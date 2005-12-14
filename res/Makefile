@@ -11,7 +11,7 @@
 # the GNU General Public License
 #
 
-MODS=res_indications.so res_monitor.so res_adsi.so res_agi.so res_features.so
+MODS=res_indications.so res_monitor.so res_adsi.so res_agi.so res_features.so res_aum.so
 
 ifneq ($(wildcard $(CROSS_COMPILE_TARGET)/usr/include/odbcinst.h)$(wildcard $(CROSS_COMPILE_TARGET)/usr/local/include/odbcinst.h),)
   ifneq (${OSARCH},FreeBSD)
@@ -75,7 +75,7 @@ install: all
 	rm -f $(DESTDIR)$(ASTHEADERDIR)/parking.h
 	rm -f $(DESTDIR)$(MODULES_DIR)/app_agi.so 
 	rm -f $(DESTDIR)$(MODULES_DIR)/res_parking.so
-	for x in $(MODS); do $(INSTALL) -m 755 $$x $(DESTDIR)$(MODULES_DIR) ; done
+	for x in $(MODS); do ($(INSTALL) -m 755 $$x $(DESTDIR)$(MODULES_DIR);echo Installing $$x) ; done
 	@if [ x`which mpg123 2>/dev/null | grep -v '^no'` != x ] ; then \
 	  if mpg123 --longhelp 2>&1 | grep -q .59r 2>&1 >/dev/null ; then echo ; else \
 			echo "*************************************************************";\
