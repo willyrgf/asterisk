@@ -1,0 +1,43 @@
+The Asterisk User Management Module - AUM
+----------------------------------------------------
+
+For now, the docs are in doxygen format in res_aum.c
+
+------------------------------------------------------
+
+Example database table for aumusers in MySQL realtime.
+You can load a user in realtime mode with "aum load rtuser <name>"
+
+The realtime cache mechanism makes the user stay in memory until
+we hit the roof of the cache. When a user is accessed, it's moved
+to the top of the cache. When the cache is full, the record at the
+bottom will be released to give room for a new user.
+
+The cache stats wil lbe shown with "aum show stats".
+
+---------------------------------------------------------------
+
+CREATE TABLE `aumusers` (
+  `name` varchar(30) NOT NULL default '',
+  `title` varchar(20) default NULL,
+  `firstname` varchar(20) default NULL,
+  `lastname` varchar(20) default NULL,
+  `email` varchar(50) default NULL,
+  `jabber` varchar(40) default NULL,
+  `sip` varchar(50) default NULL,
+  `pin` varchar(5) default NULL,
+  `group` varchar(60) default NULL,
+  `context` varchar(50) default NULL,
+  `callerid` varchar(70) default NULL,
+  `secret` varchar(15) default NULL,
+  `musicclass` varchar(20) default NULL,
+  `chanvar` varchar(60) default NULL,
+  `callgroup` varchar(20) default NULL,
+  `pickupgroup` varchar(20) default NULL,
+  `numericid` varchar(10) default NULL,
+  `sipdomain` varchar(100) default NULL,
+  `language` varchar(6) default NULL,
+  `accountcode` varchar(20) default NULL,
+  PRIMARY KEY  (`name`)
+) TYPE=MyISAM;
+    

@@ -1,0 +1,66 @@
+;AUM configuration file
+
+[general]
+;debug=yes			; AUM debugging
+
+;------------ REALTIME
+;realtimecachelimit = 100	; Maximum number of users in realtime cache
+				; Default = 100
+
+;The groups section contain a list of all groups
+; We have to do this to pre-load groups
+; (Looking for another solution)
+[groups]
+group=edvina
+group=digium
+group=asteriskmanagers
+
+; Group definition
+; Groups are used as templates for users, not as objects in themselves
+[digium]
+type=group
+musicclass=digium-sales-pitch
+setvar=DIGIUMSTAFF=yes
+
+[edvina]
+type=group
+musicclass=edvina-slow
+deny=all
+permit=192.168.40.0/24
+
+[asteriskmanagers]
+type=group
+managerperm=system		; Manager permissions for these users
+setvar=SUPERUSER=400
+
+[admin]				; Admin user
+;Which groups does this user belong to?
+group=asteriskmanagers
+group=digium
+;Pin code for this user
+pincode=1235
+email=postmaster@mylittledomain.com
+firstname=Charlie
+lastname=Root
+
+[nancy]
+pincode=1234
+group=asteriskmanagers
+group=edvina
+email=nancy.petterson@digium.com
+jabber=nancypet@digium.com
+mailbox=3000@default
+mailboxcallback=3000@sipusers
+exten=3000@sipusers
+disacontext=disalocal
+callerid=Nancy Petterson <3000>
+accountcode=3000
+musicclass=nancy-music
+firstname=Nancy R.
+lastname=Petterson
+title=Sales mngr
+language=se
+timezone=GMT+1
+permit=123.12.12.12/255.255.255.0
+deny=123.132.23.123/255.255.255.0
+managerperm=write,read
