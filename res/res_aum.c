@@ -315,10 +315,10 @@ static struct aum_address_config_struct aum_address_config[] = {
 	{AUM_ADDR_WEB,		"url", 		"Web",		AUM_CNF_ADDR_WEB},
 	{AUM_ADDR_WEB,		"http", 	"Web",		AUM_CNF_ADDR_WEB},
 	{AUM_ADDR_CUST0,	"cust0", 	"Custom 0",	AUM_CNF_ADDR_CUST0},
-	{AUM_ADDR_CUST1,	"cust0", 	"Custom 1",	AUM_CNF_ADDR_CUST1},
-	{AUM_ADDR_CUST2,	"cust0", 	"Custom 2",	AUM_CNF_ADDR_CUST2},
-	{AUM_ADDR_CUST3,	"cust0", 	"Custom 3",	AUM_CNF_ADDR_CUST3},
-	{AUM_ADDR_CUST4,	"cust0", 	"Custom 4",	AUM_CNF_ADDR_CUST4},
+	{AUM_ADDR_CUST1,	"cust1", 	"Custom 1",	AUM_CNF_ADDR_CUST1},
+	{AUM_ADDR_CUST2,	"cust2", 	"Custom 2",	AUM_CNF_ADDR_CUST2},
+	{AUM_ADDR_CUST3,	"cust3", 	"Custom 3",	AUM_CNF_ADDR_CUST3},
+	{AUM_ADDR_CUST4,	"cust4", 	"Custom 4",	AUM_CNF_ADDR_CUST4},
 };
 
 static struct aum_context_table aum_context_text[] = {
