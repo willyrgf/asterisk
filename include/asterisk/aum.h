@@ -82,6 +82,11 @@ enum aum_address_type {
 	AUM_ADDR_IAXTEL	= (1 << 9),	/*!< IAXtel Dialup User ID */
 	AUM_ADDR_FAX	= (1 << 10),	/*!< Preferred fax number (E.164 Tel URI) */
 	AUM_ADDR_WEB	= (1 << 11),	/*!< HOMEPAGE */
+	AUM_ADDR_CUST0	= (1 << 11),	/*!< Custom address */
+	AUM_ADDR_CUST1	= (1 << 12),	/*!< Custom address */
+	AUM_ADDR_CUST2	= (1 << 13),	/*!< Custom address */
+	AUM_ADDR_CUST3	= (1 << 14),	/*!< Custom address */
+	AUM_ADDR_CUST4	= (1 << 15),	/*!< Custom address */
 	AUM_ADDR_NONE	= (1 << 30),	/*!< Return value */
 };
 
@@ -109,6 +114,11 @@ enum aum_config_options {
 	AUM_CNF_ADDR_FWD,		/*!< Free World Dialup account */
 	AUM_CNF_ADDR_IAXTEL,		/*!< IAXtel account ID */
 	AUM_CNF_ADDR_WEB,		/*!< Home page */
+	AUM_CNF_ADDR_CUST0,		/*!< Custom address */
+	AUM_CNF_ADDR_CUST1,		/*!< Custom address */
+	AUM_CNF_ADDR_CUST2,		/*!< Custom address */
+	AUM_CNF_ADDR_CUST3,		/*!< Custom address */
+	AUM_CNF_ADDR_CUST4,		/*!< Custom address */
 	AUM_CNF_VMAILBOX,		/*!< Voicemail mailbox exten@context */
 	AUM_CNF_GROUP,			/*!< Group membership */
 	AUM_CNF_CALLBACKEXT,		/*!< Default extension */
@@ -344,6 +354,13 @@ struct aum_group {
 */
 struct aum_user *find_aum_user(char *userid, int realtime);
 
+/*! \brief Find specific context for user
+	\param user	AUM user object pointer
+	\param type	AUM context type searched for
+	\result		Context string if found, NULL if not
+*/
+char *find_aum_user_context(struct aum_user *user, enum aum_context_type type);
+
 /*! \brief Find an address for an AUM user 
 	\param user	AUM user object pointer
 	\param type	AUM address type (enum)
@@ -358,7 +375,7 @@ struct aum_address *find_address_for_user(struct aum_user *user, enum aum_addres
 	\param address	Address
 	\return 	Pointer to AUM address object if found, otherwise NULL
 */
-struct aum_address *find_user_aum_address(struct aum_user *user, enum aum_address_type type, char *address);
+struct aum_address *find_user_address(struct aum_user *user, enum aum_address_type type, char *address);
 
 /*! \brief Find user by any AUM address type address (xmpp, sip, email, iax2 etc)
 	\param type	AUM address type (enum)

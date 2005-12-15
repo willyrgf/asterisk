@@ -114,6 +114,11 @@ LOCAL_USER_DECL;
 	The address object consists of a type and a text string.
 	The type can be a phone number, SIP uri, IAX number or 
 	cell phone number.
+	
+	We will not add an address type for each service provider
+	out there. Instead, there are five "custom" addresses. These
+	will be configurable so that they can have different labels,
+	depending upon your configuration.
 
 	\par The AUM group object
 	Group objects are "master" objects that the User inherits
@@ -309,6 +314,11 @@ static struct aum_address_config_struct aum_address_config[] = {
 	{AUM_ADDR_WEB,		"homepage", 	"Web",		AUM_CNF_ADDR_WEB},
 	{AUM_ADDR_WEB,		"url", 		"Web",		AUM_CNF_ADDR_WEB},
 	{AUM_ADDR_WEB,		"http", 	"Web",		AUM_CNF_ADDR_WEB},
+	{AUM_ADDR_CUST0,	"cust0", 	"Custom 0",	AUM_CNF_ADDR_CUST0},
+	{AUM_ADDR_CUST1,	"cust0", 	"Custom 1",	AUM_CNF_ADDR_CUST1},
+	{AUM_ADDR_CUST2,	"cust0", 	"Custom 2",	AUM_CNF_ADDR_CUST2},
+	{AUM_ADDR_CUST3,	"cust0", 	"Custom 3",	AUM_CNF_ADDR_CUST3},
+	{AUM_ADDR_CUST4,	"cust0", 	"Custom 4",	AUM_CNF_ADDR_CUST4},
 };
 
 static struct aum_context_table aum_context_text[] = {
@@ -375,7 +385,7 @@ static int cli_aum_show_stats(int fd, int argc, char *argv[])
 	if (aum_real_groups_enabled)
 		ast_cli(fd, "  Groups - realtime:     %-10.10d\n", aum_real_groups);
 	if (aum_real_users_enabled)
-		ast_cli(fd, "  Realtime cache:        %d objects (%-10.10d kb) %d %% full\n", aum_usercache_count, (aum_usercache_count * (sizeof(struct aum_user) + sizeof(struct aum_usercache_struct)) / 1000), (aum_usercache_count / aum_usercache_max * 100 ) );
+		ast_cli(fd, "  Realtime cache:        %d objects (%-10.10d kb) %d %% full\n", aum_usercache_count, (aum_usercache_count * (sizeof(struct aum_user) + sizeof(struct aum_usercache_struct)) / 1000), (int) (aum_usercache_count / aum_usercache_max * 100 ) );
 	ast_cli(fd, "\n\n");
 	
 	return RESULT_SUCCESS;
@@ -440,8 +450,10 @@ static int cli_aum_load_rtuser(int fd, int argc, char *argv[])
 		return RESULT_SUCCESS;
 	}
 	ast_cli(fd, "* Userid %s loaded in realtime cache. \n", user->name);
-	ast_cli(fd, "  Realtime cache:        %d objects (%-10.10d kb) %d %% full\n", aum_usercache_count, (aum_usercache_count * (sizeof(struct aum_user) + sizeof(struct aum_usercache_struct)) / 1000), (aum_usercache_count / aum_usercache_max * 100 ) );
+	ast_cli(fd, "  Realtime cache:        %d objects (%-10.10d kb) %d %% full\n", aum_usercache_count, (aum_usercache_count * (sizeof(struct aum_user) + sizeof(struct aum_usercache_struct)) / 1000), (int) (aum_usercache_count / aum_usercache_max * 100 ) );
 	ast_cli(fd, "\n");
+
+	return RESULT_SUCCESS;
 }
 
 /*! \brief CLI command description */
@@ -667,6 +679,16 @@ static char *func_aumuser_read(struct ast_channel *chan, char *cmd, char *data, 
 		res = aum_find_address(user, AUM_ADDR_IAX2);
 	} else if (!strcasecmp(param, "fwd")) {
 		res = aum_find_address(user, AUM_ADDR_FWD);
+	} else if (!strcasecmp(param, "cust0")) {
+		res = aum_find_address(user, AUM_ADDR_CUST0);
+	} else if (!strcasecmp(param, "cust1")) {
+		res = aum_find_address(user, AUM_ADDR_CUST1);
+	} else if (!strcasecmp(param, "cust2")) {
+		res = aum_find_address(user, AUM_ADDR_CUST2);
+	} else if (!strcasecmp(param, "cust3")) {
+		res = aum_find_address(user, AUM_ADDR_CUST3);
+	} else if (!strcasecmp(param, "cust4")) {
+		res = aum_find_address(user, AUM_ADDR_CUST4);
 	} else if (!strcasecmp(param, "numuserid")) {
 		res = user->numuserid;
 	} else if (!strcasecmp(param, "pincode")) {
@@ -831,6 +853,11 @@ static struct aum_config_struct aum_config[] = {
 	{ AUM_CNF_ADDR_TEL,	"tel" 		,AUM_CONFOBJ_USER },
 	{ AUM_CNF_ADDR_CELL_TEL,"cell" 		,AUM_CONFOBJ_USER },
 	{ AUM_CNF_ADDR_FAX,	"fax" 		,AUM_CONFOBJ_USER },
+	{ AUM_CNF_ADDR_CUST0,	"cust0" 	,AUM_CONFOBJ_USER },
+	{ AUM_CNF_ADDR_CUST1,	"cust1" 	,AUM_CONFOBJ_USER },
+	{ AUM_CNF_ADDR_CUST2,	"cust2" 	,AUM_CONFOBJ_USER },
+	{ AUM_CNF_ADDR_CUST3,	"cust3" 	,AUM_CONFOBJ_USER },
+	{ AUM_CNF_ADDR_CUST4,	"cust4" 	,AUM_CONFOBJ_USER },
 	{ AUM_CNF_PIN,		"pin" 		,AUM_CONFOBJ_USER },
 	{ AUM_CNF_VMAILBOX,	"mailbox" 	,AUM_CONFOBJ_USER },
 	{ AUM_CNF_GROUP,	"group" 	,AUM_CONFOBJ_USER },
@@ -1179,6 +1206,11 @@ static struct aum_user *aum_build_user(char *username, struct ast_variable *x, i
 		case AUM_CNF_ADDR_FWD:
 		case AUM_CNF_ADDR_IAXTEL:
 		case AUM_CNF_ADDR_WEB:
+		case AUM_CNF_ADDR_CUST0:
+		case AUM_CNF_ADDR_CUST1:
+		case AUM_CNF_ADDR_CUST2:
+		case AUM_CNF_ADDR_CUST3:
+		case AUM_CNF_ADDR_CUST4:
 			address = build_address(AUM_ADDR_NONE, option, x->value);
 			/* Link this address to user list */
 			if (address)
@@ -1833,7 +1865,7 @@ int aum_group_test(struct aum_user *user, char *groupname)
 }
 
 /*! \brief Initialize charset conversion handlers */
-void initialize_charset_conversion(void)
+static void initialize_charset_conversion(void)
 {
 	ichandler_utf8_to_iso88591 = iconv_open("utf8", "ISO-8859-1");
 	ichandler_iso88591_to_utf8 = iconv_open("ISO-8859-1", "utf8");
