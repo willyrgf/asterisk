@@ -439,8 +439,8 @@ static int chanspy_exec(struct ast_channel *chan, void *data)
 
 	if (recbase) {
 		char filename[512];
-		snprintf(filename,sizeof(filename),"%s/%s.%ld.raw",ast_config_AST_MONITOR_DIR, recbase, time(NULL));
-		if ((fd = open(filename, O_CREAT | O_WRONLY, O_TRUNC)) <= 0) {
+		snprintf(filename,sizeof(filename),"%s/%s.%d.raw",ast_config_AST_MONITOR_DIR, recbase, (int)time(NULL));
+		if ((fd = open(filename, O_CREAT | O_WRONLY | O_TRUNC, 0644)) <= 0) {
 			ast_log(LOG_WARNING, "Cannot open %s for recording\n", filename);
 			fd = 0;
 		}
@@ -482,7 +482,7 @@ static int chanspy_exec(struct ast_channel *chan, void *data)
 					}
 				}
 				
-				if (igrp && (!spec || ((strlen(spec) < strlen(peer->name) &&
+				if (igrp && (!spec || ((strlen(spec) <= strlen(peer->name) &&
 							!strncasecmp(peer->name, spec, strlen(spec)))))) {
 					if (peer && (!bronly || ast_bridged_channel(peer)) &&
 					    !ast_check_hangup(peer) && !ast_test_flag(peer, AST_FLAG_SPYING)) {

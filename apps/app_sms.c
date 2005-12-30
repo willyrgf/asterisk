@@ -1379,8 +1379,8 @@ static int sms_exec (struct ast_channel *chan, void *data)
 		ast_copy_string (h.cli, chan->cid.cid_num, sizeof (h.cli));
 
 	{
-		char *d = data,
-			*p,
+		unsigned char *p;
+		unsigned char *d = data,
 			answer = 0;
 		if (!*d || *d == '|') {
 			ast_log (LOG_ERROR, "Requires queue name\n");
@@ -1393,11 +1393,11 @@ static int sms_exec (struct ast_channel *chan, void *data)
 			LOCAL_USER_REMOVE(u);
 			return -1;
 		}
-		strncpy (h.queue, d, p - d);
+		strncpy (h.queue, (char *)d, p - d);
 		if (*p == '|')
 			p++;
 		d = p;
-		for (p = h.queue; *p; p++)
+		for (p = (unsigned char *)h.queue; *p; p++)
 			if (!isalnum (*p))
 				*p = '-';			  /* make very safe for filenames */
 		while (*d && *d != '|') {
@@ -1429,27 +1429,27 @@ static int sms_exec (struct ast_channel *chan, void *data)
 		}
 		if (*d == '|') {
 			/* submitting a message, not taking call. */
-			/* depricated, use smsq instead */
+			/* deprecated, use smsq instead */
 			d++;
 			h.scts = time (0);
 			for (p = d; *p && *p != '|'; p++);
 			if (*p)
 				*p++ = 0;
-			if (strlen (d) >= sizeof (h.oa)) {
+			if (strlen ((char *)d) >= sizeof (h.oa)) {
 				ast_log (LOG_ERROR, "Address too long %s\n", d);
 				return 0;
 			}
 			if (h.smsc) {
-				ast_copy_string (h.oa, d, sizeof (h.oa));
+				ast_copy_string (h.oa, (char *)d, sizeof (h.oa));
 			} else {
-				ast_copy_string (h.da, d, sizeof (h.da));
+				ast_copy_string (h.da, (char *)d, sizeof (h.da));
 			}
 			if (!h.smsc)
 				ast_copy_string (h.oa, h.cli, sizeof (h.oa));
 			d = p;
 			h.udl = 0;
 			while (*p && h.udl < SMSLEN)
-				h.ud[h.udl++] = utf8decode((unsigned char **)&p);
+				h.ud[h.udl++] = utf8decode(&p);
 			if (is7bit (h.dcs) && packsms7 (0, h.udhl, h.udh, h.udl, h.ud) < 0)
 				ast_log (LOG_WARNING, "Invalid 7 bit GSM data\n");
 			if (is8bit (h.dcs) && packsms8 (0, h.udhl, h.udh, h.udl, h.ud) < 0)

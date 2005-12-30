@@ -25,13 +25,19 @@ BUILTINS=func_md5.o \
          func_language.o \
          func_moh.o
 
-STANDALONE_FUNCS=$(filter-out $(BUILTINS),$(patsubst %.c,%.o,$(wildcard func*.c)))
+AVAILABLE_FUNCS=$(filter-out $(BUILTINS),$(patsubst %.c,%.o,$(wildcard func*.c)))
+
+ifeq ($(wildcard $(CROSS_COMPILE_TARGET)/usr/include/odbcinst.h)$(wildcard $(CROSS_COMPILE_TARGET)/usr/local/include/odbcinst.h),)
+  STANDALONE_FUNCS=$(filter-out func_odbc.o,$(AVAILABLE_FUNCS))
+else
+  STANDALONE_FUNCS=$(AVAILABLE_FUNCS)
+endif
 
 FUNCS+=$(STANDALONE_FUNCS:.o=.so)
 
 FUNC_SOURCES=$(BUILTINS:.o=.c)
 
-FUNC_STRUCTS=$(shell grep 'struct ast_custom_function' $(FUNC_SOURCES) | awk '{print $$3};')
+FUNC_STRUCTS=$(shell grep 'struct ast_custom_function' $(FUNC_SOURCES) | awk '{print $$3};' | sort)
 
 ifeq (${OSARCH},CYGWIN)
 CYGSOLINK=-Wl,--out-implib=lib$@.a -Wl,--export-all-symbols
@@ -65,6 +71,9 @@ pbx_functions.o: pbx_functions.h
 
 pbx_functions.so: pbx_functions.o #$(BUILTINS)
 	$(CC) $(SOLINK) -o $@ ${CYGSOLINK} $< ${CYGSOLIB}
+
+func_odbc.so: func_odbc.o
+	$(CC) $(SOLINK) -o $@ ${CYGSOLINK} $< ${CYGSOLIB} -lodbc
 
 install: all
 	for x in $(FUNCS); do $(INSTALL) -m 755 $$x $(DESTDIR)$(MODULES_DIR) ; done

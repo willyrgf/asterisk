@@ -16,9 +16,9 @@
  */
 
 /*! \file
- * \brief Cut application
+ * \brief CUT function
  *
- * \ingroup applications
+ * \ingroup functions
  */
 
 #include <stdio.h>
@@ -120,8 +120,9 @@ static int sort_internal(struct ast_channel *chan, char *data, char *buffer, siz
 		int blen = strlen(buffer);
 		if (element_count++) {
 			strncat(buffer + blen, ",", buflen - blen - 1);
+			blen++;
 		}
-		strncat(buffer + blen + 1, sortable_keys[count2].key, buflen - blen - 2);
+		strncat(buffer + blen, sortable_keys[count2].key, buflen - blen - 1);
 	}
 
 	return 0;
@@ -269,7 +270,7 @@ static char *acf_cut_exec(struct ast_channel *chan, char *cmd, char *data, char 
 		ast_log(LOG_ERROR, "Out of memory\n");
 		break;
 	case ERROR_USAGE:
-		ast_log(LOG_ERROR, "Usage: %s\n", cut_synopsis);
+		ast_log(LOG_ERROR, "Usage: CUT(<varname>,<char-delim>,<range-spec>)\n");
 		break;
 	case 0:
 		break;

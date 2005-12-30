@@ -68,6 +68,44 @@ struct ast_custom_function fieldqty_function = {
 	.read = function_fieldqty,
 };
 
+static char *builtin_function_filter(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len)
+{
+	char *allowed, *string, *outbuf=buf;
+
+	string = ast_strdupa(data);
+	if (!string) {
+		ast_log(LOG_ERROR, "Out of memory");
+		return "";
+	}
+
+	allowed = strsep(&string, "|");
+
+	if (!string) {
+		ast_log(LOG_ERROR, "Usage: FILTER(<allowed-chars>,<string>)\n");
+		return "";
+	}
+
+	for ( ; *string && (buf + len - 1 > outbuf); string++) {
+		if (strchr(allowed, *string)) {
+			*outbuf = *string;
+			outbuf++;
+		}
+	}
+	*outbuf = '\0';
+	
+	return buf;
+}
+
+#ifndef BUILTIN_FUNC
+static
+#endif
+struct ast_custom_function filter_function = {
+	.name = "FILTER",
+	.synopsis = "Filter the string to include only the allowed characters",
+	.syntax = "FILTER(<allowed-chars>,<string>)",
+	.read = builtin_function_filter,
+};
+
 static char *builtin_function_regex(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len) 
 {
 	char *arg, *earg = NULL, *tmp, errstr[256] = "";
@@ -117,6 +155,64 @@ struct ast_custom_function regex_function = {
 	.synopsis = "Regular Expression: Returns 1 if data matches regular expression.",
 	.syntax = "REGEX(\"<regular expression>\" <data>)",
 	.read = builtin_function_regex,
+};
+
+static void builtin_function_array(struct ast_channel *chan, char *cmd, char *data, const char *value)
+{
+	char *varv[100];
+	char *valuev[100];
+	char *var, *value2;
+	int varcount, valuecount, i;
+
+	var = ast_strdupa(data);
+	value2 = ast_strdupa(value);
+	if (!var || !value2) {
+		ast_log(LOG_ERROR, "Out of memory\n");
+		return;
+	}
+
+	/* The functions this will generally be used with are SORT and ODBC_*, which
+	 * both return comma-delimited lists.  However, if somebody uses literal lists,
+	 * their commas will be translated to vertical bars by the load, and I don't
+	 * want them to be surprised by the result.  Hence, we prefer commas as the
+	 * delimiter, but we'll fall back to vertical bars if commas aren't found.
+	 */
+	if (strchr(var, ',')) {
+		varcount = ast_app_separate_args(var, ',', varv, 100);
+	} else {
+		varcount = ast_app_separate_args(var, '|', varv, 100);
+	}
+
+	if (strchr(value2, ',')) {
+		valuecount = ast_app_separate_args(value2, ',', valuev, 100);
+	} else {
+		valuecount = ast_app_separate_args(value2, '|', valuev, 100);
+	}
+
+	for (i = 0; i < varcount; i++) {
+		if (i < valuecount) {
+			pbx_builtin_setvar_helper(chan, varv[i], valuev[i]);
+		} else {
+			/* We could unset the variable, by passing a NULL, but due to
+			 * pushvar semantics, that could create some undesired behavior. */
+			pbx_builtin_setvar_helper(chan, varv[i], "");
+		}
+	}
+}
+
+#ifndef BUILTIN_FUNC
+static
+#endif
+struct ast_custom_function array_function = {
+	.name = "ARRAY",
+	.synopsis = "Allows setting multiple variables at once",
+	.syntax = "ARRAY(var1[,var2[...][,varN]])",
+	.write = builtin_function_array,
+	.desc =
+"The comma-separated list passed as a value to which the function is set\n"
+"will be interpreted as a set of values to which the comma-separated list\n"
+"of variable names in the argument should be set.\n"
+"Hence, Set(ARRAY(var1,var2)=1,2) will set var1 to 1 and var2 to 2\n",
 };
 
 static char *builtin_function_len(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len) 

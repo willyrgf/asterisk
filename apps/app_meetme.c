@@ -54,6 +54,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/cli.h"
 #include "asterisk/say.h"
 #include "asterisk/utils.h"
+#include "asterisk/translate.h"
+#include "asterisk/ulaw.h"
 
 static const char *tdesc = "MeetMe conference bridge";
 
@@ -95,6 +97,10 @@ static const char *descrip =
 "      's' -- Present menu (user or admin) when '*' is received ('send' to menu)\n"
 "      't' -- set talk only mode. (Talk only, no listening)\n"
 "      'T' -- set talker detection (sent to manager interface and meetme list)\n"
+"      'o' -- set talker optimization - treats talkers who aren't speaking as\n"
+"             being muted, meaning (a) No encode is done on transmission and\n"
+"             (b) Received audio that is not registered as talking is omitted\n"
+"             causing no buildup in background noise\n"
 "      'v' -- video mode\n"
 "      'w' -- wait until the marked user enters the conference\n"
 "      'x' -- close the conference when last marked user exits\n"
@@ -129,8 +135,11 @@ STANDARD_LOCAL_USER;
 LOCAL_USER_DECL;
 
 static struct ast_conference {
+	ast_mutex_t playlock;				/* Conference specific lock (players) */
+	ast_mutex_t listenlock;				/* Conference specific lock (listeners) */
 	char confno[AST_MAX_EXTENSION];		/* Conference */
 	struct ast_channel *chan;		/* Announcements channel */
+	struct ast_channel *lchan;		/* Listen/Record channel */
 	int fd;					/* Announcements fd */
 	int zapconf;				/* Zaptel Conf # */
 	int users;				/* Number of active users */
@@ -147,6 +156,9 @@ static struct ast_conference {
 	const char *recordingformat;			/* Format to record the Conference in */
 	char pin[AST_MAX_EXTENSION];		/* If protected by a PIN */
 	char pinadmin[AST_MAX_EXTENSION];	/* If protected by a admin PIN */
+	struct ast_frame *transframe[32];
+	struct ast_frame *origframe;
+	struct ast_trans_pvt *transpath[32];
 	struct ast_conference *next;
 } *confs;
 
@@ -182,6 +194,8 @@ static int audio_buffers;			/* The number of audio buffers to be allocated on ps
 #define MEETME_DELAYDETECTTALK 		300
 #define MEETME_DELAYDETECTENDTALK 	1000
 
+#define AST_FRAME_BITS 32
+
 enum volume_action {
 	VOL_UP,
 	VOL_DOWN,
@@ -190,6 +204,7 @@ enum volume_action {
 AST_MUTEX_DEFINE_STATIC(conflock);
 
 static int admin_exec(struct ast_channel *chan, void *data);
+static struct ast_frame null_frame = { AST_FRAME_NULL, };
 
 static void *recordthread(void *args);
 
@@ -200,8 +215,9 @@ static void *recordthread(void *args);
 #define LEAVE	1
 
 #define MEETME_RECORD_OFF	0
-#define MEETME_RECORD_ACTIVE	1
-#define MEETME_RECORD_TERMINATE	2
+#define MEETME_RECORD_STARTED	1
+#define MEETME_RECORD_ACTIVE	2
+#define MEETME_RECORD_TERMINATE	3
 
 #define CONF_SIZE 320
 
@@ -227,12 +243,14 @@ static void *recordthread(void *args);
 #define CONFFLAG_EMPTYNOPIN (1 << 20)
 #define CONFFLAG_ALWAYSPROMPT (1 << 21)
 #define CONFFLAG_ANNOUNCEUSERCOUNT (1 << 22)	/* If set, when user joins the conference, they will be told the number of users that are already in */
+#define CONFFLAG_OPTIMIZETALKER (1 << 23)	/* If set, treats talking users as muted users */
 
 
 AST_APP_OPTIONS(meetme_opts, {
 	AST_APP_OPTION('a', CONFFLAG_ADMIN ),
 	AST_APP_OPTION('c', CONFFLAG_ANNOUNCEUSERCOUNT ),
 	AST_APP_OPTION('T', CONFFLAG_MONITORTALKER ),
+	AST_APP_OPTION('o', CONFFLAG_OPTIMIZETALKER ),
 	AST_APP_OPTION('i', CONFFLAG_INTROUSER ),
 	AST_APP_OPTION('m', CONFFLAG_MONITOR ),
 	AST_APP_OPTION('p', CONFFLAG_POUNDEXIT ),
@@ -263,14 +281,17 @@ static char *istalking(int x)
 		return "(not talking)";
 }
 
-static int careful_write(int fd, unsigned char *data, int len)
+static int careful_write(int fd, unsigned char *data, int len, int block)
 {
 	int res;
 	int x;
 
 	while (len) {
-		x = ZT_IOMUX_WRITE | ZT_IOMUX_SIGEVENT;
-		res = ioctl(fd, ZT_IOMUX, &x);
+		if (block) {
+			x = ZT_IOMUX_WRITE | ZT_IOMUX_SIGEVENT;
+			res = ioctl(fd, ZT_IOMUX, &x);
+		} else
+			res = 0;
 		if (res >= 0)
 			res = write(fd, data, len);
 		if (res < 1) {
@@ -403,6 +424,8 @@ static void conf_play(struct ast_channel *chan, struct ast_conference *conf, int
 	unsigned char *data;
 	int len;
 	int res = -1;
+	short *data2;
+	int x;
 
 	if (!chan->_softhangup)
 		res = ast_autoservice_start(chan);
@@ -422,8 +445,12 @@ static void conf_play(struct ast_channel *chan, struct ast_conference *conf, int
 		data = NULL;
 		len = 0;
 	}
-	if (data) 
-		careful_write(conf->fd, data, len);
+	if (data) {
+		data2 = alloca(len * 2);
+		for (x=0;x<len;x++)
+			data2[x] = AST_MULAW(data[x]);
+		careful_write(conf->fd, (unsigned char *)data2, len << 1, 1);
+	}
 
 	ast_mutex_unlock(&conflock);
 
@@ -447,12 +474,16 @@ static struct ast_conference *build_conf(char *confno, char *pin, char *pinadmin
 		/* Make a new one */
 		cnf = calloc(1, sizeof(*cnf));
 		if (cnf) {
+			ast_mutex_init(&cnf->playlock);
+			ast_mutex_init(&cnf->listenlock);
 			ast_copy_string(cnf->confno, confno, sizeof(cnf->confno));
 			ast_copy_string(cnf->pin, pin, sizeof(cnf->pin));
 			ast_copy_string(cnf->pinadmin, pinadmin, sizeof(cnf->pinadmin));
 			cnf->markedusers = 0;
-			cnf->chan = ast_request("zap", AST_FORMAT_ULAW, "pseudo", NULL);
+			cnf->chan = ast_request("zap", AST_FORMAT_SLINEAR, "pseudo", NULL);
 			if (cnf->chan) {
+				ast_set_read_format(cnf->chan, AST_FORMAT_SLINEAR);
+				ast_set_write_format(cnf->chan, AST_FORMAT_SLINEAR);
 				cnf->fd = cnf->chan->fds[0];	/* for use by conf_play() */
 			} else {
 				ast_log(LOG_WARNING, "Unable to open pseudo channel - trying device\n");
@@ -478,6 +509,18 @@ static struct ast_conference *build_conf(char *confno, char *pin, char *pinadmin
 				free(cnf);
 				cnf = NULL;
 				goto cnfout;
+			}
+			cnf->lchan = ast_request("zap", AST_FORMAT_SLINEAR, "pseudo", NULL);
+			if (cnf->lchan) {
+				ast_set_read_format(cnf->lchan, AST_FORMAT_SLINEAR);
+				ast_set_write_format(cnf->lchan, AST_FORMAT_SLINEAR);
+				ztc.chan = 0;
+				ztc.confmode = ZT_CONF_CONFANN | ZT_CONF_CONFANNMON;
+				if (ioctl(cnf->lchan->fds[0], ZT_SETCONF, &ztc)) {
+					ast_log(LOG_WARNING, "Error setting conference\n");
+					ast_hangup(cnf->lchan);
+					cnf->lchan = NULL;
+				}
 			}
 			/* Fill the conference struct */
 			cnf->start = time(NULL);
@@ -749,7 +792,8 @@ static void conf_flush(int fd, struct ast_channel *chan)
 static int conf_free(struct ast_conference *conf)
 {
 	struct ast_conference *prev = NULL, *cur = confs;
-
+	int x;
+	
 	while (cur) {
 		if (cur == conf) {
 			if (prev)
@@ -776,6 +820,16 @@ static int conf_free(struct ast_conference *conf)
 		}
 	}
 
+	for (x=0;x<AST_FRAME_BITS;x++) {
+		if (conf->transframe[x])
+			ast_frfree(conf->transframe[x]);
+		if (conf->transpath[x])
+			ast_translator_free_path(conf->transpath[x]);
+	}
+	if (conf->origframe)
+		ast_frfree(conf->origframe);
+	if (conf->lchan)
+		ast_hangup(conf->lchan);
 	if (conf->chan)
 		ast_hangup(conf->chan);
 	else
@@ -828,21 +882,26 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 		return ret;
 	}
 
-	if (confflags & CONFFLAG_RECORDCONF && conf->recording !=MEETME_RECORD_ACTIVE) {
-		conf->recordingfilename = pbx_builtin_getvar_helper(chan, "MEETME_RECORDINGFILE");
+	if (confflags & CONFFLAG_RECORDCONF) {
 		if (!conf->recordingfilename) {
-			snprintf(recordingtmp, sizeof(recordingtmp), "meetme-conf-rec-%s-%s", conf->confno, chan->uniqueid);
-			conf->recordingfilename = ast_strdupa(recordingtmp);
+			conf->recordingfilename = pbx_builtin_getvar_helper(chan, "MEETME_RECORDINGFILE");
+			if (!conf->recordingfilename) {
+				snprintf(recordingtmp, sizeof(recordingtmp), "meetme-conf-rec-%s-%s", conf->confno, chan->uniqueid);
+				conf->recordingfilename = ast_strdupa(recordingtmp);
+			}
+			conf->recordingformat = pbx_builtin_getvar_helper(chan, "MEETME_RECORDINGFORMAT");
+			if (!conf->recordingformat) {
+				snprintf(recordingtmp, sizeof(recordingtmp), "wav");
+				conf->recordingformat = ast_strdupa(recordingtmp);
+			}
+			ast_verbose(VERBOSE_PREFIX_4 "Starting recording of MeetMe Conference %s into file %s.%s.\n",
+				    conf->confno, conf->recordingfilename, conf->recordingformat);
 		}
-		conf->recordingformat = pbx_builtin_getvar_helper(chan, "MEETME_RECORDINGFORMAT");
-		if (!conf->recordingformat) {
-			snprintf(recordingtmp, sizeof(recordingtmp), "wav");
-			conf->recordingformat = ast_strdupa(recordingtmp);
-		}
+	}
+
+	if ((conf->recording == MEETME_RECORD_OFF) && ((confflags & CONFFLAG_RECORDCONF) || (conf->lchan))) {
 		pthread_attr_init(&conf->attr);
 		pthread_attr_setdetachstate(&conf->attr, PTHREAD_CREATE_DETACHED);
-		ast_verbose(VERBOSE_PREFIX_4 "Starting recording of MeetMe Conference %s into file %s.%s.\n",
-			    conf->confno, conf->recordingfilename, conf->recordingformat);
 		ast_pthread_create(&conf->recordthread, &conf->attr, recordthread, conf);
 	}
 
@@ -858,7 +917,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 	if (confflags & CONFFLAG_MARKEDUSER)
 		conf->markedusers++;
       
-   	ast_mutex_lock(&conflock);
+   	ast_mutex_lock(&conf->playlock);
 	if (!conf->firstuser) {
 		/* Fill the first new User struct */
 		user->user_no = 1;
@@ -870,7 +929,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 		user->prevuser = conf->lastuser;
 		if (conf->lastuser->nextuser) {
 			ast_log(LOG_WARNING, "Error in User Management!\n");
-			ast_mutex_unlock(&conflock);
+			ast_mutex_unlock(&conf->playlock);
 			goto outrun;
 		} else {
 			conf->lastuser->nextuser = user;
@@ -883,7 +942,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 	user->adminflags = 0;
 	user->talking = -1;
 	conf->users++;
-	ast_mutex_unlock(&conflock);
+	ast_mutex_unlock(&conf->playlock);
 
 	if (confflags & CONFFLAG_EXIT_CONTEXT) {
 		if ((agifile = pbx_builtin_getvar_helper(chan, "MEETME_EXIT_CONTEXT"))) 
@@ -1026,7 +1085,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 	ztc.chan = 0;	
 	ztc.confno = conf->zapconf;
 
-	ast_mutex_lock(&conflock);
+	ast_mutex_lock(&conf->playlock);
 
 	if (!(confflags & CONFFLAG_QUIET) && (confflags & CONFFLAG_INTROUSER) && conf->users > 1) {
 		if (conf->chan && ast_fileexists(user->namerecloc, NULL, NULL)) {
@@ -1047,7 +1106,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 	if (ioctl(fd, ZT_SETCONF, &ztc)) {
 		ast_log(LOG_WARNING, "Error setting conference\n");
 		close(fd);
-		ast_mutex_unlock(&conflock);
+		ast_mutex_unlock(&conf->playlock);
 		goto outrun;
 	}
 	ast_log(LOG_DEBUG, "Placed channel %s in ZAP conf %d\n", chan->name, conf->zapconf);
@@ -1066,7 +1125,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 				conf_play(chan, conf, ENTER);
 	}
 
-	ast_mutex_unlock(&conflock);
+	ast_mutex_unlock(&conf->playlock);
 
 	conf_flush(fd, chan);
 
@@ -1103,7 +1162,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 			x = 1;
 			ast_channel_setoption(chan, AST_OPTION_TONE_VERIFY, &x, sizeof(char), 0);
 		}	
-		if (confflags & CONFFLAG_MONITORTALKER && !(dsp = ast_dsp_new())) {
+		if (confflags & (CONFFLAG_MONITORTALKER | CONFFLAG_OPTIMIZETALKER) && !(dsp = ast_dsp_new())) {
 			ast_log(LOG_WARNING, "Unable to allocate DSP!\n");
 			res = -1;
 		}
@@ -1142,6 +1201,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 			}
 
 			c = ast_waitfor_nandfds(&chan, 1, &fd, nfds, NULL, &outfd, &ms);
+			
 			
 			/* Update the struct with the actual confflags */
 			user->userflags = confflags;
@@ -1266,14 +1326,17 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 					user->zapchannel = !retryzap;
 					goto zapretry;
 				}
-				f = ast_read(c);
+				if ((confflags & CONFFLAG_MONITOR) || (user->adminflags & ADMINFLAG_MUTED))
+					f = ast_read_noaudio(c);
+				else
+					f = ast_read(c);
 				if (!f)
 					break;
 				if ((f->frametype == AST_FRAME_VOICE) && (f->subclass == AST_FORMAT_SLINEAR)) {
 					if (user->talk.actual)
 						ast_frame_adjust_volume(f, user->talk.actual);
 
-					if (confflags &  CONFFLAG_MONITORTALKER) {
+					if (confflags & (CONFFLAG_MONITORTALKER | CONFFLAG_OPTIMIZETALKER)) {
 						int totalsilence;
 
 						if (user->talking == -1)
@@ -1282,7 +1345,8 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 						res = ast_dsp_silence(dsp, f, &totalsilence);
 						if (!user->talking && totalsilence < MEETME_DELAYDETECTTALK) {
 							user->talking = 1;
-							manager_event(EVENT_FLAG_CALL, "MeetmeTalking",
+							if (confflags & CONFFLAG_MONITORTALKER)
+								manager_event(EVENT_FLAG_CALL, "MeetmeTalking",
 								      "Channel: %s\r\n"
 								      "Uniqueid: %s\r\n"
 								      "Meetme: %s\r\n"
@@ -1291,7 +1355,8 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 						}
 						if (user->talking && totalsilence > MEETME_DELAYDETECTENDTALK) {
 							user->talking = 0;
-							manager_event(EVENT_FLAG_CALL, "MeetmeStopTalking",
+							if (confflags & CONFFLAG_MONITORTALKER)
+								manager_event(EVENT_FLAG_CALL, "MeetmeStopTalking",
 								      "Channel: %s\r\n"
 								      "Uniqueid: %s\r\n"
 								      "Meetme: %s\r\n"
@@ -1308,7 +1373,12 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 						   audio frames (in which case carefully writing would only
 						   have delayed the audio even further).
 						*/
-						write(fd, f->data, f->datalen);
+						/* As it turns out, we do want to use careful write.  We just
+						   don't want to block, but we do want to at least *try*
+						   to write out all the samples.
+						 */
+						if (user->talking || !(confflags & CONFFLAG_OPTIMIZETALKER))
+							careful_write(fd, f->data, f->datalen, 0);
 					}
 				} else if ((f->frametype == AST_FRAME_DTMF) && (confflags & CONFFLAG_EXIT_CONTEXT)) {
 					char tmp[2];
@@ -1504,10 +1574,46 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 					fr.samples = res/2;
 					fr.data = buf;
 					fr.offset = AST_FRIENDLY_OFFSET;
-					if (user->listen.actual)
-						ast_frame_adjust_volume(&fr, user->listen.actual);
-					if (ast_write(chan, &fr) < 0) {
-						ast_log(LOG_WARNING, "Unable to write frame to channel: %s\n", strerror(errno));
+					if (!user->listen.actual && 
+						((confflags & CONFFLAG_MONITOR) || 
+						 (user->adminflags & ADMINFLAG_MUTED) ||
+						 (user->talking && (confflags & CONFFLAG_OPTIMIZETALKER))
+						 )) {
+						int index;
+						for (index=0;index<AST_FRAME_BITS;index++)
+							if (chan->rawwriteformat & (1 << index))
+								break;
+						if (index >= AST_FRAME_BITS)
+							goto bailoutandtrynormal;
+						ast_mutex_lock(&conf->listenlock);
+						if (!conf->transframe[index]) {
+							if (conf->origframe) {
+								if (!conf->transpath[index])
+									conf->transpath[index] = ast_translator_build_path((1 << index), AST_FORMAT_SLINEAR);
+								if (conf->transpath[index]) {
+									conf->transframe[index] = ast_translate(conf->transpath[index], conf->origframe, 0);
+									if (!conf->transframe[index])
+										conf->transframe[index] = &null_frame;
+								}
+							}
+						}
+						if (conf->transframe[index]) {
+ 							if (conf->transframe[index]->frametype != AST_FRAME_NULL) {
+	 							if (ast_write(chan, conf->transframe[index]))
+									ast_log(LOG_WARNING, "Unable to write frame to channel: %s\n", strerror(errno));
+							}
+						} else {
+							ast_mutex_unlock(&conf->listenlock);
+							goto bailoutandtrynormal;
+						}
+						ast_mutex_unlock(&conf->listenlock);
+					} else {
+bailoutandtrynormal:					
+						if (user->listen.actual)
+							ast_frame_adjust_volume(&fr, user->listen.actual);
+						if (ast_write(chan, &fr) < 0) {
+							ast_log(LOG_WARNING, "Unable to write frame to channel: %s\n", strerror(errno));
+						}
 					}
 				} else 
 					ast_log(LOG_WARNING, "Failed to read frame: %s\n", strerror(errno));
@@ -1549,7 +1655,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
  outrun:
 	ast_mutex_lock(&conflock);
 
-	if (confflags & CONFFLAG_MONITORTALKER && dsp)
+	if (dsp)
 		ast_dsp_free(dsp);
 	
 	if (user->user_no) { /* Only cleanup users who really joined! */
@@ -1991,15 +2097,16 @@ static int conf_exec(struct ast_channel *chan, void *data)
 	return res;
 }
 
-static struct ast_conf_user* find_user(struct ast_conference *conf, char *callerident) {
+static struct ast_conf_user* find_user(struct ast_conference *conf, char *callerident) 
+{
 	struct ast_conf_user *user = NULL;
-	char usrno[1024] = "";
-
+	int cid;
+	
+	sscanf(callerident, "%i", &cid);
 	if (conf && callerident) {
 		user = conf->firstuser;
 		while (user) {
-			snprintf(usrno, sizeof(usrno), "%d", user->user_no);
-			if (strcmp(usrno, callerident) == 0)
+			if (cid == user->user_no)
 				return user;
 			user = user->nextuser;
 		}
@@ -2093,7 +2200,7 @@ static int admin_exec(struct ast_channel *chan, void *data) {
 				if (user && (user->adminflags & ADMINFLAG_MUTED)) {
 					user->adminflags ^= ADMINFLAG_MUTED;
 				} else {
-					ast_log(LOG_NOTICE, "Specified User not found or he muted himself!");
+					ast_log(LOG_NOTICE, "Specified User not found or he muted himself!\n");
 				}
 				break;
 			case  110: /* n: Unmute all users */
@@ -2133,39 +2240,62 @@ static void *recordthread(void *args)
 	struct ast_conference *cnf = args;
 	struct ast_frame *f=NULL;
 	int flags;
-	struct ast_filestream *s;
+	struct ast_filestream *s=NULL;
 	int res=0;
+	int x;
+	const char *oldrecordingfilename = NULL;
 
-	if (!cnf || !cnf->chan) {
+	if (!cnf || !cnf->lchan) {
 		pthread_exit(0);
 	}
-	ast_stopstream(cnf->chan);
-	flags = O_CREAT|O_TRUNC|O_WRONLY;
-	s = ast_writefile(cnf->recordingfilename, cnf->recordingformat, NULL, flags, 0, 0644);
 
-	if (s) {
-		cnf->recording = MEETME_RECORD_ACTIVE;
-		while (ast_waitfor(cnf->chan, -1) > -1) {
-			f = ast_read(cnf->chan);
-			if (!f) {
-				res = -1;
-				break;
+	ast_stopstream(cnf->lchan);
+	flags = O_CREAT|O_TRUNC|O_WRONLY;
+
+
+	cnf->recording = MEETME_RECORD_ACTIVE;
+	while (ast_waitfor(cnf->lchan, -1) > -1) {
+		if (cnf->recording == MEETME_RECORD_TERMINATE) {
+			ast_mutex_lock(&conflock);
+			ast_mutex_unlock(&conflock);
+			break;
+		}
+		if (!s && cnf->recordingfilename && (cnf->recordingfilename != oldrecordingfilename)) {
+			s = ast_writefile(cnf->recordingfilename, cnf->recordingformat, NULL, flags, 0, 0644);
+			oldrecordingfilename = cnf->recordingfilename;
+		}
+		
+		f = ast_read(cnf->lchan);
+		if (!f) {
+			res = -1;
+			break;
+		}
+		if (f->frametype == AST_FRAME_VOICE) {
+			ast_mutex_lock(&cnf->listenlock);
+			for (x=0;x<AST_FRAME_BITS;x++) {
+				/* Free any translations that have occured */
+				if (cnf->transframe[x]) {
+					ast_frfree(cnf->transframe[x]);
+					cnf->transframe[x] = NULL;
+				}
 			}
-			if (f->frametype == AST_FRAME_VOICE) {
+			if (cnf->origframe)
+				ast_frfree(cnf->origframe);
+			cnf->origframe = f;
+			ast_mutex_unlock(&cnf->listenlock);
+			if (s)
 				res = ast_writestream(s, f);
-				if (res) 
-					break;
-			}
-			ast_frfree(f);
-			if (cnf->recording == MEETME_RECORD_TERMINATE) {
-				ast_mutex_lock(&conflock);
-				ast_mutex_unlock(&conflock);
+			if (res) {
+				ast_frfree(f);
 				break;
 			}
 		}
-		cnf->recording = MEETME_RECORD_OFF;
-		ast_closestream(s);
+		ast_frfree(f);
 	}
+	cnf->recording = MEETME_RECORD_OFF;
+	if (s)
+		ast_closestream(s);
+	
 	pthread_exit(0);
 }
 

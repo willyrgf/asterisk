@@ -368,7 +368,7 @@ static int handle_showuptime(int fd, int argc, char *argv[])
 	if (ast_startuptime) {
 		tmptime = curtime - ast_startuptime;
 		if (printsec) {
-			ast_cli(fd, "System uptime: %lu\n",tmptime);
+			ast_cli(fd, "System uptime: %lu\n",(u_long)tmptime);
 		} else {
 			timestr = format_uptimestr(tmptime);
 			if (timestr) {
@@ -380,7 +380,7 @@ static int handle_showuptime(int fd, int argc, char *argv[])
 	if (ast_lastreloadtime) {
 		tmptime = curtime - ast_lastreloadtime;
 		if (printsec) {
-			ast_cli(fd, "Last reload: %lu\n", tmptime);
+			ast_cli(fd, "Last reload: %lu\n", (u_long) tmptime);
 		} else {
 			timestr = format_uptimestr(tmptime);
 			if ((timestr) && (!printsec)) {
@@ -953,6 +953,7 @@ static struct ast_cli_entry builtins[] = {
 	{ { "_command", "matchesarray", NULL }, handle_commandmatchesarray, "Returns command matches array", commandmatchesarray_help },
 	{ { "debug", "channel", NULL }, handle_debugchan, "Enable debugging on a channel", debugchan_help, complete_ch_3 },
 	{ { "debug", "level", NULL }, handle_debuglevel, "Set global debug level", debuglevel_help },
+	{ { "group", "show", "channels", NULL }, group_show_channels, "Show active channels with group(s)", group_show_channels_help},
 	{ { "help", NULL }, handle_help, "Display help list, or specific help on a command", help_help },
 	{ { "load", NULL }, handle_load, "Load a dynamic module by name", load_help, complete_fn },
 	{ { "no", "debug", "channel", NULL }, handle_nodebugchan, "Disable debugging on a channel", nodebugchan_help, complete_ch_4 },
@@ -967,7 +968,6 @@ static struct ast_cli_entry builtins[] = {
 	{ { "show", "version", NULL }, handle_version, "Display version info", version_help },
 	{ { "soft", "hangup", NULL }, handle_softhangup, "Request a hangup on a given channel", softhangup_help, complete_ch_3 },
 	{ { "unload", NULL }, handle_unload, "Unload a dynamic module by name", unload_help, complete_fn },
-	{ { "group", "show", "channels", NULL }, group_show_channels, "Show active channels with group(s)", group_show_channels_help},
 	{ { NULL }, NULL, NULL, NULL }
 };
 
@@ -1019,17 +1019,8 @@ static struct ast_cli_entry *find_cli(char *cmds[], int exact)
 
 static void join(char *dest, size_t destsize, char *w[], int tws)
 {
-	int x;
-	/* Join words into a string */
-	if (!dest || destsize < 1) {
-		return;
-	}
-	dest[0] = '\0';
-	for (x=0;w[x];x++) {
-		if (x)
-			strncat(dest, " ", destsize - strlen(dest) - 1);
-		strncat(dest, w[x], destsize - strlen(dest) - 1);
-	}
+	ast_join(dest, destsize, w);	
+
 	if (tws && !ast_strlen_zero(dest))
 		strncat(dest, " ", destsize - strlen(dest) - 1);
 }

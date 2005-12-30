@@ -1587,7 +1587,7 @@ static int base_encode(char *filename, FILE *so)
 	return 1;
 }
 
-static void prep_email_sub_vars(struct ast_channel *ast, struct ast_vm_user *vmu, int msgnum, char *context, char *mailbox, char *cidnum, char *cidname, char *dur, char *date, char *passdata, size_t passdatasize)
+static void prep_email_sub_vars(struct ast_channel *ast, struct ast_vm_user *vmu, int msgnum, char *context, char *mailbox, char *cidnum, char *cidname, char *dur, char *date, char *passdata, size_t passdatasize, const char *category)
 {
 	char callerid[256];
 	/* Prepare variables for substition in email body and subject */
@@ -1601,12 +1601,47 @@ static void prep_email_sub_vars(struct ast_channel *ast, struct ast_vm_user *vmu
 	pbx_builtin_setvar_helper(ast, "VM_CIDNAME", (cidname ? cidname : "an unknown caller"));
 	pbx_builtin_setvar_helper(ast, "VM_CIDNUM", (cidnum ? cidnum : "an unknown caller"));
 	pbx_builtin_setvar_helper(ast, "VM_DATE", date);
+	pbx_builtin_setvar_helper(ast, "VM_CATEGORY", category ? ast_strdupa(category) : "no category");
 }
 
-static int sendmail(char *srcemail, struct ast_vm_user *vmu, int msgnum, char *context, char *mailbox, char *cidnum, char *cidname, char *attach, char *format, int duration, int attach_user_voicemail)
+/*
+ * fill in *tm for current time according to the proper timezone, if any.
+ * Return tm so it can be used as a function argument.
+ */
+static const struct tm *vmu_tm(const struct ast_vm_user *vmu, struct tm *tm)
+{
+	const struct vm_zone *z = NULL;
+	time_t t = time(NULL);
+
+	/* Does this user have a timezone specified? */
+	if (!ast_strlen_zero(vmu->zonetag)) {
+		/* Find the zone in the list */
+		for (z = zones; z ; z = z->next)
+			if (!strcmp(z->name, vmu->zonetag))
+				break;
+	}
+	ast_localtime(&t, tm, z ? z->timezone : NULL);
+	return tm;
+}
+
+/* same as mkstemp, but return a FILE * */
+static FILE *vm_mkftemp(char *template)
+{
+	FILE *p = NULL;
+	int pfd = mkstemp(template);
+	if (pfd > -1) {
+		p = fdopen(pfd, "w");
+		if (!p) {
+			close(pfd);
+			pfd = -1;
+		}
+	}
+	return p;
+}
+
+static int sendmail(char *srcemail, struct ast_vm_user *vmu, int msgnum, char *context, char *mailbox, char *cidnum, char *cidname, char *attach, char *format, int duration, int attach_user_voicemail, const char *category)
 {
 	FILE *p=NULL;
-	int pfd;
 	char date[256];
 	char host[MAXHOSTNAMELEN] = "";
 	char who[256];
@@ -1615,9 +1650,8 @@ static int sendmail(char *srcemail, struct ast_vm_user *vmu, int msgnum, char *c
 	char dur[256];
 	char tmp[80] = "/tmp/astmail-XXXXXX";
 	char tmp2[256];
-	time_t t;
 	struct tm tm;
-	struct vm_zone *the_zone = NULL;
+
 	if (vmu && ast_strlen_zero(vmu->email)) {
 		ast_log(LOG_WARNING, "E-mail address missing for mailbox [%s].  E-mail will not be sent.\n", vmu->mailbox);
 		return(0);
@@ -1627,15 +1661,11 @@ static int sendmail(char *srcemail, struct ast_vm_user *vmu, int msgnum, char *c
 	ast_log(LOG_DEBUG, "Attaching file '%s', format '%s', uservm is '%d', global is %d\n", attach, format, attach_user_voicemail, ast_test_flag((&globalflags), VM_ATTACH));
 	/* Make a temporary file instead of piping directly to sendmail, in case the mail
 	   command hangs */
-	pfd = mkstemp(tmp);
-	if (pfd > -1) {
-		p = fdopen(pfd, "w");
-		if (!p) {
-			close(pfd);
-			pfd = -1;
-		}
-	}
-	if (p) {
+	p = vm_mkftemp(tmp);
+	if (p == NULL) {
+		ast_log(LOG_WARNING, "Unable to launch '%s'\n", mailcmd);
+		return -1;
+	} else {
 		gethostname(host, sizeof(host)-1);
 		if (strchr(srcemail, '@'))
 			ast_copy_string(who, srcemail, sizeof(who));
@@ -1643,27 +1673,7 @@ static int sendmail(char *srcemail, struct ast_vm_user *vmu, int msgnum, char *c
 			snprintf(who, sizeof(who), "%s@%s", srcemail, host);
 		}
 		snprintf(dur, sizeof(dur), "%d:%02d", duration / 60, duration % 60);
-		time(&t);
-
-		/* Does this user have a timezone specified? */
-		if (!ast_strlen_zero(vmu->zonetag)) {
-			/* Find the zone in the list */
-			struct vm_zone *z;
-			z = zones;
-			while (z) {
-				if (!strcmp(z->name, vmu->zonetag)) {
-					the_zone = z;
-					break;
-				}
-				z = z->next;
-			}
-		}
-
-		if (the_zone)
-			ast_localtime(&t,&tm,the_zone->timezone);
-		else
-			ast_localtime(&t,&tm,NULL);
-		strftime(date, sizeof(date), "%a, %d %b %Y %H:%M:%S %z", &tm);
+		strftime(date, sizeof(date), "%a, %d %b %Y %H:%M:%S %z", vmu_tm(vmu, &tm));
 		fprintf(p, "Date: %s\n", date);
 
 		/* Set date format for voicemail mail */
@@ -1676,7 +1686,7 @@ static int sendmail(char *srcemail, struct ast_vm_user *vmu, int msgnum, char *c
 				int vmlen = strlen(fromstring)*3 + 200;
 				if ((passdata = alloca(vmlen))) {
 					memset(passdata, 0, vmlen);
-					prep_email_sub_vars(ast,vmu,msgnum + 1,context,mailbox,cidnum, cidname,dur,date,passdata, vmlen);
+					prep_email_sub_vars(ast, vmu, msgnum + 1, context, mailbox, cidnum, cidname, dur, date, passdata, vmlen, category);
 					pbx_substitute_variables_helper(ast,fromstring,passdata,vmlen);
 					fprintf(p, "From: %s <%s>\n",passdata,who);
 				} else ast_log(LOG_WARNING, "Cannot allocate workspace for variable substitution\n");
@@ -1693,7 +1703,7 @@ static int sendmail(char *srcemail, struct ast_vm_user *vmu, int msgnum, char *c
 				int vmlen = strlen(emailsubject)*3 + 200;
 				if ((passdata = alloca(vmlen))) {
 					memset(passdata, 0, vmlen);
-					prep_email_sub_vars(ast,vmu,msgnum + 1,context,mailbox,cidnum, cidname,dur,date,passdata, vmlen);
+					prep_email_sub_vars(ast, vmu, msgnum + 1, context, mailbox, cidnum, cidname, dur, date, passdata, vmlen, category);
 					pbx_substitute_variables_helper(ast,emailsubject,passdata,vmlen);
 					fprintf(p, "Subject: %s\n",passdata);
 				} else ast_log(LOG_WARNING, "Cannot allocate workspace for variable substitution\n");
@@ -1725,7 +1735,7 @@ static int sendmail(char *srcemail, struct ast_vm_user *vmu, int msgnum, char *c
 				int vmlen = strlen(emailbody)*3 + 200;
 				if ((passdata = alloca(vmlen))) {
 					memset(passdata, 0, vmlen);
-					prep_email_sub_vars(ast,vmu,msgnum + 1,context,mailbox,cidnum, cidname,dur,date,passdata, vmlen);
+					prep_email_sub_vars(ast, vmu, msgnum + 1, context, mailbox, cidnum, cidname, dur, date, passdata, vmlen, category);
 					pbx_substitute_variables_helper(ast,emailbody,passdata,vmlen);
 					fprintf(p, "%s\n",passdata);
 				} else ast_log(LOG_WARNING, "Cannot allocate workspace for variable substitution\n");
@@ -1758,37 +1768,25 @@ static int sendmail(char *srcemail, struct ast_vm_user *vmu, int msgnum, char *c
 		snprintf(tmp2, sizeof(tmp2), "( %s < %s ; rm -f %s ) &", mailcmd, tmp, tmp);
 		ast_safe_system(tmp2);
 		ast_log(LOG_DEBUG, "Sent mail to %s with command '%s'\n", vmu->email, mailcmd);
-	} else {
-		ast_log(LOG_WARNING, "Unable to launch '%s'\n", mailcmd);
-		return -1;
 	}
 	return 0;
 }
 
-static int sendpage(char *srcemail, char *pager, int msgnum, char *context, char *mailbox, char *cidnum, char *cidname, int duration, struct ast_vm_user *vmu)
+static int sendpage(char *srcemail, char *pager, int msgnum, char *context, char *mailbox, char *cidnum, char *cidname, int duration, struct ast_vm_user *vmu, const char *category)
 {
-	FILE *p=NULL;
-	int pfd;
 	char date[256];
 	char host[MAXHOSTNAMELEN]="";
 	char who[256];
 	char dur[256];
 	char tmp[80] = "/tmp/astmail-XXXXXX";
 	char tmp2[256];
-	time_t t;
 	struct tm tm;
-	struct vm_zone *the_zone = NULL;
-	pfd = mkstemp(tmp);
+	FILE *p = vm_mkftemp(tmp);
 
-	if (pfd > -1) {
-		p = fdopen(pfd, "w");
-		if (!p) {
-			close(pfd);
-			pfd = -1;
-		}
-	}
-
-	if (p) {
+	if (p == NULL) {
+		ast_log(LOG_WARNING, "Unable to launch '%s'\n", mailcmd);
+		return -1;
+	} else {
 		gethostname(host, sizeof(host)-1);
 		if (strchr(srcemail, '@'))
 			ast_copy_string(who, srcemail, sizeof(who));
@@ -1796,28 +1794,7 @@ static int sendpage(char *srcemail, char *pager, int msgnum, char *context, char
 			snprintf(who, sizeof(who), "%s@%s", srcemail, host);
 		}
 		snprintf(dur, sizeof(dur), "%d:%02d", duration / 60, duration % 60);
-		time(&t);
-
-		/* Does this user have a timezone specified? */
-		if (!ast_strlen_zero(vmu->zonetag)) {
-			/* Find the zone in the list */
-			struct vm_zone *z;
-			z = zones;
-			while (z) {
-				if (!strcmp(z->name, vmu->zonetag)) {
-					the_zone = z;
-					break;
-				}
-				z = z->next;
-			}
-		}
-
-		if (the_zone)
-			ast_localtime(&t,&tm,the_zone->timezone);
-		else
-			ast_localtime(&t,&tm,NULL);
-
-		strftime(date, sizeof(date), "%a, %d %b %Y %H:%M:%S %z", &tm);
+		strftime(date, sizeof(date), "%a, %d %b %Y %H:%M:%S %z", vmu_tm(vmu, &tm));
 		fprintf(p, "Date: %s\n", date);
 
 		if (*pagerfromstring) {
@@ -1827,7 +1804,7 @@ static int sendpage(char *srcemail, char *pager, int msgnum, char *context, char
 				int vmlen = strlen(fromstring)*3 + 200;
 				if ((passdata = alloca(vmlen))) {
 					memset(passdata, 0, vmlen);
-					prep_email_sub_vars(ast,vmu,msgnum + 1,context,mailbox,cidnum, cidname,dur,date,passdata, vmlen);
+					prep_email_sub_vars(ast, vmu, msgnum + 1, context, mailbox, cidnum, cidname, dur, date, passdata, vmlen, category);
 					pbx_substitute_variables_helper(ast,pagerfromstring,passdata,vmlen);
 					fprintf(p, "From: %s <%s>\n",passdata,who);
 				} else 
@@ -1844,7 +1821,7 @@ static int sendpage(char *srcemail, char *pager, int msgnum, char *context, char
                                int vmlen = strlen(pagersubject)*3 + 200;
                                if ((passdata = alloca(vmlen))) {
                                        memset(passdata, 0, vmlen);
-                                       prep_email_sub_vars(ast,vmu,msgnum + 1,context,mailbox,cidnum, cidname,dur,date,passdata, vmlen);
+                                       prep_email_sub_vars(ast, vmu, msgnum + 1, context, mailbox, cidnum, cidname, dur, date, passdata, vmlen, category);
                                        pbx_substitute_variables_helper(ast,pagersubject,passdata,vmlen);
                                        fprintf(p, "Subject: %s\n\n",passdata);
                                } else ast_log(LOG_WARNING, "Cannot allocate workspace for variable substitution\n");
@@ -1860,7 +1837,7 @@ static int sendpage(char *srcemail, char *pager, int msgnum, char *context, char
                                int vmlen = strlen(pagerbody)*3 + 200;
                                if ((passdata = alloca(vmlen))) {
                                        memset(passdata, 0, vmlen);
-                                       prep_email_sub_vars(ast,vmu,msgnum + 1,context,mailbox,cidnum, cidname,dur,date,passdata, vmlen);
+                                       prep_email_sub_vars(ast, vmu, msgnum + 1, context, mailbox, cidnum, cidname, dur, date, passdata, vmlen, category);
                                        pbx_substitute_variables_helper(ast,pagerbody,passdata,vmlen);
                                        fprintf(p, "%s\n",passdata);
                                } else ast_log(LOG_WARNING, "Cannot allocate workspace for variable substitution\n");
@@ -1874,9 +1851,6 @@ static int sendpage(char *srcemail, char *pager, int msgnum, char *context, char
 		snprintf(tmp2, sizeof(tmp2), "( %s < %s ; rm -f %s ) &", mailcmd, tmp, tmp);
 		ast_safe_system(tmp2);
 		ast_log(LOG_DEBUG, "Sent page to %s with command '%s'\n", pager, mailcmd);
-	} else {
-		ast_log(LOG_WARNING, "Unable to launch '%s'\n", mailcmd);
-		return -1;
 	}
 	return 0;
 }
@@ -2005,7 +1979,7 @@ static int messagecount(const char *mailbox, int *newmsgs, int *oldmsgs)
 			ast_log(LOG_WARNING, "SQL Alloc Handle failed!\n");
 			goto yuck;
 		}
-		snprintf(sql, sizeof(sql), "SELECT COUNT(*) FROM %s WHERE dir like \"%%%s/%s/%s\"%c", odbc_table, context, tmp, "INBOX", '\0');
+		snprintf(sql, sizeof(sql), "SELECT COUNT(*) FROM %s WHERE dir LIKE '%%%s/%s/%s'", odbc_table, context, tmp, "INBOX");
 		res = SQLPrepare(stmt, sql, SQL_NTS);
 		if ((res != SQL_SUCCESS) && (res != SQL_SUCCESS_WITH_INFO)) {
 			ast_log(LOG_WARNING, "SQL Prepare failed![%s]\n", sql);
@@ -2038,7 +2012,7 @@ static int messagecount(const char *mailbox, int *newmsgs, int *oldmsgs)
 			ast_log(LOG_WARNING, "SQL Alloc Handle failed!\n");
 			goto yuck;
 		}
-		snprintf(sql, sizeof(sql), "SELECT COUNT(*) FROM %s WHERE dir like \"%%%s/%s/%s\"%c", odbc_table, context, tmp, "Old", '\0');
+		snprintf(sql, sizeof(sql), "SELECT COUNT(*) FROM %s WHERE dir like '%%%s/%s/%s'", odbc_table, context, tmp, "Old");
 		res = SQLPrepare(stmt, sql, SQL_NTS);
 		if ((res != SQL_SUCCESS) && (res != SQL_SUCCESS_WITH_INFO)) {
 			ast_log(LOG_WARNING, "SQL Prepare failed![%s]\n", sql);
@@ -2105,7 +2079,7 @@ static int has_voicemail(const char *mailbox, const char *folder)
                         ast_log(LOG_WARNING, "SQL Alloc Handle failed!\n");
                         goto yuck;
                 }
-		snprintf(sql, sizeof(sql), "SELECT COUNT(*) FROM %s WHERE dir like \"%%%s/%s/%s\"%c", odbc_table, context, tmp, "INBOX", '\0');
+		snprintf(sql, sizeof(sql), "SELECT COUNT(*) FROM %s WHERE dir like '%%%s/%s/%s'", odbc_table, context, tmp, "INBOX");
                 res = SQLPrepare(stmt, sql, SQL_NTS);
                 if ((res != SQL_SUCCESS) && (res != SQL_SUCCESS_WITH_INFO)) {  
                         ast_log(LOG_WARNING, "SQL Prepare failed![%s]\n", sql);
@@ -2360,7 +2334,7 @@ static int leave_voicemail(struct ast_channel *chan, char *ext, struct leave_vm_
 	char tmp[256] = "", *tmpptr;
 	struct ast_vm_user *vmu;
 	struct ast_vm_user svm;
-	char *category = NULL;
+	const char *category = NULL;
 
 	ast_copy_string(tmp, ext, sizeof(tmp));
 	ext = tmp;
@@ -3286,6 +3260,7 @@ static int notify_new_message(struct ast_channel *chan, struct ast_vm_user *vmu,
 {
 	char todir[256], fn[256], ext_context[256], *stringp;
 	int newmsgs = 0, oldmsgs = 0;
+	const char *category = pbx_builtin_getvar_helper(chan, "VM_CATEGORY");
 
 	make_dir(todir, sizeof(todir), vmu->context, vmu->mailbox, "INBOX");
 	make_file(fn, sizeof(fn), todir, msgnum);
@@ -3303,14 +3278,14 @@ static int notify_new_message(struct ast_channel *chan, struct ast_vm_user *vmu,
 			attach_user_voicemail = ast_test_flag(vmu, VM_ATTACH);
 			if (!ast_strlen_zero(vmu->serveremail))
 				myserveremail = vmu->serveremail;
-			sendmail(myserveremail, vmu, msgnum, vmu->context, vmu->mailbox, cidnum, cidname, fn, fmt, duration, attach_user_voicemail);
+			sendmail(myserveremail, vmu, msgnum, vmu->context, vmu->mailbox, cidnum, cidname, fn, fmt, duration, attach_user_voicemail, category);
 		}
 
 		if (!ast_strlen_zero(vmu->pager)) {
 			char *myserveremail = serveremail;
 			if (!ast_strlen_zero(vmu->serveremail))
 				myserveremail = vmu->serveremail;
-			sendpage(myserveremail, vmu->pager, msgnum, vmu->context, vmu->mailbox, cidnum, cidname, duration, vmu);
+			sendpage(myserveremail, vmu->pager, msgnum, vmu->context, vmu->mailbox, cidnum, cidname, duration, vmu, category);
 		}
 	} else {
 		ast_log(LOG_ERROR, "Out of memory\n");
@@ -3470,6 +3445,7 @@ static int forward_message(struct ast_channel *chan, char *context, char *dir, i
 		leave_options.record_gain = record_gain;
 		cmd = leave_voicemail(chan, username, &leave_options);
 	} else {
+
 		/* Forward VoiceMail */
 		RETRIEVE(dir, curmsg);
 		cmd = vm_forwardoptions(chan, sender, dir, curmsg, vmfmts, context, record_gain);
@@ -3514,7 +3490,8 @@ static int forward_message(struct ast_channel *chan, char *context, char *dir, i
 				/* load the information on the source message so we can send an e-mail like a new message */
 				snprintf(miffile, sizeof(miffile), "%s/msg%04d.txt", dir, curmsg);
 				if ((mif=ast_config_load(miffile))) {
-	
+					const char *category = ast_variable_retrieve(mif, NULL, "category");
+
 					/* set callerid and duration variables */
 					snprintf(callerid, sizeof(callerid), "FWD from: %s from %s", sender->fullname, ast_variable_retrieve(mif, NULL, "callerid"));
 					s = ast_variable_retrieve(mif, NULL, "duration");
@@ -3528,14 +3505,14 @@ static int forward_message(struct ast_channel *chan, char *context, char *dir, i
 						attach_user_voicemail = ast_test_flag(vmtmp, VM_ATTACH);
 						if (!ast_strlen_zero(vmtmp->serveremail))
 							myserveremail = vmtmp->serveremail;
-						sendmail(myserveremail, vmtmp, todircount, vmtmp->context, vmtmp->mailbox, chan->cid.cid_num, chan->cid.cid_name, fn, tmp, duration, attach_user_voicemail);
+						sendmail(myserveremail, vmtmp, todircount, vmtmp->context, vmtmp->mailbox, chan->cid.cid_num, chan->cid.cid_name, fn, tmp, duration, attach_user_voicemail, category);
 					}
 
 					if (!ast_strlen_zero(vmtmp->pager)) {
 						char *myserveremail = serveremail;
 						if (!ast_strlen_zero(vmtmp->serveremail))
 							myserveremail = vmtmp->serveremail;
-						sendpage(myserveremail, vmtmp->pager, todircount, vmtmp->context, vmtmp->mailbox, chan->cid.cid_num, chan->cid.cid_name, duration, vmtmp);
+						sendpage(myserveremail, vmtmp->pager, todircount, vmtmp->context, vmtmp->mailbox, chan->cid.cid_num, chan->cid.cid_name, duration, vmtmp, category);
 					}
 				  
 					ast_config_destroy(mif); /* or here */
@@ -4751,8 +4728,7 @@ static int vm_tempgreeting(struct ast_channel *chan, struct ast_vm_user *vmu, st
 	unsigned char buf[256];
 	int bytes=0;
 
-	if (adsi_available(chan))
-	{
+	if (adsi_available(chan)) {
 		bytes += adsi_logo(buf + bytes);
 		bytes += adsi_display(buf + bytes, ADSI_COMM_PAGE, 3, ADSI_JUST_CENT, 0, "Temp Greeting Menu", "");
 		bytes += adsi_display(buf + bytes, ADSI_COMM_PAGE, 4, ADSI_JUST_CENT, 0, "Not Done", "");
@@ -4760,39 +4736,37 @@ static int vm_tempgreeting(struct ast_channel *chan, struct ast_vm_user *vmu, st
 		bytes += adsi_voice_mode(buf + bytes, 0);
 		adsi_transmit_message(chan, buf, bytes, ADSI_MSG_DISPLAY);
 	}
-	snprintf(prefile,sizeof(prefile), "%s%s/%s/temp", VM_SPOOL_DIR, vmu->context, vms->username);
-	while((cmd >= 0) && (cmd != 't')) {
+	snprintf(prefile, sizeof(prefile), "%s%s/%s/temp", VM_SPOOL_DIR, vmu->context, vms->username);
+	while (cmd >= 0 && cmd != 't') {
 		if (cmd)
 			retries = 0;
-		if (ast_fileexists(prefile, NULL, NULL) > 0) {
+		if (ast_fileexists(prefile, NULL, NULL) <= 0) {
+			play_record_review(chan, "vm-rec-temp", prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, record_gain);
+			cmd = 't';	
+		} else {
 			switch (cmd) {
 			case '1':
-				cmd = play_record_review(chan,"vm-rec-temp",prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, record_gain);
+				cmd = play_record_review(chan, "vm-rec-temp", prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, record_gain);
 				break;
 			case '2':
 				ast_filedelete(prefile, NULL);
-				ast_play_and_wait(chan,"vm-tempremoved");
+				ast_play_and_wait(chan, "vm-tempremoved");
 				cmd = 't';	
 				break;
 			case '*': 
 				cmd = 't';
 				break;
 			default:
-				if (ast_fileexists(prefile, NULL, NULL) > 0) {
-					cmd = ast_play_and_wait(chan,"vm-tempgreeting2");
-				} else {
-					cmd = ast_play_and_wait(chan,"vm-tempgreeting");
-				} if (!cmd) {
+				cmd = ast_play_and_wait(chan,
+					ast_fileexists(prefile, NULL, NULL) > 0 ? /* XXX always true ? */
+						"vm-tempgreeting2" : "vm-tempgreeting");
+				if (!cmd)
 					cmd = ast_waitfordigit(chan,6000);
-				} if (!cmd) {
+				if (!cmd)
 					retries++;
-				} if (retries > 3) {
+				if (retries > 3)
 					cmd = 't';
-				}
 			}
-		} else {
-			play_record_review(chan,"vm-rec-temp",prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, record_gain);
-			cmd = 't';	
 		}
 	}
 	if (cmd == 't')
@@ -5767,7 +5741,8 @@ static int handle_show_voicemail_zones(int fd, int argc, char *argv[])
 static char *complete_show_voicemail_users(char *line, char *word, int pos, int state)
 {
 	int which = 0;
-	struct ast_vm_user *vmu = users;
+	int wordlen;
+	struct ast_vm_user *vmu;
 	char *context = "";
 
 	/* 0 - show; 1 - voicemail; 2 - users; 3 - for; 4 - <context> */
@@ -5779,8 +5754,9 @@ static char *complete_show_voicemail_users(char *line, char *word, int pos, int 
 		else
 			return NULL;
 	}
-	while (vmu) {
-		if (!strncasecmp(word, vmu->context, strlen(word))) {
+	wordlen = strlen(word);
+	for (vmu = users; vmu; vmu = vmu->next) {
+		if (!strncasecmp(word, vmu->context, wordlen)) {
 			if (context && strcmp(context, vmu->context)) {
 				if (++which > state) {
 					return strdup(vmu->context);
@@ -5788,7 +5764,6 @@ static char *complete_show_voicemail_users(char *line, char *word, int pos, int 
 				context = vmu->context;
 			}
 		}
-		vmu = vmu->next;
 	}
 	return NULL;
 }
