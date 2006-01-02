@@ -19,7 +19,12 @@
 /*!
  * \file
  * \brief Implementation of Session Initiation Protocol
- * 
+ *
+ * \author Mark Spencer <markster@digium.com>
+ *
+ * See Also:
+ * \arg \ref AstCREDITS
+ *
  * Implementation of RFC 3261 - without S/MIME, TCP and TLS support
  * Configuration file \link Config_sip sip.conf \endlink
  *
@@ -12043,7 +12048,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, int
 		}
 
 		if (realtime && !strcasecmp(v->name, "regseconds")) {
-			if (sscanf(v->value, "%i", (int *)&regseconds) != 1)
+			if (sscanf(v->value, "%ld", (time_t *)&regseconds) != 1)
 				regseconds = 0;
 		} else if (realtime && !strcasecmp(v->name, "ipaddr") && !ast_strlen_zero(v->value) ) {
 			inet_aton(v->value, &(peer->addr.sin_addr));

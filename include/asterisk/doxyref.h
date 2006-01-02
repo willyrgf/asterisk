@@ -64,8 +64,7 @@
  *  \subsection model_txt Generic Model
  *  \verbinclude model.txt
  *  \subsection channel_txt Channels
- *  \arg See \link Def_Channel
- *  \verbinclude channel.txt
+ *  \arg See \ref Def_Channel
  */
 
 /*! \page AstDebug Debugging
@@ -126,7 +125,7 @@ DUNDi is not itself a Voice-over IP signaling or media protocol. Instead, it pub
  * \section enumreadme ENUM
  * \arg Configuration: \ref Config_enum
  * \arg \ref enum.c
- * \arg \ref app_enumlookup.c
+ * \arg \ref func_enum.c
  *
  * \verbinclude README.enum
  */

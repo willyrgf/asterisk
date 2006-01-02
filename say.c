@@ -20,9 +20,11 @@
 /*! \file
  *
  * \brief Say numbers and dates (maybe words one day too)
+ *
+ * \author Mark Spencer <markster@digium.com>
  * 
- * \note 12-16-2004 : Support for Greek added by InAccess Networks (work funded by HOL, www.hol.gr)
- *  						George Konstantoulakis <gkon@inaccessnetworks.com>
+ * \note 12-16-2004 : Support for Greek added by InAccess Networks (work funded by HOL, www.hol.gr) George Konstantoulakis <gkon@inaccessnetworks.com>
+ *  						
  */
 
 #include <sys/types.h>
@@ -279,7 +281,7 @@ int ast_say_digits(struct ast_channel *chan, int num, const char *ints, const ch
 
 /* Forward declarations */
 /*! \page Def_syntaxlang Asterisk Language Syntaxes supported
-    \not Not really language codes.
+    \note Not really language codes.
 	For these language codes, Asterisk will change the syntax when
 	saying numbers (and in some cases dates and voicemail messages
 	as well)
