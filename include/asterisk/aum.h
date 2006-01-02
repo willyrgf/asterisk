@@ -1,7 +1,7 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Asterisk User Management interface
+ * ASTUM - Asterisk User Management interface
  *
  * Copyright (C) 2005, Edvina AB, Sollentuna, Sweden
  *
@@ -22,10 +22,10 @@
 */
 
 /*!\file
- * \brief Asterisk User Managment - AUM - API
+ * \brief Asterisk User Managment - ASTUM - API
  * \arg Implemented in res_aum.c
- * \par For information on AUM, please see
- *  	\arg AUM_desc
+ * \par For information on ASTUM, please see
+ *  	\arg ASTUM_desc
  */
 
 #ifndef _ASTERISK_AUM_H

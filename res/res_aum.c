@@ -2,7 +2,7 @@
  * Asterisk -- An open source telephony toolkit.
  *
  * 
- * Asterisk User Management Resource
+ * ASTUM - Asterisk User Management Resource
  *
  * Copyright (C) 2005, Edvina AB, Sollentuna, Sweden.
  *
@@ -21,7 +21,7 @@
 
 /*! \file
  *
- * \brief AUM - Asterisk User Management
+ * \brief ASTUM - Asterisk User Management
  *
  * \author Olle E. Johansson <oej@edvina.net>
  *
@@ -72,18 +72,18 @@ STANDARD_LOCAL_USER;
 
 LOCAL_USER_DECL;
 
-/*! \page AUM_desc Asterisk User Managment - AUM - module 
-	\par What is AUM?
-	The AUM module implements common user management. A user
+/*! \page AUM_desc Asterisk User Managment - ASTUM - module 
+	\par What is ASTUM?
+	The ASTUM module implements common user management. A user
 	can have one or several voicemail accounts, phones, IM accounts
 	and other properties. A common user module mamkes it easier
 	to manage passwords, e-mail addresses and properties that belong
 	to the person who manages a device.
 
 	\par
-	In AUM-enabled Asterisk modules (channels, applications, functions)
+	In ASTUM-enabled Asterisk modules (channels, applications, functions)
 	you can refer to the AUMid and thus fetch configuration data from
-	the AUM module for common properties.
+	the ASTUM module for common properties.
 
 	\par Currently these modules support AUM:
 		- none 
@@ -97,8 +97,8 @@ LOCAL_USER_DECL;
 		- The Asterisk CLI
 		- Parking
 
-	\par The AUM User object
-	The AUM user object consist of one general structure and
+	\par The ASTUM User object
+	The ASTUM user object consist of one general structure and
 	linked lists for addresses, contexts and groups.
 	When installed, the user inherit properties from the groups.
 	\arg \ref aum_user The user object
@@ -110,7 +110,7 @@ LOCAL_USER_DECL;
 	with publish or linked to an IM account (if there's code support
 	for it).
 
-	\par The AUM Address Object
+	\par The ASTUM Address Object
 	The address object consists of a type and a text string.
 	The type can be a phone number, SIP uri, IAX number or 
 	cell phone number.
@@ -120,16 +120,16 @@ LOCAL_USER_DECL;
 	will be configurable so that they can have different labels,
 	depending upon your configuration.
 
-	\par The AUM group object
+	\par The ASTUM group object
 	Group objects are "master" objects that the User inherits
 	properties from.
 
 	There are dial plan functions to check if a user belongs
 	to a user group or not.
 	
-	\par The AUM context object
+	\par The ASTUM context object
 	...
-	\par The AUM string object
+	\par The ASTUM string object
 	The AUM string object is an encapsulation of a normal C character string,
 	terminated with a zero character. It is a linked list of strings 
 	where each string is clearly marked with character set.
@@ -172,22 +172,22 @@ LOCAL_USER_DECL;
 	- We need to synch status levels with other IM (SIMPLE/Jabber/XMPP)
 
 	\par Realtime usage
-	AUM uses ARA - the realtime architecture - to load users and groups.
+	ASTUM uses ARA - the realtime architecture - to load users and groups.
 	The realtime handles for AUM is
 	- \b aumusers	For users
 	- \b aumgroups  For the realtime groups
 	
-	AUM will cache realtime users in memory after we load them.
+	ASTUM will cache realtime users in memory after we load them.
 	Every time a realtime user is accessed, it's moved to top of
 	the cache. When we reach the maximum number of cached users,
-	AUM mwill delete from the bottom of the cache while adding the
+	ASTUM mwill delete from the bottom of the cache while adding the
 	missing user to the top.
 	
 	(Actually, the cache is implemented upside down, but I guess
 	that does not matter.)
 
-	The AUM cache size will be configurable in the general
-	section of aum.conf
+	The ASTUM cache size will be configurable in the general
+	section of astum.conf
 
 	\par Channel usage
 	For channels, they can register a device that belongs to
@@ -252,7 +252,7 @@ static const char *context_type2str(enum aum_context_type type);
 \brief AUM General Configuration 
 */
 /*! \brief Configuration file name */
-char *aum_config_file = "aum.conf";
+char *aum_config_file = "astum.conf";
 
 /*! \brief AUM debugging */
 int aum_debug = 0;
