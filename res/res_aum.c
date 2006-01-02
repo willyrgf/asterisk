@@ -61,7 +61,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 1.19 $")
 #include "asterisk/manager.h"
 #include "asterisk/utils.h"
 #include "asterisk/linkedlists.h"
-#include "asterisk/aum.h"
+#include "asterisk/astum.h"
 
 /*! AUM user lock */
 AST_MUTEX_DEFINE_STATIC(aum_userlock);
