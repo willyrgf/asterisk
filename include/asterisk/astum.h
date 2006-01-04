@@ -49,6 +49,7 @@ enum aum_string_charset {
 	AUM_CHAR_UTF8,			/*!< Unicode ISO 9660, UTF 8 encoding */
 };
 
+/*! Convert strings between character sets */
 struct aum_string_convert {
 	enum aum_string_charset	charset;	/*!< Character set */
 	const char *label;			/*!< Label used in strings in config files */

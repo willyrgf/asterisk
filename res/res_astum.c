@@ -21,11 +21,11 @@
 
 /*! \file
  *
- * \brief ASTUM - Asterisk User Management
+ * \brief AstUM - Asterisk User Management
  *
  * \author Olle E. Johansson <oej@edvina.net>
  *
- * \arg For information about aum, see \ref AUM_desc
+ * \arg For information about AstUM, see \ref AUM_desc
  *
  */
  
