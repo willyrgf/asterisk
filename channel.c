@@ -1,7 +1,7 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 1999 - 2005, Digium, Inc.
+ * Copyright (C) 1999 - 2006, Digium, Inc.
  *
  * Mark Spencer <markster@digium.com>
  *
@@ -168,8 +168,10 @@ const struct ast_cause {
 
 static int show_channeltypes(int fd, int argc, char *argv[])
 {
-#define FORMAT  "%-10.10s  %-30.30s %-12.12s %-12.12s %-12.12s\n"
+#define FORMAT  "%-10.10s  %-40.40s %-12.12s %-12.12s %-12.12s\n"
 	struct chanlist *cl;
+	int count_chan = 0;
+
 	ast_cli(fd, FORMAT, "Type", "Description",       "Devicestate", "Indications", "Transfer");
 	ast_cli(fd, FORMAT, "----------", "-----------", "-----------", "-----------", "--------");
 	if (ast_mutex_lock(&chlock)) {
@@ -181,8 +183,10 @@ static int show_channeltypes(int fd, int argc, char *argv[])
 			(cl->tech->devicestate) ? "yes" : "no", 
 			(cl->tech->indicate) ? "yes" : "no",
 			(cl->tech->transfer) ? "yes" : "no");
+		count_chan++;
 	}
 	ast_mutex_unlock(&chlock);
+	ast_cli(fd, "----------\n%d channel drivers registered.\n", count_chan);
 	return RESULT_SUCCESS;
 
 #undef FORMAT
@@ -996,7 +1000,7 @@ void ast_channel_spy_stop_by_type(struct ast_channel *chan, const char *type)
 	AST_LIST_TRAVERSE(&chan->spies->list, spy, list) {
 		ast_mutex_lock(&spy->lock);
 		if ((spy->type == type) && (spy->status == CHANSPY_RUNNING)) {
-			spy->status = CHANSPY_DONE;
+			spy->status = CHANSPY_STOP;
 			if (ast_test_flag(spy, CHANSPY_TRIGGER_MODE) != CHANSPY_TRIGGER_NONE)
 				ast_cond_signal(&spy->trigger);
 		}

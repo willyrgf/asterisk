@@ -1,7 +1,7 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 1999 - 2005, Digium, Inc.
+ * Copyright (C) 1999 - 2006, Digium, Inc.
  *
  * Mark Spencer <markster@digium.com>
  *
@@ -104,6 +104,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #define SIPDUMPER
 #define DEFAULT_DEFAULT_EXPIRY  120
+#define DEFAULT_MIN_EXPIRY	60
 #define DEFAULT_MAX_EXPIRY	3600
 #define DEFAULT_REGISTRATION_TIMEOUT	20
 #define DEFAULT_MAX_FORWARDS	"70"
@@ -120,6 +121,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define EXPIRY_GUARD_PCT	0.20	/* Percentage of expires timeout to use when 
 					   below EXPIRY_GUARD_LIMIT */
 
+static int min_expiry = DEFAULT_MIN_EXPIRY;
 static int max_expiry = DEFAULT_MAX_EXPIRY;
 static int default_expiry = DEFAULT_DEFAULT_EXPIRY;
 
@@ -498,9 +500,11 @@ int allow_external_domains;		/*!< Accept calls to external SIP domains? */
 
 /*! \brief sip_history: Structure for saving transactions within a SIP dialog */
 struct sip_history {
-	char event[80];
-	struct sip_history *next;
+	AST_LIST_ENTRY(sip_history) list;
+	char event[0];	/* actually more, depending on needs */
 };
+
+AST_LIST_HEAD_NOLOCK(sip_history_head, sip_history); /*!< history list, entry in sip_pvt */
 
 /*! \brief sip_auth: Creadentials for authentication to other SIP services */
 struct sip_auth {
@@ -693,7 +697,7 @@ static struct sip_pvt {
 	struct ast_rtp *rtp;			/*!< RTP Session */
 	struct ast_rtp *vrtp;			/*!< Video RTP session */
 	struct sip_pkt *packets;		/*!< Packets scheduled for re-transmission */
-	struct sip_history *history;		/*!< History of this SIP dialog */
+	struct sip_history_head *history;	/*!< History of this SIP dialog */
 	struct ast_variable *chanvars;		/*!< Channel variables to set for call */
 	struct sip_pvt *next;			/*!< Next call in chain */
 	struct sip_invite_param *options;	/*!< Options for INVITE */
@@ -881,7 +885,7 @@ static struct ast_ha *localaddr;
 /* The list of manual NOTIFY types we know how to send */
 struct ast_config *notify_types;
 
-static struct sip_auth *authl;          /*!< Authentication list */
+static struct sip_auth *authl = NULL;          /*!< Authentication list */
 
 
 static int transmit_response(struct sip_pvt *p, char *msg, struct sip_request *req);
@@ -1126,40 +1130,51 @@ static int ast_sip_ouraddrfor(struct in_addr *them, struct in_addr *us)
 	return 0;
 }
 
-/*! \brief  append_history: Append to SIP dialog history */
-/*	Always returns 0 */
-static int append_history(struct sip_pvt *p, const char *event, const char *data)
+/*! \brief  append_history: Append to SIP dialog history 
+	\return Always returns 0 */
+#define append_history(p, event, fmt , args... )	append_history_full(p, "%-15s " fmt, event, ## args)
+
+static int append_history_full(struct sip_pvt *p, const char *fmt, ...)
+	__attribute__ ((format (printf, 2, 3)));
+
+/*! \brief  Append to SIP dialog history with arg list  */
+static void append_history_va(struct sip_pvt *p, const char *fmt, va_list ap)
 {
-	struct sip_history *hist, *prev;
-	char *c;
+	char buf[80], *c = buf; /* max history length */
+	struct sip_history *hist;
+	int l;
+
+	vsnprintf(buf, sizeof(buf), fmt, ap);
+	strsep(&c, "\r\n"); /* Trim up everything after \r or \n */
+	l = strlen(buf) + 1;
+	hist = calloc(1, sizeof(*hist) + l);
+	if (!hist) {
+		ast_log(LOG_WARNING, "Can't allocate memory for history");
+		return;
+	}
+	if (p->history == NULL)
+		p->history = calloc(1, sizeof(struct sip_history_head));
+	if (p->history == NULL) {
+		ast_log(LOG_WARNING, "Can't allocate memory for history head");
+		free(hist);
+		return;
+	}
+	memcpy(hist->event, buf, l);
+	AST_LIST_INSERT_TAIL(p->history, hist, list);
+}
+
+/*! \brief  Append to SIP dialog history with arg list  */
+static int append_history_full(struct sip_pvt *p, const char *fmt, ...)
+{
+        va_list ap;
 
 	if (!recordhistory || !p)
 		return 0;
-	if(!(hist = malloc(sizeof(struct sip_history)))) {
-		ast_log(LOG_WARNING, "Can't allocate memory for history");
-		return 0;
-	}
-	memset(hist, 0, sizeof(struct sip_history));
-	snprintf(hist->event, sizeof(hist->event), "%-15s %s", event, data);
-	/* Trim up nicely */
-	c = hist->event;
-	while(*c) {
-		if ((*c == '\r') || (*c == '\n')) {
-			*c = '\0';
-			break;
-		}
-		c++;
-	}
-	/* Enqueue into history */
-	prev = p->history;
-	if (prev) {
-		while(prev->next)
-			prev = prev->next;
-		prev->next = hist;
-	} else {
-		p->history = hist;
-	}
-	return 0;
+        va_start(ap, fmt);
+        append_history_va(p, fmt, ap);
+        va_end(ap);
+
+        return 0;
 }
 
 /*! \brief  retrans_pkt: Retransmit SIP message if no answer ---*/
@@ -1173,8 +1188,6 @@ static int retrans_pkt(void *data)
 	ast_mutex_lock(&pkt->owner->lock);
 
 	if (pkt->retrans < MAX_RETRANS) {
-		char buf[80];
-
 		pkt->retrans++;
  		if (!pkt->timer_t1) {	/* Re-schedule using timer_a and timer_t1 */
 			if (sipdebug && option_debug > 3)
@@ -1206,9 +1219,8 @@ static int retrans_pkt(void *data)
 			else
 				ast_verbose("Retransmitting #%d (no NAT) to %s:%d:\n%s\n---\n", pkt->retrans, ast_inet_ntoa(iabuf, sizeof(iabuf), pkt->owner->sa.sin_addr), ntohs(pkt->owner->sa.sin_port), pkt->data);
 		}
-		snprintf(buf, sizeof(buf), "ReTx %d", reschedule);
 
-		append_history(pkt->owner, buf, pkt->data);
+		append_history(pkt->owner, "ReTx", "%d %s", reschedule, pkt->data);
 		__sip_xmit(pkt->owner, pkt->data, pkt->packetlen);
 		ast_mutex_unlock(&pkt->owner->lock);
 		return  reschedule;
@@ -1219,7 +1231,7 @@ static int retrans_pkt(void *data)
 		if ((pkt->method == SIP_OPTIONS) && sipdebug)
 			ast_log(LOG_WARNING, "Cancelling retransmit of OPTIONs (call id %s) \n", pkt->owner->callid);
 	}
-	append_history(pkt->owner, "MaxRetries", (ast_test_flag(pkt, FLAG_FATAL)) ? "(Critical)" : "(Non-critical)");
+	append_history(pkt->owner, "MaxRetries", "%s", (ast_test_flag(pkt, FLAG_FATAL)) ? "(Critical)" : "(Non-critical)");
  		
 	pkt->retransid = -1;
 
@@ -1331,13 +1343,10 @@ static int __sip_autodestruct(void *data)
 /*! \brief  sip_scheddestroy: Schedule destruction of SIP call ---*/
 static int sip_scheddestroy(struct sip_pvt *p, int ms)
 {
-	char tmp[80];
 	if (sip_debug_test_pvt(p))
 		ast_verbose("Scheduling destruction of call '%s' in %d ms\n", p->callid, ms);
-	if (recordhistory) {
-		snprintf(tmp, sizeof(tmp), "%d ms", ms);
-		append_history(p, "SchedDestroy", tmp);
-	}
+	if (recordhistory)
+		append_history(p, "SchedDestroy", "%d ms", ms);
 
 	if (p->autokillid > -1)
 		ast_sched_del(sched, p->autokillid);
@@ -1469,31 +1478,22 @@ static void parse_copy(struct sip_request *dst, struct sip_request *src)
 static int send_response(struct sip_pvt *p, struct sip_request *req, int reliable, int seqno)
 {
 	int res;
-	char iabuf[INET_ADDRSTRLEN];
-	struct sip_request tmp;
-	char tmpmsg[80];
 
 	if (sip_debug_test_pvt(p)) {
+		char iabuf[INET_ADDRSTRLEN];
 		if (ast_test_flag(p, SIP_NAT) & SIP_NAT_ROUTE)
 			ast_verbose("%sTransmitting (NAT) to %s:%d:\n%s\n---\n", reliable ? "Reliably " : "", ast_inet_ntoa(iabuf, sizeof(iabuf), p->recv.sin_addr), ntohs(p->recv.sin_port), req->data);
 		else
 			ast_verbose("%sTransmitting (no NAT) to %s:%d:\n%s\n---\n", reliable ? "Reliably " : "", ast_inet_ntoa(iabuf, sizeof(iabuf), p->sa.sin_addr), ntohs(p->sa.sin_port), req->data);
 	}
-	if (reliable) {
-		if (recordhistory) {
-			parse_copy(&tmp, req);
-			snprintf(tmpmsg, sizeof(tmpmsg), "%s / %s", tmp.data, get_header(&tmp, "CSeq"));
-			append_history(p, "TxRespRel", tmpmsg);
-		}
-		res = __sip_reliable_xmit(p, seqno, 1, req->data, req->len, (reliable > 1), req->method);
-	} else {
-		if (recordhistory) {
-			parse_copy(&tmp, req);
-			snprintf(tmpmsg, sizeof(tmpmsg), "%s / %s", tmp.data, get_header(&tmp, "CSeq"));
-			append_history(p, "TxResp", tmpmsg);
-		}
-		res = __sip_xmit(p, req->data, req->len);
+	if (recordhistory) {
+		struct sip_request tmp;
+		parse_copy(&tmp, req);
+		append_history(p, reliable ? "TxRespRel" : "TxResp", "%s / %s", tmp.data, get_header(&tmp, "CSeq"));
 	}
+	res = (reliable) ?
+		__sip_reliable_xmit(p, seqno, 1, req->data, req->len, (reliable > 1), req->method) :
+		__sip_xmit(p, req->data, req->len);
 	if (res > 0)
 		return 0;
 	return res;
@@ -1503,31 +1503,22 @@ static int send_response(struct sip_pvt *p, struct sip_request *req, int reliabl
 static int send_request(struct sip_pvt *p, struct sip_request *req, int reliable, int seqno)
 {
 	int res;
-	char iabuf[INET_ADDRSTRLEN];
-	struct sip_request tmp;
-	char tmpmsg[80];
 
 	if (sip_debug_test_pvt(p)) {
+		char iabuf[INET_ADDRSTRLEN];
 		if (ast_test_flag(p, SIP_NAT) & SIP_NAT_ROUTE)
 			ast_verbose("%sTransmitting (NAT) to %s:%d:\n%s\n---\n", reliable ? "Reliably " : "", ast_inet_ntoa(iabuf, sizeof(iabuf), p->recv.sin_addr), ntohs(p->recv.sin_port), req->data);
 		else
 			ast_verbose("%sTransmitting (no NAT) to %s:%d:\n%s\n---\n", reliable ? "Reliably " : "", ast_inet_ntoa(iabuf, sizeof(iabuf), p->sa.sin_addr), ntohs(p->sa.sin_port), req->data);
 	}
-	if (reliable) {
-		if (recordhistory) {
-			parse_copy(&tmp, req);
-			snprintf(tmpmsg, sizeof(tmpmsg), "%s / %s", tmp.data, get_header(&tmp, "CSeq"));
-			append_history(p, "TxReqRel", tmpmsg);
-		}
-		res = __sip_reliable_xmit(p, seqno, 0, req->data, req->len, (reliable > 1), req->method);
-	} else {
-		if (recordhistory) {
-			parse_copy(&tmp, req);
-			snprintf(tmpmsg, sizeof(tmpmsg), "%s / %s", tmp.data, get_header(&tmp, "CSeq"));
-			append_history(p, "TxReq", tmpmsg);
-		}
-		res = __sip_xmit(p, req->data, req->len);
+	if (recordhistory) {
+		struct sip_request tmp;
+		parse_copy(&tmp, req);
+		append_history(p, reliable ? "TxReqRel" : "TxReq", "%s / %s", tmp.data, get_header(&tmp, "CSeq"));
 	}
+	res = (reliable) ?
+		__sip_reliable_xmit(p, seqno, 0, req->data, req->len, (reliable > 1), req->method) :
+		__sip_xmit(p, req->data, req->len);
 	return res;
 }
 
@@ -2092,7 +2083,6 @@ static void __sip_destroy(struct sip_pvt *p, int lockowner)
 {
 	struct sip_pvt *cur, *prev = NULL;
 	struct sip_pkt *cp;
-	struct sip_history *hist;
 
 	if (sip_debug_test_pvt(p))
 		ast_verbose("Destroying call '%s'\n", p->callid);
@@ -2142,10 +2132,14 @@ static void __sip_destroy(struct sip_pvt *p, int lockowner)
 			ast_mutex_unlock(&p->owner->lock);
 	}
 	/* Clear history */
-	while(p->history) {
-		hist = p->history;
-		p->history = p->history->next;
-		free(hist);
+	if (p->history) {
+		while(!AST_LIST_EMPTY(p->history)) {
+			struct sip_history *hist = AST_LIST_FIRST(p->history);
+			AST_LIST_REMOVE_HEAD(p->history, list);
+			free(hist);
+		}
+		free(p->history);
+		p->history = NULL;
 	}
 
 	cur = iflist;
@@ -2183,8 +2177,15 @@ static void __sip_destroy(struct sip_pvt *p, int lockowner)
 }
 
 /*! \brief  update_call_counter: Handle call_limit for SIP users 
- * Note: This is going to be replaced by app_groupcount 
- * Thought: For realtime, we should propably update storage with inuse counter... */
+ * Setting a call-limit will cause calls above the limit not to be accepted.
+ *
+ * Remember that for a type=friend, there's one limit for the user and
+ * another for the peer, not a combined call limit.
+ * This will cause unexpected behaviour in subscriptions, since a "friend"
+ * is *two* devices in Asterisk, not one.
+ *
+ * Thought: For realtime, we should propably update storage with inuse counter... 
+ */
 static int update_call_counter(struct sip_pvt *fup, int event)
 {
 	char name[256];
@@ -2203,7 +2204,9 @@ static int update_call_counter(struct sip_pvt *fup, int event)
 	ast_copy_string(name, fup->username, sizeof(name));
 
 	/* Check the list of users */
-	u = find_user(name, 1);
+	if (!outgoing)	/* Only check users for incoming calls */
+		u = find_user(name, 1);
+
 	if (u) {
 		inuse = &u->inUse;
 		call_limit = &u->call_limit;
@@ -3627,7 +3630,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 
 	/* Manager Hold and Unhold events must be generated, if necessary */
 	if (sin.sin_addr.s_addr && !sendonly) {	        
-	        append_history(p, "Unhold", req->data);
+	        append_history(p, "Unhold", "%s", req->data);
 
 		if (callevents && ast_test_flag(p, SIP_CALL_ONHOLD)) {
 			manager_event(EVENT_FLAG_CALL, "Unhold",
@@ -3640,7 +3643,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 		ast_clear_flag(p, SIP_CALL_ONHOLD);
 	} else {	        
 		/* No address for RTP, we're on hold */
-	        append_history(p, "Hold", req->data);
+	        append_history(p, "Hold", "%s", req->data);
 
 	        if (callevents && !ast_test_flag(p, SIP_CALL_ONHOLD)) {
 			manager_event(EVENT_FLAG_CALL, "Hold",
@@ -4241,7 +4244,7 @@ static int add_vidupdate(struct sip_request *req)
 		" <media_control>\r\n"
 		"  <vc_primitive>\r\n"
 		"   <to_encoder>\r\n"
-		"    <picture_fast_update\r\n"
+		"    <picture_fast_update>\r\n"
 		"    </picture_fast_update>\r\n"
 		"   </to_encoder>\r\n"
 		"  </vc_primitive>\r\n"
@@ -5221,11 +5224,8 @@ static int sip_reregister(void *data)
 	if (!r)
 		return 0;
 
-	if (r->call && recordhistory) {
-		char tmp[80];
-		snprintf(tmp, sizeof(tmp), "Account: %s@%s", r->username, r->hostname);
-		append_history(r->call, "RegistryRenew", tmp);
-	}
+	if (r->call && recordhistory)
+		append_history(r->call, "RegistryRenew", "Account: %s@%s", r->username, r->hostname);
 	/* Since registry's are only added/removed by the the monitor thread, this
 	   may be overkill to reference/dereference at all here */
 	if (sipdebug)
@@ -5326,11 +5326,8 @@ static int transmit_register(struct sip_registry *r, int sipmethod, char *auth, 
 			ast_log(LOG_WARNING, "Unable to allocate registration call\n");
 			return 0;
 		}
-		if (recordhistory) {
-			char tmp[80];
-			snprintf(tmp, sizeof(tmp), "Account: %s@%s", r->username, r->hostname);
-			append_history(p, "RegistryInit", tmp);
-		}
+		if (recordhistory)
+			append_history(p, "RegistryInit", "Account: %s@%s", r->username, r->hostname);
 		/* Find address to hostname */
 		if (create_addr(p, r->hostname)) {
 			/* we have what we hope is a temporary network error,
@@ -5894,8 +5891,10 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 
 	if (p->expire > -1)
 		ast_sched_del(sched, p->expire);
-	if ((expiry < 1) || (expiry > max_expiry))
+	if (expiry > max_expiry)
 		expiry = max_expiry;
+	if (expiry < min_expiry)
+		expiry = min_expiry;
 	if (!ast_test_flag(p, SIP_REALTIME))
 		p->expire = ast_sched_add(sched, (expiry + 10) * 1000, expire_register, p);
 	else
@@ -6307,7 +6306,7 @@ static int cb_extensionstate(char *context, char* exten, int state, void *data)
 		ast_verbose(VERBOSE_PREFIX_2 "Extension state: Watcher for hint %s %s. Notify User %s\n", exten, state == AST_EXTENSION_DEACTIVATED ? "deactivated" : "removed", p->username);
 		p->stateid = -1;
 		p->subscribed = NONE;
-		append_history(p, "Subscribestatus", state == AST_EXTENSION_REMOVED ? "HintRemoved" : "Deactivated");
+		append_history(p, "Subscribestatus", "%s", state == AST_EXTENSION_REMOVED ? "HintRemoved" : "Deactivated");
 		break;
 	default:	/* Tell user */
 		p->laststate = state;
@@ -6796,7 +6795,7 @@ static int get_also_info(struct sip_pvt *p, struct sip_request *oreq)
 	return -1;
 }
 
-/*! \brief  check_via: check Via: headers ---*/
+/*! \brief check Via: header for hostname, port and rport request/answer */
 static int check_via(struct sip_pvt *p, struct sip_request *req)
 {
 	char via[256];
@@ -6806,9 +6805,16 @@ static int check_via(struct sip_pvt *p, struct sip_request *req)
 	struct ast_hostent ahp;
 
 	ast_copy_string(via, get_header(req, "Via"), sizeof(via));
+
+	/* Check for rport */
+	c = strstr(via, ";rport");
+	if (c && (c[6] != '='))	/* rport query, not answer */
+		ast_set_flag(p, SIP_NAT_ROUTE);
+
 	c = strchr(via, ';');
 	if (c) 
 		*c = '\0';
+
 	c = strchr(via, ' ');
 	if (c) {
 		*c = '\0';
@@ -6829,9 +6835,7 @@ static int check_via(struct sip_pvt *p, struct sip_request *req)
 		p->sa.sin_family = AF_INET;
 		memcpy(&p->sa.sin_addr, hp->h_addr, sizeof(p->sa.sin_addr));
 		p->sa.sin_port = htons(pt ? atoi(pt) : DEFAULT_SIP_PORT);
-		c = strstr(via, ";rport");
-		if (c && (c[6] != '='))	/* rport query, not answer */
-			ast_set_flag(p, SIP_NAT_ROUTE);
+
 		if (sip_debug_test_pvt(p)) {
 			c = (ast_test_flag(p, SIP_NAT) & SIP_NAT_ROUTE) ? "NAT" : "non-NAT";
 			ast_verbose("Sending to %s : %d (%s)\n", ast_inet_ntoa(iabuf, sizeof(iabuf), p->sa.sin_addr), ntohs(p->sa.sin_port), c);
@@ -6921,7 +6925,7 @@ static int check_user_full(struct sip_pvt *p, struct sip_request *req, int sipme
 	struct sip_user *user = NULL;
 	struct sip_peer *peer;
 	char *of, from[256], *c;
-	char *rpid,rpid_num[50];
+	char *rpid, rpid_num[50];
 	char iabuf[INET_ADDRSTRLEN];
 	int res = 0;
 	char *t;
@@ -6940,13 +6944,13 @@ static int check_user_full(struct sip_pvt *p, struct sip_request *req, int sipme
 
 	ast_copy_string(from, of, sizeof(from));
 	
-	memset(calleridname,0,sizeof(calleridname));
+	memset(calleridname, 0, sizeof(calleridname));
 	get_calleridname(from, calleridname, sizeof(calleridname));
 	if (calleridname[0])
 		ast_copy_string(p->cid_name, calleridname, sizeof(p->cid_name));
 
 	rpid = get_header(req, "Remote-Party-ID");
-	memset(rpid_num,0,sizeof(rpid_num));
+	memset(rpid_num, 0, sizeof(rpid_num));
 	if (!ast_strlen_zero(rpid)) 
 		p->callingpres = get_rpid_num(rpid,rpid_num, sizeof(rpid_num));
 
@@ -7002,11 +7006,13 @@ static int check_user_full(struct sip_pvt *p, struct sip_request *req, int sipme
 		}
 
 		if (p->rtp) {
-			ast_log(LOG_DEBUG, "Setting NAT on RTP to %d\n", (ast_test_flag(p, SIP_NAT) & SIP_NAT_ROUTE));
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Setting NAT on RTP to %d\n", (ast_test_flag(p, SIP_NAT) & SIP_NAT_ROUTE));
 			ast_rtp_setnat(p->rtp, (ast_test_flag(p, SIP_NAT) & SIP_NAT_ROUTE));
 		}
 		if (p->vrtp) {
-			ast_log(LOG_DEBUG, "Setting NAT on VRTP to %d\n", (ast_test_flag(p, SIP_NAT) & SIP_NAT_ROUTE));
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Setting NAT on VRTP to %d\n", (ast_test_flag(p, SIP_NAT) & SIP_NAT_ROUTE));
 			ast_rtp_setnat(p->vrtp, (ast_test_flag(p, SIP_NAT) & SIP_NAT_ROUTE));
 		}
 		if (!(res = check_auth(p, req, p->randdata, sizeof(p->randdata), user->name, user->secret, user->md5secret, sipmethod, uri, reliable, ignore))) {
@@ -8171,6 +8177,7 @@ static int sip_show_settings(int fd, int argc, char *argv[])
 	ast_cli(fd, "  MWI NOTIFY mime type:   %s\n", default_notifymime);
 	ast_cli(fd, "  DNS SRV lookup:         %s\n", srvlookup ? "Yes" : "No");
 	ast_cli(fd, "  Pedantic SIP support:   %s\n", pedanticsipchecking ? "Yes" : "No");
+	ast_cli(fd, "  Reg. min duration       %d secs\n", min_expiry);
 	ast_cli(fd, "  Reg. max duration:      %d secs\n", max_expiry);
 	ast_cli(fd, "  Reg. default duration:  %d secs\n", default_expiry);
 	ast_cli(fd, "  Outbound reg. timeout:  %d secs\n", global_reg_timeout);
@@ -8496,9 +8503,7 @@ static int sip_show_channel(int fd, int argc, char *argv[])
 static int sip_show_history(int fd, int argc, char *argv[])
 {
 	struct sip_pvt *cur;
-	struct sip_history *hist;
 	size_t len;
-	int x;
 	int found = 0;
 
 	if (argc != 4)
@@ -8509,19 +8514,18 @@ static int sip_show_history(int fd, int argc, char *argv[])
 	ast_mutex_lock(&iflock);
 	for (cur = iflist; cur; cur = cur->next) {
 		if (!strncasecmp(cur->callid, argv[3], len)) {
+			struct sip_history *hist;
+			int x = 0;
+
 			ast_cli(fd,"\n");
 			if (cur->subscribed != NONE)
 				ast_cli(fd, "  * Subscription\n");
 			else
 				ast_cli(fd, "  * SIP Call\n");
-			x = 0;
-			hist = cur->history;
-			while(hist) {
-				x++;
-				ast_cli(fd, "%d. %s\n", x, hist->event);
-				hist = hist->next;
-			}
-			if (!x)
+			if (cur->history)
+				AST_LIST_TRAVERSE(cur->history, hist, list)
+					ast_cli(fd, "%d. %s\n", x++, hist->event);
+			if (x == 0)
 				ast_cli(fd, "Call '%s' has no history\n", cur->callid);
 			found++;
 		}
@@ -8536,7 +8540,7 @@ static int sip_show_history(int fd, int argc, char *argv[])
   lifespan for SIP dialog */
 void sip_dump_history(struct sip_pvt *dialog)
 {
-	int x;
+	int x = 0;
 	struct sip_history *hist;
 
 	if (!dialog)
@@ -8547,11 +8551,9 @@ void sip_dump_history(struct sip_pvt *dialog)
 		ast_log(LOG_DEBUG, "  * Subscription\n");
 	else
 		ast_log(LOG_DEBUG, "  * SIP Call\n");
-	x = 0;
-	for (hist = dialog->history; hist; hist = hist->next) {
-		x++;
-		ast_log(LOG_DEBUG, "  %d. %s\n", x, hist->event);
-	}
+	if (dialog->history)
+		AST_LIST_TRAVERSE(dialog->history, hist, list)
+			ast_log(LOG_DEBUG, "  %d. %s\n", x++, hist->event);
 	if (!x)
 		ast_log(LOG_DEBUG, "Call '%s' has no history\n", dialog->callid);
 	ast_log(LOG_DEBUG, "\n---------- END SIP HISTORY for '%s' \n", dialog->callid);
@@ -8834,11 +8836,8 @@ static int do_register_auth(struct sip_pvt *p, struct sip_request *req, char *he
  			/* No old challenge */
 		return -1;
 	}
-	if (recordhistory) {
-		char tmp[80];
-		snprintf(tmp, sizeof(tmp), "Try: %d", p->authtries);
-		append_history(p, "RegistryAuth", tmp);
-	}
+	if (recordhistory)
+		append_history(p, "RegistryAuth", "Try: %d", p->authtries);
  	if (sip_debug_test_pvt(p) && p->registry)
  		ast_verbose("Responding to challenge, registration to domain/host name %s\n", p->registry->hostname);
 	return transmit_register(p->registry, SIP_REGISTER, digest, respheader); 
@@ -8979,6 +8978,8 @@ static int build_reply_digest(struct sip_pvt *p, int method, char* digest, int d
 
  	/* Check if we have separate auth credentials */
  	if ((auth = find_realm_authentication(authl, p->realm))) {
+		ast_log(LOG_WARNING, "use realm [%s] from peer [%s][%s]\n",
+			auth->username, p->peername, p->username);
  		username = auth->username;
  		secret = auth->secret;
  		md5secret = auth->md5secret;
@@ -10766,6 +10767,8 @@ static int handle_request_subscribe(struct sip_pvt *p, struct sip_request *req, 
 		if (p->subscribed == DIALOG_INFO_XML) {  
 			if (p->expiry > max_expiry)
 				p->expiry = max_expiry;
+			if (p->expiry < min_expiry)
+				p->expiry = min_expiry;
 		}
 		if (sipdebug || option_debug > 1)
 			ast_log(LOG_DEBUG, "Adding subscription for extension %s context %s for peer %s\n", p->exten, p->context, p->username);
@@ -10783,7 +10786,7 @@ static int handle_request_subscribe(struct sip_pvt *p, struct sip_request *req, 
 
 			transmit_response(p, "200 OK", req);
 			transmit_state_notify(p, firststate, 1, 1);	/* Send first notification */
-			append_history(p, "Subscribestatus", ast_extension_state2str(firststate));
+			append_history(p, "Subscribestatus", "%s", ast_extension_state2str(firststate));
 
 			/* remove any old subscription from this peer for the same exten/context,
 			   as the peer has obviously forgotten about it and it's wasteful to wait
@@ -11104,12 +11107,8 @@ retrylock:
 			goto retrylock;
 		}
 		memcpy(&p->recv, &sin, sizeof(p->recv));
-		if (recordhistory) {
-			char tmp[80];
-			/* This is a response, note what it was for */
-			snprintf(tmp, sizeof(tmp), "%s / %s", req.data, get_header(&req, "CSeq"));
-			append_history(p, "Rx", tmp);
-		}
+		if (recordhistory) /* This is a response, note what it was for */
+			append_history(p, "Rx", "%s / %s", req.data, get_header(&req, "CSeq"));
 		nounlock = 0;
 		if (handle_request(p, &req, &sin, &recount, &nounlock) == -1) {
 			/* Request failed */
@@ -11896,7 +11895,7 @@ static struct sip_user *build_user(const char *name, struct ast_variable *v, int
 			ast_copy_string(user->musicclass, v->value, sizeof(user->musicclass));
 		} else if (!strcasecmp(v->name, "accountcode")) {
 			ast_copy_string(user->accountcode, v->value, sizeof(user->accountcode));
-		} else if (!strcasecmp(v->name, "call-limit") || !strcasecmp(v->name, "incominglimit")) {
+		} else if (!strcasecmp(v->name, "call-limit")) {
 			user->call_limit = atoi(v->value);
 			if (user->call_limit < 0)
 				user->call_limit = 0;
@@ -12395,6 +12394,10 @@ static int reload_config(void)
 			max_expiry = atoi(v->value);
 			if (max_expiry < 1)
 				max_expiry = DEFAULT_MAX_EXPIRY;
+		} else if (!strcasecmp(v->name, "minexpirey") || !strcasecmp(v->name, "minexpiry")) {
+			min_expiry = atoi(v->value);
+			if (min_expiry < 1)
+				min_expiry = DEFAULT_MIN_EXPIRY;
 		} else if (!strcasecmp(v->name, "defaultexpiry") || !strcasecmp(v->name, "defaultexpirey")) {
 			default_expiry = atoi(v->value);
 			if (default_expiry < 1)

@@ -1,7 +1,7 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 1999 - 2005, Digium, Inc.
+ * Copyright (C) 1999 - 2006, Digium, Inc.
  *
  * Mark Spencer <markster@digium.com>
  *
@@ -30,9 +30,10 @@ extern "C" {
 #include "asterisk/linkedlists.h"
 
 enum chanspy_states {
-	CHANSPY_NEW = 0,
-	CHANSPY_RUNNING = 1,
-	CHANSPY_DONE = 2,
+	CHANSPY_NEW = 0,		/*!< spy not yet operating */
+	CHANSPY_RUNNING = 1,		/*!< normal operation, spy is still operating */
+	CHANSPY_DONE = 2,		/*!< spy is stopped and already removed from channel */
+	CHANSPY_STOP = 3,		/*!< spy requested to stop, still attached to channel */
 };
 
 enum chanspy_flags {
