@@ -184,8 +184,6 @@ int ast_format_unregister(const char *name)
 int ast_stopstream(struct ast_channel *tmp)
 {
 	/* Stop a running stream if there is one */
-	if (tmp->vstream)
-		ast_closestream(tmp->vstream);
 	if (tmp->stream) {
 		ast_closestream(tmp->stream);
 		if (tmp->oldwriteformat && ast_set_write_format(tmp, tmp->oldwriteformat))
@@ -203,8 +201,7 @@ int ast_writestream(struct ast_filestream *fs, struct ast_frame *f)
 		if (fs->fmt->format < AST_FORMAT_MAX_AUDIO) {
 			/* This is the audio portion.  Call the video one... */
 			if (!fs->vfs && fs->filename) {
-				/* XXX Support other video formats XXX */
-				const char *type = "h263";
+				const char *type = ast_getformatname(f->subclass & ~0x1);
 				fs->vfs = ast_writefile(fs->filename, type, NULL, fs->flags, 0, fs->mode);
 				ast_log(LOG_DEBUG, "Opened video output file\n");
 			}
@@ -365,13 +362,9 @@ static int ast_filehelper(const char *filename, const char *filename2, const cha
 	/* Check for a specific format */
 	if (ast_mutex_lock(&formatlock)) {
 		ast_log(LOG_WARNING, "Unable to lock format list\n");
-		if (action == ACTION_EXISTS)
-			return 0;
-		else
-			return -1;
+		return res;
 	}
-	f = formats;
-	while(f) {
+	for (f = formats; f; f = f->next) {
 		if (!fmt || exts_compare(f->exts, fmt)) {
 			char *stringp=NULL;
 			exts = ast_strdupa(f->exts);
@@ -452,7 +445,6 @@ static int ast_filehelper(const char *filename, const char *filename2, const cha
 			} while(ext);
 			
 		}
-		f = f->next;
 	}
 	ast_mutex_unlock(&formatlock);
 	if ((action == ACTION_EXISTS) || (action == ACTION_OPEN))
@@ -500,10 +492,14 @@ struct ast_filestream *ast_openstream_full(struct ast_channel *chan, const char 
 		} else
 			snprintf(filename2, sizeof(filename2), "%s/%s", preflang, filename);
 		fmts = ast_fileexists(filename2, NULL, NULL);
+		if (fmts > 0) 
+			fmts &= AST_FORMAT_AUDIO_MASK;
 	}
 	if (fmts < 1) {
 		ast_copy_string(filename2, filename, sizeof(filename2));
 		fmts = ast_fileexists(filename2, NULL, NULL);
+		if (fmts > 0)
+			fmts &= AST_FORMAT_AUDIO_MASK;
 	}
 	if (fmts < 1) {
 		ast_log(LOG_WARNING, "File %s does not exist in any format\n", filename);
@@ -535,30 +531,35 @@ struct ast_filestream *ast_openvstream(struct ast_channel *chan, const char *fil
 	*/
 	int fd = -1;
 	int fmts = -1;
+	unsigned int format;
 	char filename2[256];
 	char lang2[MAX_LANGUAGE];
-	/* XXX H.263 only XXX */
-	char *fmt = "h263";
-	if (!ast_strlen_zero(preflang)) {
-		snprintf(filename2, sizeof(filename2), "%s/%s", preflang, filename);
-		fmts = ast_fileexists(filename2, fmt, NULL);
+	const char *fmt;
+	for (format = AST_FORMAT_MAX_AUDIO << 1; format <= AST_FORMAT_MAX_VIDEO; format = format << 1) {
+		if (!(chan->nativeformats & format))
+			continue;
+		fmt = ast_getformatname(format);
+		if (!ast_strlen_zero(preflang)) {
+			snprintf(filename2, sizeof(filename2), "%s/%s", preflang, filename);
+			fmts = ast_fileexists(filename2, fmt, NULL);
+			if (fmts < 1) {
+				ast_copy_string(lang2, preflang, sizeof(lang2));
+				snprintf(filename2, sizeof(filename2), "%s/%s", lang2, filename);
+				fmts = ast_fileexists(filename2, fmt, NULL);
+			}
+		}
 		if (fmts < 1) {
-			ast_copy_string(lang2, preflang, sizeof(lang2));
-			snprintf(filename2, sizeof(filename2), "%s/%s", lang2, filename);
+			ast_copy_string(filename2, filename, sizeof(filename2));
 			fmts = ast_fileexists(filename2, fmt, NULL);
 		}
+		if (fmts < 1) {
+			continue;
+		}
+	 	fd = ast_filehelper(filename2, (char *)chan, fmt, ACTION_OPEN);
+		if (fd >= 0)
+			return chan->vstream;
+		ast_log(LOG_WARNING, "File %s has video but couldn't be opened\n", filename);
 	}
-	if (fmts < 1) {
-		ast_copy_string(filename2, filename, sizeof(filename2));
-		fmts = ast_fileexists(filename2, fmt, NULL);
-	}
-	if (fmts < 1) {
-		return NULL;
-	}
- 	fd = ast_filehelper(filename2, (char *)chan, fmt, ACTION_OPEN);
-	if (fd >= 0)
-		return chan->vstream;
-	ast_log(LOG_WARNING, "File %s has video but couldn't be opened\n", filename);
 	return NULL;
 }
 
@@ -727,6 +728,10 @@ int ast_closestream(struct ast_filestream *f)
 		f->realfilename = NULL;
 	}
 	f->fmt->close(f);
+	if (f->vfs) {
+		ast_closestream(f->vfs);
+		f->vfs = NULL;
+	}
 	return 0;
 }
 
@@ -797,12 +802,14 @@ int ast_filecopy(const char *filename, const char *filename2, const char *fmt)
 int ast_streamfile(struct ast_channel *chan, const char *filename, const char *preflang)
 {
 	struct ast_filestream *fs;
-	struct ast_filestream *vfs;
+	struct ast_filestream *vfs=NULL;
+	char fmt[256];
 
 	fs = ast_openstream(chan, filename, preflang);
-	vfs = ast_openvstream(chan, filename, preflang);
+	if (fs)
+		vfs = ast_openvstream(chan, filename, preflang);
 	if (vfs)
-		ast_log(LOG_DEBUG, "Ooh, found a video stream, too\n");
+		ast_log(LOG_DEBUG, "Ooh, found a video stream, too, format %s\n", ast_getformatname(vfs->fmt->format));
 	if (fs){
 		if (ast_applystream(chan, fs))
 			return -1;
@@ -818,7 +825,7 @@ int ast_streamfile(struct ast_channel *chan, const char *filename, const char *p
 #endif
 		return 0;
 	}
-	ast_log(LOG_WARNING, "Unable to open %s (format %s): %s\n", filename, ast_getformatname(chan->nativeformats), strerror(errno));
+	ast_log(LOG_WARNING, "Unable to open %s (format %s): %s\n", filename, ast_getformatname_multiple(fmt, sizeof(fmt), chan->nativeformats), strerror(errno));
 	return -1;
 }
 

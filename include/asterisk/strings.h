@@ -42,11 +42,11 @@ static force_inline int ast_strlen_zero(const char *s)
   \return a pointer to the first non-whitespace character
  */
 AST_INLINE_API(
-char *ast_skip_blanks(char *str),
+char *ast_skip_blanks(const char *str),
 {
 	while (*str && *str < 33)
 		str++;
-	return str;
+	return (char *)str;
 }
 )
 
@@ -54,7 +54,7 @@ char *ast_skip_blanks(char *str),
   \brief Trims trailing whitespace characters from a string.
   \param ast_trim_blanks function being used
   \param str the input string
-  \return a pointer to the NULL following the string
+  \return a pointer to the modified string
  */
 AST_INLINE_API(
 char *ast_trim_blanks(char *str),

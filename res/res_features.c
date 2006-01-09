@@ -1,7 +1,7 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 1999 - 2005, Digium, Inc.
+ * Copyright (C) 1999 - 2006, Digium, Inc.
  *
  * Mark Spencer <markster@digium.com>
  *
@@ -75,33 +75,20 @@ static void FREE(void *ptr)
 
 static char *parkedcall = "ParkedCall";
 
-/* No more than 45 seconds parked before you do something with them */
-static int parkingtime = DEFAULT_PARK_TIME;
+static int parkingtime = DEFAULT_PARK_TIME; 		/*!< No more than 45 seconds parked before you do something with them */
+static char parking_con[AST_MAX_EXTENSION];		/*!< Context for which parking is made accessible */
+static char parking_con_dial[AST_MAX_EXTENSION];	/*!< Context for dialback for parking (KLUDGE) */
+static char parking_ext[AST_MAX_EXTENSION];		/*!< Extension you type to park the call */
+static char pickup_ext[AST_MAX_EXTENSION];		/*!< Call pickup extension */
+static int parking_start;				/*!< First available extension for parking */
+static int parking_stop;				/*!< Last available extension for parking */
 
-/* Context for which parking is made accessible */
-static char parking_con[AST_MAX_EXTENSION];
-
-/* Context for dialback for parking (KLUDGE) */
-static char parking_con_dial[AST_MAX_EXTENSION];
-
-/* Extension you type to park the call */
-static char parking_ext[AST_MAX_EXTENSION];
-
-static char pickup_ext[AST_MAX_EXTENSION];
-
-/* Default sounds */
-static char courtesytone[256];
-static char xfersound[256];
-static char xferfailsound[256];
-
-/* First available extension for parking */
-static int parking_start;
-
-/* Last available extension for parking */
-static int parking_stop;
+static char courtesytone[256];				/*!< Courtesy tone */
+static int parkedplay = 0;				/*!< Who to play the courtesy tone to */
+static char xfersound[256];				/*!< Call transfer sound */
+static char xferfailsound[256];				/*!< Call transfer failure sound */
 
 static int parking_offset;
-
 static int parkfindnext;
 
 static int adsipark;
@@ -109,11 +96,9 @@ static int adsipark;
 static int transferdigittimeout;
 static int featuredigittimeout;
 
-/* Default courtesy tone played when party joins conference */
+static char *registrar = "res_features";		/*!< Registrar for operations */
 
-/* Registrar for operations */
-static char *registrar = "res_features";
-
+/* module and CLI command definitions */
 static char *synopsis = "Answer a parked call";
 
 static char *descrip = "ParkedCall(exten):"
@@ -133,8 +118,8 @@ static char *descrip2 = "Park(exten):"
 "into the dialplan, although you should include the 'parkedcalls'\n"
 "context.\n";
 
-static struct ast_app *monitor_app=NULL;
-static int monitor_ok=1;
+static struct ast_app *monitor_app = NULL;
+static int monitor_ok = 1;
 
 struct parkeduser {
 	struct ast_channel *chan;
@@ -358,7 +343,7 @@ int ast_park_call(struct ast_channel *chan, struct ast_channel *peer, int timeou
 		"From: %s\r\n"
 		"Timeout: %ld\r\n"
 		"CallerID: %s\r\n"
-		"CallerIDName: %s\r\n\r\n"
+		"CallerIDName: %s\r\n"
 		,pu->parkingnum, pu->chan->name, peer->name
 		,(long)pu->start.tv_sec + (long)(pu->parkingtime/1000) - (long)time(NULL)
 		,(pu->chan->cid.cid_num ? pu->chan->cid.cid_num : "<unknown>")
@@ -944,13 +929,15 @@ static int feature_exec_app(struct ast_channel *chan, struct ast_channel *peer, 
 	
 	app = pbx_findapp(feature->app);
 	if (app) {
-		struct ast_channel *work=chan;
-		if (ast_test_flag(feature,AST_FEATURE_FLAG_CALLEE)) work=peer;
+		struct ast_channel *work = chan;
+		if (ast_test_flag(feature, AST_FEATURE_FLAG_CALLEE))
+			work = peer;
 		res = pbx_exec(work, app, feature->app_args, 1);
-		if (res<0) return res; 
+		if (res < 0)
+			return res; 
 	} else {
 		ast_log(LOG_WARNING, "Could not find application (%s)\n", feature->app);
-		res = -2;
+		return -2;
 	}
 	
 	return FEATURE_RETURN_SUCCESS;
@@ -1544,7 +1531,7 @@ static void *do_parking_thread(void *ignore)
 					"Exten: %d\r\n"
 					"Channel: %s\r\n"
 					"CallerID: %s\r\n"
-					"CallerIDName: %s\r\n\r\n"
+					"CallerIDName: %s\r\n"
 					,pu->parkingnum, pu->chan->name
 					,(pu->chan->cid.cid_num ? pu->chan->cid.cid_num : "<unknown>")
 					,(pu->chan->cid.cid_name ? pu->chan->cid.cid_name : "<unknown>")
@@ -1583,12 +1570,13 @@ static void *do_parking_thread(void *ignore)
 						/* See if they need servicing */
 						f = ast_read(pu->chan);
 						if (!f || ((f->frametype == AST_FRAME_CONTROL) && (f->subclass ==  AST_CONTROL_HANGUP))) {
-
+							if (f)
+								ast_frfree(f);
 							manager_event(EVENT_FLAG_CALL, "ParkedCallGiveUp",
 								"Exten: %d\r\n"
 								"Channel: %s\r\n"
 								"CallerID: %s\r\n"
-								"CallerIDName: %s\r\n\r\n"
+								"CallerIDName: %s\r\n"
 								,pu->parkingnum, pu->chan->name
 								,(pu->chan->cid.cid_num ? pu->chan->cid.cid_num : "<unknown>")
 								,(pu->chan->cid.cid_name ? pu->chan->cid.cid_name : "<unknown>")
@@ -1725,7 +1713,7 @@ static int park_exec(struct ast_channel *chan, void *data)
 			"Channel: %s\r\n"
 			"From: %s\r\n"
 			"CallerID: %s\r\n"
-			"CallerIDName: %s\r\n\r\n"
+			"CallerIDName: %s\r\n"
 			,pu->parkingnum, pu->chan->name, chan->name
 			,(pu->chan->cid.cid_num ? pu->chan->cid.cid_num : "<unknown>")
 			,(pu->chan->cid.cid_name ? pu->chan->cid.cid_name : "<unknown>")
@@ -1739,19 +1727,45 @@ static int park_exec(struct ast_channel *chan, void *data)
 	}
 
 	if (peer) {
-		/* Play a courtesy beep in the calling channel to prefix the bridge connecting */	
+		/* Play a courtesy to the source(s) configured to prefix the bridge connecting */
+		
 		if (!ast_strlen_zero(courtesytone)) {
-			if (!ast_streamfile(chan, courtesytone, chan->language)) {
-				if (ast_waitstream(chan, "") < 0) {
-					ast_log(LOG_WARNING, "Failed to play courtesy tone!\n");
-					ast_hangup(peer);
-					return -1;
+			if (parkedplay == 0) {
+				if (!ast_streamfile(chan, courtesytone, chan->language)) {
+					if (ast_waitstream(chan, "") < 0) {
+						ast_log(LOG_WARNING, "Failed to play courtesy tone!\n");
+						ast_hangup(peer);
+						return -1;
+					}
+				}
+				ast_moh_stop(peer);
+				ast_indicate(peer, AST_CONTROL_UNHOLD);
+			} else {
+				ast_moh_stop(peer);
+				ast_indicate(peer, AST_CONTROL_UNHOLD);
+				if (parkedplay == 2) {
+					if (!ast_streamfile(chan, courtesytone, chan->language) && !ast_streamfile(peer, courtesytone, chan->language)) {
+						res = ast_waitstream(chan, "");
+						if (res >= 0)
+							res = ast_waitstream(peer, "");
+						if (res < 0) {
+							ast_log(LOG_WARNING, "Failed to play courtesy tones!\n");
+							ast_hangup(peer);
+							return -1;
+						}
+					}
+				} else if (parkedplay == 1) {
+					if (!ast_streamfile(peer, courtesytone, chan->language)) {
+						if (ast_waitstream(peer, "") < 0) {
+							ast_log(LOG_WARNING, "Failed to play courtesy tone!\n");
+							ast_hangup(peer);
+							return -1;
+						}
+					}
 				}
 			}
 		}
  
-		ast_moh_stop(peer);
-		ast_indicate(peer, AST_CONTROL_UNHOLD);
 		res = ast_channel_make_compatible(chan, peer);
 		if (res < 0) {
 			ast_log(LOG_WARNING, "Could not make channels %s and %s compatible for bridge\n", chan->name, peer->name);
@@ -2026,6 +2040,13 @@ static int load_config(void)
 				}
 			} else if (!strcasecmp(var->name, "courtesytone")) {
 				ast_copy_string(courtesytone, var->value, sizeof(courtesytone));
+			}  else if (!strcasecmp(var->name, "parkedplay")) {
+				if (!strcasecmp(var->value, "both"))
+					parkedplay = 2;
+				else if (!strcasecmp(var->value, "parked"))
+					parkedplay = 1;
+				else
+					parkedplay = 0;
 			} else if (!strcasecmp(var->name, "xfersound")) {
 				ast_copy_string(xfersound, var->value, sizeof(xfersound));
 			} else if (!strcasecmp(var->name, "xferfailsound")) {

@@ -1504,7 +1504,7 @@ static int append_event(struct mansession *s, const char *str)
 }
 
 /*! \brief  manager_event: Send AMI event to client */
-int manager_event(int category, char *event, char *fmt, ...)
+int manager_event(int category, const char *event, const char *fmt, ...)
 {
 	struct mansession *s;
 	char auth[80];
@@ -1634,7 +1634,6 @@ int ast_manager_register2(const char *action, int auth, int (*func)(struct manse
 	cur = malloc(sizeof(struct manager_action));
 	if (!cur) {
 		ast_log(LOG_WARNING, "Manager: out of memory trying to register action\n");
-		ast_mutex_unlock(&actionlock);
 		return -1;
 	}
 	cur->action = action;

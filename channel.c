@@ -1889,11 +1889,11 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 
 			if (chan->monitor && chan->monitor->read_stream ) {
 #ifndef MONITOR_CONSTANT_DELAY
-				int jump = chan->outsmpl - chan->insmpl - 2 * f->samples;
+				int jump = chan->outsmpl - chan->insmpl - 4 * f->samples;
 				if (jump >= 0) {
 					if (ast_seekstream(chan->monitor->read_stream, jump + f->samples, SEEK_FORCECUR) == -1)
 						ast_log(LOG_WARNING, "Failed to perform seek in monitoring read stream, synchronization between the files may be broken\n");
-					chan->insmpl += jump + 2 * f->samples;
+					chan->insmpl += jump + 4 * f->samples;
 				} else
 					chan->insmpl+= f->samples;
 #else
@@ -2250,11 +2250,11 @@ int ast_write(struct ast_channel *chan, struct ast_frame *fr)
 				if( chan->monitor && chan->monitor->write_stream &&
 						f && ( f->frametype == AST_FRAME_VOICE ) ) {
 #ifndef MONITOR_CONSTANT_DELAY
-					int jump = chan->insmpl - chan->outsmpl - 2 * f->samples;
+					int jump = chan->insmpl - chan->outsmpl - 4 * f->samples;
 					if (jump >= 0) {
 						if (ast_seekstream(chan->monitor->write_stream, jump + f->samples, SEEK_FORCECUR) == -1)
 							ast_log(LOG_WARNING, "Failed to perform seek in monitoring write stream, synchronization between the files may be broken\n");
-						chan->outsmpl += jump + 2 * f->samples;
+						chan->outsmpl += jump + 4 * f->samples;
 					} else
 						chan->outsmpl += f->samples;
 #else
@@ -2304,6 +2304,9 @@ static int set_format(struct ast_channel *chan, int fmt, int *rawformat, int *fo
 {
 	int native;
 	int res;
+	
+	/* Make sure we only consider audio */
+	fmt &= AST_FORMAT_AUDIO_MASK;
 	
 	native = chan->nativeformats;
 	/* Find a translation path from the native format to one of the desired formats */
@@ -3201,7 +3204,8 @@ static void bridge_playfile(struct ast_channel *chan, struct ast_channel *peer, 
 }
 
 static enum ast_bridge_result ast_generic_bridge(struct ast_channel *c0, struct ast_channel *c1,
-			      struct ast_bridge_config *config, struct ast_frame **fo, struct ast_channel **rc, int toms)
+						 struct ast_bridge_config *config, struct ast_frame **fo,
+						 struct ast_channel **rc, struct timeval bridge_end)
 {
 	/* Copy voice back and forth between the two channels. */
 	struct ast_channel *cs[3];
@@ -3213,6 +3217,7 @@ static enum ast_bridge_result ast_generic_bridge(struct ast_channel *c0, struct 
 	int watch_c0_dtmf;
 	int watch_c1_dtmf;
 	void *pvt0, *pvt1;
+	int to;
 	
 	cs[0] = c0;
 	cs[1] = c1;
@@ -3231,12 +3236,13 @@ static enum ast_bridge_result ast_generic_bridge(struct ast_channel *c0, struct 
 			res = AST_BRIDGE_RETRY;
 			break;
 		}
-		who = ast_waitfor_n(cs, 2, &toms);
+		to = ast_tvdiff_ms(bridge_end, ast_tvnow());
+		if (to <= 0) {
+			res = AST_BRIDGE_RETRY;
+			break;
+		}
+		who = ast_waitfor_n(cs, 2, &to);
 		if (!who) {
-			if (!toms) {
-				res = AST_BRIDGE_RETRY;
-				break;
-			}
 			ast_log(LOG_DEBUG, "Nobody there, continuing...\n"); 
 			if (c0->_softhangup == AST_SOFTHANGUP_UNBRIDGE || c1->_softhangup == AST_SOFTHANGUP_UNBRIDGE) {
 				if (c0->_softhangup == AST_SOFTHANGUP_UNBRIDGE)
@@ -3405,10 +3411,13 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 			
 			if (!to) {
 				if (time_left_ms >= 5000) {
+					/* force the time left to round up if appropriate */
 					if (caller_warning && config->warning_sound && config->play_warning)
-						bridge_playfile(c0, c1, config->warning_sound, time_left_ms / 1000);
+						bridge_playfile(c0, c1, config->warning_sound,
+								(time_left_ms + 500) / 1000);
 					if (callee_warning && config->warning_sound && config->play_warning)
-						bridge_playfile(c1, c0, config->warning_sound, time_left_ms / 1000);
+						bridge_playfile(c1, c0, config->warning_sound,
+								(time_left_ms + 500) / 1000);
 				}
 				if (config->warning_freq) {
 					nexteventts = ast_tvadd(nexteventts, ast_samp2tv(config->warning_freq, 1000));
@@ -3509,7 +3518,7 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 			o0nativeformats = c0->nativeformats;
 			o1nativeformats = c1->nativeformats;
 		}
-		res = ast_generic_bridge(c0, c1, config, fo, rc, to);
+		res = ast_generic_bridge(c0, c1, config, fo, rc, nexteventts);
 		if (res != AST_BRIDGE_RETRY)
 			break;
 	}
