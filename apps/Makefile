@@ -24,7 +24,8 @@ APPS=app_adsiprog.so app_alarmreceiver.so app_authenticate.so app_cdr.so       \
      app_setcdruserfield.so app_settransfercapability.so app_softhangup.so     \
      app_stack.so app_system.so app_talkdetect.so app_test.so app_transfer.so  \
      app_userevent.so app_url.so app_verbose.so app_voicemail.so               \
-     app_waitforring.so app_waitforsilence.so app_while.so app_zapateller.so
+     app_waitforring.so app_waitforsilence.so app_while.so app_zapateller.so   \
+     app_morsecode.so
      
 #
 # Obsolete things...
@@ -47,10 +48,6 @@ endif # WITHOUT_ZAPTEL
 
 ifneq ($(wildcard $(CROSS_COMPILE_TARGET)/usr/local/include/osp/osp.h $(CROSS_COMPILE_TARGET)/usr/include/osp/osp.h),)
 APPS+=app_osplookup.so
-endif
-
-ifeq ($(findstring BSD,${OSARCH}),BSD)
-CFLAGS+=-I$(CROSS_COMPILE_TARGET)/usr/local/include -L$(CROSS_COMPILE_TARGET)/usr/local/lib
 endif
 
 CURLLIBS=$(shell $(CROSS_COMPILE_BIN)curl-config --libs)

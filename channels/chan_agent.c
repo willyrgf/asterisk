@@ -105,7 +105,7 @@ static const char descrip2[] =
 static const char descrip3[] =
 "  AgentMonitorOutgoing([options]):\n"
 "Tries to figure out the id of the agent who is placing outgoing call based on\n"
-"comparision of the callerid of the current interface and the global variable \n"
+"comparison of the callerid of the current interface and the global variable \n"
 "placed by the AgentCallbackLogin application. That's why it should be used only\n"
 "with the AgentCallbackLogin app. Uses the monitoring functions in chan_agent \n"
 "instead of Monitor application. That have to be configured in the agents.conf file.\n"
@@ -147,7 +147,7 @@ static char moh[80] = "default";
 
 /** Persistent Agents astdb family */
 static const char pa_family[] = "/Agents";
-/** The maximum lengh of each persistent member agent database entry */
+/** The maximum length of each persistent member agent database entry */
 #define PA_MAX_LEN 2048
 /** queues.conf [general] option */
 static int persistent_agents = 0;
@@ -157,6 +157,8 @@ static ast_group_t group;
 static int autologoff;
 static int wrapuptime;
 static int ackcall;
+static int multiplelogin = 1;
+static int autologoffunavail = 0;
 
 static int maxlogintries = 3;
 static char agentgoodbye[AST_MAX_FILENAME_LEN] = "vm-goodbye";
@@ -170,7 +172,6 @@ AST_MUTEX_DEFINE_STATIC(agentlock);
 static int recordagentcalls = 0;
 static char recordformat[AST_MAX_BUF] = "";
 static char recordformatext[AST_MAX_BUF] = "";
-static int createlink = 0;
 static char urlprefix[AST_MAX_BUF] = "";
 static char savecallsin[AST_MAX_BUF] = "";
 static int updatecdr = 0;
@@ -244,6 +245,7 @@ static struct agent_pvt *agents = NULL;  /**< Holds the list of agents (loaded f
 
 static struct ast_channel *agent_request(const char *type, int format, void *data, int *cause);
 static int agent_devicestate(void *data);
+static void agent_logoff_maintenance(struct agent_pvt *p, char *loginchan, long logintime, char *uniqueid, char *logcommand);
 static int agent_digit(struct ast_channel *ast, char digit);
 static int agent_call(struct ast_channel *ast, char *dest, int timeout);
 static int agent_hangup(struct ast_channel *ast);
@@ -255,6 +257,7 @@ static int agent_sendtext(struct ast_channel *ast, const char *text);
 static int agent_indicate(struct ast_channel *ast, int condition);
 static int agent_fixup(struct ast_channel *oldchan, struct ast_channel *newchan);
 static struct ast_channel *agent_bridgedchannel(struct ast_channel *chan, struct ast_channel *bridge);
+static void set_agentbycallerid(const char *callerid, const char *agent);
 
 static const struct ast_channel_tech agent_tech = {
 	.type = channeltype,
@@ -286,17 +289,17 @@ static void agent_unlink(struct agent_pvt *agent)
 	struct agent_pvt *p, *prev;
 	prev = NULL;
 	p = agents;
-	// Iterate over all agents looking for the one.
+	/* Iterate over all agents looking for the one. */
 	while(p) {
 		if (p == agent) {
-			// Once it wal found, check if it is the first one.
+			/* Once it was found, check if it is the first one. */
 			if (prev)
-				// If it is not, tell the previous agent that the next one is the next one of the current (jumping the current).
+				/* If it is not, tell the previous agent that the next one is the next one of the current (jumping the current). */
 				prev->next = agent->next;
 			else
-				// If it is the first one, just change the general pointer to point to the second one.
+				/* If it is the first one, just change the general pointer to point to the second one. */
 				agents = agent->next;
-			// We are done.
+			/* We are done. */
 			break;
 		}
 		prev = p;
@@ -314,32 +317,47 @@ static void agent_unlink(struct agent_pvt *agent)
  */
 static struct agent_pvt *add_agent(char *agent, int pending)
 {
-	int argc;
-	char *argv[3];
-	char *args;
+	char *parse;
+	AST_DECLARE_APP_ARGS(args,
+		AST_APP_ARG(agt);
+		AST_APP_ARG(password);
+		AST_APP_ARG(name);
+	);
 	char *password = NULL;
 	char *name = NULL;
 	char *agt = NULL;
 	struct agent_pvt *p, *prev;
 
-	args = ast_strdupa(agent);
+	parse = ast_strdupa(agent);
+	if (!parse) {
+		ast_log(LOG_ERROR, "Out of memory!\n");
+		return NULL;
+	}
 
-	// Extract username (agt), password and name from agent (args).
-	if ((argc = ast_app_separate_args(args, ',', argv, sizeof(argv) / sizeof(argv[0])))) {
-		agt = argv[0];
-		if (argc > 1) {
-			password = argv[1];
-			while (*password && *password < 33) password++;
-		} 
-		if (argc > 2) {
-			name = argv[2];
-			while (*name && *name < 33) name++;
-		}
-	} else {
+	/* Extract username (agt), password and name from agent (args). */
+	AST_NONSTANDARD_APP_ARGS(args, parse, ',');
+
+	if(args.argc == 0) {
 		ast_log(LOG_WARNING, "A blank agent line!\n");
+		return NULL;
+	}
+
+	if(ast_strlen_zero(args.agt) ) {
+		ast_log(LOG_WARNING, "An agent line with no agentid!\n");
+		return NULL;
+	} else
+		agt = args.agt;
+
+	if(!ast_strlen_zero(args.password)) {
+		password = args.password;
+		while (*password && *password < 33) password++;
+	}
+	if(!ast_strlen_zero(args.name)) {
+		name = args.name;
+		while (*name && *name < 33) name++;
 	}
 	
-	// Are we searching for the agent here ? to see if it exists already ?
+	/* Are we searching for the agent here ? To see if it exists already ? */
 	prev=NULL;
 	p = agents;
 	while(p) {
@@ -350,25 +368,20 @@ static struct agent_pvt *add_agent(char *agent, int pending)
 	}
 	if (!p) {
 		// Build the agent.
-		p = malloc(sizeof(struct agent_pvt));
-		if (p) {
-			memset(p, 0, sizeof(struct agent_pvt));
-			ast_copy_string(p->agent, agt, sizeof(p->agent));
-			ast_mutex_init(&p->lock);
-			ast_mutex_init(&p->app_lock);
-			p->owning_app = (pthread_t) -1;
-			p->app_sleep_cond = 1;
-			p->group = group;
-			p->pending = pending;
-			p->next = NULL;
-			if (prev)
-				prev->next = p;
-			else
-				agents = p;
-			
-		} else {
+		if (!(p = ast_calloc(1, sizeof(*p))))
 			return NULL;
-		}
+		ast_copy_string(p->agent, agt, sizeof(p->agent));
+		ast_mutex_init(&p->lock);
+		ast_mutex_init(&p->app_lock);
+		p->owning_app = (pthread_t) -1;
+		p->app_sleep_cond = 1;
+		p->group = group;
+		p->pending = pending;
+		p->next = NULL;
+		if (prev)
+			prev->next = p;
+		else
+			agents = p;
 	}
 	
 	ast_copy_string(p->password, password ? password : "", sizeof(p->password));
@@ -469,6 +482,7 @@ static struct ast_frame *agent_read(struct ast_channel *ast)
 	struct ast_frame *f = NULL;
 	static struct ast_frame null_frame = { AST_FRAME_NULL, };
 	static struct ast_frame answer_frame = { AST_FRAME_CONTROL, AST_CONTROL_ANSWER };
+	const char *status;
 	ast_mutex_lock(&p->lock); 
 	CHECK_FORMATS(ast, p);
 	if (p->chan) {
@@ -489,6 +503,14 @@ static struct ast_frame *agent_read(struct ast_channel *ast)
 			if (!ast_strlen_zero(p->loginchan)) {
 				if (p->chan)
 					ast_log(LOG_DEBUG, "Bridge on '%s' being cleared (2)\n", p->chan->name);
+
+				status = pbx_builtin_getvar_helper(p->chan, "CHANLOCALSTATUS");
+				if (autologoffunavail && status && !strcasecmp(status, "CHANUNAVAIL")) {
+					long logintime = time(NULL) - p->loginstart;
+					p->loginstart = 0;
+					ast_log(LOG_NOTICE, "Agent read: '%s' is not available now, auto logoff\n", p->name);
+					agent_logoff_maintenance(p, p->loginchan, logintime, ast->uniqueid, "Chanunavail");
+				}
 				ast_hangup(p->chan);
 				if (p->wrapuptime && p->acknowledged)
 					p->lastdisc = ast_tvadd(ast_tvnow(), ast_samp2tv(p->wrapuptime, 1000));
@@ -666,16 +688,10 @@ static int agent_call(struct ast_channel *ast, char *dest, int timeout)
 			ast_verbose(VERBOSE_PREFIX_3 "outgoing agentcall, to agent '%s', on '%s'\n", p->agent, p->chan->name);
 		if (p->chan->cid.cid_num)
 			free(p->chan->cid.cid_num);
-		if (ast->cid.cid_num)
-			p->chan->cid.cid_num = strdup(ast->cid.cid_num);
-		else
-			p->chan->cid.cid_num = NULL;
+		p->chan->cid.cid_num = ast_strdup(ast->cid.cid_num);
 		if (p->chan->cid.cid_name)
 			free(p->chan->cid.cid_name);
-		if (ast->cid.cid_name)
-			p->chan->cid.cid_name = strdup(ast->cid.cid_name);
-		else
-			p->chan->cid.cid_name = NULL;
+		p->chan->cid.cid_name = ast_strdup(ast->cid.cid_name);
 		ast_channel_inherit_variables(ast, p->chan);
 		res = ast_call(p->chan, p->loginchan, 0);
 		CLEANUP(ast,p);
@@ -743,6 +759,7 @@ static int agent_hangup(struct ast_channel *ast)
 {
 	struct agent_pvt *p = ast->tech_pvt;
 	int howlong = 0;
+	const char *status;
 	ast_mutex_lock(&p->lock);
 	p->owner = NULL;
 	ast->tech_pvt = NULL;
@@ -778,31 +795,23 @@ static int agent_hangup(struct ast_channel *ast)
 			else
 				p->lastdisc = ast_tv(0,0);
 			if (p->chan) {
+				status = pbx_builtin_getvar_helper(p->chan, "CHANLOCALSTATUS");
+				if (autologoffunavail && status && !strcasecmp(status, "CHANUNAVAIL")) {
+					long logintime = time(NULL) - p->loginstart;
+					p->loginstart = 0;
+					ast_log(LOG_NOTICE, "Agent hangup: '%s' is not available now, auto logoff\n", p->name);
+					agent_logoff_maintenance(p, p->loginchan, logintime, ast->uniqueid, "Chanunavail");
+				}
 				/* Recognize the hangup and pass it along immediately */
 				ast_hangup(p->chan);
 				p->chan = NULL;
 			}
 			ast_log(LOG_DEBUG, "Hungup, howlong is %d, autologoff is %d\n", howlong, p->autologoff);
 			if (howlong  && p->autologoff && (howlong > p->autologoff)) {
-				char agent[AST_MAX_AGENT] = "";
 				long logintime = time(NULL) - p->loginstart;
 				p->loginstart = 0;
 				ast_log(LOG_NOTICE, "Agent '%s' didn't answer/confirm within %d seconds (waited %d)\n", p->name, p->autologoff, howlong);
-				manager_event(EVENT_FLAG_AGENT, "Agentcallbacklogoff",
-					      "Agent: %s\r\n"
-					      "Loginchan: %s\r\n"
-					      "Logintime: %ld\r\n"
-					      "Reason: Autologoff\r\n"
-					      "Uniqueid: %s\r\n",
-					      p->agent, p->loginchan, logintime, ast->uniqueid);
-				snprintf(agent, sizeof(agent), "Agent/%s", p->agent);
-				ast_queue_log("NONE", ast->uniqueid, agent, "AGENTCALLBACKLOGOFF", "%s|%ld|%s", p->loginchan, logintime, "Autologoff");
-				set_agentbycallerid(p->logincallerid, NULL);
-				ast_device_state_changed("Agent/%s", p->agent);
-				p->loginchan[0] = '\0';
-				p->logincallerid[0] = '\0';
-				if (persistent_agents)
-					dump_agents();
+				agent_logoff_maintenance(p, p->loginchan, logintime, ast->uniqueid, "Autologoff");
 			}
 		} else if (p->dead) {
 			ast_mutex_lock(&p->chan->lock);
@@ -1048,15 +1057,18 @@ static int read_agent_config(void)
 	strcpy(moh, "default");
 	/* set the default recording values */
 	recordagentcalls = 0;
-	createlink = 0;
 	strcpy(recordformat, "wav");
 	strcpy(recordformatext, "wav");
 	urlprefix[0] = '\0';
 	savecallsin[0] = '\0';
 
-	/* Read in [general] section for persistance */
+	/* Read in [general] section for persistence */
 	if ((general_val = ast_variable_retrieve(cfg, "general", "persistentagents")))
 		persistent_agents = ast_true(general_val);
+	if (ast_false(ast_variable_retrieve(cfg, "general", "multiplelogin") ) ) 
+		multiplelogin=0;
+	if (ast_true(ast_variable_retrieve(cfg, "general", "multiplelogin") ) )
+		multiplelogin=1;
 
 	/* Read in the [agents] section */
 	v = ast_variable_browse(cfg, "agents");
@@ -1094,10 +1106,13 @@ static int read_agent_config(void)
 				updatecdr = 1;
 			else
 				updatecdr = 0;
+		} else if (!strcasecmp(v->name, "autologoffunavail")) {
+			if (ast_true(v->value))
+				autologoffunavail = 1;
+			else
+				autologoffunavail = 0;
 		} else if (!strcasecmp(v->name, "recordagentcalls")) {
 			recordagentcalls = ast_true(v->value);
-		} else if (!strcasecmp(v->name, "createlink")) {
-			createlink = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "recordformat")) {
 			ast_copy_string(recordformat, v->value, sizeof(recordformat));
 			if (!strcasecmp(v->value, "wav49"))
@@ -1267,6 +1282,27 @@ static int check_beep(struct agent_pvt *newlyavailable, int needlock)
 		ast_mutex_lock(&newlyavailable->lock);
 	}
 	return res;
+}
+
+/* return 1 if multiple login is fine, 0 if it is not and we find a match, -1 if multiplelogin is not allowed and we don't find a match. */
+static int allow_multiple_login(char *chan,char *context)
+{
+	struct agent_pvt *p;
+	char loginchan[80];
+	if(multiplelogin)
+		return 1;
+	if(!chan) 
+		return 0;
+
+	snprintf(loginchan, sizeof(loginchan), "%s@%s", chan, !ast_strlen_zero(context) ? context : "default");
+	
+	p = agents;
+	while(p) {
+		if(!strcasecmp(chan, p->loginchan))
+			return 0;
+		p = p->next;
+	}
+	return -1;
 }
 
 /*--- agent_request: Part of the Asterisk PBX interface ---*/
@@ -1466,6 +1502,47 @@ static int action_agents(struct mansession *s, struct message *m)
 	return 0;
 }
 
+static void agent_logoff_maintenance(struct agent_pvt *p, char *loginchan, long logintime, char *uniqueid, char *logcommand)
+{
+	char *tmp = NULL;
+	char agent[AST_MAX_AGENT];
+
+	if (!ast_strlen_zero(logcommand))
+		tmp = logcommand;
+	else {
+		tmp = ast_strdupa("");
+	}
+	snprintf(agent, sizeof(agent), "Agent/%s", p->agent);
+
+	if (!ast_strlen_zero(uniqueid)) {
+		manager_event(EVENT_FLAG_AGENT, "Agentcallbacklogoff",
+				"Agent: %s\r\n"
+				"Reason: %s\r\n"
+				"Loginchan: %s\r\n"
+				"Logintime: %ld\r\n"
+				"Uniqueid: %s\r\n", 
+				p->agent, tmp, loginchan, logintime, uniqueid);
+				ast_queue_log("NONE", uniqueid, agent, "AGENTCALLBACKLOGOFF", "%s|%ld|%s", loginchan, logintime, tmp);
+	} else {
+		manager_event(EVENT_FLAG_AGENT, "Agentcallbacklogoff",
+				"Agent: %s\r\n"
+				"Reason: %s\r\n"
+				"Loginchan: %s\r\n"
+				"Logintime: %ld\r\n",
+				p->agent, tmp, loginchan, logintime);
+				ast_queue_log("NONE", "NONE", agent, "AGENTCALLBACKLOGOFF", "%s|%ld|%s", loginchan, logintime, tmp);
+	}
+
+
+	set_agentbycallerid(p->logincallerid, NULL);
+	p->loginchan[0] ='\0';
+	p->logincallerid[0] = '\0';
+	ast_device_state_changed("Agent/%s", p->agent);
+	if (persistent_agents)
+		dump_agents();	
+
+}
+
 static int agent_logoff(char *agent, int soft)
 {
 	struct agent_pvt *p;
@@ -1485,19 +1562,7 @@ static int agent_logoff(char *agent, int soft)
 			ret = 0; /* found an agent => return 0 */
 			logintime = time(NULL) - p->loginstart;
 			p->loginstart = 0;
-			
-			manager_event(EVENT_FLAG_AGENT, "Agentcallbacklogoff",
-				      "Agent: %s\r\n"
-				      "Loginchan: %s\r\n"
-				      "Logintime: %ld\r\n",
-				      p->agent, p->loginchan, logintime);
-			ast_queue_log("NONE", "NONE", agent, "AGENTCALLBACKLOGOFF", "%s|%ld|%s", p->loginchan, logintime, "CommandLogoff");
-			set_agentbycallerid(p->logincallerid, NULL);
-			p->loginchan[0] = '\0';
-			p->logincallerid[0] = '\0';
-			ast_device_state_changed("Agent/%s", p->agent);
-			if (persistent_agents)
-				dump_agents();
+			agent_logoff_maintenance(p, p->loginchan, logintime, NULL, "CommandLogoff");
 			break;
 		}
 	}
@@ -1568,12 +1633,12 @@ static char *complete_agent_logoff_cmd(char *line, char *word, int pos, int stat
 			snprintf(name, sizeof(name), "Agent/%s", p->agent);
 			if (!strncasecmp(word, name, strlen(word))) {
 				if (++which > state) {
-					return strdup(name);
+					return ast_strdup(name);
 				}
 			}
 		}
 	} else if (pos == 3 && state == 0) {
-		return strdup("soft");
+		return ast_strdup("soft");
 	}
 	return NULL;
 }
@@ -1698,6 +1763,7 @@ static int __login_exec(struct ast_channel *chan, void *data, int callbackmode)
 	char agent_goodbye[AST_MAX_FILENAME_LEN];
 	int update_cdr = updatecdr;
 	char *filename = "agent-loginok";
+	char tmpchan[AST_MAX_BUF] = "";
 
 	LOCAL_USER_ADD(u);
 
@@ -1793,7 +1859,7 @@ static int __login_exec(struct ast_channel *chan, void *data, int callbackmode)
 				gettimeofday(&p->lastdisc, NULL);
 				p->lastdisc.tv_sec++;
 
-				/* Set Channel Specific Agent Overides */
+				/* Set Channel Specific Agent Overrides */
 				if (pbx_builtin_getvar_helper(chan, "AGENTACKCALL") && strlen(pbx_builtin_getvar_helper(chan, "AGENTACKCALL"))) {
 					if (!strcasecmp(pbx_builtin_getvar_helper(chan, "AGENTACKCALL"), "always"))
 						p->ackcall = 2;
@@ -1821,14 +1887,13 @@ static int __login_exec(struct ast_channel *chan, void *data, int callbackmode)
 					if (option_verbose > 2)
 						ast_verbose(VERBOSE_PREFIX_3 "Saw variable AGENTWRAPUPTIME=%s, setting wrapuptime to: %d for Agent '%s'.\n",tmpoptions,p->wrapuptime,p->agent);
 				}
-				/* End Channel Specific Agent Overides */
+				/* End Channel Specific Agent Overrides */
 				if (!p->chan) {
 					char last_loginchan[80] = "";
 					long logintime;
 					snprintf(agent, sizeof(agent), "Agent/%s", p->agent);
 
 					if (callbackmode) {
-						char tmpchan[AST_MAX_BUF] = "";
 						int pos = 0;
 						/* Retrieve login chan */
 						for (;;) {
@@ -1837,9 +1902,15 @@ static int __login_exec(struct ast_channel *chan, void *data, int callbackmode)
 								res = 0;
 							} else
 								res = ast_app_getdata(chan, "agent-newlocation", tmpchan+pos, sizeof(tmpchan) - 2, 0);
-							if (ast_strlen_zero(tmpchan) || ast_exists_extension(chan, !ast_strlen_zero(context) ? context : "default", tmpchan,
-													     1, NULL))
+							if (ast_strlen_zero(tmpchan) )
 								break;
+							if(ast_exists_extension(chan, !ast_strlen_zero(context) ? context : "default", tmpchan,1, NULL) ) {
+								if(!allow_multiple_login(tmpchan,context) ) {
+									args.extension = NULL;
+									pos = 0;
+								} else
+									break;
+							}
 							if (args.extension) {
 								ast_log(LOG_WARNING, "Extension '%s' is not valid for automatic login of agent '%s'\n", args.extension, p->agent);
 								args.extension = NULL;
@@ -1924,26 +1995,20 @@ static int __login_exec(struct ast_channel *chan, void *data, int callbackmode)
 							if (option_verbose > 1)
 								ast_verbose(VERBOSE_PREFIX_2 "Callback Agent '%s' logged in on %s\n", p->agent, p->loginchan);
 							ast_device_state_changed("Agent/%s", p->agent);
+							if (persistent_agents)
+								dump_agents();
 						} else {
 							logintime = time(NULL) - p->loginstart;
 							p->loginstart = 0;
-							manager_event(EVENT_FLAG_AGENT, "Agentcallbacklogoff",
-								      "Agent: %s\r\n"
-								      "Loginchan: %s\r\n"
-								      "Logintime: %ld\r\n"
-								      "Uniqueid: %s\r\n",
-								      p->agent, last_loginchan, logintime, chan->uniqueid);
-							ast_queue_log("NONE", chan->uniqueid, agent, "AGENTCALLBACKLOGOFF", "%s|%ld|", last_loginchan, logintime);
+
+							agent_logoff_maintenance(p, last_loginchan, logintime, chan->uniqueid, NULL);
 							if (option_verbose > 1)
 								ast_verbose(VERBOSE_PREFIX_2 "Callback Agent '%s' logged out\n", p->agent);
-							ast_device_state_changed("Agent/%s", p->agent);
 						}
 						ast_mutex_unlock(&agentlock);
 						if (!res)
 							res = ast_safe_sleep(chan, 500);
 						ast_mutex_unlock(&p->lock);
-						if (persistent_agents)
-							dump_agents();
 					} else if (!res) {
 #ifdef HONOR_MUSIC_CLASS
 						/* check if the moh class was changed with setmusiconhold */
@@ -2364,7 +2429,7 @@ static void reload_agents(void)
 	}
 	ast_mutex_unlock(&agentlock);
 	if (db_tree) {
-		ast_log(LOG_NOTICE, "Agents sucessfully reloaded from database.\n");
+		ast_log(LOG_NOTICE, "Agents successfully reloaded from database.\n");
 		ast_db_freetree(db_tree);
 	}
 }
@@ -2505,7 +2570,7 @@ struct ast_custom_function agent_function = {
 
 /**
  * Initialize the Agents module.
- * This funcion is being called by Asterisk when loading the module. Among other thing it registers applications, cli commands and reads the cofiguration file.
+ * This function is being called by Asterisk when loading the module. Among other thing it registers applications, cli commands and reads the cofiguration file.
  *
  * @returns int Always 0.
  */

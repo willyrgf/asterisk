@@ -100,6 +100,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/pbx.h"
 #include "asterisk/enum.h"
 #include "asterisk/rtp.h"
+#if defined(T38_SUPPORT)
+#include "asterisk/udptl.h"
+#endif
 #include "asterisk/app.h"
 #include "asterisk/lock.h"
 #include "asterisk/utils.h"
@@ -1093,6 +1096,7 @@ static int handle_shutdown_when_convenient(int fd, int argc, char *argv[])
 {
 	if (argc != 3)
 		return RESULT_SHOWUSAGE;
+	ast_cli(fd, "Waiting for inactivity to perform halt\n");
 	quit_handler(0, 2 /* really nicely */, 1 /* safely */, 0 /* don't restart */);
 	return RESULT_SUCCESS;
 }
@@ -1117,6 +1121,7 @@ static int handle_restart_when_convenient(int fd, int argc, char *argv[])
 {
 	if (argc != 3)
 		return RESULT_SHOWUSAGE;
+	ast_cli(fd, "Waiting for inactivity to perform restart\n");
 	quit_handler(0, 2 /* really nicely */, 1 /* safely */, 1 /* restart */);
 	return RESULT_SUCCESS;
 }
@@ -1935,7 +1940,7 @@ static void ast_readconfig(void) {
 		/* Run as console (-c at startup, implies nofork) */
 		} else if (!strcasecmp(v->name, "console")) {
 			ast_set2_flag(&ast_options, ast_true(v->value), AST_OPT_FLAG_CONSOLE);
-		/* Run with highg priority if the O/S permits (-p at startup) */
+		/* Run with high priority if the O/S permits (-p at startup) */
 		} else if (!strcasecmp(v->name, "highpriority")) {
 			ast_set2_flag(&ast_options, ast_true(v->value), AST_OPT_FLAG_HIGH_PRIORITY);
 		/* Initialize RSA auth keys (IAX2) (-i at startup) */
@@ -2319,6 +2324,9 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 	ast_rtp_init();
+#if defined(T38_SUPPORT)
+	ast_udptl_init();
+#endif
 	if (ast_image_init()) {
 		printf(term_quit());
 		exit(1);

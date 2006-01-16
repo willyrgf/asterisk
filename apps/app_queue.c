@@ -223,7 +223,7 @@ static char *app_upqm_descrip =
 
 /*! \brief Persistent Members astdb family */
 static const char *pm_family = "/Queue/PersistentMembers";
-/* The maximum lengh of each persistent member queue database entry */
+/* The maximum length of each persistent member queue database entry */
 #define PM_MAX_LEN 2048
 
 /*! \brief queues.conf [general] option */
@@ -282,7 +282,7 @@ struct queue_ent {
 	int pos;			/*!< Where we are in the queue */
 	int prio;			/*!< Our priority */
 	int last_pos_said;              /*!< Last position we told the user */
-	time_t last_periodic_announce_time;	/*!< The last time we played a periodic anouncement */
+	time_t last_periodic_announce_time;	/*!< The last time we played a periodic announcement */
 	time_t last_pos;                /*!< Last time we told the user their position */
 	int opos;			/*!< Where we started in the queue */
 	int handled;			/*!< Whether our call was handled */
@@ -317,18 +317,18 @@ struct ast_call_queue {
 	char moh[80];			/*!< Music On Hold class to be used */
 	char announce[80];		/*!< Announcement to play when call is answered */
 	char context[AST_MAX_CONTEXT];	/*!< Exit context */
-		unsigned int monjoin:1;
-		unsigned int dead:1;
-		unsigned int joinempty:2;
-		unsigned int eventwhencalled:1;
-		unsigned int leavewhenempty:2;
-		unsigned int reportholdtime:1;
-		unsigned int wrapped:1;
-		unsigned int timeoutrestart:1;
-		unsigned int announceholdtime:2;
-		unsigned int strategy:3;
-		unsigned int maskmemberstatus:1;
-		unsigned int realtime:1;
+	unsigned int monjoin:1;
+	unsigned int dead:1;
+	unsigned int joinempty:2;
+	unsigned int eventwhencalled:1;
+	unsigned int leavewhenempty:2;
+	unsigned int reportholdtime:1;
+	unsigned int wrapped:1;
+	unsigned int timeoutrestart:1;
+	unsigned int announceholdtime:2;
+	unsigned int strategy:3;
+	unsigned int maskmemberstatus:1;
+	unsigned int realtime:1;
 	int announcefrequency;          /*!< How often to announce their position */
 	int periodicannouncefrequency;	/*!< How often to play periodic announcement */
 	int roundingseconds;            /*!< How many seconds do we round to? */
@@ -356,11 +356,13 @@ struct ast_call_queue {
 	int retry;			/*!< Retry calling everyone after this amount of time */
 	int timeout;			/*!< How long to wait for an answer */
 	int weight;                     /*!< Respective weight */
-	
+	int autopause;			/*!< Auto pause queue members if they fail to answer */
+
 	/* Queue strategy things */
 	int rrpos;			/*!< Round Robin - position */
 	int memberdelay;		/*!< Seconds to delay connecting member to caller */
-
+	int autofill;			/*!< Ignore the head call status and ring an available agent */
+	
 	struct member *members;		/*!< Head of the list of members */
 	struct queue_ent *head;		/*!< Head of the list of callers */
 	struct ast_call_queue *next;	/*!< Next call queue */
@@ -368,6 +370,8 @@ struct ast_call_queue {
 
 static struct ast_call_queue *queues = NULL;
 AST_MUTEX_DEFINE_STATIC(qlock);
+
+static int set_member_paused(char *queuename, char *interface, int paused);
 
 static void set_queue_result(struct ast_channel *chan, enum queue_result res)
 {
@@ -514,9 +518,8 @@ static int statechange_queue(const char *dev, int state, void *ign)
 	struct statechange *sc;
 	pthread_t t;
 	pthread_attr_t attr;
-
-	sc = malloc(sizeof(struct statechange) + strlen(dev) + 1);
-	if (sc) {
+	
+	if ((sc = ast_calloc(1, sizeof(*sc) + strlen(dev) + 1))) {
 		sc->state = state;
 		strcpy(sc->dev, dev);
 		pthread_attr_init(&attr);
@@ -535,10 +538,7 @@ static struct member *create_queue_member(char *interface, int penalty, int paus
 	
 	/* Add a new member */
 
-	cur = malloc(sizeof(struct member));
-
-	if (cur) {
-		memset(cur, 0, sizeof(struct member));
+	if ((cur = ast_calloc(1, sizeof(*cur)))) {
 		cur->penalty = penalty;
 		cur->paused = paused;
 		ast_copy_string(cur->interface, interface, sizeof(cur->interface));
@@ -554,9 +554,7 @@ static struct ast_call_queue *alloc_queue(const char *queuename)
 {
 	struct ast_call_queue *q;
 
-	q = malloc(sizeof(*q));
-	if (q) {
-		memset(q, 0, sizeof(*q));
+	if ((q = ast_calloc(1, sizeof(*q)))) {
 		ast_mutex_init(&q->lock);
 		ast_copy_string(q->name, queuename, sizeof(q->name));
 	}
@@ -672,6 +670,10 @@ static void queue_set_param(struct ast_call_queue *q, const char *param, const c
 			q->retry = DEFAULT_RETRY;
 	} else if (!strcasecmp(param, "wrapuptime")) {
 		q->wrapuptime = atoi(val);
+	} else if (!strcasecmp(param, "autofill")) {
+		q->autofill = ast_true(val);
+	} else if (!strcasecmp(param, "autopause")) {
+		q->autopause = ast_true(val);
 	} else if (!strcasecmp(param, "maxlen")) {
 		q->maxlen = atoi(val);
 		if (q->maxlen < 0)
@@ -829,8 +831,7 @@ static struct ast_call_queue *find_queue_by_name_rt(const char *queuename, struc
 
 	/* Create a new queue if an in-core entry does not exist yet. */
 	if (!q) {
-		q = alloc_queue(queuename);
-		if (!q)
+		if (!(q = alloc_queue(queuename)))
 			return NULL;
 		ast_mutex_lock(&q->lock);
 		clear_queue(q);
@@ -1325,7 +1326,6 @@ static int compare_weight(struct ast_call_queue *rq, struct member *member)
 		if (found) 
 			break;
 	}
-	ast_mutex_unlock(&qlock);
 	return found;
 }
 
@@ -1615,6 +1615,7 @@ static void record_abandoned(struct queue_ent *qe)
 static struct localuser *wait_for_answer(struct queue_ent *qe, struct localuser *outgoing, int *to, char *digit, int prebusies, int caller_disconnect)
 {
 	char *queue = qe->parent->name;
+	char on[256] = "";
 	struct localuser *o;
 	int found;
 	int numlines;
@@ -1658,6 +1659,7 @@ static struct localuser *wait_for_answer(struct queue_ent *qe, struct localuser 
 					peer = o;
 				}
 			} else if (o->chan && (o->chan == winner)) {
+				ast_copy_string(on, o->member->interface, sizeof(on));
 				if (!ast_strlen_zero(o->chan->call_forward)) {
 					char tmpchan[256]="";
 					char *stuff;
@@ -1707,11 +1709,7 @@ static struct localuser *wait_for_answer(struct queue_ent *qe, struct localuser 
 						if (in->cid.cid_ani) {
 							if (o->chan->cid.cid_ani)
 								free(o->chan->cid.cid_ani);
-							o->chan->cid.cid_ani = malloc(strlen(in->cid.cid_ani) + 1);
-							if (o->chan->cid.cid_ani)
-								strncpy(o->chan->cid.cid_ani, in->cid.cid_ani, strlen(in->cid.cid_ani) + 1);
-							else
-								ast_log(LOG_WARNING, "Out of memory\n");
+							o->chan->cid.cid_ani = ast_strdup(in->cid.cid_ani);
 						}
 						if (o->chan->cid.cid_rdnis) 
 							free(o->chan->cid.cid_rdnis);
@@ -1836,8 +1834,19 @@ static struct localuser *wait_for_answer(struct queue_ent *qe, struct localuser 
 			}
 			ast_frfree(f);
 		}
-		if (!*to && (option_verbose > 2))
-			ast_verbose( VERBOSE_PREFIX_3 "Nobody picked up in %d ms\n", orig);
+		if (!*to) {
+			if (option_verbose > 2)
+				ast_verbose( VERBOSE_PREFIX_3 "Nobody picked up in %d ms\n", orig);
+			if (qe->parent->autopause) {
+				if (!set_member_paused(qe->parent->name, on, 1)) {
+					if (option_verbose > 2)
+						ast_verbose( VERBOSE_PREFIX_3 "Auto-Pausing Queue Member %s in queue %s since they failed to answer.\n", on, qe->parent->name);
+				} else {
+					if (option_verbose > 2)
+						ast_verbose( VERBOSE_PREFIX_3 "Failed to pause Queue Member %s in queue %s!\n", on, qe->parent->name);
+				}
+			}
+		}
 	}
 
 	return peer;
@@ -1852,7 +1861,7 @@ static int is_our_turn(struct queue_ent *qe)
 	/* Atomically read the parent head -- does not need a lock */
 	ch = qe->parent->head;
 	/* If we are now at the top of the head, break out */
-	if (ch == qe) {
+	if ((ch == qe) || (qe->parent->autofill)) {
 		if (option_debug)
 			ast_log(LOG_DEBUG, "It's our turn (%s).\n", qe->chan->name);
 		res = 1;
@@ -2063,15 +2072,12 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 		announce = announceoverride;
 
 	while(cur) {
-		tmp = malloc(sizeof(*tmp));
-		if (!tmp) {
+		if (!(tmp = ast_calloc(1, sizeof(*tmp)))) {
 			ast_mutex_unlock(&qe->parent->lock);
 			if (use_weight) 
 				ast_mutex_unlock(&qlock);
-			ast_log(LOG_WARNING, "Out of memory\n");
 			goto out;
 		}
-		memset(tmp, 0, sizeof(*tmp));
 		tmp->stillgoing = -1;
 		if (option_debug) {
 			if (url)
@@ -2129,7 +2135,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 		peer = NULL;
 	if (!peer) {
 		if (to) {
-			/* Musta gotten hung up */
+			/* Must gotten hung up */
 			record_abandoned(qe);
 			res = -1;
 		} else {
@@ -2296,7 +2302,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 			ast_hangup(peer);
 		update_queue(qe->parent, member);
 		if (bridge == 0) 
-			res = 1; /* JDG: bridge successfull, leave app_queue */
+			res = 1; /* JDG: bridge successfully, leave app_queue */
 		else 
 			res = bridge; /* bridge error, stay in the queue */
 	}	
@@ -2326,7 +2332,7 @@ static struct member * interface_exists(struct ast_call_queue *q, char *interfac
 }
 
 
-/* Dump all members in a specific queue to the databse
+/* Dump all members in a specific queue to the database
  *
  * <pm_family>/<queuename> = <interface>;<penalty>;<paused>[|...]
  *
@@ -2555,7 +2561,7 @@ static void reload_queue_members(void)
 			paused_tok = strsep(&member, ";");
 
 			if (!penalty_tok) {
-				ast_log(LOG_WARNING, "Error parsing persisent member string for '%s' (penalty)\n", queue_name);
+				ast_log(LOG_WARNING, "Error parsing persistent member string for '%s' (penalty)\n", queue_name);
 				break;
 			}
 			penalty = strtol(penalty_tok, NULL, 10);
@@ -2586,7 +2592,7 @@ static void reload_queue_members(void)
 
 	ast_mutex_unlock(&qlock);
 	if (db_tree) {
-		ast_log(LOG_NOTICE, "Queue members sucessfully reloaded from database.\n");
+		ast_log(LOG_NOTICE, "Queue members successfully reloaded from database.\n");
 		ast_db_freetree(db_tree);
 	}
 }
@@ -3125,7 +3131,7 @@ static char *queue_function_qac(struct ast_channel *chan, char *cmd, char *data,
 	ast_copy_string(buf, "0", len);
 	
 	if (ast_strlen_zero(data)) {
-		ast_log(LOG_ERROR, "QUEUEAGENTCOUNT requires an argument: queuename\n");
+		ast_log(LOG_ERROR, "%s requires an argument: queuename\n", cmd);
 		LOCAL_USER_REMOVE(u);
 		return buf;
 	}
@@ -3157,11 +3163,85 @@ static char *queue_function_qac(struct ast_channel *chan, char *cmd, char *data,
 	return buf;
 }
 
+static char *queue_function_queuememberlist(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len)
+{
+	struct localuser *u;
+	struct ast_call_queue *q;
+	struct member *m;
+
+	/* Ensure an otherwise empty list doesn't return garbage */
+	buf[0] = '\0';
+
+	if (!data || ast_strlen_zero(data)) {
+		ast_log(LOG_ERROR, "QUEUE_MEMBER_LIST requires an argument: queuename\n");
+		return buf;
+	}
+	
+	LOCAL_USER_ACF_ADD(u);
+
+	ast_mutex_lock(&qlock);
+
+	/* Find the right queue */
+	for (q = queues; q; q = q->next) {
+		if (!strcasecmp(q->name, data)) {
+			ast_mutex_lock(&q->lock);
+			break;
+		}
+	}
+
+	ast_mutex_unlock(&qlock);
+
+	if (q) {
+		int buflen = 0, count = 0;
+		for (m = q->members; m; m = m->next) {
+			/* strcat() is always faster than printf() */
+			if (count++) {
+				strncat(buf + buflen, ",", len - buflen - 1);
+				buflen++;
+			}
+			strncat(buf + buflen, m->interface, len - buflen - 1);
+			buflen += strlen(m->interface);
+			/* Safeguard against overflow (negative length) */
+			if (buflen >= len - 2) {
+				ast_log(LOG_WARNING, "Truncating list\n");
+				break;
+			}
+		}
+		ast_mutex_unlock(&q->lock);
+	}
+
+	/* We should already be terminated, but let's make sure. */
+	buf[len - 1] = '\0';
+	LOCAL_USER_REMOVE(u);
+	return buf;
+}
+
 static struct ast_custom_function queueagentcount_function = {
 	.name = "QUEUEAGENTCOUNT",
 	.synopsis = "Count number of agents answering a queue",
 	.syntax = "QUEUEAGENTCOUNT(<queuename>)",
+	.desc =
+"Returns the number of members currently associated with the specified queue.\n"
+"This function is deprecated.  You should use QUEUE_MEMBER_COUNT() instead.\n",
 	.read = queue_function_qac,
+};
+
+static struct ast_custom_function queuemembercount_function = {
+	.name = "QUEUE_MEMBER_COUNT",
+	.synopsis = "Count number of members answering a queue",
+	.syntax = "QUEUE_MEMBER_COUNT(<queuename>)",
+	.desc =
+"Returns the number of members currently associated with the specified queue.\n",
+	.read = queue_function_qac,
+};
+
+static struct ast_custom_function queuememberlist_function = {
+	.name = "QUEUE_MEMBER_LIST",
+	.synopsis = "Returns a list of interfaces on a queue",
+	.syntax = "QUEUE_MEMBER_LIST(<queuename>)",
+	.desc =
+"Returns a comma-separated list of members associated with the specified queue.\n",
+	.read = queue_function_queuememberlist,
 };
 
 static void reload_queues(void)
@@ -3208,7 +3288,9 @@ static void reload_queues(void)
 			}
 			if (!q) {
 				/* Make one then */
-				q = alloc_queue(cat);
+				if (!(q = alloc_queue(cat))) {
+					/* TODO: Handle memory allocation failure */
+				}
 				new = 1;
 			} else
 				new = 0;
@@ -3685,8 +3767,8 @@ static char *complete_add_queue_member(char *line, char *word, int pos, int stat
 		}
 	case 7:
 		if (state < 100) {	/* 0-99 */
-			char *num = malloc(3);
-			if (num) {
+			char *num;
+			if ((num = ast_malloc(3))) {
 				sprintf(num, "%d", state);
 			}
 			return num;
@@ -3816,6 +3898,8 @@ int unload_module(void)
 	res |= ast_unregister_application(app_pqm);
 	res |= ast_unregister_application(app_upqm);
 	res |= ast_custom_function_unregister(&queueagentcount_function);
+	res |= ast_custom_function_unregister(&queuemembercount_function);
+	res |= ast_custom_function_unregister(&queuememberlist_function);
 	res |= ast_unregister_application(app);
 
 	STANDARD_HANGUP_LOCALUSERS;
@@ -3843,6 +3927,8 @@ int load_module(void)
 	res |= ast_register_application(app_pqm, pqm_exec, app_pqm_synopsis, app_pqm_descrip) ;
 	res |= ast_register_application(app_upqm, upqm_exec, app_upqm_synopsis, app_upqm_descrip) ;
 	res |= ast_custom_function_register(&queueagentcount_function);
+	res |= ast_custom_function_register(&queuemembercount_function);
+	res |= ast_custom_function_register(&queuememberlist_function);
 
 	if (!res) {	
 		reload_queues();

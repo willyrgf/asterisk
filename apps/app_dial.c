@@ -164,7 +164,7 @@ static char *descrip =
 "    S(x) - Hang up the call after 'x' seconds *after* the called party has\n"
 "           answered the call.\n"  	
 "    t    - Allow the called party to transfer the calling party by sending the\n"
-"           DTMF sequence defiend in features.conf.\n"
+"           DTMF sequence defined in features.conf.\n"
 "    T    - Allow the calling party to transfer the called party by sending the\n"
 "           DTMF sequence defined in features.conf.\n"
 "    w    - Allow the called party to enable recording of the call by sending\n"
@@ -449,13 +449,15 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in, struct localu
 					char tmpchan[256];
 					char *stuff;
 					char *tech;
+					char *forward_context;
 					ast_copy_string(tmpchan, o->chan->call_forward, sizeof(tmpchan));
 					if ((stuff = strchr(tmpchan, '/'))) {
 						*stuff = '\0';
 						stuff++;
 						tech = tmpchan;
 					} else {
-						snprintf(tmpchan, sizeof(tmpchan), "%s@%s", o->chan->call_forward, o->chan->context);
+						forward_context = pbx_builtin_getvar_helper(o->chan, "FORWARD_CONTEXT");
+						snprintf(tmpchan, sizeof(tmpchan), "%s@%s", o->chan->call_forward, forward_context ? forward_context : o->chan->context);
 						stuff = tmpchan;
 						tech = "Local";
 					}
@@ -984,13 +986,10 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			goto out;
 		}
 		*number = '\0';
-		number++;
-		tmp = malloc(sizeof(struct localuser));
-		if (!tmp) {
-			ast_log(LOG_WARNING, "Out of memory\n");
+		number++;		
+		if (!(tmp = ast_calloc(1, sizeof(*tmp)))) {
 			goto out;
 		}
-		memset(tmp, 0, sizeof(struct localuser));
 		if (opts.flags) {
 			ast_copy_flags(tmp, &opts,
 				       OPT_CALLEE_TRANSFER | OPT_CALLER_TRANSFER |

@@ -474,8 +474,7 @@ static struct ast_conference *build_conf(char *confno, char *pin, char *pinadmin
 
 	if (!cnf && (make || dynamic)) {
 		/* Make a new one */
-		cnf = calloc(1, sizeof(*cnf));
-		if (cnf) {
+		if ((cnf = ast_calloc(1, sizeof(*cnf)))) {
 			ast_mutex_init(&cnf->playlock);
 			ast_mutex_init(&cnf->listenlock);
 			ast_copy_string(cnf->confno, confno, sizeof(cnf->confno));
@@ -535,8 +534,7 @@ static struct ast_conference *build_conf(char *confno, char *pin, char *pinadmin
 				ast_verbose(VERBOSE_PREFIX_3 "Created MeetMe conference %d for conference '%s'\n", cnf->zapconf, cnf->confno);
 			cnf->next = confs;
 			confs = cnf;
-		} else	
-			ast_log(LOG_WARNING, "Out of memory\n");
+		} 
 	}
  cnfout:
 	ast_mutex_unlock(&conflock);
@@ -662,8 +660,14 @@ static int conf_cmd(int fd, int argc, char **argv) {
 			}
 		}
 		/* Show all the users */
-		for (user = cnf->firstuser; user; user = user->nextuser)
-			ast_cli(fd, "User #: %-2.2d %12.12s %-20.20s Channel: %s %s %s %s %s\n",
+		for (user = cnf->firstuser; user; user = user->nextuser){
+			now = time(NULL);
+			hr = (now - user->jointime) / 3600;
+			min = ((now - user->jointime) % 3600) / 60;
+			sec = (now - user->jointime) % 60;
+
+
+			ast_cli(fd, "User #: %-2.2d %12.12s %-20.20s Channel: %s %s %s %s %s %02d:%02d:%02d\n",
 				user->user_no,
 				user->chan->cid.cid_num ? user->chan->cid.cid_num : "<unknown>",
 				user->chan->cid.cid_name ? user->chan->cid.cid_name : "<no name>",
@@ -671,7 +675,8 @@ static int conf_cmd(int fd, int argc, char **argv) {
 				user->userflags & CONFFLAG_ADMIN ? "(Admin)" : "",
 				user->userflags & CONFFLAG_MONITOR ? "(Listen only)" : "",
 				user->adminflags & ADMINFLAG_MUTED ? "(Admn Muted)" : "",
-				istalking(user->talking));
+				istalking(user->talking), hr, min, sec);
+		}
 		ast_cli(fd,"%d users in that conference.\n",cnf->users);
 
 		return RESULT_SUCCESS;
@@ -844,7 +849,7 @@ static int conf_free(struct ast_conference *conf)
 
 static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int confflags)
 {
-	struct ast_conf_user *user = calloc(1, sizeof(*user));
+	struct ast_conf_user *user = NULL;
 	struct ast_conf_user *usr = NULL;
 	int fd;
 	struct zt_confinfo ztc, ztc_empty;
@@ -867,6 +872,8 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 	int menu_active = 0;
 	int using_pseudo = 0;
 	int duration=20;
+	int hr, min, sec;
+	time_t now;
 	struct ast_dsp *dsp=NULL;
 	struct ast_app *app;
 	const char *agifile;
@@ -878,9 +885,8 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 	ZT_BUFFERINFO bi;
 	char __buf[CONF_SIZE + AST_FRIENDLY_OFFSET];
 	char *buf = __buf + AST_FRIENDLY_OFFSET;
-	
-	if (!user) {
-		ast_log(LOG_ERROR, "Out of memory\n");
+
+	if (!(user = ast_calloc(1, sizeof(*user)))) {
 		return ret;
 	}
 
@@ -1661,12 +1667,26 @@ bailoutandtrynormal:
 		ast_dsp_free(dsp);
 	
 	if (user->user_no) { /* Only cleanup users who really joined! */
-		manager_event(EVENT_FLAG_CALL, "MeetmeLeave", 
-			      "Channel: %s\r\n"
-			      "Uniqueid: %s\r\n"
-			      "Meetme: %s\r\n"
-			      "Usernum: %d\r\n",
-			      chan->name, chan->uniqueid, conf->confno, user->user_no);
+		now = time(NULL);
+		hr = (now - user->jointime) / 3600;
+		min = ((now - user->jointime) % 3600) / 60;
+		sec = (now - user->jointime) % 60;
+
+		manager_event(EVENT_FLAG_CALL, "MeetmeLeave",
+			"Channel: %s\r\n"
+			"Uniqueid: %s\r\n"
+			"Meetme: %s\r\n"
+			"Usernum: %d\r\n"
+		        "CIDnum: %s\r\n"
+			"CIDname: %s\r\n"
+		        "Duration: %02d:%02d:%02d\r\n",
+			 chan->name, chan->uniqueid, conf->confno, 
+			  user->user_no,
+			  user->chan->cid.cid_num ? user->chan->cid.cid_num :
+		         "<unknown>",
+		         user->chan->cid.cid_name ? user->chan->cid.cid_name :
+		          "<no name>", hr, min, sec);
+
 		conf->users--;
 		if (confflags & CONFFLAG_MARKEDUSER) 
 			conf->markedusers--;

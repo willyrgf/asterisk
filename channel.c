@@ -102,11 +102,11 @@ unsigned long global_fin = 0, global_fout = 0;
 
 struct chanlist {
 	const struct ast_channel_tech *tech;
-	struct chanlist *next;
+	AST_LIST_ENTRY(chanlist) list;
 };
 
 /*! the list of registered channel types */
-static struct chanlist *backends = NULL;
+static AST_LIST_HEAD_NOLOCK_STATIC(backends, chanlist);
 
 /*! the list of channels we have */
 static struct ast_channel *channels = NULL;
@@ -178,7 +178,7 @@ static int show_channeltypes(int fd, int argc, char *argv[])
 		ast_log(LOG_WARNING, "Unable to lock channel list\n");
 		return -1;
 	}
-	for (cl = backends; cl; cl = cl->next) {
+	AST_LIST_TRAVERSE(&backends, cl, list) {
 		ast_cli(fd, FORMAT, cl->tech->type, cl->tech->description, 
 			(cl->tech->devicestate) ? "yes" : "no", 
 			(cl->tech->indicate) ? "yes" : "no",
@@ -315,7 +315,7 @@ int ast_channel_register(const struct ast_channel_tech *tech)
 
 	ast_mutex_lock(&chlock);
 
-	for (chan = backends; chan; chan = chan->next) {
+	AST_LIST_TRAVERSE(&backends, chan, list) {
 		if (!strcasecmp(tech->type, chan->tech->type)) {
 			ast_log(LOG_WARNING, "Already have a handler for type '%s'\n", tech->type);
 			ast_mutex_unlock(&chlock);
@@ -330,8 +330,7 @@ int ast_channel_register(const struct ast_channel_tech *tech)
 		return -1;
 	}
 	chan->tech = tech;
-	chan->next = backends;
-	backends = chan;
+	AST_LIST_INSERT_HEAD(&backends, chan, list);
 
 	if (option_debug)
 		ast_log(LOG_DEBUG, "Registered handler for '%s' (%s)\n", chan->tech->type, chan->tech->description);
@@ -346,29 +345,23 @@ int ast_channel_register(const struct ast_channel_tech *tech)
 
 void ast_channel_unregister(const struct ast_channel_tech *tech)
 {
-	struct chanlist *chan, *last=NULL;
+	struct chanlist *chan;
 
 	if (option_debug)
 		ast_log(LOG_DEBUG, "Unregistering channel type '%s'\n", tech->type);
 
 	ast_mutex_lock(&chlock);
 
-	for (chan = backends; chan; chan = chan->next) {
+	AST_LIST_TRAVERSE_SAFE_BEGIN(&backends, chan, list) {
 		if (chan->tech == tech) {
-			if (last)
-				last->next = chan->next;
-			else
-				backends = backends->next;
+			AST_LIST_REMOVE_CURRENT(&backends, list);
 			free(chan);
-			ast_mutex_unlock(&chlock);
-
 			if (option_verbose > 1)
-				ast_verbose( VERBOSE_PREFIX_2 "Unregistered channel type '%s'\n", tech->type);
-
-			return;
+				ast_verbose(VERBOSE_PREFIX_2 "Unregistered channel type '%s'\n", tech->type);
+			break;	
 		}
-		last = chan;
 	}
+	AST_LIST_TRAVERSE_SAFE_END
 
 	ast_mutex_unlock(&chlock);
 }
@@ -376,22 +369,23 @@ void ast_channel_unregister(const struct ast_channel_tech *tech)
 const struct ast_channel_tech *ast_get_channel_tech(const char *name)
 {
 	struct chanlist *chanls;
+	const struct ast_channel_tech *ret = NULL;
 
 	if (ast_mutex_lock(&chlock)) {
 		ast_log(LOG_WARNING, "Unable to lock channel tech list\n");
 		return NULL;
 	}
 
-	for (chanls = backends; chanls; chanls = chanls->next) {
-		if (strcasecmp(name, chanls->tech->type))
-			continue;
-
-		ast_mutex_unlock(&chlock);
-		return chanls->tech;
+	AST_LIST_TRAVERSE(&backends, chanls, list) {
+		if (!strcasecmp(name, chanls->tech->type)) {
+			ret = chanls->tech;
+			break;
+		}
 	}
 
 	ast_mutex_unlock(&chlock);
-	return NULL;
+	
+	return ret;
 }
 
 /*! \brief Gives the string form of a given hangup cause */
@@ -490,7 +484,7 @@ int ast_best_codec(int fmts)
 	};
 	
 	
-	/* Find the first prefered codec in the format given */
+	/* Find the first preferred codec in the format given */
 	for (x=0; x < (sizeof(prefs) / sizeof(prefs[0]) ); x++)
 		if (fmts & prefs[x])
 			return prefs[x];
@@ -567,7 +561,7 @@ struct ast_channel *ast_channel_alloc(int needqueue)
 	tmp->fds[AST_MAX_FDS-1] = tmp->alertpipe[0];
 	/* And timing pipe */
 	tmp->fds[AST_MAX_FDS-2] = tmp->timingfd;
-	strcpy(tmp->name, "**Unkown**");
+	strcpy(tmp->name, "**Unknown**");
 	/* Initial state */
 	tmp->_state = AST_STATE_DOWN;
 	tmp->streamid = -1;
@@ -902,7 +896,7 @@ void ast_channel_free(struct ast_channel *chan)
 	if(chan->music_state)
 		ast_moh_cleanup(chan);
 
-	/* Free translatosr */
+	/* Free translators */
 	if (chan->readtrans)
 		ast_translator_free_path(chan->readtrans);
 	if (chan->writetrans)
@@ -1905,8 +1899,10 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 				} else
 					chan->insmpl += f->samples;
 #endif
-				if (ast_writestream(chan->monitor->read_stream, f) < 0)
-					ast_log(LOG_WARNING, "Failed to write data to channel monitor read stream\n");
+				if (chan->monitor->state == AST_MONITOR_RUNNING) {
+					if (ast_writestream(chan->monitor->read_stream, f) < 0)
+						ast_log(LOG_WARNING, "Failed to write data to channel monitor read stream\n");
+				}
 			}
 			if (chan->readtrans) {
 				f = ast_translate(chan->readtrans, f, 1);
@@ -2266,8 +2262,10 @@ int ast_write(struct ast_channel *chan, struct ast_frame *fr)
 					} else
 						chan->outsmpl += f->samples;
 #endif
-					if (ast_writestream(chan->monitor->write_stream, f) < 0)
-						ast_log(LOG_WARNING, "Failed to write data to channel monitor write stream\n");
+					if (chan->monitor->state == AST_MONITOR_RUNNING) {
+						if (ast_writestream(chan->monitor->write_stream, f) < 0)
+							ast_log(LOG_WARNING, "Failed to write data to channel monitor write stream\n");
+					}
 				}
 
 				res = chan->tech->write(chan, f);
@@ -2491,7 +2489,7 @@ struct ast_channel *ast_request(const char *type, int format, void *data, int *c
 		return NULL;
 	}
 
-	for (chan = backends; chan; chan = chan->next) {
+	AST_LIST_TRAVERSE(&backends, chan, list) {
 		if (strcasecmp(type, chan->tech->type))
 			continue;
 
@@ -2909,7 +2907,7 @@ int ast_do_masquerade(struct ast_channel *original)
 	manager_event(EVENT_FLAG_CALL, "Rename", "Oldname: %s\r\nNewname: %s\r\nUniqueid: %s\r\n", newn, masqn, clone->uniqueid);
 	manager_event(EVENT_FLAG_CALL, "Rename", "Oldname: %s\r\nNewname: %s\r\nUniqueid: %s\r\n", orig, newn, original->uniqueid);
 
-	/* Swap the technlogies */	
+	/* Swap the technologies */	
 	t = original->tech;
 	original->tech = clone->tech;
 	clone->tech = t;
@@ -3280,6 +3278,9 @@ static enum ast_bridge_result ast_generic_bridge(struct ast_channel *c0, struct 
 		    (f->frametype == AST_FRAME_VIDEO) || 
 		    (f->frametype == AST_FRAME_IMAGE) ||
 		    (f->frametype == AST_FRAME_HTML) ||
+#if defined(T38_SUPPORT)
+		    (f->frametype == AST_FRAME_MODEM) ||
+#endif
 		    (f->frametype == AST_FRAME_TEXT)) {
 			if (f->frametype == AST_FRAME_DTMF) {
 				if (((who == c0) && watch_c0_dtmf) ||

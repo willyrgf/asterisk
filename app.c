@@ -55,7 +55,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 /* !
 This function presents a dialtone and reads an extension into 'collect' 
-which must be a pointer to a **pre-initilized** array of char having a 
+which must be a pointer to a **pre-initialized** array of char having a 
 size of 'size' suitable for writing to.  It will collect no more than the smaller 
 of 'maxlen' or 'size' minus the original strlen() of collect digits.
 \return 0 if extension does not exist, 1 if extension exists
@@ -279,47 +279,57 @@ int ast_app_messagecount(const char *mailbox, int *newmsgs, int *oldmsgs)
 	return 0;
 }
 
-int ast_dtmf_stream(struct ast_channel *chan,struct ast_channel *peer,char *digits,int between) 
+int ast_dtmf_stream(struct ast_channel *chan, struct ast_channel *peer, const char *digits, int between) 
 {
-	char *ptr;
+	const char *ptr;
 	int res = 0;
-	struct ast_frame f;
+	struct ast_frame f = {
+		.frametype = AST_FRAME_DTMF,
+		.src = "ast_dtmf_stream"
+	};
+
 	if (!between)
 		between = 100;
 
 	if (peer)
 		res = ast_autoservice_start(peer);
 
-	if (!res) {
-		res = ast_waitfor(chan,100);
-		if (res > -1) {
-			for (ptr=digits; *ptr; ptr++) {
-				if (*ptr == 'w') {
-					res = ast_safe_sleep(chan, 500);
-					if (res) 
-						break;
-					continue;
-				}
-				memset(&f, 0, sizeof(f));
-				f.frametype = AST_FRAME_DTMF;
+	if (!res)
+		res = ast_waitfor(chan, 100);
+
+	/* ast_waitfor will return the number of remaining ms on success */
+	if (res < 0)
+		return res;
+
+	for (ptr = digits; *ptr; ptr++) {
+		if (*ptr == 'w') {
+			/* 'w' -- wait half a second */
+			if ((res = ast_safe_sleep(chan, 500)))
+				break;
+		} else if (strchr("0123456789*#abcdfABCDF", *ptr)) {
+			/* Character represents valid DTMF */
+			if (*ptr == 'f' || *ptr == 'F') {
+				/* ignore return values if not supported by channel */
+				ast_indicate(chan, AST_CONTROL_FLASH);
+			} else {
 				f.subclass = *ptr;
-				f.src = "ast_dtmf_stream";
-				if (strchr("0123456789*#abcdABCD",*ptr)==NULL) {
-					ast_log(LOG_WARNING, "Illegal DTMF character '%c' in string. (0-9*#aAbBcCdD allowed)\n",*ptr);
-				} else {
-					res = ast_write(chan, &f);
-					if (res) 
-						break;
-					/* pause between digits */
-					res = ast_safe_sleep(chan,between);
-					if (res) 
-						break;
-				}
+				if ((res = ast_write(chan, &f)))
+					break;
 			}
-		}
-		if (peer)
-			res = ast_autoservice_stop(peer);
+			/* pause between digits */
+			if ((res = ast_safe_sleep(chan, between)))
+				break;
+		} else
+			ast_log(LOG_WARNING, "Illegal DTMF character '%c' in string. (0-9*#aAbBcCdD allowed)\n",*ptr);
 	}
+
+	if (peer) {
+		/* Stop autoservice on the peer channel, but don't overwrite any error condition 
+		   that has occurred previously while acting on the primary channel */
+		if (ast_autoservice_stop(peer) && !res)
+			res = -1;
+	}
+
 	return res;
 }
 
@@ -1099,7 +1109,7 @@ unsigned int ast_app_separate_args(char *buf, char delim, char **array, int arra
 {
 	int argc;
 	char *scan;
-	int paren = 0;
+	int paren = 0, quote = 0;
 
 	if (!buf || !array || !arraylen)
 		return 0;
@@ -1116,7 +1126,15 @@ unsigned int ast_app_separate_args(char *buf, char delim, char **array, int arra
 			else if (*scan == ')') {
 				if (paren)
 					paren--;
-			} else if ((*scan == delim) && !paren) {
+			} else if (*scan == '"') {
+				quote = quote ? 0 : 1;
+				/* Remove quote character from argument */
+				memmove(scan, scan + 1, strlen(scan));
+				scan--;
+			} else if (*scan == '\\') {
+				/* Literal character, don't parse */
+				memmove(scan, scan + 1, strlen(scan));
+			} else if ((*scan == delim) && !paren && !quote) {
 				*scan++ = '\0';
 				break;
 			}

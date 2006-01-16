@@ -50,7 +50,7 @@ struct ast_codec_pref {
 	\arg \b IMAGE:	Image transport, mostly used in IAX
 	\arg \b TEXT:	Text messages
 	\arg \b HTML:	URL's and web pages
-	\arg \b T38:	T38 Fax transport frames
+	\arg \b MODEM:	Modulated data encodings, such as T.38 and V.150
 	\arg \b IAX:	Private frame type for the IAX protocol
 	\arg \b CNG:	Comfort noice frames
 	\arg \b CONTROL:	A control frame, subclass defined as AST_CONTROL_
@@ -145,8 +145,16 @@ struct ast_frame {
 /*! Comfort Noise frame (subclass is level of CNG in -dBov), 
     body may include zero or more 8-bit quantization coefficients */
 #define AST_FRAME_CNG		10
-/*! T.38 Fax-over-IP data stream */
-#define AST_FRAME_T38		11
+#if defined(T38_SUPPORT)
+/*! Modem-over-IP data streams */
+#define AST_FRAME_MODEM		11
+
+/* MODEM subclasses */
+/*! T.38 Fax-over-IP */
+#define AST_MODEM_T38		1
+/*! V.150 Modem-over-IP */
+#define AST_MODEM_V150		2
+#endif
 
 /* HTML subclasses */
 /*! Sending a URL */

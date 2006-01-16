@@ -118,8 +118,18 @@ int ast_app_messagecount(const char *mailbox, int *newmsgs, int *oldmsgs);
 */
 extern int ast_safe_system(const char *s);
 
-/*! Send DTMF to chan (optionally entertain peer)   */
-int ast_dtmf_stream(struct ast_channel *chan, struct ast_channel *peer, char *digits, int between);
+/*!
+  \brief Send DTMF to a channel
+
+  \param chan    The channel that will receive the DTMF frames
+  \param peer    (optional) Peer channel that will be autoserviced while the primary
+                 channel is receiving DTMF
+  \param digits  This is a string of characters representing the DTMF digits to be sent
+                 to the channel.  Valid characters are "0123456789*#abcdABCD".
+  \param between This is the number of milliseconds to wait in between each DTMF digit.
+                 If zero milliseconds is specified, then the default value of 100 will be used.
+*/
+int ast_dtmf_stream(struct ast_channel *chan, struct ast_channel *peer, const char *digits, int between);
 
 /*! Stream a filename (or file descriptor) as a generator. */
 int ast_linear_stream(struct ast_channel *chan, const char *filename, int fd, int allowoverride);
@@ -217,6 +227,19 @@ int ast_app_group_match_get_count(const char *groupmatch, const char *category);
  */
 #define AST_STANDARD_APP_ARGS(args, parse) \
 	args.argc = ast_app_separate_args(parse, '|', args.argv, (sizeof(args) - sizeof(args.argc)) / sizeof(args.argv[0]))
+	
+/*!
+  \brief Performs the 'nonstandard' argument separation process for an application.
+  \param args An argument structure defined using AST_DECLARE_APP_ARGS
+  \param parse A modifiable buffer containing the input to be parsed
+  \param sep A nonstandard separator character
+
+  This function will separate the input string using the nonstandard argument
+  separator character and fill in the provided structure, including
+  the argc argument counter field.
+ */
+#define AST_NONSTANDARD_APP_ARGS(args, parse, sep) \
+	args.argc = ast_app_separate_args(parse, sep, args.argv, (sizeof(args) - sizeof(args.argc)) / sizeof(args.argv[0]))
 	
 /*!
   \brief Separate a string into arguments in an array
