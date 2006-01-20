@@ -1908,7 +1908,7 @@ static int peer_status(struct iax2_peer *peer, char *status, int statuslen)
 	return res;
 }
 
-/*--- iax2_show_peer: Show one peer in detail ---*/
+/*! \brief Show one peer in detail */
 static int iax2_show_peer(int fd, int argc, char *argv[])
 {
 	char status[30];
@@ -1970,7 +1970,7 @@ static int iax2_show_peer(int fd, int argc, char *argv[])
 	return RESULT_SUCCESS;
 }
 
-static char *complete_iax2_show_peer(char *line, char *word, int pos, int state)
+static char *complete_iax2_show_peer(const char *line, const char *word, int pos, int state)
 {
 	int which = 0;
 	struct iax2_peer *p;
@@ -3370,7 +3370,7 @@ static int iax2_getpeertrunk(struct sockaddr_in sin)
 	return res;
 }
 
-/*--- ast_iax2_new: Create new call, interface with the PBX core */
+/*! \brief  Create new call, interface with the PBX core */
 static struct ast_channel *ast_iax2_new(int callno, int state, int capability)
 {
 	struct ast_channel *tmp;
@@ -4888,6 +4888,8 @@ static int raw_hangup(struct sockaddr_in *sin, unsigned short src, unsigned shor
 	fh.iseqno = 0;
 	fh.type = AST_FRAME_IAX;
 	fh.csub = compress_subclass(IAX_COMMAND_INVAL);
+	if (iaxdebug)
+		 iax_showframe(NULL, &fh, 0, sin, 0);
 #if 0
 	if (option_debug)
 #endif	
@@ -6753,6 +6755,10 @@ retryowner:
 					break;
 				if (ies.provverpres && ies.serviceident && sin.sin_addr.s_addr)
 					check_provisioning(&sin, fd, ies.serviceident, ies.provver);
+				/* If we're in trunk mode, do it now, and update the trunk number in our frame before continuing */
+				if (ast_test_flag(iaxs[fr.callno], IAX_TRUNK)) {
+					fr.callno = make_trunk(fr.callno, 1);
+				}
 				/* For security, always ack immediately */
 				if (delayreject)
 					send_command_immediate(iaxs[fr.callno], AST_FRAME_IAX, IAX_COMMAND_ACK, fr.ts, NULL, 0,fr.iseqno);
@@ -6762,10 +6768,6 @@ retryowner:
 					if (authdebug)
 						ast_log(LOG_NOTICE, "Rejected connect attempt from %s, who was trying to reach '%s@%s'\n", ast_inet_ntoa(iabuf, sizeof(iabuf), sin.sin_addr), iaxs[fr.callno]->exten, iaxs[fr.callno]->context);
 					break;
-				}
-				/* If we're in trunk mode, do it now, and update the trunk number in our frame before continuing */
-				if (ast_test_flag(iaxs[fr.callno], IAX_TRUNK)) {
-					fr.callno = make_trunk(fr.callno, 1);
 				}
 				/* This might re-enter the IAX code and need the lock */
 				if (strcasecmp(iaxs[fr.callno]->exten, "TBD")) {
@@ -7631,7 +7633,7 @@ static int iax2_do_register(struct iax2_registry *reg)
 	return 0;
 }
 
-static char *iax2_prov_complete_template_3rd(char *line, char *word, int pos, int state)
+static char *iax2_prov_complete_template_3rd(const char *line, const char *word, int pos, int state)
 {
 	if (pos != 3)
 		return NULL;
@@ -7993,11 +7995,8 @@ static int get_auth_methods(char *value)
 }
 
 
-/*--- check_src_ip: Check if address can be used as packet source.
- returns:
- 0  address available
- 1  address unavailable
--1  error
+/*! \brief Check if address can be used as packet source.
+ \return 0  address available, 1  address unavailable, -1  error
 */
 static int check_srcaddr(struct sockaddr *sa, socklen_t salen)
 {
@@ -8021,7 +8020,7 @@ static int check_srcaddr(struct sockaddr *sa, socklen_t salen)
 	return 0;
 }
 
-/*--- peer_set_srcaddr: Parse the "sourceaddress" value,
+/*! \brief Parse the "sourceaddress" value,
   lookup in netsock list and set peer's sockfd. Defaults to defaultsockfd if
   not found. */
 static int peer_set_srcaddr(struct iax2_peer *peer, const char *srcaddr)
@@ -8079,7 +8078,7 @@ static int peer_set_srcaddr(struct iax2_peer *peer, const char *srcaddr)
 }
 
 		
-/*--- build_peer: Create peer structure based on configuration */
+/*! \brief Create peer structure based on configuration */
 static struct iax2_peer *build_peer(const char *name, struct ast_variable *v, int temponly)
 {
 	struct iax2_peer *peer;
@@ -8270,7 +8269,7 @@ static struct iax2_peer *build_peer(const char *name, struct ast_variable *v, in
 	return peer;
 }
 
-/*--- build_user: Create in-memory user structure from configuration */
+/*! \brief Create in-memory user structure from configuration */
 static struct iax2_user *build_user(const char *name, struct ast_variable *v, int temponly)
 {
 	struct iax2_user *prev, *user;
@@ -8550,7 +8549,7 @@ static void set_timing(void)
 }
 
 
-/*--- set_config: Load configuration */
+/*! \brief Load configuration */
 static int set_config(char *config_file, int reload)
 {
 	struct ast_config *cfg;
@@ -9046,7 +9045,7 @@ static struct iax2_dpcache *find_cache(struct ast_channel *chan, const char *dat
 	return dp;	
 }
 
-/*--- iax2_exists: Part of the IAX2 switch interface ---*/
+/*! \brief Part of the IAX2 switch interface */
 static int iax2_exists(struct ast_channel *chan, const char *context, const char *exten, int priority, const char *callerid, const char *data)
 {
 	struct iax2_dpcache *dp;
@@ -9069,7 +9068,7 @@ static int iax2_exists(struct ast_channel *chan, const char *context, const char
 	return res;
 }
 
-/*--- iax2_canmatch: part of the IAX2 dial plan switch interface */
+/*! \brief part of the IAX2 dial plan switch interface */
 static int iax2_canmatch(struct ast_channel *chan, const char *context, const char *exten, int priority, const char *callerid, const char *data)
 {
 	int res = 0;
@@ -9092,7 +9091,7 @@ static int iax2_canmatch(struct ast_channel *chan, const char *context, const ch
 	return res;
 }
 
-/*--- iax2_matchmore: Part of the IAX2 Switch interface */
+/*! \brief Part of the IAX2 Switch interface */
 static int iax2_matchmore(struct ast_channel *chan, const char *context, const char *exten, int priority, const char *callerid, const char *data)
 {
 	int res = 0;
@@ -9115,7 +9114,7 @@ static int iax2_matchmore(struct ast_channel *chan, const char *context, const c
 	return res;
 }
 
-/*--- iax2_exec: Execute IAX2 dialplan switch */
+/*! \brief Execute IAX2 dialplan switch */
 static int iax2_exec(struct ast_channel *chan, const char *context, const char *exten, int priority, const char *callerid, int newstack, const char *data)
 {
 	char odata[256];
@@ -9256,7 +9255,7 @@ struct ast_custom_function iaxpeer_function = {
 };
 
 
-/*--- iax2_devicestate: Part of the device state notification system ---*/
+/*! \brief Part of the device state notification system ---*/
 static int iax2_devicestate(void *data) 
 {
 	char *dest = (char *) data;
@@ -9498,7 +9497,7 @@ int unload_module()
 }
 
 
-/*--- load_module: Load IAX2 module, load configuraiton ---*/
+/*! \brief Load IAX2 module, load configuraiton ---*/
 int load_module(void)
 {
 	char *config = "iax.conf";

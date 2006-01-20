@@ -688,7 +688,7 @@ static int conf_cmd(int fd, int argc, char **argv) {
 	return 0;
 }
 
-static char *complete_confcmd(char *line, char *word, int pos, int state) {
+static char *complete_confcmd(const char *line, const char *word, int pos, int state) {
 #define CONF_COMMANDS 6
 	int which = 0, x = 0;
 	struct ast_conference *cnf = NULL;
@@ -1759,7 +1759,8 @@ static struct ast_conference *find_conf(struct ast_channel *chan, char *confno, 
 			if (dynamic_pin) {
 				if (dynamic_pin[0] == 'q') {
 					/* Query the user to enter a PIN */
-					ast_app_getdata(chan, "conf-getpin", dynamic_pin, AST_MAX_EXTENSION - 1, 0);
+					if (ast_app_getdata(chan, "conf-getpin", dynamic_pin, AST_MAX_EXTENSION - 1, 0) < 0)
+						return NULL;
 				}
 				cnf = build_conf(confno, dynamic_pin, "", make, dynamic);
 			} else {
@@ -1816,7 +1817,7 @@ static struct ast_conference *find_conf(struct ast_channel *chan, char *confno, 
 	return cnf;
 }
 
-/*--- count_exec: The MeetmeCount application */
+/*! \brief The MeetmeCount application */
 static int count_exec(struct ast_channel *chan, void *data)
 {
 	struct localuser *u;
@@ -1866,7 +1867,7 @@ static int count_exec(struct ast_channel *chan, void *data)
 	return res;
 }
 
-/*--- conf_exec: The meetme() application */
+/*! \brief The meetme() application */
 static int conf_exec(struct ast_channel *chan, void *data)
 {
 	int res=-1;
@@ -2136,7 +2137,7 @@ static struct ast_conf_user* find_user(struct ast_conference *conf, char *caller
 	return NULL;
 }
 
-/*--- admin_exec: The MeetMeadmin application */
+/*! \brief The MeetMeadmin application */
 /* MeetMeAdmin(confno, command, caller) */
 static int admin_exec(struct ast_channel *chan, void *data) {
 	char *params;

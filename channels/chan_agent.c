@@ -940,7 +940,7 @@ static struct ast_channel *agent_bridgedchannel(struct ast_channel *chan, struct
 	return ret;
 }
 
-/*--- agent_new: Create new agent channel ---*/
+/*! \brief Create new agent channel ---*/
 static struct ast_channel *agent_new(struct agent_pvt *p, int state)
 {
 	struct ast_channel *tmp;
@@ -1305,7 +1305,7 @@ static int allow_multiple_login(char *chan,char *context)
 	return -1;
 }
 
-/*--- agent_request: Part of the Asterisk PBX interface ---*/
+/*! \brief Part of the Asterisk PBX interface ---*/
 static struct ast_channel *agent_request(const char *type, int format, void *data, int *cause)
 {
 	struct agent_pvt *p;
@@ -1622,7 +1622,7 @@ static int action_agent_logoff(struct mansession *s, struct message *m)
 	return 0;
 }
 
-static char *complete_agent_logoff_cmd(char *line, char *word, int pos, int state)
+static char *complete_agent_logoff_cmd(const char *line, const char *word, int pos, int state)
 {
 	struct agent_pvt *p;
 	char name[AST_MAX_AGENT];
@@ -2434,7 +2434,7 @@ static void reload_agents(void)
 	}
 }
 
-/*--- agent_devicestate: Part of PBX channel interface ---*/
+/*! \brief Part of PBX channel interface ---*/
 static int agent_devicestate(void *data)
 {
 	struct agent_pvt *p;

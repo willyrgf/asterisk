@@ -250,6 +250,7 @@ callwaiting=yes
 ;
 ; Whether or not use the caller ID presentation for the outgoing call that the
 ; calling switch is sending.
+; See README.callingpres
 ;
 usecallingpres=yes
 ;
@@ -454,7 +455,7 @@ immediate=no
 ; Select which class of music to use for music on hold.  If not specified
 ; then the default will be used.
 ;
-;musiconhold=default
+;musicclass=default
 ;
 ; PRI channels can have an idle extension and a minunused number.  So long as
 ; at least "minunused" channels are idle, chan_zap will try to call "idledial"
