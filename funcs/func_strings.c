@@ -51,9 +51,7 @@ static char *function_fieldqty(struct ast_channel *chan, char *cmd, char *data, 
 		AST_APP_ARG(delim);
 	);
 
-	parse = ast_strdupa(data);
-	if (!parse) {
-		ast_log(LOG_ERROR, "Out of memory\n");
+	if (!(parse = ast_strdupa(data))) {
 		ast_copy_string(buf, "0", len);
 		return buf;
 	}
@@ -90,11 +88,8 @@ static char *builtin_function_filter(struct ast_channel *chan, char *cmd, char *
 	);
 	char *outbuf=buf;
 
-	parse = ast_strdupa(data);
-	if (!parse) {
-		ast_log(LOG_ERROR, "Out of memory");
+	if (!(parse = ast_strdupa(data)))
 		return "";
-	}
 
 	AST_STANDARD_APP_ARGS(args, parse);
 
@@ -140,11 +135,8 @@ static char *builtin_function_regex(struct ast_channel *chan, char *cmd, char *d
 
 	ast_copy_string(buf, "0", len);
 	
-	parse = ast_strdupa(data);
-	if (!parse) {
-		ast_log(LOG_ERROR, "Out of memory in %s(%s)\n", cmd, data);
+	if (!(parse = ast_strdupa(data)))
 		return buf;
-	}
 
 	AST_NONSTANDARD_APP_ARGS(args, parse, '"');
 
@@ -185,10 +177,8 @@ static void builtin_function_array(struct ast_channel *chan, char *cmd, char *da
 
 	var = ast_strdupa(data);
 	value2 = ast_strdupa(value);
-	if (!var || !value2) {
-		ast_log(LOG_ERROR, "Out of memory\n");
+	if (!var || !value2)
 		return;
-	}
 
 	/* The functions this will generally be used with are SORT and ODBC_*, which
 	 * both return comma-delimited lists.  However, if somebody uses literal lists,
@@ -276,11 +266,8 @@ static char *acf_strftime(struct ast_channel *chan, char *cmd, char *data, char 
 		return buf;
 	}
 	
-	parse = ast_strdupa(data);
-	if (!parse) {
-		ast_log(LOG_ERROR, "Out of memory\n");
+	if (!(parse = ast_strdupa(data)))
 		return buf;
-	}
 	
 	AST_STANDARD_APP_ARGS(args, parse);
 
@@ -307,6 +294,57 @@ struct ast_custom_function strftime_function = {
 	.synopsis = "Returns the current date/time in a specified format.",
 	.syntax = "STRFTIME([<epoch>][,[timezone][,format]])",
 	.read = acf_strftime,
+};
+
+static char *acf_strptime(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len) 
+{
+	AST_DECLARE_APP_ARGS(args,
+		AST_APP_ARG(timestring);
+		AST_APP_ARG(timezone);
+		AST_APP_ARG(format);
+	);
+	struct tm time;
+
+	memset(&time, 0, sizeof(struct tm));
+	
+	buf[0] = '\0';
+
+	if (!data) {
+		ast_log(LOG_ERROR, "Asterisk function STRPTIME() requires an argument.\n");
+		return buf;
+	}
+
+	AST_STANDARD_APP_ARGS(args, data);
+
+	if (ast_strlen_zero(args.format) ) {
+		ast_log(LOG_ERROR, "No format supplied to STRPTIME(<timestring>|<timezone>|<format>)");
+		return buf;
+	}
+			
+	if (!strptime(args.timestring, args.format, &time)) {
+		ast_log(LOG_WARNING, "C function strptime() output nothing?!!\n");
+	} else {
+		snprintf(buf, len, "%d", (int)ast_mktime(&time, args.timezone));	  
+	}
+	
+	return buf;
+}
+
+#ifndef BUILTIN_FUNC
+static
+#endif
+struct ast_custom_function strptime_function = {
+	.name = "STRPTIME",
+	.synopsis = "Returns the epoch of the arbitrary date/time string structured as described in the format.",
+	.syntax = "STRPTIME(<datetime>|<timezone>|<format>)",
+	.desc =
+"This is useful for converting a date into an EPOCH time, possibly to pass to\n"
+"an application like SayUnixTime or to calculate the difference between two\n"
+"date strings.\n"
+"\n"
+"Example:\n"
+"  ${STRPTIME(2006-03-01 07:30:35|America/Chicago|%Y-%m-%d %H:%M:%S)} returns 1141219835\n",
+	.read = acf_strptime,
 };
 
 static char *function_eval(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len) 

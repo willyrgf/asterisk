@@ -112,11 +112,11 @@ struct ast_context;
 struct ast_exten {
 	char *exten;			/*!< Extension name */
 	int matchcid;			/*!< Match caller id ? */
-	char *cidmatch;			/*!< Caller id to match for this extension */
+	const char *cidmatch;		/*!< Caller id to match for this extension */
 	int priority;			/*!< Priority */
-	char *label;			/*!< Label */
+	const char *label;		/*!< Label */
 	struct ast_context *parent;	/*!< The context this extension belongs to  */
-	char *app; 			/*!< Application to execute */
+	const char *app; 		/*!< Application to execute */
 	void *data;			/*!< Data to use (arguments) */
 	void (*datad)(void *);		/*!< Data destructor */
 	struct ast_exten *peer;		/*!< Next higher priority with our extension */
@@ -127,8 +127,8 @@ struct ast_exten {
 
 /*! \brief ast_include: include= support in extensions.conf */
 struct ast_include {
-	char *name;		
-	char *rname;				/*!< Context to include */
+	const char *name;		
+	const char *rname;			/*!< Context to include */
 	const char *registrar;			/*!< Registrar */
 	int hastime;				/*!< If time construct exists */
 	struct ast_timing timing;               /*!< time construct */
@@ -151,7 +151,7 @@ struct ast_sw {
 struct ast_ignorepat {
 	const char *registrar;
 	struct ast_ignorepat *next;
-	char pattern[0];
+	const char pattern[0];
 };
 
 /*! \brief ast_context: An extension context */
@@ -846,41 +846,38 @@ static int parse_variable_name(char *var, int *offset, int *length, int *isfunc)
 	return 0;
 }
 
-/*! \brief takes a substring. It is ok to call with value == workspace. */
-static char *substring(char *value, int offset, int length, char *workspace, size_t workspace_len)
+/*! \brief takes a substring. It is ok to call with value == workspace.
+ *
+ * offset < 0 means start from the end of the string and set the beginning
+ *   to be that many characters back.
+ * length is the length of the substring, -1 means unlimited
+ * (we take any negative value).
+ * Always return a copy in workspace.
+ */
+static char *substring(const char *value, int offset, int length, char *workspace, size_t workspace_len)
 {
 	char *ret = workspace;
+	int lr;	/* length of the input string after the copy */
 
-	/* No need to do anything */
-	if (offset == 0 && length==-1) {
-		return value;
+	ast_copy_string(workspace, value, workspace_len); /* always make a copy */
+
+	if (offset == 0 && length < 0)	/* take the whole string */
+		return ret;
+
+	lr = strlen(ret); /* compute length after copy, so we never go out of the workspace */
+
+	if (offset < 0)	{	/* translate negative offset into positive ones */
+		offset = lr + offset;
+		if (offset < 0) /* If the negative offset was greater than the length of the string, just start at the beginning */
+			offset = 0;
 	}
 
-	ast_copy_string(workspace, value, workspace_len);
+	/* too large offset result in empty string so we know what to return */
+	if (offset >= lr)
+		return ret + lr;	/* the final '\0' */
 
-	if (abs(offset) > strlen(ret)) {	/* Offset beyond string */
-		if (offset >= 0) 
-			offset = strlen(ret);
-		else 
-			offset =- strlen(ret);	
-	}
-
-	/* Detect too-long length */
-	if ((offset < 0 && length > -offset) || (offset >= 0 && offset+length > strlen(ret))) {
-		if (offset >= 0) 
-			length = strlen(ret)-offset;
-		else 
-			length = strlen(ret)+offset;
-	}
-
-	/* Bounce up to the right offset */
-	if (offset >= 0)
-		ret += offset;
-	else
-		ret += strlen(ret)+offset;
-
-	/* Chop off at the requisite length */
-	if (length >= 0)
+	ret += offset;		/* move to the start position */
+	if (length >= 0 && length < lr - offset)	/* truncate if necessary */
 		ret[length] = '\0';
 
 	return ret;
@@ -1219,11 +1216,8 @@ char *ast_func_read(struct ast_channel *chan, const char *in, char *workspace, s
 	char *ret = "0";
 	struct ast_custom_function *acfptr;
 
-	function = ast_strdupa(in);
-	if (!function) {
-		ast_log(LOG_ERROR, "Out of memory\n");
+	if (!(function = ast_strdupa(in)))
 		return ret;
-	}
 	if ((args = strchr(function, '('))) {
 		*args = '\0';
 		args++;
@@ -1254,11 +1248,8 @@ void ast_func_write(struct ast_channel *chan, const char *in, const char *value)
 	char *args = NULL, *function, *p;
 	struct ast_custom_function *acfptr;
 
-	function = ast_strdupa(in);
-	if (!function) {
-		ast_log(LOG_ERROR, "Out of memory\n");
+	if (!(function = ast_strdupa(in)))
 		return;
-	}
 	if ((args = strchr(function, '('))) {
 		*args = '\0';
 		args++;
@@ -3887,21 +3878,19 @@ int ast_context_add_include2(struct ast_context *con, const char *value,
 		return -1;
 	}
 	
-	/* ... fill in this structure ... */
+	/* Fill in this structure. Use 'p' for assignments, as the fields
+	 * in the structure are 'const char *'
+	 */
 	p = new_include->stuff;
 	new_include->name = p;
-	strcpy(new_include->name, value);
+	strcpy(p, value);
 	p += strlen(value) + 1;
 	new_include->rname = p;
-	strcpy(new_include->rname, value);
-	c = new_include->rname;
-	/* Strip off timing info */
-	while(*c && (*c != '|')) 
-		c++; 
-	/* Process if it's there */
-	if (*c) {
-	        new_include->hastime = ast_build_timing(&(new_include->timing), c+1);
-		*c = '\0';
+	strcpy(p, value);
+	/* Strip off timing info, and process if it is there */
+	if ( (c = strchr(p, '|')) ) {
+		*c++ = '\0';
+	        new_include->hastime = ast_build_timing(&(new_include->timing), c);
 	}
 	new_include->next      = NULL;
 	new_include->registrar = registrar;
@@ -4143,7 +4132,10 @@ int ast_context_add_ignorepat2(struct ast_context *con, const char *value, const
 		errno = ENOMEM;
 		return -1;
 	}
-	strcpy(ignorepat->pattern, value);
+	/* The cast to char * is because we need to write the initial value.
+	 * The field is not supposed to be modified otherwise
+	 */
+	strcpy((char *)ignorepat->pattern, value);
 	ignorepat->next = NULL;
 	ignorepat->registrar = registrar;
 	ast_mutex_lock(&con->lock);
@@ -4377,26 +4369,26 @@ int ast_add_extension2(struct ast_context *con,
 		datad = null_datad;
 	tmp = calloc(1, length);
 	if (tmp) {
+		/* use p as dst in assignments, as the fields are const char * */
 		p = tmp->stuff;
 		if (label) {
 			tmp->label = p;
-			strcpy(tmp->label, label);
+			strcpy(p, label);
 			p += strlen(label) + 1;
 		}
 		tmp->exten = p;
-		p += ext_strncpy(tmp->exten, extension, strlen(extension) + 1) + 1;
+		p += ext_strncpy(p, extension, strlen(extension) + 1) + 1;
 		tmp->priority = priority;
-		tmp->cidmatch = p;
+		tmp->cidmatch = p;	/* but use p for assignments below */
 		if (callerid) {
-			p += ext_strncpy(tmp->cidmatch, callerid, strlen(callerid) + 1) + 1;
+			p += ext_strncpy(p, callerid, strlen(callerid) + 1) + 1;
 			tmp->matchcid = 1;
 		} else {
-			tmp->cidmatch[0] = '\0';
+			*p++ = '\0';
 			tmp->matchcid = 0;
-			p++;
 		}
 		tmp->app = p;
-		strcpy(tmp->app, application);
+		strcpy(p, application);
 		tmp->parent = con;
 		tmp->data = data;
 		tmp->datad = datad;
@@ -5145,11 +5137,8 @@ static int pbx_builtin_resetcdr(struct ast_channel *chan, void *data)
 	struct ast_flags flags = { 0 };
 	
 	if (!ast_strlen_zero(data)) {
-		args = ast_strdupa(data);
-		if (!args) {
-			ast_log(LOG_ERROR, "Out of memory!\n");
+		if (!(args = ast_strdupa(data)))
 			return -1;
-		}
 		ast_app_parse_options(resetcdr_opts, &flags, NULL, args);
 	}
 
@@ -5205,8 +5194,6 @@ static int pbx_builtin_gotoiftime(struct ast_channel *chan, void *data)
 		/* struct ast_include include contained garbage here, fixed by zeroing it on get_timerange */
 		if (ast_build_timing(&timing, s) && ast_check_timing(&timing))
 			res = pbx_builtin_goto(chan, (void *)ts);
-	} else {
-		ast_log(LOG_ERROR, "Memory Error!\n");
 	}
 	return res;
 }
@@ -5227,12 +5214,8 @@ static int pbx_builtin_execiftime(struct ast_channel *chan, void *data)
 		return -1;
 	}
 
-	ptr1 = ast_strdupa(data);
-
-	if (!ptr1) {
-		ast_log(LOG_ERROR, "Out of Memory!\n");
-		return -1;	
-	}
+	if (!(ptr1 = ast_strdupa(data)))
+		return -1;
 
 	ptr2 = ptr1;
 	/* Separate the Application data ptr1 is the time spec ptr2 is the app|data */

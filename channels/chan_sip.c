@@ -567,6 +567,8 @@ struct sip_auth {
 #define SIP_CALL_LIMIT		(1 << 29)
 /* Remote Party-ID Support */
 #define SIP_SENDRPID		(1 << 30)
+/* Did this connection increment the counter of in-use calls? */
+#define SIP_INC_COUNT (1 << 31)
 
 #define SIP_FLAGS_TO_COPY \
 	(SIP_PROMISCREDIR | SIP_TRUSTRPID | SIP_SENDRPID | SIP_DTMF | SIP_REINVITE | \
@@ -2229,7 +2231,8 @@ static int update_call_counter(struct sip_pvt *fup, int event)
 		/* incoming and outgoing affects the inUse counter */
 		case DEC_CALL_LIMIT:
 			if ( *inuse > 0 ) {
-				(*inuse)--;
+			         if (ast_test_flag(fup,SIP_INC_COUNT))
+				         (*inuse)--;
 			} else {
 				*inuse = 0;
 			}
@@ -2249,6 +2252,7 @@ static int update_call_counter(struct sip_pvt *fup, int event)
 				}
 			}
 			(*inuse)++;
+	                ast_set_flag(fup,SIP_INC_COUNT);
 			if (option_debug > 1 || sipdebug) {
 				ast_log(LOG_DEBUG, "Call %s %s '%s' is %d out of %d\n", outgoing ? "to" : "from", u ? "user":"peer", name, *inuse, *call_limit);
 			}
@@ -9292,10 +9296,8 @@ static char *function_sippeer(struct ast_channel *chan, char *cmd, char *data, c
 	char *peername, *colname;
 	char iabuf[INET_ADDRSTRLEN];
 
-	if (!(peername = ast_strdupa(data))) {
-		ast_log(LOG_ERROR, "Memory Error!\n");
+	if (!(peername = ast_strdupa(data)))
 		return ret;
-	}
 
 	if ((colname = strchr(peername, ':'))) {
 		*colname = '\0';
@@ -12847,11 +12849,9 @@ static int sip_sipredirect(struct sip_pvt *p, const char *dest)
 	char *extension, *host, *port;
 	char tmp[80];
 	
-	cdest = ast_strdupa(dest);
-	if (!cdest) {
-		ast_log(LOG_ERROR, "Problem allocating the memory\n");
+	if (!(cdest = ast_strdupa(dest)))
 		return 0;
-	}
+	
 	extension = strsep(&cdest, "@");
 	host = strsep(&cdest, ":");
 	port = strsep(&cdest, ":");
@@ -12879,17 +12879,11 @@ static int sip_sipredirect(struct sip_pvt *p, const char *dest)
 				ast_log(LOG_ERROR, "Can't find the host address\n");
 				return 0;
 			}
-			host = ast_strdupa(lhost);
-			if (!host) {
-				ast_log(LOG_ERROR, "Problem allocating the memory\n");
+			if (!(host = ast_strdupa(lhost)))
 				return 0;
-			}
 			if (!ast_strlen_zero(lport)) {
-				port = ast_strdupa(lport);
-				if (!port) {
-					ast_log(LOG_ERROR, "Problem allocating the memory\n");
+				if (!(port = ast_strdupa(lport)))
 					return 0;
-				}
 			}
 		}
 	}
