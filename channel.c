@@ -604,7 +604,10 @@ struct ast_channel *ast_channel_alloc(int needqueue)
 		return NULL;
 	}
 	
-	for (x=0; x<AST_MAX_FDS - 1; x++)
+	/* Don't bother initializing the last two FD here, because they
+	   will *always* be set just a few lines down (AST_TIMING_FD,
+	   AST_ALERT_FD). */
+	for (x=0; x<AST_MAX_FDS - 2; x++)
 		tmp->fds[x] = -1;
 
 #ifdef ZAPTEL_OPTIMIZATIONS
@@ -636,9 +639,9 @@ struct ast_channel *ast_channel_alloc(int needqueue)
 		tmp->alertpipe[0] = tmp->alertpipe[1] = -1;
 
 	/* Always watch the alertpipe */
-	tmp->fds[AST_MAX_FDS-1] = tmp->alertpipe[0];
+	tmp->fds[AST_ALERT_FD] = tmp->alertpipe[0];
 	/* And timing pipe */
-	tmp->fds[AST_MAX_FDS-2] = tmp->timingfd;
+	tmp->fds[AST_TIMING_FD] = tmp->timingfd;
 	strcpy(tmp->name, "**Unknown**");
 	/* Initial state */
 	tmp->_state = AST_STATE_DOWN;
@@ -1414,6 +1417,7 @@ void ast_deactivate_generator(struct ast_channel *chan)
 			chan->generator->release(chan, chan->generatordata);
 		chan->generatordata = NULL;
 		chan->generator = NULL;
+		chan->fds[AST_GENERATOR_FD] = -1;
 		ast_clear_flag(chan, AST_FLAG_WRITE_INT);
 		ast_settimeout(chan, 0, NULL, NULL);
 	}
@@ -1470,56 +1474,8 @@ int ast_activate_generator(struct ast_channel *chan, struct ast_generator *gen, 
 /*! \brief Wait for x amount of time on a file descriptor to have input.  */
 int ast_waitfor_n_fd(int *fds, int n, int *ms, int *exception)
 {
-	struct timeval start = { 0 , 0 };
-	int res;
-	int x, y;
 	int winner = -1;
-	int spoint;
-	struct pollfd *pfds;
-	
-	pfds = alloca(sizeof(struct pollfd) * n);
-	if (!pfds) {
-		ast_log(LOG_ERROR, "Out of memory\n");
-		return -1;
-	}
-	if (*ms > 0)
-		start = ast_tvnow();
-	y = 0;
-	for (x=0; x < n; x++) {
-		if (fds[x] > -1) {
-			pfds[y].fd = fds[x];
-			pfds[y].events = POLLIN | POLLPRI;
-			y++;
-		}
-	}
-	res = poll(pfds, y, *ms);
-	if (res < 0) {
-		/* Simulate a timeout if we were interrupted */
-		if (errno != EINTR)
-			*ms = -1;
-		else
-			*ms = 0;
-		return -1;
-	}
-	spoint = 0;
-	for (x=0; x < n; x++) {
-		if (fds[x] > -1) {
-			if ((res = ast_fdisset(pfds, fds[x], y, &spoint))) {
-				winner = fds[x];
-				if (exception) {
-					if (res & POLLPRI)
-						*exception = -1;
-					else
-						*exception = 0;
-				}
-			}
-		}
-	}
-	if (*ms > 0) {
-		*ms -= ast_tvdiff_ms(ast_tvnow(), start);
-		if (*ms < 0)
-			*ms = 0;
-	}
+	ast_waitfor_nandfds(NULL, 0, fds, n, exception, &winner, ms);
 	return winner;
 }
 
@@ -1532,13 +1488,19 @@ struct ast_channel *ast_waitfor_nandfds(struct ast_channel **c, int n, int *fds,
 	int res;
 	long rms;
 	int x, y, max;
-	int spoint;
+	int sz;
 	time_t now = 0;
-	long whentohangup = 0, havewhen = 0, diff;
+	long whentohangup = 0, diff;
 	struct ast_channel *winner = NULL;
+	struct fdmap {
+		int chan;
+		int fdno;
+	} *fdmap;
 
-	pfds = alloca(sizeof(struct pollfd) * (n * AST_MAX_FDS + nfds));
-	if (!pfds) {
+	sz = n * AST_MAX_FDS + nfds;
+	pfds = alloca(sizeof(struct pollfd) * sz);
+	fdmap = alloca(sizeof(struct fdmap) * sz);
+	if (!pfds || !fdmap) {
 		ast_log(LOG_ERROR, "Out of memory\n");
 		*outfd = -1;
 		return NULL;
@@ -1552,15 +1514,6 @@ struct ast_channel *ast_waitfor_nandfds(struct ast_channel **c, int n, int *fds,
 	/* Perform any pending masquerades */
 	for (x=0; x < n; x++) {
 		ast_mutex_lock(&c[x]->lock);
-		if (c[x]->whentohangup) {
-			if (!havewhen)
-				time(&now);
-			diff = c[x]->whentohangup - now;
-			if (!havewhen || (diff < whentohangup)) {
-				havewhen++;
-				whentohangup = diff;
-			}
-		}
 		if (c[x]->masq) {
 			if (ast_do_masquerade(c[x])) {
 				ast_log(LOG_WARNING, "Masquerade failed\n");
@@ -1569,40 +1522,52 @@ struct ast_channel *ast_waitfor_nandfds(struct ast_channel **c, int n, int *fds,
 				return NULL;
 			}
 		}
+		if (c[x]->whentohangup) {
+			if (!whentohangup)
+				time(&now);
+			diff = c[x]->whentohangup - now;
+			if (diff < 1) {
+				/* Should already be hungup */
+				c[x]->_softhangup |= AST_SOFTHANGUP_TIMEOUT;
+				ast_mutex_unlock(&c[x]->lock);
+				return c[x];
+			}
+			if (!whentohangup || (diff < whentohangup))
+				whentohangup = diff;
+		}
 		ast_mutex_unlock(&c[x]->lock);
 	}
-
+	/* Wait full interval */
 	rms = *ms;
-	
-	if (havewhen) {
-		if ((*ms < 0) || (whentohangup * 1000 < *ms)) {
-			rms =  whentohangup * 1000;
-		}
+	if (whentohangup) {
+		rms = (whentohangup - now) * 1000;	/* timeout in milliseconds */
+		if (*ms >= 0 && *ms < rms)		/* original *ms still smaller */
+			rms =  *ms;
 	}
+	/*
+	 * Build the pollfd array, putting the channels' fds first,
+	 * followed by individual fds. Order is important because
+	 * individual fd's must have priority over channel fds.
+	 */
 	max = 0;
-	for (x=0; x < n; x++) {
-		for (y=0; y< AST_MAX_FDS; y++) {
-			if (c[x]->fds[y] > -1) {
-				pfds[max].fd = c[x]->fds[y];
-				pfds[max].events = POLLIN | POLLPRI;
-				pfds[max].revents = 0;
-				max++;
-			}
+	for (x=0; x<n; x++) {
+		for (y=0; y<AST_MAX_FDS; y++) {
+			fdmap[max].fdno = y;  /* fd y is linked to this pfds */
+			fdmap[max].chan = x;  /* channel x is linked to this pfds */
+			max += ast_add_fd(&pfds[max], c[x]->fds[y]);
 		}
 		CHECK_BLOCKING(c[x]);
 	}
-	for (x=0; x < nfds; x++) {
-		if (fds[x] > -1) {
-			pfds[max].fd = fds[x];
-			pfds[max].events = POLLIN | POLLPRI;
-			pfds[max].revents = 0;
-			max++;
-		}
+	/* Add the individual fds */
+	for (x=0; x<nfds; x++) {
+		fdmap[max].chan = -1;
+		max += ast_add_fd(&pfds[max], fds[x]);
 	}
+
 	if (*ms > 0) 
 		start = ast_tvnow();
 	
-	if (sizeof(int) == 4) {
+	if (sizeof(int) == 4) {	/* XXX fix timeout > 600000 on linux x86-32 */
 		do {
 			int kbrms = rms;
 			if (kbrms > 600000)
@@ -1614,65 +1579,49 @@ struct ast_channel *ast_waitfor_nandfds(struct ast_channel **c, int n, int *fds,
 	} else {
 		res = poll(pfds, max, rms);
 	}
-	
-	if (res < 0) {
-		for (x=0; x < n; x++) 
-			ast_clear_flag(c[x], AST_FLAG_BLOCKING);
-		/* Simulate a timeout if we were interrupted */
-		if (errno != EINTR)
-			*ms = -1;
-		else {
-			/* Just an interrupt */
-#if 0
-			*ms = 0;
-#endif			
-		}
-		return NULL;
-        } else {
-        	/* If no fds signalled, then timeout. So set ms = 0
-		   since we may not have an exact timeout.
-		*/
-		if (res == 0)
-			*ms = 0;
-	}
-
-	if (havewhen)
-		time(&now);
-	spoint = 0;
-	for (x=0; x < n; x++) {
+	for (x=0; x<n; x++)
 		ast_clear_flag(c[x], AST_FLAG_BLOCKING);
-		if (havewhen && c[x]->whentohangup && (now > c[x]->whentohangup)) {
-			c[x]->_softhangup |= AST_SOFTHANGUP_TIMEOUT;
-			if (!winner)
-				winner = c[x];
-		}
-		for (y=0; y < AST_MAX_FDS; y++) {
-			if (c[x]->fds[y] > -1) {
-				if ((res = ast_fdisset(pfds, c[x]->fds[y], max, &spoint))) {
-					if (res & POLLPRI)
-						ast_set_flag(c[x], AST_FLAG_EXCEPTION);
-					else
-						ast_clear_flag(c[x], AST_FLAG_EXCEPTION);
-					c[x]->fdno = y;
+	if (res < 0) { /* Simulate a timeout if we were interrupted */
+		*ms = (errno != EINTR) ? -1 : 0;
+		return NULL;
+	}
+	if (whentohangup) {   /* if we have a timeout, check who expired */
+		time(&now);
+		for (x=0; x<n; x++) {
+			if (c[x]->whentohangup && now >= c[x]->whentohangup) {
+				c[x]->_softhangup |= AST_SOFTHANGUP_TIMEOUT;
+				if (winner == NULL)
 					winner = c[x];
-				}
 			}
 		}
 	}
-	for (x=0; x < nfds; x++) {
-		if (fds[x] > -1) {
-			if ((res = ast_fdisset(pfds, fds[x], max, &spoint))) {
-				if (outfd)
-					*outfd = fds[x];
-				if (exception) {	
-					if (res & POLLPRI) 
-						*exception = -1;
-					else
-						*exception = 0;
-				}
-				winner = NULL;
-			}
-		}	
+	if (res == 0) { /* no fd ready, reset timeout and done */
+		*ms = 0;	/* XXX use 0 since we may not have an exact timeout. */
+		return winner;
+	}
+	/*
+	 * Then check if any channel or fd has a pending event.
+	 * Remember to check channels first and fds last, as they
+	 * must have priority on setting 'winner'
+	 */
+	for (x = 0; x < max; x++) {
+		res = pfds[x].revents;
+		if (res == 0)
+			continue;
+		if (fdmap[x].chan >= 0) {	/* this is a channel */
+			winner = c[fdmap[x].chan];	/* override previous winners */
+			if (res & POLLPRI)
+				ast_set_flag(winner, AST_FLAG_EXCEPTION);
+			else
+				ast_clear_flag(winner, AST_FLAG_EXCEPTION);
+			winner->fdno = fdmap[x].fdno;
+		} else {			/* this is an fd */
+			if (outfd)
+				*outfd = pfds[x].fd;
+			if (exception)
+				*exception = (res & POLLPRI) ? -1 : 0;
+			winner = NULL;
+		}
 	}
 	if (*ms > 0) {
 		*ms -= ast_tvdiff_ms(ast_tvnow(), start);
@@ -1689,16 +1638,11 @@ struct ast_channel *ast_waitfor_n(struct ast_channel **c, int n, int *ms)
 
 int ast_waitfor(struct ast_channel *c, int ms)
 {
-	struct ast_channel *chan;
 	int oldms = ms;
 
-	chan = ast_waitfor_n(&c, 1, &ms);
-	if (ms < 0) {
-		if (oldms < 0)
-			return 0;
-		else
-			return -1;
-	}
+	ast_waitfor_nandfds(&c, 1, NULL, 0, NULL, NULL, &ms);
+	if ((ms < 0) && (oldms < 0))
+		ms = 0;
 	return ms;
 }
 
@@ -1856,7 +1800,7 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 		read(chan->alertpipe[0], &blah, sizeof(blah));
 	}
 #ifdef ZAPTEL_OPTIMIZATIONS
-	if ((chan->timingfd > -1) && (chan->fdno == AST_MAX_FDS - 2) && ast_test_flag(chan, AST_FLAG_EXCEPTION)) {
+	if (chan->timingfd > -1 && chan->fdno == AST_TIMING_FD && ast_test_flag(chan, AST_FLAG_EXCEPTION)) {
 		ast_clear_flag(chan, AST_FLAG_EXCEPTION);
 		blah = -1;
 		/* IF we can't get event, assume it's an expired as-per the old interface */
@@ -1898,12 +1842,24 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 			return f;
 		} else
 			ast_log(LOG_NOTICE, "No/unknown event '%d' on timer for '%s'?\n", blah, chan->name);
-	}
+	} else
 #endif
+	/* Check for AST_GENERATOR_FD if not null.  If so, call generator with -1
+	   arguments now so it can do whatever it needs to. */
+	if (chan->fds[AST_GENERATOR_FD] > -1 && chan->fdno == AST_GENERATOR_FD) {
+		void *tmp = chan->generatordata;
+		chan->generatordata = NULL;     /* reset to let ast_write get through */
+		chan->generator->generate(chan, tmp, -1, -1);
+		chan->generatordata = tmp;
+		f = &null_frame;
+		return f;
+	}
+
 	/* Check for pending read queue */
 	if (chan->readq) {
 		f = chan->readq;
 		chan->readq = f->next;
+		f->next = NULL;
 		/* Interpret hangup and return NULL */
 		if ((f->frametype == AST_FRAME_CONTROL) && (f->subclass == AST_CONTROL_HANGUP)) {
 			ast_frfree(f);
@@ -1928,103 +1884,126 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 		}
 	}
 
+	if (f) {
+		/* if the channel driver returned more than one frame, stuff the excess
+		   into the readq for the next ast_read call
+		*/
+		if (f->next) {
+			chan->readq = f->next;
+			f->next = NULL;
+		}
 
-	if (f && (f->frametype == AST_FRAME_VOICE)) {
-		if (dropaudio) {
-			ast_frfree(f);
-			f = &null_frame;
-		} else if (!(f->subclass & chan->nativeformats)) {
-			/* This frame can't be from the current native formats -- drop it on the
-			   floor */
-			ast_log(LOG_NOTICE, "Dropping incompatible voice frame on %s of format %s since our native format has changed to %s\n", chan->name, ast_getformatname(f->subclass), ast_getformatname(chan->nativeformats));
-			ast_frfree(f);
-			f = &null_frame;
-		} else {
-			if (chan->spies)
-				queue_frame_to_spies(chan, f, SPY_READ);
-
-			if (chan->monitor && chan->monitor->read_stream ) {
+		switch (f->frametype) {
+		case AST_FRAME_CONTROL:
+			if (f->subclass == AST_CONTROL_ANSWER) {
+				if (prestate == AST_STATE_UP) {
+					ast_log(LOG_DEBUG, "Dropping duplicate answer!\n");
+					f = &null_frame;
+				}
+				/* Answer the CDR */
+				ast_setstate(chan, AST_STATE_UP);
+				ast_cdr_answer(chan->cdr);
+			}
+			break;
+		case AST_FRAME_DTMF:
+			ast_log(LOG_DTMF, "DTMF '%c' received on %s\n", f->subclass, chan->name);
+			if (ast_test_flag(chan, AST_FLAG_DEFER_DTMF)) {
+				if (strlen(chan->dtmfq) < sizeof(chan->dtmfq) - 2)
+					chan->dtmfq[strlen(chan->dtmfq)] = f->subclass;
+				else
+					ast_log(LOG_WARNING, "Dropping deferred DTMF digits on %s\n", chan->name);
+				f = &null_frame;
+			}
+			break;
+		case AST_FRAME_DTMF_BEGIN:
+			ast_log(LOG_DTMF, "DTMF begin '%c' received on %s\n", f->subclass, chan->name);
+			break;
+		case AST_FRAME_DTMF_END:
+			ast_log(LOG_DTMF, "DTMF end '%c' received on %s\n", f->subclass, chan->name);
+			break;
+		case AST_FRAME_VOICE:
+			if (dropaudio) {
+				ast_frfree(f);
+				f = &null_frame;
+			} else if (!(f->subclass & chan->nativeformats)) {
+				/* This frame can't be from the current native formats -- drop it on the
+				   floor */
+				ast_log(LOG_NOTICE, "Dropping incompatible voice frame on %s of format %s since our native format has changed to %s\n",
+					chan->name, ast_getformatname(f->subclass), ast_getformatname(chan->nativeformats));
+				ast_frfree(f);
+				f = &null_frame;
+			} else {
+				if (chan->spies)
+					queue_frame_to_spies(chan, f, SPY_READ);
+				
+				if (chan->monitor && chan->monitor->read_stream ) {
 #ifndef MONITOR_CONSTANT_DELAY
-				int jump = chan->outsmpl - chan->insmpl - 4 * f->samples;
-				if (jump >= 0) {
-					if (ast_seekstream(chan->monitor->read_stream, jump + f->samples, SEEK_FORCECUR) == -1)
-						ast_log(LOG_WARNING, "Failed to perform seek in monitoring read stream, synchronization between the files may be broken\n");
-					chan->insmpl += jump + 4 * f->samples;
-				} else
-					chan->insmpl+= f->samples;
+					int jump = chan->outsmpl - chan->insmpl - 4 * f->samples;
+					if (jump >= 0) {
+						if (ast_seekstream(chan->monitor->read_stream, jump + f->samples, SEEK_FORCECUR) == -1)
+							ast_log(LOG_WARNING, "Failed to perform seek in monitoring read stream, synchronization between the files may be broken\n");
+						chan->insmpl += jump + 4 * f->samples;
+					} else
+						chan->insmpl+= f->samples;
 #else
-				int jump = chan->outsmpl - chan->insmpl;
-				if (jump - MONITOR_DELAY >= 0) {
-					if (ast_seekstream(chan->monitor->read_stream, jump - f->samples, SEEK_FORCECUR) == -1)
-						ast_log(LOG_WARNING, "Failed to perform seek in monitoring read stream, synchronization between the files may be broken\n");
-					chan->insmpl += jump;
-				} else
-					chan->insmpl += f->samples;
+					int jump = chan->outsmpl - chan->insmpl;
+					if (jump - MONITOR_DELAY >= 0) {
+						if (ast_seekstream(chan->monitor->read_stream, jump - f->samples, SEEK_FORCECUR) == -1)
+							ast_log(LOG_WARNING, "Failed to perform seek in monitoring read stream, synchronization between the files may be broken\n");
+						chan->insmpl += jump;
+					} else
+						chan->insmpl += f->samples;
 #endif
-				if (chan->monitor->state == AST_MONITOR_RUNNING) {
-					if (ast_writestream(chan->monitor->read_stream, f) < 0)
-						ast_log(LOG_WARNING, "Failed to write data to channel monitor read stream\n");
+					if (chan->monitor->state == AST_MONITOR_RUNNING) {
+						if (ast_writestream(chan->monitor->read_stream, f) < 0)
+							ast_log(LOG_WARNING, "Failed to write data to channel monitor read stream\n");
+					}
+				}
+
+				if (chan->readtrans) {
+					if (!(f = ast_translate(chan->readtrans, f, 1)))
+						f = &null_frame;
+				}
+
+				/* Run any generator sitting on the channel */
+				if (chan->generatordata) {
+					/* Mask generator data temporarily and apply.  If there is a timing function, it
+					   will be calling the generator instead */
+					void *tmp;
+					int res;
+					int (*generate)(struct ast_channel *chan, void *tmp, int datalen, int samples);
+					
+					if (chan->timingfunc) {
+						ast_log(LOG_DEBUG, "Generator got voice, switching to phase locked mode\n");
+						ast_settimeout(chan, 0, NULL, NULL);
+					}
+					tmp = chan->generatordata;
+					chan->generatordata = NULL;
+					generate = chan->generator->generate;
+					res = generate(chan, tmp, f->datalen, f->samples);
+					chan->generatordata = tmp;
+					if (res) {
+						ast_log(LOG_DEBUG, "Auto-deactivating generator\n");
+						ast_deactivate_generator(chan);
+					}
+				} else if (f->frametype == AST_FRAME_CNG) {
+					if (chan->generator && !chan->timingfunc && (chan->timingfd > -1)) {
+						ast_log(LOG_DEBUG, "Generator got CNG, switching to timed mode\n");
+						ast_settimeout(chan, 160, generator_force, chan);
+					}
 				}
 			}
-			if (chan->readtrans) {
-				f = ast_translate(chan->readtrans, f, 1);
-				if (!f)
-					f = &null_frame;
-			}
 		}
-	}
-
-	/* Make sure we always return NULL in the future */
-	if (!f) {
+	} else {
+		/* Make sure we always return NULL in the future */
 		chan->_softhangup |= AST_SOFTHANGUP_DEV;
 		if (chan->generator)
 			ast_deactivate_generator(chan);
 		/* End the CDR if appropriate */
 		if (chan->cdr)
 			ast_cdr_end(chan->cdr);
-	} else if (ast_test_flag(chan, AST_FLAG_DEFER_DTMF) && f->frametype == AST_FRAME_DTMF) {
-		if (strlen(chan->dtmfq) < sizeof(chan->dtmfq) - 2)
-			chan->dtmfq[strlen(chan->dtmfq)] = f->subclass;
-		else
-			ast_log(LOG_WARNING, "Dropping deferred DTMF digits on %s\n", chan->name);
-		f = &null_frame;
-	} else if ((f->frametype == AST_FRAME_CONTROL) && (f->subclass == AST_CONTROL_ANSWER)) {
-		if (prestate == AST_STATE_UP) {
-			ast_log(LOG_DEBUG, "Dropping duplicate answer!\n");
-			f = &null_frame;
-		}
-		/* Answer the CDR */
-		ast_setstate(chan, AST_STATE_UP);
-		ast_cdr_answer(chan->cdr);
-	} 
-
-	/* Run any generator sitting on the line */
-	if (f && (f->frametype == AST_FRAME_VOICE) && chan->generatordata) {
-		/* Mask generator data temporarily and apply.  If there is a timing function, it
-		   will be calling the generator instead */
-		void *tmp;
-		int res;
-		int (*generate)(struct ast_channel *chan, void *tmp, int datalen, int samples);
-
-		if (chan->timingfunc) {
-			ast_log(LOG_DEBUG, "Generator got voice, switching to phase locked mode\n");
-			ast_settimeout(chan, 0, NULL, NULL);
-		}
-		tmp = chan->generatordata;
-		chan->generatordata = NULL;
-		generate = chan->generator->generate;
-		res = generate(chan, tmp, f->datalen, f->samples);
-		chan->generatordata = tmp;
-		if (res) {
-			ast_log(LOG_DEBUG, "Auto-deactivating generator\n");
-			ast_deactivate_generator(chan);
-		}
-	} else if (f && (f->frametype == AST_FRAME_CNG)) {
-		if (chan->generator && !chan->timingfunc && (chan->timingfd > -1)) {
-			ast_log(LOG_DEBUG, "Generator got CNG, switching to zap timed mode\n");
-			ast_settimeout(chan, 160, generator_force, chan);
-		}
 	}
+
 	/* High bit prints debugging */
 	if (chan->fin & 0x80000000)
 		ast_frame_dump(chan->name, f, "<<");
@@ -2033,6 +2012,7 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 	else
 		chan->fin++;
 	ast_mutex_unlock(&chan->lock);
+
 	return f;
 }
 
@@ -2159,7 +2139,8 @@ static int do_senddigit(struct ast_channel *chan, char digit)
 
 	if (chan->tech->send_digit)
 		res = chan->tech->send_digit(chan, digit);
-	if (!chan->tech->send_digit || res) {
+	if (!(chan->tech->send_digit && chan->tech->send_digit_begin) ||
+	    res) {
 		/*
 		 * Device does not support DTMF tones, lets fake
 		 * it by doing our own generation. (PM2002)
@@ -2269,6 +2250,18 @@ int ast_write(struct ast_channel *chan, struct ast_frame *fr)
 		/* XXX Interpret control frames XXX */
 		ast_log(LOG_WARNING, "Don't know how to handle control frames yet\n");
 		break;
+	case AST_FRAME_DTMF_BEGIN:
+		if (chan->tech->send_digit_begin)
+			res = chan->tech->send_digit_begin(chan, fr->subclass);
+		else
+			res = 0;
+		break;
+	case AST_FRAME_DTMF_END:
+		if (chan->tech->send_digit_end)
+			res = chan->tech->send_digit_end(chan);
+		else
+			res = 0;
+		break;
 	case AST_FRAME_DTMF:
 		ast_clear_flag(chan, AST_FLAG_BLOCKING);
 		ast_mutex_unlock(&chan->lock);
@@ -2295,7 +2288,7 @@ int ast_write(struct ast_channel *chan, struct ast_frame *fr)
 		else
 			res = 0;
 		break;
-	default:
+	case AST_FRAME_VOICE:
 		if (chan->tech->write) {
 			/* Bypass translator if we're writing format in the raw write format.  This
 			   allows mixing of native / non-native formats */
@@ -2304,11 +2297,10 @@ int ast_write(struct ast_channel *chan, struct ast_frame *fr)
 			else
 				f = (chan->writetrans) ? ast_translate(chan->writetrans, fr, 0) : fr;
 			if (f) {
-				if (f->frametype == AST_FRAME_VOICE && chan->spies)
+				if (chan->spies)
 					queue_frame_to_spies(chan, f, SPY_WRITE);
 
-				if( chan->monitor && chan->monitor->write_stream &&
-						f && ( f->frametype == AST_FRAME_VOICE ) ) {
+				if (chan->monitor && chan->monitor->write_stream) {
 #ifndef MONITOR_CONSTANT_DELAY
 					int jump = chan->insmpl - chan->outsmpl - 4 * f->samples;
 					if (jump >= 0) {
@@ -2336,13 +2328,6 @@ int ast_write(struct ast_channel *chan, struct ast_frame *fr)
 			} else
 				res = 0;
 		}
-	}
-
-	/* It's possible this is a translated frame */
-	if (f && f->frametype == AST_FRAME_DTMF) {
-		ast_log(LOG_DTMF, "%s : %c\n", chan->name, f->subclass);
-	} else if (fr->frametype == AST_FRAME_DTMF) {
-		ast_log(LOG_DTMF, "%s : %c\n", chan->name, fr->subclass);
 	}
 
 	if (f && (f != fr))
@@ -3058,9 +3043,10 @@ int ast_do_masquerade(struct ast_channel *original)
 	
 	/* Keep the same language.  */
 	ast_copy_string(original->language, clone->language, sizeof(original->language));
-	/* Copy the FD's */
+	/* Copy the FD's other than the generator fd */
 	for (x = 0; x < AST_MAX_FDS; x++) {
-		original->fds[x] = clone->fds[x];
+		if (x != AST_GENERATOR_FD)
+			original->fds[x] = clone->fds[x];
 	}
 	clone_variables(original, clone);
 	AST_LIST_HEAD_INIT_NOLOCK(&clone->varshead);
@@ -3084,7 +3070,7 @@ int ast_do_masquerade(struct ast_channel *original)
 	clone->cid = tmpcid;
 	
 	/* Restore original timing file descriptor */
-	original->fds[AST_MAX_FDS - 2] = original->timingfd;
+	original->fds[AST_TIMING_FD] = original->timingfd;
 	
 	/* Our native formats are different now */
 	original->nativeformats = clone->nativeformats;

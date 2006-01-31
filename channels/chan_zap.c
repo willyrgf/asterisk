@@ -111,6 +111,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define ZT_EVENT_DTMFUP 0
 #endif
 
+/* define this to send PRI user-user information elements */
+#undef SUPPORT_USERUSER
+
 /*! 
  * \note Define ZHONE_HACK to cause us to go off hook and then back on hook when
  * the user hangs up to reset the state machine so ring works properly.
@@ -708,7 +711,7 @@ static int zt_setoption(struct ast_channel *chan, int option, void *data, int da
 static const struct ast_channel_tech zap_tech = {
 	.type = type,
 	.description = tdesc,
-	.capabilities = AST_FORMAT_SLINEAR | AST_FORMAT_ULAW,
+	.capabilities = AST_FORMAT_SLINEAR | AST_FORMAT_ULAW | AST_FORMAT_ALAW,
 	.requester = zt_request,
 	.send_digit = zt_digit,
 	.send_text = zt_sendtext,
@@ -2013,7 +2016,9 @@ static int zt_call(struct ast_channel *ast, char *rdest, int timeout)
 #ifdef ZAPATA_PRI
 	if (p->pri) {
 		struct pri_sr *sr;
+#ifdef SUPPORT_USERUSER
 		const char *useruser;
+#endif
 		int pridialplan;
 		int dp_strip;
 		int prilocaldialplan;
@@ -2127,11 +2132,14 @@ static int zt_call(struct ast_channel *ast, char *rdest, int timeout)
 					l ? (p->use_callingpres ? ast->cid.cid_pres : PRES_ALLOWED_USER_NUMBER_PASSED_SCREEN) : 
 						 PRES_NUMBER_NOT_AVAILABLE);
 		pri_sr_set_redirecting(sr, ast->cid.cid_rdnis, p->pri->localdialplan - 1, PRES_ALLOWED_USER_NUMBER_PASSED_SCREEN, PRI_REDIR_UNCONDITIONAL);
+
+#ifdef SUPPORT_USERUSER
 		/* User-user info */
 		useruser = pbx_builtin_getvar_helper(p->owner, "USERUSERINFO");
 
 		if (useruser)
 			pri_sr_set_useruser(sr, useruser);
+#endif
 
 		if (pri_setup(p->pri->pri, p->call,  sr)) {
  			ast_log(LOG_WARNING, "Unable to setup call to %s (using %s)\n", 
@@ -2519,13 +2527,20 @@ static int zt_hangup(struct ast_channel *ast)
 		/* Perform low level hangup if no owner left */
 #ifdef ZAPATA_PRI
 		if (p->pri) {
+#ifdef SUPPORT_USERUSER
 			const char *useruser = pbx_builtin_getvar_helper(ast,"USERUSERINFO");
+#endif
+
 			/* Make sure we have a call (or REALLY have a call in the case of a PRI) */
 			if (p->call && (!p->bearer || (p->bearer->call == p->call))) {
 				if (!pri_grab(p, p->pri)) {
 					if (p->alreadyhungup) {
 						ast_log(LOG_DEBUG, "Already hungup...  Calling hangup once, and clearing call\n");
+
+#ifdef SUPPORT_USERUSER
 						pri_call_set_useruser(p->call, useruser);
+#endif
+
 						pri_hangup(p->pri->pri, p->call, -1);
 						p->call = NULL;
 						if (p->bearer) 
@@ -2534,7 +2549,11 @@ static int zt_hangup(struct ast_channel *ast)
 						const char *cause = pbx_builtin_getvar_helper(ast,"PRI_CAUSE");
 						int icause = ast->hangupcause ? ast->hangupcause : -1;
 						ast_log(LOG_DEBUG, "Not yet hungup...  Calling hangup once with icause, and clearing call\n");
+
+#ifdef SUPPORT_USERUSER
 						pri_call_set_useruser(p->call, useruser);
+#endif
+
 						p->alreadyhungup = 1;
 						if (p->bearer)
 							p->bearer->alreadyhungup = 1;
@@ -3560,12 +3579,14 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 	pthread_t threadid;
 	pthread_attr_t attr;
 	struct ast_channel *chan;
+	struct ast_frame dtmf_frame = { .frametype = AST_FRAME_DTMF };
 
 	pthread_attr_init(&attr);
 	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
 
 	index = zt_get_index(ast, p, 0);
 	p->subs[index].f.frametype = AST_FRAME_NULL;
+	p->subs[index].f.subclass = 0;
 	p->subs[index].f.datalen = 0;
 	p->subs[index].f.samples = 0;
 	p->subs[index].f.mallocd = 0;
@@ -3590,12 +3611,17 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 		ast_log(LOG_DEBUG, "Detected %sdigit '%c'\n", p->pulsedial ? "pulse ": "", res & 0xff);
 #ifdef ZAPATA_PRI
 		if (!p->proceeding && p->sig == SIG_PRI && p->pri && p->pri->overlapdial) {
-			p->subs[index].f.frametype = AST_FRAME_NULL;
-			p->subs[index].f.subclass = 0;
+			/* absorb event */
 		} else {
 #endif
-			p->subs[index].f.frametype = AST_FRAME_DTMF;
+			/* Send a DTMF event for 'legacy' channels and all applications,
+			   and a DTMF_BEGIN event for channels that handle variable duration
+			   DTMF events
+			*/
+			p->subs[index].f.frametype = AST_FRAME_DTMF_BEGIN;
 			p->subs[index].f.subclass = res & 0xff;
+			dtmf_frame.subclass = res & 0xff;
+			p->subs[index].f.next = ast_frdup(&dtmf_frame);
 #ifdef ZAPATA_PRI
 		}
 #endif
@@ -3606,10 +3632,13 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 
 	if (res & ZT_EVENT_DTMFDOWN) {
 		ast_log(LOG_DEBUG, "DTMF Down '%c'\n", res & 0xff);
-		p->subs[index].f.frametype = AST_FRAME_NULL;
-		p->subs[index].f.subclass = 0;
+		/* Mute conference */
 		zt_confmute(p, 1);
-		/* Mute conference, return null frame */
+		/* Send a DTMF_BEGIN event for devices that want variable
+		   duration DTMF events
+		*/
+		p->subs[index].f.frametype = AST_FRAME_DTMF_BEGIN;
+		p->subs[index].f.subclass = res & 0xff;
 		return &p->subs[index].f;
 	}
 
@@ -3705,8 +3734,7 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 								alarm2str(res), p->channel);
 			/* fall through intentionally */
 		case ZT_EVENT_ONHOOK:
-			if (p->radio)
-			{
+			if (p->radio) {
 				p->subs[index].f.frametype = AST_FRAME_CONTROL;
 				p->subs[index].f.subclass = AST_CONTROL_RADIO_UNKEY;
 				break;
@@ -3820,8 +3848,7 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 			break;
 		case ZT_EVENT_RINGOFFHOOK:
 			if (p->inalarm) break;
-			if (p->radio)
-			{
+			if (p->radio) {
 				p->subs[index].f.frametype = AST_FRAME_CONTROL;
 				p->subs[index].f.subclass = AST_CONTROL_RADIO_KEY;
 				break;
@@ -5362,7 +5389,7 @@ static void *ss_thread(void *data)
 			else 
 				ast_dsp_digitmode(p->dsp,DSP_DIGITMODE_DTMF | p->dtmfrelax);
 		}
-		dtmfbuf[0] = 0;
+		memset(dtmfbuf, 0, sizeof(dtmfbuf));
 		/* Wait for the first digit only if immediate=no */
 		if (!p->immediate)
 			/* Wait for the first digit (up to 5 seconds). */
@@ -8644,9 +8671,13 @@ static void *pri_dchannel(void *vpri)
 								snprintf(ani2str, 5, "%.2d", e->ring.ani2);
 								pbx_builtin_setvar_helper(c, "ANI2", ani2str);
 							}
+
+#ifdef SUPPORT_USERUSER
 							if (!ast_strlen_zero(e->ring.useruserinfo)) {
 								pbx_builtin_setvar_helper(c, "USERUSERINFO", e->ring.useruserinfo);
 							}
+#endif
+
 							snprintf(calledtonstr, sizeof(calledtonstr)-1, "%d", e->ring.calledplan);
 							pbx_builtin_setvar_helper(c, "CALLEDTON", calledtonstr);
 							if (e->ring.redirectingreason >= 0)
@@ -8679,9 +8710,13 @@ static void *pri_dchannel(void *vpri)
 									snprintf(ani2str, 5, "%d", e->ring.ani2);
 									pbx_builtin_setvar_helper(c, "ANI2", ani2str);
 								}
+
+#ifdef SUPPORT_USERUSER
 								if (!ast_strlen_zero(e->ring.useruserinfo)) {
 									pbx_builtin_setvar_helper(c, "USERUSERINFO", e->ring.useruserinfo);
 								}
+#endif
+
 								if (e->ring.redirectingreason >= 0)
 									pbx_builtin_setvar_helper(c, "PRIREDIRECTREASON", redirectingreason2str(e->ring.redirectingreason));
 							
@@ -8747,9 +8782,13 @@ static void *pri_dchannel(void *vpri)
 								pri->pvts[chanpos]->dsp_features = 0;
 							}
 						}
+
+#ifdef SUPPORT_USERUSER
 						if (!ast_strlen_zero(e->ringing.useruserinfo)) {
 							pbx_builtin_setvar_helper(pri->pvts[chanpos]->owner, "USERUSERINFO", e->ringing.useruserinfo);
 						}
+#endif
+
 						ast_mutex_unlock(&pri->pvts[chanpos]->lock);
 					}
 				}
@@ -8904,9 +8943,13 @@ static void *pri_dchannel(void *vpri)
 							/* Enable echo cancellation if it's not on already */
 							zt_enable_ec(pri->pvts[chanpos]);
 						}
+
+#ifdef SUPPORT_USERUSER
 						if (!ast_strlen_zero(e->answer.useruserinfo)) {
 							pbx_builtin_setvar_helper(pri->pvts[chanpos]->owner, "USERUSERINFO", e->answer.useruserinfo);
 						}
+#endif
+
 						ast_mutex_unlock(&pri->pvts[chanpos]->lock);
 					}
 				}
@@ -8964,9 +9007,13 @@ static void *pri_dchannel(void *vpri)
 							if (option_verbose > 2)
 								ast_verbose(VERBOSE_PREFIX_3 "Channel %d/%d, span %d received AOC-E charging %d unit%s\n",
 									pri->pvts[chanpos]->logicalspan, pri->pvts[chanpos]->prioffset, pri->span, (int)e->hangup.aoc_units, (e->hangup.aoc_units == 1) ? "" : "s");
+
+#ifdef SUPPORT_USERUSER
 						if (!ast_strlen_zero(e->hangup.useruserinfo)) {
 							pbx_builtin_setvar_helper(pri->pvts[chanpos]->owner, "USERUSERINFO", e->hangup.useruserinfo);
 						}
+#endif
+
 						ast_mutex_unlock(&pri->pvts[chanpos]->lock);
 					} else {
 						ast_log(LOG_WARNING, "Hangup on bad channel %d/%d on span %d\n", 
@@ -9024,9 +9071,13 @@ static void *pri_dchannel(void *vpri)
 							pri_reset(pri->pri, PVT_TO_CHANNEL(pri->pvts[chanpos]));
 							pri->pvts[chanpos]->resetting = 1;
 						}
+
+#ifdef SUPPORT_USERUSER
 						if (!ast_strlen_zero(e->hangup.useruserinfo)) {
 							pbx_builtin_setvar_helper(pri->pvts[chanpos]->owner, "USERUSERINFO", e->hangup.useruserinfo);
 						}
+#endif
+
 						ast_mutex_unlock(&pri->pvts[chanpos]->lock);
 					} else {
 						ast_log(LOG_WARNING, "Hangup REQ on bad channel %d/%d on span %d\n", PRI_SPAN(e->hangup.channel), PRI_CHANNEL(e->hangup.channel), pri->span);
@@ -9050,9 +9101,13 @@ static void *pri_dchannel(void *vpri)
 							if (option_verbose > 2) 
 								ast_verbose(VERBOSE_PREFIX_3 "Channel %d/%d, span %d got hangup ACK\n", PRI_SPAN(e->hangup.channel), PRI_CHANNEL(e->hangup.channel), pri->span);
 						}
+
+#ifdef SUPPORT_USERUSER
 						if (!ast_strlen_zero(e->hangup.useruserinfo)) {
 							pbx_builtin_setvar_helper(pri->pvts[chanpos]->owner, "USERUSERINFO", e->hangup.useruserinfo);
 						}
+#endif
+
 						ast_mutex_unlock(&pri->pvts[chanpos]->lock);
 					}
 				}
