@@ -34,6 +34,7 @@
  * \todo Better support of forking
  *
  * \ingroup channel_drivers
+ *
  */
 
 
@@ -487,11 +488,13 @@ struct sip_invite_param {
 	enum sip_auth_type auth_type;	/*!< Authentication type */
 };
 
+/*! \brief Structure to save routing information for a SIP session */
 struct sip_route {
 	struct sip_route *next;
 	char hop[0];
 };
 
+/*! \brief Modes for SIP domain handling in the PBX */
 enum domain_mode {
 	SIP_DOMAIN_AUTO,	/*!< This domain is auto-configured */
 	SIP_DOMAIN_CONFIG,	/*!< This domain is from configuration */
@@ -524,7 +527,9 @@ struct sip_auth {
 	struct sip_auth *next;          /*!< Next auth structure in list */
 };
 
-/*--- Various flags for the flags field in the pvt structure */
+/*--- Various flags for the flags field in the pvt structure 
+ Peer only flags should be set in PAGE2 below
+*/
 #define SIP_ALREADYGONE		(1 << 0)	/*!< Whether or not we've already been destroyed by our peer */
 #define SIP_NEEDDESTROY		(1 << 1)	/*!< if we need to be destroyed */
 #define SIP_NOVIDEO		(1 << 2)	/*!< Didn't get video in invite, don't offer */
@@ -539,14 +544,13 @@ struct sip_auth {
 #define SIP_REALTIME		(1 << 11)	/*!< Flag for realtime users */
 #define SIP_USECLIENTCODE	(1 << 12)	/*!< Trust X-ClientCode info message */
 #define SIP_OUTGOING		(1 << 13)	/*!< Is this an outgoing call? */
-#define SIP_SELFDESTRUCT	(1 << 14)	
-#define SIP_DYNAMIC		(1 << 15)	/*!< Is this a dynamic peer? */
-/* --- Choices for DTMF support in SIP channel */
-#define SIP_DTMF		(3 << 16)	/*!< three settings, uses two bits */
-#define SIP_DTMF_RFC2833	(0 << 16)	/*!< RTP DTMF */
-#define SIP_DTMF_INBAND		(1 << 16)	/*!< Inband audio, only for ULAW/ALAW */
-#define SIP_DTMF_INFO		(2 << 16)	/*!< SIP Info messages */
-#define SIP_DTMF_AUTO		(3 << 16)	/*!< AUTO switch between rfc2833 and in-band DTMF */
+#define SIP_FREEBIT		(1 << 14)	/*!< Free for session-related use */
+#define SIP_FREEBIT3		(1 << 15)	/*!< Free for session-related use */
+#define SIP_DTMF		(3 << 16)	/*!< DTMF Support: four settings, uses two bits */
+#define SIP_DTMF_RFC2833	(0 << 16)	/*!< DTMF Support: RTP DTMF - "rfc2833" */
+#define SIP_DTMF_INBAND		(1 << 16)	/*!< DTMF Support: Inband audio, only for ULAW/ALAW - "inband" */
+#define SIP_DTMF_INFO		(2 << 16)	/*!< DTMF Support: SIP Info messages - "info" */
+#define SIP_DTMF_AUTO		(3 << 16)	/*!< DTMF Support: AUTO switch between rfc2833 and in-band DTMF */
 /* NAT settings */
 #define SIP_NAT			(3 << 18)	/*!< four settings, uses two bits */
 #define SIP_NAT_NEVER		(0 << 18)	/*!< No nat support */
@@ -584,7 +588,7 @@ struct sip_auth {
 	 SIP_PROG_INBAND | SIP_OSPAUTH | SIP_USECLIENTCODE | SIP_NAT | \
 	 SIP_INSECURE_PORT | SIP_INSECURE_INVITE)
 
-/* a new page of flags for peer */
+/* a new page of flags for peers */
 #define SIP_PAGE2_RTCACHEFRIENDS	(1 << 0)
 #define SIP_PAGE2_RTUPDATE		(1 << 1)
 #define SIP_PAGE2_RTAUTOCLEAR		(1 << 2)
@@ -593,6 +597,8 @@ struct sip_auth {
 #define SIP_PAGE2_DEBUG			(3 << 5)
 #define SIP_PAGE2_DEBUG_CONFIG 		(1 << 5)
 #define SIP_PAGE2_DEBUG_CONSOLE 	(1 << 6)
+#define SIP_PAGE2_DYNAMIC		(1 << 7)	/*!< Dynamic Peers register with Asterisk */
+#define SIP_PAGE2_SELFDESTRUCT		(1 << 8)	/*!< Automatic peers need to destruct themselves */
 
 /* SIP packet flags */
 #define SIP_PKT_DEBUG		(1 << 0)	/*!< Debug this packet */
@@ -961,6 +967,9 @@ static int transmit_register(struct sip_registry *r, int sipmethod, char *auth, 
 static int sip_poke_peer(struct sip_peer *peer);
 static int __sip_do_register(struct sip_registry *r);
 static int restart_monitor(void);
+static void set_peer_defaults(struct sip_peer *peer);
+static struct sip_peer *temp_peer(const char *name);
+
 
 /*----- RTP interface functions */
 static int sip_set_rtp_peer(struct ast_channel *chan, struct ast_rtp *rtp, struct ast_rtp *vrtp, int codecs, int nat_active);
@@ -1313,7 +1322,9 @@ static int retrans_pkt(void *data)
 	return 0;
 }
 
-/*! \brief Transmit packet with retransmits */
+/*! \brief Transmit packet with retransmits 
+	\return 0 on success, -1 on failure to allocate packet 
+*/
 static int __sip_reliable_xmit(struct sip_pvt *p, int seqno, int resp, char *data, int len, int fatal, int sipmethod)
 {
 	struct sip_pkt *pkt;
@@ -1680,7 +1691,7 @@ static void sip_destroy_peer(struct sip_peer *peer)
 		ast_sched_del(sched, peer->pokeexpire);
 	register_peer_exten(peer, 0);
 	ast_free_ha(peer->ha);
-	if (ast_test_flag(peer, SIP_SELFDESTRUCT))
+	if (ast_test_flag((&peer->flags_page2), SIP_PAGE2_SELFDESTRUCT))
 		apeerobjs--;
 	else if (ast_test_flag(peer, SIP_REALTIME))
 		rpeerobjs--;
@@ -3043,11 +3054,10 @@ static struct ast_frame *sip_rtp_read(struct ast_channel *ast, struct sip_pvt *p
 {
 	/* Retrieve audio/etc from channel.  Assumes p->lock is already held. */
 	struct ast_frame *f;
-	static struct ast_frame null_frame = { AST_FRAME_NULL, };
 	
 	if (!p->rtp) {
 		/* We have no RTP allocated for this channel */
-		return &null_frame;
+		return &ast_null_frame;
 	}
 
 	switch(ast->fdno) {
@@ -3064,11 +3074,11 @@ static struct ast_frame *sip_rtp_read(struct ast_channel *ast, struct sip_pvt *p
 		f = ast_rtcp_read(p->vrtp);	/* RTCP Control Channel for video */
 		break;
 	default:
-		f = &null_frame;
+		f = &ast_null_frame;
 	}
 	/* Don't forward RFC2833 if we're not supposed to */
 	if (f && (f->frametype == AST_FRAME_DTMF) && (ast_test_flag(p, SIP_DTMF) != SIP_DTMF_RFC2833))
-		return &null_frame;
+		return &ast_null_frame;
 
 	if (p->owner) {
 		/* We already hold the channel lock */
@@ -3751,12 +3761,11 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 	if ((bridgepeer=ast_bridged_channel(p->owner))) {
 		/* We have a bridge */
 		/* Turn on/off music on hold if we are holding/unholding */
-		struct ast_frame af = { AST_FRAME_NULL, };
 		if (sin.sin_addr.s_addr && !sendonly) {
 			ast_moh_stop(bridgepeer);
 		
 			/* Activate a re-invite */
-			ast_queue_frame(p->owner, &af);
+			ast_queue_frame(p->owner, &ast_null_frame);
 		} else {
 			/* No address for RTP, we're on hold */
 			
@@ -3764,7 +3773,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 			if (sendonly)
 				ast_rtp_stop(p->rtp);
 			/* Activate a re-invite */
-			ast_queue_frame(p->owner, &af);
+			ast_queue_frame(p->owner, &ast_null_frame);
 		}
 	}
 
@@ -5758,7 +5767,7 @@ static int expire_register(void *data)
 	register_peer_exten(peer, 0);
 	peer->expire = -1;
 	ast_device_state_changed("SIP/%s", peer->name);
-	if (ast_test_flag(peer, SIP_SELFDESTRUCT) || ast_test_flag((&peer->flags_page2), SIP_PAGE2_RTAUTOCLEAR)) {
+	if (ast_test_flag((&peer->flags_page2), SIP_PAGE2_SELFDESTRUCT) || ast_test_flag((&peer->flags_page2), SIP_PAGE2_RTAUTOCLEAR)) {
 		peer = ASTOBJ_CONTAINER_UNLINK(&peerl, peer);
 		ASTOBJ_UNREF(peer, sip_destroy_peer);
 	}
@@ -6490,7 +6499,7 @@ static int register_verify(struct sip_pvt *p, struct sockaddr_in *sin, struct si
 			ASTOBJ_UNREF(peer, sip_destroy_peer);
 	}
 	if (peer) {
-		if (!ast_test_flag(peer, SIP_DYNAMIC)) {
+		if (!ast_test_flag((&peer->flags_page2), SIP_PAGE2_DYNAMIC)) {
 			ast_log(LOG_ERROR, "Peer '%s' is trying to register, but not configured as host=dynamic\n", peer->name);
 		} else {
 			ast_copy_flags(p, peer, SIP_NAT);
@@ -7650,7 +7659,7 @@ static int _sip_show_peers(int fd, int *total, struct mansession *s, struct mess
 		
 		snprintf(srch, sizeof(srch), FORMAT, name,
 			iterator->addr.sin_addr.s_addr ? ast_inet_ntoa(iabuf, sizeof(iabuf), iterator->addr.sin_addr) : "(Unspecified)",
-			ast_test_flag(iterator, SIP_DYNAMIC) ? " D " : "   ", 	/* Dynamic or not? */
+			ast_test_flag((&iterator->flags_page2), SIP_PAGE2_DYNAMIC) ? " D " : "   ", 	/* Dynamic or not? */
 			(ast_test_flag(iterator, SIP_NAT) & SIP_NAT_ROUTE) ? " N " : "   ",	/* NAT=yes? */
 			iterator->ha ? " A " : "   ", 	/* permit/deny */
 			ntohs(iterator->addr.sin_port), status);
@@ -7658,7 +7667,7 @@ static int _sip_show_peers(int fd, int *total, struct mansession *s, struct mess
 		if (!s)  {/* Normal CLI list */
 			ast_cli(fd, FORMAT, name, 
 			iterator->addr.sin_addr.s_addr ? ast_inet_ntoa(iabuf, sizeof(iabuf), iterator->addr.sin_addr) : "(Unspecified)",
-			ast_test_flag(iterator, SIP_DYNAMIC) ? " D " : "   ",  /* Dynamic or not? */
+			ast_test_flag((&iterator->flags_page2), SIP_PAGE2_DYNAMIC) ? " D " : "   ", 	/* Dynamic or not? */
 			(ast_test_flag(iterator, SIP_NAT) & SIP_NAT_ROUTE) ? " N " : "   ",	/* NAT=yes? */
 			iterator->ha ? " A " : "   ",       /* permit/deny */
 			
@@ -7680,7 +7689,7 @@ static int _sip_show_peers(int fd, int *total, struct mansession *s, struct mess
 			iterator->name, 
 			iterator->addr.sin_addr.s_addr ? ast_inet_ntoa(iabuf, sizeof(iabuf), iterator->addr.sin_addr) : "-none-",
 			ntohs(iterator->addr.sin_port), 
-			ast_test_flag(iterator, SIP_DYNAMIC) ? "yes" : "no",  /* Dynamic or not? */
+			ast_test_flag((&iterator->flags_page2), SIP_PAGE2_DYNAMIC) ? "yes" : "no", 	/* Dynamic or not? */
 			(ast_test_flag(iterator, SIP_NAT) & SIP_NAT_ROUTE) ? "yes" : "no",	/* NAT=yes? */
 			iterator->ha ? "yes" : "no",       /* permit/deny */
 			status);
@@ -8053,7 +8062,7 @@ static int _sip_show_peer(int type, int fd, struct mansession *s, struct message
 		ast_cli(fd, "  VM Extension : %s\n", peer->vmexten);
 		ast_cli(fd, "  LastMsgsSent : %d\n", peer->lastmsgssent);
 		ast_cli(fd, "  Call limit   : %d\n", peer->call_limit);
-		ast_cli(fd, "  Dynamic      : %s\n", (ast_test_flag(peer, SIP_DYNAMIC)?"Yes":"No"));
+		ast_cli(fd, "  Dynamic      : %s\n", (ast_test_flag((&peer->flags_page2), SIP_PAGE2_DYNAMIC)?"Yes":"No"));
 		ast_cli(fd, "  Callerid     : %s\n", ast_callerid_merge(cbuf, sizeof(cbuf), peer->cid_name, peer->cid_num, "<unspecified>"));
 		ast_cli(fd, "  Expire       : %d\n", peer->expire);
 		ast_cli(fd, "  Insecure     : %s\n", insecure2str(ast_test_flag(peer, SIP_INSECURE_PORT), ast_test_flag(peer, SIP_INSECURE_INVITE)));
@@ -8129,7 +8138,7 @@ static int _sip_show_peer(int type, int fd, struct mansession *s, struct message
 		ast_cli(fd, "VoiceMailbox: %s\r\n", peer->mailbox);
 		ast_cli(fd, "LastMsgsSent: %d\r\n", peer->lastmsgssent);
 		ast_cli(fd, "Call limit: %d\r\n", peer->call_limit);
-		ast_cli(fd, "Dynamic: %s\r\n", (ast_test_flag(peer, SIP_DYNAMIC)?"Y":"N"));
+		ast_cli(fd, "Dynamic: %s\r\n", (ast_test_flag((&peer->flags_page2), SIP_PAGE2_DYNAMIC)?"Y":"N"));
 		ast_cli(fd, "Callerid: %s\r\n", ast_callerid_merge(cbuf, sizeof(cbuf), peer->cid_name, peer->cid_num, ""));
 		ast_cli(fd, "RegExpire: %ld seconds\r\n", ast_sched_when(sched,peer->expire));
 		ast_cli(fd, "SIP-AuthInsecure: %s\r\n", insecure2str(ast_test_flag(peer, SIP_INSECURE_PORT), ast_test_flag(peer, SIP_INSECURE_INVITE)));
@@ -9368,7 +9377,7 @@ static char *function_sippeer(struct ast_channel *chan, char *cmd, char *data, c
 	} else  if (!strcasecmp(colname, "expire")) {
 		snprintf(buf, len, "%d", peer->expire);
 	} else  if (!strcasecmp(colname, "dynamic")) {
-		ast_copy_string(buf, (ast_test_flag(peer, SIP_DYNAMIC) ? "yes" : "no"), len);
+		ast_copy_string(buf, (ast_test_flag((&peer->flags_page2), SIP_PAGE2_DYNAMIC) ? "yes" : "no"), len);
 	} else  if (!strcasecmp(colname, "callerid_name")) {
 		ast_copy_string(buf, peer->cid_name, len);
 	} else  if (!strcasecmp(colname, "callerid_num")) {
@@ -9611,8 +9620,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, stru
 #endif
 				ast_queue_control(p->owner, AST_CONTROL_ANSWER);
 			} else {	/* RE-invite */
-				struct ast_frame af = { AST_FRAME_NULL, };
-				ast_queue_frame(p->owner, &af);
+				ast_queue_frame(p->owner, &ast_null_frame);
 			}
 		} else {
 			 /* It's possible we're getting an ACK after we've tried to disconnect
@@ -10346,7 +10354,6 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 	int res = 1;
 	struct ast_channel *c=NULL;
 	int gotdest;
-	struct ast_frame af = { AST_FRAME_NULL, };
 	char *supported;
 	char *required;
 	unsigned int required_profile = 0;
@@ -10438,7 +10445,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 
 		/* Queue NULL frame to prod ast_rtp_bridge if appropriate */
 		if (p->owner)
-			ast_queue_frame(p->owner, &af);
+			ast_queue_frame(p->owner, &ast_null_frame);
 
 		/* Initialize the context if it hasn't been already */
 		if (ast_strlen_zero(p->context))
@@ -12044,6 +12051,39 @@ static struct sip_user *build_user(const char *name, struct ast_variable *v, int
 	return user;
 }
 
+/*! \brief Set peer defaults before configuring specific configurations */
+static void set_peer_defaults(struct sip_peer *peer)
+{
+	peer->expire = -1;
+	peer->pokeexpire = -1;
+	ast_copy_flags(peer, &global_flags, SIP_FLAGS_TO_COPY);
+	strcpy(peer->context, default_context);
+	strcpy(peer->subscribecontext, default_subscribecontext);
+	strcpy(peer->language, default_language);
+	strcpy(peer->musicclass, default_musicclass);
+	peer->addr.sin_port = htons(DEFAULT_SIP_PORT);
+	peer->addr.sin_family = AF_INET;
+	peer->defaddr.sin_family = AF_INET;
+	peer->capability = global_capability;
+	peer->rtptimeout = global_rtptimeout;
+	peer->rtpholdtimeout = global_rtpholdtimeout;
+	peer->rtpkeepalive = global_rtpkeepalive;
+	strcpy(peer->vmexten, default_vmexten);
+	ast_copy_flags(peer, &global_flags, SIP_USEREQPHONE);
+	peer->secret[0] = '\0';
+	peer->md5secret[0] = '\0';
+	peer->cid_num[0] = '\0';
+	peer->cid_name[0] = '\0';
+	peer->fromdomain[0] = '\0';
+	peer->fromuser[0] = '\0';
+	peer->regexten[0] = '\0';
+	peer->mailbox[0] = '\0';
+	peer->callgroup = 0;
+	peer->pickupgroup = 0;
+	peer->maxms = default_qualify;
+	peer->prefs = default_prefs;
+}
+
 /*! \brief Create temporary peer (used in autocreatepeer mode) */
 static struct sip_peer *temp_peer(const char *name)
 {
@@ -12054,23 +12094,12 @@ static struct sip_peer *temp_peer(const char *name)
 
 	apeerobjs++;
 	ASTOBJ_INIT(peer);
+	set_peer_defaults(peer);
 
-	peer->expire = -1;
-	peer->pokeexpire = -1;
 	ast_copy_string(peer->name, name, sizeof(peer->name));
-	ast_copy_flags(peer, &global_flags, SIP_FLAGS_TO_COPY);
-	strcpy(peer->context, default_context);
-	strcpy(peer->subscribecontext, default_subscribecontext);
-	strcpy(peer->language, default_language);
-	strcpy(peer->musicclass, default_musicclass);
-	peer->addr.sin_port = htons(DEFAULT_SIP_PORT);
-	peer->addr.sin_family = AF_INET;
-	peer->capability = global_capability;
-	peer->rtptimeout = global_rtptimeout;
-	peer->rtpholdtimeout = global_rtpholdtimeout;
-	peer->rtpkeepalive = global_rtpkeepalive;
-	ast_set_flag(peer, SIP_SELFDESTRUCT);
-	ast_set_flag(peer, SIP_DYNAMIC);
+
+	ast_set_flag((&peer->flags_page2), SIP_PAGE2_SELFDESTRUCT);
+	ast_set_flag((&peer->flags_page2), SIP_PAGE2_DYNAMIC);
 	peer->prefs = default_prefs;
 	reg_source_db(peer);
 
@@ -12118,44 +12147,20 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, int
 	/* Note that our peer HAS had its reference count incrased */
 
 	peer->lastmsgssent = -1;
+	oldha = peer->ha;
+	peer->ha = NULL;
+	set_peer_defaults(peer);	/* Set peer defaults */
 	if (!found) {
 		if (name)
 			ast_copy_string(peer->name, name, sizeof(peer->name));
 		peer->addr.sin_port = htons(DEFAULT_SIP_PORT);
 		peer->addr.sin_family = AF_INET;
-		peer->defaddr.sin_family = AF_INET;
 	}
 	/* If we have channel variables, remove them (reload) */
 	if (peer->chanvars) {
 		ast_variables_destroy(peer->chanvars);
 		peer->chanvars = NULL;
 	}
-	strcpy(peer->context, default_context);
-	strcpy(peer->subscribecontext, default_subscribecontext);
-	strcpy(peer->vmexten, default_vmexten);
-	strcpy(peer->language, default_language);
-	strcpy(peer->musicclass, default_musicclass);
-	ast_copy_flags(peer, &global_flags, SIP_USEREQPHONE);
-	peer->secret[0] = '\0';
-	peer->md5secret[0] = '\0';
-	peer->cid_num[0] = '\0';
-	peer->cid_name[0] = '\0';
-	peer->fromdomain[0] = '\0';
-	peer->fromuser[0] = '\0';
-	peer->regexten[0] = '\0';
-	peer->mailbox[0] = '\0';
-	peer->callgroup = 0;
-	peer->pickupgroup = 0;
-	peer->rtpkeepalive = global_rtpkeepalive;
-	peer->maxms = default_qualify;
-	peer->prefs = default_prefs;
-	oldha = peer->ha;
-	peer->ha = NULL;
-	peer->addr.sin_family = AF_INET;
-	ast_copy_flags(peer, &global_flags, SIP_FLAGS_TO_COPY);
-	peer->capability = global_capability;
-	peer->rtptimeout = global_rtptimeout;
-	peer->rtpholdtimeout = global_rtpholdtimeout;
 	while(v) {
 		if (handle_common_options(&peerflags, &mask, v)) {
 			v = v->next;
@@ -12196,7 +12201,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, int
 					ast_log(LOG_WARNING, "You can't have a dynamic outbound proxy, you big silly head at line %d.\n", v->lineno);
 				} else {
 					/* They'll register with us */
-					ast_set_flag(peer, SIP_DYNAMIC);
+					ast_set_flag((&peer->flags_page2), SIP_PAGE2_DYNAMIC);
 					if (!found) {
 						/* Initialize stuff iff we're not found, otherwise
 						   we keep going with what we had */
@@ -12213,7 +12218,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, int
 				if (peer->expire > -1)
 					ast_sched_del(sched, peer->expire);
 				peer->expire = -1;
-				ast_clear_flag(peer, SIP_DYNAMIC);	
+				ast_clear_flag((&peer->flags_page2), SIP_PAGE2_DYNAMIC);
 				if (!obproxyfound || !strcasecmp(v->name, "outboundproxy")) {
 					if (ast_get_ip_or_srv(&peer->addr, v->value, "_sip._udp")) {
 						ASTOBJ_UNREF(peer, sip_destroy_peer);
@@ -12236,7 +12241,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, int
 		} else if (!strcasecmp(v->name, "permit") || !strcasecmp(v->name, "deny")) {
 			peer->ha = ast_append_ha(v->name, v->value, peer->ha);
 		} else if (!strcasecmp(v->name, "port")) {
-			if (!realtime && ast_test_flag(peer, SIP_DYNAMIC))
+			if (!realtime && ast_test_flag((&peer->flags_page2), SIP_PAGE2_DYNAMIC))
 				peer->defaddr.sin_port = htons(atoi(v->value));
 			else
 				peer->addr.sin_port = htons(atoi(v->value));
@@ -12318,7 +12323,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, int
 		 */
 		v=v->next;
 	}
-	if (!ast_test_flag((&global_flags_page2), SIP_PAGE2_IGNOREREGEXPIRE) && ast_test_flag(peer, SIP_DYNAMIC) && realtime) {
+	if (!ast_test_flag((&global_flags_page2), SIP_PAGE2_IGNOREREGEXPIRE) && ast_test_flag((&peer->flags_page2), SIP_PAGE2_DYNAMIC) && realtime) {
 		time_t nowtime;
 
 		time(&nowtime);
@@ -12330,7 +12335,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, int
 		}
 	}
 	ast_copy_flags(peer, &peerflags, mask.flags);
-	if (!found && ast_test_flag(peer, SIP_DYNAMIC) && !ast_test_flag(peer, SIP_REALTIME))
+	if (!found && ast_test_flag((&peer->flags_page2), SIP_PAGE2_DYNAMIC) && !ast_test_flag(peer, SIP_REALTIME))
 		reg_source_db(peer);
 	ASTOBJ_UNMARK(peer);
 	ast_free_ha(oldha);
