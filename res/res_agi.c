@@ -309,7 +309,8 @@ static int launch_script(char *script, char *argv[], int *fds, int *efd, int *op
 		/* Execute script */
 		execv(script, argv);
 		/* Can't use ast_log since FD's are closed */
-		fprintf(stderr, "Failed to execute '%s': %s\n", script, strerror(errno));
+		fprintf(stdout, "verbose \"Failed to execute '%s': %s\" 2\n", script, strerror(errno));
+		fflush(stdout);
 		exit(1);
 	}
 	if (option_verbose > 2) 
@@ -340,7 +341,7 @@ static void setup_env(struct ast_channel *chan, char *request, int fd, int enhan
 	fdprintf(fd, "agi_request: %s\n", request);
 	fdprintf(fd, "agi_channel: %s\n", chan->name);
 	fdprintf(fd, "agi_language: %s\n", chan->language);
-	fdprintf(fd, "agi_type: %s\n", chan->type);
+	fdprintf(fd, "agi_type: %s\n", chan->tech->type);
 	fdprintf(fd, "agi_uniqueid: %s\n", chan->uniqueid);
 
 	/* ANI/DNIS */
