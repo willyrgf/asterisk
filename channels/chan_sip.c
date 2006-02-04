@@ -693,7 +693,7 @@ static struct sip_pvt {
 	time_t ospstart;			/*!< OSP Start time */
 	unsigned int osptimelimit;		/*!< OSP call duration limit */
 #endif
-	struct sip_request initreq;		/*!< Initial request */
+	struct sip_request initreq;		/*!< Initial request that opened the SIP dialog */
 	
 	int maxtime;				/*!< Max time for first response */
 	int initid;				/*!< Auto-congest ID if appropriate */
@@ -1910,11 +1910,13 @@ static int create_addr_from_peer(struct sip_pvt *r, struct sip_peer *peer)
 	r->capability = peer->capability;
 	r->prefs = peer->prefs;
 	if (r->rtp) {
-		ast_log(LOG_DEBUG, "Setting NAT on RTP to %d\n", (ast_test_flag(r, SIP_NAT) & SIP_NAT_ROUTE));
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Setting NAT on RTP to %d\n", (ast_test_flag(r, SIP_NAT) & SIP_NAT_ROUTE));
 		ast_rtp_setnat(r->rtp, (ast_test_flag(r, SIP_NAT) & SIP_NAT_ROUTE));
 	}
 	if (r->vrtp) {
-		ast_log(LOG_DEBUG, "Setting NAT on VRTP to %d\n", (ast_test_flag(r, SIP_NAT) & SIP_NAT_ROUTE));
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Setting NAT on VRTP to %d\n", (ast_test_flag(r, SIP_NAT) & SIP_NAT_ROUTE));
 		ast_rtp_setnat(r->vrtp, (ast_test_flag(r, SIP_NAT) & SIP_NAT_ROUTE));
 	}
 	ast_string_field_set(r, peername, peer->username);
@@ -2257,6 +2259,10 @@ static void __sip_destroy(struct sip_pvt *p, int lockowner)
  * is *two* devices in Asterisk, not one.
  *
  * Thought: For realtime, we should propably update storage with inuse counter... 
+ *
+ * \return 0 if call is ok (no call limit, below treshold)
+ *	-1 on rejection of call
+ *		
  */
 static int update_call_counter(struct sip_pvt *fup, int event)
 {
@@ -10799,7 +10805,6 @@ static int handle_request_subscribe(struct sip_pvt *p, struct sip_request *req, 
 
 	if (!p->lastinvite) {
 		char mailboxbuf[256]="";
-		int found = 0;
 		char *mailbox = NULL;
 		int mailboxsize = 0;
 
@@ -10875,10 +10880,6 @@ static int handle_request_subscribe(struct sip_pvt *p, struct sip_request *req, 
 				
 				*/
 				if (!ast_strlen_zero(mailbox)) {
-					found++;
-				}
-
-				if (found){
 					transmit_response(p, "200 OK", req);
 					ast_set_flag(p, SIP_NEEDDESTROY);	
 				} else {
@@ -11309,7 +11310,10 @@ static int sip_send_mwi_to_peer(struct sip_peer *peer)
 	return 0;
 }
 
-/*! \brief The SIP monitoring thread */
+/*! \brief The SIP monitoring thread 
+\note	This thread monitors all the SIP sessions and peers that needs notification of mwi
+	(and thus do not have a separate thread) indefinitely 
+*/
 static void *do_monitor(void *data)
 {
 	int res;
@@ -11321,12 +11325,10 @@ static void *do_monitor(void *data)
 	int curpeernum;
 	int reloading;
 
-	/* Add an I/O event to our UDP socket */
+	/* Add an I/O event to our SIP UDP socket */
 	if (sipsock > -1) 
 		ast_io_add(io, sipsock, sipsock_read, AST_IO_IN, NULL);
 	
-	/* This thread monitors all the frame relay interfaces which are not yet in use
-	   (and thus do not have a separate thread) indefinitely */
 	/* From here on out, we die whenever asked */
 	for(;;) {
 		/* Check for a reload request */
@@ -11345,6 +11347,7 @@ restartsearch:
 		time(&t);
 		for (sip = iflist; sip; sip = sip->next) {
 			ast_mutex_lock(&sip->lock);
+			/* Check RTP timeouts and kill calls if we have a timeout set and do not get RTP */
 			if (sip->rtp && sip->owner && (sip->owner->_state == AST_STATE_UP) && !sip->redirip.sin_addr.s_addr) {
 				if (sip->lastrtptx && sip->rtpkeepalive && t > sip->lastrtptx + sip->rtpkeepalive) {
 					/* Need to send an empty RTP packet */
@@ -11375,6 +11378,7 @@ restartsearch:
 					}
 				}
 			}
+			/* If we have sessions that needs to be destroyed, do it now */
 			if (ast_test_flag(sip, SIP_NEEDDESTROY) && !sip->packets && !sip->owner) {
 				ast_mutex_unlock(&sip->lock);
 				__sip_destroy(sip, 1);
@@ -11401,16 +11405,16 @@ restartsearch:
 		if (fastrestart)
 			res = 1;
 		res = ast_io_wait(io, res);
-		if (res > 20)
+		if (option_debug && res > 20)
 			ast_log(LOG_DEBUG, "chan_sip: ast_io_wait ran %d all at once\n", res);
 		ast_mutex_lock(&monlock);
 		if (res >= 0)  {
 			res = ast_sched_runq(sched);
-			if (res >= 20)
+			if (option_debug && res >= 20)
 				ast_log(LOG_DEBUG, "chan_sip: ast_sched_runq ran %d all at once\n", res);
 		}
 
-		/* needs work to send mwi to realtime peers */
+		/* Send MWI notifications to peers - static and cached realtime peers */
 		time(&t);
 		fastrestart = FALSE;
 		curpeernum = 0;
