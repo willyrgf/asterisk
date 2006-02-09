@@ -7032,7 +7032,7 @@ static struct zt_pvt *mkintf(int channel, int signalling, int radio, struct zt_p
 				if (p.sigtype != (signalling & 0x3ffff)) {
 					ast_log(LOG_ERROR, "Signalling requested on channel %d is %s but line is in %s signalling\n", channel, sig2str(signalling), sig2str(p.sigtype));
 					destroy_zt_pvt(&tmp);
-					return tmp;
+					return NULL;
 				}
 				tmp->law = p.curlaw;
 				tmp->span = p.spanno;
@@ -7587,7 +7587,6 @@ static int pri_find_empty_chan(struct zt_pri *pri, int backwards)
 
 static struct ast_channel *zt_request(const char *type, int format, void *data, int *cause)
 {
-	int oldformat;
 	int groupmatch = 0;
 	int channelmatch = -1;
 	int roundrobin = 0;
@@ -7616,13 +7615,6 @@ static struct ast_channel *zt_request(const char *type, int format, void *data, 
 	lock = &iflock;
 	start = iflist;
 	end = ifend;
-	/* We do signed linear */
-	oldformat = format;
-	format &= (AST_FORMAT_SLINEAR | AST_FORMAT_ULAW);
-	if (!format) {
-		ast_log(LOG_NOTICE, "Asked to get a channel of unsupported format '%d'\n", oldformat);
-		return NULL;
-	}
 	if (data) {
 		dest = ast_strdupa((char *)data);
 	} else {
@@ -9392,7 +9384,7 @@ static int handle_pri_debug(int fd, int argc, char *argv[])
 	}
 	for (x=0;x<NUM_DCHANS;x++) {
 		if (pris[span-1].dchans[x])
-			pri_set_debug(pris[span-1].dchans[x], PRI_DEBUG_Q931_DUMP | PRI_DEBUG_Q931_STATE);
+			pri_set_debug(pris[span-1].dchans[x], PRI_DEBUG_APDU | PRI_DEBUG_Q931_DUMP | PRI_DEBUG_Q931_STATE);
 	}
 	ast_cli(fd, "Enabled debugging on span %d\n", span);
 	return RESULT_SUCCESS;
@@ -9440,7 +9432,7 @@ static int handle_pri_really_debug(int fd, int argc, char *argv[])
 	}
 	for (x=0;x<NUM_DCHANS;x++) {
 		if (pris[span-1].dchans[x])
-			pri_set_debug(pris[span-1].dchans[x], (PRI_DEBUG_Q931_DUMP | PRI_DEBUG_Q921_DUMP | PRI_DEBUG_Q921_RAW | PRI_DEBUG_Q921_STATE));
+			pri_set_debug(pris[span-1].dchans[x], (PRI_DEBUG_APDU | PRI_DEBUG_Q931_DUMP | PRI_DEBUG_Q921_DUMP | PRI_DEBUG_Q921_RAW | PRI_DEBUG_Q921_STATE));
 	}
 	ast_cli(fd, "Enabled EXTENSIVE debugging on span %d\n", span);
 	return RESULT_SUCCESS;
