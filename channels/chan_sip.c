@@ -9340,10 +9340,10 @@ static struct ast_custom_function checksipdomain_function = {
 };
 
 /*! \brief  function_sippeer: ${SIPPEER()} Dialplan function - reads peer data */
-int function_sippeer(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len)
+static int function_sippeer(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len)
 {
 	struct sip_peer *peer;
-	char *peername = data, *colname;
+	char *colname;
 	char iabuf[INET_ADDRSTRLEN];
 
 	if ((colname = strchr(data, ':')))
@@ -9351,7 +9351,7 @@ int function_sippeer(struct ast_channel *chan, char *cmd, char *data, char *buf,
 	else
 		colname = "ip";
 
-	if (!(peer = find_peer(peername, NULL, 1)))
+	if (!(peer = find_peer(data, NULL, 1)))
 		return -1;
 
 	if (!strcasecmp(colname, "ip")) {
