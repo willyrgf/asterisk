@@ -1,7 +1,7 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 1999 - 2005, Digium, Inc.
+ * Copyright (C) 1999 - 2006, Digium, Inc.
  *
  * Mark Spencer <markster@digium.com>
  *
@@ -88,8 +88,8 @@ struct ast_custom_function {
 	char *synopsis;
 	char *desc;
 	char *syntax;
-	char *(*read)(struct ast_channel *, char *, char *, char *, size_t);
-	void (*write)(struct ast_channel *, char *, char *, const char *);
+	int (*read)(struct ast_channel *, char *, char *, char *, size_t);
+	int (*write)(struct ast_channel *, char *, char *, const char *);
 	struct ast_custom_function *next;
 };
 
@@ -563,11 +563,11 @@ int ast_async_goto_by_name(const char *chan, const char *context, const char *ex
 
 /* Synchronously or asynchronously make an outbound call and send it to a
    particular extension */
-int ast_pbx_outgoing_exten(const char *type, int format, void *data, int timeout, const char *context, const char *exten, int priority, int *reason, int sync, const char *cid_num, const char *cid_name, struct ast_variable *vars, struct ast_channel **locked_channel);
+int ast_pbx_outgoing_exten(const char *type, int format, void *data, int timeout, const char *context, const char *exten, int priority, int *reason, int sync, const char *cid_num, const char *cid_name, struct ast_variable *vars, const char *account, struct ast_channel **locked_channel);
 
 /* Synchronously or asynchronously make an outbound call and send it to a
    particular application with given extension */
-int ast_pbx_outgoing_app(const char *type, int format, void *data, int timeout, const char *app, const char *appdata, int *reason, int sync, const char *cid_num, const char *cid_name, struct ast_variable *vars, struct ast_channel **locked_channel);
+int ast_pbx_outgoing_app(const char *type, int format, void *data, int timeout, const char *app, const char *appdata, int *reason, int sync, const char *cid_num, const char *cid_name, struct ast_variable *vars, const char *account, struct ast_channel **locked_channel);
 
 /* Functions for returning values from structures */
 const char *ast_get_context_name(struct ast_context *con);
@@ -636,25 +636,24 @@ int ast_active_calls(void);
 /*! executes a read operation on a function */
 /*!
  * \param chan Channel to execute on
- * \param in Data containing the function call string
+ * \param function Data containing the function call string (will be modified)
  * \param workspace A pointer to safe memory to use for a return value 
  * \param len the number of bytes in workspace
+ * \return zero on success, non-zero on failure
  * This application executes an function in read mode on a given channel.
- * It returns a pointer to workspace if the buffer contains any new data
- * or NULL if there was a problem.
- */
+ *  */
 	
-char *ast_func_read(struct ast_channel *chan, const char *in, char *workspace, size_t len);
+int ast_func_read(struct ast_channel *chan, char *function, char *workspace, size_t len);
 
 /*! executes a write operation on a function */
 /*!
  * \param chan Channel to execute on
- * \param in Data containing the function call string
+ * \param function Data containing the function call string (will be modified)
  * \param value A value parameter to pass for writing
+ * \return zero on success, non-zero on failure
  * This application executes an function in write mode on a given channel.
- * It has no return value.
  */
-void ast_func_write(struct ast_channel *chan, const char *in, const char *value);
+int ast_func_write(struct ast_channel *chan, char *function, const char *value);
 
 void ast_hint_state_changed(const char *device);
 

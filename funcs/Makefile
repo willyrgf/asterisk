@@ -3,7 +3,7 @@
 # 
 # Makefile for dialplan functions
 #
-# Copyright (C) 2005 - 2006, Digium
+# Copyright (C) 2005-2006, Digium, Inc.
 #
 # Kevin P. Fleming <kpfleming@digium.com>
 #
@@ -11,27 +11,26 @@
 # the GNU General Public License
 #
 
-AVAILABLE_FUNCS=$(patsubst %.c,%.o,$(wildcard func*.c))
+MODS:=$(patsubst %.c,%.so,$(wildcard func_*.c))
 
-ifeq ($(wildcard $(CROSS_COMPILE_TARGET)/usr/include/odbcinst.h)$(wildcard $(CROSS_COMPILE_TARGET)/usr/local/include/odbcinst.h),)
-  STANDALONE_FUNCS=$(filter-out func_odbc.o,$(AVAILABLE_FUNCS))
-else
-  STANDALONE_FUNCS=$(AVAILABLE_FUNCS)
+ifeq ($(wildcard $(CROSS_COMPILE_TARGET)/usr/include/odbcinst.h $(CROSS_COMPILE_TARGET)/usr/local/include/odbcinst.h),)
+  MODS:=$(filter-out func_odbc.so,$(MODS))
 endif
-
-FUNCS=$(STANDALONE_FUNCS:.o=.so)
 
 ifeq (${OSARCH},CYGWIN)
-CYGSOLINK=-Wl,--out-implib=lib$@.a -Wl,--export-all-symbols
-CYGSOLIB=-L.. -L. -lasterisk.dll
+  CYGSOLINK=-Wl,--out-implib=lib$@.a -Wl,--export-all-symbols
+  CYGSOLIB=-L.. -L. -lasterisk.dll
 else
-CFLAGS+=-fPIC
+  CFLAGS+=-fPIC
 endif
 
-all: $(FUNCS)
+all: $(MODS)
 
-clean:
-	rm -f *.so *.o .depend
+clean-depend:
+	rm -f .depend
+
+clean: clean-depend
+	rm -f *.so *.o
 
 %.so : %.o
 	$(CC) $(SOLINK) -o $@ ${CYGSOLINK} $< ${CYGSOLIB}
@@ -40,7 +39,7 @@ func_odbc.so: func_odbc.o
 	$(CC) $(SOLINK) -o $@ ${CYGSOLINK} $< ${CYGSOLIB} -lodbc
 
 install: all
-	for x in $(FUNCS); do $(INSTALL) -m 755 $$x $(DESTDIR)$(MODULES_DIR) ; done
+	for x in $(MODS); do $(INSTALL) -m 755 $$x $(DESTDIR)$(MODULES_DIR) ; done
 
 uninstall:
 

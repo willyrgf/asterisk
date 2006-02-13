@@ -1211,68 +1211,60 @@ int ast_custom_function_register(struct ast_custom_function *acf)
 	return 0;
 }
 
-char *ast_func_read(struct ast_channel *chan, const char *in, char *workspace, size_t len)
+int ast_func_read(struct ast_channel *chan, char *function, char *workspace, size_t len)
 {
-	char *args = NULL, *function, *p;
-	char *ret = "0";
+	char *args = NULL, *p;
 	struct ast_custom_function *acfptr;
 
-	if (!(function = ast_strdupa(in)))
-		return ret;
 	if ((args = strchr(function, '('))) {
-		*args = '\0';
-		args++;
-		if ((p = strrchr(args, ')'))) {
+		*args++ = '\0';
+		if ((p = strrchr(args, ')')))
 			*p = '\0';
-		} else {
+		else
 			ast_log(LOG_WARNING, "Can't find trailing parenthesis?\n");
-		}
 	} else {
 		ast_log(LOG_WARNING, "Function doesn't contain parentheses.  Assuming null argument.\n");
 	}
 
 	if ((acfptr = ast_custom_function_find(function))) {
 		/* run the custom function */
-		if (acfptr->read) {
+		if (acfptr->read)
 			return acfptr->read(chan, function, args, workspace, len);
-		} else {
+		else
 			ast_log(LOG_ERROR, "Function %s cannot be read\n", function);
-		}
 	} else {
 		ast_log(LOG_ERROR, "Function %s not registered\n", function);
 	}
-	return ret;
+
+	return -1;
 }
 
-void ast_func_write(struct ast_channel *chan, const char *in, const char *value)
+int ast_func_write(struct ast_channel *chan, char *function, const char *value)
 {
-	char *args = NULL, *function, *p;
+	char *args = NULL, *p;
 	struct ast_custom_function *acfptr;
 
-	if (!(function = ast_strdupa(in)))
-		return;
 	if ((args = strchr(function, '('))) {
-		*args = '\0';
-		args++;
-		if ((p = strrchr(args, ')'))) {
+		*args++ = '\0';
+		if ((p = strrchr(args, ')')))
 			*p = '\0';
-		} else {
+		else
 			ast_log(LOG_WARNING, "Can't find trailing parenthesis?\n");
-		}
 	} else {
 		ast_log(LOG_WARNING, "Function doesn't contain parentheses.  Assuming null argument.\n");
 	}
 
 	if ((acfptr = ast_custom_function_find(function))) {
 		/* run the custom function */
-		if (acfptr->write) {
-			acfptr->write(chan, function, args, value);
-		} else {
+		if (acfptr->write)
+			return acfptr->write(chan, function, args, value);
+		else
 			ast_log(LOG_ERROR, "Function %s is read-only, it cannot be written to\n", function);
-		}
 	} else {
 		ast_log(LOG_ERROR, "Function %s not registered\n", function);
 	}
+
+	return -1;
 }
 
 static void pbx_substitute_variables_helper_full(struct ast_channel *c, struct varshead *headp, const char *cp1, char *cp2, int count)
@@ -1373,7 +1365,7 @@ static void pbx_substitute_variables_helper_full(struct ast_channel *c, struct v
 			parse_variable_name(vars, &offset, &offset2, &isfunction);
 			if (isfunction) {
 				/* Evaluate function */
-				cp4 = ast_func_read(c, vars, workspace, VAR_BUF_SIZE);
+				cp4 = ast_func_read(c, vars, workspace, VAR_BUF_SIZE) ? NULL : workspace;
 
 				ast_log(LOG_DEBUG, "Function result is '%s'\n", cp4 ? cp4 : "(null)");
 			} else {
@@ -4649,7 +4641,7 @@ int ast_pbx_outgoing_cdr_failed(void)
 	return 0;  /* success */
 }
 
-int ast_pbx_outgoing_exten(const char *type, int format, void *data, int timeout, const char *context, const char *exten, int priority, int *reason, int sync, const char *cid_num, const char *cid_name, struct ast_variable *vars, struct ast_channel **channel)
+int ast_pbx_outgoing_exten(const char *type, int format, void *data, int timeout, const char *context, const char *exten, int priority, int *reason, int sync, const char *cid_num, const char *cid_name, struct ast_variable *vars, const char *account, struct ast_channel **channel)
 {
 	struct ast_channel *chan;
 	struct async_stat *as;
@@ -4666,7 +4658,7 @@ int ast_pbx_outgoing_exten(const char *type, int format, void *data, int timeout
 				ast_mutex_lock(&chan->lock);
 		}
 		if (chan) {
-			if(chan->cdr) { /* check if the channel already has a cdr record, if not give it one */
+			if (chan->cdr) { /* check if the channel already has a cdr record, if not give it one */
 				ast_log(LOG_WARNING, "%s already has a call record??\n", chan->name);
 			} else {
 				chan->cdr = ast_cdr_alloc();   /* allocate a cdr for the channel */
@@ -4743,6 +4735,8 @@ int ast_pbx_outgoing_exten(const char *type, int format, void *data, int timeout
 					ast_copy_string(chan->exten, "failed", sizeof(chan->exten));
 					chan->priority = 1;
 					ast_set_variables(chan, vars);
+					if (account)
+						ast_cdr_setaccount(chan, account);
 					ast_pbx_run(chan);	
 				} else 
 					ast_log(LOG_WARNING, "Can't allocate the channel structure, skipping execution of extension 'failed'\n");
@@ -4772,6 +4766,8 @@ int ast_pbx_outgoing_exten(const char *type, int format, void *data, int timeout
 		as->priority = priority;
 		as->timeout = timeout;
 		ast_set_variables(chan, vars);
+		if (account)
+			ast_cdr_setaccount(chan, account);
 		pthread_attr_init(&attr);
 		pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
 		if (ast_pthread_create(&as->p, &attr, async_wait, as)) {
@@ -4813,7 +4809,7 @@ static void *ast_pbx_run_app(void *data)
 	return NULL;
 }
 
-int ast_pbx_outgoing_app(const char *type, int format, void *data, int timeout, const char *app, const char *appdata, int *reason, int sync, const char *cid_num, const char *cid_name, struct ast_variable *vars, struct ast_channel **locked_channel)
+int ast_pbx_outgoing_app(const char *type, int format, void *data, int timeout, const char *app, const char *appdata, int *reason, int sync, const char *cid_num, const char *cid_name, struct ast_variable *vars, const char *account, struct ast_channel **locked_channel)
 {
 	struct ast_channel *chan;
 	struct async_stat *as;
@@ -4821,9 +4817,10 @@ int ast_pbx_outgoing_app(const char *type, int format, void *data, int timeout, 
 	int res = -1, cdr_res = -1;
 	struct outgoing_helper oh;
 	pthread_attr_t attr;
-	
+
 	memset(&oh, 0, sizeof(oh));
-	oh.vars = vars;	
+	oh.vars = vars;
+	oh.account = account;	
 
 	if (locked_channel) 
 		*locked_channel = NULL;
@@ -4850,6 +4847,8 @@ int ast_pbx_outgoing_app(const char *type, int format, void *data, int timeout, 
 				ast_cdr_start(chan->cdr);
 			}
 			ast_set_variables(chan, vars);
+			if (account)
+				ast_cdr_setaccount(chan, account);
 			if (chan->_state == AST_STATE_UP) {
 				res = 0;
 				if (option_verbose > 3)
@@ -4929,6 +4928,8 @@ int ast_pbx_outgoing_app(const char *type, int format, void *data, int timeout, 
 			ast_copy_string(as->appdata,  appdata, sizeof(as->appdata));
 		as->timeout = timeout;
 		ast_set_variables(chan, vars);
+		if (account)
+			ast_cdr_setaccount(chan, account);
 		/* Start a new thread, and get something handling this channel. */
 		pthread_attr_init(&attr);
 		pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
@@ -5476,8 +5477,11 @@ void pbx_builtin_pushvar_helper(struct ast_channel *chan, const char *name, cons
 	struct varshead *headp;
 
 	if (name[strlen(name)-1] == ')') {
+		char *function = ast_strdupa(name);
+
 		ast_log(LOG_WARNING, "Cannot push a value onto a function\n");
-		return ast_func_write(chan, name, value);
+		ast_func_write(chan, function, value);
+		return;
 	}
 
 	headp = (chan) ? &chan->varshead : &globals;
@@ -5496,8 +5500,12 @@ void pbx_builtin_setvar_helper(struct ast_channel *chan, const char *name, const
 	struct varshead *headp;
 	const char *nametail = name;
 
-	if (name[strlen(name)-1] == ')')
-		return ast_func_write(chan, name, value);
+	if (name[strlen(name)-1] == ')') {
+		char *function = ast_strdupa(name);
+		
+		ast_func_write(chan, function, value);
+		return;
+	}
 
 	headp = (chan) ? &chan->varshead : &globals;
 

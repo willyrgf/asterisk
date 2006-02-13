@@ -1,7 +1,7 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 1999 - 2005, Digium, Inc.
+ * Copyright (C) 1999 - 2006, Digium, Inc.
  *
  * Mark Spencer <markster@digium.com>
  *
@@ -256,6 +256,10 @@ struct ast_channel_tech {
 
 	/*! Find bridged channel */
 	struct ast_channel *(* const bridged_channel)(struct ast_channel *chan, struct ast_channel *bridge);
+
+	/*! Provide additional items for CHANNEL() dialplan function */
+	int (* func_channel_read)(struct ast_channel *chan, char *function, char *data, char *buf, size_t len);
+	int (* func_channel_write)(struct ast_channel *chan, char *function, char *data, const char *value);
 };
 
 struct ast_channel_spy_list;
@@ -481,6 +485,7 @@ struct chanmon;
 	oh.priority = priority; \
 	oh.cid_num = cid_num; \
 	oh.cid_name = cid_name; \
+	oh.account = account; \
 	oh.vars = vars; \
 	oh.parent_channel = NULL; \
 } 
@@ -491,6 +496,7 @@ struct outgoing_helper {
 	int priority;
 	const char *cid_num;
 	const char *cid_name;
+	const char *account;
 	struct ast_variable *vars;
 	struct ast_channel *parent_channel;
 };
