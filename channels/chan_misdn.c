@@ -120,6 +120,7 @@ enum misdn_chan_state {
 	MISDN_EXTCANTMATCH, /*!<  when asterisk couldnt match our ext */
 	MISDN_DIALING, /*!<  when pbx_start */
 	MISDN_PROGRESS, /*!<  we got a progress */
+	MISDN_PROCEEDING, /*!<  we got a progress */
 	MISDN_CALLING, /*!<  when misdn_call is called */
 	MISDN_CALLING_ACKNOWLEDGE, /*!<  when we get SETUP_ACK */
 	MISDN_ALERTING, /*!<  when Alerting */
@@ -158,6 +159,8 @@ struct chan_list {
 
 	int ast_dsp;
 
+	int jb_len;
+	int jb_upper_threshold;
 	struct misdn_jb *jb;
 	
 	struct ast_dsp *dsp;
@@ -595,27 +598,29 @@ static char *misdn_get_ch_state(struct chan_list *p)
 	return NULL;
 }
 
-static int misdn_reload (int fd, int argc, char *argv[])
+
+
+void reload_config(void)
 {
 	int i, cfg_debug;
-	
-	ast_cli(fd, "Reloading mISDN Config\n");
 	chan_misdn_log(-1, 0, "Dynamic Crypting Activation is not support during reload at the moment\n");
 	
 	free_robin_list();
-
 	misdn_cfg_reload();
-
 	misdn_cfg_update_ptp();
-	
 	misdn_cfg_get( 0, MISDN_GEN_TRACEFILE, global_tracefile, BUFFERSIZE);
-	
 	misdn_cfg_get( 0, MISDN_GEN_DEBUG, &cfg_debug, sizeof(int));
+
 	for (i = 0;  i <= max_ports; i++) {
 		misdn_debug[i] = cfg_debug;
 		misdn_debug_only[i] = 0;
 	}
-	
+}
+
+static int misdn_reload (int fd, int argc, char *argv[])
+{
+	ast_cli(fd, "Reloading mISDN Config\n");
+	reload_config();
 	return 0;
 }
 
@@ -1138,6 +1143,40 @@ static int update_config (struct chan_list *ch, int orig)
 }
 
 
+
+
+void config_jitterbuffer(struct chan_list *ch)
+{
+	struct misdn_bchannel *bc=ch->bc;
+	int len=ch->jb_len, threshold=ch->jb_upper_threshold;
+	
+	chan_misdn_log(1,bc->port, "config_jb: Called\n");
+	
+	if ( ! len ) {
+		chan_misdn_log(1,bc->port, "config_jb: Deactivating Jitterbuffer\n");
+		bc->nojitter=1;
+	} else {
+		
+		if (len <=100 || len > 8000) {
+			chan_misdn_log(-1,bc->port,"config_jb: Jitterbuffer out of Bounds, setting to 1000\n");
+			len=1000;
+		}
+		
+		if ( threshold > len ) {
+			chan_misdn_log(-1,bc->port,"config_jb: Jitterbuffer Threshold > Jitterbuffer setting to Jitterbuffer -1\n");
+		}
+		
+		if ( ch->jb) {
+			cb_log(0,bc->port,"config_jb: We've got a Jitterbuffer Already on this port.\n");
+			misdn_jb_destroy(ch->jb);
+			ch->jb=NULL;
+		}
+		
+		ch->jb=misdn_jb_init(len, threshold);
+	}
+}
+
+
 static int read_config(struct chan_list *ch, int orig) {
 
 	if (!ch) {
@@ -1178,33 +1217,10 @@ static int read_config(struct chan_list *ch, int orig) {
 
 	/*Initialize new Jitterbuffer*/
 	{
-		int jb_len,jb_upper_threshold;
-		misdn_cfg_get( port, MISDN_CFG_JITTERBUFFER, &jb_len, sizeof(int));
-		misdn_cfg_get( port, MISDN_CFG_JITTERBUFFER_UPPER_THRESHOLD, &jb_upper_threshold, sizeof(int));
-
-		if ( ! jb_len ) {
-			chan_misdn_log(1,bc->port, "read_config: Deactivating Jitterbuffer\n");
-			bc->nojitter=1;
-		} else {
+		misdn_cfg_get( port, MISDN_CFG_JITTERBUFFER, &ch->jb_len, sizeof(int));
+		misdn_cfg_get( port, MISDN_CFG_JITTERBUFFER_UPPER_THRESHOLD, &ch->jb_upper_threshold, sizeof(int));
 		
-			if (jb_len <=100 || jb_len > 8000) {
-				chan_misdn_log(-1,bc->port,"read_config: Jitterbuffer out of Bounds, setting to 1000\n");
-				jb_len=1000;
-			}
-			
-			if ( jb_upper_threshold > jb_len ) {
-				chan_misdn_log(-1,bc->port,"read_config: Jitterbuffer Threshold > Jitterbuffer setting to Jitterbuffer -1\n");
-			}
-			
-			
-			if ( ch->jb) {
-				cb_log(0,bc->port,"read_config: We've got a Jitterbuffer Already on this port.\n");
-				misdn_jb_destroy(ch->jb);
-				ch->jb=NULL;
-			}
-			
-			ch->jb=misdn_jb_init(jb_len, jb_upper_threshold);
-		}
+		config_jitterbuffer(ch);
 	}
 	
 	misdn_cfg_get( bc->port, MISDN_CFG_CONTEXT, ch->context, sizeof(ch->context));
@@ -1760,7 +1776,11 @@ static int misdn_indication(struct ast_channel *ast, int cond)
 		break;
 	case -1 :
 		chan_misdn_log(1, p->bc->port, " --> * IND :\t-1! (stop indication) pid:%d\n",p->bc?p->bc->pid:-1);
-		tone_indicate(p, TONE_NONE);
+		
+		if (p->state == MISDN_CONNECTED)
+			start_bc_tones(p);
+		else 
+			tone_indicate(p, TONE_NONE);
 		break;
 
 	case AST_CONTROL_HOLD:
@@ -1858,6 +1878,8 @@ static int misdn_hangup(struct ast_channel *ast)
 			break;
       
 		case MISDN_ALERTING:
+		case MISDN_PROGRESS:
+		case MISDN_PROCEEDING:
 			chan_misdn_log(2, bc->port, " --> * State Alerting\n");
 
 			if (p->orginator != ORG_AST) 
@@ -3262,6 +3284,8 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 			start_bc_tones(ch);
 		}
 
+		ch->state = MISDN_PROCEEDING;
+		
 		ast_queue_control(ch->ast, AST_CONTROL_PROCEEDING);
 	}
 	break;
@@ -3727,6 +3751,13 @@ int unload_module(void)
 	return 0;
 }
 
+int reload(void)
+{
+	reload_config();
+
+	return 0;
+}
+
 int usecount(void)
 {
 	int res;
@@ -3800,6 +3831,7 @@ static int misdn_set_opt_exec(struct ast_channel *chan, void *data)
 	int  keyidx=0;
 	int rxgain=0;
 	int txgain=0;
+	int change_jitter=0;
 	
 	if (strcasecmp(chan->tech->type,"mISDN")) {
 		ast_log(LOG_WARNING, "misdn_set_opt makes only sense with chan_misdn channels!\n");
@@ -3834,8 +3866,32 @@ static int misdn_set_opt_exec(struct ast_channel *chan, void *data)
 			break;
 
 		case 'j':
-			chan_misdn_log(1, ch->bc->port, "SETOPT: No jitter\n");
-			ch->bc->nojitter=1;
+			chan_misdn_log(1, ch->bc->port, "SETOPT: jitter\n");
+			tok++;
+			change_jitter=1;
+			
+			switch ( tok[0] ) {
+			case 'b' :
+				ch->jb_len=atoi(++tok);
+				chan_misdn_log(1, ch->bc->port, " --> buffer_len:%d\n",ch->jb_len);
+				break;
+			case 't' :
+				ch->jb_upper_threshold=atoi(++tok);
+				chan_misdn_log(1, ch->bc->port, " --> upper_threshold:%d\n",ch->jb_upper_threshold);
+				break;
+
+			case 'n':
+				ch->bc->nojitter=1;
+				chan_misdn_log(1, ch->bc->port, " --> nojitter\n");
+				break;
+				
+			default:
+				ch->jb_len=1000;
+				ch->jb_upper_threshold=0;
+				chan_misdn_log(1, ch->bc->port, " --> buffer_len:%d (default)\n",ch->jb_len);
+				chan_misdn_log(1, ch->bc->port, " --> upper_threshold:%d (default)\n",ch->jb_upper_threshold);
+			}
+			
 			break;
       
 		case 'v':
@@ -3879,6 +3935,7 @@ static int misdn_set_opt_exec(struct ast_channel *chan, void *data)
 			chan_misdn_log(1, ch->bc->port, "SETOPT: EchoCancel\n");
 			
 			if (neglect) {
+				chan_misdn_log(1, ch->bc->port, " --> disabled\n");
 				ch->bc->ec_enable=0;
 			} else {
 				ch->bc->ec_enable=1;
@@ -3933,6 +3990,10 @@ static int misdn_set_opt_exec(struct ast_channel *chan, void *data)
 			break;
 		}
 	}
+
+	if (change_jitter)
+		config_jitterbuffer(ch);
+	
 	
 	if (ch->faxdetect || ch->ast_dsp) {
 		

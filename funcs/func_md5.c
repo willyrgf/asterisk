@@ -1,7 +1,7 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 2005, Digium, Inc.
+ * Copyright (C) 2005-2006, Digium, Inc.
  * Copyright (C) 2005, Olle E. Johansson, Edvina.net
  * Copyright (C) 2005, Russell Bryant <russelb@clemson.edu> 
  *
@@ -30,52 +30,48 @@
 
 #include "asterisk.h"
 
-/* ASTERISK_FILE_VERSION(__FILE__, "$Revision$") */
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
+#include "asterisk/module.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/logger.h"
 #include "asterisk/utils.h"
 #include "asterisk/app.h"
 
-static char *builtin_function_md5(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len) 
+static int md5(struct ast_channel *chan, char *cmd, char *data,
+	       char *buf, size_t len)
 {
-	char md5[33];
-
 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_WARNING, "Syntax: MD5(<data>) - missing argument!\n");
-		return NULL;
+		return -1;
 	}
 
-	ast_md5_hash(md5, data);
-	ast_copy_string(buf, md5, len);
-	
-	return buf;
+	ast_md5_hash(buf, data);
+	buf[32] = '\0';
+
+	return 0;
 }
 
-static char *builtin_function_checkmd5(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len) 
+static int checkmd5(struct ast_channel *chan, char *cmd, char *parse,
+		    char *buf, size_t len)
 {
 	char newmd5[33];
-	char *parse;
 	static int deprecated = 0;
-	AST_DECLARE_APP_ARGS(args,
-		AST_APP_ARG(digest);
-		AST_APP_ARG(data);
-	);
+	AST_DECLARE_APP_ARGS(args, AST_APP_ARG(digest); AST_APP_ARG(data););
 
-	if (ast_strlen_zero(data)) {
-		ast_log(LOG_WARNING, "Syntax: CHECK_MD5(<digest>,<data>) - missing argument!\n");
-		return NULL;
+	if (ast_strlen_zero(parse)) {
+		ast_log(LOG_WARNING,
+				"Syntax: CHECK_MD5(<digest>,<data>) - missing argument!\n");
+		return -1;
 	}
 
-	if (!(parse = ast_strdupa(data)))
-		return NULL;
-	
 	AST_STANDARD_APP_ARGS(args, parse);
-	
+
 	if (args.argc < 2) {
-		ast_log(LOG_WARNING, "Syntax: CHECK_MD5(<digest>,<data>) - missing argument!\n");
-		return NULL;
+		ast_log(LOG_WARNING,
+				"Syntax: CHECK_MD5(<digest>,<data>) - missing argument!\n");
+		return -1;
 	}
 
 	if (!deprecated) {
@@ -85,31 +81,54 @@ static char *builtin_function_checkmd5(struct ast_channel *chan, char *cmd, char
 
 	ast_md5_hash(newmd5, args.data);
 
-	if (!strcasecmp(newmd5, args.digest) )	/* they match */
+	if (!strcasecmp(newmd5, args.digest))	/* they match */
 		ast_copy_string(buf, "1", len);
 	else
 		ast_copy_string(buf, "0", len);
-	
-	return buf;
+
+	return 0;
 }
 
-#ifndef BUILTIN_FUNC
-static
-#endif
-struct ast_custom_function md5_function = {
+static struct ast_custom_function md5_function = {
 	.name = "MD5",
 	.synopsis = "Computes an MD5 digest",
 	.syntax = "MD5(<data>)",
-	.read = builtin_function_md5,
+	.read = md5,
 };
 
-#ifndef BUILTIN_FUNC
-static
-#endif
-struct ast_custom_function checkmd5_function = {
+static struct ast_custom_function checkmd5_function = {
 	.name = "CHECK_MD5",
 	.synopsis = "Checks an MD5 digest",
 	.desc = "Returns 1 on a match, 0 otherwise\n",
 	.syntax = "CHECK_MD5(<digest>,<data>)",
-	.read = builtin_function_checkmd5,
+	.read = checkmd5,
 };
+
+static char *tdesc = "MD5 digest dialplan functions";
+
+int unload_module(void)
+{
+	return ast_custom_function_unregister(&md5_function) |
+		ast_custom_function_unregister(&checkmd5_function);
+}
+
+int load_module(void)
+{
+	return ast_custom_function_register(&md5_function) |
+		ast_custom_function_register(&checkmd5_function);
+}
+
+char *description(void)
+{
+	return tdesc;
+}
+
+int usecount(void)
+{
+	return 0;
+}
+
+char *key()
+{
+	return ASTERISK_GPL_KEY;
+}

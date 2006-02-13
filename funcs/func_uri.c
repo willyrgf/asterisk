@@ -1,7 +1,7 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 1999 - 2005, Digium, Inc.
+ * Copyright (C) 1999 - 2006, Digium, Inc.
  *
  * Created by Olle E. Johansson, Edvina.net 
  *
@@ -34,76 +34,70 @@
 
 #include "asterisk.h"
 
-/* ASTERISK_FILE_VERSION(__FILE__, "$Revision$") */
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
+#include "asterisk/module.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/logger.h"
 #include "asterisk/utils.h"
 #include "asterisk/app.h"
-#include "asterisk/module.h"
 
-/*! \brief builtin_function_uriencode: Encode URL according to RFC 2396 */
-static char *builtin_function_uriencode(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len) 
+/*! \brief uriencode: Encode URL according to RFC 2396 */
+static int uriencode(struct ast_channel *chan, char *cmd, char *data,
+		     char *buf, size_t len)
 {
-	char uri[BUFSIZ];
-
 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_WARNING, "Syntax: URIENCODE(<data>) - missing argument!\n");
-		return NULL;
+		return -1;
 	}
 
-	ast_uri_encode(data, uri, sizeof(uri), 1);
-	ast_copy_string(buf, uri, len);
+	ast_uri_encode(data, buf, len, 1);
 
-	return buf;
+	return 0;
 }
 
-/*!\brief builtin_function_uridecode: Decode URI according to RFC 2396 */
-static char *builtin_function_uridecode(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len) 
+/*!\brief uridecode: Decode URI according to RFC 2396 */
+static int uridecode(struct ast_channel *chan, char *cmd, char *data,
+		     char *buf, size_t len)
 {
 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_WARNING, "Syntax: URIDECODE(<data>) - missing argument!\n");
-		return NULL;
+		return -1;
 	}
 
-	
 	ast_copy_string(buf, data, len);
 	ast_uri_decode(buf);
-	return buf;
+
+	return 0;
 }
 
-#ifndef BUILTIN_FUNC
-static
-#endif
-struct ast_custom_function urldecode_function = {
+static struct ast_custom_function urldecode_function = {
 	.name = "URIDECODE",
 	.synopsis = "Decodes an URI-encoded string.",
 	.syntax = "URIDECODE(<data>)",
-	.read = builtin_function_uridecode,
+	.read = uridecode,
 };
 
-#ifndef BUILTIN_FUNC
-static
-#endif
-struct ast_custom_function urlencode_function = {
+static struct ast_custom_function urlencode_function = {
 	.name = "URIENCODE",
 	.synopsis = "Encodes a string to URI-safe encoding.",
 	.syntax = "URIENCODE(<data>)",
-	.read = builtin_function_uriencode,
+	.read = uriencode,
 };
 
-#ifndef BUILTIN_FUNC
-static char *tdesc = "URI encode/decode functions";
+static char *tdesc = "URI encode/decode dialplan functions";
 
 int unload_module(void)
 {
-        return ast_custom_function_unregister(&urldecode_function) || ast_custom_function_unregister(&urlencode_function);
+	return ast_custom_function_unregister(&urldecode_function)
+		|| ast_custom_function_unregister(&urlencode_function);
 }
 
 int load_module(void)
 {
-        return ast_custom_function_register(&urldecode_function) || ast_custom_function_register(&urlencode_function);
+	return ast_custom_function_register(&urldecode_function)
+		|| ast_custom_function_register(&urlencode_function);
 }
 
 char *description(void)
@@ -120,4 +114,3 @@ char *key()
 {
 	return ASTERISK_GPL_KEY;
 }
-#endif /* BUILTIN_FUNC */

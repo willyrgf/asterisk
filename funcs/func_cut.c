@@ -1,7 +1,7 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (c) 2003 Tilghman Lesher.  All rights reserved.
+ * Copyright (c) 2003-2006 Tilghman Lesher.  All rights reserved.
  *
  * Tilghman Lesher <app_cut__v003@the-tilghman.com>
  *
@@ -228,9 +228,10 @@ static int cut_internal(struct ast_channel *chan, char *data, char *buffer, size
 	return 0;
 }
 
-static char *acf_sort_exec(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len)
+static int acf_sort_exec(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len)
 {
 	struct localuser *u;
+	int ret = -1;
 
 	LOCAL_USER_ACF_ADD(u);
 
@@ -242,16 +243,19 @@ static char *acf_sort_exec(struct ast_channel *chan, char *cmd, char *data, char
 		ast_log(LOG_ERROR, "Out of memory\n");
 		break;
 	case 0:
+		ret = 0;
 		break;
 	default:
 		ast_log(LOG_ERROR, "Unknown internal error\n");
 	}
 	LOCAL_USER_REMOVE(u);
-	return buf;
+
+	return ret;
 }
 
-static char *acf_cut_exec(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len)
+static int acf_cut_exec(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len)
 {
+	int ret = -1;
 	struct localuser *u;
 
 	LOCAL_USER_ACF_ADD(u);
@@ -267,12 +271,14 @@ static char *acf_cut_exec(struct ast_channel *chan, char *cmd, char *data, char 
 		ast_log(LOG_ERROR, "Usage: CUT(<varname>,<char-delim>,<range-spec>)\n");
 		break;
 	case 0:
+		ret = 0;
 		break;
 	default:
 		ast_log(LOG_ERROR, "Unknown internal error\n");
 	}
 	LOCAL_USER_REMOVE(u);
-	return buf;
+
+	return ret;
 }
 
 struct ast_custom_function acf_sort = {
@@ -301,9 +307,9 @@ struct ast_custom_function acf_cut = {
 
 int unload_module(void)
 {
-	int res;
+	int res = 0;
 
-	res = ast_custom_function_unregister(&acf_cut);
+	res |= ast_custom_function_unregister(&acf_cut);
 	res |= ast_custom_function_unregister(&acf_sort);
 
 	STANDARD_HANGUP_LOCALUSERS;
@@ -313,9 +319,9 @@ int unload_module(void)
 
 int load_module(void)
 {
-	int res;
+	int res = 0;
 
-	res = ast_custom_function_register(&acf_cut);
+	res |= ast_custom_function_register(&acf_cut);
 	res |= ast_custom_function_register(&acf_sort);
 
 	return res;

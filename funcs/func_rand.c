@@ -30,92 +30,75 @@
 
 #include "asterisk.h"
 
-/* ASTERISK_FILE_VERSION(__FILE__, "$Revision: 7682 $") */
+ASTERISK_FILE_VERSION(__FILE__, "$Revision: 9674 $")
 
+#include "asterisk/module.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/logger.h"
 #include "asterisk/utils.h"
 #include "asterisk/app.h"
-#ifndef BUILTIN_FUNC
-#include "asterisk/module.h"
-#endif
-
 
 STANDARD_LOCAL_USER;
 
 LOCAL_USER_DECL;
 
-
-static char *acf_rand_exec(struct ast_channel *chan, char *cmd, char *data, char *buffer, size_t buflen)
+static int acf_rand_exec(struct ast_channel *chan, char *cmd,
+			 char *parse, char *buffer, size_t buflen)
 {
 	struct localuser *u;
 	int min_int, response_int, max_int;
-	char *parse;
-
 	AST_DECLARE_APP_ARGS(args,
-		AST_APP_ARG(min);
-		AST_APP_ARG(max);
+			     AST_APP_ARG(min);
+			     AST_APP_ARG(max);
 	);
-	
-	if (!(parse = ast_strdupa(data))) {
-		*buffer = '\0';
-		return buffer;
-	}
 
 	LOCAL_USER_ACF_ADD(u);
 
 	AST_STANDARD_APP_ARGS(args, parse);
-	
-	if (ast_strlen_zero(args.min) || sscanf(args.min, "%d", &min_int) != 1) {
+
+	if (ast_strlen_zero(args.min) || sscanf(args.min, "%d", &min_int) != 1)
 		min_int = 0;
-	}
 
-
-	if (ast_strlen_zero(args.max) || sscanf(args.max, "%d", &max_int) != 1) {
+	if (ast_strlen_zero(args.max) || sscanf(args.max, "%d", &max_int) != 1)
 		max_int = RAND_MAX;
-	}
 
 	if (max_int < min_int) {
 		int tmp = max_int;
+
 		max_int = min_int;
 		min_int = tmp;
 		ast_log(LOG_DEBUG, "max<min\n");
 	}
 
 	response_int = min_int + (ast_random() % (max_int - min_int + 1));
-	ast_log(LOG_DEBUG, "%d was the lucky number in range [%d,%d]\n", response_int, min_int, max_int);
+	ast_log(LOG_DEBUG, "%d was the lucky number in range [%d,%d]\n",
+		response_int, min_int, max_int);
 	snprintf(buffer, buflen, "%d", response_int);
 
 	LOCAL_USER_REMOVE(u);
-	return buffer;
+
+	return 0;
 }
 
-#ifndef BUILTIN_FUNC
-static
-#endif
-struct ast_custom_function acf_rand = {
+static struct ast_custom_function acf_rand = {
 	.name = "RAND",
 	.synopsis = "Choose a random number in a range",
 	.syntax = "RAND([min][,max])",
 	.desc =
-"Choose a random number between min and max.  Min defaults to 0, if not\n"
-"specified, while max defaults to RAND_MAX (2147483647 on many systems).\n"
-"  Example:  Set(junky=${RAND(1,8)}); \n"
-"  Sets junky to a random number between 1 and 8, inclusive.\n",
+		"Choose a random number between min and max.  Min defaults to 0, if not\n"
+		"specified, while max defaults to RAND_MAX (2147483647 on many systems).\n"
+		"  Example:  Set(junky=${RAND(1,8)}); \n"
+		"  Sets junky to a random number between 1 and 8, inclusive.\n",
 	.read = acf_rand_exec,
 };
 
 
-#ifndef BUILTIN_FUNC
-
-static char *tdesc = "Generate a random number";
+static char *tdesc = "Random number dialplan function";
 
 int unload_module(void)
 {
 	ast_custom_function_unregister(&acf_rand);
-
-	STANDARD_HANGUP_LOCALUSERS;
 
 	return 0;
 }
@@ -127,21 +110,15 @@ int load_module(void)
 
 char *description(void)
 {
-       return tdesc;
+	return tdesc;
 }
 
 int usecount(void)
 {
-	int res;
-
-	STANDARD_USECOUNT(res);
-
-	return res;
+	return 0;
 }
 
 char *key()
 {
-       return ASTERISK_GPL_KEY;
+	return ASTERISK_GPL_KEY;
 }
-
-#endif

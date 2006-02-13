@@ -49,12 +49,18 @@ maxsilence=10
 silencethreshold=128
 ; Max number of failed login attempts
 maxlogins=3
-; If you need to have an external program, i.e. /usr/bin/myapp called when a
-; voicemail is left, delivered, or your voicemailbox is checked, uncomment
-; this:
+
+; If you need to have an external program, i.e. /usr/bin/myapp
+; called when a voicemail is left, delivered, or your voicemailbox 
+; is checked, uncomment this.  It can also be set to 'smdi' to use
+; smdi for external notification.  If it is 'smdi', smdiport should
+; be set to a valid port as specfied in smdi.conf.
+
 ;externnotify=/usr/bin/myapp
-; If you need to have an external program, i.e. /usr/bin/myapp called when a
-; voicemail password is changed, uncomment this:
+;smdiport=/dev/ttyS0
+
+; If you need to have an external program, i.e. /usr/bin/myapp
+; called when a voicemail password is changed, uncomment this:
 ;externpass=/usr/bin/myapp
 ; For the directory, you can override the intro file if you want
 ;directoryintro=dir-intro
@@ -136,6 +142,12 @@ emaildateformat=%A, %B %d, %Y at %r
 ; R             24 hour time, including minute 
 ; 
 ; 
+[zonemessages]
+eastern=America/New_York|'vm-received' Q 'digits/at' IMp
+central=America/Chicago|'vm-received' Q 'digits/at' IMp
+central24=America/Chicago|'vm-received' q 'digits/at' H N 'hours'
+military=Zulu|'vm-received' q 'digits/at' H N 'hours' 'phonetic/z_p'
+european=Europe/Copenhagen|'vm-received' a d b 'digits/at' HM
 
 ;
 ; Each mailbox is listed in the form <mailbox>=<password>,<name>,<email>,<pager_email>,<options>
@@ -183,11 +195,6 @@ sendvoicemail=yes	; Context to Send voicemail from [option 5 from the advanced m
 ; hidefromdir=yes	; Hide this mailbox from the directory produced by app_directory
 			;     The default is "no".
 
-[zonemessages]
-eastern=America/New_York|'vm-received' Q 'digits/at' IMp
-central=America/Chicago|'vm-received' Q 'digits/at' IMp
-central24=America/Chicago|'vm-received' q 'digits/at' H N 'hours'
-military=Zulu|'vm-received' q 'digits/at' H N 'hours' 'phonetic/z_p'
 
 [default]
 ; Define maximum number of messages per folder for partcular context.
@@ -200,6 +207,7 @@ military=Zulu|'vm-received' q 'digits/at' H N 'hours' 'phonetic/z_p'
 ;4069 => 6522,Matt Brooks,matt@marko.net,,|tz=central|attach=yes|saycid=yes|dialout=fromvm|callback=fromvm|review=yes|operator=yes|envelope=yes|sayduration=yes|saydurationm=1
 ;4073 => 1099,Bianca Paige,bianca@biancapaige.com,,delete=1
 ;4110 => 3443,Rob Flynn,rflynn@blueridge.net
+;4235 => 1234,Jim Holmes,jim@astricon.ips,,Tz=european
 
 
 ;

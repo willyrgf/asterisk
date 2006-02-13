@@ -28,41 +28,70 @@
 
 #include "asterisk.h"
 
-/* ASTERISK_FILE_VERSION(__FILE__, "$Revision: 8403 $") */
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
+#include "asterisk/module.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/logger.h"
 #include "asterisk/utils.h"
 #include "asterisk/app.h"
 
-static char *builtin_function_sha1(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len) 
+static int sha1(struct ast_channel *chan, char *cmd, char *data,
+		char *buf, size_t len)
 {
+	*buf = '\0';
+
 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_WARNING, "Syntax: SHA1(<data>) - missing argument!\n");
-		return NULL;
+		return -1;
 	}
 
 	if (len >= 41)
 		ast_sha1_hash(buf, data);
 	else {
-		ast_log(LOG_ERROR, "Insufficient space to produce SHA1 hash result (%d < 41)\n", len);
-		*buf = '\0';
+		ast_log(LOG_ERROR,
+				"Insufficient space to produce SHA1 hash result (%d < 41)\n",
+				len);
 	}
-	return buf;
+
+	return 0;
 }
 
-
-#ifndef BUILTIN_FUNC
-static
-#endif
-struct ast_custom_function sha1_function = {
+static struct ast_custom_function sha1_function = {
 	.name = "SHA1",
 	.synopsis = "Computes a SHA1 digest",
 	.syntax = "SHA1(<data>)",
-	.read = builtin_function_sha1,
+	.read = sha1,
 	.desc = "Generate a SHA1 digest via the SHA1 algorythm.\n"
-	" Example:  Set(sha1hash=${SHA1(junky)})\n"
-	" Sets the asterisk variable sha1hash to the string '60fa5675b9303eb62f99a9cd47f9f5837d18f9a0'\n"
-	" which is known as his hash\n",
+		" Example:  Set(sha1hash=${SHA1(junky)})\n"
+		" Sets the asterisk variable sha1hash to the string '60fa5675b9303eb62f99a9cd47f9f5837d18f9a0'\n"
+		" which is known as his hash\n",
 };
+
+static char *tdesc = "SHA-1 computation dialplan function";
+
+int unload_module(void)
+{
+	return ast_custom_function_unregister(&sha1_function);
+}
+
+int load_module(void)
+{
+	return ast_custom_function_register(&sha1_function);
+}
+
+char *description(void)
+{
+	return tdesc;
+}
+
+int usecount(void)
+{
+	return 0;
+}
+
+char *key()
+{
+	return ASTERISK_GPL_KEY;
+}

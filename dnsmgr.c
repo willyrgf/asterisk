@@ -1,7 +1,7 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 2005, Kevin P. Fleming
+ * Copyright (C) 2005-2006, Kevin P. Fleming
  *
  * Kevin P. Fleming <kpfleming@digium.com>
  *
@@ -83,11 +83,7 @@ struct ast_dnsmgr_entry *ast_dnsmgr_get(const char *name, struct in_addr *result
 {
 	struct ast_dnsmgr_entry *entry;
 
-	if (!result || ast_strlen_zero(name))
-		return NULL;
-
-	entry = calloc(1, sizeof(*entry) + strlen(name));
-	if (!entry)
+	if (!result || ast_strlen_zero(name) || !(entry = ast_calloc(1, sizeof(*entry) + strlen(name))))
 		return NULL;
 
 	entry->result = result;
@@ -285,8 +281,7 @@ static struct ast_cli_entry cli_status = {
 
 int dnsmgr_init(void)
 {
-	sched = sched_context_create();
-	if (!sched) {
+	if (!(sched = sched_context_create())) {
 		ast_log(LOG_ERROR, "Unable to create schedule context.\n");
 		return -1;
 	}
@@ -308,7 +303,6 @@ static int do_reload(int loading)
 	const char *enabled_value;
 	int interval;
 	int was_enabled;
-	pthread_attr_t attr;
 	int res = -1;
 
 	/* ensure that no refresh cycles run while the reload is in progress */
@@ -343,9 +337,7 @@ static int do_reload(int loading)
 	/* if this reload enabled the manager, create the background thread
 	   if it does not exist */
 	if (enabled && !was_enabled && (refresh_thread == AST_PTHREADT_NULL)) {
-		pthread_attr_init(&attr);
-		pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-		if (ast_pthread_create(&refresh_thread, &attr, do_refresh, NULL) < 0) {
+		if (ast_pthread_create(&refresh_thread, NULL, do_refresh, NULL) < 0) {
 			ast_log(LOG_ERROR, "Unable to start refresh thread.\n");
 		}
 		else {

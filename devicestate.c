@@ -1,7 +1,7 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 1999 - 2005, Digium, Inc.
+ * Copyright (C) 1999 - 2006, Digium, Inc.
  *
  * Mark Spencer <markster@digium.com>
  *
@@ -143,11 +143,7 @@ int ast_devstate_add(ast_devstate_cb_type callback, void *data)
 {
 	struct devstate_cb *devcb;
 
-	if (!callback)
-		return -1;
-
-	devcb = calloc(1, sizeof(*devcb));
-	if (!devcb)
+	if (!callback || !(devcb = ast_calloc(1, sizeof(*devcb))))
 		return -1;
 
 	devcb->data = data;
@@ -198,16 +194,13 @@ static void do_state_change(const char *device)
 static int __ast_device_state_changed_literal(char *buf)
 {
 	char *device, *tmp;
-	struct state_change *change = NULL;
+	struct state_change *change;
 
 	device = buf;
-	tmp = strrchr(device, '-');
-	if (tmp)
+	if ((tmp = strrchr(device, '-')))
 		*tmp = '\0';
-	if (change_thread != AST_PTHREADT_NULL)
-		change = calloc(1, sizeof(*change) + strlen(device));
 
-	if (!change) {
+	if (change_thread == AST_PTHREADT_NULL || !(change = ast_calloc(1, sizeof(*change) + strlen(device)))) {
 		/* we could not allocate a change struct, or */
 		/* there is no background thread, so process the change now */
 		do_state_change(device);
@@ -272,12 +265,8 @@ static void *do_devstate_changes(void *data)
 /*! \brief Initialize the device state engine in separate thread */
 int ast_device_state_engine_init(void)
 {
-	pthread_attr_t attr;
-
 	ast_cond_init(&change_pending, NULL);
-	pthread_attr_init(&attr);
-	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-	if (ast_pthread_create(&change_thread, &attr, do_devstate_changes, NULL) < 0) {
+	if (ast_pthread_create(&change_thread, NULL, do_devstate_changes, NULL) < 0) {
 		ast_log(LOG_ERROR, "Unable to start device state change thread.\n");
 		return -1;
 	}
