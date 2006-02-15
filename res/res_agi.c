@@ -1,7 +1,7 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 1999 - 2005, Digium, Inc.
+ * Copyright (C) 1999 - 2006, Digium, Inc.
  *
  * Mark Spencer <markster@digium.com>
  *
@@ -190,17 +190,23 @@ static int launch_netscript(char *agiurl, char *argv[], int *fds, int *efd, int 
 		close(s);
 		return -1;
 	}
+
 	pfds[0].fd = s;
 	pfds[0].events = POLLOUT;
-	if (poll(pfds, 1, MAX_AGI_CONNECT) != 1) {
-		ast_log(LOG_WARNING, "Connect to '%s' failed!\n", agiurl);
-		close(s);
-		return -1;
+	while (poll(pfds, 1, MAX_AGI_CONNECT) != 1) {
+		if (errno != EINTR) {
+			ast_log(LOG_WARNING, "Connect to '%s' failed: %s\n", agiurl, strerror(errno));
+			close(s);
+			return -1;
+		}
 	}
-	if (write(s, "agi_network: yes\n", strlen("agi_network: yes\n")) < 0) {
-		ast_log(LOG_WARNING, "Connect to '%s' failed: %s\n", agiurl, strerror(errno));
-		close(s);
-		return -1;
+
+	while (write(s, "agi_network: yes\n", strlen("agi_network: yes\n")) < 0) {
+		if (errno != EINTR) {
+			ast_log(LOG_WARNING, "Connect to '%s' failed: %s\n", agiurl, strerror(errno));
+			close(s);
+			return -1;
+		}
 	}
 
 	/* If we have a script parameter, relay it to the fastagi server */
@@ -742,16 +748,13 @@ static int handle_saytime(struct ast_channel *chan, AGI *agi, int argc, char *ar
 	if (res == 1)
 		return RESULT_SUCCESS;
 	fdprintf(agi->fd, "200 result=%d\n", res);
-	if (res >= 0)
-		return RESULT_SUCCESS;
-	else
-		return RESULT_FAILURE;
+	return (res >= 0) ? RESULT_SUCCESS : RESULT_FAILURE;
 }
 
 static int handle_saydatetime(struct ast_channel *chan, AGI *agi, int argc, char *argv[])
 {
 	int res=0;
-	long unixtime;
+	time_t unixtime;
 	char *format, *zone=NULL;
 	
 	if (argc < 4)
@@ -770,19 +773,15 @@ static int handle_saydatetime(struct ast_channel *chan, AGI *agi, int argc, char
 	if (argc > 5 && !ast_strlen_zero(argv[5]))
 		zone = argv[5];
 
-	if (sscanf(argv[2], "%ld", &unixtime) != 1)
+	if (ast_get_time_t(argv[2], &unixtime, 0))
 		return RESULT_SHOWUSAGE;
 
-	res = ast_say_date_with_format(chan, (time_t) unixtime, argv[3], chan->language, format, zone);
+	res = ast_say_date_with_format(chan, unixtime, argv[3], chan->language, format, zone);
 	if (res == 1)
 		return RESULT_SUCCESS;
 
 	fdprintf(agi->fd, "200 result=%d\n", res);
-
-	if (res >= 0)
-		return RESULT_SUCCESS;
-	else
-		return RESULT_FAILURE;
+	return (res >= 0) ? RESULT_SUCCESS : RESULT_FAILURE;
 }
 
 static int handle_sayphonetic(struct ast_channel *chan, AGI *agi, int argc, char *argv[])

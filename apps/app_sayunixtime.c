@@ -2,6 +2,7 @@
  * Asterisk -- An open source telephony toolkit.
  *
  * Copyright (c) 2003 Tilghman Lesher.  All rights reserved.
+ * Copyright (c) 2006 Digium, Inc.
  *
  * Tilghman Lesher <app_sayunixtime__200309@the-tilghman.com>
  *
@@ -40,7 +41,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
 #include "asterisk/say.h"
-
+#include "asterisk/app.h"
 
 static char *tdesc = "Say time";
 
@@ -72,53 +73,39 @@ LOCAL_USER_DECL;
 
 static int sayunixtime_exec(struct ast_channel *chan, void *data)
 {
-	int res=0;
+	AST_DECLARE_APP_ARGS(args,
+			     AST_APP_ARG(timeval);
+			     AST_APP_ARG(timezone);
+			     AST_APP_ARG(format);
+	);
+	char *parse;
+	int res = 0;
 	struct localuser *u;
-	char *s,*zone=NULL,*timec,*format;
 	time_t unixtime;
-	struct timeval tv;
 	
+	if (!data)
+		return 0;
+
+	if (!(parse = ast_strdupa(data)))
+		return -1;
+
 	LOCAL_USER_ADD(u);
 
-	tv = ast_tvnow();
-	unixtime = (time_t)tv.tv_sec;
+	args.format = "c";		/* default datetime */
 
-	if( !strcasecmp(chan->language, "da" ) ) {
-		format = "A dBY HMS";
-	} else if ( !strcasecmp(chan->language, "de" ) ) {
-		format = "A dBY HMS";
-	} else {
-		format = "ABdY 'digits/at' IMp";
-	} 
+	AST_STANDARD_APP_ARGS(args, parse);
 
-	if (data) {
-		s = data;
-		if ((s = ast_strdupa(s))) {
-			timec = strsep(&s,"|");
-			if ((timec) && (*timec != '\0')) {
-				long timein;
-				if (sscanf(timec,"%ld",&timein) == 1) {
-					unixtime = (time_t)timein;
-				}
-			}
-			if (s) {
-				zone = strsep(&s,"|");
-				if (zone && (*zone == '\0'))
-					zone = NULL;
-				if (s) {
-					format = s;
-				}
-			}
-		}
-	}
+	ast_get_time_t(args.timeval, &unixtime, time(NULL));
 
-	if (chan->_state != AST_STATE_UP) {
+	if (chan->_state != AST_STATE_UP)
 		res = ast_answer(chan);
-	}
+
 	if (!res)
-		res = ast_say_date_with_format(chan, unixtime, AST_DIGIT_ANY, chan->language, format, zone);
+		res = ast_say_date_with_format(chan, unixtime, AST_DIGIT_ANY,
+					       chan->language, args.format, args.timezone);
 
 	LOCAL_USER_REMOVE(u);
+
 	return res;
 }
 
