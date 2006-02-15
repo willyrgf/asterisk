@@ -40,6 +40,7 @@ extern char ast_config_AST_CTL_PERMISSIONS[AST_CONFIG_MAX_PATH];
 extern char ast_config_AST_CTL_OWNER[AST_CONFIG_MAX_PATH];
 extern char ast_config_AST_CTL_GROUP[AST_CONFIG_MAX_PATH];
 extern char ast_config_AST_CTL[AST_CONFIG_MAX_PATH];
+extern char ast_config_AST_SYSTEM_NAME[20];
 
 /* Provided by asterisk.c */
 int ast_set_priority(int);
@@ -63,7 +64,7 @@ void ast_channels_init(void);
 /* Provided by dnsmgr.c */
 int dnsmgr_init(void);
 void dnsmgr_start_refresh(void);
-void dnsmgr_reload(void);
+int dnsmgr_reload(void);
 
 /*!
  * \brief Register the version of a source code file with the core.
