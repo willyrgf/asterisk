@@ -150,6 +150,8 @@ struct chan_list {
 	int norxtone;
 	int notxtone; 
 
+	int incoming_early_audio;
+
 	int pipe[2];
 	char ast_rd_buf[4096];
 	struct ast_frame frame;
@@ -1210,6 +1212,8 @@ static int read_config(struct chan_list *ch, int orig) {
 	misdn_cfg_get( port, MISDN_CFG_TXGAIN, &bc->txgain, sizeof(int));
 	misdn_cfg_get( port, MISDN_CFG_RXGAIN, &bc->rxgain, sizeof(int));
 	
+	misdn_cfg_get( port, MISDN_CFG_INCOMING_EARLY_AUDIO, &ch->incoming_early_audio, sizeof(int));
+	
 	misdn_cfg_get( port, MISDN_CFG_SENDDTMF, &bc->send_dtmf, sizeof(int));
 
 	misdn_cfg_get( port, MISDN_CFG_NEED_MORE_INFOS, &bc->need_more_infos, sizeof(int));
@@ -1733,7 +1737,11 @@ static int misdn_indication(struct ast_channel *ast, int cond)
 				p->state=MISDN_ALERTING;
 				chan_misdn_log(1, p->bc->port, " --> * IND :\tringing pid:%d\n",p->bc?p->bc->pid:-1);
 				misdn_lib_send_event( p->bc, EVENT_ALERTING);
-				tone_indicate(p, TONE_ALERTING);
+				
+				if ( !p->bc->nt && (p->orginator==ORG_MISDN) && !p->incoming_early_audio ) 
+					chan_misdn_log(1,p->bc->port, " --> incoming_early_audio off\n");
+				 else 
+					 tone_indicate(p, TONE_ALERTING);
 				chan_misdn_log(1, p->bc->port, " --> * SEND: State Ring pid:%d\n",p->bc?p->bc->pid:-1);
 				ast_setstate(ast,AST_STATE_RINGING);
 		}
@@ -2306,8 +2314,9 @@ static struct ast_channel *misdn_request(const char *type, int format, void *dat
 					
 					if (!strcasecmp(cfg_group, group)) {
 						int port_up;
-					
-						port_up = misdn_lib_port_up(port);
+						int check;
+						misdn_cfg_get(port, MISDN_CFG_PMP_L1_CHECK, &check, sizeof(int));
+						port_up = misdn_lib_port_up(port, check);
 						
 						if ( port_up )	{
 							newbc = misdn_lib_get_free_bc(port, robin_channel);
@@ -2333,12 +2342,14 @@ static struct ast_channel *misdn_request(const char *type, int format, void *dat
 				 port=misdn_cfg_get_next_port(port)) {
 				
 				misdn_cfg_get( port, MISDN_CFG_GROUPNAME, cfg_group, BUFFERSIZE);
-				
+
+				chan_misdn_log(3,port, "Group [%s] Port [%d]\n", group, port);
 				if (!strcasecmp(cfg_group, group)) {
 					int port_up;
+					int check;
+					misdn_cfg_get(port, MISDN_CFG_PMP_L1_CHECK, &check, sizeof(int));
+					port_up = misdn_lib_port_up(port, check);
 					
-					port_up = misdn_lib_port_up(port);
-
 					chan_misdn_log(4, port, "portup:%d\n", port_up);
 					
 					if ( port_up )	{
@@ -2857,7 +2868,11 @@ static void do_immediate_setup(struct misdn_bchannel *bc,struct chan_list *ch , 
 			ret = misdn_lib_send_event(bc, EVENT_PROCEEDING );
 		}
 	}
-	tone_indicate(ch,TONE_DIAL);  
+
+	if ( !bc->nt && (ch->orginator==ORG_MISDN) && !ch->incoming_early_audio ) 
+		chan_misdn_log(1,bc->port, " --> incoming_early_audio off\n");
+	 else 
+		tone_indicate(ch,TONE_DIAL);  
   
 	chan_misdn_log(1, bc->port, "* Starting Ast ctx:%s dad:%s oad:%s with 's' extension\n", ast->context, ast->exten, AST_CID_P(ast));
   

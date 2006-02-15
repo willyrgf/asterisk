@@ -26,6 +26,7 @@ enum misdn_cfg_elements {
 	MISDN_CFG_RXGAIN,              /* int */
 	MISDN_CFG_TXGAIN,              /* int */
 	MISDN_CFG_TE_CHOOSE_CHANNEL,   /* int (bool) */
+	MISDN_CFG_PMP_L1_CHECK,        /* int (bool) */
 	MISDN_CFG_CONTEXT,             /* char[] */
 	MISDN_CFG_LANGUAGE,            /* char[] */
 	MISDN_CFG_MUSICCLASS,            /* char[] */
@@ -42,6 +43,7 @@ enum misdn_cfg_elements {
 	MISDN_CFG_SENDDTMF,           /* int (bool) */
 	MISDN_CFG_HOLD_ALLOWED,        /* int (bool) */
 	MISDN_CFG_EARLY_BCONNECT,      /* int (bool) */
+	MISDN_CFG_INCOMING_EARLY_AUDIO,      /* int (bool) */
 	MISDN_CFG_ECHOCANCEL,          /* int */
 	MISDN_CFG_ECHOCANCELWHENBRIDGED,  /* int (bool) */
 	MISDN_CFG_ECHOTRAINING,        /* int (bool) */
