@@ -518,6 +518,11 @@ static int cli_aum_show_user(int fd, int argc, char *argv[])
 	ast_cli(fd, " Language:       %s\n", user->language);
 	ast_cli(fd, " Mailbox:        %s\n", user->mailbox);
 	ast_cli(fd, " ACL:            %s\n", (user->acl?"Yes (IP address restriction)":"No"));
+	if (user->manager_write_perm || user->manager_read_perm) {
+		char permbuf[120];
+		ast_cli(fd, " Manager write:  %s\n", authority_to_str(user->manager_write_perm, permbuf, sizeof(permbuf)));
+		ast_cli(fd, " Manager read:  %s\n", authority_to_str(user->manager_read_perm, permbuf, sizeof(permbuf)));
+	}
 	if (user->chanvars) {
 		struct ast_variable *v;
  		ast_cli(fd, "  Variables    :\n");
@@ -582,6 +587,11 @@ static int cli_aum_show_group(int fd, int argc, char *argv[])
 	ast_cli(fd, " Music class:    %s\n", group->musicclass);
 	ast_cli(fd, " Language:       %s\n", group->language);
 	ast_cli(fd, " ACL:            %s\n", (group->acl?"Yes (IP address restriction)":"No"));
+	if (group->manager_write_perm || group->manager_read_perm) {
+		char permbuf[120];
+		ast_cli(fd, " Manager write:  %s\n", authority_to_str(group->manager_write_perm, permbuf, sizeof(permbuf)));
+		ast_cli(fd, " Manager read:  %s\n", authority_to_str(group->manager_read_perm, permbuf, sizeof(permbuf)));
+	}
 	if (group->chanvars) {
 		struct ast_variable *v;
  		ast_cli(fd, "  Variables    :\n");
@@ -869,7 +879,8 @@ static struct aum_config_struct aum_config[] = {
 	{ AUM_CNF_CID,		"callerid" 	,AUM_CONFOBJ_USER },
 	{ AUM_CNF_CALLERPRES,	"callerpres" 	,AUM_CONFOBJ_USER & AUM_CONFOBJ_GROUP },
 	{ AUM_CNF_ACCOUNTCODE,	"accountcode" 	,AUM_CONFOBJ_USER & AUM_CONFOBJ_GROUP },
-	{ AUM_CNF_MANAGERACCESS,"managerperm" 	,AUM_CONFOBJ_USER & AUM_CONFOBJ_GROUP },
+	{ AUM_CNF_MANAGER_RACCESS,"managerread" ,AUM_CONFOBJ_USER & AUM_CONFOBJ_GROUP },
+	{ AUM_CNF_MANAGER_WACCESS,"managerwrite",AUM_CONFOBJ_USER & AUM_CONFOBJ_GROUP },
 	{ AUM_CNF_SECRET,	"secret" 	,AUM_CONFOBJ_USER },
 	{ AUM_CNF_IAX2KEY,	"iax2key" 	,AUM_CONFOBJ_USER },
 	{ AUM_CNF_MUSICCLASS,	"musicclass" 	,AUM_CONFOBJ_USER & AUM_CONFOBJ_GROUP },
@@ -1219,12 +1230,16 @@ static struct aum_user *aum_build_user(char *username, struct ast_variable *x, i
 				ast_log(LOG_ERROR, "Address %s not added for user %s\n", x->value, username);
 			break;
 		case AUM_CNF_VMAILBOX:
+			if (!ast_strlen_zero(x->value))
+				ast_copy_string(user->mailbox, x->value, sizeof(user->mailbox));
 			break;
 		case AUM_CNF_GROUP:
 			if (add_user_to_group(find_aum_group_by_name(x->value), user) < 0)
 				ast_log(LOG_ERROR, "Could not add user %s to group %s\n", user->name, x->value);
 			break;
-		case AUM_CNF_CALLBACKEXT:
+		case AUM_CNF_CALLBACKEXT:	/* ??????? Which field ?????? */
+			if (!ast_strlen_zero(x->value))
+				ast_copy_string(user->default_exten, x->value, sizeof(user->default_exten));
 			break;
 		case AUM_CNF_DEFCONTEXT:
 		case AUM_CNF_SUBSCRIBECONTEXT:
@@ -1260,7 +1275,11 @@ static struct aum_user *aum_build_user(char *username, struct ast_variable *x, i
 		case AUM_CNF_ACCOUNTCODE:
 			ast_copy_string(user->accountcode, x->value, sizeof(user->accountcode));
 			break;
-		case AUM_CNF_MANAGERACCESS:
+		case AUM_CNF_MANAGER_WACCESS:
+			user->manager_write_perm = get_perm(x->value);
+			break;
+		case AUM_CNF_MANAGER_RACCESS:
+			user->manager_read_perm = get_perm(x->value);
 			break;
 		case AUM_CNF_SECRET:
 			ast_copy_string(user->secret, x->value, sizeof(user->secret));
@@ -1296,7 +1315,7 @@ static struct aum_user *aum_build_user(char *username, struct ast_variable *x, i
 			break;
 		case AUM_CNF_PERMIT:
 		case AUM_CNF_DENY:
-			// ACL
+			/* ACL */
 			user->acl = ast_append_ha(x->name, x->value, user->acl);
 			break;
 		case AUM_CNF_NUMID:
@@ -1383,15 +1402,41 @@ static struct aum_group *aum_build_group(char *groupname, struct ast_variable *x
 		case AUM_CNF_SUBSCRIBECONTEXT:
 		case AUM_CNF_DISACONTEXT:
 		case AUM_CNF_PARKING:
-			break;
 			context = build_context(AUM_CONTEXT_NONE, option, x->value);
 			if (context)
 				AST_LIST_INSERT_TAIL(&group->contexts, context, list);
 			else
 				ast_log(LOG_ERROR, "Context %s not added for group %s\n", x->value, groupname);
 			break;
+		case AUM_CNF_MANAGER_WACCESS:
+			group->manager_write_perm = get_perm(x->value);
+			break;
+		case AUM_CNF_MANAGER_RACCESS:
+			group->manager_read_perm = get_perm(x->value);
+			break;
+		case AUM_CNF_MUSICCLASS:
+			ast_copy_string(group->musicclass, x->value, sizeof(group->musicclass));
+			break;
+		case AUM_CNF_LANGUAGE:
+			ast_copy_string(group->language, x->value, sizeof(group->language));
+			break;
 		case AUM_CNF_NOT_FOUND:
 			ast_log(LOG_NOTICE, "Configuration label unknown in AUM configuration: %s\n", x->name);
+			break;
+		case AUM_CNF_CALLGROUP:
+			group->callgroup = ast_get_group(x->value);
+			break;
+		case AUM_CNF_PICKUPGROUP:
+			group->pickupgroup = ast_get_group(x->value);
+			break;
+		case AUM_CNF_CHANVAR:
+			/* Set peer channel variable */
+			group->chanvars = add_variable_to_list(group->chanvars, x->value, NULL);
+			break;
+		case AUM_CNF_PERMIT:
+		case AUM_CNF_DENY:
+			/* ACL */
+			group->acl = ast_append_ha(x->name, x->value, group->acl);
 			break;
 		case AUM_CNF_NOT_VALID_FOR_OBJECT:
 			ast_log(LOG_NOTICE, "Configuration label not valid for group objects in AUM configuration: %s\n", x->name);

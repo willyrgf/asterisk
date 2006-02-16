@@ -132,7 +132,8 @@ enum aum_config_options {
 	AUM_CNF_CID,			/*!< Caller ID */
 	AUM_CNF_CALLERPRES,		/*!< Caller ID presentation when making calls */
 	AUM_CNF_ACCOUNTCODE,		/*!< Account code for this user */
-	AUM_CNF_MANAGERACCESS,		/*!< Manager access something */
+	AUM_CNF_MANAGER_WACCESS,	/*!< Manager write access */
+	AUM_CNF_MANAGER_RACCESS,	/*!< Manager read access */
 	AUM_CNF_SECRET,			/*!< Secret (password) */
 	AUM_CNF_PIN,			/*!< Pin code for authorization by DTMF */
 	AUM_CNF_CALLGROUP,		/*!< Calling group */
@@ -314,6 +315,7 @@ struct aum_user {
 	char secret[80];		/*!< Secret for this user */
 	char ldapdn[180];		/*!< LDAP DN */
 	char registrar[20];		/*!< Who added this object? */
+	char timezone[80];		/*!< Time zone (voicemail.conf) */
 	ast_group_t callgroup;			/*!< Calling group for calls */
 	ast_group_t pickupgroup;		/*!< Pickup group */
 	struct ast_variable *chanvars;	/*!< Default channel variables */
@@ -324,7 +326,8 @@ struct aum_user {
 	struct aum_devicelist devices;		/*!< Linked list of devices active for this user */
 	struct ast_ha	*acl;			/*!< Access control list for user */
 						/*!< The highest priority is used as primary group for setting default values */
-	int managerperm;			/*!< If sat, this user can log in to manager with these permissions */
+	int manager_read_perm;			/*!< If set, this user can log in to manager with these permissions */
+	int manager_write_perm;			/*!< If set, this user can log in to manager with these permissions */
 };
 
 /*! \brief the AUM group definition */
@@ -337,11 +340,13 @@ struct aum_group {
 	char musicclass[MAX_MUSICCLASS];	/*!< Default musicclass for this group */
 	ast_group_t callgroup;			/*!< Calling group for calls */
 	ast_group_t pickupgroup;		/*!< Pickup group */
-	int managerperm;			/*!< This group's permissions in manager */
+	int manager_read_perm;			/*!< If set, this group can log in to manager with these permissions */
+	int manager_write_perm;			/*!< If set, this group can log in to manager with these permissions */
 	struct aum_user_contextlist contexts;	/*!< Linked list of contexts this group use */
 	struct ast_variable *chanvars;
 	struct ast_ha	*acl;			/*!< Access control list for user */
 	char *description;			/*!< Description */
+	char timezone[80];		/*!< Time zone (voicemail.conf) */
 	struct aum_user_grouplist members;	/*!< Members list */
 	char registrar[20];		/*!< Who added this object? */
 };

@@ -142,7 +142,7 @@ int ast_carefulwrite(int fd, char *s, int len, int timeoutms)
 }
 
 /*! authority_to_str: Convert authority code to string with serveral options */
-static char *authority_to_str(int authority, char *res, int reslen)
+char *authority_to_str(int authority, char *res, int reslen)
 {
 	int running_total = 0, i;
 	memset(res, 0, reslen);
@@ -417,7 +417,7 @@ static int ast_instring(char *bigstr, char *smallstr, char delim)
 	return 0;
 }
 
-static int get_perm(char *instr)
+int get_perm(char *instr)
 {
 	int x = 0, ret = 0;
 

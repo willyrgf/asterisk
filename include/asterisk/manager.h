@@ -169,4 +169,12 @@ extern int init_manager(void);
 /*! Called by Asterisk initialization */
 extern int reload_manager(void);
 
+/* \brief Convert permission string to integer 
+	\param instr Manager permission string
+*/
+int get_perm(char *instr);
+
+/*! \brief Convert authority code to string with serveral options */
+char *authority_to_str(int authority, char *res, int reslen);
+
 #endif /* _ASTERISK_MANAGER_H */
