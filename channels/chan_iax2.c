@@ -104,6 +104,10 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
    multithreaded mode. */
 #define SCHED_MULTITHREADED
 
+/* Define DEBUG_SCHED_MULTITHREADED to keep track of where each
+   thread is actually doing. */
+#define DEBUG_SCHED_MULTITHREAD
+
 #ifdef NEWJB
 #include "../jitterbuf.h"
 #endif
@@ -680,6 +684,9 @@ struct iax2_thread {
 	void (*schedfunc)(void *);
 	void *scheddata;
 #endif
+#ifdef DEBUG_SCHED_MULTITHREAD
+	char curfunc[80];
+#endif	
 	int actions;
 	int halt;
 	pthread_t threadid;
@@ -816,7 +823,7 @@ static struct iax2_thread *find_idle_thread(void)
 }
 
 #ifdef SCHED_MULTITHREADED
-static int schedule_action(void (*func)(void *data), void *data)
+static int __schedule_action(void (*func)(void *data), void *data, const char *funcname)
 {
 	struct iax2_thread *thread;
 	static time_t lasterror;
@@ -826,6 +833,9 @@ static int schedule_action(void (*func)(void *data), void *data)
 		thread->schedfunc = func;
 		thread->scheddata = data;
 		thread->iostate = IAX_IOSTATE_SCHEDREADY;
+#ifdef DEBUG_SCHED_MULTITHREAD
+		ast_copy_string(thread->curfunc, funcname, sizeof(thread->curfunc));
+#endif
 		pthread_kill(thread->threadid, SIGURG);
 		return 0;
 	}
@@ -835,6 +845,7 @@ static int schedule_action(void (*func)(void *data), void *data)
 	lasterror = t;
 	return -1;
 }
+#define schedule_action(func, data) __schedule_action(func, data, __PRETTY_FUNCTION__)
 #endif
 
 static void __send_ping(void *data)
@@ -4415,17 +4426,33 @@ static int iax2_show_threads(int fd, int argc, char *argv[])
 	ast_cli(fd, "IAX2 Thread Information\n");
 	time(&t);
 	ast_cli(fd, "Idle Threads:\n");
+#ifdef DEBUG_SCHED_MULTITHREAD
 	ASTOBJ_CONTAINER_TRAVERSE(&idlelist, 1, {
-		ast_cli(fd, "Thread %d: state %d, last update: %d seconds ago, %d actions handled, refcnt = %d\n", 
+		ast_cli(fd, "Thread %d: state=%d, update=%d, actions=%d, refcnt=%d, func ='%s'\n", 
+			iterator->threadnum, iterator->iostate, (int)(t - iterator->checktime), iterator->actions, iterator->refcount, iterator->curfunc);
+		threadcount++;
+	});
+#else
+	ASTOBJ_CONTAINER_TRAVERSE(&idlelist, 1, {
+		ast_cli(fd, "Thread %d: state=%d, update=%d, actions=%d, refcnt=%d\n", 
 			iterator->threadnum, iterator->iostate, (int)(t - iterator->checktime), iterator->actions, iterator->refcount);
 		threadcount++;
 	});
+#endif
 	ast_cli(fd, "Active Threads:\n");
+#ifdef DEBUG_SCHED_MULTITHREAD
 	ASTOBJ_CONTAINER_TRAVERSE(&activelist, 1, {
-		ast_cli(fd, "Thread %d: state %d, last update: %d seconds ago, %d actions handled, refcnt = %d\n", 
+		ast_cli(fd, "Thread %d: state=%d, update=%d, actions=%d, refcnt=%d, func ='%s'\n", 
+			iterator->threadnum, iterator->iostate, (int)(t - iterator->checktime), iterator->actions, iterator->refcount, iterator->curfunc);
+		threadcount++;
+	});
+#else
+	ASTOBJ_CONTAINER_TRAVERSE(&activelist, 1, {
+		ast_cli(fd, "Thread %d: state=%d, update=%d, actions=%d, refcnt=%d\n", 
 			iterator->threadnum, iterator->iostate, (int)(t - iterator->checktime), iterator->actions, iterator->refcount);
 		threadcount++;
 	});
+#endif
 	ast_cli(fd, "%d of %d threads accounted for\n", threadcount, iaxthreadcount);
 	return RESULT_SUCCESS;
 }
@@ -5999,7 +6026,6 @@ static void __auth_reject(void *nothing)
 	struct iax_ie_data ied;
 	ast_mutex_lock(&iaxsl[callno]);
 	if (iaxs[callno]) {
-		iaxs[callno]->authid = -1;
 		memset(&ied, 0, sizeof(ied));
 		if (iaxs[callno]->authfail == IAX_COMMAND_REGREJ) {
 			iax_ie_append_str(&ied, IAX_IE_CAUSE, "Registration Refused");
@@ -6015,6 +6041,12 @@ static void __auth_reject(void *nothing)
 
 static int auth_reject(void *data)
 {
+	int callno = (int)(long)(data);
+	ast_mutex_lock(&iaxsl[callno]);
+	if (iaxs[callno]) {
+		iaxs[callno]->authid = -1;
+	}
+	ast_mutex_unlock(&iaxsl[callno]);
 #ifdef SCHED_MULTITHREADED
 	if (schedule_action(__auth_reject, data))
 #endif		
@@ -6047,7 +6079,6 @@ static void __auto_hangup(void *nothing)
 	struct iax_ie_data ied;
 	ast_mutex_lock(&iaxsl[callno]);
 	if (iaxs[callno]) {
-		iaxs[callno]->autoid = -1;
 		memset(&ied, 0, sizeof(ied));
 		iax_ie_append_str(&ied, IAX_IE_CAUSE, "Timeout");
 		iax_ie_append_byte(&ied, IAX_IE_CAUSECODE, AST_CAUSE_NO_USER_RESPONSE);
@@ -6058,6 +6089,12 @@ static void __auto_hangup(void *nothing)
 
 static int auto_hangup(void *data)
 {
+	int callno = (int)(long)(data);
+	ast_mutex_lock(&iaxsl[callno]);
+	if (iaxs[callno]) {
+		iaxs[callno]->autoid = -1;
+	}
+	ast_mutex_unlock(&iaxsl[callno]);
 #ifdef SCHED_MULTITHREADED
 	if (schedule_action(__auto_hangup, data))
 #endif		
@@ -6102,12 +6139,13 @@ static void vnak_retransmit(int callno, int last)
 static void __iax2_poke_peer_s(void *data)
 {
 	struct iax2_peer *peer = data;
-	peer->pokeexpire = -1;
 	iax2_poke_peer(peer, 0);
 }
 
 static int iax2_poke_peer_s(void *data)
 {
+	struct iax2_peer *peer = data;
+	peer->pokeexpire = -1;
 #ifdef SCHED_MULTITHREADED
 	if (schedule_action(__iax2_poke_peer_s, data))
 #endif		
@@ -6467,6 +6505,9 @@ static int socket_read(int *id, int fd, short events, void *cbdata)
 		}
 		/* Mark as ready and send on its way */
 		thread->iostate = IAX_IOSTATE_READY;
+#ifdef DEBUG_SCHED_MULTITHREAD
+		ast_copy_string(thread->curfunc, "socket_process", sizeof(thread->curfunc));
+#endif
 		pthread_kill(thread->threadid, SIGURG);
 	} else {
 		time(&t);
@@ -7874,6 +7915,9 @@ static void *iax2_process_thread(void *data)
 		}
 		time(&thread->checktime);
 		thread->iostate = IAX_IOSTATE_IDLE;
+#ifdef DEBUG_SCHED_MULTITHREAD
+		thread->curfunc[0]='\0';
+#endif		
 		ASTOBJ_CONTAINER_UNLINK(&activelist, thread);
 		ASTOBJ_CONTAINER_LINK_END(&idlelist, thread);
 		/* Make a copy so we don't lose thread, but if 
@@ -8041,7 +8085,6 @@ static int iax2_prov_cmd(int fd, int argc, char *argv[])
 static void __iax2_poke_noanswer(void *data)
 {
 	struct iax2_peer *peer = data;
-	peer->pokeexpire = -1;
 	if (peer->lastms > -1) {
 		ast_log(LOG_NOTICE, "Peer '%s' is now UNREACHABLE! Time: %d\n", peer->name, peer->lastms);
 		manager_event(EVENT_FLAG_SYSTEM, "PeerStatus", "Peer: IAX2/%s\r\nPeerStatus: Unreachable\r\nTime: %d\r\n", peer->name, peer->lastms);
@@ -8057,6 +8100,8 @@ static void __iax2_poke_noanswer(void *data)
 
 static int iax2_poke_noanswer(void *data)
 {
+	struct iax2_peer *peer = data;
+	peer->pokeexpire = -1;
 #ifdef SCHED_MULTITHREADED
 	if (schedule_action(__iax2_poke_noanswer, data))
 #endif		
