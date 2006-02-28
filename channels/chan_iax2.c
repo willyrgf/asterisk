@@ -2078,7 +2078,7 @@ static int iax2_show_peer(int fd, int argc, char *argv[])
 		ast_cli(fd, "  Status       : ");
 		peer_status(peer, status, sizeof(status));	
 		ast_cli(fd, "%s\n",status);
-		ast_cli(fd, "  Qualify      : every %d when OK, every %d when UNREACHABLE (sample smoothing %s)\n", peer->pokefreqok, peer->pokefreqnotok, (peer->smoothing == 1) ? "On" : "Off");
+		ast_cli(fd, "  Qualify      : every %dms when OK, every %dms when UNREACHABLE (sample smoothing %s)\n", peer->pokefreqok, peer->pokefreqnotok, peer->smoothing ? "On" : "Off");
 		ast_cli(fd,"\n");
 		if (ast_test_flag(peer, IAX_TEMPONLY))
 			destroy_peer(peer);
@@ -6486,9 +6486,10 @@ static int socket_read(int *id, int fd, short events, void *cbdata)
 {
 	struct iax2_thread *thread;
 	socklen_t len;
-	thread = find_idle_thread();
 	time_t t;
 	static time_t last_errtime=0;
+
+	thread = find_idle_thread();
 	if (thread) {
 		len = sizeof(thread->iosin);
 		thread->iofd = fd;
