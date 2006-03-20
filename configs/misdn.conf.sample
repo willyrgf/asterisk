@@ -31,15 +31,6 @@ debug=0
 ;
 ;tracefile=/var/log/misdn.trace
 
-; single call trace files
-; set to true if you want to have them
-; they depend on debug level
-;
-; default values: trace_calls : false
-;                 trace_dir   : /var/log/
-;
-trace_calls=false
-trace_dir=/var/log/
 
 ; set to yes if you want mISDN_dsp to bridge the calls in HW
 ;
@@ -295,6 +286,12 @@ jitterbuffer=4000
 ;
 jitterbuffer_upper_threshold=0
 
+
+;
+; change this to yes, if you want to bridge a mISDN data channel to 
+; another channel type or to an application.
+;
+hdlc=no
 
 [intern]
 ; define your ports, e.g. 1,2 (depends on mISDN-driver loading order) 
