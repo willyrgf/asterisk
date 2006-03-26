@@ -16,6 +16,14 @@
  * at the top of the source tree.
  */
 
+/*!
+ * \file 
+ * \brief http server
+ *
+ * This program implements a tiny http server supporting the "get" method
+ * only and was inspired by micro-httpd by Jef Poskanzer 
+ */
+
 #include <sys/types.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -30,16 +38,14 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
-#include <asterisk/cli.h>
-#include <asterisk/http.h>
-#include <asterisk/utils.h>
-#include <asterisk/strings.h>
+
+#include "asterisk/cli.h"
+#include "asterisk/http.h"
+#include "asterisk/utils.h"
+#include "asterisk/strings.h"
 
 #define MAX_PREFIX 80
 #define DEFAULT_PREFIX "asterisk"
-
-/* This program implements a tiny http server supporting the "get" method
-   only and was inspired by micro-httpd by Jef Poskanzer */
 
 struct ast_http_server_instance {
 	FILE *f;
@@ -291,23 +297,21 @@ static void *http_root(void *data)
 				ast_log(LOG_WARNING, "Accept failed: %s\n", strerror(errno));
 			continue;
 		}
-		ser = calloc(1, sizeof(*ser));
-		if (ser) {
-			ser->fd = fd;
-			if ((ser->f = fdopen(ser->fd, "w+"))) {
-				if (ast_pthread_create(&launched, NULL, ast_httpd_helper_thread, ser)) {
-					ast_log(LOG_WARNING, "Unable to launch helper thread: %s\n", strerror(errno));
-					fclose(ser->f);
-					free(ser);
-				}
-			} else {
-				ast_log(LOG_WARNING, "fdopen failed!\n");
-				close(ser->fd);
+		if (!(ser = ast_calloc(1, sizeof(*ser)))) {
+			close(fd);
+			continue;
+		}
+		ser->fd = fd;
+		if ((ser->f = fdopen(ser->fd, "w+"))) {
+			if (ast_pthread_create(&launched, NULL, ast_httpd_helper_thread, ser)) {
+				ast_log(LOG_WARNING, "Unable to launch helper thread: %s\n", strerror(errno));
+				fclose(ser->f);
 				free(ser);
 			}
 		} else {
-			ast_log(LOG_WARNING, "Out of memory!\n");
-			close(fd);
+			ast_log(LOG_WARNING, "fdopen failed!\n");
+			close(ser->fd);
+			free(ser);
 		}
 	}
 	return NULL;
