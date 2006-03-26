@@ -1,7 +1,7 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 1999 - 2005, Digium, Inc.
+ * Copyright (C) 1999 - 2006, Digium, Inc.
  *
  * Mark Spencer <markster@digium.com>
  *
@@ -107,6 +107,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/pbx.h"
 #include "asterisk/enum.h"
 #include "asterisk/rtp.h"
+#include "asterisk/http.h"
 #if defined(T38_SUPPORT)
 #include "asterisk/udptl.h"
 #endif
@@ -882,11 +883,11 @@ static void quit_handler(int num, int nice, int safeshutdown, int restart)
 	if (ast_socket > -1) {
 		close(ast_socket);
 		ast_socket = -1;
+		unlink(ast_config_AST_SOCKET);
+		pthread_cancel(lthread);
 	}
 	if (ast_consock > -1)
 		close(ast_consock);
-	if (ast_socket > -1)
-		unlink(ast_config_AST_SOCKET);
 	if (!ast_opt_remote)
 		unlink(ast_config_AST_PID);
 	printf(term_quit());
@@ -1847,7 +1848,8 @@ static int show_cli_help(void) {
 	return 0;
 }
 
-static void ast_readconfig(void) {
+static void ast_readconfig(void) 
+{
 	struct ast_config *cfg;
 	struct ast_variable *v;
 	char *config = AST_CONFIG_FILE;
@@ -2321,6 +2323,7 @@ int main(int argc, char *argv[])
 		printf(term_quit());
 		exit(1);
 	}
+	ast_http_init();
 	ast_channels_init();
 	if (init_manager()) {
 		printf(term_quit());
