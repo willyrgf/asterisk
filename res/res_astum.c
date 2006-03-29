@@ -4,7 +4,7 @@
  * 
  * ASTUM - Asterisk User Management Resource
  *
- * Copyright (C) 2005, Edvina AB, Sollentuna, Sweden.
+ * Copyright (C) 2005-2006, Edvina AB, Sollentuna, Sweden.
  *
  * Olle E. Johansson <oej@edvina.net>
  *
@@ -39,7 +39,11 @@
 #include <sys/time.h>
 #include <sys/signal.h>
 #include <netinet/in.h>
+
+#ifdef STRING_I18N		/* This part is not done yet */
+				/* For supporting string conversions we need libiconv dependencies */
 #include <iconv.h>	/* String conversion routines */
+#endif
 
 #include "asterisk.h"
 
@@ -61,6 +65,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 1.19 $")
 #include "asterisk/manager.h"
 #include "asterisk/utils.h"
 #include "asterisk/linkedlists.h"
+#include "asterisk/localtime.h"
 #include "asterisk/astum.h"
 
 /*! AUM user lock */
@@ -258,17 +263,19 @@ char *aum_config_file = "astum.conf";
 int aum_debug = 0;
 
 /* Counters */
-int aum_static_users;		/*!< Number of in-memory users */
-int aum_real_users;		/*!< Number of active realtime users */
-int aum_real_groups;		/*!< Number of active realtime groups */
-int aum_static_groups;		/*!< Number of in-memory groups */
+int aum_static_users;			/*!< Number of in-memory users */
+int aum_real_users;			/*!< Number of active realtime users */
+int aum_real_groups;			/*!< Number of active realtime groups */
+int aum_static_groups;			/*!< Number of in-memory groups */
 int aum_real_groups_enabled = 0;	/*!< TRUE If realtime groups are enabled */
 int aum_real_users_enabled = 0;		/*!< TRUE if realtime users are enabled */
 
 long aum_memory_used = 0;		/*!< Used memory for the AUM module */
 
+#ifdef STRING_I18N
 iconv_t	ichandler_utf8_to_iso88591;	/*!< libiconv handler from utf8 to iso8859-1 */
 iconv_t	ichandler_iso88591_to_utf8;	/*!< libiconv handler from iso8859- to utf8 */
+#endif
 
 /*! \brief the AUM Group list */
 static struct s_aum_grouplist {
@@ -385,7 +392,7 @@ static int cli_aum_show_stats(int fd, int argc, char *argv[])
 	if (aum_real_groups_enabled)
 		ast_cli(fd, "  Groups - realtime:     %-10.10d\n", aum_real_groups);
 	if (aum_real_users_enabled)
-		ast_cli(fd, "  Realtime cache:        %d objects (%-10.10d kb) %d %% full\n", aum_usercache_count, (aum_usercache_count * (sizeof(struct aum_user) + sizeof(struct aum_usercache_struct)) / 1000), (int) (aum_usercache_count / aum_usercache_max * 100 ) );
+		ast_cli(fd, "  Realtime cache:        %d objects (%-10.10d kb) %d %% full\n", aum_usercache_count, (int) (aum_usercache_count * (sizeof(struct aum_user) + sizeof(struct aum_usercache_struct)) / 1000), (int) (aum_usercache_count / aum_usercache_max * 100 ) );
 	ast_cli(fd, "\n\n");
 	
 	return RESULT_SUCCESS;
@@ -450,7 +457,7 @@ static int cli_aum_load_rtuser(int fd, int argc, char *argv[])
 		return RESULT_SUCCESS;
 	}
 	ast_cli(fd, "* Userid %s loaded in realtime cache. \n", user->name);
-	ast_cli(fd, "  Realtime cache:        %d objects (%-10.10d kb) %d %% full\n", aum_usercache_count, (aum_usercache_count * (sizeof(struct aum_user) + sizeof(struct aum_usercache_struct)) / 1000), (int) (aum_usercache_count / aum_usercache_max * 100 ) );
+	ast_cli(fd, "  Realtime cache:        %d objects (%-10.10d kb) %d %% full\n", aum_usercache_count, (int) (aum_usercache_count * (sizeof(struct aum_user) + sizeof(struct aum_usercache_struct)) / 1000), (int) (aum_usercache_count / aum_usercache_max * 100 ) );
 	ast_cli(fd, "\n");
 
 	return RESULT_SUCCESS;
@@ -470,6 +477,9 @@ static int cli_aum_show_user(int fd, int argc, char *argv[])
 	struct aum_context *context;
 	struct aum_address *addr;
 	struct aum_user *user;
+	struct timeval tv;
+	struct tm tm;
+	
 
 	if (argc != 4)
 		return RESULT_SHOWUSAGE;
@@ -480,6 +490,7 @@ static int cli_aum_show_user(int fd, int argc, char *argv[])
 		ast_cli(fd, "- AUM user %s not found\n", argv[3]);
 		return RESULT_SUCCESS;
 	}
+
 	ast_cli(fd, "* Userid:        %s\n", user->name);
 
 	if (ast_test_flag(user, AUM_USER_FLAG_REALTIME))
@@ -508,15 +519,22 @@ static int cli_aum_show_user(int fd, int argc, char *argv[])
 	AST_LIST_TRAVERSE(&user->contexts, context, list) {
 		ast_cli(fd, " %s Context : %s\n", context_type2str(context->type), context->context);
 	};
+	if (!ast_strlen_zero(user->ldapdn))
+		ast_cli(fd, "  LDAP dn:       %s\n", user->ldapdn);
 	ast_cli(fd, "  Callgroup:     ");
 	print_group(fd, user->callgroup, 0);
 	ast_cli(fd, "  Pickupgroup:   ");
 	print_group(fd, user->pickupgroup, 0);
+	ast_cli(fd, " Channel group : %s\n", user->channelgroup);
 	ast_cli(fd, " Numeric ID :    %s\n", user->numuserid);
 	ast_cli(fd, " Secret :        %s\n", !ast_strlen_zero(user->secret) ? "<set>" : "<not set>");
 	ast_cli(fd, " Music class:    %s\n", user->musicclass);
 	ast_cli(fd, " Language:       %s\n", user->language);
-	ast_cli(fd, " Mailbox:        %s\n", user->mailbox);
+	if (!ast_strlen_zero(user->timezone)) {
+		gettimeofday(&tv, NULL);
+		ast_localtime(&tv.tv_sec, &tm, user->timezone);
+		ast_cli(fd, " Time zone:       %s (Current time: %02d:%02d\n", user->timezone, tm.tm_hour, tm.tm_min);
+	}
 	ast_cli(fd, " ACL:            %s\n", (user->acl?"Yes (IP address restriction)":"No"));
 	if (user->manager_write_perm || user->manager_read_perm) {
 		char permbuf[120];
@@ -586,6 +604,7 @@ static int cli_aum_show_group(int fd, int argc, char *argv[])
 	print_group(fd, group->pickupgroup, 0);
 	ast_cli(fd, " Music class:    %s\n", group->musicclass);
 	ast_cli(fd, " Language:       %s\n", group->language);
+	ast_cli(fd, " Timezone:       %s\n", group->timezone);
 	ast_cli(fd, " ACL:            %s\n", (group->acl?"Yes (IP address restriction)":"No"));
 	if (group->manager_write_perm || group->manager_read_perm) {
 		char permbuf[120];
@@ -719,6 +738,17 @@ static char *func_aumuser_read(struct ast_channel *chan, char *cmd, char *data, 
 		 res = user->cid_num;
 	} else if (!strcasecmp(param, "cidname")) {
 		 res = user->cid_name;
+	} else if (!strcasecmp(param, "channelgroup")) {
+		 res = user->channelgroup;
+	} else if (!strcasecmp(param, "timezone")) {
+		res = user->timezone;
+	} else if (!strcasecmp(param, "currenttime")) {
+		struct tm tm;
+		struct timeval tv;
+
+		gettimeofday(&tv, NULL);
+		ast_localtime(&tv.tv_sec, &tm, user->timezone);
+		snprintf(buf, sizeof(buf), "%02d:%02d:%02d", tm.tm_hour, tm.tm_min, tm.tm_sec);
 	} else if (!strcasecmp(param, "name")) {
 		 snprintf(buf, sizeof(buf), "%s %s", user->first_name, user->last_name);
 	} else if (!strcasecmp(param, "vmbox")) {
@@ -740,26 +770,45 @@ struct ast_custom_function aum_user_function = {
 	.syntax = "AUM-USER(<userid>,<param>)",
 	.read = func_aumuser_read,
 	.desc = "Valid parameters are:\n"
-	"- name			First and last name\n"
-	"- firstname		First name\n"
-	"- lastname		Last name\n"
-	"- email		Email address\n"
-	"- xmpp			XMPP/Jabber address\n"
-	"- sip			SIP address\n"
-	"- tel			Telephone number\n"
-	"- iax2			IAX2 address\n"
-	"- fwd			FWD number\n"
-	"- numuserid		Numeric User ID\n"
-	"- pincode		User's Pincode\n"
-	"- musicclass		Default music class (MOH)\n"
 	"- accountcode		Account code\n"
-	"- vmbox		Voicemail box for user (mbox@vmcontext)\n"
+	"- channelgroup		Default channel group\n"
 	"- cidnum		Caller ID number\n"
 	"- cidname		Caller ID name\n"
+	"- currenttime		Current time in user's timezone\n"
+	"- email		Email address\n"
+	"- firstname		First name\n"
+	"- fwd			FWD number\n"
+	"- iax2			IAX2 address\n"
+	"- lastname		Last name\n"
+	"- musicclass		Default music class (MOH)\n"
+	"- name			First and last name\n"
+	"- numuserid		Numeric User ID\n"
+	"- pincode		User's Pincode\n"
+	"- sip			SIP address\n"
+	"- tel			Telephone number\n"
+	"- timezone		Timezone\n"
+	"- vmbox		Voicemail box for user (mbox@vmcontext)\n"
+	"- xmpp			XMPP/Jabber address\n"
 	"\n",
 };
 
 /*-------------------------AUM_STRING SUPPORT--------------------------*/
+#ifdef STRING_I18N
+
+/*! \note This part of the code is not done yet. The idea is to 
+ 	be able to configure caller ID names in multiple character sets.
+	If they are not available in required character set, then we'll
+	convert by using libiconv.
+
+	option = charset::value
+	
+	cidname = UTF8::J�rgen Blåbär
+	cidname = ASCII::Jorgen Blabar
+
+	Then the channel should know how to handle this and send UTF8 Caller ID Names
+	on SIP, but ASCII on PRI
+ */
+
 static struct aum_string_convert aum_string_labels[] = {
 	{ AUM_CHAR_ASCII,	"ASCII"	},
 	{ AUM_CHAR_ISO8859_1,	"ISO8859-1"	},
@@ -771,6 +820,7 @@ static struct aum_string_convert aum_string_labels[] = {
 aum_string *aum_string_alloc(char *string, enum aum_string_charset charset)
 {
 	aum_string *temp = NULL;
+
 	if (!string || charset == AUM_CHAR_UNKNOWN)
 		return temp;	/* Null */
 
@@ -849,7 +899,7 @@ aum_string *aum_string_add_charset_variant(aum_string *string, enum aum_string_c
 	return new;
 	
 }
-
+#endif
 
 /*------------------------- CONFIGURATION ------------------------------*/
 static struct aum_config_struct aum_config[] = {
@@ -951,10 +1001,9 @@ static enum aum_config_options aum_config_parse(char *label, enum aum_config_obj
 /*! \brief Allocate and calculate total memory used */
 static void *aum_allocate(size_t size)
 {
-	void *obj = malloc(size);
+	void *obj = calloc(1, size);
 	if (obj) {
 		aum_memory_used += (long) size;
-		memset(obj, 0, size);
 	} else
 		ast_log(LOG_ERROR, "Out of memory in AUM allocation. Memory used: %ld\n", aum_memory_used);
 
@@ -973,6 +1022,7 @@ static void aum_free(void *obj)
 static enum aum_address_type get_addr_type_from_config_option(enum aum_config_options option)
 {
 	int x;
+
 	for (x = 0; x < (sizeof(aum_address_config) / sizeof(struct aum_address_config_struct)); x++) {
 		if (aum_address_config[x].configoption == option)
 			return aum_address_config[x].type;
@@ -1069,7 +1119,7 @@ static void aum_rtcache_freeall(void) {
 		AST_LIST_LOCK(&aum_usercache);
 		while ((temp = AST_LIST_REMOVE_HEAD(&aum_usercache, list))) {
 			aum_destroy_user(temp->user);
-			free(temp);
+			aum_free(temp);
 		}
 		AST_LIST_UNLOCK(&aum_usercache);
 	}
@@ -1138,7 +1188,7 @@ static void aum_rtcache_movetotop(struct aum_user *user) {
 	/* Return */
 }
 
-/*!< Add channel variable to list 
+/*!	\brief  	Add channel variable to list 
  * 	\param var	AST_variable, list pointer
  * 	\param name	Name of variable
  * 	\param value	Value -	if value is NULL name is supposed to contain both name and value with = sign between them
@@ -1245,7 +1295,6 @@ static struct aum_user *aum_build_user(char *username, struct ast_variable *x, i
 		case AUM_CNF_SUBSCRIBECONTEXT:
 		case AUM_CNF_DISACONTEXT:
 		case AUM_CNF_PARKING:
-			break;
 			context = build_context(AUM_CONTEXT_NONE, option, x->value);
 			if (context)
 				AST_LIST_INSERT_TAIL(&user->contexts, context, list);
@@ -1265,6 +1314,7 @@ static struct aum_user *aum_build_user(char *username, struct ast_variable *x, i
 				
 			break;
 		case AUM_CNF_TIMEZONE:
+			ast_copy_string(user->timezone, x->value, sizeof(user->timezone));
 			break;
 		case AUM_CNF_CALLGROUP:
 			user->callgroup = ast_get_group(x->value);
@@ -1294,6 +1344,7 @@ static struct aum_user *aum_build_user(char *username, struct ast_variable *x, i
 			ast_copy_string(user->musicclass, x->value, sizeof(user->musicclass));
 			break;
 		case AUM_CNF_LDAPDN:
+			ast_copy_string(user->ldapdn, x->value, sizeof(user->ldapdn));
 			break;
 		case AUM_CNF_FIRSTNAME:
 			ast_copy_string(user->first_name, x->value, sizeof(user->first_name));
@@ -1305,13 +1356,14 @@ static struct aum_user *aum_build_user(char *username, struct ast_variable *x, i
 			ast_copy_string(user->title, x->value, sizeof(user->title));
 			break;
 		case AUM_CNF_SOUNDNAME:
+			ast_copy_string(user->soundname, x->value, sizeof(user->soundname));
 			break;
 		case AUM_CNF_CHANVAR:
 			/* Set peer channel variable */
 			user->chanvars = add_variable_to_list(user->chanvars, x->value, NULL);
 			break;
 		case AUM_CNF_GROUPVAR:	/* Channel group to set */
-			// chanvars GROUP
+			ast_copy_string(user->channelgroup, x->value, sizeof(user->channelgroup));
 			break;
 		case AUM_CNF_PERMIT:
 		case AUM_CNF_DENY:
@@ -1331,6 +1383,7 @@ static struct aum_user *aum_build_user(char *username, struct ast_variable *x, i
 			ast_copy_string(user->language, x->value, sizeof(user->language));
 			break;
 		case AUM_CNF_SIPDOMAIN:
+			/* Not used ye */
 			break;
 		case AUM_CNF_NOT_FOUND:
 			ast_log(LOG_NOTICE, "Configuration label unknown in AUM configuration: %s\n", x->name);
@@ -1345,7 +1398,6 @@ static struct aum_user *aum_build_user(char *username, struct ast_variable *x, i
 		
 		x = x->next;
 	}
-	ASTOBJ_CONTAINER_LINK(&aum_userlist, user);
 	if (realtime) 
 		aum_rtcache_add(user);
 
@@ -1356,7 +1408,7 @@ static struct aum_user *aum_build_user(char *username, struct ast_variable *x, i
 
 	//ASTOBJ_UNMARK(user);
 	ast_log(LOG_VERBOSE, "-- == Finished building user: %s\n", username);
-	return 0;
+	return user;
 }
 
 
@@ -1912,8 +1964,10 @@ int aum_group_test(struct aum_user *user, char *groupname)
 /*! \brief Initialize charset conversion handlers */
 static void initialize_charset_conversion(void)
 {
+#ifdef STRING_I18N
 	ichandler_utf8_to_iso88591 = iconv_open("utf8", "ISO-8859-1");
 	ichandler_iso88591_to_utf8 = iconv_open("ISO-8859-1", "utf8");
+#endif
 }
 
 
@@ -1945,9 +1999,11 @@ int unload_module(void)
 	ast_custom_function_unregister(&aum_user_function);
 	aum_rtcache_freeall();
 
+#ifdef STRING_I18N
 	/* Deallocate iconv conversion descriptors */
 	iconv_close(ichandler_utf8_to_iso88591);
 	iconv_close(ichandler_iso88591_to_utf8);
+#endif
 	return 0;
 }
 

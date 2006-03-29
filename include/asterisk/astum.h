@@ -19,6 +19,7 @@
 
 /*!\note This is just skeletons, that I'm trying to put flesh and	
 	clothes on... Mail input to oej@edvina.net
+  \todo Add stringfields to astum structures 
 */
 
 /*!\file
@@ -27,6 +28,7 @@
  * \par For information on ASTUM, please see
  *  	\arg ASTUM_desc
  */
+
 
 #ifndef _ASTERISK_AUM_H
 #define _ASTERISK_AUM_H
@@ -38,18 +40,29 @@
 #define FALSE 0
 #endif
 
+enum aum_boolean {
+	AUM_TRUE = TRUE,
+	AUM_FALSE = FALSE,
+#ifdef AIRLINE_KLM
+	AUM_NOTSUREREALLY = FALSE,
+	AUM_TOTALLY_YEAH = FALSE,
+	AUM_DONT_GIVE_A_DAMN = TRUE,
+#endif
+	
+};
+
 /*--------------------------- AUM STRING HANDLING -------------------------------- */
 /*! Character set definition for some strings */
 enum aum_string_charset {
 	AUM_CHAR_UNKNOWN = 0,
-	AUM_CHAR_ASCII,			/*!< 7 bit ASCII */
+	AUM_CHAR_ASCII,			/*!< 7 bit ASCII, the same as IA5 (used in caller ID names on PRI) */
 	AUM_CHAR_ISO8859_1,		/*!< ISO 8859-1, 8 bits */
 	AUM_CHAR_ISO8859_2,		/*!< ISO 8859-2, 8 bits */
 	AUM_CHAR_ISO8859_3,		/*!< ISO 8859-3, 8 bits */
 	AUM_CHAR_UTF8,			/*!< Unicode ISO 9660, UTF 8 encoding */
 };
 
-/*! Convert strings between character sets */
+/*! Conversioin table between character sets */
 struct aum_string_convert {
 	enum aum_string_charset	charset;	/*!< Character set */
 	const char *label;			/*!< Label used in strings in config files */
@@ -160,14 +173,14 @@ enum aum_config_options {
 /*! \brief AUM configuration definition structure */
 struct aum_config_struct {
 	enum aum_config_options option;
-	char 			*label;
+	char *label;
 	enum aum_config_objects valid;
 };
 
 /*! \brief AUM Address object */
 struct aum_address {
  	enum aum_address_type type;		/*!< Address type */
-	enum aum_string_charset charset;		/*!< character set */
+	enum aum_string_charset charset;	/*!< character set */
 	char address[180];			/*!< The actual address */
 	int active;
 	AST_LIST_ENTRY(aum_address) list;	/*!< List mechanics */
@@ -183,13 +196,13 @@ struct aum_address_config_struct {
 
 /*! \brief Context types for AUM user objects */
 enum aum_context_type {
-	AUM_CONTEXT_NONE = 0,	/*!< No Context (Return value for functions) */
-	AUM_CONTEXT_DEF_CB,	/*!< Default callback context for reaching this user */
+	AUM_CONTEXT_NONE = 0,		/*!< No Context (Return value for functions) */
+	AUM_CONTEXT_DEF_CB,		/*!< Default callback context for reaching this user */
 	AUM_CONTEXT_DEF_INCOMING,	/*!< Default incoming context for this user */
-	AUM_CONTEXT_VOICEMAIL,	/*!< Default voicemail context */
-	AUM_CONTEXT_DISA,	/*!< Default DISA context */
+	AUM_CONTEXT_VOICEMAIL,		/*!< Default voicemail context */
+	AUM_CONTEXT_DISA,		/*!< Default DISA context */
 	AUM_CONTEXT_SIPSUBSCRIBE,	/*!< Default context for SIP subscriptions */
-	AUM_CONTEXT_PARKING,	/*!< Default parking context */
+	AUM_CONTEXT_PARKING,		/*!< Default parking context */
 };
 
 /*! \brief Explanations of contexts */
@@ -225,8 +238,9 @@ struct aum_presence {
 	AST_LIST_ENTRY(aum_presence) list;	/*!< List mechanics */
 };
 
+/*! \brief Who registered this device with ASTUM ? */
 enum devicereg {
-	AUM_DEVICE_REG_CHANNEL,			/* Added by channel, persistent object */
+	AUM_DEVICE_REG_CHANNEL,			/*!< Added by channel, persistent object */
 	AUM_DEVICE_REG_MANAGER,			/*!< Added by manager, non persistant */
 	AUM_DEVICE_REG_CLI,			/*!< Added by the CLI, non persistant */
 };
@@ -316,6 +330,8 @@ struct aum_user {
 	char ldapdn[180];		/*!< LDAP DN */
 	char registrar[20];		/*!< Who added this object? */
 	char timezone[80];		/*!< Time zone (voicemail.conf) */
+	char soundname[80];		/*!< File name that includes this users name in audio */
+	char channelgroup[80];		/*!< Default channelgroup for calls from this user */
 	ast_group_t callgroup;			/*!< Calling group for calls */
 	ast_group_t pickupgroup;		/*!< Pickup group */
 	struct ast_variable *chanvars;	/*!< Default channel variables */
@@ -488,7 +504,6 @@ char *aum_string_output(aum_string *string, enum aum_string_charset charset);
 	\param string	string optionally with charset in front of string, separated with |
 	\param defaultcharset	Default character set, if not specified
 	\return 	aum_string object, allocated by this function
-	
 */
 aum_string *aum_string_add(char *string, enum aum_string_charset defaultcharset);
 
