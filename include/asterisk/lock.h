@@ -18,6 +18,37 @@
 
 /*! \file
  * \brief General Asterisk channel locking definitions.
+ *
+ * - See \ref LockDef
+ */
+/* \page LockDef Asterisk thread locking models
+ *
+ * This file provides several different implementation of the functions,
+ * depending on the platform, the use of DEBUG_THREADS, and the way
+ * global mutexes are initialized.
+ * At the moment, we have 3 ways to initialize global mutexes, depending on
+ *
+ *  - \b static: the mutex is assigned the value AST_MUTEX_INIT_VALUE
+ *        this is done at compile time, and is the way used on Linux.
+ *        This method is not applicable to all platforms e.g. when the
+ *        initialization needs that some code is run.
+ *
+ *  - \b on first use: the mutex is assigned a magic value at compile time,
+ *        and ast_mutex_init() is called when this magic value is detected.
+ *        This technique is generally applicable, though it has a bit of
+ *        overhead on each access to check whether initialization is needed.
+ *        On the other hand, the overall cost of a mutex_lock operation
+ *        is such that this overhead is often negligible.
+
+ *  - \b through constructors: for each mutex, a constructor function is
+ *        defined, which then runs when the program (or the module)
+ *        starts. The problem with this approach is that there is a
+ *        lot of code duplication (a new block of code is created for
+ *        each mutex). Also, it does not prevent a user from declaring
+ *        a global mutex without going through the wrapper macros,
+ *        so sane programming practices are still required.
+ *
+ * Eventually we should converge on a single method for all platforms.
  */
 
 #ifndef _ASTERISK_LOCK_H
@@ -640,7 +671,6 @@ static inline int ast_cond_timedwait(ast_cond_t *cond, ast_mutex_t *t, const str
 #define pthread_cond_timedwait use_ast_cond_timedwait_instead_of_pthread_cond_timedwait
 
 #define AST_MUTEX_DEFINE_STATIC(mutex) __AST_MUTEX_DEFINE(static,mutex)
-#define AST_MUTEX_DEFINE_EXPORTED(mutex) __AST_MUTEX_DEFINE(/**/,mutex)
 
 #define AST_MUTEX_INITIALIZER __use_AST_MUTEX_DEFINE_STATIC_rather_than_AST_MUTEX_INITIALIZER__
 
