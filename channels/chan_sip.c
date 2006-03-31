@@ -229,6 +229,19 @@ enum sip_auth_type {
 	WWW_AUTH,
 };
 
+/* States for outbound registrations (with register= lines in sip.conf */
+enum sipregistrystate {
+	REG_STATE_UNREGISTERED = 0,	/*!< We are not registred */
+	REG_STATE_REGSENT,	/*!< Registration request sent */
+	REG_STATE_AUTHSENT,	/*!< We have tried to authenticate */
+	REG_STATE_REGISTERED,	/*!< Registred and done */
+	REG_STATE_REJECTED,	/*!< Registration rejected */
+	REG_STATE_TIMEOUT,	/*!< Registration timed out */
+	REG_STATE_NOAUTH,	/*!< We have no accepted credentials */
+	REG_STATE_FAILED,	/*!< Registration failed after several tries */
+};
+
+
 /*! XXX Note that sip_methods[i].id == i must hold or the code breaks */
 static const struct  cfsip_methods { 
 	enum sipmethod id;
@@ -570,9 +583,9 @@ struct sip_auth {
 /* NAT settings */
 #define SIP_NAT			(3 << 18)	/*!< four settings, uses two bits */
 #define SIP_NAT_NEVER		(0 << 18)	/*!< No nat support */
-#define SIP_NAT_RFC3581		(1 << 18)
-#define SIP_NAT_ROUTE		(2 << 18)
-#define SIP_NAT_ALWAYS		(3 << 18)
+#define SIP_NAT_RFC3581		(1 << 18)	/*!< NAT RFC3581 */
+#define SIP_NAT_ROUTE		(2 << 18)	/*!< NAT Only ROUTE */
+#define SIP_NAT_ALWAYS		(3 << 18)	/*!< NAT Both ROUTE and RFC3581 */
 /* re-INVITE related settings */
 #define SIP_REINVITE		(3 << 20)	/*!< two bits used */
 #define SIP_CAN_REINVITE	(1 << 20)	/*!< allow peers to be reinvited to send media directly p2p */
@@ -591,13 +604,10 @@ struct sip_auth {
 #define SIP_OSPAUTH_GATEWAY	(1 << 26)
 #define SIP_OSPAUTH_PROXY	(2 << 26)
 #define SIP_OSPAUTH_EXCLUSIVE	(3 << 26)
-/* Call states */
-#define SIP_CALL_ONHOLD		(1 << 28)	 
-#define SIP_CALL_LIMIT		(1 << 29)
-/* Remote Party-ID Support */
-#define SIP_SENDRPID		(1 << 30)
-/* Did this connection increment the counter of in-use calls? */
-#define SIP_INC_COUNT		(1 << 31)
+#define SIP_CALL_ONHOLD		(1 << 28)	/*!< Call states */
+#define SIP_CALL_LIMIT		(1 << 29)	/*!< Call limit enforced for this call */
+#define SIP_SENDRPID		(1 << 30)	/*!< Remote Party-ID Support */
+#define SIP_INC_COUNT		(1 << 31)	/*!< Did this connection increment the counter of in-use calls? */
 
 #define SIP_FLAGS_TO_COPY \
 	(SIP_PROMISCREDIR | SIP_TRUSTRPID | SIP_SENDRPID | SIP_DTMF | SIP_REINVITE | \
@@ -852,16 +862,6 @@ struct sip_peer {
 };
 
 
-/* States for outbound registrations (with register= lines in sip.conf */
-#define REG_STATE_UNREGISTERED		0	/*!< We are not registred */
-#define REG_STATE_REGSENT		1	/*!< Registration request sent */
-#define REG_STATE_AUTHSENT		2	/*!< We have tried to authenticate */
-#define REG_STATE_REGISTERED		3	/*!< Registred and done */
-#define REG_STATE_REJECTED		4	/*!< Registration rejected */
-#define REG_STATE_TIMEOUT		5	/*!< Registration timed out */
-#define REG_STATE_NOAUTH		6	/*!< We have no accepted credentials */
-#define REG_STATE_FAILED		7	/*!< Registration failed after several tries */
-
 
 /*! \brief Registrations with other SIP proxies */
 struct sip_registry {
@@ -887,7 +887,7 @@ struct sip_registry {
 	int timeout; 			/*!< sched id of sip_reg_timeout */
 	int refresh;			/*!< How often to refresh */
 	struct sip_pvt *call;		/*!< create a sip_pvt structure for each outbound "registration dialog" in progress */
-	int regstate;			/*!< Registration state (see above) */
+	enum sipregistrystate regstate;	/*!< Registration state (see above) */
 	int callid_valid;		/*!< 0 means we haven't chosen callid for this registry yet. */
 	unsigned int ocseq;		/*!< Sequence number we got to for REGISTERs for this registry */
 	struct sockaddr_in us;		/*!< Who the server thinks we are */
@@ -5453,7 +5453,7 @@ static int transmit_notify_with_sipfrag(struct sip_pvt *p, int cseq)
 }
 
 /*! \build Convert registration state status to string */
-static char *regstate2str(int regstate)
+static char *regstate2str(enum sipregistrystate regstate)
 {
 	switch(regstate) {
 	case REG_STATE_FAILED:
@@ -5732,7 +5732,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, char *auth, 
 		ast_verbose("REGISTER %d headers, %d lines\n", p->initreq.headers, p->initreq.lines);
 	}
 	determine_firstline_parts(&p->initreq);
-	r->regstate=auth?REG_STATE_AUTHSENT:REG_STATE_REGSENT;
+	r->regstate = auth ? REG_STATE_AUTHSENT : REG_STATE_REGSENT;
 	r->regattempts++;	/* Another attempt */
 	if (option_debug > 3)
 		ast_verbose("REGISTER attempt %d to %s@%s\n", r->regattempts, r->username, r->hostname);
@@ -8287,11 +8287,7 @@ static int _sip_show_peer(int type, int fd, struct mansession *s, struct message
 		ast_cli(fd,"\n");
 		ASTOBJ_UNREF(peer,sip_destroy_peer);
 	} else  if (peer && type == 1) { /* manager listing */
-		char *actionid = astman_get_header(m,"ActionID");
-
 		astman_append(s, "Channeltype: SIP\r\n");
-		if (actionid)
-			astman_append(s, "ActionID: %s\r\n", actionid);
 		astman_append(s, "ObjectName: %s\r\n", peer->name);
 		astman_append(s, "ChanObjectType: peer\r\n");
 		astman_append(s, "SecretExist: %s\r\n", ast_strlen_zero(peer->secret)?"N":"Y");
@@ -8326,7 +8322,7 @@ static int _sip_show_peer(int type, int fd, struct mansession *s, struct message
 		astman_append(s, "SIP-VideoSupport: %s\r\n", (ast_test_flag(&peer->flags[1], SIP_PAGE2_VIDEOSUPPORT)?"Y":"N"));
 
 		/* - is enumerated */
-		astman_append(s, "SIP-DTMFmode %s\r\n", dtmfmode2str(ast_test_flag(&peer->flags[0], SIP_DTMF)));
+		astman_append(s, "SIP-DTMFmode: %s\r\n", dtmfmode2str(ast_test_flag(&peer->flags[0], SIP_DTMF)));
 		astman_append(s, "SIPLastMsg: %d\r\n", peer->lastmsg);
 		astman_append(s, "ToHost: %s\r\n", peer->tohost);
 		astman_append(s, "Address-IP: %s\r\nAddress-Port: %d\r\n",  peer->addr.sin_addr.s_addr ? ast_inet_ntoa(iabuf, sizeof(iabuf), peer->addr.sin_addr) : "", ntohs(peer->addr.sin_port));
@@ -9930,7 +9926,7 @@ static int handle_response_register(struct sip_pvt *p, int resp, char *rest, str
 			return 0;
 		}
 
-		r->regstate=REG_STATE_REGISTERED;
+		r->regstate = REG_STATE_REGISTERED;
 		manager_event(EVENT_FLAG_SYSTEM, "Registry", "Channel: SIP\r\nDomain: %s\r\nStatus: %s\r\n", r->hostname, regstate2str(r->regstate));
 		r->regattempts = 0;
 		ast_log(LOG_DEBUG, "Registration successful\n");
@@ -10588,6 +10584,16 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 		/* We do NOT destroy p here, so that our response will be accepted */
 		return 0;
 	}
+
+	if (!ignore && p->pendinginvite) {
+		/* We already have a pending invite. Sorry. You are on hold. */
+		transmit_response(p, "491 Request Pending", req);
+		if (option_debug > 1)
+			ast_log(LOG_DEBUG, "Got INVITE on call where we already have pending INVITE, deferring that - %s\n", p->callid);
+		/* Do NOT destroy dialog */
+		return 0;
+	}
+
 	if (!ignore) {
 		/* Use this as the basis */
 		if (debug)

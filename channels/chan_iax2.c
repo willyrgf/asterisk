@@ -6558,11 +6558,12 @@ static int socket_read(int *id, int fd, short events, void *cbdata)
 			if (errno != ECONNREFUSED)
 				ast_log(LOG_WARNING, "Error: %s\n", strerror(errno));
 			handle_error();
+			ASTOBJ_CONTAINER_LINK_END(&idlelist, thread);
 			return 1;
 		}
-		if(test_losspct) { /* simulate random loss condition */
-			if( (100.0*rand()/(RAND_MAX+1.0)) < test_losspct) 
-				return 1;
+		if (test_losspct && ((100.0*rand()/(RAND_MAX+1.0)) < test_losspct)) { /* simulate random loss condition */
+			ASTOBJ_CONTAINER_LINK_END(&idlelist, thread); 
+			return 1;
 		}
 		/* Mark as ready and send on its way */
 		thread->iostate = IAX_IOSTATE_READY;
@@ -9573,7 +9574,7 @@ static int iax2_matchmore(struct ast_channel *chan, const char *context, const c
 }
 
 /*! \brief Execute IAX2 dialplan switch */
-static int iax2_exec(struct ast_channel *chan, const char *context, const char *exten, int priority, const char *callerid, int newstack, const char *data)
+static int iax2_exec(struct ast_channel *chan, const char *context, const char *exten, int priority, const char *callerid, const char *data)
 {
 	char odata[256];
 	char req[256];
@@ -9589,7 +9590,7 @@ static int iax2_exec(struct ast_channel *chan, const char *context, const char *
 		if (dialstatus) {
 			dial = pbx_findapp(dialstatus);
 			if (dial) 
-				pbx_exec(chan, dial, "", newstack);
+				pbx_exec(chan, dial, "");
 		}
 		return -1;
 	} else if (priority != 1)
@@ -9618,7 +9619,7 @@ static int iax2_exec(struct ast_channel *chan, const char *context, const char *
 	ast_mutex_unlock(&dpcache_lock);
 	dial = pbx_findapp("Dial");
 	if (dial) {
-		return pbx_exec(chan, dial, req, newstack);
+		return pbx_exec(chan, dial, req);
 	} else {
 		ast_log(LOG_WARNING, "No dial application registered\n");
 	}
