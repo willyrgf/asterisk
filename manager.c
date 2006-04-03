@@ -407,7 +407,7 @@ void astman_append(struct mansession *s, const char *fmt, ...)
 		ast_log(LOG_ERROR, "Memory allocation failure\n");
 	} else {
 		if (s->fd > -1)
-			ast_carefulwrite(s->fd, stuff, strlen(stuff), 100);
+			ast_carefulwrite(s->fd, stuff, strlen(stuff), s->writetimeout);
 		else {
 			tmp = realloc(s->outputstr, (s->outputstr ? strlen(s->outputstr) : 0) + strlen(stuff) + 1);
 			if (tmp) {
@@ -2358,7 +2358,6 @@ int init_manager(void)
 		ast_log(LOG_NOTICE, "Unable to open management configuration manager.conf.  Call management disabled.\n");
 		return 0;
 	}
-	memset(&ba, 0, sizeof(ba));
 	val = ast_variable_retrieve(cfg, "general", "enabled");
 	if (val)
 		enabled = ast_true(val);
@@ -2386,11 +2385,11 @@ int init_manager(void)
 
 	if ((val = ast_variable_retrieve(cfg, "general", "httptimeout")))
 		newhttptimeout = atoi(val);
-	
+
+	memset(&ba, 0, sizeof(ba));
 	ba.sin_family = AF_INET;
 	ba.sin_port = htons(portno);
-	memset(&ba.sin_addr, 0, sizeof(ba.sin_addr));
-	
+
 	if ((val = ast_variable_retrieve(cfg, "general", "bindaddr"))) {
 		if (!inet_aton(val, &ba.sin_addr)) { 
 			ast_log(LOG_WARNING, "Invalid address '%s' specified, using 0.0.0.0\n", val);
