@@ -25,6 +25,16 @@
  * \author Mark Spencer <markster@digium.com>
  *
  * \arg Funding provided by nic.at
+ *
+ * \par Enum standards
+ *
+ * - NAPTR records: http://ietf.nri.reston.va.us/rfc/rfc2915.txt
+ * - DNS SRV records: http://www.ietf.org/rfc/rfc2782.txt
+ * - ENUM http://www.ietf.org/rfc/rfc3761.txt
+ * - ENUM for H.323: http://www.ietf.org/rfc/rfc3762.txt
+ * - ENUM SIP: http://www.ietf.org/rfc/rfc3764.txt
+ * - IANA ENUM Services: http://www.iana.org/assignments/enum-services
+ *
  */
 
 #include <sys/types.h>
@@ -89,8 +99,8 @@ static int parse_ie(char *data, int maxdatalen, char *src, int srclen)
 	len = olen = (int)src[0];
 	src++;
 	srclen--;
-	if (len > srclen) {
-		ast_log(LOG_WARNING, "Want %d, got %d\n", len, srclen);
+	if (len > srclen || len < 0 ) {
+		ast_log(LOG_WARNING, "ENUM parsing failed: Wanted %d characters, got %d\n", len, srclen);
 		return -1;
 	}
 	if (len > maxdatalen)
