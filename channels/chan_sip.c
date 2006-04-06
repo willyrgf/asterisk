@@ -1061,15 +1061,16 @@ static unsigned int parse_sip_options(struct sip_pvt *pvt, char *supported)
 	char *next, *sep;
 	char *temp = ast_strdupa(supported);
 	unsigned int profile = 0;
+	int i, found;
 
-	if (ast_strlen_zero(supported) )
+	if (!pvt || ast_strlen_zero(supported) )
 		return 0;
 
 	if (option_debug > 2 && sipdebug)
 		ast_log(LOG_DEBUG, "Begin: parsing SIP \"Supported: %s\"\n", supported);
 
 	for (next = temp; next; next = sep) {
-		int i, found = 0;
+		found = FALSE;
 		if ( (sep = strchr(next, ',')) != NULL)
 			*sep++ = '\0';
 		next = ast_skip_blanks(next);
@@ -1078,7 +1079,7 @@ static unsigned int parse_sip_options(struct sip_pvt *pvt, char *supported)
 		for (i=0; i < (sizeof(sip_options) / sizeof(sip_options[0])); i++) {
 			if (!strcasecmp(next, sip_options[i].text)) {
 				profile |= sip_options[i].id;
-				found = 1;
+				found = TRUE;
 				if (option_debug > 2 && sipdebug)
 					ast_log(LOG_DEBUG, "Matched SIP option: %s\n", next);
 				break;
@@ -1087,11 +1088,8 @@ static unsigned int parse_sip_options(struct sip_pvt *pvt, char *supported)
 		if (!found && option_debug > 2 && sipdebug)
 			ast_log(LOG_DEBUG, "Found no match for SIP option: %s (Please file bug report!)\n", next);
 	}
-	if (pvt) {
-		pvt->sipoptions = profile;
-		if (option_debug)
-			ast_log(LOG_DEBUG, "* SIP extension value: %d for call %s\n", profile, pvt->callid);
-	}
+
+	pvt->sipoptions = profile;
 	return profile;
 }
 
@@ -1420,7 +1418,7 @@ static int sip_cancel_destroy(struct sip_pvt *p)
 }
 
 /*! \brief Acknowledges receipt of a packet and stops retransmission */
-static int __sip_ack(struct sip_pvt *p, int seqno, int resp, int sipmethod)
+static int __sip_ack(struct sip_pvt *p, int seqno, int resp, int sipmethod, int reset)
 {
 	struct sip_pkt *cur, *prev = NULL;
 	int res = -1;
@@ -1449,7 +1447,8 @@ static int __sip_ack(struct sip_pvt *p, int seqno, int resp, int sipmethod)
 					ast_log(LOG_DEBUG, "** SIP TIMER: Cancelling retransmit of packet (reply received) Retransid #%d\n", cur->retransid);
 				ast_sched_del(sched, cur->retransid);
 			}
-			free(cur);
+			if (!reset)
+				free(cur);
 			res = 0;
 			break;
 		}
@@ -1472,7 +1471,7 @@ static int __sip_pretend_ack(struct sip_pvt *p)
 		}
 		cur = p->packets;
 		if (cur->method)
-			__sip_ack(p, p->packets->seqno, (ast_test_flag(p->packets, FLAG_RESPONSE)), cur->method);
+			__sip_ack(p, p->packets->seqno, (ast_test_flag(p->packets, FLAG_RESPONSE)), cur->method, FALSE);
 		else {	/* Unknown packet type */
 			char *c;
 			char method[128];
@@ -1480,7 +1479,7 @@ static int __sip_pretend_ack(struct sip_pvt *p)
 			ast_copy_string(method, p->packets->data, sizeof(method));
 			c = ast_skip_blanks(method); /* XXX what ? */
 			*c = '\0';
-			__sip_ack(p, p->packets->seqno, (ast_test_flag(p->packets, FLAG_RESPONSE)), find_sip_method(method));
+			__sip_ack(p, p->packets->seqno, (ast_test_flag(p->packets, FLAG_RESPONSE)), find_sip_method(method), FALSE);
 		}
 	}
 	return 0;
@@ -2978,6 +2977,8 @@ static struct ast_channel *sip_new(struct sip_pvt *i, int state, const char *tit
 	/* Set channel variables for this call from configuration */
 	for (v = i->chanvars ; v ; v = v->next)
 		pbx_builtin_setvar_helper(tmp,v->name,v->value);
+
+	append_history(i, "NewChan", "Channel %s - from %s", tmp->name, i->callid);
 				
 	return tmp;
 }
@@ -5704,7 +5705,8 @@ static int transmit_refer(struct sip_pvt *p, const char *dest)
 	char *of, *c;
 	char referto[256];
 
-	if (ast_test_flag(&p->flags[0], SIP_OUTGOING)) 
+	/* Are we transfering an inbound or outbound call? */
+	if (ast_test_flag(&p->flags[0], SIP_OUTGOING))
 		of = get_header(&p->initreq, "To");
 	else
 		of = get_header(&p->initreq, "From");
@@ -5728,16 +5730,26 @@ static int transmit_refer(struct sip_pvt *p, const char *dest)
 		snprintf(referto, sizeof(referto), "<sip:%s>", dest);
 	}
 
+	add_header(&req, "Max-Forwards", DEFAULT_MAX_FORWARDS);
+
 	/* save in case we get 407 challenge */
 	ast_string_field_set(p, refer_to, referto);
 	ast_string_field_set(p, referred_by, p->our_contact);
 
 	reqprep(&req, p, SIP_REFER, 0, 1);
 	add_header(&req, "Refer-To", referto);
+	add_header(&req, "Allow", ALLOWED_METHODS);
+	add_header(&req, "Supported", SUPPORTED_EXTENSIONS);
 	if (!ast_strlen_zero(p->our_contact))
 		add_header(&req, "Referred-By", p->our_contact);
 	add_blank_header(&req);
 	return send_request(p, &req, 1, p->ocseq);
+
+	/*! \todo In theory, we should hang around and wait for a reply, before
+	returning to the dial plan here. Don't know really how that would
+	affect the transfer() app or the pbx, but, well, to make this
+	useful we should have a STATUS code on transfer().
+	*/
 }
 
 /*! \brief Send SIP INFO dtmf message, see Cisco documentation on cisco.com */
@@ -10061,7 +10073,7 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 	if ((resp >= 100) && (resp <= 199))
 		__sip_semi_ack(p, seqno, 0, sipmethod);
 	else
-		__sip_ack(p, seqno, 0, sipmethod);
+		__sip_ack(p, seqno, 0, sipmethod, resp == 491 ? TRUE : FALSE);
 
 	/* Get their tag if we haven't already */
 	if (ast_strlen_zero(p->theirtag) || (resp >= 200)) {
@@ -10173,6 +10185,8 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 		case 491: /* Pending */
 			if (sipmethod == SIP_INVITE) {
 				handle_response_invite(p, resp, rest, req, ignore, seqno);
+			} else {
+				ast_log(LOG_DEBUG, "Got 491 on %s, unspported. Call ID %s\n", sip_methods[sipmethod].text, p->callid);
 			}
 		case 501: /* Not Implemented */
 			if (sipmethod == SIP_INVITE) {
@@ -10810,11 +10824,13 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 		}
 
 		/* We have a succesful authentication, process the SDP portion if there is one */
-		if (!ast_strlen_zero(get_header(req, "Content-Type"))) {
+		if (!strcasecmp(get_header(req, "Content-Type"), "application/sdp") ) {
 			if (process_sdp(p, req)) {
 				/* Unacceptable codecs */
 				transmit_response_reliable(p, "488 Not acceptable here", req);
 				ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
+				if (option_debug)
+					ast_log(LOG_DEBUG, "No compatible codecs for this SIP call.\n");
 				return -1;
 			}
 		} else {
@@ -10834,8 +10850,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 		/* Check number of concurrent calls -vs- incoming limit HERE */
 		if (option_debug)
 			ast_log(LOG_DEBUG, "Checking SIP call limits for device %s\n", p->username);
-		res = update_call_counter(p, INC_CALL_LIMIT);
-		if (res) {
+		if ((res = update_call_counter(p, INC_CALL_LIMIT))) {
 			if (res < 0) {
 				ast_log(LOG_NOTICE, "Failed to place call for user %s, too many calls\n", p->username);
 				transmit_response_reliable(p, "480 Temporarily Unavailable (Call limit) ", req);
@@ -10926,10 +10941,10 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 					ast_mutex_lock(&p->lock);
 					c = NULL;
 				}
-			} else {
+			} else {	/* Pickup call in call group */
 				ast_mutex_unlock(&c->lock);
 				if (ast_pickup_call(c)) {
-					ast_log(LOG_NOTICE, "Nothing to pick up\n");
+					ast_log(LOG_NOTICE, "Nothing to pick up for %s\n", p->callid);
 					if (ignore)
 						transmit_response(p, "503 Unavailable", req);
 					else
@@ -10965,7 +10980,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 			transmit_response(p, "100 Trying", req);
 		}
 	} else {
-		if (p && !ast_test_flag(&p->flags[0], SIP_NEEDDESTROY) && !ignore) {
+		if (p && !ast_test_flag(&p->flags[0], SIP_NEEDDESTROY)) {
 			if (!p->jointcapability) {
 				if (ignore)
 					transmit_response(p, "488 Not Acceptable Here (codec error)", req);
@@ -10973,7 +10988,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 					transmit_response_reliable(p, "488 Not Acceptable Here (codec error)", req);
 				ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
 			} else {
-				ast_log(LOG_NOTICE, "Unable to create/find channel\n");
+				ast_log(LOG_NOTICE, "Unable to create/find SIP channel for this INVITE\n");
 				if (ignore)
 					transmit_response(p, "503 Unavailable", req);
 				else
@@ -11576,7 +11591,7 @@ static int handle_request(struct sip_pvt *p, struct sip_request *req, struct soc
 		/* Make sure we don't ignore this */
 		if (seqno == p->pendinginvite) {
 			p->pendinginvite = 0;
-			__sip_ack(p, seqno, FLAG_RESPONSE, 0);
+			__sip_ack(p, seqno, FLAG_RESPONSE, 0, FALSE);
 			if (!ast_strlen_zero(get_header(req, "Content-Type"))) {
 				if (process_sdp(p, req))
 					return -1;
