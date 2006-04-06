@@ -949,6 +949,7 @@ static int sip_sipredirect(struct sip_pvt *p, const char *dest);
 static struct sip_peer *temp_peer(const char *name);
 static int do_proxy_auth(struct sip_pvt *p, struct sip_request *req, char *header, char *respheader, int sipmethod, int init);
 static void free_old_route(struct sip_route *route);
+static int reply_digest(struct sip_pvt *p, struct sip_request *req, char *header, int sipmethod, char *digest, int digest_len);
 static int build_reply_digest(struct sip_pvt *p, int method, char *digest, int digest_len);
 static int update_call_counter(struct sip_pvt *fup, int event);
 static struct sip_peer *build_peer(const char *name, struct ast_variable *v, int realtime);
@@ -1172,7 +1173,7 @@ static int ast_sip_ouraddrfor(struct in_addr *them, struct in_addr *us)
 			} else
 				ast_log(LOG_NOTICE, "Warning: Re-lookup of '%s' failed!\n", externhost);
 		}
-		memcpy(us, &externip.sin_addr, sizeof(struct in_addr));
+		*us = externip.sin_addr;
 		if (option_debug) {
 			char iabuf[INET_ADDRSTRLEN];
 			ast_inet_ntoa(iabuf, sizeof(iabuf), *(struct in_addr *)&them->s_addr);
@@ -1180,7 +1181,7 @@ static int ast_sip_ouraddrfor(struct in_addr *them, struct in_addr *us)
 			ast_log(LOG_DEBUG, "Target address %s is not local, substituting externip\n", iabuf);
 		}
 	} else if (bindaddr.sin_addr.s_addr)
-		memcpy(us, &bindaddr.sin_addr, sizeof(struct in_addr));
+		*us = bindaddr.sin_addr;
 	else
 		return ast_ouraddrfor(them, us);
 	return 0;
@@ -1896,16 +1897,8 @@ static int create_addr_from_peer(struct sip_pvt *r, struct sip_peer *peer)
 {
 	if ((peer->addr.sin_addr.s_addr || peer->defaddr.sin_addr.s_addr) &&
 	    (!peer->maxms || ((peer->lastms >= 0)  && (peer->lastms <= peer->maxms)))) {
-		if (peer->addr.sin_addr.s_addr) {
-			r->sa.sin_family = peer->addr.sin_family;
-			r->sa.sin_addr = peer->addr.sin_addr;
-			r->sa.sin_port = peer->addr.sin_port;
-		} else {
-			r->sa.sin_family = peer->defaddr.sin_family;
-			r->sa.sin_addr = peer->defaddr.sin_addr;
-			r->sa.sin_port = peer->defaddr.sin_port;
-		}
-		memcpy(&r->recv, &r->sa, sizeof(r->recv));
+		r->sa = (peer->addr.sin_addr.s_addr) ? peer->addr : peer->defaddr;
+		r->recv = r->sa;
 	} else {
 		return -1;
 	}
@@ -2035,7 +2028,7 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer)
 			ast_string_field_set(dialog, tohost, peer);
 			memcpy(&dialog->sa.sin_addr, hp->h_addr, sizeof(dialog->sa.sin_addr));
 			dialog->sa.sin_port = htons(portno);
-			memcpy(&dialog->recv, &dialog->sa, sizeof(dialog->recv));
+			dialog->recv = dialog->sa;
 			return 0;
 		} else {
 			ast_log(LOG_WARNING, "No such host: %s\n", peer);
@@ -3223,11 +3216,11 @@ static struct sip_pvt *sip_alloc(ast_string_field callid, struct sockaddr_in *si
 	p->osptimelimit = 0;
 #endif	
 	if (sin) {
-		memcpy(&p->sa, sin, sizeof(p->sa));
+		p->sa = *sin;
 		if (ast_sip_ouraddrfor(&p->sa.sin_addr,&p->ourip))
-			memcpy(&p->ourip, &__ourip, sizeof(p->ourip));
+			p->ourip = __ourip;
 	} else {
-		memcpy(&p->ourip, &__ourip, sizeof(p->ourip));
+		p->ourip = __ourip;
 	}
 	
 	ast_copy_flags(&p->flags[0], &global_flags[0], SIP_FLAGS_TO_COPY);
@@ -3265,7 +3258,7 @@ static struct sip_pvt *sip_alloc(ast_string_field callid, struct sockaddr_in *si
 	if (useglobal_nat && sin) {
 		/* Setup NAT structure according to global settings if we have an address */
 		ast_copy_flags(&p->flags[0], &global_flags[0], SIP_NAT);
-		memcpy(&p->recv, sin, sizeof(p->recv));
+		p->recv = *sin;
 		if (p->rtp)
 			ast_rtp_setnat(p->rtp, ast_test_flag(&p->flags[0], SIP_NAT_ROUTE));
 		if (p->vrtp)
@@ -5376,22 +5369,21 @@ static int transmit_sip_request(struct sip_pvt *p,struct sip_request *req)
 	return send_request(p, req, 0, p->ocseq);
 }
 
-/*! \brief Notify a transferring party of the status of trasnfer
-\note   Apparently the draft SIP REFER structure was too simple, so it was decided that the
-	status of transfers also needed to be sent via NOTIFY instead of just the 202 Accepted
-	that had worked heretofore.
+/*! \brief Notify a transferring party of the status of transfer
  */
-static int transmit_notify_with_sipfrag(struct sip_pvt *p, int cseq)
+static int transmit_notify_with_sipfrag(struct sip_pvt *p, int cseq, char *message)
 {
 	struct sip_request req;
-	char tmp[20];
+	char tmp[50];
 	reqprep(&req, p, SIP_NOTIFY, 0, 1);
 	snprintf(tmp, sizeof(tmp), "refer;id=%d", cseq);
 	add_header(&req, "Event", tmp);
 	add_header(&req, "Subscription-state", "terminated;reason=noresource");
 	add_header(&req, "Content-Type", "message/sipfrag;version=2.0");
+	add_header(&req, "Allow", ALLOWED_METHODS);
+	add_header(&req, "Supported", SUPPORTED_EXTENSIONS);
 
-	strcpy(tmp, "SIP/2.0 200 OK");
+	snprintf(tmp, sizeof(tmp), "SIP/2.0 %s\r\n", message);
 	add_header_contentLength(&req, strlen(tmp));
 	add_line(&req, tmp);
 
@@ -5597,7 +5589,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, char *auth, 
 		  internal network so we can register through nat
 		 */
 		if (ast_sip_ouraddrfor(&p->sa.sin_addr, &p->ourip))
-			memcpy(&p->ourip, &bindaddr.sin_addr, sizeof(p->ourip));
+			p->ourip = bindaddr.sin_addr;
 		build_contact(p);
 	}
 
@@ -5962,7 +5954,7 @@ static int parse_ok_contact(struct sip_pvt *pvt, struct sip_request *req)
 	} else
 		port = DEFAULT_SIP_PORT;
 
-	memcpy(&oldsin, &pvt->sa, sizeof(oldsin));
+	oldsin = pvt->sa;
 
 	if (!ast_test_flag(&pvt->flags[0], SIP_NAT_ROUTE)) {
 		/* XXX This could block for a long time XXX */
@@ -5978,7 +5970,7 @@ static int parse_ok_contact(struct sip_pvt *pvt, struct sip_request *req)
 	} else {
 		/* Don't trust the contact field.  Just use what they came to us
 		   with. */
-		memcpy(&pvt->sa, &pvt->recv, sizeof(pvt->sa));
+		pvt->sa = pvt->recv;
 	}
 	return 0;
 }
@@ -6086,7 +6078,7 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 		port = atoi(pt);
 	} else
 		port = DEFAULT_SIP_PORT;
-	memcpy(&oldsin, &p->addr, sizeof(oldsin));
+	oldsin = p->addr;
 	if (!ast_test_flag(&p->flags[0], SIP_NAT_ROUTE)) {
 		/* XXX This could block for a long time XXX */
 		hp = ast_gethostbyname(n, &ahp);
@@ -6100,7 +6092,7 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 	} else {
 		/* Don't trust the contact field.  Just use what they came to us
 		   with */
-		memcpy(&p->addr, &pvt->recv, sizeof(p->addr));
+		p->addr = pvt->recv;
 	}
 
 	if (c)	/* Overwrite the default username from config at registration */
@@ -8596,11 +8588,9 @@ static char *complete_sipch(const char *line, const char *word, int pos, int sta
 
 	ast_mutex_lock(&iflock);
 	for (cur = iflist; cur; cur = cur->next) {
-		if (!strncasecmp(word, cur->callid, wordlen)) {
-			if (++which > state) {
-				c = ast_strdup(cur->callid);
-				break;
-			}
+		if (!strncasecmp(word, cur->callid, wordlen) && ++which > state) {
+			c = ast_strdup(cur->callid);
+			break;
 		}
 	}
 	ast_mutex_unlock(&iflock);
@@ -8983,7 +8973,7 @@ static int sip_do_debug_peer(int fd, int argc, char *argv[])
 	if (peer) {
 		if (peer->addr.sin_addr.s_addr) {
 			debugaddr.sin_family = AF_INET;
-			memcpy(&debugaddr.sin_addr, &peer->addr.sin_addr, sizeof(debugaddr.sin_addr));
+			debugaddr.sin_addr = peer->addr.sin_addr;
 			debugaddr.sin_port = peer->addr.sin_port;
 			ast_cli(fd, "SIP Debugging Enabled for IP: %s:%d\n", ast_inet_ntoa(iabuf, sizeof(iabuf), debugaddr.sin_addr), ntohs(debugaddr.sin_port));
 			ast_set_flag(&global_flags[1], SIP_PAGE2_DEBUG_CONSOLE);
@@ -9064,7 +9054,7 @@ static int sip_notify(int fd, int argc, char *argv[])
 		add_blank_header(&req);
 		/* Recalculate our side, and recalculate Call ID */
 		if (ast_sip_ouraddrfor(&p->sa.sin_addr, &p->ourip))
-			memcpy(&p->ourip, &__ourip, sizeof(p->ourip));
+			p->ourip = __ourip;
 		build_via(p);
 		build_callid_pvt(p);
 		ast_cli(fd, "Sending NOTIFY of type '%s' to '%s'\n", argv[2], argv[i]);
@@ -9096,7 +9086,7 @@ static int sip_no_history(int fd, int argc, char *argv[])
 	return RESULT_SUCCESS;
 }
 
-/*! \brief  sip_no_debug: Disable SIP Debugging in CLI */
+/*! \brief Disable SIP Debugging in CLI */
 static int sip_no_debug(int fd, int argc, char *argv[])
 
 {
@@ -9107,9 +9097,8 @@ static int sip_no_debug(int fd, int argc, char *argv[])
 	return RESULT_SUCCESS;
 }
 
-static int reply_digest(struct sip_pvt *p, struct sip_request *req, char *header, int sipmethod, char *digest, int digest_len);
 
-/*! \brief  do_register_auth: Authenticate for outbound registration */
+/*! \brief Authenticate for outbound registration */
 static int do_register_auth(struct sip_pvt *p, struct sip_request *req, char *header, char *respheader) 
 {
 	char digest[1024];
@@ -9130,7 +9119,7 @@ static int do_register_auth(struct sip_pvt *p, struct sip_request *req, char *he
 	return transmit_register(p->registry, SIP_REGISTER, digest, respheader); 
 }
 
-/*! \brief  do_proxy_auth: Add authentication on outbound SIP packet */
+/*! \brief Add authentication on outbound SIP packet */
 static int do_proxy_auth(struct sip_pvt *p, struct sip_request *req, char *header, char *respheader, int sipmethod, int init) 
 {
 	char digest[1024];
@@ -9152,10 +9141,10 @@ static int do_proxy_auth(struct sip_pvt *p, struct sip_request *req, char *heade
 	return transmit_invite(p, sipmethod, sipmethod == SIP_INVITE, init); 
 }
 
-/*! \brief  reply_digest: reply to authentication for outbound registrations */
-/*      This is used for register= servers in sip.conf, SIP proxies we register
-        with  for receiving calls from.  */
-/*	Returns -1 if we have no auth */
+/*! \brief  reply to authentication for outbound registrations
+\return	Returns -1 if we have no auth 
+\note	This is used for register= servers in sip.conf, SIP proxies we register
+	with  for receiving calls from.  */
 static int reply_digest(struct sip_pvt *p, struct sip_request *req,
 	char *header, int sipmethod,  char *digest, int digest_len)
 {
@@ -9226,10 +9215,11 @@ static int reply_digest(struct sip_pvt *p, struct sip_request *req,
 	return build_reply_digest(p, sipmethod, digest, digest_len); 
 }
 
-/*! \brief  build_reply_digest:  Build reply digest */
-/*      Build digest challenge for authentication of peers (for registration) 
-	and users (for calls). Also used for authentication of CANCEL and BYE */
-/*	Returns -1 if we have no auth */
+/*! \brief  Build reply digest 
+\return	Returns -1 if we have no auth 
+\note	Build digest challenge for authentication of peers (for registration) 
+	and users (for calls). Also used for authentication of CANCEL and BYE 
+*/
 static int build_reply_digest(struct sip_pvt *p, int method, char* digest, int digest_len)
 {
 	char a1[256];
@@ -9440,7 +9430,7 @@ static struct ast_custom_function sip_header_function = {
 	.read = func_header_read,
 };
 
-/*! \brief  function_check_sipdomain: Dial plan function to check if domain is local */
+/*! \brief  Dial plan function to check if domain is local */
 int func_check_sipdomain(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len)
 {
 	if (ast_strlen_zero(data)) {
@@ -9465,7 +9455,7 @@ static struct ast_custom_function checksipdomain_function = {
 		"Check the domain= configuration in sip.conf\n",
 };
 
-/*! \brief  function_sippeer: ${SIPPEER()} Dialplan function - reads peer data */
+/*! \brief  ${SIPPEER()} Dialplan function - reads peer data */
 static int function_sippeer(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len)
 {
 	struct sip_peer *peer;
@@ -9558,7 +9548,7 @@ struct ast_custom_function sippeer_function = {
 	"\n"
 };
 
-/*! \brief  function_sipchaninfo_read: ${SIPCHANINFO()} Dialplan function - reads sip channel data */
+/*! \brief ${SIPCHANINFO()} Dialplan function - reads sip channel data */
 int function_sipchaninfo_read(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len) 
 {
 	struct sip_pvt *p;
@@ -9578,7 +9568,6 @@ int function_sipchaninfo_read(struct ast_channel *chan, char *cmd, char *data, c
 		return -1;
 	}
 
-/* 	ast_verbose("function_sipchaninfo_read: %s\n", data); */
 	p = chan->tech_pvt;
 
 	/* If there is no private structure, this channel is no longer alive */
@@ -9623,7 +9612,7 @@ static struct ast_custom_function sipchaninfo_function = {
 	"- peername              The name of the peer.\n"
 };
 
-/*! \brief  parse_moved_contact: Parse 302 Moved temporalily response */
+/*! \brief Parse 302 Moved temporalily response */
 static void parse_moved_contact(struct sip_pvt *p, struct sip_request *req)
 {
 	char tmp[256];
@@ -9668,7 +9657,7 @@ static void parse_moved_contact(struct sip_pvt *p, struct sip_request *req)
 	}
 }
 
-/*! \brief  check_pendings: Check pending actions on SIP call */
+/*! \brief Check pending actions on SIP call */
 static void check_pendings(struct sip_pvt *p)
 {
 	/* Go ahead and send bye at this point */
@@ -9677,14 +9666,15 @@ static void check_pendings(struct sip_pvt *p)
 		ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
 		ast_clear_flag(&p->flags[0], SIP_NEEDREINVITE);	
 	} else if (ast_test_flag(&p->flags[0], SIP_NEEDREINVITE)) {
-		ast_log(LOG_DEBUG, "Sending pending reinvite on '%s'\n", p->callid);
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Sending pending reinvite on '%s'\n", p->callid);
 		/* Didn't get to reinvite yet, so do it now */
 		transmit_reinvite_with_sdp(p);
 		ast_clear_flag(&p->flags[0], SIP_NEEDREINVITE);	
 	}
 }
 
-/*! \brief  handle_response_invite: Handle SIP response in dialogue */
+/*! \brief Handle SIP response in dialogue */
 static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, struct sip_request *req, int ignore, int seqno)
 {
 	int outgoing = ast_test_flag(&p->flags[0], SIP_OUTGOING);
@@ -9822,7 +9812,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, stru
 	}
 }
 
-/*! \brief  handle_response_register: Handle responses on REGISTER to services */
+/*! \brief Handle responses on REGISTER to services */
 static int handle_response_register(struct sip_pvt *p, int resp, char *rest, struct sip_request *req, int ignore, int seqno)
 {
 	int expires, expires_ms;
@@ -9938,7 +9928,7 @@ static int handle_response_register(struct sip_pvt *p, int resp, char *rest, str
 	return 1;
 }
 
-/*! \brief  handle_response_peerpoke: Handle qualification responses (OPTIONS) */
+/*! \brief Handle qualification responses (OPTIONS) */
 static int handle_response_peerpoke(struct sip_pvt *p, int resp, char *rest, struct sip_request *req, int ignore, int seqno, int sipmethod)
 {
 	struct sip_peer *peer;
@@ -9994,7 +9984,7 @@ static int handle_response_peerpoke(struct sip_pvt *p, int resp, char *rest, str
 	return 1;
 }
 
-/*! \brief  handle_response: Handle SIP response in dialogue */
+/*! \brief Handle SIP response in dialogue */
 static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_request *req, int ignore, int seqno)
 {
 	char *msg, *c;
@@ -10302,7 +10292,8 @@ static void *sip_park_thread(void *stuff)
 	res = ast_park_call(chan1, chan2, 0, &ext);
 	/* Then hangup */
 	ast_hangup(chan2);
-	ast_log(LOG_DEBUG, "Parked on extension '%d'\n", ext);
+	if (option_debug > 1)
+		ast_log(LOG_DEBUG, "Parked on extension '%d'\n", ext);
 	return NULL;
 }
 
@@ -10447,7 +10438,7 @@ static int attempt_transfer(struct sip_pvt *p1, struct sip_pvt *p2)
 	return 0;
 }
 
-/*! \brief  gettag: Get tag from packet */
+/*! \brief Get tag from packet */
 static char *gettag(struct sip_request *req, char *header, char *tagbuf, int tagbufsize) 
 {
 	char *thetag, *sep;
@@ -10817,7 +10808,7 @@ static int handle_request_refer(struct sip_pvt *p, struct sip_request *req, int 
 				ast_set_flag(&p->flags[0], SIP_GOTREFER);	
 			}
 			transmit_response(p, "202 Accepted", req);
-			transmit_notify_with_sipfrag(p, seqno);
+			transmit_notify_with_sipfrag(p, seqno, "200 OK");
 			/* Always increment on a BYE */
 			if (!nobye) {
 				transmit_request_with_auth(p, SIP_BYE, 0, XMIT_RELIABLE, 1);
@@ -11441,7 +11432,7 @@ retrylock:
 			usleep(1);
 			goto retrylock;
 		}
-		memcpy(&p->recv, &sin, sizeof(p->recv));
+		p->recv = sin;
 		if (recordhistory) /* This is a response, note what it was for */
 			append_history(p, "Rx", "%s / %s", req.data, get_header(&req, "CSeq"));
 		nounlock = 0;
@@ -11495,7 +11486,7 @@ static int sip_send_mwi_to_peer(struct sip_peer *peer)
 		}
 		/* Recalculate our side, and recalculate Call ID */
 		if (ast_sip_ouraddrfor(&p->sa.sin_addr, &p->ourip))
-			memcpy(&p->ourip, &__ourip, sizeof(p->ourip));
+			p->ourip = __ourip;
 		build_via(p);
 		build_callid_pvt(p);
 		/* Destroy this session after 32 secs */
@@ -11728,8 +11719,8 @@ static int sip_poke_peer(struct sip_peer *peer)
 	if (!(p = peer->call = sip_alloc(NULL, NULL, 0, SIP_OPTIONS)))
 		return -1;
 	
-	memcpy(&p->sa, &peer->addr, sizeof(p->sa));
-	memcpy(&p->recv, &peer->addr, sizeof(p->sa));
+	p->sa = peer->addr;
+	p->recv = peer->addr;
 	ast_copy_flags(&p->flags[0], &peer->flags[0], SIP_FLAGS_TO_COPY);
 	ast_copy_flags(&p->flags[1], &peer->flags[1], SIP_PAGE2_FLAGS_TO_COPY);
 
@@ -11748,7 +11739,7 @@ static int sip_poke_peer(struct sip_peer *peer)
 
 	/* Recalculate our side, and recalculate Call ID */
 	if (ast_sip_ouraddrfor(&p->sa.sin_addr,&p->ourip))
-		memcpy(&p->ourip, &__ourip, sizeof(p->ourip));
+		p->ourip = __ourip;
 	build_via(p);
 	build_callid_pvt(p);
 
@@ -11886,7 +11877,7 @@ static struct ast_channel *sip_request_call(const char *type, int format, void *
 		ast_string_field_set(p, peername, ext);
 	/* Recalculate our side, and recalculate Call ID */
 	if (ast_sip_ouraddrfor(&p->sa.sin_addr,&p->ourip))
-		memcpy(&p->ourip, &__ourip, sizeof(p->ourip));
+		p->ourip = __ourip;
 	build_via(p);
 	build_callid_pvt(p);
 	
