@@ -711,4 +711,16 @@ static inline int ast_cond_timedwait(ast_cond_t *cond, ast_mutex_t *t, const str
 #define pthread_create __use_ast_pthread_create_instead__
 #endif
 
+#ifndef DEBUG_CHANNEL_LOCKS
+/*! \brief Lock a channel. If DEBUG_CHANNEL_LOCKS is defined 
+	in the Makefile, print relevant output for debugging */
+#define ast_channel_lock(x)		ast_mutex_lock(x->lock);
+/*! \brief Unlock a channel. If DEBUG_CHANNEL_LOCKS is defined 
+	in the Makefile, print relevant output for debugging */
+#define ast_channel_unlock(x)		ast_mutex_unlock(x->lock);
+/*! \brief Try locking a channel. If DEBUG_CHANNEL_LOCKS is defined 
+	in the Makefile, print relevant output for debugging */
+#define ast_channel_trylock(x)		ast_mutex_trylock(x->lock);
+#endif
+
 #endif /* _ASTERISK_LOCK_H */
