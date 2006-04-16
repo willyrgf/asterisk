@@ -159,6 +159,14 @@ struct ast_bridge_thread_obj
 	struct ast_channel *peer;
 };
 
+/* store context, priority and extension */
+static void set_c_e_p(struct ast_channel *chan, const char *ctx, const char *ext, int pri)
+{
+	ast_copy_string(chan->context, ctx, sizeof(chan->context));
+	ast_copy_string(chan->exten, ext, sizeof(chan->exten));
+	chan->priority = pri;
+}
+
 static void check_goto_on_transfer(struct ast_channel *chan) 
 {
 	struct ast_channel *xferchan;
@@ -212,7 +220,7 @@ static void *ast_bridge_call_thread(void *data)
 	ast_bridge_call(tobj->peer, tobj->chan, &tobj->bconfig);
 	ast_hangup(tobj->chan);
 	ast_hangup(tobj->peer);
-	tobj->chan = tobj->peer = NULL;
+	bzero(tobj, sizeof(*tobj)); /* XXX for safety */
 	free(tobj);
 	return NULL;
 }
@@ -294,10 +302,7 @@ int ast_park_call(struct ast_channel *chan, struct ast_channel *peer, int timeou
 	}
 	pu->start = ast_tvnow();
 	pu->parkingnum = x;
-	if (timeout > 0)
-		pu->parkingtime = timeout;
-	else
-		pu->parkingtime = parkingtime;
+	pu->parkingtime = (timeout > 0) ? timeout : parkingtime;
 	if (extout)
 		*extout = x;
 	if (peer) 
@@ -375,9 +380,7 @@ int ast_masq_park_call(struct ast_channel *rchan, struct ast_channel *peer, int 
 		ast_channel_masquerade(chan, rchan);
 
 		/* Setup the extensions and such */
-		ast_copy_string(chan->context, rchan->context, sizeof(chan->context));
-		ast_copy_string(chan->exten, rchan->exten, sizeof(chan->exten));
-		chan->priority = rchan->priority;
+		set_c_e_p(chan, rchan->context, rchan->exten, rchan->priority);
 
 		/* Make the masq execute */
 		f = ast_read(chan);
@@ -425,12 +428,10 @@ static int builtin_automonitor(struct ast_channel *chan, struct ast_channel *pee
 		return -1;
 	}
 
-	if (!monitor_app) { 
-		if (!(monitor_app = pbx_findapp("Monitor"))) {
-			monitor_ok=0;
-			ast_log(LOG_ERROR,"Cannot record the call. The monitor application is disabled.\n");
-			return -1;
-		}
+	if (!monitor_app && !(monitor_app = pbx_findapp("Monitor"))) {
+		monitor_ok=0;
+		ast_log(LOG_ERROR,"Cannot record the call. The monitor application is disabled.\n");
+		return -1;
 	}
 	if (!ast_strlen_zero(courtesytone)) {
 		if (ast_autoservice_start(callee_chan))
@@ -594,9 +595,7 @@ static int builtin_blindtransfer(struct ast_channel *chan, struct ast_channel *p
 			res = -1;
 		} else {
 			/* Set the channel's new extension, since it exists, using transferer context */
-			ast_copy_string(transferee->exten, newext, sizeof(transferee->exten));
-			ast_copy_string(transferee->context, transferer_real_context, sizeof(transferee->context));
-			transferee->priority = 0;
+			set_c_e_p(transferee, transferer_real_context, newext, 0);
 		}
 		check_goto_on_transfer(transferer);
 		return res;
@@ -848,7 +847,8 @@ void ast_register_feature(struct ast_call_feature *feature)
 /*! \brief unregister feature from feature_list */
 void ast_unregister_feature(struct ast_call_feature *feature)
 {
-	if (!feature) return;
+	if (!feature)
+		return;
 
 	AST_LIST_LOCK(&feature_list);
 	AST_LIST_REMOVE(&feature_list,feature,feature_entry);
@@ -902,9 +902,7 @@ static int feature_exec_app(struct ast_channel *chan, struct ast_channel *peer, 
 	
 	app = pbx_findapp(feature->app);
 	if (app) {
-		struct ast_channel *work = chan;
-		if (ast_test_flag(feature, AST_FEATURE_FLAG_CALLEE))
-			work = peer;
+		struct ast_channel *work = ast_test_flag(feature,AST_FEATURE_FLAG_CALLEE) ? peer : chan;
 		res = pbx_exec(work, app, feature->app_args);
 		if (res < 0)
 			return res; 
@@ -913,7 +911,7 @@ static int feature_exec_app(struct ast_channel *chan, struct ast_channel *peer, 
 		return -2;
 	}
 	
-	return FEATURE_RETURN_SUCCESS;
+	return FEATURE_RETURN_SUCCESS;	/* XXX should probably return res */
 }
 
 static void unmap_features(void)
@@ -1018,26 +1016,23 @@ static void set_config_flags(struct ast_channel *chan, struct ast_channel *peer,
 			char *tok;
 			struct ast_call_feature *feature;
 
-			if (!tmp) {
+			if (!tmp)	/* no memory */
 				return;
-			}
 
 			/* while we have a feature */
 			while (NULL != (tok = strsep(&tmp, "#"))) {
-				if ((feature = find_feature(tok))) {
-					if (ast_test_flag(feature, AST_FEATURE_FLAG_NEEDSDTMF)) {
-						if (ast_test_flag(feature, AST_FEATURE_FLAG_CALLER))
-							ast_set_flag(config, AST_BRIDGE_DTMF_CHANNEL_0);
-						if (ast_test_flag(feature, AST_FEATURE_FLAG_CALLEE))
-							ast_set_flag(config, AST_BRIDGE_DTMF_CHANNEL_1);
-					}
+				if ((feature = find_feature(tok)) && ast_test_flag(feature, AST_FEATURE_FLAG_NEEDSDTMF)) {
+					if (ast_test_flag(feature, AST_FEATURE_FLAG_CALLER))
+						ast_set_flag(config, AST_BRIDGE_DTMF_CHANNEL_0);
+					if (ast_test_flag(feature, AST_FEATURE_FLAG_CALLEE))
+						ast_set_flag(config, AST_BRIDGE_DTMF_CHANNEL_1);
 				}
 			}
 		}
 	}
 }
 
-
+/* XXX this is very similar to the code in channel.c */
 static struct ast_channel *ast_feature_request_and_dial(struct ast_channel *caller, const char *type, int format, void *data, int timeout, int *outstate, const char *cid_num, const char *cid_name)
 {
 	int state = 0;
@@ -1340,10 +1335,11 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 			return -1;
 		}
 		
-		if (!f || ((f->frametype == AST_FRAME_CONTROL) && ((f->subclass == AST_CONTROL_HANGUP) || (f->subclass == AST_CONTROL_BUSY) || 
-			(f->subclass == AST_CONTROL_CONGESTION)))) {
-				res = -1;
-				break;
+		if (!f || (f->frametype == AST_FRAME_CONTROL &&
+				(f->subclass == AST_CONTROL_HANGUP || f->subclass == AST_CONTROL_BUSY || 
+					f->subclass == AST_CONTROL_CONGESTION ) ) ) {
+			res = -1;
+			break;
 		}
 		/* many things should be sent to the 'other' channel */
 		other = (who == chan) ? peer : chan;
@@ -1362,7 +1358,7 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 			}
 		}
 		/* check for '*', if we find it it's time to disconnect */
-		if (f && (f->frametype == AST_FRAME_DTMF)) {
+		if (f && f->frametype == AST_FRAME_DTMF) {
 			char *featurecode;
 			int sense;
 
@@ -1576,7 +1572,7 @@ static void *do_parking_thread(void *ignore)
 							goto std;	/* XXX Ick: jumping into an else statement??? XXX */
 						}
 					}
-				}
+				} /* end for */
 				if (x >= AST_MAX_FDS) {
 std:					for (x=0; x<AST_MAX_FDS; x++) {
 						/* Keep this one for next one */
@@ -1594,7 +1590,7 @@ std:					for (x=0; x<AST_MAX_FDS; x++) {
 					pu = pu->next;
 				}
 			}
-		}
+		} /* end while */
 		ast_mutex_unlock(&parking_lock);
 		rfds = nrfds;
 		efds = nefds;
