@@ -1905,9 +1905,9 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 	if (chan->fds[AST_GENERATOR_FD] > -1 && chan->fdno == AST_GENERATOR_FD) {
 		void *tmp = chan->generatordata;
 		chan->generatordata = NULL;     /* reset to let ast_write get through */
-		/* XXX don't we miss an ast_channel_unlock(chan); here ? */
 		chan->generator->generate(chan, tmp, -1, -1);
 		chan->generatordata = tmp;
+		ast_channel_unlock(chan);
 		return &ast_null_frame;
 	}
 
@@ -2346,45 +2346,44 @@ int ast_write(struct ast_channel *chan, struct ast_frame *fr)
 		if (chan->tech->write == NULL)
 			break;
 
-			/* XXX need to reindent this block */
-			/* Bypass translator if we're writing format in the raw write format.  This
-			   allows mixing of native / non-native formats */
-			if (fr->subclass == chan->rawwriteformat)
-				f = fr;
-			else
-				f = (chan->writetrans) ? ast_translate(chan->writetrans, fr, 0) : fr;
-			if (f == NULL) {
-				res = 0;
-			} else {
-				if (chan->spies)
-					queue_frame_to_spies(chan, f, SPY_WRITE);
+		/* Bypass translator if we're writing format in the raw write format.  This
+		   allows mixing of native / non-native formats */
+		if (fr->subclass == chan->rawwriteformat)
+			f = fr;
+		else
+			f = (chan->writetrans) ? ast_translate(chan->writetrans, fr, 0) : fr;
+		if (f == NULL) {
+			res = 0;
+		} else {
+			if (chan->spies)
+				queue_frame_to_spies(chan, f, SPY_WRITE);
 
-				if (chan->monitor && chan->monitor->write_stream) {
+			if (chan->monitor && chan->monitor->write_stream) {
 #ifndef MONITOR_CONSTANT_DELAY
-					int jump = chan->insmpl - chan->outsmpl - 4 * f->samples;
-					if (jump >= 0) {
-						if (ast_seekstream(chan->monitor->write_stream, jump + f->samples, SEEK_FORCECUR) == -1)
-							ast_log(LOG_WARNING, "Failed to perform seek in monitoring write stream, synchronization between the files may be broken\n");
-						chan->outsmpl += jump + 4 * f->samples;
-					} else
-						chan->outsmpl += f->samples;
+				int jump = chan->insmpl - chan->outsmpl - 4 * f->samples;
+				if (jump >= 0) {
+					if (ast_seekstream(chan->monitor->write_stream, jump + f->samples, SEEK_FORCECUR) == -1)
+						ast_log(LOG_WARNING, "Failed to perform seek in monitoring write stream, synchronization between the files may be broken\n");
+					chan->outsmpl += jump + 4 * f->samples;
+				} else
+					chan->outsmpl += f->samples;
 #else
-					int jump = chan->insmpl - chan->outsmpl;
-					if (jump - MONITOR_DELAY >= 0) {
-						if (ast_seekstream(chan->monitor->write_stream, jump - f->samples, SEEK_FORCECUR) == -1)
-							ast_log(LOG_WARNING, "Failed to perform seek in monitoring write stream, synchronization between the files may be broken\n");
-						chan->outsmpl += jump;
-					} else
-						chan->outsmpl += f->samples;
+				int jump = chan->insmpl - chan->outsmpl;
+				if (jump - MONITOR_DELAY >= 0) {
+					if (ast_seekstream(chan->monitor->write_stream, jump - f->samples, SEEK_FORCECUR) == -1)
+						ast_log(LOG_WARNING, "Failed to perform seek in monitoring write stream, synchronization between the files may be broken\n");
+					chan->outsmpl += jump;
+				} else
+					chan->outsmpl += f->samples;
 #endif
-					if (chan->monitor->state == AST_MONITOR_RUNNING) {
-						if (ast_writestream(chan->monitor->write_stream, f) < 0)
-							ast_log(LOG_WARNING, "Failed to write data to channel monitor write stream\n");
-					}
+				if (chan->monitor->state == AST_MONITOR_RUNNING) {
+					if (ast_writestream(chan->monitor->write_stream, f) < 0)
+						ast_log(LOG_WARNING, "Failed to write data to channel monitor write stream\n");
 				}
-
-				res = chan->tech->write(chan, f);
 			}
+
+			res = chan->tech->write(chan, f);
+		}
 		break;	
 	}
 
