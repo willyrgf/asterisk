@@ -708,6 +708,24 @@ static const struct c_referstatusstring {
 	{ REFER_NOAUTH,		"Failed - auth failure" }
 } ;
 
+/*! \brief Structure to handle SIP transfers. Dynamically allocated when needed  */
+/* OEJ: Should be moved to string fields */
+struct sip_refer {
+	char refer_to[AST_MAX_EXTENSION];		/*!< Place to store REFER-TO extension */
+	char refer_to_domain[AST_MAX_EXTENSION];	/*!< Place to store REFER-TO domain */
+	char refer_to_urioption[AST_MAX_EXTENSION];	/*!< Place to store REFER-TO uri options */
+	char refer_to_context[AST_MAX_EXTENSION];	/*!< Place to store REFER-TO context */
+	char referred_by[AST_MAX_EXTENSION];		/*!< Place to store REFERRED-BY extension */
+	char referred_by_name[AST_MAX_EXTENSION];	/*!< Place to store REFERRED-BY extension */
+	char refer_contact[AST_MAX_EXTENSION];		/*!< Place to store Contact info from a REFER extension */
+	char replaces_callid[BUFSIZ];			/*!< Replace info */
+	char replaces_callid_totag[BUFSIZ/2];		/*!< Replace info */
+	char replaces_callid_fromtag[BUFSIZ/2];		/*!< Replace info */
+	struct sip_pvt *refer_call;			/*!< Call we are referring */
+	int attendedtransfer;				/*!< Attended or blind transfer? */
+	int localtransfer;				/*!< Transfer to local domain? */
+	enum referstatus status;			/*!< REFER status */
+};
 
 /*! \brief sip_pvt: PVT structures are used for each SIP dialog, ie. a call, a registration, a subscribe  */
 static struct sip_pvt {
@@ -801,11 +819,12 @@ static struct sip_pvt {
 	int rtpholdtimeout;			/*!< RTP timeout when on hold */
 	int rtpkeepalive;			/*!< Send RTP packets for keepalive */
 	enum transfermodes allowtransfer;	/*! SIP Refer restriction scheme */
-	enum subscriptiontype subscribed;	/*!< Is this dialog a subscription?  */
-	int stateid;
-	int laststate;				/*!< Last known extension state */
-	int dialogver;
+	enum subscriptiontype subscribed;	/*!< SUBSCRIBE: Is this dialog a subscription?  */
+	int stateid;				/*!< SUBSCRIBE: ID for devicestate subscriptions */
+	int laststate;				/*!< SUBSCRIBE: Last known extension state */
+	int dialogver;				/*!< SUBSCRIBE: Version for subscription dialog-info */
 	
+	struct sip_refer *refer;		/*!< REFER: SIP transfer data structure */
 	struct ast_dsp *vad;			/*!< Voice Activation Detection dsp */
 	
 	struct sip_peer *relatedpeer;		/*!< If this dialog is related to a peer, which one 
@@ -815,7 +834,7 @@ static struct sip_pvt {
 	struct ast_rtp *vrtp;			/*!< Video RTP session */
 	struct sip_pkt *packets;		/*!< Packets scheduled for re-transmission */
 	struct sip_history_head *history;	/*!< History of this SIP dialog */
-	struct ast_variable *chanvars;		/*!< Channel variables to set for call */
+	struct ast_variable *chanvars;		/*!< Channel variables to set for inbound call */
 	struct sip_pvt *next;			/*!< Next dialog in chain */
 	struct sip_invite_param *options;	/*!< Options for INVITE */
 } *iflist = NULL;
@@ -823,9 +842,9 @@ static struct sip_pvt {
 #define FLAG_RESPONSE (1 << 0)
 #define FLAG_FATAL (1 << 1)
 
-/*! \brief sip packet - read in sipsock_read(), transmitted in send_request() */
+/*! \brief sip packet - raw format for outbound packets that are sent or scheduled for transmission */
 struct sip_pkt {
-	struct sip_pkt *next;			/*!< Next packet */
+	struct sip_pkt *next;			/*!< Next packet in linked list */
 	int retrans;				/*!< Retransmission number */
 	int method;				/*!< SIP method for this packet */
 	int seqno;				/*!< Sequence number */
@@ -2184,8 +2203,6 @@ static int auto_congest(void *nothing)
 }
 
 
-
-
 /*! \brief Initiate SIP call from PBX 
  *      used from the dial() application      */
 static int sip_call(struct ast_channel *ast, char *dest, int timeout)
@@ -2194,7 +2211,8 @@ static int sip_call(struct ast_channel *ast, char *dest, int timeout)
 	struct sip_pvt *p;
 	struct varshead *headp;
 	struct ast_var_t *current;
-	
+	const char *referer = NULL;   /* SIP refererer */	
+
 	p = ast->tech_pvt;
 	if ((ast->_state != AST_STATE_DOWN) && (ast->_state != AST_STATE_RESERVED)) {
 		ast_log(LOG_WARNING, "sip_call called on %s, neither down nor reserved\n", ast->name);
@@ -2215,13 +2233,36 @@ static int sip_call(struct ast_channel *ast, char *dest, int timeout)
 		} else if (!p->options->addsipheaders && !strncasecmp(ast_var_name(current), "SIPADDHEADER", strlen("SIPADDHEADER"))) {
 			/* Check whether there is a variable with a name starting with SIPADDHEADER */
 			p->options->addsipheaders = 1;
+		} else if (!strcasecmp(ast_var_name(current),"SIPTRANSFER")) {
+			/* This is a transfered call */
+			p->options->transfer = 1;
+		} else if (!strcasecmp(ast_var_name(current),"SIPTRANSFER_REFERER")) {
+			/* This is the referer */
+			referer = ast_var_value(current);
+		} else if (!strcasecmp(ast_var_name(current),"SIPTRANSFER_REPLACES")) {
+			/* We're replacing a call. */
+			p->options->replaces = ast_var_value(current);
 		}
 	}
 	
 	res = 0;
 	ast_set_flag(&p->flags[0], SIP_OUTGOING);
+
+	if (p->options->transfer) {
+		char buf[BUFSIZ/2];
+
+		if (referer) {
+			if (sipdebug && option_debug > 2)
+				ast_log(LOG_DEBUG, "Call for %s transfered by %s\n", p->username, referer);
+			snprintf(buf, sizeof(buf)-1, "-> %s (via %s)", p->cid_name, referer);
+		} else {
+			snprintf(buf, sizeof(buf)-1, "-> %s", p->cid_name);
+		}
+		ast_string_field_set(p, cid_name, buf);
+	} 
 	if (option_debug)
 		ast_log(LOG_DEBUG, "Outgoing Call for %s\n", p->username);
+
 	res = update_call_counter(p, INC_CALL_LIMIT);
 	if ( res != -1 ) {
 		p->callingpres = ast->cid.cid_pres;
@@ -2818,11 +2859,12 @@ static int sip_fixup(struct ast_channel *oldchan, struct ast_channel *newchan)
 	p = newchan->tech_pvt;
 
 	ast_mutex_lock(&p->lock);
+	append_history(p, "Masq", "Old channel: %s\n", oldchan->name);
+	append_history(p, "Masq (cont)", "...new owner: %s\n", p->owner->name);
 	if (p->owner != oldchan)
 		ast_log(LOG_WARNING, "old channel wasn't %p but was %p\n", oldchan, p->owner);
 	else {
 		p->owner = newchan;
-		append_history(p, "Masq", "Old channel: %s\n", oldchan->name);
 		ret = 0;
 	}
 	ast_mutex_unlock(&p->lock);
@@ -4272,6 +4314,7 @@ static int respprep(struct sip_request *resp, struct sip_pvt *p, const char *msg
 	copy_header(resp, req, "CSeq");
 	add_header(resp, "User-Agent", global_useragent);
 	add_header(resp, "Allow", ALLOWED_METHODS);
+	add_header(resp, "Supported", SUPPORTED_EXTENSIONS);
 	if (msg[0] == '2' && (p->method == SIP_SUBSCRIBE || p->method == SIP_REGISTER)) {
 		/* For registration responses, we also need expiry and
 		   contact info */
@@ -4406,8 +4449,12 @@ static int __transmit_response(struct sip_pvt *p, const char *msg, struct sip_re
 	add_header_contentLength(&resp, 0);
 	/* If we are cancelling an incoming invite for some reason, add information
 		about the reason why we are doing this in clear text */
-	if (msg[0] != '1' && p->owner && p->owner->hangupcause) {
+	if (p->method == SIP_INVITE && msg[0] != '1' && p->owner && p->owner->hangupcause) {
+		char buf[10];
+
 		add_header(&resp, "X-Asterisk-HangupCause", ast_cause2str(p->owner->hangupcause));
+		snprintf(buf, sizeof(buf), "%d", p->owner->hangupcause);
+		add_header(&resp, "X-Asterisk-HangupCauseCode", buf);
 	}
 	add_blank_header(&resp);
 	return send_response(p, &resp, reliable, seqno);
@@ -4874,10 +4921,8 @@ static int determine_firstline_parts( struct sip_request *req )
 static int transmit_reinvite_with_sdp(struct sip_pvt *p)
 {
 	struct sip_request req;
-	if (ast_test_flag(&p->flags[0], SIP_REINVITE_UPDATE))
-		reqprep(&req, p, SIP_UPDATE, 0, 1);
-	else 
-		reqprep(&req, p, SIP_INVITE, 0, 1);
+
+	reqprep(&req, p, ast_test_flag(&p->flags[0], SIP_REINVITE_UPDATE) ?  SIP_UPDATE : SIP_INVITE, 0, 1);
 	
 	add_header(&req, "Allow", ALLOWED_METHODS);
 	add_header(&req, "Supported", SUPPORTED_EXTENSIONS);
@@ -5755,6 +5800,12 @@ static int transmit_message_with_text(struct sip_pvt *p, const char *text)
 	return send_request(p, &req, 1, p->ocseq);
 }
 
+/*! \brief Allocate SIP refer structure */
+int sip_refer_allocate(struct sip_pvt *p) {
+   p->refer = ast_calloc(1, sizeof(struct sip_refer)); 
+   return p->refer ? 1 : 0;
+}
+
 /*! \brief Transmit SIP REFER message */
 static int transmit_refer(struct sip_pvt *p, const char *dest)
 {
@@ -5859,10 +5910,12 @@ static int transmit_request_with_auth(struct sip_pvt *p, int sipmethod, int seqn
 	}
 	/* If we are hanging up and know a cause for that, send it in clear text to make
 		debugging easier. */
-	if (sipmethod == SIP_BYE) {
-		if (p->owner && p->owner->hangupcause)	{
-			add_header(&resp, "X-Asterisk-HangupCause", ast_cause2str(p->owner->hangupcause));
-		}
+	if (sipmethod == SIP_BYE && p->owner && p->owner->hangupcause)	{
+		char buf[10];
+
+		add_header(&resp, "X-Asterisk-HangupCause", ast_cause2str(p->owner->hangupcause));
+		snprintf(buf, sizeof(buf), "%d", p->owner->hangupcause);
+		add_header(&resp, "X-Asterisk-HangupCauseCode", buf);
 	}
 
 	add_header_contentLength(&resp, 0);
