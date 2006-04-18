@@ -1107,6 +1107,7 @@ static int handle_request_options(struct sip_pvt *p, struct sip_request *req);
 /*------Response handling functions */
 static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, struct sip_request *req, int seqno);
 static void handle_response_refer(struct sip_pvt *p, int resp, char *rest, struct sip_request *req, int seqno);
+static int handle_response_peerpoke(struct sip_pvt *p, int resp, struct sip_request *req);
 
 /*----- RTP interface functions */
 static int sip_set_rtp_peer(struct ast_channel *chan, struct ast_rtp *rtp, struct ast_rtp *vrtp, int codecs, int nat_active);
@@ -2340,6 +2341,8 @@ static void __sip_destroy(struct sip_pvt *p, int lockowner)
 		ast_rtp_destroy(p->rtp);
 	if (p->vrtp)
 		ast_rtp_destroy(p->vrtp);
+	if (p->refer)
+		free(p->refer);
 	if (p->route) {
 		free_old_route(p->route);
 		p->route = NULL;
@@ -5821,8 +5824,8 @@ static int transmit_message_with_text(struct sip_pvt *p, const char *text)
 
 /*! \brief Allocate SIP refer structure */
 int sip_refer_allocate(struct sip_pvt *p) {
-   p->refer = ast_calloc(1, sizeof(struct sip_refer)); 
-   return p->refer ? 1 : 0;
+	p->refer = ast_calloc(1, sizeof(struct sip_refer)); 
+	return p->refer ? 1 : 0;
 }
 
 /*! \brief Transmit SIP REFER message */
@@ -5833,12 +5836,23 @@ static int transmit_refer(struct sip_pvt *p, const char *dest)
 	const char *of;
 	char *c;
 	char referto[256];
+	char *ttag, *ftag;
+	char *theirtag = ast_strdupa(p->theirtag);
 
-	/* Are we transfering an inbound or outbound call? */
-	if (ast_test_flag(&p->flags[0], SIP_OUTGOING))
+	if (option_debug || sipdebug)
+		ast_log(LOG_DEBUG, "SIP transfer of %s to %s\n", p->callid, dest);
+
+	/* Are we transfering an inbound or outbound call ? */
+	if (ast_test_flag(&p->flags[0], SIP_OUTGOING))  {
 		of = get_header(&p->initreq, "To");
-	else
+		ttag = theirtag;
+		ftag = p->tag;
+	} else {
 		of = get_header(&p->initreq, "From");
+		ftag = theirtag;
+		ttag = p->tag;
+	}
+
 	ast_copy_string(from, of, sizeof(from));
 	of = get_in_brackets(from);
 	ast_string_field_set(p, from, of);
@@ -5851,17 +5865,18 @@ static int transmit_refer(struct sip_pvt *p, const char *dest)
 		c = NULL;
 	else if ((c = strchr(of, '@')))
 		*c++ = '\0';
-	if (c) {
+	if (c) 
 		snprintf(referto, sizeof(referto), "<sip:%s@%s>", dest, c);
-	} else {
+	else
 		snprintf(referto, sizeof(referto), "<sip:%s>", dest);
-	}
 
 	add_header(&req, "Max-Forwards", DEFAULT_MAX_FORWARDS);
 
 	/* save in case we get 407 challenge */
-	ast_string_field_set(p, refer_to, referto);
-	ast_string_field_set(p, referred_by, p->our_contact);
+	sip_refer_allocate(p);
+	ast_copy_string(p->refer->refer_to, referto, sizeof(p->refer->refer_to));
+	ast_copy_string(p->refer->referred_by, p->our_contact, sizeof(p->refer->referred_by));
+	p->refer->status = REFER_SENT;   /* Set refer status */
 
 	reqprep(&req, p, SIP_REFER, 0, 1);
 	add_header(&req, "Refer-To", referto);
@@ -5870,7 +5885,10 @@ static int transmit_refer(struct sip_pvt *p, const char *dest)
 	if (!ast_strlen_zero(p->our_contact))
 		add_header(&req, "Referred-By", p->our_contact);
 	add_blank_header(&req);
+
 	return send_request(p, &req, 1, p->ocseq);
+	/* We should propably wait for a NOTIFY here until we ack the transfer */
+	/* Maybe fork a new thread and wait for a STATUS of REFER_200OK on the refer status before returning to app_transfer */
 
 	/*! \todo In theory, we should hang around and wait for a reply, before
 	returning to the dial plan here. Don't know really how that would
@@ -5878,6 +5896,7 @@ static int transmit_refer(struct sip_pvt *p, const char *dest)
 	useful we should have a STATUS code on transfer().
 	*/
 }
+
 
 /*! \brief Send SIP INFO dtmf message, see Cisco documentation on cisco.com */
 static int transmit_info_with_digit(struct sip_pvt *p, char digit)
@@ -8664,10 +8683,12 @@ static int __sip_show_channels(int fd, int argc, char *argv[], int subscriptions
 {
 #define FORMAT3 "%-15.15s  %-10.10s  %-11.11s  %-15.15s  %-13.13s  %-15.15s %-10.10s\n"
 #define FORMAT2 "%-15.15s  %-10.10s  %-11.11s  %-11.11s  %-4.4s  %-7.7s  %-15.15s\n"
-#define FORMAT  "%-15.15s  %-10.10s  %-11.11s  %5.5d/%5.5d  %-4.4s  %-3.3s %-3.3s  %-15.15s\n"
+#define FORMAT  "%-15.15s  %-10.10s  %-11.11s  %5.5d/%5.5d  %-4.4s  %-3.3s %-3.3s  %-15.15s %-10.10s\n"
 	struct sip_pvt *cur;
 	char iabuf[INET_ADDRSTRLEN];
 	int numchans = 0;
+	char *referstatus = NULL;
+
 	if (argc != 3)
 		return RESULT_SHOWUSAGE;
 	ast_mutex_lock(&iflock);
@@ -8677,6 +8698,10 @@ static int __sip_show_channels(int fd, int argc, char *argv[], int subscriptions
 	else 
 		ast_cli(fd, FORMAT3, "Peer", "User", "Call ID", "Extension", "Last state", "Type", "Mailbox");
 	for (; cur; cur = cur->next) {
+		referstatus = "";
+		if (cur->refer) { /* SIP transfer in progress */
+			referstatus = referstatus2str(cur->refer->status);
+		}
 		if (cur->subscribed == NONE && !subscriptions) {
 			ast_cli(fd, FORMAT, ast_inet_ntoa(iabuf, sizeof(iabuf), cur->sa.sin_addr), 
 				S_OR(cur->username, S_OR(cur->cid_num, "(None)")),
@@ -8685,7 +8710,9 @@ static int __sip_show_channels(int fd, int argc, char *argv[], int subscriptions
 				ast_getformatname(cur->owner ? cur->owner->nativeformats : 0), 
 				ast_test_flag(&cur->flags[0], SIP_CALL_ONHOLD) ? "Yes" : "No",
 				ast_test_flag(&cur->flags[0], SIP_NEEDDESTROY) ? "(d)" : "",
-				cur->lastmsg );
+				cur->lastmsg ,
+				referstatus
+			);
 			numchans++;
 		}
 		if (cur->subscribed != NONE && subscriptions) {
@@ -10129,7 +10156,7 @@ static int handle_response_register(struct sip_pvt *p, int resp, char *rest, str
 }
 
 /*! \brief Handle qualification responses (OPTIONS) */
-static int handle_response_peerpoke(struct sip_pvt *p, int resp, char *rest, struct sip_request *req, int ignore, int seqno, int sipmethod)
+static int handle_response_peerpoke(struct sip_pvt *p, int resp, struct sip_request *req)
 {
 	struct sip_peer *peer;
 	int pingtime;
@@ -10171,8 +10198,6 @@ static int handle_response_peerpoke(struct sip_pvt *p, int resp, char *rest, str
 
 		if (peer->pokeexpire > -1)
 			ast_sched_del(sched, peer->pokeexpire);
-		if (sipmethod == SIP_INVITE)	/* Does this really happen? */
-			transmit_request(p, SIP_ACK, seqno, XMIT_UNRELIABLE, 0);
 		ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
 
 		/* Try again eventually */
@@ -10223,7 +10248,7 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 		   Well, as long as it's not a 100 response...  since we might
 		   need to hang around for something more "definitive" */
 
-		res = handle_response_peerpoke(p, resp, rest, req, ignore, seqno, sipmethod);
+		res = handle_response_peerpoke(p, resp, req);
 	} else if (ast_test_flag(&p->flags[0], SIP_OUTGOING)) {
 		switch(resp) {
 		case 100:	/* 100 Trying */
@@ -10243,6 +10268,8 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 			if (sipmethod == SIP_MESSAGE) {
 				/* We successfully transmitted a message */
 				ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
+			} else if (sipmethod == SIP_INVITE) {
+				handle_response_invite(p, resp, rest, req, seqno);
 			} else if (sipmethod == SIP_NOTIFY) {
 				/* They got the notify, this is the end */
 				if (p->owner) {
@@ -10253,9 +10280,7 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 						ast_set_flag(&p->flags[0], SIP_NEEDDESTROY); 
 					}
 				}
-			} else if (sipmethod == SIP_INVITE)
-				handle_response_invite(p, resp, rest, req, seqno);
-			else if (sipmethod == SIP_REGISTER)
+			} else if (sipmethod == SIP_REGISTER)
 				res = handle_response_register(p, resp, rest, req, ignore, seqno);
 			break;
 		case 202:   /* Transfer accepted */
@@ -10311,6 +10336,35 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 			} else	/* We can't handle this, giving up in a bad way */
 				ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
 
+			break;
+		case 481: /* Call leg does not exist */
+			if (sipmethod == SIP_INVITE) {
+				/* First we ACK */
+				transmit_request(p, SIP_ACK, seqno, 0, 0);
+					ast_log(LOG_WARNING, "INVITE with REPLACEs failed to '%s'\n", get_header(&p->initreq, "From"));
+				if (owner)
+					ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
+				sip_scheddestroy(p, SIP_TRANS_TIMEOUT);
+			} else if (sipmethod == SIP_REFER) {
+				/* A transfer with Replaces did not work */
+				/* OEJ: We should Set flag, cancel the REFER, go back
+				to original call - but right now we can't */
+				ast_log(LOG_WARNING, "Remote host can't match request %s to call '%s'. Giving up.\n", sip_methods[sipmethod].text, p->callid);
+				if (owner)
+					ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
+				ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);
+			} else if (sipmethod == SIP_BYE) {
+				/* The other side has no transaction to bye,
+				just assume it's all right then */
+				ast_log(LOG_WARNING, "Remote host can't match request %s to call '%s'. Giving up.\n", sip_methods[sipmethod].text, p->callid);
+			} else if (sipmethod == SIP_CANCEL) {
+				/* The other side has no transaction to cancel,
+				just assume it's all right then */
+				ast_log(LOG_WARNING, "Remote host can't match request %s to call '%s'. Giving up.\n", sip_methods[sipmethod].text, p->callid);
+			} else {
+				ast_log(LOG_WARNING, "Remote host can't match request %s to call '%s'. Giving up.\n", sip_methods[sipmethod].text, p->callid);
+				/* Guessing that this is not an important request */
+			}
 			break;
 		case 491: /* Pending */
 			if (sipmethod == SIP_INVITE)
