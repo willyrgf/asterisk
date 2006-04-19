@@ -358,21 +358,14 @@ static void senddialevent(struct ast_channel *src, struct ast_channel *dst)
 
 static struct ast_channel *wait_for_answer(struct ast_channel *in, struct dial_localuser *outgoing, int *to, struct ast_flags *peerflags, int *sentringing, char *status, size_t statussize, int busystart, int nochanstart, int congestionstart, int priority_jump, int *result)
 {
-	struct dial_localuser *o;
 	int numbusy = busystart;
 	int numcongestion = congestionstart;
 	int numnochan = nochanstart;
 	int prestart = busystart + congestionstart + nochanstart;
-	int cause;
 	int orig = *to;
 	struct ast_channel *peer = NULL;
-	struct ast_channel *watchers[AST_MAX_WATCHERS];
-	int single;
-	struct ast_channel *winner;
-	const char *context = NULL;
-	char cidname[AST_MAX_EXTENSION];
-
-	single = (outgoing && !outgoing->next && !ast_test_flag(outgoing, OPT_MUSICBACK | OPT_RINGBACK));
+	/* single is set if only one destination is enabled */
+	int single = outgoing && !outgoing->next && !ast_test_flag(outgoing, OPT_MUSICBACK | OPT_RINGBACK);
 	
 	if (single) {
 		/* Turn off hold music, etc */
@@ -383,8 +376,12 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in, struct dial_l
 	
 	
 	while (*to && !peer) {
+		struct dial_localuser *o;
 		int pos = 0;	/* how many channels do we handle */
 		int numlines = prestart;
+		struct ast_channel *winner;
+		struct ast_channel *watchers[AST_MAX_WATCHERS];
+
 		watchers[pos++] = in;
 		for (o = outgoing; o; o = o->next) {
 			/* Keep track of important channels */
@@ -437,14 +434,14 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in, struct dial_l
 				char tmpchan[256];
 				char *stuff;
 				char *tech;
-				const char *forward_context;
+				int cause;
 
 				ast_copy_string(tmpchan, c->call_forward, sizeof(tmpchan));
 				if ((stuff = strchr(tmpchan, '/'))) {
 					*stuff++ = '\0';
 					tech = tmpchan;
 				} else {
-					forward_context = pbx_builtin_getvar_helper(c, "FORWARD_CONTEXT");
+					const char *forward_context = pbx_builtin_getvar_helper(c, "FORWARD_CONTEXT");
 					snprintf(tmpchan, sizeof(tmpchan), "%s@%s", c->call_forward, forward_context ? forward_context : c->context);
 					stuff = tmpchan;
 					tech = "Local";
@@ -504,8 +501,10 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in, struct dial_l
 					} else {
 						senddialevent(in, c);
 						/* After calling, set callerid to extension */
-						if (!ast_test_flag(peerflags, OPT_ORIGINAL_CLID))
+						if (!ast_test_flag(peerflags, OPT_ORIGINAL_CLID)) {
+							char cidname[AST_MAX_EXTENSION];
 							ast_set_callerid(c, S_OR(in->macroexten, in->exten), get_cid_name(cidname, sizeof(cidname), in), NULL);
+						}
 					}
 				}
 				/* Hangup the original channel now, in case we needed it */
@@ -645,7 +644,7 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in, struct dial_l
 
 			if (f && (f->frametype == AST_FRAME_DTMF)) {
 				if (ast_test_flag(peerflags, OPT_DTMF_EXIT)) {
-					context = pbx_builtin_getvar_helper(in, "EXITCONTEXT");
+					const char *context = pbx_builtin_getvar_helper(in, "EXITCONTEXT");
 					if (onedigit_goto(in, context, (char) f->subclass, 1)) {
 						if (option_verbose > 2)
 							ast_verbose(VERBOSE_PREFIX_3 "User hit %c to disconnect call.\n", f->subclass);
@@ -703,10 +702,8 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 {
 	int res = -1;
 	struct localuser *u;
-	char *tech, *number, *rest, *cur;
-	char privcid[256];
-	char privintro[1024];
-	struct dial_localuser *outgoing = NULL, *tmp;
+	char *rest, *cur;
+	struct dial_localuser *outgoing = NULL;
 	struct ast_channel *peer;
 	int to;
 	int numbusy = 0;
@@ -715,11 +712,8 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 	int cause;
 	char numsubst[AST_MAX_EXTENSION];
 	char cidname[AST_MAX_EXTENSION];
-	char toast[80];
-	char *l;
 	int privdb_val = 0;
 	unsigned int calldurationlimit = 0;
-	struct ast_bridge_config config;
 	long timelimit = 0;
 	long play_warning = 0;
 	long warning_freq = 0;
@@ -727,17 +721,14 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 	const char *end_sound = NULL;
 	const char *start_sound = NULL;
 	char *dtmfcalled = NULL, *dtmfcalling = NULL;
-	const char *var;
 	char status[256];
 	int play_to_caller = 0, play_to_callee = 0;
 	int sentringing = 0, moh = 0;
 	const char *outbound_group = NULL;
-	const char *macro_result = NULL;
-	char *macro_transfer_dest = NULL;
-	int digit = 0, result = 0;
-	time_t start_time, answer_time, end_time;
-	struct ast_app *app = NULL;
-
+	int result = 0;
+	time_t start_time;
+	char privintro[1024];
+	char privcid[256];
 	char *parse;
 	AST_DECLARE_APP_ARGS(args,
 			     AST_APP_ARG(peers);
@@ -780,18 +771,17 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 	}
 
 	if (ast_test_flag(&opts, OPT_SENDDTMF) && !ast_strlen_zero(opt_args[OPT_ARG_SENDDTMF])) {
-		parse = opt_args[OPT_ARG_SENDDTMF];
-		dtmfcalled = strsep(&parse, ":");
-		dtmfcalling = parse;
+		dtmfcalling = opt_args[OPT_ARG_SENDDTMF];
+		dtmfcalled = strsep(&dtmfcalling, ":");
 	}
 
 	if (ast_test_flag(&opts, OPT_DURATION_LIMIT) && !ast_strlen_zero(opt_args[OPT_ARG_DURATION_LIMIT])) {
 		char *limit_str, *warning_str, *warnfreq_str;
+		const char *var;
 
-		parse = opt_args[OPT_ARG_DURATION_LIMIT];
-		limit_str = strsep(&parse, ":");
-		warning_str = strsep(&parse, ":");
-		warnfreq_str = parse;
+		warnfreq_str = opt_args[OPT_ARG_DURATION_LIMIT];
+		limit_str = strsep(&warnfreq_str, ":");
+		warning_str = strsep(&warnfreq_str, ":");
 
 		timelimit = atol(limit_str);
 		if (warning_str)
@@ -830,13 +820,13 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			play_to_caller = 1;
 		
 		var = pbx_builtin_getvar_helper(chan,"LIMIT_WARNING_FILE");
-		warning_sound = (!ast_strlen_zero(var)) ? var : "timeleft";
+		warning_sound = S_OR(var, "timeleft");
 		
 		var = pbx_builtin_getvar_helper(chan,"LIMIT_TIMEOUT_FILE");
-		end_sound = (!ast_strlen_zero(var)) ? var : NULL;
+		end_sound = S_OR(var, NULL);	/* XXX not much of a point in doing this! */
 		
 		var = pbx_builtin_getvar_helper(chan,"LIMIT_CONNECT_FILE");
-		start_sound = (!ast_strlen_zero(var)) ? var : NULL;
+		start_sound = S_OR(var, NULL);	/* XXX not much of a point in doing this! */
 
 		/* undo effect of S(x) in case they are both used */
 		calldurationlimit = 0;
@@ -865,8 +855,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		opt_args[OPT_ARG_PRIVACY] = ast_strdupa(chan->exten);
 	if (ast_test_flag(&opts, OPT_PRIVACY) || ast_test_flag(&opts, OPT_SCREENING)) {
 		char callerid[60];
-
-		l = chan->cid.cid_num;
+		char *l = chan->cid.cid_num;	/* XXX watch out, we are overwriting it */
 		if (!ast_strlen_zero(l)) {
 			ast_shrink_phone_number(l);
 			if( ast_test_flag(&opts, OPT_PRIVACY) ) {
@@ -962,9 +951,10 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 	/* loop through the list of dial destinations */
 	rest = args.peers;
 	while ((cur = strsep(&rest, "&")) ) {
+		struct dial_localuser *tmp;
 		/* Get a technology/[device:]number pair */
-		number = cur;
-		tech = strsep(&number, "/");
+		char *number = cur;
+		char *tech = strsep(&number, "/");
 		if (!number) {
 			ast_log(LOG_WARNING, "Dial argument takes format (technology/[device:]number1)\n");
 			goto out;
@@ -1035,22 +1025,18 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		tmp->chan->appl = "AppDial";
 		tmp->chan->data = "(Outgoing Line)";
 		tmp->chan->whentohangup = 0;
+
 		if (tmp->chan->cid.cid_num)
 			free(tmp->chan->cid.cid_num);
-		tmp->chan->cid.cid_num = NULL;
+		tmp->chan->cid.cid_num = ast_strdup(chan->cid.cid_num);
+
 		if (tmp->chan->cid.cid_name)
 			free(tmp->chan->cid.cid_name);
-		tmp->chan->cid.cid_name = NULL;
+		tmp->chan->cid.cid_name = ast_strdup(chan->cid.cid_name);
+
 		if (tmp->chan->cid.cid_ani)
 			free(tmp->chan->cid.cid_ani);
-		tmp->chan->cid.cid_ani = NULL;
-
-		if (chan->cid.cid_num) 
-			tmp->chan->cid.cid_num = strdup(chan->cid.cid_num);
-		if (chan->cid.cid_name) 
-			tmp->chan->cid.cid_name = strdup(chan->cid.cid_name);
-		if (chan->cid.cid_ani) 
-			tmp->chan->cid.cid_ani = strdup(chan->cid.cid_ani);
+		tmp->chan->cid.cid_ani = ast_strdup(chan->cid.cid_ani);
 		
 		/* Copy language from incoming to outgoing */
 		ast_string_field_set(tmp->chan, language, chan->language);
@@ -1058,8 +1044,8 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		tmp->chan->cdrflags = chan->cdrflags;
 		if (ast_strlen_zero(tmp->chan->musicclass))
 			ast_string_field_set(tmp->chan, musicclass, chan->musicclass);
-		if (chan->cid.cid_rdnis)
-			tmp->chan->cid.cid_rdnis = strdup(chan->cid.cid_rdnis);
+		/* XXX don't we free previous values ? */
+		tmp->chan->cid.cid_rdnis = ast_strdup(chan->cid.cid_rdnis);
 		/* Pass callingpres setting */
 		tmp->chan->cid.cid_pres = chan->cid.cid_pres;
 		/* Pass type of number */
@@ -1145,8 +1131,11 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		} else { /* Nobody answered, next please? */
 			res = 0;
 		}
+		/* almost done, although the 'else' block is 400 lines */
 	} else {
-		time(&answer_time);
+		const char *number;
+		time_t end_time, answer_time = time(NULL);
+
 		strcpy(status, "ANSWER");
 		/* Ah ha!  Someone answered within the desired timeframe.  Of course after this
 		   we will always return with -1 so that it is hung up properly after the 
@@ -1159,7 +1148,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		if (peer->name)
 			pbx_builtin_setvar_helper(chan, "DIALEDPEERNAME", peer->name);
 
-		number = (char *)pbx_builtin_getvar_helper(peer, "DIALEDPEERNUMBER");
+		number = pbx_builtin_getvar_helper(peer, "DIALEDPEERNUMBER");
 		if (!number)
 			number = numsubst;
 		pbx_builtin_setvar_helper(chan, "DIALEDPEERNUMBER", number);
@@ -1356,6 +1345,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		if (!ast_test_flag(&opts, OPT_ANNOUNCE) || ast_strlen_zero(opt_args[OPT_ARG_ANNOUNCE])) {
 			res = 0;
 		} else {
+			int digit = 0;
 			/* Start autoservice on the other chan */
 			res = ast_autoservice_start(chan);
 			/* Now Stream the File */
@@ -1385,17 +1375,19 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		}
 
 		if (ast_test_flag(&opts, OPT_CALLEE_MACRO) && !ast_strlen_zero(opt_args[OPT_ARG_CALLEE_MACRO])) {
+			struct ast_app *theapp;
+
 			res = ast_autoservice_start(chan);
 			if (res) {
 				ast_log(LOG_ERROR, "Unable to start autoservice on calling channel\n");
 				res = -1;
 			}
 
-			app = pbx_findapp("Macro");
+			theapp = pbx_findapp("Macro");
 
-			if (app && !res) {
+			if (theapp && !res) {	/* XXX why check res here ? */
 				replace_macro_delimiter(opt_args[OPT_ARG_CALLEE_MACRO]);
-				res = pbx_exec(peer, app, opt_args[OPT_ARG_CALLEE_MACRO]);
+				res = pbx_exec(peer, theapp, opt_args[OPT_ARG_CALLEE_MACRO]);
 				ast_log(LOG_DEBUG, "Macro exited with status %d\n", res);
 				res = 0;
 			} else {
@@ -1409,7 +1401,10 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			}
 
 			if (!res) {
+				const char *macro_result;
 				if ((macro_result = pbx_builtin_getvar_helper(peer, "MACRO_RESULT"))) {
+					char *macro_transfer_dest;
+
 					if (!strcasecmp(macro_result, "BUSY")) {
 						ast_copy_string(status, macro_result, sizeof(status));
 						if (ast_opt_priority_jumping || ast_test_flag(&opts, OPT_PRIORITY_JUMP)) {
@@ -1451,10 +1446,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 
 		if (!res) {
 			if (calldurationlimit > 0) {
-				time_t now;
-
-				time(&now);
-				chan->whentohangup = now + calldurationlimit;
+				chan->whentohangup = time(NULL) + calldurationlimit;
 			}
 			if (!ast_strlen_zero(dtmfcalled)) { 
 				if (option_verbose > 2)
@@ -1469,6 +1461,8 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		}
 		
 		if (!res) {
+			struct ast_bridge_config config;
+
 			memset(&config,0,sizeof(struct ast_bridge_config));
 			if (play_to_caller)
 				ast_set_flag(&(config.features_caller), AST_FEATURE_PLAY_WARNING);
@@ -1507,20 +1501,25 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			if (res < 0) {
 				ast_log(LOG_WARNING, "Had to drop call because I couldn't make %s compatible with %s\n", chan->name, peer->name);
 				ast_hangup(peer);
-				LOCAL_USER_REMOVE(u);
-				return -1;
+				res = -1;
+				goto done;
 			}
 			res = ast_bridge_call(chan,peer,&config);
 			time(&end_time);
-			snprintf(toast, sizeof(toast), "%ld", (long)(end_time - answer_time));
-			pbx_builtin_setvar_helper(chan, "ANSWEREDTIME", toast);
-			
+			{
+				char toast[80];
+				snprintf(toast, sizeof(toast), "%ld", (long)(end_time - answer_time));
+				pbx_builtin_setvar_helper(chan, "ANSWEREDTIME", toast);
+			}
 		} else {
 			time(&end_time);
 			res = -1;
 		}
-		snprintf(toast, sizeof(toast), "%ld", (long)(end_time - start_time));
-		pbx_builtin_setvar_helper(chan, "DIALEDTIME", toast);
+		{
+			char toast[80];
+			snprintf(toast, sizeof(toast), "%ld", (long)(end_time - start_time));
+			pbx_builtin_setvar_helper(chan, "DIALEDTIME", toast);
+		}
 		
 		if (res != AST_PBX_NO_HANGUP_PEER) {
 			if (!chan->_softhangup)
