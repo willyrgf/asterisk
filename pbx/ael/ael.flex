@@ -29,7 +29,7 @@
 #include "ael/ael.tab.h"
 #include "asterisk/ael_structs.h"
 
-static char pbcstack[400];
+static char pbcstack[400];	/* XXX missing size checks */
 static int pbcpos = 0;
 
 static int parencount = 0;
@@ -40,17 +40,12 @@ char *my_file = 0;
 char *prev_word;
 #define MAX_INCLUDE_DEPTH 50
 
-void reset_parencount(yyscan_t yyscanner );
-void reset_semicount(yyscan_t yyscanner );
-void reset_argcount(yyscan_t yyscanner );
-struct pval *ael2_parse(char *filename, int *errors);
 int ael_yyget_column  (yyscan_t yyscanner);
 void ael_yyset_column (int  column_no , yyscan_t yyscanner);
 int ael_yyparse (struct parse_io *);
 static void pbcpush(char x);
 static int pbcpop(char x);
-static void pbcwhere(char *text, int *line, int *col );
-static int c_prevword(void);
+static void pbcwhere(const char *text, int *line, int *col );
 
 struct stackelement {
 	char *fname;
@@ -546,6 +541,7 @@ static int pbcpop(char x)
 	return 1; /* error */
 }
 
+#if 0
 static int c_prevword(void)
 {
 	char *c = prev_word;
@@ -565,8 +561,12 @@ static int c_prevword(void)
 	}
 	return 0;
 }
+#endif
 
-static void pbcwhere(char *text, int *line, int *col )
+/* compute the total number of lines and columns in the text
+ * passed as argument.
+ */
+static void pbcwhere(const char *text, int *line, int *col )
 {
 	int loc_line = 0;
 	int loc_col = 0;
@@ -583,7 +583,8 @@ static void pbcwhere(char *text, int *line, int *col )
 	*col = loc_col;
 }
 
-void reset_parencount(yyscan_t yyscanner )
+#if 0
+static void reset_parencount(yyscan_t yyscanner )
 {
 	struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
 	parencount = 0;
@@ -593,14 +594,14 @@ void reset_parencount(yyscan_t yyscanner )
 	BEGIN(paren);
 }
 
-void reset_semicount(yyscan_t yyscanner )
+static void reset_semicount(yyscan_t yyscanner )
 {
 	struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
 	pbcpos = 0;
 	BEGIN(semic);
 }
 
-void reset_argcount(yyscan_t yyscanner )
+static void reset_argcount(yyscan_t yyscanner )
 {
 	struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
 	parencount = 0;
@@ -611,7 +612,9 @@ void reset_argcount(yyscan_t yyscanner )
 	BEGIN(argg);
 }
 
+#endif
 
+/* used elsewhere, but some local vars */
 struct pval *ael2_parse(char *filename, int *errors)
 {
 	struct pval *pval;
