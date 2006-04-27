@@ -91,9 +91,7 @@ static pval *npval2(pvaltype type, YYLTYPE *first, YYLTYPE *last);
 %type <pval>target jumptarget
 %type <pval>statement
 %type <pval>switch_head
-%type <str>word_list goto_word
-%type <str>word3_list
-%type <str>includedname
+
 %type <pval>if_head
 %type <pval>random_head
 %type <pval>iftime_head
@@ -112,22 +110,48 @@ static pval *npval2(pvaltype type, YYLTYPE *first, YYLTYPE *last);
 %type <pval>objects
 %type <pval>file
 
-/* OPTIONS */
-%locations
-%pure-parser
+%type <str>goto_word
+%type <str>word_list
+%type <str>word3_list
+%type <str>includedname
+
+/*
+ * OPTIONS
+ */
+
+%locations	/* track source location using @n variables (yylloc in flex) */
+%pure-parser	/* pass yylval and yylloc as arguments to yylex(). */
 %name-prefix="ael_yy"
-/* the following option does two things:
-    it adds the locp arg to the yyerror
-    and it adds the NULL to the yyerrr arg list, and calls yyerror with NULL for that arg.
-    You can't get the locp arg without the NULL arg, don't ask me why. */
+/*
+ * add an additional argument, parseio, to yyparse(),
+ * which is then accessible in the grammar actions
+ */
 %parse-param {struct parse_io *parseio}
+
 /* there will be two shift/reduce conflicts, they involve the if statement, where a single statement occurs not wrapped in curlies in the "true" section
    the default action to shift will attach the else to the preceeding if. */
 %expect 5
 %error-verbose
-%destructor { if (yymsg[0] != 'C') {destroy_pval($$); prev_word=0;} else {printf("Cleanup destructor called for pvals\n");} } includes includeslist switchlist eswitches switches macro_statement macro_statements case_statement case_statements eval_arglist application_call
-                                application_call_head macro_call target jumptarget statement switch_head if_head random_head iftime_head statements extension ignorepat element
-                                elements arglist global_statement global_statements globals macro context object objects
+
+/*
+ * declare destructors for objects.
+ * The former is for pval, the latter for strings.
+ */
+%destructor {
+		if (yymsg[0] != 'C') {
+			destroy_pval($$);
+			prev_word=0;
+		} else {
+			printf("Cleanup destructor called for pvals\n");
+		}
+	}	includes includeslist switchlist eswitches switches
+		macro_statement macro_statements case_statement case_statements
+		eval_arglist application_call application_call_head
+		macro_call target jumptarget statement switch_head
+		if_head random_head iftime_head statements extension
+		ignorepat element elements arglist global_statement
+		global_statements globals macro context object objects
+
 %destructor { free($$);}  word word_list goto_word word3_list includedname
 
 
@@ -382,11 +406,11 @@ statement : LC statements RC {
 		$$ = npval2(PV_STATEMENTBLOCK, &@1, &@3);
 		$$->u1.list = $2; }
 	| word EQ {reset_semicount(parseio->scanner);} word SEMI {
-		$$=npval(PV_VARDEC,@1.first_line,@5.last_line, @1.first_column, @5.last_column);
+		$$ = npval2(PV_VARDEC, &@1, &@5);
 		$$->u1.str = $1;
 		$$->u2.val = $4; }
 	| KW_GOTO target SEMI {
-		$$=npval(PV_GOTO,@1.first_line,@3.last_line, @1.first_column, @3.last_column);
+		$$ = npval2(PV_GOTO, &@1, &@3);
 		$$->u1.list = $2;}
 	| KW_JUMP jumptarget SEMI {
 		$$=npval(PV_GOTO,@1.first_line,@3.last_line, @1.first_column, @3.last_column);
@@ -636,12 +660,26 @@ case_statements: case_statement {$$=$1;}
 	;
 
 case_statement: KW_CASE word COLON statements {
-		$$ = npval(PV_CASE,@1.first_line,@3.last_line, @1.first_column, @3.last_column); $$->u1.str = $2; $$->u2.statements = $4;}
-	| KW_DEFAULT COLON statements {$$ = npval(PV_DEFAULT,@1.first_line,@3.last_line, @1.first_column, @3.last_column); $$->u1.str = 0; $$->u2.statements = $3;}
-	| KW_PATTERN word COLON statements {$$ = npval(PV_PATTERN,@1.first_line,@3.last_line, @1.first_column, @3.last_column); $$->u1.str = $2; $$->u2.statements = $4;}
-	| KW_CASE word COLON {$$ = npval(PV_CASE,@1.first_line,@3.last_line, @1.first_column, @3.last_column); $$->u1.str = $2;}
-	| KW_DEFAULT COLON {$$ = npval(PV_DEFAULT,@1.first_line,@2.last_line, @1.first_column, @2.last_column); $$->u1.str = 0;}
-	| KW_PATTERN word COLON  {$$ = npval(PV_PATTERN,@1.first_line,@3.last_line, @1.first_column, @3.last_column); $$->u1.str = $2;}
+		$$ = npval2(PV_CASE, &@1, &@3); /* XXX 3 or 4 ? */
+		$$->u1.str = $2;
+		$$->u2.statements = $4;}
+	| KW_DEFAULT COLON statements {
+		$$ = npval2(PV_DEFAULT, &@1, &@3);
+		$$->u1.str = NULL;
+		$$->u2.statements = $3;}
+	| KW_PATTERN word COLON statements {
+		$$ = npval2(PV_PATTERN, &@1, &@4); /* XXX@3 or @4 ? */
+		$$->u1.str = $2;
+		$$->u2.statements = $4;}
+	| KW_CASE word COLON {
+		$$ = npval2(PV_CASE, &@1, &@3);
+		$$->u1.str = $2;}
+	| KW_DEFAULT COLON {
+		$$ = npval2(PV_DEFAULT, &@1, &@2);
+		$$->u1.str = NULL;}
+	| KW_PATTERN word COLON  {
+		$$ = npval2(PV_PATTERN, &@1, &@3);
+		$$->u1.str = $2;}
 	;
 
 macro_statements: macro_statement {$$ = $1;}
