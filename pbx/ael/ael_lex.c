@@ -372,14 +372,14 @@ static yyconst flex_int16_t yy_accept[226] =
         8,    5,    6,   12,   43,   43,   43,   43,   43,   43,
        43,   43,   43,   43,   43,   43,   43,   43,   43,    1,
        10,    2,   65,   45,   44,   46,   47,   48,   49,   65,
-       61,   62,   63,   57,   58,   59,   60,   65,   51,   50,
-       52,   55,   56,   53,   54,   42,   41,   43,   43,   13,
+       59,   62,   63,   57,   60,   58,   61,   65,   50,   53,
+       54,   51,   56,   52,   55,   42,   41,   43,   43,   13,
        11,   43,   43,   43,   43,   43,   43,   43,   43,   43,
        43,   43,   20,   43,   43,   43,   43,   43,   43,   43,
        43,   43,    0,   45,   44,   46,   47,   48,   49,    0,
 
-       61,   62,   63,   57,   58,   59,   60,    0,   51,   50,
-       52,   55,   56,   53,   54,   43,   13,   13,   43,   43,
+       59,   62,   63,   57,   60,   58,   61,    0,   50,   53,
+       54,   51,   56,   52,   55,   43,   13,   13,   43,   43,
        43,   43,   43,   43,   43,   43,   31,   43,   43,   43,
        43,   43,   43,   43,   43,   43,   43,   43,   43,   43,
        43,   43,   43,   43,   33,   43,   43,   43,   25,   43,
@@ -939,9 +939,10 @@ YY_DECL
 	register int yy_act;
     struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
 
-#line 77 "ael.flex"
+#line 83 "ael.flex"
 
-#line 945 "ael_lex.c"
+
+#line 946 "ael_lex.c"
 
     yylval = yylval_param;
 
@@ -1032,222 +1033,223 @@ do_action:	/* This label is used only to access EOF actions. */
 
 case 1:
 YY_RULE_SETUP
-#line 78 "ael.flex"
+#line 85 "ael.flex"
 { STORE_POS; return LC;}
 	YY_BREAK
 case 2:
 YY_RULE_SETUP
-#line 79 "ael.flex"
+#line 86 "ael.flex"
 { STORE_POS; return RC;}
 	YY_BREAK
 case 3:
 YY_RULE_SETUP
-#line 80 "ael.flex"
+#line 87 "ael.flex"
 { STORE_POS; return LP;}
 	YY_BREAK
 case 4:
 YY_RULE_SETUP
-#line 81 "ael.flex"
+#line 88 "ael.flex"
 { STORE_POS; return RP;}
 	YY_BREAK
 case 5:
 YY_RULE_SETUP
-#line 82 "ael.flex"
+#line 89 "ael.flex"
 { STORE_POS; return SEMI;}
 	YY_BREAK
 case 6:
 YY_RULE_SETUP
-#line 83 "ael.flex"
+#line 90 "ael.flex"
 { STORE_POS; return EQ;}
 	YY_BREAK
 case 7:
 YY_RULE_SETUP
-#line 84 "ael.flex"
+#line 91 "ael.flex"
 { STORE_POS; return COMMA;}
 	YY_BREAK
 case 8:
 YY_RULE_SETUP
-#line 85 "ael.flex"
+#line 92 "ael.flex"
 { STORE_POS; return COLON;}
 	YY_BREAK
 case 9:
 YY_RULE_SETUP
-#line 86 "ael.flex"
+#line 93 "ael.flex"
 { STORE_POS; return AMPER;}
 	YY_BREAK
 case 10:
 YY_RULE_SETUP
-#line 87 "ael.flex"
+#line 94 "ael.flex"
 { STORE_POS; return BAR;}
 	YY_BREAK
 case 11:
 YY_RULE_SETUP
-#line 88 "ael.flex"
+#line 95 "ael.flex"
 { STORE_POS; return EXTENMARK;}
 	YY_BREAK
 case 12:
 YY_RULE_SETUP
-#line 89 "ael.flex"
+#line 96 "ael.flex"
 { STORE_POS; return AT;}
 	YY_BREAK
 case 13:
 YY_RULE_SETUP
-#line 90 "ael.flex"
+#line 97 "ael.flex"
 {/*comment*/}
 	YY_BREAK
 case 14:
 YY_RULE_SETUP
-#line 91 "ael.flex"
+#line 98 "ael.flex"
 { STORE_POS; return KW_CONTEXT;}
 	YY_BREAK
 case 15:
 YY_RULE_SETUP
-#line 92 "ael.flex"
+#line 99 "ael.flex"
 { STORE_POS; return KW_ABSTRACT;}
 	YY_BREAK
 case 16:
 YY_RULE_SETUP
-#line 93 "ael.flex"
+#line 100 "ael.flex"
 { STORE_POS; return KW_MACRO;};
 	YY_BREAK
 case 17:
 YY_RULE_SETUP
-#line 94 "ael.flex"
+#line 101 "ael.flex"
 { STORE_POS; return KW_GLOBALS;}
 	YY_BREAK
 case 18:
 YY_RULE_SETUP
-#line 95 "ael.flex"
+#line 102 "ael.flex"
 { STORE_POS; return KW_IGNOREPAT;}
 	YY_BREAK
 case 19:
 YY_RULE_SETUP
-#line 96 "ael.flex"
+#line 103 "ael.flex"
 { STORE_POS; return KW_SWITCH;}
 	YY_BREAK
 case 20:
 YY_RULE_SETUP
-#line 97 "ael.flex"
+#line 104 "ael.flex"
 { STORE_POS; return KW_IF;}
 	YY_BREAK
 case 21:
 YY_RULE_SETUP
-#line 98 "ael.flex"
+#line 105 "ael.flex"
 { STORE_POS; return KW_IFTIME;}
 	YY_BREAK
 case 22:
 YY_RULE_SETUP
-#line 99 "ael.flex"
+#line 106 "ael.flex"
 { STORE_POS; return KW_RANDOM;}
 	YY_BREAK
 case 23:
 YY_RULE_SETUP
-#line 100 "ael.flex"
+#line 107 "ael.flex"
 { STORE_POS; return KW_REGEXTEN;}
 	YY_BREAK
 case 24:
 YY_RULE_SETUP
-#line 101 "ael.flex"
+#line 108 "ael.flex"
 { STORE_POS; return KW_HINT;}
 	YY_BREAK
 case 25:
 YY_RULE_SETUP
-#line 102 "ael.flex"
+#line 109 "ael.flex"
 { STORE_POS; return KW_ELSE;}
 	YY_BREAK
 case 26:
 YY_RULE_SETUP
-#line 103 "ael.flex"
+#line 110 "ael.flex"
 { STORE_POS; return KW_GOTO;}
 	YY_BREAK
 case 27:
 YY_RULE_SETUP
-#line 104 "ael.flex"
+#line 111 "ael.flex"
 { STORE_POS; return KW_JUMP;}
 	YY_BREAK
 case 28:
 YY_RULE_SETUP
-#line 105 "ael.flex"
+#line 112 "ael.flex"
 { STORE_POS; return KW_RETURN;}
 	YY_BREAK
 case 29:
 YY_RULE_SETUP
-#line 106 "ael.flex"
+#line 113 "ael.flex"
 { STORE_POS; return KW_BREAK;}
 	YY_BREAK
 case 30:
 YY_RULE_SETUP
-#line 107 "ael.flex"
+#line 114 "ael.flex"
 { STORE_POS; return KW_CONTINUE;}
 	YY_BREAK
 case 31:
 YY_RULE_SETUP
-#line 108 "ael.flex"
+#line 115 "ael.flex"
 { STORE_POS; return KW_FOR;}
 	YY_BREAK
 case 32:
 YY_RULE_SETUP
-#line 109 "ael.flex"
+#line 116 "ael.flex"
 { STORE_POS; return KW_WHILE;}
 	YY_BREAK
 case 33:
 YY_RULE_SETUP
-#line 110 "ael.flex"
+#line 117 "ael.flex"
 { STORE_POS; return KW_CASE;}
 	YY_BREAK
 case 34:
 YY_RULE_SETUP
-#line 111 "ael.flex"
+#line 118 "ael.flex"
 { STORE_POS; return KW_DEFAULT;}
 	YY_BREAK
 case 35:
 YY_RULE_SETUP
-#line 112 "ael.flex"
+#line 119 "ael.flex"
 { STORE_POS; return KW_PATTERN;}
 	YY_BREAK
 case 36:
 YY_RULE_SETUP
-#line 113 "ael.flex"
+#line 120 "ael.flex"
 { STORE_POS; return KW_CATCH;}
 	YY_BREAK
 case 37:
 YY_RULE_SETUP
-#line 114 "ael.flex"
+#line 121 "ael.flex"
 { STORE_POS; return KW_SWITCHES;}
 	YY_BREAK
 case 38:
 YY_RULE_SETUP
-#line 115 "ael.flex"
+#line 122 "ael.flex"
 { STORE_POS; return KW_ESWITCHES;}
 	YY_BREAK
 case 39:
 YY_RULE_SETUP
-#line 116 "ael.flex"
+#line 123 "ael.flex"
 { STORE_POS; return KW_INCLUDES;}
 	YY_BREAK
 case 40:
 /* rule 40 can match eol */
 YY_RULE_SETUP
-#line 118 "ael.flex"
+#line 125 "ael.flex"
 { my_lineno++; my_col = 0; }
 	YY_BREAK
 case 41:
 YY_RULE_SETUP
-#line 119 "ael.flex"
+#line 126 "ael.flex"
 { my_col += yyleng; }
 	YY_BREAK
 case 42:
 YY_RULE_SETUP
-#line 120 "ael.flex"
+#line 127 "ael.flex"
 { my_col += 8-(my_col%8); }
 	YY_BREAK
 case 43:
 YY_RULE_SETUP
-#line 122 "ael.flex"
+#line 129 "ael.flex"
 {
 		STORE_POS;
 		yylval->str = strdup(yytext);
-		/* printf("\nGot WORD %s[%d][%d:%d]\n", yylval->str, my_lineno ,yylloc->first_column,yylloc->last_column );  */
+		/* printf("\nGot WORD %s[%d][%d:%d]\n",
+			yylval->str, my_lineno ,yylloc->first_column,yylloc->last_column );  */
 		prev_word = yylval->str;
 		return word;
 	}
@@ -1255,20 +1257,16 @@ YY_RULE_SETUP
 case 44:
 /* rule 44 can match eol */
 YY_RULE_SETUP
-#line 130 "ael.flex"
+#line 141 "ael.flex"
 {
 		yylloc->first_line = my_lineno;
 		yylloc->first_column=my_col;
-		if ( pbcpop(')') ) {
-			/* error */
-			int l4,c4;
-			pbcwhere(yytext, &l4, &c4);
-			ast_log(LOG_ERROR,"File=%s, line=%d, column=%d: Mismatched ')' in expression: %s !\n", my_file, my_lineno+l4, c4, yytext);
+		if ( pbcpop(')') ) {	/* error */
+			pbcwhere(yytext, &my_lineno, &my_col);
+			ast_log(LOG_ERROR,"File=%s, line=%d, column=%d: Mismatched ')' in expression: %s !\n", my_file, my_lineno, my_col, yytext);
 			BEGIN(0);
-			yylloc->last_line = my_lineno+l4;
-			yylloc->last_column=c4;
-			my_col=c4;
-			my_lineno += l4;
+			yylloc->last_line = my_lineno;
+			yylloc->last_column = my_col;
 			yylval->str = strdup(yytext);
 			prev_word = 0;
 			return word;
@@ -1277,16 +1275,13 @@ YY_RULE_SETUP
 		if ( parencount >= 0) {
 			yymore();
 		} else {
-			int l4,c4;
-			pbcwhere(yytext, &l4, &c4);
-			yylloc->last_line = my_lineno+l4;
-			yylloc->last_column=c4;
+			pbcwhere(yytext, &my_lineno, &my_col);
+			yylloc->last_line = my_lineno;
+			yylloc->last_column = my_col;
 			yylval->str = strdup(yytext);
 			*(yylval->str+strlen(yylval->str)-1)=0;
 			/* printf("Got paren word %s\n", yylval->str); */
 			unput(')');
-			my_col=c4;
-			my_lineno += l4;
 			BEGIN(0);
 			return word;
 		}
@@ -1295,9 +1290,10 @@ YY_RULE_SETUP
 case 45:
 /* rule 45 can match eol */
 YY_RULE_SETUP
-#line 166 "ael.flex"
+#line 170 "ael.flex"
 {
-		yylloc->first_line = my_lineno; yylloc->first_column=my_col;
+		yylloc->first_line = my_lineno;
+		yylloc->first_column=my_col;
 		parencount++;
 		pbcpush('(');
 		yymore();
@@ -1306,25 +1302,28 @@ YY_RULE_SETUP
 case 46:
 /* rule 46 can match eol */
 YY_RULE_SETUP
-#line 173 "ael.flex"
-{yylloc->first_line = my_lineno;yylloc->first_column=my_col; yymore(); pbcpush('['); }
+#line 178 "ael.flex"
+{
+		yylloc->first_line = my_lineno;
+		yylloc->first_column=my_col;
+		pbcpush('[');
+		yymore();
+	}
 	YY_BREAK
 case 47:
 /* rule 47 can match eol */
 YY_RULE_SETUP
-#line 175 "ael.flex"
+#line 185 "ael.flex"
 {
-		yylloc->first_line = my_lineno;yylloc->first_column=my_col;
-		if ( pbcpop(']') ) {
-			/* error */
-			int l4,c4;
-			pbcwhere(yytext, &l4, &c4);
-			ast_log(LOG_ERROR,"File=%s, line=%d, column=%d: Mismatched ']' in expression!\n", my_file, my_lineno+l4, c4);
+		yylloc->first_line = my_lineno;
+		yylloc->first_column=my_col;
+		if ( pbcpop(']') ) { /* error */
+			pbcwhere(yytext, &my_lineno, &my_col);
+			ast_log(LOG_ERROR,"File=%s, line=%d, column=%d: Mismatched ']' in expression!\n",
+				my_file, my_lineno, my_col);
 			BEGIN(0);
-			yylloc->last_line = my_lineno+l4;
-			yylloc->last_column=c4;
-			my_col=c4;
-			my_lineno += l4;
+			yylloc->last_line = my_lineno;
+			yylloc->last_column = my_col;
 			yylval->str = strdup(yytext);
 			return word;
 		}
@@ -1334,26 +1333,28 @@ YY_RULE_SETUP
 case 48:
 /* rule 48 can match eol */
 YY_RULE_SETUP
-#line 193 "ael.flex"
-{yylloc->first_line = my_lineno;yylloc->first_column=my_col;  yymore(); pbcpush('{'); }
+#line 201 "ael.flex"
+{
+		yylloc->first_line = my_lineno;
+		yylloc->first_column=my_col;
+		pbcpush('{');
+		yymore();
+	}
 	YY_BREAK
 case 49:
 /* rule 49 can match eol */
 YY_RULE_SETUP
-#line 195 "ael.flex"
+#line 208 "ael.flex"
 {
 		yylloc->first_line = my_lineno;
 		yylloc->first_column=my_col;
-		if ( pbcpop('}') ) {
-			/* error */
-			int l4,c4;
-			pbcwhere(yytext, &l4, &c4);
-			ast_log(LOG_ERROR,"File=%s, line=%d, column=%d: Mismatched '}' in expression!\n", my_file, my_lineno+l4, c4);
+		if ( pbcpop('}') ) { /* error */
+			pbcwhere(yytext, &my_lineno, &my_col);
+			ast_log(LOG_ERROR,"File=%s, line=%d, column=%d: Mismatched '}' in expression!\n",
+				my_file, my_lineno, my_col);
 			BEGIN(0);
-			yylloc->last_line = my_lineno+l4;
-			yylloc->last_column=c4;
-			my_col=c4;
-			my_lineno += l4;
+			yylloc->last_line = my_lineno;
+			yylloc->last_column = my_col;
 			yylval->str = strdup(yytext);
 			return word;
 		}
@@ -1363,40 +1364,62 @@ YY_RULE_SETUP
 case 50:
 /* rule 50 can match eol */
 YY_RULE_SETUP
-#line 214 "ael.flex"
+#line 227 "ael.flex"
 {
 		/* printf("ARGG:%s\n",yytext); */
-		int linecount = 0;
-		int colcount = my_col;
-		char *pt = yytext;
-
+		/* printf("GOT AN LP!!!\n"); */
 		yylloc->first_line = my_lineno;
 		yylloc->first_column=my_col;
-		if ( pbcpop(')') ) {
-			/* error */
-			int l4,c4;
-			pbcwhere(yytext, &l4, &c4);
-			ast_log(LOG_ERROR,"File=%s, line=%d, column=%d: Mismatched ')' in expression!\n", my_file, my_lineno+l4, c4);
+		parencount++;
+		pbcpush('(');
+		yymore();
+	}
+	YY_BREAK
+case 51:
+/* rule 51 can match eol */
+YY_RULE_SETUP
+#line 237 "ael.flex"
+{
+		/*printf("ARGG:%s\n",yytext);*/
+		yylloc->first_line = my_lineno;
+		yylloc->first_column=my_col;
+		pbcpush('[');
+		yymore();
+	}
+	YY_BREAK
+case 52:
+/* rule 52 can match eol */
+YY_RULE_SETUP
+#line 245 "ael.flex"
+{
+		/*printf("ARGG:%s\n",yytext);*/
+		yylloc->first_line = my_lineno;
+		yylloc->first_column=my_col;
+		pbcpush('{');
+		yymore();
+	}
+	YY_BREAK
+case 53:
+/* rule 53 can match eol */
+YY_RULE_SETUP
+#line 253 "ael.flex"
+{
+		/* printf("ARGG:%s\n",yytext); */
+		yylloc->first_line = my_lineno;
+		yylloc->first_column=my_col;
+		if ( pbcpop(')') ) { /* error */
+			pbcwhere(yytext, &my_lineno, &my_col);
+			ast_log(LOG_ERROR,"File=%s, line=%d, column=%d: Mismatched ')' in expression!\n", my_file, my_lineno, my_col);
 			BEGIN(0);
-			yylloc->last_line = my_lineno+l4;
-			yylloc->last_column=c4;
-			my_col=c4;
-			my_lineno += l4;
+			yylloc->last_line = my_lineno;
+			yylloc->last_column = my_col;
 			yylval->str = strdup(yytext);
 			return word;
 		}
 
-
-		while (*pt) {
-			if (*pt == '\n') {
-				linecount++;
-				colcount=0;
-			}
-			pt++;
-			colcount++;
-		}
-		yylloc->last_line = my_lineno+linecount;
-		yylloc->last_column=colcount;
+		pbcwhere(yytext, &my_lineno, &my_col);
+		yylloc->last_line = my_lineno;
+		yylloc->last_column = my_col;
 		parencount--;
 		if( parencount >= 0){
 			yymore();
@@ -1409,35 +1432,19 @@ YY_RULE_SETUP
 			if ( !strcmp(yylval->str,")") ) {
 				free(yylval->str);
 				yylval->str = 0;
-				my_col+=1;
+				my_col++; /* XXX why ? */
 				return RP;
 			} else {
 				unput(')');
-				my_col=colcount;
-				my_lineno+=linecount;
 				return word;
 			}
 		}
 	}
 	YY_BREAK
-case 51:
-/* rule 51 can match eol */
+case 54:
+/* rule 54 can match eol */
 YY_RULE_SETUP
-#line 270 "ael.flex"
-{
-		/* printf("ARGG:%s\n",yytext); */
-		/* printf("GOT AN LP!!!\n"); */
-		yylloc->first_line = my_lineno;
-		yylloc->first_column=my_col;
-		parencount++;
-		pbcpush('(');
-		yymore();
-	}
-	YY_BREAK
-case 52:
-/* rule 52 can match eol */
-YY_RULE_SETUP
-#line 280 "ael.flex"
+#line 291 "ael.flex"
 {
 		/* printf("ARGG:%s\n",yytext); */
 		if( parencount != 0) {
@@ -1445,36 +1452,23 @@ YY_RULE_SETUP
 			yymore();
 		} else  {
 			/* printf("got a comma!\n\n");  */
-			int linecount = 0;
-			int colcount = my_col;
-			char *pt;
-
-			pt = yytext;
-			while (*pt) {
-				if ( *pt == '\n' ) {
-					linecount++;
-					colcount=0;
-				}
-				pt++;
-				colcount++;
-			}
 			yylloc->first_line = my_lineno;
-			yylloc->last_line = my_lineno+linecount;
-			yylloc->last_column=colcount;
 			yylloc->first_column=my_col;
+			pbcwhere(yytext, &my_lineno, &my_col);
+			yylloc->last_line = my_lineno;
+			yylloc->last_column = my_col;
 			if( !commaout ) {
 				if( !strcmp(yytext,"," ) ) {
 					commaout = 0;
 					my_col+=1;
 					return COMMA;
 				}
-				yylval->str = strdup(yytext); /* printf("Got argg2 word %s\n", yylval->str); */
+				yylval->str = strdup(yytext);
+				/* printf("Got argg2 word %s\n", yylval->str); */
 				unput(',');
 				commaout = 1;
-				if(yyleng > 1 )
-				*(yylval->str+yyleng-1)=0;
-				my_lineno+=linecount;
-				my_col=colcount;
+				if (yyleng > 1 )
+					*(yylval->str+yyleng-1)=0;
 				return word;
 			} else {
 				commaout = 0;
@@ -1484,60 +1478,40 @@ YY_RULE_SETUP
 		}
 	}
 	YY_BREAK
-case 53:
-/* rule 53 can match eol */
+case 55:
+/* rule 55 can match eol */
 YY_RULE_SETUP
-#line 326 "ael.flex"
+#line 324 "ael.flex"
 {
 		/*printf("ARGG:%s\n",yytext);*/
 		yylloc->first_line = my_lineno;
 		yylloc->first_column=my_col;
-		pbcpush('{'); yymore();
-	}
-	YY_BREAK
-case 54:
-/* rule 54 can match eol */
-YY_RULE_SETUP
-#line 333 "ael.flex"
-{
-		/*printf("ARGG:%s\n",yytext);*/yylloc->first_line = my_lineno;yylloc->first_column=my_col;
-		if ( pbcpop('}') ) {
-			/* error */
-			int l4,c4;
-			pbcwhere(yytext, &l4, &c4);
-			ast_log(LOG_ERROR,"File=%s, line=%d, column=%d: Mismatched '}' in expression!\n", my_file, my_lineno+l4, my_col+c4);
+		if ( pbcpop('}') ) { /* error */
+			pbcwhere(yytext, &my_lineno, &my_col);
+			ast_log(LOG_ERROR,"File=%s, line=%d, column=%d: Mismatched '}' in expression!\n", my_file, my_lineno, my_col);
 			BEGIN(0);
-			yylloc->last_line = my_lineno+l4;
-			yylloc->last_column=my_col+c4;
-			my_col=c4;
-			my_lineno += l4;
+			yylloc->last_line = my_lineno;
+			yylloc->last_column = my_col;
 			yylval->str = strdup(yytext);
 			return word;
 		}
 		yymore();
 	}
 	YY_BREAK
-case 55:
-/* rule 55 can match eol */
-YY_RULE_SETUP
-#line 351 "ael.flex"
-{/*printf("ARGG:%s\n",yytext);*/yylloc->first_line = my_lineno;yylloc->first_column=my_col; yymore(); pbcpush('['); }
-	YY_BREAK
 case 56:
 /* rule 56 can match eol */
 YY_RULE_SETUP
-#line 353 "ael.flex"
-{/*printf("ARGG:%s\n",yytext);*/yylloc->first_line = my_lineno;yylloc->first_column=my_col;
-		if ( pbcpop(']') ) {
-			/* error */
-			int l4,c4;
-			pbcwhere(yytext, &l4, &c4);
-			ast_log(LOG_ERROR,"File=%s, line=%d, column=%d: Mismatched ']' in expression!\n", my_file, my_lineno+l4, c4);
+#line 340 "ael.flex"
+{
+		/*printf("ARGG:%s\n",yytext);*/
+		yylloc->first_line = my_lineno;
+		yylloc->first_column=my_col;
+		if ( pbcpop(']') ) { /* error */
+			pbcwhere(yytext, &my_lineno, &my_col);
+			ast_log(LOG_ERROR,"File=%s, line=%d, column=%d: Mismatched ']' in expression!\n", my_file, my_lineno, my_col);
 			BEGIN(0);
-			yylloc->last_line = my_lineno+l4;
-			yylloc->last_column=c4;
-			my_col=c4;
-			my_lineno += l4;
+			yylloc->last_line = my_lineno;
+			yylloc->last_column = my_col;
 			yylval->str = strdup(yytext);
 			return word;
 		}
@@ -1547,51 +1521,53 @@ YY_RULE_SETUP
 case 57:
 /* rule 57 can match eol */
 YY_RULE_SETUP
-#line 370 "ael.flex"
-{/*printf("SEMIC:%s\n",yytext);*/yylloc->first_line = my_lineno;yylloc->first_column=my_col; yymore(); pbcpush('['); }
+#line 359 "ael.flex"
+{
+		/*printf("SEMIC:%s\n",yytext);*/
+		yylloc->first_line = my_lineno;
+		yylloc->first_column=my_col;
+		yymore();
+		pbcpush('[');
+		}
 	YY_BREAK
 case 58:
 /* rule 58 can match eol */
 YY_RULE_SETUP
-#line 372 "ael.flex"
-{/*printf("SEMIC:%s\n",yytext);*/yylloc->first_line = my_lineno;yylloc->first_column=my_col;
-		if ( pbcpop(']') ) {
-			/* error */
-			int l4,c4;
-			pbcwhere(yytext, &l4, &c4);
-			ast_log(LOG_ERROR,"File=%s, line=%d, column=%d: Mismatched ']' in expression!\n", my_file, my_lineno+l4, c4);
-			BEGIN(0);
-			yylloc->last_line = my_lineno+l4;
-			yylloc->last_column=c4;
-			my_col=c4;
-			my_lineno += l4;
-			yylval->str = strdup(yytext);
-			return word;
-		}
+#line 367 "ael.flex"
+{
+		/*printf("SEMIC:%s\n",yytext);*/
+		yylloc->first_line = my_lineno;
+		yylloc->first_column=my_col;
+		pbcpush('{');
 		yymore();
 	}
 	YY_BREAK
 case 59:
 /* rule 59 can match eol */
 YY_RULE_SETUP
-#line 389 "ael.flex"
-{/*printf("SEMIC:%s\n",yytext);*/yylloc->first_line = my_lineno;yylloc->first_column=my_col; yymore(); pbcpush('{');}
+#line 375 "ael.flex"
+{
+		/*printf("SEMIC:%s\n",yytext);*/
+		yylloc->first_line = my_lineno;
+		yylloc->first_column=my_col;
+		pbcpush('(');
+		yymore();
+	}
 	YY_BREAK
 case 60:
 /* rule 60 can match eol */
 YY_RULE_SETUP
-#line 391 "ael.flex"
-{/*printf("SEMIC:%s\n",yytext);*/yylloc->first_line = my_lineno;yylloc->first_column=my_col;
-		if ( pbcpop('}') ) {
-			/* error */
-			int l4,c4;
-			pbcwhere(yytext, &l4, &c4);
-			ast_log(LOG_ERROR,"File=%s, line=%d, column=%d: Mismatched '}' in expression!\n", my_file, my_lineno+l4, my_col+c4);
+#line 383 "ael.flex"
+{
+		/*printf("SEMIC:%s\n",yytext);*/
+		yylloc->first_line = my_lineno;
+		yylloc->first_column=my_col;
+		if ( pbcpop(']') ) { /* error */
+			pbcwhere(yytext, &my_lineno, &my_col);
+			ast_log(LOG_ERROR,"File=%s, line=%d, column=%d: Mismatched ']' in expression!\n", my_file, my_lineno, my_col);
 			BEGIN(0);
-			yylloc->last_line = my_lineno+l4;
-			yylloc->last_column=my_col+c4;
-			my_col=c4;
-			my_lineno += l4;
+			yylloc->last_line = my_lineno;
+			yylloc->last_column= my_col;
 			yylval->str = strdup(yytext);
 			return word;
 		}
@@ -1601,24 +1577,37 @@ YY_RULE_SETUP
 case 61:
 /* rule 61 can match eol */
 YY_RULE_SETUP
-#line 408 "ael.flex"
-{/*printf("SEMIC:%s\n",yytext);*/yylloc->first_line = my_lineno;yylloc->first_column=my_col; yymore(); pbcpush('(');}
+#line 399 "ael.flex"
+{
+		/*printf("SEMIC:%s\n",yytext);*/
+		yylloc->first_line = my_lineno;
+		yylloc->first_column=my_col;
+		if ( pbcpop('}') ) { /* error */
+			pbcwhere(yytext, &my_lineno, &my_col);
+			ast_log(LOG_ERROR,"File=%s, line=%d, column=%d: Mismatched '}' in expression!\n", my_file, my_lineno, my_col);
+			BEGIN(0);
+			yylloc->last_line = my_lineno;
+			yylloc->last_column=my_col;
+			yylval->str = strdup(yytext);
+			return word;
+		}
+		yymore();
+	}
 	YY_BREAK
 case 62:
 /* rule 62 can match eol */
 YY_RULE_SETUP
-#line 410 "ael.flex"
-{/*printf("SEMIC:%s\n",yytext);*/yylloc->first_line = my_lineno;yylloc->first_column=my_col;
-		if ( pbcpop(')') ) {
-			/* error */
-			int l4,c4;
-			pbcwhere(yytext, &l4, &c4);
-			ast_log(LOG_ERROR,"File=%s, line=%d, column=%d: Mismatched ')' in expression!\n", my_file, my_lineno+l4, my_col+c4);
+#line 415 "ael.flex"
+{
+		/*printf("SEMIC:%s\n",yytext);*/
+		yylloc->first_line = my_lineno;
+		yylloc->first_column=my_col;
+		if ( pbcpop(')') ) { /* error */
+			pbcwhere(yytext, &my_lineno, &my_col);
+			ast_log(LOG_ERROR,"File=%s, line=%d, column=%d: Mismatched ')' in expression!\n", my_file, my_lineno, my_col);
 			BEGIN(0);
-			yylloc->last_line = my_lineno+l4;
-			yylloc->last_column=my_col+c4;
-			my_col=c4;
-			my_lineno += l4;
+			yylloc->last_line = my_lineno;
+			yylloc->last_column=my_col;
 			yylval->str = strdup(yytext);
 			return word;
 		}
@@ -1628,38 +1617,26 @@ YY_RULE_SETUP
 case 63:
 /* rule 63 can match eol */
 YY_RULE_SETUP
-#line 427 "ael.flex"
+#line 431 "ael.flex"
 {
-		int linecount = 0;
-		int colcount = my_col;
-		char *pt = yytext;
-		while (*pt) {
-			if ( *pt == '\n' ) {
-				linecount++;
-				colcount=0;
-			}
-			pt++;
-			colcount++;
-		}
 		yylloc->first_line = my_lineno;
-		yylloc->last_line = my_lineno+linecount;
-		yylloc->last_column=colcount;
 		yylloc->first_column=my_col;
+		pbcwhere(yytext, &my_lineno, &my_col);
+		yylloc->last_line = my_lineno;
+		yylloc->last_column=my_col;;
 		yylval->str = strdup(yytext);
 		if(yyleng > 1)
 			*(yylval->str+yyleng-1)=0;
 		/* printf("Got semic word %s\n", yylval->str); */
 		unput(';');
 		BEGIN(0);
-		my_col=colcount;
-		my_lineno += linecount;
 		return word;
 	}
 	YY_BREAK
 case 64:
 /* rule 64 can match eol */
 YY_RULE_SETUP
-#line 454 "ael.flex"
+#line 446 "ael.flex"
 {
 		FILE *in1;
 		char fnamebuf[1024],*p1,*p2;
@@ -1726,7 +1703,7 @@ case YY_STATE_EOF(INITIAL):
 case YY_STATE_EOF(paren):
 case YY_STATE_EOF(semic):
 case YY_STATE_EOF(argg):
-#line 516 "ael.flex"
+#line 508 "ael.flex"
 {
 		if ( --include_stack_index < 0 ) {
 			yyterminate();
@@ -1742,10 +1719,10 @@ case YY_STATE_EOF(argg):
 	YY_BREAK
 case 65:
 YY_RULE_SETUP
-#line 529 "ael.flex"
+#line 521 "ael.flex"
 ECHO;
 	YY_BREAK
-#line 1749 "ael_lex.c"
+#line 1726 "ael_lex.c"
 
 	case YY_END_OF_BUFFER:
 		{
@@ -2875,7 +2852,7 @@ void ael_yyfree (void * ptr , yyscan_t yyscanner)
 
 #define YYTABLES_NAME "yytables"
 
-#line 529 "ael.flex"
+#line 521 "ael.flex"
 
 
 
@@ -2922,16 +2899,15 @@ int c_prevword(void)
  */
 static void pbcwhere(const char *text, int *line, int *col )
 {
-	int loc_line = 0;
-	int loc_col = 0;
-	while ( *text ) {
-		if ( *text == '\n' ) {
+	int loc_line = *line;
+	int loc_col = *col;
+	char c;
+	while ( (c = *text++) ) {
+		if ( c == '\n' ) {
 			loc_line++;
-			loc_col = 1;
-		} else {
-			loc_col++;
+			loc_col = 0;
 		}
-		text++;
+		loc_col++;
 	}
 	*line = loc_line;
 	*col = loc_col;
