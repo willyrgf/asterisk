@@ -51,8 +51,9 @@ static char *ael_token_subst(char *mess);
 
 
 %union {
-	char *str;
-	struct pval *pval;
+	int	intval;		/* integer value, typically flags */
+	char	*str;		/* strings */
+	struct pval *pval;	/* full objects */
 }
 
 %{
@@ -64,6 +65,9 @@ int ael_yylex (YYSTYPE * yylval_param, YYLTYPE * yylloc_param , void * yyscanner
  * Must be declared here because YYLTYPE is not known before
  */
 static pval *npval2(pvaltype type, YYLTYPE *first, YYLTYPE *last);
+
+/* update end position of an object, return the object */
+static pval *update_last(pval *, YYLTYPE *);
 %}
 
 
@@ -113,6 +117,8 @@ static pval *npval2(pvaltype type, YYLTYPE *first, YYLTYPE *last);
 %type <pval>file
 /* XXX lr changes */
 %type <pval>opt_else
+%type <pval>elements_block
+%type <pval>switchlist_block
 
 %type <str>opt_word
 %type <str>word_or_default
@@ -121,6 +127,8 @@ static pval *npval2(pvaltype type, YYLTYPE *first, YYLTYPE *last);
 %type <str>word_list
 %type <str>word3_list
 %type <str>includedname
+
+%type <intval>opt_abstract
 
 /*
  * OPTIONS
@@ -156,6 +164,7 @@ static pval *npval2(pvaltype type, YYLTYPE *first, YYLTYPE *last);
 		ignorepat element elements arglist global_statement
 		global_statements globals macro context object objects
 		opt_else
+		elements_block switchlist_block
 
 %destructor { free($$);}  word word_list goto_word word3_list includedname opt_word word_or_default
 
@@ -190,40 +199,16 @@ word_or_default : word { $$ = $1; }
 	| KW_DEFAULT { $$ = strdup("default"); }
 	;
 
-context : KW_CONTEXT word_or_default LC elements RC {
-		$$ = npval2(PV_CONTEXT, &@1, &@5);
-		$$->u1.str = $2;
-		$$->u2.statements = $4; }
-	| KW_CONTEXT word_or_default LC RC /* empty context OK */ {
+context : opt_abstract KW_CONTEXT word_or_default elements_block {
 		$$ = npval2(PV_CONTEXT, &@1, &@4);
-		$$->u1.str = $2; }
-	| KW_ABSTRACT KW_CONTEXT word_or_default LC elements RC {
-		$$ = npval2(PV_CONTEXT, &@1, &@6);
 		$$->u1.str = $3;
-		$$->u2.statements = $5;
-		$$->u3.abstract = 1; }
-	| KW_ABSTRACT KW_CONTEXT word_or_default LC RC /* empty context OK */ {
-		$$ = npval2(PV_CONTEXT, &@1, &@5);
-		$$->u1.str = $3;
-		$$->u3.abstract = 1; }
-/*
-	| KW_CONTEXT KW_DEFAULT LC elements RC {
-		$$ = npval2(PV_CONTEXT, &@1, &@5);
-		$$->u1.str = strdup("default");
-		$$->u2.statements = $4; }
-	| KW_CONTEXT KW_DEFAULT LC RC {
-		$$ = npval2(PV_CONTEXT, &@1, &@4);
-		$$->u1.str = strdup("default"); }
-	| KW_ABSTRACT KW_CONTEXT KW_DEFAULT LC elements RC  {
-		$$ = npval2(PV_CONTEXT, &@1, &@6);
-		$$->u1.str = strdup("default");
-		$$->u2.statements = $5;
-		$$->u3.abstract = 1; }
-	| KW_ABSTRACT KW_CONTEXT KW_DEFAULT LC RC {
-		$$ = npval2(PV_CONTEXT, &@1, &@5);
-		$$->u1.str = strdup("default");
-		$$->u3.abstract = 1; }
-*/
+		$$->u2.statements = $4;
+		$$->u3.abstract = $1; }
+	;
+
+/* optional "abstract" keyword */
+opt_abstract: KW_ABSTRACT { $$ = 1; }
+	| /* nothing */ { $$ = 0; }
 	;
 
 macro : KW_MACRO word LP arglist RP LC macro_statements RC {
@@ -267,6 +252,10 @@ arglist : word {
 		z->u1.str = $3;
 		$$ = linku1($1,z); }
 	| arglist error {$$=$1;}
+	;
+
+elements_block : LC RC	{ $$ = NULL; }
+	| LC elements RC { $$ = $2; }
 	;
 
 elements : element { $$=$1;}
@@ -441,22 +430,14 @@ statement : LC statements RC {
 		$$->u1.str = $4;
 		$$->u2.statements = $6; }
 	| switch_head RC /* empty list OK */ {
-		$$=$1;
-		$$->endline = @2.last_line;
-		$$->endcol = @2.last_column;}
+		$$ = update_last($1, &@2); }
 	| switch_head case_statements RC {
-		$$=$1;
-		$$->u2.statements = $2;
-		$$->endline = @3.last_line;
-		$$->endcol = @3.last_column;}
+		$$ = update_last($1, &@3);
+		$$->u2.statements = $2;}
 	| AMPER macro_call SEMI {
-		$$ = $2;
-		$$->endline = @2.last_line;
-		$$->endcol = @2.last_column;}
+		$$ = update_last($2, &@2); }
 	| application_call SEMI {
-		$$ = $1;
-		$$->endline = @2.last_line;
-		$$->endcol = @2.last_column;}
+		$$ = update_last($1, &@2); }
 	| word SEMI {
 		$$= npval2(PV_APPLICATION_CALL, &@1, &@2);
 		$$->u1.str = $1;}
@@ -497,47 +478,17 @@ statement : LC statements RC {
 	| KW_RETURN SEMI { $$ = npval2(PV_RETURN, &@1, &@2); }
 	| KW_CONTINUE SEMI { $$ = npval2(PV_CONTINUE, &@1, &@2); }
 	| random_head statement opt_else {
-		$$=$1;
+		$$ = update_last($1, &@2); /* XXX probably @3... */
 		$$->u2.statements = $2;
-		$$->endline = @2.last_line;
-		$$->u3.else_statements = $3;
-		$$->endcol = @2.last_column;}
-/*
-	| random_head statement KW_ELSE statement {
-		$$=$1;
-		$$->u2.statements = $2;
-		$$->endline = @2.last_line;
-		$$->endcol = @2.last_column;
-		$$->u3.else_statements = $4;}
-*/
+		$$->u3.else_statements = $3;}
 	| if_head statement opt_else {
-		$$=$1;
+		$$ = update_last($1, &@2); /* XXX probably @3... */
 		$$->u2.statements = $2;
-		$$->endline = @2.last_line;
-		$$->u3.else_statements = $3;
-		$$->endcol = @2.last_column;}
-/*
-	| if_head statement KW_ELSE statement {
-		$$=$1;
-		$$->u2.statements = $2;
-		$$->endline = @2.last_line;
-		$$->endcol = @2.last_column;
-	$$->u3.else_statements = $4;}
-*/
+		$$->u3.else_statements = $3;}
 	| iftime_head statement opt_else {
-		$$=$1;
+		$$ = update_last($1, &@2); /* XXX probably @3... */
 		$$->u2.statements = $2;
-		$$->endline = @2.last_line;
-		$$->u3.else_statements = $3;
-		$$->endcol = @2.last_column;}
-/*
-	| iftime_head statement KW_ELSE statement {
-		$$=$1;
-		$$->u2.statements = $2;
-		$$->endline = @2.last_line;
-		$$->endcol = @2.last_column;
-		$$->u3.else_statements = $4;}
-*/
+		$$->u3.else_statements = $3;}
 	| SEMI { $$=0; }
 	;
 
@@ -649,13 +600,14 @@ application_call_head: word {reset_argcount(parseio->scanner);} LP  {
 		$$->u1.str = $1; }
 	;
 
-application_call : application_call_head eval_arglist RP {$$ = $1;
+application_call : application_call_head eval_arglist RP {
+		$$ = update_last($1, &@3);
  		if( $$->type == PV_GOTO )
 			$$->u1.list = $2;
 	 	else
 			$$->u2.arglist = $2;
- 		$$->endline = @3.last_line; $$->endcol = @3.last_column;}
-	| application_call_head RP {$$=$1;$$->endline = @2.last_line; $$->endcol = @2.last_column;}
+	}
+	| application_call_head RP { $$ = update_last($1, &@2); }
 	;
 
 opt_word : word { $$ = $1 }
@@ -673,13 +625,6 @@ eval_arglist :  word_list {
 		$$ = $1;
 		linku1($1,z);
 		z->u1.str = $3;}
-/*
-	| eval_arglist COMMA {
-		pval *z = npval2(PV_WORD, &@2, &@2);
-		$$ = $1;
-		linku1($1,z);
-		z->u1.str = strdup("");}
-*/
 	;
 
 case_statements: case_statement {$$=$1;}
@@ -724,18 +669,18 @@ macro_statement : statement {$$=$1;}
 		$$->u2.statements = $4;}
 	;
 
-switches : KW_SWITCHES LC switchlist RC {
-		$$ = npval2(PV_SWITCHES, &@1, &@4);
-		$$->u1.list = $3; }
-	| KW_SWITCHES LC RC /* empty switch list OK */ {
-		$$ = npval2(PV_SWITCHES, &@1, &@3); }
+switches : KW_SWITCHES switchlist_block {
+		$$ = npval2(PV_SWITCHES, &@1, &@2);
+		$$->u1.list = $2; }
 	;
 
-eswitches : KW_ESWITCHES LC switchlist RC {
-		$$ = npval2(PV_ESWITCHES, &@1, &@4);
-		$$->u1.list = $3; }
-	| KW_ESWITCHES LC  RC { /* empty switch list OK */
-		$$ = npval2(PV_ESWITCHES, &@1, &@3); } /* if there's nothing to declare, why include it? */
+eswitches : KW_ESWITCHES switchlist_block {
+		$$ = npval2(PV_ESWITCHES, &@1, &@2);
+		$$->u1.list = $2; }
+	;
+
+switchlist_block : LC switchlist RC { $$ = $2; }
+	| LC RC { $$ = NULL; }
 	;
 
 switchlist : word SEMI {
@@ -991,6 +936,13 @@ static struct pval *npval2(pvaltype type, YYLTYPE *first, YYLTYPE *last)
 {
 	return npval(type, first->first_line, last->last_line,
 			first->first_column, last->last_column);
+}
+
+static struct pval *update_last(pval *obj, YYLTYPE *last)
+{
+	obj->endline = last->last_line;
+	obj->endcol = last->last_column;
+	return obj;
 }
 
 /* append second element to the list in the first one */
