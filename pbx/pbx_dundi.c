@@ -79,23 +79,20 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #define MAX_PACKET_SIZE 8192
 
-extern char ast_config_AST_KEY_DIR[];
-
-
 #define DUNDI_MODEL_INBOUND		(1 << 0)
 #define DUNDI_MODEL_OUTBOUND	(1 << 1)
 #define DUNDI_MODEL_SYMMETRIC	(DUNDI_MODEL_INBOUND | DUNDI_MODEL_OUTBOUND)
 
-/* Keep times of last 10 lookups */
+/*! Keep times of last 10 lookups */
 #define DUNDI_TIMING_HISTORY	10
 
-#define FLAG_ISREG		(1 << 0)		/* Transaction is register request */
-#define FLAG_DEAD		(1 << 1)		/* Transaction is dead */
-#define FLAG_FINAL		(1 << 2)		/* Transaction has final message sent */
-#define FLAG_ISQUAL		(1 << 3)		/* Transaction is a qualification */
-#define FLAG_ENCRYPT	(1 << 4)		/* Transaction is encrypted wiht ECX/DCX */
-#define FLAG_SENDFULLKEY	(1 << 5)		/* Send full key on transaction */
-#define FLAG_STOREHIST	(1 << 6)		/* Record historic performance */
+#define FLAG_ISREG       (1 << 0)   /*!< Transaction is register request */
+#define FLAG_DEAD        (1 << 1)   /*!< Transaction is dead */
+#define FLAG_FINAL       (1 << 2)   /*!< Transaction has final message sent */
+#define FLAG_ISQUAL      (1 << 3)   /*!< Transaction is a qualification */
+#define FLAG_ENCRYPT     (1 << 4)   /*!< Transaction is encrypted wiht ECX/DCX */
+#define FLAG_SENDFULLKEY (1 << 5)   /*!< Send full key on transaction */
+#define FLAG_STOREHIST   (1 << 6)   /*!< Record historic performance */
 
 #define DUNDI_FLAG_INTERNAL_NOPARTIAL (1 << 17)
 
@@ -166,31 +163,31 @@ struct dundi_precache_queue {
 struct dundi_request;
 
 struct dundi_transaction {
-	struct sockaddr_in addr;	/* Other end of transaction */
-	struct timeval start;		/* When this transaction was created */
+	struct sockaddr_in addr;               /*!< Other end of transaction */
+	struct timeval start;                  /*!< When this transaction was created */
 	dundi_eid eids[DUNDI_MAX_STACK + 1];
-	int eidcount;				/* Number of eids in eids */
-	dundi_eid us_eid;			/* Our EID, to them */
-	dundi_eid them_eid;			/* Their EID, to us */
-	aes_encrypt_ctx	ecx;		/* AES 128 Encryption context */
-	aes_decrypt_ctx	dcx;		/* AES 128 Decryption context */
-	unsigned int flags;				/* Has final packet been sent */
-	int ttl;					/* Remaining TTL for queries on this one */
-	int thread;					/* We have a calling thread */
-	int retranstimer;			/* How long to wait before retransmissions */
-	int autokillid;				/* ID to kill connection if answer doesn't come back fast enough */
-	int autokilltimeout;		/* Recommended timeout for autokill */
-	unsigned short strans;		/* Our transaction identifier */
-	unsigned short dtrans;		/* Their transaction identifer */
-	unsigned char iseqno;		/* Next expected received seqno */
-	unsigned char oiseqno;		/* Last received incoming seqno */
-	unsigned char oseqno;		/* Next transmitted seqno */
-	unsigned char aseqno;		/* Last acknowledge seqno */
-	struct dundi_packet *packets;	/* Packets to be retransmitted */
-	struct dundi_packet *lasttrans;	/* Last transmitted / ACK'd packet */
-	struct dundi_transaction *next;	/* Next with respect to the parent */
-	struct dundi_request *parent;	/* Parent request (if there is one) */
-	struct dundi_transaction *allnext; /* Next with respect to all DUNDi transactions */
+	int eidcount;                          /*!< Number of eids in eids */
+	dundi_eid us_eid;                      /*!< Our EID, to them */
+	dundi_eid them_eid;                    /*!< Their EID, to us */
+	aes_encrypt_ctx	ecx;                   /*!< AES 128 Encryption context */
+	aes_decrypt_ctx	dcx;                   /*!< AES 128 Decryption context */
+	unsigned int flags;                    /*!< Has final packet been sent */
+	int ttl;                               /*!< Remaining TTL for queries on this one */
+	int thread;                            /*!< We have a calling thread */
+	int retranstimer;                      /*!< How long to wait before retransmissions */
+	int autokillid;                        /*!< ID to kill connection if answer doesn't come back fast enough */
+	int autokilltimeout;                   /*!< Recommended timeout for autokill */
+	unsigned short strans;                 /*!< Our transaction identifier */
+	unsigned short dtrans;                 /*!< Their transaction identifer */
+	unsigned char iseqno;                  /*!< Next expected received seqno */
+	unsigned char oiseqno;                 /*!< Last received incoming seqno */
+	unsigned char oseqno;                  /*!< Next transmitted seqno */
+	unsigned char aseqno;                  /*!< Last acknowledge seqno */
+	struct dundi_packet *packets;          /*!< Packets to be retransmitted */
+	struct dundi_packet *lasttrans;        /*!< Last transmitted / ACK'd packet */
+	struct dundi_transaction *next;        /*!< Next with respect to the parent */
+	struct dundi_request *parent;          /*!< Parent request (if there is one) */
+	struct dundi_transaction *allnext;     /*!< Next with respect to all DUNDi transactions */
 } *alltrans;
 
 struct dundi_request {
@@ -206,10 +203,10 @@ struct dundi_request {
 	int expiration;
 	int cbypass;
 	int pfds[2];
-	unsigned long crc32;							/* CRC-32 of all but root EID's in avoid list */
-	struct dundi_transaction *trans;	/* Transactions */
-	struct dundi_request *next;
-} *requests;
+	unsigned long crc32;                   /*!< CRC-32 of all but root EID's in avoid list */
+	struct dundi_transaction *trans;       /*!< Transactions */
+	AST_LIST_ENTRY(dundi_request) list;
+};
 
 struct dundi_mapping {
 	char dcontext[AST_MAX_EXTENSION];
@@ -264,6 +261,7 @@ struct dundi_peer {
 
 AST_LIST_HEAD_STATIC(peers, dundi_peer);
 AST_LIST_HEAD_NOLOCK_STATIC(mappings, dundi_mapping);
+AST_LIST_HEAD_NOLOCK_STATIC(requests, dundi_request);
 
 static struct dundi_precache_queue *pcq;
 
@@ -2566,9 +2564,9 @@ static int dundi_show_requests(int fd, int argc, char *argv[])
 		return RESULT_SHOWUSAGE;
 	AST_LIST_LOCK(&peers);
 	ast_cli(fd, FORMAT2, "Number", "Context", "Root", "Max", "Rsp");
-	for (req = requests;req;req = req->next) {
-			ast_cli(fd, FORMAT, req->number, req->dcontext,
-						dundi_eid_zero(&req->root_eid) ? "<unspecified>" : dundi_eid_to_str(eidstr, sizeof(eidstr), &req->root_eid), req->maxcount, req->respcount);
+	AST_LIST_TRAVERSE(&requests, req, list) {
+		ast_cli(fd, FORMAT, req->number, req->dcontext,
+			dundi_eid_zero(&req->root_eid) ? "<unspecified>" : dundi_eid_to_str(eidstr, sizeof(eidstr), &req->root_eid), req->maxcount, req->respcount);
 	}
 	AST_LIST_UNLOCK(&peers);
 	return RESULT_SUCCESS;
@@ -3412,28 +3410,25 @@ static int register_request(struct dundi_request *dr, struct dundi_request **pen
 	int res=0;
 	char eid_str[20];
 	AST_LIST_LOCK(&peers);
-	cur = requests;
-	while(cur) {
+	AST_LIST_TRAVERSE(&requests, cur, list) {
 		if (option_debug)
 			ast_log(LOG_DEBUG, "Checking '%s@%s' vs '%s@%s'\n", cur->dcontext, cur->number,
 				dr->dcontext, dr->number);
 		if (!strcasecmp(cur->dcontext, dr->dcontext) &&
 		    !strcasecmp(cur->number, dr->number) &&
-			(!dundi_eid_cmp(&cur->root_eid, &dr->root_eid) || (cur->crc32 == dr->crc32))) {
-				ast_log(LOG_DEBUG, "Found existing query for '%s@%s' for '%s' crc '%08lx'\n", 
-					cur->dcontext, cur->number, dundi_eid_to_str(eid_str, sizeof(eid_str), &cur->root_eid), cur->crc32);
-				*pending = cur;
+		    (!dundi_eid_cmp(&cur->root_eid, &dr->root_eid) || (cur->crc32 == dr->crc32))) {
+			ast_log(LOG_DEBUG, "Found existing query for '%s@%s' for '%s' crc '%08lx'\n", 
+				cur->dcontext, cur->number, dundi_eid_to_str(eid_str, sizeof(eid_str), &cur->root_eid), cur->crc32);
+			*pending = cur;
 			res = 1;
 			break;
 		}
-		cur = cur->next;
 	}
 	if (!res) {
 		ast_log(LOG_DEBUG, "Registering request for '%s@%s' on behalf of '%s' crc '%08lx'\n", 
 				dr->number, dr->dcontext, dundi_eid_to_str(eid_str, sizeof(eid_str), &dr->root_eid), dr->crc32);
 		/* Go ahead and link us in since nobody else is searching for this */
-		dr->next = requests;
-		requests = dr;
+		AST_LIST_INSERT_HEAD(&requests, dr, list);
 		*pending = NULL;
 	}
 	AST_LIST_UNLOCK(&peers);
@@ -3442,39 +3437,23 @@ static int register_request(struct dundi_request *dr, struct dundi_request **pen
 
 static void unregister_request(struct dundi_request *dr)
 {
-	struct dundi_request *cur, *prev;
 	AST_LIST_LOCK(&peers);
-	prev = NULL;
-	cur = requests;
-	while(cur) {
-		if (cur == dr) {
-			if (prev)
-				prev->next = cur->next;
-			else
-				requests = cur->next;
-			break;
-		}
-		prev = cur;
-		cur = cur->next;
-	}
+	AST_LIST_REMOVE(&requests, dr, list);
 	AST_LIST_UNLOCK(&peers);
 }
 
 static int check_request(struct dundi_request *dr)
 {
 	struct dundi_request *cur;
-	int res = 0;
+
 	AST_LIST_LOCK(&peers);
-	cur = requests;
-	while(cur) {
-		if (cur == dr) {
-			res = 1;
+	AST_LIST_TRAVERSE(&requests, cur, list) {
+		if (cur == dr)
 			break;
-		}
-		cur = cur->next;
 	}
 	AST_LIST_UNLOCK(&peers);
-	return res;
+	
+	return cur ? 1 : 0;
 }
 
 static unsigned long avoid_crc32(dundi_eid *avoid[])
@@ -3984,70 +3963,68 @@ static void build_mapping(char *name, char *value)
 	struct dundi_mapping *map;
 	int x;
 	int y;
-	t = ast_strdupa(value);
-	if (t) {
-		AST_LIST_TRAVERSE(&mappings, map, list) {
-			/* Find a double match */
-			if (!strcasecmp(map->dcontext, name) && 
-				(!strncasecmp(map->lcontext, value, strlen(map->lcontext)) && 
-				  (!value[strlen(map->lcontext)] || 
-				   (value[strlen(map->lcontext)] == ','))))
-				break;
-		}
-		if (!map) {
-			map = ast_calloc(1, sizeof(*map));
-			if (map) {
-				AST_LIST_INSERT_HEAD(&mappings, map, list);
-				map->dead = 1;
-			}
-		}
-		if (map) {
-			map->options = 0;
-			memset(fields, 0, sizeof(fields));
-			x = 0;
-			while(t && x < MAX_OPTS) {
-				fields[x++] = t;
-				t = strchr(t, ',');
-				if (t) {
-					*t = '\0';
-					t++;
-				}
-			} /* Russell was here, arrrr! */
-			if ((x == 1) && ast_strlen_zero(fields[0])) {
-				/* Placeholder mapping */
-				ast_copy_string(map->dcontext, name, sizeof(map->dcontext));
-				map->dead = 0;
-			} else if (x >= 4) {
-				ast_copy_string(map->dcontext, name, sizeof(map->dcontext));
-				ast_copy_string(map->lcontext, fields[0], sizeof(map->lcontext));
-				if ((sscanf(fields[1], "%d", &map->weight) == 1) && (map->weight >= 0) && (map->weight < 60000)) {
-					ast_copy_string(map->dest, fields[3], sizeof(map->dest));
-					if ((map->tech = str2tech(fields[2]))) {
-						map->dead = 0;
-					}
-				} else {
-					ast_log(LOG_WARNING, "Invalid weight '%s' specified, deleting entry '%s/%s'\n", fields[1], map->dcontext, map->lcontext);
-				}
-				for (y=4;y<x;y++) {
-					if (!strcasecmp(fields[y], "nounsolicited"))
-						map->options |= DUNDI_FLAG_NOUNSOLICITED;
-					else if (!strcasecmp(fields[y], "nocomunsolicit"))
-						map->options |= DUNDI_FLAG_NOCOMUNSOLICIT;
-					else if (!strcasecmp(fields[y], "residential"))
-						map->options |= DUNDI_FLAG_RESIDENTIAL;
-					else if (!strcasecmp(fields[y], "commercial"))
-						map->options |= DUNDI_FLAG_COMMERCIAL;
-					else if (!strcasecmp(fields[y], "mobile"))
-						map->options |= DUNDI_FLAG_MOBILE;
-					else if (!strcasecmp(fields[y], "nopartial"))
-						map->options |= DUNDI_FLAG_INTERNAL_NOPARTIAL;
-					else
-						ast_log(LOG_WARNING, "Don't know anything about option '%s'\n", fields[y]);
-				}
-			} else 
-				ast_log(LOG_WARNING, "Expected at least %d arguments in map, but got only %d\n", 4, x);
-		}
+
+	if (!(t = ast_strdupa(value)))
+		return;
+		
+	AST_LIST_TRAVERSE(&mappings, map, list) {
+		/* Find a double match */
+		if (!strcasecmp(map->dcontext, name) && 
+			(!strncasecmp(map->lcontext, value, strlen(map->lcontext)) && 
+			  (!value[strlen(map->lcontext)] || 
+			   (value[strlen(map->lcontext)] == ','))))
+			break;
 	}
+	if (!map) {
+		if (!(map = ast_calloc(1, sizeof(*map))))
+			return;
+		AST_LIST_INSERT_HEAD(&mappings, map, list);
+		map->dead = 1;
+	}
+	map->options = 0;
+	memset(fields, 0, sizeof(fields));
+	x = 0;
+	while (t && x < MAX_OPTS) {
+		fields[x++] = t;
+		t = strchr(t, ',');
+		if (t) {
+			*t = '\0';
+			t++;
+		}
+	} /* Russell was here, arrrr! */
+	if ((x == 1) && ast_strlen_zero(fields[0])) {
+		/* Placeholder mapping */
+		ast_copy_string(map->dcontext, name, sizeof(map->dcontext));
+		map->dead = 0;
+	} else if (x >= 4) {
+		ast_copy_string(map->dcontext, name, sizeof(map->dcontext));
+		ast_copy_string(map->lcontext, fields[0], sizeof(map->lcontext));
+		if ((sscanf(fields[1], "%d", &map->weight) == 1) && (map->weight >= 0) && (map->weight < 60000)) {
+			ast_copy_string(map->dest, fields[3], sizeof(map->dest));
+			if ((map->tech = str2tech(fields[2]))) {
+				map->dead = 0;
+			}
+		} else {
+			ast_log(LOG_WARNING, "Invalid weight '%s' specified, deleting entry '%s/%s'\n", fields[1], map->dcontext, map->lcontext);
+		}
+		for (y = 4;y < x; y++) {
+			if (!strcasecmp(fields[y], "nounsolicited"))
+				map->options |= DUNDI_FLAG_NOUNSOLICITED;
+			else if (!strcasecmp(fields[y], "nocomunsolicit"))
+				map->options |= DUNDI_FLAG_NOCOMUNSOLICIT;
+			else if (!strcasecmp(fields[y], "residential"))
+				map->options |= DUNDI_FLAG_RESIDENTIAL;
+			else if (!strcasecmp(fields[y], "commercial"))
+				map->options |= DUNDI_FLAG_COMMERCIAL;
+			else if (!strcasecmp(fields[y], "mobile"))
+				map->options |= DUNDI_FLAG_MOBILE;
+			else if (!strcasecmp(fields[y], "nopartial"))
+				map->options |= DUNDI_FLAG_INTERNAL_NOPARTIAL;
+			else
+				ast_log(LOG_WARNING, "Don't know anything about option '%s'\n", fields[y]);
+		}
+	} else 
+		ast_log(LOG_WARNING, "Expected at least %d arguments in map, but got only %d\n", 4, x);
 }
 
 /* \note Called with the peers list already locked */
