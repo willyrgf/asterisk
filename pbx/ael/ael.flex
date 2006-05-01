@@ -74,6 +74,7 @@ static void pbcpush(char x);
 static int pbcpop(char x);
 
 static int parencount = 0;
+static int commaout = 0;
 
 /*
  * current line, column and filename, updated as we read the input.
@@ -239,7 +240,7 @@ includes	{ STORE_POS; return KW_INCLUDES;}
 		} else {
 			STORE_LOC;
 			yylval->str = strdup(yytext);
-			yylval->str[strlen(yylval->str)-1] = '\0'; /* trim trailing ')' */
+			yylval->str[yyleng-1] = '\0'; /* trim trailing ')' */
 			unput(')');
 			BEGIN(0);
 			return word;
@@ -289,14 +290,12 @@ includes	{ STORE_POS; return KW_INCLUDES;}
 			yymore();
 		} else {
 			STORE_LOC;
-			/* we have at least 1 char. If it is a single ')', just return it */
+			BEGIN(0);
 			if ( !strcmp(yytext, ")") )
 				return RP;
 			yylval->str = strdup(yytext);
 			yylval->str[yyleng-1] = '\0'; /* trim trailing ')' */
-			BEGIN(0);
 			unput(')');
-			my_col--;	/* XXX not entirely correct, should go 'back' by 1 char */
 			return word;
 		}
 	}
@@ -306,15 +305,23 @@ includes	{ STORE_POS; return KW_INCLUDES;}
 			yymore();
 		} else  {
 			STORE_LOC;
-			/* we have at least 1 char. If it is a single comma, just return it */
-			if (!strcmp(yytext, "," ) )
+			if( !commaout ) {
+				if( !strcmp(yytext,"," ) ) {
+					commaout = 0;
+					my_col+=1;
+					return COMMA;
+				}
+				yylval->str = strdup(yytext);
+				/* printf("Got argg2 word %s\n", yylval->str); */
+				unput(',');
+				commaout = 1;
+				yylval->str[yyleng-1] = '\0';
+				return word;
+			} else {
+				commaout = 0;
+				my_col+=1;
 				return COMMA;
-			yylval->str = strdup(yytext);
-			/* otherwise return the string first, then the comma. */
-			unput(',');
-			my_col--;	/* XXX not entirely correct, should go 'back' by 1 char */
-			yylval->str[yyleng-1] = '\0'; /* trim the comma off the string */
-			return word;
+			}
 		}
 	}
 
@@ -516,6 +523,7 @@ void reset_argcount(yyscan_t yyscanner )
 	struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
 	parencount = 0;
 	pbcpos = 0;
+	commaout = 0;
 	pbcpush('(');
 	c_prevword();
 	BEGIN(argg);
