@@ -1508,9 +1508,7 @@ static int read_config(struct chan_list *ch, int orig) {
 			ast_copy_string(ast->exten, bc->dad, sizeof(ast->exten));
 		}
 		
-		if ( !ast->cid.cid_num) {
-			ast_set_callerid(ast, bc->oad, NULL, bc->oad);
-		}
+		ast_set_callerid(ast, bc->oad, NULL, bc->oad);
 		
 		if ( !ast_strlen_zero(bc->rad) ) {
 			if (ast->cid.cid_rdnis)
@@ -2074,8 +2072,16 @@ static struct ast_frame  *misdn_read(struct ast_channel *ast)
 			tmp->zero_read_cnt=0;
 
 		}
-		tmp->frame.frametype = AST_FRAME_NULL;
-		tmp->frame.subclass = 0;
+
+               /*faking Voice Frame*/
+		tmp->frame.frametype = AST_FRAME_VOICE;
+		tmp->frame.subclass = AST_FORMAT_ALAW;
+		memset(tmp->ast_rd_buf,0,128);
+		tmp->frame.data = tmp->ast_rd_buf ;
+		tmp->frame.mallocd =0 ;
+		tmp->frame.datalen = 128;
+		tmp->frame.samples = 128;
+
 		frame=ast_frisolate(&tmp->frame);
 		return frame;
 	}
