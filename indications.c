@@ -382,10 +382,7 @@ struct tone_zone *ast_get_indication_zone(const char *country)
 	if (country == NULL)
 		return 0;	/* not a single country insight */
 
-	if (ast_mutex_lock(&tzlock)) {
-		ast_log(LOG_WARNING, "Unable to lock tone_zones list\n");
-		return 0;
-	}
+	ast_mutex_lock(&tzlock);
 	do {
 		for (tz=tone_zones; tz; tz=tz->next) {
 			if (strcasecmp(country,tz->country)==0) {
@@ -412,18 +409,14 @@ struct tone_zone_sound *ast_get_indication_tone(const struct tone_zone *zone, co
 	struct tone_zone_sound *ts;
 
 	/* we need some tonezone, pick the first */
-	if (!zone) {
-		if (current_tonezone)
-			return current_tonezone; /* default country? */
-		if (tone_zones)
-			return tone_zones; /* any country? */
-		return 0; /* not a single country insight */
-	}
+	if (zone == NULL && current_tonezone)
+		zone = current_tonezone;	/* default country? */
+	if (zone == NULL && tone_zones)
+		zone = tone_zones;		/* any country? */
+	if (zone == NULL)
+		return 0;	/* not a single country insight */
 
-	if (ast_mutex_lock(&tzlock)) {
-		ast_log(LOG_WARNING, "Unable to lock tone_zones list\n");
-		return 0;
-	}
+	ast_mutex_lock(&tzlock);
 	for (ts=zone->tones; ts; ts=ts->next) {
 		if (strcasecmp(indication,ts->name)==0) {
 			/* found indication! */
@@ -458,10 +451,7 @@ int ast_register_indication_country(struct tone_zone *zone)
 {
 	struct tone_zone *tz,*pz;
 
-	if (ast_mutex_lock(&tzlock)) {
-		ast_log(LOG_WARNING, "Unable to lock tone_zones list\n");
-		return -1;
-	}
+	ast_mutex_lock(&tzlock);
 	for (pz=NULL,tz=tone_zones; tz; pz=tz,tz=tz->next) {
 		if (strcasecmp(zone->country,tz->country)==0) {
 			/* tone_zone already there, replace */
@@ -499,10 +489,7 @@ int ast_unregister_indication_country(const char *country)
 	struct tone_zone *tz, *pz = NULL, *tmp;
 	int res = -1;
 
-	if (ast_mutex_lock(&tzlock)) {
-		ast_log(LOG_WARNING, "Unable to lock tone_zones list\n");
-		return -1;
-	}
+	ast_mutex_lock(&tzlock);
 	tz = tone_zones;
 	while (tz) {
 		if (country==NULL ||
@@ -547,10 +534,7 @@ int ast_register_indication(struct tone_zone *zone, const char *indication, cons
 	if (zone->alias[0])
 		return -1;
 
-	if (ast_mutex_lock(&tzlock)) {
-		ast_log(LOG_WARNING, "Unable to lock tone_zones list\n");
-		return -2;
-	}
+	ast_mutex_lock(&tzlock);
 	for (ps=NULL,ts=zone->tones; ts; ps=ts,ts=ts->next) {
 		if (strcasecmp(indication,ts->name)==0) {
 			/* indication already there, replace */
@@ -589,10 +573,7 @@ int ast_unregister_indication(struct tone_zone *zone, const char *indication)
 	if (zone->alias[0])
 		return -1;
 
-	if (ast_mutex_lock(&tzlock)) {
-		ast_log(LOG_WARNING, "Unable to lock tone_zones list\n");
-		return -1;
-	}
+	ast_mutex_lock(&tzlock);
 	ts = zone->tones;
 	while (ts) {
 		if (strcasecmp(indication,ts->name)==0) {
