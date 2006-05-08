@@ -365,9 +365,9 @@ ifeq ($(wildcard $(CROSS_COMPILE_TARGET)/usr/include/dlfcn.h),)
 endif
 
 ifeq ($(OSARCH),Linux)
-  LIBS+=-ldl -lpthread -lncurses -lm -lresolv  #-lnjamd
+  LIBS+=-ldl -lpthread $(EDITLINE_LIBS) -lm -lresolv  #-lnjamd
 else
-  LIBS+=-lncurses -lm
+  LIBS+=$(EDITLINE_LIBS) -lm
 endif
 
 ifeq ($(OSARCH),Darwin)
@@ -395,11 +395,11 @@ ifeq ($(OSARCH),FreeBSD)
 endif
 
 ifeq ($(OSARCH),NetBSD)
-  LIBS+=-lpthread -lcrypto -lm -L$(CROSS_COMPILE_TARGET)/usr/pkg/lib -lncurses
+  LIBS+=-lpthread -lcrypto -lm -L$(CROSS_COMPILE_TARGET)/usr/pkg/lib $(EDITLINE_LIBS)
 endif
 
 ifeq ($(OSARCH),OpenBSD)
-  LIBS+=-lcrypto -lpthread -lm -lncurses
+  LIBS+=-lcrypto -lpthread -lm $(EDITLINE_LIBS)
 endif
 
 ifeq ($(OSARCH),SunOS)
@@ -410,7 +410,7 @@ ifeq ($(OSARCH),SunOS)
 endif
 
 ifeq ($(MAKETOPLEVEL),$(MAKELEVEL))
-  CFLAGS+=$(ASTCFLAGS) $(TOPDIR_CFLAGS)
+  CFLAGS+=$(TOPDIR_CFLAGS) $(ASTCFLAGS)
 endif
 
 # This is used when generating the doxygen documentation
@@ -431,12 +431,12 @@ _all: all
 	@echo " +               make install                +"  
 	@echo " +-------------------------------------------+"  
 
-all: include/autoconfig.h menuselect.makeopts cleantest depend asterisk subdirs
+all: config.status menuselect.makeopts cleantest depend asterisk subdirs
 
 configure:
 	-@./bootstrap.sh
 
-include/autoconfig.h: configure
+config.status: configure
 	@CFLAGS="" ./configure
 	@echo "****"
 	@echo "**** The configure script was just executed, so 'make' needs to be"
