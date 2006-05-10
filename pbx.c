@@ -560,6 +560,33 @@ static void pbx_destroy(struct ast_pbx *p)
 	free(p);
 }
 
+/*
+ * Special characters used in patterns:
+ *	'_'	underscore is the leading character of a pattern.
+ *		In other position it is treated as a regular char.
+ *	' ' '-'	space and '-' are separator and ignored.
+ *	.	one or more of any character. Only allowed at the end of
+ *		a pattern.
+ *	!	zero or more of anything. Also impacts the result of CANMATCH
+ *		and MATCHMORE. Only allowed at the end of a pattern.
+ *	/	should not appear as it is considered the separator of the CID info.
+ *		XXX at the moment we may stop on this char.
+ *
+ *	X Z N	match ranges 0-9, 1-9, 2-9 respectively.
+ *	[	denotes the start of a set of character. Everything inside
+ *		is considered literally. We can have ranges a-d and individual
+ *		characters. A '[' and '-' can be considered literally if they
+ *		are just before ']'.
+ *		XXX currently there is no way to specify ']' in a range, nor \ is
+ *		considered specially.
+ *
+ * When we compare a pattern with a specific extension, all characters in the extension
+ * itself are considered literally with the only exception of '-' which is considered
+ * as a separator and thus ignored.
+ * XXX do we want to consider space as a separator as well ?
+ * XXX do we want to consider the separators in non-patterns as well ?
+ */
+
 /*!
  * \brief helper functions to sort extensions and patterns in the desired way,
  * so that more specific patterns appear first.
@@ -722,6 +749,10 @@ static int _extension_match_core(const char *pattern, const char *data, enum ext
 			return 0;
 	}
 	pattern++; /* skip leading _ */
+	/*
+	 * XXX below we stop at '/' which is a separator for the CID info. However we should
+	 * not store '/' in the pattern at all. When we insure it, we can remove the checks.
+	 */
 	while (*data && *pattern && *pattern != '/') {
 		const char *end;
 
@@ -4346,6 +4377,7 @@ int ast_add_extension2(struct ast_context *con,
 	tmp->registrar = registrar;
 
 	ast_mutex_lock(&con->lock);
+	res = 0; /* some compilers will think it is uninitialized otherwise */
 	for (e = con->root; e; el = e, e = e->next) {   /* scan the extension list */
 		res = ext_cmp(e->exten, extension);
 		if (res == 0) { /* extension match, now look at cidmatch */
@@ -4362,14 +4394,14 @@ int ast_add_extension2(struct ast_context *con,
 			break;
 	}
 	if (e && res == 0) { /* exact match, insert in the pri chain */
-			int ret = add_pri(con, tmp, el, e, replace);
-			ast_mutex_unlock(&con->lock);
-			if (ret < 0)
-				errno = EEXIST;
-			else {
-				LOG;
-			}
-			return ret;
+		int ret = add_pri(con, tmp, el, e, replace);
+		ast_mutex_unlock(&con->lock);
+		if (ret < 0)
+			errno = EEXIST;
+		else {
+			LOG;
+		}
+		return ret;
 	}
 	/*
 	 * not an exact match, this is the first entry with this pattern,
