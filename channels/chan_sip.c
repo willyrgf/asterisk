@@ -1173,7 +1173,6 @@ static int find_sip_method(const char *msg);
 static unsigned int parse_sip_options(struct sip_pvt *pvt, const char *supported);
 static void parse_request(struct sip_request *req);
 static const char *get_header(const struct sip_request *req, const char *name);
-static void copy_request(struct sip_request *dst,struct sip_request *src);
 static char *referstatus2str(enum referstatus rstatus);
 static int method_match(enum sipmethod id, const char *name);
 static void parse_copy(struct sip_request *dst, struct sip_request *src);
@@ -1310,7 +1309,7 @@ static void initialize_initreq(struct sip_pvt *p, struct sip_request *req)
  * matches the sip method 'id'.
  * Strictly speaking, SIP methods are case SENSITIVE, but we do
  * a case-insensitive comparison to be more tolerant.
- * following Jon Postel's rule: Be gentle in what you accept, strict with what you send 
+ * following Jon Postel's rule: Be gentle in what you accept, strict with what you send
  */
 static int method_match(enum sipmethod id, const char *name)
 {
@@ -4111,6 +4110,8 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 /*! \brief Add header to SIP message */
 static int add_header(struct sip_request *req, const char *var, const char *value)
 {
+	int maxlen = sizeof(req->data) - 4 - req->len; /* 4 bytes are for two \r\n ? */
+
 	if (req->headers == SIP_MAX_HEADERS) {
 		ast_log(LOG_WARNING, "Out of SIP header space\n");
 		return -1;
@@ -4121,7 +4122,7 @@ static int add_header(struct sip_request *req, const char *var, const char *valu
 		return -1;
 	}
 
-	if (req->len >= sizeof(req->data) - 4) {
+	if (maxlen <= 0) {
 		ast_log(LOG_WARNING, "Out of space, can't add anymore (%s:%s)\n", var, value);
 		return -1;
 	}
@@ -4131,7 +4132,7 @@ static int add_header(struct sip_request *req, const char *var, const char *valu
 	if (compactheaders)
 		var = find_alias(var, var);
 
-	snprintf(req->header[req->headers], sizeof(req->data) - req->len - 4, "%s: %s\r\n", var, value);
+	snprintf(req->header[req->headers], maxlen, "%s: %s\r\n", var, value);
 	req->len += strlen(req->header[req->headers]);
 	req->headers++;
 
