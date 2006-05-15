@@ -208,6 +208,12 @@ struct {								\
 #define	AST_LIST_FIRST(head)	((head)->first)
 
 /*!
+  \brief Returns the last entry contained in a list.
+  \param head This is a pointer to the list tail structure
+ */
+#define	AST_LIST_LAST(head)	((head)->last)
+
+/*!
   \brief Returns the next entry in the list after the given entry.
   \param elm This is a pointer to the current entry.
   \param field This is the name of the field (declared using AST_LIST_ENTRY())
@@ -352,19 +358,6 @@ struct {								\
   \brief Closes a safe loop traversal block.
  */
 #define AST_LIST_TRAVERSE_SAFE_END  }
-
-/*!
-  \brief Initializes a list head structure.
-  \param head This is a pointer to the list head structure
-
-  This macro initializes a list head structure by setting the head
-  entry to \a NULL (empty list) and recreating the embedded lock.
-*/
-#define AST_LIST_HEAD_INIT(head) {					\
-	(head)->first = NULL;						\
-	(head)->last = NULL;						\
-	ast_mutex_init(&(head)->lock);					\
-}
 
 /*!
   \brief Destroys a list head structure.

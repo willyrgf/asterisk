@@ -24,18 +24,6 @@ OPTIONS=
 #CROSS_PROC=arm
 #SUB_PROC=xscale # or maverick
 
-# Pentium Pro Optimize
-#PROC=i686
-
-# Pentium & VIA processors optimize
-#PROC=i586
-
-#PROC=k6
-#PROC=ppc
-
-CC=$(CROSS_COMPILE)gcc
-HOST_CC=gcc
-
 ifeq ($(CROSS_COMPILE),)
   OSARCH=$(shell uname -s)
   PROC?=$(shell uname -m)
@@ -69,37 +57,7 @@ endif
 OVERWRITE=y
 
 # Include debug and macro symbols in the executables (-g) and profiling info (-pg)
-DEBUG=-g3 #-pg
-
-# Set NOCRYPTO to yes if you do not want to have crypto support or dependencies
-#NOCRYPTO=yes
-
-# If you are running a radio application, define RADIO_RELAX so that the DTMF
-# will be received more reliably
-#OPTIONS += -DRADIO_RELAX
-
-# If you don't have a lot of memory (e.g. embedded Asterisk), define LOW_MEMORY
-# to reduce the size of certain static buffers
-#ifneq ($(CROSS_COMPILE),)
-#OPTIONS += -DLOW_MEMORY
-#endif
-
-# Asterisk SMDI integration
-WITH_SMDI = 1
-
-# Optional debugging parameters
-DEBUG_THREADS = #-DDUMP_SCHEDULER #-DDEBUG_SCHEDULER #-DDEBUG_THREADS #-DDO_CRASH #-DDETECT_DEADLOCKS
-
-# If you want to debug channel locking, try this (depends on code using
-# ast_channel_lock and companions to work)
-DEBUG_THREADS += #-DDEBUG_CHANNEL_LOCKS
-
-# Uncomment next one to enable ast_frame tracing (for debugging)
-TRACE_FRAMES = #-DTRACE_FRAMES
-
-# Where to install asterisk after compiling
-# Default -> leave empty
-INSTALL_PREFIX?=
+DEBUG=-g3
 
 # Staging directory
 # Files are copied here temporarily during the install process
@@ -110,16 +68,16 @@ DESTDIR?=
 #DESTDIR?=/tmp/asterisk
 
 # Original busydetect routine
-BUSYDETECT = #-DBUSYDETECT
+#BUSYDETECT = -DBUSYDETECT
 
 # Improved busydetect routine, comment the previous one if you use this one
-BUSYDETECT+= #-DBUSYDETECT_MARTIN 
+#BUSYDETECT+= -DBUSYDETECT_MARTIN 
 # Detect the busy signal looking only at tone lengths
 # For example if you have 3 beeps 100ms tone, 100ms silence separated by 500 ms of silence
-BUSYDETECT+= #-DBUSYDETECT_TONEONLY
+#BUSYDETECT+= -DBUSYDETECT_TONEONLY
 # Enforce the detection of busy signal (get rid of false hangups)
 # Don't use together with -DBUSYDETECT_TONEONLY
-BUSYDETECT+= #-DBUSYDETECT_COMPARE_TONE_AND_SILENCE
+#BUSYDETECT+= -DBUSYDETECT_COMPARE_TONE_AND_SILENCE
 
 # Define standard directories for various platforms
 # These apply if they are not redefined in asterisk.conf 
@@ -201,7 +159,7 @@ OTHER_SUBDIR_CFLAGS=-include ../include/autoconfig.h -I../include -I..
 
 #   *CLI> show memory allocations [filename]
 #   *CLI> show memory summary [filename]
-ifneq ($(findstring -DMALLOC_DEBUG,$(ASTCFLAGS)),)
+ifneq ($(findstring MALLOC_DEBUG,$(MENUSELECT_CFLAGS)),)
   TOPDIR_CFLAGS+=-include include/asterisk/astmm.h
   MOD_SUBDIR_CFLAGS+=-include ../include/asterisk/astmm.h
 endif
@@ -251,7 +209,7 @@ ifeq ($(OSARCH),SunOS)
   ID=/usr/xpg4/bin/id
 endif
 
-ASTCFLAGS+=-pipe  -Wall -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations $(DEBUG) $(INCLUDE) #-DMAKE_VALGRIND_HAPPY
+ASTCFLAGS+=-pipe -Wall -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations $(DEBUG)
 ASTCFLAGS+=$(OPTIMIZE)
 
 ifeq ($(AST_DEVMODE),yes)
@@ -259,7 +217,7 @@ ifeq ($(AST_DEVMODE),yes)
 endif
 
 ifeq ($(shell gcc -v 2>&1 | grep 'gcc version' | cut -f3 -d' ' | cut -f1 -d.),4)
-ASTCFLAGS+= -Wno-pointer-sign
+ASTCFLAGS+=-Wno-pointer-sign
 endif
 ASTOBJ=-o asterisk
 
@@ -286,8 +244,7 @@ ifeq ($(OSARCH),FreeBSD)
 endif # FreeBSD
 
 ifeq ($(OSARCH),NetBSD)
-  ASTCFLAGS+=-pthread
-  INCLUDE+=-I$(CROSS_COMPILE_TARGET)/usr/pkg/include
+  AST_CFLAGS+=-pthread -I$(CROSS_COMPILE_TARGET)/usr/pkg/include
   MPG123TARG=netbsd
 endif
 
@@ -296,8 +253,7 @@ ifeq ($(OSARCH),OpenBSD)
 endif
 
 ifeq ($(OSARCH),SunOS)
-  ASTCFLAGS+=-Wcast-align -DSOLARIS
-  INCLUDE+=-Iinclude/solaris-compat -I$(CROSS_COMPILE_TARGET)/usr/local/ssl/include
+  ASTCFLAGS+=-Wcast-align -DSOLARIS -Iinclude/solaris-compat -I$(CROSS_COMPILE_TARGET)/usr/local/ssl/include
 endif
 
 LIBEDIT=editline/libedit.a
@@ -322,13 +278,9 @@ else
   endif
 endif
 
-ASTCFLAGS+= $(DEBUG_THREADS)
-ASTCFLAGS+= $(TRACE_FRAMES)
-ASTCFLAGS+= $(MALLOC_DEBUG)
-ASTCFLAGS+= $(BUSYDETECT)
-ASTCFLAGS+= $(OPTIONS)
+ASTCFLAGS+=$(MALLOC_DEBUG)$(BUSYDETECT)$(OPTIONS)
 ifeq ($(findstring dont-optimize,$(MAKECMDGOALS)),)
-ASTCFLAGS+= -fomit-frame-pointer 
+ASTCFLAGS+=-fomit-frame-pointer
 endif
 
 MOD_SUBDIRS=res channels pbx apps codecs formats cdr funcs
@@ -347,11 +299,11 @@ OBJS=io.o sched.o logger.o frame.o loader.o config.o channel.o \
 # we need to link in the objects statically, not as a library, because
 # otherwise modules will not have them available if none of the static
 # objects use it.
-OBJS+= stdtime/localtime.o
+OBJS+=stdtime/localtime.o
 
 # At the moment say.o is an optional component which can be overridden
 # by a module.
-OBJS+= say.o
+OBJS+=say.o
 
 ifeq ($(wildcard $(CROSS_COMPILE_TARGET)/usr/include/sys/poll.h),)
   OBJS+= poll.o
@@ -410,7 +362,7 @@ ifeq ($(OSARCH),SunOS)
 endif
 
 ifeq ($(MAKETOPLEVEL),$(MAKELEVEL))
-  CFLAGS+=$(TOPDIR_CFLAGS) $(ASTCFLAGS)
+  CFLAGS+=$(TOPDIR_CFLAGS)$(ASTCFLAGS)
 endif
 
 # This is used when generating the doxygen documentation
@@ -532,7 +484,7 @@ include/asterisk/buildopts.h: menuselect.makeopts
 	@rm -f $@.tmp
 
 stdtime/libtime.a:
-	CFLAGS="$(MOD_SUBDIR_CFLAGS) $(ASTCFLAGS)" $(MAKE) -C stdtime libtime.a
+	CFLAGS="$(MOD_SUBDIR_CFLAGS)$(ASTCFLAGS)" $(MAKE) -C stdtime libtime.a
 
 asterisk: include/asterisk/buildopts.h editline/libedit.a db1-ast/libdb1.a stdtime/libtime.a $(OBJS)
 	build_tools/make_build_h > include/asterisk/build.h.tmp
@@ -547,9 +499,9 @@ muted: muted.o
 	$(CC) $(AUDIO_LIBS) -o muted muted.o
 
 subdirs: 
-	@for x in $(MOD_SUBDIRS); do CFLAGS="$(MOD_SUBDIR_CFLAGS) $(ASTCFLAGS)" $(MAKE) -C $$x || exit 1 ; done
-	@CFLAGS="$(OTHER_SUBDIR_CFLAGS) $(ASTCFLAGS)" $(MAKE) -C utils
-	@CFLAGS="$(OTHER_SUBDIR_CFLAGS) $(ASTCFLAGS)" $(MAKE) -C agi
+	@for x in $(MOD_SUBDIRS); do CFLAGS="$(MOD_SUBDIR_CFLAGS)$(ASTCFLAGS)" $(MAKE) -C $$x || exit 1 ; done
+	@CFLAGS="$(OTHER_SUBDIR_CFLAGS)$(ASTCFLAGS)" $(MAKE) -C utils
+	@CFLAGS="$(OTHER_SUBDIR_CFLAGS)$(ASTCFLAGS)" $(MAKE) -C agi
 
 clean-depend:
 	@for x in $(SUBDIRS); do $(MAKE) -C $$x clean-depend || exit 1 ; done
@@ -1004,7 +956,7 @@ uninstall-all: _uninstall
 menuselect: build_tools/menuselect makeopts.xml
 	-@build_tools/menuselect ${GLOBAL_MAKEOPTS} ${USER_MAKEOPTS} menuselect.makeopts && echo "menuselect changes saved!" || echo "menuselect changes NOT saved!"
 
-build_tools/menuselect: build_tools/menuselect.c build_tools/menuselect_curses.c build_tools/menuselect.h include/autoconfig.h mxml/libmxml.a $(MENUSELECT_OBJS)
+build_tools/menuselect: build_tools/menuselect.c build_tools/menuselect_curses.c build_tools/menuselect.h config.status mxml/libmxml.a $(MENUSELECT_OBJS)
 	$(MAKE) -C build_tools menuselect
 
 mxml/libmxml.a:

@@ -1644,26 +1644,29 @@ static char *cli_prompt(EditLine *el)
 						}
 						break;
 #endif
-					case 't': /* time */
-						memset(&tm, 0, sizeof(tm));
-						time(&ts);
-						if (localtime_r(&ts, &tm)) {
-							strftime(p, sizeof(prompt) - strlen(prompt), "%H:%M:%S", &tm);
-						}
-						break;
-					case '#': /* process console or remote? */
-						if (!ast_opt_remote) {
-							strncat(p, "#", sizeof(prompt) - strlen(prompt) - 1);
-						} else {
-							strncat(p, ">", sizeof(prompt) - strlen(prompt) - 1);
-						}
-						break;
-					case '%': /* literal % */
-						strncat(p, "%", sizeof(prompt) - strlen(prompt) - 1);
-						break;
-					case '\0': /* % is last character - prevent bug */
-						t--;
-						break;
+				case 's': /* Asterisk system name (from asterisk.conf) */
+					strncat(p, ast_config_AST_SYSTEM_NAME, sizeof(prompt) - strlen(prompt) - 1);
+					break;
+				case 't': /* time */
+					memset(&tm, 0, sizeof(tm));
+					time(&ts);
+					if (localtime_r(&ts, &tm)) {
+						strftime(p, sizeof(prompt) - strlen(prompt), "%H:%M:%S", &tm);
+					}
+					break;
+				case '#': /* process console or remote? */
+					if (!ast_opt_remote) {
+						strncat(p, "#", sizeof(prompt) - strlen(prompt) - 1);
+					} else {
+						strncat(p, ">", sizeof(prompt) - strlen(prompt) - 1);
+					}
+					break;
+				case '%': /* literal % */
+					strncat(p, "%", sizeof(prompt) - strlen(prompt) - 1);
+					break;
+				case '\0': /* % is last character - prevent bug */
+					t--;
+					break;
 				}
 				while (*p != '\0') {
 					p++;
