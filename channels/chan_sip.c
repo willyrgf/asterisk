@@ -1178,7 +1178,7 @@ static void parse_request(struct sip_request *req);
 static const char *get_header(const struct sip_request *req, const char *name);
 static char *referstatus2str(enum referstatus rstatus);
 static int method_match(enum sipmethod id, const char *name);
-static void parse_copy(struct sip_request *dst, struct sip_request *src);
+static void parse_copy(struct sip_request *dst, const struct sip_request *src);
 static char *get_in_brackets(char *tmp);
 static const char *find_alias(const char *name, const char *_default);
 static const char *__get_header(const struct sip_request *req, const char *name, int *start);
@@ -1207,7 +1207,7 @@ static int add_text(struct sip_request *req, const char *text);
 static int add_digit(struct sip_request *req, char digit);
 static int add_vidupdate(struct sip_request *req);
 static void add_route(struct sip_request *req, struct sip_route *route);
-static int copy_header(struct sip_request *req, struct sip_request *orig, char *field);
+static int copy_header(struct sip_request *req, const struct sip_request *orig, const char *field);
 static int copy_all_header(struct sip_request *req, struct sip_request *orig, char *field);
 static int copy_via_headers(struct sip_pvt *p, struct sip_request *req, struct sip_request *orig, char *field);
 static void set_destination(struct sip_pvt *p, char *uri);
@@ -1790,7 +1790,7 @@ static int __sip_semi_ack(struct sip_pvt *p, int seqno, int resp, int sipmethod)
 
 
 /*! \brief Copy SIP request, parse it */
-static void parse_copy(struct sip_request *dst, struct sip_request *src)
+static void parse_copy(struct sip_request *dst, const struct sip_request *src)
 {
 	memset(dst, 0, sizeof(*dst));
 	memcpy(dst->data, src->data, sizeof(dst->data));
@@ -2027,25 +2027,23 @@ static void update_peer(struct sip_peer *p, int expiry)
  * \todo Consider adding check of port address when matching here to follow the same
  * 	algorithm as for static peers. Will we break anything by adding that?
 */
-static struct sip_peer *realtime_peer(const char *peername, struct sockaddr_in *sin)
+static struct sip_peer *realtime_peer(const char *newpeername, struct sockaddr_in *sin)
 {
-	struct sip_peer *peer = NULL;
-	struct ast_variable *var;
+	struct sip_peer *peer;
+	struct ast_variable *var = NULL;
 	struct ast_variable *tmp;
-	char *newpeername = (char *) peername;
 	char iabuf[80];
 
 	/* First check on peer name */
 	if (newpeername) 
-		var = ast_load_realtime("sippeers", "name", peername, NULL);
+		var = ast_load_realtime("sippeers", "name", newpeername, NULL);
 	else if (sin) {	/* Then check on IP address for dynamic peers */
 		ast_inet_ntoa(iabuf, sizeof(iabuf), sin->sin_addr);
 		var = ast_load_realtime("sippeers", "host", iabuf, NULL);	/* First check for fixed IP hosts */
 		if (!var)
 			var = ast_load_realtime("sippeers", "ipaddr", iabuf, NULL);	/* Then check for registred hosts */
 	
-	} else
-		return NULL;
+	}
 
 	if (!var)
 		return NULL;
@@ -2192,7 +2190,9 @@ static struct sip_user *find_user(const char *name, int realtime)
 	return u;
 }
 
-/*! \brief Create address structure from peer reference */
+/*! \brief Create address structure from peer reference.
+ *  return -1 on error, 0 on success.
+ */
 static int create_addr_from_peer(struct sip_pvt *r, struct sip_peer *peer)
 {
 	int natflags;
@@ -2285,7 +2285,6 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer)
 	struct hostent *hp;
 	struct ast_hostent ahp;
 	struct sip_peer *p;
-	int found=0;
 	char *port;
 	int portno;
 	char host[MAXHOSTNAMELEN], *hostn;
@@ -2300,14 +2299,10 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer)
 	p = find_peer(peer, NULL, 1);
 
 	if (p) {
-		found++;
-		if (create_addr_from_peer(dialog, p))
-			ASTOBJ_UNREF(p, sip_destroy_peer);
-	}
-	if (!p) {
-		if (found)
-			return -1;
-
+		int res = create_addr_from_peer(dialog, p);
+		ASTOBJ_UNREF(p, sip_destroy_peer);
+		return res;
+	} else {
 		hostn = peer;
 		portno = port ? atoi(port) : DEFAULT_SIP_PORT;
 		if (srvlookup) {
@@ -2332,9 +2327,6 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer)
 			ast_log(LOG_WARNING, "No such host: %s\n", peer);
 			return -1;
 		}
-	} else {
-		ASTOBJ_UNREF(p, sip_destroy_peer);
-		return 0;
 	}
 }
 
@@ -4282,7 +4274,7 @@ static int add_line(struct sip_request *req, const char *line)
 }
 
 /*! \brief Copy one header field from one request to another */
-static int copy_header(struct sip_request *req, struct sip_request *orig, char *field)
+static int copy_header(struct sip_request *req, const struct sip_request *orig, const char *field)
 {
 	const char *tmp = get_header(orig, field);
 
@@ -7108,10 +7100,10 @@ static int get_destination(struct sip_pvt *p, struct sip_request *oreq)
 	- This means that in some transactions, totag needs to be their tag :-)
 	  depending upon the direction
 */
-static struct sip_pvt *get_sip_pvt_byid_locked(char *callid, char *totag, char *fromtag) 
+static struct sip_pvt *get_sip_pvt_byid_locked(const char *callid, const char *totag, const char *fromtag) 
 {
-	struct sip_pvt *sip_pvt_ptr = NULL;
-	
+	struct sip_pvt *sip_pvt_ptr;
+
 	/* Search interfaces and find the match */
 	ast_mutex_lock(&iflock);
 
@@ -7139,16 +7131,15 @@ static struct sip_pvt *get_sip_pvt_byid_locked(char *callid, char *totag, char *
 			}
 
 			if (option_debug > 3 && totag)				 
-				ast_log(LOG_DEBUG, "Matched %s call - their tag is %s Our tag is %s\n", ast_test_flag(&sip_pvt_ptr->flags[0], SIP_OUTGOING) ? "OUTGOING": "INCOMING", sip_pvt_ptr->theirtag, sip_pvt_ptr->tag);
+				ast_log(LOG_DEBUG, "Matched %s call - their tag is %s Our tag is %s\n",
+					ast_test_flag(&sip_pvt_ptr->flags[0], SIP_OUTGOING) ? "OUTGOING": "INCOMING",
+					sip_pvt_ptr->theirtag, sip_pvt_ptr->tag);
 
-			if (sip_pvt_ptr->owner) {
-				while(ast_channel_trylock(sip_pvt_ptr->owner)) {
-					ast_mutex_unlock(&sip_pvt_ptr->lock);
-					usleep(1);
-					ast_mutex_lock(&sip_pvt_ptr->lock);
-					if (!sip_pvt_ptr->owner)
-						break;
-				}
+			/* deadlock avoidance... */
+			while (sip_pvt_ptr->owner && ast_mutex_trylock(&sip_pvt_ptr->owner->lock)) {
+				ast_mutex_unlock(&sip_pvt_ptr->lock);
+				usleep(1);
+				ast_mutex_lock(&sip_pvt_ptr->lock);
 			}
 			break;
 		}
