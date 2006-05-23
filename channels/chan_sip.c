@@ -2304,32 +2304,31 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer)
 		int res = create_addr_from_peer(dialog, p);
 		ASTOBJ_UNREF(p, sip_destroy_peer);
 		return res;
-	} else {
-		hostn = peer;
-		portno = port ? atoi(port) : DEFAULT_SIP_PORT;
-		if (srvlookup) {
-			char service[MAXHOSTNAMELEN];
-			int tportno;
-			int ret;
-			snprintf(service, sizeof(service), "_sip._udp.%s", peer);
-			ret = ast_get_srv(NULL, host, sizeof(host), &tportno, service);
-			if (ret > 0) {
-				hostn = host;
-				portno = tportno;
-			}
-		}
-		hp = ast_gethostbyname(hostn, &ahp);
-		if (hp) {
-			ast_string_field_set(dialog, tohost, peer);
-			memcpy(&dialog->sa.sin_addr, hp->h_addr, sizeof(dialog->sa.sin_addr));
-			dialog->sa.sin_port = htons(portno);
-			dialog->recv = dialog->sa;
-			return 0;
-		} else {
-			ast_log(LOG_WARNING, "No such host: %s\n", peer);
-			return -1;
+	}
+	hostn = peer;
+	portno = port ? atoi(port) : DEFAULT_SIP_PORT;
+	if (srvlookup) {
+		char service[MAXHOSTNAMELEN];
+		int tportno;
+		int ret;
+
+		snprintf(service, sizeof(service), "_sip._udp.%s", peer);
+		ret = ast_get_srv(NULL, host, sizeof(host), &tportno, service);
+		if (ret > 0) {
+			hostn = host;
+			portno = tportno;
 		}
 	}
+	hp = ast_gethostbyname(hostn, &ahp);
+	if (!hp) {
+		ast_log(LOG_WARNING, "No such host: %s\n", peer);
+		return -1;
+	}
+	ast_string_field_set(dialog, tohost, peer);
+	memcpy(&dialog->sa.sin_addr, hp->h_addr, sizeof(dialog->sa.sin_addr));
+	dialog->sa.sin_port = htons(portno);
+	dialog->recv = dialog->sa;
+	return 0;
 }
 
 /*! \brief Scheduled congestion on a call */
@@ -2595,7 +2594,7 @@ static int update_call_counter(struct sip_pvt *fup, int event)
 			ast_copy_string(name, fup->peername, sizeof(name));
 		} else {
 			if (option_debug > 1)
-				ast_log(LOG_DEBUG, "%s is not a local user, no call limit\n", name);
+				ast_log(LOG_DEBUG, "%s is not a local device, no call limit\n", name);
 			return 0;
 		}
 	}
@@ -2652,11 +2651,10 @@ static int update_call_counter(struct sip_pvt *fup, int event)
 					if (*inringing > 0)
 						(*inringing)--;
 					else
-						ast_log(LOG_WARNING, "Inringing for peer '%s' < 0?\n", fup->peername);
+						ast_log(LOG_WARNING, "Inringing for peer '%s' < 0?\n", p->name);
 					ast_clear_flag(&fup->flags[1], SIP_PAGE2_INC_RINGING);
 				}
 			}
-			break;
 			break;
 		default:
 			ast_log(LOG_ERROR, "update_call_counter(%s, %d) called with no event!\n", name, event);
