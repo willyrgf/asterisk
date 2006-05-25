@@ -39,6 +39,7 @@
 #include <stdio.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <sys/wait.h>
 
 #include "asterisk.h"
 
@@ -89,6 +90,9 @@ static char *descrip =
 "  This channel will stop dialplan execution on hangup inside of this\n"
 "application, except when using DeadAGI.  Otherwise, dialplan execution\n"
 "will continue normally.\n"
+"  A locally executed AGI script will receive SIGHUP on hangup from the channel\n"
+"except when using DeadAGI. This can be disabled by setting the AGISIGHUP channel\n"
+"variable to \"no\" before executing the AGI application.\n"
 "  Using 'EAGI' provides enhanced AGI, with incoming audio available out of band\n"
 "on file descriptor 3\n\n"
 "  Use the CLI command 'show agi' to list available agi commands\n"
@@ -275,9 +279,11 @@ static enum agi_result launch_script(char *script, char *argv[], int *fds, int *
 			return AGI_RESULT_FAILURE;
 		}
 	}
+	ast_replace_sigchld();
 	pid = fork();
 	if (pid < 0) {
 		ast_log(LOG_WARNING, "Failed to fork(): %s\n", strerror(errno));
+		ast_unreplace_sigchld();
 		return AGI_RESULT_FAILURE;
 	}
 	if (!pid) {
@@ -1781,7 +1787,7 @@ static int agi_handle_command(struct ast_channel *chan, AGI *agi, char *buf)
 	return 0;
 }
 #define RETRY	3
-static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi, int pid, int dead)
+static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi, int pid, int *status, int dead)
 {
 	struct ast_channel *c;
 	int outfd;
@@ -1830,6 +1836,7 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 					returnstatus = -1;
 				if (option_verbose > 2) 
 					ast_verbose(VERBOSE_PREFIX_3 "AGI Script %s completed, returning %d\n", request, returnstatus);
+				waitpid(pid, status, 0);
 				/* No need to kill the pid anymore, since they closed us */
 				pid = -1;
 				break;
@@ -1854,8 +1861,11 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 	}
 	/* Notify process */
 	if (pid > -1) {
-		if (kill(pid, SIGHUP))
-			ast_log(LOG_WARNING, "unable to send SIGHUP to AGI process %d: %s\n", pid, strerror(errno));
+		const char *sighup = pbx_builtin_getvar_helper(chan, "AGISIGHUP");
+		if (ast_strlen_zero(sighup) || !ast_false(sighup)) {
+			if (kill(pid, SIGHUP))
+				ast_log(LOG_WARNING, "unable to send SIGHUP to AGI process %d: %s\n", pid, strerror(errno));
+		}
 	}
 	fclose(readf);
 	return returnstatus;
@@ -1976,13 +1986,18 @@ static int agi_exec_full(struct ast_channel *chan, void *data, int enhanced, int
 #endif
 	res = launch_script(argv[0], argv, fds, enhanced ? &efd : NULL, &pid);
 	if (res == AGI_RESULT_SUCCESS) {
+		int status = 0;
 		agi.fd = fds[1];
 		agi.ctrl = fds[0];
 		agi.audio = efd;
-		res = run_agi(chan, argv[0], &agi, pid, dead);
+		res = run_agi(chan, argv[0], &agi, pid, &status, dead);
+		/* If the fork'd process returns non-zero, set AGISTATUS to FAILURE */
+		if (res == AGI_RESULT_SUCCESS && status)
+			res = AGI_RESULT_FAILURE;
 		close(fds[1]);
 		if (efd > -1)
 			close(efd);
+		ast_unreplace_sigchld();
 	}
 	ast_localuser_remove(me, u);
 
