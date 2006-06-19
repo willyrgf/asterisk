@@ -11,7 +11,9 @@
 # the GNU General Public License
 #
 
-include ../menuselect.makeopts
+ifneq ($(wildcard ../menuselect.makeopts),)
+  include ../menuselect.makeopts
+endif
 
 SELECTED_MODS:=$(filter-out $(MENUSELECT_RES),$(patsubst %.c,%,$(wildcard res_*.c)))
 
@@ -38,7 +40,7 @@ endif
 
 MODS:=$(patsubst %,%.so,$(SELECTED_MODS))
 
-all: depend $(MODS)
+all: $(MODS)
 
 install: all
 	rm -f $(DESTDIR)$(ASTHEADERDIR)/parking.h

@@ -70,21 +70,6 @@ static int existing_config = 0;
 /*! This is set when the --check-deps argument is provided. */
 static int check_deps = 0;
 
-/*! Force a clean of the source tree */
-static int force_clean = 0;
-
-static int add_category(struct category *cat);
-static int add_member(struct member *mem, struct category *cat);
-static int parse_makeopts_xml(const char *makeopts_xml);
-static int process_deps(void);
-static int build_member_list(void);
-static void mark_as_present(const char *member, const char *category);
-static void process_prev_failed_deps(char *buf);
-static int parse_existing_config(const char *infile);
-static int generate_makeopts_file(void);
-static void free_member_list(void);
-static void free_trees(void);
-
 /*! \brief return a pointer to the first non-whitespace character */
 static inline char *skip_blanks(char *str)
 {
@@ -127,6 +112,19 @@ static int add_member(struct member *mem, struct category *cat)
 	AST_LIST_INSERT_TAIL(&cat->members, mem, list);
 
 	return 0;
+}
+
+/*! \brief Free a member structure and all of its members */
+static void free_member(struct member *mem)
+{
+	struct depend *dep;
+	struct conflict *cnf;
+
+	while ((dep = AST_LIST_REMOVE_HEAD(&mem->deps, list)))
+		free(dep);
+	while ((cnf = AST_LIST_REMOVE_HEAD(&mem->conflicts, list)))
+		free(cnf);
+	free(mem);
 }
 
 /*! \brief Parse an input makeopts file */
@@ -174,8 +172,7 @@ static int parse_makeopts_xml(const char *makeopts_xml)
 		cat->displayname = mxmlElementGetAttr(cur, "displayname");
 		if ((tmp = mxmlElementGetAttr(cur, "positive_output")))
 			cat->positive_output = !strcasecmp(tmp, "yes");
-		if ((tmp = mxmlElementGetAttr(cur, "force_clean_on_change")))
-			cat->force_clean_on_change = !strcasecmp(tmp, "yes");
+		cat->remove_on_change = mxmlElementGetAttr(cur, "remove_on_change");
 
 		if (add_category(cat)) {
 			free(cat);
@@ -192,8 +189,10 @@ static int parse_makeopts_xml(const char *makeopts_xml)
 			mem->name = mxmlElementGetAttr(cur2, "name");
 			mem->displayname = mxmlElementGetAttr(cur2, "displayname");
 		
+			mem->remove_on_change = mxmlElementGetAttr(cur2, "remove_on_change");
+
 			if (!cat->positive_output)
-				mem->enabled = 1;
+				mem->was_enabled = mem->enabled = 1;
 	
 			cur3 = mxmlFindElement(cur2, cur2, "defaultenabled", NULL, NULL, MXML_DESCEND);
 			if (cur3 && cur3->child)
@@ -203,8 +202,10 @@ static int parse_makeopts_xml(const char *makeopts_xml)
 			     cur3 && cur3->child;
 			     cur3 = mxmlFindElement(cur3, cur2, "depend", NULL, NULL, MXML_DESCEND))
 			{
-				if (!(dep = calloc(1, sizeof(*dep))))
+				if (!(dep = calloc(1, sizeof(*dep)))) {
+					free_member(mem);
 					return -1;
+				}
 				if (!strlen_zero(cur3->child->value.opaque)) {
 					dep->name = cur3->child->value.opaque;
 					AST_LIST_INSERT_HEAD(&mem->deps, dep, list);
@@ -216,8 +217,10 @@ static int parse_makeopts_xml(const char *makeopts_xml)
 			     cur3 && cur3->child;
 			     cur3 = mxmlFindElement(cur3, cur2, "conflict", NULL, NULL, MXML_DESCEND))
 			{
-				if (!(cnf = calloc(1, sizeof(*cnf))))
+				if (!(cnf = calloc(1, sizeof(*cnf)))) {
+					free_member(mem);
 					return -1;
+				}
 				if (!strlen_zero(cur3->child->value.opaque)) {
 					cnf->name = cur3->child->value.opaque;
 					AST_LIST_INSERT_HEAD(&mem->conflicts, cnf, list);
@@ -226,7 +229,7 @@ static int parse_makeopts_xml(const char *makeopts_xml)
 			}
 
 			if (add_member(mem, cat))
-				free(mem);
+				free_member(mem);
 		}
 	}
 
@@ -343,7 +346,7 @@ static void mark_as_present(const char *member, const char *category)
 			continue;
 		AST_LIST_TRAVERSE(&cat->members, mem, list) {
 			if (!strcmp(member, mem->name)) {
-				mem->enabled = cat->positive_output;
+				mem->was_enabled = mem->enabled = cat->positive_output;
 				break;
 			}
 		}
@@ -369,8 +372,6 @@ void toggle_enabled(struct category *cat, int index)
 
 	if (mem && !(mem->depsfailed || mem->conflictsfailed)) {
 		mem->enabled = !mem->enabled;
-		if (cat->force_clean_on_change)
-			force_clean = 1;
 	}
 }
 
@@ -502,6 +503,34 @@ static int generate_makeopts_file(void)
 
 	fclose(f);
 
+	/* Traverse all categories and members and remove any files that are supposed
+	   to be removed when an item has been changed */
+	AST_LIST_TRAVERSE(&categories, cat, list) {
+		unsigned int had_changes = 0;
+		char *file, *buf;
+
+		AST_LIST_TRAVERSE(&cat->members, mem, list) {
+			if (mem->enabled == mem->was_enabled)
+				continue;
+
+			had_changes = 1;
+
+			if (mem->remove_on_change) {
+				for (buf = strdupa(mem->remove_on_change), file = strsep(&buf, " ");
+				     file;
+				     file = strsep(&buf, " "))
+					unlink(file);
+			}
+		}
+
+		if (cat->remove_on_change && had_changes) {
+			for (buf = strdupa(cat->remove_on_change), file = strsep(&buf, " ");
+			     file;
+			     file = strsep(&buf, " "))
+				unlink(file);
+		}
+	}
+
 	return 0;
 }
 
@@ -517,7 +546,8 @@ static void dump_member_list(void)
 	AST_LIST_TRAVERSE(&categories, cat, list) {
 		fprintf(stderr, "Category: '%s'\n", cat->name);
 		AST_LIST_TRAVERSE(&cat->members, mem, list) {
-			fprintf(stderr, "   ==>> Member: '%s'  (%s)\n", mem->name, mem->enabled ? "Enabled" : "Disabled");
+			fprintf(stderr, "   ==>> Member: '%s'  (%s)", mem->name, mem->enabled ? "Enabled" : "Disabled");
+			fprintf(stderr, "        Was %s\n", mem->was_enabled ? "Enabled" : "Disabled");
 			AST_LIST_TRAVERSE(&mem->deps, dep, list)
 				fprintf(stderr, "      --> Depends on: '%s'\n", dep->name);
 			if (!AST_LIST_EMPTY(&mem->deps))
@@ -695,12 +725,6 @@ int main(int argc, char *argv[])
 	/* free everything we allocated */
 	free_trees();
 	free_member_list();
-
-	/* In some cases, such as modifying the CFLAGS for the build,
-	 * a "make clean" needs to be forced.  Removing the .lastclean 
-	 * file does this. */
-	if (force_clean)
-		unlink(".lastclean");
 
 	exit(res);
 }

@@ -11,7 +11,9 @@
 # the GNU General Public License
 #
 
-include ../menuselect.makeopts
+ifneq ($(wildcard ../menuselect.makeopts),)
+  include ../menuselect.makeopts
+endif
 
 SELECTED_MODS:=$(filter-out $(MENUSELECT_CODECS),$(patsubst %.c,%,$(wildcard codec_*.c)))
 
@@ -25,7 +27,7 @@ LIBLPC10=lpc10/liblpc10.a
 
 MODS:=$(patsubst %,%.so,$(SELECTED_MODS))
 
-all: depend $(MODS)
+all: $(MODS)
 
 clean-depend:
 	rm -f .depend

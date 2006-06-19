@@ -11,7 +11,9 @@
 # the GNU General Public License
 #
 
-include ../menuselect.makeopts
+ifneq ($(wildcard ../menuselect.makeopts),)
+  include ../menuselect.makeopts
+endif
 
 SELECTED_MODS:=$(filter-out $(MENUSELECT_CDR),$(patsubst %.c,%,$(wildcard cdr_*.c)))
 
@@ -39,7 +41,7 @@ endif
 
 MODS:=$(patsubst %,%.so,$(SELECTED_MODS))
 
-all: depend $(MODS)
+all: $(MODS)
 
 install: all
 	for x in $(MODS); do $(INSTALL) -m 755 $$x $(DESTDIR)$(MODULES_DIR) ; done

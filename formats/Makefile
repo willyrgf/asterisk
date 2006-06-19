@@ -11,7 +11,9 @@
 # the GNU General Public License
 #
 
-include ../menuselect.makeopts
+ifneq ($(wildcard ../menuselect.makeopts),)
+  include ../menuselect.makeopts
+endif
 
 SELECTED_MODS:=$(filter-out $(MENUSELECT_FORMATS),$(patsubst %.c,%,$(wildcard format_*.c)))
 
@@ -19,7 +21,7 @@ GSMLIB=../codecs/gsm/lib/libgsm.a
 
 MODS:=$(patsubst %,%.so,$(SELECTED_MODS))
 
-all: depend $(MODS)
+all: $(MODS)
 
 clean-depend:
 	rm -f .depend
