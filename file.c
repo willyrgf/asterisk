@@ -23,6 +23,10 @@
  * \author Mark Spencer <markster@digium.com> 
  */
 
+#include "asterisk.h"
+
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
 #include <sys/types.h>
 #include <errno.h>
 #include <unistd.h>
@@ -33,10 +37,6 @@
 #include <dirent.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-
-#include "asterisk.h"
-
-ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/frame.h"
 #include "asterisk/file.h"
@@ -52,7 +52,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/pbx.h"
 #include "asterisk/linkedlists.h"
 #define	MOD_LOADER
-#include "asterisk/module.h"	/* ast_update_use_count() */
+#include "asterisk/module.h"
 
 /*
  * The following variable controls the layout of localized sound files.
@@ -866,6 +866,7 @@ struct ast_filestream *ast_writefile(const char *filename, const char *type, con
 	struct ast_filestream *fs = NULL;
 	char *buf = NULL;
 	size_t size = 0;
+	int format_found = 0;
 
 	if (AST_LIST_LOCK(&formats)) {
 		ast_log(LOG_WARNING, "Unable to lock format list\n");
@@ -892,6 +893,8 @@ struct ast_filestream *ast_writefile(const char *filename, const char *type, con
 
 		if (!exts_compare(f->exts, type))
 			continue;
+		else
+			format_found = 1;
 
 		fn = build_filename(filename, type);
 		fd = open(fn, flags | myflags, mode);
@@ -974,7 +977,8 @@ struct ast_filestream *ast_writefile(const char *filename, const char *type, con
 	}
 
 	AST_LIST_UNLOCK(&formats);
-	if (!fs)
+
+	if (!format_found)
 		ast_log(LOG_WARNING, "No such format '%s'\n", type);
 
 	return fs;

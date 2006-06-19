@@ -25,6 +25,10 @@
  * \author Mark Spencer <markster@digium.com>
  */
 
+#include "asterisk.h"
+
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -42,10 +46,6 @@
 #define SYSLOG_NAMES /* so we can map syslog facilities names to their numeric values,
 		        from <syslog.h> which is included by logger.h */
 #include <syslog.h>
-
-#include "asterisk.h"
-
-ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 static int syslog_level_map[] = {
 	LOG_DEBUG,
@@ -378,8 +378,8 @@ void ast_queue_log(const char *queuename, const char *callid, const char *agent,
 
 int reload_logger(int rotate)
 {
-	char old[AST_CONFIG_MAX_PATH] = "";
-	char new[AST_CONFIG_MAX_PATH];
+	char old[PATH_MAX] = "";
+	char new[PATH_MAX];
 	int event_rotate = rotate, queue_rotate = rotate;
 	struct logchannel *f;
 	FILE *myf;
@@ -756,11 +756,11 @@ void ast_log(int level, const char *file, int line, const char *function, const 
 						term_color(tmp3, linestr, COLOR_BRWHITE, 0, sizeof(tmp3)),
 						term_color(tmp4, function, COLOR_BRWHITE, 0, sizeof(tmp4)));
 					
-					ast_console_puts(buf);
+					ast_console_puts_mutable(buf);
 					va_start(ap, fmt);
 					vsnprintf(buf, sizeof(buf), fmt, ap);
 					va_end(ap);
-					ast_console_puts(buf);
+					ast_console_puts_mutable(buf);
 				}
 			/* File channels */
 			} else if ((chan->logmask & (1 << level)) && (chan->fileptr)) {

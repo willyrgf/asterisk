@@ -182,7 +182,8 @@ struct misdn_bchannel {
 	int l3_id;
 	int pid;
 	int ces;
-  
+
+	int restart_channel;
 	int channel;
 	int channel_preselected;
 	
@@ -207,6 +208,10 @@ struct misdn_bchannel {
 
 	/* get setup ack */
 	int need_more_infos;
+
+	/* may there be more infos ?*/
+	int sending_complete;
+
 
 	/* wether we should use jollys dsp or not */
 	int nodsp;
@@ -345,7 +350,7 @@ void manager_bchannel_deactivate(struct misdn_bchannel * bc);
 
 int misdn_lib_tx2misdn_frm(struct misdn_bchannel *bc, void *data, int len);
 
-void manager_ph_control(struct misdn_bchannel *bc, long c1, long c2);
+void manager_ph_control(struct misdn_bchannel *bc, int c1, int c2);
 
 
 int misdn_lib_port_restart(int port);

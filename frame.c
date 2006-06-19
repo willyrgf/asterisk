@@ -18,20 +18,20 @@
 
 /*! \file
  *
- * \brief Frame manipulation routines
+ * \brief Frame and codec manipulation routines
  *
  * \author Mark Spencer <markster@digium.com> 
  */
+
+#include "asterisk.h"
+
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
 #include <errno.h>
 #include <stdio.h>
-
-#include "asterisk.h"
-
-ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/lock.h"
 #include "asterisk/frame.h"
@@ -91,7 +91,7 @@ static struct ast_format_list {
 	{ 1, AST_FORMAT_LPC10, "lpc10", "LPC10" },	/*!< codec_lpc10.c */
 	{ 1, AST_FORMAT_G729A, "g729", "G.729A" },	/*!< Binary commercial distribution */
 	{ 1, AST_FORMAT_SPEEX, "speex", "SpeeX" },	/*!< codec_speex.c */
-	{ 1, AST_FORMAT_ILBC, "ilbc", "iLBC"},	/*!< codec_ilbc.c */
+	{ 1, AST_FORMAT_ILBC, "ilbc", "iLBC"},		/*!< codec_ilbc.c */
 	{ 0, 0, "nothing", "undefined" },
 	{ 0, 0, "nothing", "undefined" },
 	{ 0, 0, "nothing", "undefined" },
@@ -198,6 +198,7 @@ struct ast_frame *ast_smoother_read(struct ast_smoother *s)
 {
 	struct ast_frame *opt;
 	int len;
+
 	/* IF we have an optimization frame, send it */
 	if (s->opt) {
 		if (s->opt->offset < AST_FRIENDLY_OFFSET)
@@ -316,18 +317,33 @@ struct ast_frame *ast_frisolate(struct ast_frame *fr)
 		out->samples = fr->samples;
 		out->offset = fr->offset;
 		out->data = fr->data;
+		/* Copy the timing data */
+		out->has_timing_info = fr->has_timing_info;
+		if (fr->has_timing_info) {
+			out->ts = fr->ts;
+			out->len = fr->len;
+			out->seqno = fr->seqno;
+		}
 	} else
 		out = fr;
 	
 	if (!(fr->mallocd & AST_MALLOCD_SRC)) {
-		if (fr->src)
-			out->src = strdup(fr->src);
+		if (fr->src) {
+			if (!(out->src = ast_strdup(fr->src))) {
+				if (out != fr)
+					free(out);
+				return NULL;
+			}
+		}
 	} else
 		out->src = fr->src;
 	
 	if (!(fr->mallocd & AST_MALLOCD_DATA))  {
 		if (!(newdata = ast_malloc(fr->datalen + AST_FRIENDLY_OFFSET))) {
-			free(out);
+			if (out->src != fr->src)
+				free((void *) out->src);
+			if (out != fr)
+				free(out);
 			return NULL;
 		}
 		newdata += AST_FRIENDLY_OFFSET;
@@ -380,6 +396,12 @@ struct ast_frame *ast_frdup(struct ast_frame *f)
 	out->prev = NULL;
 	out->next = NULL;
 	memcpy(out->data, f->data, out->datalen);	
+	out->has_timing_info = f->has_timing_info;
+	if (f->has_timing_info) {
+		out->ts = f->ts;
+		out->len = f->len;
+		out->seqno = f->seqno;
+	}
 	return out;
 }
 
@@ -467,13 +489,14 @@ int ast_fr_fdhangup(int fd)
 }
 
 #endif /* unused functions */
+
 void ast_swapcopy_samples(void *dst, const void *src, int samples)
 {
 	int i;
 	unsigned short *dst_s = dst;
 	const unsigned short *src_s = src;
 
-	for (i=0; i<samples; i++)
+	for (i = 0; i < samples; i++)
 		dst_s[i] = (src_s[i]<<8) | (src_s[i]>>8);
 }
 
@@ -502,12 +525,14 @@ char* ast_getformatname(int format)
 	return ret;
 }
 
-char *ast_getformatname_multiple(char *buf, size_t size, int format) {
-
+char *ast_getformatname_multiple(char *buf, size_t size, int format)
+{
 	int x;
 	unsigned len;
 	char *start, *end = buf;
-	if (!size) return buf;
+
+	if (!size)
+		return buf;
 	snprintf(end, size, "0x%x (", format);
 	len = strlen(end);
 	end += len;
@@ -531,13 +556,13 @@ char *ast_getformatname_multiple(char *buf, size_t size, int format) {
 static struct ast_codec_alias_table {
 	char *alias;
 	char *realname;
-
 } ast_codec_alias_table[] = {
-	{"slinear","slin"},
-	{"g723.1","g723"},
+	{ "slinear", "slin"},
+	{ "g723.1", "g723"},
 };
 
-static const char *ast_expand_codec_alias(const char *in) {
+static const char *ast_expand_codec_alias(const char *in)
+{
 	int x;
 
 	for (x = 0; x < sizeof(ast_codec_alias_table) / sizeof(ast_codec_alias_table[0]); x++) {
@@ -554,8 +579,8 @@ int ast_getformatbyname(const char *name)
 	all = strcasecmp(name, "all") ? 0 : 1;
 	for (x = 0; x < sizeof(AST_FORMAT_LIST) / sizeof(AST_FORMAT_LIST[0]); x++) {
 		if(AST_FORMAT_LIST[x].visible && (all || 
-										  !strcasecmp(AST_FORMAT_LIST[x].name,name) ||
-										  !strcasecmp(AST_FORMAT_LIST[x].name,ast_expand_codec_alias(name)))) {
+			  !strcasecmp(AST_FORMAT_LIST[x].name,name) ||
+			  !strcasecmp(AST_FORMAT_LIST[x].name,ast_expand_codec_alias(name)))) {
 			format |= AST_FORMAT_LIST[x].bits;
 			if(!all)
 				break;
@@ -565,7 +590,8 @@ int ast_getformatbyname(const char *name)
 	return format;
 }
 
-char *ast_codec2str(int codec) {
+char *ast_codec2str(int codec)
+{
 	int x;
 	char *ret = "unknown";
 	for (x = 0; x < sizeof(AST_FORMAT_LIST) / sizeof(AST_FORMAT_LIST[0]); x++) {
@@ -635,13 +661,13 @@ static int show_codec_n(int fd, int argc, char *argv[])
 	if (sscanf(argv[2],"%d",&codec) != 1)
 		return RESULT_SHOWUSAGE;
 
-	for (i=0;i<32;i++)
+	for (i = 0; i < 32; i++)
 		if (codec & (1 << i)) {
 			found = 1;
 			ast_cli(fd, "%11u (1 << %2d)  %s\n",1 << i,i,ast_codec2str(1<<i));
 		}
 
-	if (! found)
+	if (!found)
 		ast_cli(fd, "Codec %d not found\n", codec);
 
 	return RESULT_SUCCESS;
@@ -790,6 +816,20 @@ void ast_frame_dump(const char *name, struct ast_frame *f, char *prefix)
 			break;
 		}
 		break;
+	case AST_FRAME_MODEM:
+		strcpy(ftype, "Modem");
+		switch (f->subclass) {
+		case AST_MODEM_T38:
+			strcpy(subclass, "T.38");
+			break;
+		case AST_MODEM_V150:
+			strcpy(subclass, "V.150");
+			break;
+		default:
+			snprintf(subclass, sizeof(subclass), "Unknown MODEM frame '%d'\n", f->subclass);
+			break;
+		}
+		break;
 	default:
 		snprintf(ftype, sizeof(ftype), "Unknown Frametype '%d'", f->frametype);
 	}
@@ -925,7 +965,7 @@ int ast_codec_pref_index(struct ast_codec_pref *pref, int index)
 	return slot ? AST_FORMAT_LIST[slot-1].bits : 0;
 }
 
-/*! \brief ast_codec_pref_remove: Remove codec from pref list ---*/
+/*! \brief Remove codec from pref list */
 void ast_codec_pref_remove(struct ast_codec_pref *pref, int format)
 {
 	struct ast_codec_pref oldorder;
@@ -948,7 +988,7 @@ void ast_codec_pref_remove(struct ast_codec_pref *pref, int format)
 	
 }
 
-/*! \brief ast_codec_pref_append: Append codec to list ---*/
+/*! \brief Append codec to list */
 int ast_codec_pref_append(struct ast_codec_pref *pref, int format)
 {
 	int x, newindex = -1;
@@ -975,7 +1015,7 @@ int ast_codec_pref_append(struct ast_codec_pref *pref, int format)
 }
 
 
-/*! \brief ast_codec_choose: Pick a codec ---*/
+/*! \brief Pick a codec */
 int ast_codec_choose(struct ast_codec_pref *pref, int formats, int find_best)
 {
 	int x, ret = 0, slot;
@@ -983,15 +1023,18 @@ int ast_codec_choose(struct ast_codec_pref *pref, int formats, int find_best)
 	for (x = 0; x < sizeof(AST_FORMAT_LIST) / sizeof(AST_FORMAT_LIST[0]); x++) {
 		slot = pref->order[x];
 
-		if(!slot)
+		if (!slot)
 			break;
-		if ( formats & AST_FORMAT_LIST[slot-1].bits ) {
+		if (formats & AST_FORMAT_LIST[slot-1].bits) {
 			ret = AST_FORMAT_LIST[slot-1].bits;
 			break;
 		}
 	}
-	if(ret)
+	if(ret & AST_FORMAT_AUDIO_MASK)
 		return ret;
+
+	if (option_debug > 3)
+		ast_log(LOG_DEBUG, "Could not find preferred codec - %s\n", find_best ? "Going for the best codec" : "Returning zero codec");
 
    	return find_best ? ast_best_codec(formats) : 0;
 }
@@ -1016,7 +1059,10 @@ void ast_parse_allow_disallow(struct ast_codec_pref *pref, int *mask, const char
 				*mask &= ~format;
 		}
 
-		if (pref) {
+		/* Set up a preference list for audio. Do not include video in preferences 
+		   since we can not transcode video and have to use whatever is offered
+		 */
+		if (pref && (format & AST_FORMAT_AUDIO_MASK)) {
 			if (strcasecmp(this, "all")) {
 				if (allowing)
 					ast_codec_pref_append(pref, format);

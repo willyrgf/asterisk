@@ -40,13 +40,15 @@ extern "C" {
 
 /* Codes for RTP-specific data - not defined by our AST_FORMAT codes */
 /*! DTMF (RFC2833) */
-#define AST_RTP_DTMF            (1 << 0)
+#define AST_RTP_DTMF            	(1 << 0)
 /*! 'Comfort Noise' (RFC3389) */
-#define AST_RTP_CN              (1 << 1)
+#define AST_RTP_CN              	(1 << 1)
 /*! DTMF (Cisco Proprietary) */
-#define AST_RTP_CISCO_DTMF      (1 << 2)
+#define AST_RTP_CISCO_DTMF      	(1 << 2)
 /*! Maximum RTP-specific code */
-#define AST_RTP_MAX             AST_RTP_CISCO_DTMF
+#define AST_RTP_MAX             	AST_RTP_CISCO_DTMF
+
+#define MAX_RTP_PT			256
 
 struct ast_rtp_protocol {
 	/*! Get RTP struct, or NULL if unwilling to transfer */
@@ -60,15 +62,16 @@ struct ast_rtp_protocol {
 	AST_LIST_ENTRY(ast_rtp_protocol) list;
 };
 
-/*!
- * \brief Structure representing a RTP session.
- *
- * RTP session is defined on page 9 of RFC 3550: "An association among a set of participants communicating with RTP.  A participant may be involved in multiple RTP sessions at the same time [...]"
- *
- */
-struct ast_rtp;
+
+#define FLAG_3389_WARNING		(1 << 0)
 
 typedef int (*ast_rtp_callback)(struct ast_rtp *rtp, struct ast_frame *f, void *data);
+
+/*!
+ * \brief Get the amount of space required to hold an RTP session
+ * \return number of bytes required
+ */
+size_t ast_rtp_alloc_size(void);
 
 /*!
  * \brief Initializate a RTP session.
@@ -132,6 +135,10 @@ int ast_rtp_settos(struct ast_rtp *rtp, int tos);
 void ast_rtp_pt_clear(struct ast_rtp* rtp);
 /*! \brief Set payload types to defaults */
 void ast_rtp_pt_default(struct ast_rtp* rtp);
+
+/*! \brief Copy payload types between RTP structures */
+void ast_rtp_pt_copy(struct ast_rtp *dest, const struct ast_rtp *src);
+
 void ast_rtp_set_m_type(struct ast_rtp* rtp, int pt);
 void ast_rtp_set_rtpmap_type(struct ast_rtp* rtp, int pt,
 			 char* mimeType, char* mimeSubtype);
@@ -162,9 +169,17 @@ void ast_rtp_proto_unregister(struct ast_rtp_protocol *proto);
 
 int ast_rtp_make_compatible(struct ast_channel *dest, struct ast_channel *src, int media);
 
-int ast_rtp_early_media(struct ast_channel *dest, struct ast_channel *src);
+/*! \brief If possible, create an early bridge directly between the devices without
+           having to send a re-invite later */
+int ast_rtp_early_bridge(struct ast_channel *dest, struct ast_channel *src);
 
 void ast_rtp_stop(struct ast_rtp *rtp);
+
+/*! \brief Return RTCP quality string */
+char *ast_rtp_get_quality(struct ast_rtp *rtp);
+
+/*! \brief Send an H.261 fast update request. Some devices need this rather than the XML message  in SIP */
+int ast_rtcp_send_h261fur(void *data);
 
 void ast_rtp_init(void);
 

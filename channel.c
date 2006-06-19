@@ -23,6 +23,10 @@
  * \author Mark Spencer <markster@digium.com>
  */
 
+#include "asterisk.h"
+
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -30,9 +34,7 @@
 #include <signal.h>
 #include <errno.h>
 #include <unistd.h>
-#include <math.h>			/* For PI */
-
-#include "asterisk.h"
+#include <math.h>
 
 #ifdef HAVE_ZAPTEL
 #include <sys/ioctl.h>
@@ -45,8 +47,6 @@
 #error "You need newer zaptel!  Please cvs update zaptel"
 #endif
 #endif
-
-ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/pbx.h"
 #include "asterisk/frame.h"
@@ -539,7 +539,7 @@ char *ast_transfercapability2str(int transfercapability)
 	}
 }
 
-/*! \brief Pick the best codec */
+/*! \brief Pick the best audio codec */
 int ast_best_codec(int fmts)
 {
 	/* This just our opinion, expressed in code.  We are asked to choose
@@ -572,7 +572,9 @@ int ast_best_codec(int fmts)
 		/*! Down to G.723.1 which is proprietary but at least designed for voice */
 		AST_FORMAT_G723_1,
 	};
-	
+
+	/* Strip out video */
+	fmts &= AST_FORMAT_AUDIO_MASK;
 	
 	/* Find the first preferred codec in the format given */
 	for (x=0; x < (sizeof(prefs) / sizeof(prefs[0]) ); x++)
@@ -1012,6 +1014,9 @@ void ast_channel_free(struct ast_channel *chan)
 	while ((vardata = AST_LIST_REMOVE_HEAD(headp, entries)))
 		ast_var_delete(vardata);
 
+	/* Destroy the jitterbuffer */
+	ast_jb_destroy(chan);
+
 	ast_string_field_free_all(chan);
 	free(chan);
 	AST_LIST_UNLOCK(&channels);
@@ -1117,6 +1122,9 @@ struct ast_datastore *ast_channel_datastore_find(struct ast_channel *chan, const
 
 int ast_channel_spy_add(struct ast_channel *chan, struct ast_channel_spy *spy)
 {
+	/* Link the owner channel to the spy */
+	spy->chan = chan;
+
 	if (!ast_test_flag(spy, CHANSPY_FORMAT_AUDIO)) {
 		ast_log(LOG_WARNING, "Could not add channel spy '%s' to channel '%s', only audio format spies are supported.\n",
 			spy->type, chan->name);
@@ -1186,7 +1194,14 @@ void ast_channel_spy_stop_by_type(struct ast_channel *chan, const char *type)
 
 void ast_channel_spy_trigger_wait(struct ast_channel_spy *spy)
 {
-	ast_cond_wait(&spy->trigger, &spy->lock);
+	struct timeval tv;
+	struct timespec ts;
+
+	tv = ast_tvadd(ast_tvnow(), ast_samp2tv(50000, 1000));
+	ts.tv_sec = tv.tv_sec;
+	ts.tv_nsec = tv.tv_usec * 1000;
+
+	ast_cond_timedwait(&spy->trigger, &spy->lock, &ts);
 }
 
 void ast_channel_spy_remove(struct ast_channel *chan, struct ast_channel_spy *spy)
@@ -1199,6 +1214,8 @@ void ast_channel_spy_remove(struct ast_channel *chan, struct ast_channel_spy *sp
 	AST_LIST_REMOVE(&chan->spies->list, spy, list);
 
 	ast_mutex_lock(&spy->lock);
+
+	spy->chan = NULL;
 
 	for (f = spy->read_queue.head; f; f = spy->read_queue.head) {
 		spy->read_queue.head = f->next;
@@ -1237,6 +1254,7 @@ static void detach_spies(struct ast_channel *chan)
 	/* Marking the spies as done is sufficient.  Chanspy or spy users will get the picture. */
 	AST_LIST_TRAVERSE(&chan->spies->list, spy, list) {
 		ast_mutex_lock(&spy->lock);
+		spy->chan = NULL;
 		if (spy->status == CHANSPY_RUNNING)
 			spy->status = CHANSPY_DONE;
 		if (ast_test_flag(spy, CHANSPY_TRIGGER_MODE) != CHANSPY_TRIGGER_NONE)
@@ -1499,8 +1517,10 @@ int ast_answer(struct ast_channel *chan)
 	int res = 0;
 	ast_channel_lock(chan);
 	/* You can't answer an outbound call */
-	if (ast_test_flag(chan, AST_FLAG_OUTGOING))
+	if (ast_test_flag(chan, AST_FLAG_OUTGOING)) {
+		ast_channel_unlock(chan);
 		return 0;
+	}
 	/* Stop if we're a zombie or need a soft hangup */
 	if (ast_test_flag(chan, AST_FLAG_ZOMBIE) || ast_check_hangup(chan)) {
 		ast_channel_unlock(chan);
@@ -2094,7 +2114,7 @@ done:
 int ast_internal_timing_enabled(struct ast_channel *chan)
 {
 	int ret = ast_opt_internal_timing && chan->timingfd > -1;
-	if (option_debug > 3)
+	if (option_debug > 4)
 		ast_log(LOG_DEBUG, "Internal timing is %s (option_internal_timing=%d chan->timingfd=%d)\n", ret? "enabled": "disabled", ast_opt_internal_timing, chan->timingfd);
 	return ret;
 }
@@ -2363,6 +2383,10 @@ int ast_write(struct ast_channel *chan, struct ast_frame *fr)
 		res = (chan->tech->write_video == NULL) ? 0 :
 			chan->tech->write_video(chan, fr);
 		break;
+	case AST_FRAME_MODEM:
+		res = (chan->tech->write == NULL) ? 0 :
+			chan->tech->write(chan, fr);
+		break;
 	case AST_FRAME_VOICE:
 		if (chan->tech->write == NULL)
 			break;	/*! \todo XXX should return 0 maybe ? */
@@ -2547,7 +2571,12 @@ struct ast_channel *__ast_request_and_dial(const char *type, int format, void *d
 					timeout = 0;		/* trick to force exit from the while() */
 					break;
 
-				case AST_CONTROL_PROGRESS:	/* Ignore */
+				/* Ignore these */
+				case AST_CONTROL_PROGRESS:
+				case AST_CONTROL_PROCEEDING:
+				case AST_CONTROL_HOLD:
+				case AST_CONTROL_UNHOLD:
+				case AST_CONTROL_VIDUPDATE:
 				case -1:			/* Ignore -- just stopping indications */
 					break;
 
@@ -2604,6 +2633,7 @@ struct ast_channel *ast_request(const char *type, int format, void *data, int *c
 	int fmt;
 	int res;
 	int foo;
+	int videoformat = format & AST_FORMAT_VIDEO_MASK;
 
 	if (!cause)
 		cause = &foo;
@@ -2619,7 +2649,7 @@ struct ast_channel *ast_request(const char *type, int format, void *data, int *c
 			continue;
 
 		capabilities = chan->tech->capabilities;
-		fmt = format;
+		fmt = format & AST_FORMAT_AUDIO_MASK;
 		res = ast_translator_best_choice(&fmt, &capabilities);
 		if (res < 0) {
 			ast_log(LOG_WARNING, "No translator path exists for channel type %s (native %d) to %d\n", type, chan->tech->capabilities, format);
@@ -2630,7 +2660,7 @@ struct ast_channel *ast_request(const char *type, int format, void *data, int *c
 		if (!chan->tech->requester)
 			return NULL;
 		
-		if (!(c = chan->tech->requester(type, capabilities, data, cause)))
+		if (!(c = chan->tech->requester(type, capabilities | videoformat, data, cause)))
 			return NULL;
 
 		if (c->_state == AST_STATE_DOWN) {
@@ -2820,6 +2850,14 @@ int ast_channel_make_compatible(struct ast_channel *chan, struct ast_channel *pe
 int ast_channel_masquerade(struct ast_channel *original, struct ast_channel *clone)
 {
 	int res = -1;
+
+	/* each of these channels may be sitting behind a channel proxy (i.e. chan_agent)
+	   and if so, we don't really want to masquerade it, but its proxy */
+	if (original->_bridge && (original->_bridge != ast_bridged_channel(original)))
+		original = original->_bridge;
+
+	if (clone->_bridge && (clone->_bridge != ast_bridged_channel(clone)))
+		clone = clone->_bridge;
 
 	if (original == clone) {
 		ast_log(LOG_WARNING, "Can't masquerade channel '%s' into itself!\n", original->name);
@@ -3298,6 +3336,9 @@ static enum ast_bridge_result ast_generic_bridge(struct ast_channel *c0, struct 
 	int watch_c0_dtmf;
 	int watch_c1_dtmf;
 	void *pvt0, *pvt1;
+	/* Indicates whether a frame was queued into a jitterbuffer */
+	int frame_put_in_jb = 0;
+	int jb_in_use;
 	int to;
 	
 	cs[0] = c0;
@@ -3308,6 +3349,9 @@ static enum ast_bridge_result ast_generic_bridge(struct ast_channel *c0, struct 
 	o1nativeformats = c1->nativeformats;
 	watch_c0_dtmf = config->flags & AST_BRIDGE_DTMF_CHANNEL_0;
 	watch_c1_dtmf = config->flags & AST_BRIDGE_DTMF_CHANNEL_1;
+
+	/* Check the need of a jitterbuffer for each channel */
+	jb_in_use = ast_jb_do_usecheck(c0, c1);
 
 	for (;;) {
 		struct ast_channel *who, *other;
@@ -3327,9 +3371,15 @@ static enum ast_bridge_result ast_generic_bridge(struct ast_channel *c0, struct 
 			}
 		} else
 			to = -1;
+		/* Calculate the appropriate max sleep interval - in general, this is the time,
+		   left to the closest jb delivery moment */
+		if (jb_in_use)
+			to = ast_jb_get_when_to_wakeup(c0, c1, to);
 		who = ast_waitfor_n(cs, 2, &to);
 		if (!who) {
-			ast_log(LOG_DEBUG, "Nobody there, continuing...\n");
+			/* No frame received within the specified timeout - check if we have to deliver now */
+			if (jb_in_use)
+				ast_jb_get_and_deliver(c0, c1);
 			if (c0->_softhangup == AST_SOFTHANGUP_UNBRIDGE || c1->_softhangup == AST_SOFTHANGUP_UNBRIDGE) {
 				if (c0->_softhangup == AST_SOFTHANGUP_UNBRIDGE)
 					c0->_softhangup = 0;
@@ -3349,6 +3399,9 @@ static enum ast_bridge_result ast_generic_bridge(struct ast_channel *c0, struct 
 		}
 
 		other = (who == c0) ? c1 : c0; /* the 'other' channel */
+		/* Try add the frame info the who's bridged channel jitterbuff */
+		if (jb_in_use)
+			frame_put_in_jb = !ast_jb_put(other, f);
 
 		if ((f->frametype == AST_FRAME_CONTROL) && !(config->flags & AST_BRIDGE_IGNORE_SIGS)) {
 			int bridge_exit = 0;
@@ -3385,8 +3438,13 @@ static enum ast_bridge_result ast_generic_bridge(struct ast_channel *c0, struct 
 				ast_log(LOG_DEBUG, "Got DTMF on channel (%s)\n", who->name);
 				break;
 			}
-			/* other frames go to the other side */
-			ast_write(other, f);
+			/* Write immediately frames, not passed through jb */
+			if (!frame_put_in_jb)
+				ast_write(other, f);
+				
+			/* Check if we have to deliver now */
+			if (jb_in_use)
+				ast_jb_get_and_deliver(c0, c1);
 		}
 		/* XXX do we want to pass on also frames not matched above ? */
 		ast_frfree(f);

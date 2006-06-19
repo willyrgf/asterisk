@@ -30,6 +30,10 @@
  * \ingroup cdr_drivers
  */
 
+#include "asterisk.h"
+
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
 #include <sys/types.h>
 #include <stdio.h>
 #include <string.h>
@@ -38,10 +42,6 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <time.h>
-
-#include "asterisk.h"
-
-ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/channel.h"
 #include "asterisk/cdr.h"
@@ -63,7 +63,7 @@ static char *name = "cdr-custom";
 
 static FILE *mf = NULL;
 
-static char master[AST_CONFIG_MAX_PATH];
+static char master[PATH_MAX];
 static char format[1024]="";
 
 static int load_config(int reload) 

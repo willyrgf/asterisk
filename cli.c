@@ -23,6 +23,10 @@
  * \author Mark Spencer <markster@digium.com> 
  */
 
+#include "asterisk.h"
+
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
 #include <unistd.h>
 #include <stdlib.h>
 #include <sys/signal.h>
@@ -31,10 +35,6 @@
 #include <string.h>
 #include <ctype.h>
 #include <regex.h>
-
-#include "asterisk.h"
-
-ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/logger.h"
 #include "asterisk/options.h"
@@ -47,9 +47,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/utils.h"
 #include "asterisk/app.h"
 #include "asterisk/lock.h"
-/* For rl_filename_completion */
 #include "editline/readline/readline.h"
-/* For module directory */
 
 extern unsigned long global_fin, global_fout;
 	
@@ -114,6 +112,11 @@ static char set_debug_help[] =
 "       no messages should be displayed. Equivalent to -d[d[d...]]\n"
 "       on startup.\n";
 
+static char logger_mute_help[] = 
+"Usage: logger mute\n"
+"       Disables logging output to the current console, making it possible to\n"
+"       gather information without being disturbed by scrolling lines.\n";
+
 static char softhangup_help[] =
 "Usage: soft hangup <channel>\n"
 "       Request that a channel be hung up. The hangup takes effect\n"
@@ -124,10 +127,6 @@ static char group_show_channels_help[] =
 "       Lists all currently active channels with channel group(s) specified.\n"
 "       Optional regular expression pattern is matched to group names for each\n"
 "       channel.\n";
-
-static char frog_help[] =
-"Usage: frog [warp_factor]\n"
-"       Performs frog-in-a-blender calculations (Jacobsen Corollary)\n";
 
 static int handle_load(int fd, int argc, char *argv[])
 {
@@ -213,6 +212,14 @@ static int handle_set_debug(int fd, int argc, char *argv[])
 	return RESULT_SUCCESS;
 }
 
+static int handle_logger_mute(int fd, int argc, char *argv[])
+{
+	if (argc != 2)
+		return RESULT_SHOWUSAGE;
+	ast_console_toggle_mute(fd);
+	return RESULT_SUCCESS;
+}
+
 static int handle_unload(int fd, int argc, char *argv[])
 {
 	int x;
@@ -240,28 +247,6 @@ static int handle_unload(int fd, int argc, char *argv[])
 	}
 	return RESULT_SUCCESS;
 }
-
-/*
-* Perform frong-in-a-blender calculations (Jacobsen Corollary) 
-*/
-                                                                                                                                 
-static int handle_frog(int fd, int argc, char *argv[])
-{
-	double warpone = 75139293848.0;
-	double warpfactor = 1.0;
-
-	if (argc > 2)
-		return RESULT_SHOWUSAGE;
-	if (argc > 1 && sscanf(argv[1], "%lf", &warpfactor) != 1)
-		return RESULT_SHOWUSAGE;
-
-	ast_cli(fd, "A frog in a blender with a base diameter of 3 inches going\n");
-	ast_cli(fd, "%.0f RPM will be travelling at warp factor %f,\n",
-		warpfactor * warpfactor * warpfactor * warpone, warpfactor);
-	ast_cli(fd, "based upon the Jacobsen Frog Corollary.\n");
-	return RESULT_SUCCESS;
-}
-
 
 #define MODLIST_FORMAT  "%-30s %-40.40s %-10d\n"
 #define MODLIST_FORMAT2 "%-30s %-40.40s %-10s\n"
@@ -715,6 +700,8 @@ static int handle_showchan(int fd, int argc, char *argv[])
 		"  NativeFormats: %s\n"
 		"    WriteFormat: %s\n"
 		"     ReadFormat: %s\n"
+		" WriteTranscode: %s\n"
+		"  ReadTranscode: %s\n"
 		"1st File Descriptor: %d\n"
 		"      Frames in: %d%s\n"
 		"     Frames out: %d%s\n"
@@ -738,6 +725,8 @@ static int handle_showchan(int fd, int argc, char *argv[])
 		ast_getformatname_multiple(nf, sizeof(nf), c->nativeformats), 
 		ast_getformatname_multiple(wf, sizeof(wf), c->writeformat), 
 		ast_getformatname_multiple(rf, sizeof(rf), c->readformat),
+		c->writetrans ? "Yes" : "No",
+		c->readtrans ? "Yes" : "No",
 		c->fds[0],
 		c->fin & ~DEBUGCHAN_FLAG, (c->fin & DEBUGCHAN_FLAG) ? " (DEBUGGED)" : "",
 		c->fout & ~DEBUGCHAN_FLAG, (c->fout & DEBUGCHAN_FLAG) ? " (DEBUGGED)" : "",
@@ -911,10 +900,10 @@ static struct ast_cli_entry builtins[] = {
 	{ { "_command", "matchesarray", NULL }, handle_commandmatchesarray, "Returns command matches array", commandmatchesarray_help },
 	{ { "debug", "channel", NULL }, handle_debugchan, "Enable debugging on a channel", debugchan_help, complete_ch_3 },
 	{ { "debug", "level", NULL }, handle_debuglevel, "Set global debug level", debuglevel_help },
-	{ { "frog", NULL }, handle_frog,"Perform frog-in-a-blender calculations", frog_help },
 	{ { "group", "show", "channels", NULL }, group_show_channels, "Show active channels with group(s)", group_show_channels_help},
 	{ { "help", NULL }, handle_help, "Display help list, or specific help on a command", help_help, complete_help },
 	{ { "load", NULL }, handle_load, "Load a dynamic module by name", load_help, complete_fn },
+	{ { "logger", "mute", NULL }, handle_logger_mute, "Toggle logging output to a console", logger_mute_help },
 	{ { "no", "debug", "channel", NULL }, handle_nodebugchan, "Disable debugging on a channel", nodebugchan_help, complete_ch_4 },
 	{ { "reload", NULL }, handle_reload, "Reload configuration", reload_help, complete_mod_2 },
 	{ { "set", "debug", NULL }, handle_set_debug, "Set level of debug chattiness", set_debug_help },

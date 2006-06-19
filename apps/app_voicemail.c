@@ -41,6 +41,10 @@
  *				 Bartosz Supczinski <Bartosz.Supczinski@dir.pl>
  */
 
+#include "asterisk.h"
+
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
 #include <stdlib.h>
 #include <errno.h>
 #include <unistd.h>
@@ -53,10 +57,6 @@
 #include <sys/mman.h>
 #include <time.h>
 #include <dirent.h>
-
-#include "asterisk.h"
-
-ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/lock.h"
 #include "asterisk/file.h"
@@ -75,10 +75,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/cli.h"
 #include "asterisk/utils.h"
 #include "asterisk/stringfields.h"
-#ifdef WITH_SMDI
 #include "asterisk/smdi.h"
 #define SMDI_MWI_WAIT_TIMEOUT 1000 /* 1 second */
-#endif
 #ifdef USE_ODBC_STORAGE
 #include "asterisk/res_odbc.h"
 #endif
@@ -311,7 +309,7 @@ static char odbc_table[80];
 #define DELETE(a,b,c) (vm_delete(c))
 #endif
 
-static char VM_SPOOL_DIR[AST_CONFIG_MAX_PATH];
+static char VM_SPOOL_DIR[PATH_MAX];
 
 static char ext_pass_cmd[128];
 
@@ -408,9 +406,7 @@ static int silencethreshold = 128;
 static char serveremail[80];
 static char mailcmd[160];	/* Configurable mail cmd */
 static char externnotify[160]; 
-#ifdef WITH_SMDI
 static struct ast_smdi_interface *smdi_iface = NULL;
-#endif
 static char vmfmts[80];
 static int vmminmessage;
 static int vmmaxmessage;
@@ -655,8 +651,8 @@ static void vm_change_password(struct ast_vm_user *vmu, const char *newpassword)
 	char inbuf[256];
 	char orig[256];
 	char currcontext[256] ="";
-	char tmpin[AST_CONFIG_MAX_PATH];
-	char tmpout[AST_CONFIG_MAX_PATH];
+	char tmpin[PATH_MAX];
+	char tmpout[PATH_MAX];
 	struct stat statbuf;
 
 	if (!change_password_realtime(vmu, newpassword))
@@ -1780,11 +1776,13 @@ static int sendmail(char *srcemail, struct ast_vm_user *vmu, int msgnum, char *c
 				if ((passdata = alloca(vmlen))) {
 					memset(passdata, 0, vmlen);
 					prep_email_sub_vars(ast, vmu, msgnum + 1, context, mailbox, cidnum, cidname, dur, date, passdata, vmlen, category);
-					pbx_substitute_variables_helper(ast,fromstring,passdata,vmlen);
+					pbx_substitute_variables_helper(ast, fromstring, passdata, vmlen);
 					fprintf(p, "From: %s <%s>\n",passdata,who);
-				} else ast_log(LOG_WARNING, "Cannot allocate workspace for variable substitution\n");
+				} else
+					ast_log(LOG_WARNING, "Cannot allocate workspace for variable substitution\n");
 				ast_channel_free(ast);
-			} else ast_log(LOG_WARNING, "Cannot allocate the channel for variables substitution\n");
+			} else
+				ast_log(LOG_WARNING, "Cannot allocate the channel for variables substitution\n");
 		} else
 			fprintf(p, "From: Asterisk PBX <%s>\n", who);
 		fprintf(p, "To: %s <%s>\n", vmu->fullname, vmu->email);
@@ -1797,11 +1795,13 @@ static int sendmail(char *srcemail, struct ast_vm_user *vmu, int msgnum, char *c
 				if ((passdata = alloca(vmlen))) {
 					memset(passdata, 0, vmlen);
 					prep_email_sub_vars(ast, vmu, msgnum + 1, context, mailbox, cidnum, cidname, dur, date, passdata, vmlen, category);
-					pbx_substitute_variables_helper(ast,emailsubject,passdata,vmlen);
-					fprintf(p, "Subject: %s\n",passdata);
-				} else ast_log(LOG_WARNING, "Cannot allocate workspace for variable substitution\n");
+					pbx_substitute_variables_helper(ast, emailsubject, passdata, vmlen);
+					fprintf(p, "Subject: %s\n", passdata);
+				} else
+					ast_log(LOG_WARNING, "Cannot allocate workspace for variable substitution\n");
 				ast_channel_free(ast);
-			} else ast_log(LOG_WARNING, "Cannot allocate the channel for variables substitution\n");
+			} else
+				ast_log(LOG_WARNING, "Cannot allocate the channel for variables substitution\n");
 		} else
 		if (*emailtitle) {
 			fprintf(p, emailtitle, msgnum + 1, mailbox) ;
@@ -1811,6 +1811,10 @@ static int sendmail(char *srcemail, struct ast_vm_user *vmu, int msgnum, char *c
 		else
 			fprintf(p, "Subject: [PBX]: New message %d in mailbox %s\n", msgnum + 1, mailbox);
 		fprintf(p, "Message-ID: <Asterisk-%d-%d-%s-%d@%s>\n", msgnum, (unsigned int)ast_random(), mailbox, getpid(), host);
+		if (!ast_strlen_zero(cidnum))
+			fprintf(p, "X-Asterisk-CallerID: %s\n", cidnum);
+		if (!ast_strlen_zero(cidname))
+			fprintf(p, "X-Asterisk-CallerIDName: %s\n", cidname);
 		fprintf(p, "MIME-Version: 1.0\n");
 		if (attach_user_voicemail) {
 			/* Something unique. */
@@ -1829,11 +1833,13 @@ static int sendmail(char *srcemail, struct ast_vm_user *vmu, int msgnum, char *c
 				if ((passdata = alloca(vmlen))) {
 					memset(passdata, 0, vmlen);
 					prep_email_sub_vars(ast, vmu, msgnum + 1, context, mailbox, cidnum, cidname, dur, date, passdata, vmlen, category);
-					pbx_substitute_variables_helper(ast,emailbody,passdata,vmlen);
-					fprintf(p, "%s\n",passdata);
-				} else ast_log(LOG_WARNING, "Cannot allocate workspace for variable substitution\n");
+					pbx_substitute_variables_helper(ast, emailbody, passdata, vmlen);
+					fprintf(p, "%s\n", passdata);
+				} else
+					ast_log(LOG_WARNING, "Cannot allocate workspace for variable substitution\n");
 				ast_channel_free(ast);
-			} else ast_log(LOG_WARNING, "Cannot allocate the channel for variables substitution\n");
+			} else
+				ast_log(LOG_WARNING, "Cannot allocate the channel for variables substitution\n");
 		} else {
 			fprintf(p, "Dear %s:\n\n\tJust wanted to let you know you were just left a %s long message (number %d)\n"
 
@@ -1843,9 +1849,7 @@ static int sendmail(char *srcemail, struct ast_vm_user *vmu, int msgnum, char *c
 		}
 		if (attach_user_voicemail) {
 			/* Eww. We want formats to tell us their own MIME type */
-			char *ctype = "audio/x-";
-			if (!strcasecmp(format, "ogg"))
-				ctype = "application/";
+			char *ctype = (!strcasecmp(format, "ogg")) ?  "application/" : "audio/x-";
 		
 			fprintf(p, "--%s\n", bound);
 			fprintf(p, "Content-Type: %s%s; name=\"msg%04d.%s\"\n", ctype, format, msgnum, format);
@@ -2340,16 +2344,13 @@ static void run_externnotify(char *context, char *extension)
 	char arguments[255];
 	char ext_context[256] = "";
 	int newvoicemails = 0, oldvoicemails = 0;
-#ifdef WITH_SMDI
 	struct ast_smdi_mwi_message *mwi_msg;
-#endif
 
 	if (!ast_strlen_zero(context))
 		snprintf(ext_context, sizeof(ext_context), "%s@%s", extension, context);
 	else
 		ast_copy_string(ext_context, extension, sizeof(ext_context));
 
-#ifdef WITH_SMDI
 	if (!strcasecmp(externnotify, "smdi")) {
 		if (ast_app_has_voicemail(ext_context, NULL)) 
 			ast_smdi_mwi_set(smdi_iface, extension);
@@ -2368,9 +2369,6 @@ static void run_externnotify(char *context, char *extension)
 			ast_log(LOG_DEBUG, "Successfully executed SMDI MWI change for %s on %s\n", extension, smdi_iface->name);
 		}
 	} else if (!ast_strlen_zero(externnotify)) {
-#else
-	if (!ast_strlen_zero(externnotify)) {
-#endif
 		if (inboxcount(ext_context, &newvoicemails, &oldvoicemails)) {
 			ast_log(LOG_ERROR, "Problem in calculating number of voicemail messages available for extension %s\n", extension);
 		} else {
@@ -2617,7 +2615,8 @@ static int leave_voicemail(struct ast_channel *chan, char *ext, struct leave_vm_
 			if (duration < vmminmessage) {
 				if (option_verbose > 2) 
 					ast_verbose( VERBOSE_PREFIX_3 "Recording was %d seconds long but needs to be at least %d - abandoning\n", duration, vmminmessage);
-				DELETE(dir,msgnum,fn);
+				ast_filedelete(tmptxtfile, NULL);
+				unlink(tmptxtfile);
 			} else {
 				fprintf(txt, "duration=%d\n", duration);
 				fclose(txt);
@@ -6127,9 +6126,7 @@ static int load_config(void)
 	char *cat;
 	struct ast_variable *var;
 	char *notifystr = NULL;
-#ifdef WITH_SMDI
 	char *smdistr = NULL;
-#endif
 	char *astattach;
 	char *astsearch;
 	char *astsaycid;
@@ -6236,7 +6233,6 @@ static int load_config(void)
 		if ((notifystr = ast_variable_retrieve(cfg, "general", "externnotify"))) {
 			ast_copy_string(externnotify, notifystr, sizeof(externnotify));
 			ast_log(LOG_DEBUG, "found externnotify: %s\n", externnotify);
-#ifdef WITH_SMDI
 			if (!strcasecmp(externnotify, "smdi")) {
 				ast_log(LOG_DEBUG, "Using SMDI for external voicemail notification\n");
 				if ((smdistr = ast_variable_retrieve(cfg, "general", "smdiport"))) {
@@ -6253,7 +6249,6 @@ static int load_config(void)
 					ast_log(LOG_DEBUG, "Using SMDI port %s\n", smdi_iface->name);
 				}
 			}
-#endif
 		} else {
 			externnotify[0] = '\0';
 		}
@@ -6457,6 +6452,8 @@ static int load_config(void)
 							}
 						} else {
 							free(z);
+							AST_LIST_UNLOCK(&users);
+							ast_config_destroy(cfg);
 							return -1;
 						}
 						var = var->next;
@@ -6711,14 +6708,18 @@ static int advanced_options(struct ast_channel *chan, struct ast_vm_user *vmu, s
 		return 0;
 	}
 
-	if (!(origtime = ast_variable_retrieve(msg_cfg, "message", "origtime")))
+	if (!(origtime = ast_variable_retrieve(msg_cfg, "message", "origtime"))) {
+		ast_config_destroy(msg_cfg);
 		return 0;
+	}
 
 	cid = ast_variable_retrieve(msg_cfg, "message", "callerid");
 
 	context = ast_variable_retrieve(msg_cfg, "message", "context");
 	if (!strncasecmp("macro",context,5)) /* Macro names in contexts are useless for our needs */
 		context = ast_variable_retrieve(msg_cfg, "message","macrocontext");
+
+	ast_config_destroy(msg_cfg);
 
 	switch (option) {
 	case 3:
@@ -6856,8 +6857,6 @@ static int advanced_options(struct ast_channel *chan, struct ast_vm_user *vmu, s
 
 		break;
 	}
-
-	ast_config_destroy(msg_cfg);
 
 	if (!res) {
 		make_file(vms->fn, sizeof(vms->fn), vms->curdir, msg);

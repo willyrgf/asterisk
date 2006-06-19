@@ -23,6 +23,11 @@
  * \author Mark Spencer <markster@digium.com> 
  */
 
+#define MOD_LOADER	/* not really a module */
+#include "asterisk.h"
+
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -30,11 +35,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
-
-#define MOD_LOADER	/* not really a module */
-#include "asterisk.h"
-
-ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/lock.h"
 #include "asterisk/channel.h"
@@ -67,20 +67,22 @@ struct translator_path {
  */
 static struct translator_path tr_matrix[MAX_FORMAT][MAX_FORMAT];
 
-/*
+/*! \todo
  * TODO: sample frames for each supported input format.
  * We build this on the fly, by taking an SLIN frame and using
  * the existing converter to play with it.
  */
 
-/* returns the index of the lowest bit set */
-static int powerof(int d)
+/*! \brief returns the index of the lowest bit set */
+static force_inline int powerof(unsigned int d)
 {
-	int x;
-	for (x = 0; x < MAX_FORMAT; x++)
-		if ((1 << x) & d)
-			return x;
-	ast_log(LOG_WARNING, "Powerof %d: No power??\n", d);
+	int x = ffs(d);
+
+	if (x)
+		return x - 1;
+
+	ast_log(LOG_WARNING, "No bits set? %d\n", d);
+
 	return -1;
 }
 
@@ -146,14 +148,18 @@ static void destroy(struct ast_trans_pvt *pvt)
 	ast_update_use_count();
 }
 
-/*
- * framein wrapper, deals with plc and bound checks.
- */
+/*! \brief framein wrapper, deals with plc and bound checks.  */
 static int framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 {
 	int16_t *dst = (int16_t *)pvt->outbuf;
 	int ret;
 	int samples = pvt->samples;	/* initial value */
+	
+	/* Copy the last in jb timing info to the pvt */
+	pvt->f.has_timing_info = f->has_timing_info;
+	pvt->f.ts = f->ts;
+	pvt->f.len = f->len;
+	pvt->f.seqno = f->seqno;
 
 	if (f->samples == 0) {
 		ast_log(LOG_WARNING, "no samples for %s\n", pvt->t->name);
@@ -194,8 +200,7 @@ static int framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
         return ret;
 }
 
-/*
- * generic frameout routine.
+/*! \brief generic frameout routine.
  * If samples and datalen are 0, take whatever is in pvt
  * and reset them, otherwise take the values in the caller and
  * leave alone the pvt values.
@@ -245,7 +250,7 @@ void ast_translator_free_path(struct ast_trans_pvt *p)
 	}
 }
 
-/*! Build a chain of translators based upon the given source and dest formats */
+/*! \brief Build a chain of translators based upon the given source and dest formats */
 struct ast_trans_pvt *ast_translator_build_path(int dest, int source)
 {
 	struct ast_trans_pvt *head = NULL, *tail = NULL;
@@ -285,6 +290,15 @@ struct ast_frame *ast_translate(struct ast_trans_pvt *path, struct ast_frame *f,
 	struct ast_trans_pvt *p = path;
 	struct ast_frame *out = f;
 	struct timeval delivery;
+	int has_timing_info;
+	long ts;
+	long len;
+	int seqno;
+
+	has_timing_info = f->has_timing_info;
+	ts = f->ts;
+	len = f->len;
+	seqno = f->seqno;
 
 	/* XXX hmmm... check this below */
 	if (!ast_tvzero(f->delivery)) {
@@ -331,6 +345,12 @@ struct ast_frame *ast_translate(struct ast_trans_pvt *path, struct ast_frame *f,
 		path->nextout = ast_tvadd(path->nextout, ast_samp2tv( out->samples, 8000));
 	} else {
 		out->delivery = ast_tv(0, 0);
+		out->has_timing_info = has_timing_info;
+		if (has_timing_info) {
+			out->ts = ts;
+			out->len = len;
+			out->seqno = seqno;
+		}
 	}
 	/* Invalidate prediction if we're entering a silence period */
 	if (out->frametype == AST_FRAME_CNG)
@@ -524,6 +544,7 @@ static char show_trans_usage[] =
 static struct ast_cli_entry show_trans =
 { { "show", "translation", NULL }, show_translation, "Display translation matrix", show_trans_usage };
 
+/*! \brief register codec translator */
 int ast_register_translator(struct ast_translator *t, void *module)
 {
 	static int added_cli = 0;

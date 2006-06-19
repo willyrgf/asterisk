@@ -11,7 +11,9 @@
 # the GNU General Public License
 #
 
-MODS:=$(filter-out $(MENUSELECT_APPS),$(patsubst %.c,%.so,$(wildcard app_*.c)))
+include ../menuselect.makeopts
+
+SELECTED_MODS:=$(filter-out $(MENUSELECT_APPS),$(patsubst %.c,%,$(wildcard app_*.c)))
 
 # If you have UnixODBC you can use ODBC voicemail
 # storage
@@ -21,6 +23,8 @@ MODS:=$(filter-out $(MENUSELECT_APPS),$(patsubst %.c,%.so,$(wildcard app_*.c)))
 # Uncomment for extended ODBC voicemail storage
 #CFLAGS+=-DEXTENDED_ODBC_STORAGE
 # See doc/README.odbcstorage for more information
+
+MODS:=$(patsubst %,%.so,$(SELECTED_MODS))
 
 all: $(MODS)
 

@@ -26,6 +26,10 @@
  * \ingroup channel_drivers
  */
 
+#include "asterisk.h"
+
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
 #include <stdio.h>
 #include <pthread.h>
 #include <string.h>
@@ -39,29 +43,29 @@
 #include <sys/ioctl.h>
 #include <sys/file.h>
 
-#include <asterisk/channel.h>
-#include <asterisk/config.h>
-#include <asterisk/logger.h>
-#include <asterisk/module.h>
-#include <asterisk/pbx.h>
-#include <asterisk/options.h>
-#include <asterisk/io.h>
-#include <asterisk/frame.h>
-#include <asterisk/translate.h>
-#include <asterisk/cli.h>
-#include <asterisk/musiconhold.h>
-#include <asterisk/dsp.h>
-#include <asterisk/translate.h>
-#include <asterisk/config.h>
-#include <asterisk/file.h>
-#include <asterisk/callerid.h>
-#include <asterisk/indications.h>
-#include <asterisk/app.h>
-#include <asterisk/features.h>
-#include <asterisk/stringfields.h>
+#include "asterisk/channel.h"
+#include "asterisk/config.h"
+#include "asterisk/logger.h"
+#include "asterisk/module.h"
+#include "asterisk/pbx.h"
+#include "asterisk/options.h"
+#include "asterisk/io.h"
+#include "asterisk/frame.h"
+#include "asterisk/translate.h"
+#include "asterisk/cli.h"
+#include "asterisk/musiconhold.h"
+#include "asterisk/dsp.h"
+#include "asterisk/translate.h"
+#include "asterisk/config.h"
+#include "asterisk/file.h"
+#include "asterisk/callerid.h"
+#include "asterisk/indications.h"
+#include "asterisk/app.h"
+#include "asterisk/features.h"
+#include "asterisk/stringfields.h"
 
-#include <chan_misdn_config.h>
-#include <isdn_lib.h>
+#include "chan_misdn_config.h"
+#include "isdn_lib.h"
 
 ast_mutex_t release_lock_mutex;
 
@@ -151,14 +155,18 @@ struct chan_list {
   
 	ast_mutex_t lock;
 
+	char allowed_bearers[BUFFERSIZE+1];
+	
 	enum misdn_chan_state state;
 	int holded; 
 	int orginator;
 
 	int norxtone;
 	int notxtone; 
-
+	
 	int incoming_early_audio;
+
+	int ignore_dtmf;
 
 	int pipe[2];
 	char ast_rd_buf[4096];
@@ -346,12 +354,28 @@ static struct chan_list * get_chan_by_ast_name(char *name)
 }
 
 
+
+struct allowed_bearers {
+	int cap;
+	int val;
+	char *name;
+};
+
+struct allowed_bearers allowed_bearers_array[]={
+	{INFO_CAPABILITY_SPEECH,1,"speech"},
+	{INFO_CAPABILITY_AUDIO_3_1K,2,"3_1khz"},
+	{INFO_CAPABILITY_DIGITAL_UNRESTRICTED,4,"digital_unrestricted"},
+	{INFO_CAPABILITY_DIGITAL_RESTRICTED,8,"digital_restriced"},
+	{INFO_CAPABILITY_VIDEO,16,"video"}
+};
+
 static char *bearer2str(int cap) {
 	static char *bearers[]={
 		"Speech",
 		"Audio 3.1k",
 		"Unres Digital",
 		"Res Digital",
+		"Video",
 		"Unknown Bearer"
 	};
 	
@@ -368,8 +392,11 @@ static char *bearer2str(int cap) {
 	case INFO_CAPABILITY_DIGITAL_RESTRICTED:
 		return bearers[3];
 		break;
-	default:
+	case INFO_CAPABILITY_VIDEO:
 		return bearers[4];
+		break;
+	default:
+		return bearers[5];
 		break;
 	}
 }
@@ -1153,7 +1180,7 @@ static int update_config (struct chan_list *ch, int orig)
 	
 	int port=bc->port;
 	
-	chan_misdn_log(1,port,"update_config: Getting Config\n");
+	chan_misdn_log(5,port,"update_config: Getting Config\n");
 
 
 	int hdlc=0;
@@ -1243,7 +1270,7 @@ static void config_jitterbuffer(struct chan_list *ch)
 	struct misdn_bchannel *bc=ch->bc;
 	int len=ch->jb_len, threshold=ch->jb_upper_threshold;
 	
-	chan_misdn_log(1,bc->port, "config_jb: Called\n");
+	chan_misdn_log(5,bc->port, "config_jb: Called\n");
 	
 	if ( ! len ) {
 		chan_misdn_log(1,bc->port, "config_jb: Deactivating Jitterbuffer\n");
@@ -1295,6 +1322,10 @@ void debug_numplan(int port, int numplan, char *type)
 	}
 }
 
+
+
+
+
 static int read_config(struct chan_list *ch, int orig) {
 
 	if (!ch) {
@@ -1335,6 +1366,9 @@ static int read_config(struct chan_list *ch, int orig) {
 	misdn_cfg_get( port, MISDN_CFG_NEED_MORE_INFOS, &bc->need_more_infos, sizeof(int));
 	
 	misdn_cfg_get( port, MISDN_CFG_FAR_ALERTING, &ch->far_alerting, sizeof(int));
+
+	misdn_cfg_get( port, MISDN_CFG_ALLOWED_BEARERS, &ch->allowed_bearers, BUFFERSIZE);
+	
 	
 	int hdlc=0;
 	misdn_cfg_get( port, MISDN_CFG_HDLC, &hdlc, sizeof(int));
@@ -1394,7 +1428,7 @@ static int read_config(struct chan_list *ch, int orig) {
 		misdn_cfg_get(port, MISDN_CFG_PICKUPGROUP, &pg, sizeof(pg));
 		misdn_cfg_get(port, MISDN_CFG_CALLGROUP, &cg, sizeof(cg));
 		
-		chan_misdn_log(2, port, " --> * CallGrp:%s PickupGrp:%s\n",ast_print_group(buf,sizeof(buf),cg),ast_print_group(buf,sizeof(buf),pg));
+		chan_misdn_log(5, port, " --> * CallGrp:%s PickupGrp:%s\n",ast_print_group(buf,sizeof(buf),cg),ast_print_group(buf,sizeof(buf),pg));
 		ast->pickupgroup=pg;
 		ast->callgroup=cg;
 	}
@@ -2228,22 +2262,24 @@ static enum ast_bridge_result  misdn_bridge (struct ast_channel *c0,
 	int bridging;
 	misdn_cfg_get( 0, MISDN_GEN_BRIDGING, &bridging, sizeof(int));
 	if (bridging) {
-		int ecwb;
+		int ecwb, ec;
 		misdn_cfg_get( ch1->bc->port, MISDN_CFG_ECHOCANCELWHENBRIDGED, &ecwb, sizeof(int));
-		if ( !ecwb ) {
+		misdn_cfg_get( ch1->bc->port, MISDN_CFG_ECHOCANCEL, &ec, sizeof(int));
+		if ( !ecwb && ec ) {
 			chan_misdn_log(2, ch1->bc->port, "Disabling Echo Cancellor when Bridged\n");
 			ch1->bc->ec_enable=0;
-		/*	manager_ec_disable(ch1->bc); */
+			manager_ec_disable(ch1->bc);
 		}
 		misdn_cfg_get( ch2->bc->port, MISDN_CFG_ECHOCANCELWHENBRIDGED, &ecwb, sizeof(int));
-		if ( !ecwb ) {
+		misdn_cfg_get( ch2->bc->port, MISDN_CFG_ECHOCANCEL, &ec, sizeof(int));
+		if ( !ecwb && ec) {
 			chan_misdn_log(2, ch2->bc->port, "Disabling Echo Cancellor when Bridged\n");
 			ch2->bc->ec_enable=0;
-		/*	manager_ec_disable(ch2->bc); */
+			manager_ec_disable(ch2->bc); 
 		}
 		
 		/* trying to make a mISDN_dsp conference */
-		chan_misdn_log(1, ch1->bc->port, "I SEND: Making conference with Number:%d\n", (ch1->bc->pid<<1) +1);
+		chan_misdn_log(1, ch1->bc->port, "I SEND: Making conference with Number:%d\n", ch1->bc->pid +1);
 
 		misdn_lib_bridge(ch1->bc,ch2->bc);
 	}
@@ -2251,8 +2287,14 @@ static enum ast_bridge_result  misdn_bridge (struct ast_channel *c0,
 	if (option_verbose > 2) 
 		ast_verbose(VERBOSE_PREFIX_3 "Native bridging %s and %s\n", c0->name, c1->name);
 
-	chan_misdn_log(1, ch1->bc->port, "* Makeing Native Bridge between %s and %s\n", ch1->bc->oad, ch2->bc->oad);
-  
+	chan_misdn_log(1, ch1->bc->port, "* Making Native Bridge between %s and %s\n", ch1->bc->oad, ch2->bc->oad);
+ 
+	if (! (flags&AST_BRIDGE_DTMF_CHANNEL_0) )
+		ch1->ignore_dtmf=1;
+
+	if (! (flags&AST_BRIDGE_DTMF_CHANNEL_1) )
+		ch2->ignore_dtmf=1;
+
 	while(1) {
 		to=-1;
 		who = ast_waitfor_n(carr, 2, &to);
@@ -2270,8 +2312,16 @@ static enum ast_bridge_result  misdn_bridge (struct ast_channel *c0,
       
 			break;
 		}
-    
-    
+		
+		if ( f->frametype == AST_FRAME_DTMF ) {
+			chan_misdn_log(1,0,"Read DTMF %d from %s\n",f->subclass, who->exten);
+
+			*fo=f;
+			*rc=who;
+			break;
+		}
+		
+		
 		if (who == c0) {
 			ast_write(c1,f);
 		}
@@ -2280,8 +2330,13 @@ static enum ast_bridge_result  misdn_bridge (struct ast_channel *c0,
 		}
     
 	}
-  
-	return 0;
+	
+	chan_misdn_log(1, ch1->bc->port, "I SEND: Splitting conference with Number:%d\n", ch1->bc->pid +1);
+	
+	misdn_lib_split_bridge(ch1->bc,ch2->bc);
+	
+	
+	return AST_BRIDGE_COMPLETE;
 }
 
 /** AST INDICATIONS END **/
@@ -2291,7 +2346,7 @@ static int tone_indicate( struct chan_list *cl, enum tone_e tone)
 	const struct tone_zone_sound *ts= NULL;
 	struct ast_channel *ast=cl->ast;
 	
-	chan_misdn_log(2,cl->bc->port,"Tone Indicate:\n");
+	chan_misdn_log(3,cl->bc->port,"Tone Indicate:\n");
 	
 	if (!cl->ast) {
 		return 0;
@@ -2299,32 +2354,31 @@ static int tone_indicate( struct chan_list *cl, enum tone_e tone)
 	
 	switch (tone) {
 	case TONE_DIAL:
-		chan_misdn_log(2,cl->bc->port," --> Dial\n");
+		chan_misdn_log(3,cl->bc->port," --> Dial\n");
 		ts=ast_get_indication_tone(ast->zone,"dial");
 		misdn_lib_tone_generator_start(cl->bc);
 		break;
 	case TONE_ALERTING:
-		chan_misdn_log(2,cl->bc->port," --> Ring\n");
+		chan_misdn_log(3,cl->bc->port," --> Ring\n");
 		ts=ast_get_indication_tone(ast->zone,"ring");
 		misdn_lib_tone_generator_stop(cl->bc);
 		break;
 	case TONE_FAR_ALERTING:
 	/* VERY UGLY HACK, BECAUSE CHAN_SIP DOES NOT GENERATE TONES */
-		chan_misdn_log(2,cl->bc->port," --> Ring\n");
+		chan_misdn_log(3,cl->bc->port," --> Ring\n");
 		ts=ast_get_indication_tone(ast->zone,"ring");
 		misdn_lib_tone_generator_start(cl->bc);
 		misdn_lib_echo(cl->bc,1);
 		break;
 	case TONE_BUSY:
-		chan_misdn_log(2,cl->bc->port," --> Busy\n");
+		chan_misdn_log(3,cl->bc->port," --> Busy\n");
 		ts=ast_get_indication_tone(ast->zone,"busy");
 		misdn_lib_tone_generator_stop(cl->bc);
 		break;
 	case TONE_FILE:
 		break;
-
 	case TONE_NONE:
-		chan_misdn_log(2,cl->bc->port," --> None\n");
+		chan_misdn_log(3,cl->bc->port," --> None\n");
 		misdn_lib_tone_generator_stop(cl->bc);
 		ast_playtones_stop(ast);
 		break;
@@ -2784,8 +2838,8 @@ static void release_chan(struct misdn_bchannel *bc) {
 		} 
 		release_unlock;
 		
-		chan_misdn_log(1, bc->port, "Trying to Release bc with l3id: %x\n",bc->l3_id);
-
+		chan_misdn_log(1, bc->port, "release_chan: bc with l3id: %x\n",bc->l3_id);
+		
 		//releaseing jitterbuffer
 		if (ch->jb ) {
 			misdn_jb_destroy(ch->jb);
@@ -3148,9 +3202,12 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 		fr.mallocd =0 ;
 		fr.offset= 0 ;
 		
-		chan_misdn_log(2, bc->port, " --> DTMF:%c\n", bc->dtmf);
-		
-		ast_queue_frame(ch->ast, &fr);
+		if (!ch->ignore_dtmf) {
+			chan_misdn_log(2, bc->port, " --> DTMF:%c\n", bc->dtmf);
+			ast_queue_frame(ch->ast, &fr);
+		} else {
+			chan_misdn_log(2, bc->port, " --> Ingoring DTMF:%c due to bridge flags\n", bc->dtmf);
+		}
 	}
 	break;
 	case EVENT_STATUS:
@@ -3255,7 +3312,6 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 				
 				ast_queue_frame(ch->ast, &fr);
 			}
-			
 		}
 	}
 	break;
@@ -3325,6 +3381,24 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 
 		/** queue new chan **/
 		cl_queue_chan(&cl_te, ch) ;
+
+
+		if (!strstr(ch->allowed_bearers,"all")) {
+			int i;
+			for (i=0; i< sizeof(allowed_bearers_array)/sizeof(struct allowed_bearers); i++) {
+				if (allowed_bearers_array[i].cap == bc->capability) {
+					if (  !strstr( ch->allowed_bearers, allowed_bearers_array[i].name)) {
+						chan_misdn_log(0,bc->port,"Bearer Not allowed\b");
+						bc->out_cause=88;
+						
+						ch->state=MISDN_EXTCANTMATCH;
+						misdn_lib_send_event(bc, EVENT_RELEASE_COMPLETE );
+						return RESPONSE_OK;
+					}
+				}
+				
+			}
+		}
 		
 		/* Check for Pickup Request first */
 		if (!strcmp(chan->exten, ast_pickup_ext())) {
@@ -3380,7 +3454,8 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 			if (bc->nt)
 				misdn_lib_send_event(bc, EVENT_RELEASE_COMPLETE );
 			else
-				misdn_lib_send_event(bc, EVENT_DISCONNECT );
+				misdn_lib_send_event(bc, EVENT_RELEASE );
+				
 			break;
 		}
 		
@@ -3404,26 +3479,34 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 				if (bc->nt)
 					misdn_lib_send_event(bc, EVENT_RELEASE_COMPLETE );
 				else
-					misdn_lib_send_event(bc, EVENT_DISCONNECT );
+					misdn_lib_send_event(bc, EVENT_RELEASE);
 			}
 		} else {
-			int ret= misdn_lib_send_event(bc, EVENT_SETUP_ACKNOWLEDGE );
-			if (ret == -ENOCHAN) {
-				ast_log(LOG_WARNING,"Channel was catched, before we could Acknowledge\n");
-				misdn_lib_send_event(bc,EVENT_RELEASE_COMPLETE);
-			}
-			/*  send tone to phone :) */
 
-			/** ADD IGNOREPAT **/
-			
-			int stop_tone;
-			misdn_cfg_get( 0, MISDN_GEN_STOP_TONE, &stop_tone, sizeof(int));
-			if ( (!ast_strlen_zero(bc->dad)) && stop_tone ) 
-				tone_indicate(ch,TONE_NONE);
-			else
-				tone_indicate(ch,TONE_DIAL);
-			
-			ch->state=MISDN_WAITING4DIGS;
+
+			if (bc->sending_complete) {
+				bc->out_cause=1;
+				misdn_lib_send_event(bc, EVENT_RELEASE);
+			} else {
+				
+				int ret= misdn_lib_send_event(bc, EVENT_SETUP_ACKNOWLEDGE );
+				if (ret == -ENOCHAN) {
+					ast_log(LOG_WARNING,"Channel was catched, before we could Acknowledge\n");
+					misdn_lib_send_event(bc,EVENT_RELEASE_COMPLETE);
+				}
+				/*  send tone to phone :) */
+				
+				/** ADD IGNOREPAT **/
+				
+				int stop_tone;
+				misdn_cfg_get( 0, MISDN_GEN_STOP_TONE, &stop_tone, sizeof(int));
+				if ( (!ast_strlen_zero(bc->dad)) && stop_tone ) 
+					tone_indicate(ch,TONE_NONE);
+				else
+					tone_indicate(ch,TONE_DIAL);
+				
+				ch->state=MISDN_WAITING4DIGS;
+			}
 		}
       
 	}
@@ -3637,7 +3720,7 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 		int (*generate)(struct ast_channel *chan, void *tmp, int datalen, int samples);
 
 		chan_misdn_log(9,bc->port,"TONE_GEN: len:%d\n");
-		
+
 		if (!ast->generator) break;
 		
 		tmp = ast->generatordata;
@@ -3645,13 +3728,13 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 		generate = ast->generator->generate;
 		res = generate(ast, tmp, tone_len, tone_len);
 		ast->generatordata = tmp;
+		
 		if (res) {
 			ast_log(LOG_WARNING, "Auto-deactivating generator\n");
 			ast_deactivate_generator(ast);
 		} else {
 			bc->tone_cnt=0;
 		}
-		
 	}
 	break;
 		
@@ -3671,10 +3754,35 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 			
 			ast_queue_frame(ch->ast,&frame);
 		} else {
-			int ret=write(ch->pipe[1], bc->bframe, bc->bframe_len);
+			fd_set wrfs;
+			struct timeval tv;
+			tv.tv_sec=0;
+			tv.tv_usec=0;
+			
+			
+			FD_ZERO(&wrfs);
+			FD_SET(ch->pipe[1],&wrfs);
+			
+			int t=select(FD_SETSIZE,NULL,&wrfs,NULL,&tv);
 
-			if (ret<=0) {
-				chan_misdn_log(1, bc->port, "Write returned <=0 (err=%s)\n",strerror(errno));
+			if (!t) {
+				chan_misdn_log(9, bc->port, "Select Timed out\n");
+				break;
+			}
+			
+			if (t<0) {
+				chan_misdn_log(-1, bc->port, "Select Error (err=%s)\n",strerror(errno));
+				break;
+			}
+			
+			if (FD_ISSET(ch->pipe[1],&wrfs)) {
+				int ret=write(ch->pipe[1], bc->bframe, bc->bframe_len);
+				
+				if (ret<=0) {
+					chan_misdn_log(-1, bc->port, "Write returned <=0 (err=%s)\n",strerror(errno));
+				}
+			} else {
+				chan_misdn_log(1, bc->port, "Wripe Pipe full!\n");
 			}
 		}
 	}
@@ -3791,8 +3899,11 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 		
 		break;
 
-
 	case EVENT_RESTART:
+
+		stop_bc_tones(ch);
+		release_chan(bc);
+		
 		break;
 				
 	default:

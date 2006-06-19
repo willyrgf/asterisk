@@ -166,7 +166,7 @@ int te_lib_init( void ) ; /* returns midev */
 void te_lib_destroy(int midev) ;
 struct misdn_bchannel *manager_find_bc_by_pid(int pid);
 struct misdn_bchannel *manager_find_bc_holded(struct misdn_bchannel* bc);
-void manager_ph_control_block(struct misdn_bchannel *bc, long c1, void *c2, int c2_len);
+void manager_ph_control_block(struct misdn_bchannel *bc, int c1, void *c2, int c2_len);
 void manager_clean_bc(struct misdn_bchannel *bc );
 void manager_bchannel_setup (struct misdn_bchannel *bc);
 void manager_bchannel_cleanup (struct misdn_bchannel *bc);
@@ -471,6 +471,10 @@ void empty_bc(struct misdn_bchannel *bc)
 	bc->channel = 0;
 	bc->in_use = 0;
 
+	bc->sending_complete = 0;
+
+	bc->restart_channel=0;
+	
 	bc->conf_id = 0;
 
 	bc->need_more_infos = 0;
@@ -557,7 +561,7 @@ int clean_up_bc(struct misdn_bchannel *bc)
 	unsigned char buff[32];
 	struct misdn_stack * stack;
 
-	cb_log(2, 0, "$$$ CLEANUP CALLED\n");
+	cb_log(3, 0, "$$$ CLEANUP CALLED\n");
 	
 	if (!bc  ) return -1;
 	stack=get_stack_by_bc(bc);
@@ -587,15 +591,17 @@ int clean_up_bc(struct misdn_bchannel *bc)
 		manager_ec_disable(bc);
 	}
 
-	mISDN_write_frame(stack->midev, buff, bc->layer_id|FLG_MSG_DOWN, MGR_DELLAYER | REQUEST, 0, 0, NULL, TIMEOUT_1SEC); 
+	
+	mISDN_write_frame(stack->midev, buff, bc->layer_id|FLG_MSG_DOWN, MGR_DELLAYER | REQUEST, 0, 0, NULL, TIMEOUT_1SEC);
 
-	cb_log(2, stack->port, "$$$ CLEARING STACK\n");
+#if 0
+	cb_log(3, stack->port, "$$$ CLEARING STACK\n");
 	ret=mISDN_clear_stack(stack->midev,bc->b_stid);
-	if (ret<0) {
+	if (ret<0 && errno) {
 		cb_log(-1,stack->port,"clear stack failed [%s]\n",strerror(errno));
 	}
+#endif
 
-	
 	bc->b_stid = 0;
 	bc_state_change(bc, BCHAN_CLEANED);
 	
@@ -612,8 +618,7 @@ void clear_l3(struct misdn_stack *stack)
 			cb_event(EVENT_CLEANUP, &stack->bc[i], glob_mgr->user_data);
 			empty_chan_in_stack(stack,i+1);
 			empty_bc(&stack->bc[i]);
-			queue_cleanup_bc(&stack->bc[i]);
-			
+			clean_up_bc(&stack->bc[i]);
 		}
 		
 	} 
@@ -971,18 +976,17 @@ int setup_bc(struct misdn_bchannel *bc)
 		pid.layermask = ISDN_LAYER((1)) | ISDN_LAYER((2)) | ISDN_LAYER((3)) | ISDN_LAYER((4));
 		
 	} 
-	
+
 	ret = mISDN_set_stack(midev, bc->b_stid, &pid);
-	
+
 	if (ret){
-		cb_log(5, stack->port,"$$$ Set Stack Err: %d %s\n",ret,strerror(errno));
+		cb_log(-1, stack->port,"$$$ Set Stack Err: %d %s\n",ret,strerror(errno));
 		
 		mISDN_write_frame(midev, buff, bc->layer_id, MGR_DELLAYER | REQUEST, 0, 0, NULL, TIMEOUT_1SEC);
-
+		
 		bc_state_change(bc,BCHAN_ERROR);
 		return(-EINVAL);
 	}
-
 
 	bc_state_change(bc,BCHAN_SETUP);
 
@@ -1479,7 +1483,7 @@ int handle_cr ( struct misdn_stack *stack, iframe_t *frm)
 				cb_log(4, stack->port, " --> lib: CLEANING UP l3id: %x\n",frm->dinfo);
 				empty_chan_in_stack(stack,bc->channel);
 				empty_bc(bc);
-				queue_cleanup_bc(bc);
+				clean_up_bc(bc);
 				dump_chan_list(stack);
 				bc->pid = 0;
 				cb_event(EVENT_CLEANUP, bc, glob_mgr->user_data);
@@ -1517,7 +1521,7 @@ void misdn_lib_release(struct misdn_bchannel *bc)
 		empty_chan_in_stack(stack,bc->channel);
 		empty_bc(bc);
 	}
-	queue_cleanup_bc(bc);
+	clean_up_bc(bc);
 }
 
 
@@ -1981,7 +1985,7 @@ static int do_tone(struct misdn_bchannel *bc, int len)
 	
 	if (bc->generate_tone) {
 		cb_event(EVENT_TONE_GENERATE, bc, glob_mgr->user_data);
-
+		
 		if ( !bc->nojitter ) {
 			misdn_tx_jitter(bc,len);
 		}
@@ -1997,13 +2001,14 @@ static int do_tone(struct misdn_bchannel *bc, int len)
 void misdn_tx_jitter(struct misdn_bchannel *bc, int len)
 {
 	char buf[4096 + mISDN_HEADER_LEN];
+	char *data=&buf[mISDN_HEADER_LEN];
 	iframe_t *txfrm= (iframe_t*)buf;
 	int jlen, r;
 	
-	jlen=cb_jb_empty(bc,&buf[mISDN_HEADER_LEN],len);
+	jlen=cb_jb_empty(bc,data,len);
 	
 	if (jlen) {
-		flip_buf_bits( &buf[mISDN_HEADER_LEN], jlen);
+		flip_buf_bits( data, jlen);
 		
 		if (jlen < len) {
 			cb_log(5,bc->port,"Jitterbuffer Underrun.\n");
@@ -2019,6 +2024,33 @@ void misdn_tx_jitter(struct misdn_bchannel *bc, int len)
 		cb_log(9, bc->port, "Transmitting %d samples 2 misdn\n", txfrm->len);
 		
 		r=mISDN_write( glob_mgr->midev, buf, txfrm->len + mISDN_HEADER_LEN, 8000 );
+	} else {
+#ifdef MISDN_GEN_SILENCE
+		int cnt=len/TONE_SILENCE_SIZE;
+		int rest=len%TONE_SILENCE_SIZE;
+		int i;
+
+		for (i=0; i<cnt; i++) {
+			memcpy(data, tone_silence_flip, TONE_SILENCE_SIZE );
+			data +=TONE_SILENCE_SIZE;
+		}
+
+		if (rest) {
+			memcpy(data, tone_silence_flip, rest);
+		}
+
+		txfrm->prim = DL_DATA|REQUEST;
+
+		txfrm->dinfo = 0;
+
+		txfrm->addr = bc->addr|FLG_MSG_DOWN; /*  | IF_DOWN; */
+
+		txfrm->len =len;
+		cb_log(9, bc->port, "Transmitting %d samples 2 misdn\n", txfrm->len);
+
+		r=mISDN_write( glob_mgr->midev, buf, txfrm->len + mISDN_HEADER_LEN, 8000 );
+#endif
+
 	}
 }
 
@@ -2049,7 +2081,7 @@ int handle_bchan(msg_t *msg)
 		
 	case MGR_SETSTACK| INDICATION:
 		cb_log(2, stack->port, "BCHAN: MGR_SETSTACK|IND \n");
-
+		
 	AGAIN:
 		bc->addr = mISDN_get_layerid(stack->midev, bc->b_stid, bc->layer);
 		if (!bc->addr) {
@@ -2196,15 +2228,39 @@ int handle_bchan(msg_t *msg)
 #endif
 		
 		if ( (bc->bc_state == BCHAN_ACTIVATED) && frm->len > 0) {
-			if (  !do_tone(bc, frm->len)   ) {
+			int t;
+
+#ifdef MISDN_B_DEBUG
+			cb_log(0,bc->port,"do_tone START\n");
+#endif
+			t=do_tone(bc,frm->len);
+
+#ifdef MISDN_B_DEBUG
+			cb_log(0,bc->port,"do_tone STOP (%d)\n",t);
+#endif
+			if (  !t ) {
 				
 				if ( misdn_cap_is_speech(bc->capability)) {
 					if ( !bc->nojitter ) {
+#ifdef MISDN_B_DEBUG
+						cb_log(0,bc->port,"tx_jitter START\n");
+#endif
 						misdn_tx_jitter(bc,frm->len);
+#ifdef MISDN_B_DEBUG
+						cb_log(0,bc->port,"tx_jitter STOP\n");
+#endif
 					}
 				}
+
+#ifdef MISDN_B_DEBUG	
+				cb_log(0,bc->port,"EVENT_B_DATA START\n");
+#endif
 				
 				int i=cb_event( EVENT_BCHAN_DATA, bc, glob_mgr->user_data);
+#ifdef MISDN_B_DEBUG	
+				cb_log(0,bc->port,"EVENT_B_DATA STOP\n");
+#endif
+				
 				if (i<0) {
 					cb_log(10,stack->port,"cb_event returned <0\n");
 					/*clean_up_bc(bc);*/
@@ -2257,7 +2313,8 @@ int handle_frm_nt(msg_t *msg)
 	if (!stack || !stack->nt) {
 		return 0;
 	}
-  
+
+	
 	if ((err=stack->nst.l1_l2(&stack->nst,msg))) {
     
 		if (nt_err_cnt > 0 ) {
@@ -2332,6 +2389,9 @@ int handle_frm(msg_t *msg)
 					break;
 				case RESPONSE_IGNORE_SETUP:
 					/* I think we should send CC_RELEASE_CR, but am not sure*/
+
+					bc->out_cause=16;
+					misdn_lib_send_event(bc,EVENT_RELEASE_COMPLETE);
 					empty_chan_in_stack(stack, bc->channel);
 					empty_bc(bc);
 					bc_state_change(bc,BCHAN_CLEANED);
@@ -2515,6 +2575,8 @@ int handle_mgmt(msg_t *msg)
 		case SSTATUS_L1_DEACTIVATED:
 			cb_log(1, 0, "MGMT: SSTATUS: L1_DEACTIVATED \n");
 			stack->l1link=0;
+
+			clear_l3(stack);
 			break;
 
 		case SSTATUS_L2_ESTABLISHED:
@@ -2943,7 +3005,7 @@ int misdn_lib_send_event(struct misdn_bchannel *bc, enum event_e event )
 
 			empty_chan_in_stack(stack,bc->channel);
 			empty_bc(bc);
-			queue_cleanup_bc(bc);
+			clean_up_bc(bc);
 		}
 		
 		/** we set it up later at RETRIEVE_ACK again.**/
@@ -3018,6 +3080,13 @@ int handle_err(msg_t *msg)
 		case MGR_SETSTACK|INDICATION:
 			return handle_bchan(msg);
 		break;
+
+		case MGR_SETSTACK|CONFIRM:
+		case MGR_CLEARSTACK|CONFIRM:
+			free_msg(msg) ; 
+			return 1;
+		break;
+
 		case DL_DATA|INDICATION:
 		{
 			int port=(frm->addr&MASTER_ID_MASK) >> 8;
@@ -3084,10 +3153,20 @@ int manager_isdn_handler(iframe_t *frm ,msg_t *msg)
 	}
 
 	if ( ((frm->addr | ISDN_PID_BCHANNEL_BIT )>> 28 ) == 0x5) {
-		if (handle_bchan(msg)) 
+#ifdef MISDN_HANDLER_DEBUG
+		cb_log(0,0,"handle_bchan START\n");
+#endif
+		if (handle_bchan(msg)) {
+#ifdef MISDN_HANDLER_DEBUG
+			cb_log(0,0,"handle_bchan STOP\n");
+#endif
 			return 0 ;
+		}
+#ifdef MISDN_HANDLER_DEBUG
+		cb_log(0,0,"handle_bchan NOTSTOP\n");
+#endif	
 	}	
-
+	
 	if (handle_timers(msg)) 
 		return 0 ;
 	
@@ -3100,14 +3179,46 @@ int manager_isdn_handler(iframe_t *frm ,msg_t *msg)
 	/* Its important to handle l1 AFTER l2  */
 	if (handle_l1(msg)) 
 		return 0 ;
-
-	/* The L2/L3 will be queued */
-	if (queue_l2l3(msg))
+	
+#ifdef MISDN_HANDLER_DEBUG
+	cb_log(0,0,"handle_frm_nt START\n");
+#endif
+	if (handle_frm_nt(msg)) {
+#ifdef MISDN_HANDLER_DEBUG
+		cb_log(0,0,"handle_frm_nt STOP\n");
+#endif
 		return 0;
-
-	if (handle_err(msg)) 
+	}
+#ifdef MISDN_HANDLER_DEBUG
+	cb_log(0,0,"handle_frm_nt NOTSTOP\n");
+	
+	cb_log(0,0,"handle_frm START\n");
+#endif
+	
+	if (handle_frm(msg)) {
+#ifdef MISDN_HANDLER_DEBUG
+		cb_log(0,0,"handle_frm STOP\n");
+#endif
+		
+		return 0;
+	}
+#ifdef MISDN_HANDLER_DEBUG
+	cb_log(0,0,"handle_frm NOTSTOP\n");	
+	
+	cb_log(0,0,"handle_err START\n");
+#endif
+	
+	if (handle_err(msg)) {
+#ifdef MISDN_HANDLER_DEBUG
+		cb_log(0,0,"handle_err STOP\n");
+#endif
 		return 0 ;
+	}
+#ifdef MISDN_HANDLER_DEBUG
+	cb_log(0,0,"handle_err NOTSTOP\n");
+#endif
 
+	
 	cb_log(-1, 0, "Unhandled Message: prim %x len %d from addr %x, dinfo %x on this port.\n",frm->prim, frm->len, frm->addr, frm->dinfo);		
 	free_msg(msg);
 	
@@ -3663,17 +3774,17 @@ int misdn_lib_tx2misdn_frm(struct misdn_bchannel *bc, void *data, int len)
 /*
  * send control information to the channel (dsp-module)
  */
-void manager_ph_control(struct misdn_bchannel *bc, long c1, long c2)
+void manager_ph_control(struct misdn_bchannel *bc, int c1, int c2)
 {
-	unsigned char buffer[mISDN_HEADER_LEN+2*sizeof(long)];
+	unsigned char buffer[mISDN_HEADER_LEN+2*sizeof(int)];
 	iframe_t *ctrl = (iframe_t *)buffer; /* preload data */
-	unsigned long *d = (unsigned long *)&ctrl->data.p;
+	unsigned int *d = (unsigned int*)&ctrl->data.p;
 	struct misdn_stack *stack=get_stack_by_bc(bc);
 	
 	ctrl->prim = PH_CONTROL | REQUEST;
 	ctrl->addr = bc->addr | FLG_MSG_DOWN;
 	ctrl->dinfo = 0;
-	ctrl->len = sizeof(unsigned long)*2;
+	ctrl->len = sizeof(unsigned int)*2;
 	*d++ = c1;
 	*d++ = c2;
 	mISDN_write(stack->midev, ctrl, mISDN_HEADER_LEN+ctrl->len, TIMEOUT_1SEC);
@@ -3682,17 +3793,17 @@ void manager_ph_control(struct misdn_bchannel *bc, long c1, long c2)
 /*
  * send control information to the channel (dsp-module)
  */
-void manager_ph_control_block(struct misdn_bchannel *bc, long c1, void *c2, int c2_len)
+void manager_ph_control_block(struct misdn_bchannel *bc, int c1, void *c2, int c2_len)
 {
-	unsigned char buffer[mISDN_HEADER_LEN+sizeof(long)+c2_len];
+	unsigned char buffer[mISDN_HEADER_LEN+sizeof(int)+c2_len];
 	iframe_t *ctrl = (iframe_t *)buffer;
-	unsigned long *d = (unsigned long *)&ctrl->data.p;
+	unsigned int *d = (unsigned int *)&ctrl->data.p;
 	struct misdn_stack *stack=get_stack_by_bc(bc);
 	
 	ctrl->prim = PH_CONTROL | REQUEST;
 	ctrl->addr = bc->addr | FLG_MSG_DOWN;
 	ctrl->dinfo = 0;
-	ctrl->len = sizeof(unsigned long) + c2_len;
+	ctrl->len = sizeof(unsigned int) + c2_len;
 	*d++ = c1;
 	memcpy(d, c2, c2_len);
 	mISDN_write(stack->midev, ctrl, mISDN_HEADER_LEN+ctrl->len, TIMEOUT_1SEC);
@@ -3862,7 +3973,7 @@ void misdn_split_conf(struct misdn_bchannel *bc, int conf_id)
 }
 
 void misdn_lib_bridge( struct misdn_bchannel * bc1, struct misdn_bchannel *bc2) {
-	int conf_id=(bc1->pid<<1) +1;
+	int conf_id=bc1->pid +1;
 
 	cb_log(1, bc1->port, "I Send: BRIDGE from:%d to:%d\n",bc1->port,bc2->port);
 	

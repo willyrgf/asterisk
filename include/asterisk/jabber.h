@@ -21,11 +21,11 @@
 
 #include <iksemel.h>
 #include "asterisk/astobj.h"
+#include "asterisk/linkedlists.h"
 
 enum aji_state {
-	AJI_DISCONNECTED=0,
+	AJI_DISCONNECTED = 0,
 	AJI_CONNECTING,
-	AJI_ALMOST,
 	AJI_CONNECTED
 };
 
@@ -61,10 +61,18 @@ struct aji_capabilities {
 struct aji_resource {
 	int status;
 	char resource[80];
-	char description[1000];
+	char *description;
 	struct aji_version *cap;
 	int priority;
 	struct aji_resource *next;
+};
+
+struct aji_message {
+	char *from;
+	char *message;
+	char id[25];
+	time_t arrived;
+	AST_LIST_ENTRY(aji_message) list;
 };
 
 struct aji_buddy {
@@ -93,6 +101,7 @@ struct aji_client {
 	char user[160];
 	char serverhost[160];
 	char context[100];
+	char statusmessage[256];
 	char sid[10]; /* Session ID */
 	char mid[6]; /* Message ID */
 	iksid *jid;
@@ -108,10 +117,12 @@ struct aji_client {
 	int keepalive;
 	int allowguest;
 	int timeout;
+	int message_timeout;
 	int authorized;
 	unsigned int flags;
 	enum aji_type component;
 	struct aji_buddy_container buddies;
+	AST_LIST_HEAD(messages,aji_message) messages;
 	void *jingle;
 	pthread_t thread;
 };

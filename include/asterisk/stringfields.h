@@ -47,7 +47,7 @@
   
   sample = calloc(1, sizeof(*sample));
   if (sample) {
-	  if (!ast_string_field_init(sample)) {
+	  if (ast_string_field_init(sample, 256)) {
 		  free(sample);
 		  sample = NULL;
 	  }
@@ -132,7 +132,7 @@ struct ast_string_field_mgr {
   \param size Amount of storage to allocate
   \param fields Pointer to the first entry of the field array
   \param num_fields Number of fields in the array
-  \return 0 on failure, non-zero on success
+  \return 0 on success, non-zero on failure
 */
 int __ast_string_field_init(struct ast_string_field_mgr *mgr, size_t size,
 			    ast_string_field *fields, int num_fields);
@@ -171,7 +171,7 @@ void __ast_string_field_index_build(struct ast_string_field_mgr *mgr,
   \brief Declare a string field
   \param name The field name
 */
-#define AST_STRING_FIELD(name) const ast_string_field name;
+#define AST_STRING_FIELD(name) const ast_string_field name
 
 /*!
   \brief Declare the fields needed in a structure
@@ -181,7 +181,7 @@ void __ast_string_field_index_build(struct ast_string_field_mgr *mgr,
 	ast_string_field __begin_field[0]; \
 	field_list \
 	ast_string_field __end_field[0]; \
-	struct ast_string_field_mgr __field_mgr;
+	struct ast_string_field_mgr __field_mgr
 
 /*!
   \brief Get the number of string fields in a structure
@@ -205,7 +205,7 @@ void __ast_string_field_index_build(struct ast_string_field_mgr *mgr,
   \brief Initialize a field pool and fields
   \param x Pointer to a structure containing fields
   \param size Amount of storage to allocate
-  \return 0 on failure, non-zero on success
+  \return 0 on success, non-zero on failure
 */
 #define ast_string_field_init(x, size) \
 	__ast_string_field_init(&(x)->__field_mgr, size, &(x)->__begin_field[0], ast_string_field_count(x))

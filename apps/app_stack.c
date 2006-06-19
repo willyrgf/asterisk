@@ -25,14 +25,14 @@
  * \ingroup applications
  */
 
+#include "asterisk.h"
+ 
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
-
-#include "asterisk.h"
- 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/options.h"
 #include "asterisk/logger.h"
@@ -51,7 +51,7 @@ static const char *app_return = "Return";
 static const char *app_pop = "StackPop";
 
 static const char *gosub_synopsis = "Jump to label, saving return address";
-static const char *gosubif_synopsis = "Jump to label, saving return address";
+static const char *gosubif_synopsis = "Conditionally jump to label, saving return address";
 static const char *return_synopsis = "Return from gosub routine";
 static const char *pop_synopsis = "Remove one address from gosub stack";
 

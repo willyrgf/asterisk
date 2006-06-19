@@ -17,7 +17,7 @@ AC_CANONICAL_TARGET
 AC_CONFIG_SRCDIR([asterisk.c])
 
 # specify output header file
-AC_CONFIG_HEADER(include/autoconfig.h)
+AC_CONFIG_HEADER(include/asterisk/autoconfig.h)
 
 AC_COPYRIGHT("Asterisk")
 AC_REVISION($Revision$)
@@ -128,12 +128,19 @@ AC_SUBST(PBX_OSTYPE)
 AC_GNU_SOURCE
 
 AH_TOP(
+#ifndef ASTERISK_AUTOCONFIG_H
+#define ASTERISK_AUTOCONFIG_H
+
 #ifndef MENUSELECT
 #include "asterisk/buildopts.h"
 #endif
 
 #ifndef _REENTRANT
 #define _REENTRANT
+#endif
+)
+
+AH_BOTTOM(
 #endif
 )
 
@@ -714,7 +721,15 @@ AC_FUNC_STRNLEN
 AC_FUNC_STRTOD
 AC_FUNC_UTIME_NULL
 AC_FUNC_VPRINTF
-AC_CHECK_FUNCS([atexit bzero dup2 endpwent floor ftruncate getcwd gethostbyname gethostname gettimeofday inet_ntoa isascii localtime_r memchr memmove memset mkdir munmap pow putenv re_comp regcomp rint select setenv socket sqrt strcasecmp strchr strcspn strdup strerror strncasecmp strndup strrchr strsep strspn strstr strtol unsetenv utime strtoq strcasestr asprintf vasprintf])
+AC_CHECK_FUNCS([atexit bzero dup2 endpwent floor ftruncate getcwd gethostbyname gethostname gettimeofday inet_ntoa isascii localtime_r memchr memmove memset mkdir munmap pow putenv re_comp regcomp rint select setenv socket sqrt strcasecmp strchr strcspn strdup strerror strncasecmp strndup strnlen strrchr strsep strspn strstr strtol unsetenv utime strtoq strcasestr asprintf vasprintf])
+
+echo -n "checking for compiler atomic operations... "
+AC_LINK_IFELSE(
+AC_LANG_PROGRAM([], [int foo1; int foo2 = __sync_fetch_and_add(&foo1, 1);]),
+AC_MSG_RESULT(yes)
+AC_DEFINE([HAVE_GCC_ATOMICS], 1, [Define to 1 if your GCC C compiler provides atomic operations.]),
+AC_MSG_RESULT(no)
+)
 
 AC_CONFIG_FILES([build_tools/menuselect-deps makeopts])
 AC_OUTPUT

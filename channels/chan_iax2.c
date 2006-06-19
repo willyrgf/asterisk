@@ -28,6 +28,10 @@
  * \ingroup channel_drivers
  */
 
+#include "asterisk.h"
+
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <sys/types.h>
@@ -50,8 +54,6 @@
 #include <sys/stat.h>
 #include <regex.h>
 
-#include "asterisk.h"
-
 #ifdef HAVE_ZAPTEL
 #include <sys/ioctl.h>
 #ifdef __linux__
@@ -60,8 +62,6 @@
 #include <zaptel.h>
 #endif /* __linux__ */
 #endif
-
-ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/lock.h"
 #include "asterisk/frame.h" 
@@ -416,6 +416,7 @@ struct iax2_registry {
 	int callno;				/*!< Associated call number if applicable */
 	struct sockaddr_in us;			/*!< Who the server thinks we are */
 	struct iax2_registry *next;
+	struct ast_dnsmgr_entry *dnsmgr;	/*!< DNS refresh manager */
 };
 
 static struct iax2_registry *registrations;
@@ -1543,6 +1544,7 @@ static int __do_deliver(void *data)
 	  the IAX thread with the iaxsl lock held. */
 	struct iax_frame *fr = data;
 	fr->retrans = -1;
+	fr->af.has_timing_info = 0;
 	if (iaxs[fr->callno] && !ast_test_flag(iaxs[fr->callno], IAX_ALREADYGONE))
 		iax2_queue_frame(fr->callno, &fr->af);
 	/* Free our iax frame */
@@ -1893,7 +1895,7 @@ static int iax2_prune_realtime(int fd, int argc, char *argv[])
 	} else if ((peer = find_peer(argv[3], 0))) {
 		if(ast_test_flag(peer, IAX_RTCACHEFRIENDS)) {
 			ast_set_flag(peer, IAX_RTAUTOCLEAR);
-			expire_registry(peer);
+			expire_registry(peer->name);
 			ast_cli(fd, "OK peer %s was removed from the cache.\n", argv[3]);
 		} else {
 			ast_cli(fd, "SORRY peer %s is not eligible for this operation.\n", argv[3]);
@@ -2234,7 +2236,7 @@ static void update_jbsched(struct chan_iax2_pvt *pvt)
 static void __get_from_jb(void *p) 
 {
 	int callno = PTR_TO_CALLNO(p);
-	struct chan_iax2_pvt *pvt = iaxs[callno];
+	struct chan_iax2_pvt *pvt = NULL;
 	struct iax_frame *fr;
 	jb_frame frame;
 	int ret;
@@ -2531,7 +2533,7 @@ static struct iax2_peer *realtime_peer(const char *peername, struct sockaddr_in 
 		if (ast_test_flag(peer, IAX_RTAUTOCLEAR)) {
 			if (peer->expire > -1)
 				ast_sched_del(sched, peer->expire);
-			peer->expire = ast_sched_add(sched, (global_rtautoclear) * 1000, expire_registry, peer);
+			peer->expire = ast_sched_add(sched, (global_rtautoclear) * 1000, expire_registry, (void*)peer->name);
 		}
 		AST_LIST_LOCK(&peers);
 		AST_LIST_INSERT_HEAD(&peers, peer, entry);
@@ -4303,8 +4305,8 @@ static char *regstate2str(int regstate)
 
 static int iax2_show_registry(int fd, int argc, char *argv[])
 {
-#define FORMAT2 "%-20.20s  %-10.10s  %-20.20s %8.8s  %s\n"
-#define FORMAT "%-20.20s  %-10.10s  %-20.20s %8d  %s\n"
+#define FORMAT2 "%-20.20s  %-6.6s  %-10.10s  %-20.20s %8.8s  %s\n"
+#define FORMAT  "%-20.20s  %-6.6s  %-10.10s  %-20.20s %8d  %s\n"
 	struct iax2_registry *reg = NULL;
 
 	char host[80];
@@ -4313,7 +4315,7 @@ static int iax2_show_registry(int fd, int argc, char *argv[])
 	if (argc != 3)
 		return RESULT_SHOWUSAGE;
 	AST_LIST_LOCK(&peers);
-	ast_cli(fd, FORMAT2, "Host", "Username", "Perceived", "Refresh", "State");
+	ast_cli(fd, FORMAT2, "Host", "dnsmgr", "Username", "Perceived", "Refresh", "State");
 	for (reg = registrations;reg;reg = reg->next) {
 		snprintf(host, sizeof(host), "%s:%d", ast_inet_ntoa(iabuf, sizeof(iabuf), reg->addr.sin_addr), ntohs(reg->addr.sin_port));
 		if (reg->us.sin_addr.s_addr) 
@@ -4321,6 +4323,7 @@ static int iax2_show_registry(int fd, int argc, char *argv[])
 		else
 			ast_copy_string(perceived, "<Unregistered>", sizeof(perceived));
 		ast_cli(fd, FORMAT, host, 
+					(reg->dnsmgr) ? "Y" : "N", 
 					reg->username, perceived, reg->refresh, regstate2str(reg->regstate));
 	}
 	AST_LIST_UNLOCK(&peers);
@@ -5052,16 +5055,6 @@ static int register_verify(int callno, struct sockaddr_in *sin, struct iax_ies *
 				destroy_peer(p);
 			return -1;
 		}
-	} else if (!ast_strlen_zero(secret) && (p->authmethods & IAX_AUTH_PLAINTEXT)) {
-		/* They've provided a plain text password and we support that */
-		if (strcmp(secret, p->secret)) {
-			if (authdebug)
-				ast_log(LOG_NOTICE, "Host %s did not provide proper plaintext password for '%s'\n", ast_inet_ntoa(iabuf, sizeof(iabuf), sin->sin_addr), p->name);
-			if (ast_test_flag(p, IAX_TEMPONLY))
-				destroy_peer(p);
-			return -1;
-		} else
-			ast_set_flag(&iaxs[callno]->state, IAX_STATE_AUTHENTICATED);
 	} else if (!ast_strlen_zero(md5secret) && (p->authmethods & IAX_AUTH_MD5) && !ast_strlen_zero(iaxs[callno]->challenge)) {
 		struct MD5Context md5;
 		unsigned char digest[16];
@@ -5088,6 +5081,16 @@ static int register_verify(int callno, struct sockaddr_in *sin, struct iax_ies *
 				destroy_peer(p);
 			return -1;
 		}
+	} else if (!ast_strlen_zero(secret) && (p->authmethods & IAX_AUTH_PLAINTEXT)) {
+		/* They've provided a plain text password and we support that */
+		if (strcmp(secret, p->secret)) {
+			if (authdebug)
+				ast_log(LOG_NOTICE, "Host %s did not provide proper plaintext password for '%s'\n", ast_inet_ntoa(iabuf, sizeof(iabuf), sin->sin_addr), p->name);
+			if (ast_test_flag(p, IAX_TEMPONLY))
+				destroy_peer(p);
+			return -1;
+		} else
+			ast_set_flag(&iaxs[callno]->state, IAX_STATE_AUTHENTICATED);
 	} else if (!ast_strlen_zero(md5secret) || !ast_strlen_zero(secret)) {
 		if (authdebug)
 			ast_log(LOG_NOTICE, "Inappropriate authentication received\n");
@@ -5446,7 +5449,6 @@ static int iax2_register(char *value, int lineno)
 	char *porta;
 	char *stringp=NULL;
 	
-	struct ast_hostent ahp; struct hostent *hp;
 	if (!value)
 		return -1;
 	ast_copy_string(copy, value, sizeof(copy));
@@ -5468,20 +5470,18 @@ static int iax2_register(char *value, int lineno)
 		ast_log(LOG_WARNING, "%s is not a valid port number at line %d\n", porta, lineno);
 		return -1;
 	}
-	hp = ast_gethostbyname(hostname, &ahp);
-	if (!hp) {
-		ast_log(LOG_WARNING, "Host '%s' not found at line %d\n", hostname, lineno);
-		return -1;
-	}
 	if (!(reg = ast_calloc(1, sizeof(*reg))))
 		return -1;
+	if (ast_dnsmgr_lookup(hostname, &reg->addr.sin_addr, &reg->dnsmgr) < 0) {
+		free(reg);
+		return -1;
+	}
 	ast_copy_string(reg->username, username, sizeof(reg->username));
 	if (secret)
 		ast_copy_string(reg->secret, secret, sizeof(reg->secret));
 	reg->expire = -1;
 	reg->refresh = IAX_DEFAULT_REG_EXPIRE;
 	reg->addr.sin_family = AF_INET;
-	memcpy(&reg->addr.sin_addr, hp->h_addr, sizeof(&reg->addr.sin_addr));
 	reg->addr.sin_port = porta ? htons(atoi(porta)) : htons(IAX_DEFAULT_PORTNO);
 	reg->next = registrations;
 	reg->callno = 0;
@@ -5518,9 +5518,7 @@ static void __expire_registry(void *data)
 	AST_LIST_LOCK(&peers);
 	AST_LIST_TRAVERSE_SAFE_BEGIN(&peers, p, entry) {
 		if (!strcasecmp(p->name, name)) {
-			/* If we are set to auto clear then remove ourselves */
-			if (ast_test_flag(p, IAX_RTAUTOCLEAR))
-				AST_LIST_REMOVE_CURRENT(&peers, entry);
+			p->expire = -1;
 			break;
 		}
 	}
@@ -5545,16 +5543,13 @@ static void __expire_registry(void *data)
 		iax2_regfunk(p->name, 0);
 
 	if (ast_test_flag(p, IAX_RTAUTOCLEAR)) {
-		/* We are already gone from the list, so we can just destroy ourselves */
-		destroy_peer(p);
+		ast_set_flag(p, IAX_DELME);
+		prune_peers();
 	}
 }
 
 static int expire_registry(void *data)
 {
-	struct iax2_peer *p = data;
-	/* Reset expire notice */
-	p->expire = -1;
 #ifdef SCHED_MULTITHREADED
 	if (schedule_action(__expire_registry, data))
 #endif		
@@ -5817,11 +5812,9 @@ static int auth_fail(int callno, int failcode)
 	if (iaxs[callno]) {
 		iaxs[callno]->authfail = failcode;
 		if (delayreject) {
-			ast_mutex_lock(&iaxsl[callno]);
 			if (iaxs[callno]->authid > -1)
 				ast_sched_del(sched, iaxs[callno]->authid);
 			iaxs[callno]->authid = ast_sched_add(sched, 1000, auth_reject, (void *)(long)callno);
-			ast_mutex_unlock(&iaxsl[callno]);
 		} else
 			auth_reject((void *)(long)callno);
 	}
@@ -6315,27 +6308,39 @@ static int socket_process(struct iax2_thread *thread)
 	fd = thread->iofd;
 	memcpy(&sin, &thread->iosin, sizeof(sin));
 
-	if (res < sizeof(struct ast_iax2_mini_hdr)) {
-		ast_log(LOG_WARNING, "midget packet received (%d of %d min)\n", res, (int)sizeof(struct ast_iax2_mini_hdr));
+	if (res < sizeof(*mh)) {
+		ast_log(LOG_WARNING, "midget packet received (%d of %zd min)\n", res, sizeof(*mh));
 		return 1;
 	}
 	if ((vh->zeros == 0) && (ntohs(vh->callno) & 0x8000)) {
+		if (res < sizeof(*vh)) {
+			ast_log(LOG_WARNING, "Rejecting packet from '%s.%d' that is flagged as a video frame but is too short\n", ast_inet_ntoa(iabuf, sizeof(iabuf), sin.sin_addr), ntohs(sin.sin_port));
+			return 1;
+		}
+
 		/* This is a video frame, get call number */
 		fr->callno = find_callno(ntohs(vh->callno) & ~0x8000, dcallno, &sin, new, 1, fd);
 		minivid = 1;
-	} else if (meta->zeros == 0) {
+	} else if ((meta->zeros == 0) && !(ntohs(meta->metacmd) & 0x8000)) {
 		unsigned char metatype;
+
+		if (res < sizeof(*meta)) {
+			ast_log(LOG_WARNING, "Rejecting packet from '%s.%d' that is flagged as a meta frame but is too short\n", ast_inet_ntoa(iabuf, sizeof(iabuf), sin.sin_addr), ntohs(sin.sin_port));
+			return 1;
+		}
+
 		/* This is a meta header */
 		switch(meta->metacmd) {
 		case IAX_META_TRUNK:
-			if (res < sizeof(struct ast_iax2_meta_hdr) + sizeof(struct ast_iax2_meta_trunk_hdr)) {
-				ast_log(LOG_WARNING, "midget meta trunk packet received (%d of %d min)\n", res, (int)sizeof(struct ast_iax2_mini_hdr));
+			if (res < (sizeof(*meta) + sizeof(*mth))) {
+				ast_log(LOG_WARNING, "midget meta trunk packet received (%d of %zd min)\n", res,
+					sizeof(*meta) + sizeof(*mth));
 				return 1;
 			}
 			mth = (struct ast_iax2_meta_trunk_hdr *)(meta->data);
 			ts = ntohl(mth->ts);
 			metatype = meta->cmddata;
-			res -= (sizeof(struct ast_iax2_meta_hdr) + sizeof(struct ast_iax2_meta_trunk_hdr));
+			res -= (sizeof(*meta) + sizeof(*mth));
 			ptr = mth->data;
 			tpeer = find_tpeer(&sin, fd);
 			if (!tpeer) {
@@ -6347,21 +6352,21 @@ static int socket_process(struct iax2_thread *thread)
 				tpeer->rxtrunktime = tpeer->trunkact;
 			rxtrunktime = tpeer->rxtrunktime;
 			ast_mutex_unlock(&tpeer->lock);
-			while(res >= sizeof(struct ast_iax2_meta_trunk_entry)) {
+			while(res >= sizeof(*mte)) {
 				/* Process channels */
 				unsigned short callno, trunked_ts, len;
 
-				if(metatype == IAX_META_TRUNK_MINI) {
+				if (metatype == IAX_META_TRUNK_MINI) {
 					mtm = (struct ast_iax2_meta_trunk_mini *)ptr;
-					ptr += sizeof(struct ast_iax2_meta_trunk_mini);
-					res -= sizeof(struct ast_iax2_meta_trunk_mini);
+					ptr += sizeof(*mtm);
+					res -= sizeof(*mtm);
 					len = ntohs(mtm->len);
 					callno = ntohs(mtm->mini.callno);
 					trunked_ts = ntohs(mtm->mini.ts);
-				} else if ( metatype == IAX_META_TRUNK_SUPERMINI ) {
+				} else if (metatype == IAX_META_TRUNK_SUPERMINI) {
 					mte = (struct ast_iax2_meta_trunk_entry *)ptr;
-					ptr += sizeof(struct ast_iax2_meta_trunk_entry);
-					res -= sizeof(struct ast_iax2_meta_trunk_entry);
+					ptr += sizeof(*mte);
+					res -= sizeof(*mte);
 					len = ntohs(mte->len);
 					callno = ntohs(mte->callno);
 					trunked_ts = 0;
@@ -6406,9 +6411,9 @@ static int socket_process(struct iax2_thread *thread)
 									iax_frame_wrap(fr, &f);
 #ifdef BRIDGE_OPTIMIZATION
 									if (iaxs[fr->callno]->bridgecallno) {
-										forward_delivery(&fr);
+										forward_delivery(fr);
 									} else {
-										duped_fr = iaxfrdup2(&fr);
+										duped_fr = iaxfrdup2(fr);
 										if (duped_fr) {
 											schedule_delivery(duped_fr, updatehistory, 1, &fr->ts);
 										}
@@ -6444,11 +6449,17 @@ static int socket_process(struct iax2_thread *thread)
 		}
 		return 1;
 	}
+
 #ifdef DEBUG_SUPPORT
-	if (iaxdebug)
-		iax_showframe(NULL, fh, 1, &sin, res - sizeof(struct ast_iax2_full_hdr));
+	if (iaxdebug && (res >= sizeof(*fh)))
+		iax_showframe(NULL, fh, 1, &sin, res - sizeof(*fh));
 #endif
 	if (ntohs(mh->callno) & IAX_FLAG_FULL) {
+		if (res < sizeof(*fh)) {
+			ast_log(LOG_WARNING, "Rejecting packet from '%s.%d' that is flagged as a full frame but is too short\n", ast_inet_ntoa(iabuf, sizeof(iabuf), sin.sin_addr), ntohs(sin.sin_port));
+			return 1;
+		}
+
 		/* Get the destination call number */
 		dcallno = ntohs(fh->dcallno) & ~IAX_FLAG_RETRANS;
 		/* Retrieve the type and subclass */
@@ -6499,7 +6510,7 @@ static int socket_process(struct iax2_thread *thread)
 		}
 #ifdef DEBUG_SUPPORT
 		else if (iaxdebug)
-			iax_showframe(NULL, fh, 3, &sin, res - sizeof(struct ast_iax2_full_hdr));
+			iax_showframe(NULL, fh, 3, &sin, res - sizeof(*fh));
 #endif
 	}
 
@@ -6584,12 +6595,12 @@ static int socket_process(struct iax2_thread *thread)
 				iaxs[fr->callno]->iseqno++;
 		}
 		/* A full frame */
-		if (res < sizeof(struct ast_iax2_full_hdr)) {
-			ast_log(LOG_WARNING, "midget packet received (%d of %d min)\n", res, (int)sizeof(struct ast_iax2_full_hdr));
+		if (res < sizeof(*fh)) {
+			ast_log(LOG_WARNING, "midget packet received (%d of %zd min)\n", res, sizeof(*fh));
 			ast_mutex_unlock(&iaxsl[fr->callno]);
 			return 1;
 		}
-		f.datalen = res - sizeof(struct ast_iax2_full_hdr);
+		f.datalen = res - sizeof(*fh);
 
 		/* Handle implicit ACKing unless this is an INVAL, and only if this is 
 		   from the real peer, not the transfer peer */
@@ -6647,14 +6658,14 @@ static int socket_process(struct iax2_thread *thread)
 
 		if (f.datalen) {
 			if (f.frametype == AST_FRAME_IAX) {
-				if (iax_parse_ies(&ies, thread->buf + sizeof(struct ast_iax2_full_hdr), f.datalen)) {
+				if (iax_parse_ies(&ies, thread->buf + sizeof(*fh), f.datalen)) {
 					ast_log(LOG_WARNING, "Undecodable frame received from '%s'\n", ast_inet_ntoa(iabuf, sizeof(iabuf), sin.sin_addr));
 					ast_mutex_unlock(&iaxsl[fr->callno]);
 					return 1;
 				}
 				f.data = NULL;
 			} else
-				f.data = thread->buf + sizeof(struct ast_iax2_full_hdr);
+				f.data = thread->buf + sizeof(*fh);
 		} else {
 			if (f.frametype == AST_FRAME_IAX)
 				f.data = NULL;
@@ -7558,9 +7569,9 @@ retryowner2:
 			ast_mutex_unlock(&iaxsl[fr->callno]);
 			return 1;
 		}
-		f.datalen = res - sizeof(struct ast_iax2_video_hdr);
+		f.datalen = res - sizeof(*vh);
 		if (f.datalen)
-			f.data = thread->buf + sizeof(struct ast_iax2_video_hdr);
+			f.data = thread->buf + sizeof(*vh);
 		else
 			f.data = NULL;
 #ifdef IAXTESTS
@@ -7587,7 +7598,7 @@ retryowner2:
 			return 1;
 		}
 		if (f.datalen)
-			f.data = thread->buf + sizeof(struct ast_iax2_mini_hdr);
+			f.data = thread->buf + sizeof(*mh);
 		else
 			f.data = NULL;
 #ifdef IAXTESTS
@@ -7627,9 +7638,9 @@ retryowner2:
 	}
 #ifdef BRIDGE_OPTIMIZATION
 	if (iaxs[fr->callno]->bridgecallno) {
-		forward_delivery(&fr);
+		forward_delivery(fr);
 	} else {
-		duped_fr = iaxfrdup2(&fr);
+		duped_fr = iaxfrdup2(fr);
 		if (duped_fr) {
 			schedule_delivery(duped_fr, updatehistory, 0, &fr->ts);
 		}
@@ -7742,6 +7753,31 @@ static int iax2_do_register(struct iax2_registry *reg)
 	struct iax_ie_data ied;
 	if (option_debug && iaxdebug)
 		ast_log(LOG_DEBUG, "Sending registration request for '%s'\n", reg->username);
+
+	if (reg->dnsmgr && 
+	    ((reg->regstate == REG_STATE_TIMEOUT) || !reg->addr.sin_addr.s_addr)) {
+		/* Maybe the IP has changed, force DNS refresh */
+		ast_dnsmgr_refresh(reg->dnsmgr);
+	}
+	
+	/*
+	 * if IP has Changed, free allocated call to create a new one with new IP
+	 * call has the pointer to IP and must be updated to the new one
+	 */
+	if (reg->dnsmgr && ast_dnsmgr_changed(reg->dnsmgr) && (reg->callno > 0)) {
+		iax2_destroy(reg->callno);
+		reg->callno = 0;
+	}
+	if (!reg->addr.sin_addr.s_addr) {
+		if (option_debug && iaxdebug)
+			ast_log(LOG_DEBUG, "Unable to send registration request for '%s' without IP address\n", reg->username);
+		/* Setup the next registration attempt */
+		if (reg->expire > -1)
+			ast_sched_del(sched, reg->expire);
+		reg->expire  = ast_sched_add(sched, (5 * reg->refresh / 6) * 1000, iax2_do_register_s, reg);
+		return -1;
+	}
+
 	if (!reg->callno) {
 		if (option_debug)
 			ast_log(LOG_DEBUG, "Allocate call number\n");
@@ -8634,6 +8670,8 @@ static void delete_users(void)
 			}
 			ast_mutex_unlock(&iaxsl[regl->callno]);
 		}
+		if (regl->dnsmgr)
+			ast_dnsmgr_release(regl->dnsmgr);
 		free(regl);
 	}
 	registrations = NULL;
@@ -9399,7 +9437,9 @@ static int function_iaxpeer(struct ast_channel *chan, char *cmd, char *data, cha
 		return 0;
 	}
 
-	if ((colname = strchr(peername, ':')))
+	if ((colname = strchr(peername, ':')))	/*! \todo : will be removed after the 1.4 relese */
+		*colname++ = '\0';
+	else if ((colname = strchr(peername, '|')))
 		*colname++ = '\0';
 	else
 		colname = "ip";
@@ -9447,7 +9487,7 @@ static int function_iaxpeer(struct ast_channel *chan, char *cmd, char *data, cha
 struct ast_custom_function iaxpeer_function = {
 	.name = "IAXPEER",
 	.synopsis = "Gets IAX peer information",
-	.syntax = "IAXPEER(<peername|CURRENTCHANNEL>[:item])",
+	.syntax = "IAXPEER(<peername|CURRENTCHANNEL>[|item])",
 	.read = function_iaxpeer,
 	.desc = "If peername specified, valid items are:\n"
 	"- ip (default)          The IP address.\n"
@@ -9469,51 +9509,39 @@ struct ast_custom_function iaxpeer_function = {
 /*! \brief Part of the device state notification system ---*/
 static int iax2_devicestate(void *data) 
 {
-	char *dest = (char *) data;
+	struct parsed_dial_string pds;
+	char *tmp = ast_strdupa(data);
 	struct iax2_peer *p;
-	int found = 0;
-	char *ext, *host;
-	char tmp[256];
 	int res = AST_DEVICE_INVALID;
 
-	ast_copy_string(tmp, dest, sizeof(tmp));
-	host = strchr(tmp, '@');
-	if (host) {
-		*host = '\0';
-		host++;
-		ext = tmp;
-	} else {
-		host = tmp;
-		ext = NULL;
-	}
-
+	parse_dial_string(tmp, &pds);
+	if (ast_strlen_zero(pds.peer))
+		return res;
+	
 	if (option_debug > 2)
-		ast_log(LOG_DEBUG, "Checking device state for device %s\n", dest);
+		ast_log(LOG_DEBUG, "Checking device state for device %s\n", pds.peer);
 
 	/* SLD: FIXME: second call to find_peer during registration */
-	p = find_peer(host, 1);
-	if (p) {
-		found++;
-		res = AST_DEVICE_UNAVAILABLE;
-		if (option_debug > 2) 
-			ast_log(LOG_DEBUG, "iax2_devicestate(%s): Found peer. What's device state of %s? addr=%d, defaddr=%d maxms=%d, lastms=%d\n",
-				host, dest, p->addr.sin_addr.s_addr, p->defaddr.sin_addr.s_addr, p->maxms, p->lastms);
+	if (!(p = find_peer(pds.peer, 1)))
+		return res;
 
-		if ((p->addr.sin_addr.s_addr || p->defaddr.sin_addr.s_addr) &&
-		    (!p->maxms || ((p->lastms > -1) && (p->historicms <= p->maxms)))) {
-			/* Peer is registered, or have default IP address
-			   and a valid registration */
-			if (p->historicms == 0 || p->historicms <= p->maxms)
-				/* let the core figure out whether it is in use or not */
-				res = AST_DEVICE_UNKNOWN;	
-		}
-	} else {
-		if (option_debug > 2) 
-			ast_log(LOG_DEBUG, "Devicestate: Can't find peer %s.\n", host);
-	}
+	res = AST_DEVICE_UNAVAILABLE;
+	if (option_debug > 2) 
+		ast_log(LOG_DEBUG, "iax2_devicestate: Found peer. What's device state of %s? addr=%d, defaddr=%d maxms=%d, lastms=%d\n",
+			pds.peer, p->addr.sin_addr.s_addr, p->defaddr.sin_addr.s_addr, p->maxms, p->lastms);
 	
-	if (p && ast_test_flag(p, IAX_TEMPONLY))
+	if ((p->addr.sin_addr.s_addr || p->defaddr.sin_addr.s_addr) &&
+	    (!p->maxms || ((p->lastms > -1) && (p->historicms <= p->maxms)))) {
+		/* Peer is registered, or have default IP address
+		   and a valid registration */
+		if (p->historicms == 0 || p->historicms <= p->maxms)
+			/* let the core figure out whether it is in use or not */
+			res = AST_DEVICE_UNKNOWN;	
+	}
+
+	if (ast_test_flag(p, IAX_TEMPONLY))
 		destroy_peer(p);
+
 	return res;
 }
 

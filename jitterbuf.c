@@ -6,7 +6,8 @@
  * Contributors:
  * Steve Kann <stevek@stevek.com>
  *
- * Copyright on this file is disclaimed to Digium for inclusion in Asterisk
+ * A license has been granted to Digium (via disclaimer) for the use of
+ * this code.
  *
  * See http://www.asterisk.org for more information about
  * the Asterisk project. Please do not directly contact
@@ -26,14 +27,14 @@
  *
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
-#include <sys/types.h>
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/types.h>
 
 #include "jitterbuf.h"
 #include "asterisk/utils.h"

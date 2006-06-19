@@ -16,7 +16,7 @@
  * at the top of the source tree.
  */
 
-/*
+/*!
  * \file
  *
  * \author Russell Bryant <russell@digium.com>
@@ -24,7 +24,7 @@
  * \brief A menu-driven system for Asterisk module selection
  */
 
-#include "autoconfig.h"
+#include "asterisk.h"
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -34,25 +34,9 @@
 #include "mxml/mxml.h"
 #include "menuselect.h"
 
-#include "asterisk.h"
-
 #include "asterisk/linkedlists.h"
 
 #undef MENUSELECT_DEBUG
-
-struct depend {
-	/*! the name of the dependency */
-	const char *name;
-	/*! for linking */
-	AST_LIST_ENTRY(depend) list;
-};
-
-struct conflict {
-	/*! the name of the conflict */
-	const char *name;
-	/*! for linking */
-	AST_LIST_ENTRY(conflict) list;
-};
 
 /*! The list of categories */
 struct categories categories = AST_LIST_HEAD_NOLOCK_INIT_VALUE;
@@ -711,14 +695,6 @@ int main(int argc, char *argv[])
 	/* free everything we allocated */
 	free_trees();
 	free_member_list();
-
-	if (check_deps && !existing_config && !res) {
-		fprintf(stderr, "\n***********************************************************\n");
-		fprintf(stderr, "* menuselect.makeopts file generated with default values! *\n");
-		fprintf(stderr, "* Please rerun make to build Asterisk.                    *\n");
-		fprintf(stderr, "***********************************************************\n\n");
-		res = -1;
-	}
 
 	/* In some cases, such as modifying the CFLAGS for the build,
 	 * a "make clean" needs to be forced.  Removing the .lastclean 

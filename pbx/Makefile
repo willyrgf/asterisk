@@ -11,13 +11,17 @@
 # the GNU General Public License
 #
 
-MODS:=$(filter-out $(MENUSELECT_PBX),$(patsubst %.c,%.so,$(wildcard pbx_*.c)))
+include ../menuselect.makeopts
+
+SELECTED_MODS:=$(filter-out $(MENUSELECT_PBX),$(patsubst %.c,%,$(wildcard pbx_*.c)))
 
 MOC=$(QTDIR)/bin/moc
 KDE_FLAGS=-I$(KDEDIR)/include -I$(KDEDIR)/include/kde -I$(QTDIR)/include
 KDE_LIBS=-L$(KDEDIR)/lib -L$(QTDIR)/lib -lqt -lkdecore -lkdeui
 
 KDE_CONSOLE_OBJS=pbx_kdeconsole_main.o pbx_kdeconsole.o 
+
+MODS:=$(patsubst %,%.so,$(SELECTED_MODS))
 
 all: depend $(MODS)
 
@@ -61,7 +65,7 @@ ael/aelbison.o: ael/ael.tab.c ael/ael.tab.h ../include/asterisk/ael_structs.h
 	$(CC) $(CFLAGS) -I. -c -o ael/aelbison.o ael/ael.tab.c
 
 ael/ael_lex.c:
-	(cd ael; flex ael.flex)
+	(cd ael; flex ael.flex; sed -i -e "/begin standard C headers/i#include \"asterisk.h\"" ael_lex.c)
 
 ael/ael.tab.c ael/ael.tab.h:
 	(cd ael; bison -v -d ael.y)

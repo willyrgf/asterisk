@@ -31,6 +31,10 @@
 	<depend>asound</depend>
  ***/
 
+#include "asterisk.h"
+
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -44,10 +48,6 @@
 #define ALSA_PCM_NEW_SW_PARAMS_API
 #include <alsa/asoundlib.h>
 
-#include "asterisk.h"
-
-ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
-
 #include "asterisk/frame.h"
 #include "asterisk/logger.h"
 #include "asterisk/channel.h"
@@ -60,6 +60,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/causes.h"
 #include "asterisk/endian.h"
 #include "asterisk/stringfields.h"
+#include "asterisk/abstract_jb.h"
 
 #include "busy.h"
 #include "ringtone.h"
@@ -69,6 +70,16 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #ifdef ALSA_MONITOR
 #include "alsa-monitor.h"
 #endif
+
+/*! Global jitterbuffer configuration - by default, jb is disabled */
+static struct ast_jb_conf default_jbconf =
+{
+	.flags = 0,
+	.max_size = -1,
+	.resync_threshold = -1,
+	.impl = ""
+};
+static struct ast_jb_conf global_jbconf;
 
 #define DEBUG 0
 /* Which device to use */
@@ -812,6 +823,8 @@ static struct ast_channel *alsa_new(struct chan_alsa_pvt *p, int state)
 				tmp = NULL;
 			}
 		}
+		if (tmp)
+			ast_jb_configure(tmp, &global_jbconf);
 	}
 	return tmp;
 }
@@ -1051,9 +1064,18 @@ static int load_module(void *mod)
 	int x;
 	struct ast_config *cfg;
 	struct ast_variable *v;
+
+	/* Copy the default jb config over global_jbconf */
+	memcpy(&global_jbconf, &default_jbconf, sizeof(struct ast_jb_conf));
+
 	if ((cfg = ast_config_load(config))) {
 		v = ast_variable_browse(cfg, "general");
 		while(v) {
+			/* handle jb conf */
+			if (!ast_jb_read_conf(&global_jbconf, v->name, v->value)) {
+				v = v->next;
+				continue;
+			}
 			if (!strcasecmp(v->name, "autoanswer"))
 				autoanswer = ast_true(v->value);
 			else if (!strcasecmp(v->name, "silencesuppression"))

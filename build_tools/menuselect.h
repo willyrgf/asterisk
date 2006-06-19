@@ -31,8 +31,19 @@
 #define OUTPUT_MAKEOPTS_DEFAULT "menuselect.makeopts"
 #define MENUSELECT_DEPS         "build_tools/menuselect-deps"
 
-struct depend;
-struct conflict;
+struct depend {
+	/*! the name of the dependency */
+	const char *name;
+	/*! for linking */
+	AST_LIST_ENTRY(depend) list;
+};
+
+struct conflict {
+	/*! the name of the conflict */
+	const char *name;
+	/*! for linking */
+	AST_LIST_ENTRY(conflict) list;
+};
 
 struct member {
 	/*! What will be sent to the makeopts file */
@@ -42,11 +53,11 @@ struct member {
 	/*! Default setting */
 	const char *defaultenabled;
 	/*! This module is currently selected */
-	int enabled;
+	unsigned int enabled:1;
 	/*! This module has failed dependencies */
-	int depsfailed;
+	unsigned int depsfailed:1;
 	/*! This module has failed conflicts */
-	int conflictsfailed;
+	unsigned int conflictsfailed:1;
 	/*! dependencies of this module */
 	AST_LIST_HEAD_NOLOCK(, depend) deps;
 	/*! conflicts of this module */
@@ -61,9 +72,9 @@ struct category {
 	/*! the name displayed in the menu */
 	const char *displayname;
 	/*! Display what is selected, as opposed to not selected */
-	int positive_output;
+	unsigned int positive_output:1;
 	/*! Force a clean of the source tree if anything in this category changes */
-	int force_clean_on_change;
+	unsigned int force_clean_on_change:1;
 	/*! the list of possible values to be set in this variable */
 	AST_LIST_HEAD_NOLOCK(, member) members;
 	/*! for linking */

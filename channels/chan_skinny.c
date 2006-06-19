@@ -25,6 +25,10 @@
  */
 
 
+#include "asterisk.h"
+
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -41,10 +45,6 @@
 #include <sys/signal.h>
 #include <signal.h>
 #include <ctype.h>
-
-#include "asterisk.h"
-
-ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/lock.h"
 #include "asterisk/channel.h"
@@ -69,6 +69,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/utils.h"
 #include "asterisk/dsp.h"
 #include "asterisk/stringfields.h"
+#include "asterisk/abstract_jb.h"
 
 /*************************************
  * Skinny/Asterisk Protocol Settings *
@@ -116,6 +117,15 @@ typedef unsigned int	UINT32;
 #define htoles(x) __bswap_16(x)
 #endif
 
+/*! Global jitterbuffer configuration - by default, jb is disabled */
+static struct ast_jb_conf default_jbconf =
+{
+	.flags = 0,
+	.max_size = -1,
+	.resync_threshold = -1,
+	.impl = ""
+};
+static struct ast_jb_conf global_jbconf;
 
 /*********************
  * Protocol Messages *
@@ -909,7 +919,7 @@ static const struct ast_channel_tech skinny_tech = {
 	.type = "Skinny",
 	.description = tdesc,
 	.capabilities = AST_FORMAT_ULAW,
-	.properties = AST_CHAN_TP_WANTSJITTER,
+	.properties = AST_CHAN_TP_WANTSJITTER | AST_CHAN_TP_CREATESJITTER,
 	.requester = skinny_request,
 	.call = skinny_call,
 	.hangup = skinny_hangup,
@@ -2292,6 +2302,10 @@ static struct ast_channel *skinny_new(struct skinny_subchannel *sub, int state)
 				tmp = NULL;
 			}
 		}
+
+		/* Configure the new channel jb */
+		if (tmp && sub && sub->rtp)
+			ast_jb_configure(tmp, &global_jbconf);
 	} else {
 		ast_log(LOG_WARNING, "Unable to allocate channel structure\n");
 	}
@@ -3094,10 +3108,20 @@ static int reload_config(void)
 		ast_log(LOG_NOTICE, "Unable to load config %s, Skinny disabled\n", config);
 		return 0;
 	}
-	/* load the general section */
 	memset(&bindaddr, 0, sizeof(bindaddr));
+
+	/* Copy the default jb config over global_jbconf */
+	memcpy(&global_jbconf, &default_jbconf, sizeof(struct ast_jb_conf));
+
+	/* load the general section */
 	v = ast_variable_browse(cfg, "general");
-	while(v) {
+	while (v) {
+		/* handle jb conf */
+		if (!ast_jb_read_conf(&global_jbconf, v->name, v->value)) {
+			v = v->next;
+			continue;
+		}
+
 		/* Create the interface list */
 		if (!strcasecmp(v->name, "bindaddr")) {
 			if (!(hp = ast_gethostbyname(v->value, &ahp))) {

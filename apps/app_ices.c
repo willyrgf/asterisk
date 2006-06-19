@@ -25,6 +25,10 @@
  * \ingroup applications
  */
  
+#include "asterisk.h"
+
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
 #include <string.h>
 #include <stdio.h>
 #include <signal.h>
@@ -33,10 +37,6 @@
 #include <fcntl.h>
 #include <sys/time.h>
 #include <errno.h>
-
-#include "asterisk.h"
-
-ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/lock.h"
 #include "asterisk/file.h"
@@ -173,6 +173,7 @@ static int ices_exec(struct ast_channel *chan, void *data)
 					if (errno != EAGAIN) {
 						ast_log(LOG_WARNING, "Write failed to pipe: %s\n", strerror(errno));
 						res = -1;
+						ast_frfree(f);
 						break;
 					}
 				}

@@ -29,6 +29,9 @@
 	<depend>iksemel</depend>
  ***/
 
+#include "asterisk.h"
+
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -44,9 +47,6 @@
 #include <sys/signal.h>
 #include <iksemel.h>
 
-#include "asterisk.h"
-
-ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/lock.h"
 #include "asterisk/channel.h"
 #include "asterisk/config.h"
@@ -69,10 +69,21 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/utils.h"
 #include "asterisk/causes.h"
 #include "asterisk/astobj.h"
+#include "asterisk/abstract_jb.h"
 #include "asterisk/jabber.h"
 #include "asterisk/jingle.h"
 
 #define JINGLE_CONFIG "jingle.conf"
+
+/*! Global jitterbuffer configuration - by default, jb is disabled */
+static struct ast_jb_conf default_jbconf =
+{
+	.flags = 0,
+	.max_size = -1,
+	.resync_threshold = -1,
+	.impl = ""
+};
+static struct ast_jb_conf global_jbconf;
 
 enum jingle_protocol {
 	AJI_PROTOCOL_UDP = 1,
@@ -161,9 +172,6 @@ static int global_capability = AST_FORMAT_ULAW | AST_FORMAT_ALAW | AST_FORMAT_GS
 /* Protect the interface list (of sip_pvt's) */
 AST_MUTEX_DEFINE_STATIC(jinglelock);
 
-AST_MUTEX_DEFINE_STATIC(rand_lock);	/*!< Lock for thread-safe random generator */
-
-
 static struct ast_channel *jingle_request(const char *type, int format, void *data, int *cause);
 static int jingle_digit(struct ast_channel *ast, char digit);
 static int jingle_call(struct ast_channel *ast, char *dest, int timeout);
@@ -194,6 +202,7 @@ static const struct ast_channel_tech jingle_tech = {
 	.indicate = jingle_indicate,
 	.fixup = jingle_fixup,
 	.send_html = jingle_sendhtml,
+	.properties = AST_CHAN_TP_WANTSJITTER | AST_CHAN_TP_CREATESJITTER
 };
 
 static struct sockaddr_in bindaddr = { 0, };	/*!< The address we bind to */
@@ -214,9 +223,9 @@ static struct ast_rtp_protocol jingle_rtp = {
 	get_codec: jingle_get_codec,
 };
 
-char externip[16];
+static char externip[16];
 
-struct jingle_container jingles;
+static struct jingle_container jingles;
 
 static void jingle_member_destroy(struct jingle *obj)
 {
@@ -393,17 +402,6 @@ static int jingle_answer(struct ast_channel *ast)
 	return res;
 }
 
-static force_inline int thread_safe_rand(void)
-{
-	int val;
-
-	ast_mutex_lock(&rand_lock);
-	val = rand();
-	ast_mutex_unlock(&rand_lock);
-
-	return val;
-}
-
 static struct ast_rtp *jingle_get_rtp_peer(struct ast_channel *chan)
 {
 	struct jingle_pvt *p;
@@ -567,8 +565,8 @@ static int jingle_create_candidates(struct jingle *client, struct jingle_pvt *p,
 	ast_copy_string(ours1->name, "rtp", sizeof(ours1->name));
 	ours1->port = ntohs(sin.sin_port);
 	ours1->preference = 1;
-	snprintf(user, sizeof(user), "%08x%08x", thread_safe_rand(), thread_safe_rand());
-	snprintf(pass, sizeof(pass), "%08x%08x", thread_safe_rand(), thread_safe_rand());
+	snprintf(user, sizeof(user), "%08lx%08lx", ast_random(), ast_random());
+	snprintf(pass, sizeof(pass), "%08lx%08lx", ast_random(), ast_random());
 	ast_copy_string(ours1->username, user, sizeof(ours1->username));
 	ast_copy_string(ours1->password, pass, sizeof(ours1->password));
 	ast_inet_ntoa(ours1->ip, sizeof(ours1->ip), us);
@@ -579,8 +577,8 @@ static int jingle_create_candidates(struct jingle *client, struct jingle_pvt *p,
 
 	if (!ast_strlen_zero(externip)) {
 		/* XXX We should really stun for this one not just go with externip XXX */
-		snprintf(user, sizeof(user), "%08x%08x", thread_safe_rand(), thread_safe_rand());
-		snprintf(pass, sizeof(pass), "%08x%08x", thread_safe_rand(), thread_safe_rand());
+		snprintf(user, sizeof(user), "%08lx%08lx", ast_random(), ast_random());
+		snprintf(pass, sizeof(pass), "%08lx%08lx", ast_random(), ast_random());
 		ast_copy_string(ours2->username, user, sizeof(ours2->username));
 		ast_copy_string(ours2->password, pass, sizeof(ours2->password));
 		ast_copy_string(ours2->ip, externip, sizeof(ours2->ip));
@@ -786,6 +784,11 @@ static struct ast_channel *jingle_new(struct jingle *client, struct jingle_pvt *
 		ast_hangup(tmp);
 		tmp = NULL;
 	}
+
+	/* Configure the new channel jb */
+	if (tmp && i && i->rtp)
+		ast_jb_configure(tmp, &global_jbconf);
+
 	return tmp;
 }
 
@@ -1466,8 +1469,15 @@ static int jingle_load_config(void)
 		return 0;
 	}
 
+	/* Copy the default jb config over global_jbconf */
+	memcpy(&global_jbconf, &default_jbconf, sizeof(struct ast_jb_conf));
+
 	cat = ast_category_browse(cfg, NULL);
 	for (var = ast_variable_browse(cfg, "general"); var; var = var->next) {
+		/* handle jb conf */
+		if (!ast_jb_read_conf(&global_jbconf, var->name, var->value))
+			continue;
+
 		if (!strcasecmp(var->name, "allowguest"))
 			allowguest =
 				(ast_true(ast_variable_retrieve(cfg, "general", "allowguest"))) ? 1 : 0;

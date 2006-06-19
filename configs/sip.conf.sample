@@ -151,6 +151,13 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ; separated by '&'.  Patterns may be used in regexten.
 ;
 ;regcontext=sipregistrations
+;----------------------------------------- T.38 FAX PASSTHROUGH SUPPORT -----------------------
+;
+; These settings are available in the [general] section as well as in device configurations
+;
+; t38pt_udptl = yes            ; Default false
+; t38pt_rtp = yes              ; Default false
+; t38pt_tcp = yes              ; Default false, not yet used
 ;
 ;----------------------------------------- OUTBOUND SIP REGISTRATIONS  ------------------------
 ; Asterisk can register as a SIP user agent to a SIP proxy (provider)
@@ -302,6 +309,32 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
                           ; destinations which do not have a prior
                           ; account relationship with your server. 
 
+;------------------------------ JITTER BUFFER CONFIGURATION --------------------------
+; jbenable = yes              ; Enables the use of a jitterbuffer on the receiving side of a
+                              ; SIP channel. Defaults to "no". An enabled jitterbuffer will
+                              ; be used only if the sending side can create and the receiving
+                              ; side can not accept jitter. The SIP channel can accept jitter,
+                              ; thus a jitterbuffer on the receive SIP side will be used only
+                              ; if it is forced and enabled.
+
+; jbforce = no                ; Forces the use of a jitterbuffer on the receive side of a SIP
+                              ; channel. Defaults to "no".
+
+; jbmaxsize = 200             ; Max length of the jitterbuffer in milliseconds.
+
+; jbresyncthreshold = 1000    ; Jump in the frame timestamps over which the jitterbuffer is
+                              ; resynchronized. Useful to improve the quality of the voice, with
+                              ; big jumps in/broken timestamps, usualy sent from exotic devices
+                              ; and programs. Defaults to 1000.
+
+; jbimpl = fixed              ; Jitterbuffer implementation, used on the receiving side of a SIP
+                              ; channel. Two implementations are currenlty available - "fixed"
+                              ; (with size always equals to jbmaxsize) and "adaptive" (with
+                              ; variable size, actually the new jb of IAX2). Defaults to fixed.
+
+; jblog = no                  ; Enables jitterbuffer frame logging. Defaults to "no".
+;-----------------------------------------------------------------------------------
+
 [authentication]
 ; Global credentials for outbound calls, i.e. when a proxy challenges your
 ; Asterisk server for authentication. These credentials override
@@ -434,7 +467,6 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ;allow=alaw
 ;allow=g723.1			; Asterisk only supports g723.1 pass-thru!
 ;allow=g729			; Pass-thru only unless g729 license obtained
-;astdb=chan2ext/SIP/grandstream1=1234	; ensures an astDB entry exists
 ;callingpres=allowed_passed_screen	; Set caller ID presentation
 				; See README.callingpres for more information
 

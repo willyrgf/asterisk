@@ -21,8 +21,13 @@
  * \brief Save to raw, headerless h263 data.
  * \arg File name extension: h263
  * \ingroup formats
+ * \arg See \ref AstVideo
  */
  
+#include "asterisk.h"
+
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
 #include <unistd.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -31,10 +36,6 @@
 #include <stdio.h>
 #include <errno.h>
 #include <string.h>
-
-#include "asterisk.h"
-
-ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/lock.h"
 #include "asterisk/channel.h"

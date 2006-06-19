@@ -19,7 +19,8 @@
  *
  * This version may be optionally licenced under the GNU LGPL licence.
  *
- * This version is disclaimed to DIGIUM for inclusion in the Asterisk project.
+ * A license has been granted to Digium (via disclaimer) for the use of
+ * this code.
  */
 
 /*! \file
@@ -29,15 +30,14 @@
  * \author Steve Underwood <steveu@coppice.org>
  */
 
+#include "asterisk.h"
+
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include <limits.h>
-
-#include "asterisk.h"
-
-ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/plc.h"
 

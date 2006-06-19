@@ -25,6 +25,10 @@
  * \ingroup channel_drivers
  */
 
+#include "asterisk.h"
+
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -36,10 +40,6 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/signal.h>
-
-#include "asterisk.h"
-
-ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/lock.h"
 #include "asterisk/channel.h"
@@ -134,9 +134,9 @@ static int local_devicestate(void *data)
 		ast_log(LOG_DEBUG, "Checking if extension %s@%s exists (devicestate)\n", exten, context);
 	res = ast_exists_extension(NULL, context, exten, 1, NULL);
 	if (!res)
-		return AST_DEVICE_NOT_INUSE;
+		return AST_DEVICE_INVALID;
 	else
-		return AST_DEVICE_INUSE;
+		return AST_DEVICE_UNKNOWN;
 }
 
 static int local_queue_frame(struct local_pvt *p, int isoutbound, struct ast_frame *f, struct ast_channel *us)
@@ -211,7 +211,13 @@ static void check_bridge(struct local_pvt *p, int isoutbound)
 		return;
 	if (!p->chan || !p->owner)
 		return;
-	if (isoutbound&& p->chan->_bridge /* Not ast_bridged_channel!  Only go one step! */ && !p->owner->readq) {
+
+	/* only do the masquerade if we are being called on the outbound channel,
+	   if it has been bridged to another channel and if there are no pending
+	   frames on the owner channel (because they would be transferred to the
+	   outbound channel during the masquerade)
+	*/
+	if (isoutbound && p->chan->_bridge /* Not ast_bridged_channel!  Only go one step! */ && !p->owner->readq) {
 		/* Masquerade bridged channel into owner */
 		/* Lock everything we need, one by one, and give up if
 		   we can't get everything.  Remember, we'll get another
@@ -228,6 +234,11 @@ static void check_bridge(struct local_pvt *p, int isoutbound)
 				ast_mutex_unlock(&(p->chan->_bridge)->lock);
 			}
 		}
+	/* We only allow masquerading in one 'direction'... it's important to preserve the state
+	   (group variables, etc.) that live on p->chan->_bridge (and were put there by the dialplan)
+	   when the local channels go away.
+	*/
+#if 0
 	} else if (!isoutbound && p->owner && p->owner->_bridge && p->chan && !p->chan->readq) {
 		/* Masquerade bridged channel into chan */
 		if (!ast_mutex_trylock(&(p->owner->_bridge)->lock)) {
@@ -242,6 +253,7 @@ static void check_bridge(struct local_pvt *p, int isoutbound)
 			}
 			ast_mutex_unlock(&(p->owner->_bridge)->lock);
 		}
+#endif
 	}
 }
 

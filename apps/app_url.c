@@ -25,13 +25,13 @@
  * \ingroup applications
  */
  
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
 
 #include "asterisk/lock.h"
 #include "asterisk/file.h"
@@ -143,6 +143,7 @@ static int sendurl_exec(struct ast_channel *chan, void *data)
 					if (local_option_jump || ast_opt_priority_jumping)
 			 			ast_goto_if_exists(chan, chan->context, chan->exten, chan->priority + 101);
 					res = 0;
+					ast_frfree(f);
 					goto out;
 					break;
 				default:

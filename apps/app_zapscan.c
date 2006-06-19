@@ -34,6 +34,10 @@
 	<depend>zaptel</depend>
  ***/
 
+#include "asterisk.h"
+
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -46,10 +50,6 @@
 #else
 #include <zaptel.h>
 #endif /* __linux__ */
-
-#include "asterisk.h"
-
-ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/lock.h"
 #include "asterisk/file.h"
@@ -272,6 +272,8 @@ static int conf_run(struct ast_channel *chan, int confno, int confflags)
 					ast_log(LOG_WARNING, "Failed to read frame: %s\n", strerror(errno));
 			}
         }
+	if (f)
+		ast_frfree(f);
         if (fd != chan->fds[0])
 			close(fd);
         else {

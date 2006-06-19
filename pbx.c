@@ -23,6 +23,10 @@
  * \author Mark Spencer <markster@digium.com>
  */
 
+#include "asterisk.h"
+
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
 #include <sys/types.h>
 #include <string.h>
 #include <unistd.h>
@@ -32,10 +36,6 @@
 #include <errno.h>
 #include <time.h>
 #include <sys/time.h>
-
-#include "asterisk.h"
-
-ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/lock.h"
 #include "asterisk/cli.h"
@@ -58,7 +58,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/musiconhold.h"
 #include "asterisk/app.h"
 #include "asterisk/devicestate.h"
-#include "asterisk/compat.h"
 #include "asterisk/stringfields.h"
 
 /*!
@@ -265,25 +264,25 @@ static struct pbx_builtin {
 	},
 
 	{ "BackGround", pbx_builtin_background,
-	"Play a file while awaiting extension",
+	"Play an audio file while waiting for digits of an extension to go to.\n",
 	"  Background(filename1[&filename2...][|options[|langoverride][|context]]):\n"
 	"This application will play the given list of files while waiting for an\n"
 	"extension to be dialed by the calling channel. To continue waiting for digits\n"
 	"after this application has finished playing files, the WaitExten application\n"
-	"should be used. The 'langoverride' option explicity specifies which language\n"
+	"should be used. The 'langoverride' option explicitly specifies which language\n"
 	"to attempt to use for the requested sound files. If a 'context' is specified,\n"
 	"this is the dialplan context that this application will use when exiting to a\n"
 	"dialed extension."
 	"  If one of the requested sound files does not exist, call processing will be\n"
 	"terminated.\n"
 	"  Options:\n"
-	"    s - causes the playback of the message to be skipped\n"
+	"    s - Causes the playback of the message to be skipped\n"
 	"          if the channel is not in the 'up' state (i.e. it\n"
-	"          hasn't been answered yet.) If this happens, the\n"
+	"          hasn't been answered yet). If this happens, the\n"
 	"          application will return immediately.\n"
-	"    n - don't answer the channel before playing the files\n"
-	"    m - only break if a digit hit matches a one digit\n"
-	"          extension in the destination context\n"
+	"    n - Don't answer the channel before playing the files.\n"
+	"    m - Only break if a digit hit matches a one digit\n"
+	"          extension in the destination context.\n"
 	},
 
 	{ "Busy", pbx_builtin_busy,
@@ -326,19 +325,15 @@ static struct pbx_builtin {
 	{ "GotoIfTime", pbx_builtin_gotoiftime,
 	"Conditional Goto based on the current time",
 	"  GotoIfTime(<times>|<weekdays>|<mdays>|<months>?[[context|]exten|]priority):\n"
-	"This application will have the calling channel jump to the speicified location\n"
-	"int the dialplan if the current time matches the given time specification.\n"
-	"Further information on the time specification can be found in examples\n"
-	"illustrating how to do time-based context includes in the dialplan.\n"
+	"This application will have the calling channel jump to the specified location\n"
+	"in the dialplan if the current time matches the given time specification.\n"
 	},
 
 	{ "ExecIfTime", pbx_builtin_execiftime,
 	"Conditional application execution based on the current time",
 	"  ExecIfTime(<times>|<weekdays>|<mdays>|<months>?appname[|appargs]):\n"
 	"This application will execute the specified dialplan application, with optional\n"
-	"arguments, if the current time matches the given time specification. Further\n"
-	"information on the time speicification can be found in examples illustrating\n"
-	"how to do time-based context includes in the dialplan.\n"
+	"arguments, if the current time matches the given time specification.\n"
 	},
 
 	{ "Hangup", pbx_builtin_hangup,
@@ -408,8 +403,8 @@ static struct pbx_builtin {
 
 	{ "SetAMAFlags", pbx_builtin_setamaflags,
 	"Set the AMA Flags",
-	"  SetAMAFlags([flag]): This channel will set the channel's AMA Flags for billing\n"
-	"purposes.\n"
+	"  SetAMAFlags([flag]): This application will set the channel's AMA Flags for\n"
+ 	"  billing purposes.\n"
 	},
 
 	{ "SetGlobalVar", pbx_builtin_setglobalvar,
@@ -1685,8 +1680,8 @@ static int pbx_extension_helper(struct ast_channel *c, struct ast_context *con,
 			}
 			if (option_verbose > 2) {
 				char tmp[80], tmp2[80], tmp3[EXT_DATA_SIZE];
-				ast_verbose( VERBOSE_PREFIX_3 "Executing [%s:%d] %s(\"%s\", \"%s\") %s\n",
-					context, priority,
+				ast_verbose( VERBOSE_PREFIX_3 "Executing [%s@%s:%d] %s(\"%s\", \"%s\") %s\n",
+					exten, context, priority,
 					term_color(tmp, app->name, COLOR_BRCYAN, 0, sizeof(tmp)),
 					term_color(tmp2, c->name, COLOR_BRMAGENTA, 0, sizeof(tmp2)),
 					term_color(tmp3, passdata, COLOR_BRMAGENTA, 0, sizeof(tmp3)),
@@ -3431,7 +3426,6 @@ struct ast_context *ast_context_create(struct ast_context **extcontexts, const c
 
 	for (tmp = *local_contexts; tmp; tmp = tmp->next) {
 		if (!strcasecmp(tmp->name, name)) {
-			ast_mutex_unlock(&conlock);
 			ast_log(LOG_WARNING, "Tried to register context '%s', already in use\n", name);
 			if (!extcontexts)
 				ast_mutex_unlock(&conlock);
@@ -4457,8 +4451,10 @@ static void *async_wait(void *data)
 			break;
 		if (f->frametype == AST_FRAME_CONTROL) {
 			if ((f->subclass == AST_CONTROL_BUSY)  ||
-				(f->subclass == AST_CONTROL_CONGESTION) )
-					break;
+			    (f->subclass == AST_CONTROL_CONGESTION) ) {
+				ast_frfree(f);
+				break;
+			}
 		}
 		ast_frfree(f);
 	}
@@ -5473,6 +5469,7 @@ static int pbx_builtin_setglobalvar(struct ast_channel *chan, void *data)
 {
 	char *name;
 	char *stringp = data;
+	static int dep_warning = 0;
 
 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_WARNING, "Ignoring, since there is no variable to set\n");
@@ -5480,6 +5477,12 @@ static int pbx_builtin_setglobalvar(struct ast_channel *chan, void *data)
 	}
 
 	name = strsep(&stringp, "=");
+
+	if (!dep_warning) {
+		dep_warning = 1;
+		ast_log(LOG_WARNING, "SetGlobalVar is deprecated.  Please use Set(GLOBAL(%s)=%s) instead.\n", name, stringp);
+	}
+
 	/*! \todo XXX watch out, leading whitespace ? */
 	pbx_builtin_setvar_helper(NULL, name, stringp);
 

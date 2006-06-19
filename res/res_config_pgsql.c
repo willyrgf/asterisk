@@ -26,13 +26,14 @@
 	<depend>pgsql</depend>
  ***/
 
-#include <stdlib.h>
-#include <string.h>
-#include <libpq-fe.h>			/* PostgreSQL */
-
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <libpq-fe.h>			/* PostgreSQL */
 
 #include "asterisk/file.h"
 #include "asterisk/logger.h"

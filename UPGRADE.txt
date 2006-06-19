@@ -43,6 +43,39 @@ If you would like to save your choices and have them applied against all
 builds, the file can be copied to '~/.asterisk.makeopts' or 
 '/etc/asterisk.makeopts'.
 
+Sound (prompt) and Music On Hold files:
+
+Beginning with Asterisk 1.4, the sound files and music on hold files supplied for
+use with Asterisk have been replaced with new versions produced from high quality
+master recordings, and are available in three languages (English, French and
+Spanish) and in five formats (WAV (uncompressed), mu-Law, a-Law, GSM and G.729).
+In addition, the music on hold files provided by FreePlay Music are now available
+in the same five formats, but no longer available in MP3 format.
+
+The Asterisk 1.4 tarball packages will only include English prompts in GSM format,
+(as were supplied with previous releases) and the FreePlay MOH files in WAV format.
+All of the other variations can be installed by running 'make menuselect' and
+selecting the packages you wish to install; when you run 'make install', those
+packages will be downloaded and installed along with the standard files included
+in the tarball.
+
+If for some reason you expect to not have Internet access at the time you will be
+running 'make install', you can make your package selections using menuselect and
+then run 'make sounds' to download (only) the sound packages; this will leave the
+sound packages in the 'sounds' subdirectory to be used later during installation.
+
+WARNING: Asterisk 1.4 supports a new layout for sound files in multiple languages;
+instead of the alternate-language files being stored in subdirectories underneath
+the existing files (for French, that would be digits/fr, letters/fr, phonetic/fr,
+etc.) the new layout creates one directory under /var/lib/asterisk/sounds for the
+language itself, then places all the sound files for that language under that
+directory and its subdirectories. This is the layout that will be created if you
+select non-English languages to be installed via menuselect, HOWEVER Asterisk does
+not default to this layout and will not find the files in the places it expects them
+to be. If you wish to use this layout, make sure you put 'languageprefix=yes' in your
+/etc/asterisk/asterisk.conf file, so that Asterisk will know how the files were
+installed.
+
 PBX Core:
 
 * The (very old and undocumented) ability to use BYEXTENSION for dialing
@@ -74,6 +107,12 @@ Applications:
   and GetGroupMatchCount were all deprecated in version 1.2, and therefore have
   been removed in this version.  You should use the equivalent dialplan
   function in places where you have previously used one of these applications.
+
+* The application SetGlobalVar has been deprecated.  You should replace uses
+  of this application with the following combination of Set and GLOBAL():
+  Set(GLOBAL(name)=value).  You may also access global variables exclusively by
+  using the GLOBAL() dialplan function, instead of relying on variable
+  interpolation falling back to globals when no channel variable is set.
 
 * The application SetVar has been renamed to Set.  The syntax SetVar was marked
   deprecated in version 1.2 and is no longer recognized in this version.
@@ -112,6 +151,11 @@ Applications:
 * The app_queue application now has the ability to use MixMonitor to 
   record conversations queue members are having with queue callers. Please
   see configs/queues.conf.sample for more information on this option.
+
+* The app_queue application strategy called 'roundrobin' has been deprecated
+  for this release. Users are encouraged to use 'rrmemory' instead, since it
+  provides more 'true' round-robin call delivery. For the Asterisk 1.6 release,
+  'rrmemory' will be renamed 'roundrobin'.
 
 * app_meetme: The 'm' option (monitor) is renamed to 'l' (listen only), and
   the 'm' option now provides the functionality of "initially muted". 
@@ -215,6 +259,9 @@ Functions:
   completely with the version 1.6 release so please take the time between
   releases to make any necessary changes
 
+* The QUEUEAGENTCOUNT() function has been deprecated in favor of
+  QUEUE_MEMBER_COUNT().
+
 The IAX2 channel:
 
 * The "mailboxdetail" option has been deprecated.  Previously, if this option
@@ -251,11 +298,3 @@ Installation:
 	ASTETCDIR	/usr/local/etc/asterisk
 	ASTBINDIR	/usr/local/bin/asterisk
 	ASTSBINDIR	/usr/local/sbin/asterisk
-
-Sounds:
-
-* The phonetic sounds directory has been removed from the asterisk-sounds
-  package because they are now included directly in Asterisk.  However, it is
-  important to note that the phonetic sounds that existed in asterisk-sounds 
-  used a different naming convention than the sounds in Asterisk.  For example,
-  instead of alpha.gsm and bravo.gsm, Asterisk has a_p.gsm and b_p.gsm.

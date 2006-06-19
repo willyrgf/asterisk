@@ -24,7 +24,7 @@
  * \brief curses frontend for Asterisk module selection
  */
 
-#include "autoconfig.h"
+#include "asterisk/autoconfig.h"
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -67,7 +67,7 @@ const char * const help_info[] = {
 void winch_handler(int sig);
 void show_help(WINDOW *win);
 void draw_main_menu(WINDOW *menu, int curopt);
-void draw_category_menu(WINDOW *menu, struct category *cat, int start, int end, int curopt);
+void draw_category_menu(WINDOW *menu, struct category *cat, int start, int end, int curopt, int changed);
 int run_category_menu(WINDOW *menu, int cat_num);
 int run_category_menu(WINDOW *menu, int cat_num);
 void draw_title_window(WINDOW *title);
@@ -122,7 +122,47 @@ void draw_main_menu(WINDOW *menu, int curopt)
 	wrefresh(menu);
 }
 
-void draw_category_menu(WINDOW *menu, struct category *cat, int start, int end, int curopt)
+void display_mem_info(WINDOW *menu, struct member *mem, int start, int end)
+{
+	char buf[64];
+	struct depend *dep;
+	struct conflict *con;
+
+	wmove(menu, end - start + 2, max_x / 2 - 16);
+	wclrtoeol(menu);
+	wmove(menu, end - start + 3, max_x / 2 - 16);
+	wclrtoeol(menu);
+	wmove(menu, end - start + 4, max_x / 2 - 16);
+	wclrtoeol(menu);
+
+	if (mem->displayname) {
+		wmove(menu, end - start + 2, max_x / 2 - 16);
+		waddstr(menu, mem->displayname);
+	}
+	if (!AST_LIST_EMPTY(&mem->deps)) {
+		wmove(menu, end - start + 3, max_x / 2 - 16);
+		strcpy(buf, "Depends on: ");
+		AST_LIST_TRAVERSE(&mem->deps, dep, list) {
+			strncat(buf, dep->name, sizeof(buf) - strlen(buf) - 1);
+			if (AST_LIST_NEXT(dep, list))
+				strncat(buf, ", ", sizeof(buf) - strlen(buf) - 1);
+		}
+		waddstr(menu, buf);
+	}
+	if (!AST_LIST_EMPTY(&mem->conflicts)) {
+		wmove(menu, end - start + 4, max_x / 2 - 16);
+		strcpy(buf, "Conflicts with: ");
+		AST_LIST_TRAVERSE(&mem->conflicts, con, list) {
+			strncat(buf, con->name, sizeof(buf) - strlen(buf) - 1);
+			if (AST_LIST_NEXT(con, list))
+				strncat(buf, ", ", sizeof(buf) - strlen(buf) - 1);
+		}
+		waddstr(menu, buf);
+	}
+
+}
+
+void draw_category_menu(WINDOW *menu, struct category *cat, int start, int end, int curopt, int changed)
 {
 	int i = 0;
 	int j = 0;
@@ -130,8 +170,24 @@ void draw_category_menu(WINDOW *menu, struct category *cat, int start, int end, 
 	char buf[64];
 	const char *desc = NULL;
 
+	if (!changed) {
+		/* If all we have to do is move the cursor, 
+		 * then don't clear the screen and start over */
+		AST_LIST_TRAVERSE(&cat->members, mem, list) {
+			i++;
+			if (curopt + 1 == i) {
+				display_mem_info(menu, mem, start, end);
+				break;
+			}
+		}
+		wmove(menu, curopt - start, max_x / 2 - 9);
+		wrefresh(menu);
+		return;
+	}
+
 	wclear(menu);
 
+	i = 0;
 	AST_LIST_TRAVERSE(&cat->members, mem, list) {
 		if (i < start) {
 			i++;
@@ -146,18 +202,13 @@ void draw_category_menu(WINDOW *menu, struct category *cat, int start, int end, 
 		waddstr(menu, buf);
 		
 		if (curopt + 1 == i)
-			desc = mem->displayname;
+			display_mem_info(menu, mem, start, end);
 
 		if (i == end)
 			break;
 	}
 
-	if (desc) {
-		wmove(menu, end - start + 2, max_x / 2 - 16);
-		waddstr(menu, desc);
-	}
 	wmove(menu, curopt - start, max_x / 2 - 9);
-
 	wrefresh(menu);
 }
 
@@ -170,6 +221,7 @@ int run_category_menu(WINDOW *menu, int cat_num)
 	int c;
 	int curopt = 0;
 	int maxopt;
+	int changed = 1;
 
 	AST_LIST_TRAVERSE(&categories, cat, list) {
 		if (i++ == cat_num)
@@ -180,9 +232,10 @@ int run_category_menu(WINDOW *menu, int cat_num)
 
 	maxopt = count_members(cat) - 1;
 
-	draw_category_menu(menu, cat, start, end, curopt);
+	draw_category_menu(menu, cat, start, end, curopt, changed);
 
 	while ((c = getch())) {
+		changed = 0;
 		switch (c) {
 		case KEY_UP:
 			if (curopt > 0) {
@@ -190,6 +243,7 @@ int run_category_menu(WINDOW *menu, int cat_num)
 				if (curopt < start) {
 					start--;
 					end--;
+					changed = 1;
 				}
 			}
 			break;
@@ -199,6 +253,7 @@ int run_category_menu(WINDOW *menu, int cat_num)
 				if (curopt > end - 1) {
 					start++;
 					end++;
+					changed = 1;
 				}
 			}
 			break;
@@ -216,22 +271,26 @@ int run_category_menu(WINDOW *menu, int cat_num)
 		case '\n':
 		case ' ':
 			toggle_enabled(cat, curopt);
+			changed = 1;
 			break;
 		case 'h':
 		case 'H':
 			show_help(menu);
+			changed = 1;
 			break;
 		case KEY_F(7):
 			set_all(cat, 0);
+			changed = 1;
 			break;
 		case KEY_F(8):
 			set_all(cat, 1);
+			changed = 1;
 		default:
 			break;	
 		}
 		if (c == 'x' || c == 'X' || c == 'Q' || c == 'q')
 			break;	
-		draw_category_menu(menu, cat, start, end, curopt);
+		draw_category_menu(menu, cat, start, end, curopt, changed);
 	}
 
 	wrefresh(menu);

@@ -21,12 +21,14 @@
  *
  * - See \ref LockDef
  */
+
 /* \page LockDef Asterisk thread locking models
  *
  * This file provides several different implementation of the functions,
  * depending on the platform, the use of DEBUG_THREADS, and the way
  * global mutexes are initialized.
- * At the moment, we have 3 ways to initialize global mutexes, depending on
+ *
+ * \par At the moment, we have 3 ways to initialize global mutexes, depending on
  *
  *  - \b static: the mutex is assigned the value AST_MUTEX_INIT_VALUE
  *        this is done at compile time, and is the way used on Linux.
@@ -241,7 +243,7 @@ static inline int __ast_pthread_mutex_destroy(const char *filename, int lineno, 
 }
 
 #if defined(AST_MUTEX_INIT_W_CONSTRUCTORS)
-/* if AST_MUTEX_INIT_W_CONSTRUCTORS is defined, use file scope
+/*! \brief  if AST_MUTEX_INIT_W_CONSTRUCTORS is defined, use file scope
  constrictors/destructors to create/destroy mutexes.  */
 #define __AST_MUTEX_DEFINE(scope,mutex) \
 	scope ast_mutex_t mutex = AST_MUTEX_INIT_VALUE; \
@@ -254,11 +256,13 @@ static void  __attribute__ ((destructor)) fini_##mutex(void) \
 	ast_mutex_destroy(&mutex); \
 }
 #elif defined(AST_MUTEX_INIT_ON_FIRST_USE)
-/* if AST_MUTEX_INIT_ON_FIRST_USE is defined, mutexes are created on
+/*! \note
+ if AST_MUTEX_INIT_ON_FIRST_USE is defined, mutexes are created on
  first use.  The performance impact on FreeBSD should be small since
  the pthreads library does this itself to initialize errror checking
  (defaulty type) mutexes.  If nither is defined, the pthreads librariy
- does the initialization itself on first use. */ 
+ does the initialization itself on first use. 
+*/ 
 #define __AST_MUTEX_DEFINE(scope,mutex) \
 	scope ast_mutex_t mutex = AST_MUTEX_INIT_VALUE
 #else /* AST_MUTEX_INIT_W_CONSTRUCTORS */
@@ -720,6 +724,63 @@ static inline int ast_cond_timedwait(ast_cond_t *cond, ast_mutex_t *t, const str
 #define pthread_create __use_ast_pthread_create_instead__
 #endif
 
+/*
+ * Initial support for atomic instructions.
+ * For platforms that have it, use the native cpu instruction to
+ * implement them. For other platforms, resort to a 'slow' version
+ * (defined in utils.c) that protects the atomic instruction with
+ * a single lock.
+ * The slow versions is always available, for testing purposes,
+ * as ast_atomic_fetchadd_int_slow()
+ */
+
+int ast_atomic_fetchadd_int_slow(volatile int *p, int v);
+
+#include "asterisk/inline_api.h"
+
+/*! \brief Atomically add v to *p and return * the previous value of *p.
+ * This can be used to handle reference counts, and the return value
+ * can be used to generate unique identifiers.
+ */
+
+#if defined(HAVE_GCC_ATOMICS)
+AST_INLINE_API(int ast_atomic_fetchadd_int(volatile int *p, int v),
+{
+	return __sync_fetch_and_add(p, v);
+})
+#elif defined ( __i386__)
+AST_INLINE_API(int ast_atomic_fetchadd_int(volatile int *p, int v),
+{
+	__asm __volatile (
+	"       lock   xaddl   %0, %1 ;        "
+	: "+r" (v),                     /* 0 (result) */   
+	  "=m" (*p)                     /* 1 */
+	: "m" (*p));                    /* 2 */
+	return (v);
+})
+#else   /* low performance version in utils.c */
+AST_INLINE_API(int ast_atomic_fetchadd_int(volatile int *p, int v),
+{
+	return ast_atomic_fetchadd_int_slow(p, v);
+})
+#endif
+
+/*! \brief decrement *p by 1 and return true if the variable has reached 0.
+ * Useful e.g. to check if a refcount has reached 0.
+ */
+#if defined(HAVE_GCC_ATOMICS)
+AST_INLINE_API(int ast_atomic_dec_and_test(volatile int *p),
+{
+	return __sync_sub_and_fetch(p, 1) == 0;
+})
+#else
+AST_INLINE_API(int ast_atomic_dec_and_test(volatile int *p),
+{
+	int a = ast_atomic_fetchadd_int(p, -1);
+	return a == 1; /* true if the value is 0 now (so it was 1 previously) */
+})
+#endif
+
 #ifndef DEBUG_CHANNEL_LOCKS
 /*! \brief Lock a channel. If DEBUG_CHANNEL_LOCKS is defined 
 	in the Makefile, print relevant output for debugging */
@@ -731,6 +792,8 @@ static inline int ast_cond_timedwait(ast_cond_t *cond, ast_mutex_t *t, const str
 	in the Makefile, print relevant output for debugging */
 #define ast_channel_trylock(x)		ast_mutex_trylock(&x->lock)
 #else
+
+struct ast_channel;
 
 /*! \brief Lock AST channel (and print debugging output)
 \note You need to enable DEBUG_CHANNEL_LOCKS for this function */

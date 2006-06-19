@@ -26,6 +26,10 @@
  * \ingroup channel_drivers
  */
 
+#include "asterisk.h"
+
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -33,13 +37,13 @@
 
 #include "chan_misdn_config.h"
 
-#include <asterisk/config.h>
-#include <asterisk/channel.h>
-#include <asterisk/logger.h>
-#include <asterisk/lock.h>
-#include <asterisk/pbx.h>
-#include <asterisk/strings.h>
-#include <asterisk/utils.h>
+#include "asterisk/config.h"
+#include "asterisk/channel.h"
+#include "asterisk/logger.h"
+#include "asterisk/lock.h"
+#include "asterisk/pbx.h"
+#include "asterisk/strings.h"
+#include "asterisk/utils.h"
 
 #define AST_LOAD_CFG ast_config_load
 #define AST_DESTROY_CFG ast_config_destroy
@@ -84,6 +88,7 @@ struct misdn_cfg_spec {
 
 static const struct misdn_cfg_spec port_spec[] = {
 	{ "name", MISDN_CFG_GROUPNAME, MISDN_CTYPE_STR, "default", NONE },
+	{ "allowed_bearers", MISDN_CFG_ALLOWED_BEARERS, MISDN_CTYPE_STR, "all", NONE },
 	{ "rxgain", MISDN_CFG_RXGAIN, MISDN_CTYPE_INT, "0", NONE },
 	{ "txgain", MISDN_CFG_TXGAIN, MISDN_CTYPE_INT, "0", NONE },
 	{ "te_choose_channel", MISDN_CFG_TE_CHOOSE_CHANNEL, MISDN_CTYPE_BOOL, "no", NONE },

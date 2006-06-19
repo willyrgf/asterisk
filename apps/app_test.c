@@ -27,6 +27,10 @@
  * \ingroup applications
  */
 
+#include "asterisk.h"
+
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -34,10 +38,6 @@
 #include <fcntl.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-
-#include "asterisk.h"
-
-ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/channel.h"
 #include "asterisk/options.h"
@@ -101,6 +101,7 @@ static int measurenoise(struct ast_channel *chan, int ms, char *who)
 				samples++;
 			}
 		}
+		ast_frfree(f);
 	}
 
 	if (rformat) {

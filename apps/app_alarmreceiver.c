@@ -22,13 +22,17 @@
  * 
  * *** WARNING *** WARNING *** WARNING *** WARNING *** WARNING *** WARNING *** WARNING *** WARNING *** 
  *
- * Use at your own risk. Please consult the GNU GPL license document included with Asterisk details. *
+ * Use at your own risk. Please consult the GNU GPL license document included with Asterisk.         *
  *
  * *** WARNING *** WARNING *** WARNING *** WARNING *** WARNING *** WARNING *** WARNING *** WARNING ***
  *
  * \ingroup applications
  */ 
  
+#include "asterisk.h"
+
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -36,10 +40,6 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <sys/time.h>
-
-#include "asterisk.h"
-
-ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/lock.h"
 #include "asterisk/file.h"
@@ -70,7 +70,7 @@ typedef struct event_node event_node_t;
 
 static char *app = "AlarmReceiver";
 
-static char *synopsis = "Provide support for receving alarm reports from a burglar or fire alarm panel";
+static char *synopsis = "Provide support for receiving alarm reports from a burglar or fire alarm panel";
 static char *descrip =
 "  AlarmReceiver(): Only 1 signalling format is supported at this time: Ademco\n"
 "Contact ID. This application should be called whenever there is an alarm\n"
@@ -206,6 +206,7 @@ static int send_tone_burst(struct ast_channel *chan, float freq, int duration, i
 
 			i += wf.datalen / 8;
 			if (i > duration) {
+				ast_frfree(f);
 				break;
 			}
 			if (ast_write(chan, &wf)){
@@ -213,6 +214,7 @@ static int send_tone_burst(struct ast_channel *chan, float freq, int duration, i
 					ast_verbose(VERBOSE_PREFIX_4 "AlarmReceiver: Failed to write frame on %s\n", chan->name);
 				ast_log(LOG_WARNING, "AlarmReceiver Failed to write frame on %s\n",chan->name);
 				res = -1;
+				ast_frfree(f);
 				break;
 			}
 		}

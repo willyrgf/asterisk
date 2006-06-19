@@ -57,6 +57,10 @@
   
  */
 
+#include "asterisk.h"
+
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
 #include <unistd.h>
 #include <stdlib.h>
 #include <sys/time.h>
@@ -86,13 +90,9 @@
 #if  defined(__FreeBSD__) || defined( __NetBSD__ ) || defined(SOLARIS)
 #include <netdb.h>
 #if defined(SOLARIS)
-extern int daemon(int, int);  /* defined in libresolv of all places */
+int daemon(int, int);  /* defined in libresolv of all places */
 #endif
 #endif
-
-#include "asterisk.h"
-
-ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/logger.h"
 #include "asterisk/options.h"
@@ -101,7 +101,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/ulaw.h"
 #include "asterisk/alaw.h"
 #include "asterisk/callerid.h"
-// XXX #include "asterisk/module.h"
 #include "asterisk/image.h"
 #include "asterisk/tdd.h"
 #include "asterisk/term.h"
@@ -123,7 +122,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/version.h"
 #include "asterisk/linkedlists.h"
 #include "asterisk/devicestate.h"
-#include "asterisk/compat.h"
 
 #include "asterisk/doxyref.h"		/* Doxygen documentation */
 
@@ -176,6 +174,7 @@ struct console {
 	int fd;				/*!< File descriptor */
 	int p[2];			/*!< Pipe */
 	pthread_t t;			/*!< Thread of handler */
+	int mute;			/*!< Is the console muted for logs */
 };
 
 struct ast_atexit {
@@ -200,26 +199,26 @@ static int ast_el_add_history(char *);
 static int ast_el_read_history(char *);
 static int ast_el_write_history(char *);
 
-char ast_config_AST_CONFIG_DIR[AST_CONFIG_MAX_PATH];
-char ast_config_AST_CONFIG_FILE[AST_CONFIG_MAX_PATH];
-char ast_config_AST_MODULE_DIR[AST_CONFIG_MAX_PATH];
-char ast_config_AST_SPOOL_DIR[AST_CONFIG_MAX_PATH];
-char ast_config_AST_MONITOR_DIR[AST_CONFIG_MAX_PATH];
-char ast_config_AST_VAR_DIR[AST_CONFIG_MAX_PATH];
-char ast_config_AST_DATA_DIR[AST_CONFIG_MAX_PATH];
-char ast_config_AST_LOG_DIR[AST_CONFIG_MAX_PATH];
-char ast_config_AST_AGI_DIR[AST_CONFIG_MAX_PATH];
-char ast_config_AST_DB[AST_CONFIG_MAX_PATH];
-char ast_config_AST_KEY_DIR[AST_CONFIG_MAX_PATH];
-char ast_config_AST_PID[AST_CONFIG_MAX_PATH];
-char ast_config_AST_SOCKET[AST_CONFIG_MAX_PATH];
-char ast_config_AST_RUN_DIR[AST_CONFIG_MAX_PATH];
-char ast_config_AST_RUN_USER[AST_CONFIG_MAX_PATH];
-char ast_config_AST_RUN_GROUP[AST_CONFIG_MAX_PATH];
-char ast_config_AST_CTL_PERMISSIONS[AST_CONFIG_MAX_PATH];
-char ast_config_AST_CTL_OWNER[AST_CONFIG_MAX_PATH] = "\0";
-char ast_config_AST_CTL_GROUP[AST_CONFIG_MAX_PATH] = "\0";
-char ast_config_AST_CTL[AST_CONFIG_MAX_PATH] = "asterisk.ctl";
+char ast_config_AST_CONFIG_DIR[PATH_MAX];
+char ast_config_AST_CONFIG_FILE[PATH_MAX];
+char ast_config_AST_MODULE_DIR[PATH_MAX];
+char ast_config_AST_SPOOL_DIR[PATH_MAX];
+char ast_config_AST_MONITOR_DIR[PATH_MAX];
+char ast_config_AST_VAR_DIR[PATH_MAX];
+char ast_config_AST_DATA_DIR[PATH_MAX];
+char ast_config_AST_LOG_DIR[PATH_MAX];
+char ast_config_AST_AGI_DIR[PATH_MAX];
+char ast_config_AST_DB[PATH_MAX];
+char ast_config_AST_KEY_DIR[PATH_MAX];
+char ast_config_AST_PID[PATH_MAX];
+char ast_config_AST_SOCKET[PATH_MAX];
+char ast_config_AST_RUN_DIR[PATH_MAX];
+char ast_config_AST_RUN_USER[PATH_MAX];
+char ast_config_AST_RUN_GROUP[PATH_MAX];
+char ast_config_AST_CTL_PERMISSIONS[PATH_MAX];
+char ast_config_AST_CTL_OWNER[PATH_MAX] = "\0";
+char ast_config_AST_CTL_GROUP[PATH_MAX] = "\0";
+char ast_config_AST_CTL[PATH_MAX] = "asterisk.ctl";
 char ast_config_AST_SYSTEM_NAME[20]="";
 
 extern const char *ast_build_hostname;
@@ -358,9 +357,8 @@ struct profile_data {
 
 static struct profile_data *prof_data;
 
-/*
- * allocates a counter with a given name and scale.
- * Returns the identifier of the counter.
+/*! \brief allocates a counter with a given name and scale.
+ * \return Returns the identifier of the counter.
  */
 int ast_add_profile(const char *name, uint64_t scale)
 {
@@ -489,7 +487,7 @@ static char show_version_files_help[] =
 "       Shows the revision numbers of the files used to build this copy of Asterisk.\n"
 "       Optional regular expression pattern is used to filter the file list.\n";
 
-/*! CLI command to list module versions */
+/*! \brief CLI command to list module versions */
 static int handle_show_version_files(int fd, int argc, char *argv[])
 {
 #define FORMAT "%-25.25s %-40.40s\n"
@@ -601,14 +599,14 @@ static int fdprint(int fd, const char *s)
 	return write(fd, s, strlen(s) + 1);
 }
 
-/*! NULL handler so we can collect the child exit status */
+/*! \brief NULL handler so we can collect the child exit status */
 static void null_sig_handler(int signal)
 {
 
 }
 
 AST_MUTEX_DEFINE_STATIC(safe_system_lock);
-/*! Keep track of how many threads are currently trying to wait*() on
+/*! \brief Keep track of how many threads are currently trying to wait*() on
  *  a child process */
 static unsigned int safe_system_level = 0;
 static void *safe_system_prev_handler;
@@ -659,7 +657,7 @@ int ast_safe_system(const char *s)
 		/* Close file descriptors and launch system command */
 		for (x = STDERR_FILENO + 1; x < 4096; x++)
 			close(x);
-		execl("/bin/sh", "/bin/sh", "-c", s, NULL);
+		execl("/bin/sh", "/bin/sh", "-c", s, (char *) NULL);
 		exit(1);
 	} else if (pid > 0) {
 		for(;;) {
@@ -681,7 +679,52 @@ int ast_safe_system(const char *s)
 }
 
 /*!
- * write the string to all attached console clients
+ * \brief mute or unmute a console from logging
+ */
+void ast_console_toggle_mute(int fd) {
+	int x;
+	for (x = 0;x < AST_MAX_CONNECTS; x++) {
+		if (fd == consoles[x].fd) {
+			if (consoles[x].mute) {
+				consoles[x].mute = 0;
+				ast_cli(fd, "Console is not muted anymore.\n");
+			} else {
+				consoles[x].mute = 1;
+				ast_cli(fd, "Console is muted.\n");
+			}
+			return;
+		}
+	}
+	ast_cli(fd, "Couldn't find remote console.\n");
+}
+
+/*!
+ * \brief log the string to all attached console clients
+ */
+static void ast_network_puts_mutable(const char *string)
+{
+	int x;
+	for (x = 0;x < AST_MAX_CONNECTS; x++) {
+		if (consoles[x].mute)
+			continue;
+		if (consoles[x].fd > -1) 
+			fdprint(consoles[x].p[1], string);
+	}
+}
+
+/*!
+ * \brief log the string to the console, and all attached
+ * console clients
+ */
+void ast_console_puts_mutable(const char *string)
+{
+	fputs(string, stdout);
+	fflush(stdout);
+	ast_network_puts_mutable(string);
+}
+
+/*!
+ * \brief write the string to all attached console clients
  */
 static void ast_network_puts(const char *string)
 {
@@ -711,14 +754,14 @@ static void network_verboser(const char *s, int pos, int replace, int complete)
 		if ((t = alloca(strlen(s) + 2))) {
 			sprintf(t, "\r%s", s);
 			if (complete)
-				ast_network_puts(t);
+				ast_network_puts_mutable(t);
 		} else {
 			ast_log(LOG_ERROR, "Out of memory\n");
-			ast_network_puts(s);
+			ast_network_puts_mutable(s);
 		}
 	} else {
 		if (complete)
-			ast_network_puts(s);
+			ast_network_puts_mutable(s);
 	}
 }
 
@@ -819,6 +862,7 @@ static void *listener(void *unused)
 					flags = fcntl(consoles[x].p[1], F_GETFL);
 					fcntl(consoles[x].p[1], F_SETFL, flags | O_NONBLOCK);
 					consoles[x].fd = s;
+					consoles[x].mute = ast_opt_mute;
 					if (ast_pthread_create(&consoles[x].t, &attr, netconsole, &consoles[x])) {
 						ast_log(LOG_ERROR, "Unable to spawn thread to handle connection: %s\n", strerror(errno));
 						close(consoles[x].p[0]);
@@ -933,7 +977,8 @@ static int ast_tryconnect(void)
 		return 1;
 }
 
-/*! Urgent handler
+/*! \brief Urgent handler
+
  Called by soft_hangup to interrupt the poll, read, or other
  system call.  We don't actually need to do anything though.  
  Remember: Cannot EVER ast_log from within a signal handler 
@@ -976,7 +1021,7 @@ static void child_handler(int sig)
 	signal(sig, child_handler);
 }
 
-/*! Set an X-term or screen title */
+/*! \brief Set an X-term or screen title */
 static void set_title(char *text)
 {
 	if (getenv("TERM") && strstr(getenv("TERM"), "xterm"))
@@ -989,7 +1034,7 @@ static void set_icon(char *text)
 		fprintf(stdout, "\033]1;%s\007", text);
 }
 
-/*! We set ourselves to a high priority, that we might pre-empt everything
+/*! \brief We set ourselves to a high priority, that we might pre-empt everything
    else.  If your PBX has heavy activity on it, this is a good thing.  */
 int ast_set_priority(int pri)
 {
@@ -2025,6 +2070,10 @@ static void ast_remotecontrol(char * data)
 	fdprint(ast_consock, tmp);
 	snprintf(tmp, sizeof(tmp), "set debug atleast %d", option_debug);
 	fdprint(ast_consock, tmp);
+	if (ast_opt_mute) {
+		snprintf(tmp, sizeof(tmp), "log and verbose output currently muted ('logger unmute' to unmute)");
+		fdprint(ast_consock, tmp);
+	}
 	ast_verbose("Connected to Asterisk %s currently running on %s (pid = %d)\n", version, hostname, pid);
 	remotehostname = hostname;
 	if (getenv("HOME")) 
@@ -2039,17 +2088,12 @@ static void ast_remotecontrol(char * data)
 
 	if (ast_opt_exec && data) {  /* hack to print output then exit if asterisk -rx is used */
 		char tempchar;
-#ifdef __Darwin__
-		struct pollfd fds[0];
-		fds[0].fd = ast_consock;
-		fds[0].events = POLLIN;
-		fds[0].revents = 0;
-		while (poll(fds, 1, 100) > 0) {
+		struct pollfd fds;
+		fds.fd = ast_consock;
+		fds.events = POLLIN;
+		fds.revents = 0;
+		while (poll(&fds, 1, 100) > 0)
 			ast_el_read_char(el, &tempchar);
-		}
-#else
-		while (!ast_el_read_char(el, &tempchar));
-#endif
 		return;
 	}
 	for(;;) {
@@ -2090,6 +2134,7 @@ static int show_cli_help(void) {
 	printf("   -g              Dump core in case of a crash\n");
 	printf("   -h              This help screen\n");
 	printf("   -i              Initialize crypto keys at startup\n");
+	printf("   -m              Mute the console from debugging and verbose output\n");
 	printf("   -n              Disable console colorization\n");
 	printf("   -p              Run as pseudo-realtime thread\n");
 	printf("   -q              Quiet mode (suppress output)\n");
@@ -2136,8 +2181,8 @@ static void ast_readconfig(void)
 	if (!cfg) {
 		return;
 	}
-	v = ast_variable_browse(cfg, "files");
-	while (v) {
+
+	for (v = ast_variable_browse(cfg, "files"); v; v = v->next) {
 		if (!strcasecmp(v->name, "astctlpermissions")) {
 			ast_copy_string(ast_config_AST_CTL_PERMISSIONS, v->value, sizeof(ast_config_AST_CTL_PERMISSIONS));
 		} else if (!strcasecmp(v->name, "astctlowner")) {
@@ -2147,10 +2192,9 @@ static void ast_readconfig(void)
 		} else if (!strcasecmp(v->name, "astctl")) {
 			ast_copy_string(ast_config_AST_CTL, v->value, sizeof(ast_config_AST_CTL));
 		}
-		v = v->next;
 	}
-	v = ast_variable_browse(cfg, "directories");
-	while(v) {
+
+	for (v = ast_variable_browse(cfg, "directories"); v; v = v->next) {
 		if (!strcasecmp(v->name, "astetcdir")) {
 			ast_copy_string(ast_config_AST_CONFIG_DIR, v->value, sizeof(ast_config_AST_CONFIG_DIR));
 		} else if (!strcasecmp(v->name, "astspooldir")) {
@@ -2172,13 +2216,10 @@ static void ast_readconfig(void)
 			ast_copy_string(ast_config_AST_RUN_DIR, v->value, sizeof(ast_config_AST_RUN_DIR));
 		} else if (!strcasecmp(v->name, "astmoddir")) {
 			ast_copy_string(ast_config_AST_MODULE_DIR, v->value, sizeof(ast_config_AST_MODULE_DIR));
-		} else if (!strcasecmp(v->name, "languageprefix")) {
-			ast_language_is_prefix = ast_true(v->value);
 		}
-		v = v->next;
 	}
-	v = ast_variable_browse(cfg, "options");
-	while(v) {
+
+	for (v = ast_variable_browse(cfg, "options"); v; v = v->next) {
 		/* verbose level (-v at startup) */
 		if (!strcasecmp(v->name, "verbose")) {
 			option_verbose = atoi(v->value);
@@ -2257,8 +2298,9 @@ static void ast_readconfig(void)
 			ast_copy_string(ast_config_AST_RUN_GROUP, v->value, sizeof(ast_config_AST_RUN_GROUP));
 		} else if (!strcasecmp(v->name, "systemname")) {
 			ast_copy_string(ast_config_AST_SYSTEM_NAME, v->value, sizeof(ast_config_AST_SYSTEM_NAME));
+		} else if (!strcasecmp(v->name, "languageprefix")) {
+			ast_language_is_prefix = ast_true(v->value);
 		}
-		v = v->next;
 	}
 	ast_config_destroy(cfg);
 }
@@ -2315,8 +2357,8 @@ int main(int argc, char *argv[])
 	}
 	*/
 	/* Check for options */
-	while((c=getopt(argc, argv, "tThfdvVqprRgciInx:U:G:C:L:M:")) != -1) {
-		switch(c) {
+	while ((c = getopt(argc, argv, "mtThfdvVqprRgciInx:U:G:C:L:M:")) != -1) {
+		switch (c) {
 		case 'F':
 			ast_set_flag(&ast_options, AST_OPT_FLAG_ALWAYS_FORK);
 			break;
@@ -2345,6 +2387,9 @@ int main(int argc, char *argv[])
 		case 'v':
 			option_verbose++;
 			ast_set_flag(&ast_options, AST_OPT_FLAG_NO_FORK);
+			break;
+		case 'm':
+			ast_set_flag(&ast_options, AST_OPT_FLAG_MUTE);
 			break;
 		case 'M':
 			if ((sscanf(optarg, "%d", &option_maxcalls) != 1) || (option_maxcalls < 0))

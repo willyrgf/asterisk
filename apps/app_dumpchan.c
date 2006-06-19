@@ -5,7 +5,8 @@
  *
  * Anthony Minessale <anthmct@yahoo.com>
  *
- * disclaimed to Digium
+ * A license has been granted to Digium (via disclaimer) for the use of
+ * this code.
  *
  * See http://www.asterisk.org for more information about
  * the Asterisk project. Please do not directly contact
@@ -27,14 +28,14 @@
  * \ingroup applications
  */
 
+#include "asterisk.h"
+
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
-
-#include "asterisk.h"
-
-ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/file.h"
 #include "asterisk/logger.h"
@@ -62,8 +63,9 @@ static int ast_serialize_showchan(struct ast_channel *c, char *buf, size_t size)
 	struct timeval now;
 	long elapsed_seconds=0;
 	int hour=0, min=0, sec=0;
-	char cgrp[256];
-	char pgrp[256];
+	char cgrp[BUFSIZ/2];
+	char pgrp[BUFSIZ/2];
+	char formatbuf[BUFSIZ/2];
 	
 	now = ast_tvnow();
 	memset(buf,0,size);
@@ -86,9 +88,9 @@ static int ast_serialize_showchan(struct ast_channel *c, char *buf, size_t size)
 			 "DNIDDigits=         %s\n"
 			 "State=              %s (%d)\n"
 			 "Rings=              %d\n"
-			 "NativeFormat=       %d\n"
-			 "WriteFormat=        %d\n"
-			 "ReadFormat=         %d\n"
+			 "NativeFormat=       %s\n"
+			 "WriteFormat=        %s\n"
+			 "ReadFormat=         %s\n"
 			 "1stFileDescriptor=  %d\n"
 			 "Framesin=           %d %s\n"
 			 "Framesout=          %d %s\n"
@@ -111,9 +113,9 @@ static int ast_serialize_showchan(struct ast_channel *c, char *buf, size_t size)
 			 ast_state2str(c->_state),
 			 c->_state,
 			 c->rings,
-			 c->nativeformats,
-			 c->writeformat,
-			 c->readformat,
+			 ast_getformatname_multiple(formatbuf, sizeof(formatbuf), c->nativeformats),
+			 ast_getformatname_multiple(formatbuf, sizeof(formatbuf), c->writeformat),
+			 ast_getformatname_multiple(formatbuf, sizeof(formatbuf), c->readformat),
 			 c->fds[0], c->fin & ~DEBUGCHAN_FLAG, (c->fin & DEBUGCHAN_FLAG) ? " (DEBUGGED)" : "",
 			 c->fout & ~DEBUGCHAN_FLAG, (c->fout & DEBUGCHAN_FLAG) ? " (DEBUGGED)" : "", (long)c->whentohangup,
 			 hour,

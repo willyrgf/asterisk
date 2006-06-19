@@ -27,6 +27,10 @@
 	<defaultenabled>no</defaultenabled>
  ***/
 
+#include "asterisk.h"
+
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
 #include <sys/types.h>
 #include <stdlib.h>
 #include <fcntl.h>
@@ -39,10 +43,6 @@
 
 #include <gtk/gtk.h>
 #include <glib.h>
-
-#include "asterisk.h"
-
-ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/pbx.h"
 #include "asterisk/config.h"
@@ -240,7 +240,7 @@ static void reload_module(void)
 
 static void file_ok_sel(GtkWidget *w, GtkFileSelection *fs)
 {
-	char tmp[AST_CONFIG_MAX_PATH];
+	char tmp[PATH_MAX];
 	char *module = gtk_file_selection_get_filename(fs);
 	char buf[256];
 	snprintf(tmp, sizeof(tmp), "%s/", ast_config_AST_MODULE_DIR);
@@ -260,7 +260,7 @@ static void file_ok_sel(GtkWidget *w, GtkFileSelection *fs)
 
 static void add_module(void)
 {
-	char tmp[AST_CONFIG_MAX_PATH];
+	char tmp[PATH_MAX];
 	GtkWidget *filew;
 	snprintf(tmp, sizeof(tmp), "%s/*.so", ast_config_AST_MODULE_DIR);
 	filew = gtk_file_selection_new("Load Module");

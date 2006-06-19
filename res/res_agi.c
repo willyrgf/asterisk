@@ -23,6 +23,10 @@
  * \author Mark Spencer <markster@digium.com> 
  */
 
+#include "asterisk.h"
+
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
 #include <sys/types.h>
 #include <netdb.h>
 #include <sys/socket.h>
@@ -40,10 +44,6 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <sys/wait.h>
-
-#include "asterisk.h"
-
-ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/file.h"
 #include "asterisk/logger.h"
@@ -149,6 +149,7 @@ static enum agi_result launch_netscript(char *agiurl, char *argv[], int *fds, in
 	struct sockaddr_in sin;
 	struct hostent *hp;
 	struct ast_hostent ahp;
+	int res;
 
 	/* agiusl is "agi://host.domain[:port][/script/name]" */
 	host = ast_strdupa(agiurl + 6);	/* Remove agi:// */
@@ -200,9 +201,13 @@ static enum agi_result launch_netscript(char *agiurl, char *argv[], int *fds, in
 
 	pfds[0].fd = s;
 	pfds[0].events = POLLOUT;
-	while (poll(pfds, 1, MAX_AGI_CONNECT) != 1) {
+	while ((res = poll(pfds, 1, MAX_AGI_CONNECT)) != 1) {
 		if (errno != EINTR) {
-			ast_log(LOG_WARNING, "Connect to '%s' failed: %s\n", agiurl, strerror(errno));
+			if (!res) {
+				ast_log(LOG_WARNING, "FastAGI connection to '%s' timed out after MAX_AGI_CONNECT (%d) milliseconds.\n",
+					agiurl, MAX_AGI_CONNECT);
+			} else
+				ast_log(LOG_WARNING, "Connect to '%s' failed: %s\n", agiurl, strerror(errno));
 			close(s);
 			return AGI_RESULT_FAILURE;
 		}
@@ -300,6 +305,9 @@ static enum agi_result launch_script(char *script, char *argv[], int *fds, int *
 		setenv("AST_KEY_DIR", ast_config_AST_KEY_DIR, 1);
 		setenv("AST_RUN_DIR", ast_config_AST_RUN_DIR, 1);
 
+		/* Don't run AGI scripts with realtime priority -- it causes audio stutter */
+		ast_set_priority(0);
+
 		/* Redirect stdin and out, provide enhanced audio channel if desired */
 		dup2(fromast[0], STDIN_FILENO);
 		dup2(toast[1], STDOUT_FILENO);
@@ -318,9 +326,6 @@ static enum agi_result launch_script(char *script, char *argv[], int *fds, int *
 		/* Close everything but stdin/out/error */
 		for (x=STDERR_FILENO + 2;x<1024;x++) 
 			close(x);
-
-		/* Don't run AGI scripts with realtime priority -- it causes audio stutter */
-		ast_set_priority(0);
 
 		/* Execute script */
 		execv(script, argv);
@@ -998,7 +1003,6 @@ static int handle_recordfile(struct ast_channel *chan, AGI *agi, int argc, char 
                                         }
                                         if (totalsilence > silence) {
                                              /* Ended happily with silence */
-                                        	ast_frfree(f);
                                                 gotsilence = 1;
                                                 break;
                                         }

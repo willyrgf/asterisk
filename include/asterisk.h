@@ -18,61 +18,52 @@
 #ifndef _ASTERISK_H
 #define _ASTERISK_H
 
+#include "asterisk/autoconfig.h"
+
 #include "asterisk/compat.h"
+
+#include <limits.h>
 
 #define DEFAULT_LANGUAGE "en"
 
 #define DEFAULT_SAMPLE_RATE 8000
 #define DEFAULT_SAMPLES_PER_MS  ((DEFAULT_SAMPLE_RATE)/1000)
 
-#define AST_CONFIG_MAX_PATH 255
-
 /* provided in asterisk.c */
-extern char ast_config_AST_CONFIG_DIR[AST_CONFIG_MAX_PATH];
-extern char ast_config_AST_CONFIG_FILE[AST_CONFIG_MAX_PATH];
-extern char ast_config_AST_MODULE_DIR[AST_CONFIG_MAX_PATH];
-extern char ast_config_AST_SPOOL_DIR[AST_CONFIG_MAX_PATH];
-extern char ast_config_AST_MONITOR_DIR[AST_CONFIG_MAX_PATH];
-extern char ast_config_AST_VAR_DIR[AST_CONFIG_MAX_PATH];
-extern char ast_config_AST_DATA_DIR[AST_CONFIG_MAX_PATH];
-extern char ast_config_AST_LOG_DIR[AST_CONFIG_MAX_PATH];
-extern char ast_config_AST_AGI_DIR[AST_CONFIG_MAX_PATH];
-extern char ast_config_AST_DB[AST_CONFIG_MAX_PATH];
-extern char ast_config_AST_KEY_DIR[AST_CONFIG_MAX_PATH];
-extern char ast_config_AST_PID[AST_CONFIG_MAX_PATH];
-extern char ast_config_AST_SOCKET[AST_CONFIG_MAX_PATH];
-extern char ast_config_AST_RUN_DIR[AST_CONFIG_MAX_PATH];
-extern char ast_config_AST_CTL_PERMISSIONS[AST_CONFIG_MAX_PATH];
-extern char ast_config_AST_CTL_OWNER[AST_CONFIG_MAX_PATH];
-extern char ast_config_AST_CTL_GROUP[AST_CONFIG_MAX_PATH];
-extern char ast_config_AST_CTL[AST_CONFIG_MAX_PATH];
+extern char ast_config_AST_CONFIG_DIR[PATH_MAX];
+extern char ast_config_AST_CONFIG_FILE[PATH_MAX];
+extern char ast_config_AST_MODULE_DIR[PATH_MAX];
+extern char ast_config_AST_SPOOL_DIR[PATH_MAX];
+extern char ast_config_AST_MONITOR_DIR[PATH_MAX];
+extern char ast_config_AST_VAR_DIR[PATH_MAX];
+extern char ast_config_AST_DATA_DIR[PATH_MAX];
+extern char ast_config_AST_LOG_DIR[PATH_MAX];
+extern char ast_config_AST_AGI_DIR[PATH_MAX];
+extern char ast_config_AST_DB[PATH_MAX];
+extern char ast_config_AST_KEY_DIR[PATH_MAX];
+extern char ast_config_AST_PID[PATH_MAX];
+extern char ast_config_AST_SOCKET[PATH_MAX];
+extern char ast_config_AST_RUN_DIR[PATH_MAX];
+extern char ast_config_AST_CTL_PERMISSIONS[PATH_MAX];
+extern char ast_config_AST_CTL_OWNER[PATH_MAX];
+extern char ast_config_AST_CTL_GROUP[PATH_MAX];
+extern char ast_config_AST_CTL[PATH_MAX];
 extern char ast_config_AST_SYSTEM_NAME[20];
 
-/* Provided by asterisk.c */
-int ast_set_priority(int);
-/* Provided by module.c */
-int load_modules(const int preload_only);
-/* Provided by pbx.c */
-int load_pbx(void);
-/* Provided by logger.c */
-int init_logger(void);
-void close_logger(void);
-/* Provided by frame.c */
-int init_framer(void);
-/* Provided by logger.c */
-int reload_logger(int);
-/* Provided by term.c */
-int term_init(void);
-/* Provided by db.c */
-int astdb_init(void);
-/* Provided by channel.c */
-void ast_channels_init(void);
-/* Provided by cli.c */
-void ast_builtins_init(void);
-/* Provided by dnsmgr.c */
-int dnsmgr_init(void);
-void dnsmgr_start_refresh(void);
-int dnsmgr_reload(void);
+int ast_set_priority(int);			/*!< Provided by asterisk.c */
+int load_modules(const int preload_only);	/*!< Provided by module.c */
+int load_pbx(void);				/*!< Provided by pbx.c */
+int init_logger(void);				/*!< Provided by logger.c */
+void close_logger(void);			/*!< Provided by logger.c */
+int reload_logger(int);				/*!< Provided by logger.c */
+int init_framer(void);				/*!< Provided by frame.c */
+int term_init(void);				/*!< Provided by term.c */
+int astdb_init(void);				/*!< Provided by db.c */
+void ast_channels_init(void);			/*!< Provided by channel.c */
+void ast_builtins_init(void);			/*!< Provided by cli.c */
+int dnsmgr_init(void);				/*!< Provided by dnsmgr.c */ 
+void dnsmgr_start_refresh(void);		/*!< Provided by dnsmgr.c */
+int dnsmgr_reload(void);			/*!< Provided by dnsmgr.c */
 
 /*!
  * \brief Reload asterisk modules.
@@ -128,6 +119,7 @@ void ast_unregister_file_version(const char *file);
 
 /*!
  * \brief support for event profiling
+ *
  * (note, this must be documented a lot more)
  * ast_add_profile allocates a generic 'counter' with a given name,
  * which can be shown with the command 'show profile <name>'

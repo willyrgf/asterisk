@@ -13,6 +13,8 @@
 
 .EXPORT_ALL_VARIABLES:
 
+.PHONY: sounds
+
 # Create OPTIONS variable
 OPTIONS=
 
@@ -36,22 +38,6 @@ PWD=$(shell pwd)
 
 # Remember the MAKELEVEL at the top
 MAKETOPLEVEL?=$(MAKELEVEL)
-
-ifeq ($(findstring dont-optimize,$(MAKECMDGOALS)),)
-# More GSM codec optimization
-# Uncomment to enable MMXTM optimizations for x86 architecture CPU's
-# which support MMX instructions.  This should be newer pentiums,
-# ppro's, etc, as well as the AMD K6 and K7.  
-#K6OPT  = -DK6OPT
-
-# Tell gcc to optimize the code
-OPTIMIZE+=-O6
-else
-  # Stack backtraces, while useful for debugging, are incompatible with optimizations
-  ifeq (${OSARCH},Linux)
-    CFLAGS+=-DSTACK_BACKTRACES
-  endif
-endif
 
 # Overwite config files on "make samples"
 OVERWRITE=y
@@ -143,9 +129,32 @@ ifneq ($(wildcard makeopts),)
   include makeopts
 endif
 
-TOPDIR_CFLAGS=-include include/autoconfig.h -Iinclude
-MOD_SUBDIR_CFLAGS=-include ../include/autoconfig.h -I../include -I..
-OTHER_SUBDIR_CFLAGS=-include ../include/autoconfig.h -I../include -I..
+TOPDIR_CFLAGS=-Iinclude
+MOD_SUBDIR_CFLAGS=-I../include -I..
+OTHER_SUBDIR_CFLAGS=-I../include -I..
+
+ifeq ($(findstring dont-optimize,$(MAKECMDGOALS)),)
+  ifeq ($(findstring DONT_OPTIMIZE,$(MENUSELECT_CFLAGS)),)
+# More GSM codec optimization
+# Uncomment to enable MMXTM optimizations for x86 architecture CPU's
+# which support MMX instructions.  This should be newer pentiums,
+# ppro's, etc, as well as the AMD K6 and K7.  
+#K6OPT  = -DK6OPT
+
+# Tell gcc to optimize the code
+OPTIMIZE+=-O6
+  else
+    # Stack backtraces, while useful for debugging, are incompatible with optimizations
+    ifeq (${OSARCH},Linux)
+      CFLAGS+=-DSTACK_BACKTRACES
+    endif
+  endif
+else
+  # Stack backtraces, while useful for debugging, are incompatible with optimizations
+  ifeq (${OSARCH},Linux)
+    CFLAGS+=-DSTACK_BACKTRACES
+  endif
+endif
 
 #   *CLI> show memory allocations [filename]
 #   *CLI> show memory summary [filename]
@@ -187,7 +196,6 @@ ifeq ($(OSARCH),Linux)
       endif
     endif
   endif
-  MPG123TARG=linux
 endif
 
 GREP=grep
@@ -230,12 +238,10 @@ ifeq ($(OSARCH),FreeBSD)
   ifneq ($(wildcard $(CROSS_COMPILE_TARGET)/usr/local/include/spandsp),)
     ASTCFLAGS+=-I$(CROSS_COMPILE_TARGET)/usr/local/include/spandsp
   endif
-  MPG123TARG=freebsd
 endif # FreeBSD
 
 ifeq ($(OSARCH),NetBSD)
   AST_CFLAGS+=-pthread -I$(CROSS_COMPILE_TARGET)/usr/pkg/include
-  MPG123TARG=netbsd
 endif
 
 ifeq ($(OSARCH),OpenBSD)
@@ -282,7 +288,7 @@ OBJS=io.o sched.o logger.o frame.o loader.o config.o channel.o \
 	astmm.o enum.o srv.o dns.o aescrypt.o aestab.o aeskey.o \
 	utils.o plc.o jitterbuf.o dnsmgr.o devicestate.o \
 	netsock.o slinfactory.o ast_expr2.o ast_expr2f.o \
-	cryptostub.o sha1.o http.o
+	cryptostub.o sha1.o http.o fixedjitterbuf.o abstract_jb.o
 
 # we need to link in the objects statically, not as a library, because
 # otherwise modules will not have them available if none of the static
@@ -371,7 +377,7 @@ _all: all
 	@echo " +               make install                +"  
 	@echo " +-------------------------------------------+"  
 
-all: cleantest defaults.h config.status menuselect.makeopts depend asterisk subdirs
+all: cleantest config.status menuselect.makeopts depend asterisk subdirs
 
 config.status: configure
 	@CFLAGS="" ./configure
@@ -503,19 +509,19 @@ clean: clean-depend
 	rm -f include/asterisk/version.h
 	rm -f .tags-sources tags TAGS
 	@if [ -f editline/Makefile ]; then $(MAKE) -C editline distclean ; fi
-	@if [ -d mpg123-0.59r ]; then $(MAKE) -C mpg123-0.59r clean; fi
 	$(MAKE) -C db1-ast clean
 	$(MAKE) -C stdtime clean
 
 distclean: dist-clean
 
 dist-clean: clean
+	$(MAKE) -C mxml clean
+	$(MAKE) -C build_tools dist-clean
+	$(MAKE) -C sounds dist-clean
 	rm -f menuselect.makeopts makeopts makeopts.xml
 	rm -f config.log config.status
 	rm -f include/autoconfig.h
 	rm -f include/asterisk/buildopts.h
-	$(MAKE) -C mxml clean
-	$(MAKE) -C build_tools dist-clean
 
 datafiles: all
 	if [ x`$(ID) -un` = xroot ]; then sh build_tools/mkpkgconfig $(DESTDIR)/usr/lib/pkgconfig; fi
@@ -526,57 +532,12 @@ datafiles: all
 	for x in static-http/*; do \
 		$(INSTALL) -m 644 $$x $(DESTDIR)$(ASTDATADIR)/static-http ; \
 	done
-	mkdir -p $(DESTDIR)$(ASTDATADIR)/sounds/digits
-	mkdir -p $(DESTDIR)$(ASTDATADIR)/sounds/priv-callerintros
-	for x in sounds/digits/*.gsm; do \
-		if $(GREP) -q "^%`basename $$x`%" sounds.txt; then \
-			$(INSTALL) -m 644 $$x $(DESTDIR)$(ASTDATADIR)/sounds/digits ; \
-		else \
-			echo "No description for $$x"; \
-			exit 1; \
-		fi; \
-	done
-	mkdir -p $(DESTDIR)$(ASTDATADIR)/sounds/dictate
-	for x in sounds/dictate/*.gsm; do \
-		if $(GREP) -q "^%`basename $$x`%" sounds.txt; then \
-			$(INSTALL) -m 644 $$x $(DESTDIR)$(ASTDATADIR)/sounds/dictate ; \
-		else \
-			echo "No description for $$x"; \
-			exit 1; \
-		fi; \
-	done
-	mkdir -p $(DESTDIR)$(ASTDATADIR)/sounds/letters
-	for x in sounds/letters/*.gsm; do \
-		if $(GREP) -q "^%`basename $$x`%" sounds.txt; then \
-			$(INSTALL) -m 644 $$x $(DESTDIR)$(ASTDATADIR)/sounds/letters ; \
-		else \
-			echo "No description for $$x"; \
-			exit 1; \
-		fi; \
-	done
-	mkdir -p $(DESTDIR)$(ASTDATADIR)/sounds/phonetic
-	for x in sounds/phonetic/*.gsm; do \
-		if $(GREP) -q "^%`basename $$x`%" sounds.txt; then \
-			$(INSTALL) -m 644 $$x $(DESTDIR)$(ASTDATADIR)/sounds/phonetic ; \
-		else \
-			echo "No description for $$x"; \
-			exit 1; \
-		fi; \
-	done
-	for x in sounds/demo-* sounds/vm-* sounds/transfer* sounds/pbx-* sounds/ss-* sounds/beep* sounds/dir-* sounds/conf-* sounds/agent-* sounds/invalid* sounds/tt-* sounds/auth-* sounds/privacy-* sounds/queue-* sounds/spy-* sounds/priv-* sounds/screen-* sounds/hello-*; do \
-		if $(GREP) -q "^%`basename $$x`%" sounds.txt; then \
-			$(INSTALL) -m 644 $$x $(DESTDIR)$(ASTDATADIR)/sounds ; \
-		else \
-			echo "No description for $$x"; \
-			exit 1; \
-		fi; \
-	done
-	mkdir -p $(DESTDIR)$(ASTDATADIR)/mohmp3
 	mkdir -p $(DESTDIR)$(ASTDATADIR)/images
 	for x in images/*.jpg; do \
 		$(INSTALL) -m 644 $$x $(DESTDIR)$(ASTDATADIR)/images ; \
 	done
 	mkdir -p $(DESTDIR)$(AGI_DIR)
+	$(MAKE) -C sounds install
 
 update: 
 	@if [ -d .svn ]; then \
@@ -628,11 +589,11 @@ bininstall: all
 		chmod 755 $(DESTDIR)$(ASTSBINDIR)/safe_asterisk;\
 	fi
 	$(INSTALL) -d $(DESTDIR)$(ASTHEADERDIR)
+	$(INSTALL) -m 644 include/asterisk.h $(DESTDIR)$(includedir)
 	$(INSTALL) -m 644 include/asterisk/*.h $(DESTDIR)$(ASTHEADERDIR)
 	if [ -n "$(OLDHEADERS)" ]; then \
 		rm -f $(addprefix $(DESTDIR)$(ASTHEADERDIR)/,$(OLDHEADERS)) ;\
 	fi
-	mkdir -p $(DESTDIR)$(ASTDATADIR)/sounds
 	mkdir -p $(DESTDIR)$(ASTLOGDIR)/cdr-csv
 	mkdir -p $(DESTDIR)$(ASTLOGDIR)/cdr-custom
 	mkdir -p $(DESTDIR)$(ASTDATADIR)/keys
@@ -650,7 +611,6 @@ bininstall: all
 	else \
 		echo "You need to do cvs update -d not just cvs update" ; \
 	fi 
-	if [ -f mpg123-0.59r/mpg123 ]; then $(MAKE) -C mpg123-0.59r install; fi
 
 install-subdirs:
 	@for x in $(SUBDIRS); do $(MAKE) -C $$x install || exit 1 ; done
@@ -754,20 +714,6 @@ samples: adsi
 	else \
 		echo "Skipping asterisk.conf creation"; \
 	fi
-	mkdir -p $(DESTDIR)$(ASTDATADIR)/sounds ; \
-	for x in sounds/demo-*; do \
-		if $(GREP) -q "^%`basename $$x`%" sounds.txt; then \
-			$(INSTALL) -m 644 $$x $(DESTDIR)$(ASTDATADIR)/sounds ; \
-		else \
-			echo "No description for $$x"; \
-			exit 1; \
-		fi; \
-	done
-	mkdir -p $(DESTDIR)$(ASTDATADIR)/mohmp3 ; \
-	for x in sounds/*.mp3; do \
-		$(INSTALL) -m 644 $$x $(DESTDIR)$(ASTDATADIR)/mohmp3 ; \
-	done
-	rm -f $(DESTDIR)$(ASTDATADIR)/mohmp3/sample-hold.mp3
 	mkdir -p $(DESTDIR)$(ASTSPOOLDIR)/voicemail/default/1234/INBOX
 	:> $(DESTDIR)$(ASTSPOOLDIR)/voicemail/default/1234/unavail.gsm
 	for x in vm-theperson digits/1 digits/2 digits/3 digits/4 vm-isunavail; do \
@@ -821,12 +767,6 @@ __rpm: include/asterisk/version.h include/asterisk/buildopts.h spec
 progdocs:
 	(cat contrib/asterisk-ng-doxygen; echo "HAVE_DOT=$(HAVEDOT)"; \
 	echo "PROJECT_NUMBER=$(ASTERISKVERSION)") | doxygen - 
-
-mpg123:
-	@wget -V >/dev/null || (echo "You need wget" ; false )
-	[ -f mpg123-0.59r.tar.gz ] || wget http://www.mpg123.de/mpg123/mpg123-0.59r.tar.gz
-	[ -d mpg123-0.59r ] || tar xfz mpg123-0.59r.tar.gz
-	$(MAKE) -C mpg123-0.59r $(MPG123TARG)
 
 config:
 	@if [ "${OSARCH}" = "Linux" ]; then \
@@ -897,6 +837,9 @@ FORCE:
 %_env:
 	$(MAKE) -C $(shell echo $@ | sed "s/_env//g") env
 
+sounds:
+	$(MAKE) -C sounds all
+
 env:
 	env
 
@@ -907,6 +850,7 @@ env:
 cleantest:
 	@if cmp -s .cleancount .lastclean ; then echo ; else \
 		$(MAKE) clean; cp -f .cleancount .lastclean;\
+		$(MAKE) defaults.h;\
 	fi
 
 _uninstall:
@@ -915,10 +859,10 @@ _uninstall:
 	rm -f $(DESTDIR)$(ASTSBINDIR)/astgenkey
 	rm -f $(DESTDIR)$(ASTSBINDIR)/autosupport
 	rm -rf $(DESTDIR)$(ASTHEADERDIR)
-	rm -rf $(DESTDIR)$(ASTDATADIR)/sounds
 	rm -rf $(DESTDIR)$(ASTDATADIR)/firmware
 	rm -rf $(DESTDIR)$(ASTMANDIR)/man8
 	for x in $(SUBDIRS); do $(MAKE) -C $$x uninstall || exit 1 ; done
+	$(MAKE) -C sounds uninstall
 
 uninstall: _uninstall
 	@echo " +--------- Asterisk Uninstall Complete -----+"  
@@ -952,6 +896,6 @@ mxml/libmxml.a:
 	@cd mxml && unset CFLAGS LIBS && test -f config.h || ./configure
 	$(MAKE) -C mxml libmxml.a
 
-makeopts.xml: $(foreach dir,$(MOD_SUBDIRS),$(dir)/*.c) build_tools/cflags.xml
+makeopts.xml: $(foreach dir,$(MOD_SUBDIRS),$(dir)/*.c) build_tools/cflags.xml sounds/sounds.xml
 	@echo "Generating list of available modules ..."
 	@build_tools/prep_moduledeps > $@

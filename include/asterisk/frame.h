@@ -109,6 +109,14 @@ struct ast_frame {
 	struct ast_frame *prev;			
 	/*! Next/Prev for linking stand alone frames */
 	struct ast_frame *next;			
+	/*! Timing data flag */
+	int has_timing_info;
+	/*! Timestamp in milliseconds */
+	long ts;
+	/*! Length in milliseconds */
+	long len;
+	/*! Sequence number */
+	int seqno;
 };
 
 /*!
@@ -400,7 +408,7 @@ void ast_swapcopy_samples(void *dst, const void *src, int samples);
  * \param format id of format
  * \return A static string containing the name of the format or "UNKN" if unknown.
  */
-extern char* ast_getformatname(int format);
+char* ast_getformatname(int format);
 
 /*! \brief Get the names of a set of formats
  * \param buf a buffer for the output string
@@ -410,33 +418,33 @@ extern char* ast_getformatname(int format);
  * ex: for format=AST_FORMAT_GSM|AST_FORMAT_SPEEX|AST_FORMAT_ILBC it will return "0x602 (GSM|SPEEX|ILBC)"
  * \return The return value is buf.
  */
-extern char* ast_getformatname_multiple(char *buf, size_t size, int format);
+char* ast_getformatname_multiple(char *buf, size_t size, int format);
 
 /*!
  * \brief Gets a format from a name.
  * \param name string of format
  * \return This returns the form of the format in binary on success, 0 on error.
  */
-extern int ast_getformatbyname(const char *name);
+int ast_getformatbyname(const char *name);
 
 /*! \brief Get a name from a format 
  * Gets a name from a format
  * \param codec codec number (1,2,4,8,16,etc.)
  * \return This returns a static string identifying the format on success, 0 on error.
  */
-extern char *ast_codec2str(int codec);
+char *ast_codec2str(int codec);
 
 struct ast_smoother;
 
-extern struct ast_format_list *ast_get_format_list_index(int index);
-extern struct ast_format_list *ast_get_format_list(size_t *size);
-extern struct ast_smoother *ast_smoother_new(int bytes);
-extern void ast_smoother_set_flags(struct ast_smoother *smoother, int flags);
-extern int ast_smoother_get_flags(struct ast_smoother *smoother);
-extern void ast_smoother_free(struct ast_smoother *s);
-extern void ast_smoother_reset(struct ast_smoother *s, int bytes);
-extern int __ast_smoother_feed(struct ast_smoother *s, struct ast_frame *f, int swap);
-extern struct ast_frame *ast_smoother_read(struct ast_smoother *s);
+struct ast_format_list *ast_get_format_list_index(int index);
+struct ast_format_list *ast_get_format_list(size_t *size);
+struct ast_smoother *ast_smoother_new(int bytes);
+void ast_smoother_set_flags(struct ast_smoother *smoother, int flags);
+int ast_smoother_get_flags(struct ast_smoother *smoother);
+void ast_smoother_free(struct ast_smoother *s);
+void ast_smoother_reset(struct ast_smoother *s, int bytes);
+int __ast_smoother_feed(struct ast_smoother *s, struct ast_frame *f, int swap);
+struct ast_frame *ast_smoother_read(struct ast_smoother *s);
 #define ast_smoother_feed(s,f) __ast_smoother_feed(s, f, 0)
 #if __BYTE_ORDER == __LITTLE_ENDIAN
 #define ast_smoother_feed_be(s,f) __ast_smoother_feed(s, f, 1)
@@ -446,42 +454,59 @@ extern struct ast_frame *ast_smoother_read(struct ast_smoother *s);
 #define ast_smoother_feed_le(s,f) __ast_smoother_feed(s, f, 1)
 #endif
 
-extern void ast_frame_dump(const char *name, struct ast_frame *f, char *prefix);
+void ast_frame_dump(const char *name, struct ast_frame *f, char *prefix);
 
-/*! \brief Initialize a codec preference to "no preference" */
-extern void ast_codec_pref_init(struct ast_codec_pref *pref);
+/*! \par AudioCodecPref Audio Codec Preferences
+	In order to negotiate audio codecs in the order they are configured
+	in <channel>.conf for a device, we set up codec preference lists
+	in addition to the codec capabilities setting. The capabilities
+	setting is a bitmask of audio and video codecs with no internal
+	order. This will reflect the offer given to the other side, where
+	the prefered codecs will be added to the top of the list in the
+	order indicated by the "allow" lines in the device configuration.
+	
+	Video codecs are not included in the preference lists since they
+	can't be transcoded and we just have to pick whatever is supported
+*/
 
-/*! \brief Codec located at  a particular place in the preference index */
-extern int ast_codec_pref_index(struct ast_codec_pref *pref, int index);
+/*! \brief Initialize an audio codec preference to "no preference" See \ref AudioCodecPref */
+void ast_codec_pref_init(struct ast_codec_pref *pref);
 
-/*! \brief Remove a codec from a preference list */
-extern void ast_codec_pref_remove(struct ast_codec_pref *pref, int format);
+/*! \brief Codec located at a particular place in the preference index See \ref AudioCodecPref */
+int ast_codec_pref_index(struct ast_codec_pref *pref, int index);
 
-/*! \brief Append a codec to a preference list, removing it first if it was already there */
-extern int ast_codec_pref_append(struct ast_codec_pref *pref, int format);
+/*! \brief Remove audio a codec from a preference list */
+void ast_codec_pref_remove(struct ast_codec_pref *pref, int format);
 
-/*! \brief Select the best format according to preference list from supplied options. 
+/*! \brief Append a audio codec to a preference list, removing it first if it was already there 
+*/
+int ast_codec_pref_append(struct ast_codec_pref *pref, int format);
+
+/*! \brief Select the best audio format according to preference list from supplied options. 
    If "find_best" is non-zero then if nothing is found, the "Best" format of 
    the format list is selected, otherwise 0 is returned. */
-extern int ast_codec_choose(struct ast_codec_pref *pref, int formats, int find_best);
+int ast_codec_choose(struct ast_codec_pref *pref, int formats, int find_best);
 
-/*! \brief Parse an "allow" or "deny" line and update the mask and pref if provided */
-extern void ast_parse_allow_disallow(struct ast_codec_pref *pref, int *mask, const char *list, int allowing);
+/*! \brief Parse an "allow" or "deny" line in a channel or device configuration 
+        and update the capabilities mask and pref if provided.
+	Video codecs are not added to codec preference lists, since we can not transcode
+ */
+void ast_parse_allow_disallow(struct ast_codec_pref *pref, int *mask, const char *list, int allowing);
 
-/*! \brief Dump codec preference list into a string */
-extern int ast_codec_pref_string(struct ast_codec_pref *pref, char *buf, size_t size);
+/*! \brief Dump audio codec preference list into a string */
+int ast_codec_pref_string(struct ast_codec_pref *pref, char *buf, size_t size);
 
-/*! \brief Shift a codec preference list up or down 65 bytes so that it becomes an ASCII string */
-extern void ast_codec_pref_convert(struct ast_codec_pref *pref, char *buf, size_t size, int right);
+/*! \brief Shift an audio codec preference list up or down 65 bytes so that it becomes an ASCII string */
+void ast_codec_pref_convert(struct ast_codec_pref *pref, char *buf, size_t size, int right);
 
 /*! \brief Returns the number of samples contained in the frame */
-extern int ast_codec_get_samples(struct ast_frame *f);
+int ast_codec_get_samples(struct ast_frame *f);
 
 /*! \brief Returns the number of bytes for the number of samples of the given format */
-extern int ast_codec_get_len(int format, int samples);
+int ast_codec_get_len(int format, int samples);
 
 /*! \brief Appends a frame to the end of a list of frames, truncating the maximum length of the list */
-extern struct ast_frame *ast_frame_enqueue(struct ast_frame *head, struct ast_frame *f, int maxlen, int dupe);
+struct ast_frame *ast_frame_enqueue(struct ast_frame *head, struct ast_frame *f, int maxlen, int dupe);
 
 
 /*! \brief Gets duration in ms of interpolation frame for a format */

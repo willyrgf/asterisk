@@ -25,6 +25,10 @@
  * \ingroup applications
  */
 
+#include "asterisk.h"
+
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
 #include <sys/types.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -41,10 +45,6 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <ctype.h>
-
-#include "asterisk.h"
-
-ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/file.h"
 #include "asterisk/logger.h"
@@ -238,11 +238,13 @@ static int send_waveform_to_channel(struct ast_channel *chan, char *waveform, in
 					myf.f.data = myf.frdata;
 					if (ast_write(chan, &myf.f) < 0) {
 						res = -1;
+						ast_frfree(f);
 						break;
 					}
 					if (res < needed) { /* last frame */
 						ast_log(LOG_DEBUG, "Last frame\n");
 						res=0;
+						ast_frfree(f);
 						break;
 					}
 				} else {
@@ -485,6 +487,9 @@ static int festival_exec(struct ast_channel *chan, void *vdata)
                        if ( read_data == -1 )
                        {
                                ast_log(LOG_WARNING,"Unable to read from cache/festival fd");
+			       close(fd);
+			       ast_config_destroy(cfg);
+			       LOCAL_USER_REMOVE(u);
                                return -1;
                        }
                        n += read_data;
