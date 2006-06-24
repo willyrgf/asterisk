@@ -504,12 +504,13 @@ clean: $(SUBDIRS_CLEAN) clean-depend
 	@if [ -f editline/Makefile ]; then $(MAKE) -C editline distclean ; fi
 	@$(MAKE) -C db1-ast clean
 	@$(MAKE) -C stdtime clean
+	@$(MAKE) -C menuselect clean
 
 distclean: dist-clean
 
 dist-clean: clean
 	@$(MAKE) -C mxml clean
-	@$(MAKE) -C build_tools dist-clean
+	@$(MAKE) -C menuselect dist-clean
 	@$(MAKE) -C sounds dist-clean
 	rm -f menuselect.makeopts makeopts makeopts.xml
 	rm -f config.log config.status
@@ -874,7 +875,7 @@ uninstall-all: _uninstall
 menuselect: menuselect/menuselect makeopts.xml
 	-@menuselect/menuselect ${GLOBAL_MAKEOPTS} ${USER_MAKEOPTS} menuselect.makeopts && echo "menuselect changes saved!" || echo "menuselect changes NOT saved!"
 
-menuselect/menuselect: menuselect/menuselect.c menuselect/menuselect_curses.c menuselect/menuselect.h config.status mxml/libmxml.a $(MENUSELECT_OBJS)
+menuselect/menuselect: menuselect/menuselect.c menuselect/menuselect_curses.c menuselect/menuselect.h menuselect/linkedlists.h config.status mxml/libmxml.a $(MENUSELECT_OBJS)
 	@CFLAGS="-include ../include/asterisk/autoconfig.h" $(MAKE) -C menuselect menuselect
 
 mxml/libmxml.a:
@@ -885,4 +886,4 @@ makeopts.xml: $(foreach dir,$(MOD_SUBDIRS),$(dir)/*.c) build_tools/cflags.xml so
 	@echo "Generating list of available modules ..."
 	@build_tools/prep_moduledeps > $@
 
-.PHONY: sounds clean clean-depend dist-clean distclean all _all depend cleantest uninstall _uninstall uninstall-all dont-optimize valgrind $(SUBDIRS_INSTALL) $(SUBDIRS_CLEAN) $(SUBDIRS_CLEAN_DEPEND) $(SUBDIRS_DEPEND) $(SUBDIRS_UNINSTALL) $(SUBDIRS)
+.PHONY: menuselect sounds clean clean-depend dist-clean distclean all _all depend cleantest uninstall _uninstall uninstall-all dont-optimize valgrind $(SUBDIRS_INSTALL) $(SUBDIRS_CLEAN) $(SUBDIRS_CLEAN_DEPEND) $(SUBDIRS_DEPEND) $(SUBDIRS_UNINSTALL) $(SUBDIRS)
