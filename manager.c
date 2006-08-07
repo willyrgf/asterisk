@@ -115,6 +115,7 @@ static struct permalias {
 	{ EVENT_FLAG_COMMAND, "command" },
 	{ EVENT_FLAG_AGENT, "agent" },
 	{ EVENT_FLAG_USER, "user" },
+	{ EVENT_FLAG_CONFIG, "config" },
 	{ -1, "all" },
 	{ 0, "none" },
 };
@@ -233,8 +234,8 @@ static void xml_copy_escape(char **dst, size_t *maxlen, const char *src, int low
 			break;
 		case '&':
 			strcpy(*dst, "&amp;");
-			(*dst) += 4;
-			*maxlen -= 4;
+			(*dst) += 5;
+			*maxlen -= 5;
 			break;		
 		default:
 			*(*dst)++ = lower ? tolower(*src) : *src;
@@ -279,7 +280,7 @@ static char *xml_translate(char *in, struct ast_variable *vars)
 			escaped++;
 	}
 	len = (size_t) (strlen(in) + colons * 5 + breaks * (40 + strlen(dest) + strlen(objtype)) + escaped * 10); /* foo="bar", "<response type=\"object\" id=\"dest\"", "&amp;" */
-	out = malloc(len);
+	out = ast_malloc(len);
 	if (!out)
 		return 0;
 	tmp = out;
@@ -337,7 +338,7 @@ static char *html_translate(char *in)
 			breaks++;
 	}
 	len = strlen(in) + colons * 40 + breaks * 40; /* <tr><td></td><td></td></tr>, "<tr><td colspan=\"2\"><hr></td></tr> */
-	out = malloc(len);
+	out = ast_malloc(len);
 	if (!out)
 		return 0;
 	tmp = out;
@@ -443,13 +444,12 @@ static int handle_showmancmds(int fd, int argc, char *argv[])
 static int handle_showmanconn(int fd, int argc, char *argv[])
 {
 	struct mansession *s;
-	char iabuf[INET_ADDRSTRLEN];
 	char *format = "  %-15.15s  %-15.15s\n";
 	ast_mutex_lock(&sessionlock);
 	s = sessions;
 	ast_cli(fd, format, "Username", "IP Address");
 	while (s) {
-		ast_cli(fd, format,s->username, ast_inet_ntoa(iabuf, sizeof(iabuf), s->sin.sin_addr));
+		ast_cli(fd, format,s->username, ast_inet_ntoa(s->sin.sin_addr));
 		s = s->next;
 	}
 
@@ -749,7 +749,6 @@ static int set_eventmask(struct mansession *s, char *eventmask)
 static int authenticate(struct mansession *s, struct message *m)
 {
 	struct ast_config *cfg;
-	char iabuf[INET_ADDRSTRLEN];
 	char *cat;
 	char *user = astman_get_header(m, "Username");
 	char *pass = astman_get_header(m, "Secret");
@@ -795,7 +794,7 @@ static int authenticate(struct mansession *s, struct message *m)
 					v = v->next;
 				}
 				if (ha && !ast_apply_ha(ha, &(s->sin))) {
-					ast_log(LOG_NOTICE, "%s failed to pass IP ACL as '%s'\n", ast_inet_ntoa(iabuf, sizeof(iabuf), s->sin.sin_addr), user);
+					ast_log(LOG_NOTICE, "%s failed to pass IP ACL as '%s'\n", ast_inet_ntoa(s->sin.sin_addr), user);
 					ast_free_ha(ha);
 					ast_config_destroy(cfg);
 					return -1;
@@ -824,7 +823,7 @@ static int authenticate(struct mansession *s, struct message *m)
 				} else if (password && !strcmp(password, pass)) {
 					break;
 				} else {
-					ast_log(LOG_NOTICE, "%s failed to authenticate as '%s'\n", ast_inet_ntoa(iabuf, sizeof(iabuf), s->sin.sin_addr), user);
+					ast_log(LOG_NOTICE, "%s failed to authenticate as '%s'\n", ast_inet_ntoa(s->sin.sin_addr), user);
 					ast_config_destroy(cfg);
 					return -1;
 				}	
@@ -841,7 +840,7 @@ static int authenticate(struct mansession *s, struct message *m)
 			set_eventmask(s, events);
 		return 0;
 	}
-	ast_log(LOG_NOTICE, "%s tried to authenticate with nonexistent user '%s'\n", ast_inet_ntoa(iabuf, sizeof(iabuf), s->sin.sin_addr), user);
+	ast_log(LOG_NOTICE, "%s tried to authenticate with nonexistent user '%s'\n", ast_inet_ntoa(s->sin.sin_addr), user);
 	ast_config_destroy(cfg);
 	return -1;
 }
@@ -855,6 +854,149 @@ static char mandescr_ping[] =
 static int action_ping(struct mansession *s, struct message *m)
 {
 	astman_send_response(s, m, "Pong", NULL);
+	return 0;
+}
+
+static char mandescr_getconfig[] =
+"Description: A 'GetConfig' action will dump the contents of a configuration\n"
+"file by category and contents.\n"
+"Variables:\n"
+"   Filename: Configuration filename (e.g. foo.conf)\n";
+
+static int action_getconfig(struct mansession *s, struct message *m)
+{
+	struct ast_config *cfg;
+	char *fn = astman_get_header(m, "Filename");
+	int catcount = 0;
+	int lineno = 0;
+	char *category=NULL;
+	struct ast_variable *v;
+	char idText[256] = "";
+	char *id = astman_get_header(m, "ActionID");
+
+	if (!ast_strlen_zero(id))
+		snprintf(idText, sizeof(idText), "ActionID: %s\r\n", id);
+
+	if (ast_strlen_zero(fn)) {
+		astman_send_error(s, m, "Filename not specified");
+		return 0;
+	}
+	if (!(cfg = ast_config_load(fn))) {
+		astman_send_error(s, m, "Config file not found");
+		return 0;
+	}
+	astman_append(s, "Response: Success\r\n%s", idText);
+	while ((category = ast_category_browse(cfg, category))) {
+		lineno = 0;
+		astman_append(s, "Category-%06d: %s\r\n", catcount, category);
+		v = ast_variable_browse(cfg, category);
+		while (v) {
+			astman_append(s, "Line-%06d-%06d: %s=%s\r\n", catcount, lineno++, v->name, v->value);
+			v = v->next;
+		}
+		catcount++;
+	}
+	ast_config_destroy(cfg);
+	astman_append(s, "\r\n");
+	return 0;
+}
+
+
+static void handle_updates(struct mansession *s, struct message *m, struct ast_config *cfg)
+{
+	int x;
+	char hdr[40];
+	char *action, *cat, *var, *value, *match;
+	struct ast_category *category;
+	struct ast_variable *v;
+	
+	for (x=0;x<100000;x++) {
+		snprintf(hdr, sizeof(hdr), "Action-%06d", x);
+		action = astman_get_header(m, hdr);
+		if (ast_strlen_zero(action))
+			break;
+		snprintf(hdr, sizeof(hdr), "Cat-%06d", x);
+		cat = astman_get_header(m, hdr);
+		snprintf(hdr, sizeof(hdr), "Var-%06d", x);
+		var = astman_get_header(m, hdr);
+		snprintf(hdr, sizeof(hdr), "Value-%06d", x);
+		value = astman_get_header(m, hdr);
+		snprintf(hdr, sizeof(hdr), "Match-%06d", x);
+		match = astman_get_header(m, hdr);
+		if (!strcasecmp(action, "newcat")) {
+			if (!ast_strlen_zero(cat)) {
+				category = ast_category_new(cat);
+				if (category) {
+					ast_category_append(cfg, category);
+				}
+			}
+		} else if (!strcasecmp(action, "renamecat")) {
+			if (!ast_strlen_zero(cat) && !ast_strlen_zero(value)) {
+				category = ast_category_get(cfg, cat);
+				if (category) 
+					ast_category_rename(category, value);
+			}
+		} else if (!strcasecmp(action, "delcat")) {
+			if (!ast_strlen_zero(cat))
+				ast_category_delete(cfg, cat);
+		} else if (!strcasecmp(action, "update")) {
+			if (!ast_strlen_zero(cat) && !ast_strlen_zero(var) && (category = ast_category_get(cfg, cat)))
+				ast_variable_update(category, var, value, match);
+		} else if (!strcasecmp(action, "delete")) {
+			if (!ast_strlen_zero(cat) && !ast_strlen_zero(var) && (category = ast_category_get(cfg, cat)))
+				ast_variable_delete(category, var, match);
+		} else if (!strcasecmp(action, "append")) {
+			if (!ast_strlen_zero(cat) && !ast_strlen_zero(var) && 
+				(category = ast_category_get(cfg, cat)) && 
+				(v = ast_variable_new(var, value))){
+				if (match && !strcasecmp(match, "object"))
+					v->object = 1;
+				ast_variable_append(category, v);
+			}
+		}
+	}
+}
+
+static char mandescr_updateconfig[] =
+"Description: A 'UpdateConfig' action will dump the contents of a configuration\n"
+"file by category and contents.\n"
+"Variables (X's represent 6 digit number beginning with 000000):\n"
+"   SrcFilename:   Configuration filename to read(e.g. foo.conf)\n"
+"   DstFilename:   Configuration filename to write(e.g. foo.conf)\n"
+"   Action-XXXXXX: Action to Take (NewCat,RenameCat,DelCat,Update,Delete,Append)\n"
+"   Cat-XXXXXX:    Category to operate on\n"
+"   Var-XXXXXX:    Variable to work on\n"
+"   Value-XXXXXX:  Value to work on\n"
+"   Match-XXXXXX:  Extra match required to match line\n";
+
+static int action_updateconfig(struct mansession *s, struct message *m)
+{
+	struct ast_config *cfg;
+	char *sfn = astman_get_header(m, "SrcFilename");
+	char *dfn = astman_get_header(m, "DstFilename");
+	int res;
+	char idText[256] = "";
+	char *id = astman_get_header(m, "ActionID");
+
+	if (!ast_strlen_zero(id))
+		snprintf(idText, sizeof(idText), "ActionID: %s\r\n", id);
+
+	if (ast_strlen_zero(sfn) || ast_strlen_zero(dfn)) {
+		astman_send_error(s, m, "Filename not specified");
+		return 0;
+	}
+	if (!(cfg = ast_config_load(sfn))) {
+		astman_send_error(s, m, "Config file not found");
+		return 0;
+	}
+	handle_updates(s, m, cfg);
+	res = config_text_file_save(dfn, cfg, "Manager");
+	ast_config_destroy(cfg);
+	if (res) {
+		astman_send_error(s, m, "Save of config failed");
+		return 0;
+	}
+	astman_append(s, "Response: Success\r\n%s\r\n", idText);
 	return 0;
 }
 
@@ -1136,8 +1278,8 @@ static int action_status(struct mansession *s, struct message *m)
 	int all = ast_strlen_zero(name); /* set if we want all channels */
 
 	astman_send_ack(s, m, "Channel status will follow");
-        if (!ast_strlen_zero(id))
-                snprintf(idText, sizeof(idText), "ActionID: %s\r\n", id);
+	if (!ast_strlen_zero(id))
+		snprintf(idText, sizeof(idText), "ActionID: %s\r\n", id);
 	if (all)
 		c = ast_channel_walk_locked(NULL);
 	else {
@@ -1418,11 +1560,10 @@ static int action_originate(struct mansession *s, struct message *m)
 			l = NULL;
 	}
 	if (ast_true(async)) {
-		struct fast_originate_helper *fast = malloc(sizeof(struct fast_originate_helper));
+		struct fast_originate_helper *fast = ast_calloc(1, sizeof(*fast));
 		if (!fast) {
 			res = -1;
 		} else {
-			memset(fast, 0, sizeof(struct fast_originate_helper));
 			if (!ast_strlen_zero(id))
 				snprintf(fast->idtext, sizeof(fast->idtext), "ActionID: %s\r\n", id);
 			ast_copy_string(fast->tech, tech, sizeof(fast->tech));
@@ -1661,7 +1802,6 @@ static int process_message(struct mansession *s, struct message *m)
 	struct manager_action *tmp = first_action;
 	char *id = astman_get_header(m,"ActionID");
 	char idText[256] = "";
-	char iabuf[INET_ADDRSTRLEN];
 	int ret = 0;
 
 	ast_copy_string(action, astman_get_header(m, "Action"), sizeof(action));
@@ -1701,10 +1841,10 @@ static int process_message(struct mansession *s, struct message *m)
 				s->authenticated = 1;
 				if (option_verbose > 1) {
 					if (displayconnects) {
-						ast_verbose(VERBOSE_PREFIX_2 "%sManager '%s' logged on from %s\n", (s->sessiontimeout ? "HTTP " : ""), s->username, ast_inet_ntoa(iabuf, sizeof(iabuf), s->sin.sin_addr));
+						ast_verbose(VERBOSE_PREFIX_2 "%sManager '%s' logged on from %s\n", (s->sessiontimeout ? "HTTP " : ""), s->username, ast_inet_ntoa(s->sin.sin_addr));
 					}
 				}
-				ast_log(LOG_EVENT, "%sManager '%s' logged on from %s\n", (s->sessiontimeout ? "HTTP " : ""), s->username, ast_inet_ntoa(iabuf, sizeof(iabuf), s->sin.sin_addr));
+				ast_log(LOG_EVENT, "%sManager '%s' logged on from %s\n", (s->sessiontimeout ? "HTTP " : ""), s->username, ast_inet_ntoa(s->sin.sin_addr));
 				astman_send_ack(s, m, "Authentication accepted");
 			}
 		} else if (!strcasecmp(action, "Logoff")) {
@@ -1742,7 +1882,6 @@ static int get_input(struct mansession *s, char *output)
 	int res;
 	int x;
 	struct pollfd fds[1];
-	char iabuf[INET_ADDRSTRLEN];
 	for (x = 1; x < s->inlen; x++) {
 		if ((s->inbuf[x] == '\n') && (s->inbuf[x-1] == '\r')) {
 			/* Copy output data up to and including \r\n */
@@ -1756,7 +1895,7 @@ static int get_input(struct mansession *s, char *output)
 		}
 	} 
 	if (s->inlen >= sizeof(s->inbuf) - 1) {
-		ast_log(LOG_WARNING, "Dumping long line with no return from %s: %s\n", ast_inet_ntoa(iabuf, sizeof(iabuf), s->sin.sin_addr), s->inbuf);
+		ast_log(LOG_WARNING, "Dumping long line with no return from %s: %s\n", ast_inet_ntoa(s->sin.sin_addr), s->inbuf);
 		s->inlen = 0;
 	}
 	fds[0].fd = s->fd;
@@ -1797,7 +1936,6 @@ static void *session_do(void *data)
 {
 	struct mansession *s = data;
 	struct message m;
-	char iabuf[INET_ADDRSTRLEN];
 	int res;
 	
 	ast_mutex_lock(&s->__lock);
@@ -1827,15 +1965,15 @@ static void *session_do(void *data)
 	if (s->authenticated) {
 		if (option_verbose > 1) {
 			if (displayconnects) 
-				ast_verbose(VERBOSE_PREFIX_2 "Manager '%s' logged off from %s\n", s->username, ast_inet_ntoa(iabuf, sizeof(iabuf), s->sin.sin_addr));
+				ast_verbose(VERBOSE_PREFIX_2 "Manager '%s' logged off from %s\n", s->username, ast_inet_ntoa(s->sin.sin_addr));
 		}
-		ast_log(LOG_EVENT, "Manager '%s' logged off from %s\n", s->username, ast_inet_ntoa(iabuf, sizeof(iabuf), s->sin.sin_addr));
+		ast_log(LOG_EVENT, "Manager '%s' logged off from %s\n", s->username, ast_inet_ntoa(s->sin.sin_addr));
 	} else {
 		if (option_verbose > 1) {
 			if (displayconnects)
-				ast_verbose(VERBOSE_PREFIX_2 "Connect attempt from '%s' unable to authenticate\n", ast_inet_ntoa(iabuf, sizeof(iabuf), s->sin.sin_addr));
+				ast_verbose(VERBOSE_PREFIX_2 "Connect attempt from '%s' unable to authenticate\n", ast_inet_ntoa(s->sin.sin_addr));
 		}
-		ast_log(LOG_EVENT, "Failed attempt from %s\n", ast_inet_ntoa(iabuf, sizeof(iabuf), s->sin.sin_addr));
+		ast_log(LOG_EVENT, "Failed attempt from %s\n", ast_inet_ntoa(s->sin.sin_addr));
 	}
 	destroy_session(s);
 	return NULL;
@@ -1854,7 +1992,6 @@ static void *accept_thread(void *ignore)
 	pthread_attr_t attr;
 	time_t now;
 	struct pollfd pfds[1];
-	char iabuf[INET_ADDRSTRLEN];
 
 	pthread_attr_init(&attr);
 	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
@@ -1874,7 +2011,7 @@ static void *accept_thread(void *ignore)
 					sessions = next;
 				if (s->authenticated && (option_verbose > 1) && displayconnects) {
 					ast_verbose(VERBOSE_PREFIX_2 "HTTP Manager '%s' timed out from %s\n",
-						s->username, ast_inet_ntoa(iabuf, sizeof(iabuf), s->sin.sin_addr));
+						s->username, ast_inet_ntoa(s->sin.sin_addr));
 				}
 				free_session(s);
 			} else
@@ -1909,12 +2046,9 @@ static void *accept_thread(void *ignore)
 				ast_log(LOG_WARNING, "Failed to set manager tcp connection to TCP_NODELAY mode: %s\n", strerror(errno));
 			}
 		}
-		s = malloc(sizeof(struct mansession));
-		if (!s) {
-			ast_log(LOG_WARNING, "Failed to allocate management session: %s\n", strerror(errno));
+		if (!(s = ast_calloc(1, sizeof(*s))))
 			continue;
-		} 
-		memset(s, 0, sizeof(struct mansession));
+		
 		memcpy(&s->sin, &sin, sizeof(sin));
 		s->writetimeout = 100;
 		s->waiting_thread = AST_PTHREADT_NULL;
@@ -1950,24 +2084,28 @@ static void *accept_thread(void *ignore)
 static int append_event(const char *str, int category)
 {
 	struct eventqent *tmp, *prev = NULL;
-	tmp = malloc(sizeof(struct eventqent) + strlen(str));
-	if (tmp) {
-		ast_mutex_init(&tmp->lock);
-		tmp->next = NULL;
-		tmp->category = category;
-		strcpy(tmp->eventdata, str);
-		if (master_eventq) {
-			prev = master_eventq;
-			while (prev->next) 
-				prev = prev->next;
-			prev->next = tmp;
-		} else {
-			master_eventq = tmp;
-		}
-		tmp->usecount = num_sessions;
-		return 0;
+	tmp = ast_malloc(sizeof(*tmp) + strlen(str));
+
+	if (!tmp)
+		return -1;
+
+	ast_mutex_init(&tmp->lock);
+	tmp->next = NULL;
+	tmp->category = category;
+	strcpy(tmp->eventdata, str);
+	
+	if (master_eventq) {
+		prev = master_eventq;
+		while (prev->next) 
+			prev = prev->next;
+		prev->next = tmp;
+	} else {
+		master_eventq = tmp;
 	}
-	return -1;
+	
+	tmp->usecount = num_sessions;
+	
+	return 0;
 }
 
 /*! \brief  manager_event: Send AMI event to client */
@@ -2088,11 +2226,10 @@ int ast_manager_register2(const char *action, int auth, int (*func)(struct manse
 {
 	struct manager_action *cur;
 
-	cur = malloc(sizeof(struct manager_action));
-	if (!cur) {
-		ast_log(LOG_WARNING, "Manager: out of memory trying to register action\n");
+	cur = ast_malloc(sizeof(*cur));
+	if (!cur)
 		return -1;
-	}
+	
 	cur->action = action;
 	cur->authority = auth;
 	cur->func = func;
@@ -2147,9 +2284,8 @@ static char *generic_http_callback(int format, struct sockaddr_in *requestor, co
 {
 	struct mansession *s = NULL;
 	unsigned long ident = 0;
-	char workspace[256];
+	char workspace[512];
 	char cookie[128];
-	char iabuf[INET_ADDRSTRLEN];
 	size_t len = sizeof(workspace);
 	int blastaway = 0;
 	char *c = workspace;
@@ -2169,7 +2305,11 @@ static char *generic_http_callback(int format, struct sockaddr_in *requestor, co
 
 	if (!s) {
 		/* Create new session */
-		s = calloc(1, sizeof(struct mansession));
+		s = ast_calloc(1, sizeof(struct mansession));
+		if (!s) {
+			*status = 500;
+			goto generic_callback_out;
+		}
 		memcpy(&s->sin, requestor, sizeof(s->sin));
 		s->fd = -1;
 		s->waiting_thread = AST_PTHREADT_NULL;
@@ -2203,7 +2343,7 @@ static char *generic_http_callback(int format, struct sockaddr_in *requestor, co
 	memset(&m, 0, sizeof(m));
 	if (s) {
 		char tmp[80];
-		ast_build_string(&c, &len, "Content-type: text/%s\n", contenttype[format]);
+		ast_build_string(&c, &len, "Content-type: text/%s\r\n", contenttype[format]);
 		sprintf(tmp, "%08lx", s->managerid);
 		ast_build_string(&c, &len, "%s\r\n", ast_http_setcookie("mansession_id", tmp, httptimeout, cookie, sizeof(cookie)));
 		if (format == FORMAT_HTML)
@@ -2219,15 +2359,15 @@ static char *generic_http_callback(int format, struct sockaddr_in *requestor, co
 			if (s->authenticated) {
 				if (option_verbose > 1) {
 					if (displayconnects) 
-						ast_verbose(VERBOSE_PREFIX_2 "HTTP Manager '%s' logged off from %s\n", s->username, ast_inet_ntoa(iabuf, sizeof(iabuf), s->sin.sin_addr));    
+						ast_verbose(VERBOSE_PREFIX_2 "HTTP Manager '%s' logged off from %s\n", s->username, ast_inet_ntoa(s->sin.sin_addr));    
 				}
-				ast_log(LOG_EVENT, "HTTP Manager '%s' logged off from %s\n", s->username, ast_inet_ntoa(iabuf, sizeof(iabuf), s->sin.sin_addr));
+				ast_log(LOG_EVENT, "HTTP Manager '%s' logged off from %s\n", s->username, ast_inet_ntoa(s->sin.sin_addr));
 			} else {
 				if (option_verbose > 1) {
 					if (displayconnects)
-						ast_verbose(VERBOSE_PREFIX_2 "HTTP Connect attempt from '%s' unable to authenticate\n", ast_inet_ntoa(iabuf, sizeof(iabuf), s->sin.sin_addr));
+						ast_verbose(VERBOSE_PREFIX_2 "HTTP Connect attempt from '%s' unable to authenticate\n", ast_inet_ntoa(s->sin.sin_addr));
 				}
-				ast_log(LOG_EVENT, "HTTP Failed attempt from %s\n", ast_inet_ntoa(iabuf, sizeof(iabuf), s->sin.sin_addr));
+				ast_log(LOG_EVENT, "HTTP Failed attempt from %s\n", ast_inet_ntoa(s->sin.sin_addr));
 			}
 			s->needdestroy = 1;
 		}
@@ -2280,6 +2420,7 @@ static char *generic_http_callback(int format, struct sockaddr_in *requestor, co
 	
 	if (blastaway)
 		destroy_session(s);
+generic_callback_out:
 	if (*status != 200)
 		return ast_http_error(500, "Server Error", NULL, "Internal Server Error (out of memory)\n"); 
 	return retval;
@@ -2343,6 +2484,8 @@ int init_manager(void)
 		ast_manager_register("Status", EVENT_FLAG_CALL, action_status, "Lists channel status" );
 		ast_manager_register2("Setvar", EVENT_FLAG_CALL, action_setvar, "Set Channel Variable", mandescr_setvar );
 		ast_manager_register2("Getvar", EVENT_FLAG_CALL, action_getvar, "Gets a Channel Variable", mandescr_getvar );
+		ast_manager_register2("GetConfig", EVENT_FLAG_CONFIG, action_getconfig, "Retrieve configuration", mandescr_getconfig);
+		ast_manager_register2("UpdateConfig", EVENT_FLAG_CONFIG, action_updateconfig, "Update basic configuration", mandescr_updateconfig);
 		ast_manager_register2("Redirect", EVENT_FLAG_CALL, action_redirect, "Redirect (transfer) a call", mandescr_redirect );
 		ast_manager_register2("Originate", EVENT_FLAG_CALL, action_originate, "Originate Call", mandescr_originate);
 		ast_manager_register2("Command", EVENT_FLAG_COMMAND, action_command, "Execute Asterisk CLI Command", mandescr_command );

@@ -206,6 +206,12 @@ include => dundi-e164-switch
 ;
 ; ARG1 is the extension to Dial
 ;
+; Extension "s" is not a wildcard extension that matches "anything".
+; In macros, it is the start extension. In most other cases, 
+; you have to goto "s" to execute that extension.
+;
+; For wildcard matches, see above - all pattern matches start with
+; an underscore.
 exten => s,1,Goto(${ARG1},1)
 include => dundi-e164-lookup
 
@@ -278,11 +284,14 @@ include => trunkld
 ;
 ignorepat => 9
 include => default
-include => parkedcalls
 include => trunklocal
 include => iaxtel700
 include => trunktollfree
 include => iaxprovider
+
+;Include parkedcalls (or the context you define in features conf)
+;to enable call parking.
+include => parkedcalls
 ;
 ; You can use an alternative switch type as well, to resolve
 ; extensions that are not known here, for example with remote 
@@ -511,6 +520,12 @@ include => demo
 ;exten => mark,1,Goto(6275|1)			; alias mark to 6275
 ;exten => 6536,1,Macro(stdexten,6236,${WIL})	; Ditto for wil
 ;exten => wil,1,Goto(6236|1)
+
+;If you want to subscribe to the status of a parking space, this is
+;how you do it. Subscribe to extension 6600 in sip, and you will see
+;the status of the first parking lot with this extensions' help
+;exten => 6600,hint,park:701@parkedcalls
+;exten => 6600,1,noop
 ;
 ; Some other handy things are an extension for checking voicemail via
 ; voicemailmain

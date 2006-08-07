@@ -64,6 +64,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/callerid.h"
 #include "asterisk/causes.h"
 #include "asterisk/stringfields.h"
+#include "asterisk/musiconhold.h"
 
 #include "DialTone.h"
 
@@ -218,6 +219,12 @@ static int phone_indicate(struct ast_channel *chan, int condition, const void *d
 			ioctl(p->fd, IXJCTL_PSTN_SET_STATE, PSTN_OFF_HOOK);
 			p->lastformat = -1;
 			res = 0;
+			break;
+		case AST_CONTROL_HOLD:
+			ast_moh_start(chan, data, NULL);
+			break;
+		case AST_CONTROL_UNHOLD:
+			ast_moh_stop(chan);
 			break;
 		default:
 			ast_log(LOG_WARNING, "Condition %d is not supported on channel %s\n", condition, chan->name);
@@ -857,10 +864,13 @@ static struct ast_channel *phone_new(struct phone_pvt *i, int state, char *conte
 			strncpy(tmp->exten, "s",  sizeof(tmp->exten) - 1);
 		if (!ast_strlen_zero(i->language))
 			ast_string_field_set(tmp, language, i->language);
-		if (!ast_strlen_zero(i->cid_num))
-			tmp->cid.cid_num = strdup(i->cid_num);
-		if (!ast_strlen_zero(i->cid_name))
-			tmp->cid.cid_name = strdup(i->cid_name);
+
+		/* Don't use ast_set_callerid() here because it will
+		 * generate a NewCallerID event before the NewChannel event */
+		tmp->cid.cid_num = ast_strdup(i->cid_num);
+		tmp->cid.cid_ani = ast_strdup(i->cid_num);
+		tmp->cid.cid_name = ast_strdup(i->cid_name);
+
 		i->owner = tmp;
 		ast_mutex_lock(&usecnt_lock);
 		usecnt++;

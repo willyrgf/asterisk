@@ -80,29 +80,30 @@ static struct ast_format_list {
 	int bits;	/*!< bitmask value */
 	char *name;	/*!< short name */
 	char *desc;	/*!< Description */
-} AST_FORMAT_LIST[] = {
-	{ 1, AST_FORMAT_G723_1 , "g723" , "G.723.1"},	/*!< codec_g723_1.c */
-	{ 1, AST_FORMAT_GSM, "gsm" , "GSM"},		/*!< codec_gsm.c */
-	{ 1, AST_FORMAT_ULAW, "ulaw", "G.711 u-law" },	/*!< codec_ulaw.c */
-	{ 1, AST_FORMAT_ALAW, "alaw", "G.711 A-law" },	/*!< codec_alaw.c */
-	{ 1, AST_FORMAT_G726, "g726", "G.726" },	/*!< codec_g726.c */
-	{ 1, AST_FORMAT_ADPCM, "adpcm" , "ADPCM"},	/*!< codec_adpcm.c */
-	{ 1, AST_FORMAT_SLINEAR, "slin",  "16 bit Signed Linear PCM"},	/*!<  */
-	{ 1, AST_FORMAT_LPC10, "lpc10", "LPC10" },	/*!< codec_lpc10.c */
-	{ 1, AST_FORMAT_G729A, "g729", "G.729A" },	/*!< Binary commercial distribution */
-	{ 1, AST_FORMAT_SPEEX, "speex", "SpeeX" },	/*!< codec_speex.c */
-	{ 1, AST_FORMAT_ILBC, "ilbc", "iLBC"},		/*!< codec_ilbc.c */
+} AST_FORMAT_LIST[] = {					/*!< Bit number: comment  - Bit numbers are hard coded in show_codec() */
+	{ 1, AST_FORMAT_G723_1 , "g723" , "G.723.1"},	/*!<  1 */
+	{ 1, AST_FORMAT_GSM, "gsm" , "GSM"},		/*!<  2: codec_gsm.c */
+	{ 1, AST_FORMAT_ULAW, "ulaw", "G.711 u-law" },	/*!<  3: codec_ulaw.c */
+	{ 1, AST_FORMAT_ALAW, "alaw", "G.711 A-law" },	/*!<  4: codec_alaw.c */
+	{ 1, AST_FORMAT_G726, "g726", "G.726 RFC3551" },/*!<  5: codec_g726.c */
+	{ 1, AST_FORMAT_ADPCM, "adpcm" , "ADPCM"},	/*!<  6: codec_adpcm.c */
+	{ 1, AST_FORMAT_SLINEAR, "slin",  "16 bit Signed Linear PCM"},	/*!< 7 */
+	{ 1, AST_FORMAT_LPC10, "lpc10", "LPC10" },	/*!<  8: codec_lpc10.c */
+	{ 1, AST_FORMAT_G729A, "g729", "G.729A" },	/*!<  9: Binary commercial distribution */
+	{ 1, AST_FORMAT_SPEEX, "speex", "SpeeX" },	/*!< 10: codec_speex.c */
+	{ 1, AST_FORMAT_ILBC, "ilbc", "iLBC"},		/*!< 11: codec_ilbc.c */
+	{ 1, AST_FORMAT_G726_AAL2, "g726aal2", "G.726 AAL2" },	/*!<  12: codec_g726.c */
 	{ 0, 0, "nothing", "undefined" },
 	{ 0, 0, "nothing", "undefined" },
 	{ 0, 0, "nothing", "undefined" },
 	{ 0, 0, "nothing", "undefined" },
-	{ 0, AST_FORMAT_MAX_AUDIO, "maxaudio", "Maximum audio format" },
-	{ 1, AST_FORMAT_JPEG, "jpeg", "JPEG image"},	/*!< See format_jpeg.c */
-	{ 1, AST_FORMAT_PNG, "png", "PNG image"},	/*!< Image format */
-	{ 1, AST_FORMAT_H261, "h261", "H.261 Video" },	/*!< Passthrough */
-	{ 1, AST_FORMAT_H263, "h263", "H.263 Video" },	/*!< Passthrough support, see format_h263.c */
-	{ 1, AST_FORMAT_H263_PLUS, "h263p", "H.263+ Video" },	/*!< See format_h263.c */
-	{ 1, AST_FORMAT_H264, "h264", "H.264 Video" },	/*!< Passthrough support, see format_h263.c */
+	{ 0, AST_FORMAT_MAX_AUDIO, "maxaudio", "Maximum audio format" },	
+	{ 1, AST_FORMAT_JPEG, "jpeg", "JPEG image"},	/*!< 17: See format_jpeg.c */
+	{ 1, AST_FORMAT_PNG, "png", "PNG image"},	/*!< 18: Image format */
+	{ 1, AST_FORMAT_H261, "h261", "H.261 Video" },	/*!< 19: Video Passthrough */
+	{ 1, AST_FORMAT_H263, "h263", "H.263 Video" },	/*!< 20: Passthrough support, see format_h263.c */
+	{ 1, AST_FORMAT_H263_PLUS, "h263p", "H.263+ Video" },	/*!< 21: See format_h263.c */
+	{ 1, AST_FORMAT_H264, "h264", "H.264 Video" },	/*!< 22: Passthrough support, see format_h263.c */
 	{ 0, 0, "nothing", "undefined" },
 	{ 0, 0, "nothing", "undefined" },
 	{ 0, 0, "nothing", "undefined" },
@@ -254,9 +255,9 @@ static struct ast_frame *ast_frame_header_new(void)
 	struct ast_frame *f = ast_calloc(1, sizeof(*f));
 #ifdef TRACE_FRAMES
 	if (f) {
-		headers++;
 		f->prev = NULL;
 		ast_mutex_lock(&framelock);
+		headers++;
 		f->next = headerlist;
 		if (headerlist)
 			headerlist->prev = f;
@@ -283,8 +284,8 @@ void ast_frfree(struct ast_frame *fr)
 	}
 	if (fr->mallocd & AST_MALLOCD_HDR) {
 #ifdef TRACE_FRAMES
-		headers--;
 		ast_mutex_lock(&framelock);
+		headers--;
 		if (fr->next)
 			fr->next->prev = fr->prev;
 		if (fr->prev)
@@ -358,7 +359,7 @@ struct ast_frame *ast_frisolate(struct ast_frame *fr)
 	return out;
 }
 
-struct ast_frame *ast_frdup(struct ast_frame *f)
+struct ast_frame *ast_frdup(const struct ast_frame *f)
 {
 	struct ast_frame *out;
 	int len, srclen = 0;
@@ -374,7 +375,7 @@ struct ast_frame *ast_frdup(struct ast_frame *f)
 		srclen = strlen(f->src);
 	if (srclen > 0)
 		len += srclen + 1;
-	if (!(buf = ast_malloc(len)))
+	if (!(buf = ast_calloc(1, len)))
 		return NULL;
 	out = buf;
 	/* Set us as having malloc'd header only, so it will eventually
@@ -386,16 +387,15 @@ struct ast_frame *ast_frdup(struct ast_frame *f)
 	out->delivery = f->delivery;
 	out->mallocd = AST_MALLOCD_HDR;
 	out->offset = AST_FRIENDLY_OFFSET;
-	out->data = buf + sizeof(*out) + AST_FRIENDLY_OFFSET;
+	if (out->datalen) {
+		out->data = buf + sizeof(*out) + AST_FRIENDLY_OFFSET;
+		memcpy(out->data, f->data, out->datalen);	
+	}
 	if (srclen > 0) {
-		out->src = out->data + f->datalen;
+		out->src = buf + sizeof(*out) + AST_FRIENDLY_OFFSET + f->datalen;
 		/* Must have space since we allocated for it */
 		strcpy((char *)out->src, f->src);
-	} else
-		out->src = NULL;
-	out->prev = NULL;
-	out->next = NULL;
-	memcpy(out->data, f->data, out->datalen);	
+	}
 	out->has_timing_info = f->has_timing_info;
 	if (f->has_timing_info) {
 		out->ts = f->ts;
@@ -635,7 +635,7 @@ static int show_codecs(int fd, int argc, char *argv[])
 
 	if ((argc == 2) || (!strcasecmp(argv[1],"video"))) {
 		found = 1;
-		for (i=18;i<21;i++) {
+		for (i=18;i<22;i++) {
 			snprintf(hex,25,"(0x%x)",1<<i);
 			ast_cli(fd, "%11u (1 << %2d) %10s  video   %5s   (%s)\n",1 << i,i,hex,ast_getformatname(1<<i),ast_codec2str(1<<i));
 		}
@@ -860,11 +860,11 @@ static int show_frame_stats(int fd, int argc, char *argv[])
 	int x=1;
 	if (argc != 3)
 		return RESULT_SHOWUSAGE;
+	ast_mutex_lock(&framelock);
 	ast_cli(fd, "     Framer Statistics     \n");
 	ast_cli(fd, "---------------------------\n");
 	ast_cli(fd, "Total allocated headers: %d\n", headers);
 	ast_cli(fd, "Queue Dump:\n");
-	ast_mutex_lock(&framelock);
 	for (f=headerlist; f; f = f->next) {
 		ast_cli(fd, "%d.  Type %d, subclass %d from %s\n", x++, f->frametype, f->subclass, f->src ? f->src : "<Unknown>");
 	}
@@ -1255,6 +1255,7 @@ int ast_codec_get_samples(struct ast_frame *f)
 		break;
 	case AST_FORMAT_ADPCM:
 	case AST_FORMAT_G726:
+	case AST_FORMAT_G726_AAL2:
 		samples = f->datalen * 2;
 		break;
 	default:
@@ -1287,6 +1288,7 @@ int ast_codec_get_len(int format, int samples)
 		break;
 	case AST_FORMAT_ADPCM:
 	case AST_FORMAT_G726:
+	case AST_FORMAT_G726_AAL2:
 		len = samples / 2;
 		break;
 	default:

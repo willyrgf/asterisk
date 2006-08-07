@@ -38,7 +38,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #ifdef HAVE_ZAPTEL
 #include <sys/ioctl.h>
-#include <zaptel.h>
+#include <zaptel/zaptel.h>
 #endif
 
 #include "asterisk/pbx.h"
@@ -66,6 +66,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/transcap.h"
 #include "asterisk/devicestate.h"
 #include "asterisk/sha1.h"
+#include "asterisk/slinfactory.h"
 
 struct channel_spy_trans {
 	int last_format;
@@ -76,6 +77,12 @@ struct ast_channel_spy_list {
 	struct channel_spy_trans read_translator;
 	struct channel_spy_trans write_translator;
 	AST_LIST_HEAD_NOLOCK(, ast_channel_spy) list;
+};
+
+struct ast_channel_whisper_buffer {
+	ast_mutex_t lock;
+	struct ast_slinfactory sf;
+	unsigned int original_format;
 };
 
 /* uncomment if you have problems with 'monitoring' synchronized files */
@@ -92,7 +99,9 @@ static int uniqueint = 0;
 
 unsigned long global_fin = 0, global_fout = 0;
 
-/* XXX Lock appropriately in more functions XXX */
+static pthread_key_t state2str_buf_key;
+static pthread_once_t state2str_buf_once = PTHREAD_ONCE_INIT;
+#define STATE2STR_BUFSIZE   32
 
 struct chanlist {
 	const struct ast_channel_tech *tech;
@@ -158,6 +167,14 @@ const struct ast_cause {
 	{ AST_CAUSE_INTERWORKING, "INTERWORKING", "Interworking, unspecified" },
 };
 
+#ifdef __AST_DEBUG_MALLOC
+static void FREE(void *ptr)
+{
+	free(ptr);
+}
+#else
+#define FREE free
+#endif
 
 struct ast_variable *ast_channeltype_list(void)
 {
@@ -482,12 +499,17 @@ int ast_str2cause(const char *name)
 
 	return -1;
 }
-	 
+
+static void state2str_buf_key_create(void)
+{
+	pthread_key_create(&state2str_buf_key, FREE);
+}
+ 
 /*! \brief Gives the string form of a given channel state */
 char *ast_state2str(int state)
 {
-	/* XXX Not reentrant XXX */
-	static char localtmp[256];
+	char *buf;
+
 	switch(state) {
 	case AST_STATE_DOWN:
 		return "Down";
@@ -505,9 +527,19 @@ char *ast_state2str(int state)
 		return "Up";
 	case AST_STATE_BUSY:
 		return "Busy";
+	case AST_STATE_DIALING_OFFHOOK:
+		return "Dialing Offhook";
+	case AST_STATE_PRERING:
+		return "Pre-ring";
 	default:
-		snprintf(localtmp, sizeof(localtmp), "Unknown (%d)\n", state);
-		return localtmp;
+		pthread_once(&state2str_buf_once, state2str_buf_key_create);
+		if (!(buf = pthread_getspecific(state2str_buf_key))) {
+			if (!(buf = ast_malloc(STATE2STR_BUFSIZE)))
+				return NULL;
+			pthread_setspecific(state2str_buf_key, buf);
+		}
+		snprintf(buf, STATE2STR_BUFSIZE, "Unknown (%d)", state);
+		return buf;
 	}
 }
 
@@ -546,8 +578,10 @@ int ast_best_codec(int fmts)
 		AST_FORMAT_ALAW,
 		/*! Okay, well, signed linear is easy to translate into other stuff */
 		AST_FORMAT_SLINEAR,
-		/*! G.726 is standard ADPCM */
+		/*! G.726 is standard ADPCM, in RFC3551 packing order */
 		AST_FORMAT_G726,
+		/*! G.726 is standard ADPCM, in AAL2 packing order */
+		AST_FORMAT_G726_AAL2,
 		/*! ADPCM has great sound quality and is still pretty easy to translate */
 		AST_FORMAT_ADPCM,
 		/*! Okay, we're down to vocoders now, so pick GSM because it's small and easier to
@@ -828,16 +862,17 @@ static struct ast_channel *channel_find_locked(const struct ast_channel *prev,
 					continue;
 				/* found, prepare to return c->next */
 				c = AST_LIST_NEXT(c, chan_list);
-			} else if (name) { /* want match by name */
-				if ( (!namelen && strcasecmp(c->name, name)) ||
-				     (namelen && strncasecmp(c->name, name, namelen)) )
+			}
+			if (name) { /* want match by name */
+				if ((!namelen && strcasecmp(c->name, name)) ||
+				    (namelen && strncasecmp(c->name, name, namelen)))
 					continue;	/* name match failed */
 			} else if (exten) {
 				if (context && strcasecmp(c->context, context) &&
-						strcasecmp(c->macrocontext, context))
+				    strcasecmp(c->macrocontext, context))
 					continue;	/* context match failed */
 				if (strcasecmp(c->exten, exten) &&
-						strcasecmp(c->macroexten, exten))
+				    strcasecmp(c->macroexten, exten))
 					continue;	/* exten match failed */
 			}
 			/* if we get here, c points to the desired record */
@@ -882,7 +917,8 @@ struct ast_channel *ast_get_channel_by_name_prefix_locked(const char *name, cons
 }
 
 /*! \brief Get next channel by name prefix and lock it */
-struct ast_channel *ast_walk_channel_by_name_prefix_locked(struct ast_channel *chan, const char *name, const int namelen)
+struct ast_channel *ast_walk_channel_by_name_prefix_locked(const struct ast_channel *chan, const char *name,
+							   const int namelen)
 {
 	return channel_find_locked(chan, name, namelen, NULL, NULL);
 }
@@ -891,6 +927,13 @@ struct ast_channel *ast_walk_channel_by_name_prefix_locked(struct ast_channel *c
 struct ast_channel *ast_get_channel_by_exten_locked(const char *exten, const char *context)
 {
 	return channel_find_locked(NULL, NULL, 0, context, exten);
+}
+
+/*! \brief Get next channel by exten (and optionally context) and lock it */
+struct ast_channel *ast_walk_channel_by_exten_locked(const struct ast_channel *chan, const char *exten,
+						     const char *context)
+{
+	return channel_find_locked(chan, NULL, 0, context, exten);
 }
 
 /*! \brief Wait, look for hangups and condition arg */
@@ -963,13 +1006,16 @@ void ast_channel_free(struct ast_channel *chan)
 	ast_copy_string(name, chan->name, sizeof(name));
 
 	/* Stop monitoring */
-	if (chan->monitor) {
+	if (chan->monitor)
 		chan->monitor->stop( chan, 0 );
-	}
 
 	/* If there is native format music-on-hold state, free it */
-	if(chan->music_state)
+	if (chan->music_state)
 		ast_moh_cleanup(chan);
+
+	/* if someone is whispering on the channel, stop them */
+	if (chan->whisper)
+		ast_channel_whisper_stop(chan);
 
 	/* Free translators */
 	if (chan->readtrans)
@@ -1456,10 +1502,16 @@ int ast_hangup(struct ast_channel *chan)
 		return 0;
 	}
 	free_translation(chan);
-	if (chan->stream) 		/* Close audio stream */
+	/* Close audio stream */
+	if (chan->stream) {
 		ast_closestream(chan->stream);
-	if (chan->vstream)		/* Close video stream */
+		chan->stream = NULL;
+	}
+	/* Close video stream */
+	if (chan->vstream) {
 		ast_closestream(chan->vstream);
+		chan->vstream = NULL;
+	}
 	if (chan->sched) {
 		sched_context_destroy(chan->sched);
 		chan->sched = NULL;
@@ -2345,8 +2397,8 @@ int ast_write(struct ast_channel *chan, struct ast_frame *fr)
 	CHECK_BLOCKING(chan);
 	switch(fr->frametype) {
 	case AST_FRAME_CONTROL:
-		/* XXX Interpret control frames XXX */
-		ast_log(LOG_WARNING, "Don't know how to handle control frames yet\n");
+		res = (chan->tech->indicate == NULL) ? 0 :
+			chan->tech->indicate(chan, fr->subclass, fr->data, fr->datalen);
 		break;
 	case AST_FRAME_DTMF_BEGIN:
 		res = (chan->tech->send_digit_begin == NULL) ? 0 :
@@ -2421,6 +2473,27 @@ int ast_write(struct ast_channel *chan, struct ast_frame *fr)
 				}
 			}
 
+			if (ast_test_flag(chan, AST_FLAG_WHISPER)) {
+				/* frame is assumed to be in SLINEAR, since that is
+				   required for whisper mode */
+				ast_frame_adjust_volume(f, -2);
+				if (ast_slinfactory_available(&chan->whisper->sf) >= f->samples) {
+					short buf[f->samples];
+					struct ast_frame whisper = {
+						.frametype = AST_FRAME_VOICE,
+						.subclass = AST_FORMAT_SLINEAR,
+						.data = buf,
+						.datalen = sizeof(buf),
+						.samples = f->samples,
+					};
+
+					ast_mutex_lock(&chan->whisper->lock);
+					if (ast_slinfactory_read(&chan->whisper->sf, buf, f->samples))
+						ast_frame_slinear_sum(f, &whisper);
+					ast_mutex_unlock(&chan->whisper->lock);
+				}
+			}
+
 			res = chan->tech->write(chan, f);
 		}
 		break;	
@@ -2466,6 +2539,13 @@ static int set_format(struct ast_channel *chan, int fmt, int *rawformat, int *fo
 	
 	/* Now we have a good choice for both. */
 	ast_channel_lock(chan);
+
+	if ((*rawformat == native) && (*format == fmt)) {
+		/* the channel is already in these formats, so nothing to do */
+		ast_channel_unlock(chan);
+		return 0;
+	}
+
 	*rawformat = native;
 	/* User perspective is fmt */
 	*format = fmt;
@@ -2843,25 +2923,43 @@ int ast_channel_make_compatible(struct ast_channel *chan, struct ast_channel *pe
 int ast_channel_masquerade(struct ast_channel *original, struct ast_channel *clone)
 {
 	int res = -1;
+	struct ast_channel *final_orig = original, *final_clone = clone;
 
-	/* each of these channels may be sitting behind a channel proxy (i.e. chan_agent)
-	   and if so, we don't really want to masquerade it, but its proxy */
-	if (original->_bridge && (original->_bridge != ast_bridged_channel(original)))
-		original = original->_bridge;
-
-	if (clone->_bridge && (clone->_bridge != ast_bridged_channel(clone)))
-		clone = clone->_bridge;
-
-	if (original == clone) {
-		ast_log(LOG_WARNING, "Can't masquerade channel '%s' into itself!\n", original->name);
-		return -1;
-	}
 	ast_channel_lock(original);
-	while(ast_channel_trylock(clone)) {
+	while (ast_channel_trylock(clone)) {
 		ast_channel_unlock(original);
 		usleep(1);
 		ast_channel_lock(original);
 	}
+
+	/* each of these channels may be sitting behind a channel proxy (i.e. chan_agent)
+	   and if so, we don't really want to masquerade it, but its proxy */
+	if (original->_bridge && (original->_bridge != ast_bridged_channel(original)))
+		final_orig = original->_bridge;
+
+	if (clone->_bridge && (clone->_bridge != ast_bridged_channel(clone)))
+		final_clone = clone->_bridge;
+
+	if ((final_orig != original) || (final_clone != clone)) {
+		ast_channel_lock(final_orig);
+		while (ast_channel_trylock(final_clone)) {
+			ast_channel_unlock(final_orig);
+			usleep(1);
+			ast_channel_lock(final_orig);
+		}
+		ast_channel_unlock(clone);
+		ast_channel_unlock(original);
+		original = final_orig;
+		clone = final_clone;
+	}
+
+	if (original == clone) {
+		ast_log(LOG_WARNING, "Can't masquerade channel '%s' into itself!\n", original->name);
+		ast_channel_unlock(clone);
+		ast_channel_unlock(original);
+		return -1;
+	}
+
 	ast_log(LOG_DEBUG, "Planning to masquerade channel %s into the structure of %s\n",
 		clone->name, original->name);
 	if (original->masq) {
@@ -2878,8 +2976,10 @@ int ast_channel_masquerade(struct ast_channel *original, struct ast_channel *clo
 		ast_log(LOG_DEBUG, "Done planning to masquerade channel %s into the structure of %s\n", clone->name, original->name);
 		res = 0;
 	}
+
 	ast_channel_unlock(clone);
 	ast_channel_unlock(original);
+
 	return res;
 }
 
@@ -3120,6 +3220,16 @@ int ast_do_masquerade(struct ast_channel *original)
 		if (x != AST_GENERATOR_FD)
 			original->fds[x] = clone->fds[x];
 	}
+
+	/* move any whisperer over */
+	ast_channel_whisper_stop(original);
+	if (ast_test_flag(clone, AST_FLAG_WHISPER)) {
+		original->whisper = clone->whisper;
+		ast_set_flag(original, AST_FLAG_WHISPER);
+		clone->whisper = NULL;
+		ast_clear_flag(clone, AST_FLAG_WHISPER);
+	}
+
 	/* Move data stores over */
 	if (AST_LIST_FIRST(&clone->datastores))
                 AST_LIST_INSERT_TAIL(&original->datastores, AST_LIST_FIRST(&clone->datastores), entry);
@@ -3257,8 +3367,7 @@ int ast_setstate(struct ast_channel *chan, int state)
 
 	chan->_state = state;
 	ast_device_state_changed_literal(chan->name);
-	manager_event(EVENT_FLAG_CALL,
-		      (oldstate == AST_STATE_DOWN) ? "Newchannel" : "Newstate",
+	manager_event(EVENT_FLAG_CALL, "Newstate",
 		      "Channel: %s\r\n"
 		      "State: %s\r\n"
 		      "CallerID: %s\r\n"
@@ -3464,7 +3573,6 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 	struct timeval nexteventts = { 0, };
 	char caller_warning = 0;
 	char callee_warning = 0;
-	int to;
 
 	if (c0->_bridge) {
 		ast_log(LOG_WARNING, "%s is already in a bridge with %s\n",
@@ -3517,20 +3625,28 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 	o0nativeformats = c0->nativeformats;
 	o1nativeformats = c1->nativeformats;
 
-	if (config->timelimit) {
+	if (config->feature_timer) {
+		nexteventts = ast_tvadd(config->start_time, ast_samp2tv(config->feature_timer, 1000));
+	} else if (config->timelimit) {
 		nexteventts = ast_tvadd(config->start_time, ast_samp2tv(config->timelimit, 1000));
 		if (caller_warning || callee_warning)
 			nexteventts = ast_tvsub(nexteventts, ast_samp2tv(config->play_warning, 1000));
 	}
 
 	for (/* ever */;;) {
+		struct timeval now = { 0, };
+		int to;
+
 		to = -1;
-		if (config->timelimit) {
-			struct timeval now;
+
+		if (!ast_tvzero(nexteventts)) {
 			now = ast_tvnow();
 			to = ast_tvdiff_ms(nexteventts, now);
 			if (to < 0)
 				to = 0;
+		}
+
+		if (config->timelimit) {
 			time_left_ms = config->timelimit - ast_tvdiff_ms(now, config->start_time);
 			if (time_left_ms < to)
 				to = time_left_ms;
@@ -3593,7 +3709,8 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 		    (config->timelimit == 0) &&
 		    (c0->tech->bridge == c1->tech->bridge) &&
 		    !nativefailed && !c0->monitor && !c1->monitor &&
-		    !c0->spies && !c1->spies) {
+		    !c0->spies && !c1->spies && !ast_test_flag(&(config->features_callee),AST_FEATURE_REDIRECT) &&
+		    !ast_test_flag(&(config->features_caller),AST_FEATURE_REDIRECT) ) {
 			/* Looks like they share a bridge method and nothing else is in the way */
 			ast_set_flag(c0, AST_FLAG_NBRIDGE);
 			ast_set_flag(c1, AST_FLAG_NBRIDGE);
@@ -3858,11 +3975,11 @@ ast_group_t ast_get_group(char *s)
 	return group;
 }
 
-static int (*ast_moh_start_ptr)(struct ast_channel *, const char *) = NULL;
+static int (*ast_moh_start_ptr)(struct ast_channel *, const char *, const char *) = NULL;
 static void (*ast_moh_stop_ptr)(struct ast_channel *) = NULL;
 static void (*ast_moh_cleanup_ptr)(struct ast_channel *) = NULL;
 
-void ast_install_music_functions(int (*start_ptr)(struct ast_channel *, const char *),
+void ast_install_music_functions(int (*start_ptr)(struct ast_channel *, const char *, const char *),
 				 void (*stop_ptr)(struct ast_channel *),
 				 void (*cleanup_ptr)(struct ast_channel *))
 {
@@ -3879,14 +3996,16 @@ void ast_uninstall_music_functions(void)
 }
 
 /*! \brief Turn on music on hold on a given channel */
-int ast_moh_start(struct ast_channel *chan, const char *mclass)
+int ast_moh_start(struct ast_channel *chan, const char *mclass, const char *interpclass)
 {
 	if (ast_moh_start_ptr)
-		return ast_moh_start_ptr(chan, mclass);
+		return ast_moh_start_ptr(chan, mclass, interpclass);
 
-	if (option_verbose > 2)
-		ast_verbose(VERBOSE_PREFIX_3 "Music class %s requested but no musiconhold loaded.\n", mclass ? mclass : "default");
-	
+	if (option_verbose > 2) {
+		ast_verbose(VERBOSE_PREFIX_3 "Music class %s requested but no musiconhold loaded.\n", 
+			mclass ? mclass : (interpclass ? interpclass : "default"));
+	}
+
 	return 0;
 }
 
@@ -4347,4 +4466,43 @@ int ast_say_digits_full(struct ast_channel *chan, int num,
         return ast_say_digit_str_full(chan, buf, ints, lang, audiofd, ctrlfd);
 }
 
-/* end of file */
+int ast_channel_whisper_start(struct ast_channel *chan)
+{
+	if (chan->whisper)
+		return -1;
+
+	if (!(chan->whisper = ast_calloc(1, sizeof(*chan->whisper))))
+		return -1;
+
+	ast_mutex_init(&chan->whisper->lock);
+	ast_slinfactory_init(&chan->whisper->sf);
+	chan->whisper->original_format = ast_set_write_format(chan, AST_FORMAT_SLINEAR);
+	ast_set_flag(chan, AST_FLAG_WHISPER);
+
+	return 0;
+}
+
+int ast_channel_whisper_feed(struct ast_channel *chan, struct ast_frame *f)
+{
+	if (!chan->whisper)
+		return -1;
+
+	ast_mutex_lock(&chan->whisper->lock);
+	ast_slinfactory_feed(&chan->whisper->sf, f);
+	ast_mutex_unlock(&chan->whisper->lock);
+
+	return 0;
+}
+
+void ast_channel_whisper_stop(struct ast_channel *chan)
+{
+	if (!chan->whisper)
+		return;
+
+	ast_clear_flag(chan, AST_FLAG_WHISPER);
+	ast_set_write_format(chan, chan->whisper->original_format);
+	ast_slinfactory_destroy(&chan->whisper->sf);
+	ast_mutex_destroy(&chan->whisper->lock);
+	free(chan->whisper);
+	chan->whisper = NULL;
+}

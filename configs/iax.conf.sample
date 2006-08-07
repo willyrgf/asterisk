@@ -46,6 +46,11 @@
 ;
 ;amaflags=default
 ;
+; ADSI (Analog Display Services Interface) can be enabled if you have
+; (or may have) ADSI compatible CPE equipment
+;
+;adsi=no
+;
 ; You may specify a default account for Call Detail Records in addition
 ; to specifying on a per-user basis
 ;
@@ -56,6 +61,24 @@
 ; If omitted, will fallback to english
 ;
 ;language=en
+;
+; This option specifies a preference for which music on hold class this channel
+; should listen to when put on hold if the music class has not been set on the
+; channel with Set(CHANNEL(musicclass)=whatever) in the dialplan, and the peer
+; channel putting this one on hold did not suggest a music class.
+;
+; If this option is set to "passthrough", then the hold message will always be
+; passed through as signalling instead of generating hold music locally.
+;
+; This option may be specified globally, or on a per-user or per-peer basis.
+;
+;mohinterpret=default
+;
+; This option specifies which music on hold class to suggest to the peer channel
+; when this channel places the peer on hold. It may be specified globally or on
+; a per-user or per-peer basis.
+;
+;mohsuggest=default
 ;
 ; Specify bandwidth of low, medium, or high to control which codecs are used
 ; in general.
@@ -314,6 +337,8 @@ inkeys=freeworlddialup
 			; only media stream
 ;jitterbuffer=yes	; Override global setting an enable jitter buffer
 ;			; for this user
+;maxauthreq=10          ; Set maximum number of outstanding AUTHREQs waiting for replies. Any further authentication attempts will be blocked
+;                       ; if this limit is reached until they expire or a reply is received.
 ;callerid="Mark Spencer" <(256) 428-6275>
 ;deny=0.0.0.0/0.0.0.0
 ;accountcode=markster0101

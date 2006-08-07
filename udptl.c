@@ -57,8 +57,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 static int udptlstart = 0;
 static int udptlend = 0;
-static int udptldebug = 0;		        /* Are we debugging? */
-static struct sockaddr_in udptldebugaddr;	/* Debug packets to/from this host */
+static int udptldebug = 0;                  /* Are we debugging? */
+static struct sockaddr_in udptldebugaddr;   /* Debug packets to/from this host */
 #ifdef SO_NO_CHECK
 static int nochecksums = 0;
 #endif
@@ -150,7 +150,7 @@ static inline int udptl_debug_test_addr(struct sockaddr_in *addr)
 		if (((ntohs(udptldebugaddr.sin_port) != 0)
 			&& (udptldebugaddr.sin_port != addr->sin_port))
 			|| (udptldebugaddr.sin_addr.s_addr != addr->sin_addr.s_addr))
-		return 0;
+			return 0;
 	}
 	return 1;
 }
@@ -190,7 +190,7 @@ static int decode_open_type(uint8_t *buf, int limit, int *len, const uint8_t **p
 	int i;
 	const uint8_t **pbuf;
 
-	for (octet_idx = 0, *p_num_octets = 0;  ;  octet_idx += octet_cnt) {
+	for (octet_idx = 0, *p_num_octets = 0; ; octet_idx += octet_cnt) {
 		if ((stat = decode_length(buf, limit, len, &octet_cnt)) < 0)
 			return -1;
 		if (octet_cnt > 0) {
@@ -232,7 +232,7 @@ static int encode_length(uint8_t *buf, int *len, int value)
 		return value;
 	}
 	/* Fragmentation */
-	multiplier = (value < 0x10000)  ?  (value >> 14)  :  4;
+	multiplier = (value < 0x10000) ? (value >> 14) : 4;
 	/* Set the first 2 bits of the octet */
 	buf[*len] = 0xC0 | multiplier;
 	(*len)++;
@@ -253,7 +253,7 @@ static int encode_open_type(uint8_t *buf, int *len, const uint8_t *data, int num
 		num_octets = 1;
 	}
 	/* Encode the open type */
-	for (octet_idx = 0;  ;  num_octets -= enclen, octet_idx += enclen) {
+	for (octet_idx = 0; ; num_octets -= enclen, octet_idx += enclen) {
 		if ((enclen = encode_length(buf, len, num_octets)) < 0)
 			return -1;
 		if (enclen > 0) {
@@ -320,7 +320,7 @@ static int udptl_rx_packet(struct ast_udptl *s, uint8_t *buf, int len)
 			do {
 				if ((stat2 = decode_length(buf, len, &ptr, &count)) < 0)
 					return -1;
-				for (i = 0;  i < count;  i++) {
+				for (i = 0; i < count; i++) {
 					if ((stat = decode_open_type(buf, len, &ptr, &bufs[total_count + i], &lengths[total_count + i])) != 0)
 						return -1;
 				}
@@ -328,7 +328,7 @@ static int udptl_rx_packet(struct ast_udptl *s, uint8_t *buf, int len)
 			}
 			while (stat2 > 0);
 			/* Step through in reverse order, so we go oldest to newest */
-			for (i = total_count;  i > 0;  i--) {
+			for (i = total_count; i > 0; i--) {
 				if (seq_no - i >= s->rx_seq_no) {
 					/* This one wasn't seen before */
 					/* Decode the secondary IFP packet */
@@ -378,7 +378,7 @@ static int udptl_rx_packet(struct ast_udptl *s, uint8_t *buf, int len)
 		if (ifp_len > LOCAL_FAX_MAX_DATAGRAM)
 			return -1;
 		/* Update any missed slots in the buffer */
-		for (  ;  seq_no > s->rx_seq_no;  s->rx_seq_no++) {
+		for ( ; seq_no > s->rx_seq_no; s->rx_seq_no++) {
 			x = s->rx_seq_no & UDPTL_BUF_MASK;
 			s->rx[x].buf_len = -1;
 			s->rx[x].fec_len[0] = 0;
@@ -413,7 +413,7 @@ static int udptl_rx_packet(struct ast_udptl *s, uint8_t *buf, int len)
 		s->rx[x].fec_entries = entries;
 
 		/* Decode the elements */
-		for (i = 0;  i < entries;  i++) {
+		for (i = 0; i < entries; i++) {
 			if ((stat = decode_open_type(buf, len, &ptr, &data, &s->rx[x].fec_len[i])) != 0)
 				return -1;
 			if (s->rx[x].fec_len[i] > LOCAL_FAX_MAX_DATAGRAM)
@@ -423,29 +423,29 @@ static int udptl_rx_packet(struct ast_udptl *s, uint8_t *buf, int len)
 			memcpy(s->rx[x].fec[i], data, s->rx[x].fec_len[i]);
 #if 0
 			fprintf(stderr, "FEC: ");
-			for (j = 0;  j < s->rx[x].fec_len[i];  j++)
+			for (j = 0; j < s->rx[x].fec_len[i]; j++)
 				fprintf(stderr, "%02X ", data[j]);
 			fprintf(stderr, "\n");
 #endif
-	   }
+		}
 
 		/* See if we can reconstruct anything which is missing */
 		/* TODO: this does not comprehensively hunt back and repair everything that is possible */
-		for (l = x;  l != ((x - (16 - span*entries)) & UDPTL_BUF_MASK);  l = (l - 1) & UDPTL_BUF_MASK) {
+		for (l = x; l != ((x - (16 - span*entries)) & UDPTL_BUF_MASK); l = (l - 1) & UDPTL_BUF_MASK) {
 			if (s->rx[l].fec_len[0] <= 0)
 				continue;
-			for (m = 0;  m < s->rx[l].fec_entries;  m++) {
+			for (m = 0; m < s->rx[l].fec_entries; m++) {
 				limit = (l + m) & UDPTL_BUF_MASK;
-				for (which = -1, k = (limit - s->rx[l].fec_span*s->rx[l].fec_entries) & UDPTL_BUF_MASK;  k != limit;  k = (k + s->rx[l].fec_entries) & UDPTL_BUF_MASK) {
+				for (which = -1, k = (limit - s->rx[l].fec_span * s->rx[l].fec_entries) & UDPTL_BUF_MASK; k != limit; k = (k + s->rx[l].fec_entries) & UDPTL_BUF_MASK) {
 					if (s->rx[k].buf_len <= 0)
-						which = (which == -1)  ?  k  :  -2;
+						which = (which == -1) ? k : -2;
 				}
 				if (which >= 0) {
 					/* Repairable */
-					for (j = 0;  j < s->rx[l].fec_len[m];  j++) {
+					for (j = 0; j < s->rx[l].fec_len[m]; j++) {
 						s->rx[which].buf[j] = s->rx[l].fec[m][j];
-						for (k = (limit - s->rx[l].fec_span*s->rx[l].fec_entries) & UDPTL_BUF_MASK;  k != limit;  k = (k + s->rx[l].fec_entries) & UDPTL_BUF_MASK)
-							s->rx[which].buf[j] ^= (s->rx[k].buf_len > j)  ?  s->rx[k].buf[j]  :  0;
+						for (k = (limit - s->rx[l].fec_span * s->rx[l].fec_entries) & UDPTL_BUF_MASK; k != limit; k = (k + s->rx[l].fec_entries) & UDPTL_BUF_MASK)
+							s->rx[which].buf[j] ^= (s->rx[k].buf_len > j) ? s->rx[k].buf[j] : 0;
 					}
 					s->rx[which].buf_len = s->rx[l].fec_len[m];
 					repaired[which] = TRUE;
@@ -453,7 +453,7 @@ static int udptl_rx_packet(struct ast_udptl *s, uint8_t *buf, int len)
 			}
 		}
 		/* Now play any new packets forwards in time */
-		for (l = (x + 1) & UDPTL_BUF_MASK, j = seq_no - UDPTL_BUF_MASK;  l != x;  l = (l + 1) & UDPTL_BUF_MASK, j++) {
+		for (l = (x + 1) & UDPTL_BUF_MASK, j = seq_no - UDPTL_BUF_MASK; l != x; l = (l + 1) & UDPTL_BUF_MASK, j++) {
 			if (repaired[l]) {
 				//fprintf(stderr, "Fixed packet %d, len %d\n", j, l);
 				s->f[ifp_no].frametype = AST_FRAME_MODEM;
@@ -553,7 +553,7 @@ static int udptl_build_packet(struct ast_udptl *s, uint8_t *buf, uint8_t *ifp, i
 		if (encode_length(buf, &len, entries) < 0)
 			return -1;
 		/* Encode the elements */
-		for (i = 0;  i < entries;  i++) {
+		for (i = 0; i < entries; i++) {
 			j = (entry - i - 1) & UDPTL_BUF_MASK;
 			if (encode_open_type(buf, &len, s->tx[j].buf, s->tx[j].buf_len) < 0)
 				return -1;
@@ -577,19 +577,19 @@ static int udptl_build_packet(struct ast_udptl *s, uint8_t *buf, uint8_t *ifp, i
 		/* The number of entries is defined as a length, but will only ever be a small
 		   value. Treat it as such. */
 		buf[len++] = entries;
-		for (m = 0;  m < entries;  m++) {
+		for (m = 0; m < entries; m++) {
 			/* Make an XOR'ed entry the maximum length */
 			limit = (entry + m) & UDPTL_BUF_MASK;
 			high_tide = 0;
-			for (i = (limit - span*entries) & UDPTL_BUF_MASK;  i != limit;  i = (i + entries) & UDPTL_BUF_MASK) {
+			for (i = (limit - span*entries) & UDPTL_BUF_MASK; i != limit; i = (i + entries) & UDPTL_BUF_MASK) {
 				if (high_tide < s->tx[i].buf_len) {
-					for (j = 0;  j < high_tide;  j++)
+					for (j = 0; j < high_tide; j++)
 						fec[j] ^= s->tx[i].buf[j];
-					for (  ;  j < s->tx[i].buf_len;  j++)
+					for ( ; j < s->tx[i].buf_len; j++)
 						fec[j] = s->tx[i].buf[j];
 					high_tide = s->tx[i].buf_len;
 				} else {
-					for (j = 0;  j < s->tx[i].buf_len;  j++)
+					for (j = 0; j < s->tx[i].buf_len; j++)
 						fec[j] ^= s->tx[i].buf[j];
 				}
 			}
@@ -644,7 +644,6 @@ struct ast_frame *ast_udptl_read(struct ast_udptl *udptl)
 	struct sockaddr_in sin;
 	socklen_t len;
 	uint16_t seqno = 0;
-	char iabuf[INET_ADDRSTRLEN];
 	uint16_t *udptlheader;
 
 	len = sizeof(sin);
@@ -674,16 +673,16 @@ struct ast_frame *ast_udptl_read(struct ast_udptl *udptl)
 		if ((udptl->them.sin_addr.s_addr != sin.sin_addr.s_addr) ||
 			(udptl->them.sin_port != sin.sin_port)) {
 			memcpy(&udptl->them, &sin, sizeof(udptl->them));
-			ast_log(LOG_DEBUG, "UDPTL NAT: Using address %s:%d\n", ast_inet_ntoa(iabuf, sizeof(iabuf), udptl->them.sin_addr), ntohs(udptl->them.sin_port));
+			ast_log(LOG_DEBUG, "UDPTL NAT: Using address %s:%d\n", ast_inet_ntoa(udptl->them.sin_addr), ntohs(udptl->them.sin_port));
 		}
 	}
 
 	if (udptl_debug_test_addr(&sin)) {
 		ast_verbose("Got UDPTL packet from %s:%d (type %d, seq %d, len %d)\n",
-			ast_inet_ntoa(iabuf, sizeof(iabuf), sin.sin_addr), ntohs(sin.sin_port), 0, seqno, res);
+			ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port), 0, seqno, res);
 	}
 #if 0
-	printf("Got UDPTL packet from %s:%d (seq %d, len = %d)\n", ast_inet_ntoa(iabuf, sizeof(iabuf), sin.sin_addr), ntohs(sin.sin_port), seqno, res);
+	printf("Got UDPTL packet from %s:%d (seq %d, len = %d)\n", ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port), seqno, res);
 #endif
 	udptl_rx_packet(udptl, udptl->rawdata + AST_FRIENDLY_OFFSET, res);
 
@@ -700,68 +699,68 @@ void ast_udptl_offered_from_local(struct ast_udptl* udptl, int local)
 
 int ast_udptl_get_error_correction_scheme(struct ast_udptl* udptl)
 {
-    if (udptl)
-	    return udptl->error_correction_scheme;
-    else {
-	    ast_log(LOG_WARNING, "udptl structure is null\n");
-	    return -1;
-    }
+	if (udptl)
+		return udptl->error_correction_scheme;
+	else {
+		ast_log(LOG_WARNING, "udptl structure is null\n");
+		return -1;
+	}
 }
 
 void ast_udptl_set_error_correction_scheme(struct ast_udptl* udptl, int ec)
 {
-    if (udptl) {
-	switch (ec) {
-	    case UDPTL_ERROR_CORRECTION_FEC:
-		udptl->error_correction_scheme = UDPTL_ERROR_CORRECTION_FEC;
-		break;
-	    case UDPTL_ERROR_CORRECTION_REDUNDANCY:
-		udptl->error_correction_scheme = UDPTL_ERROR_CORRECTION_REDUNDANCY;
-		break;
-	    case UDPTL_ERROR_CORRECTION_NONE:
-		udptl->error_correction_scheme = UDPTL_ERROR_CORRECTION_NONE;
-		break;
-	    default:
-		ast_log(LOG_WARNING, "error correction parameter invalid");
-	};
-    } else
-	    ast_log(LOG_WARNING, "udptl structure is null\n");
+	if (udptl) {
+		switch (ec) {
+		case UDPTL_ERROR_CORRECTION_FEC:
+			udptl->error_correction_scheme = UDPTL_ERROR_CORRECTION_FEC;
+			break;
+		case UDPTL_ERROR_CORRECTION_REDUNDANCY:
+			udptl->error_correction_scheme = UDPTL_ERROR_CORRECTION_REDUNDANCY;
+			break;
+		case UDPTL_ERROR_CORRECTION_NONE:
+			udptl->error_correction_scheme = UDPTL_ERROR_CORRECTION_NONE;
+			break;
+		default:
+			ast_log(LOG_WARNING, "error correction parameter invalid");
+		};
+	} else
+		ast_log(LOG_WARNING, "udptl structure is null\n");
 }
 
 int ast_udptl_get_local_max_datagram(struct ast_udptl* udptl)
 {
-    if (udptl)
-	    return udptl->local_max_datagram_size;
-    else {
-	    ast_log(LOG_WARNING, "udptl structure is null\n");
-	    return -1;
-    }
+	if (udptl)
+		return udptl->local_max_datagram_size;
+	else {
+		ast_log(LOG_WARNING, "udptl structure is null\n");
+		return -1;
+	}
 }
 
 int ast_udptl_get_far_max_datagram(struct ast_udptl* udptl)
 {
-    if (udptl)
-	    return udptl->far_max_datagram_size;
-    else {
-	    ast_log(LOG_WARNING, "udptl structure is null\n");
-	    return -1;
-    }
+	if (udptl)
+		return udptl->far_max_datagram_size;
+	else {
+		ast_log(LOG_WARNING, "udptl structure is null\n");
+		return -1;
+	}
 }
 
 void ast_udptl_set_local_max_datagram(struct ast_udptl* udptl, int max_datagram)
 {
-    if (udptl)
-	    udptl->local_max_datagram_size = max_datagram;
-    else
-	    ast_log(LOG_WARNING, "udptl structure is null\n");
+	if (udptl)
+		udptl->local_max_datagram_size = max_datagram;
+	else
+		ast_log(LOG_WARNING, "udptl structure is null\n");
 }
 
 void ast_udptl_set_far_max_datagram(struct ast_udptl* udptl, int max_datagram)
 {
-    if (udptl)
-	    udptl->far_max_datagram_size = max_datagram;
-    else
-	    ast_log(LOG_WARNING, "udptl structure is null\n");
+	if (udptl)
+		udptl->far_max_datagram_size = max_datagram;
+	else
+		ast_log(LOG_WARNING, "udptl structure is null\n");
 }
 
 struct ast_udptl *ast_udptl_new_with_bindaddr(struct sched_context *sched, struct io_context *io, int callbackmode, struct in_addr addr)
@@ -789,7 +788,7 @@ struct ast_udptl *ast_udptl_new_with_bindaddr(struct sched_context *sched, struc
 
 	memset(&udptl->rx, 0, sizeof(udptl->rx));
 	memset(&udptl->tx, 0, sizeof(udptl->tx));
-	for (i = 0;  i <= UDPTL_BUF_MASK;  i++) {
+	for (i = 0; i <= UDPTL_BUF_MASK; i++) {
 		udptl->rx[i].buf_len = -1;
 		udptl->tx[i].buf_len = -1;
 	}
@@ -895,7 +894,6 @@ int ast_udptl_write(struct ast_udptl *s, struct ast_frame *f)
 	int len;
 	int res;
 	uint8_t buf[LOCAL_FAX_MAX_DATAGRAM];
-	char iabuf[INET_ADDRSTRLEN];
 
 	/* If we have no peer, return immediately */	
 	if (s->them.sin_addr.s_addr == INADDR_ANY)
@@ -913,15 +911,15 @@ int ast_udptl_write(struct ast_udptl *s, struct ast_frame *f)
 	/* Cook up the UDPTL packet, with the relevant EC info. */
 	len = udptl_build_packet(s, buf, f->data, f->datalen);
 
-	if (len > 0  &&  s->them.sin_port && s->them.sin_addr.s_addr) {
+	if (len > 0 && s->them.sin_port && s->them.sin_addr.s_addr) {
 		if ((res = sendto(s->fd, buf, len, 0, (struct sockaddr *) &s->them, sizeof(s->them))) < 0)
-			ast_log(LOG_NOTICE, "UDPTL Transmission error to %s:%d: %s\n", ast_inet_ntoa(iabuf, sizeof(iabuf), s->them.sin_addr), ntohs(s->them.sin_port), strerror(errno));
+			ast_log(LOG_NOTICE, "UDPTL Transmission error to %s:%d: %s\n", ast_inet_ntoa(s->them.sin_addr), ntohs(s->them.sin_port), strerror(errno));
 #if 0
-		printf("Sent %d bytes of UDPTL data to %s:%d\n", res, ast_inet_ntoa(iabuf, sizeof(iabuf), udptl->them.sin_addr), ntohs(udptl->them.sin_port));
+		printf("Sent %d bytes of UDPTL data to %s:%d\n", res, ast_inet_ntoa(udptl->them.sin_addr), ntohs(udptl->them.sin_port));
 #endif
 		if (udptl_debug_test_addr(&s->them))
 			ast_verbose("Sent UDPTL packet to %s:%d (type %d, seq %d, len %d)\n",
-					ast_inet_ntoa(iabuf, sizeof(iabuf), s->them.sin_addr),
+					ast_inet_ntoa(s->them.sin_addr),
 					ntohs(s->them.sin_port), 0, s->seqno, len);
 	}
 		
@@ -935,7 +933,7 @@ void ast_udptl_proto_unregister(struct ast_udptl_protocol *proto)
 
 	cur = protos;
 	prev = NULL;
-	while(cur) {
+	while (cur) {
 		if (cur == proto) {
 			if (prev)
 				prev->next = proto->next;
@@ -953,7 +951,7 @@ int ast_udptl_proto_register(struct ast_udptl_protocol *proto)
 	struct ast_udptl_protocol *cur;
 
 	cur = protos;
-	while(cur) {
+	while (cur) {
 		if (cur->type == proto->type) {
 			ast_log(LOG_WARNING, "Tried to register same protocol '%s' twice\n", cur->type);
 			return -1;
@@ -991,7 +989,6 @@ int ast_udptl_bridge(struct ast_channel *c0, struct ast_channel *c1, int flags, 
 	struct sockaddr_in ac1;
 	struct sockaddr_in t0;
 	struct sockaddr_in t1;
-	char iabuf[INET_ADDRSTRLEN];
 	void *pvt0;
 	void *pvt1;
 	int to;
@@ -1044,7 +1041,7 @@ int ast_udptl_bridge(struct ast_channel *c0, struct ast_channel *c1, int flags, 
 	cs[1] = c1;
 	cs[2] = NULL;
 	for (;;) {
-		if ((c0->tech_pvt != pvt0)  ||
+		if ((c0->tech_pvt != pvt0) ||
 			(c1->tech_pvt != pvt1) ||
 			(c0->masq || c0->masqr || c1->masq || c1->masqr)) {
 				ast_log(LOG_DEBUG, "Oooh, something is weird, backing out\n");
@@ -1056,16 +1053,16 @@ int ast_udptl_bridge(struct ast_channel *c0, struct ast_channel *c1, int flags, 
 		ast_udptl_get_peer(p0, &t0);
 		if (inaddrcmp(&t1, &ac1)) {
 			ast_log(LOG_DEBUG, "Oooh, '%s' changed end address to %s:%d\n", 
-				c1->name, ast_inet_ntoa(iabuf, sizeof(iabuf), t1.sin_addr), ntohs(t1.sin_port));
+				c1->name, ast_inet_ntoa(t1.sin_addr), ntohs(t1.sin_port));
 			ast_log(LOG_DEBUG, "Oooh, '%s' was %s:%d\n", 
-				c1->name, ast_inet_ntoa(iabuf, sizeof(iabuf), ac1.sin_addr), ntohs(ac1.sin_port));
+				c1->name, ast_inet_ntoa(ac1.sin_addr), ntohs(ac1.sin_port));
 			memcpy(&ac1, &t1, sizeof(ac1));
 		}
 		if (inaddrcmp(&t0, &ac0)) {
 			ast_log(LOG_DEBUG, "Oooh, '%s' changed end address to %s:%d\n", 
-				c0->name, ast_inet_ntoa(iabuf, sizeof(iabuf), t0.sin_addr), ntohs(t0.sin_port));
+				c0->name, ast_inet_ntoa(t0.sin_addr), ntohs(t0.sin_port));
 			ast_log(LOG_DEBUG, "Oooh, '%s' was %s:%d\n", 
-				c0->name, ast_inet_ntoa(iabuf, sizeof(iabuf), ac0.sin_addr), ntohs(ac0.sin_port));
+				c0->name, ast_inet_ntoa(ac0.sin_addr), ntohs(ac0.sin_port));
 			memcpy(&ac0, &t0, sizeof(ac0));
 		}
 		who = ast_waitfor_n(cs, 2, &to);
@@ -1106,7 +1103,6 @@ static int udptl_do_debug_ip(int fd, int argc, char *argv[])
 {
 	struct hostent *hp;
 	struct ast_hostent ahp;
-	char iabuf[INET_ADDRSTRLEN];
 	int port;
 	char *p;
 	char *arg;
@@ -1128,9 +1124,9 @@ static int udptl_do_debug_ip(int fd, int argc, char *argv[])
 	memcpy(&udptldebugaddr.sin_addr, hp->h_addr, sizeof(udptldebugaddr.sin_addr));
 	udptldebugaddr.sin_port = htons(port);
 	if (port == 0)
-		ast_cli(fd, "UDPTL Debugging Enabled for IP: %s\n", ast_inet_ntoa(iabuf, sizeof(iabuf), udptldebugaddr.sin_addr));
+		ast_cli(fd, "UDPTL Debugging Enabled for IP: %s\n", ast_inet_ntoa(udptldebugaddr.sin_addr));
 	else
-		ast_cli(fd, "UDPTL Debugging Enabled for IP: %s:%d\n", ast_inet_ntoa(iabuf, sizeof(iabuf), udptldebugaddr.sin_addr), port);
+		ast_cli(fd, "UDPTL Debugging Enabled for IP: %s:%d\n", ast_inet_ntoa(udptldebugaddr.sin_addr), port);
 	udptldebug = 1;
 	return RESULT_SUCCESS;
 }
@@ -1147,7 +1143,7 @@ static int udptl_do_debug(int fd, int argc, char *argv[])
 	ast_cli(fd, "UDPTL Debugging Enabled\n");
 	return RESULT_SUCCESS;
 }
-   
+
 static int udptl_no_debug(int fd, int argc, char *argv[])
 {
 	if (argc !=3)
@@ -1165,13 +1161,13 @@ static char no_debug_usage[] =
   "Usage: udptl no debug\n"
   "       Disable all UDPTL debugging\n";
 
-static struct ast_cli_entry  cli_debug_ip =
+static struct ast_cli_entry cli_debug_ip =
 {{ "udptl", "debug", "ip", NULL } , udptl_do_debug, "Enable UDPTL debugging on IP", debug_usage };
 
-static struct ast_cli_entry  cli_debug =
+static struct ast_cli_entry cli_debug =
 {{ "udptl", "debug", NULL } , udptl_do_debug, "Enable UDPTL debugging", debug_usage };
 
-static struct ast_cli_entry  cli_no_debug =
+static struct ast_cli_entry cli_no_debug =
 {{ "udptl", "no", "debug", NULL } , udptl_no_debug, "Disable UDPTL debugging", no_debug_usage };
 
 void ast_udptl_reload(void)

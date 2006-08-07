@@ -19,6 +19,30 @@
 /* typedef int ie_nothing_t ;*/
 /** end of init usage **/
 
+#ifdef WITH_BEROEC
+typedef int beroec_t;
+
+
+enum beroec_type {
+	BEROEC_FULLBAND=0,
+	BEROEC_SUBBAND,
+	BEROEC_FASTSUBBAND
+};
+
+void beroec_init(void);
+void beroec_exit(void);
+beroec_t *beroec_new(int tail, enum beroec_type type, int anti_howl,
+		     int tonedisable, int zerocoeff, int adapt, int nlp);
+
+void beroec_destroy(beroec_t *ec);
+int beroec_cancel_alaw_chunk(beroec_t *ec, 
+	char *send, 
+	char *receive , 
+	int len);
+
+int beroec_version(void);
+#endif
+
 
 
 enum tone_e {
@@ -114,6 +138,7 @@ enum event_e {
 	EVENT_DTMF_TONE,
 	EVENT_NEW_L3ID,
 	EVENT_NEW_BC,
+	EVENT_PORT_ALARM,
 	EVENT_NEW_CHANNEL,
 	EVENT_UNKNOWN
 }; 
@@ -191,7 +216,11 @@ struct misdn_bchannel {
 	
 	int layer;
 	
-	
+	/*state stuff*/
+	int need_disconnect;
+	int need_release;
+	int need_release_complete;
+
 	/** var stuff**/
 	int l3_id;
 	int pid;
@@ -322,6 +351,16 @@ struct misdn_bchannel {
 	int ec_deftaps;
 	int ec_whenbridged;
 	int ec_training;
+
+#ifdef WITH_BEROEC
+	beroec_t *ec;
+	int bnec_tail;
+	int bnec_ah;
+	int bnec_nlp;
+	int bnec_td;
+	int bnec_adapt;
+	int bnec_zero;
+#endif
 	
 	int orig;
 
@@ -337,19 +376,20 @@ void (*cb_log) (int level, int port, char *tmpl, ...);
 int (*cb_jb_empty)(struct misdn_bchannel *bc, char *buffer, int len);
 
 struct misdn_lib_iface {
-	
 	enum event_response_e (*cb_event)(enum event_e event, struct misdn_bchannel *bc, void *user_data);
 	void (*cb_log)(int level, int port, char *tmpl, ...);
 	int (*cb_jb_empty)(struct misdn_bchannel *bc, char *buffer, int len);
-	
-	int l1watcher_timeout;
 };
 
 /***** USER IFACE **********/
 
+void misdn_lib_nt_debug_init( int flags, char *file );
+
 int misdn_lib_init(char *portlist, struct misdn_lib_iface* iface, void *user_data);
 int misdn_lib_send_event(struct misdn_bchannel *bc, enum event_e event );
 void misdn_lib_destroy(void);
+
+void misdn_lib_isdn_l1watcher(int port);
 
 void misdn_lib_log_ies(struct misdn_bchannel *bc);
 
@@ -369,6 +409,11 @@ void manager_ph_control(struct misdn_bchannel *bc, int c1, int c2);
 
 int misdn_lib_port_restart(int port);
 int misdn_lib_get_port_info(int port);
+
+int misdn_lib_port_block(int port);
+int misdn_lib_port_unblock(int port);
+
+int misdn_lib_port_is_pri(int port);
 
 int misdn_lib_port_up(int port, int notcheck);
 
@@ -406,6 +451,9 @@ void misdn_lib_split_bridge( struct misdn_bchannel * bc1, struct misdn_bchannel 
 void misdn_lib_echo(struct misdn_bchannel *bc, int onoff);
 
 int misdn_lib_is_ptp(int port);
+int misdn_lib_get_maxchans(int port);
+
+void misdn_lib_reinit_nt_stack(int port);
 
 #define PRI_TRANS_CAP_SPEECH                                    0x0
 #define PRI_TRANS_CAP_DIGITAL                                   0x08

@@ -839,6 +839,7 @@ static void *listener(void *unused)
 		fds[0].fd = ast_socket;
 		fds[0].events= POLLIN;
 		s = poll(fds, 1, -1);
+		pthread_testcancel();
 		if (s < 0) {
 			if (errno != EINTR)
 				ast_log(LOG_WARNING, "poll returned error: %s\n", strerror(errno));
@@ -982,15 +983,9 @@ static int ast_tryconnect(void)
  Called by soft_hangup to interrupt the poll, read, or other
  system call.  We don't actually need to do anything though.  
  Remember: Cannot EVER ast_log from within a signal handler 
- SLD: seems to be some pthread activity relating to the printf anyway:
- which is leading to a deadlock? 
  */
 static void urg_handler(int num)
 {
-#if 0
-	if (option_debug > 2) 
-		printf("-- Asterisk Urgent handler\n");
-#endif
 	signal(num, urg_handler);
 	return;
 }
@@ -1152,10 +1147,10 @@ static void quit_handler(int num, int nice, int safeshutdown, int restart)
 		ast_log(LOG_DEBUG, "Asterisk ending (%d).\n", num);
 	manager_event(EVENT_FLAG_SYSTEM, "Shutdown", "Shutdown: %s\r\nRestart: %s\r\n", ast_active_channels() ? "Uncleanly" : "Cleanly", restart ? "True" : "False");
 	if (ast_socket > -1) {
+		pthread_cancel(lthread);
 		close(ast_socket);
 		ast_socket = -1;
 		unlink(ast_config_AST_SOCKET);
-		pthread_cancel(lthread);
 	}
 	if (ast_consock > -1)
 		close(ast_consock);
@@ -1247,46 +1242,40 @@ static void consolehandler(char *s)
 {
 	printf(term_end());
 	fflush(stdout);
+
 	/* Called when readline data is available */
-	if (s && !ast_all_zeros(s))
+	if (!ast_all_zeros(s))
 		ast_el_add_history(s);
-	/* Give the console access to the shell */
-	if (s) {
-		/* The real handler for bang */
-		if (s[0] == '!') {
-			if (s[1])
-				ast_safe_system(s+1);
-			else
-				ast_safe_system(getenv("SHELL") ? getenv("SHELL") : "/bin/sh");
-		} else 
+	/* The real handler for bang */
+	if (s[0] == '!') {
+		if (s[1])
+			ast_safe_system(s+1);
+		else
+			ast_safe_system(getenv("SHELL") ? getenv("SHELL") : "/bin/sh");
+	} else 
 		ast_cli_command(STDOUT_FILENO, s);
-	} else
-		fprintf(stdout, "\nUse \"quit\" to exit\n");
 }
 
 static int remoteconsolehandler(char *s)
 {
 	int ret = 0;
+
 	/* Called when readline data is available */
-	if (s && !ast_all_zeros(s))
+	if (!ast_all_zeros(s))
 		ast_el_add_history(s);
-	/* Give the console access to the shell */
-	if (s) {
-		/* The real handler for bang */
-		if (s[0] == '!') {
-			if (s[1])
-				ast_safe_system(s+1);
-			else
-				ast_safe_system(getenv("SHELL") ? getenv("SHELL") : "/bin/sh");
-			ret = 1;
-		}
-		if ((strncasecmp(s, "quit", 4) == 0 || strncasecmp(s, "exit", 4) == 0) &&
-		    (s[4] == '\0' || isspace(s[4]))) {
-			quit_handler(0, 0, 0, 0);
-			ret = 1;
-		}
-	} else
-		fprintf(stdout, "\nUse \"quit\" to exit\n");
+	/* The real handler for bang */
+	if (s[0] == '!') {
+		if (s[1])
+			ast_safe_system(s+1);
+		else
+			ast_safe_system(getenv("SHELL") ? getenv("SHELL") : "/bin/sh");
+		ret = 1;
+	}
+	if ((strncasecmp(s, "quit", 4) == 0 || strncasecmp(s, "exit", 4) == 0) &&
+	    (s[4] == '\0' || isspace(s[4]))) {
+		quit_handler(0, 0, 0, 0);
+		ret = 1;
+	}
 
 	return ret;
 }
@@ -2223,7 +2212,7 @@ static void ast_readconfig(void)
 		/* verbose level (-v at startup) */
 		if (!strcasecmp(v->name, "verbose")) {
 			option_verbose = atoi(v->value);
-		/* whether or not to force timestamping. (-T at startup) */
+		/* whether or not to force timestamping in CLI verbose output. (-T at startup) */
 		} else if (!strcasecmp(v->name, "timestamp")) {
 			ast_set2_flag(&ast_options, ast_true(v->value), AST_OPT_FLAG_TIMESTAMP);
 		/* whether or not to support #exec in config files */
@@ -2738,7 +2727,7 @@ int main(int argc, char *argv[])
 				consolehandler((char *)buf);
 			} else {
 				if (write(STDOUT_FILENO, "\nUse EXIT or QUIT to exit the asterisk console\n",
-								  strlen("\nUse EXIT or QUIT to exit the asterisk console\n")) < 0) {
+					  strlen("\nUse EXIT or QUIT to exit the asterisk console\n")) < 0) {
 					/* Whoa, stdout disappeared from under us... Make /dev/null's */
 					int fd;
 					fd = open("/dev/null", O_RDWR);

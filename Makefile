@@ -11,7 +11,19 @@
 # the GNU General Public License
 #
 
+# All Makefiles use the following variables:
+#
+# LDFLAGS - linker flags (not libraries), used for all links
+# LIBS - additional libraries, at top-level for all links,
+#      on a single object just for that object
+# SOLINK - linker flags used only for creating shared objects (.so files),
+#      used for all .so links
+#
+
 .EXPORT_ALL_VARIABLES:
+
+#Uncomment this to see all build commands instead of 'quiet' output
+#NOISY_BUILD=yes
 
 # Create OPTIONS variable
 OPTIONS=
@@ -25,14 +37,14 @@ OPTIONS=
 #SUB_PROC=xscale # or maverick
 
 ifeq ($(CROSS_COMPILE),)
-  OSARCH=$(shell uname -s)
-  PROC?=$(shell uname -m)
+  OSARCH:=$(shell uname -s)
+  PROC?:=$(shell uname -m)
 else
   OSARCH=$(CROSS_ARCH)
   PROC=$(CROSS_PROC)
 endif
 
-PWD=$(shell pwd)
+ASTTOPDIR:=$(shell pwd)
 
 # Remember the MAKELEVEL at the top
 MAKETOPLEVEL?=$(MAKELEVEL)
@@ -66,16 +78,16 @@ DESTDIR?=
 # Define standard directories for various platforms
 # These apply if they are not redefined in asterisk.conf 
 ifeq ($(OSARCH),SunOS)
-  ASTETCDIR=/etc/opt/asterisk
+  ASTETCDIR=/var/etc/asterisk
   ASTLIBDIR=/opt/asterisk/lib
-  ASTVARLIBDIR=/var/opt/asterisk/lib
-  ASTSPOOLDIR=/var/opt/asterisk/spool
-  ASTLOGDIR=/var/opt/asterisk/log
-  ASTHEADERDIR=/opt/asterisk/usr/include/asterisk
-  ASTBINDIR=/opt/asterisk/usr/bin
-  ASTSBINDIR=/opt/asterisk/usr/sbin
-  ASTVARRUNDIR=/var/opt/asterisk/run
-  ASTMANDIR=/opt/asterisk/usr/share/man
+  ASTVARLIBDIR=/var/opt/asterisk
+  ASTSPOOLDIR=/var/spool/asterisk
+  ASTLOGDIR=/var/log/asterisk
+  ASTHEADERDIR=/opt/asterisk/include
+  ASTBINDIR=/opt/asterisk/bin
+  ASTSBINDIR=/opt/asterisk/sbin
+  ASTVARRUNDIR=/var/run/asterisk
+  ASTMANDIR=/opt/asterisk/man
 else
   ASTETCDIR=$(sysconfdir)/asterisk
   ASTLIBDIR=$(libdir)/asterisk
@@ -132,7 +144,17 @@ TOPDIR_CFLAGS=-Iinclude
 MOD_SUBDIR_CFLAGS=-I../include -I..
 OTHER_SUBDIR_CFLAGS=-I../include -I..
 
-ifeq ($(or $(findstring dont-optimize,$(MAKECMDGOALS)),$(findstring DONT_OPTIMIZE,$(MENUSELECT_CFLAGS))),)
+ifeq ($(origin MENUSELECT_CFLAGS),undefined)
+  MENUSELECT_CFLAGS:=$(shell grep MENUSELECT_CFLAGS $(USER_MAKEOPTS) .)
+  ifeq ($(MENUSELECT_CFLAGS),)
+    MENUSELECT_CFLAGS:=$(shell grep MENUSELECT_CFLAGS $(GLOBAL_MAKEOPTS) .)
+  endif
+  ifneq ($(MENUSELECT_CFLAGS),)
+    MENUSELECT_CFLAGS:=$(shell echo $(MENUSELECT_CFLAGS) | cut -f2 -d'=')
+  endif
+endif
+
+ifeq ($(findstring dont-optimize,$(MAKECMDGOALS)),$(findstring DONT_OPTIMIZE,$(MENUSELECT_CFLAGS)))
 # More GSM codec optimization
 # Uncomment to enable MMXTM optimizations for x86 architecture CPU's
 # which support MMX instructions.  This should be newer pentiums,
@@ -208,9 +230,6 @@ ifeq ($(AST_DEVMODE),yes)
   ASTCFLAGS+=-Werror -Wunused
 endif
 
-ifeq ($(shell gcc -v 2>&1 | grep 'gcc version' | cut -f3 -d' ' | cut -f1 -d.),4)
-ASTCFLAGS+=-Wno-pointer-sign
-endif
 ASTOBJ=-o asterisk
 
 ifeq ($(findstring BSD,$(OSARCH)),BSD)
@@ -228,7 +247,7 @@ endif
 ifeq ($(OSARCH),FreeBSD)
   BSDVERSION=$(shell make -V OSVERSION -f $(CROSS_COMPILE_TARGET)/usr/share/mk/bsd.port.subdir.mk)
   ASTCFLAGS+=$(shell if test $(BSDVERSION) -lt 500016 ; then echo "-D_THREAD_SAFE"; fi)
-  LIBS+=$(shell if test  $(BSDVERSION) -lt 502102 ; then echo "-lc_r"; else echo "-pthread"; fi)
+  AST_LIBS+=$(shell if test  $(BSDVERSION) -lt 502102 ; then echo "-lc_r"; else echo "-pthread"; fi)
 endif # FreeBSD
 
 ifeq ($(OSARCH),NetBSD)
@@ -240,7 +259,7 @@ ifeq ($(OSARCH),OpenBSD)
 endif
 
 ifeq ($(OSARCH),SunOS)
-  ASTCFLAGS+=-Wcast-align -DSOLARIS -Iinclude/solaris-compat -I$(CROSS_COMPILE_TARGET)/usr/local/ssl/include
+  ASTCFLAGS+=-Wcast-align -DSOLARIS -Iinclude/solaris-compat -I$(CROSS_COMPILE_TARGET)/opt/ssl/include -I$(CROSS_COMPILE_TARGET)/usr/local/ssl/include
 endif
 
 LIBEDIT=editline/libedit.a
@@ -301,13 +320,13 @@ ifeq ($(wildcard $(CROSS_COMPILE_TARGET)/usr/include/dlfcn.h),)
 endif
 
 ifeq ($(OSARCH),Linux)
-  LIBS+=-ldl -lpthread $(EDITLINE_LIB) -lm -lresolv  #-lnjamd
+  AST_LIBS+=-ldl -lpthread $(EDITLINE_LIB) -lm -lresolv  #-lnjamd
 else
-  LIBS+=$(EDITLINE_LIB) -lm
+  AST_LIBS+=$(EDITLINE_LIB) -lm
 endif
 
 ifeq ($(OSARCH),Darwin)
-  LIBS+=-lresolv
+  AST_LIBS+=-lresolv
   ASTCFLAGS+=-D__Darwin__
   AUDIO_LIBS=-framework CoreAudio
   ASTLINK=-Wl,-dynamic
@@ -322,26 +341,25 @@ else
   ASTLINK=-Wl,-E 
   SOLINK=-shared -Xlinker -x
   ifeq ($(findstring BSD,$(OSARCH)),BSD)
-    SOLINK+=-L$(CROSS_COMPILE_TARGET)/usr/local/lib
+    LDFLAGS+=-L$(CROSS_COMPILE_TARGET)/usr/local/lib
   endif
 endif
 
 ifeq ($(OSARCH),FreeBSD)
-  LIBS+=-lcrypto
+  AST_LIBS+=-lcrypto
 endif
 
 ifeq ($(OSARCH),NetBSD)
-  LIBS+=-lpthread -lcrypto -lm -L$(CROSS_COMPILE_TARGET)/usr/pkg/lib $(EDITLINE_LIB)
+  AST_LIBS+=-lpthread -lcrypto -lm -L$(CROSS_COMPILE_TARGET)/usr/pkg/lib $(EDITLINE_LIB)
 endif
 
 ifeq ($(OSARCH),OpenBSD)
-  LIBS+=-lcrypto -lpthread -lm $(EDITLINE_LIB)
+  AST_LIBS+=-lcrypto -lpthread -lm $(EDITLINE_LIB)
 endif
 
 ifeq ($(OSARCH),SunOS)
-  LIBS+=-lpthread -ldl -lnsl -lsocket -lresolv -L$(CROSS_COMPILE_TARGET)/usr/local/ssl/lib
+  AST_LIBS+=-lpthread -ldl -lnsl -lsocket -lresolv -L$(CROSS_COMPILE_TARGET)/opt/ssl/lib -L$(CROSS_COMPILE_TARGET)/usr/local/ssl/lib
   OBJS+=strcompat.o
-  MENUSELECT_OBJS+=strcompat.o
   ASTLINK=
   SOLINK=-shared -fpic -L$(CROSS_COMPILE_TARGET)/usr/local/ssl/lib
 endif
@@ -357,6 +375,8 @@ else
   HAVEDOT=no
 endif
 
+include Makefile.rules
+
 _all: all
 	@echo " +--------- Asterisk Build Complete ---------+"  
 	@echo " + Asterisk has successfully been built, but +"  
@@ -366,7 +386,7 @@ _all: all
 	@echo " +               make install                +"  
 	@echo " +-------------------------------------------+"  
 
-all: cleantest config.status menuselect.makeopts depend asterisk $(SUBDIRS)
+all: cleantest config.status menuselect.makeopts depend $(SUBDIRS) asterisk
 
 $(MOD_SUBDIRS):
 	@CFLAGS="$(MOD_SUBDIR_CFLAGS)$(ASTCFLAGS)" $(MAKE) -C $@
@@ -390,8 +410,8 @@ makeopts: configure
 	@echo "****"
 	@exit 1
 
-menuselect.makeopts: menuselect/menuselect makeopts.xml
-	@menuselect/menuselect --check-deps ${GLOBAL_MAKEOPTS} ${USER_MAKEOPTS} $@
+menuselect.makeopts menuselect.makedeps: menuselect/menuselect makeopts.xml
+	menuselect/menuselect --check-deps $(GLOBAL_MAKEOPTS) $(USER_MAKEOPTS) menuselect.makeopts
 
 #ifneq ($(wildcard tags),)
 ctags: tags
@@ -402,10 +422,10 @@ all: TAGS
 endif
 
 editline/config.h:
-	cd editline && unset CFLAGS LIBS && CFLAGS="$(OPTIMIZE)" ./configure ; \
+	cd editline && unset CFLAGS AST_LIBS && CFLAGS="$(OPTIMIZE)" ./configure ; \
 
 editline/libedit.a:
-	cd editline && unset CFLAGS LIBS && test -f config.h || CFLAGS="$(OPTIMIZE)" ./configure
+	cd editline && unset CFLAGS AST_LIBS && test -f config.h || CFLAGS="$(OPTIMIZE)" ./configure
 	$(MAKE) -C editline libedit.a
 
 db1-ast/libdb1.a:
@@ -475,16 +495,17 @@ include/asterisk/buildopts.h: menuselect.makeopts
 channel.o: CFLAGS+=$(ZAPTEL_INCLUDE)
 
 asterisk: include/asterisk/buildopts.h editline/libedit.a db1-ast/libdb1.a $(OBJS)
-	build_tools/make_build_h > include/asterisk/build.h.tmp
-	if cmp -s include/asterisk/build.h.tmp include/asterisk/build.h ; then echo ; else \
+	@build_tools/make_build_h > include/asterisk/build.h.tmp
+	@if cmp -s include/asterisk/build.h.tmp include/asterisk/build.h ; then echo ; else \
 		mv include/asterisk/build.h.tmp include/asterisk/build.h ; \
 	fi
-	rm -f include/asterisk/build.h.tmp
-	$(CC) -c -o buildinfo.o $(CFLAGS) buildinfo.c
-	$(CC) $(DEBUG) $(ASTOBJ) $(ASTLINK) $(OBJS) buildinfo.o $(LIBEDIT) db1-ast/libdb1.a $(LIBS)
+	@rm -f include/asterisk/build.h.tmp
+	@$(CC) -c -o buildinfo.o $(CFLAGS) buildinfo.c
+	@echo "   [LD] $(OBJS) buildinfo.o $(LIBEDIT) db1-ast/libdb1.1 $(AST_LIBS) -> $@"
+	@$(CC) $(DEBUG) $(ASTOBJ) $(ASTLINK) $(OBJS) buildinfo.o $(LIBEDIT) db1-ast/libdb1.a $(AST_LIBS)
 
 muted: muted.o
-	$(CC) $(AUDIO_LIBS) -o muted muted.o
+muted: LIBS+=$(AUDIO_LIBS)
 
 $(SUBDIRS_CLEAN_DEPEND):
 	@$(MAKE) -C $(@:-clean-depend=) clean-depend
@@ -506,18 +527,19 @@ clean: $(SUBDIRS_CLEAN) clean-depend
 	@$(MAKE) -C stdtime clean
 	@$(MAKE) -C menuselect clean
 
-distclean: dist-clean
+dist-clean: distclean
 
-dist-clean: clean
+distclean: clean
 	@$(MAKE) -C mxml clean
 	@$(MAKE) -C menuselect dist-clean
 	@$(MAKE) -C sounds dist-clean
 	rm -f menuselect.makeopts makeopts makeopts.xml menuselect.makedeps
 	rm -f config.log config.status
 	rm -rf autom4te.cache
-	rm -f include/autoconfig.h
+	rm -f include/asterisk/autoconfig.h
 	rm -f include/asterisk/buildopts.h
 	rm -rf doc/api
+	rm -f build_tools/menuselect-deps
 
 datafiles: all
 	if [ x`$(ID) -un` = xroot ]; then sh build_tools/mkpkgconfig $(DESTDIR)/usr/lib/pkgconfig; fi
@@ -873,16 +895,16 @@ uninstall-all: _uninstall
 	rm -rf $(DESTDIR)$(ASTLOGDIR)
 
 menuselect: menuselect/menuselect makeopts.xml
-	-@menuselect/menuselect ${GLOBAL_MAKEOPTS} ${USER_MAKEOPTS} menuselect.makeopts && echo "menuselect changes saved!" || echo "menuselect changes NOT saved!"
+	-@menuselect/menuselect $(GLOBAL_MAKEOPTS) $(USER_MAKEOPTS) menuselect.makeopts && echo "menuselect changes saved!" || echo "menuselect changes NOT saved!"
 
-menuselect/menuselect: menuselect/menuselect.c menuselect/menuselect_curses.c menuselect/menuselect.h menuselect/linkedlists.h config.status mxml/libmxml.a $(MENUSELECT_OBJS)
-	@CFLAGS="-include ../include/asterisk/autoconfig.h" $(MAKE) -C menuselect menuselect
+menuselect/menuselect: menuselect/menuselect.c menuselect/menuselect_curses.c menuselect/menuselect_stub.c menuselect/menuselect.h menuselect/linkedlists.h config.status mxml/libmxml.a
+	@CFLAGS="-include $(ASTTOPDIR)/include/asterisk/autoconfig.h -I$(ASTTOPDIR)/include" PARENTSRC="$(ASTTOPDIR)" $(MAKE) -C menuselect menuselect
 
 mxml/libmxml.a:
-	@cd mxml && unset CFLAGS LIBS && test -f config.h || ./configure
+	@cd mxml && unset CFLAGS AST_LIBS && test -f config.h || ./configure
 	$(MAKE) -C mxml libmxml.a
 
-makeopts.xml: $(foreach dir,$(MOD_SUBDIRS),$(dir)/*.c) build_tools/cflags.xml sounds/sounds.xml
+makeopts.xml: $(foreach dir,$(MOD_SUBDIRS),$(wildcard $(dir)/*.c) $(wildcard $(dir)/*.cc)) build_tools/cflags.xml sounds/sounds.xml
 	@echo "Generating list of available modules ..."
 	@build_tools/prep_moduledeps > $@
 

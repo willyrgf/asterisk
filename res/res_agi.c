@@ -547,9 +547,14 @@ static int handle_streamfile(struct ast_channel *chan, AGI *agi, int argc, char 
 	struct ast_filestream *vfs;
 	long sample_offset = 0;
 	long max_length;
+	char *edigits = "";
 
 	if (argc < 4 || argc > 5)
 		return RESULT_SHOWUSAGE;
+
+	if (argv[3]) 
+		edigits = argv[3];
+
 	if ((argc > 4) && (sscanf(argv[4], "%ld", &sample_offset) != 1))
 		return RESULT_SHOWUSAGE;
 	
@@ -563,6 +568,9 @@ static int handle_streamfile(struct ast_channel *chan, AGI *agi, int argc, char 
 	if (vfs)
 		ast_log(LOG_DEBUG, "Ooh, found a video stream, too\n");
 		
+	if (option_verbose > 2)
+		ast_verbose(VERBOSE_PREFIX_3 "Playing '%s' (escape_digits=%s) (sample_offset %ld)\n", argv[2], edigits, sample_offset);
+
 	ast_seekstream(fs, 0, SEEK_END);
 	max_length = ast_tellstream(fs);
 	ast_seekstream(fs, sample_offset, SEEK_SET);
@@ -600,7 +608,7 @@ static int handle_getoption(struct ast_channel *chan, AGI *agi, int argc, char *
 	long sample_offset = 0;
 	long max_length;
 	int timeout = 0;
-	char *edigits = NULL;
+	char *edigits = "";
 
 	if ( argc < 4 || argc > 5 )
 		return RESULT_SHOWUSAGE;
@@ -1330,7 +1338,7 @@ static int handle_noop(struct ast_channel *chan, AGI *agi, int arg, char *argv[]
 static int handle_setmusic(struct ast_channel *chan, AGI *agi, int argc, char *argv[])
 {
 	if (!strncasecmp(argv[2], "on", 2))
-		ast_moh_start(chan, argc > 3 ? argv[3] : NULL);
+		ast_moh_start(chan, argc > 3 ? argv[3] : NULL, NULL);
 	else if (!strncasecmp(argv[2], "off", 3))
 		ast_moh_stop(chan);
 	fdprintf(agi->fd, "200 result=0\n");
@@ -1784,11 +1792,6 @@ static int agi_handle_command(struct ast_channel *chan, AGI *agi, char *buf)
 	agi_command *c;
 
 	parse_args(buf, &argc, argv);
-#if	0
-	{ int x;
-	for (x=0; x<argc; x++) 
-		fprintf(stderr, "Got Arg%d: %s\n", x, argv[x]); }
-#endif
 	c = find_command(argv, 0);
 	if (c) {
 		res = c->handler(chan, agi, argc, argv);

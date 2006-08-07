@@ -78,7 +78,7 @@ static void update_statusbar(char *msg)
 	gtk_statusbar_push(GTK_STATUSBAR(statusbar), 1, msg);
 }
 
-int unload_module(void)
+static int unload_module(void *mod)
 {
 	if (inuse) {
 		/* Kill off the main thread */
@@ -200,7 +200,7 @@ static void remove_module(void)
 		}
 	}
 }
-static void reload_module(void)
+static int reload_module(void *mod)
 {
 	int res, x;
 	char *module;
@@ -236,6 +236,8 @@ static void reload_module(void)
 			free(module);
 		}
 	}
+
+	return 0;
 }
 
 static void file_ok_sel(GtkWidget *w, GtkFileSelection *fs)
@@ -275,15 +277,15 @@ static void add_module(void)
 static int add_mod(const char *module, const char *description, int usecount, const char *like)
 {
 	char use[10];
-	char *pass[4];
+	const char *pass[4];
 	int row;
 	snprintf(use, sizeof(use), "%d", usecount);
 	pass[0] = module;
 	pass[1] = description;
 	pass[2] = use;
 	pass[3] = NULL;
-	row = gtk_clist_append(GTK_CLIST(modules), pass);
-	gtk_clist_set_row_data(GTK_CLIST(modules), row, module);
+	row = gtk_clist_append(GTK_CLIST(modules), (char **) pass);
+	gtk_clist_set_row_data(GTK_CLIST(modules), row, (char *) module);
 	return 0;	
 }
 
@@ -475,7 +477,7 @@ static int show_console(void)
 }
 
 
-int load_module(void)
+static int load_module(void *mod)
 {
 	if (pipe(clipipe)) {
 		ast_log(LOG_WARNING, "Unable to create CLI pipe\n");
@@ -499,18 +501,14 @@ int load_module(void)
 	return 0;
 }
 
-int usecount(void)
-{
-	return inuse;
-}
-
-const char *description(void)
+static const char *description(void)
 {
 	return dtext;
 }
 
-const char *key(void)
+static const char *key(void)
 {
 	return ASTERISK_GPL_KEY;
 }
 
+STD_MOD(MOD_0, reload_module, NULL, NULL);

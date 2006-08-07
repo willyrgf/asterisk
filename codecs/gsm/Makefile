@@ -39,7 +39,7 @@ WAV49	= -DWAV49
 
 ifeq (, $(findstring $(OSARCH) , Darwin SunOS ))
 ifeq (, $(findstring $(PROC) , x86_64 amd64 ultrasparc sparc64 arm ppc ppc64 ia64 s390))
-ifeq (, $(findstring $(shell uname -m) , ppc ppc64 alpha armv4l ))
+ifeq (, $(findstring $(shell uname -m) , ppc ppc64 alpha armv4l s390 ))
 OPTIMIZE+=-march=$(PROC)
 endif
 endif
@@ -71,11 +71,8 @@ PG =
 # CC		= /usr/lang/acc
 # CCFLAGS 	= -c -O
 
-CC		?= gcc
 CCFLAGS 	+= -c -DNeedFunctionPrototypes=1 -funroll-loops $(OPTIMIZE)
 CCFLAGS   += -fPIC
-
-LD 		= $(CC)
 
 # LD		= gcc
 # LDFLAGS 	=
@@ -212,7 +209,7 @@ GSM_SOURCES =	$(SRC)/add.c		\
 # XXX Keep a space after each findstring argument
 # XXX should merge with GSM_OBJECTS
 ifeq (${OSARCH},Linux)
-ifeq (,$(findstring $(shell uname -m) , x86_64 amd64 ppc ppc64 alpha armv4l sparc64 parisc ))
+ifeq (,$(findstring $(shell uname -m) , x86_64 amd64 ppc ppc64 alpha armv4l sparc64 parisc s390 ))
 ifeq (,$(findstring ${PROC} , arm ia64 s390 ))
 GSM_SOURCES+= $(SRC)/k6opt.s
 endif
@@ -326,6 +323,8 @@ TOAST_INSTALL_TARGETS =	\
 		$(CC) $(CFLAGS:-Werror=) $?
 		@-mv `$(BASENAME) $@` $@ > /dev/null 2>&1
 
+include $(ASTTOPDIR)/Makefile.rules
+
 # Target rules
 
 all:		$(LIBGSM) $(LIBGSMSO) $(TOAST) $(TCAT) $(UNTOAST)
@@ -353,11 +352,7 @@ $(LIBGSMSO):	$(LIB) $(GSM_OBJECTS)
 		ln -fs libgsm.so.1.0.10 lib/libgsm.so.1
 		ln -fs libgsm.so.1.0.10 lib/libgsm.so
 
-$(LIBGSM):	$(LIB) $(GSM_OBJECTS)
-		-rm $(RMFLAGS) $(LIBGSM)
-		$(AR) $(ARFLAGS) $(LIBGSM) $(GSM_OBJECTS)
-		$(RANLIB) $(LIBGSM)
-
+$(eval $(call ast_make_a_o,$(LIBGSM),$(GSM_OBJECTS)))
 
 # Toast, Untoast and Tcat -- the compress-like frontends to gsm.
 

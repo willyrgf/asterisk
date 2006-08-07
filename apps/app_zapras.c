@@ -48,7 +48,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <errno.h>
 #include <stdio.h>
 #include <fcntl.h>
-#include <zaptel.h>
+#include <zaptel/zaptel.h>
 
 #include "asterisk/lock.h"
 #include "asterisk/file.h"
@@ -125,12 +125,6 @@ static pid_t spawn_ras(struct ast_channel *chan, char *args)
 	argv[argc++] = "plugin";
 	argv[argc++] = "zaptel.so";
 	argv[argc++] = "stdin";
-
-#if 0
-	for (x=0;x<argc;x++) {
-		fprintf(stderr, "Arg %d: %s\n", x, argv[x]);
-	}
-#endif
 
 	/* Finally launch PPP */
 	execv(PPP_EXEC, argv);

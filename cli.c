@@ -50,22 +50,61 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "editline/readline/readline.h"
 
 extern unsigned long global_fin, global_fout;
-	
+
+static pthread_key_t ast_cli_buf_key;
+static pthread_once_t ast_cli_buf_once = PTHREAD_ONCE_INIT;
+
+/*! \brief Initial buffer size for resulting strings in ast_cli() */
+#define AST_CLI_MAXSTRLEN   256
+
+#ifdef __AST_DEBUG_MALLOC
+static void FREE(void *ptr)
+{
+	free(ptr);
+}
+#else
+#define FREE free
+#endif
+
+static void ast_cli_buf_key_create(void)
+{
+	pthread_key_create(&ast_cli_buf_key, FREE);
+}
+
 void ast_cli(int fd, char *fmt, ...)
 {
-	char *stuff;
+	struct {
+		size_t len;
+		char str[0];
+	} *buf;
 	int res;
 	va_list ap;
 
-	va_start(ap, fmt);
-	res = vasprintf(&stuff, fmt, ap);
-	va_end(ap);
-	if (res == -1) {
-		ast_log(LOG_ERROR, "Memory allocation failure\n");
-	} else {
-		ast_carefulwrite(fd, stuff, strlen(stuff), 100);
-		free(stuff);
+	pthread_once(&ast_cli_buf_once, ast_cli_buf_key_create);
+	if (!(buf = pthread_getspecific(ast_cli_buf_key))) {
+		if (!(buf = ast_malloc(AST_CLI_MAXSTRLEN + sizeof(*buf))))
+			return;
+		buf->len = AST_CLI_MAXSTRLEN;
+		pthread_setspecific(ast_cli_buf_key, buf);
 	}
+
+	va_start(ap, fmt);
+	res = vsnprintf(buf->str, buf->len, fmt, ap);
+	while (res >= buf->len) {
+		if (!(buf = ast_realloc(buf, (buf->len * 2) + sizeof(*buf)))) {
+			va_end(ap);
+			return;
+		}
+		buf->len *= 2;
+		pthread_setspecific(ast_cli_buf_key, buf);
+		va_end(ap);
+		va_start(ap, fmt);
+		res = vsnprintf(buf->str, buf->len, fmt, ap);
+	}
+	va_end(ap);
+
+	if (res > 0)
+		ast_carefulwrite(fd, buf->str, strlen(buf->str), 100);
 }
 
 static AST_LIST_HEAD_STATIC(helpers, ast_cli_entry);
@@ -1177,7 +1216,7 @@ static char *parse_args(const char *s, int *argc, char *argv[], int max, int *tr
 	if (s == NULL)	/* invalid, though! */
 		return NULL;
 	/* make a copy to store the parsed string */
-	if (!(dup = strdup(s)))
+	if (!(dup = ast_strdup(s)))
 		return NULL;
 
 	cur = dup;
@@ -1350,10 +1389,8 @@ int ast_cli_command(int fd, const char *s)
 	char *dup;
 	int tws;
 	
-	if (!(dup = parse_args(s, &x, argv, sizeof(argv) / sizeof(argv[0]), &tws))) {
-		ast_log(LOG_ERROR, "Memory allocation failure\n");
+	if (!(dup = parse_args(s, &x, argv, sizeof(argv) / sizeof(argv[0]), &tws)))
 		return -1;
-	}
 
 	/* We need at least one entry, or ignore */
 	if (x > 0) {
@@ -1373,11 +1410,8 @@ int ast_cli_command(int fd, const char *s)
 			}
 		} else 
 			ast_cli(fd, "No such command '%s' (type 'help' for help)\n", find_best(argv));
-		if (e) {
-			AST_LIST_LOCK(&helpers);
-			e->inuse--;	/* XXX here an atomic dec would suffice */
-			AST_LIST_UNLOCK(&helpers);
-		}
+		if (e)
+			ast_atomic_fetchadd_int(&e->inuse, -1);
 	}
 	free(dup);
 	

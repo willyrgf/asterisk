@@ -25,9 +25,7 @@
 
 [general]
 context=default			; Default context for incoming calls
-;allowguest=no			; Allow or reject guest calls (default is yes, 
-				; this can also be set to 'osp'
-				; if asterisk was compiled with OSP support.)
+;allowguest=no			; Allow or reject guest calls (default is yes)
 allowoverlap=no			; Disable overlap dialing support. (Default is yes)
 ;allowtransfer=no		; Disable all transfers (unless enabled in peers or users)
 				; Default is enabled
@@ -49,15 +47,6 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 				; If configured, Asterisk will only allow
 				; INVITE and REFER to non-local domains
 				; Use "sip show domains" to list local domains
-;domain=mydomain.tld,mydomain-incoming
-				; Add domain and configure incoming context
-				; for external calls to this domain
-;domain=1.2.3.4			; Add IP address as local domain
-				; You can have several "domain" settings
-;allowexternalinvites=no	; Disable INVITE and REFER to non-local domains
-				; Default is yes
-;autodomain=yes			; Turn this on to have Asterisk add local host
-				; name and local IP to domain list.
 ;pedantic=yes			; Enable checking of tags in headers, 
 				; international character conversions in URIs
 				; and multiline formatted headers for strict
@@ -79,14 +68,25 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ;vmexten=voicemail		; dialplan extension to reach mailbox sets the 
 				; Message-Account in the MWI notify message 
 				; defaults to "asterisk"
-;recordhistory=yes		; Record SIP history by default 
-				; (see sip history / sip no history)
-
 ;disallow=all			; First disallow all codecs
 ;allow=ulaw			; Allow codecs in order of preference
 ;allow=ilbc			; 
-;musicclass=default		; Sets the default music on hold class for all SIP calls
-				; This may also be set for individual users/peers
+;
+; This option specifies a preference for which music on hold class this channel
+; should listen to when put on hold if the music class has not been set on the
+; channel with Set(CHANNEL(musicclass)=whatever) in the dialplan, and the peer
+; channel putting this one on hold did not suggest a music class.
+;
+; This option may be specified globally, or on a per-user or per-peer basis.
+;
+;mohinterpret=default
+;
+; This option specifies which music on hold class to suggest to the peer channel
+; when this channel places the peer on hold. It may be specified globally or on
+; a per-user or per-peer basis.
+;
+;mohsuggest=default
+;
 ;language=en			; Default language setting for all users/peers
 				; This may also be set for individual users/peers
 ;relaxdtmf=yes			; Relax dtmf handling
@@ -114,8 +114,6 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 				; auto : Use rfc2833 if offered, inband otherwise
 
 ;compactheaders = yes		; send compact sip headers.
-;sipdebug = yes			; Turn on SIP debugging by default, from
-				; the moment the channel loads this configuration
 ;
 ;videosupport=yes		; Turn on support for SIP video
 ;maxcallbitrate=384		; Maximum bitrate for video calls (default 384 kb/s)
@@ -123,8 +121,40 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 				; for peers and users as well
 ;callevents=no			; generate manager events when sip ua 
 				; performs events (e.g. hold)
+;alwaysauthreject = yes		; When an incoming INVITE or REGISTER is to be rejected,
+ 		    		; for any reason, always reject with '401 Unauthorized'
+ 				; instead of letting the requester know whether there was
+ 				; a matching user or peer for their request
 
-;--------------------------- STATUS NOTIFICATIONS (SUBSCRIPTIONS) ---------
+;g726nonstandard = yes		; If the peer negotiates G726-32 audio, use AAL2 packing
+				; order instead of RFC3551 packing order (this is required
+				; for Sipura and Grandstream ATAs, among others). This is
+				; contrary to the RFC3551 specification, the peer _should_
+				; be negotiating AAL2-G726-32 instead :-(
+
+;
+; If regcontext is specified, Asterisk will dynamically create and destroy a
+; NoOp priority 1 extension for a given peer who registers or unregisters with
+; us and have a "regexten=" configuration item.  
+; Multiple contexts may be specified by separating them with '&'. The 
+; actual extension is the 'regexten' parameter of the registering peer or its
+; name if 'regexten' is not provided.  If more than one context is provided,
+; the context must be specified within regexten by appending the desired
+; context after '@'.  More than one regexten may be supplied if they are 
+; separated by '&'.  Patterns may be used in regexten.
+;
+;regcontext=sipregistrations
+;
+;--------------------------- SIP DEBUGGING ---------------------------------------------------
+;sipdebug = yes			; Turn on SIP debugging by default, from
+				; the moment the channel loads this configuration
+;recordhistory=yes		; Record SIP history by default 
+				; (see sip history / sip no history)
+;dumphistory=yes		; Dump SIP history at end of SIP dialogue
+				; SIP history is output to the DEBUG logging channel
+
+
+;--------------------------- STATUS NOTIFICATIONS (SUBSCRIPTIONS) ----------------------------
 ; You can subscribe to the status of extensions with a "hint" priority
 ; (See extensions.conf.sample for examples)
 ; chan_sip support two major formats for notifications: dialog-info and SIMPLE 
@@ -136,28 +166,14 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 				; Useful to limit subscriptions to local extensions
 				; Settable per peer/user also
 ;notifyringing = yes		; Notify subscriptions on RINGING state
-;alwaysauthreject = yes		; When an incoming INVITE or REGISTER is to be rejected,
- 		    		; for any reason, always reject with '401 Unauthorized'
- 				; instead of letting the requester know whether there was
- 				; a matching user or peer for their request
-;
-; If regcontext is specified, Asterisk will dynamically create and destroy a
-; NoOp priority 1 extension for a given peer who registers or unregisters with
-; us.  Multiple contexts may be specified by separating them with '&'. The 
-; actual extension is the 'regexten' parameter of the registering peer or its
-; name if 'regexten' is not provided.  If more than one context is provided,
-; the context must be specified within regexten by appending the desired
-; context after '@'.  More than one regexten may be supplied if they are 
-; separated by '&'.  Patterns may be used in regexten.
-;
-;regcontext=sipregistrations
 ;----------------------------------------- T.38 FAX PASSTHROUGH SUPPORT -----------------------
 ;
-; These settings are available in the [general] section as well as in device configurations
+; This setting is available in the [general] section as well as in device configurations.
+; Setting this to yes, enables T.38 fax (UDPTL) passthrough on SIP to SIP calls, provided
+; both parties have T38 support enabled in their Asterisk configuration (either general or
+; peer/user/friend sections)
 ;
 ; t38pt_udptl = yes            ; Default false
-; t38pt_rtp = yes              ; Default false
-; t38pt_tcp = yes              ; Default false, not yet used
 ;
 ;----------------------------------------- OUTBOUND SIP REGISTRATIONS  ------------------------
 ; Asterisk can register as a SIP user agent to a SIP proxy (provider)
@@ -258,6 +274,9 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 				; just like friends added from the config file only on a
 				; as-needed basis? (yes|no)
 
+;rtsavesysname=yes		; Save systemname in realtime database at registration
+				; Default= no
+
 ;rtupdate=yes			; Send registry updates to database using realtime? (yes|no)
 				; If set to yes, when a SIP UA registers successfully, the ip address,
 				; the origination port, the registration period, and the username of
@@ -301,13 +320,23 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ; To disallow requests for domains not serviced by this server:
 ; allowexternaldomains=no
 
-; fromdomain=mydomain.tld ; When making outbound SIP INVITEs to
-                          ; non-peers, use your primary domain "identity"
-                          ; for From: headers instead of just your IP
-                          ; address. This is to be polite and
-                          ; it may be a mandatory requirement for some
-                          ; destinations which do not have a prior
-                          ; account relationship with your server. 
+;domain=mydomain.tld,mydomain-incoming
+				; Add domain and configure incoming context
+				; for external calls to this domain
+;domain=1.2.3.4			; Add IP address as local domain
+				; You can have several "domain" settings
+;allowexternalinvites=no	; Disable INVITE and REFER to non-local domains
+				; Default is yes
+;autodomain=yes			; Turn this on to have Asterisk add local host
+				; name and local IP to domain list.
+
+; fromdomain=mydomain.tld 	; When making outbound SIP INVITEs to
+                          	; non-peers, use your primary domain "identity"
+                          	; for From: headers instead of just your IP
+                          	; address. This is to be polite and
+                          	; it may be a mandatory requirement for some
+                          	; destinations which do not have a prior
+                          	; account relationship with your server. 
 
 ;------------------------------ JITTER BUFFER CONFIGURATION --------------------------
 ; jbenable = yes              ; Enables the use of a jitterbuffer on the receiving side of a
@@ -382,7 +411,6 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ; callerid		      callerid
 ; amaflags		      amaflags
 ; call-limit		      call-limit
-; restrictcid		      restrictcid
 ; allowoverlap		      allowoverlap
 ; allowsubscribe	      allowsubscribe
 ; allowtransfer	      	      allowtransfer
@@ -402,6 +430,7 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ;                             rtptimeout
 ;                             rtpholdtimeout
 ;                             sendrpid
+;                             outboundproxy
 
 ;[sip_proxy]
 ; For incoming calls only. Example: FWD (Free World Dialup)
@@ -412,14 +441,15 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ;host=fwd.pulver.com
 
 ;[sip_proxy-out]
-;type=peer          		; we only want to call out, not be called
+;type=peer          			; we only want to call out, not be called
 ;secret=guessit
-;username=yourusername		; Authentication user for outbound proxies
-;fromuser=yourusername		; Many SIP providers require this!
+;username=yourusername			; Authentication user for outbound proxies
+;fromuser=yourusername			; Many SIP providers require this!
 ;fromdomain=provider.sip.domain	
 ;host=box.provider.com
-;usereqphone=yes		; This provider requires ";user=phone" on URI
-;call-limit=5			; permit only 5 simultaneous outgoing calls to this peer
+;usereqphone=yes			; This provider requires ";user=phone" on URI
+;call-limit=5				; permit only 5 simultaneous outgoing calls to this peer
+;outboundproxy=proxy.provider.domain	; send outbound signaling to this proxy, not directly to the peer
 				; Call-limits will not be enforced on real-time peers,
 				; since they are not stored in-memory
 
@@ -502,7 +532,6 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ;vmexten=voicemail		; dialplan extension to reach mailbox 
 				; sets the Message-Account in the MWI notify message
 				; defaults to global vmexten which defaults to "asterisk"
-;restrictcid=yes		; To have the callerid restriced -> sent as ANI
 ;disallow=all
 ;allow=ulaw			; dtmfmode=inband only works with ulaw or alaw!
 
@@ -537,6 +566,8 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ;callgroup=1,3-4		; We are in caller groups 1,3,4
 ;pickupgroup=1,3-5		; We can do call pick-p for call group 1,3,4,5
 ;defaultip=192.168.0.60		; IP address to use if peer has not registred
+;deny=0.0.0.0/0.0.0.0		; ACL: Control access to this account based on IP address
+;permit=192.168.0.60/255.255.255.0
 
 ;[cisco1]
 ;type=friend

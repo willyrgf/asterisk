@@ -439,7 +439,8 @@ static int update_pgsql(const char *database, const char *table, const char *key
 }
 
 static struct ast_config *config_pgsql(const char *database, const char *table,
-					   const char *file, struct ast_config *cfg)
+					   const char *file, struct ast_config *cfg,
+					   int withcomments)
 {
 	PGresult *result = NULL;
 	long num_rows;
@@ -514,7 +515,7 @@ static struct ast_config *config_pgsql(const char *database, const char *table,
 			char *field_var_val = PQgetvalue(result, rowIndex, 2);
 			char *field_cat_metric = PQgetvalue(result, rowIndex, 3);
 			if (!strcmp(field_var_name, "#include")) {
-				if (!ast_config_internal_load(field_var_val, cfg)) {
+				if (!ast_config_internal_load(field_var_val, cfg, 0)) {
 					PQclear(result);
 					ast_mutex_unlock(&pgsql_lock);
 					return NULL;
@@ -700,18 +701,6 @@ static const char *description(void)
 {
 	return "Postgresql RealTime Configuration Driver";
 
-}
-
-static int usecount(void)
-{
-	/* XXX check this... */
-	/* Try and get a lock. If unsuccessful, than that means another thread is using the pgsql object. */
-	if (ast_mutex_trylock(&pgsql_lock)) {
-		ast_log(LOG_DEBUG, "Postgresql RealTime: Module usage count is 1.\n");
-		return 1;
-	}
-	ast_mutex_unlock(&pgsql_lock);
-	return 0;
 }
 
 static const char *key(void)

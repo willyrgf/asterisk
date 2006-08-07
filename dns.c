@@ -48,40 +48,40 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define MAX_SIZE 4096
 
 typedef struct {
-	unsigned	id :16;		/*!< query identification number */
+	unsigned	id:16;          /*!< query identification number */
 #if __BYTE_ORDER == __BIG_ENDIAN
 			/* fields in third byte */
-	unsigned	qr: 1;		/*!< response flag */
-	unsigned	opcode: 4;	/*!< purpose of message */
-	unsigned	aa: 1;		/*!< authoritive answer */
-	unsigned	tc: 1;		/*!< truncated message */
-	unsigned	rd: 1;		/*!< recursion desired */
+	unsigned	qr:1;           /*!< response flag */
+	unsigned	opcode:4;       /*!< purpose of message */
+	unsigned	aa:1;           /*!< authoritive answer */
+	unsigned	tc:1;           /*!< truncated message */
+	unsigned	rd:1;           /*!< recursion desired */
 			/* fields in fourth byte */
-	unsigned	ra: 1;		/*!< recursion available */
-	unsigned	unused :1;	/*!< unused bits (MBZ as of 4.9.3a3) */
-	unsigned	ad: 1;		/*!< authentic data from named */
-	unsigned	cd: 1;		/*!< checking disabled by resolver */
-	unsigned	rcode :4;	/*!< response code */
+	unsigned	ra:1;           /*!< recursion available */
+	unsigned	unused:1;       /*!< unused bits (MBZ as of 4.9.3a3) */
+	unsigned	ad:1;           /*!< authentic data from named */
+	unsigned	cd:1;           /*!< checking disabled by resolver */
+	unsigned	rcode:4;        /*!< response code */
 #endif
 #if __BYTE_ORDER == __LITTLE_ENDIAN || __BYTE_ORDER == __PDP_ENDIAN
 			/* fields in third byte */
-	unsigned	rd :1;		/*!< recursion desired */
-	unsigned	tc :1;		/*!< truncated message */
-	unsigned	aa :1;		/*!< authoritive answer */
-	unsigned	opcode :4;	/*!< purpose of message */
-	unsigned	qr :1;		/*!< response flag */
+	unsigned	rd:1;           /*!< recursion desired */
+	unsigned	tc:1;           /*!< truncated message */
+	unsigned	aa:1;           /*!< authoritive answer */
+	unsigned	opcode:4;       /*!< purpose of message */
+	unsigned	qr:1;           /*!< response flag */
 			/* fields in fourth byte */
-	unsigned	rcode :4;	/*!< response code */
-	unsigned	cd: 1;		/*!< checking disabled by resolver */
-	unsigned	ad: 1;		/*!< authentic data from named */
-	unsigned	unused :1;	/*!< unused bits (MBZ as of 4.9.3a3) */
-	unsigned	ra :1;		/*!< recursion available */
+	unsigned	rcode:4;        /*!< response code */
+	unsigned	cd:1;           /*!< checking disabled by resolver */
+	unsigned	ad:1;           /*!< authentic data from named */
+	unsigned	unused:1;       /*!< unused bits (MBZ as of 4.9.3a3) */
+	unsigned	ra:1;           /*!< recursion available */
 #endif
 			/* remaining bytes */
-	unsigned	qdcount :16;	/*!< number of question entries */
-	unsigned	ancount :16;	/*!< number of answer entries */
-	unsigned	nscount :16;	/*!< number of authority entries */
-	unsigned	arcount :16;	/*!< number of resource entries */
+	unsigned	qdcount:16;     /*!< number of question entries */
+	unsigned	ancount:16;     /*!< number of answer entries */
+	unsigned	nscount:16;     /*!< number of authority entries */
+	unsigned	arcount:16;     /*!< number of resource entries */
 } dns_HEADER;
 
 struct dn_answer {
@@ -91,7 +91,7 @@ struct dn_answer {
 	unsigned short size;
 } __attribute__ ((__packed__));
 
-static int skip_name(char *s, int len)
+static int skip_name(unsigned char *s, int len)
 {
 	int x = 0;
 
@@ -116,10 +116,10 @@ static int skip_name(char *s, int len)
 
 /*! \brief Parse DNS lookup result, call callback */
 static int dns_parse_answer(void *context,
-	int class, int type, char *answer, int len,
-	int (*callback)(void *context, char *answer, int len, char *fullanswer))
+	int class, int type, unsigned char *answer, int len,
+	int (*callback)(void *context, unsigned char *answer, int len, unsigned char *fullanswer))
 {
-	char *fullanswer = answer;
+	unsigned char *fullanswer = answer;
 	struct dn_answer *ans;
 	dns_HEADER *h;
 	int res;
@@ -192,12 +192,12 @@ not work properly, Asterisk might not start properly or a channel may lock.
 */
 int ast_search_dns(void *context,
 	   const char *dname, int class, int type,
-	   int (*callback)(void *context, char *answer, int len, char *fullanswer))
+	   int (*callback)(void *context, unsigned char *answer, int len, unsigned char *fullanswer))
 {
 #ifdef HAS_RES_NINIT
 	struct __res_state dnsstate;
 #endif
-	char answer[MAX_SIZE];
+	unsigned char answer[MAX_SIZE];
 	int res, ret = -1;
 
 #ifdef HAS_RES_NINIT
@@ -205,7 +205,7 @@ int ast_search_dns(void *context,
 	memset(&dnsstate, 0, sizeof(dnsstate));
 #endif	
 	res_ninit(&dnsstate);
-	res = res_nsearch(&dnsstate, dname, class, type, (unsigned char *)answer, sizeof(answer));
+	res = res_nsearch(&dnsstate, dname, class, type, answer, sizeof(answer));
 #else
 	ast_mutex_lock(&res_lock);
 	res_init();

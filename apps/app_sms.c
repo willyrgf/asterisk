@@ -693,7 +693,7 @@ static void sms_readfile (sms_t * h, char *fn)
 		}
 		while (fgets (line, sizeof (line), s))
 		{								 /* process line in file */
-			unsigned char *p;
+			char *p;
 			for (p = line; *p && *p != '\n' && *p != '\r'; p++);
 			*p = 0;					 /* strip eoln */
 			p = line;
@@ -713,7 +713,7 @@ static void sms_readfile (sms_t * h, char *fn)
 				{						 /* parse message (UTF-8) */
 					unsigned char o = 0;
 					while (*p && o < SMSLEN)
-						h->ud[o++] = utf8decode(&p);
+						h->ud[o++] = utf8decode((unsigned char **) &p);
 					h->udl = o;
 					if (*p)
 						ast_log (LOG_WARNING, "UD too long in %s\n", fn);
@@ -1203,7 +1203,7 @@ static int sms_generate (struct ast_channel *chan, void *data, int len, int samp
 	f.datalen = len;
 	f.offset = AST_FRIENDLY_OFFSET;
 	f.mallocd = 0;
-	f.data = buf + AST_FRIENDLY_OFFSET;
+	f.data = buf;
 	f.samples = samples;
 	f.src = "app_sms";
 	/* create a buffer containing the digital sms pattern */

@@ -90,7 +90,7 @@ struct my_ifreq {
 void ast_free_ha(struct ast_ha *ha)
 {
 	struct ast_ha *hal;
-	while(ha) {
+	while (ha) {
 		hal = ha;
 		ha = ha->next;
 		free(hal);
@@ -122,9 +122,9 @@ static struct ast_ha *ast_duplicate_ha(struct ast_ha *original)
 /*  Used in chan_sip2 templates */
 struct ast_ha *ast_duplicate_ha_list(struct ast_ha *original)
 {
-	struct ast_ha *start=original;
+	struct ast_ha *start = original;
 	struct ast_ha *ret = NULL;
-	struct ast_ha *link,*prev=NULL;
+	struct ast_ha *link, *prev = NULL;
 
 	while (start) {
 		link = ast_duplicate_ha(start);  /* Create copy of this object */
@@ -167,7 +167,7 @@ struct ast_ha *ast_append_ha(char *sense, char *stuff, struct ast_ha *path)
 		if (!strchr(nm, '.')) {
 			if ((sscanf(nm, "%d", &x) == 1) && (x >= 0) && (x <= 32)) {
 				y = 0;
-				for (z=0;z<x;z++) {
+				for (z = 0; z < x; z++) {
 					y >>= 1;
 					y |= 0x80000000;
 				}
@@ -208,10 +208,9 @@ int ast_apply_ha(struct ast_ha *ha, struct sockaddr_in *sin)
 		char iabuf[INET_ADDRSTRLEN];
 		char iabuf2[INET_ADDRSTRLEN];
 		/* DEBUG */
-		ast_log(LOG_DEBUG,
-			"##### Testing %s with %s\n",
-			ast_inet_ntoa(iabuf, sizeof(iabuf), sin->sin_addr),
-			ast_inet_ntoa(iabuf2, sizeof(iabuf2), ha->netaddr));
+		ast_copy_string(iabuf, ast_inet_ntoa(sin->sin_addr), sizeof(iabuf));
+		ast_copy_string(iabuf2, ast_inet_ntoa(ha->netaddr), sizeof(iabuf2));
+		ast_log(LOG_DEBUG, "##### Testing %s with %s\n", iabuf, iabuf2);
 		/* For each rule, if this address and the netmask = the net address
 		   apply the current rule */
 		if ((sin->sin_addr.s_addr & ha->netmask.s_addr) == ha->netaddr.s_addr)
@@ -423,3 +422,4 @@ int ast_find_ourip(struct in_addr *ourip, struct sockaddr_in bindaddr)
 		return 0;
 	return -1;
 }
+

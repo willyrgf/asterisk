@@ -39,6 +39,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/frame.h"
 #include "asterisk/utils.h"
 #include "asterisk/unaligned.h"
+#include "asterisk/lock.h"
+
 #include "iax2.h"
 #include "iax2-parser.h"
 #include "iax2-provision.h"
@@ -63,10 +65,9 @@ static void (*errorf)(const char *str) = internalerror;
 static void dump_addr(char *output, int maxlen, void *value, int len)
 {
 	struct sockaddr_in sin;
-	char iabuf[INET_ADDRSTRLEN];
 	if (len == (int)sizeof(sin)) {
 		memcpy(&sin, value, len);
-		snprintf(output, maxlen, "IPV4 %s:%d", ast_inet_ntoa(iabuf, sizeof(iabuf), sin.sin_addr), ntohs(sin.sin_port));
+		snprintf(output, maxlen, "IPV4 %s:%d", ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port));
 	} else {
 		snprintf(output, maxlen, "Invalid Address");
 	}
@@ -143,11 +144,9 @@ static void dump_datetime(char *output, int maxlen, void *value, int len)
 static void dump_ipaddr(char *output, int maxlen, void *value, int len)
 {
 	struct sockaddr_in sin;
-	char iabuf[INET_ADDRSTRLEN];
 	if (len == (int)sizeof(unsigned int)) {
 		memcpy(&sin.sin_addr, value, len);
-		ast_inet_ntoa(iabuf, sizeof(iabuf), sin.sin_addr);
-		snprintf(output, maxlen, "%s", iabuf);
+		snprintf(output, maxlen, "%s", ast_inet_ntoa(sin.sin_addr));
 	} else
 		ast_copy_string(output, "Invalid IPADDR", maxlen);
 }
@@ -444,7 +443,18 @@ void iax_showframe(struct iax_frame *f, struct ast_iax2_full_hdr *fhi, int rx, s
 		"ANSWER ",
 		"BUSY   ",
 		"TKOFFHK",
-		"OFFHOOK" };
+		"OFFHOOK",
+		"CONGSTN",
+		"FLASH  ",
+		"WINK   ",
+		"OPTION ",
+		"RDKEY  ",
+		"RDUNKEY",
+		"PROGRES",
+		"PROCDNG",
+		"HOLD   ",
+		"UNHOLD ",
+		"VIDUPDT", };
 	struct ast_iax2_full_hdr *fh;
 	char retries[20];
 	char class2[20];
@@ -453,7 +463,6 @@ void iax_showframe(struct iax_frame *f, struct ast_iax2_full_hdr *fhi, int rx, s
 	const char *subclass;
 	char *dir;
 	char tmp[512];
-	char iabuf[INET_ADDRSTRLEN];
 
 	switch(rx) {
 	case 0:
@@ -519,7 +528,7 @@ void iax_showframe(struct iax_frame *f, struct ast_iax2_full_hdr *fhi, int rx, s
 		 "   Timestamp: %05lums  SCall: %5.5d  DCall: %5.5d [%s:%d]\n",
 		 (unsigned long)ntohl(fh->ts),
 		 ntohs(fh->scallno) & ~IAX_FLAG_FULL, ntohs(fh->dcallno) & ~IAX_FLAG_RETRANS,
-		 ast_inet_ntoa(iabuf, sizeof(iabuf), sin->sin_addr), ntohs(sin->sin_port));
+		 ast_inet_ntoa(sin->sin_addr), ntohs(sin->sin_port));
 	outputf(tmp);
 	if (fh->type == AST_FRAME_IAX)
 		dump_ies(fh->iedata, datalen);
@@ -922,11 +931,11 @@ struct iax_frame *iax_frame_new(int direction, int datalen)
 	if (fr) {
 		fr->direction = direction;
 		fr->retrans = -1;
-		frames++;
+		ast_atomic_fetchadd_int(&frames, 1);
 		if (fr->direction == DIRECTION_INGRESS)
-			iframes++;
+			ast_atomic_fetchadd_int(&iframes, 1);
 		else
-			oframes++;
+			ast_atomic_fetchadd_int(&oframes, 1);
 	}
 	return fr;
 }
@@ -935,16 +944,16 @@ void iax_frame_free(struct iax_frame *fr)
 {
 	/* Note: does not remove from scheduler! */
 	if (fr->direction == DIRECTION_INGRESS)
-		iframes--;
+		ast_atomic_fetchadd_int(&iframes, -1);
 	else if (fr->direction == DIRECTION_OUTGRESS)
-		oframes--;
+		ast_atomic_fetchadd_int(&oframes, -1);
 	else {
 		errorf("Attempt to double free frame detected\n");
 		return;
 	}
 	fr->direction = 0;
 	free(fr);
-	frames--;
+	ast_atomic_fetchadd_int(&frames, -1);
 }
 
 int iax_get_frames(void) { return frames; }

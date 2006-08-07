@@ -62,6 +62,18 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 static char base64[64];
 static char b2a[256];
 
+static pthread_key_t inet_ntoa_buf_key;
+static pthread_once_t inet_ntoa_buf_once = PTHREAD_ONCE_INIT;
+
+#ifdef __AST_DEBUG_MALLOC
+static void FREE(void *ptr)
+{
+	free(ptr);
+}
+#else
+#define FREE free
+#endif
+
 #if defined(__FreeBSD__) || defined(__OpenBSD__) || defined( __NetBSD__ ) || defined(__APPLE__) || defined(__CYGWIN__)
 
 #define ERANGE 34	/*!< duh? ERANGE value copied from web... */
@@ -112,7 +124,7 @@ static int gethostbyname_r (const char *name, struct hostent *ret, char *buf,
 
 		/* here nbytes is the number of bytes required in buffer */
 		/* as a terminator must be there, the minimum value is ph->h_length */
-		if(nbytes > buflen) {
+		if (nbytes > buflen) {
 			*result = NULL;
 			ast_mutex_unlock(&__mutex); /* end critical area */
 			return ERANGE; /* not enough space in buf!! */
@@ -136,7 +148,7 @@ static int gethostbyname_r (const char *name, struct hostent *ret, char *buf,
 		/* copy addresses */
 		q = (char **)buf; /* pointer to pointers area (type: char **) */
 		ret->h_addr_list = q; /* update pointer to address list */
-		pbuf = buf + ((naddr+naliases+2)*sizeof(*p)); /* skip that area */
+		pbuf = buf + ((naddr + naliases + 2) * sizeof(*p)); /* skip that area */
 		for (p = ph->h_addr_list; *p != 0; p++) {
 			memcpy(pbuf, *p, ph->h_length); /* copy address bytes */
 			*q++ = pbuf; /* the pointer is the one inside buf... */
@@ -294,7 +306,7 @@ void ast_md5_hash(char *output, char *input)
 	MD5Update(&md5, (unsigned char *)input, strlen(input));
 	MD5Final(digest, &md5);
 	ptr = output;
-	for (x=0; x<16; x++)
+	for (x = 0; x < 16; x++)
 		ptr += sprintf(ptr, "%2.2x", digest[x]);
 }
 
@@ -353,7 +365,7 @@ int ast_base64encode_full(char *dst, const unsigned char *src, int srclen, int m
 	int cntin = 0;
 	/* Reserve space for null byte at end of string */
 	max--;
-	while((cntin < srclen) && (cnt < max)) {
+	while ((cntin < srclen) && (cnt < max)) {
 		byte <<= 8;
 		byte |= *(src++);
 		bits += 8;
@@ -405,7 +417,7 @@ static void base64_init(void)
 	int x;
 	memset(b2a, -1, sizeof(b2a));
 	/* Initialize base-64 Conversion table */
-	for (x=0;x<26;x++) {
+	for (x = 0; x < 26; x++) {
 		/* A-Z */
 		base64[x] = 'A' + x;
 		b2a['A' + x] = x;
@@ -422,14 +434,6 @@ static void base64_init(void)
 	base64[63] = '/';
 	b2a[(int)'+'] = 62;
 	b2a[(int)'/'] = 63;
-#if 0
-	for (x=0;x<64;x++) {
-		if (b2a[(int)base64[x]] != x) {
-			fprintf(stderr, "!!! %d failed\n", x);
-		} else
-			fprintf(stderr, "--- %d passed\n", x);
-	}
-#endif
 }
 
 /*! \brief  ast_uri_encode: Turn text string to URI-encoded %XX version
@@ -491,10 +495,24 @@ void ast_uri_decode(char *s)
 	*o = '\0';
 }
 
-/*! \brief  ast_inet_ntoa: Recursive thread safe replacement of inet_ntoa */
-const char *ast_inet_ntoa(char *buf, int bufsiz, struct in_addr ia)
+static void inet_ntoa_buf_key_create(void)
 {
-	return inet_ntop(AF_INET, &ia, buf, bufsiz);
+	pthread_key_create(&inet_ntoa_buf_key, FREE);
+}
+
+/*! \brief  ast_inet_ntoa: Recursive thread safe replacement of inet_ntoa */
+const char *ast_inet_ntoa(struct in_addr ia)
+{
+	char *buf;
+
+	pthread_once(&inet_ntoa_buf_once, inet_ntoa_buf_key_create);
+	if (!(buf = pthread_getspecific(inet_ntoa_buf_key))) {
+		if (!(buf = ast_calloc(1, INET_ADDRSTRLEN)))
+			return NULL;
+		pthread_setspecific(inet_ntoa_buf_key, buf);
+	}
+
+	return inet_ntop(AF_INET, &ia, buf, INET_ADDRSTRLEN);
 }
 
 int ast_utils_init(void)
@@ -795,7 +813,7 @@ size_t strnlen(const char *s, size_t n)
 {
 	size_t len;
 
-	for (len=0; len < n; len++)
+	for (len = 0; len < n; len++)
 		if (s[len] == '\0')
 			break;
 
@@ -1034,14 +1052,14 @@ char *ast_process_quotes_and_slashes(char *start, char find, char replace_with)
 		if (inEscape) {
 			*dataPut++ = *start;       /* Always goes verbatim */
 			inEscape = 0;
-    		} else {
+		} else {
 			if (*start == '\\') {
 				inEscape = 1;      /* Do not copy \ into the data */
 			} else if (*start == '\'') {
-				inQuotes = 1-inQuotes;   /* Do not copy ' into the data */
+				inQuotes = 1 - inQuotes;   /* Do not copy ' into the data */
 			} else {
 				/* Replace , with |, unless in quotes */
-				*dataPut++ = inQuotes ? *start : ((*start==find) ? replace_with : *start);
+				*dataPut++ = inQuotes ? *start : ((*start == find) ? replace_with : *start);
 			}
 		}
 	}
@@ -1058,7 +1076,7 @@ void ast_join(char *s, size_t len, char * const w[])
 	/* Join words into a string */
 	if (!s)
 		return;
-	for (x=0; ofs < len && w[x]; x++) {
+	for (x = 0; ofs < len && w[x]; x++) {
 		if (x > 0)
 			s[ofs++] = ' ';
 		for (src = w[x]; *src && ofs < len; src++)
@@ -1156,6 +1174,7 @@ void __ast_string_field_index_build(struct ast_string_field_mgr *mgr,
 }
 
 AST_MUTEX_DEFINE_STATIC(fetchadd_m); /* used for all fetc&add ops */
+
 int ast_atomic_fetchadd_int_slow(volatile int *p, int v)
 {
         int ret;
@@ -1191,3 +1210,4 @@ int ast_get_time_t(const char *src, time_t *dst, time_t _default, int *consumed)
 	} else
 		return -1;
 }
+

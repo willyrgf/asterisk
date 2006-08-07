@@ -29,6 +29,7 @@ enum misdn_cfg_elements {
 	MISDN_CFG_TXGAIN,              /* int */
 	MISDN_CFG_TE_CHOOSE_CHANNEL,   /* int (bool) */
 	MISDN_CFG_PMP_L1_CHECK,        /* int (bool) */
+	MISDN_CFG_ALARM_BLOCK,        /* int (bool) */
 	MISDN_CFG_HDLC,                /* int (bool) */
 	MISDN_CFG_CONTEXT,             /* char[] */
 	MISDN_CFG_LANGUAGE,            /* char[] */
@@ -43,6 +44,7 @@ enum misdn_cfg_elements {
 	MISDN_CFG_PRES,                /* int */
 	MISDN_CFG_SCREEN,              /* int */
 	MISDN_CFG_ALWAYS_IMMEDIATE,    /* int (bool) */
+	MISDN_CFG_NODIALTONE,    /* int (bool) */
 	MISDN_CFG_IMMEDIATE,           /* int (bool) */
 	MISDN_CFG_SENDDTMF,           /* int (bool) */
 	MISDN_CFG_HOLD_ALLOWED,        /* int (bool) */
@@ -50,7 +52,18 @@ enum misdn_cfg_elements {
 	MISDN_CFG_INCOMING_EARLY_AUDIO,      /* int (bool) */
 	MISDN_CFG_ECHOCANCEL,          /* int */
 	MISDN_CFG_ECHOCANCELWHENBRIDGED,  /* int (bool) */
+#ifdef WITH_ECHOTRAINGING
 	MISDN_CFG_ECHOTRAINING,        /* int (bool) */
+#endif
+
+#ifdef WITH_BEROEC
+	MISDN_CFG_BNECHOCANCEL,
+	MISDN_CFG_BNEC_ANTIHOWL,
+	MISDN_CFG_BNEC_NLP,
+	MISDN_CFG_BNEC_ZEROCOEFF,
+	MISDN_CFG_BNEC_TD,
+	MISDN_CFG_BNEC_ADAPT,
+#endif
 	MISDN_CFG_NEED_MORE_INFOS,     /* bool */
 	MISDN_CFG_JITTERBUFFER,              /* int */
 	MISDN_CFG_JITTERBUFFER_UPPER_THRESHOLD,              /* int */
@@ -58,7 +71,10 @@ enum misdn_cfg_elements {
 	MISDN_CFG_PICKUPGROUP,         /* ast_group_t */
 	MISDN_CFG_MAX_IN,              /* int */
 	MISDN_CFG_MAX_OUT,              /* int */
+	MISDN_CFG_L1_TIMEOUT,          /* int */
+	MISDN_CFG_OVERLAP_DIAL, 	/* int (bool)*/
 	MISDN_CFG_MSNS,                /* char[] */
+	MISDN_CFG_FAXDETECT,           /* char[] */
 	MISDN_CFG_PTP,                 /* int (bool) */
 	MISDN_CFG_LAST,
 	
@@ -73,7 +89,8 @@ enum misdn_cfg_elements {
 	MISDN_GEN_DYNAMIC_CRYPT,       /* int (bool) */
 	MISDN_GEN_CRYPT_PREFIX,        /* char[] */
 	MISDN_GEN_CRYPT_KEYS,          /* char[] */
-	MISDN_GEN_L1_TIMEOUT,          /* int */
+	MISDN_GEN_NTDEBUGFLAGS,          /* int */
+	MISDN_GEN_NTDEBUGFILE,          /* char[] */
 	MISDN_GEN_LAST
 };
 
@@ -93,6 +110,15 @@ void misdn_cfg_update_ptp( void );
  * value is not available, or the buffer is too small, the buffer will be nulled (in 
  * case of a char* only its first byte will be nulled). */
 void misdn_cfg_get(int port, enum misdn_cfg_elements elem, void* buf, int bufsize);
+
+/* returns the enum element for the given name, returns MISDN_CFG_FIRST if none was found */
+enum misdn_cfg_elements misdn_cfg_get_elem (char *name);
+
+/* fills the buffer with the name of the given config element */
+void misdn_cfg_get_name (enum misdn_cfg_elements elem, void *buf, int bufsize);
+
+/* fills the buffer with the description of the given config element */
+void misdn_cfg_get_desc (enum misdn_cfg_elements elem, void *buf, int bufsize, void *buf_default, int bufsize_default);
 
 /* fills the buffer with a ',' separated list of all active ports */
 void misdn_cfg_get_ports_string(char *ports);

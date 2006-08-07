@@ -442,7 +442,7 @@ static int jingle_set_rtp_peer(struct ast_channel *chan, struct ast_rtp *rtp, st
 	return 0;
 }
 
-static int jingle_response(struct jingle *client, ikspak *pak, const char *reasonstr)
+static int jingle_response(struct jingle *client, ikspak *pak, const char *reasonstr, const char *reasonstr2)
 {
 	iks *response, *error = NULL, *reason = NULL;
 	int res = -1;
@@ -490,9 +490,57 @@ static int jingle_is_answered(struct jingle *client, ikspak *pak)
 			ast_queue_control(tmp->owner, AST_CONTROL_ANSWER);
 	} else
 		ast_log(LOG_NOTICE, "Whoa, didn't find call!\n");
-	jingle_response(client, pak, NULL);
+	jingle_response(client, pak, NULL, NULL);
 	return 1;
 }
+
+static int jingle_handle_dtmf(struct jingle *client, ikspak *pak)
+{
+	struct jingle_pvt *tmp;
+	iks *dtmfnode = NULL;
+	char *dtmf;
+	/* Make sure our new call doesn't exist yet */
+	for (tmp = client->p; tmp; tmp = tmp->next) {
+		if (iks_find_with_attrib(pak->x, GOOGLE_NODE, GOOGLE_SID, tmp->sid))
+			break;
+	}
+
+	if (tmp) {
+		if(iks_find_with_attrib(pak->x, "dtmf-method", "method", "rtp")) {
+			jingle_response(client,pak,
+					"feature-not-implemented xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'",
+					"unsupported-dtmf-method xmlns='http://jabber.org/protocol/jingle/info/dtmf#errors'");
+			return -1;
+		}
+		if ((dtmfnode  = iks_find(pak->x, "dtmf"))) {
+			if((dtmf = iks_find_attrib(dtmfnode, "code"))) {
+				if(iks_find_with_attrib(pak->x, "dtmf", "action", "button-up")) {
+					struct ast_frame f = {AST_FRAME_DTMF_BEGIN, };
+					f.subclass = dtmf[0];
+					ast_queue_frame(tmp->owner, &f);
+					ast_verbose("JINGLE! DTMF-relay event received: %c\n", f.subclass);
+				} else if(iks_find_with_attrib(pak->x, "dtmf", "action", "button-down")) {
+					struct ast_frame f = {AST_FRAME_DTMF_END, };
+					f.subclass = dtmf[0];
+					ast_queue_frame(tmp->owner, &f);
+					ast_verbose("JINGLE! DTMF-relay event received: %c\n", f.subclass);
+				} else if(iks_find_attrib(pak->x, "dtmf")) { /* 250 millasecond default */
+					struct ast_frame f = {AST_FRAME_DTMF, };
+					f.subclass = dtmf[0];
+					ast_queue_frame(tmp->owner, &f);
+					ast_verbose("JINGLE! DTMF-relay event received: %c\n", f.subclass);
+				}
+			}
+		}
+		jingle_response(client, pak, NULL, NULL);
+		return 1;
+	} else
+		ast_log(LOG_NOTICE, "Whoa, didn't find call!\n");
+
+	jingle_response(client, pak, NULL, NULL);
+	return 1;
+}
+
 
 static int jingle_hangup_farend(struct jingle *client, ikspak *pak)
 {
@@ -510,7 +558,7 @@ static int jingle_hangup_farend(struct jingle *client, ikspak *pak)
 		ast_queue_hangup(tmp->owner);
 	} else
 		ast_log(LOG_NOTICE, "Whoa, didn't find call!\n");
-	jingle_response(client, pak, NULL);
+	jingle_response(client, pak, NULL, NULL);
 	return 1;
 }
 
@@ -562,7 +610,7 @@ static int jingle_create_candidates(struct jingle *client, struct jingle_pvt *p,
 	snprintf(pass, sizeof(pass), "%08lx%08lx", ast_random(), ast_random());
 	ast_copy_string(ours1->username, user, sizeof(ours1->username));
 	ast_copy_string(ours1->password, pass, sizeof(ours1->password));
-	ast_inet_ntoa(ours1->ip, sizeof(ours1->ip), us);
+	ast_copy_string(ours1->ip, ast_inet_ntoa(us), sizeof(ours1->ip));
 	ours1->protocol = AJI_PROTOCOL_UDP;
 	ours1->type = AJI_CONNECT_LOCAL;
 	ours1->generation = 0;
@@ -761,10 +809,7 @@ static struct ast_channel *jingle_new(struct jingle *client, struct jingle_pvt *
 	ast_mutex_unlock(&usecnt_lock);
 	ast_copy_string(tmp->context, client->context, sizeof(tmp->context));
 	ast_copy_string(tmp->exten, i->exten, sizeof(tmp->exten));
-	if (!ast_strlen_zero(i->cid_num))
-		tmp->cid.cid_num = ast_strdup(i->cid_num);
-	if (!ast_strlen_zero(i->cid_name))
-		tmp->cid.cid_name = ast_strdup(i->cid_name);
+	ast_set_callerid(tmp, i->cid_num, i->cid_name, i->cid_num);
 	if (!ast_strlen_zero(i->exten) && strcmp(i->exten, "s"))
 		tmp->cid.cid_dnid = ast_strdup(i->exten);
 	tmp->priority = 1;
@@ -861,7 +906,7 @@ static int jingle_newcall(struct jingle *client, ikspak *pak)
 	while (tmp) {
 		if (iks_find_with_attrib(pak->x, GOOGLE_NODE, GOOGLE_SID, tmp->sid)) {
 			ast_log(LOG_NOTICE, "Ignoring duplicate call setup on SID %s\n", tmp->sid);
-			jingle_response(client, pak, "out-of-order");
+			jingle_response(client, pak, "out-of-order", NULL);
 			return -1;
 		}
 		tmp = tmp->next;
@@ -885,7 +930,7 @@ static int jingle_newcall(struct jingle *client, ikspak *pak)
 		while (codec) {
 			ast_rtp_set_m_type(p->rtp, atoi(iks_find_attrib(codec, "id")));
 			ast_rtp_set_rtpmap_type(p->rtp, atoi(iks_find_attrib(codec, "id")), "audio",
-									iks_find_attrib(codec, "name"));
+						iks_find_attrib(codec, "name"), 0);
 			codec = iks_next(codec);
 		}
 		
@@ -896,14 +941,14 @@ static int jingle_newcall(struct jingle *client, ikspak *pak)
 		switch (res) {
 		case AST_PBX_FAILED:
 			ast_log(LOG_WARNING, "Failed to start PBX :(\n");
-			jingle_response(client, pak, "service-unavailable");
+			jingle_response(client, pak, "service-unavailable", NULL);
 			break;
 		case AST_PBX_CALL_LIMIT:
 			ast_log(LOG_WARNING, "Failed to start PBX (call limit reached) \n");
-			jingle_response(client, pak, "service-unavailable");
+			jingle_response(client, pak, "service-unavailable", NULL);
 			break;
 		case AST_PBX_SUCCESS:
-			jingle_response(client, pak, NULL);
+			jingle_response(client, pak, NULL, NULL);
 			jingle_create_candidates(client, p,
 					iks_find_attrib(pak->query, GOOGLE_SID),
 					iks_find_attrib(pak->x, "from"));
@@ -1119,16 +1164,71 @@ static int jingle_fixup(struct ast_channel *oldchan, struct ast_channel *newchan
 
 static int jingle_indicate(struct ast_channel *ast, int condition, const void *data, size_t datalen)
 {
-	ast_log(LOG_NOTICE, "XXX Implement jingle indicate XXX\n");
+	int res = 0;
 
-	return -1;
+	switch (condition) {
+	case AST_CONTROL_HOLD:
+		ast_moh_start(ast, data, NULL);
+		break;
+	case AST_CONTROL_UNHOLD:
+		ast_moh_stop(ast);
+		break;
+	default:
+		ast_log(LOG_NOTICE, "Don't know how to indicate condition '%d'\n", condition);
+		res = -1;
+	}
+
+	return res;
 }
 
 static int jingle_digit(struct ast_channel *ast, char digit)
 {
-	ast_log(LOG_NOTICE, "XXX Implement jingle digit XXX\n");
+	struct jingle_pvt *p = ast->tech_pvt;
+	struct jingle *client = p->parent;
+	iks *iq, *jingle, *dtmf;
+	char buffer[2] = {digit, '\0'};
+	iq = iks_new("iq");
+	jingle = iks_new("jingle");
+	dtmf = iks_new("dtmf");
+	if(!iq || !jingle || !dtmf) {
+		if(iq)
+			iks_delete(iq);
+		if(jingle)
+			iks_delete(jingle);
+		if(dtmf)
+			iks_delete(dtmf);
+		ast_log(LOG_ERROR, "Did not send dtmf do to memory issue\n");
+		return -1;
+	}
 
-	return -1;
+	iks_insert_attrib(iq, "type", "set");
+	iks_insert_attrib(iq, "to", p->from);
+	iks_insert_attrib(iq, "from", client->connection->jid->full);
+	iks_insert_attrib(iq, "id", client->connection->mid);
+	ast_aji_increment_mid(client->connection->mid);
+	iks_insert_attrib(jingle, "xmlns", "http://jabber.org/protocol/jingle");
+	iks_insert_attrib(jingle, "action", "content-info");
+	iks_insert_attrib(jingle, "initiator", p->initiator ? client->connection->jid->full : p->from);
+	iks_insert_attrib(jingle, "sid", p->sid);
+	iks_insert_attrib(dtmf, "xmlns", "http://jabber.org/protocol/jingle/info/dtmf");
+	iks_insert_attrib(dtmf, "code", buffer);
+	iks_insert_node(iq, jingle);
+	iks_insert_node(jingle, dtmf);
+
+	ast_mutex_lock(&p->lock);
+	if(ast->dtmff.frametype == AST_FRAME_DTMF) {
+		ast_verbose("Sending 250ms dtmf!\n");
+	} else if (ast->dtmff.frametype == AST_FRAME_DTMF_BEGIN) {
+		iks_insert_attrib(dtmf, "action", "button-down");
+	} else if (ast->dtmff.frametype == AST_FRAME_DTMF_END) {
+		iks_insert_attrib(dtmf, "action", "button-up");
+	}
+	iks_send(client->connection->p, iq);
+	iks_delete(iq);
+	iks_delete(jingle);
+	iks_delete(dtmf);
+	ast_mutex_unlock(&p->lock);
+	return 0;
 }
 
 static int jingle_sendhtml(struct ast_channel *ast, int subclass, const char *data, int datalen)
@@ -1324,6 +1424,8 @@ static int jingle_parser(void *data, ikspak *pak)
 		ast_log(LOG_DEBUG, "Candidate Added!\n");
 	} else if (iks_find_with_attrib(pak->x, GOOGLE_NODE, "type", GOOGLE_ACCEPT)) {
 		jingle_is_answered(client, pak);
+	} else if (iks_find_with_attrib(pak->x, GOOGLE_NODE, "type", "content-info")) {
+		jingle_handle_dtmf(client, pak);
 	} else if (iks_find_with_attrib(pak->x, GOOGLE_NODE, "type", "terminate")) {
 		jingle_hangup_farend(client, pak);
 	} else if (iks_find_with_attrib(pak->x, GOOGLE_NODE, "type", "reject")) {

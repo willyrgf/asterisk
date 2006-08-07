@@ -702,6 +702,16 @@ static int oh323_indicate(struct ast_channel *c, int condition, const void *data
 		if (token)
 			free(token);
 		return -1;
+	case AST_CONTROL_HOLD:
+		ast_moh_start(c, data, NULL);
+		if (token)
+			free(token);
+		return 0;
+	case AST_CONTROL_UNHOLD:
+		ast_moh_stop(c);
+		if (token)
+			free(token);
+		return 0;
 	case AST_CONTROL_PROCEEDING:
 	case -1:
 		if (token)
@@ -786,19 +796,19 @@ static struct ast_channel *__oh323_new(struct oh323_pvt *pvt, int state, const c
 		if (pvt->amaflags) {
 			ch->amaflags = pvt->amaflags;
 		}
+		
+		/* Don't use ast_set_callerid() here because it will
+		 * generate a NewCallerID event before the NewChannel event */
 		if (!ast_strlen_zero(pvt->cid_num)) {
-			ch->cid.cid_num = strdup(pvt->cid_num);
-		} else if (!ast_strlen_zero(pvt->cd.call_source_e164)) {
-			ch->cid.cid_num = strdup(pvt->cd.call_source_e164);
+			ch->cid.cid_num = ast_strdup(pvt->cid_num);
+			ch->cid.cid_ani = ast_strdup(pvt->cid_num);
+		} else {
+			ch->cid.cid_num = ast_strdup(pvt->cd.call_source_e164);
+			ch->cid.cid_ani = ast_strdup(pvt->cd.call_source_e164);
 		}
-		if (!ast_strlen_zero(pvt->cid_name)) {
-			ch->cid.cid_name = strdup(pvt->cid_name);
-		} else if (!ast_strlen_zero(pvt->cd.call_source_name)) {
-			ch->cid.cid_name = strdup(pvt->cd.call_source_name);
-		}
-		if (!ast_strlen_zero(pvt->rdnis)) {
-			ch->cid.cid_rdnis = strdup(pvt->rdnis);
-		}
+		ch->cid.cid_name = ast_strdup(pvt->cid_name);
+		ch->cid.cid_rdnis = ast_strdup(pvt->rdnis);
+		
 		if (!ast_strlen_zero(pvt->exten) && strcmp(pvt->exten, "s")) {
 			ch->cid.cid_dnid = strdup(pvt->exten);
 		}

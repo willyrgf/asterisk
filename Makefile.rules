@@ -11,43 +11,83 @@
 # the GNU General Public License
 #
 
-define module_o_template
-$(1).o: $(1).c
-	$$(CC) -c -o $$@ $$< $$(CFLAGS) $$(MENUSELECT_OPTS_$(1):%=-D%) $(foreach dep,$(MENUSELECT_DEPENDS_$(1)),$$(value $(dep)_INCLUDE))
-endef
+# Each command is preceded by a short comment on what to do.
+# Prefixing one or the other with @\# or @ or nothing makes the desired
+# behaviour. ECHO_PREFIX prefixes the comment, CMD_PREFIX prefixes the command.
 
-define module_so_template
-$(1).so: $(1).o
-	$$(CC) $$(SOLINK) -o $$@ $$^ $(foreach dep,$(MENUSELECT_DEPENDS_$(1)),$$(value $(dep)_LIB))
-endef
-
-%.o: %.c
-	$(CC) -c -o $@ $< $(CFLAGS)
-
-$(foreach mod,$(SELECTED_MODS),$(eval $(call module_o_template,$(mod))))
-
-$(foreach mod,$(SELECTED_MODS),$(eval $(call module_so_template,$(mod))))
-
-.PHONY: clean clean-depend depend uninstall _all
-
-_all: $(SELECTED_MODS:%=%.so)
-
-clean-depend::
-	rm -f .depend
-
-clean:: clean-depend
-	rm -f *.so *.o
-
-install:: all
-	for x in $(SELECTED_MODS:%=%.so); do $(INSTALL) -m 755 $$x $(DESTDIR)$(MODULES_DIR) ; done
-
-uninstall::
-
-ifneq ($(wildcard .depend),)
- include .depend
+ifeq ($(NOISY_BUILD),)
+   ECHO_PREFIX=@
+   CMD_PREFIX=@
+else
+   ECHO_PREFIX=@\# 
+   CMD_PREFIX=
 endif
 
-depend: .depend
+define ast_make_o_c
+$(1): $(2)
+	$(ECHO_PREFIX) echo "   [CC] $$< -> $$@"
+	$(CMD_PREFIX) $$(CC) -o $$@ -c $$< $$(CFLAGS)
+endef
 
-.depend:
-	../build_tools/mkdep $(CFLAGS) `ls *.c`
+define ast_make_oo_cc
+$(1): $(2)
+	$(ECHO_PREFIX) echo "   [CXX] $$< -> $$@"
+	$(CMD_PREFIX) $$(CXX) -o $$@ -c $$< $$(CFLAGS)
+endef
+
+define ast_make_c_y
+$(1): $(2)
+	$(ECHO_PREFIX) echo "   [BISON] $$< -> $$@"
+	$(CMD_PREFIX) bison -o $$@ -d --name-prefix=ast_yy $$<
+endef
+
+define ast_make_c_fl
+$(1): $(2)
+	$(ECHO_PREFIX) echo "   [FLEX] $$< -> $$@"
+	$(CMD_PREFIX) flex -o $$@ --full $$<
+endef
+
+define ast_make_so_o
+$(1): $(2)
+	$(ECHO_PREFIX) echo "   [LD] $$^ -> $$@"
+	$(CMD_PREFIX) $$(CC) -o $$@ $$(LDFLAGS) $$(SOLINK) $$^ $$(LIBS)
+endef
+
+define ast_make_so_oo
+$(1): $(2)
+	$(ECHO_PREFIX) echo "   [LDXX] $$^ -> $$@"
+	$(CMD_PREFIX) $$(CXX) -o $$@ $$(LDFLAGS) $$(SOLINK) $$^ $$(LIBS)
+endef
+
+define ast_make_a_o
+$(1): $(2)
+	$(ECHO_PREFIX) echo "   [AR] $$^ -> $$@"
+	$(CMD_PREFIX) $$(AR) cr $$@ $$^
+	$(CMD_PREFIX) $$(RANLIB) $$@
+endef
+
+define ast_make_final
+$(1): $(2)
+	$(ECHO_PREFIX) echo "   [LD] $$^ -> $$@"
+	$(CMD_PREFIX) $$(CC) -o $$@ $$(LDFLAGS) $$^ $$(LIBS)
+endef
+
+define ast_make_final_host
+$(1): $(2)
+	$(ECHO_PREFIX) echo "   [LD] $$^ -> $$@"
+	$(CMD_PREFIX) $$(HOST_CC) -o $$@ $$(CFLAGS) $$(LDFLAGS) $$^ $$(LIBS)
+endef
+
+$(eval $(call ast_make_o_c,%.o,%.c))
+
+$(eval $(call ast_make_oo_cc,%.oo,%.cc))
+
+$(eval $(call ast_make_so_o,%.so,%.o))
+
+$(eval $(call ast_make_so_oo,%.so,%.oo))
+
+$(eval $(call ast_make_final,%,%.o))
+
+$(eval $(call ast_make_c_y,%.c,%.y))
+
+$(eval $(call ast_make_c_fl,%.c,%.fl))

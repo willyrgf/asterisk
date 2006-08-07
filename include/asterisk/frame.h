@@ -214,8 +214,8 @@ extern struct ast_frame ast_null_frame;
 #define AST_FORMAT_ULAW		(1 << 2)
 /*! Raw A-law data (G.711) */
 #define AST_FORMAT_ALAW		(1 << 3)
-/*! ADPCM (G.726, 32kbps) */
-#define AST_FORMAT_G726		(1 << 4)
+/*! ADPCM (G.726, 32kbps, AAL2 codeword packing) */
+#define AST_FORMAT_G726_AAL2	(1 << 4)
 /*! ADPCM (IMA) */
 #define AST_FORMAT_ADPCM	(1 << 5)
 /*! Raw 16-bit Signed Linear (8000 Hz) PCM */
@@ -228,6 +228,8 @@ extern struct ast_frame ast_null_frame;
 #define AST_FORMAT_SPEEX	(1 << 9)
 /*! iLBC Free Compression */
 #define AST_FORMAT_ILBC		(1 << 10)
+/*! ADPCM (G.726, 32kbps, RFC3551 codeword packing) */
+#define AST_FORMAT_G726		(1 << 11)
 /*! Maximum audio format */
 #define AST_FORMAT_MAX_AUDIO	(1 << 15)
 /*! Maximum audio mask */
@@ -352,7 +354,7 @@ struct ast_frame *ast_fralloc(char *source, int len);
  */
 void ast_frfree(struct ast_frame *fr);
 
-/*! \brief Copies a frame 
+/*! \brief Makes a frame independent of any static storage
  * \param fr frame to act upon
  * Take a frame, and if it's not been malloc'd, make a malloc'd copy
  * and if the data hasn't been malloced then make the
@@ -364,10 +366,10 @@ struct ast_frame *ast_frisolate(struct ast_frame *fr);
 
 /*! \brief Copies a frame 
  * \param fr frame to copy
- * Dupliates a frame -- should only rarely be used, typically frisolate is good enough
+ * Duplicates a frame -- should only rarely be used, typically frisolate is good enough
  * \return Returns a frame on success, NULL on error
  */
-struct ast_frame *ast_frdup(struct ast_frame *fr);
+struct ast_frame *ast_frdup(const struct ast_frame *fr);
 
 /*! \brief Reads a frame from an fd
  * Read a frame from a stream or packet fd, as written by fd_write

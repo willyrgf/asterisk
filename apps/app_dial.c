@@ -37,6 +37,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <stdio.h>
 #include <sys/time.h>
 #include <sys/signal.h>
+#include <sys/stat.h>
 #include <netinet/in.h>
 
 #include "asterisk/lock.h"
@@ -728,10 +729,13 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in, struct dial_l
 				if (ast_write(outgoing->chan, f))
 					ast_log(LOG_WARNING, "Unable to forward voice\n");
 			}
-			if (single && (f->frametype == AST_FRAME_CONTROL) && (f->subclass == AST_CONTROL_VIDUPDATE)) {
+			if (single && (f->frametype == AST_FRAME_CONTROL) && 
+				((f->subclass == AST_CONTROL_HOLD) || 
+				 (f->subclass == AST_CONTROL_UNHOLD) || 
+				 (f->subclass == AST_CONTROL_VIDUPDATE))) {
 				if (option_verbose > 2)
-					ast_verbose(VERBOSE_PREFIX_3 "%s requested a video update, passing it to %s\n", in->name,outgoing->chan->name);
-				ast_indicate(outgoing->chan, AST_CONTROL_VIDUPDATE);
+					ast_verbose(VERBOSE_PREFIX_3 "%s requested special control %d, passing it to %s\n", in->name, f->subclass, outgoing->chan->name);
+				ast_indicate_data(outgoing->chan, f->subclass, f->data, f->datalen);
 			}
 			ast_frfree(f);
 		}
@@ -998,7 +1002,13 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			   unless it is already there-- this should be done before the 
 			   call is actually dialed  */
 
-			/* make sure the priv-callerintros dir exists? */
+			/* make sure the priv-callerintros dir actually exists */
+			snprintf(privintro, sizeof(privintro), "%s/sounds/priv-callerintros", ast_config_AST_DATA_DIR);
+			if (mkdir(privintro, 0755) && errno != EEXIST) {
+				ast_log(LOG_WARNING, "privacy: can't create directory priv-callerintros: %s\n", strerror(errno));
+				res = -1;
+				goto out;
+			}
 
 			snprintf(privintro,sizeof(privintro), "priv-callerintros/%s", privcid);
 			if( ast_fileexists(privintro,NULL,NULL ) > 0 && strncmp(privcid,"NOCALLERID",10) != 0) {
@@ -1211,8 +1221,8 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		/* Our status will at least be NOANSWER */
 		strcpy(status, "NOANSWER");
 		if (ast_test_flag(outgoing, OPT_MUSICBACK)) {
-			moh=1;
-			ast_moh_start(chan, opt_args[OPT_ARG_MUSICBACK]);
+			moh = 1;
+			ast_moh_start(chan, opt_args[OPT_ARG_MUSICBACK], NULL);
 		} else if (ast_test_flag(outgoing, OPT_RINGBACK)) {
 			ast_indicate(chan, AST_CONTROL_RINGING);
 			sentringing++;
@@ -1270,7 +1280,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 
 			if (ast_test_flag(&opts, OPT_MUSICBACK) && !ast_strlen_zero(opt_args[OPT_ARG_MUSICBACK])) {
 				ast_indicate(chan, -1);
-				ast_moh_start(chan, opt_args[OPT_ARG_MUSICBACK]);
+				ast_moh_start(chan, opt_args[OPT_ARG_MUSICBACK], NULL);
 			} else if (ast_test_flag(&opts, OPT_RINGBACK)) {
 				ast_indicate(chan, AST_CONTROL_RINGING);
 				sentringing++;
@@ -1698,7 +1708,7 @@ static int retrydial_exec(struct ast_channel *chan, void *data)
 					res = ast_waitstream(chan, AST_DIGIT_ANY);
 				if (!res && sleep) {
 					if (!ast_test_flag(chan, AST_FLAG_MOH))
-						ast_moh_start(chan, NULL);
+						ast_moh_start(chan, NULL, NULL);
 					res = ast_waitfordigit(chan, sleep);
 				}
 			} else {
@@ -1706,7 +1716,7 @@ static int retrydial_exec(struct ast_channel *chan, void *data)
 					res = ast_waitstream(chan, "");
 				if (sleep) {
 					if (!ast_test_flag(chan, AST_FLAG_MOH))
-						ast_moh_start(chan, NULL);
+						ast_moh_start(chan, NULL, NULL);
 					if (!res) 
 						res = ast_waitfordigit(chan, sleep);
 				}

@@ -95,7 +95,7 @@ struct naptr {
 } __attribute__ ((__packed__));
 
 /*! \brief Parse NAPTR record information elements */
-static unsigned int parse_ie(char *data, unsigned int maxdatalen, char *src, unsigned int srclen)
+static unsigned int parse_ie(char *data, unsigned int maxdatalen, unsigned char *src, unsigned int srclen)
 {
 	unsigned int len, olen;
 
@@ -116,10 +116,10 @@ static unsigned int parse_ie(char *data, unsigned int maxdatalen, char *src, uns
 }
 
 /*! \brief Parse DNS NAPTR record used in ENUM ---*/
-static int parse_naptr(unsigned char *dst, int dstsize, char *tech, int techsize, unsigned char *answer, int len, unsigned char *naptrinput)
+static int parse_naptr(char *dst, int dstsize, char *tech, int techsize, unsigned char *answer, int len, char *naptrinput)
 {
 	char tech_return[80];
-	char *oanswer = answer;
+	unsigned char *oanswer = answer;
 	char flags[512] = "";
 	char services[512] = "";
 	char *p;
@@ -167,7 +167,7 @@ static int parse_naptr(unsigned char *dst, int dstsize, char *tech, int techsize
 		len -= res;
 	}
 
-	if ((res = dn_expand((unsigned char *)oanswer, (unsigned char *)answer + len, (unsigned char *)answer, repl, sizeof(repl) - 1)) < 0) {
+	if ((res = dn_expand(oanswer, answer + len, answer, repl, sizeof(repl) - 1)) < 0) {
 		ast_log(LOG_WARNING, "Failed to expand hostname\n");
 		return -1;
 	}
@@ -226,12 +226,6 @@ static int parse_naptr(unsigned char *dst, int dstsize, char *tech, int techsize
 	*delim2 = 0;
 	subst   = delim2 + 1;
 	regexp[regexp_len-1] = 0;
-
-#if 0
-	printf("Pattern: %s\n", pattern);
-	printf("Subst: %s\n", subst);
-       printf("Input: %s\n", naptrinput);
-#endif
 
 /*
  * now do the regex wizardry.
@@ -324,12 +318,9 @@ struct enum_context {
 };
 
 /*! \brief Callback for TXT record lookup */
-static int txt_callback(void *context, char *answer, int len, char *fullanswer)
+static int txt_callback(void *context, unsigned char *answer, int len, unsigned char *fullanswer)
 {
 	struct enum_context *c = (struct enum_context *)context;
-#if 0
-	printf("ENUMTXT Called\n");
-#endif
 
 	if (answer == NULL) {
 		c->txt = NULL;
@@ -342,15 +333,15 @@ static int txt_callback(void *context, char *answer, int len, char *fullanswer)
 	len -= 1;
 
 	/* answer is not null-terminated, but should be */
-       /* this is safe to do, as answer has extra bytes on the end we can
-           safely overwrite with a null */
+	/* this is safe to do, as answer has extra bytes on the end we can
+	 * safely overwrite with a null */
 	answer[len] = '\0';
 	/* now increment len so that len includes the null, so that we can
-	   compare apples to apples */
+	 * compare apples to apples */
 	len +=1;
 
 	/* finally, copy the answer into c->txt */
-	ast_copy_string(c->txt, answer, len < c->txtlen ? len : (c->txtlen));
+	ast_copy_string(c->txt, (const char *) answer, len < c->txtlen ? len : (c->txtlen));
 
 	/* just to be safe, let's make sure c->txt is null terminated */
 	c->txt[(c->txtlen)-1] = '\0';
@@ -359,39 +350,38 @@ static int txt_callback(void *context, char *answer, int len, char *fullanswer)
 }
 
 /*! \brief Callback from ENUM lookup function */
-static int enum_callback(void *context, char *answer, int len, char *fullanswer)
+static int enum_callback(void *context, unsigned char *answer, int len, unsigned char *fullanswer)
 {
-       struct enum_context *c = context;
-       void *p = NULL;
-       int res;
+	struct enum_context *c = context;
+	void *p = NULL;
+	int res;
 
-       res = parse_naptr(c->dst, c->dstlen, c->tech, c->techlen, answer, len, c->naptrinput);
+	res = parse_naptr(c->dst, c->dstlen, c->tech, c->techlen, answer, len, c->naptrinput);
 
-       if (res < 0) {
+	if (res < 0) {
 		ast_log(LOG_WARNING, "Failed to parse naptr :(\n");
 		return -1;
-       } else if (res > 0 && !ast_strlen_zero(c->dst)){ /* ok, we got needed NAPTR */
-               if (c->options & ENUMLOOKUP_OPTIONS_COUNT){ /* counting RRs */
-                       c->position++;
-                       snprintf(c->dst, c->dstlen, "%d", c->position);
-               } else  {
-                       if ((p = ast_realloc(c->naptr_rrs, sizeof(*c->naptr_rrs) * (c->naptr_rrs_count + 1)))) {
-                               c->naptr_rrs = p;
-                               memcpy(&c->naptr_rrs[c->naptr_rrs_count].naptr, answer, sizeof(c->naptr_rrs->naptr));
-                               /* printf("order=%d, pref=%d\n", ntohs(c->naptr_rrs[c->naptr_rrs_count].naptr.order), ntohs(c->naptr_rrs[c->naptr_rrs_count].naptr.pref)); */
-                               c->naptr_rrs[c->naptr_rrs_count].result = strdup(c->dst);
-                               c->naptr_rrs[c->naptr_rrs_count].tech = strdup(c->tech);
-                               c->naptr_rrs[c->naptr_rrs_count].sort_pos = c->naptr_rrs_count;
-                               c->naptr_rrs_count++;
-                       }
-                       c->dst[0] = 0;
-               }
-               return 0;
+	} else if (res > 0 && !ast_strlen_zero(c->dst)){ /* ok, we got needed NAPTR */
+		if (c->options & ENUMLOOKUP_OPTIONS_COUNT){ /* counting RRs */
+			c->position++;
+			snprintf(c->dst, c->dstlen, "%d", c->position);
+		} else  {
+			if ((p = ast_realloc(c->naptr_rrs, sizeof(*c->naptr_rrs) * (c->naptr_rrs_count + 1)))) {
+				c->naptr_rrs = p;
+				memcpy(&c->naptr_rrs[c->naptr_rrs_count].naptr, answer, sizeof(c->naptr_rrs->naptr));
+				c->naptr_rrs[c->naptr_rrs_count].result = strdup(c->dst);
+				c->naptr_rrs[c->naptr_rrs_count].tech = strdup(c->tech);
+				c->naptr_rrs[c->naptr_rrs_count].sort_pos = c->naptr_rrs_count;
+				c->naptr_rrs_count++;
+			}
+			c->dst[0] = 0;
+		}
+		return 0;
 	}
 
-       if (c->options & ENUMLOOKUP_OPTIONS_COUNT) 	{ /* counting RRs */
-               snprintf(c->dst, c->dstlen, "%d", c->position);
-       }
+	if (c->options & ENUMLOOKUP_OPTIONS_COUNT) 	{ /* counting RRs */
+		snprintf(c->dst, c->dstlen, "%d", c->position);
+	}
 
 	return 0;
 }
@@ -493,7 +483,7 @@ int ast_get_enum(struct ast_channel *chan, const char *number, char *dst, int ds
 		if (ret > 0)
 			break;
 		if (suffix != NULL)
-                       break;
+			break;
 	}
 	if (ret < 0) {
 		ast_log(LOG_DEBUG, "No such number found: %s (%s)\n", tmp, strerror(errno));
@@ -503,8 +493,8 @@ int ast_get_enum(struct ast_channel *chan, const char *number, char *dst, int ds
 
 	if (context.naptr_rrs_count >= context.position && ! (context.options & ENUMLOOKUP_OPTIONS_COUNT)) {
 		/* sort array by NAPTR order/preference */
-		for (k=0; k<context.naptr_rrs_count; k++) {
-			for (i=0; i<context.naptr_rrs_count; i++) {
+		for (k = 0; k < context.naptr_rrs_count; k++) {
+			for (i = 0; i < context.naptr_rrs_count; i++) {
 				/* use order first and then preference to compare */
 				if ((ntohs(context.naptr_rrs[k].naptr.order) < ntohs(context.naptr_rrs[i].naptr.order)
 						&& context.naptr_rrs[k].sort_pos > context.naptr_rrs[i].sort_pos)
@@ -527,7 +517,7 @@ int ast_get_enum(struct ast_channel *chan, const char *number, char *dst, int ds
 				}
 			}
 		}
-		for (k=0; k<context.naptr_rrs_count; k++) {
+		for (k = 0; k < context.naptr_rrs_count; k++) {
 			if (context.naptr_rrs[k].sort_pos == context.position-1) {
 				ast_copy_string(context.dst, context.naptr_rrs[k].result, dstlen);
 				ast_copy_string(context.tech, context.naptr_rrs[k].tech, techlen);
@@ -540,7 +530,7 @@ int ast_get_enum(struct ast_channel *chan, const char *number, char *dst, int ds
 	if (chan)
 		ret |= ast_autoservice_stop(chan);
 
-	for (k=0; k<context.naptr_rrs_count; k++) {
+	for (k = 0; k < context.naptr_rrs_count; k++) {
 		free(context.naptr_rrs[k].result);
 		free(context.naptr_rrs[k].tech);
 	}
