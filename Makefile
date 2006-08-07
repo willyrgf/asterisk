@@ -121,6 +121,7 @@ USER_MAKEOPTS=$(wildcard ~/.asterisk.makeopts)
 
 ifneq ($(wildcard menuselect.makeopts),)
   include menuselect.makeopts
+  include menuselect.makedeps
 endif
 
 ifneq ($(wildcard makeopts),)
@@ -228,9 +229,6 @@ ifeq ($(OSARCH),FreeBSD)
   BSDVERSION=$(shell make -V OSVERSION -f $(CROSS_COMPILE_TARGET)/usr/share/mk/bsd.port.subdir.mk)
   ASTCFLAGS+=$(shell if test $(BSDVERSION) -lt 500016 ; then echo "-D_THREAD_SAFE"; fi)
   LIBS+=$(shell if test  $(BSDVERSION) -lt 502102 ; then echo "-lc_r"; else echo "-pthread"; fi)
-  ifneq ($(wildcard $(CROSS_COMPILE_TARGET)/usr/local/include/spandsp),)
-    ASTCFLAGS+=-I$(CROSS_COMPILE_TARGET)/usr/local/include/spandsp
-  endif
 endif # FreeBSD
 
 ifeq ($(OSARCH),NetBSD)
@@ -303,9 +301,9 @@ ifeq ($(wildcard $(CROSS_COMPILE_TARGET)/usr/include/dlfcn.h),)
 endif
 
 ifeq ($(OSARCH),Linux)
-  LIBS+=-ldl -lpthread $(EDITLINE_LIBS) -lm -lresolv  #-lnjamd
+  LIBS+=-ldl -lpthread $(EDITLINE_LIB) -lm -lresolv  #-lnjamd
 else
-  LIBS+=$(EDITLINE_LIBS) -lm
+  LIBS+=$(EDITLINE_LIB) -lm
 endif
 
 ifeq ($(OSARCH),Darwin)
@@ -333,11 +331,11 @@ ifeq ($(OSARCH),FreeBSD)
 endif
 
 ifeq ($(OSARCH),NetBSD)
-  LIBS+=-lpthread -lcrypto -lm -L$(CROSS_COMPILE_TARGET)/usr/pkg/lib $(EDITLINE_LIBS)
+  LIBS+=-lpthread -lcrypto -lm -L$(CROSS_COMPILE_TARGET)/usr/pkg/lib $(EDITLINE_LIB)
 endif
 
 ifeq ($(OSARCH),OpenBSD)
-  LIBS+=-lcrypto -lpthread -lm $(EDITLINE_LIBS)
+  LIBS+=-lcrypto -lpthread -lm $(EDITLINE_LIB)
 endif
 
 ifeq ($(OSARCH),SunOS)
@@ -474,6 +472,8 @@ include/asterisk/buildopts.h: menuselect.makeopts
 	fi
 	@rm -f $@.tmp
 
+channel.o: CFLAGS+=$(ZAPTEL_INCLUDE)
+
 asterisk: include/asterisk/buildopts.h editline/libedit.a db1-ast/libdb1.a $(OBJS)
 	build_tools/make_build_h > include/asterisk/build.h.tmp
 	if cmp -s include/asterisk/build.h.tmp include/asterisk/build.h ; then echo ; else \
@@ -512,7 +512,7 @@ dist-clean: clean
 	@$(MAKE) -C mxml clean
 	@$(MAKE) -C menuselect dist-clean
 	@$(MAKE) -C sounds dist-clean
-	rm -f menuselect.makeopts makeopts makeopts.xml
+	rm -f menuselect.makeopts makeopts makeopts.xml menuselect.makedeps
 	rm -f config.log config.status
 	rm -rf autom4te.cache
 	rm -f include/autoconfig.h
