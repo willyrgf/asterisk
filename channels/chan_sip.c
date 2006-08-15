@@ -3331,8 +3331,15 @@ static int sip_write(struct ast_channel *ast, struct ast_frame *frame)
 	switch (frame->frametype) {
 	case AST_FRAME_VOICE:
 		if (!(frame->subclass & ast->nativeformats)) {
-			ast_log(LOG_WARNING, "Asked to transmit frame type %d, while native formats is %d (read/write = %d/%d)\n",
-				frame->subclass, ast->nativeformats, ast->readformat, ast->writeformat);
+			char s1[512], s2[512], s3[512];
+			ast_log(LOG_WARNING, "Asked to transmit frame type %d, while native formats is %s(%d) read/write = %s(%d)/%s(%d)\n",
+				frame->subclass, 
+				ast_getformatname_multiple(s1, sizeof(s1) - 1, ast->nativeformats & AST_FORMAT_AUDIO_MASK),
+				ast->nativeformats & AST_FORMAT_AUDIO_MASK,
+				ast_getformatname_multiple(s2, sizeof(s2) - 1, ast->readformat),
+				ast->readformat,
+				ast_getformatname_multiple(s3, sizeof(s3) - 1, ast->writeformat),
+				ast->writeformat);
 			return 0;
 		}
 		if (p) {
@@ -9686,7 +9693,6 @@ static int _sip_show_peer(int type, int fd, struct mansession *s, struct message
 		ast_cli(fd, "%s\n", codec_buf);
 		ast_cli(fd, "  Codec Order  : (");
 		print_codec_to_cli(fd, &peer->prefs);
-
 		ast_cli(fd, ")\n");
 
 		ast_cli(fd, "  Status       : ");
@@ -9789,9 +9795,8 @@ static int sip_show_user(int fd, int argc, char *argv[])
 {
 	char cbuf[256];
 	struct sip_user *user;
-	struct ast_codec_pref *pref;
 	struct ast_variable *v;
-	int x = 0, codec = 0, load_realtime;
+	int load_realtime;
 
 	if (argc < 4)
 		return RESULT_SHOWUSAGE;
@@ -9821,18 +9826,7 @@ static int sip_show_user(int fd, int argc, char *argv[])
 		ast_cli(fd, "  Callerid     : %s\n", ast_callerid_merge(cbuf, sizeof(cbuf), user->cid_name, user->cid_num, "<unspecified>"));
 		ast_cli(fd, "  ACL          : %s\n", (user->ha?"Yes":"No"));
 		ast_cli(fd, "  Codec Order  : (");
-		pref = &user->prefs;
-		for(x = 0; x < 32 ; x++) {
-			codec = ast_codec_pref_index(pref,x);
-			if (!codec)
-				break;
-			ast_cli(fd, "%s", ast_getformatname(codec));
-			if (x < 31 && ast_codec_pref_index(pref,x+1))
-				ast_cli(fd, "|");
-		}
-
-		if (!x)
-			ast_cli(fd, "none");
+		print_codec_to_cli(fd, &user->prefs);
 		ast_cli(fd, ")\n");
 
 		if (user->chanvars) {
