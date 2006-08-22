@@ -3927,12 +3927,19 @@ static int get_input(struct skinnysession *s)
 		res = read(s->fd, s->inbuf, 4);
 		if (res < 0) {
 			ast_log(LOG_WARNING, "read() returned error: %s\n", strerror(errno));
+			ast_mutex_unlock(&s->lock);
 			return res;
 		} else if (res != 4) {
 			ast_log(LOG_WARNING, "Skinny Client sent less data than expected.  Expected 4 but got %d.\n", res);
+			ast_mutex_unlock(&s->lock);
 			return -1;
 		}
 		dlen = letohl(*(int *)s->inbuf);
+		if (dlen < 0) {
+			ast_log(LOG_WARNING, "Skinny Client sent invalid data.\n");
+			ast_mutex_unlock(&s->lock);
+			return -1;
+		}
 		if (dlen+8 > sizeof(s->inbuf)) {
 			dlen = sizeof(s->inbuf) - 8;
 		}
@@ -4342,7 +4349,7 @@ static void delete_devices(void)
 	ast_mutex_unlock(&devicelock);
 }
 
-static int reload(void *mod)
+static int reload(void)
 {
 	delete_devices();
 	reload_config();
@@ -4350,8 +4357,7 @@ static int reload(void *mod)
 	return 0;
 }
 
-
-static int load_module(void *mod)
+static int load_module(void)
 {
 	int res = 0;
 
@@ -4389,7 +4395,7 @@ static int load_module(void *mod)
 	return res;
 }
 
-static int unload_module(void *mod)
+static int unload_module(void)
 {
 #if 0
 	struct skinnysession *s;
@@ -4443,14 +4449,8 @@ static int unload_module(void *mod)
 	return -1;
 }
 
-static const char *key(void)
-{
-	return ASTERISK_GPL_KEY;
-}
-
-static const char *description(void)
-{
-	return "Skinny Client Control Protocol (Skinny)";
-}
-
-STD_MOD(MOD_1, reload, NULL, NULL);
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "Skinny Client Control Protocol (Skinny)",
+		.load = load_module,
+		.unload = unload_module,
+		.reload = reload,
+	       );

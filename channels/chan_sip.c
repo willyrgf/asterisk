@@ -215,7 +215,6 @@ static struct ast_jb_conf default_jbconf =
 };
 static struct ast_jb_conf global_jbconf;
 
-static const char tdesc[] = "Session Initiation Protocol (SIP)";
 static const char config[] = "sip.conf";
 static const char notify_config[] = "sip_notify.conf";
 static int usecnt = 0;
@@ -10858,9 +10857,14 @@ static char show_settings_usage[] =
 static int func_header_read(struct ast_channel *chan, char *function, char *data, char *buf, size_t len) 
 {
 	struct sip_pvt *p;
-	const char *content;
-	
- 	if (!data) {
+	const char *content = NULL;
+	AST_DECLARE_APP_ARGS(args,
+		AST_APP_ARG(header);
+		AST_APP_ARG(number);
+	);
+	int i, number, start = 0;
+
+ 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_WARNING, "This function requires a header name.\n");
 		return -1;
 	}
@@ -10872,6 +10876,11 @@ static int func_header_read(struct ast_channel *chan, char *function, char *data
 		return -1;
 	}
 
+	AST_STANDARD_APP_ARGS(args, data);
+	sscanf(args.number, "%d", &number);
+	if (number < 1)
+		number = 1;
+
 	p = chan->tech_pvt;
 
 	/* If there is no private structure, this channel is no longer alive */
@@ -10880,7 +10889,8 @@ static int func_header_read(struct ast_channel *chan, char *function, char *data
 		return -1;
 	}
 
-	content = get_header(&p->initreq, data);
+	for (i = 0; i < number; i++)
+		content = __get_header(&p->initreq, args.header, &start);
 
 	if (ast_strlen_zero(content)) {
 		ast_channel_unlock(chan);
@@ -10896,7 +10906,10 @@ static int func_header_read(struct ast_channel *chan, char *function, char *data
 static struct ast_custom_function sip_header_function = {
 	.name = "SIP_HEADER",
 	.synopsis = "Gets the specified SIP header",
-	.syntax = "SIP_HEADER(<name>)",
+	.syntax = "SIP_HEADER(<name>[,<number>])",
+	.desc = "Since there are several headers (such as Via) which can occur multiple\n"
+	"times, SIP_HEADER takes an optional second argument to specify which header with\n"
+	"that name to retrieve. Headers start at offset 1.\n",
 	.read = func_header_read,
 };
 
@@ -16408,7 +16421,7 @@ static int sip_reload(int fd, int argc, char *argv[])
 }
 
 /*! \brief  reload: Part of Asterisk module interface */
-static int reload(void *mod)
+static int reload(void)
 {
 	return sip_reload(0, 0, NULL);
 }
@@ -16444,7 +16457,7 @@ static struct ast_cli_entry  my_clis[] = {
 };
 
 /*! \brief  load_module: PBX load module - initialization */
-static int load_module(void *mod)
+static int load_module(void)
 {
 	ASTOBJ_CONTAINER_INIT(&userl);	/* User object list */
 	ASTOBJ_CONTAINER_INIT(&peerl);	/* Peer object list */
@@ -16502,7 +16515,7 @@ static int load_module(void *mod)
 	return 0;
 }
 
-static int unload_module(void *mod)
+static int unload_module(void)
 {
 	struct sip_pvt *p, *pl;
 	
@@ -16578,14 +16591,8 @@ static int unload_module(void *mod)
 	return 0;
 }
 
-static const char *key(void)
-{
-	return ASTERISK_GPL_KEY;
-}
-
-static const char *description(void)
-{
-	return (char *) tdesc;
-}
-
-STD_MOD(MOD_1, reload, NULL, NULL);
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "Session Initiation Protocol (SIP)",
+		.load = load_module,
+		.unload = unload_module,
+		.reload = reload,
+	       );

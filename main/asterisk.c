@@ -30,7 +30,7 @@
  *
  * \section copyright Copyright and author
  *
- * Copyright (C) 1999 - 2005, Digium, Inc.
+ * Copyright (C) 1999 - 2006, Digium, Inc.
  * Asterisk is a trade mark registered by Digium, Inc.
  *
  * \author Mark Spencer <markster@digium.com>
@@ -125,7 +125,7 @@ int daemon(int, int);  /* defined in libresolv of all places */
 
 #include "asterisk/doxyref.h"		/* Doxygen documentation */
 
-#include "defaults.h"
+#include "../defaults.h"
 
 #ifndef AF_LOCAL
 #define AF_LOCAL AF_UNIX
@@ -219,7 +219,7 @@ char ast_config_AST_CTL_PERMISSIONS[PATH_MAX];
 char ast_config_AST_CTL_OWNER[PATH_MAX] = "\0";
 char ast_config_AST_CTL_GROUP[PATH_MAX] = "\0";
 char ast_config_AST_CTL[PATH_MAX] = "asterisk.ctl";
-char ast_config_AST_SYSTEM_NAME[20]="";
+char ast_config_AST_SYSTEM_NAME[20] = "";
 
 extern const char *ast_build_hostname;
 extern const char *ast_build_kernel;
@@ -405,7 +405,7 @@ int64_t ast_profile(int i, int64_t delta)
 #if defined(__FreeBSD__)
 #include <machine/cpufunc.h>
 #elif defined(linux)
-static __inline u_int64_t
+static __inline uint64_t
 rdtsc(void)
 { 
 	uint64_t rv;
@@ -415,7 +415,7 @@ rdtsc(void)
 }
 #endif
 #else	/* supply a dummy function on other platforms */
-static __inline u_int64_t
+static __inline uint64_t
 rdtsc(void)
 {
 	return 0;
@@ -647,7 +647,8 @@ int ast_safe_system(const char *s)
 	struct rusage rusage;
 	int status;
 
-	ast_replace_sigchld();
+#if HAVE_WORKING_FORK
+    	ast_replace_sigchld();
 
 	pid = fork();
 
@@ -674,6 +675,9 @@ int ast_safe_system(const char *s)
 	}
 
 	ast_unreplace_sigchld();
+#else
+	res = -1;
+#endif
 
 	return res;
 }
@@ -729,7 +733,7 @@ void ast_console_puts_mutable(const char *string)
 static void ast_network_puts(const char *string)
 {
 	int x;
-	for (x=0;x<AST_MAX_CONNECTS; x++) {
+	for (x=0; x < AST_MAX_CONNECTS; x++) {
 		if (consoles[x].fd > -1) 
 			fdprint(consoles[x].p[1], string);
 	}
@@ -756,7 +760,7 @@ static pthread_t lthread;
 static void *netconsole(void *vconsole)
 {
 	struct console *con = vconsole;
-	char hostname[MAXHOSTNAMELEN]="";
+	char hostname[MAXHOSTNAMELEN] = "";
 	char tmp[512];
 	int res;
 	struct pollfd fds[2];
@@ -819,11 +823,11 @@ static void *listener(void *unused)
 	pthread_attr_t attr;
 	pthread_attr_init(&attr);
 	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-	for(;;) {
+	for (;;) {
 		if (ast_socket < 0)
 			return NULL;
 		fds[0].fd = ast_socket;
-		fds[0].events= POLLIN;
+		fds[0].events = POLLIN;
 		s = poll(fds, 1, -1);
 		pthread_testcancel();
 		if (s < 0) {
@@ -837,7 +841,7 @@ static void *listener(void *unused)
 			if (errno != EINTR)
 				ast_log(LOG_WARNING, "Accept returned %d: %s\n", s, strerror(errno));
 		} else {
-			for (x=0;x<AST_MAX_CONNECTS;x++) {
+			for (x = 0; x < AST_MAX_CONNECTS; x++) {
 				if (consoles[x].fd < 0) {
 					if (socketpair(AF_LOCAL, SOCK_STREAM, 0, consoles[x].p)) {
 						ast_log(LOG_ERROR, "Unable to create pipe: %s\n", strerror(errno));
@@ -1081,7 +1085,7 @@ static void quit_handler(int num, int nice, int safeshutdown, int restart)
 			if (option_verbose && ast_opt_console)
 				ast_verbose("Beginning asterisk %s....\n", restart ? "restart" : "shutdown");
 			time(&s);
-			for(;;) {
+			for (;;) {
 				time(&e);
 				/* Wait up to 15 seconds for all channels to go away */
 				if ((e - s) > 15)
@@ -1098,7 +1102,7 @@ static void quit_handler(int num, int nice, int safeshutdown, int restart)
 				ast_begin_shutdown(0);
 			if (option_verbose && ast_opt_console)
 				ast_verbose("Waiting for inactivity to perform %s...\n", restart ? "restart" : "halt");
-			for(;;) {
+			for (;;) {
 				if (!ast_active_channels())
 					break;
 				if (!shuttingdown)
@@ -1147,7 +1151,7 @@ static void quit_handler(int num, int nice, int safeshutdown, int restart)
 		if (option_verbose || ast_opt_console)
 			ast_verbose("Preparing for Asterisk restart...\n");
 		/* Mark all FD's for closing on exec */
-		for (x=3;x<32768;x++) {
+		for (x=3; x < 32768; x++) {
 			fcntl(x, F_SETFD, FD_CLOEXEC);
 		}
 		if (option_verbose || ast_opt_console)
@@ -1192,7 +1196,7 @@ static const char *fix_header(char *outbuf, int maxout, const char *s, char *cmp
 static void console_verboser(const char *s)
 {
 	char tmp[80];
-	const char *c=NULL;
+	const char *c = NULL;
 
 	if ((c = fix_header(tmp, sizeof(tmp), s, VERBOSE_PREFIX_4)) ||
 	    (c = fix_header(tmp, sizeof(tmp), s, VERBOSE_PREFIX_3)) ||
@@ -1212,7 +1216,7 @@ static void console_verboser(const char *s)
 
 static int ast_all_zeros(char *s)
 {
-	while(*s) {
+	while (*s) {
 		if (*s > 32)
 			return 0;
 		s++;  
@@ -1498,8 +1502,8 @@ static struct ast_cli_entry core_cli[] = {
 
 static int ast_el_read_char(EditLine *el, char *cp)
 {
-	int num_read=0;
-	int lastpos=0;
+	int num_read = 0;
+	int lastpos = 0;
 	struct pollfd fds[2];
 	int res;
 	int max;
@@ -1540,7 +1544,7 @@ static int ast_el_read_char(EditLine *el, char *cp)
 					int tries;
 					int reconnects_per_second = 20;
 					fprintf(stderr, "Attempting to reconnect for 30 seconds\n");
-					for (tries=0;tries<30 * reconnects_per_second;tries++) {
+					for (tries=0; tries < 30 * reconnects_per_second; tries++) {
 						if (ast_tryconnect()) {
 							fprintf(stderr, "Reconnect succeeded after %.3f seconds\n", 1.0 / reconnects_per_second * tries);
 							printf(term_quit());
@@ -1579,7 +1583,7 @@ static char *cli_prompt(EditLine *el)
 {
 	static char prompt[200];
 	char *pfmt;
-	int color_used=0;
+	int color_used = 0;
 	char term_code[20];
 
 	if ((pfmt = getenv("ASTERISK_PROMPT"))) {
@@ -1598,79 +1602,79 @@ static char *cli_prompt(EditLine *el)
 
 				t++;
 				switch (*t) {
-					case 'C': /* color */
-						t++;
-						if (sscanf(t, "%d;%d%n", &fgcolor, &bgcolor, &i) == 2) {
-							strncat(p, term_color_code(term_code, fgcolor, bgcolor, sizeof(term_code)),sizeof(prompt) - strlen(prompt) - 1);
-							t += i - 1;
-						} else if (sscanf(t, "%d%n", &fgcolor, &i) == 1) {
-							strncat(p, term_color_code(term_code, fgcolor, 0, sizeof(term_code)),sizeof(prompt) - strlen(prompt) - 1);
-							t += i - 1;
-						}
+				case 'C': /* color */
+					t++;
+					if (sscanf(t, "%d;%d%n", &fgcolor, &bgcolor, &i) == 2) {
+						strncat(p, term_color_code(term_code, fgcolor, bgcolor, sizeof(term_code)),sizeof(prompt) - strlen(prompt) - 1);
+						t += i - 1;
+					} else if (sscanf(t, "%d%n", &fgcolor, &i) == 1) {
+						strncat(p, term_color_code(term_code, fgcolor, 0, sizeof(term_code)),sizeof(prompt) - strlen(prompt) - 1);
+						t += i - 1;
+					}
 
-						/* If the color has been reset correctly, then there's no need to reset it later */
-						if ((fgcolor == COLOR_WHITE) && (bgcolor == COLOR_BLACK)) {
-							color_used = 0;
-						} else {
-							color_used = 1;
-						}
-						break;
-					case 'd': /* date */
-						memset(&tm, 0, sizeof(tm));
-						time(&ts);
-						if (localtime_r(&ts, &tm)) {
-							strftime(p, sizeof(prompt) - strlen(prompt), "%Y-%m-%d", &tm);
-						}
-						break;
-					case 'h': /* hostname */
-						if (!gethostname(hostname, sizeof(hostname) - 1)) {
-							strncat(p, hostname, sizeof(prompt) - strlen(prompt) - 1);
-						} else {
-							strncat(p, "localhost", sizeof(prompt) - strlen(prompt) - 1);
-						}
-						break;
-					case 'H': /* short hostname */
-						if (!gethostname(hostname, sizeof(hostname) - 1)) {
-							for (i=0;i<sizeof(hostname);i++) {
-								if (hostname[i] == '.') {
-									hostname[i] = '\0';
-									break;
-								}
+					/* If the color has been reset correctly, then there's no need to reset it later */
+					if ((fgcolor == COLOR_WHITE) && (bgcolor == COLOR_BLACK)) {
+						color_used = 0;
+					} else {
+						color_used = 1;
+					}
+					break;
+				case 'd': /* date */
+					memset(&tm, 0, sizeof(tm));
+					time(&ts);
+					if (localtime_r(&ts, &tm)) {
+						strftime(p, sizeof(prompt) - strlen(prompt), "%Y-%m-%d", &tm);
+					}
+					break;
+				case 'h': /* hostname */
+					if (!gethostname(hostname, sizeof(hostname) - 1)) {
+						strncat(p, hostname, sizeof(prompt) - strlen(prompt) - 1);
+					} else {
+						strncat(p, "localhost", sizeof(prompt) - strlen(prompt) - 1);
+					}
+					break;
+				case 'H': /* short hostname */
+					if (!gethostname(hostname, sizeof(hostname) - 1)) {
+						for (i = 0; i < sizeof(hostname); i++) {
+							if (hostname[i] == '.') {
+								hostname[i] = '\0';
+								break;
 							}
-							strncat(p, hostname, sizeof(prompt) - strlen(prompt) - 1);
-						} else {
-							strncat(p, "localhost", sizeof(prompt) - strlen(prompt) - 1);
 						}
-						break;
+						strncat(p, hostname, sizeof(prompt) - strlen(prompt) - 1);
+					} else {
+						strncat(p, "localhost", sizeof(prompt) - strlen(prompt) - 1);
+					}
+					break;
 #ifdef linux
-					case 'l': /* load avg */
-						t++;
-						if ((LOADAVG = fopen("/proc/loadavg", "r"))) {
-							float avg1, avg2, avg3;
-							int actproc, totproc, npid, which;
-							fscanf(LOADAVG, "%f %f %f %d/%d %d",
-								&avg1, &avg2, &avg3, &actproc, &totproc, &npid);
-							if (sscanf(t, "%d", &which) == 1) {
-								switch (which) {
-									case 1:
-										snprintf(p, sizeof(prompt) - strlen(prompt), "%.2f", avg1);
-										break;
-									case 2:
-										snprintf(p, sizeof(prompt) - strlen(prompt), "%.2f", avg2);
-										break;
-									case 3:
-										snprintf(p, sizeof(prompt) - strlen(prompt), "%.2f", avg3);
-										break;
-									case 4:
-										snprintf(p, sizeof(prompt) - strlen(prompt), "%d/%d", actproc, totproc);
-										break;
-									case 5:
-										snprintf(p, sizeof(prompt) - strlen(prompt), "%d", npid);
-										break;
-								}
+				case 'l': /* load avg */
+					t++;
+					if ((LOADAVG = fopen("/proc/loadavg", "r"))) {
+						float avg1, avg2, avg3;
+						int actproc, totproc, npid, which;
+						fscanf(LOADAVG, "%f %f %f %d/%d %d",
+							&avg1, &avg2, &avg3, &actproc, &totproc, &npid);
+						if (sscanf(t, "%d", &which) == 1) {
+							switch (which) {
+							case 1:
+								snprintf(p, sizeof(prompt) - strlen(prompt), "%.2f", avg1);
+								break;
+							case 2:
+								snprintf(p, sizeof(prompt) - strlen(prompt), "%.2f", avg2);
+								break;
+							case 3:
+								snprintf(p, sizeof(prompt) - strlen(prompt), "%.2f", avg3);
+								break;
+							case 4:
+								snprintf(p, sizeof(prompt) - strlen(prompt), "%d/%d", actproc, totproc);
+								break;
+							case 5:
+								snprintf(p, sizeof(prompt) - strlen(prompt), "%d", npid);
+								break;
 							}
 						}
-						break;
+					}
+					break;
 #endif
 				case 's': /* Asterisk system name (from asterisk.conf) */
 					strncat(p, ast_config_AST_SYSTEM_NAME, sizeof(prompt) - strlen(prompt) - 1);
@@ -1818,7 +1822,7 @@ static int ast_cli_display_match_list(char **matches, int len, int max)
 
 static char *cli_complete(EditLine *el, int ch)
 {
-	int len=0;
+	int len = 0;
 	char *ptr;
 	int nummatches = 0;
 	char **matches;
@@ -2017,7 +2021,7 @@ static void ast_remotecontrol(char * data)
 	char *version;
 	int pid;
 	char tmp[80];
-	char *stringp=NULL;
+	char *stringp = NULL;
 
 	char *ebuf;
 	int num = 0;
@@ -2025,13 +2029,13 @@ static void ast_remotecontrol(char * data)
 	read(ast_consock, buf, sizeof(buf));
 	if (data)
 		write(ast_consock, data, strlen(data) + 1);
-	stringp=buf;
+	stringp = buf;
 	hostname = strsep(&stringp, "/");
 	cpid = strsep(&stringp, "/");
 	version = strsep(&stringp, "\n");
 	if (!version)
 		version = "<Version Unknown>";
-	stringp=hostname;
+	stringp = hostname;
 	strsep(&stringp, ".");
 	if (cpid)
 		pid = atoi(cpid);
@@ -2067,7 +2071,7 @@ static void ast_remotecontrol(char * data)
 			ast_el_read_char(el, &tempchar);
 		return;
 	}
-	for(;;) {
+	for (;;) {
 		ebuf = (char *)el_gets(el, &num);
 
 		if (!ast_strlen_zero(ebuf)) {
@@ -2092,7 +2096,7 @@ static int show_version(void)
 }
 
 static int show_cli_help(void) {
-	printf("Asterisk " ASTERISK_VERSION ", Copyright (C) 1999 - 2005, Digium, Inc. and others.\n");
+	printf("Asterisk " ASTERISK_VERSION ", Copyright (C) 1999 - 2006, Digium, Inc. and others.\n");
 	printf("Usage: asterisk [OPTIONS]\n");
 	printf("Valid Options:\n");
 	printf("   -V              Display version number and exit\n");
@@ -2101,10 +2105,16 @@ static int show_cli_help(void) {
 	printf("   -U <user>       Run as a user other than the caller\n");
 	printf("   -c              Provide console CLI\n");
 	printf("   -d              Enable extra debugging\n");
+#if HAVE_WORKING_FORK
 	printf("   -f              Do not fork\n");
+	printf("   -F              Always fork\n");
+#endif
 	printf("   -g              Dump core in case of a crash\n");
 	printf("   -h              This help screen\n");
 	printf("   -i              Initialize crypto keys at startup\n");
+	printf("   -I              Enable internal timing if Zaptel timer is available\n");
+	printf("   -L <load>       Limit the maximum load average before rejecting new calls\n");
+	printf("   -M <value>      Limit the maximum number of calls to the specified value\n");
 	printf("   -m              Mute the console from debugging and verbose output\n");
 	printf("   -n              Disable console colorization\n");
 	printf("   -p              Run as pseudo-realtime thread\n");
@@ -2136,7 +2146,7 @@ static void ast_readconfig(void)
 	/* init with buildtime config */
 	ast_copy_string(ast_config_AST_CONFIG_DIR, AST_CONFIG_DIR, sizeof(ast_config_AST_CONFIG_DIR));
 	ast_copy_string(ast_config_AST_SPOOL_DIR, AST_SPOOL_DIR, sizeof(ast_config_AST_SPOOL_DIR));
-	ast_copy_string(ast_config_AST_MODULE_DIR, AST_MODULE_DIR, sizeof(ast_config_AST_VAR_DIR));
+	ast_copy_string(ast_config_AST_MODULE_DIR, AST_MODULE_DIR, sizeof(ast_config_AST_MODULE_DIR));
  	snprintf(ast_config_AST_MONITOR_DIR, sizeof(ast_config_AST_MONITOR_DIR) - 1, "%s/monitor", ast_config_AST_SPOOL_DIR);
 	ast_copy_string(ast_config_AST_VAR_DIR, AST_VAR_DIR, sizeof(ast_config_AST_VAR_DIR));
 	ast_copy_string(ast_config_AST_DATA_DIR, AST_DATA_DIR, sizeof(ast_config_AST_DATA_DIR));
@@ -2206,12 +2216,14 @@ static void ast_readconfig(void)
 			if (sscanf(v->value, "%d", &option_debug) != 1) {
 				option_debug = ast_true(v->value);
 			}
+#if HAVE_WORKING_FORK
 		/* Disable forking (-f at startup) */
 		} else if (!strcasecmp(v->name, "nofork")) {
 			ast_set2_flag(&ast_options, ast_true(v->value), AST_OPT_FLAG_NO_FORK);
 		/* Always fork, even if verbose or debug are enabled (-F at startup) */
 		} else if (!strcasecmp(v->name, "alwaysfork")) {
 			ast_set2_flag(&ast_options, ast_true(v->value), AST_OPT_FLAG_ALWAYS_FORK);
+#endif
 		/* Run quietly (-q at startup ) */
 		} else if (!strcasecmp(v->name, "quiet")) {
 			ast_set2_flag(&ast_options, ast_true(v->value), AST_OPT_FLAG_QUIET);
@@ -2280,23 +2292,23 @@ int main(int argc, char *argv[])
 {
 	int c;
 	char filename[80] = "";
-	char hostname[MAXHOSTNAMELEN]="";
+	char hostname[MAXHOSTNAMELEN] = "";
 	char tmp[80];
 	char * xarg = NULL;
 	int x;
 	FILE *f;
 	sigset_t sigs;
 	int num;
-	int is_child_of_nonroot=0;
+	int is_child_of_nonroot = 0;
 	char *buf;
-	char *runuser=NULL, *rungroup=NULL;
+	char *runuser = NULL, *rungroup = NULL;
 
 	/* Remember original args for restart */
 	if (argc > sizeof(_argv) / sizeof(_argv[0]) - 1) {
 		fprintf(stderr, "Truncating argument size to %d\n", (int)(sizeof(_argv) / sizeof(_argv[0])) - 1);
 		argc = sizeof(_argv) / sizeof(_argv[0]) - 1;
 	}
-	for (x=0;x<argc;x++)
+	for (x=0; x<argc; x++)
 		_argv[x] = argv[x];
 	_argv[x] = NULL;
 
@@ -2315,33 +2327,28 @@ int main(int argc, char *argv[])
 	tdd_init();
 	/* When Asterisk restarts after it has dropped the root privileges,
 	 * it can't issue setuid(), setgid(), setgroups() or set_priority() 
-	 * */
+	 */
 	if (getenv("ASTERISK_ALREADY_NONROOT"))
 		is_child_of_nonroot=1;
 	if (getenv("HOME")) 
 		snprintf(filename, sizeof(filename), "%s/.asterisk_history", getenv("HOME"));
-	/* Check if we're root */
-	/*
-	if (geteuid()) {
-		ast_log(LOG_ERROR, "Must be run as root\n");
-		exit(1);
-	}
-	*/
 	/* Check for options */
 	while ((c = getopt(argc, argv, "mtThfdvVqprRgciInx:U:G:C:L:M:")) != -1) {
 		switch (c) {
+#if HAVE_WORKING_FORK
 		case 'F':
 			ast_set_flag(&ast_options, AST_OPT_FLAG_ALWAYS_FORK);
 			break;
+		case 'f':
+			ast_set_flag(&ast_options, AST_OPT_FLAG_NO_FORK);
+			break;
+#endif
 		case 'd':
 			option_debug++;
 			ast_set_flag(&ast_options, AST_OPT_FLAG_NO_FORK);
 			break;
 		case 'c':
 			ast_set_flag(&ast_options, AST_OPT_FLAG_NO_FORK | AST_OPT_FLAG_CONSOLE);
-			break;
-		case 'f':
-			ast_set_flag(&ast_options, AST_OPT_FLAG_NO_FORK);
 			break;
 		case 'n':
 			ast_set_flag(&ast_options, AST_OPT_FLAG_NO_COLOR);
@@ -2373,7 +2380,6 @@ int main(int argc, char *argv[])
 		case 'q':
 			ast_set_flag(&ast_options, AST_OPT_FLAG_QUIET);
 			break;
-			break;
 		case 't':
 			ast_set_flag(&ast_options, AST_OPT_FLAG_CACHE_RECORD_FILES);
 			break;
@@ -2394,7 +2400,7 @@ int main(int argc, char *argv[])
 		case 'i':
 			ast_set_flag(&ast_options, AST_OPT_FLAG_INIT_KEYS);
 			break;
-		case'g':
+		case 'g':
 			ast_set_flag(&ast_options, AST_OPT_FLAG_DUMP_CORE);
 			break;
 		case 'h':
@@ -2455,6 +2461,7 @@ int main(int argc, char *argv[])
 		rungroup = ast_config_AST_RUN_GROUP;
 	if ((!runuser) && !ast_strlen_zero(ast_config_AST_RUN_USER))
 		runuser = ast_config_AST_RUN_USER;
+
 #ifndef __CYGWIN__
 
 	if (!is_child_of_nonroot) 
@@ -2500,7 +2507,7 @@ int main(int argc, char *argv[])
 			ast_log(LOG_WARNING, "Unable to setuid to %d (%s)\n", (int)pw->pw_uid, runuser);
 			exit(1);
 		}
-		setenv("ASTERISK_ALREADY_NONROOT","yes",1);
+		setenv("ASTERISK_ALREADY_NONROOT", "yes", 1);
 		if (option_verbose)
 			ast_verbose("Running as user '%s'\n", runuser);
 	}
@@ -2525,7 +2532,6 @@ int main(int argc, char *argv[])
 	register_config_cli();
 	read_config_maps();
 	
-
 	if (ast_opt_console) {
 		if (el_hist == NULL || el == NULL)
 			ast_el_initialize();
@@ -2552,7 +2558,7 @@ int main(int argc, char *argv[])
 			exit(1);
 		}
 	} else if (ast_opt_remote || ast_opt_exec) {
-		ast_log(LOG_ERROR, "Unable to connect to remote asterisk (does %s exist?)\n",ast_config_AST_SOCKET);
+		ast_log(LOG_ERROR, "Unable to connect to remote asterisk (does %s exist?)\n", ast_config_AST_SOCKET);
 		printf(term_quit());
 		exit(1);
 	}
@@ -2565,8 +2571,9 @@ int main(int argc, char *argv[])
 	} else
 		ast_log(LOG_WARNING, "Unable to open pid file '%s': %s\n", ast_config_AST_PID, strerror(errno));
 
+#if HAVE_WORKING_FORK
 	if (ast_opt_always_fork || !ast_opt_no_fork) {
-		daemon(0,0);
+		daemon(0, 0);
 		ast_mainpid = getpid();
 		/* Blindly re-write pid file since we are forking */
 		unlink(ast_config_AST_PID);
@@ -2577,6 +2584,7 @@ int main(int argc, char *argv[])
 		} else
 			ast_log(LOG_WARNING, "Unable to open pid file '%s': %s\n", ast_config_AST_PID, strerror(errno));
 	}
+#endif
 
 	/* Test recursive mutex locking. */
 	if (test_for_thread_safety())
@@ -2607,72 +2615,75 @@ int main(int argc, char *argv[])
 		printf(term_quit());
 		exit(1);
 	}
-	if (dnsmgr_init()) {
-		printf(term_quit());
-		exit(1);
-	}
-	/* load 'preload' modules, required for access to Realtime-mapped configuration files */
 	if (load_modules(1)) {
 		printf(term_quit());
 		exit(1);
 	}
+
+	if (dnsmgr_init()) {
+		printf(term_quit());
+		exit(1);
+	}
+
 	ast_http_init();
+
 	ast_channels_init();
+
 	if (init_manager()) {
 		printf(term_quit());
 		exit(1);
 	}
+
 	if (ast_cdr_engine_init()) {
 		printf(term_quit());
 		exit(1);
 	}
+
 	if (ast_device_state_engine_init()) {
 		printf(term_quit());
 		exit(1);
 	}
+
 	ast_rtp_init();
+
 	ast_udptl_init();
+
 	if (ast_image_init()) {
 		printf(term_quit());
 		exit(1);
 	}
+
 	if (ast_file_init()) {
 		printf(term_quit());
 		exit(1);
 	}
+
 	if (load_pbx()) {
 		printf(term_quit());
 		exit(1);
 	}
-	if (load_modules(0)) {
-		printf(term_quit());
-		exit(1);
-	}
+
 	if (init_framer()) {
 		printf(term_quit());
 		exit(1);
 	}
+
 	if (astdb_init()) {
 		printf(term_quit());
 		exit(1);
 	}
+
 	if (ast_enum_init()) {
 		printf(term_quit());
 		exit(1);
 	}
 
+	if (load_modules(0)) {
+		printf(term_quit());
+		exit(1);
+	}
+
 	dnsmgr_start_refresh();
-
-#if 0
-	/* This should no longer be necessary */
-	/* sync cust config and reload some internals in case a custom config handler binded to them */
-	read_ast_cust_config();
-	reload_logger(0);
-	reload_manager();
-	ast_enum_reload();
-	ast_rtp_reload();
-#endif
-
 
 	/* We might have the option of showing a console, but for now just
 	   do nothing... */
@@ -2682,13 +2693,17 @@ int main(int argc, char *argv[])
 		ast_verbose(term_color(tmp, "Asterisk Ready.\n", COLOR_BRWHITE, COLOR_BLACK, sizeof(tmp)));
 	if (ast_opt_no_fork)
 		consolethread = pthread_self();
+
 	ast_set_flag(&ast_options, AST_OPT_FLAG_FULLY_BOOTED);
 	pthread_sigmask(SIG_UNBLOCK, &sigs, NULL);
+
 #ifdef __AST_DEBUG_MALLOC
 	__ast_mm_init();
 #endif	
+
 	time(&ast_startuptime);
 	ast_cli_register_multiple(core_cli, sizeof(core_cli) / sizeof(core_cli[0]));
+
 	if (ast_opt_console) {
 		/* Console stuff now... */
 		/* Register our quit function */
@@ -2714,7 +2729,7 @@ int main(int argc, char *argv[])
 						dup2(fd, STDOUT_FILENO);
 						dup2(fd, STDIN_FILENO);
 					} else
-						ast_log(LOG_WARNING, "Failed to open /dev/null to recover from dead console.  Bad things will happen!\n");
+						ast_log(LOG_WARNING, "Failed to open /dev/null to recover from dead console. Bad things will happen!\n");
 					break;
 				}
 			}
@@ -2722,9 +2737,11 @@ int main(int argc, char *argv[])
 
 	}
 	/* Do nothing */
-	for(;;)  {	/* apparently needed for the MACos */
+	for (;;) {	/* apparently needed for Mac OS X */
 		struct pollfd p = { -1 /* no descriptor */, 0, 0 };
+
 		poll(&p, 0, -1);
 	}
+
 	return 0;
 }
