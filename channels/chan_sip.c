@@ -81,6 +81,10 @@
  * The PBX issues a hangup on both incoming and outgoing calls through
  * the sip_hangup() function
  *
+ * \par Deprecated stuff
+ * This is deprecated and will be removed after the 1.4 release
+ * - the SIPUSERAGENT dialplan variable
+ * - the ALERT_INFO dialplan variable
  */
 
 
@@ -7061,8 +7065,6 @@ static int transmit_refer(struct sip_pvt *p, const char *dest)
 	else
 		snprintf(referto, sizeof(referto), "<sip:%s>", dest);
 
-	add_header(&req, "Max-Forwards", DEFAULT_MAX_FORWARDS);
-
 	/* save in case we get 407 challenge */
 	sip_refer_allocate(p);
 	ast_copy_string(p->refer->refer_to, referto, sizeof(p->refer->refer_to));
@@ -7070,6 +7072,8 @@ static int transmit_refer(struct sip_pvt *p, const char *dest)
 	p->refer->status = REFER_SENT;   /* Set refer status */
 
 	reqprep(&req, p, SIP_REFER, 0, 1);
+	add_header(&req, "Max-Forwards", DEFAULT_MAX_FORWARDS);
+
 	add_header(&req, "Refer-To", referto);
 	add_header(&req, "Allow", ALLOWED_METHODS);
 	add_header(&req, "Supported", SUPPORTED_EXTENSIONS);
@@ -11827,6 +11831,8 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 					break;
 				case 487:	/* Response on INVITE that has been CANCELled */
 					/* channel now destroyed - dec the inUse counter */
+					if (owner)
+						ast_queue_hangup(p->owner);
 					update_call_counter(p, DEC_CALL_LIMIT);
 					break;
 				case 482: /*
