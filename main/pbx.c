@@ -739,6 +739,9 @@ enum ext_match_t {
 static int _extension_match_core(const char *pattern, const char *data, enum ext_match_t mode)
 {
 	mode &= E_MATCH_MASK;	/* only consider the relevant bits */
+	
+	if (!strcasecmp(pattern,data)) /* note: if this test is left out, then _x. will not match _x. !!! */
+		return 1;
 
 	if (pattern[0] != '_') { /* not a pattern, try exact or partial match */
 		int ld = strlen(data), lp = strlen(pattern);
@@ -5360,9 +5363,9 @@ int pbx_builtin_serialize_variables(struct ast_channel *chan, char *buf, size_t 
 	memset(buf, 0, size);
 
 	AST_LIST_TRAVERSE(&chan->varshead, variables, entries) {
-		if(variables &&
-		   (var=ast_var_name(variables)) && (val=ast_var_value(variables)) &&
-		   !ast_strlen_zero(var) && !ast_strlen_zero(val)) {
+		if ((var=ast_var_name(variables)) && (val=ast_var_value(variables))
+		   /* && !ast_strlen_zero(var) && !ast_strlen_zero(val) */
+		   ) {
 			if (ast_build_string(&buf, &size, "%s=%s\n", var, val)) {
 				ast_log(LOG_ERROR, "Data Buffer Size Exceeded!\n");
 				break;

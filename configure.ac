@@ -1,6 +1,6 @@
 # Process this file with autoconf to produce a configure script.
 
-AC_PREREQ(2.59)
+AC_PREREQ(2.60)
 
 m4_define([PBX_VERSION],
           m4_bpatsubst(m4_esyscmd([build_tools/make_version .]),
@@ -74,9 +74,7 @@ AH_TOP(
 #ifndef ASTERISK_AUTOCONFIG_H
 #define ASTERISK_AUTOCONFIG_H
 
-#ifndef MENUSELECT
 #include "asterisk/buildopts.h"
-#endif
 
 #ifndef _REENTRANT
 #define _REENTRANT
@@ -107,6 +105,29 @@ AC_PROG_INSTALL
 AC_PROG_LN_S
 AC_PROG_RANLIB
 AST_CHECK_GNU_MAKE
+
+# http://www.mail-archive.com/bug-make@gnu.org/msg02871.html
+echo 'define A' > testMakefile
+echo '12345: $(1:.idl=.hh) $(1:.idl=S.h) $(1:.idl=C.h) $(1:.idl=SK.cc) $(1:.idl=DynSK.cc)' >> testMakefile
+echo 'endef' >> testMakefile
+echo '$(eval $(call A,01234567890123456789012345678901.idl))' >> testMakefile
+echo '01234567890123456789012345678901.hh:' >> testMakefile
+echo '01234567890123456789012345678901S.h:' >> testMakefile
+echo '01234567890123456789012345678901C.h:' >> testMakefile
+echo '01234567890123456789012345678901SK.cc:' >> testMakefile
+echo '01234567890123456789012345678901DynSK.cc:' >> testMakefile
+$GNU_MAKE -r -f testMakefile 2>&1 > /dev/null
+if test "$?" != "0" ; then
+  rm -f testMakefile
+  AC_MSG_NOTICE(********** ERROR **********)
+  AC_MSG_NOTICE(Your version of GNU Make contains a bug that will cause the Asterisk build)
+  AC_MSG_NOTICE(system to not function properly.  This bug is known to be fixed in version)
+  AC_MSG_NOTICE(3.81 as well as distributions of 3.80 that contain backported bug fixes.  You)
+  AC_MSG_NOTICE(must update GNU make to build Asterisk.)
+  AC_MSG_NOTICE(***************************)
+  exit 1
+fi
+rm -f testMakefile
 
 AC_PATH_PROG([GREP], [grep], :)
 AC_PATH_PROG([AR], [ar], :)
@@ -228,6 +249,35 @@ AC_DEFINE([HAVE_GCC_ATOMICS], 1, [Define to 1 if your GCC C compiler provides at
 AC_MSG_RESULT(no)
 )
 
+AST_GCC_ATTRIBUTE(pure)
+AST_GCC_ATTRIBUTE(malloc)
+AST_GCC_ATTRIBUTE(const)
+AST_GCC_ATTRIBUTE(unused)
+AST_GCC_ATTRIBUTE(always_inline)
+
+AC_MSG_CHECKING(checking for -ffunction-sections support)
+saved_CFLAGS="${CFLAGS}"
+CFLAGS="${CFLAGS} -ffunction-sections"
+AC_COMPILE_IFELSE(
+	AC_LANG_PROGRAM([], [int x = 1;]),
+	AC_MSG_RESULT(yes)
+	[saved_LDFLAGS="${LDFLAGS}"]
+	[LDFLAGS="${LDFLAGS} -Wl,--gc-sections"]
+	AC_MSG_CHECKING(checking for --gc-sections support)
+	AC_LINK_IFELSE(
+		AC_LANG_PROGRAM([], [int x = 1;]),
+		AC_MSG_RESULT(yes)
+		[GC_CFLAGS="-ffunction-sections"]
+		[[GC_LDFLAGS="-Wl,--gc-sections"]],
+		AC_MSG_RESULT(no)
+	)
+	[LDFLAGS="${saved_LDFLAGS}"],
+	AC_MSG_RESULT(no)
+)
+CFLAGS="${saved_CFLAGS}"
+AC_SUBST(GC_CFLAGS)
+AC_SUBST(GC_LDFLAGS)
+
 AC_MSG_CHECKING(checking for res_ninit)
 AC_LINK_IFELSE(
 	AC_LANG_PROGRAM([#include <resolv.h>],
@@ -237,11 +287,14 @@ AC_LINK_IFELSE(
 	AC_MSG_RESULT(no)
 )
 
-AST_GCC_ATTRIBUTE(pure)
-AST_GCC_ATTRIBUTE(malloc)
-AST_GCC_ATTRIBUTE(const)
-AST_GCC_ATTRIBUTE(unused)
-AST_GCC_ATTRIBUTE(always_inline)
+AC_MSG_CHECKING(checking for RTLD_NOLOAD)
+AC_LINK_IFELSE(
+	AC_LANG_PROGRAM([#include <dlfcn.h>],
+			[int foo = RTLD_NOLOAD;]),
+	AC_MSG_RESULT(yes)
+	AC_DEFINE([HAVE_RTLD_NOLOAD], 1, [Define to 1 if your system has a dynamic linker that supports RTLD_NOLOAD.]),
+	AC_MSG_RESULT(no)
+)
 
 AC_CHECK_HEADER([libkern/OSAtomic.h],
                 [AC_DEFINE_UNQUOTED([HAVE_OSX_ATOMICS], 1, [Define to 1 if OSX atomic operations are supported.])])
@@ -908,20 +961,23 @@ if test ! x"${CURL}" = xNo; then
 # check for version
    if test "${host_os}" = "SunOS"; then
       if [[ 0x`curl-config --vernum` -ge 0x70907 ]]; then
-         CURLLIB=$(${CURL} --libs)
+         CURL_INCLUDE=$(${CURL} --cflags)
+         CURL_LIB=$(${CURL} --libs)
          PBX_CURL=1
          AC_DEFINE([HAVE_CURL], 1, [Define if your system has the curl libraries.])
       fi
    else
       if [[[ 0x`curl-config --vernum` -ge 0x70907 ]]]; then
-         CURLLIB=$(${CURL} --libs)
+         CURL_INCLUDE=$(${CURL} --cflags)
+         CURL_LIB=$(${CURL} --libs)
          PBX_CURL=1
          AC_DEFINE([HAVE_CURL], 1, [Define if your system has the curl libraries.])
       fi
    fi
 fi
 AC_SUBST(PBX_CURL)
-AC_SUBST(CURLLIB)
+AC_SUBST(CURL_INCLUDE)
+AC_SUBST(CURL_LIB)
 
 AC_CONFIG_FILES([build_tools/menuselect-deps makeopts])
 AC_OUTPUT
@@ -957,14 +1013,4 @@ AC_MSG_NOTICE( OS type  : $host_os)
 AC_MSG_NOTICE( Host CPU : $host_cpu)
 if test "${cross_compiling}" = "yes"; then
    AC_MSG_NOTICE( Cross Compilation = YES)
-fi
-
-if test ${GNU_MAKE_VERSION_MAJOR} -lt 3 || test ${GNU_MAKE_VERSION_MINOR} -lt 81 ; then
-   AC_MSG_NOTICE()
-   AC_MSG_NOTICE(***** WARNING ******)
-   AC_MSG_NOTICE(You are currently using GNU Make version ${GNU_MAKE_VERSION_MAJOR}.${GNU_MAKE_VERSION_MINOR}.)
-   AC_MSG_NOTICE(The Asterisk build system uses features that may not work correctly prior to 3.81.)
-   AC_MSG_NOTICE(Please consider upgrading GNU Make or you may experience problems.)
-   AC_MSG_NOTICE(********************)
-   AC_MSG_NOTICE()
 fi

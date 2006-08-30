@@ -323,9 +323,14 @@ static struct ast_module *find_resource(const char *resource, int do_lock)
 #if LOADABLE_MODULES
 static void unload_dynamic_module(struct ast_module *mod)
 {
-	if (mod->lib)
-		dlclose(mod->lib);
-	/* WARNING: the structure pointed to by mod is now gone! */
+	void *lib = mod->lib;
+
+	/* WARNING: the structure pointed to by mod is going to
+	   disappear when this operation succeeds, so we can't
+	   dereference it */
+
+	if (lib)
+		while (!dlclose(lib));
 }
 
 static struct ast_module *load_dynamic_module(const char *resource_in, unsigned int global_symbols_only)
@@ -368,7 +373,7 @@ static struct ast_module *load_dynamic_module(const char *resource_in, unsigned 
 	*/
 	if (resource_being_loaded != (mod = AST_LIST_LAST(&module_list))) {
 		/* no, it did not, so close it and return */
-		dlclose(lib);
+		while (!dlclose(lib));
 		/* note that the module's destructor will call ast_module_unregister(),
 		   which will free the structure we allocated in resource_being_loaded */
 		return NULL;
@@ -376,15 +381,27 @@ static struct ast_module *load_dynamic_module(const char *resource_in, unsigned 
 
 	wants_global = ast_test_flag(mod->info, AST_MODFLAG_GLOBAL_SYMBOLS);
 
-	/* we are done with this first load, so clean up and start over */
-
-	dlclose(lib);
-	resource_being_loaded = NULL;
-
 	/* if we are being asked only to load modules that provide global symbols,
 	   and this one does not, then close it and return */
-	if (global_symbols_only && !wants_global)
+	if (global_symbols_only && !wants_global) {
+		while (!dlclose(lib));
 		return NULL;
+	}
+
+	/* if the system supports RTLD_NOLOAD, we can just 'promote' the flags
+	   on the already-opened library to what we want... if not, we have to
+	   close it and start over
+	*/
+#if HAVE_RTLD_NOLOAD
+	if (!dlopen(fn, RTLD_NOLOAD | (wants_global ? RTLD_LAZY | RTLD_GLOBAL : RTLD_NOW | RTLD_LOCAL))) {
+		ast_log(LOG_WARNING, "%s\n", dlerror());
+		while (!dlclose(lib));
+		free(resource_being_loaded);
+		return NULL;
+	}
+#else
+	while (!dlclose(lib));
+	resource_being_loaded = NULL;
 
 	/* start the load process again */
 
@@ -402,6 +419,8 @@ static struct ast_module *load_dynamic_module(const char *resource_in, unsigned 
 	/* since the module was successfully opened, and it registered itself
 	   the previous time we did that, we're going to assume it worked this
 	   time too :) */
+#endif
+
 	AST_LIST_LAST(&module_list)->lib = lib;
 	resource_being_loaded = NULL;
 

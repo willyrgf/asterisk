@@ -3516,7 +3516,6 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 	pthread_t threadid;
 	pthread_attr_t attr;
 	struct ast_channel *chan;
-	struct ast_frame dtmf_frame = { .frametype = AST_FRAME_DTMF };
 
 	pthread_attr_init(&attr);
 	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
@@ -3560,8 +3559,6 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 			*/
 			p->subs[index].f.frametype = AST_FRAME_DTMF_BEGIN;
 			p->subs[index].f.subclass = res & 0xff;
-			dtmf_frame.subclass = res & 0xff;
-			p->subs[index].f.next = ast_frdup(&dtmf_frame);
 #ifdef HAVE_PRI
 		}
 #endif
@@ -8628,10 +8625,11 @@ static void *pri_dchannel(void *vpri)
 						res = set_actual_gain(pri->pvts[chanpos]->subs[SUB_REAL].zfd, 0, pri->pvts[chanpos]->rxgain, pri->pvts[chanpos]->txgain, law);
 						if (res < 0)
 							ast_log(LOG_WARNING, "Unable to set gains on channel %d\n", pri->pvts[chanpos]->channel);
-						if (e->ring.complete || !pri->overlapdial)
+						if (e->ring.complete || !pri->overlapdial) {
 							/* Just announce proceeding */
+							pri->pvts[chanpos]->proceeding = 1;
 							pri_proceeding(pri->pri, e->ring.call, PVT_TO_CHANNEL(pri->pvts[chanpos]), 0);
-						else  {
+						} else {
 							if (pri->switchtype != PRI_SWITCH_GR303_TMC) 
 								pri_need_more_info(pri->pri, e->ring.call, PVT_TO_CHANNEL(pri->pvts[chanpos]), 1);
 							else
@@ -11222,11 +11220,13 @@ static int reload(void)
 	return 0;
 }
 
-AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "Zapata Telephony"
 #ifdef ZAPATA_PRI
-               " w/PRI"
+#define tdesc "Zapata Telephony w/PRI"
+#else
+#define tdesc "Zapata Telephony"
 #endif
-		,
+
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, tdesc,
 		.load = load_module,
 		.unload = unload_module,
 		.reload = reload,

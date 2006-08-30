@@ -163,7 +163,8 @@ ifeq ($(PROC),ppc)
 endif
 
 ifeq ($(OSARCH),FreeBSD)
-  BSDVERSION=$(shell $(MAKE) -V OSVERSION -f /usr/share/mk/bsd.port.subdir.mk)
+  # -V is understood by BSD Make, not by GNU make.
+  BSDVERSION=$(shell make -V OSVERSION -f /usr/share/mk/bsd.port.subdir.mk)
   ASTCFLAGS+=$(shell if test $(BSDVERSION) -lt 500016 ; then echo "-D_THREAD_SAFE"; fi)
   AST_LIBS+=$(shell if test  $(BSDVERSION) -lt 502102 ; then echo "-lc_r"; else echo "-pthread"; fi)
 endif
@@ -331,7 +332,7 @@ distclean: clean
 	rm -f build_tools/menuselect-deps
 
 datafiles: all
-	if [ x`$(ID) -un` = xroot ]; then sh build_tools/mkpkgconfig $(DESTDIR)/usr/lib/pkgconfig; fi
+	if [ x`$(ID) -un` = xroot ]; then CFLAGS="$(ASTCFLAGS)" sh build_tools/mkpkgconfig $(DESTDIR)/usr/lib/pkgconfig; fi
 # Should static HTTP be installed during make samples or even with its own target ala
 # webvoicemail?  There are portions here that *could* be customized but might also be
 # improved a lot.  I'll put it here for now.
@@ -646,7 +647,7 @@ menuselect: menuselect/menuselect menuselect-tree
 	-@menuselect/menuselect $(GLOBAL_MAKEOPTS) $(USER_MAKEOPTS) menuselect.makeopts && echo "menuselect changes saved!" || echo "menuselect changes NOT saved!"
 
 menuselect/menuselect: makeopts menuselect/menuselect.c menuselect/menuselect_curses.c menuselect/menuselect_stub.c menuselect/menuselect.h menuselect/linkedlists.h makeopts
-	@CFLAGS="-include $(ASTTOPDIR)/include/asterisk/autoconfig.h -I$(ASTTOPDIR)/include" PARENTSRC="$(ASTTOPDIR)" $(MAKE) -C menuselect CC="$(HOST_CC)"
+	@unset CC LD AR RANLIB && $(MAKE) -C menuselect CONFIGURE_SILENT="--silent"
 
 menuselect-tree: $(foreach dir,$(filter-out main,$(MOD_SUBDIRS)),$(wildcard $(dir)/*.c) $(wildcard $(dir)/*.cc)) build_tools/cflags.xml sounds/sounds.xml build_tools/embed_modules.xml
 	@echo "Generating input for menuselect ..."

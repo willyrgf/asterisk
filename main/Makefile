@@ -11,14 +11,7 @@
 # the GNU General Public License
 #
 
-ifneq ($(wildcard $(ASTTOPDIR)/menuselect.makeopts),)
-  include $(ASTTOPDIR)/menuselect.makeopts
-  include $(ASTTOPDIR)/menuselect.makedeps
-endif
-
-ifneq ($(wildcard $(ASTTOPDIR)/makeopts.embed_rules),)
-  include $(ASTTOPDIR)/makeopts.embed_rules
-endif
+-include $(ASTTOPDIR)/menuselect.makeopts $(ASTTOPDIR)/menuselect.makedeps $(ASTTOPDIR)/makeopts.embed_rules
 
 all: asterisk
 
@@ -62,7 +55,9 @@ endif
 
 ifneq ($(findstring darwin,$(OSARCH)),)
   AST_LIBS+=-lresolv
-  ASTLINK=-Wl,-dynamic
+  ifneq ($(findstring LOADABLE_MODULES,$(MENUSELECT_CFLAGS)),)
+    ASTLINK=-Wl,-dynamic
+  endif
   # Mac on Intel CoreDuo does not need poll compatibility layer
   ifneq ($(PROC),i386)
     OBJS+=poll.o
@@ -70,7 +65,11 @@ ifneq ($(findstring darwin,$(OSARCH)),)
   endif
 else
 # These are used for all but Darwin
-  ASTLINK=-Wl,-E 
+  ifneq ($(findstring LOADABLE_MODULES,$(MENUSELECT_CFLAGS)),)
+    ASTLINK+=-Wl,--export-dynamic
+  else
+    ASTLINK+=${GC_LDFLAGS}
+  endif
   ifneq ($(findstring BSD,$(OSARCH)),)
     LDFLAGS+=-L/usr/local/lib
   endif
@@ -128,7 +127,7 @@ asterisk: $(OBJS) editline/libedit.a db1-ast/libdb1.a $(AST_EMBED_LDSCRIPTS)
 	@rm -f $(ASTTOPDIR)/include/asterisk/build.h.tmp
 	@$(CC) -c -o buildinfo.o $(CFLAGS) buildinfo.c
 	$(ECHO_PREFIX) echo "   [LD] $^ -> $@"
-	$(CMD_PREFIX) $(CXX) $(LDFLAGS) $(STATIC_BUILD) -o asterisk $(ASTLINK) $(AST_EMBED_LDFLAGS) $^ buildinfo.o $(AST_LIBS) $(AST_EMBED_LIBS)
+	$(CMD_PREFIX) $(CXX) $(STATIC_BUILD) -o asterisk $(ASTLINK) $(AST_EMBED_LDFLAGS) $(LDFLAGS) $^ buildinfo.o $(AST_LIBS) $(AST_EMBED_LIBS)
 
 clean::
 	rm -f asterisk
