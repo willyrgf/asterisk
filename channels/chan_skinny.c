@@ -2172,6 +2172,7 @@ static void *skinny_ss(void *data)
 
 	if (option_verbose > 2)
 		ast_verbose( VERBOSE_PREFIX_3 "Starting simple switch on '%s@%s'\n", l->name, d->name);
+
 	while (len < AST_MAX_EXTENSION-1) {
 		res = ast_waitfordigit(c, timeout);
 		timeout = 0;
@@ -2769,12 +2770,11 @@ static int handle_keypad_button_message(skinny_req *req, struct skinnysession *s
 	lineInstance = letohl(req->data.keypad.lineInstance);
 	callReference = letohl(req->data.keypad.callReference);
 
-	f.frametype = AST_FRAME_DTMF;
 	if (digit == 14) {
 		dgt = '*';
 	} else if (digit == 15) {
 		dgt = '#';
-	} else if (digit >=0 && digit <= 9) {
+	} else if (digit >= 0 && digit <= 9) {
 		dgt = '0' + digit;
 	} else {
 		/* digit=10-13 (A,B,C,D ?), or
@@ -2787,7 +2787,9 @@ static int handle_keypad_button_message(skinny_req *req, struct skinnysession *s
 		dgt = '0' + digit;
 		ast_log(LOG_WARNING, "Unsupported digit %d\n", digit);
 	}
+
 	f.subclass = dgt;
+
 	f.src = "skinny";
 
 	if (lineInstance && callReference)
@@ -2800,10 +2802,20 @@ static int handle_keypad_button_message(skinny_req *req, struct skinnysession *s
 
 	l = sub->parent;
 	if (sub->owner) {
+		if (sub->owner->_state == 0) {
+			f.frametype = AST_FRAME_DTMF_BEGIN;
+			ast_queue_frame(sub->owner, &f);
+		}
 		/* XXX MUST queue this frame to all lines in threeway call if threeway call is active */
+		f.frametype = AST_FRAME_DTMF_END;
 		ast_queue_frame(sub->owner, &f);
 		/* XXX This seriously needs to be fixed */
 		if (sub->next && sub->next->owner) {
+			if (sub->owner->_state == 0) {
+				f.frametype = AST_FRAME_DTMF_BEGIN;
+				ast_queue_frame(sub->next->owner, &f);
+			}
+			f.frametype = AST_FRAME_DTMF_END;
 			ast_queue_frame(sub->next->owner, &f);
 		}
 	} else {
@@ -4182,7 +4194,7 @@ static int reload_config(void)
 	/* We *must* have a config file otherwise stop immediately */
 	if (!cfg) {
 		ast_log(LOG_NOTICE, "Unable to load config %s, Skinny disabled\n", config);
-		return 0;
+		return -1;
 	}
 	memset(&bindaddr, 0, sizeof(bindaddr));
 
@@ -4317,7 +4329,7 @@ static int reload_config(void)
 	}
 	ast_mutex_unlock(&netlock);
 	ast_config_destroy(cfg);
-	return 0;
+	return 1;
 }
 
 static void delete_devices(void)
@@ -4377,9 +4389,16 @@ static int load_module(void)
 	}
 	/* load and parse config */
 	res = reload_config();
-	if(!res) {
+	if (res == -1) {
 		return AST_MODULE_LOAD_DECLINE;
 	}
+
+	/* Make sure we can register our skinny channel type */
+	if (ast_channel_register(&skinny_tech)) {
+		ast_log(LOG_ERROR, "Unable to register channel class 'Skinny'\n");
+		return -1;
+	}
+
 	ast_rtp_proto_register(&skinny_rtp);
 	ast_cli_register(&cli_show_devices);
 	ast_cli_register(&cli_show_lines);
@@ -4397,14 +4416,6 @@ static int load_module(void)
 	/* And start the monitor for the first time */
 	restart_monitor();
 
-	/* Announce our presence to Asterisk */
-	if (!res) {
-		/* Make sure we can register our skinny channel type */
-		if (ast_channel_register(&skinny_tech)) {
-			ast_log(LOG_ERROR, "Unable to register channel class 'Skinny'\n");
-			return -1;
-		}
-	}
 	return res;
 }
 
