@@ -1600,6 +1600,11 @@ static int ring_entry(struct queue_ent *qe, struct callattempt *tmp, int *busies
 			ast_cdr_busy(qe->chan->cdr);
 		tmp->stillgoing = 0;
 		update_dial_status(qe->parent, tmp->member, status);
+
+		ast_mutex_lock(&qe->parent->lock);
+		qe->parent->rrpos++;
+		ast_mutex_unlock(&qe->parent->lock);
+
 		(*busies)++;
 		return 0;
 	} else if (status != tmp->oldstatus)
@@ -1914,6 +1919,7 @@ static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callatte
 						o->stillgoing = 0;
 						numnochan++;
 					} else {
+						ast_channel_inherit_variables(in, o->chan);
 						if (o->chan->cid.cid_num)
 							free(o->chan->cid.cid_num);
 						o->chan->cid.cid_num = ast_strdup(in->cid.cid_num);
