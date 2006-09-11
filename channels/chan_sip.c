@@ -329,7 +329,7 @@ enum check_auth_result {
 	AUTH_UNKNOWN_DOMAIN = -5,
 };
 
-/* States for outbound registrations (with register= lines in sip.conf */
+/*! \brief States for outbound registrations (with register= lines in sip.conf */
 enum sipregistrystate {
 	REG_STATE_UNREGISTERED = 0,	/*!< We are not registred */
 	REG_STATE_REGSENT,	/*!< Registration request sent */
@@ -639,6 +639,10 @@ enum domain_mode {
 	SIP_DOMAIN_CONFIG,		/*!< This domain is from configuration */
 };
 
+/*! \brief Domain data structure. 
+	\note In the future, we will connect this to a configuration tree specific
+	for this domain
+*/
 struct domain {
 	char domain[MAXHOSTNAMELEN];		/*!< SIP domain we are responsible for */
 	char context[AST_MAX_EXTENSION];	/*!< Incoming context for this domain */
@@ -660,10 +664,10 @@ AST_LIST_HEAD_NOLOCK(sip_history_head, sip_history); /*!< history list, entry in
 /*! \brief sip_auth: Creadentials for authentication to other SIP services */
 struct sip_auth {
 	char realm[AST_MAX_EXTENSION];  /*!< Realm in which these credentials are valid */
-	char username[256];		/*!< Username */
-	char secret[256];		/*!< Secret */
-	char md5secret[256];		/*!< MD5Secret */
-	struct sip_auth *next;		/*!< Next auth structure in list */
+	char username[256];             /*!< Username */
+	char secret[256];               /*!< Secret */
+	char md5secret[256];            /*!< MD5Secret */
+	struct sip_auth *next;          /*!< Next auth structure in list */
 };
 
 /*--- Various flags for the flags field in the pvt structure */
@@ -718,7 +722,7 @@ struct sip_auth {
 	 SIP_PROG_INBAND | SIP_USECLIENTCODE | SIP_NAT | SIP_G726_NONSTANDARD | \
 	 SIP_USEREQPHONE | SIP_INSECURE_PORT | SIP_INSECURE_INVITE)
 
-/* a new page of flags */
+/*--- a new page of flags (for flags[1] */
 /* realtime flags */
 #define SIP_PAGE2_RTCACHEFRIENDS	(1 << 0)
 #define SIP_PAGE2_RTUPDATE		(1 << 1)
@@ -788,12 +792,12 @@ static int global_t38_capability = T38FAX_VERSION_0 | T38FAX_RATE_2400 | T38FAX_
 
 /*! \brief T38 States for a call */
 enum t38state {
-	T38_DISABLED = 0,		/*! Not enabled */
-	T38_LOCAL_DIRECT,		/*! Offered from local */
-	T38_LOCAL_REINVITE,		/*! Offered from local - REINVITE */
-	T38_PEER_DIRECT,		/*! Offered from peer */
-	T38_PEER_REINVITE,		/*! Offered from peer - REINVITE */
-	T38_ENABLED			/*! Negotiated (enabled) */
+        T38_DISABLED = 0,                /*!< Not enabled */
+        T38_LOCAL_DIRECT,                /*!< Offered from local */
+        T38_LOCAL_REINVITE,              /*!< Offered from local - REINVITE */
+        T38_PEER_DIRECT,                 /*!< Offered from peer */
+        T38_PEER_REINVITE,               /*!< Offered from peer - REINVITE */
+        T38_ENABLED                      /*!< Negotiated (enabled) */
 };
 
 /*! \brief T.38 channel settings (at some point we need to make this alloc'ed */
@@ -807,15 +811,15 @@ struct t38properties {
 
 /*! \brief Parameters to know status of transfer */
 enum referstatus {
-	REFER_IDLE,		/*!< No REFER is in progress */
-	REFER_SENT,		/*!< Sent REFER to transferee */
-	REFER_RECEIVED,		/*!< Received REFER from transferer */
-	REFER_CONFIRMED,	/*!< Refer confirmed with a 100 TRYING */
-	REFER_ACCEPTED,		/*!< Accepted by transferee */
-	REFER_RINGING,		/*!< Target Ringing */
-	REFER_200OK,		/*!< Answered by transfer target */
-	REFER_FAILED,		/*!< REFER declined - go on */
-	REFER_NOAUTH		/*!< We had no auth for REFER */
+        REFER_IDLE,                    /*!< No REFER is in progress */
+        REFER_SENT,                    /*!< Sent REFER to transferee */
+        REFER_RECEIVED,                /*!< Received REFER from transferer */
+        REFER_CONFIRMED,               /*!< Refer confirmed with a 100 TRYING */
+        REFER_ACCEPTED,                /*!< Accepted by transferee */
+        REFER_RINGING,                 /*!< Target Ringing */
+        REFER_200OK,                   /*!< Answered by transfer target */
+        REFER_FAILED,                  /*!< REFER declined - go on */
+        REFER_NOAUTH                   /*!< We had no auth for REFER */
 };
 
 static const struct c_referstatusstring {
@@ -1939,7 +1943,7 @@ static int __sip_autodestruct(void *data)
 	p->autokillid = -1;
 
 	if (option_debug)
-		ast_log(LOG_DEBUG, "Auto destroying call '%s'\n", p->callid);
+		ast_log(LOG_DEBUG, "Auto destroying SIP dialog '%s'\n", p->callid);
 	append_history(p, "AutoDestroy", "%s", p->callid);
 	if (p->owner) {
 		ast_log(LOG_WARNING, "Autodestruct on dialog '%s' with owner in place (Method: %s)\n", p->callid, sip_methods[p->method].text);
@@ -1952,7 +1956,7 @@ static int __sip_autodestruct(void *data)
 	return 0;
 }
 
-/*! \brief Schedule destruction of SIP call */
+/*! \brief Schedule destruction of SIP dialog */
 static void sip_scheddestroy(struct sip_pvt *p, int ms)
 {
 	if (ms < 0) {
@@ -2071,7 +2075,7 @@ static void parse_copy(struct sip_request *dst, const struct sip_request *src)
 	parse_request(dst);
 }
 
-/* add a blank line if no body */
+/*! \brief add a blank line if no body */
 static void add_blank(struct sip_request *req)
 {
 	if (!req->lines) {
@@ -2399,9 +2403,9 @@ static struct sip_peer *find_peer(const char *peer, struct sockaddr_in *sin, int
 	else
 		p = ASTOBJ_CONTAINER_FIND_FULL(&peerl, sin, name, sip_addr_hashfunc, 1, sip_addrcmp);
 
-	if (!p && realtime) {
+	if (!p && realtime)
 		p = realtime_peer(peer, sin);
-	}
+
 	return p;
 }
 
@@ -2687,16 +2691,16 @@ static int sip_call(struct ast_channel *ast, char *dest, int timeout)
 		} else if (!p->options->addsipheaders && !strncasecmp(ast_var_name(current), "SIPADDHEADER", strlen("SIPADDHEADER"))) {
 			/* Check whether there is a variable with a name starting with SIPADDHEADER */
 			p->options->addsipheaders = 1;
-		} else if (!strcasecmp(ast_var_name(current),"SIPTRANSFER")) {
+		} else if (!strcasecmp(ast_var_name(current), "SIPTRANSFER")) {
 			/* This is a transfered call */
 			p->options->transfer = 1;
-		} else if (!strcasecmp(ast_var_name(current),"SIPTRANSFER_REFERER")) {
+		} else if (!strcasecmp(ast_var_name(current), "SIPTRANSFER_REFERER")) {
 			/* This is the referer */
 			referer = ast_var_value(current);
-		} else if (!strcasecmp(ast_var_name(current),"SIPTRANSFER_REPLACES")) {
+		} else if (!strcasecmp(ast_var_name(current), "SIPTRANSFER_REPLACES")) {
 			/* We're replacing a call. */
 			p->options->replaces = ast_var_value(current);
-		} else if (!strcasecmp(ast_var_name(current),"T38CALL")) {
+		} else if (!strcasecmp(ast_var_name(current), "T38CALL")) {
 			p->t38.state = T38_LOCAL_DIRECT;
 			if (option_debug)
 				ast_log(LOG_DEBUG,"T38State change to %d on channel %s\n", p->t38.state, ast->name);
@@ -3182,9 +3186,8 @@ static int sip_hangup(struct ast_channel *ast)
 		else 
 			ast_log(LOG_DEBUG, "Hangup call %s, SIP callid %s)\n", ast->name, p->callid);
 	}
-	if (option_debug && ast_test_flag(ast, AST_FLAG_ZOMBIE)) {
+	if (option_debug && ast_test_flag(ast, AST_FLAG_ZOMBIE)) 
 		ast_log(LOG_DEBUG, "Hanging up zombie call. Be scared.\n");
-	}
 
 	ast_mutex_lock(&p->lock);
 	if (option_debug && sipdebug)
@@ -3334,9 +3337,8 @@ static int sip_answer(struct ast_channel *ast)
 			if (option_debug > 1)
 				ast_log(LOG_DEBUG,"T38State change to %d on channel %s\n", p->t38.state, ast->name);
 			res = transmit_response_with_t38_sdp(p, "200 OK", &p->initreq, XMIT_CRITICAL);
-		} else {
+		} else 
 			res = transmit_response_with_sdp(p, "200 OK", &p->initreq, XMIT_CRITICAL);
-		}
 	}
 	ast_mutex_unlock(&p->lock);
 	return res;
@@ -5572,8 +5574,8 @@ static int add_digit(struct sip_request *req, char digit)
 	return 0;
 }
 
-/*! \brief add XML encoded media control with update */
-/*! \note XML: The only way to turn 0 bits of information into a few hundred. */
+/*! \brief add XML encoded media control with update 
+	\note XML: The only way to turn 0 bits of information into a few hundred. (markster) */
 static int add_vidupdate(struct sip_request *req)
 {
 	const char *xml_is_a_huge_waste_of_space =
@@ -5700,9 +5702,8 @@ static int add_t38_sdp(struct sip_request *resp, struct sip_pvt *p)
 		udptldest.sin_port = udptlsin.sin_port;
 	}
 	
-	if (debug) {
+	if (debug) 
 		ast_log(LOG_DEBUG, "T.38 UDPTL is at %s port %d\n", ast_inet_ntoa(p->ourip), ntohs(udptlsin.sin_port));
-	}
 	
 	/* We break with the "recommendation" and send our IP, in order that our
 	   peer doesn't have to ast_gethostbyname() us */
@@ -6045,7 +6046,7 @@ static int add_sdp(struct sip_request *resp, struct sip_pvt *p)
 	return 0;
 }
 
-/*--- transmit_response_with_t38_sdp: Used for 200 OK and 183 early media ---*/
+/*! \brief Used for 200 OK and 183 early media */
 static int transmit_response_with_t38_sdp(struct sip_pvt *p, char *msg, struct sip_request *req, int retrans)
 {
 	struct sip_request resp;
@@ -6059,9 +6060,8 @@ static int transmit_response_with_t38_sdp(struct sip_pvt *p, char *msg, struct s
 	if (p->udptl) {
 		ast_udptl_offered_from_local(p->udptl, 0);
 		add_t38_sdp(&resp, p);
-	} else {
+	} else 
 		ast_log(LOG_ERROR, "Can't add SDP to response, since we have no UDPTL session allocated. Call-ID %s\n", p->callid);
-	}
 	return send_response(p, &resp, retrans, seqno);
 }
 
@@ -6093,9 +6093,8 @@ static int transmit_response_with_sdp(struct sip_pvt *p, const char *msg, const 
 	if (p->rtp) {
 		try_suggested_sip_codec(p);	
 		add_sdp(&resp, p);
-	} else {
+	} else 
 		ast_log(LOG_ERROR, "Can't add SDP to response, since we have no RTP session allocated. Call-ID %s\n", p->callid);
-	}
 	return send_response(p, &resp, reliable, seqno);
 }
 
@@ -6162,7 +6161,7 @@ static int transmit_reinvite_with_sdp(struct sip_pvt *p)
 	/* Use this as the basis */
 	initialize_initreq(p, &req);
 	p->lastinvite = p->ocseq;
-	return send_request(p, &req, 1, p->ocseq);
+	return send_request(p, &req, XMIT_CRITICAL, p->ocseq);
 }
 
 /*! \brief Transmit reinvite with T38 SDP 
@@ -6184,7 +6183,7 @@ static int transmit_reinvite_with_t38_sdp(struct sip_pvt *p)
 	/* Use this as the basis */
 	initialize_initreq(p, &req);
 	p->lastinvite = p->ocseq;
-	return send_request(p, &req, 1, p->ocseq);
+	return send_request(p, &req, XMIT_CRITICAL, p->ocseq);
 }
 
 /*! \brief Check Contact: URI of SIP message */
@@ -6401,9 +6400,8 @@ static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmetho
 	} else if (p->options && p->options->vxml_url) {
 		/* If there is a VXML URL append it to the SIP URL */
 		snprintf(to, sizeof(to), "<%s>;%s", p->uri, p->options->vxml_url);
-	} else {
+	} else 
 		snprintf(to, sizeof(to), "<%s>", p->uri);
-	}
 	
 	init_req(req, sipmethod, p->uri);
 	snprintf(tmp, sizeof(tmp), "%d %s", ++p->ocseq, sip_methods[sipmethod].text);
@@ -6415,9 +6413,8 @@ static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmetho
 	if (ast_test_flag(&p->flags[0], SIP_SENDRPID) && (sipmethod == SIP_INVITE)) {
 		build_rpid(p);
 		add_header(req, "From", p->rpid_from);
-	} else {
+	} else 
 		add_header(req, "From", from);
-	}
 	add_header(req, "To", to);
 	ast_string_field_set(p, exten, l);
 	build_contact(p);
@@ -6468,9 +6465,8 @@ static int transmit_invite(struct sip_pvt *p, int sipmethod, int sdp, int init)
 		add_header(&req, "Require", "replaces");
 	}
 
-	if (p->options && !ast_strlen_zero(p->options->distinctive_ring)) {
+	if (p->options && !ast_strlen_zero(p->options->distinctive_ring))
 		add_header(&req, "Alert-Info", p->options->distinctive_ring);
-	}
 	add_header(&req, "Allow", ALLOWED_METHODS);
 	add_header(&req, "Supported", SUPPORTED_EXTENSIONS);
 	if (p->options && p->options->addsipheaders ) {
@@ -6518,9 +6514,8 @@ static int transmit_invite(struct sip_pvt *p, int sipmethod, int sdp, int init)
 			if (option_debug)
 				ast_log(LOG_DEBUG, "T38 is in state %d on channel %s\n", p->t38.state, p->owner ? p->owner->name : "<none>");
 			add_t38_sdp(&req, p);
-		} else if (p->rtp) {
+		} else if (p->rtp) 
 			add_sdp(&req, p);
-		}
 	} else {
 		add_header_contentLength(&req, 0);
 	}
@@ -6528,7 +6523,7 @@ static int transmit_invite(struct sip_pvt *p, int sipmethod, int sdp, int init)
 	if (!p->initreq.headers)
 		initialize_initreq(p, &req);
 	p->lastinvite = p->ocseq;
-	return send_request(p, &req, init ? 2 : 1, p->ocseq);
+	return send_request(p, &req, init ? XMIT_CRITICAL : XMIT_RELIABLE, p->ocseq);
 }
 
 /*! \brief Used in the SUBSCRIBE notification subsystem */
@@ -6689,7 +6684,7 @@ static int transmit_state_notify(struct sip_pvt *p, int state, int full)
 	add_header_contentLength(&req, strlen(tmp));
 	add_line(&req, tmp);
 
-	return send_request(p, &req, 1, p->ocseq);
+	return send_request(p, &req, XMIT_RELIABLE, p->ocseq);
 }
 
 /*! \brief Notify user of messages waiting in voicemail
@@ -6728,15 +6723,15 @@ static int transmit_notify_with_mwi(struct sip_pvt *p, int newmsgs, int oldmsgs,
 
 	if (!p->initreq.headers) 
 		initialize_initreq(p, &req);
-	return send_request(p, &req, 1, p->ocseq);
+	return send_request(p, &req, XMIT_RELIABLE, p->ocseq);
 }
 
-/*! \brief Transmit SIP request */
+/*! \brief Transmit SIP request unreliably (only used in sip_notify subsystem) */
 static int transmit_sip_request(struct sip_pvt *p, struct sip_request *req)
 {
 	if (!p->initreq.headers) 	/* Initialize first request before sending */
 		initialize_initreq(p, req);
-	return send_request(p, req, 0, p->ocseq);
+	return send_request(p, req, XMIT_UNRELIABLE, p->ocseq);
 }
 
 /*! \brief Notify a transferring party of the status of transfer */
@@ -6760,7 +6755,7 @@ static int transmit_notify_with_sipfrag(struct sip_pvt *p, int cseq, char *messa
 	if (!p->initreq.headers)
 		initialize_initreq(p, &req);
 
-	return send_request(p, &req, 1, p->ocseq);
+	return send_request(p, &req, XMIT_RELIABLE, p->ocseq);
 }
 
 /*! \brief Convert registration state status to string */
@@ -7037,7 +7032,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 	r->regattempts++;	/* Another attempt */
 	if (option_debug > 3)
 		ast_verbose("REGISTER attempt %d to %s@%s\n", r->regattempts, r->username, r->hostname);
-	return send_request(p, &req, 2, p->ocseq);
+	return send_request(p, &req, XMIT_CRITICAL, p->ocseq);
 }
 
 /*! \brief Transmit text with SIP MESSAGE method */
@@ -7047,7 +7042,7 @@ static int transmit_message_with_text(struct sip_pvt *p, const char *text)
 
 	reqprep(&req, p, SIP_MESSAGE, 0, 1);
 	add_text(&req, text);
-	return send_request(p, &req, 1, p->ocseq);
+	return send_request(p, &req, XMIT_RELIABLE, p->ocseq);
 }
 
 /*! \brief Allocate SIP refer structure */
@@ -7120,7 +7115,7 @@ static int transmit_refer(struct sip_pvt *p, const char *dest)
 	if (!ast_strlen_zero(p->our_contact))
 		add_header(&req, "Referred-By", p->our_contact);
 
-	return send_request(p, &req, 1, p->ocseq);
+	return send_request(p, &req, XMIT_RELIABLE, p->ocseq);
 	/* We should propably wait for a NOTIFY here until we ack the transfer */
 	/* Maybe fork a new thread and wait for a STATUS of REFER_200OK on the refer status before returning to app_transfer */
 
@@ -7139,7 +7134,7 @@ static int transmit_info_with_digit(struct sip_pvt *p, const char digit)
 
 	reqprep(&req, p, SIP_INFO, 0, 1);
 	add_digit(&req, digit);
-	return send_request(p, &req, 1, p->ocseq);
+	return send_request(p, &req, XMIT_RELIABLE, p->ocseq);
 }
 
 /*! \brief Send SIP INFO with video update request */
@@ -7149,7 +7144,7 @@ static int transmit_info_with_vidupdate(struct sip_pvt *p)
 
 	reqprep(&req, p, SIP_INFO, 0, 1);
 	add_vidupdate(&req);
-	return send_request(p, &req, 1, p->ocseq);
+	return send_request(p, &req, XMIT_RELIABLE, p->ocseq);
 }
 
 /*! \brief Transmit generic SIP request */
