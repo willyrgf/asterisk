@@ -5996,7 +5996,7 @@ static int add_sdp(struct sip_request *resp, struct sip_pvt *p)
 	if (option_debug > 2)
 		ast_log(LOG_DEBUG, "-- Done with adding codecs to SDP\n");
 
-	if(!ast_internal_timing_enabled(p->owner))
+	if(!p->owner || !ast_internal_timing_enabled(p->owner))
 		ast_build_string(&a_audio_next, &a_audio_left, "a=silenceSupp:off - - - -\r\n");
 
 	if ((m_audio_left < 2) || (m_video_left < 2) || (a_audio_left == 0) || (a_video_left == 0))
@@ -13080,7 +13080,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 			break;
 		}
 	} else {
-		if (p && !ast_test_flag(&p->flags[0], SIP_NEEDDESTROY)) {
+		if (p && p->autokillid > -1) {
 			const char *msg;
 
 			if (!p->jointcapability)
