@@ -1302,7 +1302,7 @@ static char debug_usage[] =
 "       Enables dumping of AGI transactions for debugging purposes\n";
 
 static char no_debug_usage[] = 
-"Usage: agi no debug\n"
+"Usage: agi nodebug\n"
 "       Disables dumping of AGI transactions for debugging purposes\n";
 
 static int agi_do_debug(int fd, int argc, char *argv[])
@@ -1316,18 +1316,12 @@ static int agi_do_debug(int fd, int argc, char *argv[])
 
 static int agi_no_debug(int fd, int argc, char *argv[])
 {
-	if (argc != 3)
+	if (argc != 2)
 		return RESULT_SHOWUSAGE;
 	agidebug = 0;
 	ast_cli(fd, "AGI Debugging Disabled\n");
 	return RESULT_SUCCESS;
 }
-
-static struct ast_cli_entry  cli_debug =
-	{ { "agi", "debug", NULL }, agi_do_debug, "Enable AGI debugging", debug_usage };
-
-static struct ast_cli_entry  cli_no_debug =
-	{ { "agi", "no", "debug", NULL }, agi_no_debug, "Disable AGI debugging", no_debug_usage };
 
 static int handle_noop(struct ast_channel *chan, AGI *agi, int arg, char *argv[])
 {
@@ -1655,7 +1649,7 @@ static int help_workhorse(int fd, char *match[])
 	return 0;
 }
 
-int agi_register(agi_command *agi)
+int ast_agi_register(agi_command *agi)
 {
 	int x;
 	for (x=0; x<MAX_COMMANDS - 1; x++) {
@@ -1674,7 +1668,7 @@ int agi_register(agi_command *agi)
 	return -1;
 }
 
-void agi_unregister(agi_command *agi)
+void ast_agi_unregister(agi_command *agi)
 {
 	int x;
 	for (x=0; x<MAX_COMMANDS - 1; x++) {
@@ -1924,7 +1918,7 @@ static int handle_showagi(int fd, int argc, char *argv[])
 	return RESULT_SUCCESS;
 }
 
-static int handle_dumpagihtml(int fd, int argc, char *argv[])
+static int handle_agidumphtml(int fd, int argc, char *argv[])
 {
 	struct agi_command *e;
 	char fullcmd[80];
@@ -2080,29 +2074,38 @@ static int deadagi_exec(struct ast_channel *chan, void *data)
 }
 
 static char showagi_help[] =
-"Usage: show agi [topic]\n"
+"Usage: agi list [topic]\n"
 "       When called with a topic as an argument, displays usage\n"
 "       information on the given command.  If called without a\n"
 "       topic, it provides a list of AGI commands.\n";
 
 
 static char dumpagihtml_help[] =
-"Usage: dump agihtml <filename>\n"
+"Usage: agi dumphtml <filename>\n"
 "	Dumps the agi command list in html format to given filename\n";
 
-static struct ast_cli_entry showagi = 
-{ { "show", "agi", NULL }, handle_showagi, "Show AGI commands or specific help", showagi_help };
+static struct ast_cli_entry cli_agi[] = {
+	{ { "agi", "debug", NULL },
+	agi_do_debug, "Enable AGI debugging",
+	debug_usage },
 
-static struct ast_cli_entry dumpagihtml = 
-{ { "dump", "agihtml", NULL }, handle_dumpagihtml, "Dumps a list of agi command in html format", dumpagihtml_help };
+	{ { "agi", "nodebug", NULL },
+	agi_no_debug, "Disable AGI debugging",
+	no_debug_usage },
+
+	{ { "agi", "list", NULL },
+	handle_showagi, "List AGI commands or specific help",
+	showagi_help },
+
+	{ { "agi", "dumphtml", NULL },
+	handle_agidumphtml, "Dumps a list of agi commands in html format",
+	dumpagihtml_help },
+};
 
 static int unload_module(void)
 {
 	ast_module_user_hangup_all();
-	ast_cli_unregister(&showagi);
-	ast_cli_unregister(&dumpagihtml);
-	ast_cli_unregister(&cli_debug);
-	ast_cli_unregister(&cli_no_debug);
+	ast_cli_unregister_multiple(cli_agi, sizeof(cli_agi) / sizeof(struct ast_cli_entry));
 	ast_unregister_application(eapp);
 	ast_unregister_application(deadapp);
 	return ast_unregister_application(app);
@@ -2110,10 +2113,7 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	ast_cli_register(&showagi);
-	ast_cli_register(&dumpagihtml);
-	ast_cli_register(&cli_debug);
-	ast_cli_register(&cli_no_debug);
+	ast_cli_register_multiple(cli_agi, sizeof(cli_agi) / sizeof(struct ast_cli_entry));
 	ast_register_application(deadapp, deadagi_exec, deadsynopsis, descrip);
 	ast_register_application(eapp, eagi_exec, esynopsis, descrip);
 	return ast_register_application(app, agi_exec, synopsis, descrip);

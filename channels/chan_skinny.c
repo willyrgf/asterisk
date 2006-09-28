@@ -80,8 +80,18 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 static const char tdesc[] = "Skinny Client Control Protocol (Skinny)";
 static const char config[] = "skinny.conf";
 
-/* Just about everybody seems to support ulaw, so make it a nice default */
-static int capability = AST_FORMAT_ULAW;
+static int default_capability = AST_FORMAT_ULAW | AST_FORMAT_ALAW;
+static struct ast_codec_pref default_prefs;
+
+enum skinny_codecs {
+	SKINNY_CODEC_ALAW = 2,
+	SKINNY_CODEC_ULAW = 4,
+	SKINNY_CODEC_G723_1 = 9,
+	SKINNY_CODEC_G729A = 12,
+	SKINNY_CODEC_G726_32 = 82, /* XXX Which packing order does this translate to? */
+	SKINNY_CODEC_H261 = 100,
+	SKINNY_CODEC_H263 = 101
+};
 
 #define DEFAULT_SKINNY_PORT	2000
 #define DEFAULT_SKINNY_BACKLOG	2
@@ -182,7 +192,7 @@ struct station_capabilities {
 	uint32_t frames;
 	union {
 		char res[8];
-		uint64_t rate;
+		uint32_t rate;
 	} payloads;
 };
 
@@ -948,6 +958,7 @@ struct skinny_line {
 	int hookstate;
 	int nat;
 
+	struct ast_codec_pref prefs;
 	struct skinny_subchannel *sub;
 	struct skinny_line *next;
 	struct skinny_device *parent;
@@ -980,11 +991,13 @@ static struct skinny_device {
 	int registered;
 	int lastlineinstance;
 	int lastcallreference;
+	int capability;
 	struct sockaddr_in addr;
 	struct in_addr ourip;
 	struct skinny_line *lines;
 	struct skinny_speeddial *speeddials;
 	struct skinny_addon *addons;
+	struct ast_codec_pref prefs;
 	struct ast_ha *ha;
 	struct skinnysession *session;
 	struct skinny_device *next;
@@ -1022,7 +1035,7 @@ static int skinny_senddigit_end(struct ast_channel *ast, char digit);
 static const struct ast_channel_tech skinny_tech = {
 	.type = "Skinny",
 	.description = tdesc,
-	.capabilities = AST_FORMAT_ULAW,
+	.capabilities = ((AST_FORMAT_MAX_AUDIO << 1) - 1),
 	.properties = AST_CHAN_TP_WANTSJITTER | AST_CHAN_TP_CREATESJITTER,
 	.requester = skinny_request,
 	.call = skinny_call,
@@ -1278,6 +1291,50 @@ static struct skinny_speeddial *find_speeddial_by_instance(struct skinny_device 
 	return sd;
 }
 
+static int codec_skinny2ast(enum skinny_codecs skinnycodec)
+{
+	switch (skinnycodec) {
+	case SKINNY_CODEC_ALAW:
+		return AST_FORMAT_ALAW;
+	case SKINNY_CODEC_ULAW:
+		return AST_FORMAT_ULAW;
+	case SKINNY_CODEC_G723_1:
+		return AST_FORMAT_G723_1;
+	case SKINNY_CODEC_G729A:
+		return AST_FORMAT_G729A;
+	case SKINNY_CODEC_G726_32:
+		return AST_FORMAT_G726_AAL2; /* XXX Is this right? */
+	case SKINNY_CODEC_H261:
+		return AST_FORMAT_H261;
+	case SKINNY_CODEC_H263:
+		return AST_FORMAT_H263;
+	default:
+		return 0;
+	}
+}
+
+static int codec_ast2skinny(int astcodec)
+{
+	switch (astcodec) {
+	case AST_FORMAT_ALAW:
+		return SKINNY_CODEC_ALAW;
+	case AST_FORMAT_ULAW:
+		return SKINNY_CODEC_ULAW;
+	case AST_FORMAT_G723_1:
+		return SKINNY_CODEC_G723_1;
+	case AST_FORMAT_G729A:
+		return SKINNY_CODEC_G729A;
+	case AST_FORMAT_G726_AAL2: /* XXX Is this right? */
+		return SKINNY_CODEC_G726_32;
+	case AST_FORMAT_H261:
+		return SKINNY_CODEC_H261;
+	case AST_FORMAT_H263:
+		return SKINNY_CODEC_H263;
+	default:
+		return 0;
+	}
+}
+
 static int transmit_response(struct skinnysession *s, struct skinny_req *req)
 {
 	int res = 0;
@@ -1298,13 +1355,6 @@ static int transmit_response(struct skinnysession *s, struct skinny_req *req)
 	}
 	ast_mutex_unlock(&s->lock);
 	return 1;
-}
-
-/* XXX Do this right */
-static int convert_cap(int capability)
-{
-	return 4; /* ulaw (this is not the same as asterisk's '4' */
-
 }
 
 static void transmit_speaker_mode(struct skinnysession *s, int mode)
@@ -1401,14 +1451,17 @@ static void transmit_connect(struct skinnysession *s, struct skinny_subchannel *
 {
 	struct skinny_req *req;
 	struct skinny_line *l = sub->parent;
+	struct ast_format_list fmt;
 
 	if (!(req = req_alloc(sizeof(struct open_receive_channel_message), OPEN_RECEIVE_CHANNEL_MESSAGE)))
 		return;
 
+	fmt = ast_codec_pref_getsize(&l->prefs, ast_best_codec(l->capability));
+
 	req->data.openreceivechannel.conferenceId = htolel(0);
 	req->data.openreceivechannel.partyId = htolel(sub->callid);
-	req->data.openreceivechannel.packets = htolel(20);
-	req->data.openreceivechannel.capability = htolel(convert_cap(l->capability));
+	req->data.openreceivechannel.packets = htolel(fmt.cur_ms);
+	req->data.openreceivechannel.capability = htolel(codec_ast2skinny(fmt.bits));
 	req->data.openreceivechannel.echo = htolel(0);
 	req->data.openreceivechannel.bitrate = htolel(0);
 	transmit_response(s, req);
@@ -1650,7 +1703,7 @@ static int skinny_do_debug(int fd, int argc, char *argv[])
 
 static int skinny_no_debug(int fd, int argc, char *argv[])
 {
-	if (argc != 3) {
+	if (argc != 2) {
 		return RESULT_SHOWUSAGE;
 	}
 	skinnydebug = 0;
@@ -1839,11 +1892,11 @@ static int skinny_show_lines(int fd, int argc, char *argv[])
 }
 
 static char show_devices_usage[] =
-"Usage: skinny show devices\n"
+"Usage: skinny list devices\n"
 "       Lists all devices known to the Skinny subsystem.\n";
 
 static char show_lines_usage[] =
-"Usage: skinny show lines\n"
+"Usage: skinny list lines\n"
 "       Lists all lines known to the Skinny subsystem.\n";
 
 static char debug_usage[] =
@@ -1851,27 +1904,34 @@ static char debug_usage[] =
 "       Enables dumping of Skinny packets for debugging purposes\n";
 
 static char no_debug_usage[] =
-"Usage: skinny no debug\n"
+"Usage: skinny nodebug\n"
 "       Disables dumping of Skinny packets for debugging purposes\n";
 
 static char reset_usage[] =
 "Usage: skinny reset <DeviceId|all> [restart]\n"
 "       Causes a Skinny device to reset itself, optionally with a full restart\n";
 
-static struct ast_cli_entry cli_show_devices =
-	{ { "skinny", "show", "devices", NULL }, skinny_show_devices, "Show defined Skinny devices", show_devices_usage };
+static struct ast_cli_entry cli_skinny[] = {
+	{ { "skinny", "list", "devices", NULL },
+	skinny_show_devices, "List defined Skinny devices",
+	show_devices_usage },
 
-static struct ast_cli_entry cli_show_lines =
-	{ { "skinny", "show", "lines", NULL }, skinny_show_lines, "Show defined Skinny lines per device", show_lines_usage };
+	{ { "skinny", "list", "lines", NULL },
+	skinny_show_lines, "List defined Skinny lines per device",
+	show_lines_usage },
 
-static struct ast_cli_entry cli_debug =
-	{ { "skinny", "debug", NULL }, skinny_do_debug, "Enable Skinny debugging", debug_usage };
+	{ { "skinny", "debug", NULL },
+	skinny_do_debug, "Enable Skinny debugging",
+	debug_usage },
 
-static struct ast_cli_entry cli_no_debug =
-	{ { "skinny", "no", "debug", NULL }, skinny_no_debug, "Disable Skinny debugging", no_debug_usage };
+	{ { "skinny", "nodebug", NULL },
+	skinny_no_debug, "Disable Skinny debugging",
+	no_debug_usage },
 
-static struct ast_cli_entry cli_reset_device =
-	{ { "skinny", "reset", NULL }, skinny_reset_device, "Reset Skinny device(s)", reset_usage, complete_skinny_reset };
+	{ { "skinny", "reset", NULL },
+	skinny_reset_device, "Reset Skinny device(s)",
+	reset_usage, complete_skinny_reset },
+};
 
 #if 0
 static struct skinny_paging_device *build_paging_device(const char *cat, struct ast_variable *v)
@@ -1895,6 +1955,8 @@ static struct skinny_device *build_device(const char *cat, struct ast_variable *
 	} else {
 		ast_copy_string(d->name, cat, sizeof(d->name));
 		d->lastlineinstance = 1;
+		d->capability = default_capability;
+		d->prefs = default_prefs;
 		while(v) {
 			if (!strcasecmp(v->name, "host")) {
 				if (ast_get_ip(&d->addr, v->value)) {
@@ -1909,6 +1971,10 @@ static struct skinny_device *build_device(const char *cat, struct ast_variable *
 				d->ha = ast_append_ha(v->name, v->value, d->ha);
 			} else if (!strcasecmp(v->name, "context")) {
 				ast_copy_string(context, v->value, sizeof(context));
+			} else if (!strcasecmp(v->name, "allow")) {
+				ast_parse_allow_disallow(&d->prefs, &d->capability, v->value, 1);
+			} else if (!strcasecmp(v->name, "disallow")) {
+				ast_parse_allow_disallow(&d->prefs, &d->capability, v->value, 0);
 			} else if (!strcasecmp(v->name, "version")) {
 				ast_copy_string(d->version_id, v->value, sizeof(d->version_id));
 			} else if (!strcasecmp(v->name, "nat")) {
@@ -2008,7 +2074,8 @@ static struct skinny_device *build_device(const char *cat, struct ast_variable *
 							ast_verbose(VERBOSE_PREFIX_3 "Setting mailbox '%s' on %s@%s\n", mailbox, d->name, l->name);
 					}
 					l->msgstate = -1;
-					l->capability = capability;
+					l->capability = d->capability;
+					l->prefs = d->prefs;
 					l->parent = d;
 					if (!strcasecmp(v->name, "trunk")) {
 						l->type = TYPE_TRUNK;
@@ -2135,6 +2202,10 @@ static void start_rtp(struct skinny_subchannel *sub)
 	if (sub->vrtp) {
 		ast_rtp_setnat(sub->vrtp, l->nat);
 	}
+	/* Set Frame packetization */
+	if (sub->rtp)
+		ast_rtp_codec_setpref(sub->rtp, &l->prefs);
+
 	/* Create the RTP connection */
 	transmit_connect(d->session, sub);
  	ast_mutex_unlock(&sub->lock);
@@ -2648,7 +2719,7 @@ static struct ast_channel *skinny_new(struct skinny_line *l, int state)
 		tmp->tech_pvt = sub;
 		tmp->nativeformats = l->capability;
 		if (!tmp->nativeformats)
-			tmp->nativeformats = capability;
+			tmp->nativeformats = default_capability;
 		fmt = ast_best_codec(tmp->nativeformats);
 		if (skinnydebug)
 			ast_verbose("skinny_new: tmp->nativeformats=%d fmt=%d\n", tmp->nativeformats, fmt);
@@ -3257,7 +3328,32 @@ static int handle_onhook_message(struct skinny_req *req, struct skinnysession *s
 
 static int handle_capabilities_res_message(struct skinny_req *req, struct skinnysession *s)
 {
-	/* XXX process the capabilites */
+	struct skinny_device *d = s->device;
+	struct skinny_line *l;
+	int count = 0;
+	int codecs = 0;
+	int i;
+
+	count = letohl(req->data.caps.count);
+
+	for (i = 0; i < count; i++) {
+		int acodec = 0;
+		int scodec = 0;
+		scodec = letohl(req->data.caps.caps[i].codec);
+		acodec = codec_skinny2ast(scodec);
+		if (skinnydebug)
+			ast_verbose("Adding codec capability '%d (%d)'\n", acodec, scodec);
+		codecs |= acodec;
+	}
+
+	d->capability &= codecs;
+	ast_verbose("Device capability set to '%d'\n", d->capability);
+	for (l = d->lines; l; l = l->next) {
+		ast_mutex_lock(&l->lock);
+		l->capability = d->capability;
+		ast_mutex_unlock(&l->lock);
+	}
+
 	return 1;
 }
 
@@ -3487,6 +3583,7 @@ static int handle_open_receive_channel_ack_message(struct skinny_req *req, struc
 	struct skinny_device *d = s->device;
 	struct skinny_line *l;
 	struct skinny_subchannel *sub;
+	struct ast_format_list fmt;
 	struct sockaddr_in sin;
 	struct sockaddr_in us;
 	uint32_t addr;
@@ -3530,12 +3627,17 @@ static int handle_open_receive_channel_ack_message(struct skinny_req *req, struc
 	if (!(req = req_alloc(sizeof(struct start_media_transmission_message), START_MEDIA_TRANSMISSION_MESSAGE)))
 		return -1;
 
+	fmt = ast_codec_pref_getsize(&l->prefs, ast_best_codec(l->capability));
+
+	if (skinnydebug)
+		ast_verbose("Setting payloadType to '%d' (%d ms)\n", fmt.bits, fmt.cur_ms);
+
 	req->data.startmedia.conferenceId = htolel(0);
 	req->data.startmedia.passThruPartyId = htolel(sub->callid);
 	req->data.startmedia.remoteIp = htolel(d->ourip.s_addr);
 	req->data.startmedia.remotePort = htolel(ntohs(us.sin_port));
-	req->data.startmedia.packetSize = htolel(20);
-	req->data.startmedia.payloadType = htolel(convert_cap(l->capability));
+	req->data.startmedia.packetSize = htolel(fmt.cur_ms);
+	req->data.startmedia.payloadType = htolel(codec_ast2skinny(fmt.bits));
 	req->data.startmedia.qualifier.precedence = htolel(127);
 	req->data.startmedia.qualifier.vad = htolel(0);
 	req->data.startmedia.qualifier.packets = htolel(0);
@@ -4212,10 +4314,8 @@ static int restart_monitor(void)
 	/* If we're supposed to be stopped -- stay stopped */
 	if (monitor_thread == AST_PTHREADT_STOP)
 		return 0;
-	if (ast_mutex_lock(&monlock)) {
-		ast_log(LOG_WARNING, "Unable to lock monitor\n");
-		return -1;
-	}
+
+	ast_mutex_lock(&monlock);
 	if (monitor_thread == pthread_self()) {
 		ast_mutex_unlock(&monlock);
 		ast_log(LOG_WARNING, "Cannot kill myself\n");
@@ -4245,7 +4345,7 @@ static struct ast_channel *skinny_request(const char *type, int format, void *da
 	char *dest = data;
 
 	oldformat = format;
-	format &= capability;
+	format &= default_capability;
 	if (!format) {
 		ast_log(LOG_NOTICE, "Asked to get a channel of unsupported format '%d'\n", format);
 		return NULL;
@@ -4276,7 +4376,6 @@ static int reload_config(void)
 	int on = 1;
 	struct ast_config *cfg;
 	struct ast_variable *v;
-	int format;
 	char *cat;
 	struct skinny_device *d;
 	int oldport = ntohs(bindaddr.sin_port);
@@ -4293,6 +4392,7 @@ static int reload_config(void)
 		return -1;
 	}
 	memset(&bindaddr, 0, sizeof(bindaddr));
+	memset(&default_prefs, 0, sizeof(default_prefs));
 
 	/* Copy the default jb config over global_jbconf */
 	memcpy(&global_jbconf, &default_jbconf, sizeof(struct ast_jb_conf));
@@ -4318,27 +4418,14 @@ static int reload_config(void)
 		} else if (!strcasecmp(v->name, "dateformat")) {
 			ast_copy_string(date_format, v->value, sizeof(date_format));
 		} else if (!strcasecmp(v->name, "allow")) {
-			format = ast_getformatbyname(v->value);
-			if (format < 1) {
-				ast_log(LOG_WARNING, "Cannot allow unknown format '%s'\n", v->value);
-			} else {
-				capability |= format;
-			}
+			ast_parse_allow_disallow(&default_prefs, &default_capability, v->value, 1);
 		} else if (!strcasecmp(v->name, "disallow")) {
-			format = ast_getformatbyname(v->value);
-			if (format < 1) {
-				ast_log(LOG_WARNING, "Cannot disallow unknown format '%s'\n", v->value);
-			} else {
-				capability &= ~format;
-			}
-		} else if (!strcasecmp(v->name, "bindport") || !strcasecmp(v->name, "port")) {
+			ast_parse_allow_disallow(&default_prefs, &default_capability, v->value, 0);
+		} else if (!strcasecmp(v->name, "bindport")) {
 			if (sscanf(v->value, "%d", &ourport) == 1) {
 				bindaddr.sin_port = htons(ourport);
 			} else {
 				ast_log(LOG_WARNING, "Invalid bindport '%s' at line %d of %s\n", v->value, v->lineno, config);
-			}
-			if (!strcasecmp(v->name, "port")) { /*! \todo Remove 'port' option after 1.4 */
-				ast_log(LOG_WARNING, "Option 'port' at line %d of %s has been deprecated.  Please use 'bindport' instead.\n", v->lineno, config);
 			}
 		}
 		v = v->next;
@@ -4468,6 +4555,11 @@ static void delete_devices(void)
 	ast_mutex_unlock(&devicelock);
 }
 
+#if 0
+/*
+ * XXX This never worked properly anyways.
+ * Let's get rid of it, until we can fix it.
+ */
 static int reload(void)
 {
 	delete_devices();
@@ -4475,6 +4567,7 @@ static int reload(void)
 	restart_monitor();
 	return 0;
 }
+#endif
 
 static int load_module(void)
 {
@@ -4496,11 +4589,7 @@ static int load_module(void)
 	}
 
 	ast_rtp_proto_register(&skinny_rtp);
-	ast_cli_register(&cli_show_devices);
-	ast_cli_register(&cli_show_lines);
-	ast_cli_register(&cli_debug);
-	ast_cli_register(&cli_no_debug);
-	ast_cli_register(&cli_reset_device);
+	ast_cli_register_multiple(cli_skinny, sizeof(cli_skinny) / sizeof(struct ast_cli_entry));
 	sched = sched_context_create();
 	if (!sched) {
 		ast_log(LOG_WARNING, "Unable to create schedule context\n");
@@ -4517,60 +4606,77 @@ static int load_module(void)
 
 static int unload_module(void)
 {
-#if 0
-	struct skinnysession *s;
+	struct skinnysession *s, *slast;
+	struct skinny_device *d;
+	struct skinny_line *l;
+	struct skinny_subchannel *sub;
 
-	/* close all IP connections */
-	if (!ast_mutex_lock(&devicelock)) {
-		/* Terminate tcp listener thread */
-	} else {
-		ast_log(LOG_WARNING, "Unable to lock the monitor\n");
-		return -1;
-	}
-	if (!ast_mutex_lock(&monlock)) {
-		if (monitor_thread && (monitor_thread != AST_PTHREADT_STOP)) {
-			pthread_cancel(monitor_thread);
-			pthread_kill(monitor_thread, SIGURG);
-			pthread_join(monitor_thread, NULL);
+	ast_mutex_lock(&sessionlock);
+	/* Destroy all the interfaces and free their memory */
+	s = sessions;
+	while(s) {
+		slast = s;
+		s = s->next;
+		for (d = slast->device; d; d = d->next) {
+			for (l = d->lines; l; l = l->next) {
+				ast_mutex_lock(&l->lock);
+				for (sub = l->sub; sub; sub = sub->next) {
+					ast_mutex_lock(&sub->lock);
+					if (sub->owner) {
+						sub->alreadygone = 1;
+						ast_softhangup(sub->owner, AST_SOFTHANGUP_APPUNLOAD);
+					}
+					ast_mutex_unlock(&sub->lock);
+				}
+				ast_mutex_unlock(&l->lock);
+			}
 		}
-		monitor_thread = AST_PTHREADT_STOP;
-		ast_mutex_unlock(&monlock);
-	} else {
-		ast_log(LOG_WARNING, "Unable to lock the monitor\n");
-		return -1;
+		if (slast->fd > -1)
+			close(slast->fd);
+		ast_mutex_destroy(&slast->lock);
+		free(slast);
 	}
-	if (!ast_mutex_lock(&iflock)) {
-		/* Destroy all the interfaces and free their memory */
-		p = iflist;
-		while(p) {
-			pl = p;
-			p = p->next;
-			/* Free associated memory */
-			ast_mutex_destroy(&pl->lock);
-			free(pl);
-		}
-		iflist = NULL;
-		ast_mutex_unlock(&iflock);
-	} else {
-		ast_log(LOG_WARNING, "Unable to lock the monitor\n");
-		return -1;
+	sessions = NULL;
+	ast_mutex_unlock(&sessionlock);
+
+	delete_devices();
+
+	ast_mutex_lock(&monlock);
+	if (monitor_thread && (monitor_thread != AST_PTHREADT_STOP)) {
+		pthread_cancel(monitor_thread);
+		pthread_kill(monitor_thread, SIGURG);
+		pthread_join(monitor_thread, NULL);
 	}
+	monitor_thread = AST_PTHREADT_STOP;
+	ast_mutex_unlock(&monlock);
+
+	if (tcp_thread && (tcp_thread != AST_PTHREADT_STOP)) {
+		pthread_cancel(tcp_thread);
+		pthread_kill(tcp_thread, SIGURG);
+		pthread_join(tcp_thread, NULL);
+	}
+	tcp_thread = AST_PTHREADT_STOP;
+
+	ast_mutex_lock(&netlock);
+	if (accept_t && (accept_t != AST_PTHREADT_STOP)) {
+		pthread_cancel(accept_t);
+		pthread_kill(accept_t, SIGURG);
+		pthread_join(accept_t, NULL);
+	}
+	accept_t = AST_PTHREADT_STOP;
+	ast_mutex_unlock(&netlock);
 
 	ast_rtp_proto_unregister(&skinny_rtp);
 	ast_channel_unregister(&skinny_tech);
-	ast_cli_unregister(&cli_show_devices);
-	ast_cli_unregister(&cli_show_lines);
-	ast_cli_unregister(&cli_debug);
-	ast_cli_unregister(&cli_no_debug);
-	ast_cli_unregister(&cli_reset_device);
+	ast_cli_unregister_multiple(cli_skinny, sizeof(cli_skinny) / sizeof(struct ast_cli_entry));
+
+	close(skinnysock);
+	sched_context_destroy(sched);
 
 	return 0;
-#endif
-	return -1;
 }
 
 AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "Skinny Client Control Protocol (Skinny)",
 		.load = load_module,
 		.unload = unload_module,
-		.reload = reload,
 	       );

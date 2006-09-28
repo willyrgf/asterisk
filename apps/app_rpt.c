@@ -394,17 +394,17 @@ static struct rpt
 
 	struct {
 
-		char *ourcontext;
-		char *ourcallerid;
-		char *acctcode;
-		char *ident;
+		const char *ourcontext;
+		const char *ourcallerid;
+		const char *acctcode;
+		const char *ident;
 		char *tonezone;
 		char simple;
-		char *functions;
-		char *link_functions;
-		char *phone_functions;
-		char *dphone_functions;
-		char *nodes;
+		const char *functions;
+		const char *link_functions;
+		const char *phone_functions;
+		const char *dphone_functions;
+		const char *nodes;
 		int hangtime;
 		int totime;
 		int idtime;
@@ -414,9 +414,9 @@ static struct rpt
 		int politeid;
 		char *tailmessages[500];
 		int tailmessagemax;
-		char	*memory;
-		char	*macro;
-		char	*startupmacro;
+		const char	*memory;
+		const char	*macro;
+		const char	*startupmacro;
 		int iobase;
 		char funcchar;
 		char endchar;
@@ -726,29 +726,30 @@ static char restart_usage[] =
 "Usage: rpt restart\n"
 "       Restarts app_rpt\n";
 
-static struct ast_cli_entry  cli_debug =
-        { { "rpt", "debug", "level" }, rpt_do_debug, 
-		"Enable app_rpt debugging", debug_usage };
+static struct ast_cli_entry cli_rpt[] = {
+	{ { "rpt", "debug", "level" },
+	rpt_do_debug, "Enable app_rpt debugging",
+	debug_usage },
 
-static struct ast_cli_entry  cli_dump =
-        { { "rpt", "dump" }, rpt_do_dump,
-		"Dump app_rpt structs for debugging", dump_usage };
+        { { "rpt", "dump" },
+	rpt_do_dump, "Dump app_rpt structs for debugging",
+	dump_usage },
 
-static struct ast_cli_entry  cli_stats =
-        { { "rpt", "stats" }, rpt_do_stats,
-		"Dump node statistics", dump_stats };
+        { { "rpt", "stats" },
+	rpt_do_stats, "Dump node statistics",
+	dump_stats },
+        { { "rpt", "lstats" },
+	rpt_do_lstats, "Dump link statistics",
+	dump_lstats },
 
-static struct ast_cli_entry  cli_lstats =
-        { { "rpt", "lstats" }, rpt_do_lstats,
-		"Dump link statistics", dump_lstats };
+        { { "rpt", "reload" },
+	rpt_do_reload, "Reload app_rpt config",
+	reload_usage },
 
-static struct ast_cli_entry  cli_reload =
-        { { "rpt", "reload" }, rpt_do_reload,
-		"Reload app_rpt config", reload_usage };
-
-static struct ast_cli_entry  cli_restart =
-        { { "rpt", "restart" }, rpt_do_restart,
-		"Restart app_rpt", restart_usage };
+        { { "rpt", "restart" },
+	rpt_do_restart, "Restart app_rpt",
+	restart_usage },
+};
 
 /*
 * Telemetry defaults
@@ -899,7 +900,7 @@ int i;
 					
 
 
-static int myatoi(char *str)
+static int myatoi(const char *str)
 {
 int	ret;
 
@@ -940,7 +941,7 @@ struct	rptfilter *f;
                                                                                 
 static int retrieve_astcfgint(struct rpt *myrpt,char *category, char *name, int min, int max, int defl)
 {
-        char *var;
+        const char *var;
         int ret;
                                                                                 
         var = ast_variable_retrieve(myrpt->cfg, category, name);
@@ -959,7 +960,8 @@ static int retrieve_astcfgint(struct rpt *myrpt,char *category, char *name, int 
 
 static void load_rpt_vars(int n,int init)
 {
-char *this,*val;
+char *this;
+	const char *val;
 int	j,longestnode;
 struct ast_variable *vp;
 struct ast_config *cfg;
@@ -1020,11 +1022,11 @@ char *strs[100];
 	rpt_vars[n].p.idtime = retrieve_astcfgint(&rpt_vars[n],this, "idtime", 60000, 2400000, IDTIME);	/* Enforce a min max */
 	rpt_vars[n].p.politeid = retrieve_astcfgint(&rpt_vars[n],this, "politeid", 30000, 300000, POLITEID); /* Enforce a min max */
 	val = ast_variable_retrieve(cfg,this,"tonezone");
-	if (val) rpt_vars[n].p.tonezone = val;
+	if (val) rpt_vars[n].p.tonezone = ast_strdupa(val);
 	rpt_vars[n].p.tailmessages[0] = 0;
 	rpt_vars[n].p.tailmessagemax = 0;
 	val = ast_variable_retrieve(cfg,this,"tailmessagelist");
-	if (val) rpt_vars[n].p.tailmessagemax = finddelim(val, rpt_vars[n].p.tailmessages, 500);
+	if (val) rpt_vars[n].p.tailmessagemax = finddelim(ast_strdupa(val), rpt_vars[n].p.tailmessages, 500);
 	val = ast_variable_retrieve(cfg,this,"memory");
 	if (!val) val = MEMORY;
 	rpt_vars[n].p.memory = val;
@@ -1068,7 +1070,7 @@ char *strs[100];
 #ifdef	__RPT_NOTCH
 	val = ast_variable_retrieve(cfg,this,"rxnotch");
 	if (val) {
-		i = finddelim(val,strs,MAXFILTERS * 2);
+		i = finddelim(ast_strdupa(val),strs,MAXFILTERS * 2);
 		i &= ~1; /* force an even number, rounded down */
 		if (i >= 2) for(j = 0; j < i; j += 2)
 		{
@@ -1522,7 +1524,7 @@ static int play_silence(struct ast_channel *chan, int duration)
 }
 
 
-static int send_morse(struct ast_channel *chan, char *string, int speed, int freq, int amplitude)
+static int send_morse(struct ast_channel *chan, const char *string, int speed, int freq, int amplitude)
 {
 
 static struct morse_bits mbits[] = {
@@ -1684,7 +1686,7 @@ static struct morse_bits mbits[] = {
 	return res;
 }
 
-static int send_tone_telemetry(struct ast_channel *chan, char *tonestring)
+static int send_tone_telemetry(struct ast_channel *chan, const char *tonestring)
 {
 	char *stringp;
 	char *tonesubset;
@@ -1736,7 +1738,7 @@ static int send_tone_telemetry(struct ast_channel *chan, char *tonestring)
 }
 	
 
-static int sayfile(struct ast_channel *mychannel,char *fname)
+static int sayfile(struct ast_channel *mychannel, const char *fname)
 {
 int	res;
 
@@ -1775,7 +1777,7 @@ static int saynum(struct ast_channel *mychannel, int num)
 }
 
 
-static int telem_any(struct rpt *myrpt,struct ast_channel *chan, char *entry)
+static int telem_any(struct rpt *myrpt,struct ast_channel *chan, const char *entry)
 {
 	int res;
 	char c;
@@ -1836,8 +1838,8 @@ static int telem_lookup(struct rpt *myrpt,struct ast_channel *chan, char *node, 
 	
 	int res;
 	int i;
-	char *entry;
-	char *telemetry;
+	const char *entry;
+	const char *telemetry;
 	char *telemetry_save;
 
 	res = 0;
@@ -1880,55 +1882,54 @@ static int telem_lookup(struct rpt *myrpt,struct ast_channel *chan, char *node, 
 
 static int get_wait_interval(struct rpt *myrpt, int type)
 {
-        int interval;
-        char *wait_times;
-        char *wait_times_save;
-                                                                                                                  
-        wait_times_save = NULL;
-        wait_times = ast_variable_retrieve(myrpt->cfg, myrpt->name, "wait_times");
-                                                                                                                  
-        if(wait_times){
-                wait_times_save = ast_strdupa(wait_times);
-                if(!wait_times_save){
-                        ast_log(LOG_WARNING, "Out of memory in wait_interval()\n");
-                        wait_times = NULL;
-                }
-        }
-                                                                                                                  
-        switch(type){
-                case DLY_TELEM:
-                        if(wait_times)
-                                interval = retrieve_astcfgint(myrpt,wait_times_save, "telemwait", 500, 5000, 1000);
-                        else
-                                interval = 1000;
-                        break;
-                                                                                                                  
-                case DLY_ID:
-                        if(wait_times)
-                                interval = retrieve_astcfgint(myrpt,wait_times_save, "idwait",250,5000,500);
-                        else
-                                interval = 500;
-                        break;
-                                                                                                                  
-                case DLY_UNKEY:
-                        if(wait_times)
-                                interval = retrieve_astcfgint(myrpt,wait_times_save, "unkeywait",500,5000,1000);
-                        else
-                                interval = 1000;
-                        break;
-                                                                                                                  
-                case DLY_CALLTERM:
-                        if(wait_times)
-                                interval = retrieve_astcfgint(myrpt,wait_times_save, "calltermwait",500,5000,1500);
-                        else
-                                interval = 1500;
-                        break;
-                                                                                                                  
-                default:
-                        return 0;
-        }
+	int interval;
+	const char *wait_times;
+	char *wait_times_save = NULL;
+
+	wait_times = ast_variable_retrieve(myrpt->cfg, myrpt->name, "wait_times");
+
+	if (wait_times) {
+		wait_times_save = ast_strdupa(wait_times);
+		if (!wait_times_save) {
+			ast_log(LOG_WARNING, "Out of memory in wait_interval()\n");
+			wait_times = NULL;
+		}
+	}
+
+	switch (type) {
+	case DLY_TELEM:
+		if (wait_times)
+			interval = retrieve_astcfgint(myrpt, wait_times_save, "telemwait", 500, 5000, 1000);
+		else
+			interval = 1000;
+		break;
+
+	case DLY_ID:
+		if (wait_times)
+			interval = retrieve_astcfgint(myrpt, wait_times_save, "idwait", 250, 5000, 500);
+		else
+			interval = 500;
+		break;
+
+	case DLY_UNKEY:
+		if (wait_times)
+			interval = retrieve_astcfgint(myrpt, wait_times_save, "unkeywait", 500, 5000, 1000);
+		else
+			interval = 1000;
+		break;
+
+	case DLY_CALLTERM:
+		if (wait_times)
+			interval = retrieve_astcfgint(myrpt, wait_times_save, "calltermwait", 500, 5000, 1500);
+		else
+			interval = 1500;
+		break;
+
+	default:
+		return 0;
+	}
 	return interval;
-}                                                                                                                  
+}
 
 
 /*
@@ -1959,7 +1960,8 @@ struct  rpt_tele *tlist;
 struct	rpt *myrpt;
 struct	rpt_link *l,*m,linkbase;
 struct	ast_channel *mychannel;
-char *p,*ct,*ct_copy,*ident, *nodename;
+	const char *p, *ct;
+	char *ct_copy, *ident, *nodename;
 time_t t;
 struct tm localtm;
 
@@ -2921,7 +2923,8 @@ struct	rpt_link *l;
 static int function_ilink(struct rpt *myrpt, char *param, char *digits, int command_source, struct rpt_link *mylink)
 {
 
-	char *val, *s, *s1, *s2, *tele;
+	const char *val;
+	char *s, *s1, *s2, *tele;
 	char tmp[300], deststr[300] = "",modechange = 0;
 	char digitbuf[MAXNODESTR];
 	struct rpt_link *l;
@@ -3444,7 +3447,7 @@ static int function_status(struct rpt *myrpt, char *param, char *digitbuf, int c
 static int function_macro(struct rpt *myrpt, char *param, char *digitbuf, int command_source, struct rpt_link *mylink)
 {
 
-char	*val;
+	const char	*val;
 int	i;
 struct	ast_channel *mychannel;
 
@@ -4919,7 +4922,8 @@ static int rmt_saycharstr(struct rpt *myrpt, struct ast_channel *chan, int delay
 
 static int function_remote(struct rpt *myrpt, char *param, char *digitbuf, int command_source, struct rpt_link *mylink)
 {
-	char *s,*s1,*s2,*val;
+	char *s,*s1,*s2;
+	const char *val;
 	int i,j,ht,k,l,ls2,m,d,res,offset,offsave, modesave, defmode;
 	char multimode = 0;
 	char oc;
@@ -4953,7 +4957,7 @@ static int function_remote(struct rpt *myrpt, char *param, char *digitbuf, int c
 				sayfile(mychannel,"rpt/memory_notfound");
 				return DC_COMPLETE;
 			}			
-			strncpy(tmp,val,sizeof(tmp) - 1);
+			ast_copy_string(tmp, val, sizeof(tmp));
 			s = strchr(tmp,',');
 			if (!s)
 				return DC_ERROR;
@@ -5772,7 +5776,8 @@ int	res;
 
 static int attempt_reconnect(struct rpt *myrpt, struct rpt_link *l)
 {
-	char *val, *s, *s1, *s2, *tele;
+	const char *val;
+	char *s, *s1, *s2, *tele;
 	char tmp[300], deststr[300] = "";
 
 	val = ast_variable_retrieve(myrpt->cfg, myrpt->p.nodes, l->name);
@@ -6017,7 +6022,8 @@ static void do_scheduler(struct rpt *myrpt)
 static void *rpt(void *this)
 {
 struct	rpt *myrpt = (struct rpt *)this;
-char *tele,*idtalkover,c;
+	char *tele, c;
+	const char *idtalkover;
 int ms = MSWAIT,i,lasttx=0,val,remrx=0,identqueued,othertelemqueued,tailmessagequeued,ctqueued;
 struct ast_channel *who;
 ZT_CONFINFO ci;  /* conference info */
@@ -7155,7 +7161,8 @@ static void *rpt_master(void *config)
 int	i,n;
 pthread_attr_t attr;
 struct ast_config *cfg;
-char *this,*val;
+	char *this;
+	const char *val;
 
 	/* go thru all the specified repeaters */
 	this = NULL;
@@ -7441,7 +7448,9 @@ static int rpt_exec(struct ast_channel *chan, void *data)
                 struct ast_hostent ahp;
                 struct hostent *hp;
 		struct in_addr ia;
-		char hisip[100],nodeip[100],*val, *s, *s1, *s2, *b,*b1;
+		char hisip[100],nodeip[100];
+		const char *val;
+		char *s, *s1, *s2, *b,*b1;
 
 		/* look at callerid to see what node this comes from */
 		if (!chan->cid.cid_num) /* if doesn't have caller id */
@@ -8018,12 +8027,7 @@ static int unload_module(void)
 	i = ast_unregister_application(app);
 
 	/* Unregister cli extensions */
-	ast_cli_unregister(&cli_debug);
-	ast_cli_unregister(&cli_dump);
-	ast_cli_unregister(&cli_stats);
-	ast_cli_unregister(&cli_lstats);
-	ast_cli_unregister(&cli_reload);
-	ast_cli_unregister(&cli_restart);
+	ast_cli_unregister_multiple(cli_rpt, sizeof(cli_rpt) / sizeof(struct ast_cli_entry));
 
 	return i;
 }
@@ -8038,12 +8042,7 @@ static int load_module(void)
 	ast_pthread_create(&rpt_master_thread,NULL,rpt_master,cfg);
 
 	/* Register cli extensions */
-	ast_cli_register(&cli_debug);
-	ast_cli_register(&cli_dump);
-	ast_cli_register(&cli_stats);
-	ast_cli_register(&cli_lstats);
-	ast_cli_register(&cli_reload);
-	ast_cli_register(&cli_restart);
+	ast_cli_register_multiple(cli_rpt, sizeof(cli_rpt) / sizeof(struct ast_cli_entry));
 
 	return ast_register_application(app, rpt_exec, synopsis, descrip);
 }

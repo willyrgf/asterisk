@@ -127,7 +127,7 @@ static AST_LIST_HEAD_STATIC(locals, local_pvt);
 static int local_devicestate(void *data)
 {
 	char *exten = ast_strdupa(data);
-	char *context = NULL;
+	char *context = NULL, *opts = NULL;
 	int res;
 
 	if (!(context = strchr(exten, '@'))) {
@@ -136,6 +136,10 @@ static int local_devicestate(void *data)
 	}
 
 	*context++ = '\0';
+
+	/* Strip options if they exist */
+	if ((opts = strchr(context, '/')))
+		*opts = '\0';
 
 	if (option_debug > 2)
 		ast_log(LOG_DEBUG, "Checking if extension %s@%s exists (devicestate)\n", exten, context);
@@ -622,12 +626,14 @@ static int locals_show(int fd, int argc, char **argv)
 }
 
 static char show_locals_usage[] = 
-"Usage: local show channels\n"
+"Usage: local list channels\n"
 "       Provides summary information on active local proxy channels.\n";
 
-static struct ast_cli_entry cli_show_locals = {
-	{ "local", "show", "channels", NULL }, locals_show, 
-	"Show status of local channels", show_locals_usage, NULL };
+static struct ast_cli_entry cli_local[] = {
+	{ { "local", "list", "channels", NULL },
+	locals_show, "List status of local channels",
+	show_locals_usage },
+};
 
 /*! \brief Load module into PBX, register channel */
 static int load_module(void)
@@ -637,7 +643,7 @@ static int load_module(void)
 		ast_log(LOG_ERROR, "Unable to register channel class 'Local'\n");
 		return -1;
 	}
-	ast_cli_register(&cli_show_locals);
+	ast_cli_register_multiple(cli_local, sizeof(cli_local) / sizeof(struct ast_cli_entry));
 	return 0;
 }
 
@@ -647,7 +653,7 @@ static int unload_module(void)
 	struct local_pvt *p = NULL;
 
 	/* First, take us out of the channel loop */
-	ast_cli_unregister(&cli_show_locals);
+	ast_cli_unregister_multiple(cli_local, sizeof(cli_local) / sizeof(struct ast_cli_entry));
 	ast_channel_unregister(&local_tech);
 	if (!AST_LIST_LOCK(&locals)) {
 		/* Hangup all interfaces if they have an owner */

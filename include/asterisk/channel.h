@@ -238,6 +238,9 @@ struct ast_channel_tech {
 	enum ast_bridge_result (* const bridge)(struct ast_channel *c0, struct ast_channel *c1, int flags,
 						struct ast_frame **fo, struct ast_channel **rc, int timeoutms);
 
+	/*! \brief Bridge two channels of the same type together (early) */
+	enum ast_bridge_result (* const early_bridge)(struct ast_channel *c0, struct ast_channel *c1);
+
 	/*! \brief Indicate a particular condition (e.g. AST_CONTROL_BUSY or AST_CONTROL_RINGING or AST_CONTROL_CONGESTION */
 	int (* const indicate)(struct ast_channel *c, int condition, const void *data, size_t datalen);
 
@@ -404,8 +407,8 @@ struct ast_channel {
 	unsigned int fout;
 	int hangupcause;				/*!< Why is the channel hanged up. See causes.h */
 	struct varshead varshead;			/*!< A linked list for channel variables */
-	unsigned int callgroup;				/*!< Call group for call pickups */
-	unsigned int pickupgroup;			/*!< Pickup group - which calls groups can be picked up? */
+	ast_group_t callgroup;				/*!< Call group for call pickups */
+	ast_group_t pickupgroup;			/*!< Pickup group - which calls groups can be picked up? */
 	unsigned int flags;				/*!< channel flags of AST_FLAG_ type */
 	unsigned short transfercapability;		/*!< ISDN Transfer Capbility - AST_FLAG_DIGITAL is not enough */
 	AST_LIST_HEAD_NOLOCK(, ast_frame) readq;
@@ -964,6 +967,13 @@ int ast_readstring_full(struct ast_channel *c, char *s, int len, int timeout, in
  * Set two channels to compatible formats -- call before ast_channel_bridge in general .  
  * \return Returns 0 on success and -1 if it could not be done */
 int ast_channel_make_compatible(struct ast_channel *c0, struct ast_channel *c1);
+
+/*! Bridge two channels together (early)
+ * \param c0 first channel to bridge
+ * \param c1 second channel to bridge
+ * Bridge two channels (c0 and c1) together early. This implies either side may not be answered yet.
+ * \return Returns 0 on success and -1 if it could not be done */
+int ast_channel_early_bridge(struct ast_channel *c0, struct ast_channel *c1);
 
 /*! Bridge two channels together 
  * \param c0 first channel to bridge

@@ -474,20 +474,19 @@ static void rebuild_matrix(int samples)
 	}
 }
 
-/*! \brief CLI "show translation" command handler */
 static int show_translation(int fd, int argc, char *argv[])
 {
 #define SHOW_TRANS 12
 	int x, y, z;
 	int curlen = 0, longest = 0;
 
-	if (argc > 4) 
+	if (argc > 5)
 		return RESULT_SHOWUSAGE;
 
 	AST_LIST_LOCK(&translators);	
 	
-	if (argv[2] && !strcasecmp(argv[2], "recalc")) {
-		z = argv[3] ? atoi(argv[3]) : 1;
+	if (argv[3] && !strcasecmp(argv[3], "recalc")) {
+		z = argv[4] ? atoi(argv[4]) : 1;
 
 		if (z <= 0) {
 			ast_cli(fd, "         C'mon let's be serious here... defaulting to 1.\n");
@@ -544,16 +543,18 @@ static int show_translation(int fd, int argc, char *argv[])
 	return RESULT_SUCCESS;
 }
 
-
 static char show_trans_usage[] =
-"Usage: show translation [recalc] [<recalc seconds>]\n"
+"Usage: core show translation [recalc] [<recalc seconds>]\n"
 "       Displays known codec translators and the cost associated\n"
 "with each conversion.  If the argument 'recalc' is supplied along\n"
 "with optional number of seconds to test a new test will be performed\n"
 "as the chart is being displayed.\n";
 
-static struct ast_cli_entry show_trans =
-{ { "show", "translation", NULL }, show_translation, "Display translation matrix", show_trans_usage };
+static struct ast_cli_entry cli_translate[] = {
+	{ { "core", "show", "translation", NULL },
+	show_translation, "Display translation matrix",
+	show_trans_usage, NULL, NULL },
+};
 
 /*! \brief register codec translator */
 int __ast_register_translator(struct ast_translator *t, struct ast_module *mod)
@@ -613,7 +614,7 @@ int __ast_register_translator(struct ast_translator *t, struct ast_module *mod)
 	}
 	AST_LIST_LOCK(&translators);
 	if (!added_cli) {
-		ast_cli_register(&show_trans);
+		ast_cli_register_multiple(cli_translate, sizeof(cli_translate) / sizeof(struct ast_cli_entry));
 		added_cli++;
 	}
 	AST_LIST_INSERT_HEAD(&translators, t, list);

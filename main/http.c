@@ -681,18 +681,19 @@ int ast_http_reload(void)
 }
 
 static char show_http_help[] =
-"Usage: http show status\n"
-"       Shows status of internal HTTP engine\n";
+"Usage: http list status\n"
+"       Lists status of internal HTTP engine\n";
 
-static struct ast_cli_entry http_cli[] = {
-	{ { "http", "show", "status", NULL }, handle_show_http,
-	  "Display HTTP server status", show_http_help },
+static struct ast_cli_entry cli_http[] = {
+	{ { "http", "list", "status", NULL },
+	handle_show_http, "Display HTTP server status",
+	show_http_help },
 };
 
 int ast_http_init(void)
 {
 	ast_http_uri_link(&statusuri);
 	ast_http_uri_link(&staticuri);
-	ast_cli_register_multiple(http_cli, sizeof(http_cli) / sizeof(http_cli[0]));
+	ast_cli_register_multiple(cli_http, sizeof(cli_http) / sizeof(struct ast_cli_entry));
 	return __ast_http_load(0);
 }

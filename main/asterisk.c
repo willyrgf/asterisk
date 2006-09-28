@@ -80,12 +80,11 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <sys/stat.h>
 #ifdef linux
 #include <sys/prctl.h>
-#endif
+#ifdef HAVE_CAP
+#include <sys/capability.h>
+#endif /* HAVE_CAP */
+#endif /* linux */
 #include <regex.h>
-
-#ifdef linux
-#include <sys/prctl.h>
-#endif
 
 #if  defined(__FreeBSD__) || defined( __NetBSD__ ) || defined(SOLARIS)
 #include <netdb.h>
@@ -458,7 +457,7 @@ static int handle_show_profile(int fd, int argc, char *argv[])
 	}
 	if (max > prof_data->entries)
 		max = prof_data->entries;
-	if (!strcmp(argv[0], "clear")) {
+	if (!strcmp(argv[1], "clear")) {
 		for (i= min; i < max; i++) {
 			if (!search || strstr(prof_data->e[i].name, search)) {
 				prof_data->e[i].value = 0;
@@ -485,8 +484,8 @@ static int handle_show_profile(int fd, int argc, char *argv[])
 }
 
 static char show_version_files_help[] = 
-"Usage: show version files [like <pattern>]\n"
-"       Shows the revision numbers of the files used to build this copy of Asterisk.\n"
+"Usage: file list version [like <pattern>]\n"
+"       Lists the revision numbers of the files used to build this copy of Asterisk.\n"
 "       Optional regular expression pattern is used to filter the file list.\n";
 
 /*! \brief CLI command to list module versions */
@@ -652,10 +651,10 @@ int ast_safe_system(const char *s)
 #if defined(HAVE_WORKING_FORK) || defined(HAVE_WORKING_VFORK)
 	ast_replace_sigchld();
 
-#ifdef HAVE_WORKING_VFORK
-	pid = vfork();
-#else
+#ifdef HAVE_WORKING_FORK
 	pid = fork();
+#else
+	pid = vfork();
 #endif	
 
 	if (pid == 0) {
@@ -1139,7 +1138,7 @@ static void quit_handler(int num, int nice, int safeshutdown, int restart)
 	/* Called on exit */
 	if (option_verbose && ast_opt_console)
 		ast_verbose("Asterisk %s ending (%d).\n", ast_active_channels() ? "uncleanly" : "cleanly", num);
-	else if (option_debug)
+	if (option_debug)
 		ast_log(LOG_DEBUG, "Asterisk ending (%d).\n", num);
 	manager_event(EVENT_FLAG_SYSTEM, "Shutdown", "Shutdown: %s\r\nRestart: %s\r\n", ast_active_channels() ? "Uncleanly" : "Cleanly", restart ? "True" : "False");
 	if (ast_socket > -1) {
@@ -1471,38 +1470,66 @@ static int show_license(int fd, int argc, char *argv[])
 
 #define ASTERISK_PROMPT2 "%s*CLI> "
 
-static struct ast_cli_entry core_cli[] = {
-	{ { "abort", "halt", NULL }, handle_abort_halt,
-	  "Cancel a running halt", abort_halt_help },
-	{ { "stop", "now", NULL }, handle_shutdown_now,
-	  "Shut down Asterisk immediately", shutdown_now_help },
-	{ { "stop", "gracefully", NULL }, handle_shutdown_gracefully,
-	  "Gracefully shut down Asterisk", shutdown_gracefully_help },
-	{ { "stop", "when","convenient", NULL }, handle_shutdown_when_convenient,
-	  "Shut down Asterisk at empty call volume", shutdown_when_convenient_help },
-	{ { "restart", "now", NULL }, handle_restart_now,
-	  "Restart Asterisk immediately", restart_now_help },
-	{ { "restart", "gracefully", NULL }, handle_restart_gracefully,
-	  "Restart Asterisk gracefully", restart_gracefully_help },
-	{ { "restart", "when", "convenient", NULL }, handle_restart_when_convenient,
-	  "Restart Asterisk at empty call volume", restart_when_convenient_help },
-	{ { "show", "warranty", NULL }, show_warranty,
-	  "Show the warranty (if any) for this copy of Asterisk", show_warranty_help },
-	{ { "show", "license", NULL }, show_license,
-	  "Show the license(s) for this copy of Asterisk", show_license_help },
-	{ { "show", "version", NULL }, handle_version, 
-	  "Display version info", version_help },
-	{ { "!", NULL }, handle_bang,
-	  "Execute a shell command", bang_help },
+static struct ast_cli_entry cli_asterisk[] = {
+	{ { "abort", "halt", NULL },
+	handle_abort_halt, "Cancel a running halt",
+	abort_halt_help },
+
+	{ { "stop", "now", NULL },
+	handle_shutdown_now, "Shut down Asterisk immediately",
+	shutdown_now_help },
+
+	{ { "stop", "gracefully", NULL },
+	handle_shutdown_gracefully, "Gracefully shut down Asterisk",
+	shutdown_gracefully_help },
+
+	{ { "stop", "when", "convenient", NULL },
+	handle_shutdown_when_convenient, "Shut down Asterisk at empty call volume",
+	shutdown_when_convenient_help },
+
+	{ { "restart", "now", NULL },
+	handle_restart_now, "Restart Asterisk immediately", restart_now_help },
+
+	{ { "restart", "gracefully", NULL },
+	handle_restart_gracefully, "Restart Asterisk gracefully",
+	restart_gracefully_help },
+
+	{ { "restart", "when", "convenient", NULL },
+	handle_restart_when_convenient, "Restart Asterisk at empty call volume",
+	restart_when_convenient_help },
+
+	{ { "show", "warranty", NULL },
+	show_warranty, "Show the warranty (if any) for this copy of Asterisk",
+	show_warranty_help },
+
+	{ { "show", "license", NULL },
+	show_license, "Show the license(s) for this copy of Asterisk",
+	show_license_help },
+
+	{ { "show", "version", NULL },
+	handle_version, "Display version info",
+	version_help },
+
+	{ { "!", NULL },
+	handle_bang, "Execute a shell command",
+	bang_help },
+
 #if !defined(LOW_MEMORY)
-	{ { "show", "version", "files", NULL }, handle_show_version_files,
-	  "Show versions of files used to build Asterisk", show_version_files_help, complete_show_version_files },
-	{ { "show", "threads", NULL }, handle_show_threads,
-	  "Show running threads", show_threads_help, NULL },
-	{ { "show", "profile", NULL }, handle_show_profile,
-	  "Show profiling info"},
-	{ { "clear", "profile", NULL }, handle_show_profile,
-	  "Clear profiling info"},
+	{ { "file", "list", "version", NULL },
+	handle_show_version_files, "List versions of files used to build Asterisk",
+	show_version_files_help, complete_show_version_files },
+
+	{ { "show", "threads", NULL },
+	handle_show_threads, "Show running threads",
+	show_threads_help },
+
+	{ { "profile", "list", NULL },
+	handle_show_profile, "Display profiling info",
+	NULL },
+
+	{ { "profile", "clear", NULL },
+	handle_show_profile, "Clear profiling info",
+	NULL },
 #endif /* ! LOW_MEMORY */
 };
 
@@ -2047,9 +2074,9 @@ static void ast_remotecontrol(char * data)
 		pid = atoi(cpid);
 	else
 		pid = -1;
-	snprintf(tmp, sizeof(tmp), "set verbose atleast %d", option_verbose);
+	snprintf(tmp, sizeof(tmp), "core verbose %d", option_verbose);
 	fdprint(ast_consock, tmp);
-	snprintf(tmp, sizeof(tmp), "set debug atleast %d", option_debug);
+	snprintf(tmp, sizeof(tmp), "core debug %d", option_debug);
 	fdprint(ast_consock, tmp);
 	if (ast_opt_mute) {
 		snprintf(tmp, sizeof(tmp), "log and verbose output currently muted ('logger unmute' to unmute)");
@@ -2493,12 +2520,22 @@ int main(int argc, char *argv[])
 	}
 
 	if (!is_child_of_nonroot && runuser) {
+#ifdef HAVE_CAP
+		cap_t cap;
+		int has_cap = 1;
+#endif /* HAVE_CAP */
 		struct passwd *pw;
 		pw = getpwnam(runuser);
 		if (!pw) {
 			ast_log(LOG_WARNING, "No such user '%s'!\n", runuser);
 			exit(1);
 		}
+#ifdef HAVE_CAP
+		if (prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0)) {
+			ast_log(LOG_WARNING, "Unable to keep capabilities.\n");
+			has_cap  = 0;
+		}
+#endif /* HAVE_CAP */
 		if (!rungroup) {
 			if (setgid(pw->pw_gid)) {
 				ast_log(LOG_WARNING, "Unable to setgid to %d!\n", (int)pw->pw_gid);
@@ -2516,6 +2553,18 @@ int main(int argc, char *argv[])
 		setenv("ASTERISK_ALREADY_NONROOT", "yes", 1);
 		if (option_verbose)
 			ast_verbose("Running as user '%s'\n", runuser);
+#ifdef HAVE_CAP
+		if (has_cap) {
+			cap = cap_from_text("cap_net_admin=ep");
+			if (cap_set_proc(cap)) {
+				ast_log(LOG_WARNING, "Unable to install capabilities.\n");
+				break;
+			}
+			if (cap_free(cap)) {
+				ast_log(LOG_WARNING, "Unable to drop capabilities.\n");
+			}
+		}
+#endif /* HAVE_CAP */
 	}
 
 #endif /* __CYGWIN__ */
@@ -2708,7 +2757,7 @@ int main(int argc, char *argv[])
 #endif	
 
 	time(&ast_startuptime);
-	ast_cli_register_multiple(core_cli, sizeof(core_cli) / sizeof(core_cli[0]));
+	ast_cli_register_multiple(cli_asterisk, sizeof(cli_asterisk) / sizeof(struct ast_cli_entry));
 
 	if (ast_opt_console) {
 		/* Console stuff now... */
@@ -2725,19 +2774,17 @@ int main(int argc, char *argv[])
 					buf[strlen(buf)-1] = '\0';
 
 				consolehandler((char *)buf);
-			} else {
-				if (write(STDOUT_FILENO, "\nUse EXIT or QUIT to exit the asterisk console\n",
-					  strlen("\nUse EXIT or QUIT to exit the asterisk console\n")) < 0) {
-					/* Whoa, stdout disappeared from under us... Make /dev/null's */
-					int fd;
-					fd = open("/dev/null", O_RDWR);
-					if (fd > -1) {
-						dup2(fd, STDOUT_FILENO);
-						dup2(fd, STDIN_FILENO);
-					} else
-						ast_log(LOG_WARNING, "Failed to open /dev/null to recover from dead console. Bad things will happen!\n");
-					break;
-				}
+			} else if (ast_opt_remote && (write(STDOUT_FILENO, "\nUse EXIT or QUIT to exit the asterisk console\n",
+				   strlen("\nUse EXIT or QUIT to exit the asterisk console\n")) < 0)) {
+				/* Whoa, stdout disappeared from under us... Make /dev/null's */
+				int fd;
+				fd = open("/dev/null", O_RDWR);
+				if (fd > -1) {
+					dup2(fd, STDOUT_FILENO);
+					dup2(fd, STDIN_FILENO);
+				} else
+					ast_log(LOG_WARNING, "Failed to open /dev/null to recover from dead console. Bad things will happen!\n");
+				break;
 			}
 		}
 

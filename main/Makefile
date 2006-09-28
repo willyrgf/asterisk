@@ -39,6 +39,7 @@ OBJS+=say.o
 
 ifeq ($(wildcard /usr/include/sys/poll.h),)
   OBJS+=poll.o
+  ASTCFLAGS+=-DPOLLCOMPAT
 endif
 
 ifeq ($(wildcard /usr/include/dlfcn.h),)
@@ -49,6 +50,9 @@ ifneq ($(findstring $(OSARCH), linux-gnu uclinux ),)
   ifneq ($(findstring LOADABLE_MODULES,$(MENUSELECT_CFLAGS)),)
   AST_LIBS+=-ldl
   endif
+  ifneq (x$(CAP_LIB),x)
+    AST_LIBS+=$(CAP_LIB)
+  endif
   AST_LIBS+=-lpthread $(EDITLINE_LIB) -lm -lresolv
 else
   AST_LIBS+=$(EDITLINE_LIB) -lm
@@ -58,11 +62,6 @@ ifneq ($(findstring darwin,$(OSARCH)),)
   AST_LIBS+=-lresolv
   ifneq ($(findstring LOADABLE_MODULES,$(MENUSELECT_CFLAGS)),)
     ASTLINK=-Wl,-dynamic
-  endif
-  # Mac on Intel CoreDuo does not need poll compatibility layer
-  ifneq ($(PROC),i386)
-    OBJS+=poll.o
-    ASTCFLAGS+=-DPOLLCOMPAT
   endif
 else
 # These are used for all but Darwin
@@ -119,6 +118,13 @@ AST_EMBED_LDFLAGS:=$(foreach dep,$(EMBED_LDFLAGS),$(value $(dep)))
 AST_EMBED_LIBS:=$(foreach dep,$(EMBED_LIBS),$(value $(dep)))
 OBJS:=$(sort $(OBJS))
 
+ifneq ($(wildcard ../channels/h323/Makefile.ast),)
+  include ../channels/h323/Makefile.ast
+else
+  H323LDFLAGS=
+  H323LDLIBS=
+endif
+
 asterisk: $(OBJS) editline/libedit.a db1-ast/libdb1.a $(AST_EMBED_LDSCRIPTS)
 	@$(ASTTOPDIR)/build_tools/make_build_h > $(ASTTOPDIR)/include/asterisk/build.h.tmp
 	@if cmp -s $(ASTTOPDIR)/include/asterisk/build.h.tmp $(ASTTOPDIR)/include/asterisk/build.h ; then echo ; else \
@@ -127,7 +133,8 @@ asterisk: $(OBJS) editline/libedit.a db1-ast/libdb1.a $(AST_EMBED_LDSCRIPTS)
 	@rm -f $(ASTTOPDIR)/include/asterisk/build.h.tmp
 	@$(CC) -c -o buildinfo.o $(CFLAGS) buildinfo.c
 	$(ECHO_PREFIX) echo "   [LD] $^ -> $@"
-	$(CMD_PREFIX) $(CXX) $(STATIC_BUILD) -o asterisk $(ASTLINK) $(AST_EMBED_LDFLAGS) $(LDFLAGS) $^ buildinfo.o $(AST_LIBS) $(AST_EMBED_LIBS)
+	$(CMD_PREFIX) $(CXX) $(STATIC_BUILD) -o $@ $(ASTLINK) $(AST_EMBED_LDFLAGS) $(LDFLAGS) $(H323LDFLAGS) $^ buildinfo.o $(AST_LIBS) $(AST_EMBED_LIBS) $(H323LDLIBS)
+	@$(ASTTOPDIR)/build_tools/strip_nonapi $@
 
 clean::
 	rm -f asterisk

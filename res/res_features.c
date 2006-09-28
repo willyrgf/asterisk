@@ -265,10 +265,10 @@ static int adsi_announce_park(struct ast_channel *chan, char *parkingexten)
 
 	snprintf(tmp, sizeof(tmp), "Parked on %s", parkingexten);
 	message[0] = tmp;
-	res = adsi_load_session(chan, NULL, 0, 1);
+	res = ast_adsi_load_session(chan, NULL, 0, 1);
 	if (res == -1)
 		return res;
-	return adsi_print(chan, message, justify, 1);
+	return ast_adsi_print(chan, message, justify, 1);
 }
 
 /*! \brief Notify metermaids that we've changed an extension */
@@ -407,9 +407,9 @@ int ast_park_call(struct ast_channel *chan, struct ast_channel *peer, int timeou
 		S_OR(pu->chan->cid.cid_name, "<unknown>")
 		);
 
-	if (peer && adsipark && adsi_available(peer)) {
+	if (peer && adsipark && ast_adsi_available(peer)) {
 		adsi_announce_park(peer, pu->parkingexten);	/* Only supports parking numbers */
-		adsi_unload_session(peer);
+		ast_adsi_unload_session(peer);
 	}
 
 	con = ast_context_find(parking_con);
@@ -1301,7 +1301,6 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 	int hasfeatures=0;
 	int hadfeatures=0;
 	struct ast_option_header *aoh;
-	struct timeval start = { 0 , 0 };
 	struct ast_bridge_config backup_config;
 
 	memset(&backup_config, 0, sizeof(backup_config));
@@ -1354,14 +1353,12 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 	}
 	for (;;) {
 		struct ast_channel *other;	/* used later */
-		if (config->feature_timer)
-			start = ast_tvnow();
 
 		res = ast_channel_bridge(chan, peer, config, &f, &who);
 
 		if (config->feature_timer) {
 			/* Update time limit for next pass */
-			diff = ast_tvdiff_ms(ast_tvnow(), start);
+			diff = ast_tvdiff_ms(ast_tvnow(), config->start_time);
 			config->feature_timer -= diff;
 			if (hasfeatures) {
 				/* Running on backup config, meaning a feature might be being
@@ -1400,7 +1397,12 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 					hadfeatures = hasfeatures;
 					/* Continue as we were */
 					continue;
-				}
+				} else if (!f) {
+					/* The bridge returned without a frame and there is a feature in progress.
+					 * However, we don't think the feature has quite yet timed out, so just
+					 * go back into the bridge. */
+					continue;
+ 				}
 			} else {
 				if (config->feature_timer <=0) {
 					/* We ran out of time */
@@ -1888,11 +1890,8 @@ static int handle_showfeatures(int fd, int argc, char *argv[])
 }
 
 static char showfeatures_help[] =
-"Usage: show features\n"
+"Usage: feature list\n"
 "       Lists currently configured features.\n";
-
-static struct ast_cli_entry showfeatures =
-{ { "show", "features", NULL }, handle_showfeatures, "Lists configured features", showfeatures_help };
 
 static int handle_parkedcalls(int fd, int argc, char *argv[])
 {
@@ -1922,8 +1921,15 @@ static char showparked_help[] =
 "Usage: show parkedcalls\n"
 "       Lists currently parked calls.\n";
 
-static struct ast_cli_entry showparked =
-{ { "show", "parkedcalls", NULL }, handle_parkedcalls, "Lists parked calls", showparked_help };
+static struct ast_cli_entry cli_features[] = {
+	{ { "feature", "list", NULL },
+	handle_showfeatures, "Lists configured features",
+	showfeatures_help },
+
+	{ { "show", "parkedcalls", NULL },
+	handle_parkedcalls, "Lists parked calls",
+	showparked_help },
+};
 
 /*! \brief Dump lot status */
 static int manager_parking_status( struct mansession *s, struct message *m )
@@ -2299,8 +2305,7 @@ static int load_module(void)
 
 	if ((res = load_config()))
 		return res;
-	ast_cli_register(&showparked);
-	ast_cli_register(&showfeatures);
+	ast_cli_register_multiple(cli_features, sizeof(cli_features) / sizeof(struct ast_cli_entry));
 	ast_pthread_create(&parking_thread, NULL, do_parking_thread, NULL);
 	res = ast_register_application(parkedcall, park_exec, synopsis, descrip);
 	if (!res)
@@ -2323,8 +2328,7 @@ static int unload_module(void)
 
 	ast_manager_unregister("ParkedCalls");
 	ast_manager_unregister("Park");
-	ast_cli_unregister(&showfeatures);
-	ast_cli_unregister(&showparked);
+	ast_cli_unregister_multiple(cli_features, sizeof(cli_features) / sizeof(struct ast_cli_entry));
 	ast_unregister_application(parkcall);
 	ast_devstate_prov_del("Park");
 	return ast_unregister_application(parkedcall);

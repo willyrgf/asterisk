@@ -147,9 +147,9 @@ struct ast_variable *ast_variable_browse(const struct ast_config *config, const 
 	return (cat) ? cat->root : NULL;
 }
 
-char *ast_config_option(struct ast_config *cfg, const char *cat, const char *var)
+const char *ast_config_option(struct ast_config *cfg, const char *cat, const char *var)
 {
-	char *tmp;
+	const char *tmp;
 	tmp = ast_variable_retrieve(cfg, cat, var);
 	if (!tmp)
 		tmp = ast_variable_retrieve(cfg, "general", var);
@@ -157,7 +157,7 @@ char *ast_config_option(struct ast_config *cfg, const char *cat, const char *var
 }
 
 
-char *ast_variable_retrieve(const struct ast_config *config, const char *category, const char *variable)
+const char *ast_variable_retrieve(const struct ast_config *config, const char *category, const char *variable)
 {
 	struct ast_variable *v;
 
@@ -717,21 +717,21 @@ static struct ast_config *config_text_file_load(const char *database, const char
 			ast_log(LOG_WARNING, "'%s' is not a regular file, ignoring\n", fn);
 			continue;
 		}
-		if ((option_verbose > 1) && !option_debug) {
+		if (option_verbose > 1) {
 			ast_verbose(VERBOSE_PREFIX_2 "Parsing '%s': ", fn);
 			fflush(stdout);
 		}
 		if (!(f = fopen(fn, "r"))) {
 			if (option_debug)
 				ast_log(LOG_DEBUG, "No file to parse: %s\n", fn);
-			else if (option_verbose > 1)
+			if (option_verbose > 1)
 				ast_verbose( "Not found (%s)\n", strerror(errno));
 			continue;
 		}
 		count++;
 		if (option_debug)
 			ast_log(LOG_DEBUG, "Parsing %s\n", fn);
-		else if (option_verbose > 1)
+		if (option_verbose > 1)
 			ast_verbose("Found\n");
 		while(!feof(f)) {
 			lineno++;
@@ -835,7 +835,7 @@ int config_text_file_save(const char *configfile, const struct ast_config *cfg, 
 #else
 	if ((f = fopen(fn, "w"))) {
 #endif	    
-		if ((option_verbose > 1) && !option_debug)
+		if (option_verbose > 1)
 			ast_verbose(  VERBOSE_PREFIX_2 "Saving '%s': ", fn);
 		fprintf(f, ";!\n");
 		fprintf(f, ";! Automatically generated configuration file\n");
@@ -872,7 +872,7 @@ int config_text_file_save(const char *configfile, const struct ast_config *cfg, 
 	} else {
 		if (option_debug)
 			printf("Unable to open for writing: %s\n", fn);
-		else if (option_verbose > 1)
+		if (option_verbose > 1)
 			printf( "Unable to write (%s)", strerror(errno));
 		return -1;
 	}
@@ -1232,14 +1232,17 @@ static int config_command(int fd, int argc, char **argv)
 }
 
 static char show_config_help[] =
-	"Usage: show config mappings\n"
+	"Usage: core list config mappings\n"
 	"	Shows the filenames to config engines.\n";
 
-static struct ast_cli_entry config_command_struct = {
-	{ "show", "config", "mappings", NULL }, config_command, "Show Config mappings (file names to config engines)", show_config_help, NULL
+static struct ast_cli_entry cli_config[] = {
+	{ { "core", "list", "config", "mappings", NULL },
+	config_command, "Display config mappings (file names to config engines)",
+	show_config_help },
 };
 
 int register_config_cli() 
 {
-	return ast_cli_register(&config_command_struct);
+	ast_cli_register_multiple(cli_config, sizeof(cli_config) / sizeof(struct ast_cli_entry));
+	return 0;
 }

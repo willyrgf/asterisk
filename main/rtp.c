@@ -160,6 +160,7 @@ struct ast_rtp {
 	int rtp_lookup_code_cache_code;
 	int rtp_lookup_code_cache_result;
 	struct ast_rtcp *rtcp;
+	struct ast_codec_pref pref;
 	struct ast_rtp *bridged;        /*!< Who we are Packet bridged to */
 };
 
@@ -603,10 +604,51 @@ static struct ast_frame *process_cisco_dtmf(struct ast_rtp *rtp, unsigned char *
 	unsigned int event;
 	char resp = 0;
 	struct ast_frame *f = NULL;
-	event = ntohl(*((unsigned int *)(data)));
-	event &= 0x001F;
+	unsigned char seq;
+	unsigned int flags;
+	unsigned int power;
+
+	/* We should have at least 4 bytes in RTP data */
+	if (len < 4)
+		return f;
+
+	/*	The format of Cisco RTP DTMF packet looks like next:
+		+0				- sequence number of DTMF RTP packet (begins from 1,
+						  wrapped to 0)
+		+1				- set of flags
+		+1 (bit 0)		- flaps by different DTMF digits delimited by audio
+						  or repeated digit without audio???
+		+2 (+4,+6,...)	- power level? (rises from 0 to 32 at begin of tone
+						  then falls to 0 at its end)
+		+3 (+5,+7,...)	- detected DTMF digit (0..9,*,#,A-D,...)
+		Repeated DTMF information (bytes 4/5, 6/7) is history shifted right
+		by each new packet and thus provides some redudancy.
+		
+		Sample of Cisco RTP DTMF packet is (all data in hex):
+			19 07 00 02 12 02 20 02
+		showing end of DTMF digit '2'.
+
+		The packets
+			27 07 00 02 0A 02 20 02
+			28 06 20 02 00 02 0A 02
+		shows begin of new digit '2' with very short pause (20 ms) after
+		previous digit '2'. Bit +1.0 flips at begin of new digit.
+		
+		Cisco RTP DTMF packets comes as replacement of audio RTP packets
+		so its uses the same sequencing and timestamping rules as replaced
+		audio packets. Repeat interval of DTMF packets is 20 ms and not rely
+		on audio framing parameters. Marker bit isn't used within stream of
+		DTMFs nor audio stream coming immediately after DTMF stream. Timestamps
+		are not sequential at borders between DTMF and audio streams,
+	*/
+
+	seq = data[0];
+	flags = data[1];
+	power = data[2];
+	event = data[3] & 0x1f;
+
 	if (option_debug > 2 || rtpdebug)
-		ast_log(LOG_DEBUG, "Cisco DTMF Digit: %08x (len = %d)\n", event, len);
+		ast_log(LOG_DEBUG, "Cisco DTMF Digit: %02x (len=%d, seq=%d, flags=%02x, power=%d, history count=%d)\n", event, len, seq, flags, power, (len - 4) / 2);
 	if (event < 10) {
 		resp = '0' + event;
 	} else if (event < 11) {
@@ -618,10 +660,19 @@ static struct ast_frame *process_cisco_dtmf(struct ast_rtp *rtp, unsigned char *
 	} else if (event < 17) {
 		resp = 'X';
 	}
-	if (rtp->resp && (rtp->resp != resp)) {
+	if ((!rtp->resp && power) || (rtp->resp && (rtp->resp != resp))) {
+		rtp->resp = resp;
+		/* Why we should care on DTMF compensation at receiption? */
+		if (!ast_test_flag(rtp, FLAG_DTMF_COMPENSATE)) {
+			f = send_dtmf(rtp, AST_FRAME_DTMF_BEGIN);
+			rtp->dtmfduration = 0;
+		}
+	} else if ((rtp->resp == resp) && !power) {
 		f = send_dtmf(rtp, AST_FRAME_DTMF_END);
-	}
-	rtp->resp = resp;
+		f->samples = rtp->dtmfduration * 8;
+		rtp->resp = 0;
+	} else if (rtp->resp == resp)
+		rtp->dtmfduration += 20 * 8;
 	rtp->dtmfcount = dtmftimeout;
 	return f;
 }
@@ -676,6 +727,12 @@ static struct ast_frame *process_rfc2833(struct ast_rtp *rtp, unsigned char *dat
 		if (!ast_test_flag(rtp, FLAG_DTMF_COMPENSATE))
 			f = send_dtmf(rtp, AST_FRAME_DTMF_BEGIN);
 	} else if (event_end & 0x80 && rtp->lasteventendseqn != seqno && rtp->resp) {
+		f = send_dtmf(rtp, AST_FRAME_DTMF_END);
+		f->samples = duration;
+		rtp->resp = 0;
+		rtp->lasteventendseqn = seqno;
+	} else if (ast_test_flag(rtp, FLAG_DTMF_COMPENSATE) && event_end & 0x80 && rtp->lasteventendseqn != seqno) {
+		rtp->resp = resp;
 		f = send_dtmf(rtp, AST_FRAME_DTMF_END);
 		f->samples = duration;
 		rtp->resp = 0;
@@ -1373,8 +1430,9 @@ static struct ast_rtp_protocol *get_proto(struct ast_channel *chan)
 	return cur;
 }
 
-int ast_rtp_early_bridge(struct ast_channel *dest, struct ast_channel *src)
+int ast_rtp_early_bridge(struct ast_channel *c0, struct ast_channel *c1)
 {
+	// dest = c0, src = c1
 	struct ast_rtp *destp = NULL, *srcp = NULL;		/* Audio RTP Channels */
 	struct ast_rtp *vdestp = NULL, *vsrcp = NULL;		/* Video RTP channels */
 	struct ast_rtp_protocol *destpr = NULL, *srcpr = NULL;
@@ -1383,68 +1441,68 @@ int ast_rtp_early_bridge(struct ast_channel *dest, struct ast_channel *src)
 	int srccodec;
 
 	/* Lock channels */
-	ast_channel_lock(dest);
-	if (src) {
-		while(ast_channel_trylock(src)) {
-			ast_channel_unlock(dest);
+	ast_channel_lock(c0);
+	if (c1) {
+		while(ast_channel_trylock(c1)) {
+			ast_channel_unlock(c0);
 			usleep(1);
-			ast_channel_lock(dest);
+			ast_channel_lock(c0);
 		}
 	}
 
 	/* Find channel driver interfaces */
-	destpr = get_proto(dest);
-	if (src)
-		srcpr = get_proto(src);
+	destpr = get_proto(c0);
+	if (c1)
+		srcpr = get_proto(c1);
 	if (!destpr) {
 		if (option_debug)
-			ast_log(LOG_DEBUG, "Channel '%s' has no RTP, not doing anything\n", dest->name);
-		ast_channel_unlock(dest);
-		if (src)
-			ast_channel_unlock(src);
-		return 0;
+			ast_log(LOG_DEBUG, "Channel '%s' has no RTP, not doing anything\n", c0->name);
+		ast_channel_unlock(c0);
+		if (c1)
+			ast_channel_unlock(c1);
+		return -1;
 	}
 	if (!srcpr) {
 		if (option_debug)
-			ast_log(LOG_DEBUG, "Channel '%s' has no RTP, not doing anything\n", src ? src->name : "<unspecified>");
-		ast_channel_unlock(dest);
-		if (src)
-			ast_channel_unlock(src);
-		return 0;
+			ast_log(LOG_DEBUG, "Channel '%s' has no RTP, not doing anything\n", c1 ? c1->name : "<unspecified>");
+		ast_channel_unlock(c0);
+		if (c1)
+			ast_channel_unlock(c1);
+		return -1;
 	}
 
 	/* Get audio and video interface (if native bridge is possible) */
-	audio_dest_res = destpr->get_rtp_info(dest, &destp);
-	video_dest_res = destpr->get_vrtp_info ? destpr->get_vrtp_info(dest, &vdestp) : AST_RTP_GET_FAILED;
+	audio_dest_res = destpr->get_rtp_info(c0, &destp);
+	video_dest_res = destpr->get_vrtp_info ? destpr->get_vrtp_info(c0, &vdestp) : AST_RTP_GET_FAILED;
 	if (srcpr) {
-		audio_src_res = srcpr->get_rtp_info(src, &srcp);
-		video_src_res = srcpr->get_vrtp_info ? srcpr->get_vrtp_info(src, &vsrcp) : AST_RTP_GET_FAILED;
+		audio_src_res = srcpr->get_rtp_info(c1, &srcp);
+		video_src_res = srcpr->get_vrtp_info ? srcpr->get_vrtp_info(c1, &vsrcp) : AST_RTP_GET_FAILED;
 	}
 
 	/* Check if bridge is still possible (In SIP canreinvite=no stops this, like NAT) */
 	if (audio_dest_res != AST_RTP_TRY_NATIVE) {
 		/* Somebody doesn't want to play... */
-		ast_channel_unlock(dest);
-		if (src)
-			ast_channel_unlock(src);
-		return 0;
+		ast_channel_unlock(c0);
+		if (c1)
+			ast_channel_unlock(c1);
+		return -1;
 	}
 	if (audio_src_res == AST_RTP_TRY_NATIVE && srcpr->get_codec)
-		srccodec = srcpr->get_codec(src);
+		srccodec = srcpr->get_codec(c1);
 	else
 		srccodec = 0;
 	/* Consider empty media as non-existant */
 	if (audio_src_res == AST_RTP_TRY_NATIVE && !srcp->them.sin_addr.s_addr)
 		srcp = NULL;
 	/* Bridge media early */
-	if (destpr->set_rtp_peer(dest, srcp, vsrcp, srccodec, srcp ? ast_test_flag(srcp, FLAG_NAT_ACTIVE) : 0))
-		ast_log(LOG_WARNING, "Channel '%s' failed to setup early bridge to '%s'\n", dest->name, src ? src->name : "<unspecified>");
-	ast_channel_unlock(dest);
-	if (src)
-		ast_channel_unlock(src);
+	if (destpr->set_rtp_peer(c0, srcp, vsrcp, srccodec, srcp ? ast_test_flag(srcp, FLAG_NAT_ACTIVE) : 0))
+		ast_log(LOG_WARNING, "Channel '%s' failed to setup early bridge to '%s'\n", c0->name, c1 ? c1->name : "<unspecified>");
+	ast_channel_unlock(c0);
+	if (c1)
+		ast_channel_unlock(c1);
 	if (option_debug)
-		ast_log(LOG_DEBUG, "Setting early bridge SDP of '%s' with that of '%s'\n", dest->name, src ? src->name : "<unspecified>");
-	return 1;
+		ast_log(LOG_DEBUG, "Setting early bridge SDP of '%s' with that of '%s'\n", c0->name, c1 ? c1->name : "<unspecified>");
+	return 0;
 }
 
 int ast_rtp_make_compatible(struct ast_channel *dest, struct ast_channel *src, int media)
@@ -2480,6 +2538,35 @@ static int ast_rtp_raw_write(struct ast_rtp *rtp, struct ast_frame *f, int codec
 	return 0;
 }
 
+int ast_rtp_codec_setpref(struct ast_rtp *rtp, struct ast_codec_pref *prefs)
+{
+	int x;
+	for (x = 0; x < 32; x++) {  /* Ugly way */
+		rtp->pref.order[x] = prefs->order[x];
+		rtp->pref.framing[x] = prefs->framing[x];
+	}
+	if (rtp->smoother)
+		ast_smoother_free(rtp->smoother);
+	rtp->smoother = NULL;
+	return 0;
+}
+
+struct ast_codec_pref *ast_rtp_codec_getpref(struct ast_rtp *rtp)
+{
+	return &rtp->pref;
+}
+
+int ast_rtp_codec_getformat(int pt)
+{
+	if (pt < 0 || pt > MAX_RTP_PT)
+		return 0; /* bogus payload type */
+
+	if (static_RTP_PT[pt].isAstFormat)
+		return static_RTP_PT[pt].code;
+	else
+		return 0;
+}
+
 int ast_rtp_write(struct ast_rtp *rtp, struct ast_frame *_f)
 {
 	struct ast_frame *f;
@@ -2522,99 +2609,29 @@ int ast_rtp_write(struct ast_rtp *rtp, struct ast_frame *_f)
 		rtp->smoother = NULL;
 	}
 
+	if (!rtp->smoother) {
+		struct ast_format_list fmt = ast_codec_pref_getsize(&rtp->pref, subclass);
+		if (fmt.inc_ms) { /* if codec parameters is set / avoid division by zero */
+			if (!(rtp->smoother = ast_smoother_new((fmt.cur_ms * fmt.fr_len) / fmt.inc_ms))) {
+				ast_log(LOG_WARNING, "Unable to create smoother: format: %d ms: %d len: %d\n", subclass, fmt.cur_ms, ((fmt.cur_ms * fmt.fr_len) / fmt.inc_ms));
+				return -1;
+			}
+			if (fmt.flags)
+				ast_smoother_set_flags(rtp->smoother, fmt.flags);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Created smoother: format: %d ms: %d len: %d\n", subclass, fmt.cur_ms, ((fmt.cur_ms * fmt.fr_len) / fmt.inc_ms));
+		}
+	}
+	if (rtp->smoother) {
+		if (ast_smoother_test_flag(rtp->smoother, AST_SMOOTHER_FLAG_BE)) {
+			ast_smoother_feed_be(rtp->smoother, _f);
+		} else {
+			ast_smoother_feed(rtp->smoother, _f);
+		}
 
-	switch(subclass) {
-	case AST_FORMAT_SLINEAR:
-		if (!rtp->smoother) {
-			rtp->smoother = ast_smoother_new(320);
-		}
-		if (!rtp->smoother) {
-			ast_log(LOG_WARNING, "Unable to create smoother :(\n");
-			return -1;
-		}
-		ast_smoother_feed_be(rtp->smoother, _f);
-		
 		while((f = ast_smoother_read(rtp->smoother)))
 			ast_rtp_raw_write(rtp, f, codec);
-		break;
-	case AST_FORMAT_ULAW:
-	case AST_FORMAT_ALAW:
-		if (!rtp->smoother) {
-			rtp->smoother = ast_smoother_new(160);
-		}
-		if (!rtp->smoother) {
-			ast_log(LOG_WARNING, "Unable to create smoother :(\n");
-			return -1;
-		}
-		ast_smoother_feed(rtp->smoother, _f);
-		
-		while((f = ast_smoother_read(rtp->smoother)))
-			ast_rtp_raw_write(rtp, f, codec);
-		break;
-	case AST_FORMAT_ADPCM:
-	case AST_FORMAT_G726:
-	case AST_FORMAT_G726_AAL2:
-		if (!rtp->smoother) {
-			rtp->smoother = ast_smoother_new(80);
-		}
-		if (!rtp->smoother) {
-			ast_log(LOG_WARNING, "Unable to create smoother :(\n");
-			return -1;
-		}
-		ast_smoother_feed(rtp->smoother, _f);
-		
-		while((f = ast_smoother_read(rtp->smoother)))
-			ast_rtp_raw_write(rtp, f, codec);
-		break;
-	case AST_FORMAT_G729A:
-		if (!rtp->smoother) {
-			rtp->smoother = ast_smoother_new(20);
-			if (rtp->smoother)
-				ast_smoother_set_flags(rtp->smoother, AST_SMOOTHER_FLAG_G729);
-		}
-		if (!rtp->smoother) {
-			ast_log(LOG_WARNING, "Unable to create g729 smoother :(\n");
-			return -1;
-		}
-		ast_smoother_feed(rtp->smoother, _f);
-		
-		while((f = ast_smoother_read(rtp->smoother)))
-			ast_rtp_raw_write(rtp, f, codec);
-		break;
-	case AST_FORMAT_GSM:
-		if (!rtp->smoother) {
-			rtp->smoother = ast_smoother_new(33);
-		}
-		if (!rtp->smoother) {
-			ast_log(LOG_WARNING, "Unable to create GSM smoother :(\n");
-			return -1;
-		}
-		ast_smoother_feed(rtp->smoother, _f);
-		while((f = ast_smoother_read(rtp->smoother)))
-			ast_rtp_raw_write(rtp, f, codec);
-		break;
-	case AST_FORMAT_ILBC:
-		if (!rtp->smoother) {
-			rtp->smoother = ast_smoother_new(50);
-		}
-		if (!rtp->smoother) {
-			ast_log(LOG_WARNING, "Unable to create ILBC smoother :(\n");
-			return -1;
-		}
-		ast_smoother_feed(rtp->smoother, _f);
-		while((f = ast_smoother_read(rtp->smoother)))
-			ast_rtp_raw_write(rtp, f, codec);
-		break;
-	default:	
-		ast_log(LOG_WARNING, "Not sure about sending format %s packets\n", ast_getformatname(subclass));
-		/* fall through to... */
-	case AST_FORMAT_H261:
-	case AST_FORMAT_H263:
-	case AST_FORMAT_H263_PLUS:
-	case AST_FORMAT_H264:
-	case AST_FORMAT_G723_1:
-	case AST_FORMAT_LPC10:
-	case AST_FORMAT_SPEEX:
+	} else {
 	        /* Don't buffer outgoing frames; send them one-per-packet: */
 		if (_f->offset < hdrlen) {
 			f = ast_frdup(_f);
@@ -2980,14 +2997,30 @@ static enum ast_bridge_result bridge_p2p_loop(struct ast_channel *c0, struct ast
 			if ((fr->subclass == AST_CONTROL_HOLD) ||
 			    (fr->subclass == AST_CONTROL_UNHOLD) ||
 			    (fr->subclass == AST_CONTROL_VIDUPDATE)) {
-				/* If we are going on hold, then break callback mode */
+				/* If we are going on hold, then break callback mode and P2P bridging */
 				if (fr->subclass == AST_CONTROL_HOLD) {
 					if (p0_callback)
 						p0_callback = p2p_callback_disable(c0, p0, &p0_fds[0], &p0_iod[0]);
 					if (p1_callback)
 						p1_callback = p2p_callback_disable(c1, p1, &p1_fds[0], &p1_iod[0]);
+					p0->bridged = NULL;
+					p1->bridged = NULL;
+					if (vp0) {
+						vp0->bridged = NULL;
+						vp1->bridged = NULL;
+					}
 				} else if (fr->subclass == AST_CONTROL_UNHOLD) {
-					/* If we are off hold, then go back to callback mode */
+					/* If we are off hold, then go back to callback mode and P2P bridging */
+					ast_clear_flag(p0, FLAG_P2P_SENT_MARK);
+					p0->bridged = p1;
+					ast_clear_flag(p1, FLAG_P2P_SENT_MARK);
+					p1->bridged = p0;
+					if (vp0) {
+						ast_clear_flag(vp0, FLAG_P2P_SENT_MARK);
+						vp0->bridged = vp1;
+						ast_clear_flag(vp1, FLAG_P2P_SENT_MARK);
+						vp1->bridged = vp0;
+					}
 					p0_callback = p2p_callback_enable(c0, p0, &p0_fds[0], &p0_iod[0]);
 					p1_callback = p2p_callback_enable(c1, p1, &p1_fds[0], &p1_iod[0]);
 				}
@@ -3106,19 +3139,25 @@ enum ast_bridge_result ast_rtp_bridge(struct ast_channel *c0, struct ast_channel
 	/* Get codecs from both sides */
 	codec0 = pr0->get_codec ? pr0->get_codec(c0) : 0;
 	codec1 = pr1->get_codec ? pr1->get_codec(c1) : 0;
-	if (pr0->get_codec && pr1->get_codec) {
+	if (codec0 && codec1 && !(codec0 & codec1)) {
 		/* Hey, we can't do native bridging if both parties speak different codecs */
-		if (!(codec0 & codec1)) {
-			if (option_debug)
-				ast_log(LOG_DEBUG, "Channel codec0 = %d is not codec1 = %d, cannot native bridge in RTP.\n", codec0, codec1);
-			ast_channel_unlock(c0);
-			ast_channel_unlock(c1);
-			return AST_BRIDGE_FAILED_NOWARN;
-		}
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Channel codec0 = %d is not codec1 = %d, cannot native bridge in RTP.\n", codec0, codec1);
+		ast_channel_unlock(c0);
+		ast_channel_unlock(c1);
+		return AST_BRIDGE_FAILED_NOWARN;
 	}
 
 	/* If either side can only do a partial bridge, then don't try for a true native bridge */
 	if (audio_p0_res == AST_RTP_TRY_PARTIAL || audio_p1_res == AST_RTP_TRY_PARTIAL) {
+		/* In order to do Packet2Packet bridging both sides must be in the same rawread/rawwrite */
+		if (c0->rawreadformat != c1->rawwriteformat || c1->rawreadformat != c0->rawwriteformat) {
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Cannot packet2packet bridge - raw formats are incompatible\n");
+			ast_channel_unlock(c0);
+			ast_channel_unlock(c1);
+			return AST_BRIDGE_FAILED_NOWARN;
+		}
 		if (option_verbose > 2)
 			ast_verbose(VERBOSE_PREFIX_3 "Packet2Packet bridging %s and %s\n", c0->name, c1->name);
 		res = bridge_p2p_loop(c0, c1, p0, p1, vp0, vp1, timeoutms, flags, fo, rc, pvt0, pvt1);
@@ -3167,10 +3206,10 @@ static int rtcp_do_debug_ip(int fd, int argc, char *argv[])
 	struct ast_hostent ahp;
 	int port = 0;
 	char *p, *arg;
-	if (argc != 5)
+	if (argc != 4)
 		return RESULT_SHOWUSAGE;
 
-	arg = argv[4];
+	arg = argv[3];
 	p = strstr(arg, ":");
 	if (p) {
 		*p = '\0';
@@ -3205,8 +3244,8 @@ static int rtp_do_debug(int fd, int argc, char *argv[])
 }
    
 static int rtcp_do_debug(int fd, int argc, char *argv[]) {
-	if (argc != 3) {
-		if (argc != 5)
+	if (argc != 2) {
+		if (argc != 4)
 			return RESULT_SHOWUSAGE;
 		return rtcp_do_debug_ip(fd, argc, argv);
 	}
@@ -3217,7 +3256,7 @@ static int rtcp_do_debug(int fd, int argc, char *argv[]) {
 }
 
 static int rtcp_do_stats(int fd, int argc, char *argv[]) {
-	if (argc != 3) {
+	if (argc != 2) {
 		return RESULT_SHOWUSAGE;
 	}
 	rtcpstats = 1;
@@ -3227,7 +3266,7 @@ static int rtcp_do_stats(int fd, int argc, char *argv[]) {
 
 static int rtp_no_debug(int fd, int argc, char *argv[])
 {
-	if (argc != 3)
+	if (argc != 2)
 		return RESULT_SHOWUSAGE;
 	rtpdebug = 0;
 	ast_cli(fd,"RTP Debugging Disabled\n");
@@ -3236,7 +3275,7 @@ static int rtp_no_debug(int fd, int argc, char *argv[])
 
 static int rtcp_no_debug(int fd, int argc, char *argv[])
 {
-	if (argc != 4)
+	if (argc != 2)
 		return RESULT_SHOWUSAGE;
 	rtcpdebug = 0;
 	ast_cli(fd,"RTCP Debugging Disabled\n");
@@ -3245,13 +3284,12 @@ static int rtcp_no_debug(int fd, int argc, char *argv[])
 
 static int rtcp_no_stats(int fd, int argc, char *argv[])
 {
-	if (argc != 4)
+	if (argc != 2)
 		return RESULT_SHOWUSAGE;
 	rtcpstats = 0;
 	ast_cli(fd,"RTCP Stats Disabled\n");
 	return RESULT_SUCCESS;
 }
-
 
 static int stun_do_debug(int fd, int argc, char *argv[])
 {
@@ -3265,20 +3303,19 @@ static int stun_do_debug(int fd, int argc, char *argv[])
    
 static int stun_no_debug(int fd, int argc, char *argv[])
 {
-	if (argc != 3)
+	if (argc != 2)
 		return RESULT_SHOWUSAGE;
 	stundebug = 0;
 	ast_cli(fd,"STUN Debugging Disabled\n");
 	return RESULT_SUCCESS;
 }
 
-
 static char debug_usage[] =
   "Usage: rtp debug [ip host[:port]]\n"
   "       Enable dumping of all RTP packets to and from host.\n";
 
 static char no_debug_usage[] =
-  "Usage: rtp no debug\n"
+  "Usage: rtp nodebug\n"
   "       Disable all RTP debugging\n";
 
 static char stun_debug_usage[] =
@@ -3286,60 +3323,71 @@ static char stun_debug_usage[] =
   "       Enable STUN (Simple Traversal of UDP through NATs) debugging\n";
 
 static char stun_no_debug_usage[] =
-  "Usage: stun no debug\n"
+  "Usage: stun nodebug\n"
   "       Disable STUN debugging\n";
 
-
-static struct ast_cli_entry  cli_debug_ip =
-{{ "rtp", "debug", "ip", NULL } , rtp_do_debug, "Enable RTP debugging on IP", debug_usage };
-
-static struct ast_cli_entry  cli_debug =
-{{ "rtp", "debug", NULL } , rtp_do_debug, "Enable RTP debugging", debug_usage };
-
-static struct ast_cli_entry  cli_no_debug =
-{{ "rtp", "no", "debug", NULL } , rtp_no_debug, "Disable RTP debugging", no_debug_usage };
-
 static char rtcp_debug_usage[] =
-  "Usage: rtp rtcp debug [ip host[:port]]\n"
+  "Usage: rtcp debug [ip host[:port]]\n"
   "       Enable dumping of all RTCP packets to and from host.\n";
   
 static char rtcp_no_debug_usage[] =
-  "Usage: rtp rtcp no debug\n"
+  "Usage: rtcp nodebug\n"
   "       Disable all RTCP debugging\n";
 
 static char rtcp_stats_usage[] =
-  "Usage: rtp rtcp stats\n"
+  "Usage: rtcp stats\n"
   "       Enable dumping of RTCP stats.\n";
   
 static char rtcp_no_stats_usage[] =
-  "Usage: rtp rtcp no stats\n"
+  "Usage: rtcp nostats\n"
   "       Disable all RTCP stats\n";
 
-static struct ast_cli_entry  cli_debug_ip_rtcp =
-{{ "rtp", "rtcp", "debug", "ip", NULL } , rtcp_do_debug, "Enable RTCP debugging on IP", rtcp_debug_usage };
+static struct ast_cli_entry cli_rtp[] = {
+	{ { "rtp", "debug", "ip", NULL },
+	rtp_do_debug, "Enable RTP debugging on IP",
+	debug_usage },
 
-static struct ast_cli_entry  cli_debug_rtcp =
-{{ "rtp", "rtcp", "debug", NULL } , rtcp_do_debug, "Enable RTCP debugging", rtcp_debug_usage };
+	{ { "rtp", "debug", NULL },
+	rtp_do_debug, "Enable RTP debugging",
+	debug_usage },
 
-static struct ast_cli_entry  cli_no_debug_rtcp =
-{{ "rtp", "rtcp", "no", "debug", NULL } , rtcp_no_debug, "Disable RTCP debugging", rtcp_no_debug_usage };
+	{ { "rtp", "nodebug", NULL },
+	rtp_no_debug, "Disable RTP debugging",
+	no_debug_usage },
 
-static struct ast_cli_entry  cli_stats_rtcp =
-{{ "rtp", "rtcp", "stats", NULL } , rtcp_do_stats, "Enable RTCP stats", rtcp_stats_usage };
+	{ { "rtcp", "debug", "ip", NULL },
+	rtcp_do_debug, "Enable RTCP debugging on IP",
+	rtcp_debug_usage },
 
-static struct ast_cli_entry  cli_no_stats_rtcp =
-{{ "rtp", "rtcp", "no", "stats", NULL } , rtcp_no_stats, "Disable RTCP stats", rtcp_no_stats_usage };
+	{ { "rtcp", "debug", NULL },
+	rtcp_do_debug, "Enable RTCP debugging",
+	rtcp_debug_usage },
 
-static struct ast_cli_entry  cli_stun_debug =
-{{ "stun", "debug", NULL } , stun_do_debug, "Enable STUN debugging", stun_debug_usage };
+	{ { "rtcp", "nodebug", NULL },
+	rtcp_no_debug, "Disable RTCP debugging",
+	rtcp_no_debug_usage },
 
-static struct ast_cli_entry  cli_stun_no_debug =
-{{ "stun", "no", "debug", NULL } , stun_no_debug, "Disable STUN debugging", stun_no_debug_usage };
+	{ { "rtcp", "stats", NULL },
+	rtcp_do_stats, "Enable RTCP stats",
+	rtcp_stats_usage },
+
+	{ { "rtcp", "nostats", NULL },
+	rtcp_no_stats, "Disable RTCP stats",
+	rtcp_no_stats_usage },
+
+	{ { "stun", "debug", NULL },
+	stun_do_debug, "Enable STUN debugging",
+	stun_debug_usage },
+
+	{ { "stun", "nodebug", NULL },
+	stun_no_debug, "Disable STUN debugging",
+	stun_no_debug_usage },
+};
 
 int ast_rtp_reload(void)
 {
 	struct ast_config *cfg;
-	char *s;
+	const char *s;
 
 	rtpstart = 5000;
 	rtpend = 31000;
@@ -3403,19 +3451,7 @@ int ast_rtp_reload(void)
 /*! \brief Initialize the RTP system in Asterisk */
 void ast_rtp_init(void)
 {
-	ast_cli_register(&cli_debug);
-	ast_cli_register(&cli_debug_ip);
-	ast_cli_register(&cli_no_debug);
-
-	ast_cli_register(&cli_debug_rtcp);
-	ast_cli_register(&cli_debug_ip_rtcp);
-	ast_cli_register(&cli_no_debug_rtcp);
-
-	ast_cli_register(&cli_stats_rtcp);
-	ast_cli_register(&cli_no_stats_rtcp);
-	
-	ast_cli_register(&cli_stun_debug);
-	ast_cli_register(&cli_stun_no_debug);
+	ast_cli_register_multiple(cli_rtp, sizeof(cli_rtp) / sizeof(struct ast_cli_entry));
 	ast_rtp_reload();
 }
 

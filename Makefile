@@ -106,7 +106,7 @@ ASTCFLAGS=
 GLOBAL_MAKEOPTS=$(wildcard /etc/asterisk.makeopts)
 USER_MAKEOPTS=$(wildcard ~/.asterisk.makeopts)
 
-MOD_SUBDIR_CFLAGS=-I../include -I../main
+MOD_SUBDIR_CFLAGS=-I../include
 OTHER_SUBDIR_CFLAGS=-I../include
 
 ifeq ($(OSARCH),linux-gnu)
@@ -140,13 +140,6 @@ ifeq ($(OSARCH),linux-gnu)
       endif
     endif
   endif
-endif
-
-ID=id
-
-ifeq ($(OSARCH),SunOS)
-  M4=/usr/local/bin/m4
-  ID=/usr/xpg4/bin/id
 endif
 
 ASTCFLAGS+=-pipe -Wall -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations $(DEBUG)
@@ -238,13 +231,15 @@ else
   HAVEDOT=no
 endif
 
-all: cleantest $(SUBDIRS)
+all: _all
 	@echo " +--------- Asterisk Build Complete ---------+"  
 	@echo " + Asterisk has successfully been built, and +"  
 	@echo " + can be installed by running:              +"
 	@echo " +                                           +"
 	@echo " +               make install                +"  
 	@echo " +-------------------------------------------+"  
+
+_all: cleantest $(SUBDIRS)
 
 makeopts: configure
 	@echo "****"
@@ -336,7 +331,7 @@ distclean: clean
 	rm -rf doc/api
 	rm -f build_tools/menuselect-deps
 
-datafiles: all
+datafiles: _all
 	if [ x`$(ID) -un` = xroot ]; then CFLAGS="$(ASTCFLAGS)" sh build_tools/mkpkgconfig $(DESTDIR)/usr/lib/pkgconfig; fi
 # Should static HTTP be installed during make samples or even with its own target ala
 # webvoicemail?  There are portions here that *could* be customized but might also be
@@ -370,7 +365,7 @@ update:
 NEWHEADERS=$(notdir $(wildcard include/asterisk/*.h))
 OLDHEADERS=$(filter-out $(NEWHEADERS),$(notdir $(wildcard $(DESTDIR)$(ASTHEADERDIR)/*.h)))
 
-bininstall: all
+bininstall: _all
 	mkdir -p $(DESTDIR)$(MODULES_DIR)
 	mkdir -p $(DESTDIR)$(ASTSBINDIR)
 	mkdir -p $(DESTDIR)$(ASTETCDIR)
@@ -434,7 +429,7 @@ oldmodcheck:
 		echo " WARNING WARNING WARNING" ;\
 	fi
 
-install: all datafiles bininstall $(SUBDIRS_INSTALL)
+install: datafiles bininstall $(SUBDIRS_INSTALL)
 	@if [ -x /usr/sbin/asterisk-post-install ]; then \
 		/usr/sbin/asterisk-post-install $(DESTDIR) . ; \
 	fi
@@ -461,7 +456,7 @@ install: all datafiles bininstall $(SUBDIRS_INSTALL)
 	@echo " +-------------------------------------------+"
 	@$(MAKE) -s oldmodcheck
 
-upgrade: all bininstall
+upgrade: bininstall
 
 adsi:
 	mkdir -p $(DESTDIR)$(ASTETCDIR)
@@ -648,7 +643,7 @@ uninstall-all: _uninstall
 	rm -rf $(DESTDIR)$(ASTLOGDIR)
 
 menuselect: menuselect/menuselect menuselect-tree
-	-@menuselect/menuselect $(GLOBAL_MAKEOPTS) $(USER_MAKEOPTS) menuselect.makeopts && echo "menuselect changes saved!" || echo "menuselect changes NOT saved!"
+	-@menuselect/menuselect $(GLOBAL_MAKEOPTS) $(USER_MAKEOPTS) menuselect.makeopts && (echo "menuselect changes saved!"; rm -f channels/h323/Makefile.ast main/asterisk) || echo "menuselect changes NOT saved!"
 
 menuselect/menuselect: makeopts menuselect/menuselect.c menuselect/menuselect_curses.c menuselect/menuselect_stub.c menuselect/menuselect.h menuselect/linkedlists.h makeopts
 	@unset CC LD AR RANLIB && $(MAKE) -C menuselect CONFIGURE_SILENT="--silent"

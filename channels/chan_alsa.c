@@ -223,7 +223,7 @@ static int send_sound(void)
 
 	if (cursound == -1)
 		return 0;
-	
+
 	res = total;
 	if (sampsent < sounds[cursound].samplen) {
 		myoff = 0;
@@ -259,7 +259,7 @@ static int send_sound(void)
 			return 0;
 		}
 	}
-	
+
 	if (res == 0 || !frame)
 		return 0;
 
@@ -782,7 +782,7 @@ static int alsa_indicate(struct ast_channel *chan, int cond, const void *data, s
 static struct ast_channel *alsa_new(struct chan_alsa_pvt *p, int state)
 {
 	struct ast_channel *tmp = NULL;
-	
+
 	if (!(tmp = ast_channel_alloc(1)))
 		return NULL;
 
@@ -843,26 +843,21 @@ static struct ast_channel *alsa_request(const char *type, int format, void *data
 
 static int console_autoanswer(int fd, int argc, char *argv[])
 {
-	int res = RESULT_SUCCESS;
-
-	if ((argc != 1) && (argc != 2))
+	int res = RESULT_SUCCESS;;
+	if ((argc != 2) && (argc != 3))
 		return RESULT_SHOWUSAGE;
-
 	ast_mutex_lock(&alsalock);
-
-	if (argc == 1) {
+	if (argc == 2) {
 		ast_cli(fd, "Auto answer is %s.\n", autoanswer ? "on" : "off");
 	} else {
-		if (!strcasecmp(argv[1], "on"))
+		if (!strcasecmp(argv[2], "on"))
 			autoanswer = -1;
-		else if (!strcasecmp(argv[1], "off"))
+		else if (!strcasecmp(argv[2], "off"))
 			autoanswer = 0;
 		else
 			res = RESULT_SHOWUSAGE;
 	}
-
 	ast_mutex_unlock(&alsalock);
-
 	return res;
 }
 
@@ -885,15 +880,16 @@ static char *autoanswer_complete(const char *line, const char *word, int pos, in
 }
 
 static const char autoanswer_usage[] =
-	"Usage: autoanswer [on|off]\n"
+	"Usage: console autoanswer [on|off]\n"
 	"       Enables or disables autoanswer feature.  If used without\n"
-	"       argument, displays the current on/off status of autoanswer.\n" "       The default value of autoanswer is in 'alsa.conf'.\n";
+	"       argument, displays the current on/off status of autoanswer.\n"
+	"       The default value of autoanswer is in 'alsa.conf'.\n";
 
 static int console_answer(int fd, int argc, char *argv[])
 {
 	int res = RESULT_SUCCESS;
 
-	if (argc != 1)
+	if (argc != 2)
 		return RESULT_SHOWUSAGE;
 
 	ast_mutex_lock(&alsalock);
@@ -921,14 +917,16 @@ static int console_answer(int fd, int argc, char *argv[])
 	return RESULT_SUCCESS;
 }
 
-static char sendtext_usage[] = "Usage: send text <message>\n" "       Sends a text message for display on the remote terminal.\n";
+static char sendtext_usage[] =
+	"Usage: console send text <message>\n"
+	"       Sends a text message for display on the remote terminal.\n";
 
 static int console_sendtext(int fd, int argc, char *argv[])
 {
-	int tmparg = 2;
+	int tmparg = 3;
 	int res = RESULT_SUCCESS;
 
-	if (argc < 2)
+	if (argc < 3)
 		return RESULT_SHOWUSAGE;
 
 	ast_mutex_lock(&alsalock);
@@ -964,13 +962,15 @@ static int console_sendtext(int fd, int argc, char *argv[])
 	return res;
 }
 
-static char answer_usage[] = "Usage: answer\n" "       Answers an incoming call on the console (ALSA) channel.\n";
+static char answer_usage[] =
+	"Usage: console answer\n"
+	"       Answers an incoming call on the console (ALSA) channel.\n";
 
 static int console_hangup(int fd, int argc, char *argv[])
 {
 	int res = RESULT_SUCCESS;
 
-	if (argc != 1)
+	if (argc != 2)
 		return RESULT_SHOWUSAGE;
 
 	cursound = -1;
@@ -994,8 +994,9 @@ static int console_hangup(int fd, int argc, char *argv[])
 	return res;
 }
 
-static char hangup_usage[] = "Usage: hangup\n" "       Hangs up any call currently placed on the console.\n";
-
+static char hangup_usage[] =
+	"Usage: console hangup\n"
+	"       Hangs up any call currently placed on the console.\n";
 
 static int console_dial(int fd, int argc, char *argv[])
 {
@@ -1004,14 +1005,14 @@ static int console_dial(int fd, int argc, char *argv[])
 	char *d;
 	int res = RESULT_SUCCESS;
 
-	if ((argc != 1) && (argc != 2))
+	if ((argc != 2) && (argc != 3))
 		return RESULT_SHOWUSAGE;
 
 	ast_mutex_lock(&alsalock);
 
 	if (alsa.owner) {
-		if (argc == 2) {
-			d = argv[1];
+		if (argc == 3) {
+			d = argv[2];
 			grab_owner();
 			if (alsa.owner) {
 				struct ast_frame f = { AST_FRAME_DTMF };
@@ -1029,9 +1030,9 @@ static int console_dial(int fd, int argc, char *argv[])
 	} else {
 		mye = exten;
 		myc = context;
-		if (argc == 2) {
+		if (argc == 3) {
 			char *stringp = NULL;
-			strncpy(tmp, argv[1], sizeof(tmp) - 1);
+			strncpy(tmp, argv[2], sizeof(tmp) - 1);
 			stringp = tmp;
 			strsep(&stringp, "@");
 			tmp2 = strsep(&stringp, "@");
@@ -1054,20 +1055,34 @@ static int console_dial(int fd, int argc, char *argv[])
 	return res;
 }
 
-static char dial_usage[] = "Usage: dial [extension[@context]]\n" "       Dials a given extension (and context if specified)\n";
+static char dial_usage[] =
+	"Usage: console dial [extension[@context]]\n"
+	"       Dials a given extension (and context if specified)\n";
 
+static struct ast_cli_entry cli_alsa[] = {
+	{ { "console", "answer", NULL },
+	console_answer, "Answer an incoming console call",
+	answer_usage },
 
-static struct ast_cli_entry myclis[] = {
-	{{"answer", NULL}, console_answer, "Answer an incoming console call", answer_usage},
-	{{"hangup", NULL}, console_hangup, "Hangup a call on the console", hangup_usage},
-	{{"dial", NULL}, console_dial, "Dial an extension on the console", dial_usage},
-	{{"send", "text", NULL}, console_sendtext, "Send text to the remote device", sendtext_usage},
-	{{"autoanswer", NULL}, console_autoanswer, "Sets/displays autoanswer", autoanswer_usage, autoanswer_complete}
+	{ { "console", "hangup", NULL },
+	console_hangup, "Hangup a call on the console",
+	hangup_usage },
+
+	{ { "console", "dial", NULL },
+	console_dial, "Dial an extension on the console",
+	dial_usage },
+
+	{ { "console", "send", "text", NULL },
+	console_sendtext, "Send text to the remote device",
+	sendtext_usage },
+
+	{ { "console", "autoanswer", NULL },
+	console_autoanswer, "Sets/displays autoanswer",
+	autoanswer_usage, autoanswer_complete },
 };
 
 static int load_module(void)
 {
-	int res, x;
 	struct ast_config *cfg;
 	struct ast_variable *v;
 
@@ -1076,70 +1091,69 @@ static int load_module(void)
 
 	strcpy(mohinterpret, "default");
 
-	if ((cfg = ast_config_load(config))) {
-		v = ast_variable_browse(cfg, "general");
-		for (; v; v = v->next) {
-			/* handle jb conf */
-			if (!ast_jb_read_conf(&global_jbconf, v->name, v->value))
-				continue;
+	if (!(cfg = ast_config_load(config)))
+		return AST_MODULE_LOAD_DECLINE;
 
-			if (!strcasecmp(v->name, "autoanswer"))
-				autoanswer = ast_true(v->value);
-			else if (!strcasecmp(v->name, "silencesuppression"))
-				silencesuppression = ast_true(v->value);
-			else if (!strcasecmp(v->name, "silencethreshold"))
-				silencethreshold = atoi(v->value);
-			else if (!strcasecmp(v->name, "context"))
-				ast_copy_string(context, v->value, sizeof(context));
-			else if (!strcasecmp(v->name, "language"))
-				ast_copy_string(language, v->value, sizeof(language));
-			else if (!strcasecmp(v->name, "extension"))
-				ast_copy_string(exten, v->value, sizeof(exten));
-			else if (!strcasecmp(v->name, "input_device"))
-				ast_copy_string(indevname, v->value, sizeof(indevname));
-			else if (!strcasecmp(v->name, "output_device"))
-				ast_copy_string(outdevname, v->value, sizeof(outdevname));
-			else if (!strcasecmp(v->name, "mohinterpret"))
-				ast_copy_string(mohinterpret, v->value, sizeof(mohinterpret));
-		}
-		ast_config_destroy(cfg);
+	v = ast_variable_browse(cfg, "general");
+	for (; v; v = v->next) {
+		/* handle jb conf */
+		if (!ast_jb_read_conf(&global_jbconf, v->name, v->value))
+				continue;
+		
+		if (!strcasecmp(v->name, "autoanswer"))
+			autoanswer = ast_true(v->value);
+		else if (!strcasecmp(v->name, "silencesuppression"))
+			silencesuppression = ast_true(v->value);
+		else if (!strcasecmp(v->name, "silencethreshold"))
+			silencethreshold = atoi(v->value);
+		else if (!strcasecmp(v->name, "context"))
+			ast_copy_string(context, v->value, sizeof(context));
+		else if (!strcasecmp(v->name, "language"))
+			ast_copy_string(language, v->value, sizeof(language));
+		else if (!strcasecmp(v->name, "extension"))
+			ast_copy_string(exten, v->value, sizeof(exten));
+		else if (!strcasecmp(v->name, "input_device"))
+			ast_copy_string(indevname, v->value, sizeof(indevname));
+		else if (!strcasecmp(v->name, "output_device"))
+			ast_copy_string(outdevname, v->value, sizeof(outdevname));
+		else if (!strcasecmp(v->name, "mohinterpret"))
+			ast_copy_string(mohinterpret, v->value, sizeof(mohinterpret));
 	}
-	res = pipe(sndcmd);
-	if (res) {
+	ast_config_destroy(cfg);
+
+	if (pipe(sndcmd)) {
 		ast_log(LOG_ERROR, "Unable to create pipe\n");
-		return -1;
+		return AST_MODULE_LOAD_FAILURE;
 	}
-	res = soundcard_init();
-	if (res < 0) {
+
+	if (soundcard_init() < 0) {
 		if (option_verbose > 1) {
 			ast_verbose(VERBOSE_PREFIX_2 "No sound card detected -- console channel will be unavailable\n");
 			ast_verbose(VERBOSE_PREFIX_2 "Turn off ALSA support by adding 'noload=chan_alsa.so' in /etc/asterisk/modules.conf\n");
 		}
-		return 0;
+		return AST_MODULE_LOAD_DECLINE;
 	}
 
-	res = ast_channel_register(&alsa_tech);
-	if (res < 0) {
+	if (ast_channel_register(&alsa_tech)) {
 		ast_log(LOG_ERROR, "Unable to register channel class 'Console'\n");
-		return -1;
+		return AST_MODULE_LOAD_FAILURE;
 	}
-	for (x = 0; x < sizeof(myclis) / sizeof(struct ast_cli_entry); x++)
-		ast_cli_register(myclis + x);
+
+	ast_cli_register_multiple(cli_alsa, sizeof(cli_alsa) / sizeof(struct ast_cli_entry));
+
 	ast_pthread_create(&sthread, NULL, sound_thread, NULL);
 #ifdef ALSA_MONITOR
 	if (alsa_monitor_start())
 		ast_log(LOG_ERROR, "Problem starting Monitoring\n");
 #endif
-	return 0;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 static int unload_module(void)
 {
-	int x;
-
 	ast_channel_unregister(&alsa_tech);
-	for (x = 0; x < sizeof(myclis) / sizeof(struct ast_cli_entry); x++)
-		ast_cli_unregister(myclis + x);
+	ast_cli_unregister_multiple(cli_alsa, sizeof(cli_alsa) / sizeof(struct ast_cli_entry));
+
 	if (alsa.icard)
 		snd_pcm_close(alsa.icard);
 	if (alsa.ocard)

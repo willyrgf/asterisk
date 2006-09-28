@@ -110,7 +110,7 @@ int misdn_jb_empty(struct misdn_jb *jb, char *data, int len);
 
 
 enum misdn_chan_state {
-	MISDN_NOTHING,		/*!< at beginning */
+	MISDN_NOTHING=0,	/*!< at beginning */
 	MISDN_WAITING4DIGS, /*!<  when waiting for infos */
 	MISDN_EXTCANTMATCH, /*!<  when asterisk couldnt match our ext */
 	MISDN_DIALING, /*!<  when pbx_start */
@@ -223,7 +223,7 @@ static struct robin_list *robin = NULL;
 
 
 
-struct ast_frame *process_ast_dsp(struct chan_list *tmp, struct ast_frame *frame);
+static struct ast_frame *process_ast_dsp(struct chan_list *tmp, struct ast_frame *frame);
 
 
 
@@ -857,7 +857,6 @@ static int misdn_show_config (int fd, int argc, char *argv[])
 	
 	if (argc == 3 || onlyport == 0) {
 		ast_cli(fd,"Misdn General-Config: \n"); 
-		ast_cli(fd," -> Version: chan_misdn-" CHAN_MISDN_VERSION "\n");
 		for (elem = MISDN_GEN_FIRST + 1, linebreak = 1; elem < MISDN_GEN_LAST; elem++, linebreak++) {
 			misdn_cfg_get_config_string( 0, elem, buffer, BUFFERSIZE);
 			ast_cli(fd, "%-36s%s", buffer, !(linebreak % 2) ? "\n" : "");
@@ -1918,8 +1917,6 @@ static int misdn_call(struct ast_channel *ast, char *dest, int timeout)
 		else
 			chan_misdn_log(2,port,"NO OPTS GIVEN\n");
 		
-		ch->state=MISDN_CALLING;
-		
 		r=misdn_lib_send_event( newbc, EVENT_SETUP );
 		
 		/** we should have l3id after sending setup **/
@@ -1940,6 +1937,8 @@ static int misdn_call(struct ast_channel *ast, char *dest, int timeout)
 	ast->hangupcause=16;
 	
 	if (newbc->nt) stop_bc_tones(ch);
+
+	ch->state=MISDN_CALLING;
 	
 	return 0; 
 }
@@ -2247,8 +2246,9 @@ static int misdn_hangup(struct ast_channel *ast)
 
 	bc=p->bc;
 	
-	if (ast->_state == AST_STATE_RESERVED) {
+	if (ast->_state == AST_STATE_RESERVED || p->state == MISDN_NOTHING) {
 		/* between request and call */
+		ast_log(LOG_DEBUG, "State Reserved (or nothing) => chanIsAvail\n");
 		MISDN_ASTERISK_TECH_PVT(ast)=NULL;
 		
 		cl_dequeue_chan(&cl_te, p);
@@ -2376,7 +2376,7 @@ static int misdn_hangup(struct ast_channel *ast)
 }
 
 
-struct ast_frame *process_ast_dsp(struct chan_list *tmp, struct ast_frame *frame)
+static struct ast_frame *process_ast_dsp(struct chan_list *tmp, struct ast_frame *frame)
 {
 	struct ast_frame *f,*f2;
  
@@ -4139,10 +4139,10 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 			cb_log(1,bc->port," --> found holded ch\n");
 			if  (ch->state == MISDN_CONNECTED ) {
 				misdn_transfer_bc(ch, holded_ch) ;
+				hangup_chan(ch);
+			//	release_chan(bc);
+				break;
 			}
-			hangup_chan(ch);
-			release_chan(bc);
-			break;
 		}
 		
 		stop_bc_tones(ch);
@@ -4464,7 +4464,7 @@ static int unload_module(void)
 	
 	if (!g_config_initialized) return 0;
 	
-	ast_cli_unregister_multiple(chan_misdn_clis, sizeof(chan_misdn_clis) / sizeof(chan_misdn_clis[0]));
+	ast_cli_unregister_multiple(chan_misdn_clis, sizeof(chan_misdn_clis) / sizeof(struct ast_cli_entry));
 	
 	/* ast_unregister_application("misdn_crypt"); */
 	ast_unregister_application("misdn_set_opt");
@@ -4496,7 +4496,7 @@ static int load_module(void)
 	
 	if (max_ports<=0) {
 		ast_log(LOG_ERROR, "Unable to initialize mISDN\n");
-		return 0;
+		return AST_MODULE_LOAD_DECLINE;
 	}
 	
 	if (misdn_cfg_init(max_ports)) {
@@ -4566,7 +4566,7 @@ static int load_module(void)
 		}
 	}
   
-	ast_cli_register_multiple(chan_misdn_clis, sizeof(chan_misdn_clis) / sizeof(chan_misdn_clis[0]));
+	ast_cli_register_multiple(chan_misdn_clis, sizeof(chan_misdn_clis) / sizeof(struct ast_cli_entry));
   
 	ast_register_application("misdn_set_opt", misdn_set_opt_exec, "misdn_set_opt",
 				 "misdn_set_opt(:<opt><optarg>:<opt><optarg>..):\n"
@@ -4608,7 +4608,7 @@ static int load_module(void)
 		}
 	}
 	
-	chan_misdn_log(0, 0, "-- mISDN Channel Driver Registered -- (BE AWARE THIS DRIVER IS EXPERIMENTAL!)\n");
+	chan_misdn_log(0, 0, "-- mISDN Channel Driver Registered --\n");
 
 	return 0;
 }

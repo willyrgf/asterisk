@@ -1056,11 +1056,14 @@ static int waitstream_core(struct ast_channel *c, const char *breakon,
 				case AST_CONTROL_RINGING:
 				case AST_CONTROL_ANSWER:
 				case AST_CONTROL_VIDUPDATE:
+				case AST_CONTROL_HOLD:
+				case AST_CONTROL_UNHOLD:
 					/* Unimportant */
 					break;
 				default:
 					ast_log(LOG_WARNING, "Unexpected control subclass '%d'\n", fr->subclass);
 				}
+				break;
 			case AST_FRAME_VOICE:
 				/* Write audio if appropriate */
 				if (audiofd > -1)
@@ -1148,17 +1151,18 @@ static int show_file_formats(int fd, int argc, char *argv[])
 #undef FORMAT2
 }
 
-struct ast_cli_entry show_file =
-{
-	{ "show", "file", "formats" },
-	show_file_formats,
-	"Displays file formats",
-	"Usage: show file formats\n"
-	"       displays currently registered file formats (if any)\n"
+char show_file_formats_usage[] = 
+"Usage: core list file formats\n"
+"       Displays currently registered file formats (if any)\n";
+
+struct ast_cli_entry cli_file[] = {
+	{ { "file", "list", "formats" },
+	show_file_formats, "Displays file formats",
+	show_file_formats_usage },
 };
 
 int ast_file_init(void)
 {
-	ast_cli_register(&show_file);
+	ast_cli_register_multiple(cli_file, sizeof(cli_file) / sizeof(struct ast_cli_entry));
 	return 0;
 }

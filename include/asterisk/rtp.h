@@ -196,7 +196,7 @@ int ast_rtp_make_compatible(struct ast_channel *dest, struct ast_channel *src, i
 
 /*! \brief If possible, create an early bridge directly between the devices without
            having to send a re-invite later */
-int ast_rtp_early_bridge(struct ast_channel *dest, struct ast_channel *src);
+int ast_rtp_early_bridge(struct ast_channel *c0, struct ast_channel *c1);
 
 void ast_rtp_stop(struct ast_rtp *rtp);
 
@@ -209,6 +209,12 @@ int ast_rtcp_send_h261fur(void *data);
 void ast_rtp_init(void);
 
 int ast_rtp_reload(void);
+
+int ast_rtp_codec_setpref(struct ast_rtp *rtp, struct ast_codec_pref *prefs);
+
+struct ast_codec_pref *ast_rtp_codec_getpref(struct ast_rtp *rtp);
+
+int ast_rtp_codec_getformat(int pt);
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }

@@ -83,6 +83,8 @@ static int syslog_level_map[] = {
 
 static char dateformat[256] = "%b %e %T";		/* Original Asterisk Format */
 
+static char queue_log_name[256] = QUEUELOG;
+
 static int filesize_reload_needed = 0;
 static int global_logmask = -1;
 
@@ -286,7 +288,7 @@ static void init_logger_chain(void)
 	struct logchannel *chan;
 	struct ast_config *cfg;
 	struct ast_variable *var;
-	char *s;
+	const char *s;
 
 	/* delete our list of log channels */
 	AST_LIST_LOCK(&logchannels);
@@ -336,6 +338,8 @@ static void init_logger_chain(void)
 		logfiles.queue_log = ast_true(s);
 	if ((s = ast_variable_retrieve(cfg, "general", "event_log")))
 		logfiles.event_log = ast_true(s);
+	if ((s = ast_variable_retrieve(cfg, "general", "queue_log_name")))
+		ast_copy_string(queue_log_name, s, sizeof(queue_log_name));
 
 	AST_LIST_LOCK(&logchannels);
 	var = ast_variable_browse(cfg, "logfiles");
@@ -450,10 +454,10 @@ int reload_logger(int rotate)
 	}
 
 	if (logfiles.queue_log) {
-		snprintf(old, sizeof(old), "%s/%s", (char *)ast_config_AST_LOG_DIR, QUEUELOG);
+		snprintf(old, sizeof(old), "%s/%s", (char *)ast_config_AST_LOG_DIR, queue_log_name);
 		if (queue_rotate) {
 			for (x = 0; ; x++) {
-				snprintf(new, sizeof(new), "%s/%s.%d", (char *)ast_config_AST_LOG_DIR, QUEUELOG, x);
+				snprintf(new, sizeof(new), "%s/%s.%d", (char *)ast_config_AST_LOG_DIR, queue_log_name, x);
 				myf = fopen((char *)new, "r");
 				if (myf) 	/* File exists */
 					fclose(myf);
@@ -554,23 +558,22 @@ static char logger_rotate_help[] =
 "       Rotates and Reopens the log files.\n";
 
 static char logger_show_channels_help[] =
-"Usage: logger show channels\n"
-"       Show configured logger channels.\n";
+"Usage: logger list channels\n"
+"       List configured logger channels.\n";
 
-static struct ast_cli_entry logger_show_channels_cli = 
-	{ { "logger", "show", "channels", NULL }, 
+static struct ast_cli_entry cli_logger[] = {
+	{ { "logger", "list", "channels", NULL }, 
 	handle_logger_show_channels, "List configured log channels",
-	logger_show_channels_help };
+	logger_show_channels_help },
 
-static struct ast_cli_entry reload_logger_cli = 
 	{ { "logger", "reload", NULL }, 
 	handle_logger_reload, "Reopens the log files",
-	logger_reload_help };
+	logger_reload_help },
 
-static struct ast_cli_entry rotate_logger_cli = 
 	{ { "logger", "rotate", NULL }, 
 	handle_logger_rotate, "Rotates and reopens the log files",
-	logger_rotate_help };
+	logger_rotate_help },
+};
 
 static int handle_SIGXFSZ(int sig) 
 {
@@ -587,10 +590,8 @@ int init_logger(void)
 	/* auto rotate if sig SIGXFSZ comes a-knockin */
 	(void) signal(SIGXFSZ,(void *) handle_SIGXFSZ);
 
-	/* register the relaod logger cli command */
-	ast_cli_register(&reload_logger_cli);
-	ast_cli_register(&rotate_logger_cli);
-	ast_cli_register(&logger_show_channels_cli);
+	/* register the logger cli commands */
+	ast_cli_register_multiple(cli_logger, sizeof(cli_logger) / sizeof(struct ast_cli_entry));
 
 	mkdir((char *)ast_config_AST_LOG_DIR, 0755);
   
@@ -613,7 +614,7 @@ int init_logger(void)
 	}
 
 	if (logfiles.queue_log) {
-		snprintf(tmp, sizeof(tmp), "%s/%s", (char *)ast_config_AST_LOG_DIR, QUEUELOG);
+		snprintf(tmp, sizeof(tmp), "%s/%s", (char *)ast_config_AST_LOG_DIR, queue_log_name);
 		qlog = fopen(tmp, "a");
 		ast_queue_log("NONE", "NONE", "NONE", "QUEUESTART", "%s", "");
 	}

@@ -41,6 +41,7 @@
 	<depend>zaptel</depend>
 	<depend>tonezone</depend>
 	<use>pri</use>
+	<use>ss7</use>
  ***/
 
 #include "asterisk.h"
@@ -69,6 +70,10 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #ifdef HAVE_PRI
 #include <libpri.h>
+#endif
+
+#ifdef HAVE_SS7
+#include <libss7.h>
 #endif
 
 #include "asterisk/lock.h"
@@ -158,6 +163,9 @@ static const char tdesc[] = "Zapata Telephony Driver"
 #ifdef HAVE_PRI
                " w/PRI"
 #endif
+#ifdef HAVEL_LIBSS7
+	       "w/SS7"
+#endif
 ;
 
 static const char config[] = "zapata.conf";
@@ -178,6 +186,7 @@ static const char config[] = "zapata.conf";
 #define SIG_FXOGS	ZT_SIG_FXOGS
 #define SIG_FXOKS	ZT_SIG_FXOKS
 #define SIG_PRI		ZT_SIG_CLEAR
+#define SIG_SS7		(0x1000000 | ZT_SIG_CLEAR)
 #define	SIG_SF		ZT_SIG_SF
 #define SIG_SFWINK 	(0x0100000 | ZT_SIG_SF)
 #define SIG_SF_FEATD	(0x0200000 | ZT_SIG_SF)
@@ -402,6 +411,36 @@ struct zt_pvt;
 
 static int ringt_base = DEFAULT_RINGT;
 
+#ifdef HAVE_SS7
+
+#define LINKSTATE_INALARM	(1 << 0)
+#define LINKSTATE_STARTING	(1 << 1)
+#define LINKSTATE_UP		(1 << 2)
+#define LINKSTATE_DOWN		(1 << 3)
+
+struct zt_ss7 {
+	pthread_t master;						/*!< Thread of master */
+	ast_mutex_t lock;
+	int fds[NUM_DCHANS];
+	int numsigchans;
+	int linkstate[NUM_DCHANS];
+	int numchans;
+	int type;
+	struct ss7 *ss7;
+	struct zt_pvt *pvts[MAX_CHANNELS];				/*!< Member channel pvt structs */
+};
+
+static struct zt_ss7 linksets[NUM_SPANS];
+
+static int cur_ss7type = -1;
+static int cur_linkset = -1;
+static int cur_pointcode = -1;
+static int cur_cicbeginswith = -1;
+static int cur_adjpointcode = -1;
+static int cur_networkindicator = -1;
+static int cur_defaultdpc = -1;
+#endif /* HAVE_SS7 */
+
 #ifdef HAVE_PRI
 
 #define PVT_TO_CHANNEL(p) (((p)->prioffset) | ((p)->logicalspan << 8) | (p->pri->mastertrunkgroup ? 0x10000 : 0))
@@ -605,6 +644,9 @@ static struct zt_pvt {
 	unsigned int resetting:1;
 	unsigned int setup_ack:1;
 #endif
+#if defined(HAVE_SS7)
+	unsigned int blocked:1;
+#endif
 	unsigned int use_smdi:1;		/* Whether to use SMDI on this channel */
 	struct ast_smdi_interface *smdi_iface;	/* The serial port to listen for SMDI data on */
 
@@ -691,6 +733,12 @@ static struct zt_pvt {
 #endif	
 	int polarity;
 	int dsp_features;
+#ifdef HAVE_SS7
+	struct zt_ss7 *ss7;
+	struct isup_call *ss7call;
+	int transcap;
+	int cic;							/*!< CIC associated with channel */
+#endif
 	char begindigit;
 } *iflist = NULL, *ifend = NULL;
 
@@ -701,9 +749,9 @@ static int zt_sendtext(struct ast_channel *c, const char *text);
 static int zt_call(struct ast_channel *ast, char *rdest, int timeout);
 static int zt_hangup(struct ast_channel *ast);
 static int zt_answer(struct ast_channel *ast);
-struct ast_frame *zt_read(struct ast_channel *ast);
+static struct ast_frame *zt_read(struct ast_channel *ast);
 static int zt_write(struct ast_channel *ast, struct ast_frame *frame);
-struct ast_frame *zt_exception(struct ast_channel *ast);
+static struct ast_frame *zt_exception(struct ast_channel *ast);
 static int zt_indicate(struct ast_channel *chan, int condition, const void *data, size_t datalen);
 static int zt_fixup(struct ast_channel *oldchan, struct ast_channel *newchan);
 static int zt_setoption(struct ast_channel *chan, int option, void *data, int datalen);
@@ -758,6 +806,30 @@ static inline int pri_grab(struct zt_pvt *pvt, struct zt_pri *pri)
 }
 #endif
 
+#ifdef HAVE_SS7
+static inline void ss7_rel(struct zt_ss7 *ss7)
+{
+	ast_mutex_unlock(&ss7->lock);
+}
+
+static inline int ss7_grab(struct zt_pvt *pvt, struct zt_ss7 *pri)
+{
+	int res;
+	/* Grab the lock first */
+	do {
+		res = ast_mutex_trylock(&pri->lock);
+		if (res) {
+			ast_mutex_unlock(&pvt->lock);
+			/* Release the lock and try again */
+			usleep(1);
+			ast_mutex_lock(&pvt->lock);
+		}
+	} while (res);
+	/* Then break the poll */
+	pthread_kill(pri->master, SIGURG);
+	return 0;
+}
+#endif
 #define NUM_CADENCE_MAX 25
 static int num_cadence = 4;
 static int user_has_defined_cadences = 0;
@@ -833,16 +905,32 @@ static void wakeup_sub(struct zt_pvt *p, int a, void *pri)
 #endif			
 }
 
-#ifdef HAVE_PRI
-static void zap_queue_frame(struct zt_pvt *p, struct ast_frame *f, struct zt_pri *pri)
-#else
-static void zap_queue_frame(struct zt_pvt *p, struct ast_frame *f, void *pri)
-#endif
+static void zap_queue_frame(struct zt_pvt *p, struct ast_frame *f, void *data)
 {
-	/* We must unlock the PRI to avoid the possibility of a deadlock */
 #ifdef HAVE_PRI
-	if (pri)
-		ast_mutex_unlock(&pri->lock);
+	struct zt_pri *pri = (struct zt_pri*) data;
+#endif
+#ifdef HAVE_SS7
+	struct zt_ss7 *ss7 = (struct zt_ss7*) data;
+#endif
+	/* We must unlock the PRI to avoid the possibility of a deadlock */
+#if defined(HAVE_PRI) || defined(HAVE_SS7)
+	if (data) {
+		switch (p->sig) {
+#ifdef HAVE_PRI
+		case SIG_PRI:
+			ast_mutex_unlock(&pri->lock);
+			break;
+#endif
+#ifdef HAVE_SS7
+		case SIG_SS7:
+			ast_mutex_unlock(&ss7->lock);
+			break;
+#endif
+		default:
+			break;
+		}
+	}
 #endif		
 	for (;;) {
 		if (p->owner) {
@@ -858,9 +946,24 @@ static void zap_queue_frame(struct zt_pvt *p, struct ast_frame *f, void *pri)
 		} else
 			break;
 	}
+#if defined(HAVE_PRI) || defined(HAVE_SS7)
+	if (data) {
+		switch (p->sig) {
 #ifdef HAVE_PRI
-	if (pri)
-		ast_mutex_lock(&pri->lock);
+		case SIG_PRI:
+			ast_mutex_lock(&pri->lock);
+			break;
+#endif
+#ifdef HAVE_SS7
+		case SIG_SS7:
+			ast_mutex_lock(&ss7->lock);
+			break;
+#endif
+		default:
+			break;
+		}
+	}
+
 #endif		
 }
 
@@ -1220,6 +1323,8 @@ static char *zap_sig2str(int sig)
 		return "FXO Kewlstart";
 	case SIG_PRI:
 		return "PRI Signalling";
+	case SIG_SS7:
+		return "SS7 Signalling";
 	case SIG_SF:
 		return "SF (Tone) Signalling Immediate";
 	case SIG_SFWINK:
@@ -1443,7 +1548,7 @@ static void zt_enable_ec(struct zt_pvt *p)
 		return;
 	}
 	if (p->echocancel) {
-		if (p->sig == SIG_PRI) {
+		if ((p->sig == SIG_PRI) || (p->sig == SIG_SS7)) {
 			x = 1;
 			res = ioctl(p->subs[SUB_REAL].zfd, ZT_AUDIOMODE, &x);
 			if (res)
@@ -1645,7 +1750,7 @@ static inline int zt_confmute(struct zt_pvt *p, int muted)
 {
 	int x, y, res;
 	x = muted;
-	if (p->sig == SIG_PRI) {
+	if ((p->sig == SIG_PRI) || (p->sig == SIG_SS7)) {
 		y = 1;
 		res = ioctl(p->subs[SUB_REAL].zfd, ZT_AUDIOMODE, &y);
 		if (res)
@@ -2051,6 +2156,7 @@ static int zt_call(struct ast_channel *ast, char *rdest, int timeout)
 		ast_setstate(ast, AST_STATE_UP);
 		break;		
 	case SIG_PRI:
+	case SIG_SS7:
 		/* We'll get it in a moment -- but use dialdest to store pre-setup_ack digits */
 		p->dialdest[0] = '\0';
 		break;
@@ -2059,6 +2165,37 @@ static int zt_call(struct ast_channel *ast, char *rdest, int timeout)
 		ast_mutex_unlock(&p->lock);
 		return -1;
 	}
+#ifdef HAVE_SS7
+	if (p->ss7) {
+		c = strchr(dest, '/');
+		if (c)
+			c++;
+		else
+			c = dest;
+
+		if (!p->hidecallerid) {
+			l = ast->cid.cid_num;
+		} else {
+			l = NULL;
+		}
+
+		ss7_grab(p, p->ss7);
+		p->digital = IS_DIGITAL(ast->transfercapability);
+		p->ss7call = isup_new_call(p->ss7->ss7);
+
+		if (!p->ss7call) {
+			ss7_rel(p->ss7);
+			ast_mutex_unlock(&p->lock);
+			ast_log(LOG_ERROR, "Unable to allocate new SS7 call!\n");
+			return -1;
+		}
+
+		isup_init_call(p->ss7->ss7, p->ss7call, p->cic, c + p->stripmsd, l);
+
+		isup_iam(p->ss7->ss7, p->ss7call);
+		ss7_rel(p->ss7);
+	}
+#endif /* HAVE_SS7 */
 #ifdef HAVE_PRI
 	if (p->pri) {
 		struct pri_sr *sr;
@@ -2070,6 +2207,8 @@ static int zt_call(struct ast_channel *ast, char *rdest, int timeout)
 		int prilocaldialplan;
 		int ldp_strip;
 		int exclusive;
+		const char *rr_str;
+		int redirect_reason;
 
 		c = strchr(dest, '/');
 		if (c)
@@ -2176,7 +2315,20 @@ static int zt_call(struct ast_channel *ast, char *rdest, int timeout)
 		}
 		pri_sr_set_caller(sr, l ? (l + ldp_strip) : NULL, n, prilocaldialplan,
 			p->use_callingpres ? ast->cid.cid_pres : (l ? PRES_ALLOWED_USER_NUMBER_PASSED_SCREEN : PRES_NUMBER_NOT_AVAILABLE));
-		pri_sr_set_redirecting(sr, ast->cid.cid_rdnis, p->pri->localdialplan - 1, PRES_ALLOWED_USER_NUMBER_PASSED_SCREEN, PRI_REDIR_UNCONDITIONAL);
+		if ((rr_str = pbx_builtin_getvar_helper(ast, "PRIREDIRECTREASON"))) {
+			if (!strcasecmp(rr_str, "UNKNOWN"))
+				redirect_reason = 0;
+			else if (!strcasecmp(rr_str, "BUSY"))
+				redirect_reason = 1;
+			else if (!strcasecmp(rr_str, "NO_REPLY"))
+				redirect_reason = 2;
+			else if (!strcasecmp(rr_str, "UNCONDITIONAL"))
+				redirect_reason = 15;
+			else
+				redirect_reason = PRI_REDIR_UNCONDITIONAL;
+		} else
+			redirect_reason = PRI_REDIR_UNCONDITIONAL;
+		pri_sr_set_redirecting(sr, ast->cid.cid_rdnis, p->pri->localdialplan - 1, PRES_ALLOWED_USER_NUMBER_PASSED_SCREEN, redirect_reason);
 
 #ifdef SUPPORT_USERUSER
 		/* User-user info */
@@ -2423,7 +2575,7 @@ static int zt_hangup(struct ast_channel *ast)
 	
 	index = zt_get_index(ast, p, 1);
 
-	if (p->sig == SIG_PRI) {
+	if ((p->sig == SIG_PRI) || (p->sig == SIG_SS7)) {
 		x = 1;
 		ast_channel_setoption(ast,AST_OPTION_AUDIO_MODE,&x,sizeof(char),0);
 	}
@@ -2577,6 +2729,23 @@ static int zt_hangup(struct ast_channel *ast)
 		if (res < 0) 
 			ast_log(LOG_WARNING, "Unable to set law on channel %d to default\n", p->channel);
 		/* Perform low level hangup if no owner left */
+#ifdef HAVE_SS7
+		if (p->ss7) {
+			if (p->ss7call) {
+				if (!ss7_grab(p, p->ss7)) {
+					if (!p->alreadyhungup) {
+						isup_rel(p->ss7->ss7, p->ss7call, ast->hangupcause ? ast->hangupcause : -1);
+						ss7_rel(p->ss7);
+						p->alreadyhungup = 1;
+					} else
+						ast_log(LOG_WARNING, "Trying to hangup twice!\n");
+				} else {
+					ast_log(LOG_WARNING, "Unable to grab SS7 on CIC %d\n", p->cic);
+					res = -1;
+				}
+			}
+		}
+#endif
 #ifdef HAVE_PRI
 		if (p->pri) {
 #ifdef SUPPORT_USERUSER
@@ -2630,7 +2799,7 @@ static int zt_hangup(struct ast_channel *ast)
 			}
 		}
 #endif
-		if (p->sig && (p->sig != SIG_PRI))
+		if (p->sig && ((p->sig != SIG_PRI) && (p->sig != SIG_SS7)))
 			res = zt_set_hook(p->subs[SUB_REAL].zfd, ZT_ONHOOK);
 		if (res < 0) {
 			ast_log(LOG_WARNING, "Unable to hangup line %s\n", ast->name);
@@ -2681,7 +2850,7 @@ static int zt_hangup(struct ast_channel *ast)
 		update_conf(p);
 		reset_conf(p);
 		/* Restore data mode */
-		if (p->sig == SIG_PRI) {
+		if ((p->sig == SIG_PRI) || (p->sig == SIG_SS7)) {
 			x = 0;
 			ast_channel_setoption(ast,AST_OPTION_AUDIO_MODE,&x,sizeof(char),0);
 		}
@@ -2800,6 +2969,18 @@ static int zt_answer(struct ast_channel *ast)
 			pri_rel(p->pri);
 		} else {
 			ast_log(LOG_WARNING, "Unable to grab PRI on span %d\n", p->span);
+			res = -1;
+		}
+		break;
+#endif
+#ifdef HAVE_SS7
+	case SIG_SS7:
+		if (!ss7_grab(p, p->ss7)) {
+			p->proceeding = 1;
+			res = isup_anm(p->ss7->ss7, p->ss7call);
+			ss7_rel(p->ss7);
+		} else {
+			ast_log(LOG_WARNING, "Unable to grab SS7 on span %d\n", p->span);
 			res = -1;
 		}
 		break;
@@ -3731,7 +3912,7 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 								"Alarm: %s\r\n"
 								"Channel: %d\r\n",
 								alarm2str(res), p->channel);
-#ifdef HAVE_LIBPRI
+#ifdef HAVE_PRI
 			if (!p->pri || !p->pri->pri || pri_get_timer(p->pri->pri, PRI_TIMER_T309) < 0) {
 				/* fall through intentionally */
 			} else {
@@ -4501,7 +4682,7 @@ static struct ast_frame *__zt_exception(struct ast_channel *ast)
 	return f;
 }
 
-struct ast_frame *zt_exception(struct ast_channel *ast)
+static struct ast_frame *zt_exception(struct ast_channel *ast)
 {
 	struct zt_pvt *p = ast->tech_pvt;
 	struct ast_frame *f;
@@ -4511,7 +4692,7 @@ struct ast_frame *zt_exception(struct ast_channel *ast)
 	return f;
 }
 
-struct ast_frame  *zt_read(struct ast_channel *ast)
+static struct ast_frame  *zt_read(struct ast_channel *ast)
 {
 	struct zt_pvt *p = ast->tech_pvt;
 	int res;
@@ -5013,7 +5194,19 @@ static int zt_indicate(struct ast_channel *chan, int condition, const void *data
 				}
 				p->alerting = 1;
 			}
+
 #endif
+#ifdef HAVE_SS7
+			if ((!p->alerting) && (p->sig == SIG_SS7) && p->ss7 && !p->outgoing && (chan->_state != AST_STATE_UP)) {
+				if (p->ss7->ss7) {
+					ss7_grab(p, p->ss7);
+					isup_cpg(p->ss7->ss7, p->ss7call, CPG_EVENT_ALERTING);
+					p->alerting = 1;
+					ss7_rel(p->ss7);
+				}
+			}
+#endif
+
 			res = tone_zone_play_tone(p->subs[index].zfd, ZT_TONE_RINGTONE);
 			if (chan->_state != AST_STATE_UP) {
 				if ((chan->_state != AST_STATE_RING) ||
@@ -5036,6 +5229,17 @@ static int zt_indicate(struct ast_channel *chan, int condition, const void *data
 						ast_log(LOG_WARNING, "Unable to grab PRI on span %d\n", p->span);
 				}
 				p->proceeding = 1;
+			}
+#endif
+#ifdef HAVE_SS7
+			if (!p->proceeding && p->sig==SIG_SS7 && p->ss7 && !p->outgoing) {
+				if (p->ss7->ss7) {
+					ss7_grab(p, p->ss7);
+					isup_cpg(p->ss7->ss7, p->ss7call, CPG_EVENT_INBANDINFO);
+					p->proceeding = 1;
+					ss7_rel(p->ss7);
+
+				}
 			}
 #endif
 			/* don't continue in ast_indicate */
@@ -5228,7 +5432,7 @@ static struct ast_channel *zt_new(struct zt_pvt *i, int state, int startpbx, int
 				i->dsp_features = features & ~DSP_PROGRESS_TALK;
 #ifdef HAVE_PRI
 				/* We cannot do progress detection until receives PROGRESS message */
-				if (i->outgoing && (i->sig == SIG_PRI)) {
+				if (i->outgoing && ((i->sig == SIG_PRI) || (i->sig == SIG_SS7))) {
 					/* Remember requested DSP features, don't treat
 					   talking as ANSWER */
 					features = 0;
@@ -5291,7 +5495,7 @@ static struct ast_channel *zt_new(struct zt_pvt *i, int state, int startpbx, int
 #endif
 	tmp->cid.cid_pres = i->callingpres;
 	tmp->cid.cid_ton = i->cid_ton;
-#ifdef HAVE_PRI
+#if defined(HAVE_PRI) || defined(HAVE_SS7)
 	tmp->transfercapability = transfercapability;
 	pbx_builtin_setvar_helper(tmp, "TRANSFERCAPABILITY", ast_transfercapability2str(transfercapability));
 	if (transfercapability & PRI_TRANS_CAP_DIGITAL)
@@ -6649,6 +6853,7 @@ static int handle_init_event(struct zt_pvt *i, int event)
 			zt_set_hook(i->subs[SUB_REAL].zfd, ZT_ONHOOK);
 			break;
 		case SIG_PRI:
+		case SIG_SS7:
 			zt_disable_ec(i);
 			res = tone_zone_play_tone(i->subs[SUB_REAL].zfd, -1);
 			break;
@@ -7023,6 +7228,16 @@ static int pri_create_spanmap(int span, int trunkgroup, int logicalspan)
 
 #endif
 
+#ifdef HAVE_SS7
+static struct zt_ss7 * ss7_resolve_linkset(int linkset)
+{
+	if ((linkset < 0) || (linkset >= NUM_SPANS))
+		return NULL;
+	else
+		return &linksets[linkset - 1];
+}
+#endif /* HAVE_SS7 */
+
 static struct zt_pvt *mkintf(int channel, int signalling, int outsignalling, int radio, struct zt_pri *pri, int reloading)
 {
 	/* Make a zt_pvt structure for this interface (or CRV if "pri" is specified) */
@@ -7116,6 +7331,35 @@ static struct zt_pvt *mkintf(int channel, int signalling, int outsignalling, int
 					return NULL;
 				}
 			}
+#ifdef HAVE_SS7
+			if (signalling == SIG_SS7) {
+				struct zt_ss7 *ss7;
+				int clear = 0;
+				if (ioctl(tmp->subs[SUB_REAL].zfd, ZT_AUDIOMODE, &clear)) {
+					ast_log(LOG_ERROR, "Unable to set clear mode on clear channel %d of span %d: %s\n", channel, p.spanno, strerror(errno));
+					destroy_zt_pvt(&tmp);
+					return NULL;
+				}
+
+				ss7 = ss7_resolve_linkset(cur_linkset);
+				if (!ss7) {
+					ast_log(LOG_ERROR, "Unable to find linkset %d\n", cur_linkset);
+					destroy_zt_pvt(&tmp);
+					return NULL;
+				}
+				if (cur_cicbeginswith < 0) {
+					ast_log(LOG_ERROR, "Need to set cicbeginswith for the channels!\n");
+					destroy_zt_pvt(&tmp);
+					return NULL;
+				}
+
+				tmp->cic = cur_cicbeginswith++;
+
+				tmp->ss7 = ss7;
+				tmp->ss7call = NULL;
+				ss7->pvts[ss7->numchans++] = tmp;
+			}
+#endif
 #ifdef HAVE_PRI
 			if ((signalling == SIG_PRI) || (signalling == SIG_GR303FXOKS) || (signalling == SIG_GR303FXSKS)) {
 				int offset;
@@ -7404,7 +7648,7 @@ static struct zt_pvt *mkintf(int channel, int signalling, int outsignalling, int
 				ast_dsp_digitmode(tmp->dsp, DSP_DIGITMODE_DTMF | tmp->dtmfrelax);
 			update_conf(tmp);
 			if (!here) {
-				if (signalling != SIG_PRI)
+				if ((signalling != SIG_PRI) && (signalling != SIG_SS7))
 					/* Hang it up to be sure it's good */
 					zt_set_hook(tmp->subs[SUB_REAL].zfd, ZT_ONHOOK);
 			}
@@ -7513,6 +7757,15 @@ static inline int available(struct zt_pvt *p, int channelmatch, int groupmatch, 
 		/* Trust PRI */
 		if (p->pri) {
 			if (p->resetting || p->call)
+				return 0;
+			else
+				return 1;
+		}
+#endif
+#ifdef HAVE_SS7
+		/* Trust PRI */
+		if (p->ss7) {
+			if (p->ss7call || p->blocked)
 				return 0;
 			else
 				return 1;
@@ -7865,6 +8118,454 @@ next:
 	return tmp;
 }
 
+#ifdef HAVE_SS7
+static int zt_setlaw(int zfd, int law);
+
+static int ss7_find_cic(struct zt_ss7 *linkset, int cic)
+{
+	int i;
+	int winner = -1;
+	for (i = 0; i < linkset->numchans; i++) {
+		if (linkset->pvts[i] && (linkset->pvts[i]->cic == cic)) {
+			winner = i;
+		}
+	}
+	return winner;
+}
+
+static inline void ss7_block_cics(struct zt_ss7 *linkset, int startcic, int endcic, unsigned char state[], int block)
+{
+	int i;
+
+	for (i = 0; i < linkset->numchans; i++) {
+		if (linkset->pvts[i] && ((linkset->pvts[i]->cic >= startcic) && (linkset->pvts[i]->cic <= endcic))) {
+			if (state) {
+				if (state[i])
+					linkset->pvts[i]->blocked = block;
+			} else
+				linkset->pvts[i]->blocked = block;
+		}
+	}
+}
+
+static int ss7_reset_linkset(struct zt_ss7 *linkset)
+{
+	int i, startcic = -1, endcic;
+
+	if (linkset->numchans <= 0)
+		return 0;
+
+	startcic = linkset->pvts[0]->cic;
+
+	for (i = 0; i < linkset->numchans; i++) {
+		if (linkset->pvts[i+1] && (linkset->pvts[i+1]->cic - linkset->pvts[i]->cic) == 1) {
+			continue;
+		} else {
+			endcic = linkset->pvts[i]->cic;
+			ast_verbose(VERBOSE_PREFIX_3 "Resetting CICs %d to %d\n", startcic, endcic);
+			isup_grs(linkset->ss7, startcic, endcic);
+
+			if (linkset->pvts[i+1])
+				startcic = linkset->pvts[i+1]->cic;
+		}
+	}
+}
+
+static void zt_loopback(struct zt_pvt *p, int enable)
+{
+	if (ioctl(p->subs[SUB_REAL].zfd, ZT_LOOPBACK, &enable)) {
+		ast_log(LOG_WARNING, "Unable to set loopback on channel %d\n", p->channel);
+		return;
+	}
+}
+
+static void ss7_start_call(struct zt_pvt *p, struct zt_ss7 *linkset)
+{
+	struct ss7 *ss7 = linkset->ss7;
+	int res;
+	int law = 1;
+	struct ast_channel *c;
+
+	if (ioctl(p->subs[SUB_REAL].zfd, ZT_AUDIOMODE, &law) == -1)
+		ast_log(LOG_WARNING, "Unable to set audio mode on channel %d to %d\n", p->channel, law);
+	
+	if (linkset->type == SS7_ITU)
+		law = ZT_LAW_ALAW;
+	else
+		law = ZT_LAW_MULAW;
+
+	res = zt_setlaw(p->subs[SUB_REAL].zfd, law);
+	if (res < 0) 
+		ast_log(LOG_WARNING, "Unable to set law on channel %d\n", p->channel);
+	
+	isup_acm(ss7, p->ss7call);
+
+	ast_mutex_unlock(&linkset->lock);
+	c = zt_new(p, AST_STATE_RING, 1, SUB_REAL, law, 0);
+	ast_mutex_lock(&linkset->lock);
+	if (c)
+		ast_verbose(VERBOSE_PREFIX_3 "Accepting call to '%s' on CIC %d\n", p->exten, p->cic);
+	else
+		ast_log(LOG_WARNING, "Unable to start PBX on CIC %d\n", p->cic);
+}
+
+static void *ss7_linkset(void *data)
+{
+	int res, i;
+	struct timeval *next = NULL, tv;
+	struct zt_ss7 *linkset = (struct zt_ss7 *) data;
+	struct ss7 *ss7 = linkset->ss7;
+	ss7_event *e = NULL;
+	struct zt_pvt *p;
+	int chanpos;
+	pthread_attr_t attr;
+	struct pollfd pollers[NUM_DCHANS];
+	int cic;
+	int nextms = 0;
+
+	pthread_attr_init(&attr);
+	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+
+	ss7_start(ss7);
+
+	while(1) {
+		ast_mutex_lock(&linkset->lock);
+		if ((next = ss7_schedule_next(ss7))) {
+			gettimeofday(&tv, NULL);
+			tv.tv_sec = next->tv_sec - tv.tv_sec;
+			tv.tv_usec = next->tv_usec - tv.tv_usec;
+			if (tv.tv_usec < 0) {
+				tv.tv_usec += 1000000;
+				tv.tv_sec -= 1;
+			}
+			if (tv.tv_sec < 0) {
+				tv.tv_sec = 0;
+				tv.tv_usec = 0;
+			}
+			nextms = tv.tv_sec * 1000;
+			nextms += tv.tv_usec / 1000;
+		}
+		ast_mutex_unlock(&linkset->lock);
+
+		for (i = 0; i < linkset->numsigchans; i++) {
+			pollers[i].fd = linkset->fds[i];
+			pollers[i].events = POLLIN | POLLOUT | POLLPRI;
+			pollers[i].revents = 0;
+		}
+
+		res = poll(pollers, linkset->numsigchans, nextms);
+		if ((res < 0) && (errno != EINTR)) {
+			ast_log(LOG_ERROR, "poll(%s)\n", strerror(errno));
+		} else if (!res) {
+			ast_mutex_lock(&linkset->lock);
+			ss7_schedule_run(ss7);
+			ast_mutex_unlock(&linkset->lock);
+			continue;
+		}
+
+		ast_mutex_lock(&linkset->lock);
+		for (i = 0; i < linkset->numsigchans; i++) {
+			if (pollers[i].revents & POLLPRI) {
+				int x;
+				if (ioctl(pollers[i].fd, ZT_GETEVENT, &x)) {
+					ast_log(LOG_ERROR, "Error in exception retrieval!\n");
+				}
+				switch (x) {
+				case ZT_EVENT_OVERRUN:
+					ast_log(LOG_ERROR, "Overrun detected!\n");
+					break;
+				case ZT_EVENT_BADFCS:
+					ast_log(LOG_ERROR, "Bad FCS!\n");
+					break;
+				case ZT_EVENT_ABORT:
+					ast_log(LOG_ERROR, "HDLC Abort!\n");
+					break;
+				case ZT_EVENT_ALARM:
+					ast_log(LOG_ERROR, "Alarm on link!\n");
+					linkset->linkstate[i] |= (LINKSTATE_DOWN | LINKSTATE_INALARM);
+					linkset->linkstate[i] &= ~LINKSTATE_UP;
+					ss7_link_alarm(ss7, pollers[i].fd);
+					break;
+				case ZT_EVENT_NOALARM:
+					ast_log(LOG_ERROR, "Alarm cleared on link\n");
+					linkset->linkstate[i] &= ~(LINKSTATE_INALARM | LINKSTATE_DOWN);
+					linkset->linkstate[i] |= LINKSTATE_STARTING;
+					ss7_link_noalarm(ss7, pollers[i].fd);
+					break;
+				default:
+					ast_log(LOG_ERROR, "Got exception %d!\n", x);
+					break;
+				}
+			}
+
+			if (pollers[i].revents & POLLIN)
+				res = ss7_read(ss7, pollers[i].fd);
+			if (pollers[i].revents & POLLOUT) {
+				res = ss7_write(ss7, pollers[i].fd);
+				if (res < 0) {
+					ast_log(LOG_ERROR, "Error in write %s", strerror(errno));
+				}
+			}
+		}
+
+#if 0
+		if (res < 0)
+			exit(-1);
+#endif
+
+		while ((e = ss7_check_event(ss7))) {
+			switch (e->e) {
+			case SS7_EVENT_UP:
+				ast_verbose("--- SS7 Up ---\n");
+				ss7_reset_linkset(linkset);
+				break;
+			case MTP2_LINK_UP:
+				ast_log(LOG_DEBUG, "MTP2 link up\n");
+				break;
+			case ISUP_EVENT_CPG:
+				chanpos = ss7_find_cic(linkset, e->cpg.cic);
+				if (chanpos < 0) {
+					ast_log(LOG_WARNING, "CPG on unconfigured CIC %d\n", e->cpg.cic);
+					break;
+				}
+				p = linkset->pvts[chanpos];
+				ast_mutex_lock(&p->lock);
+				switch (e->cpg.event) {
+				case CPG_EVENT_ALERTING:
+					p->alerting = 1;
+					p->subs[SUB_REAL].needringing = 1;
+					break;
+				case CPG_EVENT_PROGRESS:
+				case CPG_EVENT_INBANDINFO:
+					{
+						struct ast_frame f = { AST_FRAME_CONTROL, AST_CONTROL_PROGRESS, };
+						ast_log(LOG_DEBUG, "Queuing frame PROGRESS on CIC %d\n", p->cic);
+						zap_queue_frame(p, &f, ss7);
+						p->progress = 1;
+					}
+					break;
+				default:
+					ast_log(LOG_DEBUG, "Do not handle CPG with event type 0x%x\n", e->cpg.event);
+				}
+
+				ast_mutex_unlock(&p->lock);
+				break;
+			case ISUP_EVENT_RSC:
+				ast_verbose("Resetting CIC %d\n", e->rsc.cic);
+				chanpos = ss7_find_cic(linkset, e->rsc.cic);
+				if (chanpos < 0) {
+					ast_log(LOG_WARNING, "RSC on unconfigured CIC %d\n", e->rsc.cic);
+					break;
+				}
+				p = linkset->pvts[chanpos];
+				p->blocked = 0;
+				isup_rlc(ss7, e->rsc.call);
+				break;
+			case ISUP_EVENT_GRS:
+				ast_log(LOG_DEBUG, "Got Reset for CICs %d to %d: Acknowledging\n", e->grs.startcic, e->grs.endcic);
+				isup_gra(ss7, e->grs.startcic, e->grs.endcic);
+				ss7_block_cics(linkset, e->grs.startcic, e->grs.endcic, NULL, 0);
+				break;
+			case ISUP_EVENT_GRA:
+				ast_log(LOG_DEBUG, "Got GRA from CIC %d to %d.\n", e->gra.startcic, e->gra.endcic);
+				ss7_block_cics(linkset, e->gra.startcic, e->gra.endcic, e->gra.status, 1);
+				break;
+			case ISUP_EVENT_IAM:
+				ast_log(LOG_DEBUG, "Got IAM for CIC %d and number %s\n", e->iam.cic, e->iam.called_party_num);
+				chanpos = ss7_find_cic(linkset, e->iam.cic);
+				if (chanpos < 0) {
+					ast_log(LOG_WARNING, "IAM on unconfigured CIC %d\n", e->iam.cic);
+					isup_rel(ss7, e->iam.call, -1);
+					break;
+				}
+				p = linkset->pvts[chanpos];
+				ast_mutex_lock(&p->lock);
+				if (p->owner) {
+					if (p->ss7call == e->iam.call) {
+						ast_mutex_unlock(&p->lock);
+						ast_log(LOG_WARNING, "Duplicate IAM requested on CIC %d\n", e->iam.cic);
+						break;
+					} else {
+						ast_mutex_unlock(&p->lock);
+						ast_log(LOG_WARNING, "Ring requested on CIC %d already in use!\n", e->iam.cic);
+						break;
+					}
+				}
+
+				p->ss7call = e->iam.call;
+
+				if (p->use_callerid)
+					ast_copy_string(p->cid_num, e->iam.calling_party_num, sizeof(p->cid_num));
+				else
+					p->cid_num[0] = 0;
+
+				if (p->immediate) {
+					p->exten[0] = 's';
+					p->exten[1] = '\0';
+				} else if (!ast_strlen_zero(e->iam.called_party_num)) {
+					char *st;
+					ast_copy_string(p->exten, e->iam.called_party_num, sizeof(p->exten));
+					st = strchr(p->exten, '#');
+					if (st)
+						*st = '\0';
+				} else
+					p->exten[0] = '\0';
+
+				/* Need to fill these fields */
+				p->cid_ani[0] = '\0';
+				p->cid_name[0] = '\0';
+				p->cid_ton = 0;
+				/* Set DNID */
+				if (!ast_strlen_zero(e->iam.called_party_num))
+					ast_copy_string(p->dnid, e->iam.called_party_num, sizeof(p->exten));
+
+				if (ast_exists_extension(NULL, p->context, p->exten, 1, p->cid_num)) {
+
+					if (e->iam.cot_check_required) {
+						zt_loopback(p, 1);
+					} else
+						ss7_start_call(p, linkset);
+				} else {
+					ast_log(LOG_DEBUG, "Call on CIC for unconfigured extension %s\n", p->exten);
+					isup_rel(ss7, e->iam.call, -1);
+				}
+				ast_mutex_unlock(&p->lock);
+				break;
+			case ISUP_EVENT_COT:
+				chanpos = ss7_find_cic(linkset, e->cot.cic);
+				if (chanpos < 0) {
+					ast_log(LOG_WARNING, "COT on unconfigured CIC %d\n", e->cot.cic);
+					isup_rel(ss7, e->cot.call, -1);
+					break;
+				}
+				p = linkset->pvts[chanpos];
+
+				zt_loopback(p, 0);
+				
+				isup_acm(ss7, p->ss7call);
+				ss7_start_call(p, linkset);
+				break;
+			case ISUP_EVENT_REL:
+				chanpos = ss7_find_cic(linkset, e->rel.cic);
+				if (chanpos < 0) {
+					ast_log(LOG_WARNING, "REL on unconfigured CIC %d\n", e->rel.cic);
+					break;
+				}
+				p = linkset->pvts[chanpos];
+				ast_mutex_lock(&p->lock);
+				if (p->owner)
+					ast_queue_hangup(p->owner);
+				else
+					ast_log(LOG_WARNING, "REL on channel (CIC %d) without owner!\n", p->cic);
+
+				isup_rlc(ss7, e->rel.call);
+				p->ss7call = NULL;
+
+				ast_mutex_unlock(&p->lock);
+				break;
+			case ISUP_EVENT_ACM:
+				chanpos = ss7_find_cic(linkset, e->acm.cic);
+				if (chanpos < 0) {
+					ast_log(LOG_WARNING, "ACM on unconfigured CIC %d\n", e->acm.cic);
+					isup_rel(ss7, e->acm.call, -1);
+					break;
+				} else {
+					struct ast_frame f = { AST_FRAME_CONTROL, AST_CONTROL_PROCEEDING, };
+
+					p = linkset->pvts[chanpos];
+
+					ast_log(LOG_DEBUG, "Queueing frame from SS7_EVENT_ACM on CIC %d\n", p->cic);
+
+					ast_mutex_lock(&p->lock);
+					zap_queue_frame(p, &f, linkset);
+					p->proceeding = 1;
+
+					ast_mutex_unlock(&p->lock);
+				}
+				break;
+			case ISUP_EVENT_CGB:
+				ss7_block_cics(linkset, e->cgb.startcic, e->cgb.endcic, e->cgb.status, 1);
+				isup_cgba(linkset->ss7, e->cgb.startcic, e->cgb.endcic, e->cgb.status);
+				break;
+			case ISUP_EVENT_CGU:
+				ss7_block_cics(linkset, e->cgu.startcic, e->cgu.endcic, e->cgb.status, 0);
+				isup_cgua(linkset->ss7, e->cgu.startcic, e->cgu.endcic, e->cgb.status);
+				break;
+			case ISUP_EVENT_BLO:
+				chanpos = ss7_find_cic(linkset, e->blo.cic);
+				if (chanpos < 0) {
+					ast_log(LOG_WARNING, "BLO on unconfigured CIC %d\n", e->blo.cic);
+					break;
+				}
+				p = linkset->pvts[chanpos];
+				ast_log(LOG_DEBUG, "Blocking CIC %d\n", e->blo.cic);
+				p->blocked = 1;
+				isup_bla(linkset->ss7, e->blo.cic);
+				break;
+			case ISUP_EVENT_UBL:
+				chanpos = ss7_find_cic(linkset, e->ubl.cic);
+				if (chanpos < 0) {
+					ast_log(LOG_WARNING, "UBL on unconfigured CIC %d\n", e->ubl.cic);
+					break;
+				}
+				p = linkset->pvts[chanpos];
+				ast_log(LOG_DEBUG, "Unblocking CIC %d\n", e->ubl.cic);
+				p->blocked = 0;
+				isup_uba(linkset->ss7, e->ubl.cic);
+				break;
+			case ISUP_EVENT_CON:
+			case ISUP_EVENT_ANM:
+				if (e->e == ISUP_EVENT_CON)
+					cic = e->con.cic;
+				else
+					cic = e->anm.cic;
+
+				chanpos = ss7_find_cic(linkset, cic);
+				if (chanpos < 0) {
+					ast_log(LOG_WARNING, "ANM/CON on unconfigured CIC %d\n", cic);
+					isup_rel(ss7, (e->e == ISUP_EVENT_ANM) ? e->anm.call : e->con.call, -1);
+					break;
+				} else {
+					p = linkset->pvts[chanpos];
+					ast_mutex_lock(&p->lock);
+					p->subs[SUB_REAL].needanswer = 1;
+					zt_enable_ec(p);
+					ast_mutex_unlock(&p->lock);
+				}
+				break;
+			case ISUP_EVENT_RLC:
+				chanpos = ss7_find_cic(linkset, e->rlc.cic);
+				if (chanpos < 0) {
+					ast_log(LOG_WARNING, "RLC on unconfigured CIC %d\n", e->rlc.cic);
+					break;
+				} else {
+					p = linkset->pvts[chanpos];
+					ast_mutex_lock(&p->lock);
+					p->ss7call = NULL;
+					ast_mutex_unlock(&p->lock);
+				}
+				break;
+			default:
+				ast_log(LOG_DEBUG, "Unknown event %s\n", ss7_event2str(e->e));
+				break;
+			}
+		}
+		ast_mutex_unlock(&linkset->lock);
+	}
+
+	return 0;
+}
+
+static void zt_ss7_message(struct ss7 *ss7, char *s)
+{
+	ast_verbose("%s", s);
+}
+
+static void zt_ss7_error(struct ss7 *ss7, char *s)
+{
+	ast_log(LOG_ERROR, "%s", s);
+}
+#endif /* HAVE_SS7 */
 
 #ifdef HAVE_PRI
 static struct zt_pvt *pri_find_crv(struct zt_pri *pri, int crv)
@@ -9621,22 +10322,34 @@ static const char pri_show_spans_help[] =
 	"       Displays PRI Information\n";
 
 static struct ast_cli_entry zap_pri_cli[] = {
-	{ { "pri", "debug", "span", NULL }, handle_pri_debug,
-	  "Enables PRI debugging on a span", pri_debug_help, complete_span_4 },
-	{ { "pri", "no", "debug", "span", NULL }, handle_pri_no_debug,
-	  "Disables PRI debugging on a span", pri_no_debug_help, complete_span_5 },
-	{ { "pri", "intense", "debug", "span", NULL }, handle_pri_really_debug,
-	  "Enables REALLY INTENSE PRI debugging", pri_really_debug_help, complete_span_5 },
-	{ { "pri", "show", "spans", NULL }, handle_pri_show_spans,
-	  "Displays PRI Information", pri_show_spans_help },
-	{ { "pri", "show", "span", NULL }, handle_pri_show_span,
-	  "Displays PRI Information", pri_show_span_help, complete_span_4 },
-	{ { "pri", "show", "debug", NULL }, handle_pri_show_debug,
-	  "Displays current PRI debug settings" },
-	{ { "pri", "set", "debug", "file", NULL }, handle_pri_set_debug_file,
-	  "Sends PRI debug output to the specified file" },
-	{ { "pri", "unset", "debug", "file", NULL }, handle_pri_set_debug_file,
-	  "Ends PRI debug output to file" },
+	{ { "pri", "debug", "span", NULL },
+	handle_pri_debug, "Enables PRI debugging on a span",
+	pri_debug_help, complete_span_4 },
+
+	{ { "pri", "no", "debug", "span", NULL },
+	handle_pri_no_debug, "Disables PRI debugging on a span",
+	pri_no_debug_help, complete_span_5 },
+
+	{ { "pri", "intense", "debug", "span", NULL },
+	handle_pri_really_debug, "Enables REALLY INTENSE PRI debugging",
+	pri_really_debug_help, complete_span_5 },
+
+	{ { "pri", "show", "spans", NULL },
+	handle_pri_show_spans, "Displays PRI Information",
+	pri_show_spans_help },
+
+	{ { "pri", "show", "span", NULL },
+	handle_pri_show_span, "Displays PRI Information",
+	pri_show_span_help, complete_span_4 },
+
+	{ { "pri", "show", "debug", NULL },
+	handle_pri_show_debug, "Displays current PRI debug settings" },
+
+	{ { "pri", "set", "debug", "file", NULL },
+	handle_pri_set_debug_file, "Sends PRI debug output to the specified file" },
+
+	{ { "pri", "unset", "debug", "file", NULL },
+	handle_pri_set_debug_file, "Ends PRI debug output to file" },
 };
 
 #endif /* HAVE_PRI */
@@ -9851,6 +10564,12 @@ static int zap_show_channel(int fd, int argc, char **argv)
 				if (tmp->slaves[x])
 					ast_cli(fd, "Slave Channel: %d\n", tmp->slaves[x]->channel);
 			}
+#ifdef HAVE_SS7
+			if (tmp->ss7) {
+				ast_cli(fd, "CIC: %d\n", tmp->cic);
+				ast_cli(fd, "Blocked: %s\n", tmp->blocked ? "yes" : "no");
+			}
+#endif
 #ifdef HAVE_PRI
 			if (tmp->pri) {
 				ast_cli(fd, "PRI Flags: ");
@@ -10012,18 +10731,29 @@ static char zap_restart_usage[] =
 	"";
 
 static struct ast_cli_entry zap_cli[] = {
-	{ { "zap", "show", "cadences", NULL }, handle_zap_show_cadences,
-	  "List cadences", zap_show_cadences_help },
-	{ {"zap", "show", "channels", NULL}, zap_show_channels,
-	  "Show active zapata channels", show_channels_usage },
-	{ {"zap", "show", "channel", NULL}, zap_show_channel,
-	  "Show information on a channel", show_channel_usage },
-	{ {"zap", "destroy", "channel", NULL}, zap_destroy_channel,
-	  "Destroy a channel", destroy_channel_usage },
-	{ {"zap", "restart", NULL}, zap_restart_cmd,
-	  "Fully restart zaptel channels", zap_restart_usage },
-	{ {"zap", "show", "status", NULL}, zap_show_status,
-	  "Show all Zaptel cards status", zap_show_status_usage },
+	{ { "zap", "show", "cadences", NULL },
+	handle_zap_show_cadences, "List cadences",
+	zap_show_cadences_help },
+
+	{ { "zap", "show", "channels", NULL},
+	zap_show_channels, "Show active zapata channels",
+	show_channels_usage },
+
+	{ { "zap", "show", "channel", NULL},
+	zap_show_channel, "Show information on a channel",
+	show_channel_usage },
+
+	{ { "zap", "destroy", "channel", NULL},
+	zap_destroy_channel, "Destroy a channel",
+	destroy_channel_usage },
+
+	{ { "zap", "restart", NULL},
+	zap_restart_cmd, "Fully restart zaptel channels",
+	zap_restart_usage },
+
+	{ { "zap", "show", "status", NULL},
+	zap_show_status, "Show all Zaptel cards status",
+	zap_show_status_usage },
 };
 
 #define TRANSFER	0
@@ -10213,10 +10943,10 @@ static int __unload_module(void)
 		if (pris[i].master != AST_PTHREADT_NULL) 
 			pthread_cancel(pris[i].master);
 	}
-	ast_cli_unregister_multiple(zap_pri_cli, sizeof(zap_pri_cli) / sizeof(zap_pri_cli[0]));
+	ast_cli_unregister_multiple(zap_pri_cli, sizeof(zap_pri_cli) / sizeof(struct ast_cli_entry));
 	ast_unregister_application(zap_send_keypad_facility_app);
 #endif
-	ast_cli_unregister_multiple(zap_cli, sizeof(zap_cli) / sizeof(zap_cli[0]));
+	ast_cli_unregister_multiple(zap_cli, sizeof(zap_cli) / sizeof(struct ast_cli_entry));
 	ast_manager_unregister( "ZapDialOffhook" );
 	ast_manager_unregister( "ZapHangup" );
 	ast_manager_unregister( "ZapTransfer" );
@@ -10271,27 +11001,331 @@ static int __unload_module(void)
 		zt_close(pris[i].fds[i]);
 	}
 #endif
+#ifdef HAVE_SS7
+	for (i = 0; i < NUM_SPANS; i++) {
+		if (linksets[i].master && (linksets[i].master != AST_PTHREADT_NULL))
+			pthread_join(linksets[i].master, NULL);
+		zt_close(linksets[i].fds[i]);
+	}
+#endif /* HAVE_SS7 */
 	return 0;
 }
 
+#ifdef HAVE_SS7
+static int linkset_addsigchan(int sigchan)
+{
+	struct zt_ss7 *link;
+	int res;
+	int curfd;
+	ZT_PARAMS p;
+	ZT_BUFFERINFO bi;
+	struct zt_spaninfo si;
+
+
+	link = ss7_resolve_linkset(cur_linkset);
+	if (!link) {
+		ast_log(LOG_ERROR, "Invalid linkset number.  Must be between 1 and %d\n", NUM_SPANS + 1);
+		return -1;
+	}
+
+	if (cur_ss7type < 0) {
+		ast_log(LOG_ERROR, "Unspecified or invalid ss7type\n");
+		return -1;
+	}
+
+	if (!link->ss7)
+		link->ss7 = ss7_new(cur_ss7type);
+
+	if (!link->ss7) {
+		ast_log(LOG_ERROR, "Can't create new SS7!\n");
+		return -1;
+	}
+
+	link->type = cur_ss7type;
+
+	if (cur_pointcode < 0) {
+		ast_log(LOG_ERROR, "Unspecified pointcode!\n");
+		return -1;
+	} else
+		ss7_set_pc(link->ss7, cur_pointcode);
+
+	if (sigchan < 0) {
+		ast_log(LOG_ERROR, "Invalid sigchan!\n");
+		return -1;
+	} else {
+		if (link->numsigchans >= NUM_DCHANS) {
+			ast_log(LOG_ERROR, "Too many sigchans on linkset %d\n", cur_linkset);
+			return -1;
+		}
+		curfd = link->numsigchans;
+
+		link->fds[curfd] = open("/dev/zap/channel", O_RDWR, 0600);
+		if ((link->fds[curfd] < 0) || (ioctl(link->fds[curfd],ZT_SPECIFY,&sigchan) == -1)) {
+			ast_log(LOG_ERROR, "Unable to open SS7 sigchan %d (%s)\n", sigchan, strerror(errno));
+			return -1;
+		}
+		res = ioctl(link->fds[curfd], ZT_GET_PARAMS, &p);
+		if (res) {
+			zt_close(link->fds[curfd]);
+			link->fds[curfd] = -1;
+			ast_log(LOG_ERROR, "Unable to get parameters for sigchan %d (%s)\n", sigchan, strerror(errno));
+			return -1;
+		}
+		if ((p.sigtype != ZT_SIG_HDLCFCS) && (p.sigtype != ZT_SIG_HARDHDLC)) {
+			zt_close(link->fds[curfd]);
+			link->fds[curfd] = -1;
+			ast_log(LOG_ERROR, "sigchan %d is not in HDLC/FCS mode.  See /etc/zaptel.conf\n", sigchan);
+			return -1;
+		}
+
+		bi.txbufpolicy = ZT_POLICY_IMMEDIATE;
+		bi.rxbufpolicy = ZT_POLICY_IMMEDIATE;
+		bi.numbufs = 32;
+		bi.bufsize = 512;
+
+		if (ioctl(link->fds[curfd], ZT_SET_BUFINFO, &bi)) {
+			ast_log(LOG_ERROR, "Unable to set appropriate buffering on channel %d\n", sigchan);
+			zt_close(link->fds[curfd]);
+			link->fds[curfd] = -1;
+			return -1;
+		}
+
+		ss7_add_link(link->ss7, link->fds[curfd]);
+		link->numsigchans++;
+
+		memset(&si, 0, sizeof(si));
+		res = ioctl(link->fds[curfd], ZT_SPANSTAT, &si);
+		if (res) {
+			zt_close(link->fds[curfd]);
+			link->fds[curfd] = -1;
+			ast_log(LOG_ERROR, "Unable to get span state for sigchan %d (%s)\n", sigchan, strerror(errno));
+		}
+
+		if (!si.alarms) {
+			link->linkstate[curfd] = LINKSTATE_DOWN;
+			ss7_link_noalarm(link->ss7, link->fds[curfd]);
+		} else {
+			link->linkstate[curfd] = LINKSTATE_DOWN | LINKSTATE_INALARM;
+			ss7_link_alarm(link->ss7, link->fds[curfd]);
+		}
+	}
+
+	if (cur_adjpointcode < 0) {
+		ast_log(LOG_ERROR, "Unspecified adjpointcode!\n");
+		return -1;
+	} else {
+		ss7_set_adjpc(link->ss7, link->fds[curfd], cur_adjpointcode);
+	}
+
+	if (cur_defaultdpc < 0) {
+		ast_log(LOG_ERROR, "Unspecified defaultdpc!\n");
+		return -1;
+	} else {
+		ss7_set_default_dpc(link->ss7, cur_defaultdpc);
+	}
+
+	if (cur_networkindicator < 0) {
+		ast_log(LOG_ERROR, "Invalid networkindicator!\n");
+		return -1;
+	} else
+		ss7_set_network_ind(link->ss7, cur_networkindicator);
+
+	return 0;
+}
+
+static int handle_ss7_no_debug(int fd, int argc, char *argv[])
+{
+	int span;
+	if (argc < 5)
+		return RESULT_SHOWUSAGE;
+	span = atoi(argv[4]);
+	if ((span < 1) || (span > NUM_SPANS)) {
+		ast_cli(fd, "Invalid linkset %s.  Should be a number %d to %d\n", argv[4], 1, NUM_SPANS);
+		return RESULT_SUCCESS;
+	}
+	if (!linksets[span-1].ss7) {
+		ast_cli(fd, "No SS7 running on linkset %d\n", span);
+		return RESULT_SUCCESS;
+	}
+	if (linksets[span-1].ss7)
+		ss7_set_debug(linksets[span-1].ss7, 0);
+
+	ast_cli(fd, "Disabled debugging on linkset %d\n", span);
+	return RESULT_SUCCESS;
+}
+
+static int handle_ss7_debug(int fd, int argc, char *argv[])
+{
+	int span;
+	if (argc < 4)
+		return RESULT_SHOWUSAGE;
+	span = atoi(argv[3]);
+	if ((span < 1) || (span > NUM_SPANS)) {
+		ast_cli(fd, "Invalid linkset %s.  Should be a number %d to %d\n", argv[4], 1, NUM_SPANS);
+		return RESULT_SUCCESS;
+	}
+	if (!linksets[span-1].ss7) {
+		ast_cli(fd, "No SS7 running on linkset %d\n", span);
+		return RESULT_SUCCESS;
+	}
+	if (linksets[span-1].ss7)
+		ss7_set_debug(linksets[span-1].ss7, SS7_DEBUG_MTP2 | SS7_DEBUG_MTP3 | SS7_DEBUG_ISUP);
+
+	ast_cli(fd, "Enabled debugging on linkset %d\n", span);
+	return RESULT_SUCCESS;
+}
+
+static int handle_ss7_block_cic(int fd, int argc, char *argv[])
+{
+	int linkset, cic;
+	if (argc == 5)
+		linkset = atoi(argv[3]);
+	else
+		return RESULT_SHOWUSAGE;
+
+	if ((linkset < 1) || (linkset > NUM_SPANS)) {
+		ast_cli(fd, "Invalid linkset %s.  Should be a number %d to %d\n", argv[3], 1, NUM_SPANS);
+		return RESULT_SUCCESS;
+	}
+
+	if (!linksets[linkset-1].ss7) {
+		ast_cli(fd, "No SS7 running on linkset %d\n", linkset);
+		return RESULT_SUCCESS;
+	}
+
+	cic = atoi(argv[4]);
+
+	if (cic < 1) {
+		ast_cli(fd, "Invalid CIC specified!\n");
+		return RESULT_SUCCESS;
+	}
+
+	ast_mutex_lock(&linksets[linkset-1].lock);
+	isup_blo(linksets[linkset-1].ss7, cic);
+	ast_mutex_unlock(&linksets[linkset-1].lock);
+	ast_cli(fd, "Sent blocking request for linkset %d on CIC %d\n", linkset, cic);
+	return RESULT_SUCCESS;
+}
+
+static int handle_ss7_unblock_cic(int fd, int argc, char *argv[])
+{
+	int linkset, cic;
+	if (argc == 5)
+		linkset = atoi(argv[3]);
+	else
+		return RESULT_SHOWUSAGE;
+
+	if ((linkset < 1) || (linkset > NUM_SPANS)) {
+		ast_cli(fd, "Invalid linkset %s.  Should be a number %d to %d\n", argv[3], 1, NUM_SPANS);
+		return RESULT_SUCCESS;
+	}
+
+	if (!linksets[linkset-1].ss7) {
+		ast_cli(fd, "No SS7 running on linkset %d\n", linkset);
+		return RESULT_SUCCESS;
+	}
+
+	cic = atoi(argv[4]);
+
+	if (cic < 1) {
+		ast_cli(fd, "Invalid CIC specified!\n");
+		return RESULT_SUCCESS;
+	}
+
+	ast_mutex_lock(&linksets[linkset-1].lock);
+	isup_ubl(linksets[linkset-1].ss7, cic);
+	ast_mutex_unlock(&linksets[linkset-1].lock);
+	ast_cli(fd, "Sent blocking request for linkset %d on CIC %d\n", linkset, cic);
+	return RESULT_SUCCESS;
+}
+
+#if 0
+static int handle_ss7_show_linkset(int fd, int argc, char *argv[])
+{
+	int linkset;
+	struct zt_ss7 *ss7;
+	if (argc < 4)
+		return RESULT_SHOWUSAGE;
+	linkset = atoi(argv[3]);
+	if ((linkset < 1) || (linkset > NUM_SPANS)) {
+		ast_cli(fd, "Invalid linkset %s.  Should be a number %d to %d\n", argv[4], 1, NUM_SPANS);
+		return RESULT_SUCCESS;
+	}
+	if (!linksets[linkset-1].ss7) {
+		ast_cli(fd, "No SS7 running on linkset %d\n", linkset);
+		return RESULT_SUCCESS;
+	}
+	if (linksets[linkset-1].ss7)
+		ss7 = linksets[linkset-1];
+
+	if (
+
+	return RESULT_SUCCESS;
+}
+#endif
+
+static const char ss7_debug_help[] = 
+	"Usage: ss7 debug linkset <linkset>\n"
+	"       Enables debugging on a given SS7 linkset\n";
+	
+static const char ss7_no_debug_help[] = 
+	"Usage: ss7 no debug linkset <span>\n"
+	"       Disables debugging on a given SS7 linkset\n";
+
+static const char ss7_block_cic_help[] = 
+	"Usage: ss7 block cic <linkset> <CIC>\n"
+	"       Sends a remote blocking request for the given CIC on the specified linkset\n";
+
+static const char ss7_unblock_cic_help[] = 
+	"Usage: ss7 unblock cic <linkset> <CIC>\n"
+	"       Sends a remote unblocking request for the given CIC on the specified linkset\n";
+
+#if 0
+static const char ss7_show_linkset_help[] = 
+	"Usage: ss7 show linkset <span>\n"
+	"       Disables debugging on a given SS7 linkset\n";
+#endif
+
+static struct ast_cli_entry zap_ss7_cli[] = {
+	{ { "ss7", "debug", "linkset", NULL }, handle_ss7_debug,
+	  "Enables SS7 debugging on a linkset", ss7_debug_help, NULL },
+	{ { "ss7", "no", "debug", "linkset", NULL }, handle_ss7_no_debug,
+	  "Disables SS7 debugging on a linkset", ss7_debug_help, NULL },
+	{ { "ss7", "block", "cic", NULL }, handle_ss7_block_cic,
+	  "Disables SS7 debugging on a linkset", ss7_block_cic_help, NULL },
+	{ { "ss7", "unblock", "cic", NULL }, handle_ss7_unblock_cic,
+	  "Disables SS7 debugging on a linkset", ss7_unblock_cic_help, NULL },
+#if 0
+	{ { "ss7", "show", "linkset", NULL }, handle_ss7_show_linkset,
+	  "Disables SS7 debugging on a linkset", ss7_show_linkset_help, NULL },
+#endif
+};
+#endif /* HAVE_SS7 */
+
 static int unload_module(void)
 {
-#ifdef HAVE_PRI		
+#if defined(HAVE_PRI) || defined(HAVE_SS7)
 	int y;
+#endif
+#ifdef HAVE_PRI
 	for (y = 0; y < NUM_SPANS; y++)
 		ast_mutex_destroy(&pris[y].lock);
 #endif
+#ifdef HAVE_SS7
+	for (y = 0; y < NUM_SPANS; y++)
+		ast_mutex_destroy(&linksets[y].lock);
+#endif /* HAVE_SS7 */
 	return __unload_module();
 }
 
-static int build_channels(int iscrv, char *value, int reload, int lineno, int *found_pseudo)
+static int build_channels(int iscrv, const char *value, int reload, int lineno, int *found_pseudo)
 {
 	char *c, *chan;
-	int x, y, start, finish;
+	int x, start, finish;
 	struct zt_pvt *tmp;
 #ifdef HAVE_PRI
 	struct zt_pri *pri;
-	int trunkgroup;
+	int trunkgroup, y;
 #endif
 	
 	if ((reload == 0) && (cur_signalling < 0)) {
@@ -10299,7 +11333,7 @@ static int build_channels(int iscrv, char *value, int reload, int lineno, int *f
 		return -1;
 	}
 
-	c = value;
+	c = ast_strdupa(value);
 
 #ifdef HAVE_PRI
 	pri = NULL;
@@ -10380,7 +11414,6 @@ static int process_zap(struct ast_variable *v, int reload, int skipchannels)
 	char *ringc;
 	int y;
 	int found_pseudo = 0;
-	char *c;
 
 	while(v) {
 		/* Create the interface list */
@@ -10699,6 +11732,11 @@ static int process_zap(struct ast_variable *v, int reload, int skipchannels)
 					cur_radio = 0;
 					pritype = PRI_CPE;
 #endif
+#ifdef HAVE_SS7
+				} else if (!strcasecmp(v->value, "ss7")) {
+					cur_signalling = SIG_SS7;
+					cur_radio = 0;
+#endif
 				} else {
 					ast_log(LOG_ERROR, "Unknown signalling method '%s'\n", v->value);
 				}
@@ -10845,7 +11883,7 @@ static int process_zap(struct ast_variable *v, int reload, int skipchannels)
 				overlapdial = ast_true(v->value);
 			} else if (!strcasecmp(v->name, "pritimer")) {
 #ifdef PRI_GETSET_TIMERS
-				char *timerc;
+				char *timerc, *c;
 				int timer, timeridx;
 				c = v->value;
 				timerc = strsep(&c, ",");
@@ -10866,6 +11904,42 @@ static int process_zap(struct ast_variable *v, int reload, int skipchannels)
 				facilityenable = ast_true(v->value);
 #endif /* PRI_GETSET_TIMERS */
 #endif /* HAVE_PRI */
+#ifdef HAVE_SS7
+			} else if (!strcasecmp(v->name, "ss7type")) {
+				if (!strcasecmp(v->value, "itu")) {
+					cur_ss7type = SS7_ITU;
+				} else if (!strcasecmp(v->value, "ansi")) {
+					cur_ss7type = SS7_ANSI;
+				} else
+					ast_log(LOG_WARNING, "'%s' is an unknown ss7 switch type!\n", v->value);
+			} else if (!strcasecmp(v->name, "linkset")) {
+				cur_linkset = atoi(v->value);
+			} else if (!strcasecmp(v->name, "pointcode")) {
+				cur_pointcode = atoi(v->value);
+			} else if (!strcasecmp(v->name, "adjpointcode")) {
+				cur_adjpointcode = atoi(v->value);
+			} else if (!strcasecmp(v->name, "defaultdpc")) {
+				cur_defaultdpc = atoi(v->value);
+			} else if (!strcasecmp(v->name, "cicbeginswith")) {
+				cur_cicbeginswith = atoi(v->value);
+			} else if (!strcasecmp(v->name, "networkindicator")) {
+				if (!strcasecmp(v->value, "national"))
+					cur_networkindicator = SS7_NI_NAT;
+				else if (!strcasecmp(v->value, "national_spare"))
+					cur_networkindicator = SS7_NI_NAT_SPARE;
+				else if (!strcasecmp(v->value, "international"))
+					cur_networkindicator = SS7_NI_INT;
+				else if (!strcasecmp(v->value, "international_spare"))
+					cur_networkindicator = SS7_NI_INT_SPARE;
+				else
+					cur_networkindicator = -1;
+			} else if (!strcasecmp(v->name, "sigchan")) {
+				int sigchan, res;
+				sigchan = atoi(v->value);
+				res = linkset_addsigchan(sigchan);
+				if (res < 0)
+					return -1;
+#endif /* HAVE_SS7 */
 			} else if (!strcasecmp(v->name, "cadence")) {
 				/* setup to scan our argument */
 				int element_count, c[16] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
@@ -11025,16 +12099,15 @@ static int process_zap(struct ast_variable *v, int reload, int skipchannels)
 		
 static int setup_zap(int reload)
 {
-	int x;
 	struct ast_config *cfg;
 	struct ast_variable *v;
 	struct ast_variable *vjb;
-	char *c;
 	int res;
 
 #ifdef HAVE_PRI
+	char *c;
 	int spanno;
-	int i;
+	int i, x;
 	int logicalspan;
 	int trunkgroup;
 	int dchannels[NUM_DCHANS];
@@ -11124,7 +12197,7 @@ static int setup_zap(int reload)
 	cfg = ast_config_load("users.conf");
 	if (cfg) {
 		char *cat;
-		char *chans;
+		const char *chans;
 		process_zap(ast_variable_browse(cfg, "general"), 1, 1);
 		for (cat = ast_category_browse(cfg, NULL); cat ; cat = ast_category_browse(cfg, cat)) {
 			if (!strcasecmp(cat, "general"))
@@ -11150,6 +12223,19 @@ static int setup_zap(int reload)
 		}
 	}
 #endif
+#ifdef HAVE_SS7
+	if (!reload) {
+		for (x = 0; x < NUM_SPANS; x++) {
+			if (linksets[x].ss7) {
+				if (ast_pthread_create(&linksets[x].master, NULL, ss7_linkset, &linksets[x])) {
+					ast_log(LOG_ERROR, "Unable to start SS7 linkset on span %d\n", x + 1);
+					return -1;
+				} else if (option_verbose > 1)
+					ast_verbose(VERBOSE_PREFIX_2 "Starting SS7 linkset on span %d\n", x + 1);
+			}
+		}
+	}
+#endif
 	/* And start the monitor for the first time */
 	restart_monitor();
 	return 0;
@@ -11158,9 +12244,11 @@ static int setup_zap(int reload)
 static int load_module(void)
 {
 	int res;
+#if defined(HAVE_PRI) || defined(HAVE_SS7)
+	int y, i;
+#endif
 
 #ifdef HAVE_PRI
-	int y,i;
 	memset(pris, 0, sizeof(pris));
 	for (y = 0; y < NUM_SPANS; y++) {
 		ast_mutex_init(&pris[y].lock);
@@ -11174,6 +12262,17 @@ static int load_module(void)
 	ast_register_application(zap_send_keypad_facility_app, zap_send_keypad_facility_exec,
 			zap_send_keypad_facility_synopsis, zap_send_keypad_facility_descrip);
 #endif
+#ifdef HAVE_SS7
+	memset(linksets, 0, sizeof(linksets));
+	for (y = 0; y < NUM_SPANS; y++) {
+		ast_mutex_init(&linksets[y].lock);
+		linksets[y].master = AST_PTHREADT_NULL;
+		for (i = 0; i < NUM_DCHANS; i++)
+			linksets[y].fds[i] = -1;
+	}
+	ss7_set_error(zt_ss7_error);
+	ss7_set_message(zt_ss7_message);
+#endif /* HAVE_SS7 */
 	res = setup_zap(0);
 	/* Make sure we can register our Zap channel type */
 	if (res)
@@ -11186,9 +12285,13 @@ static int load_module(void)
 #ifdef HAVE_PRI
 	ast_string_field_init(&inuse, 16);
 	ast_string_field_set(&inuse, name, "GR-303InUse");
-	ast_cli_register_multiple(zap_pri_cli, sizeof(zap_pri_cli) / sizeof(zap_pri_cli[0]));
+	ast_cli_register_multiple(zap_pri_cli, sizeof(zap_pri_cli) / sizeof(struct ast_cli_entry));
 #endif	
-	ast_cli_register_multiple(zap_cli, sizeof(zap_cli) / sizeof(zap_cli[0]));
+#ifdef HAVE_SS7
+	ast_cli_register_multiple(zap_ss7_cli, sizeof(zap_ss7_cli) / sizeof(zap_ss7_cli[0]));
+#endif
+
+	ast_cli_register_multiple(zap_cli, sizeof(zap_cli) / sizeof(struct ast_cli_entry));
 	
 	memset(round_robin, 0, sizeof(round_robin));
 	ast_manager_register( "ZapTransfer", 0, action_transfer, "Transfer Zap Channel" );

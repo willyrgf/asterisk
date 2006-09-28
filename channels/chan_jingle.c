@@ -156,7 +156,7 @@ struct jingle {
 };
 
 struct jingle_container {
-        ASTOBJ_CONTAINER_COMPONENTS(struct jingle);
+	ASTOBJ_CONTAINER_COMPONENTS(struct jingle);
 };
 
 static const char desc[] = "Jingle Channel";
@@ -521,7 +521,7 @@ static int jingle_handle_dtmf(struct jingle *client, ikspak *pak)
 					"unsupported-dtmf-method xmlns='http://jabber.org/protocol/jingle/info/dtmf#errors'");
 			return -1;
 		}
-		if ((dtmfnode  = iks_find(pak->x, "dtmf"))) {
+		if ((dtmfnode = iks_find(pak->x, "dtmf"))) {
 			if((dtmf = iks_find_attrib(dtmfnode, "code"))) {
 				if(iks_find_with_attrib(pak->x, "dtmf", "action", "button-up")) {
 					struct ast_frame f = {AST_FRAME_DTMF_BEGIN, };
@@ -995,7 +995,7 @@ static int jingle_add_candidate(struct jingle *client, ikspak *pak)
 	struct jingle_pvt *p = NULL, *tmp = NULL;
 	struct aji_client *c = client->connection;
 	struct jingle_candidate *newcandidate = NULL;
-	iks  *traversenodes = NULL, *receipt = NULL;
+	iks *traversenodes = NULL, *receipt = NULL;
 	newcandidate = ast_calloc(1, sizeof(*newcandidate));
 	if (!newcandidate)
 		return 0;
@@ -1533,7 +1533,7 @@ static int jingle_create_member(char *label, struct ast_variable *var, int allow
 				member->connection = client;
 				iks_filter_add_rule(client->f, jingle_parser, member, IKS_RULE_TYPE,
 									IKS_PAK_IQ, IKS_RULE_FROM_PARTIAL, member->user,
-									IKS_RULE_NS, "http://www.google.com/session",
+									IKS_RULE_NS, "http://jabber.org/protocol/jingle",
 									IKS_RULE_DONE);
 			} else {
 				ast_log(LOG_ERROR, "connection referenced not found!\n");
@@ -1640,7 +1640,7 @@ static int jingle_load_config(void)
 						ASTOBJ_WRLOCK(member);
 						member->connection = iterator;
 						iks_filter_add_rule(iterator->f, jingle_parser, member, IKS_RULE_TYPE, IKS_PAK_IQ, IKS_RULE_NS,
-										"http://www.google.com/session", IKS_RULE_DONE);
+										"http://jabber.org/protocol/jingle", IKS_RULE_DONE);
 						ASTOBJ_UNLOCK(member);
 						ASTOBJ_CONTAINER_LINK(&jingles, member);
 						ASTOBJ_UNLOCK(iterator);
@@ -1715,9 +1715,9 @@ static int unload_module(void)
 			ASTOBJ_WRLOCK(iterator);
 			privates = iterator->p;
 			while(privates) {
-			    if (privates->owner)
-			        ast_softhangup(privates->owner, AST_SOFTHANGUP_APPUNLOAD);
-			    privates = privates->next;
+				if (privates->owner)
+					ast_softhangup(privates->owner, AST_SOFTHANGUP_APPUNLOAD);
+				privates = privates->next;
 			}
 			iterator->p = NULL;
 			ASTOBJ_UNLOCK(iterator);

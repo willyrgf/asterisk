@@ -225,7 +225,6 @@ static int pbx_builtin_ringing(struct ast_channel *, void *);
 static int pbx_builtin_progress(struct ast_channel *, void *);
 static int pbx_builtin_congestion(struct ast_channel *, void *);
 static int pbx_builtin_busy(struct ast_channel *, void *);
-static int pbx_builtin_setglobalvar(struct ast_channel *, void *);
 static int pbx_builtin_noop(struct ast_channel *, void *);
 static int pbx_builtin_gotoif(struct ast_channel *, void *);
 static int pbx_builtin_gotoiftime(struct ast_channel *, void *);
@@ -285,6 +284,9 @@ static struct pbx_builtin {
 	"    n - Don't answer the channel before playing the files.\n"
 	"    m - Only break if a digit hit matches a one digit\n"
 	"          extension in the destination context.\n"
+	"This application sets the following channel variable upon completion:\n"
+	" BACKGROUNDSTATUS    The status of the background attempt as a text string, one of\n"
+	"               SUCCESS | FAILED\n"
 	},
 
 	{ "Busy", pbx_builtin_busy,
@@ -301,6 +303,13 @@ static struct pbx_builtin {
 	"condition to the calling channel. If the optional timeout is specified, the\n"
 	"calling channel will be hung up after the specified number of seconds.\n"
 	"Otherwise, this application will wait until the calling channel hangs up.\n"
+	},
+
+	{ "ExecIfTime", pbx_builtin_execiftime,
+	"Conditional application execution based on the current time",
+	"  ExecIfTime(<times>|<weekdays>|<mdays>|<months>?appname[|appargs]):\n"
+	"This application will execute the specified dialplan application, with optional\n"
+	"arguments, if the current time matches the given time specification.\n"
 	},
 
 	{ "Goto", pbx_builtin_goto,
@@ -331,11 +340,14 @@ static struct pbx_builtin {
 	"in the dialplan if the current time matches the given time specification.\n"
 	},
 
-	{ "ExecIfTime", pbx_builtin_execiftime,
-	"Conditional application execution based on the current time",
-	"  ExecIfTime(<times>|<weekdays>|<mdays>|<months>?appname[|appargs]):\n"
-	"This application will execute the specified dialplan application, with optional\n"
-	"arguments, if the current time matches the given time specification.\n"
+	{ "ImportVar", pbx_builtin_importvar,
+	"Import a variable from a channel into a new variable",
+	"  ImportVar(newvar=channelname|variable): This application imports a variable\n"
+	"from the specified channel (as opposed to the current one) and stores it as\n"
+	"a variable in the current channel (the channel that is calling this\n"
+	"application). Variables created by this application have the same inheritance\n"
+	"properties as those created with the Set application. See the documentation for\n"
+	"Set for more information.\n"
 	},
 
 	{ "Hangup", pbx_builtin_hangup,
@@ -375,12 +387,10 @@ static struct pbx_builtin {
 	"tone to the user.\n"
 	},
 
-	{ "SayNumber", pbx_builtin_saynumber,
-	"Say Number",
-	"  SayNumber(digits[,gender]): This application will play the sounds that\n"
-	"correspond to the given number. Optionally, a gender may be specified.\n"
-	"This will use the language that is currently set for the channel. See the\n"
-	"LANGUAGE function for more information on setting the language for the channel.\n"
+	{ "SayAlpha", pbx_builtin_saycharacters,
+	"Say Alpha",
+	"  SayAlpha(string): This application will play the sounds that correspond to\n"
+	"the letters of the given string.\n"
 	},
 
 	{ "SayDigits", pbx_builtin_saydigits,
@@ -391,28 +401,18 @@ static struct pbx_builtin {
 	"the language for the channel.\n"
 	},
 
-	{ "SayAlpha", pbx_builtin_saycharacters,
-	"Say Alpha",
-	"  SayAlpha(string): This application will play the sounds that correspond to\n"
-	"the letters of the given string.\n"
+	{ "SayNumber", pbx_builtin_saynumber,
+	"Say Number",
+	"  SayNumber(digits[,gender]): This application will play the sounds that\n"
+	"correspond to the given number. Optionally, a gender may be specified.\n"
+	"This will use the language that is currently set for the channel. See the\n"
+	"LANGUAGE function for more information on setting the language for the channel.\n"
 	},
 
 	{ "SayPhonetic", pbx_builtin_sayphonetic,
 	"Say Phonetic",
 	"  SayPhonetic(string): This application will play the sounds from the phonetic\n"
 	"alphabet that correspond to the letters in the given string.\n"
-	},
-
-	{ "SetAMAFlags", pbx_builtin_setamaflags,
-	"Set the AMA Flags",
-	"  SetAMAFlags([flag]): This application will set the channel's AMA Flags for\n"
- 	"  billing purposes.\n"
-	},
-
-	{ "SetGlobalVar", pbx_builtin_setglobalvar,
-	"Set a global variable to a given value",
-	"  SetGlobalVar(variable=value): This application sets a given global variable to\n"
-	"the specified value.\n"
 	},
 
 	{ "Set", pbx_builtin_setvar,
@@ -429,14 +429,10 @@ static struct pbx_builtin {
 	"        (applies only to variables, not functions)\n"
 	},
 
-	{ "ImportVar", pbx_builtin_importvar,
-	"Import a variable from a channel into a new variable",
-	"  ImportVar(newvar=channelname|variable): This application imports a variable\n"
-	"from the specified channel (as opposed to the current one) and stores it as\n"
-	"a variable in the current channel (the channel that is calling this\n"
-	"application). Variables created by this application have the same inheritance\n"
-	"properties as those created with the Set application. See the documentation for\n"
-	"Set for more information.\n"
+	{ "SetAMAFlags", pbx_builtin_setamaflags,
+	"Set the AMA Flags",
+	"  SetAMAFlags([flag]): This application will set the channel's AMA Flags for\n"
+ 	"  billing purposes.\n"
 	},
 
 	{ "Wait", pbx_builtin_wait,
@@ -1208,18 +1204,15 @@ void pbx_retrieve_variable(struct ast_channel *c, const char *var, char **ret, c
 	}
 }
 
-/*! \brief CLI function to show installed custom functions
-    \addtogroup CLI_functions
- */
 static int handle_show_functions(int fd, int argc, char *argv[])
 {
 	struct ast_custom_function *acf;
 	int count_acf = 0;
 	int like = 0;
 
-	if (argc == 4 && (!strcmp(argv[2], "like")) ) {
+	if (argc == 5 && (!strcmp(argv[3], "like")) ) {
 		like = 1;
-	} else if (argc != 2) {
+	} else if (argc != 3) {
 		return RESULT_SHOWUSAGE;
 	}
 
@@ -1227,7 +1220,7 @@ static int handle_show_functions(int fd, int argc, char *argv[])
 
 	AST_LIST_LOCK(&acf_root);
 	AST_LIST_TRAVERSE(&acf_root, acf, acflist) {
-		if (!like || strstr(acf->name, argv[3])) {
+		if (!like || strstr(acf->name, argv[4])) {
 			count_acf++;
 			ast_cli(fd, "%-20.20s  %-35.35s  %s\n", acf->name, acf->syntax, acf->synopsis);
 		}
@@ -1248,10 +1241,10 @@ static int handle_show_function(int fd, int argc, char *argv[])
 	char stxtitle[40], *syntax = NULL;
 	int synopsis_size, description_size, syntax_size;
 
-	if (argc < 3)
+	if (argc < 4)
 		return RESULT_SHOWUSAGE;
 
-	if (!(acf = ast_custom_function_find(argv[2]))) {
+	if (!(acf = ast_custom_function_find(argv[3]))) {
 		ast_cli(fd, "No function by that name registered.\n");
 		return RESULT_FAILURE;
 
@@ -2271,14 +2264,14 @@ static int __ast_pbx_run(struct ast_channel *c)
 				if (res == AST_PBX_KEEPALIVE) {
 					if (option_debug)
 						ast_log(LOG_DEBUG, "Spawn extension (%s,%s,%d) exited KEEPALIVE on '%s'\n", c->context, c->exten, c->priority, c->name);
-					else if (option_verbose > 1)
+					if (option_verbose > 1)
 						ast_verbose( VERBOSE_PREFIX_2 "Spawn extension (%s, %s, %d) exited KEEPALIVE on '%s'\n", c->context, c->exten, c->priority, c->name);
 					error = 1;
 					break;
 				}
 				if (option_debug)
 					ast_log(LOG_DEBUG, "Spawn extension (%s,%s,%d) exited non-zero on '%s'\n", c->context, c->exten, c->priority, c->name);
-				else if (option_verbose > 1)
+				if (option_verbose > 1)
 					ast_verbose( VERBOSE_PREFIX_2 "Spawn extension (%s, %s, %d) exited non-zero on '%s'\n", c->context, c->exten, c->priority, c->name);
 				if (c->_softhangup == AST_SOFTHANGUP_ASYNCGOTO) {
 					c->_softhangup =0;
@@ -2398,7 +2391,7 @@ static int __ast_pbx_run(struct ast_channel *c)
 				/* Something bad happened, or a hangup has been requested. */
 				if (option_debug)
 					ast_log(LOG_DEBUG, "Spawn extension (%s,%s,%d) exited non-zero on '%s'\n", c->context, c->exten, c->priority, c->name);
-				else if (option_verbose > 1)
+				if (option_verbose > 1)
 					ast_verbose( VERBOSE_PREFIX_2 "Spawn extension (%s, %s, %d) exited non-zero on '%s'\n", c->context, c->exten, c->priority, c->name);
 				break;
 			}
@@ -2882,49 +2875,44 @@ void ast_unregister_switch(struct ast_switch *sw)
 /*
  * Help for CLI commands ...
  */
-static char show_application_help[] =
-"Usage: show application <application> [<application> [<application> [...]]]\n"
-"       Describes a particular application.\n";
-
-static char show_functions_help[] =
-"Usage: show functions [like <text>]\n"
-"       List builtin functions, optionally only those matching a given string\n";
-
-static char show_function_help[] =
-"Usage: show function <function>\n"
-"       Describe a particular dialplan function.\n";
-
 static char show_applications_help[] =
-"Usage: show applications [{like|describing} <text>]\n"
+"Usage: core list applications [{like|describing} <text>]\n"
 "       List applications which are currently available.\n"
 "       If 'like', <text> will be a substring of the app name\n"
 "       If 'describing', <text> will be a substring of the description\n";
 
-static char show_dialplan_help[] =
-"Usage: show dialplan [exten@][context]\n"
-"       Show dialplan\n";
+static char show_functions_help[] =
+"Usage: core list functions [like <text>]\n"
+"       List builtin functions, optionally only those matching a given string\n";
 
 static char show_switches_help[] =
-"Usage: show switches\n"
-"       Show registered switches\n";
+"Usage: core list switches\n"
+"       List registered switches\n";
 
 static char show_hints_help[] =
-"Usage: show hints\n"
-"       Show registered hints\n";
+"Usage: core list hints\n"
+"       List registered hints\n";
 
 static char show_globals_help[] =
-"Usage: show globals\n"
-"       Show current global dialplan variables and their values\n";
+"Usage: core list globals\n"
+"       List current global dialplan variables and their values\n";
+
+static char show_application_help[] =
+"Usage: core show application <application> [<application> [<application> [...]]]\n"
+"       Describes a particular application.\n";
+
+static char show_function_help[] =
+"Usage: core show function <function>\n"
+"       Describe a particular dialplan function.\n";
+
+static char show_dialplan_help[] =
+"Usage: dialplan show [exten@][context]\n"
+"       Show dialplan\n";
 
 static char set_global_help[] =
-"Usage: set global <name> <value>\n"
+"Usage: core set global <name> <value>\n"
 "       Set global dialplan variable <name> to <value>\n";
 
-
-/*
- * IMPLEMENTATION OF CLI FUNCTIONS IS IN THE SAME ORDER AS COMMANDS HELPS
- *
- */
 
 /*
  * \brief 'show application' CLI command implementation functions ...
@@ -2960,7 +2948,7 @@ static int handle_show_application(int fd, int argc, char *argv[])
 	struct ast_app *a;
 	int app, no_registered_app = 1;
 
-	if (argc < 3)
+	if (argc < 4)
 		return RESULT_SHOWUSAGE;
 
 	/* ... go through all applications ... */
@@ -2968,7 +2956,7 @@ static int handle_show_application(int fd, int argc, char *argv[])
 	AST_LIST_TRAVERSE(&apps, a, list) {
 		/* ... compare this application name with all arguments given
 		 * to 'show application' command ... */
-		for (app = 2; app < argc; app++) {
+		for (app = 3; app < argc; app++) {
 			if (!strcasecmp(a->name, argv[app])) {
 				/* Maximum number of characters added by terminal coloring is 22 */
 				char infotitle[64 + AST_MAX_APP + 22], syntitle[40], destitle[40];
@@ -3079,9 +3067,6 @@ static int handle_show_switches(int fd, int argc, char *argv[])
 	return RESULT_SUCCESS;
 }
 
-/*
- * 'show applications' CLI command implementation functions ...
- */
 static int handle_show_applications(int fd, int argc, char *argv[])
 {
 	struct ast_app *a;
@@ -3097,14 +3082,14 @@ static int handle_show_applications(int fd, int argc, char *argv[])
 		return -1;
 	}
 
-	/* show applications like <keyword> */
-	if ((argc == 4) && (!strcmp(argv[2], "like"))) {
+	/* core list applications like <keyword> */
+	if ((argc == 5) && (!strcmp(argv[3], "like"))) {
 		like = 1;
-	} else if ((argc > 3) && (!strcmp(argv[2], "describing"))) {
+	} else if ((argc > 4) && (!strcmp(argv[3], "describing"))) {
 		describing = 1;
 	}
 
-	/* show applications describing <keyword1> [<keyword2>] [...] */
+	/* core list applications describing <keyword1> [<keyword2>] [...] */
 	if ((!like) && (!describing)) {
 		ast_cli(fd, "    -= Registered Asterisk Applications =-\n");
 	} else {
@@ -3115,7 +3100,7 @@ static int handle_show_applications(int fd, int argc, char *argv[])
 		int printapp = 0;
 		total_apps++;
 		if (like) {
-			if (strcasestr(a->name, argv[3])) {
+			if (strcasestr(a->name, argv[4])) {
 				printapp = 1;
 				total_match++;
 			}
@@ -3124,7 +3109,7 @@ static int handle_show_applications(int fd, int argc, char *argv[])
 				/* Match all words on command line */
 				int i;
 				printapp = 1;
-				for (i = 3; i < argc; i++) {
+				for (i = 4; i < argc; i++) {
 					if (!strcasestr(a->description, argv[i])) {
 						printapp = 0;
 					} else {
@@ -3155,7 +3140,7 @@ static char *complete_show_applications(const char *line, const char *word, int 
 {
 	static char* choices[] = { "like", "describing", NULL };
 
-	return (pos != 2) ? NULL : ast_cli_complete(word, choices, state);
+	return (pos != 3) ? NULL : ast_cli_complete(word, choices, state);
 }
 
 /*
@@ -3433,14 +3418,13 @@ static int handle_show_globals(int fd, int argc, char *argv[])
 	return RESULT_SUCCESS;
 }
 
-/*! \brief  CLI support for setting global variables */
 static int handle_set_global(int fd, int argc, char *argv[])
 {
-	if (argc != 4)
+	if (argc != 5)
 		return RESULT_SHOWUSAGE;
 
-	pbx_builtin_setvar_helper(NULL, argv[2], argv[3]);
-	ast_cli(fd, "\n    -- Global variable %s set to %s\n", argv[2], argv[3]);
+	pbx_builtin_setvar_helper(NULL, argv[3], argv[4]);
+	ast_cli(fd, "\n    -- Global variable %s set to %s\n", argv[3], argv[4]);
 
 	return RESULT_SUCCESS;
 }
@@ -3451,24 +3435,41 @@ static int handle_set_global(int fd, int argc, char *argv[])
  * CLI entries for upper commands ...
  */
 static struct ast_cli_entry pbx_cli[] = {
-	{ { "show", "applications", NULL }, handle_show_applications,
-	  "Shows registered dialplan applications", show_applications_help, complete_show_applications },
-	{ { "show", "functions", NULL }, handle_show_functions,
-	  "Shows registered dialplan functions", show_functions_help },
-	{ { "show" , "function", NULL }, handle_show_function,
-	  "Describe a specific dialplan function", show_function_help, complete_show_function },
-	{ { "show", "application", NULL }, handle_show_application,
-	  "Describe a specific dialplan application", show_application_help, complete_show_application },
-	{ { "show", "dialplan", NULL }, handle_show_dialplan,
-	  "Show dialplan", show_dialplan_help, complete_show_dialplan_context },
-	{ { "show", "switches", NULL },	handle_show_switches,
-	  "Show alternative switches", show_switches_help },
-	{ { "show", "hints", NULL }, handle_show_hints,
-	  "Show dialplan hints", show_hints_help },
-	{ { "show", "globals", NULL }, handle_show_globals,
-	  "Show global dialplan variables", show_globals_help },
-	{ { "set", "global", NULL }, handle_set_global,
-	  "Set global dialplan variable", set_global_help },
+	{ { "core", "list", "applications", NULL },
+	handle_show_applications, "Shows registered dialplan applications",
+	show_applications_help, complete_show_applications },
+
+	{ { "core", "list", "functions", NULL },
+	handle_show_functions, "Shows registered dialplan functions",
+	show_functions_help },
+
+	{ { "core", "list", "switches", NULL },
+	handle_show_switches, "Show alternative switches",
+	show_switches_help },
+
+	{ { "core", "list", "hints", NULL },
+	handle_show_hints, "Show dialplan hints",
+	show_hints_help },
+
+	{ { "core", "list", "globals", NULL },
+	handle_show_globals, "Show global dialplan variables",
+	show_globals_help },
+
+	{ { "core", "show" , "function", NULL },
+	handle_show_function, "Describe a specific dialplan function",
+	show_function_help, complete_show_function },
+
+	{ { "core", "show", "application", NULL },
+	handle_show_application, "Describe a specific dialplan application",
+	show_application_help, complete_show_application },
+
+	{ { "core", "set", "global", NULL },
+	handle_set_global, "Set global dialplan variable",
+	set_global_help },
+
+	{ { "dialplan", "show", NULL },
+	handle_show_dialplan, "Show dialplan",
+	show_dialplan_help, complete_show_dialplan_context },
 };
 
 int ast_unregister_application(const char *app)
@@ -3525,7 +3526,7 @@ static struct ast_context *__ast_context_create(struct ast_context **extcontexts
 		*local_contexts = tmp;
 		if (option_debug)
 			ast_log(LOG_DEBUG, "Registered context '%s'\n", tmp->name);
-		else if (option_verbose > 2)
+		if (option_verbose > 2)
 			ast_verbose( VERBOSE_PREFIX_3 "Registered extension context '%s'\n", tmp->name);
 	}
 
@@ -4499,7 +4500,8 @@ int ast_add_extension2(struct ast_context *con,
 			ast_log(LOG_DEBUG, "Added extension '%s' priority %d to %s\n",
 				tmp->exten, tmp->priority, con->name);
 		}
-	} else if (option_verbose > 2) {
+	}
+	if (option_verbose > 2) {
 		if (tmp->matchcid) {
 			ast_verbose( VERBOSE_PREFIX_3 "Added extension '%s' priority %d (CID match '%s')to %s\n",
 				tmp->exten, tmp->priority, tmp->cidmatch, con->name);
@@ -5284,6 +5286,7 @@ static int pbx_builtin_waitexten(struct ast_channel *chan, void *data)
 static int pbx_builtin_background(struct ast_channel *chan, void *data)
 {
 	int res = 0;
+	int mres = 0;
 	struct ast_flags flags = {0};
 	char *parse;
 	AST_DECLARE_APP_ARGS(args,
@@ -5293,8 +5296,10 @@ static int pbx_builtin_background(struct ast_channel *chan, void *data)
 		AST_APP_ARG(context);
 	);
 
-	if (ast_strlen_zero(data))
+	if (ast_strlen_zero(data)) {
 		ast_log(LOG_WARNING, "Background requires an argument (filename)\n");
+		return -1;
+	}
 
 	parse = ast_strdupa(data);
 
@@ -5318,7 +5323,7 @@ static int pbx_builtin_background(struct ast_channel *chan, void *data)
 	/* Answer if need be */
 	if (chan->_state != AST_STATE_UP) {
 		if (ast_test_flag(&flags, BACKGROUND_SKIP)) {
-			return 0;
+			goto done;
 		} else if (!ast_test_flag(&flags, BACKGROUND_NOANSWER)) {
 			res = ast_answer(chan);
 		}
@@ -5327,12 +5332,14 @@ static int pbx_builtin_background(struct ast_channel *chan, void *data)
 	if (!res) {
 		char *back = args.filename;
 		char *front;
+
 		ast_stopstream(chan);		/* Stop anything playing */
 		/* Stream the list of files */
 		while (!res && (front = strsep(&back, "&")) ) {
 			if ( (res = ast_streamfile(chan, front, args.lang)) ) {
 				ast_log(LOG_WARNING, "ast_streamfile failed on %s for %s\n", chan->name, (char*)data);
 				res = 0;
+				mres = 1;
 				break;
 			}
 			if (ast_test_flag(&flags, BACKGROUND_PLAYBACK)) {
@@ -5351,6 +5358,8 @@ static int pbx_builtin_background(struct ast_channel *chan, void *data)
 		chan->priority = 0;
 		res = 0;
 	}
+done:
+	pbx_builtin_setvar_helper(chan, "BACKGROUNDSTATUS", mres ? "FAILED" : "SUCCESS");
 	return res;
 }
 
@@ -5563,31 +5572,6 @@ int pbx_builtin_importvar(struct ast_channel *chan, void *data)
 	return(0);
 }
 
-/*! \todo XXX overwrites data ? */
-static int pbx_builtin_setglobalvar(struct ast_channel *chan, void *data)
-{
-	char *name;
-	char *stringp = data;
-	static int dep_warning = 0;
-
-	if (ast_strlen_zero(data)) {
-		ast_log(LOG_WARNING, "Ignoring, since there is no variable to set\n");
-		return 0;
-	}
-
-	name = strsep(&stringp, "=");
-
-	if (!dep_warning) {
-		dep_warning = 1;
-		ast_log(LOG_WARNING, "SetGlobalVar is deprecated.  Please use Set(GLOBAL(%s)=%s) instead.\n", name, stringp);
-	}
-
-	/*! \todo XXX watch out, leading whitespace ? */
-	pbx_builtin_setvar_helper(NULL, name, stringp);
-
-	return(0);
-}
-
 static int pbx_builtin_noop(struct ast_channel *chan, void *data)
 {
 	return 0;
@@ -5699,7 +5683,7 @@ int load_pbx(void)
 		ast_verbose( "Asterisk PBX Core Initializing\n");
 		ast_verbose( "Registering builtin applications:\n");
 	}
-	ast_cli_register_multiple(pbx_cli, sizeof(pbx_cli) / sizeof(pbx_cli[0]));
+	ast_cli_register_multiple(pbx_cli, sizeof(pbx_cli) / sizeof(struct ast_cli_entry));
 
 	/* Register builtin applications */
 	for (x=0; x<sizeof(builtins) / sizeof(struct pbx_builtin); x++) {

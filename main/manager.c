@@ -177,6 +177,20 @@ struct mansession {
 
 static AST_LIST_HEAD_STATIC(sessions, mansession);
 
+struct ast_manager_user {
+	char username[80];
+	char *secret;
+	char *deny;
+	char *permit;
+	char *read;
+	char *write;
+	unsigned int displayconnects:1;
+	int keep;
+	AST_LIST_ENTRY(ast_manager_user) list;
+};
+
+static AST_LIST_HEAD_STATIC(users, ast_manager_user);
+
 static struct manager_action *first_action = NULL;
 AST_MUTEX_DEFINE_STATIC(actionlock);
 
@@ -380,6 +394,18 @@ static char *html_translate(char *in)
 	return out;
 }
 
+
+
+static struct ast_manager_user *ast_get_manager_by_name_locked(const char *name)
+{
+	struct ast_manager_user *user = NULL;
+
+	AST_LIST_TRAVERSE(&users, user, list)
+		if (!strcasecmp(user->username, name))
+			break;
+	return user;
+}
+
 void astman_append(struct mansession *s, const char *fmt, ...)
 {
 	va_list ap;
@@ -423,6 +449,77 @@ static int handle_showmancmd(int fd, int argc, char *argv[])
 
 	return RESULT_SUCCESS;
 }
+
+static int handle_showmanager(int fd, int argc, char *argv[])
+{
+	struct ast_manager_user *user = NULL;
+
+	if (argc != 4)
+		return RESULT_SHOWUSAGE;
+
+	AST_LIST_LOCK(&users);
+
+	if (!(user = ast_get_manager_by_name_locked(argv[3]))) {
+		ast_cli(fd, "There is no manager called %s\n", argv[3]);
+		AST_LIST_UNLOCK(&users);
+		return -1;
+	}
+
+	ast_cli(fd,"\n");
+	ast_cli(fd,
+		"       username: %s\n"
+		"         secret: %s\n"
+		"           deny: %s\n"
+		"         permit: %s\n"
+		"           read: %s\n"
+		"          write: %s\n"
+		"displayconnects: %s\n",
+		(user->username ? user->username : "(N/A)"),
+		(user->secret ? user->secret : "(N/A)"),
+		(user->deny ? user->deny : "(N/A)"),
+		(user->permit ? user->permit : "(N/A)"),
+		(user->read ? user->read : "(N/A)"),
+		(user->write ? user->write : "(N/A)"),
+		(user->displayconnects ? "yes" : "no"));
+
+	AST_LIST_UNLOCK(&users);
+
+	return RESULT_SUCCESS;
+}
+
+
+static int handle_showmanagers(int fd, int argc, char *argv[])
+{
+	struct ast_manager_user *user = NULL;
+	int count_amu = 0;
+
+	if (argc != 3)
+		return RESULT_SHOWUSAGE;
+
+	AST_LIST_LOCK(&users);
+
+	/* If there are no users, print out something along those lines */
+	if (AST_LIST_EMPTY(&users)) {
+		ast_cli(fd, "There are no manager users.\n");
+		AST_LIST_UNLOCK(&users);
+		return RESULT_SUCCESS;
+	}
+
+	ast_cli(fd, "\nusername\n--------\n");
+
+	AST_LIST_TRAVERSE(&users, user, list) {
+		ast_cli(fd, "%s\n", user->username);
+		count_amu++;
+	}
+
+	AST_LIST_UNLOCK(&users);
+
+	ast_cli(fd,"-------------------\n");
+	ast_cli(fd,"%d manager users configured.\n", count_amu);
+
+	return RESULT_SUCCESS;
+}
+
 
 /*! \brief  CLI command 
 	Should change to "manager show commands" */
@@ -478,38 +575,57 @@ static int handle_showmaneventq(int fd, int argc, char *argv[])
 }
 
 static char showmancmd_help[] = 
-"Usage: show manager command <actionname>\n"
+"Usage: manager show command <actionname>\n"
 "	Shows the detailed description for a specific Asterisk manager interface command.\n";
 
 static char showmancmds_help[] = 
-"Usage: show manager commands\n"
+"Usage: manager list commands\n"
 "	Prints a listing of all the available Asterisk manager interface commands.\n";
 
 static char showmanconn_help[] = 
-"Usage: show manager connected\n"
+"Usage: manager list connected\n"
 "	Prints a listing of the users that are currently connected to the\n"
 "Asterisk manager interface.\n";
 
 static char showmaneventq_help[] = 
-"Usage: show manager eventq\n"
+"Usage: manager list eventq\n"
 "	Prints a listing of all events pending in the Asterisk manger\n"
 "event queue.\n";
 
-static struct ast_cli_entry show_mancmd_cli =
-	{ { "show", "manager", "command", NULL },
-	handle_showmancmd, "Show a manager interface command", showmancmd_help, complete_show_mancmd };
+static char showmanagers_help[] =
+"Usage: manager list users\n"
+"       Prints a listing of all managers that are currently configured on that\n"
+" system.\n";
 
-static struct ast_cli_entry show_mancmds_cli =
-	{ { "show", "manager", "commands", NULL },
-	handle_showmancmds, "List manager interface commands", showmancmds_help };
+static char showmanager_help[] =
+" Usage: manager show user <user>\n"
+"        Display all information related to the manager user specified.\n";
 
-static struct ast_cli_entry show_manconn_cli =
-	{ { "show", "manager", "connected", NULL },
-	handle_showmanconn, "Show connected manager interface users", showmanconn_help };
+static struct ast_cli_entry cli_manager[] = {
+	{ { "manager", "show", "command", NULL },
+	handle_showmancmd, "Show a manager interface command",
+	showmancmd_help, complete_show_mancmd },
 
-static struct ast_cli_entry show_maneventq_cli =
-	{ { "show", "manager", "eventq", NULL },
-	handle_showmaneventq, "Show manager interface queued events", showmaneventq_help };
+	{ { "manager", "list", "commands", NULL },
+	handle_showmancmds, "List manager interface commands",
+	showmancmds_help },
+
+	{ { "manager", "list", "connected", NULL },
+	handle_showmanconn, "List connected manager interface users",
+	showmanconn_help },
+
+	{ { "manager", "list", "eventq", NULL },
+	handle_showmaneventq, "List manager interface queued events",
+	showmaneventq_help },
+
+	{ { "manager", "list", "users", NULL },
+	handle_showmanagers, "List configured manager users",
+	showmanagers_help, NULL, NULL },
+
+	{ { "manager", "show", "user", NULL },
+	handle_showmanager, "Display information on a specific manager user",
+	showmanager_help, NULL, NULL },
+};
 
 static void unuse_eventqent(struct eventqent *e)
 {
@@ -640,9 +756,9 @@ void astman_send_ack(struct mansession *s, struct message *m, char *msg)
    ast_instring("this|that|more","this",',') == 1;
 
    feel free to move this to app.c -anthm */
-static int ast_instring(char *bigstr, char *smallstr, char delim) 
+static int ast_instring(const char *bigstr, const char *smallstr, char delim) 
 {
-	char *val = bigstr, *next;
+	const char *val = bigstr, *next;
 
 	do {
 		if ((next = strchr(val, delim))) {
@@ -658,7 +774,7 @@ static int ast_instring(char *bigstr, char *smallstr, char delim)
 	return 0;
 }
 
-static int get_perm(char *instr)
+static int get_perm(const char *instr)
 {
 	int x = 0, ret = 0;
 
@@ -1294,7 +1410,6 @@ static int action_status(struct mansession *s, struct message *m)
 			"Event: Status\r\n"
 			"Privilege: Call\r\n"
 			"Channel: %s\r\n"
-			"CallerID: %s\r\n"		/* This parameter is deprecated and will be removed post-1.4 */
 			"CallerIDNum: %s\r\n"
 			"CallerIDName: %s\r\n"
 			"Account: %s\r\n"
@@ -1309,7 +1424,6 @@ static int action_status(struct mansession *s, struct message *m)
 			"\r\n",
 			c->name, 
 			S_OR(c->cid.cid_num, "<unknown>"), 
-			S_OR(c->cid.cid_num, "<unknown>"), 
 			S_OR(c->cid.cid_name, "<unknown>"), 
 			c->accountcode,
 			ast_state2str(c->_state), c->context,
@@ -1319,7 +1433,6 @@ static int action_status(struct mansession *s, struct message *m)
 			"Event: Status\r\n"
 			"Privilege: Call\r\n"
 			"Channel: %s\r\n"
-			"CallerID: %s\r\n"		/* This parameter is deprecated and will be removed post-1.4 */
 			"CallerIDNum: %s\r\n"
 			"CallerIDName: %s\r\n"
 			"Account: %s\r\n"
@@ -1329,7 +1442,6 @@ static int action_status(struct mansession *s, struct message *m)
 			"%s"
 			"\r\n",
 			c->name, 
-			S_OR(c->cid.cid_num, "<unknown>"), 
 			S_OR(c->cid.cid_num, "<unknown>"), 
 			S_OR(c->cid.cid_name, "<unknown>"), 
 			c->accountcode,
@@ -1459,12 +1571,10 @@ static void *fast_originate(void *data)
 		"Exten: %s\r\n"
 		"Reason: %d\r\n"
 		"Uniqueid: %s\r\n"
-		"CallerID: %s\r\n"		/* This parameter is deprecated and will be removed post-1.4 */
 		"CallerIDNum: %s\r\n"
 		"CallerIDName: %s\r\n",
 		in->idtext, in->tech, in->data, in->context, in->exten, reason, 
 		chan ? chan->uniqueid : "<null>",
-		S_OR(in->cid_num, "<unknown>"),
 		S_OR(in->cid_num, "<unknown>"),
 		S_OR(in->cid_name, "<unknown>")
 		);
@@ -2449,14 +2559,17 @@ static int webregged = 0;
 
 int init_manager(void)
 {
-	struct ast_config *cfg;
-	char *val;
+	struct ast_config *cfg = NULL;
+	const char *val;
+	char *cat = NULL;
 	int oldportno = portno;
 	static struct sockaddr_in ba;
 	int x = 1;
 	int flags;
 	int webenabled = 0;
 	int newhttptimeout = 60;
+	struct ast_manager_user *user = NULL;
+
 	if (!registered) {
 		/* Register default actions */
 		ast_manager_register2("Ping", 0, action_ping, "Keepalive command", mandescr_ping);
@@ -2479,10 +2592,7 @@ int init_manager(void)
 		ast_manager_register2("UserEvent", EVENT_FLAG_USER, action_userevent, "Send an arbitrary event", mandescr_userevent);
 		ast_manager_register2("WaitEvent", 0, action_waitevent, "Wait for an event to occur", mandescr_waitevent);
 
-		ast_cli_register(&show_mancmd_cli);
-		ast_cli_register(&show_mancmds_cli);
-		ast_cli_register(&show_manconn_cli);
-		ast_cli_register(&show_maneventq_cli);
+		ast_cli_register_multiple(cli_manager, sizeof(cli_manager) / sizeof(struct ast_cli_entry));
 		ast_extension_state_add(NULL, NULL, manager_state_cb, NULL);
 		registered = 1;
 		/* Append placeholder event so master_eventq never runs dry */
@@ -2544,6 +2654,83 @@ int init_manager(void)
 		ast_log(LOG_WARNING, "Unable to change management port / enabled\n");
 #endif
 	}
+
+	AST_LIST_LOCK(&users);
+
+	while ((cat = ast_category_browse(cfg, cat))) {
+		struct ast_variable *var = NULL;
+
+		if (!strcasecmp(cat, "general"))
+			continue;
+
+		/* Look for an existing entry, if none found - create one and add it to the list */
+		if (!(user = ast_get_manager_by_name_locked(cat))) {
+			if (!(user = ast_calloc(1, sizeof(*user))))
+				break;
+			/* Copy name over */
+			ast_copy_string(user->username, cat, sizeof(user->username));
+			/* Insert into list */
+			AST_LIST_INSERT_TAIL(&users, user, list);
+		}
+
+		/* Make sure we keep this user and don't destroy it during cleanup */
+		user->keep = 1;
+
+		var = ast_variable_browse(cfg, cat);
+		while (var) {
+			if (!strcasecmp(var->name, "secret")) {
+				if (user->secret)
+					free(user->secret);
+				user->secret = ast_strdup(var->value);
+			} else if (!strcasecmp(var->name, "deny") ) {
+				if (user->deny)
+					free(user->deny);
+				user->deny = ast_strdup(var->value);
+			} else if (!strcasecmp(var->name, "permit") ) {
+				if (user->permit)
+					free(user->permit);
+				user->permit = ast_strdup(var->value);
+			}  else if (!strcasecmp(var->name, "read") ) {
+				if (user->read)
+					free(user->read);
+				user->read = ast_strdup(var->value);
+			}  else if (!strcasecmp(var->name, "write") ) {
+				if (user->write)
+					free(user->write);
+				user->write = ast_strdup(var->value);
+			}  else if (!strcasecmp(var->name, "displayconnects") )
+				user->displayconnects = ast_true(var->value);
+			else
+				ast_log(LOG_DEBUG, "%s is an unknown option.\n", var->name);
+			var = var->next;
+		}
+	}
+
+	/* Perform cleanup - essentially prune out old users that no longer exist */
+	AST_LIST_TRAVERSE_SAFE_BEGIN(&users, user, list) {
+		if (user->keep) {
+			user->keep = 0;
+			continue;
+		}
+		/* We do not need to keep this user so take them out of the list */
+		AST_LIST_REMOVE_CURRENT(&users, list);
+		/* Free their memory now */
+		if (user->secret)
+			free(user->secret);
+		if (user->deny)
+			free(user->deny);
+		if (user->permit)
+			free(user->permit);
+		if (user->read)
+			free(user->read);
+		if (user->write)
+			free(user->write);
+		free(user);
+	}
+	AST_LIST_TRAVERSE_SAFE_END
+
+	AST_LIST_UNLOCK(&users);
+
 	ast_config_destroy(cfg);
 	
 	if (webenabled && enabled) {
