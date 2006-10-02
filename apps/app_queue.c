@@ -1659,7 +1659,7 @@ static int ring_entry(struct queue_ent *qe, struct callattempt *tmp, int *busies
 		manager_event(EVENT_FLAG_AGENT, "AgentCalled",
 					"AgentCalled: %s\r\n"
 					"ChannelCalling: %s\r\n"
-					"CallerID: %s\r\n"
+					"CallerIDNum: %s\r\n"
 					"CallerIDName: %s\r\n"
 					"Context: %s\r\n"
 					"Extension: %s\r\n"
@@ -2580,8 +2580,10 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 				ast_log(LOG_DEBUG, "app_queue: sendurl=%s.\n", url);
 			ast_channel_sendurl(peer, url);
 		}
-		if (qe->parent->setinterfacevar)
+		if (qe->parent->setinterfacevar) {
 				pbx_builtin_setvar_helper(qe->chan, "MEMBERINTERFACE", member->interface);
+				pbx_builtin_setvar_helper(qe->chan, "MEMBERNAME", member->membername);
+		}
 		if (!ast_strlen_zero(agi)) {
 			if (option_debug)
 				ast_log(LOG_DEBUG, "app_queue: agi=%s.\n", agi);
@@ -4131,7 +4133,7 @@ static int manager_queues_status(struct mansession *s, struct message *m)
 					"Queue: %s\r\n"
 					"Position: %d\r\n"
 					"Channel: %s\r\n"
-					"CallerID: %s\r\n"
+					"CallerIDNum: %s\r\n"
 					"CallerIDName: %s\r\n"
 					"Wait: %ld\r\n"
 					"%s"
