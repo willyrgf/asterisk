@@ -3807,11 +3807,15 @@ static int reload_queues(void)
 				}
 
 				/* Free remaining members marked as delme */
-				for (prev = NULL, cur = q->members, next = cur ? cur->next : NULL;
+				for (prev = NULL, cur = q->members;
 				     cur;
-				     cur = next, next = cur ? cur->next : NULL) {
-					if (!cur->delme)
+				     cur = next) {
+					next = cur->next;
+
+					if (!cur->delme) {
+						prev = cur;
 						continue;
+					}
 
 					if (prev)
 						prev->next = next;
@@ -4107,7 +4111,7 @@ static int manager_queues_status(struct mansession *s, struct message *m)
 			astman_append(s, "Event: QueueParams\r\n"
 				"Queue: %s\r\n"
 				"Max: %d\r\n"
-				"Strat: %s\r\n"
+				"Strategy: %s\r\n"
 				"Calls: %d\r\n"
 				"Holdtime: %d\r\n"
 				"Completed: %d\r\n"
