@@ -37,11 +37,17 @@ AC_SUBST([$1_INCLUDE])
 AC_SUBST([PBX_$1])
 ])
 
+# Check for existence of a given package ($1), looking up a function
+# in a library, or, if no function is supplied, only check for the
+# existence of the header files.
+# Only check if PBX_$1 != 1, and set PBX_$1=1 and HAVE_$1 if found.
+# Should be called after AST_EXT_LIB_SETUP($1, ...)
+
 # AST_EXT_LIB_CHECK([package symbol name], [package library name], [function to check], [package header], [additional LIB data])
 
 AC_DEFUN([AST_EXT_LIB_CHECK],
 [
-if test "${USE_$1}" != "no"; then
+if test "x${PBX_$1}" != "x1" -a "${USE_$1}" != "no"; then
    pbxlibdir=""
    if test "x${$1_DIR}" != "x"; then
       if test -d ${$1_DIR}/lib; then
@@ -50,7 +56,12 @@ if test "${USE_$1}" != "no"; then
       	 pbxlibdir="-L${$1_DIR}"
       fi
    fi
-   AC_CHECK_LIB([$2], [$3], [AST_$1_FOUND=yes], [AST_$1_FOUND=no], ${pbxlibdir} $5)
+   pbxfuncname="$3"
+   if test "x${pbxfuncname}" = "x" ; then   # empty lib, assume only headers
+      AST_$1_FOUND=yes
+   else
+      AC_CHECK_LIB([$2], [${pbxfuncname}], [AST_$1_FOUND=yes], [AST_$1_FOUND=no], ${pbxlibdir} $5)
+   fi
 
    if test "${AST_$1_FOUND}" = "yes"; then
       $1_LIB="-l$2 $5"
@@ -67,8 +78,7 @@ if test "${USE_$1}" != "no"; then
 	 fi
       fi
       if test "x${$1_HEADER_FOUND}" = "x0" ; then
-         if test ! -z "${$1_MANDATORY}" ;
-         then
+         if test ! -z "${$1_MANDATORY}" ; then
             AC_MSG_NOTICE( ***)
             AC_MSG_NOTICE( *** It appears that you do not have the $2 development package installed.)
             AC_MSG_NOTICE( *** Please install it to include ${$1_DESCRIP} support, or re-run configure)
@@ -77,13 +87,14 @@ if test "${USE_$1}" != "no"; then
          fi
          $1_LIB=""
          $1_INCLUDE=""
-         PBX_$1=0
       else
+         if test "x${pbxfuncname}" = "x" ; then		# only checking headers -> no library
+	    $1_LIB=""
+	 fi
          PBX_$1=1
          AC_DEFINE_UNQUOTED([HAVE_$1], 1, [Define to indicate the ${$1_DESCRIP} library])
       fi
-   elif test ! -z "${$1_MANDATORY}";
-   then
+   elif test ! -z "${$1_MANDATORY}"; then
       AC_MSG_NOTICE(***)
       AC_MSG_NOTICE(*** The ${$1_DESCRIP} installation on this system appears to be broken.)
       AC_MSG_NOTICE(*** Either correct the installation, or run configure)
