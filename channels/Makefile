@@ -62,6 +62,7 @@ include $(ASTTOPDIR)/Makefile.moddir_rules
 clean::
 	rm -f busy.h ringtone.h gentone
 	$(MAKE) -C misdn clean
+	$(MAKE) -C sip3 clean
 
 ifneq ($(wildcard h323/Makefile.ast),)
   include h323/Makefile.ast
@@ -79,6 +80,9 @@ h323/libchanh323.a h323/Makefile.ast:
 	$(CMD_PREFIX) echo "***************************************************************"
 	$(CMD_PREFIX) exit 1
 endif
+
+sip3/libastsip3.a:
+	$(CMD_PREFIX) $(MAKE) -C sip3
 
 gentone: gentone.c
 	$(ECHO_PREFIX) echo "   [LD] $^ -> $@"
@@ -112,3 +116,5 @@ chan_misdn.o: ASTCFLAGS+=-Imisdn
 misdn_config.o: ASTCFLAGS+=-Imisdn 
 
 $(if $(filter chan_misdn,$(EMBEDDED_MODS)),modules.link,chan_misdn.so): chan_misdn.o misdn_config.o misdn/isdn_lib.o misdn/isdn_msg_parser.o
+
+chan_sip3.o: ASTCFLAGS+=-Isip3
