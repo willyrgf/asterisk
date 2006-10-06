@@ -862,11 +862,13 @@ static int authenticate(struct mansession *s, struct message *m)
 	cfg = ast_config_load("manager.conf");
 	if (!cfg)
 		return -1;
-	cat = ast_category_browse(cfg, NULL);
-	while (cat) {
-		if (strcasecmp(cat, "general")) {
-			/* This is a user */
-			if (!strcasecmp(cat, user)) {
+	cat = NULL;
+	while ( (cat = ast_category_browse(cfg, cat)) ) {
+		if (!strcasecmp(cat, "general") || strcasecmp(cat, user))
+			continue;	/* skip 'general' and non-matching sections */
+
+		/* XXX fix indentation */
+		{
 				struct ast_variable *v;
 				struct ast_ha *ha = NULL;
 				char *password = NULL;
@@ -929,9 +931,7 @@ static int authenticate(struct mansession *s, struct message *m)
 					ast_config_destroy(cfg);
 					return -1;
 				}	
-			}
 		}
-		cat = ast_category_browse(cfg, cat);
 	}
 	if (cat) {
 		ast_copy_string(s->username, cat, sizeof(s->username));
@@ -2438,7 +2438,7 @@ static char *generic_http_callback(int format, struct sockaddr_in *requestor, co
 	ast_mutex_unlock(&s->__lock);
 	
 	memset(&m, 0, sizeof(m));
-	if (s) {
+	{
 		char tmp[80];
 		ast_build_string(&c, &len, "Content-type: text/%s\r\n", contenttype[format]);
 		sprintf(tmp, "%08lx", s->managerid);
@@ -2496,9 +2496,6 @@ static char *generic_http_callback(int format, struct sockaddr_in *requestor, co
 			ast_build_string(&c, &len, "</ajax-response>\n");
 		} else if (format == FORMAT_HTML)
 			ast_build_string(&c, &len, "</table></body>\r\n");
-	} else {
-		*status = 500;
-		*title = strdup("Server Error");
 	}
 	ast_mutex_lock(&s->__lock);
 	if (s->needdestroy) {
