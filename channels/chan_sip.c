@@ -6283,7 +6283,7 @@ static void extract_uri(struct sip_pvt *p, struct sip_request *req)
 static void build_contact(struct sip_pvt *p)
 {
 	/* Construct Contact: header */
-	if (ourport != 5060)	/* Needs to be 5060, according to the RFC */
+	if (ourport != DEFAULT_SIP_PORT)	/* Needs to be 5060, according to the RFC */
 		ast_string_field_build(p, our_contact, "<sip:%s%s%s:%d>", p->exten, ast_strlen_zero(p->exten) ? "" : "@", ast_inet_ntoa(p->ourip), ourport);
 	else
 		ast_string_field_build(p, our_contact, "<sip:%s%s%s>", p->exten, ast_strlen_zero(p->exten) ? "" : "@", ast_inet_ntoa(p->ourip));
@@ -6442,7 +6442,7 @@ static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmetho
 		l = tmp2;
 	}
 
-	if ((ourport != 5060) && ast_strlen_zero(p->fromdomain))	/* Needs to be 5060 */
+	if (ourport != DEFAULT_SIP_PORT && ast_strlen_zero(p->fromdomain))	/* Needs to be 5060 */
 		snprintf(from, sizeof(from), "\"%s\" <sip:%s@%s:%d>;tag=%s", n, l, S_OR(p->fromdomain, ast_inet_ntoa(p->ourip)), ourport, p->tag);
 	else
 		snprintf(from, sizeof(from), "\"%s\" <sip:%s@%s>;tag=%s", n, l, S_OR(p->fromdomain, ast_inet_ntoa(p->ourip)), p->tag);
@@ -6463,7 +6463,7 @@ static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmetho
 			ast_build_string(&invite, &invite_max, "%s@", n);
 		}
 		ast_build_string(&invite, &invite_max, "%s", p->tohost);
-		if (ntohs(p->sa.sin_port) != 5060)		/* Needs to be 5060 */
+		if (ntohs(p->sa.sin_port) != DEFAULT_SIP_PORT)		/* Needs to be 5060 */
 			ast_build_string(&invite, &invite_max, ":%d", ntohs(p->sa.sin_port));
 		ast_build_string(&invite, &invite_max, "%s", urioptions);
 	}
@@ -11766,6 +11766,18 @@ static int handle_response_peerpoke(struct sip_pvt *p, int resp, struct sip_requ
 	return 1;
 }
 
+/*! \brief Immediately stop RTP, VRTP and UDPTL as applicable */
+static void stop_data_flows(struct sip_pvt *p)
+{
+	/* Immediately stop RTP, VRTP and UDPTL as applicable */
+	if (p->rtp)
+		ast_rtp_stop(p->rtp);
+	if (p->vrtp)
+		ast_rtp_stop(p->vrtp);
+	if (p->udptl)
+		ast_udptl_stop(p->udptl);
+}
+
 /*! \brief Handle SIP response in dialogue */
 /* XXX only called by handle_request */
 static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_request *req, int ignore, int seqno)
@@ -11955,18 +11967,9 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 				if ((option_verbose > 2) && (resp != 487))
 					ast_verbose(VERBOSE_PREFIX_3 "Got SIP response %d \"%s\" back from %s\n", resp, rest, ast_inet_ntoa(p->sa.sin_addr));
 				ast_set_flag(&p->flags[0], SIP_ALREADYGONE);	
-				if (p->rtp) {
-					/* Immediately stop RTP */
-					ast_rtp_stop(p->rtp);
-				}
-				if (p->vrtp) {
-					/* Immediately stop VRTP */
-					ast_rtp_stop(p->vrtp);
-				}
-				if (p->udptl) {
-					/* Immediately stop UDPTL */
-					ast_udptl_stop(p->udptl);
-				}
+	
+				stop_data_flows(p); /* Immediately stop RTP, VRTP and UDPTL as applicable */
+
 				/* XXX Locking issues?? XXX */
 				switch(resp) {
 				case 300: /* Multiple Choices */
@@ -13696,18 +13699,8 @@ static int handle_request_cancel(struct sip_pvt *p, struct sip_request *req)
 			ast_log(LOG_DEBUG, "Got CANCEL on an answered call. Ignoring... \n");
 		return 0;
 	}
-	if (p->rtp) {
-		/* Immediately stop RTP */
-		ast_rtp_stop(p->rtp);
-	}
-	if (p->vrtp) {
-		/* Immediately stop VRTP */
-		ast_rtp_stop(p->vrtp);
-	}
-	if (p->udptl) {
-		/* Immediately stop UDPTL */
-		ast_udptl_stop(p->udptl);
-	}
+	stop_data_flows(p); /* Immediately stop RTP, VRTP and UDPTL as applicable */
+
 	if (p->owner)
 		ast_queue_hangup(p->owner);
 	else
@@ -13728,7 +13721,6 @@ static int handle_request_bye(struct sip_pvt *p, struct sip_request *req)
 	struct ast_channel *c=NULL;
 	int res;
 	struct ast_channel *bridged_to;
-	char *audioqos = NULL, *videoqos = NULL;
 	
 	if (p->pendinginvite && !ast_test_flag(&p->flags[0], SIP_OUTGOING) && !ast_test_flag(req, SIP_PKT_IGNORE))
 		transmit_response_reliable(p, "487 Request Terminated", &p->initreq);
@@ -13737,35 +13729,27 @@ static int handle_request_bye(struct sip_pvt *p, struct sip_request *req)
 	check_via(p, req);
 	ast_set_flag(&p->flags[0], SIP_ALREADYGONE);	
 
-	if (p->rtp)
-		audioqos = ast_rtp_get_quality(p->rtp);
-	if (p->vrtp)
-		videoqos = ast_rtp_get_quality(p->vrtp);
-
 	/* Get RTCP quality before end of call */
-	if (recordhistory) {
-		if (p->rtp)
-			append_history(p, "RTCPaudio", "Quality:%s", audioqos);
-		if (p->vrtp)
-			append_history(p, "RTCPvideo", "Quality:%s", videoqos);
+	if (recordhistory || p->owner) {
+		char *audioqos, *videoqos;
+		if (p->rtp) {
+			audioqos = ast_rtp_get_quality(p->rtp);
+			if (recordhistory)
+				append_history(p, "RTCPaudio", "Quality:%s", audioqos);
+			if (p->owner)
+				pbx_builtin_setvar_helper(p->owner, "RTPAUDIOQOS", audioqos);
+		}
+		if (p->vrtp) {
+			videoqos = ast_rtp_get_quality(p->vrtp);
+			if (recordhistory)
+				append_history(p, "RTCPvideo", "Quality:%s", videoqos);
+			if (p->owner)
+				pbx_builtin_setvar_helper(p->owner, "RTPVIDEOQOS", videoqos);
+		}
 	}
 
-	if (p->rtp) {
-		if (p->owner)
-			pbx_builtin_setvar_helper(p->owner, "RTPAUDIOQOS", audioqos);
-		/* Immediately stop RTP */
-		ast_rtp_stop(p->rtp);
-	}
-	if (p->vrtp) {
-		if (p->owner)
-			pbx_builtin_setvar_helper(p->owner, "RTPVIDEOQOS", videoqos);
-		/* Immediately stop VRTP */
-		ast_rtp_stop(p->vrtp);
-	}
-	if (p->udptl) {
-		/* Immediately stop UDPTL */
-		ast_udptl_stop(p->udptl);
-	}
+	stop_data_flows(p); /* Immediately stop RTP, VRTP and UDPTL as applicable */
+
 	if (!ast_strlen_zero(get_header(req, "Also"))) {
 		ast_log(LOG_NOTICE, "Client '%s' using deprecated BYE/Also transfer method.  Ask vendor to support REFER instead\n",
 			ast_inet_ntoa(p->recv.sin_addr));
