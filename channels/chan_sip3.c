@@ -186,55 +186,18 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/localtime.h"
 #include "asterisk/abstract_jb.h"
 #include "asterisk/compiler.h"
+#include "sip3/sip3.h"
 
 #define SIPLABEL	sip3
-
-#ifndef FALSE
-#define FALSE    0
-#endif
-
-#ifndef TRUE
-#define TRUE     1
-#endif
-
-#define VIDEO_CODEC_MASK        0x1fc0000 /*!< Video codecs from H.261 thru AST_FORMAT_MAX_VIDEO */
-#ifndef IPTOS_MINCOST
-#define IPTOS_MINCOST           0x02
-#endif
-
-/* #define VOCAL_DATA_HACK */
-
-#define DEFAULT_DEFAULT_EXPIRY  120
-#define DEFAULT_MIN_EXPIRY      60
-#define DEFAULT_MAX_EXPIRY      3600
-#define DEFAULT_REGISTRATION_TIMEOUT 20
-#define DEFAULT_MAX_FORWARDS    "70"
-
-/* guard limit must be larger than guard secs */
-/* guard min must be < 1000, and should be >= 250 */
-#define EXPIRY_GUARD_SECS       15                /*!< How long before expiry do we reregister */
-#define EXPIRY_GUARD_LIMIT      30                /*!< Below here, we use EXPIRY_GUARD_PCT instead of 
-                                                   EXPIRY_GUARD_SECS */
-#define EXPIRY_GUARD_MIN        500                /*!< This is the minimum guard time applied. If 
-                                                   GUARD_PCT turns out to be lower than this, it 
-                                                   will use this time instead.
-                                                   This is in milliseconds. */
-#define EXPIRY_GUARD_PCT        0.20                /*!< Percentage of expires timeout to use when 
-                                                    below EXPIRY_GUARD_LIMIT */
-#define DEFAULT_EXPIRY 900                          /*!< Expire slowly */
 
 static int min_expiry = DEFAULT_MIN_EXPIRY;        /*!< Minimum accepted registration time */
 static int max_expiry = DEFAULT_MAX_EXPIRY;        /*!< Maximum accepted registration time */
 static int default_expiry = DEFAULT_DEFAULT_EXPIRY;
 static int expiry = DEFAULT_EXPIRY;
 
-#ifndef MAX
-#define MAX(a,b) ((a) > (b) ? (a) : (b))
-#endif
-
 #define CALLERID_UNKNOWN        "Unknown"
 
-#define DEFAULT_MAXMS                2000             /*!< Qualification: Must be faster than 2 seconds by default */
+#define DEFAULT_QUALIFY_MAXMS                2000             /*!< Qualification: Must be faster than 2 seconds by default */
 #define DEFAULT_QUALIFY_FREQ_OK      60 * 1000        /*!< Qualification: How often to check for the host to be up */
 			
 #define DEFAULT_QUALIFY_FREQ_NOTOK   10 * 1000        /*!< Qualification: How often to check, if the host is down... */
@@ -14643,7 +14606,7 @@ static int sip_poke_peer(struct sip_peer *peer)
 	transmit_invite(p, SIP_OPTIONS, 0, 2);
 #endif
 	gettimeofday(&peer->ps, NULL);
-	peer->pokeexpire = ast_sched_add(sched, DEFAULT_MAXMS * 2, sip_poke_noanswer, peer);
+	peer->pokeexpire = ast_sched_add(sched, DEFAULT_QUALIFY_MAXMS * 2, sip_poke_noanswer, peer);
 
 	return 0;
 }
@@ -15486,7 +15449,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 			if (!strcasecmp(v->value, "no")) {
 				peer->maxms = 0;
 			} else if (!strcasecmp(v->value, "yes")) {
-				peer->maxms = DEFAULT_MAXMS;
+				peer->maxms = DEFAULT_QUALIFY_MAXMS;
 			} else if (sscanf(v->value, "%d", &peer->maxms) != 1) {
 				ast_log(LOG_WARNING, "Qualification of peer '%s' should be 'yes', 'no', or a number of milliseconds at line %d of sip.conf\n", peer->name, v->lineno);
 				peer->maxms = 0;
@@ -15860,7 +15823,7 @@ static int reload_config(enum channelreloadreason reason)
 			if (!strcasecmp(v->value, "no")) {
 				default_qualify = 0;
 			} else if (!strcasecmp(v->value, "yes")) {
-				default_qualify = DEFAULT_MAXMS;
+				default_qualify = DEFAULT_QUALIFY_MAXMS;
 			} else if (sscanf(v->value, "%d", &default_qualify) != 1) {
 				ast_log(LOG_WARNING, "Qualification default should be 'yes', 'no', or a number of milliseconds at line %d of sip.conf\n", v->lineno);
 				default_qualify = 0;
