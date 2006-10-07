@@ -194,8 +194,9 @@ static int expiry = DEFAULT_EXPIRY;
 #define CALLERID_UNKNOWN        "Unknown"
 
 #define DEFAULT_MAXMS                2000             /*!< Qualification: Must be faster than 2 seconds by default */
-#define DEFAULT_FREQ_OK              60 * 1000        /*!< Qualification: How often to check for the host to be up */
-#define DEFAULT_FREQ_NOTOK           10 * 1000        /*!< Qualification: How often to check, if the host is down... */
+#define DEFAULT_QUALIFY_FREQ_OK      60 * 1000        /*!< Qualification: How often to check for the host to be up */
+			
+#define DEFAULT_QUALIFY_FREQ_NOTOK   10 * 1000        /*!< Qualification: How often to check, if the host is down... */
 
 #define DEFAULT_RETRANS              1000             /*!< How frequently to retransmit Default: 2 * 500 ms in RFC 3261 */
 #define MAX_RETRANS                  6                /*!< Try only 6 times for retransmissions, a total of 7 transmissions */
@@ -490,13 +491,15 @@ static const struct cfsip_options {
 
 /* Default setttings are used as a channel setting and as a default when
    configuring devices */
+static int default_qualifycheck_ok;	/*!< Default qualify time when status is ok */
+static int default_qualifycheck_notok;	/*!< Default qualify time when statusis not ok */
+static int default_qualify;		/*!< Default Qualify= setting */
 static char default_context[AST_MAX_CONTEXT];
 static char default_subscribecontext[AST_MAX_CONTEXT];
 static char default_language[MAX_LANGUAGE];
 static char default_callerid[AST_MAX_EXTENSION];
 static char default_fromdomain[AST_MAX_EXTENSION];
 static char default_notifymime[AST_MAX_EXTENSION];
-static int default_qualify;		/*!< Default Qualify= setting */
 static char default_vmexten[AST_MAX_EXTENSION];
 static char default_mohinterpret[MAX_MUSICCLASS];  /*!< Global setting for moh class to use when put on hold */
 static char default_mohsuggest[MAX_MUSICCLASS];	   /*!< Global setting for moh class to suggest when putting 
@@ -9966,6 +9969,8 @@ static int sip_show_settings(int fd, int argc, char *argv[])
 	ast_cli(fd, "  Nat:                    %s\n", nat2str(ast_test_flag(&global_flags[0], SIP_NAT)));
 	ast_cli(fd, "  DTMF:                   %s\n", dtmfmode2str(ast_test_flag(&global_flags[0], SIP_DTMF)));
 	ast_cli(fd, "  Qualify:                %d\n", default_qualify);
+	ast_cli(fd, "  Qualify timer OK:       %d sec\n", default_qualifycheck_ok);
+	ast_cli(fd, "  Qualify timer not OK:   %d sec\n", default_qualifycheck_notok);
 	ast_cli(fd, "  Use ClientCode:         %s\n", ast_test_flag(&global_flags[0], SIP_USECLIENTCODE) ? "Yes" : "No");
 	ast_cli(fd, "  Progress inband:        %s\n", (ast_test_flag(&global_flags[0], SIP_PROG_INBAND) == SIP_PROG_INBAND_NEVER) ? "Never" : (ast_test_flag(&global_flags[0], SIP_PROG_INBAND) == SIP_PROG_INBAND_NO) ? "No" : "Yes" );
 	ast_cli(fd, "  Language:               %s\n", S_OR(default_language, "(Defaults to English)"));
@@ -11643,9 +11648,9 @@ static int handle_response_peerpoke(struct sip_pvt *p, int resp, struct sip_requ
 
 		/* Try again eventually */
 		if ((peer->lastms < 0)  || (peer->lastms > peer->maxms))
-			peer->pokeexpire = ast_sched_add(sched, DEFAULT_FREQ_NOTOK, sip_poke_peer_s, peer);
+			peer->pokeexpire = ast_sched_add(sched, default_qualifycheck_notok, sip_poke_peer_s, peer);
 		else
-			peer->pokeexpire = ast_sched_add(sched, DEFAULT_FREQ_OK, sip_poke_peer_s, peer);
+			peer->pokeexpire = ast_sched_add(sched, default_qualifycheck_ok, sip_poke_peer_s, peer);
 	}
 	return 1;
 }
@@ -14563,7 +14568,7 @@ static int sip_poke_noanswer(void *data)
 	peer->lastms = -1;
 	ast_device_state_changed("SIP/%s", peer->name);
 	/* Try again quickly */
-	peer->pokeexpire = ast_sched_add(sched, DEFAULT_FREQ_NOTOK, sip_poke_peer_s, peer);
+	peer->pokeexpire = ast_sched_add(sched, default_qualifycheck_notok, sip_poke_peer_s, peer);
 	return 0;
 }
 
@@ -15607,6 +15612,8 @@ static int reload_config(enum channelreloadreason reason)
 	default_language[0] = '\0';
 	default_fromdomain[0] = '\0';
 	default_qualify = DEFAULT_QUALIFY;
+	default_qualifycheck_ok = DEFAULT_QUALIFY_FREQ_OK;	/*!< Default qualify time when status is ok */
+	default_qualifycheck_notok = DEFAULT_QUALIFY_FREQ_NOTOK;	/*!< Default qualify time when statusis not ok */
 	default_maxcallbitrate = DEFAULT_MAX_CALL_BITRATE;
 	ast_copy_string(default_mohinterpret, DEFAULT_MOHINTERPRET, sizeof(default_mohinterpret));
 	ast_copy_string(default_mohsuggest, DEFAULT_MOHSUGGEST, sizeof(default_mohsuggest));
@@ -15842,6 +15849,17 @@ static int reload_config(enum channelreloadreason reason)
 				ast_log(LOG_WARNING, "Qualification default should be 'yes', 'no', or a number of milliseconds at line %d of sip.conf\n", v->lineno);
 				default_qualify = 0;
 			}
+		} else if (!strcasecmp(v->name, "qualify-timer-ok")) {
+			int freq;
+			if(sscanf(v->value, "%d", &freq) != 1) 
+				if (freq)
+					default_qualifycheck_ok = freq;
+		} else if (!strcasecmp(v->name, "qualify-timer-notok")) {
+			int freq;
+			if(sscanf(v->value, "%d", &freq) != 1) 
+				if (freq)
+					default_qualifycheck_notok = freq;
+		} else if (!strcasecmp(v->name, "qualify-timer-notok")) {
 		} else if (!strcasecmp(v->name, "callevents")) {
 			global_callevents = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "maxcallbitrate")) {

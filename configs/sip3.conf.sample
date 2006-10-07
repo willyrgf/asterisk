@@ -132,6 +132,10 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 				; contrary to the RFC3551 specification, the peer _should_
 				; be negotiating AAL2-G726-32 instead :-(
 
+;default-qualify-ok = 30	; Set default time between OPTIONS packets when qualify=yes
+				; Default is 60. Recommended for NAT keepalives is 30 secs
+;default-qualify-notok = 10	; How often to check when NOT ok
+
 ;
 ; If regcontext is specified, Asterisk will dynamically create and destroy a
 ; NoOp priority 1 extension for a given peer who registers or unregisters with
