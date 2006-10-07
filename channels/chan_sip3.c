@@ -101,6 +101,10 @@
 	- removed pedantic mode
 	- added config option for qualify frequency timers
 
+	Halfdone
+	- Added separate TOS setting for presence. Need to run setsockopt
+	  in a locked socket for that to work on the SIP interface.
+
 	Todo
 	- Add astum
 	- Add sipregister branch
@@ -117,6 +121,8 @@
 	- Implement remote MWI notification
 	- Implement improved SIP domain support
 	- Prove transaction engine by implementing PRACK
+	- Implement netsock API in this channel
+	- Add File's multithreading code
 
 	- ... And much more
 */
@@ -511,6 +517,7 @@ static const struct cfsip_options {
 #define DEFAULT_TOS_SIP         0               /*!< Call signalling packets should be marked as DSCP CS3, but the default is 0 to be compatible with previous versions. */
 #define DEFAULT_TOS_AUDIO       0               /*!< Audio packets should be marked as DSCP EF (Expedited Forwarding), but the default is 0 to be compatible with previous versions. */
 #define DEFAULT_TOS_VIDEO       0               /*!< Video packets should be marked as DSCP AF41, but the default is 0 to be compatible with previous versions. */
+#define DEFAULT_TOS_PRESENCE    0               /*!< Presence notifications does not need SIP priority */
 #define DEFAULT_ALLOW_EXT_DOM	TRUE
 #define DEFAULT_REALM		"asterisk"
 #define DEFAULT_NOTIFYRINGING	TRUE
@@ -560,6 +567,7 @@ static int global_mwitime;		/*!< Time between MWI checks for peers */
 static unsigned int global_tos_sip;		/*!< IP type of service for SIP packets */
 static unsigned int global_tos_audio;		/*!< IP type of service for audio RTP packets */
 static unsigned int global_tos_video;		/*!< IP type of service for video RTP packets */
+static unsigned int global_tos_presence;	/*!< IP type of service for SIP presence packets */
 static int compactheaders;		/*!< send compact sip headers */
 static int recordhistory;		/*!< Record SIP history. Off by default */
 static int dumphistory;			/*!< Dump history to verbose before destroying SIP dialog */
@@ -9937,6 +9945,7 @@ static int sip_show_settings(int fd, int argc, char *argv[])
 	ast_cli(fd, "  IP ToS SIP:             %s\n", ast_tos2str(global_tos_sip));
 	ast_cli(fd, "  IP ToS RTP audio:       %s\n", ast_tos2str(global_tos_audio));
 	ast_cli(fd, "  IP ToS RTP video:       %s\n", ast_tos2str(global_tos_video));
+	ast_cli(fd, "  IP ToS SIP presence:    %s\n", ast_tos2str(global_tos_presence));
 	ast_cli(fd, "  T38 fax pt UDPTL:       %s\n", ast_test_flag(&global_flags[1], SIP_PAGE2_T38SUPPORT_UDPTL) ? "Yes" : "No");
 	ast_cli(fd, "  T38 fax pt RTP:         %s\n", ast_test_flag(&global_flags[1], SIP_PAGE2_T38SUPPORT_RTP) ? "Yes" : "No");
 	ast_cli(fd, "  T38 fax pt TCP:         %s\n", ast_test_flag(&global_flags[1], SIP_PAGE2_T38SUPPORT_TCP) ? "Yes" : "No");
@@ -15577,6 +15586,7 @@ static int reload_config(enum channelreloadreason reason)
 	global_tos_sip = DEFAULT_TOS_SIP;
 	global_tos_audio = DEFAULT_TOS_AUDIO;
 	global_tos_video = DEFAULT_TOS_VIDEO;
+	global_tos_presence = DEFAULT_TOS_SIP;	/* Initialize to SIP type of service */
 	externhost[0] = '\0';			/* External host name (for behind NAT DynDNS support) */
 	externexpire = 0;			/* Expiration for DNS re-issuing */
 	externrefresh = 10;
@@ -15837,6 +15847,9 @@ static int reload_config(enum channelreloadreason reason)
 		} else if (!strcasecmp(v->name, "tos_video")) {
 			if (ast_str2tos(v->value, &global_tos_video))
 				ast_log(LOG_WARNING, "Invalid tos_video value at line %d, recommended value is 'af41'. See doc/ip-tos.txt.\n", v->lineno);
+		} else if (!strcasecmp(v->name, "tos_presence")) {
+			if (ast_str2tos(v->value, &global_tos_presence))
+				ast_log(LOG_WARNING, "Invalid tos_presence value at line %d, recommended value is 'cs3'. See doc/ip-tos.txt.\n", v->lineno);
 		} else if (!strcasecmp(v->name, "bindport")) {
 			if (sscanf(v->value, "%d", &ourport) == 1) {
 				bindaddr.sin_port = htons(ourport);
