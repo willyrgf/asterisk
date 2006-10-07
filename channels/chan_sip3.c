@@ -24,7 +24,7 @@
  * Version 3 of chan_sip
  *
  * \author Mark Spencer <markster@digium.com>
- * \author Olle E. Johansson <oej@edvina.net>
+ * \author Olle E. Johansson <oej@edvina.net> (all the chan_sip3 changes)
  *
  * See Also:
  * \arg \ref AstCREDITS
@@ -85,6 +85,41 @@
  * The PBX issues a hangup on both incoming and outgoing calls through
  * the sip_hangup() function
  */
+
+/*! Chan_sip3 changes
+
+	This channel will not be backwards compatible with the old 
+	sip channel. In order to be more SIP compatible, I will have
+	to break the backwards compatibility. That's why the old channel
+	will still be around.
+
+	** This work is sponsored by voop.com - the Internet Dialtone.
+
+	Done
+	- removed userconf support (in favour of astum)
+	- added the peermatch branch
+	- removed pedantic mode
+	- added config option for qualify frequency timers
+
+	Todo
+	- Add astum
+	- Add sipregister branch
+	- Split up source code file
+	- Remove user
+	- Add type=device for peers
+	- Add type=service for register= replacement
+	- Add type=trunk definition, based on domain routing
+	- Implement state engine for dialogs
+	- Implement transactions
+	- Implement state engine for transactions
+	- Implement real realtime caching
+	- Implement realtime static loading for MWI and qualify support
+	- Implement remote MWI notification
+	- Implement improved SIP domain support
+	- Prove transaction engine by implementing PRACK
+
+	- ... And much more
+*/
 
 
 #include "asterisk.h"
