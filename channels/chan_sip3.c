@@ -479,7 +479,6 @@ static const struct cfsip_options {
 #define DEFAULT_ALLOW_EXT_DOM	TRUE
 #define DEFAULT_REALM		"asterisk"
 #define DEFAULT_NOTIFYRINGING	TRUE
-#define DEFAULT_PEDANTIC	FALSE
 #define DEFAULT_AUTOCREATEPEER	FALSE
 #define DEFAULT_QUALIFY		FALSE
 #define DEFAULT_T1MIN		100		/*!< 100 MS for minimal roundtrip time */
@@ -512,7 +511,6 @@ static int global_rtautoclear;
 static int global_notifyringing;	/*!< Send notifications on ringing */
 static int global_alwaysauthreject;	/*!< Send 401 Unauthorized for all failing requests */
 static int srvlookup;			/*!< SRV Lookup on or off. Default is off, RFC behavior is on */
-static int pedanticsipchecking;		/*!< Extra checking ?  Default off */
 static int autocreatepeer;		/*!< Auto creation of peers at registration? Default off. */
 static int global_relaxdtmf;			/*!< Relax DTMF */
 static int global_rtptimeout;		/*!< Time out call if no RTP */
@@ -3831,16 +3829,13 @@ static const char *__get_header(const struct sip_request *req, const char *name,
 	 * one afterwards.  If you shouldn't do it, what absolute idiot decided it was 
 	 * a good idea to say you can do it, and if you can do it, why in the hell would.
 	 * you say you shouldn't.
-	 * Anyways, pedanticsipchecking controls whether we allow spaces before ':',
-	 * and we always allow spaces after that for compatibility.
 	 */
 	for (pass = 0; name && pass < 2;pass++) {
 		int x, len = strlen(name);
 		for (x=*start; x<req->headers; x++) {
 			if (!strncasecmp(req->header[x], name, len)) {
 				char *r = req->header[x] + len;	/* skip name */
-				if (pedanticsipchecking)
-					r = ast_skip_blanks(r);
+				r = ast_skip_blanks(r);
 
 				if (*r == ':') {
 					*start = x+1;
@@ -4143,38 +4138,34 @@ static struct sip_pvt *find_call(struct sip_request *req, struct sockaddr_in *si
 	if (!callid || !to || !from || !cseq)		/* Call-ID, to, from and Cseq are required by RFC 3261. (Max-forwards and via too - ignored now) */
 		return NULL;	/* Invalid packet */
 
-	if (pedanticsipchecking) {
-		/* In principle Call-ID's uniquely identify a call, but with a forking SIP proxy
-		   we need more to identify a branch - so we have to check branch, from
-		   and to tags to identify a call leg.
-		   For Asterisk to behave correctly, you need to turn on pedanticsipchecking
-		   in sip.conf
-		   */
-		if (gettag(req, "To", totag, sizeof(totag)))
-			ast_set_flag(req, SIP_PKT_WITH_TOTAG);	/* Used in handle_request/response */
-		gettag(req, "From", fromtag, sizeof(fromtag));
+	/* In principle Call-ID's uniquely identify a call, but with a forking SIP proxy
+	   we need more to identify a branch - so we have to check branch, from
+	   and to tags to identify a call leg.
+	   */
+	if (gettag(req, "To", totag, sizeof(totag)))
+		ast_set_flag(req, SIP_PKT_WITH_TOTAG);	/* Used in handle_request/response */
+	gettag(req, "From", fromtag, sizeof(fromtag));
 
-		tag = (req->method == SIP_RESPONSE) ? totag : fromtag;
+	tag = (req->method == SIP_RESPONSE) ? totag : fromtag;
 
-		if (option_debug > 4 )
-			ast_log(LOG_DEBUG, "= Looking for  Call ID: %s (Checking %s) --From tag %s --To-tag %s  \n", callid, req->method==SIP_RESPONSE ? "To" : "From", fromtag, totag);
-	}
+	if (option_debug > 4 )
+		ast_log(LOG_DEBUG, "= Looking for  Call ID: %s (Checking %s) --From tag %s --To-tag %s  \n", callid, req->method==SIP_RESPONSE ? "To" : "From", fromtag, totag);
 
 	ast_mutex_lock(&iflock);
 	for (p = iflist; p; p = p->next) {
-		/* In pedantic, we do not want packets with bad syntax to be connected to a PVT */
+		/* we do not want packets with bad syntax to be connected to a PVT */
 		int found = FALSE;
 		if (req->method == SIP_REGISTER)
 			found = (!strcmp(p->callid, callid));
 		else 
 			found = (!strcmp(p->callid, callid) && 
-			(!pedanticsipchecking || !tag || ast_strlen_zero(p->theirtag) || !strcmp(p->theirtag, tag))) ;
+			(!tag || ast_strlen_zero(p->theirtag) || !strcmp(p->theirtag, tag))) ;
 
 		if (option_debug > 4)
 			ast_log(LOG_DEBUG, "= %s Their Call ID: %s Their Tag %s Our tag: %s\n", found ? "Found" : "No match", p->callid, p->theirtag, p->tag);
 
 		/* If we get a new request within an existing to-tag - check the to tag as well */
-		if (pedanticsipchecking && found  && req->method != SIP_RESPONSE) {	/* SIP Request */
+		if (found  && req->method != SIP_RESPONSE) {	/* SIP Request */
 			if (p->tag[0] == '\0' && totag[0]) {
 				/* We have no to tag, but they have. Wrong dialog */
 				found = FALSE;
@@ -4278,8 +4269,7 @@ static int sip_register(char *value, int lineno)
 	return 0;
 }
 
-/*! \brief  Parse multiline SIP headers into one header
-	This is enabled if pedanticsipchecking is enabled */
+/*! \brief  Parse multiline SIP headers into one header */
 static int lws2sws(char *msgbuf, int len) 
 {
 	int h = 0, t = 0; 
@@ -6379,12 +6369,10 @@ static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmetho
 	else /* Save for any further attempts */
 		ast_string_field_set(p, fromname, n);
 
-	if (pedanticsipchecking) {
-		ast_uri_encode(n, tmp, sizeof(tmp), 0);
-		n = tmp;
-		ast_uri_encode(l, tmp2, sizeof(tmp2), 0);
-		l = tmp2;
-	}
+	ast_uri_encode(n, tmp, sizeof(tmp), 0);
+	n = tmp;
+	ast_uri_encode(l, tmp2, sizeof(tmp2), 0);
+	l = tmp2;
 
 	if ((ourport != 5060) && ast_strlen_zero(p->fromdomain))	/* Needs to be 5060 */
 		snprintf(from, sizeof(from), "\"%s\" <sip:%s@%s:%d>;tag=%s", n, l, S_OR(p->fromdomain, ast_inet_ntoa(p->ourip)), ourport, p->tag);
@@ -6400,10 +6388,8 @@ static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmetho
 		ast_build_string(&invite, &invite_max, "sip:");
 		if (!ast_strlen_zero(p->username)) {
 			n = p->username;
-			if (pedanticsipchecking) {
-				ast_uri_encode(n, tmp, sizeof(tmp), 0);
-				n = tmp;
-			}
+			ast_uri_encode(n, tmp, sizeof(tmp), 0);
+			n = tmp;
 			ast_build_string(&invite, &invite_max, "%s@", n);
 		}
 		ast_build_string(&invite, &invite_max, "%s", p->tohost);
@@ -7926,8 +7912,7 @@ static enum check_auth_result register_verify(struct sip_pvt *p, struct sockaddr
 	*t = '\0';
 	
 	ast_copy_string(tmp, get_header(req, "To"), sizeof(tmp));
-	if (pedanticsipchecking)
-		ast_uri_decode(tmp);
+	ast_uri_decode(tmp);
 
 	c = get_in_brackets(tmp);
 	c = strsep(&c, ";");	/* Ditch ;user=phone */
@@ -8126,8 +8111,7 @@ static int get_destination(struct sip_pvt *p, struct sip_request *oreq)
 	if (req->rlPart2)
 		ast_copy_string(tmp, req->rlPart2, sizeof(tmp));
 	
-	if (pedanticsipchecking)
-		ast_uri_decode(tmp);
+	ast_uri_decode(tmp);
 
 	uri = get_in_brackets(tmp);
 
@@ -8140,8 +8124,7 @@ static int get_destination(struct sip_pvt *p, struct sip_request *oreq)
 	/* Now find the From: caller ID and name */
 	ast_copy_string(tmpf, get_header(req, "From"), sizeof(tmpf));
 	if (!ast_strlen_zero(tmpf)) {
-		if (pedanticsipchecking)
-			ast_uri_decode(tmpf);
+		ast_uri_decode(tmpf);
 		from = get_in_brackets(tmpf);
 	} else {
 		from = NULL;
@@ -8246,7 +8229,7 @@ static struct sip_pvt *get_sip_pvt_byid_locked(const char *callid, const char *t
 			   (With a forking SIP proxy, several call legs share the
 			   call id, but have different tags)
 			*/
-			if (pedanticsipchecking && (strcmp(fromtag, sip_pvt_ptr->theirtag) || strcmp(totag, ourtag)))
+			if (strcmp(fromtag, sip_pvt_ptr->theirtag) || strcmp(totag, ourtag))
 				match = 0;
 
 			if (!match) {
@@ -8303,8 +8286,7 @@ static int get_refer_info(struct sip_pvt *transferer, struct sip_request *outgoi
 	}
 	h_refer_to = ast_strdupa(p_refer_to);
 	refer_to = get_in_brackets(h_refer_to);
-	if (pedanticsipchecking)
-		ast_uri_decode(refer_to);
+	ast_uri_decode(refer_to);
 
 	if (strncasecmp(refer_to, "sip:", 4)) {
 		ast_log(LOG_WARNING, "Can't transfer to non-sip: URI.  (Refer-to: %s)?\n", refer_to);
@@ -8316,8 +8298,7 @@ static int get_refer_info(struct sip_pvt *transferer, struct sip_request *outgoi
 	if ((p_referred_by = get_header(req, "Referred-By"))) {
 		char *lessthan;
 		h_referred_by = ast_strdupa(p_referred_by);
-		if (pedanticsipchecking)
-			ast_uri_decode(h_referred_by);
+		ast_uri_decode(h_referred_by);
 
 		/* Store referrer's caller ID name */
 		ast_copy_string(referdata->referred_by_name, h_referred_by, sizeof(referdata->referred_by_name));
@@ -8373,12 +8354,8 @@ static int get_refer_info(struct sip_pvt *transferer, struct sip_request *outgoi
 				ast_copy_string(referdata->replaces_callid_fromtag, ptr, sizeof(referdata->replaces_callid_fromtag));
 			}
 
-			if (option_debug > 1) {
-				if (!pedanticsipchecking)
-					ast_log(LOG_DEBUG,"Attended transfer: Will use Replace-Call-ID : %s (No check of from/to tags)\n", referdata->replaces_callid );
-				else
-					ast_log(LOG_DEBUG,"Attended transfer: Will use Replace-Call-ID : %s F-tag: %s T-tag: %s\n", referdata->replaces_callid, referdata->replaces_callid_fromtag ? referdata->replaces_callid_fromtag : "<none>", referdata->replaces_callid_totag ? referdata->replaces_callid_totag : "<none>" );
-			}
+			if (option_debug > 1)
+				ast_log(LOG_DEBUG,"Attended transfer: Will use Replace-Call-ID : %s F-tag: %s T-tag: %s\n", referdata->replaces_callid, referdata->replaces_callid_fromtag ? referdata->replaces_callid_fromtag : "<none>", referdata->replaces_callid_totag ? referdata->replaces_callid_totag : "<none>" );
 		}
 	}
 	
@@ -8445,8 +8422,7 @@ static int get_also_info(struct sip_pvt *p, struct sip_request *oreq)
 	ast_copy_string(tmp, get_header(req, "Also"), sizeof(tmp));
 	c = get_in_brackets(tmp);
 
-	if (pedanticsipchecking)
-		ast_uri_decode(c);
+	ast_uri_decode(c);
 	
 	if (strncmp(c, "sip:", 4)) {
 		ast_log(LOG_WARNING, "Huh?  Not a SIP header in Also: transfer (%s)?\n", c);
@@ -8640,8 +8616,7 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 		t++;
 	*t = '\0';
 	ast_copy_string(from, get_header(req, "From"), sizeof(from));	/* XXX bug in original code, overwrote string */
-	if (pedanticsipchecking)
-		ast_uri_decode(from);
+	ast_uri_decode(from);
 	/* XXX here tries to map the username for invite things */
 	memset(calleridname, 0, sizeof(calleridname));
 	get_calleridname(from, calleridname, sizeof(calleridname));
@@ -9954,7 +9929,6 @@ static int sip_show_settings(int fd, int argc, char *argv[])
 	ast_cli(fd, "  RTP Hold Timeout:       %d %s\n", global_rtpholdtimeout, global_rtpholdtimeout ? "" : "(Disabled)");
 	ast_cli(fd, "  MWI NOTIFY mime type:   %s\n", default_notifymime);
 	ast_cli(fd, "  DNS SRV lookup:         %s\n", srvlookup ? "Yes" : "No");
-	ast_cli(fd, "  Pedantic SIP support:   %s\n", pedanticsipchecking ? "Yes" : "No");
 	ast_cli(fd, "  Reg. min duration       %d secs\n", min_expiry);
 	ast_cli(fd, "  Reg. max duration:      %d secs\n", max_expiry);
 	ast_cli(fd, "  Reg. default duration:  %d secs\n", default_expiry);
@@ -12671,8 +12645,8 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 		/* This is a call to ourself.  Send ourselves an error code and stop
 	   	processing immediately, as SIP really has no good mechanism for
 	   	being able to call yourself */
-		/* If pedantic is on, we need to check the tags. If they're different, this is
-	   	in fact a forked call through a SIP proxy somewhere. */
+		/* we need to check the tags. If they're different, this is
+	   	  in fact a forked call through a SIP proxy somewhere. */
 		transmit_response(p, "482 Loop Detected", req);
 		/* We do NOT destroy p here, so that our response will be accepted */
 		return 0;
@@ -14117,22 +14091,20 @@ static int handle_request(struct sip_pvt *p, struct sip_request *req, struct soc
 	}
 	snprintf(p->lastmsg, sizeof(p->lastmsg), "Rx: %s", cmd);
 
-	if (pedanticsipchecking) {
-		/* If this is a request packet without a from tag, it's not
-			correct according to RFC 3261  */
-		/* Check if this a new request in a new dialog with a totag already attached to it,
-			RFC 3261 - section 12.2 - and we don't want to mess with recovery  */
-		if (!p->initreq.headers && ast_test_flag(req, SIP_PKT_WITH_TOTAG)) {
-			/* If this is a first request and it got a to-tag, it is not for us */
-			if (!ast_test_flag(req, SIP_PKT_IGNORE) && req->method == SIP_INVITE) {
-				transmit_response_reliable(p, "481 Call/Transaction Does Not Exist", req);
-				/* Will cease to exist after ACK */
-			} else if (req->method != SIP_ACK) {
-				transmit_response(p, "481 Call/Transaction Does Not Exist", req);
-				sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
-			}
-			return res;
+	/* If this is a request packet without a from tag, it's not
+		correct according to RFC 3261  */
+	/* Check if this a new request in a new dialog with a totag already attached to it,
+		RFC 3261 - section 12.2 - and we don't want to mess with recovery  */
+	if (!p->initreq.headers && ast_test_flag(req, SIP_PKT_WITH_TOTAG)) {
+		/* If this is a first request and it got a to-tag, it is not for us */
+		if (!ast_test_flag(req, SIP_PKT_IGNORE) && req->method == SIP_INVITE) {
+			transmit_response_reliable(p, "481 Call/Transaction Does Not Exist", req);
+			/* Will cease to exist after ACK */
+		} else if (req->method != SIP_ACK) {
+			transmit_response(p, "481 Call/Transaction Does Not Exist", req);
+			sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 		}
+		return res;
 	}
 
 	/* Handle various incoming SIP methods in requests */
@@ -14236,8 +14208,7 @@ static int sipsock_read(int *id, int fd, short events, void *ignore)
 	req.len = res;
 	if(sip_debug_test_addr(&sin))	/* Set the debug flag early on packet level */
 		ast_set_flag(&req, SIP_PKT_DEBUG);
-	if (pedanticsipchecking)
-		req.len = lws2sws(req.data, req.len);	/* Fix multiline headers */
+	req.len = lws2sws(req.data, req.len);	/* Fix multiline headers */
 	if (ast_test_flag(&req, SIP_PKT_DEBUG))
 		ast_verbose("\n<-- SIP read from %s:%d: \n%s\n", ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port), req.data);
 
@@ -15593,7 +15564,6 @@ static int reload_config(enum channelreloadreason reason)
 	compactheaders = DEFAULT_COMPACTHEADERS;
 	global_reg_timeout = DEFAULT_REGISTRATION_TIMEOUT;
 	global_regattempts_max = 0;
-	pedanticsipchecking = DEFAULT_PEDANTIC;
 	global_mwitime = DEFAULT_MWITIME;
 	autocreatepeer = DEFAULT_AUTOCREATEPEER;
 	global_allowguest = DEFAULT_ALLOWGUEST;
@@ -15740,8 +15710,6 @@ static int reload_config(enum channelreloadreason reason)
 			autocreatepeer = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "srvlookup")) {
 			srvlookup = ast_true(v->value);
-		} else if (!strcasecmp(v->name, "pedantic")) {
-			pedanticsipchecking = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "maxexpirey") || !strcasecmp(v->name, "maxexpiry")) {
 			max_expiry = atoi(v->value);
 			if (max_expiry < 1)
