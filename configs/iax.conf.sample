@@ -157,6 +157,13 @@ forcejitterbuffer=no
 ; also support this feature, although they do not also need to have it enabled.
 ;
 ; trunktimestamps=yes
+
+; With a large amount of traffic on IAX2 trunks, there is a risk of bad voice quality due to
+; the fact that the IAX2 trunking scheme depends on the Linux system to handle fragmentation of
+; UDP packets. This may not be very efficient. 
+; This setting sets the maximum transmission unit for IAX2 UDP trunking.
+; default is 1240 bytes
+; trunkmtu = 0
 ;
 ; Minimum and maximum amounts of time that IAX peers can request as
 ; a registration expiration interval (in seconds).
