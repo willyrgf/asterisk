@@ -13,7 +13,7 @@
 
 .PHONY: clean clean-depend all depend uninstall
 
-#ALL_UTILS:=astman smsq stereorize streamplayer aelparse muted
+ALL_UTILS:=astman smsq stereorize streamplayer aelparse muted
 UTILS:=$(ALL_UTILS)
 
 include $(ASTTOPDIR)/Makefile.rules
