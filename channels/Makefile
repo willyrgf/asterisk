@@ -81,9 +81,6 @@ h323/libchanh323.a h323/Makefile.ast:
 	$(CMD_PREFIX) exit 1
 endif
 
-sip3/libastsip3.a:
-	$(CMD_PREFIX) $(MAKE) -C sip3
-
 gentone: gentone.c
 	$(ECHO_PREFIX) echo "   [LD] $^ -> $@"
 	$(CMD_PREFIX) $(HOST_CC) $(STATIC_BUILD) -o $@ $(HOST_CFLAGS) $(HOST_LDFLAGS) $^ $(LIBS)
@@ -117,4 +114,9 @@ misdn_config.o: ASTCFLAGS+=-Imisdn
 
 $(if $(filter chan_misdn,$(EMBEDDED_MODS)),modules.link,chan_misdn.so): chan_misdn.o misdn_config.o misdn/isdn_lib.o misdn/isdn_msg_parser.o
 
-chan_sip3.o: ASTCFLAGS+=-Isip3
+sip3/sip3_test.o: sip3/sip3_test.c
+	$(MAKE) -C sip3 
+
+chan_sip3.so: chan_sip3.o sip3/sip3_test.o
+	$(ECHO_PREFIX) echo "   [LD] $^ -> $@"
+	$(CMD_PREFIX) $(CXX) $(SOLINK) -o $@ $< 

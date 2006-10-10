@@ -1,7 +1,7 @@
 #
 # Makefile for chan_sip3 support
 #
-all:
+all: sip3_test.o
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<

@@ -1,3 +1,7 @@
+/* CODENAME PINEAPPLE - THIS IS VERY EXPERIMENTAL. 
+   IF YOU USE THIS IN PRODUCTION, I WILL NOT SUPPORT YOU...
+*/
+
 /*
  * Asterisk -- An open source telephony toolkit.
  *
@@ -190,10 +194,13 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #define SIPLABEL	sip3
 
-static int min_expiry = DEFAULT_MIN_EXPIRY;        /*!< Minimum accepted registration time */
-static int max_expiry = DEFAULT_MAX_EXPIRY;        /*!< Maximum accepted registration time */
-static int default_expiry = DEFAULT_DEFAULT_EXPIRY;
-static int expiry = DEFAULT_EXPIRY;
+
+static struct expiry_times expiry = {
+	.min_expiry = DEFAULT_MIN_EXPIRY,        /*!< Minimum accepted registration time */
+	.max_expiry = DEFAULT_MAX_EXPIRY,        /*!< Maximum accepted registration time */
+	.default_expiry = DEFAULT_DEFAULT_EXPIRY,
+	.expiry = DEFAULT_EXPIRY,		/*!< Is this ever used ??? */
+};
 
 #define CALLERID_UNKNOWN        "Unknown"
 
@@ -212,12 +219,8 @@ static const char notify_config[] = "sip3_notify.conf";
 static int usecnt = 0;
 
 
-static const struct cfsubscription_types {
-	enum subscriptiontype type;
-	const char * const event;
-	const char * const mediatype;
-	const char * const text;
-} subscription_types[] = {
+/*! \brief List of subscription event types for SUBSCRIBE requests */
+static const struct cfsubscription_types subscription_types[] = {
 	{ NONE,		   "-",        "unknown",	             "unknown" },
  	/* RFC 4235: SIP Dialog event package */
 	{ DIALOG_INFO_XML, "dialog",   "application/dialog-info+xml", "dialog-info+xml" },
@@ -229,11 +232,7 @@ static const struct cfsubscription_types {
 
 
 /*! XXX Note that sip_methods[i].id == i must hold or the code breaks */
-static const struct  cfsip_methods { 
-	enum sipmethod id;
-	int need_rtp;		/*!< when this is the 'primary' use for a pvt structure, does it need RTP? */
-	char * const text;
-} sip_methods[] = {
+static const struct cfsip_methods sip_methods[] = {
 	{ SIP_UNKNOWN,	 RTP,    "-UNKNOWN-" },
 	{ SIP_RESPONSE,	 NO_RTP, "SIP/2.0" },
 	{ SIP_REGISTER,	 NO_RTP, "REGISTER" },
@@ -254,11 +253,7 @@ static const struct  cfsip_methods {
 
 /*! \brief List of well-known SIP options. If we get this in a require,
    we should check the list and answer accordingly. */
-static const struct cfsip_options {
-	int id;			/*!< Bitmap ID */
-	int supported;		/*!< Supported by Asterisk ? */
-	char * const text;	/*!< Text id, as in standard */
-} sip_options[] = {	/* XXX used in 3 places */
+static const struct cfsip_options sip_options[] = {	/* XXX used in 3 places */
 	/* RFC3891: Replaces: header for transfer */
 	{ SIP_OPT_REPLACES,	SUPPORTED,	"replaces" },	
 	/* One version of Polycom firmware has the wrong label */
@@ -346,6 +341,7 @@ static int allow_external_domains;	/*!< Accept calls to external SIP domains? */
 static int global_callevents;		/*!< Whether we send manager events or not */
 static int global_t1min;		/*!< T1 roundtrip time minimum */
 static enum transfermodes global_allowtransfer;	/*!< SIP Refer restriction scheme */
+static int global_autoframing = 0;
 
 /*! \brief Codecs that we support by default: */
 static int global_capability = AST_FORMAT_ULAW | AST_FORMAT_ALAW | AST_FORMAT_GSM | AST_FORMAT_H263;
@@ -361,7 +357,6 @@ static int regobjs = 0;                  /*!< Registry objects */
 
 static struct ast_flags global_flags[2] = {{0}};        /*!< global SIP_ flags */
 
-static int global_autoframing = 0;
 
 /*! \brief Protect the SIP dialog list (of sip_pvt's) */
 AST_MUTEX_DEFINE_STATIC(iflock);
@@ -812,15 +807,6 @@ static const struct ast_channel_tech sip_tech = {
 	.early_bridge = ast_rtp_early_bridge,
 	.send_text = sip_sendtext,
 };
-
-/**--- some list management macros. **/
- 
-#define UNLINK(element, head, prev) do {	\
-	if (prev)				\
-		(prev)->next = (element)->next;	\
-	else					\
-		(head) = (element)->next;	\
-	} while (0)
 
 /*! \brief Interface structure with callbacks used to connect to RTP module */
 static struct ast_rtp_protocol sip_rtp = {
@@ -3569,7 +3555,7 @@ static int sip_register(char *value, int lineno)
 		ast_string_field_set(reg, secret, secret);
 	reg->expire = -1;
 	reg->timeout =  -1;
-	reg->refresh = default_expiry;
+	reg->refresh = expiry.default_expiry;
 	reg->portno = porta ? atoi(porta) : 0;
 	reg->callid_valid = FALSE;
 	reg->ocseq = INITIAL_CSEQ;
@@ -6337,7 +6323,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 	
 	}
 
-	snprintf(tmp, sizeof(tmp), "%d", default_expiry);
+	snprintf(tmp, sizeof(tmp), "%d", expiry.default_expiry);
 	add_header(&req, "Expires", tmp);
 	add_header(&req, "Contact", p->our_contact);
 	add_header(&req, "Event", "registration");
@@ -6708,7 +6694,7 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 	char contact[BUFSIZ]; 
 	char data[BUFSIZ];
 	const char *expires = get_header(req, "Expires");
-	int expiry = atoi(expires);
+	int localexpiry = atoi(expires);
 	char *curi, *n, *pt;
 	int port;
 	const char *useragent;
@@ -6723,11 +6709,11 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 		if (expires) {
 			/* XXX bug here, we overwrite the string */
 			expires = strsep((char **) &expires, ";"); /* trim ; and beyond */
-			if (sscanf(expires + 9, "%d", &expiry) != 1)
-				expiry = default_expiry;
+			if (sscanf(expires + 9, "%d", &localexpiry) != 1)
+				localexpiry = expiry.default_expiry;
 		} else {
 			/* Nothing has been specified */
-			expiry = default_expiry;
+			localexpiry = expiry.default_expiry;
 		}
 	}
 
@@ -6746,7 +6732,7 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 		if (peer->expire > -1 && !ast_strlen_zero(peer->fullcontact))
 			pvt->expiry = ast_sched_when(sched, peer->expire);
 		return PARSE_REGISTER_QUERY;
-	} else if (!strcasecmp(curi, "*") || !expiry) {	/* Unregister this peer */
+	} else if (!strcasecmp(curi, "*") || !localexpiry) {	/* Unregister this peer */
 		/* This means remove all registrations and return OK */
 		memset(&peer->addr, 0, sizeof(peer->addr));
 		if (peer->expire > -1)
@@ -6820,14 +6806,14 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 
 	if (peer->expire > -1)
 		ast_sched_del(sched, peer->expire);
-	if (expiry > max_expiry)
-		expiry = max_expiry;
-	if (expiry < min_expiry)
-		expiry = min_expiry;
+	if (localexpiry > expiry.max_expiry)
+		localexpiry = expiry.max_expiry;
+	if (localexpiry < expiry.min_expiry)
+		localexpiry = expiry.min_expiry;
 	peer->expire = ast_test_flag(&peer->flags[0], SIP_REALTIME) ? -1 :
-		ast_sched_add(sched, (expiry + 10) * 1000, expire_register, peer);
-	pvt->expiry = expiry;
-	snprintf(data, sizeof(data), "%s:%d:%d:%s:%s", ast_inet_ntoa(peer->addr.sin_addr), ntohs(peer->addr.sin_port), expiry, peer->username, peer->fullcontact);
+		ast_sched_add(sched, (localexpiry + 10) * 1000, expire_register, peer);
+	pvt->expiry = localexpiry;
+	snprintf(data, sizeof(data), "%s:%d:%d:%s:%s", ast_inet_ntoa(peer->addr.sin_addr), ntohs(peer->addr.sin_port), localexpiry, peer->username, peer->fullcontact);
 	if (!ast_test_flag(&peer->flags[1], SIP_PAGE2_RT_FROMCONTACT)) 
 		ast_db_put("SIP/Registry", peer->name, data);
 	manager_event(EVENT_FLAG_SYSTEM, "PeerStatus", "Peer: SIP/%s\r\nPeerStatus: Registered\r\n", peer->name);
@@ -6836,7 +6822,7 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 	if (inaddrcmp(&peer->addr, &oldsin)) {
 		sip_poke_peer(peer);
 		if (option_verbose > 2)
-			ast_verbose(VERBOSE_PREFIX_3 "Registered SIP '%s' at %s port %d expires %d\n", peer->name, ast_inet_ntoa(peer->addr.sin_addr), ntohs(peer->addr.sin_port), expiry);
+			ast_verbose(VERBOSE_PREFIX_3 "Registered SIP '%s' at %s port %d expires %d\n", peer->name, ast_inet_ntoa(peer->addr.sin_addr), ntohs(peer->addr.sin_port), localexpiry);
 		register_peer_exten(peer, 1);
 	}
 	
@@ -9239,9 +9225,9 @@ static int sip_show_settings(int fd, int argc, char *argv[])
 	ast_cli(fd, "  RTP Hold Timeout:       %d %s\n", global_rtpholdtimeout, global_rtpholdtimeout ? "" : "(Disabled)");
 	ast_cli(fd, "  MWI NOTIFY mime type:   %s\n", default_notifymime);
 	ast_cli(fd, "  DNS SRV lookup:         %s\n", srvlookup ? "Yes" : "No");
-	ast_cli(fd, "  Reg. min duration       %d secs\n", min_expiry);
-	ast_cli(fd, "  Reg. max duration:      %d secs\n", max_expiry);
-	ast_cli(fd, "  Reg. default duration:  %d secs\n", default_expiry);
+	ast_cli(fd, "  Reg. min duration       %d secs\n", expiry.min_expiry);
+	ast_cli(fd, "  Reg. max duration:      %d secs\n", expiry.max_expiry);
+	ast_cli(fd, "  Reg. default duration:  %d secs\n", expiry.default_expiry);
 	ast_cli(fd, "  Outbound reg. timeout:  %d secs\n", global_reg_timeout);
 	ast_cli(fd, "  Outbound reg. attempts: %d\n", global_regattempts_max);
 	ast_cli(fd, "  Notify ringing state:   %s\n", global_notifyringing ? "Yes" : "No");
@@ -10864,9 +10850,9 @@ static int handle_response_register(struct sip_pvt *p, int resp, char *rest, str
 
 		}
 		if (!expires) 
-			expires=atoi(get_header(req, "expires"));
+			expires = atoi(get_header(req, "expires"));
 		if (!expires)
-			expires=default_expiry;
+			expires = expiry.default_expiry;
 
 		expires_ms = expires * 1000;
 		if (expires <= EXPIRY_GUARD_LIMIT)
@@ -13157,10 +13143,10 @@ static int handle_request_subscribe(struct sip_pvt *p, struct sip_request *req, 
 		p->expiry = atoi(get_header(req, "Expires"));
 
 		/* check if the requested expiry-time is within the approved limits from sip.conf */
-		if (p->expiry > max_expiry)
-			p->expiry = max_expiry;
-		if (p->expiry < min_expiry && p->expiry > 0)
-			p->expiry = min_expiry;
+		if (p->expiry > expiry.max_expiry)
+			p->expiry = expiry.max_expiry;
+		if (p->expiry < expiry.min_expiry && p->expiry > 0)
+			p->expiry = expiry.min_expiry;
 
 		if (sipdebug || option_debug > 1) {
 			if (p->subscribed == MWI_NOTIFICATION && p->relatedpeer)
@@ -13540,7 +13526,10 @@ retrylock:
 
 	/* Find the active SIP dialog or create a new one */
 	p = find_call(&req, &sin, req.method);	/* returns p locked */
-	if (p) {
+	if (p == NULL) {
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Invalid SIP message - rejected , no callid, len %d\n", req.len);
+	} else {
 		/* Go ahead and lock the owner if it has one -- we may need it */
 		/* becaues this is deadlock-prone, we need to try and unlock if failed */
 		if (p->owner && ast_channel_trylock(p->owner)) {
@@ -13576,9 +13565,6 @@ retrylock:
 		if (p->owner && !nounlock)
 			ast_channel_unlock(p->owner);
 		ast_mutex_unlock(&p->lock);
-	} else {
-		if (option_debug)
-			ast_log(LOG_DEBUG, "Invalid SIP message - rejected , bad request: %-70.70s\n", p->callid[0] ? p->callid : "<no callid>");
 	}
 	ast_mutex_unlock(&netlock);
 	if (recount)
@@ -14861,7 +14847,10 @@ static int reload_config(enum channelreloadreason reason)
 	/* Reset channel settings to default before re-configuring */
 	allow_external_domains = DEFAULT_ALLOW_EXT_DOM;				/* Allow external invites */
 	global_regcontext[0] = '\0';
-	expiry = DEFAULT_EXPIRY;
+	expiry.min_expiry = DEFAULT_MIN_EXPIRY;        /*!< Minimum accepted registration time */
+	expiry.max_expiry = DEFAULT_MAX_EXPIRY;        /*!< Maximum accepted registration time */
+	expiry.default_expiry = DEFAULT_DEFAULT_EXPIRY;
+	expiry.expiry = DEFAULT_EXPIRY;					/* Used anywhere??? */
 	global_notifyringing = DEFAULT_NOTIFYRINGING;
 	global_alwaysauthreject = 0;
 	global_allowsubscribe = FALSE;
@@ -15022,17 +15011,17 @@ static int reload_config(enum channelreloadreason reason)
 		} else if (!strcasecmp(v->name, "srvlookup")) {
 			srvlookup = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "maxexpirey") || !strcasecmp(v->name, "maxexpiry")) {
-			max_expiry = atoi(v->value);
-			if (max_expiry < 1)
-				max_expiry = DEFAULT_MAX_EXPIRY;
+			expiry.max_expiry = atoi(v->value);
+			if (expiry.max_expiry < 1)
+				expiry.max_expiry = DEFAULT_MAX_EXPIRY;
 		} else if (!strcasecmp(v->name, "minexpirey") || !strcasecmp(v->name, "minexpiry")) {
-			min_expiry = atoi(v->value);
-			if (min_expiry < 1)
-				min_expiry = DEFAULT_MIN_EXPIRY;
+			expiry.min_expiry = atoi(v->value);
+			if (expiry.min_expiry < 1)
+				expiry.min_expiry = DEFAULT_MIN_EXPIRY;
 		} else if (!strcasecmp(v->name, "defaultexpiry") || !strcasecmp(v->name, "defaultexpirey")) {
-			default_expiry = atoi(v->value);
-			if (default_expiry < 1)
-				default_expiry = DEFAULT_DEFAULT_EXPIRY;
+			expiry.default_expiry = atoi(v->value);
+			if (expiry.default_expiry < 1)
+				expiry.default_expiry = DEFAULT_DEFAULT_EXPIRY;
 		} else if (!strcasecmp(v->name, "sipdebug")) {
 			if (ast_true(v->value))
 				ast_set_flag(&global_flags[1], SIP_PAGE2_DEBUG_CONFIG);
@@ -15736,7 +15725,7 @@ static void sip_send_all_registers(void)
 	int regspacing;
 	if (!regobjs)
 		return;
-	regspacing = default_expiry * 1000/regobjs;
+	regspacing = expiry.default_expiry * 1000/regobjs;
 	if (regspacing > 100)
 		regspacing = 100;
 	ms = regspacing;

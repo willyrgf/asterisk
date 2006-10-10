@@ -167,6 +167,7 @@ enum transfermodes {
 };
 
 
+
 enum sip_result {
 	AST_SUCCESS = 0,
 	AST_FAILURE = -1,
@@ -312,6 +313,40 @@ struct sip_request {
 	unsigned int sdp_end;   /*!< the line number where the SDP ends */
 };
 
+/*! \brief Description of SUBSCRIBE events */
+struct cfsubscription_types {
+	enum subscriptiontype type;
+	const char * const event;
+	const char * const mediatype;
+	const char * const text;
+};
+
+
+/*! \brief Structure for parsing of SIP methods.
+\note Note that sip_methods[i].id == i must hold or the code breaks */
+struct cfsip_methods { 
+	enum sipmethod id;
+	int need_rtp;		/*!< when this is the 'primary' use for a pvt structure, does it need RTP? */
+	char * const text;
+};
+
+/*! \brief Structure for expiration times for inbound/outbound REGISTER */
+struct expiry_times {
+	int	min_expiry;
+	int	max_expiry;
+	int	default_expiry;
+	int	expiry;		/* ?? Is this ever used? */
+};
+
+/*! \brief List of well-known SIP options. If we get this in a require,
+   we should check the list and answer accordingly. */
+struct cfsip_options {
+	int id;			/*!< Bitmap ID */
+	int supported;		/*!< Supported by Asterisk ? */
+	char * const text;	/*!< Text id, as in standard */
+};
+
+
 /*
  * A sip packet is stored into the data[] buffer, with the header followed
  * by an empty line and the body of the message.
@@ -394,6 +429,15 @@ struct t38properties {
 	int jointcapability;		/*!< Supported T38 capability at both ends */
 	enum t38state state;		/*!< T.38 state */
 };
+
+/**--- some list management macros. **/
+#define UNLINK(element, head, prev) do {	\
+	if (prev)				\
+		(prev)->next = (element)->next;	\
+	else					\
+		(head) = (element)->next;	\
+	} while (0)
+
 
 
 /*--- Various flags for the flags field in the pvt structure */
@@ -762,5 +806,6 @@ struct sip_registry {
 	int noncecount;			/*!< Nonce-count */
 	char lastmsg[256];		/*!< Last Message sent/received */
 };
+
 
 #endif
