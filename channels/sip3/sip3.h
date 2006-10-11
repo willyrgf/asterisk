@@ -895,4 +895,9 @@ struct channel_counters {
 	int registry_objects;
 };
 
+/* Ugly solution, please don't tell kpfleming */
+#ifndef CHAN_SIP3_MAIN
+extern struct sip_globals global;	/* Defined in chan_sip3.c */
+#endif
+
 #endif

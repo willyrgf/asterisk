@@ -104,13 +104,13 @@ AST_MUTEX_DEFINE_STATIC(netlock);
 extern struct sip_globals global;
 
 /*! \brief Lock netlock */
-static void sipnet_lock()
+static void sipnet_lock(void)
 {
 	ast_mutex_lock(&netlock);
 }
 
 /*! \brief Unlock netlock */
-static void sipnet_unlock()
+static void sipnet_unlock(void)
 {
 	ast_mutex_unlock(&netlock);
 }
@@ -221,13 +221,69 @@ retrylock:
 	return 1;
 }
 
+/*! \brief Check if network socket is open */
+static int sipsocket_initialized(void)
+{
+	if (sipnet.sipsock < 0)
+		return FALSE;
+	return TRUE;
+}
+
+/*! \brief Open network socket, bind to address and set options (TOS) */
+static int sipsocket_open(void)
+{
+	const int reuseFlag = 1;
+
+	sipnet.sipsock = socket(AF_INET, SOCK_DGRAM, 0);
+	if (sipnet.sipsock < 0) {
+		ast_log(LOG_WARNING, "Unable to create SIP socket: %s\n", strerror(errno));
+		return FALSE;
+	} 
+	/* Allow SIP clients on the same host to access us: */
+	setsockopt(sipnet.sipsock, SOL_SOCKET, SO_REUSEADDR,
+				   (const char*)&reuseFlag,
+				   sizeof reuseFlag);
+
+	if (bind(sipnet.sipsock, (struct sockaddr *)&sipnet.bindaddr, sizeof(sipnet.bindaddr)) < 0) {
+		ast_log(LOG_WARNING, "Failed to bind to %s:%d: %s\n",
+			ast_inet_ntoa(sipnet.bindaddr.sin_addr), ntohs(sipnet.bindaddr.sin_port),
+			strerror(errno));
+		close(sipnet.sipsock);
+		sipnet.sipsock = -1;
+		return FALSE;
+	} else {
+		if (option_verbose > 1) { 
+			ast_verbose(VERBOSE_PREFIX_2 "SIP Listening on %s:%d\n", 
+				ast_inet_ntoa(sipnet.bindaddr.sin_addr), ntohs(sipnet.bindaddr.sin_port));
+			ast_verbose(VERBOSE_PREFIX_2 "Using SIP TOS: %s\n", ast_tos2str(global.tos_sip));
+		}
+		if (setsockopt(sipnet.sipsock, IPPROTO_IP, IP_TOS, &global.tos_sip, sizeof(global.tos_sip))) 
+			ast_log(LOG_WARNING, "Unable to set SIP TOS to %s\n", ast_tos2str(global.tos_sip));
+	}
+	return TRUE;
+}
+
+/*! \brief read our port number */
 static int sipnet_ourport()
 {
 	return(sipnet.ourport);
 }
 
+/*! \brief Set our port number */
 static void sipnet_ourport_set(int port)
 {
 	sipnet.ourport = port;
+}
+
+/*! \brief Transmit SIP message */
+static int __sip_xmit(struct sip_pvt *p, char *data, int len)
+{
+	int res;
+	const struct sockaddr_in *dst = sip_real_dst(p);
+	res = sendto(sipnet.sipsock, data, len, 0, (const struct sockaddr *)dst, sizeof(struct sockaddr_in));
+
+	if (res != len)
+		ast_log(LOG_WARNING, "sip_xmit of %p (len %d) to %s:%d returned %d: %s\n", data, len, ast_inet_ntoa(dst->sin_addr), ntohs(dst->sin_port), res, strerror(errno));
+	return res;
 }
 

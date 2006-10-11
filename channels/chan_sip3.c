@@ -132,6 +132,7 @@
 	- ... And much more
 */
 
+#define CHAN_SIP3_MAIN
 
 #include "asterisk.h"
 
@@ -246,7 +247,6 @@ static enum channelreloadreason sip_reloadreason;       /*!< Reason for last rel
 static struct sched_context *sched;     /*!< The scheduling context */
 static struct io_context *io;           /*!< The IO context */
 
-static AST_LIST_HEAD_STATIC(domain_list, domain);	/*!< The SIP domain list */
 AST_LIST_HEAD_NOLOCK(sip_history_head, sip_history); /*!< history list, entry in sip_pvt */
 
 
@@ -380,20 +380,12 @@ static int build_reply_digest(struct sip_pvt *p, int method, char *digest, int d
 static int clear_realm_authentication(struct sip_auth *authlist);	/* Clear realm authentication list (at reload) */
 static struct sip_auth *add_realm_authentication(struct sip_auth *authlist, char *configuration, int lineno);	/* Add realm authentication in list */
 static struct sip_auth *find_realm_authentication(struct sip_auth *authlist, const char *realm);	/* Find authentication for a specific realm */
-static enum check_auth_result check_auth(struct sip_pvt *p, struct sip_request *req, const char *username,
-					 const char *secret, const char *md5secret, int sipmethod,
-					 char *uri, enum xmittype reliable, int ignore);
 static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_request *req,
 					      int sipmethod, char *uri, enum xmittype reliable,
 					      struct sockaddr_in *sin, struct sip_peer **authpeer);
 static int check_user(struct sip_pvt *p, struct sip_request *req, int sipmethod, char *uri, enum xmittype reliable, struct sockaddr_in *sin);
 static int do_proxy_auth(struct sip_pvt *p, struct sip_request *req, char *header, char *respheader, int sipmethod, int init);
 static int build_reply_digest(struct sip_pvt *p, int method, char* digest, int digest_len);
-
-/*--- Domain handling */
-static int check_sip_domain(const char *domain, char *context, size_t len); /* Check if domain is one of our local domains */
-static int add_sip_domain(const char *domain, const enum domain_mode mode, const char *context);
-static void clear_sip_domains(void);
 
 /*--- SIP realm authentication */
 static struct sip_auth *add_realm_authentication(struct sip_auth *authlist, char *configuration, int lineno);
@@ -438,8 +430,6 @@ static const char *dtmfmode2str(int mode) attribute_const;
 static const char *insecure2str(int port, int invite) attribute_const;
 static void cleanup_stale_contexts(char *new, char *old);
 static void print_codec_to_cli(int fd, struct ast_codec_pref *pref);
-static const char *domain_mode_to_text(const enum domain_mode mode);
-static int sip_show_domains(int fd, int argc, char *argv[]);
 static int _sip_show_peer(int type, int fd, struct mansession *s, struct message *m, int argc, char *argv[]);
 static int manager_sip_show_peer( struct mansession *s, struct message *m);
 static int sip_show_peer(int fd, int argc, char *argv[]);
@@ -470,7 +460,6 @@ static int sip_notify(int fd, int argc, char *argv[]);
 static int sip_do_history(int fd, int argc, char *argv[]);
 static int sip_no_history(int fd, int argc, char *argv[]);
 static int func_header_read(struct ast_channel *chan, char *function, char *data, char *buf, size_t len);
-static int func_check_sipdomain(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len);
 static int function_sippeer(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len);
 static int function_sipchaninfo_read(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len);
 static int sip_dtmfmode(struct ast_channel *chan, void *data);
@@ -708,19 +697,6 @@ static inline int sip_debug_test_pvt(struct sip_pvt *p)
 		return 0;
 	return sip_debug_test_addr(sip_real_dst(p));
 }
-
-/*! \brief Transmit SIP message */
-static int __sip_xmit(struct sip_pvt *p, char *data, int len)
-{
-	int res;
-	const struct sockaddr_in *dst = sip_real_dst(p);
-	res=sendto(sipnet.sipsock, data, len, 0, (const struct sockaddr *)dst, sizeof(struct sockaddr_in));
-
-	if (res != len)
-		ast_log(LOG_WARNING, "sip_xmit of %p (len %d) to %s:%d returned %d: %s\n", data, len, ast_inet_ntoa(dst->sin_addr), ntohs(dst->sin_port), res, strerror(errno));
-	return res;
-}
-
 
 /*! \brief Build a Via header for a request */
 static void build_via(struct sip_pvt *p)
@@ -6338,7 +6314,7 @@ static void reg_source_db(struct sip_peer *peer)
 	peer->addr.sin_family = AF_INET;
 	peer->addr.sin_addr = in;
 	peer->addr.sin_port = htons(port);
-	if (sipnet.sipsock < 0) {
+	if (sipsocket_initialized()) {
 		/* SIP isn't up yet, so schedule a poke only, pretty soon */
 		if (peer->pokeexpire > -1)
 			ast_sched_del(sched, peer->pokeexpire);
@@ -6710,168 +6686,6 @@ static void build_route(struct sip_pvt *p, struct sip_request *req, int backward
 		list_route(p->route);
 }
 
-
-/*! \brief  Check user authorization from peer definition 
-	Some actions, like REGISTER and INVITEs from peers require
-	authentication (if peer have secret set) 
-    \return 0 on success, non-zero on error
-*/
-static enum check_auth_result check_auth(struct sip_pvt *p, struct sip_request *req, const char *username,
-					 const char *secret, const char *md5secret, int sipmethod,
-					 char *uri, enum xmittype reliable, int ignore)
-{
-	const char *response = "407 Proxy Authentication Required";
-	const char *reqheader = "Proxy-Authorization";
-	const char *respheader = "Proxy-Authenticate";
-	const char *authtoken;
-	char a1_hash[256];
-	char resp_hash[256]="";
-	char tmp[BUFSIZ * 2];                /* Make a large enough buffer */
-	char *c;
-	int  wrongnonce = FALSE;
-	int  good_response;
-	const char *usednonce = p->randdata;
-
-	/* table of recognised keywords, and their value in the digest */
-	enum keys { K_RESP, K_URI, K_USER, K_NONCE, K_LAST };
-	struct x {
-		const char *key;
-		const char *s;
-	} *i, keys[] = {
-		[K_RESP] = { "response=", "" },
-		[K_URI] = { "uri=", "" },
-		[K_USER] = { "username=", "" },
-		[K_NONCE] = { "nonce=", "" },
-		[K_LAST] = { NULL, NULL}
-	};
-
-	/* Always OK if no secret */
-	if (ast_strlen_zero(secret) && ast_strlen_zero(md5secret))
-		return AUTH_SUCCESSFUL;
-	if (sipmethod == SIP_REGISTER || sipmethod == SIP_SUBSCRIBE) {
-		/* On a REGISTER, we have to use 401 and its family of headers instead of 407 and its family
-		   of headers -- GO SIP!  Whoo hoo!  Two things that do the same thing but are used in
-		   different circumstances! What a surprise. */
-		response = "401 Unauthorized";
-		reqheader = "Authorization";
-		respheader = "WWW-Authenticate";
-	}
-	authtoken =  get_header(req, reqheader);	
-	if (ignore && !ast_strlen_zero(p->randdata) && ast_strlen_zero(authtoken)) {
-		/* This is a retransmitted invite/register/etc, don't reconstruct authentication
-		   information */
-		if (!reliable) {
-			/* Resend message if this was NOT a reliable delivery.   Otherwise the
-			   retransmission should get it */
-			transmit_response_with_auth(p, response, req, p->randdata, reliable, respheader, 0);
-			/* Schedule auto destroy in 32 seconds (according to RFC 3261) */
-			sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
-		}
-		return AUTH_CHALLENGE_SENT;
-	} else if (ast_strlen_zero(p->randdata) || ast_strlen_zero(authtoken)) {
-		/* We have no auth, so issue challenge and request authentication */
-		ast_string_field_build(p, randdata, "%08lx", ast_random());	/* Create nonce for challenge */
-		transmit_response_with_auth(p, response, req, p->randdata, reliable, respheader, 0);
-		/* Schedule auto destroy in 32 seconds */
-		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
-		return AUTH_CHALLENGE_SENT;
-	} 
-
-	/* --- We have auth, so check it */
-
-	/* Whoever came up with the authentication section of SIP can suck my %&#$&* for not putting
-   	   an example in the spec of just what it is you're doing a hash on. */
-
-
-	/* Make a copy of the response and parse it */
-	ast_copy_string(tmp, authtoken, sizeof(tmp));
-	c = tmp;
-
-	while(c && *(c = ast_skip_blanks(c)) ) { /* lookup for keys */
-		for (i = keys; i->key != NULL; i++) {
-			const char *separator = ",";	/* default */
-
-			if (strncasecmp(c, i->key, strlen(i->key)) != 0)
-				continue;
-			/* Found. Skip keyword, take text in quotes or up to the separator. */
-			c += strlen(i->key);
-			if (*c == '"') { /* in quotes. Skip first and look for last */
-				c++;
-				separator = "\"";
-			}
-			i->s = c;
-			strsep(&c, separator);
-			break;
-		}
-		if (i->key == NULL) /* not found, jump after space or comma */
-			strsep(&c, " ,");
-	}
-
-	/* Verify that digest username matches  the username we auth as */
-	if (strcmp(username, keys[K_USER].s)) {
-		ast_log(LOG_WARNING, "username mismatch, have <%s>, digest has <%s>\n",
-			username, keys[K_USER].s);
-		/* Oops, we're trying something here */
-		return AUTH_USERNAME_MISMATCH;
-	}
-
-	/* Verify nonce from request matches our nonce.  If not, send 401 with new nonce */
-	if (strcasecmp(p->randdata, keys[K_NONCE].s)) { /* XXX it was 'n'casecmp ? */
-		wrongnonce = TRUE;
-		usednonce = keys[K_NONCE].s;
-	}
-
-	if (!ast_strlen_zero(md5secret))
-		ast_copy_string(a1_hash, md5secret, sizeof(a1_hash));
-	else {
-		char a1[256];
-		snprintf(a1, sizeof(a1), "%s:%s:%s", username, global.realm, secret);
-		ast_md5_hash(a1_hash, a1);
-	}
-
-	/* compute the expected response to compare with what we received */
-	{
-		char a2[256];
-		char a2_hash[256];
-		char resp[256];
-
-		snprintf(a2, sizeof(a2), "%s:%s", sip_method2txt(sipmethod), S_OR(keys[K_URI].s, uri));
-		ast_md5_hash(a2_hash, a2);
-		snprintf(resp, sizeof(resp), "%s:%s:%s", a1_hash, usednonce, a2_hash);
-		ast_md5_hash(resp_hash, resp);
-	}
-
-	good_response = keys[K_RESP].s &&
-			!strncasecmp(keys[K_RESP].s, resp_hash, strlen(resp_hash));
-	if (wrongnonce) {
-		ast_string_field_build(p, randdata, "%08lx", ast_random());
-		if (good_response) {
-			if (sipdebug)
-				ast_log(LOG_NOTICE, "Correct auth, but based on stale nonce received from '%s'\n", get_header(req, "To"));
-			/* We got working auth token, based on stale nonce . */
-			transmit_response_with_auth(p, response, req, p->randdata, reliable, respheader, 1);
-		} else {
-			/* Everything was wrong, so give the device one more try with a new challenge */
-			if (sipdebug)
-				ast_log(LOG_NOTICE, "Bad authentication received from '%s'\n", get_header(req, "To"));
-			transmit_response_with_auth(p, response, req, p->randdata, reliable, respheader, 0);
-		}
-
-		/* Schedule auto destroy in 32 seconds */
-		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
-		return AUTH_CHALLENGE_SENT;
-	} 
-	if (good_response)
-		return AUTH_SUCCESSFUL;
-
-	/* Ok, we have a bad username/secret pair */
-	/* Challenge again, and again, and again */
-	transmit_response_with_auth(p, response, req, p->randdata, reliable, respheader, 0);
-	sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
-
-	return AUTH_CHALLENGE_SENT;
-}
-
 /*! \brief Change onhold state of a peer using a pvt structure */
 static void sip_peer_hold(struct sip_pvt *p, int hold)
 {
@@ -6970,7 +6784,7 @@ static enum check_auth_result register_verify(struct sip_pvt *p, struct sockaddr
 		domain = c;
 		if ((c = strchr(domain, ':')))	/* Remove :port */
 			*c = '\0';
-		if (!AST_LIST_EMPTY(&domain_list)) {
+		if (domains_configured()) {
 			if (!check_sip_domain(domain, NULL, 0)) {
 				transmit_response(p, "404 Not found (unknown domain)", &p->initreq);
 				return AUTH_UNKNOWN_DOMAIN;
@@ -7203,7 +7017,7 @@ static int get_destination(struct sip_pvt *p, struct sip_request *oreq)
 
 	ast_string_field_set(p, domain, a);
 
-	if (!AST_LIST_EMPTY(&domain_list)) {
+	if (domains_configured()) {
 		char domain_context[AST_MAX_EXTENSION];
 
 		domain_context[0] = '\0';
@@ -8542,41 +8356,6 @@ static void print_codec_to_cli(int fd, struct ast_codec_pref *pref)
 		ast_cli(fd, "none");
 }
 
-/*! \brief Print domain mode to cli */
-static const char *domain_mode_to_text(const enum domain_mode mode)
-{
-	switch (mode) {
-	case SIP_DOMAIN_AUTO:
-		return "[Automatic]";
-	case SIP_DOMAIN_CONFIG:
-		return "[Configured]";
-	}
-
-	return "";
-}
-
-/*! \brief CLI command to list local domains */
-static int sip_show_domains(int fd, int argc, char *argv[])
-{
-	struct domain *d;
-#define FORMAT "%-40.40s %-20.20s %-16.16s\n"
-
-	if (AST_LIST_EMPTY(&domain_list)) {
-		ast_cli(fd, "SIP Domain support not enabled.\n\n");
-		return RESULT_SUCCESS;
-	} else {
-		ast_cli(fd, FORMAT, "Our local SIP domains:", "Context", "Set by");
-		AST_LIST_LOCK(&domain_list);
-		AST_LIST_TRAVERSE(&domain_list, d, list)
-			ast_cli(fd, FORMAT, d->domain, S_OR(d->context, "(default)"),
-				domain_mode_to_text(d->mode));
-		AST_LIST_UNLOCK(&domain_list);
-		ast_cli(fd, "\n");
-		return RESULT_SUCCESS;
-	}
-}
-#undef FORMAT
-
 static char mandescr_show_peer[] = 
 "Description: Show one SIP peer with details on current status.\n"
 "Variables: \n"
@@ -8919,7 +8698,7 @@ static int sip_show_settings(int fd, int argc, char *argv[])
 	ast_cli(fd, "  Allow subscriptions:    %s\n", ast_test_flag(&global.flags[1], SIP_PAGE2_ALLOWSUBSCRIBE) ? "Yes" : "No");
 	ast_cli(fd, "  Allow overlap dialing:  %s\n", ast_test_flag(&global.flags[1], SIP_PAGE2_ALLOWOVERLAP) ? "Yes" : "No");
 	ast_cli(fd, "  Promsic. redir:         %s\n", ast_test_flag(&global.flags[0], SIP_PROMISCREDIR) ? "Yes" : "No");
-	ast_cli(fd, "  SIP domain support:     %s\n", AST_LIST_EMPTY(&domain_list) ? "No" : "Yes");
+	ast_cli(fd, "  SIP domain support:     %s\n", domains_configured() ? "No" : "Yes");
 	ast_cli(fd, "  Call to non-local dom.: %s\n", global.allow_external_domains ? "Yes" : "No");
 	ast_cli(fd, "  URI user is phone no:   %s\n", ast_test_flag(&global.flags[0], SIP_USEREQPHONE) ? "Yes" : "No");
 	ast_cli(fd, "  Our auth realm          %s\n", global.realm);
@@ -9928,31 +9707,6 @@ static struct ast_custom_function sip_header_function = {
 	"times, SIP_HEADER takes an optional second argument to specify which header with\n"
 	"that name to retrieve. Headers start at offset 1.\n",
 	.read = func_header_read,
-};
-
-/*! \brief  Dial plan function to check if domain is local */
-static int func_check_sipdomain(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len)
-{
-	if (ast_strlen_zero(data)) {
-		ast_log(LOG_WARNING, "CHECKSIPDOMAIN requires an argument - A domain name\n");
-		return -1;
-	}
-	if (check_sip_domain(data, NULL, 0))
-		ast_copy_string(buf, data, len);
-	else
-		buf[0] = '\0';
-	return 0;
-}
-
-static struct ast_custom_function checksipdomain_function = {
-	.name = "CHECKSIPDOMAIN",
-	.synopsis = "Checks if domain is a local domain",
-	.syntax = "CHECKSIPDOMAIN(<domain|IP>)",
-	.read = func_check_sipdomain,
-	.desc = "This function checks if the domain in the argument is configured\n"
-		"as a local SIP domain that this Asterisk server is configured to handle.\n"
-		"Returns the domain name if it is locally handled, otherwise an empty string.\n"
-		"Check the domain= configuration in sip.conf\n",
 };
 
 /*! \brief  ${SIPPEER()} Dialplan function - reads peer data */
@@ -12355,7 +12109,7 @@ static int handle_request_refer(struct sip_pvt *p, struct sip_request *req, int 
 		p->refer->localtransfer = 1;
 		if (sipdebug && option_debug > 2)
 			ast_log(LOG_DEBUG, "This SIP transfer is local : %s\n", p->refer->refer_to_domain);
-	} else if (AST_LIST_EMPTY(&domain_list)) {
+	} else if (domains_configured()) {
 		/* This PBX don't bother with SIP domains, so all transfers are local */
 		p->refer->localtransfer = 1;
 	} else
@@ -13255,7 +13009,7 @@ static void *do_monitor(void *data)
 	int reloading;
 
 	/* Add an I/O event to our SIP UDP socket */
-	if (sipnet.sipsock > -1) 
+	if (sipsocket_initialized())
 		sipnet.read_id = ast_io_add(io, sipnet.sipsock, sipsock_read, AST_IO_IN, NULL);
 	
 	/* From here on out, we die whenever asked */
@@ -13271,7 +13025,7 @@ static void *do_monitor(void *data)
 			sip_do_reload(sip_reloadreason);
 
 			/* Change the I/O fd of our UDP socket */
-			if (sipnet.sipsock > -1)
+			if (sipsocket_initialized())
 				sipnet.read_id = ast_io_change(io, sipnet.read_id, sipnet.sipsock, NULL, 0, NULL);
 		}
 		/* Check for interfaces needing to be killed */
@@ -13790,70 +13544,6 @@ static int handle_common_options(struct ast_flags *flags, struct ast_flags *mask
 
 	return res;
 }
-
-/*! \brief Add SIP domain to list of domains we are responsible for */
-static int add_sip_domain(const char *domain, const enum domain_mode mode, const char *context)
-{
-	struct domain *d;
-
-	if (ast_strlen_zero(domain)) {
-		ast_log(LOG_WARNING, "Zero length domain.\n");
-		return 1;
-	}
-
-	if (!(d = ast_calloc(1, sizeof(*d))))
-		return 0;
-
-	ast_copy_string(d->domain, domain, sizeof(d->domain));
-
-	if (!ast_strlen_zero(context))
-		ast_copy_string(d->context, context, sizeof(d->context));
-
-	d->mode = mode;
-
-	AST_LIST_LOCK(&domain_list);
-	AST_LIST_INSERT_TAIL(&domain_list, d, list);
-	AST_LIST_UNLOCK(&domain_list);
-
- 	if (sipdebug)	
-		ast_log(LOG_DEBUG, "Added local SIP domain '%s'\n", domain);
-
-	return 1;
-}
-
-/*! \brief  check_sip_domain: Check if domain part of uri is local to our server */
-static int check_sip_domain(const char *domain, char *context, size_t len)
-{
-	struct domain *d;
-	int result = 0;
-
-	AST_LIST_LOCK(&domain_list);
-	AST_LIST_TRAVERSE(&domain_list, d, list) {
-		if (strcasecmp(d->domain, domain))
-			continue;
-
-		if (len && !ast_strlen_zero(d->context))
-			ast_copy_string(context, d->context, len);
-		
-		result = 1;
-		break;
-	}
-	AST_LIST_UNLOCK(&domain_list);
-
-	return result;
-}
-
-/*! \brief Clear our domain list (at reload) */
-static void clear_sip_domains(void)
-{
-	struct domain *d;
-
-	AST_LIST_LOCK(&domain_list);
-	while ((d = AST_LIST_REMOVE_HEAD(&domain_list, list)))
-		free(d);
-	AST_LIST_UNLOCK(&domain_list);
-}
-
 
 /*! \brief Add realm authentication in list */
 static struct sip_auth *add_realm_authentication(struct sip_auth *authlist, char *configuration, int lineno)
@@ -14766,7 +14456,7 @@ static int reload_config(enum channelreloadreason reason)
 		}
 	}
 
-	if (!global.allow_external_domains && AST_LIST_EMPTY(&domain_list)) {
+	if (!global.allow_external_domains && domains_configured()) {
 		ast_log(LOG_WARNING, "To disallow external domains, you need to configure local SIP domains.\n");
 		global.allow_external_domains = 1;
 	}
@@ -14832,38 +14522,12 @@ static int reload_config(enum channelreloadreason reason)
 		sipnet.bindaddr.sin_port = ntohs(DEFAULT_LISTEN_SIP_PORT);
 	sipnet.bindaddr.sin_family = AF_INET;
 	sipnet_lock();
-	if ((sipnet.sipsock > -1) && (memcmp(&old_bindaddr, &sipnet.bindaddr, sizeof(struct sockaddr_in)))) {
+	if (sipsocket_initialized() && (memcmp(&old_bindaddr, &sipnet.bindaddr, sizeof(struct sockaddr_in)))) {
 		close(sipnet.sipsock);
 		sipnet.sipsock = -1;
 	}
-	if (sipnet.sipsock < 0) {
-		sipnet.sipsock = socket(AF_INET, SOCK_DGRAM, 0);
-		if (sipnet.sipsock < 0) {
-			ast_log(LOG_WARNING, "Unable to create SIP socket: %s\n", strerror(errno));
-		} else {
-			/* Allow SIP clients on the same host to access us: */
-			const int reuseFlag = 1;
-			setsockopt(sipnet.sipsock, SOL_SOCKET, SO_REUSEADDR,
-				   (const char*)&reuseFlag,
-				   sizeof reuseFlag);
-
-			if (bind(sipnet.sipsock, (struct sockaddr *)&sipnet.bindaddr, sizeof(sipnet.bindaddr)) < 0) {
-				ast_log(LOG_WARNING, "Failed to bind to %s:%d: %s\n",
-				ast_inet_ntoa(sipnet.bindaddr.sin_addr), ntohs(sipnet.bindaddr.sin_port),
-				strerror(errno));
-				close(sipnet.sipsock);
-				sipnet.sipsock = -1;
-			} else {
-				if (option_verbose > 1) { 
-					ast_verbose(VERBOSE_PREFIX_2 "SIP Listening on %s:%d\n", 
-					ast_inet_ntoa(sipnet.bindaddr.sin_addr), ntohs(sipnet.bindaddr.sin_port));
-					ast_verbose(VERBOSE_PREFIX_2 "Using SIP TOS: %s\n", ast_tos2str(global.tos_sip));
-				}
-				if (setsockopt(sipnet.sipsock, IPPROTO_IP, IP_TOS, &global.tos_sip, sizeof(global.tos_sip))) 
-					ast_log(LOG_WARNING, "Unable to set SIP TOS to %s\n", ast_tos2str(global.tos_sip));
-			}
-		}
-	}
+	if (!sipsocket_initialized()) 
+		sipsocket_open();	/* Open socket, bind to address and set TOS option */
 	sipnet_unlock();
 
 	/* Add default domains - host name, IP address and IP:port */

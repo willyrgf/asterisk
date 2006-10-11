@@ -1,7 +1,7 @@
 #
 # Makefile for chan_sip3 support
 #
-all: sip3_refer.o sip3_subscribe.o sip3_network.o
+all: sip3_refer.o sip3_subscribe.o sip3_network.o sip3_domain.o sip3_callerid.o sip3_auth.c
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
