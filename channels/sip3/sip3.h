@@ -46,6 +46,9 @@
 #define DEFAULT_REGISTRATION_TIMEOUT 20
 #define DEFAULT_MAX_FORWARDS    "70"
 
+/* These strings needs to be localized */
+#define CALLERID_UNKNOWN	"Unknown"
+
 /* guard limit must be larger than guard secs */
 /* guard min must be < 1000, and should be >= 250 */
 #define EXPIRY_GUARD_SECS       15                /*!< How long before expiry do we reregister */
@@ -125,7 +128,8 @@
    sip.conf.sample for new installations. These may differ to keep backwards compatibility,
    yet encouraging new behaviour on new installations 
  */
-#define DEFAULT_SIP_PORT	5060	/*!< From RFC 3261 (former 2543) */
+#define DEFAULT_LISTEN_SIP_PORT	5060	/*!< From RFC 3261 (former 2543) */
+#define STANDARD_SIP_PORT	5060	/*!< From RFC 3261 (former 2543) */
 #define DEFAULT_CONTEXT		"default"
 #define DEFAULT_MOHINTERPRET    "default"
 #define DEFAULT_MOHSUGGEST      ""
@@ -439,6 +443,10 @@ struct t38properties {
 	} while (0)
 
 
+/*! \brief Append to SIP dialog history 
+	\return Always returns 0 */
+#define append_history(p, event, fmt , args... )	append_history_full(p, "%-15s " fmt, event, ## args)
+
 
 /*--- Various flags for the flags field in the pvt structure */
 #define SIP_ALREADYGONE		(1 << 0)	/*!< Whether or not we've already been destroyed by our peer */
@@ -553,9 +561,9 @@ struct t38properties {
 #define T38FAX_RATE_12000			(1 << 12)	/*!< 12000 bps t38FaxRate */
 #define T38FAX_RATE_14400			(1 << 13)	/*!< 14400 bps t38FaxRate */
 
-#define sipdebug		ast_test_flag(&global_flags[1], SIP_PAGE2_DEBUG)
-#define sipdebug_config		ast_test_flag(&global_flags[1], SIP_PAGE2_DEBUG_CONFIG)
-#define sipdebug_console	ast_test_flag(&global_flags[1], SIP_PAGE2_DEBUG_CONSOLE)
+#define sipdebug		ast_test_flag(&global.flags[1], SIP_PAGE2_DEBUG)
+#define sipdebug_config		ast_test_flag(&global.flags[1], SIP_PAGE2_DEBUG_CONFIG)
+#define sipdebug_console	ast_test_flag(&global.flags[1], SIP_PAGE2_DEBUG_CONSOLE)
 
 
 /*! \brief Structure to handle SIP transfers. Dynamically allocated when needed  */
@@ -577,8 +585,8 @@ struct sip_refer {
 	enum referstatus status;			/*!< REFER status */
 };
 
-/*! \brief sip_pvt: PVT structures are used for each SIP dialog, ie. a call, a registration, a subscribe  */
-static struct sip_pvt {
+/*! \brief PVT structure are used for each SIP dialog, ie. a call, a registration, a subscribe  */
+struct sip_pvt {
 	ast_mutex_t lock;			/*!< Dialog private lock */
 	int method;				/*!< SIP method that opened this dialog */
 	AST_DECLARE_STRING_FIELDS(
@@ -689,7 +697,7 @@ static struct sip_pvt {
 	struct sip_pvt *next;			/*!< Next dialog in chain */
 	struct sip_invite_param *options;	/*!< Options for INVITE */
 	int autoframing;
-} *iflist = NULL;
+};
 
 #define FLAG_RESPONSE (1 << 0)
 #define FLAG_FATAL (1 << 1)
@@ -807,5 +815,84 @@ struct sip_registry {
 	char lastmsg[256];		/*!< Last Message sent/received */
 };
 
+/* Global settings only apply to the channel */
+struct sip_globals {
+	struct ast_jb_conf jbconf;	/*!< Jitterbuffer configuration */
+	int rtautoclear;		/*!< Realtime caching options */
+	int notifyringing;		/*!< Send notifications on ringing */
+	int alwaysauthreject;		/*!< Send 401 Unauthorized for all failing requests */
+	int srvlookup;			/*!< SRV Lookup on or off. Default is off, RFC behavior is on */
+	int autocreatepeer;		/*!< Auto creation of peers at registration? Default off. */
+	int relaxdtmf;			/*!< Relax DTMF */
+	int rtptimeout;			/*!< Time out call if no RTP */
+	int rtpholdtimeout;
+	int rtpkeepalive;		/*!< Send RTP keepalives */
+	int reg_timeout;	
+	int regattempts_max;		/*!< Registration attempts before giving up */
+	int allowguest;			/*!< allow unauthenticated users/peers to connect? */
+	int allowsubscribe;		/*!< Flag for disabling ALL subscriptions, this is FALSE only if all peers are FALSE 
+					    	the global setting is in globals_flags[1] */
+	int mwitime;			/*!< Time between MWI checks for peers */
+	unsigned int tos_sip;		/*!< IP type of service for SIP packets */
+	unsigned int tos_audio;		/*!< IP type of service for audio RTP packets */
+	unsigned int tos_video;		/*!< IP type of service for video RTP packets */
+	unsigned int tos_presence;	/*!< IP type of service for SIP presence packets */
+	int compactheaders;		/*!< send compact sip headers */
+	int recordhistory;		/*!< Record SIP history. Off by default */
+	int dumphistory;		/*!< Dump history to verbose before destroying SIP dialog */
+	char realm[MAXHOSTNAMELEN]; 	/*!< Default realm */
+	char regcontext[AST_MAX_CONTEXT];	/*!< Context for auto-extensions */
+	char useragent[AST_MAX_EXTENSION];	/*!< Useragent for the SIP channel */
+	int allow_external_domains;	/*!< Accept calls to external SIP domains? */
+	int callevents;			/*!< Whether we send manager events or not */
+	int t1min;			/*!< T1 roundtrip time minimum */
+	enum transfermodes allowtransfer;	/*!< SIP Refer restriction scheme */
+	int autoframing;
+	struct ast_flags flags[2];	/* Flags for various default settings */
+	/* Default values */
+	int default_qualifycheck_ok;	/*!< Default qualify time when status is ok */
+	int default_qualifycheck_notok;	/*!< Default qualify time when statusis not ok */
+	int default_qualify;		/*!< Default Qualify= setting */
+	int capability;			/*!< Codec support */
+	int dtmf_capability;		/*!< DTMF support (2833) */
+	int t38_capability;		/*!< T38 Capability */
+	char default_context[AST_MAX_CONTEXT];
+	char default_subscribecontext[AST_MAX_CONTEXT];
+	char default_language[MAX_LANGUAGE];
+	char default_callerid[AST_MAX_EXTENSION];
+	char default_fromdomain[AST_MAX_EXTENSION];
+	char default_notifymime[AST_MAX_EXTENSION];
+	char default_vmexten[AST_MAX_EXTENSION];
+	char default_mohinterpret[MAX_MUSICCLASS];  /*!< Global setting for moh class to use when put on hold */
+	char default_mohsuggest[MAX_MUSICCLASS];	   /*!< Global setting for moh class to suggest when putting 
+                                                    *   a bridged channel on hold */
+	int default_maxcallbitrate;	/*!< Maximum bitrate for call */
+	struct ast_codec_pref default_prefs;	/*!< Default codec prefs */
+};
+
+/* Network interface settings */
+struct sip_network {
+	int sipsock;			/*!< Network socket for this interface */
+	struct sockaddr_in bindaddr;	/*!< Bind address */
+	struct sockaddr_in externip;	/*!< External IP address (outside of NAT) */
+	char externhost[MAXHOSTNAMELEN];	/*!< Extern host name in case of us being behind NAT */
+	time_t externexpire;		/*!< Expiration time for DNS resolution of externhost */
+	int externrefresh;		/*!< How often to re-resolve */
+	struct ast_ha *localaddr;	/*!< Our local addresses (locanet= ) */
+	struct in_addr __ourip;		/*!< Our IP */
+	int ourport;		/*!< Our port */
+	struct sockaddr_in outboundproxyip;	/*!< First SIP route hop */
+	struct sockaddr_in debugaddr;	/*!< Debugging ??? */
+	int *read_id;			/*!< ID of IO entry for sipsock socket FD */
+};
+
+struct channel_counters {
+	int static_users;
+	int realtime_users;
+	int static_peers;
+	int realtime_peers;
+	int autocreated_peers;
+	int registry_objects;
+};
 
 #endif

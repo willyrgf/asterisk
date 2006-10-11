@@ -55,7 +55,7 @@ ifneq ($(findstring channels,$(MENUSELECT_EMBED)),)
   LOADABLE_MODS:=
 endif
 
-all: _all
+all: _all sip3
 
 include $(ASTTOPDIR)/Makefile.moddir_rules
 
@@ -114,9 +114,9 @@ misdn_config.o: ASTCFLAGS+=-Imisdn
 
 $(if $(filter chan_misdn,$(EMBEDDED_MODS)),modules.link,chan_misdn.so): chan_misdn.o misdn_config.o misdn/isdn_lib.o misdn/isdn_msg_parser.o
 
-sip3/sip3_test.o: sip3/sip3_test.c
+sip3:	
 	$(MAKE) -C sip3 
 
-chan_sip3.so: chan_sip3.o sip3/sip3_test.o
+chan_sip3.so: chan_sip3.o sip3/sip3_network.o sip3/sip3_subscribe.o sip3/sip3_refer.o
 	$(ECHO_PREFIX) echo "   [LD] $^ -> $@"
 	$(CMD_PREFIX) $(CXX) $(SOLINK) -o $@ $< 
