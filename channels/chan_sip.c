@@ -4401,9 +4401,9 @@ static void parse_request(struct sip_request *req)
 		else if (*c == '\n') { /* end of this line */
 			*c = '\0';
 			if (sipdebug && option_debug > 3)
-				ast_log(LOG_DEBUG, "%7s %2d [%3zd]: %s\n",
+				ast_log(LOG_DEBUG, "%7s %2d [%3d]: %s\n",
 					req->headers < 0 ? "Header" : "Body",
-					i, strlen(dst[i]), dst[i]);
+					i, (int)strlen(dst[i]), dst[i]);
 			if (ast_strlen_zero(dst[i]) && req->headers < 0) {
 				req->headers = i;	/* record number of header lines */
 				dst = req->line;	/* start working on the body */
@@ -7737,7 +7737,7 @@ static enum check_auth_result check_auth(struct sip_pvt *p, struct sip_request *
 					 const char *secret, const char *md5secret, int sipmethod,
 					 char *uri, enum xmittype reliable, int ignore)
 {
-	const char *response = "407 Proxy Authentication Required";
+	const char *response;
 	char *reqheader, *respheader;
 	const char *authtoken;
 	char a1_hash[256];
@@ -7746,6 +7746,7 @@ static enum check_auth_result check_auth(struct sip_pvt *p, struct sip_request *
 	char *c;
 	int  wrongnonce = FALSE;
 	int  good_response;
+	int code;
 	const char *usednonce = p->randdata;
 
 	/* table of recognised keywords, and their value in the digest */
@@ -7768,12 +7769,18 @@ static enum check_auth_result check_auth(struct sip_pvt *p, struct sip_request *
 		/* On a REGISTER, we have to use 401 and its family of headers
 		 * instead of 407 and its family of headers.
 		 */
+		code = WWW_AUTH;
 		response = "401 Unauthorized";
-		auth_headers(WWW_AUTH, &reqheader, &respheader);
 	} else {
+		code = PROXY_AUTH;
 		response = "407 Proxy Authentication Required";
-		auth_headers(PROXY_AUTH, &reqheader, &respheader);
 	}
+	/*
+	 * Note the apparent swap of arguments below, compared to other
+	 * usages of auth_headers().
+	 */
+	auth_headers(code, &respheader, &reqheader);
+
 	authtoken =  get_header(req, reqheader);	
 	if (ignore && !ast_strlen_zero(p->randdata) && ast_strlen_zero(authtoken)) {
 		/* This is a retransmitted invite/register/etc, don't reconstruct authentication
