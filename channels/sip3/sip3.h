@@ -898,6 +898,8 @@ struct channel_counters {
 /* Ugly solution, please don't tell kpfleming */
 #ifndef CHAN_SIP3_MAIN
 extern struct sip_globals global;	/* Defined in chan_sip3.c */
+extern struct sched_context *sched;     /*!< The scheduling context */
+extern struct io_context *io;           /*!< The IO context */
 #endif
 
 #endif

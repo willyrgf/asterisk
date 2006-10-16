@@ -6,9 +6,7 @@ encapsulated so they are not needed in a common namespace
 ------------------------------------------------------------------------------------*/
 
 /*--- Transmitting responses and requests */
-extern int __sip_reliable_xmit(struct sip_pvt *p, int seqno, int resp, char *data, int len, int fatal, int sipmethod);
 extern int __transmit_response(struct sip_pvt *p, const char *msg, const struct sip_request *req, enum xmittype reliable);
-extern int retrans_pkt(void *data);
 extern int transmit_sip_request(struct sip_pvt *p, struct sip_request *req);
 extern int transmit_response(struct sip_pvt *p, const char *msg, const struct sip_request *req);
 extern int transmit_response_reliable(struct sip_pvt *p, const char *msg, const struct sip_request *req);
@@ -30,7 +28,6 @@ extern int transmit_notify_with_mwi(struct sip_pvt *p, int newmsgs, int oldmsgs,
 extern int transmit_notify_with_sipfrag(struct sip_pvt *p, int cseq, char *message, int terminate);
 extern int transmit_state_notify(struct sip_pvt *p, int state, int full);
 extern int transmit_register(struct sip_registry *r, int sipmethod, const char *auth, const char *authheader);
-extern int send_response(struct sip_pvt *p, struct sip_request *req, enum xmittype reliable, int seqno);
 extern int send_request(struct sip_pvt *p, struct sip_request *req, enum xmittype reliable, int seqno);
 extern void copy_request(struct sip_request *dst, const struct sip_request *src);
 extern void receive_message(struct sip_pvt *p, struct sip_request *req);
@@ -239,6 +236,7 @@ extern void parse_request(struct sip_request *req);
 extern const char *get_header(const struct sip_request *req, const char *name);
 extern int method_match(enum sipmethod id, const char *name);
 extern void parse_copy(struct sip_request *dst, const struct sip_request *src);
+static void add_blank(struct sip_request *req);
 extern char *get_in_brackets(char *tmp);
 extern const char *find_alias(const char *name, const char *_default);
 extern const char *__get_header(const struct sip_request *req, const char *name, int *start);

@@ -224,7 +224,7 @@ static int usecnt = 0;
 /* Default setttings are used as a channel setting and as a default when
    configuring devices */
 /* Global settings only apply to the channel */
-static struct sip_globals global;
+struct sip_globals global;
 
 /* Object counters */
 static struct channel_counters sipcounters = { 0, 0, 0, 0, 0, 0 };
@@ -246,8 +246,8 @@ static pthread_t monitor_thread = AST_PTHREADT_NULL;
 static int sip_reloading = FALSE;                       /*!< Flag for avoiding multiple reloads at the same time */
 static enum channelreloadreason sip_reloadreason;       /*!< Reason for last reload/load of configuration */
 
-static struct sched_context *sched;     /*!< The scheduling context */
-static struct io_context *io;           /*!< The IO context */
+struct sched_context *sched;     /*!< The scheduling context */
+struct io_context *io;           /*!< The IO context */
 
 AST_LIST_HEAD_NOLOCK(sip_history_head, sip_history); /*!< history list, entry in sip_pvt */
 
@@ -301,9 +301,7 @@ static int sip_senddigit_begin(struct ast_channel *ast, char digit);
 static int sip_senddigit_end(struct ast_channel *ast, char digit);
 
 /*--- Transmitting responses and requests */
-static int __sip_reliable_xmit(struct sip_pvt *p, int seqno, int resp, char *data, int len, int fatal, int sipmethod);
 static int __transmit_response(struct sip_pvt *p, const char *msg, const struct sip_request *req, enum xmittype reliable);
-static int retrans_pkt(void *data);
 static int transmit_sip_request(struct sip_pvt *p, struct sip_request *req);
 static int transmit_response(struct sip_pvt *p, const char *msg, const struct sip_request *req);
 static int transmit_response_reliable(struct sip_pvt *p, const char *msg, const struct sip_request *req);
@@ -325,8 +323,6 @@ static int transmit_notify_with_mwi(struct sip_pvt *p, int newmsgs, int oldmsgs,
 static int transmit_notify_with_sipfrag(struct sip_pvt *p, int cseq, char *message, int terminate);
 static int transmit_state_notify(struct sip_pvt *p, int state, int full);
 static int transmit_register(struct sip_registry *r, int sipmethod, const char *auth, const char *authheader);
-static int send_response(struct sip_pvt *p, struct sip_request *req, enum xmittype reliable, int seqno);
-static int send_request(struct sip_pvt *p, struct sip_request *req, enum xmittype reliable, int seqno);
 static void copy_request(struct sip_request *dst, const struct sip_request *src);
 static void receive_message(struct sip_pvt *p, struct sip_request *req);
 static void parse_moved_contact(struct sip_pvt *p, struct sip_request *req);
@@ -778,141 +774,6 @@ static void append_history_full(struct sip_pvt *p, const char *fmt, ...)
 	return;
 }
 
-/*! \brief Retransmit SIP message if no answer (Called from scheduler) */
-static int retrans_pkt(void *data)
-{
-	struct sip_pkt *pkt = data, *prev, *cur = NULL;
-	int reschedule = DEFAULT_RETRANS;
-
-	/* Lock channel PVT */
-	ast_mutex_lock(&pkt->owner->lock);
-
-	if (pkt->retrans < MAX_RETRANS) {
-		pkt->retrans++;
- 		if (!pkt->timer_t1) {	/* Re-schedule using timer_a and timer_t1 */
-			if (sipdebug && option_debug > 3)
- 				ast_log(LOG_DEBUG, "SIP TIMER: Not rescheduling id #%d:%s (Method %d) (No timer T1)\n", pkt->retransid, sip_method2txt(pkt->method), pkt->method);
-		} else {
- 			int siptimer_a;
-
- 			if (sipdebug && option_debug > 3)
- 				ast_log(LOG_DEBUG, "SIP TIMER: Rescheduling retransmission #%d (%d) %s - %d\n", pkt->retransid, pkt->retrans, sip_method2txt(pkt->method), pkt->method);
- 			if (!pkt->timer_a)
- 				pkt->timer_a = 2 ;
- 			else
- 				pkt->timer_a = 2 * pkt->timer_a;
- 
- 			/* For non-invites, a maximum of 4 secs */
- 			siptimer_a = pkt->timer_t1 * pkt->timer_a;	/* Double each time */
- 			if (pkt->method != SIP_INVITE && siptimer_a > 4000)
- 				siptimer_a = 4000;
- 		
- 			/* Reschedule re-transmit */
-			reschedule = siptimer_a;
- 			if (option_debug > 3)
- 				ast_log(LOG_DEBUG, "** SIP timers: Rescheduling retransmission %d to %d ms (t1 %d ms (Retrans id #%d)) \n", pkt->retrans +1, siptimer_a, pkt->timer_t1, pkt->retransid);
- 		} 
-
-		if (sip_debug_test_pvt(pkt->owner)) {
-			const struct sockaddr_in *dst = sip_real_dst(pkt->owner);
-			ast_verbose("Retransmitting #%d (%s) to %s:%d:\n%s\n---\n",
-				pkt->retrans, sip_nat_mode(pkt->owner),
-				ast_inet_ntoa(dst->sin_addr),
-				ntohs(dst->sin_port), pkt->data);
-		}
-
-		append_history(pkt->owner, "ReTx", "%d %s", reschedule, pkt->data);
-		__sip_xmit(pkt->owner, pkt->data, pkt->packetlen);
-		ast_mutex_unlock(&pkt->owner->lock);
-		return  reschedule;
-	} 
-	/* Too many retries */
-	if (pkt->owner && pkt->method != SIP_OPTIONS) {
-		if (ast_test_flag(pkt, FLAG_FATAL) || sipdebug)	/* Tell us if it's critical or if we're debugging */
-			ast_log(LOG_WARNING, "Maximum retries exceeded on transmission %s for seqno %d (%s %s)\n", pkt->owner->callid, pkt->seqno, (ast_test_flag(pkt, FLAG_FATAL)) ? "Critical" : "Non-critical", (ast_test_flag(pkt, FLAG_RESPONSE)) ? "Response" : "Request");
-	} else {
-		if ((pkt->method == SIP_OPTIONS) && sipdebug)
-			ast_log(LOG_WARNING, "Cancelling retransmit of OPTIONs (call id %s) \n", pkt->owner->callid);
-	}
-	append_history(pkt->owner, "MaxRetries", "%s", (ast_test_flag(pkt, FLAG_FATAL)) ? "(Critical)" : "(Non-critical)");
- 		
-	pkt->retransid = -1;
-
-	if (ast_test_flag(pkt, FLAG_FATAL)) {
-		while(pkt->owner->owner && ast_channel_trylock(pkt->owner->owner)) {
-			ast_mutex_unlock(&pkt->owner->lock);	/* SIP_PVT, not channel */
-			usleep(1);
-			ast_mutex_lock(&pkt->owner->lock);
-		}
-		if (pkt->owner->owner) {
-			ast_set_flag(&pkt->owner->flags[0], SIP_ALREADYGONE);
-			ast_log(LOG_WARNING, "Hanging up call %s - no reply to our critical packet.\n", pkt->owner->callid);
-			ast_queue_hangup(pkt->owner->owner);
-			ast_channel_unlock(pkt->owner->owner);
-		} else {
-			/* If no channel owner, destroy now */
-			ast_set_flag(&pkt->owner->flags[0], SIP_NEEDDESTROY);	
-		}
-	}
-	/* In any case, go ahead and remove the packet */
-	for (prev = NULL, cur = pkt->owner->packets; cur; prev = cur, cur = cur->next) {
-		if (cur == pkt)
-			break;
-	}
-	if (cur) {
-		if (prev)
-			prev->next = cur->next;
-		else
-			pkt->owner->packets = cur->next;
-		ast_mutex_unlock(&pkt->owner->lock);
-		free(cur);
-		pkt = NULL;
-	} else
-		ast_log(LOG_WARNING, "Weird, couldn't find packet owner!\n");
-	if (pkt)
-		ast_mutex_unlock(&pkt->owner->lock);
-	return 0;
-}
-
-/*! \brief Transmit packet with retransmits 
-	\return 0 on success, -1 on failure to allocate packet 
-*/
-static enum sip_result __sip_reliable_xmit(struct sip_pvt *p, int seqno, int resp, char *data, int len, int fatal, int sipmethod)
-{
-	struct sip_pkt *pkt;
-	int siptimer_a = DEFAULT_RETRANS;
-
-	if (!(pkt = ast_calloc(1, sizeof(*pkt) + len + 1)))
-		return AST_FAILURE;
-	memcpy(pkt->data, data, len);
-	pkt->method = sipmethod;
-	pkt->packetlen = len;
-	pkt->next = p->packets;
-	pkt->owner = p;
-	pkt->seqno = seqno;
-	pkt->flags = resp;
-	pkt->data[len] = '\0';
-	pkt->timer_t1 = p->timer_t1;	/* Set SIP timer T1 */
-	if (fatal)
-		ast_set_flag(pkt, FLAG_FATAL);
-	if (pkt->timer_t1)
-		siptimer_a = pkt->timer_t1 * 2;
-
-	/* Schedule retransmission */
-	pkt->retransid = ast_sched_add_variable(sched, siptimer_a, retrans_pkt, pkt, 1);
-	if (option_debug > 3 && sipdebug)
-		ast_log(LOG_DEBUG, "*** SIP TIMER: Initalizing retransmit timer on packet: Id  #%d\n", pkt->retransid);
-	pkt->next = p->packets;
-	p->packets = pkt;
-
-	__sip_xmit(pkt->owner, pkt->data, pkt->packetlen);	/* Send packet */
-	if (sipmethod == SIP_INVITE) {
-		/* Note this is a pending invite */
-		p->pendinginvite = seqno;
-	}
-	return AST_SUCCESS;
-}
-
 /*! \brief Kill a SIP dialog (called by scheduler) */
 static int __sip_autodestruct(void *data)
 {
@@ -938,11 +799,10 @@ static int __sip_autodestruct(void *data)
 	if (p->owner) {
 		ast_log(LOG_WARNING, "Autodestruct on dialog '%s' with owner in place (Method: %s)\n", p->callid, sip_method2txt(p->method));
 		ast_queue_hangup(p->owner);
-	} else if (p->refer) {
+	} else if (p->refer)
 		transmit_request_with_auth(p, SIP_BYE, 0, XMIT_RELIABLE, 1);
-	} else {
+	else 
 		sip_destroy(p);
-	}
 	return 0;
 }
 
@@ -1074,57 +934,6 @@ static void add_blank(struct sip_request *req)
 		snprintf(req->data + req->len, sizeof(req->data) - req->len, "\r\n");
 		req->len += strlen(req->data + req->len);
 	}
-}
-
-/*! \brief Transmit response on SIP request*/
-static int send_response(struct sip_pvt *p, struct sip_request *req, enum xmittype reliable, int seqno)
-{
-	int res;
-
-	add_blank(req);
-	if (sip_debug_test_pvt(p)) {
-		const struct sockaddr_in *dst = sip_real_dst(p);
-
-		ast_verbose("%sTransmitting (%s) to %s:%d:\n%s\n---\n",
-			reliable ? "Reliably " : "", sip_nat_mode(p),
-			ast_inet_ntoa(dst->sin_addr),
-			ntohs(dst->sin_port), req->data);
-	}
-	if (global.recordhistory) {
-		struct sip_request tmp;
-		parse_copy(&tmp, req);
-		append_history(p, reliable ? "TxRespRel" : "TxResp", "%s / %s - %s", tmp.data, get_header(&tmp, "CSeq"), 
-			(tmp.method == SIP_RESPONSE || tmp.method == SIP_UNKNOWN) ? tmp.rlPart2 : sip_method2txt(tmp.method));
-	}
-	res = (reliable) ?
-		__sip_reliable_xmit(p, seqno, 1, req->data, req->len, (reliable == XMIT_CRITICAL), req->method) :
-		__sip_xmit(p, req->data, req->len);
-	if (res > 0)
-		return 0;
-	return res;
-}
-
-/*! \brief Send SIP Request to the other part of the dialogue */
-static int send_request(struct sip_pvt *p, struct sip_request *req, enum xmittype reliable, int seqno)
-{
-	int res;
-
-	add_blank(req);
-	if (sip_debug_test_pvt(p)) {
-		if (ast_test_flag(&p->flags[0], SIP_NAT_ROUTE))
-			ast_verbose("%sTransmitting (NAT) to %s:%d:\n%s\n---\n", reliable ? "Reliably " : "", ast_inet_ntoa(p->recv.sin_addr), ntohs(p->recv.sin_port), req->data);
-		else
-			ast_verbose("%sTransmitting (no NAT) to %s:%d:\n%s\n---\n", reliable ? "Reliably " : "", ast_inet_ntoa(p->sa.sin_addr), ntohs(p->sa.sin_port), req->data);
-	}
-	if (global.recordhistory) {
-		struct sip_request tmp;
-		parse_copy(&tmp, req);
-		append_history(p, reliable ? "TxReqRel" : "TxReq", "%s / %s - %s", tmp.data, get_header(&tmp, "CSeq"), sip_method2txt(tmp.method));
-	}
-	res = (reliable) ?
-		__sip_reliable_xmit(p, seqno, 0, req->data, req->len, (reliable > 1), req->method) :
-		__sip_xmit(p, req->data, req->len);
-	return res;
 }
 
 /*! \brief Locate closing quote in a string, skipping escaped quotes.

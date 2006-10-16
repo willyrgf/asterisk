@@ -56,7 +56,8 @@ GNURK void sipnet_lock(void);			/*!< Lock netlock mutex */
 GNURK void sipnet_unlock(void);		/*!< Unlock netlock mutex */
 GNURK int sipsocket_open(void);		/* Open network socket for SIP */
 GNURK int sipsocket_initialized(void);		/* Check if we have network socket open */
-GNURK int __sip_xmit(struct sip_pvt *p, char *data, int len);
+GNURK int send_response(struct sip_pvt *p, struct sip_request *req, enum xmittype reliable, int seqno);
+GNURK int send_request(struct sip_pvt *p, struct sip_request *req, enum xmittype reliable, int seqno);
 
 /*! sip3_parse.c */
 GNURK char *sip_method2txt(int method);
