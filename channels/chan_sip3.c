@@ -405,6 +405,7 @@ static int sip_addrcmp(char *name, struct sockaddr_in *sin);	/* Support for peer
 static int sip_refer_allocate(struct sip_pvt *p);
 static void ast_quiet_chan(struct ast_channel *chan);
 static int attempt_transfer(struct sip_dual *transferer, struct sip_dual *target);
+static void do_setnat(struct sip_pvt *p, int natflags);
 
 /*--- Device monitoring and Device/extension state handling */
 static int cb_extensionstate(char *context, char* exten, int state, void *data);
@@ -1486,13 +1487,33 @@ static struct sip_peer *find_user(const char *name, int realtime)
 	return u;
 }
 
+/*! \brief Set nat mode on the various data sockets */
+static void do_setnat(struct sip_pvt *p, int natflags)
+{
+	const char *mode = natflags ? "On" : "Off";
+
+	if (p->rtp) {
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Setting NAT on RTP to %s\n", mode);
+		ast_rtp_setnat(p->rtp, natflags);
+	}
+	if (p->vrtp) {
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Setting NAT on VRTP to %s\n", mode);
+		ast_rtp_setnat(p->vrtp, natflags);
+	}
+	if (p->udptl) {
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Setting NAT on UDPTL to %s\n", mode);
+		ast_udptl_setnat(p->udptl, natflags);
+	}
+}
+
 /*! \brief Create address structure from peer reference.
  *  return -1 on error, 0 on success.
  */
 static int create_addr_from_peer(struct sip_pvt *dialog, struct sip_peer *peer)
 {
-	int natflags;
-
 	if ((peer->addr.sin_addr.s_addr || peer->defaddr.sin_addr.s_addr) &&
 	    (!peer->maxms || ((peer->lastms >= 0)  && (peer->lastms <= peer->maxms)))) {
 		dialog->sa = (peer->addr.sin_addr.s_addr) ? peer->addr : peer->defaddr;
@@ -1526,26 +1547,17 @@ static int create_addr_from_peer(struct sip_pvt *dialog, struct sip_peer *peer)
 		ast_udptl_destroy(dialog->udptl);
 		dialog->udptl = NULL;
 	}
-	natflags = ast_test_flag(&dialog->flags[0], SIP_NAT) & SIP_NAT_ROUTE;
+	do_setnat(dialog, ast_test_flag(&dialog->flags[0], SIP_NAT) & SIP_NAT_ROUTE );
+
 	if (dialog->rtp) {
-		if (option_debug)
-			ast_log(LOG_DEBUG, "Setting NAT on RTP to %s\n", natflags ? "On" : "Off");
-		ast_rtp_setnat(dialog->rtp, natflags);
 		ast_rtp_setdtmf(dialog->rtp, ast_test_flag(&dialog->flags[0], SIP_DTMF) != SIP_DTMF_INFO);
 		ast_rtp_setdtmfcompensate(dialog->rtp, ast_test_flag(&dialog->flags[1], SIP_PAGE2_RFC2833_COMPENSATE));
 	}
 	if (dialog->vrtp) {
-		if (option_debug)
-			ast_log(LOG_DEBUG, "Setting NAT on VRTP to %s\n", natflags ? "On" : "Off");
-		ast_rtp_setnat(dialog->vrtp, natflags);
 		ast_rtp_setdtmf(dialog->vrtp, 0);
 		ast_rtp_setdtmfcompensate(dialog->vrtp, 0);
 	}
-	if (dialog->udptl) {
-		if (option_debug)
-			ast_log(LOG_DEBUG, "Setting NAT on UDPTL to %s\n", natflags ? "On" : "Off");
-		ast_udptl_setnat(dialog->udptl, natflags);
-	}
+
 	/* Set Frame packetization */
 	if (dialog->rtp) {
 		ast_rtp_codec_setpref(dialog->rtp, &dialog->prefs);
@@ -3105,17 +3117,10 @@ static struct sip_pvt *sip_alloc(ast_string_field callid, struct sockaddr_in *si
 	}
 
 	if (useglobal_nat && sin) {
-		int natflags;
 		/* Setup NAT structure according to global settings if we have an address */
 		ast_copy_flags(&p->flags[0], &global.flags[0], SIP_NAT);
 		p->recv = *sin;
-		natflags = ast_test_flag(&p->flags[0], SIP_NAT) & SIP_NAT_ROUTE;
-		if (p->rtp)
-			ast_rtp_setnat(p->rtp, natflags);
-		if (p->vrtp)
-			ast_rtp_setnat(p->vrtp, natflags);
-		if (p->udptl)
-			ast_udptl_setnat(p->udptl, natflags);
+		do_setnat(p, ast_test_flag(&p->flags[0], SIP_NAT) & SIP_NAT_ROUTE);
 	}
 
 	if (p->method != SIP_REGISTER)
@@ -7447,10 +7452,9 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 	enum check_auth_result res = AUTH_SUCCESSFUL;
 	char *t;
 	char calleridname[50];
-	int debug=sip_debug_test_addr(sin);
+	int debug = sip_debug_test_addr(sin);
 	struct ast_variable *tmpvar = NULL, *v = NULL;
 	enum objecttype devicematch = SIP_UNKNOWN;
-	int usenatroute;
 	char *uri2 = ast_strdupa(uri);
 
 	/* Terminate URI */
@@ -7578,21 +7582,12 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 				ast_shrink_phone_number(tmp);
 			ast_string_field_set(p, cid_num, tmp);
 		} else {
-			ast_string_field_set(p, cid_num, rpid_num);
+			ast_string_field_set(p, cid_num, tmp);
 		}
 	}
+	
+	do_setnat(p, ast_test_flag(&p->flags[0], SIP_NAT_ROUTE));
 
-	usenatroute = ast_test_flag(&p->flags[0], SIP_NAT_ROUTE);
-	if (p->rtp) {
-		if (option_debug)
-			ast_log(LOG_DEBUG, "Setting NAT on RTP to %d\n", usenatroute);
-		ast_rtp_setnat(p->rtp, usenatroute);
-	}
-	if (p->vrtp) {
-		if (option_debug)
-			ast_log(LOG_DEBUG, "Setting NAT on VRTP to %d\n", usenatroute);
-		ast_rtp_setnat(p->vrtp, usenatroute);
-	}
 	if (device->maxms && device->lastms)
 		p->timer_t1 = device->lastms;
 	if (ast_test_flag(&device->flags[0], SIP_INSECURE_INVITE)) {
@@ -7680,22 +7675,7 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 				p->chanvars = tmpvar;
 			}
 		}	
-		usenatroute = ast_test_flag(&p->flags[0], SIP_NAT_ROUTE);
-		if (p->rtp) {
-			if (option_debug)
-				ast_log(LOG_DEBUG, "Setting NAT on RTP to %s\n", usenatroute ? "On" : "Off");
-			ast_rtp_setnat(p->rtp, usenatroute);
-		}
-		if (p->vrtp) {
-			if (option_debug)
-				ast_log(LOG_DEBUG, "Setting NAT on VRTP to %s\n", usenatroute ? "On" : "Off");
-			ast_rtp_setnat(p->vrtp, usenatroute);
-		}
-		if (p->udptl) {
-			if (option_debug)
-				ast_log(LOG_DEBUG, "Setting NAT on UDPTL to %s\n", usenatroute ? "On" : "Off");
-			ast_udptl_setnat(p->udptl, usenatroute);
-		}
+		do_setnat(p, ast_test_flag(&p->flags[0], SIP_NAT_ROUTE));
 		ast_string_field_set(p, peersecret, device->secret);
 		ast_string_field_set(p, peermd5secret, device->md5secret);
 		ast_string_field_set(p, subscribecontext, device->subscribecontext);
