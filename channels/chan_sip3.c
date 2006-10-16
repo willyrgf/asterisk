@@ -13725,20 +13725,11 @@ static struct sip_peer *build_user(const char *name, struct ast_variable *v, int
 			if (user->maxcallbitrate < 0)
 				user->maxcallbitrate = global.default_maxcallbitrate;
  		} else if (!strcasecmp(v->name, "t38pt_udptl")) {
-			if (ast_true(v->value)) {
-				ast_set_flag(&user->flags[1], SIP_PAGE2_T38SUPPORT_UDPTL);
-			} else
-				ast_clear_flag(&user->flags[1], SIP_PAGE2_T38SUPPORT_UDPTL);
+			ast_set2_flag(&user->flags[1], ast_true(v->value), SIP_PAGE2_T38SUPPORT_UDPTL);
 		} else if (!strcasecmp(v->name, "t38pt_rtp")) {
-			if (ast_true(v->value)) {
-				ast_set_flag(&user->flags[1], SIP_PAGE2_T38SUPPORT_RTP);
-			} else
-				ast_clear_flag(&user->flags[1], SIP_PAGE2_T38SUPPORT_RTP);
+			ast_set2_flag(&user->flags[1], ast_true(v->value), SIP_PAGE2_T38SUPPORT_RTP);
 		} else if (!strcasecmp(v->name, "t38pt_tcp")) {
-			if (ast_true(v->value)) {
-				ast_set_flag(&user->flags[1], SIP_PAGE2_T38SUPPORT_TCP);
-			} else
-				ast_clear_flag(&user->flags[1], SIP_PAGE2_T38SUPPORT_TCP);
+			ast_set2_flag(&user->flags[1], ast_true(v->value), SIP_PAGE2_T38SUPPORT_TCP);
 		}
 	}
 	ast_copy_flags(&user->flags[0], &userflags[0], mask[0].flags);
@@ -13999,20 +13990,11 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 			if (peer->maxcallbitrate < 0)
 				peer->maxcallbitrate = global.default_maxcallbitrate;
 		} else if (!strcasecmp(v->name, "t38pt_udptl")) {
-			if (ast_true(v->value)) {
-				ast_set_flag(&peer->flags[1], SIP_PAGE2_T38SUPPORT_UDPTL);
-			} else
-				ast_clear_flag(&peer->flags[1], SIP_PAGE2_T38SUPPORT_UDPTL);
+			ast_set2_flag(&peer->flags[1], ast_true(v->value), SIP_PAGE2_T38SUPPORT_UDPTL);
 		} else if (!strcasecmp(v->name, "t38pt_rtp")) {
-			if (ast_true(v->value)) {
-				ast_set_flag(&peer->flags[1], SIP_PAGE2_T38SUPPORT_RTP);
-			} else
-				ast_clear_flag(&peer->flags[1], SIP_PAGE2_T38SUPPORT_RTP);
+			ast_set2_flag(&peer->flags[1], ast_true(v->value), SIP_PAGE2_T38SUPPORT_RTP);
 		} else if (!strcasecmp(v->name, "t38pt_tcp")) {
-			if (ast_true(v->value)) {
-				ast_set_flag(&peer->flags[1], SIP_PAGE2_T38SUPPORT_TCP);
-			} else
-				ast_clear_flag(&peer->flags[1], SIP_PAGE2_T38SUPPORT_TCP);
+			ast_set2_flag(&peer->flags[1], ast_true(v->value), SIP_PAGE2_T38SUPPORT_TCP);
 		}
 	}
 	if (!ast_test_flag(&global.flags[1], SIP_PAGE2_IGNOREREGEXPIRE) && ast_test_flag(&peer->flags[1], SIP_PAGE2_DYNAMIC) && realtime) {
