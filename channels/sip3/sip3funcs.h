@@ -73,6 +73,7 @@ extern const char *domain_mode_to_text(const enum domain_mode mode);
 extern int sip_show_domains(int fd, int argc, char *argv[]);	/* CLI Function */
 
 /*! sip3_auth.c */
+extern void auth_headers(enum sip_auth_type code, char **header, char **respheader);
 extern enum check_auth_result check_auth(struct sip_pvt *p, struct sip_request *req, const char *username,
 		 const char *secret, const char *md5secret, int sipmethod,
 		 char *uri, enum xmittype reliable, int ignore);

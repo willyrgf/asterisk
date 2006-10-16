@@ -240,8 +240,8 @@ enum sipmethod {
 	to the end point.
 */
 enum sip_auth_type {
-	PROXY_AUTH,
-	WWW_AUTH,
+	PROXY_AUTH = 407,
+	WWW_AUTH = 401,
 };
 
 /*! \brief Authentication result from check_auth* functions */

@@ -89,6 +89,22 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/compiler.h"
 #include "sip3.h"
 
+
+/*! \brief return the request and response heade for a 401 or 407 code */
+static void auth_headers(enum sip_auth_type code, char **header, char **respheader)
+{
+	if (code == WWW_AUTH) {			/* 401 */
+		*header = "WWW-Authenticate";
+		*respheader = "Authorization";
+	} else if (code == PROXY_AUTH) {	/* 407 */
+		*header = "Proxy-Authenticate";
+		*respheader = "Proxy-Authorization";
+	} else {
+		ast_verbose("-- wrong response code %d\n", code);
+		*header = *respheader = "Invalid";
+	}
+}
+
 /*! \brief  Check user authorization from peer definition 
 	Some actions, like REGISTER and INVITEs from peers require
 	authentication (if peer have secret set) 
@@ -99,8 +115,8 @@ static enum check_auth_result check_auth(struct sip_pvt *p, struct sip_request *
 					 char *uri, enum xmittype reliable, int ignore)
 {
 	const char *response = "407 Proxy Authentication Required";
-	const char *reqheader = "Proxy-Authorization";
-	const char *respheader = "Proxy-Authenticate";
+	const char *reqheader;
+	const char *respheader;
 	const char *authtoken;
 	char a1_hash[256];
 	char resp_hash[256]="";
@@ -126,14 +142,8 @@ static enum check_auth_result check_auth(struct sip_pvt *p, struct sip_request *
 	/* Always OK if no secret */
 	if (ast_strlen_zero(secret) && ast_strlen_zero(md5secret))
 		return AUTH_SUCCESSFUL;
-	if (sipmethod == SIP_REGISTER || sipmethod == SIP_SUBSCRIBE) {
-		/* On a REGISTER, we have to use 401 and its family of headers instead of 407 and its family
-		   of headers -- GO SIP!  Whoo hoo!  Two things that do the same thing but are used in
-		   different circumstances! What a surprise. */
-		response = "401 Unauthorized";
-		reqheader = "Authorization";
-		respheader = "WWW-Authenticate";
-	}
+	response = "401 Unauthorized";
+	auth_headers(WWW_AUTH, &respheader, &reqheader);	
 	authtoken =  get_header(req, reqheader);	
 	if (ignore && !ast_strlen_zero(p->randdata) && ast_strlen_zero(authtoken)) {
 		/* This is a retransmitted invite/register/etc, don't reconstruct authentication

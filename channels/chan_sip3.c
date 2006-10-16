@@ -1,5 +1,7 @@
 /* CODENAME PINEAPPLE - THIS IS VERY EXPERIMENTAL. 
    IF YOU USE THIS IN PRODUCTION, I WILL NOT SUPPORT YOU...
+*
+*  -- Mail bugs to oej@edvina.net, do not file them in the bug tracker
 */
 
 /*
@@ -299,7 +301,6 @@ static int sip_senddigit_begin(struct ast_channel *ast, char digit);
 static int sip_senddigit_end(struct ast_channel *ast, char digit);
 
 /*--- Transmitting responses and requests */
-static int __sip_xmit(struct sip_pvt *p, char *data, int len);
 static int __sip_reliable_xmit(struct sip_pvt *p, int seqno, int resp, char *data, int len, int fatal, int sipmethod);
 static int __transmit_response(struct sip_pvt *p, const char *msg, const struct sip_request *req, enum xmittype reliable);
 static int retrans_pkt(void *data);
@@ -374,7 +375,6 @@ static void add_noncodec_to_sdp(const struct sip_pvt *p, int format, int sample_
 static int add_sdp(struct sip_request *resp, struct sip_pvt *p);
 
 /*--- Authentication stuff */
-static int do_proxy_auth(struct sip_pvt *p, struct sip_request *req, char *header, char *respheader, int sipmethod, int init);
 static int reply_digest(struct sip_pvt *p, struct sip_request *req, char *header, int sipmethod, char *digest, int digest_len);
 static int build_reply_digest(struct sip_pvt *p, int method, char *digest, int digest_len);
 static int clear_realm_authentication(struct sip_auth *authlist);	/* Clear realm authentication list (at reload) */
@@ -384,7 +384,7 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 					      int sipmethod, char *uri, enum xmittype reliable,
 					      struct sockaddr_in *sin, struct sip_peer **authpeer);
 static int check_user(struct sip_pvt *p, struct sip_request *req, int sipmethod, char *uri, enum xmittype reliable, struct sockaddr_in *sin);
-static int do_proxy_auth(struct sip_pvt *p, struct sip_request *req, char *header, char *respheader, int sipmethod, int init);
+static int do_proxy_auth(struct sip_pvt *p, struct sip_request *req, enum sip_auth_type code, int sipmethod, int init);
 static int build_reply_digest(struct sip_pvt *p, int method, char* digest, int digest_len);
 
 /*--- SIP realm authentication */
@@ -511,7 +511,6 @@ static char *regstate2str(enum sipregistrystate regstate) attribute_const;
 static int sip_reregister(void *data);
 static int __sip_do_register(struct sip_registry *r);
 static int sip_reg_timeout(void *data);
-static int do_register_auth(struct sip_pvt *p, struct sip_request *req, char *header, char *respheader);
 static int reply_digest(struct sip_pvt *p, struct sip_request *req, char *header, int sipmethod,  char *digest, int digest_len);
 static void sip_send_all_registers(void);
 
@@ -590,7 +589,7 @@ static int local_attended_transfer(struct sip_pvt *transferer, struct sip_dual *
 /*------Response handling functions */
 static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, struct sip_request *req, int seqno);
 static void handle_response_refer(struct sip_pvt *p, int resp, char *rest, struct sip_request *req, int seqno);
-static int handle_response_peerpoke(struct sip_pvt *p, int resp, struct sip_request *req);
+static void handle_response_peerpoke(struct sip_pvt *p, int resp, struct sip_request *req);
 static int handle_response_register(struct sip_pvt *p, int resp, char *rest, struct sip_request *req, int ignore, int seqno);
 static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_request *req, int ignore, int seqno);
 
@@ -3336,73 +3335,47 @@ static int lws2sws(char *msgbuf, int len)
 */
 static void parse_request(struct sip_request *req)
 {
-	/* Divide fields by NULL's */
-	char *c;
-	int f = 0;
+	char *c = req->data, **dst = req->header;
+	int i = 0, lim = SIP_MAX_HEADERS - 1;
 
-	c = req->data;
-
-	/* First header starts immediately */
-	req->header[f] = c;
-	while(*c) {
-		if (*c == '\n') {
-			/* We've got a new header */
-			*c = 0;
-
+	req->header[0] = c;
+	req->headers = -1;	/* mark that we are working on the header */
+	for (; *c; c++) {
+		if (*c == '\r')		/* remove \r */
+			*c = '\0';
+		else if (*c == '\n') { /* end of this line */
+			*c = '\0';
 			if (sipdebug && option_debug > 3)
-				ast_log(LOG_DEBUG, "Header %d: %s (%d)\n", f, req->header[f], (int) strlen(req->header[f]));
-			if (ast_strlen_zero(req->header[f])) {
-				/* Line by itself means we're now in content */
-				c++;
-				break;
+				ast_log(LOG_DEBUG, "%7s %2d [%3d]: %s\n",
+					req->headers < 0 ? "Header" : "Body",
+					i, (int)strlen(dst[i]), dst[i]);
+			if (ast_strlen_zero(dst[i]) && req->headers < 0) {
+				req->headers = i;	/* record number of header lines */
+				dst = req->line;	/* start working on the body */
+				i = 0;
+				lim = SIP_MAX_LINES - 1;
+			} else {	/* move to next line, check for overflows */
+				if (i++ >= lim)
+					break;
 			}
-			if (f >= SIP_MAX_HEADERS - 1) {
-				ast_log(LOG_WARNING, "Too many SIP headers. Ignoring.\n");
-			} else
-				f++;
-			req->header[f] = c + 1;
-		} else if (*c == '\r') {
-			/* Ignore but eliminate \r's */
-			*c = 0;
+			dst[i] = c + 1; /* record start of next line */
 		}
-		c++;
+        }
+	/* update count of header or body lines */
+	if (req->headers >= 0)	/* we are in the body */
+		req->lines = i;
+	else {			/* no body */
+		req->headers = i;
+		req->lines = 0;
+		req->line[0] = "";
 	}
-	/* Check for last header */
-	if (!ast_strlen_zero(req->header[f])) {
-		if (sipdebug && option_debug > 3)
-			ast_log(LOG_DEBUG, "Header %d: %s (%d)\n", f, req->header[f], (int) strlen(req->header[f]));
-		f++;
-	}
-	req->headers = f;
-	/* Now we process any mime content */
-	f = 0;
-	req->line[f] = c;
-	while(*c) {
-		if (*c == '\n') {
-			/* We've got a new line */
-			*c = 0;
-			if (sipdebug && option_debug > 3)
-				ast_log(LOG_DEBUG, "Line: %s (%d)\n", req->line[f], (int) strlen(req->line[f]));
-			if (f >= SIP_MAX_LINES - 1) {
-				ast_log(LOG_WARNING, "Too many SDP lines. Ignoring.\n");
-			} else
-				f++;
-			req->line[f] = c + 1;
-		} else if (*c == '\r') {
-			/* Ignore and eliminate \r's */
-			*c = 0;
-		}
-		c++;
-	}
-	/* Check for last line */
-	if (!ast_strlen_zero(req->line[f])) 
-		f++;
-	req->lines = f;
-	if (*c) 
-		ast_log(LOG_WARNING, "Odd content, extra stuff left over ('%s')\n", c);
+
+	if (*c)
+		ast_log(LOG_WARNING, "Too many lines, skipping <%s>\n", c);
 	/* Split up the first line parts */
 	determine_firstline_parts(req);
 }
+
 
 /*!
   \brief Determine whether a SIP message contains an SDP in its body
@@ -6194,12 +6167,10 @@ static int transmit_request_with_auth(struct sip_pvt *p, int sipmethod, int seqn
 
 		memset(digest, 0, sizeof(digest));
 		if(!build_reply_digest(p, sipmethod, digest, sizeof(digest))) {
-			if (p->options && p->options->auth_type == PROXY_AUTH)
-				add_header(&resp, "Proxy-Authorization", digest);
-			else if (p->options && p->options->auth_type == WWW_AUTH)
-				add_header(&resp, "Authorization", digest);
-			else	/* Default, to be backwards compatible (maybe being too careful, but leaving it for now) */
-				add_header(&resp, "Proxy-Authorization", digest);
+			char *dummy, *response;
+			enum sip_auth_type code = p->options ? p->options->auth_type : PROXY_AUTH; /* XXX force 407 if unknown */
+			auth_headers(code, &dummy, &response);
+			add_header(&resp, response, digest);
 		} else
 			ast_log(LOG_WARNING, "No authentication available for call %s\n", p->callid);
 	}
@@ -9365,10 +9336,13 @@ static int sip_no_history(int fd, int argc, char *argv[])
 }
 
 /*! \brief Authenticate for outbound registration */
-static int do_register_auth(struct sip_pvt *p, struct sip_request *req, char *header, char *respheader)
+static int do_register_auth(struct sip_pvt *p, struct sip_request *req, enum sip_auth_type code)
 {
+	char *header, *respheader;
 	char digest[1024];
+
 	p->authtries++;
+	auth_headers(code, &header, &respheader);
 	memset(digest,0,sizeof(digest));
 	if (reply_digest(p, req, header, SIP_REGISTER, digest, sizeof(digest))) {
 		/* There's nothing to use for authentication */
@@ -9386,14 +9360,16 @@ static int do_register_auth(struct sip_pvt *p, struct sip_request *req, char *he
 }
 
 /*! \brief Add authentication on outbound SIP packet */
-static int do_proxy_auth(struct sip_pvt *p, struct sip_request *req, char *header, char *respheader, int sipmethod, int init)
+static int do_proxy_auth(struct sip_pvt *p, struct sip_request *req, enum sip_auth_type code, int sipmethod, int init)
 {
+	char *header, *respheader;
 	char digest[1024];
 
 	if (!p->options && !(p->options = ast_calloc(1, sizeof(*p->options))))
 		return -2;
 
 	p->authtries++;
+	auth_headers(code, &header, &respheader);
 	if (option_debug > 1)
 		ast_log(LOG_DEBUG, "Auth attempt %d on %s\n", p->authtries, sip_method2txt(sipmethod));
 	memset(digest, 0, sizeof(digest));
@@ -10112,14 +10088,12 @@ static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, stru
 		/* First we ACK */
 		transmit_request(p, SIP_ACK, seqno, XMIT_UNRELIABLE, FALSE);
 		if (p->options)
-			p->options->auth_type = (resp == 401 ? WWW_AUTH : PROXY_AUTH);
+			p->options->auth_type = resp;
 
 		/* Then we AUTH */
 		ast_string_field_free(p, theirtag);	/* forget their old tag, so we don't match tags when getting response */
 		if (!ast_test_flag(req, SIP_PKT_IGNORE)) {
-			char *authenticate = (resp == 401 ? "WWW-Authenticate" : "Proxy-Authenticate");
-			char *authorization = (resp == 401 ? "Authorization" : "Proxy-Authorization");
-			if ((p->authtries == MAX_AUTHTRIES) || do_proxy_auth(p, req, authenticate, authorization, SIP_INVITE, 1)) {
+			if (p->authtries == MAX_AUTHTRIES || do_proxy_auth(p, req, resp, SIP_INVITE, 1)) {
 				ast_log(LOG_NOTICE, "Failed to authenticate on INVITE to '%s'\n", get_header(&p->initreq, "From"));
 				ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
 				ast_set_flag(&p->flags[0], SIP_ALREADYGONE);	
@@ -10165,9 +10139,6 @@ static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, stru
   */
 static void handle_response_refer(struct sip_pvt *p, int resp, char *rest, struct sip_request *req, int seqno)
 {
-	char *auth = "Proxy-Authenticate";
-	char *auth2 = "Proxy-Authorization";
-
 	switch (resp) {
 	case 202:   /* Transfer accepted */
 		/* We need  to do something here */
@@ -10186,11 +10157,7 @@ static void handle_response_refer(struct sip_pvt *p, int resp, char *rest, struc
 				ast_inet_ntoa(p->recv.sin_addr), ntohs(p->recv.sin_port));
 			ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);
 		}
-		if (resp == 401) {
-			auth = "WWW-Authenticate";
-			auth2 = "Authorization";
-		}
-		if ((p->authtries > 1) || do_proxy_auth(p, req, auth, auth2, SIP_REFER, 0)) {
+		if (p->authtries > 1 || do_proxy_auth(p, req, resp, SIP_REFER, 0)) {
 			ast_log(LOG_NOTICE, "Failed to authenticate on REFER to '%s'\n", get_header(&p->initreq, "From"));
 			p->refer->status = REFER_NOAUTH;
 			ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);
@@ -10223,7 +10190,7 @@ static int handle_response_register(struct sip_pvt *p, int resp, char *rest, str
 
 	switch (resp) {
 	case 401:	/* Unauthorized */
-		if ((p->authtries == MAX_AUTHTRIES) || do_register_auth(p, req, "WWW-Authenticate", "Authorization")) {
+		if (p->authtries == MAX_AUTHTRIES || do_register_auth(p, req, resp)) {
 			ast_log(LOG_NOTICE, "Failed to authenticate on REGISTER to '%s@%s' (Tries %d)\n", p->registry->username, p->registry->hostname, p->authtries);
 			ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
 			}
@@ -10244,7 +10211,7 @@ static int handle_response_register(struct sip_pvt *p, int resp, char *rest, str
 		ast_sched_del(sched, r->timeout);
 		break;
 	case 407:	/* Proxy auth */
-		if ((p->authtries == MAX_AUTHTRIES) || do_register_auth(p, req, "Proxy-Authenticate", "Proxy-Authorization")) {
+		if (p->authtries == MAX_AUTHTRIES || do_register_auth(p, req, resp)) {
 			ast_log(LOG_NOTICE, "Failed to authenticate on REGISTER to '%s' (tries '%d')\n", get_header(&p->initreq, "From"), p->authtries);
 			ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
 		}
@@ -10333,58 +10300,52 @@ static int handle_response_register(struct sip_pvt *p, int resp, char *rest, str
 	return 1;
 }
 
+
 /*! \brief Handle qualification responses (OPTIONS) */
-static int handle_response_peerpoke(struct sip_pvt *p, int resp, struct sip_request *req)
+static void handle_response_peerpoke(struct sip_pvt *p, int resp, struct sip_request *req)
 {
-	struct sip_peer *peer;
-	int pingtime;
-	struct timeval tv;
+	struct sip_peer *peer = p->relatedpeer;
+	int statechanged, is_reachable, was_reachable;
+	int pingtime = ast_tvdiff_ms(ast_tvnow(), peer->ps);
 
-	if (resp != 100) {
-		int statechanged = 0;
-		int newstate = 0;
-		peer = p->relatedpeer;
-		gettimeofday(&tv, NULL);
-		pingtime = ast_tvdiff_ms(tv, peer->ps);
-		if (pingtime < 1)
-			pingtime = 1;
-		if ((peer->lastms < 0)  || (peer->lastms > peer->maxms)) {
-			if (pingtime <= peer->maxms) {
-				ast_log(LOG_NOTICE, "Peer '%s' is now REACHABLE! (%dms / %dms)\n", peer->name, pingtime, peer->maxms);
-				statechanged = 1;
-				newstate = 1;
-			}
-		} else if ((peer->lastms > 0) && (peer->lastms <= peer->maxms)) {
-			if (pingtime > peer->maxms) {
-				ast_log(LOG_NOTICE, "Peer '%s' is now TOO LAGGED! (%dms / %dms)\n", peer->name, pingtime, peer->maxms);
-				statechanged = 1;
-				newstate = 2;
-			}
-		}
-		if (!peer->lastms)
-			statechanged = 1;
-		peer->lastms = pingtime;
-		peer->call = NULL;
-		if (statechanged) {
-			ast_device_state_changed("SIP/%s", peer->name);
-			if (newstate == 2) {
-				manager_event(EVENT_FLAG_SYSTEM, "PeerStatus", "Peer: SIP/%s\r\nPeerStatus: Lagged\r\nTime: %d\r\n", peer->name, pingtime);
-			} else {
-				manager_event(EVENT_FLAG_SYSTEM, "PeerStatus", "Peer: SIP/%s\r\nPeerStatus: Reachable\r\nTime: %d\r\n", peer->name, pingtime);
-			}
-		}
+	/*
+	 * Compute the response time to a ping (goes in peer->lastms.)
+	 * -1 means did not respond, 0 means unknown,
+	 * 1..maxms is a valid response, >maxms means late response.
+	 */
+	if (pingtime < 1)	/* zero = unknown, so round up to 1 */
+		pingtime = 1;
 
-		if (peer->pokeexpire > -1)
-			ast_sched_del(sched, peer->pokeexpire);
-		ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
+	/* Now determine new state and whether it has changed.
+	 * Use some helper variables to simplify the writing
+	 * of the expressions.
+	 */
+	was_reachable = peer->lastms > 0 && peer->lastms <= peer->maxms;
+	is_reachable = pingtime <= peer->maxms;
+	statechanged = peer->lastms == 0 /* yes, unknown before */
+		|| was_reachable != is_reachable;
 
-		/* Try again eventually */
-		if ((peer->lastms < 0)  || (peer->lastms > peer->maxms))
-			peer->pokeexpire = ast_sched_add(sched, global.default_qualifycheck_notok, sip_poke_peer_s, peer);
-		else
-			peer->pokeexpire = ast_sched_add(sched, global.default_qualifycheck_ok, sip_poke_peer_s, peer);
+	peer->lastms = pingtime;
+	peer->call = NULL;
+	if (statechanged) {
+		const char *s = is_reachable ? "Reachable" : "Lagged";
+
+		ast_log(LOG_NOTICE, "Peer '%s' is now %s. (%dms / %dms)\n",
+			peer->name, s, pingtime, peer->maxms);
+		ast_device_state_changed("SIP/%s", peer->name);
+		manager_event(EVENT_FLAG_SYSTEM, "PeerStatus",
+			"Peer: SIP/%s\r\nPeerStatus: %s\r\nTime: %d\r\n",
+			peer->name, s, pingtime);
 	}
-	return 1;
+
+	if (peer->pokeexpire > -1)
+		ast_sched_del(sched, peer->pokeexpire);
+	ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
+
+	/* Try again eventually */
+	peer->pokeexpire = ast_sched_add(sched,
+		is_reachable ? global.default_qualifycheck_ok: global.default_qualifycheck_notok,
+		sip_poke_peer_s, peer);
 }
 
 /*! \brief Handle SIP response in dialogue */
@@ -10425,7 +10386,7 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 		   Well, as long as it's not a 100 response...  since we might
 		   need to hang around for something more "definitive" */
 
-		res = handle_response_peerpoke(p, resp, req);
+		handle_response_peerpoke(p, resp, req);
 	} else if (ast_test_flag(&p->flags[0], SIP_OUTGOING)) {
 		switch(resp) {
 		case 100:	/* 100 Trying */
@@ -10510,7 +10471,7 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 					ast_log(LOG_WARNING, "Asked to authenticate %s, to %s:%d but we have no matching peer!\n",
 							msg, ast_inet_ntoa(p->recv.sin_addr), ntohs(p->recv.sin_port));
 					ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
-				if ((p->authtries == MAX_AUTHTRIES) || do_proxy_auth(p, req, "Proxy-Authenticate", "Proxy-Authorization", sipmethod, 0)) {
+				if (p->authtries == MAX_AUTHTRIES || do_proxy_auth(p, req, 407, sipmethod, 0)) {
 					ast_log(LOG_NOTICE, "Failed to authenticate on %s to '%s'\n", msg, get_header(&p->initreq, "From"));
 					ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
 				}
@@ -10714,11 +10675,7 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 			else if (sipmethod == SIP_INVITE) 
 				handle_response_invite(p, resp, rest, req, seqno);
 			else if (sipmethod == SIP_BYE) {
-				char *auth, *auth2;
-
-				auth = (resp == 407 ? "Proxy-Authenticate" : "WWW-Authenticate");
-				auth2 = (resp == 407 ? "Proxy-Authorization" : "Authorization");
-				if ((p->authtries == MAX_AUTHTRIES) || do_proxy_auth(p, req, auth, auth2, sipmethod, 0)) {
+				if (p->authtries == MAX_AUTHTRIES || do_proxy_auth(p, req, resp, sipmethod, 0)) {
 					ast_log(LOG_NOTICE, "Failed to authenticate on %s to '%s'\n", msg, get_header(&p->initreq, "From"));
 					ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
 				}
