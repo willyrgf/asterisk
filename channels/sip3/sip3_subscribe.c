@@ -71,7 +71,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/callerid.h"
 #include "asterisk/cli.h"
 #include "asterisk/app.h"
-#include "asterisk/musiconhold.h"
 #include "asterisk/dsp.h"
 #include "asterisk/features.h"
 #include "asterisk/acl.h"
@@ -89,7 +88,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/localtime.h"
 #include "asterisk/abstract_jb.h"
 #include "asterisk/compiler.h"
+
 #include "sip3.h"
+#include "sip3funcs.h"
 
 
 /*! \brief List of subscription event types for SUBSCRIBE requests */
@@ -104,7 +105,7 @@ static const struct cfsubscription_types subscription_types[] = {
 };
 
 /*! \brief Show subscription type in string format */
-static const char *subscription_type2str(enum subscriptiontype subtype)
+const char *subscription_type2str(enum subscriptiontype subtype)
 {
 	int i;
 
@@ -117,7 +118,7 @@ static const char *subscription_type2str(enum subscriptiontype subtype)
 }
 
 /*! \brief Find subscription type in array */
-static const struct cfsubscription_types *find_subscription_type(enum subscriptiontype subtype)
+const struct cfsubscription_types *find_subscription_type(enum subscriptiontype subtype)
 {
 	int i;
 

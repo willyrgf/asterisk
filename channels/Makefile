@@ -14,7 +14,7 @@
 C_MODS:=$(filter-out $(MENUSELECT_CHANNELS),$(patsubst %.c,%,$(wildcard chan_*.c)))
 CC_MODS:=$(filter-out $(MENUSELECT_CHANNELS),$(patsubst %.cc,%,$(wildcard chan_*.cc)))
 SIP3_MODULES=chan_sip3.o sip3/sip3_network.o sip3/sip3_subscribe.o sip3/sip3_refer.o sip3/sip3_domain.o \
-	sip3/sip3_callerid.o sip3/sip3_auth.o
+	sip3/sip3_callerid.o sip3/sip3_auth.o sip3/sip3_sdprtp.c
 
 ifeq ($(OSARCH),OpenBSD)
   PTLIB=-lpt_OpenBSD_x86_r

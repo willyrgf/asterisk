@@ -67,10 +67,7 @@ extern int sip_sipredirect(struct sip_pvt *p, const char *dest);
 
 /*--- Codec handling / SDP */
 extern void try_suggested_sip_codec(struct sip_pvt *p);
-extern const char* get_sdp_iterate(int* start, struct sip_request *req, const char *name);
-extern const char *get_sdp(struct sip_request *req, const char *name);
 extern int find_sdp(struct sip_request *req);
-extern int process_sdp(struct sip_pvt *p, struct sip_request *req);
 extern void add_codec_to_sdp(const struct sip_pvt *p, int codec, int sample_rate,
 			     char **m_buf, size_t *m_size, char **a_buf, size_t *a_size,
 			     int debug);
@@ -316,8 +313,6 @@ extern void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 
 /*----- RTP interface functions */
 extern int sip_set_rtp_peer(struct ast_channel *chan, struct ast_rtp *rtp, struct ast_rtp *vrtp, int codecs, int nat_active);
-extern enum ast_rtp_get_result sip_get_rtp_peer(struct ast_channel *chan, struct ast_rtp **rtp);
-extern enum ast_rtp_get_result sip_get_vrtp_peer(struct ast_channel *chan, struct ast_rtp **rtp);
 extern int sip_get_codec(struct ast_channel *chan);
 extern struct ast_frame *sip_rtp_read(struct ast_channel *ast, struct sip_pvt *p, int *faxdetect);
 

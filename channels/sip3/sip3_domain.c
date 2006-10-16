@@ -122,14 +122,14 @@ static int add_sip_domain(const char *domain, const enum domain_mode mode, const
 }
 
 /*! \brief return TRUE if any domains are configured for this server */
-static int domains_configured()
+int domains_configured(void)
 {
 	return (!AST_LIST_EMPTY(&domain_list));
 }
 
 
 /*! \brief  check_sip_domain: Check if domain part of uri is local to our server */
-static int check_sip_domain(const char *domain, char *context, size_t len)
+int check_sip_domain(const char *domain, char *context, size_t len)
 {
 	struct domain *d;
 	int result = 0;
@@ -151,7 +151,7 @@ static int check_sip_domain(const char *domain, char *context, size_t len)
 }
 
 /*! \brief Clear our domain list (at reload) */
-static void clear_sip_domains(void)
+void clear_sip_domains(void)
 {
 	struct domain *d;
 
@@ -163,7 +163,7 @@ static void clear_sip_domains(void)
 
 
 /*! \brief  Dial plan function to check if domain is local */
-static int func_check_sipdomain(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len)
+int func_check_sipdomain(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len)
 {
 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_WARNING, "CHECKSIPDOMAIN requires an argument - A domain name\n");
@@ -201,7 +201,7 @@ static const char *domain_mode_to_text(const enum domain_mode mode)
 }
 
 /*! \brief CLI command to list local domains */
-static int sip_show_domains(int fd, int argc, char *argv[])
+int sip_show_domains(int fd, int argc, char *argv[])
 {
 	struct domain *d;
 #define FORMAT "%-40.40s %-20.20s %-16.16s\n"

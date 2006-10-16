@@ -69,14 +69,11 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/acl.h"
 #include "asterisk/manager.h"
 #include "asterisk/callerid.h"
-#include "asterisk/cli.h"
 #include "asterisk/app.h"
-#include "asterisk/musiconhold.h"
 #include "asterisk/dsp.h"
 #include "asterisk/features.h"
 #include "asterisk/acl.h"
 #include "asterisk/srv.h"
-#include "asterisk/astdb.h"
 #include "asterisk/causes.h"
 #include "asterisk/utils.h"
 #include "asterisk/file.h"
@@ -90,7 +87,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/abstract_jb.h"
 #include "asterisk/compiler.h"
 #include "sip3.h"
-#include "sip3core.h"
+#include "sip3core.h"			/* Old stuff in the core file */
+#include "sip3funcs.h"			/* Moved functions */
 
 struct sip_network sipnet;		/* Socket and networking data */
 
@@ -104,13 +102,13 @@ AST_MUTEX_DEFINE_STATIC(netlock);
 extern struct sip_globals global;
 
 /*! \brief Lock netlock */
-static void sipnet_lock(void)
+void sipnet_lock(void)
 {
 	ast_mutex_lock(&netlock);
 }
 
 /*! \brief Unlock netlock */
-static void sipnet_unlock(void)
+void sipnet_unlock(void)
 {
 	ast_mutex_unlock(&netlock);
 }
@@ -120,7 +118,7 @@ static void sipnet_unlock(void)
 \return 1 on error, 0 on success
 \note Successful messages is connected to SIP call and forwarded to handle_request() 
 */
-static int sipsock_read(int *id, int fd, short events, void *ignore)
+int sipsock_read(int *id, int fd, short events, void *ignore)
 {
 	struct sip_request req;
 	struct sockaddr_in sin = { 0, };
@@ -222,7 +220,7 @@ retrylock:
 }
 
 /*! \brief Check if network socket is open */
-static int sipsocket_initialized(void)
+int sipsocket_initialized(void)
 {
 	if (sipnet.sipsock < 0)
 		return FALSE;
@@ -230,7 +228,7 @@ static int sipsocket_initialized(void)
 }
 
 /*! \brief Open network socket, bind to address and set options (TOS) */
-static int sipsocket_open(void)
+int sipsocket_open(void)
 {
 	const int reuseFlag = 1;
 
@@ -264,19 +262,19 @@ static int sipsocket_open(void)
 }
 
 /*! \brief read our port number */
-static int sipnet_ourport()
+int sipnet_ourport(void)
 {
 	return(sipnet.ourport);
 }
 
 /*! \brief Set our port number */
-static void sipnet_ourport_set(int port)
+void sipnet_ourport_set(int port)
 {
 	sipnet.ourport = port;
 }
 
 /*! \brief Transmit SIP message */
-static int __sip_xmit(struct sip_pvt *p, char *data, int len)
+int __sip_xmit(struct sip_pvt *p, char *data, int len)
 {
 	int res;
 	const struct sockaddr_in *dst = sip_real_dst(p);

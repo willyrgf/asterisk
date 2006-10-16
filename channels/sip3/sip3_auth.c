@@ -89,9 +89,11 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/compiler.h"
 #include "sip3.h"
 
+#include "sip3core.h"		/* Old functions */
+#include "sip3funcs.h"		/* Moved functions */
 
 /*! \brief return the request and response heade for a 401 or 407 code */
-static void auth_headers(enum sip_auth_type code, char **header, char **respheader)
+void auth_headers(enum sip_auth_type code, char **header, char **respheader)
 {
 	if (code == WWW_AUTH) {			/* 401 */
 		*header = "WWW-Authenticate";
@@ -110,13 +112,13 @@ static void auth_headers(enum sip_auth_type code, char **header, char **resphead
 	authentication (if peer have secret set) 
     \return 0 on success, non-zero on error
 */
-static enum check_auth_result check_auth(struct sip_pvt *p, struct sip_request *req, const char *username,
+enum check_auth_result check_auth(struct sip_pvt *p, struct sip_request *req, const char *username,
 					 const char *secret, const char *md5secret, int sipmethod,
 					 char *uri, enum xmittype reliable, int ignore)
 {
 	const char *response = "407 Proxy Authentication Required";
-	const char *reqheader;
-	const char *respheader;
+	char *reqheader;
+	char *respheader;
 	const char *authtoken;
 	char a1_hash[256];
 	char resp_hash[256]="";

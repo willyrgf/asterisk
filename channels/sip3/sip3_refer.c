@@ -106,7 +106,7 @@ static const struct c_referstatusstring {
 
 
 /*! \brief Convert transfer status to string */
-static char *referstatus2str(enum referstatus rstatus)
+char *referstatus2str(enum referstatus rstatus)
 {
 	int i = (sizeof(referstatusstrings) / sizeof(referstatusstrings[0]));
 	int x;
