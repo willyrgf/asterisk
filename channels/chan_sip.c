@@ -1252,6 +1252,7 @@ static void add_noncodec_to_sdp(const struct sip_pvt *p, int format, int sample_
 				char **m_buf, size_t *m_size, char **a_buf, size_t *a_size,
 				int debug);
 static int add_sdp(struct sip_request *resp, struct sip_pvt *p);
+static void do_setnat(struct sip_pvt *p, int natflags);
 
 /*--- Authentication stuff */
 static int reply_digest(struct sip_pvt *p, struct sip_request *req, char *header, int sipmethod, char *digest, int digest_len);
@@ -11514,10 +11515,8 @@ static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, stru
 static void handle_response_refer(struct sip_pvt *p, int resp, char *rest, struct sip_request *req, int seqno)
 {
 	/* If no refer structure exists, then do nothing */
-	if (!p->refer) {
-		ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);
+	if (!p->refer)
 		return;
-	}
 
 	switch (resp) {
 	case 202:   /* Transfer accepted */
