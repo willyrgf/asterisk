@@ -306,8 +306,8 @@ extern int local_attended_transfer(struct sip_pvt *transferer, struct sip_dual *
 extern void handle_response_invite(struct sip_pvt *p, int resp, char *rest, struct sip_request *req, int seqno);
 extern void handle_response_refer(struct sip_pvt *p, int resp, char *rest, struct sip_request *req, int seqno);
 extern int handle_response_peerpoke(struct sip_pvt *p, int resp, struct sip_request *req);
-extern int handle_response_register(struct sip_pvt *p, int resp, char *rest, struct sip_request *req, int ignore, int seqno);
-extern void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_request *req, int ignore, int seqno);
+extern int handle_response_register(struct sip_pvt *p, int resp, char *rest, struct sip_request *req, int seqno);
+extern void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_request *req, int seqno);
 
 /*----- RTP interface functions */
 extern int sip_set_rtp_peer(struct ast_channel *chan, struct ast_rtp *rtp, struct ast_rtp *vrtp, int codecs, int nat_active);
