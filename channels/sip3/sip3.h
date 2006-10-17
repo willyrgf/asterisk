@@ -802,6 +802,7 @@ struct sip_registry {
 	);
 	int portno;			/*!<  Optional port override */
 	int expire;			/*!< Sched ID of expiration */
+	int expiry;			/*!< Requested value for expiration time */
 	int regattempts;		/*!< Number of attempts (since the last success) */
 	int timeout; 			/*!< sched id of sip_reg_timeout */
 	int refresh;			/*!< How often to refresh */

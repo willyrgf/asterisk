@@ -3056,6 +3056,7 @@ static int sip_register(char *value, int lineno)
 	if (secret)
 		ast_string_field_set(reg, secret, secret);
 	reg->expire = -1;
+	reg->expiry = expiry.default_expiry;
 	reg->timeout =  -1;
 	reg->refresh = expiry.default_expiry;
 	reg->portno = porta ? atoi(porta) : 0;
@@ -5225,7 +5226,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 	
 	}
 
-	snprintf(tmp, sizeof(tmp), "%d", expiry.default_expiry);
+	snprintf(tmp, sizeof(tmp), "%d", r->expiry);
 	add_header(&req, "Expires", tmp);
 	add_header(&req, "Contact", p->our_contact);
 	add_header(&req, "Event", "registration");
@@ -9398,6 +9399,25 @@ static int handle_response_register(struct sip_pvt *p, int resp, char *rest, str
 			ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
 		}
 		break;
+	case 423:	/* Interval too brief */
+		r->expiry = atoi(get_header(req, "Min-Expires"));
+		ast_log(LOG_WARNING, "Got 423 Interval too brief for service %s@%s, minimum is %d seconds\n", p->registry->username, p->registry->hostname, r->expiry);
+		ast_sched_del(sched, r->timeout);
+		r->timeout = -1;
+		if (r->call) {
+			r->call = NULL;
+			ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
+		}
+		if (r->expiry > expiry.max_expiry) {
+			ast_log(LOG_WARNING, "Required expiration time from %s@%s is too high, giving up\n", p->registry->username, p->registry->hostname);
+			r->expiry = expiry.default_expiry;
+			r->regstate = REG_STATE_REJECTED;
+		} else {
+			r->regstate = REG_STATE_UNREGISTERED;
+			transmit_register(r, SIP_REGISTER, NULL, NULL);
+		}
+		manager_event(EVENT_FLAG_SYSTEM, "Registry", "Channel: SIP\r\nUsername: %s\r\nDomain: %s\r\nStatus: %s\r\n", r->username, r->hostname, regstate2str(r->regstate));
+		break;
 	case 479:	/* SER: Not able to process the URI - address is wrong in register*/
 		ast_log(LOG_WARNING, "Got error 479 on register to %s@%s, giving up (check config)\n", p->registry->username,p->registry->hostname);
 		if (global.regattempts_max)
@@ -9660,6 +9680,10 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 			} else	/* We can't handle this, giving up in a bad way */
 				ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
 
+			break;
+		case 423: /* Interval too brief */
+			if (sipmethod == SIP_REGISTER)
+				res = handle_response_register(p, resp, rest, req, seqno);
 			break;
 		case 481: /* Call leg does not exist */
 			if (sipmethod == SIP_INVITE) {
