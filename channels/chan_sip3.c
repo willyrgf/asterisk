@@ -136,6 +136,10 @@
 
 #define CHAN_SIP3_MAIN
 
+/* GNURK is a temporary marker of functions that are exposed outside of this code file 
+   and possibly needs to move out */
+#define GNURK
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
@@ -344,7 +348,6 @@ static int auto_congest(void *nothing);
 static int update_call_counter(struct sip_pvt *fup, int event);
 static int hangup_sip2cause(int cause);
 static const char *hangup_cause2sip(int cause);
-static struct sip_pvt *find_call(struct sip_request *req, struct sockaddr_in *sin, const int intended_method);
 static void free_old_route(struct sip_route *route);
 static void list_route(struct sip_route *route);
 static void build_route(struct sip_pvt *p, struct sip_request *req, int backwards);
@@ -406,7 +409,7 @@ static int sip_devicestate(void *data);
 static int sip_poke_noanswer(void *data);
 static int sip_poke_peer(struct sip_peer *peer);
 static void sip_poke_all_peers(void);
-static void sip_peer_hold(struct sip_pvt *p, int hold);
+GNURK void sip_peer_hold(struct sip_pvt *p, int hold);
 
 /*--- Applications, functions, CLI and manager command helpers */
 static const char *sip_nat_mode(const struct sip_pvt *p);
@@ -514,12 +517,10 @@ static int determine_firstline_parts(struct sip_request *req);
 static const char *gettag(const struct sip_request *req, const char *header, char *tagbuf, int tagbufsize);
 static void parse_request(struct sip_request *req);
 static const char *get_header(const struct sip_request *req, const char *name);
-static void parse_copy(struct sip_request *dst, const struct sip_request *src);
 static char *get_in_brackets(char *tmp);
 static const char *find_alias(const char *name, const char *_default);
 static const char *__get_header(const struct sip_request *req, const char *name, int *start);
 static const char *get_header(const struct sip_request *req, const char *name);
-static int lws2sws(char *msgbuf, int len);
 static void extract_uri(struct sip_pvt *p, struct sip_request *req);
 static int get_refer_info(struct sip_pvt *transferer, struct sip_request *outgoing_req);
 static int get_also_info(struct sip_pvt *p, struct sip_request *oreq);
@@ -565,7 +566,6 @@ static void build_contact(struct sip_pvt *p);
 static void build_rpid(struct sip_pvt *p);
 
 /*------Request handling functions */
-static int handle_request(struct sip_pvt *p, struct sip_request *req, struct sockaddr_in *sin, int *recount, int *nounlock);
 static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int debug, int seqno, struct sockaddr_in *sin, int *recount, char *e);
 static int handle_request_refer(struct sip_pvt *p, struct sip_request *req, int debug, int seqno, int *nounlock);
 static int handle_request_bye(struct sip_pvt *p, struct sip_request *req);
@@ -918,7 +918,7 @@ static int __sip_semi_ack(struct sip_pvt *p, int seqno, int resp, int sipmethod)
 
 
 /*! \brief Copy SIP request, parse it */
-static void parse_copy(struct sip_request *dst, const struct sip_request *src)
+GNURK void parse_copy(struct sip_request *dst, const struct sip_request *src)
 {
 	memset(dst, 0, sizeof(*dst));
 	memcpy(dst->data, src->data, sizeof(dst->data));
@@ -927,7 +927,7 @@ static void parse_copy(struct sip_request *dst, const struct sip_request *src)
 }
 
 /*! \brief add a blank line if no body */
-static void add_blank(struct sip_request *req)
+void add_blank(struct sip_request *req)
 {
 	if (!req->lines) {
 		/* Add extra empty return. add_header() reserves 4 bytes so cannot be truncated */
@@ -2921,7 +2921,7 @@ static struct sip_pvt *sip_alloc(ast_string_field callid, struct sockaddr_in *si
 
 /*! \brief Connect incoming SIP message to current dialog or create new dialog structure
 	Called by handle_request, sipsock_read */
-static struct sip_pvt *find_call(struct sip_request *req, struct sockaddr_in *sin, const int intended_method)
+GNURK struct sip_pvt *find_call(struct sip_request *req, struct sockaddr_in *sin, const int intended_method)
 {
 	struct sip_pvt *p;
 	char *tag = "";	/* note, tag is never NULL */
@@ -3067,7 +3067,7 @@ static int sip_register(char *value, int lineno)
 }
 
 /*! \brief  Parse multiline SIP headers into one header */
-static int lws2sws(char *msgbuf, int len) 
+GNURK int lws2sws(char *msgbuf, int len) 
 {
 	int h = 0, t = 0; 
 	int lws = 0; 
@@ -5865,7 +5865,7 @@ static void build_route(struct sip_pvt *p, struct sip_request *req, int backward
 }
 
 /*! \brief Change onhold state of a peer using a pvt structure */
-static void sip_peer_hold(struct sip_pvt *p, int hold)
+GNURK void sip_peer_hold(struct sip_pvt *p, int hold)
 {
 	struct sip_peer *peer = find_peer(p->peername, NULL, 1);
 
@@ -11866,7 +11866,7 @@ static int handle_request_register(struct sip_pvt *p, struct sip_request *req, s
 /*! \brief Handle incoming SIP requests (methods) 
 \note	This is where all incoming requests go first   */
 /* called with p and p->owner locked */
-static int handle_request(struct sip_pvt *p, struct sip_request *req, struct sockaddr_in *sin, int *recount, int *nounlock)
+GNURK int handle_request(struct sip_pvt *p, struct sip_request *req, struct sockaddr_in *sin, int *recount, int *nounlock)
 {
 	/* Called with p->lock held, as well as p->owner->lock if appropriate, keeping things
 	   relatively static */
