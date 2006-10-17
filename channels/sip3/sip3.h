@@ -612,6 +612,7 @@ struct sip_pvt {
 		AST_STRING_FIELD(mohinterpret);	/*!< MOH class to use when put on hold */
 		AST_STRING_FIELD(mohsuggest);	/*!< MOH class to suggest when putting a peer on hold */
 		AST_STRING_FIELD(rdnis);	/*!< Referring DNIS */
+		AST_STRING_FIELD(redircause);	/*!< Referring cause */
 		AST_STRING_FIELD(theirtag);	/*!< Their tag */
 		AST_STRING_FIELD(username);	/*!< [user] name */
 		AST_STRING_FIELD(peername);	/*!< [peer] name, not set if [user] */
