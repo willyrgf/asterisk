@@ -240,9 +240,19 @@ static char *complete_show_mancmd(const char *line, const char *word, int pos, i
 	return ret;
 }
 
-static void xml_copy_escape(char **dst, size_t *maxlen, const char *src, int lower)
+/*
+ * convert to xml with various conversion:
+ * mode & 1	-> lowercase;
+ * mode & 2	-> replace non-alphanumeric chars with underscore
+ */
+static void xml_copy_escape(char **dst, size_t *maxlen, const char *src, int mode)
 {
-	while (*src && (*maxlen > 6)) {
+	for ( ; *src && *maxlen > 6; src++) {
+		if ( (mode & 2) && !isalnum(*src)) {
+			*(*dst)++ = '_';
+			(*maxlen)--;
+			continue;
+		}
 		switch (*src) {
 		case '<':
 			strcpy(*dst, "&lt;");
@@ -269,11 +279,11 @@ static void xml_copy_escape(char **dst, size_t *maxlen, const char *src, int low
 			(*dst) += 5;
 			*maxlen -= 5;
 			break;		
+
 		default:
-			*(*dst)++ = lower ? tolower(*src) : *src;
+			*(*dst)++ = mode ? tolower(*src) : *src;
 			(*maxlen)--;
 		}
-		src++;
 	}
 }
 
@@ -286,7 +296,7 @@ static char *xml_translate(char *in, struct ast_variable *vars)
 	int colons = 0;
 	int breaks = 0;
 	size_t len;
-	int count = 1;
+	int in_data = 0;	/* parsing data */
 	int escaped = 0;
 	int inobj = 0;
 	int x;
@@ -301,6 +311,11 @@ static char *xml_translate(char *in, struct ast_variable *vars)
 		dest = "unknown";
 	if (!objtype)
 		objtype = "generic";
+
+	/* determine how large is the response.
+	 * This is a heuristic - counting colons (for headers),
+	 * newlines (for extra arguments), and escaped chars.
+	 */
 	for (x = 0; in[x]; x++) {
 		if (in[x] == ':')
 			colons++;
@@ -312,39 +327,52 @@ static char *xml_translate(char *in, struct ast_variable *vars)
 	len = (size_t) (strlen(in) + colons * 5 + breaks * (40 + strlen(dest) + strlen(objtype)) + escaped * 10); /* foo="bar", "<response type=\"object\" id=\"dest\"", "&amp;" */
 	out = ast_malloc(len);
 	if (!out)
-		return 0;
+		return NULL;
 	tmp = out;
-	while (*in) {
-		var = in;
-		while (*in && (*in >= 32))
-			in++;
-		if (*in) {
-			if ((count > 3) && inobj) {
-				ast_build_string(&tmp, &len, " /></response>\n");
-				inobj = 0;
+	/* we want to stop when we find an empty line */
+	while (in && *in) {
+		in = ast_skip_blanks(in);	/* trailing \n from before */
+		val = strsep(&in, "\r\n");	/* mark start and end of line */
+		ast_trim_blanks(val);
+		ast_verbose("inobj %d in_data %d line <%s>\n", inobj, in_data, val);
+		if (ast_strlen_zero(val)) {
+			if (in_data) { /* close data */
+				ast_build_string(&tmp, &len, "'");
+				in_data = 0;
 			}
-			count = 0;
-			while (*in && (*in < 32)) {
-				*in = '\0';
-				in++;
-				count++;
+			ast_build_string(&tmp, &len, " /></response>\n");
+			inobj = 0;
+			continue;
+		}
+		/* we expect Name: value lines */
+		if (in_data) {
+			var = NULL;
+		} else {
+			var = strsep(&val, ":");
+			if (val) {	/* found the field name */
+				val = ast_skip_blanks(val);
+				ast_trim_blanks(var);
+			} else {		/* field name not found, move to opaque mode */
+				val = var;
+				var = "Opaque-data";
 			}
-			val = strchr(var, ':');
-			if (val) {
-				*val = '\0';
-				val++;
-				if (*val == ' ')
-					val++;
-				if (!inobj) {
-					ast_build_string(&tmp, &len, "<response type='object' id='%s'><%s", dest, objtype);
-					inobj = 1;
-				}
-				ast_build_string(&tmp, &len, " ");				
-				xml_copy_escape(&tmp, &len, var, 1);
-				ast_build_string(&tmp, &len, "='");
-				xml_copy_escape(&tmp, &len, val, 0);
+		}
+		if (!inobj) {
+			ast_build_string(&tmp, &len, "<response type='object' id='%s'><%s", dest, objtype);
+			inobj = 1;
+		}
+		if (!in_data) {
+			ast_build_string(&tmp, &len, " ");				
+			xml_copy_escape(&tmp, &len, var, 1 | 2);
+			ast_build_string(&tmp, &len, "='");
+			xml_copy_escape(&tmp, &len, val, 0);
+			if (!strcmp(var, "Opaque-data")) {
+				in_data = 1;
+			} else {
 				ast_build_string(&tmp, &len, "'");
 			}
+		} else {
+			xml_copy_escape(&tmp, &len, val, 0);
 		}
 	}
 	if (inobj)
@@ -1162,7 +1190,7 @@ static int action_waitevent(struct mansession *s, struct message *m)
 		ast_mutex_unlock(&s->__lock);
 		if (needexit)
 			break;
-		if (s->fd > 0) {
+		if (!s->inuse && s->fd > 0) {
 			if (ast_wait_for_input(s->fd, 1000))
 				break;
 		} else {
@@ -2435,6 +2463,11 @@ static char *generic_http_callback(int format, struct sockaddr_in *requestor, co
 			ast_build_string(&c, &len, "<body bgcolor=\"#ffffff\"><table align=center bgcolor=\"#f1f1f1\" width=\"500\">\r\n");
 			ast_build_string(&c, &len, "<tr><td colspan=\"2\" bgcolor=\"#f1f1ff\"><h1>&nbsp;&nbsp;Manager Tester</h1></td></tr>\r\n");
 		}
+		{
+			char template[32];
+			ast_copy_string(template, "/tmp/ast-http-XXXXXX", sizeof(template));
+			s->fd = mkstemp(template);
+		}
 		if (process_message(s, &m)) {
 			if (s->authenticated) {
 				if (option_verbose > 1) {
@@ -2451,6 +2484,25 @@ static char *generic_http_callback(int format, struct sockaddr_in *requestor, co
 			}
 			s->needdestroy = 1;
 		}
+		if (s->fd > -1) {	/* have temporary output */
+			char *buf;
+			off_t len = lseek(s->fd, 0, SEEK_END);	/* how many chars available */
+
+			if (len > 0 && (buf = ast_calloc(1, len+1))) {
+				if (!s->outputstr)
+					s->outputstr = ast_calloc(1, sizeof(*s->outputstr));
+				if (s->outputstr) {
+					lseek(s->fd, 0, SEEK_SET);
+					read(s->fd, buf, len);
+					ast_verbose("--- fd %d has %d bytes ---\n%s\n---\n", s->fd, (int)len, buf);
+					ast_dynamic_str_append(&s->outputstr, 0, "%s", buf);
+				}
+				free(buf);
+			}
+			close(s->fd);
+			s->fd = -1;
+		}
+
 		if (s->outputstr) {
 			char *tmp;
 			if (format == FORMAT_XML)
