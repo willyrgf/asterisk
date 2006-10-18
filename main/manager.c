@@ -154,8 +154,6 @@ struct mansession {
 	struct sockaddr_in sin;
 	/*! TCP socket */
 	int fd;
-	/*! Whether or not we're busy doing an action XXX currently useless */
-	int busy;
 	/*! Whether an HTTP manager is in use */
 	int inuse;
 	/*! Whether an HTTP session should be destroyed */
@@ -1148,8 +1146,6 @@ static int action_waitevent(struct mansession *s, struct message *m)
 		if (!s->send_events)
 			s->send_events = -1;
 		/* Once waitevent is called, always queue events from now on */
-		if (s->busy == 1)
-			s->busy = 2;
 	}
 	ast_mutex_unlock(&s->__lock);
 	s->waiting_thread = pthread_self();
@@ -1257,6 +1253,44 @@ static int action_logoff(struct mansession *s, struct message *m)
 {
 	astman_send_response(s, m, "Goodbye", "Thanks for all the fish.");
 	return -1;
+}
+
+static int action_login(struct mansession *s, struct message *m)
+{
+	if (authenticate(s, m)) {
+		sleep(1);
+		astman_send_error(s, m, "Authentication failed");
+		return -1;
+	}
+	s->authenticated = 1;
+	if (option_verbose > 1) {
+		if (displayconnects) {
+			ast_verbose(VERBOSE_PREFIX_2 "%sManager '%s' logged on from %s\n", (s->sessiontimeout ? "HTTP " : ""), s->username, ast_inet_ntoa(s->sin.sin_addr));
+		}
+	}
+	ast_log(LOG_EVENT, "%sManager '%s' logged on from %s\n", (s->sessiontimeout ? "HTTP " : ""), s->username, ast_inet_ntoa(s->sin.sin_addr));
+	astman_send_ack(s, m, "Authentication accepted");
+	return 0;
+}
+
+static int action_challenge(struct mansession *s, struct message *m)
+{
+	char *authtype = astman_get_header(m, "AuthType");
+
+	if (!strcasecmp(authtype, "MD5")) {
+		char *id = astman_get_header(m,"ActionID");
+		if (ast_strlen_zero(s->challenge))
+			snprintf(s->challenge, sizeof(s->challenge), "%ld", ast_random());
+		ast_mutex_lock(&s->__lock);
+		astman_append(s, "Response: Success\r\n");
+		if (!ast_strlen_zero(id))
+			astman_append(s, "ActionID: %s\r\n", id);
+		astman_append(s, "Challenge: %s\r\n\r\n", s->challenge);
+		ast_mutex_unlock(&s->__lock);
+	} else {
+		astman_send_error(s, m, "Must specify AuthType");
+	}
+	return 0;
 }
 
 static char mandescr_hangup[] = 
@@ -1857,7 +1891,6 @@ static int process_events(struct mansession *s)
 	if (s->fd > -1) {
 		struct eventqent *eqe;
 
-		s->busy--;
 		if (!s->eventq)
 			s->eventq = master_eventq;
 		while( (eqe = s->eventq->next) ) {
@@ -1906,9 +1939,8 @@ static int action_userevent(struct mansession *s, struct message *m)
 static int process_message(struct mansession *s, struct message *m)
 {
 	char action[80] = "";
-	char *id = astman_get_header(m,"ActionID");
-	char idText[256] = "";
 	int ret = 0;
+	struct manager_action *tmp;
 
 	ast_copy_string(action, astman_get_header(m, "Action"), sizeof(action));
 	if (option_debug)
@@ -1918,61 +1950,21 @@ static int process_message(struct mansession *s, struct message *m)
 		astman_send_error(s, m, "Missing action in request");
 		return 0;
 	}
-	if (!ast_strlen_zero(id))
-		snprintf(idText, sizeof(idText), "ActionID: %s\r\n", id);
 
-	if (!strcasecmp(action, "Challenge")) {
-		char *authtype = astman_get_header(m, "AuthType");
-
-		if (!strcasecmp(authtype, "MD5")) {
-			if (ast_strlen_zero(s->challenge))
-				snprintf(s->challenge, sizeof(s->challenge), "%ld", ast_random());
-			ast_mutex_lock(&s->__lock);
-			astman_append(s, "Response: Success\r\n"
-					"%s"
-					"Challenge: %s\r\n\r\n",
-					idText, s->challenge);
-			ast_mutex_unlock(&s->__lock);
-		} else {
-			astman_send_error(s, m, "Must specify AuthType");
-		}
-		return 0;
-	} else if (!strcasecmp(action, "Login")) {
-		if (authenticate(s, m)) {
-			sleep(1);
-			astman_send_error(s, m, "Authentication failed");
-			return -1;
-		}
-		s->authenticated = 1;
-		if (option_verbose > 1) {
-			if (displayconnects) {
-				ast_verbose(VERBOSE_PREFIX_2 "%sManager '%s' logged on from %s\n", (s->sessiontimeout ? "HTTP " : ""), s->username, ast_inet_ntoa(s->sin.sin_addr));
+	/* XXX should we protect the list navigation ? */
+	for (tmp = first_action ; tmp; tmp = tmp->next) { 		
+		if (!strcasecmp(action, tmp->action)) {
+			if ((s->writeperm & tmp->authority) == tmp->authority) {
+				if (tmp->func(s, m))	/* error */
+					return -1;
+			} else {
+				astman_send_error(s, m, "Permission denied");
 			}
+			break;
 		}
-		ast_log(LOG_EVENT, "%sManager '%s' logged on from %s\n", (s->sessiontimeout ? "HTTP " : ""), s->username, ast_inet_ntoa(s->sin.sin_addr));
-		astman_send_ack(s, m, "Authentication accepted");
-		return 0;
 	}
-	{
-		struct manager_action *tmp;
-		ast_mutex_lock(&s->__lock);
-		s->busy++;
-		ast_mutex_unlock(&s->__lock);
-		/* XXX should we protect the list navigation ? */
-		for (tmp = first_action ; tmp; tmp = tmp->next) { 		
-			if (!strcasecmp(action, tmp->action)) {
-				if ((s->writeperm & tmp->authority) == tmp->authority) {
-					if (tmp->func(s, m))
-						ret = -1;
-				} else {
-					astman_send_error(s, m, "Permission denied");
-				}
-				break;
-			}
-		}
-		if (!tmp)
-			astman_send_error(s, m, "Invalid/unknown command");
-	}
+	if (!tmp)
+		astman_send_error(s, m, "Invalid/unknown command");
 	if (ret)
 		return ret;
 	return process_events(s);
@@ -2369,7 +2361,6 @@ static char *generic_http_callback(enum output_format format,
 	struct mansession *s = NULL;
 	unsigned long ident = 0;
 	char workspace[1024];
-	char cookie[128];
 	size_t len = sizeof(workspace);
 	int blastaway = 0;
 	char *c = workspace;
@@ -2421,91 +2412,98 @@ static char *generic_http_callback(enum output_format format,
 	memset(&m, 0, sizeof(m));
 	{
 		char tmp[80];
+		char cookie[128];
+
 		ast_build_string(&c, &len, "Content-type: text/%s\r\n", contenttype[format]);
 		sprintf(tmp, "%08lx", s->managerid);
 		ast_build_string(&c, &len, "%s\r\n", ast_http_setcookie("mansession_id", tmp, httptimeout, cookie, sizeof(cookie)));
-		if (format == FORMAT_HTML)
-			ast_build_string(&c, &len, "<title>Asterisk&trade; Manager Test Interface</title>");
-		vars2msg(&m, params);
-		if (format == FORMAT_XML) {
-			ast_build_string(&c, &len, "<ajax-response>\n");
-		} else if (format == FORMAT_HTML) {
+	}
+
+	if (format == FORMAT_HTML)
+		ast_build_string(&c, &len, "<title>Asterisk&trade; Manager Test Interface</title>");
+	vars2msg(&m, params);
+
+	if (format == FORMAT_XML) {
+		ast_build_string(&c, &len, "<ajax-response>\n");
+	} else if (format == FORMAT_HTML) {
+
 #define ROW_FMT	"<tr><td colspan=\"2\" bgcolor=\"#f1f1ff\">%s</td></tr>\r\n"
 #define TEST_STRING \
 	"<form action=\"manager\">action: <input name=\"action\"> cmd <input name=\"command\"><br>\
 	user <input name=\"username\"> pass <input type=\"password\" name=\"secret\"><br>
 	<input type=\"submit\"></form>"
-			ast_build_string(&c, &len, "<body bgcolor=\"#ffffff\"><table align=center bgcolor=\"#f1f1f1\" width=\"500\">\r\n");
-			ast_build_string(&c, &len, ROW_FMT, "<h1>&nbsp;&nbsp;Manager Tester</h1>");
-			ast_build_string(&c, &len, ROW_FMT, TEST_STRING);
-		}
-		{
-			char template[32];
-			ast_copy_string(template, "/tmp/ast-http-XXXXXX", sizeof(template));
-			s->fd = mkstemp(template);
-		}
-		if (process_message(s, &m)) {
-			if (s->authenticated) {
-				if (option_verbose > 1) {
-					if (displayconnects) 
-						ast_verbose(VERBOSE_PREFIX_2 "HTTP Manager '%s' logged off from %s\n", s->username, ast_inet_ntoa(s->sin.sin_addr));    
-				}
-				ast_log(LOG_EVENT, "HTTP Manager '%s' logged off from %s\n", s->username, ast_inet_ntoa(s->sin.sin_addr));
-			} else {
-				if (option_verbose > 1) {
-					if (displayconnects)
-						ast_verbose(VERBOSE_PREFIX_2 "HTTP Connect attempt from '%s' unable to authenticate\n", ast_inet_ntoa(s->sin.sin_addr));
-				}
-				ast_log(LOG_EVENT, "HTTP Failed attempt from %s\n", ast_inet_ntoa(s->sin.sin_addr));
-			}
-			s->needdestroy = 1;
-		}
-		if (s->fd > -1) {	/* have temporary output */
-			char *buf;
-			off_t len = lseek(s->fd, 0, SEEK_END);	/* how many chars available */
 
-			if (len > 0 && (buf = ast_calloc(1, len+1))) {
-				if (!s->outputstr)
-					s->outputstr = ast_calloc(1, sizeof(*s->outputstr));
-				if (s->outputstr) {
-					lseek(s->fd, 0, SEEK_SET);
-					read(s->fd, buf, len);
-					ast_verbose("--- fd %d has %d bytes ---\n%s\n---\n", s->fd, (int)len, buf);
-					ast_dynamic_str_append(&s->outputstr, 0, "%s", buf);
-				}
-				free(buf);
-			}
-			close(s->fd);
-			s->fd = -1;
-		}
-
-		if (s->outputstr) {
-			char *tmp;
-			if (format == FORMAT_XML || format == FORMAT_HTML)
-				tmp = xml_translate(s->outputstr->str, params, format);
-			else
-				tmp = s->outputstr->str;
-			if (tmp) {
-				retval = malloc(strlen(workspace) + strlen(tmp) + 128);
-				if (retval) {
-					strcpy(retval, workspace);
-					strcpy(retval + strlen(retval), tmp);
-					c = retval + strlen(retval);
-					len = 120;
-				}
-			}
-			if (tmp != s->outputstr->str)
-				free(tmp);
-			free(s->outputstr);
-			s->outputstr = NULL;
-		}
-		/* Still okay because c would safely be pointing to workspace even
-		   if retval failed to allocate above */
-		if (format == FORMAT_XML) {
-			ast_build_string(&c, &len, "</ajax-response>\n");
-		} else if (format == FORMAT_HTML)
-			ast_build_string(&c, &len, "</table></body>\r\n");
+		ast_build_string(&c, &len, "<body bgcolor=\"#ffffff\"><table align=center bgcolor=\"#f1f1f1\" width=\"500\">\r\n");
+		ast_build_string(&c, &len, ROW_FMT, "<h1>Manager Tester</h1>");
+		ast_build_string(&c, &len, ROW_FMT, TEST_STRING);
 	}
+	{
+		char template[32];
+		ast_copy_string(template, "/tmp/ast-http-XXXXXX", sizeof(template));
+		s->fd = mkstemp(template);
+	}
+	if (process_message(s, &m)) {
+		if (s->authenticated) {
+			if (option_verbose > 1) {
+				if (displayconnects) 
+					ast_verbose(VERBOSE_PREFIX_2 "HTTP Manager '%s' logged off from %s\n", s->username, ast_inet_ntoa(s->sin.sin_addr));    
+			}
+			ast_log(LOG_EVENT, "HTTP Manager '%s' logged off from %s\n", s->username, ast_inet_ntoa(s->sin.sin_addr));
+		} else {
+			if (option_verbose > 1) {
+				if (displayconnects)
+					ast_verbose(VERBOSE_PREFIX_2 "HTTP Connect attempt from '%s' unable to authenticate\n", ast_inet_ntoa(s->sin.sin_addr));
+			}
+			ast_log(LOG_EVENT, "HTTP Failed attempt from %s\n", ast_inet_ntoa(s->sin.sin_addr));
+		}
+		s->needdestroy = 1;
+	}
+	if (s->fd > -1) {	/* have temporary output */
+		char *buf;
+		off_t len = lseek(s->fd, 0, SEEK_END);	/* how many chars available */
+
+		if (len > 0 && (buf = ast_calloc(1, len+1))) {
+			if (!s->outputstr)
+				s->outputstr = ast_calloc(1, sizeof(*s->outputstr));
+			if (s->outputstr) {
+				lseek(s->fd, 0, SEEK_SET);
+				read(s->fd, buf, len);
+				ast_verbose("--- fd %d has %d bytes ---\n%s\n---\n", s->fd, (int)len, buf);
+				ast_dynamic_str_append(&s->outputstr, 0, "%s", buf);
+			}
+			free(buf);
+		}
+		close(s->fd);
+		s->fd = -1;
+	}
+
+	if (s->outputstr) {
+		char *tmp;
+		if (format == FORMAT_XML || format == FORMAT_HTML)
+			tmp = xml_translate(s->outputstr->str, params, format);
+		else
+			tmp = s->outputstr->str;
+		if (tmp) {
+			retval = malloc(strlen(workspace) + strlen(tmp) + 128);
+			if (retval) {
+				strcpy(retval, workspace);
+				strcpy(retval + strlen(retval), tmp);
+				c = retval + strlen(retval);
+				len = 120;
+			}
+		}
+		if (tmp != s->outputstr->str)
+			free(tmp);
+		free(s->outputstr);
+		s->outputstr = NULL;
+	}
+	/* Still okay because c would safely be pointing to workspace even
+	   if retval failed to allocate above */
+	if (format == FORMAT_XML) {
+		ast_build_string(&c, &len, "</ajax-response>\n");
+	} else if (format == FORMAT_HTML)
+		ast_build_string(&c, &len, "</table></body>\r\n");
+
 	ast_mutex_lock(&s->__lock);
 	if (s->needdestroy) {
 		if (s->inuse == 1) {
@@ -2588,6 +2586,8 @@ int init_manager(void)
 		ast_manager_register2("Ping", 0, action_ping, "Keepalive command", mandescr_ping);
 		ast_manager_register2("Events", 0, action_events, "Control Event Flow", mandescr_events);
 		ast_manager_register2("Logoff", 0, action_logoff, "Logoff Manager", mandescr_logoff);
+		ast_manager_register2("Login", 0, action_login, "Login Manager", NULL);
+		ast_manager_register2("Challenge", 0, action_challenge, "Generate Challenge for MD5 Auth", NULL);
 		ast_manager_register2("Hangup", EVENT_FLAG_CALL, action_hangup, "Hangup Channel", mandescr_hangup);
 		ast_manager_register("Status", EVENT_FLAG_CALL, action_status, "Lists channel status" );
 		ast_manager_register2("Setvar", EVENT_FLAG_CALL, action_setvar, "Set Channel Variable", mandescr_setvar );
