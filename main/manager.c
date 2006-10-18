@@ -156,8 +156,6 @@ struct mansession {
 	int fd;
 	/*! Whether or not we're busy doing an action XXX currently useless */
 	int busy;
-	/*! Whether or not we're "dead" XXX currently unused */
-	int dead;
 	/*! Whether an HTTP manager is in use */
 	int inuse;
 	/*! Whether an HTTP session should be destroyed */
@@ -184,7 +182,6 @@ struct mansession {
 	char inbuf[AST_MAX_MANHEADER_LEN];
 	int inlen;
 	int send_events;
-	int displaysystemname;		/*!< Add system name to manager responses and events */
 	/* Queued events that we've not had the ability to send yet */
 	struct eventqent *eventq;
 	/* Timeout for ast_carefulwrite() */
@@ -403,23 +400,22 @@ static char *xml_translate(char *in, struct ast_variable *vars, enum output_form
 				ast_build_string(&tmp, &len, "<body>\n");
 			inobj = 1;
 		}
-		if (!in_data) {
+		if (!in_data) {	/* build appropriate line start */
 			ast_build_string(&tmp, &len, xml ? " " : "<tr><td>");
 			xml_copy_escape(&tmp, &len, var, xml ? 1 | 2 : 0);
 			ast_build_string(&tmp, &len, xml ? "='" : "</td><td>");
-			xml_copy_escape(&tmp, &len, val, 0);
-			if (!strcmp(var, "Opaque-data")) {
+			if (!strcmp(var, "Opaque-data"))
 				in_data = 1;
-			} else {
-				ast_build_string(&tmp, &len, xml ? "'" : "</td></tr>\n");
-			}
-		} else {
-			xml_copy_escape(&tmp, &len, val, 0);
-			ast_build_string(&tmp, &len, xml ? "\n" : "<br>\n");
 		}
+		xml_copy_escape(&tmp, &len, val, 0);	/* data field */
+		if (!in_data)
+			ast_build_string(&tmp, &len, xml ? "'" : "</td></tr>\n");
+		else
+			ast_build_string(&tmp, &len, xml ? "\n" : "<br>\n");
 	}
 	if (inobj)
-		ast_build_string(&tmp, &len, xml ? " /></response>\n" : "</body>\n");
+		ast_build_string(&tmp, &len, xml ? " /></response>\n" :
+			"<tr><td colspan=\"2\"><hr></td></tr>\r\n");
 	return out;
 }
 
@@ -468,7 +464,10 @@ static int handle_showmancmd(int fd, int argc, char *argv[])
 	for (cur = first_action; cur; cur = cur->next) { /* Walk the list of actions */
 		for (num = 3; num < argc; num++) {
 			if (!strcasecmp(cur->action, argv[num])) {
-				ast_cli(fd, "Action: %s\nSynopsis: %s\nPrivilege: %s\n%s\n", cur->action, cur->synopsis, authority_to_str(cur->authority, authority, sizeof(authority) -1), cur->description ? cur->description : "");
+				ast_cli(fd, "Action: %s\nSynopsis: %s\nPrivilege: %s\n%s\n",
+					cur->action, cur->synopsis,
+					authority_to_str(cur->authority, authority, sizeof(authority) -1),
+					S_OR(cur->description, "") );
 			}
 		}
 	}
@@ -700,9 +699,7 @@ struct ast_variable *astman_get_variables(struct message *m)
 {
 	int varlen, x, y;
 	struct ast_variable *head = NULL, *cur;
-	char *var, *val;
 
-	char *parse;    
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(vars)[32];
 	);
@@ -710,34 +707,32 @@ struct ast_variable *astman_get_variables(struct message *m)
 	varlen = strlen("Variable: ");	
 
 	for (x = 0; x < m->hdrcount; x++) {
+		char *parse, *var, *val;
+
 		if (strncasecmp("Variable: ", m->headers[x], varlen))
 			continue;
-
 		parse = ast_strdupa(m->headers[x] + varlen);
 
 		AST_STANDARD_APP_ARGS(args, parse);
-		if (args.argc) {
-			for (y = 0; y < args.argc; y++) {
-				if (!args.vars[y])
-					continue;
-				var = val = ast_strdupa(args.vars[y]);
-				strsep(&val, "=");
-				if (!val || ast_strlen_zero(var))
-					continue;
-				cur = ast_variable_new(var, val);
-				if (head) {
-					cur->next = head;
-					head = cur;
-				} else
-					head = cur;
-			}
+		if (!args.argc)
+			continue;
+		for (y = 0; y < args.argc; y++) {
+			if (!args.vars[y])
+				continue;
+			var = val = ast_strdupa(args.vars[y]);
+			strsep(&val, "=");
+			if (!val || ast_strlen_zero(var))
+				continue;
+			cur = ast_variable_new(var, val);
+			cur->next = head;
+			head = cur;
 		}
 	}
 
 	return head;
 }
 
-/*! \note NOTE:
+/*! \note NOTE: XXX this comment is unclear and possibly wrong.
    Callers of astman_send_error(), astman_send_response() or astman_send_ack() must EITHER
    hold the session lock _or_ be running in an action callback (in which case s->busy will
    be non-zero). In either of these cases, there is no need to lock-protect the session's
@@ -815,10 +810,9 @@ static int get_perm(const char *instr)
  * A number returns itself, false returns 0, true returns all flags,
  * other strings return the flags that are set.
  */
-static int ast_strings_to_mask(char *string) 
+static int ast_strings_to_mask(const char *string) 
 {
-	int x, ret = 0;
-	char *p;
+	const char *p;
 
 	if (ast_strlen_zero(string))
 		return -1;
@@ -826,23 +820,17 @@ static int ast_strings_to_mask(char *string)
 	for (p = string; *p; p++)
 		if (*p < '0' || *p > '9')
 			break;
-	if (!p)
+	if (!p)	/* all digits */
 		return atoi(string);
 	if (ast_false(string))
 		return 0;
 	if (ast_true(string)) {	/* all permissions */
-		ret = 0;
+		int x, ret = 0;
 		for (x=0; x<sizeof(perms) / sizeof(perms[0]); x++)
 			ret |= perms[x].num;		
-	} else {
-		ret = 0;
-		for (x=0; x<sizeof(perms) / sizeof(perms[0]); x++) {
-			if (ast_instring(string, perms[x].label, ',')) 
-				ret |= perms[x].num;		
-		}
+		return ret;
 	}
-
-	return ret;
+	return get_perm(string);
 }
 
 /*! \brief
@@ -871,6 +859,9 @@ static int authenticate(struct mansession *s, struct message *m)
 	char *cat = NULL;
 	struct ast_config *cfg = ast_config_load("manager.conf");
 	int ret = -1;	/* default: error return */
+	struct ast_variable *v;
+	struct ast_ha *ha = NULL;
+	char *password = NULL;
 
 	/*
 	 * XXX there is no need to scan the config file again here,
@@ -881,25 +872,20 @@ static int authenticate(struct mansession *s, struct message *m)
 	if (!cfg)
 		return -1;
 	while ( (cat = ast_category_browse(cfg, cat)) ) {
-		struct ast_variable *v;
-		struct ast_ha *ha = NULL;
-		char *password = NULL;
-
-		if (!strcasecmp(cat, "general") || strcasecmp(cat, user))
-			continue;	/* skip 'general' and non-matching sections */
+		/* "general" is not a valid user */
+		if (!strcasecmp(cat, user) && strcasecmp(cat, "general"))
+			break;
+	}
+	if (!cat) {
+		ast_log(LOG_NOTICE, "%s tried to authenticate with nonexistent user '%s'\n", ast_inet_ntoa(s->sin.sin_addr), user);
+		ast_config_destroy(cfg);
+		return ret;
+	}
 
 		/* collect parameters for the user's entry */
 		for (v = ast_variable_browse(cfg, cat); v; v = v->next) {
 			if (!strcasecmp(v->name, "secret")) {
 				password = v->value;
-			} else if (!strcasecmp(v->name, "displaysystemname")) {
-				if (ast_true(v->value)) {
-					if (ast_strlen_zero(ast_config_AST_SYSTEM_NAME)) {
-						s->displaysystemname = 1;
-					} else {
-						ast_log(LOG_ERROR, "Can't enable displaysystemname in manager.conf - no system name configured in asterisk.conf\n");
-					}
-				}
 			} else if (!strcasecmp(v->name, "permit") ||
 				   !strcasecmp(v->name, "deny")) {
 				ha = ast_append_ha(v->name, v->value, ha);
@@ -935,26 +921,23 @@ static int authenticate(struct mansession *s, struct message *m)
 				for (x=0; x<16; x++)
 					len += sprintf(md5key + len, "%2.2x", digest[x]);
 				if (!strcmp(md5key, key))
-					break;
+					goto ok;
 			}
 		} else if (password) {
 			if (!strcmp(password, pass))
-				break;
+				goto ok;
 		}
 		ast_log(LOG_NOTICE, "%s failed to authenticate as '%s'\n", ast_inet_ntoa(s->sin.sin_addr), user);
 		goto error;
-	}
-	/* we get here with user not found (cat = NULL) or successful authentication */
-	if (cat) {
+
+ok:
 		ast_copy_string(s->username, cat, sizeof(s->username));
 		s->readperm = get_perm(ast_variable_retrieve(cfg, cat, "read"));
 		s->writeperm = get_perm(ast_variable_retrieve(cfg, cat, "write"));
 		if (events)
 			set_eventmask(s, events);
 		ret = 0;
-	} else {
-		ast_log(LOG_NOTICE, "%s tried to authenticate with nonexistent user '%s'\n", ast_inet_ntoa(s->sin.sin_addr), user);
-	}
+
 error:
 	ast_config_destroy(cfg);
 	return ret;
@@ -2027,8 +2010,6 @@ static int get_input(struct mansession *s, char *output)
 		ast_mutex_unlock(&s->__lock);
 		if (res < 0) {
 			if (errno == EINTR) {
-				if (s->dead)
-					return -1;
 				return 0;
 			}
 			ast_log(LOG_WARNING, "Select returned error: %s\n", strerror(errno));
