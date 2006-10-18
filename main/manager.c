@@ -852,22 +852,23 @@ static int set_eventmask(struct mansession *s, char *eventmask)
 static int authenticate(struct mansession *s, struct message *m)
 {
 	char *user = astman_get_header(m, "Username");
-	char *pass = astman_get_header(m, "Secret");
-	char *authtype = astman_get_header(m, "AuthType");
-	char *key = astman_get_header(m, "Key");
-	char *events = astman_get_header(m, "Events");
-	char *cat = NULL;
-	struct ast_config *cfg = ast_config_load("manager.conf");
-	int ret = -1;	/* default: error return */
-	struct ast_variable *v;
+	int error = -1;
 	struct ast_ha *ha = NULL;
 	char *password = NULL;
+	int readperm = 0, writeperm = 0;
 
+	if (ast_strlen_zero(user))	/* missing username */
+		return -1;
+
+    {
 	/*
-	 * XXX there is no need to scan the config file again here,
+	 * XXX there should be no need to scan the config file again here,
 	 * suffices to call ast_get_manager_by_name_locked() to fetch
 	 * the user's entry.
 	 */
+	struct ast_config *cfg = ast_config_load("manager.conf");
+	char *cat = NULL;
+	struct ast_variable *v;
 
 	if (!cfg)
 		return -1;
@@ -879,68 +880,72 @@ static int authenticate(struct mansession *s, struct message *m)
 	if (!cat) {
 		ast_log(LOG_NOTICE, "%s tried to authenticate with nonexistent user '%s'\n", ast_inet_ntoa(s->sin.sin_addr), user);
 		ast_config_destroy(cfg);
-		return ret;
+		return -1;
 	}
 
-		/* collect parameters for the user's entry */
-		for (v = ast_variable_browse(cfg, cat); v; v = v->next) {
-			if (!strcasecmp(v->name, "secret")) {
-				password = v->value;
-			} else if (!strcasecmp(v->name, "permit") ||
-				   !strcasecmp(v->name, "deny")) {
-				ha = ast_append_ha(v->name, v->value, ha);
-			} else if (!strcasecmp(v->name, "writetimeout")) {
-				int val = atoi(v->value);
+	/* collect parameters for the user's entry */
+	for (v = ast_variable_browse(cfg, cat); v; v = v->next) {
+		if (!strcasecmp(v->name, "secret"))
+			password = ast_strdupa(v->value);
+		else if (!strcasecmp(v->name, "read"))
+			readperm = get_perm(v->value);
+		else if (!strcasecmp(v->name, "write"))
+			writeperm = get_perm(v->value);
+		else if (!strcasecmp(v->name, "permit") ||
+			   !strcasecmp(v->name, "deny")) {
+			ha = ast_append_ha(v->name, v->value, ha);
+		} else if (!strcasecmp(v->name, "writetimeout")) {
+			int val = atoi(v->value);
 
-				if (val < 100)
-					ast_log(LOG_WARNING, "Invalid writetimeout value '%s' at line %d\n", v->value, v->lineno);
-				else
-					s->writetimeout = val;
-			}
-				
+			if (val < 100)
+				ast_log(LOG_WARNING, "Invalid writetimeout value '%s' at line %d\n", v->value, v->lineno);
+			else
+				s->writetimeout = val;
 		}
-		if (ha) {
-			if (!ast_apply_ha(ha, &(s->sin))) {
-				ast_log(LOG_NOTICE, "%s failed to pass IP ACL as '%s'\n", ast_inet_ntoa(s->sin.sin_addr), user);
-				ast_free_ha(ha);
-				goto error;
-			}
-			ast_free_ha(ha);
-		}
-		if (!strcasecmp(authtype, "MD5")) {
-			if (!ast_strlen_zero(key) && s->challenge) {
-				int x;
-				int len = 0;
-				char md5key[256] = "";
-				struct MD5Context md5;
-				unsigned char digest[16];
-				MD5Init(&md5);
-				MD5Update(&md5, (unsigned char *) s->challenge, strlen(s->challenge));
-				MD5Update(&md5, (unsigned char *) password, strlen(password));
-				MD5Final(digest, &md5);
-				for (x=0; x<16; x++)
-					len += sprintf(md5key + len, "%2.2x", digest[x]);
-				if (!strcmp(md5key, key))
-					goto ok;
-			}
-		} else if (password) {
-			if (!strcmp(password, pass))
-				goto ok;
-		}
-		ast_log(LOG_NOTICE, "%s failed to authenticate as '%s'\n", ast_inet_ntoa(s->sin.sin_addr), user);
-		goto error;
-
-ok:
-		ast_copy_string(s->username, cat, sizeof(s->username));
-		s->readperm = get_perm(ast_variable_retrieve(cfg, cat, "read"));
-		s->writeperm = get_perm(ast_variable_retrieve(cfg, cat, "write"));
-		if (events)
-			set_eventmask(s, events);
-		ret = 0;
-
-error:
+	}
 	ast_config_destroy(cfg);
-	return ret;
+    }
+
+	if (ha) {
+		int good = ast_apply_ha(ha, &(s->sin));
+		ast_free_ha(ha);
+		if (!good) {
+			ast_log(LOG_NOTICE, "%s failed to pass IP ACL as '%s'\n", ast_inet_ntoa(s->sin.sin_addr), user);
+			return -1;
+		}
+	}
+	if (!strcasecmp(astman_get_header(m, "AuthType"), "MD5")) {
+		char *key = astman_get_header(m, "Key");
+		if (!ast_strlen_zero(key) && !ast_strlen_zero(s->challenge)) {
+			int x;
+			int len = 0;
+			char md5key[256] = "";
+			struct MD5Context md5;
+			unsigned char digest[16];
+
+			MD5Init(&md5);
+			MD5Update(&md5, (unsigned char *) s->challenge, strlen(s->challenge));
+			MD5Update(&md5, (unsigned char *) password, strlen(password));
+			MD5Final(digest, &md5);
+			for (x=0; x<16; x++)
+				len += sprintf(md5key + len, "%2.2x", digest[x]);
+			if (!strcmp(md5key, key))
+				error = 0;
+		}
+	} else if (password) {
+		char *pass = astman_get_header(m, "Secret");
+		if (!strcmp(password, pass))
+			error = 0;
+	}
+	if (error) {
+		ast_log(LOG_NOTICE, "%s failed to authenticate as '%s'\n", ast_inet_ntoa(s->sin.sin_addr), user);
+		return -1;
+	}
+	ast_copy_string(s->username, user, sizeof(s->username));
+	s->readperm = readperm;
+	s->writeperm = writeperm;
+	set_eventmask(s, astman_get_header(m, "Events"));
+	return 0;
 }
 
 /*! \brief Manager PING */
@@ -1913,42 +1918,41 @@ static int process_message(struct mansession *s, struct message *m)
 		astman_send_error(s, m, "Missing action in request");
 		return 0;
 	}
-	if (!ast_strlen_zero(id)) {
+	if (!ast_strlen_zero(id))
 		snprintf(idText, sizeof(idText), "ActionID: %s\r\n", id);
-	}
-		if (!strcasecmp(action, "Challenge")) {
-			char *authtype = astman_get_header(m, "AuthType");
 
-			if (!strcasecmp(authtype, "MD5")) {
-				if (ast_strlen_zero(s->challenge))
-					snprintf(s->challenge, sizeof(s->challenge), "%ld", ast_random());
-				ast_mutex_lock(&s->__lock);
-				astman_append(s, "Response: Success\r\n"
-						"%s"
-						"Challenge: %s\r\n\r\n",
-						idText, s->challenge);
-				ast_mutex_unlock(&s->__lock);
-			} else {
-				astman_send_error(s, m, "Must specify AuthType");
-			}
-			return 0;
-		} else if (!strcasecmp(action, "Login")) {
-			if (authenticate(s, m)) {
-				sleep(1);
-				astman_send_error(s, m, "Authentication failed");
-				return -1;
-			} else {
-				s->authenticated = 1;
-				if (option_verbose > 1) {
-					if (displayconnects) {
-						ast_verbose(VERBOSE_PREFIX_2 "%sManager '%s' logged on from %s\n", (s->sessiontimeout ? "HTTP " : ""), s->username, ast_inet_ntoa(s->sin.sin_addr));
-					}
-				}
-				ast_log(LOG_EVENT, "%sManager '%s' logged on from %s\n", (s->sessiontimeout ? "HTTP " : ""), s->username, ast_inet_ntoa(s->sin.sin_addr));
-				astman_send_ack(s, m, "Authentication accepted");
-				return 0;
+	if (!strcasecmp(action, "Challenge")) {
+		char *authtype = astman_get_header(m, "AuthType");
+
+		if (!strcasecmp(authtype, "MD5")) {
+			if (ast_strlen_zero(s->challenge))
+				snprintf(s->challenge, sizeof(s->challenge), "%ld", ast_random());
+			ast_mutex_lock(&s->__lock);
+			astman_append(s, "Response: Success\r\n"
+					"%s"
+					"Challenge: %s\r\n\r\n",
+					idText, s->challenge);
+			ast_mutex_unlock(&s->__lock);
+		} else {
+			astman_send_error(s, m, "Must specify AuthType");
+		}
+		return 0;
+	} else if (!strcasecmp(action, "Login")) {
+		if (authenticate(s, m)) {
+			sleep(1);
+			astman_send_error(s, m, "Authentication failed");
+			return -1;
+		}
+		s->authenticated = 1;
+		if (option_verbose > 1) {
+			if (displayconnects) {
+				ast_verbose(VERBOSE_PREFIX_2 "%sManager '%s' logged on from %s\n", (s->sessiontimeout ? "HTTP " : ""), s->username, ast_inet_ntoa(s->sin.sin_addr));
 			}
 		}
+		ast_log(LOG_EVENT, "%sManager '%s' logged on from %s\n", (s->sessiontimeout ? "HTTP " : ""), s->username, ast_inet_ntoa(s->sin.sin_addr));
+		astman_send_ack(s, m, "Authentication accepted");
+		return 0;
+	}
 	{
 		struct manager_action *tmp;
 		ast_mutex_lock(&s->__lock);
