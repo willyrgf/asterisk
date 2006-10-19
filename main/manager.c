@@ -83,10 +83,6 @@ struct eventqent {
 	char eventdata[1];	/* really variable size, allocated by append_event() */
 };
 struct eventqent *master_eventq = NULL; /* Protected by the sessions list lock */
-/*
- * XXX for some unclear reasons, we make sure master_eventq always
- * has one event in it (Placeholder) in init_manager().
- */
 
 static int enabled = 0;
 static int portno = DEFAULT_MANAGER_PORT;
@@ -130,7 +126,7 @@ struct mansession {
 	char inbuf[AST_MAX_MANHEADER_LEN];	/*! Buffer */
 	int inlen;		/*! number of buffered bytes */
 	int send_events;	/* XXX what ? */
-	struct eventqent *eventq;	/* Queued events that we've not had the ability to send yet */
+	struct eventqent *eventq;	/* last event processed. */
 	int writetimeout;	/* Timeout for ast_carefulwrite() */
 	AST_LIST_ENTRY(mansession) list;
 };
@@ -505,7 +501,6 @@ static struct ast_cli_entry cli_manager[] = {
  * (why check for e->next ?) wakeup the
  * main thread, which is in charge of freeing the record.
  * Returns the next record.
- * XXX Locking assumptions ??? next may change if we are last.
  */
 static struct eventqent *unref_event(struct eventqent *e)
 {
@@ -991,10 +986,10 @@ static int action_waitevent(struct mansession *s, struct message *m)
 		ast_mutex_unlock(&s->__lock);
 		if (needexit)
 			break;
-		if (!s->inuse && s->fd > 0) {
+		if (!s->inuse && s->fd > 0) {	/* AMI session */
 			if (ast_wait_for_input(s->fd, 1000))
 				break;
-		} else {
+		} else {	/* HTTP session */
 			sleep(1);
 		}
 	}
@@ -1010,7 +1005,7 @@ static int action_waitevent(struct mansession *s, struct message *m)
 			    ((s->send_events & eqe->category) == eqe->category)) {
 				astman_append(s, "%s", eqe->eventdata);
 			}
-			unref_event(s->eventq);	/* XXX why not eqe ? */
+			unref_event(s->eventq);
 			s->eventq = eqe;
 		}
 		astman_append(s,
@@ -2022,16 +2017,16 @@ static void *accept_thread(void *ignore)
 /*
  * events are appended to a queue from where they
  * can be dispatched to clients.
- * Must be called with the session lock held (or equivalent).
  */
 static int append_event(const char *str, int category)
 {
-	struct eventqent *tmp, *prev = NULL;
-	tmp = ast_malloc(sizeof(*tmp) + strlen(str));
+	struct eventqent *prev = NULL;
+	struct eventqent *tmp = ast_malloc(sizeof(*tmp) + strlen(str));
 
 	if (!tmp)
 		return -1;
 
+	/* need to init all fields, because ast_malloc() does not */
 	tmp->next = NULL;
 	tmp->category = category;
 	strcpy(tmp->eventdata, str);
@@ -2356,8 +2351,9 @@ static char *xml_translate(char *in, struct ast_variable *vars, enum output_form
 	tmp = out;
 	/* we want to stop when we find an empty line */
 	while (in && *in) {
-		in = ast_skip_blanks(in);	/* trailing \n from before */
 		val = strsep(&in, "\r\n");	/* mark start and end of line */
+		if (in && *in == '\n')		/* remove trailing \n if any */
+			in++;
 		ast_trim_blanks(val);
 		ast_verbose("inobj %d in_data %d line <%s>\n", inobj, in_data, val);
 		if (ast_strlen_zero(val)) {
