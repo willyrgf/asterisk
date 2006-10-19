@@ -434,6 +434,22 @@ struct t38properties {
 	enum t38state state;		/*!< T.38 state */
 };
 
+/*! \brief The user list: Users and friends */
+struct sip_user_list {
+	ASTOBJ_CONTAINER_COMPONENTS(struct sip_peer);
+} ;
+
+/*! \brief The peer list: Peers and Friends */
+struct sip_device_list {
+	ASTOBJ_CONTAINER_COMPONENTS(struct sip_peer);
+};
+
+/*! \brief  The register list: Other SIP proxys we register with and place calls to */
+struct sip_register_list {
+	ASTOBJ_CONTAINER_COMPONENTS(struct sip_registry);
+	int recheck;
+};
+
 /**--- some list management macros. **/
 #define UNLINK(element, head, prev) do {	\
 	if (prev)				\
@@ -897,11 +913,9 @@ struct channel_counters {
 	int registry_objects;
 };
 
-/* Ugly solution, please don't tell kpfleming */
-#ifndef CHAN_SIP3_MAIN
-extern struct sip_globals global;	/* Defined in chan_sip3.c */
-extern struct sched_context *sched;     /*!< The scheduling context */
-extern struct io_context *io;           /*!< The IO context */
-#endif
+extern struct sip_network sipnet;                      /*!< Sockets and networking */
+extern struct expiry_times expiry;			/*!< Various expiration times */
+extern struct ast_config *notify_types;			/*!< Notification types */
+extern const char notify_config[];			/*!< Configuration file for notifications */
 
 #endif

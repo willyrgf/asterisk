@@ -74,9 +74,6 @@ extern void add_noncodec_to_sdp(const struct sip_pvt *p, int format, int sample_
 extern int add_sdp(struct sip_request *resp, struct sip_pvt *p);
 
 /*--- Authentication stuff */
-extern int do_proxy_auth(struct sip_pvt *p, struct sip_request *req, char *header, char *respheader, int sipmethod, int init);
-extern int reply_digest(struct sip_pvt *p, struct sip_request *req, char *header, int sipmethod, char *digest, int digest_len);
-extern int build_reply_digest(struct sip_pvt *p, int method, char *digest, int digest_len);
 extern int clear_realm_authentication(struct sip_auth *authlist);	/* Clear realm authentication list (at reload) */
 extern struct sip_auth *add_realm_authentication(struct sip_auth *authlist, char *configuration, int lineno);	/* Add realm authentication in list */
 extern struct sip_auth *find_realm_authentication(struct sip_auth *authlist, const char *realm);	/* Find authentication for a specific realm */
@@ -87,7 +84,6 @@ extern enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 					      int sipmethod, char *uri, enum xmittype reliable,
 					      struct sockaddr_in *sin, struct sip_peer **authpeer);
 extern int check_user(struct sip_pvt *p, struct sip_request *req, int sipmethod, char *uri, enum xmittype reliable, struct sockaddr_in *sin);
-extern int do_proxy_auth(struct sip_pvt *p, struct sip_request *req, char *header, char *respheader, int sipmethod, int init);
 extern int build_reply_digest(struct sip_pvt *p, int method, char* digest, int digest_len);
 
 /*--- Domain handling */
@@ -102,7 +98,6 @@ extern struct sip_auth *find_realm_authentication(struct sip_auth *authlist, con
 
 /*--- Misc functions */
 extern int sip_do_reload(enum channelreloadreason reason);
-extern int reload_config(enum channelreloadreason reason);
 extern int expire_register(void *data);
 extern int sip_sipredirect(struct sip_pvt *p, const char *dest);
 extern void *do_monitor(void *data);
@@ -190,8 +185,6 @@ extern void sip_dump_history(struct sip_pvt *dialog);
 
 /*--- Device object handling */
 extern struct sip_peer *temp_peer(const char *name);
-extern struct sip_peer *build_peer(const char *name, struct ast_variable *v, struct ast_variable *alt, int realtime);
-extern struct sip_peer *build_user(const char *name, struct ast_variable *v, int realtime);
 extern int update_call_counter(struct sip_pvt *fup, int event);
 extern void sip_destroy_device(struct sip_peer *peer);
 extern int sip_poke_peer(struct sip_peer *peer);
@@ -209,9 +202,7 @@ extern int handle_common_options(struct ast_flags *flags, struct ast_flags *mask
 
 /* Realtime device support */
 extern void realtime_update_peer(const char *peername, struct sockaddr_in *sin, const char *username, const char *fullcontact, int expirey);
-extern struct sip_peer *realtime_user(const char *username);
 extern void update_peer(struct sip_peer *p, int expiry);
-extern struct sip_peer *realtime_peer(const char *peername, struct sockaddr_in *sin);
 extern int sip_prune_realtime(int fd, int argc, char *argv[]);
 
 /*--- Internal UA client handling (outbound registrations) */
@@ -222,8 +213,6 @@ extern char *regstate2str(enum sipregistrystate regstate) attribute_const;
 extern int sip_reregister(void *data);
 extern int __sip_do_register(struct sip_registry *r);
 extern int sip_reg_timeout(void *data);
-extern int do_register_auth(struct sip_pvt *p, struct sip_request *req, char *header, char *respheader);
-extern int reply_digest(struct sip_pvt *p, struct sip_request *req, char *header, int sipmethod,  char *digest, int digest_len);
 extern void sip_send_all_registers(void);
 
 /*--- Parsing SIP requests and responses */

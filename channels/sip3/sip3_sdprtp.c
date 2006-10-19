@@ -83,6 +83,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/abstract_jb.h"
 #include "asterisk/compiler.h"
 #include "sip3.h"
+#include "sip3funcs.h"
 
 /*! \brief Reads one line of SIP message body */
 static char *get_body_by_line(const char *line, const char *name, int nameLen)
@@ -118,8 +119,8 @@ static const char *get_sdp(struct sip_request *req, const char *name)
 	return get_sdp_iterate(&dummy, req, name);
 }
 
-/*! \brief Get a specific line from the message body */
-static char *get_body(struct sip_request *req, char *name) 
+/*! \brief Get the message body part identified by name= */
+char *get_body(struct sip_request *req, char *name) 
 {
 	int x;
 	int len = strlen(name);
@@ -137,7 +138,7 @@ static char *get_body(struct sip_request *req, char *name)
 /*! \brief Process SIP SDP offer, select formats and activate RTP channels
 	If offer is rejected, we will not change any properties of the call
 */
-static int process_sdp(struct sip_pvt *p, struct sip_request *req)
+int process_sdp(struct sip_pvt *p, struct sip_request *req)
 {
 	const char *m;		/* SDP media offer */
 	const char *c;
@@ -704,7 +705,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 
 
 /*! \brief Set the RTP peer for this call */
-static int sip_set_rtp_peer(struct ast_channel *chan, struct ast_rtp *rtp, struct ast_rtp *vrtp, int codecs, int nat_active)
+int sip_set_rtp_peer(struct ast_channel *chan, struct ast_rtp *rtp, struct ast_rtp *vrtp, int codecs, int nat_active)
 {
 	struct sip_pvt *p;
 	int changed = 0;
@@ -769,7 +770,7 @@ static int sip_set_rtp_peer(struct ast_channel *chan, struct ast_rtp *rtp, struc
 }
 
 /*! \brief Returns null if we can't reinvite audio (part of RTP interface) */
-static enum ast_rtp_get_result sip_get_rtp_peer(struct ast_channel *chan, struct ast_rtp **rtp)
+enum ast_rtp_get_result sip_get_rtp_peer(struct ast_channel *chan, struct ast_rtp **rtp)
 {
 	struct sip_pvt *p = NULL;
 	enum ast_rtp_get_result res = AST_RTP_TRY_PARTIAL;
@@ -794,19 +795,15 @@ static enum ast_rtp_get_result sip_get_rtp_peer(struct ast_channel *chan, struct
 }
 
 /*! \brief Returns null if we can't reinvite video (part of RTP interface) */
-static enum ast_rtp_get_result sip_get_vrtp_peer(struct ast_channel *chan, struct ast_rtp **rtp)
+enum ast_rtp_get_result sip_get_vrtp_peer(struct ast_channel *chan, struct ast_rtp **rtp)
 {
 	struct sip_pvt *p = NULL;
 	enum ast_rtp_get_result res = AST_RTP_TRY_PARTIAL;
 	
-	if (!(p = chan->tech_pvt))
+	if (!(p = chan->tech_pvt) || !(p->vrtp))
 		return AST_RTP_GET_FAILED;
 
 	ast_mutex_lock(&p->lock);
-	if (!(p->vrtp)) {
-		ast_mutex_unlock(&p->lock);
-		return AST_RTP_GET_FAILED;
-	}
 
 	*rtp = p->vrtp;
 
@@ -816,5 +813,394 @@ static enum ast_rtp_get_result sip_get_vrtp_peer(struct ast_channel *chan, struc
 	ast_mutex_unlock(&p->lock);
 
 	return res;
+}
+
+/*!
+  \brief Determine whether a SIP message contains an SDP in its body
+  \param req the SIP request to process
+  \return 1 if SDP found, 0 if not found
+
+  Also updates req->sdp_start and req->sdp_end to indicate where the SDP
+  lives in the message body.
+*/
+int find_sdp(struct sip_request *req)
+{
+	const char *content_type;
+	const char *search;
+	char *boundary;
+	unsigned int x;
+
+	content_type = get_header(req, "Content-Type");
+
+	/* if the body contains only SDP, this is easy */
+	if (!strcasecmp(content_type, "application/sdp")) {
+		req->sdp_start = 0;
+		req->sdp_end = req->lines;
+		return 1;
+	}
+
+	/* if it's not multipart/mixed, there cannot be an SDP */
+	if (strncasecmp(content_type, "multipart/mixed", 15))
+		return 0;
+
+	/* if there is no boundary marker, it's invalid */
+	if (!(search = strcasestr(content_type, ";boundary=")))
+		return 0;
+
+	search += 10;
+
+	if (ast_strlen_zero(search))
+		return 0;
+
+	/* make a duplicate of the string, with two extra characters
+	   at the beginning */
+	boundary = ast_strdupa(search - 2);
+	boundary[0] = boundary[1] = '-';
+
+	/* search for the boundary marker, but stop when there are not enough
+	   lines left for it, the Content-Type header and at least one line of
+	   body */
+	for (x = 0; x < (req->lines - 2); x++) {
+		if (!strncasecmp(req->line[x], boundary, strlen(boundary)) &&
+		    !strcasecmp(req->line[x + 1], "Content-Type: application/sdp")) {
+			req->sdp_start = x + 2;
+			/* search for the end of the body part */
+			for ( ; x < req->lines; x++) {
+				if (!strncasecmp(req->line[x], boundary, strlen(boundary)))
+					break;
+			}
+			req->sdp_end = x;
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
+/*! \brief Add RFC 2833 DTMF offer to SDP */
+static void add_noncodec_to_sdp(const struct sip_pvt *p, int format, int sample_rate,
+				char **m_buf, size_t *m_size, char **a_buf, size_t *a_size,
+				int debug)
+{
+	int rtp_code;
+
+	if (debug)
+		ast_verbose("Adding non-codec 0x%x (%s) to SDP\n", format, ast_rtp_lookup_mime_subtype(0, format, 0));
+	if ((rtp_code = ast_rtp_lookup_code(p->rtp, 0, format)) == -1)
+		return;
+
+	ast_build_string(m_buf, m_size, " %d", rtp_code);
+	ast_build_string(a_buf, a_size, "a=rtpmap:%d %s/%d\r\n", rtp_code,
+			 ast_rtp_lookup_mime_subtype(0, format, 0),
+			 sample_rate);
+	if (format == AST_RTP_DTMF)
+		/* Indicate we support DTMF and FLASH... */
+		ast_build_string(a_buf, a_size, "a=fmtp:%d 0-16\r\n", rtp_code);
+}
+
+/*! \brief Add codec offer to SDP offer/answer body in INVITE or 200 OK */
+static void add_codec_to_sdp(const struct sip_pvt *p, int codec, int sample_rate,
+			     char **m_buf, size_t *m_size, char **a_buf, size_t *a_size,
+			     int debug)
+{
+	int rtp_code;
+	struct ast_format_list fmt;
+
+
+	if (debug)
+		ast_verbose("Adding codec 0x%x (%s) to SDP\n", codec, ast_getformatname(codec));
+	if ((rtp_code = ast_rtp_lookup_code(p->rtp, 1, codec)) == -1)
+		return;
+
+	if (p->rtp) {
+		struct ast_codec_pref *pref = ast_rtp_codec_getpref(p->rtp);
+		fmt = ast_codec_pref_getsize(pref, codec);
+	} else /* I dont see how you couldn't have p->rtp, but good to check for and error out if not there like earlier code */
+		return;
+	ast_build_string(m_buf, m_size, " %d", rtp_code);
+	ast_build_string(a_buf, a_size, "a=rtpmap:%d %s/%d\r\n", rtp_code,
+			 ast_rtp_lookup_mime_subtype(1, codec,
+						     ast_test_flag(&p->flags[0], SIP_G726_NONSTANDARD) ? AST_RTP_OPT_G726_NONSTANDARD : 0),
+			 sample_rate);
+	if (codec == AST_FORMAT_G729A) {
+		/* Indicate that we don't support VAD (G.729 annex B) */
+		ast_build_string(a_buf, a_size, "a=fmtp:%d annexb=no\r\n", rtp_code);
+	} else if (codec == AST_FORMAT_ILBC) {
+		/* Add information about us using only 20/30 ms packetization */
+		ast_build_string(a_buf, a_size, "a=fmtp:%d mode=%d\r\n", rtp_code, fmt.cur_ms);
+	}
+
+	if (codec != AST_FORMAT_ILBC) 
+		ast_build_string(a_buf, a_size, "a=ptime:%d\r\n", fmt.cur_ms);
+}
+
+/*! \brief Add Session Description Protocol message */
+int add_sdp(struct sip_request *resp, struct sip_pvt *p)
+{
+	int len = 0;
+	int alreadysent = 0;
+
+	struct sockaddr_in sin;
+	struct sockaddr_in vsin;
+	struct sockaddr_in dest;
+	struct sockaddr_in vdest = { 0, };
+
+	/* SDP fields */
+	char *version = 	"v=0\r\n";		/* Protocol version */
+	char *subject = 	"s=session\r\n";	/* Subject of the session */
+	char owner[256];				/* Session owner/creator */
+	char connection[256];				/* Connection data */
+	char *stime = "t=0 0\r\n"; 			/* Time the session is active */
+	char bandwidth[256] = "";			/* Max bitrate */
+	char *hold;
+	char m_audio[256];				/* Media declaration line for audio */
+	char m_video[256];				/* Media declaration line for video */
+	char a_audio[1024];				/* Attributes for audio */
+	char a_video[1024];				/* Attributes for video */
+	char *m_audio_next = m_audio;
+	char *m_video_next = m_video;
+	size_t m_audio_left = sizeof(m_audio);
+	size_t m_video_left = sizeof(m_video);
+	char *a_audio_next = a_audio;
+	char *a_video_next = a_video;
+	size_t a_audio_left = sizeof(a_audio);
+	size_t a_video_left = sizeof(a_video);
+
+	int x;
+	int capability;
+	int needvideo = FALSE;
+	int debug = sip_debug_test_pvt(p);
+
+	m_video[0] = '\0';	/* Reset the video media string if it's not needed */
+
+	if (!p->rtp) {
+		ast_log(LOG_WARNING, "No way to add SDP without an RTP structure\n");
+		return -1;
+	}
+
+	/* Set RTP Session ID and version */
+	if (!p->sessionid) {
+		p->sessionid = getpid();
+		p->sessionversion = p->sessionid;
+	} else
+		p->sessionversion++;
+
+	/* Get our addresses */
+	ast_rtp_get_us(p->rtp, &sin);
+	if (p->vrtp)
+		ast_rtp_get_us(p->vrtp, &vsin);
+
+	/* Is this a re-invite to move the media out, then use the original offer from caller  */
+	if (p->redirip.sin_addr.s_addr) {
+		dest.sin_port = p->redirip.sin_port;
+		dest.sin_addr = p->redirip.sin_addr;
+		if (p->redircodecs)
+			capability = p->redircodecs;
+	} else {
+		dest.sin_addr = p->ourip;
+		dest.sin_port = sin.sin_port;
+	}
+
+	/* Ok, let's start working with codec selection here */
+	capability = p->jointcapability;
+
+	if (option_debug > 1) {
+		char codecbuf[BUFSIZ];
+		ast_log(LOG_DEBUG, "** Our capability: %s Video flag: %s\n", ast_getformatname_multiple(codecbuf, sizeof(codecbuf), capability), ast_test_flag(&p->flags[0], SIP_NOVIDEO) ? "True" : "False");
+		ast_log(LOG_DEBUG, "** Our prefcodec: %s \n", ast_getformatname_multiple(codecbuf, sizeof(codecbuf), p->prefcodec));
+	}
+	
+	if ((ast_test_flag(&p->t38.t38support, SIP_PAGE2_T38SUPPORT_RTP))) {
+		ast_build_string(&m_audio_next, &m_audio_left, " %d", 191);
+		ast_build_string(&a_audio_next, &a_audio_left, "a=rtpmap:%d %s/%d\r\n", 191, "t38", 8000);
+	}
+
+	/* Check if we need video in this call */
+	if((capability & AST_FORMAT_VIDEO_MASK) && !ast_test_flag(&p->flags[0], SIP_NOVIDEO)) {
+		if (p->vrtp) {
+			needvideo = TRUE;
+			if (option_debug > 1)
+				ast_log(LOG_DEBUG, "This call needs video offers! \n");
+		} else if (option_debug > 1)
+			ast_log(LOG_DEBUG, "This call needs video offers, but there's no video support enabled ! \n");
+	}
+		
+
+	/* Ok, we need video. Let's add what we need for video and set codecs.
+	   Video is handled differently than audio since we can not transcode. */
+	if (needvideo) {
+
+		/* Determine video destination */
+		if (p->vredirip.sin_addr.s_addr) {
+			vdest.sin_addr = p->vredirip.sin_addr;
+			vdest.sin_port = p->vredirip.sin_port;
+		} else {
+			vdest.sin_addr = p->ourip;
+			vdest.sin_port = vsin.sin_port;
+		}
+		ast_build_string(&m_video_next, &m_video_left, "m=video %d RTP/AVP", ntohs(vdest.sin_port));
+
+		/* Build max bitrate string */
+		if (p->maxcallbitrate)
+			snprintf(bandwidth, sizeof(bandwidth), "b=CT:%d\r\n", p->maxcallbitrate);
+		if (debug) 
+			ast_verbose("Video is at %s port %d\n", ast_inet_ntoa(p->ourip), ntohs(vsin.sin_port));	
+
+		/* For video, we can't negotiate video offers. Let's compare the incoming call with what we got. */
+		if (p->prefcodec) {
+			int videocapability = (capability & p->prefcodec) & AST_FORMAT_VIDEO_MASK; /* Outbound call */
+		
+			/*! \todo XXX We need to select one codec, not many, since there's no transcoding */
+
+			/* Now, merge this video capability into capability while removing unsupported codecs */
+			if (!videocapability) {
+				needvideo = FALSE;
+				if (option_debug > 2)
+					ast_log(LOG_DEBUG, "** No compatible video codecs... Disabling video.\n");
+			} 
+
+			/* Replace video capabilities with the new videocapability */
+			capability = (capability & AST_FORMAT_AUDIO_MASK) | videocapability;
+
+			if (option_debug > 4) {
+				char codecbuf[BUFSIZ];
+				if (videocapability)
+					ast_log(LOG_DEBUG, "** Our video codec selection is: %s \n", ast_getformatname_multiple(codecbuf, sizeof(codecbuf), videocapability));
+				ast_log(LOG_DEBUG, "** Capability now set to : %s \n", ast_getformatname_multiple(codecbuf, sizeof(codecbuf), capability));
+			}
+		}
+	}
+	if (debug) 
+		ast_verbose("Audio is at %s port %d\n", ast_inet_ntoa(p->ourip), ntohs(sin.sin_port));	
+
+	/* Start building generic SDP headers */
+
+	/* We break with the "recommendation" and send our IP, in order that our
+	   peer doesn't have to ast_gethostbyname() us */
+
+	snprintf(owner, sizeof(owner), "o=root %d %d IN IP4 %s\r\n", p->sessionid, p->sessionversion, ast_inet_ntoa(dest.sin_addr));
+	snprintf(connection, sizeof(connection), "c=IN IP4 %s\r\n", ast_inet_ntoa(dest.sin_addr));
+	ast_build_string(&m_audio_next, &m_audio_left, "m=audio %d RTP/AVP", ntohs(dest.sin_port));
+
+	if (ast_test_flag(&p->flags[1], SIP_PAGE2_CALL_ONHOLD_ONEDIR))
+		hold = "a=recvonly\r\n";
+	else if (ast_test_flag(&p->flags[1], SIP_PAGE2_CALL_ONHOLD_INACTIVE))
+		hold = "a=inactive\r\n";
+	else
+		hold = "a=sendrecv\r\n";
+
+	/* Now, start adding audio codecs. These are added in this order:
+		- First what was requested by the calling channel
+		- Then preferences in order from sip.conf device config for this peer/user
+		- Then other codecs in capabilities, including video
+	*/
+
+	/* Prefer the audio codec we were requested to use, first, no matter what 
+		Note that p->prefcodec can include video codecs, so mask them out
+	 */
+	if (capability & p->prefcodec) {
+		add_codec_to_sdp(p, p->prefcodec & AST_FORMAT_AUDIO_MASK, 8000,
+				 &m_audio_next, &m_audio_left,
+				 &a_audio_next, &a_audio_left,
+				 debug);
+		alreadysent |= p->prefcodec & AST_FORMAT_AUDIO_MASK;
+	}
+
+
+	/* Start by sending our preferred audio codecs */
+	for (x = 0; x < 32; x++) {
+		int pref_codec;
+
+		if (!(pref_codec = ast_codec_pref_index(&p->prefs, x)))
+			break; 
+
+		if (!(capability & pref_codec))
+			continue;
+
+		if (alreadysent & pref_codec)
+			continue;
+
+		add_codec_to_sdp(p, pref_codec, 8000,
+				 &m_audio_next, &m_audio_left,
+				 &a_audio_next, &a_audio_left,
+				 debug);
+		alreadysent |= pref_codec;
+	}
+
+	/* Now send any other common audio and video codecs, and non-codec formats: */
+	for (x = 1; x <= (needvideo ? AST_FORMAT_MAX_VIDEO : AST_FORMAT_MAX_AUDIO); x <<= 1) {
+		if (!(capability & x))	/* Codec not requested */
+			continue;
+
+		if (alreadysent & x)	/* Already added to SDP */
+			continue;
+
+		if (x <= AST_FORMAT_MAX_AUDIO)
+			add_codec_to_sdp(p, x, 8000,
+					 &m_audio_next, &m_audio_left,
+					 &a_audio_next, &a_audio_left,
+					 debug);
+		else 
+			add_codec_to_sdp(p, x, 90000,
+					 &m_video_next, &m_video_left,
+					 &a_video_next, &a_video_left,
+					 debug);
+	}
+
+	/* Now add DTMF RFC2833 telephony-event as a codec */
+	for (x = 1; x <= AST_RTP_MAX; x <<= 1) {
+		if (!(p->noncodeccapability & x))
+			continue;
+
+		add_noncodec_to_sdp(p, x, 8000,
+				    &m_audio_next, &m_audio_left,
+				    &a_audio_next, &a_audio_left,
+				    debug);
+	}
+
+	if (option_debug > 2)
+		ast_log(LOG_DEBUG, "-- Done with adding codecs to SDP\n");
+
+	if(!p->owner || !ast_internal_timing_enabled(p->owner))
+		ast_build_string(&a_audio_next, &a_audio_left, "a=silenceSupp:off - - - -\r\n");
+
+	if ((m_audio_left < 2) || (m_video_left < 2) || (a_audio_left == 0) || (a_video_left == 0))
+		ast_log(LOG_WARNING, "SIP SDP may be truncated due to undersized buffer!!\n");
+
+	ast_build_string(&m_audio_next, &m_audio_left, "\r\n");
+	if (needvideo)
+		ast_build_string(&m_video_next, &m_video_left, "\r\n");
+
+	len = strlen(version) + strlen(subject) + strlen(owner) + strlen(connection) + strlen(stime) + strlen(m_audio) + strlen(a_audio) + strlen(hold);
+	if (needvideo) /* only if video response is appropriate */
+		len += strlen(m_video) + strlen(a_video) + strlen(bandwidth) + strlen(hold);
+
+	add_header(resp, "Content-Type", "application/sdp");
+	add_header_contentLength(resp, len);
+	add_line(resp, version);
+	add_line(resp, owner);
+	add_line(resp, subject);
+	add_line(resp, connection);
+	if (needvideo)	 	/* only if video response is appropriate */
+		add_line(resp, bandwidth);
+	add_line(resp, stime);
+	add_line(resp, m_audio);
+	add_line(resp, a_audio);
+	add_line(resp, hold);
+	if (needvideo) { /* only if video response is appropriate */
+		add_line(resp, m_video);
+		add_line(resp, a_video);
+		add_line(resp, hold);	/* Repeat hold for the video stream */
+	}
+
+	/* Update lastrtprx when we send our SDP */
+	p->lastrtprx = p->lastrtptx = time(NULL); /* XXX why both ? */
+
+	if (option_debug > 2) {
+		char buf[BUFSIZ];
+		ast_log(LOG_DEBUG, "Done building SDP. Settling with this capability: %s\n", ast_getformatname_multiple(buf, BUFSIZ, capability));
+	}
+
+	return 0;
 }
 

@@ -41,6 +41,36 @@
 
 /*! Function declarations */
 
+/*! Chan_sip3.c */
+/* XXX Should we really expose functions in chan_sip3.c ? */
+extern struct sip_globals global;	/* Defined in chan_sip3.c */
+extern struct sched_context *sched;     /*!< The scheduling context */
+extern struct io_context *io;           /*!< The IO context */
+extern struct channel_counters sipcounters;	/*!< Various object counters */
+extern struct sip_user_list userl;
+extern struct sip_device_list peerl;
+extern struct sip_register_list regl;
+extern struct sip_auth *authl;
+
+GNURK inline int sip_debug_test_pvt(struct sip_pvt *p) ;
+GNURK void append_history_full(struct sip_pvt *p, const char *fmt, ...);
+GNURK void append_history_va(struct sip_pvt *p, const char *fmt, va_list ap);
+GNURK void sip_peer_hold(struct sip_pvt *p, int hold);
+GNURK int sip_register(char *value, int lineno);;
+GNURK struct sip_auth *add_realm_authentication(struct sip_auth *authlist, char *configuration, int lineno);	/* Add realm authentication in list */
+GNURK int transmit_reinvite_with_sdp(struct sip_pvt *p);
+GNURK struct sip_pvt *find_call(struct sip_request *req, struct sockaddr_in *sin, const int intended_method);
+GNURK void add_blank(struct sip_request *req);
+GNURK int lws2sws(char *msgbuf, int len);
+GNURK int handle_request(struct sip_pvt *p, struct sip_request *req, struct sockaddr_in *sin, int *recount, int *nounlock);
+GNURK const char *get_header(const struct sip_request *req, const char *name);
+GNURK int add_header(struct sip_request *req, const char *var, const char *value);
+GNURK int add_header_contentLength(struct sip_request *req, int len);
+GNURK void sip_destroy_device(struct sip_peer *peer);
+GNURK void destroy_association(struct sip_peer *peer);
+GNURK void reg_source_db(struct sip_peer *peer);
+GNURK int expire_register(void *data);
+
 /*! sip3_refer.c */
 GNURK const char *referstatus2str(enum referstatus rstatus) attribute_pure;
 
@@ -86,12 +116,24 @@ GNURK void auth_headers(enum sip_auth_type code, char **header, char **respheade
 GNURK enum check_auth_result check_auth(struct sip_pvt *p, struct sip_request *req, const char *username,
 		 const char *secret, const char *md5secret, int sipmethod,
 		 char *uri, enum xmittype reliable, int ignore);
+GNURK int do_register_auth(struct sip_pvt *p, struct sip_request *req, enum sip_auth_type code);
+GNURK int do_proxy_auth(struct sip_pvt *p, struct sip_request *req, enum sip_auth_type code, int sipmethod, int init);
+GNURK int reply_digest(struct sip_pvt *p, struct sip_request *req, char *header, int sipmethod,  char *digest, int digest_len);
+GNURK int build_reply_digest(struct sip_pvt *p, int method, char* digest, int digest_len);
 
 /* sip3_sdprtp.c */
+GNURK char *get_body(struct sip_request *req, char *name);
 GNURK int process_sdp(struct sip_pvt *p, struct sip_request *req);
 GNURK int sip_set_rtp_peer(struct ast_channel *chan, struct ast_rtp *rtp, struct ast_rtp *vrtp, int codecs, int nat_active);
 GNURK enum ast_rtp_get_result sip_get_rtp_peer(struct ast_channel *chan, struct ast_rtp **rtp);
 GNURK enum ast_rtp_get_result sip_get_vrtp_peer(struct ast_channel *chan, struct ast_rtp **rtp);
 GNURK char *get_body(struct sip_request *req, char *name);
+GNURK int find_sdp(struct sip_request *req);
+GNURK int add_sdp(struct sip_request *resp, struct sip_pvt *p);
 
+/* sip3_config.c */
+GNURK void set_device_defaults(struct sip_peer *device);
+GNURK struct sip_peer *realtime_peer(const char *newpeername, struct sockaddr_in *sin);
+GNURK struct sip_peer *realtime_user(const char *username);
+GNURK int reload_config(enum channelreloadreason reason);
 #endif
