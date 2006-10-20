@@ -200,6 +200,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/localtime.h"
 #include "asterisk/abstract_jb.h"
 #include "asterisk/compiler.h"
+#include "asterisk/threadstorage.h"
+
 #include "sip3/sip3.h"
 #include "sip3/sip3funcs.h"
 
@@ -261,6 +263,9 @@ struct sip_device_list peerl;
 /*! \brief  The register list: Other SIP proxys we register with and place calls to */
 struct sip_register_list regl;
 
+/*! \brief A per-thread temporary pvt structure */
+AST_THREADSTORAGE_CUSTOM(ts_temp_pvt, temp_pvt_init, temp_pvt_cleanup);
+
 /*! \todo Move the sip_auth list to AST_LIST */
 struct sip_auth *authl = NULL;		/*!< Authentication list for realm authentication */
 
@@ -288,6 +293,7 @@ static int sip_senddigit_end(struct ast_channel *ast, char digit);
 /*--- Transmitting responses and requests */
 static int __transmit_response(struct sip_pvt *p, const char *msg, const struct sip_request *req, enum xmittype reliable);
 static int transmit_sip_request(struct sip_pvt *p, struct sip_request *req);
+static int transmit_response_using_temp(ast_string_field callid, struct sockaddr_in *sin, int useglobal_nat, const int intended_method, const struct sip_request *req, const char *msg);
 static int transmit_response(struct sip_pvt *p, const char *msg, const struct sip_request *req);
 static int transmit_response_reliable(struct sip_pvt *p, const char *msg, const struct sip_request *req);
 static int transmit_response_with_date(struct sip_pvt *p, const char *msg, const struct sip_request *req);
@@ -2759,7 +2765,7 @@ static struct sip_pvt *sip_alloc(ast_string_field callid, struct sockaddr_in *si
 	Called by handle_request, sipsock_read */
 GNURK struct sip_pvt *find_call(struct sip_request *req, struct sockaddr_in *sin, const int intended_method)
 {
-	struct sip_pvt *p;
+	struct sip_pvt *p = NULL;
 	char *tag = "";	/* note, tag is never NULL */
 	char totag[128];
 	char fromtag[128];
@@ -2820,9 +2826,25 @@ GNURK struct sip_pvt *find_call(struct sip_request *req, struct sockaddr_in *sin
 		}
 	}
 	ast_mutex_unlock(&iflock);
-	/* Allocate new call */
-	if ((p = sip_alloc(callid, sin, 1, intended_method)))
-		ast_mutex_lock(&p->lock);
+	if (sip_methods[intended_method].creates_dialog == CAN_CREATE_DIALOG) {
+		/* This method creates dialog */
+		if ((p = sip_alloc(callid, sin, 1, intended_method))) 
+			/* Ok, we've created a dialog, let's go and process it */
+			ast_mutex_lock(&p->lock);
+		return(p);
+	} else if (intented_method = SIP_REFER) {
+
+		/* We do not support out-of-dialog REFERs yet */
+		transmit_response_using_temp(callid, sin, 1, intended_method, req, "603 Declined (no dialog)");
+	} else if (intented_method = SIP_NOTIFY) {
+		/* We do not support out-of-dialog NOTIFY either,
+		  like voicemail notification, so cancel that early */
+		transmit_response_using_temp(callid, sin, 1, intended_method, req, "489 Bad event");
+	} else {
+		if (intended_method != SIP_RESPONSE)
+			transmit_response_using_temp(callid, sin, 1, intended_method, req, "481 Call leg/transaction does not exist");
+	}
+
 	return p;
 }
 
@@ -3450,6 +3472,73 @@ static int __transmit_response(struct sip_pvt *p, const char *msg, const struct 
 		add_header(&resp, "X-Asterisk-HangupCauseCode", buf);
 	}
 	return send_response(p, &resp, reliable, seqno);
+}
+
+/*! \brief Initialize temporary PVT */
+static int temp_pvt_init(void *data)
+{
+	struct sip_pvt *p = data;
+
+	ast_set_flag(&p->flags[0], SIP_NO_HISTORY);
+	return ast_string_field_init(p, 512);
+}
+
+/*! \brief Cleanup temporary PVT */
+static void temp_pvt_cleanup(void *data)
+{
+	struct sip_pvt *p = data;
+
+	ast_string_field_free_pools(p);
+
+	free(data);
+}
+
+/*! \brief Transmit response, no retransmits, using a temporary pvt structure */
+static int transmit_response_using_temp(ast_string_field callid, struct sockaddr_in *sin, int useglobal_nat, const int intended_method, const struct sip_request *req, const char *msg)
+{
+	struct sip_pvt *p = NULL;
+
+	if (!(p = ast_threadstorage_get(&ts_temp_pvt, sizeof(*p)))) {
+		ast_log(LOG_NOTICE, "Failed to get temporary pvt\n");
+		return -1;
+	}
+
+	memset(p, 0, sizeof(*p));
+
+	/* Initialize the bare minimum */
+	if (ast_string_field_init(p, 512))
+		return -1;
+
+	p->method = intended_method;
+
+	if (sin) {
+		p->sa = *sin;
+		if (ast_sip_ouraddrfor(&p->sa.sin_addr, &p->ourip))
+			p->ourip = __ourip;
+	} else
+		p->ourip = __ourip;
+
+	p->branch = ast_random();
+	make_our_tag(p->tag, sizeof(p->tag));
+	p->ocseq = INITIAL_CSEQ;
+
+	if (useglobal_nat && sin) {
+		ast_copy_flags(&p->flags[0], &global_flags[0], SIP_NAT);
+		p->recv = *sin;
+		do_setnat(p, ast_test_flag(&p->flags[0], SIP_NAT) & SIP_NAT_ROUTE);
+	}
+
+	ast_string_field_set(p, fromdomain, global.default_fromdomain);
+	build_via(p);
+	ast_string_field_set(p, callid, callid);
+
+	/* Use this temporary pvt structure to send the message */
+	__transmit_response(p, msg, req, XMIT_UNRELIABLE);
+
+	/* Now do a simple destruction */
+	ast_string_field_free_all(p);
+
+	return 0;
 }
 
 /*! \brief Transmit response, no retransmits */
@@ -6052,81 +6141,6 @@ static void check_via(struct sip_pvt *p, struct sip_request *req)
 		}
 	}
 }
-
-/*! \brief  Get caller id name from SIP headers */
-static char *get_calleridname(const char *input, char *output, size_t outputsize)
-{
-	const char *end = strchr(input,'<');	/* first_bracket */
-	const char *tmp = strchr(input,'"');	/* first quote */
-	int bytes = 0;
-	int maxbytes = outputsize - 1;
-
-	if (!end || end == input)	/* we require a part in brackets */
-		return NULL;
-
-	/* move away from "<" */
-	end--;
-
-	/* we found "name" */
-	if (tmp && tmp < end) {
-		end = strchr(tmp+1, '"');
-		if (!end)
-			return NULL;
-		bytes = (int) (end - tmp);
-		/* protect the output buffer */
-		if (bytes > maxbytes)
-			bytes = maxbytes;
-		ast_copy_string(output, tmp + 1, bytes);
-	} else {
-		/* we didn't find "name" */
-		/* clear the empty characters in the begining*/
-		input = ast_skip_blanks(input);
-		/* clear the empty characters in the end */
-		while(*end && *end < 33 && end > input)
-			end--;
-		if (end >= input) {
-			bytes = (int) (end - input) + 2;
-			/* protect the output buffer */
-			if (bytes > maxbytes)
-				bytes = maxbytes;
-			ast_copy_string(output, input, bytes);
-		} else
-			return NULL;
-	}
-	return output;
-}
-
-/*! \brief  Get caller id number from Remote-Party-ID header field 
- *	Returns true if number should be restricted (privacy setting found)
- *	output is set to NULL if no number found
- */
-static int get_rpid_num(const char *input, char *output, int maxlen)
-{
-	char *start;
-	char *end;
-
-	start = strchr(input,':');
-	if (!start) {
-		output[0] = '\0';
-		return 0;
-	}
-	start++;
-
-	/* we found "number" */
-	ast_copy_string(output,start,maxlen);
-	output[maxlen-1] = '\0';
-
-	end = strchr(output,'@');
-	if (end)
-		*end = '\0';
-	else
-		output[0] = '\0';
-	if (strstr(input,"privacy=full") || strstr(input,"privacy=uri"))
-		return AST_PRES_PROHIB_USER_NUMBER_NOT_SCREENED;
-
-	return 0;
-}
-
 
 /*! \brief  Check if matching user or peer is defined 
  	Match user on From: user name and peer on IP/port
@@ -9506,7 +9520,10 @@ static const char *gettag(const struct sip_request *req, const char *header, cha
 	return NULL;
 }
 
-/*! \brief Handle incoming notifications */
+/*! \brief Handle incoming notifications 
+ * \note Out of dialog NOTIFY messages are killed in find_call()
+ 	If implementing VMI support, that needs to change 
+ */
 static int handle_request_notify(struct sip_pvt *p, struct sip_request *req, struct sockaddr_in *sin, int seqno, char *e)
 {
 	/* This is mostly a skeleton for future improvements */
@@ -10478,6 +10495,7 @@ static int local_attended_transfer(struct sip_pvt *transferer, struct sip_dual *
 	We can't destroy dialogs, since we want the call to continue.
 	
 	*/
+/*	XXX note that out-of-dialog refers are killed in find_call() */
 static int handle_request_refer(struct sip_pvt *p, struct sip_request *req, int debug, int seqno, int *nounlock)
 {
 	struct sip_dual current;	/* Chan1: Call between asterisk and transferer */
@@ -11445,6 +11463,59 @@ static int does_peer_need_mwi(struct sip_peer *peer)
 }
 
 
+/*! \brief helper function for the monitoring thread */
+static void check_rtp_timeout(struct sip_pvt *sip, time_t t)
+{
+	if (sip->rtp && sip->owner &&
+	    (sip->owner->_state == AST_STATE_UP) &&
+	    !sip->redirip.sin_addr.s_addr) {
+		if (sip->lastrtptx &&
+		    sip->rtpkeepalive &&
+		    (t > sip->lastrtptx + sip->rtpkeepalive)) {
+			/* Need to send an empty RTP packet */
+			sip->lastrtptx = time(NULL);
+			ast_rtp_sendcng(sip->rtp, 0);
+		}
+		if (sip->lastrtprx &&
+		    (sip->rtptimeout || sip->rtpholdtimeout) &&
+		    (t > sip->lastrtprx + sip->rtptimeout)) {
+			/* Might be a timeout now -- see if we're on hold */
+			struct sockaddr_in sin;
+			ast_rtp_get_peer(sip->rtp, &sin);
+			if (sin.sin_addr.s_addr || 
+			    (sip->rtpholdtimeout && 
+			     (t > sip->lastrtprx + sip->rtpholdtimeout))) {
+				/* Needs a hangup */
+				if (sip->rtptimeout) {
+					while (sip->owner && ast_channel_trylock(sip->owner)) {
+						ast_mutex_unlock(&sip->lock);
+						usleep(1);
+						ast_mutex_lock(&sip->lock);
+					}
+					if (sip->owner) {
+						if (!(ast_rtp_get_bridged(sip->rtp))) {
+							ast_log(LOG_NOTICE,
+								"Disconnecting call '%s' for lack of RTP activity in %ld seconds\n",
+								sip->owner->name,
+								(long) (t - sip->lastrtprx));
+							/* Issue a softhangup */
+							ast_softhangup_nolock(sip->owner, AST_SOFTHANGUP_DEV);
+						} else
+							ast_log(LOG_NOTICE, "'%s' will not be disconnected in %ld seconds because it is directly bridged to another RTP stream\n", sip->owner->name, (long) (t - sip->lastrtprx));
+						ast_channel_unlock(sip->owner);
+						/* forget the timeouts for this call, since a hangup
+						   has already been requested and we don't want to
+						   repeatedly request hangups
+						*/
+						sip->rtptimeout = 0;
+						sip->rtpholdtimeout = 0;
+					}
+				}
+			}
+		}
+	}
+}
+
 /*! \brief The SIP monitoring thread 
 \note	This thread monitors all the SIP sessions and peers that needs notification of mwi
 	(and thus do not have a separate thread) indefinitely 
@@ -11491,54 +11562,7 @@ restartsearch:
 		for (sip = dialoglist; !fastrestart && sip; sip = sip->next) {
 			ast_mutex_lock(&sip->lock);
 			/* Check RTP timeouts and kill calls if we have a timeout set and do not get RTP */
-			if (sip->rtp && sip->owner &&
-			    (sip->owner->_state == AST_STATE_UP) &&
-			    !sip->redirip.sin_addr.s_addr) {
-				if (sip->lastrtptx &&
-				    sip->rtpkeepalive &&
-				    (t > sip->lastrtptx + sip->rtpkeepalive)) {
-					/* Need to send an empty RTP packet */
-					sip->lastrtptx = time(NULL);
-					ast_rtp_sendcng(sip->rtp, 0);
-				}
-				if (sip->lastrtprx &&
-				    (sip->rtptimeout || sip->rtpholdtimeout) &&
-				    (t > sip->lastrtprx + sip->rtptimeout)) {
-					/* Might be a timeout now -- see if we're on hold */
-					struct sockaddr_in sin;
-					ast_rtp_get_peer(sip->rtp, &sin);
-					if (sin.sin_addr.s_addr || 
-					    (sip->rtpholdtimeout && 
-					     (t > sip->lastrtprx + sip->rtpholdtimeout))) {
-						/* Needs a hangup */
-						if (sip->rtptimeout) {
-							while (sip->owner && ast_channel_trylock(sip->owner)) {
-								ast_mutex_unlock(&sip->lock);
-								usleep(1);
-								ast_mutex_lock(&sip->lock);
-							}
-							if (sip->owner) {
-								if (!(ast_rtp_get_bridged(sip->rtp))) {
-									ast_log(LOG_NOTICE,
-										"Disconnecting call '%s' for lack of RTP activity in %ld seconds\n",
-										sip->owner->name,
-										(long) (t - sip->lastrtprx));
-									/* Issue a softhangup */
-									ast_softhangup_nolock(sip->owner, AST_SOFTHANGUP_DEV);
-								} else
-									ast_log(LOG_NOTICE, "'%s' will not be disconnected in %ld seconds because it is directly bridged to another RTP stream\n", sip->owner->name, (long) (t - sip->lastrtprx));
-								ast_channel_unlock(sip->owner);
-								/* forget the timeouts for this call, since a hangup
-								   has already been requested and we don't want to
-								   repeatedly request hangups
-								*/
-								sip->rtptimeout = 0;
-								sip->rtpholdtimeout = 0;
-							}
-						}
-					}
-				}
-			}
+			check_rtp_timeout(sip, t);
 			/* If we have sessions that needs to be destroyed, do it now */
 			if (ast_test_flag(&sip->flags[0], SIP_NEEDDESTROY) && !sip->packets &&
 			    !sip->owner) {

@@ -80,3 +80,76 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "sip3.h"
 
 
+/*! \brief  Get caller id number from Remote-Party-ID header field 
+ *	Returns true if number should be restricted (privacy setting found)
+ *	output is set to NULL if no number found
+ */
+static int get_rpid_num(const char *input, char *output, int maxlen)
+{
+	char *start;
+	char *end;
+
+	start = strchr(input,':');
+	if (!start) {
+		output[0] = '\0';
+		return 0;
+	}
+	start++;
+
+	/* we found "number" */
+	ast_copy_string(output,start,maxlen);
+	output[maxlen-1] = '\0';
+
+	end = strchr(output,'@');
+	if (end)
+		*end = '\0';
+	else
+		output[0] = '\0';
+	if (strstr(input,"privacy=full") || strstr(input,"privacy=uri"))
+		return AST_PRES_PROHIB_USER_NUMBER_NOT_SCREENED;
+
+	return 0;
+}
+
+/*! \brief  Get caller id name from SIP headers */
+static char *get_calleridname(const char *input, char *output, size_t outputsize)
+{
+	const char *end = strchr(input,'<');	/* first_bracket */
+	const char *tmp = strchr(input,'"');	/* first quote */
+	int bytes = 0;
+	int maxbytes = outputsize - 1;
+
+	if (!end || end == input)	/* we require a part in brackets */
+		return NULL;
+
+	/* move away from "<" */
+	end--;
+
+	/* we found "name" */
+	if (tmp && tmp < end) {
+		end = strchr(tmp+1, '"');
+		if (!end)
+			return NULL;
+		bytes = (int) (end - tmp);
+		/* protect the output buffer */
+		if (bytes > maxbytes)
+			bytes = maxbytes;
+		ast_copy_string(output, tmp + 1, bytes);
+	} else {
+		/* we didn't find "name" */
+		/* clear the empty characters in the begining*/
+		input = ast_skip_blanks(input);
+		/* clear the empty characters in the end */
+		while(*end && *end < 33 && end > input)
+			end--;
+		if (end >= input) {
+			bytes = (int) (end - input) + 2;
+			/* protect the output buffer */
+			if (bytes > maxbytes)
+				bytes = maxbytes;
+			ast_copy_string(output, input, bytes);
+		} else
+			return NULL;
+	}
+	return output;
+}

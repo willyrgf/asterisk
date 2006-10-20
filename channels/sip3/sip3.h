@@ -332,6 +332,7 @@ struct cfsip_methods {
 	enum sipmethod id;
 	int need_rtp;		/*!< when this is the 'primary' use for a pvt structure, does it need RTP? */
 	char * const text;
+	int creates_dialog;	/*! Whether or not this method can create dialog */
 };
 
 /*! \brief Structure for expiration times for inbound/outbound REGISTER */
@@ -553,6 +554,9 @@ struct sip_register_list {
 #define SIP_PKT_IGNORE 		(1 << 2)	/*!< This is a re-transmit, ignore it */
 #define SIP_PKT_IGNORE_RESP	(1 << 3)	/*!< Resp ignore - ??? */
 #define SIP_PKT_IGNORE_REQ	(1 << 4)	/*!< Req ignore - ??? */
+
+#define CAN_CREATE_DIALOG	0
+#define CAN_NOT_CREATE_DIALOG	1
 
 /* T.38 set of flags */
 #define T38FAX_FILL_BIT_REMOVAL		(1 << 0)	/*!< Default: 0 (unset)*/
