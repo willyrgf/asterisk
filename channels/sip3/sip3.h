@@ -927,7 +927,7 @@ extern struct sched_context *sched;     /*!< The scheduling context */
 extern struct io_context *io;           /*!< The IO context */
 extern struct channel_counters sipcounters;	/*!< Various object counters */
 extern struct sip_user_list userl;	/*!< User list - will be gone soon ! */
-extern struct sip_device_list peerl;	/*!< Device list */
+extern struct sip_device_list devicelist; /*!< Device list */
 extern struct sip_register_list regl;	/*!< Registration list */
 extern struct sip_auth *authl;		/*!< Realm authentications */
 

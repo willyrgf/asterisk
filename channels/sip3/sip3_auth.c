@@ -29,6 +29,36 @@
  *
  */
 
+/* Lets try to scetch a new
+	CHAN_SIP3 Authentication scheme
+
+	1) If a user claims to be FROM a domain we host
+		- authenticate, always!
+	2) If the request is to a URI published in the
+		context specified in the [general] section
+		or, lacking that, "default"
+		- Let them in if the domain belongs
+		  to us
+	3) If the call is to a service not published
+		in the "free context"
+		- Authenticate, regardless of domain
+
+We need to separate authentication from From: user names
+- account is matched on authentication user in the digest
+
+If policyfromauth = yes, then the From: username part needs
+to be equal to the auth user (default yes today)
+
+Each account can have a list of valid From: uri's
+	(username@domain)
+
+- Will this work for subscriptions?
+
+This is for devices. Trunks will have separate settings.
+*/
+
+	
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
