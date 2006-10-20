@@ -279,7 +279,7 @@ int do_register_auth(struct sip_pvt *p, struct sip_request *req, enum sip_auth_t
  			/* No old challenge */
 		return -1;
 	}
-	if (global.recordhistory)
+	if (!ast_test_flag(&p->flags[0], SIP_NO_HISTORY))
 		append_history(p, "RegistryAuth", "Try: %d", p->authtries);
  	if (sip_debug_test_pvt(p) && p->registry)
  		ast_verbose("Responding to challenge, registration to domain/host name %s\n", p->registry->hostname);

@@ -43,14 +43,6 @@
 
 /*! Chan_sip3.c */
 /* XXX Should we really expose functions in chan_sip3.c ? */
-extern struct sip_globals global;	/* Defined in chan_sip3.c */
-extern struct sched_context *sched;     /*!< The scheduling context */
-extern struct io_context *io;           /*!< The IO context */
-extern struct channel_counters sipcounters;	/*!< Various object counters */
-extern struct sip_user_list userl;
-extern struct sip_device_list peerl;
-extern struct sip_register_list regl;
-extern struct sip_auth *authl;
 
 GNURK inline int sip_debug_test_pvt(struct sip_pvt *p) ;
 GNURK void append_history_full(struct sip_pvt *p, const char *fmt, ...);
@@ -70,6 +62,8 @@ GNURK void sip_destroy_device(struct sip_peer *peer);
 GNURK void destroy_association(struct sip_peer *peer);
 GNURK void reg_source_db(struct sip_peer *peer);
 GNURK int expire_register(void *data);
+GNURK struct sip_auth *find_realm_authentication(struct sip_auth *authlist, const char *realm);
+GNURK int add_line(struct sip_request *req, const char *line);
 
 /*! sip3_refer.c */
 GNURK const char *referstatus2str(enum referstatus rstatus) attribute_pure;
@@ -136,4 +130,8 @@ GNURK void set_device_defaults(struct sip_peer *device);
 GNURK struct sip_peer *realtime_peer(const char *newpeername, struct sockaddr_in *sin);
 GNURK struct sip_peer *realtime_user(const char *username);
 GNURK int reload_config(enum channelreloadreason reason);
+
+/* sip3_callerid.c */
+GNURK int get_rpid_num(const char *input, char *output, int maxlen);
+GNURK char *get_calleridname(const char *input, char *output, size_t outputsize);
 #endif

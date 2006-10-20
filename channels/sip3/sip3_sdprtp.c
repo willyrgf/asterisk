@@ -746,7 +746,7 @@ int sip_set_rtp_peer(struct ast_channel *chan, struct ast_rtp *rtp, struct ast_r
 	}
 	if (changed && !ast_test_flag(&p->flags[0], SIP_GOTREFER)) {
 		if (chan->_state != AST_STATE_UP) {	/* We are in early state */
-			if (global.recordhistory)
+			if (!ast_test_flag(&p->flags[0], SIP_NO_HISTORY))
 				append_history(p, "ExtInv", "Initial invite sent with remote bridge proposal.");
 			if (option_debug)
 				ast_log(LOG_DEBUG, "Early remote bridge setting SIP '%s' - Sending media to %s\n", p->callid, ast_inet_ntoa(rtp ? p->redirip.sin_addr : p->ourip));
@@ -788,6 +788,8 @@ enum ast_rtp_get_result sip_get_rtp_peer(struct ast_channel *chan, struct ast_rt
 
 	if (ast_test_flag(&p->flags[0], SIP_CAN_REINVITE))
 		res = AST_RTP_TRY_NATIVE;
+	else if (ast_test_flag(&global.jbconf, AST_JB_FORCED))
+		res = AST_RTP_GET_FAILED;
 
 	ast_mutex_unlock(&p->lock);
 

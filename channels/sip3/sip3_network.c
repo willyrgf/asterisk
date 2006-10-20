@@ -87,7 +87,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/abstract_jb.h"
 #include "asterisk/compiler.h"
 #include "sip3.h"
-#include "sip3core.h"			/* Old stuff in the core file */
 #include "sip3funcs.h"			/* Moved functions */
 
 struct sip_network sipnet;		/* Socket and networking data */
@@ -190,7 +189,7 @@ retrylock:
 		}
 		p->recv = sin;
 
-		if (global.recordhistory) /* This is a request or response, note what it was for */
+		if (!ast_test_flag(&p->flags[0], SIP_NO_HISTORY)) /* This is a request or response, note what it was for */
 			append_history(p, "Rx", "%s / %s / %s", req.data, get_header(&req, "CSeq"), req.rlPart2);
 
 		if (!lockretry) {
@@ -435,7 +434,7 @@ int send_response(struct sip_pvt *p, struct sip_request *req, enum xmittype reli
 			ast_inet_ntoa(dst->sin_addr),
 			ntohs(dst->sin_port), req->data);
 	}
-	if (global.recordhistory) {
+	if (!ast_test_flag(&p->flags[0], SIP_NO_HISTORY)) {
 		struct sip_request tmp;
 		parse_copy(&tmp, req);
 		append_history(p, reliable ? "TxRespRel" : "TxResp", "%s / %s - %s", tmp.data, get_header(&tmp, "CSeq"), 
@@ -461,7 +460,7 @@ int send_request(struct sip_pvt *p, struct sip_request *req, enum xmittype relia
 		else
 			ast_verbose("%sTransmitting (no NAT) to %s:%d:\n%s\n---\n", reliable ? "Reliably " : "", ast_inet_ntoa(p->sa.sin_addr), ntohs(p->sa.sin_port), req->data);
 	}
-	if (global.recordhistory) {
+	if (!ast_test_flag(&p->flags[0], SIP_NO_HISTORY)) {
 		struct sip_request tmp;
 		parse_copy(&tmp, req);
 		append_history(p, reliable ? "TxReqRel" : "TxReq", "%s / %s - %s", tmp.data, get_header(&tmp, "CSeq"), sip_method2txt(tmp.method));

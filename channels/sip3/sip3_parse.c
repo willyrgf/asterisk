@@ -90,7 +90,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "sip3.h"
 
 /*! XXX Note that sip_methods[i].id == i must hold or the code breaks */
-static const struct cfsip_methods sip_methods[] = {
+const struct cfsip_methods sip_methods[] = {
 	{ SIP_UNKNOWN,	 RTP,    "-UNKNOWN-", CAN_NOT_CREATE_DIALOG},
 	{ SIP_RESPONSE,	 NO_RTP, "SIP/2.0" , CAN_NOT_CREATE_DIALOG},
 	{ SIP_REGISTER,	 NO_RTP, "REGISTER" , CAN_CREATE_DIALOG},

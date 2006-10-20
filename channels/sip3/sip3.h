@@ -506,7 +506,7 @@ struct sip_register_list {
 #define SIP_PROG_INBAND_NEVER	(0 << 25)
 #define SIP_PROG_INBAND_NO	(1 << 25)
 #define SIP_PROG_INBAND_YES	(2 << 25)
-#define SIP_FREE_BIT		(1 << 27)	/*!< Undefined bit - not in use */
+#define SIP_NO_HISTORY		(1 << 27)	/*!< Supress recording request/response history */
 #define SIP_CALL_LIMIT		(1 << 28)	/*!< Call limit enforced for this call */
 #define SIP_SENDRPID		(1 << 29)	/*!< Remote Party-ID Support */
 #define SIP_INC_COUNT		(1 << 30)	/*!< Did this connection increment the counter of in-use calls? */
@@ -921,5 +921,14 @@ extern struct sip_network sipnet;                      /*!< Sockets and networki
 extern struct expiry_times expiry;			/*!< Various expiration times */
 extern struct ast_config *notify_types;			/*!< Notification types */
 extern const char notify_config[];			/*!< Configuration file for notifications */
+extern const struct cfsip_methods sip_methods[];		/*!< sip3_parse.c: SIP method table */
+extern struct sip_globals global;	/* Defined in chan_sip3.c */
+extern struct sched_context *sched;     /*!< The scheduling context */
+extern struct io_context *io;           /*!< The IO context */
+extern struct channel_counters sipcounters;	/*!< Various object counters */
+extern struct sip_user_list userl;	/*!< User list - will be gone soon ! */
+extern struct sip_device_list peerl;	/*!< Device list */
+extern struct sip_register_list regl;	/*!< Registration list */
+extern struct sip_auth *authl;		/*!< Realm authentications */
 
 #endif

@@ -78,13 +78,14 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/localtime.h"
 #include "asterisk/compiler.h"
 #include "sip3.h"
+#include "sip3funcs.h"
 
 
 /*! \brief  Get caller id number from Remote-Party-ID header field 
  *	Returns true if number should be restricted (privacy setting found)
  *	output is set to NULL if no number found
  */
-static int get_rpid_num(const char *input, char *output, int maxlen)
+int get_rpid_num(const char *input, char *output, int maxlen)
 {
 	char *start;
 	char *end;
@@ -112,7 +113,7 @@ static int get_rpid_num(const char *input, char *output, int maxlen)
 }
 
 /*! \brief  Get caller id name from SIP headers */
-static char *get_calleridname(const char *input, char *output, size_t outputsize)
+char *get_calleridname(const char *input, char *output, size_t outputsize)
 {
 	const char *end = strchr(input,'<');	/* first_bracket */
 	const char *tmp = strchr(input,'"');	/* first quote */
