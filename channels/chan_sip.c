@@ -4305,7 +4305,10 @@ static struct sip_pvt *find_call(struct sip_request *req, struct sockaddr_in *si
 	const char *to = get_header(req, "To");
 	const char *cseq = get_header(req, "Cseq");
 
-	if (!callid || !to || !from || !cseq)		/* Call-ID, to, from and Cseq are required by RFC 3261. (Max-forwards and via too - ignored now) */
+	/* Call-ID, to, from and Cseq are required by RFC 3261. (Max-forwards and via too - ignored now) */
+	/* get_header always returns non-NULL so we must use ast_strlen_zero() */
+	if (ast_strlen_zero(callid) || ast_strlen_zero(to) ||
+			ast_strlen_zero(from) || ast_strlen_zero(cseq))
 		return NULL;	/* Invalid packet */
 
 	if (pedanticsipchecking) {
@@ -7750,7 +7753,7 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 	
 	/* Save User agent */
 	useragent = get_header(req, "User-Agent");
-	if (useragent && strcasecmp(useragent, peer->useragent)) {
+	if (strcasecmp(useragent, peer->useragent)) {	/* XXX copy if they are different ? */
 		ast_copy_string(peer->useragent, useragent, sizeof(peer->useragent));
 		if (option_verbose > 3)
 			ast_verbose(VERBOSE_PREFIX_3 "Saved useragent \"%s\" for peer %s\n", peer->useragent, peer->name);  
@@ -8576,7 +8579,8 @@ static int get_refer_info(struct sip_pvt *transferer, struct sip_request *outgoi
 	if (!req)
 		req = &transferer->initreq;
 
-	if (!(p_refer_to = get_header(req, "Refer-To"))) {
+	p_refer_to = get_header(req, "Refer-To");
+	if (ast_strlen_zero(p_refer_to)) {
 		ast_log(LOG_WARNING, "Refer-To Header missing. Skipping transfer.\n");
 		return -2;	/* Syntax error */
 	}
@@ -8592,7 +8596,8 @@ static int get_refer_info(struct sip_pvt *transferer, struct sip_request *outgoi
 	refer_to += 4;			/* Skip sip: */
 
 	/* Get referred by header if it exists */
-	if ((p_referred_by = get_header(req, "Referred-By"))) {
+	p_referred_by = get_header(req, "Referred-By");
+	if (!ast_strlen_zero(p_referred_by)) {
 		char *lessthan;
 		h_referred_by = ast_strdupa(p_referred_by);
 		if (pedanticsipchecking)
@@ -8905,6 +8910,21 @@ static struct ast_variable *copy_vars(struct ast_variable *src)
 	return res;
 }
 
+/* helper function for check_{user|peer}_ok() */
+
+static void replace_cid(struct sip_pvt *p, const char *rpid_num, const char *calleridname)
+{
+	/* replace callerid if rpid found, and not restricted */
+	if (!ast_strlen_zero(rpid_num) && ast_test_flag(&p->flags[0], SIP_TRUSTRPID)) {
+		char *tmp = ast_strdupa(rpid_num); /* XXX the copy can be done later */
+		if (!ast_strlen_zero(calleridname))
+			ast_string_field_set(p, cid_name, calleridname);
+		if (ast_is_shrinkable_phonenumber(tmp))
+			ast_shrink_phone_number(tmp);
+		ast_string_field_set(p, cid_num, tmp);
+	}
+}
+
 static enum check_auth_result check_user_ok(struct sip_pvt *p, char *of,
 	struct sip_request *req, int sipmethod, struct sockaddr_in *sin,
 	enum xmittype reliable,
@@ -8940,17 +8960,8 @@ static enum check_auth_result check_user_ok(struct sip_pvt *p, char *of,
 		ast_rtp_codec_setpref(p->rtp, &p->prefs);
 		p->autoframing = user->autoframing;
 	}
-	/* replace callerid if rpid found, and not restricted */
-	if (!ast_strlen_zero(rpid_num) && ast_test_flag(&p->flags[0], SIP_TRUSTRPID)) {
-		char *tmp;
-		if (*calleridname)
-			ast_string_field_set(p, cid_name, calleridname);
-		tmp = ast_strdupa(rpid_num);
-		if (ast_is_shrinkable_phonenumber(tmp))
-			ast_shrink_phone_number(tmp);
-		ast_string_field_set(p, cid_num, tmp);
-	}
-		
+
+	replace_cid(p, rpid_num, calleridname);
 	do_setnat(p, ast_test_flag(&p->flags[0], SIP_NAT_ROUTE) );
 
 	if (!(res = check_auth(p, req, user->name, user->secret, user->md5secret, sipmethod, uri2, reliable, ast_test_flag(req, SIP_PKT_IGNORE)))) {
@@ -9055,15 +9066,7 @@ static enum check_auth_result check_peer_ok(struct sip_pvt *p, char *of,
 	if (p->sipoptions)
 		peer->sipoptions = p->sipoptions;
 
-	/* replace callerid if rpid found, and not restricted */
-	if (!ast_strlen_zero(rpid_num) && ast_test_flag(&p->flags[0], SIP_TRUSTRPID)) {
-		char *tmp = ast_strdupa(rpid_num);
-		if (*calleridname)
-			ast_string_field_set(p, cid_name, calleridname);
-		if (ast_is_shrinkable_phonenumber(tmp))
-			ast_shrink_phone_number(tmp);
-		ast_string_field_set(p, cid_num, tmp);
-	}
+	replace_cid(p, rpid_num, calleridname);
 	do_setnat(p, ast_test_flag(&p->flags[0], SIP_NAT_ROUTE));
 
 	ast_string_field_set(p, peersecret, peer->secret);
@@ -11945,6 +11948,8 @@ static int handle_response_register(struct sip_pvt *p, int resp, char *rest, str
 		/* according to section 6.13 of RFC, contact headers override
 		   expires headers, so check those first */
 		expires = 0;
+
+		/* XXX todo: try to save the extra call */
 		if (!ast_strlen_zero(get_header(req, "Contact"))) {
 			const char *contact = NULL;
 			const char *tmptmp = NULL;
@@ -13034,13 +13039,13 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 	/* Find out what they support */
 	if (!p->sipoptions) {
 		const char *supported = get_header(req, "Supported");
-		if (supported)
+		if (!ast_strlen_zero(supported))
 			parse_sip_options(p, supported);
 	}
 
 	/* Find out what they require */
 	required = get_header(req, "Require");
-	if (required && !ast_strlen_zero(required)) {
+	if (!ast_strlen_zero(required)) {
 		required_profile = parse_sip_options(NULL, required);
 		if (required_profile && required_profile != SIP_OPT_REPLACES) {
 			/* At this point we only support REPLACES */
@@ -13072,7 +13077,8 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 		return 0;
 	}
 
-	if ((p_replaces = get_header(req, "Replaces")) && !ast_strlen_zero(p_replaces)) {
+	p_replaces = get_header(req, "Replaces");
+	if (!ast_strlen_zero(p_replaces)) {
 		/* We have a replaces header */
 		char *ptr;
 		char *fromtag = NULL;
