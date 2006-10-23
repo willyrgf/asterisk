@@ -912,6 +912,7 @@ struct sip_pvt {
 		AST_STRING_FIELD(cid_name);	/*!< Caller*ID name */
 		AST_STRING_FIELD(via);		/*!< Via: header */
 		AST_STRING_FIELD(fullcontact);	/*!< The Contact: that the UA registers with us */
+			/* we only store the part in <brackets> in this field. */
 		AST_STRING_FIELD(our_contact);	/*!< Our contact header */
 		AST_STRING_FIELD(rpid);		/*!< Our RPID header */
 		AST_STRING_FIELD(rpid_from);	/*!< Our RPID From header */
@@ -2242,7 +2243,7 @@ static char *get_in_brackets(char *tmp)
  * name:pass and domain:port.
  * It is safe to call with ret_name, pass, domain, port
  * pointing all to the same place.
- *
+ * Init pointers to empty string so we never get NULL dereferencing.
  * Overwrites the string.
  * return 0 on success, other values on error.
  */
@@ -2252,13 +2253,11 @@ static int parse_uri(char *uri, char *scheme,
 	char *name = NULL;
 	int error = 0;
 
-	ast_verbose("-------- parse_uri '%s' ----\n", uri);
-
 	/* init field as required */
 	if (*pass)
-		*pass = NULL;
+		*pass = "";
 	if (*port)
-		*port = NULL;
+		*port = "";
 	name = strsep(&uri, ";");	/* remove options */
 	if (scheme) {
 		int l = strlen(scheme);
@@ -2269,19 +2268,27 @@ static int parse_uri(char *uri, char *scheme,
 			error = -1;
 		}
 	}
-	if (domain) {
+	if (!domain) {
+		/* if we don't want to split around domain, keep everything as a name,
+		 * so we need to do nothing here, except remember why.
+		 */
+	} else {
 		/* store the result in a temp. variable to avoid it being
 		 * overwritten if arguments point to the same place.
 		 */
-		char *c, *dom = NULL;
+		char *c, *dom = "";
 
-		if ((c = strchr(name, '@'))) {
+		if ((c = strchr(name, '@')) == NULL) {
+			/* domain-only URI, according to the SIP RFC. */
+			dom = name;
+			name = "";
+		} else {
 			*c++ = '\0';
 			dom = c;
-			if (port && (c = strchr(dom, ':'))) { /* Remove :port */
-				*c++ = '\0';
-				*port = c;
-			}
+		}
+		if (port && (c = strchr(dom, ':'))) { /* Remove :port */
+			*c++ = '\0';
+			*port = c;
 		}
 		if (pass && (c = strchr(name, ':'))) {	/* user:password */
 			*c++ = '\0';
@@ -2292,7 +2299,8 @@ static int parse_uri(char *uri, char *scheme,
 	if (ret_name)	/* same as for domain, store the result only at the end */
 		*ret_name = name;
 	if (options)
-		*options = uri;
+		*options = uri ? uri : "";
+
 	return error;
 }
 
@@ -7583,7 +7591,7 @@ static int set_address_from_contact(struct sip_pvt *pvt)
 	struct hostent *hp;
 	struct ast_hostent ahp;
 	int port;
-	char *c, *host, *pt;
+	char *host, *pt;
 	char *contact;
 
 
@@ -7597,32 +7605,12 @@ static int set_address_from_contact(struct sip_pvt *pvt)
 
 	/* Work on a copy */
 	contact = ast_strdupa(pvt->fullcontact);
+	/* We have only the part in <brackets> here so we just need to parse a SIP URI.*/
 
-	/* XXX this code is repeated all over */
-	/* Make sure it's a SIP URL */
-	if (strncasecmp(contact, "sip:", 4)) {
+	if (parse_uri(contact, "sip:", &contact, NULL, &host, &pt, NULL))
 		ast_log(LOG_NOTICE, "'%s' is not a valid SIP contact (missing sip:) trying to use anyway\n", contact);
-	} else
-		contact += 4;
-
-	/* Ditch arguments */
-	/* XXX this code is replicated also shortly below */
-	contact = strsep(&contact, ";");	/* trim ; and beyond */
-
-	/* Grab host */
-	host = strchr(contact, '@');
-	if (!host) {	/* No username part */
-		host = contact;
-		c = NULL;
-	} else {
-		*host++ = '\0';
-	}
-	pt = strchr(host, ':');
-	if (pt) {
-		*pt++ = '\0';
-		port = atoi(pt);
-	} else
-		port = STANDARD_SIP_PORT;
+	port = !ast_strlen_zero(pt) ? atoi(pt) : STANDARD_SIP_PORT;
+	ast_verbose("--- set_address_from_contact host '%s'\n", host);
 
 	/* XXX This could block for a long time XXX */
 	/* We should only do this if it's a name, not an IP */
@@ -8186,6 +8174,9 @@ static enum check_auth_result register_verify(struct sip_pvt *p, struct sockaddr
 		ast_log(LOG_NOTICE, "Invalid to address: '%s' from %s (missing sip:) trying to use anyway...\n", c, ast_inet_ntoa(sin->sin_addr));
 	}
 
+	/* XXX here too we interpret a missing @domain as a name-only
+	 * URI, whereas the RFC says this is a domain-only uri.
+	 */
 	/* Strip off the domain name */
 	if ((c = strchr(name, '@'))) {
 		*c++ = '\0';
@@ -9183,6 +9174,7 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 {
 	char from[256];
 	char *dummy;	/* dummy return value for parse_uri */
+	char *domain;	/* dummy return value for parse_uri */
 	char *of;
 	char rpid_num[50];
 	const char *rpid;
@@ -9222,8 +9214,17 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 	ast_string_field_set(p, from, of);
 
 	/* ignore all fields but name */
-	if (parse_uri(of, "sip:", &of, &dummy, &dummy, &dummy, &dummy)) {
+	if (parse_uri(of, "sip:", &of, &dummy, &domain, &dummy, &dummy)) {
 		ast_log(LOG_NOTICE, "From address missing 'sip:', using it anyway\n");
+	}
+	if (ast_strlen_zero(of)) {
+		/* XXX note: the original code considered a missing @host
+		 * as a username-only URI. The SIP RFC (19.1.1) says that
+		 * this is wrong, and it should be considered as a domain-only URI.
+		 * For backward compatibility, we keep this block, but it is
+		 * really a mistake and should go away.
+		 */
+		of = domain;
 	}
 	{
 		char *tmp = ast_strdupa(of);
