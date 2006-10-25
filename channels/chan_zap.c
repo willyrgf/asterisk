@@ -5359,7 +5359,7 @@ static int zt_indicate(struct ast_channel *chan, int condition, const void *data
 			if (!p->proceeding && p->sig==SIG_SS7 && p->ss7 && !p->outgoing) {
 				if (p->ss7->ss7) {
 					ss7_grab(p, p->ss7);
-					isup_cpg(p->ss7->ss7, p->ss7call, CPG_EVENT_INBANDINFO);
+					isup_acm(p->ss7->ss7, p->ss7call);
 					p->proceeding = 1;
 					ss7_rel(p->ss7);
 
@@ -5384,6 +5384,17 @@ static int zt_indicate(struct ast_channel *chan, int condition, const void *data
 						ast_log(LOG_WARNING, "Unable to grab PRI on span %d\n", p->span);
 				}
 				p->progress = 1;
+			}
+#endif
+#ifdef HAVE_SS7
+			if (!p->progress && p->sig==SIG_SS7 && p->ss7 && !p->outgoing) {
+				if (p->ss7->ss7) {
+					ss7_grab(p, p->ss7);
+					isup_cpg(p->ss7->ss7, p->ss7call, CPG_EVENT_INBANDINFO);
+					p->progress = 1;
+					ss7_rel(p->ss7);
+
+				}
 			}
 #endif
 			/* don't continue in ast_indicate */
@@ -7370,6 +7381,21 @@ static int pri_create_spanmap(int span, int trunkgroup, int logicalspan)
 #endif
 
 #ifdef HAVE_SS7
+
+static unsigned int parse_pointcode(char *pcstring)
+{
+	unsigned int code1, code2, code3;
+	int numvals;
+
+	numvals = sscanf(pcstring, "%d.%d.%d", &code1, &code2, &code3);
+	if (numvals == 1)
+		return code1;
+	if (numvals == 3)
+		return (code1 << 16) | (code2 << 8) | code3;
+
+	return 0;
+}
+
 static struct zt_ss7 * ss7_resolve_linkset(int linkset)
 {
 	if ((linkset < 0) || (linkset >= NUM_SPANS))
@@ -8343,6 +8369,7 @@ static void ss7_start_call(struct zt_pvt *p, struct zt_ss7 *linkset)
 	if (res < 0) 
 		ast_log(LOG_WARNING, "Unable to set law on channel %d\n", p->channel);
 	
+	p->proceeding = 1;
 	isup_acm(ss7, p->ss7call);
 
 	ast_mutex_unlock(&linkset->lock);
@@ -8587,7 +8614,6 @@ static void *ss7_linkset(void *data)
 
 				zt_loopback(p, 0);
 				
-				isup_acm(ss7, p->ss7call);
 				ss7_start_call(p, linkset);
 				break;
 			case ISUP_EVENT_REL:
@@ -12073,11 +12099,11 @@ static int process_zap(struct ast_variable *v, int reload, int skipchannels)
 			} else if (!strcasecmp(v->name, "linkset")) {
 				cur_linkset = atoi(v->value);
 			} else if (!strcasecmp(v->name, "pointcode")) {
-				cur_pointcode = atoi(v->value);
+				cur_pointcode = parse_pointcode(v->value);
 			} else if (!strcasecmp(v->name, "adjpointcode")) {
-				cur_adjpointcode = atoi(v->value);
+				cur_adjpointcode = parse_pointcode(v->value);
 			} else if (!strcasecmp(v->name, "defaultdpc")) {
-				cur_defaultdpc = atoi(v->value);
+				cur_defaultdpc = parse_pointcode(v->value);
 			} else if (!strcasecmp(v->name, "cicbeginswith")) {
 				cur_cicbeginswith = atoi(v->value);
 			} else if (!strcasecmp(v->name, "networkindicator")) {
