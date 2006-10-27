@@ -74,12 +74,26 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/astobj.h"
 #include "asterisk/dnsmgr.h"
 #include "asterisk/linkedlists.h"
+#include "asterisk/manager.h"
 #include "asterisk/monitor.h"
 #include "asterisk/localtime.h"
 #include "asterisk/compiler.h"
 #include "sip3.h"
 #include "sip3funcs.h"
 
+/*! \brief helper function for check_{user|peer}_ok() */
+void replace_cid(struct sip_dialog *p, const char *rpid_num, const char *calleridname)
+{
+	/* replace callerid if rpid found, and not restricted */
+	if (!ast_strlen_zero(rpid_num) && ast_test_flag(&p->flags[0], SIP_TRUSTRPID)) {
+		char *tmp = ast_strdupa(rpid_num); /* XXX the copy can be done later */
+		if (!ast_strlen_zero(calleridname))
+			ast_string_field_set(p, cid_name, calleridname);
+		if (ast_is_shrinkable_phonenumber(tmp))
+			ast_shrink_phone_number(tmp);
+		ast_string_field_set(p, cid_num, tmp);
+	}
+}
 
 /*! \brief  Get caller id number from Remote-Party-ID header field 
  *	Returns true if number should be restricted (privacy setting found)

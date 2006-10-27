@@ -121,7 +121,7 @@ int sipsock_read(int *id, int fd, short events, void *ignore)
 {
 	struct sip_request req;
 	struct sockaddr_in sin = { 0, };
-	struct sip_pvt *p;
+	struct sip_dialog *p;
 	int res;
 	socklen_t len;
 	int nounlock;
@@ -273,7 +273,7 @@ void sipnet_ourport_set(int port)
 }
 
 /*! \brief Transmit SIP message */
-static int __sip_xmit(struct sip_pvt *p, char *data, int len)
+static int __sip_xmit(struct sip_dialog *p, char *data, int len)
 {
 	int res;
 	const struct sockaddr_in *dst = sip_real_dst(p);
@@ -384,7 +384,7 @@ static int retrans_pkt(void *data)
 /*! \brief Transmit packet with retransmits 
 	\return 0 on success, -1 on failure to allocate packet 
 */
-static enum sip_result __sip_reliable_xmit(struct sip_pvt *p, int seqno, int resp, char *data, int len, int fatal, int sipmethod)
+static enum sip_result __sip_reliable_xmit(struct sip_dialog *p, int seqno, int resp, char *data, int len, int fatal, int sipmethod)
 {
 	struct sip_pkt *pkt;
 	int siptimer_a = DEFAULT_RETRANS;
@@ -421,7 +421,7 @@ static enum sip_result __sip_reliable_xmit(struct sip_pvt *p, int seqno, int res
 }
 
 /*! \brief Transmit response on SIP request*/
-int send_response(struct sip_pvt *p, struct sip_request *req, enum xmittype reliable, int seqno)
+int send_response(struct sip_dialog *p, struct sip_request *req, enum xmittype reliable, int seqno)
 {
 	int res;
 
@@ -449,7 +449,7 @@ int send_response(struct sip_pvt *p, struct sip_request *req, enum xmittype reli
 }
 
 /*! \brief Send SIP Request to the other part of the dialogue */
-int send_request(struct sip_pvt *p, struct sip_request *req, enum xmittype reliable, int seqno)
+int send_request(struct sip_dialog *p, struct sip_request *req, enum xmittype reliable, int seqno)
 {
 	int res;
 

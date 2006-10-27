@@ -213,15 +213,16 @@ static int sip_option_lookup(const char *optionlabel)
 }
 
 /*! \brief Parse supported header in incoming packet */
-static unsigned int parse_sip_options(struct sip_pvt *pvt, const char *supported)
+static unsigned int parse_sip_options(struct sip_dialog *pvt, const char *supported)
 {
 	char *next, *sep;
-	char *temp = ast_strdupa(supported);
+	char *temp;
 	unsigned int profile = 0;
 	int i, found;
 
-	if (ast_strlen_zero(supported) )
+	if (ast_strlen_zero(supported))
 		return 0;
+	temp = ast_strdupa(supported);
 
 	if (option_debug > 2 && sipdebug)
 		ast_log(LOG_DEBUG, "Begin: parsing SIP \"Supported: %s\"\n", supported);

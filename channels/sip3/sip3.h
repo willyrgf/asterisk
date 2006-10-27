@@ -250,7 +250,7 @@ enum check_auth_result {
 	AUTH_CHALLENGE_SENT = 1,
 	AUTH_SECRET_FAILED = -1,
 	AUTH_USERNAME_MISMATCH = -2,
-	AUTH_NOT_FOUND = -3,
+	AUTH_NOT_FOUND = -3,	/* Returned by register_verify */
 	AUTH_FAKE_AUTH = -4,
 	AUTH_UNKNOWN_DOMAIN = -5,
 };
@@ -298,8 +298,54 @@ enum referstatus {
         REFER_NOAUTH                   /*!< We had no auth for REFER */
 };
 
+/*!<  SIP RFC 3261 states for the INVITE transaction */
+enum invitetrans_state {
+        INV_STATE_CALLING,      /*!< Early state. Invite sent (only for client) */
+        INV_STATE_PROCEEDING,   /*!< Sent/Got 1xx message */
+        INV_STATE_COMPLETED,    /*!< Sent/Got 300-699 message, Waiting for ACK, Then CONFIRMED */
+        INV_STATE_CONFIRMED,    /*!< For server transactions: We got an ACK (no more retries) */
+        INV_STATE_TERMINATED,   /*!< Sent/Got Transaction completed, finished, over and out buddy 
+					- We might have a call or not  - check p->owner->_state */
+        INV_STATE_CANCELLED,    /*!< Sent/Got CANCEL or BYE in non-TERMINATED state */
+};
+
+enum dialogstate {
+	DIALOG_STATE_TRYING,		/*!< Sent invite, no response yet. Please answer :-) 
+					\ref AST_STATE_RING, AST_STATE_DOWN, AST_STATE_RESERVED
+						AST_STATE_OFFHOOK, AST_STATE_DIALING
+					*/
+	DIALOG_STATE_PROCEEDING,	/*!< Got 1xx reply without tag - something is alive! 
+					\ref AST_STATE_RINGING
+					*/
+	DIALOG_STATE_EARLY,		/*!< We have early media or 1xx reply WITH tag
+					If we get another with a different tag, it's another
+					dialog (create a new pvt and, well, live with it 
+					\ref AST_STATE_UP ???
+					*/
+	DIALOG_STATE_CONFIRMED,		/*!< 2xx received, we have something going on, buddy 
+					\ref AST_STATE_UP
+					*/
+	DIALOG_STATE_CONFIRMED_HOLD,	/*!< We are in CONFIRMED state on HOLD 
+					This is an ASTERISK state 
+					\ref AST_STATE_UP */
+	DIALOG_STATE_TERMINATED, 	/*!< This call is down - timeout, hangup, replaced 
+					\ref AST_STATE_DOWN
+					*/
+	
+};
+
+/*! \brief Transaction state for non-invite transactions */
+enum transaction_state {
+	TRANS_TRYING,		/*!< Client: initiated transaction */
+	TRANS_PROCEEDING,	/*!< Client: Provisional response received */
+	TRANS_COMPLETED,	/*!< Final response received/sent */
+	TRANS_TERMINATED,	/*!< We're done, no more re-transmits */
+};
 
 /* -------- Structure declarations */
+
+/* Define struct sip_history_head */
+AST_LIST_HEAD_NOLOCK(sip_history_head, sip_history);
 
 /*! \brief sip_request: The data grabbed from the UDP socket */
 struct sip_request {
@@ -315,6 +361,15 @@ struct sip_request {
 	char data[SIP_MAX_PACKET];
 	unsigned int sdp_start; /*!< the line number where the SDP begins */
 	unsigned int sdp_end;   /*!< the line number where the SDP ends */
+};
+
+/*! \brief Invite transaction state */
+struct sip_trans {
+	struct sip_request initreq;	/*!< Initial request */
+	int is_outbound;		/*!< TRUE if this is an outbound request */
+	int cseq;			/*!< Cseq for this transaction */
+	enum transaction_state state;	/*!< Transaction status */
+	enum invitetrans_state invstate;	/*!< Invite transaction state */
 };
 
 /*! \brief Description of SUBSCRIBE events */
@@ -434,11 +489,6 @@ struct t38properties {
 	int jointcapability;		/*!< Supported T38 capability at both ends */
 	enum t38state state;		/*!< T.38 state */
 };
-
-/*! \brief The user list: Users and friends */
-struct sip_user_list {
-	ASTOBJ_CONTAINER_COMPONENTS(struct sip_peer);
-} ;
 
 /*! \brief The peer list: Peers and Friends */
 struct sip_device_list {
@@ -599,14 +649,14 @@ struct sip_refer {
 	char replaces_callid[BUFSIZ];			/*!< Replace info: callid */
 	char replaces_callid_totag[BUFSIZ/2];		/*!< Replace info: to-tag */
 	char replaces_callid_fromtag[BUFSIZ/2];		/*!< Replace info: from-tag */
-	struct sip_pvt *refer_call;			/*!< Call we are referring */
+	struct sip_dialog *refer_call;			/*!< Call we are referring */
 	int attendedtransfer;				/*!< Attended or blind transfer? */
 	int localtransfer;				/*!< Transfer to local domain? */
 	enum referstatus status;			/*!< REFER status */
 };
 
 /*! \brief PVT structure are used for each SIP dialog, ie. a call, a registration, a subscribe  */
-struct sip_pvt {
+struct sip_dialog {
 	ast_mutex_t lock;			/*!< Dialog private lock */
 	int method;				/*!< SIP method that opened this dialog */
 	AST_DECLARE_STRING_FIELDS(
@@ -715,7 +765,7 @@ struct sip_pvt {
 	struct sip_pkt *packets;		/*!< Packets scheduled for re-transmission */
 	struct sip_history_head *history;	/*!< History of this SIP dialog */
 	struct ast_variable *chanvars;		/*!< Channel variables to set for inbound call */
-	struct sip_pvt *next;			/*!< Next dialog in chain */
+	struct sip_dialog *next;			/*!< Next dialog in chain */
 	struct sip_invite_param *options;	/*!< Options for INVITE */
 	int autoframing;
 };
@@ -730,7 +780,7 @@ struct sip_pkt {
 	int method;				/*!< SIP method for this packet */
 	int seqno;				/*!< Sequence number */
 	unsigned int flags;			/*!< non-zero if this is a response packet (e.g. 200 OK) */
-	struct sip_pvt *owner;			/*!< Owner AST call */
+	struct sip_dialog *owner;			/*!< Owner AST call */
 	int retransid;				/*!< Retransmission ID */
 	int timer_a;				/*!< SIP timer A, retransmission timer */
 	int timer_t1;				/*!< SIP Timer T1, estimated RTT or 500 ms */
@@ -788,7 +838,7 @@ struct sip_peer {
 	int maxcallbitrate;		/*!< Maximum Bitrate for a video call */
 	
 	/* Qualification */
-	struct sip_pvt *call;		/*!<  Call pointer */
+	struct sip_dialog *call;		/*!<  Call pointer */
 	int pokeexpire;			/*!<  When to expire poke (qualify= checking) */
 	int lastms;			/*!<  How long last response took (in ms), or -1 for no response */
 	int maxms;			/*!<  Max ms we will accept for the host to be up, 0 to not monitor */
@@ -797,7 +847,7 @@ struct sip_peer {
 	struct sockaddr_in defaddr;	/*!<  Default IP address, used until registration */
 	struct ast_ha *ha;		/*!<  Access control list */
 	struct ast_variable *chanvars;	/*!<  Variables to set for channel created by user */
-	struct sip_pvt *mwipvt;		/*!<  Subscription for MWI */
+	struct sip_dialog *mwipvt;		/*!<  Subscription for MWI */
 	int lastmsg;
 	int autoframing;
 };
@@ -827,7 +877,7 @@ struct sip_registry {
 	int regattempts;		/*!< Number of attempts (since the last success) */
 	int timeout; 			/*!< sched id of sip_reg_timeout */
 	int refresh;			/*!< How often to refresh */
-	struct sip_pvt *call;		/*!< create a sip_pvt structure for each outbound "registration dialog" in progress */
+	struct sip_dialog *call;	/*!< create a sip_dialog structure for each outbound "registration dialog" in progress */
 	enum sipregistrystate regstate;	/*!< Registration state (see above) */
 	time_t regtime;		/*!< Last succesful registration time */
 	int callid_valid;		/*!< 0 means we haven't chosen callid for this registry yet. */
@@ -926,9 +976,9 @@ extern struct sip_globals global;	/* Defined in chan_sip3.c */
 extern struct sched_context *sched;     /*!< The scheduling context */
 extern struct io_context *io;           /*!< The IO context */
 extern struct channel_counters sipcounters;	/*!< Various object counters */
-extern struct sip_user_list userl;	/*!< User list - will be gone soon ! */
 extern struct sip_device_list devicelist; /*!< Device list */
 extern struct sip_register_list regl;	/*!< Registration list */
 extern struct sip_auth *authl;		/*!< Realm authentications */
+extern struct sip_dialog *dialoglist;
 
 #endif

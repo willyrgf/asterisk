@@ -18,7 +18,7 @@
 
 /*!
  * \file
- * \brief Various SIP transfer/refer functions
+ * \brief Various SIP dialog handlers
  * Version 3 of chan_sip
  *
  * \author Mark Spencer <markster@digium.com>
@@ -90,32 +90,31 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "sip3.h"
 #include "sip3funcs.h"
 
-/*! \brief Table to convert from REFER status variable to string */
-static const struct c_referstatusstring {
-	enum referstatus status;
-	char *text;
-} referstatusstrings[] = {
-	{ REFER_IDLE,		"<none>" },
-	{ REFER_SENT,		"Request sent" },
-	{ REFER_RECEIVED,	"Request received" },
-	{ REFER_ACCEPTED,	"Accepted" },
-	{ REFER_RINGING,	"Target ringing" },
-	{ REFER_200OK,		"Done" },
-	{ REFER_FAILED,		"Failed" },
-	{ REFER_NOAUTH,		"Failed - auth failure" }
-} ;
+/*! \page chan_sip3_dialogs Chan_sip3: The dialog list
+	\par The dialog list
+	The dialog list contains all active dialogs in various states.
+	A dialog can be 
+	- an active call
+	- a call in hangup state - waiting for cleanup
+	- a subscription
+	- an inbound or outbound registration
 
+	We will implement dialog states soon
+	\ref enum dialogstate
 
-/*! \brief Convert transfer status to string */
-const char *referstatus2str(enum referstatus rstatus)
+*/
+
+/*! \brief Protect the SIP dialog list (of sip_dialog's) */
+AST_MUTEX_DEFINE_STATIC(dialoglock);
+
+/*! \brief Lock list of active SIP dialogs */
+void dialoglist_lock(void)
 {
-	int i = (sizeof(referstatusstrings) / sizeof(referstatusstrings[0]));
-	int x;
-
-	for (x = 0; x < i; x++) {
-		if (referstatusstrings[x].status ==  rstatus)
-			return (char *) referstatusstrings[x].text;
-	}
-	return "";
+	ast_mutex_lock(&dialoglock);
 }
 
+/*! \brief Unlock list of active SIP dialogs */
+void dialoglist_unlock(void)
+{
+	ast_mutex_unlock(&dialoglock);
+}

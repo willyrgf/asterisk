@@ -29,7 +29,12 @@
  *
  */
 
-/* Lets try to scetch a new
+/*!
+\page chan_sip3_auth  chan_sip3: Authentication
+
+	\title New authentication scheme
+
+ Lets try to scetch a new
 	CHAN_SIP3 Authentication scheme
 
 	1) If a user claims to be FROM a domain we host
@@ -119,7 +124,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/compiler.h"
 #include "sip3.h"
 
-#include "sip3core.h"		/* Old functions */
 #include "sip3funcs.h"		/* Moved functions */
 
 /*! \brief return the request and response heade for a 401 or 407 code */
@@ -142,7 +146,7 @@ void auth_headers(enum sip_auth_type code, char **header, char **respheader)
 	authentication (if peer have secret set) 
     \return 0 on success, non-zero on error
 */
-enum check_auth_result check_auth(struct sip_pvt *p, struct sip_request *req, const char *username,
+enum check_auth_result check_auth(struct sip_dialog *p, struct sip_request *req, const char *username,
 					 const char *secret, const char *md5secret, int sipmethod,
 					 char *uri, enum xmittype reliable, int ignore)
 {
@@ -293,7 +297,7 @@ enum check_auth_result check_auth(struct sip_pvt *p, struct sip_request *req, co
 }
 
 /*! \brief Authenticate for outbound registration */
-int do_register_auth(struct sip_pvt *p, struct sip_request *req, enum sip_auth_type code)
+int do_register_auth(struct sip_dialog *p, struct sip_request *req, enum sip_auth_type code)
 {
 	char *header, *respheader;
 	char digest[1024];
@@ -317,7 +321,7 @@ int do_register_auth(struct sip_pvt *p, struct sip_request *req, enum sip_auth_t
 }
 
 /*! \brief Add authentication on outbound SIP packet */
-int do_proxy_auth(struct sip_pvt *p, struct sip_request *req, enum sip_auth_type code, int sipmethod, int init)
+int do_proxy_auth(struct sip_dialog *p, struct sip_request *req, enum sip_auth_type code, int sipmethod, int init)
 {
 	char *header, *respheader;
 	char digest[1024];
@@ -344,7 +348,7 @@ int do_proxy_auth(struct sip_pvt *p, struct sip_request *req, enum sip_auth_type
 \return	Returns -1 if we have no auth 
 \note	This is used for register= servers in sip.conf, SIP proxies we register
 	with  for receiving calls from.  */
-int reply_digest(struct sip_pvt *p, struct sip_request *req, char *header, int sipmethod,  char *digest, int digest_len)
+int reply_digest(struct sip_dialog *p, struct sip_request *req, char *header, int sipmethod,  char *digest, int digest_len)
 {
 	char tmp[512];
 	char *c;
@@ -418,7 +422,7 @@ int reply_digest(struct sip_pvt *p, struct sip_request *req, char *header, int s
 \note	Build digest challenge for authentication of peers (for registration) 
 	and users (for calls). Also used for authentication of CANCEL and BYE 
 */
-int build_reply_digest(struct sip_pvt *p, int method, char* digest, int digest_len)
+int build_reply_digest(struct sip_dialog *p, int method, char* digest, int digest_len)
 {
 	char a1[256];
 	char a2[256];

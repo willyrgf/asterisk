@@ -450,6 +450,7 @@ INPUT                  = ./ \
 			 include \
                          include/asterisk \
 			 channels \
+			 channels/sip3 \
 			 funcs \
 			 main/stdtime \
 			 apps \

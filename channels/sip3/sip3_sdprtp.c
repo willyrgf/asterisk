@@ -138,7 +138,7 @@ char *get_body(struct sip_request *req, char *name)
 /*! \brief Process SIP SDP offer, select formats and activate RTP channels
 	If offer is rejected, we will not change any properties of the call
 */
-int process_sdp(struct sip_pvt *p, struct sip_request *req)
+int process_sdp(struct sip_dialog *p, struct sip_request *req)
 {
 	const char *m;		/* SDP media offer */
 	const char *c;
@@ -707,7 +707,7 @@ int process_sdp(struct sip_pvt *p, struct sip_request *req)
 /*! \brief Set the RTP peer for this call */
 int sip_set_rtp_peer(struct ast_channel *chan, struct ast_rtp *rtp, struct ast_rtp *vrtp, int codecs, int nat_active)
 {
-	struct sip_pvt *p;
+	struct sip_dialog *p;
 	int changed = 0;
 
 	p = chan->tech_pvt;
@@ -772,7 +772,7 @@ int sip_set_rtp_peer(struct ast_channel *chan, struct ast_rtp *rtp, struct ast_r
 /*! \brief Returns null if we can't reinvite audio (part of RTP interface) */
 enum ast_rtp_get_result sip_get_rtp_peer(struct ast_channel *chan, struct ast_rtp **rtp)
 {
-	struct sip_pvt *p = NULL;
+	struct sip_dialog *p = NULL;
 	enum ast_rtp_get_result res = AST_RTP_TRY_PARTIAL;
 
 	if (!(p = chan->tech_pvt))
@@ -799,7 +799,7 @@ enum ast_rtp_get_result sip_get_rtp_peer(struct ast_channel *chan, struct ast_rt
 /*! \brief Returns null if we can't reinvite video (part of RTP interface) */
 enum ast_rtp_get_result sip_get_vrtp_peer(struct ast_channel *chan, struct ast_rtp **rtp)
 {
-	struct sip_pvt *p = NULL;
+	struct sip_dialog *p = NULL;
 	enum ast_rtp_get_result res = AST_RTP_TRY_PARTIAL;
 	
 	if (!(p = chan->tech_pvt) || !(p->vrtp))
@@ -880,7 +880,7 @@ int find_sdp(struct sip_request *req)
 }
 
 /*! \brief Add RFC 2833 DTMF offer to SDP */
-static void add_noncodec_to_sdp(const struct sip_pvt *p, int format, int sample_rate,
+static void add_noncodec_to_sdp(const struct sip_dialog *p, int format, int sample_rate,
 				char **m_buf, size_t *m_size, char **a_buf, size_t *a_size,
 				int debug)
 {
@@ -901,7 +901,7 @@ static void add_noncodec_to_sdp(const struct sip_pvt *p, int format, int sample_
 }
 
 /*! \brief Add codec offer to SDP offer/answer body in INVITE or 200 OK */
-static void add_codec_to_sdp(const struct sip_pvt *p, int codec, int sample_rate,
+static void add_codec_to_sdp(const struct sip_dialog *p, int codec, int sample_rate,
 			     char **m_buf, size_t *m_size, char **a_buf, size_t *a_size,
 			     int debug)
 {
@@ -937,7 +937,7 @@ static void add_codec_to_sdp(const struct sip_pvt *p, int codec, int sample_rate
 }
 
 /*! \brief Add Session Description Protocol message */
-int add_sdp(struct sip_request *resp, struct sip_pvt *p)
+int add_sdp(struct sip_request *resp, struct sip_dialog *p)
 {
 	int len = 0;
 	int alreadysent = 0;

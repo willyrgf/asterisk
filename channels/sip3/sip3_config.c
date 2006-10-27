@@ -291,114 +291,6 @@ void set_device_defaults(struct sip_peer *device)
 	device->prefs = global.default_prefs;
 }
 
-/*! \brief Initiate a SIP user structure from configuration (configuration or realtime) */
-/* XXX This function needs to go! */
-static struct sip_peer *build_user(const char *name, struct ast_variable *v, int realtime)
-{
-	struct sip_peer *user;
-	int format;
-	struct ast_ha *oldha = NULL;
-	char *varname = NULL, *varval = NULL;
-	struct ast_variable *tmpvar = NULL;
-	struct ast_flags userflags[2] = {{(0)}};
-	struct ast_flags mask[2] = {{(0)}};
-
-	if (!(user = ast_calloc(1, sizeof(*user))))
-		return NULL;
-		
-	sipcounters.static_users++;
-	ASTOBJ_INIT(user);
-	user->type &= SIP_USER;
-	ast_copy_string(user->name, name, sizeof(user->name));
-	oldha = user->ha;
-	user->ha = NULL;
-	set_device_defaults(user);	/* Set default values for this object */
-	for (; v; v = v->next) {
-		if (handle_common_options(&userflags[0], &mask[0], v))
-			continue;
-
-		if (!strcasecmp(v->name, "context")) {
-			ast_copy_string(user->context, v->value, sizeof(user->context));
-		} else if (!strcasecmp(v->name, "subscribecontext")) {
-			ast_copy_string(user->subscribecontext, v->value, sizeof(user->subscribecontext));
-		} else if (!strcasecmp(v->name, "setvar")) {
-			varname = ast_strdupa(v->value);
-			if ((varval = strchr(varname,'='))) {
-				*varval++ = '\0';
-				if ((tmpvar = ast_variable_new(varname, varval))) {
-					tmpvar->next = user->chanvars;
-					user->chanvars = tmpvar;
-				}
-			}
-		} else if (!strcasecmp(v->name, "permit") ||
-				   !strcasecmp(v->name, "deny")) {
-			user->ha = ast_append_ha(v->name, v->value, user->ha);
-		} else if (!strcasecmp(v->name, "allowtransfer")) {
-			user->allowtransfer = ast_true(v->value) ? TRANSFER_OPENFORALL : TRANSFER_CLOSED;
-		} else if (!strcasecmp(v->name, "secret")) {
-			ast_copy_string(user->secret, v->value, sizeof(user->secret)); 
-		} else if (!strcasecmp(v->name, "md5secret")) {
-			ast_copy_string(user->md5secret, v->value, sizeof(user->md5secret));
-		} else if (!strcasecmp(v->name, "callerid")) {
-			ast_callerid_split(v->value, user->cid_name, sizeof(user->cid_name), user->cid_num, sizeof(user->cid_num));
-		} else if (!strcasecmp(v->name, "fullname")) {
-			ast_copy_string(user->cid_name, v->value, sizeof(user->cid_name));
-		} else if (!strcasecmp(v->name, "cid_number")) {
-			ast_copy_string(user->cid_num, v->value, sizeof(user->cid_num));
-		} else if (!strcasecmp(v->name, "callgroup")) {
-			user->callgroup = ast_get_group(v->value);
-		} else if (!strcasecmp(v->name, "pickupgroup")) {
-			user->pickupgroup = ast_get_group(v->value);
-		} else if (!strcasecmp(v->name, "language")) {
-			ast_copy_string(user->language, v->value, sizeof(user->language));
-		} else if (!strcasecmp(v->name, "mohinterpret") 
-			|| !strcasecmp(v->name, "musicclass") || !strcasecmp(v->name, "musiconhold")) {
-			ast_copy_string(user->mohinterpret, v->value, sizeof(user->mohinterpret));
-		} else if (!strcasecmp(v->name, "mohsuggest")) {
-			ast_copy_string(user->mohsuggest, v->value, sizeof(user->mohsuggest));
-		} else if (!strcasecmp(v->name, "accountcode")) {
-			ast_copy_string(user->accountcode, v->value, sizeof(user->accountcode));
-		} else if (!strcasecmp(v->name, "call-limit")) {
-			user->call_limit = atoi(v->value);
-			if (user->call_limit < 0)
-				user->call_limit = 0;
-		} else if (!strcasecmp(v->name, "amaflags")) {
-			format = ast_cdr_amaflags2int(v->value);
-			if (format < 0) {
-				ast_log(LOG_WARNING, "Invalid AMA Flags: %s at line %d\n", v->value, v->lineno);
-			} else {
-				user->amaflags = format;
-			}
-		} else if (!strcasecmp(v->name, "allow")) {
-			ast_parse_allow_disallow(&user->prefs, &user->capability, v->value, 1);
-		} else if (!strcasecmp(v->name, "disallow")) {
-			ast_parse_allow_disallow(&user->prefs, &user->capability, v->value, 0);
-		} else if (!strcasecmp(v->name, "autoframing")) {
-			user->autoframing = ast_true(v->value);
-		} else if (!strcasecmp(v->name, "callingpres")) {
-			user->callingpres = ast_parse_caller_presentation(v->value);
-			if (user->callingpres == -1)
-				user->callingpres = atoi(v->value);
-		} else if (!strcasecmp(v->name, "maxcallbitrate")) {
-			user->maxcallbitrate = atoi(v->value);
-			if (user->maxcallbitrate < 0)
-				user->maxcallbitrate = global.default_maxcallbitrate;
- 		} else if (!strcasecmp(v->name, "t38pt_udptl")) {
-			ast_set2_flag(&user->flags[1], ast_true(v->value), SIP_PAGE2_T38SUPPORT_UDPTL);
-		} else if (!strcasecmp(v->name, "t38pt_rtp")) {
-			ast_set2_flag(&user->flags[1], ast_true(v->value), SIP_PAGE2_T38SUPPORT_RTP);
-		} else if (!strcasecmp(v->name, "t38pt_tcp")) {
-			ast_set2_flag(&user->flags[1], ast_true(v->value), SIP_PAGE2_T38SUPPORT_TCP);
-		}
-	}
-	ast_copy_flags(&user->flags[0], &userflags[0], mask[0].flags);
-	ast_copy_flags(&user->flags[1], &userflags[1], mask[1].flags);
-	if (ast_test_flag(&user->flags[1], SIP_PAGE2_ALLOWSUBSCRIBE))
-		global.allowsubscribe = TRUE;	/* No global ban any more */
-	ast_free_ha(oldha);
-	return user;
-}
-
 /*! \brief Build peer from configuration (file or realtime static/dynamic) */
 static struct sip_peer *build_peer(const char *name, struct ast_variable *v, struct ast_variable *alt, int realtime)
 {
@@ -421,7 +313,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 		   that case changes made to the peer name will be properly handled
 		   during reload
 		*/
-		peer = ASTOBJ_CONTAINER_FIND_UNLINK_FULL(&peerl, name, name, 0, 0, strcmp);
+		peer = ASTOBJ_CONTAINER_FIND_UNLINK_FULL(&devicelist, name, name, 0, 0, strcmp);
 
 	if (peer) {
 		/* Already in the list, remove it and it will be added back (or FREE'd)  */
@@ -712,55 +604,13 @@ struct sip_peer *realtime_peer(const char *newpeername, struct sockaddr_in *sin)
 			}
 			peer->expire = ast_sched_add(sched, (global.rtautoclear) * 1000, expire_register, (void *)peer);
 		}
-		ASTOBJ_CONTAINER_LINK(&peerl,peer);
+		ASTOBJ_CONTAINER_LINK(&devicelist,peer);
 	} else {
 		ast_set_flag(&peer->flags[0], SIP_REALTIME);
 	}
 	ast_variables_destroy(var);
 
 	return peer;
-}
-
-/*! \brief Load user from realtime storage
- * Loads user from "sipusers" category in realtime (extconfig.conf)
- * Users are matched on From: user name (the domain in skipped) */
-struct sip_peer *realtime_user(const char *username)
-{
-	struct ast_variable *var;
-	struct ast_variable *tmp;
-	struct sip_peer *user = NULL;
-
-	var = ast_load_realtime("sipusers", "name", username, NULL);
-
-	if (!var)
-		return NULL;
-
-	for (tmp = var; tmp; tmp = tmp->next) {
-		if (!strcasecmp(tmp->name, "type") &&
-			!strcasecmp(tmp->value, "peer")) {
-			ast_variables_destroy(var);
-			return NULL;
-		}
-	}
-
-	user = build_user(username, var, !ast_test_flag((&global.flags[1]), SIP_PAGE2_RTCACHEFRIENDS)); 
-	if (!user) {	/* No user found */
-		ast_variables_destroy(var);
-		return NULL;
-	}
-
-	if (ast_test_flag(&global.flags[1], SIP_PAGE2_RTCACHEFRIENDS)) {
-		ast_set_flag(&user->flags[1], SIP_PAGE2_RTCACHEFRIENDS);
-		sipcounters.static_users++;
-		ASTOBJ_CONTAINER_LINK(&userl,user);
-	} else {
-		/* Move counter from s to r... */
-		sipcounters.static_users--;
-		sipcounters.realtime_users++;
-		ast_set_flag(&user->flags[0], SIP_REALTIME);
-	}
-	ast_variables_destroy(var);
-	return user;
 }
 
 /*! \brief Re-read SIP.conf config file
@@ -1167,14 +1017,7 @@ int reload_config(enum channelreloadreason reason)
 		} else {
 			enum objecttype type;
 
-			if (!strcasecmp(utype, "user"))
-				type = SIP_USER;
-			else if (!strcasecmp(utype, "friend"))
-				/* type = SIP_USER | SIP_PEER; */
-				/* ASTOBJ can't linke one object to two lists, so we
-				   have to make a decision here */
-				type = SIP_PEER;
-			else if (!strcasecmp(utype, "peer"))
+			if (!strcasecmp(utype, "phone") || !strcasecmp(utype, "peer") )  /* Keep "peer" for a short while */
 				type = SIP_PEER;
 			else {
 				ast_log(LOG_WARNING, "Unknown type '%s' for '%s' in %s\n", utype, cat, "sip.conf");
@@ -1183,19 +1026,9 @@ int reload_config(enum channelreloadreason reason)
 			if (type & SIP_PEER) {
 				device = build_peer(cat, ast_variable_browse(cfg, cat), NULL, 0);
 				if (device) {
-					ASTOBJ_CONTAINER_LINK(&peerl,device);
+					ASTOBJ_CONTAINER_LINK(&devicelist,device);
 					ASTOBJ_UNREF(device, sip_destroy_device);
 					peer_count++;
-				}
-			}
-			if (type & SIP_USER) {
-				/* We already have a device for a friend, link it in again */
-				if (!(type & SIP_PEER))	/* Friend ? Don't build a new object, just re-use the peer object */
-					device = build_user(cat, ast_variable_browse(cfg, cat), 0);
-				if (device) {
-					ASTOBJ_CONTAINER_LINK(&userl,device);
-					ASTOBJ_UNREF(device, sip_destroy_device);
-					user_count++;
 				}
 			}
 		}

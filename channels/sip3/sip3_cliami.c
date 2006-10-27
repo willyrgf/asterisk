@@ -92,7 +92,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 
 /*! \brief Display SIP nat mode */
-static const char *sip_nat_mode(const struct sip_pvt *p)
+const char *sip_nat_mode(const struct sip_dialog *p)
 {
 	return ast_test_flag(&p->flags[0], SIP_NAT) & SIP_NAT_ROUTE ? "NAT" : "no NAT";
 }
@@ -172,7 +172,7 @@ static void print_codec_to_cli(int fd, struct ast_codec_pref *pref)
 }
 
 /*! \brief Print call group and pickup group */
-static void  print_group(int fd, ast_group_t group, int crlf)
+void  print_group(int fd, ast_group_t group, int crlf)
 {
 	char buf[256];
 	ast_cli(fd, crlf ? "%s\r\n" : "%s\n", ast_print_group(buf, sizeof(buf), group) );
@@ -181,7 +181,7 @@ static void  print_group(int fd, ast_group_t group, int crlf)
 /*! \brief  Report Peer status in character string
  *  \return 0 if peer is unreachable, 1 if peer is online, -1 if unmonitored
  */
-static int peer_status(struct sip_peer *peer, char *status, int statuslen)
+int peer_status(struct sip_peer *peer, char *status, int statuslen)
 {
 	int res = 0;
 	if (peer->maxms) {
@@ -219,19 +219,6 @@ static int sip_show_inuse(int fd, int argc, char *argv[])
 	if (argc == 4 && !strcmp(argv[3],"all")) 
 			showall = TRUE;
 	
-	ast_cli(fd, FORMAT, "* User name", "In use", "Limit");
-	ASTOBJ_CONTAINER_TRAVERSE(&userl, 1, do {
-		ASTOBJ_RDLOCK(iterator);
-		if (iterator->call_limit)
-			snprintf(ilimits, sizeof(ilimits), "%d", iterator->call_limit);
-		else 
-			ast_copy_string(ilimits, "N/A", sizeof(ilimits));
-		snprintf(iused, sizeof(iused), "%d", iterator->inUse);
-		if (showall || iterator->call_limit)
-			ast_cli(fd, FORMAT2, iterator->name, iused, ilimits);
-		ASTOBJ_UNLOCK(iterator);
-	} while (0) );
-
 	ast_cli(fd, FORMAT, "* Peer name", "In use", "Limit");
 
 	ASTOBJ_CONTAINER_TRAVERSE(&devicelist, 1, do {
@@ -251,88 +238,10 @@ static int sip_show_inuse(int fd, int argc, char *argv[])
 #undef FORMAT2
 }
 
-/*! \brief  CLI Command 'SIP Show Users' */
-static int sip_show_users(int fd, int argc, char *argv[])
-{
-	regex_t regexbuf;
-	int havepattern = FALSE;
-
-#define FORMAT  "%-25.25s  %-15.15s  %-15.15s  %-15.15s  %-5.5s%-10.10s\n"
-
-	switch (argc) {
-	case 5:
-		if (!strcasecmp(argv[3], "like")) {
-			if (regcomp(&regexbuf, argv[4], REG_EXTENDED | REG_NOSUB))
-				return RESULT_SHOWUSAGE;
-			havepattern = TRUE;
-		} else
-			return RESULT_SHOWUSAGE;
-	case 3:
-		break;
-	default:
-		return RESULT_SHOWUSAGE;
-	}
-
-	ast_cli(fd, FORMAT, "Username", "Secret", "Accountcode", "Def.Context", "ACL", "NAT");
-	ASTOBJ_CONTAINER_TRAVERSE(&userl, 1, do {
-		ASTOBJ_RDLOCK(iterator);
-
-		if (havepattern && regexec(&regexbuf, iterator->name, 0, NULL, 0)) {
-			ASTOBJ_UNLOCK(iterator);
-			continue;
-		}
-
-		ast_cli(fd, FORMAT, iterator->name, 
-			iterator->secret, 
-			iterator->accountcode,
-			iterator->context,
-			iterator->ha ? "Yes" : "No",
-			nat2str(ast_test_flag(&iterator->flags[0], SIP_NAT)));
-		ASTOBJ_UNLOCK(iterator);
-	} while (0)
-	);
-
-	if (havepattern)
-		regfree(&regexbuf);
-
-	return RESULT_SUCCESS;
-#undef FORMAT
-}
-
-static char mandescr_show_peers[] = 
+char mandescr_show_peers[] = 
 "Description: Lists SIP peers in text format with details on current status.\n"
 "Variables: \n"
 "  ActionID: <id>	Action ID for this transaction. Will be returned.\n";
-
-/*! \brief  Show SIP peers in the manager API */
-/*    Inspired from chan_iax2 */
-static int manager_sip_show_peers( struct mansession *s, struct message *m )
-{
-	char *id = astman_get_header(m,"ActionID");
-	char *a[] = { "sip3", "show", "peers" };
-	char idtext[256] = "";
-	int total = 0;
-
-	if (!ast_strlen_zero(id))
-		snprintf(idtext, sizeof(idtext), "ActionID: %s\r\n", id);
-
-	astman_send_ack(s, m, "Peer status list will follow");
-	/* List the peers in separate manager events */
-	_sip_show_peers(-1, &total, s, m, 3, a);
-	/* Send final confirmation */
-	astman_append(s,
-	"Event: PeerlistComplete\r\n"
-	"ListItems: %d\r\n"
-	"%s"
-	"\r\n", total, idtext);
-	return 0;
-}
-
-/*! \brief  CLI Show Peers command */
-static int sip_show_peers(int fd, int argc, char *argv[])
-{
-	return _sip_show_peers(fd, NULL, NULL, NULL, argc, argv);
-}
 
 /*! \brief  _sip_show_peers: Execute sip show peers command */
 static int _sip_show_peers(int fd, int *total, struct mansession *s, struct message *m, int argc, char *argv[])
@@ -472,14 +381,44 @@ static int _sip_show_peers(int fd, int *total, struct mansession *s, struct mess
 #undef FORMAT2
 }
 
+/*! \brief  Show SIP peers in the manager API */
+/*    Inspired from chan_iax2 */
+int manager_sip_show_peers( struct mansession *s, struct message *m )
+{
+	char *id = astman_get_header(m,"ActionID");
+	char *a[] = { "sip3", "show", "peers" };
+	char idtext[256] = "";
+	int total = 0;
+
+	if (!ast_strlen_zero(id))
+		snprintf(idtext, sizeof(idtext), "ActionID: %s\r\n", id);
+
+	astman_send_ack(s, m, "Peer status list will follow");
+	/* List the peers in separate manager events */
+	_sip_show_peers(-1, &total, s, m, 3, a);
+	/* Send final confirmation */
+	astman_append(s,
+	"Event: PeerlistComplete\r\n"
+	"ListItems: %d\r\n"
+	"%s"
+	"\r\n", total, idtext);
+	return 0;
+}
+
+
+/*! \brief  CLI Show Peers command */
+static int sip_show_peers(int fd, int argc, char *argv[])
+{
+	return _sip_show_peers(fd, NULL, NULL, NULL, argc, argv);
+}
+
+
 /*! \brief List all allocated SIP Objects (realtime or static) */
 static int sip_show_objects(int fd, int argc, char *argv[])
 {
 	char tmp[256];
 	if (argc != 3)
 		return RESULT_SHOWUSAGE;
-	ast_cli(fd, "-= User objects: %d static, %d realtime =-\n\n", sipcounters.static_users, sipcounters.realtime_users);
-	ASTOBJ_CONTAINER_DUMP(fd, tmp, sizeof(tmp), &userl);
 	ast_cli(fd, "-= Peer objects: %d static, %d realtime, %d autocreate =-\n\n", sipcounters.static_peers, sipcounters.realtime_peers, sipcounters.autocreated_peers);
 	ASTOBJ_CONTAINER_DUMP(fd, tmp, sizeof(tmp), &devicelist);
 	ast_cli(fd, "-= Registry objects: %d =-\n\n", sipcounters.registry_objects);
@@ -492,37 +431,6 @@ static char mandescr_show_peer[] =
 "Variables: \n"
 "  Peer: <name>           The peer name you want to check.\n"
 "  ActionID: <id>	  Optional action ID for this AMI transaction.\n";
-
-/*! \brief Show SIP peers in the manager API  */
-static int manager_sip_show_peer( struct mansession *s, struct message *m)
-{
-	char *id = astman_get_header(m,"ActionID");
-	char *a[4];
-	char *peer;
-	int ret;
-
-	peer = astman_get_header(m,"Peer");
-	if (ast_strlen_zero(peer)) {
-		astman_send_error(s, m, "Peer: <name> missing.\n");
-		return 0;
-	}
-	a[0] = "sip3";
-	a[1] = "show";
-	a[2] = "peer";
-	a[3] = peer;
-
-	if (!ast_strlen_zero(id))
-		astman_append(s, "ActionID: %s\r\n",id);
-	ret = _sip_show_peer(1, -1, s, m, 4, a );
-	astman_append(s, "\r\n\r\n" );
-	return ret;
-}
-
-/*! \brief Show one peer in detail */
-static int sip_show_peer(int fd, int argc, char *argv[])
-{
-	return _sip_show_peer(0, fd, NULL, NULL, argc, argv);
-}
 
 /*! \brief Show one peer in detail (main function) */
 static int _sip_show_peer(int type, int fd, struct mansession *s, struct message *m, int argc, char *argv[])
@@ -543,7 +451,7 @@ static int _sip_show_peer(int type, int fd, struct mansession *s, struct message
 		return RESULT_SHOWUSAGE;
 
 	load_realtime = (argc == 5 && !strcmp(argv[4], "load")) ? TRUE : FALSE;
-	peer = find_peer(argv[3], NULL, load_realtime);
+	peer = find_device(argv[3], NULL, load_realtime);
 	if (s) { 	/* Manager */
 		if (peer)
 			astman_append(s, "Response: Success\r\n");
@@ -722,59 +630,38 @@ static int _sip_show_peer(int type, int fd, struct mansession *s, struct message
 	return RESULT_SUCCESS;
 }
 
-/*! \brief Show one user in detail */
-static int sip_show_user(int fd, int argc, char *argv[])
+/*! \brief Show one peer in detail */
+static int sip_show_peer(int fd, int argc, char *argv[])
 {
-	char cbuf[256];
-	struct sip_peer *user;
-	struct ast_variable *v;
-	int load_realtime;
-
-	if (argc < 4)
-		return RESULT_SHOWUSAGE;
-
-	/* Load from realtime storage? */
-	load_realtime = (argc == 5 && !strcmp(argv[4], "load")) ? TRUE : FALSE;
-
-	user = find_user(argv[3], load_realtime);
-	if (user) {
-		ast_cli(fd,"\n\n");
-		ast_cli(fd, "  * Name       : %s\n", user->name);
-		ast_cli(fd, "  Secret       : %s\n", ast_strlen_zero(user->secret)?"<Not set>":"<Set>");
-		ast_cli(fd, "  MD5Secret    : %s\n", ast_strlen_zero(user->md5secret)?"<Not set>":"<Set>");
-		ast_cli(fd, "  Context      : %s\n", user->context);
-		ast_cli(fd, "  Language     : %s\n", user->language);
-		if (!ast_strlen_zero(user->accountcode))
-			ast_cli(fd, "  Accountcode  : %s\n", user->accountcode);
-		ast_cli(fd, "  AMA flags    : %s\n", ast_cdr_flags2str(user->amaflags));
-		ast_cli(fd, "  Transfer mode: %s\n", transfermode2str(user->allowtransfer));
-		ast_cli(fd, "  MaxCallBR    : %d kbps\n", user->maxcallbitrate);
-		ast_cli(fd, "  CallingPres  : %s\n", ast_describe_caller_presentation(user->callingpres));
-		ast_cli(fd, "  Call limit   : %d\n", user->call_limit);
-		ast_cli(fd, "  Callgroup    : ");
-		print_group(fd, user->callgroup, 0);
-		ast_cli(fd, "  Pickupgroup  : ");
-		print_group(fd, user->pickupgroup, 0);
-		ast_cli(fd, "  Callerid     : %s\n", ast_callerid_merge(cbuf, sizeof(cbuf), user->cid_name, user->cid_num, "<unspecified>"));
-		ast_cli(fd, "  ACL          : %s\n", (user->ha?"Yes":"No"));
-		ast_cli(fd, "  Codec Order  : (");
-		print_codec_to_cli(fd, &user->prefs);
-		ast_cli(fd, ")\n");
-
-		if (user->chanvars) {
- 			ast_cli(fd, "  Variables    :\n");
-			for (v = user->chanvars ; v ; v = v->next)
- 				ast_cli(fd, "                 %s = %s\n", v->name, v->value);
-		}
-		ast_cli(fd,"\n");
-		ASTOBJ_UNREF(user,sip_destroy_device);
-	} else {
-		ast_cli(fd,"User %s not found.\n", argv[3]);
-		ast_cli(fd,"\n");
-	}
-
-	return RESULT_SUCCESS;
+	return _sip_show_peer(0, fd, NULL, NULL, argc, argv);
 }
+
+/*! \brief Show SIP peers in the manager API  */
+int manager_sip_show_peer( struct mansession *s, struct message *m)
+{
+	char *id = astman_get_header(m,"ActionID");
+	char *a[4];
+	char *peer;
+	int ret;
+
+	peer = astman_get_header(m,"Peer");
+	if (ast_strlen_zero(peer)) {
+		astman_send_error(s, m, "Peer: <name> missing.\n");
+		return 0;
+	}
+	a[0] = "sip3";
+	a[1] = "show";
+	a[2] = "peer";
+	a[3] = peer;
+
+	if (!ast_strlen_zero(id))
+		astman_append(s, "ActionID: %s\r\n",id);
+	ret = _sip_show_peer(1, -1, s, m, 4, a );
+	astman_append(s, "\r\n\r\n" );
+	return ret;
+}
+
+
 
 /*! \brief  Show SIP Registry (registrations with other SIP proxies */
 static int sip_show_registry(int fd, int argc, char *argv[])
@@ -909,3 +796,581 @@ static int sip_show_settings(int fd, int argc, char *argv[])
 	ast_cli(fd, "\n----\n");
 	return RESULT_SUCCESS;
 }
+
+/*! \brief Show details of one active dialog */
+static int sip_show_channel(int fd, int argc, char *argv[])
+{
+	struct sip_dialog *cur;
+	size_t len;
+	int found = 0;
+
+	if (argc != 4)
+		return RESULT_SHOWUSAGE;
+	len = strlen(argv[3]);
+	dialoglist_lock();
+	for (cur = dialoglist; cur; cur = cur->next) {
+		if (!strncasecmp(cur->callid, argv[3], len)) {
+			char formatbuf[BUFSIZ/2];
+			ast_cli(fd,"\n");
+			if (cur->subscribed != NONE)
+				ast_cli(fd, "  * Subscription (type: %s)\n", subscription_type2str(cur->subscribed));
+			else
+				ast_cli(fd, "  * SIP Call\n");
+			ast_cli(fd, "  Direction:              %s\n", ast_test_flag(&cur->flags[0], SIP_OUTGOING)?"Outgoing":"Incoming");
+			ast_cli(fd, "  Call-ID:                %s\n", cur->callid);
+			ast_cli(fd, "  Owner channel ID:       %s\n", cur->owner ? cur->owner->name : "<none>");
+			ast_cli(fd, "  Our Codec Capability:   %d\n", cur->capability);
+			ast_cli(fd, "  Non-Codec Capability (DTMF):   %d\n", cur->noncodeccapability);
+			ast_cli(fd, "  Their Codec Capability:   %d\n", cur->peercapability);
+			ast_cli(fd, "  Joint Codec Capability:   %d\n", cur->jointcapability);
+			ast_cli(fd, "  Format:                 %s\n", ast_getformatname_multiple(formatbuf, sizeof(formatbuf), cur->owner ? cur->owner->nativeformats : 0) );
+			ast_cli(fd, "  T.38 support            %s\n", cur->udptl ? "Yes" : "No");
+			ast_cli(fd, "  Video support           %s\n", cur->vrtp ? "Yes" : "No");
+			ast_cli(fd, "  MaxCallBR:              %d kbps\n", cur->maxcallbitrate);
+			ast_cli(fd, "  Theoretical Address:    %s:%d\n", ast_inet_ntoa(cur->sa.sin_addr), ntohs(cur->sa.sin_port));
+			ast_cli(fd, "  Received Address:       %s:%d\n", ast_inet_ntoa(cur->recv.sin_addr), ntohs(cur->recv.sin_port));
+			ast_cli(fd, "  SIP Transfer mode:      %s\n", transfermode2str(cur->allowtransfer));
+			ast_cli(fd, "  NAT Support:            %s\n", nat2str(ast_test_flag(&cur->flags[0], SIP_NAT)));
+			ast_cli(fd, "  Audio IP:               %s %s\n", ast_inet_ntoa(cur->redirip.sin_addr.s_addr ? cur->redirip.sin_addr : cur->ourip), cur->redirip.sin_addr.s_addr ? "(Outside bridge)" : "(local)" );
+			ast_cli(fd, "  Our Tag:                %s\n", cur->tag);
+			ast_cli(fd, "  Their Tag:              %s\n", cur->theirtag);
+			ast_cli(fd, "  SIP User agent:         %s\n", cur->useragent);
+			if (!ast_strlen_zero(cur->username))
+				ast_cli(fd, "  Username:               %s\n", cur->username);
+			if (!ast_strlen_zero(cur->peername))
+				ast_cli(fd, "  Peername:               %s\n", cur->peername);
+			if (!ast_strlen_zero(cur->uri))
+				ast_cli(fd, "  Original uri:           %s\n", cur->uri);
+			if (!ast_strlen_zero(cur->cid_num))
+				ast_cli(fd, "  Caller-ID:              %s\n", cur->cid_num);
+			ast_cli(fd, "  Need Destroy:           %d\n", ast_test_flag(&cur->flags[0], SIP_NEEDDESTROY));
+			ast_cli(fd, "  Last Message:           %s\n", cur->lastmsg);
+			ast_cli(fd, "  Promiscuous Redir:      %s\n", ast_test_flag(&cur->flags[0], SIP_PROMISCREDIR) ? "Yes" : "No");
+			ast_cli(fd, "  Route:                  %s\n", cur->route ? cur->route->hop : "N/A");
+			ast_cli(fd, "  DTMF Mode:              %s\n", dtmfmode2str(ast_test_flag(&cur->flags[0], SIP_DTMF)));
+			ast_cli(fd, "  SIP Options:            ");
+			if (cur->sipoptions) {
+				sip_options_print(cur->sipoptions, fd);
+			} else
+				ast_cli(fd, "(none)\n");
+			ast_cli(fd, "\n\n");
+			found++;
+		}
+	}
+	dialoglist_unlock();
+	if (!found) 
+		ast_cli(fd, "No such SIP Call ID starting with '%s'\n", argv[3]);
+	return RESULT_SUCCESS;
+}
+
+/*! \brief Show history details of one dialog */
+static int sip_show_history(int fd, int argc, char *argv[])
+{
+	struct sip_dialog *cur;
+	size_t len;
+	int found = 0;
+
+	if (argc != 4)
+		return RESULT_SHOWUSAGE;
+	if (!global.recordhistory)
+		ast_cli(fd, "\n***Note: History recording is currently DISABLED.  Use 'sip history' to ENABLE.\n");
+	len = strlen(argv[3]);
+	dialoglist_lock();
+	for (cur = dialoglist; cur; cur = cur->next) {
+		if (!strncasecmp(cur->callid, argv[3], len)) {
+			struct sip_history *hist;
+			int x = 0;
+
+			ast_cli(fd,"\n");
+			if (cur->subscribed != NONE)
+				ast_cli(fd, "  * Subscription\n");
+			else
+				ast_cli(fd, "  * SIP Call\n");
+			if (cur->history) {
+				AST_LIST_TRAVERSE(cur->history, hist, list)
+					ast_cli(fd, "%d. %s\n", ++x, hist->event);
+			}
+			if (x == 0)
+				ast_cli(fd, "Call '%s' has no history\n", cur->callid);
+			found++;
+		}
+	}
+	dialoglist_unlock();
+	if (!found) 
+		ast_cli(fd, "No such SIP Call ID starting with '%s'\n", argv[3]);
+	return RESULT_SUCCESS;
+}
+
+/*! \brief Do completion on peer name */
+GNURK char *complete_sip_peer(const char *word, int state, int flags2)
+{
+	char *result = NULL;
+	int wordlen = strlen(word);
+	int which = 0;
+
+	ASTOBJ_CONTAINER_TRAVERSE(&devicelist, !result, do {
+		/* locking of the object is not required because only the name and flags are being compared */
+		if (!strncasecmp(word, iterator->name, wordlen) &&
+				(!flags2 || ast_test_flag(&iterator->flags[1], flags2)) &&
+				++which > state)
+			result = ast_strdup(iterator->name);
+	} while(0) );
+	return result;
+}
+
+/*! \brief Support routine for 'sip show peer' CLI */
+GNURK char *complete_sip_show_peer(const char *line, const char *word, int pos, int state)
+{
+	if (pos == 3)
+		return complete_sip_peer(word, state, 0);
+
+	return NULL;
+}
+
+/*! \brief Support routine for 'sip show channel' CLI */
+static char *complete_sipch(const char *line, const char *word, int pos, int state)
+{
+	int which=0;
+	struct sip_dialog *cur;
+	char *c = NULL;
+	int wordlen = strlen(word);
+
+	dialoglist_lock();
+	for (cur = dialoglist; cur; cur = cur->next) {
+		if (!strncasecmp(word, cur->callid, wordlen) && ++which > state) {
+			c = ast_strdup(cur->callid);
+			break;
+		}
+	}
+	dialoglist_unlock();
+	return c;
+}
+
+
+/*! \brief Support routine for 'sip debug peer' CLI */
+static char *complete_sip_debug_peer(const char *line, const char *word, int pos, int state)
+{
+	if (pos == 3)
+		return complete_sip_peer(word, state, 0);
+
+	return NULL;
+}
+
+
+/*! \brief SIP show channels CLI (main function) */
+static int __sip_show_channels(int fd, int argc, char *argv[], int subscriptions)
+{
+#define FORMAT3 "%-15.15s  %-10.10s  %-11.11s  %-15.15s  %-13.13s  %-15.15s %-10.10s\n"
+#define FORMAT2 "%-15.15s  %-10.10s  %-11.11s  %-11.11s  %-4.4s  %-7.7s  %-15.15s\n"
+#define FORMAT  "%-15.15s  %-10.10s  %-11.11s  %5.5d/%5.5d  %-4.4s  %-3.3s %-3.3s  %-15.15s %-10.10s\n"
+	struct sip_dialog *cur;
+	int numchans = 0;
+	const char *referstatus = NULL;
+
+	if (argc != 3)
+		return RESULT_SHOWUSAGE;
+	dialoglist_lock();
+	cur = dialoglist;
+	if (!subscriptions)
+		ast_cli(fd, FORMAT2, "Peer", "User/ANR", "Call ID", "Seq (Tx/Rx)", "Format", "Hold", "Last Message");
+	else 
+		ast_cli(fd, FORMAT3, "Peer", "User", "Call ID", "Extension", "Last state", "Type", "Mailbox");
+	for (; cur; cur = cur->next) {
+		referstatus = "";
+		if (cur->refer) { /* SIP transfer in progress */
+			referstatus = referstatus2str(cur->refer->status);
+		}
+		if (cur->subscribed == NONE && !subscriptions) {
+			ast_cli(fd, FORMAT, ast_inet_ntoa(cur->sa.sin_addr), 
+				S_OR(cur->username, S_OR(cur->cid_num, "(None)")),
+				cur->callid, 
+				cur->ocseq, cur->icseq, 
+				ast_getformatname(cur->owner ? cur->owner->nativeformats : 0), 
+				ast_test_flag(&cur->flags[1], SIP_PAGE2_CALL_ONHOLD) ? "Yes" : "No",
+				ast_test_flag(&cur->flags[0], SIP_NEEDDESTROY) ? "(d)" : "",
+				cur->lastmsg ,
+				referstatus
+			);
+			numchans++;
+		}
+		if (cur->subscribed != NONE && subscriptions) {
+			ast_cli(fd, FORMAT3, ast_inet_ntoa(cur->sa.sin_addr),
+				S_OR(cur->username, S_OR(cur->cid_num, "(None)")), 
+			   	cur->callid,
+				/* the 'complete' exten/context is hidden in the refer_to field for subscriptions */
+				cur->subscribed == MWI_NOTIFICATION ? "--" : cur->subscribeuri,
+				cur->subscribed == MWI_NOTIFICATION ? "<none>" : ast_extension_state2str(cur->laststate), 
+				subscription_type2str(cur->subscribed),
+				cur->subscribed == MWI_NOTIFICATION ? (cur->relatedpeer ? cur->relatedpeer->mailbox : "<none>") : "<none>"
+);
+			numchans++;
+		}
+	}
+	dialoglist_unlock();
+	if (!subscriptions)
+		ast_cli(fd, "%d active SIP channel%s\n", numchans, (numchans != 1) ? "s" : "");
+	else
+		ast_cli(fd, "%d active SIP subscription%s\n", numchans, (numchans != 1) ? "s" : "");
+	return RESULT_SUCCESS;
+#undef FORMAT
+#undef FORMAT2
+#undef FORMAT3
+}
+
+/*! \brief Show active SIP channels */
+static int sip_show_channels(int fd, int argc, char *argv[])  
+{
+        return __sip_show_channels(fd, argc, argv, 0);
+}
+ 
+/*! \brief Show active SIP subscriptions */
+static int sip_show_subscriptions(int fd, int argc, char *argv[])
+{
+        return __sip_show_channels(fd, argc, argv, 1);
+}
+
+
+/*! \brief Start reload process from CLI */
+static  int cli_sip_reload(int fd, int argc, char *argv[])
+{
+	return sip_reload(fd);
+	
+}
+
+
+/*! \brief Enable SIP Debugging in CLI */
+static int sip_do_debug_ip(int fd, int argc, char *argv[])
+{
+	struct hostent *hp;
+	struct ast_hostent ahp;
+	int port = 0;
+	char *p, *arg;
+
+	if (argc != 4)
+		return RESULT_SHOWUSAGE;
+	p = arg = argv[3];
+	strsep(&p, ":");
+	if (p)
+		port = atoi(p);
+	hp = ast_gethostbyname(arg, &ahp);
+	if (hp == NULL)
+		return RESULT_SHOWUSAGE;
+
+	sipnet.debugaddr.sin_family = AF_INET;
+	memcpy(&sipnet.debugaddr.sin_addr, hp->h_addr, sizeof(sipnet.debugaddr.sin_addr));
+	sipnet.debugaddr.sin_port = htons(port);
+	if (port == 0)
+		ast_cli(fd, "SIP Debugging Enabled for IP: %s\n", ast_inet_ntoa(sipnet.debugaddr.sin_addr));
+	else
+		ast_cli(fd, "SIP Debugging Enabled for IP: %s:%d\n", ast_inet_ntoa(sipnet.debugaddr.sin_addr), port);
+
+	ast_set_flag(&global.flags[1], SIP_PAGE2_DEBUG_CONSOLE);
+
+	return RESULT_SUCCESS;
+}
+
+
+/*! \brief  sip_do_debug_peer: Turn on SIP debugging with peer mask */
+static int sip_do_debug_peer(int fd, int argc, char *argv[])
+{
+	struct sip_peer *peer;
+	if (argc != 4)
+		return RESULT_SHOWUSAGE;
+	peer = find_device(argv[3], NULL, 1);
+	if (peer) {
+		if (peer->addr.sin_addr.s_addr) {
+			sipnet.debugaddr.sin_family = AF_INET;
+			sipnet.debugaddr.sin_addr = peer->addr.sin_addr;
+			sipnet.debugaddr.sin_port = peer->addr.sin_port;
+			ast_cli(fd, "SIP Debugging Enabled for IP: %s:%d\n", ast_inet_ntoa(sipnet.debugaddr.sin_addr), ntohs(sipnet.debugaddr.sin_port));
+			ast_set_flag(&global.flags[1], SIP_PAGE2_DEBUG_CONSOLE);
+		} else
+			ast_cli(fd, "Unable to get IP address of peer '%s'\n", argv[3]);
+		ASTOBJ_UNREF(peer,sip_destroy_device);
+	} else
+		ast_cli(fd, "No such peer '%s'\n", argv[3]);
+	return RESULT_SUCCESS;
+}
+
+/*! \brief Turn on SIP debugging (CLI command) */
+static int sip_do_debug(int fd, int argc, char *argv[])
+{
+	int oldsipdebug = sipdebug_console;
+	if (argc != 3) {
+		if (argc != 4) 
+			return RESULT_SHOWUSAGE;
+		else if (strcmp(argv[2], "ip") == 0)
+			return sip_do_debug_ip(fd, argc, argv);
+		else if (strcmp(argv[2], "peer") == 0)
+			return sip_do_debug_peer(fd, argc, argv);
+		else
+			return RESULT_SHOWUSAGE;
+	}
+	ast_set_flag(&global.flags[1], SIP_PAGE2_DEBUG_CONSOLE);
+	memset(&sipnet.debugaddr, 0, sizeof(sipnet.debugaddr));
+	ast_cli(fd, "SIP Debugging %senabled\n", oldsipdebug ? "re-" : "");
+	return RESULT_SUCCESS;
+}
+
+/*! \brief Disable SIP Debugging in CLI */
+static int sip_no_debug(int fd, int argc, char *argv[])
+{
+	if (argc != 3)
+		return RESULT_SHOWUSAGE;
+	ast_clear_flag(&global.flags[1], SIP_PAGE2_DEBUG_CONSOLE);
+	ast_cli(fd, "SIP Debugging Disabled\n");
+	return RESULT_SUCCESS;
+}
+
+
+/*! \brief Enable SIP History logging (CLI) */
+static int sip_do_history(int fd, int argc, char *argv[])
+{
+	if (argc != 3) {
+		return RESULT_SHOWUSAGE;
+	}
+	global.recordhistory = TRUE;
+	ast_cli(fd, "SIP History Recording Enabled (use 'sip show history')\n");
+	return RESULT_SUCCESS;
+}
+
+/*! \brief Disable SIP History logging (CLI) */
+static int sip_no_history(int fd, int argc, char *argv[])
+{
+	if (argc != 3) {
+		return RESULT_SHOWUSAGE;
+	}
+	global.recordhistory = FALSE;
+	ast_cli(fd, "SIP History Recording Disabled\n");
+	return RESULT_SUCCESS;
+}
+
+
+/*! \brief Support routine for 'sip notify' CLI */
+static char *complete_sipnotify(const char *line, const char *word, int pos, int state)
+{
+	char *c = NULL;
+
+	if (pos == 2) {
+		int which = 0;
+		char *cat = NULL;
+		int wordlen = strlen(word);
+
+		/* do completion for notify type */
+
+		if (!notify_types)
+			return NULL;
+		
+		while ( (cat = ast_category_browse(notify_types, cat)) ) {
+			if (!strncasecmp(word, cat, wordlen) && ++which > state) {
+				c = ast_strdup(cat);
+				break;
+			}
+		}
+		return c;
+	}
+
+	if (pos > 2)
+		return complete_sip_peer(word, state, 0);
+
+	return NULL;
+}
+
+/*! \brief Support routine for 'sip prune realtime peer' CLI */
+static char *complete_sip_prune_realtime_peer(const char *line, const char *word, int pos, int state)
+{
+	if (pos == 4)
+		return complete_sip_peer(word, state, SIP_PAGE2_RTCACHEFRIENDS);
+	return NULL;
+}
+
+static char show_domains_usage[] = 
+"Usage: sip list domains\n"
+"       Lists all configured SIP local domains.\n"
+"       Asterisk only responds to SIP messages to local domains.\n";
+
+static char notify_usage[] =
+"Usage: sip notify <type> <peer> [<peer>...]\n"
+"       Send a NOTIFY message to a SIP peer or peers\n"
+"       Message types are defined in sip_notify.conf\n";
+
+static char show_inuse_usage[] = 
+"Usage: sip list inuse [all]\n"
+"       List all SIP users and peers usage counters and limits.\n"
+"       Add option \"all\" to show all devices, not only those with a limit.\n";
+
+static char show_channels_usage[] = 
+"Usage: sip list channels\n"
+"       Lists all currently active SIP channels.\n";
+
+static char show_channel_usage[] = 
+"Usage: sip show channel <channel>\n"
+"       Provides detailed status on a given SIP channel.\n";
+
+static char show_history_usage[] = 
+"Usage: sip show history <channel>\n"
+"       Provides detailed dialog history on a given SIP channel.\n";
+
+static char show_peers_usage[] = 
+"Usage: sip list peers [like <pattern>]\n"
+"       Lists all known SIP peers.\n"
+"       Optional regular expression pattern is used to filter the peer list.\n";
+
+static char show_peer_usage[] =
+"Usage: sip show peer <name> [load]\n"
+"       Shows all details on one SIP peer and the current status.\n"
+"       Option \"load\" forces lookup of peer in realtime storage.\n";
+
+static char prune_realtime_usage[] =
+"Usage: sip prune realtime [peer|user] [<name>|all|like <pattern>]\n"
+"       Prunes object(s) from the cache.\n"
+"       Optional regular expression pattern is used to filter the objects.\n";
+
+static char show_reg_usage[] =
+"Usage: sip list registry\n"
+"       Lists all registration requests and status.\n";
+
+static char debug_usage[] = 
+"Usage: sip debug on/off\n"
+"       Enables dumping of SIP packets for debugging purposes\n\n"
+"       sip debug ip <host[:PORT]>\n"
+"       Enables dumping of SIP packets to and from host.\n\n"
+"       sip debug peer <peername>\n"
+"       Enables dumping of SIP packets to and from host.\n"
+"       Require peer to be registered.\n";
+
+static char no_debug_usage[] = 
+"Usage: sip debug off\n"
+"       Disables dumping of SIP packets for debugging purposes\n";
+
+static char no_history_usage[] = 
+"Usage: sip history off\n"
+"       Disables recording of SIP dialog history for debugging purposes\n";
+
+static char history_usage[] = 
+"Usage: sip history on\n"
+"       Enables recording of SIP dialog history for debugging purposes.\n"
+"Use 'sip show history' to view the history of a call number.\n";
+
+static char sip_reload_usage[] =
+"Usage: sip reload\n"
+"       Reloads SIP configuration from sip.conf\n";
+
+static char show_subscriptions_usage[] =
+"Usage: sip list subscriptions\n" 
+"       Lists active SIP subscriptions for extension states\n";
+
+static char show_objects_usage[] =
+"Usage: sip list objects\n" 
+"       Lists status of known SIP objects\n";
+
+static char show_settings_usage[] = 
+"Usage: sip list settings\n"
+"       Provides detailed list of the configuration of the SIP channel.\n";
+
+static struct ast_cli_entry cli_sip[] = {
+	{ { "sip", "show", "channels", NULL },
+	sip_show_channels, "List active SIP channels",
+	show_channels_usage },
+
+	{ { "sip", "show", "domains", NULL },
+	sip_show_domains, "List our local SIP domains.",
+	show_domains_usage },
+
+	{ { "sip", "show", "inuse", NULL },
+	sip_show_inuse, "List all call limits and their current usage level",
+	show_inuse_usage },
+
+	{ { "sip", "show", "objects", NULL },
+	sip_show_objects, "List all SIP object allocations",
+	show_objects_usage },
+
+	{ { "sip", "show", "peers", NULL },
+	sip_show_peers, "List defined SIP peers",
+	show_peers_usage },
+
+	{ { "sip", "show", "registry", NULL },
+	sip_show_registry, "List SIP registration status",
+	show_reg_usage },
+
+	{ { "sip", "show", "settings", NULL },
+	sip_show_settings, "List SIP global settings",
+	show_settings_usage },
+
+	{ { "sip", "show", "subscriptions", NULL },
+	sip_show_subscriptions, "List active SIP subscriptions",
+	show_subscriptions_usage },
+
+	{ { "sip", "notify", NULL },
+	sip_notify, "Send a notify packet to a SIP peer",
+	notify_usage, complete_sipnotify },
+
+	{ { "sip", "show", "channel", NULL },
+	sip_show_channel, "Show detailed SIP channel info",
+	show_channel_usage, complete_sipch  },
+
+	{ { "sip", "show", "history", NULL },
+	sip_show_history, "Show SIP dialog history",
+	show_history_usage, complete_sipch  },
+
+	{ { "sip", "show", "peer", NULL },
+	sip_show_peer, "Show details on specific SIP peer",
+	show_peer_usage, complete_sip_show_peer },
+
+	{ { "sip", "prune", "realtime", NULL },
+	sip_prune_realtime, "Prune cached Realtime object(s)",
+	prune_realtime_usage },
+
+	{ { "sip", "prune", "realtime", "peer", NULL },
+	sip_prune_realtime, "Prune cached Realtime peer(s)",
+	prune_realtime_usage, complete_sip_prune_realtime_peer },
+
+	{ { "sip", "debug", "on", NULL },
+	sip_do_debug, "Enable SIP debugging",
+	debug_usage },
+
+	{ { "sip", "debug", "ip", NULL },
+	sip_do_debug, "Enable SIP debugging on IP",
+	debug_usage },
+
+	{ { "sip", "debug", "peer", NULL },
+	sip_do_debug, "Enable SIP debugging on Peername",
+	debug_usage, complete_sip_debug_peer },
+
+	{ { "sip", "debug", "off", NULL },
+	sip_no_debug, "Disable SIP debugging",
+	no_debug_usage },
+
+	{ { "sip", "history", "on", NULL },
+	sip_do_history, "Enable SIP history",
+	history_usage },
+
+	{ { "sip", "history", "off", NULL },
+	sip_no_history, "Disable SIP history",
+	no_history_usage },
+
+	{ { "sip", "reload", NULL },
+	cli_sip_reload, "Reload SIP configuration",
+	sip_reload_usage },
+};
+
+/*! \brief Register cli and manager commands */
+void sip_cli_and_manager_commands_register()
+{
+	/* Register CLI commands */
+	ast_cli_register_multiple(cli_sip, sizeof(cli_sip)/ sizeof(struct ast_cli_entry));
+	/* Register manager commands */
+	ast_manager_register2("SIPpeers", EVENT_FLAG_SYSTEM, manager_sip_show_peers,
+			"List SIP peers (text format)", mandescr_show_peers);
+	ast_manager_register2("SIPshowpeer", EVENT_FLAG_SYSTEM, manager_sip_show_peer,
+			"Show SIP peer (text format)", mandescr_show_peer);
+}
+
+/*! \brief Unregister cli and manager commands */
+void sip_cli_and_manager_commands_unregister()
+{
+	ast_cli_unregister_multiple(cli_sip, sizeof(cli_sip) / sizeof(struct ast_cli_entry));
+	ast_manager_unregister("SIPpeers");
+	ast_manager_unregister("SIPshowpeer");
+}
+

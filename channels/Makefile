@@ -14,7 +14,8 @@
 C_MODS:=$(filter-out $(MENUSELECT_CHANNELS),$(patsubst %.c,%,$(wildcard chan_*.c)))
 CC_MODS:=$(filter-out $(MENUSELECT_CHANNELS),$(patsubst %.cc,%,$(wildcard chan_*.cc)))
 SIP3_MODULES=chan_sip3.o sip3/sip3_network.o sip3/sip3_subscribe.o sip3/sip3_refer.o sip3/sip3_domain.o \
-	sip3/sip3_callerid.o sip3/sip3_auth.o sip3/sip3_sdprtp.o sip3/sip3_config.o
+	sip3/sip3_callerid.o sip3/sip3_auth.o sip3/sip3_sdprtp.o sip3/sip3_config.o \
+	sip3/sip3_cliami.o sip3/sip3_dialog.o
 
 ifeq ($(OSARCH),OpenBSD)
   PTLIB=-lpt_OpenBSD_x86_r
@@ -119,6 +120,6 @@ $(if $(filter chan_misdn,$(EMBEDDED_MODS)),modules.link,chan_misdn.so): chan_mis
 sip3:	
 	$(MAKE) -C sip3 
 
-chan_sip3.so: $(SIP3_MODULES) sip3/sip3.h sip3/sip3core.h sip3/sip3funcs.h
+chan_sip3.so: $(SIP3_MODULES) sip3/sip3.h  sip3/sip3funcs.h
 	$(ECHO_PREFIX) echo "   [LD] $^ -> $@"
 	$(CMD_PREFIX) $(CXX) $(SOLINK) -o $@ $< 

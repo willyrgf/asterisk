@@ -88,11 +88,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/abstract_jb.h"
 #include "asterisk/compiler.h"
 #include "sip3.h"
+#include "sip3funcs.h"
 
 static AST_LIST_HEAD_STATIC(domain_list, domain);	/*!< The SIP domain list */
 
 /*! \brief Add SIP domain to list of domains we are responsible for */
-static int add_sip_domain(const char *domain, const enum domain_mode mode, const char *context)
+int add_sip_domain(const char *domain, const enum domain_mode mode, const char *context)
 {
 	struct domain *d;
 
@@ -176,7 +177,7 @@ int func_check_sipdomain(struct ast_channel *chan, char *cmd, char *data, char *
 	return 0;
 }
 
-static struct ast_custom_function checksipdomain_function = {
+struct ast_custom_function checksipdomain_function = {
 	.name = "CHECKSIPDOMAIN",
 	.synopsis = "Checks if domain is a local domain",
 	.syntax = "CHECKSIPDOMAIN(<domain|IP>)",
@@ -188,7 +189,7 @@ static struct ast_custom_function checksipdomain_function = {
 };
 
 /*! \brief Print domain mode to cli */
-static const char *domain_mode_to_text(const enum domain_mode mode)
+const char *domain_mode_to_text(const enum domain_mode mode)
 {
 	switch (mode) {
 	case SIP_DOMAIN_AUTO:
