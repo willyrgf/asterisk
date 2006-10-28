@@ -56,7 +56,6 @@ GNURK void sip_destroy_device(struct sip_peer *peer);
 GNURK void destroy_association(struct sip_peer *peer);
 GNURK void reg_source_db(struct sip_peer *peer);
 GNURK int expire_register(void *data);
-GNURK int add_line(struct sip_request *req, const char *line);
 GNURK int sip_do_relaod(enum channelreloadreason reason);
 GNURK inline int sip_debug_test_addr(const struct sockaddr_in *addr);
 GNURK void parse_request(struct sip_request *req);
@@ -129,6 +128,10 @@ GNURK void build_callid_pvt(struct sip_dialog *pvt);
 GNURK void append_date(struct sip_request *req);
 GNURK int add_text(struct sip_request *req, const char *text);
 GNURK int add_digit(struct sip_request *req, char digit);
+GNURK int respprep(struct sip_request *resp, struct sip_dialog *p, const char *msg, const struct sip_request *req);
+GNURK void add_route(struct sip_request *req, struct sip_route *route);
+GNURK int add_line(struct sip_request *req, const char *line);
+GNURK int reqprep(struct sip_request *req, struct sip_dialog *p, int sipmethod, int seqno, int newbranch);
 
 /*! sip3_domain.c: Domain handling functions (sip domain hosting, not DNS lookups) */
 GNURK int add_sip_domain(const char *domain, const enum domain_mode mode, const char *context);
