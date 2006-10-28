@@ -51,7 +51,6 @@ GNURK int transmit_reinvite_with_sdp(struct sip_dialog *p, int t38version);
 GNURK void add_blank(struct sip_request *req);
 GNURK int handle_request(struct sip_dialog *p, struct sip_request *req, struct sockaddr_in *sin, int *recount, int *nounlock);
 GNURK int add_header(struct sip_request *req, const char *var, const char *value);
-GNURK int add_header_contentLength(struct sip_request *req, int len);
 GNURK void sip_destroy_device(struct sip_peer *peer);
 GNURK void destroy_association(struct sip_peer *peer);
 GNURK void reg_source_db(struct sip_peer *peer);
@@ -78,9 +77,16 @@ GNURK void build_contact(struct sip_dialog *p);
 GNURK int init_req(struct sip_request *req, int sipmethod, const char *recip);
 GNURK void initialize_initreq(struct sip_dialog *p, struct sip_request *req);
 GNURK int __transmit_response(struct sip_dialog *p, const char *msg, const struct sip_request *req, enum xmittype reliable);
+GNURK int transmit_notify_with_sipfrag(struct sip_dialog *p, int cseq, char *message, int terminate);
+GNURK int init_resp(struct sip_request *resp, const char *msg);
+GNURK void copy_request(struct sip_request *dst, const struct sip_request *src);
+GNURK struct sip_dialog *get_sip_dialog_byid_locked(const char *callid, const char *totag, const char *fromtag);
+GNURK void ast_quiet_chan(struct ast_channel *chan);
 
 /*! sip3_refer.c */
 GNURK const char *referstatus2str(enum referstatus rstatus) attribute_pure;
+GNURK int handle_request_refer(struct sip_dialog *p, struct sip_request *req, int debug, int seqno, int *nounlock);
+GNURK int sip_refer_allocate(struct sip_dialog *p);
 
 /*! sip3_subscribe.c */
 GNURK const char *subscription_type2str(enum subscriptiontype subtype) attribute_pure;
@@ -122,6 +128,7 @@ GNURK char *get_in_brackets(char *tmp);
 GNURK char *generate_random_string(char *buf, size_t size);
 GNURK const char *gettag(const struct sip_request *req, const char *header, char *tagbuf, int tagbufsize);
 GNURK int determine_firstline_parts(struct sip_request *req);
+GNURK void extract_uri(struct sip_dialog *p, struct sip_request *req);
 
 /*! sip3_compose.c : Composing new SIP messages */
 GNURK void build_callid_pvt(struct sip_dialog *pvt);
@@ -131,6 +138,7 @@ GNURK int add_digit(struct sip_request *req, char digit);
 GNURK int respprep(struct sip_request *resp, struct sip_dialog *p, const char *msg, const struct sip_request *req);
 GNURK void add_route(struct sip_request *req, struct sip_route *route);
 GNURK int add_line(struct sip_request *req, const char *line);
+GNURK int add_header_contentLength(struct sip_request *req, int len);
 GNURK int reqprep(struct sip_request *req, struct sip_dialog *p, int sipmethod, int seqno, int newbranch);
 
 /*! sip3_domain.c: Domain handling functions (sip domain hosting, not DNS lookups) */

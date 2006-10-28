@@ -623,3 +623,16 @@ int determine_firstline_parts(struct sip_request *req)
 	return 1;
 }
 
+/*! \brief Check Contact: URI of SIP message */
+void extract_uri(struct sip_dialog *p, struct sip_request *req)
+{
+	char stripped[256];
+	char *c;
+
+	ast_copy_string(stripped, get_header(req, "Contact"), sizeof(stripped));
+	c = get_in_brackets(stripped);
+	c = strsep(&c, ";");	/* trim ; and beyond */
+	if (!ast_strlen_zero(c))
+		ast_string_field_set(p, uri, c);
+}
+

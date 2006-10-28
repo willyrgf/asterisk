@@ -179,6 +179,15 @@ int respprep(struct sip_request *resp, struct sip_dialog *p, const char *msg, co
 	return 0;
 }
 
+/*! \brief Add 'Content-Length' header to SIP message */
+int add_header_contentLength(struct sip_request *req, int len)
+{
+	char clen[10];
+
+	snprintf(clen, sizeof(clen), "%d", len);
+	return add_header(req, "Content-Length", clen);
+}
+
 /*! \brief Add route header into request per learned route */
 void add_route(struct sip_request *req, struct sip_route *route)
 {
