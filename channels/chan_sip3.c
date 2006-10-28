@@ -301,7 +301,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/localtime.h"
 #include "asterisk/abstract_jb.h"
 #include "asterisk/compiler.h"
-#include "asterisk/threadstorage.h"
 
 #include "sip3/sip3.h"
 #include "sip3/sip3funcs.h"
@@ -352,13 +351,6 @@ struct sip_dialog *dialoglist = NULL;
 /*! \brief The peer list: Peers and Friends */
 struct sip_device_list devicelist;
 
-/* Forward declaration */
-static int temp_pvt_init(void *data);
-static void temp_pvt_cleanup(void *data);
-
-/*! \brief A per-thread temporary pvt structure */
-AST_THREADSTORAGE_CUSTOM(ts_temp_pvt, temp_pvt_init, temp_pvt_cleanup);
-
 /*! \todo Move the sip_auth list to AST_LIST */
 struct sip_auth *authl = NULL;		/*!< Authentication list for realm authentication */
 
@@ -383,9 +375,7 @@ static int sip_senddigit_begin(struct ast_channel *ast, char digit);
 static int sip_senddigit_end(struct ast_channel *ast, char digit);
 
 /*--- Transmitting responses and requests */
-static int __transmit_response(struct sip_dialog *p, const char *msg, const struct sip_request *req, enum xmittype reliable);
 static int transmit_sip_request(struct sip_dialog *p, struct sip_request *req);
-static int transmit_response_using_temp(ast_string_field callid, struct sockaddr_in *sin, int useglobal_nat, const int intended_method, const struct sip_request *req, const char *msg);
 static int transmit_response_reliable(struct sip_dialog *p, const char *msg, const struct sip_request *req);
 static int transmit_response_with_date(struct sip_dialog *p, const char *msg, const struct sip_request *req);
 static int transmit_response_with_sdp(struct sip_dialog *p, const char *msg, const struct sip_request *req, enum xmittype reliable);
@@ -496,7 +486,6 @@ static void update_peer(struct sip_peer *p, int expiry);
 /*--- Parsing SIP requests and responses */
 static void append_date(struct sip_request *req);	/* Append date to SIP packet */
 static int determine_firstline_parts(struct sip_request *req);
-static const char *gettag(const struct sip_request *req, const char *header, char *tagbuf, int tagbufsize);
 static void extract_uri(struct sip_dialog *p, struct sip_request *req);
 static int get_refer_info(struct sip_dialog *transferer, struct sip_request *outgoing_req);
 static int get_also_info(struct sip_dialog *p, struct sip_request *oreq);
@@ -506,7 +495,6 @@ static void check_via(struct sip_dialog *p, struct sip_request *req);
 static int get_rdnis(struct sip_dialog *p, struct sip_request *oreq);
 static int get_destination(struct sip_dialog *p, struct sip_request *oreq);
 static int get_msg_text(char *buf, int len, struct sip_request *req);
-static const char *gettag(const struct sip_request *req, const char *header, char *tagbuf, int tagbufsize);
 static void free_old_route(struct sip_route *route);
 
 /*--- Constructing requests and responses */
@@ -2027,120 +2015,6 @@ static struct ast_channel *sip_new(struct sip_dialog *dialog, int state, const c
 	return tmp;
 }
 
-/*! \brief Generate 32 byte random string for callid's etc */
-GNURK char *generate_random_string(char *buf, size_t size)
-{
-	long val[4];
-	int x;
-
-	for (x=0; x<4; x++)
-		val[x] = ast_random();
-	snprintf(buf, size, "%08lx%08lx%08lx%08lx", val[0], val[1], val[2], val[3]);
-
-	return buf;
-}
-
-/*! \brief Build SIP Call-ID value for a non-REGISTER transaction */
-GNURK void build_callid_pvt(struct sip_dialog *pvt)
-{
-	char buf[33];
-
-	const char *host = S_OR(pvt->fromdomain, ast_inet_ntoa(pvt->ourip));
-	
-	ast_string_field_build(pvt, callid, "%s@%s", generate_random_string(buf, sizeof(buf)), host);
-
-}
-
-/*! \brief Connect incoming SIP message to current dialog or create new dialog structure
-	Called by handle_request, sipsock_read */
-GNURK struct sip_dialog *find_call(struct sip_request *req, struct sockaddr_in *sin, const int intended_method)
-{
-	struct sip_dialog *p = NULL;
-	char *tag = "";	/* note, tag is never NULL */
-	char totag[128];
-	char fromtag[128];
-	const char *callid = get_header(req, "Call-ID");
-	const char *from = get_header(req, "From");
-	const char *to = get_header(req, "To");
-	const char *cseq = get_header(req, "Cseq");
-
-	/* Call-ID, to, from and Cseq are required by RFC 3261. (Max-forwards and via too - ignored now) */
-	/* get_header always returns non-NULL so we must use ast_strlen_zero() */
-	if (ast_strlen_zero(callid) || ast_strlen_zero(to) ||
-			ast_strlen_zero(from) || ast_strlen_zero(cseq))
-		return NULL;	/* Invalid packet */
-
-	/* In principle Call-ID's uniquely identify a call, but with a forking SIP proxy
-	   we need more to identify a branch - so we have to check branch, from
-	   and to tags to identify a call leg.
-	   */
-	if (gettag(req, "To", totag, sizeof(totag)))
-		ast_set_flag(req, SIP_PKT_WITH_TOTAG);	/* Used in handle_request/response */
-	gettag(req, "From", fromtag, sizeof(fromtag));
-
-	tag = (req->method == SIP_RESPONSE) ? totag : fromtag;
-
-	if (option_debug > 4 )
-		ast_log(LOG_DEBUG, "= Looking for  Call ID: %s (Checking %s) --From tag %s --To-tag %s  \n", callid, req->method==SIP_RESPONSE ? "To" : "From", fromtag, totag);
-
-	dialoglist_lock();
-	for (p = dialoglist; p; p = p->next) {
-		/* we do not want packets with bad syntax to be connected to a PVT */
-		int found = FALSE;
-		if (req->method == SIP_REGISTER)
-			found = (!strcmp(p->callid, callid));
-		else 
-			found = (!strcmp(p->callid, callid) && 
-			(!tag || ast_strlen_zero(p->theirtag) || !strcmp(p->theirtag, tag))) ;
-
-		if (option_debug > 4)
-			ast_log(LOG_DEBUG, "= %s Their Call ID: %s Their Tag %s Our tag: %s\n", found ? "Found" : "No match", p->callid, p->theirtag, p->tag);
-
-		/* If we get a new request within an existing to-tag - check the to tag as well */
-		if (found  && req->method != SIP_RESPONSE) {	/* SIP Request */
-			if (p->tag[0] == '\0' && totag[0]) {
-				/* We have no to tag, but they have. Wrong dialog */
-				found = FALSE;
-			} else if (totag[0]) {			/* Both have tags, compare them */
-				if (strcmp(totag, p->tag)) {
-					found = FALSE;		/* This is not our packet */
-				}
-			}
-			if (!found && option_debug > 4)
-				ast_log(LOG_DEBUG, "= Being pedantic: This is not our match on request: Call ID: %s Ourtag <null> Totag %s Method %s\n", p->callid, totag, sip_method2txt(req->method));
-		}
-
-
-		if (found) {
-			/* Found the call */
-			ast_mutex_lock(&p->lock);
-			dialoglist_unlock();
-			return p;
-		}
-	}
-	dialoglist_unlock();
-	if (sip_methods[intended_method].creates_dialog == CAN_CREATE_DIALOG) {
-		if (intended_method == SIP_REFER) {
-
-			/* We do not support out-of-dialog REFERs yet */
-			transmit_response_using_temp(callid, sin, 1, intended_method, req, "603 Declined (no dialog)");
-		} else if (intended_method == SIP_NOTIFY) {
-			/* We do not support out-of-dialog NOTIFY either,
-			  like voicemail notification, so cancel that early */
-			transmit_response_using_temp(callid, sin, 1, intended_method, req, "489 Bad event");
-		} else if ((p = sip_alloc(callid, sin, 1, intended_method))) {
-			/* This method creates dialog */
-			/* Ok, we've created a dialog, let's go and process it */
-			ast_mutex_lock(&p->lock);
-		}
-	} else {
-		if (intended_method != SIP_RESPONSE)
-			transmit_response_using_temp(callid, sin, 1, intended_method, req, "481 Call leg/transaction does not exist");
-	}
-
-	return p;
-}
-
 /*! \brief Parse a SIP message 
 	\note this function is used both on incoming and outgoing packets
 */
@@ -2522,7 +2396,7 @@ static int reqprep(struct sip_request *req, struct sip_dialog *p, int sipmethod,
 }
 
 /*! \brief Base transmit response function */
-static int __transmit_response(struct sip_dialog *p, const char *msg, const struct sip_request *req, enum xmittype reliable)
+GNURK int __transmit_response(struct sip_dialog *p, const char *msg, const struct sip_request *req, enum xmittype reliable)
 {
 	struct sip_request resp;
 	int seqno = 0;
@@ -2543,75 +2417,6 @@ static int __transmit_response(struct sip_dialog *p, const char *msg, const stru
 		add_header(&resp, "X-Asterisk-HangupCauseCode", buf);
 	}
 	return send_response(p, &resp, reliable, seqno);
-}
-
-/*! \brief Initialize temporary PVT */
-static int temp_pvt_init(void *data)
-{
-	struct sip_dialog *p = data;
-
-	ast_set_flag(&p->flags[0], SIP_NO_HISTORY);
-	return ast_string_field_init(p, 512);
-}
-
-/*! \brief Cleanup temporary PVT */
-static void temp_pvt_cleanup(void *data)
-{
-	struct sip_dialog *p = data;
-
-	ast_string_field_free_pools(p);
-
-	free(data);
-}
-
-/*! \brief Transmit response, no retransmits, using a temporary pvt structure */
-static int transmit_response_using_temp(ast_string_field callid, struct sockaddr_in *sin, int useglobal_nat, const int intended_method, const struct sip_request *req, const char *msg)
-{
-	struct sip_dialog *p = NULL;
-
-	if (!(p = ast_threadstorage_get(&ts_temp_pvt, sizeof(*p)))) {
-		ast_log(LOG_NOTICE, "Failed to get temporary pvt\n");
-		return -1;
-	}
-
-	/* if the structure was just allocated, initialize it */
-	if (!ast_test_flag(&p->flags[0], SIP_NO_HISTORY)) {
-		ast_set_flag(&p->flags[0], SIP_NO_HISTORY);
-		if (ast_string_field_init(p, 512))
-			return -1;
-	}
-
-	/* Initialize the bare minimum */
-	p->method = intended_method;
-
-	if (sin) {
-		p->sa = *sin;
-		if (sip_ouraddrfor(&p->sa.sin_addr, &p->ourip))
-			p->ourip = sipnet.__ourip;
-	} else
-		p->ourip = sipnet.__ourip;
-
-	p->branch = ast_random();
-	make_our_tag(p->tag, sizeof(p->tag));
-	p->ocseq = INITIAL_CSEQ;
-
-	if (useglobal_nat && sin) {
-		ast_copy_flags(&p->flags[0], &global.flags[0], SIP_NAT);
-		p->recv = *sin;
-		do_setnat(p, ast_test_flag(&p->flags[0], SIP_NAT) & SIP_NAT_ROUTE);
-	}
-
-	ast_string_field_set(p, fromdomain, global.default_fromdomain);
-	build_via(p);
-	ast_string_field_set(p, callid, callid);
-
-	/* Use this temporary pvt structure to send the message */
-	__transmit_response(p, msg, req, XMIT_UNRELIABLE);
-
-	/* Free the string fields, but not the pool space */
-	ast_string_field_free_all(p);
-
-	return 0;
 }
 
 /*! \brief Transmit response, no retransmits */
@@ -6776,30 +6581,8 @@ static int attempt_transfer(struct sip_dual *transferer, struct sip_dual *target
 	return 0;
 }
 
-/*! \brief Get tag from packet 
- *
- * \return Returns the pointer to the provided tag buffer,
- *         or NULL if the tag was not found.
- */
-static const char *gettag(const struct sip_request *req, const char *header, char *tagbuf, int tagbufsize)
-{
-	const char *thetag;
-
-	if (!tagbuf)
-		return NULL;
-	tagbuf[0] = '\0'; 	/* reset the buffer */
-	thetag = get_header(req, header);
-	thetag = strcasestr(thetag, ";tag=");
-	if (thetag) {
-		thetag += 5;
-		ast_copy_string(tagbuf, thetag, tagbufsize);
-		return strsep(&tagbuf, ";");
-	}
-	return NULL;
-}
-
 /*! \brief Handle incoming notifications 
- * \note Out of dialog NOTIFY messages are killed in find_call()
+ * \note Out of dialog NOTIFY messages are killed in match_or_create_dialog()
  	If implementing VMI support, that needs to change 
  */
 static int handle_request_notify(struct sip_dialog *p, struct sip_request *req, struct sockaddr_in *sin, int seqno, char *e)
@@ -7774,7 +7557,7 @@ static int local_attended_transfer(struct sip_dialog *transferer, struct sip_dua
 	We can't destroy dialogs, since we want the call to continue.
 	
 	*/
-/*	XXX note that out-of-dialog refers are killed in find_call() */
+/*	XXX note that out-of-dialog refers are killed in match_or_create_dialog() */
 static int handle_request_refer(struct sip_dialog *p, struct sip_request *req, int debug, int seqno, int *nounlock)
 {
 	struct sip_dual current;	/* Chan1: Call between asterisk and transferer */

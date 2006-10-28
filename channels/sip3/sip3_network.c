@@ -170,7 +170,7 @@ retrylock:
 	sipnet_lock();
 
 	/* Find the active SIP dialog or create a new one */
-	p = find_call(&req, &sin, req.method);	/* returns p locked */
+	p = match_or_create_dialog(&req, &sin, req.method);	/* returns p locked */
 	if (p == NULL) {
 		if (option_debug)
 			ast_log(LOG_DEBUG, "Invalid SIP message - rejected , no callid, len %d\n", req.len);

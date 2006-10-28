@@ -49,7 +49,6 @@ GNURK void append_history_va(struct sip_dialog *p, const char *fmt, va_list ap);
 GNURK void sip_peer_hold(struct sip_dialog *p, int hold);
 GNURK struct sip_auth *add_realm_authentication(struct sip_auth *authlist, char *configuration, int lineno);	/* Add realm authentication in list */
 GNURK int transmit_reinvite_with_sdp(struct sip_dialog *p);
-GNURK struct sip_dialog *find_call(struct sip_request *req, struct sockaddr_in *sin, const int intended_method);
 GNURK void add_blank(struct sip_request *req);
 GNURK int handle_request(struct sip_dialog *p, struct sip_request *req, struct sockaddr_in *sin, int *recount, int *nounlock);
 GNURK int add_header(struct sip_request *req, const char *var, const char *value);
@@ -76,14 +75,13 @@ GNURK int transmit_state_notify(struct sip_dialog *p, int state, int full);
 GNURK int transmit_request_with_auth(struct sip_dialog *p, int sipmethod, int seqno, enum xmittype reliable, int newbranch);
 GNURK void sip_destroy(struct sip_dialog *p);
 GNURK void do_setnat(struct sip_dialog *p, int natflags);
-GNURK void build_callid_pvt(struct sip_dialog *pvt);
 GNURK void build_via(struct sip_dialog *p);
-GNURK char *generate_random_string(char *buf, size_t size);
 GNURK void __sip_pretend_ack(struct sip_dialog *p);
 GNURK int create_addr(struct sip_dialog *dialog, const char *opeer);
 GNURK void build_contact(struct sip_dialog *p);
 GNURK int init_req(struct sip_request *req, int sipmethod, const char *recip);
 GNURK void initialize_initreq(struct sip_dialog *p, struct sip_request *req);
+GNURK int __transmit_response(struct sip_dialog *p, const char *msg, const struct sip_request *req, enum xmittype reliable);
 
 /*! sip3_refer.c */
 GNURK const char *referstatus2str(enum referstatus rstatus) attribute_pure;
@@ -124,8 +122,10 @@ GNURK int copy_header(struct sip_request *req, const struct sip_request *orig, c
 GNURK int copy_all_header(struct sip_request *req, const struct sip_request *orig, const char *field);
 GNURK int copy_via_headers(struct sip_dialog *p, struct sip_request *req, const struct sip_request *orig, const char *field);
 GNURK const char *__get_header(const struct sip_request *req, const char *name, int *start);
-//GNURK const char *find_closing_quote(const char *start, const char *lim);
 GNURK char *get_in_brackets(char *tmp);
+GNURK char *generate_random_string(char *buf, size_t size);
+GNURK void build_callid_pvt(struct sip_dialog *pvt);
+GNURK const char *gettag(const struct sip_request *req, const char *header, char *tagbuf, int tagbufsize);
 
 /*! sip3_domain.c: Domain handling functions (sip domain hosting, not DNS lookups) */
 GNURK int add_sip_domain(const char *domain, const enum domain_mode mode, const char *context);
@@ -186,7 +186,7 @@ GNURK char *complete_sip_show_peer(const char *line, const char *word, int pos, 
 GNURK char *complete_sip_user(const char *word, int state, int flags2);
 
 
-/* sip3_dialog.h */
+/* sip3_dialog.c */
 GNURK void dialoglist_lock(void);
 GNURK void dialoglist_unlock(void);
 GNURK void sip_scheddestroy(struct sip_dialog *p, int ms);
@@ -195,13 +195,15 @@ GNURK int hangup_sip2cause(int cause);
 GNURK const char *hangup_cause2sip(int cause);
 GNURK struct sip_dialog *sip_alloc(ast_string_field callid, struct sockaddr_in *sin, int useglobal_nat, const int intended_method);
 GNURK void make_our_tag(char *tagbuf, size_t len);
+GNURK struct sip_dialog *match_or_create_dialog(struct sip_request *req, struct sockaddr_in *sin, const int intended_method);
 
-/* sip3_services.h - outbound registration for services from other servers/providers  */
+/* sip3_services.c - outbound registration for services from other servers/providers  */
 
 GNURK void sip_send_all_registers(void);
 GNURK int sip_register(char *value, int lineno);
 GNURK void sip_registry_destroy(struct sip_registry *reg);
 GNURK char *regstate2str(enum sipregistrystate regstate) attribute_const;
 GNURK int handle_response_register(struct sip_dialog *p, int resp, char *rest, struct sip_request *req, int seqno);
+GNURK int transmit_register(struct sip_registry *r, int sipmethod, const char *auth, const char *authheader);
 
 #endif

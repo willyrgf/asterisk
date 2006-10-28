@@ -191,6 +191,28 @@ static int sip_method_needrtp(int method)
 	return sip_methods[method].need_rtp;
 }
 
+/*! \brief Get tag from packet 
+ *
+ * \return Returns the pointer to the provided tag buffer,
+ *         or NULL if the tag was not found.
+ */
+const char *gettag(const struct sip_request *req, const char *header, char *tagbuf, int tagbufsize)
+{
+	const char *thetag;
+
+	if (!tagbuf)
+		return NULL;
+	tagbuf[0] = '\0'; 	/* reset the buffer */
+	thetag = get_header(req, header);
+	thetag = strcasestr(thetag, ";tag=");
+	if (thetag) {
+		thetag += 5;
+		ast_copy_string(tagbuf, thetag, tagbufsize);
+		return strsep(&tagbuf, ";");
+	}
+	return NULL;
+}
+
 /*! \brief Check if sip option is known to us, avoid x- options (non-standard) */ 
 static int sip_option_lookup(const char *optionlabel)
 {
@@ -545,5 +567,29 @@ GNURK int lws2sws(char *msgbuf, int len)
 	} 
 	msgbuf[t] = '\0'; 
 	return t; 
+}
+
+/*! \brief Build SIP Call-ID value for a non-REGISTER transaction */
+void build_callid_pvt(struct sip_dialog *pvt)
+{
+	char buf[33];
+
+	const char *host = S_OR(pvt->fromdomain, ast_inet_ntoa(pvt->ourip));
+	
+	ast_string_field_build(pvt, callid, "%s@%s", generate_random_string(buf, sizeof(buf)), host);
+
+}
+
+/*! \brief Generate 32 byte random string for callid's etc */
+char *generate_random_string(char *buf, size_t size)
+{
+	long val[4];
+	int x;
+
+	for (x=0; x<4; x++)
+		val[x] = ast_random();
+	snprintf(buf, size, "%08lx%08lx%08lx%08lx", val[0], val[1], val[2], val[3]);
+
+	return buf;
 }
 

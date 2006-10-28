@@ -93,7 +93,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "sip3funcs.h"
 
 /* Forward declaration */
-static int transmit_register(struct sip_registry *r, int sipmethod, const char *auth, const char *authheader);
 static int sip_reregister(void *data);
 
 /*! \brief  The register list: Other SIP proxys we register with and place calls to */
@@ -337,7 +336,7 @@ static int sip_reg_timeout(void *data)
 }
 
 /*! \brief Transmit register to SIP proxy or UA */
-static int transmit_register(struct sip_registry *r, int sipmethod, const char *auth, const char *authheader)
+int transmit_register(struct sip_registry *r, int sipmethod, const char *auth, const char *authheader)
 {
 	struct sip_request req;
 	char from[256];
