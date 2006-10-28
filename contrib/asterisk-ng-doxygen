@@ -451,6 +451,7 @@ INPUT                  = ./ \
                          include/asterisk \
 			 channels \
 			 channels/sip3 \
+			 channels/misdn \
 			 funcs \
 			 main/stdtime \
 			 apps \

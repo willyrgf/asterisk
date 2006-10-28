@@ -5569,6 +5569,7 @@ static int reqprep(struct sip_request *req, struct sip_pvt *p, int sipmethod, in
 			ast_log(LOG_DEBUG, "Strict routing enforced for session %s\n", p->callid);
 	}
 	
+#ifdef SKREP
 	/* Let's try to figure out the direction of this transaction within the dialog */
 	/* If we're sending an ACK, we DID send the INVITE - which means outbound.
 	   INVITE's are outbound transactions, always 
@@ -5576,6 +5577,7 @@ static int reqprep(struct sip_request *req, struct sip_pvt *p, int sipmethod, in
 	if (sipmethod == SIP_ACK || sipmethod == SIP_INVITE)
 		is_outbound = TRUE;
 	/* In other case's, let's follow the flow of the dialog */
+#endif
 
 	if (sipmethod == SIP_CANCEL)
 		c = p->initreq.rlPart2;	/* Use original URI */
@@ -10607,6 +10609,8 @@ static int sip_show_channel(int fd, int argc, char *argv[])
 			ast_cli(fd, "  Their Codec Capability:   %d\n", cur->peercapability);
 			ast_cli(fd, "  Joint Codec Capability:   %d\n", cur->jointcapability);
 			ast_cli(fd, "  Format:                 %s\n", ast_getformatname_multiple(formatbuf, sizeof(formatbuf), cur->owner ? cur->owner->nativeformats : 0) );
+			ast_cli(fd, "  T.38 support            %s\n", cur->udptl ? "Yes" : "No");
+			ast_cli(fd, "  Video support           %s\n", cur->vrtp ? "Yes" : "No");
 			ast_cli(fd, "  MaxCallBR:              %d kbps\n", cur->maxcallbitrate);
 			ast_cli(fd, "  Theoretical Address:    %s:%d\n", ast_inet_ntoa(cur->sa.sin_addr), ntohs(cur->sa.sin_port));
 			ast_cli(fd, "  Received Address:       %s:%d\n", ast_inet_ntoa(cur->recv.sin_addr), ntohs(cur->recv.sin_port));

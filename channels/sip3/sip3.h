@@ -13,11 +13,17 @@
  *
  * This program is free software, distributed under the terms of
  * the GNU General Public License
+ *
+ *
+ * For more information about chan_sip3: \ref chan_sip3_00index
  */
  
 #ifndef _SIP3_H
 #define _SIP3_H
 
+/* remove this line, and I can't be responsible for what happens to your
+   favourite PBX ... :-) 
+*/
 #define THIS_IS_A_TEST	"Pineapples are sweet"
 
 #ifndef FALSE

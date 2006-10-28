@@ -4,6 +4,8 @@
 *  -- Mail bugs to oej@edvina.net, do not file them in the bug tracker
 */
 
+/* To skip to source code, search for "-END-" */
+
 /*
  * Asterisk -- An open source telephony toolkit.
  *
@@ -93,10 +95,25 @@
  * the sip_hangup() function
  */
 
-/*! 
-	\page chan_sip3_start Welcome to Codename Pineapple :: chan_sip3 !
+/*!	\page chan_sip3_00index Chan_sip3: Index over docs
+	\title Chan_sip3 :: Index
 
-	\title What's this?
+	- \ref chan_sip3_start
+	- \ref chan_sip3_objects
+	- \ref chan_sip3_files
+	- \ref chan_sip3_auth
+	- \ref chan_sip3_dialogs
+
+	\par todo Things to do, ideas
+	- \ref chan_sip3_todo
+	- \ref chan_sip3_subs
+
+*/
+
+/*! 
+	\page chan_sip3_start Chan_sip3: Welcome to Codename Pineapple !
+
+	\title Chan_sip3: What's this?
 	This is a re-work of the SIP channel in Asterisk. 
 	This channel will not be backwards compatible with the old 
 	sip channel. In order to be more SIP compatible, I will have
@@ -106,7 +123,7 @@
 	** This work is sponsored by voop.com - the Internet Dialtone.
 	   I am open for more sponsors - contact me on oej@edvina.net
 
-	\page chan_sip3_todo Things to do
+	\page chan_sip3_todo Chan_sip3: Things to do
 	Done
 	- removed userconf support (in favour of astum)
 	- added the peermatch branch
@@ -121,7 +138,6 @@
 	- Add astum
 	- Add sipregister branch
 	- Split up source code file
-	- Remove user
 	- Add type=device for peers
 	- Add type=service for register= replacement
 	- Add type=trunk definition, based on domain routing
@@ -140,7 +156,8 @@
 	- change "sip nodebug" to "sip debug off" and "sip debug" to "sip debug on"
 
 	- ... And much more
-
+*/
+/*!
 	\page chan_sip3_objects	Chan_sip3: Devices, trunks and services
 	- \b phones are devices that connect to Asterisk. They register with  
 	Asterisk acting as a SIP location server/registrar and use Asterisk 
@@ -168,6 +185,56 @@
 	instead of just matching on domain and then authenticate.
 
 */
+
+/*!
+	\page chan_sip3_subs Chan_sip3: Subscriptions
+
+	\title Ideas for a new subscription system
+	
+	We need to move out the active subsriptions to a list
+	of their own, like the registry. Do not keep them in
+	the active dialog list, they're active subscriptions.
+
+	Add a list of internal and external subscriptions.
+	We need one object that "watches" URIs or extensions
+	that is connected to subscribers. For several subscribers,
+	we have only one internal or external subscription.
+
+	Should the external subscription system be directly
+	connected or go through the hint subsystem? Will this
+	cause un-needed overhead?
+
+	exten => johnny,hint,sipsubscribe::sip:johnny@johnnysdomain.com
+
+*/
+
+/*!
+	\page chan_sip3_files Chan_sip3: Source code files
+	\title Chan_sip3: Source Code Files
+
+	\b \\channels
+
+	- \b chan_sip3.c	The main source code file for the channel
+				PBX interface
+
+	\b \\channels\\sip3
+	
+	- \b sip3.h		The include file for structures and enums
+	- \b sip3funcs.h	The include file for functions
+	- \b sip3_cliami.c	Manager and CLI functions
+	- \b sip3_sdprtp.c	SDP handling and RTP interface
+	- \b sip3_callerid.c	CallerID, pres and RPID handling
+	- \b sip3_dialog.c	SIP dialog support
+	- \b sip3_auth.c	SIP authentication
+	- \b sip3_config.c	Configuration
+	- \b sip3_domain.c	SIP domain support
+	- \b sip3_subscribe.c	SIP subscription support
+	- \b sip3_parse.c	Parsing stuff
+	- \b sip3_refer.c	SIP transfer support
+	- \b sip3_network.c	Networks interface (UDP today)
+		
+*/
+			/* -END- documentation pages */
 
 #define CHAN_SIP3_MAIN
 
