@@ -85,6 +85,48 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "sip3.h"
 #include "sip3funcs.h"
 
+/* Forward declarations */
+static int sip_get_codec(struct ast_channel *chan);
+static int sip_set_udptl_peer(struct ast_channel *chan, struct ast_udptl *udptl);
+static struct ast_udptl *sip_get_udptl_peer(struct ast_channel *chan);
+
+/*! \brief Interface structure with callbacks used to connect to RTP module */
+static struct ast_rtp_protocol sip_rtp = {
+	type: "SIP",
+	get_rtp_info: sip_get_rtp_peer,
+	get_vrtp_info: sip_get_vrtp_peer,
+	set_rtp_peer: sip_set_rtp_peer,
+	get_codec: sip_get_codec,
+};
+
+/*! \brief Interface structure with callbacks used to connect to UDPTL module*/
+static struct ast_udptl_protocol sip_udptl = {
+	type: "SIP",
+	get_udptl_info: sip_get_udptl_peer,
+	set_udptl_peer: sip_set_udptl_peer,
+};
+
+/*! \brief Register RTP and UDPTL to the subsystems */
+void register_rtp_and_udptl(void)
+{
+	/* Tell the RTP subdriver that we're here */
+	ast_rtp_proto_register(&sip_rtp);
+
+	/* Tell the UDPTL subdriver that we're here */
+	ast_udptl_proto_register(&sip_udptl);
+}
+
+/*! \brief UNRegister RTP and UDPTL to the subsystems */
+void unregister_rtp_and_udptl(void)
+{
+	/* Tell the RTP subdriver that we're gone */
+	ast_rtp_proto_unregister(&sip_rtp);
+
+	/* Tell the UDPTL subdriver that we're gone */
+	ast_udptl_proto_unregister(&sip_udptl);
+}
+
+
 /*! \brief Reads one line of SIP message body */
 static char *get_body_by_line(const char *line, const char *name, int nameLen)
 {
@@ -1206,3 +1248,154 @@ int add_sdp(struct sip_request *resp, struct sip_dialog *p)
 	return 0;
 }
 
+/*! \brief Return SIP UA's codec (part of the RTP interface) */
+static int sip_get_codec(struct ast_channel *chan)
+{
+	struct sip_dialog *p = chan->tech_pvt;
+	return p->peercapability;	
+}
+
+/*! \brief Read RTP from network */
+static struct ast_frame *sip_rtp_read(struct ast_channel *ast, struct sip_dialog *p, int *faxdetect)
+{
+	/* Retrieve audio/etc from channel.  Assumes p->lock is already held. */
+	struct ast_frame *f;
+	
+	if (!p->rtp) {
+		/* We have no RTP allocated for this channel */
+		return &ast_null_frame;
+	}
+
+	switch(ast->fdno) {
+	case 0:
+		f = ast_rtp_read(p->rtp);	/* RTP Audio */
+		break;
+	case 1:
+		f = ast_rtcp_read(p->rtp);	/* RTCP Control Channel */
+		break;
+	case 2:
+		f = ast_rtp_read(p->vrtp);	/* RTP Video */
+		break;
+	case 3:
+		f = ast_rtcp_read(p->vrtp);	/* RTCP Control Channel for video */
+		break;
+	case 5:
+		f = ast_udptl_read(p->udptl);	/* UDPTL for T.38 */
+		break;
+	default:
+		f = &ast_null_frame;
+	}
+	/* Don't forward RFC2833 if we're not supposed to */
+	if (f && (f->frametype == AST_FRAME_DTMF) &&
+	    (ast_test_flag(&p->flags[0], SIP_DTMF) != SIP_DTMF_RFC2833))
+		return &ast_null_frame;
+
+	if (p->owner) {
+		/* We already hold the channel lock */
+		if (f->frametype == AST_FRAME_VOICE) {
+			if (f->subclass != (p->owner->nativeformats & AST_FORMAT_AUDIO_MASK)) {
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Oooh, format changed to %d\n", f->subclass);
+				p->owner->nativeformats = (p->owner->nativeformats & AST_FORMAT_VIDEO_MASK) | f->subclass;
+				ast_set_read_format(p->owner, p->owner->readformat);
+				ast_set_write_format(p->owner, p->owner->writeformat);
+			}
+			if ((ast_test_flag(&p->flags[0], SIP_DTMF) == SIP_DTMF_INBAND) && p->vad) {
+				f = ast_dsp_process(p->owner, p->vad, f);
+				if (f && f->frametype == AST_FRAME_DTMF) {
+					if (ast_test_flag(&p->t38.t38support, SIP_PAGE2_T38SUPPORT_UDPTL) && f->subclass == 'f') {
+						if (option_debug)
+							ast_log(LOG_DEBUG, "Fax CNG detected on %s\n", ast->name);
+						*faxdetect = 1;
+					} else if (option_debug) {
+						ast_log(LOG_DEBUG, "* Detected inband DTMF '%c'\n", f->subclass);
+					}
+				}
+			}
+		}
+	}
+	return f;
+}
+
+/*! \brief Read SIP RTP from channel */
+static struct ast_frame *sip_read(struct ast_channel *ast)
+{
+	struct ast_frame *fr;
+	struct sip_dialog *p = ast->tech_pvt;
+	int faxdetected = FALSE;
+
+	ast_mutex_lock(&p->lock);
+	fr = sip_rtp_read(ast, p, &faxdetected);
+	p->lastrtprx = time(NULL);
+
+	/* If we are NOT bridged to another channel, and we have detected fax tone we issue T38 re-invite to a peer */
+	/* If we are bridged then it is the responsibility of the SIP device to issue T38 re-invite if it detects CNG or fax preamble */
+	if (faxdetected && ast_test_flag(&p->t38.t38support, SIP_PAGE2_T38SUPPORT_UDPTL) && (p->t38.state == T38_DISABLED) && !(ast_bridged_channel(ast))) {
+		if (!ast_test_flag(&p->flags[0], SIP_GOTREFER)) {
+			if (!p->pendinginvite) {
+				if (option_debug > 2)
+					ast_log(LOG_DEBUG, "Sending reinvite on SIP (%s) for T.38 negotiation.\n",ast->name);
+				p->t38.state = T38_LOCAL_REINVITE;
+				transmit_reinvite_with_t38_sdp(p);
+				if (option_debug > 1)
+					ast_log(LOG_DEBUG, "T38 state changed to %d on channel %s\n", p->t38.state, ast->name);
+			}
+		} else if (!ast_test_flag(&p->flags[0], SIP_PENDINGBYE)) {
+			if (option_debug > 2)
+				ast_log(LOG_DEBUG, "Deferring reinvite on SIP (%s) - it will be re-negotiated for T.38\n", ast->name);
+			ast_set_flag(&p->flags[0], SIP_NEEDREINVITE);
+		}
+	}
+
+	ast_mutex_unlock(&p->lock);
+	return fr;
+}
+
+/*! \brief Get UDPTL peer address (part of UDPTL interface) */
+static struct ast_udptl *sip_get_udptl_peer(struct ast_channel *chan)
+{
+	struct sip_dialog *p;
+	struct ast_udptl *udptl = NULL;
+	
+	p = chan->tech_pvt;
+	if (!p)
+		return NULL;
+	
+	ast_mutex_lock(&p->lock);
+	if (p->udptl && ast_test_flag(&p->flags[0], SIP_CAN_REINVITE))
+		udptl = p->udptl;
+	ast_mutex_unlock(&p->lock);
+	return udptl;
+}
+
+/*! \brief Determine UDPTL peer address for re-invite (part of UDPTL interface) */
+static int sip_set_udptl_peer(struct ast_channel *chan, struct ast_udptl *udptl)
+{
+	struct sip_dialog *p;
+	
+	p = chan->tech_pvt;
+	if (!p)
+		return -1;
+	ast_mutex_lock(&p->lock);
+	if (udptl)
+		ast_udptl_get_peer(udptl, &p->udptlredirip);
+	else
+		memset(&p->udptlredirip, 0, sizeof(p->udptlredirip));
+	if (!ast_test_flag(&p->flags[0], SIP_GOTREFER)) {
+		if (!p->pendinginvite) {
+			if (option_debug > 2) {
+				ast_log(LOG_DEBUG, "Sending reinvite on SIP '%s' - It's UDPTL soon redirected to IP %s:%d\n", p->callid, ast_inet_ntoa(udptl ? p->udptlredirip.sin_addr : p->ourip), udptl ? ntohs(p->udptlredirip.sin_port) : 0);
+			}
+			transmit_reinvite_with_t38_sdp(p);
+		} else if (!ast_test_flag(&p->flags[0], SIP_PENDINGBYE)) {
+			if (option_debug > 2) {
+				ast_log(LOG_DEBUG, "Deferring reinvite on SIP '%s' - It's UDPTL will be redirected to IP %s:%d\n", p->callid, ast_inet_ntoa(udptl ? p->udptlredirip.sin_addr : p->ourip), udptl ? ntohs(p->udptlredirip.sin_port) : 0);
+			}
+			ast_set_flag(&p->flags[0], SIP_NEEDREINVITE);
+		}
+	}
+	/* Reset lastrtprx timer */
+	p->lastrtprx = p->lastrtptx = time(NULL);
+	ast_mutex_unlock(&p->lock);
+	return 0;
+}

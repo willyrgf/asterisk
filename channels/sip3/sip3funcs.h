@@ -78,6 +78,7 @@ GNURK int sip_reload(int fd);
 GNURK int transmit_response_with_auth(struct sip_dialog *p, const char *msg, const struct sip_request *req, const char *rand, enum xmittype reliable, const char *header, int stale);
 GNURK int transmit_register(struct sip_registry *r, int sipmethod, const char *auth, const char *authheader);
 GNURK int transmit_invite(struct sip_dialog *p, int sipmethod, int sdp, int init);
+GNURK int transmit_reinvite_with_t38_sdp(struct sip_dialog *p);
 GNURK void sip_scheddestroy(struct sip_dialog *p, int ms);
 
 /*! sip3_refer.c */
@@ -131,6 +132,8 @@ GNURK int reply_digest(struct sip_dialog *p, struct sip_request *req, char *head
 GNURK int build_reply_digest(struct sip_dialog *p, int method, char* digest, int digest_len);
 
 /* sip3_sdprtp.c */
+GNURK void register_rtp_and_udptl(void);
+GNURK void unregister_rtp_and_udptl(void);
 GNURK char *get_body(struct sip_request *req, char *name);
 GNURK int process_sdp(struct sip_dialog *p, struct sip_request *req);
 GNURK int sip_set_rtp_peer(struct ast_channel *chan, struct ast_rtp *rtp, struct ast_rtp *vrtp, int codecs, int nat_active);
