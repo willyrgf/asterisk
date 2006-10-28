@@ -441,3 +441,109 @@ int copy_via_headers(struct sip_dialog *p, struct sip_request *req, const struct
 	return 0;
 }
 
+/*! \brief Locate closing quote in a string, skipping escaped quotes.
+ * optionally with a limit on the search.
+ * start must be past the first quote.
+ */
+const char *find_closing_quote(const char *start, const char *lim)
+{
+        char last_char = '\0';
+        const char *s;
+        for (s = start; *s && s != lim; last_char = *s++) {
+                if (*s == '"' && last_char != '\\')
+                        break;
+        }
+        return s;
+}
+
+/*! \brief Pick out text in brackets from character string
+	\return pointer to terminated stripped string
+	\param tmp input string that will be modified
+	Examples:
+
+	"foo" <bar>	valid input, returns bar
+	foo		returns the whole string
+	< "foo ... >	returns the string between brackets
+	< "foo...	bogus (missing closing bracket), returns the whole string
+			XXX maybe should still skip the opening bracket
+ */
+char *get_in_brackets(char *tmp)
+{
+	const char *parse = tmp;
+	char *first_bracket;
+
+	/*
+	 * Skip any quoted text until we find the part in brackets.
+         * On any error give up and return the full string.
+         */
+        while ( (first_bracket = strchr(parse, '<')) ) {
+                char *first_quote = strchr(parse, '"');
+
+		if (!first_quote || first_quote > first_bracket)
+			break; /* no need to look at quoted part */
+		/* the bracket is within quotes, so ignore it */
+		parse = find_closing_quote(first_quote + 1, NULL);
+		if (!*parse) { /* not found, return full string ? */
+			/* XXX or be robust and return in-bracket part ? */
+			ast_log(LOG_WARNING, "No closing quote found in '%s'\n", tmp);
+			break;
+		}
+		parse++;
+	}
+	if (first_bracket) {
+		char *second_bracket = strchr(first_bracket + 1, '>');
+		if (second_bracket) {
+			*second_bracket = '\0';
+			tmp = first_bracket + 1;
+		} else {
+			ast_log(LOG_WARNING, "No closing bracket found in '%s'\n", tmp);
+		}
+	}
+	return tmp;
+}
+
+/*! \brief  Parse multiline SIP headers into one header */
+GNURK int lws2sws(char *msgbuf, int len) 
+{
+	int h = 0, t = 0; 
+	int lws = 0; 
+
+	for (; h < len;) { 
+		/* Eliminate all CRs */ 
+		if (msgbuf[h] == '\r') { 
+			h++; 
+			continue; 
+		} 
+		/* Check for end-of-line */ 
+		if (msgbuf[h] == '\n') { 
+			/* Check for end-of-message */ 
+			if (h + 1 == len) 
+				break; 
+			/* Check for a continuation line */ 
+			if (msgbuf[h + 1] == ' ' || msgbuf[h + 1] == '\t') { 
+				/* Merge continuation line */ 
+				h++; 
+				continue; 
+			} 
+			/* Propagate LF and start new line */ 
+			msgbuf[t++] = msgbuf[h++]; 
+			lws = 0;
+			continue; 
+		} 
+		if (msgbuf[h] == ' ' || msgbuf[h] == '\t') { 
+			if (lws) { 
+				h++; 
+				continue; 
+			} 
+			msgbuf[t++] = msgbuf[h++]; 
+			lws = 1; 
+			continue; 
+		} 
+		msgbuf[t++] = msgbuf[h++]; 
+		if (lws) 
+			lws = 0; 
+	} 
+	msgbuf[t] = '\0'; 
+	return t; 
+}
+

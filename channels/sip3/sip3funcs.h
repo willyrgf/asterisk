@@ -47,12 +47,10 @@
 GNURK void append_history_full(struct sip_dialog *p, const char *fmt, ...);
 GNURK void append_history_va(struct sip_dialog *p, const char *fmt, va_list ap);
 GNURK void sip_peer_hold(struct sip_dialog *p, int hold);
-GNURK int sip_register(char *value, int lineno);;
 GNURK struct sip_auth *add_realm_authentication(struct sip_auth *authlist, char *configuration, int lineno);	/* Add realm authentication in list */
 GNURK int transmit_reinvite_with_sdp(struct sip_dialog *p);
 GNURK struct sip_dialog *find_call(struct sip_request *req, struct sockaddr_in *sin, const int intended_method);
 GNURK void add_blank(struct sip_request *req);
-GNURK int lws2sws(char *msgbuf, int len);
 GNURK int handle_request(struct sip_dialog *p, struct sip_request *req, struct sockaddr_in *sin, int *recount, int *nounlock);
 GNURK int add_header(struct sip_request *req, const char *var, const char *value);
 GNURK int add_header_contentLength(struct sip_request *req, int len);
@@ -70,15 +68,22 @@ GNURK void parse_copy(struct sip_request *dst, const struct sip_request *src);
 GNURK int sip_prune_realtime(int fd, int argc, char *argv[]);	/* XXX Needs to move to sip3_cliami.c */
 GNURK int sip_notify(int fd, int argc, char *argv[]); /* XXX Move where ?? */
 GNURK struct sip_peer *find_device(const char *peer, struct sockaddr_in *sin, int realtime);
-GNURK char *regstate2str(enum sipregistrystate regstate) attribute_const;
 GNURK int sip_reload(int fd);
 GNURK int transmit_response_with_auth(struct sip_dialog *p, const char *msg, const struct sip_request *req, const char *rand, enum xmittype reliable, const char *header, int stale);
-GNURK int transmit_register(struct sip_registry *r, int sipmethod, const char *auth, const char *authheader);
 GNURK int transmit_invite(struct sip_dialog *p, int sipmethod, int sdp, int init);
 GNURK int transmit_reinvite_with_t38_sdp(struct sip_dialog *p);
 GNURK int transmit_state_notify(struct sip_dialog *p, int state, int full);
 GNURK int transmit_request_with_auth(struct sip_dialog *p, int sipmethod, int seqno, enum xmittype reliable, int newbranch);
 GNURK void sip_destroy(struct sip_dialog *p);
+GNURK void do_setnat(struct sip_dialog *p, int natflags);
+GNURK void build_callid_pvt(struct sip_dialog *pvt);
+GNURK void build_via(struct sip_dialog *p);
+GNURK char *generate_random_string(char *buf, size_t size);
+GNURK void __sip_pretend_ack(struct sip_dialog *p);
+GNURK int create_addr(struct sip_dialog *dialog, const char *opeer);
+GNURK void build_contact(struct sip_dialog *p);
+GNURK int init_req(struct sip_request *req, int sipmethod, const char *recip);
+GNURK void initialize_initreq(struct sip_dialog *p, struct sip_request *req);
 
 /*! sip3_refer.c */
 GNURK const char *referstatus2str(enum referstatus rstatus) attribute_pure;
@@ -104,6 +109,7 @@ GNURK inline int sip_debug_test_pvt(struct sip_dialog *p) ;
 GNURK int sip_ouraddrfor(struct in_addr *them, struct in_addr *us);
 
 /*! sip3_parse.c */
+GNURK int lws2sws(char *msgbuf, int len);
 GNURK char *sip_method2txt(int method);
 GNURK int sip_method_needrtp(int method);
 GNURK int method_match(enum sipmethod id, const char *name);
@@ -118,6 +124,8 @@ GNURK int copy_header(struct sip_request *req, const struct sip_request *orig, c
 GNURK int copy_all_header(struct sip_request *req, const struct sip_request *orig, const char *field);
 GNURK int copy_via_headers(struct sip_dialog *p, struct sip_request *req, const struct sip_request *orig, const char *field);
 GNURK const char *__get_header(const struct sip_request *req, const char *name, int *start);
+//GNURK const char *find_closing_quote(const char *start, const char *lim);
+GNURK char *get_in_brackets(char *tmp);
 
 /*! sip3_domain.c: Domain handling functions (sip domain hosting, not DNS lookups) */
 GNURK int add_sip_domain(const char *domain, const enum domain_mode mode, const char *context);
@@ -176,10 +184,6 @@ GNURK char *complete_sip_peer(const char *word, int state, int flags2);
 GNURK char *complete_sip_show_peer(const char *line, const char *word, int pos, int state);
 //static char *complete_sip_debug_peer(const char *line, const char *word, int pos, int state);
 GNURK char *complete_sip_user(const char *word, int state, int flags2);
-//static char *complete_sip_show_user(const char *line, const char *word, int pos, int state);
-//static char *complete_sipnotify(const char *line, const char *word, int pos, int state);
-//static char *complete_sip_prune_realtime_peer(const char *line, const char *word, int pos, int state);
-//static char *complete_sip_prune_realtime_user(const char *line, const char *word, int pos, int state);
 
 
 /* sip3_dialog.h */
@@ -187,5 +191,17 @@ GNURK void dialoglist_lock(void);
 GNURK void dialoglist_unlock(void);
 GNURK void sip_scheddestroy(struct sip_dialog *p, int ms);
 GNURK void sip_cancel_destroy(struct sip_dialog *p);
+GNURK int hangup_sip2cause(int cause);
+GNURK const char *hangup_cause2sip(int cause);
+GNURK struct sip_dialog *sip_alloc(ast_string_field callid, struct sockaddr_in *sin, int useglobal_nat, const int intended_method);
+GNURK void make_our_tag(char *tagbuf, size_t len);
+
+/* sip3_services.h - outbound registration for services from other servers/providers  */
+
+GNURK void sip_send_all_registers(void);
+GNURK int sip_register(char *value, int lineno);
+GNURK void sip_registry_destroy(struct sip_registry *reg);
+GNURK char *regstate2str(enum sipregistrystate regstate) attribute_const;
+GNURK int handle_response_register(struct sip_dialog *p, int resp, char *rest, struct sip_request *req, int seqno);
 
 #endif
