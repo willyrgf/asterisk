@@ -169,6 +169,14 @@
 
 /* --------- ENUM declarations */
 
+/*! \brief Variants for sending responses with transmit_response_with_attachment() */
+enum responseattach {
+	WITH_DATE,
+	WITH_ALLOW,
+	WITH_SDP,
+	WITH_T38_SDP,
+};
+
 /*! \brief Authorization scheme for call transfers 
 \note Not a bitfield flag, since there are plans for other modes,
 	like "only allow transfers for authenticated devices" */

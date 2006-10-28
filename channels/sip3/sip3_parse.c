@@ -569,17 +569,6 @@ GNURK int lws2sws(char *msgbuf, int len)
 	return t; 
 }
 
-/*! \brief Build SIP Call-ID value for a non-REGISTER transaction */
-void build_callid_pvt(struct sip_dialog *pvt)
-{
-	char buf[33];
-
-	const char *host = S_OR(pvt->fromdomain, ast_inet_ntoa(pvt->ourip));
-	
-	ast_string_field_build(pvt, callid, "%s@%s", generate_random_string(buf, sizeof(buf)), host);
-
-}
-
 /*! \brief Generate 32 byte random string for callid's etc */
 char *generate_random_string(char *buf, size_t size)
 {
@@ -591,5 +580,46 @@ char *generate_random_string(char *buf, size_t size)
 	snprintf(buf, size, "%08lx%08lx%08lx%08lx", val[0], val[1], val[2], val[3]);
 
 	return buf;
+}
+
+/*! \brief Parse first line of incoming SIP request */
+int determine_firstline_parts(struct sip_request *req) 
+{
+	char *e = ast_skip_blanks(req->header[0]);	/* there shouldn't be any */
+
+	if (!*e)
+		return -1;
+	req->rlPart1 = e;	/* method or protocol */
+	e = ast_skip_nonblanks(e);
+	if (*e)
+		*e++ = '\0';
+	/* Get URI or status code */
+	e = ast_skip_blanks(e);
+	if ( !*e )
+		return -1;
+	ast_trim_blanks(e);
+
+	if (!strcasecmp(req->rlPart1, "SIP/2.0") ) { /* We have a response */
+		if (strlen(e) < 3)	/* status code is 3 digits */
+			return -1;
+		req->rlPart2 = e;
+	} else { /* We have a request */
+		if ( *e == '<' ) { /* XXX the spec says it must not be in <> ! */
+			ast_log(LOG_WARNING, "bogus uri in <> %s\n", e);
+			e++;
+			if (!*e)
+				return -1; 
+		}
+		req->rlPart2 = e;	/* URI */
+		e = ast_skip_nonblanks(e);
+		if (*e)
+			*e++ = '\0';
+		e = ast_skip_blanks(e);
+		if (strcasecmp(e, "SIP/2.0") ) {
+			ast_log(LOG_WARNING, "Bad request protocol %s\n", e);
+			return -1;
+		}
+	}
+	return 1;
 }
 

@@ -126,6 +126,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "sip3funcs.h"		/* Moved functions */
 
+/*! \todo Move the sip_auth list to AST_LIST */
+struct sip_auth *authl = NULL;		/*!< Authentication list for realm authentication */
+
 /*! \brief return the request and response heade for a 401 or 407 code */
 void auth_headers(enum sip_auth_type code, char **header, char **respheader)
 {
@@ -487,3 +490,91 @@ int build_reply_digest(struct sip_dialog *p, int method, char* digest, int diges
 
 	return 0;
 }
+
+/*! \brief Add realm authentication in list */
+struct sip_auth *add_realm_authentication(struct sip_auth *authlist, char *configuration, int lineno)
+{
+	char authcopy[256];
+	char *username=NULL, *realm=NULL, *secret=NULL, *md5secret=NULL;
+	char *stringp;
+	struct sip_auth *a, *b, *auth;
+
+	if (ast_strlen_zero(configuration))
+		return authlist;
+
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Auth config ::  %s\n", configuration);
+
+	ast_copy_string(authcopy, configuration, sizeof(authcopy));
+	stringp = authcopy;
+
+	username = stringp;
+	realm = strrchr(stringp, '@');
+	if (realm)
+		*realm++ = '\0';
+	if (ast_strlen_zero(username) || ast_strlen_zero(realm)) {
+		ast_log(LOG_WARNING, "Format for authentication entry is user[:secret]@realm at line %d\n", lineno);
+		return authlist;
+	}
+	stringp = username;
+	username = strsep(&stringp, ":");
+	if (username) {
+		secret = strsep(&stringp, ":");
+		if (!secret) {
+			stringp = username;
+			md5secret = strsep(&stringp,"#");
+		}
+	}
+	if (!(auth = ast_calloc(1, sizeof(*auth))))
+		return authlist;
+
+	ast_copy_string(auth->realm, realm, sizeof(auth->realm));
+	ast_copy_string(auth->username, username, sizeof(auth->username));
+	if (secret)
+		ast_copy_string(auth->secret, secret, sizeof(auth->secret));
+	if (md5secret)
+		ast_copy_string(auth->md5secret, md5secret, sizeof(auth->md5secret));
+
+	/* find the end of the list */
+	for (b = NULL, a = authlist; a ; b = a, a = a->next)
+		;
+	if (b)
+		b->next = auth;	/* Add structure add end of list */
+	else
+		authlist = auth;
+
+	if (option_verbose > 2)
+		ast_verbose("Added authentication for realm %s\n", realm);
+
+	return authlist;
+
+}
+
+/*! \brief Clear realm authentication list (at reload) */
+int clear_realm_authentication(struct sip_auth *authlist)
+{
+	struct sip_auth *a = authlist;
+	struct sip_auth *b;
+
+	while (a) {
+		b = a;
+		a = a->next;
+		free(b);
+	}
+
+	return 1;
+}
+
+/*! \brief Find authentication for a specific realm */
+struct sip_auth *find_realm_authentication(struct sip_auth *authlist, const char *realm)
+{
+	struct sip_auth *a;
+
+	for (a = authlist; a; a = a->next) {
+		if (!strcasecmp(a->realm, realm))
+			break;
+	}
+
+	return a;
+}
+

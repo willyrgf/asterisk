@@ -351,9 +351,6 @@ struct sip_dialog *dialoglist = NULL;
 /*! \brief The peer list: Peers and Friends */
 struct sip_device_list devicelist;
 
-/*! \todo Move the sip_auth list to AST_LIST */
-struct sip_auth *authl = NULL;		/*!< Authentication list for realm authentication */
-
 struct ast_config *notify_types;		/*!< The list of manual NOTIFY types we know how to send */
 
 /*---------------------------- Forward declarations of functions in chan_sip.c */
@@ -377,10 +374,9 @@ static int sip_senddigit_end(struct ast_channel *ast, char digit);
 /*--- Transmitting responses and requests */
 static int transmit_sip_request(struct sip_dialog *p, struct sip_request *req);
 static int transmit_response_reliable(struct sip_dialog *p, const char *msg, const struct sip_request *req);
-static int transmit_response_with_date(struct sip_dialog *p, const char *msg, const struct sip_request *req);
-static int transmit_response_with_sdp(struct sip_dialog *p, const char *msg, const struct sip_request *req, enum xmittype reliable);
+static int transmit_response_with_attachment(enum responseattach attach, struct sip_dialog *p, const char *msg, 
+		const struct sip_request *req, enum xmittype reliable);
 static int transmit_response_with_unsupported(struct sip_dialog *p, const char *msg, const struct sip_request *req, const char *unsupported);
-static int transmit_response_with_allow(struct sip_dialog *p, const char *msg, const struct sip_request *req, enum xmittype reliable);
 static void transmit_fake_auth_response(struct sip_dialog *p, struct sip_request *req, int reliable);
 static int transmit_request(struct sip_dialog *p, int sipmethod, int inc, enum xmittype reliable, int newbranch);
 static int transmit_info_with_digit(struct sip_dialog *p, const char digit);
@@ -417,7 +413,6 @@ static int sip_sipredirect(struct sip_dialog *p, const char *dest);
 static void try_suggested_sip_codec(struct sip_dialog *p);
 
 /*--- Authentication stuff */
-static int clear_realm_authentication(struct sip_auth *authlist);	/* Clear realm authentication list (at reload) */
 static enum check_auth_result check_user_full(struct sip_dialog *p, struct sip_request *req,
 					      int sipmethod, char *uri, enum xmittype reliable,
 					      struct sockaddr_in *sin, struct sip_peer **authpeer);
@@ -484,8 +479,6 @@ static void realtime_update_peer(const char *peername, struct sockaddr_in *sin, 
 static void update_peer(struct sip_peer *p, int expiry);
 
 /*--- Parsing SIP requests and responses */
-static void append_date(struct sip_request *req);	/* Append date to SIP packet */
-static int determine_firstline_parts(struct sip_request *req);
 static void extract_uri(struct sip_dialog *p, struct sip_request *req);
 static int get_refer_info(struct sip_dialog *transferer, struct sip_request *outgoing_req);
 static int get_also_info(struct sip_dialog *p, struct sip_request *oreq);
@@ -503,12 +496,9 @@ static void initreqprep(struct sip_request *req, struct sip_dialog *p, int sipme
 static int init_resp(struct sip_request *resp, const char *msg);
 static int respprep(struct sip_request *resp, struct sip_dialog *p, const char *msg, const struct sip_request *req);
 static int create_addr_from_peer(struct sip_dialog *r, struct sip_peer *peer);
-static int add_text(struct sip_request *req, const char *text);
-static int add_digit(struct sip_request *req, char digit);
 static int add_vidupdate(struct sip_request *req);
 static void add_route(struct sip_request *req, struct sip_route *route);
 static void set_destination(struct sip_dialog *p, char *uri);
-static void append_date(struct sip_request *req);
 static void build_rpid(struct sip_dialog *p);
 
 /*------Request handling functions */
@@ -537,7 +527,7 @@ static void stop_media_flows(struct sip_dialog *p);
 
 /*------ T38 Support --------- */
 static int sip_handle_t38_reinvite(struct ast_channel *chan, struct sip_dialog *pvt, int reinvite); /*!< T38 negotiation helper function */
-static int transmit_response_with_t38_sdp(struct sip_dialog *p, char *msg, struct sip_request *req, int retrans);
+static int transmit_response_with_t38_sdp(struct sip_dialog *p, char *msg, struct sip_request *req, enum xmittype reliable);
 
 /*! \brief Definition of this channel for PBX channel registration */
 static const struct ast_channel_tech sip_tech = {
@@ -1579,9 +1569,9 @@ static int sip_answer(struct ast_channel *ast)
 			p->t38.state = T38_ENABLED;
 			if (option_debug > 1)
 				ast_log(LOG_DEBUG,"T38State change to %d on channel %s\n", p->t38.state, ast->name);
-			res = transmit_response_with_t38_sdp(p, "200 OK", &p->initreq, XMIT_CRITICAL);
+			res = transmit_response_with_attachment(WITH_T38_SDP, p, "200 OK", &p->initreq, XMIT_CRITICAL);
 		} else 
-			res = transmit_response_with_sdp(p, "200 OK", &p->initreq, XMIT_CRITICAL);
+			res = transmit_response_with_attachment(WITH_SDP, p, "200 OK", &p->initreq, XMIT_CRITICAL);
 	}
 	ast_mutex_unlock(&p->lock);
 	return res;
@@ -1614,7 +1604,7 @@ static int sip_write(struct ast_channel *ast, struct ast_frame *frame)
 				if ((ast->_state != AST_STATE_UP) &&
 				    !ast_test_flag(&p->flags[0], SIP_PROGRESS_SENT) &&
 				    !ast_test_flag(&p->flags[0], SIP_OUTGOING)) {
-					transmit_response_with_sdp(p, "183 Session Progress", &p->initreq, XMIT_UNRELIABLE);
+					transmit_response_with_attachment(WITH_SDP, p, "183 Session Progress", &p->initreq, XMIT_UNRELIABLE);
 					ast_set_flag(&p->flags[0], SIP_PROGRESS_SENT);	
 				}
 				p->lastrtptx = time(NULL);
@@ -1631,7 +1621,7 @@ static int sip_write(struct ast_channel *ast, struct ast_frame *frame)
 				if ((ast->_state != AST_STATE_UP) &&
 				    !ast_test_flag(&p->flags[0], SIP_PROGRESS_SENT) &&
 				    !ast_test_flag(&p->flags[0], SIP_OUTGOING)) {
-					transmit_response_with_sdp(p, "183 Session Progress", &p->initreq, XMIT_UNRELIABLE);
+					transmit_response_with_attachment(WITH_SDP, p, "183 Session Progress", &p->initreq, XMIT_UNRELIABLE);
 					ast_set_flag(&p->flags[0], SIP_PROGRESS_SENT);	
 				}
 				p->lastrtptx = time(NULL);
@@ -1650,7 +1640,7 @@ static int sip_write(struct ast_channel *ast, struct ast_frame *frame)
 				if ((ast->_state != AST_STATE_UP) &&
 					!ast_test_flag(&p->flags[0], SIP_PROGRESS_SENT) && 
 				    !ast_test_flag(&p->flags[0], SIP_OUTGOING)) {
-					transmit_response_with_t38_sdp(p, "183 Session Progress", &p->initreq, XMIT_RELIABLE);
+					transmit_response_with_attachment(WITH_T38_SDP, p, "183 Session Progress", &p->initreq, XMIT_UNRELIABLE);
 					ast_set_flag(&p->flags[0], SIP_PROGRESS_SENT);
 				}
 				res = ast_udptl_write(p->udptl, frame);
@@ -1827,7 +1817,7 @@ static int sip_indicate(struct ast_channel *ast, int condition, const void *data
 		if ((ast->_state != AST_STATE_UP) &&
 		    !ast_test_flag(&p->flags[0], SIP_PROGRESS_SENT) &&
 		    !ast_test_flag(&p->flags[0], SIP_OUTGOING)) {
-			transmit_response_with_sdp(p, "183 Session Progress", &p->initreq, XMIT_UNRELIABLE);
+			transmit_response_with_attachment(WITH_SDP, p, "183 Session Progress", &p->initreq, XMIT_UNRELIABLE);
 			ast_set_flag(&p->flags[0], SIP_PROGRESS_SENT);	
 			break;
 		}
@@ -2425,6 +2415,56 @@ GNURK int transmit_response(struct sip_dialog *p, const char *msg, const struct 
 	return __transmit_response(p, msg, req, XMIT_UNRELIABLE);
 }
 
+
+/*! \brief Transmit response, Make sure you get an ACK
+	This is only used for responses to INVITEs, where we need to make sure we get an ACK
+*/
+static int transmit_response_reliable(struct sip_dialog *p, const char *msg, const struct sip_request *req)
+{
+	return __transmit_response(p, msg, req, XMIT_CRITICAL);
+}
+
+/* Forward declaration */
+static int add_t38_sdp(struct sip_request *resp, struct sip_dialog *p);
+
+/*! \brief Transmit responses with various attachments */
+static int transmit_response_with_attachment(enum responseattach attach, struct sip_dialog *p, const char *msg, 
+		const struct sip_request *req, enum xmittype reliable)
+{
+	struct sip_request resp;
+	respprep(&resp, p, msg, req);
+	append_date(&resp);
+	switch (attach) {
+	case WITH_DATE:
+		add_header_contentLength(&resp, 0);
+		break;
+	case WITH_ALLOW:
+		add_header(&resp, "Accept", "application/sdp");
+		add_header_contentLength(&resp, 0);
+		break;
+	case WITH_SDP:
+		if (p->rtp) {
+			if (!p->autoframing && !ast_test_flag(&p->flags[0], SIP_OUTGOING)) {
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Setting framing from config on incoming call\n");
+				ast_rtp_codec_setpref(p->rtp, &p->prefs);
+			}
+			try_suggested_sip_codec(p);	
+			add_sdp(&resp, p);
+		} else 
+			ast_log(LOG_ERROR, "Can't add SDP to response, since we have no RTP session allocated. Call-ID %s\n", p->callid);
+		break;
+	case WITH_T38_SDP:
+		if (p->udptl) {
+			ast_udptl_offered_from_local(p->udptl, 0);
+			add_t38_sdp(&resp, p);
+		} else 
+			ast_log(LOG_ERROR, "Can't add T38 SDP to response, since we have no UDPTL session allocated. Call-ID %s\n", p->callid);
+		break;
+	}
+	return send_response(p, &resp, reliable, 0);
+}
+
 /*! \brief Transmit response, no retransmits */
 static int transmit_response_with_unsupported(struct sip_dialog *p, const char *msg, const struct sip_request *req, const char *unsupported) 
 {
@@ -2435,44 +2475,10 @@ static int transmit_response_with_unsupported(struct sip_dialog *p, const char *
 	return send_response(p, &resp, XMIT_UNRELIABLE, 0);
 }
 
-/*! \brief Transmit response, Make sure you get an ACK
-	This is only used for responses to INVITEs, where we need to make sure we get an ACK
-*/
-static int transmit_response_reliable(struct sip_dialog *p, const char *msg, const struct sip_request *req)
+/*! \brief Used for 200 OK and 183 early media */
+static int transmit_response_with_t38_sdp(struct sip_dialog *p, char *msg, struct sip_request *req, enum xmittype reliable)
 {
-	return __transmit_response(p, msg, req, XMIT_CRITICAL);
-}
-
-/*! \brief Append date to SIP message */
-static void append_date(struct sip_request *req)
-{
-	char tmpdat[256];
-	struct tm tm;
-	time_t t = time(NULL);
-
-	gmtime_r(&t, &tm);
-	strftime(tmpdat, sizeof(tmpdat), "%a, %d %b %Y %T GMT", &tm);
-	add_header(req, "Date", tmpdat);
-}
-
-/*! \brief Append date and content length before transmitting response */
-static int transmit_response_with_date(struct sip_dialog *p, const char *msg, const struct sip_request *req)
-{
-	struct sip_request resp;
-	respprep(&resp, p, msg, req);
-	append_date(&resp);
-	add_header_contentLength(&resp, 0);
-	return send_response(p, &resp, XMIT_UNRELIABLE, 0);
-}
-
-/*! \brief Append Accept header, content length before transmitting response */
-static int transmit_response_with_allow(struct sip_dialog *p, const char *msg, const struct sip_request *req, enum xmittype reliable)
-{
-	struct sip_request resp;
-	respprep(&resp, p, msg, req);
-	add_header(&resp, "Accept", "application/sdp");
-	add_header_contentLength(&resp, 0);
-	return send_response(p, &resp, reliable, 0);
+	return transmit_response_with_attachment(WITH_T38_SDP, p, msg, req, reliable);
 }
 
 /*! \brief Respond with authorization request */
@@ -2493,29 +2499,6 @@ GNURK int transmit_response_with_auth(struct sip_dialog *p, const char *msg, con
 	add_header(&resp, header, tmp);
 	add_header_contentLength(&resp, 0);
 	return send_response(p, &resp, reliable, seqno);
-}
-
-/*! \brief Add text body to SIP message */
-static int add_text(struct sip_request *req, const char *text)
-{
-	/* XXX Convert \n's to \r\n's XXX */
-	add_header(req, "Content-Type", "text/plain");
-	add_header_contentLength(req, strlen(text));
-	add_line(req, text);
-	return 0;
-}
-
-/*! \brief Add DTMF INFO tone to sip message */
-/* Always adds default duration 250 ms, regardless of what came in over the line */
-static int add_digit(struct sip_request *req, char digit)
-{
-	char tmp[256];
-
-	snprintf(tmp, sizeof(tmp), "Signal=%c\r\nDuration=250\r\n", digit);
-	add_header(req, "Content-Type", "application/dtmf-relay");
-	add_header_contentLength(req, strlen(tmp));
-	add_line(req, tmp);
-	return 0;
 }
 
 /*! \brief add XML encoded media control with update 
@@ -2671,33 +2654,12 @@ static int add_t38_sdp(struct sip_request *resp, struct sip_dialog *p)
 	return 0;
 }
 
-
-/*! \brief Used for 200 OK and 183 early media */
-static int transmit_response_with_t38_sdp(struct sip_dialog *p, char *msg, struct sip_request *req, int retrans)
-{
-	struct sip_request resp;
-	int seqno;
-	
-	if (sscanf(get_header(req, "CSeq"), "%d ", &seqno) != 1) {
-		ast_log(LOG_WARNING, "Unable to get seqno from '%s'\n", get_header(req, "CSeq"));
-		return -1;
-	}
-	respprep(&resp, p, msg, req);
-	if (p->udptl) {
-		ast_udptl_offered_from_local(p->udptl, 0);
-		add_t38_sdp(&resp, p);
-	} else 
-		ast_log(LOG_ERROR, "Can't add SDP to response, since we have no UDPTL session allocated. Call-ID %s\n", p->callid);
-	if (retrans && !p->pendinginvite)
-		p->pendinginvite = seqno;		/* Buggy clients sends ACK on RINGING too */
-	return send_response(p, &resp, retrans, seqno);
-}
-
 /*! \brief copy SIP request (mostly used to save request for responses) */
 static void copy_request(struct sip_request *dst, const struct sip_request *src)
 {
 	long offset;
 	int x;
+
 	offset = ((void *)dst) - ((void *)src);
 	/* First copy stuff */
 	memcpy(dst, src, sizeof(*dst));
@@ -2708,79 +2670,15 @@ static void copy_request(struct sip_request *dst, const struct sip_request *src)
 		dst->line[x] += offset;
 }
 
-/*! \brief Used for 200 OK and 183 early media */
-static int transmit_response_with_sdp(struct sip_dialog *p, const char *msg, const struct sip_request *req, enum xmittype reliable)
-{
-	struct sip_request resp;
-	int seqno;
-	if (sscanf(get_header(req, "CSeq"), "%d ", &seqno) != 1) {
-		ast_log(LOG_WARNING, "Unable to get seqno from '%s'\n", get_header(req, "CSeq"));
-		return -1;
-	}
-	respprep(&resp, p, msg, req);
-	if (p->rtp) {
-		if (!p->autoframing && !ast_test_flag(&p->flags[0], SIP_OUTGOING)) {
-			if (option_debug)
-				ast_log(LOG_DEBUG, "Setting framing from config on incoming call\n");
-			ast_rtp_codec_setpref(p->rtp, &p->prefs);
-		}
-		try_suggested_sip_codec(p);	
-		add_sdp(&resp, p);
-	} else 
-		ast_log(LOG_ERROR, "Can't add SDP to response, since we have no RTP session allocated. Call-ID %s\n", p->callid);
-	if (reliable && !p->pendinginvite)
-		p->pendinginvite = seqno;		/* Buggy clients sends ACK on RINGING too */
-	return send_response(p, &resp, reliable, seqno);
-}
-
-/*! \brief Parse first line of incoming SIP request */
-static int determine_firstline_parts(struct sip_request *req) 
-{
-	char *e = ast_skip_blanks(req->header[0]);	/* there shouldn't be any */
-
-	if (!*e)
-		return -1;
-	req->rlPart1 = e;	/* method or protocol */
-	e = ast_skip_nonblanks(e);
-	if (*e)
-		*e++ = '\0';
-	/* Get URI or status code */
-	e = ast_skip_blanks(e);
-	if ( !*e )
-		return -1;
-	ast_trim_blanks(e);
-
-	if (!strcasecmp(req->rlPart1, "SIP/2.0") ) { /* We have a response */
-		if (strlen(e) < 3)	/* status code is 3 digits */
-			return -1;
-		req->rlPart2 = e;
-	} else { /* We have a request */
-		if ( *e == '<' ) { /* XXX the spec says it must not be in <> ! */
-			ast_log(LOG_WARNING, "bogus uri in <> %s\n", e);
-			e++;
-			if (!*e)
-				return -1; 
-		}
-		req->rlPart2 = e;	/* URI */
-		e = ast_skip_nonblanks(e);
-		if (*e)
-			*e++ = '\0';
-		e = ast_skip_blanks(e);
-		if (strcasecmp(e, "SIP/2.0") ) {
-			ast_log(LOG_WARNING, "Bad request protocol %s\n", e);
-			return -1;
-		}
-	}
-	return 1;
-}
 
 /*! \brief Transmit reinvite with SDP
 \note 	A re-invite is basically a new INVITE with the same CALL-ID and TAG as the
 	INVITE that opened the SIP dialogue 
 	We reinvite so that the audio stream (RTP) go directly between
 	the SIP UAs. SIP Signalling stays with * in the path.
+	IF type == 1, we send T.38 SDP 
 */
-GNURK int transmit_reinvite_with_sdp(struct sip_dialog *p)
+GNURK int transmit_reinvite_with_sdp(struct sip_dialog *p, int t38type)
 {
 	struct sip_request req;
 
@@ -2792,29 +2690,10 @@ GNURK int transmit_reinvite_with_sdp(struct sip_dialog *p)
 		add_header(&req, "X-asterisk-Info", "SIP re-invite (External RTP bridge)");
 	if (!ast_test_flag(&p->flags[0], SIP_NO_HISTORY))
 		append_history(p, "ReInv", "Re-invite sent");
-	add_sdp(&req, p);
-	/* Use this as the basis */
-	initialize_initreq(p, &req);
-	p->lastinvite = p->ocseq;
-	return send_request(p, &req, XMIT_CRITICAL, p->ocseq);
-}
-
-/*! \brief Transmit reinvite with T38 SDP 
-       We reinvite so that the T38 processing can take place.
-       SIP Signalling stays with * in the path.
-*/
-GNURK int transmit_reinvite_with_t38_sdp(struct sip_dialog *p)
-{
-	struct sip_request req;
-
-	reqprep(&req, p, ast_test_flag(&p->flags[0], SIP_REINVITE_UPDATE) ?  SIP_UPDATE : SIP_INVITE, 0, 1);
-	
-	add_header(&req, "Allow", ALLOWED_METHODS);
-	add_header(&req, "Supported", SUPPORTED_EXTENSIONS);
-	if (sipdebug)
-		add_header(&req, "X-asterisk-info", "SIP re-invite (T38 switchover)");
-	ast_udptl_offered_from_local(p->udptl, 1);
-	add_t38_sdp(&req, p);
+	if (t38type)
+		add_t38_sdp(&req, p);
+	else
+		add_sdp(&req, p);
 	/* Use this as the basis */
 	initialize_initreq(p, &req);
 	p->lastinvite = p->ocseq;
@@ -4149,19 +4028,19 @@ static enum check_auth_result register_verify(struct sip_dialog *p, struct socka
 				switch (parse_register_contact(p, peer, req)) {
 				case PARSE_REGISTER_FAILED:
 					ast_log(LOG_WARNING, "Failed to parse contact info\n");
-					transmit_response_with_date(p, "400 Bad Request", req);
+					transmit_response_with_attachment(WITH_DATE, p, "400 Bad Request", req, XMIT_UNRELIABLE);
 					peer->lastmsgssent = -1;
 					res = 0;
 					break;
 				case PARSE_REGISTER_QUERY:
-					transmit_response_with_date(p, "200 OK", req);
+					transmit_response_with_attachment(WITH_DATE, p, "200 OK", req, XMIT_UNRELIABLE);
 					peer->lastmsgssent = -1;
 					res = 0;
 					break;
 				case PARSE_REGISTER_UPDATE:
 					update_peer(peer, p->expiry);
 					/* Say OK and ask subsystem to retransmit msg counter */
-					transmit_response_with_date(p, "200 OK", req);
+					transmit_response_with_attachment(WITH_DATE, p, "200 OK", req, XMIT_UNRELIABLE);
 					if (!ast_test_flag((&peer->flags[1]), SIP_PAGE2_SUBSCRIBEMWIONLY))
 						peer->lastmsgssent = -1;
 					res = 0;
@@ -4179,18 +4058,18 @@ static enum check_auth_result register_verify(struct sip_dialog *p, struct socka
 			switch (parse_register_contact(p, peer, req)) {
 			case PARSE_REGISTER_FAILED:
 				ast_log(LOG_WARNING, "Failed to parse contact info\n");
-				transmit_response_with_date(p, "400 Bad Request", req);
+				transmit_response_with_attachment(WITH_DATE, p, "400 Bad Request", req, XMIT_UNRELIABLE);
 				peer->lastmsgssent = -1;
 				res = 0;
 				break;
 			case PARSE_REGISTER_QUERY:
-				transmit_response_with_date(p, "200 OK", req);
+				transmit_response_with_attachment(WITH_DATE, p, "200 OK", req, XMIT_UNRELIABLE);
 				peer->lastmsgssent = -1;
 				res = 0;
 				break;
 			case PARSE_REGISTER_UPDATE:
 				/* Say OK and ask subsystem to retransmit msg counter */
-				transmit_response_with_date(p, "200 OK", req);
+				transmit_response_with_attachment(WITH_DATE, p, "200 OK", req, XMIT_UNRELIABLE);
 				manager_event(EVENT_FLAG_SYSTEM, "PeerStatus", "Peer: SIP/%s\r\nPeerStatus: Registered\r\n", peer->name);
 				peer->lastmsgssent = -1;
 				res = 0;
@@ -5623,7 +5502,7 @@ static void check_pendings(struct sip_dialog *p)
 		if (option_debug)
 			ast_log(LOG_DEBUG, "Sending pending reinvite on '%s'\n", p->callid);
 		/* Didn't get to reinvite yet, so do it now */
-		transmit_reinvite_with_sdp(p);
+		transmit_reinvite_with_sdp(p, FALSE);
 		ast_clear_flag(&p->flags[0], SIP_NEEDREINVITE);	
 	}
 }
@@ -6724,9 +6603,9 @@ static int handle_request_options(struct sip_dialog *p, struct sip_request *req)
 	if (ast_strlen_zero(p->context))
 		ast_string_field_set(p, context, global.default_context);
 	if (res < 0)
-		transmit_response_with_allow(p, "404 Not Found", req, 0);
+		transmit_response_with_attachment(WITH_ALLOW, p, "404 Not Found", req, XMIT_UNRELIABLE);
 	else 
-		transmit_response_with_allow(p, "200 OK", req, 0);
+		transmit_response_with_attachment(WITH_ALLOW, p, "200 OK", req, XMIT_UNRELIABLE);
 	/* Destroy if this OPTIONS was the opening request, but not if
 	   it's in the middle of a normal call flow. */
 	if (!p->lastinvite)
@@ -6774,7 +6653,7 @@ static int handle_invite_replaces(struct sip_dialog *p, struct sip_request *req,
 		/* We should answer something here. If we are here, the
 			call we are replacing exists, so an accepted 
 			can't harm */
-		transmit_response_with_sdp(p, "200 OK", req, 1);
+		transmit_response_with_attachment(WITH_SDP, p, "200 OK", req, XMIT_RELIABLE);
 		/* Do something more clever here */
 		ast_channel_unlock(c);
 		ast_mutex_unlock(&p->refer->refer_call->lock);
@@ -6783,7 +6662,7 @@ static int handle_invite_replaces(struct sip_dialog *p, struct sip_request *req,
 	if (!c) {
 		/* What to do if no channel ??? */
 		ast_log(LOG_ERROR, "Unable to create new channel.  Invite/replace failed.\n");
-		transmit_response_with_sdp(p, "503 Service Unavailable", req, 1);
+		transmit_response_reliable(p, "503 Service Unavailable", req);
 		append_history(p, "Xfer", "INVITE/Replace Failed. No new channel.");
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 		ast_mutex_unlock(&p->refer->refer_call->lock);
@@ -6808,7 +6687,7 @@ static int handle_invite_replaces(struct sip_dialog *p, struct sip_request *req,
 	   Targetcall is not touched by the masq */
 
 	/* Answer the incoming call and set channel to UP state */
-	transmit_response_with_sdp(p, "200 OK", req, 1);
+	transmit_response_with_attachment(WITH_SDP, p, "200 OK", req, XMIT_RELIABLE);
 	ast_setstate(c, AST_STATE_UP);
 	
 	/* Stop music on hold and other generators */
@@ -7357,7 +7236,7 @@ static int handle_request_invite(struct sip_dialog *p, struct sip_request *req, 
 					}
 				} 
 				if (sendok)
-					transmit_response_with_sdp(p, "200 OK", req, XMIT_CRITICAL);
+					transmit_response_with_attachment(WITH_SDP, p, "200 OK", req, XMIT_CRITICAL);
 
 			}
 			break;
@@ -8442,7 +8321,7 @@ GNURK int handle_request(struct sip_dialog *p, struct sip_request *req, struct s
 			ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
 		break;
 	default:
-		transmit_response_with_allow(p, "501 Method Not Implemented", req, 0);
+		transmit_response_with_attachment(WITH_ALLOW, p, "501 Method Not Implemented", req, XMIT_UNRELIABLE);
 		ast_log(LOG_NOTICE, "Unknown SIP command '%s' from '%s'\n", 
 			cmd, ast_inet_ntoa(p->sa.sin_addr));
 		/* If this is some new method, and we don't have a call, destroy it now */
@@ -8945,94 +8824,6 @@ static struct ast_channel *sip_request_call(const char *type, int format, void *
 	return tmpc;
 }
 
-/*! \brief Add realm authentication in list */
-struct sip_auth *add_realm_authentication(struct sip_auth *authlist, char *configuration, int lineno)
-{
-	char authcopy[256];
-	char *username=NULL, *realm=NULL, *secret=NULL, *md5secret=NULL;
-	char *stringp;
-	struct sip_auth *a, *b, *auth;
-
-	if (ast_strlen_zero(configuration))
-		return authlist;
-
-	if (option_debug)
-		ast_log(LOG_DEBUG, "Auth config ::  %s\n", configuration);
-
-	ast_copy_string(authcopy, configuration, sizeof(authcopy));
-	stringp = authcopy;
-
-	username = stringp;
-	realm = strrchr(stringp, '@');
-	if (realm)
-		*realm++ = '\0';
-	if (ast_strlen_zero(username) || ast_strlen_zero(realm)) {
-		ast_log(LOG_WARNING, "Format for authentication entry is user[:secret]@realm at line %d\n", lineno);
-		return authlist;
-	}
-	stringp = username;
-	username = strsep(&stringp, ":");
-	if (username) {
-		secret = strsep(&stringp, ":");
-		if (!secret) {
-			stringp = username;
-			md5secret = strsep(&stringp,"#");
-		}
-	}
-	if (!(auth = ast_calloc(1, sizeof(*auth))))
-		return authlist;
-
-	ast_copy_string(auth->realm, realm, sizeof(auth->realm));
-	ast_copy_string(auth->username, username, sizeof(auth->username));
-	if (secret)
-		ast_copy_string(auth->secret, secret, sizeof(auth->secret));
-	if (md5secret)
-		ast_copy_string(auth->md5secret, md5secret, sizeof(auth->md5secret));
-
-	/* find the end of the list */
-	for (b = NULL, a = authlist; a ; b = a, a = a->next)
-		;
-	if (b)
-		b->next = auth;	/* Add structure add end of list */
-	else
-		authlist = auth;
-
-	if (option_verbose > 2)
-		ast_verbose("Added authentication for realm %s\n", realm);
-
-	return authlist;
-
-}
-
-/*! \brief Clear realm authentication list (at reload) */
-static int clear_realm_authentication(struct sip_auth *authlist)
-{
-	struct sip_auth *a = authlist;
-	struct sip_auth *b;
-
-	while (a) {
-		b = a;
-		a = a->next;
-		free(b);
-	}
-
-	return 1;
-}
-
-/*! \brief Find authentication for a specific realm */
-GNURK struct sip_auth *find_realm_authentication(struct sip_auth *authlist, const char *realm)
-{
-	struct sip_auth *a;
-
-	for (a = authlist; a; a = a->next) {
-		if (!strcasecmp(a->realm, realm))
-			break;
-	}
-
-	return a;
-}
-
-
 /*! \brief Create temporary peer (used in autocreatepeer mode) */
 static struct sip_peer *temp_peer(const char *name)
 {
@@ -9087,7 +8878,7 @@ static int sip_handle_t38_reinvite(struct ast_channel *chan, struct sip_dialog *
 					else
 						ast_log(LOG_DEBUG, "Sending reinvite on SIP '%s' - It's UDPTL soon redirected to us (IP %s)\n", p->callid, ast_inet_ntoa(p->ourip));
 				}
-				transmit_reinvite_with_t38_sdp(p);
+				transmit_reinvite_with_sdp(p, TRUE);
 			} else if (!ast_test_flag(&p->flags[0], SIP_PENDINGBYE)) {
 				if (option_debug > 2) {
 					if (flag)

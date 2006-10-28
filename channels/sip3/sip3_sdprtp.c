@@ -796,7 +796,7 @@ int sip_set_rtp_peer(struct ast_channel *chan, struct ast_rtp *rtp, struct ast_r
 			if (option_debug > 2) {
 				ast_log(LOG_DEBUG, "Sending reinvite on SIP '%s' - It's audio soon redirected to IP %s\n", p->callid, ast_inet_ntoa(rtp ? p->redirip.sin_addr : p->ourip));
 			}
-			transmit_reinvite_with_sdp(p);
+			transmit_reinvite_with_sdp(p, FALSE);
 		} else if (!ast_test_flag(&p->flags[0], SIP_PENDINGBYE)) {
 			if (option_debug > 2) {
 				ast_log(LOG_DEBUG, "Deferring reinvite on SIP '%s' - It's audio will be redirected to IP %s\n", p->callid, ast_inet_ntoa(rtp ? p->redirip.sin_addr : p->ourip));
@@ -1336,7 +1336,7 @@ GNURK struct ast_frame *sip_read(struct ast_channel *ast)
 				if (option_debug > 2)
 					ast_log(LOG_DEBUG, "Sending reinvite on SIP (%s) for T.38 negotiation.\n",ast->name);
 				p->t38.state = T38_LOCAL_REINVITE;
-				transmit_reinvite_with_t38_sdp(p);
+				transmit_reinvite_with_sdp(p, TRUE);
 				if (option_debug > 1)
 					ast_log(LOG_DEBUG, "T38 state changed to %d on channel %s\n", p->t38.state, ast->name);
 			}
@@ -1386,7 +1386,7 @@ static int sip_set_udptl_peer(struct ast_channel *chan, struct ast_udptl *udptl)
 			if (option_debug > 2) {
 				ast_log(LOG_DEBUG, "Sending reinvite on SIP '%s' - It's UDPTL soon redirected to IP %s:%d\n", p->callid, ast_inet_ntoa(udptl ? p->udptlredirip.sin_addr : p->ourip), udptl ? ntohs(p->udptlredirip.sin_port) : 0);
 			}
-			transmit_reinvite_with_t38_sdp(p);
+			transmit_reinvite_with_sdp(p, TRUE);
 		} else if (!ast_test_flag(&p->flags[0], SIP_PENDINGBYE)) {
 			if (option_debug > 2) {
 				ast_log(LOG_DEBUG, "Deferring reinvite on SIP '%s' - It's UDPTL will be redirected to IP %s:%d\n", p->callid, ast_inet_ntoa(udptl ? p->udptlredirip.sin_addr : p->ourip), udptl ? ntohs(p->udptlredirip.sin_port) : 0);

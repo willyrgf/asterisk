@@ -47,8 +47,7 @@
 GNURK void append_history_full(struct sip_dialog *p, const char *fmt, ...);
 GNURK void append_history_va(struct sip_dialog *p, const char *fmt, va_list ap);
 GNURK void sip_peer_hold(struct sip_dialog *p, int hold);
-GNURK struct sip_auth *add_realm_authentication(struct sip_auth *authlist, char *configuration, int lineno);	/* Add realm authentication in list */
-GNURK int transmit_reinvite_with_sdp(struct sip_dialog *p);
+GNURK int transmit_reinvite_with_sdp(struct sip_dialog *p, int t38version);
 GNURK void add_blank(struct sip_request *req);
 GNURK int handle_request(struct sip_dialog *p, struct sip_request *req, struct sockaddr_in *sin, int *recount, int *nounlock);
 GNURK int add_header(struct sip_request *req, const char *var, const char *value);
@@ -57,7 +56,6 @@ GNURK void sip_destroy_device(struct sip_peer *peer);
 GNURK void destroy_association(struct sip_peer *peer);
 GNURK void reg_source_db(struct sip_peer *peer);
 GNURK int expire_register(void *data);
-GNURK struct sip_auth *find_realm_authentication(struct sip_auth *authlist, const char *realm);
 GNURK int add_line(struct sip_request *req, const char *line);
 GNURK int sip_do_relaod(enum channelreloadreason reason);
 GNURK inline int sip_debug_test_addr(const struct sockaddr_in *addr);
@@ -70,7 +68,6 @@ GNURK struct sip_peer *find_device(const char *peer, struct sockaddr_in *sin, in
 GNURK int sip_reload(int fd);
 GNURK int transmit_response_with_auth(struct sip_dialog *p, const char *msg, const struct sip_request *req, const char *rand, enum xmittype reliable, const char *header, int stale);
 GNURK int transmit_invite(struct sip_dialog *p, int sipmethod, int sdp, int init);
-GNURK int transmit_reinvite_with_t38_sdp(struct sip_dialog *p);
 GNURK int transmit_state_notify(struct sip_dialog *p, int state, int full);
 GNURK int transmit_request_with_auth(struct sip_dialog *p, int sipmethod, int seqno, enum xmittype reliable, int newbranch);
 GNURK void sip_destroy(struct sip_dialog *p);
@@ -124,8 +121,14 @@ GNURK int copy_via_headers(struct sip_dialog *p, struct sip_request *req, const 
 GNURK const char *__get_header(const struct sip_request *req, const char *name, int *start);
 GNURK char *get_in_brackets(char *tmp);
 GNURK char *generate_random_string(char *buf, size_t size);
-GNURK void build_callid_pvt(struct sip_dialog *pvt);
 GNURK const char *gettag(const struct sip_request *req, const char *header, char *tagbuf, int tagbufsize);
+GNURK int determine_firstline_parts(struct sip_request *req);
+
+/*! sip3_compose.c : Composing new SIP messages */
+GNURK void build_callid_pvt(struct sip_dialog *pvt);
+GNURK void append_date(struct sip_request *req);
+GNURK int add_text(struct sip_request *req, const char *text);
+GNURK int add_digit(struct sip_request *req, char digit);
 
 /*! sip3_domain.c: Domain handling functions (sip domain hosting, not DNS lookups) */
 GNURK int add_sip_domain(const char *domain, const enum domain_mode mode, const char *context);
@@ -146,6 +149,9 @@ GNURK int do_register_auth(struct sip_dialog *p, struct sip_request *req, enum s
 GNURK int do_proxy_auth(struct sip_dialog *p, struct sip_request *req, enum sip_auth_type code, int sipmethod, int init);
 GNURK int reply_digest(struct sip_dialog *p, struct sip_request *req, char *header, int sipmethod,  char *digest, int digest_len);
 GNURK int build_reply_digest(struct sip_dialog *p, int method, char* digest, int digest_len);
+GNURK int clear_realm_authentication(struct sip_auth *authlist);	/* Clear realm authentication list (at reload) */
+GNURK struct sip_auth *find_realm_authentication(struct sip_auth *authlist, const char *realm);
+GNURK struct sip_auth *add_realm_authentication(struct sip_auth *authlist, char *configuration, int lineno);
 
 /* sip3_sdprtp.c */
 GNURK void register_rtp_and_udptl(void);
@@ -175,8 +181,8 @@ GNURK void replace_cid(struct sip_dialog *p, const char *rpid_num, const char *c
 GNURK const char *sip_nat_mode(const struct sip_dialog *p);
 GNURK void  print_group(int fd, ast_group_t group, int crlf);
 GNURK int peer_status(struct sip_peer *peer, char *status, int statuslen);
-GNURK int manager_sip_show_peers( struct mansession *s, struct message *m );
-GNURK int manager_sip_show_peer( struct mansession *s, struct message *m);
+GNURK int manager_sip_show_peers(struct mansession *s, struct message *m );
+GNURK int manager_sip_show_peer(struct mansession *s, struct message *m);
 GNURK void sip_cli_and_manager_commands_register(void);
 GNURK void sip_cli_and_manager_commands_unregister(void);
 //static char *complete_sipch(const char *line, const char *word, int pos, int state);
