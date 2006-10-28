@@ -118,3 +118,65 @@ void dialoglist_unlock(void)
 {
 	ast_mutex_unlock(&dialoglock);
 }
+
+
+/*! \brief Kill a SIP dialog (called by scheduler) */
+static int __sip_autodestruct(void *data)
+{
+	struct sip_dialog *p = data;
+
+	/* If this is a subscription, tell the phone that we got a timeout */
+	if (p->subscribed) {
+		p->subscribed = TIMEOUT;
+		transmit_state_notify(p, AST_EXTENSION_DEACTIVATED, 1);	/* Send last notification */
+		p->subscribed = NONE;
+		append_history(p, "Subscribestatus", "timeout");
+		if (option_debug > 2)
+			ast_log(LOG_DEBUG, "Re-scheduled destruction of SIP subsription %s\n", p->callid ? p->callid : "<unknown>");
+		return 10000;	/* Reschedule this destruction so that we know that it's gone */
+	}
+
+	/* Reset schedule ID */
+	p->autokillid = -1;
+
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Auto destroying SIP dialog '%s'\n", p->callid);
+	append_history(p, "AutoDestroy", "%s", p->callid);
+	if (p->owner) {
+		ast_log(LOG_WARNING, "Autodestruct on dialog '%s' with owner in place (Method: %s)\n", p->callid, sip_method2txt(p->method));
+		ast_queue_hangup(p->owner);
+	} else if (p->refer)
+		transmit_request_with_auth(p, SIP_BYE, 0, XMIT_RELIABLE, 1);
+	else 
+		sip_destroy(p);
+	return 0;
+}
+
+/*! \brief Schedule destruction of SIP dialog */
+GNURK void sip_scheddestroy(struct sip_dialog *p, int ms)
+{
+	if (ms < 0) {
+		if (p->timer_t1 == 0)
+			p->timer_t1 = 500;	/* Set timer T1 if not set (RFC 3261) */
+		ms = p->timer_t1 * 64;
+	}
+	if (sip_debug_test_pvt(p))
+		ast_verbose("Scheduling destruction of SIP dialog '%s' in %d ms (Method: %s)\n", p->callid, ms, sip_method2txt(p->method));
+	if (!ast_test_flag(&p->flags[0], SIP_NO_HISTORY))
+		append_history(p, "SchedDestroy", "%d ms", ms);
+
+	if (p->autokillid > -1)
+		ast_sched_del(sched, p->autokillid);
+	p->autokillid = ast_sched_add(sched, ms, __sip_autodestruct, p);
+}
+
+/*! \brief Cancel destruction of SIP dialog */
+GNURK void sip_cancel_destroy(struct sip_dialog *p)
+{
+	if (p->autokillid > -1) {
+		ast_sched_del(sched, p->autokillid);
+		append_history(p, "CancelDestroy", "");
+		p->autokillid = -1;
+	}
+}
+

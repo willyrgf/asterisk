@@ -1318,7 +1318,7 @@ static struct ast_frame *sip_rtp_read(struct ast_channel *ast, struct sip_dialog
 }
 
 /*! \brief Read SIP RTP from channel */
-static struct ast_frame *sip_read(struct ast_channel *ast)
+GNURK struct ast_frame *sip_read(struct ast_channel *ast)
 {
 	struct ast_frame *fr;
 	struct sip_dialog *p = ast->tech_pvt;

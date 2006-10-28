@@ -44,7 +44,6 @@
 /*! Chan_sip3.c */
 /* XXX Should we really expose functions in chan_sip3.c ? */
 /* These needs to be resorted and moved around */
-GNURK inline int sip_debug_test_pvt(struct sip_dialog *p) ;
 GNURK void append_history_full(struct sip_dialog *p, const char *fmt, ...);
 GNURK void append_history_va(struct sip_dialog *p, const char *fmt, va_list ap);
 GNURK void sip_peer_hold(struct sip_dialog *p, int hold);
@@ -55,7 +54,6 @@ GNURK struct sip_dialog *find_call(struct sip_request *req, struct sockaddr_in *
 GNURK void add_blank(struct sip_request *req);
 GNURK int lws2sws(char *msgbuf, int len);
 GNURK int handle_request(struct sip_dialog *p, struct sip_request *req, struct sockaddr_in *sin, int *recount, int *nounlock);
-GNURK const char *get_header(const struct sip_request *req, const char *name);
 GNURK int add_header(struct sip_request *req, const char *var, const char *value);
 GNURK int add_header_contentLength(struct sip_request *req, int len);
 GNURK void sip_destroy_device(struct sip_peer *peer);
@@ -68,7 +66,6 @@ GNURK int sip_do_relaod(enum channelreloadreason reason);
 GNURK inline int sip_debug_test_addr(const struct sockaddr_in *addr);
 GNURK void parse_request(struct sip_request *req);
 GNURK int transmit_response(struct sip_dialog *p, const char *msg, const struct sip_request *req);
-GNURK const struct sockaddr_in *sip_real_dst(const struct sip_dialog *p);
 GNURK void parse_copy(struct sip_request *dst, const struct sip_request *src);
 GNURK int sip_prune_realtime(int fd, int argc, char *argv[]);	/* XXX Needs to move to sip3_cliami.c */
 GNURK int sip_notify(int fd, int argc, char *argv[]); /* XXX Move where ?? */
@@ -79,7 +76,9 @@ GNURK int transmit_response_with_auth(struct sip_dialog *p, const char *msg, con
 GNURK int transmit_register(struct sip_registry *r, int sipmethod, const char *auth, const char *authheader);
 GNURK int transmit_invite(struct sip_dialog *p, int sipmethod, int sdp, int init);
 GNURK int transmit_reinvite_with_t38_sdp(struct sip_dialog *p);
-GNURK void sip_scheddestroy(struct sip_dialog *p, int ms);
+GNURK int transmit_state_notify(struct sip_dialog *p, int state, int full);
+GNURK int transmit_request_with_auth(struct sip_dialog *p, int sipmethod, int seqno, enum xmittype reliable, int newbranch);
+GNURK void sip_destroy(struct sip_dialog *p);
 
 /*! sip3_refer.c */
 GNURK const char *referstatus2str(enum referstatus rstatus) attribute_pure;
@@ -100,6 +99,9 @@ GNURK int sipsocket_initialized(void);		/* Check if we have network socket open 
    they involve the transaction states  and need to handle various transports (UDP, TCP) */
 GNURK int send_response(struct sip_dialog *p, struct sip_request *req, enum xmittype reliable, int seqno);
 GNURK int send_request(struct sip_dialog *p, struct sip_request *req, enum xmittype reliable, int seqno);
+GNURK const struct sockaddr_in *sip_real_dst(const struct sip_dialog *p);
+GNURK inline int sip_debug_test_pvt(struct sip_dialog *p) ;
+GNURK int sip_ouraddrfor(struct in_addr *them, struct in_addr *us);
 
 /*! sip3_parse.c */
 GNURK char *sip_method2txt(int method);
@@ -110,6 +112,12 @@ GNURK int sip_option_lookup(const char *optionlabel);
 GNURK unsigned int parse_sip_options(struct sip_dialog *pvt, const char *supported);
 GNURK char *sip_option2text(int option);
 GNURK void sip_options_print(int options, int fd);
+GNURK const char *find_alias(const char *name, const char *_default);
+GNURK const char *get_header(const struct sip_request *req, const char *name);
+GNURK int copy_header(struct sip_request *req, const struct sip_request *orig, const char *field);
+GNURK int copy_all_header(struct sip_request *req, const struct sip_request *orig, const char *field);
+GNURK int copy_via_headers(struct sip_dialog *p, struct sip_request *req, const struct sip_request *orig, const char *field);
+GNURK const char *__get_header(const struct sip_request *req, const char *name, int *start);
 
 /*! sip3_domain.c: Domain handling functions (sip domain hosting, not DNS lookups) */
 GNURK int add_sip_domain(const char *domain, const enum domain_mode mode, const char *context);
@@ -142,6 +150,7 @@ GNURK enum ast_rtp_get_result sip_get_vrtp_peer(struct ast_channel *chan, struct
 GNURK char *get_body(struct sip_request *req, char *name);
 GNURK int find_sdp(struct sip_request *req);
 GNURK int add_sdp(struct sip_request *resp, struct sip_dialog *p);
+GNURK struct ast_frame *sip_read(struct ast_channel *ast);
 
 /* sip3_config.c */
 GNURK void set_device_defaults(struct sip_peer *device);
@@ -176,5 +185,7 @@ GNURK char *complete_sip_user(const char *word, int state, int flags2);
 /* sip3_dialog.h */
 GNURK void dialoglist_lock(void);
 GNURK void dialoglist_unlock(void);
+GNURK void sip_scheddestroy(struct sip_dialog *p, int ms);
+GNURK void sip_cancel_destroy(struct sip_dialog *p);
 
 #endif

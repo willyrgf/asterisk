@@ -378,7 +378,6 @@ static int sip_sendtext(struct ast_channel *ast, const char *text);
 static int sip_call(struct ast_channel *ast, char *dest, int timeout);
 static int sip_hangup(struct ast_channel *ast);
 static int sip_answer(struct ast_channel *ast);
-static struct ast_frame *sip_read(struct ast_channel *ast);
 static int sip_write(struct ast_channel *ast, struct ast_frame *frame);
 static int sip_indicate(struct ast_channel *ast, int condition, const void *data, size_t datalen);
 static int sip_transfer(struct ast_channel *ast, const char *dest);
@@ -397,14 +396,12 @@ static int transmit_response_with_unsupported(struct sip_dialog *p, const char *
 static int transmit_response_with_allow(struct sip_dialog *p, const char *msg, const struct sip_request *req, enum xmittype reliable);
 static void transmit_fake_auth_response(struct sip_dialog *p, struct sip_request *req, int reliable);
 static int transmit_request(struct sip_dialog *p, int sipmethod, int inc, enum xmittype reliable, int newbranch);
-static int transmit_request_with_auth(struct sip_dialog *p, int sipmethod, int seqno, enum xmittype reliable, int newbranch);
 static int transmit_info_with_digit(struct sip_dialog *p, const char digit);
 static int transmit_info_with_vidupdate(struct sip_dialog *p);
 static int transmit_message_with_text(struct sip_dialog *p, const char *text);
 static int transmit_refer(struct sip_dialog *p, const char *dest);
 static int transmit_notify_with_mwi(struct sip_dialog *p, int newmsgs, int oldmsgs, char *vmexten);
 static int transmit_notify_with_sipfrag(struct sip_dialog *p, int cseq, char *message, int terminate);
-static int transmit_state_notify(struct sip_dialog *p, int state, int full);
 static void copy_request(struct sip_request *dst, const struct sip_request *src);
 static void receive_message(struct sip_dialog *p, struct sip_request *req);
 static void parse_moved_contact(struct sip_dialog *p, struct sip_request *req);
@@ -414,9 +411,7 @@ static int does_peer_need_mwi(struct sip_peer *peer);
 /*--- Dialog management */
 static struct sip_dialog *sip_alloc(ast_string_field callid, struct sockaddr_in *sin,
 				 int useglobal_nat, const int intended_method);
-static int __sip_autodestruct(void *data);
-static void sip_cancel_destroy(struct sip_dialog *p);
-static void sip_destroy(struct sip_dialog *p);
+GNURK void sip_destroy(struct sip_dialog *p);
 static void __sip_destroy(struct sip_dialog *p, int lockowner);
 static void __sip_ack(struct sip_dialog *p, int seqno, int resp, int sipmethod, int reset);
 static void __sip_pretend_ack(struct sip_dialog *p);
@@ -452,7 +447,6 @@ static int sip_sipredirect(struct sip_dialog *p, const char *dest);
 static void *do_monitor(void *data);
 static int restart_monitor(void);
 static int sip_send_mwi_to_peer(struct sip_peer *peer);
-static void sip_destroy(struct sip_dialog *p);
 static int sip_addrcmp(char *name, struct sockaddr_in *sin);	/* Support for peer matching */
 static int sip_refer_allocate(struct sip_dialog *p);
 static void ast_quiet_chan(struct ast_channel *chan);
@@ -509,7 +503,6 @@ static void realtime_update_peer(const char *peername, struct sockaddr_in *sin, 
 static void update_peer(struct sip_peer *p, int expiry);
 
 /*--- Internal UA client handling (outbound registrations) */
-static int ast_sip_ouraddrfor(struct in_addr *them, struct in_addr *us);
 static void sip_registry_destroy(struct sip_registry *reg);
 static int sip_reregister(void *data);
 static int __sip_do_register(struct sip_registry *r);
@@ -521,8 +514,6 @@ static void append_date(struct sip_request *req);	/* Append date to SIP packet *
 static int determine_firstline_parts(struct sip_request *req);
 static const char *gettag(const struct sip_request *req, const char *header, char *tagbuf, int tagbufsize);
 static char *get_in_brackets(char *tmp);
-static const char *find_alias(const char *name, const char *_default);
-static const char *__get_header(const struct sip_request *req, const char *name, int *start);
 static void extract_uri(struct sip_dialog *p, struct sip_request *req);
 static int get_refer_info(struct sip_dialog *transferer, struct sip_request *outgoing_req);
 static int get_also_info(struct sip_dialog *p, struct sip_request *oreq);
@@ -553,9 +544,6 @@ static int add_text(struct sip_request *req, const char *text);
 static int add_digit(struct sip_request *req, char digit);
 static int add_vidupdate(struct sip_request *req);
 static void add_route(struct sip_request *req, struct sip_route *route);
-static int copy_header(struct sip_request *req, const struct sip_request *orig, const char *field);
-static int copy_all_header(struct sip_request *req, const struct sip_request *orig, const char *field);
-static int copy_via_headers(struct sip_dialog *p, struct sip_request *req, const struct sip_request *orig, const char *field);
 static void set_destination(struct sip_dialog *p, char *uri);
 static void append_date(struct sip_request *req);
 static void build_contact(struct sip_dialog *p);
@@ -584,15 +572,11 @@ static int handle_response_register(struct sip_dialog *p, int resp, char *rest, 
 static void handle_response(struct sip_dialog *p, int resp, char *rest, struct sip_request *req, int seqno);
 
 /*----- RTP interface functions */
-static struct ast_frame *sip_rtp_read(struct ast_channel *ast, struct sip_dialog *p, int *faxdetect);
 static void stop_media_flows(struct sip_dialog *p);
 
 /*------ T38 Support --------- */
 static int sip_handle_t38_reinvite(struct ast_channel *chan, struct sip_dialog *pvt, int reinvite); /*!< T38 negotiation helper function */
 static int transmit_response_with_t38_sdp(struct sip_dialog *p, char *msg, struct sip_request *req, int retrans);
-static struct ast_udptl *sip_get_udptl_peer(struct ast_channel *chan);
-static int sip_set_udptl_peer(struct ast_channel *chan, struct ast_udptl *udptl);
-
 
 /*! \brief Definition of this channel for PBX channel registration */
 static const struct ast_channel_tech sip_tech = {
@@ -633,26 +617,6 @@ static void initialize_initreq(struct sip_dialog *p, struct sip_request *req)
 		ast_verbose("%d headers, %d lines\n", p->initreq.headers, p->initreq.lines);
 }
 
-/*! \brief See if we pass debug IP filter */
-GNURK inline int sip_debug_test_addr(const struct sockaddr_in *addr) 
-{
-	if (!sipdebug)
-		return 0;
-	if (sipnet.debugaddr.sin_addr.s_addr) {
-		if (((ntohs(sipnet.debugaddr.sin_port) != 0)
-			&& (sipnet.debugaddr.sin_port != addr->sin_port))
-			|| (sipnet.debugaddr.sin_addr.s_addr != addr->sin_addr.s_addr))
-			return 0;
-	}
-	return 1;
-}
-
-/*! \brief The real destination address for a write */
-GNURK const struct sockaddr_in *sip_real_dst(const struct sip_dialog *p)
-{
-	return ast_test_flag(&p->flags[0], SIP_NAT) & SIP_NAT_ROUTE ? &p->recv : &p->sa;
-}
-
 /*! \brief Test PVT for debugging output */
 inline int sip_debug_test_pvt(struct sip_dialog *p) 
 {
@@ -670,44 +634,6 @@ static void build_via(struct sip_dialog *p)
 	/* z9hG4bK is a magic cookie.  See RFC 3261 section 8.1.1.7 */
 	ast_string_field_build(p, via, "SIP/2.0/UDP %s:%d;branch=z9hG4bK%08x%s",
 			 ast_inet_ntoa(p->ourip), sipnet_ourport(), p->branch, rport);
-}
-
-/*! \brief NAT fix - decide which IP address to use for ASterisk server?
- *
- * Using the localaddr structure built up with localnet statements in sip.conf
- * apply it to their address to see if we need to substitute our
- * externip or can get away with our internal bindaddr
- */
-static enum sip_result ast_sip_ouraddrfor(struct in_addr *them, struct in_addr *us)
-{
-	struct sockaddr_in theirs, ours;
-
-	/* Get our local information */
-	ast_ouraddrfor(them, us);
-	theirs.sin_addr = *them;
-	ours.sin_addr = *us;
-
-	if (sipnet.localaddr && sipnet.externip.sin_addr.s_addr &&
-	    ast_apply_ha(sipnet.localaddr, &theirs) &&
-	    !ast_apply_ha(sipnet.localaddr, &ours)) {
-		if (sipnet.externexpire && time(NULL) >= sipnet.externexpire) {
-			struct ast_hostent ahp;
-			struct hostent *hp;
-
-			sipnet.externexpire = time(NULL) + sipnet.externrefresh;
-			if ((hp = ast_gethostbyname(sipnet.externhost, &ahp))) {
-				memcpy(&sipnet.externip.sin_addr, hp->h_addr, sizeof(sipnet.externip.sin_addr));
-			} else
-				ast_log(LOG_NOTICE, "Warning: Re-lookup of '%s' failed!\n", sipnet.externhost);
-		}
-		*us = sipnet.externip.sin_addr;
-		if (option_debug) {
-			ast_log(LOG_DEBUG, "Target address %s is not local, substituting externip\n", 
-				ast_inet_ntoa(*(struct in_addr *)&them->s_addr));
-		}
-	} else if (sipnet.bindaddr.sin_addr.s_addr)
-		*us = sipnet.bindaddr.sin_addr;
-	return AST_SUCCESS;
 }
 
 GNURK void append_history_full(struct sip_dialog *p, const char *fmt, ...)
@@ -745,66 +671,6 @@ GNURK void append_history_full(struct sip_dialog *p, const char *fmt, ...)
 	va_end(ap);
 
 	return;
-}
-
-/*! \brief Kill a SIP dialog (called by scheduler) */
-static int __sip_autodestruct(void *data)
-{
-	struct sip_dialog *p = data;
-
-	/* If this is a subscription, tell the phone that we got a timeout */
-	if (p->subscribed) {
-		p->subscribed = TIMEOUT;
-		transmit_state_notify(p, AST_EXTENSION_DEACTIVATED, 1);	/* Send last notification */
-		p->subscribed = NONE;
-		append_history(p, "Subscribestatus", "timeout");
-		if (option_debug > 2)
-			ast_log(LOG_DEBUG, "Re-scheduled destruction of SIP subsription %s\n", p->callid ? p->callid : "<unknown>");
-		return 10000;	/* Reschedule this destruction so that we know that it's gone */
-	}
-
-	/* Reset schedule ID */
-	p->autokillid = -1;
-
-	if (option_debug)
-		ast_log(LOG_DEBUG, "Auto destroying SIP dialog '%s'\n", p->callid);
-	append_history(p, "AutoDestroy", "%s", p->callid);
-	if (p->owner) {
-		ast_log(LOG_WARNING, "Autodestruct on dialog '%s' with owner in place (Method: %s)\n", p->callid, sip_method2txt(p->method));
-		ast_queue_hangup(p->owner);
-	} else if (p->refer)
-		transmit_request_with_auth(p, SIP_BYE, 0, XMIT_RELIABLE, 1);
-	else 
-		sip_destroy(p);
-	return 0;
-}
-
-/*! \brief Schedule destruction of SIP dialog */
-GNURK void sip_scheddestroy(struct sip_dialog *p, int ms)
-{
-	if (ms < 0) {
-		if (p->timer_t1 == 0)
-			p->timer_t1 = 500;	/* Set timer T1 if not set (RFC 3261) */
-		ms = p->timer_t1 * 64;
-	}
-	if (sip_debug_test_pvt(p))
-		ast_verbose("Scheduling destruction of SIP dialog '%s' in %d ms (Method: %s)\n", p->callid, ms, sip_method2txt(p->method));
-	if (!ast_test_flag(&p->flags[0], SIP_NO_HISTORY))
-		append_history(p, "SchedDestroy", "%d ms", ms);
-
-	if (p->autokillid > -1)
-		ast_sched_del(sched, p->autokillid);
-	p->autokillid = ast_sched_add(sched, ms, __sip_autodestruct, p);
-}
-
-/*! \brief Cancel destruction of SIP dialog */
-static void sip_cancel_destroy(struct sip_dialog *p)
-{
-	if (p->autokillid > -1) {
-		ast_sched_del(sched, p->autokillid);
-		append_history(p, "CancelDestroy", "");
-		p->autokillid = -1;
-	}
 }
 
 /*! \brief Acknowledges receipt of a packet and stops retransmission */
@@ -1645,7 +1511,7 @@ static int update_call_counter(struct sip_dialog *fup, int event)
 }
 
 /*! \brief Destroy SIP call structure */
-static void sip_destroy(struct sip_dialog *p)
+GNURK void sip_destroy(struct sip_dialog *p)
 {
 	dialoglist_lock();
 	if (option_debug > 2)
@@ -2124,6 +1990,8 @@ static int sip_fixup(struct ast_channel *oldchan, struct ast_channel *newchan)
 	return ret;
 }
 
+/*! \brief Start sending DTMF character on SIP channel
+	within one call, we're able to transmit in many methods simultaneously */
 static int sip_senddigit_begin(struct ast_channel *ast, char digit)
 {
 	struct sip_dialog *p = ast->tech_pvt;
@@ -2434,81 +2302,6 @@ static struct ast_channel *sip_new(struct sip_dialog *dialog, int state, const c
 	return tmp;
 }
 
-/*! \brief Find compressed SIP alias */
-static const char *find_alias(const char *name, const char *_default)
-{
-	/*! \brief Structure for conversion between compressed SIP and "normal" SIP */
-	static const struct cfalias {
-		char * const fullname;
-		char * const shortname;
-	} aliases[] = {
-		{ "Content-Type",	 "c" },
-		{ "Content-Encoding",	 "e" },
-		{ "From",		 "f" },
-		{ "Call-ID",		 "i" },
-		{ "Contact",		 "m" },
-		{ "Content-Length",	 "l" },
-		{ "Subject",		 "s" },
-		{ "To",			 "t" },
-		{ "Supported",		 "k" },
-		{ "Refer-To",		 "r" },
-		{ "Referred-By",	 "b" },
-		{ "Allow-Events",	 "u" },
-		{ "Event",		 "o" },
-		{ "Via",		 "v" },
-		{ "Accept-Contact",      "a" },
-		{ "Reject-Contact",      "j" },
-		{ "Request-Disposition", "d" },
-		{ "Session-Expires",     "x" },
-	};
-	int x;
-
-	for (x=0; x<sizeof(aliases) / sizeof(aliases[0]); x++) 
-		if (!strcasecmp(aliases[x].fullname, name))
-			return aliases[x].shortname;
-
-	return _default;
-}
-
-static const char *__get_header(const struct sip_request *req, const char *name, int *start)
-{
-	int pass;
-
-	/*
-	 * Technically you can place arbitrary whitespace both before and after the ':' in
-	 * a header, although RFC3261 clearly says you shouldn't before, and place just
-	 * one afterwards.  If you shouldn't do it, what absolute idiot decided it was 
-	 * a good idea to say you can do it, and if you can do it, why in the hell would.
-	 * you say you shouldn't.
-	 */
-	for (pass = 0; name && pass < 2;pass++) {
-		int x, len = strlen(name);
-		for (x=*start; x<req->headers; x++) {
-			if (!strncasecmp(req->header[x], name, len)) {
-				char *r = req->header[x] + len;	/* skip name */
-				r = ast_skip_blanks(r);
-
-				if (*r == ':') {
-					*start = x+1;
-					return ast_skip_blanks(r+1);
-				}
-			}
-		}
-		if (pass == 0) /* Try aliases */
-			name = find_alias(name, NULL);
-	}
-
-	/* Don't return NULL, so get_header is always a valid pointer */
-	return "";
-}
-
-/*! \brief Get header from SIP request */
-GNURK const char *get_header(const struct sip_request *req, const char *name)
-{
-	int start = 0;
-	return __get_header(req, name, &start);
-}
-
 /*! \brief Generate 32 byte random string for callid's etc */
 static char *generate_random_string(char *buf, size_t size)
 {
@@ -2580,7 +2373,7 @@ static struct sip_dialog *sip_alloc(ast_string_field callid, struct sockaddr_in 
 
 	if (sin) {
 		p->sa = *sin;
-		if (ast_sip_ouraddrfor(&p->sa.sin_addr, &p->ourip))
+		if (sip_ouraddrfor(&p->sa.sin_addr, &p->ourip))
 			p->ourip = sipnet.__ourip;
 	} else
 		p->ourip = sipnet.__ourip;
@@ -3000,106 +2793,6 @@ GNURK int add_line(struct sip_request *req, const char *line)
 	return 0;	
 }
 
-/*! \brief Copy one header field from one request to another */
-static int copy_header(struct sip_request *req, const struct sip_request *orig, const char *field)
-{
-	const char *tmp = get_header(orig, field);
-
-	if (!ast_strlen_zero(tmp)) /* Add what we're responding to */
-		return add_header(req, field, tmp);
-	ast_log(LOG_NOTICE, "No field '%s' present to copy\n", field);
-	return -1;
-}
-
-/*! \brief Copy all headers from one request to another */
-static int copy_all_header(struct sip_request *req, const struct sip_request *orig, const char *field)
-{
-	int start = 0;
-	int copied = 0;
-	int res;
-
-	for (;;) {
-		const char *tmp = __get_header(orig, field, &start);
-
-		if (ast_strlen_zero(tmp))
-			break;
-		/* Add what we're responding to */
-		res = add_header(req, field, tmp);
-		if (res != -1)
-			copied++;
-		else
-			return -1;
-		
-	}
-	return copied ? 0 : -1;
-}
-
-/*! \brief Copy SIP VIA Headers from the request to the response
-\note	If the client indicates that it wishes to know the port we received from,
-	it adds ;rport without an argument to the topmost via header. We need to
-	add the port number (from our point of view) to that parameter.
-	We always add ;received=<ip address> to the topmost via header.
-	Received: RFC 3261, rport RFC 3581 */
-static int copy_via_headers(struct sip_dialog *p, struct sip_request *req, const struct sip_request *orig, const char *field)
-{
-	int copied = 0;
-	int start = 0;
-
-	for (;;) {
-		char new[256];
-		const char *oh = __get_header(orig, field, &start);
-
-		if (ast_strlen_zero(oh))
-			break;
-
-		if (!copied) {	/* Only check for empty rport in topmost via header */
-			char *rport;
-
-			/* Find ;rport;  (empty request) */
-			rport = strstr(oh, ";rport");
-			if (rport && *(rport+6) == '=') 
-				rport = NULL;		/* We already have a parameter to rport */
-
-			if (rport && ast_test_flag(&p->flags[0], SIP_NAT) == SIP_NAT_ALWAYS) {
-				/* We need to add received port - rport */
-				char tmp[256], *end;
-
-				ast_copy_string(tmp, oh, sizeof(tmp));
-
-				rport = strstr(tmp, ";rport");
-
-				if (rport) {
-					end = strchr(rport + 1, ';');
-					if (end)
-						memmove(rport, end, strlen(end) + 1);
-					else
-						*rport = '\0';
-				}
-
-				/* Add rport to first VIA header if requested */
-				/* Whoo hoo!  Now we can indicate port address translation too!  Just
-				   another RFC (RFC3581). I'll leave the original comments in for
-				   posterity.  */
-				snprintf(new, sizeof(new), "%s;received=%s;rport=%d",
-					tmp, ast_inet_ntoa(p->recv.sin_addr),
-					ntohs(p->recv.sin_port));
-			} else {
-				/* We should *always* add a received to the topmost via */
-				snprintf(new, sizeof(new), "%s;received=%s",
-					oh, ast_inet_ntoa(p->recv.sin_addr));
-			}
-			oh = new;	/* the header to copy */
-		}  /* else add the following via headers untouched */
-		add_header(req, field, oh);
-		copied++;
-	}
-	if (!copied) {
-		ast_log(LOG_NOTICE, "No header field '%s' present to copy\n", field);
-		return -1;
-	}
-	return 0;
-}
-
 /*! \brief Add route header into request per learned route */
 static void add_route(struct sip_request *req, struct sip_route *route)
 {
@@ -3431,7 +3124,7 @@ static int transmit_response_using_temp(ast_string_field callid, struct sockaddr
 
 	if (sin) {
 		p->sa = *sin;
-		if (ast_sip_ouraddrfor(&p->sa.sin_addr, &p->ourip))
+		if (sip_ouraddrfor(&p->sa.sin_addr, &p->ourip))
 			p->ourip = sipnet.__ourip;
 	} else
 		p->ourip = sipnet.__ourip;
@@ -4190,7 +3883,7 @@ GNURK int transmit_invite(struct sip_dialog *p, int sipmethod, int sdp, int init
 }
 
 /*! \brief Used in the SUBSCRIBE notification subsystem */
-static int transmit_state_notify(struct sip_dialog *p, int state, int full)
+GNURK int transmit_state_notify(struct sip_dialog *p, int state, int full)
 {
 	char tmp[4000], from[256], to[256];
 	char *t = tmp, *c, *mfrom, *mto;
@@ -4607,7 +4300,7 @@ GNURK int transmit_register(struct sip_registry *r, int sipmethod, const char *a
 		  based on whether the remote host is on the external or
 		  internal network so we can register through nat
 		 */
-		if (ast_sip_ouraddrfor(&p->sa.sin_addr, &p->ourip))
+		if (sip_ouraddrfor(&p->sa.sin_addr, &p->ourip))
 			p->ourip = sipnet.bindaddr.sin_addr;
 		build_contact(p);
 	}
@@ -4822,7 +4515,7 @@ static int transmit_request(struct sip_dialog *p, int sipmethod, int seqno, enum
 }
 
 /*! \brief Transmit SIP request, auth added */
-static int transmit_request_with_auth(struct sip_dialog *p, int sipmethod, int seqno, enum xmittype reliable, int newbranch)
+GNURK int transmit_request_with_auth(struct sip_dialog *p, int sipmethod, int seqno, enum xmittype reliable, int newbranch)
 {
 	struct sip_request resp;
 
@@ -6646,7 +6339,7 @@ GNURK int sip_notify(int fd, int argc, char *argv[])
 			add_header(&req, var->name, var->value);
 
 		/* Recalculate our side, and recalculate Call ID */
-		if (ast_sip_ouraddrfor(&p->sa.sin_addr, &p->ourip))
+		if (sip_ouraddrfor(&p->sa.sin_addr, &p->ourip))
 			p->ourip = sipnet.__ourip;
 		build_via(p);
 		build_callid_pvt(p);
@@ -9966,7 +9659,7 @@ static int sip_send_mwi_to_peer(struct sip_peer *peer)
 			return 0;
 		}
 		/* Recalculate our side, and recalculate Call ID */
-		if (ast_sip_ouraddrfor(&p->sa.sin_addr, &p->ourip))
+		if (sip_ouraddrfor(&p->sa.sin_addr, &p->ourip))
 			p->ourip = sipnet.__ourip;
 		build_via(p);
 		build_callid_pvt(p);
@@ -10245,7 +9938,7 @@ static int sip_poke_peer(struct sip_peer *peer)
 		ast_string_field_set(p, tohost, ast_inet_ntoa(peer->addr.sin_addr));
 
 	/* Recalculate our side, and recalculate Call ID */
-	if (ast_sip_ouraddrfor(&p->sa.sin_addr, &p->ourip))
+	if (sip_ouraddrfor(&p->sa.sin_addr, &p->ourip))
 		p->ourip = sipnet.__ourip;
 	build_via(p);
 	build_callid_pvt(p);
@@ -10398,7 +10091,7 @@ static struct ast_channel *sip_request_call(const char *type, int format, void *
 	if (ast_strlen_zero(p->peername) && ext)
 		ast_string_field_set(p, peername, ext);
 	/* Recalculate our side, and recalculate Call ID */
-	if (ast_sip_ouraddrfor(&p->sa.sin_addr, &p->ourip))
+	if (sip_ouraddrfor(&p->sa.sin_addr, &p->ourip))
 		p->ourip = sipnet.__ourip;
 	build_via(p);
 	build_callid_pvt(p);

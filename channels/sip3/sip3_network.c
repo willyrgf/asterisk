@@ -470,3 +470,61 @@ int send_request(struct sip_dialog *p, struct sip_request *req, enum xmittype re
 		__sip_xmit(p, req->data, req->len);
 	return res;
 }
+
+/*! \brief The real destination address for a write */
+const struct sockaddr_in *sip_real_dst(const struct sip_dialog *p)
+{
+	return ast_test_flag(&p->flags[0], SIP_NAT) & SIP_NAT_ROUTE ? &p->recv : &p->sa;
+}
+
+/*! \brief See if we pass debug IP filter */
+inline int sip_debug_test_addr(const struct sockaddr_in *addr) 
+{
+	if (!sipdebug)
+		return 0;
+	if (sipnet.debugaddr.sin_addr.s_addr) {
+		if (((ntohs(sipnet.debugaddr.sin_port) != 0)
+			&& (sipnet.debugaddr.sin_port != addr->sin_port))
+			|| (sipnet.debugaddr.sin_addr.s_addr != addr->sin_addr.s_addr))
+			return 0;
+	}
+	return 1;
+}
+
+/*! \brief NAT fix - decide which IP address to use for ASterisk server?
+ *
+ * Using the localaddr structure built up with localnet statements in sip.conf
+ * apply it to their address to see if we need to substitute our
+ * externip or can get away with our internal bindaddr
+ */
+enum sip_result sip_ouraddrfor(struct in_addr *them, struct in_addr *us)
+{
+	struct sockaddr_in theirs, ours;
+
+	/* Get our local information */
+	ast_ouraddrfor(them, us);
+	theirs.sin_addr = *them;
+	ours.sin_addr = *us;
+
+	if (sipnet.localaddr && sipnet.externip.sin_addr.s_addr &&
+	    ast_apply_ha(sipnet.localaddr, &theirs) &&
+	    !ast_apply_ha(sipnet.localaddr, &ours)) {
+		if (sipnet.externexpire && time(NULL) >= sipnet.externexpire) {
+			struct ast_hostent ahp;
+			struct hostent *hp;
+
+			sipnet.externexpire = time(NULL) + sipnet.externrefresh;
+			if ((hp = ast_gethostbyname(sipnet.externhost, &ahp))) {
+				memcpy(&sipnet.externip.sin_addr, hp->h_addr, sizeof(sipnet.externip.sin_addr));
+			} else
+				ast_log(LOG_NOTICE, "Warning: Re-lookup of '%s' failed!\n", sipnet.externhost);
+		}
+		*us = sipnet.externip.sin_addr;
+		if (option_debug) {
+			ast_log(LOG_DEBUG, "Target address %s is not local, substituting externip\n", 
+				ast_inet_ntoa(*(struct in_addr *)&them->s_addr));
+		}
+	} else if (sipnet.bindaddr.sin_addr.s_addr)
+		*us = sipnet.bindaddr.sin_addr;
+	return AST_SUCCESS;
+}

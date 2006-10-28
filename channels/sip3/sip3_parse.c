@@ -266,4 +266,178 @@ static void sip_options_print(int options, int fd)
 }
 
 
+/*! \brief Find compressed SIP alias */
+const char *find_alias(const char *name, const char *_default)
+{
+	/*! \brief Structure for conversion between compressed SIP and "normal" SIP */
+	static const struct cfalias {
+		char * const fullname;
+		char * const shortname;
+	} aliases[] = {
+		{ "Content-Type",	 "c" },
+		{ "Content-Encoding",	 "e" },
+		{ "From",		 "f" },
+		{ "Call-ID",		 "i" },
+		{ "Contact",		 "m" },
+		{ "Content-Length",	 "l" },
+		{ "Subject",		 "s" },
+		{ "To",			 "t" },
+		{ "Supported",		 "k" },
+		{ "Refer-To",		 "r" },
+		{ "Referred-By",	 "b" },
+		{ "Allow-Events",	 "u" },
+		{ "Event",		 "o" },
+		{ "Via",		 "v" },
+		{ "Accept-Contact",      "a" },
+		{ "Reject-Contact",      "j" },
+		{ "Request-Disposition", "d" },
+		{ "Session-Expires",     "x" },
+	};
+	int x;
+
+	for (x=0; x<sizeof(aliases) / sizeof(aliases[0]); x++) 
+		if (!strcasecmp(aliases[x].fullname, name))
+			return aliases[x].shortname;
+
+	return _default;
+}
+
+static const char *__get_header(const struct sip_request *req, const char *name, int *start)
+{
+	int pass;
+
+	/*
+	 * Technically you can place arbitrary whitespace both before and after the ':' in
+	 * a header, although RFC3261 clearly says you shouldn't before, and place just
+	 * one afterwards.  If you shouldn't do it, what absolute idiot decided it was 
+	 * a good idea to say you can do it, and if you can do it, why in the hell would.
+	 * you say you shouldn't.
+	 */
+	for (pass = 0; name && pass < 2;pass++) {
+		int x, len = strlen(name);
+		for (x=*start; x<req->headers; x++) {
+			if (!strncasecmp(req->header[x], name, len)) {
+				char *r = req->header[x] + len;	/* skip name */
+				r = ast_skip_blanks(r);
+
+				if (*r == ':') {
+					*start = x+1;
+					return ast_skip_blanks(r+1);
+				}
+			}
+		}
+		if (pass == 0) /* Try aliases */
+			name = find_alias(name, NULL);
+	}
+
+	/* Don't return NULL, so get_header is always a valid pointer */
+	return "";
+}
+
+/*! \brief Get header from SIP request */
+const char *get_header(const struct sip_request *req, const char *name)
+{
+	int start = 0;
+	return __get_header(req, name, &start);
+}
+
+/*! \brief Copy one header field from one request to another */
+int copy_header(struct sip_request *req, const struct sip_request *orig, const char *field)
+{
+	const char *tmp = get_header(orig, field);
+
+	if (!ast_strlen_zero(tmp)) /* Add what we're responding to */
+		return add_header(req, field, tmp);
+	ast_log(LOG_NOTICE, "No field '%s' present to copy\n", field);
+	return -1;
+}
+
+/*! \brief Copy all headers from one request to another */
+int copy_all_header(struct sip_request *req, const struct sip_request *orig, const char *field)
+{
+	int start = 0;
+	int copied = 0;
+	int res;
+
+	for (;;) {
+		const char *tmp = __get_header(orig, field, &start);
+
+		if (ast_strlen_zero(tmp))
+			break;
+		/* Add what we're responding to */
+		res = add_header(req, field, tmp);
+		if (res != -1)
+			copied++;
+		else
+			return -1;
+		
+	}
+	return copied ? 0 : -1;
+}
+
+/*! \brief Copy SIP VIA Headers from the request to the response
+\note	If the client indicates that it wishes to know the port we received from,
+	it adds ;rport without an argument to the topmost via header. We need to
+	add the port number (from our point of view) to that parameter.
+	We always add ;received=<ip address> to the topmost via header.
+	Received: RFC 3261, rport RFC 3581 */
+int copy_via_headers(struct sip_dialog *p, struct sip_request *req, const struct sip_request *orig, const char *field)
+{
+	int copied = 0;
+	int start = 0;
+
+	for (;;) {
+		char new[256];
+		const char *oh = __get_header(orig, field, &start);
+
+		if (ast_strlen_zero(oh))
+			break;
+
+		if (!copied) {	/* Only check for empty rport in topmost via header */
+			char *rport;
+
+			/* Find ;rport;  (empty request) */
+			rport = strstr(oh, ";rport");
+			if (rport && *(rport+6) == '=') 
+				rport = NULL;		/* We already have a parameter to rport */
+
+			if (rport && ast_test_flag(&p->flags[0], SIP_NAT) == SIP_NAT_ALWAYS) {
+				/* We need to add received port - rport */
+				char tmp[256], *end;
+
+				ast_copy_string(tmp, oh, sizeof(tmp));
+
+				rport = strstr(tmp, ";rport");
+
+				if (rport) {
+					end = strchr(rport + 1, ';');
+					if (end)
+						memmove(rport, end, strlen(end) + 1);
+					else
+						*rport = '\0';
+				}
+
+				/* Add rport to first VIA header if requested */
+				/* Whoo hoo!  Now we can indicate port address translation too!  Just
+				   another RFC (RFC3581). I'll leave the original comments in for
+				   posterity.  */
+				snprintf(new, sizeof(new), "%s;received=%s;rport=%d",
+					tmp, ast_inet_ntoa(p->recv.sin_addr),
+					ntohs(p->recv.sin_port));
+			} else {
+				/* We should *always* add a received to the topmost via */
+				snprintf(new, sizeof(new), "%s;received=%s",
+					oh, ast_inet_ntoa(p->recv.sin_addr));
+			}
+			oh = new;	/* the header to copy */
+		}  /* else add the following via headers untouched */
+		add_header(req, field, oh);
+		copied++;
+	}
+	if (!copied) {
+		ast_log(LOG_NOTICE, "No header field '%s' present to copy\n", field);
+		return -1;
+	}
+	return 0;
+}
 

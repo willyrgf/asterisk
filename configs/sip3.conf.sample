@@ -205,8 +205,8 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ;    unless you configure a [sip_proxy] section below, and configure a
 ;    context.
 ;    Tip 1: Avoid assigning hostname to a sip.conf section like [provider.com]
-;    Tip 2: Use separate type=peer and type=user sections for SIP providers
-;           (instead of type=friend) if you have calls in both directions
+;    Tip 2: Use separate type=peer  sections for SIP providers
+;           if you have calls in both directions, one for each direction
   
 ;registertimeout=20		; retry registration calls every 20 seconds (default)
 ;registerattempts=10		; Number of registration attempts before we give up
@@ -386,67 +386,65 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ; Peer auth= override all other authentication settings if we match on realm
 
 ;------------------------------------------------------------------------------
-; Users and peers have different settings available. Friends have all settings,
-; since a friend is both a peer and a user
-;
-; User config options:        Peer configuration:
-; --------------------        -------------------
-; context                     context
-; callingpres		      callingpres
-; permit                      permit
-; deny                        deny
-; secret                      secret
-; md5secret                   md5secret
-; dtmfmode                    dtmfmode
-; canreinvite                 canreinvite
-; nat                         nat
-; callgroup                   callgroup
-; pickupgroup                 pickupgroup
-; language                    language
-; allow                       allow
-; disallow                    disallow
-; insecure                    insecure
-; trustrpid                   trustrpid
-; progressinband              progressinband
-; promiscredir                promiscredir
-; useclientcode               useclientcode
-; accountcode                 accountcode
-; setvar                      setvar
-; callerid		      callerid
-; amaflags		      amaflags
-; call-limit		      call-limit
-; allowoverlap		      allowoverlap
-; allowsubscribe	      allowsubscribe
-; allowtransfer	      	      allowtransfer
-; subscribecontext	      subscribecontext
-; videosupport		      videosupport
-; maxcallbitrate	      maxcallbitrate
-; rfc2833compensate           mailbox
-;                             username
-;                             template
-;                             fromdomain
-;                             regexten
-;                             fromuser
-;                             host
-;                             port
-;                             qualify
-;                             defaultip
-;                             rtptimeout
-;                             rtpholdtimeout
-;                             sendrpid
-;                             outboundproxy
-;                             rfc2833compensate
+; The settings are available for type=device (or phone)
+
+; -------------------
+;  context
+; callingpres
+; permit
+; deny
+; secret
+; md5secret
+; dtmfmode
+; canreinvite
+; nat
+; callgroup
+; pickupgroup
+; language
+; allow
+; disallow
+; insecure
+; trustrpid
+; progressinband
+; promiscredir
+; useclientcode
+; accountcode
+; setvar
+; callerid
+; amaflags
+; call-limit
+; allowoverlap
+; allowsubscribe
+; allowtransfer
+; subscribecontext
+; videosupport
+; maxcallbitrate
+; mailbox
+; username
+; template
+; fromdomain
+; regexten
+; fromuser
+; host
+; port
+; qualify
+; defaultip
+; rtptimeout
+; rtpholdtimeout
+; sendrpid
+; outboundproxy
+; rfc2833compensate
 
 ;[sip_proxy]
 ; For incoming calls only. Example: FWD (Free World Dialup)
 ; We match on IP address of the proxy for incoming calls 
 ; since we can not match on username (caller id)
-;type=peer
+;type=device
 ;context=from-fwd
 ;host=fwd.pulver.com
 
 ;[sip_proxy-out]
-;type=peer          			; we only want to call out, not be called
+;type=device          			; we only want to call out, not be called
 ;secret=guessit
 ;username=yourusername			; Authentication user for outbound proxies
 ;fromuser=yourusername			; Many SIP providers require this!
@@ -461,21 +459,20 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ;------------------------------------------------------------------------------
 ; Definitions of locally connected SIP devices
 ;
-; type = user	a device that authenticates to us by "from" field to place calls
-; type = peer	a device we place calls to or that calls us and we match by host
-; type = friend two configurations (peer+user) in one
-;
+; type = device		a device we place calls to or that calls us and we match by host
+; Future types
+; type = service 	Another SIP server or service provider we register with as a phone
+; type = trunk		Another SIP service we exchange traffic with
+
 ; For device names, we recommend using only a-z, numerics (0-9) and underscore
 ; 
-; For local phones, type=friend works most of the time
-;
 ; If you have one-way audio, you probably have NAT problems. 
 ; If Asterisk is on a public IP, and the phone is inside of a NAT device
 ; you will need to configure nat option for those phones.
 ; Also, turn on qualify=yes to keep the nat session open
 
 ;[grandstream1]
-;type=friend 			
+;type=device 			
 ;context=from-sip		; Where to start in the dialplan when this phone calls
 ;callerid=John Doe <1234>	; Full caller ID, to override the phones config
 				; on incoming calls to Asterisk
@@ -486,9 +483,6 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ;dtmfmode=info			; either RFC2833 or INFO for the BudgeTone
 ;call-limit=1			; permit only 1 outgoing call and 1 incoming call at a time
 				; from the phone to asterisk
-				; 1 for the explicit peer, 1 for the explicit user,
-				; remember that a friend equals 1 peer and 1 user in
-				; memory
 				; This will affect your subscriptions as well.
 				; There is no combined call counter for a "friend"
 				; so there's currently no way in sip.conf to limit
@@ -509,7 +503,7 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ;[xlite1]
 ; Turn off silence suppression in X-Lite ("Transmit Silence"=YES)!
 ; Note that Xlite sends NAT keep-alive packets, so qualify=yes is not needed
-;type=friend
+;type=device
 ;regexten=1234			; When they register, create extension 1234
 ;callerid="Jane Smith" <5678>
 ;host=dynamic			; This device needs to register
@@ -523,7 +517,7 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 
 
 ;[snom]
-;type=friend			; Friends place calls and receive calls
+;type=device			; Friends place calls and receive calls
 ;context=from-sip		; Context for incoming calls from this user
 ;secret=blah
 ;subscribecontext=localextensions	; Only allow SUBSCRIBE for local extensions
@@ -542,7 +536,7 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 
 
 ;[polycom]
-;type=friend			; Friends place calls and receive calls
+;type=device			; Friends place calls and receive calls
 ;context=from-sip		; Context for incoming calls from this user
 ;secret=blahpoly
 ;host=dynamic			; This peer register with us
@@ -555,7 +549,7 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 
 
 ;[pingtel]
-;type=friend
+;type=device
 ;secret=blah
 ;host=dynamic
 ;insecure=port			; Allow matching of peer by IP address without 
@@ -575,7 +569,7 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ;permit=192.168.0.60/255.255.255.0
 
 ;[cisco1]
-;type=friend
+;type=device
 ;secret=blah
 ;qualify=200			; Qualify peer is no more than 200ms away
 ;nat=yes			; This phone may be natted
@@ -593,7 +587,7 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ;setvar=CUSTID=5678		; Channel variable to be set for all calls from this device
 
 ;[pre14-asterisk]
-;type=friend
+;type=device
 ;secret=digium
 ;host=dynamic
 ;rfc2833compensate=yes		; Compensate for pre-1.4 DTMF transmission from another Asterisk machine.
