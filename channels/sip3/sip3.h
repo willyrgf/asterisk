@@ -221,7 +221,6 @@ enum parse_register_result {
 
 enum subscriptiontype { 
 	NONE = 0,
-	TIMEOUT,
 	XPIDF_XML,
 	DIALOG_INFO_XML,
 	CPIM_PIDF_XML,
@@ -684,7 +683,7 @@ struct sip_dialog {
 		AST_STRING_FIELD(callid);	/*!< Dialog ID: Global CallID  - the call ID is a unique ID for this SIP dialog,
 							a string that never changes during the dialog */
 		AST_STRING_FIELD(theirtag);	/*!< Dialog ID: remote side's tag */
-		AST_STRING_FIELD(branch);	/*!< Dialog ID: branch tag from topmost via */
+		AST_STRING_FIELD(thisbranch);	/*!< Dialog ID: branch tag from topmost via */
 		AST_STRING_FIELD(randdata);	/*!< Random data */
 		AST_STRING_FIELD(realm);	/*!< Authorization realm for this dialog */
 		AST_STRING_FIELD(nonce);	/*!< Authorization nonce */

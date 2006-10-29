@@ -2725,7 +2725,7 @@ GNURK int transmit_invite(struct sip_dialog *p, int sipmethod, int sdp, int init
 }
 
 /*! \brief Used in the SUBSCRIBE notification subsystem */
-GNURK int transmit_state_notify(struct sip_dialog *p, int state, int full)
+GNURK int transmit_state_notify(struct sip_dialog *p, int state, int full, int timeout)
 {
 	char tmp[4000], from[256], to[256];
 	char *t = tmp, *c, *mfrom, *mto;
@@ -2816,7 +2816,7 @@ GNURK int transmit_state_notify(struct sip_dialog *p, int state, int full)
 	add_header(&req, "Content-Type", subscriptiontype->mediatype);
 	switch(state) {
 	case AST_EXTENSION_DEACTIVATED:
-		if (p->subscribed == TIMEOUT)
+		if (timeout)
 			add_header(&req, "Subscription-State", "terminated;reason=timeout");
 		else {
 			add_header(&req, "Subscription-State", "terminated;reason=probation");
@@ -3614,7 +3614,7 @@ static int cb_extensionstate(char *context, char* exten, int state, void *data)
 		p->laststate = state;
 		break;
 	}
-	transmit_state_notify(p, state, 1);
+	transmit_state_notify(p, state, 1, FALSE);
 
 	if (option_verbose > 1)
 		ast_verbose(VERBOSE_PREFIX_1 "Extension Changed %s new state %s for Notify User %s\n", exten, ast_extension_state2str(state), p->username);
@@ -6734,8 +6734,11 @@ static int handle_request_subscribe(struct sip_dialog *p, struct sip_request *re
 	/* Handle authentication if this is our first subscribe */
 	res = check_user_full(p, req, SIP_SUBSCRIBE, e, 0, sin, &authpeer);
 	/* if an authentication response was sent, we are done here */
-	if (res == AUTH_CHALLENGE_SENT)
+	if (res == AUTH_CHALLENGE_SENT) {
+		if (authpeer)
+			ASTOBJ_UNREF(authpeer, sip_destroy_device);
 		return 0;
+	}
 	if (res < 0) {
 		if (res == AUTH_FAKE_AUTH) {
 			ast_log(LOG_NOTICE, "Sending fake auth rejection for user %s\n", get_header(req, "From"));
@@ -6745,6 +6748,8 @@ static int handle_request_subscribe(struct sip_dialog *p, struct sip_request *re
 			transmit_response_reliable(p, "403 Forbidden", req);
 		}
 		ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
+		if (authpeer)
+			ASTOBJ_UNREF(authpeer, sip_destroy_device);
 		return 0;
 	}
 
@@ -6752,6 +6757,8 @@ static int handle_request_subscribe(struct sip_dialog *p, struct sip_request *re
 	if (!ast_test_flag(&p->flags[1], SIP_PAGE2_ALLOWSUBSCRIBE)) {
 		transmit_response(p, "403 Forbidden (policy)", req);
 		ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);
+		if (authpeer)
+			ASTOBJ_UNREF(authpeer, sip_destroy_device);
 		return 0;
 	}
 
@@ -6772,6 +6779,8 @@ static int handle_request_subscribe(struct sip_dialog *p, struct sip_request *re
 	if (gotdest) {
 		transmit_response(p, "404 Not Found", req);
 		ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
+		if (authpeer)
+			ASTOBJ_UNREF(authpeer, sip_destroy_device);
 		return 0;
 	} else {
 		/* XXX reduce nesting here */
@@ -6780,6 +6789,8 @@ static int handle_request_subscribe(struct sip_dialog *p, struct sip_request *re
 			make_our_tag(p->tag, sizeof(p->tag));
 
 		if (!strcmp(event, "presence") || !strcmp(event, "dialog")) { /* Presence, RFC 3842 */
+			if (authpeer)
+				ASTOBJ_UNREF(authpeer, sip_destroy_device);
 
 			/* Header from Xten Eye-beam Accept: multipart/related, application/rlmi+xml, application/pidf+xml, application/xpidf+xml */
 			/* Polycom phones only handle xpidf+xml, even if they say they can
@@ -6808,6 +6819,8 @@ static int handle_request_subscribe(struct sip_dialog *p, struct sip_request *re
 				transmit_response(p, "406 Not Acceptable", req);
 				if (option_debug > 1)
 					ast_log(LOG_DEBUG, "Received SIP mailbox subscription for unknown format: %s\n", accept);
+				if (authpeer)
+					ASTOBJ_UNREF(authpeer, sip_destroy_device);
  				ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
 				return 0;
 			}
@@ -6820,6 +6833,8 @@ static int handle_request_subscribe(struct sip_dialog *p, struct sip_request *re
 				transmit_response(p, "404 Not found (no mailbox)", req);
 				ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
 				ast_log(LOG_NOTICE, "Received SIP subscribe for peer without mailbox: %s\n", authpeer->name);
+				if (authpeer)
+					ASTOBJ_UNREF(authpeer, sip_destroy_device);
 				return 0;
 			}
 
@@ -6834,8 +6849,11 @@ static int handle_request_subscribe(struct sip_dialog *p, struct sip_request *re
 			if (option_debug > 1)
 				ast_log(LOG_DEBUG, "Received SIP subscribe for unknown event package: %s\n", event);
  			ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
+			if (authpeer)
+				ASTOBJ_UNREF(authpeer, sip_destroy_device);
 			return 0;
 		}
+		/* Now, subscribe to status events from the PBX core */
 		if (p->subscribed != MWI_NOTIFICATION && !resubscribe)
 			p->stateid = ast_extension_state_add(p->context, p->exten, cb_extensionstate, p);
 	}
@@ -6881,7 +6899,7 @@ static int handle_request_subscribe(struct sip_dialog *p, struct sip_request *re
 				struct sip_dialog *p_old;
 	
 				transmit_response(p, "200 OK", req);
-				transmit_state_notify(p, firststate, 1);	/* Send first notification */
+				transmit_state_notify(p, firststate, 1, FALSE);	/* Send first notification */
 				append_history(p, "Subscribestatus", "%s", ast_extension_state2str(firststate));
 				/* hide the 'complete' exten/context in the refer_to field for later display */
 				ast_string_field_build(p, subscribeuri, "%s@%s", p->exten, p->context);
@@ -6916,8 +6934,6 @@ static int handle_request_subscribe(struct sip_dialog *p, struct sip_request *re
 		if (!p->expiry)
 			ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);
 	}
-	if (authpeer)
-		ASTOBJ_UNREF(authpeer, sip_destroy_device);
 	return 1;
 }
 
@@ -7909,8 +7925,7 @@ static int sip_sipredirect(struct sip_dialog *p, const char *dest)
 	ast_string_field_build(p, our_contact, "Transfer <sip:%s@%s%s%s>", extension, host, port ? ":" : "", port ? port : "");
 	transmit_response_reliable(p, "302 Moved Temporarily", &p->initreq);
 
-	/* this is all that we want to send to that SIP device */
-	ast_set_flag(&p->flags[0], SIP_ALREADYGONE);
+	sip_scheddestroy(p, 32000);	/* Make sure we stop send this reply. */
 
 	/* hangup here */
 	return -1;

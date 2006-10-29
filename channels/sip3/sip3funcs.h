@@ -66,7 +66,7 @@ GNURK struct sip_peer *find_device(const char *peer, struct sockaddr_in *sin, in
 GNURK int sip_reload(int fd);
 GNURK int transmit_response_with_auth(struct sip_dialog *p, const char *msg, const struct sip_request *req, const char *rand, enum xmittype reliable, const char *header, int stale);
 GNURK int transmit_invite(struct sip_dialog *p, int sipmethod, int sdp, int init);
-GNURK int transmit_state_notify(struct sip_dialog *p, int state, int full);
+GNURK int transmit_state_notify(struct sip_dialog *p, int state, int full, int timeout);
 GNURK int transmit_request_with_auth(struct sip_dialog *p, int sipmethod, int seqno, enum xmittype reliable, int newbranch);
 GNURK void sip_destroy(struct sip_dialog *p);
 GNURK void do_setnat(struct sip_dialog *p, int natflags);
