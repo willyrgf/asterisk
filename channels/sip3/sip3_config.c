@@ -437,7 +437,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 			peer->callingpres = ast_parse_caller_presentation(v->value);
 			if (peer->callingpres == -1)
 				peer->callingpres = atoi(v->value);
-		} else if (!strcasecmp(v->name, "username")) {
+		} else if (!strcasecmp(v->name, "defaultuser")) {
 			ast_copy_string(peer->username, v->value, sizeof(peer->username));
 		} else if (!strcasecmp(v->name, "language")) {
 			ast_copy_string(peer->language, v->value, sizeof(peer->language));

@@ -135,9 +135,10 @@
 	  in a locked socket for that to work on the SIP interface.
 
 	Todo
+	- Split up source code file
 	- Add astum
 	- Add sipregister branch
-	- Split up source code file
+	- Add auto-nat for RFC 1918 networks
 	- Add type=device for peers
 	- Add type=service for register= replacement
 	- Add type=trunk definition, based on domain routing
@@ -147,13 +148,16 @@
 	- Implement real realtime caching
 	- Implement realtime static loading for MWI and qualify support
 	- Implement remote MWI notification
+	- Implement remote subscriptions
 	- Implement improved SIP domain support
+		- Document these ideas!
 	- Prove transaction engine by implementing PRACK
 	- Implement netsock API in this channel
 	- Add File's multithreading code
 	- Make debugaddr a ha list instead of one address and move it out of sipnet
 
-	- change "sip nodebug" to "sip debug off" and "sip debug" to "sip debug on"
+	- change "sip nodebug" to "sip debug off" and "sip debug" to "sip debug on" - done
+	- change "sip history" and "nohistory" to "on/off" - done
 
 	- ... And much more
 */
@@ -230,7 +234,8 @@
 	- \b sip3_domain.c	SIP domain support
 	- \b sip3_subscribe.c	SIP subscription support
 	- \b sip3_parse.c	Parsing stuff
-	- \b sip3_refer.c	SIP transfer support
+	- \b sip3_compose.c	Composing new requests and responses
+	- \b sip3_refer.c	SIP transfer and parking support
 	- \b sip3_network.c	Networks interface (UDP today)
 	- \b sip3_services.c	Outbound registrations (services)
 		

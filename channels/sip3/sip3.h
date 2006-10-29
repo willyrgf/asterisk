@@ -670,18 +670,26 @@ struct sip_refer {
 	enum referstatus status;			/*!< REFER status */
 };
 
-/*! \brief PVT structure are used for each SIP dialog, ie. a call, a registration, a subscribe  */
+/*! \brief PVT structure are used for each SIP dialog, ie. a call, a registration, a subscribe  
+
+	One SIP dialog is distinguished from another by these four items (if they exist)
+		- Call ID
+		- Remote tag= and local tag= (From: / To: header tags)
+		- Topmost via header branch ID 
+*/
 struct sip_dialog {
 	ast_mutex_t lock;			/*!< Dialog private lock */
 	int method;				/*!< SIP method that opened this dialog */
 	AST_DECLARE_STRING_FIELDS(
-		AST_STRING_FIELD(callid);	/*!< Global CallID */
+		AST_STRING_FIELD(callid);	/*!< Dialog ID: Global CallID  - the call ID is a unique ID for this SIP dialog,
+							a string that never changes during the dialog */
+		AST_STRING_FIELD(theirtag);	/*!< Dialog ID: remote side's tag */
+		AST_STRING_FIELD(branch);	/*!< Dialog ID: branch tag from topmost via */
 		AST_STRING_FIELD(randdata);	/*!< Random data */
-		AST_STRING_FIELD(accountcode);	/*!< Account code */
-		AST_STRING_FIELD(realm);	/*!< Authorization realm */
+		AST_STRING_FIELD(realm);	/*!< Authorization realm for this dialog */
 		AST_STRING_FIELD(nonce);	/*!< Authorization nonce */
-		AST_STRING_FIELD(opaque);	/*!< Opaque nonsense */
-		AST_STRING_FIELD(qop);		/*!< Quality of Protection, since SIP wasn't complicated enough yet. */
+		AST_STRING_FIELD(opaque);	/*!< Authorization Opaque string */
+		AST_STRING_FIELD(qop);		/*!< Quality of Protection for authorization  */
 		AST_STRING_FIELD(domain);	/*!< Authorization domain */
 		AST_STRING_FIELD(from);		/*!< The From: header */
 		AST_STRING_FIELD(useragent);	/*!< User agent in SIP request */
@@ -691,14 +699,13 @@ struct sip_dialog {
 		AST_STRING_FIELD(subscribeuri); /*!< Subscribecontext */
 		AST_STRING_FIELD(fromdomain);	/*!< Domain to show in the from field */
 		AST_STRING_FIELD(fromuser);	/*!< User to show in the user field */
-		AST_STRING_FIELD(fromname);	/*!< Name to show in the user field */
+		AST_STRING_FIELD(fromname);	/*!< Name to show as display name  */
 		AST_STRING_FIELD(tohost);	/*!< Host we should put in the "to" field */
-		AST_STRING_FIELD(language);	/*!< Default language for this call */
+		AST_STRING_FIELD(language);	/*!< Default language for this call (to select prompts) */
 		AST_STRING_FIELD(mohinterpret);	/*!< MOH class to use when put on hold */
 		AST_STRING_FIELD(mohsuggest);	/*!< MOH class to suggest when putting a peer on hold */
 		AST_STRING_FIELD(rdnis);	/*!< Referring DNIS */
 		AST_STRING_FIELD(redircause);	/*!< Referring cause */
-		AST_STRING_FIELD(theirtag);	/*!< Their tag */
 		AST_STRING_FIELD(username);	/*!< [user] name */
 		AST_STRING_FIELD(peername);	/*!< [peer] name, not set if [user] */
 		AST_STRING_FIELD(authname);	/*!< Who we use for authentication */
@@ -708,20 +715,49 @@ struct sip_dialog {
 		AST_STRING_FIELD(peermd5secret);
 		AST_STRING_FIELD(cid_num);	/*!< Caller*ID number */
 		AST_STRING_FIELD(cid_name);	/*!< Caller*ID name */
+		AST_STRING_FIELD(rpid);		/*!< Our RPID header */
+		AST_STRING_FIELD(rpid_from);	/*!< Our RPID From header */
 		AST_STRING_FIELD(via);		/*!< Via: header */
 		AST_STRING_FIELD(fullcontact);	/*!< The Contact: that the UA registers with us */
 		AST_STRING_FIELD(our_contact);	/*!< Our contact header */
-		AST_STRING_FIELD(rpid);		/*!< Our RPID header */
-		AST_STRING_FIELD(rpid_from);	/*!< Our RPID From header */
+		AST_STRING_FIELD(accountcode);	/*!< Account code - only used for billing */
 	);
+	/* Dialog settings */
 	unsigned int ocseq;			/*!< Current outgoing seqno */
 	unsigned int icseq;			/*!< Current incoming seqno */
-	ast_group_t callgroup;			/*!< Call group */
-	ast_group_t pickupgroup;		/*!< Pickup group */
 	int lastinvite;				/*!< Last Cseq of invite */
-	struct ast_flags flags[2];		/*!< SIP_ flags */
 	int timer_t1;				/*!< SIP timer T1, ms rtt */
+	int autokillid;				/*!< Dialog response timer Auto-kill ID (scheduler) */
 	unsigned int sipoptions;		/*!< Supported SIP options on the other end */
+	int authtries;				/*!< Times we've tried to authenticate */
+	int expiry;				/*!< How long we take to expire */
+	long branch;				/*!< The branch identifier of this session */
+	char tag[11];				/*!< Dialog ID: Our tag for this session */
+	int callingpres;			/*!< Caller ID presentation settings */
+	struct sip_route *route;		/*!< Head of linked list of routing steps (fm Record-Route) */
+	int route_persistant;			/*!< Is this the "real" route? */
+	char lastmsg[256];			/*!< Last Message sent/received */
+	int initid;				/*!< Invite Auto-congest ID if appropriate (scheduler) */
+	int pendinginvite;			/*!< Any pending invite ? (seqno of this) */
+	struct sip_request initreq;		/*!< Initial request that opened the SIP dialog 
+							Something that keeps getting overwritten
+						 */
+	struct sip_pkt *packets;		/*!< Packets scheduled for re-transmission */
+	struct sip_history_head *history;	/*!< History of this SIP dialog */
+
+	struct ast_flags flags[2];		/*!< SIP_ flags - various flags grouped togheter to save memory */
+
+	/* Authentication */
+	struct sip_auth *peerauth;		/*!< Realm authentication */
+	int noncecount;				/*!< Nonce-count */
+
+	int maxtime;				/*!< Max time for first response (needs to go now) */
+
+	/* The grouping below shows that these settings should be allocated in substructures,
+	   depending on the nature of the dialog - the method that opened it. Note that
+	   one dialog can have both INVITE and REFER, but not SUSBCRIBE and REGISTER and INVITE */
+
+	/* INVITE: Media support for this dialog */
 	struct ast_codec_pref prefs;		/*!< codec prefs */
 	int capability;				/*!< Special capability (codec) */
 	int jointcapability;			/*!< Supported capability at both ends (codecs ) */
@@ -730,14 +766,15 @@ struct sip_dialog {
 	int noncodeccapability;			/*!< DTMF RFC2833 telephony-event */
 	int redircodecs;			/*!< Redirect codecs */
 	int maxcallbitrate;			/*!< Maximum Call Bitrate for Video Calls */	
+	struct ast_rtp *rtp;			/*!< RTP Session */
+	struct ast_rtp *vrtp;			/*!< Video RTP session */
+
+	/* T38 settings - these should be allocated only when needed */
 	struct t38properties t38;		/*!< T38 settings */
 	struct sockaddr_in udptlredirip;	/*!< Where our T.38 UDPTL should be going if not to us */
 	struct ast_udptl *udptl;		/*!< T.38 UDPTL session */
-	int callingpres;			/*!< Calling presentation */
-	int authtries;				/*!< Times we've tried to authenticate */
-	int expiry;				/*!< How long we take to expire */
-	long branch;				/*!< The branch identifier of this session */
-	char tag[11];				/*!< Our tag for this session */
+
+	/* INVITE:  SDP/RTP settings - these could also be grouped together and allocated as needed */
 	int sessionid;				/*!< SDP Session ID */
 	int sessionversion;			/*!< SDP Session Version */
 	struct sockaddr_in sa;			/*!< Our peer */
@@ -748,41 +785,37 @@ struct sip_dialog {
 	int rtptimeout;				/*!< RTP timeout time */
 	int rtpholdtimeout;			/*!< RTP timeout when on hold */
 	int rtpkeepalive;			/*!< Send RTP packets for keepalive */
-	struct sockaddr_in recv;		/*!< Received as */
+	struct ast_dsp *vad;			/*!< Inband DTMF Detection dsp */
+	int autoframing;			/*!< ???? */
+
+	struct sockaddr_in recv;		/*!< SIP Received from */
 	struct in_addr ourip;			/*!< Our IP */
+
+	/* INVITE:  PBX interface - this is only needeed for "calls", not for registrations etc */
+	struct sip_invite_param *options;	/*!< Options for INVITE */
 	struct ast_channel *owner;		/*!< Who owns us (if we have an owner) */
-	struct sip_route *route;		/*!< Head of linked list of routing steps (fm Record-Route) */
-	int route_persistant;			/*!< Is this the "real" route? */
-	struct sip_auth *peerauth;		/*!< Realm authentication */
-	int noncecount;				/*!< Nonce-count */
-	char lastmsg[256];			/*!< Last Message sent/received */
-	int amaflags;				/*!< AMA Flags */
-	int pendinginvite;			/*!< Any pending invite ? (seqno of this) */
-	struct sip_request initreq;		/*!< Initial request that opened the SIP dialog */
+	ast_group_t callgroup;			/*!< Call group */
+	ast_group_t pickupgroup;		/*!< Pickup group */
+	int amaflags;				/*!< AMA Flags (only for billing) */
+	struct ast_variable *chanvars;		/*!< Channel variables to set for inbound call */
+
 	
-	int maxtime;				/*!< Max time for first response */
-	int initid;				/*!< Auto-congest ID if appropriate (scheduler) */
-	int autokillid;				/*!< Auto-kill ID (scheduler) */
+	/* REFER: */
 	enum transfermodes allowtransfer;	/*!< REFER: restriction scheme */
 	struct sip_refer *refer;		/*!< REFER: SIP transfer data structure */
+
+	/* SUBSCRIBE: These need to be allocated only for subscriptions */
 	enum subscriptiontype subscribed;	/*!< SUBSCRIBE: Is this dialog a subscription?  */
 	int stateid;				/*!< SUBSCRIBE: ID for devicestate subscriptions */
 	int laststate;				/*!< SUBSCRIBE: Last known extension state */
 	int dialogver;				/*!< SUBSCRIBE: Version for subscription dialog-info */
-	
-	struct ast_dsp *vad;			/*!< Voice Activation Detection dsp */
-	
 	struct sip_peer *relatedpeer;		/*!< If this dialog is related to a peer, which one 
 							Used in peerpoke, mwi subscriptions */
+
+	/* REGISTER (outbound) */
 	struct sip_registry *registry;		/*!< If this is a REGISTER dialog, to which registry */
-	struct ast_rtp *rtp;			/*!< RTP Session */
-	struct ast_rtp *vrtp;			/*!< Video RTP session */
-	struct sip_pkt *packets;		/*!< Packets scheduled for re-transmission */
-	struct sip_history_head *history;	/*!< History of this SIP dialog */
-	struct ast_variable *chanvars;		/*!< Channel variables to set for inbound call */
-	struct sip_dialog *next;			/*!< Next dialog in chain */
-	struct sip_invite_param *options;	/*!< Options for INVITE */
-	int autoframing;
+
+	struct sip_dialog *next;		/*!< Next dialog in chain */
 };
 
 #define FLAG_RESPONSE (1 << 0)
