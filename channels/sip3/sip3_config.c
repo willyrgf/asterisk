@@ -305,7 +305,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 	struct ast_variable *tmpvar = NULL;
 	struct ast_flags peerflags[2] = {{(0)}};
 	struct ast_flags mask[2] = {{(0)}};
-
+	int register_lineno = 0;
 
 	if (!realtime)
 		/* Note we do NOT use find_peer here, to avoid realtime recursion */
@@ -517,6 +517,15 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 			peer->maxcallbitrate = atoi(v->value);
 			if (peer->maxcallbitrate < 0)
 				peer->maxcallbitrate = global.default_maxcallbitrate;
+		} else if (!strcasecmp(v->name, "register")) {
+			if (ast_true(v->value)) {
+				if (realtime)
+					ast_log(LOG_ERROR, "register=yes is not supported for realtime.\n");
+				else {
+					ast_set_flag(&peer->flags[1], SIP_PAGE2_SERVICE);
+					register_lineno = v->lineno;
+				}
+			}
 		} else if (!strcasecmp(v->name, "t38pt_udptl")) {
 			ast_set2_flag(&peer->flags[1], ast_true(v->value), SIP_PAGE2_T38SUPPORT_UDPTL);
 		} else if (!strcasecmp(v->name, "t38pt_rtp")) {
@@ -543,6 +552,14 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 		reg_source_db(peer);
 	ASTOBJ_UNMARK(peer);
 	ast_free_ha(oldha);
+	/* Start registration if needed */
+	if (ast_test_flag(&peer->flags[1], SIP_PAGE2_SERVICE)) {
+		sip_register(NULL, register_lineno, peer);	/* XXX How do we handle this at reload?? */
+	} else if (peer->registry) {
+		/* We have a registry entry for a peer that no longer wished to be registered */
+		ASTOBJ_UNREF(peer->registry,sip_registry_destroy);
+		peer->registry = NULL;
+	}
 	return peer;
 }
 
@@ -925,7 +942,7 @@ int reload_config(enum channelreloadreason reason)
 			else
 				add_sip_domain(ast_strip(domain), SIP_DOMAIN_CONFIG, context ? ast_strip(context) : "");
 		} else if (!strcasecmp(v->name, "register")) {
-			if (sip_register(v->value, v->lineno) == 0)
+			if (sip_register(v->value, v->lineno, NULL) == 0)
 				registry_count++;
 		} else if (!strcasecmp(v->name, "tos_sip")) {
 			if (ast_str2tos(v->value, &global.tos_sip))

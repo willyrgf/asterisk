@@ -843,6 +843,10 @@ GNURK void sip_destroy_device(struct sip_peer *device)
 	}
 	if (device->dnsmgr)
 		ast_dnsmgr_release(device->dnsmgr);
+	if (device->registry) {
+		device->registry->peer = NULL;
+		ASTOBJ_UNREF(device->registry,sip_registry_destroy);
+	}
 	free(device);
 }
 
@@ -3913,6 +3917,7 @@ static int get_destination(struct sip_dialog *p, struct sip_request *oreq)
 	char tmpf[256] = "", *from;
 	struct sip_request *req;
 	char *colon;
+	int localdomain = TRUE;
 	
 	req = oreq;
 	if (!req)
@@ -3979,16 +3984,48 @@ static int get_destination(struct sip_dialog *p, struct sip_request *oreq)
 
 		domain_context[0] = '\0';
 		if (!check_sip_domain(p->domain, domain_context, sizeof(domain_context))) {
+			localdomain = FALSE;
 			if (!global.allow_external_domains && (req->method == SIP_INVITE || req->method == SIP_REFER)) {
 				if (option_debug)
 					ast_log(LOG_DEBUG, "Got SIP %s to non-local domain '%s'; refusing request.\n", sip_method2txt(req->method), p->domain);
 				return -2;
 			}
 		}
-		/* If we have a context defined, overwrite the original context */
+		/* If we have a domain context defined, overwrite the original context */
 		if (!ast_strlen_zero(domain_context))
 			ast_string_field_set(p, context, domain_context);
 	}
+
+	/* If the URI starts with our magic marker and has a corresponding
+		entry in the registry, then replace the URI with the extension
+		we want to use */
+	/* We don't have to check this at all if we have no registry entries... */
+	if (localdomain && req->method == SIP_INVITE) {
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Checking %s for magic registry marker \n", uri);
+		/* Check if the incoming URI is a registry entry */
+		/* Need a function in ASTOBJ to check if there are objects
+			in the container at all here to avoid this check 
+			when we have no registry entries */
+		if (!strncmp(uri, REG_MAGICMARKER, strlen(REG_MAGICMARKER))) {
+			int found = FALSE;
+
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Checking for %s in registry\n", uri);
+			/* Traverse the registry to find something */
+			ASTOBJ_CONTAINER_TRAVERSE(&regl, !found, do {
+				ASTOBJ_RDLOCK(iterator);
+				if (!strcmp(uri, iterator->contact)) {
+					found = TRUE;
+					/* Use the extension of this registry item for the incoming call */
+					uri = (char *) iterator->extension;
+					p->registry = iterator;
+				}
+				ASTOBJ_UNLOCK(iterator);
+			} while(0));
+		}
+	}
+
 
 	if (sip_debug_test_pvt(p))
 		ast_verbose("Looking for %s in %s (domain %s)\n", uri, p->context, p->domain);
@@ -4243,8 +4280,11 @@ static enum check_auth_result check_user_full(struct sip_dialog *p, struct sip_r
 	if (ast_strlen_zero(of))
 		return AUTH_SUCCESSFUL;
 
-	/* Find device in device list */
-	device = find_device(of, NULL, 1);
+	if (p->registry && p->registry->peer)	/* We already know this device from registry */
+		device = p->registry->peer;
+	else
+		/* Find device in device list */
+		device = find_device(of, NULL, 1);
 	if (device && !ast_apply_ha(device->ha, sin)) {
 		ASTOBJ_UNREF(device,sip_destroy_device);
 		device = NULL;

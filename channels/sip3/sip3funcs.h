@@ -217,7 +217,7 @@ GNURK struct sip_dialog *match_or_create_dialog(struct sip_request *req, struct 
 /* sip3_services.c - outbound registration for services from other servers/providers  */
 
 GNURK void sip_send_all_registers(void);
-GNURK int sip_register(char *value, int lineno);
+GNURK int sip_register(char *value, int lineno, struct sip_peer *peer);
 GNURK void sip_registry_destroy(struct sip_registry *reg);
 GNURK char *regstate2str(enum sipregistrystate regstate) attribute_const;
 GNURK int handle_response_register(struct sip_dialog *p, int resp, char *rest, struct sip_request *req, int seqno);

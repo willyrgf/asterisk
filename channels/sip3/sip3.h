@@ -44,8 +44,6 @@
 #define IPTOS_MINCOST           0x02
 #endif
 
-/* #define VOCAL_DATA_HACK */
-
 #define DEFAULT_DEFAULT_EXPIRY  120
 #define DEFAULT_MIN_EXPIRY      60
 #define DEFAULT_MAX_EXPIRY      3600
@@ -54,6 +52,9 @@
 
 /* These strings needs to be localized */
 #define CALLERID_UNKNOWN	"Unknown"
+
+/*! \brief Magic marker for registration contacts */
+#define REG_MAGICMARKER		"ASTZVXW"
 
 /* guard limit must be larger than guard secs */
 /* guard min must be < 1000, and should be >= 250 */
@@ -608,6 +609,7 @@ struct sip_register_list {
 #define SIP_PAGE2_CALL_ONHOLD_ONEDIR	(1 << 23)	/*!< 23: One directional hold */
 #define SIP_PAGE2_CALL_ONHOLD_INACTIVE	(2 << 24)	/*!< 24: Inactive  */
 #define SIP_PAGE2_RFC2833_COMPENSATE    (1 << 26)
+#define SIP_PAGE2_SERVICE               (1 << 27)	/*!< Whether this device is a service or not */
 
 #define SIP_PAGE2_FLAGS_TO_COPY \
 	(SIP_PAGE2_ALLOWSUBSCRIBE | SIP_PAGE2_ALLOWOVERLAP | SIP_PAGE2_VIDEOSUPPORT | SIP_PAGE2_T38SUPPORT | SIP_PAGE2_RFC2833_COMPENSATE)
@@ -895,6 +897,7 @@ struct sip_peer {
 	struct ast_ha *ha;		/*!<  Access control list */
 	struct ast_variable *chanvars;	/*!<  Variables to set for channel created by user */
 	struct sip_dialog *mwipvt;		/*!<  Subscription for MWI */
+	struct sip_registry *registry;	/*!< If this is a service, which registration is connected to this device */
 	int lastmsg;
 	int autoframing;
 };
@@ -916,6 +919,7 @@ struct sip_registry {
 		AST_STRING_FIELD(secret);	/*!< Password in clear text */	
 		AST_STRING_FIELD(md5secret);	/*!< Password in md5 */
 		AST_STRING_FIELD(contact);	/*!< Contact extension */
+		AST_STRING_FIELD(extension);	/*!< Extension for callback */
 		AST_STRING_FIELD(random);
 	);
 	int portno;			/*!<  Optional port override */
@@ -932,6 +936,7 @@ struct sip_registry {
 	struct sockaddr_in us;		/*!< Who the server thinks we are */
 	int noncecount;			/*!< Nonce-count */
 	char lastmsg[256];		/*!< Last Message sent/received */
+	struct sip_peer *peer;		/*!< If we have a known peer for this registry entry, use it for incoming calls */
 };
 
 /* Global settings only apply to the channel */

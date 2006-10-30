@@ -159,48 +159,65 @@ void sip_send_all_registers(void)
 }
 
 /*! \brief Parse register=> line in sip.conf and add to registry */
-int sip_register(char *value, int lineno)
+int sip_register(char *value, int lineno, struct sip_peer *peer)
 {
 	struct sip_registry *reg;
-	char copy[256];
-	char *username=NULL, *hostname=NULL, *secret=NULL, *authuser=NULL;
-	char *porta=NULL;
-	char *contact=NULL;
-	char *stringp=NULL;
+	char username[256] = "";
+	char randomcontact[256];
+	char *hostname = NULL, *secret = NULL, *authuser = NULL;
+	char *porta = NULL;
+	char *contact = NULL;
+	char *extension = NULL;
+	int portnum = 0;
 	
-	if (!value)
-		return -1;
-	ast_copy_string(copy, value, sizeof(copy));
-	stringp=copy;
-	username = stringp;
-	hostname = strrchr(stringp, '@');
+	if (peer != NULL) {	/* Build registration string from peer info */
+		/* Need to copy port number as well */
+		if (ast_strlen_zero(peer->fromuser))
+			snprintf(username, sizeof(username), "%s:%s@%s/%s",
+				peer->username, peer->secret, peer->tohost, peer->regexten);
+		else
+			snprintf(username, sizeof(username), "%s:%s:%s@%s/%s",
+				peer->username, peer->secret, peer->fromuser, peer->tohost, peer->regexten);
+	} else if (value)
+		ast_copy_string(username, value, sizeof(username));
+	else
+		username[0] = '\0';
+
+	
+	/* ------ Parse registration string ----------- */
+	/* First split around the last '@' then parse the two components. */
+	hostname = strrchr(username, '@'); /* allow @ in the first part */
 	if (hostname)
 		*hostname++ = '\0';
 	if (ast_strlen_zero(username) || ast_strlen_zero(hostname)) {
 		ast_log(LOG_WARNING, "Format for registration is user[:secret[:authuser]]@host[:port][/contact] at line %d\n", lineno);
 		return -1;
 	}
-	stringp = username;
-	username = strsep(&stringp, ":");
-	if (username) {
-		secret = strsep(&stringp, ":");
-		if (secret) 
-			authuser = strsep(&stringp, ":");
+	/* split user[:secret[:authuser]] */
+	secret = strchr(username, ':');
+	if (secret) {
+		*secret++ = '\0';
+		authuser = strchr(secret, ':');
+		if (authuser)
+			*authuser++ = '\0';
 	}
-	stringp = hostname;
-	hostname = strsep(&stringp, "/");
-	if (hostname) 
-		contact = strsep(&stringp, "/");
+	/* split host[:port][/contact] */
+	contact = strchr(hostname, '/');
+	if (contact)
+		*contact++ = '\0';
 	if (ast_strlen_zero(contact))
 		contact = "s";
-	stringp=hostname;
-	hostname = strsep(&stringp, ":");
-	porta = strsep(&stringp, ":");
-	
-	if (porta && !atoi(porta)) {
-		ast_log(LOG_WARNING, "%s is not a valid port number at line %d\n", porta, lineno);
-		return -1;
+	porta = strchr(hostname, ':');
+	if (porta) {
+		*porta++ = '\0';
+		portnum = atoi(porta);
+		if (portnum == 0) {
+			ast_log(LOG_WARNING, "%s is not a valid port number at line %d\n", porta, lineno);
+			return -1;
+		}
 	}
+
+	/* Allocate data */
 	if (!(reg = ast_calloc(1, sizeof(*reg)))) {
 		ast_log(LOG_ERROR, "Out of memory. Can't allocate SIP registry entry\n");
 		return -1;
@@ -212,9 +229,14 @@ int sip_register(char *value, int lineno)
 		return -1;
 	}
 
+	if (peer) {
+		reg->peer = peer;
+		peer->registry = reg;
+		// xxx?? ASTOBJ_REF(peer);		/* Add reference counter to peer */
+	}
+
 	sipcounters.registry_objects++;
 	ASTOBJ_INIT(reg);
-	ast_string_field_set(reg, contact, contact);
 	if (username)
 		ast_string_field_set(reg, username, username);
 	if (hostname)
@@ -223,6 +245,16 @@ int sip_register(char *value, int lineno)
 		ast_string_field_set(reg, authuser, authuser);
 	if (secret)
 		ast_string_field_set(reg, secret, secret);
+
+	if (extension)
+		ast_string_field_set(reg, extension, extension);
+	/* Build a random contact string for this registration entry */
+	generate_random_string(randomcontact, sizeof(randomcontact));
+	if (sipdebug)
+		ast_string_field_build(reg, contact, "%s-%s-%s-debug", REG_MAGICMARKER, randomcontact, extension);
+	else
+		ast_string_field_build(reg, contact, "%s-%s", REG_MAGICMARKER, randomcontact);
+
 	reg->expire = -1;
 	reg->expiry = expiry.default_expiry;
 	reg->timeout =  -1;
@@ -255,6 +287,8 @@ void sip_registry_destroy(struct sip_registry *reg)
 		ast_sched_del(sched, reg->expire);
 	if (reg->timeout > -1)
 		ast_sched_del(sched, reg->timeout);
+	if (reg->peer)
+		reg->peer->registry = NULL;		/* XXX ASTOBJ_UNREF ??? */
 	ast_string_field_free_pools(reg);
 	sipcounters.registry_objects--;
 	free(reg);
@@ -415,6 +449,13 @@ int transmit_register(struct sip_registry *r, int sipmethod, const char *auth, c
 		if (!ast_strlen_zero(r->username))
 			ast_string_field_set(p, username, r->username);
 		/* Save extension in packet */
+	
+		/* If we have a peer relationship, fetch som more data from taht peer.
+		*/
+		if (r->peer) {
+			if (!ast_strlen_zero(r->peer->fromdomain))
+				ast_string_field_set(p, fromdomain, r->peer->fromdomain);
+		}
 		ast_string_field_set(p, exten, r->contact);
 
 		/*
