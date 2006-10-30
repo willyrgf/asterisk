@@ -159,7 +159,6 @@ static const char notify_config[] = "sip_notify.conf";
 
 enum subscriptiontype { 
 	NONE = 0,
-	TIMEOUT,
 	XPIDF_XML,
 	DIALOG_INFO_XML,
 	CPIM_PIDF_XML,
@@ -930,7 +929,7 @@ static void append_date(struct sip_request *req);	/* Append date to SIP packet *
 static int determine_firstline_parts(struct sip_request *req);
 static void sip_dump_history(struct sip_pvt *dialog);	/* Dump history to LOG_DEBUG at end of dialog, before destroying data */
 static const struct cfsubscription_types *find_subscription_type(enum subscriptiontype subtype);
-static int transmit_state_notify(struct sip_pvt *p, int state, int full, int substate);
+static int transmit_state_notify(struct sip_pvt *p, int state, int full, int substate, int timeout);
 static char *gettag(struct sip_request *req, char *header, char *tagbuf, int tagbufsize);
 
 /*! \brief Definition of this channel for PBX channel registration */
@@ -1321,8 +1320,7 @@ static int __sip_autodestruct(void *data)
 
 	/* If this is a subscription, tell the phone that we got a timeout */
 	if (p->subscribed) {
-		p->subscribed = TIMEOUT;
-		transmit_state_notify(p, AST_EXTENSION_DEACTIVATED, 1, 1);	/* Send first notification */
+		transmit_state_notify(p, AST_EXTENSION_DEACTIVATED, 1, 1, 1);	/* Send first notification */
 		p->subscribed = NONE;
 		append_history(p, "Subscribestatus", "timeout");
 		return 10000;	/* Reschedule this destruction so that we know that it's gone */
@@ -5114,7 +5112,7 @@ static int transmit_invite(struct sip_pvt *p, int sipmethod, int sdp, int init)
 }
 
 /*! \brief  transmit_state_notify: Used in the SUBSCRIBE notification subsystem ----*/
-static int transmit_state_notify(struct sip_pvt *p, int state, int full, int substate)
+static int transmit_state_notify(struct sip_pvt *p, int state, int full, int substate, int timeout)
 {
 	char tmp[4000], from[256], to[256];
 	char *t = tmp, *c, *a, *mfrom, *mto;
@@ -5210,7 +5208,7 @@ static int transmit_state_notify(struct sip_pvt *p, int state, int full, int sub
 	add_header(&req, "Content-Type", subscriptiontype->mediatype);
 	switch(state) {
 	case AST_EXTENSION_DEACTIVATED:
-		if (p->subscribed == TIMEOUT)
+		if (timeout)
 			add_header(&req, "Subscription-State", "terminated;reason=timeout");
 		else {
 			add_header(&req, "Subscription-State", "terminated;reason=probation");
@@ -6500,7 +6498,7 @@ static int cb_extensionstate(char *context, char* exten, int state, void *data)
 		p->laststate = state;
 		break;
 	}
-	transmit_state_notify(p, state, 1, 1);
+	transmit_state_notify(p, state, 1, 1, 0);
 
 	if (option_verbose > 1)
 		ast_verbose(VERBOSE_PREFIX_1 "Extension Changed %s new state %s for Notify User %s\n", exten, ast_extension_state2str(state), p->username);
@@ -7261,7 +7259,8 @@ static int check_user_full(struct sip_pvt *p, struct sip_request *req, int sipme
 			p->amaflags = user->amaflags;
 			p->callgroup = user->callgroup;
 			p->pickupgroup = user->pickupgroup;
-			p->callingpres = user->callingpres;
+			if (user->callingpres)
+				p->callingpres = user->callingpres;
 			p->capability = user->capability;
 			p->jointcapability = user->capability;
 			if (p->peercapability)
@@ -7324,7 +7323,8 @@ static int check_user_full(struct sip_pvt *p, struct sip_request *req, int sipme
 			ast_copy_string(p->subscribecontext, peer->subscribecontext, sizeof(p->subscribecontext));
 			ast_copy_string(p->peermd5secret, peer->md5secret, sizeof(p->peermd5secret));
 			p->peermd5secret[sizeof(p->peermd5secret)-1] = '\0';
-			p->callingpres = peer->callingpres;
+			if (peer->callingpres)
+				p->callingpres = peer->callingpres;
 			if (peer->maxms && peer->lastms)
 				p->timer_t1 = peer->lastms;
 			if (ast_test_flag(peer, SIP_INSECURE_INVITE)) {
@@ -11096,7 +11096,7 @@ static int handle_request_subscribe(struct sip_pvt *p, struct sip_request *req, 
 			struct sip_pvt *p_old;
 
 			transmit_response(p, "200 OK", req);
-			transmit_state_notify(p, firststate, 1, 1);	/* Send first notification */
+			transmit_state_notify(p, firststate, 1, 1, 0);	/* Send first notification */
 			append_history(p, "Subscribestatus", ast_extension_state2str(firststate));
 
 			/* remove any old subscription from this peer for the same exten/context,
@@ -13295,8 +13295,7 @@ static int sip_sipredirect(struct sip_pvt *p, const char *dest)
 	snprintf(p->our_contact, sizeof(p->our_contact), "Transfer <sip:%s@%s%s%s>", extension, host, port ? ":" : "", port ? port : "");
 	transmit_response_reliable(p, "302 Moved Temporarily", &p->initreq, 1);
 
-	/* this is all that we want to send to that SIP device */
-	ast_set_flag(p, SIP_ALREADYGONE);
+	sip_scheddestroy(p, 32000);	/* Make sure we stop send this reply. */
 
 	/* hangup here */
 	return -1;
