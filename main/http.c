@@ -337,7 +337,6 @@ static char *handle_uri(struct sockaddr_in *sin, char *uri, int *status, char **
 	}
 	if (urih) {
 		c = urih->callback(sin, uri, vars, status, title, contentlength);
-		ast_variables_destroy(vars);
 	} else if (ast_strlen_zero(uri) && ast_strlen_zero(prefix)) {
 		/* Special case: If no prefix, and no URI, send to /static/index.html */
 		c = ast_http_error(302, "Moved Temporarily", "Location: /static/index.html\r\n", "This is not the page you are looking for...");
@@ -348,6 +347,7 @@ static char *handle_uri(struct sockaddr_in *sin, char *uri, int *status, char **
 		*status = 404;
 		*title = strdup("Not Found");
 	}
+	ast_variables_destroy(vars);
 	return c;
 }
 
@@ -494,6 +494,8 @@ static void *http_root(void *data)
 	pthread_attr_t attr;
 	
 	for (;;) {
+		int flags;
+
 		ast_wait_for_input(httpfd, -1);
 		sinlen = sizeof(sin);
 		fd = accept(httpfd, (struct sockaddr *)&sin, &sinlen);
@@ -503,25 +505,28 @@ static void *http_root(void *data)
 			continue;
 		}
 		ser = ast_calloc(1, sizeof(*ser));
-		if (ser) {
-			int flags = fcntl(fd, F_GETFL);
-			fcntl(fd, F_SETFL, flags & ~O_NONBLOCK);
-			ser->fd = fd;
-			memcpy(&ser->requestor, &sin, sizeof(ser->requestor));
-			if ((ser->f = fdopen(ser->fd, "w+"))) {
-				pthread_attr_init(&attr);
-				pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-				
-				if (ast_pthread_create_background(&launched, &attr, ast_httpd_helper_thread, ser)) {
-					ast_log(LOG_WARNING, "Unable to launch helper thread: %s\n", strerror(errno));
-					fclose(ser->f);
-					free(ser);
-				}
-			} else {
-				ast_log(LOG_WARNING, "fdopen failed!\n");
-				close(ser->fd);
+		if (!ser) {
+			ast_log(LOG_WARNING, "No memory for new session: %s\n", strerror(errno));
+			close(fd);
+			continue;
+		}
+		flags = fcntl(fd, F_GETFL);
+		fcntl(fd, F_SETFL, flags & ~O_NONBLOCK);
+		ser->fd = fd;
+		memcpy(&ser->requestor, &sin, sizeof(ser->requestor));
+		if ((ser->f = fdopen(ser->fd, "w+"))) {
+			pthread_attr_init(&attr);
+			pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+			
+			if (ast_pthread_create_background(&launched, &attr, ast_httpd_helper_thread, ser)) {
+				ast_log(LOG_WARNING, "Unable to launch helper thread: %s\n", strerror(errno));
+				fclose(ser->f);
 				free(ser);
 			}
+		} else {
+			ast_log(LOG_WARNING, "fdopen failed!\n");
+			close(ser->fd);
+			free(ser);
 		}
 	}
 	return NULL;

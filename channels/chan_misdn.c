@@ -78,6 +78,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 char global_tracefile[BUFFERSIZE+1];
 
+static int g_config_initialized=0;
 
 struct misdn_jb{
 	int size;
@@ -198,6 +199,9 @@ struct chan_list {
 	int dropped_frame_cnt;
 
 	int far_alerting;
+
+	int nttimeout;
+
 	int other_pid;
 	struct chan_list *other_ch;
 
@@ -956,6 +960,11 @@ static char *misdn_get_ch_state(struct chan_list *p)
 static void reload_config(void)
 {
 	int i, cfg_debug;
+
+	if (!g_config_initialized) {
+		ast_log(LOG_WARNING, "chan_misdn is not initialized properly, still reloading ?\n");
+		return ;
+	}
 	
 	free_robin_list();
 	misdn_cfg_reload();
@@ -1645,6 +1654,7 @@ static int read_config(struct chan_list *ch, int orig) {
 	misdn_cfg_get( port, MISDN_CFG_SENDDTMF, &bc->send_dtmf, sizeof(int));
 
 	misdn_cfg_get( port, MISDN_CFG_NEED_MORE_INFOS, &bc->need_more_infos, sizeof(int));
+	misdn_cfg_get( port, MISDN_CFG_NTTIMEOUT, &ch->nttimeout, sizeof(int));
 	
 	misdn_cfg_get( port, MISDN_CFG_FAR_ALERTING, &ch->far_alerting, sizeof(int));
 
@@ -2658,7 +2668,6 @@ static enum ast_bridge_result  misdn_bridge (struct ast_channel *c0,
 	carr[0]=c0;
 	carr[1]=c1;
   
-  
 	if (ch1 && ch2 ) ;
 	else
 		return -1;
@@ -2682,7 +2691,6 @@ static enum ast_bridge_result  misdn_bridge (struct ast_channel *c0,
 			ch2->bc->ec_enable=0;
 			manager_ec_disable(ch2->bc); 
 		}
-		
 		/* trying to make a mISDN_dsp conference */
 		chan_misdn_log(1, ch1->bc->port, "I SEND: Making conference with Number:%d\n", ch1->bc->pid +1);
 
@@ -2731,8 +2739,15 @@ static enum ast_bridge_result  misdn_bridge (struct ast_channel *c0,
 			*rc=who;
 			break;
 		}
-		
-		
+	
+#if 0
+		if (f->frametype == AST_FRAME_VOICE) {
+			chan_misdn_log(1, ch1->bc->port, "I SEND: Splitting conference with Number:%d\n", ch1->bc->pid +1);
+	
+			continue;
+		}
+#endif
+
 		if (who == c0) {
 			ast_write(c1,f);
 		}
@@ -3200,6 +3215,8 @@ static struct chan_list *find_holded_l3(struct chan_list *list, unsigned long l3
 			) 
 			return help;
 	}
+
+	return NULL;
 }
 
 static void cl_queue_chan(struct chan_list **list, struct chan_list *chan)
@@ -4248,6 +4265,7 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 			ch->state=MISDN_CLEANING;
 	}
 	break;
+	case EVENT_BCHAN_ERROR:
 	case EVENT_CLEANUP:
 	{
 		stop_bc_tones(ch);
@@ -4359,9 +4377,11 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 			chan_misdn_log(1,bc->port,"--> state: %s\n",misdn_get_ch_state(ch));
 
 		switch (ch->state) {
-			case MISDN_CALLING:
 			case MISDN_DIALING:
 			case MISDN_PROGRESS:
+				if (bc->nt && !ch->nttimeout) break;
+			
+			case MISDN_CALLING:
 			case MISDN_ALERTING:
 			case MISDN_PROCEEDING:
 			case MISDN_CALLING_ACKNOWLEDGE:
@@ -4526,7 +4546,6 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
  *******************************************/
 
 
-static int g_config_initialized=0;
 
 static int unload_module(void)
 {
@@ -4872,7 +4891,10 @@ static int misdn_set_opt_exec(struct ast_channel *chan, void *data)
 			
 			if (strlen(tok) > 1 && tok[1]=='1') {
 				chan_misdn_log(1, ch->bc->port, "SETOPT: HDLC \n");
-				ch->bc->hdlc=1;
+				if (!ch->bc->hdlc) {
+					ch->bc->hdlc=1;
+					misdn_lib_setup_bc(ch->bc);
+				}
 			}  
 			ch->bc->capability=INFO_CAPABILITY_DIGITAL_UNRESTRICTED;
 			break;

@@ -621,32 +621,32 @@ static int aji_act_hook(void *data, int type, iks *node)
 
 	switch (pak->type) {
 	case IKS_PAK_NONE:
-		if (option_verbose > 4)
-			ast_verbose(VERBOSE_PREFIX_3 "JABBER: I Don't know what to do with you NONE\n");
+		if (option_debug)
+			ast_log(LOG_DEBUG, "JABBER: I Don't know what to do with you NONE\n");
 		break;
 	case IKS_PAK_MESSAGE:
 		aji_handle_message(client, pak);
-		if (option_verbose > 4)
-			ast_verbose(VERBOSE_PREFIX_3 "JABBER: I Don't know what to do with you MESSAGE\n");
+		if (option_debug)
+			ast_log(LOG_DEBUG, "JABBER: I Don't know what to do with you MESSAGE\n");
 		break;
 	case IKS_PAK_PRESENCE:
 		aji_handle_presence(client, pak);
-		if (option_verbose > 4)
-			ast_verbose(VERBOSE_PREFIX_3 "JABBER: I Do know how to handle presence!!\n");
+		if (option_debug)
+			ast_log(LOG_DEBUG, "JABBER: I Do know how to handle presence!!\n");
 		break;
 	case IKS_PAK_S10N:
 		aji_handle_subscribe(client, pak);
-		if (option_verbose > 4)
-			ast_verbose(VERBOSE_PREFIX_3 "JABBER: I Dont know S10N subscribe!!\n");
+		if (option_debug)
+			ast_log(LOG_DEBUG, "JABBER: I Dont know S10N subscribe!!\n");
 		break;
 	case IKS_PAK_IQ:
-		if (option_verbose > 4)
-			ast_verbose(VERBOSE_PREFIX_3 "JABBER: I Dont have an IQ!!!\n");
+		if (option_debug)
+			ast_log(LOG_DEBUG, "JABBER: I Dont have an IQ!!!\n");
 		aji_handle_iq(client, node);
 		break;
 	default:
-		if (option_verbose > 4)
-			ast_verbose(VERBOSE_PREFIX_3 "JABBER: I Dont know %i\n", pak->type);
+		if (option_debug)
+			ast_log(LOG_DEBUG, "JABBER: I Dont know %i\n", pak->type);
 		break;
 	}
 	
@@ -1099,7 +1099,8 @@ static void aji_handle_message(struct aji_client *client, ikspak *pak)
 		insert->message = ast_strdup(iks_find_cdata(pak->x, "body"));
 	if(pak->id)
 		ast_copy_string(insert->id, pak->id, sizeof(insert->message));
-	insert->from = ast_strdup(pak->from->full);
+	if (pak->from)
+		insert->from = ast_strdup(pak->from->full);
 	AST_LIST_LOCK(&client->messages);
 	AST_LIST_TRAVERSE_SAFE_BEGIN(&client->messages, tmp, list) {
 		if (flag) {
@@ -2379,6 +2380,7 @@ static int unload_module(void)
 {
 	ast_cli_unregister_multiple(aji_cli, sizeof(aji_cli) / sizeof(struct ast_cli_entry));
 	ast_unregister_application(app_ajisend);
+	ast_unregister_application(app_ajistatus);
 	ast_manager_unregister("JabberSend");
 	ASTOBJ_CONTAINER_TRAVERSE(&clients, 1, {
 		ASTOBJ_RDLOCK(iterator);

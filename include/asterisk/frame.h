@@ -240,6 +240,8 @@ extern struct ast_frame ast_null_frame;
 #define AST_FORMAT_ILBC		(1 << 10)
 /*! ADPCM (G.726, 32kbps, RFC3551 codeword packing) */
 #define AST_FORMAT_G726		(1 << 11)
+/*! G.722 */
+#define AST_FORMAT_G722		(1 << 12)
 /*! Maximum audio format */
 #define AST_FORMAT_MAX_AUDIO	(1 << 15)
 /*! Maximum audio mask */
@@ -471,7 +473,7 @@ struct ast_frame *ast_smoother_read(struct ast_smoother *s);
 
 void ast_frame_dump(const char *name, struct ast_frame *f, char *prefix);
 
-/*! \par AudioCodecPref Audio Codec Preferences
+/*! \page AudioCodecPref Audio Codec Preferences
 	In order to negotiate audio codecs in the order they are configured
 	in <channel>.conf for a device, we set up codec preference lists
 	in addition to the codec capabilities setting. The capabilities

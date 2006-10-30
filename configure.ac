@@ -296,6 +296,15 @@ AC_LINK_IFELSE(
 	AC_MSG_RESULT(no)
 )
 
+AC_MSG_CHECKING(for IP_MTU_DISCOVER)
+AC_LINK_IFELSE(
+	AC_LANG_PROGRAM([#include <netinet/in.h>],
+			[int foo = IP_MTU_DISCOVER;]),
+	AC_MSG_RESULT(yes)
+	AC_DEFINE([HAVE_IP_MTU_DISCOVER], 1, [Define to 1 if your system has PMTU discovery on UDP sockets.]),
+	AC_MSG_RESULT(no)
+)
+
 AC_CHECK_HEADER([libkern/OSAtomic.h],
                 [AC_DEFINE_UNQUOTED([HAVE_OSX_ATOMICS], 1, [Define to 1 if OSX atomic operations are supported.])])
 
@@ -725,9 +734,9 @@ if test "${PBX_PWLIB}" = "1" -a "${USE_OPENH323}" != "no" ; then
 fi
 if test "${USE_OPENH323}" != "no" -a "x${ac_cv_lib_OPENH323}" != "xyes" -a ! -z "${OPENH323_MANDATORY}"; then
    AC_MSG_NOTICE(***)
-   AC_MSG_NOTICE(*** The PWLIB installation on this system appears to be broken.)
+   AC_MSG_NOTICE(*** The OPENH323 installation on this system appears to be broken.)
    AC_MSG_NOTICE(*** Either correct the installation, or run configure)
-   AC_MSG_NOTICE(*** including --without-pwlib)
+   AC_MSG_NOTICE(*** including --without-h323)
    exit 1
 fi
 

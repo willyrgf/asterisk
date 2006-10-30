@@ -63,6 +63,9 @@ struct translator_path {
  * until step->dstfmt == desired_format.
  *
  * Array indexes are 'src' and 'dest', in that order.
+ *
+ * Note: the lock in the 'translators' list is also used to protect
+ * this structure.
  */
 static struct translator_path tr_matrix[MAX_FORMAT][MAX_FORMAT];
 
@@ -253,18 +256,22 @@ struct ast_trans_pvt *ast_translator_build_path(int dest, int source)
 	source = powerof(source);
 	dest = powerof(dest);
 	
+	AST_LIST_LOCK(&translators);
+
 	while (source != dest) {
 		struct ast_trans_pvt *cur;
 		struct ast_translator *t = tr_matrix[source][dest].step;
 		if (!t) {
 			ast_log(LOG_WARNING, "No translator path from %s to %s\n", 
 				ast_getformatname(source), ast_getformatname(dest));
+			AST_LIST_UNLOCK(&translators);
 			return NULL;
 		}
 		if (!(cur = newpvt(t))) {
 			ast_log(LOG_WARNING, "Failed to build translator step from %d to %d\n", source, dest);
 			if (head)
 				ast_translator_free_path(head);	
+			AST_LIST_UNLOCK(&translators);
 			return NULL;
 		}
 		if (!head)
@@ -276,6 +283,8 @@ struct ast_trans_pvt *ast_translator_build_path(int dest, int source)
 		/* Keep going if this isn't the final destination */
 		source = cur->t->dstfmt;
 	}
+
+	AST_LIST_UNLOCK(&translators);
 	return head;
 }
 
@@ -477,7 +486,7 @@ static void rebuild_matrix(int samples)
 /*! \brief CLI "show translation" command handler */
 static int show_translation_deprecated(int fd, int argc, char *argv[])
 {
-#define SHOW_TRANS 12
+#define SHOW_TRANS 13
 	int x, y, z;
 	int curlen = 0, longest = 0;
 
@@ -546,7 +555,6 @@ static int show_translation_deprecated(int fd, int argc, char *argv[])
 
 static int show_translation(int fd, int argc, char *argv[])
 {
-#define SHOW_TRANS 12
 	int x, y, z;
 	int curlen = 0, longest = 0;
 
@@ -635,6 +643,7 @@ static struct ast_cli_entry cli_translate[] = {
 int __ast_register_translator(struct ast_translator *t, struct ast_module *mod)
 {
 	static int added_cli = 0;
+	struct ast_translator *u;
 
 	if (!mod) {
 		ast_log(LOG_WARNING, "Missing module pointer, you need to supply one\n");
@@ -692,7 +701,24 @@ int __ast_register_translator(struct ast_translator *t, struct ast_module *mod)
 		ast_cli_register_multiple(cli_translate, sizeof(cli_translate) / sizeof(struct ast_cli_entry));
 		added_cli++;
 	}
-	AST_LIST_INSERT_HEAD(&translators, t, list);
+
+	/* find any existing translators that provide this same srcfmt/dstfmt,
+	   and put this one in order based on cost */
+	AST_LIST_TRAVERSE_SAFE_BEGIN(&translators, u, list) {
+		if ((u->srcfmt == t->srcfmt) &&
+		    (u->dstfmt == t->dstfmt) &&
+		    (u->cost > t->cost)) {
+			AST_LIST_INSERT_BEFORE_CURRENT(&translators, t, list);
+			t = NULL;
+		}
+	}
+	AST_LIST_TRAVERSE_SAFE_END;
+
+	/* if no existing translator was found for this format combination,
+	   add it to the beginning of the list */
+	if (t)
+		AST_LIST_INSERT_HEAD(&translators, t, list);
+
 	rebuild_matrix(0);
 	AST_LIST_UNLOCK(&translators);
 	return 0;
@@ -712,7 +738,7 @@ int ast_unregister_translator(struct ast_translator *t)
 			break;
 		}
 	}
-	AST_LIST_TRAVERSE_SAFE_END
+	AST_LIST_TRAVERSE_SAFE_END;
 	rebuild_matrix(0);
 	AST_LIST_UNLOCK(&translators);
 	return (u ? 0 : -1);
@@ -768,12 +794,85 @@ int ast_translator_best_choice(int *dst, int *srcs)
 
 unsigned int ast_translate_path_steps(unsigned int dest, unsigned int src)
 {
+	unsigned int res = -1;
+
 	/* convert bitwise format numbers into array indices */
 	src = powerof(src);
 	dest = powerof(dest);
-	if (!tr_matrix[src][dest].step)
-		return -1;
-	else
-		return tr_matrix[src][dest].multistep + 1;
+
+	AST_LIST_LOCK(&translators);
+
+	if (tr_matrix[src][dest].step)
+		res = tr_matrix[src][dest].multistep + 1;
+
+	AST_LIST_UNLOCK(&translators);
+
+	return res;
 }
 
+unsigned int ast_translate_available_formats(unsigned int dest, unsigned int src)
+{
+	unsigned int res = dest;
+	unsigned int x;
+	unsigned int src_audio = src & AST_FORMAT_AUDIO_MASK;
+	unsigned int src_video = src & AST_FORMAT_VIDEO_MASK;
+
+	/* if we don't have a source format, we just have to try all
+	   possible destination formats */
+	if (!src)
+		return dest;
+
+	/* If we have a source audio format, get its format index */
+	if (src_audio)
+		src_audio = powerof(src_audio);
+
+	/* If we have a source video format, get its format index */
+	if (src_video)
+		src_video = powerof(src_video);
+
+	AST_LIST_LOCK(&translators);
+
+	/* For a given source audio format, traverse the list of
+	   known audio formats to determine whether there exists
+	   a translation path from the source format to the
+	   destination format. */
+	for (x = 1; src_audio && x < AST_FORMAT_MAX_AUDIO; x <<= 1) {
+		/* if this is not a desired format, nothing to do */
+		if (!dest & x)
+			continue;
+
+		/* if the source is supplying this format, then
+		   we can leave it in the result */
+		if (src & x)
+			continue;
+
+		/* if we don't have a translation path from the src
+		   to this format, remove it from the result */
+		if (!tr_matrix[src_audio][powerof(x)].step)
+			res &= ~x;
+	}
+
+	/* For a given source video format, traverse the list of
+	   known video formats to determine whether there exists
+	   a translation path from the source format to the
+	   destination format. */
+	for (; src_video && x < AST_FORMAT_MAX_VIDEO; x <<= 1) {
+		/* if this is not a desired format, nothing to do */
+		if (!dest & x)
+			continue;
+
+		/* if the source is supplying this format, then
+		   we can leave it in the result */
+		if (src & x)
+			continue;
+
+		/* if we don't have a translation path from the src
+		   to this format, remove it from the result */
+		if (!tr_matrix[src_video][powerof(x)].step)
+			res &= ~x;
+	}
+
+	AST_LIST_UNLOCK(&translators);
+
+	return res;
+}

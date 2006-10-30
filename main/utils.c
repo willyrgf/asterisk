@@ -449,7 +449,7 @@ char *ast_uri_encode(const char *string, char *outbuf, int buflen, int doreserve
 	char *out = NULL;
 	char *buf = NULL;
 
-	strncpy(outbuf, string, buflen);
+	ast_copy_string(outbuf, string, buflen);
 
 	/* If there's no characters to convert, just go through and don't do anything */
 	while (*ptr) {
@@ -983,4 +983,14 @@ int ast_dynamic_str_thread_build_va(struct ast_dynamic_str **buf, size_t max_len
 	}
 
 	return res;
+}
+
+void ast_enable_packet_fragmentation(int sock)
+{
+#if defined(HAVE_IP_MTU_DISCOVER)
+	int val = IP_PMTUDISC_DONT;
+	
+	if (setsockopt(sock, IPPROTO_IP, IP_MTU_DISCOVER, &val, sizeof(val)))
+		ast_log(LOG_WARNING, "Unable to disable PMTU discovery. Large UDP packets may fail to be delivered when sent from this socket.\n");
+#endif /* HAVE_IP_MTU_DISCOVER */
 }

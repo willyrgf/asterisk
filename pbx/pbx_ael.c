@@ -823,13 +823,13 @@ static void check_includes(pval *includes)
 
 static void check_timerange(pval *p)
 {
-	char times[200];
+	char *times;
 	char *e;
 	int s1, s2;
 	int e1, e2;
 
+	times = ast_strdupa(p->u1.str);
 
-	strncpy(times, p->u1.str, sizeof(times));
 	/* Star is all times */
 	if (ast_strlen_zero(times) || !strcmp(times, "*")) {
 		return;
@@ -891,13 +891,13 @@ static char *days[] =
 /*! \brief  get_dow: Get day of week */
 static void check_dow(pval *DOW)
 {
-	char dow[200];
+	char *dow;
 	char *c;
 	/* The following line is coincidence, really! */
 	int s, e;
 	
-	strncpy(dow,DOW->u1.str,sizeof(dow));
- 
+	dow = ast_strdupa(DOW->u1.str);
+
 	/* Check for all days */
 	if (ast_strlen_zero(dow) || !strcmp(dow, "*"))
 		return;
@@ -930,12 +930,13 @@ static void check_dow(pval *DOW)
 
 static void check_day(pval *DAY)
 {
-	char day[200];
+	char *day;
 	char *c;
 	/* The following line is coincidence, really! */
 	int s, e;
 
-	strncpy(day,DAY->u1.str,sizeof(day));
+	day = ast_strdupa(DAY->u1.str);
+
 	/* Check for all days */
 	if (ast_strlen_zero(day) || !strcmp(day, "*")) {
 		return;
@@ -992,12 +993,13 @@ static char *months[] =
 
 static void check_month(pval *MON)
 {
-	char mon[200];
+	char *mon;
 	char *c;
 	/* The following line is coincidence, really! */
 	int s, e;
 
-	strncpy(mon,MON->u1.str,sizeof(mon));
+	mon = ast_strdupa(MON->u1.str);
+
 	/* Check for all days */
 	if (ast_strlen_zero(mon) || !strcmp(mon, "*")) 
 		return ;
@@ -1876,14 +1878,14 @@ int is_empty(char *arg)
 int option_matches_j( struct argdesc *should, pval *is, struct argapp *app)
 {
 	struct argchoice *ac;
-	char opcop[400],*q,*p;
+	char *opcop,*q,*p;
 	
 	switch (should->dtype) {
 	case ARGD_OPTIONSET:
 		if ( strstr(is->u1.str,"${") )
 			return 0;  /* no checking anything if there's a var reference in there! */
 			
-		strncpy(opcop,is->u1.str,sizeof(opcop));
+		opcop = ast_strdupa(is->u1.str);
 
 		for (q=opcop;*q;q++) { /* erase the innards of X(innard) type arguments, so we don't get confused later */
 			if ( *q == '(' ) {
@@ -1938,7 +1940,7 @@ int option_matches_j( struct argdesc *should, pval *is, struct argapp *app)
 int option_matches( struct argdesc *should, pval *is, struct argapp *app)
 {
 	struct argchoice *ac;
-	char opcop[400];
+	char *opcop;
 	
 	switch (should->dtype) {
 	case ARGD_STRING:
@@ -1973,7 +1975,7 @@ int option_matches( struct argdesc *should, pval *is, struct argapp *app)
 		break;
 		
 	case ARGD_OPTIONSET:
-		strncpy(opcop,is->u1.str,sizeof(opcop));
+		opcop = ast_strdupa(is->u1.str);
 		
 		for (ac=app->opts; ac; ac=ac->next) {
 			if (strlen(ac->name)>1  && strchr(ac->name,'(') == 0 && strcmp(ac->name,is->u1.str) == 0) /* multichar option, no parens, and a match? */
@@ -2065,7 +2067,7 @@ void check_switch_expr(pval *item, struct argapp *apps)
 {
 #ifdef AAL_ARGCHECK
 	/* get and clean the variable name */
-	char buff1[1024],*p;
+	char *buff1, *p;
 	struct argapp *a,*a2;
 	struct appsetvar *v,*v2;
 	struct argchoice *c;
@@ -2075,7 +2077,8 @@ void check_switch_expr(pval *item, struct argapp *apps)
 	while (p && *p && (*p == ' ' || *p == '\t' || *p == '$' || *p == '{' ) )
 		p++;
 	
-	strncpy(buff1,p,sizeof(buff1));
+	buff1 = ast_strdupa(p);
+
 	while (strlen(buff1) > 0 && ( buff1[strlen(buff1)-1] == '}' || buff1[strlen(buff1)-1] == ' ' || buff1[strlen(buff1)-1] == '\t'))
 		buff1[strlen(buff1)-1] = 0;
 	/* buff1 now contains the variable name */
@@ -2785,6 +2788,29 @@ static void remove_spaces_before_equals(char *str)
 	}
 }
 
+static void gen_match_to_pattern(char *pattern, char *result)
+{
+	/* the result will be a string that will be matched by pattern */
+	char *p=pattern, *t=result;
+	while (*p) {
+		if (*p == 'x' || *p == 'n' || *p == 'z' || *p == 'X' || *p == 'N' || *p == 'Z')
+			*t++ = '9';
+		else if (*p == '[') {
+			char *z = p+1;
+			while (*z != ']')
+				z++;
+			if (*(z+1)== ']')
+				z++;
+			*t++=*(p+1); /* use the first char in the set */
+			p = z;
+		} else {
+			*t++ = *p;
+		}
+		p++;
+	}
+	*t++ = 0; /* cap it off */
+}
+
 static void gen_prios(struct ael_extension *exten, char *label, pval *statement, struct ael_extension *mother_exten, struct ast_context *this_context )
 {
 	pval *p,*p2,*p3;
@@ -3031,14 +3057,15 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 							fall_thru = new_prio();
 							fall_thru->type = AEL_APPCALL;
 							fall_thru->app = strdup("Goto");
-							snprintf(buf1,sizeof(buf1),"_sw-%d-%s|1",local_control_statement_count, p2->next->u1.str);
+							gen_match_to_pattern(p2->next->u1.str, buf2);
+							snprintf(buf1,sizeof(buf1),"sw-%d-%s|1", local_control_statement_count, buf2);
 							fall_thru->appargs = strdup(buf1);
 							linkprio(switch_case, fall_thru);
 						} else if (p2->next && p2->next->type == PV_DEFAULT) {
 							fall_thru = new_prio();
 							fall_thru->type = AEL_APPCALL;
 							fall_thru->app = strdup("Goto");
-							snprintf(buf1,sizeof(buf1),"_sw-%d-.|1",local_control_statement_count);
+							snprintf(buf1,sizeof(buf1),"sw-%d-.|1",local_control_statement_count);
 							fall_thru->appargs = strdup(buf1);
 							linkprio(switch_case, fall_thru);
 						} else if (!p2->next) {
@@ -3092,14 +3119,15 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 							fall_thru = new_prio();
 							fall_thru->type = AEL_APPCALL;
 							fall_thru->app = strdup("Goto");
-							snprintf(buf1,sizeof(buf1),"_sw-%d-%s|1",local_control_statement_count, p2->next->u1.str);
+							gen_match_to_pattern(p2->next->u1.str, buf2);
+							snprintf(buf1,sizeof(buf1),"sw-%d-%s|1",local_control_statement_count, buf2);
 							fall_thru->appargs = strdup(buf1);
 							linkprio(switch_case, fall_thru);
 						} else if (p2->next && p2->next->type == PV_DEFAULT) {
 							fall_thru = new_prio();
 							fall_thru->type = AEL_APPCALL;
 							fall_thru->app = strdup("Goto");
-							snprintf(buf1,sizeof(buf1),"_sw-%d-.|1",local_control_statement_count);
+							snprintf(buf1,sizeof(buf1),"sw-%d-.|1",local_control_statement_count);
 							fall_thru->appargs = strdup(buf1);
 							linkprio(switch_case, fall_thru);
 						} else if (!p2->next) {
@@ -3155,14 +3183,15 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 							fall_thru = new_prio();
 							fall_thru->type = AEL_APPCALL;
 							fall_thru->app = strdup("Goto");
-							snprintf(buf1,sizeof(buf1),"_sw-%d-%s|1",local_control_statement_count, p2->next->u1.str);
+							gen_match_to_pattern(p2->next->u1.str, buf2);
+							snprintf(buf1,sizeof(buf1),"sw-%d-%s|1",local_control_statement_count, buf2);
 							fall_thru->appargs = strdup(buf1);
 							linkprio(switch_case, fall_thru);
 						} else if (p2->next && p2->next->type == PV_DEFAULT) {
 							fall_thru = new_prio();
 							fall_thru->type = AEL_APPCALL;
 							fall_thru->app = strdup("Goto");
-							snprintf(buf1,sizeof(buf1),"_sw-%d-.|1",local_control_statement_count);
+							snprintf(buf1,sizeof(buf1),"sw-%d-.|1",local_control_statement_count);
 							fall_thru->appargs = strdup(buf1);
 							linkprio(switch_case, fall_thru);
 						} else if (!p2->next) {

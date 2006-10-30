@@ -145,7 +145,7 @@ int daemon(int, int);  /* defined in libresolv of all places */
 	ast_verbose("certain conditions. Type 'show license' for details.\n"); \
 	ast_verbose("=========================================================================\n")
 
-/*! \defgroup main_options 
+/*! \defgroup main_options Main Configuration Options
  \brief Main configuration options from \ref Config_ast "asterisk.conf" or 
   the operating system command line when starting Asterisk 
   Some of them can be changed in the CLI 
@@ -690,7 +690,9 @@ void ast_unreplace_sigchld(void)
 int ast_safe_system(const char *s)
 {
 	pid_t pid;
+#ifdef HAVE_WORKING_FORK
 	int x;
+#endif
 	int res;
 	struct rusage rusage;
 	int status;
@@ -705,13 +707,15 @@ int ast_safe_system(const char *s)
 #endif	
 
 	if (pid == 0) {
+#ifdef HAVE_WORKING_FORK
 		if (ast_opt_high_priority)
 			ast_set_priority(0);
 		/* Close file descriptors and launch system command */
 		for (x = STDERR_FILENO + 1; x < 4096; x++)
 			close(x);
+#endif
 		execl("/bin/sh", "/bin/sh", "-c", s, (char *) NULL);
-		exit(1);
+		_exit(1);
 	} else if (pid > 0) {
 		for(;;) {
 			res = wait4(pid, &status, 0, &rusage);

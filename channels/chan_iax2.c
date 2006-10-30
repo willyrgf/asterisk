@@ -192,7 +192,8 @@ int (*iax2_regfunk)(const char *username, int onoff) = NULL;
 #define IAX_CAPABILITY_MEDBANDWIDTH 	(IAX_CAPABILITY_FULLBANDWIDTH & 	\
 					 ~AST_FORMAT_SLINEAR &			\
 					 ~AST_FORMAT_ULAW &			\
-					 ~AST_FORMAT_ALAW) 
+					 ~AST_FORMAT_ALAW &			\
+					 ~AST_FORMAT_G722) 
 /* A modem */
 #define IAX_CAPABILITY_LOWBANDWIDTH	(IAX_CAPABILITY_MEDBANDWIDTH & 		\
 					 ~AST_FORMAT_G726 &			\
@@ -1773,7 +1774,7 @@ retry:
 				iax2_frame_free(frame.data);
 			jb_destroy(pvt->jb);
 			/* gotta free up the stringfields */
-			ast_string_field_free_all(pvt);
+			ast_string_field_free_pools(pvt);
 			free(pvt);
 		}
 	}
@@ -2931,6 +2932,9 @@ static int iax2_call(struct ast_channel *c, char *dest, int timeout)
 		iaxs[callno]->pingtime = autokill / 2;
 		iaxs[callno]->initid = ast_sched_add(sched, autokill * 2, auto_congest, CALLNO_TO_PTR(callno));
 	}
+
+	/* send the command using the appropriate socket for this peer */
+	iaxs[callno]->sockfd = cai.sockfd;
 
 	/* Transmit the string in a "NEW" request */
 	send_command(iaxs[callno], AST_FRAME_IAX, IAX_COMMAND_NEW, 0, ied.buf, ied.pos, -1);
@@ -8114,11 +8118,12 @@ static void *network_thread(void *ignore)
 				continue;
 			
 			f->sentyet++;
-			/* Send a copy immediately -- errors here are ok, so don't bother locking */
+			ast_mutex_lock(&iaxsl[f->callno]);
 			if (iaxs[f->callno]) {
 				send_packet(f);
 				count++;
 			} 
+			ast_mutex_unlock(&iaxsl[f->callno]);
 			if (f->retries < 0) {
 				/* This is not supposed to be retransmitted */
 				AST_LIST_REMOVE(&iaxq.queue, f, list);
@@ -8401,7 +8406,7 @@ static struct iax2_peer *build_peer(const char *name, struct ast_variable *v, st
 					peer->expire = -1;
 					ast_clear_flag(peer, IAX_DYNAMIC);
 					if (ast_dnsmgr_lookup(v->value, &peer->addr.sin_addr, &peer->dnsmgr)) {
-						ast_string_field_free_all(peer);
+						ast_string_field_free_pools(peer);
 						free(peer);
 						return NULL;
 					}
@@ -8412,7 +8417,7 @@ static struct iax2_peer *build_peer(const char *name, struct ast_variable *v, st
 					inet_aton("255.255.255.255", &peer->mask);
 			} else if (!strcasecmp(v->name, "defaultip")) {
 				if (ast_get_ip(&peer->defaddr, v->value)) {
-					ast_string_field_free_all(peer);
+					ast_string_field_free_pools(peer);
 					free(peer);
 					return NULL;
 				}
@@ -8548,7 +8553,7 @@ static struct iax2_user *build_user(const char *name, struct ast_variable *v, st
 	
 	if (user) {
 		if (firstpass) {
-			ast_string_field_free_all(user);
+			ast_string_field_free_pools(user);
 			memset(user, 0, sizeof(struct iax2_user));
 			if (ast_string_field_init(user, 32)) {
 				free(user);
@@ -8633,11 +8638,9 @@ static struct iax2_user *build_user(const char *name, struct ast_variable *v, st
 				ast_string_field_set(user, dbsecret, v->value);
 			} else if (!strcasecmp(v->name, "secret")) {
 				if (!ast_strlen_zero(user->secret)) {
-					char buf99[100];
-					strncpy(buf99,user->secret,100); /* just in case some weirdness happens in the string_field_build */
-					ast_string_field_build(user,secret,"%s;%s",buf99,v->value);
-					/* strncpy(user->secret + strlen(user->secret), ";", sizeof(user->secret) - strlen(user->secret) - 1);
-					   strncpy(user->secret + strlen(user->secret), v->value, sizeof(user->secret) - strlen(user->secret) - 1); */
+					char *old = ast_strdupa(user->secret);
+
+					ast_string_field_build(user, secret, "%s;%s", old, v->value);
 				} else
 					ast_string_field_set(user, secret, v->value);
 			} else if (!strcasecmp(v->name, "callerid")) {
@@ -8750,7 +8753,7 @@ static void destroy_user(struct iax2_user *user)
 		ast_variables_destroy(user->vars);
 		user->vars = NULL;
 	}
-	ast_string_field_free_all(user);
+	ast_string_field_free_pools(user);
 	free(user);
 }
 
@@ -8791,7 +8794,7 @@ static void destroy_peer(struct iax2_peer *peer)
 	register_peer_exten(peer, 0);
 	if (peer->dnsmgr)
 		ast_dnsmgr_release(peer->dnsmgr);
-	ast_string_field_free_all(peer);
+	ast_string_field_free_pools(peer);
 	free(peer);
 }
 
@@ -10089,6 +10092,8 @@ static int load_module(void)
 	for (x=0;x<IAX_MAX_CALLS;x++)
 		ast_mutex_init(&iaxsl[x]);
 	
+	ast_cond_init(&sched_cond, NULL);
+
 	io = io_context_create();
 	sched = sched_context_create();
 	
