@@ -126,9 +126,12 @@
 	\page chan_sip3_todo Chan_sip3: Things to do
 	Done
 	- removed userconf support (in favour of astum)
-	- added the peermatch branch
 	- removed pedantic mode
 	- added config option for qualify frequency timers
+	- merged peermatch and sipregister branches
+	- removed "type=user"
+	- change "sip nodebug" to "sip debug off" and "sip debug" to "sip debug on" - done
+	- change "sip history" and "nohistory" to "on/off" - done
 
 	Halfdone
 	- Added separate TOS setting for presence. Need to run setsockopt
@@ -137,7 +140,7 @@
 	Todo
 	- Split up source code file
 	- Add astum
-	- Add sipregister branch
+	- Add T1 configuration settings
 	- Add auto-nat for RFC 1918 networks
 	- Add type=device for peers
 	- Add type=service for register= replacement
@@ -156,8 +159,6 @@
 	- Add File's multithreading code
 	- Make debugaddr a ha list instead of one address and move it out of sipnet
 
-	- change "sip nodebug" to "sip debug off" and "sip debug" to "sip debug on" - done
-	- change "sip history" and "nohistory" to "on/off" - done
 
 	- ... And much more
 */
@@ -358,9 +359,7 @@ struct sip_device_list devicelist;
 
 struct ast_config *notify_types;		/*!< The list of manual NOTIFY types we know how to send */
 
-/*---------------------------- Forward declarations of functions in chan_sip.c */
-/*! \note This is added to help splitting up chan_sip.c into several files
-	in coming releases */
+/*---------------------------- Forward declarations of functions in chan_sip3.c */
 
 /*--- PBX interface functions  - stays in this source code file */
 static struct ast_channel *sip_request_call(const char *type, int format, void *data, int *cause);
