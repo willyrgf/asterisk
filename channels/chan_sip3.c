@@ -3699,8 +3699,10 @@ static enum check_auth_result register_verify(struct sip_dialog *p, struct socka
 	build_contact(p);
 	peer = find_device(name, NULL, 1);
 	if (!(peer && ast_apply_ha(peer->ha, sin))) {
+		/* Peer fails ACL check */
 		if (peer)
 			ASTOBJ_UNREF(peer, sip_destroy_device);
+		peer = NULL;
 	}
 	if (peer) {
 		/* Set Frame packetization */
