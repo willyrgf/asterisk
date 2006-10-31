@@ -3936,7 +3936,7 @@ static int copy_via_headers(struct sip_pvt *p, struct sip_request *req, struct s
 				if (rport && *(rport+6) == '=') 
 					rport = NULL;		/* We already have a parameter to rport */
 
-				if (rport && (ast_test_flag(p, SIP_NAT) == SIP_NAT_ALWAYS)) {
+				if (rport && ((ast_test_flag(p, SIP_NAT) == SIP_NAT_ALWAYS) || (ast_test_flag(p, SIP_NAT) == SIP_NAT_RFC3581))) {
 					/* We need to add received port - rport */
 					ast_copy_string(tmp, oh, sizeof(tmp));
 
@@ -6566,8 +6566,10 @@ static int register_verify(struct sip_pvt *p, struct sockaddr_in *sin, struct si
 	build_contact(p);
 	peer = find_peer(name, NULL, 1);
 	if (!(peer && ast_apply_ha(peer->ha, sin))) {
+		/* Peer fails ACL check */
 		if (peer)
 			ASTOBJ_UNREF(peer,sip_destroy_peer);
+		peer = NULL;
 	}
 	if (peer) {
 		if (!ast_test_flag(&peer->flags_page2, SIP_PAGE2_DYNAMIC)) {
@@ -6577,9 +6579,6 @@ static int register_verify(struct sip_pvt *p, struct sockaddr_in *sin, struct si
 			transmit_response(p, "100 Trying", req);
 			if (!(res = check_auth(p, req, p->randdata, sizeof(p->randdata), peer->name, peer->secret, peer->md5secret, SIP_REGISTER, uri, 0, ignore))) {
 				sip_cancel_destroy(p);
-
-				/* Make sure we copy flags, so that NAT settings apply */
-				ast_copy_flags(p, peer, SIP_FLAGS_TO_COPY);
 
 				switch (parse_register_contact(p, peer, req)) {
 				case PARSE_REGISTER_FAILED:
