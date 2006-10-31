@@ -195,6 +195,7 @@ static int expiry = DEFAULT_EXPIRY;
 
 #define DEFAULT_RETRANS              1000             /*!< How frequently to retransmit Default: 2 * 500 ms in RFC 3261 */
 #define MAX_RETRANS                  6                /*!< Try only 6 times for retransmissions, a total of 7 transmissions */
+#define SIP_TIMER_T1		     500              /* SIP timer T1 (according to RFC 3261) */
 #define SIP_TRANS_TIMEOUT            32000            /*!< SIP request timeout (rfc 3261) 64*T1 
                                                       \todo Use known T1 for timeout (peerpoke)
                                                       */
@@ -2003,7 +2004,7 @@ static void sip_scheddestroy(struct sip_pvt *p, int ms)
 {
 	if (ms < 0) {
 		if (p->timer_t1 == 0)
-			p->timer_t1 = 500;	/* Set timer T1 if not set (RFC 3261) */
+			p->timer_t1 = SIP_TIMER_T1;	/* Set timer T1 if not set (RFC 3261) */
 		ms = p->timer_t1 * 64;
 	}
 	if (sip_debug_test_pvt(p))
@@ -2740,33 +2741,33 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer)
 {
 	struct hostent *hp;
 	struct ast_hostent ahp;
-	struct sip_peer *p;
+	struct sip_peer *peer;
 	char *port;
 	int portno;
 	char host[MAXHOSTNAMELEN], *hostn;
-	char peer[256];
+	char peername[256];
 
-	ast_copy_string(peer, opeer, sizeof(peer));
-	port = strchr(peer, ':');
+	ast_copy_string(peername, opeer, sizeof(peername));
+	port = strchr(peername, ':');
 	if (port)
 		*port++ = '\0';
 	dialog->sa.sin_family = AF_INET;
-	dialog->timer_t1 = 500; /* Default SIP retransmission timer T1 (RFC 3261) */
-	p = find_peer(peer, NULL, 1);
+	dialog->timer_t1 = SIP_TIMER_T1; /* Default SIP retransmission timer T1 (RFC 3261) */
+	peer = find_peer(peername, NULL, 1);
 
-	if (p) {
-		int res = create_addr_from_peer(dialog, p);
-		ASTOBJ_UNREF(p, sip_destroy_peer);
+	if (peer) {
+		int res = create_addr_from_peer(dialog, peer);
+		ASTOBJ_UNREF(peer, sip_destroy_peer);
 		return res;
 	}
-	hostn = peer;
+	hostn = peername;
 	portno = port ? atoi(port) : STANDARD_SIP_PORT;
 	if (srvlookup) {
 		char service[MAXHOSTNAMELEN];
 		int tportno;
 		int ret;
 
-		snprintf(service, sizeof(service), "_sip._udp.%s", peer);
+		snprintf(service, sizeof(service), "_sip._udp.%s", peername);
 		ret = ast_get_srv(NULL, host, sizeof(host), &tportno, service);
 		if (ret > 0) {
 			hostn = host;
@@ -2775,10 +2776,10 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer)
 	}
 	hp = ast_gethostbyname(hostn, &ahp);
 	if (!hp) {
-		ast_log(LOG_WARNING, "No such host: %s\n", peer);
+		ast_log(LOG_WARNING, "No such host: %s\n", peername);
 		return -1;
 	}
-	ast_string_field_set(dialog, tohost, peer);
+	ast_string_field_set(dialog, tohost, peername);
 	memcpy(&dialog->sa.sin_addr, hp->h_addr, sizeof(dialog->sa.sin_addr));
 	dialog->sa.sin_port = htons(portno);
 	dialog->recv = dialog->sa;
@@ -4199,7 +4200,7 @@ static struct sip_pvt *sip_alloc(ast_string_field callid, struct sockaddr_in *si
 	p->prefs = default_prefs;		/* Set default codecs for this call */
 
 	if (intended_method != SIP_OPTIONS)	/* Peerpoke has it's own system */
-		p->timer_t1 = 500;	/* Default SIP retransmission timer T1 (RFC 3261) */
+		p->timer_t1 = SIP_TIMER_T1;	/* Default SIP retransmission timer T1 (RFC 3261) */
 
 	if (sin) {
 		p->sa = *sin;
