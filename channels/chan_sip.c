@@ -1940,7 +1940,7 @@ static enum sip_result __sip_reliable_xmit(struct sip_pvt *p, int seqno, int res
 	pkt->owner = p;
 	pkt->seqno = seqno;
 	if (resp)
-		ast_set_flag(pkt->flags, FLAG_RESPONSE);
+		ast_set_flag(pkt, FLAG_RESPONSE);
 	pkt->data[len] = '\0';
 	pkt->timer_t1 = p->timer_t1;	/* Set SIP timer T1 */
 	if (fatal)
@@ -6095,6 +6095,12 @@ static int add_sdp(struct sip_request *resp, struct sip_pvt *p)
 
 	/* Ok, let's start working with codec selection here */
 	capability = ast_translate_available_formats(p->jointcapability, p->prefcodec);
+
+	/* If there are no audio formats left to offer, punt */
+	if (!(capability & AST_FORMAT_AUDIO_MASK)) {
+		ast_log(LOG_WARNING, "No audio format found to offer.\n");
+		return -1;
+	}
 
 	if (option_debug > 1) {
 		char codecbuf[BUFSIZ];
