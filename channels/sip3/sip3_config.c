@@ -292,7 +292,7 @@ void set_device_defaults(struct sip_peer *device)
 }
 
 /*! \brief Build peer from configuration (file or realtime static/dynamic) */
-static struct sip_peer *build_peer(const char *name, struct ast_variable *v, struct ast_variable *alt, int realtime)
+static struct sip_peer *build_device(const char *name, struct ast_variable *v, struct ast_variable *alt, int realtime)
 {
 	struct sip_peer *peer = NULL;
 	struct ast_ha *oldha = NULL;
@@ -354,6 +354,8 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 			continue;
 		if (realtime && !strcasecmp(v->name, "regseconds")) {
 			ast_get_time_t(v->value, &regseconds, 0, NULL);
+		} else if (!strcasecmp(v->name, "domain")) {
+			ast_copy_string(peer->domain, v->value, sizeof(peer->domain));
 		} else if (realtime && !strcasecmp(v->name, "ipaddr") && !ast_strlen_zero(v->value) ) {
 			inet_aton(v->value, &(peer->addr.sin_addr));
 		} else if (realtime && !strcasecmp(v->name, "name"))
@@ -363,6 +365,8 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 			ast_set_flag(&peer->flags[1], SIP_PAGE2_RT_FROMCONTACT);
 		} else if (!strcasecmp(v->name, "secret")) 
 			ast_copy_string(peer->secret, v->value, sizeof(peer->secret));
+		else if (!strcasecmp(v->name, "authuser")) 
+			ast_copy_string(peer->authuser, v->value, sizeof(peer->authuser));
 		else if (!strcasecmp(v->name, "md5secret")) 
 			ast_copy_string(peer->md5secret, v->value, sizeof(peer->md5secret));
 		else if (!strcasecmp(v->name, "auth"))
@@ -438,7 +442,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 			if (peer->callingpres == -1)
 				peer->callingpres = atoi(v->value);
 		} else if (!strcasecmp(v->name, "defaultuser")) {
-			ast_copy_string(peer->username, v->value, sizeof(peer->username));
+			ast_copy_string(peer->defaultuser, v->value, sizeof(peer->defaultuser));
 		} else if (!strcasecmp(v->name, "language")) {
 			ast_copy_string(peer->language, v->value, sizeof(peer->language));
 		} else if (!strcasecmp(v->name, "regexten")) {
@@ -606,7 +610,7 @@ struct sip_peer *realtime_peer(const char *newpeername, struct sockaddr_in *sin)
 	}
 
 	/* Peer found in realtime, now build it in memory */
-	peer = build_peer(newpeername, var, NULL, !ast_test_flag(&global.flags[1], SIP_PAGE2_RTCACHEFRIENDS));
+	peer = build_device(newpeername, var, NULL, !ast_test_flag(&global.flags[1], SIP_PAGE2_RTCACHEFRIENDS));
 	if (!peer) {
 		ast_variables_destroy(var);
 		return NULL;
@@ -1041,7 +1045,7 @@ int reload_config(enum channelreloadreason reason)
 				continue;
 			}
 			if (type & SIP_PEER) {
-				device = build_peer(cat, ast_variable_browse(cfg, cat), NULL, 0);
+				device = build_device(cat, ast_variable_browse(cfg, cat), NULL, 0);
 				if (device) {
 					ASTOBJ_CONTAINER_LINK(&devicelist,device);
 					ASTOBJ_UNREF(device, sip_destroy_device);

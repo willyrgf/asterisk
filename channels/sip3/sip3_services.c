@@ -174,10 +174,10 @@ int sip_register(char *value, int lineno, struct sip_peer *peer)
 		/* Need to copy port number as well */
 		if (ast_strlen_zero(peer->fromuser))
 			snprintf(username, sizeof(username), "%s:%s@%s/%s",
-				peer->username, peer->secret, peer->tohost, peer->regexten);
+				peer->name, peer->secret, peer->tohost, peer->regexten);
 		else
 			snprintf(username, sizeof(username), "%s:%s:%s@%s/%s",
-				peer->username, peer->secret, peer->fromuser, peer->tohost, peer->regexten);
+				peer->name, peer->secret, peer->fromuser, peer->tohost, peer->regexten);
 	} else if (value)
 		ast_copy_string(username, value, sizeof(username));
 	else

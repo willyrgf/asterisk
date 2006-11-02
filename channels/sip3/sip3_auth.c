@@ -445,14 +445,14 @@ int build_reply_digest(struct sip_dialog *p, int method, char* digest, int diges
 	else if (!ast_strlen_zero(p->uri))
 		ast_copy_string(uri, p->uri, sizeof(uri));
 	else
-		snprintf(uri, sizeof(uri), "sip:%s@%s",p->username, ast_inet_ntoa(p->sa.sin_addr));
+		snprintf(uri, sizeof(uri), "sip:%s@%s",p->peername, ast_inet_ntoa(p->sa.sin_addr));
 
 	snprintf(cnonce, sizeof(cnonce), "%08lx", ast_random());
 
  	/* Check if we have separate auth credentials */
  	if ((auth = find_realm_authentication(authl, p->realm))) {
-		ast_log(LOG_WARNING, "use realm [%s] from peer [%s][%s]\n",
-			auth->username, p->peername, p->username);
+		ast_log(LOG_WARNING, "use realm [%s] from peer [%s]\n",
+			auth->username, p->peername);
  		username = auth->username;
  		secret = auth->secret;
  		md5secret = auth->md5secret;

@@ -68,7 +68,6 @@ GNURK int transmit_response_with_auth(struct sip_dialog *p, const char *msg, con
 GNURK int transmit_invite(struct sip_dialog *p, int sipmethod, int sdp, int init);
 GNURK int transmit_state_notify(struct sip_dialog *p, int state, int full, int timeout);
 GNURK int transmit_request_with_auth(struct sip_dialog *p, int sipmethod, int seqno, enum xmittype reliable, int newbranch);
-GNURK void sip_destroy(struct sip_dialog *p);
 GNURK void do_setnat(struct sip_dialog *p, int natflags);
 GNURK void build_via(struct sip_dialog *p);
 GNURK void __sip_pretend_ack(struct sip_dialog *p);
@@ -82,6 +81,8 @@ GNURK int init_resp(struct sip_request *resp, const char *msg);
 GNURK void copy_request(struct sip_request *dst, const struct sip_request *src);
 GNURK struct sip_dialog *get_sip_dialog_byid_locked(const char *callid, const char *totag, const char *fromtag);
 GNURK void ast_quiet_chan(struct ast_channel *chan);
+GNURK void sip_dump_history(struct sip_dialog *dialog);	/* Dump history to LOG_DEBUG at end of dialog, before destroying data */
+GNURK void free_old_route(struct sip_route *route);
 
 /*! sip3_refer.c */
 GNURK const char *referstatus2str(enum referstatus rstatus) attribute_pure;
@@ -180,7 +181,6 @@ GNURK struct ast_frame *sip_read(struct ast_channel *ast);
 /* sip3_config.c */
 GNURK void set_device_defaults(struct sip_peer *device);
 GNURK struct sip_peer *realtime_peer(const char *newpeername, struct sockaddr_in *sin);
-GNURK struct sip_peer *realtime_user(const char *username);
 GNURK int reload_config(enum channelreloadreason reason);
 
 /* sip3_callerid.c */
@@ -192,15 +192,12 @@ GNURK void replace_cid(struct sip_dialog *p, const char *rpid_num, const char *c
 GNURK const char *sip_nat_mode(const struct sip_dialog *p);
 GNURK void  print_group(int fd, ast_group_t group, int crlf);
 GNURK int peer_status(struct sip_peer *peer, char *status, int statuslen);
-GNURK int manager_sip_show_peers(struct mansession *s, struct message *m );
-GNURK int manager_sip_show_peer(struct mansession *s, struct message *m);
+GNURK int manager_sip_show_device(struct mansession *s, struct message *m );
+GNURK int manager_sip_show_devices(struct mansession *s, struct message *m);
 GNURK void sip_cli_and_manager_commands_register(void);
 GNURK void sip_cli_and_manager_commands_unregister(void);
-//static char *complete_sipch(const char *line, const char *word, int pos, int state);
-GNURK char *complete_sip_peer(const char *word, int state, int flags2);
-GNURK char *complete_sip_show_peer(const char *line, const char *word, int pos, int state);
-//static char *complete_sip_debug_peer(const char *line, const char *word, int pos, int state);
-GNURK char *complete_sip_user(const char *word, int state, int flags2);
+GNURK char *complete_sip_device(const char *word, int state, int flags2);
+GNURK char *complete_sip_show_device(const char *line, const char *word, int pos, int state);
 
 
 /* sip3_dialog.c */
@@ -213,6 +210,10 @@ GNURK const char *hangup_cause2sip(int cause);
 GNURK struct sip_dialog *sip_alloc(ast_string_field callid, struct sockaddr_in *sin, int useglobal_nat, const int intended_method);
 GNURK void make_our_tag(char *tagbuf, size_t len);
 GNURK struct sip_dialog *match_or_create_dialog(struct sip_request *req, struct sockaddr_in *sin, const int intended_method);
+GNURK void sip_destroy(struct sip_dialog *p);
+GNURK void __sip_destroy(struct sip_dialog *p, int lockowner, int lockdialoglist);
+GNURK void __sip_ack(struct sip_dialog *dialog, int seqno, int resp, int sipmethod, int reset);
+GNURK int __sip_semi_ack(struct sip_dialog *p, int seqno, int resp, int sipmethod);
 
 /* sip3_services.c - outbound registration for services from other servers/providers  */
 

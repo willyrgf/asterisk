@@ -129,6 +129,199 @@ void dialoglist_unlock(void)
 }
 
 
+/*! \brief For a reliable transmission, we need to get an reply to stop retransmission. 
+	Acknowledges receipt of a packet and stops retransmission */
+/* We need a method for responses too ... */
+void __sip_ack(struct sip_dialog *dialog, int seqno, int resp, int sipmethod, int reset)
+{
+	struct sip_request *cur, *prev = NULL;
+
+	/* Just in case... */
+	int res = FALSE;
+
+	ast_mutex_lock(&dialog->lock);
+
+	/* Find proper transactoin */
+	for (cur = dialog->packets; cur; prev = cur, cur = cur->next) {
+		/* Match on seqno AND req/resp AND method? */
+		if ((cur->seqno == seqno) && ((ast_test_flag(cur, SIP_PKT_RESPONSE)) == resp) &&
+			((ast_test_flag(cur, SIP_PKT_RESPONSE)) || (cur->method == sipmethod))) {
+			if (!resp && (seqno == dialog->pendinginvite)) {
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Acked pending invite %d\n", dialog->pendinginvite);
+				dialog->pendinginvite = 0;
+			}
+			/* this is our baby */
+			res = TRUE;
+			UNLINK(cur, dialog->packets, prev);
+			if (cur->retransid > -1) {
+				if (sipdebug && option_debug > 3)
+					ast_log(LOG_DEBUG, "** SIP TIMER: Cancelling retransmit of packet (reply received) Retransid #%d\n", cur->retransid);
+				ast_sched_del(sched, cur->retransid);
+			}
+			if (!reset)
+				free(cur);	/* We might want to keep this somewhere else */
+			break;
+		}
+	}
+	ast_mutex_unlock(&dialog->lock);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Stopping retransmission on '%s' of %s %d: Match %s\n", dialog->callid, resp ? "Response" : "Request", seqno, res ? "Not Found" : "Found");
+}
+
+/*! \brief Pretend to ack all packets - nothing to do with SIP_ACK (the method)
+ * maybe the lock on p is not strictly necessary but there might be a race */
+GNURK void __sip_pretend_ack(struct sip_dialog *dialog)
+{
+	struct sip_request *cur = NULL;
+
+	while (dialog->packets) {
+		int method;
+		if (cur == dialog->packets) {
+			ast_log(LOG_WARNING, "Have a packet that doesn't want to give up! %s\n", sip_method2txt(cur->method));
+			return;
+		}
+		cur = dialog->packets;
+		method = (cur->method) ? cur->method : find_sip_method(cur->data);
+		__sip_ack(dialog, cur->seqno, ast_test_flag(cur, SIP_PKT_RESPONSE), method, FALSE);
+	}
+}
+
+/*! \brief Acks receipt of packet, keep it around (used for provisional responses) 
+ */
+int __sip_semi_ack(struct sip_dialog *dialog, int seqno, int resp, int sipmethod)
+{
+	struct sip_request *cur;
+	int res = -1;
+
+	for (cur = dialog->packets; cur; cur = cur->next) {
+		if (cur->seqno == seqno && ast_test_flag(cur, SIP_PKT_RESPONSE) == resp &&
+			(ast_test_flag(cur, SIP_PKT_RESPONSE) || method_match(sipmethod, cur->data))) {
+			/* this is our baby */
+			if (cur->retransid > -1) {
+				if (option_debug > 3 && sipdebug)
+					ast_log(LOG_DEBUG, "*** SIP TIMER: Cancelling retransmission #%d - %s (got response)\n", cur->retransid, sip_method2txt(sipmethod));
+				ast_sched_del(sched, cur->retransid);
+			}
+			cur->retransid = -1;
+			res = 0;
+			break;
+		}
+	}
+	if (option_debug)
+		ast_log(LOG_DEBUG, "(Provisional) Stopping retransmission (but retaining packet) on '%s' %s %d: %s\n", dialog->callid, resp ? "Response" : "Request", seqno, res ? "Not Found" : "Found");
+	return res;
+}
+
+/*! \brief Execute destruction of SIP dialog structure, release memory */
+void __sip_destroy(struct sip_dialog *dialog, int lockowner, int lockdialoglist)
+{
+	struct sip_dialog *cur, *prev = NULL;
+	struct sip_request *cp;
+
+	if (sip_debug_test_pvt(dialog) || option_debug > 2)
+		ast_verbose("Really destroying SIP dialog '%s' Method: %s\n", dialog->callid, sip_method2txt(dialog->method));
+
+	/* Remove link from peer to subscription of MWI */
+	if (dialog->relatedpeer && dialog->relatedpeer->mwipvt)
+		dialog->relatedpeer->mwipvt = NULL;
+
+	if (global.dumphistory)
+		sip_dump_history(dialog);
+
+
+	if (dialog->stateid > -1)
+		ast_extension_state_del(dialog->stateid, NULL);
+	if (dialog->initid > -1)
+		ast_sched_del(sched, dialog->initid);
+	if (dialog->autokillid > -1)
+		ast_sched_del(sched, dialog->autokillid);
+
+	if (dialog->options)
+		free(dialog->options);
+
+	if (dialog->rtp)
+		ast_rtp_destroy(dialog->rtp);
+	if (dialog->vrtp)
+		ast_rtp_destroy(dialog->vrtp);
+	if (dialog->udptl)
+		ast_udptl_destroy(dialog->udptl);
+	if (dialog->refer)
+		free(dialog->refer);
+	if (dialog->route) {
+		free_old_route(dialog->route);
+		dialog->route = NULL;
+	}
+	if (dialog->registry) {
+		if (dialog->registry->call == dialog)
+			dialog->registry->call = NULL;
+		ASTOBJ_UNREF(dialog->registry, sip_registry_destroy);
+	}
+
+	/* Unlink us from the owner if we have one */
+	if (dialog->owner) {
+		if (lockowner)
+			ast_channel_lock(dialog->owner);
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Detaching from %s\n", dialog->owner->name);
+		dialog->owner->tech_pvt = NULL;
+		if (lockowner)
+			ast_channel_unlock(dialog->owner);
+	}
+	/* Clear history */
+	if (dialog->history) {
+		struct sip_history *hist;
+		while( (hist = AST_LIST_REMOVE_HEAD(dialog->history, list)) )
+			free(hist);
+		free(dialog->history);
+		dialog->history = NULL;
+	}
+
+	/* Unlink us from the dialog list */
+	if (lockdialoglist)
+		dialoglist_lock();
+	for (prev = NULL, cur = dialoglist; cur; prev = cur, cur = cur->next) {
+		if (cur == dialog) {
+			UNLINK(cur, dialoglist, prev);
+			break;
+		}
+	}
+	if (lockdialoglist)
+		dialoglist_unlock();
+
+	if (!cur) {
+		ast_log(LOG_WARNING, "Trying to destroy \"%s\", not found in dialog list?!?! \n", dialog->callid);
+		return;
+	} 
+
+	/* remove all current packets in this dialog */
+	while((cp = dialog->packets)) {
+		dialog->packets = dialog->packets->next;
+		if (cp->retransid > -1)
+			ast_sched_del(sched, cp->retransid);
+		free(cp);
+	}
+	if (dialog->chanvars) {
+		ast_variables_destroy(dialog->chanvars);
+		dialog->chanvars = NULL;
+	}
+	ast_mutex_destroy(&dialog->lock);
+
+	ast_string_field_free_pools(dialog);
+
+	/* Finally, release the dialog */
+	free(dialog);
+}
+
+/*! \brief Destroy SIP call structure */
+void sip_destroy(struct sip_dialog *dialog)
+{
+	if (option_debug > 2)
+		ast_log(LOG_DEBUG, "Destroying SIP dialog %s\n", dialog->callid);
+	__sip_destroy(dialog, TRUE, TRUE);
+}
+
+
 /*! \brief Kill a SIP dialog (called by scheduler) */
 static int __sip_autodestruct(void *data)
 {

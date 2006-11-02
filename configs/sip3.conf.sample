@@ -1,5 +1,54 @@
 ;
-; SIP Configuration example for Asterisk
+; ------ CHAN_SIP3 Configuration example and reference guide
+;
+; This is a configuration example for the new SIP channel, chan_sip3.
+; If you've used the old channel, it's time to learn some new concepts:
+;
+; The old user, peer, friend configuration is gone. We now have
+; 
+; phone		A device that is connected to your Asterisk server
+;		and places and receives calls. The name of the phone
+;		needs to be unique within the phone's domain.
+; 
+; service	A remote server that Asterisk connects to, acting
+;		as a phone. We register and place and receive calls
+;		from the service. For a service, we normally hide
+;		the local extensions, just acting as a simple client
+;		connected to the service provider/remote server.
+;
+; trunk		A remote server that Asterisk exchanges traffic with.
+;		We expose our full phone network, forward caller ID's
+;		and receive full addresses back.
+;
+; Dial strings
+; ------------
+; Dialling to a phone
+;		sip/<name>
+;		sip/<name>@<domain>
+; Dialling using a service
+;		sip/<name>/<extension>
+; Dialling using a trunk
+;		sip/<name>/<extension>
+; Dialling using SIP uri's
+;		sip/<extension>@<domain>
+; or		sip/<username>@<domain>
+;
+; Where domain can be
+;		the name of a service
+;		a local domain (then the username can be a "phone"'s name)
+;		a remote domain (checked in SRV records)
+;		a DNS host name
+;
+; Naming devices
+; --------------
+; Currently, we do only support A-Z characters, digits and underscore in the
+; name of the device. The name of the device is not what you place calls to,
+; so do give the phone a unique name within the local domain.
+; You place calls to extensions in the dial plan. These need not be the 
+; same as the device name, in fact, we recommend using another name for
+; the extension so that you avoid name space collissions and confusion 
+; while debugging your system.
+;------------------------------------------------------------------------------
 ;
 ; Syntax for specifying a SIP device in extensions.conf is
 ; SIP/devicename where devicename is defined in a section below.
@@ -19,7 +68,7 @@
 ;
 ;   sip debug			Show all SIP messages
 ;
-;   module reload chan_sip.so	Reload configuration file
+;   sip reload		 	Reload configuration file
 ;				Active SIP peers will not be reconfigured
 ;
 
@@ -389,51 +438,62 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ; The settings are available for type=device (or phone)
 
 ; -------------------
-;  context
-; callingpres
-; permit
-; deny
-; secret
-; md5secret
-; dtmfmode
-; canreinvite
-; nat
-; callgroup
-; pickupgroup
-; language
-; allow
-; disallow
-; insecure
-; trustrpid
-; progressinband
-; promiscredir
-; useclientcode
-; accountcode
-; setvar
-; callerid
-; amaflags
-; call-limit
-; allowoverlap
-; allowsubscribe
-; allowtransfer
-; subscribecontext
-; videosupport
-; maxcallbitrate
-; mailbox
-; defaultuser
-; template
-; fromdomain
-; regexten
+; domain		The local domain for this device. 
+; context		The default incoming context for calls from this phone
+; callingpres		Calling ID presentation rules (hidden, screened?)
+; permit		ACL based on IP - you can have several permit/deny with IP masks
+; deny			ACL block on IP, subnet or CIDR range
+; secret		Password for phone authentication to us
+; md5secret		MD5 encoded password
+; dtmfmode		DTMF mode for sending and receiving tones from this device
+; canreinvite		Whether or not the phone supports re-invites to change media stream properties
+;			like IP address (direct p2p audio) and codecs
+; nat			Is the peer behind a NAT and needs symmetric SIP and RTP
+; callgroup		Calls to this phone belongs to this call group
+; pickupgroup		This phone can pickup any calls that belongs to these groups
+; language		Language for selection of prompts and syntax for numbers
+; allow			Codec selection - in order of preference
+; disallow		Disallow some codecs. Always reset with disallow=all before adding "allow"
+; trustrpid		Trust RPID settings from this device
+; progressinband	Play in-band early media
+; promiscredir		Allow 302 redirects to any SIP domain, not just local domains
+; useclientcode		Private setting for SNOM phones to store the client code header in a channel
+;			variable
+; accountcode		CDR accountcode used for calls from this phone
+; amaflags		CDR Automated Machine Accounting flag for calls from this phone
+; setvar		Set channel variables on each call from this phone
+; callerid		Override the caller ID on incoming calls from this phone
+; call-limit		How many simultaneous calls to allow to and from this phone
+; allowoverlap		Allow overlap dialling
+; allowsubscribe	Allow subscriptions for status
+; allowtransfer		Allow SIP transfers from this device
+; subscribecontext	For subscriptions, where in the dialplan to find allowed extensions to watch
+; videosupport		Allow video calls to and from this device
+; maxcallbitrate	Maximum allowed bitrate for media streams
+; mailbox		Mailbox for MWI notification (mailbox@context)
+; defaultuser		Username to use if the host has not registered with us
+; defaultip		Domain or IP to use if the host has not registered with us
+; auth			Realm based authentication
+; regexten		Extension to create when phone registers with Asterisk
+; host			Host name or IP for this phone. "dynamic" to allow registrations
+; port			Default port address for this phone
+; qualify		Whether or not to test reachability to this device
+; rtptimeout		Timer for disconnecting the call if no media shows up
+; rtpholdtimeout	Timer for how long to allow "onhold" without media
+; sendrpid		Should we send RPID to this phone?
+; outboundproxy		***Broken***
+; rfc2833compensate	????
+
+;---- Settings for trunks
+; domain		The outbound domain for this trunk
+; insecure		Accept incoming calls without authentication
+; authuser		Authentication user for outbound calls to this trunk partner
+; fromdomain		
 ; fromuser
-; host
-; port
+; host			Host name or IP for this trunk partner
+; port			Default port address for this phone
 ; qualify
-; defaultip
-; rtptimeout
-; rtpholdtimeout
-; sendrpid
-; outboundproxy
-; rfc2833compensate
+; sendrpid		
 
 ;[sip_proxy]
 ; For incoming calls only. Example: FWD (Free World Dialup)

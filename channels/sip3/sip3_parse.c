@@ -423,7 +423,8 @@ int copy_via_headers(struct sip_dialog *p, struct sip_request *req, const struct
 			if (rport && *(rport+6) == '=') 
 				rport = NULL;		/* We already have a parameter to rport */
 
-			if (rport && ast_test_flag(&p->flags[0], SIP_NAT) == SIP_NAT_ALWAYS) {
+			if (rport && ((ast_test_flag(&p->flags[0], SIP_NAT) == SIP_NAT_ALWAYS) ||
+				(ast_test_flag(&p->flags[0], SIP_NAT) == SIP_NAT_RFC3581) ) }
 				/* We need to add received port - rport */
 				char tmp[256], *end;
 

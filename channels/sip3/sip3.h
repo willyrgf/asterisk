@@ -364,18 +364,34 @@ AST_LIST_HEAD_NOLOCK(sip_history_head, sip_history);
 
 /*! \brief sip_request: The data grabbed from the UDP socket */
 struct sip_request {
+	int method;             /*!< Method of this request or response */
+	enum transaction_state state;	/*!< State of this transaction */
 	char *rlPart1; 	        /*!< SIP Method Name or "SIP/2.0" protocol version */
 	char *rlPart2; 	        /*!< The Request URI or Response Status */
+	const char *cseqheader;	/*! Pointer to the cseq header */
 	int len;                /*!< Length */
 	int headers;            /*!< # of SIP Headers */
-	int method;             /*!< Method of this request */
-	int lines;              /*!< Body Content */
 	unsigned int flags;     /*!< SIP_PKT Flags for this packet */
-	char *header[SIP_MAX_HEADERS];
-	char *line[SIP_MAX_LINES];
-	char data[SIP_MAX_PACKET];
+	char *header[SIP_MAX_HEADERS];	/*!< Pointers to the headers */
+	int lines;              /*!< Body Content */
+	char *line[SIP_MAX_LINES];	/*!< Pointer to content (attachment) lines */
 	unsigned int sdp_start; /*!< the line number where the SDP begins */
 	unsigned int sdp_end;   /*!< the line number where the SDP ends */
+
+	/* New stuff to be implemented */
+	// struct sip_request *nextrans;	/*!< Next transaction */
+	// struct sip_request *nextmess;	/*!< Next message within *this* transaction */
+
+	/* Retransmission data */
+	struct sip_request *next;	/*!< For linked list of packets, use this */
+	int retrans;			/*!< Retransmission number */
+	int seqno;			/*!< Sequence number */
+	struct sip_dialog *owner;	/*!< Owner SIP dialog */
+	int retransid;			/*!< Retransmission ID */
+	int timer_a;			/*!< SIP timer A, retransmission timer */
+	int timer_t1;			/*!< SIP Timer T1, estimated RTT or 500 ms */
+	int packetlen;			/*!< Length of packet */
+	char data[SIP_MAX_PACKET];	/*!< The actual message */
 };
 
 /*! \brief Invite transaction state */
@@ -448,8 +464,6 @@ struct sip_dual {
 	struct sip_request req;		/*!< Request that caused the transfer (REFER) */
 	int seqno;			/*!< Sequence number */
 };
-
-struct sip_pkt;
 
 /*! \brief Parameters to the transmit_invite function */
 struct sip_invite_param {
@@ -620,6 +634,12 @@ struct sip_register_list {
 #define SIP_PKT_IGNORE 		(1 << 2)	/*!< This is a re-transmit, ignore it */
 #define SIP_PKT_IGNORE_RESP	(1 << 3)	/*!< Resp ignore - ??? */
 #define SIP_PKT_IGNORE_REQ	(1 << 4)	/*!< Req ignore - ??? */
+#define SIP_PKT_INITREQ		(1 << 5)	/*!< This is the initial request in this dialog */
+
+#define SIP_PKT_RESPONSE	(1 << 6)	/*!< This packet is a response, not a request */
+#define SIP_PKT_FATAL 		(1 << 7)	/*! Fatal - if this does not get through, the dialog dies */
+#define SIP_PKT_CONNECTED	(1 << 8)	/*! This packet is connected to a dialog and should not
+							be free'd by sipsock_read() */
 
 #define CAN_CREATE_DIALOG	0
 #define CAN_NOT_CREATE_DIALOG	1
@@ -681,6 +701,7 @@ struct sip_refer {
 struct sip_dialog {
 	ast_mutex_t lock;			/*!< Dialog private lock */
 	int method;				/*!< SIP method that opened this dialog */
+	enum dialogstate state;			/*!< Dialog state */
 	AST_DECLARE_STRING_FIELDS(
 		AST_STRING_FIELD(callid);	/*!< Dialog ID: Global CallID  - the call ID is a unique ID for this SIP dialog,
 							a string that never changes during the dialog */
@@ -707,7 +728,8 @@ struct sip_dialog {
 		AST_STRING_FIELD(mohsuggest);	/*!< MOH class to suggest when putting a peer on hold */
 		AST_STRING_FIELD(rdnis);	/*!< Referring DNIS */
 		AST_STRING_FIELD(redircause);	/*!< Referring cause */
-		AST_STRING_FIELD(username);	/*!< [user] name */
+		AST_STRING_FIELD(defaultuser);	/*!< Default user name (used with default IP) */
+		AST_STRING_FIELD(username);	/*!< Username part of URI */
 		AST_STRING_FIELD(peername);	/*!< [peer] name, not set if [user] */
 		AST_STRING_FIELD(authname);	/*!< Who we use for authentication */
 		AST_STRING_FIELD(uri);		/*!< Original requested URI */
@@ -743,7 +765,7 @@ struct sip_dialog {
 	struct sip_request initreq;		/*!< Initial request that opened the SIP dialog 
 							Something that keeps getting overwritten
 						 */
-	struct sip_pkt *packets;		/*!< Packets scheduled for re-transmission */
+	struct sip_request *packets;		/*!< Packets scheduled for re-transmission */
 	struct sip_history_head *history;	/*!< History of this SIP dialog */
 
 	struct ast_flags flags[2];		/*!< SIP_ flags - various flags grouped togheter to save memory */
@@ -819,36 +841,23 @@ struct sip_dialog {
 	struct sip_dialog *next;		/*!< Next dialog in chain */
 };
 
-#define FLAG_RESPONSE (1 << 0)
-#define FLAG_FATAL (1 << 1)
-
-/*! \brief sip packet - raw format for outbound packets that are sent or scheduled for transmission */
-struct sip_pkt {
-	struct sip_pkt *next;			/*!< Next packet in linked list */
-	int retrans;				/*!< Retransmission number */
-	int method;				/*!< SIP method for this packet */
-	int seqno;				/*!< Sequence number */
-	unsigned int flags;			/*!< non-zero if this is a response packet (e.g. 200 OK) */
-	struct sip_dialog *owner;			/*!< Owner AST call */
-	int retransid;				/*!< Retransmission ID */
-	int timer_a;				/*!< SIP timer A, retransmission timer */
-	int timer_t1;				/*!< SIP Timer T1, estimated RTT or 500 ms */
-	int packetlen;				/*!< Length of packet */
-	char data[0];
-};	
 
 /*! \brief Structure for SIP peer data, we place calls to peers if registered  or fixed IP address (host) */
 /* XXX field 'name' must be first otherwise sip_addrcmp() will fail */
 struct sip_peer {
 	ASTOBJ_COMPONENTS(struct sip_peer);	/*!< name, refcount, objflags,  object pointers */
-					/*!< peer->name is the unique name of this object */
-	enum objecttype type;		/*!< SIP_PEER or SIP_USER */
+					/*!< device->name is the unique name of this object */
+	char domain[MAXHOSTNAMELEN];	/*!< Domain name for this device. The name needs to be unique within
+						a domain only 
+					For type=phone, the domain needs to be a locally hosted domain */
+	enum objecttype type;		/*!< SIP_PEER */
 	char secret[80];		/*!< Password */
 	char md5secret[80];		/*!< Password in MD5 */
 	struct sip_auth *auth;		/*!< Realm authentication list */
 	char context[AST_MAX_CONTEXT];	/*!< Default context for incoming calls */
 	char subscribecontext[AST_MAX_CONTEXT];	/*!< Default context for subscriptions */
-	char username[80];		/*!< Temporary username until registration */ 
+	char defaultuser[80];		/*!< Temporary username until registration */ 
+	char authuser[80];		/*!< Authentication user name */
 	char accountcode[AST_MAX_ACCOUNT_CODE];	/*!< Account code */
 	int amaflags;			/*!< AMA Flags (for billing) */
 	char tohost[MAXHOSTNAMELEN];	/*!< If not dynamic, IP address */

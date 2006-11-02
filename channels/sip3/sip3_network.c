@@ -119,7 +119,7 @@ void sipnet_unlock(void)
 */
 int sipsock_read(int *id, int fd, short events, void *ignore)
 {
-	struct sip_request req;
+	struct sip_request *req;
 	struct sockaddr_in sin = { 0, };
 	struct sip_dialog *p;
 	int res;
@@ -128,9 +128,11 @@ int sipsock_read(int *id, int fd, short events, void *ignore)
 	int recount = 0;
 	unsigned int lockretry = 100;
 
+	if (!(req = ast_calloc(1, sizeof(*req))))
+		return AST_FAILURE;
+
 	len = sizeof(sin);
-	memset(&req, 0, sizeof(req));
-	res = recvfrom(sipnet.sipsock, req.data, sizeof(req.data) - 1, 0, (struct sockaddr *)&sin, &len);
+	res = recvfrom(sipnet.sipsock, req->data, sizeof(req->data) - 1, 0, (struct sockaddr *)&sin, &len);
 	if (res < 0) {
 #if !defined(__FreeBSD__)
 		if (errno == EAGAIN)
@@ -139,29 +141,31 @@ int sipsock_read(int *id, int fd, short events, void *ignore)
 #endif
 		if (errno != ECONNREFUSED)
 			ast_log(LOG_WARNING, "Recv error: %s\n", strerror(errno));
+		free(req);
 		return 1;
 	}
-	if (option_debug && res == sizeof(req.data)) {
-		ast_log(LOG_DEBUG, "Received packet exceeds buffer. Data is possibly lost\n");
-		req.data[sizeof(req.data) - 1] = '\0';
-	} else
-		req.data[res] = '\0';
-	req.len = res;
 	if(sip_debug_test_addr(&sin))	/* Set the debug flag early on packet level */
-		ast_set_flag(&req, SIP_PKT_DEBUG);
-	req.len = lws2sws(req.data, req.len);	/* Fix multiline headers */
-	if (ast_test_flag(&req, SIP_PKT_DEBUG))
-		ast_verbose("\n<-- SIP read from %s:%d: \n%s\n", ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port), req.data);
+		ast_set_flag(req, SIP_PKT_DEBUG);
+	if (res == sizeof(req->data)) {
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Received packet exceeds buffer. Data is possibly lost\n");
+		req->data[sizeof(req->data) - 1] = '\0';
+	} else
+		req->data[res] = '\0';
+	req->len = lws2sws(req->data, res);	/* Fix multiline headers */
+	if (ast_test_flag(req, SIP_PKT_DEBUG))
+		ast_verbose("\n<-- SIP read from %s:%d: \n%s\n", ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port), req->data);
 
-	parse_request(&req);
-	req.method = find_sip_method(req.rlPart1);
-	if (ast_test_flag(&req, SIP_PKT_DEBUG)) {
-		ast_verbose("--- (%d headers %d lines)%s ---\n", req.headers, req.lines, (req.headers + req.lines == 0) ? " Nat keepalive" : "");
+	parse_request(req);
+	req->method = find_sip_method(req->rlPart1);
+	if (ast_test_flag(req, SIP_PKT_DEBUG)) {
+		ast_verbose("--- (%d headers %d lines)%s ---\n", req->headers, req->lines, (req->headers + req->lines == 0) ? " Nat keepalive" : "");
 	}
 
-	if (req.headers < 2) {
+	if (req->headers < 2) {
 		/* Must have at least two headers */
-		return 1;
+		free(req);
+		return AST_FAILURE;
 	}
 
 
@@ -170,10 +174,10 @@ retrylock:
 	sipnet_lock();
 
 	/* Find the active SIP dialog or create a new one */
-	p = match_or_create_dialog(&req, &sin, req.method);	/* returns p locked */
+	p = match_or_create_dialog(req, &sin, req->method);	/* returns p locked */
 	if (p == NULL) {
 		if (option_debug)
-			ast_log(LOG_DEBUG, "Invalid SIP message - rejected , no callid, len %d\n", req.len);
+			ast_log(LOG_DEBUG, "Invalid SIP message - rejected , no callid, len %d\n", req->len);
 	} else {
 		/* Go ahead and lock the owner if it has one -- we may need it */
 		/* becaues this is deadlock-prone, we need to try and unlock if failed */
@@ -190,18 +194,18 @@ retrylock:
 		p->recv = sin;
 
 		if (!ast_test_flag(&p->flags[0], SIP_NO_HISTORY)) /* This is a request or response, note what it was for */
-			append_history(p, "Rx", "%s / %s / %s", req.data, get_header(&req, "CSeq"), req.rlPart2);
+			append_history(p, "Rx", "%s / %s / %s", req->data, get_header(req, "CSeq"), req->rlPart2);
 
 		if (!lockretry) {
 			ast_log(LOG_ERROR, "We could NOT get the channel lock for %s! \n", p->owner->name ? p->owner->name : "- no channel name ??? - ");
 			ast_log(LOG_ERROR, "SIP transaction failed: %s \n", p->callid);
-			transmit_response(p, "503 Server error", &req);	/* We must respond according to RFC 3261 sec 12.2 */
+			transmit_response(p, "503 Server error", req);	/* We must respond according to RFC 3261 sec 12.2 */
 					/* XXX We could add retry-after to make sure they come back */
 			append_history(p, "LockFail", "Owner lock failed, transaction failed.");
 			return 1;
 		}
 		nounlock = 0;
-		if (handle_request(p, &req, &sin, &recount, &nounlock) == -1) {
+		if (handle_request(p, req, &sin, &recount, &nounlock) == -1) {
 			/* Request failed */
 			if (option_debug)
 				ast_log(LOG_DEBUG, "SIP message could not be handled, bad request: %-70.70s\n", p->callid[0] ? p->callid : "<no callid>");
@@ -214,6 +218,11 @@ retrylock:
 	sipnet_unlock();
 	if (recount)
 		ast_update_use_count();
+	
+	/* If this packet is not connected to a dialog, then free it. If it is connected,
+		then let the dialog destroy it later */
+	if (!ast_test_flag(req, SIP_PKT_CONNECTED))
+		free(req);
 
 	return 1;
 }
@@ -273,14 +282,16 @@ void sipnet_ourport_set(int port)
 }
 
 /*! \brief Transmit SIP message */
-static int __sip_xmit(struct sip_dialog *p, char *data, int len)
+static int __sip_xmit(struct sip_dialog *p, struct sip_request *req)
 {
 	int res;
 	const struct sockaddr_in *dst = sip_real_dst(p);
-	res = sendto(sipnet.sipsock, data, len, 0, (const struct sockaddr *)dst, sizeof(struct sockaddr_in));
 
-	if (res != len)
-		ast_log(LOG_WARNING, "sip_xmit of %p (len %d) to %s:%d returned %d: %s\n", data, len, ast_inet_ntoa(dst->sin_addr), ntohs(dst->sin_port), res, strerror(errno));
+	/* XXX in the future, we need to make sure we follow the current flow for this dialog  - TCP, UDP */
+	res = sendto(sipnet.sipsock, req->data, req->len, 0, (const struct sockaddr *)dst, sizeof(struct sockaddr_in));
+
+	if (res != req->len)
+		ast_log(LOG_WARNING, "sip_xmit of %p (len %d) to %s:%d returned %d: %s\n", req->data, req->len, ast_inet_ntoa(dst->sin_addr), ntohs(dst->sin_port), res, strerror(errno));
 	return res;
 }
 
@@ -288,7 +299,7 @@ static int __sip_xmit(struct sip_dialog *p, char *data, int len)
 /* XXX This should be moved to transaction handler */
 static int retrans_pkt(void *data)
 {
-	struct sip_pkt *pkt = data, *prev, *cur = NULL;
+	struct sip_request *pkt = data, *prev, *cur = NULL;
 	int reschedule = DEFAULT_RETRANS;
 
 	/* Lock channel PVT */
@@ -329,23 +340,23 @@ static int retrans_pkt(void *data)
 		}
 
 		append_history(pkt->owner, "ReTx", "%d %s", reschedule, pkt->data);
-		__sip_xmit(pkt->owner, pkt->data, pkt->packetlen);
+		__sip_xmit(pkt->owner, pkt);
 		ast_mutex_unlock(&pkt->owner->lock);
 		return  reschedule;
 	} 
 	/* Too many retries */
 	if (pkt->owner && pkt->method != SIP_OPTIONS) {
-		if (ast_test_flag(pkt, FLAG_FATAL) || sipdebug)	/* Tell us if it's critical or if we're debugging */
-			ast_log(LOG_WARNING, "Maximum retries exceeded on transmission %s for seqno %d (%s %s)\n", pkt->owner->callid, pkt->seqno, (ast_test_flag(pkt, FLAG_FATAL)) ? "Critical" : "Non-critical", (ast_test_flag(pkt, FLAG_RESPONSE)) ? "Response" : "Request");
+		if (ast_test_flag(pkt, SIP_PKT_FATAL) || sipdebug)	/* Tell us if it's critical or if we're debugging */
+			ast_log(LOG_WARNING, "Maximum retries exceeded on transmission %s for seqno %d (%s %s)\n", pkt->owner->callid, pkt->seqno, (ast_test_flag(pkt, SIP_PKT_FATAL)) ? "Critical" : "Non-critical", (ast_test_flag(pkt, SIP_PKT_RESPONSE)) ? "Response" : "Request");
 	} else {
 		if ((pkt->method == SIP_OPTIONS) && sipdebug)
 			ast_log(LOG_WARNING, "Cancelling retransmit of OPTIONs (call id %s) \n", pkt->owner->callid);
 	}
-	append_history(pkt->owner, "MaxRetries", "%s", (ast_test_flag(pkt, FLAG_FATAL)) ? "(Critical)" : "(Non-critical)");
+	append_history(pkt->owner, "MaxRetries", "%s", (ast_test_flag(pkt, SIP_PKT_FATAL)) ? "(Critical)" : "(Non-critical)");
  		
 	pkt->retransid = -1;
 
-	if (ast_test_flag(pkt, FLAG_FATAL)) {
+	if (ast_test_flag(pkt, SIP_PKT_FATAL)) {
 		while(pkt->owner->owner && ast_channel_trylock(pkt->owner->owner)) {
 			ast_mutex_unlock(&pkt->owner->lock);	/* SIP_PVT, not channel */
 			usleep(1);
@@ -382,42 +393,50 @@ static int retrans_pkt(void *data)
 }
 
 /*! \brief Transmit packet with retransmits 
+	\note the packet is stored in the PVT until we have a reply...
 	\return 0 on success, -1 on failure to allocate packet 
 */
-static enum sip_result __sip_reliable_xmit(struct sip_dialog *p, int seqno, int resp, char *data, int len, int fatal, int sipmethod)
+static enum sip_result __sip_reliable_xmit(struct sip_dialog *dialog, 
+	int seqno, int resp, struct sip_request *req, int fatal)
 {
-	struct sip_pkt *pkt;
 	int siptimer_a = DEFAULT_RETRANS;
+	enum sip_result res= AST_FAILURE;
 
-	if (!(pkt = ast_calloc(1, sizeof(*pkt) + len + 1)))
-		return AST_FAILURE;
-	memcpy(pkt->data, data, len);
-	pkt->method = sipmethod;
-	pkt->packetlen = len;
-	pkt->next = p->packets;
-	pkt->owner = p;
-	pkt->seqno = seqno;
-	pkt->flags = resp;
-	pkt->data[len] = '\0';
-	pkt->timer_t1 = p->timer_t1;	/* Set SIP timer T1 */
+	ast_set_flag(req, SIP_PKT_CONNECTED);	/* Stop sipsock_read from free'ing this request */
+	req->next = dialog->packets;
+	req->owner = dialog;
+	req->seqno = seqno;
+	if (resp)
+		ast_set_flag(req, SIP_PKT_RESPONSE);
+	req->timer_t1 = dialog->timer_t1;	/* Set SIP timer T1 */
+	/* If this is critical for the success of this transaction, mark it FATAL
+		the dialog will fail if this is not accepted */
 	if (fatal)
-		ast_set_flag(pkt, FLAG_FATAL);
-	if (pkt->timer_t1)
-		siptimer_a = pkt->timer_t1 * 2;
+		ast_set_flag(req, SIP_PKT_FATAL);
+	if (req->timer_t1)
+		siptimer_a = req->timer_t1 * 2;
 
 	/* Schedule retransmission */
-	pkt->retransid = ast_sched_add_variable(sched, siptimer_a, retrans_pkt, pkt, 1);
-	if (option_debug > 3 && sipdebug)
-		ast_log(LOG_DEBUG, "*** SIP TIMER: Initalizing retransmit timer on packet: Id  #%d\n", pkt->retransid);
-	pkt->next = p->packets;
-	p->packets = pkt;
+	req->retransid = ast_sched_add_variable(sched, siptimer_a, retrans_pkt, req, 1);
 
-	__sip_xmit(pkt->owner, pkt->data, pkt->packetlen);	/* Send packet */
-	if (sipmethod == SIP_INVITE) {
+	if (option_debug > 3 && sipdebug)
+		ast_log(LOG_DEBUG, "*** SIP TIMER: Initalizing retransmit timer on packet: Id  #%d\n", req->retransid);
+	/* XXX Are we locked? Any chance of messing up here? */
+	req->next = dialog->packets;
+	dialog->packets = req;
+
+	/* Send packet */
+	if (!__sip_xmit(req->owner, req))
+		res = AST_FAILURE;
+	else
+		res = AST_SUCCESS;
+
+
+	if (req->method == SIP_INVITE) {
 		/* Note this is a pending invite */
-		p->pendinginvite = seqno;
+		dialog->pendinginvite = seqno;
 	}
-	return AST_SUCCESS;
+	return res;
 }
 
 /*! \brief Transmit response on SIP request*/
@@ -441,8 +460,8 @@ int send_response(struct sip_dialog *p, struct sip_request *req, enum xmittype r
 			(tmp.method == SIP_RESPONSE || tmp.method == SIP_UNKNOWN) ? tmp.rlPart2 : sip_method2txt(tmp.method));
 	}
 	res = (reliable) ?
-		__sip_reliable_xmit(p, seqno, 1, req->data, req->len, (reliable == XMIT_CRITICAL), req->method) :
-		__sip_xmit(p, req->data, req->len);
+		__sip_reliable_xmit(p, seqno, 1, req, (reliable == XMIT_CRITICAL)) :
+		__sip_xmit(p, req);
 	if (res > 0)
 		return 0;
 	return res;
@@ -466,8 +485,8 @@ int send_request(struct sip_dialog *p, struct sip_request *req, enum xmittype re
 		append_history(p, reliable ? "TxReqRel" : "TxReq", "%s / %s - %s", tmp.data, get_header(&tmp, "CSeq"), sip_method2txt(tmp.method));
 	}
 	res = (reliable) ?
-		__sip_reliable_xmit(p, seqno, 0, req->data, req->len, (reliable > 1), req->method) :
-		__sip_xmit(p, req->data, req->len);
+		__sip_reliable_xmit(p, seqno, 0, req, (reliable > 1)) :
+		__sip_xmit(p, req);
 	return res;
 }
 
