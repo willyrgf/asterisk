@@ -1348,7 +1348,7 @@ static int sip_hangup(struct ast_channel *ast)
 				__sip_pretend_ack(p);
 
 				/* if we can't send right now, mark it pending */
-				if (!ast_test_flag(&p->flags[0], SIP_CAN_BYE)) {
+				if (p->state == DIALOG_STATE_TRYING) {
 					ast_set_flag(&p->flags[0], SIP_PENDINGBYE);
 					/* Do we need a timer here if we don't hear from them at all? */
 				} else {
@@ -1358,6 +1358,7 @@ static int sip_hangup(struct ast_channel *ast)
 					   INVITE, but do set an autodestruct just in case we never get it. */
 					needdestroy = 0;
 					sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
+					dialogstatechange(p, DIALOG_STATE_TERMINATED);
 				}
 				if ( p->initid != -1 ) {
 					/* channel still up - reverse dec of inUse counter
@@ -1370,6 +1371,7 @@ static int sip_hangup(struct ast_channel *ast)
 					transmit_response_reliable(p, res, &p->initreq);
 				else 
 					transmit_response_reliable(p, "603 Declined", &p->initreq);
+				dialogstatechange(p, DIALOG_STATE_TERMINATED);
 			}
 		} else {	/* Call is in UP state, send BYE */
 			if (!p->pendinginvite) {
@@ -1393,6 +1395,7 @@ static int sip_hangup(struct ast_channel *ast)
 					pbx_builtin_setvar_helper(oldowner, "RTPAUDIOQOS", audioqos);
 				if (p->vrtp && oldowner)
 					pbx_builtin_setvar_helper(oldowner, "RTPVIDEOQOS", videoqos);
+				dialogstatechange(p, DIALOG_STATE_TERMINATED);
 			} else {
 				/* Note we will need a BYE when this all settles out
 				   but we can't send one while we have "INVITE" outstanding. */
@@ -1435,24 +1438,25 @@ static void try_suggested_sip_codec(struct sip_dialog *p)
 static int sip_answer(struct ast_channel *ast)
 {
 	int res = 0;
-	struct sip_dialog *p = ast->tech_pvt;
+	struct sip_dialog *dialog = ast->tech_pvt;
 
-	ast_mutex_lock(&p->lock);
+	ast_mutex_lock(&dialog->lock);
 	if (ast->_state != AST_STATE_UP) {
-		try_suggested_sip_codec(p);	
+		try_suggested_sip_codec(dialog);	
 
 		ast_setstate(ast, AST_STATE_UP);
 		if (option_debug)
 			ast_log(LOG_DEBUG, "SIP answering channel: %s\n", ast->name);
-		if (p->t38.state == T38_PEER_DIRECT) {
-			p->t38.state = T38_ENABLED;
+		if (dialog->t38.state == T38_PEER_DIRECT) {
+			dialog->t38.state = T38_ENABLED;
 			if (option_debug > 1)
-				ast_log(LOG_DEBUG,"T38State change to %d on channel %s\n", p->t38.state, ast->name);
-			res = transmit_response_with_attachment(WITH_T38_SDP, p, "200 OK", &p->initreq, XMIT_CRITICAL);
+				ast_log(LOG_DEBUG,"T38State change to %d on channel %s\n", dialog->t38.state, ast->name);
+			res = transmit_response_with_attachment(WITH_T38_SDP, dialog, "200 OK", &dialog->initreq, XMIT_CRITICAL);
 		} else 
-			res = transmit_response_with_attachment(WITH_SDP, p, "200 OK", &p->initreq, XMIT_CRITICAL);
+			res = transmit_response_with_attachment(WITH_SDP, dialog, "200 OK", &dialog->initreq, XMIT_CRITICAL);
+		dialogstatechange(dialog, DIALOG_STATE_CONFIRMED);
 	}
-	ast_mutex_unlock(&p->lock);
+	ast_mutex_unlock(&dialog->lock);
 	return res;
 }
 
@@ -2088,6 +2092,7 @@ static int transmit_response_with_attachment(enum responseattach attach, struct 
 static int transmit_response_with_unsupported(struct sip_dialog *p, const char *msg, const struct sip_request *req, const char *unsupported) 
 {
 	struct sip_request resp;
+
 	respprep(&resp, p, msg, req);
 	append_date(&resp);
 	add_header(&resp, "Unsupported", unsupported);
@@ -4563,6 +4568,14 @@ static void handle_request_info(struct sip_dialog *p, struct sip_request *req)
 	unsigned int event;
 	const char *c = get_header(req, "Content-Type");
 
+	if (ast_test_flag(req, SIP_PKT_IGNORE))  {
+		transmit_response(p, "200 OK", req);
+		return;
+	}
+
+	/* All replies to INFO are final */
+	dialogstatechange(p, DIALOG_STATE_TERMINATED);
+
 	/* Need to check the media/type */
 	if (!strcasecmp(c, "application/dtmf-relay") ||
 	    !strcasecmp(c, "application/vnd.nortelnetworks.digits")) {
@@ -5180,6 +5193,7 @@ static void handle_response_invite(struct sip_dialog *p, int resp, char *rest, s
 
 		/* Then we AUTH */
 		ast_string_field_free(p, theirtag);	/* forget their old tag, so we don't match tags when getting response */
+		//??? dialogstatechange(p, DIALOG_STATE_TERMINATED_AUTH);	
 		if (!ast_test_flag(req, SIP_PKT_IGNORE)) {
 			if (p->authtries == MAX_AUTHTRIES || do_proxy_auth(p, req, resp, SIP_INVITE, 1)) {
 				ast_log(LOG_NOTICE, "Failed to authenticate on INVITE to '%s'\n", get_header(&p->initreq, "From"));
@@ -5187,6 +5201,7 @@ static void handle_response_invite(struct sip_dialog *p, int resp, char *rest, s
 				ast_set_flag(&p->flags[0], SIP_ALREADYGONE);	
 				if (p->owner)
 					ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
+				dialogstatechange(p, DIALOG_STATE_TERMINATED);	
 			}
 		}
 		break;
@@ -5196,6 +5211,7 @@ static void handle_response_invite(struct sip_dialog *p, int resp, char *rest, s
 		ast_log(LOG_WARNING, "Received response: \"Forbidden\" from '%s'\n", get_header(&p->initreq, "From"));
 		if (!ast_test_flag(req, SIP_PKT_IGNORE) && p->owner)
 			ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
+		dialogstatechange(p, DIALOG_STATE_TERMINATED);
 		ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
 		ast_set_flag(&p->flags[0], SIP_ALREADYGONE);	
 		break;
@@ -5396,6 +5412,7 @@ static void handle_response(struct sip_dialog *p, int resp, char *rest, struct s
 					if (p->subscribed == NONE) 
 						ast_set_flag(&p->flags[0], SIP_NEEDDESTROY); 
 				}
+				dialogstatechange(p, DIALOG_STATE_TERMINATED);
 			} else if (sipmethod == SIP_REGISTER) 
 				res = handle_response_register(p, resp, rest, req, req->seqno);
 			else if (sipmethod == SIP_BYE)		/* Ok, we're ready to go */
@@ -5466,6 +5483,7 @@ static void handle_response(struct sip_dialog *p, int resp, char *rest, struct s
 					ast_log(LOG_WARNING, "INVITE with REPLACEs failed to '%s'\n", get_header(&p->initreq, "From"));
 				if (owner)
 					ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
+				dialogstatechange(p, DIALOG_STATE_TERMINATED);
 				sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 			} else if (sipmethod == SIP_REFER) {
 				/* A transfer with Replaces did not work */
@@ -5502,8 +5520,9 @@ static void handle_response(struct sip_dialog *p, int resp, char *rest, struct s
 				handle_response_invite(p, resp, rest, req);
 			else if (sipmethod == SIP_REFER)
 				handle_response_refer(p, resp, rest, req);
-			else
+			else {
 				ast_log(LOG_WARNING, "Host '%s' does not implement '%s'\n", ast_inet_ntoa(p->sa.sin_addr), msg);
+			}
 			break;
 		case 603:	/* Declined transfer */
 			if (sipmethod == SIP_REFER) {
@@ -7081,6 +7100,7 @@ GNURK int handle_request(struct sip_dialog *p, struct sip_request *req, struct s
 		correct according to RFC 3261  */
 	/* Check if this a new request in a new dialog with a totag already attached to it,
 		RFC 3261 - section 12.2 - and we don't want to mess with recovery  */
+
 	if (!p->initreq.headers && ast_test_flag(req, SIP_PKT_WITH_TOTAG)) {
 		/* If this is a first request and it got a to-tag, it is not for us */
 		if (!ast_test_flag(req, SIP_PKT_IGNORE) && req->method == SIP_INVITE) {
@@ -7090,6 +7110,7 @@ GNURK int handle_request(struct sip_dialog *p, struct sip_request *req, struct s
 			transmit_response(p, "481 Call/Transaction Does Not Exist", req);
 			sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 		}
+		dialogstatechange(p, DIALOG_STATE_TERMINATED);
 		return res;
 	}
 
