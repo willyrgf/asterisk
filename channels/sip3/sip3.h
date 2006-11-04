@@ -326,6 +326,14 @@ enum invitetrans_state {
         INV_STATE_CANCELLED,    /*!< Sent/Got CANCEL or BYE in non-TERMINATED state */
 };
 
+/*! \brief Transaction state for non-invite transactions */
+enum transaction_state {
+	TRANS_TRYING,		/*!< Client: initiated transaction */
+	TRANS_PROCEEDING,	/*!< Client: Provisional response received */
+	TRANS_COMPLETED,	/*!< Final response received/sent */
+	TRANS_TERMINATED,	/*!< We're done, no more re-transmits */
+};
+
 enum dialogstate {
 	DIALOG_STATE_TRYING,		/*!< Sent invite, no response yet. Please answer :-) 
 					\ref AST_STATE_RING, AST_STATE_DOWN, AST_STATE_RESERVED
@@ -353,13 +361,6 @@ enum dialogstate {
 	
 };
 
-/*! \brief Transaction state for non-invite transactions */
-enum transaction_state {
-	TRANS_TRYING,		/*!< Client: initiated transaction */
-	TRANS_PROCEEDING,	/*!< Client: Provisional response received */
-	TRANS_COMPLETED,	/*!< Final response received/sent */
-	TRANS_TERMINATED,	/*!< We're done, no more re-transmits */
-};
 
 /* -------- Structure declarations */
 
