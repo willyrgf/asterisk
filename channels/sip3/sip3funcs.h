@@ -203,6 +203,8 @@ GNURK char *complete_sip_show_device(const char *line, const char *word, int pos
 /* sip3_dialog.c */
 GNURK void dialoglist_lock(void);
 GNURK void dialoglist_unlock(void);
+GNURK const char *dialogstate2str(const enum dialogstate state);
+GNURK void dialogstatechange(struct sip_dialog *dialog, enum dialogstate newstate);
 GNURK void sip_scheddestroy(struct sip_dialog *p, int ms);
 GNURK void sip_cancel_destroy(struct sip_dialog *p);
 GNURK int hangup_sip2cause(int cause);
@@ -214,6 +216,7 @@ GNURK void sip_destroy(struct sip_dialog *p);
 GNURK void __sip_destroy(struct sip_dialog *p, int lockowner, int lockdialoglist);
 GNURK void __sip_ack(struct sip_dialog *dialog, int seqno, int resp, int sipmethod, int reset);
 GNURK int __sip_semi_ack(struct sip_dialog *p, int seqno, int resp, int sipmethod);
+
 
 /* sip3_services.c - outbound registration for services from other servers/providers  */
 

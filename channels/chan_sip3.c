@@ -152,12 +152,14 @@
 	- manager command renamed - SIPdevices and SIPshowdevice
 	- Added "authuser" configuration option for trunks and services
 	- Added "domain" configuration option for all devices
+	- Fixed handling of too short registration times (sending 423)
 
 	Halfdone
 	- Added separate TOS setting for presence. Need to run setsockopt
 	  in a locked socket for that to work on the SIP interface.
 
 	Todo
+	- check resp 491 to INVITE processing
 	- Make show devices and the completion support domains too
 	- Fix realtime caching and optional loading
 	- Clean up the authuser/username/peername mess!
@@ -360,6 +362,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/udptl.h"
 #include "asterisk/acl.h"
 #include "asterisk/manager.h"
+#include "asterisk/translate.h"
 #include "asterisk/callerid.h"
 #include "asterisk/cli.h"
 #include "asterisk/app.h"
@@ -395,8 +398,6 @@ struct expiry_times expiry = {
 	.default_expiry = DEFAULT_DEFAULT_EXPIRY,
 	.expiry = DEFAULT_EXPIRY,		/*!< Is this ever used ??? */
 };
-
-static int usecnt = 0;
 
 /* Default setttings are used as a channel setting and as a default when
    configuring devices */
@@ -980,7 +981,6 @@ static int create_addr_from_peer(struct sip_dialog *dialog, struct sip_peer *dev
 		ast_string_field_set(dialog, fromdomain, device->fromdomain);
 	if (!ast_strlen_zero(device->fromuser))
 		ast_string_field_set(dialog, fromuser, device->fromuser);
-	dialog->maxtime = device->maxms;
 	dialog->callgroup = device->callgroup;
 	dialog->pickupgroup = device->pickupgroup;
 	dialog->allowtransfer = device->allowtransfer;
@@ -1155,16 +1155,17 @@ static int sip_call(struct ast_channel *ast, char *dest, int timeout)
 	res = update_call_counter(p, INC_CALL_RINGING);
 	if ( res != -1 ) {
 		p->callingpres = ast->cid.cid_pres;
-		p->jointcapability = p->capability;
-		p->t38.jointcapability = p->t38.capability;
-		if (option_debug)
-			ast_log(LOG_DEBUG,"Our T38 capability (%d), joint T38 capability (%d)\n", p->t38.capability, p->t38.jointcapability);
-		transmit_invite(p, SIP_INVITE, 1, 2);
-		if (p->maxtime)
-			/* Initialize auto-congest time */
-			p->initid = ast_sched_add(sched, p->maxtime * 4, auto_congest, p);
-		else 
+		p->jointcapability = ast_translate_available_formats(p->capability, p->prefcodec);
+		if (!(p->jointcapability & AST_FORMAT_AUDIO_MASK)) {	
+			ast_log(LOG_WARNING, "No audio formats found to offer. Cancelling call to %s\n", p->username);
+			res = -1;
+		} else {
+			p->t38.jointcapability = p->t38.capability;
+			if (option_debug)
+				ast_log(LOG_DEBUG,"Our T38 capability (%d), joint T38 capability (%d)\n", p->t38.capability, p->t38.jointcapability);
+			transmit_invite(p, SIP_INVITE, 1, 2);
 			p->initid = ast_sched_add(sched, SIP_TRANS_TIMEOUT, auto_congest, p);
+		}
 	}
 	return res;
 }
@@ -1327,9 +1328,6 @@ static int sip_hangup(struct ast_channel *ast)
 
 	p->owner = NULL;
 	ast->tech_pvt = NULL;
-
-	ast_atomic_fetchadd_int(&usecnt, -1);
-	ast_update_use_count();
 
 	/* Do not destroy this pvt until we have timeout or
 	   get an answer to the BYE or INVITE/CANCEL 
@@ -1844,8 +1842,6 @@ static struct ast_channel *sip_new(struct sip_dialog *dialog, int state, const c
 	if (!ast_strlen_zero(dialog->language))
 		ast_string_field_set(tmp, language, dialog->language);
 	dialog->owner = tmp;
-	ast_atomic_fetchadd_int(&usecnt, 1);
-	ast_update_use_count();
 	ast_copy_string(tmp->context, dialog->context, sizeof(tmp->context));
 	ast_copy_string(tmp->exten, dialog->exten, sizeof(tmp->exten));
 
@@ -2049,11 +2045,17 @@ static int transmit_response_with_attachment(enum responseattach attach, struct 
 		const struct sip_request *req, enum xmittype reliable)
 {
 	struct sip_request resp;
+	char buf[12];
+
 	respprep(&resp, p, msg, req);
 	append_date(&resp);
 	switch (attach) {
 	case WITH_DATE:
 		add_header_contentLength(&resp, 0);
+		break;
+	case WITH_MINEXPIRY:
+		snprintf(buf, sizeof(buf), "%d", expiry.min_expiry);
+		add_header(&resp, "Min-Expires", buf);
 		break;
 	case WITH_ALLOW:
 		add_header(&resp, "Accept", "application/sdp");
@@ -3226,6 +3228,8 @@ static enum parse_register_result parse_register_contact(struct sip_dialog *pvt,
 			localexpiry = expiry.default_expiry;
 		}
 	}
+	if (localexpiry < expiry.min_expiry)
+		return PARSE_REGISTER_FAILED_MINEXPIRY;
 
 	/* Look for brackets */
 	curi = contact;
@@ -3318,8 +3322,8 @@ static enum parse_register_result parse_register_contact(struct sip_dialog *pvt,
 		ast_sched_del(sched, peer->expire);
 	if (localexpiry > expiry.max_expiry)
 		localexpiry = expiry.max_expiry;
-	if (localexpiry < expiry.min_expiry)
-		localexpiry = expiry.min_expiry;
+	//if (localexpiry < expiry.min_expiry)
+		//localexpiry = expiry.min_expiry;
 	peer->expire = ast_test_flag(&peer->flags[0], SIP_REALTIME) ? -1 :
 		ast_sched_add(sched, (localexpiry + 10) * 1000, expire_register, peer);
 	pvt->expiry = localexpiry;
@@ -3619,6 +3623,11 @@ static enum check_auth_result register_verify(struct sip_dialog *p, struct socka
 				/* We have a succesful registration attemp with proper authentication,
 				   now, update the peer */
 				switch (parse_register_contact(p, peer, req)) {
+				case PARSE_REGISTER_FAILED_MINEXPIRY:
+					transmit_response_with_attachment(WITH_MINEXPIRY, p, "423 Interval too small", req, XMIT_UNRELIABLE);
+					peer->lastmsgssent = -1;
+					res = 0;
+					break;
 				case PARSE_REGISTER_FAILED:
 					ast_log(LOG_WARNING, "Failed to parse contact info\n");
 					transmit_response_with_attachment(WITH_DATE, p, "400 Bad Request", req, XMIT_UNRELIABLE);
@@ -3649,6 +3658,10 @@ static enum check_auth_result register_verify(struct sip_dialog *p, struct socka
 			ASTOBJ_CONTAINER_LINK(&devicelist, peer);
 			sip_cancel_destroy(p);
 			switch (parse_register_contact(p, peer, req)) {
+			case PARSE_REGISTER_FAILED_MINEXPIRY:
+				transmit_response_with_attachment(WITH_MINEXPIRY, p, "423 Interval too small", req, XMIT_UNRELIABLE);
+				peer->lastmsgssent = -1;
+				res = 0;
 			case PARSE_REGISTER_FAILED:
 				ast_log(LOG_WARNING, "Failed to parse contact info\n");
 				transmit_response_with_attachment(WITH_DATE, p, "400 Bad Request", req, XMIT_UNRELIABLE);
@@ -4992,7 +5005,8 @@ static void handle_response_invite(struct sip_dialog *p, int resp, char *rest, s
 			ast_log(LOG_DEBUG, "SIP response %d to standard invite\n", resp);
 	}
 
-	if (ast_test_flag(&p->flags[0], SIP_ALREADYGONE)) { /* This call is already gone */
+	//sif (ast_test_flag(&p->flags[0], SIP_ALREADYGONE)) { /* This call is already gone */
+	if (p->state == DIALOG_STATE_TERMINATED) {
 		if (option_debug)
 			ast_log(LOG_DEBUG, "Got response on call that is already terminated: %s (ignoring)\n", p->callid);
 		return;
@@ -5013,6 +5027,10 @@ static void handle_response_invite(struct sip_dialog *p, int resp, char *rest, s
 	    (resp != 180) &&
 	    (resp != 183))
 		resp = 183;
+
+	if (p->state == DIALOG_STATE_TRYING)
+		dialogstatechange(p, DIALOG_STATE_PROCEEDING);	/* We do have any type of response */
+	/* If we got 1xx reply WITH tag, it has to be DIALOG_STATE_EARLY */
 
 	switch (resp) {
 	case 100:	/* Trying */
@@ -5050,12 +5068,14 @@ static void handle_response_invite(struct sip_dialog *p, int resp, char *rest, s
 				ast_queue_control(p->owner, AST_CONTROL_PROGRESS);
 			}
 		}
+		dialogstatechange(p, DIALOG_STATE_EARLY);	/* We do have any type of response */
 		ast_set_flag(&p->flags[0], SIP_CAN_BYE);
 		check_pendings(p);
 		break;
 	case 200:	/* 200 OK on invite - someone's answering our call */
 		if (!ast_test_flag(req, SIP_PKT_IGNORE))
 			sip_cancel_destroy(p);
+		dialogstatechange(p, DIALOG_STATE_CONFIRMED);	/* We do have any type of response */
 		p->authtries = 0;
 		if (find_sdp(req)) {
 			if ((res = process_sdp(p, req)) && !ast_test_flag(req, SIP_PKT_IGNORE))
@@ -5180,6 +5200,7 @@ static void handle_response_invite(struct sip_dialog *p, int resp, char *rest, s
 		ast_set_flag(&p->flags[0], SIP_ALREADYGONE);	
 		break;
 	case 404: /* Not found */
+		dialogstatechange(p, DIALOG_STATE_TERMINATED);
 		transmit_request(p, SIP_ACK, req->seqno, XMIT_UNRELIABLE, FALSE);
 		if (p->owner && !ast_test_flag(req, SIP_PKT_IGNORE))
 			ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
@@ -5188,6 +5209,7 @@ static void handle_response_invite(struct sip_dialog *p, int resp, char *rest, s
 	case 481: /* Call leg does not exist */
 		/* Could be REFER or INVITE */
 		ast_log(LOG_WARNING, "Re-invite to non-existing call leg on other UA. SIP dialog '%s'. Giving up.\n", p->callid);
+		dialogstatechange(p, DIALOG_STATE_TERMINATED);
 		transmit_request(p, SIP_ACK, req->seqno, XMIT_UNRELIABLE, FALSE);
 		break;
 	case 491: /* Pending */
@@ -5196,6 +5218,8 @@ static void handle_response_invite(struct sip_dialog *p, int resp, char *rest, s
 			We should support the retry-after at some point */
 		break;
 	case 501: /* Not implemented */
+		transmit_request(p, SIP_ACK, req->seqno, XMIT_UNRELIABLE, FALSE);
+		dialogstatechange(p, DIALOG_STATE_TERMINATED);
 		if (p->owner)
 			ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
 		break;
@@ -5289,12 +5313,14 @@ static void handle_response_peerpoke(struct sip_dialog *p, int resp, struct sip_
 
 	if (peer->pokeexpire > -1)
 		ast_sched_del(sched, peer->pokeexpire);
-	ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
 
 	/* Try again eventually */
 	peer->pokeexpire = ast_sched_add(sched,
 		is_reachable ? global.default_qualifycheck_ok: global.default_qualifycheck_notok,
 		sip_poke_peer_s, peer);
+
+	dialogstatechange(p, DIALOG_STATE_TERMINATED);
+	ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
 }
 
 /*! \brief Handle SIP response in dialogue */
@@ -6798,14 +6824,20 @@ static int handle_request_subscribe(struct sip_dialog *p, struct sip_request *re
 
 	if (!ast_test_flag(req, SIP_PKT_IGNORE) && p)
 		p->lastinvite = req->seqno;
+
+	p->expiry = atoi(get_header(req, "Expires"));
+	if (p->expiry < expiry.min_expiry && p->expiry > 0) {
+		transmit_response_with_attachment(WITH_MINEXPIRY, p, "423 Interval too small", req, XMIT_UNRELIABLE);
+		ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
+		return 0;
+	}
+	
+
 	if (p && !ast_test_flag(&p->flags[0], SIP_NEEDDESTROY)) {
-		p->expiry = atoi(get_header(req, "Expires"));
 
 		/* check if the requested expiry-time is within the approved limits from sip.conf */
 		if (p->expiry > expiry.max_expiry)
 			p->expiry = expiry.max_expiry;
-		if (p->expiry < expiry.min_expiry && p->expiry > 0)
-			p->expiry = expiry.min_expiry;
 
 		if (sipdebug || option_debug > 1) {
 			if (p->subscribed == MWI_NOTIFICATION && p->relatedpeer)

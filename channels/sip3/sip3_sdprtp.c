@@ -945,7 +945,7 @@ static void add_noncodec_to_sdp(const struct sip_dialog *p, int format, int samp
 /*! \brief Add codec offer to SDP offer/answer body in INVITE or 200 OK */
 static void add_codec_to_sdp(const struct sip_dialog *p, int codec, int sample_rate,
 			     char **m_buf, size_t *m_size, char **a_buf, size_t *a_size,
-			     int debug)
+			     int debug, int *min_packet_size)
 {
 	int rtp_code;
 	struct ast_format_list fmt;
@@ -974,8 +974,44 @@ static void add_codec_to_sdp(const struct sip_dialog *p, int codec, int sample_r
 		ast_build_string(a_buf, a_size, "a=fmtp:%d mode=%d\r\n", rtp_code, fmt.cur_ms);
 	}
 
-	if (codec != AST_FORMAT_ILBC) 
-		ast_build_string(a_buf, a_size, "a=ptime:%d\r\n", fmt.cur_ms);
+	if (fmt.cur_ms && (fmt.cur_ms < *min_packet_size))
+		*min_packet_size = fmt.cur_ms;
+
+	/* Our first codec packetization processed cannot be zero */
+	if ((*min_packet_size)==0 && fmt.cur_ms)
+		*min_packet_size = fmt.cur_ms;
+}
+
+/*! \brief Set all IP media addresses for this call 
+       \note called from add_sdp()
+*/
+static void get_our_media_address(struct sip_dialog *p, int needvideo, struct sockaddr_in *sin, struct sockaddr_in *vsin, struct sockaddr_in *dest, struct sockaddr_in *vdest)
+{
+       /* First, get our address */
+       ast_rtp_get_us(p->rtp, sin);
+       if (p->vrtp)
+               ast_rtp_get_us(p->vrtp, vsin);
+
+       /* Now, try to figure out where we want them to send data */
+       /* Is this a re-invite to move the media out, then use the original offer from caller  */
+       if (p->redirip.sin_addr.s_addr) {       /* If we have a redirection IP, use it */
+               dest->sin_port = p->redirip.sin_port;
+               dest->sin_addr = p->redirip.sin_addr;
+       } else {
+               dest->sin_addr = p->ourip;
+               dest->sin_port = sin->sin_port;
+       }
+       if (needvideo) {
+               /* Determine video destination */
+               if (p->vredirip.sin_addr.s_addr) {
+                       vdest->sin_addr = p->vredirip.sin_addr;
+                       vdest->sin_port = p->vredirip.sin_port;
+               } else {
+                       vdest->sin_addr = p->ourip;
+                       vdest->sin_port = vsin->sin_port;
+               }
+       }
+
 }
 
 /*! \brief Add Session Description Protocol message */
@@ -1014,6 +1050,8 @@ int add_sdp(struct sip_request *resp, struct sip_dialog *p)
 	int capability;
 	int needvideo = FALSE;
 	int debug = sip_debug_test_pvt(p);
+	int min_audio_packet_size = 0;
+	int min_video_packet_size = 0;
 
 	m_video[0] = '\0';	/* Reset the video media string if it's not needed */
 
@@ -1029,22 +1067,6 @@ int add_sdp(struct sip_request *resp, struct sip_dialog *p)
 	} else
 		p->sessionversion++;
 
-	/* Get our addresses */
-	ast_rtp_get_us(p->rtp, &sin);
-	if (p->vrtp)
-		ast_rtp_get_us(p->vrtp, &vsin);
-
-	/* Is this a re-invite to move the media out, then use the original offer from caller  */
-	if (p->redirip.sin_addr.s_addr) {
-		dest.sin_port = p->redirip.sin_port;
-		dest.sin_addr = p->redirip.sin_addr;
-		if (p->redircodecs)
-			capability = p->redircodecs;
-	} else {
-		dest.sin_addr = p->ourip;
-		dest.sin_port = sin.sin_port;
-	}
-
 	/* Ok, let's start working with codec selection here */
 	capability = p->jointcapability;
 
@@ -1054,10 +1076,12 @@ int add_sdp(struct sip_request *resp, struct sip_dialog *p)
 		ast_log(LOG_DEBUG, "** Our prefcodec: %s \n", ast_getformatname_multiple(codecbuf, sizeof(codecbuf), p->prefcodec));
 	}
 	
+#ifdef WHEN_WE_HAVE_T38_FOR_OTHER_TRANSPORTS
 	if ((ast_test_flag(&p->t38.t38support, SIP_PAGE2_T38SUPPORT_RTP))) {
 		ast_build_string(&m_audio_next, &m_audio_left, " %d", 191);
 		ast_build_string(&a_audio_next, &a_audio_left, "a=rtpmap:%d %s/%d\r\n", 191, "t38", 8000);
 	}
+#endif
 
 	/* Check if we need video in this call */
 	if((capability & AST_FORMAT_VIDEO_MASK) && !ast_test_flag(&p->flags[0], SIP_NOVIDEO)) {
@@ -1068,20 +1092,13 @@ int add_sdp(struct sip_request *resp, struct sip_dialog *p)
 		} else if (option_debug > 1)
 			ast_log(LOG_DEBUG, "This call needs video offers, but there's no video support enabled ! \n");
 	}
-		
+
+	/* Get our media IP addresses for RTP */
+	get_our_media_address(p, needvideo, &sin, &vsin, &dest, &vdest);
 
 	/* Ok, we need video. Let's add what we need for video and set codecs.
 	   Video is handled differently than audio since we can not transcode. */
 	if (needvideo) {
-
-		/* Determine video destination */
-		if (p->vredirip.sin_addr.s_addr) {
-			vdest.sin_addr = p->vredirip.sin_addr;
-			vdest.sin_port = p->vredirip.sin_port;
-		} else {
-			vdest.sin_addr = p->ourip;
-			vdest.sin_port = vsin.sin_port;
-		}
 		ast_build_string(&m_video_next, &m_video_left, "m=video %d RTP/AVP", ntohs(vdest.sin_port));
 
 		/* Build max bitrate string */
@@ -1090,29 +1107,7 @@ int add_sdp(struct sip_request *resp, struct sip_dialog *p)
 		if (debug) 
 			ast_verbose("Video is at %s port %d\n", ast_inet_ntoa(p->ourip), ntohs(vsin.sin_port));	
 
-		/* For video, we can't negotiate video offers. Let's compare the incoming call with what we got. */
-		if (p->prefcodec) {
-			int videocapability = (capability & p->prefcodec) & AST_FORMAT_VIDEO_MASK; /* Outbound call */
-		
-			/*! \todo XXX We need to select one codec, not many, since there's no transcoding */
-
-			/* Now, merge this video capability into capability while removing unsupported codecs */
-			if (!videocapability) {
-				needvideo = FALSE;
-				if (option_debug > 2)
-					ast_log(LOG_DEBUG, "** No compatible video codecs... Disabling video.\n");
-			} 
-
-			/* Replace video capabilities with the new videocapability */
-			capability = (capability & AST_FORMAT_AUDIO_MASK) | videocapability;
-
-			if (option_debug > 4) {
-				char codecbuf[BUFSIZ];
-				if (videocapability)
-					ast_log(LOG_DEBUG, "** Our video codec selection is: %s \n", ast_getformatname_multiple(codecbuf, sizeof(codecbuf), videocapability));
-				ast_log(LOG_DEBUG, "** Capability now set to : %s \n", ast_getformatname_multiple(codecbuf, sizeof(codecbuf), capability));
-			}
-		}
+		/*! \todo XXX We need to select one codec, not many, since there's no transcoding */
 	}
 	if (debug) 
 		ast_verbose("Audio is at %s port %d\n", ast_inet_ntoa(p->ourip), ntohs(sin.sin_port));	
@@ -1146,7 +1141,7 @@ int add_sdp(struct sip_request *resp, struct sip_dialog *p)
 		add_codec_to_sdp(p, p->prefcodec & AST_FORMAT_AUDIO_MASK, 8000,
 				 &m_audio_next, &m_audio_left,
 				 &a_audio_next, &a_audio_left,
-				 debug);
+				 debug, &min_audio_packet_size);
 		alreadysent |= p->prefcodec & AST_FORMAT_AUDIO_MASK;
 	}
 
@@ -1167,7 +1162,7 @@ int add_sdp(struct sip_request *resp, struct sip_dialog *p)
 		add_codec_to_sdp(p, pref_codec, 8000,
 				 &m_audio_next, &m_audio_left,
 				 &a_audio_next, &a_audio_left,
-				 debug);
+				 debug, &min_audio_packet_size);
 		alreadysent |= pref_codec;
 	}
 
@@ -1183,12 +1178,12 @@ int add_sdp(struct sip_request *resp, struct sip_dialog *p)
 			add_codec_to_sdp(p, x, 8000,
 					 &m_audio_next, &m_audio_left,
 					 &a_audio_next, &a_audio_left,
-					 debug);
+					 debug, &min_audio_packet_size);
 		else 
 			add_codec_to_sdp(p, x, 90000,
 					 &m_video_next, &m_video_left,
 					 &a_video_next, &a_video_left,
-					 debug);
+					 debug, &min_video_packet_size);
 	}
 
 	/* Now add DTMF RFC2833 telephony-event as a codec */
@@ -1207,6 +1202,12 @@ int add_sdp(struct sip_request *resp, struct sip_dialog *p)
 
 	if(!p->owner || !ast_internal_timing_enabled(p->owner))
 		ast_build_string(&a_audio_next, &a_audio_left, "a=silenceSupp:off - - - -\r\n");
+	if (min_audio_packet_size)
+		ast_build_string(&a_audio_next, &a_audio_left, "a=ptime:%d\r\n", min_audio_packet_size);
+
+	if (min_video_packet_size)
+		ast_build_string(&a_video_next, &a_video_left, "a=ptime:%d\r\n", min_video_packet_size);
+
 
 	if ((m_audio_left < 2) || (m_video_left < 2) || (a_audio_left == 0) || (a_video_left == 0))
 		ast_log(LOG_WARNING, "SIP SDP may be truncated due to undersized buffer!!\n");

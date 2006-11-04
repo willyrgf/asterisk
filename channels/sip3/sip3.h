@@ -172,6 +172,7 @@
 
 /*! \brief Variants for sending responses with transmit_response_with_attachment() */
 enum responseattach {
+	WITH_MINEXPIRY,
 	WITH_DATE,
 	WITH_ALLOW,
 	WITH_SDP,
@@ -215,6 +216,7 @@ enum xmittype {
 };
 
 enum parse_register_result {
+	PARSE_REGISTER_FAILED_MINEXPIRY,
 	PARSE_REGISTER_FAILED,
 	PARSE_REGISTER_UPDATE,
 	PARSE_REGISTER_QUERY,
@@ -346,6 +348,8 @@ enum dialogstate {
 	DIALOG_STATE_TERMINATED, 	/*!< This call is down - timeout, hangup, replaced 
 					\ref AST_STATE_DOWN
 					*/
+	DIALOG_STATE_TERMINATED_AUTH,	/*!< Asterisk state for dialog that need to restart in
+						TRYING for authentication */
 	
 };
 
@@ -773,8 +777,6 @@ struct sip_dialog {
 	/* Authentication */
 	struct sip_auth *peerauth;		/*!< Realm authentication */
 	int noncecount;				/*!< Nonce-count */
-
-	int maxtime;				/*!< Max time for first response (needs to go now) */
 
 	/* The grouping below shows that these settings should be allocated in substructures,
 	   depending on the nature of the dialog - the method that opened it. Note that

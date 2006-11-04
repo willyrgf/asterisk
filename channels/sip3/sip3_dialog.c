@@ -128,6 +128,44 @@ void dialoglist_unlock(void)
 	ast_mutex_unlock(&dialoglock);
 }
 
+/*! \brief Convert SIP dialog states to string */
+const char *dialogstate2str(const enum dialogstate state)
+{
+	const char *reply = "<unknown>";
+	switch (state) {
+	case DIALOG_STATE_TRYING:
+		reply = "Trying";
+		break;
+	case DIALOG_STATE_PROCEEDING:
+		reply = "Proceeding";
+		break;
+	case DIALOG_STATE_EARLY:
+		reply = "Early";
+		break;
+	case DIALOG_STATE_CONFIRMED:
+		reply = "Confirmed";
+		break;
+	case DIALOG_STATE_CONFIRMED_HOLD:
+		reply = "Confirmed, on hold";
+		break;
+	case DIALOG_STATE_TERMINATED:
+		reply = "Terminated";
+		break;
+	case DIALOG_STATE_TERMINATED_AUTH:
+		reply = "Terminated, auth";
+		break;
+	}
+	return reply;
+}
+
+/*! \brief Change dialog state for a SIP dialog and output to debug */
+void dialogstatechange(struct sip_dialog *dialog, enum dialogstate newstate)
+{
+	dialog->state = newstate;
+	if (sipdebug && option_debug > 1)
+		ast_log(LOG_DEBUG, "-- Dialog %s changed state to %s\n", dialog->callid, dialogstate2str(newstate));
+}
+
 
 /*! \brief For a reliable transmission, we need to get an reply to stop retransmission. 
 	Acknowledges receipt of a packet and stops retransmission */
@@ -639,20 +677,26 @@ struct sip_dialog *sip_alloc(ast_string_field callid, struct sockaddr_in *sin,
 
 	if (p->method != SIP_REGISTER)
 		ast_string_field_set(p, fromdomain, global.default_fromdomain);
+
 	build_via(p);
-	if (!callid)
+	if (!callid)					/* Make sure we have a unique call ID */
 		build_callid_pvt(p);
 	else
 		ast_string_field_set(p, callid, callid);
-	/* Assign default music on hold class */
+
+	dialogstatechange(p, DIALOG_STATE_TRYING);	/* Set dialog state */
+
+							/* Assign default music on hold class */
 	ast_string_field_set(p, mohinterpret, global.default_mohinterpret);
 	ast_string_field_set(p, mohsuggest, global.default_mohsuggest);
-	p->capability = global.capability;
-	p->allowtransfer = global.allowtransfer;
+	
+	p->capability = global.capability;		/* Set default codec settings */
+
 	if ((ast_test_flag(&p->flags[0], SIP_DTMF) == SIP_DTMF_RFC2833) ||
 	    (ast_test_flag(&p->flags[0], SIP_DTMF) == SIP_DTMF_AUTO))
 		p->noncodeccapability |= AST_RTP_DTMF;
-	if (p->udptl) {
+
+	if (p->udptl) {					/* T.38 fax properties */
 		p->t38.capability = global.t38_capability;
 		if (ast_udptl_get_error_correction_scheme(p->udptl) == UDPTL_ERROR_CORRECTION_REDUNDANCY)
 			p->t38.capability |= T38FAX_UDP_EC_REDUNDANCY;
@@ -664,6 +708,8 @@ struct sip_dialog *sip_alloc(ast_string_field callid, struct sockaddr_in *sin,
 		p->t38.jointcapability = p->t38.capability;
 	}
 	ast_string_field_set(p, context, global.default_context);
+	p->allowtransfer = global.allowtransfer;	/* Default transfer mode */
+
 
 	/* Add to active dialog list */
 	dialoglist_lock();
