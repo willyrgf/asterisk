@@ -196,15 +196,14 @@ static int sip_method_needrtp(int method)
  * \return Returns the pointer to the provided tag buffer,
  *         or NULL if the tag was not found.
  */
-const char *gettag(const struct sip_request *req, const char *header, char *tagbuf, int tagbufsize)
+const char *gettag(const char *header, char *tagbuf, int tagbufsize)
 {
 	const char *thetag;
 
 	if (!tagbuf)
 		return NULL;
 	tagbuf[0] = '\0'; 	/* reset the buffer */
-	thetag = get_header(req, header);
-	thetag = strcasestr(thetag, ";tag=");
+	thetag = strcasestr(header, ";tag=");
 	if (thetag) {
 		thetag += 5;
 		ast_copy_string(tagbuf, thetag, tagbufsize);

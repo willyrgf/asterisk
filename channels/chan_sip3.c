@@ -298,7 +298,10 @@
  *	state engine works properly.
 
  * 	\title Random thoughts
- *	- Integrate sip_pkt and sip_request
+ *	- Integrate sip_pkt and sip_request - done
+ *	- Mark the UNACKed packets in dialog->packets with a flag
+ *		Maybe two lists of packets, to keep it simple for do_monitor?
+ *		Or a flag when we have no open transactions?
  *	- Use sip-request as "transaction holders" within sip_dialog
  *	- Keep them in Cseq order
  *	- Add transaction state
@@ -631,15 +634,56 @@ inline int sip_debug_test_pvt(struct sip_dialog *dialog)
 	return sip_debug_test_addr(sip_real_dst(dialog));
 }
 
+/*! \brief Find via branch parameter */
+static void find_via_branch(struct sip_dialog *dialog, struct sip_request *req)
+{
+	char *dupvia = ast_strdupa(req->via);
+	char *viabranch;
+	char *sep;
+
+	if (ast_strlen_zero(req->via))
+		return;
+	dupvia = ast_strdupa(req->via);
+	if (!(viabranch = strcasestr(dupvia, ";branch=")))
+		return;
+	viabranch += 8;
+	if ((sep = strchr(viabranch, ';')))
+		*sep = '\0';
+	if (ast_test_flag(req, SIP_PKT_DEBUG) && option_debug > 3)
+		ast_log(LOG_DEBUG, "* Found via branch %s\n", viabranch);
+	ast_string_field_set(dialog, remotebranch, viabranch);
+}
+
+
+/*! \brief Make branch tag for via header if it does not exist yet */
+static char *ourdialogbranch(struct sip_dialog *dialog, int forcenewbranch)
+{
+	char branch[20];
+	int seed = 0;
+
+	if (forcenewbranch || ast_strlen_zero(dialog->ourbranch)) {
+		if (forcenewbranch)
+			seed ^= ast_random();
+		else
+			seed = ast_random();
+		snprintf(branch, sizeof(branch), "z9hG4bk%08x", seed);
+		ast_string_field_set(dialog, ourbranch, branch);
+	}
+
+	return((char *) dialog->ourbranch);
+	
+}
+
 /*! \brief Build a Via header for a request */
-GNURK void build_via(struct sip_dialog *dialog)
+GNURK void build_via(struct sip_dialog *dialog, int forcenewbranch)
 {
 	/* Work around buggy UNIDEN UIP200 firmware */
 	const char *rport = ast_test_flag(&dialog->flags[0], SIP_NAT) & SIP_NAT_RFC3581 ? ";rport" : "";
 
 	/* z9hG4bK is a magic cookie.  See RFC 3261 section 8.1.1.7 */
-	ast_string_field_build(dialog, via, "SIP/2.0/UDP %s:%d;branch=z9hG4bK%08x%s",
-			 ast_inet_ntoa(dialog->ourip), sipnet_ourport(), dialog->branch, rport);
+	ast_string_field_build(dialog, via, "SIP/2.0/UDP %s:%d;branch=%s%s",
+			ast_inet_ntoa(dialog->ourip), sipnet_ourport(), 
+			ourdialogbranch(dialog, forcenewbranch), rport);
 }
 
 GNURK void append_history_full(struct sip_dialog *p, const char *fmt, ...)
@@ -1933,8 +1977,12 @@ GNURK void parse_request(struct sip_request *req)
 	determine_firstline_parts(req);
 	/* Determine the seqno of this request once and for all */
 
+	req->callid = get_header(req, "Call-ID");
+	req->from = get_header(req, "From");
+	req->to = get_header(req, "To");
+	req->via = get_header(req, "Via");	/* Get the first via header only */
+	req->cseqheader = get_header(req, "CSeq");  
 	/* Seqno can be zero, but anyway... */
-	req->cseqheader = get_header(req, "CSeq");
 	if (!req->seqno && sscanf(req->cseqheader, "%d ", &seqno) != 1)
 		req->seqno = seqno;
 }
@@ -2544,8 +2592,7 @@ GNURK int transmit_invite(struct sip_dialog *p, int sipmethod, int sdp, int init
 	req.method = sipmethod;
 	if (init) {		/* Seems like init always is 2 */
 		/* Bump branch even on initial requests */
-		p->branch ^= ast_random();
-		build_via(p);
+		build_via(p, TRUE);
 		if (init > 1)
 			initreqprep(&req, p, sipmethod);
 		else
@@ -4685,7 +4732,7 @@ GNURK int sip_notify(int fd, int argc, char *argv[])
 		struct sip_request req;
 		struct ast_variable *var;
 
-		if (!(p = sip_alloc(NULL, NULL, 0, SIP_NOTIFY))) {
+		if (!(p = sip_alloc(NULL, NULL, FALSE, SIP_NOTIFY))) {
 			ast_log(LOG_WARNING, "Unable to build sip pvt data for notify (memory/socket error)\n");
 			return RESULT_FAILURE;
 		}
@@ -4705,7 +4752,7 @@ GNURK int sip_notify(int fd, int argc, char *argv[])
 		/* Recalculate our side, and recalculate Call ID */
 		if (sip_ouraddrfor(&p->sa.sin_addr, &p->ourip))
 			p->ourip = sipnet.__ourip;
-		build_via(p);
+		build_via(p, FALSE);
 		build_callid_pvt(p);
 		ast_cli(fd, "Sending NOTIFY of type '%s' to '%s'\n", argv[2], argv[i]);
 		transmit_sip_request(p, &req);
@@ -5370,7 +5417,7 @@ static void handle_response(struct sip_dialog *p, int resp, char *rest, struct s
 	if (ast_strlen_zero(p->theirtag) || (resp >= 200)) {
 		char tag[128];
 
-		gettag(req, "To", tag, sizeof(tag));
+		gettag(req->to, tag, sizeof(tag));
 		ast_string_field_set(p, theirtag, tag);
 	}
 	if (p->relatedpeer && p->method == SIP_OPTIONS) {
@@ -5620,7 +5667,7 @@ static void handle_response(struct sip_dialog *p, int resp, char *rest, struct s
 		  	the final reply to our INVITE */
 			char tag[128];
 
-			gettag(req, "To", tag, sizeof(tag));
+			gettag(req->to, tag, sizeof(tag));
 			ast_string_field_set(p, theirtag, tag);
 		}
 
@@ -7091,7 +7138,7 @@ GNURK int handle_request(struct sip_dialog *p, struct sip_request *req, struct s
 	if (ast_strlen_zero(p->theirtag)) {
 		char tag[128];
 
-		gettag(req, "From", tag, sizeof(tag));
+		gettag(req->from, tag, sizeof(tag));
 		ast_string_field_set(p, theirtag, tag);
 	}
 	snprintf(p->lastmsg, sizeof(p->lastmsg), "Rx: %s", cmd);
@@ -7203,7 +7250,7 @@ static int sip_send_mwi_to_peer(struct sip_peer *peer)
 		p = peer->mwipvt;
 	} else {
 		/* Build temporary dialog for this message */
-		if (!(p = sip_alloc(NULL, NULL, 0, SIP_NOTIFY))) 
+		if (!(p = sip_alloc(NULL, NULL, FALSE, SIP_NOTIFY))) 
 			return -1;
 		if (create_addr_from_peer(p, peer)) {
 			/* Maybe they're not registered, etc. */
@@ -7213,7 +7260,7 @@ static int sip_send_mwi_to_peer(struct sip_peer *peer)
 		/* Recalculate our side, and recalculate Call ID */
 		if (sip_ouraddrfor(&p->sa.sin_addr, &p->ourip))
 			p->ourip = sipnet.__ourip;
-		build_via(p);
+		build_via(p, FALSE);
 		build_callid_pvt(p);
 		/* Destroy this session after 32 secs */
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
@@ -7473,7 +7520,7 @@ static int sip_poke_peer(struct sip_peer *peer)
 			ast_log(LOG_NOTICE, "Still have a QUALIFY dialog active, deleting\n");
 		sip_destroy(peer->call);
 	}
-	if (!(p = peer->call = sip_alloc(NULL, NULL, 0, SIP_OPTIONS)))
+	if (!(p = peer->call = sip_alloc(NULL, NULL, FALSE, SIP_OPTIONS)))
 		return -1;
 	
 	p->sa = peer->addr;
@@ -7493,7 +7540,7 @@ static int sip_poke_peer(struct sip_peer *peer)
 	/* Recalculate our side, and recalculate Call ID */
 	if (sip_ouraddrfor(&p->sa.sin_addr, &p->ourip))
 		p->ourip = sipnet.__ourip;
-	build_via(p);
+	build_via(p, FALSE);
 	build_callid_pvt(p);
 
 	if (peer->pokeexpire > -1)
@@ -7609,7 +7656,7 @@ static struct ast_channel *sip_request_call(const char *type, int format, void *
 	if (option_debug)
 		ast_log(LOG_DEBUG, "Asked to create a SIP channel with formats: %s\n", ast_getformatname_multiple(tmp, sizeof(tmp), oldformat));
 
-	if (!(p = sip_alloc(NULL, NULL, 0, SIP_INVITE))) {
+	if (!(p = sip_alloc(NULL, NULL, FALSE, SIP_INVITE))) {
 		ast_log(LOG_ERROR, "Unable to build sip pvt data for '%s' (Out of memory or socket error)\n", (char *)data);
 		*cause = AST_CAUSE_SWITCH_CONGESTION;
 		return NULL;
@@ -7646,7 +7693,7 @@ static struct ast_channel *sip_request_call(const char *type, int format, void *
 	/* Recalculate our side, and recalculate Call ID */
 	if (sip_ouraddrfor(&p->sa.sin_addr, &p->ourip))
 		p->ourip = sipnet.__ourip;
-	build_via(p);
+	build_via(p, FALSE);
 	build_callid_pvt(p);
 	
 	/* We have an extension to call, don't use the full contact here */

@@ -498,15 +498,12 @@ int transmit_register(struct sip_registry *r, int sipmethod, const char *auth, c
 	snprintf(addr, sizeof(addr), "sip:%s", S_OR(p->fromdomain, r->hostname));
 	ast_string_field_set(p, uri, addr);
 
-	p->branch ^= ast_random();
-
 	init_req(&req, sipmethod, addr);
 
 	/* Add to CSEQ */
 	snprintf(tmp, sizeof(tmp), "%u %s", ++r->ocseq, sip_method2txt(sipmethod));
 	p->ocseq = r->ocseq;
-
-	build_via(p);
+	build_via(p, TRUE);
 	add_header(&req, "Via", p->via);
 	add_header(&req, "From", from);
 	add_header(&req, "To", to);

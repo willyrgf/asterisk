@@ -69,7 +69,7 @@ GNURK int transmit_invite(struct sip_dialog *p, int sipmethod, int sdp, int init
 GNURK int transmit_state_notify(struct sip_dialog *p, int state, int full, int timeout);
 GNURK int transmit_request_with_auth(struct sip_dialog *p, int sipmethod, int seqno, enum xmittype reliable, int newbranch);
 GNURK void do_setnat(struct sip_dialog *p, int natflags);
-GNURK void build_via(struct sip_dialog *p);
+GNURK void build_via(struct sip_dialog *p, int forcenewbranch);
 GNURK void __sip_pretend_ack(struct sip_dialog *p);
 GNURK int create_addr(struct sip_dialog *dialog, const char *opeer);
 GNURK void build_contact(struct sip_dialog *p);
@@ -127,7 +127,7 @@ GNURK int copy_via_headers(struct sip_dialog *p, struct sip_request *req, const 
 GNURK const char *__get_header(const struct sip_request *req, const char *name, int *start);
 GNURK char *get_in_brackets(char *tmp);
 GNURK char *generate_random_string(char *buf, size_t size);
-GNURK const char *gettag(const struct sip_request *req, const char *header, char *tagbuf, int tagbufsize);
+GNURK const char *gettag(const char *header, char *tagbuf, int tagbufsize);
 GNURK int determine_firstline_parts(struct sip_request *req);
 GNURK void extract_uri(struct sip_dialog *p, struct sip_request *req);
 
@@ -136,7 +136,7 @@ GNURK void build_callid_pvt(struct sip_dialog *pvt);
 GNURK void append_date(struct sip_request *req);
 GNURK int add_text(struct sip_request *req, const char *text);
 GNURK int add_digit(struct sip_request *req, char digit);
-GNURK int respprep(struct sip_request *resp, struct sip_dialog *p, const char *msg, const struct sip_request *req);
+GNURK int respprep(struct sip_request *resp, struct sip_dialog *p, const char *msg, struct sip_request *req);
 GNURK void add_route(struct sip_request *req, struct sip_route *route);
 GNURK int add_line(struct sip_request *req, const char *line);
 GNURK int add_header_contentLength(struct sip_request *req, int len);

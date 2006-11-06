@@ -133,7 +133,7 @@ int add_digit(struct sip_request *req, char digit)
 }
 
 /*! \brief Prepare SIP response packet */
-int respprep(struct sip_request *resp, struct sip_dialog *p, const char *msg, const struct sip_request *req)
+int respprep(struct sip_request *resp, struct sip_dialog *p, const char *msg, struct sip_request *req)
 {
 	char newto[256];
 	const char *ot;
@@ -142,8 +142,11 @@ int respprep(struct sip_request *resp, struct sip_dialog *p, const char *msg, co
 	copy_via_headers(p, resp, req, "Via");
 	if (msg[0] == '2')
 		copy_all_header(resp, req, "Record-Route");
-	copy_header(resp, req, "From");
-	ot = get_header(req, "To");
+	copy_header(resp, req, "From");	/* XXX this can be simplified when we are sure that req->from works*/
+	if (ast_strlen_zero(req->to))
+		req->to = get_header(req, "To");
+	ot = req->to;
+		
 	if (!strcasestr(ot, "tag=") && strncmp(msg, "100", 3)) {
 		/* Add the proper tag if we don't have it already.  If they have specified
 		   their tag, use it.  Otherwise, use our own tag */
@@ -156,8 +159,8 @@ int respprep(struct sip_request *resp, struct sip_dialog *p, const char *msg, co
 		ot = newto;
 	}
 	add_header(resp, "To", ot);
-	copy_header(resp, req, "Call-ID");
-	copy_header(resp, req, "CSeq");
+	copy_header(resp, req, "Call-ID");	/* Should use req->callid */
+	copy_header(resp, req, "CSeq");		/* Should use req->cseqheader */
 	add_header(resp, "User-Agent", global.useragent);
 	add_header(resp, "Allow", ALLOWED_METHODS);
 	add_header(resp, "Supported", SUPPORTED_EXTENSIONS);
@@ -173,7 +176,7 @@ int respprep(struct sip_request *resp, struct sip_dialog *p, const char *msg, co
 			snprintf(contact, sizeof(contact), "%s;expires=%d", p->our_contact, p->expiry);
 			add_header(resp, "Contact", contact);	/* Not when we unregister */
 		}
-	} else if (msg[0] != '4' && p->our_contact[0]) {
+	} else if (msg[0] != '4' && p->our_contact[0] && req->method != SIP_BYE && req->method != SIP_CANCEL) {
 		add_header(resp, "Contact", p->our_contact);
 	}
 	return 0;
@@ -324,10 +327,7 @@ int reqprep(struct sip_request *req, struct sip_dialog *p, int sipmethod, int se
 		seqno = p->ocseq;
 	}
 	
-	if (newbranch) {
-		p->branch ^= ast_random();
-		build_via(p);
-	}
+	build_via(p, newbranch);
 
 	/* Check for strict or loose router */
 	if (p->route && !ast_strlen_zero(p->route->hop) && strstr(p->route->hop,";lr") == NULL) {

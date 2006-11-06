@@ -373,7 +373,11 @@ struct sip_request {
 	enum transaction_state state;	/*!< State of this transaction */
 	char *rlPart1; 	        /*!< SIP Method Name or "SIP/2.0" protocol version */
 	char *rlPart2; 	        /*!< The Request URI or Response Status */
-	const char *cseqheader;	/*! Pointer to the cseq header */
+	const char *cseqheader;	/*!< Pointer to the cseq header */
+	const char *callid;	/*!< Pointer to the call ID header */
+	const char *via;	/*!< Pointer to the Via header */
+	const char *to;		/*!< Pointer to the To header */
+	const char *from;	/*!< Pointer to the from header */
 	int len;                /*!< Length */
 	int headers;            /*!< # of SIP Headers */
 	unsigned int flags;     /*!< SIP_PKT Flags for this packet */
@@ -711,7 +715,8 @@ struct sip_dialog {
 		AST_STRING_FIELD(callid);	/*!< Dialog ID: Global CallID  - the call ID is a unique ID for this SIP dialog,
 							a string that never changes during the dialog */
 		AST_STRING_FIELD(theirtag);	/*!< Dialog ID: remote side's tag */
-		AST_STRING_FIELD(thisbranch);	/*!< Dialog ID: branch tag from topmost via */
+		AST_STRING_FIELD(remotebranch);	/*!< Dialog ID: branch tag from topmost via */
+		AST_STRING_FIELD(ourbranch);	/*!< Dialog ID: branch tag from topmost via */
 		AST_STRING_FIELD(randdata);	/*!< Random data */
 		AST_STRING_FIELD(realm);	/*!< Authorization realm for this dialog */
 		AST_STRING_FIELD(nonce);	/*!< Authorization nonce */
@@ -759,7 +764,6 @@ struct sip_dialog {
 	unsigned int sipoptions;		/*!< Supported SIP options on the other end */
 	int authtries;				/*!< Times we've tried to authenticate */
 	int expiry;				/*!< How long we take to expire */
-	long branch;				/*!< The branch identifier of this session */
 	char tag[11];				/*!< Dialog ID: Our tag for this session */
 	int callingpres;			/*!< Caller ID presentation settings */
 	struct sip_route *route;		/*!< Head of linked list of routing steps (fm Record-Route) */

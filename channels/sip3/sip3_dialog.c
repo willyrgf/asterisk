@@ -92,7 +92,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "sip3funcs.h"
 
 /*! \page chan_sip3_dialogs Chan_sip3: The dialog list
-	\par The dialog list
+	\title The dialog list
 	The dialog list contains all active dialogs in various states.
 	A dialog can be 
 	- an active call
@@ -100,7 +100,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 	- a subscription
 	- an inbound or outbound registration
 
-	We will implement dialog states soon
+	\title Dialog states
+	Dialog states affect operation, especially in an INVITE
+	dialog. We now try to change dialog state in a clear way
 	\ref enum dialogstate
 
 */
@@ -120,12 +122,16 @@ AST_MUTEX_DEFINE_STATIC(dialoglock);
 void dialoglist_lock(void)
 {
 	ast_mutex_lock(&dialoglock);
+	if (option_debug > 3)
+		ast_log(LOG_DEBUG, "=== SIP dialog list: LOCKED\n");
 }
 
 /*! \brief Unlock list of active SIP dialogs */
 void dialoglist_unlock(void)
 {
 	ast_mutex_unlock(&dialoglock);
+	if (option_debug > 3)
+		ast_log(LOG_DEBUG, "=== SIP dialog list: UNLOCKED\n");
 }
 
 /*! \brief Convert SIP dialog states to string */
@@ -161,14 +167,23 @@ const char *dialogstate2str(const enum dialogstate state)
 /*! \brief Change dialog state for a SIP dialog and output to debug */
 void dialogstatechange(struct sip_dialog *dialog, enum dialogstate newstate)
 {
-	dialog->state = newstate;
-	if (sipdebug && option_debug > 1)
-		ast_log(LOG_DEBUG, "-- Dialog %s changed state to %s\n", dialog->callid, dialogstate2str(newstate));
+	if (dialog->state == newstate) {
+		if (option_debug > 3)
+			ast_log(LOG_DEBUG, "Asked to change state to dialog that already has requested state: %s State %s\n", dialog->callid, dialogstate2str(newstate));
+	} else {
+		dialog->state = newstate;
+		if (sipdebug && option_debug > 1)
+			ast_log(LOG_DEBUG, "-- Dialog %s changed state to %s\n", dialog->callid, dialogstate2str(newstate));
+		if (global.recordhistory)
+			append_history(dialog, "DialogState", "New state: %s O-Cseq %d I-Cseq %d", dialogstate2str(newstate), dialog->ocseq, dialog->icseq);
+	}
 }
 
 
 /*! \brief For a reliable transmission, we need to get an reply to stop retransmission. 
-	Acknowledges receipt of a packet and stops retransmission */
+	Acknowledges receipt of a packet and stops retransmission 
+	\note Assume that the dialog is locked. 
+ */
 /* We need a method for responses too ... */
 void __sip_ack(struct sip_dialog *dialog, int seqno, int resp, int sipmethod, int reset)
 {
@@ -226,6 +241,7 @@ GNURK void __sip_pretend_ack(struct sip_dialog *dialog)
 }
 
 /*! \brief Acks receipt of packet, keep it around (used for provisional responses) 
+	\note Assume that the dialog is locked.
  */
 int __sip_semi_ack(struct sip_dialog *dialog, int seqno, int resp, int sipmethod)
 {
@@ -630,7 +646,6 @@ struct sip_dialog *sip_alloc(ast_string_field callid, struct sockaddr_in *sin,
 
 	ast_set2_flag(&p->flags[0], !global.recordhistory, SIP_NO_HISTORY);
 
-	p->branch = ast_random();	
 	make_our_tag(p->tag, sizeof(p->tag));
 	p->ocseq = INITIAL_CSEQ;
 
@@ -678,7 +693,7 @@ struct sip_dialog *sip_alloc(ast_string_field callid, struct sockaddr_in *sin,
 	if (p->method != SIP_REGISTER)
 		ast_string_field_set(p, fromdomain, global.default_fromdomain);
 
-	build_via(p);
+	build_via(p, TRUE);
 	if (!callid)					/* Make sure we have a unique call ID */
 		build_callid_pvt(p);
 	else
@@ -767,7 +782,6 @@ static int transmit_response_using_temp(ast_string_field callid, struct sockaddr
 	} else
 		p->ourip = sipnet.__ourip;
 
-	p->branch = ast_random();
 	make_our_tag(p->tag, sizeof(p->tag));
 	p->ocseq = INITIAL_CSEQ;
 
@@ -778,7 +792,7 @@ static int transmit_response_using_temp(ast_string_field callid, struct sockaddr
 	}
 
 	ast_string_field_set(p, fromdomain, global.default_fromdomain);
-	build_via(p);
+	build_via(p, TRUE);
 	ast_string_field_set(p, callid, callid);
 
 	/* Use this temporary pvt structure to send the message */
@@ -794,88 +808,98 @@ static int transmit_response_using_temp(ast_string_field callid, struct sockaddr
 	Called by handle_request, sipsock_read */
 struct sip_dialog *match_or_create_dialog(struct sip_request *req, struct sockaddr_in *sin, const int intended_method)
 {
-	struct sip_dialog *p = NULL;
+	struct sip_dialog *cur = NULL;
 	char *tag = "";	/* note, tag is never NULL */
 	char totag[128];
 	char fromtag[128];
-	const char *callid = get_header(req, "Call-ID");
-	const char *from = get_header(req, "From");
-	const char *to = get_header(req, "To");
-	const char *cseq = get_header(req, "Cseq");
+
+	if (ast_strlen_zero(req->callid))
+		req->callid = get_header(req, "Call-ID");
+	if (ast_strlen_zero(req->from))
+		req->from = get_header(req, "From");
+	if (ast_strlen_zero(req->to))
+		req->to = get_header(req, "To");
+	if (ast_strlen_zero(req->cseqheader))
+		req->cseqheader = get_header(req, "Cseq");
 
 	/* Call-ID, to, from and Cseq are required by RFC 3261. (Max-forwards and via too - ignored now) */
 	/* get_header always returns non-NULL so we must use ast_strlen_zero() */
-	if (ast_strlen_zero(callid) || ast_strlen_zero(to) ||
-			ast_strlen_zero(from) || ast_strlen_zero(cseq))
+	if (ast_strlen_zero(req->callid) || ast_strlen_zero(req->to) ||
+			ast_strlen_zero(req->from) || ast_strlen_zero(req->cseqheader))
 		return NULL;	/* Invalid packet */
 
 	/* In principle Call-ID's uniquely identify a call, but with a forking SIP proxy
 	   we need more to identify a branch - so we have to check branch, from
 	   and to tags to identify a call leg.
 	   */
-	if (gettag(req, "To", totag, sizeof(totag)))
+	if (gettag(req->to, totag, sizeof(totag)))
 		ast_set_flag(req, SIP_PKT_WITH_TOTAG);	/* Used in handle_request/response */
-	gettag(req, "From", fromtag, sizeof(fromtag));
+	gettag(req->from, fromtag, sizeof(fromtag));
 
 	tag = (req->method == SIP_RESPONSE) ? totag : fromtag;
 
 	if (option_debug > 4 )
-		ast_log(LOG_DEBUG, "= Looking for  Call ID: %s (Checking %s) --From tag %s --To-tag %s  \n", callid, req->method==SIP_RESPONSE ? "To" : "From", fromtag, totag);
+		ast_log(LOG_DEBUG, "= Looking for  Call ID: %s (Checking %s) --From tag %s --To-tag %s  \n", req->callid, req->method==SIP_RESPONSE ? "To" : "From", fromtag, totag);
 
 	dialoglist_lock();
-	for (p = dialoglist; p; p = p->next) {
+	for (cur = dialoglist; cur; cur = cur->next) {
 		/* we do not want packets with bad syntax to be connected to a PVT */
 		int found = FALSE;
 		if (req->method == SIP_REGISTER)
-			found = (!strcmp(p->callid, callid));
+			found = (!strcmp(cur->callid, req->callid));
 		else 
-			found = (!strcmp(p->callid, callid) && 
-			(!tag || ast_strlen_zero(p->theirtag) || !strcmp(p->theirtag, tag))) ;
+			found = (!strcmp(cur->callid, req->callid) && 
+			(!tag || ast_strlen_zero(cur->theirtag) || !strcmp(cur->theirtag, tag))) ;
 
 		if (option_debug > 4)
-			ast_log(LOG_DEBUG, "= %s Their Call ID: %s Their Tag %s Our tag: %s\n", found ? "Found" : "No match", p->callid, p->theirtag, p->tag);
+			ast_log(LOG_DEBUG, "= %s Their Call ID: %s Their Tag %s Our tag: %s\n", found ? "Found" : "No match", cur->callid, cur->theirtag, cur->tag);
 
 		/* If we get a new request within an existing to-tag - check the to tag as well */
 		if (found  && req->method != SIP_RESPONSE) {	/* SIP Request */
-			if (p->tag[0] == '\0' && totag[0]) {
+			if (cur->tag[0] == '\0' && totag[0]) {
 				/* We have no to tag, but they have. Wrong dialog */
 				found = FALSE;
 			} else if (totag[0]) {			/* Both have tags, compare them */
-				if (strcmp(totag, p->tag)) {
+				if (strcmp(totag, cur->tag)) {
 					found = FALSE;		/* This is not our packet */
 				}
 			}
 			if (!found && option_debug > 4)
-				ast_log(LOG_DEBUG, "= Being pedantic: This is not our match on request: Call ID: %s Ourtag <null> Totag %s Method %s\n", p->callid, totag, sip_method2txt(req->method));
+				ast_log(LOG_DEBUG, "= Being pedantic: This is not our match on request: Call ID: %s Ourtag <null> Totag %s Method %s\n", cur->callid, totag, sip_method2txt(req->method));
 		}
 
 
 		if (found) {
 			/* Found the call */
-			ast_mutex_lock(&p->lock);
+			ast_mutex_lock(&cur->lock);
 			dialoglist_unlock();
-			return p;
+			return cur;
 		}
 	}
 	dialoglist_unlock();
-	if (sip_methods[intended_method].creates_dialog == CAN_CREATE_DIALOG) {
-		if (intended_method == SIP_REFER) {
-
-			/* We do not support out-of-dialog REFERs yet */
-			transmit_response_using_temp(callid, sin, 1, intended_method, req, "603 Declined (no dialog)");
-		} else if (intended_method == SIP_NOTIFY) {
-			/* We do not support out-of-dialog NOTIFY either,
-			  like voicemail notification, so cancel that early */
-			transmit_response_using_temp(callid, sin, 1, intended_method, req, "489 Bad event");
-		} else if ((p = sip_alloc(callid, sin, 1, intended_method))) {
+	if (sip_methods[intended_method].creates_dialog != CAN_CREATE_DIALOG && intended_method != SIP_RESPONSE) {
+		transmit_response_using_temp(req->callid, sin, TRUE, intended_method, req, "481 Call leg/transaction does not exist");
+		return cur;
+	}
+	switch (intended_method) {
+	case SIP_REFER:
+		/* We do not support out-of-dialog REFERs yet */
+		transmit_response_using_temp(req->callid, sin, TRUE, intended_method, req, "603 Declined (no dialog)");
+		break;
+	case SIP_NOTIFY:
+		/* We do not support out-of-dialog NOTIFY either,
+		  like voicemail notification, so cancel that early */
+		transmit_response_using_temp(req->callid, sin, TRUE, intended_method, req, "489 Bad event");
+		break;
+	default:
+		/* ready to create a new dialog. */
+		if ((cur = sip_alloc(req->callid, sin, TRUE, intended_method))) {
 			/* This method creates dialog */
-			/* Ok, we've created a dialog, let's go and process it */
-			ast_mutex_lock(&p->lock);
+			/* Ok, 	we've created a dialog, let's go and process it */
+			ast_mutex_lock(&cur->lock);
 		}
-	} else {
-		if (intended_method != SIP_RESPONSE)
-			transmit_response_using_temp(callid, sin, 1, intended_method, req, "481 Call leg/transaction does not exist");
+		break;
 	}
 
-	return p;
+	return cur;
 }
