@@ -187,7 +187,11 @@ enum transfermodes {
 	TRANSFER_CLOSED,                /*!< Allow no SIP transfers */
 };
 
-
+typedef enum {
+	AST_FALSE = 0,
+	AST_TRUE = 1,
+	AST_HAVENOCLUEANDDONOTCARE = -1,
+} sip_boolean;
 
 enum sip_result {
 	AST_SUCCESS = 0,

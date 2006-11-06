@@ -249,6 +249,8 @@ int sipsocket_open(void)
 	setsockopt(sipnet.sipsock, SOL_SOCKET, SO_REUSEADDR,
 				   (const char*)&reuseFlag,
 				   sizeof reuseFlag);
+	
+	ast_enable_packet_fragmentation(sipnet.sipsock);
 
 	if (bind(sipnet.sipsock, (struct sockaddr *)&sipnet.bindaddr, sizeof(sipnet.bindaddr)) < 0) {
 		ast_log(LOG_WARNING, "Failed to bind to %s:%d: %s\n",

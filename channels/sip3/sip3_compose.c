@@ -132,6 +132,85 @@ int add_digit(struct sip_request *req, char digit)
 	return 0;
 }
 
+/*! \brief Build the Remote Party-ID & From using callingpres options */
+static void build_rpid(struct sip_dialog *p)
+{
+	int send_pres_tags = TRUE;
+	const char *privacy=NULL;
+	const char *screen=NULL;
+	char buf[256];
+	const char *clid = global.default_callerid;
+	const char *clin = NULL;
+	const char *fromdomain;
+
+	if (!ast_strlen_zero(p->rpid) || !ast_strlen_zero(p->rpid_from))  
+		return;
+
+	if (p->owner && p->owner->cid.cid_num)
+		clid = p->owner->cid.cid_num;
+	if (p->owner && p->owner->cid.cid_name)
+		clin = p->owner->cid.cid_name;
+	if (ast_strlen_zero(clin))
+		clin = clid;
+
+	switch (p->callingpres) {
+	case AST_PRES_ALLOWED_USER_NUMBER_NOT_SCREENED:
+		privacy = "off";
+		screen = "no";
+		break;
+	case AST_PRES_ALLOWED_USER_NUMBER_PASSED_SCREEN:
+		privacy = "off";
+		screen = "pass";
+		break;
+	case AST_PRES_ALLOWED_USER_NUMBER_FAILED_SCREEN:
+		privacy = "off";
+		screen = "fail";
+		break;
+	case AST_PRES_ALLOWED_NETWORK_NUMBER:
+		privacy = "off";
+		screen = "yes";
+		break;
+	case AST_PRES_PROHIB_USER_NUMBER_NOT_SCREENED:
+		privacy = "full";
+		screen = "no";
+		break;
+	case AST_PRES_PROHIB_USER_NUMBER_PASSED_SCREEN:
+		privacy = "full";
+		screen = "pass";
+		break;
+	case AST_PRES_PROHIB_USER_NUMBER_FAILED_SCREEN:
+		privacy = "full";
+		screen = "fail";
+		break;
+	case AST_PRES_PROHIB_NETWORK_NUMBER:
+		privacy = "full";
+		screen = "pass";
+		break;
+	case AST_PRES_NUMBER_NOT_AVAILABLE:
+		send_pres_tags = FALSE;
+		break;
+	default:
+		ast_log(LOG_WARNING, "Unsupported callingpres (%d)\n", p->callingpres);
+		if ((p->callingpres & AST_PRES_RESTRICTION) != AST_PRES_ALLOWED)
+			privacy = "full";
+		else
+			privacy = "off";
+		screen = "no";
+		break;
+	}
+	
+	fromdomain = S_OR(p->fromdomain, ast_inet_ntoa(p->ourip));
+
+	snprintf(buf, sizeof(buf), "\"%s\" <sip:%s@%s>", clin, clid, fromdomain);
+	if (send_pres_tags)
+		snprintf(buf + strlen(buf), sizeof(buf) - strlen(buf), ";privacy=%s;screen=%s", privacy, screen);
+	ast_string_field_set(p, rpid, buf);
+
+	ast_string_field_build(p, rpid_from, "\"%s\" <sip:%s@%s>;tag=%s", clin,
+			       S_OR(p->fromuser, clid),
+			       fromdomain, p->tag);
+}
+
 /*! \brief Prepare SIP response packet */
 int respprep(struct sip_request *resp, struct sip_dialog *p, const char *msg, const struct sip_request *req)
 {
@@ -305,6 +384,135 @@ static void set_destination(struct sip_dialog *p, char *uri)
 	p->sa.sin_port = htons(port);
 	if (debug)
 		ast_verbose("set_destination: set destination to %s, port %d\n", ast_inet_ntoa(p->sa.sin_addr), port);
+}
+
+/*! \brief Initiate new SIP request to peer/user */
+void initreqprep(struct sip_request *req, struct sip_dialog *p, int sipmethod)
+{
+	char invite_buf[256] = "";
+	char *invite = invite_buf;
+	size_t invite_max = sizeof(invite_buf);
+	char from[256];
+	char to[256];
+	char tmp[BUFSIZ/2];
+	char tmp2[BUFSIZ/2];
+	const char *l = NULL, *n = NULL;
+	const char *urioptions = "";
+
+	if (ast_test_flag(&p->flags[0], SIP_USEREQPHONE)) {
+	 	const char *s = p->username;	/* being a string field, cannot be NULL */
+
+		/* Test p->username against allowed characters in AST_DIGIT_ANY
+			If it matches the allowed characters list, then sipuser = ";user=phone"
+			If not, then sipuser = ""
+		*/
+		/* + is allowed in first position in a tel: uri */
+		if (*s == '+')
+			s++;
+		for (; *s; s++) {
+			if (!strchr(AST_DIGIT_ANYNUM, *s) )
+				break;
+		}
+		/* If we have only digits, add ;user=phone to the uri */
+		if (*s)
+			urioptions = ";user=phone";
+	}
+
+
+	snprintf(p->lastmsg, sizeof(p->lastmsg), "Init: %s", sip_method2txt(sipmethod));
+
+	if (p->owner) {
+		l = p->owner->cid.cid_num;
+		n = p->owner->cid.cid_name;
+	}
+	/* if we are not sending RPID and user wants his callerid restricted */
+	if (!ast_test_flag(&p->flags[0], SIP_SENDRPID) &&
+	    ((p->callingpres & AST_PRES_RESTRICTION) != AST_PRES_ALLOWED)) {
+		l = CALLERID_UNKNOWN;
+		n = l;
+	}
+	if (ast_strlen_zero(l))
+		l = global.default_callerid;
+	if (ast_strlen_zero(n))
+		n = l;
+	/* Allow user to be overridden */
+	if (!ast_strlen_zero(p->fromuser))
+		l = p->fromuser;
+	else /* Save for any further attempts */
+		ast_string_field_set(p, fromuser, l);
+
+	/* Allow user to be overridden */
+	if (!ast_strlen_zero(p->fromname))
+		n = p->fromname;
+	else /* Save for any further attempts */
+		ast_string_field_set(p, fromname, n);
+
+	ast_uri_encode(n, tmp, sizeof(tmp), 0);
+	n = tmp;
+	ast_uri_encode(l, tmp2, sizeof(tmp2), 0);
+	l = tmp2;
+
+	if ((sipnet_ourport() != STANDARD_SIP_PORT) && ast_strlen_zero(p->fromdomain))	/* Needs to be 5060 */
+		snprintf(from, sizeof(from), "\"%s\" <sip:%s@%s:%d>;tag=%s", n, l, S_OR(p->fromdomain, ast_inet_ntoa(p->ourip)), sipnet_ourport(), p->tag);
+	else
+		snprintf(from, sizeof(from), "\"%s\" <sip:%s@%s>;tag=%s", n, l, S_OR(p->fromdomain, ast_inet_ntoa(p->ourip)), p->tag);
+
+	/* If we're calling a registered SIP peer, use the fullcontact to dial to the peer */
+	if (!ast_strlen_zero(p->fullcontact)) {
+		/* If we have full contact, trust it */
+		ast_build_string(&invite, &invite_max, "%s", p->fullcontact);
+	} else {
+		/* Otherwise, use the defaultuser while waiting for registration */
+		ast_build_string(&invite, &invite_max, "sip:");
+		if (!ast_strlen_zero(p->defaultuser)) {
+			n = p->defaultuser;
+			ast_uri_encode(n, tmp, sizeof(tmp), 0);
+			n = tmp;
+			ast_build_string(&invite, &invite_max, "%s@", n);
+		}
+		ast_build_string(&invite, &invite_max, "%s", p->tohost);
+		if (ntohs(p->sa.sin_port) != STANDARD_SIP_PORT)		/* Needs to be 5060 */
+			ast_build_string(&invite, &invite_max, ":%d", ntohs(p->sa.sin_port));
+		ast_build_string(&invite, &invite_max, "%s", urioptions);
+	}
+
+	/* If custom URI options have been provided, append them */
+	if (p->options && p->options->uri_options)
+		ast_build_string(&invite, &invite_max, ";%s", p->options->uri_options);
+	
+	ast_string_field_set(p, uri, invite_buf);
+
+	if (sipmethod == SIP_NOTIFY && !ast_strlen_zero(p->theirtag)) { 
+		/* If this is a NOTIFY, use the From: tag in the subscribe (RFC 3265) */
+		snprintf(to, sizeof(to), "<sip:%s>;tag=%s", p->uri, p->theirtag);
+	} else if (p->options && p->options->vxml_url) {
+		/* If there is a VXML URL append it to the SIP URL */
+		snprintf(to, sizeof(to), "<%s>;%s", p->uri, p->options->vxml_url);
+	} else 
+		snprintf(to, sizeof(to), "<%s>", p->uri);
+	
+	init_req(req, sipmethod, p->uri);
+	snprintf(tmp, sizeof(tmp), "%d %s", ++p->ocseq, sip_method2txt(sipmethod));
+
+	add_header(req, "Via", p->via);
+	/* SLD: FIXME?: do Route: here too?  I think not cos this is the first request.
+	 * OTOH, then we won't have anything in p->route anyway */
+	/* Build Remote Party-ID and From */
+	if (ast_test_flag(&p->flags[0], SIP_SENDRPID) && (sipmethod == SIP_INVITE)) {
+		build_rpid(p);
+		add_header(req, "From", p->rpid_from);
+	} else 
+		add_header(req, "From", from);
+	add_header(req, "To", to);
+	ast_string_field_set(p, exten, l);
+	build_contact(p);
+	add_header(req, "Contact", p->our_contact);
+	add_header(req, "Call-ID", p->callid);
+	add_header(req, "CSeq", tmp);
+	add_header(req, "User-Agent", global.useragent);
+	add_header(req, "Max-Forwards", DEFAULT_MAX_FORWARDS);
+	if (!ast_strlen_zero(p->rpid))
+		add_header(req, "Remote-Party-ID", p->rpid);
 }
 
 

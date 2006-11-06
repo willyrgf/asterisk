@@ -636,3 +636,46 @@ void extract_uri(struct sip_dialog *p, struct sip_request *req)
 		ast_string_field_set(p, uri, c);
 }
 
+/*! \brief Parse 302 Moved temporalily response */
+void parse_moved_contact(struct sip_dialog *p, struct sip_request *req)
+{
+	char tmp[256];
+	char *s, *e;
+	char *domain;
+
+	ast_copy_string(tmp, get_header(req, "Contact"), sizeof(tmp));
+	s = get_in_brackets(tmp);
+	s = strsep(&s, ";");	/* strip ; and beyond */
+	if (ast_test_flag(&p->flags[0], SIP_PROMISCREDIR)) {
+		if (!strncasecmp(s, "sip:", 4))
+			s += 4;
+		e = strchr(s, '/');
+		if (e)
+			*e = '\0';
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Found promiscuous redirection to 'SIP/%s'\n", s);
+		if (p->owner)
+			ast_string_field_build(p->owner, call_forward, "SIP/%s", s);
+	} else {
+		e = strchr(tmp, '@');
+		if (e) {
+			*e++ = '\0';
+			domain = e;
+		} else {
+			/* No username part */
+			domain = tmp;
+		}
+		e = strchr(tmp, '/');
+		if (e)
+			*e = '\0';
+		if (!strncasecmp(s, "sip:", 4))
+			s += 4;
+		if (option_debug > 1)
+			ast_log(LOG_DEBUG, "Received 302 Redirect to extension '%s' (domain %s)\n", s, domain);
+		if (p->owner) {
+			pbx_builtin_setvar_helper(p->owner, "SIPDOMAIN", domain);
+			ast_string_field_set(p->owner, call_forward, s);
+		}
+	}
+}
+

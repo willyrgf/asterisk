@@ -439,6 +439,9 @@ GNURK void sip_cancel_destroy(struct sip_dialog *p)
 }
 
 /*! \brief Convert SIP hangup causes to Asterisk hangup causes */
+/* \page SIP_isdn2sip Conversion from ISDN to SIP codes
+	- see function \ref hangup_sip2cause()
+*/
 int hangup_sip2cause(int cause)
 {
 	/* Possible values taken from causes.h */
@@ -520,6 +523,7 @@ int hangup_sip2cause(int cause)
 }
 
 /*! \brief Convert Asterisk hangup causes to SIP codes 
+\page SIP_isdn2sip Conversion from ISDN to SIP codes
 \verbatim
  Possible values from causes.h
         AST_CAUSE_NOTDEFINED    AST_CAUSE_NORMAL        AST_CAUSE_BUSY
@@ -550,6 +554,7 @@ int hangup_sip2cause(int cause)
    29 facility rejected                    501 Not implemented
    31 normal unspecified                   480 Temporarily unavailable
 \endverbatim
+Also see \ref SIP_sip2isdn
 */
 const char *hangup_cause2sip(int cause)
 {
@@ -807,6 +812,7 @@ static int transmit_response_using_temp(ast_string_field callid, struct sockaddr
 /*! \brief Connect incoming SIP message to current dialog or create new dialog structure
 	\note Called by handle_request, sipsock_read 
 
+	\page sip3_dialog_match chan_sip3:: Dialog matching and scenarios
 	\title Dialog matching
 
 	SIP can be forked, so we need to separate dialogs from each other in a 
@@ -970,6 +976,7 @@ struct sip_dialog *match_or_create_dialog(struct sip_request *req, struct sockad
 				For requests, we might be getting a statelessly forked call to us. 
 			*/
 			if (!ast_strlen_zero(cur->remotebranch) && strcmp(cur->remotebranch, branch)) {
+				/* XXX What do we do here ? */
 				
 			}
 		}

@@ -131,6 +131,7 @@ GNURK char *generate_random_string(char *buf, size_t size);
 GNURK const char *gettag(const char *header, char *tagbuf, int tagbufsize);
 GNURK int determine_firstline_parts(struct sip_request *req);
 GNURK void extract_uri(struct sip_dialog *p, struct sip_request *req);
+GNURK void parse_moved_contact(struct sip_dialog *p, struct sip_request *req);
 
 /*! sip3_compose.c : Composing new SIP messages */
 GNURK void build_callid_pvt(struct sip_dialog *pvt);
@@ -141,6 +142,7 @@ GNURK int respprep(struct sip_request *resp, struct sip_dialog *p, const char *m
 GNURK void add_route(struct sip_request *req, struct sip_route *route);
 GNURK int add_line(struct sip_request *req, const char *line);
 GNURK int add_header_contentLength(struct sip_request *req, int len);
+GNURK void initreqprep(struct sip_request *req, struct sip_dialog *p, int sipmethod);
 GNURK int reqprep(struct sip_request *req, struct sip_dialog *p, int sipmethod, int seqno, int newbranch);
 
 /*! sip3_domain.c: Domain handling functions (sip domain hosting, not DNS lookups) */
