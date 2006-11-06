@@ -113,16 +113,16 @@
 /*!	\page chan_sip3_00index Chan_sip3: Index over docs
 	\title Chan_sip3 :: Index
 
-	- \ref chan_sip3_start
-	- \ref chan_sip3_objects
-	- \ref chan_sip3_files
-	- \ref chan_sip3_auth
-	- \ref chan_sip3_dialogs
-	- \ref chan_sip3_overview
+	- \subpage chan_sip3_start
+	- \subpage chan_sip3_objects
+	- \subpage chan_sip3_files
+	- \subpage chan_sip3_auth
+	- \subpage chan_sip3_dialogs
+	- \subpage chan_sip3_overview
 
 	\par todo Things to do, ideas
-	- \ref chan_sip3_todo
-	- \ref chan_sip3_subs
+	- \subpage chan_sip3_todo
+	- \subpage chan_sip3_subs
 
 */
 
@@ -635,9 +635,9 @@ inline int sip_debug_test_pvt(struct sip_dialog *dialog)
 }
 
 /*! \brief Find via branch parameter */
-static void find_via_branch(struct sip_dialog *dialog, struct sip_request *req)
+static void find_via_branch(struct sip_request *req, char *viabuf, size_t vialen)
 {
-	char *dupvia = ast_strdupa(req->via);
+	char *dupvia;
 	char *viabranch;
 	char *sep;
 
@@ -651,7 +651,7 @@ static void find_via_branch(struct sip_dialog *dialog, struct sip_request *req)
 		*sep = '\0';
 	if (ast_test_flag(req, SIP_PKT_DEBUG) && option_debug > 3)
 		ast_log(LOG_DEBUG, "* Found via branch %s\n", viabranch);
-	ast_string_field_set(dialog, remotebranch, viabranch);
+	strncpy(viabuf, vialen, viabranch);
 }
 
 

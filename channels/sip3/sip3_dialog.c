@@ -805,13 +805,94 @@ static int transmit_response_using_temp(ast_string_field callid, struct sockaddr
 }
 
 /*! \brief Connect incoming SIP message to current dialog or create new dialog structure
-	Called by handle_request, sipsock_read */
+	\note Called by handle_request, sipsock_read 
+
+	\title Dialog matching
+
+	SIP can be forked, so we need to separate dialogs from each other in a 
+	good way.
+
+	\title 1. Calling out, getting the same call back
+	An OUTBOUND INVITE can be sent to a SiP proxy and come back twice. We
+	separate the two different calls by branch tag in the topmost via header.
+		Asterisk1 ----> INVITE ---> PROXY
+				    PROXY --> INVITE branch 1 ---> Asterisk1
+				    PROXY --> INVITE branch 2 ---> Asterisk1
+				    PROXY --> INVITE branch 3 ---> UA3 (not Asterisk)
+	We have to treat the two calls as separate calls. But how do we handle
+	this situation, where we actually can take the media internally somehow?
+	If the proxy does not add Record-Route, we can just tear down the SIP
+	signalling and shortcut the call internally. If the proxy Record-Route the
+	call, we need to keep the SIP signalling or just fake a tear down with
+	a fake BYE and handle it internally, which wouuld be bad if the proxy
+	logs are important.
+	
+	\title 2. Getting the same INCOMING call multiple times
+		UAC ----> INVITE ---> PROXY
+				    PROXY --> INVITE branch 1 ---> Asterisk1
+				    PROXY --> INVITE branch 2 ---> Asterisk1
+				    PROXY --> INVITE branch 3 ---> UA3 (not Asterisk)
+
+	\title 3. Sending INVITE, getting many replies
+				
+	An OUTBOUND INVITE may be forked to two or more separate UA's. If there's
+	a stateless SIP proxy between us and the UA's, we get multiple replies.
+	In a worst case scenario, we get multiple 200 OK at the same time.
+	Since we don't know about the fork, we won't send CANCEL.
+		INVITE -->
+			<--- 100 trying from UA1
+			<--- 100 trying from UA2
+			<--- 200 OK from UA1
+			<--- 200 OK from UA2
+	in this case
+
+	If it's a secondary 200 OK to a current
+	INVITE, we're in interesting waters.
+	In this case, we have to copy the current dialog, create
+	a new and send ACK, then immediately BYE since there's
+	no call to bridge it with.
+	of course, there's a usability issue here. how do you
+	tell the person that answers the forked call that someone
+	else answered already? Too late to cancel the call...
+
+	Scenarios:
+	INVITE
+		100 from first device
+		100 from second device
+		183 from first device
+		183 from second device
+			- provisional responses, don't create new dialog, 
+			  just ignore the secondary answers and be happy
+	--- 2. Double 200 OKs
+		200 OK from first device
+		200 OK from second
+			- Creates new branch
+	--- 3. Error and 200 OK from different devices
+		200 OK from first device response
+		603 Declined from secondary device response
+			- Sorry, just ACK the 603 and close
+
+		603 declined from first response
+		200 OK from second response
+			- In this case, the call failed. We can't wait
+				for the possibility that we get a 200 OK
+				from a device we don't know about.	
+			- But we might be clever, if we get two 100 trying
+			  then we know that something's going on.
+			- Without trickery, the second 200 OK will have to
+			  get an ACK, then a BYE
+
+	\title 4. How do we handle this in Asterisk chan_sip3 ???
+
+	
+*/
 struct sip_dialog *match_or_create_dialog(struct sip_request *req, struct sockaddr_in *sin, const int intended_method)
 {
 	struct sip_dialog *cur = NULL;
 	char *tag = "";	/* note, tag is never NULL */
 	char totag[128];
 	char fromtag[128];
+	char branch[128];
 
 	if (ast_strlen_zero(req->callid))
 		req->callid = get_header(req, "Call-ID");
@@ -841,6 +922,7 @@ struct sip_dialog *match_or_create_dialog(struct sip_request *req, struct sockad
 	if (option_debug > 4 )
 		ast_log(LOG_DEBUG, "= Looking for  Call ID: %s (Checking %s) --From tag %s --To-tag %s  \n", req->callid, req->method==SIP_RESPONSE ? "To" : "From", fromtag, totag);
 
+	findviabranch(req, branch, sizeof(branch));
 	dialoglist_lock();
 	for (cur = dialoglist; cur; cur = cur->next) {
 		/* we do not want packets with bad syntax to be connected to a PVT */
@@ -861,11 +943,35 @@ struct sip_dialog *match_or_create_dialog(struct sip_request *req, struct sockad
 				found = FALSE;
 			} else if (totag[0]) {			/* Both have tags, compare them */
 				if (strcmp(totag, cur->tag)) {
-					found = FALSE;		/* This is not our packet */
+					found = FALSE;		/* This is not our dialog */
 				}
 			}
 			if (!found && option_debug > 4)
 				ast_log(LOG_DEBUG, "= Being pedantic: This is not our match on request: Call ID: %s Ourtag <null> Totag %s Method %s\n", cur->callid, totag, sip_method2txt(req->method));
+		}
+		
+		/* We need to check the branch too, to make sure this is the proper reply */
+		/* If it is an INVITE from us coming back with a new branch, we need to
+			do some masquerading trickery with the audio.
+			We might also get several INVITEs with different branches
+			and have to treat them as several calls 
+		 */
+		if (found) {
+			if (!strcmp(cur->ourbranch, branch)) {
+				/* This is our own request coming back to us strangely enough */
+				/* Propably through DNS, but not a proxy */
+				/* Bad dialplan design... ; -) */
+				/* Any way we can handle this??? */
+			}
+			/* If we have a remote branch already, and get a new branch with the
+				same call ID, then something is happening.
+				For responses - we might have a forking proxy and get responses
+				from several UAs on one request.
+				For requests, we might be getting a statelessly forked call to us. 
+			*/
+			if (!ast_strlen_zero(cur->remotebranch) && strcmp(cur->remotebranch, branch) {
+				
+			}
 		}
 
 
