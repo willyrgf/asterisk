@@ -93,6 +93,21 @@ static struct ast_jb_conf default_jbconf =
 	.impl = ""
 };
 
+/*! \brief * implement the servar config line */
+static struct ast_variable *add_var(const char *buf, struct ast_variable *list)
+{
+	struct ast_variable *tmpvar = NULL;
+	char *varname = ast_strdupa(buf), *varval = NULL;
+	
+	if ((varval = strchr(varname,'='))) {
+		*varval++ = '\0';
+		if ((tmpvar = ast_variable_new(varname, varval))) {
+			tmpvar->next = list;
+			list = tmpvar;
+		}
+	}
+	return list;
+}
 /*! \brief Destroy disused contexts between reloads
 	Only used in reload_config so the code for regcontext doesn't get ugly
 */
@@ -301,8 +316,6 @@ static struct sip_peer *build_device(const char *name, struct ast_variable *v, s
 	int firstpass = 1;
 	int format = 0;		/* Ama flags */
 	time_t regseconds = 0;
-	char *varname = NULL, *varval = NULL;
-	struct ast_variable *tmpvar = NULL;
 	struct ast_flags peerflags[2] = {{(0)}};
 	struct ast_flags mask[2] = {{(0)}};
 	int register_lineno = 0;
@@ -499,15 +512,7 @@ static struct sip_peer *build_device(const char *name, struct ast_variable *v, s
 				peer->rtpkeepalive = global.rtpkeepalive;
 			}
 		} else if (!strcasecmp(v->name, "setvar")) {
-			/* Set peer channel variable */
-			varname = ast_strdupa(v->value);
-			if ((varval = strchr(varname, '='))) {
-				*varval++ = '\0';
-				if ((tmpvar = ast_variable_new(varname, varval))) {
-					tmpvar->next = peer->chanvars;
-					peer->chanvars = tmpvar;
-				}
-			}
+			peer->chanvars = add_var(v->value, peer->chanvars);
 		} else if (!strcasecmp(v->name, "qualify")) {
 			if (!strcasecmp(v->value, "no")) {
 				peer->maxms = 0;

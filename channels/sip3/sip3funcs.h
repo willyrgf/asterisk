@@ -83,6 +83,7 @@ GNURK struct sip_dialog *get_sip_dialog_byid_locked(const char *callid, const ch
 GNURK void ast_quiet_chan(struct ast_channel *chan);
 GNURK void sip_dump_history(struct sip_dialog *dialog);	/* Dump history to LOG_DEBUG at end of dialog, before destroying data */
 GNURK void free_old_route(struct sip_route *route);
+GNURK void find_via_branch(struct sip_request *req, char *viabuf, size_t vialen);
 
 /*! sip3_refer.c */
 GNURK const char *referstatus2str(enum referstatus rstatus) attribute_pure;
@@ -136,7 +137,7 @@ GNURK void build_callid_pvt(struct sip_dialog *pvt);
 GNURK void append_date(struct sip_request *req);
 GNURK int add_text(struct sip_request *req, const char *text);
 GNURK int add_digit(struct sip_request *req, char digit);
-GNURK int respprep(struct sip_request *resp, struct sip_dialog *p, const char *msg, struct sip_request *req);
+GNURK int respprep(struct sip_request *resp, struct sip_dialog *p, const char *msg, const struct sip_request *req);
 GNURK void add_route(struct sip_request *req, struct sip_route *route);
 GNURK int add_line(struct sip_request *req, const char *line);
 GNURK int add_header_contentLength(struct sip_request *req, int len);

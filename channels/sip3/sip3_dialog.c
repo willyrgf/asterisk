@@ -922,7 +922,7 @@ struct sip_dialog *match_or_create_dialog(struct sip_request *req, struct sockad
 	if (option_debug > 4 )
 		ast_log(LOG_DEBUG, "= Looking for  Call ID: %s (Checking %s) --From tag %s --To-tag %s  \n", req->callid, req->method==SIP_RESPONSE ? "To" : "From", fromtag, totag);
 
-	findviabranch(req, branch, sizeof(branch));
+	find_via_branch(req, branch, sizeof(branch));
 	dialoglist_lock();
 	for (cur = dialoglist; cur; cur = cur->next) {
 		/* we do not want packets with bad syntax to be connected to a PVT */
@@ -969,7 +969,7 @@ struct sip_dialog *match_or_create_dialog(struct sip_request *req, struct sockad
 				from several UAs on one request.
 				For requests, we might be getting a statelessly forked call to us. 
 			*/
-			if (!ast_strlen_zero(cur->remotebranch) && strcmp(cur->remotebranch, branch) {
+			if (!ast_strlen_zero(cur->remotebranch) && strcmp(cur->remotebranch, branch)) {
 				
 			}
 		}

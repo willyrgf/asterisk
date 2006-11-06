@@ -635,7 +635,7 @@ inline int sip_debug_test_pvt(struct sip_dialog *dialog)
 }
 
 /*! \brief Find via branch parameter */
-static void find_via_branch(struct sip_request *req, char *viabuf, size_t vialen)
+GNURK void find_via_branch(struct sip_request *req, char *viabuf, size_t vialen)
 {
 	char *dupvia;
 	char *viabranch;
@@ -651,7 +651,7 @@ static void find_via_branch(struct sip_request *req, char *viabuf, size_t vialen
 		*sep = '\0';
 	if (ast_test_flag(req, SIP_PKT_DEBUG) && option_debug > 3)
 		ast_log(LOG_DEBUG, "* Found via branch %s\n", viabranch);
-	strncpy(viabuf, vialen, viabranch);
+	strncpy(viabuf, viabranch, vialen);
 }
 
 

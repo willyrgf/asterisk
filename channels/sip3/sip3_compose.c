@@ -133,7 +133,7 @@ int add_digit(struct sip_request *req, char digit)
 }
 
 /*! \brief Prepare SIP response packet */
-int respprep(struct sip_request *resp, struct sip_dialog *p, const char *msg, struct sip_request *req)
+int respprep(struct sip_request *resp, struct sip_dialog *p, const char *msg, const struct sip_request *req)
 {
 	char newto[256];
 	const char *ot;
@@ -143,9 +143,10 @@ int respprep(struct sip_request *resp, struct sip_dialog *p, const char *msg, st
 	if (msg[0] == '2')
 		copy_all_header(resp, req, "Record-Route");
 	copy_header(resp, req, "From");	/* XXX this can be simplified when we are sure that req->from works*/
-	if (ast_strlen_zero(req->to))
-		req->to = get_header(req, "To");
-	ot = req->to;
+	if (!ast_strlen_zero(req->to))
+		ot = req->to;
+	else
+		ot = get_header(req, "To");
 		
 	if (!strcasestr(ot, "tag=") && strncmp(msg, "100", 3)) {
 		/* Add the proper tag if we don't have it already.  If they have specified
