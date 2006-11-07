@@ -68,26 +68,27 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/manager.h"
 #include "asterisk/callerid.h"
 #include "asterisk/cli.h"
-#include "asterisk/app.h"
+//#include "asterisk/app.h"
 #include "asterisk/musiconhold.h"
-#include "asterisk/dsp.h"
+//#include "asterisk/dsp.h"
 #include "asterisk/features.h"
-#include "asterisk/acl.h"
-#include "asterisk/srv.h"
-#include "asterisk/astdb.h"
+//#include "asterisk/srv.h"
+//#include "asterisk/astdb.h"
 #include "asterisk/causes.h"
 #include "asterisk/utils.h"
 #include "asterisk/file.h"
 #include "asterisk/astobj.h"
-#include "asterisk/dnsmgr.h"
-#include "asterisk/devicestate.h"
+//#include "asterisk/dnsmgr.h"
+//#include "asterisk/devicestate.h"
 #include "asterisk/linkedlists.h"
 #include "asterisk/stringfields.h"
 #include "asterisk/monitor.h"
-#include "asterisk/localtime.h"
-#include "asterisk/abstract_jb.h"
+//#include "asterisk/localtime.h"
+//#include "asterisk/abstract_jb.h"
 #include "asterisk/compiler.h"
+
 #include "sip3.h"
+#include "sip3funcs.h"
 
 /*! XXX Note that sip_methods[i].id == i must hold or the code breaks */
 const struct cfsip_methods sip_methods[] = {
@@ -156,7 +157,7 @@ static const struct cfsip_options sip_options[] = {	/* XXX used in 3 places */
  * a case-insensitive comparison to be more tolerant.
  * following Jon Postel's rule: Be gentle in what you accept, strict with what you send
  */
-static int method_match(enum sipmethod id, const char *name)
+int method_match(enum sipmethod id, const char *name)
 {
 	int len = strlen(sip_methods[id].text);
 	int l_name = name ? strlen(name) : 0;
@@ -166,7 +167,7 @@ static int method_match(enum sipmethod id, const char *name)
 }
 
 /*! \brief  find_sip_method: Find SIP method from header */
-static int find_sip_method(const char *msg)
+int find_sip_method(const char *msg)
 {
 	int i, res = 0;
 	
@@ -180,13 +181,13 @@ static int find_sip_method(const char *msg)
 }
 
 /*! \brief return text string for sip method */
-static char *sip_method2txt(int method)
+char *sip_method2txt(int method)
 {
 	return sip_methods[method].text;
 }
 
 /*! \brief Check whether method needs RTP */
-static int sip_method_needrtp(int method)
+int sip_method_needrtp(int method)
 {
 	return sip_methods[method].need_rtp;
 }
@@ -213,28 +214,45 @@ const char *gettag(const char *header, char *tagbuf, int tagbufsize)
 }
 
 /*! \brief Check if sip option is known to us, avoid x- options (non-standard) */ 
-static int sip_option_lookup(const char *optionlabel)
+int sip_option_lookup(const char *optionlabel)
 {
 	int i;
+
 	for (i=0; i < (sizeof(sip_options) / sizeof(sip_options[0])); i++) {
-		if (!strcasecmp(next, sip_options[i].text)) {
-			profile |= sip_options[i].id;
+		if (!strcasecmp(optionlabel, sip_options[i].text)) {
 			if (option_debug > 2 && sipdebug)
-				ast_log(LOG_DEBUG, "Matched SIP option: %s\n", next);
+				ast_log(LOG_DEBUG, "Matched SIP option: %s\n", optionlabel);
 			return i;
 		}
 	}
 	if (option_debug > 2) {
-		if (!strncasecmp(next, "x-", 2))
-			ast_log(LOG_DEBUG, "Found private SIP option, not supported: %s\n", next);
+		if (!strncasecmp(optionlabel, "x-", 2))
+			ast_log(LOG_DEBUG, "Found private SIP option, not supported: %s\n", optionlabel);
 		else
-			ast_log(LOG_DEBUG, "Found no match for SIP option: %s (Please file bug report!)\n", next);
+			ast_log(LOG_DEBUG, "Found no match for SIP option: %s (Please file bug report!)\n", optionlabel);
 	}
 	return -1;
 }
 
+/*! \brief copy SIP request (mostly used to save request for responses) */
+void copy_request(struct sip_request *dst, const struct sip_request *src)
+{
+	long offset;
+	int x;
+
+	offset = ((void *)dst) - ((void *)src);
+	/* First copy stuff */
+	memcpy(dst, src, sizeof(*dst));
+	/* Now fix pointer arithmetic */
+	for (x=0; x < src->headers; x++)
+		dst->header[x] += offset;
+	for (x=0; x < src->lines; x++)
+		dst->line[x] += offset;
+}
+
+
 /*! \brief Parse supported header in incoming packet */
-static unsigned int parse_sip_options(struct sip_dialog *pvt, const char *supported)
+unsigned int parse_sip_options(struct sip_dialog *pvt, const char *supported)
 {
 	char *next, *sep;
 	char *temp;
@@ -255,7 +273,7 @@ static unsigned int parse_sip_options(struct sip_dialog *pvt, const char *suppor
 		next = ast_skip_blanks(next);
 		if (option_debug > 2 && sipdebug)
 			ast_log(LOG_DEBUG, "Got SIP option: -%s-\n", next);
-		i = sip_options_lookup(next);
+		i = sip_option_lookup(next);
 		if (i > 0)
 			profile |= sip_options[i].id;
 	}
@@ -266,13 +284,13 @@ static unsigned int parse_sip_options(struct sip_dialog *pvt, const char *suppor
 }
 
 /*! \brief Return text representation of SIP option */
-static char *sip_option2text(int option)
+char *sip_option2text(int option)
 {
-	return sip_options[option].text);
+	return sip_options[option].text;
 }
 
 /*! \brief Print options to cli */
-static void sip_options_print(int options, int fd)
+void sip_options_print(int options, int fd)
 {
 	int x;
 	int lastoption = -1;
@@ -323,7 +341,237 @@ const char *find_alias(const char *name, const char *_default)
 	return _default;
 }
 
-static const char *__get_header(const struct sip_request *req, const char *name, int *start)
+/*! \brief Translate referring cause 
+*/
+static void sip_set_redirstr(struct sip_dialog *p, char *reason) {
+
+	if (strcmp(reason, "unknown")==0) {
+		ast_string_field_set(p, redircause, "UNKNOWN");
+	} else if (strcmp(reason, "user-busy")==0) {
+		ast_string_field_set(p, redircause, "BUSY");
+	} else if (strcmp(reason, "no-answer")==0) {
+		ast_string_field_set(p, redircause, "NOANSWER");
+	} else if (strcmp(reason, "unavailable")==0) {
+		ast_string_field_set(p, redircause, "UNREACHABLE");
+	} else if (strcmp(reason, "unconditional")==0) {
+		ast_string_field_set(p, redircause, "UNCONDITIONAL");
+	} else if (strcmp(reason, "time-of-day")==0) {
+		ast_string_field_set(p, redircause, "UNKNOWN");
+	} else if (strcmp(reason, "do-not-disturb")==0) {
+		ast_string_field_set(p, redircause, "UNKNOWN");
+	} else if (strcmp(reason, "deflection")==0) {
+		ast_string_field_set(p, redircause, "UNKNOWN");
+	} else if (strcmp(reason, "follow-me")==0) {
+		ast_string_field_set(p, redircause, "UNKNOWN");
+	} else if (strcmp(reason, "out-of-service")==0) {
+		ast_string_field_set(p, redircause, "UNREACHABLE");
+	} else if (strcmp(reason, "away")==0) {
+		ast_string_field_set(p, redircause, "UNREACHABLE");
+	} else {
+		ast_string_field_set(p, redircause, "UNKNOWN");
+	}
+}
+
+
+/*! \brief Get referring dnis */
+int get_rdnis(struct sip_dialog *p, struct sip_request *oreq)
+{
+	char tmp[256], *exten, *rexten, *rdomain;
+	char *params, *reason = NULL;
+	struct sip_request *req;
+	
+	req = oreq ? oreq : &p->initreq;
+
+	ast_copy_string(tmp, get_header(req, "Diversion"), sizeof(tmp));
+	if (ast_strlen_zero(tmp))
+		return 0;
+
+	exten = get_in_brackets(tmp);
+	if (strncmp(exten, "sip:", 4)) {
+		ast_log(LOG_WARNING, "Huh?  Not an RDNIS SIP header (%s)?\n", exten);
+		return -1;
+	}
+	exten += 4;
+
+	/* Get diversion-reason param if present */
+	if ((params = strchr(tmp, ';'))) {
+		*params = '\0';	/* Cut off parameters  */
+		params++;
+		while (*params == ';' || *params == ' ')
+			params++;
+		/* Check if we have a reason parameter */
+		if ((reason = strcasestr(params, "reason="))) {
+			reason+=7;
+			/* Remove enclosing double-quotes */
+			if (*reason == '"') 
+				ast_strip_quoted(reason, "\"", "\"");
+			if (!ast_strlen_zero(reason)) {
+				sip_set_redirstr(p, reason);
+				if (p->owner) {
+					pbx_builtin_setvar_helper(p->owner, "__PRIREDIRECTREASON", p->redircause);
+					pbx_builtin_setvar_helper(p->owner, "__SIPREDIRECTREASON", reason);
+				}
+			}
+		}
+	}
+
+	rdomain = exten;
+	rexten = strsep(&rdomain, "@");	/* trim anything after @ */
+	if (p->owner) 
+		pbx_builtin_setvar_helper(p->owner, "__SIPRDNISDOMAIN", rdomain);
+
+	if (sip_debug_test_pvt(p))
+		ast_verbose("RDNIS for this call is is %s (reason %s)\n", exten, reason ? reason : "");
+
+	ast_string_field_set(p, rdnis, rexten);
+
+	return 0;
+}
+
+/*! \brief Find out who the call is for 
+	We use the INVITE request uri to find out
+	Runs a dialplan lookup
+*/
+int get_destination(struct sip_dialog *p, struct sip_request *oreq)
+{
+	char tmp[256] = "", *uri, *a;
+	char tmpf[256] = "", *from;
+	struct sip_request *req;
+	char *colon;
+	int localdomain = TRUE;
+	
+	req = oreq;
+	if (!req)
+		req = &p->initreq;
+
+	/* Find the request URI */
+	if (req->rlPart2)
+		ast_copy_string(tmp, req->rlPart2, sizeof(tmp));
+	
+	ast_uri_decode(tmp);
+
+	uri = get_in_brackets(tmp);
+
+	if (strncmp(uri, "sip:", 4)) {
+		ast_log(LOG_WARNING, "Huh?  Not a SIP header (%s)?\n", uri);
+		return -1;
+	}
+	uri += 4;
+
+	/* Now find the From: caller ID and name */
+	ast_copy_string(tmpf, get_header(req, "From"), sizeof(tmpf));
+	if (!ast_strlen_zero(tmpf)) {
+		ast_uri_decode(tmpf);
+		from = get_in_brackets(tmpf);
+	} else {
+		from = NULL;
+	}
+	
+	if (!ast_strlen_zero(from)) {
+		if (strncmp(from, "sip:", 4)) {
+			ast_log(LOG_WARNING, "Huh?  Not a SIP header (%s)?\n", from);
+			return -1;
+		}
+		from += 4;
+		if ((a = strchr(from, '@')))
+			*a++ = '\0';
+		else
+			a = from;	/* just a domain */
+		from = strsep(&from, ";");	/* Remove userinfo options */
+		a = strsep(&a, ";");		/* Remove URI options */
+		ast_string_field_set(p, fromdomain, a);
+	}
+
+	/* Skip any options and find the domain */
+
+	/* Get the target domain */
+	if ((a = strchr(uri, '@'))) {
+		*a++ = '\0';
+	} else {	/* No username part */
+		a = uri;
+		uri = "s";	/* Set extension to "s" */
+	}
+	colon = strchr(a, ':'); /* Remove :port */
+	if (colon)
+		*colon = '\0';
+
+	uri = strsep(&uri, ";");	/* Remove userinfo options */
+	a = strsep(&a, ";");		/* Remove URI options */
+
+	ast_string_field_set(p, domain, a);
+
+	if (domains_configured()) {
+		char domain_context[AST_MAX_EXTENSION];
+
+		domain_context[0] = '\0';
+		if (!check_sip_domain(p->domain, domain_context, sizeof(domain_context))) {
+			localdomain = FALSE;
+			if (!global.allow_external_domains && (req->method == SIP_INVITE || req->method == SIP_REFER)) {
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Got SIP %s to non-local domain '%s'; refusing request.\n", sip_method2txt(req->method), p->domain);
+				return -2;
+			}
+		}
+		/* If we have a domain context defined, overwrite the original context */
+		if (!ast_strlen_zero(domain_context))
+			ast_string_field_set(p, context, domain_context);
+	}
+
+	/* If the URI starts with our magic marker and has a corresponding
+		entry in the registry, then replace the URI with the extension
+		we want to use */
+	/* We don't have to check this at all if we have no registry entries... */
+	if (localdomain && req->method == SIP_INVITE) {
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Checking %s for magic registry marker \n", uri);
+		/* Check if the incoming URI is a registry entry */
+		/* Need a function in ASTOBJ to check if there are objects
+			in the container at all here to avoid this check 
+			when we have no registry entries */
+		if (!strncmp(uri, REG_MAGICMARKER, strlen(REG_MAGICMARKER))) {
+			int found = FALSE;
+
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Checking for %s in registry\n", uri);
+			/* Traverse the registry to find something */
+			ASTOBJ_CONTAINER_TRAVERSE(&regl, !found, do {
+				ASTOBJ_RDLOCK(iterator);
+				if (!strcmp(uri, iterator->contact)) {
+					found = TRUE;
+					/* Use the extension of this registry item for the incoming call */
+					uri = (char *) iterator->extension;
+					p->registry = iterator;
+				}
+				ASTOBJ_UNLOCK(iterator);
+			} while(0));
+		}
+	}
+
+
+	if (sip_debug_test_pvt(p))
+		ast_verbose("Looking for %s in %s (domain %s)\n", uri, p->context, p->domain);
+
+	/* Check the dialplan for the username part of the request URI,
+	   the domain will be stored in the SIPDOMAIN variable
+		Return 0 if we have a matching extension */
+	if (ast_exists_extension(NULL, p->context, uri, 1, from) ||
+		!strcmp(uri, ast_pickup_ext())) {
+		if (!oreq)
+			ast_string_field_set(p, exten, uri);
+		return 0;
+	}
+
+	/* Return 1 for pickup extension or overlap dialling support (if we support it) */
+	if((ast_test_flag(&global.flags[1], SIP_PAGE2_ALLOWOVERLAP) && 
+ 	    ast_canmatch_extension(NULL, p->context, uri, 1, from)) ||
+	    !strncmp(uri, ast_pickup_ext(), strlen(uri))) {
+		return 1;
+	}
+	
+	return -1;
+}
+
+const char *__get_header(const struct sip_request *req, const char *name, int *start)
 {
 	int pass;
 
@@ -422,8 +670,8 @@ int copy_via_headers(struct sip_dialog *p, struct sip_request *req, const struct
 			if (rport && *(rport+6) == '=') 
 				rport = NULL;		/* We already have a parameter to rport */
 
-			if (rport && ((ast_test_flag(&p->flags[0], SIP_NAT) == SIP_NAT_ALWAYS) ||
-				(ast_test_flag(&p->flags[0], SIP_NAT) == SIP_NAT_RFC3581) ) }
+			if (rport && ( (ast_test_flag(&p->flags[0], SIP_NAT) == SIP_NAT_ALWAYS) ||
+				(ast_test_flag(&p->flags[0], SIP_NAT) == SIP_NAT_RFC3581) ) ) {
 				/* We need to add received port - rport */
 				char tmp[256], *end;
 

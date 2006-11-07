@@ -132,8 +132,19 @@ int add_digit(struct sip_request *req, char digit)
 	return 0;
 }
 
+/*! \brief Build contact header - the contact header we send out */
+void build_contact(struct sip_dialog *p)
+{
+	/* Construct Contact: header */
+	if (sipnet_ourport() != STANDARD_SIP_PORT)	/* Needs to be 5060, according to the RFC */
+		ast_string_field_build(p, our_contact, "<sip:%s%s%s:%d>", p->exten, ast_strlen_zero(p->exten) ? "" : "@", ast_inet_ntoa(p->ourip), sipnet_ourport());
+	else
+		ast_string_field_build(p, our_contact, "<sip:%s%s%s>", p->exten, ast_strlen_zero(p->exten) ? "" : "@", ast_inet_ntoa(p->ourip));
+}
+
+
 /*! \brief Build the Remote Party-ID & From using callingpres options */
-static void build_rpid(struct sip_dialog *p)
+void build_rpid(struct sip_dialog *p)
 {
 	int send_pres_tags = TRUE;
 	const char *privacy=NULL;

@@ -538,14 +538,11 @@ static int get_also_info(struct sip_dialog *p, struct sip_request *oreq);
 static int parse_ok_contact(struct sip_dialog *pvt, struct sip_request *req);
 static int set_address_from_contact(struct sip_dialog *pvt);
 static void check_via(struct sip_dialog *p, struct sip_request *req);
-static int get_rdnis(struct sip_dialog *p, struct sip_request *oreq);
-static int get_destination(struct sip_dialog *p, struct sip_request *oreq);
 static int get_msg_text(char *buf, int len, struct sip_request *req);
 
 /*--- Constructing requests and responses */
 static int create_addr_from_peer(struct sip_dialog *r, struct sip_peer *peer);
 static int add_vidupdate(struct sip_request *req);
-static void build_rpid(struct sip_dialog *p);
 
 /*------Request handling functions */
 static int handle_request_invite(struct sip_dialog *p, struct sip_request *req, int debug, struct sockaddr_in *sin, int *recount, char *e);
@@ -2306,23 +2303,6 @@ static int add_t38_sdp(struct sip_request *resp, struct sip_dialog *p)
 	return 0;
 }
 
-/*! \brief copy SIP request (mostly used to save request for responses) */
-GNURK void copy_request(struct sip_request *dst, const struct sip_request *src)
-{
-	long offset;
-	int x;
-
-	offset = ((void *)dst) - ((void *)src);
-	/* First copy stuff */
-	memcpy(dst, src, sizeof(*dst));
-	/* Now fix pointer arithmetic */
-	for (x=0; x < src->headers; x++)
-		dst->header[x] += offset;
-	for (x=0; x < src->lines; x++)
-		dst->line[x] += offset;
-}
-
-
 /*! \brief Transmit reinvite with SDP
 \note 	A re-invite is basically a new INVITE with the same CALL-ID and TAG as the
 	INVITE that opened the SIP dialogue 
@@ -2350,95 +2330,6 @@ GNURK int transmit_reinvite_with_sdp(struct sip_dialog *p, int t38type)
 	initialize_initreq(p, &req);
 	p->lastinvite = p->ocseq;
 	return send_request(p, &req, XMIT_CRITICAL, p->ocseq);
-}
-
-/*! \brief Build contact header - the contact header we send out */
-GNURK void build_contact(struct sip_dialog *p)
-{
-	/* Construct Contact: header */
-	if (sipnet_ourport() != STANDARD_SIP_PORT)	/* Needs to be 5060, according to the RFC */
-		ast_string_field_build(p, our_contact, "<sip:%s%s%s:%d>", p->exten, ast_strlen_zero(p->exten) ? "" : "@", ast_inet_ntoa(p->ourip), sipnet_ourport());
-	else
-		ast_string_field_build(p, our_contact, "<sip:%s%s%s>", p->exten, ast_strlen_zero(p->exten) ? "" : "@", ast_inet_ntoa(p->ourip));
-}
-
-/*! \brief Build the Remote Party-ID & From using callingpres options */
-static void build_rpid(struct sip_dialog *p)
-{
-	int send_pres_tags = TRUE;
-	const char *privacy=NULL;
-	const char *screen=NULL;
-	char buf[256];
-	const char *clid = global.default_callerid;
-	const char *clin = NULL;
-	const char *fromdomain;
-
-	if (!ast_strlen_zero(p->rpid) || !ast_strlen_zero(p->rpid_from))  
-		return;
-
-	if (p->owner && p->owner->cid.cid_num)
-		clid = p->owner->cid.cid_num;
-	if (p->owner && p->owner->cid.cid_name)
-		clin = p->owner->cid.cid_name;
-	if (ast_strlen_zero(clin))
-		clin = clid;
-
-	switch (p->callingpres) {
-	case AST_PRES_ALLOWED_USER_NUMBER_NOT_SCREENED:
-		privacy = "off";
-		screen = "no";
-		break;
-	case AST_PRES_ALLOWED_USER_NUMBER_PASSED_SCREEN:
-		privacy = "off";
-		screen = "pass";
-		break;
-	case AST_PRES_ALLOWED_USER_NUMBER_FAILED_SCREEN:
-		privacy = "off";
-		screen = "fail";
-		break;
-	case AST_PRES_ALLOWED_NETWORK_NUMBER:
-		privacy = "off";
-		screen = "yes";
-		break;
-	case AST_PRES_PROHIB_USER_NUMBER_NOT_SCREENED:
-		privacy = "full";
-		screen = "no";
-		break;
-	case AST_PRES_PROHIB_USER_NUMBER_PASSED_SCREEN:
-		privacy = "full";
-		screen = "pass";
-		break;
-	case AST_PRES_PROHIB_USER_NUMBER_FAILED_SCREEN:
-		privacy = "full";
-		screen = "fail";
-		break;
-	case AST_PRES_PROHIB_NETWORK_NUMBER:
-		privacy = "full";
-		screen = "pass";
-		break;
-	case AST_PRES_NUMBER_NOT_AVAILABLE:
-		send_pres_tags = FALSE;
-		break;
-	default:
-		ast_log(LOG_WARNING, "Unsupported callingpres (%d)\n", p->callingpres);
-		if ((p->callingpres & AST_PRES_RESTRICTION) != AST_PRES_ALLOWED)
-			privacy = "full";
-		else
-			privacy = "off";
-		screen = "no";
-		break;
-	}
-	
-	fromdomain = S_OR(p->fromdomain, ast_inet_ntoa(p->ourip));
-
-	snprintf(buf, sizeof(buf), "\"%s\" <sip:%s@%s>", clin, clid, fromdomain);
-	if (send_pres_tags)
-		snprintf(buf + strlen(buf), sizeof(buf) - strlen(buf), ";privacy=%s;screen=%s", privacy, screen);
-	ast_string_field_set(p, rpid, buf);
-
-	ast_string_field_build(p, rpid_from, "\"%s\" <sip:%s@%s>;tag=%s", clin,
-			       S_OR(p->fromuser, clid),
-			       fromdomain, p->tag);
 }
 
 /*! \brief Build REFER/INVITE/OPTIONS message and transmit it */
@@ -3042,7 +2933,7 @@ static int parse_ok_contact(struct sip_dialog *pvt, struct sip_request *req)
 	/* Save URI for later ACKs, BYE or RE-invites */
 	ast_string_field_set(pvt, okcontacturi, c);
 
-	/* We should return false for URI:s we can't handle,
+	/*! \todo We should return false for URI:s we can't handle,
 		like sips:, tel:, mailto:,ldap: etc */
 	return TRUE;		
 }
@@ -3643,233 +3534,6 @@ static enum check_auth_result register_verify(struct sip_dialog *p, struct socka
 		ASTOBJ_UNREF(peer, sip_destroy_device);
 
 	return res;
-}
-
-/*! \brief Translate referring cause */
-static void sip_set_redirstr(struct sip_dialog *p, char *reason) {
-
-	if (strcmp(reason, "unknown")==0) {
-		ast_string_field_set(p, redircause, "UNKNOWN");
-	} else if (strcmp(reason, "user-busy")==0) {
-		ast_string_field_set(p, redircause, "BUSY");
-	} else if (strcmp(reason, "no-answer")==0) {
-		ast_string_field_set(p, redircause, "NOANSWER");
-	} else if (strcmp(reason, "unavailable")==0) {
-		ast_string_field_set(p, redircause, "UNREACHABLE");
-	} else if (strcmp(reason, "unconditional")==0) {
-		ast_string_field_set(p, redircause, "UNCONDITIONAL");
-	} else if (strcmp(reason, "time-of-day")==0) {
-		ast_string_field_set(p, redircause, "UNKNOWN");
-	} else if (strcmp(reason, "do-not-disturb")==0) {
-		ast_string_field_set(p, redircause, "UNKNOWN");
-	} else if (strcmp(reason, "deflection")==0) {
-		ast_string_field_set(p, redircause, "UNKNOWN");
-	} else if (strcmp(reason, "follow-me")==0) {
-		ast_string_field_set(p, redircause, "UNKNOWN");
-	} else if (strcmp(reason, "out-of-service")==0) {
-		ast_string_field_set(p, redircause, "UNREACHABLE");
-	} else if (strcmp(reason, "away")==0) {
-		ast_string_field_set(p, redircause, "UNREACHABLE");
-	} else {
-		ast_string_field_set(p, redircause, "UNKNOWN");
-	}
-}
-
-/*! \brief Get referring dnis */
-static int get_rdnis(struct sip_dialog *p, struct sip_request *oreq)
-{
-	char tmp[256], *exten, *rexten, *rdomain;
-	char *params, *reason = NULL;
-	struct sip_request *req;
-	
-	req = oreq ? oreq : &p->initreq;
-
-	ast_copy_string(tmp, get_header(req, "Diversion"), sizeof(tmp));
-	if (ast_strlen_zero(tmp))
-		return 0;
-
-	exten = get_in_brackets(tmp);
-	if (strncmp(exten, "sip:", 4)) {
-		ast_log(LOG_WARNING, "Huh?  Not an RDNIS SIP header (%s)?\n", exten);
-		return -1;
-	}
-	exten += 4;
-
-	/* Get diversion-reason param if present */
-	if ((params = strchr(tmp, ';'))) {
-		*params = '\0';	/* Cut off parameters  */
-		params++;
-		while (*params == ';' || *params == ' ')
-			params++;
-		/* Check if we have a reason parameter */
-		if ((reason = strcasestr(params, "reason="))) {
-			reason+=7;
-			/* Remove enclosing double-quotes */
-			if (*reason == '"') 
-				ast_strip_quoted(reason, "\"", "\"");
-			if (!ast_strlen_zero(reason)) {
-				sip_set_redirstr(p, reason);
-				if (p->owner) {
-					pbx_builtin_setvar_helper(p->owner, "__PRIREDIRECTREASON", p->redircause);
-					pbx_builtin_setvar_helper(p->owner, "__SIPREDIRECTREASON", reason);
-				}
-			}
-		}
-	}
-
-	rdomain = exten;
-	rexten = strsep(&rdomain, "@");	/* trim anything after @ */
-	if (p->owner) 
-		pbx_builtin_setvar_helper(p->owner, "__SIPRDNISDOMAIN", rdomain);
-
-	if (sip_debug_test_pvt(p))
-		ast_verbose("RDNIS for this call is is %s (reason %s)\n", exten, reason ? reason : "");
-
-	ast_string_field_set(p, rdnis, rexten);
-
-	return 0;
-}
-
-/*! \brief Find out who the call is for 
-	We use the INVITE uri to find out
-*/
-static int get_destination(struct sip_dialog *p, struct sip_request *oreq)
-{
-	char tmp[256] = "", *uri, *a;
-	char tmpf[256] = "", *from;
-	struct sip_request *req;
-	char *colon;
-	int localdomain = TRUE;
-	
-	req = oreq;
-	if (!req)
-		req = &p->initreq;
-
-	/* Find the request URI */
-	if (req->rlPart2)
-		ast_copy_string(tmp, req->rlPart2, sizeof(tmp));
-	
-	ast_uri_decode(tmp);
-
-	uri = get_in_brackets(tmp);
-
-	if (strncmp(uri, "sip:", 4)) {
-		ast_log(LOG_WARNING, "Huh?  Not a SIP header (%s)?\n", uri);
-		return -1;
-	}
-	uri += 4;
-
-	/* Now find the From: caller ID and name */
-	ast_copy_string(tmpf, get_header(req, "From"), sizeof(tmpf));
-	if (!ast_strlen_zero(tmpf)) {
-		ast_uri_decode(tmpf);
-		from = get_in_brackets(tmpf);
-	} else {
-		from = NULL;
-	}
-	
-	if (!ast_strlen_zero(from)) {
-		if (strncmp(from, "sip:", 4)) {
-			ast_log(LOG_WARNING, "Huh?  Not a SIP header (%s)?\n", from);
-			return -1;
-		}
-		from += 4;
-		if ((a = strchr(from, '@')))
-			*a++ = '\0';
-		else
-			a = from;	/* just a domain */
-		from = strsep(&from, ";");	/* Remove userinfo options */
-		a = strsep(&a, ";");		/* Remove URI options */
-		ast_string_field_set(p, fromdomain, a);
-	}
-
-	/* Skip any options and find the domain */
-
-	/* Get the target domain */
-	if ((a = strchr(uri, '@'))) {
-		*a++ = '\0';
-	} else {	/* No username part */
-		a = uri;
-		uri = "s";	/* Set extension to "s" */
-	}
-	colon = strchr(a, ':'); /* Remove :port */
-	if (colon)
-		*colon = '\0';
-
-	uri = strsep(&uri, ";");	/* Remove userinfo options */
-	a = strsep(&a, ";");		/* Remove URI options */
-
-	ast_string_field_set(p, domain, a);
-
-	if (domains_configured()) {
-		char domain_context[AST_MAX_EXTENSION];
-
-		domain_context[0] = '\0';
-		if (!check_sip_domain(p->domain, domain_context, sizeof(domain_context))) {
-			localdomain = FALSE;
-			if (!global.allow_external_domains && (req->method == SIP_INVITE || req->method == SIP_REFER)) {
-				if (option_debug)
-					ast_log(LOG_DEBUG, "Got SIP %s to non-local domain '%s'; refusing request.\n", sip_method2txt(req->method), p->domain);
-				return -2;
-			}
-		}
-		/* If we have a domain context defined, overwrite the original context */
-		if (!ast_strlen_zero(domain_context))
-			ast_string_field_set(p, context, domain_context);
-	}
-
-	/* If the URI starts with our magic marker and has a corresponding
-		entry in the registry, then replace the URI with the extension
-		we want to use */
-	/* We don't have to check this at all if we have no registry entries... */
-	if (localdomain && req->method == SIP_INVITE) {
-		if (option_debug)
-			ast_log(LOG_DEBUG, "Checking %s for magic registry marker \n", uri);
-		/* Check if the incoming URI is a registry entry */
-		/* Need a function in ASTOBJ to check if there are objects
-			in the container at all here to avoid this check 
-			when we have no registry entries */
-		if (!strncmp(uri, REG_MAGICMARKER, strlen(REG_MAGICMARKER))) {
-			int found = FALSE;
-
-			if (option_debug)
-				ast_log(LOG_DEBUG, "Checking for %s in registry\n", uri);
-			/* Traverse the registry to find something */
-			ASTOBJ_CONTAINER_TRAVERSE(&regl, !found, do {
-				ASTOBJ_RDLOCK(iterator);
-				if (!strcmp(uri, iterator->contact)) {
-					found = TRUE;
-					/* Use the extension of this registry item for the incoming call */
-					uri = (char *) iterator->extension;
-					p->registry = iterator;
-				}
-				ASTOBJ_UNLOCK(iterator);
-			} while(0));
-		}
-	}
-
-
-	if (sip_debug_test_pvt(p))
-		ast_verbose("Looking for %s in %s (domain %s)\n", uri, p->context, p->domain);
-
-	/* Check the dialplan for the username part of the request URI,
-	   the domain will be stored in the SIPDOMAIN variable
-		Return 0 if we have a matching extension */
-	if (ast_exists_extension(NULL, p->context, uri, 1, from) ||
-		!strcmp(uri, ast_pickup_ext())) {
-		if (!oreq)
-			ast_string_field_set(p, exten, uri);
-		return 0;
-	}
-
-	/* Return 1 for pickup extension or overlap dialling support (if we support it) */
-	if((ast_test_flag(&global.flags[1], SIP_PAGE2_ALLOWOVERLAP) && 
- 	    ast_canmatch_extension(NULL, p->context, uri, 1, from)) ||
-	    !strncmp(uri, ast_pickup_ext(), strlen(uri))) {
-		return 1;
-	}
-	
-	return -1;
 }
 
 /*! \brief Lock dialog list lock and find matching pvt lock  
