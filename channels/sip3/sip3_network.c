@@ -370,8 +370,12 @@ static int retrans_pkt(void *data)
 			ast_queue_hangup(pkt->owner->owner);
 			ast_channel_unlock(pkt->owner->owner);
 		} else {
-			/* If no channel owner, destroy now */
-			ast_set_flag(&pkt->owner->flags[0], SIP_NEEDDESTROY);	
+			/* If no channel owner, destroy now 
+				...unless it's a SIP options packet, where
+				we want the peerpoke expiry routine handle this.
+			*/
+			if (pkt->method != SIP_OPTIONS)
+				ast_set_flag(&pkt->owner->flags[0], SIP_NEEDDESTROY);	
 		}
 	}
 	/* In any case, go ahead and remove the packet */

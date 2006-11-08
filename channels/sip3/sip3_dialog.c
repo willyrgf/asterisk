@@ -134,6 +134,17 @@ void dialoglist_unlock(void)
 		ast_log(LOG_DEBUG, "=== SIP dialog list: UNLOCKED\n");
 }
 
+/*! \brief Helper function to lock and unlock, hiding the underlying locking mechanism. 
+	\param state TRUE for lock, FALSE for unlock
+*/
+void dialog_lock(struct sip_dialog *dialog, int state)
+{
+	if (state)
+		ast_mutex_lock(&dialog->lock);
+	else
+		ast_mutex_unlock(&dialog->lock);
+}
+
 /*! \brief Convert SIP dialog states to string */
 const char *dialogstate2str(const enum dialogstate state)
 {
@@ -192,7 +203,7 @@ void __sip_ack(struct sip_dialog *dialog, int seqno, int resp, int sipmethod, in
 	/* Just in case... */
 	int res = FALSE;
 
-	ast_mutex_lock(&dialog->lock);
+	dialog_lock(dialog, TRUE);
 
 	/* Find proper transactoin */
 	for (cur = dialog->packets; cur; prev = cur, cur = cur->next) {
@@ -217,7 +228,7 @@ void __sip_ack(struct sip_dialog *dialog, int seqno, int resp, int sipmethod, in
 			break;
 		}
 	}
-	ast_mutex_unlock(&dialog->lock);
+	dialog_lock(dialog, FALSE);
 	if (option_debug)
 		ast_log(LOG_DEBUG, "Stopping retransmission on '%s' of %s %d: Match %s\n", dialog->callid, resp ? "Response" : "Request", seqno, res ? "Not Found" : "Found");
 }
@@ -984,7 +995,7 @@ struct sip_dialog *match_or_create_dialog(struct sip_request *req, struct sockad
 
 		if (found) {
 			/* Found the call */
-			ast_mutex_lock(&cur->lock);
+			dialog_lock(dialog, TRUE);
 			dialoglist_unlock();
 			return cur;
 		}
@@ -1009,7 +1020,7 @@ struct sip_dialog *match_or_create_dialog(struct sip_request *req, struct sockad
 		if ((cur = sip_alloc(req->callid, sin, TRUE, intended_method))) {
 			/* This method creates dialog */
 			/* Ok, 	we've created a dialog, let's go and process it */
-			ast_mutex_lock(&cur->lock);
+			dialog_lock(dialog, TRUE);
 		}
 		break;
 	}

@@ -911,7 +911,7 @@ struct sip_peer {
 	int pokeexpire;			/*!<  When to expire poke (qualify= checking) */
 	int lastms;			/*!<  How long last response took (in ms), or -1 for no response */
 	int maxms;			/*!<  Max ms we will accept for the host to be up, 0 to not monitor */
-	struct timeval ps;		/*!<  Ping send time */
+	struct timeval ps;		/*!<  Time when sip_poke_peer() was executed */
 	
 	struct sockaddr_in defaddr;	/*!<  Default IP address, used until registration */
 	struct ast_ha *ha;		/*!<  Access control list */

@@ -361,8 +361,8 @@ static int sip_park(struct ast_channel *chan1, struct ast_channel *chan2, struct
 		/* Chan2m: The transferer, chan1m: The transferee */
 	pthread_t th;
 
-	transferee = ast_channel_alloc(0);
-	transferer = ast_channel_alloc(0);
+	transferee = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "Parking/%s", chan1->name);
+	transferer = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "SIPPeer/%s", chan2->name);
 	if ((!transferer) || (!transferee)) {
 		if (transferee) {
 			transferee->hangupcause = AST_CAUSE_SWITCH_CONGESTION;
@@ -374,7 +374,6 @@ static int sip_park(struct ast_channel *chan1, struct ast_channel *chan2, struct
 		}
 		return -1;
 	}
-	ast_string_field_build(transferee, name,  "Parking/%s", chan1->name);
 
 	/* Make formats okay */
 	transferee->readformat = chan1->readformat;
@@ -390,7 +389,6 @@ static int sip_park(struct ast_channel *chan1, struct ast_channel *chan2, struct
 		
 	/* We make a clone of the peer channel too, so we can play
 	   back the announcement */
-	ast_string_field_build(transferer, name, "SIPPeer/%s", chan2->name);
 
 	/* Make formats okay */
 	transferer->readformat = chan2->readformat;

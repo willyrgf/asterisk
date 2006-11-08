@@ -506,6 +506,7 @@ void initreqprep(struct sip_request *req, struct sip_dialog *p, int sipmethod)
 	snprintf(tmp, sizeof(tmp), "%d %s", ++p->ocseq, sip_method2txt(sipmethod));
 
 	add_header(req, "Via", p->via);
+	add_header(req, "Max-Forwards", DEFAULT_MAX_FORWARDS);
 	/* SLD: FIXME?: do Route: here too?  I think not cos this is the first request.
 	 * OTOH, then we won't have anything in p->route anyway */
 	/* Build Remote Party-ID and From */
@@ -521,7 +522,6 @@ void initreqprep(struct sip_request *req, struct sip_dialog *p, int sipmethod)
 	add_header(req, "Call-ID", p->callid);
 	add_header(req, "CSeq", tmp);
 	add_header(req, "User-Agent", global.useragent);
-	add_header(req, "Max-Forwards", DEFAULT_MAX_FORWARDS);
 	if (!ast_strlen_zero(p->rpid))
 		add_header(req, "Remote-Party-ID", p->rpid);
 }
@@ -586,6 +586,7 @@ int reqprep(struct sip_request *req, struct sip_dialog *p, int sipmethod, int se
 		set_destination(p, p->route->hop);
 		add_route(req, is_strict ? p->route->next : p->route);
 	}
+	add_header(req, "Max-Forwards", DEFAULT_MAX_FORWARDS);
 
 	ot = get_header(orig, "To");
 	of = get_header(orig, "From");
@@ -616,7 +617,6 @@ int reqprep(struct sip_request *req, struct sip_dialog *p, int sipmethod, int se
 	add_header(req, "CSeq", tmp);
 
 	add_header(req, "User-Agent", global.useragent);
-	add_header(req, "Max-Forwards", DEFAULT_MAX_FORWARDS);
 
 	if (!ast_strlen_zero(p->rpid))
 		add_header(req, "Remote-Party-ID", p->rpid);

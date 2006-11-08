@@ -1400,3 +1400,18 @@ static int sip_set_udptl_peer(struct ast_channel *chan, struct ast_udptl *udptl)
 	ast_mutex_unlock(&p->lock);
 	return 0;
 }
+
+
+/*! \brief Immediately stop RTP, VRTP and UDPTL as applicable */
+void stop_media_flows(struct sip_dialog *dialog)
+{
+	if (option_debug > 4 && sipdebug)
+		ast_log(LOG_DEBUG, "Stopping media flow for %s\n", dialog->callid);
+	/* Immediately stop RTP, VRTP and UDPTL as applicable */
+	if (dialog->rtp)
+		ast_rtp_stop(dialog->rtp);
+	if (dialog->vrtp)
+		ast_rtp_stop(dialog->vrtp);
+	if (dialog->udptl)
+		ast_udptl_stop(dialog->udptl);
+}

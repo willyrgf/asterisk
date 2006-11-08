@@ -166,7 +166,7 @@
 		- authuser as a separate config option, please, please
 	- Split up source code file
 	- Add astum
-	- Add T1 configuration settings
+	- Add T1 timer configuration settings
 	- Add auto-nat for RFC 1918 networks
 	- Add type=device for peers
 	- Add type=service for register= replacement
@@ -185,6 +185,10 @@
 	- Add File's multithreading code
 	- Make debugaddr a ha list instead of one address and move it out of sipnet
 
+	Maybe
+	- add support for Path header
+		the Path is arriving with Register requests, saved in location
+		and used as a Route: header in the outbound request
 
 	- ... And much more
 */
@@ -393,6 +397,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #define SIPLABEL	sip3
 
+/*------- GLOBAL VARIABLES ------------------------------------ */
 
 /*! \brief various expiry times for registrations */
 struct expiry_times expiry = {
@@ -412,30 +417,26 @@ struct channel_counters sipcounters = { 0, 0, 0, 0, 0, 0 };
 
 /*! \brief Protect the monitoring thread, so only one process can kill or start it, and not
    when it's doing something critical. */
-
 AST_MUTEX_DEFINE_STATIC(monlock);
 
+/*! \brief Make sure we don't reload twice at the same time */
 AST_MUTEX_DEFINE_STATIC(sip_reload_lock);
 
 /*! \brief This is the thread for the monitor which checks for input on the channels
    which are not currently in use.  */
 static pthread_t monitor_thread = AST_PTHREADT_NULL;
 
-static int sip_reloading = FALSE;                       /*!< Flag for avoiding multiple reloads at the same time */
-static enum channelreloadreason sip_reloadreason;       /*!< Reason for last reload/load of configuration */
+static int sip_reloading = FALSE;                      /*!< Flag for avoiding multiple reloads at the same time */
+static enum channelreloadreason sip_reloadreason;      /*!< Reason for last reload/load of configuration */
 
 struct sched_context *sched;     /*!< The scheduling context */
 struct io_context *io;           /*!< The IO context */
 
 /* --- Linked lists of various objects --------*/
 
-/*! \brief List of concurrent SIP dialogs */
-struct sip_dialog *dialoglist = NULL;
-
-/*! \brief The peer list: Peers and Friends */
-struct sip_device_list devicelist;
-
-struct ast_config *notify_types;		/*!< The list of manual NOTIFY types we know how to send */
+struct sip_dialog *dialoglist = NULL;        /*!< List of concurrent SIP dialogs */
+struct sip_device_list devicelist;           /*!< The device list */
+struct ast_config *notify_types;	     /*!< The list of manual NOTIFY types we know how to send */
 
 /*---------------------------- Forward declarations of functions in chan_sip3.c */
 
@@ -485,8 +486,8 @@ static void try_suggested_sip_codec(struct sip_dialog *p);
 
 /*--- Authentication stuff */
 static enum check_auth_result check_user_full(struct sip_dialog *p, struct sip_request *req,
-					      int sipmethod, char *uri, enum xmittype reliable,
-					      struct sockaddr_in *sin, struct sip_peer **authpeer);
+		      int sipmethod, char *uri, enum xmittype reliable,
+		      struct sockaddr_in *sin, struct sip_peer **authpeer);
 static int check_user(struct sip_dialog *p, struct sip_request *req, int sipmethod, char *uri, enum xmittype reliable, struct sockaddr_in *sin);
 
 /*--- Misc functions */
@@ -561,9 +562,6 @@ static void handle_response_invite(struct sip_dialog *p, int resp, char *rest, s
 static void handle_response_refer(struct sip_dialog *p, int resp, char *rest, struct sip_request *req);
 static void handle_response_peerpoke(struct sip_dialog *p, int resp, struct sip_request *req);
 static void handle_response(struct sip_dialog *p, int resp, char *rest, struct sip_request *req);
-
-/*----- RTP interface functions */
-static void stop_media_flows(struct sip_dialog *p);
 
 /*------ T38 Support --------- */
 static int sip_handle_t38_reinvite(struct ast_channel *chan, struct sip_dialog *pvt, int reinvite); /*!< T38 negotiation helper function */
@@ -1102,7 +1100,7 @@ static int auto_congest(void *nothing)
 {
 	struct sip_dialog *dialog = nothing;
 
-	ast_mutex_lock(&dialog->lock);
+	dialog_lock(dialog, TRUE);
 	dialog->initid = -1;
 	if (dialog->owner) {
 		/* XXX fails on possible deadlock */
@@ -1113,7 +1111,7 @@ static int auto_congest(void *nothing)
 			ast_channel_unlock(dialog->owner);
 		}
 	}
-	ast_mutex_unlock(&dialog->lock);
+	dialog_lock(dialog, FALSE);
 	return 0;
 }
 
@@ -1331,7 +1329,7 @@ static int sip_hangup(struct ast_channel *ast)
 	if (option_debug && ast_test_flag(ast, AST_FLAG_ZOMBIE)) 
 		ast_log(LOG_DEBUG, "Hanging up zombie call. Be scared.\n");
 
-	ast_mutex_lock(&p->lock);
+	dialog_lock(p, TRUE);
 	if (option_debug && sipdebug)
 		ast_log(LOG_DEBUG, "update_call_counter(%s) - decrement call limit counter on hangup\n", p->peername);
 	update_call_counter(p, DEC_CALL_LIMIT);
@@ -1339,7 +1337,7 @@ static int sip_hangup(struct ast_channel *ast)
 	/* Determine how to disconnect */
 	if (p->owner != ast) {
 		ast_log(LOG_WARNING, "Huh?  We aren't the owner? Can't hangup call.\n");
-		ast_mutex_unlock(&p->lock);
+		dialog_lock(p, FALSE);
 		return 0;
 	}
 	/* If the call is not UP, we need to send CANCEL instead of BYE */
@@ -1433,7 +1431,7 @@ static int sip_hangup(struct ast_channel *ast)
 	}
 	if (needdestroy)
 		ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);
-	ast_mutex_unlock(&p->lock);
+	dialog_lock(p, FALSE);
 	return 0;
 }
 
@@ -1467,7 +1465,7 @@ static int sip_answer(struct ast_channel *ast)
 	int res = 0;
 	struct sip_dialog *dialog = ast->tech_pvt;
 
-	ast_mutex_lock(&dialog->lock);
+	dialog_lock(dialog, TRUE);
 	if (ast->_state != AST_STATE_UP) {
 		try_suggested_sip_codec(dialog);	
 
@@ -1483,7 +1481,7 @@ static int sip_answer(struct ast_channel *ast)
 			res = transmit_response_with_attachment(WITH_SDP, dialog, "200 OK", &dialog->initreq, XMIT_CRITICAL);
 		dialogstatechange(dialog, DIALOG_STATE_CONFIRMED);
 	}
-	ast_mutex_unlock(&dialog->lock);
+	dialog_lock(dialog, FALSE);
 	return res;
 }
 
@@ -1508,7 +1506,7 @@ static int sip_write(struct ast_channel *ast, struct ast_frame *frame)
 			return 0;
 		}
 		if (p) {
-			ast_mutex_lock(&p->lock);
+			dialog_lock(p, TRUE);
 			if (p->rtp) {
 				/* If channel is not up, activate early media session */
 				if ((ast->_state != AST_STATE_UP) &&
@@ -1520,12 +1518,12 @@ static int sip_write(struct ast_channel *ast, struct ast_frame *frame)
 				p->lastrtptx = time(NULL);
 				res = ast_rtp_write(p->rtp, frame);
 			}
-			ast_mutex_unlock(&p->lock);
+			dialog_lock(p, FALSE);
 		}
 		break;
 	case AST_FRAME_VIDEO:
 		if (p) {
-			ast_mutex_lock(&p->lock);
+			dialog_lock(p, TRUE);
 			if (p->vrtp) {
 				/* Activate video early media */
 				if ((ast->_state != AST_STATE_UP) &&
@@ -1537,7 +1535,7 @@ static int sip_write(struct ast_channel *ast, struct ast_frame *frame)
 				p->lastrtptx = time(NULL);
 				res = ast_rtp_write(p->vrtp, frame);
 			}
-			ast_mutex_unlock(&p->lock);
+			dialog_lock(p, FALSE);
 		}
 		break;
 	case AST_FRAME_IMAGE:
@@ -1545,7 +1543,7 @@ static int sip_write(struct ast_channel *ast, struct ast_frame *frame)
 		break;
 	case AST_FRAME_MODEM:
 		if (p) {
-			ast_mutex_lock(&p->lock);
+			dialog_lock(p, TRUE);
 			if (p->udptl) {
 				if ((ast->_state != AST_STATE_UP) &&
 					!ast_test_flag(&p->flags[0], SIP_PROGRESS_SENT) && 
@@ -1555,7 +1553,7 @@ static int sip_write(struct ast_channel *ast, struct ast_frame *frame)
 				}
 				res = ast_udptl_write(p->udptl, frame);
 			}
-			ast_mutex_unlock(&p->lock);
+			dialog_lock(p, FALSE);
 		}
 		break;
 	default: 
@@ -1587,7 +1585,7 @@ static int sip_fixup(struct ast_channel *oldchan, struct ast_channel *newchan)
 	}
 	p = newchan->tech_pvt;
 
-	ast_mutex_lock(&p->lock);
+	dialog_lock(p, TRUE);
 	append_history(p, "Masq", "Old channel: %s\n", oldchan->name);
 	append_history(p, "Masq (cont)", "...new owner: %s\n", newchan->name);
 	if (p->owner != oldchan)
@@ -1599,7 +1597,7 @@ static int sip_fixup(struct ast_channel *oldchan, struct ast_channel *newchan)
 	if (option_debug > 2)
 		ast_log(LOG_DEBUG, "SIP Fixup: New owner for dialogue %s: %s (Old parent: %s)\n", p->callid, p->owner->name, oldchan->name);
 
-	ast_mutex_unlock(&p->lock);
+	dialog_lock(p, FALSE);
 	return ret;
 }
 
@@ -1610,7 +1608,7 @@ static int sip_senddigit_begin(struct ast_channel *ast, char digit)
 	struct sip_dialog *p = ast->tech_pvt;
 	int res = 0;
 
-	ast_mutex_lock(&p->lock);
+	dialog_lock(p, TRUE);
 	switch (ast_test_flag(&p->flags[0], SIP_DTMF)) {
 	case SIP_DTMF_INBAND:
 		res = -1; /* Tell Asterisk to generate inband indications */
@@ -1622,7 +1620,7 @@ static int sip_senddigit_begin(struct ast_channel *ast, char digit)
 	default:
 		break;
 	}
-	ast_mutex_unlock(&p->lock);
+	dialog_lock(p, FALSE);
 
 	return res;
 }
@@ -1634,7 +1632,7 @@ static int sip_senddigit_end(struct ast_channel *ast, char digit)
 	struct sip_dialog *p = ast->tech_pvt;
 	int res = 0;
 
-	ast_mutex_lock(&p->lock);
+	dialog_lock(p, TRUE);
 	switch (ast_test_flag(&p->flags[0], SIP_DTMF)) {
 	case SIP_DTMF_INFO:
 		transmit_info_with_digit(p, digit);
@@ -1647,7 +1645,7 @@ static int sip_senddigit_end(struct ast_channel *ast, char digit)
 		res = -1; /* Tell Asterisk to stop inband indications */
 		break;
 	}
-	ast_mutex_unlock(&p->lock);
+	dialog_lock(p, FALSE);
 
 	return res;
 }
@@ -1660,12 +1658,12 @@ static int sip_transfer(struct ast_channel *ast, const char *dest)
 
 	if (dest == NULL)
 		dest = "";
-	ast_mutex_lock(&p->lock);
+	dialog_lock(p, TRUE);
 	if (ast->_state == AST_STATE_RING)
 		res = sip_sipredirect(p, dest);
 	else
 		res = transmit_refer(p, dest);
-	ast_mutex_unlock(&p->lock);
+	dialog_lock(p, FALSE);
 	return res;
 }
 
@@ -1679,7 +1677,7 @@ static int sip_indicate(struct ast_channel *ast, int condition, const void *data
 	struct sip_dialog *p = ast->tech_pvt;
 	int res = 0;
 
-	ast_mutex_lock(&p->lock);
+	dialog_lock(p, TRUE);
 	switch(condition) {
 	case AST_CONTROL_RINGING:
 		if (ast->_state == AST_STATE_RING) {
@@ -1754,7 +1752,7 @@ static int sip_indicate(struct ast_channel *ast, int condition, const void *data
 		res = -1;
 		break;
 	}
-	ast_mutex_unlock(&p->lock);
+	dialog_lock(p, FALSE);
 	return res;
 }
 
@@ -1773,10 +1771,23 @@ static struct ast_channel *sip_new(struct sip_dialog *dialog, int state, const c
 	int what;
 	int needvideo = 0;
 	
-	dialoglist_unlock();
-	/* Don't hold a sip pvt lock while we allocate a channel */
-	tmp = ast_channel_alloc(1);
-	dialoglist_lock();
+	{
+		const char *my_name;	/* pick a good name */
+	
+		if (title)
+			my_name = title;
+		else if ( (my_name = strchr(dialog->fromdomain,':')) )
+			my_name++;	/* skip ':' */
+		else
+			my_name = dialog->fromdomain;
+
+		dialog_lock(dialog, FALSE);
+		/* Don't hold a sip pvt lock while we allocate a channel */
+
+		tmp = ast_channel_alloc(1, state, dialog->cid_num, dialog->cid_name, "SIP/%s-%08x", my_name, (int)(long) dialog);
+
+	}
+	dialog_lock(dialog, TRUE);
 	if (!tmp) {
 		ast_log(LOG_WARNING, "Unable to allocate AST channel structure for SIP channel\n");
 		return NULL;
@@ -1823,18 +1834,6 @@ static struct ast_channel *sip_new(struct sip_dialog *dialog, int state, const c
 			ast_log(LOG_DEBUG, "This channel can handle video! HOLLYWOOD next!\n");
 		else
 			ast_log(LOG_DEBUG, "This channel will not be able to handle video.\n");
-	}
-
-
-	{
-		const char *my_name;	/* pick a good name */
-		if (title)
-			my_name = title;
-		else if ( (my_name = strchr(dialog->fromdomain,':')) )
-			my_name++;	/* skip ':' */
-		else
-			my_name = dialog->fromdomain;
-		ast_string_field_build(tmp, name, "SIP/%s-%08x", my_name, (int)(long) dialog);
 	}
 
 	if (ast_test_flag(&dialog->flags[0], SIP_DTMF) ==  SIP_DTMF_INBAND) {
@@ -1894,7 +1893,6 @@ static struct ast_channel *sip_new(struct sip_dialog *dialog, int state, const c
 		pbx_builtin_setvar_helper(tmp, "SIPDOMAIN", dialog->domain);
 	if (!ast_strlen_zero(dialog->callid))
 		pbx_builtin_setvar_helper(tmp, "SIPCALLID", dialog->callid);
-	ast_setstate(tmp, state);
 	if (dialog->rtp)
 		ast_jb_configure(tmp, &global.jbconf);
 	if (state != AST_STATE_DOWN && ast_pbx_start(tmp)) {
@@ -3557,7 +3555,7 @@ GNURK struct sip_dialog *get_sip_dialog_byid_locked(const char *callid, const ch
 			char *ourtag = sip_dialog_ptr->tag;
 
 			/* Go ahead and lock it (and its owner) before returning */
-			ast_mutex_lock(&sip_dialog_ptr->lock);
+			dialog_lock(sip_dialog_ptr, TRUE);
 
 			/* Check if tags match. If not, this is not the call we want
 			   (With a forking SIP proxy, several call legs share the
@@ -3567,7 +3565,7 @@ GNURK struct sip_dialog *get_sip_dialog_byid_locked(const char *callid, const ch
 				match = 0;
 
 			if (!match) {
-				ast_mutex_unlock(&sip_dialog_ptr->lock);
+				dialog_lock(sip_dialog_ptr, FALSE);
 				continue;
 			}
 
@@ -3578,9 +3576,9 @@ GNURK struct sip_dialog *get_sip_dialog_byid_locked(const char *callid, const ch
 
 			/* deadlock avoidance... */
 			while (sip_dialog_ptr->owner && ast_channel_trylock(sip_dialog_ptr->owner)) {
-				ast_mutex_unlock(&sip_dialog_ptr->lock);
+				dialog_lock(sip_dialog_ptr, FALSE);
 				usleep(1);
-				ast_mutex_lock(&sip_dialog_ptr->lock);
+				dialog_lock(sip_dialog_ptr, TRUE);
 			}
 			break;
 		}
@@ -4667,9 +4665,9 @@ static void handle_response_invite(struct sip_dialog *p, int resp, char *rest, s
 				} else {
 					if (option_debug > 1)
 						ast_log(LOG_DEBUG, "Strange... The other side of the bridge does not have a udptl struct\n");
-					ast_mutex_lock(&bridgepvt->lock);
+					dialog_lock(bridgepvt, TRUE);
 					bridgepvt->t38.state = T38_DISABLED;
-					ast_mutex_unlock(&bridgepvt->lock);
+					dialog_lock(bridgepvt, FALSE);
 					if (option_debug)
 						ast_log(LOG_DEBUG,"T38 state changed to %d on channel %s\n", bridgepvt->t38.state, bridgepeer->tech->type);
 					p->t38.state = T38_DISABLED;
@@ -5479,7 +5477,7 @@ static int handle_invite_replaces(struct sip_dialog *p, struct sip_request *req,
 		transmit_response_with_attachment(WITH_SDP, p, "200 OK", req, XMIT_RELIABLE);
 		/* Do something more clever here */
 		ast_channel_unlock(c);
-		ast_mutex_unlock(&p->refer->refer_call->lock);
+		dialog_lock(p->refer->refer_call, FALSE);
 		return 1;
 	} 
 	if (!c) {
@@ -5488,7 +5486,7 @@ static int handle_invite_replaces(struct sip_dialog *p, struct sip_request *req,
 		transmit_response_reliable(p, "503 Service Unavailable", req);
 		append_history(p, "Xfer", "INVITE/Replace Failed. No new channel.");
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
-		ast_mutex_unlock(&p->refer->refer_call->lock);
+		dialog_lock(p->refer->refer_call, FALSE);
 		return 1;
 	}
 	append_history(p, "Xfer", "INVITE/Replace received");
@@ -5521,8 +5519,8 @@ static int handle_invite_replaces(struct sip_dialog *p, struct sip_request *req,
 	/* Unlock clone, but not original (replacecall) */
 	ast_channel_unlock(c);
 
-	/* Unlock PVT */
-	ast_mutex_unlock(&p->refer->refer_call->lock);
+	/* Unlock dialog */
+	dialog_lock(p->refer->refer_call, FALSE);
 
 	/* Make sure that the masq does not free our PVT for the old call */
 	ast_set_flag(&p->refer->refer_call->flags[0], SIP_DEFER_BYE_ON_TRANSFER);	/* Delay hangup */
@@ -5563,7 +5561,7 @@ static int handle_invite_replaces(struct sip_dialog *p, struct sip_request *req,
 		}
 		ast_channel_unlock(replacecall);
 	}
-	ast_mutex_unlock(&p->refer->refer_call->lock);
+	dialog_lock(p->refer->refer_call, FALSE);
 
 	ast_setstate(c, AST_STATE_DOWN);
 	if (option_debug > 3) {
@@ -5585,7 +5583,7 @@ static int handle_invite_replaces(struct sip_dialog *p, struct sip_request *req,
 	}
 
 	ast_channel_unlock(p->owner);	/* Unlock new owner */
-	ast_mutex_unlock(&p->lock);	/* Unlock SIP structure */
+	dialog_lock(p, FALSE);
 
 	/* The call should be down with no ast_channel, so hang it up */
 	c->tech_pvt = NULL;
@@ -5746,9 +5744,9 @@ static int handle_request_invite(struct sip_dialog *p, struct sip_request *req, 
 		if (error) {	/* Give up this dialog */
 			append_history(p, "Xfer", "INVITE/Replace Failed.");
 			sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
-			ast_mutex_unlock(&p->lock);
+			dialog_lock(p, FALSE);
 			if (p->refer->refer_call) {
-				ast_mutex_unlock(&p->refer->refer_call->lock);
+				dialog_lock(p->refer->refer_call, FALSE);
 				ast_channel_unlock(p->refer->refer_call->owner);
 			}
 			return -1;
@@ -5945,10 +5943,10 @@ static int handle_request_invite(struct sip_dialog *p, struct sip_request *req, 
 				if (res) {
 
 					/* Unlock locks so ast_hangup can do its magic */
-					ast_mutex_unlock(&c->lock);
-					ast_mutex_unlock(&p->lock);
+					ast_channel_unlock(c);
+					dialog_lock(p, FALSE);
 					ast_hangup(c);
-					ast_mutex_lock(&p->lock);
+					dialog_lock(p, TRUE);
 					c = NULL;
 				}
 			} else {	/* Pickup call in call group */
@@ -5961,15 +5959,15 @@ static int handle_request_invite(struct sip_dialog *p, struct sip_request *req, 
 						transmit_response_reliable(p, "503 Unavailable", req);
 					ast_set_flag(&p->flags[0], SIP_ALREADYGONE);	
 					/* Unlock locks so ast_hangup can do its magic */
-					ast_mutex_unlock(&p->lock);
+					dialog_lock(p, FALSE);
 					c->hangupcause = AST_CAUSE_CALL_REJECTED;
 				} else {
-					ast_mutex_unlock(&p->lock);
+					dialog_lock(p, FALSE);
 					ast_setstate(c, AST_STATE_DOWN);
 					c->hangupcause = AST_CAUSE_NORMAL_CLEARING;
 				}
 				ast_hangup(c);
-				ast_mutex_lock(&p->lock);
+				dialog_lock(p, TRUE);
 				c = NULL;
 			}
 			break;
@@ -5998,9 +5996,9 @@ static int handle_request_invite(struct sip_dialog *p, struct sip_request *req, 
 								sip_handle_t38_reinvite(bridgepeer, p, 1);
 							} else { /* Something is wrong with peers udptl struct */
 								ast_log(LOG_WARNING, "Strange... The other side of the bridge don't have udptl struct\n");
-								ast_mutex_lock(&bridgepvt->lock);
+								dialog_lock(bridgepvt, TRUE);
 								bridgepvt->t38.state = T38_DISABLED;
-								ast_mutex_unlock(&bridgepvt->lock);
+								dialog_lock(bridgepvt, FALSE);
 								if (option_debug > 1)
 									ast_log(LOG_DEBUG,"T38 state changed to %d on channel %s\n", bridgepvt->t38.state, bridgepeer->name);
 								if (ast_test_flag(req, SIP_PKT_IGNORE))
@@ -6115,18 +6113,6 @@ static int handle_request_cancel(struct sip_dialog *p, struct sip_request *req)
 		transmit_response(p, "481 Call Leg Does Not Exist", req);
 		return 0;
 	}
-}
-
-/*! \brief Immediately stop RTP, VRTP and UDPTL as applicable */
-static void stop_media_flows(struct sip_dialog *p)
-{
-	/* Immediately stop RTP, VRTP and UDPTL as applicable */
-	if (p->rtp)
-		ast_rtp_stop(p->rtp);
-	if (p->vrtp)
-		ast_rtp_stop(p->vrtp);
-	if (p->udptl)
-		ast_udptl_stop(p->udptl);
 }
 
 /*! \brief Handle incoming BYE request */
@@ -6368,7 +6354,7 @@ static int handle_request_subscribe(struct sip_dialog *p, struct sip_request *re
 			if (!authpeer || ast_strlen_zero(authpeer->mailbox)) {
 				transmit_response(p, "404 Not found (no mailbox)", req);
 				ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
-				ast_log(LOG_NOTICE, "Received SIP subscribe for peer without mailbox: %s\n", authpeer->name);
+				ast_log(LOG_NOTICE, "Received SIP subscribe for peer without mailbox: %s\n", authpeer ? authpeer->name : "<no peername>");
 				if (authpeer)
 					ASTOBJ_UNREF(authpeer, sip_destroy_device);
 				return 0;
@@ -6459,7 +6445,7 @@ static int handle_request_subscribe(struct sip_dialog *p, struct sip_request *re
 						continue;
 					if (p_old->subscribed == NONE)
 						continue;
-					ast_mutex_lock(&p_old->lock);
+					dialog_lock(p_old, TRUE);
 					if (!strcmp(p_old->peername, p->peername)) {
 						if (!strcmp(p_old->exten, p->exten) &&
 						    !strcmp(p_old->context, p->context)) {
@@ -6468,7 +6454,7 @@ static int handle_request_subscribe(struct sip_dialog *p, struct sip_request *re
 							break;
 						}
 					}
-					ast_mutex_unlock(&p_old->lock);
+					dialog_lock(p_old, FALSE);
 				}
 				dialoglist_unlock();
 			}
@@ -6822,9 +6808,9 @@ static void check_rtp_timeout(struct sip_dialog *sip, time_t t)
 			if (!sip->rtptimeout)
 				return;
 			while (sip->owner && ast_channel_trylock(sip->owner)) {
-				ast_mutex_unlock(&sip->lock);
+				dialog_lock(sip, FALSE);
 				usleep(1);
-				ast_mutex_lock(&sip->lock);
+				dialog_lock(sip, TRUE);
 			}
 			if (!sip->owner) 
 				return;
@@ -6893,17 +6879,17 @@ restartsearch:
 		   get back to this point every millisecond or less)
 		*/
 		for (sip = dialoglist; !fastrestart && sip; sip = sip->next) {
-			ast_mutex_lock(&sip->lock);
+			dialog_lock(sip, TRUE);
 			/* Check RTP timeouts and kill calls if we have a timeout set and do not get RTP */
 			check_rtp_timeout(sip, t);
 			/* If we have sessions that needs to be destroyed, do it now */
 			if (ast_test_flag(&sip->flags[0], SIP_NEEDDESTROY) && !sip->packets &&
 			    !sip->owner) {
-				ast_mutex_unlock(&sip->lock);
+				dialog_lock(sip, FALSE);
 				__sip_destroy(sip, TRUE, FALSE);
 				goto restartsearch;
 			}
-			ast_mutex_unlock(&sip->lock);
+			dialog_lock(sip, FALSE);
 		}
 		dialoglist_unlock();
 
@@ -7214,9 +7200,9 @@ static struct ast_channel *sip_request_call(const char *type, int format, void *
 	printf("Setting up to call extension '%s' at '%s'\n", ext ? ext : "<none>", host);
 #endif
 	p->prefcodec = oldformat;				/* Format for this call */
-	ast_mutex_lock(&p->lock);
+	dialog_lock(p, TRUE);
 	tmpc = sip_new(p, AST_STATE_DOWN, host);	/* Place the call */
-	ast_mutex_unlock(&p->lock);
+	dialog_lock(p, FALSE);
 	if (!tmpc)
 		sip_destroy(p);
 	ast_update_use_count();
@@ -7257,7 +7243,7 @@ static int sip_handle_t38_reinvite(struct ast_channel *chan, struct sip_dialog *
 		return -1;
 	
 	/* Setup everything on the other side like offered/responded from first side */
-	ast_mutex_lock(&p->lock);
+	dialog_lock(p, TRUE);
 	p->t38.jointcapability = p->t38.peercapability = pvt->t38.jointcapability;
 	ast_udptl_set_far_max_datagram(p->udptl, ast_udptl_get_local_max_datagram(pvt->udptl));
 	ast_udptl_set_local_max_datagram(p->udptl, ast_udptl_get_local_max_datagram(pvt->udptl));
@@ -7291,7 +7277,7 @@ static int sip_handle_t38_reinvite(struct ast_channel *chan, struct sip_dialog *
 		}
 		/* Reset lastrtprx timer */
 		p->lastrtprx = p->lastrtptx = time(NULL);
-		ast_mutex_unlock(&p->lock);
+		dialog_lock(p, FALSE);
 		return 0;
 	} else {	/* If we are handling sending 200 OK to the other side of the bridge */
 		if (ast_test_flag(&p->flags[0], SIP_CAN_REINVITE) && ast_test_flag(&pvt->flags[0], SIP_CAN_REINVITE)) {
@@ -7314,7 +7300,7 @@ static int sip_handle_t38_reinvite(struct ast_channel *chan, struct sip_dialog *
 		}
 		transmit_response_with_attachment(WITH_T38_SDP, p, "200 OK", &p->initreq, XMIT_CRITICAL);
 		p->lastrtprx = p->lastrtptx = time(NULL);
-		ast_mutex_unlock(&p->lock);
+		dialog_lock(p, FALSE);
 		return 0;
 	}
 }
@@ -7358,7 +7344,7 @@ static int sip_dtmfmode(struct ast_channel *chan, void *data)
 		ast_channel_unlock(chan);
 		return 0;
 	}
-	ast_mutex_lock(&p->lock);
+	dialog_lock(p, TRUE);
 	if (!strcasecmp(mode, "info")) {
 		ast_clear_flag(&p->flags[0], SIP_DTMF);
 		ast_set_flag(&p->flags[0], SIP_DTMF_INFO);
@@ -7381,7 +7367,7 @@ static int sip_dtmfmode(struct ast_channel *chan, void *data)
 			p->vad = NULL;
 		}
 	}
-	ast_mutex_unlock(&p->lock);
+	dialog_lock(p, FALSE);
 	ast_channel_unlock(chan);
 	return 0;
 }
@@ -7699,7 +7685,7 @@ static int unload_module(void)
 	return 0;
 }
 
-AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "Session Initiation Protocol (SIP)",
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "Session Initiation Protocol, chan_sip3 version (SIP)",
 		.load = load_module,
 		.unload = unload_module,
 		.reload = reload,

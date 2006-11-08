@@ -183,6 +183,7 @@ GNURK char *get_body(struct sip_request *req, char *name);
 GNURK int find_sdp(struct sip_request *req);
 GNURK int add_sdp(struct sip_request *resp, struct sip_dialog *p);
 GNURK struct ast_frame *sip_read(struct ast_channel *ast);
+GNURK void stop_media_flows(struct sip_dialog *dialog);
 
 /* sip3_config.c */
 GNURK void set_device_defaults(struct sip_peer *device);
@@ -222,6 +223,7 @@ GNURK void sip_destroy(struct sip_dialog *p);
 GNURK void __sip_destroy(struct sip_dialog *p, int lockowner, int lockdialoglist);
 GNURK void __sip_ack(struct sip_dialog *dialog, int seqno, int resp, int sipmethod, int reset);
 GNURK int __sip_semi_ack(struct sip_dialog *p, int seqno, int resp, int sipmethod);
+GNURK void dialog_lock(struct sip_dialog *dialog, int state);
 
 
 /* sip3_services.c - outbound registration for services from other servers/providers  */
