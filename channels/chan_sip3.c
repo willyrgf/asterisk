@@ -3568,7 +3568,7 @@ GNURK struct sip_dialog *get_sip_dialog_byid_locked(const char *callid, const ch
 
 			if (!match) {
 				ast_mutex_unlock(&sip_dialog_ptr->lock);
-				break;
+				continue;
 			}
 
 			if (option_debug > 3 && totag)				 
@@ -7674,16 +7674,10 @@ static int unload_module(void)
 	while (p) {
 		pl = p;
 		p = p->next;
-		/* Free associated memory */
-		ast_mutex_destroy(&pl->lock);
-		if (pl->chanvars) {
-			ast_variables_destroy(pl->chanvars);
-			pl->chanvars = NULL;
-		}
-		free(pl);
+		__sip_destroy(pl, TRUE, TRUE);
 	}
-	dialoglist = NULL;
 	dialoglist_unlock();
+	dialoglist = NULL;
 
 	/* Free memory for local network address mask */
 	ast_free_ha(sipnet.localaddr);
