@@ -2,6 +2,7 @@
  * Asterisk -- An open source telephony toolkit.
  *
  * Copyright (C) 1999 - 2006, Digium, Inc.
+ * and Edvina AB, Sollentuna, Sweden (chan_sip3 changes/additions)
  *
  * Mark Spencer <markster@digium.com>
  *
@@ -99,6 +100,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 	- a call in hangup state - waiting for cleanup
 	- a subscription
 	- an inbound or outbound registration
+	
+	\ref dialoglist
 
 	\title Dialog states
 	Dialog states affect operation, especially in an INVITE
@@ -994,15 +997,18 @@ struct sip_dialog *match_or_create_dialog(struct sip_request *req, struct sockad
 
 
 		if (found) {
-			/* Found the call */
-			dialog_lock(dialog, TRUE);
-			dialoglist_unlock();
+			/* Found the dialog */
+			dialog_lock(cur, TRUE);	/* Lock the dialog */
+			dialoglist_unlock();	/* Unlock the list */
 			return cur;
 		}
 	}
 	dialoglist_unlock();
-	if (sip_methods[intended_method].creates_dialog != CAN_CREATE_DIALOG && intended_method != SIP_RESPONSE) {
-		transmit_response_using_temp(req->callid, sin, TRUE, intended_method, req, "481 Call leg/transaction does not exist");
+	if (sip_methods[intended_method].creates_dialog != CAN_CREATE_DIALOG) {
+		if (intended_method != SIP_RESPONSE && intended_method != SIP_ACK)
+			transmit_response_using_temp(req->callid, sin, TRUE, intended_method, req, "481 Call leg/transaction does not exist");
+		else
+			logdebug(2, "Got response or ACK to non-existing transaction. No action taken. Call-ID: %s\n", req->callid);
 		return cur;
 	}
 	switch (intended_method) {
@@ -1020,7 +1026,7 @@ struct sip_dialog *match_or_create_dialog(struct sip_request *req, struct sockad
 		if ((cur = sip_alloc(req->callid, sin, TRUE, intended_method))) {
 			/* This method creates dialog */
 			/* Ok, 	we've created a dialog, let's go and process it */
-			dialog_lock(dialog, TRUE);
+			dialog_lock(cur, TRUE);
 		}
 		break;
 	}

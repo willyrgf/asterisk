@@ -313,18 +313,26 @@ static int local_fixup(struct ast_channel *oldchan, struct ast_channel *newchan)
 static int local_indicate(struct ast_channel *ast, int condition, const void *data, size_t datalen)
 {
 	struct local_pvt *p = ast->tech_pvt;
-	int res = -1;
+	int res = 0;
 	struct ast_frame f = { AST_FRAME_CONTROL, };
 	int isoutbound;
 
-	/* Queue up a frame representing the indication as a control frame */
-	ast_mutex_lock(&p->lock);
-	isoutbound = IS_OUTBOUND(ast, p);
-	f.subclass = condition;
-	f.data = (void*)data;
-	f.datalen = datalen;
-	res = local_queue_frame(p, isoutbound, &f, ast);
-	ast_mutex_unlock(&p->lock);
+	/* If this is an MOH hold or unhold, do it on the Local channel versus real channel */
+	if (condition == AST_CONTROL_HOLD) {
+		ast_moh_start(ast, data, NULL);
+	} else if (condition == AST_CONTROL_UNHOLD) {
+		ast_moh_stop(ast);
+	} else {
+		/* Queue up a frame representing the indication as a control frame */
+		ast_mutex_lock(&p->lock);
+		isoutbound = IS_OUTBOUND(ast, p);
+		f.subclass = condition;
+		f.data = (void*)data;
+		f.datalen = datalen;
+		res = local_queue_frame(p, isoutbound, &f, ast);
+		ast_mutex_unlock(&p->lock);
+	}
+
 	return res;
 }
 
@@ -541,7 +549,8 @@ static struct ast_channel *local_new(struct local_pvt *p, int state)
 	int randnum = ast_random() & 0xffff, fmt = 0;
 
 	/* Allocate two new Asterisk channels */
-	if (!(tmp = ast_channel_alloc(1)) || !(tmp2 = ast_channel_alloc(1))) {
+	if (!(tmp = ast_channel_alloc(1, state, 0, 0, "Local/%s@%s-%04x,1", p->exten, p->context, randnum)) 
+			|| !(tmp2 = ast_channel_alloc(1, AST_STATE_RING, 0, 0, "Local/%s@%s-%04x,2", p->exten, p->context, randnum))) {
 		if (tmp)
 			ast_channel_free(tmp);
 		if (tmp2)
@@ -554,12 +563,6 @@ static struct ast_channel *local_new(struct local_pvt *p, int state)
 
 	tmp->nativeformats = p->reqformat;
 	tmp2->nativeformats = p->reqformat;
-
-	ast_string_field_build(tmp, name, "Local/%s@%s-%04x,1", p->exten, p->context, randnum);
-	ast_string_field_build(tmp2, name, "Local/%s@%s-%04x,2", p->exten, p->context, randnum);
-
-	ast_setstate(tmp, state);
-	ast_setstate(tmp2, AST_STATE_RING);
 
 	/* Determine our read/write format and set it on each channel */
 	fmt = ast_best_codec(p->reqformat);

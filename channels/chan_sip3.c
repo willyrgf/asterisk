@@ -153,6 +153,7 @@
 	- Added "authuser" configuration option for trunks and services
 	- Added "domain" configuration option for all devices
 	- Fixed handling of too short registration times (sending 423)
+	- T38 does no longer depend on canreinvite settings
 
 	Halfdone
 	- Added separate TOS setting for presence. Need to run setsockopt
@@ -814,8 +815,9 @@ static void register_peer_exten(struct sip_peer *device, int onoff)
 /*! \brief Destroy device object from memory */
 GNURK void sip_destroy_device(struct sip_peer *device)
 {
-	if (option_debug > 2)
-		ast_log(LOG_DEBUG, "Destroying SIP %s %s\n", device->type & SIP_USER ? "user" : "peer", device->name);
+	logdebug(3, "Destroying SIP %s %s\n", device->type & SIP_USER ? "user" : "peer", device->name);
+	//if (option_debug > 2)
+		//ast_log(LOG_DEBUG, "Destroying SIP %s %s\n", device->type & SIP_USER ? "user" : "peer", device->name);
 
 	/* Delete it, it needs to disappear */
 	if (device->call)
@@ -1188,7 +1190,7 @@ static int sip_call(struct ast_channel *ast, char *dest, int timeout)
 			p->t38.jointcapability = p->t38.capability;
 			if (option_debug)
 				ast_log(LOG_DEBUG,"Our T38 capability (%d), joint T38 capability (%d)\n", p->t38.capability, p->t38.jointcapability);
-			transmit_invite(p, SIP_INVITE, 1, 2);
+			transmit_invite(p, SIP_INVITE, TRUE, 2);
 			p->initid = ast_sched_add(sched, SIP_TRANS_TIMEOUT, auto_congest, p);
 		}
 	}
@@ -2317,13 +2319,14 @@ GNURK int transmit_reinvite_with_sdp(struct sip_dialog *p, int t38type)
 	add_header(&req, "Allow", ALLOWED_METHODS);
 	add_header(&req, "Supported", SUPPORTED_EXTENSIONS);
 	if (sipdebug)
-		add_header(&req, "X-asterisk-Info", "SIP re-invite (External RTP bridge)");
+		add_header(&req, "X-asterisk-Info", t38type ? "SIP re-invite for T38 fax" : "SIP re-invite (External RTP bridge)");
 	if (!ast_test_flag(&p->flags[0], SIP_NO_HISTORY))
-		append_history(p, "ReInv", "Re-invite sent");
+		append_history(p, "ReInv", t38type ? "Re-invite sent for T38" : "Re-invite sent for external RTP media");
 	if (t38type)
 		add_t38_sdp(&req, p);
 	else
 		add_sdp(&req, p);
+
 	/* Use this as the basis */
 	initialize_initreq(p, &req);
 	p->lastinvite = p->ocseq;
@@ -2336,40 +2339,38 @@ GNURK int transmit_invite(struct sip_dialog *p, int sipmethod, int sdp, int init
 	struct sip_request req;
 	
 	req.method = sipmethod;
-	if (init) {		/* Seems like init always is 2 */
+	if (init)
 		/* Bump branch even on initial requests */
 		build_via(p, TRUE);
-		if (init > 1) /* open a new dialog */
-			initreqprep(&req, p, sipmethod);
-		else
-			reqprep(&req, p, sipmethod, 0, TRUE);
-	} else
+
+	if (init = 2) /* open a new dialog */
+		initreqprep(&req, p, sipmethod);
+	else
 		reqprep(&req, p, sipmethod, 0, TRUE);
 		
 	if (p->options && p->options->auth)
 		add_header(&req, p->options->authheader, p->options->auth);
 	append_date(&req);
-	if (sipmethod == SIP_REFER) {	/* Call transfer */
-		if (p->refer) {
-			char buf[BUFSIZ];
-			if (!ast_strlen_zero(p->refer->refer_to))
-				add_header(&req, "Refer-To", p->refer->refer_to);
-			if (!ast_strlen_zero(p->refer->referred_by)) {
-				sprintf(buf, "%s <%s>", p->refer->referred_by_name, p->refer->referred_by);
-				add_header(&req, "Referred-By", buf);
-			}
+	if (sipmethod == SIP_REFER && p->refer) { /* Call transfer */
+		char buf[BUFSIZ];
+		if (!ast_strlen_zero(p->refer->refer_to))
+			add_header(&req, "Refer-To", p->refer->refer_to);
+		if (!ast_strlen_zero(p->refer->referred_by)) {
+			sprintf(buf, "%s <%s>", p->refer->referred_by_name, p->refer->referred_by);
+			add_header(&req, "Referred-By", buf);
 		}
 	}
-	/* This new INVITE is part of an attended transfer. Make sure that the
-	other end knows and replace the current call with this new call */
+
 	if (p->options && p->options->replaces && !ast_strlen_zero(p->options->replaces)) {
+		/* This new INVITE is part of an attended transfer. Make sure that the
+	 	   other end knows and replace the current call with this new call */
 		add_header(&req, "Replaces", p->options->replaces);
 		add_header(&req, "Require", "replaces");
 	}
 
 	add_header(&req, "Allow", ALLOWED_METHODS);
 	add_header(&req, "Supported", SUPPORTED_EXTENSIONS);
-	if (p->options && p->options->addsipheaders ) {
+	if (p->options && p->options->addsipheaders) {
 		struct ast_channel *ast;
 		struct varshead *headp = NULL;
 		const struct ast_var_t *current;
@@ -2379,7 +2380,7 @@ GNURK int transmit_invite(struct sip_dialog *p, int sipmethod, int sdp, int init
 			char *headdup;
 	 		headp = &ast->varshead;
 			if (!headp)
-				ast_log(LOG_WARNING,"No Headp for the channel...ooops!\n");
+				ast_log(LOG_WARNING,"No varshead for the channel...ooops!\n");
 			else {
 				AST_LIST_TRAVERSE(headp, current, entries) {  
 					/* SIPADDHEADER: Add SIP header to outgoing call */
@@ -6450,7 +6451,7 @@ static int handle_request_subscribe(struct sip_dialog *p, struct sip_request *re
 						if (!strcmp(p_old->exten, p->exten) &&
 						    !strcmp(p_old->context, p->context)) {
 							ast_set_flag(&p_old->flags[0], SIP_NEEDDESTROY);
-							ast_mutex_unlock(&p_old->lock);
+							dialog_lock(p_old, FALSE);
 							break;
 						}
 					}
@@ -7041,9 +7042,9 @@ static int sip_poke_peer(struct sip_peer *peer)
 	ast_set_flag(&p->flags[0], SIP_OUTGOING);
 #ifdef VOCAL_DATA_HACK
 	ast_copy_string(p->peername, "__VOCAL_DATA_SHOULD_READ_THE_SIP_SPEC__", sizeof(p->peername));
-	transmit_invite(p, SIP_INVITE, 0, 2);
+	transmit_invite(p, SIP_INVITE, FALSE, 2);
 #else
-	transmit_invite(p, SIP_OPTIONS, 0, 2);
+	transmit_invite(p, SIP_OPTIONS, FALSE, 2);
 #endif
 	gettimeofday(&peer->ps, NULL);
 	peer->pokeexpire = ast_sched_add(sched, DEFAULT_QUALIFY_MAXMS * 2, sip_poke_noanswer, peer);

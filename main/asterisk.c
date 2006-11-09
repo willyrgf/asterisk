@@ -447,13 +447,13 @@ static int handle_show_profile(int fd, int argc, char *argv[])
 
 	min = 0;
 	max = prof_data->entries;
-	if  (argc >= 3) { /* specific entries */
-		if (isdigit(argv[2][0])) {
-			min = atoi(argv[2]);
-			if (argc == 4 && strcmp(argv[3], "-"))
-				max = atoi(argv[3]);
+	if  (argc > 3) { /* specific entries */
+		if (isdigit(argv[3][0])) {
+			min = atoi(argv[3]);
+			if (argc == 5 && strcmp(argv[4], "-"))
+				max = atoi(argv[4]);
 		} else
-			search = argv[2];
+			search = argv[3];
 	}
 	if (max > prof_data->entries)
 		max = prof_data->entries;
@@ -2063,9 +2063,9 @@ static void ast_remotecontrol(char * data)
 		pid = atoi(cpid);
 	else
 		pid = -1;
-	snprintf(tmp, sizeof(tmp), "core verbose atleast %d", option_verbose);
+	snprintf(tmp, sizeof(tmp), "core set verbose atleast %d", option_verbose);
 	fdprint(ast_consock, tmp);
-	snprintf(tmp, sizeof(tmp), "core debug atleast %d", option_debug);
+	snprintf(tmp, sizeof(tmp), "core set debug atleast %d", option_debug);
 	fdprint(ast_consock, tmp);
 	if (ast_opt_mute) {
 		snprintf(tmp, sizeof(tmp), "log and verbose output currently muted ('logger unmute' to unmute)");

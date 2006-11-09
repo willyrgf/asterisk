@@ -2,9 +2,9 @@
  * Asterisk -- An open source telephony toolkit.
  *
  * Copyright (C) 1999 - 2006, Digium, Inc.
+ * and Edvina AB, Sollentuna, Sweden (chan_sip3 changes/additions)
  *
  * Mark Spencer <markster@digium.com>
- *
  *
  *
  * See http://www.asterisk.org for more information about

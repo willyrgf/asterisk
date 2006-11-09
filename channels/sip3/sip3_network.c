@@ -2,6 +2,7 @@
  * Asterisk -- An open source telephony toolkit.
  *
  * Copyright (C) 1999 - 2006, Digium, Inc.
+ * and Edvina AB, Sollentuna, Sweden (chan_sip3 changes/additions)
  *
  * Mark Spencer <markster@digium.com>
  *
@@ -184,7 +185,7 @@ retrylock:
 		if (p->owner && ast_channel_trylock(p->owner)) {
 			if (option_debug)
 				ast_log(LOG_DEBUG, "Failed to grab owner channel lock, trying again. (SIP call %s)\n", p->callid);
-			ast_mutex_unlock(&p->lock);
+			dialog_lock(p, FALSE);
 			sipnet_unlock();
 			/* Sleep for a very short amount of time */
 			usleep(1);
@@ -213,7 +214,7 @@ retrylock:
 		
 		if (p->owner && !nounlock)
 			ast_channel_unlock(p->owner);
-		ast_mutex_unlock(&p->lock);
+		dialog_lock(p, FALSE);
 	}
 	sipnet_unlock();
 	if (recount)
@@ -305,7 +306,7 @@ static int retrans_pkt(void *data)
 	int reschedule = DEFAULT_RETRANS;
 
 	/* Lock channel PVT */
-	ast_mutex_lock(&pkt->owner->lock);
+	dialog_lock(pkt->owner, TRUE);
 
 	if (pkt->retrans < MAX_RETRANS) {
 		pkt->retrans++;
@@ -343,7 +344,7 @@ static int retrans_pkt(void *data)
 
 		append_history(pkt->owner, "ReTx", "%d %s", reschedule, pkt->data);
 		__sip_xmit(pkt->owner, pkt);
-		ast_mutex_unlock(&pkt->owner->lock);
+		dialog_lock(pkt->owner, FALSE);
 		return  reschedule;
 	} 
 	/* Too many retries */
@@ -360,9 +361,9 @@ static int retrans_pkt(void *data)
 
 	if (ast_test_flag(pkt, SIP_PKT_FATAL)) {
 		while(pkt->owner->owner && ast_channel_trylock(pkt->owner->owner)) {
-			ast_mutex_unlock(&pkt->owner->lock);	/* SIP_PVT, not channel */
+			dialog_lock(pkt->owner, FALSE);
 			usleep(1);
-			ast_mutex_lock(&pkt->owner->lock);
+			dialog_lock(pkt->owner, TRUE);
 		}
 		if (pkt->owner->owner) {
 			ast_set_flag(&pkt->owner->flags[0], SIP_ALREADYGONE);
@@ -388,13 +389,13 @@ static int retrans_pkt(void *data)
 			prev->next = cur->next;
 		else
 			pkt->owner->packets = cur->next;
-		ast_mutex_unlock(&pkt->owner->lock);
+		dialog_lock(pkt->owner, FALSE);
 		free(cur);
 		pkt = NULL;
 	} else
 		ast_log(LOG_WARNING, "Weird, couldn't find packet owner!\n");
 	if (pkt)
-		ast_mutex_unlock(&pkt->owner->lock);
+		dialog_lock(pkt->owner, FALSE);
 	return 0;
 }
 

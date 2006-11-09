@@ -2,6 +2,7 @@
  * Asterisk -- An open source telephony toolkit.
  *
  * Copyright (C) 1999 - 2006, Digium, Inc.
+ * and Edvina AB, Sollentuna, Sweden (chan_sip3 changes/additions)
  *
  * Mark Spencer <markster@digium.com>
  *
@@ -755,10 +756,10 @@ int sip_set_rtp_peer(struct ast_channel *chan, struct ast_rtp *rtp, struct ast_r
 	p = chan->tech_pvt;
 	if (!p) 
 		return -1;
-	ast_mutex_lock(&p->lock);
+	dialog_lock(p, TRUE);
 	if (ast_test_flag(&p->flags[0], SIP_ALREADYGONE)) {
 		/* If we're destroyed, don't bother */
-		ast_mutex_unlock(&p->lock);
+		dialog_lock(p, FALSE);
 		return 0;
 	}
 
@@ -766,7 +767,7 @@ int sip_set_rtp_peer(struct ast_channel *chan, struct ast_rtp *rtp, struct ast_r
 	   that are known to be behind a NAT, then stop the process now
 	*/
 	if (nat_active && !ast_test_flag(&p->flags[0], SIP_CAN_REINVITE_NAT)) {
-		ast_mutex_unlock(&p->lock);
+		dialog_lock(p, FALSE);
 		return 0;
 	}
 
@@ -807,24 +808,20 @@ int sip_set_rtp_peer(struct ast_channel *chan, struct ast_rtp *rtp, struct ast_r
 	}
 	/* Reset lastrtprx timer */
 	p->lastrtprx = p->lastrtptx = time(NULL);
-	ast_mutex_unlock(&p->lock);
+	dialog_lock(p, FALSE);
 	return 0;
 }
 
-/*! \brief Returns null if we can't reinvite audio (part of RTP interface) */
+/*! \brief Returns AST_RTP_GET_FAILED if we can't reinvite audio (part of RTP interface) */
 enum ast_rtp_get_result sip_get_rtp_peer(struct ast_channel *chan, struct ast_rtp **rtp)
 {
 	struct sip_dialog *p = NULL;
 	enum ast_rtp_get_result res = AST_RTP_TRY_PARTIAL;
 
-	if (!(p = chan->tech_pvt))
+	if (!(p = chan->tech_pvt) || !(p->rtp))
 		return AST_RTP_GET_FAILED;
 
-	ast_mutex_lock(&p->lock);
-	if (!(p->rtp)) {
-		ast_mutex_unlock(&p->lock);
-		return AST_RTP_GET_FAILED;
-	}
+	dialog_lock(p, TRUE);
 
 	*rtp = p->rtp;
 
@@ -833,7 +830,7 @@ enum ast_rtp_get_result sip_get_rtp_peer(struct ast_channel *chan, struct ast_rt
 	else if (ast_test_flag(&global.jbconf, AST_JB_FORCED))
 		res = AST_RTP_GET_FAILED;
 
-	ast_mutex_unlock(&p->lock);
+	dialog_lock(p, FALSE);
 
 	return res;
 }
@@ -854,6 +851,8 @@ enum ast_rtp_get_result sip_get_vrtp_peer(struct ast_channel *chan, struct ast_r
 	if (ast_test_flag(&p->flags[0], SIP_CAN_REINVITE))
 		res = AST_RTP_TRY_NATIVE;
 
+	/* The jitterbuffer is not implemented for video */
+
 	ast_mutex_unlock(&p->lock);
 
 	return res;
@@ -862,7 +861,7 @@ enum ast_rtp_get_result sip_get_vrtp_peer(struct ast_channel *chan, struct ast_r
 /*!
   \brief Determine whether a SIP message contains an SDP in its body
   \param req the SIP request to process
-  \return 1 if SDP found, 0 if not found
+  \return TRUE if SDP found, FALSE if not found
 
   Also updates req->sdp_start and req->sdp_end to indicate where the SDP
   lives in the message body.
@@ -880,21 +879,21 @@ int find_sdp(struct sip_request *req)
 	if (!strcasecmp(content_type, "application/sdp")) {
 		req->sdp_start = 0;
 		req->sdp_end = req->lines;
-		return 1;
+		return TRUE;
 	}
 
 	/* if it's not multipart/mixed, there cannot be an SDP */
 	if (strncasecmp(content_type, "multipart/mixed", 15))
-		return 0;
+		return FALSE;
 
 	/* if there is no boundary marker, it's invalid */
 	if (!(search = strcasestr(content_type, ";boundary=")))
-		return 0;
+		return FALSE;
 
 	search += 10;
 
 	if (ast_strlen_zero(search))
-		return 0;
+		return FALSE;
 
 	/* make a duplicate of the string, with two extra characters
 	   at the beginning */
@@ -914,11 +913,11 @@ int find_sdp(struct sip_request *req)
 					break;
 			}
 			req->sdp_end = x;
-			return 1;
+			return TRUE;
 		}
 	}
 
-	return 0;
+	return FALSE;
 }
 
 /*! \brief Add RFC 2833 DTMF offer to SDP */
@@ -1325,7 +1324,7 @@ GNURK struct ast_frame *sip_read(struct ast_channel *ast)
 	struct sip_dialog *p = ast->tech_pvt;
 	int faxdetected = FALSE;
 
-	ast_mutex_lock(&p->lock);
+	dialog_lock(p, TRUE);
 	fr = sip_rtp_read(ast, p, &faxdetected);
 	p->lastrtprx = time(NULL);
 
@@ -1340,15 +1339,18 @@ GNURK struct ast_frame *sip_read(struct ast_channel *ast)
 				transmit_reinvite_with_sdp(p, TRUE);
 				if (option_debug > 1)
 					ast_log(LOG_DEBUG, "T38 state changed to %d on channel %s\n", p->t38.state, ast->name);
-			}
+			} 
 		} else if (!ast_test_flag(&p->flags[0], SIP_PENDINGBYE)) {
 			if (option_debug > 2)
 				ast_log(LOG_DEBUG, "Deferring reinvite on SIP (%s) - it will be re-negotiated for T.38\n", ast->name);
 			ast_set_flag(&p->flags[0], SIP_NEEDREINVITE);
+		}  else if (option_debug > 3) {
+			ast_log(LOG_DEBUG, "Fax deteced but discarded because another transaction is already in progress.\n");
+			/* \note Should we turn on a flag and send re-invite for fax at a later stage? */
 		}
 	}
+	dialog_lock(p, FALSE);
 
-	ast_mutex_unlock(&p->lock);
 	return fr;
 }
 
@@ -1359,13 +1361,15 @@ static struct ast_udptl *sip_get_udptl_peer(struct ast_channel *chan)
 	struct ast_udptl *udptl = NULL;
 	
 	p = chan->tech_pvt;
-	if (!p)
+	if (!p || !(p->udptl))
 		return NULL;
 	
-	ast_mutex_lock(&p->lock);
-	if (p->udptl && ast_test_flag(&p->flags[0], SIP_CAN_REINVITE))
-		udptl = p->udptl;
-	ast_mutex_unlock(&p->lock);
+	dialog_lock(p, TRUE);
+	/*  T38 reinvites is something very different from media re-invites to optimize
+		the media stream. They should not rely on the CAN_REINVITE setting
+		if (ast_test_flag(&p->flags[0], SIP_CAN_REINVITE)) */
+	udptl = p->udptl;
+	dialog_lock(p, FALSE);
 	return udptl;
 }
 
@@ -1384,9 +1388,8 @@ static int sip_set_udptl_peer(struct ast_channel *chan, struct ast_udptl *udptl)
 		memset(&p->udptlredirip, 0, sizeof(p->udptlredirip));
 	if (!ast_test_flag(&p->flags[0], SIP_GOTREFER)) {
 		if (!p->pendinginvite) {
-			if (option_debug > 2) {
-				ast_log(LOG_DEBUG, "Sending reinvite on SIP '%s' - It's UDPTL soon redirected to IP %s:%d\n", p->callid, ast_inet_ntoa(udptl ? p->udptlredirip.sin_addr : p->ourip), udptl ? ntohs(p->udptlredirip.sin_port) : 0);
-			}
+			if (option_debug > 2) 
+				ast_log(LOG_DEBUG, "Sending T38 reinvite on SIP '%s' - It's UDPTL soon redirected to IP %s:%d\n", p->callid, ast_inet_ntoa(udptl ? p->udptlredirip.sin_addr : p->ourip), udptl ? ntohs(p->udptlredirip.sin_port) : 0);
 			transmit_reinvite_with_sdp(p, TRUE);
 		} else if (!ast_test_flag(&p->flags[0], SIP_PENDINGBYE)) {
 			if (option_debug > 2) {

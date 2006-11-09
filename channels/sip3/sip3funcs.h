@@ -2,10 +2,10 @@
  * Asterisk -- An open source telephony toolkit.
  *
  * Copyright (C) 1999 - 2006, Digium, Inc.
+ * and Edvina AB, Sollentuna, Sweden (chan_sip3 changes/additions)
  *
  * Mark Spencer <markster@digium.com>
- *
- *
+ * Olle E. Johansson
  *
  * See http://www.asterisk.org for more information about
  * the Asterisk project. Please do not directly contact
@@ -234,5 +234,8 @@ GNURK void sip_registry_destroy(struct sip_registry *reg);
 GNURK char *regstate2str(enum sipregistrystate regstate) attribute_const;
 GNURK int handle_response_register(struct sip_dialog *p, int resp, char *rest, struct sip_request *req, int seqno);
 GNURK int transmit_register(struct sip_registry *r, int sipmethod, const char *auth, const char *authheader);
+
+/* sip3_utils.c - various utility functions */
+GNURK void logdebug(int level, const char *fmt, ...);
 
 #endif

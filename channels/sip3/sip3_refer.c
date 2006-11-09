@@ -2,6 +2,7 @@
  * Asterisk -- An open source telephony toolkit.
  *
  * Copyright (C) 1999 - 2006, Digium, Inc.
+ * and Edvina AB, Sollentuna, Sweden (chan_sip3 changes/additions)
  *
  * Mark Spencer <markster@digium.com>
  *
@@ -589,7 +590,7 @@ static int local_attended_transfer(struct sip_dialog *transferer, struct sip_dua
 		append_history(transferer, "Xfer", "Refer failed");
 		ast_clear_flag(&transferer->flags[0], SIP_GOTREFER);	
 		transferer->refer->status = REFER_FAILED;
-		ast_mutex_unlock(&targetcall_pvt->lock);
+		dialog_lock(targetcall_pvt, FALSE);
 		ast_channel_unlock(current->chan1);
 		ast_channel_unlock(target.chan1);
 		return -1;
@@ -607,7 +608,7 @@ static int local_attended_transfer(struct sip_dialog *transferer, struct sip_dua
 
 	/* Perform the transfer */
 	res = attempt_transfer(current, &target);
-	ast_mutex_unlock(&targetcall_pvt->lock);
+	dialog_lock(targetcall_pvt, FALSE);
 	if (res) {
 		/* Failed transfer */
 		/* Could find better message, but they will get the point */
