@@ -399,7 +399,7 @@ struct sip_request {
 	struct sip_request *next;	/*!< For linked list of packets, use this */
 	int retrans;			/*!< Retransmission number */
 	int seqno;			/*!< Sequence number */
-	struct sip_dialog *owner;	/*!< Owner SIP dialog */
+	struct sip_dialog *dialog;	/*!< Owner SIP dialog */
 	int retransid;			/*!< Retransmission ID */
 	int timer_a;			/*!< SIP timer A, retransmission timer */
 	int timer_t1;			/*!< SIP Timer T1, estimated RTT or 500 ms */

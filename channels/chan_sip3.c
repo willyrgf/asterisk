@@ -2319,9 +2319,9 @@ GNURK int transmit_reinvite_with_sdp(struct sip_dialog *p, int t38type)
 	add_header(&req, "Allow", ALLOWED_METHODS);
 	add_header(&req, "Supported", SUPPORTED_EXTENSIONS);
 	if (sipdebug)
-		add_header(&req, "X-asterisk-Info", t38type ? "SIP re-invite for T38 fax" : "SIP re-invite (External RTP bridge)");
+		add_header(&req, "X-asterisk-Info",(t38type ? "SIP re-invite for T38 fax" : "SIP re-invite (External RTP bridge)"));
 	if (!ast_test_flag(&p->flags[0], SIP_NO_HISTORY))
-		append_history(p, "ReInv", t38type ? "Re-invite sent for T38" : "Re-invite sent for external RTP media");
+		append_history(p, "ReInv", "%s", (t38type ? "Re-invite sent for T38" : "Re-invite sent for external RTP media"));
 	if (t38type)
 		add_t38_sdp(&req, p);
 	else

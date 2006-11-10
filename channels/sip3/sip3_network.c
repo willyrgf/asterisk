@@ -306,7 +306,7 @@ static int retrans_pkt(void *data)
 	int reschedule = DEFAULT_RETRANS;
 
 	/* Lock channel PVT */
-	dialog_lock(pkt->owner, TRUE);
+	dialog_lock(pkt->dialog, TRUE);
 
 	if (pkt->retrans < MAX_RETRANS) {
 		pkt->retrans++;
@@ -334,53 +334,53 @@ static int retrans_pkt(void *data)
  				ast_log(LOG_DEBUG, "** SIP timers: Rescheduling retransmission %d to %d ms (t1 %d ms (Retrans id #%d)) \n", pkt->retrans +1, siptimer_a, pkt->timer_t1, pkt->retransid);
  		} 
 
-		if (sip_debug_test_pvt(pkt->owner)) {
-			const struct sockaddr_in *dst = sip_real_dst(pkt->owner);
+		if (sip_debug_test_pvt(pkt->dialog)) {
+			const struct sockaddr_in *dst = sip_real_dst(pkt->dialog);
 			ast_verbose("Retransmitting #%d (%s) to %s:%d:\n%s\n---\n",
-				pkt->retrans, sip_nat_mode(pkt->owner),
+				pkt->retrans, sip_nat_mode(pkt->dialog),
 				ast_inet_ntoa(dst->sin_addr),
 				ntohs(dst->sin_port), pkt->data);
 		}
 
-		append_history(pkt->owner, "ReTx", "%d %s", reschedule, pkt->data);
-		__sip_xmit(pkt->owner, pkt);
-		dialog_lock(pkt->owner, FALSE);
+		append_history(pkt->dialog, "ReTx", "%d %s", reschedule, pkt->data);
+		__sip_xmit(pkt->dialog, pkt);
+		dialog_lock(pkt->dialog, FALSE);
 		return  reschedule;
 	} 
 	/* Too many retries */
-	if (pkt->owner && pkt->method != SIP_OPTIONS) {
+	if (pkt->dialog && pkt->method != SIP_OPTIONS) {
 		if (ast_test_flag(pkt, SIP_PKT_FATAL) || sipdebug)	/* Tell us if it's critical or if we're debugging */
-			ast_log(LOG_WARNING, "Maximum retries exceeded on transmission %s for seqno %d (%s %s)\n", pkt->owner->callid, pkt->seqno, (ast_test_flag(pkt, SIP_PKT_FATAL)) ? "Critical" : "Non-critical", (ast_test_flag(pkt, SIP_PKT_RESPONSE)) ? "Response" : "Request");
+			ast_log(LOG_WARNING, "Maximum retries exceeded on transmission %s for seqno %d (%s %s)\n", pkt->dialog->callid, pkt->seqno, (ast_test_flag(pkt, SIP_PKT_FATAL)) ? "Critical" : "Non-critical", (ast_test_flag(pkt, SIP_PKT_RESPONSE)) ? "Response" : "Request");
 	} else {
 		if ((pkt->method == SIP_OPTIONS) && sipdebug)
-			ast_log(LOG_WARNING, "Cancelling retransmit of OPTIONs (call id %s) \n", pkt->owner->callid);
+			ast_log(LOG_WARNING, "Cancelling retransmit of OPTIONs (call id %s) \n", pkt->dialog->callid);
 	}
-	append_history(pkt->owner, "MaxRetries", "%s", (ast_test_flag(pkt, SIP_PKT_FATAL)) ? "(Critical)" : "(Non-critical)");
+	append_history(pkt->dialog, "MaxRetries", "%s", (ast_test_flag(pkt, SIP_PKT_FATAL)) ? "(Critical)" : "(Non-critical)");
  		
 	pkt->retransid = -1;
 
 	if (ast_test_flag(pkt, SIP_PKT_FATAL)) {
-		while(pkt->owner->owner && ast_channel_trylock(pkt->owner->owner)) {
-			dialog_lock(pkt->owner, FALSE);
+		while(pkt->dialog->owner && ast_channel_trylock(pkt->dialog->owner)) {
+			dialog_lock(pkt->dialog, FALSE);
 			usleep(1);
-			dialog_lock(pkt->owner, TRUE);
+			dialog_lock(pkt->dialog, TRUE);
 		}
-		if (pkt->owner->owner) {
-			ast_set_flag(&pkt->owner->flags[0], SIP_ALREADYGONE);
-			ast_log(LOG_WARNING, "Hanging up call %s - no reply to our critical packet.\n", pkt->owner->callid);
-			ast_queue_hangup(pkt->owner->owner);
-			ast_channel_unlock(pkt->owner->owner);
+		if (pkt->dialog->owner) {
+			ast_set_flag(&pkt->dialog->flags[0], SIP_ALREADYGONE);
+			ast_log(LOG_WARNING, "Hanging up call %s - no reply to our critical packet.\n", pkt->dialog->callid);
+			ast_queue_hangup(pkt->dialog->owner);
+			ast_channel_unlock(pkt->dialog->owner);
 		} else {
 			/* If no channel owner, destroy now 
 				...unless it's a SIP options packet, where
 				we want the peerpoke expiry routine handle this.
 			*/
 			if (pkt->method != SIP_OPTIONS)
-				ast_set_flag(&pkt->owner->flags[0], SIP_NEEDDESTROY);	
+				ast_set_flag(&pkt->dialog->flags[0], SIP_NEEDDESTROY);	
 		}
 	}
 	/* In any case, go ahead and remove the packet */
-	for (prev = NULL, cur = pkt->owner->packets; cur; prev = cur, cur = cur->next) {
+	for (prev = NULL, cur = pkt->dialog->packets; cur; prev = cur, cur = cur->next) {
 		if (cur == pkt)
 			break;
 	}
@@ -388,14 +388,14 @@ static int retrans_pkt(void *data)
 		if (prev)
 			prev->next = cur->next;
 		else
-			pkt->owner->packets = cur->next;
-		dialog_lock(pkt->owner, FALSE);
+			pkt->dialog->packets = cur->next;
+		dialog_lock(pkt->dialog, FALSE);
 		free(cur);
 		pkt = NULL;
 	} else
-		ast_log(LOG_WARNING, "Weird, couldn't find packet owner!\n");
+		ast_log(LOG_WARNING, "Weird, couldn't find packet dialog!\n");
 	if (pkt)
-		dialog_lock(pkt->owner, FALSE);
+		dialog_lock(pkt->dialog, FALSE);
 	return 0;
 }
 
@@ -411,7 +411,7 @@ static enum sip_result __sip_reliable_xmit(struct sip_dialog *dialog,
 
 	ast_set_flag(req, SIP_PKT_CONNECTED);	/* Stop sipsock_read from free'ing this request */
 	req->next = dialog->packets;
-	req->owner = dialog;
+	req->dialog = dialog;
 	req->seqno = seqno;
 	if (resp)
 		ast_set_flag(req, SIP_PKT_RESPONSE);
@@ -433,7 +433,7 @@ static enum sip_result __sip_reliable_xmit(struct sip_dialog *dialog,
 	dialog->packets = req;
 
 	/* Send packet */
-	if (!__sip_xmit(req->owner, req))
+	if (!__sip_xmit(req->dialog, req))
 		res = AST_FAILURE;
 	else
 		res = AST_SUCCESS;
