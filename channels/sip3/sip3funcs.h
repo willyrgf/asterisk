@@ -224,6 +224,7 @@ GNURK void __sip_destroy(struct sip_dialog *p, int lockowner, int lockdialoglist
 GNURK void __sip_ack(struct sip_dialog *dialog, int seqno, int resp, int sipmethod, int reset);
 GNURK int __sip_semi_ack(struct sip_dialog *p, int seqno, int resp, int sipmethod);
 GNURK void dialog_lock(struct sip_dialog *dialog, int state);
+GNURK int transmit_final_response(struct sip_dialog *dialog, const char *msg, const struct sip_request *req, enum xmittype reliable);
 
 
 /* sip3_services.c - outbound registration for services from other servers/providers  */

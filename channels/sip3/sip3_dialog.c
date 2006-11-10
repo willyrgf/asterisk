@@ -191,8 +191,24 @@ void dialogstatechange(struct sip_dialog *dialog, enum dialogstate newstate)
 		if (global.recordhistory)
 			append_history(dialog, "DialogState", "New state: %s O-Cseq %d I-Cseq %d", dialogstate2str(newstate), dialog->ocseq, dialog->icseq);
 	}
+	/* When state is terminated, keep it for 32 secs to allow for retransmits 
+	 */
 }
 
+
+/*! \brief Transmit final response to a request and close dialog 
+	Set dialog state to TERMINATED to avoid problems
+ */
+int transmit_final_response(struct sip_dialog *dialog, const char *msg, const struct sip_request *req, enum xmittype reliable)
+{
+	int res;
+
+	/* If this is a final response to an INVITE */
+	res = __transmit_response(dialog, msg, req, reliable);
+	sip_scheddestroy(dialog, -1);	/* Destroy by using T1 timer if available */
+	dialogstatechange(dialog, DIALOG_STATE_TERMINATED);
+	return res;
+}
 
 /*! \brief For a reliable transmission, we need to get an reply to stop retransmission. 
 	Acknowledges receipt of a packet and stops retransmission 
@@ -390,37 +406,44 @@ void sip_destroy(struct sip_dialog *dialog)
 }
 
 
-/*! \brief Kill a SIP dialog (called by scheduler) */
+/*! \brief Kill a SIP dialog (called by scheduler) 
+ */
 static int __sip_autodestruct(void *data)
 {
-	struct sip_dialog *p = data;
+	struct sip_dialog *dialog = data;
 
 	/* If this is a subscription, tell the phone that we got a timeout */
-	if (p->subscribed) {
-		transmit_state_notify(p, AST_EXTENSION_DEACTIVATED, 1, TRUE);	/* Send last notification */
-		p->subscribed = NONE;
-		append_history(p, "Subscribestatus", "timeout");
+	if (dialog->subscribed) {
+		transmit_state_notify(dialog, AST_EXTENSION_DEACTIVATED, 1, TRUE);	/* Send last notification */
+		dialog->subscribed = NONE;
+		append_history(dialog, "Subscribestatus", "timeout");
 		if (option_debug > 2)
-			ast_log(LOG_DEBUG, "Re-scheduled destruction of SIP subsription %s\n", p->callid ? p->callid : "<unknown>");
+			ast_log(LOG_DEBUG, "Re-scheduled destruction of SIP subsription %s\n", dialog->callid ? dialog->callid : "<unknown>");
 		return 10000;	/* Reschedule this destruction so that we know that it's gone */
 	}
 
-	if (p->subscribed == MWI_NOTIFICATION && p->relatedpeer)
-		ASTOBJ_UNREF(p->relatedpeer,sip_destroy_device);
+	if (dialog->subscribed == MWI_NOTIFICATION && dialog->relatedpeer)
+		ASTOBJ_UNREF(dialog->relatedpeer,sip_destroy_device);
 
 	/* Reset schedule ID */
-	p->autokillid = -1;
+	dialog->autokillid = -1;
 
-	if (option_debug)
-		ast_log(LOG_DEBUG, "Auto destroying SIP dialog '%s'\n", p->callid);
-	append_history(p, "AutoDestroy", "%s", p->callid);
-	if (p->owner) {
-		ast_log(LOG_WARNING, "Autodestruct on dialog '%s' with owner in place (Method: %s)\n", p->callid, sip_method2txt(p->method));
-		ast_queue_hangup(p->owner);
-	} else if (p->refer)
-		transmit_request_with_auth(p, SIP_BYE, 0, XMIT_RELIABLE, 1);
-	else 
-		sip_destroy(p);
+	append_history(dialog, "AutoDestroy", "%s", dialog->callid);
+	if (dialog->owner) {
+		ast_log(LOG_WARNING, "Autodestruct on dialog '%s' with owner in place (Method: %s)\n", dialog->callid, sip_method2txt(dialog->method));
+		ast_queue_hangup(dialog->owner);
+	} else if (dialog->refer) {
+		if (option_debug > 2)
+			ast_log(LOG_DEBUG, "Finally hanging up channel after transfer: %s\n", dialog->callid);
+		transmit_request_with_auth(dialog, SIP_BYE, 0, XMIT_RELIABLE, 1);
+		append_history(dialog, "ReferBYE", "Sending BYE on transferer call leg %s", dialog->callid);
+		sip_scheddestroy(dialog, DEFAULT_TRANS_TIMEOUT);
+	} else  {
+		append_history(dialog, "AutoDestroy", "%s", dialog->callid);
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Auto destroying SIP dialog '%s'\n", dialog->callid);
+		sip_destroy(dialog);
+	}
 	return 0;
 }
 

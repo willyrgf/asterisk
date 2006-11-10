@@ -13105,6 +13105,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 	   	in fact a forked call through a SIP proxy somewhere. */
 		transmit_response(p, "482 Loop Detected", req);
 		/* We do NOT destroy p here, so that our response will be accepted */
+		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 		return 0;
 	}
 	
