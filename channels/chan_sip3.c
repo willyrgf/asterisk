@@ -520,7 +520,7 @@ static int sip_do_reload(enum channelreloadreason reason);
 	a SIP dialog
 */
 GNURK void sip_dump_history(struct sip_dialog *dialog);	/* Dump history to LOG_DEBUG at end of dialog, before destroying data */
-static inline int sip_debug_test_pvt(struct sip_dialog *p);
+GNURK inline int sip_debug_test_pvt(struct sip_dialog *p);
 
 /*--- Device object handling */
 static struct sip_peer *temp_peer(const char *name);
@@ -606,14 +606,6 @@ GNURK void initialize_initreq(struct sip_dialog *dialog, struct sip_request *req
 	parse_request(&dialog->initreq);
 	if (ast_test_flag(req, SIP_PKT_DEBUG))
 		ast_verbose("Initreq: %d headers, %d lines\n", dialog->initreq.headers, dialog->initreq.lines);
-}
-
-/*! \brief Test PVT for debugging output */
-inline int sip_debug_test_pvt(struct sip_dialog *dialog) 
-{
-	if (!sipdebug)
-		return 0;
-	return sip_debug_test_addr(sip_real_dst(dialog));
 }
 
 /*! \brief Find via branch parameter */

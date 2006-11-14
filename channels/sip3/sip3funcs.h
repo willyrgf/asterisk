@@ -56,7 +56,6 @@ GNURK void destroy_association(struct sip_peer *peer);
 GNURK void reg_source_db(struct sip_peer *peer);
 GNURK int expire_register(void *data);
 GNURK int sip_do_relaod(enum channelreloadreason reason);
-GNURK inline int sip_debug_test_addr(const struct sockaddr_in *addr);
 GNURK void parse_request(struct sip_request *req);
 GNURK int transmit_response(struct sip_dialog *p, const char *msg, const struct sip_request *req);
 GNURK void parse_copy(struct sip_request *dst, const struct sip_request *src);
@@ -105,7 +104,8 @@ GNURK int sipsocket_initialized(void);		/* Check if we have network socket open 
 GNURK int send_response(struct sip_dialog *p, struct sip_request *req, enum xmittype reliable, int seqno);
 GNURK int send_request(struct sip_dialog *p, struct sip_request *req, enum xmittype reliable, int seqno);
 GNURK const struct sockaddr_in *sip_real_dst(const struct sip_dialog *p);
-GNURK inline int sip_debug_test_pvt(struct sip_dialog *p) ;
+GNURK inline int sip_debug_test_pvt(struct sip_dialog *p);
+GNURK inline int sip_debug_test_addr(const struct sockaddr_in *addr);
 GNURK int sip_ouraddrfor(struct in_addr *them, struct in_addr *us);
 
 /*! sip3_parse.c */

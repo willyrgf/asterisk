@@ -503,6 +503,7 @@ const struct sockaddr_in *sip_real_dst(const struct sip_dialog *p)
 	return ast_test_flag(&p->flags[0], SIP_NAT) & SIP_NAT_ROUTE ? &p->recv : &p->sa;
 }
 
+
 /*! \brief See if we pass debug IP filter */
 inline int sip_debug_test_addr(const struct sockaddr_in *addr) 
 {
@@ -515,6 +516,14 @@ inline int sip_debug_test_addr(const struct sockaddr_in *addr)
 			return 0;
 	}
 	return 1;
+}
+
+/*! \brief Test PVT for debugging output */
+inline int sip_debug_test_pvt(struct sip_dialog *p)
+{
+	if (!sipdebug)
+		return 0;
+	return sip_debug_test_addr(sip_real_dst(p));
 }
 
 /*! \brief NAT fix - decide which IP address to use for ASterisk server?

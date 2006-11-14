@@ -121,6 +121,8 @@ $(if $(filter chan_misdn,$(EMBEDDED_MODS)),modules.link,chan_misdn.so): chan_mis
 sip3:	
 	$(MAKE) -C sip3 
 
-chan_sip3.so: $(SIP3_MODULES) sip3/sip3.h  sip3/sip3funcs.h
-	$(ECHO_PREFIX) echo "   [LD] $^ -> $@"
-	$(CMD_PREFIX) $(CXX) $(SOLINK) -o $@ $< 
+#chan_sip3.so: $(SIP3_MODULES) sip3/sip3.h  sip3/sip3funcs.h
+#$(ECHO_PREFIX) echo "   [LD] $^ -> $@"
+#$(CMD_PREFIX) $(CXX) $(SOLINK) -o $@ $< 
+
+$(if $(filter chan_sip3,$(EMBEDDED_MODS)),modules.link,chan_sip3.so): $(SIP3_MODULES)
