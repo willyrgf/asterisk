@@ -1037,6 +1037,7 @@ struct channel_counters {
 	int realtime_peers;
 	int autocreated_peers;
 	int registry_objects;
+	int dialog_objects;
 };
 
 extern struct sip_network sipnet;                      /*!< Sockets and networking */

@@ -4222,30 +4222,22 @@ static int manager_iax2_show_netstats( struct mansession *s, struct message *m )
 
 static int iax2_show_firmware(int fd, int argc, char *argv[])
 {
-#define FORMAT2 "%-15.15s  %-15.15s %-15.15s\n"
-#if !defined(__FreeBSD__)
-#define FORMAT "%-15.15s  %-15d %-15d\n"
-#else /* __FreeBSD__ */
-#define FORMAT "%-15.15s  %-15d %-15d\n" /* XXX 2.95 ? */
-#endif /* __FreeBSD__ */
 	struct iax_firmware *cur = NULL;
 
 	if ((argc != 3) && (argc != 4))
 		return RESULT_SHOWUSAGE;
 
+	ast_cli(fd, "%-15.15s  %-15.15s %-15.15s\n", "Device", "Version", "Size");
 	AST_LIST_LOCK(&firmwares);
-	
-	ast_cli(fd, FORMAT2, "Device", "Version", "Size");
-	AST_LIST_TRAVERSE(&firmwares, cur, list)
-		if ((argc == 3) || (!strcasecmp(argv[3], (char *)cur->fwh->devname))) 
-			ast_cli(fd, FORMAT, cur->fwh->devname, ntohs(cur->fwh->version),
-				(int)ntohl(cur->fwh->datalen));
-
+	AST_LIST_TRAVERSE(&firmwares, cur, list) {
+		if ((argc == 3) || (!strcasecmp(argv[3], (char *)cur->fwh->devname)))  {
+			ast_cli(fd, "%-15.15s  %-15d %-15d\n", cur->fwh->devname, 
+				ntohs(cur->fwh->version), (int)ntohl(cur->fwh->datalen));
+		}
+	}
 	AST_LIST_UNLOCK(&firmwares);
 
 	return RESULT_SUCCESS;
-#undef FORMAT
-#undef FORMAT2
 }
 
 /* JDG: callback to display iax peers in manager */
@@ -4449,7 +4441,7 @@ static int iax2_show_netstats(int fd, int argc, char *argv[])
 
 static int iax2_do_debug(int fd, int argc, char *argv[])
 {
-	if (argc != 2)
+	if (argc < 2 || argc > 3)
 		return RESULT_SHOWUSAGE;
 	iaxdebug = 1;
 	ast_cli(fd, "IAX2 Debugging Enabled\n");
@@ -4458,7 +4450,7 @@ static int iax2_do_debug(int fd, int argc, char *argv[])
 
 static int iax2_do_trunk_debug(int fd, int argc, char *argv[])
 {
-	if (argc != 3)
+	if (argc < 3 || argc > 4)
 		return RESULT_SHOWUSAGE;
 	iaxtrunkdebug = 1;
 	ast_cli(fd, "IAX2 Trunk Debug Requested\n");
@@ -4467,7 +4459,7 @@ static int iax2_do_trunk_debug(int fd, int argc, char *argv[])
 
 static int iax2_do_jb_debug(int fd, int argc, char *argv[])
 {
-	if (argc != 3)
+	if (argc < 3 || argc > 4)
 		return RESULT_SHOWUSAGE;
 	jb_setoutput(jb_error_output, jb_warning_output, jb_debug_output);
 	ast_cli(fd, "IAX2 Jitterbuffer Debugging Enabled\n");
@@ -4476,7 +4468,7 @@ static int iax2_do_jb_debug(int fd, int argc, char *argv[])
 
 static int iax2_no_debug(int fd, int argc, char *argv[])
 {
-	if (argc != 3)
+	if (argc < 3 || argc > 4)
 		return RESULT_SHOWUSAGE;
 	iaxdebug = 0;
 	ast_cli(fd, "IAX2 Debugging Disabled\n");
@@ -4485,7 +4477,7 @@ static int iax2_no_debug(int fd, int argc, char *argv[])
 
 static int iax2_no_trunk_debug(int fd, int argc, char *argv[])
 {
-	if (argc != 4)
+	if (argc < 4 || argc > 5)
 		return RESULT_SHOWUSAGE;
 	iaxtrunkdebug = 0;
 	ast_cli(fd, "IAX2 Trunk Debugging Disabled\n");
@@ -4494,7 +4486,7 @@ static int iax2_no_trunk_debug(int fd, int argc, char *argv[])
 
 static int iax2_no_jb_debug(int fd, int argc, char *argv[])
 {
-	if (argc != 4)
+	if (argc < 4 || argc > 5)
 		return RESULT_SHOWUSAGE;
 	iaxtrunkdebug = 0;
 	ast_cli(fd, "IAX2 Trunk Debugging Disabled\n");
@@ -9502,14 +9494,14 @@ static int function_iaxpeer(struct ast_channel *chan, char *cmd, char *data, cha
 	struct iax2_peer *peer;
 	char *peername, *colname;
 
-	if (chan->tech != &iax2_tech)
-		return -1;
-
 	peername = ast_strdupa(data);
 
 	/* if our channel, return the IP address of the endpoint of current channel */
 	if (!strcmp(peername,"CURRENTCHANNEL")) {
-	        unsigned short callno = PTR_TO_CALLNO(chan->tech_pvt);
+	        unsigned short callno;
+		if (chan->tech != &iax2_tech)
+			return -1;
+		callno = PTR_TO_CALLNO(chan->tech_pvt);	
 		ast_copy_string(buf, iaxs[callno]->addr.sin_addr.s_addr ? ast_inet_ntoa(iaxs[callno]->addr.sin_addr) : "", len);
 		return 0;
 	}
@@ -9699,27 +9691,27 @@ static char show_reg_usage[] =
 "       Lists all registration requests and status.\n";
 
 static char debug_usage[] = 
-"Usage: iax2 debug\n"
+"Usage: iax2 set debug\n"
 "       Enables dumping of IAX packets for debugging purposes\n";
 
 static char no_debug_usage[] = 
-"Usage: iax2 nodebug\n"
+"Usage: iax2 set debug off\n"
 "       Disables dumping of IAX packets for debugging purposes\n";
 
 static char debug_trunk_usage[] =
-"Usage: iax2 debug trunk\n"
+"Usage: iax2 set debug trunk\n"
 "       Requests current status of IAX trunking\n";
 
 static char no_debug_trunk_usage[] =
-"Usage: iax2 nodebug trunk\n"
+"Usage: iax2 set debug trunk off\n"
 "       Requests current status of IAX trunking\n";
 
 static char debug_jb_usage[] =
-"Usage: iax2 debug jb\n"
+"Usage: iax2 set debug jb\n"
 "       Enables jitterbuffer debugging information\n";
 
 static char no_debug_jb_usage[] =
-"Usage: iax2 nodebug jb\n"
+"Usage: iax2 set debug jb off\n"
 "       Disables jitterbuffer debugging information\n";
 
 static char iax2_test_losspct_usage[] =
@@ -9793,27 +9785,27 @@ static struct ast_cli_entry cli_iax2[] = {
 	iax2_show_peer, "Show details on specific IAX peer",
 	show_peer_usage, complete_iax2_show_peer },
 
-	{ { "iax2", "debug", NULL },
+	{ { "iax2", "set", "debug", NULL },
 	iax2_do_debug, "Enable IAX debugging",
 	debug_usage },
 
-	{ { "iax2", "debug", "trunk", NULL },
+	{ { "iax2", "set", "debug", "trunk", NULL },
 	iax2_do_trunk_debug, "Enable IAX trunk debugging",
 	debug_trunk_usage },
 
-	{ { "iax2", "debug", "jb", NULL },
+	{ { "iax2", "set", "debug", "jb", NULL },
 	iax2_do_jb_debug, "Enable IAX jitterbuffer debugging",
 	debug_jb_usage },
 
-	{ { "iax2", "debug", "off", NULL },
+	{ { "iax2", "set", "debug", "off", NULL },
 	iax2_no_debug, "Disable IAX debugging",
 	no_debug_usage },
 
-	{ { "iax2", "debug", "trunk", "off", NULL },
+	{ { "iax2", "set", "debug", "trunk", "off", NULL },
 	iax2_no_trunk_debug, "Disable IAX trunk debugging",
 	no_debug_trunk_usage },
 
-	{ { "iax2", "debug", "jb", "off", NULL },
+	{ { "iax2", "set", "debug", "jb", "off", NULL },
 	iax2_no_jb_debug, "Disable IAX jitterbuffer debugging",
 	no_debug_jb_usage },
 

@@ -7512,13 +7512,17 @@ static int load_config(void)
 			tmpread = tmpwrite = emailbody;
 			while ((tmpwrite = strchr(tmpread,'\\'))) {
 				switch (tmpwrite[1]) {
+				case 'r':
+					memmove(tmpwrite + 1, tmpwrite + 2, strlen(tmpwrite + 2) + 1);
+					*tmpwrite = '\r';
+					break;
 				case 'n':
-					*tmpwrite++ = '\n';
-					memmove(tmpwrite, tmpwrite + 1, strlen(tmpwrite + 1) + 1);
+					memmove(tmpwrite + 1, tmpwrite + 2, strlen(tmpwrite + 2) + 1);
+					*tmpwrite = '\n';
 					break;
 				case 't':
-					*tmpwrite++ = '\t';
-					memmove(tmpwrite, tmpwrite + 1, strlen(tmpwrite + 1) + 1);
+					memmove(tmpwrite + 1, tmpwrite + 2, strlen(tmpwrite + 2) + 1);
+					*tmpwrite = '\t';
 					break;
 				default:
 					ast_log(LOG_NOTICE, "Substitution routine does not support this character: %c\n", tmpwrite[1]);
@@ -7536,13 +7540,17 @@ static int load_config(void)
 			tmpread = tmpwrite = pagerbody;
 			while ((tmpwrite = strchr(tmpread, '\\'))) {
 				switch (tmpwrite[1]) {
+				case 'r':
+					memmove(tmpwrite + 1, tmpwrite + 2, strlen(tmpwrite + 2) + 1);
+					*tmpwrite = '\r';
+					break;
 				case 'n':
-					*tmpwrite++ = '\n';
-					memmove(tmpwrite, tmpwrite + 1, strlen(tmpwrite + 1) + 1);
+					memmove(tmpwrite + 1, tmpwrite + 2, strlen(tmpwrite + 2) + 1);
+					*tmpwrite = '\n';
 					break;
 				case 't':
-					*tmpwrite++ = '\t';
-					memmove(tmpwrite, tmpwrite + 1, strlen(tmpwrite + 1) + 1);
+					memmove(tmpwrite + 1, tmpwrite + 2, strlen(tmpwrite + 2) + 1);
+					*tmpwrite = '\t';
 					break;
 				default:
 					ast_log(LOG_NOTICE, "Substitution routine does not support this character: %c\n", tmpwrite[1]);
@@ -8765,6 +8773,10 @@ static void get_mailbox_delimiter(MAILSTREAM *stream) {
 }
 
 #endif /* IMAP_STORAGE */
+
+/* This is a workaround so that menuselect displays a proper description
+ * AST_MODULE_INFO(, , "Comedian Mail (Voicemail System)"
+ */
  
 AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, tdesc,
 		.load = load_module,

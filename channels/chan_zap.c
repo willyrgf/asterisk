@@ -247,6 +247,8 @@ static int callwaitingcallerid = 0;
 
 static int hidecallerid = 0;
 
+static int hidecalleridname = 0;
+
 static int restrictcid = 0;
 
 static int use_callingpres = 0;
@@ -612,7 +614,8 @@ static struct zt_pvt {
 	unsigned int firstradio:1;
 	unsigned int hanguponpolarityswitch:1;
 	unsigned int hardwaredtmf:1;
-	unsigned int hidecallerid;
+	unsigned int hidecallerid:1;
+	unsigned int hidecalleridname:1;      /*!< Hide just the name not the number for legacy PBX use */
 	unsigned int ignoredtmf:1;
 	unsigned int immediate:1;			/*!< Answer before getting digits? */
 	unsigned int inalarm:1;
@@ -2239,6 +2242,10 @@ static int zt_call(struct ast_channel *ast, char *rdest, int timeout)
 			c++;
 		else
 			c = dest;
+		if (!p->hidecalleridname)
+			n = ast->cid.cid_name;
+		else
+			n = NULL;
 		if (!p->hidecallerid) {
 			l = ast->cid.cid_num;
 			n = ast->cid.cid_name;
@@ -6867,7 +6874,9 @@ static int handle_init_event(struct zt_pvt *i, int event)
 		case SIG_FXOLS:
 		case SIG_FXOGS:
 		case SIG_FXOKS:
-		        zt_set_hook(i->subs[SUB_REAL].zfd, ZT_OFFHOOK);
+			res = zt_set_hook(i->subs[SUB_REAL].zfd, ZT_OFFHOOK);
+			if (res && (errno == EBUSY))
+				break;
 			if (i->cidspill) {
 				/* Cancel VMWI spill */
 				free(i->cidspill);
@@ -8337,12 +8346,12 @@ static void ss7_inservice(struct zt_ss7 *linkset, int startcic, int endcic)
 	}
 }
 
-static int ss7_reset_linkset(struct zt_ss7 *linkset)
+static void ss7_reset_linkset(struct zt_ss7 *linkset)
 {
 	int i, startcic = -1, endcic;
 
 	if (linkset->numchans <= 0)
-		return 0;
+		return;
 
 	startcic = linkset->pvts[0]->cic;
 
@@ -11820,6 +11829,8 @@ static int process_zap(struct ast_variable *v, int reload, int skipchannels)
 				echotraining = 0;
 		} else if (!strcasecmp(v->name, "hidecallerid")) {
 			hidecallerid = ast_true(v->value);
+		} else if (!strcasecmp(v->name, "hidecalleridname")) {
+			hidecalleridname = ast_true(v->value);
  		} else if (!strcasecmp(v->name, "pulsedial")) {
  			pulse = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "callreturn")) {
@@ -12693,6 +12704,10 @@ static int reload(void)
 	}
 	return 0;
 }
+
+/* This is a workaround so that menuselect displays a proper description
+ * AST_MODULE_INFO(, , "Zapata Telephony"
+ */
 
 #ifdef ZAPATA_PRI
 #define tdesc "Zapata Telephony w/PRI"

@@ -423,6 +423,7 @@ static int sip_show_objects(int fd, int argc, char *argv[])
 	ast_cli(fd, "-= Device objects: %d static, %d realtime, %d autocreate =-\n\n", sipcounters.static_peers, sipcounters.realtime_peers, sipcounters.autocreated_peers);
 	ASTOBJ_CONTAINER_DUMP(fd, tmp, sizeof(tmp), &devicelist);
 	ast_cli(fd, "-= Registry objects: %d =-\n\n", sipcounters.registry_objects);
+	ast_cli(fd, "-= Dialog objects: %d =-\n\n", sipcounters.dialog_objects);
 	ASTOBJ_CONTAINER_DUMP(fd, tmp, sizeof(tmp), &regl);
 	return RESULT_SUCCESS;
 }

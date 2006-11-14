@@ -395,6 +395,10 @@ void __sip_destroy(struct sip_dialog *dialog, int lockowner, int lockdialoglist)
 
 	/* Finally, release the dialog */
 	free(dialog);
+
+	sipcounters.dialog_objects--;
+	if (option_debug > 3)
+		ast_log(LOG_DEBUG, "--DIALOGS-- Counter %d\n", sipcounters.dialog_objects);
 }
 
 /*! \brief Destroy SIP call structure */
@@ -662,6 +666,9 @@ struct sip_dialog *sip_alloc(ast_string_field callid, struct sockaddr_in *sin,
 		free(p);
 		return NULL;
 	}
+	sipcounters.dialog_objects++;
+	if (option_debug > 3)
+		ast_log(LOG_DEBUG, "--DIALOGS-- Counter %d\n", sipcounters.dialog_objects);
 
 	ast_mutex_init(&p->lock);
 

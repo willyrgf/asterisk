@@ -414,7 +414,7 @@ struct expiry_times expiry = {
 struct sip_globals global;
 
 /* Object counters */
-struct channel_counters sipcounters = { 0, 0, 0, 0, 0, 0 };
+struct channel_counters sipcounters = { 0, 0, 0, 0, 0, 0, 0};
 
 /*! \brief Protect the monitoring thread, so only one process can kill or start it, and not
    when it's doing something critical. */
