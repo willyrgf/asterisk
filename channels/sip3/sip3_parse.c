@@ -716,7 +716,7 @@ int copy_via_headers(struct sip_dialog *p, struct sip_request *req, const struct
  * optionally with a limit on the search.
  * start must be past the first quote.
  */
-const char *find_closing_quote(const char *start, const char *lim)
+static const char *find_closing_quote(const char *start, const char *lim)
 {
         char last_char = '\0';
         const char *s;
