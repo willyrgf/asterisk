@@ -6076,6 +6076,7 @@ static int handle_request_subscribe(struct sip_dialog *p, struct sip_request *re
 	const char *event = get_header(req, "Event");	/* Get Event package name */
 	const char *accept = get_header(req, "Accept");
 	int resubscribe = (p->subscribed != NONE);
+	static int subscribe_counter = 0;
 
 	if (p->initreq.headers) {	
 		/* We already have a dialog */
@@ -6104,6 +6105,10 @@ static int handle_request_subscribe(struct sip_dialog *p, struct sip_request *re
 		transmit_final_response(p, "403 Forbidden (policy)", req, XMIT_UNRELIABLE);
 		return 0;
 	}
+	subscribe_counter ++;
+	if (option_debug > 2)
+		ast_log(LOG_DEBUG, "-SUBSCRIPTIONS- Concurrent counter: %d\n", subscribe_counter);
+
 
 	if (!ast_test_flag(req, SIP_PKT_IGNORE) && !p->initreq.headers) {	/* Set up dialog, new subscription */
 		/* Use this as the basis */
@@ -6126,6 +6131,7 @@ static int handle_request_subscribe(struct sip_dialog *p, struct sip_request *re
 	if (res == AUTH_CHALLENGE_SENT) {
 		if (authpeer)
 			ASTOBJ_UNREF(authpeer, sip_destroy_device);
+		subscribe_counter--;
 		return 0;
 	}
 	if (res < 0) {
@@ -6138,6 +6144,7 @@ static int handle_request_subscribe(struct sip_dialog *p, struct sip_request *re
 		}
 		if (authpeer)
 			ASTOBJ_UNREF(authpeer, sip_destroy_device);
+		subscribe_counter--;
 		return 0;
 	}
 
@@ -6146,6 +6153,7 @@ static int handle_request_subscribe(struct sip_dialog *p, struct sip_request *re
 		transmit_final_response(p, "403 Forbidden (policy)", req, XMIT_UNRELIABLE);
 		if (authpeer)
 			ASTOBJ_UNREF(authpeer, sip_destroy_device);
+		subscribe_counter--;
 		return 0;
 	}
 
@@ -6167,6 +6175,7 @@ static int handle_request_subscribe(struct sip_dialog *p, struct sip_request *re
 		transmit_final_response(p, "404 Not Found", req, XMIT_UNRELIABLE);
 		if (authpeer)
 			ASTOBJ_UNREF(authpeer, sip_destroy_device);
+		subscribe_counter--;
 		return 0;
 	} else {
 		/* XXX reduce nesting here */
@@ -6196,17 +6205,17 @@ static int handle_request_subscribe(struct sip_dialog *p, struct sip_request *re
 			} else {
  				/* Can't find a format for events that we know about */
 				transmit_final_response(p, "489 Bad Event", req, XMIT_UNRELIABLE);
+				subscribe_counter--;
  				return 0;
  			}
  		} else if (!strcmp(event, "message-summary")) { 
+			char *resp = NULL;
+			int error = FALSE;
 			if (!ast_strlen_zero(accept) && strcmp(accept, "application/simple-message-summary")) {
 				/* Format requested that we do not support */
-				transmit_final_response(p, "406 Not Acceptable", req, XMIT_UNRELIABLE);
+				resp = "406 Not acceptable";
 				if (option_debug > 1)
 					ast_log(LOG_DEBUG, "Received SIP mailbox subscription for unknown format: %s\n", accept);
-				if (authpeer)
-					ASTOBJ_UNREF(authpeer, sip_destroy_device);
-				return 0;
 			}
 			/* Looks like they actually want a mailbox status 
 			  This version of Asterisk supports mailbox subscriptions
@@ -6214,10 +6223,15 @@ static int handle_request_subscribe(struct sip_dialog *p, struct sip_request *re
 			  In most devices, this is configurable to the voicemailmain extension you use
 			*/
 			if (!authpeer || ast_strlen_zero(authpeer->mailbox)) {
-				transmit_final_response(p, "403 Not found (no mailbox)", req, XMIT_UNRELIABLE);
+				resp = "404 Not found (no mailbox)";
 				ast_log(LOG_NOTICE, "Received SIP subscribe for peer without mailbox: %s\n", authpeer ? authpeer->name : "<no peername>");
+				return 0;
+			}
+			if (error) {
+				transmit_final_response(p, resp, req, XMIT_UNRELIABLE);
 				if (authpeer)
 					ASTOBJ_UNREF(authpeer, sip_destroy_device);
+				subscribe_counter--;
 				return 0;
 			}
 
@@ -6233,6 +6247,7 @@ static int handle_request_subscribe(struct sip_dialog *p, struct sip_request *re
 				ast_log(LOG_DEBUG, "Received SIP subscribe for unknown event package: %s\n", event);
 			if (authpeer)
 				ASTOBJ_UNREF(authpeer, sip_destroy_device);
+			subscribe_counter--;
 			return 0;
 		}
 		/* Now, subscribe to status events from the PBX core */
@@ -6247,6 +6262,7 @@ static int handle_request_subscribe(struct sip_dialog *p, struct sip_request *re
 	if (p->expiry < expiry.min_expiry && p->expiry > 0) {
 		transmit_response_with_attachment(WITH_MINEXPIRY, p, "423 Interval too small", req, XMIT_UNRELIABLE);
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
+		subscribe_counter--;
 		return 0;
 	}
 	
@@ -6282,48 +6298,48 @@ static int handle_request_subscribe(struct sip_dialog *p, struct sip_request *re
 
 				ast_log(LOG_ERROR, "Got SUBSCRIBE for extension %s@%s from %s, but there is no hint for that extension\n", p->exten, p->context, ast_inet_ntoa(p->sa.sin_addr));
 				transmit_final_response(p, "404 Not Found", req, XMIT_UNRELIABLE);
+				subscribe_counter--;
 				return 0;
-			} else {
-				/* XXX reduce nesting here */
-				struct sip_dialog *p_old;
-	
-				transmit_response(p, "200 OK", req);
-				dialogstatechange(p, DIALOG_STATE_CONFIRMED);
-				transmit_state_notify(p, firststate, 1, FALSE);	/* Send first notification */
-				append_history(p, "Subscribestatus", "%s", ast_extension_state2str(firststate));
-				/* hide the 'complete' exten/context in the refer_to field for later display */
-				ast_string_field_build(p, subscribeuri, "%s@%s", p->exten, p->context);
+			} 
+			struct sip_dialog *p_old;
 
-				/* remove any old subscription from this peer for the same exten/context,
-			   	as the peer has obviously forgotten about it and it's wasteful to wait
-			   	for it to expire and send NOTIFY messages to the peer only to have them
-			   	ignored (or generate errors)
-				*/
-				dialoglist_lock();
-				for (p_old = dialoglist; p_old; p_old = p_old->next) {
-					if (p_old == p)
-						continue;
-					if (p_old->initreq.method != SIP_SUBSCRIBE)
-						continue;
-					if (p_old->subscribed == NONE)
-						continue;
-					dialog_lock(p_old, TRUE);
-					if (!strcmp(p_old->peername, p->peername)) {
-						if (!strcmp(p_old->exten, p->exten) &&
-						    !strcmp(p_old->context, p->context)) {
-							ast_set_flag(&p_old->flags[0], SIP_NEEDDESTROY);
-							dialog_lock(p_old, FALSE);
-							break;
-						}
+			transmit_response(p, "200 OK", req);
+			dialogstatechange(p, DIALOG_STATE_CONFIRMED);
+			transmit_state_notify(p, firststate, 1, FALSE);	/* Send first notification */
+			append_history(p, "Subscribestatus", "%s", ast_extension_state2str(firststate));
+			/* hide the 'complete' exten/context in the refer_to field for later display */
+			ast_string_field_build(p, subscribeuri, "%s@%s", p->exten, p->context);
+
+			/* remove any old subscription from this peer for the same exten/context,
+		   	as the peer has obviously forgotten about it and it's wasteful to wait
+		   	for it to expire and send NOTIFY messages to the peer only to have them
+		   	ignored (or generate errors)
+			*/
+			dialoglist_lock();
+			for (p_old = dialoglist; p_old; p_old = p_old->next) {
+				if (p_old == p)
+					continue;
+				if (p_old->initreq.method != SIP_SUBSCRIBE)
+					continue;
+				if (p_old->subscribed == NONE)
+					continue;
+				dialog_lock(p_old, TRUE);
+				if (!strcmp(p_old->peername, p->peername)) {
+					if (!strcmp(p_old->exten, p->exten) &&
+					    !strcmp(p_old->context, p->context)) {
+						ast_set_flag(&p_old->flags[0], SIP_NEEDDESTROY);
+						dialog_lock(p_old, FALSE);
+						break;
 					}
-					dialog_lock(p_old, FALSE);
 				}
-				dialoglist_unlock();
+				dialog_lock(p_old, FALSE);
 			}
+			dialoglist_unlock();
 		}
 		if (!p->expiry)
 			ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);
 	}
+	subscribe_counter--;
 	return 1;
 }
 
@@ -6331,6 +6347,12 @@ static int handle_request_subscribe(struct sip_dialog *p, struct sip_request *re
 static int handle_request_register(struct sip_dialog *p, struct sip_request *req, struct sockaddr_in *sin, char *e)
 {
 	enum check_auth_result res;
+
+	static int register_counter = 0;
+
+	register_counter ++;
+	if (option_debug > 3)
+		ast_log(LOG_DEBUG, "-REGISTRATIONS- register counter %d\n", register_counter);
 
 	/* Use this as the basis */
 	if (ast_test_flag(req, SIP_PKT_DEBUG))
@@ -6366,6 +6388,7 @@ static int handle_request_register(struct sip_dialog *p, struct sip_request *req
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 	}
 	append_history(p, "RegRequest", "%s : Account %s", res ? "Failed": "Succeeded", get_header(req, "To"));
+	register_counter--;
 	return res;
 }
 

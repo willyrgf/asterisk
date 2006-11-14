@@ -172,6 +172,7 @@ GNURK struct sip_auth *find_realm_authentication(struct sip_auth *authlist, cons
 GNURK struct sip_auth *add_realm_authentication(struct sip_auth *authlist, char *configuration, int lineno);
 
 /* sip3_sdprtp.c */
+GNURK struct ast_frame *sip_read(struct ast_channel *ast);
 GNURK void register_rtp_and_udptl(void);
 GNURK void unregister_rtp_and_udptl(void);
 GNURK char *get_body(struct sip_request *req, char *name);

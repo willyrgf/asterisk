@@ -363,7 +363,7 @@ static int sip_reg_timeout(void *data)
 	} else {
 		r->regstate = REG_STATE_UNREGISTERED;
 		r->timeout = -1;
-		res=transmit_register(r, SIP_REGISTER, NULL, NULL);
+		res = transmit_register(r, SIP_REGISTER, NULL, NULL);
 	}
 	manager_event(EVENT_FLAG_SYSTEM, "Registry", "ChannelDriver: SIP\r\nUsername: %s\r\nDomain: %s\r\nStatus: %s\r\n", r->username, r->hostname, regstate2str(r->regstate));
 	ASTOBJ_UNREF(r, sip_registry_destroy);

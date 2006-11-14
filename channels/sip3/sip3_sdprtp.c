@@ -426,10 +426,6 @@ int process_sdp(struct sip_dialog *p, struct sip_request *req)
 				if (debug)
 					ast_verbose("Got unsupported a:crypto in SDP offer \n");
 				breakout = TRUE;
-			} else if (!strncasecmp(a, "ptime:", (size_t) 6)) {
-				if (debug)
-					ast_verbose("Got unsupported a:ptime in SDP offer \n");
-				breakout = TRUE;
 			}
 			if (breakout)	/* We have a match, skip to next header */
 				continue;
