@@ -65,7 +65,6 @@ GNURK struct sip_peer *find_device(const char *peer, struct sockaddr_in *sin, in
 GNURK int sip_reload(int fd);
 GNURK int transmit_response_with_auth(struct sip_dialog *p, const char *msg, const struct sip_request *req, const char *rand, enum xmittype reliable, const char *header, int stale);
 GNURK int transmit_invite(struct sip_dialog *p, int sipmethod, int sdp, int init);
-GNURK int transmit_state_notify(struct sip_dialog *p, int state, int full, int timeout);
 GNURK int transmit_request_with_auth(struct sip_dialog *p, int sipmethod, int seqno, enum xmittype reliable, int newbranch);
 GNURK void do_setnat(struct sip_dialog *p, int natflags);
 GNURK void build_via(struct sip_dialog *p, int forcenewbranch);
@@ -74,22 +73,24 @@ GNURK int create_addr(struct sip_dialog *dialog, const char *opeer);
 GNURK int init_req(struct sip_request *req, int sipmethod, const char *recip);
 GNURK void initialize_initreq(struct sip_dialog *p, struct sip_request *req);
 GNURK int __transmit_response(struct sip_dialog *p, const char *msg, const struct sip_request *req, enum xmittype reliable);
-GNURK int transmit_notify_with_sipfrag(struct sip_dialog *p, int cseq, char *message, int terminate);
 GNURK int init_resp(struct sip_request *resp, const char *msg);
 GNURK struct sip_dialog *get_sip_dialog_byid_locked(const char *callid, const char *totag, const char *fromtag);
 GNURK void ast_quiet_chan(struct ast_channel *chan);
 GNURK void sip_dump_history(struct sip_dialog *dialog);	/* Dump history to LOG_DEBUG at end of dialog, before destroying data */
 GNURK void free_old_route(struct sip_route *route);
 GNURK void find_via_branch(struct sip_request *req, char *viabuf, size_t vialen);
+GNURK int update_call_counter(struct sip_dialog *fup, int event);
 
 /*! sip3_refer.c */
 GNURK const char *referstatus2str(enum referstatus rstatus) attribute_pure;
 GNURK int handle_request_refer(struct sip_dialog *p, struct sip_request *req, int debug, int seqno, int *nounlock);
 GNURK int sip_refer_allocate(struct sip_dialog *p);
+GNURK int transmit_notify_with_sipfrag(struct sip_dialog *p, int cseq, char *message, int terminate);
 
 /*! sip3_subscribe.c */
 GNURK const char *subscription_type2str(enum subscriptiontype subtype) attribute_pure;
 GNURK const struct cfsubscription_types *find_subscription_type(enum subscriptiontype subtype);
+GNURK int transmit_state_notify(struct sip_dialog *p, int state, int full, int timeout);
 
 /*! sip3_network.c */
 GNURK int sipsock_read(int *id, int fd, short events, void *ignore);
@@ -239,5 +240,14 @@ GNURK int transmit_register(struct sip_registry *r, int sipmethod, const char *a
 
 /* sip3_utils.c - various utility functions */
 GNURK void logdebug(int level, const char *fmt, ...);
+
+/* sip3_pokedevice.c - poking peers (qualify) */
+int sip_poke_noanswer(void *data);
+int sip_poke_peer(struct sip_peer *peer);
+void sip_poke_all_peers(void);
+int sip_poke_peer_s(void *data);
+int sip_poke_peer(struct sip_peer *peer);
+void handle_response_peerpoke(struct sip_dialog *p, int resp, struct sip_request *req);
+
 
 #endif

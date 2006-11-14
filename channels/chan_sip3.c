@@ -474,7 +474,6 @@ static int does_peer_need_mwi(struct sip_peer *peer);
 
 /*--- Dialog management */
 static int auto_congest(void *nothing);
-static int update_call_counter(struct sip_dialog *fup, int event);
 static void list_route(struct sip_route *route);
 static void build_route(struct sip_dialog *p, struct sip_request *req, int backwards);
 static enum check_auth_result register_verify(struct sip_dialog *p, struct sockaddr_in *sin,
@@ -502,9 +501,6 @@ static int sip_addrcmp(char *name, struct sockaddr_in *sin);	/* Support for peer
 /*--- Device monitoring and Device/extension state handling */
 static int cb_extensionstate(char *context, char* exten, int state, void *data);
 static int sip_devicestate(void *data);
-static int sip_poke_noanswer(void *data);
-static int sip_poke_peer(struct sip_peer *peer);
-static void sip_poke_all_peers(void);
 
 /*--- Applications, functions, CLI and manager command helpers */
 GNURK int sip_notify(int fd, int argc, char *argv[]);
@@ -524,11 +520,8 @@ GNURK inline int sip_debug_test_pvt(struct sip_dialog *p);
 
 /*--- Device object handling */
 static struct sip_peer *temp_peer(const char *name);
-static int update_call_counter(struct sip_dialog *fup, int event);
-static int sip_poke_peer(struct sip_peer *peer);
 static struct sip_peer *temp_peer(const char *name);
 static void register_peer_exten(struct sip_peer *peer, int onoff);
-static int sip_poke_peer_s(void *data);
 static enum parse_register_result parse_register_contact(struct sip_dialog *pvt, struct sip_peer *p, struct sip_request *req);
 
 /* Realtime device support */
@@ -561,7 +554,6 @@ static int handle_request_notify(struct sip_dialog *p, struct sip_request *req, 
 /*------Response handling functions */
 static void handle_response_invite(struct sip_dialog *p, int resp, char *rest, struct sip_request *req);
 static void handle_response_refer(struct sip_dialog *p, int resp, char *rest, struct sip_request *req);
-static void handle_response_peerpoke(struct sip_dialog *p, int resp, struct sip_request *req);
 static void handle_response(struct sip_dialog *p, int resp, char *rest, struct sip_request *req);
 
 /*------ T38 Support --------- */
@@ -807,7 +799,7 @@ static void register_peer_exten(struct sip_peer *device, int onoff)
 /*! \brief Destroy device object from memory */
 GNURK void sip_destroy_device(struct sip_peer *device)
 {
-	logdebug(3, "Destroying SIP %s %s\n", device->type & SIP_USER ? "user" : "peer", device->name);
+	logdebug(3, "Destroying SIP device %s\n", device->name);
 	//if (option_debug > 2)
 		//ast_log(LOG_DEBUG, "Destroying SIP %s %s\n", device->type & SIP_USER ? "user" : "peer", device->name);
 
@@ -1203,7 +1195,7 @@ static int sip_call(struct ast_channel *ast, char *dest, int timeout)
  *	-1 on rejection of call
  *		
  */
-static int update_call_counter(struct sip_dialog *fup, int event)
+GNURK int update_call_counter(struct sip_dialog *fup, int event)
 {
 	char name[256];
 	int outgoing = ast_test_flag(&fup->flags[0], SIP_OUTGOING);
@@ -1694,8 +1686,7 @@ static int sip_indicate(struct ast_channel *ast, int condition, const void *data
 		break;
 	case AST_CONTROL_BUSY:
 		if (ast->_state != AST_STATE_UP) {
-			transmit_response(p, "486 Busy Here", &p->initreq);
-			ast_set_flag(&p->flags[0], SIP_ALREADYGONE);	
+			transmit_final_response(p, "486 Busy Here", &p->initreq, XMIT_RELIABLE);
 			ast_softhangup_nolock(ast, AST_SOFTHANGUP_DEV);
 			break;
 		}
@@ -1703,8 +1694,7 @@ static int sip_indicate(struct ast_channel *ast, int condition, const void *data
 		break;
 	case AST_CONTROL_CONGESTION:
 		if (ast->_state != AST_STATE_UP) {
-			transmit_response(p, "503 Service Unavailable", &p->initreq);
-			ast_set_flag(&p->flags[0], SIP_ALREADYGONE);	
+			transmit_final_response(p, "503 Service Unavailable", &p->initreq, XMIT_RELIABLE);
 			ast_softhangup_nolock(ast, AST_SOFTHANGUP_DEV);
 			break;
 		}
@@ -2423,167 +2413,6 @@ GNURK int transmit_invite(struct sip_dialog *p, int sipmethod, int sdp, int init
 	return send_request(p, &req, init ? XMIT_CRITICAL : XMIT_RELIABLE, p->ocseq);
 }
 
-/*! \brief Used in the SUBSCRIBE notification subsystem */
-GNURK int transmit_state_notify(struct sip_dialog *p, int state, int full, int timeout)
-{
-	char tmp[4000], from[256], to[256];
-	char *t = tmp, *c, *mfrom, *mto;
-	size_t maxbytes = sizeof(tmp);
-	struct sip_request req;
-	char hint[AST_MAX_EXTENSION];
-	char *statestring = "terminated";
-	const struct cfsubscription_types *subscriptiontype;
-	enum state { NOTIFY_OPEN, NOTIFY_INUSE, NOTIFY_CLOSED } local_state = NOTIFY_OPEN;
-	char *pidfstate = "--";
-	char *pidfnote= "Ready";
-
-	memset(from, 0, sizeof(from));
-	memset(to, 0, sizeof(to));
-	memset(tmp, 0, sizeof(tmp));
-
-	switch (state) {
-	case (AST_EXTENSION_RINGING | AST_EXTENSION_INUSE):
-		statestring = (global.notifyringing) ? "early" : "confirmed";
-		local_state = NOTIFY_INUSE;
-		pidfstate = "busy";
-		pidfnote = "Ringing";
-		break;
-	case AST_EXTENSION_RINGING:
-		statestring = "early";
-		local_state = NOTIFY_INUSE;
-		pidfstate = "busy";
-		pidfnote = "Ringing";
-		break;
-	case AST_EXTENSION_INUSE:
-		statestring = "confirmed";
-		local_state = NOTIFY_INUSE;
-		pidfstate = "busy";
-		pidfnote = "On the phone";
-		break;
-	case AST_EXTENSION_BUSY:
-		statestring = "confirmed";
-		local_state = NOTIFY_CLOSED;
-		pidfstate = "busy";
-		pidfnote = "On the phone";
-		break;
-	case AST_EXTENSION_UNAVAILABLE:
-		statestring = "confirmed";
-		local_state = NOTIFY_CLOSED;
-		pidfstate = "away";
-		pidfnote = "Unavailable";
-		break;
-	case AST_EXTENSION_ONHOLD:
-		break;
-	case AST_EXTENSION_NOT_INUSE:
-	default:
-		/* Default setting */
-		break;
-	}
-
-	subscriptiontype = find_subscription_type(p->subscribed);
-	
-	/* Check which device/devices we are watching  and if they are registered */
-	if (ast_get_hint(hint, sizeof(hint), NULL, 0, NULL, p->context, p->exten)) {
-		/* If they are not registered, we will override notification and show no availability */
-		if (ast_device_state(hint) == AST_DEVICE_UNAVAILABLE) {
-			local_state = NOTIFY_CLOSED;
-			pidfstate = "away";
-			pidfnote = "Not online";
-		}
-	}
-
-	ast_copy_string(from, get_header(&p->initreq, "From"), sizeof(from));
-	c = get_in_brackets(from);
-	if (strncmp(c, "sip:", 4)) {
-		ast_log(LOG_WARNING, "Huh?  Not a SIP header (%s)?\n", c);
-		return -1;
-	}
-	mfrom = strsep(&c, ";");	/* trim ; and beyond */
-
-	ast_copy_string(to, get_header(&p->initreq, "To"), sizeof(to));
-	c = get_in_brackets(to);
-	if (strncmp(c, "sip:", 4)) {
-		ast_log(LOG_WARNING, "Huh?  Not a SIP header (%s)?\n", c);
-		return -1;
-	}
-	mto = strsep(&c, ";");	/* trim ; and beyond */
-
-	reqprep(&req, p, SIP_NOTIFY, 0, TRUE);
-
-	
-	add_header(&req, "Event", subscriptiontype->event);
-	add_header(&req, "Content-Type", subscriptiontype->mediatype);
-	switch(state) {
-	case AST_EXTENSION_DEACTIVATED:
-		if (timeout)
-			add_header(&req, "Subscription-State", "terminated;reason=timeout");
-		else {
-			add_header(&req, "Subscription-State", "terminated;reason=probation");
-			add_header(&req, "Retry-After", "60");
-		}
-		break;
-	case AST_EXTENSION_REMOVED:
-		add_header(&req, "Subscription-State", "terminated;reason=noresource");
-		break;
-	default:
-		if (p->expiry)
-			add_header(&req, "Subscription-State", "active");
-		else	/* Expired */
-			add_header(&req, "Subscription-State", "terminated;reason=timeout");
-	}
-	switch (p->subscribed) {
-	case XPIDF_XML:
-	case CPIM_PIDF_XML:
-		ast_build_string(&t, &maxbytes, "<?xml version=\"1.0\"?>\n");
-		ast_build_string(&t, &maxbytes, "<!DOCTYPE presence PUBLIC \"-//IETF//DTD RFCxxxx XPIDF 1.0//EN\" \"xpidf.dtd\">\n");
-		ast_build_string(&t, &maxbytes, "<presence>\n");
-		ast_build_string(&t, &maxbytes, "<presentity uri=\"%s;method=SUBSCRIBE\" />\n", mfrom);
-		ast_build_string(&t, &maxbytes, "<atom id=\"%s\">\n", p->exten);
-		ast_build_string(&t, &maxbytes, "<address uri=\"%s;user=ip\" priority=\"0.800000\">\n", mto);
-		ast_build_string(&t, &maxbytes, "<status status=\"%s\" />\n", (local_state ==  NOTIFY_OPEN) ? "open" : (local_state == NOTIFY_INUSE) ? "inuse" : "closed");
-		ast_build_string(&t, &maxbytes, "<msnsubstatus substatus=\"%s\" />\n", (local_state == NOTIFY_OPEN) ? "online" : (local_state == NOTIFY_INUSE) ? "onthephone" : "offline");
-		ast_build_string(&t, &maxbytes, "</address>\n</atom>\n</presence>\n");
-		break;
-	case PIDF_XML: /* Eyebeam supports this format */
-		ast_build_string(&t, &maxbytes, "<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?>\n");
-		ast_build_string(&t, &maxbytes, "<presence xmlns=\"urn:ietf:params:xml:ns:pidf\" \nxmlns:pp=\"urn:ietf:params:xml:ns:pidf:person\"\nxmlns:es=\"urn:ietf:params:xml:ns:pidf:rpid:status:rpid-status\"\nxmlns:ep=\"urn:ietf:params:xml:ns:pidf:rpid:rpid-person\"\nentity=\"%s\">\n", mfrom);
-		ast_build_string(&t, &maxbytes, "<pp:person><status>\n");
-		if (pidfstate[0] != '-')
-			ast_build_string(&t, &maxbytes, "<ep:activities><ep:%s/></ep:activities>\n", pidfstate);
-		ast_build_string(&t, &maxbytes, "</status></pp:person>\n");
-		ast_build_string(&t, &maxbytes, "<note>%s</note>\n", pidfnote); /* Note */
-		ast_build_string(&t, &maxbytes, "<tuple id=\"%s\">\n", p->exten); /* Tuple start */
-		ast_build_string(&t, &maxbytes, "<contact priority=\"1\">%s</contact>\n", mto);
-		if (pidfstate[0] == 'b') /* Busy? Still open ... */
-			ast_build_string(&t, &maxbytes, "<status><basic>open</basic></status>\n");
-		else
-			ast_build_string(&t, &maxbytes, "<status><basic>%s</basic></status>\n", (local_state != NOTIFY_CLOSED) ? "open" : "closed");
-		ast_build_string(&t, &maxbytes, "</tuple>\n</presence>\n");
-		break;
-	case DIALOG_INFO_XML: /* SNOM subscribes in this format */
-		ast_build_string(&t, &maxbytes, "<?xml version=\"1.0\"?>\n");
-		ast_build_string(&t, &maxbytes, "<dialog-info xmlns=\"urn:ietf:params:xml:ns:dialog-info\" version=\"%d\" state=\"%s\" entity=\"%s\">\n", p->dialogver++, full ? "full":"partial", mto);
-		if ((state & AST_EXTENSION_RINGING) && global.notifyringing)
-			ast_build_string(&t, &maxbytes, "<dialog id=\"%s\" direction=\"recipient\">\n", p->exten);
-		else
-			ast_build_string(&t, &maxbytes, "<dialog id=\"%s\">\n", p->exten);
-		ast_build_string(&t, &maxbytes, "<state>%s</state>\n", statestring);
-		ast_build_string(&t, &maxbytes, "</dialog>\n</dialog-info>\n");
-		break;
-	case NONE:
-	default:
-		break;
-	}
-
-	if (t > tmp + sizeof(tmp))
-		ast_log(LOG_WARNING, "Buffer overflow detected!!  (Please file a bug report)\n");
-
-	add_header_contentLength(&req, strlen(tmp));
-	add_line(&req, tmp);
-
-	return send_request(p, &req, XMIT_RELIABLE, p->ocseq);
-}
-
 /*! \brief Notify user of messages waiting in voicemail
 \note	- Notification only works for registered peers with mailbox= definitions
 	in sip.conf
@@ -2629,30 +2458,6 @@ static int transmit_sip_request(struct sip_dialog *p, struct sip_request *req)
 	if (!p->initreq.headers) 	/* Initialize first request before sending */
 		initialize_initreq(p, req);
 	return send_request(p, req, XMIT_UNRELIABLE, p->ocseq);
-}
-
-/*! \brief Notify a transferring party of the status of transfer */
-GNURK int transmit_notify_with_sipfrag(struct sip_dialog *p, int cseq, char *message, int terminate)
-{
-	struct sip_request req;
-	char tmp[BUFSIZ/2];
-
-	reqprep(&req, p, SIP_NOTIFY, 0, TRUE);
-	snprintf(tmp, sizeof(tmp), "refer;id=%d", cseq);
-	add_header(&req, "Event", tmp);
-	add_header(&req, "Subscription-state", terminate ? "terminated;reason=noresource" : "active");
-	add_header(&req, "Content-Type", "message/sipfrag;version=2.0");
-	add_header(&req, "Allow", ALLOWED_METHODS);
-	add_header(&req, "Supported", SUPPORTED_EXTENSIONS);
-
-	snprintf(tmp, sizeof(tmp), "SIP/2.0 %s\r\n", message);
-	add_header_contentLength(&req, strlen(tmp));
-	add_line(&req, tmp);
-
-	if (!p->initreq.headers)
-		initialize_initreq(p, &req);
-
-	return send_request(p, &req, XMIT_RELIABLE, p->ocseq);
 }
 
 /*! \brief Transmit text with SIP MESSAGE method */
@@ -2839,16 +2644,6 @@ GNURK int expire_register(void *data)
 		ASTOBJ_UNREF(peer, sip_destroy_device);		/* Remove from memory */
 	}
 
-	return 0;
-}
-
-/*! \brief Poke peer (send qualify to check if peer is alive and well) */
-static int sip_poke_peer_s(void *data)
-{
-	struct sip_peer *peer = data;
-
-	peer->pokeexpire = -1;
-	sip_poke_peer(peer);
 	return 0;
 }
 
@@ -4835,55 +4630,6 @@ static void handle_response_refer(struct sip_dialog *p, int resp, char *rest, st
 }
 
 
-/*! \brief Handle qualification responses (OPTIONS) */
-static void handle_response_peerpoke(struct sip_dialog *p, int resp, struct sip_request *req)
-{
-	struct sip_peer *peer = p->relatedpeer;
-	int statechanged, is_reachable, was_reachable;
-	int pingtime = ast_tvdiff_ms(ast_tvnow(), peer->ps);
-
-	/*
-	 * Compute the response time to a ping (goes in peer->lastms.)
-	 * -1 means did not respond, 0 means unknown,
-	 * 1..maxms is a valid response, >maxms means late response.
-	 */
-	if (pingtime < 1)	/* zero = unknown, so round up to 1 */
-		pingtime = 1;
-
-	/* Now determine new state and whether it has changed.
-	 * Use some helper variables to simplify the writing
-	 * of the expressions.
-	 */
-	was_reachable = peer->lastms > 0 && peer->lastms <= peer->maxms;
-	is_reachable = pingtime <= peer->maxms;
-	statechanged = peer->lastms == 0 /* yes, unknown before */
-		|| was_reachable != is_reachable;
-
-	peer->lastms = pingtime;
-	peer->call = NULL;
-	if (statechanged) {
-		const char *s = is_reachable ? "Reachable" : "Lagged";
-
-		ast_log(LOG_NOTICE, "Peer '%s' is now %s. (%dms / %dms)\n",
-			peer->name, s, pingtime, peer->maxms);
-		ast_device_state_changed("SIP/%s", peer->name);
-		manager_event(EVENT_FLAG_SYSTEM, "PeerStatus",
-			"Peer: SIP/%s\r\nPeerStatus: %s\r\nTime: %d\r\n",
-			peer->name, s, pingtime);
-	}
-
-	if (peer->pokeexpire > -1)
-		ast_sched_del(sched, peer->pokeexpire);
-
-	/* Try again eventually */
-	peer->pokeexpire = ast_sched_add(sched,
-		is_reachable ? global.default_qualifycheck_ok: global.default_qualifycheck_notok,
-		sip_poke_peer_s, peer);
-
-	dialogstatechange(p, DIALOG_STATE_TERMINATED);
-	ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
-}
-
 /*! \brief Handle SIP response in dialogue */
 /* XXX only called by handle_request */
 static void handle_response(struct sip_dialog *p, int resp, char *rest, struct sip_request *req)
@@ -6845,87 +6591,6 @@ static int restart_monitor(void)
 	return 0;
 }
 
-/*! \brief React to lack of answer to Qualify poke */
-static int sip_poke_noanswer(void *data)
-{
-	struct sip_peer *peer = data;
-	
-	peer->pokeexpire = -1;
-	if (peer->lastms > -1) {
-		ast_log(LOG_NOTICE, "Peer '%s' is now UNREACHABLE!  Last qualify: %d\n", peer->name, peer->lastms);
-		manager_event(EVENT_FLAG_SYSTEM, "PeerStatus", "Peer: SIP/%s\r\nPeerStatus: Unreachable\r\nTime: %d\r\n", peer->name, -1);
-	}
-	if (peer->call)
-		sip_destroy(peer->call);
-	peer->call = NULL;
-	peer->lastms = -1;
-	ast_device_state_changed("SIP/%s", peer->name);
-	/* Try again quickly */
-	peer->pokeexpire = ast_sched_add(sched, global.default_qualifycheck_notok, sip_poke_peer_s, peer);
-	return 0;
-}
-
-/*! \brief Check availability of peer, also keep NAT open
-\note	This is done with the interval in qualify= configuration option
-	Default is 2 seconds */
-static int sip_poke_peer(struct sip_peer *peer)
-{
-	struct sip_dialog *p;
-
-	if (!peer->maxms || !peer->addr.sin_addr.s_addr) {
-		/* IF we have no IP, or this isn't to be monitored, return
-		  imeediately after clearing things out */
-		if (peer->pokeexpire > -1)
-			ast_sched_del(sched, peer->pokeexpire);
-		peer->lastms = 0;
-		peer->pokeexpire = -1;
-		peer->call = NULL;
-		return 0;
-	}
-	if (peer->call > 0) {
-		if (sipdebug)
-			ast_log(LOG_NOTICE, "Still have a QUALIFY dialog active, deleting\n");
-		sip_destroy(peer->call);
-	}
-	if (!(p = peer->call = sip_alloc(NULL, NULL, FALSE, SIP_OPTIONS)))
-		return -1;
-	
-	p->sa = peer->addr;
-	p->recv = peer->addr;
-	ast_copy_flags(&p->flags[0], &peer->flags[0], SIP_FLAGS_TO_COPY);
-	ast_copy_flags(&p->flags[1], &peer->flags[1], SIP_PAGE2_FLAGS_TO_COPY);
-
-	/* Send OPTIONs to peer's fullcontact */
-	if (!ast_strlen_zero(peer->fullcontact))
-		ast_string_field_set(p, fullcontact, peer->fullcontact);
-
-	if (!ast_strlen_zero(peer->tohost))
-		ast_string_field_set(p, tohost, peer->tohost);
-	else
-		ast_string_field_set(p, tohost, ast_inet_ntoa(peer->addr.sin_addr));
-
-	/* Recalculate our side, and recalculate Call ID */
-	if (sip_ouraddrfor(&p->sa.sin_addr, &p->ourip))
-		p->ourip = sipnet.__ourip;
-	build_via(p, FALSE);
-	build_callid_pvt(p);
-
-	if (peer->pokeexpire > -1)
-		ast_sched_del(sched, peer->pokeexpire);
-	p->relatedpeer = peer;
-	ast_set_flag(&p->flags[0], SIP_OUTGOING);
-#ifdef VOCAL_DATA_HACK
-	ast_copy_string(p->peername, "__VOCAL_DATA_SHOULD_READ_THE_SIP_SPEC__", sizeof(p->peername));
-	transmit_invite(p, SIP_INVITE, FALSE, 2);
-#else
-	transmit_invite(p, SIP_OPTIONS, FALSE, 2);
-#endif
-	gettimeofday(&peer->ps, NULL);
-	peer->pokeexpire = ast_sched_add(sched, DEFAULT_QUALIFY_MAXMS * 2, sip_poke_noanswer, peer);
-
-	return 0;
-}
-
 /*! \brief Part of PBX channel interface
 \note
 \par	Return values:---
@@ -7338,28 +7003,6 @@ static int sip_sipredirect(struct sip_dialog *p, const char *dest)
 
 	/* hangup here */
 	return -1;
-}
-
-/*! \brief Send a poke to all known peers 
-	Space them out 100 ms apart
-	XXX We might have a cool algorithm for this or use random - any suggestions?
-*/
-static void sip_poke_all_peers(void)
-{
-	int ms = 0;
-	
-	if (!sipcounters.static_peers)	/* No peers, just give up */
-		return;
-
-	ASTOBJ_CONTAINER_TRAVERSE(&devicelist, 1, do {
-		ASTOBJ_WRLOCK(iterator);
-		if (iterator->pokeexpire > -1)
-			ast_sched_del(sched, iterator->pokeexpire);
-		ms += 100;
-		iterator->pokeexpire = ast_sched_add(sched, ms, sip_poke_peer_s, iterator);
-		ASTOBJ_UNLOCK(iterator);
-	} while (0)
-	);
 }
 
 /*! \brief Reload module */

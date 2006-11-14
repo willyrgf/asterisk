@@ -184,6 +184,13 @@ int find_sip_method(const char *msg)
 /*! \brief return text string for sip method */
 char *sip_method2txt(int method)
 {
+	int max = sizeof(sip_methods) / sizeof(sip_methods[0]);
+
+	if (method > max || method < 0) {
+		if (option_debug > 3)
+			ast_log(LOG_DEBUG, "Unknown SIP method %d given to this function. Strange... \n", method);
+		return "<unknown>";
+	}
 	return sip_methods[method].text;
 }
 

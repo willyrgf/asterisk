@@ -117,7 +117,6 @@ static void temp_pvt_cleanup(void *data);
 /*! \brief A per-thread temporary pvt structure */
 AST_THREADSTORAGE_CUSTOM(ts_temp_pvt, temp_pvt_init, temp_pvt_cleanup);
 
-
 /*! \brief Protect the SIP dialog list (of sip_dialog's) */
 AST_MUTEX_DEFINE_STATIC(dialoglock);
 
@@ -125,7 +124,7 @@ AST_MUTEX_DEFINE_STATIC(dialoglock);
 void dialoglist_lock(void)
 {
 	ast_mutex_lock(&dialoglock);
-	if (option_debug > 3)
+	if (sipdebug && option_debug > 4)
 		ast_log(LOG_DEBUG, "=== SIP dialog list: LOCKED\n");
 }
 
@@ -133,7 +132,7 @@ void dialoglist_lock(void)
 void dialoglist_unlock(void)
 {
 	ast_mutex_unlock(&dialoglock);
-	if (option_debug > 3)
+	if (sipdebug && option_debug > 4)
 		ast_log(LOG_DEBUG, "=== SIP dialog list: UNLOCKED\n");
 }
 
@@ -142,6 +141,13 @@ void dialoglist_unlock(void)
 */
 void dialog_lock(struct sip_dialog *dialog, int state)
 {
+	if (!dialog) {
+		ast_log(LOG_ERROR, "-DIALOGLOCK- Trying to %s non-existing dialog. Giving up.\n", state ? "lock" : "unlock");
+		return;
+	}
+	if (sipdebug && option_debug > 4)
+		ast_log(LOG_DEBUG, "-DIALOGLOCK- %s dialog %s\n", state ? "  locking" : "unlocking", dialog->callid ? dialog->callid : "<no callid>");
+
 	if (state)
 		ast_mutex_lock(&dialog->lock);
 	else
@@ -198,12 +204,15 @@ void dialogstatechange(struct sip_dialog *dialog, enum dialogstate newstate)
 
 /*! \brief Transmit final response to a request and close dialog 
 	Set dialog state to TERMINATED to avoid problems
+	At some point, after debugging, we can remove the reliable flag. Only responses to INVITEs are sent reliably 
  */
 int transmit_final_response(struct sip_dialog *dialog, const char *msg, const struct sip_request *req, enum xmittype reliable)
 {
 	int res;
 
 	/* If this is a final response to an INVITE */
+	if (reliable == XMIT_RELIABLE && req->method != SIP_INVITE)
+		ast_log(LOG_WARNING, "Transmitting RELIABLE response to %s - Call ID %s (?? BUG ?? ) \n", sip_method2txt(req->method), dialog->callid);
 	res = __transmit_response(dialog, msg, req, reliable);
 	sip_scheddestroy(dialog, -1);	/* Destroy by using T1 timer if available */
 	dialogstatechange(dialog, DIALOG_STATE_TERMINATED);
@@ -253,7 +262,7 @@ void __sip_ack(struct sip_dialog *dialog, int seqno, int resp, int sipmethod, in
 }
 
 /*! \brief Pretend to ack all packets - nothing to do with SIP_ACK (the method)
- * maybe the lock on p is not strictly necessary but there might be a race */
+ *   maybe the lock on p is not strictly necessary but there might be a race */
 GNURK void __sip_pretend_ack(struct sip_dialog *dialog)
 {
 	struct sip_request *cur = NULL;
@@ -302,6 +311,11 @@ void __sip_destroy(struct sip_dialog *dialog, int lockowner, int lockdialoglist)
 {
 	struct sip_dialog *cur, *prev = NULL;
 	struct sip_request *cp;
+
+	if (ast_test_flag(&dialog->flags[0], SIP_INC_COUNT)) 			/* This dialog has incremented call count */
+		update_call_counter(dialog, DEC_CALL_LIMIT);				/* Since it was forgotten, decrement call count */
+	if (ast_test_flag(&dialog->flags[1], SIP_PAGE2_INC_RINGING)) 			/* This dialog has incremented ring count */
+		update_call_counter(dialog, DEC_CALL_RINGING);				/* Since it was forgotten, decrement ring count */
 
 	if (sip_debug_test_pvt(dialog) || option_debug > 2)
 		ast_verbose("Really destroying SIP dialog '%s' Method: %s\n", dialog->callid, sip_method2txt(dialog->method));

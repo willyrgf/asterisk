@@ -82,7 +82,7 @@ GNURK void logdebug(int level, const char *fmt, ...)
 	__attribute__ ((format (printf, 2, 3)));
 
 /*! \brief Output message to LOG_DEBUG channel */
-GNURK void logdebug_va(int level, const char *fmt, va_list ap)
+static void logdebug_va(int level, const char *fmt, va_list ap)
 {
 	if (option_debug >= level)
 		ast_log(LOG_DEBUG, fmt, ap);

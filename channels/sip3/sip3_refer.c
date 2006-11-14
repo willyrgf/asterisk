@@ -978,3 +978,26 @@ int handle_request_refer(struct sip_dialog *p, struct sip_request *req, int debu
 	return res;
 }
 
+/*! \brief Notify a transferring party of the status of transfer */
+GNURK int transmit_notify_with_sipfrag(struct sip_dialog *p, int cseq, char *message, int terminate)
+{
+	struct sip_request req;
+	char tmp[BUFSIZ/2];
+
+	reqprep(&req, p, SIP_NOTIFY, 0, TRUE);
+	snprintf(tmp, sizeof(tmp), "refer;id=%d", cseq);
+	add_header(&req, "Event", tmp);
+	add_header(&req, "Subscription-state", terminate ? "terminated;reason=noresource" : "active");
+	add_header(&req, "Content-Type", "message/sipfrag;version=2.0");
+	add_header(&req, "Allow", ALLOWED_METHODS);
+	add_header(&req, "Supported", SUPPORTED_EXTENSIONS);
+
+	snprintf(tmp, sizeof(tmp), "SIP/2.0 %s\r\n", message);
+	add_header_contentLength(&req, strlen(tmp));
+	add_line(&req, tmp);
+
+	if (!p->initreq.headers)
+		initialize_initreq(p, &req);
+
+	return send_request(p, &req, XMIT_RELIABLE, p->ocseq);
+}
