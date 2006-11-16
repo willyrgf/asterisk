@@ -175,7 +175,10 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ;subscribecontext = default	; Set a specific context for SUBSCRIBE requests
 				; Useful to limit subscriptions to local extensions
 				; Settable per peer/user also
-;notifyringing = yes		; Notify subscriptions on RINGING state
+;notifyringing = yes		; Notify subscriptions on RINGING state (default: no)
+;notifyhold = yes		; Notify subscriptions on HOLD state (default: no)
+				; Turning on notifyringing and notifyhold will add a lot
+				; more database transactions if you are using realtime.
 
 ;----------------------------------------- T.38 FAX PASSTHROUGH SUPPORT -----------------------
 ;
@@ -266,6 +269,12 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 				; route = Assume NAT, don't send rport 
 				; (work around more UNIDEN bugs)
 
+;----------------------------------- MEDIA HANDLING --------------------------------
+; By default, Asterisk tries to re-invite the audio to an optimal path. If there's
+; no reason for Asterisk to stay in the media path, the media will be redirected.
+; This does not really work with in the case where Asterisk is outside and have
+; clients on the inside of a NAT. In that case, you want to set canreinvite=nonat
+;
 ;canreinvite=yes		; Asterisk by default tries to redirect the
 				; RTP media stream (audio) to go directly from
 				; the caller to the callee.  Some devices do not
