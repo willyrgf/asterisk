@@ -7106,6 +7106,8 @@ static int load_module(void)
 		ast_log(LOG_ERROR, "Unable to register channel type 'SIP'\n");
 		io_context_destroy(io);
 		sched_context_destroy(sched);
+		
+		/* Isn't there more to destroy here? */
 		return AST_MODULE_LOAD_FAILURE;
 	}
 
