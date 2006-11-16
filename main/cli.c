@@ -75,52 +75,11 @@ void ast_cli(int fd, char *fmt, ...)
 
 static AST_LIST_HEAD_STATIC(helpers, ast_cli_entry);
 
-static char load_help[] = 
-"Usage: module load <module name>\n"
-"       Loads the specified module into Asterisk.\n";
-
-static char unload_help[] = 
-"Usage: module unload [-f|-h] <module name>\n"
-"       Unloads the specified module from Asterisk. The -f\n"
-"       option causes the module to be unloaded even if it is\n"
-"       in use (may cause a crash) and the -h module causes the\n"
-"       module to be unloaded even if the module says it cannot, \n"
-"       which almost always will cause a crash.\n";
-
 static char help_help[] =
 "Usage: help [topic]\n"
 "       When called with a topic as an argument, displays usage\n"
 "       information on the given command. If called without a\n"
 "       topic, it provides a list of commands.\n";
-
-static char chanlist_help[] = 
-"Usage: core show channels [concise|verbose]\n"
-"       Lists currently defined channels and some information about them. If\n"
-"       'concise' is specified, the format is abridged and in a more easily\n"
-"       machine parsable format. If 'verbose' is specified, the output includes\n"
-"       more and longer fields.\n";
-
-static char reload_help[] = 
-"Usage: module reload [module ...]\n"
-"       Reloads configuration files for all listed modules which support\n"
-"       reloading, or for all supported modules if none are listed.\n";
-
-static char verbose_help[] = 
-"Usage: core set verbose <level>\n"
-"       Sets level of verbose messages to be displayed.  0 means\n"
-"       no messages should be displayed. Equivalent to -v[v[v...]]\n"
-"       on startup\n";
-
-static char debug_help[] = 
-"Usage: core set debug <level> [filename]\n"
-"       Sets level of core debug messages to be displayed.  0 means\n"
-"       no messages should be displayed.  Equivalent to -d[d[d...]]\n"
-"       on startup.  If filename is specified, debugging will be\n"
-"       limited to just that file.\n";
-
-static char nodebug_help[] = 
-"Usage: core set debug off\n"
-"       Turns off core debug messages.\n";
 
 static char logger_mute_help[] = 
 "Usage: logger mute\n"
@@ -138,99 +97,148 @@ static char group_show_channels_help[] =
 "       Optional regular expression pattern is matched to group names for each\n"
 "       channel.\n";
 
-static int handle_load_deprecated(int fd, int argc, char *argv[])
+static char *complete_fn(const char *word, int state)
 {
-	if (argc != 2)
-		return RESULT_SHOWUSAGE;
-	if (ast_load_resource(argv[1])) {
-		ast_cli(fd, "Unable to load module %s\n", argv[1]);
-		return RESULT_FAILURE;
-	}
-	return RESULT_SUCCESS;
+	char *c;
+	char filename[256];
+
+	if (word[0] == '/')
+		ast_copy_string(filename, word, sizeof(filename));
+	else
+		snprintf(filename, sizeof(filename), "%s/%s", ast_config_AST_MODULE_DIR, word);
+
+	/* XXX the following function is not reentrant, so we better not use it */
+	c = filename_completion_function(filename, state);
+	
+	if (c && word[0] != '/')
+		c += (strlen(ast_config_AST_MODULE_DIR) + 1);
+	
+	return c ? strdup(c) : c;
 }
 
-static int handle_load(int fd, int argc, char *argv[])
+static char *handle_load(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	if (argc != 3)
-		return RESULT_SHOWUSAGE;
-	if (ast_load_resource(argv[2])) {
-		ast_cli(fd, "Unable to load module %s\n", argv[2]);
-		return RESULT_FAILURE;
+	/* "module load <mod>" */
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "module load";
+		e->usage =
+			"Usage: module load <module name>\n"
+			"       Loads the specified module into Asterisk.\n";
+		return NULL;
+
+	case CLI_GENERATE:
+		if (a->argc != e->args + 1)
+			return NULL;
+		return complete_fn(a->word, a->n);
 	}
-	return RESULT_SUCCESS;
+	if (a->argc != e->args + 1)
+		return CLI_SHOWUSAGE;
+	if (ast_load_resource(a->argv[e->args])) {
+		ast_cli(a->fd, "Unable to load module %s\n", a->argv[e->args]);
+		return CLI_FAILURE;
+	}
+	return CLI_SUCCESS;
 }
 
-static int handle_reload_deprecated(int fd, int argc, char *argv[])
+static char *handle_load_deprecated(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	char *res = handle_load(e, cmd, a);
+	if (cmd == CLI_INIT)
+		e->command = "load";
+	return res;
+}
+
+static char *handle_reload(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	int x;
-	int res;
-	if (argc < 1)
-		return RESULT_SHOWUSAGE;
-	if (argc > 1) { 
-		for (x = 1; x < argc; x++) {
-			res = ast_module_reload(argv[x]);
-			switch(res) {
-			case 0:
-				ast_cli(fd, "No such module '%s'\n", argv[x]);
-				break;
-			case 1:
-				ast_cli(fd, "Module '%s' does not support reload\n", argv[x]);
-				break;
-			}
-		}
-	} else
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "module reload";
+		e->usage =
+			"Usage: module reload [module ...]\n"
+			"       Reloads configuration files for all listed modules which support\n"
+			"       reloading, or for all supported modules if none are listed.\n";
+		return NULL;
+
+	case CLI_GENERATE:
+		return ast_module_helper(a->line, a->word, a->pos, a->n, a->pos, 1);
+	}
+	if (a->argc == e->args) {
 		ast_module_reload(NULL);
-	return RESULT_SUCCESS;
+		return CLI_SUCCESS;
+	}
+	for (x = e->args; x < a->argc; x++) {
+		int res = ast_module_reload(a->argv[x]);
+		/* XXX reload has multiple error returns, including -1 on error and 2 on success */
+		switch(res) {
+		case 0:
+			ast_cli(a->fd, "No such module '%s'\n", a->argv[x]);
+			break;
+		case 1:
+			ast_cli(a->fd, "Module '%s' does not support reload\n", a->argv[x]);
+			break;
+		}
+	}
+	return CLI_SUCCESS;
 }
 
-static int handle_reload(int fd, int argc, char *argv[])
+static char *handle_reload_deprecated(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	int x;
-	int res;
-	if (argc < 2)
-		return RESULT_SHOWUSAGE;
-	if (argc > 2) { 
-		for (x = 2; x < argc; x++) {
-			res = ast_module_reload(argv[x]);
-			switch(res) {
-			case 0:
-				ast_cli(fd, "No such module '%s'\n", argv[x]);
-				break;
-			case 1:
-				ast_cli(fd, "Module '%s' does not support reload\n", argv[x]);
-				break;
-			}
-		}
-	} else
-		ast_module_reload(NULL);
-	return RESULT_SUCCESS;
+	char *s = handle_reload(e, cmd, a);
+	if (cmd == CLI_INIT)		/* override command name */
+		e->command = "reload";
+	return s;
 }
 
-static int handle_verbose(int fd, int argc, char *argv[])
+static char *handle_verbose(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	int oldval = option_verbose;
 	int newlevel;
 	int atleast = 0;
+	static char *choices[] = { "off", "atleast", NULL };
+	int fd = a->fd;
+	int argc = a->argc;
+	char **argv = a->argv;
 
-	if ((argc < 4) || (argc > 5))
-		return RESULT_SHOWUSAGE;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "core set verbose";
+		e->usage =
+			"Usage: core set verbose [atleast] <level>\n"
+			"       core set verbose off\n"
+			"       Sets level of verbose messages to be displayed.  0 or off means\n"
+			"       no messages should be displayed. Equivalent to -v[v[v...]]\n"
+			"       on startup\n";
+		return NULL;
 
-	if (!strcasecmp(argv[3], "atleast"))
+	case CLI_GENERATE:
+		if (a->pos > e->args)
+			return NULL;
+		return ast_cli_complete(a->word, choices, a->n);
+	}
+	/* all the above return, so we proceed with the handler.
+	 * we are guaranteed to be called with argc >= e->args;
+	 */
+
+	if (argc < e->args + 1)
+		return CLI_SHOWUSAGE;
+
+	if (argc == e->args + 1 && !strcasecmp(argv[e->args], "off")) {
+		newlevel = 0;
+		goto done;
+	}
+	if (!strcasecmp(argv[e->args], "atleast"))
 		atleast = 1;
+	if (argc != e->args + atleast + 1)
+		return CLI_SHOWUSAGE;
+	if (sscanf(argv[e->args + atleast], "%d", &newlevel) != 1)
+		return CLI_SHOWUSAGE;
 
-	if (!atleast) {
-		if (argc > 4)
-			return RESULT_SHOWUSAGE;
-
-		option_verbose = atoi(argv[3]);
-	} else {
-		if (argc < 5)
-			return RESULT_SHOWUSAGE;
-
-		newlevel = atoi(argv[4]);
-		if (newlevel > option_verbose)
-			option_verbose = newlevel;
-        }
+done:
+	if (!atleast || newlevel > option_verbose)
+		option_verbose = newlevel;
 	if (oldval > 0 && option_verbose == 0)
 		ast_cli(fd, "Verbosity is now OFF\n");
 	else if (option_verbose > 0) {
@@ -240,59 +248,64 @@ static int handle_verbose(int fd, int argc, char *argv[])
 			ast_cli(fd, "Verbosity was %d and is now %d\n", oldval, option_verbose);
 	}
 
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 
-static int handle_set_debug(int fd, int argc, char *argv[])
+static char *handle_set_debug(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	int oldval = option_debug;
 	int newlevel;
 	int atleast = 0;
 	char *filename = '\0';
+	static char *choices[] = { "off", "atleast", NULL };
+	int fd = a->fd;
+	int argc = a->argc;
+	char **argv = a->argv;
 
-	/* 'core set debug <level>'
-	 * 'core set debug <level> <fn>'
-	 * 'core set debug atleast <level>'
-	 * 'core set debug atleast <level> <fn>'
-	 */
-	if ((argc < 4) || (argc > 6))
-		return RESULT_SHOWUSAGE;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "core set debug";
+		e->usage =
+			"Usage: core set debug [atleast] <level> [filename]\n"
+			"       core set debug off\n"
+			"       Sets level of core debug messages to be displayed. 0 or 'off' means\n"
+			"       no messages should be displayed.  Equivalent to -d[d[d...]]\n"
+			"       on startup.  If filename is specified, debugging will be\n"
+			"       limited to just that file.\n";
+		return NULL;
 
-	if (!strcasecmp(argv[3], "atleast"))
-		atleast = 1;
-
-	if (!atleast) {
-		if (argc > 5)
-			return RESULT_SHOWUSAGE;
-
-		if (sscanf(argv[3], "%d", &newlevel) != 1)
-			return RESULT_SHOWUSAGE;
-
-		if (argc == 4) {
-			debug_filename[0] = '\0';
-		} else {
-			filename = argv[4];
-			ast_copy_string(debug_filename, filename, sizeof(debug_filename));
-		}
-
-		option_debug = newlevel;
-	} else {
-		if (argc < 5 || argc > 6)
-			return RESULT_SHOWUSAGE;
-
-		if (sscanf(argv[4], "%d", &newlevel) != 1)
-			return RESULT_SHOWUSAGE;
-
-		if (argc == 5) {
-			debug_filename[0] = '\0';
-		} else {
-			filename = argv[5];
-			ast_copy_string(debug_filename, filename, sizeof(debug_filename));
-		}
-
-		if (newlevel > option_debug)
-			option_debug = newlevel;
+	case CLI_GENERATE:
+		if (a->pos > e->args)
+			return NULL;
+		return ast_cli_complete(a->word, choices, a->n);
 	}
+	/* all the above return, so we proceed with the handler.
+	 * we are guaranteed to be called with argc >= e->args;
+	 */
+
+	if (argc < e->args + 1)
+		return CLI_SHOWUSAGE;
+
+	if (argc == e->args + 1 && !strcasecmp(argv[e->args], "off")) {
+		newlevel = 0;
+		goto done;
+	}
+	if (!strcasecmp(argv[e->args], "atleast"))
+		atleast = 1;
+	if (argc < e->args + atleast + 1 || argc > e->args + atleast + 2)
+		return CLI_SHOWUSAGE;
+	if (sscanf(argv[e->args + atleast], "%d", &newlevel) != 1)
+		return CLI_SHOWUSAGE;
+
+	if (argc == e->args + atleast + 1) {
+		debug_filename[0] = '\0';
+	} else {
+		ast_copy_string(debug_filename, argv[e->args + atleast + 1], sizeof(debug_filename));
+	}
+
+done:
+	if (!atleast || newlevel > option_debug)
+		option_debug = newlevel;
 
 	if (oldval > 0 && option_debug == 0)
 		ast_cli(fd, "Core debug is now OFF\n");
@@ -310,21 +323,7 @@ static int handle_set_debug(int fd, int argc, char *argv[])
 		}
 	}
 
-	return RESULT_SUCCESS;
-}
-
-static int handle_nodebug(int fd, int argc, char *argv[])
-{
-	int oldval = option_debug;
-	if (argc != 4)
-		return RESULT_SHOWUSAGE;
-
-	option_debug = 0;
-	debug_filename[0] = '\0';
-
-	if (oldval > 0)
-		ast_cli(fd, "Core debug is now OFF\n");
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 
 static int handle_logger_mute(int fd, int argc, char *argv[])
@@ -335,60 +334,59 @@ static int handle_logger_mute(int fd, int argc, char *argv[])
 	return RESULT_SUCCESS;
 }
 
-static int handle_unload_deprecated(int fd, int argc, char *argv[])
+static char *handle_unload(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
+	/* "module unload mod_1 [mod_2 .. mod_N]" */
 	int x;
 	int force = AST_FORCE_SOFT;
-	if (argc < 2)
-		return RESULT_SHOWUSAGE;
-	for (x = 1; x < argc; x++) {
-		if (argv[x][0] == '-') {
-			switch(argv[x][1]) {
-			case 'f':
-				force = AST_FORCE_FIRM;
-				break;
-			case 'h':
-				force = AST_FORCE_HARD;
-				break;
-			default:
-				return RESULT_SHOWUSAGE;
-			}
-		} else if (x != argc - 1) 
-			return RESULT_SHOWUSAGE;
-		else if (ast_unload_resource(argv[x], force)) {
-			ast_cli(fd, "Unable to unload resource %s\n", argv[x]);
-			return RESULT_FAILURE;
+	char *s;
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "module unload";
+		e->usage =
+			"Usage: module unload [-f|-h] <module_1> [<module_2> ... ]\n"
+			"       Unloads the specified module from Asterisk. The -f\n"
+			"       option causes the module to be unloaded even if it is\n"
+			"       in use (may cause a crash) and the -h module causes the\n"
+			"       module to be unloaded even if the module says it cannot, \n"
+			"       which almost always will cause a crash.\n";
+		return NULL;
+
+	case CLI_GENERATE:
+		return ast_module_helper(a->line, a->word, a->pos, a->n, a->pos, 0);
+	}
+	if (a->argc < e->args + 1)
+		return CLI_SHOWUSAGE;
+	x = e->args;	/* first argument */
+	s = a->argv[x];
+	if (s[0] == '-') {
+		if (s[1] == 'f')
+			force = AST_FORCE_FIRM;
+		else if (s[1] == 'h')
+			force = AST_FORCE_HARD;
+		else
+			return CLI_SHOWUSAGE;
+		if (a->argc < e->args + 2)	/* need at least one module name */
+			return CLI_SHOWUSAGE;
+		x++;	/* skip this argument */
+	}
+
+	for (; x < a->argc; x++) {
+		if (ast_unload_resource(a->argv[x], force)) {
+			ast_cli(a->fd, "Unable to unload resource %s\n", a->argv[x]);
+			return CLI_FAILURE;
 		}
 	}
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 
-static int handle_unload(int fd, int argc, char *argv[])
+static char *handle_unload_deprecated(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	int x;
-	int force = AST_FORCE_SOFT;
-	if (argc < 3)
-		return RESULT_SHOWUSAGE;
-	for (x = 2; x < argc; x++) {
-		if (argv[x][0] == '-') {
-			switch(argv[x][1]) {
-			case 'f':
-				force = AST_FORCE_FIRM;
-				break;
-			case 'h':
-				force = AST_FORCE_HARD;
-				break;
-			default:
-				return RESULT_SHOWUSAGE;
-			}
-		} else if (x != argc - 1) 
-			return RESULT_SHOWUSAGE;
-		else if (ast_unload_resource(argv[x], force)) {
-			ast_cli(fd, "Unable to unload resource %s\n", argv[x]);
-			return RESULT_FAILURE;
-		}
-	}
-	return RESULT_SUCCESS;
+	char *res = handle_unload(e, cmd, a);
+	if (cmd == CLI_INIT)
+		e->command = "unload";	/* XXX override */
+	return res;
 }
 
 #define MODLIST_FORMAT  "%-30s %-40.40s %-10d\n"
@@ -406,15 +404,6 @@ static int modlist_modentry(const char *module, const char *description, int use
 	} 
 	return 0;
 }
-
-static char modlist_help[] =
-"Usage: module show [like keyword]\n"
-"       Shows Asterisk modules currently in use, and usage statistics.\n";
-
-static char uptime_help[] =
-"Usage: core show uptime [seconds]\n"
-"       Shows Asterisk uptime information.\n"
-"       The seconds word returns the uptime in seconds only.\n";
 
 static void print_uptimestr(int fd, time_t timeval, const char *prefix, int printsec)
 {
@@ -468,37 +457,72 @@ static void print_uptimestr(int fd, time_t timeval, const char *prefix, int prin
 		ast_cli(fd, "%s: %s\n", prefix, timestr);
 }
 
-static int handle_showuptime(int fd, int argc, char *argv[])
+static char * handle_showuptime(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	/* 'show uptime [seconds]' */
-	time_t curtime = time(NULL);
-	int printsec = (argc == 4 && !strcasecmp(argv[3],"seconds"));
+	time_t curtime;
+	int printsec;
 
-	if (argc != 3 && !printsec)
-		return RESULT_SHOWUSAGE;
+	switch (cmd) {
+        case CLI_INIT:
+		e->command = "core show uptime";
+		e->usage =
+			"Usage: core show uptime [seconds]\n"
+			"       Shows Asterisk uptime information.\n"
+			"       The seconds word returns the uptime in seconds only.\n";
+		return NULL;
+
+	case CLI_GENERATE:
+		return (a->pos > e->args || a->n > 0) ? NULL : "seconds";
+	}
+	/* regular handler */
+	if (a->argc == e->args+1 && !strcasecmp(a->argv[e->args],"seconds"))
+		printsec = 1;
+	else if (a->argc == e->args)
+		printsec = 0;
+	else
+		return CLI_SHOWUSAGE;
+	curtime = time(NULL);
 	if (ast_startuptime)
-		print_uptimestr(fd, curtime - ast_startuptime, "System uptime", printsec);
+		print_uptimestr(a->fd, curtime - ast_startuptime, "System uptime", printsec);
 	if (ast_lastreloadtime)
-		print_uptimestr(fd, curtime - ast_lastreloadtime, "Last reload", printsec);
-	return RESULT_SUCCESS;
+		print_uptimestr(a->fd, curtime - ast_lastreloadtime, "Last reload", printsec);
+	return CLI_SUCCESS;
 }
 
-/* core show modules [like keyword] */
-static int handle_modlist(int fd, int argc, char *argv[])
+static char *handle_modlist(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	char *like = "";
-	if (argc != 2 && argc != 4)
-		return RESULT_SHOWUSAGE;
-	else if (argc == 4) {
-		if (strcmp(argv[2],"like")) 
-			return RESULT_SHOWUSAGE;
-		like = argv[3];
+	char *like;
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "module show";
+		e->usage =
+			"Usage: module show [like keyword]\n"
+			"       Shows Asterisk modules currently in use, and usage statistics.\n";
+		return NULL;
+
+	case CLI_GENERATE:
+		if (a->pos == e->args)
+			return a->n == 0 ? strdup("like") : NULL;
+		else if (a->pos == e->args+1 && strcasestr(a->line," like "))
+			return ast_module_helper(a->line, a->word, a->pos, a->n, a->pos, 0);
+		else
+			return NULL;
 	}
+	/* all the above return, so we proceed with the handler.
+	 * we are guaranteed to have argc >= e->args
+	 */
+	if (a->argc == e->args)
+		like = "";
+	else if (a->argc == e->args + 2 && !strcmp(a->argv[e->args],"like"))
+		like = a->argv[e->args + 1];
+	else
+		return CLI_SHOWUSAGE;
 		
 	ast_mutex_lock(&climodentrylock);
-	climodentryfd = fd; /* global, protected by climodentrylock */
-	ast_cli(fd, MODLIST_FORMAT2, "Module", "Description", "Use Count");
-	ast_cli(fd,"%d modules loaded\n", ast_update_module_list(modlist_modentry, like));
+	climodentryfd = a->fd; /* global, protected by climodentrylock */
+	ast_cli(a->fd, MODLIST_FORMAT2, "Module", "Description", "Use Count");
+	ast_cli(a->fd,"%d modules loaded\n", ast_update_module_list(modlist_modentry, like));
 	climodentryfd = -1;
 	ast_mutex_unlock(&climodentrylock);
 	return RESULT_SUCCESS;
@@ -506,8 +530,7 @@ static int handle_modlist(int fd, int argc, char *argv[])
 #undef MODLIST_FORMAT
 #undef MODLIST_FORMAT2
 
-/* core show channels [concise|verbose] */
-static int handle_chanlist(int fd, int argc, char *argv[])
+static char *handle_chanlist(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 #define FORMAT_STRING  "%-20.20s %-20.20s %-7.7s %-30.30s\n"
 #define FORMAT_STRING2 "%-20.20s %-20.20s %-7.7s %-30.30s\n"
@@ -516,18 +539,39 @@ static int handle_chanlist(int fd, int argc, char *argv[])
 #define VERBOSE_FORMAT_STRING2 "%-20.20s %-20.20s %-16.16s %-4.4s %-7.7s %-12.12s %-25.25s %-15.15s %8.8s %-11.11s %-20.20s\n"
 
 	struct ast_channel *c = NULL;
-	char durbuf[10] = "-";
-	char locbuf[40];
-	char appdata[40];
-	int duration;
-	int durh, durm, durs;
 	int numchans = 0, concise = 0, verbose = 0;
+	int fd, argc;
+	char **argv;
 
-	concise = (argc == 4 && (!strcasecmp(argv[3],"concise")));
-	verbose = (argc == 4 && (!strcasecmp(argv[3],"verbose")));
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "core show channels";
+		e->usage =
+			"Usage: core show channels [concise|verbose]\n"
+			"       Lists currently defined channels and some information about them. If\n"
+			"       'concise' is specified, the format is abridged and in a more easily\n"
+			"       machine parsable format. If 'verbose' is specified, the output includes\n"
+			"       more and longer fields.\n";
+		return NULL;
 
-	if (argc < 3 || argc > 4 || (argc == 4 && !concise && !verbose))
-		return RESULT_SHOWUSAGE;
+	case CLI_GENERATE: {
+		static char *choices[] = { "concise", "verbose", NULL };
+		return (a->pos != e->args) ? NULL : ast_cli_complete(a->word, choices, a->n);
+		}
+	}
+	fd = a->fd;
+	argc = a->argc;
+	argv = a->argv;
+
+	if (a->argc == e->args + 1) {
+		if (!strcasecmp(argv[3],"concise"))
+			concise = 1;
+		else if (!strcasecmp(argv[3],"verbose"))
+			verbose = 1;
+		else
+			return CLI_SHOWUSAGE;
+	} else if (a->argc != e->args)
+		return CLI_SHOWUSAGE;
 
 	if (!concise && !verbose)
 		ast_cli(fd, FORMAT_STRING2, "Channel", "Location", "State", "Application(Data)");
@@ -537,18 +581,18 @@ static int handle_chanlist(int fd, int argc, char *argv[])
 
 	while ((c = ast_channel_walk_locked(c)) != NULL) {
 		struct ast_channel *bc = ast_bridged_channel(c);
+		char durbuf[10] = "-";
+
 		if ((concise || verbose)  && c->cdr && !ast_tvzero(c->cdr->start)) {
-			duration = (int)(ast_tvdiff_ms(ast_tvnow(), c->cdr->start) / 1000);
+			int duration = (int)(ast_tvdiff_ms(ast_tvnow(), c->cdr->start) / 1000);
 			if (verbose) {
-				durh = duration / 3600;
-				durm = (duration % 3600) / 60;
-				durs = duration % 60;
+				int durh = duration / 3600;
+				int durm = (duration % 3600) / 60;
+				int durs = duration % 60;
 				snprintf(durbuf, sizeof(durbuf), "%02d:%02d:%02d", durh, durm, durs);
 			} else {
 				snprintf(durbuf, sizeof(durbuf), "%d", duration);
 			}				
-		} else {
-			durbuf[0] = '\0';
 		}
 		if (concise) {
 			ast_cli(fd, CONCISE_FORMAT_STRING, c->name, c->context, c->exten, c->priority, ast_state2str(c->_state),
@@ -568,14 +612,13 @@ static int handle_chanlist(int fd, int argc, char *argv[])
 			        S_OR(c->accountcode, ""),
 				bc ? bc->name : "(None)");
 		} else {
+			char locbuf[40] = "(None)";
+			char appdata[40] = "(None)";
+
 			if (!ast_strlen_zero(c->context) && !ast_strlen_zero(c->exten)) 
 				snprintf(locbuf, sizeof(locbuf), "%s@%s:%d", c->exten, c->context, c->priority);
-			else
-				strcpy(locbuf, "(None)");
 			if (c->appl)
-				snprintf(appdata, sizeof(appdata), "%s(%s)", c->appl, c->data ? c->data : "");
-			else
-				strcpy(appdata, "(None)");
+				snprintf(appdata, sizeof(appdata), "%s(%s)", c->appl, S_OR(c->data, ""));
 			ast_cli(fd, FORMAT_STRING, c->name, locbuf, ast_state2str(c->_state), appdata);
 		}
 		numchans++;
@@ -590,7 +633,7 @@ static int handle_chanlist(int fd, int argc, char *argv[])
 		else
 			ast_cli(fd, "%d active call%s\n", ast_active_calls(), ESS(ast_active_calls()));
 	}
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 	
 #undef FORMAT_STRING
 #undef FORMAT_STRING2
@@ -602,10 +645,6 @@ static int handle_chanlist(int fd, int argc, char *argv[])
 static char showchan_help[] = 
 "Usage: core show channel <channel>\n"
 "       Shows lots of information about the specified channel.\n";
-
-static char debugchan_help[] = 
-"Usage: core set debug channel <channel> [off]\n"
-"       Enables/disables debugging on a specific channel.\n";
 
 static char commandcomplete_help[] = 
 "Usage: _command complete \"<line>\" text state\n"
@@ -711,52 +750,35 @@ static int handle_commandcomplete(int fd, int argc, char *argv[])
 	return RESULT_SUCCESS;
 }
 
-static int handle_debugchan_deprecated(int fd, int argc, char *argv[])
-{
-	struct ast_channel *c=NULL;
-	int is_all;
-
-	/* 'debug channel {all|chan_id}' */
-	if (argc != 4)
-		return RESULT_SHOWUSAGE;
-
-	is_all = !strcasecmp("all", argv[3]);
-	if (is_all) {
-		global_fin |= DEBUGCHAN_FLAG;
-		global_fout |= DEBUGCHAN_FLAG;
-		c = ast_channel_walk_locked(NULL);
-	} else {
-		c = ast_get_channel_by_name_locked(argv[3]);
-		if (c == NULL)
-			ast_cli(fd, "No such channel %s\n", argv[3]);
-	}
-	while (c) {
-		if (!(c->fin & DEBUGCHAN_FLAG) || !(c->fout & DEBUGCHAN_FLAG)) {
-			c->fin |= DEBUGCHAN_FLAG;
-			c->fout |= DEBUGCHAN_FLAG;
-			ast_cli(fd, "Debugging enabled on channel %s\n", c->name);
-		}
-		ast_channel_unlock(c);
-		if (!is_all)
-			break;
-		c = ast_channel_walk_locked(c);
-	}
-	ast_cli(fd, "Debugging on new channels is enabled\n");
-	return RESULT_SUCCESS;
-}
-
-static int handle_core_set_debug_channel(int fd, int argc, char *argv[])
+static char *handle_core_set_debug_channel(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	struct ast_channel *c = NULL;
 	int is_all, is_off = 0;
 
-	/* 'core set debug channel {all|chan_id}' */
-	if (argc == 6 && strcmp(argv[5], "off") == 0)
-		is_off = 1;
-	else if (argc != 5)
-		return RESULT_SHOWUSAGE;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "core set debug channel";
+		e->usage =
+			"Usage: core set debug channel <all|channel> [off]\n"
+			"       Enables/disables debugging on all or on a specific channel.\n";
+		return NULL;
 
-	is_all = !strcasecmp("all", argv[4]);
+	case CLI_GENERATE:
+		/* XXX remember to handle the optional "off" */
+		if (a->pos != e->args)
+			return NULL;
+		return a->n == 0 ? strdup("all") : ast_complete_channels(a->line, a->word, a->pos, a->n - 1, e->args);
+	}
+	/* 'core set debug channel {all|chan_id}' */
+	if (a->argc == e->args + 2) {
+		if (!strcasecmp(a->argv[e->args + 1], "off"))
+			is_off = 1;
+		else
+			return CLI_SHOWUSAGE;
+	} else if (a->argc != e->args + 1)
+		return CLI_SHOWUSAGE;
+
+	is_all = !strcasecmp("all", a->argv[e->args]);
 	if (is_all) {
 		if (is_off) {
 			global_fin &= ~DEBUGCHAN_FLAG;
@@ -767,9 +789,9 @@ static int handle_core_set_debug_channel(int fd, int argc, char *argv[])
 		}
 		c = ast_channel_walk_locked(NULL);
 	} else {
-		c = ast_get_channel_by_name_locked(argv[4]);
+		c = ast_get_channel_by_name_locked(a->argv[e->args]);
 		if (c == NULL)
-			ast_cli(fd, "No such channel %s\n", argv[4]);
+			ast_cli(a->fd, "No such channel %s\n", a->argv[e->args]);
 	}
 	while (c) {
 		if (!(c->fin & DEBUGCHAN_FLAG) || !(c->fout & DEBUGCHAN_FLAG)) {
@@ -780,47 +802,45 @@ static int handle_core_set_debug_channel(int fd, int argc, char *argv[])
 				c->fin |= DEBUGCHAN_FLAG;
 				c->fout |= DEBUGCHAN_FLAG;
 			}
-			ast_cli(fd, "Debugging %s on channel %s\n", is_off ? "disabled" : "enabled", c->name);
+			ast_cli(a->fd, "Debugging %s on channel %s\n", is_off ? "disabled" : "enabled", c->name);
 		}
 		ast_channel_unlock(c);
 		if (!is_all)
 			break;
 		c = ast_channel_walk_locked(c);
 	}
-	ast_cli(fd, "Debugging on new channels is %s\n", is_off ? "disabled" : "enabled");
+	ast_cli(a->fd, "Debugging on new channels is %s\n", is_off ? "disabled" : "enabled");
 	return RESULT_SUCCESS;
 }
 
-static int handle_nodebugchan_deprecated(int fd, int argc, char *argv[])
+static char *handle_debugchan_deprecated(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	struct ast_channel *c=NULL;
-	int is_all;
-	/* 'no debug channel {all|chan_id}' */
-	if (argc != 4)
-		return RESULT_SHOWUSAGE;
-	is_all = !strcasecmp("all", argv[3]);
-	if (is_all) {
-		global_fin &= ~DEBUGCHAN_FLAG;
-		global_fout &= ~DEBUGCHAN_FLAG;
-		c = ast_channel_walk_locked(NULL);
-	} else {
-		c = ast_get_channel_by_name_locked(argv[3]);
-		if (c == NULL)
-			ast_cli(fd, "No such channel %s\n", argv[3]);
+	char *res;
+
+	if (cmd == CLI_HANDLER && a->argc != e->args + 1)
+		return CLI_SHOWUSAGE;
+	res = handle_core_set_debug_channel(e, cmd, a);
+	if (cmd == CLI_INIT)
+		e->command = "debug channel";
+	return res;
+}
+
+static char *handle_nodebugchan_deprecated(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	char *res;
+	if (cmd == CLI_HANDLER) {
+		if (a->argc != e->args + 1)
+			return CLI_SHOWUSAGE;
+		/* pretend we have an extra "off" at the end. We can do this as the array
+		 * is NULL terminated so we overwrite that entry.
+		 */
+		a->argv[e->args+1] = "off";
+		a->argc++;
 	}
-	while(c) {
-		if ((c->fin & DEBUGCHAN_FLAG) || (c->fout & DEBUGCHAN_FLAG)) {
-			c->fin &= ~DEBUGCHAN_FLAG;
-			c->fout &= ~DEBUGCHAN_FLAG;
-			ast_cli(fd, "Debugging disabled on channel %s\n", c->name);
-		}
-		ast_channel_unlock(c);
-		if (!is_all)
-			break;
-		c = ast_channel_walk_locked(c);
-	}
-	ast_cli(fd, "Debugging on new channels is disabled\n");
-	return RESULT_SUCCESS;
+	res = handle_core_set_debug_channel(e, cmd, a);
+	if (cmd == CLI_INIT)
+		e->command = "no debug channel";
+	return res;
 }
 		
 static int handle_showchan(int fd, int argc, char *argv[])
@@ -923,13 +943,6 @@ char *ast_cli_complete(const char *word, char *const choices[], int state)
 	return NULL;
 }
 
-static char *complete_show_channels(const char *line, const char *word, int pos, int state)
-{
-	static char *choices[] = { "concise", "verbose", NULL };
-
-	return (pos != 3) ? NULL : ast_cli_complete(word, choices, state);
-}
-
 char *ast_complete_channels(const char *line, const char *word, int pos, int state, int rpos)
 {
 	struct ast_channel *c = NULL;
@@ -966,46 +979,6 @@ static char *complete_ch_5(const char *line, const char *word, int pos, int stat
 	return ast_complete_channels(line, word, pos, state, 4);
 }
 
-static char *complete_mod_2(const char *line, const char *word, int pos, int state)
-{
-	return ast_module_helper(line, word, pos, state, 1, 1);
-}
-
-static char *complete_mod_3_nr(const char *line, const char *word, int pos, int state)
-{
-	return ast_module_helper(line, word, pos, state, 2, 0);
-}
-
-static char *complete_mod_3(const char *line, const char *word, int pos, int state)
-{
-	return ast_module_helper(line, word, pos, state, 2, 1);
-}
-
-static char *complete_mod_4(const char *line, const char *word, int pos, int state)
-{
-	return ast_module_helper(line, word, pos, state, 3, 0);
-}
-
-static char *complete_fn(const char *line, const char *word, int pos, int state)
-{
-	char *c;
-	char filename[256];
-
-	if (pos != 1)
-		return NULL;
-	
-	if (word[0] == '/')
-		ast_copy_string(filename, word, sizeof(filename));
-	else
-		snprintf(filename, sizeof(filename), "%s/%s", ast_config_AST_MODULE_DIR, word);
-	
-	c = filename_completion_function(filename, state);
-	
-	if (c && word[0] != '/')
-		c += (strlen(ast_config_AST_MODULE_DIR) + 1);
-	
-	return c ? strdup(c) : c;
-}
 
 static int group_show_channels(int fd, int argc, char *argv[])
 {
@@ -1091,55 +1064,27 @@ static struct ast_cli_entry builtins[] = {
 	{ { NULL }, NULL, NULL, NULL }
 };
 
-static struct ast_cli_entry cli_debug_channel_deprecated = {
-	{ "debug", "channel", NULL },
-	handle_debugchan_deprecated, NULL,
-	NULL, complete_ch_3 };
-
-static struct ast_cli_entry cli_module_load_deprecated = {
-	{ "load", NULL },
-	handle_load_deprecated, NULL,
-	NULL, complete_fn };
-
-static struct ast_cli_entry cli_module_reload_deprecated = {
-	{ "reload", NULL },
-	handle_reload_deprecated, NULL,
-	NULL, complete_mod_2 };
-
-static struct ast_cli_entry cli_module_unload_deprecated = {
-	{ "unload", NULL },
-	handle_unload_deprecated, NULL,
-	NULL, complete_mod_2 };
+static struct ast_cli_entry cli_debug_channel_deprecated = NEW_CLI(handle_debugchan_deprecated, "Enable debugging on channel");
+static struct ast_cli_entry cli_module_load_deprecated = NEW_CLI(handle_load_deprecated, "Load a module");
+static struct ast_cli_entry cli_module_reload_deprecated = NEW_CLI(handle_reload_deprecated, "reload modules by name");
+static struct ast_cli_entry cli_module_unload_deprecated = NEW_CLI(handle_unload_deprecated, "unload modules by name");
 
 static struct ast_cli_entry cli_cli[] = {
 	/* Deprecated, but preferred command is now consolidated (and already has a deprecated command for it). */
-	{ { "no", "debug", "channel", NULL },
-	handle_nodebugchan_deprecated, NULL,
-	NULL, complete_ch_4 },
+	NEW_CLI(handle_nodebugchan_deprecated, "Disable debugging on channel(s)"),
 
-	{ { "core", "show", "channels", NULL },
-	handle_chanlist, "Display information on channels",
-	chanlist_help, complete_show_channels },
+	NEW_CLI(handle_chanlist, "Display information on channels"),
 
 	{ { "core", "show", "channel", NULL },
 	handle_showchan, "Display information on a specific channel",
 	showchan_help, complete_ch_4 },
 
-	{ { "core", "set", "debug", "channel", NULL },
-	handle_core_set_debug_channel, "Enable/disable debugging on a channel",
-	debugchan_help, complete_ch_5, &cli_debug_channel_deprecated },
+	NEW_CLI(handle_core_set_debug_channel, "Enable/disable debugging on a channel",
+		.deprecate_cmd = &cli_debug_channel_deprecated),
 
-	{ { "core", "set", "debug", NULL },
-	handle_set_debug, "Set level of debug chattiness",
-	debug_help },
+	NEW_CLI(handle_set_debug, "Set level of debug chattiness"),
 
-	{ { "core", "set", "debug", "off", NULL },
-	handle_nodebug, "Turns off debug chattiness",
-	nodebug_help },
-
-	{ { "core", "set", "verbose", NULL },
-	handle_verbose, "Set level of verboseness",
-	verbose_help },
+	NEW_CLI(handle_verbose, "Set level of verboseness"),
 
 	{ { "group", "show", "channels", NULL },
 	group_show_channels, "Display active channels with group(s)",
@@ -1153,29 +1098,15 @@ static struct ast_cli_entry cli_cli[] = {
 	handle_logger_mute, "Toggle logging output to a console",
 	logger_mute_help },
 
-	{ { "module", "show", NULL },
-	handle_modlist, "List modules and info",
-	modlist_help },
+	NEW_CLI(handle_modlist, "List modules and info"),
 
-	{ { "module", "show", "like", NULL },
-	handle_modlist, "List modules and info",
-	modlist_help, complete_mod_4 },
+	NEW_CLI(handle_load, "Load a module by name", .deprecate_cmd = &cli_module_load_deprecated),
 
-	{ { "module", "load", NULL },
-	handle_load, "Load a module by name",
-	load_help, complete_fn, &cli_module_load_deprecated },
+	NEW_CLI(handle_reload, "Reload configuration", .deprecate_cmd = &cli_module_reload_deprecated),
 
-	{ { "module", "reload", NULL },
-	handle_reload, "Reload configuration",
-	reload_help, complete_mod_3, &cli_module_reload_deprecated },
+	NEW_CLI(handle_unload, "Unload a module by name", .deprecate_cmd = &cli_module_unload_deprecated ),
 
-	{ { "module", "unload", NULL },
-	handle_unload, "Unload a module by name",
-	unload_help, complete_mod_3_nr, &cli_module_unload_deprecated },
-
- 	{ { "core", "show", "uptime", NULL },
-	handle_showuptime, "Show uptime information",
-	uptime_help },
+	NEW_CLI(handle_showuptime, "Show uptime information"),
 
 	{ { "soft", "hangup", NULL },
 	handle_softhangup, "Request a hangup on a given channel",
@@ -1272,8 +1203,10 @@ static struct ast_cli_entry *find_cli(char *const cmds[], int match_type)
 				continue;
 			/* we are in case match_type == -1 and mismatch on last word */
 		}
-		if (cand == NULL || y > matchlen)	/* remember the candidate */
+		if (y > matchlen) {	/* remember the candidate */
+			matchlen = y;
 			cand = e;
+		}
 	}
 	return e ? e : cand;
 }
@@ -1309,6 +1242,14 @@ static int __ast_cli_unregister(struct ast_cli_entry *e, struct ast_cli_entry *e
 		AST_LIST_REMOVE(&helpers, e, list);
 		AST_LIST_UNLOCK(&helpers);
 		free(e->_full_cmd);
+		e->_full_cmd = NULL;
+		if (e->new_handler) {
+			/* this is a new-style entry. Reset fields and free memory. */
+			bzero((char **)(e->cmda), sizeof(e->cmda));
+			free(e->command);
+			e->command = NULL;
+			e->usage = NULL;
+		}
 	}
 	return 0;
 }
@@ -1317,8 +1258,31 @@ static int __ast_cli_register(struct ast_cli_entry *e, struct ast_cli_entry *ed)
 {
 	struct ast_cli_entry *cur;
 	char fulle[80] ="";
-	int lf, ret = -1;
-	
+	int i, lf, ret = -1;
+
+	if (e->handler == NULL) {	/* new style entry, run the handler to init fields */
+		struct ast_cli_args a;	/* fake argument */
+		char **dst = (char **)e->cmda;	/* need to cast as the entry is readonly */
+		char *s;
+
+		bzero (&a, sizeof(a));
+		e->new_handler(e, CLI_INIT, &a);
+		/* XXX check that usage and command are filled up */
+		s = ast_skip_blanks(e->command);
+		s = e->command = ast_strdup(s);
+		for (i=0; !ast_strlen_zero(s) && i < AST_MAX_CMD_LEN-1; i++) {
+			*dst++ = s;	/* store string */
+			s = ast_skip_nonblanks(s);
+			if (*s == '\0')	/* we are done */
+				break;
+			*s++ = '\0';
+			s = ast_skip_blanks(s);
+		}
+		*dst++ = NULL;
+	}
+	for (i = 0; e->cmda[i]; i++)
+		;
+	e->args = i;
 	ast_join(fulle, sizeof(fulle), e->cmda);
 	AST_LIST_LOCK(&helpers);
 	
@@ -1432,7 +1396,7 @@ static int help1(int fd, char *match[], int locked)
 			continue;
 		if (match && strncasecmp(matchstr, e->_full_cmd, len))
 			continue;
-		ast_cli(fd, "%25.25s  %s\n", e->_full_cmd, e->summary);
+		ast_cli(fd, "%25.25s  %s\n", e->_full_cmd, S_OR(e->summary, "<no description available>"));
 		found++;
 	}
 	AST_LIST_UNLOCK(&helpers);
@@ -1622,7 +1586,7 @@ static char *__ast_cli_generator(const char *text, const char *word, int state, 
 	}
 	if (lock)
 		AST_LIST_LOCK(&helpers);
-	while ((e = cli_next(&i))) {
+	while ( (e = cli_next(&i)) ) {
 		int lc = strlen(e->_full_cmd);
 		if (e->_full_cmd[0] != '_' && lc > 0 && matchlen <= lc &&
 				!strncasecmp(matchstr, e->_full_cmd, matchlen)) {
@@ -1632,11 +1596,21 @@ static char *__ast_cli_generator(const char *text, const char *word, int state, 
 				break;
 			}
 		} else if (!strncasecmp(matchstr, e->_full_cmd, lc) && matchstr[lc] < 33) {
-			/* We have a command in its entirity within us -- theoretically only one
-			   command can have this occur */
+			/* This entry is a prefix of the command string entered
+			 * (only one entry in the list should have this property).
+			 * Run the generator if one is available. In any case we are done.
+			 */
 			if (e->generator)
-				ret = e->generator(matchstr, word, argindex, state);
-			break;
+				ret = e->generator(matchstr, word, argindex, state - matchnum);
+			else if (e->new_handler) {	/* new style command */
+				struct ast_cli_args a = {
+					.line = matchstr, .word = word,
+					.pos = argindex,
+					.n = state - matchnum };
+				ret = e->new_handler(e, CLI_GENERATE, &a);
+			}
+			if (ret)
+				break;
 		}
 	}
 	if (lock)
@@ -1652,24 +1626,36 @@ char *ast_cli_generator(const char *text, const char *word, int state)
 
 int ast_cli_command(int fd, const char *s)
 {
-	char *argv[AST_MAX_ARGS];
+	char *args[AST_MAX_ARGS + 1];
 	struct ast_cli_entry *e;
 	int x;
 	char *dup;
 	int tws;
 	
-	if (!(dup = parse_args(s, &x, argv, sizeof(argv) / sizeof(argv[0]), &tws)))
+	if (!(dup = parse_args(s, &x, args + 1, AST_MAX_ARGS, &tws)))
 		return -1;
 
 	/* We need at least one entry, or ignore */
 	if (x > 0) {
 		AST_LIST_LOCK(&helpers);
-		e = find_cli(argv, 0);
+		e = find_cli(args + 1, 0);
 		if (e)
 			e->inuse++;
 		AST_LIST_UNLOCK(&helpers);
 		if (e) {
-			switch(e->handler(fd, x, argv)) {
+			int res;
+			/* within calling the handler, argv[-1] contains a pointer
+			 * to the cli entry, and the array is null-terminated
+			 */
+			args[0] = (char *)e;
+			if (e->new_handler) {	/* new style */
+				struct ast_cli_args a = {
+					.fd = fd, .argc = x, .argv = args+1 };
+				res = (int)e->new_handler(e, CLI_HANDLER, &a);
+			} else {		/* old style */
+				res = e->handler(fd, x, args + 1);
+			}
+			switch (res) {
 			case RESULT_SHOWUSAGE:
 				if (e->usage)
 					ast_cli(fd, "%s", e->usage);
@@ -1686,7 +1672,7 @@ int ast_cli_command(int fd, const char *s)
 				break;
 			}
 		} else 
-			ast_cli(fd, "No such command '%s' (type 'help' for help)\n", find_best(argv));
+			ast_cli(fd, "No such command '%s' (type 'help' for help)\n", find_best(args + 1));
 		if (e)
 			ast_atomic_fetchadd_int(&e->inuse, -1);
 	}

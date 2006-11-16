@@ -1634,7 +1634,8 @@ static void initialize_initreq(struct sip_pvt *p, struct sip_request *req)
 	if (option_debug) {
 		if (p->initreq.headers)
 			ast_log(LOG_DEBUG, "Initializing already initialized SIP dialog %s (presumably reinvite)\n", p->callid);
-		ast_log(LOG_DEBUG, "Initializing initreq for method %s - callid %s\n", sip_methods[req->method].text, p->callid);
+		else
+			ast_log(LOG_DEBUG, "Initializing initreq for method %s - callid %s\n", sip_methods[req->method].text, p->callid);
 	}
 	/* Use this as the basis */
 	copy_request(&p->initreq, req);
@@ -2678,7 +2679,7 @@ static int create_addr_from_peer(struct sip_pvt *dialog, struct sip_peer *peer)
 	ast_copy_flags(&dialog->flags[0], &peer->flags[0], SIP_FLAGS_TO_COPY);
 	ast_copy_flags(&dialog->flags[1], &peer->flags[1], SIP_PAGE2_FLAGS_TO_COPY);
 	dialog->capability = peer->capability;
-	if (!ast_test_flag(&dialog->flags[1], SIP_PAGE2_VIDEOSUPPORT) && dialog->vrtp) {
+	if ((!ast_test_flag(&dialog->flags[1], SIP_PAGE2_VIDEOSUPPORT) || !(dialog->capability & AST_FORMAT_VIDEO_MASK)) && dialog->vrtp) {
 		ast_rtp_destroy(dialog->vrtp);
 		dialog->vrtp = NULL;
 	}
@@ -4435,9 +4436,22 @@ static struct sip_pvt *find_call(struct sip_request *req, struct sockaddr_in *si
 			transmit_response_using_temp(callid, sin, 1, intended_method, req, "489 Bad event");
 		} else {
 			/* Ok, time to create a new SIP dialog object, a pvt */
-			if ((p = sip_alloc(callid, sin, 1, intended_method))) 
+			if ((p = sip_alloc(callid, sin, 1, intended_method)))  {
 				/* Ok, we've created a dialog, let's go and process it */
 				sip_pvt_lock(p);
+			} else {
+				/* We have a memory or file/socket error (can't allocate RTP sockets or something) so we're not
+					getting a dialog from sip_alloc. 
+	
+					Without a dialog we can't retransmit and handle ACKs and all that, but at least
+					send an error message.
+	
+					Sorry, we apologize for the inconvienience
+				*/
+				transmit_response_using_temp(callid, sin, 1, intended_method, req, "500 Server internal error");
+				if (option_debug > 3)
+					ast_log(LOG_DEBUG, "Failed allocating SIP dialog, sending 500 Server internal error and giving up\n");
+			}
 		}
 		return p;
 	} else if( sip_methods[intended_method].can_create == CAN_CREATE_DIALOG_UNSUPPORTED_METHOD) {
@@ -5853,6 +5867,7 @@ static int transmit_response_with_auth(struct sip_pvt *p, const char *msg, const
 	respprep(&resp, p, msg, req);
 	add_header(&resp, header, tmp);
 	add_header_contentLength(&resp, 0);
+	append_history(p, "AuthChal", "Auth challenge sent for %s - nc %d", p->username, p->noncecount);
 	return send_response(p, &resp, reliable, seqno);
 }
 
@@ -8081,20 +8096,22 @@ static enum check_auth_result check_auth(struct sip_pvt *p, struct sip_request *
 			if (sipdebug)
 				ast_log(LOG_NOTICE, "Correct auth, but based on stale nonce received from '%s'\n", get_header(req, "To"));
 			/* We got working auth token, based on stale nonce . */
-			transmit_response_with_auth(p, response, req, p->randdata, reliable, respheader, 1);
+			transmit_response_with_auth(p, response, req, p->randdata, reliable, respheader, TRUE);
 		} else {
 			/* Everything was wrong, so give the device one more try with a new challenge */
 			if (sipdebug)
 				ast_log(LOG_NOTICE, "Bad authentication received from '%s'\n", get_header(req, "To"));
-			transmit_response_with_auth(p, response, req, p->randdata, reliable, respheader, 0);
+			transmit_response_with_auth(p, response, req, p->randdata, reliable, respheader, FALSE);
 		}
 
 		/* Schedule auto destroy in 32 seconds */
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 		return AUTH_CHALLENGE_SENT;
 	} 
-	if (good_response)
+	if (good_response) {
+		append_history(p, "AuthOK", "Auth challenge succesful for %s", username);
 		return AUTH_SUCCESSFUL;
+	}
 
 	/* Ok, we have a bad username/secret pair */
 	/* Challenge again, and again, and again */
@@ -9068,7 +9085,7 @@ static enum check_auth_result check_user_ok(struct sip_pvt *p, char *of,
 			p->t38.jointcapability &= p->t38.peercapability;
 		p->maxcallbitrate = user->maxcallbitrate;
 		/* If we do not support video, remove video from call structure */
-		if (!ast_test_flag(&p->flags[1], SIP_PAGE2_VIDEOSUPPORT) && p->vrtp) {
+		if ((!ast_test_flag(&p->flags[1], SIP_PAGE2_VIDEOSUPPORT) || !(p->capability & AST_FORMAT_VIDEO_MASK)) && p->vrtp) {
 			ast_rtp_destroy(p->vrtp);
 			p->vrtp = NULL;
 		}
@@ -9182,7 +9199,7 @@ static enum check_auth_result check_peer_ok(struct sip_pvt *p, char *of,
 		if (p->peercapability)
 			p->jointcapability &= p->peercapability;
 		p->maxcallbitrate = peer->maxcallbitrate;
-		if (!ast_test_flag(&p->flags[1], SIP_PAGE2_VIDEOSUPPORT) && p->vrtp) {
+		if ((!ast_test_flag(&p->flags[1], SIP_PAGE2_VIDEOSUPPORT) || !(p->capability & AST_FORMAT_VIDEO_MASK)) && p->vrtp) {
 			ast_rtp_destroy(p->vrtp);
 			p->vrtp = NULL;
 		}
@@ -11234,6 +11251,8 @@ static int build_reply_digest(struct sip_pvt *p, int method, char* digest, int d
 	else
 		snprintf(digest, digest_len, "Digest username=\"%s\", realm=\"%s\", algorithm=MD5, uri=\"%s\", nonce=\"%s\", response=\"%s\", opaque=\"%s\"", username, p->realm, uri, p->nonce, resp_hash, p->opaque);
 
+	append_history(p, "AuthResp", "Auth response sent for %s in realm %s - nc %d", username, p->realm, p->noncecount);
+
 	return 0;
 }
 	
@@ -13261,16 +13280,21 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 	   a re-invite in an existing dialog */
 
 	if (!ast_test_flag(req, SIP_PKT_IGNORE)) {
+		int newcall = (p->initreq.headers ? TRUE : FALSE);
+
 		sip_cancel_destroy(p);
 		/* This also counts as a pending invite */
 		p->pendinginvite = seqno;
 		check_via(p, req);
 
 		copy_request(&p->initreq, req);		/* Save this INVITE as the transaction basis */
+		if (sipdebug && option_debug)
+			ast_log(LOG_DEBUG, "Initializing initreq for method %s - callid %s\n", sip_methods[req->method].text, p->callid);
 		if (!p->owner) {	/* Not a re-invite */
 			if (debug)
 				ast_verbose("Using INVITE request as basis request - %s\n", p->callid);
-			append_history(p, "Invite", "New call: %s", p->callid);
+			if (newcall)
+				append_history(p, "Invite", "New call: %s", p->callid);
 			parse_ok_contact(p, req);
 		} else {	/* Re-invite on existing call */
 			ast_clear_flag(&p->flags[0], SIP_OUTGOING);	/* This is now an inbound dialog */
@@ -14075,6 +14099,8 @@ static int handle_request_bye(struct sip_pvt *p, struct sip_request *req)
 		transmit_response_reliable(p, "487 Request Terminated", &p->initreq);
 
 	copy_request(&p->initreq, req);
+	if (sipdebug && option_debug)
+		ast_log(LOG_DEBUG, "Initializing initreq for method %s - callid %s\n", sip_methods[req->method].text, p->callid);
 	check_via(p, req);
 	ast_set_flag(&p->flags[0], SIP_ALREADYGONE);	
 
@@ -14194,6 +14220,8 @@ static int handle_request_subscribe(struct sip_pvt *p, struct sip_request *req, 
 			ast_verbose("Creating new subscription\n");
 
 		copy_request(&p->initreq, req);
+		if (option_debug > 3 && sipdebug)
+			ast_log(LOG_DEBUG, "Initializing initreq for method %s - callid %s\n", sip_methods[req->method].text, p->callid);
 		check_via(p, req);
 	} else if (ast_test_flag(req, SIP_PKT_DEBUG) && ast_test_flag(req, SIP_PKT_IGNORE))
 		ast_verbose("Ignoring this SUBSCRIBE request\n");
@@ -14422,9 +14450,9 @@ static int handle_request_register(struct sip_pvt *p, struct sip_request *req, s
 	enum check_auth_result res;
 
 	/* Use this as the basis */
-	if (ast_test_flag(req, SIP_PKT_DEBUG))
-		ast_verbose("Using latest REGISTER request as basis request\n");
 	copy_request(&p->initreq, req);
+	if (option_debug > 3 && sipdebug)
+		ast_log(LOG_DEBUG, "Initializing initreq for method %s - callid %s\n", sip_methods[req->method].text, p->callid);
 	check_via(p, req);
 	if ((res = register_verify(p, sin, req, e)) < 0) {
 		const char *reason = "";
@@ -14591,6 +14619,9 @@ static int handle_request(struct sip_pvt *p, struct sip_request *req, struct soc
 			} else if (req->method != SIP_ACK) {
 				transmit_response(p, "481 Call/Transaction Does Not Exist", req);
 				sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
+			} else {
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Got ACK for unknown dialog... strange.\n");
 			}
 			return res;
 		}
@@ -14741,7 +14772,8 @@ static int sipsock_read(int *id, int fd, short events, void *ignore)
 	if (!lockretry) {
 		ast_log(LOG_ERROR, "We could NOT get the channel lock for %s! \n", S_OR(p->owner->name, "- no channel name ??? - "));
 		ast_log(LOG_ERROR, "SIP transaction failed: %s \n", p->callid);
-		transmit_response(p, "503 Server error", &req);	/* We must respond according to RFC 3261 sec 12.2 */
+		if (req.method != SIP_ACK)
+			transmit_response(p, "503 Server error", &req);	/* We must respond according to RFC 3261 sec 12.2 */
 		/* XXX We could add retry-after to make sure they come back */
 		append_history(p, "LockFail", "Owner lock failed, transaction failed.");
 		return 1;
@@ -15108,6 +15140,9 @@ static int sip_poke_peer(struct sip_peer *peer)
 		- registered, no call			AST_DEVICE_NOT_INUSE
 		- registered, active calls		AST_DEVICE_INUSE
 		- registered, call limit reached	AST_DEVICE_BUSY
+		- registered, onhold			AST_DEVICE_ONHOLD
+		- registered, ringing			AST_DEVICE_RINGING
+
 	For peers without call limit:
 		- not registered			AST_DEVICE_UNAVAILABLE
 		- registered				AST_DEVICE_NOT_INUSE
