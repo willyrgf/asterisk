@@ -93,6 +93,8 @@ GNURK const struct cfsubscription_types *find_subscription_type(enum subscriptio
 GNURK int transmit_state_notify(struct sip_dialog *p, int state, int full, int timeout);
 
 /*! sip3_network.c */
+GNURK void reset_ip_interface(struct sip_network *sipsock);
+GNURK int sipsock_init(struct sip_network *sipsock, struct sockaddr_in *old_bindappr);
 GNURK int sipsock_read(int *id, int fd, short events, void *ignore);
 GNURK int sipnet_ourport(void);		/*!< Get current port number */
 GNURK void sipnet_ourport_set(int port);	/*!< Set our port number */

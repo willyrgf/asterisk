@@ -113,6 +113,47 @@ void sipnet_unlock(void)
 	ast_mutex_unlock(&netlock);
 }
 
+/*! \brief clear IP interfaces */
+void reset_ip_interface(struct sip_network *sipnet)
+{
+	/* Reset IP addresses  */
+	memset(&sipnet->bindaddr, 0, sizeof(sipnet->bindaddr));
+	memset(&sipnet->localaddr, 0, sizeof(sipnet->localaddr));
+	memset(&sipnet->externip, 0, sizeof(sipnet->externip));
+
+	sipnet->outboundproxyip.sin_port = htons(STANDARD_SIP_PORT);
+	sipnet->outboundproxyip.sin_family = AF_INET;	/* Type of address: IPv4 */
+	memset(&sipnet->outboundproxyip, 0, sizeof(sipnet->outboundproxyip));
+
+	sipnet_ourport_set(DEFAULT_LISTEN_SIP_PORT);
+	sipnet->externhost[0] = '\0';			/* External host name (for behind NAT DynDNS support) */
+	sipnet->externexpire = 0;			/* Expiration for DNS re-issuing */
+	sipnet->externrefresh = 10;
+
+}
+
+/*! \brief Initialize IP socket on configured address - the bind address.
+	\todo Needs to be converted to netsock */
+int sipsock_init(struct sip_network *sipnet, struct sockaddr_in *old_bindaddr)
+{
+	if (ast_find_ourip(&sipnet->__ourip, sipnet->bindaddr)) {
+		ast_log(LOG_WARNING, "Unable to get own IP address, SIP disabled\n");
+		return -1;
+	}
+	if (!ntohs(sipnet->bindaddr.sin_port))
+		sipnet->bindaddr.sin_port = ntohs(DEFAULT_LISTEN_SIP_PORT);
+	sipnet->bindaddr.sin_family = AF_INET;
+	sipnet_lock();
+	if (sipsocket_initialized() && (memcmp(old_bindaddr, &sipnet->bindaddr, sizeof(struct sockaddr_in)))) {
+		close(sipnet->sipsock);
+		sipnet->sipsock = -1;
+	}
+	if (!sipsocket_initialized()) 
+		sipsocket_open();	/* Open socket, bind to address and set TOS option */
+	sipnet_unlock();
+	return 0;
+}
+
 /*! \brief Read data from SIP socket
 \note sipsock_read locks the owner channel while we are processing the SIP message
 \return 1 on error, 0 on success

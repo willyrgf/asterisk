@@ -7089,17 +7089,21 @@ static int load_module(void)
 		ast_log(LOG_ERROR, "Unable to create scheduler context\n");
 		return AST_MODULE_LOAD_FAILURE;
 	}
+	logdebug(4, "SIP3 :: Scheduler initialized...\n");
 
 	if (!(io = io_context_create())) {
 		ast_log(LOG_ERROR, "Unable to create I/O context\n");
 		sched_context_destroy(sched);
 		return AST_MODULE_LOAD_FAILURE;
 	}
+	logdebug(4, "SIP3 :: IO context initialized...\n");
 
 	sip_reloadreason = CHANNEL_MODULE_LOAD;
 
 	if(reload_config(sip_reloadreason))	/* Load the configuration from sip.conf */
 		return AST_MODULE_LOAD_DECLINE;
+
+	logdebug(4, "SIP3 :: Configuration loaded\n");
 
 	/* Make sure we can register our sip channel type */
 	if (ast_channel_register(&sip_tech)) {
@@ -7110,9 +7114,11 @@ static int load_module(void)
 		/* Isn't there more to destroy here? */
 		return AST_MODULE_LOAD_FAILURE;
 	}
+	logdebug(4, "SIP3 :: Registered channel to PBX.\n");
 
 	/* Tell the RTP and UDPTL subdriver that we're here */
 	register_rtp_and_udptl();	/* See sip3_sdprtp.c */
+	logdebug(4, "SIP3 :: Initialized RTP and UDPTL. Ready for action\n");
 
 	/* Register dialplan applications */
 	ast_register_application(app_dtmfmode, sip_dtmfmode, synopsis_dtmfmode, descrip_dtmfmode);
@@ -7126,11 +7132,15 @@ static int load_module(void)
 
 	/* Register manager commands */
 	sip_cli_and_manager_commands_register();
+	logdebug(4, "SIP3 :: Registered CLI and manager commands\n");
 	sip_poke_all_peers();	
+	logdebug(4, "SIP3 :: Scheduled poke of all peers\n");
 	sip_send_all_registers();
+	logdebug(4, "SIP3 :: Scheduled registration of services\n");
 	
 	/* And start the monitor for the first time */
 	restart_monitor();
+	logdebug(4, "SIP3 :: Monitor started. Ready for rock'n'roll! ---------------------------\n");
 
 	return AST_MODULE_LOAD_SUCCESS;
 }
