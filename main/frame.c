@@ -102,7 +102,7 @@ struct ast_smoother {
 
 /*! \brief Definition of supported media formats (codecs) */
 static struct ast_format_list AST_FORMAT_LIST[] = {					/*!< Bit number: comment  - Bit numbers are hard coded in show_codec() */
-	{ 1, AST_FORMAT_G723_1 , "g723" , "G.723.1", 24, 30, 300, 30, 30 },	/*!<  1 */
+	{ 1, AST_FORMAT_G723_1 , "g723" , "G.723.1", 20, 30, 300, 30, 30 },	/*!<  1 */
 	{ 1, AST_FORMAT_GSM, "gsm" , "GSM", 33, 20, 300, 20, 20 },		/*!<  2: codec_gsm.c */
 	{ 1, AST_FORMAT_ULAW, "ulaw", "G.711 u-law", 80, 10, 150, 10, 20 },	/*!<  3: codec_ulaw.c */
 	{ 1, AST_FORMAT_ALAW, "alaw", "G.711 A-law", 80, 10, 150, 10, 20 },	/*!<  4: codec_alaw.c */
@@ -188,6 +188,8 @@ int __ast_smoother_feed(struct ast_smoother *s, struct ast_frame *f, int swap)
 			/* Optimize by sending the frame we just got
 			   on the next read, thus eliminating the douple
 			   copy */
+			if (swap)
+				ast_swapcopy_samples(f->data, f->data, f->samples);
 			s->opt = f;
 			return 0;
 		} else {
@@ -198,6 +200,8 @@ int __ast_smoother_feed(struct ast_smoother *s, struct ast_frame *f, int swap)
 				   we were unable to optimize because there was still
 				   some cruft left over.  Lets just drop the cruft so
 				   we can move to a fully optimized path */
+				if (swap)
+					ast_swapcopy_samples(f->data, f->data, f->samples);
 				s->len = 0;
 				s->opt = f;
 				return 0;
@@ -612,7 +616,7 @@ static int show_codecs(int fd, int argc, char *argv[])
 	ast_cli(fd, "--------------------------------------------------------------------------------\n");
 	if ((argc == 3) || (!strcasecmp(argv[3],"audio"))) {
 		found = 1;
-		for (i=0;i<12;i++) {
+		for (i=0;i<13;i++) {
 			snprintf(hex,25,"(0x%x)",1<<i);
 			ast_cli(fd, "%11u (1 << %2d) %10s  audio   %8s   (%s)\n",1 << i,i,hex,ast_getformatname(1<<i),ast_codec2str(1<<i));
 		}
@@ -1377,6 +1381,9 @@ int ast_codec_get_len(int format, int samples)
 
 	/* XXX Still need speex, g723, and lpc10 XXX */	
 	switch(format) {
+	case AST_FORMAT_G723_1:
+		len = (samples / 240) * 20;
+		break;
 	case AST_FORMAT_ILBC:
 		len = (samples / 240) * 50;
 		break;

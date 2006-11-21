@@ -105,25 +105,45 @@ int ast_app_dtget(struct ast_channel *chan, const char *context, char *collect, 
  *  \param maxlen How many digits to read (maximum)
  *  \param timeout set timeout to 0 for "standard" timeouts. Set timeout to -1 for 
  *      "ludicrous time" (essentially never times out) */
-int ast_app_getdata(struct ast_channel *c, char *prompt, char *s, int maxlen, int timeout)
+int ast_app_getdata(struct ast_channel *c, const char *prompt, char *s, int maxlen, int timeout)
 {
-	int res,to,fto;
+	int res = 0, to, fto;
+	char *front, *filename;
+
 	/* XXX Merge with full version? XXX */
+	
 	if (maxlen)
 		s[0] = '\0';
-	if (prompt) {
-		res = ast_streamfile(c, prompt, c->language);
-		if (res < 0)
+
+	if (ast_strlen_zero(prompt))
+		return -1;
+
+	filename = ast_strdupa(prompt);
+	while ((front = strsep(&filename, "&"))) {
+		res = ast_streamfile(c, front, c->language);
+		if (res)
+			continue;
+		if (ast_strlen_zero(filename)) {
+			/* set timeouts for the last prompt */
+			fto = c->pbx ? c->pbx->rtimeout * 1000 : 6000;
+			to = c->pbx ? c->pbx->dtimeout * 1000 : 2000;
+
+			if (timeout > 0) 
+				fto = to = timeout;
+			if (timeout < 0) 
+				fto = to = 1000000000;
+		} else {
+			/* there is more than one prompt, so
+			   get rid of the long timeout between 
+			   prompts, and make it 50ms */
+			fto = 50;
+			to = c->pbx ? c->pbx->dtimeout * 1000 : 2000;
+		}
+		res = ast_readstring(c, s, maxlen, to, fto, "#");
+		if (!ast_strlen_zero(s))
 			return res;
 	}
-	fto = c->pbx ? c->pbx->rtimeout * 1000 : 6000;
-	to = c->pbx ? c->pbx->dtimeout * 1000 : 2000;
-
-	if (timeout > 0) 
-		fto = to = timeout;
-	if (timeout < 0) 
-		fto = to = 1000000000;
-	res = ast_readstring(c, s, maxlen, to, fto, "#");
+	
 	return res;
 }
 
@@ -344,7 +364,7 @@ int ast_linear_stream(struct ast_channel *chan, const char *filename, int fd, in
 		if (filename[0] == '/') 
 			ast_copy_string(tmpf, filename, sizeof(tmpf));
 		else
-			snprintf(tmpf, sizeof(tmpf), "%s/%s/%s", (char *)ast_config_AST_DATA_DIR, "sounds", filename);
+			snprintf(tmpf, sizeof(tmpf), "%s/%s/%s", ast_config_AST_DATA_DIR, "sounds", filename);
 		fd = open(tmpf, O_RDONLY);
 		if (fd < 0){
 			ast_log(LOG_WARNING, "Unable to open file '%s': %s\n", tmpf, strerror(errno));
@@ -521,7 +541,7 @@ static int __ast_play_and_record(struct ast_channel *chan, const char *playfile,
 		if (!beep)
 			d = ast_play_and_wait(chan, playfile);
 		if (d > -1)
-			d = ast_stream_and_wait(chan, "beep", chan->language, "");
+			d = ast_stream_and_wait(chan, "beep", "");
 		if (d < 0)
 			return -1;
 	}
@@ -737,7 +757,7 @@ static int __ast_play_and_record(struct ast_channel *chan, const char *playfile,
 		ast_log(LOG_WARNING, "Unable to restore format %s to channel '%s'\n", ast_getformatname(rfmt), chan->name);
 	}
 	if (outmsg == 2) {
-		ast_stream_and_wait(chan, "auth-thankyou", chan->language, "");
+		ast_stream_and_wait(chan, "auth-thankyou", "");
 	}
 	if (sildet)
 		ast_dsp_free(sildet);
@@ -995,14 +1015,14 @@ int ast_record_review(struct ast_channel *chan, const char *playfile, const char
 				cmd = '3';
 				break;
 			} else {
-				ast_stream_and_wait(chan, "vm-msgsaved", chan->language, "");
+				ast_stream_and_wait(chan, "vm-msgsaved", "");
 				cmd = 't';
 				return res;
 			}
 		case '2':
 			/* Review */
 			ast_verbose(VERBOSE_PREFIX_3 "Reviewing the recording\n");
-			cmd = ast_stream_and_wait(chan, recordfile, chan->language, AST_DIGIT_ANY);
+			cmd = ast_stream_and_wait(chan, recordfile, AST_DIGIT_ANY);
 			break;
 		case '3':
 			message_exists = 0;
@@ -1089,14 +1109,14 @@ static int ivr_dispatch(struct ast_channel *chan, struct ast_ivr_option *option,
 	case AST_ACTION_NOOP:
 		return 0;
 	case AST_ACTION_BACKGROUND:
-		res = ast_stream_and_wait(chan, (char *)option->adata, chan->language, AST_DIGIT_ANY);
+		res = ast_stream_and_wait(chan, (char *)option->adata, AST_DIGIT_ANY);
 		if (res < 0) {
 			ast_log(LOG_NOTICE, "Unable to find file '%s'!\n", (char *)option->adata);
 			res = 0;
 		}
 		return res;
 	case AST_ACTION_PLAYBACK:
-		res = ast_stream_and_wait(chan, (char *)option->adata, chan->language, "");
+		res = ast_stream_and_wait(chan, (char *)option->adata, "");
 		if (res < 0) {
 			ast_log(LOG_NOTICE, "Unable to find file '%s'!\n", (char *)option->adata);
 			res = 0;
@@ -1125,7 +1145,7 @@ static int ivr_dispatch(struct ast_channel *chan, struct ast_ivr_option *option,
 		res = 0;
 		c = ast_strdupa(option->adata);
 		while ((n = strsep(&c, ";"))) {
-			if ((res = ast_stream_and_wait(chan, n, chan->language,
+			if ((res = ast_stream_and_wait(chan, n,
 					(option->action == AST_ACTION_BACKLIST) ? AST_DIGIT_ANY : "")))
 				break;
 		}

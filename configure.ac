@@ -129,7 +129,9 @@ AC_PROG_CC
 AC_PROG_CXX
 AC_PROG_CPP
 AC_PROG_CXXCPP
-AC_PROG_LD
+# This macro is just copied into our local acinclude.m4 from libtool.m4 so that
+# the developers regenerating the configure script don't have to install libtool.
+AST_PROG_LD
 AC_PROG_AWK
 AC_PROG_INSTALL
 AC_PROG_LN_S
@@ -848,6 +850,38 @@ AST_EXT_LIB_CHECK([ZLIB], [z], [compress], [zlib.h])
 AST_C_DEFINE_CHECK([ZAPTEL], [ZT_TONE_DTMF_BASE], [zaptel/zaptel.h], [140])
 # or, try old zaptel (0.80 or so)
 AST_EXT_LIB_CHECK([ZAPTEL], [zaptel],, [zaptel.h],, [80])
+
+if test "${USE_ZAPTEL}" != "no"; then
+   if test "${PBX_ZAPTEL}" != "1"; then
+      AC_MSG_CHECKING(for ZT_DIAL_OP_CANCEL in zaptel.h)
+      saved_cppflags="${CPPFLAGS}"
+      if test "x${ZAPTEL_DIR}" != "x"; then
+	 CPPFLAGS="${CPPFLAGS} -I${ZAPTEL_DIR}/include"
+      fi
+      AC_COMPILE_IFELSE(
+	[
+	AC_LANG_PROGRAM(
+	[#include <zaptel.h>],
+	[int foo = ZT_DIAL_OP_CANCEL;])
+	],
+	[	AC_MSG_RESULT(yes) 
+		ac_cv_zaptel_h="yes" 
+	],
+	[	AC_MSG_RESULT(no) 
+		ac_cv_zaptel_h="no" 
+	]
+	)
+      CPPFLAGS="${saved_cppflags}"
+      if test "${ac_cv_zaptel_h}" = "yes"; then
+         AC_MSG_NOTICE(***)
+	 AC_MSG_NOTICE(*** The Zaptel installation on this system is too old)
+	 AC_MSG_NOTICE(*** to be useable with this version of Asterisk.)
+	 AC_MSG_NOTICE(*** Either upgrade your Zaptel installation, or run configure)
+	 AC_MSG_NOTICE(*** including --without-zaptel.)
+	 exit 1
+      fi
+   fi
+fi
 
 EDITLINE_LIB=""
 if test "x$TERMCAP_LIB" != "x" ; then

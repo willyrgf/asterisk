@@ -330,31 +330,28 @@ static struct dundi_transaction *find_transaction(struct dundi_hdr *hdr, struct 
 			  ((trans->dtrans == (ntohs(hdr->strans) & 32767)) && (!hdr->dtrans))) /* We match their destination */) {
 			  if (hdr->strans)
 				  trans->dtrans = ntohs(hdr->strans) & 32767;
-			  break;
+			  return trans;
 		}
 	}
-	if (!trans) {
-		switch(hdr->cmdresp & 0x7f) {
-		case DUNDI_COMMAND_DPDISCOVER:
-		case DUNDI_COMMAND_EIDQUERY:
-		case DUNDI_COMMAND_PRECACHERQ:
-		case DUNDI_COMMAND_REGREQ:
-		case DUNDI_COMMAND_NULL:
-		case DUNDI_COMMAND_ENCRYPT:
-			if (hdr->strans) {	
-				/* Create new transaction */
-				trans = create_transaction(NULL);
-				if (trans) {
-					memcpy(&trans->addr, sin, sizeof(trans->addr));
-					trans->dtrans = ntohs(hdr->strans) & 32767;
-				} else
-					ast_log(LOG_WARNING, "Out of memory!\n");
-			}
+	
+	switch(hdr->cmdresp & 0x7f) {
+	case DUNDI_COMMAND_DPDISCOVER:
+	case DUNDI_COMMAND_EIDQUERY:
+	case DUNDI_COMMAND_PRECACHERQ:
+	case DUNDI_COMMAND_REGREQ:
+	case DUNDI_COMMAND_NULL:
+	case DUNDI_COMMAND_ENCRYPT:
+		if (!hdr->strans)
 			break;
-		default:
+		/* Create new transaction */
+		if (!(trans = create_transaction(NULL)))
 			break;
-		}
+		memcpy(&trans->addr, sin, sizeof(trans->addr));
+		trans->dtrans = ntohs(hdr->strans) & 32767;
+	default:
+		break;
 	}
+	
 	return trans;
 }
 
@@ -392,26 +389,26 @@ static void dundi_reject(struct dundi_hdr *h, struct sockaddr_in *sin)
 static void reset_global_eid(void)
 {
 #if defined(SIOCGIFHWADDR)
-	int x,s;
+	int s, x = 0;
 	char eid_str[20];
 	struct ifreq ifr;
 
 	s = socket(AF_INET, SOCK_STREAM, 0);
-	if (s > 0) {
-		x = 0;
-		for(x=0;x<10;x++) {
-			memset(&ifr, 0, sizeof(ifr));
-			snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), "eth%d", x);
-			if (!ioctl(s, SIOCGIFHWADDR, &ifr)) {
-				memcpy(&global_eid, ((unsigned char *)&ifr.ifr_hwaddr) + 2, sizeof(global_eid));
-				if (option_debug)
-					ast_log(LOG_DEBUG, "Seeding global EID '%s' from '%s'\n", dundi_eid_to_str(eid_str, sizeof(eid_str), &global_eid), ifr.ifr_name);
-				close(s);
-				return;
-			}
-        }
-		close(s);
+	if (s < 0)
+		return;
+	for (x = 0; x < 10; x++) {
+		memset(&ifr, 0, sizeof(ifr));
+		snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), "eth%d", x);
+		if (ioctl(s, SIOCGIFHWADDR, &ifr))
+			continue;
+		memcpy(&global_eid, ((unsigned char *)&ifr.ifr_hwaddr) + 2, sizeof(global_eid));
+		if (option_debug) {
+			ast_log(LOG_DEBUG, "Seeding global EID '%s' from '%s'\n", 
+				dundi_eid_to_str(eid_str, sizeof(eid_str), &global_eid), ifr.ifr_name);
+		}
+		break;
 	}
+	close(s);
 #else
 #if defined(ifa_broadaddr) && !defined(SOLARIS)
 	char eid_str[20];
@@ -1985,8 +1982,8 @@ static int socket_read(int *id, int fd, short events, void *cbdata)
 	int res;
 	struct dundi_hdr *h;
 	char buf[MAX_PACKET_SIZE];
-	socklen_t len;
-	len = sizeof(sin);
+	socklen_t len = sizeof(sin);
+	
 	res = recvfrom(netsocket, buf, sizeof(buf) - 1, 0,(struct sockaddr *) &sin, &len);
 	if (res < 0) {
 		if (errno != ECONNREFUSED)
@@ -1998,7 +1995,7 @@ static int socket_read(int *id, int fd, short events, void *cbdata)
 		return 1;
 	}
 	buf[res] = '\0';
-	h = (struct dundi_hdr *)buf;
+	h = (struct dundi_hdr *) buf;
 	if (dundidebug)
 		dundi_showframe(h, 1, &sin, res - sizeof(struct dundi_hdr));
 	AST_LIST_LOCK(&peers);
@@ -2777,22 +2774,23 @@ static struct dundi_transaction *create_transaction(struct dundi_peer *p)
 	tid = get_trans_id();
 	if (tid < 1)
 		return NULL;
-	trans = ast_calloc(1, sizeof(*trans));
-	if (trans) {
-		if (global_storehistory) {
-			trans->start = ast_tvnow();
-			ast_set_flag(trans, FLAG_STOREHIST);
-		}
-		trans->retranstimer = DUNDI_DEFAULT_RETRANS_TIMER;
-		trans->autokillid = -1;
-		if (p) {
-			apply_peer(trans, p);
-			if (!p->sentfullkey)
-				ast_set_flag(trans, FLAG_SENDFULLKEY);
-		}
-		trans->strans = tid;
-		AST_LIST_INSERT_HEAD(&alltrans, trans, all);
+	if (!(trans = ast_calloc(1, sizeof(*trans))))
+		return NULL;
+
+	if (global_storehistory) {
+		trans->start = ast_tvnow();
+		ast_set_flag(trans, FLAG_STOREHIST);
 	}
+	trans->retranstimer = DUNDI_DEFAULT_RETRANS_TIMER;
+	trans->autokillid = -1;
+	if (p) {
+		apply_peer(trans, p);
+		if (!p->sentfullkey)
+			ast_set_flag(trans, FLAG_SENDFULLKEY);
+	}
+	trans->strans = tid;
+	AST_LIST_INSERT_HEAD(&alltrans, trans, all);
+	
 	return trans;
 }
 
@@ -3610,19 +3608,16 @@ static void dundi_precache_full(void)
 	AST_LIST_TRAVERSE(&mappings, cur, list) {
 		ast_log(LOG_NOTICE, "Should precache context '%s'\n", cur->dcontext);
 		ast_lock_contexts();
-		con = ast_walk_contexts(NULL);
-		while (con) {
-			if (!strcasecmp(cur->lcontext, ast_get_context_name(con))) {
-				/* Found the match, now queue them all up */
-				ast_lock_context(con);
-				e = ast_walk_context_extensions(con, NULL);
-				while (e) {
-					reschedule_precache(ast_get_extension_name(e), cur->dcontext, 0);
-					e = ast_walk_context_extensions(con, e);
-				}
-				ast_unlock_context(con);
-			}
-			con = ast_walk_contexts(con);
+		con = NULL;
+		while ((con = ast_walk_contexts(con))) {
+			if (strcasecmp(cur->lcontext, ast_get_context_name(con)))
+				continue;
+			/* Found the match, now queue them all up */
+			ast_lock_context(con);
+			e = NULL;
+			while ((e = ast_walk_context_extensions(con, e)))
+				reschedule_precache(ast_get_extension_name(e), cur->dcontext, 0);
+			ast_unlock_context(con);
 		}
 		ast_unlock_contexts();
 	}
@@ -4509,13 +4504,15 @@ static int unload_module(void)
 static int reload(void)
 {
 	struct sockaddr_in sin;
-	set_config("dundi.conf",&sin);
+
+	if (set_config("dundi.conf", &sin))
+		return -1;
+
 	return 0;
 }
 
 static int load_module(void)
 {
-	int res = 0;
 	struct sockaddr_in sin;
 
 	dundi_set_output(dundi_debug_output);
@@ -4529,23 +4526,22 @@ static int load_module(void)
 	io = io_context_create();
 	sched = sched_context_create();
 	
-	if (!io || !sched) {
-		ast_log(LOG_ERROR, "Out of memory\n");
-		return -1;
-	}
+	if (!io || !sched)
+		return AST_MODULE_LOAD_FAILURE;
 
-	if(set_config("dundi.conf",&sin))
+	if (set_config("dundi.conf", &sin))
 		return AST_MODULE_LOAD_DECLINE;
 
 	netsocket = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
 	
 	if (netsocket < 0) {
 		ast_log(LOG_ERROR, "Unable to create network socket: %s\n", strerror(errno));
-		return -1;
+		return AST_MODULE_LOAD_FAILURE;
 	}
-	if (bind(netsocket,(struct sockaddr *)&sin, sizeof(sin))) {
-		ast_log(LOG_ERROR, "Unable to bind to %s port %d: %s\n", ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port), strerror(errno));
-		return -1;
+	if (bind(netsocket, (struct sockaddr *) &sin, sizeof(sin))) {
+		ast_log(LOG_ERROR, "Unable to bind to %s port %d: %s\n", 
+			ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port), strerror(errno));
+		return AST_MODULE_LOAD_FAILURE;
 	}
 
 	if (option_verbose > 1)
@@ -4554,22 +4550,23 @@ static int load_module(void)
 	if (setsockopt(netsocket, IPPROTO_IP, IP_TOS, &tos, sizeof(tos))) 
 		ast_log(LOG_WARNING, "Unable to set TOS to %d\n", tos);
 	
-	res = start_network_thread();
-	if (res) {
+	if (start_network_thread()) {
 		ast_log(LOG_ERROR, "Unable to start network thread\n");
 		close(netsocket);
-		return -1;
+		return AST_MODULE_LOAD_FAILURE;
 	}
-
-	if (option_verbose > 1)
-		ast_verbose(VERBOSE_PREFIX_2 "DUNDi Ready and Listening on %s port %d\n", ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port));
-
-	ast_cli_register_multiple(cli_dundi, sizeof(cli_dundi) / sizeof(struct ast_cli_entry));
+	
+	ast_cli_register_multiple(cli_dundi, sizeof(cli_dundi) / sizeof(*cli_dundi));
 	if (ast_register_switch(&dundi_switch))
 		ast_log(LOG_ERROR, "Unable to register DUNDi switch\n");
-	ast_custom_function_register(&dundi_function); 
+	ast_custom_function_register(&dundi_function);
 	
-	return res;
+	if (option_verbose > 1) {
+		ast_verbose(VERBOSE_PREFIX_2 "DUNDi Ready and Listening on %s port %d\n", 
+			ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port));
+	}
+
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "Distributed Universal Number Discovery (DUNDi)",

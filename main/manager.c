@@ -183,6 +183,26 @@ static AST_LIST_HEAD_STATIC(users, ast_manager_user);
 static struct manager_action *first_action = NULL;
 AST_MUTEX_DEFINE_STATIC(actionlock);
 
+static AST_RWLIST_HEAD_STATIC(manager_hooks, manager_custom_hook);
+
+/*! \brief Add a custom hook to be called when an event is fired */
+void ast_manager_register_hook(struct manager_custom_hook *hook)
+{
+	AST_RWLIST_WRLOCK(&manager_hooks);
+	AST_RWLIST_INSERT_TAIL(&manager_hooks, hook, list);
+	AST_RWLIST_UNLOCK(&manager_hooks);
+	return;
+}
+
+/*! \brief Delete a custom hook to be called when an event is fired */
+void ast_manager_unregister_hook(struct manager_custom_hook *hook)
+{
+	AST_RWLIST_WRLOCK(&manager_hooks);
+	AST_RWLIST_REMOVE(&manager_hooks, hook, list);
+	AST_RWLIST_UNLOCK(&manager_hooks);
+	return;
+}
+
 /*! \brief
  * Event list management functions.
  * We assume that the event list always has at least one element,
@@ -1882,6 +1902,9 @@ static int action_timeout(struct mansession *s, struct message *m)
 	return 0;
 }
 
+/*!
+ * Send any applicable events to the client listening on this socket
+ */
 static int process_events(struct mansession *s)
 {
 	int ret = 0;
@@ -1974,6 +1997,7 @@ static int process_message(struct mansession *s, struct message *m)
 		astman_send_error(s, m, "Invalid/unknown command");
 	if (ret)
 		return ret;
+	/* Once done with our message, deliver any pending events */
 	return process_events(s);
 }
 
@@ -2026,6 +2050,9 @@ static int get_input(struct mansession *s, char *output)
 		ast_mutex_unlock(&s->__lock);
 	}
 	if (res < 0) {
+		/* If we get a signal from some other thread (typically because
+		 * there are new events queued), return 0 to notify the caller.
+		 */
 		if (errno == EINTR)
 			return 0;
 		ast_log(LOG_WARNING, "poll() returned error: %s\n", strerror(errno));
@@ -2045,6 +2072,12 @@ static int get_input(struct mansession *s, char *output)
 }
 
 /*! \brief The body of the individual manager session.
+ * Call get_input() to read one line at a time
+ * (or be woken up on new events), collect the lines in a
+ * message until found an empty line, and execute the request.
+ * In any case, deliver events asynchronously through process_events()
+ * (called from here if no line is available, or at the end of
+ * process_message(). )
  */
 static void *session_do(void *data)
 {
@@ -2213,7 +2246,9 @@ int __manager_event(int category, const char *event,
 	const char *file, int line, const char *func, const char *fmt, ...)
 {
 	struct mansession *s;
+	struct manager_custom_hook *hook;
 	char auth[80];
+	char tmp[4096] = "";
 	va_list ap;
 	struct timeval now;
 	struct ast_dynamic_str *buf;
@@ -2261,6 +2296,22 @@ int __manager_event(int category, const char *event,
 		ast_mutex_unlock(&s->__lock);
 	}
 	AST_LIST_UNLOCK(&sessions);
+
+	AST_RWLIST_RDLOCK(&manager_hooks);
+	if (!AST_RWLIST_EMPTY(&manager_hooks)) {
+		char *p;
+		int len;
+		snprintf(tmp, sizeof(tmp), "event: %s\r\nprivilege: %s\r\n", event, authority_to_str(category, tmp, sizeof(tmp)));
+                len = strlen(tmp);
+                p = tmp + len;
+                va_start(ap, fmt);
+                vsnprintf(p, sizeof(tmp) - len, fmt, ap);
+                va_end(ap);
+		AST_RWLIST_TRAVERSE(&manager_hooks, hook, list) {
+			hook->helper(category, event, tmp);
+		}
+	}
+	AST_RWLIST_UNLOCK(&manager_hooks);
 
 	return 0;
 }

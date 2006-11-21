@@ -530,7 +530,7 @@ static int soundcard_writeframe(struct chan_oss_pvt *o, short *data)
 		return 0;
 	}
 	o->w_errors = 0;
-	return write(o->sounddev, ((void *) data), FRAME_SIZE * 2);
+	return write(o->sounddev, (void *)data, FRAME_SIZE * 2);
 }
 
 /*
@@ -559,10 +559,8 @@ static void send_sound(struct chan_oss_pvt *o)
 		l = s->samplen - l_sampsent;	/* # of available samples */
 		if (l > 0) {
 			start = l_sampsent % s->datalen;	/* source offset */
-			if (l > FRAME_SIZE - ofs)	/* don't overflow the frame */
-				l = FRAME_SIZE - ofs;
-			if (l > s->datalen - start)	/* don't overflow the source */
-				l = s->datalen - start;
+			l = MIN(l, FRAME_SIZE - ofs);	/* don't overflow the frame */
+			l = MIN(l, s->datalen - start);	/* don't overflow the source */
 			bcopy(s->data + start, myframe + ofs, l * 2);
 			if (0)
 				ast_log(LOG_WARNING, "send_sound sound %d/%d of %d into %d\n", l_sampsent, l, s->samplen, ofs);
@@ -572,8 +570,7 @@ static void send_sound(struct chan_oss_pvt *o)
 
 			l += s->silencelen;
 			if (l > 0) {
-				if (l > FRAME_SIZE - ofs)
-					l = FRAME_SIZE - ofs;
+				l = MIN(l, FRAME_SIZE - ofs);
 				bcopy(silence, myframe + ofs, l * 2);
 				l_sampsent += l;
 			} else {			/* silence is over, restart sound if loop */
@@ -605,6 +602,7 @@ static void *sound_thread(void *arg)
 	for (;;) {
 		fd_set rfds, wfds;
 		int maxfd, res;
+		struct timeval *to = NULL, t;
 
 		FD_ZERO(&rfds);
 		FD_ZERO(&wfds);
@@ -620,13 +618,19 @@ static void *sound_thread(void *arg)
 				maxfd = MAX(o->sounddev, maxfd);
 			}
 			if (o->cursound > -1) {
-				FD_SET(o->sounddev, &wfds);
-				maxfd = MAX(o->sounddev, maxfd);
+				/*
+				 * We would like to use select here, but the device
+				 * is always writable, so this would become busy wait.
+				 * So we rather set a timeout to 1/2 of the frame size.
+				 */
+				t.tv_sec = 0;
+				t.tv_usec = (1000000 * FRAME_SIZE) / (5 * DEFAULT_SAMPLE_RATE);
+				to = &t;
 			}
 		}
 		/* ast_select emulates linux behaviour in terms of timeout handling */
-		res = ast_select(maxfd + 1, &rfds, &wfds, NULL, NULL);
-		if (res < 1) {
+		res = ast_select(maxfd + 1, &rfds, &wfds, NULL, to);
+		if (res < 0) {
 			ast_log(LOG_WARNING, "select failed: %s\n", strerror(errno));
 			sleep(1);
 			continue;
@@ -650,7 +654,7 @@ static void *sound_thread(void *arg)
 		if (o->sounddev > -1) {
 			if (FD_ISSET(o->sounddev, &rfds))	/* read and ignore errors */
 				read(o->sounddev, ign, sizeof(ign));
-			if (FD_ISSET(o->sounddev, &wfds))
+			if (to != NULL)			/* maybe it is possible to write */
 				send_sound(o);
 		}
 	}
@@ -696,22 +700,24 @@ static int setformat(struct chan_oss_pvt *o, int mode)
 		return -1;
 	}
 	switch (mode) {
-		case O_RDWR:
-			res = ioctl(fd, SNDCTL_DSP_SETDUPLEX, 0);
-			/* Check to see if duplex set (FreeBSD Bug) */
-			res = ioctl(fd, SNDCTL_DSP_GETCAPS, &fmt);
-			if (res == 0 && (fmt & DSP_CAP_DUPLEX)) {
-				if (option_verbose > 1)
-					ast_verbose(VERBOSE_PREFIX_2 "Console is full duplex\n");
-				o->duplex = M_FULL;
-			};
-			break;
-		case O_WRONLY:
-			o->duplex = M_WRITE;
-			break;
-		case O_RDONLY:
-			o->duplex = M_READ;
-			break;
+	case O_RDWR:
+		res = ioctl(fd, SNDCTL_DSP_SETDUPLEX, 0);
+		/* Check to see if duplex set (FreeBSD Bug) */
+		res = ioctl(fd, SNDCTL_DSP_GETCAPS, &fmt);
+		if (res == 0 && (fmt & DSP_CAP_DUPLEX)) {
+			if (option_verbose > 1)
+				ast_verbose(VERBOSE_PREFIX_2 "Console is full duplex\n");
+			o->duplex = M_FULL;
+		};
+		break;
+
+	case O_WRONLY:
+		o->duplex = M_WRITE;
+		break;
+
+	case O_RDONLY:
+		o->duplex = M_READ;
+		break;
 	}
 
 	fmt = 0;
@@ -949,32 +955,34 @@ static int oss_indicate(struct ast_channel *c, int cond, const void *data, size_
 	int res = -1;
 
 	switch (cond) {
-		case AST_CONTROL_BUSY:
-		case AST_CONTROL_CONGESTION:
-		case AST_CONTROL_RINGING:
-			res = cond;
-			break;
+	case AST_CONTROL_BUSY:
+	case AST_CONTROL_CONGESTION:
+	case AST_CONTROL_RINGING:
+		res = cond;
+		break;
 
-		case -1:
-			o->cursound = -1;
-			o->nosound = 0;		/* when cursound is -1 nosound must be 0 */
-			return 0;
+	case -1:
+		o->cursound = -1;
+		o->nosound = 0;		/* when cursound is -1 nosound must be 0 */
+		return 0;
 
-		case AST_CONTROL_VIDUPDATE:
-			res = -1;
-			break;
-		case AST_CONTROL_HOLD:
-			ast_verbose(" << Console Has Been Placed on Hold >> \n");
-			ast_moh_start(c, data, o->mohinterpret);
-			break;
-		case AST_CONTROL_UNHOLD:
-			ast_verbose(" << Console Has Been Retrieved from Hold >> \n");
-			ast_moh_stop(c);
-			break;
+	case AST_CONTROL_VIDUPDATE:
+		res = -1;
+		break;
 
-		default:
-			ast_log(LOG_WARNING, "Don't know how to display condition %d on %s\n", cond, c->name);
-			return -1;
+	case AST_CONTROL_HOLD:
+		ast_verbose(" << Console Has Been Placed on Hold >> \n");
+		ast_moh_start(c, data, o->mohinterpret);
+		break;
+
+	case AST_CONTROL_UNHOLD:
+		ast_verbose(" << Console Has Been Retrieved from Hold >> \n");
+		ast_moh_stop(c);
+		break;
+
+	default:
+		ast_log(LOG_WARNING, "Don't know how to display condition %d on %s\n", cond, c->name);
+		return -1;
 	}
 
 	if (res > -1)
@@ -990,11 +998,10 @@ static struct ast_channel *oss_new(struct chan_oss_pvt *o, char *ext, char *ctx,
 {
 	struct ast_channel *c;
 
-	c = ast_channel_alloc(1);
+	c = ast_channel_alloc(1, state, o->cid_num, o->cid_name, "OSS/%s", o->device + 5);
 	if (c == NULL)
 		return NULL;
 	c->tech = &oss_tech;
-	ast_string_field_build(c, name, "OSS/%s", o->device + 5);
 	if (o->sounddev < 0)
 		setformat(o, O_RDWR);
 	c->fds[0] = o->sounddev;	/* -1 if device closed, override later */
@@ -1009,12 +1016,15 @@ static struct ast_channel *oss_new(struct chan_oss_pvt *o, char *ext, char *ctx,
 		ast_copy_string(c->exten, ext, sizeof(c->exten));
 	if (!ast_strlen_zero(o->language))
 		ast_string_field_set(c, language, o->language);
-	ast_set_callerid(c, o->cid_num, o->cid_name, o->cid_num);
+	/* Don't use ast_set_callerid() here because it will
+	 * generate a needless NewCallerID event */
+	c->cid.cid_num = ast_strdup(o->cid_num);
+	c->cid.cid_ani = ast_strdup(o->cid_num);
+	c->cid.cid_name = ast_strdup(o->cid_name);
 	if (!ast_strlen_zero(ext))
 		c->cid.cid_dnid = ast_strdup(ext);
 
 	o->owner = c;
-	ast_setstate(c, state);
 	ast_jb_configure(c, &global_jbconf);
 	if (state != AST_STATE_DOWN) {
 		if (ast_pbx_start(c)) {
@@ -1056,88 +1066,101 @@ static struct ast_channel *oss_request(const char *type, int format, void *data,
 	return c;
 }
 
-static int console_autoanswer(int fd, int argc, char *argv[])
+static char *console_autoanswer(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	struct chan_oss_pvt *o = find_desc(oss_active);
 
-	if (argc == 2) {
-		ast_cli(fd, "Auto answer is %s.\n", o->autoanswer ? "on" : "off");
-		return RESULT_SUCCESS;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "console autoanswer [on|off]";
+		e->usage =
+			"Usage: console autoanswer [on|off]\n"
+			"       Enables or disables autoanswer feature.  If used without\n"
+			"       argument, displays the current on/off status of autoanswer.\n"
+			"       The default value of autoanswer is in 'oss.conf'.\n";
+		return NULL;
+
+	case CLI_GENERATE:
+		return NULL;
 	}
-	if (argc != 3)
-		return RESULT_SHOWUSAGE;
+
+	if (a->argc == e->args - 1) {
+		ast_cli(a->fd, "Auto answer is %s.\n", o->autoanswer ? "on" : "off");
+		return CLI_SUCCESS;
+	}
+	if (a->argc != e->args)
+		return CLI_SHOWUSAGE;
 	if (o == NULL) {
 		ast_log(LOG_WARNING, "Cannot find device %s (should not happen!)\n",
 		    oss_active);
-		return RESULT_FAILURE;
+		return CLI_FAILURE;
 	}
-	if (!strcasecmp(argv[2], "on"))
-		o->autoanswer = -1;
-	else if (!strcasecmp(argv[2], "off"))
+	if (!strcasecmp(a->argv[e->args-1], "on"))
+		o->autoanswer = 1;
+	else if (!strcasecmp(a->argv[e->args - 1], "off"))
 		o->autoanswer = 0;
 	else
-		return RESULT_SHOWUSAGE;
-	return RESULT_SUCCESS;
+		return CLI_SHOWUSAGE;
+	return CLI_SUCCESS;
 }
-
-static char *autoanswer_complete(const char *line, const char *word, int pos, int state)
-{
-	static char *choices[] = { "on", "off", NULL };
-
-	return (pos != 3) ? NULL : ast_cli_complete(word, choices, state);
-}
-
-static char autoanswer_usage[] =
-	"Usage: console autoanswer [on|off]\n"
-	"       Enables or disables autoanswer feature.  If used without\n"
-	"       argument, displays the current on/off status of autoanswer.\n"
-	"       The default value of autoanswer is in 'oss.conf'.\n";
 
 /*
  * answer command from the console
  */
-static int console_answer(int fd, int argc, char *argv[])
+static char *console_answer(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	struct ast_frame f = { AST_FRAME_CONTROL, AST_CONTROL_ANSWER };
 	struct chan_oss_pvt *o = find_desc(oss_active);
 
-	if (argc != 2)
-		return RESULT_SHOWUSAGE;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "console answer";
+		e->usage =
+			"Usage: console answer\n"
+			"       Answers an incoming call on the console (OSS) channel.\n";
+		return NULL;
+
+	case CLI_GENERATE:
+		return NULL;	/* no completion */
+	}
+	if (a->argc != e->args)
+		return CLI_SHOWUSAGE;
 	if (!o->owner) {
-		ast_cli(fd, "No one is calling us\n");
-		return RESULT_FAILURE;
+		ast_cli(a->fd, "No one is calling us\n");
+		return CLI_FAILURE;
 	}
 	o->hookstate = 1;
 	o->cursound = -1;
 	o->nosound = 0;
 	ast_queue_frame(o->owner, &f);
-#if 0
-	/* XXX do we really need it ? considering we shut down immediately... */
-	ring(o, AST_CONTROL_ANSWER);
-#endif
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
-
-static char answer_usage[] =
-	"Usage: console answer\n"
-	"       Answers an incoming call on the console (OSS) channel.\n";
 
 /*
  * concatenate all arguments into a single string. argv is NULL-terminated
  * so we can use it right away
  */
-static int console_sendtext(int fd, int argc, char *argv[])
+static char *console_sendtext(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	struct chan_oss_pvt *o = find_desc(oss_active);
 	char buf[TEXT_SIZE];
 
-	if (argc < 3)
-		return RESULT_SHOWUSAGE;
+	if (cmd == CLI_INIT) {
+		e->command = "console send text";
+		e->usage =
+			"Usage: console send text <message>\n"
+			"       Sends a text message for display on the remote terminal.\n";
+		return NULL;
+	} else if (cmd == CLI_GENERATE)
+		return NULL;
+
+	if (a->argc < e->args + 1)
+		return CLI_SHOWUSAGE;
 	if (!o->owner) {
-		ast_cli(fd, "Not in a call\n");
-		return RESULT_FAILURE;
+		ast_cli(a->fd, "Not in a call\n");
+		return CLI_FAILURE;
 	}
-	ast_join(buf, sizeof(buf) - 1, argv + 3);
+	ast_join(buf, sizeof(buf) - 1, a->argv + e->args);
 	if (!ast_strlen_zero(buf)) {
 		struct ast_frame f = { 0, };
 		int i = strlen(buf);
@@ -1148,85 +1171,100 @@ static int console_sendtext(int fd, int argc, char *argv[])
 		f.datalen = i + 1;
 		ast_queue_frame(o->owner, &f);
 	}
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 
-static char sendtext_usage[] =
-	"Usage: console send text <message>\n"
-	"       Sends a text message for display on the remote terminal.\n";
-
-static int console_hangup(int fd, int argc, char *argv[])
+static char *console_hangup(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	struct chan_oss_pvt *o = find_desc(oss_active);
 
-	if (argc != 2)
-		return RESULT_SHOWUSAGE;
+	if (cmd == CLI_INIT) {
+		e->command = "console hangup";
+		e->usage =
+			"Usage: console hangup\n"
+			"       Hangs up any call currently placed on the console.\n";
+		return NULL;
+	} else if (cmd == CLI_GENERATE)
+		return NULL;
+
+	if (a->argc != e->args)
+		return CLI_SHOWUSAGE;
 	o->cursound = -1;
 	o->nosound = 0;
 	if (!o->owner && !o->hookstate) { /* XXX maybe only one ? */
-		ast_cli(fd, "No call to hang up\n");
-		return RESULT_FAILURE;
+		ast_cli(a->fd, "No call to hang up\n");
+		return CLI_FAILURE;
 	}
 	o->hookstate = 0;
 	if (o->owner)
 		ast_queue_hangup(o->owner);
 	setformat(o, O_CLOSE);
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 
-static char hangup_usage[] =
-	"Usage: console hangup\n"
-	"       Hangs up any call currently placed on the console.\n";
-
-static int console_flash(int fd, int argc, char *argv[])
+static char *console_flash(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	struct ast_frame f = { AST_FRAME_CONTROL, AST_CONTROL_FLASH };
 	struct chan_oss_pvt *o = find_desc(oss_active);
 
-	if (argc != 2)
-		return RESULT_SHOWUSAGE;
+	if (cmd == CLI_INIT) {
+		e->command = "console flash";
+		e->usage =
+			"Usage: console flash\n"
+			"       Flashes the call currently placed on the console.\n";
+		return NULL;
+	} else if (cmd == CLI_GENERATE)
+		return NULL;
+
+	if (a->argc != e->args)
+		return CLI_SHOWUSAGE;
 	o->cursound = -1;
 	o->nosound = 0;				/* when cursound is -1 nosound must be 0 */
 	if (!o->owner) {			/* XXX maybe !o->hookstate too ? */
-		ast_cli(fd, "No call to flash\n");
-		return RESULT_FAILURE;
+		ast_cli(a->fd, "No call to flash\n");
+		return CLI_FAILURE;
 	}
 	o->hookstate = 0;
 	if (o->owner)				/* XXX must be true, right ? */
 		ast_queue_frame(o->owner, &f);
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 
-static char flash_usage[] =
-	"Usage: console flash\n"
-	"       Flashes the call currently placed on the console.\n";
-
-static int console_dial(int fd, int argc, char *argv[])
+static char *console_dial(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	char *s = NULL, *mye = NULL, *myc = NULL;
 	struct chan_oss_pvt *o = find_desc(oss_active);
 
-	if (argc != 2 && argc != 3)
-		return RESULT_SHOWUSAGE;
+	if (cmd == CLI_INIT) {
+		e->command = "console dial";
+		e->usage =
+			"Usage: console dial [extension[@context]]\n"
+			"       Dials a given extension (and context if specified)\n";
+		return NULL;
+	} else if (cmd == CLI_GENERATE)
+		return NULL;
+
+	if (a->argc > e->args + 1)
+		return CLI_SHOWUSAGE;
 	if (o->owner) {	/* already in a call */
 		int i;
 		struct ast_frame f = { AST_FRAME_DTMF, 0 };
 
-		if (argc == 1) {	/* argument is mandatory here */
-			ast_cli(fd, "Already in a call. You can only dial digits until you hangup.\n");
-			return RESULT_FAILURE;
+		if (a->argc == e->args) {	/* argument is mandatory here */
+			ast_cli(a->fd, "Already in a call. You can only dial digits until you hangup.\n");
+			return CLI_FAILURE;
 		}
-		s = argv[2];
+		s = a->argv[e->args];
 		/* send the string one char at a time */
 		for (i = 0; i < strlen(s); i++) {
 			f.subclass = s[i];
 			ast_queue_frame(o->owner, &f);
 		}
-		return RESULT_SUCCESS;
+		return CLI_SUCCESS;
 	}
 	/* if we have an argument split it into extension and context */
-	if (argc == 3)
-		s = ast_ext_ctx(argv[2], &mye, &myc);
+	if (a->argc == e->args + 1)
+		s = ast_ext_ctx(a->argv[e->args], &mye, &myc);
 	/* supply default values if needed */
 	if (mye == NULL)
 		mye = o->ext;
@@ -1236,45 +1274,37 @@ static int console_dial(int fd, int argc, char *argv[])
 		o->hookstate = 1;
 		oss_new(o, mye, myc, AST_STATE_RINGING);
 	} else
-		ast_cli(fd, "No such extension '%s' in context '%s'\n", mye, myc);
+		ast_cli(a->fd, "No such extension '%s' in context '%s'\n", mye, myc);
 	if (s)
 		free(s);
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 
-static char dial_usage[] =
-	"Usage: console dial [extension[@context]]\n"
-	"       Dials a given extension (and context if specified)\n";
-
-static int __console_mute_unmute(int mute)
+static char *console_mute(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	struct chan_oss_pvt *o = find_desc(oss_active);
+	char *s;
 	
-	o->mute = mute;
-	return RESULT_SUCCESS;
+	if (cmd == CLI_INIT) {
+		e->command = "console {mute|unmute}";
+		e->usage =
+			"Usage: console {mute|unmute}\n"
+			"       Mute/unmute the microphone.\n";
+		return NULL;
+	} else if (cmd == CLI_GENERATE)
+		return NULL;
+
+	if (a->argc != e->args)
+		return CLI_SHOWUSAGE;
+	s = a->argv[e->args-1];
+	if (!strcasecmp(s, "mute"))
+		o->mute = 1;
+	else if (!strcasecmp(s, "unmute"))
+		o->mute = 0;
+	else
+		return CLI_SHOWUSAGE;
+	return CLI_SUCCESS;
 }
-
-static int console_mute(int fd, int argc, char *argv[])
-{
-	if (argc != 2)
-		return RESULT_SHOWUSAGE;
-
-	return __console_mute_unmute(1);
-}
-
-static char mute_usage[] =
-	"Usage: console mute\nMutes the microphone\n";
-
-static int console_unmute(int fd, int argc, char *argv[])
-{
-	if (argc != 2)
-		return RESULT_SHOWUSAGE;
-
-	return __console_mute_unmute(0);
-}
-
-static char unmute_usage[] =
-	"Usage: console unmute\nUnmutes the microphone\n";
 
 static int console_transfer(int fd, int argc, char *argv[])
 {
@@ -1373,41 +1403,17 @@ static int do_boost(int fd, int argc, char *argv[])
 }
 
 static struct ast_cli_entry cli_oss[] = {
-	{ { "console", "answer", NULL },
-	console_answer, "Answer an incoming console call",
-	answer_usage },
-
-	{ { "console", "hangup", NULL },
-	console_hangup, "Hangup a call on the console",
-	hangup_usage },
-
-	{ { "console", "flash", NULL },
-	console_flash, "Flash a call on the console",
-	flash_usage },
-
-	{ { "console", "dial", NULL },
-	console_dial, "Dial an extension on the console",
-	dial_usage },
-
-	{ { "console", "mute", NULL },
-	console_mute, "Disable mic input",
-	mute_usage },
-
-	{ { "console", "unmute", NULL },
-	console_unmute, "Enable mic input",
-	unmute_usage },
-
+	NEW_CLI(console_answer, "Answer an incoming console call"),
+	NEW_CLI(console_hangup, "Hangup a call on the console"),
+	NEW_CLI(console_flash, "Flash a call on the console"),
+	NEW_CLI(console_dial, "Dial an extension on the console"),
+	NEW_CLI(console_mute, "Disable/Enable mic input"),
 	{ { "console", "transfer", NULL },
 	console_transfer, "Transfer a call to a different extension",
 	transfer_usage },
 
-	{ { "console", "send", "text", NULL },
-	console_sendtext, "Send text to the remote device",
-	sendtext_usage },
-
-	{ { "console", "autoanswer", NULL },
-	console_autoanswer, "Sets/displays autoanswer",
-	autoanswer_usage, autoanswer_complete },
+	NEW_CLI(console_sendtext, "Send text to the remote device"),
+	NEW_CLI(console_autoanswer, "Sets/displays autoanswer"),
 
 	{ { "console", "boost", NULL },
 	do_boost, "Sets/displays mic boost in dB",
@@ -1483,21 +1489,21 @@ static struct chan_oss_pvt *store_config(struct ast_config *cfg, char *ctg)
 			continue;
 
 		M_BOOL("autoanswer", o->autoanswer)
-			M_BOOL("autohangup", o->autohangup)
-			M_BOOL("overridecontext", o->overridecontext)
-			M_STR("device", o->device)
-			M_UINT("frags", o->frags)
-			M_UINT("debug", oss_debug)
-			M_UINT("queuesize", o->queuesize)
-			M_STR("context", o->ctx)
-			M_STR("language", o->language)
-			M_STR("mohinterpret", o->mohinterpret)
-			M_STR("extension", o->ext)
-			M_F("mixer", store_mixer(o, v->value))
-			M_F("callerid", store_callerid(o, v->value))
-			M_F("boost", store_boost(o, v->value))
-			M_END(;
-			);
+		M_BOOL("autohangup", o->autohangup)
+		M_BOOL("overridecontext", o->overridecontext)
+		M_STR("device", o->device)
+		M_UINT("frags", o->frags)
+		M_UINT("debug", oss_debug)
+		M_UINT("queuesize", o->queuesize)
+		M_STR("context", o->ctx)
+		M_STR("language", o->language)
+		M_STR("mohinterpret", o->mohinterpret)
+		M_STR("extension", o->ext)
+		M_F("mixer", store_mixer(o, v->value))
+		M_F("callerid", store_callerid(o, v->value))
+		M_F("boost", store_boost(o, v->value))
+
+		M_END(/* */);
 	}
 	if (ast_strlen_zero(o->device))
 		ast_copy_string(o->device, DEV_DSP, sizeof(o->device));

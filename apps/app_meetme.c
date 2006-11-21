@@ -2315,10 +2315,12 @@ static int conf_exec(struct ast_channel *chan, void *data)
 					ast_waitstream(chan, "");
 			} else {
 				if (sscanf(confno, "%d", &confno_int) == 1) {
-					res = ast_streamfile(chan, "conf-enteringno", chan->language);
-					if (!res) {
-						ast_waitstream(chan, "");
-						res = ast_say_digits(chan, confno_int, "", chan->language);
+					if (!ast_test_flag(&confflags, CONFFLAG_QUIET)) {
+						res = ast_streamfile(chan, "conf-enteringno", chan->language);
+						if (!res) {
+							ast_waitstream(chan, "");
+							res = ast_say_digits(chan, confno_int, "", chan->language);
+						}
 					}
 				} else {
 					ast_log(LOG_ERROR, "Could not scan confno '%s'\n", confno);
@@ -2951,6 +2953,10 @@ static int slastate(const char *data)
 
 	/* Find conference */
 	sla = sla2 = ASTOBJ_CONTAINER_FIND(&slas, data);
+
+	if (!sla2)
+		return AST_DEVICE_INVALID;
+
 	ASTOBJ_UNREF(sla2, sla_destroy);
 
 	if (option_debug)

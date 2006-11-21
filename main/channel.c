@@ -29,6 +29,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <string.h>
 #include <sys/time.h>
 #include <signal.h>
@@ -330,6 +331,21 @@ static int ast_check_hangup_locked(struct ast_channel *chan)
 	return res;
 }
 
+/*! \brief printf the string into a correctly sized mallocd buffer, and return the buffer */
+char *ast_safe_string_alloc(const char *fmt, ...)
+{
+	char *b2,buf[1];
+	int len;
+
+	va_list args;
+	va_start(args, fmt);
+	len = vsnprintf(buf, 1, fmt, args);
+	b2 = ast_malloc(len+1);
+	vsnprintf(b2, len+1,  fmt, args);
+	va_end(args);
+	return b2;
+}
+
 /*! \brief Initiate system shutdown */
 void ast_begin_shutdown(int hangup)
 {
@@ -608,12 +624,13 @@ static const struct ast_channel_tech null_tech = {
 };
 
 /*! \brief Create a new channel structure */
-struct ast_channel *ast_channel_alloc(int needqueue)
+struct ast_channel *ast_channel_alloc(int needqueue, int state, const char *cid_num, const char *cid_name, const char *name_fmt, ...)
 {
 	struct ast_channel *tmp;
 	int x;
 	int flags;
 	struct varshead *headp;
+	va_list ap1, ap2;
 
 	/* If shutting down, don't allocate any new channels */
 	if (shutting_down) {
@@ -671,10 +688,10 @@ struct ast_channel *ast_channel_alloc(int needqueue)
 	/* And timing pipe */
 	tmp->fds[AST_TIMING_FD] = tmp->timingfd;
 	ast_string_field_set(tmp, name, "**Unknown**");
-	
+
 	/* Initial state */
-	tmp->_state = AST_STATE_DOWN;
-	
+	tmp->_state = state;
+
 	tmp->streamid = -1;
 	
 	tmp->fin = global_fin;
@@ -688,6 +705,37 @@ struct ast_channel *ast_channel_alloc(int needqueue)
 			(long) time(NULL), ast_atomic_fetchadd_int(&uniqueint, 1));
 	}
 
+	if (!ast_strlen_zero(name_fmt)) {
+		/* Almost every channel is calling this function, and setting the name via the ast_string_field_build() call.
+		 * And they all use slightly different formats for their name string.
+		 * This means, to set the name here, we have to accept variable args, and call the string_field_build from here.
+		 * This means, that the stringfields must have a routine that takes the va_lists directly, and 
+		 * uses them to build the string, instead of forming the va_lists internally from the vararg ... list.
+		 * This new function was written so this can be accomplished.
+		 */
+		va_start(ap1, name_fmt);
+		va_start(ap2, name_fmt);
+		ast_string_field_build_va(tmp, name, name_fmt, ap1, ap2);
+		va_end(ap1);
+		va_end(ap2);
+
+		/* and now, since the channel structure is built, and has its name, let's call the
+		 * manager event generator with this Newchannel event. This is the proper and correct
+		 * place to make this call, but you sure do have to pass a lot of data into this func
+		 * to do it here!
+		 */
+		manager_event(EVENT_FLAG_CALL, "Newchannel",
+			      "Channel: %s\r\n"
+			      "State: %s\r\n"
+			      "CallerIDNum: %s\r\n"
+			      "CallerIDName: %s\r\n"
+			      "Uniqueid: %s\r\n",
+			      tmp->name, ast_state2str(state),
+			      S_OR(cid_num, "<unknown>"),
+			      S_OR(cid_name, "<unknown>"),
+			      tmp->uniqueid);
+	}
+	
 	headp = &tmp->varshead;
 	AST_LIST_HEAD_INIT_NOLOCK(headp);
 	
@@ -2858,19 +2906,8 @@ struct ast_channel *ast_request(const char *type, int format, void *data, int *c
 		
 		if (!(c = chan->tech->requester(type, capabilities | videoformat, data, cause)))
 			return NULL;
-
-		if (c->_state == AST_STATE_DOWN) {
-			manager_event(EVENT_FLAG_CALL, "Newchannel",
-				      "Channel: %s\r\n"
-				      "State: %s\r\n"
-				      "CallerIDNum: %s\r\n"
-				      "CallerIDName: %s\r\n"
-				      "Uniqueid: %s\r\n",
-				      c->name, ast_state2str(c->_state),
-				      S_OR(c->cid.cid_num, "<unknown>"),
-				      S_OR(c->cid.cid_name, "<unknown>"),
-				      c->uniqueid);
-		}
+		
+		/* no need to generate a Newchannel event here; it is done in the channel_alloc call */
 		return c;
 	}
 
@@ -3518,8 +3555,9 @@ int ast_setstate(struct ast_channel *chan, enum ast_channel_state state)
 
 	chan->_state = state;
 	ast_device_state_changed_literal(chan->name);
+	/* setstate used to conditionally report Newchannel; this is no more */
 	manager_event(EVENT_FLAG_CALL,
-		      (oldstate == AST_STATE_DOWN) ? "Newchannel" : "Newstate",
+		      "Newstate",
 		      "Channel: %s\r\n"
 		      "State: %s\r\n"
 		      "CallerIDNum: %s\r\n"
@@ -3561,17 +3599,17 @@ static void bridge_playfile(struct ast_channel *chan, struct ast_channel *peer, 
 	}
 	
 	if (!strcmp(sound,"timeleft")) {	/* Queue support */
-		ast_stream_and_wait(chan, "vm-youhave", chan->language, "");
+		ast_stream_and_wait(chan, "vm-youhave", "");
 		if (min) {
 			ast_say_number(chan, min, AST_DIGIT_ANY, chan->language, NULL);
-			ast_stream_and_wait(chan, "queue-minutes", chan->language, "");
+			ast_stream_and_wait(chan, "queue-minutes", "");
 		}
 		if (sec) {
 			ast_say_number(chan, sec, AST_DIGIT_ANY, chan->language, NULL);
-			ast_stream_and_wait(chan, "queue-seconds", chan->language, "");
+			ast_stream_and_wait(chan, "queue-seconds", "");
 		}
 	} else {
-		ast_stream_and_wait(chan, sound, chan->language, "");
+		ast_stream_and_wait(chan, sound, "");
 	}
 
 	ast_autoservice_stop(peer);
@@ -3620,7 +3658,10 @@ static enum ast_bridge_result ast_generic_bridge(struct ast_channel *c0, struct 
 		if (bridge_end.tv_sec) {
 			to = ast_tvdiff_ms(bridge_end, ast_tvnow());
 			if (to <= 0) {
-				res = AST_BRIDGE_COMPLETE;
+				if (config->timelimit)
+					res = AST_BRIDGE_RETRY;
+				else
+					res = AST_BRIDGE_COMPLETE;
 				break;
 			}
 		} else
@@ -3813,8 +3854,11 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 			now = ast_tvnow();
 			to = ast_tvdiff_ms(nexteventts, now);
 			if (to <= 0) {
-				res = AST_BRIDGE_COMPLETE;
-				break;
+				if (!config->timelimit) {
+					res = AST_BRIDGE_COMPLETE;
+					break;
+				}
+				to = 0;
 			}
 		}
 
@@ -3844,7 +3888,11 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 						bridge_playfile(c1, c0, config->warning_sound, t);
 				}
 				if (config->warning_freq) {
-					nexteventts = ast_tvadd(nexteventts, ast_samp2tv(config->warning_freq, 1000));
+
+					if (time_left_ms > (config->warning_freq + 5000)) {
+						nexteventts = ast_tvadd(nexteventts, ast_samp2tv(config->warning_freq, 1000));
+					}
+								
 				} else
 					nexteventts = ast_tvadd(config->start_time, ast_samp2tv(config->timelimit, 1000));
 			}
@@ -4145,7 +4193,7 @@ int ast_tonepair(struct ast_channel *chan, int freq1, int freq2, int duration, i
 	return 0;
 }
 
-ast_group_t ast_get_group(char *s)
+ast_group_t ast_get_group(const char *s)
 {
 	char *piece;
 	char *c;

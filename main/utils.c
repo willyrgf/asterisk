@@ -604,6 +604,21 @@ int ast_wait_for_input(int fd, int ms)
 	return poll(pfd, 1, ms);
 }
 
+/*!
+ * Try to write string, but wait no more than ms milliseconds before timing out.
+ *
+ * \note The code assumes that the file descriptor has NONBLOCK set,
+ * so there is only one system call made to do a write, unless we actually
+ * have a need to wait.  This way, we get better performance.
+ * If the descriptor is blocking, all assumptions on the guaranteed
+ * detail do not apply anymore.
+ * Also note that in the current implementation, the delay is per-write,
+ * so you still have no guarantees, anyways.
+ * Fortunately the routine is only used in a few places (cli.c, manager.c,
+ * res_agi.c) so it is reasonably easy to check how it behaves there.
+ *
+ * XXX We either need to fix the code, or fix the documentation.
+ */
 int ast_carefulwrite(int fd, char *s, int len, int timeoutms) 
 {
 	/* Try to write string, but wait no more than ms milliseconds
@@ -877,15 +892,11 @@ ast_string_field __ast_string_field_alloc_space(struct ast_string_field_mgr *mgr
 	return result;
 }
 
-void __ast_string_field_index_build(struct ast_string_field_mgr *mgr,
+void __ast_string_field_index_build_va(struct ast_string_field_mgr *mgr,
 				    ast_string_field *fields, int num_fields,
-				    int index, const char *format, ...)
+				    int index, const char *format, va_list ap1, va_list ap2)
 {
 	size_t needed;
-	va_list ap1, ap2;
-
-	va_start(ap1, format);
-	va_start(ap2, format);		/* va_copy does not exist on FreeBSD */
 
 	needed = vsnprintf(mgr->pool->base + mgr->used, mgr->space, format, ap1) + 1;
 
@@ -906,7 +917,20 @@ void __ast_string_field_index_build(struct ast_string_field_mgr *mgr,
 	fields[index] = mgr->pool->base + mgr->used;
 	mgr->used += needed;
 	mgr->space -= needed;
+}
 
+void __ast_string_field_index_build(struct ast_string_field_mgr *mgr,
+				    ast_string_field *fields, int num_fields,
+				    int index, const char *format, ...)
+{
+	va_list ap1, ap2;
+
+	va_start(ap1, format);
+	va_start(ap2, format);		/* va_copy does not exist on FreeBSD */
+
+	__ast_string_field_index_build_va(mgr, fields, num_fields, index, format, ap1, ap2);
+
+	va_end(ap1);
 	va_end(ap2);
 }
 

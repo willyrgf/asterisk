@@ -269,9 +269,9 @@ static struct logchannel *make_logchannel(char *channel, char *components, int l
 		}		  
 		
 		if(!ast_strlen_zero(hostname)) {
-			snprintf(chan->filename, sizeof(chan->filename), "%s/%s.%s",(char *)ast_config_AST_LOG_DIR, channel, hostname);
+			snprintf(chan->filename, sizeof(chan->filename), "%s/%s.%s", ast_config_AST_LOG_DIR, channel, hostname);
 		} else {
-			snprintf(chan->filename, sizeof(chan->filename), "%s/%s", (char *)ast_config_AST_LOG_DIR, channel);
+			snprintf(chan->filename, sizeof(chan->filename), "%s/%s", ast_config_AST_LOG_DIR, channel);
 		}
 		chan->fileptr = fopen(chan->filename, "a");
 		if (!chan->fileptr) {
@@ -395,7 +395,7 @@ int reload_logger(int rotate)
 		queue_rotate = 0;
 	qlog = NULL;
 
-	mkdir((char *)ast_config_AST_LOG_DIR, 0755);
+	mkdir(ast_config_AST_LOG_DIR, 0755);
 
 	AST_LIST_TRAVERSE(&logchannels, f, list) {
 		if (f->disabled) {
@@ -411,7 +411,7 @@ int reload_logger(int rotate)
 				if (!rotatetimestamp) { 
 					for (x = 0; ; x++) {
 						snprintf(new, sizeof(new), "%s.%d", f->filename, x);
-						myf = fopen((char *)new, "r");
+						myf = fopen(new, "r");
 						if (myf)
 							fclose(myf);
 						else
@@ -432,19 +432,19 @@ int reload_logger(int rotate)
 	init_logger_chain();
 
 	if (logfiles.event_log) {
-		snprintf(old, sizeof(old), "%s/%s", (char *)ast_config_AST_LOG_DIR, EVENTLOG);
+		snprintf(old, sizeof(old), "%s/%s", ast_config_AST_LOG_DIR, EVENTLOG);
 		if (event_rotate) {
 			if (!rotatetimestamp) { 
 				for (x=0;;x++) {
-					snprintf(new, sizeof(new), "%s/%s.%d", (char *)ast_config_AST_LOG_DIR, EVENTLOG,x);
-					myf = fopen((char *)new, "r");
+					snprintf(new, sizeof(new), "%s/%s.%d", ast_config_AST_LOG_DIR, EVENTLOG,x);
+					myf = fopen(new, "r");
 					if (myf) 	/* File exists */
 						fclose(myf);
 					else
 						break;
 				}
 			} else 
-				snprintf(new, sizeof(new), "%s/%s.%ld", (char *)ast_config_AST_LOG_DIR, EVENTLOG,(long)time(NULL));
+				snprintf(new, sizeof(new), "%s/%s.%ld", ast_config_AST_LOG_DIR, EVENTLOG,(long)time(NULL));
 	
 			/* do it */
 			if (rename(old,new))
@@ -463,12 +463,12 @@ int reload_logger(int rotate)
 	}
 
 	if (logfiles.queue_log) {
-		snprintf(old, sizeof(old), "%s/%s", (char *)ast_config_AST_LOG_DIR, queue_log_name);
+		snprintf(old, sizeof(old), "%s/%s", ast_config_AST_LOG_DIR, queue_log_name);
 		if (queue_rotate) {
 			if (!rotatetimestamp) { 
 				for (x = 0; ; x++) {
-					snprintf(new, sizeof(new), "%s/%s.%d", (char *)ast_config_AST_LOG_DIR, queue_log_name, x);
-					myf = fopen((char *)new, "r");
+					snprintf(new, sizeof(new), "%s/%s.%d", ast_config_AST_LOG_DIR, queue_log_name, x);
+					myf = fopen(new, "r");
 					if (myf) 	/* File exists */
 						fclose(myf);
 					else
@@ -476,7 +476,7 @@ int reload_logger(int rotate)
 				}
 	
 			} else 
-				snprintf(new, sizeof(new), "%s/%s.%ld", (char *)ast_config_AST_LOG_DIR, queue_log_name,(long)time(NULL));
+				snprintf(new, sizeof(new), "%s/%s.%ld", ast_config_AST_LOG_DIR, queue_log_name,(long)time(NULL));
 			/* do it */
 			if (rename(old, new))
 				ast_log(LOG_ERROR, "Unable to rename file '%s' to '%s'\n", old, new);
@@ -605,20 +605,20 @@ int init_logger(void)
 	/* register the logger cli commands */
 	ast_cli_register_multiple(cli_logger, sizeof(cli_logger) / sizeof(struct ast_cli_entry));
 
-	mkdir((char *)ast_config_AST_LOG_DIR, 0755);
+	mkdir(ast_config_AST_LOG_DIR, 0755);
   
 	/* create log channels */
 	init_logger_chain();
 
 	/* create the eventlog */
 	if (logfiles.event_log) {
-		mkdir((char *)ast_config_AST_LOG_DIR, 0755);
-		snprintf(tmp, sizeof(tmp), "%s/%s", (char *)ast_config_AST_LOG_DIR, EVENTLOG);
-		eventlog = fopen((char *)tmp, "a");
+		mkdir(ast_config_AST_LOG_DIR, 0755);
+		snprintf(tmp, sizeof(tmp), "%s/%s", ast_config_AST_LOG_DIR, EVENTLOG);
+		eventlog = fopen(tmp, "a");
 		if (eventlog) {
 			ast_log(LOG_EVENT, "Started Asterisk Event Logger\n");
 			if (option_verbose)
-				ast_verbose("Asterisk Event Logger Started %s\n",(char *)tmp);
+				ast_verbose("Asterisk Event Logger Started %s\n", tmp);
 		} else {
 			ast_log(LOG_ERROR, "Unable to create event log: %s\n", strerror(errno));
 			res = -1;
@@ -626,7 +626,7 @@ int init_logger(void)
 	}
 
 	if (logfiles.queue_log) {
-		snprintf(tmp, sizeof(tmp), "%s/%s", (char *)ast_config_AST_LOG_DIR, queue_log_name);
+		snprintf(tmp, sizeof(tmp), "%s/%s", ast_config_AST_LOG_DIR, queue_log_name);
 		qlog = fopen(tmp, "a");
 		ast_queue_log("NONE", "NONE", "NONE", "QUEUESTART", "%s", "");
 	}
@@ -716,8 +716,10 @@ void ast_log(int level, const char *file, int line, const char *function, const 
 			va_start(ap, fmt);
 			res = ast_dynamic_str_thread_set_va(&buf, BUFSIZ, &log_buf, fmt, ap);
 			va_end(ap);
-			if (res != AST_DYNSTR_BUILD_FAILED)
+			if (res != AST_DYNSTR_BUILD_FAILED) {
+				term_filter_escapes(buf->str);
 				fputs(buf->str, stdout);
+			}
 		}
 		return;
 	}
@@ -781,7 +783,8 @@ void ast_log(int level, const char *file, int line, const char *function, const 
 					term_color(tmp2, file, COLOR_BRWHITE, 0, sizeof(tmp2)),
 					term_color(tmp3, linestr, COLOR_BRWHITE, 0, sizeof(tmp3)),
 					term_color(tmp4, function, COLOR_BRWHITE, 0, sizeof(tmp4)));
-
+				/*filter to the console!*/
+				term_filter_escapes(buf->str);
 				ast_console_puts_mutable(buf->str);
 				
 				va_start(ap, fmt);
@@ -892,6 +895,9 @@ void ast_verbose(const char *fmt, ...)
 
 	if (res == AST_DYNSTR_BUILD_FAILED)
 		return;
+	
+	/* filter out possibly hazardous escape sequences */
+	term_filter_escapes(buf->str);
 
 	AST_LIST_LOCK(&verbosers);
 	AST_LIST_TRAVERSE(&verbosers, v, list)

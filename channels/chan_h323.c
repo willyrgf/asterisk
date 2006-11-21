@@ -1006,17 +1006,27 @@ static int __oh323_rtp_create(struct oh323_pvt *pvt)
 static struct ast_channel *__oh323_new(struct oh323_pvt *pvt, int state, const char *host)
 {
 	struct ast_channel *ch;
+	char *cid_num, *cid_name;
 	int fmt;
 
+	if (!ast_strlen_zero(pvt->options.cid_num))
+		cid_num = pvt->options.cid_num;
+	else
+		cid_num = pvt->cd.call_source_e164;
+
+	if (!ast_strlen_zero(pvt->options.cid_name))
+		cid_name = pvt->options.cid_name;
+	else
+		cid_name = pvt->cd.call_source_name;
+	
 	/* Don't hold a oh323_pvt lock while we allocate a chanel */
 	ast_mutex_unlock(&pvt->lock);
-	ch = ast_channel_alloc(1);
+	ch = ast_channel_alloc(1, state, cid_num, cid_name, "H323/%s", host);
 	/* Update usage counter */
 	ast_module_ref(ast_module_info->self);
 	ast_mutex_lock(&pvt->lock);
 	if (ch) {
 		ch->tech = &oh323_tech;
-		ast_string_field_build(ch, name, "H323/%s", host);
 		if (!(fmt = pvt->jointcapability) && !(fmt = pvt->options.capability))
 			fmt = global_options.capability;
 		ch->nativeformats = ast_codec_choose(&pvt->options.prefs, fmt, 1)/* | (pvt->jointcapability & AST_FORMAT_VIDEO_MASK)*/;
@@ -1065,18 +1075,11 @@ static struct ast_channel *__oh323_new(struct oh323_pvt *pvt, int state, const c
 		}
 
 		/* Don't use ast_set_callerid() here because it will
-		 * generate a NewCallerID event before the NewChannel event */
-		if (!ast_strlen_zero(pvt->options.cid_num)) {
-			ch->cid.cid_num = ast_strdup(pvt->options.cid_num);
-			ch->cid.cid_ani = ast_strdup(pvt->options.cid_num);
-		} else {
-			ch->cid.cid_num = ast_strdup(pvt->cd.call_source_e164);
-			ch->cid.cid_ani = ast_strdup(pvt->cd.call_source_e164);
-		}
-		if (!ast_strlen_zero(pvt->options.cid_name))
-			ch->cid.cid_name = ast_strdup(pvt->options.cid_name);
-		else
-			ch->cid.cid_name = ast_strdup(pvt->cd.call_source_name);
+		 * generate a needless NewCallerID event */
+		ch->cid.cid_num = ast_strdup(cid_num);
+		ch->cid.cid_ani = ast_strdup(cid_num);
+		ch->cid.cid_name = ast_strdup(cid_name);
+
 		if (pvt->cd.redirect_reason >= 0) {
 			ch->cid.cid_rdnis = ast_strdup(pvt->cd.redirect_number);
 			pbx_builtin_setvar_helper(ch, "PRIREDIRECTREASON", redirectingreason2str(pvt->cd.redirect_reason));
@@ -1089,7 +1092,6 @@ static struct ast_channel *__oh323_new(struct oh323_pvt *pvt, int state, const c
 		}
 		if (pvt->cd.transfer_capability >= 0)
 			ch->transfercapability = pvt->cd.transfer_capability;
-		ast_setstate(ch, state);
 		if (state != AST_STATE_DOWN) {
 			if (ast_pbx_start(ch)) {
 				ast_log(LOG_WARNING, "Unable to start PBX on %s\n", ch->name);
@@ -2609,17 +2611,17 @@ static int restart_monitor(void)
 
 static int h323_do_trace(int fd, int argc, char *argv[])
 {
-	if (argc != 3) {
+	if (argc != 4) {
 		return RESULT_SHOWUSAGE;
 	}
-	h323_debug(1, atoi(argv[2]));
+	h323_debug(1, atoi(argv[3]));
 	ast_cli(fd, "H.323 trace set to level %s\n", argv[2]);
 	return RESULT_SUCCESS;
 }
 
 static int h323_no_trace(int fd, int argc, char *argv[])
 {
-	if (argc != 3) {
+	if (argc < 3 || argc > 4) {
 		return RESULT_SHOWUSAGE;
 	}
 	h323_debug(0,0);
@@ -2629,7 +2631,7 @@ static int h323_no_trace(int fd, int argc, char *argv[])
 
 static int h323_do_debug(int fd, int argc, char *argv[])
 {
-	if (argc != 2) {
+	if (argc < 2 || argc > 3) {
 		return RESULT_SHOWUSAGE;
 	}
 	h323debug = 1;
@@ -2639,7 +2641,7 @@ static int h323_do_debug(int fd, int argc, char *argv[])
 
 static int h323_no_debug(int fd, int argc, char *argv[])
 {
-	if (argc != 3) {
+	if (argc < 3 || argc > 4) {
 		return RESULT_SHOWUSAGE;
 	}
 	h323debug = 0;
@@ -2752,20 +2754,35 @@ static struct ast_cli_entry cli_h323_show_tokens_deprecated =
 	h323_tokens_show, "Show all active call tokens",
 	show_tokens_usage };
 
+static struct ast_cli_entry cli_h323_debug_deprecated = {
+	{ "h.323", "debug", NULL },
+	h323_do_debug, "Enable H.323 debug",
+	debug_usage };
+
+static struct ast_cli_entry cli_h323_trace_deprecated = {
+	{ "h.323", "trace", NULL },
+	h323_do_trace, "Enable H.323 Stack Tracing",
+	trace_usage };
+
+static struct ast_cli_entry cli_h323_gk_cycle_deprecated = {
+	{ "h323", "cycle", "gk", NULL },
+	h323_gk_cycle, "Manually re-register with the Gatekeper",
+	show_cycle_usage };
+
 static struct ast_cli_entry cli_h323[] = {
-	{ { "h323", "trace", NULL },
+	{ { "h323", "set", "trace", NULL },
 	h323_do_trace, "Enable H.323 Stack Tracing",
 	trace_usage, NULL, &cli_h323_trace_deprecated },
 
-	{ { "h323", "trace", "off", NULL },
+	{ { "h323", "set", "trace", "off", NULL },
 	h323_no_trace, "Disable H.323 Stack Tracing",
 	no_trace_usage, NULL, &cli_h323_no_trace_deprecated },
 
-	{ { "h323", "debug", NULL },
+	{ { "h323", "set", "debug", NULL },
 	h323_do_debug, "Enable H.323 debug",
 	debug_usage, NULL, &cli_h323_debug_deprecated },
 
-	{ { "h323", "debug", "off", NULL },
+	{ { "h323", "set", "debug", "off", NULL },
 	h323_no_debug, "Disable H.323 debug",
 	no_debug_usage, NULL, &cli_h323_no_debug_deprecated },
 

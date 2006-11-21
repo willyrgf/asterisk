@@ -264,6 +264,29 @@ char *term_prompt(char *outbuf, const char *inbuf, int maxout)
 	return outbuf;
 }
 
+/* filter escape sequences */
+void term_filter_escapes(char *line)
+{
+	int i;
+	int len = strlen(line);
+
+	for (i = 0; i < len; i++) {
+		if (line[i] != ESC)
+			continue;
+		if ((i < (len - 2)) &&
+		    (line[i + 1] == 0x5B)) {
+			switch (line[i + 2]) {
+		 	case 0x30:
+			case 0x31:
+			case 0x33:
+				continue;
+			}
+		}
+		/* replace ESC with a space */
+		line[i] = ' ';
+	}
+}
+
 char *term_prep(void)
 {
 	return prepdata;

@@ -420,7 +420,10 @@ struct displaytext_message {
 	char text[40];
 };
 
+#define CLEAR_NOTIFY_MESSAGE  0x0115
+#define CLEAR_PROMPT_MESSAGE  0x0113
 #define CLEAR_DISPLAY_MESSAGE 0x009A
+
 #define CAPABILITIES_REQ_MESSAGE 0x009B
 
 #define REGISTER_REJ_MESSAGE 0x009D
@@ -1756,7 +1759,7 @@ static int skinny_do_debug(int fd, int argc, char *argv[])
 
 static int skinny_no_debug(int fd, int argc, char *argv[])
 {
-	if (argc != 3) {
+	if (argc != 4) {
 		return RESULT_SHOWUSAGE;
 	}
 	skinnydebug = 0;
@@ -1953,11 +1956,11 @@ static char show_lines_usage[] =
 "       Lists all lines known to the Skinny subsystem.\n";
 
 static char debug_usage[] =
-"Usage: skinny debug\n"
+"Usage: skinny set debug\n"
 "       Enables dumping of Skinny packets for debugging purposes\n";
 
 static char no_debug_usage[] =
-"Usage: skinny no debug\n"
+"Usage: skinny set debug off\n"
 "       Disables dumping of Skinny packets for debugging purposes\n";
 
 static char reset_usage[] =
@@ -1973,11 +1976,11 @@ static struct ast_cli_entry cli_skinny[] = {
 	skinny_show_lines, "List defined Skinny lines per device",
 	show_lines_usage },
 
-	{ { "skinny", "debug", NULL },
+	{ { "skinny", "set", "debug", NULL },
 	skinny_do_debug, "Enable Skinny debugging",
 	debug_usage },
 
-	{ { "skinny", "debug", "off", NULL },
+	{ { "skinny", "set", "debug", "off", NULL },
 	skinny_no_debug, "Disable Skinny debugging",
 	no_debug_usage },
 
@@ -2699,7 +2702,7 @@ static struct ast_channel *skinny_new(struct skinny_line *l, int state)
 	struct skinny_device *d = l->parent;
 	int fmt;
 
-	tmp = ast_channel_alloc(1);
+	tmp = ast_channel_alloc(1, state, l->cid_num, l->cid_name, "Skinny/%s@%s-%d", l->name, d->name, callnums);
 	if (!tmp) {
 		ast_log(LOG_WARNING, "Unable to allocate channel structure\n");
 		return NULL;
@@ -2731,11 +2734,9 @@ static struct ast_channel *skinny_new(struct skinny_line *l, int state)
 		fmt = ast_best_codec(tmp->nativeformats);
 		if (skinnydebug)
 			ast_verbose("skinny_new: tmp->nativeformats=%d fmt=%d\n", tmp->nativeformats, fmt);
-		ast_string_field_build(tmp, name, "Skinny/%s@%s-%d", l->name, d->name, sub->callid);
 		if (sub->rtp) {
 			tmp->fds[0] = ast_rtp_fd(sub->rtp);
 		}
-		ast_setstate(tmp, state);
 		if (state == AST_STATE_RING) {
 			tmp->rings = 1;
 		}
@@ -2757,7 +2758,7 @@ static struct ast_channel *skinny_new(struct skinny_line *l, int state)
 		ast_copy_string(tmp->exten, l->exten, sizeof(tmp->exten));
 
 		/* Don't use ast_set_callerid() here because it will
-		 * generate a NewCallerID event before the NewChannel event */
+		 * generate a needless NewCallerID event */
 		tmp->cid.cid_num = ast_strdup(l->cid_num);
 		tmp->cid.cid_ani = ast_strdup(l->cid_num);
 		tmp->cid.cid_name = ast_strdup(l->cid_name);
@@ -4251,7 +4252,10 @@ static void *skinny_session(void *data)
 		}
 	}
 	ast_log(LOG_NOTICE, "Skinny Session returned: %s\n", strerror(errno));
-	destroy_session(s);
+
+	if (s) 
+		destroy_session(s);
+	
 	return 0;
 }
 
@@ -4358,17 +4362,19 @@ static int restart_monitor(void)
 static struct ast_channel *skinny_request(const char *type, int format, void *data, int *cause)
 {
 	int oldformat;
+	
 	struct skinny_line *l;
 	struct ast_channel *tmpc = NULL;
 	char tmp[256];
 	char *dest = data;
 
 	oldformat = format;
-	format &= default_capability;
-	if (!format) {
+	
+	if (!(format &= ((AST_FORMAT_MAX_AUDIO << 1) - 1))) {
 		ast_log(LOG_NOTICE, "Asked to get a channel of unsupported format '%d'\n", format);
-		return NULL;
-	}
+		return NULL;	
+	}		
+
 	ast_copy_string(tmp, dest, sizeof(tmp));
 	if (ast_strlen_zero(tmp)) {
 		ast_log(LOG_NOTICE, "Skinny channels require a device\n");

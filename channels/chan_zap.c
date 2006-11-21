@@ -247,6 +247,8 @@ static int callwaitingcallerid = 0;
 
 static int hidecallerid = 0;
 
+static int hidecalleridname = 0;
+
 static int restrictcid = 0;
 
 static int use_callingpres = 0;
@@ -424,6 +426,10 @@ struct zt_ss7 {
 	int linkstate[NUM_DCHANS];
 	int numchans;
 	int type;
+	enum {
+		LINKSET_STATE_DOWN = 0,
+		LINKSET_STATE_UP
+	} state;
 	struct ss7 *ss7;
 	struct zt_pvt *pvts[MAX_CHANNELS];				/*!< Member channel pvt structs */
 };
@@ -526,6 +532,7 @@ static struct zt_distRings drings;
 
 struct distRingData {
 	int ring[3];
+	int range;
 };
 struct ringContextData {
 	char contextData[AST_MAX_CONTEXT];
@@ -612,7 +619,8 @@ static struct zt_pvt {
 	unsigned int firstradio:1;
 	unsigned int hanguponpolarityswitch:1;
 	unsigned int hardwaredtmf:1;
-	unsigned int hidecallerid;
+	unsigned int hidecallerid:1;
+	unsigned int hidecalleridname:1;      /*!< Hide just the name not the number for legacy PBX use */
 	unsigned int ignoredtmf:1;
 	unsigned int immediate:1;			/*!< Answer before getting digits? */
 	unsigned int inalarm:1;
@@ -2239,6 +2247,10 @@ static int zt_call(struct ast_channel *ast, char *rdest, int timeout)
 			c++;
 		else
 			c = dest;
+		if (!p->hidecalleridname)
+			n = ast->cid.cid_name;
+		else
+			n = NULL;
 		if (!p->hidecallerid) {
 			l = ast->cid.cid_num;
 			n = ast->cid.cid_name;
@@ -5482,12 +5494,35 @@ static struct ast_channel *zt_new(struct zt_pvt *i, int state, int startpbx, int
 	int res;
 	int x,y;
 	int features;
+	char *b2 = 0;
 	ZT_PARAMS ps;
 	if (i->subs[index].owner) {
 		ast_log(LOG_WARNING, "Channel %d already has a %s call\n", i->channel,subnames[index]);
 		return NULL;
 	}
-	if (!(tmp = ast_channel_alloc(0)))
+	y = 1;
+	do {
+		if (b2)
+			free(b2);
+#ifdef HAVE_PRI
+		if (i->bearer || (i->pri && (i->sig == SIG_FXSKS)))
+			b2 = ast_safe_string_alloc("Zap/%d:%d-%d", i->pri->trunkgroup, i->channel, y);
+		else
+#endif
+		if (i->channel == CHAN_PSEUDO)
+			b2 = ast_safe_string_alloc("Zap/pseudo-%d", ast_random());
+		else	
+			b2 = ast_safe_string_alloc("Zap/%d-%d", i->channel, y);
+		for (x = 0; x < 3; x++) {
+			if ((index != x) && i->subs[x].owner && !strcasecmp(b2, i->subs[x].owner->name))
+				break;
+		}
+		y++;
+	} while (x < 3);
+	tmp = ast_channel_alloc(0, state, 0, 0, b2);
+	if (b2) /*!> b2 can be freed now, it's been copied into the channel structure */
+		free(b2);
+	if (!tmp)
 		return NULL;
 	tmp->tech = &zap_tech;
 	ps.channo = i->channel;
@@ -5506,23 +5541,6 @@ static struct ast_channel *zt_new(struct zt_pvt *i, int state, int startpbx, int
 		else
 			deflaw = AST_FORMAT_ULAW;
 	}
-	y = 1;
-	do {
-#ifdef HAVE_PRI
-		if (i->bearer || (i->pri && (i->sig == SIG_FXSKS)))
-			ast_string_field_build(tmp, name, "Zap/%d:%d-%d", i->pri->trunkgroup, i->channel, y);
-		else
-#endif
-		if (i->channel == CHAN_PSEUDO)
-			ast_string_field_build(tmp, name, "Zap/pseudo-%d", ast_random());
-		else	
-			ast_string_field_build(tmp, name, "Zap/%d-%d", i->channel, y);
-		for (x = 0; x < 3; x++) {
-			if ((index != x) && i->subs[x].owner && !strcasecmp(tmp->name, i->subs[x].owner->name))
-				break;
-		}
-		y++;
-	} while (x < 3);
 	tmp->fds[0] = i->subs[index].zfd;
 	tmp->nativeformats = AST_FORMAT_SLINEAR | deflaw;
 	/* Start out assuming ulaw since it's smaller :) */
@@ -5613,9 +5631,9 @@ static struct ast_channel *zt_new(struct zt_pvt *i, int state, int startpbx, int
 	if (!ast_strlen_zero(i->dnid))
 		tmp->cid.cid_dnid = ast_strdup(i->dnid);
 
-#ifdef PRI_ANI
 	/* Don't use ast_set_callerid() here because it will
-	 * generate a NewCallerID event before the NewChannel event */
+	 * generate a needless NewCallerID event */
+#ifdef PRI_ANI
 	tmp->cid.cid_num = ast_strdup(i->cid_num);
 	tmp->cid.cid_name = ast_strdup(i->cid_name);
 	if (!ast_strlen_zero(i->cid_ani))
@@ -5642,7 +5660,6 @@ static struct ast_channel *zt_new(struct zt_pvt *i, int state, int startpbx, int
 	i->fake_event = 0;
 	/* Assure there is no confmute on this channel */
 	zt_confmute(i, 0);
-	ast_setstate(tmp, state);
 	/* Configure the new channel jb */
 	ast_jb_configure(tmp, &global_jbconf);
 	if (startpbx) {
@@ -6597,17 +6614,26 @@ static void *ss_thread(void *data)
 						if (option_verbose > 2)
 							/* this only shows up if you have n of the dring patterns filled in */
 							ast_verbose( VERBOSE_PREFIX_3 "Detected ring pattern: %d,%d,%d\n",curRingData[0],curRingData[1],curRingData[2]);
-	
 						for (counter = 0; counter < 3; counter++) {
 							/* Check to see if the rings we received match any of the ones in zapata.conf for this
 							channel */
 							distMatches = 0;
 							for (counter1 = 0; counter1 < 3; counter1++) {
-								if (curRingData[counter1] <= (p->drings.ringnum[counter].ring[counter1]+10) && curRingData[counter1] >=
-								(p->drings.ringnum[counter].ring[counter1]-10)) {
+								ast_verbose( VERBOSE_PREFIX_3 "Ring pattern check range: %d\n", p->drings.ringnum[counter].range);
+								if (p->drings.ringnum[counter].ring[counter1] == -1) {
+									ast_verbose( VERBOSE_PREFIX_3 "Pattern ignore (-1) detected, so matching pattern %d regardless.\n",
+									curRingData[counter1]);
+									distMatches++;
+								}
+								else if (curRingData[counter1] <= (p->drings.ringnum[counter].ring[counter1] + p->drings.ringnum[counter].range) &&
+								    curRingData[counter1] >= (p->drings.ringnum[counter].ring[counter1] - p->drings.ringnum[counter].range)) {
+									ast_verbose( VERBOSE_PREFIX_3 "Ring pattern matched in range: %d to %d\n",
+									(p->drings.ringnum[counter].ring[counter1] - p->drings.ringnum[counter].range),
+									(p->drings.ringnum[counter].ring[counter1] + p->drings.ringnum[counter].range));
 									distMatches++;
 								}
 							}
+
 							if (distMatches == 3) {
 								/* The ring matches, set the context to whatever is for distinctive ring.. */
 								ast_copy_string(p->context, p->drings.ringContext[counter].contextData, sizeof(p->context));
@@ -6779,8 +6805,17 @@ static void *ss_thread(void *data)
 								p->drings.ringnum[counter].ring[2]);
 						distMatches = 0;
 						for (counter1 = 0; counter1 < 3; counter1++) {
-							if (curRingData[counter1] <= (p->drings.ringnum[counter].ring[counter1]+10) && curRingData[counter1] >=
-							(p->drings.ringnum[counter].ring[counter1]-10)) {
+							ast_verbose( VERBOSE_PREFIX_3 "Ring pattern check range: %d\n", p->drings.ringnum[counter].range);
+							if (p->drings.ringnum[counter].ring[counter1] == -1) {
+								ast_verbose( VERBOSE_PREFIX_3 "Pattern ignore (-1) detected, so matching pattern %d regardless.\n",
+								curRingData[counter1]);
+								distMatches++;
+							}
+							else if (curRingData[counter1] <= (p->drings.ringnum[counter].ring[counter1] + p->drings.ringnum[counter].range) &&
+							    curRingData[counter1] >= (p->drings.ringnum[counter].ring[counter1] - p->drings.ringnum[counter].range)) {
+								ast_verbose( VERBOSE_PREFIX_3 "Ring pattern matched in range: %d to %d\n",
+								(p->drings.ringnum[counter].ring[counter1] - p->drings.ringnum[counter].range),
+								(p->drings.ringnum[counter].ring[counter1] + p->drings.ringnum[counter].range));
 								distMatches++;
 							}
 						}
@@ -6862,7 +6897,9 @@ static int handle_init_event(struct zt_pvt *i, int event)
 		case SIG_FXOLS:
 		case SIG_FXOGS:
 		case SIG_FXOKS:
-		        zt_set_hook(i->subs[SUB_REAL].zfd, ZT_OFFHOOK);
+			res = zt_set_hook(i->subs[SUB_REAL].zfd, ZT_OFFHOOK);
+			if (res && (errno == EBUSY))
+				break;
 			if (i->cidspill) {
 				/* Cancel VMWI spill */
 				free(i->cidspill);
@@ -7287,8 +7324,9 @@ static int pri_resolve_span(int *span, int channel, int offset, struct zt_spanin
 		} else {
 			if (si->totalchans == 31) { /* if it's an E1 */
 				pris[*span].dchannels[0] = 16 + offset;
-			} else {
-				pris[*span].dchannels[0] = 24 + offset;
+			} else { /* T1 or BRI: D Channel is the last Channel */
+				pris[*span].dchannels[0] = 
+					si->totalchans + offset;
 			}
 			pris[*span].dchanavail[0] |= DCHAN_PROVISIONED;
 			pris[*span].offset = offset;
@@ -8332,12 +8370,12 @@ static void ss7_inservice(struct zt_ss7 *linkset, int startcic, int endcic)
 	}
 }
 
-static int ss7_reset_linkset(struct zt_ss7 *linkset)
+static void ss7_reset_linkset(struct zt_ss7 *linkset)
 {
 	int i, startcic = -1, endcic;
 
 	if (linkset->numchans <= 0)
-		return 0;
+		return;
 
 	startcic = linkset->pvts[0]->cic;
 
@@ -8502,10 +8540,18 @@ static void *ss7_linkset(void *data)
 			switch (e->e) {
 			case SS7_EVENT_UP:
 				ast_verbose("--- SS7 Up ---\n");
-				ss7_reset_linkset(linkset);
+				if (linkset->state != LINKSET_STATE_UP)
+					ss7_reset_linkset(linkset);
+				linkset->state = LINKSET_STATE_UP;
 				break;
 			case SS7_EVENT_DOWN:
 				ast_verbose("--- SS7 Down ---\n");
+				linkset->state = LINKSET_STATE_DOWN;
+				for (i = 0; i < linkset->numchans; i++) {
+					struct zt_pvt *p = linkset->pvts[i];
+					if (p)
+						p->inalarm = 1;
+				}
 				break;
 			case MTP2_LINK_UP:
 				ast_log(LOG_DEBUG, "MTP2 link up\n");
@@ -11712,6 +11758,21 @@ static int process_zap(struct ast_variable *v, int reload, int skipchannels)
 			ast_copy_string(drings.ringContext[1].contextData,v->value,sizeof(drings.ringContext[1].contextData));
 		} else if (!strcasecmp(v->name, "dring3context")) {
 			ast_copy_string(drings.ringContext[2].contextData,v->value,sizeof(drings.ringContext[2].contextData));
+		} else if (!strcasecmp(v->name, "dring1range")) {
+			drings.ringnum[0].range = atoi(v->value);
+			/* 10 is a nice default. */
+			if (drings.ringnum[0].range == 0)
+				drings.ringnum[0].range = 10;
+		} else if (!strcasecmp(v->name, "dring2range")) {
+			drings.ringnum[1].range = atoi(v->value);
+			/* 10 is a nice default. */
+			if (drings.ringnum[1].range == 0)
+				drings.ringnum[1].range = 10;
+		} else if (!strcasecmp(v->name, "dring3range")) {
+			drings.ringnum[2].range = atoi(v->value);
+			/* 10 is a nice default. */
+			if (drings.ringnum[2].range == 0)
+				drings.ringnum[2].range = 10;
 		} else if (!strcasecmp(v->name, "dring1")) {
 			ringc = v->value;
 			sscanf(ringc, "%d,%d,%d", &drings.ringnum[0].ring[0], &drings.ringnum[0].ring[1], &drings.ringnum[0].ring[2]);
@@ -11815,6 +11876,8 @@ static int process_zap(struct ast_variable *v, int reload, int skipchannels)
 				echotraining = 0;
 		} else if (!strcasecmp(v->name, "hidecallerid")) {
 			hidecallerid = ast_true(v->value);
+		} else if (!strcasecmp(v->name, "hidecalleridname")) {
+			hidecalleridname = ast_true(v->value);
  		} else if (!strcasecmp(v->name, "pulsedial")) {
  			pulse = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "callreturn")) {
@@ -12688,6 +12751,10 @@ static int reload(void)
 	}
 	return 0;
 }
+
+/* This is a workaround so that menuselect displays a proper description
+ * AST_MODULE_INFO(, , "Zapata Telephony"
+ */
 
 #ifdef ZAPATA_PRI
 #define tdesc "Zapata Telephony w/PRI"

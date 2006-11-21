@@ -338,6 +338,7 @@ static AST_LIST_HEAD_STATIC(interfaces, member_interface);
 /* values used in multi-bit flags in call_queue */
 #define QUEUE_EMPTY_NORMAL 1
 #define QUEUE_EMPTY_STRICT 2
+#define QUEUE_EMPTY_LOOSE 3
 #define ANNOUNCEHOLDTIME_ALWAYS 1
 #define ANNOUNCEHOLDTIME_ONCE 2
 #define QUEUE_EVENT_VARIABLES 3
@@ -488,6 +489,7 @@ static inline void insert_entry(struct call_queue *q, struct queue_ent *prev, st
 enum queue_member_status {
 	QUEUE_NO_MEMBERS,
 	QUEUE_NO_REACHABLE_MEMBERS,
+	QUEUE_NO_UNPAUSED_REACHABLE_MEMBERS,
 	QUEUE_NORMAL
 };
 
@@ -501,18 +503,22 @@ static enum queue_member_status get_member_status(struct call_queue *q, int max_
 		if (max_penalty && (member->penalty > max_penalty))
 			continue;
 
-		if (member->paused) continue;
-
 		switch (member->status) {
 		case AST_DEVICE_INVALID:
 			/* nothing to do */
 			break;
 		case AST_DEVICE_UNAVAILABLE:
-			result = QUEUE_NO_REACHABLE_MEMBERS;
+			if (result != QUEUE_NO_UNPAUSED_REACHABLE_MEMBERS) 
+				result = QUEUE_NO_REACHABLE_MEMBERS;
 			break;
 		default:
-			ast_mutex_unlock(&q->lock);
-			return QUEUE_NORMAL;
+			if (member->paused) {
+				result = QUEUE_NO_UNPAUSED_REACHABLE_MEMBERS;
+			} else {
+				ast_mutex_unlock(&q->lock);
+				return QUEUE_NORMAL;
+			}
+			break;
 		}
 	}
 	
@@ -903,14 +909,18 @@ static void queue_set_param(struct call_queue *q, const char *param, const char 
 			q->strategy = QUEUE_STRATEGY_RINGALL;
 		}
 	} else if (!strcasecmp(param, "joinempty")) {
-		if (!strcasecmp(val, "strict"))
+		if (!strcasecmp(val, "loose"))
+			q->joinempty = QUEUE_EMPTY_LOOSE;
+		else if (!strcasecmp(val, "strict"))
 			q->joinempty = QUEUE_EMPTY_STRICT;
 		else if (ast_true(val))
 			q->joinempty = QUEUE_EMPTY_NORMAL;
 		else
 			q->joinempty = 0;
 	} else if (!strcasecmp(param, "leavewhenempty")) {
-		if (!strcasecmp(val, "strict"))
+		if (!strcasecmp(val, "loose"))
+			q->leavewhenempty = QUEUE_EMPTY_LOOSE;
+		else if (!strcasecmp(val, "strict"))
 			q->leavewhenempty = QUEUE_EMPTY_STRICT;
 		else if (ast_true(val))
 			q->leavewhenempty = QUEUE_EMPTY_NORMAL;
@@ -1189,7 +1199,9 @@ static int join_queue(char *queuename, struct queue_ent *qe, enum queue_result *
 	stat = get_member_status(q, qe->max_penalty);
 	if (!q->joinempty && (stat == QUEUE_NO_MEMBERS))
 		*reason = QUEUE_JOINEMPTY;
-	else if ((q->joinempty == QUEUE_EMPTY_STRICT) && (stat == QUEUE_NO_REACHABLE_MEMBERS))
+	else if ((q->joinempty == QUEUE_EMPTY_STRICT) && (stat == QUEUE_NO_REACHABLE_MEMBERS || stat == QUEUE_NO_UNPAUSED_REACHABLE_MEMBERS))
+		*reason = QUEUE_JOINUNAVAIL;
+	else if ((q->joinempty == QUEUE_EMPTY_LOOSE) && (stat == QUEUE_NO_REACHABLE_MEMBERS))
 		*reason = QUEUE_JOINUNAVAIL;
 	else if (q->maxlen && (q->count >= q->maxlen))
 		*reason = QUEUE_FULL;
@@ -2207,7 +2219,13 @@ static int wait_our_turn(struct queue_ent *qe, int ringing, enum queue_result *r
 		}
 
 		/* leave the queue if no reachable agents, if enabled */
-		if ((qe->parent->leavewhenempty == QUEUE_EMPTY_STRICT) && (stat == QUEUE_NO_REACHABLE_MEMBERS)) {
+		if ((qe->parent->leavewhenempty == QUEUE_EMPTY_STRICT) && (stat == QUEUE_NO_REACHABLE_MEMBERS || stat == QUEUE_NO_UNPAUSED_REACHABLE_MEMBERS)) {
+			*reason = QUEUE_LEAVEUNAVAIL;
+			ast_queue_log(qe->parent->name, qe->chan->uniqueid, "NONE", "EXITEMPTY", "%d|%d|%ld", qe->pos, qe->opos, (long)time(NULL) - qe->start);
+			leave_queue(qe);
+			break;
+		}
+		if ((qe->parent->leavewhenempty == QUEUE_EMPTY_LOOSE) && (stat == QUEUE_NO_REACHABLE_MEMBERS)) {
 			*reason = QUEUE_LEAVEUNAVAIL;
 			ast_queue_log(qe->parent->name, qe->chan->uniqueid, "NONE", "EXITEMPTY", "%d|%d|%ld", qe->pos, qe->opos, (long)time(NULL) - qe->start);
 			leave_queue(qe);
@@ -2620,7 +2638,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 		/* use  pbx_builtin_setvar to set a load of variables with one call */
 		if (qe->parent->setinterfacevar) {
 			snprintf(interfacevar,sizeof(interfacevar), "MEMBERINTERFACE=%s|MEMBERNAME=%s|MEMBERCALLS=%d|MEMBERLASTCALL=%ld|MEMBERPENALTY=%d|MEMBERDYNAMIC=%d",
-				member->interface, member->membername, member->calls, member->lastcall, member->penalty, member->dynamic);
+				member->interface, member->membername, member->calls, (long)member->lastcall, member->penalty, member->dynamic);
 		 	pbx_builtin_setvar(qe->chan, interfacevar);
 		}
 		
@@ -3200,8 +3218,8 @@ static int rqm_exec(struct ast_channel *chan, void *data)
 
 	switch (remove_from_queue(args.queuename, args.interface)) {
 	case RES_OKAY:
-		if (option_debug)
-			ast_log(LOG_DEBUG, "Removed interface '%s' from queue '%s'\n", args.interface, args.queuename);
+		ast_queue_log(args.queuename, chan->uniqueid, args.interface, "REMOVEMEMBER", "%s", "");
+		ast_log(LOG_NOTICE, "Removed interface '%s' from queue '%s'\n", args.interface, args.queuename);
 		pbx_builtin_setvar_helper(chan, "RQMSTATUS", "REMOVED");
 		res = 0;
 		break;
@@ -3276,6 +3294,7 @@ static int aqm_exec(struct ast_channel *chan, void *data)
 
 	switch (add_to_queue(args.queuename, args.interface, args.membername, penalty, 0, queue_persistent_members)) {
 	case RES_OKAY:
+		ast_queue_log(args.queuename, chan->uniqueid, args.interface, "ADDMEMBER", "%s", "");
 		ast_log(LOG_NOTICE, "Added interface '%s' to queue '%s'\n", args.interface, args.queuename);
 		pbx_builtin_setvar_helper(chan, "AQMSTATUS", "ADDED");
 		res = 0;
@@ -3531,7 +3550,13 @@ check_turns:
 				}
 
 				/* leave the queue if no reachable agents, if enabled */
-				if ((qe.parent->leavewhenempty == QUEUE_EMPTY_STRICT) && (stat == QUEUE_NO_REACHABLE_MEMBERS)) {
+				if ((qe.parent->leavewhenempty == QUEUE_EMPTY_STRICT) && (stat == QUEUE_NO_REACHABLE_MEMBERS || stat == QUEUE_NO_UNPAUSED_REACHABLE_MEMBERS)) {
+					record_abandoned(&qe);
+					reason = QUEUE_LEAVEUNAVAIL;
+					res = 0;
+					break;
+				}
+				if ((qe.parent->leavewhenempty == QUEUE_EMPTY_LOOSE) && (stat == QUEUE_NO_REACHABLE_MEMBERS)) {
 					record_abandoned(&qe);
 					reason = QUEUE_LEAVEUNAVAIL;
 					res = 0;
@@ -4365,6 +4390,7 @@ static int manager_add_queue_member(struct mansession *s, struct message *m)
 
 	switch (add_to_queue(queuename, interface, membername, penalty, paused, queue_persistent_members)) {
 	case RES_OKAY:
+		ast_queue_log(queuename, "MANAGER", interface, "ADDMEMBER", "%s", "");
 		astman_send_ack(s, m, "Added interface to queue");
 		break;
 	case RES_EXISTS:
@@ -4395,6 +4421,7 @@ static int manager_remove_queue_member(struct mansession *s, struct message *m)
 
 	switch (remove_from_queue(queuename, interface)) {
 	case RES_OKAY:
+		ast_queue_log(queuename, "MANAGER", interface, "REMOVEMEMBER", "%s", "");
 		astman_send_ack(s, m, "Removed interface from queue");
 		break;
 	case RES_EXISTS:
@@ -4431,6 +4458,27 @@ static int manager_pause_queue_member(struct mansession *s, struct message *m)
 		astman_send_error(s, m, "Interface not found");
 	else
 		astman_send_ack(s, m, paused ? "Interface paused successfully" : "Interface unpaused successfully");
+	return 0;
+}
+
+static int manager_queue_log_custom(struct mansession *s, struct message *m)
+{
+	char *queuename, *event, *message, *interface, *uniqueid;
+
+	queuename = astman_get_header(m, "Queue");
+	uniqueid = astman_get_header(m, "UniqueId");
+	interface = astman_get_header(m, "Interface");
+	event = astman_get_header(m, "Event");
+	message = astman_get_header(m, "Message");
+
+	if (ast_strlen_zero(queuename) || ast_strlen_zero(event)) {
+		astman_send_error(s, m, "Need 'Queue' and 'Event' parameters.");
+		return 0;
+	}
+
+	ast_queue_log(queuename, S_OR(uniqueid, "NONE"), interface, event, "%s", message);
+	astman_send_ack(s, m, "Event added successfully");
+
 	return 0;
 }
 
@@ -4473,6 +4521,7 @@ static int handle_queue_add_member(int fd, int argc, char *argv[])
 
 	switch (add_to_queue(queuename, interface, membername, penalty, 0, queue_persistent_members)) {
 	case RES_OKAY:
+		ast_queue_log(queuename, "CLI", interface, "ADDMEMBER", "%s", "");
 		ast_cli(fd, "Added interface '%s' to queue '%s'\n", interface, queuename);
 		return RESULT_SUCCESS;
 	case RES_EXISTS:
@@ -4535,6 +4584,7 @@ static int handle_queue_remove_member(int fd, int argc, char *argv[])
 
 	switch (remove_from_queue(queuename, interface)) {
 	case RES_OKAY:
+		ast_queue_log(queuename, "CLI", interface, "REMOVEMEMBER", "%s", "");
 		ast_cli(fd, "Removed interface '%s' from queue '%s'\n", interface, queuename);
 		return RESULT_SUCCESS;
 	case RES_EXISTS:
@@ -4619,6 +4669,7 @@ static int unload_module(void)
 	res |= ast_manager_unregister("QueueAdd");
 	res |= ast_manager_unregister("QueueRemove");
 	res |= ast_manager_unregister("QueuePause");
+	res |= ast_manager_unregister("QueueLog");
 	res |= ast_unregister_application(app_aqm);
 	res |= ast_unregister_application(app_rqm);
 	res |= ast_unregister_application(app_pqm);
@@ -4657,6 +4708,7 @@ static int load_module(void)
 	res |= ast_manager_register("QueueAdd", EVENT_FLAG_AGENT, manager_add_queue_member, "Add interface to queue.");
 	res |= ast_manager_register("QueueRemove", EVENT_FLAG_AGENT, manager_remove_queue_member, "Remove interface from queue.");
 	res |= ast_manager_register("QueuePause", EVENT_FLAG_AGENT, manager_pause_queue_member, "Makes a queue member temporarily unavailable");
+	res |= ast_manager_register("QueueLog", EVENT_FLAG_AGENT, manager_queue_log_custom, "Adds custom entry in queue_log");
 	res |= ast_custom_function_register(&queuevar_function);
 	res |= ast_custom_function_register(&queuemembercount_function);
 	res |= ast_custom_function_register(&queuememberlist_function);

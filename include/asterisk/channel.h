@@ -385,6 +385,7 @@ struct ast_channel {
 	char macrocontext[AST_MAX_CONTEXT];		/*!< Macro: Current non-macro context. See app_macro.c */
 	char macroexten[AST_MAX_EXTENSION];		/*!< Macro: Current non-macro extension. See app_macro.c */
 	int macropriority;				/*!< Macro: Current non-macro priority. See app_macro.c */
+	char dialcontext[AST_MAX_CONTEXT];              /*!< Dial: Extension context that we were called from */
 
 	struct ast_pbx *pbx;				/*!< PBX private structure for this channel */
 	int amaflags;					/*!< Set BEFORE PBX is started to determine AMA flags */
@@ -579,7 +580,7 @@ int ast_setstate(struct ast_channel *chan, enum ast_channel_state);
 	by default set to the "default" context and
 	extension "s"
  */
-struct ast_channel *ast_channel_alloc(int needalertpipe);
+struct ast_channel *ast_channel_alloc(int needalertpipe, int state, const char *cid_num, const char *cid_name, const char *name_fmt, ...);
 
 /*! \brief Queue an outgoing frame */
 int ast_queue_frame(struct ast_channel *chan, struct ast_frame *f);
@@ -1106,6 +1107,12 @@ void ast_deactivate_generator(struct ast_channel *chan);
 
 void ast_set_callerid(struct ast_channel *chan, const char *cidnum, const char *cidname, const char *ani);
 
+
+/*! return a mallocd string with the result of sprintf of the fmt and following args */
+char *ast_safe_string_alloc(const char *fmt, ...);
+
+
+
 /*! Start a tone going */
 int ast_tonepair_start(struct ast_channel *chan, int freq1, int freq2, int duration, int vol);
 /*! Stop a tone from playing */
@@ -1317,7 +1324,7 @@ static inline int ast_select(int nfds, fd_set *rfds, fd_set *wfds, fd_set *efds,
 									ast_set_flag(c, AST_FLAG_BLOCKING); \
 									} }
 
-ast_group_t ast_get_group(char *s);
+ast_group_t ast_get_group(const char *s);
 
 /*! \brief print call- and pickup groups into buffer */
 char *ast_print_group(char *buf, int buflen, ast_group_t group);
