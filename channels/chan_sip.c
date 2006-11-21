@@ -2095,6 +2095,7 @@ static void __sip_ack(struct sip_pvt *p, int seqno, int resp, int sipmethod)
 				if (sipdebug && option_debug > 3)
 					ast_log(LOG_DEBUG, "** SIP TIMER: Cancelling retransmit of packet (reply received) Retransid #%d\n", cur->retransid);
 				ast_sched_del(sched, cur->retransid);
+				cur->retransid = -1;
 			}
 			UNLINK(cur, p->packets, prev);
 			free(cur);
@@ -2139,8 +2140,8 @@ static int __sip_semi_ack(struct sip_pvt *p, int seqno, int resp, int sipmethod)
 				if (option_debug > 3 && sipdebug)
 					ast_log(LOG_DEBUG, "*** SIP TIMER: Cancelling retransmission #%d - %s (got response)\n", cur->retransid, sip_methods[sipmethod].text);
 				ast_sched_del(sched, cur->retransid);
+				cur->retransid = -1;
 			}
-			cur->retransid = -1;
 			res = 0;
 			break;
 		}
@@ -2458,6 +2459,7 @@ static void sip_destroy_peer(struct sip_peer *peer)
 	}
 	if (peer->expire > -1)
 		ast_sched_del(sched, peer->expire);
+
 	if (peer->pokeexpire > -1)
 		ast_sched_del(sched, peer->pokeexpire);
 	register_peer_exten(peer, FALSE);
@@ -7818,8 +7820,10 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 	else
 		peer->username[0] = '\0';
 
-	if (peer->expire > -1)
+	if (peer->expire > -1) {
 		ast_sched_del(sched, peer->expire);
+		peer->expire = -1;
+	}
 	if (expiry > max_expiry)
 		expiry = max_expiry;
 	if (expiry < min_expiry)
@@ -8925,11 +8929,12 @@ static char *get_calleridname(const char *input, char *output, size_t outputsize
 	if (!end || end == input)	/* we require a part in brackets */
 		return NULL;
 
-	/* move away from "<" */
-	end--;
+	end--; /* move just before "<" */
 
-	/* we found "name" */
-	if (tmp && tmp < end) {
+	if (tmp && tmp <= end) {
+		/* The quote (tmp) precedes the bracket (end+1).
+		 * Find the matching quote and return the content.
+		 */
 		end = strchr(tmp+1, '"');
 		if (!end)
 			return NULL;
@@ -8939,7 +8944,7 @@ static char *get_calleridname(const char *input, char *output, size_t outputsize
 			bytes = maxbytes;
 		ast_copy_string(output, tmp + 1, bytes);
 	} else {
-		/* we didn't find "name" */
+		/* No quoted string, or it is inside brackets. */
 		/* clear the empty characters in the begining*/
 		input = ast_skip_blanks(input);
 		/* clear the empty characters in the end */
@@ -11814,7 +11819,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, stru
 				ast_log(LOG_WARNING, "Ooooh.. no tech!  That's REALLY bad\n");
 				break;
 			}
-			if (!strcasecmp(bridgepeer->tech->type,"SIP")) {
+			if (bridgepeer->tech == &sip_tech) {
 				bridgepvt = (struct sip_pvt*)(bridgepeer->tech_pvt);
 				if (bridgepvt->udptl) {
 					if (p->t38.state == T38_PEER_REINVITE) {
@@ -12002,6 +12007,7 @@ static int handle_response_register(struct sip_pvt *p, int resp, char *rest, str
 		if (global_regattempts_max)
 			p->registry->regattempts = global_regattempts_max+1;
 		ast_sched_del(sched, r->timeout);
+		r->timeout = -1;
 		ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
 		break;
 	case 404:	/* Not found */
@@ -12011,6 +12017,7 @@ static int handle_response_register(struct sip_pvt *p, int resp, char *rest, str
 		ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
 		r->call = NULL;
 		ast_sched_del(sched, r->timeout);
+		r->timeout = -1;
 		break;
 	case 407:	/* Proxy auth */
 		if (p->authtries == MAX_AUTHTRIES || do_register_auth(p, req, resp)) {
@@ -12044,6 +12051,7 @@ static int handle_response_register(struct sip_pvt *p, int resp, char *rest, str
 		ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
 		r->call = NULL;
 		ast_sched_del(sched, r->timeout);
+		r->timeout = -1;
 		break;
 	case 200:	/* 200 OK */
 		if (!r) {
@@ -13555,7 +13563,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 				if ((bridgepeer = ast_bridged_channel(p->owner))) {
 					/* We have a bridge, and this is re-invite to switchover to T38 so we send re-invite with T38 SDP, to other side of bridge*/
 					/*! XXX: we should also check here does the other side supports t38 at all !!! XXX */
-					if (!strcasecmp(bridgepeer->tech->type, "SIP")) { /* If we are bridged to SIP channel */
+					if (bridgepeer->tech == &sip_tech) {
 						bridgepvt = (struct sip_pvt*)bridgepeer->tech_pvt;
 						if (bridgepvt->t38.state == T38_DISABLED) {
 							if (bridgepvt->udptl) { /* If everything is OK with other side's udptl struct */
@@ -13609,7 +13617,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 				struct ast_channel *bridgepeer = NULL;
 				struct sip_pvt *bridgepvt = NULL;
 				if ((bridgepeer = ast_bridged_channel(p->owner))) {
-					if (!strcasecmp(bridgepeer->tech->type, sip_tech.type)) {
+					if (bridgepeer->tech == &sip_tech) {
 						bridgepvt = (struct sip_pvt*)bridgepeer->tech_pvt;
 						/* Does the bridged peer have T38 ? */
 						if (bridgepvt->t38.state == T38_ENABLED) {

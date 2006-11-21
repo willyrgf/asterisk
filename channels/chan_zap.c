@@ -426,6 +426,10 @@ struct zt_ss7 {
 	int linkstate[NUM_DCHANS];
 	int numchans;
 	int type;
+	enum {
+		LINKSET_STATE_DOWN = 0,
+		LINKSET_STATE_UP
+	} state;
 	struct ss7 *ss7;
 	struct zt_pvt *pvts[MAX_CHANNELS];				/*!< Member channel pvt structs */
 };
@@ -528,6 +532,7 @@ static struct zt_distRings drings;
 
 struct distRingData {
 	int ring[3];
+	int range;
 };
 struct ringContextData {
 	char contextData[AST_MAX_CONTEXT];
@@ -6609,17 +6614,26 @@ static void *ss_thread(void *data)
 						if (option_verbose > 2)
 							/* this only shows up if you have n of the dring patterns filled in */
 							ast_verbose( VERBOSE_PREFIX_3 "Detected ring pattern: %d,%d,%d\n",curRingData[0],curRingData[1],curRingData[2]);
-	
 						for (counter = 0; counter < 3; counter++) {
 							/* Check to see if the rings we received match any of the ones in zapata.conf for this
 							channel */
 							distMatches = 0;
 							for (counter1 = 0; counter1 < 3; counter1++) {
-								if (curRingData[counter1] <= (p->drings.ringnum[counter].ring[counter1]+10) && curRingData[counter1] >=
-								(p->drings.ringnum[counter].ring[counter1]-10)) {
+								ast_verbose( VERBOSE_PREFIX_3 "Ring pattern check range: %d\n", p->drings.ringnum[counter].range);
+								if (p->drings.ringnum[counter].ring[counter1] == -1) {
+									ast_verbose( VERBOSE_PREFIX_3 "Pattern ignore (-1) detected, so matching pattern %d regardless.\n",
+									curRingData[counter1]);
+									distMatches++;
+								}
+								else if (curRingData[counter1] <= (p->drings.ringnum[counter].ring[counter1] + p->drings.ringnum[counter].range) &&
+								    curRingData[counter1] >= (p->drings.ringnum[counter].ring[counter1] - p->drings.ringnum[counter].range)) {
+									ast_verbose( VERBOSE_PREFIX_3 "Ring pattern matched in range: %d to %d\n",
+									(p->drings.ringnum[counter].ring[counter1] - p->drings.ringnum[counter].range),
+									(p->drings.ringnum[counter].ring[counter1] + p->drings.ringnum[counter].range));
 									distMatches++;
 								}
 							}
+
 							if (distMatches == 3) {
 								/* The ring matches, set the context to whatever is for distinctive ring.. */
 								ast_copy_string(p->context, p->drings.ringContext[counter].contextData, sizeof(p->context));
@@ -6791,8 +6805,17 @@ static void *ss_thread(void *data)
 								p->drings.ringnum[counter].ring[2]);
 						distMatches = 0;
 						for (counter1 = 0; counter1 < 3; counter1++) {
-							if (curRingData[counter1] <= (p->drings.ringnum[counter].ring[counter1]+10) && curRingData[counter1] >=
-							(p->drings.ringnum[counter].ring[counter1]-10)) {
+							ast_verbose( VERBOSE_PREFIX_3 "Ring pattern check range: %d\n", p->drings.ringnum[counter].range);
+							if (p->drings.ringnum[counter].ring[counter1] == -1) {
+								ast_verbose( VERBOSE_PREFIX_3 "Pattern ignore (-1) detected, so matching pattern %d regardless.\n",
+								curRingData[counter1]);
+								distMatches++;
+							}
+							else if (curRingData[counter1] <= (p->drings.ringnum[counter].ring[counter1] + p->drings.ringnum[counter].range) &&
+							    curRingData[counter1] >= (p->drings.ringnum[counter].ring[counter1] - p->drings.ringnum[counter].range)) {
+								ast_verbose( VERBOSE_PREFIX_3 "Ring pattern matched in range: %d to %d\n",
+								(p->drings.ringnum[counter].ring[counter1] - p->drings.ringnum[counter].range),
+								(p->drings.ringnum[counter].ring[counter1] + p->drings.ringnum[counter].range));
 								distMatches++;
 							}
 						}
@@ -7301,8 +7324,9 @@ static int pri_resolve_span(int *span, int channel, int offset, struct zt_spanin
 		} else {
 			if (si->totalchans == 31) { /* if it's an E1 */
 				pris[*span].dchannels[0] = 16 + offset;
-			} else {
-				pris[*span].dchannels[0] = 24 + offset;
+			} else { /* T1 or BRI: D Channel is the last Channel */
+				pris[*span].dchannels[0] = 
+					si->totalchans + offset;
 			}
 			pris[*span].dchanavail[0] |= DCHAN_PROVISIONED;
 			pris[*span].offset = offset;
@@ -8516,10 +8540,18 @@ static void *ss7_linkset(void *data)
 			switch (e->e) {
 			case SS7_EVENT_UP:
 				ast_verbose("--- SS7 Up ---\n");
-				ss7_reset_linkset(linkset);
+				if (linkset->state != LINKSET_STATE_UP)
+					ss7_reset_linkset(linkset);
+				linkset->state = LINKSET_STATE_UP;
 				break;
 			case SS7_EVENT_DOWN:
 				ast_verbose("--- SS7 Down ---\n");
+				linkset->state = LINKSET_STATE_DOWN;
+				for (i = 0; i < linkset->numchans; i++) {
+					struct zt_pvt *p = linkset->pvts[i];
+					if (p)
+						p->inalarm = 1;
+				}
 				break;
 			case MTP2_LINK_UP:
 				ast_log(LOG_DEBUG, "MTP2 link up\n");
@@ -11726,6 +11758,21 @@ static int process_zap(struct ast_variable *v, int reload, int skipchannels)
 			ast_copy_string(drings.ringContext[1].contextData,v->value,sizeof(drings.ringContext[1].contextData));
 		} else if (!strcasecmp(v->name, "dring3context")) {
 			ast_copy_string(drings.ringContext[2].contextData,v->value,sizeof(drings.ringContext[2].contextData));
+		} else if (!strcasecmp(v->name, "dring1range")) {
+			drings.ringnum[0].range = atoi(v->value);
+			/* 10 is a nice default. */
+			if (drings.ringnum[0].range == 0)
+				drings.ringnum[0].range = 10;
+		} else if (!strcasecmp(v->name, "dring2range")) {
+			drings.ringnum[1].range = atoi(v->value);
+			/* 10 is a nice default. */
+			if (drings.ringnum[1].range == 0)
+				drings.ringnum[1].range = 10;
+		} else if (!strcasecmp(v->name, "dring3range")) {
+			drings.ringnum[2].range = atoi(v->value);
+			/* 10 is a nice default. */
+			if (drings.ringnum[2].range == 0)
+				drings.ringnum[2].range = 10;
 		} else if (!strcasecmp(v->name, "dring1")) {
 			ringc = v->value;
 			sscanf(ringc, "%d,%d,%d", &drings.ringnum[0].ring[0], &drings.ringnum[0].ring[1], &drings.ringnum[0].ring[2]);

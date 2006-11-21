@@ -67,7 +67,7 @@ static char *synopsis = "Place a call and connect to the current channel";
 
 static char *descrip =
 "  Dial(Technology/resource[&Tech2/resource2...][|timeout][|options][|URL]):\n"
-"This applicaiton will place calls to one or more specified channels. As soon\n"
+"This application will place calls to one or more specified channels. As soon\n"
 "as one of the requested channels answers, the originating channel will be\n"
 "answered, if it has not already been answered. These two channels will then\n"
 "be active in a bridged call. All other channels that were requested will then\n"
@@ -419,7 +419,12 @@ static void senddialendevent(const struct ast_channel *src, const char *dialstat
 					src->name, dialstatus);
 }	
 
-/* helper function for wait_for_answer() */
+/*!
+ * helper function for wait_for_answer()
+ *
+ * XXX this code is highly suspicious, as it essentially overwrites
+ * the outgoing channel without properly deleting it.
+ */
 static void do_forward(struct dial_localuser *o,
 	struct cause_args *num, struct ast_flags *peerflags, int single)
 {
@@ -504,10 +509,10 @@ static void do_forward(struct dial_localuser *o,
 				char cidname[AST_MAX_EXTENSION];
 				ast_set_callerid(c, S_OR(in->macroexten, in->exten), get_cid_name(cidname, sizeof(cidname), in), NULL);
 			}
+			/* Hangup the original channel now, in case we needed it */
+			ast_hangup(c);
 		}
 	}
-	/* Hangup the original channel now, in case we needed it */
-	ast_hangup(c);
 }
 
 /* argument used for some functions. */
@@ -590,7 +595,7 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 						       OPT_CALLEE_MONITOR | OPT_CALLER_MONITOR |
 						       OPT_CALLEE_PARK | OPT_CALLER_PARK |
 						       DIAL_NOFORWARDHTML);
-					ast_copy_string(c->context, "", sizeof(c->context));
+					ast_copy_string(c->dialcontext, "", sizeof(c->dialcontext));
 					ast_copy_string(c->exten, "", sizeof(c->exten));
 				}
 				continue;
@@ -625,7 +630,7 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 							       OPT_CALLEE_MONITOR | OPT_CALLER_MONITOR |
 							       OPT_CALLEE_PARK | OPT_CALLER_PARK |
 							       DIAL_NOFORWARDHTML);
-						ast_copy_string(c->context, "", sizeof(c->context));
+						ast_copy_string(c->dialcontext, "", sizeof(c->dialcontext));
 						ast_copy_string(c->exten, "", sizeof(c->exten));
 						/* Setup early bridge if appropriate */
 						ast_channel_early_bridge(in, peer);
@@ -1369,7 +1374,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			ast_app_group_set_channel(tmp->chan, outbound_group);
 
 		/* Inherit context and extension */
-		ast_copy_string(tmp->chan->context, chan->context, sizeof(tmp->chan->context));
+		ast_copy_string(tmp->chan->dialcontext, chan->context, sizeof(tmp->chan->dialcontext));
 		ast_copy_string(tmp->chan->exten, chan->exten, sizeof(tmp->chan->exten));
 
 		/* Place the call, but don't wait on the answer */
