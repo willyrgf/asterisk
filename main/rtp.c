@@ -1705,7 +1705,7 @@ const char *ast_rtp_lookup_mime_subtype(const int isAstFormat, const int code,
 			if (isAstFormat &&
 			    (code == AST_FORMAT_G726_AAL2) &&
 			    (options & AST_RTP_OPT_G726_NONSTANDARD))
-				return "AAL2-G726-32";
+				return "G726-32";
 			else
 				return mimeTypes[i].subtype;
 		}
@@ -2474,6 +2474,7 @@ int ast_rtp_sendcng(struct ast_rtp *rtp, int level)
 	return 0;
 }
 
+/*! \brief Write RTP packet with audio or video media frames into UDP packet */
 static int ast_rtp_raw_write(struct ast_rtp *rtp, struct ast_frame *f, int codec)
 {
 	unsigned char *rtpheader;
@@ -2659,11 +2660,10 @@ int ast_rtp_write(struct ast_rtp *rtp, struct ast_frame *_f)
 			ast_rtp_raw_write(rtp, f, codec);
 	} else {
 	        /* Don't buffer outgoing frames; send them one-per-packet: */
-		if (_f->offset < hdrlen) {
-			f = ast_frdup(_f);
-		} else {
+		if (_f->offset < hdrlen) 
+			f = ast_frdup(_f);	/*! \bug XXX this might never be free'd. Why do we do this? */
+		else
 			f = _f;
-		}
 		ast_rtp_raw_write(rtp, f, codec);
 	}
 		
@@ -2850,7 +2850,7 @@ static enum ast_bridge_result bridge_native_loop(struct ast_channel *c0, struct 
 	return AST_BRIDGE_FAILED;
 }
 
-/*! \brief P2P RTP/RTCP Callback */
+/*! \brief peer 2 peer RTP mode  RTP/RTCP Callback */
 static int p2p_rtp_callback(int *id, int fd, short events, void *cbdata)
 {
 	int res = 0, hdrlen = 12;
@@ -2951,8 +2951,13 @@ static int p2p_callback_disable(struct ast_channel *chan, struct ast_rtp *rtp, i
 	return 0;
 }
 
-/*! \brief Bridge loop for partial native bridge (packet2packet) */
-static enum ast_bridge_result bridge_p2p_loop(struct ast_channel *c0, struct ast_channel *c1, struct ast_rtp *p0, struct ast_rtp *p1, struct ast_rtp *vp0, struct ast_rtp *vp1, int timeoutms, int flags, struct ast_frame **fo, struct ast_channel **rc, void *pvt0, void *pvt1)
+/*! \brief Bridge loop for partial native bridge (packet2packet) 
+
+	In p2p mode, Asterisk is a very basic RTP proxy, just forwarding whatever
+	rtp/rtcp we get in to the channel. 
+	\note this currently only works for Audio
+*/
+static enum ast_bridge_result bridge_p2p_loop(struct ast_channel *c0, struct ast_channel *c1, struct ast_rtp *p0, struct ast_rtp *p1, int timeoutms, int flags, struct ast_frame **fo, struct ast_channel **rc, void *pvt0, void *pvt1)
 {
 	struct ast_frame *fr = NULL;
 	struct ast_channel *who = NULL, *other = NULL, *cs[3] = {NULL, };
@@ -2965,12 +2970,6 @@ static enum ast_bridge_result bridge_p2p_loop(struct ast_channel *c0, struct ast
 	p0->bridged = p1;
 	ast_clear_flag(p1, FLAG_P2P_SENT_MARK);
 	p1->bridged = p0;
-	if (vp0) {
-		ast_clear_flag(vp0, FLAG_P2P_SENT_MARK);
-		vp0->bridged = vp1;
-		ast_clear_flag(vp1, FLAG_P2P_SENT_MARK);
-		vp1->bridged = vp0;
-	}
 
 	/* Activate callback modes if possible */
 	p0_callback = p2p_callback_enable(c0, p0, &p0_iod[0]);
@@ -3032,22 +3031,12 @@ static enum ast_bridge_result bridge_p2p_loop(struct ast_channel *c0, struct ast
 						p1_callback = p2p_callback_disable(c1, p1, &p1_iod[0]);
 					p0->bridged = NULL;
 					p1->bridged = NULL;
-					if (vp0) {
-						vp0->bridged = NULL;
-						vp1->bridged = NULL;
-					}
 				} else if (fr->subclass == AST_CONTROL_UNHOLD) {
 					/* If we are off hold, then go back to callback mode and P2P bridging */
 					ast_clear_flag(p0, FLAG_P2P_SENT_MARK);
 					p0->bridged = p1;
 					ast_clear_flag(p1, FLAG_P2P_SENT_MARK);
 					p1->bridged = p0;
-					if (vp0) {
-						ast_clear_flag(vp0, FLAG_P2P_SENT_MARK);
-						vp0->bridged = vp1;
-						ast_clear_flag(vp1, FLAG_P2P_SENT_MARK);
-						vp1->bridged = vp0;
-					}
 					p0_callback = p2p_callback_enable(c0, p0, &p0_iod[0]);
 					p1_callback = p2p_callback_enable(c1, p1, &p1_iod[0]);
 				}
@@ -3085,10 +3074,6 @@ static enum ast_bridge_result bridge_p2p_loop(struct ast_channel *c0, struct ast
 	/* Break out of the direct bridge */
 	p0->bridged = NULL;
 	p1->bridged = NULL;
-	if (vp0) {
-		vp0->bridged = NULL;
-		vp1->bridged = NULL;
-	}
 
 	return res;
 }
@@ -3188,7 +3173,7 @@ enum ast_bridge_result ast_rtp_bridge(struct ast_channel *c0, struct ast_channel
 		}
 		if (option_verbose > 2)
 			ast_verbose(VERBOSE_PREFIX_3 "Packet2Packet bridging %s and %s\n", c0->name, c1->name);
-		res = bridge_p2p_loop(c0, c1, p0, p1, vp0, vp1, timeoutms, flags, fo, rc, pvt0, pvt1);
+		res = bridge_p2p_loop(c0, c1, p0, p1, timeoutms, flags, fo, rc, pvt0, pvt1);
 	} else {
 		if (option_verbose > 2) 
 			ast_verbose(VERBOSE_PREFIX_3 "Native bridging %s and %s\n", c0->name, c1->name);

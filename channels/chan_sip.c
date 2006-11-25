@@ -558,7 +558,7 @@ static char global_useragent[AST_MAX_EXTENSION];	/*!< Useragent for the SIP chan
 static int allow_external_domains;	/*!< Accept calls to external SIP domains? */
 static int global_callevents;		/*!< Whether we send manager events or not */
 static int global_t1min;		/*!< T1 roundtrip time minimum */
-static int global_autoframing;          /*!< ?????????? */
+static int global_autoframing;          /*!< Turn autoframing on or off. */
 static enum transfermodes global_allowtransfer;	/*!< SIP Refer restriction scheme */
 
 /*! \brief Codecs that we support by default: */
@@ -11724,7 +11724,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, stru
 	/* RFC3261 says we must treat every 1xx response (but not 100)
 	   that we don't recognize as if it was 183.
 	*/
-	if (resp > 100 && resp < 200 && resp != 180 && resp != 183)
+	if (resp > 100 && resp < 200 && resp!=101 && resp != 180 && resp != 183)
 		resp = 183;
 
  	/* Any response between 100 and 199 is PROCEEDING */
@@ -11738,6 +11738,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, stru
 
 	switch (resp) {
 	case 100:	/* Trying */
+	case 101:	/* Dialog establishment */
 		if (!ast_test_flag(req, SIP_PKT_IGNORE))
 			sip_cancel_destroy(p);
 		check_pendings(p);
@@ -12232,6 +12233,7 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 	} else if (ast_test_flag(&p->flags[0], SIP_OUTGOING)) {
 		switch(resp) {
 		case 100:	/* 100 Trying */
+		case 101:	/* 101 Dialog establishment */
 			if (sipmethod == SIP_INVITE) 
 				handle_response_invite(p, resp, rest, req, seqno);
 			break;
@@ -12940,6 +12942,7 @@ static int handle_request_notify(struct sip_pvt *p, struct sip_request *req, str
 		respcode = atoi(code);
 		switch (respcode) {
 		case 100:	/* Trying: */
+		case 101:	/* dialog establishment */
 			/* Don't do anything yet */
 			break;
 		case 183:	/* Ringing: */
@@ -14453,7 +14456,7 @@ static int handle_request_subscribe(struct sip_pvt *p, struct sip_request *req, 
 
 			if ((firststate = ast_extension_state(NULL, p->context, p->exten)) < 0) {
 
-				ast_log(LOG_ERROR, "Got SUBSCRIBE for extension %s@%s from %s, but there is no hint for that extension\n", p->exten, p->context, ast_inet_ntoa(p->sa.sin_addr));
+				ast_log(LOG_NOTICE, "Got SUBSCRIBE for extension %s@%s from %s, but there is no hint for that extension.\n", p->exten, p->context, ast_inet_ntoa(p->sa.sin_addr));
 				transmit_response(p, "404 Not found", req);
 				ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
 				return 0;
@@ -14546,7 +14549,6 @@ static int handle_request(struct sip_pvt *p, struct sip_request *req, struct soc
 {
 	/* Called with p->lock held, as well as p->owner->lock if appropriate, keeping things
 	   relatively static */
-	struct sip_request resp;
 	const char *cmd;
 	const char *cseq;
 	const char *useragent;
@@ -14557,9 +14559,6 @@ static int handle_request(struct sip_pvt *p, struct sip_request *req, struct soc
 	int debug = sip_debug_test_pvt(p);
 	char *e;
 	int error = 0;
-
-	/* Clear out potential response */
-	memset(&resp, 0, sizeof(resp));
 
 	/* Get Method and Cseq */
 	cseq = get_header(req, "Cseq");
@@ -17116,6 +17115,7 @@ static int sip_do_reload(enum channelreloadreason reason)
 			sip_destroy(iterator->call);
 		}
 		ASTOBJ_UNLOCK(iterator);
+	
 	} while(0));
 
 	/* Then, actually destroy users and registry */
