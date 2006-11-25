@@ -128,6 +128,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "sip3funcs.h"		/* Moved functions */
 
 /*! \todo Move the sip_auth list to AST_LIST */
+
 struct sip_auth *authl = NULL;		/*!< Authentication list for realm authentication */
 
 /*! \brief return the request and response heade for a 401 or 407 code */

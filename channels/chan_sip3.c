@@ -96,7 +96,7 @@
  * The PBX issues a hangup on both incoming and outgoing calls through
  * the sip_hangup() function
  *
- * \title Dialogs, packets, transactions
+ * \section SIP3dialog Dialogs, packets, transactions
  *
  * This version of chan_sip has a concept of a SIP dialog (\ref sip_dialog) that
  * lives throughut a session - a call (INVITE), a registration (REGISTER)
@@ -118,7 +118,8 @@
 	- \subpage chan_sip3_files
 	- \subpage chan_sip3_auth
 	- \subpage chan_sip3_dialogs
-	- \subpage chan_sip3_overview
+	- \subpage chan_sip3_transactions
+	- \ref chan_sip3_overview
 	- \subpage sip3_dialog_match
 	\par todo Things to do, ideas
 	- \subpage chan_sip3_todo
