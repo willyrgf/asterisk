@@ -8380,7 +8380,7 @@ static void ss7_reset_linkset(struct zt_ss7 *linkset)
 	startcic = linkset->pvts[0]->cic;
 
 	for (i = 0; i < linkset->numchans; i++) {
-		if (linkset->pvts[i+1] && (linkset->pvts[i+1]->cic - linkset->pvts[i]->cic) == 1) {
+		if (linkset->pvts[i+1] && ((linkset->pvts[i+1]->cic - linkset->pvts[i]->cic) == 1) && (linkset->pvts[i]->cic - startcic < 31)) {
 			continue;
 		} else {
 			endcic = linkset->pvts[i]->cic;
@@ -10568,23 +10568,23 @@ static int handle_pri_show_debug(int fd, int argc, char *argv[])
 	return RESULT_SUCCESS;
 }
 
-static const char pri_debug_help[] = 
+static char pri_debug_help[] = 
 	"Usage: pri debug span <span>\n"
 	"       Enables debugging on a given PRI span\n";
 	
-static const char pri_no_debug_help[] = 
+static char pri_no_debug_help[] = 
 	"Usage: pri no debug span <span>\n"
 	"       Disables debugging on a given PRI span\n";
 
-static const char pri_really_debug_help[] = 
+static char pri_really_debug_help[] = 
 	"Usage: pri intensive debug span <span>\n"
 	"       Enables debugging down to the Q.921 level\n";
 
-static const char pri_show_span_help[] = 
+static char pri_show_span_help[] = 
 	"Usage: pri show span <span>\n"
 	"       Displays PRI Information on a given PRI span\n";
 
-static const char pri_show_spans_help[] = 
+static char pri_show_spans_help[] = 
 	"Usage: pri show spans\n"
 	"       Displays PRI Information\n";
 
@@ -11556,7 +11556,6 @@ static int handle_ss7_unblock_cic(int fd, int argc, char *argv[])
 	return RESULT_SUCCESS;
 }
 
-#if 0
 static int handle_ss7_show_linkset(int fd, int argc, char *argv[])
 {
 	int linkset;
@@ -11573,49 +11572,44 @@ static int handle_ss7_show_linkset(int fd, int argc, char *argv[])
 		return RESULT_SUCCESS;
 	}
 	if (linksets[linkset-1].ss7)
-		ss7 = linksets[linkset-1];
+		ss7 = &linksets[linkset-1];
 
-	if (
+	ast_cli(fd, "SS7 linkset %d status: %s\n", linkset, (ss7->state == LINKSET_STATE_UP) ? "Up" : "Down");
 
 	return RESULT_SUCCESS;
 }
-#endif
 
-static const char ss7_debug_help[] = 
+static char ss7_debug_help[] = 
 	"Usage: ss7 debug linkset <linkset>\n"
 	"       Enables debugging on a given SS7 linkset\n";
 	
-static const char ss7_no_debug_help[] = 
+static char ss7_no_debug_help[] = 
 	"Usage: ss7 no debug linkset <span>\n"
 	"       Disables debugging on a given SS7 linkset\n";
 
-static const char ss7_block_cic_help[] = 
+static char ss7_block_cic_help[] = 
 	"Usage: ss7 block cic <linkset> <CIC>\n"
 	"       Sends a remote blocking request for the given CIC on the specified linkset\n";
 
-static const char ss7_unblock_cic_help[] = 
+static char ss7_unblock_cic_help[] = 
 	"Usage: ss7 unblock cic <linkset> <CIC>\n"
 	"       Sends a remote unblocking request for the given CIC on the specified linkset\n";
 
-#if 0
-static const char ss7_show_linkset_help[] = 
+static char ss7_show_linkset_help[] = 
 	"Usage: ss7 show linkset <span>\n"
-	"       Disables debugging on a given SS7 linkset\n";
-#endif
+	"       Shows the status of an SS7 linkset.\n";
 
 static struct ast_cli_entry zap_ss7_cli[] = {
 	{ { "ss7", "debug", "linkset", NULL }, handle_ss7_debug,
 	  "Enables SS7 debugging on a linkset", ss7_debug_help, NULL },
 	{ { "ss7", "no", "debug", "linkset", NULL }, handle_ss7_no_debug,
-	  "Disables SS7 debugging on a linkset", ss7_debug_help, NULL },
+	  "Disables SS7 debugging on a linkset", ss7_no_debug_help, NULL },
 	{ { "ss7", "block", "cic", NULL }, handle_ss7_block_cic,
 	  "Disables SS7 debugging on a linkset", ss7_block_cic_help, NULL },
 	{ { "ss7", "unblock", "cic", NULL }, handle_ss7_unblock_cic,
 	  "Disables SS7 debugging on a linkset", ss7_unblock_cic_help, NULL },
-#if 0
 	{ { "ss7", "show", "linkset", NULL }, handle_ss7_show_linkset,
-	  "Disables SS7 debugging on a linkset", ss7_show_linkset_help, NULL },
-#endif
+	  "Shows the status of a linkset", ss7_show_linkset_help, NULL },
 };
 #endif /* HAVE_SS7 */
 

@@ -12331,7 +12331,8 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 			if (sipmethod == SIP_INVITE) {
 				/* First we ACK */
 				transmit_request(p, SIP_ACK, seqno, XMIT_UNRELIABLE, FALSE);
-					ast_log(LOG_WARNING, "INVITE with REPLACEs failed to '%s'\n", get_header(&p->initreq, "From"));
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Got 481 on Invite. Assuming INVITE with REPLACEs failed to '%s'\n", get_header(&p->initreq, "From"));
 				if (owner)
 					ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
 				sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
@@ -14574,7 +14575,7 @@ static int handle_request(struct sip_pvt *p, struct sip_request *req, struct soc
 		error = 1;
 	}
 	if (error) {
-		if (!p->initreq.header)	/* New call */
+		if (!p->initreq.headers)	/* New call */
 			ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	/* Make sure we destroy this dialog */
 		return -1;
 	}
@@ -16307,7 +16308,7 @@ static int reload_config(enum channelreloadreason reason)
 			autocreatepeer = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "match_auth_username")) {
 			global_match_auth_username = ast_true(v->value);
-		} else if (!strcasecmp(v->name, "global_srvlookup")) {
+		} else if (!strcasecmp(v->name, "srvlookup")) {
 			global_srvlookup = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "pedantic")) {
 			pedanticsipchecking = ast_true(v->value);

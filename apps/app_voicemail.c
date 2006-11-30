@@ -4673,7 +4673,7 @@ static int open_mailbox(struct vm_state *vms, struct ast_vm_user *vmu, int box)
 	if(option_debug > 2)
 		ast_log(LOG_DEBUG,"Before init_mailstream, user is %s\n",vmu->imapuser);
 	ret = init_mailstream(vms, box);
-	if (ret != 0) {
+	if (ret != 0 || !vms->mailstream) {
 		ast_log (LOG_ERROR,"Could not initialize mailstream\n");
 		return -1;
 	}
@@ -6970,22 +6970,13 @@ static int handle_voicemail_show_users(int fd, int argc, char *argv[])
 			}
 		}
 		AST_LIST_TRAVERSE(&users, vmu, list) {
-			char dirname[256];
-			DIR *vmdir;
-			struct dirent *vment;
-			int vmcount = 0;
-			char count[12];
+			int newmsgs = 0, oldmsgs = 0;
+			char count[12], tmp[256] = "";
 
 			if ((argc == 3) || ((argc == 5) && !strcmp(argv[4],vmu->context))) {
-				make_dir(dirname, 255, vmu->context, vmu->mailbox, "INBOX");
-				if ((vmdir = opendir(dirname))) {
-					/* No matter what the format of VM, there will always be a .txt file for each message. */
-					while ((vment = readdir(vmdir)))
-						if (strlen(vment->d_name) > 7 && !strncmp(vment->d_name + 7,".txt",4))
-							vmcount++;
-					closedir(vmdir);
-				}
-				snprintf(count,sizeof(count),"%d",vmcount);
+				snprintf(tmp, sizeof(tmp), "%s@%s", vmu->mailbox, ast_strlen_zero(vmu->context) ? "default" : vmu->context);
+				inboxcount(tmp, &newmsgs, &oldmsgs);
+				snprintf(count,sizeof(count),"%d",newmsgs);
 				ast_cli(fd, output_format, vmu->context, vmu->mailbox, vmu->fullname, vmu->zonetag, count);
 			}
 		}
@@ -8481,15 +8472,16 @@ void mm_login(NETMBX * mb, char *user, char *pwd, long trial)
 
 	if(option_debug > 3)
 		ast_log(LOG_DEBUG, "Entering callback mm_login\n");
-	ast_copy_string(user, mb->user,sizeof(user));
+
+	ast_copy_string(user, mb->user, MAILTMPLEN);
 
 	/* We should only do this when necessary */
 	if (!ast_strlen_zero(authpassword)) {
-		ast_copy_string(pwd, authpassword, sizeof(pwd));
+		ast_copy_string(pwd, authpassword, MAILTMPLEN);
 	} else {
 		AST_LIST_TRAVERSE(&users, vmu, list) {
 			if(!strcasecmp(mb->user, vmu->imapuser)) {
-				ast_copy_string(pwd, vmu->imappassword, sizeof(pwd));
+				ast_copy_string(pwd, vmu->imappassword, MAILTMPLEN);
 				break;
 			}
 		}
