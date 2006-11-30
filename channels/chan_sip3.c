@@ -7101,8 +7101,11 @@ static int load_module(void)
 
 	sip_reloadreason = CHANNEL_MODULE_LOAD;
 
-	if(reload_config(sip_reloadreason))	/* Load the configuration from sip.conf */
+	if(reload_config(sip_reloadreason)) {	/* Load the configuration from sip.conf */
+		io_context_destroy(io);
+		sched_context_destroy(sched);
 		return AST_MODULE_LOAD_DECLINE;
+	}
 
 	logdebug(4, "SIP3 :: Configuration loaded\n");
 
