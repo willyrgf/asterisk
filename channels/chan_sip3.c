@@ -1476,10 +1476,36 @@ static int sip_answer(struct ast_channel *ast)
 	return res;
 }
 
+/*! Write a media frame (audio, video, text) to the dialogs RTP stream.
+ *   If needed, issue early media with 183
+*/
+static int write_media_frame(struct ast_channel *ast, struct sip_dialog *p, struct ast_frame *frame, struct ast_rtp *mediartp)
+{
+	int res = 0;
+	if (!p)
+		return AST_FAILURE;
+
+	dialog_lock(p, TRUE);
+	if (mediartp) {
+		/* If channel is not up, activate early media session */
+		if ((ast->_state != AST_STATE_UP) &&
+		    !ast_test_flag(&p->flags[0], SIP_PROGRESS_SENT) &&
+		    !ast_test_flag(&p->flags[0], SIP_OUTGOING)) {
+			transmit_response_with_attachment(WITH_SDP, p, "183 Session Progress", &p->initreq, XMIT_UNRELIABLE);
+			ast_set_flag(&p->flags[0], SIP_PROGRESS_SENT);	
+		}
+		p->lastrtptx = time(NULL);
+		res = ast_rtp_write(mediartp, frame);
+	}
+	dialog_lock(p, FALSE);
+	return res;
+}
+
 /*! \brief Send frame to media channel (rtp) */
 static int sip_write(struct ast_channel *ast, struct ast_frame *frame)
 {
 	struct sip_dialog *p = ast->tech_pvt;
+	struct ast_rtp *mediartp = NULL;
 	int res = 0;
 
 	switch (frame->frametype) {
@@ -1496,38 +1522,12 @@ static int sip_write(struct ast_channel *ast, struct ast_frame *frame)
 				ast->writeformat);
 			return 0;
 		}
-		if (p) {
-			dialog_lock(p, TRUE);
-			if (p->rtp) {
-				/* If channel is not up, activate early media session */
-				if ((ast->_state != AST_STATE_UP) &&
-				    !ast_test_flag(&p->flags[0], SIP_PROGRESS_SENT) &&
-				    !ast_test_flag(&p->flags[0], SIP_OUTGOING)) {
-					transmit_response_with_attachment(WITH_SDP, p, "183 Session Progress", &p->initreq, XMIT_UNRELIABLE);
-					ast_set_flag(&p->flags[0], SIP_PROGRESS_SENT);	
-				}
-				p->lastrtptx = time(NULL);
-				res = ast_rtp_write(p->rtp, frame);
-			}
-			dialog_lock(p, FALSE);
-		}
+		if (p && p->rtp)
+			res = write_media_frame(ast, p, frame, p->rtp);
 		break;
 	case AST_FRAME_VIDEO:
-		if (p) {
-			dialog_lock(p, TRUE);
-			if (p->vrtp) {
-				/* Activate video early media */
-				if ((ast->_state != AST_STATE_UP) &&
-				    !ast_test_flag(&p->flags[0], SIP_PROGRESS_SENT) &&
-				    !ast_test_flag(&p->flags[0], SIP_OUTGOING)) {
-					transmit_response_with_attachment(WITH_SDP, p, "183 Session Progress", &p->initreq, XMIT_UNRELIABLE);
-					ast_set_flag(&p->flags[0], SIP_PROGRESS_SENT);	
-				}
-				p->lastrtptx = time(NULL);
-				res = ast_rtp_write(p->vrtp, frame);
-			}
-			dialog_lock(p, FALSE);
-		}
+		if (p && p->vrtp)
+			res = write_media_frame(ast, p, frame, p->vrtp);
 		break;
 	case AST_FRAME_IMAGE:
 		return 0;
@@ -1535,15 +1535,8 @@ static int sip_write(struct ast_channel *ast, struct ast_frame *frame)
 	case AST_FRAME_MODEM:
 		if (p) {
 			dialog_lock(p, TRUE);
-			if (p->udptl) {
-				if ((ast->_state != AST_STATE_UP) &&
-					!ast_test_flag(&p->flags[0], SIP_PROGRESS_SENT) && 
-				    !ast_test_flag(&p->flags[0], SIP_OUTGOING)) {
-					transmit_response_with_attachment(WITH_T38_SDP, p, "183 Session Progress", &p->initreq, XMIT_UNRELIABLE);
-					ast_set_flag(&p->flags[0], SIP_PROGRESS_SENT);
-				}
+			if (p->udptl && ast->_state == AST_STATE_UP)
 				res = ast_udptl_write(p->udptl, frame);
-			}
 			dialog_lock(p, FALSE);
 		}
 		break;
