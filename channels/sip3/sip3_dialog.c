@@ -123,7 +123,13 @@ AST_MUTEX_DEFINE_STATIC(dialoglock);
 /*! \brief Lock list of active SIP dialogs */
 void dialoglist_lock(void)
 {
-	ast_mutex_lock(&dialoglock);
+	int counter = 0;
+	while (ast_mutex_trylock(&dialoglock) && counter < 100) {
+		if (option_debug > 4)
+			ast_log(LOG_DEBUG, "---Trying to lock dialoglist -- %d \n", ++counter);
+	} 
+	if (counter == 100)
+		ast_mutex_lock(&dialoglock);
 	if (sipdebug && option_debug > 4)
 		ast_log(LOG_DEBUG, "=== SIP dialog list: LOCKED\n");
 }
@@ -227,8 +233,6 @@ int transmit_final_response(struct sip_dialog *dialog, const char *msg, const st
 void __sip_ack(struct sip_dialog *dialog, int seqno, int resp, int sipmethod, int reset)
 {
 	struct sip_request *cur, *prev = NULL;
-
-	/* Just in case... */
 	int res = FALSE;
 
 	dialog_lock(dialog, TRUE);
@@ -1002,7 +1006,6 @@ struct sip_dialog *match_or_create_dialog(struct sip_request *req, struct sockad
 		ast_log(LOG_DEBUG, "= Looking for  Call ID: %s (Checking %s) --From tag %s --To-tag %s  \n", req->callid, req->method==SIP_RESPONSE ? "To" : "From", fromtag, totag);
 
 	find_via_branch(req, branch, sizeof(branch));
-	dialoglist_lock();
 	for (cur = dialoglist; cur; cur = cur->next) {
 		/* we do not want packets with bad syntax to be connected to a PVT */
 		int found = FALSE;

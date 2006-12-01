@@ -1333,7 +1333,7 @@ static struct sip_auth *find_realm_authentication(struct sip_auth *authlist, con
 static int sip_do_reload(enum channelreloadreason reason);
 static int reload_config(enum channelreloadreason reason);
 static int expire_register(void *data);
-static void *do_monitor(void *data);
+static void *do_sip_monitor(void *data);
 static int restart_monitor(void);
 static int sip_send_mwi_to_peer(struct sip_peer *peer);
 static void sip_destroy(struct sip_pvt *p);
@@ -14970,7 +14970,7 @@ static void check_rtp_timeout(struct sip_pvt *sip, time_t t)
 \note	This thread monitors all the SIP sessions and peers that needs notification of mwi
 	(and thus do not have a separate thread) indefinitely 
 */
-static void *do_monitor(void *data)
+static void *do_sip_monitor(void *data)
 {
 	int res;
 	struct sip_pvt *sip;
@@ -15091,7 +15091,7 @@ static int restart_monitor(void)
 		pthread_kill(monitor_thread, SIGURG);
 	} else {
 		/* Start a new monitor */
-		if (ast_pthread_create_background(&monitor_thread, NULL, do_monitor, NULL) < 0) {
+		if (ast_pthread_create_background(&monitor_thread, NULL, do_sip_monitor, NULL) < 0) {
 			ast_mutex_unlock(&monlock);
 			ast_log(LOG_ERROR, "Unable to start monitor thread.\n");
 			return -1;

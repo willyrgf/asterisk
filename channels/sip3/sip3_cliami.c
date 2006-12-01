@@ -982,6 +982,7 @@ static int __sip_show_channels(int fd, int argc, char *argv[], int subscriptions
 	else 
 		ast_cli(fd, FORMAT3, "Peer", "User", "Call ID", "Extension", "Last state", "Type", "Mailbox");
 	for (; cur; cur = cur->next) {
+		dialoglist_unlock();
 		referstatus = "";
 		if (cur->refer) { /* SIP transfer in progress */
 			referstatus = referstatus2str(cur->refer->status);
@@ -1011,6 +1012,7 @@ static int __sip_show_channels(int fd, int argc, char *argv[], int subscriptions
 );
 			numchans++;
 		}
+		dialoglist_lock();
 	}
 	dialoglist_unlock();
 	if (!subscriptions)

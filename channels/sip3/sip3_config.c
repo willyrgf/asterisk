@@ -481,6 +481,7 @@ static struct sip_peer *build_device(const char *name, struct ast_variable *v, s
 			ast_copy_string(device->mohsuggest, v->value, sizeof(device->mohsuggest));
 		} else if (!strcasecmp(v->name, "mailbox")) {
 			ast_copy_string(device->mailbox, v->value, sizeof(device->mailbox));
+			sipcounters.peers_with_mwi++;
 		} else if (!strcasecmp(v->name, "subscribemwi")) {
 			ast_set2_flag(&device->flags[1], ast_true(v->value), SIP_PAGE2_SUBSCRIBEMWIONLY);
 		} else if (!strcasecmp(v->name, "vmexten")) {
@@ -709,6 +710,7 @@ static void reset_global_settings(struct sip_globals *global)
 	global->relaxdtmf = FALSE;
 	global->callevents = FALSE;
 	global->t1min = DEFAULT_T1MIN;		
+	sipcounters.peers_with_mwi = 0;		/* Reset counter for mwi peers */
 }
 
 /*! \brief Re-read SIP.conf config file

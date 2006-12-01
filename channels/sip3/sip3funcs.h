@@ -55,7 +55,7 @@ GNURK void sip_destroy_device(struct sip_peer *peer);
 GNURK void destroy_association(struct sip_peer *peer);
 GNURK void reg_source_db(struct sip_peer *peer);
 GNURK int expire_register(void *data);
-GNURK int sip_do_relaod(enum channelreloadreason reason);
+GNURK int sip_do_reload(void);
 GNURK void parse_request(struct sip_request *req);
 GNURK int transmit_response(struct sip_dialog *p, const char *msg, const struct sip_request *req);
 GNURK void parse_copy(struct sip_request *dst, const struct sip_request *src);
@@ -80,6 +80,8 @@ GNURK void sip_dump_history(struct sip_dialog *dialog);	/* Dump history to LOG_D
 GNURK void free_old_route(struct sip_route *route);
 GNURK void find_via_branch(struct sip_request *req, char *viabuf, size_t vialen);
 GNURK int update_call_counter(struct sip_dialog *fup, int event);
+GNURK int sip_reload_check(void);
+GNURK  int sip_send_mwi_to_peer(struct sip_peer *peer);
 
 /*! sip3_refer.c */
 GNURK const char *referstatus2str(enum referstatus rstatus) attribute_pure;
@@ -251,5 +253,9 @@ int sip_poke_peer_s(void *data);
 int sip_poke_peer(struct sip_peer *peer);
 void handle_response_peerpoke(struct sip_dialog *p, int resp, struct sip_request *req);
 
+/* sip3_monitor.c - the monitor thread */
+void *do_sip_monitor(void *data);
+void kill_monitor(void);
+int restart_monitor(void);
 
 #endif

@@ -1038,20 +1038,24 @@ struct channel_counters {
 	int autocreated_peers;
 	int registry_objects;
 	int dialog_objects;
+	int peers_with_mwi;
 };
 
-extern struct sip_network sipnet;                      /*!< Sockets and networking */
-extern struct expiry_times expiry;			/*!< Various expiration times */
-extern struct ast_config *notify_types;			/*!< Notification types */
-extern const char notify_config[];			/*!< Configuration file for notifications */
-extern const struct cfsip_methods sip_methods[];		/*!< sip3_parse.c: SIP method table */
-extern struct sip_globals global;	/* Defined in chan_sip3.c */
-extern struct sched_context *sched;     /*!< The scheduling context */
-extern struct io_context *io;           /*!< The IO context */
+/*! @name External objects */
+/*! @{ */
+extern struct sip_network sipnet;               /*!< Sockets and networking */
+extern struct expiry_times expiry;		/*!< Various expiration times */
+extern struct ast_config *notify_types;		/*!< Notification types */
+extern const char notify_config[];		/*!< Configuration file for notifications */
+extern const struct cfsip_methods sip_methods[];	/*!< sip3_parse.c: SIP method table */
+extern struct sip_globals global;	        /* Defined in chan_sip3.c */
+extern struct sched_context *sched;             /*!< The scheduling context */
+extern struct io_context *io;                   /*!< The IO context */
 extern struct channel_counters sipcounters;	/*!< Various object counters */
 extern struct sip_device_list devicelist; /*!< Device list */
 extern struct sip_register_list regl;	/*!< Registration list */
 extern struct sip_auth *authl;		/*!< Realm authentications */
 extern struct sip_dialog *dialoglist;
+/*! @} */
 
 #endif

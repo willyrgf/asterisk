@@ -346,6 +346,10 @@ static int retrans_pkt(void *data)
 	struct sip_request *pkt = data, *prev, *cur = NULL;
 	int reschedule = DEFAULT_RETRANS;
 
+	if (!pkt->dialog) {
+		ast_log(LOG_WARNING, "Trying to retransmit packet without dialog owner...  id #%d:%s (Method %d) (No timer T1)\n", pkt->retransid, sip_method2txt(pkt->method), pkt->method);
+		return 0;
+	}
 	/* Lock channel PVT */
 	dialog_lock(pkt->dialog, TRUE);
 
@@ -431,6 +435,8 @@ static int retrans_pkt(void *data)
 		else
 			pkt->dialog->packets = cur->next;
 		dialog_lock(pkt->dialog, FALSE);
+		if (option_debug > 3)
+			ast_log(LOG_DEBUG, "Deleting packet from dialog list...%s\n", pkt->dialog->callid);
 		free(cur);
 		pkt = NULL;
 	} else
