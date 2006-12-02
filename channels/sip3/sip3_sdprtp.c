@@ -378,7 +378,7 @@ int process_sdp(struct sip_dialog *p, struct sip_request *req)
 			if (debug)
 				ast_verbose("Peer audio RTP is at port %s:%d\n", ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port));
 		} else {
-			if (utptlportno > 0) {
+			if (udptlportno > 0) {
 				if (debug)
 					ast_log(LOG_DEBUG, "Got T.38 re-invite without audio. Keeping RTP active during T.38 session. Call-Id %s\n", p->callid);
 			} else 

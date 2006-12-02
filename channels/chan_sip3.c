@@ -991,9 +991,14 @@ static int create_addr_from_peer(struct sip_dialog *dialog, struct sip_peer *dev
 	else
 		dialog->noncodeccapability &= ~AST_RTP_DTMF;
 	ast_string_field_set(dialog, context, device->context);
-	dialog->rtptimeout = device->rtptimeout;
-	dialog->rtpholdtimeout = device->rtpholdtimeout;
-	dialog->rtpkeepalive = device->rtpkeepalive;
+	ast_rtp_set_rtptimeout(dialog->rtp, device->rtptimeout);
+	ast_rtp_set_rtpholdtimeout(dialog->rtp, device->rtpholdtimeout);
+	ast_rtp_set_rtpkeepalive(dialog->rtp, device->rtpkeepalive);
+	if (dialog->vrtp) {
+		ast_rtp_set_rtptimeout(dialog->vrtp, device->rtptimeout);
+		ast_rtp_set_rtpholdtimeout(dialog->vrtp, device->rtpholdtimeout);
+		ast_rtp_set_rtpkeepalive(dialog->vrtp, device->rtpkeepalive);
+	}
 	if (device->call_limit)
 		ast_set_flag(&dialog->flags[0], SIP_CALL_LIMIT);
 	dialog->maxcallbitrate = device->maxcallbitrate;
@@ -5245,7 +5250,7 @@ static int handle_request_invite(struct sip_dialog *p, struct sip_request *req, 
 		/* we need to check the tags and the branch. If they're different, this is
 	   	  in fact a forked call through a SIP proxy somewhere. */
 		transmit_final_response(p, "482 Loop Detected", req, XMIT_RELIABLE);
-		sip_sched_destroy(p, DEFAULT_TRANS_TIMEOUT);
+		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 		return 0;
 	}
 	
