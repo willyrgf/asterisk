@@ -141,8 +141,7 @@
 	   I am open for more sponsors - contact me on oej@edvina.net
 
 	\page chan_sip3_todo Chan_sip3: Things to do
-	Done
-	- removed userconf support (in favour of astum)
+	\b Done
 	- removed pedantic mode
 	- added config option for qualify frequency timers
 	- merged peermatch and sipregister branches
@@ -155,12 +154,13 @@
 	- Added "domain" configuration option for all devices
 	- Fixed handling of too short registration times (sending 423)
 	- T38 does no longer depend on canreinvite settings
+	- removed userconf support (in favour of astum)
 
-	Halfdone
+	\b Halfdone
 	- Added separate TOS setting for presence. Need to run setsockopt
 	  in a locked socket for that to work on the SIP interface.
 
-	Todo
+	\b Todo
 	- check resp 491 to INVITE processing
 	- Make show devices and the completion support domains too
 	- Fix realtime caching and optional loading
@@ -186,11 +186,14 @@
 	- Implement netsock API in this channel
 	- Add File's multithreading code
 	- Make debugaddr a ha list instead of one address and move it out of sipnet
+	- Save the last sent request/response for re-transmits
 
-	Maybe
+	\b Maybe
 	- add support for Path header
 		the Path is arriving with Register requests, saved in location
 		and used as a Route: header in the outbound request
+	- Add support for the "norefersub" option
+	- Add support for GRUU
 
 	- ... And much more
 */
