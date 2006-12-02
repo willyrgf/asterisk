@@ -616,6 +616,7 @@ int handle_response_register(struct sip_dialog *p, int resp, char *rest, struct 
 		ast_sched_del(sched, r->timeout);
 		break;
 	case 200:	/* 200 OK */
+		p->authtries = 0;
 		if (!r) {
 			ast_log(LOG_WARNING, "Got 200 OK on REGISTER that isn't a register\n");
 			ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	

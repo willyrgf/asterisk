@@ -107,6 +107,9 @@ void handle_response_peerpoke(struct sip_dialog *p, int resp, struct sip_request
 	struct sip_peer *peer = p->relatedpeer;
 	int statechanged, is_reachable, was_reachable;
 	int pingtime = ast_tvdiff_ms(ast_tvnow(), peer->ps);
+		
+	if (!peer)
+		return;
 
 	/*
 	 * Compute the response time to a ping (goes in peer->lastms.)

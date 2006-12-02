@@ -272,6 +272,7 @@
 	- \b sip3_refer.c	SIP transfer and parking support
 	- \b sip3_network.c	Networks interface (UDP today)
 	- \b sip3_services.c	Outbound registrations (services)
+	- \b sip3_pokedevice.c	Peer management (health checks)
 		
 */
 /*!
@@ -1410,7 +1411,7 @@ static int sip_hangup(struct ast_channel *ast)
 				   but we can't send one while we have "INVITE" outstanding. */
 				ast_set_flag(&p->flags[0], SIP_PENDINGBYE);	
 				ast_clear_flag(&p->flags[0], SIP_NEEDREINVITE);	
-				sip_clear_destroy(p);
+				sip_cancel_destroy(p);
 			}
 		}
 	}
@@ -4539,6 +4540,7 @@ static void handle_response_invite(struct sip_dialog *p, int resp, char *rest, s
 		ast_set_flag(&p->flags[0], SIP_ALREADYGONE);	
 		break;
 	case 404: /* Not found */
+	case 410: /* Gone */
 		dialogstatechange(p, DIALOG_STATE_TERMINATED);
 		transmit_request(p, SIP_ACK, req->seqno, XMIT_UNRELIABLE, FALSE);
 		if (p->owner && !ast_test_flag(req, SIP_PKT_IGNORE))
@@ -4546,10 +4548,28 @@ static void handle_response_invite(struct sip_dialog *p, int resp, char *rest, s
 		ast_set_flag(&p->flags[0], SIP_ALREADYGONE);	
 		break;
 	case 481: /* Call leg does not exist */
-		/* Could be REFER or INVITE */
+		/* Could be REFER caused INVITE with replaces header that refers to non-existing call  */
 		ast_log(LOG_WARNING, "Re-invite to non-existing call leg on other UA. SIP dialog '%s'. Giving up.\n", p->callid);
 		dialogstatechange(p, DIALOG_STATE_TERMINATED);
 		transmit_request(p, SIP_ACK, req->seqno, XMIT_UNRELIABLE, FALSE);
+		if (p->owner)
+			ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
+		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
+		break;
+	case 482: 
+		 /* So we treat this as a call forward and hope we end up at the right place... */
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Hairpin detected, setting up call forward for what it's worth\n");
+		if (p->owner) {
+			ast_string_field_build(p->owner, call_forward, "Local/%s@%s", p->peername, p->context);
+			ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
+		}
+		break;
+	case 487:	/* Response on INVITE that has been CANCELled */
+		/* channel now destroyed - dec the inUse counter */
+		if (p->owner)
+			ast_queue_hangup(p->owner);
+		update_call_counter(p, DEC_CALL_LIMIT);
 		break;
 	case 491: /* Pending */
 		/* we have to wait a while, then retransmit */
@@ -4559,6 +4579,8 @@ static void handle_response_invite(struct sip_dialog *p, int resp, char *rest, s
 		break;
 	case 488: /* Not acceptable here - codec error */
 	case 501: /* Not implemented */
+	case 400: /* Bad Request */
+	case 500: /* Server error */
 		transmit_request(p, SIP_ACK, req->seqno, XMIT_UNRELIABLE, FALSE);
 		dialogstatechange(p, DIALOG_STATE_TERMINATED);
 		if (p->owner)
@@ -4567,6 +4589,7 @@ static void handle_response_invite(struct sip_dialog *p, int resp, char *rest, s
 	case 486: /* Busy here */
 	case 600: /* Busy everywhere */
 	case 603: /* Decline */
+	case 480: /* Temporarily Unavailable */
 		dialogstatechange(p, DIALOG_STATE_TERMINATED);
 		transmit_request(p, SIP_ACK, req->seqno, XMIT_UNRELIABLE, FALSE);
 		ast_set_flag(&p->flags[0], SIP_ALREADYGONE);	
@@ -4606,7 +4629,15 @@ static void handle_response_refer(struct sip_dialog *p, int resp, char *rest, st
 			ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);
 		}
 		break;
-
+	case 481: /* Call leg does not exist */
+		/* A transfer with Replaces did not work */
+		/* OEJ: We should Set flag, cancel the REFER, go back to original call - but right now we can't */
+		ast_log(LOG_WARNING, "Remote host can't match REFER request to call '%s'. Giving up.\n", p->callid);
+		if (p->owner) {
+			ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
+			ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);
+		}
+		break;
 
 	case 500:   /* Server error */
 	case 501:   /* Method not implemented */
@@ -4624,6 +4655,66 @@ static void handle_response_refer(struct sip_dialog *p, int resp, char *rest, st
 	}
 }
 
+/* \brief Handle SIP response in NOTIFY transaction */
+static void handle_response_notify(struct sip_dialog *dialog, int resp, char *rest, struct sip_request *req)
+{
+	switch(resp) {
+	case 200:	/* 200 OK */
+		/* They got the notify, this is the end */
+		if (dialog->owner) {
+			if (!dialog->refer) {
+				ast_log(LOG_WARNING, "Notify answer on an owned channel? - %s\n", dialog->owner->name);
+				ast_queue_hangup(dialog->owner);
+			} else if (option_debug > 3) 
+				ast_log(LOG_DEBUG, "Got OK on REFER Notify message\n");
+		} else if (dialog->subscribed == NONE) 
+			ast_set_flag(&dialog->flags[0], SIP_NEEDDESTROY); 
+		dialogstatechange(dialog, DIALOG_STATE_TERMINATED);
+		break;
+	default: 
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Got unexpected answer on NOTIFY: %d - Call ID %s\n", resp, dialog->callid);
+		break;
+	}
+}
+
+/* \brief Handle SIP response in MESSAGE transaction */
+static void handle_response_message(struct sip_dialog *dialog, int resp, char *rest, struct sip_request *req)
+{
+	switch(resp) {
+	case 200:	/* 200 OK */
+		dialog->authtries = 0;	/* Reset authentication counter */
+		/* We successfully transmitted a message */
+		ast_set_flag(&dialog->flags[0], SIP_NEEDDESTROY);	
+		break;
+	default: 
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Got unexpected answer on MESSAGE: %d - Call ID %s\n", resp, dialog->callid);
+		break;
+	}
+}
+
+/* \brief Handle SIP response in BYE transaction */
+static void handle_response_bye(struct sip_dialog *dialog, int resp, char *rest, struct sip_request *req)
+{
+	if (resp == 401 || resp == 407) {
+		if (ast_strlen_zero(dialog->authname))
+			ast_log(LOG_WARNING, "Asked to authenticate BYE, to %s:%d but we have no matching peer!\n",
+					ast_inet_ntoa(dialog->recv.sin_addr), ntohs(dialog->recv.sin_port));
+		if (dialog->authtries == MAX_AUTHTRIES || do_proxy_auth(dialog, req, resp, SIP_BYE, 0)) {
+			ast_log(LOG_NOTICE, "Failed to authenticate on BYE to '%s'\n", get_header(&dialog->initreq, "From"));
+			ast_set_flag(&dialog->flags[0], SIP_NEEDDESTROY);	
+		}
+	} else {
+		if (resp == 481) { /* Can't match call leg */
+			/* The other side has no transaction to bye, just assume it's all right then */
+			ast_log(LOG_WARNING, "Remote host can't match BYE request to call '%s'. Giving up.\n", dialog->callid);
+		}
+		/* Regardless of response, just destroy the call now */
+		ast_set_flag(&dialog->flags[0], SIP_NEEDDESTROY); 
+	}
+}
+
 
 /*! \brief Handle SIP response in dialogue */
 /* XXX only called by handle_request */
@@ -4631,7 +4722,6 @@ static void handle_response(struct sip_dialog *p, int resp, char *rest, struct s
 {
 	struct ast_channel *owner;
 	int sipmethod;
-	int res = 1;
 	const char *c = req->cseqheader;
 	const char *msg = strchr(c, ' ');
 
@@ -4640,10 +4730,11 @@ static void handle_response(struct sip_dialog *p, int resp, char *rest, struct s
 		msg = "";
 	else
 		msg++;
+	
 	sipmethod = find_sip_method(msg);
 
 	owner = p->owner;
-	if (owner) 
+	if (owner && resp > 199) 
 		owner->hangupcause = hangup_sip2cause(resp);
 
 	/* Acknowledge whatever it is destined for */
@@ -4659,238 +4750,129 @@ static void handle_response(struct sip_dialog *p, int resp, char *rest, struct s
 		gettag(req->to, tag, sizeof(tag));
 		ast_string_field_set(p, theirtag, tag);
 	}
-	if (p->relatedpeer && p->method == SIP_OPTIONS) {
+	switch (sipmethod) {
+	case SIP_OPTIONS:
 		/* We don't really care what the response is, just that it replied back. 
 		   Well, as long as it's not a 100 response...  since we might
 		   need to hang around for something more "definitive" */
-
-		return handle_response_peerpoke(p, resp, req);
-	}
-
-	switch(resp) {
-	case 100:	/* 100 Trying */
-		if (sipmethod == SIP_INVITE) 
-			handle_response_invite(p, resp, rest, req);
+		handle_response_peerpoke(p, resp, req);
 		break;
-	case 183:	/* 183 Session Progress */
-		if (sipmethod == SIP_INVITE) 
-			handle_response_invite(p, resp, rest, req);
+	case SIP_MESSAGE:
+		handle_response_message(p, resp, rest, req);
 		break;
-	case 180:	/* 180 Ringing */
-		if (sipmethod == SIP_INVITE) 
-			handle_response_invite(p, resp, rest, req);
+	case SIP_NOTIFY:
+		handle_response_notify(p, resp, rest, req);
 		break;
-	case 200:	/* 200 OK */
-		p->authtries = 0;	/* Reset authentication counter */
-		if (sipmethod == SIP_MESSAGE) {
-			/* We successfully transmitted a message */
-			ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
-		} else if (sipmethod == SIP_CANCEL) {
+	case SIP_INVITE:
+		handle_response_invite(p, resp, rest, req);
+		break;
+	case SIP_REGISTER:
+		handle_response_register(p, resp, rest, req, req->seqno);
+		break;
+	case SIP_REFER:
+		handle_response_refer(p, resp, rest, req);
+		break;
+	case SIP_BYE:
+		handle_response_bye(p, resp, rest, req);
+		break;
+	case SIP_CANCEL:
+		switch(resp) {
+		case 200:	/* 200 OK */
 			if (option_debug)
 				ast_log(LOG_DEBUG, "Got 200 OK on CANCEL\n");
 
 			/* Wait for 487, then destroy */
-		} else if (sipmethod == SIP_INVITE) {
-			handle_response_invite(p, resp, rest, req);
-		} else if (sipmethod == SIP_NOTIFY) {
-			/* They got the notify, this is the end */
-			if (p->owner) {
-				if (!p->refer) {
-					ast_log(LOG_WARNING, "Notify answer on an owned channel? - %s\n", p->owner->name);
-					ast_queue_hangup(p->owner);
-				} else if (option_debug > 3) 
-					ast_log(LOG_DEBUG, "Got OK on REFER Notify message\n");
-			} else {
-				if (p->subscribed == NONE) 
-					ast_set_flag(&p->flags[0], SIP_NEEDDESTROY); 
-			}
-			dialogstatechange(p, DIALOG_STATE_TERMINATED);
-		} else if (sipmethod == SIP_REGISTER) 
-			res = handle_response_register(p, resp, rest, req, req->seqno);
-		else if (sipmethod == SIP_BYE)		/* Ok, we're ready to go */
-			ast_set_flag(&p->flags[0], SIP_NEEDDESTROY); 
+			break;
+		case 481:
+			ast_log(LOG_WARNING, "Remote host can't match request %s to call '%s'. Giving up.\n", sip_method2txt(sipmethod), p->callid);
+			break;
+		}
 		break;
-	case 202:   /* Transfer accepted */
-		if (sipmethod == SIP_REFER) 
-			handle_response_refer(p, resp, rest, req);
-		break;
-	case 401: /* Not www-authorized on SIP method */
-	case 407: /* Proxy auth required */
-		if (sipmethod == SIP_INVITE)
-			handle_response_invite(p, resp, rest, req);
-		else if (sipmethod == SIP_REFER)
-			handle_response_refer(p, resp, rest, req);
-		else if (p->registry && sipmethod == SIP_REGISTER)
-			res = handle_response_register(p, resp, rest, req, req->seqno);
-		else if (sipmethod == SIP_BYE) {
-			if (ast_strlen_zero(p->authname))
-				ast_log(LOG_WARNING, "Asked to authenticate %s, to %s:%d but we have no matching peer!\n",
-						msg, ast_inet_ntoa(p->recv.sin_addr), ntohs(p->recv.sin_port));
-			if (p->authtries == MAX_AUTHTRIES || do_proxy_auth(p, req, resp, sipmethod, 0)) {
-				ast_log(LOG_NOTICE, "Failed to authenticate on %s to '%s'\n", msg, get_header(&p->initreq, "From"));
-				ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
-			}
-		} else {
+	default:
+		/* All other cases - which is ??? */
+
+		switch(resp) {
+		case 100:	/* 100 Trying */
+		case 183:	/* 183 Session Progress */
+		case 180:	/* 180 Ringing */
+		case 200:	/* 200 OK */
+		case 202:   /* Transfer accepted */
+			break;
+		case 401: /* Not www-authorized on SIP method */
+		case 407: /* Proxy auth required */
 			ast_log(LOG_WARNING, "Got authentication request (401) on unknown %s to '%s'\n", sip_method2txt(sipmethod), get_header(req, "To"));
 			ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
-		}
-		break;
-	case 403: /* Forbidden - we failed authentication */
-		if (sipmethod == SIP_INVITE)
-			handle_response_invite(p, resp, rest, req);
-		else if (p->registry && sipmethod == SIP_REGISTER) 
-			res = handle_response_register(p, resp, rest, req, req->seqno);
-		else {
+			break;
+		case 403: /* Forbidden - we failed authentication */
 			ast_log(LOG_WARNING, "Forbidden - maybe wrong password on authentication for %s\n", msg);
 			ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
-		}
-		break;
-	case 404: /* Not found */
-		if (p->registry && sipmethod == SIP_REGISTER)
-			res = handle_response_register(p, resp, rest, req, req->seqno);
-		else if (sipmethod == SIP_INVITE)
-			handle_response_invite(p, resp, rest, req);
-		else if (owner)
-			ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
-		break;
-	case 423: /* Interval too brief */
-		if (sipmethod == SIP_REGISTER)
-			res = handle_response_register(p, resp, rest, req, req->seqno);
-		break;
-	case 481: /* Call leg does not exist */
-		if (sipmethod == SIP_INVITE) {
-			/* First we ACK */
-			transmit_request(p, SIP_ACK, req->seqno, XMIT_UNRELIABLE, FALSE);
-				ast_log(LOG_WARNING, "INVITE with REPLACEs failed to '%s'\n", get_header(&p->initreq, "From"));
+			break;
+		case 404: /* Not found */
 			if (owner)
 				ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
-			dialogstatechange(p, DIALOG_STATE_TERMINATED);
-			sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
-		} else if (sipmethod == SIP_REFER) {
-			/* A transfer with Replaces did not work */
-			/* OEJ: We should Set flag, cancel the REFER, go back
-			to original call - but right now we can't */
+			break;
+		case 423: /* Interval too brief */
+			ast_log(LOG_WARNING, "Got 423 Interval to brief in response. Don't know how to handle that. Call-ID %s\n", p->callid);
+			break;
+		case 481: /* Call leg does not exist */
 			ast_log(LOG_WARNING, "Remote host can't match request %s to call '%s'. Giving up.\n", sip_method2txt(sipmethod), p->callid);
-			if (owner)
-				ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
-			ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);
-		} else if (sipmethod == SIP_BYE) {
-			/* The other side has no transaction to bye,
-			just assume it's all right then */
-			ast_log(LOG_WARNING, "Remote host can't match request %s to call '%s'. Giving up.\n", sip_method2txt(sipmethod), p->callid);
-		} else if (sipmethod == SIP_CANCEL) {
-			/* The other side has no transaction to cancel,
-			just assume it's all right then */
-			ast_log(LOG_WARNING, "Remote host can't match request %s to call '%s'. Giving up.\n", sip_method2txt(sipmethod), p->callid);
-		} else {
-			ast_log(LOG_WARNING, "Remote host can't match request %s to call '%s'. Giving up.\n", sip_method2txt(sipmethod), p->callid);
-			/* Guessing that this is not an important request */
-		}
-		break;
-	case 491: /* Pending */
-		if (sipmethod == SIP_INVITE)
-			handle_response_invite(p, resp, rest, req);
-		else {
+				/* Guessing that this is not an important request */
+			break;
+		case 491: /* Pending */
 			if (option_debug)
 				ast_log(LOG_DEBUG, "Got 491 on %s, unspported. Call ID %s\n", sip_method2txt(sipmethod), p->callid);
 			ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
-		}
-		break;
-	case 501: /* Not Implemented */
-		if (sipmethod == SIP_INVITE)
-			handle_response_invite(p, resp, rest, req);
-		else if (sipmethod == SIP_REFER)
-			handle_response_refer(p, resp, rest, req);
-		else {
+			break;
+		case 501: /* Not Implemented */
 			ast_log(LOG_WARNING, "Host '%s' does not implement '%s'\n", ast_inet_ntoa(p->sa.sin_addr), msg);
-		}
-		break;
-	case 603:	/* Declined transfer */
-		if (sipmethod == SIP_REFER) {
-			handle_response_refer(p, resp, rest, req);
 			break;
-		} else if (sipmethod == SIP_INVITE) {
-			handle_response_invite(p, resp, rest, req);
-			break;
-		}
-		/* Fallthrough */
-	default:
-		if ((resp >= 300) && (resp < 700)) {
-			/* Fatal response */
-			if ((option_verbose > 2) && (resp != 487))
-				ast_verbose(VERBOSE_PREFIX_3 "Got SIP response %d \"%s\" back from %s\n", resp, rest, ast_inet_ntoa(p->sa.sin_addr));
-			ast_set_flag(&p->flags[0], SIP_ALREADYGONE);	
-			stop_media_flows(p);	/* Stop RTP, VRTP and UDPTL */
-			/* XXX Locking issues?? XXX */
-			switch(resp) {
-			case 300: /* Multiple Choices */
-			case 301: /* Moved permenantly */
-			case 302: /* Moved temporarily */
-			case 305: /* Use Proxy */
-			case 486: /* Busy here */
-			case 600: /* Busy everywhere */
-				if (sipmethod == SIP_INVITE)
-					handle_response_invite(p, resp, rest, req);
-				break;
-			case 487:	/* Response on INVITE that has been CANCELled */
-				/* channel now destroyed - dec the inUse counter */
-				if (owner)
-					ast_queue_hangup(p->owner);
-				update_call_counter(p, DEC_CALL_LIMIT);
-				break;
-			case 488: /* Not acceptable here - codec error */
-				if (sipmethod == SIP_INVITE) {
-					handle_response_invite(p, resp, rest, req);
+		case 603:	/* Declined */
+			/* Fallthrough */
+		default:
+			if ((resp >= 300) && (resp < 700)) {
+				int congest = FALSE;
+
+				/* Fatal response */
+				if ((option_verbose > 2) && (resp != 487))
+					ast_verbose(VERBOSE_PREFIX_3 "Got SIP response %d \"%s\" back from %s\n", resp, rest, ast_inet_ntoa(p->sa.sin_addr));
+				/* XXX Locking issues?? XXX */
+				switch(resp) {
+				case 300: /* Multiple Choices */
+				case 301: /* Moved permenantly */
+				case 302: /* Moved temporarily */
+				case 305: /* Use Proxy */
+				case 486: /* Busy here */
+				case 600: /* Busy everywhere */
+				case 487: /* Response on INVITE that has been CANCELled */
+				case 488: /* Not acceptable here - codec error */
+				case 482: /* Loop detected */
+					break;
+				case 480: /* Temporarily Unavailable */
+				case 404: /* Not Found */
+				case 410: /* Gone */
+				case 400: /* Bad Request */
+				case 500: /* Server error */
+				case 503: /* Service Unavailable */
+					if (owner) {
+						ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
+						congest = TRUE;
+					}
+					break;
+				default:
+					/* Send hangup */	
 					break;
 				}
-			case 482: 
-				 /* So we treat this as a call
-				 forward and hope we end up at the right place... */
-				if (option_debug)
-					ast_log(LOG_DEBUG, "Hairpin detected, setting up call forward for what it's worth\n");
-				if (p->owner)
-					ast_string_field_build(p->owner, call_forward,
-							       "Local/%s@%s", p->peername, p->context);
-					/* Fall through */
-			case 480: /* Temporarily Unavailable */
-			case 404: /* Not Found */
-			case 410: /* Gone */
-			case 400: /* Bad Request */
-			case 500: /* Server error */
-				if (sipmethod == SIP_REFER) {
-					handle_response_refer(p, resp, rest, req);
-					break;
-				}
-				/* Fall through */
-			case 503: /* Service Unavailable */
-				if (owner)
-					ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
-				break;
-			default:
-				/* Send hangup */	
-				if (owner)
+				/* Ok, we got an error response, so let's kill this,
+					whatever it is */
+				if (p->owner && !congest)
 					ast_queue_hangup(p->owner);
-				break;
-			}
-			/* ACK on invite */
-			if (sipmethod == SIP_INVITE) 
-				transmit_request(p, SIP_ACK, req->seqno, XMIT_UNRELIABLE, FALSE);
-			ast_set_flag(&p->flags[0], SIP_ALREADYGONE);	
-			if (!p->owner)
-				ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
-		} else if ((resp >= 100) && (resp < 200)) {
-			if (sipmethod == SIP_INVITE) {
-				if (!ast_test_flag(req, SIP_PKT_IGNORE))
-					sip_cancel_destroy(p);
-				if (find_sdp(req))
-					process_sdp(p, req);
-				if (p->owner) {
-					/* Queue a progress frame */
-					ast_queue_control(p->owner, AST_CONTROL_PROGRESS);
-				}
-			}
-		} else
-			ast_log(LOG_NOTICE, "Dont know how to handle a %d %s response from %s\n", resp, rest, p->owner ? p->owner->name : ast_inet_ntoa(p->sa.sin_addr));
+				stop_media_flows(p);	/* Stop RTP, VRTP and UDPTL */
+				ast_set_flag(&p->flags[0], SIP_ALREADYGONE);	
+				if (!p->owner)
+					ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
+			} else
+				ast_log(LOG_NOTICE, "Dont know how to handle a %d %s response from %s\n", resp, rest, p->owner ? p->owner->name : ast_inet_ntoa(p->sa.sin_addr));
+		}
 	}
 }
 
