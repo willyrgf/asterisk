@@ -321,13 +321,14 @@ enum referstatus {
 
 /*!<  SIP RFC 3261 states for the INVITE transaction */
 enum invitetrans_state {
-        INV_STATE_CALLING,      /*!< Early state. Invite sent (only for client) */
-        INV_STATE_PROCEEDING,   /*!< Sent/Got 1xx message */
-        INV_STATE_COMPLETED,    /*!< Sent/Got 300-699 message, Waiting for ACK, Then CONFIRMED */
-        INV_STATE_CONFIRMED,    /*!< For server transactions: We got an ACK (no more retries) */
-        INV_STATE_TERMINATED,   /*!< Sent/Got Transaction completed, finished, over and out buddy 
+        INV_STATE_CALLING = 1,      /*!< Early state. Invite sent (only for client) */
+        INV_STATE_PROCEEDING = 2,   /*!< Sent/Got 1xx message */
+        INV_STATE_PROCEEDING_EARLY_MEDIA = 3,   /*!< Sent/Got 18x message */
+        INV_STATE_COMPLETED = 3,    /*!< Sent/Got 300-699 message, Waiting for ACK, Then CONFIRMED */
+        INV_STATE_CONFIRMED = 4,    /*!< For server transactions: We got an ACK (no more retries) */
+        INV_STATE_TERMINATED = 5,   /*!< Sent/Got Transaction completed, finished, over and out buddy 
 					- We might have a call or not  - check p->owner->_state */
-        INV_STATE_CANCELLED,    /*!< Sent/Got CANCEL or BYE in non-TERMINATED state */
+        INV_STATE_CANCELLED = 6,    /*!< Sent/Got CANCEL or BYE in non-TERMINATED state */
 };
 
 /*! \brief Transaction state for non-invite transactions */

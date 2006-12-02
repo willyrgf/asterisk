@@ -1318,11 +1318,16 @@ static int sip_hangup(struct ast_channel *ast)
 		return 0;
 	}
 	/* If the call is not UP, we need to send CANCEL instead of BYE */
-	if (ast->_state == AST_STATE_RING || ast->_state == AST_STATE_RINGING) {
+	/*! \note XXX This need to check invitestate to handle early media !!!*/
+	if (p->state < INV_STATE_COMPLETED) {
 		needcancel = TRUE;
-		if (option_debug > 3)
-			ast_log(LOG_DEBUG, "Hanging up channel in state %s (not UP)\n", ast_state2str(ast->_state));
+		if (option_debug > 3) {
+			ast_log(LOG_DEBUG, "Hanging up channel in AST state %s (not UP)\n", ast_state2str(ast->_state));
+			ast_log(LOG_DEBUG, "Hanging up channel in SIP state %s\n", dialogstate2str(p->state));
+		}
 	}
+
+	if (option_debug > 2)
 
 	/* Disconnect */
 	if (p->vad)
@@ -1340,7 +1345,7 @@ static int sip_hangup(struct ast_channel *ast)
 	*/
 	if (ast_test_flag(&p->flags[0], SIP_ALREADYGONE))
 		needdestroy = 1;	/* Set destroy flag at end of this function */
-	else
+	else	/* ONLY do this if we're in UP state */
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 
 	/* Start the process if it's not already started */
@@ -1405,6 +1410,7 @@ static int sip_hangup(struct ast_channel *ast)
 				   but we can't send one while we have "INVITE" outstanding. */
 				ast_set_flag(&p->flags[0], SIP_PENDINGBYE);	
 				ast_clear_flag(&p->flags[0], SIP_NEEDREINVITE);	
+				sip_clear_destroy(p);
 			}
 		}
 	}
@@ -1660,6 +1666,7 @@ static int sip_indicate(struct ast_channel *ast, int condition, const void *data
 				/* Send 180 ringing if out-of-band seems reasonable */
 				transmit_response(p, "180 Ringing", &p->initreq);
 				ast_set_flag(&p->flags[0], SIP_RINGING);
+				dialogstatechange(p, DIALOG_STATE_PROCEEDING);
 				if (ast_test_flag(&p->flags[0], SIP_PROG_INBAND) != SIP_PROG_INBAND_YES)
 					break;
 			} else {
@@ -1672,6 +1679,7 @@ static int sip_indicate(struct ast_channel *ast, int condition, const void *data
 		if (ast->_state != AST_STATE_UP) {
 			transmit_final_response(p, "486 Busy Here", &p->initreq, XMIT_RELIABLE);
 			ast_softhangup_nolock(ast, AST_SOFTHANGUP_DEV);
+			dialogstatechange(p, DIALOG_STATE_CONFIRMED);
 			break;
 		}
 		res = -1;
@@ -1680,6 +1688,7 @@ static int sip_indicate(struct ast_channel *ast, int condition, const void *data
 		if (ast->_state != AST_STATE_UP) {
 			transmit_final_response(p, "503 Service Unavailable", &p->initreq, XMIT_RELIABLE);
 			ast_softhangup_nolock(ast, AST_SOFTHANGUP_DEV);
+			dialogstatechange(p, DIALOG_STATE_CONFIRMED);
 			break;
 		}
 		res = -1;
@@ -1689,6 +1698,7 @@ static int sip_indicate(struct ast_channel *ast, int condition, const void *data
 		    !ast_test_flag(&p->flags[0], SIP_PROGRESS_SENT) &&
 		    !ast_test_flag(&p->flags[0], SIP_OUTGOING)) {
 			transmit_response(p, "100 Trying", &p->initreq);
+			dialogstatechange(p, DIALOG_STATE_PROCEEDING);
 			break;
 		}
 		res = -1;
@@ -1699,6 +1709,7 @@ static int sip_indicate(struct ast_channel *ast, int condition, const void *data
 		    !ast_test_flag(&p->flags[0], SIP_OUTGOING)) {
 			transmit_response_with_attachment(WITH_SDP, p, "183 Session Progress", &p->initreq, XMIT_UNRELIABLE);
 			ast_set_flag(&p->flags[0], SIP_PROGRESS_SENT);	
+			dialogstatechange(p, DIALOG_STATE_PROCEEDING);
 			break;
 		}
 		res = -1;
