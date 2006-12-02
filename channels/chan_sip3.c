@@ -261,6 +261,7 @@
 	- \b sip3_cliami.c	Manager and CLI functions
 	- \b sip3_sdprtp.c	SDP handling and RTP interface
 	- \b sip3_callerid.c	CallerID, pres and RPID handling
+	- \b sip3_monitor.c	The monitor thread (housekeeping)
 	- \b sip3_dialog.c	SIP dialog support
 	- \b sip3_auth.c	SIP authentication
 	- \b sip3_config.c	Configuration
