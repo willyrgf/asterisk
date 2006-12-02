@@ -759,6 +759,7 @@ static int sip_show_settings(int fd, int argc, char *argv[])
 	ast_cli(fd, "  T1 minimum:             %d\n", global.t1min);
 	ast_cli(fd, "  Relax DTMF:             %s\n", global.relaxdtmf ? "Yes" : "No");
 	ast_cli(fd, "  Compact SIP headers:    %s\n", global.compactheaders ? "Yes" : "No");
+	ast_cli(fd, "  RTP Keepalive:          %d %s\n", global.rtpkeepalive, global.rtpkeepalive ? "" : "(Disabled)" );
 	ast_cli(fd, "  RTP Timeout:            %d %s\n", global.rtptimeout, global.rtptimeout ? "" : "(Disabled)" );
 	ast_cli(fd, "  RTP Hold Timeout:       %d %s\n", global.rtpholdtimeout, global.rtpholdtimeout ? "" : "(Disabled)");
 	ast_cli(fd, "  MWI NOTIFY mime type:   %s\n", global.default_notifymime);

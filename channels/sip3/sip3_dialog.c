@@ -737,16 +737,19 @@ struct sip_dialog *sip_alloc(ast_string_field callid, struct sockaddr_in *sin,
 		ast_rtp_setdtmf(p->rtp, ast_test_flag(&p->flags[0], SIP_DTMF) != SIP_DTMF_INFO);
 		ast_rtp_setdtmfcompensate(p->rtp, ast_test_flag(&p->flags[1], SIP_PAGE2_RFC2833_COMPENSATE));
 		ast_rtp_settos(p->rtp, global.tos_audio);
+		ast_rtp_set_rtptimeout(p->rtp, global.rtptimeout);
+		ast_rtp_set_rtpholdtimeout(p->rtp, global.rtpholdtimeout);
+		ast_rtp_set_rtpkeepalive(p->rtp, global.rtpkeepalive);
 		if (p->vrtp) {
 			ast_rtp_settos(p->vrtp, global.tos_video);
 			ast_rtp_setdtmf(p->vrtp, 0);
 			ast_rtp_setdtmfcompensate(p->vrtp, 0);
+			ast_rtp_set_rtptimeout(p->vrtp, global.rtptimeout);
+			ast_rtp_set_rtpholdtimeout(p->vrtp, global.rtpholdtimeout);
+			ast_rtp_set_rtpkeepalive(p->vrtp, global.rtpkeepalive);
 		}
 		if (p->udptl)
 			ast_udptl_settos(p->udptl, global.tos_audio);
-		p->rtptimeout = global.rtptimeout;
-		p->rtpholdtimeout = global.rtpholdtimeout;
-		p->rtpkeepalive = global.rtpkeepalive;
 		p->maxcallbitrate = global.default_maxcallbitrate;
 	}
 

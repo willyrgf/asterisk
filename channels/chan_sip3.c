@@ -5245,6 +5245,7 @@ static int handle_request_invite(struct sip_dialog *p, struct sip_request *req, 
 		/* we need to check the tags and the branch. If they're different, this is
 	   	  in fact a forked call through a SIP proxy somewhere. */
 		transmit_final_response(p, "482 Loop Detected", req, XMIT_RELIABLE);
+		sip_sched_destroy(p, DEFAULT_TRANS_TIMEOUT);
 		return 0;
 	}
 	
@@ -5464,6 +5465,7 @@ static int handle_request_invite(struct sip_dialog *p, struct sip_request *req, 
 				response = "404 Not Found";
 			transmit_final_response(p, response, req, XMIT_RELIABLE);
 			update_call_counter(p, DEC_CALL_LIMIT);
+			return 0;
 		} else {
 			/* If no extension was specified, use the s one */
 			/* Basically for calling to IP/Host name only */
@@ -5480,10 +5482,8 @@ static int handle_request_invite(struct sip_dialog *p, struct sip_request *req, 
 			/* Save Record-Route for any later requests we make on this dialogue */
 			build_route(p, req, 0);
 
-			if (c) {
-				/* Pre-lock the call */
+			if (c) /* Pre-lock the call */
 				ast_channel_lock(c);
-			}
 		}
 	} else {
 		if (option_debug > 1 && sipdebug) {

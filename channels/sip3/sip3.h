@@ -816,9 +816,6 @@ struct sip_dialog {
 	struct sockaddr_in vredirip;		/*!< Where our Video RTP should be going if not to us */
 	time_t lastrtprx;			/*!< Last RTP received */
 	time_t lastrtptx;			/*!< Last RTP sent */
-	int rtptimeout;				/*!< RTP timeout time */
-	int rtpholdtimeout;			/*!< RTP timeout when on hold */
-	int rtpkeepalive;			/*!< Send RTP packets for keepalive */
 	struct ast_dsp *vad;			/*!< Inband DTMF Detection dsp */
 	int autoframing;			/*!< ???? */
 

@@ -154,61 +154,74 @@ int restart_monitor(void)
 	return 0;
 }
 
-
-/*! \brief Check if we need to send RTP keepalive or hangup, due to RTP timers */
-static void check_rtp_timeout(struct sip_dialog *sip, time_t t)
+/*! \brief Check RTP timeouts and send RTP keepalives 
+	\note We're only sending audio keepalives yet.	
+*/
+static void check_rtp_timeout(struct sip_pvt *dialog, time_t t)
 {
-	/* Do we have a channel that is UP and do we handle RTP inside the box? */
-	if (!(sip->rtp && sip->owner && (sip->owner->_state == AST_STATE_UP) &&
-	    !sip->redirip.sin_addr.s_addr) )
+	/* If we have no RTP or no active owner, no need to check timers */
+	if (!dialog->rtp || !dialog->owner)
+		return;
+	/* If the call is not in UP state or redirected outside Asterisk, no need to check timers */
+	if (dialog->owner->_state != AST_STATE_UP || dialog->redirip.sin_addr.s_addr)
 		return;
 
-	/* Do we need to sent RTP keepalive ? */
-	if (sip->lastrtptx && sip->rtpkeepalive &&
-	    (t > sip->lastrtptx + sip->rtpkeepalive)) {
+	/* If we have no timers set, return now */
+	if (ast_rtp_get_rtpkeepalive(dialog->rtp) == 0 || (ast_rtp_get_rtptimeout(dialog->rtp) == 0 && ast_rtp_get_rtpholdtimeout(dialog->rtp) == 0))
+		return;
+
+	/* Check AUDIO RTP keepalives */
+	if (dialog->lastrtptx && ast_rtp_get_rtpkeepalive(dialog->rtp) &&
+		    (t > dialog->lastrtptx + ast_rtp_get_rtpkeepalive(dialog->rtp))) {
 		/* Need to send an empty RTP packet */
-		sip->lastrtptx = time(NULL);
-		ast_rtp_sendcng(sip->rtp, 0);
+		dialog->lastrtptx = time(NULL);
+		ast_rtp_sendcng(dialog->rtp, 0);
 	}
 
-	if (sip->lastrtprx && (sip->rtptimeout || sip->rtpholdtimeout) &&
-	    (t > sip->lastrtprx + sip->rtptimeout)) {
+	/*! \todo Check video RTP keepalives
+
+		Do we need to move the lastrtptx to the RTP structure to have one for audio and one
+		for video? It really does belong to the RTP structure.
+	*/
+
+	/* Check AUDIO RTP timers */
+	if (dialog->lastrtprx && (ast_rtp_get_rtptimeout(dialog->rtp) || ast_rtp_get_rtpholdtimeout(dialog->rtp)) &&
+		    (t > dialog->lastrtprx + ast_rtp_get_rtptimeout(dialog->rtp))) {
+
 		/* Might be a timeout now -- see if we're on hold */
 		struct sockaddr_in sin;
-		ast_rtp_get_peer(sip->rtp, &sin);
-		if (sin.sin_addr.s_addr || 
-		    (sip->rtpholdtimeout && (t > sip->lastrtprx + sip->rtpholdtimeout))) {
+		ast_rtp_get_peer(dialog->rtp, &sin);
+		if (sin.sin_addr.s_addr || (ast_rtp_get_rtpholdtimeout(dialog->rtp) &&
+		     (t > dialog->lastrtprx + ast_rtp_get_rtpholdtimeout(dialog->rtp)))) {
 			/* Needs a hangup */
-			if (!sip->rtptimeout)
-				return;
-			while (sip->owner && ast_channel_trylock(sip->owner)) {
-				dialog_lock(sip, FALSE);
-				usleep(1);
-				dialog_lock(sip, TRUE);
+			if (dialog->rtptimeout) {
+				while (dialog->owner && ast_channel_trylock(dialog->owner)) {
+					sip_pvt_unlock(dialog);
+					usleep(1);
+					sip_pvt_lock(dialog);
+				}
+				if (!(ast_rtp_get_bridged(dialog->rtp))) {
+					ast_log(LOG_NOTICE, "Disconnecting call '%s' for lack of RTP activity in %ld seconds\n",
+						dialog->owner->name, (long) (t - dialog->lastrtprx));
+					/* Issue a softhangup */
+					ast_softhangup_nolock(dialog->owner, AST_SOFTHANGUP_DEV);
+				} else
+					ast_log(LOG_NOTICE, "'%s' will not be disconnected in %ld seconds because it is directly bridged to another RTP stream\n", dialog->owner->name, (long) (t - dialog->lastrtprx));
+				ast_channel_unlock(dialog->owner);
+				/* forget the timeouts for this call, since a hangup
+				   has already been requested and we don't want to
+				   repeatedly request hangups
+				*/
+				ast_rtp_set_rtptimeout(dialog->rtp, 0);
+				ast_rtp_set_rtpholdtimeout(dialog->rtp, 0);
+				if (dialog->vrtp) {
+					ast_rtp_set_rtptimeout(dialog->vrtp, 0);
+					ast_rtp_set_rtpholdtimeout(dialog->vrtp, 0);
+				}
 			}
-			if (!sip->owner) 
-				return;
-
-			if (ast_rtp_get_bridged(sip->rtp)) 
-				ast_log(LOG_NOTICE, "'%s' will not be disconnected in %ld seconds because it is directly bridged to another RTP stream\n", sip->owner->name, (long) (t - sip->lastrtprx));
-			else {
-				ast_log(LOG_NOTICE, "Disconnecting call '%s' for lack of RTP activity in %ld seconds\n",
-					sip->owner->name,
-					(long) (t - sip->lastrtprx));
-				/* Issue a softhangup */
-				ast_softhangup_nolock(sip->owner, AST_SOFTHANGUP_DEV);
-			} 
-			ast_channel_unlock(sip->owner);
-			/* forget the timeouts for this call, since a hangup
-			   has already been requested and we don't want to
-			   repeatedly request hangups
-			*/
-			sip->rtptimeout = 0;
-			sip->rtpholdtimeout = 0;
 		}
 	}
 }
-
 /*! \brief Check whether peer needs a new MWI notification check */
 static int does_peer_need_mwi(struct sip_peer *peer)
 {

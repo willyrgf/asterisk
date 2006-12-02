@@ -358,22 +358,6 @@ int process_sdp(struct sip_dialog *p, struct sip_request *req)
 	if (vhp)
 		memcpy(&vsin.sin_addr, vhp->h_addr, sizeof(vsin.sin_addr));
 		
-	if (p->rtp) {
-		if (portno > 0) {
-			sin.sin_port = htons(portno);
-			ast_rtp_set_peer(p->rtp, &sin);
-			if (debug)
-				ast_verbose("Peer audio RTP is at port %s:%d\n", ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port));
-		} else {
-			ast_rtp_stop(p->rtp);
-			if (debug)
-				ast_verbose("Peer doesn't provide audio\n");
-		}
-	}
-	/* Setup video port number */
-	if (vportno != -1)
-		vsin.sin_port = htons(vportno);
-
 	/* Setup UDPTL port number */
 	if (p->udptl) {
 		if (udptlportno > 0) {
@@ -387,6 +371,26 @@ int process_sdp(struct sip_dialog *p, struct sip_request *req)
 				ast_log(LOG_DEBUG, "Peer doesn't provide T.38 UDPTL\n");
 		}
 	}
+	if (p->rtp) {
+		if (portno > 0) {
+			sin.sin_port = htons(portno);
+			ast_rtp_set_peer(p->rtp, &sin);
+			if (debug)
+				ast_verbose("Peer audio RTP is at port %s:%d\n", ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port));
+		} else {
+			if (utptlportno > 0) {
+				if (debug)
+					ast_log(LOG_DEBUG, "Got T.38 re-invite without audio. Keeping RTP active during T.38 session. Call-Id %s\n", p->callid);
+			} else 
+				ast_rtp_stop(p->rtp);
+			if (debug)
+				ast_verbose("Peer doesn't provide audio: Call-Id: %s\n", p->callid);
+		}
+	}
+	/* Setup video port number */
+	if (vportno != -1)
+		vsin.sin_port = htons(vportno);
+
 
 	/* Next, scan through each "a=rtpmap:" line, noting each
 	 * specified RTP payload type (with corresponding MIME subtype):
