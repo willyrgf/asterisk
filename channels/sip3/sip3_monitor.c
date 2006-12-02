@@ -240,7 +240,6 @@ void *do_sip_monitor(void *data)
 	int fastrestart = FALSE;
 	int lastpeernum = -1;
 	int curpeernum;
-	int reloading;
 
 	/* Add an I/O event to our SIP UDP socket */
 	if (sipsocket_initialized())
