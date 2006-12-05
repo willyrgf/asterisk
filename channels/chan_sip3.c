@@ -417,7 +417,7 @@ struct expiry_times expiry = {
 
 /* Default setttings are used as a channel setting and as a default when
    configuring devices */
-/* Global settings only apply to the channel */
+/*! Global settings only apply to the channel */
 struct sip_globals global;
 
 /* Object counters */
@@ -835,6 +835,9 @@ GNURK void sip_destroy_device(struct sip_peer *device)
 		device->registry->peer = NULL;
 		ASTOBJ_UNREF(device->registry,sip_registry_destroy);
 	}
+
+	/* Free the stringfield pool */
+	ast_string_field_free_pools(device);
 	free(device);
 }
 
@@ -2682,7 +2685,8 @@ GNURK void reg_source_db(struct sip_peer *peer)
 		return;
 
 	if (username)
-		ast_copy_string(peer->defaultuser, username, sizeof(peer->defaultuser));
+		ast_string_field_set(peer, defaultuser, username);
+		//ast_copy_string(peer->defaultuser, username, sizeof(peer->defaultuser));
 	if (contact)
 		ast_copy_string(peer->fullcontact, contact, sizeof(peer->fullcontact));
 
@@ -2904,9 +2908,11 @@ static enum parse_register_result parse_register_contact(struct sip_dialog *pvt,
 	peer->sipoptions = pvt->sipoptions;
 
 	if (curi) {	/* Overwrite the default username from config at registration */
-		ast_copy_string(peer->defaultuser, curi, sizeof(peer->defaultuser));
+		ast_string_field_set(peer, defaultuser, curi);
+		//ast_copy_string(peer->defaultuser, curi, sizeof(peer->defaultuser));
 	} else
-		peer->defaultuser[0] = '\0';
+		ast_string_field_set(peer, defaultuser, "");
+		//peer->defaultuser[0] = '\0';
 
 	if (peer->expire > -1)
 		ast_sched_del(sched, peer->expire);
@@ -6361,7 +6367,7 @@ GNURK int sip_send_mwi_to_peer(struct sip_peer *peer)
 	}
 	/* Send MWI */
 	ast_set_flag(&p->flags[0], SIP_OUTGOING);
-	transmit_notify_with_mwi(p, newmsgs, oldmsgs, peer->vmexten);
+	transmit_notify_with_mwi(p, newmsgs, oldmsgs, (char *) peer->vmexten);
 	return 0;
 }
 

@@ -45,8 +45,8 @@
 #endif
 
 #define DEFAULT_DEFAULT_EXPIRY  120
-#define DEFAULT_MIN_EXPIRY      60
-#define DEFAULT_MAX_EXPIRY      3600
+#define DEFAULT_MIN_EXPIRY      60		/*! Minimum expiry time for subscription and registration requests */
+#define DEFAULT_MAX_EXPIRY      3600		/*! Maximum expiry time for regs and subs */
 #define DEFAULT_REGISTRATION_TIMEOUT 20
 #define DEFAULT_MAX_FORWARDS    "70"
 
@@ -497,6 +497,62 @@ struct sip_route {
 	char hop[0];
 };
 
+/*! Global settings only apply to the channel */
+struct sip_globals {
+	struct ast_jb_conf jbconf;	/*!< Jitterbuffer configuration */
+	int maxforwards;		/*!< Max forwards */
+	int rtautoclear;		/*!< Realtime caching options */
+	int notifyringing;		/*!< Send notifications on ringing */
+	int alwaysauthreject;		/*!< Send 401 Unauthorized for all failing requests */
+	int srvlookup;			/*!< SRV Lookup on or off. Default is off, RFC behavior is on */
+	int autocreatepeer;		/*!< Auto creation of peers at registration? Default off. */
+	int relaxdtmf;			/*!< Relax DTMF */
+	int rtptimeout;			/*!< Time out call if no RTP */
+	int rtpholdtimeout;
+	int rtpkeepalive;		/*!< Send RTP keepalives */
+	int reg_timeout;	
+	int regattempts_max;		/*!< Registration attempts before giving up */
+	int allowguest;			/*!< allow unauthenticated users/peers to connect? */
+	int allowsubscribe;		/*!< Flag for disabling ALL subscriptions, this is FALSE only if all peers are FALSE 
+					    	the global setting is in globals_flags[1] */
+	int mwitime;			/*!< Time between MWI checks for peers */
+	unsigned int tos_sip;		/*!< IP type of service for SIP packets */
+	unsigned int tos_audio;		/*!< IP type of service for audio RTP packets */
+	unsigned int tos_video;		/*!< IP type of service for video RTP packets */
+	unsigned int tos_presence;	/*!< IP type of service for SIP presence packets */
+	int compactheaders;		/*!< send compact sip headers */
+	int recordhistory;		/*!< Record SIP history. Off by default */
+	int dumphistory;		/*!< Dump history to verbose before destroying SIP dialog */
+	char realm[MAXHOSTNAMELEN]; 	/*!< Default realm */
+	char regcontext[AST_MAX_CONTEXT];	/*!< Context for auto-extensions */
+	char useragent[AST_MAX_EXTENSION];	/*!< Useragent for the SIP channel */
+	int allow_external_domains;	/*!< Accept calls to external SIP domains? */
+	int callevents;			/*!< Whether we send manager events or not */
+	int t1min;			/*!< T1 roundtrip time minimum */
+	enum transfermodes allowtransfer;	/*!< SIP Refer restriction scheme */
+	int autoframing;
+	struct ast_flags flags[2];	/* Flags for various default settings */
+	/* Default values */
+	int default_qualifycheck_ok;	/*!< Default qualify time when status is ok */
+	int default_qualifycheck_notok;	/*!< Default qualify time when statusis not ok */
+	int default_qualify;		/*!< Default Qualify= setting */
+	int capability;			/*!< Codec support */
+	int dtmf_capability;		/*!< DTMF support (2833) */
+	int t38_capability;		/*!< T38 Capability */
+	char default_context[AST_MAX_CONTEXT];
+	char default_subscribecontext[AST_MAX_CONTEXT];
+	char default_language[MAX_LANGUAGE];
+	char default_callerid[AST_MAX_EXTENSION];
+	char default_fromdomain[AST_MAX_EXTENSION];
+	char default_notifymime[AST_MAX_EXTENSION];
+	char default_vmexten[AST_MAX_EXTENSION];
+	char default_mohinterpret[MAX_MUSICCLASS];  /*!< Global setting for moh class to use when put on hold */
+	char default_mohsuggest[MAX_MUSICCLASS];	   /*!< Global setting for moh class to suggest when putting 
+                                                    *   a bridged channel on hold */
+	int default_maxcallbitrate;	/*!< Maximum bitrate for call */
+	struct ast_codec_pref default_prefs;	/*!< Default codec prefs */
+};
+
 
 /*! \brief Domain data structure. 
 	\note In the future, we will connect this to a configuration tree specific
@@ -506,6 +562,7 @@ struct domain {
 	char domain[MAXHOSTNAMELEN];		/*!< SIP domain we are responsible for */
 	char context[AST_MAX_EXTENSION];	/*!< Incoming context for this domain */
 	enum domain_mode mode;			/*!< How did we find this domain? */
+	struct sip_globals globals;		/*!< Globals for this domain */
 	AST_LIST_ENTRY(domain) list;		/*!< List mechanics */
 };
 
@@ -771,6 +828,7 @@ struct sip_dialog {
 	int expiry;				/*!< How long we take to expire */
 	char tag[11];				/*!< Dialog ID: Our tag for this session */
 	int callingpres;			/*!< Caller ID presentation settings */
+	int maxforwards;			/*!< Max forwards for this dialog */
 	struct sip_route *route;		/*!< Head of linked list of routing steps (fm Record-Route) */
 	int route_persistant;			/*!< Is this the "real" route? */
 	char lastmsg[256];			/*!< Last Message sent/received */
@@ -860,34 +918,50 @@ struct sip_peer {
 						a domain only 
 					For type=phone, the domain needs to be a locally hosted domain */
 	enum objecttype type;		/*!< SIP_PEER */
-	char secret[80];		/*!< Password */
-	char md5secret[80];		/*!< Password in MD5 */
+	AST_DECLARE_STRING_FIELDS(
+		AST_STRING_FIELD(secret);	/*!< Secret (password) */
+		AST_STRING_FIELD(md5secret);	/*!< Secret (password in md5 digest with realm and username) */
+		AST_STRING_FIELD(context);	/*!< Default context for incoming calls */
+		AST_STRING_FIELD(subscribecontext);	/*!< Default context for subscriptions */
+		AST_STRING_FIELD(defaultuser);	/*!< Temporary username until registration */ 
+		AST_STRING_FIELD(authuser);	/*!< Authentication user name */
+		AST_STRING_FIELD(regexten); 	/*!< Extension to register (if regcontext is used) */
+		AST_STRING_FIELD(fromuser);	/*!< From: user when calling this peer */
+		AST_STRING_FIELD(fromdomain);	/*!< From: domain when calling this peer */
+		AST_STRING_FIELD(vmexten); 	/*!< Dialplan extension for MWI notify message*/
+		AST_STRING_FIELD(mailbox); 	/*!< Mailbox setting for MWI checks */
+	);
+	//char secret[80];		/*!< Password */
+	//char md5secret[80];		/*!< Password in MD5 */
 	struct sip_auth *auth;		/*!< Realm authentication list */
-	char context[AST_MAX_CONTEXT];	/*!< Default context for incoming calls */
-	char subscribecontext[AST_MAX_CONTEXT];	/*!< Default context for subscriptions */
-	char defaultuser[80];		/*!< Temporary username until registration */ 
-	char authuser[80];		/*!< Authentication user name */
+	//char context[AST_MAX_CONTEXT];	/*!< Default context for incoming calls */
+	//char subscribecontext[AST_MAX_CONTEXT];	/*!< Default context for subscriptions */
+	//char defaultuser[80];		/*!< Temporary username until registration */ 
+	//char authuser[80];		/*!< Authentication user name */
 	char accountcode[AST_MAX_ACCOUNT_CODE];	/*!< Account code */
 	int amaflags;			/*!< AMA Flags (for billing) */
 	char tohost[MAXHOSTNAMELEN];	/*!< If not dynamic, IP address */
-	char regexten[AST_MAX_EXTENSION]; /*!< Extension to register (if regcontext is used) */
-	char fromuser[80];		/*!< From: user when calling this peer */
-	char fromdomain[MAXHOSTNAMELEN];	/*!< From: domain when calling this peer */
-	char fullcontact[256];		/*!< Contact registered with us (not in sip.conf) */
+	//char regexten[AST_MAX_EXTENSION]; /*!< Extension to register (if regcontext is used) */
+	//char fromuser[80];		/*!< From: user when calling this peer */
+	//char fromdomain[MAXHOSTNAMELEN];	/*!< From: domain when calling this peer */
+	char fullcontact[256];		/*!< Contact registered with us (not in sip.conf)
+					 *  \note XXX Needs to move to stringfields!!! */
 	char cid_num[80];		/*!< Caller ID num */
 	char cid_name[80];		/*!< Caller ID name */
 	int callingpres;		/*!< Calling id presentation */
 	int inUse;			/*!< Number of calls in use */
 	int inRinging;			/*!< Number of calls ringing */
+	int maxforwards;		/*!< Max forwards */
 	int onHold;                     /*!< Peer has someone on hold */
 	int call_limit;			/*!< Limit of concurrent calls */
 	enum transfermodes allowtransfer;	/*! SIP Refer restriction scheme */
-	char vmexten[AST_MAX_EXTENSION]; /*!< Dialplan extension for MWI notify message*/
-	char mailbox[AST_MAX_EXTENSION]; /*!< Mailbox setting for MWI checks */
+	//char vmexten[AST_MAX_EXTENSION]; /*!< Dialplan extension for MWI notify message*/
+	//char mailbox[AST_MAX_EXTENSION]; /*!< Mailbox setting for MWI checks */
 	char language[MAX_LANGUAGE];	/*!<  Default language for prompts */
 	char mohinterpret[MAX_MUSICCLASS];/*!<  Music on Hold class */
 	char mohsuggest[MAX_MUSICCLASS];/*!<  Music on Hold class */
-	char useragent[256];		/*!<  User agent in SIP request (saved from registration) */
+	char useragent[256];		/*!<  User agent in SIP request (saved from registration) 
+					 *! \note XXX Needs to move to stringfields!!! */
 	struct ast_codec_pref prefs;	/*!<  codec prefs */
 	int lastmsgssent;
 	time_t	lastmsgcheck;		/*!<  Last time we checked for MWI */
@@ -957,60 +1031,6 @@ struct sip_registry {
 	struct sip_peer *peer;		/*!< If we have a known peer for this registry entry, use it for incoming calls */
 };
 
-/* Global settings only apply to the channel */
-struct sip_globals {
-	struct ast_jb_conf jbconf;	/*!< Jitterbuffer configuration */
-	int rtautoclear;		/*!< Realtime caching options */
-	int notifyringing;		/*!< Send notifications on ringing */
-	int alwaysauthreject;		/*!< Send 401 Unauthorized for all failing requests */
-	int srvlookup;			/*!< SRV Lookup on or off. Default is off, RFC behavior is on */
-	int autocreatepeer;		/*!< Auto creation of peers at registration? Default off. */
-	int relaxdtmf;			/*!< Relax DTMF */
-	int rtptimeout;			/*!< Time out call if no RTP */
-	int rtpholdtimeout;
-	int rtpkeepalive;		/*!< Send RTP keepalives */
-	int reg_timeout;	
-	int regattempts_max;		/*!< Registration attempts before giving up */
-	int allowguest;			/*!< allow unauthenticated users/peers to connect? */
-	int allowsubscribe;		/*!< Flag for disabling ALL subscriptions, this is FALSE only if all peers are FALSE 
-					    	the global setting is in globals_flags[1] */
-	int mwitime;			/*!< Time between MWI checks for peers */
-	unsigned int tos_sip;		/*!< IP type of service for SIP packets */
-	unsigned int tos_audio;		/*!< IP type of service for audio RTP packets */
-	unsigned int tos_video;		/*!< IP type of service for video RTP packets */
-	unsigned int tos_presence;	/*!< IP type of service for SIP presence packets */
-	int compactheaders;		/*!< send compact sip headers */
-	int recordhistory;		/*!< Record SIP history. Off by default */
-	int dumphistory;		/*!< Dump history to verbose before destroying SIP dialog */
-	char realm[MAXHOSTNAMELEN]; 	/*!< Default realm */
-	char regcontext[AST_MAX_CONTEXT];	/*!< Context for auto-extensions */
-	char useragent[AST_MAX_EXTENSION];	/*!< Useragent for the SIP channel */
-	int allow_external_domains;	/*!< Accept calls to external SIP domains? */
-	int callevents;			/*!< Whether we send manager events or not */
-	int t1min;			/*!< T1 roundtrip time minimum */
-	enum transfermodes allowtransfer;	/*!< SIP Refer restriction scheme */
-	int autoframing;
-	struct ast_flags flags[2];	/* Flags for various default settings */
-	/* Default values */
-	int default_qualifycheck_ok;	/*!< Default qualify time when status is ok */
-	int default_qualifycheck_notok;	/*!< Default qualify time when statusis not ok */
-	int default_qualify;		/*!< Default Qualify= setting */
-	int capability;			/*!< Codec support */
-	int dtmf_capability;		/*!< DTMF support (2833) */
-	int t38_capability;		/*!< T38 Capability */
-	char default_context[AST_MAX_CONTEXT];
-	char default_subscribecontext[AST_MAX_CONTEXT];
-	char default_language[MAX_LANGUAGE];
-	char default_callerid[AST_MAX_EXTENSION];
-	char default_fromdomain[AST_MAX_EXTENSION];
-	char default_notifymime[AST_MAX_EXTENSION];
-	char default_vmexten[AST_MAX_EXTENSION];
-	char default_mohinterpret[MAX_MUSICCLASS];  /*!< Global setting for moh class to use when put on hold */
-	char default_mohsuggest[MAX_MUSICCLASS];	   /*!< Global setting for moh class to suggest when putting 
-                                                    *   a bridged channel on hold */
-	int default_maxcallbitrate;	/*!< Maximum bitrate for call */
-	struct ast_codec_pref default_prefs;	/*!< Default codec prefs */
-};
 
 /* Network interface settings */
 struct sip_network {

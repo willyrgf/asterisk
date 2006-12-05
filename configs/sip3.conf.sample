@@ -110,8 +110,6 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 				; and subscriptions (seconds)
 ;minexpiry=60			; Minimum length of registrations/subscriptions (default 60)
 ;defaultexpiry=120		; Default length of incoming/outgoing registration
-;t1min=100			; Minimum roundtrip time for messages to monitored hosts
-				; Defaults to 100 ms
 ;notifymimetype=text/plain	; Allow overriding of mime type in MWI NOTIFY
 ;checkmwi=10			; Default time between mailbox checks for peers
 ;vmexten=voicemail		; dialplan extension to reach mailbox sets the 
@@ -176,10 +174,6 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 				; for Sipura and Grandstream ATAs, among others). This is
 				; contrary to the RFC3551 specification, the peer _should_
 				; be negotiating AAL2-G726-32 instead :-(
-
-;default-qualify-ok = 30	; Set default time between OPTIONS packets when qualify=yes
-				; Default is 60. Recommended for NAT keepalives is 30 secs
-;default-qualify-notok = 10	; How often to check when NOT ok
 
 ;
 ; If regcontext is specified, Asterisk will dynamically create and destroy a
@@ -427,6 +421,15 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
                               ; variable size, actually the new jb of IAX2). Defaults to fixed.
 
 ; jblog = no                  ; Enables jitterbuffer frame logging. Defaults to "no".
+;------------------------------ ADVANCED CONFIGURATION -----------------------------
+;maxforwards = 70		; Set the Max forards (TTL) header for outbound SIP requests
+				; Default= 70
+;t1min=100			; Minimum roundtrip time for messages to monitored hosts
+				; Defaults to 100 ms
+;default-qualify-ok = 30	; Set default time between OPTIONS packets when qualify=yes
+				; Default is 60. Recommended for NAT keepalives is 30 secs
+;default-qualify-notok = 10	; How often to check when NOT ok
+
 ;-----------------------------------------------------------------------------------
 
 [authentication]

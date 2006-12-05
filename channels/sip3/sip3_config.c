@@ -279,8 +279,10 @@ void set_device_defaults(struct sip_peer *device)
 	}
 	ast_copy_flags(&device->flags[0], &global.flags[0], SIP_FLAGS_TO_COPY);
 	ast_copy_flags(&device->flags[1], &global.flags[1], SIP_PAGE2_FLAGS_TO_COPY);
-	strcpy(device->context, global.default_context);
-	strcpy(device->subscribecontext, global.default_subscribecontext);
+	ast_string_field_set(device, context, global.default_context);
+	ast_string_field_set(device, subscribecontext, global.default_subscribecontext);
+	//strcpy(device->context, global.default_context);
+	//strcpy(device->subscribecontext, global.default_subscribecontext);
 	strcpy(device->language, global.default_language);
 	strcpy(device->mohinterpret, global.default_mohinterpret);
 	strcpy(device->mohsuggest, global.default_mohsuggest);
@@ -292,14 +294,20 @@ void set_device_defaults(struct sip_peer *device)
 	device->rtpkeepalive = global.rtpkeepalive;
 	device->maxcallbitrate = global.default_maxcallbitrate;
 	strcpy(device->vmexten, global.default_vmexten);
-	device->secret[0] = '\0';
-	device->md5secret[0] = '\0';
+	ast_string_field_set(device, secret, "");
+	ast_string_field_set(device, md5secret, "");
+	ast_string_field_set(device, fromdomain, "");
+	ast_string_field_set(device, fromuser, "");
+	ast_string_field_set(device, regexten, "");
+	ast_string_field_set(device, mailbox, "");
+	//device->fromdomain[0] = '\0';
+	//device->fromuser[0] = '\0';
+	//device->regexten[0] = '\0';
+	//device->mailbox[0] = '\0';
+	//device->secret[0] = '\0';
+	//device->md5secret[0] = '\0';
 	device->cid_num[0] = '\0';
 	device->cid_name[0] = '\0';
-	device->fromdomain[0] = '\0';
-	device->fromuser[0] = '\0';
-	device->regexten[0] = '\0';
-	device->mailbox[0] = '\0';
 	device->callgroup = 0;
 	device->pickupgroup = 0;
 	device->allowtransfer = global.allowtransfer;
@@ -337,6 +345,11 @@ static struct sip_peer *build_device(const char *name, struct ast_variable *v, s
  	} else {
 		if (!(device = ast_calloc(1, sizeof(*device))))
 			return NULL;
+
+		if (ast_string_field_init(device, 512)) {	/* Initialize string field buffer */
+			free(device);
+			return NULL;
+		}
 
 		if (realtime)
 			sipcounters.realtime_peers++;
@@ -378,11 +391,13 @@ static struct sip_peer *build_device(const char *name, struct ast_variable *v, s
 			ast_copy_string(device->fullcontact, v->value, sizeof(device->fullcontact));
 			ast_set_flag(&device->flags[1], SIP_PAGE2_RT_FROMCONTACT);
 		} else if (!strcasecmp(v->name, "secret")) 
-			ast_copy_string(device->secret, v->value, sizeof(device->secret));
+			ast_string_field_set(device, secret, v->value);
+			//ast_copy_string(device->secret, v->value, sizeof(device->secret));
 		else if (!strcasecmp(v->name, "authuser")) 
 			ast_copy_string(device->authuser, v->value, sizeof(device->authuser));
 		else if (!strcasecmp(v->name, "md5secret")) 
-			ast_copy_string(device->md5secret, v->value, sizeof(device->md5secret));
+			ast_string_field_set(device, md5secret, v->value);
+			//ast_copy_string(device->md5secret, v->value, sizeof(device->md5secret));
 		else if (!strcasecmp(v->name, "auth"))
 			device->auth = add_realm_authentication(device->auth, v->value, v->lineno);
 		else if (!strcasecmp(v->name, "callerid")) {
@@ -392,15 +407,19 @@ static struct sip_peer *build_device(const char *name, struct ast_variable *v, s
 		} else if (!strcasecmp(v->name, "cid_number")) {
 			ast_copy_string(device->cid_num, v->value, sizeof(device->cid_num));
 		} else if (!strcasecmp(v->name, "context")) {
-			ast_copy_string(device->context, v->value, sizeof(device->context));
+			ast_string_field_set(device, context, v->value);
+			//ast_copy_string(device->context, v->value, sizeof(device->context));
 		} else if (!strcasecmp(v->name, "subscribecontext")) {
-			ast_copy_string(device->subscribecontext, v->value, sizeof(device->subscribecontext));
-		} else if (!strcasecmp(v->name, "fromdomain")) {
-			ast_copy_string(device->fromdomain, v->value, sizeof(device->fromdomain));
+			ast_string_field_set(device, subscribecontext, v->value);
+			//ast_copy_string(device->subscribecontext, v->value, sizeof(device->subscribecontext));
 		} else if (!strcasecmp(v->name, "usereqphone")) {
 			ast_set2_flag(&device->flags[0], ast_true(v->value), SIP_USEREQPHONE);
+		} else if (!strcasecmp(v->name, "fromdomain")) {
+			ast_string_field_set(device, fromdomain, v->value);
+			//ast_copy_string(device->fromdomain, v->value, sizeof(device->fromdomain));
 		} else if (!strcasecmp(v->name, "fromuser")) {
-			ast_copy_string(device->fromuser, v->value, sizeof(device->fromuser));
+			ast_string_field_set(device, fromuser, v->value);
+			//ast_copy_string(device->fromuser, v->value, sizeof(device->fromuser));
 		} else if (!strcasecmp(v->name, "host") || !strcasecmp(v->name, "outboundproxy")) {
 			if (!strcasecmp(v->value, "dynamic")) {
 				if (!strcasecmp(v->name, "outboundproxy") || obproxyfound) {
@@ -456,11 +475,13 @@ static struct sip_peer *build_device(const char *name, struct ast_variable *v, s
 			if (device->callingpres == -1)
 				device->callingpres = atoi(v->value);
 		} else if (!strcasecmp(v->name, "defaultuser")) {
-			ast_copy_string(device->defaultuser, v->value, sizeof(device->defaultuser));
+			ast_string_field_set(device, subscribecontext, v->value);
+			//ast_copy_string(device->defaultuser, v->value, sizeof(device->defaultuser));
 		} else if (!strcasecmp(v->name, "language")) {
 			ast_copy_string(device->language, v->value, sizeof(device->language));
 		} else if (!strcasecmp(v->name, "regexten")) {
-			ast_copy_string(device->regexten, v->value, sizeof(device->regexten));
+			ast_string_field_set(device, subscribecontext, v->value);
+			//ast_copy_string(device->regexten, v->value, sizeof(device->regexten));
 		} else if (!strcasecmp(v->name, "call-limit")) {
 			device->call_limit = atoi(v->value);
 			if (device->call_limit < 0)
@@ -480,12 +501,14 @@ static struct sip_peer *build_device(const char *name, struct ast_variable *v, s
 		} else if (!strcasecmp(v->name, "mohsuggest")) {
 			ast_copy_string(device->mohsuggest, v->value, sizeof(device->mohsuggest));
 		} else if (!strcasecmp(v->name, "mailbox")) {
-			ast_copy_string(device->mailbox, v->value, sizeof(device->mailbox));
+			ast_string_field_set(device, mailbox, v->value);
+			//ast_copy_string(device->mailbox, v->value, sizeof(device->mailbox));
 			sipcounters.peers_with_mwi++;
 		} else if (!strcasecmp(v->name, "subscribemwi")) {
 			ast_set2_flag(&device->flags[1], ast_true(v->value), SIP_PAGE2_SUBSCRIBEMWIONLY);
 		} else if (!strcasecmp(v->name, "vmexten")) {
-			ast_copy_string(device->vmexten, v->value, sizeof(device->vmexten));
+			ast_string_field_set(device, vmexten, v->value);
+			//ast_copy_string(device->vmexten, v->value, sizeof(device->vmexten));
 		} else if (!strcasecmp(v->name, "callgroup")) {
 			device->callgroup = ast_get_group(v->value);
 		} else if (!strcasecmp(v->name, "allowtransfer")) {
@@ -654,6 +677,7 @@ static void reset_global_settings(struct sip_globals *global)
 	/*!< This is default: NO MMR and JBIG trancoding, NO fill bit removal, transferredTCF TCF, UDP FEC, Version 0 and 9600 max fax rate */
 	global->t38_capability = T38FAX_VERSION_0 | T38FAX_RATE_2400 | T38FAX_RATE_4800 | T38FAX_RATE_7200 | T38FAX_RATE_9600;
 
+	global->maxforwards = DEFAULT_MAX_FORWARDS;
 	global->tos_sip = DEFAULT_TOS_SIP;
 	global->tos_audio = DEFAULT_TOS_AUDIO;
 	global->tos_video = DEFAULT_TOS_VIDEO;
@@ -788,6 +812,10 @@ int reload_config(enum channelreloadreason reason)
 			ast_set2_flag(&global.flags[1], ast_true(v->value), SIP_PAGE2_RTCACHEFRIENDS);	
 		} else if (!strcasecmp(v->name, "rtsavesysname")) {
 			ast_set2_flag(&global.flags[1], ast_true(v->value), SIP_PAGE2_RTSAVE_SYSNAME);	
+		} else if (!strcasecmp(v->name, "maxforwards")) {
+			global.maxforwards = atoi(v->value);
+			if (global.maxforwards < 1)
+				global.maxforwards = DEFAULT_MAX_FORWARDS;
 		} else if (!strcasecmp(v->name, "rtupdate")) {
 			ast_set2_flag(&global.flags[1], ast_true(v->value), SIP_PAGE2_RTUPDATE);	
 		} else if (!strcasecmp(v->name, "ignoreregexpire")) {

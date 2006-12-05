@@ -511,7 +511,7 @@ int transmit_register(struct sip_registry *r, int sipmethod, const char *auth, c
 	add_header(&req, "Call-ID", p->callid);
 	add_header(&req, "CSeq", tmp);
 	add_header(&req, "User-Agent", global.useragent);
-	add_header(&req, "Max-Forwards", DEFAULT_MAX_FORWARDS);
+	add_header(&req, "Max-Forwards", global.maxforwards);
 
 	
 	if (auth) 	/* Add auth header */
