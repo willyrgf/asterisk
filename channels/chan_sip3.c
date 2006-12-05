@@ -187,6 +187,7 @@
 	- Add File's multithreading code
 	- Make debugaddr a ha list instead of one address and move it out of sipnet
 	- Save the last sent request/response for re-transmits
+	- RTP keepalives (STUN) for video
 
 	\b Maybe
 	- add support for Path header
