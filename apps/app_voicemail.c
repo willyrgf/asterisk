@@ -142,6 +142,7 @@ static struct vmstate *vmstates = NULL;
 /* Don't modify these here; set your umask at runtime instead */
 #define	VOICEMAIL_DIR_MODE	0777
 #define	VOICEMAIL_FILE_MODE	0666
+#define	CHUNKSIZE	65536
 
 #define VOICEMAIL_CONFIG "voicemail.conf"
 #define ASTERISK_USERNAME "asterisk"
@@ -1099,6 +1100,7 @@ static int retrieve_file(char *dir, int msgnum)
 				goto yuck;
 			}
 			if (!strcasecmp(coltitle, "recording")) {
+				off_t offset;
 				res = SQLGetData(stmt, x + 1, SQL_BINARY, NULL, 0, &colsize2);
 				fdlen = colsize2;
 				if (fd > -1) {
@@ -1109,24 +1111,27 @@ static int retrieve_file(char *dir, int msgnum)
 						fd = -1;
 						continue;
 					}
-					if (fd > -1) {
-						if ((fdm = mmap(NULL, fdlen, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0)) == -1) {
+					/* Read out in small chunks */
+					for (offset = 0; offset < colsize2; offset += CHUNKSIZE) {
+						/* +1 because SQLGetData likes null-terminating binary data */
+						if ((fdm = mmap(NULL, CHUNKSIZE + 1, PROT_READ | PROT_WRITE, MAP_SHARED, fd, offset)) == (void *)-1) {
 							ast_log(LOG_WARNING, "Could not mmap the output file: %s (%d)\n", strerror(errno), errno);
 							SQLFreeHandle(SQL_HANDLE_STMT, stmt);
 							ast_odbc_release_obj(obj);
 							goto yuck;
+						} else {
+							res = SQLGetData(stmt, x + 1, SQL_BINARY, fdm, CHUNKSIZE + 1, NULL);
+							munmap(fdm, 0);
+							if ((res != SQL_SUCCESS) && (res != SQL_SUCCESS_WITH_INFO)) {
+								ast_log(LOG_WARNING, "SQL Get Data error!\n[%s]\n\n", sql);
+								unlink(full_fn);
+								SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+								ast_odbc_release_obj(obj);
+								goto yuck;
+							}
 						}
 					}
-				}
-				if (fdm) {
-					memset(fdm, 0, fdlen);
-					res = SQLGetData(stmt, x + 1, SQL_BINARY, fdm, fdlen, &colsize2);
-					if ((res != SQL_SUCCESS) && (res != SQL_SUCCESS_WITH_INFO)) {
-						ast_log(LOG_WARNING, "SQL Get Data error!\n[%s]\n\n", sql);
-						SQLFreeHandle (SQL_HANDLE_STMT, stmt);
-						ast_odbc_release_obj(obj);
-						goto yuck;
-					}
+					truncate(full_fn, fdlen);
 				}
 			} else {
 				res = SQLGetData(stmt, x + 1, SQL_CHAR, rowdata, sizeof(rowdata), NULL);
@@ -1147,8 +1152,6 @@ static int retrieve_file(char *dir, int msgnum)
 yuck:	
 	if (f)
 		fclose(f);
-	if (fdm)
-		munmap(fdm, fdlen);
 	if (fd > -1)
 		close(fd);
 	return x - 1;
@@ -4673,7 +4676,7 @@ static int open_mailbox(struct vm_state *vms, struct ast_vm_user *vmu, int box)
 	if(option_debug > 2)
 		ast_log(LOG_DEBUG,"Before init_mailstream, user is %s\n",vmu->imapuser);
 	ret = init_mailstream(vms, box);
-	if (ret != 0) {
+	if (ret != 0 || !vms->mailstream) {
 		ast_log (LOG_ERROR,"Could not initialize mailstream\n");
 		return -1;
 	}
@@ -6970,22 +6973,13 @@ static int handle_voicemail_show_users(int fd, int argc, char *argv[])
 			}
 		}
 		AST_LIST_TRAVERSE(&users, vmu, list) {
-			char dirname[256];
-			DIR *vmdir;
-			struct dirent *vment;
-			int vmcount = 0;
-			char count[12];
+			int newmsgs = 0, oldmsgs = 0;
+			char count[12], tmp[256] = "";
 
 			if ((argc == 3) || ((argc == 5) && !strcmp(argv[4],vmu->context))) {
-				make_dir(dirname, 255, vmu->context, vmu->mailbox, "INBOX");
-				if ((vmdir = opendir(dirname))) {
-					/* No matter what the format of VM, there will always be a .txt file for each message. */
-					while ((vment = readdir(vmdir)))
-						if (strlen(vment->d_name) > 7 && !strncmp(vment->d_name + 7,".txt",4))
-							vmcount++;
-					closedir(vmdir);
-				}
-				snprintf(count,sizeof(count),"%d",vmcount);
+				snprintf(tmp, sizeof(tmp), "%s@%s", vmu->mailbox, ast_strlen_zero(vmu->context) ? "default" : vmu->context);
+				inboxcount(tmp, &newmsgs, &oldmsgs);
+				snprintf(count,sizeof(count),"%d",newmsgs);
 				ast_cli(fd, output_format, vmu->context, vmu->mailbox, vmu->fullname, vmu->zonetag, count);
 			}
 		}
@@ -8012,6 +8006,8 @@ static int play_record_review(struct ast_channel *chan, char *playfile, char *re
 				if (option_verbose > 2)
 					ast_verbose(VERBOSE_PREFIX_3 "Saving message as is\n");
 				ast_stream_and_wait(chan, "vm-msgsaved", "");
+				STORE(recordfile, vmu->mailbox, vmu->context, -1, chan, vmu, fmt, duration, vms);
+				DISPOSE(recordfile, -1);
 				cmd = 't';
 				return res;
 			}
@@ -8481,15 +8477,16 @@ void mm_login(NETMBX * mb, char *user, char *pwd, long trial)
 
 	if(option_debug > 3)
 		ast_log(LOG_DEBUG, "Entering callback mm_login\n");
-	ast_copy_string(user, mb->user,sizeof(user));
+
+	ast_copy_string(user, mb->user, MAILTMPLEN);
 
 	/* We should only do this when necessary */
 	if (!ast_strlen_zero(authpassword)) {
-		ast_copy_string(pwd, authpassword, sizeof(pwd));
+		ast_copy_string(pwd, authpassword, MAILTMPLEN);
 	} else {
 		AST_LIST_TRAVERSE(&users, vmu, list) {
 			if(!strcasecmp(mb->user, vmu->imapuser)) {
-				ast_copy_string(pwd, vmu->imappassword, sizeof(pwd));
+				ast_copy_string(pwd, vmu->imappassword, MAILTMPLEN);
 				break;
 			}
 		}

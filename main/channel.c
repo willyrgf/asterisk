@@ -1027,6 +1027,7 @@ static void free_cid(struct ast_callerid *cid)
 		free(cid->cid_ani);
 	if (cid->cid_rdnis)
 		free(cid->cid_rdnis);
+	cid->cid_dnid = cid->cid_num = cid->cid_name = cid->cid_ani = cid->cid_rdnis = NULL;
 }
 
 /*! \brief Free a channel structure */
@@ -4592,9 +4593,9 @@ int ast_channel_lock(struct ast_channel *chan)
 			if (option_debug)
 				ast_log(LOG_DEBUG, "::::==== Channel %s was locked\n", chan->name);
 		if (res == EDEADLK) {
-		/* We had no lock, so okey any way */
-		if (option_debug > 3)
-			ast_log(LOG_DEBUG, "::::==== Channel %s was not locked by us. Lock would cause deadlock.\n", chan->name);
+			/* We had no lock, so okey any way */
+			if (option_debug > 3)
+				ast_log(LOG_DEBUG, "::::==== Channel %s was not locked by us. Lock would cause deadlock.\n", chan->name);
 		}
 		if (res == EINVAL) {
 			if (option_debug > 3)

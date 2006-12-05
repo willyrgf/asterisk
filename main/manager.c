@@ -124,10 +124,12 @@ AST_THREADSTORAGE(manager_event_buf);
 AST_THREADSTORAGE(astman_append_buf);
 #define ASTMAN_APPEND_BUF_INITSIZE   256
 
-/*! \brief Descriptor for an AMI session, either a regular one
- * or one over http.
- * For AMI sessions, the entry is created upon a connect, and destroyed
- * with the socket.
+/*!
+ * Descriptor for a manager session, either on the AMI socket or over HTTP.
+ * AMI session have managerid == 0; the entry is created upon a connect,
+ * and destroyed with the socket.
+ * HTTP sessions have managerid != 0, the value is used as a search key
+ * to lookup sessions (using the mansession_id cookie).
  */
 struct mansession {
 	pthread_t ms_t;		/*!< Execution thread, basically useless */
@@ -137,10 +139,9 @@ struct mansession {
 	int fd;			/*!< descriptor used for output. Either the socket (AMI) or a temporary file (HTTP) */
 	int inuse;		/*!< number of HTTP sessions using this entry */
 	int needdestroy;	/*!< Whether an HTTP session should be destroyed */
-	pthread_t waiting_thread;	/*!< Whether an HTTP session has someone waiting on events */
+	pthread_t waiting_thread;	/*!< Sleeping thread using this descriptor */
 	unsigned long managerid;	/*!< Unique manager identifier, 0 for AMI sessions */
 	time_t sessiontimeout;	/*!< Session timeout if HTTP */
-	struct ast_dynamic_str *outputstr;	/*!< Output from manager interface */
 	char username[80];	/*!< Logged in username */
 	char challenge[10];	/*!< Authentication challenge */
 	int authenticated;	/*!< Authentication status */
@@ -269,7 +270,7 @@ static struct eventqent *grab_last(void)
  * Purge unused events. Remove elements from the head
  * as long as their usecount is 0 and there is a next element.
  */
-static void purge_unused(void)
+static void purge_events(void)
 {
 	struct eventqent *ev;
 
@@ -667,8 +668,6 @@ static void free_session(struct mansession *s)
 	struct eventqent *eqe = s->last_ev;
 	if (s->fd > -1)
 		close(s->fd);
-	if (s->outputstr)
-		free(s->outputstr);
 	ast_mutex_destroy(&s->__lock);
 	free(s);
 	unref_event(eqe);
@@ -734,6 +733,15 @@ struct ast_variable *astman_get_variables(struct message *m)
 	return head;
 }
 
+/*!
+ * helper function to send a string to the socket.
+ * Return -1 on error (e.g. buffer full).
+ */
+static int send_string(struct mansession *s, char *string)
+{
+	return ast_carefulwrite(s->fd, string, strlen(string), s->writetimeout);
+}
+
 /*
  * utility functions for creating AMI replies
  */
@@ -750,13 +758,9 @@ void astman_append(struct mansession *s, const char *fmt, ...)
 	va_end(ap);
 
 	if (s->fd > -1)
-		ast_carefulwrite(s->fd, buf->str, strlen(buf->str), s->writetimeout);
-	else {
-		if (!s->outputstr && !(s->outputstr = ast_calloc(1, sizeof(*s->outputstr))))
-			return;
-
-		ast_dynamic_str_append(&s->outputstr, 0, "%s", buf->str);
-	}
+		send_string(s, buf->str);
+	else
+		ast_verbose("fd == -1 in astman_append, should not happen\n");
 }
 
 /*! \note NOTE: XXX this comment is unclear and possibly wrong.
@@ -1098,15 +1102,14 @@ static char mandescr_waitevent[] =
 "a manager event is queued.  Once WaitEvent has been called on an HTTP manager\n"
 "session, events will be generated and queued.\n"
 "Variables: \n"
-"   Timeout: Maximum time to wait for events\n";
+"   Timeout: Maximum time (in seconds) to wait for events, -1 means forever.\n";
 
 static int action_waitevent(struct mansession *s, struct message *m)
 {
 	char *timeouts = astman_get_header(m, "Timeout");
-	int timeout = -1, max;
+	int timeout = -1;
 	int x;
 	int needexit = 0;
-	time_t now;
 	char *id = astman_get_header(m,"ActionID");
 	char idText[256] = "";
 
@@ -1115,31 +1118,46 @@ static int action_waitevent(struct mansession *s, struct message *m)
 
 	if (!ast_strlen_zero(timeouts)) {
 		sscanf(timeouts, "%i", &timeout);
+		if (timeout < -1)
+			timeout = -1;
+		/* XXX maybe put an upper bound, or prevent the use of 0 ? */
 	}
 
 	ast_mutex_lock(&s->__lock);
-	if (s->waiting_thread != AST_PTHREADT_NULL) {
+	if (s->waiting_thread != AST_PTHREADT_NULL)
 		pthread_kill(s->waiting_thread, SIGURG);
-	}
-	if (s->sessiontimeout) {
-		time(&now);
-		max = s->sessiontimeout - now - 10;
-		if (max < 0)
+
+	if (s->managerid) { /* AMI-over-HTTP session */
+		/*
+		 * Make sure the timeout is within the expire time of the session,
+		 * as the client will likely abort the request if it does not see
+		 * data coming after some amount of time.
+		 */
+		time_t now = time(NULL);
+		int max = s->sessiontimeout - now - 10;
+
+		if (max < 0)	/* We are already late. Strange but possible. */
 			max = 0;
-		if ((timeout < 0) || (timeout > max))
+		if (timeout < 0 || timeout > max)
 			timeout = max;
-		if (!s->send_events)
+		if (!s->send_events)	/* make sure we record events */
 			s->send_events = -1;
-		/* Once waitevent is called, always queue events from now on */
 	}
 	ast_mutex_unlock(&s->__lock);
-	s->waiting_thread = pthread_self();
+
+	/* XXX should this go inside the lock ? */
+	s->waiting_thread = pthread_self();	/* let new events wake up this thread */
 	if (option_debug)
 		ast_log(LOG_DEBUG, "Starting waiting for an event!\n");
-	for (x=0; ((x < timeout) || (timeout < 0)); x++) {
+
+	for (x=0; x < timeout || timeout < 0; x++) {
 		ast_mutex_lock(&s->__lock);
 		if (NEW_EVENT(s))
 			needexit = 1;
+		/* We can have multiple HTTP session point to the same mansession entry.
+		 * The way we deal with it is not very nice: newcomers kick out the previous
+		 * HTTP session. XXX this needs to be improved.
+		 */
 		if (s->waiting_thread != pthread_self())
 			needexit = 1;
 		if (s->needdestroy)
@@ -1147,7 +1165,7 @@ static int action_waitevent(struct mansession *s, struct message *m)
 		ast_mutex_unlock(&s->__lock);
 		if (needexit)
 			break;
-		if (!s->inuse && s->fd > 0) {	/* AMI session */
+		if (s->managerid == 0) {	/* AMI session */
 			if (ast_wait_for_input(s->fd, 1000))
 				break;
 		} else {	/* HTTP session */
@@ -1159,8 +1177,7 @@ static int action_waitevent(struct mansession *s, struct message *m)
 	ast_mutex_lock(&s->__lock);
 	if (s->waiting_thread == pthread_self()) {
 		struct eventqent *eqe;
-		astman_send_response(s, m, "Success", "Waiting for Event...");
-		/* Only show events if we're the most recent waiter */
+		astman_send_response(s, m, "Success", "Waiting for Event completed.");
 		while ( (eqe = NEW_EVENT(s)) ) {
 			ref_event(eqe);
 			if (((s->readperm & eqe->category) == eqe->category) &&
@@ -1246,10 +1263,10 @@ static int action_login(struct mansession *s, struct message *m)
 	s->authenticated = 1;
 	if (option_verbose > 1) {
 		if (displayconnects) {
-			ast_verbose(VERBOSE_PREFIX_2 "%sManager '%s' logged on from %s\n", (s->sessiontimeout ? "HTTP " : ""), s->username, ast_inet_ntoa(s->sin.sin_addr));
+			ast_verbose(VERBOSE_PREFIX_2 "%sManager '%s' logged on from %s\n", (s->managerid ? "HTTP " : ""), s->username, ast_inet_ntoa(s->sin.sin_addr));
 		}
 	}
-	ast_log(LOG_EVENT, "%sManager '%s' logged on from %s\n", (s->sessiontimeout ? "HTTP " : ""), s->username, ast_inet_ntoa(s->sin.sin_addr));
+	ast_log(LOG_EVENT, "%sManager '%s' logged on from %s\n", (s->managerid ? "HTTP " : ""), s->username, ast_inet_ntoa(s->sin.sin_addr));
 	astman_send_ack(s, m, "Authentication accepted");
 	return 0;
 }
@@ -1589,7 +1606,7 @@ static int action_command(struct mansession *s, struct message *m)
 	if (!ast_strlen_zero(id))
 		astman_append(s, "ActionID: %s\r\n", id);
 	/* FIXME: Wedge a ActionID response in here, waiting for later changes */
-	ast_cli_command(s->fd, cmd);
+	ast_cli_command(s->fd, cmd);	/* XXX need to change this to use a FILE * */
 	astman_append(s, "--END COMMAND--\r\n\r\n");
 	return 0;
 }
@@ -1903,7 +1920,9 @@ static int action_timeout(struct mansession *s, struct message *m)
 }
 
 /*!
- * Send any applicable events to the client listening on this socket
+ * Send any applicable events to the client listening on this socket.
+ * Wait only for a finite time on each event, and drop all events whether
+ * they are successfully sent or not.
  */
 static int process_events(struct mansession *s)
 {
@@ -1915,11 +1934,11 @@ static int process_events(struct mansession *s)
 
 		while ( (eqe = NEW_EVENT(s)) ) {
 			ref_event(eqe);
-			if ((s->authenticated && (s->readperm & eqe->category) == eqe->category) &&
-			    ((s->send_events & eqe->category) == eqe->category)) {
-				if (!ret && ast_carefulwrite(s->fd, eqe->eventdata,
-						strlen(eqe->eventdata), s->writetimeout) < 0)
-					ret = -1;
+			if (!ret && s->authenticated &&
+			    (s->readperm & eqe->category) == eqe->category &&
+			    (s->send_events & eqe->category) == eqe->category) {
+				if (send_string(s, eqe->eventdata) < 0)
+					ret = -1;	/* don't send more */
 			}
 			s->last_ev = unref_event(s->last_ev);
 		}
@@ -1981,6 +2000,10 @@ static int process_message(struct mansession *s, struct message *m)
 		return 0;
 	}
 
+	if (!s->authenticated && strcasecmp(action, "Login") && strcasecmp(action, "Logoff") && strcasecmp(action, "Challenge")) {
+		astman_send_error(s, m, "Permission denied");
+		return 0;
+	}
 	/* XXX should we protect the list navigation ? */
 	for (tmp = first_action ; tmp; tmp = tmp->next) {
 		if (!strcasecmp(action, tmp->action)) {
@@ -1994,7 +2017,7 @@ static int process_message(struct mansession *s, struct message *m)
 		}
 	}
 	if (!tmp)
-		astman_send_error(s, m, "Invalid/unknown command");
+		astman_send_error(s, m, "Invalid/unknown command. Use Action: ListCommands to show available commands.");
 	if (ret)
 		return ret;
 	/* Once done with our message, deliver any pending events */
@@ -2010,7 +2033,6 @@ static int process_message(struct mansession *s, struct message *m)
  */
 static int get_input(struct mansession *s, char *output)
 {
-	struct pollfd fds[1];
 	int res, x;
 	int maxlen = sizeof(s->inbuf) - 1;
 	char *src = s->inbuf;
@@ -2034,8 +2056,6 @@ static int get_input(struct mansession *s, char *output)
 		ast_log(LOG_WARNING, "Dumping long line with no return from %s: %s\n", ast_inet_ntoa(s->sin.sin_addr), src);
 		s->inlen = 0;
 	}
-	fds[0].fd = s->fd;
-	fds[0].events = POLLIN;
 	res = 0;
 	while (res == 0) {
 		/* XXX do we really need this locking ? */
@@ -2043,7 +2063,7 @@ static int get_input(struct mansession *s, char *output)
 		s->waiting_thread = pthread_self();
 		ast_mutex_unlock(&s->__lock);
 
-		res = poll(fds, 1, -1);	/* return 0 on timeout ? */
+		res = ast_wait_for_input(s->fd, -1);	/* return 0 on timeout ? */
 
 		ast_mutex_lock(&s->__lock);
 		s->waiting_thread = AST_PTHREADT_NULL;
@@ -2121,6 +2141,32 @@ static void *session_do(void *data)
 	return NULL;
 }
 
+/*! \brief remove at most n_max stale session from the list. */
+static void purge_sessions(int n_max)
+{
+	struct mansession *s;
+	time_t now = time(NULL);
+
+	AST_LIST_LOCK(&sessions);
+	AST_LIST_TRAVERSE_SAFE_BEGIN(&sessions, s, list) {
+		if (s->sessiontimeout && (now > s->sessiontimeout) && !s->inuse) {
+			ast_verbose("destroy session[2] %lx now %lu to %lu\n",
+				s->managerid, (unsigned long)now, (unsigned long)s->sessiontimeout);
+			AST_LIST_REMOVE_CURRENT(&sessions, list);
+			ast_atomic_fetchadd_int(&num_sessions, -1);
+			if (s->authenticated && (option_verbose > 1) && displayconnects) {
+				ast_verbose(VERBOSE_PREFIX_2 "HTTP Manager '%s' timed out from %s\n",
+					s->username, ast_inet_ntoa(s->sin.sin_addr));
+			}
+			free_session(s);	/* XXX outside ? */
+			if (--n_max <= 0)
+				break;
+		}
+	}
+	AST_LIST_TRAVERSE_SAFE_END
+	AST_LIST_UNLOCK(&sessions);
+}
+
 /*! \brief The thread accepting connections on the manager interface port.
  * As a side effect, it purges stale sessions, one per each iteration,
  * which is at least every 5 seconds.
@@ -2134,40 +2180,20 @@ static void *accept_thread(void *ignore)
 
 	for (;;) {
 		struct mansession *s;
-		time_t now = time(NULL);
 		int as;
 		struct sockaddr_in sin;
 		socklen_t sinlen;
 		struct protoent *p;
 		int flags;
-		struct pollfd pfds[1];
 
-		AST_LIST_LOCK(&sessions);
-		AST_LIST_TRAVERSE_SAFE_BEGIN(&sessions, s, list) {
-			if (s->sessiontimeout && (now > s->sessiontimeout) && !s->inuse) {
-				ast_verbose("destroy session[2] %lx now %lu to %lu\n",
-					s->managerid, (unsigned long)now, (unsigned long)s->sessiontimeout);
-				AST_LIST_REMOVE_CURRENT(&sessions, list);
-				ast_atomic_fetchadd_int(&num_sessions, -1);
-				if (s->authenticated && (option_verbose > 1) && displayconnects) {
-					ast_verbose(VERBOSE_PREFIX_2 "HTTP Manager '%s' timed out from %s\n",
-						s->username, ast_inet_ntoa(s->sin.sin_addr));
-				}
-				free_session(s);	/* XXX outside ? */
-				break;
-			}
-		}
-		AST_LIST_TRAVERSE_SAFE_END
-		AST_LIST_UNLOCK(&sessions);
-		purge_unused();
+		purge_sessions(1);
+		purge_events();
 
-		sinlen = sizeof(sin);
-		pfds[0].fd = asock;
-		pfds[0].events = POLLIN;
 		/* Wait for something to happen, but timeout every few seconds so
 		   we can ditch any old manager sessions */
-		if (poll(pfds, 1, 5000) < 1)
+		if (ast_wait_for_input(asock, 5000) < 1)
 			continue;
+		sinlen = sizeof(sin);
 		as = accept(asock, (struct sockaddr *)&sin, &sinlen);
 		if (as < 0) {
 			ast_log(LOG_NOTICE, "Accept returned -1: %s\n", strerror(errno));
@@ -2423,7 +2449,11 @@ static char *contenttype[] = {
 	[FORMAT_XML] =  "xml",
 };
 
-/* locate an http session in the list using the cookie as a key */
+/*!
+ * locate an http session in the list. The search key (ident) is
+ * the value of the mansession_id cookie (0 is not valid and means
+ * a session on the AMI socket).
+ */
 static struct mansession *find_session(unsigned long ident)
 {
 	struct mansession *s;
@@ -2434,7 +2464,7 @@ static struct mansession *find_session(unsigned long ident)
 	AST_LIST_LOCK(&sessions);
 	AST_LIST_TRAVERSE(&sessions, s, list) {
 		ast_mutex_lock(&s->__lock);
-		if (s->sessiontimeout && (s->managerid == ident) && !s->needdestroy) {
+		if (s->managerid == ident && !s->needdestroy) {
 			ast_atomic_fetchadd_int(&s->inuse, 1);
 			break;
 		}
@@ -2636,7 +2666,7 @@ static char *generic_http_callback(enum output_format format,
 	char **title, int *contentlength)
 {
 	struct mansession *s = NULL;
-	unsigned long ident = 0;
+	unsigned long ident = 0; /* invalid, so find_session will fail if not set through the cookie */
 	char workspace[1024];
 	size_t len = sizeof(workspace);
 	int blastaway = 0;
@@ -2727,18 +2757,30 @@ static char *generic_http_callback(enum output_format format,
 	}
 	if (s->fd > -1) {	/* have temporary output */
 		char *buf;
-		off_t len = lseek(s->fd, 0, SEEK_END);	/* how many chars available */
+		off_t l = lseek(s->fd, 0, SEEK_END);	/* how many chars available */
 
-		if (len > 0 && (buf = ast_calloc(1, len+1))) {
-			if (!s->outputstr)
-				s->outputstr = ast_calloc(1, sizeof(*s->outputstr));
-			if (s->outputstr) {
+		/* always return something even if len == 0 */
+		if ((buf = ast_calloc(1, l+1))) {
+			char *tmp;
+			if (l > 0) {
 				lseek(s->fd, 0, SEEK_SET);
-				read(s->fd, buf, len);
-				if (0)
-					ast_verbose("--- fd %d has %d bytes ---\n%s\n---\n", s->fd, (int)len, buf);
-				ast_dynamic_str_append(&s->outputstr, 0, "%s", buf);
+				read(s->fd, buf, l);
 			}
+			if (format == FORMAT_XML || format == FORMAT_HTML)
+				tmp = xml_translate(buf, params, format);
+			else
+				tmp = buf;
+			if (tmp) {
+				retval = malloc(strlen(workspace) + strlen(tmp) + 128);
+				if (retval) {
+					strcpy(retval, workspace);
+					strcpy(retval + strlen(retval), tmp);
+					c = retval + strlen(retval);
+					len = 120;
+				}
+			}
+			if (tmp != buf)
+				free(tmp);
 			free(buf);
 		}
 		close(s->fd);
@@ -2746,26 +2788,6 @@ static char *generic_http_callback(enum output_format format,
 		unlink(template);
 	}
 
-	if (s->outputstr) {
-		char *tmp;
-		if (format == FORMAT_XML || format == FORMAT_HTML)
-			tmp = xml_translate(s->outputstr->str, params, format);
-		else
-			tmp = s->outputstr->str;
-		if (tmp) {
-			retval = malloc(strlen(workspace) + strlen(tmp) + 128);
-			if (retval) {
-				strcpy(retval, workspace);
-				strcpy(retval + strlen(retval), tmp);
-				c = retval + strlen(retval);
-				len = 120;
-			}
-		}
-		if (tmp != s->outputstr->str)
-			free(tmp);
-		free(s->outputstr);
-		s->outputstr = NULL;
-	}
 	/* Still okay because c would safely be pointing to workspace even
 	   if retval failed to allocate above */
 	if (format == FORMAT_XML) {

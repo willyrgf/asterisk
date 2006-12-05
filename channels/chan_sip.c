@@ -242,15 +242,15 @@ enum sip_result {
 	\note this is for the INVITE that sets up the dialog
 */
 enum invitestates {
-	INV_NONE = 0,	/*!< No state at all, maybe not an INVITE dialog */
-	INV_CALLING,	/*!< Invite sent, no answer */
-	INV_PROCEEDING,	/*!< We got 1xx message */
-	INV_EARLY_MEDIA, /*!< We got 18x message with to-tag back */
-	INV_COMPLETED,	/*!< Got final response with error. Wait for ACK, then CONFIRMED */
-	INV_CONFIRMED,	/*!< Confirmed response - we've got an ack (Incoming calls only) */
-	INV_TERMINATED,	/*!< Transaction done - either successful (AST_STATE_UP) or failed, but done 
-				The only way out of this is a BYE from one side */
-	INV_CANCELLED	/*!< Transaction cancelled by client or server in non-terminated state */
+	INV_NONE = 0,	        /*!< No state at all, maybe not an INVITE dialog */
+	INV_CALLING = 1,	/*!< Invite sent, no answer */
+	INV_PROCEEDING = 2,	/*!< We got/sent 1xx message */
+	INV_EARLY_MEDIA = 3,    /*!< We got 18x message with to-tag back */
+	INV_COMPLETED = 4,	/*!< Got final response with error. Wait for ACK, then CONFIRMED */
+	INV_CONFIRMED = 5,	/*!< Confirmed response - we've got an ack (Incoming calls only) */
+	INV_TERMINATED = 6,	/*!< Transaction done - either successful (AST_STATE_UP) or failed, but done 
+				     The only way out of this is a BYE from one side */
+	INV_CANCELLED = 7,	/*!< Transaction cancelled by client or server in non-terminated state */
 };
 
 /* Do _NOT_ make any changes to this enum, or the array following it;
@@ -558,7 +558,7 @@ static char global_useragent[AST_MAX_EXTENSION];	/*!< Useragent for the SIP chan
 static int allow_external_domains;	/*!< Accept calls to external SIP domains? */
 static int global_callevents;		/*!< Whether we send manager events or not */
 static int global_t1min;		/*!< T1 roundtrip time minimum */
-static int global_autoframing;          /*!< ?????????? */
+static int global_autoframing;          /*!< Turn autoframing on or off. */
 static enum transfermodes global_allowtransfer;	/*!< SIP Refer restriction scheme */
 
 /*! \brief Codecs that we support by default: */
@@ -961,8 +961,6 @@ struct sip_pvt {
 	time_t lastrtprx;			/*!< Last RTP received */
 	time_t lastrtptx;			/*!< Last RTP sent */
 	int rtptimeout;				/*!< RTP timeout time */
-	int rtpholdtimeout;			/*!< RTP timeout when on hold */
-	int rtpkeepalive;			/*!< Send RTP packets for keepalive */
 	struct sockaddr_in recv;		/*!< Received as */
 	struct in_addr ourip;			/*!< Our IP */
 	struct ast_channel *owner;		/*!< Who owns us (if we have an owner) */
@@ -1661,6 +1659,14 @@ static void initialize_initreq(struct sip_pvt *p, struct sip_request *req)
 		ast_verbose("Initreq: %d headers, %d lines\n", p->initreq.headers, p->initreq.lines);
 }
 
+/*! \brief Encapsulate setting of SIP_ALREADYGONE to be able to trace it with debugging */
+static void sip_alreadygone(struct sip_pvt *dialog)
+{
+	if (option_debug > 2)
+		ast_log(LOG_DEBUG, "Setting SIP_ALREADYGONE on dialog %s\n", dialog->callid);
+	ast_set_flag(&dialog->flags[0], SIP_ALREADYGONE);
+}
+
 
 /*! \brief returns true if 'name' (with optional trailing whitespace)
  * matches the sip method 'id'.
@@ -1939,7 +1945,7 @@ static int retrans_pkt(void *data)
 			sip_pvt_lock(pkt->owner);
 		}
 		if (pkt->owner->owner) {
-			ast_set_flag(&pkt->owner->flags[0], SIP_ALREADYGONE);
+			sip_alreadygone(pkt->owner);
 			ast_log(LOG_WARNING, "Hanging up call %s - no reply to our critical packet.\n", pkt->owner->callid);
 			ast_queue_hangup(pkt->owner->owner);
 			ast_channel_unlock(pkt->owner->owner);
@@ -2726,17 +2732,21 @@ static int create_addr_from_peer(struct sip_pvt *dialog, struct sip_peer *peer)
 	if (dialog->rtp) {
 		ast_rtp_setdtmf(dialog->rtp, ast_test_flag(&dialog->flags[0], SIP_DTMF) != SIP_DTMF_INFO);
 		ast_rtp_setdtmfcompensate(dialog->rtp, ast_test_flag(&dialog->flags[1], SIP_PAGE2_RFC2833_COMPENSATE));
+		ast_rtp_set_rtptimeout(dialog->rtp, peer->rtptimeout);
+		ast_rtp_set_rtpholdtimeout(dialog->rtp, peer->rtpholdtimeout);
+		ast_rtp_set_rtpkeepalive(dialog->rtp, peer->rtpkeepalive);
+		/* Set Frame packetization */
+		ast_rtp_codec_setpref(dialog->rtp, &dialog->prefs);
+		dialog->autoframing = peer->autoframing;
 	}
 	if (dialog->vrtp) {
 		ast_rtp_setdtmf(dialog->vrtp, 0);
 		ast_rtp_setdtmfcompensate(dialog->vrtp, 0);
+		ast_rtp_set_rtptimeout(dialog->vrtp, peer->rtptimeout);
+		ast_rtp_set_rtpholdtimeout(dialog->vrtp, peer->rtpholdtimeout);
+		ast_rtp_set_rtpkeepalive(dialog->vrtp, peer->rtpkeepalive);
 	}
 
-	/* Set Frame packetization */
-	if (dialog->rtp) {
-		ast_rtp_codec_setpref(dialog->rtp, &dialog->prefs);
-		dialog->autoframing = peer->autoframing;
-	}
 	ast_string_field_set(dialog, peername, peer->username);
 	ast_string_field_set(dialog, authname, peer->username);
 	ast_string_field_set(dialog, username, peer->username);
@@ -2774,8 +2784,6 @@ static int create_addr_from_peer(struct sip_pvt *dialog, struct sip_peer *peer)
 		dialog->noncodeccapability &= ~AST_RTP_DTMF;
 	ast_string_field_set(dialog, context, peer->context);
 	dialog->rtptimeout = peer->rtptimeout;
-	dialog->rtpholdtimeout = peer->rtpholdtimeout;
-	dialog->rtpkeepalive = peer->rtpkeepalive;
 	if (peer->call_limit)
 		ast_set_flag(&dialog->flags[0], SIP_CALL_LIMIT);
 	dialog->maxcallbitrate = peer->maxcallbitrate;
@@ -3099,9 +3107,9 @@ static int update_call_counter(struct sip_pvt *fup, int event)
 
 	/* Check the list of users only for incoming calls */
 	if (global_limitonpeers == FALSE && !outgoing && (u = find_user(name, 1)))  {
-			inuse = &u->inUse;
-			call_limit = &u->call_limit;
-			inringing = NULL;
+		inuse = &u->inUse;
+		call_limit = &u->call_limit;
+		inringing = NULL;
 	} else if ( (p = find_peer(ast_strlen_zero(fup->peername) ? name : fup->peername, NULL, 1) ) ) { /* Try to find peer */
 		inuse = &p->inUse;
 		call_limit = &p->call_limit;
@@ -3405,7 +3413,7 @@ static int sip_hangup(struct ast_channel *ast)
 		return 0;
 	}
 	/* If the call is not UP, we need to send CANCEL instead of BYE */
-	if (ast->_state == AST_STATE_RING || ast->_state == AST_STATE_RINGING) {
+	if (p->invitestate < INV_COMPLETED) {
 		needcancel = TRUE;
 		if (option_debug > 3)
 			ast_log(LOG_DEBUG, "Hanging up channel in state %s (not UP)\n", ast_state2str(ast->_state));
@@ -3426,7 +3434,7 @@ static int sip_hangup(struct ast_channel *ast)
 	*/
 	if (ast_test_flag(&p->flags[0], SIP_ALREADYGONE))
 		needdestroy = 1;	/* Set destroy flag at end of this function */
-	else
+	else if (p->invitestate != INV_CALLING)
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 
 	/* Start the process if it's not already started */
@@ -3488,6 +3496,7 @@ static int sip_hangup(struct ast_channel *ast)
 				   but we can't send one while we have "INVITE" outstanding. */
 				ast_set_flag(&p->flags[0], SIP_PENDINGBYE);	
 				ast_clear_flag(&p->flags[0], SIP_NEEDREINVITE);	
+				sip_cancel_destroy(p);
 			}
 		}
 	}
@@ -3605,15 +3614,12 @@ static int sip_write(struct ast_channel *ast, struct ast_frame *frame)
 	case AST_FRAME_MODEM:
 		if (p) {
 			sip_pvt_lock(p);
-			if (p->udptl) {
-				if ((ast->_state != AST_STATE_UP) &&
-					!ast_test_flag(&p->flags[0], SIP_PROGRESS_SENT) && 
-				    !ast_test_flag(&p->flags[0], SIP_OUTGOING)) {
-					transmit_response_with_t38_sdp(p, "183 Session Progress", &p->initreq, XMIT_UNRELIABLE);
-					ast_set_flag(&p->flags[0], SIP_PROGRESS_SENT);
-				}
+			/* UDPTL requires two-way communication, so early media is not needed here.
+				we simply forget the frames if we get modem frames before the bridge is up.
+				Fax will re-transmit.
+			*/
+			if (p->udptl && ast->_state != AST_STATE_UP) 
 				res = ast_udptl_write(p->udptl, frame);
-			}
 			sip_pvt_unlock(p);
 		}
 		break;
@@ -3740,6 +3746,7 @@ static int sip_indicate(struct ast_channel *ast, int condition, const void *data
 	switch(condition) {
 	case AST_CONTROL_RINGING:
 		if (ast->_state == AST_STATE_RING) {
+			p->invitestate = INV_EARLY_MEDIA;
 			if (!ast_test_flag(&p->flags[0], SIP_PROGRESS_SENT) ||
 			    (ast_test_flag(&p->flags[0], SIP_PROG_INBAND) == SIP_PROG_INBAND_NEVER)) {				
 				/* Send 180 ringing if out-of-band seems reasonable */
@@ -3756,7 +3763,8 @@ static int sip_indicate(struct ast_channel *ast, int condition, const void *data
 	case AST_CONTROL_BUSY:
 		if (ast->_state != AST_STATE_UP) {
 			transmit_response(p, "486 Busy Here", &p->initreq);
-			ast_set_flag(&p->flags[0], SIP_ALREADYGONE);	
+			p->invitestate = INV_TERMINATED;
+			sip_alreadygone(p);
 			ast_softhangup_nolock(ast, AST_SOFTHANGUP_DEV);
 			break;
 		}
@@ -3765,7 +3773,8 @@ static int sip_indicate(struct ast_channel *ast, int condition, const void *data
 	case AST_CONTROL_CONGESTION:
 		if (ast->_state != AST_STATE_UP) {
 			transmit_response(p, "503 Service Unavailable", &p->initreq);
-			ast_set_flag(&p->flags[0], SIP_ALREADYGONE);	
+			p->invitestate = INV_TERMINATED;
+			sip_alreadygone(p);
 			ast_softhangup_nolock(ast, AST_SOFTHANGUP_DEV);
 			break;
 		}
@@ -3776,6 +3785,7 @@ static int sip_indicate(struct ast_channel *ast, int condition, const void *data
 		    !ast_test_flag(&p->flags[0], SIP_PROGRESS_SENT) &&
 		    !ast_test_flag(&p->flags[0], SIP_OUTGOING)) {
 			transmit_response(p, "100 Trying", &p->initreq);
+			p->invitestate = INV_PROCEEDING;  
 			break;
 		}
 		res = -1;
@@ -3784,6 +3794,7 @@ static int sip_indicate(struct ast_channel *ast, int condition, const void *data
 		if ((ast->_state != AST_STATE_UP) &&
 		    !ast_test_flag(&p->flags[0], SIP_PROGRESS_SENT) &&
 		    !ast_test_flag(&p->flags[0], SIP_OUTGOING)) {
+			p->invitestate = INV_EARLY_MEDIA;
 			transmit_response_with_sdp(p, "183 Session Progress", &p->initreq, XMIT_UNRELIABLE);
 			ast_set_flag(&p->flags[0], SIP_PROGRESS_SENT);	
 			break;
@@ -4302,16 +4313,19 @@ static struct sip_pvt *sip_alloc(ast_string_field callid, struct sockaddr_in *si
 		ast_rtp_setdtmf(p->rtp, ast_test_flag(&p->flags[0], SIP_DTMF) != SIP_DTMF_INFO);
 		ast_rtp_setdtmfcompensate(p->rtp, ast_test_flag(&p->flags[1], SIP_PAGE2_RFC2833_COMPENSATE));
 		ast_rtp_settos(p->rtp, global_tos_audio);
+		ast_rtp_set_rtptimeout(p->rtp, global_rtptimeout);
+		ast_rtp_set_rtpholdtimeout(p->rtp, global_rtpholdtimeout);
+		ast_rtp_set_rtpkeepalive(p->rtp, global_rtpkeepalive);
 		if (p->vrtp) {
 			ast_rtp_settos(p->vrtp, global_tos_video);
 			ast_rtp_setdtmf(p->vrtp, 0);
 			ast_rtp_setdtmfcompensate(p->vrtp, 0);
+			ast_rtp_set_rtptimeout(p->vrtp, global_rtptimeout);
+			ast_rtp_set_rtpholdtimeout(p->vrtp, global_rtpholdtimeout);
+			ast_rtp_set_rtpkeepalive(p->vrtp, global_rtpkeepalive);
 		}
 		if (p->udptl)
 			ast_udptl_settos(p->udptl, global_tos_audio);
-		p->rtptimeout = global_rtptimeout;
-		p->rtpholdtimeout = global_rtpholdtimeout;
-		p->rtpkeepalive = global_rtpkeepalive;
 		p->maxcallbitrate = default_maxcallbitrate;
 	}
 
@@ -7347,7 +7361,8 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 		ast_string_field_set(p, domain, r->domain);
 		ast_string_field_set(p, opaque, r->opaque);
 		ast_string_field_set(p, qop, r->qop);
-		p->noncecount = r->noncecount++;
+		r->noncecount++;
+		p->noncecount = r->noncecount;
 
 		memset(digest,0,sizeof(digest));
 		if(!build_reply_digest(p, sipmethod, digest, sizeof(digest)))
@@ -10429,6 +10444,7 @@ static int sip_show_settings(int fd, int argc, char *argv[])
 	ast_cli(fd, "  T1 minimum:             %d\n", global_t1min);
 	ast_cli(fd, "  Relax DTMF:             %s\n", global_relaxdtmf ? "Yes" : "No");
 	ast_cli(fd, "  Compact SIP headers:    %s\n", compactheaders ? "Yes" : "No");
+	ast_cli(fd, "  RTP Keepalive:          %d %s\n", global_rtpkeepalive, global_rtpkeepalive ? "" : "(Disabled)" );
 	ast_cli(fd, "  RTP Timeout:            %d %s\n", global_rtptimeout, global_rtptimeout ? "" : "(Disabled)" );
 	ast_cli(fd, "  RTP Hold Timeout:       %d %s\n", global_rtpholdtimeout, global_rtpholdtimeout ? "" : "(Disabled)");
 	ast_cli(fd, "  MWI NOTIFY mime type:   %s\n", default_notifymime);
@@ -11724,7 +11740,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, stru
 	/* RFC3261 says we must treat every 1xx response (but not 100)
 	   that we don't recognize as if it was 183.
 	*/
-	if (resp > 100 && resp < 200 && resp != 180 && resp != 183)
+	if (resp > 100 && resp < 200 && resp!=101 && resp != 180 && resp != 183)
 		resp = 183;
 
  	/* Any response between 100 and 199 is PROCEEDING */
@@ -11738,6 +11754,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, stru
 
 	switch (resp) {
 	case 100:	/* Trying */
+	case 101:	/* Dialog establishment */
 		if (!ast_test_flag(req, SIP_PKT_IGNORE))
 			sip_cancel_destroy(p);
 		check_pendings(p);
@@ -11824,6 +11841,9 @@ static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, stru
 				if (bridgepvt->udptl) {
 					if (p->t38.state == T38_PEER_REINVITE) {
 						sip_handle_t38_reinvite(bridgepeer, p, 0);
+						ast_rtp_set_rtptimers_onhold(p->rtp);
+						if (p->vrtp)
+							ast_rtp_set_rtptimers_onhold(p->vrtp);	/* Turn off RTP timers while we send fax */
 					} else if (p->t38.state == T38_DISABLED && bridgepeer && (bridgepvt->t38.state == T38_ENABLED)) {
 						ast_log(LOG_WARNING, "RTP re-inivte after T38 session not handled yet !\n");
 						/* Insted of this we should somehow re-invite the other side of the bridge to RTP */
@@ -11890,7 +11910,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, stru
 			if (p->authtries == MAX_AUTHTRIES || do_proxy_auth(p, req, resp, SIP_INVITE, 1)) {
 				ast_log(LOG_NOTICE, "Failed to authenticate on INVITE to '%s'\n", get_header(&p->initreq, "From"));
 				ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
-				ast_set_flag(&p->flags[0], SIP_ALREADYGONE);	
+				sip_alreadygone(p);
 				if (p->owner)
 					ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
 			}
@@ -11904,20 +11924,23 @@ static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, stru
 		if (!ast_test_flag(req, SIP_PKT_IGNORE) && p->owner)
 			ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
 		ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
-		ast_set_flag(&p->flags[0], SIP_ALREADYGONE);	
+		sip_alreadygone(p);
 		break;
 
 	case 404: /* Not found */
 		transmit_request(p, SIP_ACK, seqno, XMIT_UNRELIABLE, FALSE);
 		if (p->owner && !ast_test_flag(req, SIP_PKT_IGNORE))
 			ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
-		ast_set_flag(&p->flags[0], SIP_ALREADYGONE);	
+		sip_alreadygone(p);
 		break;
 
 	case 481: /* Call leg does not exist */
-		/* Could be REFER or INVITE */
+		/* Could be REFER caused INVITE with replaces */
 		ast_log(LOG_WARNING, "Re-invite to non-existing call leg on other UA. SIP dialog '%s'. Giving up.\n", p->callid);
 		transmit_request(p, SIP_ACK, seqno, XMIT_UNRELIABLE, FALSE);
+		if (p->owner)
+			ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
+		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 		break;
 
 	case 491: /* Pending */
@@ -11970,7 +11993,16 @@ static void handle_response_refer(struct sip_pvt *p, int resp, char *rest, struc
 			ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);
 		}
 		break;
+	case 481: /* Call leg does not exist */
 
+		/* A transfer with Replaces did not work */
+		/* OEJ: We should Set flag, cancel the REFER, go back
+		to original call - but right now we can't */
+		ast_log(LOG_WARNING, "Remote host can't match REFER request to call '%s'. Giving up.\n", p->callid);
+		if (p->owner)
+			ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
+		ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);
+		break;
 
 	case 500:   /* Server error */
 	case 501:   /* Method not implemented */
@@ -12232,6 +12264,7 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 	} else if (ast_test_flag(&p->flags[0], SIP_OUTGOING)) {
 		switch(resp) {
 		case 100:	/* 100 Trying */
+		case 101:	/* 101 Dialog establishment */
 			if (sipmethod == SIP_INVITE) 
 				handle_response_invite(p, resp, rest, req, seqno);
 			break;
@@ -12327,20 +12360,9 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 			break;
 		case 481: /* Call leg does not exist */
 			if (sipmethod == SIP_INVITE) {
-				/* First we ACK */
-				transmit_request(p, SIP_ACK, seqno, XMIT_UNRELIABLE, FALSE);
-					ast_log(LOG_WARNING, "INVITE with REPLACEs failed to '%s'\n", get_header(&p->initreq, "From"));
-				if (owner)
-					ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
-				sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
+				handle_response_invite(p, resp, rest, req, seqno);
 			} else if (sipmethod == SIP_REFER) {
-				/* A transfer with Replaces did not work */
-				/* OEJ: We should Set flag, cancel the REFER, go back
-				to original call - but right now we can't */
-				ast_log(LOG_WARNING, "Remote host can't match request %s to call '%s'. Giving up.\n", sip_methods[sipmethod].text, p->callid);
-				if (owner)
-					ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
-				ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);
+				handle_response_refer(p, resp, rest, req, seqno);
 			} else if (sipmethod == SIP_BYE) {
 				/* The other side has no transaction to bye,
 				just assume it's all right then */
@@ -12382,7 +12404,6 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 				/* Fatal response */
 				if ((option_verbose > 2) && (resp != 487))
 					ast_verbose(VERBOSE_PREFIX_3 "Got SIP response %d \"%s\" back from %s\n", resp, rest, ast_inet_ntoa(p->sa.sin_addr));
-				ast_set_flag(&p->flags[0], SIP_ALREADYGONE);	
 	
 				stop_media_flows(p); /* Immediately stop RTP, VRTP and UDPTL as applicable */
 
@@ -12441,7 +12462,7 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 				/* ACK on invite */
 				if (sipmethod == SIP_INVITE) 
 					transmit_request(p, SIP_ACK, seqno, XMIT_UNRELIABLE, FALSE);
-				ast_set_flag(&p->flags[0], SIP_ALREADYGONE);	
+				sip_alreadygone(p);
 				if (!p->owner)
 					ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
 			} else if ((resp >= 100) && (resp < 200)) {
@@ -12940,6 +12961,7 @@ static int handle_request_notify(struct sip_pvt *p, struct sip_request *req, str
 		respcode = atoi(code);
 		switch (respcode) {
 		case 100:	/* Trying: */
+		case 101:	/* dialog establishment */
 			/* Don't do anything yet */
 			break;
 		case 183:	/* Ringing: */
@@ -13529,7 +13551,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 						transmit_response(p, "503 Unavailable", req);	/* OEJ - Right answer? */
 					else
 						transmit_response_reliable(p, "503 Unavailable", req);
-					ast_set_flag(&p->flags[0], SIP_ALREADYGONE);	
+					sip_alreadygone(p);
 					/* Unlock locks so ast_hangup can do its magic */
 					sip_pvt_unlock(p);
 					c->hangupcause = AST_CAUSE_CALL_REJECTED;
@@ -13853,7 +13875,7 @@ static int handle_request_refer(struct sip_pvt *p, struct sip_request *req, int 
 		transmit_response(p, "603 Declined (No dialog)", req);
 		if (!ast_test_flag(req, SIP_PKT_IGNORE)) {
 			append_history(p, "Xfer", "Refer failed. Outside of dialog.");
-			ast_set_flag(&p->flags[0], SIP_ALREADYGONE);	
+			sip_alreadygone(p);
 			ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
 		}
 		return 0;
@@ -14112,7 +14134,7 @@ static int handle_request_cancel(struct sip_pvt *p, struct sip_request *req)
 {
 		
 	check_via(p, req);
-	ast_set_flag(&p->flags[0], SIP_ALREADYGONE);	
+	sip_alreadygone(p);
 	p->invitestate = INV_CANCELLED;
 	
 	if (p->owner && p->owner->_state == AST_STATE_UP) {
@@ -14155,7 +14177,7 @@ static int handle_request_bye(struct sip_pvt *p, struct sip_request *req)
 	if (sipdebug && option_debug)
 		ast_log(LOG_DEBUG, "Initializing initreq for method %s - callid %s\n", sip_methods[req->method].text, p->callid);
 	check_via(p, req);
-	ast_set_flag(&p->flags[0], SIP_ALREADYGONE);	
+	sip_alreadygone(p);
 
 	/* Get RTCP quality before end of call */
 	if (!ast_test_flag(&p->flags[0], SIP_NO_HISTORY) || p->owner) {
@@ -14453,7 +14475,7 @@ static int handle_request_subscribe(struct sip_pvt *p, struct sip_request *req, 
 
 			if ((firststate = ast_extension_state(NULL, p->context, p->exten)) < 0) {
 
-				ast_log(LOG_ERROR, "Got SUBSCRIBE for extension %s@%s from %s, but there is no hint for that extension\n", p->exten, p->context, ast_inet_ntoa(p->sa.sin_addr));
+				ast_log(LOG_NOTICE, "Got SUBSCRIBE for extension %s@%s from %s, but there is no hint for that extension.\n", p->exten, p->context, ast_inet_ntoa(p->sa.sin_addr));
 				transmit_response(p, "404 Not found", req);
 				ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
 				return 0;
@@ -14546,7 +14568,6 @@ static int handle_request(struct sip_pvt *p, struct sip_request *req, struct soc
 {
 	/* Called with p->lock held, as well as p->owner->lock if appropriate, keeping things
 	   relatively static */
-	struct sip_request resp;
 	const char *cmd;
 	const char *cseq;
 	const char *useragent;
@@ -14557,9 +14578,6 @@ static int handle_request(struct sip_pvt *p, struct sip_request *req, struct soc
 	int debug = sip_debug_test_pvt(p);
 	char *e;
 	int error = 0;
-
-	/* Clear out potential response */
-	memset(&resp, 0, sizeof(resp));
 
 	/* Get Method and Cseq */
 	cseq = get_header(req, "Cseq");
@@ -14575,7 +14593,7 @@ static int handle_request(struct sip_pvt *p, struct sip_request *req, struct soc
 		error = 1;
 	}
 	if (error) {
-		if (!p->initreq.header)	/* New call */
+		if (!p->initreq.headers)	/* New call */
 			ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	/* Make sure we destroy this dialog */
 		return -1;
 	}
@@ -14914,52 +14932,66 @@ static int does_peer_need_mwi(struct sip_peer *peer)
 
 
 /*! \brief helper function for the monitoring thread */
-static void check_rtp_timeout(struct sip_pvt *sip, time_t t)
+static void check_rtp_timeout(struct sip_pvt *dialog, time_t t)
 {
-	if (sip->rtp && sip->owner &&
-	    (sip->owner->_state == AST_STATE_UP) &&
-	    !sip->redirip.sin_addr.s_addr) {
-		if (sip->lastrtptx &&
-		    sip->rtpkeepalive &&
-		    (t > sip->lastrtptx + sip->rtpkeepalive)) {
-			/* Need to send an empty RTP packet */
-			sip->lastrtptx = time(NULL);
-			ast_rtp_sendcng(sip->rtp, 0);
-		}
-		if (sip->lastrtprx &&
-		    (sip->rtptimeout || sip->rtpholdtimeout) &&
-		    (t > sip->lastrtprx + sip->rtptimeout)) {
-			/* Might be a timeout now -- see if we're on hold */
-			struct sockaddr_in sin;
-			ast_rtp_get_peer(sip->rtp, &sin);
-			if (sin.sin_addr.s_addr || 
-			    (sip->rtpholdtimeout && 
-			     (t > sip->lastrtprx + sip->rtpholdtimeout))) {
-				/* Needs a hangup */
-				if (sip->rtptimeout) {
-					while (sip->owner && ast_channel_trylock(sip->owner)) {
-						sip_pvt_unlock(sip);
-						usleep(1);
-						sip_pvt_lock(sip);
-					}
-					if (sip->owner) {
-						if (!(ast_rtp_get_bridged(sip->rtp))) {
-							ast_log(LOG_NOTICE,
-								"Disconnecting call '%s' for lack of RTP activity in %ld seconds\n",
-								sip->owner->name,
-								(long) (t - sip->lastrtprx));
-							/* Issue a softhangup */
-							ast_softhangup_nolock(sip->owner, AST_SOFTHANGUP_DEV);
-						} else
-							ast_log(LOG_NOTICE, "'%s' will not be disconnected in %ld seconds because it is directly bridged to another RTP stream\n", sip->owner->name, (long) (t - sip->lastrtprx));
-						ast_channel_unlock(sip->owner);
-						/* forget the timeouts for this call, since a hangup
-						   has already been requested and we don't want to
-						   repeatedly request hangups
-						*/
-						sip->rtptimeout = 0;
-						sip->rtpholdtimeout = 0;
-					}
+	/* If we have no RTP or no active owner, no need to check timers */
+	if (!dialog->rtp || !dialog->owner)
+		return;
+	/* If the call is not in UP state or redirected outside Asterisk, no need to check timers */
+	if (dialog->owner->_state != AST_STATE_UP || dialog->redirip.sin_addr.s_addr)
+		return;
+
+	/* If we have no timers set, return now */
+	if (ast_rtp_get_rtpkeepalive(dialog->rtp) == 0 || (ast_rtp_get_rtptimeout(dialog->rtp) == 0 && ast_rtp_get_rtpholdtimeout(dialog->rtp) == 0))
+		return;
+
+	/* Check AUDIO RTP keepalives */
+	if (dialog->lastrtptx && ast_rtp_get_rtpkeepalive(dialog->rtp) &&
+		    (t > dialog->lastrtptx + ast_rtp_get_rtpkeepalive(dialog->rtp))) {
+		/* Need to send an empty RTP packet */
+		dialog->lastrtptx = time(NULL);
+		ast_rtp_sendcng(dialog->rtp, 0);
+	}
+
+	/*! \todo Check video RTP keepalives
+
+		Do we need to move the lastrtptx to the RTP structure to have one for audio and one
+		for video? It really does belong to the RTP structure.
+	*/
+
+	/* Check AUDIO RTP timers */
+	if (dialog->lastrtprx && (ast_rtp_get_rtptimeout(dialog->rtp) || ast_rtp_get_rtpholdtimeout(dialog->rtp)) &&
+		    (t > dialog->lastrtprx + ast_rtp_get_rtptimeout(dialog->rtp))) {
+
+		/* Might be a timeout now -- see if we're on hold */
+		struct sockaddr_in sin;
+		ast_rtp_get_peer(dialog->rtp, &sin);
+		if (sin.sin_addr.s_addr || (ast_rtp_get_rtpholdtimeout(dialog->rtp) &&
+		     (t > dialog->lastrtprx + ast_rtp_get_rtpholdtimeout(dialog->rtp)))) {
+			/* Needs a hangup */
+			if (dialog->rtptimeout) {
+				while (dialog->owner && ast_channel_trylock(dialog->owner)) {
+					sip_pvt_unlock(dialog);
+					usleep(1);
+					sip_pvt_lock(dialog);
+				}
+				if (!(ast_rtp_get_bridged(dialog->rtp))) {
+					ast_log(LOG_NOTICE, "Disconnecting call '%s' for lack of RTP activity in %ld seconds\n",
+						dialog->owner->name, (long) (t - dialog->lastrtprx));
+					/* Issue a softhangup */
+					ast_softhangup_nolock(dialog->owner, AST_SOFTHANGUP_DEV);
+				} else
+					ast_log(LOG_NOTICE, "'%s' will not be disconnected in %ld seconds because it is directly bridged to another RTP stream\n", dialog->owner->name, (long) (t - dialog->lastrtprx));
+				ast_channel_unlock(dialog->owner);
+				/* forget the timeouts for this call, since a hangup
+				   has already been requested and we don't want to
+				   repeatedly request hangups
+				*/
+				ast_rtp_set_rtptimeout(dialog->rtp, 0);
+				ast_rtp_set_rtpholdtimeout(dialog->rtp, 0);
+				if (dialog->vrtp) {
+					ast_rtp_set_rtptimeout(dialog->vrtp, 0);
+					ast_rtp_set_rtpholdtimeout(dialog->vrtp, 0);
 				}
 			}
 		}
@@ -14973,7 +15005,7 @@ static void check_rtp_timeout(struct sip_pvt *sip, time_t t)
 static void *do_monitor(void *data)
 {
 	int res;
-	struct sip_pvt *sip;
+	struct sip_pvt *dialog;
 	struct sip_peer *peer = NULL;
 	time_t t;
 	int fastrestart = FALSE;
@@ -15001,6 +15033,7 @@ static void *do_monitor(void *data)
 			if (sipsock > -1)
 				sipsock_read_id = ast_io_change(io, sipsock_read_id, sipsock, NULL, 0, NULL);
 		}
+
 		/* Check for dialogs needing to be killed */
 		dialoglist_lock();
 restartsearch:		
@@ -15009,18 +15042,20 @@ restartsearch:
 		   of time since the last time we did it (when MWI is being sent, we can
 		   get back to this point every millisecond or less)
 		*/
-		for (sip = dialoglist; !fastrestart && sip; sip = sip->next) {
-			sip_pvt_lock(sip);
+		for (dialog = dialoglist; !fastrestart && dialog; dialog = dialog->next) {
+			sip_pvt_lock(dialog);
 			/* Check RTP timeouts and kill calls if we have a timeout set and do not get RTP */
-			check_rtp_timeout(sip, t);
+			check_rtp_timeout(dialog, t);
 			/* If we have sessions that needs to be destroyed, do it now */
-			if (ast_test_flag(&sip->flags[0], SIP_NEEDDESTROY) && !sip->packets &&
-			    !sip->owner) {
-				sip_pvt_unlock(sip);
-				__sip_destroy(sip, TRUE, FALSE);
+			/* Check if we have outstanding requests not responsed to or an active call
+				- if that's the case, wait with destruction */
+			if (ast_test_flag(&dialog->flags[0], SIP_NEEDDESTROY) && !dialog->packets &&
+			    !dialog->owner) {
+				sip_pvt_unlock(dialog);
+				__sip_destroy(dialog, TRUE, FALSE);
 				goto restartsearch;
 			}
-			sip_pvt_unlock(sip);
+			sip_pvt_unlock(dialog);
 		}
 		dialoglist_unlock();
 
@@ -15029,7 +15064,8 @@ restartsearch:
 		res = ast_sched_wait(sched);
 		if ((res < 0) || (res > 1000))
 			res = 1000;
-		/* If we might need to send more mailboxes, don't wait long at all.*/
+
+		/* If we might need to send more mailbox notifications, don't wait long at all.*/
 		if (fastrestart)
 			res = 1;
 		res = ast_io_wait(io, res);
@@ -16267,10 +16303,10 @@ static int reload_config(enum channelreloadreason reason)
 			compactheaders = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "notifymimetype")) {
 			ast_copy_string(default_notifymime, v->value, sizeof(default_notifymime));
+		} else if (!strcasecmp(v->name, "limitonpeers")) {
+			global_limitonpeers = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "notifyringing")) {
 			global_notifyringing = ast_true(v->value);
-		} else if (!strcasecmp(v->name, "limitpeersonly")) {
-			global_limitonpeers = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "notifyhold")) {
 			global_notifyhold = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "alwaysauthreject")) {
@@ -16308,7 +16344,7 @@ static int reload_config(enum channelreloadreason reason)
 			autocreatepeer = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "match_auth_username")) {
 			global_match_auth_username = ast_true(v->value);
-		} else if (!strcasecmp(v->name, "global_srvlookup")) {
+		} else if (!strcasecmp(v->name, "srvlookup")) {
 			global_srvlookup = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "pedantic")) {
 			pedanticsipchecking = ast_true(v->value);
@@ -17116,6 +17152,7 @@ static int sip_do_reload(enum channelreloadreason reason)
 			sip_destroy(iterator->call);
 		}
 		ASTOBJ_UNLOCK(iterator);
+	
 	} while(0));
 
 	/* Then, actually destroy users and registry */

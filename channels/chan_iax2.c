@@ -1195,6 +1195,20 @@ static int make_trunk(unsigned short callno, int locked)
 	return res;
 }
 
+/*!
+ * \todo XXX Note that this function contains a very expensive operation that
+ * happens for *every* incoming media frame.  It iterates through every
+ * possible call number, locking and unlocking each one, to try to match the
+ * incoming frame to an active call.  Call numbers can be up to 2^15, 32768.
+ * So, for an call with a local call number of 20000, every incoming audio
+ * frame would require 20000 mutex lock and unlock operations.  Ouch.
+ *
+ * It's a shame that IAX2 media frames carry the source call number instead of
+ * the destination call number.  If they did, this lookup wouldn't be needed.
+ * However, it's too late to change that now.  Instead, we need to come up with
+ * a better way of indexing active calls so that these frequent lookups are not
+ * so expensive.
+ */
 static int find_callno(unsigned short callno, unsigned short dcallno, struct sockaddr_in *sin, int new, int lockpeer, int sockfd)
 {
 	int res = 0;
@@ -6974,7 +6988,7 @@ retryowner:
 					if (!strcmp(ies.called_number, ast_parking_ext())) {
 						if (iax_park(ast_bridged_channel(iaxs[fr->callno]->owner), iaxs[fr->callno]->owner)) {
 							ast_log(LOG_WARNING, "Failed to park call on '%s'\n", ast_bridged_channel(iaxs[fr->callno]->owner)->name);
-						} else {
+						} else if (ast_bridged_channel(iaxs[fr->callno]->owner)) {
 							if (option_debug)
 								ast_log(LOG_DEBUG, "Parked call on '%s'\n", ast_bridged_channel(iaxs[fr->callno]->owner)->name);
 						}

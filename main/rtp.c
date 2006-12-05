@@ -128,6 +128,11 @@ struct ast_rtp {
 	double rxtransit;               /*!< Relative transit time for previous packet */
 	int lasttxformat;
 	int lastrxformat;
+
+	int rtptimeout;			/*!< RTP timeout time (negative or zero means disabled, negative value means temporarily disabled) */
+	int rtpholdtimeout;		/*!< RTP timeout when on hold (negative or zero means disabled, negative value means temporarily disabled). */
+	int rtpkeepalive;		/*!< Send RTP comfort noice packets for keepalive */
+
 	/* DTMF Reception Variables */
 	char resp;
 	unsigned int lasteventendseqn;
@@ -183,6 +188,7 @@ static int bridge_p2p_rtcp_write(struct ast_rtp *rtp, unsigned int *rtcpheader, 
 #define FLAG_P2P_NEED_DTMF              (1 << 5)
 #define FLAG_CALLBACK_MODE              (1 << 6)
 #define FLAG_DTMF_COMPENSATE            (1 << 7)
+#define FLAG_HAS_STUN                   (1 << 8)
 
 /*!
  * \brief Structure defining an RTCP session.
@@ -520,6 +526,53 @@ unsigned int ast_rtcp_calc_interval(struct ast_rtp *rtp)
 	return interval;
 }
 
+/* \brief Put RTP timeout timers on hold during another transaction, like T.38 */
+void ast_rtp_set_rtptimers_onhold(struct ast_rtp *rtp)
+{
+	rtp->rtptimeout = (-1) * rtp->rtptimeout;
+	rtp->rtpholdtimeout = (-1) * rtp->rtpholdtimeout;
+}
+
+/*! \brief Set rtp timeout */
+void ast_rtp_set_rtptimeout(struct ast_rtp *rtp, int timeout)
+{
+	rtp->rtptimeout = timeout;
+}
+
+/*! \brief Set rtp hold timeout */
+void ast_rtp_set_rtpholdtimeout(struct ast_rtp *rtp, int timeout)
+{
+	rtp->rtpholdtimeout = timeout;
+}
+
+/*! \brief set RTP keepalive interval */
+void ast_rtp_set_rtpkeepalive(struct ast_rtp *rtp, int period)
+{
+	rtp->rtpkeepalive = period;
+}
+
+/*! \brief Get rtp timeout */
+int ast_rtp_get_rtptimeout(struct ast_rtp *rtp)
+{
+	if (rtp->rtptimeout < 0)	/* We're not checking, but remembering the setting (during T.38 transmission) */
+		return 0;
+	return rtp->rtptimeout;
+}
+
+/*! \brief Get rtp hold timeout */
+int ast_rtp_get_rtpholdtimeout(struct ast_rtp *rtp)
+{
+	if (rtp->rtptimeout < 0)	/* We're not checking, but remembering the setting (during T.38 transmission) */
+		return 0;
+	return rtp->rtpholdtimeout;
+}
+
+/*! \brief Get RTP keepalive interval */
+int ast_rtp_get_rtpkeepalive(struct ast_rtp *rtp)
+{
+	return rtp->rtpkeepalive;
+}
+
 void ast_rtp_set_data(struct ast_rtp *rtp, void *data)
 {
 	rtp->data = data;
@@ -543,6 +596,11 @@ void ast_rtp_setdtmf(struct ast_rtp *rtp, int dtmf)
 void ast_rtp_setdtmfcompensate(struct ast_rtp *rtp, int compensate)
 {
 	ast_set2_flag(rtp, compensate ? 1 : 0, FLAG_DTMF_COMPENSATE);
+}
+
+void ast_rtp_setstun(struct ast_rtp *rtp, int stun_enable)
+{
+	ast_set2_flag(rtp, stun_enable ? 1 : 0, FLAG_HAS_STUN);
 }
 
 static struct ast_frame *send_dtmf(struct ast_rtp *rtp, enum ast_frame_type type)
@@ -1350,6 +1408,7 @@ static struct {
 	{{1, AST_FORMAT_H263}, "video", "H263"},
 	{{1, AST_FORMAT_H263_PLUS}, "video", "h263-1998"},
 	{{1, AST_FORMAT_H264}, "video", "H264"},
+	{{1, AST_FORMAT_T140}, "text", "T140"},
 };
 
 /* Static (i.e., well-known) RTP payload types for our "AST_FORMAT..."s:
@@ -1381,6 +1440,7 @@ static struct rtpPayloadType static_RTP_PT[MAX_RTP_PT] = {
 	[97] = {1, AST_FORMAT_ILBC},
 	[99] = {1, AST_FORMAT_H264},
 	[101] = {0, AST_RTP_DTMF},
+	[102] = {1, AST_FORMAT_T140},	/* Real time text chat */
 	[110] = {1, AST_FORMAT_SPEEX},
 	[111] = {1, AST_FORMAT_G726},
 	[112] = {1, AST_FORMAT_G726_AAL2},
@@ -1705,7 +1765,7 @@ const char *ast_rtp_lookup_mime_subtype(const int isAstFormat, const int code,
 			if (isAstFormat &&
 			    (code == AST_FORMAT_G726_AAL2) &&
 			    (options & AST_RTP_OPT_G726_NONSTANDARD))
-				return "AAL2-G726-32";
+				return "G726-32";
 			else
 				return mimeTypes[i].subtype;
 		}
@@ -2474,6 +2534,7 @@ int ast_rtp_sendcng(struct ast_rtp *rtp, int level)
 	return 0;
 }
 
+/*! \brief Write RTP packet with audio or video media frames into UDP packet */
 static int ast_rtp_raw_write(struct ast_rtp *rtp, struct ast_frame *f, int codec)
 {
 	unsigned char *rtpheader;
@@ -2659,12 +2720,13 @@ int ast_rtp_write(struct ast_rtp *rtp, struct ast_frame *_f)
 			ast_rtp_raw_write(rtp, f, codec);
 	} else {
 	        /* Don't buffer outgoing frames; send them one-per-packet: */
-		if (_f->offset < hdrlen) {
-			f = ast_frdup(_f);
-		} else {
+		if (_f->offset < hdrlen) 
+			f = ast_frdup(_f);	/*! \bug XXX this might never be free'd. Why do we do this? */
+		else
 			f = _f;
-		}
 		ast_rtp_raw_write(rtp, f, codec);
+		if (f != _f)
+			ast_frfree(f);
 	}
 		
 	return 0;
@@ -2850,7 +2912,7 @@ static enum ast_bridge_result bridge_native_loop(struct ast_channel *c0, struct 
 	return AST_BRIDGE_FAILED;
 }
 
-/*! \brief P2P RTP/RTCP Callback */
+/*! \brief peer 2 peer RTP mode  RTP/RTCP Callback */
 static int p2p_rtp_callback(int *id, int fd, short events, void *cbdata)
 {
 	int res = 0, hdrlen = 12;
@@ -2911,8 +2973,8 @@ static int p2p_rtp_callback(int *id, int fd, short events, void *cbdata)
 /*! \brief Helper function to switch a channel and RTP stream into callback mode */
 static int p2p_callback_enable(struct ast_channel *chan, struct ast_rtp *rtp, int **iod)
 {
-	/* If we need DTMF or we have no IO structure, then we can't do direct callback */
-	if (ast_test_flag(rtp, FLAG_P2P_NEED_DTMF) || !rtp->io)
+	/* If we need DTMF, are looking for STUN, or we have no IO structure then we can't do direct callback */
+	if (ast_test_flag(rtp, FLAG_P2P_NEED_DTMF) || ast_test_flag(rtp, FLAG_HAS_STUN) || !rtp->io)
 		return 0;
 
 	/* If the RTP structure is already in callback mode, remove it temporarily */
@@ -2951,8 +3013,13 @@ static int p2p_callback_disable(struct ast_channel *chan, struct ast_rtp *rtp, i
 	return 0;
 }
 
-/*! \brief Bridge loop for partial native bridge (packet2packet) */
-static enum ast_bridge_result bridge_p2p_loop(struct ast_channel *c0, struct ast_channel *c1, struct ast_rtp *p0, struct ast_rtp *p1, struct ast_rtp *vp0, struct ast_rtp *vp1, int timeoutms, int flags, struct ast_frame **fo, struct ast_channel **rc, void *pvt0, void *pvt1)
+/*! \brief Bridge loop for partial native bridge (packet2packet) 
+
+	In p2p mode, Asterisk is a very basic RTP proxy, just forwarding whatever
+	rtp/rtcp we get in to the channel. 
+	\note this currently only works for Audio
+*/
+static enum ast_bridge_result bridge_p2p_loop(struct ast_channel *c0, struct ast_channel *c1, struct ast_rtp *p0, struct ast_rtp *p1, int timeoutms, int flags, struct ast_frame **fo, struct ast_channel **rc, void *pvt0, void *pvt1)
 {
 	struct ast_frame *fr = NULL;
 	struct ast_channel *who = NULL, *other = NULL, *cs[3] = {NULL, };
@@ -2965,12 +3032,6 @@ static enum ast_bridge_result bridge_p2p_loop(struct ast_channel *c0, struct ast
 	p0->bridged = p1;
 	ast_clear_flag(p1, FLAG_P2P_SENT_MARK);
 	p1->bridged = p0;
-	if (vp0) {
-		ast_clear_flag(vp0, FLAG_P2P_SENT_MARK);
-		vp0->bridged = vp1;
-		ast_clear_flag(vp1, FLAG_P2P_SENT_MARK);
-		vp1->bridged = vp0;
-	}
 
 	/* Activate callback modes if possible */
 	p0_callback = p2p_callback_enable(c0, p0, &p0_iod[0]);
@@ -2989,8 +3050,8 @@ static enum ast_bridge_result bridge_p2p_loop(struct ast_channel *c0, struct ast
 		if ((c0->tech_pvt != pvt0) ||
 		    (c1->tech_pvt != pvt1) ||
 		    (c0->masq || c0->masqr || c1->masq || c1->masqr)) {
-			if (option_debug)
-				ast_log(LOG_DEBUG, "Oooh, something is weird, backing out\n");
+			if (option_debug > 2)
+				ast_log(LOG_DEBUG, "p2p-rtp-bridge: Oooh, something is weird, backing out\n");
 			res = AST_BRIDGE_RETRY;
 			break;
 		}
@@ -3000,8 +3061,8 @@ static enum ast_bridge_result bridge_p2p_loop(struct ast_channel *c0, struct ast
 				res = AST_BRIDGE_RETRY;
 				break;
 			}
-			if (option_debug)
-				ast_log(LOG_NOTICE, "Ooh, empty read...\n");
+			if (option_debug > 2)
+				ast_log(LOG_NOTICE, "p2p-rtp-bridge: Ooh, empty read...\n");
 			if (ast_check_hangup(c0) || ast_check_hangup(c1))
 				break;
 			continue;
@@ -3009,15 +3070,15 @@ static enum ast_bridge_result bridge_p2p_loop(struct ast_channel *c0, struct ast
 		/* Read in frame from channel */
 		fr = ast_read(who);
 		other = (who == c0) ? c1 : c0;
-		/* Dependong on the frame we may need to break out of our bridge */
+		/* Depending on the frame we may need to break out of our bridge */
 		if (!fr || ((fr->frametype == AST_FRAME_DTMF) &&
 			    ((who == c0) && (flags & AST_BRIDGE_DTMF_CHANNEL_0)) |
 			    ((who == c1) && (flags & AST_BRIDGE_DTMF_CHANNEL_1)))) {
 			/* Record received frame and who */
 			*fo = fr;
 			*rc = who;
-			if (option_debug)
-				ast_log(LOG_DEBUG, "Oooh, got a %s\n", fr ? "digit" : "hangup");
+			if (option_debug > 2)
+				ast_log(LOG_DEBUG, "p2p-rtp-bridge: Ooh, got a %s\n", fr ? "digit" : "hangup");
 			res = AST_BRIDGE_COMPLETE;
 			break;
 		} else if ((fr->frametype == AST_FRAME_CONTROL) && !(flags & AST_BRIDGE_IGNORE_SIGS)) {
@@ -3032,22 +3093,12 @@ static enum ast_bridge_result bridge_p2p_loop(struct ast_channel *c0, struct ast
 						p1_callback = p2p_callback_disable(c1, p1, &p1_iod[0]);
 					p0->bridged = NULL;
 					p1->bridged = NULL;
-					if (vp0) {
-						vp0->bridged = NULL;
-						vp1->bridged = NULL;
-					}
 				} else if (fr->subclass == AST_CONTROL_UNHOLD) {
 					/* If we are off hold, then go back to callback mode and P2P bridging */
 					ast_clear_flag(p0, FLAG_P2P_SENT_MARK);
 					p0->bridged = p1;
 					ast_clear_flag(p1, FLAG_P2P_SENT_MARK);
 					p1->bridged = p0;
-					if (vp0) {
-						ast_clear_flag(vp0, FLAG_P2P_SENT_MARK);
-						vp0->bridged = vp1;
-						ast_clear_flag(vp1, FLAG_P2P_SENT_MARK);
-						vp1->bridged = vp0;
-					}
 					p0_callback = p2p_callback_enable(c0, p0, &p0_iod[0]);
 					p1_callback = p2p_callback_enable(c1, p1, &p1_iod[0]);
 				}
@@ -3056,8 +3107,8 @@ static enum ast_bridge_result bridge_p2p_loop(struct ast_channel *c0, struct ast
 			} else {
 				*fo = fr;
 				*rc = who;
-				if (option_debug)
-					ast_log(LOG_DEBUG, "Got a FRAME_CONTROL (%d) frame on channel %s\n", fr->subclass, who->name);
+				if (option_debug > 2)
+					ast_log(LOG_DEBUG, "p2p-rtp-bridge: Got a FRAME_CONTROL (%d) frame on channel %s\n", fr->subclass, who->name);
 				res = AST_BRIDGE_COMPLETE;
 				break;
 			}
@@ -3085,10 +3136,6 @@ static enum ast_bridge_result bridge_p2p_loop(struct ast_channel *c0, struct ast
 	/* Break out of the direct bridge */
 	p0->bridged = NULL;
 	p1->bridged = NULL;
-	if (vp0) {
-		vp0->bridged = NULL;
-		vp1->bridged = NULL;
-	}
 
 	return res;
 }
@@ -3169,7 +3216,7 @@ enum ast_bridge_result ast_rtp_bridge(struct ast_channel *c0, struct ast_channel
 	codec1 = pr1->get_codec ? pr1->get_codec(c1) : 0;
 	if (codec0 && codec1 && !(codec0 & codec1)) {
 		/* Hey, we can't do native bridging if both parties speak different codecs */
-		if (option_debug)
+		if (option_debug > 2)
 			ast_log(LOG_DEBUG, "Channel codec0 = %d is not codec1 = %d, cannot native bridge in RTP.\n", codec0, codec1);
 		ast_channel_unlock(c0);
 		ast_channel_unlock(c1);
@@ -3188,7 +3235,7 @@ enum ast_bridge_result ast_rtp_bridge(struct ast_channel *c0, struct ast_channel
 		}
 		if (option_verbose > 2)
 			ast_verbose(VERBOSE_PREFIX_3 "Packet2Packet bridging %s and %s\n", c0->name, c1->name);
-		res = bridge_p2p_loop(c0, c1, p0, p1, vp0, vp1, timeoutms, flags, fo, rc, pvt0, pvt1);
+		res = bridge_p2p_loop(c0, c1, p0, p1, timeoutms, flags, fo, rc, pvt0, pvt1);
 	} else {
 		if (option_verbose > 2) 
 			ast_verbose(VERBOSE_PREFIX_3 "Native bridging %s and %s\n", c0->name, c1->name);

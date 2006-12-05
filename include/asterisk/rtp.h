@@ -186,6 +186,9 @@ void ast_rtp_setdtmf(struct ast_rtp *rtp, int dtmf);
 /*! \brief Compensate for devices that send RFC2833 packets all at once */
 void ast_rtp_setdtmfcompensate(struct ast_rtp *rtp, int compensate);
 
+/*! \brief Enable STUN capability */
+void ast_rtp_setstun(struct ast_rtp *rtp, int stun_enable);
+
 int ast_rtp_bridge(struct ast_channel *c0, struct ast_channel *c1, int flags, struct ast_frame **fo, struct ast_channel **rc, int timeoutms);
 
 int ast_rtp_proto_register(struct ast_rtp_protocol *proto);
@@ -215,6 +218,21 @@ int ast_rtp_codec_setpref(struct ast_rtp *rtp, struct ast_codec_pref *prefs);
 struct ast_codec_pref *ast_rtp_codec_getpref(struct ast_rtp *rtp);
 
 int ast_rtp_codec_getformat(int pt);
+
+/*! \brief Set rtp timeout */
+void ast_rtp_set_rtptimeout(struct ast_rtp *rtp, int timeout);
+/*! \brief Set rtp hold timeout */
+void ast_rtp_set_rtpholdtimeout(struct ast_rtp *rtp, int timeout);
+/*! \brief set RTP keepalive interval */
+void ast_rtp_set_rtpkeepalive(struct ast_rtp *rtp, int period);
+/*! \brief Get RTP keepalive interval */
+int ast_rtp_get_rtpkeepalive(struct ast_rtp *rtp);
+/*! \brief Get rtp hold timeout */
+int ast_rtp_get_rtpholdtimeout(struct ast_rtp *rtp);
+/*! \brief Get rtp timeout */
+int ast_rtp_get_rtptimeout(struct ast_rtp *rtp);
+/* \brief Put RTP timeout timers on hold during another transaction, like T.38 */
+void ast_rtp_set_rtptimers_onhold(struct ast_rtp *rtp);
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }

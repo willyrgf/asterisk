@@ -58,12 +58,28 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define DEFAULT_PREFIX "/asterisk"
 
 /*!
- * In order to have SSL support, we need the openssl libraries.
+ * In order to have TLS/SSL support, we need the openssl libraries.
  * Still we can decide whether or not to use them by commenting
  * in or out the DO_SSL macro.
+ * TLS/SSL support is basically implemented by reading from a config file
+ * (currently http.conf) the names of the certificate and cipher to use,
+ * and then run ssl_setup() to create an appropriate SSL_CTX (ssl_ctx)
+ * If we support multiple domains, presumably we need to read multiple
+ * certificates.
+ * When we are requested to open a TLS socket, we run make_file_from_fd()
+ * on the socket, to do the necessary setup. At the moment the context's name
+ * is hardwired in the function, but we can certainly make it into an extra
+ * parameter to the function.
+ *
  * We declare most of ssl support variables unconditionally,
  * because their number is small and this simplifies the code.
+ *
+ * NOTE: the ssl-support variables (ssl_ctx, do_ssl, certfile, cipher)
+ * and their setup should be moved to a more central place, e.g. asterisk.conf
+ * and the source files that processes it. Similarly, ssl_setup() should
+ * be run earlier in the startup process so modules have it available.
  */
+
 #if defined(HAVE_OPENSSL) && (defined(HAVE_FUNOPEN) || defined(HAVE_FOPENCOOKIE))
 #define	DO_SSL	/* comment in/out if you want to support ssl */
 #endif
@@ -71,7 +87,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #ifdef DO_SSL
 #include <openssl/ssl.h>
 #include <openssl/err.h>
-SSL_CTX* ssl_ctx;
+static SSL_CTX* ssl_ctx;
+#else
+typedef struct {} SSL;	/* so we can define a pointer to it */
 #endif /* DO_SSL */
 
 /* SSL support */
@@ -81,17 +99,45 @@ static char *certfile;
 static char *cipher;
 
 /*!
+ * The following code implements a generic mechanism for starting
+ * services on a TCP or TLS socket.
+ * The service is configured in the struct server_args, and
+ * then started by calling server_start(desc) on the descriptor.
+ * server_start() first verifies if an instance of the service is active,
+ * and in case shuts it down. Then, if the service must be started, creates
+ * a socket and a thread in charge of doing the accept().
+ *
+ * The body of the thread is desc->accept_fn(desc), which the user can define
+ * freely. We supply a sample implementation, server_root(), structured as an
+ * infinite loop. At the beginning of each iteration it runs periodic_fn()
+ * if defined (e.g. to perform some cleanup etc.) then issues a poll()
+ * or equivalent with a timeout of 'poll_timeout' milliseconds, and if the
+ * following accept() is successful it creates a thread in charge of
+ * running the session, whose body is desc->worker_fn(). The argument of
+ * worker_fn() is a struct server_instance, which contains the address
+ * of the other party, a pointer to desc, the file descriptors (fd) on which
+ * we can do a select/poll (but NOT IO/, and a FILE * on which we can do I/O.
+ * We have both because we want to support plain and SSL sockets, and
+ * going through a FILE * lets us provide the encryption/decryption
+ * on the stream without using an auxiliary thread.
+ *
+ * NOTE: in order to let other parts of asterisk use these services,
+ * we need to do the following:
+ *    + move struct server_instance and struct server_args to
+ *	a common header file, together with prototypes for
+ *	server_start() and server_root().
+ *    +
+ */
+ 
+/*!
  * describes a server instance
  */
 struct server_instance {
 	FILE *f;	/* fopen/funopen result */
 	int fd;		/* the socket returned by accept() */
-	int is_ssl;	/* is this an ssl session ? */
-#ifdef DO_SSL
 	SSL *ssl;	/* ssl state */
-#endif
 	struct sockaddr_in requestor;
-	ast_http_callback callback;
+	struct server_args *parent;
 };
 
 /*!
@@ -102,8 +148,16 @@ struct server_args {
 	struct sockaddr_in oldsin;
 	int is_ssl;		/* is this an SSL accept ? */
 	int accept_fd;
+	int poll_timeout;
 	pthread_t master;
+	void *(*accept_fn)(void *);	/* the function in charge of doing the accept */
+	void (*periodic_fn)(void *);	/* something we may want to run before after select on the accept socket */
+	void *(*worker_fn)(void *);	/* the function in charge of doing the actual work */
+	const char *name;
 };
+
+static void *server_root(void *arg);
+static void *httpd_helper_thread(void *arg);
 
 /*!
  * we have up to two accepting threads, one for http, one for https
@@ -112,12 +166,20 @@ static struct server_args http_desc = {
 	.accept_fd = -1,
 	.master = AST_PTHREADT_NULL,
 	.is_ssl = 0,
+	.poll_timeout = -1,
+	.name = "http server",
+	.accept_fn = server_root,
+	.worker_fn = httpd_helper_thread,
 };
 
 static struct server_args https_desc = {
 	.accept_fd = -1,
 	.master = AST_PTHREADT_NULL,
 	.is_ssl = 1,
+	.poll_timeout = -1,
+	.name = "https server",
+	.accept_fn = server_root,
+	.worker_fn = httpd_helper_thread,
 };
 
 static struct ast_http_uri *uris;	/*!< list of supported handlers */
@@ -471,19 +533,19 @@ static int ssl_close(void *cookie)
 }
 #endif	/* DO_SSL */
 
-static void *ast_httpd_helper_thread(void *data)
+/*!
+ * creates a FILE * from the fd passed by the accept thread.
+ * This operation is potentially expensive (certificate verification),
+ * so we do it in the child thread context.
+ */
+static void *make_file_from_fd(void *data)
 {
-	char buf[4096];
-	char cookie[4096];
 	struct server_instance *ser = data;
-	struct ast_variable *var, *prev=NULL, *vars=NULL;
-	char *uri, *c, *title=NULL;
-	int status = 200, contentlength = 0;
 
 	/*
 	 * open a FILE * as appropriate.
 	 */
-	if (!ser->is_ssl)
+	if (!ser->parent->is_ssl)
 		ser->f = fdopen(ser->fd, "w+");
 #ifdef DO_SSL
 	else if ( (ser->ssl = SSL_new(ssl_ctx)) ) {
@@ -511,8 +573,20 @@ static void *ast_httpd_helper_thread(void *data)
 	if (!ser->f) {
 		close(ser->fd);
 		ast_log(LOG_WARNING, "FILE * open failed!\n");
-		goto done;
+		free(ser);
+		return NULL;
 	}
+	return ser->parent->worker_fn(ser);
+}
+
+static void *httpd_helper_thread(void *data)
+{
+	char buf[4096];
+	char cookie[4096];
+	struct server_instance *ser = data;
+	struct ast_variable *var, *prev=NULL, *vars=NULL;
+	char *uri, *c, *title=NULL;
+	int status = 200, contentlength = 0;
 
 	if (!fgets(buf, sizeof(buf), ser->f))
 		goto done;
@@ -631,7 +705,7 @@ done:
 	return NULL;
 }
 
-static void *http_root(void *data)
+static void *server_root(void *data)
 {
 	struct server_args *desc = data;
 	int fd;
@@ -642,9 +716,13 @@ static void *http_root(void *data)
 	pthread_attr_t attr;
 	
 	for (;;) {
-		int flags;
+		int i, flags;
 
-		ast_wait_for_input(desc->accept_fd, -1);
+		if (desc->periodic_fn)
+			desc->periodic_fn(desc);
+		i = ast_wait_for_input(desc->accept_fd, desc->poll_timeout);
+		if (i <= 0)
+			continue;
 		sinlen = sizeof(sin);
 		fd = accept(desc->accept_fd, (struct sockaddr *)&sin, &sinlen);
 		if (fd < 0) {
@@ -661,13 +739,13 @@ static void *http_root(void *data)
 		flags = fcntl(fd, F_GETFL);
 		fcntl(fd, F_SETFL, flags & ~O_NONBLOCK);
 		ser->fd = fd;
-		ser->is_ssl = desc->is_ssl;
+		ser->parent = desc;
 		memcpy(&ser->requestor, &sin, sizeof(ser->requestor));
 
 		pthread_attr_init(&attr);
 		pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
 			
-		if (ast_pthread_create_background(&launched, &attr, ast_httpd_helper_thread, ser)) {
+		if (ast_pthread_create_background(&launched, &attr, make_file_from_fd, ser)) {
 			ast_log(LOG_WARNING, "Unable to launch helper thread: %s\n", strerror(errno));
 			close(ser->fd);
 			free(ser);
@@ -721,7 +799,12 @@ static int ssl_setup(void)
 #endif
 }
 
-static void http_server_start(struct server_args *desc)
+/*!
+ * This is a generic (re)start routine for a TCP server,
+ * which does the socket/bind/listen and starts a thread for handling
+ * accept().
+ */
+static void server_start(struct server_args *desc)
 {
 	int flags;
 	int x = 1;
@@ -729,7 +812,7 @@ static void http_server_start(struct server_args *desc)
 	/* Do nothing if nothing has changed */
 	if (!memcmp(&desc->oldsin, &desc->sin, sizeof(desc->oldsin))) {
 		if (option_debug)
-			ast_log(LOG_DEBUG, "Nothing changed in http\n");
+			ast_log(LOG_DEBUG, "Nothing changed in %s\n", desc->name);
 		return;
 	}
 	
@@ -748,33 +831,33 @@ static void http_server_start(struct server_args *desc)
 	/* If there's no new server, stop here */
 	if (desc->sin.sin_family == 0)
 		return;
-	
-	
+
 	desc->accept_fd = socket(AF_INET, SOCK_STREAM, 0);
 	if (desc->accept_fd < 0) {
-		ast_log(LOG_WARNING, "Unable to allocate socket: %s\n", strerror(errno));
+		ast_log(LOG_WARNING, "Unable to allocate socket for %s: %s\n",
+			desc->name, strerror(errno));
 		return;
 	}
 	
 	setsockopt(desc->accept_fd, SOL_SOCKET, SO_REUSEADDR, &x, sizeof(x));
 	if (bind(desc->accept_fd, (struct sockaddr *)&desc->sin, sizeof(desc->sin))) {
-		ast_log(LOG_NOTICE, "Unable to bind http server to %s:%d: %s\n",
+		ast_log(LOG_NOTICE, "Unable to bind %s to %s:%d: %s\n",
+			desc->name,
 			ast_inet_ntoa(desc->sin.sin_addr), ntohs(desc->sin.sin_port),
 			strerror(errno));
 		goto error;
 	}
 	if (listen(desc->accept_fd, 10)) {
-		ast_log(LOG_NOTICE, "Unable to listen!\n");
-		close(desc->accept_fd);
-		desc->accept_fd = -1;
-		return;
+		ast_log(LOG_NOTICE, "Unable to listen for %s!\n", desc->name);
+		goto error;
 	}
 	flags = fcntl(desc->accept_fd, F_GETFL);
 	fcntl(desc->accept_fd, F_SETFL, flags | O_NONBLOCK);
-	if (ast_pthread_create_background(&desc->master, NULL, http_root, desc)) {
-		ast_log(LOG_NOTICE, "Unable to launch http server on %s:%d: %s\n",
-				ast_inet_ntoa(desc->sin.sin_addr), ntohs(desc->sin.sin_port),
-				strerror(errno));
+	if (ast_pthread_create_background(&desc->master, NULL, desc->accept_fn, desc)) {
+		ast_log(LOG_NOTICE, "Unable to launch %s on %s:%d: %s\n",
+			desc->name,
+			ast_inet_ntoa(desc->sin.sin_addr), ntohs(desc->sin.sin_port),
+			strerror(errno));
 		goto error;
 	}
 	return;
@@ -793,9 +876,12 @@ static int __ast_http_load(int reload)
 	struct hostent *hp;
 	struct ast_hostent ahp;
 	char newprefix[MAX_PREFIX];
+	int have_sslbindaddr = 0;
 
+	/* default values */
 	memset(&http_desc.sin, 0, sizeof(http_desc.sin));
 	http_desc.sin.sin_port = htons(8088);
+
 	memset(&https_desc.sin, 0, sizeof(https_desc.sin));
 	https_desc.sin.sin_port = htons(8089);
 	strcpy(newprefix, DEFAULT_PREFIX);
@@ -829,10 +915,16 @@ static int __ast_http_load(int reload)
 				newenablestatic = ast_true(v->value);
 			else if (!strcasecmp(v->name, "bindport"))
 				http_desc.sin.sin_port = htons(atoi(v->value));
-			else if (!strcasecmp(v->name, "bindaddr")) {
+			else if (!strcasecmp(v->name, "sslbindaddr")) {
+				if ((hp = ast_gethostbyname(v->value, &ahp))) {
+					memcpy(&https_desc.sin.sin_addr, hp->h_addr, sizeof(https_desc.sin.sin_addr));
+					have_sslbindaddr = 1;
+				} else {
+					ast_log(LOG_WARNING, "Invalid bind address '%s'\n", v->value);
+				}
+			} else if (!strcasecmp(v->name, "bindaddr")) {
 				if ((hp = ast_gethostbyname(v->value, &ahp))) {
 					memcpy(&http_desc.sin.sin_addr, hp->h_addr, sizeof(http_desc.sin.sin_addr));
-					memcpy(&https_desc.sin.sin_addr, hp->h_addr, sizeof(https_desc.sin.sin_addr));
 				} else {
 					ast_log(LOG_WARNING, "Invalid bind address '%s'\n", v->value);
 				}
@@ -849,14 +941,16 @@ static int __ast_http_load(int reload)
 		}
 		ast_config_destroy(cfg);
 	}
+	if (!have_sslbindaddr)
+		https_desc.sin.sin_addr = http_desc.sin.sin_addr;
 	if (enabled)
 		http_desc.sin.sin_family = https_desc.sin.sin_family = AF_INET;
 	if (strcmp(prefix, newprefix))
 		ast_copy_string(prefix, newprefix, sizeof(prefix));
 	enablestatic = newenablestatic;
-	http_server_start(&http_desc);
+	server_start(&http_desc);
 	if (ssl_setup())
-		http_server_start(&https_desc);
+		server_start(&https_desc);
 	return 0;
 }
 
