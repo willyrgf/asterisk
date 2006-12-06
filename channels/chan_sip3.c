@@ -4364,6 +4364,10 @@ static void handle_response_invite(struct sip_dialog *p, int resp, char *rest, s
 	    (resp != 183))
 		resp = 183;
 
+	/* Transmit ACK here and now for all failure messages */
+	if (resp >= 300)
+		transmit_request(p, SIP_ACK, req->seqno, XMIT_UNRELIABLE, FALSE);
+
 	if (p->state == DIALOG_STATE_TRYING)
 		dialogstatechange(p, DIALOG_STATE_PROCEEDING);	/* We do have any type of response */
 	/* If we got 1xx reply WITH tag, it has to be DIALOG_STATE_EARLY */
@@ -4511,7 +4515,6 @@ static void handle_response_invite(struct sip_dialog *p, int resp, char *rest, s
 	case 301: /* Moved permenantly */
 	case 302: /* Moved temporarily */
 	case 305: /* Use Proxy */
-		transmit_request(p, SIP_ACK, req->seqno, XMIT_UNRELIABLE, FALSE);
 		ast_set_flag(&p->flags[0], SIP_ALREADYGONE);	
 		stop_media_flows(p);	/* Stop RTP, VRTP and UDPTL */
 		parse_moved_contact(p, req);
@@ -4520,8 +4523,6 @@ static void handle_response_invite(struct sip_dialog *p, int resp, char *rest, s
 		break;
 	case 407: /* Proxy authentication */
 	case 401: /* Www auth */
-		/* First we ACK */
-		transmit_request(p, SIP_ACK, req->seqno, XMIT_UNRELIABLE, FALSE);
 		if (p->options)
 			p->options->auth_type = resp;
 
@@ -4540,8 +4541,6 @@ static void handle_response_invite(struct sip_dialog *p, int resp, char *rest, s
 		}
 		break;
 	case 403: /* Forbidden */
-		/* First we ACK */
-		transmit_request(p, SIP_ACK, req->seqno, XMIT_UNRELIABLE, FALSE);
 		ast_log(LOG_WARNING, "Received response: \"Forbidden\" from '%s'\n", get_header(&p->initreq, "From"));
 		if (!ast_test_flag(req, SIP_PKT_IGNORE) && p->owner)
 			ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
@@ -4552,7 +4551,6 @@ static void handle_response_invite(struct sip_dialog *p, int resp, char *rest, s
 	case 404: /* Not found */
 	case 410: /* Gone */
 		dialogstatechange(p, DIALOG_STATE_TERMINATED);
-		transmit_request(p, SIP_ACK, req->seqno, XMIT_UNRELIABLE, FALSE);
 		if (p->owner && !ast_test_flag(req, SIP_PKT_IGNORE))
 			ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
 		ast_set_flag(&p->flags[0], SIP_ALREADYGONE);	
@@ -4561,7 +4559,6 @@ static void handle_response_invite(struct sip_dialog *p, int resp, char *rest, s
 		/* Could be REFER caused INVITE with replaces header that refers to non-existing call  */
 		ast_log(LOG_WARNING, "Re-invite to non-existing call leg on other UA. SIP dialog '%s'. Giving up.\n", p->callid);
 		dialogstatechange(p, DIALOG_STATE_TERMINATED);
-		transmit_request(p, SIP_ACK, req->seqno, XMIT_UNRELIABLE, FALSE);
 		if (p->owner)
 			ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
@@ -4591,7 +4588,6 @@ static void handle_response_invite(struct sip_dialog *p, int resp, char *rest, s
 	case 501: /* Not implemented */
 	case 400: /* Bad Request */
 	case 500: /* Server error */
-		transmit_request(p, SIP_ACK, req->seqno, XMIT_UNRELIABLE, FALSE);
 		dialogstatechange(p, DIALOG_STATE_TERMINATED);
 		if (p->owner)
 			ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
@@ -4601,7 +4597,6 @@ static void handle_response_invite(struct sip_dialog *p, int resp, char *rest, s
 	case 603: /* Decline */
 	case 480: /* Temporarily Unavailable */
 		dialogstatechange(p, DIALOG_STATE_TERMINATED);
-		transmit_request(p, SIP_ACK, req->seqno, XMIT_UNRELIABLE, FALSE);
 		ast_set_flag(&p->flags[0], SIP_ALREADYGONE);	
 		stop_media_flows(p);	/* Stop RTP, VRTP and UDPTL */
 		if (p->owner)
