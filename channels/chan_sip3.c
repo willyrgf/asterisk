@@ -4303,7 +4303,6 @@ static struct ast_custom_function sipchaninfo_function = {
 	"- t38passthrough        1 if T38 is offered or enabled in this channel, otherwise 0\n"
 };
 
-
 /*! \brief Check pending actions on SIP call */
 static void check_pendings(struct sip_dialog *p)
 {
@@ -4326,13 +4325,114 @@ static void check_pendings(struct sip_dialog *p)
 	}
 }
 
+/*! \brief Handle a positive response to an INVITE - 200 OK */
+static void handle_response_answer(struct sip_dialog *dialog, struct sip_request *req, int outgoing, int reinvite)
+{
+	int res; 	/*! \note XXX Not used now, but somehow we need to handle response from process_sdp */
+	struct ast_channel *bridgepeer = NULL;
+
+	/* If we have SDP in the 200 OK, then process it */
+	if (find_sdp(req)) {
+		if ((res = process_sdp(dialog, req)) && !ast_test_flag(req, SIP_PKT_IGNORE))
+			if (!reinvite)
+				/* This 200 OK's SDP is not acceptable, so we need to ack, then hangup */
+				/* For re-invites, we try to recover */
+				ast_set_flag(&dialog->flags[0], SIP_PENDINGBYE);	
+	} else 
+		ast_log(LOG_NOTICE, "200 OK on INVITE without SDP??? Call-ID: %s\n", dialog->callid);
+
+	/* Parse contact header for continued conversation */
+	/* When we get 200 OK, we know which device (and IP) to contact for this call */
+	/* This is important when we have a SIP proxy between us and the phone */
+	if (outgoing) {
+		update_call_counter(dialog, DEC_CALL_RINGING);
+		parse_ok_contact(dialog, req);
+		if(set_address_from_contact(dialog)) {
+			/* Bad contact - we don't know how to reach this device */
+			/* We need to ACK, but then send a bye */
+			/* OEJ: Possible issue that may need a check:
+				If we have a proxy route between us and the device,
+				should we care about resolving the contact
+				or should we just send it?
+			*/
+			if (!ast_test_flag(req, SIP_PKT_IGNORE))
+				ast_set_flag(&dialog->flags[0], SIP_PENDINGBYE);	
+		} 
+
+		/* Save Record-Route for any later requests we make on this dialogue */
+		build_route(dialog, req, 1);
+	}
+		
+	if (dialog->owner && (dialog->owner->_state == AST_STATE_UP) && (bridgepeer = ast_bridged_channel(dialog->owner))) { /* if this is a re-invite */
+		struct sip_dialog *bridge_dialog = NULL;
+
+		if (!bridgepeer->tech) {
+			ast_log(LOG_WARNING, "Ooooh.. no tech!  That's REALLY bad\n");
+			return;		/*! \todo Fix this - this looks really bad */
+		}
+		if (bridgepeer->tech == &sip_tech) {
+			bridge_dialog = (struct sip_dialog *)(bridgepeer->tech_pvt);
+			if (bridge_dialog->udptl) {
+				if (dialog->t38.state == T38_PEER_REINVITE) {
+					sip_handle_t38_reinvite(bridgepeer, dialog, 0);
+					ast_rtp_set_rtptimers_onhold(dialog->rtp);
+					if (dialog->vrtp)
+						ast_rtp_set_rtptimers_onhold(dialog->vrtp);	/* Turn off RTP timers while we send fax */
+				} else if (dialog->t38.state == T38_DISABLED && bridgepeer && (bridge_dialog->t38.state == T38_ENABLED)) {
+					ast_log(LOG_WARNING, "RTP re-invite after T38 session not handled yet !\n");
+					/* Insted of this we should somehow re-invite the other side of the bridge to RTP */
+					if (!ast_test_flag(req, SIP_PKT_IGNORE))
+						ast_set_flag(&dialog->flags[0], SIP_PENDINGBYE);	
+				}
+			} else {
+				if (option_debug > 1)
+					ast_log(LOG_DEBUG, "Strange... The other side of the bridge does not have a udptl struct\n");
+				dialog_lock(bridge_dialog, TRUE);
+				bridge_dialog->t38.state = T38_DISABLED;
+				dialog_lock(bridge_dialog, FALSE);
+				if (option_debug)
+					ast_log(LOG_DEBUG,"T38 state changed to %d on channel %s\n", bridge_dialog->t38.state, bridgepeer->tech->type);
+				dialog->t38.state = T38_DISABLED;
+				if (option_debug > 1)
+					ast_log(LOG_DEBUG,"T38 state changed to %d on channel %s\n", dialog->t38.state, dialog->owner ? dialog->owner->name : "<none>");
+			}
+		} else {
+			/* Other side is not a SIP channel */
+			if (option_debug > 1)
+				ast_log(LOG_DEBUG, "Strange... The other side of the bridge is not a SIP channel\n");
+			dialog->t38.state = T38_DISABLED;
+			if (option_debug > 1)
+				ast_log(LOG_DEBUG,"T38 state changed to %d on channel %s\n", dialog->t38.state, dialog->owner ? dialog->owner->name : "<none>");
+		}
+	}
+	if ((dialog->t38.state == T38_LOCAL_REINVITE) || (dialog->t38.state == T38_LOCAL_DIRECT)) {
+		/* If there was T38 reinvite and we are supposed to answer with 200 OK than this should set us to T38 negotiated mode */
+		dialog->t38.state = T38_ENABLED;
+		if (option_debug)
+			ast_log(LOG_DEBUG, "T38 changed state to %d on channel %s\n", dialog->t38.state, dialog->owner ? dialog->owner->name : "<none>");
+	}
+
+	/* Ok, let's go */
+	if (!ast_test_flag(req, SIP_PKT_IGNORE) && dialog->owner) {
+		if (!reinvite) 
+			ast_queue_control(dialog->owner, AST_CONTROL_ANSWER);
+		else 	/* RE-invite */
+			ast_queue_frame(dialog->owner, &ast_null_frame);
+	} else {
+		 /* It's possible we're getting an 200 OK after we've tried to disconnect
+			  by sending CANCEL */
+		/* First send ACK, then send bye */
+		if (!ast_test_flag(req, SIP_PKT_IGNORE))
+			ast_set_flag(&dialog->flags[0], SIP_PENDINGBYE);	
+	}
+}
+
 /*! \brief Handle SIP response to INVITE dialogue */
 static void handle_response_invite(struct sip_dialog *p, int resp, char *rest, struct sip_request *req)
 {
 	int outgoing = ast_test_flag(&p->flags[0], SIP_OUTGOING);
 	int res = 0;
 	int reinvite = (p->owner && p->owner->_state == AST_STATE_UP);
-	struct ast_channel *bridgepeer = NULL;
 	
 	if (option_debug > 3) {
 		if (reinvite)
@@ -4417,95 +4517,9 @@ static void handle_response_invite(struct sip_dialog *p, int resp, char *rest, s
 			sip_cancel_destroy(p);
 		dialogstatechange(p, DIALOG_STATE_CONFIRMED);	/* We do have any type of response */
 		p->authtries = 0;
-		if (find_sdp(req)) {
-			if ((res = process_sdp(p, req)) && !ast_test_flag(req, SIP_PKT_IGNORE))
-				if (!reinvite)
-					/* This 200 OK's SDP is not acceptable, so we need to ack, then hangup */
-					/* For re-invites, we try to recover */
-					ast_set_flag(&p->flags[0], SIP_PENDINGBYE);	
-		}
+		/* Ok, we got an answer - let's talk */
+		handle_response_answer(p, req, outgoing, reinvite);
 
-		/* Parse contact header for continued conversation */
-		/* When we get 200 OK, we know which device (and IP) to contact for this call */
-		/* This is important when we have a SIP proxy between us and the phone */
-		if (outgoing) {
-			update_call_counter(p, DEC_CALL_RINGING);
-			parse_ok_contact(p, req);
-			if(set_address_from_contact(p)) {
-				/* Bad contact - we don't know how to reach this device */
-				/* We need to ACK, but then send a bye */
-				/* OEJ: Possible issue that may need a check:
-					If we have a proxy route between us and the device,
-					should we care about resolving the contact
-					or should we just send it?
-				*/
-				if (!ast_test_flag(req, SIP_PKT_IGNORE))
-					ast_set_flag(&p->flags[0], SIP_PENDINGBYE);	
-			} 
-
-			/* Save Record-Route for any later requests we make on this dialogue */
-			build_route(p, req, 1);
-		}
-		
-		if (p->owner && (p->owner->_state == AST_STATE_UP) && (bridgepeer = ast_bridged_channel(p->owner))) { /* if this is a re-invite */
-			struct sip_dialog *bridgepvt = NULL;
-
-			if (!bridgepeer->tech) {
-				ast_log(LOG_WARNING, "Ooooh.. no tech!  That's REALLY bad\n");
-				break;
-			}
-			if (!strcasecmp(bridgepeer->tech->type,"SIP")) {
-				bridgepvt = (struct sip_dialog*)(bridgepeer->tech_pvt);
-				if (bridgepvt->udptl) {
-					if (p->t38.state == T38_PEER_REINVITE) {
-						sip_handle_t38_reinvite(bridgepeer, p, 0);
-					} else if (p->t38.state == T38_DISABLED && bridgepeer && (bridgepvt->t38.state == T38_ENABLED)) {
-						ast_log(LOG_WARNING, "RTP re-inivte after T38 session not handled yet !\n");
-						/* Insted of this we should somehow re-invite the other side of the bridge to RTP */
-						/* XXXX Should we really destroy this session here, without any response at all??? */
-						sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
-					}
-				} else {
-					if (option_debug > 1)
-						ast_log(LOG_DEBUG, "Strange... The other side of the bridge does not have a udptl struct\n");
-					dialog_lock(bridgepvt, TRUE);
-					bridgepvt->t38.state = T38_DISABLED;
-					dialog_lock(bridgepvt, FALSE);
-					if (option_debug)
-						ast_log(LOG_DEBUG,"T38 state changed to %d on channel %s\n", bridgepvt->t38.state, bridgepeer->tech->type);
-					p->t38.state = T38_DISABLED;
-					if (option_debug > 1)
-						ast_log(LOG_DEBUG,"T38 state changed to %d on channel %s\n", p->t38.state, p->owner ? p->owner->name : "<none>");
-				}
-			} else {
-				/* Other side is not a SIP channel */
-				if (option_debug > 1)
-					ast_log(LOG_DEBUG, "Strange... The other side of the bridge is not a SIP channel\n");
-				p->t38.state = T38_DISABLED;
-				if (option_debug > 1)
-					ast_log(LOG_DEBUG,"T38 state changed to %d on channel %s\n", p->t38.state, p->owner ? p->owner->name : "<none>");
-			}
-		}
-		if ((p->t38.state == T38_LOCAL_REINVITE) || (p->t38.state == T38_LOCAL_DIRECT)) {
-			/* If there was T38 reinvite and we are supposed to answer with 200 OK than this should set us to T38 negotiated mode */
-			p->t38.state = T38_ENABLED;
-			if (option_debug)
-				ast_log(LOG_DEBUG, "T38 changed state to %d on channel %s\n", p->t38.state, p->owner ? p->owner->name : "<none>");
-		}
-
-		if (!ast_test_flag(req, SIP_PKT_IGNORE) && p->owner) {
-			if (!reinvite) {
-				ast_queue_control(p->owner, AST_CONTROL_ANSWER);
-			} else {	/* RE-invite */
-				ast_queue_frame(p->owner, &ast_null_frame);
-			}
-		} else {
-			 /* It's possible we're getting an 200 OK after we've tried to disconnect
-				  by sending CANCEL */
-			/* First send ACK, then send bye */
-			if (!ast_test_flag(req, SIP_PKT_IGNORE))
-				ast_set_flag(&p->flags[0], SIP_PENDINGBYE);	
-		}
 		/* If I understand this right, the branch is different for a non-200 ACK only */
 		transmit_request(p, SIP_ACK, req->seqno, XMIT_UNRELIABLE, TRUE);
 		ast_set_flag(&p->flags[0], SIP_CAN_BYE);
@@ -5582,24 +5596,24 @@ static int handle_request_invite(struct sip_dialog *p, struct sip_request *req, 
 
 			if (p->t38.state == T38_PEER_REINVITE) {
 				struct ast_channel *bridgepeer = NULL;
-				struct sip_dialog *bridgepvt = NULL;
+				struct sip_dialog *bridge_dialog = NULL;
 				
 				if ((bridgepeer = ast_bridged_channel(p->owner))) {
 					/* We have a bridge, and this is re-invite to switchover to T38 so we send re-invite with T38 SDP, to other side of bridge*/
 					/*! XXX: we should also check here does the other side supports t38 at all !!! XXX */
 					if (!strcasecmp(bridgepeer->tech->type, "SIP")) { /* If we are bridged to SIP channel */
-						bridgepvt = (struct sip_dialog*)bridgepeer->tech_pvt;
-						if (bridgepvt->t38.state == T38_DISABLED) {
-							if (bridgepvt->udptl) { /* If everything is OK with other side's udptl struct */
+						bridge_dialog = (struct sip_dialog*)bridgepeer->tech_pvt;
+						if (bridge_dialog->t38.state == T38_DISABLED) {
+							if (bridge_dialog->udptl) { /* If everything is OK with other side's udptl struct */
 								/* Send re-invite to the bridged channel */
 								sip_handle_t38_reinvite(bridgepeer, p, 1);
 							} else { /* Something is wrong with peers udptl struct */
 								ast_log(LOG_WARNING, "Strange... The other side of the bridge don't have udptl struct\n");
-								dialog_lock(bridgepvt, TRUE);
-								bridgepvt->t38.state = T38_DISABLED;
-								dialog_lock(bridgepvt, FALSE);
+								dialog_lock(bridge_dialog, TRUE);
+								bridge_dialog->t38.state = T38_DISABLED;
+								dialog_lock(bridge_dialog, FALSE);
 								if (option_debug > 1)
-									ast_log(LOG_DEBUG,"T38 state changed to %d on channel %s\n", bridgepvt->t38.state, bridgepeer->name);
+									ast_log(LOG_DEBUG,"T38 state changed to %d on channel %s\n", bridge_dialog->t38.state, bridgepeer->name);
 								transmit_final_response(p, "488 Not Acceptable here", req, ast_test_flag(req, SIP_PKT_IGNORE) ? XMIT_UNRELIABLE : XMIT_RELIABLE);
 							}
 						} else {
@@ -5631,12 +5645,12 @@ static int handle_request_invite(struct sip_dialog *p, struct sip_request *req, 
 				/* If we are bridged to a channel that has T38 enabled than this is a case of RTP re-invite after T38 session */
 				/* so handle it here (re-invite other party to RTP) */
 				struct ast_channel *bridgepeer = NULL;
-				struct sip_dialog *bridgepvt = NULL;
+				struct sip_dialog *bridge_dialog = NULL;
 				if ((bridgepeer = ast_bridged_channel(p->owner))) {
 					if (!strcasecmp(bridgepeer->tech->type, sip_tech.type)) {
-						bridgepvt = (struct sip_dialog*)bridgepeer->tech_pvt;
+						bridge_dialog = (struct sip_dialog*)bridgepeer->tech_pvt;
 						/* Does the bridged peer have T38 ? */
-						if (bridgepvt->t38.state == T38_ENABLED) {
+						if (bridge_dialog->t38.state == T38_ENABLED) {
 							ast_log(LOG_WARNING, "RTP re-invite after T38 session not handled yet !\n");
 							/* Insted of this we should somehow re-invite the other side of the bridge to RTP */
 							transmit_final_response(p, "488 Not Acceptable here (unsupported)", req, ast_test_flag(req, SIP_PKT_IGNORE) ? XMIT_UNRELIABLE : XMIT_RELIABLE);
