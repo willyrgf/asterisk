@@ -105,9 +105,7 @@ struct eventqent {
 
 static AST_LIST_HEAD_STATIC(all_events, eventqent);
 
-static int enabled = 0;
 static int portno = DEFAULT_MANAGER_PORT;
-static int asock = -1;	/* the accept socket */
 static int displayconnects = 1;
 static int timestampevents = 0;
 static int httptimeout = 60;
@@ -136,6 +134,7 @@ struct mansession {
 	ast_mutex_t __lock;	/*!< Thread lock -- don't use in action callbacks, it's already taken care of  */
 				/* XXX need to document which fields it is protecting */
 	struct sockaddr_in sin;	/*!< address we are connecting from */
+	FILE *f;		/*!< fdopen() on the underlying fd */
 	int fd;			/*!< descriptor used for output. Either the socket (AMI) or a temporary file (HTTP) */
 	int inuse;		/*!< number of HTTP sessions using this entry */
 	int needdestroy;	/*!< Whether an HTTP session should be destroyed */
@@ -666,8 +665,8 @@ static void ref_event(struct eventqent *e)
 static void free_session(struct mansession *s)
 {
 	struct eventqent *eqe = s->last_ev;
-	if (s->fd > -1)
-		close(s->fd);
+	if (s->f != NULL)
+		fclose(s->f);
 	ast_mutex_destroy(&s->__lock);
 	free(s);
 	unref_event(eqe);
@@ -739,7 +738,30 @@ struct ast_variable *astman_get_variables(struct message *m)
  */
 static int send_string(struct mansession *s, char *string)
 {
-	return ast_carefulwrite(s->fd, string, strlen(string), s->writetimeout);
+	int len = strlen(string);	/* residual length */
+	char *src = string;
+	struct timeval start = ast_tvnow();
+	int n = 0;
+
+	for (;;) {
+		int elapsed;
+		struct pollfd fd;
+		n = fwrite(src, 1, len, s->f);	/* try to write the string, non blocking */
+		if (n == len /* ok */ || n < 0 /* error */)
+			break;
+		len -= n;	/* skip already written data */
+		src += n;
+		fd.fd = s->fd;
+		fd.events = POLLOUT;
+		n = -1;		/* error marker */
+		elapsed = ast_tvdiff_ms(ast_tvnow(), start);
+		if (elapsed > s->writetimeout)
+			break;
+		if (poll(&fd, 1, s->writetimeout - elapsed) < 1)
+			break;
+	}
+	fflush(s->f);
+	return n < 0 ? -1 : 0;
 }
 
 /*
@@ -757,7 +779,7 @@ void astman_append(struct mansession *s, const char *fmt, ...)
 	ast_dynamic_str_thread_set_va(&buf, 0, &astman_append_buf, fmt, ap);
 	va_end(ap);
 
-	if (s->fd > -1)
+	if (s->f != NULL)
 		send_string(s, buf->str);
 	else
 		ast_verbose("fd == -1 in astman_append, should not happen\n");
@@ -1602,11 +1624,24 @@ static int action_command(struct mansession *s, struct message *m)
 {
 	char *cmd = astman_get_header(m, "Command");
 	char *id = astman_get_header(m, "ActionID");
+	char *buf;
+	char template[] = "/tmp/ast-ami-XXXXXX";	/* template for temporary file */
+	int fd = mkstemp(template);
+	off_t l;
+
 	astman_append(s, "Response: Follows\r\nPrivilege: Command\r\n");
 	if (!ast_strlen_zero(id))
 		astman_append(s, "ActionID: %s\r\n", id);
 	/* FIXME: Wedge a ActionID response in here, waiting for later changes */
-	ast_cli_command(s->fd, cmd);	/* XXX need to change this to use a FILE * */
+	ast_cli_command(fd, cmd);	/* XXX need to change this to use a FILE * */
+	l = lseek(fd, 0, SEEK_END);	/* how many chars available */
+	buf = alloca(l+1);
+	lseek(fd, 0, SEEK_SET);
+	read(fd, buf, l);
+	buf[l] = '\0';
+	close(fd);
+	unlink(template);
+	astman_append(s, buf);
 	astman_append(s, "--END COMMAND--\r\n\r\n");
 	return 0;
 }
@@ -1634,6 +1669,7 @@ static void *fast_originate(void *data)
 	int res;
 	int reason = 0;
 	struct ast_channel *chan = NULL;
+	char requested_channel[AST_CHANNEL_NAME];
 
 	if (!ast_strlen_zero(in->app)) {
 		res = ast_pbx_outgoing_app(in->tech, AST_FORMAT_SLINEAR, in->data, in->timeout, in->app, in->appdata, &reason, 1,
@@ -1647,18 +1683,20 @@ static void *fast_originate(void *data)
 			in->vars, in->account, &chan);
 	}
 
+	if (!chan)
+		snprintf(requested_channel, AST_CHANNEL_NAME, "%s/%s", in->tech, in->data);	
 	/* Tell the manager what happened with the channel */
-	manager_event(EVENT_FLAG_CALL,
-		res ? "OriginateFailure" : "OriginateSuccess",
+	manager_event(EVENT_FLAG_CALL, "OriginateResponse",
 		"%s"
-		"Channel: %s/%s\r\n"
+		"Response: %s\r\n"
+		"Channel: %s\r\n"
 		"Context: %s\r\n"
 		"Exten: %s\r\n"
 		"Reason: %d\r\n"
 		"Uniqueid: %s\r\n"
 		"CallerIDNum: %s\r\n"
 		"CallerIDName: %s\r\n",
-		in->idtext, in->tech, in->data, in->context, in->exten, reason,
+		in->idtext, res ? "Failure" : "Success", chan ? chan->name : requested_channel, in->context, in->exten, reason, 
 		chan ? chan->uniqueid : "<null>",
 		S_OR(in->cid_num, "<unknown>"),
 		S_OR(in->cid_name, "<unknown>")
@@ -1929,7 +1967,7 @@ static int process_events(struct mansession *s)
 	int ret = 0;
 
 	ast_mutex_lock(&s->__lock);
-	if (s->fd > -1) {
+	if (s->f != NULL) {
 		struct eventqent *eqe;
 
 		while ( (eqe = NEW_EVENT(s)) ) {
@@ -2041,12 +2079,17 @@ static int get_input(struct mansession *s, char *output)
 	 * Look for \r\n within the buffer. If found, copy to the output
 	 * buffer and return, trimming the \r\n (not used afterwards).
 	 */
-	for (x = 1; x < s->inlen; x++) {
-		if (src[x] != '\n' || src[x-1] != '\r')
+	for (x = 0; x < s->inlen; x++) {
+		int cr;	/* set if we have \r */
+		if (src[x] == '\r' && x+1 < s->inlen && src[x+1] == '\n')
+			cr = 2;	/* Found. Update length to include \r\n */
+		else if (src[x] == '\n')
+			cr = 1;	/* also accept \n only */
+		else
 			continue;
-		x++;	/* Found. Update length to include \r\n */
-		memmove(output, src, x-2);	/*... but trim \r\n */
-		output[x-2] = '\0';		/* terminate the string */
+		memmove(output, src, x);	/*... but trim \r\n */
+		output[x] = '\0';		/* terminate the string */
+		x += cr;			/* number of bytes used */
 		s->inlen -= x;			/* remaining size */
 		memmove(src, src + x, s->inlen); /* remove used bytes */
 		return 1;
@@ -2079,7 +2122,7 @@ static int get_input(struct mansession *s, char *output)
 		return -1;
 	}
 	ast_mutex_lock(&s->__lock);
-	res = read(s->fd, src + s->inlen, maxlen - s->inlen);
+	res = fread(src + s->inlen, 1, maxlen - s->inlen, s->f);
 	if (res < 1)
 		res = -1;	/* error return */
 	else {
@@ -2101,10 +2144,39 @@ static int get_input(struct mansession *s, char *output)
  */
 static void *session_do(void *data)
 {
-	struct mansession *s = data;
 	struct message m;	/* XXX watch out, this is 20k of memory! */
+	struct server_instance *ser = data;
+	struct mansession *s = ast_calloc(1, sizeof(*s));
+	int flags;
 
+	if (s == NULL)
+		goto done;
+
+	s->writetimeout = 100;
+	s->waiting_thread = AST_PTHREADT_NULL;
+
+	flags = fcntl(ser->fd, F_GETFL);
+	if (!block_sockets) /* make sure socket is non-blocking */
+		flags |= O_NONBLOCK;
+	else
+		flags &= ~O_NONBLOCK;
+	fcntl(ser->fd, F_SETFL, flags);
+
+	ast_mutex_init(&s->__lock);
+	s->send_events = -1;
+	/* these fields duplicate those in the 'ser' structure */
+	s->fd = ser->fd;
+	s->f = ser->f;
+	s->sin = ser->requestor;
+
+	ast_atomic_fetchadd_int(&num_sessions, 1);
+	AST_LIST_LOCK(&sessions);
+	AST_LIST_INSERT_HEAD(&sessions, s, list);
+	AST_LIST_UNLOCK(&sessions);
+	/* Hook to the tail of the event queue */
+	s->last_ev = grab_last();
 	ast_mutex_lock(&s->__lock);
+	s->f = ser->f;
 	astman_append(s, "Asterisk Call Manager/1.0\r\n");	/* welcome prompt */
 	ast_mutex_unlock(&s->__lock);
 	memset(&m, 0, sizeof(m));
@@ -2138,6 +2210,9 @@ static void *session_do(void *data)
 		ast_log(LOG_EVENT, "Failed attempt from %s\n", ast_inet_ntoa(s->sin.sin_addr));
 	}
 	destroy_session(s);
+
+done:
+	free(ser);
 	return NULL;
 }
 
@@ -2165,80 +2240,6 @@ static void purge_sessions(int n_max)
 	}
 	AST_LIST_TRAVERSE_SAFE_END
 	AST_LIST_UNLOCK(&sessions);
-}
-
-/*! \brief The thread accepting connections on the manager interface port.
- * As a side effect, it purges stale sessions, one per each iteration,
- * which is at least every 5 seconds.
- */
-static void *accept_thread(void *ignore)
-{
-	pthread_attr_t attr;
-
-	pthread_attr_init(&attr);
-	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-
-	for (;;) {
-		struct mansession *s;
-		int as;
-		struct sockaddr_in sin;
-		socklen_t sinlen;
-		struct protoent *p;
-		int flags;
-
-		purge_sessions(1);
-		purge_events();
-
-		/* Wait for something to happen, but timeout every few seconds so
-		   we can ditch any old manager sessions */
-		if (ast_wait_for_input(asock, 5000) < 1)
-			continue;
-		sinlen = sizeof(sin);
-		as = accept(asock, (struct sockaddr *)&sin, &sinlen);
-		if (as < 0) {
-			ast_log(LOG_NOTICE, "Accept returned -1: %s\n", strerror(errno));
-			continue;
-		}
-		p = getprotobyname("tcp");
-		if (p) {
-			int arg = 1;
-			if( setsockopt(as, p->p_proto, TCP_NODELAY, (char *)&arg, sizeof(arg) ) < 0 ) {
-				ast_log(LOG_WARNING, "Failed to set manager tcp connection to TCP_NODELAY mode: %s\n", strerror(errno));
-			}
-		}
-		s = ast_calloc(1, sizeof(*s));	/* allocate a new record */
-		if (!s) {
-			close(as);
-			continue;
-		}
-
-
-		s->sin = sin;
-		s->writetimeout = 100;
-		s->waiting_thread = AST_PTHREADT_NULL;
-
-		flags = fcntl(as, F_GETFL);
-		if (!block_sockets) /* For safety, make sure socket is non-blocking */
-			flags |= O_NONBLOCK;
-		else
-			flags &= ~O_NONBLOCK;
-		fcntl(as, F_SETFL, flags);
-
-		ast_mutex_init(&s->__lock);
-		s->fd = as;
-		s->send_events = -1;
-
-		ast_atomic_fetchadd_int(&num_sessions, 1);
-		AST_LIST_LOCK(&sessions);
-		AST_LIST_INSERT_HEAD(&sessions, s, list);
-		AST_LIST_UNLOCK(&sessions);
-		/* Hook to the tail of the event queue */
-		s->last_ev = grab_last();
-		if (ast_pthread_create_background(&s->ms_t, &attr, session_do, s))
-			destroy_session(s);
-	}
-	pthread_attr_destroy(&attr);
-	return NULL;
 }
 
 /*
@@ -2598,7 +2599,7 @@ static char *xml_translate(char *in, struct ast_variable *vars, enum output_form
 		else if (strchr("&\"<>", in[x]))
 			escaped++;
 	}
-	len = (size_t) (strlen(in) + colons * 5 + breaks * (40 + strlen(dest) + strlen(objtype)) + escaped * 10); /* foo="bar", "<response type=\"object\" id=\"dest\"", "&amp;" */
+	len = (size_t) (1 + strlen(in) + colons * 5 + breaks * (40 + strlen(dest) + strlen(objtype)) + escaped * 10); /* foo="bar", "<response type=\"object\" id=\"dest\"", "&amp;" */
 	out = ast_malloc(len);
 	if (!out)
 		return NULL;
@@ -2738,6 +2739,7 @@ static char *generic_http_callback(enum output_format format,
 	}
 
 	s->fd = mkstemp(template);	/* create a temporary file for command output */
+	s->f = fdopen(s->fd, "w+");
 
 	if (process_message(s, &m)) {
 		if (s->authenticated) {
@@ -2755,16 +2757,16 @@ static char *generic_http_callback(enum output_format format,
 		}
 		s->needdestroy = 1;
 	}
-	if (s->fd > -1) {	/* have temporary output */
+	if (s->f != NULL) {	/* have temporary output */
 		char *buf;
-		off_t l = lseek(s->fd, 0, SEEK_END);	/* how many chars available */
+		off_t l = fseek(s->f, 0, SEEK_END);	/* how many chars available */
 
 		/* always return something even if len == 0 */
 		if ((buf = ast_calloc(1, l+1))) {
 			char *tmp;
 			if (l > 0) {
-				lseek(s->fd, 0, SEEK_SET);
-				read(s->fd, buf, l);
+				fseek(s->f, 0, SEEK_SET);
+				fread(buf, 1, l, s->f);
 			}
 			if (format == FORMAT_XML || format == FORMAT_HTML)
 				tmp = xml_translate(buf, params, format);
@@ -2783,7 +2785,8 @@ static char *generic_http_callback(enum output_format format,
 				free(tmp);
 			free(buf);
 		}
-		close(s->fd);
+		fclose(s->f);
+		s->f = NULL;
 		s->fd = -1;
 		unlink(template);
 	}
@@ -2864,17 +2867,48 @@ struct ast_http_uri managerxmluri = {
 static int registered = 0;
 static int webregged = 0;
 
+/*! \brief cleanup code called at each iteration of server_root,
+ * guaranteed to happen every 5 seconds at most
+ */
+static void purge_old_stuff(void *data)
+{
+	purge_sessions(1);
+	purge_events();
+}
+
+struct tls_config ami_tls_cfg;
+static struct server_args ami_desc = {
+        .accept_fd = -1,
+        .master = AST_PTHREADT_NULL,
+        .tls_cfg = NULL, 
+        .poll_timeout = 5000,	/* wake up every 5 seconds */
+	.periodic_fn = purge_old_stuff,
+        .name = "AMI server",
+        .accept_fn = server_root,	/* thread doing the accept() */
+        .worker_fn = session_do,	/* thread handling the session */
+};
+
+static struct server_args amis_desc = {
+        .accept_fd = -1,
+        .master = AST_PTHREADT_NULL,
+        .tls_cfg = &ami_tls_cfg, 
+        .poll_timeout = -1,	/* the other does the periodic cleanup */
+        .name = "AMI TLS server",
+        .accept_fn = server_root,	/* thread doing the accept() */
+        .worker_fn = session_do,	/* thread handling the session */
+};
+
 int init_manager(void)
 {
 	struct ast_config *cfg = NULL;
 	const char *val;
 	char *cat = NULL;
-	int oldportno = portno;
-	static struct sockaddr_in ba;
-	int x = 1;
-	int flags;
 	int webenabled = 0;
+	int enabled = 0;
 	int newhttptimeout = 60;
+	int have_sslbindaddr = 0;
+	struct hostent *hp;
+	struct ast_hostent ahp;
 	struct ast_manager_user *user = NULL;
 
 	if (!registered) {
@@ -2915,6 +2949,42 @@ int init_manager(void)
 		ast_log(LOG_NOTICE, "Unable to open management configuration manager.conf.  Call management disabled.\n");
 		return 0;
 	}
+
+	/* default values */
+	memset(&amis_desc.sin, 0, sizeof(amis_desc.sin));
+	amis_desc.sin.sin_port = htons(5039);
+
+	ami_tls_cfg.enabled = 0;
+	if (ami_tls_cfg.certfile)
+		free(ami_tls_cfg.certfile);
+	ami_tls_cfg.certfile = ast_strdup(AST_CERTFILE);
+	if (ami_tls_cfg.cipher)
+		free(ami_tls_cfg.cipher);
+	ami_tls_cfg.cipher = ast_strdup("");
+
+	/* XXX change this into a loop on  ast_variable_browse(cfg, "general"); */
+
+	if ((val = ast_variable_retrieve(cfg, "general", "sslenable")))
+		ami_tls_cfg.enabled = ast_true(val);
+	if ((val = ast_variable_retrieve(cfg, "general", "sslbindport")))
+		amis_desc.sin.sin_port = htons(atoi(val));
+	if ((val = ast_variable_retrieve(cfg, "general", "sslbindaddr"))) {
+		if ((hp = ast_gethostbyname(val, &ahp))) {
+			memcpy(&amis_desc.sin.sin_addr, hp->h_addr, sizeof(amis_desc.sin.sin_addr));
+			have_sslbindaddr = 1;
+		} else {
+			ast_log(LOG_WARNING, "Invalid bind address '%s'\n", val);
+		}
+	}
+	if ((val = ast_variable_retrieve(cfg, "general", "sslcert"))) {
+		free(ami_tls_cfg.certfile);
+		ami_tls_cfg.certfile = ast_strdup(val);
+	}
+	if ((val = ast_variable_retrieve(cfg, "general", "sslcipher"))) {
+		free(ami_tls_cfg.cipher);
+		ami_tls_cfg.cipher = ast_strdup(val);
+	}
+
 	val = ast_variable_retrieve(cfg, "general", "enabled");
 	if (val)
 		enabled = ast_true(val);
@@ -2946,28 +3016,23 @@ int init_manager(void)
 	if ((val = ast_variable_retrieve(cfg, "general", "httptimeout")))
 		newhttptimeout = atoi(val);
 
-	memset(&ba, 0, sizeof(ba));
-	ba.sin_family = AF_INET;
-	ba.sin_port = htons(portno);
+	memset(&ami_desc.sin, 0, sizeof(struct sockaddr_in));
+	if (enabled)
+		ami_desc.sin.sin_family = AF_INET;
+	ami_desc.sin.sin_port = htons(portno);
 
 	if ((val = ast_variable_retrieve(cfg, "general", "bindaddr"))) {
-		if (!inet_aton(val, &ba.sin_addr)) {
+		if (!inet_aton(val, &ami_desc.sin.sin_addr)) {
 			ast_log(LOG_WARNING, "Invalid address '%s' specified, using 0.0.0.0\n", val);
-			memset(&ba.sin_addr, 0, sizeof(ba.sin_addr));
+			memset(&ami_desc.sin.sin_addr, 0, sizeof(ami_desc.sin.sin_addr));
 		}
 	}
+	if (!have_sslbindaddr)
+		amis_desc.sin.sin_addr = ami_desc.sin.sin_addr;
+	if (ami_tls_cfg.enabled)
+		amis_desc.sin.sin_family = AF_INET;
 
-
-	if ((asock > -1) && ((portno != oldportno) || !enabled)) {
-#if 0
-		/* Can't be done yet */
-		close(asock);
-		asock = -1;
-#else
-		ast_log(LOG_WARNING, "Unable to change management port / enabled\n");
-#endif
-	}
-
+	
 	AST_LIST_LOCK(&users);
 
 	while ((cat = ast_category_browse(cfg, cat))) {
@@ -3067,35 +3132,9 @@ int init_manager(void)
 	if (newhttptimeout > 0)
 		httptimeout = newhttptimeout;
 
-	/* If not enabled, do nothing */
-	if (!enabled)
-		return 0;
-
-	if (asock < 0) {
-		asock = socket(AF_INET, SOCK_STREAM, 0);
-		if (asock < 0) {
-			ast_log(LOG_WARNING, "Unable to create socket: %s\n", strerror(errno));
-			return -1;
-		}
-		setsockopt(asock, SOL_SOCKET, SO_REUSEADDR, &x, sizeof(x));
-		if (bind(asock, (struct sockaddr *)&ba, sizeof(ba))) {
-			ast_log(LOG_WARNING, "Unable to bind socket: %s\n", strerror(errno));
-			close(asock);
-			asock = -1;
-			return -1;
-		}
-		if (listen(asock, 2)) {
-			ast_log(LOG_WARNING, "Unable to listen on socket: %s\n", strerror(errno));
-			close(asock);
-			asock = -1;
-			return -1;
-		}
-		flags = fcntl(asock, F_GETFL);
-		fcntl(asock, F_SETFL, flags | O_NONBLOCK);
-		if (option_verbose)
-			ast_verbose("Asterisk Management interface listening on port %d\n", portno);
-		ast_pthread_create_background(&accept_thread_ptr, NULL, accept_thread, NULL);
-	}
+	server_start(&ami_desc);
+	if (ssl_setup(amis_desc.tls_cfg))
+		server_start(&amis_desc);
 	return 0;
 }
 
