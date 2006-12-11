@@ -366,6 +366,20 @@ enum dialogstate {
 	
 };
 
+/*! \brief For each config object, a flag that says where this config object
+	can be used */
+enum sip_config_objects {
+	SIP_CONFOBJ_GENERAL	= (1 << 0),	/*!< [general] section */
+	SIP_CONFOBJ_PHONE	= (1 << 1),	/*!< phone configuration */
+	SIP_CONFOBJ_SERVICE	= (1 << 2),	/*!< Service configuration */
+	SIP_CONFOBJ_TRUNK	= (1 << 3),	/*!< Trunk configuration */
+	SIP_CONFOBJ_DOMAIN	= (1 << 4),	/*!< Domain configurations */
+	SIP_CONFOBJ_REALM	= (1 << 5),	/*!< Realm configurations */
+}
+
+enum sip_config_options {
+	SIP_CONF_NONE,		/*!< Unknown */
+}
 
 /* -------- Structure declarations */
 
