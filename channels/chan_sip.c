@@ -5733,9 +5733,10 @@ static int reqprep(struct sip_request *req, struct sip_pvt *p, int sipmethod, in
 		add_header(req, "From", ot);
 		add_header(req, "To", of);
 	}
-	/* Do not add Contact for BYE and Cancel requests */
-	if (sipmethod != SIP_BYE && sipmethod != SIP_CANCEL)
+	/* Do not add Contact for MESSAGE, BYE and Cancel requests */
+	if (sipmethod != SIP_BYE && sipmethod != SIP_CANCEL && sipmethod != SIP_MESSAGE)
 		add_header(req, "Contact", p->our_contact);
+
 	copy_header(req, orig, "Call-ID");
 	add_header(req, "CSeq", tmp);
 
@@ -11302,63 +11303,63 @@ static int build_reply_digest(struct sip_pvt *p, int method, char* digest, int d
 	return 0;
 }
 	
-static char show_domains_usage[] = 
+static const char show_domains_usage[] = 
 "Usage: sip show domains\n"
 "       Lists all configured SIP local domains.\n"
 "       Asterisk only responds to SIP messages to local domains.\n";
 
-static char notify_usage[] =
+static const char notify_usage[] =
 "Usage: sip notify <type> <peer> [<peer>...]\n"
 "       Send a NOTIFY message to a SIP peer or peers\n"
 "       Message types are defined in sip_notify.conf\n";
 
-static char show_users_usage[] = 
+static const char show_users_usage[] = 
 "Usage: sip show users [like <pattern>]\n"
 "       Lists all known SIP users.\n"
 "       Optional regular expression pattern is used to filter the user list.\n";
 
-static char show_user_usage[] =
+static const char show_user_usage[] =
 "Usage: sip show user <name> [load]\n"
 "       Shows all details on one SIP user and the current status.\n"
 "       Option \"load\" forces lookup of peer in realtime storage.\n";
 
-static char show_inuse_usage[] = 
+static const char show_inuse_usage[] = 
 "Usage: sip show inuse [all]\n"
 "       List all SIP users and peers usage counters and limits.\n"
 "       Add option \"all\" to show all devices, not only those with a limit.\n";
 
-static char show_channels_usage[] = 
+static const char show_channels_usage[] = 
 "Usage: sip show channels\n"
 "       Lists all currently active SIP channels.\n";
 
-static char show_channel_usage[] = 
+static const char show_channel_usage[] = 
 "Usage: sip show channel <channel>\n"
 "       Provides detailed status on a given SIP channel.\n";
 
-static char show_history_usage[] = 
+static const char show_history_usage[] = 
 "Usage: sip show history <channel>\n"
 "       Provides detailed dialog history on a given SIP channel.\n";
 
-static char show_peers_usage[] = 
+static const char show_peers_usage[] = 
 "Usage: sip show peers [like <pattern>]\n"
 "       Lists all known SIP peers.\n"
 "       Optional regular expression pattern is used to filter the peer list.\n";
 
-static char show_peer_usage[] =
+static const char show_peer_usage[] =
 "Usage: sip show peer <name> [load]\n"
 "       Shows all details on one SIP peer and the current status.\n"
 "       Option \"load\" forces lookup of peer in realtime storage.\n";
 
-static char prune_realtime_usage[] =
+static const char prune_realtime_usage[] =
 "Usage: sip prune realtime [peer|user] [<name>|all|like <pattern>]\n"
 "       Prunes object(s) from the cache.\n"
 "       Optional regular expression pattern is used to filter the objects.\n";
 
-static char show_reg_usage[] =
+static const char show_reg_usage[] =
 "Usage: sip show registry\n"
 "       Lists all registration requests and status.\n";
 
-static char debug_usage[] = 
+static const char debug_usage[] = 
 "Usage: sip debug\n"
 "       Enables dumping of SIP packets for debugging purposes\n\n"
 "       sip debug ip <host[:PORT]>\n"
@@ -11367,32 +11368,32 @@ static char debug_usage[] =
 "       Enables dumping of SIP packets to and from host.\n"
 "       Require peer to be registered.\n";
 
-static char no_debug_usage[] = 
+static const char no_debug_usage[] = 
 "Usage: sip debug off\n"
 "       Disables dumping of SIP packets for debugging purposes\n";
 
-static char no_history_usage[] = 
+static const char no_history_usage[] = 
 "Usage: sip history off\n"
 "       Disables recording of SIP dialog history for debugging purposes\n";
 
-static char history_usage[] = 
+static const char history_usage[] = 
 "Usage: sip history\n"
 "       Enables recording of SIP dialog history for debugging purposes.\n"
 "Use 'sip show history' to view the history of a call number.\n";
 
-static char sip_reload_usage[] =
+static const char sip_reload_usage[] =
 "Usage: sip reload\n"
 "       Reloads SIP configuration from sip.conf\n";
 
-static char show_subscriptions_usage[] =
+static const char show_subscriptions_usage[] =
 "Usage: sip show subscriptions\n" 
 "       Lists active SIP subscriptions for extension states\n";
 
-static char show_objects_usage[] =
+static const char show_objects_usage[] =
 "Usage: sip show objects\n" 
 "       Lists status of known SIP objects\n";
 
-static char show_settings_usage[] = 
+static const char show_settings_usage[] = 
 "Usage: sip show settings\n"
 "       Provides detailed list of the configuration of the SIP channel.\n";
 
@@ -11942,7 +11943,16 @@ static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, stru
 			ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 		break;
-
+	case 487: /* Cancelled transaction */
+		/* We have sent CANCEL on an outbound INVITE 
+			This transaction is already scheduled to be killed by sip_hangup().
+		*/
+		transmit_request(p, SIP_ACK, seqno, 0, 0);
+		if (p->owner && !ast_test_flag(req, SIP_PKT_IGNORE))
+			ast_queue_hangup(p->owner);
+		else if (!ast_test_flag(req, SIP_PKT_IGNORE))
+			update_call_counter(p, DEC_CALL_LIMIT);
+		break;
 	case 491: /* Pending */
 		/* we really should have to wait a while, then retransmit */
 			/* We should support the retry-after at some point */
@@ -11954,6 +11964,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, stru
 		break;
 
 	case 501: /* Not implemented */
+		transmit_request(p, SIP_ACK, seqno, 0, 0);
 		if (p->owner)
 			ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
 		break;
@@ -12376,6 +12387,10 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 				/* Guessing that this is not an important request */
 			}
 			break;
+		case 487:
+			if (sipmethod == SIP_INVITE)
+				handle_response_invite(p, resp, rest, req, seqno);
+			break;
 		case 491: /* Pending */
 			if (sipmethod == SIP_INVITE)
 				handle_response_invite(p, resp, rest, req, seqno);
@@ -12420,12 +12435,6 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 				case 603: /* Decline */
 					if (p->owner)
 						ast_queue_control(p->owner, AST_CONTROL_BUSY);
-					break;
-				case 487:	/* Response on INVITE that has been CANCELled */
-					/* channel now destroyed - dec the inUse counter */
-					if (owner)
-						ast_queue_hangup(p->owner);
-					update_call_counter(p, DEC_CALL_LIMIT);
 					break;
 				case 482: /*
 					\note SIP is incapable of performing a hairpin call, which

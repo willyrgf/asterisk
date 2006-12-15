@@ -2912,7 +2912,7 @@ static enum ast_bridge_result bridge_native_loop(struct ast_channel *c0, struct 
 	return AST_BRIDGE_FAILED;
 }
 
-/*! \brief peer 2 peer RTP mode  RTP/RTCP Callback */
+/*! \brief P2P RTP Callback */
 static int p2p_rtp_callback(int *id, int fd, short events, void *cbdata)
 {
 	int res = 0, hdrlen = 12;
@@ -2920,7 +2920,6 @@ static int p2p_rtp_callback(int *id, int fd, short events, void *cbdata)
 	socklen_t len;
 	unsigned int *header;
 	struct ast_rtp *rtp = cbdata;
-	int is_rtp = 0, is_rtcp = 0;
 
 	if (!rtp)
 		return 1;
@@ -2931,42 +2930,54 @@ static int p2p_rtp_callback(int *id, int fd, short events, void *cbdata)
 
 	header = (unsigned int *)(rtp->rawdata + AST_FRIENDLY_OFFSET);
 
-	/* Determine what this file descriptor is for */
-	if (rtp->s == fd)
-		is_rtp = 1;
-	else if (rtp->rtcp && rtp->rtcp->s == fd)
-		is_rtcp = 1;
-
 	/* If NAT support is turned on, then see if we need to change their address */
-	if (rtp->nat) {
-		/* If this is for RTP, check that - if it's for RTCP, check that */
-		if (is_rtp) {
-			if ((rtp->them.sin_addr.s_addr != sin.sin_addr.s_addr) ||
-			    (rtp->them.sin_port != sin.sin_port)) {
-				rtp->them = sin;
-				rtp->rxseqno = 0;
-				ast_set_flag(rtp, FLAG_NAT_ACTIVE);
-				if (option_debug || rtpdebug)
-					ast_log(LOG_DEBUG, "P2P RTP NAT: Got audio from other end. Now sending to address %s:%d\n", ast_inet_ntoa(rtp->them.sin_addr), ntohs(rtp->them.sin_port));
-			}
-		} else if (is_rtcp) {
-			if ((rtp->rtcp->them.sin_addr.s_addr != sin.sin_addr.s_addr) ||
-			    (rtp->rtcp->them.sin_port != sin.sin_port)) {
-				rtp->rtcp->them = sin;
-				if (option_debug || rtpdebug)
-					ast_log(LOG_DEBUG, "P2P RTCP NAT: Got RTCP from other end. Now sending to address %s:%d\n", ast_inet_ntoa(rtp->rtcp->them.sin_addr), ntohs(rtp->rtcp->them.sin_port));
-			}
-		}
+	if ((rtp->nat) && 
+	    ((rtp->them.sin_addr.s_addr != sin.sin_addr.s_addr) ||
+	     (rtp->them.sin_port != sin.sin_port))) {
+		rtp->them = sin;
+		rtp->rxseqno = 0;
+		ast_set_flag(rtp, FLAG_NAT_ACTIVE);
+		if (option_debug || rtpdebug)
+			ast_log(LOG_DEBUG, "P2P RTP NAT: Got audio from other end. Now sending to address %s:%d\n", ast_inet_ntoa(rtp->them.sin_addr), ntohs(rtp->them.sin_port));
 	}
 
-	/* If this came from the RTP stream, write out via RTP - if it's RTCP, write out via RTCP */
-	if (ast_rtp_get_bridged(rtp)) {
-		if (is_rtp)
-			bridge_p2p_rtp_write(rtp, header, res, hdrlen);
-		else if (is_rtcp)
-			bridge_p2p_rtcp_write(rtp, header, res);
-	}
+	/* Write directly out to other RTP stream if bridged */
+	if (ast_rtp_get_bridged(rtp))
+		bridge_p2p_rtp_write(rtp, header, res, hdrlen);
 
+	return 1;
+}
+
+/*! \brief P2P RTCP Callback */
+static int p2p_rtcp_callback(int *id, int fd, short events, void *cbdata)
+{
+	int res = 0;
+	struct sockaddr_in sin;
+	socklen_t len;
+	unsigned int *header;
+	struct ast_rtp *rtp = cbdata;
+	struct ast_rtcp *rtcp = NULL;
+
+	if (!rtp || !(rtcp = rtp->rtcp))
+		return 1;
+
+	len = sizeof(sin);
+	if ((res = recvfrom(fd, rtp->rawdata + AST_FRIENDLY_OFFSET, sizeof(rtp->rawdata) - AST_FRIENDLY_OFFSET, 0, (struct sockaddr *)&sin, &len)) < 0)
+		return 1;
+
+	header = (unsigned int *)(rtp->rawdata + AST_FRIENDLY_OFFSET);
+	
+	if ((rtp->nat) &&
+	    ((rtcp->them.sin_addr.s_addr != sin.sin_addr.s_addr) ||
+	     (rtcp->them.sin_port != sin.sin_port))) {
+		rtcp->them = sin;
+		if (option_debug || rtpdebug)
+			ast_log(LOG_DEBUG, "P2P RTCP NAT: Got RTCP from other end. Now sending to address %s:%d\n", ast_inet_ntoa(rtcp->them.sin_addr), ntohs(rtcp->them.sin_port));
+	}
+	
+	if (ast_rtp_get_bridged(rtp))
+		bridge_p2p_rtcp_write(rtp, header, res);
+	
 	return 1;
 }
 
@@ -2990,7 +3001,7 @@ static int p2p_callback_enable(struct ast_channel *chan, struct ast_rtp *rtp, in
 	/* Now, fire up callback mode */
 	iod[0] = ast_io_add(rtp->io, ast_rtp_fd(rtp), p2p_rtp_callback, AST_IO_IN, rtp);
 	if (rtp->rtcp)
-		iod[1] = ast_io_add(rtp->io, ast_rtcp_fd(rtp), p2p_rtp_callback, AST_IO_IN, rtp);
+		iod[1] = ast_io_add(rtp->io, ast_rtcp_fd(rtp), p2p_rtcp_callback, AST_IO_IN, rtp);
 
 	return 1;
 }
@@ -2999,17 +3010,22 @@ static int p2p_callback_enable(struct ast_channel *chan, struct ast_rtp *rtp, in
 static int p2p_callback_disable(struct ast_channel *chan, struct ast_rtp *rtp, int **iod)
 {
 	ast_channel_lock(chan);
+
 	/* Remove the callback from the IO context */
 	ast_io_remove(rtp->io, iod[0]);
+
 	if (iod[1])
 		ast_io_remove(rtp->io, iod[1]);
+
 	/* Restore file descriptors */
 	chan->fds[0] = ast_rtp_fd(rtp);
 	chan->fds[1] = ast_rtcp_fd(rtp);
 	ast_channel_unlock(chan);
+
 	/* Restore callback mode if previously used */
 	if (ast_test_flag(rtp, FLAG_CALLBACK_MODE))
-	    rtp->ioid = ast_io_add(rtp->io, ast_rtp_fd(rtp), rtpread, AST_IO_IN, rtp);
+		rtp->ioid = ast_io_add(rtp->io, ast_rtp_fd(rtp), rtpread, AST_IO_IN, rtp);
+	
 	return 0;
 }
 
@@ -3142,7 +3158,34 @@ static enum ast_bridge_result bridge_p2p_loop(struct ast_channel *c0, struct ast
 
 /*! \brief Bridge calls. If possible and allowed, initiate
 	re-invite so the peers exchange media directly outside 
-	of Asterisk. */
+	of Asterisk. 
+*/
+/*! \page AstRTPbridge The Asterisk RTP bridge 
+	The RTP bridge is called from the channel drivers that are using the RTP
+	subsystem in Asterisk - like SIP, H.323 and Jingle/Google Talk.
+
+	This bridge aims to offload the Asterisk server by setting up
+	the media stream directly between the endpoints, keeping the
+	signalling in Asterisk.
+
+	It checks with the channel driver, using a callback function, if
+	there are possibilities for a remote bridge.
+
+	If this fails, the bridge hands off to the core bridge. Reasons
+	can be NAT support needed, DTMF features in audio needed by
+	the PBX for transfers or spying/monitoring on channels.
+
+	If transcoding is needed - we can't do a remote bridge.
+	If only NAT support is needed, we're using Asterisk in
+	RTP proxy mode with the p2p RTP bridge, basically
+	forwarding incoming audio packets to the outbound
+	stream on a network level.
+
+	References:
+	- ast_rtp_bridge()
+	- ast_channel_early_bridge()
+	- ast_channel_bridge()
+*/
 enum ast_bridge_result ast_rtp_bridge(struct ast_channel *c0, struct ast_channel *c1, int flags, struct ast_frame **fo, struct ast_channel **rc, int timeoutms)
 {
 	struct ast_rtp *p0 = NULL, *p1 = NULL;		/* Audio RTP Channels */
@@ -3385,35 +3428,35 @@ static int stun_no_debug(int fd, int argc, char *argv[])
 	return RESULT_SUCCESS;
 }
 
-static char debug_usage[] =
+static const char debug_usage[] =
   "Usage: rtp debug [ip host[:port]]\n"
   "       Enable dumping of all RTP packets to and from host.\n";
 
-static char no_debug_usage[] =
+static const char no_debug_usage[] =
   "Usage: rtp debug off\n"
   "       Disable all RTP debugging\n";
 
-static char stun_debug_usage[] =
+static const char stun_debug_usage[] =
   "Usage: stun debug\n"
   "       Enable STUN (Simple Traversal of UDP through NATs) debugging\n";
 
-static char stun_no_debug_usage[] =
+static const char stun_no_debug_usage[] =
   "Usage: stun debug off\n"
   "       Disable STUN debugging\n";
 
-static char rtcp_debug_usage[] =
+static const char rtcp_debug_usage[] =
   "Usage: rtcp debug [ip host[:port]]\n"
   "       Enable dumping of all RTCP packets to and from host.\n";
   
-static char rtcp_no_debug_usage[] =
+static const char rtcp_no_debug_usage[] =
   "Usage: rtcp debug off\n"
   "       Disable all RTCP debugging\n";
 
-static char rtcp_stats_usage[] =
+static const char rtcp_stats_usage[] =
   "Usage: rtcp stats\n"
   "       Enable dumping of RTCP stats.\n";
   
-static char rtcp_no_stats_usage[] =
+static const char rtcp_no_stats_usage[] =
   "Usage: rtcp stats off\n"
   "       Disable all RTCP stats\n";
 
