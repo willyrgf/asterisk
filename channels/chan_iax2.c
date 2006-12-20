@@ -871,41 +871,61 @@ static const struct ast_channel_tech iax2_tech = {
 	.fixup = iax2_fixup,
 };
 
+static void insert_idle_thread(struct iax2_thread *thread)
+{
+	if (thread->type == IAX_THREAD_TYPE_DYNAMIC) {
+		AST_LIST_LOCK(&dynamic_list);
+		AST_LIST_INSERT_TAIL(&dynamic_list, thread, list);
+		AST_LIST_UNLOCK(&dynamic_list);
+	} else {
+		AST_LIST_LOCK(&idle_list);
+		AST_LIST_INSERT_TAIL(&idle_list, thread, list);
+		AST_LIST_UNLOCK(&idle_list);
+	}
+
+	return;
+}
+
 static struct iax2_thread *find_idle_thread(void)
 {
 	struct iax2_thread *thread = NULL;
 
-	/* Pop the head of the list off */
+	/* Pop the head of the idle list off */
 	AST_LIST_LOCK(&idle_list);
 	thread = AST_LIST_REMOVE_HEAD(&idle_list, list);
 	AST_LIST_UNLOCK(&idle_list);
 
-	/* If no idle thread is available from the regular list, try dynamic */
-	if (thread == NULL) {
-		AST_LIST_LOCK(&dynamic_list);
-		thread = AST_LIST_FIRST(&dynamic_list);
-		if (thread != NULL) {
-			AST_LIST_REMOVE(&dynamic_list, thread, list);
-		}
-		/* Make sure we absolutely have a thread... if not, try to make one if allowed */
-		if (thread == NULL && iaxmaxthreadcount > iaxdynamicthreadcount) {
-			/* We need to MAKE a thread! */
-			thread = ast_calloc(1, sizeof(*thread));
-			if (thread != NULL) {
-				thread->threadnum = iaxdynamicthreadcount;
-				thread->type = IAX_THREAD_TYPE_DYNAMIC;
-				ast_mutex_init(&thread->lock);
-				ast_cond_init(&thread->cond, NULL);
-				if (ast_pthread_create(&thread->threadid, NULL, iax2_process_thread, thread)) {
-					free(thread);
-					thread = NULL;
-				} else {
-					/* All went well and the thread is up, so increment our count */
-					iaxdynamicthreadcount++;
-				}
-			}
-		}
-		AST_LIST_UNLOCK(&dynamic_list);
+	/* If we popped a thread off the idle list, just return it */
+	if (thread)
+		return thread;
+
+	/* Pop the head of the dynamic list off */
+	AST_LIST_LOCK(&dynamic_list);
+	thread = AST_LIST_REMOVE_HEAD(&dynamic_list, list);
+	AST_LIST_UNLOCK(&dynamic_list);
+
+	/* If we popped a thread off the dynamic list, just return it */
+	if (thread)
+		return thread;
+
+	/* If we can't create a new dynamic thread for any reason, return no thread at all */
+	if (iaxdynamicthreadcount >= iaxmaxthreadcount || !(thread = ast_calloc(1, sizeof(*thread))))
+		return NULL;
+
+	/* Set default values */
+	thread->threadnum = ast_atomic_fetchadd_int(&iaxdynamicthreadcount, 1);
+	thread->type = IAX_THREAD_TYPE_DYNAMIC;
+
+	/* Initialize lock and condition */
+	ast_mutex_init(&thread->lock);
+	ast_cond_init(&thread->cond, NULL);
+
+	/* Create thread and send it on it's way */
+	if (ast_pthread_create(&thread->threadid, NULL, iax2_process_thread, thread)) {
+		ast_cond_destroy(&thread->cond);
+		ast_mutex_destroy(&thread->lock);
+		free(thread);
+		thread = NULL;
 	}
 
 	return thread;
@@ -1788,11 +1808,14 @@ retry:
 			ast_queue_hangup(owner);
 		}
 
+		AST_LIST_LOCK(&iaxq.queue);
 		AST_LIST_TRAVERSE(&iaxq.queue, cur, list) {
 			/* Cancel any pending transmissions */
 			if (cur->callno == pvt->callno) 
 				cur->retries = -1;
 		}
+		AST_LIST_UNLOCK(&iaxq.queue);
+
 		if (pvt->reg)
 			pvt->reg->callno = 0;
 		if (!owner) {
@@ -2099,8 +2122,11 @@ static int iax2_show_stats(int fd, int argc, char *argv[])
 {
 	struct iax_frame *cur;
 	int cnt = 0, dead=0, final=0;
+
 	if (argc != 3)
 		return RESULT_SHOWUSAGE;
+
+	AST_LIST_LOCK(&iaxq.queue);
 	AST_LIST_TRAVERSE(&iaxq.queue, cur, list) {
 		if (cur->retries < 0)
 			dead++;
@@ -2108,6 +2134,8 @@ static int iax2_show_stats(int fd, int argc, char *argv[])
 			final++;
 		cnt++;
 	}
+	AST_LIST_UNLOCK(&iaxq.queue);
+
 	ast_cli(fd, "    IAX Statistics\n");
 	ast_cli(fd, "---------------------\n");
 	ast_cli(fd, "Outstanding frames: %d (%d ingress, %d egress)\n", iax_get_frames(), iax_get_iframes(), iax_get_oframes());
@@ -6253,15 +6281,11 @@ static int socket_read(int *id, int fd, short events, void *cbdata)
 			if (errno != ECONNREFUSED && errno != EAGAIN)
 				ast_log(LOG_WARNING, "Error: %s\n", strerror(errno));
 			handle_error();
-			AST_LIST_LOCK(&idle_list);
-			AST_LIST_INSERT_TAIL(&idle_list, thread, list);
-			AST_LIST_UNLOCK(&idle_list);
+			insert_idle_thread(thread);
 			return 1;
 		}
 		if (test_losspct && ((100.0 * ast_random() / (RAND_MAX + 1.0)) < test_losspct)) { /* simulate random loss condition */
-			AST_LIST_LOCK(&idle_list);
-			AST_LIST_INSERT_TAIL(&idle_list, thread, list);
-			AST_LIST_UNLOCK(&idle_list);
+			insert_idle_thread(thread);
 			return 1;
 		}
 		/* Mark as ready and send on its way */
@@ -7658,10 +7682,16 @@ static void *iax2_process_thread(void *data)
 	struct iax2_thread *thread = data;
 	struct timeval tv;
 	struct timespec ts;
+	int put_into_idle = 0;
 
 	for(;;) {
 		/* Wait for something to signal us to be awake */
 		ast_mutex_lock(&thread->lock);
+
+		/* Put into idle list if applicable */
+		if (put_into_idle)
+			insert_idle_thread(thread);
+
 		if (thread->type == IAX_THREAD_TYPE_DYNAMIC) {
 			/* Wait to be signalled or time out */
 			tv = ast_tvadd(ast_tvnow(), ast_samp2tv(30000, 1000));
@@ -7671,8 +7701,8 @@ static void *iax2_process_thread(void *data)
 				ast_mutex_unlock(&thread->lock);
 				AST_LIST_LOCK(&dynamic_list);
 				AST_LIST_REMOVE(&dynamic_list, thread, list);
-				iaxdynamicthreadcount--;
 				AST_LIST_UNLOCK(&dynamic_list);
+				ast_atomic_dec_and_test(&iaxdynamicthreadcount);
 				break;
 			}
 		} else {
@@ -7712,16 +7742,7 @@ static void *iax2_process_thread(void *data)
 		AST_LIST_REMOVE(&active_list, thread, list);
 		AST_LIST_UNLOCK(&active_list);
 
-		/* Go back into our respective list */
-		if (thread->type == IAX_THREAD_TYPE_DYNAMIC) {
-			AST_LIST_LOCK(&dynamic_list);
-			AST_LIST_INSERT_TAIL(&dynamic_list, thread, list);
-			AST_LIST_UNLOCK(&dynamic_list);
-		} else {
-			AST_LIST_LOCK(&idle_list);
-			AST_LIST_INSERT_TAIL(&idle_list, thread, list);
-			AST_LIST_UNLOCK(&idle_list);
-		}
+		put_into_idle = 1;
 	}
 
 	return NULL;
@@ -7744,7 +7765,9 @@ static int iax2_do_register(struct iax2_registry *reg)
 	 * call has the pointer to IP and must be updated to the new one
 	 */
 	if (reg->dnsmgr && ast_dnsmgr_changed(reg->dnsmgr) && (reg->callno > 0)) {
+		ast_mutex_lock(&iaxsl[reg->callno]);
 		iax2_destroy(reg->callno);
+		ast_mutex_unlock(&iaxsl[reg->callno]);
 		reg->callno = 0;
 	}
 	if (!reg->addr.sin_addr.s_addr) {
@@ -7911,8 +7934,11 @@ static void __iax2_poke_noanswer(void *data)
 		manager_event(EVENT_FLAG_SYSTEM, "PeerStatus", "Peer: IAX2/%s\r\nPeerStatus: Unreachable\r\nTime: %d\r\n", peer->name, peer->lastms);
 		ast_device_state_changed("IAX2/%s", peer->name); /* Activate notification */
 	}
-	if (peer->callno > 0)
+	if (peer->callno > 0) {
+		ast_mutex_lock(&iaxsl[peer->callno]);
 		iax2_destroy(peer->callno);
+		ast_mutex_unlock(&iaxsl[peer->callno]);
+	}
 	peer->callno = 0;
 	peer->lastms = -1;
 	/* Try again quickly */
@@ -7943,7 +7969,9 @@ static int iax2_poke_peer(struct iax2_peer *peer, int heldcall)
 	}
 	if (peer->callno > 0) {
 		ast_log(LOG_NOTICE, "Still have a callno...\n");
+		ast_mutex_lock(&iaxsl[peer->callno]);
 		iax2_destroy(peer->callno);
+		ast_mutex_unlock(&iaxsl[peer->callno]);
 	}
 	if (heldcall)
 		ast_mutex_unlock(&iaxsl[heldcall]);
@@ -8098,7 +8126,7 @@ static void *network_thread(void *ignore)
 {
 	/* Our job is simple: Send queued messages, retrying if necessary.  Read frames 
 	   from the network, and queue them for delivery to the channels */
-	int res, count;
+	int res, count, wakeup;
 	struct iax_frame *f;
 
 	if (timingfd > -1)
@@ -8109,13 +8137,16 @@ static void *network_thread(void *ignore)
 		   sent, and scheduling retransmissions if appropriate */
 		AST_LIST_LOCK(&iaxq.queue);
 		count = 0;
+		wakeup = -1;
 		AST_LIST_TRAVERSE_SAFE_BEGIN(&iaxq.queue, f, list) {
 			if (f->sentyet)
 				continue;
 			
 			/* Try to lock the pvt, if we can't... don't fret - defer it till later */
-			if (ast_mutex_trylock(&iaxsl[f->callno]))
+			if (ast_mutex_trylock(&iaxsl[f->callno])) {
+				wakeup = 1;
 				continue;
+			}
 
 			f->sentyet++;
 
@@ -8146,7 +8177,7 @@ static void *network_thread(void *ignore)
 			ast_log(LOG_DEBUG, "chan_iax2: Sent %d queued outbound frames all at once\n", count);
 
 		/* Now do the IO, and run scheduled tasks */
-		res = ast_io_wait(io, -1);
+		res = ast_io_wait(io, wakeup);
 		if (res >= 0) {
 			if (res >= 20 && option_debug)
 				ast_log(LOG_DEBUG, "chan_iax2: ast_io_wait ran %d I/Os all at once\n", res);
@@ -8775,8 +8806,11 @@ static void destroy_peer(struct iax2_peer *peer)
 		ast_sched_del(sched, peer->expire);
 	if (peer->pokeexpire > -1)
 		ast_sched_del(sched, peer->pokeexpire);
-	if (peer->callno > 0)
+	if (peer->callno > 0) {
+		ast_mutex_lock(&iaxsl[peer->callno]);
 		iax2_destroy(peer->callno);
+		ast_mutex_unlock(&iaxsl[peer->callno]);
+	}
 
 	register_peer_exten(peer, 0);
 

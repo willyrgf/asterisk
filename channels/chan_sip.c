@@ -449,11 +449,11 @@ static const struct cfsip_options {
 	{ SIP_OPT_SDP_ANAT,	NOT_SUPPORTED,	"sdp-anat" },
 	/* RFC3329: Security agreement mechanism */
 	{ SIP_OPT_SEC_AGREE,	NOT_SUPPORTED,	"sec_agree" },
-	/* SIMPLE events:  draft-ietf-simple-event-list-07.txt */
+	/* SIMPLE events:  RFC4662 */
 	{ SIP_OPT_EVENTLIST,	NOT_SUPPORTED,	"eventlist" },
 	/* GRUU: Globally Routable User Agent URI's */
 	{ SIP_OPT_GRUU,		NOT_SUPPORTED,	"gruu" },
-	/* Target-dialog: draft-ietf-sip-target-dialog-03.txt */
+	/* RFC4538: Target-dialog */
 	{ SIP_OPT_TARGET_DIALOG,NOT_SUPPORTED,	"tdialog" },
 	/* Disable the REFER subscription, RFC 4488 */
 	{ SIP_OPT_NOREFERSUB,	NOT_SUPPORTED,	"norefersub" },
@@ -811,7 +811,7 @@ struct sip_auth {
 #define T38FAX_RATE_12000			(1 << 12)	/*!< 12000 bps t38FaxRate */
 #define T38FAX_RATE_14400			(1 << 13)	/*!< 14400 bps t38FaxRate */
 
-/*!< This is default: NO MMR and JBIG trancoding, NO fill bit removal, transferredTCF TCF, UDP FEC, Version 0 and 9600 max fax rate */
+/*!< This is default: NO MMR and JBIG transcoding, NO fill bit removal, transferredTCF TCF, UDP FEC, Version 0 and 9600 max fax rate */
 static int global_t38_capability = T38FAX_VERSION_0 | T38FAX_RATE_2400 | T38FAX_RATE_4800 | T38FAX_RATE_7200 | T38FAX_RATE_9600;
 
 #define sipdebug		ast_test_flag(&global_flags[1], SIP_PAGE2_DEBUG)
@@ -841,7 +841,7 @@ struct t38properties {
 enum referstatus {
         REFER_IDLE,                    /*!< No REFER is in progress */
         REFER_SENT,                    /*!< Sent REFER to transferee */
-        REFER_RECEIVED,                /*!< Received REFER from transferer */
+        REFER_RECEIVED,                /*!< Received REFER from transferrer */
         REFER_CONFIRMED,               /*!< Refer confirmed with a 100 TRYING */
         REFER_ACCEPTED,                /*!< Accepted by transferee */
         REFER_RINGING,                 /*!< Target Ringing */
@@ -1159,7 +1159,7 @@ struct sip_registry {
 	int refresh;			/*!< How often to refresh */
 	struct sip_pvt *call;		/*!< create a sip_pvt structure for each outbound "registration dialog" in progress */
 	enum sipregistrystate regstate;	/*!< Registration state (see above) */
-	time_t regtime;		/*!< Last succesful registration time */
+	time_t regtime;		/*!< Last successful registration time */
 	int callid_valid;		/*!< 0 means we haven't chosen callid for this registry yet. */
 	unsigned int ocseq;		/*!< Sequence number we got to for REGISTERs for this registry */
 	struct sockaddr_in us;		/*!< Who the server thinks we are */
@@ -1179,7 +1179,7 @@ static struct ast_peer_list {
 	ASTOBJ_CONTAINER_COMPONENTS(struct sip_peer);
 } peerl;
 
-/*! \brief  The register list: Other SIP proxys we register with and place calls to */
+/*! \brief  The register list: Other SIP proxies we register with and place calls to */
 static struct ast_register_list {
 	ASTOBJ_CONTAINER_COMPONENTS(struct sip_registry);
 	int recheck;
@@ -2872,7 +2872,7 @@ static int sip_call(struct ast_channel *ast, char *dest, int timeout)
 	struct sip_pvt *p;
 	struct varshead *headp;
 	struct ast_var_t *current;
-	const char *referer = NULL;   /* SIP refererer */	
+	const char *referer = NULL;   /* SIP referrer */	
 
 	p = ast->tech_pvt;
 	if ((ast->_state != AST_STATE_DOWN) && (ast->_state != AST_STATE_RESERVED)) {
@@ -2895,7 +2895,7 @@ static int sip_call(struct ast_channel *ast, char *dest, int timeout)
 			/* This is a transfered call */
 			p->options->transfer = 1;
 		} else if (!strcasecmp(ast_var_name(current), "SIPTRANSFER_REFERER")) {
-			/* This is the referer */
+			/* This is the referrer */
 			referer = ast_var_value(current);
 		} else if (!strcasecmp(ast_var_name(current), "SIPTRANSFER_REPLACES")) {
 			/* We're replacing a call. */
@@ -3082,9 +3082,9 @@ static void __sip_destroy(struct sip_pvt *p, int lockowner, int lockdialoglist)
  * This will cause unexpected behaviour in subscriptions, since a "friend"
  * is *two* devices in Asterisk, not one.
  *
- * Thought: For realtime, we should propably update storage with inuse counter... 
+ * Thought: For realtime, we should probably update storage with inuse counter... 
  *
- * \return 0 if call is ok (no call limit, below treshold)
+ * \return 0 if call is ok (no call limit, below threshold)
  *	-1 on rejection of call
  *		
  */
@@ -3244,7 +3244,7 @@ static int hangup_sip2cause(int cause)
 			return AST_CAUSE_NO_ANSWER;
 		case 484:	/* Address incomplete */
 			return AST_CAUSE_INVALID_NUMBER_FORMAT;
-		case 485:	/* Ambigous */
+		case 485:	/* Ambiguous */
 			return AST_CAUSE_UNALLOCATED;
 		case 486:	/* Busy everywhere */
 			return AST_CAUSE_BUSY;
@@ -3437,6 +3437,7 @@ static int sip_hangup(struct ast_channel *ast)
 	else if (p->invitestate != INV_CALLING)
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 
+ast_verbose("chan_sip1 sip_hangup flags invitestate %d 0x%x data <%s>\n", p->invitestate, p->flags[0].flags, p->initreq.data);
 	/* Start the process if it's not already started */
 	if (!ast_test_flag(&p->flags[0], SIP_ALREADYGONE) && !ast_strlen_zero(p->initreq.data)) {
 		if (needcancel) {	/* Outgoing call, not up */
@@ -3502,6 +3503,7 @@ static int sip_hangup(struct ast_channel *ast)
 	}
 	if (needdestroy)
 		ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);
+ast_verbose("chan_sip1 sip_hangup flags now 0x%x\n", p->flags[0].flags);
 	sip_pvt_unlock(p);
 	return 0;
 }
@@ -4058,6 +4060,8 @@ static const char *find_alias(const char *name, const char *_default)
 		{ "Reject-Contact",      "j" },
 		{ "Request-Disposition", "d" },
 		{ "Session-Expires",     "x" },
+		{ "Identity",            "y" },
+		{ "Identity-Info",       "n" },
 	};
 	int x;
 
@@ -7506,6 +7510,7 @@ static int transmit_request(struct sip_pvt *p, int sipmethod, int seqno, enum xm
 {
 	struct sip_request resp;
 
+ast_verbose("transmit_request %s\n", sip_methods[sipmethod].text);
 	if (sipmethod == SIP_ACK)
 		p->invitestate = INV_CONFIRMED;
 
@@ -12459,6 +12464,7 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 					}
 					/* Fall through */
 				case 503: /* Service Unavailable */
+				case 504: /* Server Timeout */
 					if (owner)
 						ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
 					break;
@@ -12585,6 +12591,7 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 				case 603: /* Decline */
 				case 500: /* Server error */
 				case 503: /* Service Unavailable */
+				case 504: /* Server timeout */
 
 					if (sipmethod == SIP_INVITE) {	/* re-invite failed */
 						sip_cancel_destroy(p);
@@ -14652,6 +14659,7 @@ static int handle_request(struct sip_pvt *p, struct sip_request *req, struct soc
 	p->method = req->method;	/* Find out which SIP method they are using */
 	if (option_debug > 3)
 		ast_log(LOG_DEBUG, "**** Received %s (%d) - Command in SIP %s\n", sip_methods[p->method].text, sip_methods[p->method].id, cmd); 
+		ast_verbose("**** Received %s (%d) - Command in SIP %s\n", sip_methods[p->method].text, sip_methods[p->method].id, cmd); 
 
 	if (p->icseq && (p->icseq > seqno)) {
 		if (option_debug)
@@ -14747,6 +14755,7 @@ static int handle_request(struct sip_pvt *p, struct sip_request *req, struct soc
 	case SIP_ACK:
 		/* Make sure we don't ignore this */
 		if (seqno == p->pendinginvite) {
+ast_verbose("setting state to INV_CONFIRMED\n");
 			p->invitestate = INV_CONFIRMED;
 			p->pendinginvite = 0;
 			__sip_ack(p, seqno, FLAG_RESPONSE, 0);

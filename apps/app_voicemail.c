@@ -358,7 +358,7 @@ static int advanced_options(struct ast_channel *chan, struct ast_vm_user *vmu, s
 static int dialout(struct ast_channel *chan, struct ast_vm_user *vmu, char *num, char *outgoing_context);
 static int play_record_review(struct ast_channel *chan, char *playfile, char *recordfile, int maxtime,
 			char *fmt, int outsidecaller, struct ast_vm_user *vmu, int *duration, const char *unlockdir,
-			signed char record_gain);
+			signed char record_gain, struct vm_state *vms);
 static int vm_tempgreeting(struct ast_channel *chan, struct ast_vm_user *vmu, struct vm_state *vms, char *fmtc, signed char record_gain);
 static int vm_play_folder_name(struct ast_channel *chan, char *mbox);
 static int notify_new_message(struct ast_channel *chan, struct ast_vm_user *vmu, int msgnum, long duration, char *fmt, char *cidnum, char *cidname);
@@ -2428,7 +2428,7 @@ static int imap_store_file(char *dir, char *mailboxuser, char *mailboxcontext, i
 		ast_log(LOG_WARNING, "Unable to store '%s' (can't create temporary file)\n", fn);
 		return -1;
 	} else {
-		make_email_file(p, myserveremail, vmu, msgnum, vmu->context, vmu->mailbox, (!ast_strlen_zero(chan->cid.cid_num) ? chan->cid.cid_num : NULL), (!ast_strlen_zero(chan->cid.cid_name) ? chan->cid.cid_name : NULL), fn, fmt, duration, 1, chan, NULL, 1);
+		make_email_file(p, myserveremail, vmu, msgnum, vmu->context, vmu->mailbox, S_OR(chan->cid.cid_num, NULL), S_OR(chan->cid.cid_name, NULL), fn, fmt, duration, 1, chan, NULL, 1);
 		/* read mail file to memory */		
 		len = ftell(p);
 		rewind(p);
@@ -2658,7 +2658,7 @@ static int copy_message(struct ast_channel *chan, struct ast_vm_user *vmu, int i
 		ast_log(LOG_ERROR, "Recipient mailbox %s@%s is full\n", recip->mailbox, recip->context);
 	}
 	ast_unlock_path(todir);
-	notify_new_message(chan, recip, recipmsgnum, duration, fmt, (!ast_strlen_zero(chan->cid.cid_num) ? chan->cid.cid_num : NULL), (!ast_strlen_zero(chan->cid.cid_name) ? chan->cid.cid_name : NULL));
+	notify_new_message(chan, recip, recipmsgnum, duration, fmt, S_OR(chan->cid.cid_num, NULL), S_OR(chan->cid.cid_name, NULL));
 	
 	return 0;
 }
@@ -3080,12 +3080,12 @@ static int leave_voicemail(struct ast_channel *chan, char *ext, struct leave_vm_
 				chan->exten,
 				chan->priority,
 				chan->name,
-				ast_callerid_merge(callerid, sizeof(callerid), (!ast_strlen_zero(chan->cid.cid_name) ? chan->cid.cid_name : NULL), (!ast_strlen_zero(chan->cid.cid_num) ? chan->cid.cid_num : NULL), "Unknown"),
+				ast_callerid_merge(callerid, sizeof(callerid), S_OR(chan->cid.cid_name, NULL), S_OR(chan->cid.cid_num, NULL), "Unknown"),
 				date, (long)time(NULL),
 				category ? category : ""); 
 		} else
 			ast_log(LOG_WARNING, "Error opening text file for output\n");
-		res = play_record_review(chan, NULL, tmptxtfile, vmmaxmessage, fmt, 1, vmu, &duration, NULL, options->record_gain);
+		res = play_record_review(chan, NULL, tmptxtfile, vmmaxmessage, fmt, 1, vmu, &duration, NULL, options->record_gain, vms);
 				
 		if (txt) {
 			if (duration < vmminmessage) {
@@ -3142,7 +3142,7 @@ static int leave_voicemail(struct ast_channel *chan, char *ext, struct leave_vm_
 #endif
 					if (ast_fileexists(fn, NULL, NULL)) {
 						STORE(dir, vmu->mailbox, vmu->context, msgnum, chan, vmu, fmt, duration, vms);
-						notify_new_message(chan, vmu, msgnum, duration, fmt, (!ast_strlen_zero(chan->cid.cid_num) ? chan->cid.cid_num : NULL), (!ast_strlen_zero(chan->cid.cid_name) ? chan->cid.cid_name : NULL));
+						notify_new_message(chan, vmu, msgnum, duration, fmt, S_OR(chan->cid.cid_num, NULL), S_OR(chan->cid.cid_name, NULL));
 						DISPOSE(dir, msgnum);
 					}
 				}
@@ -3935,7 +3935,6 @@ static int forward_message(struct ast_channel *chan, char *context, struct vm_st
 	char *temp;
 	char todir[256];
 	int todircount=0;
-	int duration;
 #endif
 	char username[70]="";
 	int res = 0, cmd = 0;
@@ -4135,7 +4134,7 @@ static int forward_message(struct ast_channel *chan, char *context, struct vm_st
 				int attach_user_voicemail = ast_test_flag((&globalflags), VM_ATTACH);
 				attach_user_voicemail = ast_test_flag(vmtmp, VM_ATTACH);
 				/* NULL category for IMAP storage */
-				sendmail(myserveremail, vmtmp, todircount, vmtmp->context, vmtmp->mailbox, (!ast_strlen_zero(chan->cid.cid_num) ? chan->cid.cid_num : NULL), (!ast_strlen_zero(chan->cid.cid_name) ? chan->cid.cid_name : NULL), vms->fn, fmt, duration, attach_user_voicemail, chan, NULL);
+				sendmail(myserveremail, vmtmp, todircount, vmtmp->context, vmtmp->mailbox, S_OR(chan->cid.cid_num, NULL), S_OR(chan->cid.cid_name, NULL), vms->fn, fmt, duration, attach_user_voicemail, chan, NULL);
 
 #else
 				copy_message(chan, sender, 0, curmsg, duration, vmtmp, fmt);
@@ -5767,7 +5766,7 @@ static int vm_newuser(struct ast_channel *chan, struct ast_vm_user *vmu, struct 
 	/* If forcename is set, have the user record their name */	
 	if (ast_test_flag(vmu, VM_FORCENAME)) {
 		snprintf(prefile,sizeof(prefile), "%s%s/%s/greet", VM_SPOOL_DIR, vmu->context, vms->username);
-		cmd = play_record_review(chan,"vm-rec-name",prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, record_gain);
+		cmd = play_record_review(chan,"vm-rec-name",prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, record_gain, NULL);
 		if (cmd < 0 || cmd == 't' || cmd == '#')
 			return cmd;
 	}
@@ -5775,11 +5774,11 @@ static int vm_newuser(struct ast_channel *chan, struct ast_vm_user *vmu, struct 
 	/* If forcegreetings is set, have the user record their greetings */
 	if (ast_test_flag(vmu, VM_FORCEGREET)) {
 		snprintf(prefile,sizeof(prefile), "%s%s/%s/unavail", VM_SPOOL_DIR, vmu->context, vms->username);
-		cmd = play_record_review(chan,"vm-rec-unv",prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, record_gain);
+		cmd = play_record_review(chan,"vm-rec-unv",prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, record_gain, NULL);
 		if (cmd < 0 || cmd == 't' || cmd == '#')
 			return cmd;
 		snprintf(prefile,sizeof(prefile), "%s%s/%s/busy", VM_SPOOL_DIR, vmu->context, vms->username);
-		cmd = play_record_review(chan,"vm-rec-busy",prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, record_gain);
+		cmd = play_record_review(chan,"vm-rec-busy",prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, record_gain, NULL);
 		if (cmd < 0 || cmd == 't' || cmd == '#')
 			return cmd;
 	}
@@ -5813,15 +5812,15 @@ static int vm_options(struct ast_channel *chan, struct ast_vm_user *vmu, struct 
 		switch (cmd) {
 		case '1':
 			snprintf(prefile,sizeof(prefile), "%s%s/%s/unavail", VM_SPOOL_DIR, vmu->context, vms->username);
-			cmd = play_record_review(chan,"vm-rec-unv",prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, record_gain);
+			cmd = play_record_review(chan,"vm-rec-unv",prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, record_gain, NULL);
 			break;
 		case '2': 
 			snprintf(prefile,sizeof(prefile), "%s%s/%s/busy", VM_SPOOL_DIR, vmu->context, vms->username);
-			cmd = play_record_review(chan,"vm-rec-busy",prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, record_gain);
+			cmd = play_record_review(chan,"vm-rec-busy",prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, record_gain, NULL);
 			break;
 		case '3': 
 			snprintf(prefile,sizeof(prefile), "%s%s/%s/greet", VM_SPOOL_DIR, vmu->context, vms->username);
-			cmd = play_record_review(chan,"vm-rec-name",prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, record_gain);
+			cmd = play_record_review(chan,"vm-rec-name",prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, record_gain, NULL);
 			break;
 		case '4': 
 			cmd = vm_tempgreeting(chan, vmu, vms, fmtc, record_gain);
@@ -5909,12 +5908,12 @@ static int vm_tempgreeting(struct ast_channel *chan, struct ast_vm_user *vmu, st
 			retries = 0;
 		RETRIEVE(prefile, -1);
 		if (ast_fileexists(prefile, NULL, NULL) <= 0) {
-			play_record_review(chan, "vm-rec-temp", prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, record_gain);
+			play_record_review(chan, "vm-rec-temp", prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, record_gain, NULL);
 			cmd = 't';	
 		} else {
 			switch (cmd) {
 			case '1':
-				cmd = play_record_review(chan, "vm-rec-temp", prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, record_gain);
+				cmd = play_record_review(chan, "vm-rec-temp", prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, record_gain, NULL);
 				break;
 			case '2':
 				DELETE(prefile, -1, prefile);
@@ -7972,7 +7971,7 @@ static int advanced_options(struct ast_channel *chan, struct ast_vm_user *vmu, s
 
 static int play_record_review(struct ast_channel *chan, char *playfile, char *recordfile, int maxtime, char *fmt,
 			int outsidecaller, struct ast_vm_user *vmu, int *duration, const char *unlockdir,
-			signed char record_gain)
+			signed char record_gain, struct vm_state *vms)
 {
 	/* Record message & let caller review or re-record it, or set options if applicable */
 	int res = 0;
@@ -8007,7 +8006,7 @@ static int play_record_review(struct ast_channel *chan, char *playfile, char *re
 				if (option_verbose > 2)
 					ast_verbose(VERBOSE_PREFIX_3 "Saving message as is\n");
 				ast_stream_and_wait(chan, "vm-msgsaved", "");
-				STORE(recordfile, vmu->mailbox, vmu->context, -1, chan, vmu, fmt, duration, vms);
+				STORE(recordfile, vmu->mailbox, vmu->context, -1, chan, vmu, fmt, *duration, vms);
 				DISPOSE(recordfile, -1);
 				cmd = 't';
 				return res;

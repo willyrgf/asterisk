@@ -25,6 +25,15 @@
 #include "asterisk/module.h"
 #include "asterisk/cli.h"
 
+/* Find proper rlimit for virtual memory */
+#ifdef RLIMIT_AS
+#define VMEM_DEF RLIMIT_AS
+#else
+#ifdef RLIMIT_VMEM
+#define VMEM_DEF RLIMIT_VMEM
+#endif
+#endif
+
 static struct limits {
 	int resource;
 	char limit[3];
@@ -41,10 +50,9 @@ static struct limits {
 	{ RLIMIT_MEMLOCK, "-l", "amount of memory locked into RAM" },
 #endif
 	{ RLIMIT_NOFILE, "-n", "number of file descriptors" },
-#ifndef RLIMIT_AS	/* *BSD use RLIMIT_VMEM */
-#define	RLIMIT_AS	RLIMIT_VMEM
+#ifdef VMEM_DEF
+	{ VMEM_DEF, "-v", "virtual memory" },
 #endif
-	{ RLIMIT_AS, "-v", "virtual memory" },
 };
 
 static int str2limit(const char *string)
@@ -90,13 +98,14 @@ static int my_ulimit(int fd, int argc, char **argv)
 		}
 
 		if (argc == 3) {
+			int x;
 			if (resource != RLIMIT_NOFILE && resource != RLIMIT_CORE && resource != RLIMIT_NPROC && resource != RLIMIT_FSIZE) {
 				ast_cli(fd, "Resource not permitted to be set\n");
 				return RESULT_FAILURE;
 			}
 
-			sscanf(argv[2], "%d", (int *)&rlimit.rlim_cur);
-			rlimit.rlim_max = rlimit.rlim_cur;
+			sscanf(argv[2], "%d", &x);
+			rlimit.rlim_max = rlimit.rlim_cur = x;
 			setrlimit(resource, &rlimit);
 			return RESULT_SUCCESS;
 		} else {
@@ -142,7 +151,9 @@ static const char ulimit_usage[] =
 "         -s  Process stack size [readonly]\n"
 "         -t  CPU usage [readonly]\n"
 "         -u  Child processes\n"
+#ifdef VMEM_DEF
 "         -v  Process virtual memory [readonly]\n"
+#endif
 "         -c  Core dump file size\n"
 "         -n  Number of file descriptors\n";
 
