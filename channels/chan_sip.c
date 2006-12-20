@@ -449,11 +449,11 @@ static const struct cfsip_options {
 	{ SIP_OPT_SDP_ANAT,	NOT_SUPPORTED,	"sdp-anat" },
 	/* RFC3329: Security agreement mechanism */
 	{ SIP_OPT_SEC_AGREE,	NOT_SUPPORTED,	"sec_agree" },
-	/* SIMPLE events:  draft-ietf-simple-event-list-07.txt */
+	/* SIMPLE events:  RFC4662 */
 	{ SIP_OPT_EVENTLIST,	NOT_SUPPORTED,	"eventlist" },
 	/* GRUU: Globally Routable User Agent URI's */
 	{ SIP_OPT_GRUU,		NOT_SUPPORTED,	"gruu" },
-	/* Target-dialog: draft-ietf-sip-target-dialog-03.txt */
+	/* RFC4538: Target-dialog */
 	{ SIP_OPT_TARGET_DIALOG,NOT_SUPPORTED,	"tdialog" },
 	/* Disable the REFER subscription, RFC 4488 */
 	{ SIP_OPT_NOREFERSUB,	NOT_SUPPORTED,	"norefersub" },
@@ -3437,6 +3437,7 @@ static int sip_hangup(struct ast_channel *ast)
 	else if (p->invitestate != INV_CALLING)
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 
+ast_verbose("chan_sip1 sip_hangup flags invitestate %d 0x%x data <%s>\n", p->invitestate, p->flags[0].flags, p->initreq.data);
 	/* Start the process if it's not already started */
 	if (!ast_test_flag(&p->flags[0], SIP_ALREADYGONE) && !ast_strlen_zero(p->initreq.data)) {
 		if (needcancel) {	/* Outgoing call, not up */
@@ -3502,6 +3503,7 @@ static int sip_hangup(struct ast_channel *ast)
 	}
 	if (needdestroy)
 		ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);
+ast_verbose("chan_sip1 sip_hangup flags now 0x%x\n", p->flags[0].flags);
 	sip_pvt_unlock(p);
 	return 0;
 }
@@ -4058,6 +4060,8 @@ static const char *find_alias(const char *name, const char *_default)
 		{ "Reject-Contact",      "j" },
 		{ "Request-Disposition", "d" },
 		{ "Session-Expires",     "x" },
+		{ "Identity",            "y" },
+		{ "Identity-Info",       "n" },
 	};
 	int x;
 
@@ -7506,6 +7510,7 @@ static int transmit_request(struct sip_pvt *p, int sipmethod, int seqno, enum xm
 {
 	struct sip_request resp;
 
+ast_verbose("transmit_request %s\n", sip_methods[sipmethod].text);
 	if (sipmethod == SIP_ACK)
 		p->invitestate = INV_CONFIRMED;
 
@@ -12459,6 +12464,7 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 					}
 					/* Fall through */
 				case 503: /* Service Unavailable */
+				case 504: /* Server Timeout */
 					if (owner)
 						ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
 					break;
@@ -12585,6 +12591,7 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 				case 603: /* Decline */
 				case 500: /* Server error */
 				case 503: /* Service Unavailable */
+				case 504: /* Server timeout */
 
 					if (sipmethod == SIP_INVITE) {	/* re-invite failed */
 						sip_cancel_destroy(p);
@@ -14652,6 +14659,7 @@ static int handle_request(struct sip_pvt *p, struct sip_request *req, struct soc
 	p->method = req->method;	/* Find out which SIP method they are using */
 	if (option_debug > 3)
 		ast_log(LOG_DEBUG, "**** Received %s (%d) - Command in SIP %s\n", sip_methods[p->method].text, sip_methods[p->method].id, cmd); 
+		ast_verbose("**** Received %s (%d) - Command in SIP %s\n", sip_methods[p->method].text, sip_methods[p->method].id, cmd); 
 
 	if (p->icseq && (p->icseq > seqno)) {
 		if (option_debug)
@@ -14747,6 +14755,7 @@ static int handle_request(struct sip_pvt *p, struct sip_request *req, struct soc
 	case SIP_ACK:
 		/* Make sure we don't ignore this */
 		if (seqno == p->pendinginvite) {
+ast_verbose("setting state to INV_CONFIRMED\n");
 			p->invitestate = INV_CONFIRMED;
 			p->pendinginvite = 0;
 			__sip_ack(p, seqno, FLAG_RESPONSE, 0);

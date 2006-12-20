@@ -288,22 +288,21 @@ AST_APP_OPTIONS(dial_exec_options, {
 	AST_APP_OPTION('K', OPT_CALLER_PARK),
 });
 
-/* We define a custom "local user" structure because we
-   use it not only for keeping track of what is in use but
-   also for keeping track of who we're dialing. */
-
-struct dial_localuser {
+/*
+ * The list of active channels
+ */
+struct chanlist {
+	struct chanlist *next;
 	struct ast_channel *chan;
 	unsigned int flags;
 	int forwards;
-	struct dial_localuser *next;
 };
 
 
-static void hanguptree(struct dial_localuser *outgoing, struct ast_channel *exception)
+static void hanguptree(struct chanlist *outgoing, struct ast_channel *exception)
 {
 	/* Hang up a tree of stuff */
-	struct dial_localuser *oo;
+	struct chanlist *oo;
 	while (outgoing) {
 		/* Hangup any existing lines we have open */
 		if (outgoing->chan && (outgoing->chan != exception))
@@ -425,7 +424,7 @@ static void senddialendevent(const struct ast_channel *src, const char *dialstat
  * XXX this code is highly suspicious, as it essentially overwrites
  * the outgoing channel without properly deleting it.
  */
-static void do_forward(struct dial_localuser *o,
+static void do_forward(struct chanlist *o,
 	struct cause_args *num, struct ast_flags *peerflags, int single)
 {
 	char tmpchan[256];
@@ -525,7 +524,7 @@ struct privacy_args {
 };
 
 static struct ast_channel *wait_for_answer(struct ast_channel *in,
-	struct dial_localuser *outgoing, int *to, struct ast_flags *peerflags,
+	struct chanlist *outgoing, int *to, struct ast_flags *peerflags,
 	struct privacy_args *pa,
 	const struct cause_args *num_in, int priority_jump, int *result)
 {
@@ -545,7 +544,7 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 	
 	
 	while (*to && !peer) {
-		struct dial_localuser *o;
+		struct chanlist *o;
 		int pos = 0;	/* how many channels do we handle */
 		int numlines = prestart;
 		struct ast_channel *winner;
@@ -1054,12 +1053,123 @@ static int do_privacy(struct ast_channel *chan, struct ast_channel *peer,
 	}
 }
 
+/*! \brief returns 1 if successful, 0 or <0 if the caller should 'goto out' */
+static int setup_privacy_args(struct privacy_args *pa,
+	struct ast_flags *opts, char *opt_args[], struct ast_channel *chan)
+{
+	char callerid[60];
+	int res;
+	char *l;
+
+	if (!ast_strlen_zero(chan->cid.cid_num)) {
+		l = ast_strdupa(chan->cid.cid_num);
+		ast_shrink_phone_number(l);
+		if (ast_test_flag(opts, OPT_PRIVACY) ) {
+			if (option_verbose > 2)
+				ast_verbose(VERBOSE_PREFIX_3  "Privacy DB is '%s', clid is '%s'\n",
+					     opt_args[OPT_ARG_PRIVACY], l);
+			pa->privdb_val = ast_privacy_check(opt_args[OPT_ARG_PRIVACY], l);
+		} else {
+			if (option_verbose > 2)
+				ast_verbose(VERBOSE_PREFIX_3  "Privacy Screening, clid is '%s'\n", l);
+			pa->privdb_val = AST_PRIVACY_UNKNOWN;
+		}
+	} else {
+		char *tnam, *tn2;
+
+		tnam = ast_strdupa(chan->name);
+		/* clean the channel name so slashes don't try to end up in disk file name */
+		for (tn2 = tnam; *tn2; tn2++) {
+			if (*tn2=='/')	/* any other chars to be afraid of? */
+				*tn2 = '=';
+		}
+		if (option_verbose > 2)
+			ast_verbose(VERBOSE_PREFIX_3  "Privacy-- callerid is empty\n");
+
+		snprintf(callerid, sizeof(callerid), "NOCALLERID_%s%s", chan->exten, tnam);
+		l = callerid;
+		pa->privdb_val = AST_PRIVACY_UNKNOWN;
+	}
+	
+	ast_copy_string(pa->privcid,l,sizeof(pa->privcid));
+
+	if( strncmp(pa->privcid,"NOCALLERID",10) != 0 && ast_test_flag(opts, OPT_SCREEN_NOCLID) ) { /* if callerid is set, and ast_test_flag(&opts, OPT_SCREEN_NOCLID) is set also */  
+		if (option_verbose > 2)
+			ast_verbose( VERBOSE_PREFIX_3  "CallerID set (%s); N option set; Screening should be off\n", pa->privcid);
+		pa->privdb_val = AST_PRIVACY_ALLOW;
+	} else if (ast_test_flag(opts, OPT_SCREEN_NOCLID) && strncmp(pa->privcid,"NOCALLERID",10) == 0 ) {
+		if (option_verbose > 2)
+			ast_verbose( VERBOSE_PREFIX_3  "CallerID blank; N option set; Screening should happen; dbval is %d\n", pa->privdb_val);
+	}
+	
+	if (pa->privdb_val == AST_PRIVACY_DENY ) {
+		ast_copy_string(pa->status, "NOANSWER", sizeof(pa->status));
+		if (option_verbose > 2)
+			ast_verbose( VERBOSE_PREFIX_3  "Privacy DB reports PRIVACY_DENY for this callerid. Dial reports unavailable\n");
+		return 0;
+	} else if (pa->privdb_val == AST_PRIVACY_KILL ) {
+		ast_copy_string(pa->status, "DONTCALL", sizeof(pa->status));
+		if (ast_opt_priority_jumping || ast_test_flag(opts, OPT_PRIORITY_JUMP)) {
+			ast_goto_if_exists(chan, chan->context, chan->exten, chan->priority + 201);
+		}
+		return 0; /* Is this right? */
+	} else if (pa->privdb_val == AST_PRIVACY_TORTURE ) {
+		ast_copy_string(pa->status, "TORTURE", sizeof(pa->status));
+		if (ast_opt_priority_jumping || ast_test_flag(opts, OPT_PRIORITY_JUMP)) {
+			ast_goto_if_exists(chan, chan->context, chan->exten, chan->priority + 301);
+		}
+		return 0; /* is this right??? */
+	} else if (pa->privdb_val == AST_PRIVACY_UNKNOWN ) {
+		/* Get the user's intro, store it in priv-callerintros/$CID, 
+		   unless it is already there-- this should be done before the 
+		   call is actually dialed  */
+
+		/* make sure the priv-callerintros dir actually exists */
+		snprintf(pa->privintro, sizeof(pa->privintro), "%s/sounds/priv-callerintros", ast_config_AST_DATA_DIR);
+		if (mkdir(pa->privintro, 0755) && errno != EEXIST) {
+			ast_log(LOG_WARNING, "privacy: can't create directory priv-callerintros: %s\n", strerror(errno));
+			return -1;
+		}
+
+		snprintf(pa->privintro,sizeof(pa->privintro), "priv-callerintros/%s", pa->privcid);
+		if (ast_fileexists(pa->privintro,NULL,NULL ) > 0 && strncmp(pa->privcid,"NOCALLERID",10) != 0) {
+			/* the DELUX version of this code would allow this caller the
+			   option to hear and retape their previously recorded intro.
+			*/
+		} else {
+			int duration; /* for feedback from play_and_wait */
+			/* the file doesn't exist yet. Let the caller submit his
+			   vocal intro for posterity */
+			/* priv-recordintro script:
+
+			   "At the tone, please say your name:"
+
+			*/
+			res = ast_play_and_record(chan, "priv-recordintro", pa->privintro, 4, "gsm", &duration, 128, 2000, 0);  /* NOTE: I've reduced the total time to 4 sec */
+									/* don't think we'll need a lock removed, we took care of
+									   conflicts by naming the pa.privintro file */
+			if (res == -1) {
+				/* Delete the file regardless since they hung up during recording */
+				ast_filedelete(pa->privintro, NULL);
+				if (ast_fileexists(pa->privintro,NULL,NULL ) > 0 )
+					ast_log(LOG_NOTICE,"privacy: ast_filedelete didn't do its job on %s\n", pa->privintro);
+				else if (option_verbose > 2)
+					ast_verbose( VERBOSE_PREFIX_3 "Successfully deleted %s intro file\n", pa->privintro);
+				return -1;
+			}
+			if (!ast_streamfile(chan, "vm-dialout", chan->language) )
+				ast_waitstream(chan, "");
+		}
+	}
+	return 1;	/* success */
+}
+
 static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags *peerflags)
 {
 	int res = -1;	/* default: error */
 	struct ast_module_user *u;
 	char *rest, *cur;	/* scan the list of destinations */
-	struct dial_localuser *outgoing = NULL;	/* list of destinations */
+	struct chanlist *outgoing = NULL;	/* list of destinations */
 	struct ast_channel *peer;
 	int to;	/* timeout */
 	struct cause_args num = { chan, 0, 0, 0 };
@@ -1141,118 +1251,12 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		ast_cdr_reset(chan->cdr, NULL);
 	if (ast_test_flag(&opts, OPT_PRIVACY) && ast_strlen_zero(opt_args[OPT_ARG_PRIVACY]))
 		opt_args[OPT_ARG_PRIVACY] = ast_strdupa(chan->exten);
+
 	if (ast_test_flag(&opts, OPT_PRIVACY) || ast_test_flag(&opts, OPT_SCREENING)) {
-		char callerid[60];
-		char *l = chan->cid.cid_num;	/* XXX watch out, we are overwriting it */
-		if (!ast_strlen_zero(l)) {
-			ast_shrink_phone_number(l);
-			if( ast_test_flag(&opts, OPT_PRIVACY) ) {
-				if (option_verbose > 2)
-					ast_verbose(VERBOSE_PREFIX_3  "Privacy DB is '%s', clid is '%s'\n",
-						     opt_args[OPT_ARG_PRIVACY], l);
-				pa.privdb_val = ast_privacy_check(opt_args[OPT_ARG_PRIVACY], l);
-			}
-			else {
-				if (option_verbose > 2)
-					ast_verbose(VERBOSE_PREFIX_3  "Privacy Screening, clid is '%s'\n", l);
-				pa.privdb_val = AST_PRIVACY_UNKNOWN;
-			}
-		} else {
-			char *tnam, *tn2;
-
-			tnam = ast_strdupa(chan->name);
-			/* clean the channel name so slashes don't try to end up in disk file name */
-			for(tn2 = tnam; *tn2; tn2++) {
-				if( *tn2=='/')
-					*tn2 = '=';  /* any other chars to be afraid of? */
-			}
-			if (option_verbose > 2)
-				ast_verbose(VERBOSE_PREFIX_3  "Privacy-- callerid is empty\n");
-
-			snprintf(callerid, sizeof(callerid), "NOCALLERID_%s%s", chan->exten, tnam);
-			l = callerid;
-			pa.privdb_val = AST_PRIVACY_UNKNOWN;
-		}
-		
-		ast_copy_string(pa.privcid,l,sizeof(pa.privcid));
-
-		if( strncmp(pa.privcid,"NOCALLERID",10) != 0 && ast_test_flag(&opts, OPT_SCREEN_NOCLID) ) { /* if callerid is set, and ast_test_flag(&opts, OPT_SCREEN_NOCLID) is set also */  
-			if (option_verbose > 2)
-				ast_verbose( VERBOSE_PREFIX_3  "CallerID set (%s); N option set; Screening should be off\n", pa.privcid);
-			pa.privdb_val = AST_PRIVACY_ALLOW;
-		}
-		else if(ast_test_flag(&opts, OPT_SCREEN_NOCLID) && strncmp(pa.privcid,"NOCALLERID",10) == 0 ) {
-			if (option_verbose > 2)
-				ast_verbose( VERBOSE_PREFIX_3  "CallerID blank; N option set; Screening should happen; dbval is %d\n", pa.privdb_val);
-		}
-		
-		if(pa.privdb_val == AST_PRIVACY_DENY ) {
-			ast_copy_string(pa.status, "NOANSWER", sizeof(pa.status));
-			if (option_verbose > 2)
-				ast_verbose( VERBOSE_PREFIX_3  "Privacy DB reports PRIVACY_DENY for this callerid. Dial reports unavailable\n");
-			res=0;
+		res = setup_privacy_args(&pa, &opts, opt_args, chan);
+		if (res <= 0)
 			goto out;
-		}
-		else if(pa.privdb_val == AST_PRIVACY_KILL ) {
-			ast_copy_string(pa.status, "DONTCALL", sizeof(pa.status));
-			if (ast_opt_priority_jumping || ast_test_flag(&opts, OPT_PRIORITY_JUMP)) {
-				ast_goto_if_exists(chan, chan->context, chan->exten, chan->priority + 201);
-			}
-			res = 0;
-			goto out; /* Is this right? */
-		}
-		else if(pa.privdb_val == AST_PRIVACY_TORTURE ) {
-			ast_copy_string(pa.status, "TORTURE", sizeof(pa.status));
-			if (ast_opt_priority_jumping || ast_test_flag(&opts, OPT_PRIORITY_JUMP)) {
-				ast_goto_if_exists(chan, chan->context, chan->exten, chan->priority + 301);
-			}
-			res = 0;
-			goto out; /* is this right??? */
-		}
-		else if(pa.privdb_val == AST_PRIVACY_UNKNOWN ) {
-			/* Get the user's intro, store it in priv-callerintros/$CID, 
-			   unless it is already there-- this should be done before the 
-			   call is actually dialed  */
-
-			/* make sure the priv-callerintros dir actually exists */
-			snprintf(pa.privintro, sizeof(pa.privintro), "%s/sounds/priv-callerintros", ast_config_AST_DATA_DIR);
-			if (mkdir(pa.privintro, 0755) && errno != EEXIST) {
-				ast_log(LOG_WARNING, "privacy: can't create directory priv-callerintros: %s\n", strerror(errno));
-				res = -1;
-				goto out;
-			}
-
-			snprintf(pa.privintro,sizeof(pa.privintro), "priv-callerintros/%s", pa.privcid);
-			if( ast_fileexists(pa.privintro,NULL,NULL ) > 0 && strncmp(pa.privcid,"NOCALLERID",10) != 0) {
-				/* the DELUX version of this code would allow this caller the
-				   option to hear and retape their previously recorded intro.
-				*/
-			}
-			else {
-				int duration; /* for feedback from play_and_wait */
-				/* the file doesn't exist yet. Let the caller submit his
-				   vocal intro for posterity */
-				/* priv-recordintro script:
-
-				   "At the tone, please say your name:"
-
-				*/
-				res = ast_play_and_record(chan, "priv-recordintro", pa.privintro, 4, "gsm", &duration, 128, 2000, 0);  /* NOTE: I've reduced the total time to 4 sec */
-										/* don't think we'll need a lock removed, we took care of
-										   conflicts by naming the pa.privintro file */
-				if (res == -1) {
-					/* Delete the file regardless since they hung up during recording */
-                                        ast_filedelete(pa.privintro, NULL);
-                                        if( ast_fileexists(pa.privintro,NULL,NULL ) > 0 )
-                                                ast_log(LOG_NOTICE,"privacy: ast_filedelete didn't do its job on %s\n", pa.privintro);
-                                        else if (option_verbose > 2)
-                                                ast_verbose( VERBOSE_PREFIX_3 "Successfully deleted %s intro file\n", pa.privintro);
-					goto out;
-				}
-                                if( !ast_streamfile(chan, "vm-dialout", chan->language) )
-                                        ast_waitstream(chan, "");
-			}
-		}
+		res = -1;	/* reset default */
 	}
 
 	/* If a channel group has been specified, get it for use when we create peer channels */
@@ -1262,7 +1266,8 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 	/* loop through the list of dial destinations */
 	rest = args.peers;
 	while ((cur = strsep(&rest, "&")) ) {
-		struct dial_localuser *tmp;
+		struct chanlist *tmp;
+		struct ast_channel *tc;	/* channel for this destination */
 		/* Get a technology/[device:]number pair */
 		char *number = cur;
 		char *tech = strsep(&number, "/");
@@ -1283,106 +1288,107 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		}
 		ast_copy_string(numsubst, number, sizeof(numsubst));
 		/* Request the peer */
-		tmp->chan = ast_request(tech, chan->nativeformats, numsubst, &cause);
-		if (!tmp->chan) {
+		tc = ast_request(tech, chan->nativeformats, numsubst, &cause);
+		if (!tc) {
 			/* If we can't, just go on to the next call */
-			ast_log(LOG_WARNING, "Unable to create channel of type '%s' (cause %d - %s)\n", tech, cause, ast_cause2str(cause));
+			ast_log(LOG_WARNING, "Unable to create channel of type '%s' (cause %d - %s)\n",
+				    tech, cause, ast_cause2str(cause));
 			handle_cause(cause, &num);
 			if (!rest)	/* we are on the last destination */
 				chan->hangupcause = cause;
+			free(tmp);
 			continue;
 		}
-		pbx_builtin_setvar_helper(tmp->chan, "DIALEDPEERNUMBER", numsubst);
-		if (!ast_strlen_zero(tmp->chan->call_forward)) {
+		pbx_builtin_setvar_helper(tc, "DIALEDPEERNUMBER", numsubst);
+		if (!ast_strlen_zero(tc->call_forward)) {
 			char tmpchan[256];
 			char *stuff;
 			char *tech;
-			ast_copy_string(tmpchan, tmp->chan->call_forward, sizeof(tmpchan));
+			ast_copy_string(tmpchan, tc->call_forward, sizeof(tmpchan));
 			if ((stuff = strchr(tmpchan, '/'))) {
 				*stuff++ = '\0';
 				tech = tmpchan;
 			} else {
-				snprintf(tmpchan, sizeof(tmpchan), "%s@%s", tmp->chan->call_forward, tmp->chan->context);
+				snprintf(tmpchan, sizeof(tmpchan), "%s@%s", tc->call_forward, tc->context);
 				stuff = tmpchan;
 				tech = "Local";
 			}
 			tmp->forwards++;
 			if (tmp->forwards < AST_MAX_FORWARDS) {
 				if (option_verbose > 2)
-					ast_verbose(VERBOSE_PREFIX_3 "Now forwarding %s to '%s/%s' (thanks to %s)\n", chan->name, tech, stuff, tmp->chan->name);
-				ast_hangup(tmp->chan);
-				/* If we have been told to ignore forwards, just set this channel to null and continue processing extensions normally */
+					ast_verbose(VERBOSE_PREFIX_3 "Now forwarding %s to '%s/%s' (thanks to %s)\n",
+					chan->name, tech, stuff, tc->name);
+				ast_hangup(tc);
+				/* If we have been told to ignore forwards, just set this channel to null
+				 * and continue processing extensions normally */
 				if (ast_test_flag(&opts, OPT_IGNORE_FORWARDING)) {
-					tmp->chan = NULL;
+					tc = NULL;
 					cause = AST_CAUSE_BUSY;
 					if (option_verbose > 2)
-						ast_verbose(VERBOSE_PREFIX_3 "Forwarding %s to '%s/%s' prevented.\n", chan->name, tech, stuff);
+						ast_verbose(VERBOSE_PREFIX_3 "Forwarding %s to '%s/%s' prevented.\n",
+							chan->name, tech, stuff);
 				} else {
-					tmp->chan = ast_request(tech, chan->nativeformats, stuff, &cause);
+					tc = ast_request(tech, chan->nativeformats, stuff, &cause);
 				}
-				if (!tmp->chan)
+				if (!tc)
 					ast_log(LOG_NOTICE, "Unable to create local channel for call forward to '%s/%s' (cause = %d)\n", tech, stuff, cause);
 				else
-					ast_channel_inherit_variables(chan, tmp->chan);
+					ast_channel_inherit_variables(chan, tc);
 			} else {
 				if (option_verbose > 2)
-					ast_verbose(VERBOSE_PREFIX_3 "Too many forwards from %s\n", tmp->chan->name);
-				ast_hangup(tmp->chan);
-				tmp->chan = NULL;
+					ast_verbose(VERBOSE_PREFIX_3 "Too many forwards from %s\n", tc->name);
+				ast_hangup(tc);
+				tc = NULL;
 				cause = AST_CAUSE_CONGESTION;
 			}
-			if (!tmp->chan) {
+			if (!tc) {
 				handle_cause(cause, &num);
+				free(tmp);
 				continue;
 			}
 		}
 
 		/* Setup outgoing SDP to match incoming one */
-		ast_rtp_make_compatible(tmp->chan, chan, !outgoing && !rest);
+		ast_rtp_make_compatible(tc, chan, !outgoing && !rest);
 		
 		/* Inherit specially named variables from parent channel */
-		ast_channel_inherit_variables(chan, tmp->chan);
+		ast_channel_inherit_variables(chan, tc);
 
-		tmp->chan->appl = "AppDial";
-		tmp->chan->data = "(Outgoing Line)";
-		tmp->chan->whentohangup = 0;
+		tc->appl = "AppDial";
+		tc->data = "(Outgoing Line)";
+		tc->whentohangup = 0;
 
-		S_REPLACE(tmp->chan->cid.cid_num, ast_strdup(chan->cid.cid_num));
-		S_REPLACE(tmp->chan->cid.cid_name, ast_strdup(chan->cid.cid_name));
-		S_REPLACE(tmp->chan->cid.cid_ani, ast_strdup(chan->cid.cid_ani));
-		S_REPLACE(tmp->chan->cid.cid_rdnis, ast_strdup(chan->cid.cid_rdnis));
+		S_REPLACE(tc->cid.cid_num, ast_strdup(chan->cid.cid_num));
+		S_REPLACE(tc->cid.cid_name, ast_strdup(chan->cid.cid_name));
+		S_REPLACE(tc->cid.cid_ani, ast_strdup(chan->cid.cid_ani));
+		S_REPLACE(tc->cid.cid_rdnis, ast_strdup(chan->cid.cid_rdnis));
 		
 		/* Copy language from incoming to outgoing */
-		ast_string_field_set(tmp->chan, language, chan->language);
-		ast_string_field_set(tmp->chan, accountcode, chan->accountcode);
-		tmp->chan->cdrflags = chan->cdrflags;
-		if (ast_strlen_zero(tmp->chan->musicclass))
-			ast_string_field_set(tmp->chan, musicclass, chan->musicclass);
-		/* Pass callingpres setting */
-		tmp->chan->cid.cid_pres = chan->cid.cid_pres;
-		/* Pass type of number */
-		tmp->chan->cid.cid_ton = chan->cid.cid_ton;
-		/* Pass type of tns */
-		tmp->chan->cid.cid_tns = chan->cid.cid_tns;
-		/* Presense of ADSI CPE on outgoing channel follows ours */
-		tmp->chan->adsicpe = chan->adsicpe;
-		/* Pass the transfer capability */
-		tmp->chan->transfercapability = chan->transfercapability;
+		ast_string_field_set(tc, language, chan->language);
+		ast_string_field_set(tc, accountcode, chan->accountcode);
+		tc->cdrflags = chan->cdrflags;
+		if (ast_strlen_zero(tc->musicclass))
+			ast_string_field_set(tc, musicclass, chan->musicclass);
+		/* Pass callingpres, type of number, tns, ADSI CPE, transfer capability */
+		tc->cid.cid_pres = chan->cid.cid_pres;
+		tc->cid.cid_ton = chan->cid.cid_ton;
+		tc->cid.cid_tns = chan->cid.cid_tns;
+		tc->adsicpe = chan->adsicpe;
+		tc->transfercapability = chan->transfercapability;
 
 		/* If we have an outbound group, set this peer channel to it */
 		if (outbound_group)
-			ast_app_group_set_channel(tmp->chan, outbound_group);
+			ast_app_group_set_channel(tc, outbound_group);
 
 		/* Inherit context and extension */
-		ast_copy_string(tmp->chan->dialcontext, chan->context, sizeof(tmp->chan->dialcontext));
-		ast_copy_string(tmp->chan->exten, chan->exten, sizeof(tmp->chan->exten));
+		ast_copy_string(tc->dialcontext, chan->context, sizeof(tc->dialcontext));
+		ast_copy_string(tc->exten, chan->exten, sizeof(tc->exten));
 
-		/* Place the call, but don't wait on the answer */
-		res = ast_call(tmp->chan, numsubst, 0);
+		res = ast_call(tc, numsubst, 0);	/* Place the call, but don't wait on the answer */
 
 		/* Save the info in cdr's that we called them */
 		if (chan->cdr)
-			ast_cdr_setdestchan(chan->cdr, tmp->chan->name);
+			ast_cdr_setdestchan(chan->cdr, tc->name);
 
 		/* check the results of ast_call */
 		if (res) {
@@ -1391,20 +1397,22 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 				ast_log(LOG_DEBUG, "ast call on peer returned %d\n", res);
 			if (option_verbose > 2)
 				ast_verbose(VERBOSE_PREFIX_3 "Couldn't call %s\n", numsubst);
-			ast_hangup(tmp->chan);
-			tmp->chan = NULL;
+			ast_hangup(tc);
+			tc = NULL;
+			free(tmp);
 			continue;
 		} else {
-			senddialevent(chan, tmp->chan);
+			senddialevent(chan, tc);
 			if (option_verbose > 2)
 				ast_verbose(VERBOSE_PREFIX_3 "Called %s\n", numsubst);
 			if (!ast_test_flag(peerflags, OPT_ORIGINAL_CLID))
-				ast_set_callerid(tmp->chan, S_OR(chan->macroexten, chan->exten), get_cid_name(cidname, sizeof(cidname), chan), NULL);
+				ast_set_callerid(tc, S_OR(chan->macroexten, chan->exten), get_cid_name(cidname, sizeof(cidname), chan), NULL);
 		}
 		/* Put them in the list of outgoing thingies...  We're ready now. 
 		   XXX If we're forcibly removed, these outgoing calls won't get
 		   hung up XXX */
 		ast_set_flag(tmp, DIAL_STILLGOING);	
+		tmp->chan = tc;
 		tmp->next = outgoing;
 		outgoing = tmp;
 		/* If this line is up, don't try anybody else */

@@ -49,8 +49,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "editline/readline/readline.h"
 #include "asterisk/threadstorage.h"
 
-extern unsigned long global_fin, global_fout;
-
 AST_THREADSTORAGE(ast_cli_buf);
 
 /*! \brief Initial buffer size for resulting strings in ast_cli() */
@@ -59,14 +57,14 @@ AST_THREADSTORAGE(ast_cli_buf);
 void ast_cli(int fd, char *fmt, ...)
 {
 	int res;
-	struct ast_dynamic_str *buf;
+	struct ast_str *buf;
 	va_list ap;
 
-	if (!(buf = ast_dynamic_str_thread_get(&ast_cli_buf, AST_CLI_INITLEN)))
+	if (!(buf = ast_str_thread_get(&ast_cli_buf, AST_CLI_INITLEN)))
 		return;
 
 	va_start(ap, fmt);
-	res = ast_dynamic_str_thread_set_va(&buf, 0, &ast_cli_buf, fmt, ap);
+	res = ast_str_set_va(&buf, 0, fmt, ap);
 	va_end(ap);
 
 	if (res != AST_DYNSTR_BUILD_FAILED)
@@ -332,8 +330,7 @@ static int modlist_modentry(const char *module, const char *description, int use
 static void print_uptimestr(int fd, time_t timeval, const char *prefix, int printsec)
 {
 	int x; /* the main part - years, weeks, etc. */
-	char timestr[256]="", *s = timestr;
-	size_t maxbytes = sizeof(timestr);
+	struct ast_str *out;
 
 #define SECOND (1)
 #define MINUTE (SECOND*60)
@@ -344,40 +341,41 @@ static void print_uptimestr(int fd, time_t timeval, const char *prefix, int prin
 #define NEEDCOMMA(x) ((x)? ",": "")	/* define if we need a comma */
 	if (timeval < 0)	/* invalid, nothing to show */
 		return;
+
 	if (printsec)  {	/* plain seconds output */
-		ast_build_string(&s, &maxbytes, "%lu", (u_long)timeval);
-		timeval = 0; /* bypass the other cases */
+		ast_cli(fd, "%s: %lu\n", prefix, (u_long)timeval);
+		return;
 	}
+	out = ast_str_alloca(256);
 	if (timeval > YEAR) {
 		x = (timeval / YEAR);
 		timeval -= (x * YEAR);
-		ast_build_string(&s, &maxbytes, "%d year%s%s ", x, ESS(x),NEEDCOMMA(timeval));
+		ast_str_append(&out, 0, "%d year%s%s ", x, ESS(x),NEEDCOMMA(timeval));
 	}
 	if (timeval > WEEK) {
 		x = (timeval / WEEK);
 		timeval -= (x * WEEK);
-		ast_build_string(&s, &maxbytes, "%d week%s%s ", x, ESS(x),NEEDCOMMA(timeval));
+		ast_str_append(&out, 0, "%d week%s%s ", x, ESS(x),NEEDCOMMA(timeval));
 	}
 	if (timeval > DAY) {
 		x = (timeval / DAY);
 		timeval -= (x * DAY);
-		ast_build_string(&s, &maxbytes, "%d day%s%s ", x, ESS(x),NEEDCOMMA(timeval));
+		ast_str_append(&out, 0, "%d day%s%s ", x, ESS(x),NEEDCOMMA(timeval));
 	}
 	if (timeval > HOUR) {
 		x = (timeval / HOUR);
 		timeval -= (x * HOUR);
-		ast_build_string(&s, &maxbytes, "%d hour%s%s ", x, ESS(x),NEEDCOMMA(timeval));
+		ast_str_append(&out, 0, "%d hour%s%s ", x, ESS(x),NEEDCOMMA(timeval));
 	}
 	if (timeval > MINUTE) {
 		x = (timeval / MINUTE);
 		timeval -= (x * MINUTE);
-		ast_build_string(&s, &maxbytes, "%d minute%s%s ", x, ESS(x),NEEDCOMMA(timeval));
+		ast_str_append(&out, 0, "%d minute%s%s ", x, ESS(x),NEEDCOMMA(timeval));
 	}
 	x = timeval;
-	if (x > 0)
-		ast_build_string(&s, &maxbytes, "%d second%s ", x, ESS(x));
-	if (timestr[0] != '\0')
-		ast_cli(fd, "%s: %s\n", prefix, timestr);
+	if (x > 0 || out->used == 0)	/* if there is nothing, print 0 seconds */
+		ast_str_append(&out, 0, "%d second%s ", x, ESS(x));
+	ast_cli(fd, "%s: %s\n", prefix, out->str);
 }
 
 static char * handle_showuptime(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
@@ -766,7 +764,7 @@ static int handle_showchan(int fd, int argc, char *argv[])
 {
 	struct ast_channel *c=NULL;
 	struct timeval now;
-	char buf[2048];
+	struct ast_str *out = ast_str_alloca(2048);
 	char cdrtime[256];
 	char nf[256], wf[256], rf[256];
 	long elapsed_seconds=0;
@@ -837,10 +835,10 @@ static int handle_showchan(int fd, int argc, char *argv[])
 		( c-> data ? S_OR(c->data, "(Empty)") : "(None)"),
 		(ast_test_flag(c, AST_FLAG_BLOCKING) ? c->blockproc : "(Not Blocking)"));
 	
-	if(pbx_builtin_serialize_variables(c,buf,sizeof(buf)))
-		ast_cli(fd,"      Variables:\n%s\n",buf);
-	if(c->cdr && ast_cdr_serialize_variables(c->cdr,buf, sizeof(buf), '=', '\n', 1))
-		ast_cli(fd,"  CDR Variables:\n%s\n",buf);
+	if(pbx_builtin_serialize_variables(c, &out))
+		ast_cli(fd,"      Variables:\n%s\n", out->str);
+	if(c->cdr && ast_cdr_serialize_variables(c->cdr, &out, '=', '\n', 1))
+		ast_cli(fd,"  CDR Variables:\n%s\n", out->str);
 	
 	ast_channel_unlock(c);
 	return RESULT_SUCCESS;

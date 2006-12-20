@@ -310,8 +310,21 @@ struct ast_channel_tech {
 struct ast_channel_spy_list;	/*!< \todo Add explanation here */
 struct ast_channel_whisper_buffer;	/*!< \todo Add explanation here */
 
+/*!
+ * The high bit of the frame count is used as a debug marker, so
+ * increments of the counters must be done with care.
+ * Please use c->fin = FRAMECOUNT_INC(c->fin) and the same for c->fout.
+ */
 #define	DEBUGCHAN_FLAG  0x80000000
-#define	FRAMECOUNT_INC(x)	( ((x) & DEBUGCHAN_FLAG) | ((x++) & ~DEBUGCHAN_FLAG) )
+
+/* XXX not ideal to evaluate x twice... */
+#define	FRAMECOUNT_INC(x)	( ((x) & DEBUGCHAN_FLAG) | (((x)+1) & ~DEBUGCHAN_FLAG) )
+
+/*!
+ * The current value of the debug flags is stored in the two
+ * variables global_fin and global_fout (declared in main/channel.c)
+ */
+extern unsigned long global_fin, global_fout;
 
 enum ast_channel_adsicpe {
 	AST_ADSI_UNKNOWN,
@@ -1142,12 +1155,6 @@ int ast_activate_generator(struct ast_channel *chan, struct ast_generator *gen, 
 void ast_deactivate_generator(struct ast_channel *chan);
 
 void ast_set_callerid(struct ast_channel *chan, const char *cidnum, const char *cidname, const char *ani);
-
-
-/*! return a mallocd string with the result of sprintf of the fmt and following args */
-char *ast_safe_string_alloc(const char *fmt, ...);
-
-
 
 /*! Start a tone going */
 int ast_tonepair_start(struct ast_channel *chan, int freq1, int freq2, int duration, int vol);
