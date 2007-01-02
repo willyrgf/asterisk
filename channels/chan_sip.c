@@ -3438,7 +3438,6 @@ static int sip_hangup(struct ast_channel *ast)
 	else if (p->invitestate != INV_CALLING)
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 
-ast_verbose("chan_sip1 sip_hangup flags invitestate %d 0x%x data <%s>\n", p->invitestate, p->flags[0].flags, p->initreq.data);
 	/* Start the process if it's not already started */
 	if (!ast_test_flag(&p->flags[0], SIP_ALREADYGONE) && !ast_strlen_zero(p->initreq.data)) {
 		if (needcancel) {	/* Outgoing call, not up */
@@ -3504,7 +3503,6 @@ ast_verbose("chan_sip1 sip_hangup flags invitestate %d 0x%x data <%s>\n", p->inv
 	}
 	if (needdestroy)
 		ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);
-ast_verbose("chan_sip1 sip_hangup flags now 0x%x\n", p->flags[0].flags);
 	sip_pvt_unlock(p);
 	return 0;
 }
@@ -6114,9 +6112,7 @@ static int add_t38_sdp(struct sip_request *resp, struct sip_pvt *p)
 	ast_build_string(&a_modem_next, &a_modem_left, "a=T38FaxMaxDatagram:%d\r\n",x);
 	if (p->t38.jointcapability != T38FAX_UDP_EC_NONE)
 		ast_build_string(&a_modem_next, &a_modem_left, "a=T38FaxUdpEC:%s\r\n", (p->t38.jointcapability & T38FAX_UDP_EC_REDUNDANCY) ? "t38UDPRedundancy" : "t38UDPFEC");
-	len = strlen(v) + strlen(s) + strlen(o) + strlen(c) + strlen(t);
-	if (p->udptl)
-		len += strlen(m_modem) + strlen(a_modem);
+	len = strlen(v) + strlen(s) + strlen(o) + strlen(c) + strlen(t) + strlen(m_modem) + strlen(a_modem);
 	add_header(resp, "Content-Type", "application/sdp");
 	add_header_contentLength(resp, len);
 	add_line(resp, v);
@@ -7518,7 +7514,6 @@ static int transmit_request(struct sip_pvt *p, int sipmethod, int seqno, enum xm
 {
 	struct sip_request resp;
 
-ast_verbose("transmit_request %s\n", sip_methods[sipmethod].text);
 	if (sipmethod == SIP_ACK)
 		p->invitestate = INV_CONFIRMED;
 
@@ -14764,7 +14759,6 @@ static int handle_request(struct sip_pvt *p, struct sip_request *req, struct soc
 	case SIP_ACK:
 		/* Make sure we don't ignore this */
 		if (seqno == p->pendinginvite) {
-ast_verbose("setting state to INV_CONFIRMED\n");
 			p->invitestate = INV_CONFIRMED;
 			p->pendinginvite = 0;
 			__sip_ack(p, seqno, FLAG_RESPONSE, 0);
