@@ -629,12 +629,7 @@ struct chan_iax2_pvt {
 	int frames_received;
 };
 
-static struct ast_iax2_queue {
-	AST_LIST_HEAD(, iax_frame) queue;
-	int count;
-} iaxq = {
-	.queue = AST_LIST_HEAD_INIT_VALUE
-};
+static AST_LIST_HEAD_STATIC(queue, iax_frame);
 
 static AST_LIST_HEAD_STATIC(users, iax2_user);
 
@@ -1810,13 +1805,13 @@ retry:
 			ast_queue_hangup(owner);
 		}
 
-		AST_LIST_LOCK(&iaxq.queue);
-		AST_LIST_TRAVERSE(&iaxq.queue, cur, list) {
+		AST_LIST_LOCK(&queue);
+		AST_LIST_TRAVERSE(&queue, cur, list) {
 			/* Cancel any pending transmissions */
 			if (cur->callno == pvt->callno) 
 				cur->retries = -1;
 		}
-		AST_LIST_UNLOCK(&iaxq.queue);
+		AST_LIST_UNLOCK(&queue);
 
 		if (pvt->reg)
 			pvt->reg->callno = 0;
@@ -1926,10 +1921,9 @@ static void __attempt_transmit(void *data)
 	/* Do not try again */
 	if (freeme) {
 		/* Don't attempt delivery, just remove it from the queue */
-		AST_LIST_LOCK(&iaxq.queue);
-		AST_LIST_REMOVE(&iaxq.queue, f, list);
-		iaxq.count--;
-		AST_LIST_UNLOCK(&iaxq.queue);
+		AST_LIST_LOCK(&queue);
+		AST_LIST_REMOVE(&queue, f, list);
+		AST_LIST_UNLOCK(&queue);
 		f->retrans = -1;
 		/* Free the IAX frame */
 		iax2_frame_free(f);
@@ -2128,15 +2122,15 @@ static int iax2_show_stats(int fd, int argc, char *argv[])
 	if (argc != 3)
 		return RESULT_SHOWUSAGE;
 
-	AST_LIST_LOCK(&iaxq.queue);
-	AST_LIST_TRAVERSE(&iaxq.queue, cur, list) {
+	AST_LIST_LOCK(&queue);
+	AST_LIST_TRAVERSE(&queue, cur, list) {
 		if (cur->retries < 0)
 			dead++;
 		if (cur->final)
 			final++;
 		cnt++;
 	}
-	AST_LIST_UNLOCK(&iaxq.queue);
+	AST_LIST_UNLOCK(&queue);
 
 	ast_cli(fd, "    IAX Statistics\n");
 	ast_cli(fd, "---------------------\n");
@@ -2459,10 +2453,9 @@ static int iax2_transmit(struct iax_frame *fr)
 	/* By setting this to 0, the network thread will send it for us, and
 	   queue retransmission if necessary */
 	fr->sentyet = 0;
-	AST_LIST_LOCK(&iaxq.queue);
-	AST_LIST_INSERT_TAIL(&iaxq.queue, fr, list);
-	iaxq.count++;
-	AST_LIST_UNLOCK(&iaxq.queue);
+	AST_LIST_LOCK(&queue);
+	AST_LIST_INSERT_TAIL(&queue, fr, list);
+	AST_LIST_UNLOCK(&queue);
 	/* Wake up the network and scheduler thread */
 	pthread_kill(netthreadid, SIGURG);
 	signal_condition(&sched_lock, &sched_cond);
@@ -5405,15 +5398,15 @@ static int complete_transfer(int callno, struct iax_ies *ies)
 	pvt->lastsent = 0;
 	pvt->nextpred = 0;
 	pvt->pingtime = DEFAULT_RETRY_TIME;
-	AST_LIST_LOCK(&iaxq.queue);
-	AST_LIST_TRAVERSE(&iaxq.queue, cur, list) {
+	AST_LIST_LOCK(&queue);
+	AST_LIST_TRAVERSE(&queue, cur, list) {
 		/* We must cancel any packets that would have been transmitted
 		   because now we're talking to someone new.  It's okay, they
 		   were transmitted to someone that didn't care anyway. */
 		if (callno == cur->callno) 
 			cur->retries = -1;
 	}
-	AST_LIST_UNLOCK(&iaxq.queue);
+	AST_LIST_UNLOCK(&queue);
 	return 0; 
 }
 
@@ -5928,15 +5921,15 @@ static void vnak_retransmit(int callno, int last)
 {
 	struct iax_frame *f;
 
-	AST_LIST_LOCK(&iaxq.queue);
-	AST_LIST_TRAVERSE(&iaxq.queue, f, list) {
+	AST_LIST_LOCK(&queue);
+	AST_LIST_TRAVERSE(&queue, f, list) {
 		/* Send a copy immediately */
 		if ((f->callno == callno) && iaxs[f->callno] &&
 			(f->oseqno >= last)) {
 			send_packet(f);
 		}
 	}
-	AST_LIST_UNLOCK(&iaxq.queue);
+	AST_LIST_UNLOCK(&queue);
 }
 
 static void __iax2_poke_peer_s(void *data)
@@ -6659,8 +6652,8 @@ static int socket_process(struct iax2_thread *thread)
 					/* Ack the packet with the given timestamp */
 					if (option_debug && iaxdebug)
 						ast_log(LOG_DEBUG, "Cancelling transmission of packet %d\n", x);
-					AST_LIST_LOCK(&iaxq.queue);
-					AST_LIST_TRAVERSE(&iaxq.queue, cur, list) {
+					AST_LIST_LOCK(&queue);
+					AST_LIST_TRAVERSE(&queue, cur, list) {
 						/* If it's our call, and our timestamp, mark -1 retries */
 						if ((fr->callno == cur->callno) && (x == cur->oseqno)) {
 							cur->retries = -1;
@@ -6672,7 +6665,7 @@ static int socket_process(struct iax2_thread *thread)
 							}
 						}
 					}
-					AST_LIST_UNLOCK(&iaxq.queue);
+					AST_LIST_UNLOCK(&queue);
 				}
 				/* Note how much we've received acknowledgement for */
 				if (iaxs[fr->callno])
@@ -6817,13 +6810,13 @@ retryowner:
 			case IAX_COMMAND_TXACC:
 				if (iaxs[fr->callno]->transferring == TRANSFER_BEGIN) {
 					/* Ack the packet with the given timestamp */
-					AST_LIST_LOCK(&iaxq.queue);
-					AST_LIST_TRAVERSE(&iaxq.queue, cur, list) {
+					AST_LIST_LOCK(&queue);
+					AST_LIST_TRAVERSE(&queue, cur, list) {
 						/* Cancel any outstanding txcnt's */
 						if ((fr->callno == cur->callno) && (cur->transfer))
 							cur->retries = -1;
 					}
-					AST_LIST_UNLOCK(&iaxq.queue);
+					AST_LIST_UNLOCK(&queue);
 					memset(&ied1, 0, sizeof(ied1));
 					iax_ie_append_short(&ied1, IAX_IE_CALLNO, iaxs[fr->callno]->callno);
 					send_command(iaxs[fr->callno], AST_FRAME_IAX, IAX_COMMAND_TXREADY, 0, ied1.buf, ied1.pos, -1);
@@ -8137,10 +8130,10 @@ static void *network_thread(void *ignore)
 	for(;;) {
 		/* Go through the queue, sending messages which have not yet been
 		   sent, and scheduling retransmissions if appropriate */
-		AST_LIST_LOCK(&iaxq.queue);
+		AST_LIST_LOCK(&queue);
 		count = 0;
 		wakeup = -1;
-		AST_LIST_TRAVERSE_SAFE_BEGIN(&iaxq.queue, f, list) {
+		AST_LIST_TRAVERSE_SAFE_BEGIN(&queue, f, list) {
 			if (f->sentyet)
 				continue;
 			
@@ -8161,8 +8154,7 @@ static void *network_thread(void *ignore)
 
 			if (f->retries < 0) {
 				/* This is not supposed to be retransmitted */
-				AST_LIST_REMOVE(&iaxq.queue, f, list);
-				iaxq.count--;
+				AST_LIST_REMOVE(&queue, f, list);
 				/* Free the iax frame */
 				iax_frame_free(f);
 			} else {
@@ -8173,7 +8165,7 @@ static void *network_thread(void *ignore)
 			}
 		}
 		AST_LIST_TRAVERSE_SAFE_END
-		AST_LIST_UNLOCK(&iaxq.queue);
+		AST_LIST_UNLOCK(&queue);
 
 		if (count >= 20 && option_debug)
 			ast_log(LOG_DEBUG, "chan_iax2: Sent %d queued outbound frames all at once\n", count);
@@ -8458,7 +8450,7 @@ static struct iax2_peer *build_peer(const char *name, struct ast_variable *v, st
 				peer_set_srcaddr(peer, v->value);
 			} else if (!strcasecmp(v->name, "permit") ||
 					   !strcasecmp(v->name, "deny")) {
-				peer->ha = ast_append_ha(v->name, v->value, peer->ha);
+				peer->ha = ast_append_ha(v->name, v->value, peer->ha, NULL);
 			} else if (!strcasecmp(v->name, "mask")) {
 				maskfound++;
 				inet_aton(v->value, &peer->mask);
@@ -8618,7 +8610,7 @@ static struct iax2_user *build_user(const char *name, struct ast_variable *v, st
 				}
 			} else if (!strcasecmp(v->name, "permit") ||
 					   !strcasecmp(v->name, "deny")) {
-				user->ha = ast_append_ha(v->name, v->value, user->ha);
+				user->ha = ast_append_ha(v->name, v->value, user->ha, NULL);
 			} else if (!strcasecmp(v->name, "setvar")) {
 				varname = ast_strdupa(v->value);
 				if (varname && (varval = strchr(varname,'='))) {

@@ -15,11 +15,10 @@
 
 -include $(ASTTOPDIR)/menuselect.makeopts $(ASTTOPDIR)/makeopts
 
-PWD:=$(shell pwd)
 SOUNDS_DIR:=$(DESTDIR)$(ASTDATADIR)/sounds
 MOH_DIR:=$(DESTDIR)$(ASTDATADIR)/moh
-CORE_SOUNDS_VERSION:=1.4.4
-EXTRA_SOUNDS_VERSION:=1.4.3
+CORE_SOUNDS_VERSION:=1.4.5
+EXTRA_SOUNDS_VERSION:=1.4.4
 SOUNDS_URL:=http://ftp.digium.com/pub/telephony/sounds/releases
 MCS:=$(subst -EN-,-en-,$(MENUSELECT_CORE_SOUNDS))
 MCS:=$(subst -FR-,-fr-,$(MCS))
@@ -80,7 +79,7 @@ $(SOUNDS_DIR)/.asterisk-core-sounds-en-%: have_download
 	if test ! -f $${PACKAGE}; then $(DOWNLOAD) $(WGET_ARGS) $(SOUNDS_URL)/$${PACKAGE}; fi; \
 	if test ! -f $${PACKAGE}; then exit 1; fi; \
 	rm -f $(subst -$(CORE_SOUNDS_VERSION),,$@)-* && \
-	(cd $(SOUNDS_DIR); cat $(PWD)/$${PACKAGE} | gzip -d | tar xf -) && \
+	(cd $(SOUNDS_DIR)/en; cat $(CURDIR)/$${PACKAGE} | gzip -d | tar xf -) && \
 	touch $@
 
 $(SOUNDS_DIR)/.asterisk-core-sounds-es-%: have_download
@@ -88,7 +87,7 @@ $(SOUNDS_DIR)/.asterisk-core-sounds-es-%: have_download
 	if test ! -f $${PACKAGE}; then $(DOWNLOAD) $(WGET_ARGS) $(SOUNDS_URL)/$${PACKAGE}; fi; \
 	if test ! -f $${PACKAGE}; then exit 1; fi; \
 	rm -f $(subst -$(CORE_SOUNDS_VERSION),,$@)-* && \
-	(cd $(SOUNDS_DIR)/es; cat $(PWD)/$${PACKAGE} | gzip -d | tar xf -) && \
+	(cd $(SOUNDS_DIR)/es; cat $(CURDIR)/$${PACKAGE} | gzip -d | tar xf -) && \
 	touch $@
 
 $(SOUNDS_DIR)/.asterisk-core-sounds-fr-%: have_download
@@ -96,7 +95,7 @@ $(SOUNDS_DIR)/.asterisk-core-sounds-fr-%: have_download
 	if test ! -f $${PACKAGE}; then $(DOWNLOAD) $(WGET_ARGS) $(SOUNDS_URL)/$${PACKAGE}; fi; \
 	if test ! -f $${PACKAGE}; then exit 1; fi; \
 	rm -f $(subst -$(CORE_SOUNDS_VERSION),,$@)-* && \
-	(cd $(SOUNDS_DIR)/fr; cat $(PWD)/$${PACKAGE} | gzip -d | tar xf -) && \
+	(cd $(SOUNDS_DIR)/fr; cat $(CURDIR)/$${PACKAGE} | gzip -d | tar xf -) && \
 	touch $@
 
 $(SOUNDS_DIR)/.asterisk-extra-sounds-en-%: have_download
@@ -104,7 +103,7 @@ $(SOUNDS_DIR)/.asterisk-extra-sounds-en-%: have_download
 	if test ! -f $${PACKAGE}; then $(DOWNLOAD) $(WGET_ARGS) $(SOUNDS_URL)/$${PACKAGE}; fi; \
 	if test ! -f $${PACKAGE}; then exit 1; fi; \
 	rm -f $(subst -$(EXTRA_SOUNDS_VERSION),,$@)-* && \
-	(cd $(SOUNDS_DIR); cat $(PWD)/$${PACKAGE} | gzip -d | tar xf -) && \
+	(cd $(SOUNDS_DIR)/en; cat $(CURDIR)/$${PACKAGE} | gzip -d | tar xf -) && \
 	touch $@
 
 $(SOUNDS_DIR)/.asterisk-extra-sounds-es-%: have_download
@@ -112,7 +111,7 @@ $(SOUNDS_DIR)/.asterisk-extra-sounds-es-%: have_download
 	if test ! -f $${PACKAGE}; then $(DOWNLOAD) $(WGET_ARGS) $(SOUNDS_URL)/$${PACKAGE}; fi; \
 	if test ! -f $${PACKAGE}; then exit 1; fi; \
 	rm -f $(subst -$(EXTRA_SOUNDS_VERSION),,$@)-* && \
-	(cd $(SOUNDS_DIR)/es; cat $(PWD)/$${PACKAGE} | gzip -d | tar xf -) && \
+	(cd $(SOUNDS_DIR)/es; cat $(CURDIR)/$${PACKAGE} | gzip -d | tar xf -) && \
 	touch $@
 
 $(SOUNDS_DIR)/.asterisk-extra-sounds-fr-%: have_download
@@ -120,14 +119,14 @@ $(SOUNDS_DIR)/.asterisk-extra-sounds-fr-%: have_download
 	if test ! -f $${PACKAGE}; then $(DOWNLOAD) $(WGET_ARGS) $(SOUNDS_URL)/$${PACKAGE}; fi; \
 	if test ! -f $${PACKAGE}; then exit 1; fi; \
 	rm -f $(subst -$(EXTRA_SOUNDS_VERSION),,$@)-* && \
-	(cd $(SOUNDS_DIR)/fr; cat $(PWD)/$${PACKAGE} | gzip -d | tar xf -) && \
+	(cd $(SOUNDS_DIR)/fr; cat $(CURDIR)/$${PACKAGE} | gzip -d | tar xf -) && \
 	touch $@
 
 $(MOH_DIR)/.asterisk-moh-%: have_download
 	@PACKAGE=$(subst $(MOH_DIR)/.asterisk,asterisk,$@).tar.gz; \
 	if test ! -f $${PACKAGE}; then $(DOWNLOAD) $(WGET_ARGS) $(SOUNDS_URL)/$${PACKAGE}; fi; \
 	if test ! -f $${PACKAGE}; then exit 1; fi; \
-	(cd $(MOH_DIR); cat $(PWD)/$${PACKAGE} | gzip -d | tar xf -) && \
+	(cd $(MOH_DIR); cat $(CURDIR)/$${PACKAGE} | gzip -d | tar xf -) && \
 	touch $@
 
 asterisk-core-%.tar.gz: have_download
@@ -142,10 +141,10 @@ asterisk-moh-%.tar.gz: have_download
 dist-clean:
 	rm -f *.tar.gz
 
-$(SOUNDS_DIR) $(MOH_DIR) $(SOUNDS_DIR)/es $(SOUNDS_DIR)/fr:
+$(SOUNDS_DIR)/en $(MOH_DIR) $(SOUNDS_DIR)/es $(SOUNDS_DIR)/fr:
 	mkdir -p $@
 
-install: $(SOUNDS_DIR) $(SOUNDS_DIR)/es $(SOUNDS_DIR)/fr $(MOH_DIR) $(CORE_SOUND_TAGS) $(EXTRA_SOUND_TAGS) $(MOH_TAGS)
+install: $(SOUNDS_DIR)/en $(SOUNDS_DIR)/es $(SOUNDS_DIR)/fr $(MOH_DIR) $(CORE_SOUND_TAGS) $(EXTRA_SOUND_TAGS) $(MOH_TAGS)
 
 uninstall:
 	rm -rf $(SOUNDS_DIR)

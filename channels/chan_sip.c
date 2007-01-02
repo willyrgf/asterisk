@@ -113,7 +113,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/module.h"
 #include "asterisk/pbx.h"
 #include "asterisk/options.h"
-#include "asterisk/lock.h"
 #include "asterisk/sched.h"
 #include "asterisk/io.h"
 #include "asterisk/rtp.h"
@@ -126,7 +125,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/musiconhold.h"
 #include "asterisk/dsp.h"
 #include "asterisk/features.h"
-#include "asterisk/acl.h"
 #include "asterisk/srv.h"
 #include "asterisk/astdb.h"
 #include "asterisk/causes.h"
@@ -143,6 +141,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/compiler.h"
 #include "asterisk/threadstorage.h"
 #include "asterisk/translate.h"
+#include "asterisk/version.h"
 
 #ifndef FALSE
 #define FALSE    0
@@ -14670,7 +14669,6 @@ static int handle_request(struct sip_pvt *p, struct sip_request *req, struct soc
 	p->method = req->method;	/* Find out which SIP method they are using */
 	if (option_debug > 3)
 		ast_log(LOG_DEBUG, "**** Received %s (%d) - Command in SIP %s\n", sip_methods[p->method].text, sip_methods[p->method].id, cmd); 
-		ast_verbose("**** Received %s (%d) - Command in SIP %s\n", sip_methods[p->method].text, sip_methods[p->method].id, cmd); 
 
 	if (p->icseq && (p->icseq > seqno)) {
 		if (option_debug)
@@ -15547,7 +15545,7 @@ static int handle_common_options(struct ast_flags *flags, struct ast_flags *mask
 		ast_set_flag(&mask[1], SIP_PAGE2_RFC2833_COMPENSATE);
 		ast_set2_flag(&flags[1], ast_true(v->value), SIP_PAGE2_RFC2833_COMPENSATE);
 		res = 1;
-	} else if (!strcasecmp(v->name, "buggyciscomwi")) {
+	} else if (!strcasecmp(v->name, "buggymwi")) {
 		ast_set_flag(&mask[1], SIP_PAGE2_BUGGY_MWI);
 		ast_set2_flag(&flags[1], ast_true(v->value), SIP_PAGE2_BUGGY_MWI);
 		res = 1;
@@ -15767,7 +15765,11 @@ static struct sip_user *build_user(const char *name, struct ast_variable *v, int
 			user->chanvars = add_var(v->value, user->chanvars);
 		} else if (!strcasecmp(v->name, "permit") ||
 				   !strcasecmp(v->name, "deny")) {
-			user->ha = ast_append_ha(v->name, v->value, user->ha);
+			int ha_error = 0;
+
+			user->ha = ast_append_ha(v->name, v->value, user->ha, &ha_error);
+			if (ha_error)
+				ast_log(LOG_ERROR, "Bad ACL entry in configuration line %d : %s\n", v->lineno, v->value);
 		} else if (!strcasecmp(v->name, "allowtransfer")) {
 			user->allowtransfer = ast_true(v->value) ? TRANSFER_OPENFORALL : TRANSFER_CLOSED;
 		} else if (!strcasecmp(v->name, "secret")) {
@@ -15786,8 +15788,7 @@ static struct sip_user *build_user(const char *name, struct ast_variable *v, int
 			user->pickupgroup = ast_get_group(v->value);
 		} else if (!strcasecmp(v->name, "language")) {
 			ast_copy_string(user->language, v->value, sizeof(user->language));
-		} else if (!strcasecmp(v->name, "mohinterpret") 
-			|| !strcasecmp(v->name, "musicclass") || !strcasecmp(v->name, "musiconhold")) {
+		} else if (!strcasecmp(v->name, "mohinterpret")) {
 			ast_copy_string(user->mohinterpret, v->value, sizeof(user->mohinterpret));
 		} else if (!strcasecmp(v->name, "mohsuggest")) {
 			ast_copy_string(user->mohsuggest, v->value, sizeof(user->mohsuggest));
@@ -15805,9 +15806,13 @@ static struct sip_user *build_user(const char *name, struct ast_variable *v, int
 				user->amaflags = format;
 			}
 		} else if (!strcasecmp(v->name, "allow")) {
-			ast_parse_allow_disallow(&user->prefs, &user->capability, v->value, 1);
+			int error =  ast_parse_allow_disallow(&user->prefs, &user->capability, v->value, TRUE);
+			if (error)
+				ast_log(LOG_WARNING, "Codec configuration errors found in line %d : %s = %s\n", v->lineno, v->name, v->value);
 		} else if (!strcasecmp(v->name, "disallow")) {
-			ast_parse_allow_disallow(&user->prefs, &user->capability, v->value, 0);
+			int error =  ast_parse_allow_disallow(&user->prefs, &user->capability, v->value, FALSE);
+			if (error)
+				ast_log(LOG_WARNING, "Codec configuration errors found in line %d : %s = %s\n", v->lineno, v->name, v->value);
 		} else if (!strcasecmp(v->name, "autoframing")) {
 			user->autoframing = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "callingpres")) {
@@ -15818,14 +15823,6 @@ static struct sip_user *build_user(const char *name, struct ast_variable *v, int
 			user->maxcallbitrate = atoi(v->value);
 			if (user->maxcallbitrate < 0)
 				user->maxcallbitrate = default_maxcallbitrate;
- 		} else if (!strcasecmp(v->name, "t38pt_udptl")) {
-			ast_set2_flag(&user->flags[1], ast_true(v->value), SIP_PAGE2_T38SUPPORT_UDPTL);
-#ifdef WHEN_WE_HAVE_T38_FOR_OTHER_TRANSPORTS
-		} else if (!strcasecmp(v->name, "t38pt_rtp")) {
-			ast_set2_flag(&user->flags[1], ast_true(v->value), SIP_PAGE2_T38SUPPORT_RTP);
-		} else if (!strcasecmp(v->name, "t38pt_tcp")) {
-			ast_set2_flag(&user->flags[1], ast_true(v->value), SIP_PAGE2_T38SUPPORT_TCP);
-#endif
 		}
 	}
 	ast_copy_flags(&user->flags[0], &userflags[0], mask[0].flags);
@@ -16034,7 +16031,11 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 				return NULL;
 			}
 		} else if (!strcasecmp(v->name, "permit") || !strcasecmp(v->name, "deny")) {
-			peer->ha = ast_append_ha(v->name, v->value, peer->ha);
+			int ha_error = 0;
+
+			peer->ha = ast_append_ha(v->name, v->value, peer->ha, &ha_error);
+			if (ha_error)
+				ast_log(LOG_ERROR, "Bad ACL entry in configuration line %d : %s\n", v->lineno, v->value);
 		} else if (!strcasecmp(v->name, "port")) {
 			if (!realtime && ast_test_flag(&peer->flags[1], SIP_PAGE2_DYNAMIC))
 				peer->defaddr.sin_port = htons(atoi(v->value));
@@ -16065,8 +16066,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 			}
 		} else if (!strcasecmp(v->name, "accountcode")) {
 			ast_copy_string(peer->accountcode, v->value, sizeof(peer->accountcode));
-		} else if (!strcasecmp(v->name, "mohinterpret")
-			|| !strcasecmp(v->name, "musicclass") || !strcasecmp(v->name, "musiconhold")) {
+		} else if (!strcasecmp(v->name, "mohinterpret")) {
 			ast_copy_string(peer->mohinterpret, v->value, sizeof(peer->mohinterpret));
 		} else if (!strcasecmp(v->name, "mohsuggest")) {
 			ast_copy_string(peer->mohsuggest, v->value, sizeof(peer->mohsuggest));
@@ -16083,9 +16083,13 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 		} else if (!strcasecmp(v->name, "pickupgroup")) {
 			peer->pickupgroup = ast_get_group(v->value);
 		} else if (!strcasecmp(v->name, "allow")) {
-			ast_parse_allow_disallow(&peer->prefs, &peer->capability, v->value, 1);
+			int error =  ast_parse_allow_disallow(&peer->prefs, &peer->capability, v->value, TRUE);
+			if (error)
+				ast_log(LOG_WARNING, "Codec configuration errors found in line %d : %s = %s\n", v->lineno, v->name, v->value);
 		} else if (!strcasecmp(v->name, "disallow")) {
-			ast_parse_allow_disallow(&peer->prefs, &peer->capability, v->value, 0);
+			int error =  ast_parse_allow_disallow(&peer->prefs, &peer->capability, v->value, FALSE);
+			if (error)
+				ast_log(LOG_WARNING, "Codec configuration errors found in line %d : %s = %s\n", v->lineno, v->name, v->value);
 		} else if (!strcasecmp(v->name, "autoframing")) {
 			peer->autoframing = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "rtptimeout")) {
@@ -16118,14 +16122,6 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 			peer->maxcallbitrate = atoi(v->value);
 			if (peer->maxcallbitrate < 0)
 				peer->maxcallbitrate = default_maxcallbitrate;
-		} else if (!strcasecmp(v->name, "t38pt_udptl")) {
-			ast_set2_flag(&peer->flags[1], ast_true(v->value), SIP_PAGE2_T38SUPPORT_UDPTL);
-#ifdef WHEN_WE_HAVE_T38_FOR_OTHER_TRANSPORTS
-		} else if (!strcasecmp(v->name, "t38pt_rtp")) {
-			ast_set2_flag(&peer->flags[1], ast_true(v->value), SIP_PAGE2_T38SUPPORT_RTP);
-		} else if (!strcasecmp(v->name, "t38pt_tcp")) {
-			ast_set2_flag(&peer->flags[1], ast_true(v->value), SIP_PAGE2_T38SUPPORT_TCP);
-#endif
 		}
 	}
 	if (!ast_test_flag(&global_flags[1], SIP_PAGE2_IGNOREREGEXPIRE) && ast_test_flag(&peer->flags[1], SIP_PAGE2_DYNAMIC) && realtime) {
@@ -16226,7 +16222,7 @@ static int reload_config(enum channelreloadreason reason)
 	global_notifyhold = FALSE;		/*!< Keep track of hold status for a peer */
 	global_alwaysauthreject = 0;
 	global_allowsubscribe = FALSE;
-	ast_copy_string(global_useragent, DEFAULT_USERAGENT, sizeof(global_useragent));
+	snprintf(global_useragent, sizeof(global_useragent), "%s %s", DEFAULT_USERAGENT, ASTERISK_VERSION);
 	ast_copy_string(default_notifymime, DEFAULT_NOTIFYMIME, sizeof(default_notifymime));
 	if (ast_strlen_zero(ast_config_AST_SYSTEM_NAME))
 		ast_copy_string(global_realm, DEFAULT_REALM, sizeof(global_realm));
@@ -16356,8 +16352,7 @@ static int reload_config(enum channelreloadreason reason)
 			global_notifyhold = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "alwaysauthreject")) {
 			global_alwaysauthreject = ast_true(v->value);
-		} else if (!strcasecmp(v->name, "mohinterpret") 
-			|| !strcasecmp(v->name, "musicclass") || !strcasecmp(v->name, "musiconhold")) {
+		} else if (!strcasecmp(v->name, "mohinterpret")) {
 			ast_copy_string(default_mohinterpret, v->value, sizeof(default_mohinterpret));
 		} else if (!strcasecmp(v->name, "mohsuggest")) {
 			ast_copy_string(default_mohsuggest, v->value, sizeof(default_mohsuggest));
@@ -16426,12 +16421,14 @@ static int reload_config(enum channelreloadreason reason)
 			}
 		} else if (!strcasecmp(v->name, "localnet")) {
 			struct ast_ha *na;
-			if (!(na = ast_append_ha("d", v->value, localaddr)))
+			int ha_error;
+
+			if (!(na = ast_append_ha("d", v->value, localaddr, &ha_error)))
 				ast_log(LOG_WARNING, "Invalid localnet value: %s\n", v->value);
 			else
 				localaddr = na;
-		} else if (!strcasecmp(v->name, "localmask")) {
-			ast_log(LOG_WARNING, "Use of localmask is no long supported -- use localnet with mask syntax\n");
+			if (ha_error)
+				ast_log(LOG_ERROR, "Bad localnet configuration value line %d : %s\n", v->lineno, v->value);
 		} else if (!strcasecmp(v->name, "externip")) {
 			if (!(hp = ast_gethostbyname(v->value, &ahp))) 
 				ast_log(LOG_WARNING, "Invalid address for externip keyword: %s\n", v->value);
@@ -16451,9 +16448,13 @@ static int reload_config(enum channelreloadreason reason)
 				externrefresh = 10;
 			}
 		} else if (!strcasecmp(v->name, "allow")) {
-			ast_parse_allow_disallow(&default_prefs, &global_capability, v->value, 1);
+			int error =  ast_parse_allow_disallow(&default_prefs, &global_capability, v->value, TRUE);
+			if (error)
+				ast_log(LOG_WARNING, "Codec configuration errors found in line %d : %s = %s\n", v->lineno, v->name, v->value);
 		} else if (!strcasecmp(v->name, "disallow")) {
-			ast_parse_allow_disallow(&default_prefs, &global_capability, v->value, 0);
+			int error =  ast_parse_allow_disallow(&default_prefs, &global_capability, v->value, FALSE);
+			if (error)
+				ast_log(LOG_WARNING, "Codec configuration errors found in line %d : %s = %s\n", v->lineno, v->name, v->value);
 		} else if (!strcasecmp(v->name, "autoframing")) {
 			global_autoframing = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "allowexternaldomains")) {
@@ -16506,24 +16507,6 @@ static int reload_config(enum channelreloadreason reason)
 			default_maxcallbitrate = atoi(v->value);
 			if (default_maxcallbitrate < 0)
 				default_maxcallbitrate = DEFAULT_MAX_CALL_BITRATE;
-		} else if (!strcasecmp(v->name, "t38pt_udptl")) {	/* XXX maybe ast_set2_flags ? */
-			if (ast_true(v->value)) {
-				ast_set_flag(&global_flags[1], SIP_PAGE2_T38SUPPORT_UDPTL);
-			}
-#ifdef WHEN_WE_HAVE_T38_FOR_OTHER_TRANSPORTS
-		} else if (!strcasecmp(v->name, "t38pt_rtp")) {	/* XXX maybe ast_set2_flags ? */
-			if (ast_true(v->value)) {
-				ast_set_flag(&global_flags[1], SIP_PAGE2_T38SUPPORT_RTP);
-			}
-		} else if (!strcasecmp(v->name, "t38pt_tcp")) {	/* XXX maybe ast_set2_flags ? */
-			if (ast_true(v->value)) {
-				ast_set_flag(&global_flags[1], SIP_PAGE2_T38SUPPORT_TCP);
-			}
-#endif
-		} else if (!strcasecmp(v->name, "rfc2833compensate")) {	/* XXX maybe ast_set2_flags ? */
-			if (ast_true(v->value)) {
-				ast_set_flag(&global_flags[1], SIP_PAGE2_RFC2833_COMPENSATE);
-			}
 		}
 	}
 

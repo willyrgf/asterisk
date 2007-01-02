@@ -77,17 +77,17 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 static int dtmftimeout = DEFAULT_DTMF_TIMEOUT;
 
-static int rtpstart = 0;		/*!< First port for RTP sessions (set in rtp.conf) */
-static int rtpend = 0;			/*!< Last port for RTP sessions (set in rtp.conf) */
-static int rtpdebug = 0;		/*!< Are we debugging? */
-static int rtcpdebug = 0;		/*!< Are we debugging RTCP? */
-static int rtcpstats = 0;		/*!< Are we debugging RTCP? */
+static int rtpstart;			/*!< First port for RTP sessions (set in rtp.conf) */
+static int rtpend;			/*!< Last port for RTP sessions (set in rtp.conf) */
+static int rtpdebug;			/*!< Are we debugging? */
+static int rtcpdebug;			/*!< Are we debugging RTCP? */
+static int rtcpstats;			/*!< Are we debugging RTCP? */
 static int rtcpinterval = RTCP_DEFAULT_INTERVALMS; /*!< Time between rtcp reports in millisecs */
-static int stundebug = 0;		/*!< Are we debugging stun? */
+static int stundebug;			/*!< Are we debugging stun? */
 static struct sockaddr_in rtpdebugaddr;	/*!< Debug packets to/from this host */
 static struct sockaddr_in rtcpdebugaddr;	/*!< Debug RTCP packets to/from this host */
 #ifdef SO_NO_CHECK
-static int nochecksums = 0;
+static int nochecksums;
 #endif
 
 /*!
@@ -3070,6 +3070,11 @@ static enum ast_bridge_result bridge_p2p_loop(struct ast_channel *c0, struct ast
 		    (c0->masq || c0->masqr || c1->masq || c1->masqr)) {
 			if (option_debug > 2)
 				ast_log(LOG_DEBUG, "p2p-rtp-bridge: Oooh, something is weird, backing out\n");
+			/* If a masquerade needs to happen we have to try to read in a frame so that it actually happens. Without this we risk being called again and going into a loop */
+			if ((c0->masq || c0->masqr) && (fr = ast_read(c0)))
+				ast_frfree(fr);
+			if ((c1->masq || c1->masqr) && (fr = ast_read(c1)))
+				ast_frfree(fr);
 			res = AST_BRIDGE_RETRY;
 			break;
 		}
