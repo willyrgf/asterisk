@@ -95,11 +95,11 @@ struct ast_channel_whisper_buffer {
 #endif
 
 /*! Prevent new channel allocation if shutting down. */
-static int shutting_down = 0;
+static int shutting_down;
 
-static int uniqueint = 0;
+static int uniqueint;
 
-unsigned long global_fin = 0, global_fout = 0;
+unsigned long global_fin, global_fout;
 
 AST_THREADSTORAGE(state2str_threadbuf);
 #define STATE2STR_BUFSIZE   32
@@ -686,10 +686,10 @@ struct ast_channel *ast_channel_alloc(int needqueue, int state, const char *cid_
 
 	if (ast_strlen_zero(ast_config_AST_SYSTEM_NAME)) {
 		ast_string_field_build(tmp, uniqueid, "%li.%d", (long) time(NULL), 
-			ast_atomic_fetchadd_int(&uniqueint, 1));
+				       ast_atomic_fetchadd_int(&uniqueint, 1));
 	} else {
 		ast_string_field_build(tmp, uniqueid, "%s-%li.%d", ast_config_AST_SYSTEM_NAME, 
-			(long) time(NULL), ast_atomic_fetchadd_int(&uniqueint, 1));
+				       (long) time(NULL), ast_atomic_fetchadd_int(&uniqueint, 1));
 	}
 
 	if (!ast_strlen_zero(name_fmt)) {
@@ -2301,7 +2301,7 @@ int ast_indicate_data(struct ast_channel *chan, int condition, const void *data,
 		if (condition < 0)
 			ast_playtones_stop(chan);
 		else {
-			const struct tone_zone_sound *ts = NULL;
+			const struct ind_tone_zone_sound *ts = NULL;
 			switch (condition) {
 			case AST_CONTROL_RINGING:
 				ts = ast_get_indication_tone(chan->zone, "ring");

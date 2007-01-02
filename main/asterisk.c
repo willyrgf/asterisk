@@ -142,7 +142,9 @@ int daemon(int, int);  /* defined in libresolv of all places */
 	ast_verbose("This is free software, with components licensed under the GNU General Public\n"); \
 	ast_verbose("License version 2 and other licenses; you are welcome to redistribute it under\n"); \
 	ast_verbose("certain conditions. Type 'core show license' for details.\n"); \
-	ast_verbose("=========================================================================\n")
+	ast_verbose("=========================================================================\n"); \
+	ast_verbose("NOTE: This is a development version of Asterisk, and should not be used in\n"); \
+	ast_verbose("production installations.\n");
 
 /*! \defgroup main_options Main Configuration Options
  \brief Main configuration options from \ref Config_ast "asterisk.conf" or 
@@ -151,15 +153,13 @@ int daemon(int, int);  /* defined in libresolv of all places */
  */
 /*! @{ */
 
-extern int ast_language_is_prefix;	/* XXX move to some header */
-
 struct ast_flags ast_options = { AST_DEFAULT_OPTIONS };
 
-int option_verbose = 0;				/*!< Verbosity level */
-int option_debug = 0;				/*!< Debug level */
+int option_verbose;				/*!< Verbosity level */
+int option_debug;				/*!< Debug level */
 
-double option_maxload = 0.0;			/*!< Max load avg on system */
-int option_maxcalls = 0;			/*!< Max number of active calls */
+double option_maxload;				/*!< Max load avg on system */
+int option_maxcalls;				/*!< Max number of active calls */
 
 /*! @} */
 
@@ -186,8 +186,8 @@ static AST_LIST_HEAD_STATIC(atexits, ast_atexit);
 time_t ast_startuptime;
 time_t ast_lastreloadtime;
 
-static History *el_hist = NULL;
-static EditLine *el = NULL;
+static History *el_hist;
+static EditLine *el;
 static char *remotehostname;
 
 struct console consoles[AST_MAX_CONNECTS];
@@ -228,8 +228,8 @@ extern const char *ast_build_date;
 extern const char *ast_build_user;
 
 static char *_argv[256];
-static int shuttingdown = 0;
-static int restartnow = 0;
+static int shuttingdown;
+static int restartnow;
 static pthread_t consolethread = AST_PTHREADT_NULL;
 
 static char randompool[256];
@@ -2492,6 +2492,9 @@ int main(int argc, char *argv[])
 	if (ast_opt_console && !option_verbose) 
 		ast_verbose("[ Reading Master Configuration ]\n");
 	ast_readconfig();
+
+	if (!ast_language_is_prefix && !ast_opt_remote)
+		ast_log(LOG_WARNING, "The 'languageprefix' option in asterisk.conf is deprecated; in a future release it will be removed, and your sound files will need to be organized in the 'new style' language layout.\n");
 
 	if (ast_opt_dump_core) {
 		struct rlimit l;

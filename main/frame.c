@@ -45,7 +45,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/linkedlists.h"
 
 #ifdef TRACE_FRAMES
-static int headers = 0;
+static int headers;
 static AST_LIST_HEAD_STATIC(headerlist, ast_frame);
 #endif
 
@@ -301,7 +301,7 @@ static struct ast_frame *ast_frame_header_new(void)
 		}
 	}
 
-	if (!(f = ast_calloc(1, sizeof(*f))))
+	if (!(f = ast_calloc_cache(1, sizeof(*f))))
 		return NULL;
 
 	f->mallocd_hdr_len = sizeof(*f);
@@ -458,7 +458,7 @@ struct ast_frame *ast_frdup(const struct ast_frame *f)
 		AST_LIST_TRAVERSE_SAFE_END
 	}
 	if (!buf) {
-		if (!(buf = ast_calloc(1, len)))
+		if (!(buf = ast_calloc_cache(1, len)))
 			return NULL;
 		out = buf;
 		out->mallocd_hdr_len = len;
@@ -1084,7 +1084,7 @@ int ast_codec_pref_setsize(struct ast_codec_pref *pref, int format, int framems)
 struct ast_format_list ast_codec_pref_getsize(struct ast_codec_pref *pref, int format)
 {
 	int x, index = -1, framems = 0;
-	struct ast_format_list fmt;
+	struct ast_format_list fmt = { 0, };
 
 	for (x = 0; x < sizeof(AST_FORMAT_LIST) / sizeof(AST_FORMAT_LIST[0]); x++) {
 		if(AST_FORMAT_LIST[x].bits == format) {
@@ -1143,8 +1143,9 @@ int ast_codec_choose(struct ast_codec_pref *pref, int formats, int find_best)
    	return find_best ? ast_best_codec(formats) : 0;
 }
 
-void ast_parse_allow_disallow(struct ast_codec_pref *pref, int *mask, const char *list, int allowing) 
+int ast_parse_allow_disallow(struct ast_codec_pref *pref, int *mask, const char *list, int allowing) 
 {
+	int errors = 0;
 	char *parse = NULL, *this = NULL, *psize = NULL;
 	int format = 0, framems = 0;
 
@@ -1156,11 +1157,15 @@ void ast_parse_allow_disallow(struct ast_codec_pref *pref, int *mask, const char
 			if (option_debug)
 				ast_log(LOG_DEBUG,"Packetization for codec: %s is %s\n", this, psize);
 			framems = atoi(psize);
-			if (framems < 0)
+			if (framems < 0) {
 				framems = 0;
+				errors++;
+				ast_log(LOG_WARNING, "Bad packetization value for codec %s\n", this);
+			}
 		}
 		if (!(format = ast_getformatbyname(this))) {
 			ast_log(LOG_WARNING, "Cannot %s unknown format '%s'\n", allowing ? "allow" : "disallow", this);
+			errors++;
 			continue;
 		}
 
@@ -1187,6 +1192,7 @@ void ast_parse_allow_disallow(struct ast_codec_pref *pref, int *mask, const char
 			}
 		}
 	}
+	return errors;
 }
 
 static int g723_len(unsigned char buf)
