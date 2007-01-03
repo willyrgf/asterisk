@@ -132,7 +132,6 @@ enum misdn_chan_state {
 	/* misdn_hangup */
 	MISDN_HOLDED, /*!< if this chan is holded */
 	MISDN_HOLD_DISCONNECT, /*!< if this chan is holded */
-	MISDN_FIXUP/*!< if this chan is holded */
   
 };
 
@@ -778,6 +777,20 @@ static int misdn_restart_port (int fd, int argc, char *argv[])
 	return 0;
 }
 
+static int misdn_restart_pid (int fd, int argc, char *argv[])
+{
+	int pid;
+  
+	if (argc != 4)
+		return RESULT_SHOWUSAGE;
+  
+	pid = atoi(argv[3]);
+
+	misdn_lib_pid_restart(pid);
+
+	return 0;
+}
+
 static int misdn_port_up (int fd, int argc, char *argv[])
 {
 	int port;
@@ -933,7 +946,6 @@ static struct state_struct state_array[] = {
 	{MISDN_HUNGUP_FROM_MISDN,"HUNGUP_FROM_MISDN"}, /* when DISCONNECT/RELEASE/REL_COMP  cam from misdn */
 	{MISDN_HOLDED,"HOLDED"}, /* when DISCONNECT/RELEASE/REL_COMP  cam from misdn */
 	{MISDN_HOLD_DISCONNECT,"HOLD_DISCONNECT"}, /* when DISCONNECT/RELEASE/REL_COMP  cam from misdn */
-	{MISDN_FIXUP,"FIXUP"}, /**/
 	{MISDN_HUNGUP_FROM_AST,"HUNGUP_FROM_AST"} /* when DISCONNECT/RELEASE/REL_COMP came out of */
 	/* misdn_hangup */
 };
@@ -1045,8 +1057,8 @@ static int misdn_show_cls (int fd, int argc, char *argv[])
 			print_bc_info(fd, help, bc);
 		} else {
 			if (help->state == MISDN_HOLDED) {
-				chan_misdn_log(0, 0, "ITS A HOLDED BC:\n");
-				chan_misdn_log(0,0," --> l3_id: %x\n"
+				chan_misdn_log(2, 0, "ITS A HOLDED BC:\n");
+				chan_misdn_log(2,0," --> l3_id: %x\n"
 						" --> dad:%s oad:%s\n"
 						" --> hold_port: %d\n"
 						" --> hold_channel: %d\n"
@@ -1411,6 +1423,8 @@ static struct ast_cli_entry chan_misdn_clis[] = {
 		"Usage: misdn port unblock\n" },
 	{ {"misdn","restart","port", NULL}, misdn_restart_port, "Restarts the given port",
 		"Usage: misdn restart port\n" },
+	{ {"misdn","restart","pid", NULL}, misdn_restart_pid, "Restarts the given pid",
+		"Usage: misdn restart pid\n" },
 	{ {"misdn","port","up", NULL}, misdn_port_up, "Tries to establish L1 on the given port",
 		"Usage: misdn port up <port>\n" },
 	{ {"misdn","port","down", NULL}, misdn_port_down, "Tries to deacivate the L1 on the given port",
@@ -1426,7 +1440,6 @@ static struct ast_cli_entry chan_misdn_clis[] = {
 	{ {"misdn","set","crypt","debug", NULL}, misdn_set_crypt_debug, "Sets CryptDebuglevel of chan_misdn, at the moment, level={1,2}",
 		"Usage: misdn set crypt debug <level>\n" }
 };
-
 
 static int update_config (struct chan_list *ch, int orig) 
 {
@@ -1444,8 +1457,7 @@ static int update_config (struct chan_list *ch, int orig)
 	
 	int port=bc->port;
 	
-	chan_misdn_log(5,port,"update_config: Getting Config\n");
-
+	chan_misdn_log(7,port,"update_config: Getting Config\n");
 
 	int hdlc=0;
 	misdn_cfg_get( port, MISDN_CFG_HDLC, &hdlc, sizeof(int));
@@ -1911,7 +1923,7 @@ static int misdn_call(struct ast_channel *ast, char *dest, int timeout)
 	
 	chan_misdn_log(1, port, "* CALL: %s\n",dest);
 	
-	chan_misdn_log(1, port, " --> * dad:%s tech:%s ctx:%s\n",ast->exten,ast->name, ast->context);
+	chan_misdn_log(2, port, " --> * dad:%s tech:%s ctx:%s\n",ast->exten,ast->name, ast->context);
 	
 	chan_misdn_log(3, port, " --> * adding2newbc ext %s\n",ast->exten);
 	if (ast->exten) {
@@ -1952,6 +1964,15 @@ static int misdn_call(struct ast_channel *ast, char *dest, int timeout)
 			misdn_set_opt_exec(ast,opts);
 		else
 			chan_misdn_log(2,port,"NO OPTS GIVEN\n");
+
+		/*check for bridging*/
+		int bridging;
+		misdn_cfg_get( 0, MISDN_GEN_BRIDGING, &bridging, sizeof(int));
+		if (bridging && ch->other_ch) {
+			chan_misdn_log(0, port, "Disabling EC on both Sides\n");	
+			ch->bc->ec_enable=0;
+			ch->other_ch->bc->ec_enable=0;
+		}
 		
 		r=misdn_lib_send_event( newbc, EVENT_SETUP );
 		
@@ -1967,7 +1988,7 @@ static int misdn_call(struct ast_channel *ast, char *dest, int timeout)
 		return -1;
 	}
 	
-	chan_misdn_log(1, port, " --> * SEND: State Dialing pid:%d\n",newbc?newbc->pid:1);
+	chan_misdn_log(2, port, " --> * SEND: State Dialing pid:%d\n",newbc?newbc->pid:1);
 
 	ast_setstate(ast, AST_STATE_DIALING);
 	ast->hangupcause=16;
@@ -2027,7 +2048,6 @@ static int misdn_answer(struct ast_channel *ast)
 	}
 	
 	p->state = MISDN_CONNECTED;
-	misdn_lib_echo(p->bc,0);
 	stop_indicate(p);
 
 	if ( ast_strlen_zero(p->bc->cad) ) {
@@ -2114,7 +2134,6 @@ static int misdn_fixup(struct ast_channel *oldast, struct ast_channel *ast)
 	chan_misdn_log(1, p->bc?p->bc->port:0, "* IND: Got Fixup State:%s L3id:%x\n", misdn_get_ch_state(p), p->l3id);
 	
 	p->ast = ast ;
-	p->state=MISDN_FIXUP;
   
 	return 0;
 }
@@ -2137,12 +2156,11 @@ static int misdn_indication(struct ast_channel *ast, int cond, const void *data,
 		return -1;
 	}
 	
-	chan_misdn_log(1, p->bc->port, "* IND : Indication [%d] from %s\n",cond, ast->exten);
+	chan_misdn_log(5, p->bc->port, "* IND : Indication [%d] from %s\n",cond, ast->exten);
 	
 	switch (cond) {
 	case AST_CONTROL_BUSY:
-		chan_misdn_log(1, p->bc->port, "* IND :\tbusy\n");
-		chan_misdn_log(1, p->bc->port, " --> * SEND: State Busy pid:%d\n",p->bc?p->bc->pid:-1);
+		chan_misdn_log(1, p->bc->port, "* IND :\tbusy pid:%d\n",p->bc?p->bc->pid:-1);
 		ast_setstate(ast,AST_STATE_BUSY);
 
 		p->bc->out_cause=17;
@@ -2155,41 +2173,42 @@ static int misdn_indication(struct ast_channel *ast, int cond, const void *data,
 		return -1;
 		break;
 	case AST_CONTROL_RING:
-		chan_misdn_log(1, p->bc->port, " --> * IND :\tring pid:%d\n",p->bc?p->bc->pid:-1);
+		chan_misdn_log(1, p->bc->port, "* IND :\tring pid:%d\n",p->bc?p->bc->pid:-1);
 		return -1;
 		break;
 		
 	case AST_CONTROL_RINGING:
+		chan_misdn_log(1, p->bc->port, "* IND :\tringing pid:%d\n",p->bc?p->bc->pid:-1);
 		switch (p->state) {
 			case MISDN_ALERTING:
-				chan_misdn_log(1, p->bc->port, " --> * IND :\tringing pid:%d but I was Ringing before, so ignoreing it\n",p->bc?p->bc->pid:-1);
+				chan_misdn_log(2, p->bc->port, " --> * IND :\tringing pid:%d but I was Ringing before, so ignoreing it\n",p->bc?p->bc->pid:-1);
 				break;
 			case MISDN_CONNECTED:
-				chan_misdn_log(1, p->bc->port, " --> * IND :\tringing pid:%d but Connected, so just send TONE_ALERTING without state changes \n",p->bc?p->bc->pid:-1);
+				chan_misdn_log(2, p->bc->port, " --> * IND :\tringing pid:%d but Connected, so just send TONE_ALERTING without state changes \n",p->bc?p->bc->pid:-1);
 				return -1;
 				break;
 			default:
 				p->state=MISDN_ALERTING;
-				chan_misdn_log(1, p->bc->port, " --> * IND :\tringing pid:%d\n",p->bc?p->bc->pid:-1);
+				chan_misdn_log(2, p->bc->port, " --> * IND :\tringing pid:%d\n",p->bc?p->bc->pid:-1);
 				misdn_lib_send_event( p->bc, EVENT_ALERTING);
 			
 				if (p->other_ch && p->other_ch->bc) {
 					if (misdn_inband_avail(p->other_ch->bc)) {
-						chan_misdn_log(1,p->bc->port, " --> other End is mISDN and has inband info available\n");
+						chan_misdn_log(2,p->bc->port, " --> other End is mISDN and has inband info available\n");
 						break;
 					}
 
 					if (!p->other_ch->bc->nt) {
-						chan_misdn_log(1,p->bc->port, " --> other End is mISDN TE so it has inband info for sure (?)\n");
+						chan_misdn_log(2,p->bc->port, " --> other End is mISDN TE so it has inband info for sure (?)\n");
 						break;
 					}
 				}
 
-				chan_misdn_log(1, p->bc->port, " --> * SEND: State Ring pid:%d\n",p->bc?p->bc->pid:-1);
+				chan_misdn_log(3, p->bc->port, " --> * SEND: State Ring pid:%d\n",p->bc?p->bc->pid:-1);
 				ast_setstate(ast,AST_STATE_RINGING);
 			
 				if ( !p->bc->nt && (p->orginator==ORG_MISDN) && !p->incoming_early_audio ) 
-					chan_misdn_log(1,p->bc->port, " --> incoming_early_audio off\n");
+					chan_misdn_log(2,p->bc->port, " --> incoming_early_audio off\n");
 				else 
 					return -1;
 		}
@@ -2249,7 +2268,7 @@ static int misdn_indication(struct ast_channel *ast, int cond, const void *data,
 		chan_misdn_log(1, p->bc->port, " --> *\tUNHOLD pid:%d\n",p->bc?p->bc->pid:-1);
 		break;
 	default:
-		ast_log(LOG_NOTICE, " --> * Unknown Indication:%d pid:%d\n",cond,p->bc?p->bc->pid:-1);
+		chan_misdn_log(1, p->bc->port, " --> * Unknown Indication:%d pid:%d\n",cond,p->bc?p->bc->pid:-1);
 	}
   
 	return 0;
@@ -2282,7 +2301,6 @@ static int misdn_hangup(struct ast_channel *ast)
 	if (ast->_state == AST_STATE_RESERVED || 
 		p->state == MISDN_NOTHING || 
 		p->state == MISDN_HOLDED || 
-		p->state == MISDN_FIXUP || 
 		p->state == MISDN_HOLD_DISCONNECT ) {
 
 		CLEAN_CH:
@@ -2328,10 +2346,10 @@ static int misdn_hangup(struct ast_channel *ast)
 		}
     
 		chan_misdn_log(1, bc->port, "* IND : HANGUP\tpid:%d ctx:%s dad:%s oad:%s State:%s\n",p->bc?p->bc->pid:-1, ast->context, ast->exten, AST_CID_P(ast), misdn_get_ch_state(p));
-		chan_misdn_log(2, bc->port, " --> l3id:%x\n",p->l3id);
-		chan_misdn_log(1, bc->port, " --> cause:%d\n",bc->cause);
-		chan_misdn_log(1, bc->port, " --> out_cause:%d\n",bc->out_cause);
-		chan_misdn_log(1, bc->port, " --> state:%s\n", misdn_get_ch_state(p));
+		chan_misdn_log(3, bc->port, " --> l3id:%x\n",p->l3id);
+		chan_misdn_log(3, bc->port, " --> cause:%d\n",bc->cause);
+		chan_misdn_log(2, bc->port, " --> out_cause:%d\n",bc->out_cause);
+		chan_misdn_log(2, bc->port, " --> state:%s\n", misdn_get_ch_state(p));
 		
 		switch (p->state) {
 		case MISDN_CALLING:
@@ -2416,7 +2434,7 @@ static int misdn_hangup(struct ast_channel *ast)
 	}
 	
 
-	chan_misdn_log(1, bc->port, "Channel: %s hanguped new state:%s\n",ast->name,misdn_get_ch_state(p));
+	chan_misdn_log(3, bc->port, " --> Channel: %s hanguped new state:%s\n",ast->name,misdn_get_ch_state(p));
 	
 	return 0;
 }
@@ -2677,29 +2695,12 @@ static enum ast_bridge_result  misdn_bridge (struct ast_channel *c0,
 	if (ch1 && ch2 ) ;
 	else
 		return -1;
-  
 
 	int bridging;
 	misdn_cfg_get( 0, MISDN_GEN_BRIDGING, &bridging, sizeof(int));
 	if (bridging) {
-		int ecwb, ec;
-		misdn_cfg_get( ch1->bc->port, MISDN_CFG_ECHOCANCELWHENBRIDGED, &ecwb, sizeof(int));
-		misdn_cfg_get( ch1->bc->port, MISDN_CFG_ECHOCANCEL, &ec, sizeof(int));
-		if ( !ecwb && ec ) {
-			chan_misdn_log(2, ch1->bc->port, "Disabling Echo Cancellor when Bridged\n");
-			ch1->bc->ec_enable=0;
-			manager_ec_disable(ch1->bc);
-		}
-		misdn_cfg_get( ch2->bc->port, MISDN_CFG_ECHOCANCELWHENBRIDGED, &ecwb, sizeof(int));
-		misdn_cfg_get( ch2->bc->port, MISDN_CFG_ECHOCANCEL, &ec, sizeof(int));
-		if ( !ecwb && ec) {
-			chan_misdn_log(2, ch2->bc->port, "Disabling Echo Cancellor when Bridged\n");
-			ch2->bc->ec_enable=0;
-			manager_ec_disable(ch2->bc); 
-		}
 		/* trying to make a mISDN_dsp conference */
 		chan_misdn_log(1, ch1->bc->port, "I SEND: Making conference with Number:%d\n", ch1->bc->pid +1);
-
 		misdn_lib_bridge(ch1->bc,ch2->bc);
 	}
 	
@@ -2728,9 +2729,9 @@ static enum ast_bridge_result  misdn_bridge (struct ast_channel *c0,
 			/* got hangup .. */
 
 			if (!f) 
-				chan_misdn_log(1,ch1->bc->port,"Read Null Frame\n");
+				chan_misdn_log(4,ch1->bc->port,"Read Null Frame\n");
 			else
-				chan_misdn_log(1,ch1->bc->port,"Read Frame Controll class:%d\n",f->subclass);
+				chan_misdn_log(4,ch1->bc->port,"Read Frame Controll class:%d\n",f->subclass);
 			
 			*fo=f;
 			*rc=who;
@@ -2778,6 +2779,10 @@ static int dialtone_indicate(struct chan_list *cl)
 	const struct ind_tone_zone_sound *ts= NULL;
 	struct ast_channel *ast=cl->ast;
 
+	if (!ast) {
+		chan_misdn_log(0,cl->bc->port,"No Ast in dialtone_indicate\n");
+		return -1;
+	}
 
 	int nd=0;
 	misdn_cfg_get( cl->bc->port, MISDN_CFG_NODIALTONE, &nd, sizeof(nd));
@@ -2811,6 +2816,12 @@ static int hanguptone_indicate(struct chan_list *cl)
 static int stop_indicate(struct chan_list *cl)
 {
 	struct ast_channel *ast=cl->ast;
+
+	if (!ast) {
+		chan_misdn_log(0,cl->bc->port,"No Ast in stop_indicate\n");
+		return -1;
+	}
+
 	chan_misdn_log(3,cl->bc->port," --> None\n");
 	misdn_lib_tone_generator_stop(cl->bc);
 	ast_playtones_stop(ast);
@@ -3309,11 +3320,11 @@ static void hangup_chan(struct chan_list *ch)
 		return;
 	}
 
-	cb_log(1,port,"hangup_chan\n");
+	cb_log(5,port,"hangup_chan called\n");
 
 	if (ch->need_hangup) 
 	{
-		cb_log(1,port,"-> hangup\n");
+		cb_log(2,port," --> hangup\n");
 		send_cause2ast(ch->ast,ch->bc,ch);
 		ch->need_hangup=0;
 		ch->need_queue_hangup=0;
@@ -3323,7 +3334,7 @@ static void hangup_chan(struct chan_list *ch)
 	}
 
 	if (!ch->need_queue_hangup) {
-		cb_log(1,port,"No need to queue hangup\n");
+		cb_log(2,port," --> No need to queue hangup\n");
 	}
 
 	ch->need_queue_hangup=0;
@@ -3332,7 +3343,7 @@ static void hangup_chan(struct chan_list *ch)
 
 		if (ch->ast)
 			ast_queue_hangup(ch->ast);
-		cb_log(1,port,"-> queue_hangup\n");
+		cb_log(2,port," --> queue_hangup\n");
 	} else {
 		cb_log(1,port,"Cannot hangup chan, no ast\n");
 	}
@@ -3352,7 +3363,7 @@ static void release_chan(struct misdn_bchannel *bc) {
 			ast=ch->ast;
 		} 
 		
-		chan_misdn_log(1, bc->port, "release_chan: bc with l3id: %x\n",bc->l3_id);
+		chan_misdn_log(5, bc->port, "release_chan: bc with l3id: %x\n",bc->l3_id);
 		
 		/*releaseing jitterbuffer*/
 		if (ch->jb ) {
@@ -3548,20 +3559,35 @@ void import_ch(struct ast_channel *chan, struct misdn_bchannel *bc, struct chan_
 	tmp=pbx_builtin_getvar_helper(chan,"MISDN_PID");
 	if (tmp) {
 		ch->other_pid=atoi(tmp);
-		chan_misdn_log(1,bc->port,"IMPORT_PID: importing pid:%s\n",tmp);
+		chan_misdn_log(3,bc->port," --> IMPORT_PID: importing pid:%s\n",tmp);
 		if (ch->other_pid >0) {
 			ch->other_ch=find_chan_by_pid(cl_te,ch->other_pid);
 			if (ch->other_ch) ch->other_ch->other_ch=ch;
 		}
+	}
+
+	tmp=pbx_builtin_getvar_helper(chan,"MISDN_ADDRESS_COMPLETE");
+	if (tmp && (atoi(tmp) == 1)) {
+		bc->sending_complete=1;
 	}
 }
 
 void export_ch(struct ast_channel *chan, struct misdn_bchannel *bc, struct chan_list *ch)
 {
 	char tmp[32];
-	chan_misdn_log(1,bc->port,"EXPORT_PID: pid:%d\n",bc->pid);
+	chan_misdn_log(3,bc->port," --> EXPORT_PID: pid:%d\n",bc->pid);
 	sprintf(tmp,"%d",bc->pid);
 	pbx_builtin_setvar_helper(chan,"_MISDN_PID",tmp);
+
+	if (bc->sending_complete) {
+		sprintf(tmp,"%d",bc->sending_complete);
+		pbx_builtin_setvar_helper(chan,"MISDN_ADDRESS_COMPLETE",tmp);
+	}
+
+	if (bc->urate) {
+		sprintf(tmp,"%d",bc->urate);
+		pbx_builtin_setvar_helper(chan,"MISDN_URATE",tmp);
+	}
 }
 
 int add_in_calls(int port)
@@ -3609,7 +3635,6 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 	
 	if (event != EVENT_BCHAN_DATA && event != EVENT_TONE_GENERATE) { /*  Debug Only Non-Bchan */
 		int debuglevel=1;
-	
 		if ( event==EVENT_CLEANUP && !user_data)
 			debuglevel=5;
 
@@ -4171,15 +4196,15 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 		ast_queue_control(ch->ast, AST_CONTROL_RINGING);
 		ast_setstate(ch->ast, AST_STATE_RINGING);
 		
-		cb_log(1,bc->port,"Set State Ringing\n");
+		cb_log(7,bc->port," --> Set State Ringing\n");
 		
 		if ( misdn_cap_is_speech(bc->capability) && misdn_inband_avail(bc)) {
 			cb_log(1,bc->port,"Starting Tones, we have inband Data\n");
 			start_bc_tones(ch);
 		} else {
-			cb_log(1,bc->port,"We have no inband Data, the other end must create ringing\n");
+			cb_log(3,bc->port," --> We have no inband Data, the other end must create ringing\n");
 			if (ch->far_alerting) {
-				cb_log(1,bc->port,"The other end can not do ringing eh ?.. we must do all ourself..");
+				cb_log(1,bc->port," --> The other end can not do ringing eh ?.. we must do all ourself..");
 				start_bc_tones(ch);
 				/*tone_indicate(ch, TONE_FAR_ALERTING);*/
 			}
@@ -4192,8 +4217,6 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 		misdn_lib_send_event(bc,EVENT_CONNECT_ACKNOWLEDGE);
 	
 		struct ast_channel *bridged=AST_BRIDGED_P(ch->ast);
-		
-		misdn_lib_echo(bc,0);
 		stop_indicate(ch);
 
 		if (bridged && !strcasecmp(bridged->tech->type,"mISDN")) {
@@ -4379,7 +4402,11 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 				int ret=write(ch->pipe[1], bc->bframe, bc->bframe_len);
 				
 				if (ret<=0) {
-					chan_misdn_log(-1, bc->port, "Write returned <=0 (err=%s)\n",strerror(errno));
+					chan_misdn_log(-1, bc->port, "Write returned <=0 (err=%s) --> hanging up channel\n",strerror(errno));
+
+					stop_bc_tones(ch);
+					hangup_chan(ch);
+					release_chan(bc);
 				}
 			} else {
 				chan_misdn_log(1, bc->port, "Wripe Pipe full!\n");
@@ -4451,6 +4478,9 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 		ch->bc=bc;
 		ch->state = MISDN_CONNECTED;
 
+		ch->hold_info.port=0;
+		ch->hold_info.channel=0;
+		
 		struct ast_channel *hold_ast=AST_BRIDGED_P(ch->ast);
 		
 		if (hold_ast) {
@@ -4545,7 +4575,7 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 		break;
 				
 	default:
-		ast_log(LOG_NOTICE, "Got Unknown Event\n");
+		chan_misdn_log(1,0, "Got Unknown Event\n");
 		break;
 	}
 	
@@ -4771,7 +4801,7 @@ static int misdn_facility_exec(struct ast_channel *chan, void *data)
 		strncpy((char *)ch->bc->fac_out.u.CDeflection.DeflectedToNumber, tok, sizeof(ch->bc->fac_out.u.CDeflection.DeflectedToNumber));
 		misdn_lib_send_event(ch->bc, EVENT_FACILITY);
 	} else {
-		ast_log(LOG_WARNING, "Unknown Facility: %s\n",tok);
+		chan_misdn_log(1, ch->bc->port, "Unknown Facility: %s\n",tok);
 	}
 	
 	return 0;
