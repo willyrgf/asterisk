@@ -637,6 +637,7 @@ static struct sip_pvt {
 	char fromdomain[MAXHOSTNAMELEN];	/*!< Domain to show in the from field */
 	char fromuser[AST_MAX_EXTENSION];	/*!< User to show in the user field */
 	char fromname[AST_MAX_EXTENSION];	/*!< Name to show in the user field */
+	char todnid[MAXHOSTNAMELEN];		/*!< DNID of this call */
 	char tohost[MAXHOSTNAMELEN];		/*!< Host we should put in the "to" field */
 	char language[MAX_LANGUAGE];		/*!< Default language for this call */
 	char musicclass[MAX_MUSICCLASS];	/*!< Music on Hold class */
@@ -5008,16 +5009,29 @@ static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmetho
 	if (p->options && p->options->uri_options)
 		ast_build_string(&invite, &invite_max, ";%s", p->options->uri_options);
 
+	/* This is the request URI, which is the next hop of the call
+		which may or may not be the destination of the call.
+	 */
 	ast_copy_string(p->uri, invite_buf, sizeof(p->uri));
 
-	if (sipmethod == SIP_NOTIFY && !ast_strlen_zero(p->theirtag)) { 
-		/* If this is a NOTIFY, use the From: tag in the subscribe (RFC 3265) */
-		snprintf(to, sizeof(to), "<sip:%s>;tag=%s", p->uri, p->theirtag);
-	} else if (p->options && p->options->vxml_url) {
-		/* If there is a VXML URL append it to the SIP URL */
-		snprintf(to, sizeof(to), "<%s>;%s", p->uri, p->options->vxml_url);
+	/* Check if we have a DNID from the dial string for the To: header */
+	if (!ast_strlen_zero(p->todnid)) {
+		if (!strchr(p->todnid, '@')) {
+			/* We have no domain in the dnid */
+			snprintf(to, sizeof(to), "<sip:%s@%s>;tag=%s", p->todnid, p->tohost, p->theirtag);
+		} else {
+			snprintf(to, sizeof(to), "<sip:%s>;tag=%s", p->todnid, p->theirtag);
+		}
 	} else {
-		snprintf(to, sizeof(to), "<%s>", p->uri);
+		if (sipmethod == SIP_NOTIFY && !ast_strlen_zero(p->theirtag)) { 
+			/* If this is a NOTIFY, use the From: tag in the subscribe (RFC 3265) */
+			snprintf(to, sizeof(to), "<sip:%s>;tag=%s", p->uri, p->theirtag);
+		} else if (p->options && p->options->vxml_url) {
+			/* If there is a VXML URL append it to the SIP URL */
+			snprintf(to, sizeof(to), "<%s>;%s", p->uri, p->options->vxml_url);
+		} else {
+			snprintf(to, sizeof(to), "<%s>", p->uri);
+		}
 	}
 	
 	memset(req, 0, sizeof(struct sip_request));
@@ -11860,6 +11874,7 @@ static struct ast_channel *sip_request_call(const char *type, int format, void *
 	char *ext, *host;
 	char tmp[256];
 	char *dest = data;
+	char *dnid;
 
 	oldformat = format;
 	format &= ((AST_FORMAT_MAX_AUDIO << 1) - 1);
@@ -11883,24 +11898,48 @@ static struct ast_channel *sip_request_call(const char *type, int format, void *
 		return NULL;
 	}
 
+	/* Save the destination, the SIP dial string */
 	ast_copy_string(tmp, dest, sizeof(tmp));
-	host = strchr(tmp, '@');
+
+	/* Find at-sign @ */
+	host = strchr(tmp, '@');	/* Host can be peer name or DNS host name or DNS domain (srv enabled) */
+	/* Old Syntax: SIP/exten@host */
+	/* New Syntax: SIP/exten@host!dnid */
 	if (host) {
 		*host = '\0';
 		host++;
 		ext = tmp;
+		dnid = strchr(tmp, '!');
+		if (dnid) {
+			*dnid++ = '\0';
+		}
 	} else {
+		/* Old Syntax: SIP/host/exten */
+		/* New Syntax: SIP/host/exten!dnid */
 		ext = strchr(tmp, '/');
 		if (ext) {
 			*ext++ = '\0';
 			host = tmp;
-		}
-		else {
+		} else {
+			/* Old Syntax SIP/host */
+			/* New Syntax SIP/host!dnid */
 			host = tmp;
 			ext = NULL;
 		}
+		/* Find DNID */
+		dnid = strchr(ext ? ext : host, '!');
+		if (dnid) {
+			*dnid++ = '\0';
+		}
 	}
 
+
+	/* We now have
+		host = peer name, DNS host name or DNS domain
+		ext = extension (user part of URI)
+		dnid = destination of the call (applies to the To: header)
+	*/
+	ast_copy_string(p->todnid, dnid, sizeof(p->todnid));
 	if (create_addr(p, host)) {
 		*cause = AST_CAUSE_UNREGISTERED;
 		sip_destroy(p);
@@ -11917,7 +11956,8 @@ static struct ast_channel *sip_request_call(const char *type, int format, void *
 	/* We have an extension to call, don't use the full contact here */
 	/* This to enable dialling registered peers with extension dialling,
 	   like SIP/peername/extension 	
-	   SIP/peername will still use the full contact */
+	   SIP/peername will still use the full contact 
+	 */
 	if (ext) {
 		ast_copy_string(p->username, ext, sizeof(p->username));
 		p->fullcontact[0] = 0;	
