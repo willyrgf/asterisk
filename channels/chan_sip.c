@@ -5018,9 +5018,9 @@ static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmetho
 	if (!ast_strlen_zero(p->todnid)) {
 		if (!strchr(p->todnid, '@')) {
 			/* We have no domain in the dnid */
-			snprintf(to, sizeof(to), "<sip:%s@%s>;tag=%s", p->todnid, p->tohost, p->theirtag);
+			snprintf(to, sizeof(to), "<sip:%s@%s>%s%s", p->todnid, p->tohost, ast_strlen_zero(p->theirtag) ? "" : ";tag=", p->theirtag);
 		} else {
-			snprintf(to, sizeof(to), "<sip:%s>;tag=%s", p->todnid, p->theirtag);
+			snprintf(to, sizeof(to), "<sip:%s>%s%s", p->todnid, ast_strlen_zero(p->theirtag) ? "" : ";tag=", p->theirtag);
 		}
 	} else {
 		if (sipmethod == SIP_NOTIFY && !ast_strlen_zero(p->theirtag)) { 
@@ -11901,6 +11901,13 @@ static struct ast_channel *sip_request_call(const char *type, int format, void *
 	/* Save the destination, the SIP dial string */
 	ast_copy_string(tmp, dest, sizeof(tmp));
 
+	/* Find DNID and take it away */
+	dnid = strchr(tmp, '!');
+	if (dnid != NULL) {
+		*dnid++ = '\0';
+		ast_copy_string(p->todnid, dnid, sizeof(p->todnid));
+	}
+
 	/* Find at-sign @ */
 	host = strchr(tmp, '@');	/* Host can be peer name or DNS host name or DNS domain (srv enabled) */
 	/* Old Syntax: SIP/exten@host */
@@ -11909,10 +11916,6 @@ static struct ast_channel *sip_request_call(const char *type, int format, void *
 		*host = '\0';
 		host++;
 		ext = tmp;
-		dnid = strchr(tmp, '!');
-		if (dnid) {
-			*dnid++ = '\0';
-		}
 	} else {
 		/* Old Syntax: SIP/host/exten */
 		/* New Syntax: SIP/host/exten!dnid */
@@ -11926,11 +11929,6 @@ static struct ast_channel *sip_request_call(const char *type, int format, void *
 			host = tmp;
 			ext = NULL;
 		}
-		/* Find DNID */
-		dnid = strchr(ext ? ext : host, '!');
-		if (dnid) {
-			*dnid++ = '\0';
-		}
 	}
 
 
@@ -11939,7 +11937,6 @@ static struct ast_channel *sip_request_call(const char *type, int format, void *
 		ext = extension (user part of URI)
 		dnid = destination of the call (applies to the To: header)
 	*/
-	ast_copy_string(p->todnid, dnid, sizeof(p->todnid));
 	if (create_addr(p, host)) {
 		*cause = AST_CAUSE_UNREGISTERED;
 		sip_destroy(p);
