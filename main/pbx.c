@@ -265,7 +265,8 @@ static struct pbx_builtin {
 	"Answer a channel if ringing",
 	"  Answer([delay]): If the call has not been answered, this application will\n"
 	"answer it. Otherwise, it has no effect on the call. If a delay is specified,\n"
-	"Asterisk will wait this number of milliseconds before answering the call.\n"
+	"Asterisk will wait this number of milliseconds before returning to\n"
+	"the dialplan after answering the call.\n"
 	},
 
 	{ "BackGround", pbx_builtin_background,
@@ -5325,21 +5326,11 @@ static int pbx_builtin_congestion(struct ast_channel *chan, void *data)
 static int pbx_builtin_answer(struct ast_channel *chan, void *data)
 {
 	int delay = 0;
-	int res;
 
-	if (chan->_state == AST_STATE_UP)
-		delay = 0;
-	else if (!ast_strlen_zero(data))
+	if ((chan->_state != AST_STATE_UP) && !ast_strlen_zero(data))
 		delay = atoi(data);
 
-	res = ast_answer(chan);
-	if (res)
-		return res;
-
-	if (delay)
-		res = ast_safe_sleep(chan, delay);
-
-	return res;
+	return __ast_answer(chan, delay);
 }
 
 AST_APP_OPTIONS(resetcdr_opts, {
