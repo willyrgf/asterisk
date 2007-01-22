@@ -58,10 +58,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <sys/stat.h>
 #include <regex.h>
 
-#ifdef HAVE_ZAPTEL
-#include <sys/ioctl.h>
-#include <zaptel/zaptel.h>
-#endif
+#include "asterisk/zapata.h"
 
 #include "asterisk/lock.h"
 #include "asterisk/frame.h" 
@@ -820,7 +817,7 @@ static int iax2_answer(struct ast_channel *c);
 static int iax2_call(struct ast_channel *c, char *dest, int timeout);
 static int iax2_devicestate(void *data);
 static int iax2_digit_begin(struct ast_channel *c, char digit);
-static int iax2_digit_end(struct ast_channel *c, char digit);
+static int iax2_digit_end(struct ast_channel *c, char digit, unsigned int duration);
 static int iax2_do_register(struct iax2_registry *reg);
 static int iax2_fixup(struct ast_channel *oldchannel, struct ast_channel *newchan);
 static int iax2_hangup(struct ast_channel *c);
@@ -962,26 +959,25 @@ static int __schedule_action(void (*func)(void *data), void *data, const char *f
 #define schedule_action(func, data) __schedule_action(func, data, __PRETTY_FUNCTION__)
 #endif
 
+static int send_ping(void *data);
+
 static void __send_ping(void *data)
 {
 	int callno = (long)data;
 	ast_mutex_lock(&iaxsl[callno]);
-	if (iaxs[callno])
+	if (iaxs[callno] && iaxs[callno]->pingid != -1) {
 		send_command(iaxs[callno], AST_FRAME_IAX, IAX_COMMAND_PING, 0, NULL, 0, -1);
+		iaxs[callno]->pingid = ast_sched_add(sched, ping_time * 1000, send_ping, data);
+	}
 	ast_mutex_unlock(&iaxsl[callno]);
 }
 
 static int send_ping(void *data)
 {
-	int callno = (long)data;
-	if (iaxs[callno]) {
 #ifdef SCHED_MULTITHREADED
-		if (schedule_action(__send_ping, data))
+	if (schedule_action(__send_ping, data))
 #endif		
-			__send_ping(data);
-		return 1;
-	} else
-		return 0;
+		__send_ping(data);
 	return 0;
 }
 
@@ -997,27 +993,26 @@ static int get_encrypt_methods(const char *s)
 	return e;
 }
 
+static int send_lagrq(void *data);
+
 static void __send_lagrq(void *data)
 {
 	int callno = (long)data;
 	/* Ping only if it's real not if it's bridged */
 	ast_mutex_lock(&iaxsl[callno]);
-	if (iaxs[callno])
+	if (iaxs[callno] && iaxs[callno]->lagid != -1) {
 		send_command(iaxs[callno], AST_FRAME_IAX, IAX_COMMAND_LAGRQ, 0, NULL, 0, -1);
+		iaxs[callno]->lagid = ast_sched_add(sched, lagrq_time * 1000, send_lagrq, data);
+	}
 	ast_mutex_unlock(&iaxsl[callno]);
 }
 
 static int send_lagrq(void *data)
 {
-	int callno = (long)data;
-	if (iaxs[callno]) {
 #ifdef SCHED_MULTITHREADED
-		if (schedule_action(__send_lagrq, data))
+	if (schedule_action(__send_lagrq, data))
 #endif		
-			__send_lagrq(data);
-		return 1;
-	} else
-		return 0;
+		__send_lagrq(data);
 	return 0;
 }
 
@@ -2481,7 +2476,7 @@ static int iax2_digit_begin(struct ast_channel *c, char digit)
 	return send_command_locked(PTR_TO_CALLNO(c->tech_pvt), AST_FRAME_DTMF_BEGIN, digit, 0, NULL, 0, -1);
 }
 
-static int iax2_digit_end(struct ast_channel *c, char digit)
+static int iax2_digit_end(struct ast_channel *c, char digit, unsigned int duration)
 {
 	return send_command_locked(PTR_TO_CALLNO(c->tech_pvt), AST_FRAME_DTMF_END, digit, 0, NULL, 0, -1);
 }
@@ -6357,8 +6352,8 @@ static int socket_process_meta(int packet_len, struct ast_iax2_meta_hdr *meta, s
 		return 1;
 
 	if (packet_len < (sizeof(*meta) + sizeof(*mth))) {
-		ast_log(LOG_WARNING, "midget meta trunk packet received (%d of %zd min)\n", packet_len,
-			sizeof(*meta) + sizeof(*mth));
+		ast_log(LOG_WARNING, "midget meta trunk packet received (%d of %d min)\n", packet_len,
+			(int) (sizeof(*meta) + sizeof(*mth)));
 		return 1;
 	}
 	mth = (struct ast_iax2_meta_trunk_hdr *)(meta->data);
@@ -6528,7 +6523,7 @@ static int socket_process(struct iax2_thread *thread)
 	memcpy(&sin, &thread->iosin, sizeof(sin));
 
 	if (res < sizeof(*mh)) {
-		ast_log(LOG_WARNING, "midget packet received (%d of %zd min)\n", res, sizeof(*mh));
+		ast_log(LOG_WARNING, "midget packet received (%d of %d min)\n", res, (int) sizeof(*mh));
 		return 1;
 	}
 	if ((vh->zeros == 0) && (ntohs(vh->callno) & 0x8000)) {
@@ -6689,7 +6684,7 @@ static int socket_process(struct iax2_thread *thread)
 		}
 		/* A full frame */
 		if (res < sizeof(*fh)) {
-			ast_log(LOG_WARNING, "midget packet received (%d of %zd min)\n", res, sizeof(*fh));
+			ast_log(LOG_WARNING, "midget packet received (%d of %d min)\n", res, (int) sizeof(*fh));
 			ast_mutex_unlock(&iaxsl[fr->callno]);
 			return 1;
 		}

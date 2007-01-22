@@ -140,10 +140,11 @@ struct ast_rtp {
 	char resp;
 	unsigned int lasteventendseqn;
 	int dtmfcount;
-	unsigned int dtmfduration;
+	unsigned int dtmfsamples;
 	/* DTMF Transmission Variables */
 	unsigned int lastdigitts;
-	char send_digit;
+	char sending_digit;	/* boolean - are we sending digits */
+	char send_digit;	/* digit we are sending */
 	int send_payload;
 	int send_duration;
 	int nat;
@@ -430,14 +431,14 @@ static int stun_handle_packet(int s, struct sockaddr_in *src, unsigned char *dat
 	
 	if (len < sizeof(struct stun_header)) {
 		if (option_debug)
-			ast_log(LOG_DEBUG, "Runt STUN packet (only %zd, wanting at least %zd)\n", len, sizeof(struct stun_header));
+			ast_log(LOG_DEBUG, "Runt STUN packet (only %d, wanting at least %d)\n", (int) len, (int) sizeof(struct stun_header));
 		return -1;
 	}
 	if (stundebug)
 		ast_verbose("STUN Packet, msg %s (%04x), length: %d\n", stun_msg2str(ntohs(hdr->msgtype)), ntohs(hdr->msgtype), ntohs(hdr->msglen));
 	if (ntohs(hdr->msglen) > len - sizeof(struct stun_header)) {
 		if (option_debug)
-			ast_log(LOG_DEBUG, "Scrambled STUN packet length (got %d, expecting %zd)\n", ntohs(hdr->msglen), len - sizeof(struct stun_header));
+			ast_log(LOG_DEBUG, "Scrambled STUN packet length (got %d, expecting %d)\n", ntohs(hdr->msglen), (int)(len - sizeof(struct stun_header)));
 	} else
 		len = ntohs(hdr->msglen);
 	data += sizeof(struct stun_header);
@@ -445,13 +446,13 @@ static int stun_handle_packet(int s, struct sockaddr_in *src, unsigned char *dat
 	while(len) {
 		if (len < sizeof(struct stun_attr)) {
 			if (option_debug)
-				ast_log(LOG_DEBUG, "Runt Attribute (got %zd, expecting %zd)\n", len, sizeof(struct stun_attr));
+				ast_log(LOG_DEBUG, "Runt Attribute (got %d, expecting %d)\n", (int)len, (int) sizeof(struct stun_attr));
 			break;
 		}
 		attr = (struct stun_attr *)data;
 		if (ntohs(attr->len) > len) {
 			if (option_debug)
-				ast_log(LOG_DEBUG, "Inconsistent Attribute (length %d exceeds remaining msg len %zd)\n", ntohs(attr->len), len);
+				ast_log(LOG_DEBUG, "Inconsistent Attribute (length %d exceeds remaining msg len %d)\n", ntohs(attr->len), (int)len);
 			break;
 		}
 		if (stun_process_attr(&st, attr)) {
@@ -618,7 +619,7 @@ static struct ast_frame *send_dtmf(struct ast_rtp *rtp, enum ast_frame_type type
 		if (option_debug)
 			ast_log(LOG_DEBUG, "Ignore potential DTMF echo from '%s'\n", ast_inet_ntoa(rtp->them.sin_addr));
 		rtp->resp = 0;
-		rtp->dtmfduration = 0;
+		rtp->dtmfsamples = 0;
 		return &ast_null_frame;
 	}
 	if (option_debug)
@@ -731,14 +732,14 @@ static struct ast_frame *process_cisco_dtmf(struct ast_rtp *rtp, unsigned char *
 		/* Why we should care on DTMF compensation at reception? */
 		if (!ast_test_flag(rtp, FLAG_DTMF_COMPENSATE)) {
 			f = send_dtmf(rtp, AST_FRAME_DTMF_BEGIN);
-			rtp->dtmfduration = 0;
+			rtp->dtmfsamples = 0;
 		}
 	} else if ((rtp->resp == resp) && !power) {
 		f = send_dtmf(rtp, AST_FRAME_DTMF_END);
-		f->samples = rtp->dtmfduration * 8;
+		f->samples = rtp->dtmfsamples * 8;
 		rtp->resp = 0;
 	} else if (rtp->resp == resp)
-		rtp->dtmfduration += 20 * 8;
+		rtp->dtmfsamples += 20 * 8;
 	rtp->dtmfcount = dtmftimeout;
 	return f;
 }
@@ -758,18 +759,18 @@ static struct ast_frame *process_rfc2833(struct ast_rtp *rtp, unsigned char *dat
 {
 	unsigned int event;
 	unsigned int event_end;
-	unsigned int duration;
+	unsigned int samples;
 	char resp = 0;
 	struct ast_frame *f = NULL;
 
-	/* Figure out event, event end, and duration */
+	/* Figure out event, event end, and samples */
 	event = ntohl(*((unsigned int *)(data)));
 	event >>= 24;
 	event_end = ntohl(*((unsigned int *)(data)));
 	event_end <<= 8;
 	event_end >>= 24;
-	duration = ntohl(*((unsigned int *)(data)));
-	duration &= 0xFFFF;
+	samples = ntohl(*((unsigned int *)(data)));
+	samples &= 0xFFFF;
 
 	/* Print out debug if turned on */
 	if (rtpdebug || option_debug > 2)
@@ -794,19 +795,19 @@ static struct ast_frame *process_rfc2833(struct ast_rtp *rtp, unsigned char *dat
 			f = send_dtmf(rtp, AST_FRAME_DTMF_BEGIN);
 	} else if (event_end & 0x80 && rtp->lasteventendseqn != seqno && rtp->resp) {
 		f = send_dtmf(rtp, AST_FRAME_DTMF_END);
-		f->samples = duration;
+		f->len = ast_tvdiff_ms(ast_samp2tv(samples, 8000), ast_tv(0, 0)); /* XXX hard coded 8kHz */
 		rtp->resp = 0;
 		rtp->lasteventendseqn = seqno;
 	} else if (ast_test_flag(rtp, FLAG_DTMF_COMPENSATE) && event_end & 0x80 && rtp->lasteventendseqn != seqno) {
 		rtp->resp = resp;
 		f = send_dtmf(rtp, AST_FRAME_DTMF_END);
-		f->samples = duration;
+		f->len = ast_tvdiff_ms(ast_samp2tv(samples, 8000), ast_tv(0, 0)); /* XXX hard coded 8kHz */
 		rtp->resp = 0;
 		rtp->lasteventendseqn = seqno;
 	}
 
 	rtp->dtmfcount = dtmftimeout;
-	rtp->dtmfduration = duration;
+	rtp->dtmfsamples = samples;
 
 	return f;
 }
@@ -1115,11 +1116,11 @@ static int bridge_p2p_rtp_write(struct ast_rtp *rtp, struct ast_rtp *bridged, un
 				ast_log(LOG_DEBUG, "RTP NAT: Can't write RTP to private address %s:%d, waiting for other end to send audio...\n", ast_inet_ntoa(bridged->them.sin_addr), ntohs(bridged->them.sin_port));
 			ast_set_flag(bridged, FLAG_NAT_INACTIVE_NOWARN);
 		}
-		return -1;
+		return 0;
 	} else if (rtp_debug_test_addr(&bridged->them))
 			ast_verbose("Sent RTP P2P packet to %s:%d (type %-2.2d, len %-6.6u)\n", ast_inet_ntoa(bridged->them.sin_addr), ntohs(bridged->them.sin_port), bridged_payload, len - hdrlen);
 
-	return -1;
+	return 0;
 }
 
 struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
@@ -1142,7 +1143,7 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 	struct ast_rtp *bridged = NULL;
 	
 	/* If time is up, kill it */
-	if (rtp->send_digit)
+	if (rtp->sending_digit)
 		ast_rtp_senddigit_continuation(rtp);
 
 	len = sizeof(sin);
@@ -2064,7 +2065,7 @@ void ast_rtp_reset(struct ast_rtp *rtp)
 	rtp->lasttxformat = 0;
 	rtp->lastrxformat = 0;
 	rtp->dtmfcount = 0;
-	rtp->dtmfduration = 0;
+	rtp->dtmfsamples = 0;
 	rtp->seqno = 0;
 	rtp->rxseqno = 0;
 }
@@ -2203,6 +2204,7 @@ int ast_rtp_senddigit_begin(struct ast_rtp *rtp, char digit)
 	}
 
 	/* Since we received a begin, we can safely store the digit and disable any compensation */
+	rtp->sending_digit = 1;
 	rtp->send_digit = digit;
 	rtp->send_payload = payload;
 
@@ -2294,6 +2296,7 @@ int ast_rtp_senddigit_end(struct ast_rtp *rtp, char digit)
 				    ast_inet_ntoa(rtp->them.sin_addr),
 				    ntohs(rtp->them.sin_port), rtp->send_payload, rtp->seqno, rtp->lastdigitts, res - hdrlen);
 	}
+	rtp->sending_digit = 0;
 	rtp->send_digit = 0;
 	/* Increment lastdigitts */
 	rtp->lastdigitts += 960;
@@ -2928,7 +2931,7 @@ static enum ast_bridge_result bridge_native_loop(struct ast_channel *c0, struct 
 			if ((fr->subclass == AST_CONTROL_HOLD) ||
 			    (fr->subclass == AST_CONTROL_UNHOLD) ||
 			    (fr->subclass == AST_CONTROL_VIDUPDATE)) {
-				ast_indicate(other, fr->subclass);
+				ast_indicate_data(other, fr->subclass, fr->data, fr->datalen);
 				ast_frfree(fr);
 			} else {
 				*fo = fr;
@@ -3142,7 +3145,7 @@ static enum ast_bridge_result bridge_p2p_loop(struct ast_channel *c0, struct ast
 					p0_callback = p2p_callback_enable(c0, p0, &p0_iod[0]);
 					p1_callback = p2p_callback_enable(c1, p1, &p1_iod[0]);
 				}
-				ast_indicate(other, fr->subclass);
+				ast_indicate_data(other, fr->subclass, fr->data, fr->datalen);
 				ast_frfree(fr);
 			} else {
 				*fo = fr;
@@ -3275,6 +3278,22 @@ enum ast_bridge_result ast_rtp_bridge(struct ast_channel *c0, struct ast_channel
 
 	if (ast_test_flag(p1, FLAG_HAS_DTMF) && (flags & AST_BRIDGE_DTMF_CHANNEL_1)) {
 		ast_set_flag(p1, FLAG_P2P_NEED_DTMF);
+		audio_p1_res = AST_RTP_TRY_PARTIAL;
+	}
+
+	/* If both sides are not using the same method of DTMF transmission 
+	 * (ie: one is RFC2833, other is INFO... then we can not do direct media. 
+	 * --------------------------------------------------
+	 * | DTMF Mode |  HAS_DTMF  |  Accepts Begin Frames |
+	 * |-----------|------------|-----------------------|
+	 * | Inband    | False      | True                  |
+	 * | RFC2833   | True       | True                  |
+	 * | SIP Info  | False      | False                 |
+	 * --------------------------------------------------
+	 */
+	if ( (ast_test_flag(p0, FLAG_HAS_DTMF) != ast_test_flag(p1, FLAG_HAS_DTMF)) ||
+		 (!c0->tech->send_digit_begin != !c1->tech->send_digit_begin)) {
+		audio_p0_res = AST_RTP_TRY_PARTIAL;
 		audio_p1_res = AST_RTP_TRY_PARTIAL;
 	}
 

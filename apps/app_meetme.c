@@ -38,8 +38,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
-#include <sys/ioctl.h>
-#include <zaptel/zaptel.h>
+
+#include "asterisk/zapata.h"
 
 #include "asterisk/lock.h"
 #include "asterisk/file.h"
@@ -161,7 +161,7 @@ enum {
 enum {
 	OPT_ARG_WAITMARKED = 0,
 	OPT_ARG_ARRAY_SIZE = 1,
-} meetme_option_args;
+};
 
 AST_APP_OPTIONS(meetme_opts, {
 	AST_APP_OPTION('A', CONFFLAG_MARKEDUSER ),
@@ -297,7 +297,6 @@ static const char *descripslat =
 "other participants in the conference, all member stations are invited into\n"
 "the bridge.\n";
 
-#define CONFIG_FILE_NAME "meetme.conf"
 #define CONFIG_FILE_NAME_SLA "sla.conf"
 
 /*! \brief The MeetMe Conference object */
@@ -379,9 +378,6 @@ struct ast_sla_box {
 	ASTOBJ_CONTAINER_COMPONENTS(struct ast_sla);
 } slas;
 
-static int audio_buffers;			/*!< The number of audio buffers to be allocated on pseudo channels
-						   when in a conference
-						*/
 /*! The number of audio buffers to be allocated on pseudo channels
  *  when in a conference */
 static int audio_buffers;
@@ -1933,7 +1929,7 @@ bailoutandtrynormal:
 				      user->user_no,
 				      S_OR(user->chan->cid.cid_num, "<unknown>"),
 				      S_OR(user->chan->cid.cid_name, "<unknown>"),
-				      (now - user->jointime));
+				      (long)(now - user->jointime));
 		}
 
 		conf->users--;
