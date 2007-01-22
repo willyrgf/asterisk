@@ -235,7 +235,7 @@ static int h323_do_reload(void);
 
 static struct ast_channel *oh323_request(const char *type, int format, void *data, int *cause);
 static int oh323_digit_begin(struct ast_channel *c, char digit);
-static int oh323_digit_end(struct ast_channel *c, char digit);
+static int oh323_digit_end(struct ast_channel *c, char digit, unsigned int duration);
 static int oh323_call(struct ast_channel *c, char *dest, int timeout);
 static int oh323_hangup(struct ast_channel *c);
 static int oh323_answer(struct ast_channel *c);
@@ -548,7 +548,7 @@ static int oh323_digit_begin(struct ast_channel *c, char digit)
  * Send (play) the specified digit to the channel.
  *
  */
-static int oh323_digit_end(struct ast_channel *c, char digit)
+static int oh323_digit_end(struct ast_channel *c, char digit, unsigned int duration)
 {
 	struct oh323_pvt *pvt = (struct oh323_pvt *) c->tech_pvt;
 	char *token;
@@ -1425,7 +1425,11 @@ static struct oh323_user *build_user(char *name, struct ast_variable *v, struct 
 			}
 		} else if (!strcasecmp(v->name, "permit") ||
 					!strcasecmp(v->name, "deny")) {
-			user->ha = ast_append_ha(v->name, v->value, user->ha, NULL);
+			int ha_error = 0;
+
+			user->ha = ast_append_ha(v->name, v->value, user->ha, &ha_error);
+			if (ha_error)
+				ast_log(LOG_ERROR, "Bad ACL entry in configuration line %d : %s\n", v->lineno, v->value);
 		}
 	}
 	if (!user->options.dtmfmode)
@@ -1529,7 +1533,11 @@ static struct oh323_peer *build_peer(const char *name, struct ast_variable *v, s
 			peer->addr.sin_port = htons(atoi(v->value));
 		} else if (!strcasecmp(v->name, "permit") ||
 					!strcasecmp(v->name, "deny")) {
-			peer->ha = ast_append_ha(v->name, v->value, peer->ha);
+			int ha_error = 0;
+
+			peer->ha = ast_append_ha(v->name, v->value, peer->ha, &ha_error);
+			if (ha_error)
+				ast_log(LOG_ERROR, "Bad ACL entry in configuration line %d : %s\n", v->lineno, v->value);
 		} else if (!strcasecmp(v->name, "mailbox")) {
 			ast_copy_string(peer->mailbox, v->value, sizeof(peer->mailbox));
 		}

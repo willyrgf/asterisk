@@ -678,13 +678,11 @@ static void apply_options_full(struct ast_vm_user *retval, struct ast_variable *
 	struct ast_variable *tmp;
 	tmp = var;
 	while (tmp) {
-		ast_log(LOG_DEBUG, "Name: %s Value: %s\n", tmp->name, tmp->value);
-		if (!strcasecmp(tmp->name, "password") || !strcasecmp(tmp->name, "secret")) {
+		if (!strcasecmp(tmp->name, "vmpassword")) {
 			ast_copy_string(retval->password, tmp->value, sizeof(retval->password));
-		} else if  (!strcasecmp(tmp->name, "secret")) {
-			/* dont let secret override vmpassword */
-			if ((strlen(retval->password) == 0))
-				ast_copy_string(retval->password, tmp->value, sizeof(retval->password));	
+		} else if (!strcasecmp(tmp->name, "secret") || !strcasecmp(tmp->name, "password")) { /* don't overwrite vmpassword if it exists */
+			if (ast_strlen_zero(retval->password))
+				ast_copy_string(retval->password, tmp->value, sizeof(retval->password));
 		} else if (!strcasecmp(tmp->name, "uniqueid")) {
 			ast_copy_string(retval->uniqueid, tmp->value, sizeof(retval->uniqueid));
 		} else if (!strcasecmp(tmp->name, "pager")) {
@@ -695,6 +693,12 @@ static void apply_options_full(struct ast_vm_user *retval, struct ast_variable *
 			ast_copy_string(retval->fullname, tmp->value, sizeof(retval->fullname));
 		} else if (!strcasecmp(tmp->name, "context")) {
 			ast_copy_string(retval->context, tmp->value, sizeof(retval->context));
+#ifdef IMAP_STORAGE
+		} else if (!strcasecmp(tmp->name, "imapuser")) {
+			ast_copy_string(retval->imapuser, tmp->value, sizeof(retval->imapuser));
+		} else if (!strcasecmp(tmp->name, "imappassword")) {
+			ast_copy_string(retval->imappassword, tmp->value, sizeof(retval->imappassword));
+#endif
 		} else
 			apply_option(retval, tmp->name, tmp->value);
 		tmp = tmp->next;
@@ -784,7 +788,6 @@ static void vm_change_password(struct ast_vm_user *vmu, const char *newpassword)
 	struct ast_category *cat=NULL;
 	char *category=NULL, *value=NULL, *new=NULL;
 	const char *tmp=NULL;
-	int len;
 					
 	if (!change_password_realtime(vmu, newpassword))
 		return;
@@ -803,14 +806,8 @@ static void vm_change_password(struct ast_vm_user *vmu, const char *newpassword)
 					ast_log(LOG_WARNING, "variable has bad format.\n");
 					break;
 				}
-				len  = (strlen(value) + strlen(newpassword));
-				
-				if (!(new = ast_calloc(1,len))) {
-					ast_log(LOG_WARNING, "Memory Allocation Failed.\n");
-					break;
-				}
+				new = alloca((strlen(value)+strlen(newpassword)+1));
 				sprintf(new,"%s%s", newpassword, value);
-	
 				if (!(cat = ast_category_get(cfg, category))) {
 					ast_log(LOG_WARNING, "Failed to get category structure.\n");
 					break;
@@ -822,29 +819,29 @@ static void vm_change_password(struct ast_vm_user *vmu, const char *newpassword)
 		reset_user_pw(vmu->context, vmu->mailbox, newpassword);
 		ast_copy_string(vmu->password, newpassword, sizeof(vmu->password));
 		config_text_file_save(VOICEMAIL_CONFIG, cfg, "AppVoicemail");
-		if (new)
-			free(new);
 	}
 	category = NULL;
 	var = NULL;
 	/* check users.conf and update the password stored for the mailbox*/
 	/* if no vmpassword entry exists create one. */
 	if ((cfg = ast_config_load_with_comments("users.conf"))) {
-		ast_log(LOG_WARNING, "we are looking for %s\n", vmu->mailbox);
+		if (option_debug > 3)
+			ast_log(LOG_DEBUG, "we are looking for %s\n", vmu->mailbox);
 		while ((category = ast_category_browse(cfg, category))) {
-			ast_log(LOG_WARNING, "users.conf: %s\n", category);
+			if (option_debug > 3)
+				ast_log(LOG_DEBUG, "users.conf: %s\n", category);
 			if (!strcasecmp(category, vmu->mailbox)) {
 				if (!(tmp = ast_variable_retrieve(cfg, category, "vmpassword"))) {
-					ast_log(LOG_WARNING, "looks like we need to make vmpassword!\n");
+					if (option_debug > 3)
+						ast_log(LOG_DEBUG, "looks like we need to make vmpassword!\n");
 					var = ast_variable_new("vmpassword", newpassword);
 				} 
-				if (!(new = ast_calloc(1,strlen(newpassword)))) {
-					ast_log(LOG_WARNING, "Memory Allocation Failed.\n");
-					break;
-				} 
+				new = alloca(strlen(newpassword)+1);
 				sprintf(new, "%s", newpassword);
 				if (!(cat = ast_category_get(cfg, category))) {
-					ast_log(LOG_WARNING, "failed to get category!\n");
+					if (option_debug > 3)
+						ast_log(LOG_DEBUG, "failed to get category!\n");
+					break;
 				}
 				if (!var)		
 					ast_variable_update(cat, "vmpassword", new, NULL);
@@ -856,10 +853,7 @@ static void vm_change_password(struct ast_vm_user *vmu, const char *newpassword)
 		reset_user_pw(vmu->context, vmu->mailbox, newpassword);	
 		ast_copy_string(vmu->password, newpassword, sizeof(vmu->password));
 		config_text_file_save("users.conf", cfg, "AppVoicemail");
-		if (new) 
-			free(new);
 	}
-
 }
 
 static void vm_change_password_shell(struct ast_vm_user *vmu, char *newpassword)
@@ -1074,7 +1068,7 @@ static int retrieve_file(char *dir, int msgnum)
 			}
 			if (!strcasecmp(coltitle, "recording")) {
 				off_t offset;
-				res = SQLGetData(stmt, x + 1, SQL_BINARY, NULL, 0, &colsize2);
+				res = SQLGetData(stmt, x + 1, SQL_BINARY, rowdata, 0, &colsize2);
 				fdlen = colsize2;
 				if (fd > -1) {
 					char tmp[1]="";
@@ -1086,15 +1080,14 @@ static int retrieve_file(char *dir, int msgnum)
 					}
 					/* Read out in small chunks */
 					for (offset = 0; offset < colsize2; offset += CHUNKSIZE) {
-						/* +1 because SQLGetData likes null-terminating binary data */
-						if ((fdm = mmap(NULL, CHUNKSIZE + 1, PROT_READ | PROT_WRITE, MAP_SHARED, fd, offset)) == (void *)-1) {
+						if ((fdm = mmap(NULL, CHUNKSIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, offset)) == (void *)-1) {
 							ast_log(LOG_WARNING, "Could not mmap the output file: %s (%d)\n", strerror(errno), errno);
 							SQLFreeHandle(SQL_HANDLE_STMT, stmt);
 							ast_odbc_release_obj(obj);
 							goto yuck;
 						} else {
-							res = SQLGetData(stmt, x + 1, SQL_BINARY, fdm, CHUNKSIZE + 1, NULL);
-							munmap(fdm, 0);
+							res = SQLGetData(stmt, x + 1, SQL_BINARY, fdm, CHUNKSIZE, NULL);
+							munmap(fdm, CHUNKSIZE);
 							if ((res != SQL_SUCCESS) && (res != SQL_SUCCESS_WITH_INFO)) {
 								ast_log(LOG_WARNING, "SQL Get Data error!\n[%s]\n\n", sql);
 								unlink(full_fn);
@@ -1992,12 +1985,14 @@ static void make_email_file(FILE *p, char *srcemail, struct ast_vm_user *vmu, in
 		create_dirpath(tmpdir, sizeof(tmpdir), vmu->context, vmu->mailbox, "tmp");
 		snprintf(newtmp, sizeof(newtmp), "%s/XXXXXX", tmpdir);
 		tmpfd = mkstemp(newtmp);
-		ast_log(LOG_DEBUG, "newtmp: %s\n", newtmp);
+		if (option_debug > 2)
+			ast_log(LOG_DEBUG, "newtmp: %s\n", newtmp);
 		if (vmu->volgain < -.001 || vmu->volgain > .001) {
 			snprintf(tmpcmd, sizeof(tmpcmd), "sox -v %.4f %s.%s %s.%s", vmu->volgain, attach, format, newtmp, format);
 			ast_safe_system(tmpcmd);
 			attach = newtmp;
-			ast_log(LOG_DEBUG, "VOLGAIN: Stored at: %s.%s - Level: %.4f - Mailbox: %s\n", attach, format, vmu->volgain, mailbox);
+			if (option_debug > 2)
+				ast_log(LOG_DEBUG, "VOLGAIN: Stored at: %s.%s - Level: %.4f - Mailbox: %s\n", attach, format, vmu->volgain, mailbox);
 		}
 		fprintf(p, "--%s\r\n", bound);
 		fprintf(p, "Content-Type: %s%s; name=\"msg%04d.%s\"\r\n", ctype, format, msgnum, format);
@@ -2007,7 +2002,7 @@ static void make_email_file(FILE *p, char *srcemail, struct ast_vm_user *vmu, in
 		snprintf(fname, sizeof(fname), "%s.%s", attach, format);
 		base_encode(fname, p);
 		/* only attach if necessary */
-		if (imap && strcmp(format, "gsm")) {
+		if (imap && !strcmp(format, "gsm")) {
 			fprintf(p, "--%s\r\n", bound);
 			fprintf(p, "Content-Type: audio/x-gsm; name=\"msg%04d.%s\"\r\n", msgnum, format);
 			fprintf(p, "Content-Transfer-Encoding: base64\r\n");
@@ -2034,7 +2029,8 @@ static int sendmail(char *srcemail, struct ast_vm_user *vmu, int msgnum, char *c
 	}
 	if (!strcmp(format, "wav49"))
 		format = "WAV";
-	ast_log(LOG_DEBUG, "Attaching file '%s', format '%s', uservm is '%d', global is %d\n", attach, format, attach_user_voicemail, ast_test_flag((&globalflags), VM_ATTACH));
+	if (option_debug > 2)
+		ast_log(LOG_DEBUG, "Attaching file '%s', format '%s', uservm is '%d', global is %d\n", attach, format, attach_user_voicemail, ast_test_flag((&globalflags), VM_ATTACH));
 	/* Make a temporary file instead of piping directly to sendmail, in case the mail
 	   command hangs */
 	if ((p = vm_mkftemp(tmp)) == NULL) {
@@ -4612,8 +4608,9 @@ static int play_message(struct ast_channel *chan, struct ast_vm_user *vmu, struc
 #ifdef IMAP_STORAGE
 static void imap_mailbox_name(char *spec, struct vm_state *vms, int box, int use_folder)
 {
-	char tmp[256];
-	
+	char tmp[256], *t = tmp;
+	size_t left = sizeof(tmp);
+
 	if (box == 1) {
 		ast_copy_string(vms->curbox, mbox(0), sizeof(vms->curbox));
 		sprintf(vms->vmbox, "vm-%s", mbox(1));
@@ -4622,11 +4619,20 @@ static void imap_mailbox_name(char *spec, struct vm_state *vms, int box, int use
 		snprintf(vms->vmbox, sizeof(vms->vmbox), "vm-%s", vms->curbox);
 	}
 
-	if (strlen(authuser) > 0) {
-		snprintf(tmp, sizeof(tmp), "{%s:%s/imap/authuser=%s/%s/user=%s}",imapserver,imapport,authuser,imapflags,vms->imapuser);
-	} else {
-		snprintf(tmp, sizeof(tmp), "{%s:%s/imap/%s/user=%s}",imapserver,imapport,imapflags,vms->imapuser);
-	}
+	/* Build up server information */
+	ast_build_string(&t, &left, "{%s:%s/imap", imapserver, imapport);
+
+	/* Add authentication user if present */
+	if (!ast_strlen_zero(authuser))
+		ast_build_string(&t, &left, "/%s", authuser);
+
+	/* Add flags if present */
+	if (!ast_strlen_zero(imapflags))
+		ast_build_string(&t, &left, "/%s", imapflags);
+
+	/* End with username */
+	ast_build_string(&t, &left, "/user=%s}", vms->imapuser);
+
 	if(box == 0 || box == 1)
 		sprintf(spec, "%s%s", tmp, use_folder? imapfolder: "INBOX");
 	else
@@ -4646,7 +4652,8 @@ static int init_mailstream(struct vm_state *vms, int box)
 	if(option_debug > 2)
 		ast_log (LOG_DEBUG,"vm_state user is:%s\n",vms->imapuser);
 	if (vms->mailstream == NIL || !vms->mailstream) {
-		ast_log (LOG_DEBUG,"mailstream not set.\n");
+		if (option_debug)
+			ast_log (LOG_DEBUG,"mailstream not set.\n");
 	} else {
 		stream = vms->mailstream;
 	}
@@ -6404,7 +6411,8 @@ static int vm_execmain(struct ast_channel *chan, void *data)
 		if(option_debug > 2)
 			ast_log(LOG_DEBUG, "Checking quotas: comparing %u to %u\n",vms.quota_usage,vms.quota_limit);
 		if (vms.quota_limit && vms.quota_usage >= vms.quota_limit) {
-			ast_log(LOG_DEBUG, "*** QUOTA EXCEEDED!!\n");
+			if (option_debug)
+				ast_log(LOG_DEBUG, "*** QUOTA EXCEEDED!!\n");
 			cmd = ast_play_and_wait(chan, "vm-mailboxfull");
 		}
 #endif
@@ -8404,6 +8412,28 @@ static void status(MAILSTREAM *stream)
 }
 #endif
 
+static struct ast_vm_user *find_user_realtime_imapuser(const char *imapuser)
+{
+	struct ast_variable *var;
+	struct ast_vm_user *vmu;
+
+	vmu = ast_calloc(1, sizeof *vmu);
+	if (!vmu)
+		return NULL;
+	ast_set_flag(vmu, VM_ALLOCED);
+	populate_defaults(vmu);
+
+	var = ast_load_realtime("voicemail", "imapuser", imapuser, NULL);
+	if (var) {
+		apply_options_full(vmu, var);
+		ast_variables_destroy(var);
+		return vmu;
+	} else {
+		free(vmu);
+		return NULL;
+	}
+}
+
 /* Interfaces to C-client */
 
 void mm_exists(MAILSTREAM * stream, unsigned long number)
@@ -8537,6 +8567,12 @@ void mm_login(NETMBX * mb, char *user, char *pwd, long trial)
 			if(!strcasecmp(mb->user, vmu->imapuser)) {
 				ast_copy_string(pwd, vmu->imappassword, MAILTMPLEN);
 				break;
+			}
+		}
+		if (!vmu) {
+			if ((vmu = find_user_realtime_imapuser(mb->user))) {
+				ast_copy_string(pwd, vmu->imappassword, MAILTMPLEN);
+				free_user(vmu);
 			}
 		}
 	}
