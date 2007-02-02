@@ -1,7 +1,7 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 1999 - 2006, Digium, Inc.
+ * Copyright (C) 1999 - 2007, Digium, Inc.
  * and Edvina AB, Sollentuna, Sweden (chan_sip3 changes/additions)
  *
  * Mark Spencer <markster@digium.com>
@@ -60,7 +60,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/module.h"
 #include "asterisk/pbx.h"
 #include "asterisk/options.h"
-#include "asterisk/lock.h"
 #include "asterisk/sched.h"
 #include "asterisk/io.h"
 #include "asterisk/acl.h"
@@ -71,7 +70,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/musiconhold.h"
 #include "asterisk/dsp.h"
 #include "asterisk/features.h"
-#include "asterisk/acl.h"
 #include "asterisk/srv.h"
 #include "asterisk/astdb.h"
 #include "asterisk/causes.h"
@@ -86,6 +84,81 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/compiler.h"
 #include "sip3.h"
 #include "sip3funcs.h"
+
+/*! \brief Add header to SIP message */
+GNURK int add_header(struct sip_request *req, const char *var, const char *value)
+{
+	int maxlen = req->data_size - 4 - req->len; /* 4 bytes are for two \r\n ? */
+
+	if (req->headers == SIP_MAX_HEADERS) {
+		ast_log(LOG_WARNING, "Out of SIP header space\n");
+		return -1;
+	}
+
+	if (req->lines) {
+		ast_log(LOG_WARNING, "Can't add more headers when lines have been added\n");
+		return -1;
+	}
+
+	if (maxlen <= 0) {
+		ast_log(LOG_WARNING, "Out of space, can't add anymore (%s:%s)\n", var, value);
+		if (option_debug > 2)
+			ast_log(LOG_DEBUG, "    ==== Req->len %d, req->data size %d Maxlen %d\n", req->len, (int) req->data_size, maxlen);
+		return -1;
+	}
+
+	req->header[req->headers] = req->data + req->len;
+
+	if (global.compactheaders)
+		var = find_alias(var, var);
+
+	snprintf(req->header[req->headers], maxlen, "%s: %s\r\n", var, value);
+	req->len += strlen(req->header[req->headers]);
+	req->headers++;
+	if (req->headers < SIP_MAX_HEADERS)
+		req->headers++;
+	else
+		ast_log(LOG_WARNING, "Out of SIP header space... Will generate broken SIP message\n");
+
+	return 0;	
+}
+
+
+/*! \brief add a blank line if no body */
+GNURK void add_blank(struct sip_request *req)
+{
+	if (!req->lines) {
+		/* Add extra empty return. add_header() reserves 4 bytes so cannot be truncated */
+		snprintf(req->data + req->len, req->data_size - req->len, "\r\n");
+		req->len += strlen(req->data + req->len);
+	}
+}
+
+/*! \brief Initialize SIP response, based on SIP request */
+GNURK int init_resp(struct sip_request *resp, const char *msg)
+{
+	/* Initialize a response */
+	resp->method = SIP_RESPONSE;
+	resp->header[0] = resp->data;
+	snprintf(resp->header[0], resp->data_size, "SIP/2.0 %s\r\n", msg);
+	resp->len = strlen(resp->header[0]);
+	resp->headers++;
+	return 0;
+}
+
+/*! \brief Initialize SIP request */
+GNURK int init_req(struct sip_request *req, int sipmethod, const char *recip)
+{
+	/* Initialize a request */
+        req->method = sipmethod;
+	if (option_debug > 3)
+		ast_log(LOG_DEBUG,"!!!!!! Size of request data in init_req: %d\n", (int) req->data_size);
+	req->header[0] = req->data;
+	snprintf(req->header[0], req->data_size, "%s %s SIP/2.0\r\n", sip_method2txt(sipmethod), recip);
+	req->len = strlen(req->header[0]);
+	req->headers++;
+	return 0;
+}
 
 /*! \brief Build SIP Call-ID value for a non-REGISTER transaction */
 void build_callid_pvt(struct sip_dialog *pvt)
@@ -110,6 +183,14 @@ void append_date(struct sip_request *req)
 	add_header(req, "Date", tmpdat);
 }
 
+/*! \brief Append Max-Forwards header to request */
+void append_maxforwards(struct sip_request *req)
+{
+	char buf[4];
+	snprintf(buf, sizeof(buf), "%d", global.maxforwards);
+	add_header(req, "Max-Forwards", buf);
+}
+
 /*! \brief Add text body to SIP message */
 int add_text(struct sip_request *req, const char *text)
 {
@@ -121,12 +202,11 @@ int add_text(struct sip_request *req, const char *text)
 }
 
 /*! \brief Add DTMF INFO tone to sip message */
-/* Always adds default duration 250 ms, regardless of what came in over the line */
-int add_digit(struct sip_request *req, char digit)
+int add_digit(struct sip_request *req, char digit, unsigned int duration)
 {
 	char tmp[256];
 
-	snprintf(tmp, sizeof(tmp), "Signal=%c\r\nDuration=250\r\n", digit);
+	snprintf(tmp, sizeof(tmp), "Signal=%c\r\nDuration=%u\r\n", digit, duration);
 	add_header(req, "Content-Type", "application/dtmf-relay");
 	add_header_contentLength(req, strlen(tmp));
 	add_line(req, tmp);
@@ -137,8 +217,8 @@ int add_digit(struct sip_request *req, char digit)
 void build_contact(struct sip_dialog *p)
 {
 	/* Construct Contact: header */
-	if (sipnet_ourport() != STANDARD_SIP_PORT)	/* Needs to be 5060, according to the RFC */
-		ast_string_field_build(p, our_contact, "<sip:%s%s%s:%d>", p->exten, ast_strlen_zero(p->exten) ? "" : "@", ast_inet_ntoa(p->ourip), sipnet_ourport());
+	if (sipnet_ourport(&sipnet) != STANDARD_SIP_PORT)	/* Needs to be 5060, according to the RFC */
+		ast_string_field_build(p, our_contact, "<sip:%s%s%s:%d>", p->exten, ast_strlen_zero(p->exten) ? "" : "@", ast_inet_ntoa(p->ourip), sipnet_ourport(&sipnet));
 	else
 		ast_string_field_build(p, our_contact, "<sip:%s%s%s>", p->exten, ast_strlen_zero(p->exten) ? "" : "@", ast_inet_ntoa(p->ourip));
 }
@@ -224,52 +304,56 @@ void build_rpid(struct sip_dialog *p)
 }
 
 /*! \brief Prepare SIP response packet */
-int respprep(struct sip_request *resp, struct sip_dialog *p, const char *msg, const struct sip_request *req)
+int respprep(struct sip_request *resp, struct sip_dialog *dialog, const char *msg, struct sip_request *req)
 {
 	char newto[256];
 	const char *ot;
 
 	init_resp(resp, msg);
-	copy_via_headers(p, resp, req, "Via");
+	copy_via_headers(dialog, resp, req, "Via");
 	if (msg[0] == '2')
 		copy_all_header(resp, req, "Record-Route");
-	copy_header(resp, req, "From");	/* XXX this can be simplified when we are sure that req->from works*/
-	if (!ast_strlen_zero(req->to))
-		ot = req->to;
-	else
-		ot = get_header(req, "To");
+	add_header(resp, "From", req->from);
+	ot = req->to;
 		
 	if (!strcasestr(ot, "tag=") && strncmp(msg, "100", 3)) {
 		/* Add the proper tag if we don't have it already.  If they have specified
 		   their tag, use it.  Otherwise, use our own tag */
-		if (!ast_strlen_zero(p->theirtag) && ast_test_flag(&p->flags[0], SIP_OUTGOING))
-			snprintf(newto, sizeof(newto), "%s;tag=%s", ot, p->theirtag);
-		else if (p->tag && !ast_test_flag(&p->flags[0], SIP_OUTGOING))
-			snprintf(newto, sizeof(newto), "%s;tag=%s", ot, p->tag);
+		if (!ast_strlen_zero(dialog->theirtag) && ast_test_flag(&dialog->flags[0], SIP_OUTGOING))
+			snprintf(newto, sizeof(newto), "%s;tag=%s", ot, dialog->theirtag);
+		else if (dialog->tag && !ast_test_flag(&dialog->flags[0], SIP_OUTGOING))
+			snprintf(newto, sizeof(newto), "%s;tag=%s", ot, dialog->tag);
 		else
 			ast_copy_string(newto, ot, sizeof(newto));
 		ot = newto;
 	}
 	add_header(resp, "To", ot);
-	copy_header(resp, req, "Call-ID");	/* Should use req->callid */
-	copy_header(resp, req, "CSeq");		/* Should use req->cseqheader */
+	add_header(resp, "Call-ID", dialog->callid);
+	add_header(resp, "CSeq", req->cseqheader);
 	add_header(resp, "User-Agent", global.useragent);
 	add_header(resp, "Allow", ALLOWED_METHODS);
 	add_header(resp, "Supported", SUPPORTED_EXTENSIONS);
-	if (msg[0] == '2' && (p->method == SIP_SUBSCRIBE || p->method == SIP_REGISTER)) {
+	resp->seqno = req->seqno;
+
+	/* We need to add Contact on 200 responses on registrations,
+		invites and subscriptions. 
+		INVITE, SUBSCRIBE, OPT och REGISTER responses and requests
+	*/
+	if (msg[0] == '2' && (dialog->method == SIP_SUBSCRIBE || dialog->method == SIP_REGISTER)) {
 		/* For successful registration responses, we also need expiry and
 		   contact info */
 		char tmp[256];
 
-		snprintf(tmp, sizeof(tmp), "%d", p->expiry);
+		snprintf(tmp, sizeof(tmp), "%d", dialog->expiry);
 		add_header(resp, "Expires", tmp);
-		if (p->expiry) {	/* Only add contact if we have an expiry time */
+		if (dialog->expiry) {	/* Only add contact if we have an expiry time */
 			char contact[256];
-			snprintf(contact, sizeof(contact), "%s;expires=%d", p->our_contact, p->expiry);
+			snprintf(contact, sizeof(contact), "%s;expires=%d", dialog->our_contact, dialog->expiry);
 			add_header(resp, "Contact", contact);	/* Not when we unregister */
 		}
-	} else if (msg[0] != '4' && p->our_contact[0] && req->method != SIP_BYE && req->method != SIP_CANCEL) {
-		add_header(resp, "Contact", p->our_contact);
+	} else if (dialog->our_contact[0] && (req->method == SIP_INVITE || req->method == SIP_OPTIONS)) {
+		if  (msg[0] != '4' && msg[0] != '1')
+			add_header(resp, "Contact", dialog->our_contact);
 	}
 	return 0;
 }
@@ -320,15 +404,15 @@ int add_line(struct sip_request *req, const char *line)
 	}
 	if (!req->lines) {
 		/* Add extra empty return */
-		snprintf(req->data + req->len, sizeof(req->data) - req->len, "\r\n");
+		snprintf(req->data + req->len, req->data_size - req->len, "\r\n");
 		req->len += strlen(req->data + req->len);
 	}
-	if (req->len >= sizeof(req->data) - 4) {
-		ast_log(LOG_WARNING, "Out of space, can't add anymore\n");
+	if (req->len >= req->data_size - 4) {
+		ast_log(LOG_WARNING, "Out of space, can't add anymore: Len %d Data %dd\n", req->len, (int) req->data_size);
 		return -1;
 	}
 	req->line[req->lines] = req->data + req->len;
-	snprintf(req->line[req->lines], sizeof(req->data) - req->len, "%s", line);
+	snprintf(req->line[req->lines], req->data_size - req->len, "%s", line);
 	req->len += strlen(req->line[req->lines]);
 	req->lines++;
 	return 0;	
@@ -464,8 +548,8 @@ void initreqprep(struct sip_request *req, struct sip_dialog *p, int sipmethod)
 	ast_uri_encode(l, tmp2, sizeof(tmp2), 0);
 	l = tmp2;
 
-	if ((sipnet_ourport() != STANDARD_SIP_PORT) && ast_strlen_zero(p->fromdomain))	/* Needs to be 5060 */
-		snprintf(from, sizeof(from), "\"%s\" <sip:%s@%s:%d>;tag=%s", n, l, S_OR(p->fromdomain, ast_inet_ntoa(p->ourip)), sipnet_ourport(), p->tag);
+	if ((sipnet_ourport(&sipnet) != STANDARD_SIP_PORT) && ast_strlen_zero(p->fromdomain))	/* Needs to be 5060 */
+		snprintf(from, sizeof(from), "\"%s\" <sip:%s@%s:%d>;tag=%s", n, l, S_OR(p->fromdomain, ast_inet_ntoa(p->ourip)), sipnet_ourport(&sipnet), p->tag);
 	else
 		snprintf(from, sizeof(from), "\"%s\" <sip:%s@%s>;tag=%s", n, l, S_OR(p->fromdomain, ast_inet_ntoa(p->ourip)), p->tag);
 
@@ -489,25 +573,34 @@ void initreqprep(struct sip_request *req, struct sip_dialog *p, int sipmethod)
 	}
 
 	/* If custom URI options have been provided, append them */
-	if (p->options && p->options->uri_options)
-		ast_build_string(&invite, &invite_max, ";%s", p->options->uri_options);
+	if (p->inviteoptions && p->inviteoptions->uri_options)
+		ast_build_string(&invite, &invite_max, ";%s", p->inviteoptions->uri_options);
 	
 	ast_string_field_set(p, uri, invite_buf);
 
-	if (sipmethod == SIP_NOTIFY && !ast_strlen_zero(p->theirtag)) { 
-		/* If this is a NOTIFY, use the From: tag in the subscribe (RFC 3265) */
-		snprintf(to, sizeof(to), "<sip:%s>;tag=%s", p->uri, p->theirtag);
-	} else if (p->options && p->options->vxml_url) {
-		/* If there is a VXML URL append it to the SIP URL */
-		snprintf(to, sizeof(to), "<%s>;%s", p->uri, p->options->vxml_url);
-	} else 
-		snprintf(to, sizeof(to), "<%s>", p->uri);
+	if (!ast_strlen_zero(p->todnid)) {
+		if (!strchr(p->todnid, '@')) {
+			/* We have no domain in the dnid */
+			snprintf(to, sizeof(to), "<sip:%s@%s>%s%s", p->todnid, p->tohost, ast_strlen_zero(p->theirtag) ? "" : ";tag=", p->theirtag);
+		} else {
+			snprintf(to, sizeof(to), "<sip:%s>%s%s", p->todnid, ast_strlen_zero(p->theirtag) ? "" : ";tag=", p->theirtag);
+		}
+	} else {
+		if (sipmethod == SIP_NOTIFY && !ast_strlen_zero(p->theirtag)) { 
+			/* If this is a NOTIFY, use the From: tag in the subscribe (RFC 3265) */
+			snprintf(to, sizeof(to), "<sip:%s>;tag=%s", p->uri, p->theirtag);
+		} else if (p->inviteoptions && p->inviteoptions->vxml_url) {
+			/* If there is a VXML URL append it to the SIP URL */
+			snprintf(to, sizeof(to), "<%s>;%s", p->uri, p->inviteoptions->vxml_url);
+		} else 
+			snprintf(to, sizeof(to), "<%s>", p->uri);
+	}
 	
 	init_req(req, sipmethod, p->uri);
 	snprintf(tmp, sizeof(tmp), "%d %s", ++p->ocseq, sip_method2txt(sipmethod));
 
 	add_header(req, "Via", p->via);
-	add_header(req, "Max-Forwards", global.maxforwards);
+	append_maxforwards(req);
 	/* SLD: FIXME?: do Route: here too?  I think not cos this is the first request.
 	 * OTOH, then we won't have anything in p->route anyway */
 	/* Build Remote Party-ID and From */
@@ -531,7 +624,7 @@ void initreqprep(struct sip_request *req, struct sip_dialog *p, int sipmethod)
 /*! \brief Initialize a SIP request message (not the initial one in a dialog) */
 int reqprep(struct sip_request *req, struct sip_dialog *p, int sipmethod, int seqno, int newbranch)
 {
-	struct sip_request *orig = &p->initreq;
+	struct sip_request *orig = p->initreq;
 	char stripped[80];
 	char tmp[80];
 	char newto[256];
@@ -539,14 +632,13 @@ int reqprep(struct sip_request *req, struct sip_dialog *p, int sipmethod, int se
 	const char *ot, *of;
 	int is_strict = FALSE;		/*!< Strict routing flag */
 
-	memset(req, 0, sizeof(struct sip_request));
-	
 	snprintf(p->lastmsg, sizeof(p->lastmsg), "Tx: %s", sip_method2txt(sipmethod));
 	
 	if (!seqno) {
 		p->ocseq++;
 		seqno = p->ocseq;
 	}
+	req->seqno = seqno;
 	
 	build_via(p, newbranch);
 
@@ -556,16 +648,22 @@ int reqprep(struct sip_request *req, struct sip_dialog *p, int sipmethod, int se
 		if (sipdebug)
 			ast_log(LOG_DEBUG, "Strict routing enforced for session %s\n", p->callid);
 	}
+	if (!ast_test_flag(p->initreq, SIP_PKT_PARSED)) {
+		if (!ast_test_flag(p->initreq, SIP_PKT_CONNECTED))
+			parse_request(p->initreq);
+		else 
+			ast_log(LOG_WARNING, "Can't parse initial record. This request will look weird. Call ID %s\n", p->callid);
+	}
 
 	if (sipmethod == SIP_CANCEL)
-		c = p->initreq.rlPart2;	/* Use original URI */
+		c = p->initreq->rlPart2;	/* Use original URI */
 	else if (sipmethod == SIP_ACK) {
 		/* Use URI from Contact: in 200 OK (if INVITE) 
 		(we only have the contacturi on INVITEs) */
 		if (!ast_strlen_zero(p->okcontacturi))
 			c = is_strict ? p->route->hop : p->okcontacturi;
  		else
- 			c = p->initreq.rlPart2;
+ 			c = p->initreq->rlPart2;
 	} else if (!ast_strlen_zero(p->okcontacturi)) 
 		c = is_strict ? p->route->hop : p->okcontacturi; /* Use for BYE or REINVITE */
 	else if (!ast_strlen_zero(p->uri)) 
@@ -587,7 +685,7 @@ int reqprep(struct sip_request *req, struct sip_dialog *p, int sipmethod, int se
 		set_destination(p, p->route->hop);
 		add_route(req, is_strict ? p->route->next : p->route);
 	}
-	add_header(req, "Max-Forwards", global.maxforwards);
+	append_maxforwards(req);
 
 	ot = get_header(orig, "To");
 	of = get_header(orig, "From");

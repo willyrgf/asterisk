@@ -60,7 +60,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/module.h"
 #include "asterisk/pbx.h"
 #include "asterisk/options.h"
-#include "asterisk/lock.h"
 #include "asterisk/sched.h"
 #include "asterisk/io.h"
 #include "asterisk/rtp.h"
@@ -73,7 +72,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/musiconhold.h"
 #include "asterisk/dsp.h"
 #include "asterisk/features.h"
-#include "asterisk/acl.h"
 #include "asterisk/srv.h"
 #include "asterisk/astdb.h"
 #include "asterisk/causes.h"
@@ -136,14 +134,15 @@ static void *sip_park_thread(void *stuff)
 {
 	struct ast_channel *transferee, *transferer;	/* Chan1: The transferee, Chan2: The transferer */
 	struct sip_dual *d;
-	struct sip_request req;
+	struct sip_request *req;
 	int ext;
 	int res;
 
 	d = stuff;
 	transferee = d->chan1;
 	transferer = d->chan2;
-	copy_request(&req, &d->req);
+	
+	req = d->req;
 	free(d);
 
 	if (!transferee || !transferer) {
@@ -156,8 +155,9 @@ static void *sip_park_thread(void *stuff)
 	ast_channel_lock(transferee);
 	if (ast_do_masquerade(transferee)) {
 		ast_log(LOG_WARNING, "Masquerade failed.\n");
-		transmit_response(transferer->tech_pvt, "503 Internal error", &req);
+		transmit_response(transferer->tech_pvt, "503 Internal error", req);
 		ast_channel_unlock(transferee);
+		
 		return NULL;
 	} 
 	ast_channel_unlock(transferee);
@@ -177,7 +177,8 @@ static void *sip_park_thread(void *stuff)
 
 	/* Any way back to the current call??? */
 	/* Transmit response to the REFER request */
-	transmit_response(transferer->tech_pvt, "202 Accepted", &req);
+	transmit_response(transferer->tech_pvt, "202 Accepted", req);
+
 	if (!res)	{
 		/* Transfer succeeded */
 		append_history(transferer->tech_pvt, "SIPpark","Parked call on %d", ext);
@@ -193,6 +194,7 @@ static void *sip_park_thread(void *stuff)
 			ast_log(LOG_DEBUG, "SIP Call parked failed \n");
 		/* Do not hangup call */
 	}
+	siprequest_free(req);
 	return NULL;
 }
 
@@ -217,7 +219,7 @@ static int get_refer_info(struct sip_dialog *transferer, struct sip_request *out
 	referdata = transferer->refer;
 
 	if (!req)
-		req = &transferer->initreq;
+		req = transferer->initreq;
 
 	p_refer_to = get_header(req, "Refer-To");
 	if (ast_strlen_zero(p_refer_to)) {
@@ -424,12 +426,17 @@ static int sip_park(struct ast_channel *chan1, struct ast_channel *chan2, struct
 		return -1;
 	}
 	if ((d = ast_calloc(1, sizeof(*d)))) {
+		pthread_attr_t attr;
+		
+		pthread_attr_init(&attr);
+		pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+
 		/* Save original request for followup */
-		copy_request(&d->req, req);
+		d->req = req;
 		d->chan1 = transferee;	/* Transferee */
 		d->chan2 = transferer;	/* Transferer */
 		d->seqno = seqno;
-		if (ast_pthread_create_background(&th, NULL, sip_park_thread, d) < 0) {
+		if (ast_pthread_create_background(&th, &attr, sip_park_thread, d) < 0) {
 			/* Could not start thread */
 			free(d);	/* We don't need it anymore. If thread is created, d will be free'd
 					   by sip_park_thread() */
@@ -867,7 +874,7 @@ int handle_request_refer(struct sip_dialog *p, struct sip_request *req, int debu
 		/* Must release c's lock now, because it will not longer be accessible after the transfer! */
 		*nounlock = 1;
 		ast_channel_unlock(current.chan1);
-		copy_request(&current.req, req);
+		current.req = req;
 		ast_clear_flag(&p->flags[0], SIP_GOTREFER);	
 		p->refer->status = REFER_200OK;
 		append_history(p, "Xfer", "REFER to call parking.");
@@ -981,23 +988,25 @@ int handle_request_refer(struct sip_dialog *p, struct sip_request *req, int debu
 /*! \brief Notify a transferring party of the status of transfer */
 GNURK int transmit_notify_with_sipfrag(struct sip_dialog *p, int cseq, char *message, int terminate)
 {
-	struct sip_request req;
+	struct sip_request *req;
 	char tmp[BUFSIZ/2];
 
-	reqprep(&req, p, SIP_NOTIFY, 0, TRUE);
+	req = siprequest_alloc(SIP_MAX_PACKET, &sipnet);
+
+	reqprep(req, p, SIP_NOTIFY, 0, TRUE);
 	snprintf(tmp, sizeof(tmp), "refer;id=%d", cseq);
-	add_header(&req, "Event", tmp);
-	add_header(&req, "Subscription-state", terminate ? "terminated;reason=noresource" : "active");
-	add_header(&req, "Content-Type", "message/sipfrag;version=2.0");
-	add_header(&req, "Allow", ALLOWED_METHODS);
-	add_header(&req, "Supported", SUPPORTED_EXTENSIONS);
+	add_header(req, "Event", tmp);
+	add_header(req, "Subscription-state", terminate ? "terminated;reason=noresource" : "active");
+	add_header(req, "Content-Type", "message/sipfrag;version=2.0");
+	add_header(req, "Allow", ALLOWED_METHODS);
+	add_header(req, "Supported", SUPPORTED_EXTENSIONS);
 
 	snprintf(tmp, sizeof(tmp), "SIP/2.0 %s\r\n", message);
-	add_header_contentLength(&req, strlen(tmp));
-	add_line(&req, tmp);
+	add_header_contentLength(req, strlen(tmp));
+	add_line(req, tmp);
 
-	if (!p->initreq.headers)
-		initialize_initreq(p, &req);
+	if (!p->initreq)
+		initialize_initreq(p, req);
 
-	return send_request(p, &req, XMIT_RELIABLE, p->ocseq);
+	return send_request(p, req, XMIT_RELIABLE);
 }

@@ -61,7 +61,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/module.h"
 #include "asterisk/pbx.h"
 #include "asterisk/options.h"
-#include "asterisk/lock.h"
 #include "asterisk/sched.h"
 #include "asterisk/io.h"
 #include "asterisk/rtp.h"
@@ -73,7 +72,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/app.h"
 #include "asterisk/dsp.h"
 #include "asterisk/features.h"
-#include "asterisk/acl.h"
 #include "asterisk/srv.h"
 #include "asterisk/astdb.h"
 #include "asterisk/causes.h"
@@ -136,13 +134,15 @@ GNURK int transmit_state_notify(struct sip_dialog *p, int state, int full, int t
 	char tmp[4000], from[256], to[256];
 	char *t = tmp, *c, *mfrom, *mto;
 	size_t maxbytes = sizeof(tmp);
-	struct sip_request req;
+	struct sip_request *req;
 	char hint[AST_MAX_EXTENSION];
 	char *statestring = "terminated";
 	const struct cfsubscription_types *subscriptiontype;
 	enum state { NOTIFY_OPEN, NOTIFY_INUSE, NOTIFY_CLOSED } local_state = NOTIFY_OPEN;
 	char *pidfstate = "--";
 	char *pidfnote= "Ready";
+
+	req = siprequest_alloc(SIP_MAX_PACKET, &sipnet);
 
 	memset(from, 0, sizeof(from));
 	memset(to, 0, sizeof(to));
@@ -174,12 +174,16 @@ GNURK int transmit_state_notify(struct sip_dialog *p, int state, int full, int t
 		pidfnote = "On the phone";
 		break;
 	case AST_EXTENSION_UNAVAILABLE:
-		statestring = "confirmed";
+		statestring = "terminated";
 		local_state = NOTIFY_CLOSED;
 		pidfstate = "away";
 		pidfnote = "Unavailable";
 		break;
 	case AST_EXTENSION_ONHOLD:
+		statestring = "confirmed";
+		local_state = NOTIFY_INUSE;
+		pidfstate = "busy";
+		pidfnote = "On hold";
 		break;
 	case AST_EXTENSION_NOT_INUSE:
 	default:
@@ -199,7 +203,7 @@ GNURK int transmit_state_notify(struct sip_dialog *p, int state, int full, int t
 		}
 	}
 
-	ast_copy_string(from, get_header(&p->initreq, "From"), sizeof(from));
+	ast_copy_string(from, get_header(p->initreq, "From"), sizeof(from));
 	c = get_in_brackets(from);
 	if (strncmp(c, "sip:", 4)) {
 		ast_log(LOG_WARNING, "Huh?  Not a SIP header (%s)?\n", c);
@@ -207,7 +211,7 @@ GNURK int transmit_state_notify(struct sip_dialog *p, int state, int full, int t
 	}
 	mfrom = strsep(&c, ";");	/* trim ; and beyond */
 
-	ast_copy_string(to, get_header(&p->initreq, "To"), sizeof(to));
+	ast_copy_string(to, get_header(p->initreq, "To"), sizeof(to));
 	c = get_in_brackets(to);
 	if (strncmp(c, "sip:", 4)) {
 		ast_log(LOG_WARNING, "Huh?  Not a SIP header (%s)?\n", c);
@@ -215,28 +219,28 @@ GNURK int transmit_state_notify(struct sip_dialog *p, int state, int full, int t
 	}
 	mto = strsep(&c, ";");	/* trim ; and beyond */
 
-	reqprep(&req, p, SIP_NOTIFY, 0, TRUE);
+	reqprep(req, p, SIP_NOTIFY, 0, TRUE);
 
 	
-	add_header(&req, "Event", subscriptiontype->event);
-	add_header(&req, "Content-Type", subscriptiontype->mediatype);
+	add_header(req, "Event", subscriptiontype->event);
+	add_header(req, "Content-Type", subscriptiontype->mediatype);
 	switch(state) {
 	case AST_EXTENSION_DEACTIVATED:
 		if (timeout)
-			add_header(&req, "Subscription-State", "terminated;reason=timeout");
+			add_header(req, "Subscription-State", "terminated;reason=timeout");
 		else {
-			add_header(&req, "Subscription-State", "terminated;reason=probation");
-			add_header(&req, "Retry-After", "60");
+			add_header(req, "Subscription-State", "terminated;reason=probation");
+			add_header(req, "Retry-After", "60");
 		}
 		break;
 	case AST_EXTENSION_REMOVED:
-		add_header(&req, "Subscription-State", "terminated;reason=noresource");
+		add_header(req, "Subscription-State", "terminated;reason=noresource");
 		break;
 	default:
 		if (p->expiry)
-			add_header(&req, "Subscription-State", "active");
+			add_header(req, "Subscription-State", "active");
 		else	/* Expired */
-			add_header(&req, "Subscription-State", "terminated;reason=timeout");
+			add_header(req, "Subscription-State", "terminated;reason=timeout");
 	}
 	switch (p->subscribed) {
 	case XPIDF_XML:
@@ -275,6 +279,11 @@ GNURK int transmit_state_notify(struct sip_dialog *p, int state, int full, int t
 		else
 			ast_build_string(&t, &maxbytes, "<dialog id=\"%s\">\n", p->exten);
 		ast_build_string(&t, &maxbytes, "<state>%s</state>\n", statestring);
+		if (state == AST_EXTENSION_ONHOLD) {
+			ast_build_string(&t, &maxbytes, "<local>\n<target uri=\"%s\">\n"
+				"<param pname=\"+sip.rendering\" pvalue=\"no\">\n"
+				"</target>\n</local>\n", mto);
+		}
 		ast_build_string(&t, &maxbytes, "</dialog>\n</dialog-info>\n");
 		break;
 	case NONE:
@@ -285,9 +294,9 @@ GNURK int transmit_state_notify(struct sip_dialog *p, int state, int full, int t
 	if (t > tmp + sizeof(tmp))
 		ast_log(LOG_WARNING, "Buffer overflow detected!!  (Please file a bug report)\n");
 
-	add_header_contentLength(&req, strlen(tmp));
-	add_line(&req, tmp);
+	add_header_contentLength(req, strlen(tmp));
+	add_line(req, tmp);
 
-	return send_request(p, &req, XMIT_RELIABLE, p->ocseq);
+	return send_request(p, req, XMIT_RELIABLE);
 }
 

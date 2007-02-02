@@ -1,7 +1,7 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 1999 - 2006, Digium, Inc.
+ * Copyright (C) 1999 - 2007, Digium, Inc.
  * and Edvina AB, Sollentuna, Sweden (chan_sip3 changes/additions)
  *
  * Mark Spencer <markster@digium.com>
@@ -69,7 +69,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47624 $")
 #include "asterisk/module.h"
 #include "asterisk/pbx.h"
 #include "asterisk/options.h"
-#include "asterisk/lock.h"
 #include "asterisk/sched.h"
 #include "asterisk/io.h"
 #include "asterisk/rtp.h"
@@ -82,7 +81,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47624 $")
 #include "asterisk/musiconhold.h"
 #include "asterisk/dsp.h"
 #include "asterisk/features.h"
-#include "asterisk/acl.h"
 #include "asterisk/srv.h"
 #include "asterisk/astdb.h"
 #include "asterisk/causes.h"
@@ -170,6 +168,8 @@ static void check_rtp_timeout(struct sip_dialog *dialog, time_t t)
 	if (ast_rtp_get_rtpkeepalive(dialog->rtp) == 0 || (ast_rtp_get_rtptimeout(dialog->rtp) == 0 && ast_rtp_get_rtpholdtimeout(dialog->rtp) == 0))
 		return;
 
+	dialog_lock(dialog, TRUE);
+
 	/* Check AUDIO RTP keepalives */
 	if (dialog->lastrtptx && ast_rtp_get_rtpkeepalive(dialog->rtp) &&
 		    (t > dialog->lastrtptx + ast_rtp_get_rtpkeepalive(dialog->rtp))) {
@@ -221,19 +221,21 @@ static void check_rtp_timeout(struct sip_dialog *dialog, time_t t)
 			}
 		}
 	}
+	dialog_lock(dialog, FALSE);
 }
+
 /*! \brief Check whether peer needs a new MWI notification check */
-static int does_peer_need_mwi(struct sip_peer *peer)
+static int does_peer_need_mwi(struct sip_device *peer)
 {
 	time_t t = time(NULL);
 
 	if (ast_test_flag(&peer->flags[1], SIP_PAGE2_SUBSCRIBEMWIONLY) &&
-	    !peer->mwipvt) {	/* We don't have a subscription */
-		peer->lastmsgcheck = t;	/* Reset timer */
+	    !peer->mailbox.mwipvt) {	/* We don't have a subscription */
+		peer->mailbox.lastmsgcheck = t;	/* Reset timer */
 		return FALSE;
 	}
 
-	if (!ast_strlen_zero(peer->mailbox) && (t - peer->lastmsgcheck) > global.mwitime)
+	if (!ast_strlen_zero(peer->mailbox.mailbox) && (t - peer->mailbox.lastmsgcheck) > global.mwitime)
 		return TRUE;
 
 	return FALSE;
@@ -248,14 +250,15 @@ void *do_sip_monitor(void *data)
 {
 	int res;
 	struct sip_dialog *sip;
-	struct sip_peer *peer = NULL;
-	time_t t;
+	struct sip_device *device = NULL;
+	time_t now;
 	int fastrestart = FALSE;
 	int lastpeernum = -1;
 	int curpeernum;
+	static int nowalkmessage = 0;
 
 	/* Add an I/O event to our SIP UDP socket */
-	if (sipsocket_initialized())
+	if (sipsocket_initialized(&sipnet))
 		sipnet.read_id = ast_io_add(io, sipnet.sipsock, sipsock_read, AST_IO_IN, NULL);
 	
 	/* From here on out, we die whenever asked */
@@ -267,35 +270,40 @@ void *do_sip_monitor(void *data)
 			sip_do_reload();
 
 			/* Change the I/O fd of our UDP socket */
-			if (sipsocket_initialized())
+			if (sipsocket_initialized(&sipnet))
 				sipnet.read_id = ast_io_change(io, sipnet.read_id, sipnet.sipsock, NULL, 0, NULL);
 		}
 
 		/*----- Check for interfaces needing to be killed */
-		if (dialoglist != NULL) {
-			ast_log(LOG_DEBUG, ":: MONITOR :: Walking dialog list.\n");
+		if (dialoglist != NULL && !fastrestart) {
+			struct sip_dialog *nextdialog;
+
+			if (option_debug > 4)
+				ast_log(LOG_DEBUG, ":: MONITOR :: Walking dialog list.\n");
 			dialoglist_lock();
 restartsearch:		
-			t = time(NULL);
+			now = time(NULL);
 			/* don't scan the interface list if it hasn't been a reasonable period
 		   	of time since the last time we did it (when MWI is being sent, we can
 		   	get back to this point every millisecond or less)
 			*/
-			for (sip = dialoglist; !fastrestart && sip; sip = sip->next) {
-				dialog_lock(sip, TRUE);
+			for (sip = dialoglist;  sip; sip = nextdialog) {
+				nextdialog = sip->next;
 				/* Check RTP timeouts and kill calls if we have a timeout set and do not get RTP or RTCP */
-				check_rtp_timeout(sip, t);
+				check_rtp_timeout(sip, now);
+
 				/* If we have sessions that needs to be destroyed, do it now */
 				if (ast_test_flag(&sip->flags[0], SIP_NEEDDESTROY) && !sip->packets && !sip->owner) {
-					dialog_lock(sip, FALSE);
 					__sip_destroy(sip, TRUE, FALSE);
-					goto restartsearch;
+					//goto restartsearch;
 				}
-				dialog_lock(sip, FALSE);
 			}
 			dialoglist_unlock();
-		} else if (sipdebug && option_debug > 4) {
-			ast_log(LOG_DEBUG, ":: MONITOR :: Empty dialog list. No walk today \n");
+			nowalkmessage = 0;
+		} else if (!fastrestart && sipdebug && option_debug > 4) {
+			if (!nowalkmessage)
+				ast_log(LOG_DEBUG, ":: MONITOR :: Empty dialog list. Pausing channel walks\n");
+			nowalkmessage = 1;
 		}
 
 		pthread_testcancel();
@@ -319,28 +327,27 @@ restartsearch:
 				ast_log(LOG_DEBUG, "chan_sip: ast_sched_runq ran %d all at once\n", res);
 		}
 
-		/*----- Send MWI notifications to peers - static and cached realtime peers */
+		/*----- Send MWI notifications to devices - static and cached realtime peers */
 		if (sipcounters.peers_with_mwi > 0 ) {
-			t = time(NULL);
 			fastrestart = FALSE;
 			curpeernum = 0;
-			peer = NULL;
-			/* Find next peer that needs mwi */
-			ASTOBJ_CONTAINER_TRAVERSE(&devicelist, !peer, do {
+			device= NULL;
+			/* Find next device that needs mwi */
+			ASTOBJ_CONTAINER_TRAVERSE(&devicelist, !device, do {
 				if ((curpeernum > lastpeernum) && does_peer_need_mwi(iterator)) {
 					fastrestart = TRUE;
 					lastpeernum = curpeernum;
-					peer = ASTOBJ_REF(iterator);
+					device = device_ref(iterator);
 				};
 				curpeernum++;
 			} while (0)
 			);
 			/* Send MWI to the peer */
-			if (peer) {
-				ASTOBJ_WRLOCK(peer);
-				sip_send_mwi_to_peer(peer);
-				ASTOBJ_UNLOCK(peer);
-				ASTOBJ_UNREF(peer,sip_destroy_device);
+			if (device) {
+				ASTOBJ_WRLOCK(device);
+				sip_send_mwi_to_peer(device);
+				ASTOBJ_UNLOCK(device);
+				device_unref(device);
 			} else {
 				/* Reset where we come from */
 				lastpeernum = -1;

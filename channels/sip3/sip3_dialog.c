@@ -1,7 +1,7 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 1999 - 2006, Digium, Inc.
+ * Copyright (C) 1999 - 2007, Digium, Inc.
  * and Edvina AB, Sollentuna, Sweden (chan_sip3 changes/additions)
  *
  * Mark Spencer <markster@digium.com>
@@ -60,7 +60,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/module.h"
 #include "asterisk/pbx.h"
 #include "asterisk/options.h"
-#include "asterisk/lock.h"
 #include "asterisk/sched.h"
 #include "asterisk/io.h"
 #include "asterisk/rtp.h"
@@ -73,7 +72,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/musiconhold.h"
 #include "asterisk/dsp.h"
 #include "asterisk/features.h"
-#include "asterisk/acl.h"
 #include "asterisk/srv.h"
 #include "asterisk/astdb.h"
 #include "asterisk/causes.h"
@@ -93,7 +91,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "sip3funcs.h"
 
 /*! \page chan_sip3_dialogs Chan_sip3: The dialog list
-	\title The dialog list
+	\par The dialog list
 	The dialog list contains all active dialogs in various states.
 	A dialog can be 
 	- an active call
@@ -103,7 +101,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 	
 	\ref dialoglist
 
-	\title Dialog states
+	\par Dialog states
 	Dialog states affect operation, especially in an INVITE
 	dialog. We now try to change dialog state in a clear way
 	\ref enum dialogstate
@@ -212,7 +210,7 @@ void dialogstatechange(struct sip_dialog *dialog, enum dialogstate newstate)
 	Set dialog state to TERMINATED to avoid problems
 	At some point, after debugging, we can remove the reliable flag. Only responses to INVITEs are sent reliably 
  */
-int transmit_final_response(struct sip_dialog *dialog, const char *msg, const struct sip_request *req, enum xmittype reliable)
+int transmit_final_response(struct sip_dialog *dialog, const char *msg, struct sip_request *req, enum xmittype reliable)
 {
 	int res;
 
@@ -225,6 +223,36 @@ int transmit_final_response(struct sip_dialog *dialog, const char *msg, const st
 	return res;
 }
 
+/*! \brief Set packet to initreq status. Set flag to avoid 
+	de-allocation until dialog is destroyed 
+*/
+void set_initreq(struct sip_dialog *dialog, struct sip_request *req)
+{
+	dialog->initreq = req;
+	ast_set_flag(dialog->initreq, SIP_PKT_INITREQ);
+	
+}
+
+/*! \brief Initialize the initital request packet in the pvt structure.
+ 	This packet is used for creating replies and future requests in
+	a dialog */
+GNURK void initialize_initreq(struct sip_dialog *dialog, struct sip_request *req)
+{
+	/* If we already have an initial req, free it if it's not waiting for an ACK */
+	if (dialog->initreq) {
+		if (option_debug > 2)
+			ast_log(LOG_DEBUG, "Initializing already initialized SIP dialog %s (presumably reinvite)\n", dialog->callid);
+		if (!ast_test_flag(dialog->initreq, SIP_PKT_CONNECTED))
+			siprequest_free(dialog->initreq);
+	}
+	/* Use this as the basis */
+	set_initreq(dialog, req);
+	//parse_request(dialog->initreq);
+	if (ast_test_flag(req, SIP_PKT_DEBUG))
+		ast_verbose("Initreq: %d headers, %d lines\n", dialog->initreq->headers, dialog->initreq->lines);
+}
+
+
 /*! \brief For a reliable transmission, we need to get an reply to stop retransmission. 
 	Acknowledges receipt of a packet and stops retransmission 
 	\note Assume that the dialog is locked. 
@@ -235,34 +263,56 @@ void __sip_ack(struct sip_dialog *dialog, int seqno, int resp, int sipmethod, in
 	struct sip_request *cur, *prev = NULL;
 	int res = FALSE;
 
+	if (option_debug) {
+		if (!resp)
+			ast_log(LOG_DEBUG, "Trying to confirm pending invite %d Call ID %s\n", dialog->pendinginvite, dialog->callid);
+		else
+			ast_log(LOG_DEBUG, "Trying to confirm pending response on Call ID %s\n", dialog->callid);
+	}
+
 	dialog_lock(dialog, TRUE);
 
-	/* Find proper transactoin */
+	/* Find proper transaction */
 	for (cur = dialog->packets; cur; prev = cur, cur = cur->next) {
+		if (option_debug > 2)
+			ast_log(LOG_DEBUG, "--Checking packet with seqno %d against response with seqno %d\n", cur->seqno, seqno);
 		/* Match on seqno AND req/resp AND method? */
 		if ((cur->seqno == seqno) && ((ast_test_flag(cur, SIP_PKT_RESPONSE)) == resp) &&
 			((ast_test_flag(cur, SIP_PKT_RESPONSE)) || (cur->method == sipmethod))) {
 			if (!resp && (seqno == dialog->pendinginvite)) {
-				if (option_debug)
-					ast_log(LOG_DEBUG, "Acked pending invite %d\n", dialog->pendinginvite);
+				if (sipdebug && option_debug && !reset)
+					ast_log(LOG_DEBUG, "Got reply to pending invite %d - Call Id %s\n", dialog->pendinginvite, dialog->callid);
 				dialog->pendinginvite = 0;
+			} else {
+				if (sipdebug && option_debug && !reset)
+					ast_log(LOG_DEBUG, "Got ACK on INVITE response Cseq %d Call Id %s\n", cur->seqno, dialog->callid);
 			}
 			/* this is our baby */
 			res = TRUE;
 			UNLINK(cur, dialog->packets, prev);
 			if (cur->retransid > -1) {
-				if (sipdebug && option_debug > 3)
-					ast_log(LOG_DEBUG, "** SIP TIMER: Cancelling retransmit of packet (reply received) Retransid #%d\n", cur->retransid);
+				if (sipdebug && option_debug > 3 && !reset)
+					ast_log(LOG_DEBUG, "Cancelling retransmit of packet (reply received) Retransid #%d\n", cur->retransid);
 				ast_sched_del(sched, cur->retransid);
+				cur->retransid = -1;
 			}
-			if (!reset)
-				free(cur);	/* We might want to keep this somewhere else */
+			if (!reset) {
+				if (!ast_test_flag(cur, SIP_PKT_INITREQ)) 
+					siprequest_free(cur);	/* We might want to keep this somewhere else */
+				else {
+					if (sipdebug && option_debug > 3 && !reset)
+						ast_log(LOG_DEBUG, "This is the initial request, keeping it in memory - Cseq %d\n", cur->seqno);
+					ast_clear_flag(cur, SIP_PKT_CONNECTED);
+					if (!ast_test_flag(cur, SIP_PKT_PARSED))
+						parse_request(cur);	/* Parse initreq now, after we have answer */
+				}
+			}
 			break;
 		}
 	}
 	dialog_lock(dialog, FALSE);
-	if (option_debug)
-		ast_log(LOG_DEBUG, "Stopping retransmission on '%s' of %s %d: Match %s\n", dialog->callid, resp ? "Response" : "Request", seqno, res ? "Not Found" : "Found");
+	if (option_debug && sipdebug)
+		ast_log(LOG_DEBUG, "Stopping retransmission on '%s' of %s %d: Match %s\n", dialog->callid, resp ? "Response" : "Request", seqno, res ? "Found" : "Not Found");
 }
 
 /*! \brief Pretend to ack all packets - nothing to do with SIP_ACK (the method)
@@ -292,12 +342,14 @@ int __sip_semi_ack(struct sip_dialog *dialog, int seqno, int resp, int sipmethod
 	int res = -1;
 
 	for (cur = dialog->packets; cur; cur = cur->next) {
+		if (option_debug > 2)
+			ast_log(LOG_DEBUG, "--Checking packet with seqno %d against response with seqno %d\n", cur->seqno, seqno);
 		if (cur->seqno == seqno && ast_test_flag(cur, SIP_PKT_RESPONSE) == resp &&
 			(ast_test_flag(cur, SIP_PKT_RESPONSE) || method_match(sipmethod, cur->data))) {
 			/* this is our baby */
 			if (cur->retransid > -1) {
 				if (option_debug > 3 && sipdebug)
-					ast_log(LOG_DEBUG, "*** SIP TIMER: Cancelling retransmission #%d - %s (got response)\n", cur->retransid, sip_method2txt(sipmethod));
+					ast_log(LOG_DEBUG, "Cancelling retransmission #%d - %s (got response)\n", cur->retransid, sip_method2txt(sipmethod));
 				ast_sched_del(sched, cur->retransid);
 			}
 			cur->retransid = -1;
@@ -318,15 +370,17 @@ void __sip_destroy(struct sip_dialog *dialog, int lockowner, int lockdialoglist)
 
 	if (ast_test_flag(&dialog->flags[0], SIP_INC_COUNT)) 			/* This dialog has incremented call count */
 		update_call_counter(dialog, DEC_CALL_LIMIT);				/* Since it was forgotten, decrement call count */
+
 	if (ast_test_flag(&dialog->flags[1], SIP_PAGE2_INC_RINGING)) 			/* This dialog has incremented ring count */
 		update_call_counter(dialog, DEC_CALL_RINGING);				/* Since it was forgotten, decrement ring count */
 
 	if (sip_debug_test_pvt(dialog) || option_debug > 2)
 		ast_verbose("Really destroying SIP dialog '%s' Method: %s\n", dialog->callid, sip_method2txt(dialog->method));
 
+
 	/* Remove link from peer to subscription of MWI */
-	if (dialog->relatedpeer && dialog->relatedpeer->mwipvt)
-		dialog->relatedpeer->mwipvt = NULL;
+	if (dialog->relatedpeer && dialog->relatedpeer->mailbox.mwipvt)
+		dialog->relatedpeer->mailbox.mwipvt = NULL;
 
 	if (global.dumphistory)
 		sip_dump_history(dialog);
@@ -339,8 +393,8 @@ void __sip_destroy(struct sip_dialog *dialog, int lockowner, int lockdialoglist)
 	if (dialog->autokillid > -1)
 		ast_sched_del(sched, dialog->autokillid);
 
-	if (dialog->options)
-		free(dialog->options);
+	if (dialog->inviteoptions)
+		free(dialog->inviteoptions);
 
 	if (dialog->rtp)
 		ast_rtp_destroy(dialog->rtp);
@@ -379,6 +433,7 @@ void __sip_destroy(struct sip_dialog *dialog, int lockowner, int lockdialoglist)
 		dialog->history = NULL;
 	}
 
+
 	/* Unlink us from the dialog list */
 	if (lockdialoglist)
 		dialoglist_lock();
@@ -398,11 +453,19 @@ void __sip_destroy(struct sip_dialog *dialog, int lockowner, int lockdialoglist)
 
 	/* remove all current packets in this dialog */
 	while((cp = dialog->packets)) {
+		/* If one of the records in the packet list is the initreq, then release it */
+		if (cp == dialog->initreq)
+			dialog->initreq = NULL;
+
 		dialog->packets = dialog->packets->next;
 		if (cp->retransid > -1)
 			ast_sched_del(sched, cp->retransid);
 		free(cp);
 	}
+
+	if (dialog->initreq)
+		siprequest_free(dialog->initreq);
+
 	if (dialog->chanvars) {
 		ast_variables_destroy(dialog->chanvars);
 		dialog->chanvars = NULL;
@@ -445,7 +508,7 @@ static int __sip_autodestruct(void *data)
 	}
 
 	if (dialog->subscribed == MWI_NOTIFICATION && dialog->relatedpeer)
-		ASTOBJ_UNREF(dialog->relatedpeer,sip_destroy_device);
+		device_unref(dialog->relatedpeer);
 
 	/* Reset schedule ID */
 	dialog->autokillid = -1;
@@ -671,139 +734,168 @@ GNURK void make_our_tag(char *tagbuf, size_t len)
 		snprintf(tagbuf, len, "%08lx", ast_random());
 }
 
+/*! \brief Activate media streams - Audio, Video and T.38 UDPTL if needed */
+static int dialog_activate_media(struct sip_dialog *dialog, struct sip_network *sipnet)
+{
+	/* Audio channel is always activated */
+	dialog->rtp = ast_rtp_new_with_bindaddr(sched, io, 1, 0, sipnet->bindaddr.sin_addr);
+
+	/* If the global videosupport flag is on, we always create a RTP interface for video */
+	if (ast_test_flag(&dialog->flags[1], SIP_PAGE2_VIDEOSUPPORT)) {
+		if (option_debug > 3)
+			ast_log(LOG_DEBUG, "Creating video interface for %s\n", dialog->callid);
+		dialog->vrtp = ast_rtp_new_with_bindaddr(sched, io, 1, 0, sipnet->bindaddr.sin_addr);
+	}
+
+	/* T.38 support UDPTL stream */
+	if (ast_test_flag(&dialog->flags[1], SIP_PAGE2_T38SUPPORT)) {
+		if (option_debug > 3)
+			ast_log(LOG_DEBUG, "Creating UDPTL interface for %s\n", dialog->callid);
+		dialog->udptl = ast_udptl_new_with_bindaddr(sched, io, 0, sipnet->bindaddr.sin_addr);
+		if (!dialog->udptl)
+			ast_log(LOG_WARNING, "Unable to create T.38 UDPTL interface for session: %s\n", dialog->callid);
+	}
+
+	/* Do we have channels? */
+	if (!dialog->rtp || (ast_test_flag(&dialog->flags[1], SIP_PAGE2_VIDEOSUPPORT) && !dialog->vrtp)) {
+		ast_log(LOG_WARNING, "Unable to create RTP audio %s session: %s\n",
+		ast_test_flag(&dialog->flags[1], SIP_PAGE2_VIDEOSUPPORT) ? "and video" : "", strerror(errno));
+		return FALSE;
+	}
+
+	/* Fine tune audio RTP settings */
+	ast_rtp_setdtmf(dialog->rtp, ast_test_flag(&dialog->flags[0], SIP_DTMF) != SIP_DTMF_INFO);
+	ast_rtp_setdtmfcompensate(dialog->rtp, ast_test_flag(&dialog->flags[1], SIP_PAGE2_RFC2833_COMPENSATE));
+	ast_rtp_settos(dialog->rtp, global.tos_audio);
+	ast_rtp_set_rtptimeout(dialog->rtp, global.rtptimer.rtptimeout);
+	ast_rtp_set_rtpholdtimeout(dialog->rtp, global.rtptimer.rtpholdtimeout);
+	ast_rtp_set_rtpkeepalive(dialog->rtp, global.rtptimer.rtpkeepalive);
+
+	/* If we have video, fine tune RTP settings */
+	if (dialog->vrtp) {
+		ast_rtp_settos(dialog->vrtp, global.tos_video);
+		ast_rtp_setdtmf(dialog->vrtp, 0);
+		ast_rtp_setdtmfcompensate(dialog->vrtp, 0);
+		ast_rtp_set_rtptimeout(dialog->vrtp, global.rtptimer.rtptimeout);
+		ast_rtp_set_rtpholdtimeout(dialog->vrtp, global.rtptimer.rtpholdtimeout);
+		ast_rtp_set_rtpkeepalive(dialog->vrtp, global.rtptimer.rtpkeepalive);
+	}
+
+	/* Finally, T.38 settings */
+	if (dialog->udptl) {
+		ast_udptl_settos(dialog->udptl, global.tos_audio);
+		dialog->t38.capability = global.t38_capability;
+		if (ast_udptl_get_error_correction_scheme(dialog->udptl) == UDPTL_ERROR_CORRECTION_REDUNDANCY)
+			dialog->t38.capability |= T38FAX_UDP_EC_REDUNDANCY;
+		else if (ast_udptl_get_error_correction_scheme(dialog->udptl) == UDPTL_ERROR_CORRECTION_FEC)
+			dialog->t38.capability |= T38FAX_UDP_EC_FEC;
+		else if (ast_udptl_get_error_correction_scheme(dialog->udptl) == UDPTL_ERROR_CORRECTION_NONE)
+			dialog->t38.capability |= T38FAX_UDP_EC_NONE;
+		dialog->t38.capability |= T38FAX_RATE_MANAGEMENT_TRANSFERED_TCF;
+		dialog->t38.jointcapability = dialog->t38.capability;
+	}
+
+	dialog->maxcallbitrate = global.default_maxcallbitrate;
+	return TRUE;
+}
+
 /*! \brief Allocate SIP dialog structure and set defaults */
 struct sip_dialog *sip_alloc(ast_string_field callid, struct sockaddr_in *sin,
 				 int useglobal_nat, const int intended_method)
 {
-	struct sip_dialog *p;
+	struct sip_dialog *dialog;
 
-	if (!(p = ast_calloc(1, sizeof(*p))))
+	if (!(dialog = ast_calloc(1, sizeof(*dialog))))
 		return NULL;
 
-	if (ast_string_field_init(p, 512)) {
-		free(p);
+	if (ast_string_field_init(dialog, 512)) {
+		free(dialog);
 		return NULL;
 	}
 	sipcounters.dialog_objects++;
 	if (option_debug > 3)
 		ast_log(LOG_DEBUG, "--DIALOGS-- Counter %d\n", sipcounters.dialog_objects);
 
-	ast_mutex_init(&p->lock);
+		ast_mutex_init(&dialog->lock);
 
-	p->method = intended_method;
-	p->initid = -1;
-	p->autokillid = -1;
-	p->subscribed = NONE;
-	p->stateid = -1;
-	p->prefs = global.default_prefs;		/* Set default codecs for this call */
+	dialog->method = intended_method;
+	dialog->initid = -1;
+	dialog->autokillid = -1;
+	dialog->subscribed = NONE;
+	dialog->stateid = -1;
+	dialog->prefs = global.default_prefs;		/* Set default codecs for this call */
 
 	if (intended_method != SIP_OPTIONS)	/* Peerpoke has it's own system */
-		p->timer_t1 = SIP_TIMER_T1_DEFAULT;	/* 500 ms Default SIP retransmission timer T1 (RFC 3261) */
+		dialog->timer_t1 = global.t1default;	/* 500 ms Default SIP retransmission timer T1 (RFC 3261) */
 
 	if (sin) {
-		p->sa = *sin;
-		if (sip_ouraddrfor(&p->sa.sin_addr, &p->ourip))
-			p->ourip = sipnet.__ourip;
+		dialog->sa = *sin;
+		if (sip_ouraddrfor(&dialog->sa.sin_addr, &dialog->ourip))
+			dialog->ourip = sipnet.__ourip;
 	} else
-		p->ourip = sipnet.__ourip;
+		dialog->ourip = sipnet.__ourip;
 
 	/* Copy global flags to this PVT at setup. */
-	ast_copy_flags(&p->flags[0], &global.flags[0], SIP_FLAGS_TO_COPY);
-	ast_copy_flags(&p->flags[1], &global.flags[1], SIP_PAGE2_FLAGS_TO_COPY);
+	ast_copy_flags(&dialog->flags[0], &global.flags[0], SIP_FLAGS_TO_COPY);
+	ast_copy_flags(&dialog->flags[1], &global.flags[1], SIP_PAGE2_FLAGS_TO_COPY);
 
-	ast_set2_flag(&p->flags[0], !global.recordhistory, SIP_NO_HISTORY);
+	ast_set2_flag(&dialog->flags[0], !global.recordhistory, SIP_NO_HISTORY);
 
-	make_our_tag(p->tag, sizeof(p->tag));
-	p->ocseq = INITIAL_CSEQ;
+	make_our_tag(dialog->tag, sizeof(dialog->tag));
+	dialog->ocseq = INITIAL_CSEQ;
 
+	/* Activate media streams */
 	if (sip_method_needrtp(intended_method)) {
-		p->rtp = ast_rtp_new_with_bindaddr(sched, io, 1, 0, sipnet.bindaddr.sin_addr);
-		/* If the global videosupport flag is on, we always create a RTP interface for video */
-		if (ast_test_flag(&p->flags[1], SIP_PAGE2_VIDEOSUPPORT))
-			p->vrtp = ast_rtp_new_with_bindaddr(sched, io, 1, 0, sipnet.bindaddr.sin_addr);
-		if (ast_test_flag(&p->flags[1], SIP_PAGE2_T38SUPPORT))
-			p->udptl = ast_udptl_new_with_bindaddr(sched, io, 0, sipnet.bindaddr.sin_addr);
-		if (!p->rtp || (ast_test_flag(&p->flags[1], SIP_PAGE2_VIDEOSUPPORT) && !p->vrtp)) {
-			ast_log(LOG_WARNING, "Unable to create RTP audio %s session: %s\n",
-				ast_test_flag(&p->flags[1], SIP_PAGE2_VIDEOSUPPORT) ? "and video" : "", strerror(errno));
-			ast_mutex_destroy(&p->lock);
-			if (p->chanvars) {
-				ast_variables_destroy(p->chanvars);
-				p->chanvars = NULL;
+		if (!dialog_activate_media(dialog, &sipnet)) {
+			ast_mutex_destroy(&dialog->lock);
+			if (dialog->chanvars) {
+				ast_variables_destroy(dialog->chanvars);
+				dialog->chanvars = NULL;
 			}
-			free(p);
+			free(dialog);
 			return NULL;
 		}
-		ast_rtp_setdtmf(p->rtp, ast_test_flag(&p->flags[0], SIP_DTMF) != SIP_DTMF_INFO);
-		ast_rtp_setdtmfcompensate(p->rtp, ast_test_flag(&p->flags[1], SIP_PAGE2_RFC2833_COMPENSATE));
-		ast_rtp_settos(p->rtp, global.tos_audio);
-		ast_rtp_set_rtptimeout(p->rtp, global.rtptimeout);
-		ast_rtp_set_rtpholdtimeout(p->rtp, global.rtpholdtimeout);
-		ast_rtp_set_rtpkeepalive(p->rtp, global.rtpkeepalive);
-		if (p->vrtp) {
-			ast_rtp_settos(p->vrtp, global.tos_video);
-			ast_rtp_setdtmf(p->vrtp, 0);
-			ast_rtp_setdtmfcompensate(p->vrtp, 0);
-			ast_rtp_set_rtptimeout(p->vrtp, global.rtptimeout);
-			ast_rtp_set_rtpholdtimeout(p->vrtp, global.rtpholdtimeout);
-			ast_rtp_set_rtpkeepalive(p->vrtp, global.rtpkeepalive);
-		}
-		if (p->udptl)
-			ast_udptl_settos(p->udptl, global.tos_audio);
-		p->maxcallbitrate = global.default_maxcallbitrate;
 	}
 
 	if (useglobal_nat && sin) {
 		/* Setup NAT structure according to global settings if we have an address */
-		ast_copy_flags(&p->flags[0], &global.flags[0], SIP_NAT);
-		p->recv = *sin;
-		do_setnat(p, ast_test_flag(&p->flags[0], SIP_NAT) & SIP_NAT_ROUTE);
+		ast_copy_flags(&dialog->flags[0], &global.flags[0], SIP_NAT);
+		dialog->recv = *sin;
+		do_setnat(dialog, ast_test_flag(&dialog->flags[0], SIP_NAT) & SIP_NAT_ROUTE);
 	}
 
-	if (p->method != SIP_REGISTER)
-		ast_string_field_set(p, fromdomain, global.default_fromdomain);
+	if (dialog->method != SIP_REGISTER)
+		ast_string_field_set(dialog, fromdomain, global.default_fromdomain);
 
-	build_via(p, TRUE);
+	build_via(dialog, TRUE);
 	if (!callid)					/* Make sure we have a unique call ID */
-		build_callid_pvt(p);
+		build_callid_pvt(dialog);
 	else
-		ast_string_field_set(p, callid, callid);
+		ast_string_field_set(dialog, callid, callid);
 
-	dialogstatechange(p, DIALOG_STATE_TRYING);	/* Set dialog state */
+	dialogstatechange(dialog, DIALOG_STATE_TRYING);	/* Set dialog state */
 
 							/* Assign default music on hold class */
-	ast_string_field_set(p, mohinterpret, global.default_mohinterpret);
-	ast_string_field_set(p, mohsuggest, global.default_mohsuggest);
+	ast_string_field_set(dialog, mohinterpret, global.default_mohinterpret);
+	ast_string_field_set(dialog, mohsuggest, global.default_mohsuggest);
 	
-	p->capability = global.capability;		/* Set default codec settings */
+	dialog->capability = global.capability;		/* Set default codec settings */
 
-	if ((ast_test_flag(&p->flags[0], SIP_DTMF) == SIP_DTMF_RFC2833) ||
-	    (ast_test_flag(&p->flags[0], SIP_DTMF) == SIP_DTMF_AUTO))
-		p->noncodeccapability |= AST_RTP_DTMF;
+	if ((ast_test_flag(&dialog->flags[0], SIP_DTMF) == SIP_DTMF_RFC2833) ||
+	    (ast_test_flag(&dialog->flags[0], SIP_DTMF) == SIP_DTMF_AUTO))
+		dialog->noncodeccapability |= AST_RTP_DTMF;
 
-	if (p->udptl) {					/* T.38 fax properties */
-		p->t38.capability = global.t38_capability;
-		if (ast_udptl_get_error_correction_scheme(p->udptl) == UDPTL_ERROR_CORRECTION_REDUNDANCY)
-			p->t38.capability |= T38FAX_UDP_EC_REDUNDANCY;
-		else if (ast_udptl_get_error_correction_scheme(p->udptl) == UDPTL_ERROR_CORRECTION_FEC)
-			p->t38.capability |= T38FAX_UDP_EC_FEC;
-		else if (ast_udptl_get_error_correction_scheme(p->udptl) == UDPTL_ERROR_CORRECTION_NONE)
-			p->t38.capability |= T38FAX_UDP_EC_NONE;
-		p->t38.capability |= T38FAX_RATE_MANAGEMENT_TRANSFERED_TCF;
-		p->t38.jointcapability = p->t38.capability;
-	}
-	ast_string_field_set(p, context, global.default_context);
-	p->allowtransfer = global.allowtransfer;	/* Default transfer mode */
-
+	ast_string_field_set(dialog, context, global.default_context);
+	dialog->allowtransfer = global.allowtransfer;	/* Default transfer mode */
 
 	/* Add to active dialog list */
 	dialoglist_lock();
-	p->next = dialoglist;
-	dialoglist = p;
+	dialog->next = dialoglist;
+	dialoglist = dialog;
 	dialoglist_unlock();
 	if (option_debug)
-		ast_log(LOG_DEBUG, "Allocating new SIP dialog for %s - %s (%s)\n", callid ? callid : "(No Call-ID)", sip_method2txt(intended_method), p->rtp ? "With RTP" : "No RTP");
-	return p;
+		ast_log(LOG_DEBUG, "Allocating new SIP dialog for %s - %s (%s)\n", callid ? callid : "(No Call-ID)", sip_method2txt(intended_method), dialog->rtp ? "With RTP" : "No RTP");
+	return dialog;
 }
 
 /*! \brief Initialize temporary PVT */
@@ -826,7 +918,7 @@ static void temp_pvt_cleanup(void *data)
 }
 
 /*! \brief Transmit response, no retransmits, using a temporary pvt structure */
-static int transmit_response_using_temp(ast_string_field callid, struct sockaddr_in *sin, int useglobal_nat, const int intended_method, const struct sip_request *req, const char *msg)
+static int transmit_response_using_temp(ast_string_field callid, struct sockaddr_in *sin, int useglobal_nat, const int intended_method, struct sip_request *req, const char *msg)
 {
 	struct sip_dialog *p = NULL;
 
@@ -878,12 +970,12 @@ static int transmit_response_using_temp(ast_string_field callid, struct sockaddr
 	\note Called by handle_request, sipsock_read 
 
 	\page sip3_dialog_match chan_sip3:: Dialog matching and scenarios
-	\title Dialog matching
+	\par Dialog matching
 
 	SIP can be forked, so we need to separate dialogs from each other in a 
 	good way.
 
-	\title 1. Calling out, getting the same call back
+	\par 1. Calling out, getting the same call back
 	An OUTBOUND INVITE can be sent to a SiP proxy and come back twice. We
 	separate the two different calls by branch tag in the topmost via header.
 		Asterisk1 ----> INVITE ---> PROXY
@@ -898,13 +990,13 @@ static int transmit_response_using_temp(ast_string_field callid, struct sockaddr
 	a fake BYE and handle it internally, which wouuld be bad if the proxy
 	logs are important.
 	
-	\title 2. Getting the same INCOMING call multiple times
+	\par 2. Getting the same INCOMING call multiple times
 		UAC ----> INVITE ---> PROXY
 				    PROXY --> INVITE branch 1 ---> Asterisk1
 				    PROXY --> INVITE branch 2 ---> Asterisk1
 				    PROXY --> INVITE branch 3 ---> UA3 (not Asterisk)
 
-	\title 3. Sending INVITE, getting many replies
+	\par 3. Sending INVITE, getting many replies
 				
 	An OUTBOUND INVITE may be forked to two or more separate UA's. If there's
 	a stateless SIP proxy between us and the UA's, we get multiple replies.
@@ -953,7 +1045,8 @@ static int transmit_response_using_temp(ast_string_field callid, struct sockaddr
 			- Without trickery, the second 200 OK will have to
 			  get an ACK, then a BYE
 
-	\title 4. How do we handle this in Asterisk chan_sip3 ???
+	\par 4. How do we handle this in Asterisk chan_sip3 ???
+	\todo Add text here!
 
 	
 */
@@ -1098,3 +1191,56 @@ struct sip_dialog *match_or_create_dialog(struct sip_request *req, struct sockad
 
 	return cur;
 }
+
+/*! \brief Find via branch parameter */
+GNURK void find_via_branch(struct sip_request *req, char *viabuf, size_t vialen)
+{
+	char *dupvia;
+	char *viabranch;
+	char *sep;
+
+	if (ast_strlen_zero(req->via))
+		return;
+	dupvia = ast_strdupa(req->via);
+	if (!(viabranch = strcasestr(dupvia, ";branch=")))
+		return;
+	viabranch += 8;
+	if ((sep = strchr(viabranch, ';')))
+		*sep = '\0';
+	if (ast_test_flag(req, SIP_PKT_DEBUG) && option_debug > 3)
+		ast_log(LOG_DEBUG, "* Found via branch %s\n", viabranch);
+	strncpy(viabuf, viabranch, vialen);
+}
+
+
+/*! \brief Make branch tag for via header if it does not exist yet */
+static char *ourdialogbranch(struct sip_dialog *dialog, int forcenewbranch)
+{
+	char branch[20];
+	int seed = 0;
+
+	if (forcenewbranch || ast_strlen_zero(dialog->ourbranch)) {
+		if (forcenewbranch)
+			seed ^= ast_random();
+		else
+			seed = ast_random();
+		snprintf(branch, sizeof(branch), "z9hG4bk%08x", seed);
+		ast_string_field_set(dialog, ourbranch, branch);
+	}
+
+	return((char *) dialog->ourbranch);
+	
+}
+
+/*! \brief Build a Via header for a request */
+GNURK void build_via(struct sip_dialog *dialog, int forcenewbranch)
+{
+	/* Work around buggy UNIDEN UIP200 firmware */
+	const char *rport = ast_test_flag(&dialog->flags[0], SIP_NAT) & SIP_NAT_RFC3581 ? ";rport" : "";
+
+	/* z9hG4bK is a magic cookie.  See RFC 3261 section 8.1.1.7 */
+	ast_string_field_build(dialog, via, "SIP/2.0/UDP %s:%d;branch=%s%s",
+			ast_inet_ntoa(dialog->ourip), sipnet_ourport(&sipnet), 
+			ourdialogbranch(dialog, forcenewbranch), rport);
+}
+

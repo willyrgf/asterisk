@@ -1,7 +1,7 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 1999 - 2006, Digium, Inc.
+ * Copyright (C) 1999 - 2007, Digium, Inc.
  * and Edvina AB, Sollentuna, Sweden (chan_sip3 changes/additions)
  *
  * Mark Spencer <markster@digium.com>
@@ -60,7 +60,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/module.h"
 #include "asterisk/pbx.h"
 #include "asterisk/options.h"
-#include "asterisk/lock.h"
 #include "asterisk/sched.h"
 #include "asterisk/io.h"
 #include "asterisk/rtp.h"
@@ -69,23 +68,15 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/manager.h"
 #include "asterisk/callerid.h"
 #include "asterisk/cli.h"
-//#include "asterisk/app.h"
 #include "asterisk/musiconhold.h"
-//#include "asterisk/dsp.h"
 #include "asterisk/features.h"
-//#include "asterisk/srv.h"
-//#include "asterisk/astdb.h"
 #include "asterisk/causes.h"
 #include "asterisk/utils.h"
 #include "asterisk/file.h"
 #include "asterisk/astobj.h"
-//#include "asterisk/dnsmgr.h"
-//#include "asterisk/devicestate.h"
 #include "asterisk/linkedlists.h"
 #include "asterisk/stringfields.h"
 #include "asterisk/monitor.h"
-//#include "asterisk/localtime.h"
-//#include "asterisk/abstract_jb.h"
 #include "asterisk/compiler.h"
 
 #include "sip3.h"
@@ -138,11 +129,11 @@ static const struct cfsip_options sip_options[] = {	/* XXX used in 3 places */
 	{ SIP_OPT_SDP_ANAT,	NOT_SUPPORTED,	"sdp-anat" },
 	/* RFC3329: Security agreement mechanism */
 	{ SIP_OPT_SEC_AGREE,	NOT_SUPPORTED,	"sec_agree" },
-	/* SIMPLE events:  draft-ietf-simple-event-list-07.txt */
+	/* SIMPLE events:  RFC4662 */
 	{ SIP_OPT_EVENTLIST,	NOT_SUPPORTED,	"eventlist" },
 	/* GRUU: Globally Routable User Agent URI's */
 	{ SIP_OPT_GRUU,		NOT_SUPPORTED,	"gruu" },
-	/* Target-dialog: draft-ietf-sip-target-dialog-03.txt */
+	/* RFC4538: Target-dialog */
 	{ SIP_OPT_TARGET_DIALOG,NOT_SUPPORTED,	"tdialog" },
 	/* Disable the REFER subscription, RFC 4488 */
 	{ SIP_OPT_NOREFERSUB,	NOT_SUPPORTED,	"norefersub" },
@@ -162,6 +153,7 @@ int method_match(enum sipmethod id, const char *name)
 {
 	int len = strlen(sip_methods[id].text);
 	int l_name = name ? strlen(name) : 0;
+
 	/* true if the string is long enough, and ends with whitespace, and matches */
 	return (l_name >= len && name[len] < 33 &&
 		!strncasecmp(sip_methods[id].text, name, len));
@@ -251,11 +243,22 @@ void copy_request(struct sip_request *dst, const struct sip_request *src)
 	offset = ((void *)dst) - ((void *)src);
 	/* First copy stuff */
 	memcpy(dst, src, sizeof(*dst));
+	
+	/* Now, fix data part */
+	if (dst->data)
+		free(dst->data);
+	dst->data = ast_calloc(1, src->data_size);
+	dst->data_size = src->data_size;
+	memcpy(dst->data, src->data, src->data_size);
+
 	/* Now fix pointer arithmetic */
 	for (x=0; x < src->headers; x++)
 		dst->header[x] += offset;
 	for (x=0; x < src->lines; x++)
 		dst->line[x] += offset;
+
+	if (option_debug > 3)
+		ast_log(LOG_DEBUG, "==== Copied request... \n");
 }
 
 
@@ -339,6 +342,8 @@ const char *find_alias(const char *name, const char *_default)
 		{ "Reject-Contact",      "j" },
 		{ "Request-Disposition", "d" },
 		{ "Session-Expires",     "x" },
+		{ "Identity",            "y" },
+		{ "Identity-Info",       "n" },
 	};
 	int x;
 
@@ -388,7 +393,7 @@ int get_rdnis(struct sip_dialog *p, struct sip_request *oreq)
 	char *params, *reason = NULL;
 	struct sip_request *req;
 	
-	req = oreq ? oreq : &p->initreq;
+	req = oreq ? oreq : p->initreq;
 
 	ast_copy_string(tmp, get_header(req, "Diversion"), sizeof(tmp));
 	if (ast_strlen_zero(tmp))
@@ -450,7 +455,7 @@ int get_destination(struct sip_dialog *p, struct sip_request *oreq)
 	
 	req = oreq;
 	if (!req)
-		req = &p->initreq;
+		req = p->initreq;
 
 	/* Find the request URI */
 	if (req->rlPart2)
@@ -579,10 +584,21 @@ int get_destination(struct sip_dialog *p, struct sip_request *oreq)
 	return -1;
 }
 
-const char *__get_header(const struct sip_request *req, const char *name, int *start)
+const char *__get_header(struct sip_request *req, const char *name, int *start)
 {
 	int pass;
 
+	if (!ast_test_flag(req, SIP_PKT_PARSED)) {
+		/* Ok, so this req is not parse by parse_request yet. */
+		/* Parsing it before we have finished re-transmit may be bad. */
+		if (!ast_test_flag(req, SIP_PKT_CONNECTED))
+			parse_request(req);
+		else {
+			ast_log(LOG_ERROR, "Can't get header %s from request before parsing. Hang in for a jumpy ride!\n", name);
+			return "";
+		}
+			
+	}
 	/*
 	 * Technically you can place arbitrary whitespace both before and after the ':' in
 	 * a header, although RFC3261 clearly says you shouldn't before, and place just
@@ -612,14 +628,14 @@ const char *__get_header(const struct sip_request *req, const char *name, int *s
 }
 
 /*! \brief Get header from SIP request */
-const char *get_header(const struct sip_request *req, const char *name)
+const char *get_header(struct sip_request *req, const char *name)
 {
 	int start = 0;
 	return __get_header(req, name, &start);
 }
 
 /*! \brief Copy one header field from one request to another */
-int copy_header(struct sip_request *req, const struct sip_request *orig, const char *field)
+int copy_header(struct sip_request *req, struct sip_request *orig, const char *field)
 {
 	const char *tmp = get_header(orig, field);
 
@@ -630,7 +646,7 @@ int copy_header(struct sip_request *req, const struct sip_request *orig, const c
 }
 
 /*! \brief Copy all headers from one request to another */
-int copy_all_header(struct sip_request *req, const struct sip_request *orig, const char *field)
+int copy_all_header(struct sip_request *req, struct sip_request *orig, const char *field)
 {
 	int start = 0;
 	int copied = 0;
@@ -658,7 +674,7 @@ int copy_all_header(struct sip_request *req, const struct sip_request *orig, con
 	add the port number (from our point of view) to that parameter.
 	We always add ;received=<ip address> to the topmost via header.
 	Received: RFC 3261, rport RFC 3581 */
-int copy_via_headers(struct sip_dialog *p, struct sip_request *req, const struct sip_request *orig, const char *field)
+int copy_via_headers(struct sip_dialog *p, struct sip_request *req, struct sip_request *orig, const char *field)
 {
 	int copied = 0;
 	int start = 0;
@@ -671,21 +687,25 @@ int copy_via_headers(struct sip_dialog *p, struct sip_request *req, const struct
 			break;
 
 		if (!copied) {	/* Only check for empty rport in topmost via header */
-			char *rport;
+			char leftmost[256], *others, *rport;
+
+			/* Only work on leftmost value */
+			ast_copy_string(leftmost, oh, sizeof(leftmost));
+			others = strchr(leftmost, ',');
+			if (others)
+				*others++ = '\0';
 
 			/* Find ;rport;  (empty request) */
-			rport = strstr(oh, ";rport");
+			rport = strstr(leftmost, ";rport");
 			if (rport && *(rport+6) == '=') 
 				rport = NULL;		/* We already have a parameter to rport */
 
 			if (rport && ( (ast_test_flag(&p->flags[0], SIP_NAT) == SIP_NAT_ALWAYS) ||
 				(ast_test_flag(&p->flags[0], SIP_NAT) == SIP_NAT_RFC3581) ) ) {
 				/* We need to add received port - rport */
-				char tmp[256], *end;
+				char *end;
 
-				ast_copy_string(tmp, oh, sizeof(tmp));
-
-				rport = strstr(tmp, ";rport");
+				rport = strstr(leftmost, ";rport");
 
 				if (rport) {
 					end = strchr(rport + 1, ';');
@@ -699,13 +719,16 @@ int copy_via_headers(struct sip_dialog *p, struct sip_request *req, const struct
 				/* Whoo hoo!  Now we can indicate port address translation too!  Just
 				   another RFC (RFC3581). I'll leave the original comments in for
 				   posterity.  */
-				snprintf(new, sizeof(new), "%s;received=%s;rport=%d",
-					tmp, ast_inet_ntoa(p->recv.sin_addr),
-					ntohs(p->recv.sin_port));
-			} else {
-				/* We should *always* add a received to the topmost via */
-				snprintf(new, sizeof(new), "%s;received=%s",
-					oh, ast_inet_ntoa(p->recv.sin_addr));
+				snprintf(new, sizeof(new), "%s;received=%s;rport=%d%s%s",
+					leftmost, ast_inet_ntoa(p->recv.sin_addr),
+					ntohs(p->recv.sin_port),
+					others ? "," : "", others ? others : "");
+                        } else {
+                                /* We should *always* add a received to the topmost via */
+				snprintf(new, sizeof(new), "%s;received=%s%s%s",
+					leftmost, ast_inet_ntoa(p->recv.sin_addr),
+					others ? "," : "", others ? others : "");
+
 			}
 			oh = new;	/* the header to copy */
 		}  /* else add the following via headers untouched */
@@ -935,3 +958,61 @@ void parse_moved_contact(struct sip_dialog *p, struct sip_request *req)
 	}
 }
 
+/*! \brief Parse a SIP message 
+	\note this function is used both on incoming and outgoing packets
+*/
+GNURK void parse_request(struct sip_request *req)
+{
+	char *c = req->data, **dst = req->header;
+	int i = 0, lim = SIP_MAX_HEADERS - 1;
+	int seqno = 0;
+
+	req->header[0] = c;
+	req->headers = -1;	/* mark that we are working on the header */
+	for (; *c; c++) {
+		if (*c == '\r')		/* remove \r */
+			*c = '\0';
+		else if (*c == '\n') { /* end of this line */
+			*c = '\0';
+			if (sipdebug && option_debug > 3)
+				ast_log(LOG_DEBUG, "%7s %2d [%3d]: %s\n",
+					req->headers < 0 ? "Header" : "Body",
+					i, (int)strlen(dst[i]), dst[i]);
+			if (ast_strlen_zero(dst[i]) && req->headers < 0) {
+				req->headers = i;	/* record number of header lines */
+				dst = req->line;	/* start working on the body */
+				i = 0;
+				lim = SIP_MAX_LINES - 1;
+			} else {	/* move to next line, check for overflows */
+				if (i++ >= lim)
+					break;
+			}
+			dst[i] = c + 1; /* record start of next line */
+		}
+        }
+	/* update count of header or body lines */
+	if (req->headers >= 0)	/* we are in the body */
+		req->lines = i;
+	else {			/* no body */
+		req->headers = i;
+		req->lines = 0;
+		req->line[0] = "";
+	}
+
+	if (*c)
+		ast_log(LOG_WARNING, "Too many lines, skipping <%s>\n", c);
+	/* Split up the first line parts */
+	determine_firstline_parts(req);
+	/* Determine the seqno of this request once and for all */
+
+	ast_set_flag(req, SIP_PKT_PARSED);
+
+	req->callid = get_header(req, "Call-ID");
+	req->from = get_header(req, "From");
+	req->to = get_header(req, "To");
+	req->via = get_header(req, "Via");	/* Get the first via header only */
+	req->cseqheader = get_header(req, "CSeq");  
+	/* Seqno can be zero, but anyway... */
+	if (!req->seqno && sscanf(req->cseqheader, "%d ", &seqno) != 1)
+		req->seqno = seqno;
+}

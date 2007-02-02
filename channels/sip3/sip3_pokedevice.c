@@ -60,7 +60,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/module.h"
 #include "asterisk/pbx.h"
 #include "asterisk/options.h"
-#include "asterisk/lock.h"
 #include "asterisk/sched.h"
 #include "asterisk/io.h"
 #include "asterisk/rtp.h"
@@ -73,7 +72,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/musiconhold.h"
 #include "asterisk/dsp.h"
 #include "asterisk/features.h"
-#include "asterisk/acl.h"
 #include "asterisk/srv.h"
 #include "asterisk/astdb.h"
 #include "asterisk/causes.h"
@@ -94,7 +92,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 /*! \brief Poke peer (send qualify to check if peer is alive and well) */
 int sip_poke_peer_s(void *data)
 {
-	struct sip_peer *peer = data;
+	struct sip_device *peer = data;
 
 	peer->pokeexpire = -1;
 	sip_poke_peer(peer);
@@ -104,7 +102,7 @@ int sip_poke_peer_s(void *data)
 /*! \brief Handle qualification responses (OPTIONS) */
 void handle_response_peerpoke(struct sip_dialog *p, int resp, struct sip_request *req)
 {
-	struct sip_peer *peer = p->relatedpeer;
+	struct sip_device *peer = p->relatedpeer;
 	int statechanged, is_reachable, was_reachable;
 	int pingtime = ast_tvdiff_ms(ast_tvnow(), peer->ps);
 		
@@ -156,7 +154,7 @@ void handle_response_peerpoke(struct sip_dialog *p, int resp, struct sip_request
 /*! \brief React to lack of answer to Qualify poke */
 int sip_poke_noanswer(void *data)
 {
-	struct sip_peer *peer = data;
+	struct sip_device *peer = data;
 	
 	peer->pokeexpire = -1;
 	if (peer->lastms > -1) {
@@ -176,7 +174,7 @@ int sip_poke_noanswer(void *data)
 /*! \brief Check availability of peer, also keep NAT open
 \note	This is done with the interval in qualify= configuration option
 	Default is 2 seconds */
-int sip_poke_peer(struct sip_peer *peer)
+int sip_poke_peer(struct sip_device *peer)
 {
 	struct sip_dialog *p;
 
@@ -207,8 +205,8 @@ int sip_poke_peer(struct sip_peer *peer)
 	if (!ast_strlen_zero(peer->fullcontact))
 		ast_string_field_set(p, fullcontact, peer->fullcontact);
 
-	if (!ast_strlen_zero(peer->tohost))
-		ast_string_field_set(p, tohost, peer->tohost);
+	if (!ast_strlen_zero(peer->extra.tohost))
+		ast_string_field_set(p, tohost, peer->extra.tohost);
 	else
 		ast_string_field_set(p, tohost, ast_inet_ntoa(peer->addr.sin_addr));
 

@@ -526,6 +526,7 @@ static int default_maxcallbitrate;	/*!< Maximum bitrate for call */
 static struct ast_codec_pref default_prefs;		/*!< Default codec prefs */
 
 /* Global settings only apply to the channel */
+static int global_directrtpsetup;	/*!< Enable support for Direct RTP setup (no re-invites) */
 static int global_limitonpeers;		/*!< Match call limit on peers only */
 static int global_rtautoclear;
 static int global_notifyringing;	/*!< Send notifications on ringing */
@@ -562,7 +563,6 @@ static enum transfermodes global_allowtransfer;	/*!< SIP Refer restriction schem
 
 /*! \brief Codecs that we support by default: */
 static int global_capability = AST_FORMAT_ULAW | AST_FORMAT_ALAW | AST_FORMAT_GSM | AST_FORMAT_H263;
-static int noncodeccapability = AST_RTP_DTMF;
 
 /* Object counters */
 static int suserobjs = 0;                /*!< Static users */
@@ -944,6 +944,7 @@ struct sip_pvt {
 	int peercapability;			/*!< Supported peer capability */
 	int prefcodec;				/*!< Preferred codec (outbound only) */
 	int noncodeccapability;			/*!< DTMF RFC2833 telephony-event */
+	int jointnoncodeccapability;            /*!< Joint Non codec capability */
 	int redircodecs;			/*!< Redirect codecs */
 	int maxcallbitrate;			/*!< Maximum Call Bitrate for Video Calls */	
 	struct t38properties t38;		/*!< T38 settings */
@@ -1095,6 +1096,7 @@ struct sip_peer {
 	int inRinging;			/*!< Number of calls ringing */
 	int onHold;                     /*!< Peer has someone on hold */
 	int call_limit;			/*!< Limit of concurrent calls */
+	int busy_limit;			/*!< Limit where we signal busy */
 	enum transfermodes allowtransfer;	/*! SIP Refer restriction scheme */
 	char vmexten[AST_MAX_EXTENSION]; /*!< Dialplan extension for MWI notify message*/
 	char mailbox[AST_MAX_EXTENSION]; /*!< Mailbox setting for MWI checks */
@@ -1331,7 +1333,7 @@ static struct sip_auth *find_realm_authentication(struct sip_auth *authlist, con
 static int sip_do_reload(enum channelreloadreason reason);
 static int reload_config(enum channelreloadreason reason);
 static int expire_register(void *data);
-static void *do_sip_monitor(void *data);
+static void *do_monitor(void *data);
 static int restart_monitor(void);
 static int sip_send_mwi_to_peer(struct sip_peer *peer);
 static void sip_destroy(struct sip_pvt *p);
@@ -2960,7 +2962,8 @@ static int sip_call(struct ast_channel *ast, char *dest, int timeout)
 
 	p->callingpres = ast->cid.cid_pres;
 	p->jointcapability = ast_translate_available_formats(p->capability, p->prefcodec);
-	
+	p->jointnoncodeccapability = p->noncodeccapability;
+
 	/* If there are no audio formats left to offer, punt */
 	if (!(p->jointcapability & AST_FORMAT_AUDIO_MASK)) {
 		ast_log(LOG_WARNING, "No audio format found to offer. Cancelling call to %s\n", p->username);
@@ -3013,6 +3016,12 @@ static void __sip_destroy(struct sip_pvt *p, int lockowner, int lockdialoglist)
 
 	if (sip_debug_test_pvt(p) || option_debug > 2)
 		ast_verbose("Really destroying SIP dialog '%s' Method: %s\n", p->callid, sip_methods[p->method].text);
+
+	if (ast_test_flag(&p->flags[0], SIP_INC_COUNT)) {
+		update_call_counter(p, DEC_CALL_LIMIT);
+		if (option_debug > 1)
+			ast_log(LOG_DEBUG, "This call did not properly clean up call limits. Call ID %s\n", p->callid);
+	}
 
 	/* Remove link from peer to subscription of MWI */
 	if (p->relatedpeer && p->relatedpeer->mwipvt) 
@@ -3155,9 +3164,10 @@ static int update_call_counter(struct sip_pvt *fup, int event)
 	/* incoming and outgoing affects the inUse counter */
 	case DEC_CALL_LIMIT:
 		/* Decrement inuse count if applicable */
-		if (inuse && ast_test_flag(&fup->flags[0], SIP_INC_COUNT))
+		if (inuse && ast_test_flag(&fup->flags[0], SIP_INC_COUNT)) {
 			ast_atomic_fetchadd_int(inuse, -1);
-		else
+			ast_clear_flag(&fup->flags[0], SIP_INC_COUNT);
+		} else
 			*inuse = 0;
 		/* Decrement ringing count if applicable */
 		if (inringing && ast_test_flag(&fup->flags[1], SIP_PAGE2_INC_RINGING)) {
@@ -3642,7 +3652,7 @@ static int sip_write(struct ast_channel *ast, struct ast_frame *frame)
 				we simply forget the frames if we get modem frames before the bridge is up.
 				Fax will re-transmit.
 			*/
-			if (p->udptl && ast->_state != AST_STATE_UP) 
+			if (p->udptl && ast->_state == AST_STATE_UP) 
 				res = ast_udptl_write(p->udptl, frame);
 			sip_pvt_unlock(p);
 		}
@@ -5207,7 +5217,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 
 	newjointcapability = p->capability & (peercapability | vpeercapability);
 	newpeercapability = (peercapability | vpeercapability);
-	newnoncodeccapability = noncodeccapability & peernoncodeccapability;
+	newnoncodeccapability = p->noncodeccapability & peernoncodeccapability;
 		
 		
 	if (debug) {
@@ -5221,7 +5231,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 			    ast_getformatname_multiple(s4, BUFSIZ, newjointcapability));
 
 		ast_verbose("Non-codec capabilities (dtmf): us - %s, peer - %s, combined - %s\n",
-			    ast_rtp_lookup_mime_multiple(s1, BUFSIZ, noncodeccapability, 0, 0),
+			    ast_rtp_lookup_mime_multiple(s1, BUFSIZ, p->noncodeccapability, 0, 0),
 			    ast_rtp_lookup_mime_multiple(s2, BUFSIZ, peernoncodeccapability, 0, 0),
 			    ast_rtp_lookup_mime_multiple(s3, BUFSIZ, newnoncodeccapability, 0, 0));
 	}
@@ -5240,9 +5250,9 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 
 	/* We are now ready to change the sip session and p->rtp and p->vrtp with the offered codecs, since
 		they are acceptable */
-	p->jointcapability = newjointcapability;	/* Our joint codec profile for this call */
-	p->peercapability = newpeercapability;		/* The other sides capability in latest offer */
-	p->noncodeccapability = newnoncodeccapability;	/* DTMF capabilities */
+	p->jointcapability = newjointcapability;	        /* Our joint codec profile for this call */
+	p->peercapability = newpeercapability;		        /* The other sides capability in latest offer */
+	p->jointnoncodeccapability = newnoncodeccapability;	/* DTMF capabilities */
 
 	ast_rtp_pt_copy(p->rtp, newaudiortp);
 	if (p->vrtp)
@@ -6394,7 +6404,7 @@ static enum sip_result add_sdp(struct sip_request *resp, struct sip_pvt *p)
 
 	/* Now add DTMF RFC2833 telephony-event as a codec */
 	for (x = 1; x <= AST_RTP_MAX; x <<= 1) {
-		if (!(p->noncodeccapability & x))
+		if (!(p->jointnoncodeccapability & x))
 			continue;
 
 		add_noncodec_to_sdp(p, x, 8000,
@@ -6965,6 +6975,10 @@ static int transmit_state_notify(struct sip_pvt *p, int state, int full, int tim
 		pidfnote = "Unavailable";
 		break;
 	case AST_EXTENSION_ONHOLD:
+		statestring = "confirmed";
+		local_state = NOTIFY_INUSE;
+		pidfstate = "busy";
+		pidfnote = "On hold";
 		break;
 	case AST_EXTENSION_NOT_INUSE:
 	default:
@@ -7060,6 +7074,11 @@ static int transmit_state_notify(struct sip_pvt *p, int state, int full, int tim
 		else
 			ast_build_string(&t, &maxbytes, "<dialog id=\"%s\">\n", p->exten);
 		ast_build_string(&t, &maxbytes, "<state>%s</state>\n", statestring);
+		if (state == AST_EXTENSION_ONHOLD) {
+			ast_build_string(&t, &maxbytes, "<local>\n<target uri=\"%s\">\n"
+			                                "<param pname=\"+sip.rendering\" pvalue=\"no\">\n"
+			                                "</target>\n</local>\n", mto);
+		}
 		ast_build_string(&t, &maxbytes, "</dialog>\n</dialog-info>\n");
 		break;
 	case NONE:
@@ -10198,6 +10217,8 @@ static int _sip_show_peer(int type, int fd, struct mansession *s, const struct m
 		ast_cli(fd, "  VM Extension : %s\n", peer->vmexten);
 		ast_cli(fd, "  LastMsgsSent : %d/%d\n", (peer->lastmsgssent & 0x7fff0000) >> 16, peer->lastmsgssent & 0xffff);
 		ast_cli(fd, "  Call limit   : %d\n", peer->call_limit);
+		if (peer->busy_limit)
+			ast_cli(fd, "  Busy limit   : %d\n", peer->busy_limit);
 		ast_cli(fd, "  Dynamic      : %s\n", (ast_test_flag(&peer->flags[1], SIP_PAGE2_DYNAMIC)?"Yes":"No"));
 		ast_cli(fd, "  Callerid     : %s\n", ast_callerid_merge(cbuf, sizeof(cbuf), peer->cid_name, peer->cid_num, "<unspecified>"));
 		ast_cli(fd, "  MaxCallBR    : %d kbps\n", peer->maxcallbitrate);
@@ -10285,7 +10306,8 @@ static int _sip_show_peer(int type, int fd, struct mansession *s, const struct m
 		astman_append(s, "VoiceMailbox: %s\r\n", peer->mailbox);
 		astman_append(s, "TransferMode: %s\r\n", transfermode2str(peer->allowtransfer));
 		astman_append(s, "LastMsgsSent: %d\r\n", peer->lastmsgssent);
-		astman_append(s, "Call limit: %d\r\n", peer->call_limit);
+		astman_append(s, "Call-limit: %d\r\n", peer->call_limit);
+		astman_append(s, "Busy-limit: %d\r\n", peer->busy_limit);
 		astman_append(s, "MaxCallBR: %d kbps\r\n", peer->maxcallbitrate);
 		astman_append(s, "Dynamic: %s\r\n", (ast_test_flag(&peer->flags[1], SIP_PAGE2_DYNAMIC)?"Y":"N"));
 		astman_append(s, "Callerid: %s\r\n", ast_callerid_merge(cbuf, sizeof(cbuf), peer->cid_name, peer->cid_num, ""));
@@ -10457,6 +10479,7 @@ static int sip_show_settings(int fd, int argc, char *argv[])
 	ast_cli(fd, "  Realm. auth:            %s\n", authl ? "Yes": "No");
  	ast_cli(fd, "  Always auth rejects:    %s\n", global_alwaysauthreject ? "Yes" : "No");
 	ast_cli(fd, "  Call limit peers only:  %s\n", global_limitonpeers ? "Yes" : "No");
+	ast_cli(fd, "  Direct RTP setup:       %s\n", global_directrtpsetup ? "Yes" : "No");
 	ast_cli(fd, "  User Agent:             %s\n", global_useragent);
 	ast_cli(fd, "  MWI checking interval:  %d secs\n", global_mwitime);
 	ast_cli(fd, "  Reg. context:           %s\n", S_OR(global_regcontext, "(not set)"));
@@ -12841,8 +12864,10 @@ static int sip_park(struct ast_channel *chan1, struct ast_channel *chan2, struct
 			/* Could not start thread */
 			free(d);	/* We don't need it anymore. If thread is created, d will be free'd
 					   by sip_park_thread() */
+			pthread_attr_destroy(&attr);
 			return 0;
 		}
+		pthread_attr_destroy(&attr);
 	} 
 	return -1;
 }
@@ -15108,7 +15133,7 @@ static void check_rtp_timeout(struct sip_pvt *dialog, time_t t)
 \note	This thread monitors all the SIP sessions and peers that needs notification of mwi
 	(and thus do not have a separate thread) indefinitely 
 */
-static void *do_sip_monitor(void *data)
+static void *do_monitor(void *data)
 {
 	int res;
 	struct sip_pvt *dialog;
@@ -15233,7 +15258,7 @@ static int restart_monitor(void)
 		pthread_kill(monitor_thread, SIGURG);
 	} else {
 		/* Start a new monitor */
-		if (ast_pthread_create_background(&monitor_thread, NULL, do_sip_monitor, NULL) < 0) {
+		if (ast_pthread_create_background(&monitor_thread, NULL, do_monitor, NULL) < 0) {
 			ast_mutex_unlock(&monlock);
 			ast_log(LOG_ERROR, "Unable to start monitor thread.\n");
 			return -1;
@@ -15343,9 +15368,13 @@ static int sip_poke_peer(struct sip_peer *peer)
 		- not registered			AST_DEVICE_UNAVAILABLE
 		- registered				AST_DEVICE_NOT_INUSE
 		- fixed IP (!dynamic)			AST_DEVICE_NOT_INUSE
+	
+	Peers that does not have a known call and can't be reached by OPTIONS
+		- unreachable				AST_DEVICE_UNAVAILABLE
 
 	If we return AST_DEVICE_UNKNOWN, the device state engine will try to find
 	out a state by walking the channel list.
+
 */
 static int sip_devicestate(void *data)
 {
@@ -15369,27 +15398,38 @@ static int sip_devicestate(void *data)
 	if ((p = find_peer(host, NULL, 1))) {
 		if (p->addr.sin_addr.s_addr || p->defaddr.sin_addr.s_addr) {
 			/* we have an address for the peer */
-			/* if qualify is turned on, check the status */
-			if (p->maxms && (p->lastms > p->maxms)) {
-				res = AST_DEVICE_UNAVAILABLE;
-			} else {
-				/* qualify is not on, or the peer is responding properly */
-				/* check call limit */
-				if (p->call_limit && (p->inUse == p->call_limit))
-					res = AST_DEVICE_BUSY;
-				else if (p->call_limit && p->inUse)
-					res = AST_DEVICE_INUSE;
+		
+			/* Check status in this order
+				- Hold
+				- Ringing
+				- Busy (enforced only by call limit)
+				- Inuse (we have a call)
+				- Unreachable (qualify)
+			   If we don't find any of these state, report AST_DEVICE_NOT_INUSE
+			   for registered devices */
+
+			if (p->onHold)
+				/* First check for hold or ring states */
+				res = AST_DEVICE_ONHOLD;
+			else if (p->inRinging) {
+				if (p->inRinging == p->inUse)
+					res = AST_DEVICE_RINGING;
 				else
-					res = AST_DEVICE_NOT_INUSE;
-				if (p->onHold)
-					res = AST_DEVICE_ONHOLD;
-				else if (p->inRinging) {
-					if (p->inRinging == p->inUse)
-						res = AST_DEVICE_RINGING;
-					else
-						res = AST_DEVICE_RINGINUSE;
-				}
-			}
+					res = AST_DEVICE_RINGINUSE;
+			} else if (p->call_limit && (p->inUse == p->call_limit))
+				/* check call limit */
+				res = AST_DEVICE_BUSY;
+			else if (p->call_limit && p->busy_limit && p->inUse >= p->busy_limit)
+				/* We're forcing busy before we've reached the call limit */
+				res = AST_DEVICE_BUSY;
+			else if (p->call_limit && p->inUse)
+				/* Not busy, but we do have a call */
+				res = AST_DEVICE_INUSE;
+			else if (p->maxms && (p->lastms > p->maxms)) 
+				/* We don't have a call. Are we reachable at all? Requires qualify= */
+				res = AST_DEVICE_UNAVAILABLE;
+			else	/* Default reply if we're registered and have no other data */
+				res = AST_DEVICE_NOT_INUSE;
 		} else {
 			/* there is no address, it's unavailable */
 			res = AST_DEVICE_UNAVAILABLE;
@@ -16299,6 +16339,7 @@ static int reload_config(enum channelreloadreason reason)
 	global_notifyringing = DEFAULT_NOTIFYRINGING;
 	global_limitonpeers = FALSE;		/*!< Match call limit on peers only */
 	global_notifyhold = FALSE;		/*!< Keep track of hold status for a peer */
+	global_directrtpsetup = FALSE;		/* Experimental feature, disabled by default */
 	global_alwaysauthreject = 0;
 	global_allowsubscribe = FALSE;
 	snprintf(global_useragent, sizeof(global_useragent), "%s %s", DEFAULT_USERAGENT, ASTERISK_VERSION);
@@ -16425,6 +16466,8 @@ static int reload_config(enum channelreloadreason reason)
 			ast_copy_string(default_notifymime, v->value, sizeof(default_notifymime));
 		} else if (!strcasecmp(v->name, "limitonpeers")) {
 			global_limitonpeers = ast_true(v->value);
+		} else if (!strcasecmp(v->name, "directrtpsetup")) {
+			global_directrtpsetup = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "notifyringing")) {
 			global_notifyringing = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "notifyhold")) {
@@ -16975,6 +17018,11 @@ static int sip_set_rtp_peer(struct ast_channel *chan, struct ast_rtp *rtp, struc
 	p = chan->tech_pvt;
 	if (!p) 
 		return -1;
+
+	/* Disable early RTP bridge  */
+	if (chan->_state != AST_STATE_UP && !global_directrtpsetup) 	/* We are in early state */
+		return 0;
+
 	sip_pvt_lock(p);
 	if (ast_test_flag(&p->flags[0], SIP_ALREADYGONE)) {
 		/* If we're destroyed, don't bother */

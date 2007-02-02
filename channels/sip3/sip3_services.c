@@ -42,13 +42,13 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <unistd.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
+#include <sys/signal.h>
 #include <net/if.h>
 #include <errno.h>
 #include <stdlib.h>
 #include <fcntl.h>
 #include <netdb.h>
 #include <signal.h>
-#include <sys/signal.h>
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
 #include <arpa/inet.h>
@@ -62,12 +62,10 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/module.h"
 #include "asterisk/pbx.h"
 #include "asterisk/options.h"
-#include "asterisk/lock.h"
 #include "asterisk/sched.h"
 #include "asterisk/io.h"
 #include "asterisk/rtp.h"
 #include "asterisk/udptl.h"
-#include "asterisk/acl.h"
 #include "asterisk/manager.h"
 #include "asterisk/callerid.h"
 #include "asterisk/cli.h"
@@ -160,7 +158,7 @@ void sip_send_all_registers(void)
 }
 
 /*! \brief Parse register=> line in sip.conf and add to registry */
-int sip_register(char *value, int lineno, struct sip_peer *peer)
+int sip_register(char *value, int lineno, struct sip_device *peer)
 {
 	struct sip_registry *reg;
 	char username[256] = "";
@@ -173,12 +171,12 @@ int sip_register(char *value, int lineno, struct sip_peer *peer)
 	
 	if (peer != NULL) {	/* Build registration string from peer info */
 		/* Need to copy port number as well */
-		if (ast_strlen_zero(peer->fromuser))
+		if (ast_strlen_zero(peer->extra.fromuser))
 			snprintf(username, sizeof(username), "%s:%s@%s/%s",
-				peer->name, peer->secret, peer->tohost, peer->regexten);
+				peer->name, peer->secret, peer->extra.tohost, peer->extra.regexten);
 		else
 			snprintf(username, sizeof(username), "%s:%s:%s@%s/%s",
-				peer->name, peer->secret, peer->fromuser, peer->tohost, peer->regexten);
+				peer->name, peer->secret, peer->extra.fromuser, peer->extra.tohost, peer->extra.regexten);
 	} else if (value)
 		ast_copy_string(username, value, sizeof(username));
 	else
@@ -373,12 +371,14 @@ static int sip_reg_timeout(void *data)
 /*! \brief Transmit register to SIP proxy or UA */
 int transmit_register(struct sip_registry *r, int sipmethod, const char *auth, const char *authheader)
 {
-	struct sip_request req;
+	struct sip_request *req;
 	char from[256];
 	char to[256];
 	char tmp[80];
 	char addr[80];
-	struct sip_dialog *p;
+	struct sip_dialog *dialog;
+
+	req = siprequest_alloc(SIP_MAX_PACKET, &sipnet);
 
 	/* exit if we are already in process with this registrar ?*/
 	if ( r == NULL || ((auth==NULL) && (r->regstate==REG_STATE_REGSENT || r->regstate==REG_STATE_AUTHSENT))) {
@@ -391,9 +391,9 @@ int transmit_register(struct sip_registry *r, int sipmethod, const char *auth, c
 			ast_log(LOG_WARNING, "Already have a REGISTER going on to %s@%s?? \n", r->username, r->hostname);
 			return 0;
 		} else {
-			p = r->call;
-			make_our_tag(p->tag, sizeof(p->tag));	/* create a new local tag for every register attempt */
-			ast_string_field_free(p, theirtag);	/* forget their old tag, so we don't match tags when getting response */
+			dialog = r->call;
+			make_our_tag(dialog->tag, sizeof(dialog->tag));	/* create a new local tag for every register attempt */
+			ast_string_field_free(dialog, theirtag);	/* forget their old tag, so we don't match tags when getting response */
 		}
 	} else {
 		/* Build callid for registration if we haven't registered before */
@@ -402,17 +402,17 @@ int transmit_register(struct sip_registry *r, int sipmethod, const char *auth, c
 			r->callid_valid = TRUE;
 		}
 		/* Allocate SIP packet for registration */
-		if (!(p = sip_alloc( r->callid, NULL, 0, SIP_REGISTER))) {
+		if (!(dialog = sip_alloc( r->callid, NULL, 0, SIP_REGISTER))) {
 			ast_log(LOG_WARNING, "Unable to allocate registration transaction (memory or socket error)\n");
 			return 0;
 		}
-		if (!ast_test_flag(&p->flags[0], SIP_NO_HISTORY))
-			append_history(p, "RegistryInit", "Account: %s@%s", r->username, r->hostname);
+		if (!ast_test_flag(&dialog->flags[0], SIP_NO_HISTORY))
+			append_history(dialog, "RegistryInit", "Account: %s@%s", r->username, r->hostname);
 		/* Find address to hostname */
-		if (create_addr(p, r->hostname)) {
+		if (create_addr(dialog, NULL, r->hostname, NULL)) {
 			/* we have what we hope is a temporary network error,
 			 * probably DNS.  We need to reschedule a registration try */
-			sip_destroy(p);
+			sip_destroy(dialog);
 			if (r->timeout > -1) {
 				ast_sched_del(sched, r->timeout);
 				r->timeout = ast_sched_add(sched, global.reg_timeout*1000, sip_reg_timeout, r);
@@ -425,48 +425,48 @@ int transmit_register(struct sip_registry *r, int sipmethod, const char *auth, c
 			return 0;
 		}
 		/* Copy back Call-ID in case create_addr changed it */
-		ast_string_field_set(r, callid, p->callid);
+		ast_string_field_set(r, callid, dialog->callid);
 		if (r->portno)
-			p->sa.sin_port = htons(r->portno);
+			dialog->sa.sin_port = htons(r->portno);
 		else 	/* Set registry port to the port set from the peer definition/srv or default */
-			r->portno = ntohs(p->sa.sin_port);
-		ast_set_flag(&p->flags[0], SIP_OUTGOING);	/* Registration is outgoing call */
-		r->call=p;			/* Save pointer to SIP packet */
-		p->registry = ASTOBJ_REF(r);	/* Add pointer to registry in packet */
+			r->portno = ntohs(dialog->sa.sin_port);
+		ast_set_flag(&dialog->flags[0], SIP_OUTGOING);	/* Registration is outgoing call */
+		r->call = dialog;			/* Save pointer to SIP packet */
+		dialog->registry = ASTOBJ_REF(r);	/* Add pointer to registry in packet */
 		if (!ast_strlen_zero(r->secret))	/* Secret (password) */
-			ast_string_field_set(p, peersecret, r->secret);
+			ast_string_field_set(dialog, peersecret, r->secret);
 		if (!ast_strlen_zero(r->md5secret))
-			ast_string_field_set(p, peermd5secret, r->md5secret);
+			ast_string_field_set(dialog, peermd5secret, r->md5secret);
 		/* User name in this realm  
 		- if authuser is set, use that, otherwise use username */
 		if (!ast_strlen_zero(r->authuser)) {	
-			ast_string_field_set(p, peername, r->authuser);
-			ast_string_field_set(p, authname, r->authuser);
+			ast_string_field_set(dialog, peername, r->authuser);
+			ast_string_field_set(dialog, authname, r->authuser);
 		} else if (!ast_strlen_zero(r->username)) {
-			ast_string_field_set(p, peername, r->username);
-			ast_string_field_set(p, authname, r->username);
-			ast_string_field_set(p, fromuser, r->username);
+			ast_string_field_set(dialog, peername, r->username);
+			ast_string_field_set(dialog, authname, r->username);
+			ast_string_field_set(dialog, fromuser, r->username);
 		}
 		if (!ast_strlen_zero(r->username))
-			ast_string_field_set(p, username, r->username);
+			ast_string_field_set(dialog, username, r->username);
 		/* Save extension in packet */
 	
 		/* If we have a peer relationship, fetch som more data from taht peer.
 		*/
 		if (r->peer) {
-			if (!ast_strlen_zero(r->peer->fromdomain))
-				ast_string_field_set(p, fromdomain, r->peer->fromdomain);
+			if (!ast_strlen_zero(r->peer->extra.fromdomain))
+				ast_string_field_set(dialog, fromdomain, r->peer->extra.fromdomain);
 		}
-		ast_string_field_set(p, exten, r->contact);
+		ast_string_field_set(dialog, exten, r->contact);
 
 		/*
 		  check which address we should use in our contact header 
 		  based on whether the remote host is on the external or
 		  internal network so we can register through nat
 		 */
-		if (sip_ouraddrfor(&p->sa.sin_addr, &p->ourip))
-			p->ourip = sipnet.bindaddr.sin_addr;
-		build_contact(p);
+		if (sip_ouraddrfor(&dialog->sa.sin_addr, &dialog->ourip))
+			dialog->ourip = sipnet.bindaddr.sin_addr;
+		build_contact(dialog);
 	}
 
 	/* set up a timeout */
@@ -481,76 +481,75 @@ int transmit_register(struct sip_registry *r, int sipmethod, const char *auth, c
 	}
 
 	if (strchr(r->username, '@')) {
-		snprintf(from, sizeof(from), "<sip:%s>;tag=%s", r->username, p->tag);
-		if (!ast_strlen_zero(p->theirtag))
-			snprintf(to, sizeof(to), "<sip:%s>;tag=%s", r->username, p->theirtag);
+		snprintf(from, sizeof(from), "<sip:%s>;tag=%s", r->username, dialog->tag);
+		if (!ast_strlen_zero(dialog->theirtag))
+			snprintf(to, sizeof(to), "<sip:%s>;tag=%s", r->username, dialog->theirtag);
 		else
 			snprintf(to, sizeof(to), "<sip:%s>", r->username);
 	} else {
-		snprintf(from, sizeof(from), "<sip:%s@%s>;tag=%s", r->username, p->tohost, p->tag);
-		if (!ast_strlen_zero(p->theirtag))
-			snprintf(to, sizeof(to), "<sip:%s@%s>;tag=%s", r->username, p->tohost, p->theirtag);
+		snprintf(from, sizeof(from), "<sip:%s@%s>;tag=%s", r->username, dialog->tohost, dialog->tag);
+		if (!ast_strlen_zero(dialog->theirtag))
+			snprintf(to, sizeof(to), "<sip:%s@%s>;tag=%s", r->username, dialog->tohost, dialog->theirtag);
 		else
-			snprintf(to, sizeof(to), "<sip:%s@%s>", r->username, p->tohost);
+			snprintf(to, sizeof(to), "<sip:%s@%s>", r->username, dialog->tohost);
 	}
 	
 	/* Fromdomain is what we are registering to, regardless of actual
 	   host name from SRV */
-	snprintf(addr, sizeof(addr), "sip:%s", S_OR(p->fromdomain, r->hostname));
-	ast_string_field_set(p, uri, addr);
+	snprintf(addr, sizeof(addr), "sip:%s", S_OR(dialog->fromdomain, r->hostname));
+	ast_string_field_set(dialog, uri, addr);
 
-	init_req(&req, sipmethod, addr);
+	init_req(req, sipmethod, addr);
 
 	/* Add to CSEQ */
 	snprintf(tmp, sizeof(tmp), "%u %s", ++r->ocseq, sip_method2txt(sipmethod));
-	p->ocseq = r->ocseq;
-	build_via(p, TRUE);
-	add_header(&req, "Via", p->via);
-	add_header(&req, "From", from);
-	add_header(&req, "To", to);
-	add_header(&req, "Call-ID", p->callid);
-	add_header(&req, "CSeq", tmp);
-	add_header(&req, "User-Agent", global.useragent);
-	add_header(&req, "Max-Forwards", global.maxforwards);
-
+	req->seqno = dialog->ocseq = r->ocseq;
+	build_via(dialog, TRUE);
+	add_header(req, "Via", dialog->via);
+	add_header(req, "From", from);
+	add_header(req, "To", to);
+	add_header(req, "Call-ID", dialog->callid);
+	add_header(req, "CSeq", tmp);
+	add_header(req, "User-Agent", global.useragent);
+	append_maxforwards(req);
 	
 	if (auth) 	/* Add auth header */
-		add_header(&req, authheader, auth);
+		add_header(req, authheader, auth);
 	else if (!ast_strlen_zero(r->nonce)) {
 		char digest[1024];
 
 		/* We have auth data to reuse, build a digest header! */
 		if (sipdebug)
 			ast_log(LOG_DEBUG, "   >>> Re-using Auth data for %s@%s\n", r->username, r->hostname);
-		ast_string_field_set(p, realm, r->realm);
-		ast_string_field_set(p, nonce, r->nonce);
-		ast_string_field_set(p, domain, r->domain);
-		ast_string_field_set(p, opaque, r->opaque);
-		ast_string_field_set(p, qop, r->qop);
-		p->noncecount = r->noncecount++;
+		ast_string_field_set(dialog, realm, r->realm);
+		ast_string_field_set(dialog, nonce, r->nonce);
+		ast_string_field_set(dialog, domain, r->domain);
+		ast_string_field_set(dialog, opaque, r->opaque);
+		ast_string_field_set(dialog, qop, r->qop);
+		dialog->noncecount = r->noncecount++;
 
-		memset(digest,0,sizeof(digest));
-		if(!build_reply_digest(p, sipmethod, digest, sizeof(digest)))
-			add_header(&req, "Authorization", digest);
+		memset(digest, 0, sizeof(digest));
+		if(!build_reply_digest(dialog, sipmethod, digest, sizeof(digest)))
+			add_header(req, "Authorization", digest);
 		else
 			ast_log(LOG_NOTICE, "No authorization available for authentication of registration to %s@%s\n", r->username, r->hostname);
 	
 	}
 
 	snprintf(tmp, sizeof(tmp), "%d", r->expiry);
-	add_header(&req, "Expires", tmp);
-	add_header(&req, "Contact", p->our_contact);
-	add_header(&req, "Event", "registration");
-	add_header_contentLength(&req, 0);
+	add_header(req, "Expires", tmp);
+	add_header(req, "Contact", dialog->our_contact);
+	add_header(req, "Event", "registration");
+	add_header_contentLength(req, 0);
 
-	initialize_initreq(p, &req);
-	if (sip_debug_test_pvt(p))
-		ast_verbose("REGISTER %d headers, %d lines\n", p->initreq.headers, p->initreq.lines);
+	initialize_initreq(dialog, req);
+	if (sip_debug_test_pvt(dialog))
+		ast_verbose("REGISTER %d headers, %d lines\n", dialog->initreq->headers, dialog->initreq->lines);
 	r->regstate = auth ? REG_STATE_AUTHSENT : REG_STATE_REGSENT;
 	r->regattempts++;	/* Another attempt */
 	if (option_debug > 3)
 		ast_verbose("REGISTER attempt %d to %s@%s\n", r->regattempts, r->username, r->hostname);
-	return send_request(p, &req, XMIT_CRITICAL, p->ocseq);
+	return send_request(dialog, req, XMIT_CRITICAL);
 }
 
 /*! \brief Handle responses on REGISTER to services */
@@ -558,7 +557,7 @@ int handle_response_register(struct sip_dialog *p, int resp, char *rest, struct 
 {
 	int expires, expires_ms;
 	struct sip_registry *r;
-	r=p->registry;
+	r = p->registry;
 
 	switch (resp) {
 	case 401:	/* Unauthorized */
@@ -575,7 +574,7 @@ int handle_response_register(struct sip_dialog *p, int resp, char *rest, struct 
 		ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
 		break;
 	case 404:	/* Not found */
-		ast_log(LOG_WARNING, "Got 404 Not found on SIP register to service %s@%s, giving up\n", p->registry->username,p->registry->hostname);
+		ast_log(LOG_WARNING, "Got 404 Not found on SIP register to service %s@%s, giving up\n", p->registry->username, p->registry->hostname);
 		if (global.regattempts_max)
 			p->registry->regattempts = global.regattempts_max+1;
 		ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
@@ -584,7 +583,7 @@ int handle_response_register(struct sip_dialog *p, int resp, char *rest, struct 
 		break;
 	case 407:	/* Proxy auth */
 		if (p->authtries == MAX_AUTHTRIES || do_register_auth(p, req, resp)) {
-			ast_log(LOG_NOTICE, "Failed to authenticate on REGISTER to '%s' (tries '%d')\n", get_header(&p->initreq, "From"), p->authtries);
+			ast_log(LOG_NOTICE, "Failed to authenticate on REGISTER to '%s' (tries '%d')\n", get_header(p->initreq, "From"), p->authtries);
 			ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
 		}
 		break;

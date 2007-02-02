@@ -1,7 +1,7 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 1999 - 2006, Digium, Inc.
+ * Copyright (C) 1999 - 2007, Digium, Inc.
  * and Edvina AB, Sollentuna, Sweden (chan_sip3 changes/additions)
  *
  * Mark Spencer <markster@digium.com>
@@ -53,6 +53,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <netinet/ip.h>
 #include <regex.h>
 
+#include "asterisk/cli.h"
 #include "asterisk/lock.h"
 #include "asterisk/channel.h"
 #include "asterisk/config.h"
@@ -60,7 +61,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/module.h"
 #include "asterisk/pbx.h"
 #include "asterisk/options.h"
-#include "asterisk/lock.h"
 #include "asterisk/sched.h"
 #include "asterisk/io.h"
 #include "asterisk/rtp.h"
@@ -71,11 +71,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/cli.h"
 #include "asterisk/app.h"
 #include "asterisk/musiconhold.h"
-#include "asterisk/dsp.h"
 #include "asterisk/features.h"
-#include "asterisk/acl.h"
-#include "asterisk/srv.h"
-#include "asterisk/astdb.h"
+//#include "asterisk/srv.h"
+//#include "asterisk/astdb.h"
 #include "asterisk/causes.h"
 #include "asterisk/utils.h"
 #include "asterisk/file.h"
@@ -179,10 +177,10 @@ void  print_group(int fd, ast_group_t group, int crlf)
 	ast_cli(fd, crlf ? "%s\r\n" : "%s\n", ast_print_group(buf, sizeof(buf), group) );
 }
 
-/*! \brief  Report Peer status in character string
+/*! \brief  Report Device status in character string
  *  \return 0 if peer is unreachable, 1 if peer is online, -1 if unmonitored
  */
-int peer_status(struct sip_peer *device, char *status, int statuslen)
+int device_status(struct sip_device *device, char *status, int statuslen)
 {
 	int res = 0;
 	if (device->maxms) {
@@ -245,7 +243,7 @@ char mandescr_show_devices[] =
 "  ActionID: <id>	Action ID for this transaction. Will be returned.\n";
 
 /*! \brief  Execute sip show devices command */
-static int _sip_show_devices(int fd, int *total, struct mansession *s, struct message *m, int argc, char *argv[])
+static int _sip_show_devices(int fd, int *total, struct mansession *s, const struct message *m, int argc, const char *argv[])
 {
 	regex_t regexbuf;
 	int havepattern = FALSE;
@@ -259,14 +257,14 @@ static int _sip_show_devices(int fd, int *total, struct mansession *s, struct me
 	int peers_mon_offline = 0;
 	int peers_unmon_offline = 0;
 	int peers_unmon_online = 0;
-	char *id;
+	const char *id;
 	char idtext[256] = "";
 	int realtimepeers;
 
 	realtimepeers = ast_check_realtime("sippeers");
 
 	if (s) {	/* Manager - get ActionID */
-		id = astman_get_header(m,"ActionID");
+		id = astman_get_header(m, "ActionID");
 		if (!ast_strlen_zero(id))
 			snprintf(idtext, sizeof(idtext), "ActionID: %s\r\n", id);
 	}
@@ -305,7 +303,7 @@ static int _sip_show_devices(int fd, int *total, struct mansession *s, struct me
 		else
 			ast_copy_string(name, iterator->name, sizeof(name));
 		
-		pstatus = peer_status(iterator, status, sizeof(status));
+		pstatus = device_status(iterator, status, sizeof(status));
 		if (pstatus == 1)
 			peers_mon_online++;
 		else if (pstatus == 0)
@@ -384,10 +382,10 @@ static int _sip_show_devices(int fd, int *total, struct mansession *s, struct me
 
 /*! \brief  Show SIP peers in the manager API */
 /*    Inspired from chan_iax2 */
-int manager_sip_show_devices( struct mansession *s, struct message *m )
+int manager_sip_show_devices(struct mansession *s, const struct message *m )
 {
-	char *id = astman_get_header(m,"ActionID");
-	char *a[] = { "sip3", "show", "peers" };
+	const char *id = astman_get_header(m,"ActionID");
+	const char *a[] = { "sip3", "show", "peers" };
 	char idtext[256] = "";
 	int total = 0;
 
@@ -410,7 +408,7 @@ int manager_sip_show_devices( struct mansession *s, struct message *m )
 /*! \brief  CLI Show Peers command */
 static int sip_show_devices(int fd, int argc, char *argv[])
 {
-	return _sip_show_devices(fd, NULL, NULL, NULL, argc, argv);
+	return _sip_show_devices(fd, NULL, NULL, NULL, argc, (const char **) argv);
 }
 
 
@@ -435,11 +433,11 @@ static char mandescr_show_device[] =
 "  ActionID: <id>	  Optional action ID for this AMI transaction.\n";
 
 /*! \brief Show one peer in detail (main function) */
-static int _sip_show_device(int type, int fd, struct mansession *s, struct message *m, int argc, char *argv[])
+static int _sip_show_device(int type, int fd, struct mansession *s, const struct message *m, int argc, const char *argv[])
 {
 	char status[30] = "";
 	char cbuf[256];
-	struct sip_peer *peer;
+	struct sip_device *device;
 	char codec_buf[512];
 	struct ast_codec_pref *pref;
 	struct ast_variable *v;
@@ -453,9 +451,9 @@ static int _sip_show_device(int type, int fd, struct mansession *s, struct messa
 		return RESULT_SHOWUSAGE;
 
 	load_realtime = (argc == 5 && !strcmp(argv[4], "load")) ? TRUE : FALSE;
-	peer = find_device(argv[3], NULL, load_realtime);
+	device = find_device(argv[3], NULL, load_realtime);
 	if (s) { 	/* Manager */
-		if (peer)
+		if (device)
 			astman_append(s, "Response: Success\r\n");
 		else {
 			snprintf (cbuf, sizeof(cbuf), "Device %s not found.\n", argv[3]);
@@ -463,146 +461,147 @@ static int _sip_show_device(int type, int fd, struct mansession *s, struct messa
 			return 0;
 		}
 	}
-	if (peer && type==0 ) { /* Normal listing */
+	if (device && type==0 ) { /* Normal listing */
 		ast_cli(fd,"\n\n");
-		if (!ast_strlen_zero(peer->domain))
-			ast_cli(fd, "  * Name       : %s@%s\n", peer->name, peer->domain);
+		if (!ast_strlen_zero(device->domain))
+			ast_cli(fd, "  * Name       : %s@%s\n", device->name, device->domain);
 		else
-			ast_cli(fd, "  * Name       : %s <no domain>\n", peer->name);
+			ast_cli(fd, "  * Name       : %s <no domain>\n", device->name);
 		if (realtimepeers) {	/* Realtime is enabled */
-			ast_cli(fd, "  Realtime peer: %s\n", ast_test_flag(&peer->flags[0], SIP_REALTIME) ? "Yes, cached" : "No");
+			ast_cli(fd, "  Realtime device: %s\n", ast_test_flag(&device->flags[0], SIP_REALTIME) ? "Yes, cached" : "No");
 		}
-		ast_cli(fd, "  Secret       : %s\n", ast_strlen_zero(peer->secret)?"<Not set>":"<Set>");
-		ast_cli(fd, "  MD5Secret    : %s\n", ast_strlen_zero(peer->md5secret)?"<Not set>":"<Set>");
-		for (auth = peer->auth; auth; auth = auth->next) {
+		ast_cli(fd, "  Secret       : %s\n", ast_strlen_zero(device->secret)?"<Not set>":"<Set>");
+		ast_cli(fd, "  MD5Secret    : %s\n", ast_strlen_zero(device->md5secret)?"<Not set>":"<Set>");
+		for (auth = device->auth; auth; auth = auth->next) {
 			ast_cli(fd, "  Realm-auth   : Realm %-15.15s User %-10.20s ", auth->realm, auth->username);
 			ast_cli(fd, "%s\n", !ast_strlen_zero(auth->secret)?"<Secret set>":(!ast_strlen_zero(auth->md5secret)?"<MD5secret set>" : "<Not set>"));
 		}
-		ast_cli(fd, "  Context      : %s\n", peer->context);
-		ast_cli(fd, "  Subscr.Cont. : %s\n", S_OR(peer->subscribecontext, "<Not set>") );
-		ast_cli(fd, "  Language     : %s\n", peer->language);
-		if (!ast_strlen_zero(peer->accountcode))
-			ast_cli(fd, "  Accountcode  : %s\n", peer->accountcode);
-		ast_cli(fd, "  AMA flags    : %s\n", ast_cdr_flags2str(peer->amaflags));
-		ast_cli(fd, "  Transfer mode: %s\n", transfermode2str(peer->allowtransfer));
-		ast_cli(fd, "  CallingPres  : %s\n", ast_describe_caller_presentation(peer->callingpres));
-		if (!ast_strlen_zero(peer->fromuser))
-			ast_cli(fd, "  FromUser     : %s\n", peer->fromuser);
-		if (!ast_strlen_zero(peer->fromdomain))
-			ast_cli(fd, "  FromDomain   : %s\n", peer->fromdomain);
+		ast_cli(fd, "  Context      : %s\n", device->extra.context);
+		ast_cli(fd, "  Subscr.Cont. : %s\n", S_OR(device->extra.subscribecontext, "<Not set>") );
+		ast_cli(fd, "  Language     : %s\n", device->language);
+		if (!ast_strlen_zero(device->extra.accountcode))
+			ast_cli(fd, "  Accountcode  : %s\n", device->extra.accountcode);
+		ast_cli(fd, "  AMA flags    : %s\n", ast_cdr_flags2str(device->extra.amaflags));
+		ast_cli(fd, "  Transfer mode: %s\n", transfermode2str(device->allowtransfer));
+		ast_cli(fd, "  CallingPres  : %s\n", ast_describe_caller_presentation(device->callingpres));
+		if (!ast_strlen_zero(device->extra.fromuser))
+			ast_cli(fd, "  FromUser     : %s\n", device->extra.fromuser);
+		if (!ast_strlen_zero(device->extra.fromdomain))
+			ast_cli(fd, "  FromDomain   : %s\n", device->extra.fromdomain);
 		ast_cli(fd, "  Callgroup    : ");
-		print_group(fd, peer->callgroup, 0);
+		print_group(fd, device->callgroup, 0);
 		ast_cli(fd, "  Pickupgroup  : ");
-		print_group(fd, peer->pickupgroup, 0);
-		ast_cli(fd, "  Mailbox      : %s\n", peer->mailbox);
-		ast_cli(fd, "  VM Extension : %s\n", peer->vmexten);
-		ast_cli(fd, "  LastMsgsSent : %d\n", peer->lastmsgssent);
-		ast_cli(fd, "  Call limit   : %d\n", peer->call_limit);
-		ast_cli(fd, "  Dynamic      : %s\n", (ast_test_flag(&peer->flags[1], SIP_PAGE2_DYNAMIC)?"Yes":"No"));
-		ast_cli(fd, "  Expire       : %ld\n", ast_sched_when(sched, peer->expire));
-		ast_cli(fd, "  Callerid     : %s\n", ast_callerid_merge(cbuf, sizeof(cbuf), peer->cid_name, peer->cid_num, "<unspecified>"));
-		ast_cli(fd, "  MaxCallBR    : %d kbps\n", peer->maxcallbitrate);
-		ast_cli(fd, "  Insecure     : %s\n", insecure2str(ast_test_flag(&peer->flags[0], SIP_INSECURE_PORT), ast_test_flag(&peer->flags[0], SIP_INSECURE_INVITE)));
-		ast_cli(fd, "  Nat          : %s\n", nat2str(ast_test_flag(&peer->flags[0], SIP_NAT)));
-		ast_cli(fd, "  ACL          : %s\n", (peer->ha?"Yes":"No"));
-		ast_cli(fd, "  T38 pt UDPTL : %s\n", ast_test_flag(&peer->flags[1], SIP_PAGE2_T38SUPPORT_UDPTL)?"Yes":"No");
-		ast_cli(fd, "  T38 pt RTP   : %s\n", ast_test_flag(&peer->flags[1], SIP_PAGE2_T38SUPPORT_RTP)?"Yes":"No");
-		ast_cli(fd, "  T38 pt TCP   : %s\n", ast_test_flag(&peer->flags[1], SIP_PAGE2_T38SUPPORT_TCP)?"Yes":"No");
-		ast_cli(fd, "  CanReinvite  : %s\n", ast_test_flag(&peer->flags[0], SIP_CAN_REINVITE)?"Yes":"No");
-		ast_cli(fd, "  PromiscRedir : %s\n", ast_test_flag(&peer->flags[0], SIP_PROMISCREDIR)?"Yes":"No");
-		ast_cli(fd, "  User=Phone   : %s\n", ast_test_flag(&peer->flags[0], SIP_USEREQPHONE)?"Yes":"No");
-		ast_cli(fd, "  Video Support: %s\n", ast_test_flag(&peer->flags[1], SIP_PAGE2_VIDEOSUPPORT)?"Yes":"No");
-		ast_cli(fd, "  Trust RPID   : %s\n", ast_test_flag(&peer->flags[0], SIP_TRUSTRPID) ? "Yes" : "No");
-		ast_cli(fd, "  Send RPID    : %s\n", ast_test_flag(&peer->flags[0], SIP_SENDRPID) ? "Yes" : "No");
-		ast_cli(fd, "  Subscriptions: %s\n", ast_test_flag(&peer->flags[1], SIP_PAGE2_ALLOWSUBSCRIBE) ? "Yes" : "No");
-		ast_cli(fd, "  Overlap dial : %s\n", ast_test_flag(&peer->flags[1], SIP_PAGE2_ALLOWOVERLAP) ? "Yes" : "No");
+		print_group(fd, device->pickupgroup, 0);
+		ast_cli(fd, "  Mailbox      : %s\n", device->mailbox.mailbox);
+		ast_cli(fd, "  VM Extension : %s\n", device->mailbox.vmexten);
+		ast_cli(fd, "  Call limit   : %d\n", device->call_limit);
+		ast_cli(fd, "  Dynamic      : %s\n", (ast_test_flag(&device->flags[1], SIP_PAGE2_DYNAMIC)?"Yes":"No"));
+		ast_cli(fd, "  Expire       : %ld\n", ast_sched_when(sched, device->expire));
+		ast_cli(fd, "  Callerid     : %s\n", ast_callerid_merge(cbuf, sizeof(cbuf), device->extra.cid_name, device->extra.cid_num, "<unspecified>"));
+		if (!ast_strlen_zero(global.regcontext))
+			ast_cli(fd, "  Reg. exten   : %s\n", device->extra.regexten);
+		ast_cli(fd, "  MaxCallBR    : %d kbps\n", device->maxcallbitrate);
+		ast_cli(fd, "  Insecure     : %s\n", insecure2str(ast_test_flag(&device->flags[0], SIP_INSECURE_PORT), ast_test_flag(&device->flags[0], SIP_INSECURE_INVITE)));
+		ast_cli(fd, "  Nat support  : %s\n", nat2str(ast_test_flag(&device->flags[0], SIP_NAT)));
+		ast_cli(fd, "  CanReinvite  : %s\n", ast_test_flag(&device->flags[0], SIP_CAN_REINVITE)?"Yes":"No");
+		ast_cli(fd, "  ACL          : %s\n", (device->ha?"Yes":"No"));
+		ast_cli(fd, "  T38 pt UDPTL : %s\n", ast_test_flag(&device->flags[1], SIP_PAGE2_T38SUPPORT_UDPTL)?"Yes":"No");
+		ast_cli(fd, "  T38 pt RTP   : %s\n", ast_test_flag(&device->flags[1], SIP_PAGE2_T38SUPPORT_RTP)?"Yes":"No");
+		ast_cli(fd, "  T38 pt TCP   : %s\n", ast_test_flag(&device->flags[1], SIP_PAGE2_T38SUPPORT_TCP)?"Yes":"No");
+		ast_cli(fd, "  PromiscRedir : %s\n", ast_test_flag(&device->flags[0], SIP_PROMISCREDIR)?"Yes":"No");
+		ast_cli(fd, "  Video Support: %s\n", ast_test_flag(&device->flags[1], SIP_PAGE2_VIDEOSUPPORT)?"Yes":"No");
+		ast_cli(fd, "  Trust RPID   : %s\n", ast_test_flag(&device->flags[0], SIP_TRUSTRPID) ? "Yes" : "No");
+		ast_cli(fd, "  Send RPID    : %s\n", ast_test_flag(&device->flags[0], SIP_SENDRPID) ? "Yes" : "No");
+		ast_cli(fd, "  Subscriptions: %s\n", ast_test_flag(&device->flags[1], SIP_PAGE2_ALLOWSUBSCRIBE) ? "Yes" : "No");
+		ast_cli(fd, "  Overlap dial : %s\n", ast_test_flag(&device->flags[1], SIP_PAGE2_ALLOWOVERLAP) ? "Yes" : "No");
 
 		/* - is enumerated */
-		ast_cli(fd, "  DTMFmode     : %s\n", dtmfmode2str(ast_test_flag(&peer->flags[0], SIP_DTMF)));
-		ast_cli(fd, "  LastMsg      : %d\n", peer->lastmsg);
-		ast_cli(fd, "  ToHost       : %s\n", peer->tohost);
-		ast_cli(fd, "  Addr->IP     : %s Port %d\n",  peer->addr.sin_addr.s_addr ? ast_inet_ntoa(peer->addr.sin_addr) : "(Unspecified)", ntohs(peer->addr.sin_port));
-		ast_cli(fd, "  Defaddr->IP  : %s Port %d\n", ast_inet_ntoa(peer->defaddr.sin_addr), ntohs(peer->defaddr.sin_port));
-		if (!ast_strlen_zero(global.regcontext))
-			ast_cli(fd, "  Reg. exten   : %s\n", peer->regexten);
-		ast_cli(fd, "  Def. Username: %s\n", peer->defaultuser);
-		ast_cli(fd, "  SIP Options  : ");
-		if (peer->sipoptions) {
-			sip_options_print(peer->sipoptions, fd);
-		} else
-			ast_cli(fd, "(none)");
-
-		ast_cli(fd, "\n");
+		ast_cli(fd, "  DTMFmode     : %s\n", dtmfmode2str(ast_test_flag(&device->flags[0], SIP_DTMF)));
+		ast_cli(fd, "  User=Phone   : %s\n", ast_test_flag(&device->flags[0], SIP_USEREQPHONE)?"Yes":"No");
+		ast_cli(fd, "  ToHost       : %s\n", device->extra.tohost);
+		ast_cli(fd, "  Addr->IP     : %s Port %d\n",  device->addr.sin_addr.s_addr ? ast_inet_ntoa(device->addr.sin_addr) : "(Unspecified)", ntohs(device->addr.sin_port));
+		ast_cli(fd, "  Defaddr->IP  : %s Port %d\n", ast_inet_ntoa(device->defaddr.sin_addr), ntohs(device->defaddr.sin_port));
+		ast_cli(fd, "  Def. Username: %s\n", device->defaultuser);
 		ast_cli(fd, "  Codecs       : ");
-		ast_getformatname_multiple(codec_buf, sizeof(codec_buf) -1, peer->capability);
+		ast_getformatname_multiple(codec_buf, sizeof(codec_buf) -1, device->capability);
 		ast_cli(fd, "%s\n", codec_buf);
 		ast_cli(fd, "  Codec Order  : (");
-		print_codec_to_cli(fd, &peer->prefs);
+		print_codec_to_cli(fd, &device->prefs);
 		ast_cli(fd, ")\n");
 
-		peer_status(peer, status, sizeof(status));
+		ast_cli(fd, "  LastMsgsSent : %d\n", device->mailbox.lastmsgssent);
+		ast_cli(fd, "  SIP Options  : ");
+		if (device->sipoptions) {
+			sip_options_print(device->sipoptions, fd);
+		} else
+			ast_cli(fd, "(none)");
+		ast_cli(fd, "\n");
+
+		device_status(device, status, sizeof(status));
 		ast_cli(fd, "  Status       : %s\n", status);
- 		ast_cli(fd, "  Useragent    : %s\n", peer->useragent);
- 		ast_cli(fd, "  Reg. Contact : %s\n", peer->fullcontact);
-		if (peer->chanvars) {
+ 		ast_cli(fd, "  Useragent    : %s\n", device->useragent);
+ 		ast_cli(fd, "  Reg. Contact : %s\n", device->fullcontact);
+		if (device->chanvars) {
  			ast_cli(fd, "  Variables    :\n");
-			for (v = peer->chanvars ; v ; v = v->next)
+			for (v = device->chanvars ; v ; v = v->next)
  				ast_cli(fd, "                 %s = %s\n", v->name, v->value);
 		}
 		ast_cli(fd,"\n");
-		ASTOBJ_UNREF(peer,sip_destroy_device);
-	} else  if (peer && type == 1) { /* manager listing */
+		device_unref(device);
+	} else  if (device && type == 1) { /* manager listing */
 		char buf[256];
 		astman_append(s, "Channeltype: SIP\r\n");
-		astman_append(s, "ObjectName: %s\r\n", peer->name);
-		astman_append(s, "SIPDomain: %s\r\n", peer->domain);
-		astman_append(s, "ChanObjectType: peer\r\n");
-		astman_append(s, "SecretExist: %s\r\n", ast_strlen_zero(peer->secret)?"N":"Y");
-		astman_append(s, "MD5SecretExist: %s\r\n", ast_strlen_zero(peer->md5secret)?"N":"Y");
-		astman_append(s, "Context: %s\r\n", peer->context);
-		astman_append(s, "Language: %s\r\n", peer->language);
-		if (!ast_strlen_zero(peer->accountcode))
-			astman_append(s, "Accountcode: %s\r\n", peer->accountcode);
-		astman_append(s, "AMAflags: %s\r\n", ast_cdr_flags2str(peer->amaflags));
-		astman_append(s, "CID-CallingPres: %s\r\n", ast_describe_caller_presentation(peer->callingpres));
-		if (!ast_strlen_zero(peer->fromuser))
-			astman_append(s, "SIP-FromUser: %s\r\n", peer->fromuser);
-		if (!ast_strlen_zero(peer->fromdomain))
-			astman_append(s, "SIP-FromDomain: %s\r\n", peer->fromdomain);
+		astman_append(s, "ObjectName: %s\r\n", device->name);
+		astman_append(s, "SIPDomain: %s\r\n", device->domain);
+		astman_append(s, "ChanObjectType: device\r\n");
+		astman_append(s, "SecretExist: %s\r\n", ast_strlen_zero(device->secret)?"N":"Y");
+		astman_append(s, "MD5SecretExist: %s\r\n", ast_strlen_zero(device->md5secret)?"N":"Y");
+		astman_append(s, "Context: %s\r\n", device->extra.context);
+		astman_append(s, "Language: %s\r\n", device->language);
+		if (!ast_strlen_zero(device->extra.accountcode))
+			astman_append(s, "Accountcode: %s\r\n", device->extra.accountcode);
+		astman_append(s, "AMAflags: %s\r\n", ast_cdr_flags2str(device->extra.amaflags));
+		astman_append(s, "CID-CallingPres: %s\r\n", ast_describe_caller_presentation(device->callingpres));
+		if (!ast_strlen_zero(device->extra.fromuser))
+			astman_append(s, "SIP-FromUser: %s\r\n", device->extra.fromuser);
+		if (!ast_strlen_zero(device->extra.fromdomain))
+			astman_append(s, "SIP-FromDomain: %s\r\n", device->extra.fromdomain);
 		astman_append(s, "Callgroup: ");
-		astman_append(s, "%s\r\n", ast_print_group(buf, sizeof(buf), peer->callgroup));
+		astman_append(s, "%s\r\n", ast_print_group(buf, sizeof(buf), device->callgroup));
 		astman_append(s, "Pickupgroup: ");
-		astman_append(s, "%s\r\n", ast_print_group(buf, sizeof(buf), peer->pickupgroup));
-		astman_append(s, "VoiceMailbox: %s\r\n", peer->mailbox);
-		astman_append(s, "TransferMode: %s\r\n", transfermode2str(peer->allowtransfer));
-		astman_append(s, "LastMsgsSent: %d\r\n", peer->lastmsgssent);
-		astman_append(s, "Call limit: %d\r\n", peer->call_limit);
-		astman_append(s, "MaxCallBR: %d kbps\r\n", peer->maxcallbitrate);
-		astman_append(s, "Dynamic: %s\r\n", (ast_test_flag(&peer->flags[1], SIP_PAGE2_DYNAMIC)?"Y":"N"));
-		astman_append(s, "Callerid: %s\r\n", ast_callerid_merge(cbuf, sizeof(cbuf), peer->cid_name, peer->cid_num, ""));
-		astman_append(s, "RegExpire: %ld seconds\r\n", ast_sched_when(sched,peer->expire));
-		astman_append(s, "SIP-AuthInsecure: %s\r\n", insecure2str(ast_test_flag(&peer->flags[0], SIP_INSECURE_PORT), ast_test_flag(&peer->flags[0], SIP_INSECURE_INVITE)));
-		astman_append(s, "SIP-NatSupport: %s\r\n", nat2str(ast_test_flag(&peer->flags[0], SIP_NAT)));
-		astman_append(s, "ACL: %s\r\n", (peer->ha?"Y":"N"));
-		astman_append(s, "SIP-CanReinvite: %s\r\n", (ast_test_flag(&peer->flags[0], SIP_CAN_REINVITE)?"Y":"N"));
-		astman_append(s, "SIP-PromiscRedir: %s\r\n", (ast_test_flag(&peer->flags[0], SIP_PROMISCREDIR)?"Y":"N"));
-		astman_append(s, "SIP-UserPhone: %s\r\n", (ast_test_flag(&peer->flags[0], SIP_USEREQPHONE)?"Y":"N"));
-		astman_append(s, "SIP-VideoSupport: %s\r\n", (ast_test_flag(&peer->flags[1], SIP_PAGE2_VIDEOSUPPORT)?"Y":"N"));
+		astman_append(s, "%s\r\n", ast_print_group(buf, sizeof(buf), device->pickupgroup));
+		astman_append(s, "VoiceMailbox: %s\r\n", device->mailbox.mailbox);
+		astman_append(s, "TransferMode: %s\r\n", transfermode2str(device->allowtransfer));
+		astman_append(s, "LastMsgsSent: %d\r\n", device->mailbox.lastmsgssent);
+		astman_append(s, "Call limit: %d\r\n", device->call_limit);
+		astman_append(s, "MaxCallBR: %d kbps\r\n", device->maxcallbitrate);
+		astman_append(s, "Dynamic: %s\r\n", (ast_test_flag(&device->flags[1], SIP_PAGE2_DYNAMIC)?"Y":"N"));
+		astman_append(s, "Callerid: %s\r\n", ast_callerid_merge(cbuf, sizeof(cbuf), device->extra.cid_name, device->extra.cid_num, ""));
+		astman_append(s, "RegExpire: %ld seconds\r\n", ast_sched_when(sched,device->expire));
+		astman_append(s, "SIP-AuthInsecure: %s\r\n", insecure2str(ast_test_flag(&device->flags[0], SIP_INSECURE_PORT), ast_test_flag(&device->flags[0], SIP_INSECURE_INVITE)));
+		astman_append(s, "SIP-NatSupport: %s\r\n", nat2str(ast_test_flag(&device->flags[0], SIP_NAT)));
+		astman_append(s, "ACL: %s\r\n", (device->ha?"Y":"N"));
+		astman_append(s, "SIP-CanReinvite: %s\r\n", (ast_test_flag(&device->flags[0], SIP_CAN_REINVITE)?"Y":"N"));
+		astman_append(s, "SIP-PromiscRedir: %s\r\n", (ast_test_flag(&device->flags[0], SIP_PROMISCREDIR)?"Y":"N"));
+		astman_append(s, "SIP-UserPhone: %s\r\n", (ast_test_flag(&device->flags[0], SIP_USEREQPHONE)?"Y":"N"));
+		astman_append(s, "SIP-VideoSupport: %s\r\n", (ast_test_flag(&device->flags[1], SIP_PAGE2_VIDEOSUPPORT)?"Y":"N"));
+		astman_append(s, "T38pt-UDPTL: %s\n", ast_test_flag(&device->flags[1], SIP_PAGE2_T38SUPPORT_UDPTL)?"Y":"N");
+		astman_append(s, "T38pt-RTP: %s\n", ast_test_flag(&device->flags[1], SIP_PAGE2_T38SUPPORT_RTP)?"Y":"N");
+		astman_append(s, "T38pt-TCP: %s\n", ast_test_flag(&device->flags[1], SIP_PAGE2_T38SUPPORT_TCP)?"Y":"N");
 
 		/* - is enumerated */
-		astman_append(s, "SIP-DTMFmode: %s\r\n", dtmfmode2str(ast_test_flag(&peer->flags[0], SIP_DTMF)));
-		astman_append(s, "SIPLastMsg: %d\r\n", peer->lastmsg);
-		astman_append(s, "ToHost: %s\r\n", peer->tohost);
-		astman_append(s, "Address-IP: %s\r\nAddress-Port: %d\r\n",  peer->addr.sin_addr.s_addr ? ast_inet_ntoa(peer->addr.sin_addr) : "", ntohs(peer->addr.sin_port));
-		astman_append(s, "Default-addr-IP: %s\r\nDefault-addr-port: %d\r\n", ast_inet_ntoa(peer->defaddr.sin_addr), ntohs(peer->defaddr.sin_port));
-		astman_append(s, "Default-Username: %s\r\n", peer->defaultuser);
+		astman_append(s, "SIP-DTMFmode: %s\r\n", dtmfmode2str(ast_test_flag(&device->flags[0], SIP_DTMF)));
+		astman_append(s, "ToHost: %s\r\n", device->extra.tohost);
+		astman_append(s, "Address-IP: %s\r\nAddress-Port: %d\r\n",  device->addr.sin_addr.s_addr ? ast_inet_ntoa(device->addr.sin_addr) : "", ntohs(device->addr.sin_port));
+		astman_append(s, "Default-addr-IP: %s\r\nDefault-addr-port: %d\r\n", ast_inet_ntoa(device->defaddr.sin_addr), ntohs(device->defaddr.sin_port));
+		astman_append(s, "Default-Username: %s\r\n", device->defaultuser);
 		if (!ast_strlen_zero(global.regcontext))
-			astman_append(s, "RegExtension: %s\r\n", peer->regexten);
+			astman_append(s, "RegExtension: %s\r\n", device->extra.regexten);
 		astman_append(s, "Codecs: ");
-		ast_getformatname_multiple(codec_buf, sizeof(codec_buf) -1, peer->capability);
+		ast_getformatname_multiple(codec_buf, sizeof(codec_buf) -1, device->capability);
 		astman_append(s, "%s\r\n", codec_buf);
 		astman_append(s, "CodecOrder: ");
-		pref = &peer->prefs;
+		pref = &device->prefs;
 		for(x = 0; x < 32 ; x++) {
 			codec = ast_codec_pref_index(pref,x);
 			if (!codec)
@@ -614,21 +613,21 @@ static int _sip_show_device(int type, int fd, struct mansession *s, struct messa
 
 		astman_append(s, "\r\n");
 		astman_append(s, "Status: ");
-		peer_status(peer, status, sizeof(status));
+		device_status(device, status, sizeof(status));
 		astman_append(s, "%s\r\n", status);
- 		astman_append(s, "SIP-Useragent: %s\r\n", peer->useragent);
- 		astman_append(s, "Reg-Contact : %s\r\n", peer->fullcontact);
-		if (peer->chanvars) {
-			for (v = peer->chanvars ; v ; v = v->next) {
+ 		astman_append(s, "SIP-Useragent: %s\r\n", device->useragent);
+ 		astman_append(s, "Reg-Contact : %s\r\n", device->fullcontact);
+		if (device->chanvars) {
+			for (v = device->chanvars ; v ; v = v->next) {
  				astman_append(s, "ChanVariable:\n");
  				astman_append(s, " %s,%s\r\n", v->name, v->value);
 			}
 		}
 
-		ASTOBJ_UNREF(peer,sip_destroy_device);
+		device_unref(device);
 
 	} else {
-		ast_cli(fd,"Peer %s not found.\n", argv[3]);
+		ast_cli(fd,"Device %s not found.\n", argv[3]);
 		ast_cli(fd,"\n");
 	}
 
@@ -636,17 +635,17 @@ static int _sip_show_device(int type, int fd, struct mansession *s, struct messa
 }
 
 /*! \brief Show one peer in detail */
-static int sip_show_device(int fd, int argc, char *argv[])
+static int sip_show_device(int fd, int argc, const char *argv[])
 {
 	return _sip_show_device(0, fd, NULL, NULL, argc, argv);
 }
 
 /*! \brief Show SIP peers in the manager API  */
-int manager_sip_show_device( struct mansession *s, struct message *m)
+int manager_sip_show_device( struct mansession *s, const struct message *m)
 {
-	char *id = astman_get_header(m,"ActionID");
-	char *a[4];
-	char *peer;
+	const char *id = astman_get_header(m,"ActionID");
+	const char *a[4];
+	const char *peer;
 	int ret;
 
 	peer = astman_get_header(m,"Peer");
@@ -735,7 +734,7 @@ static int sip_show_settings(int fd, int argc, char *argv[])
 	ast_cli(fd, "  IP ToS SIP:             %s\n", ast_tos2str(global.tos_sip));
 	ast_cli(fd, "  IP ToS RTP audio:       %s\n", ast_tos2str(global.tos_audio));
 	ast_cli(fd, "  IP ToS RTP video:       %s\n", ast_tos2str(global.tos_video));
-	ast_cli(fd, "  IP ToS SIP presence:    %s\n", ast_tos2str(global.tos_presence));
+	ast_cli(fd, "  IP ToS SIP presence:    %s\n", ast_tos2str(global.tos_presense));
 	ast_cli(fd, "  T38 fax pt UDPTL:       %s\n", ast_test_flag(&global.flags[1], SIP_PAGE2_T38SUPPORT_UDPTL) ? "Yes" : "No");
 	ast_cli(fd, "  T38 fax pt RTP:         %s\n", ast_test_flag(&global.flags[1], SIP_PAGE2_T38SUPPORT_RTP) ? "Yes" : "No");
 	ast_cli(fd, "  T38 fax pt TCP:         %s\n", ast_test_flag(&global.flags[1], SIP_PAGE2_T38SUPPORT_TCP) ? "Yes" : "No");
@@ -746,6 +745,7 @@ static int sip_show_settings(int fd, int argc, char *argv[])
 	ast_cli(fd, "  Jitterbuffer resync:    %ld\n", global.jbconf.resync_threshold);
 	ast_cli(fd, "  Jitterbuffer impl:      %s\n", global.jbconf.impl);
 	ast_cli(fd, "  Jitterbuffer log:       %s\n", ast_test_flag(&global.jbconf, AST_JB_LOG) ? "Yes" : "No");
+	ast_cli(fd, "  SIP debug level:        %s\n", global.debuglevel == SIPDEBUG_ALL ? "Everything" : (global.debuglevel == SIPDEBUG_CALLS ? "Calls" : "No OPTION messages"));
 	if (!realtimepeers && !realtimeusers)
 		ast_cli(fd, "  SIP realtime:           Disabled\n" );
 	else
@@ -756,12 +756,11 @@ static int sip_show_settings(int fd, int argc, char *argv[])
 	ast_cli(fd, "  Codecs:                 ");
 	print_codec_to_cli(fd, &global.default_prefs);
 	ast_cli(fd, "\n");
-	ast_cli(fd, "  T1 minimum:             %d\n", global.t1min);
 	ast_cli(fd, "  Relax DTMF:             %s\n", global.relaxdtmf ? "Yes" : "No");
 	ast_cli(fd, "  Compact SIP headers:    %s\n", global.compactheaders ? "Yes" : "No");
-	ast_cli(fd, "  RTP Keepalive:          %d %s\n", global.rtpkeepalive, global.rtpkeepalive ? "" : "(Disabled)" );
-	ast_cli(fd, "  RTP Timeout:            %d %s\n", global.rtptimeout, global.rtptimeout ? "" : "(Disabled)" );
-	ast_cli(fd, "  RTP Hold Timeout:       %d %s\n", global.rtpholdtimeout, global.rtpholdtimeout ? "" : "(Disabled)");
+	ast_cli(fd, "  RTP Keepalive:          %d %s\n", global.rtptimer.rtpkeepalive, global.rtptimer.rtpkeepalive ? "" : "(Disabled)" );
+	ast_cli(fd, "  RTP Timeout:            %d %s\n", global.rtptimer.rtptimeout, global.rtptimer.rtptimeout ? "" : "(Disabled)" );
+	ast_cli(fd, "  RTP Hold Timeout:       %d %s\n", global.rtptimer.rtpholdtimeout, global.rtptimer.rtpholdtimeout ? "" : "(Disabled)");
 	ast_cli(fd, "  MWI NOTIFY mime type:   %s\n", global.default_notifymime);
 	ast_cli(fd, "  DNS SRV lookup:         %s\n", global.srvlookup ? "Yes" : "No");
 	ast_cli(fd, "  Reg. min duration       %d secs\n", expiry.min_expiry);
@@ -772,6 +771,14 @@ static int sip_show_settings(int fd, int argc, char *argv[])
 	ast_cli(fd, "  Notify ringing state:   %s\n", global.notifyringing ? "Yes" : "No");
 	ast_cli(fd, "  SIP Transfer mode:      %s\n", transfermode2str(global.allowtransfer));
 	ast_cli(fd, "  Max Call Bitrate:       %d kbps\r\n", global.default_maxcallbitrate);
+	ast_cli(fd, "\nTimer Settings:\n");
+	ast_cli(fd, "-----------------\n");
+	ast_cli(fd, "  SIP Timer T1 minimum: %d\n", global.t1min);
+	ast_cli(fd, "  SIP Timer T1 default: %d\n", global.t1default);
+	ast_cli(fd, "  SIP Timer T2:         %d\n", global.t2default);
+	ast_cli(fd, "  SIP Timer T4:         %d\n", global.t4default);
+	ast_cli(fd, "  SIP Timer B:          %d\n", global.siptimer_b);
+	ast_cli(fd, "  SIP Timer F:          %d\n", global.siptimer_f);
 	ast_cli(fd, "\nDefault Settings:\n");
 	ast_cli(fd, "-----------------\n");
 	ast_cli(fd, "  Context:                %s\n", global.default_context);
@@ -1009,7 +1016,7 @@ static int __sip_show_channels(int fd, int argc, char *argv[], int subscriptions
 				cur->subscribed == MWI_NOTIFICATION ? "--" : cur->subscribeuri,
 				cur->subscribed == MWI_NOTIFICATION ? "<none>" : ast_extension_state2str(cur->laststate), 
 				subscription_type2str(cur->subscribed),
-				cur->subscribed == MWI_NOTIFICATION ? (cur->relatedpeer ? cur->relatedpeer->mailbox : "<none>") : "<none>"
+				cur->subscribed == MWI_NOTIFICATION ? (cur->relatedpeer ? cur->relatedpeer->mailbox.mailbox : "<none>") : "<none>"
 );
 			numchans++;
 		}
@@ -1044,6 +1051,12 @@ static  int cli_sip_reload(int fd, int argc, char *argv[])
 {
 	return sip_reload(fd);
 	
+}
+
+/*! \brief List configuration options */
+static  int cli_sip_listconfigs(int fd, int argc, char *argv[])
+{
+	return sip_listconfigs(fd);
 }
 
 
@@ -1082,7 +1095,7 @@ static int sip_do_debug_ip(int fd, int argc, char *argv[])
 /*! \brief  sip_do_debug_device: Turn on SIP debugging with peer mask */
 static int sip_do_debug_device(int fd, int argc, char *argv[])
 {
-	struct sip_peer *peer;
+	struct sip_device *peer;
 	if (argc != 4)
 		return RESULT_SHOWUSAGE;
 	peer = find_device(argv[3], NULL, 1);
@@ -1095,7 +1108,7 @@ static int sip_do_debug_device(int fd, int argc, char *argv[])
 			ast_set_flag(&global.flags[1], SIP_PAGE2_DEBUG_CONSOLE);
 		} else
 			ast_cli(fd, "Unable to get IP address of peer '%s'\n", argv[3]);
-		ASTOBJ_UNREF(peer,sip_destroy_device);
+		device_unref(peer);
 	} else
 		ast_cli(fd, "No such peer '%s'\n", argv[3]);
 	return RESULT_SUCCESS;
@@ -1277,6 +1290,11 @@ static char show_settings_usage[] =
 "Usage: sip list settings\n"
 "       Provides detailed list of the configuration of the SIP channel.\n";
 
+static char sip_listconfig_usage[] = 
+"Usage: sip list configs\n"
+"       Provides detailed list of the configuration options of the SIP channel.\n";
+
+
 static struct ast_cli_entry cli_sip[] = {
 	{ { "sip", "show", "channels", NULL },
 	sip_show_channels, "List active SIP channels",
@@ -1361,6 +1379,10 @@ static struct ast_cli_entry cli_sip[] = {
 	{ { "sip", "reload", NULL },
 	cli_sip_reload, "Reload SIP configuration",
 	sip_reload_usage },
+
+	{ { "sip", "list", "configs", NULL },
+	cli_sip_listconfigs, "List SIP coniguration options",
+	sip_listconfig_usage },
 };
 
 /*! \brief Register cli and manager commands */

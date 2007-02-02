@@ -1,7 +1,7 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 1999 - 2006, Digium, Inc.
+ * Copyright (C) 1999 - 2007, Digium, Inc.
  * and Edvina AB, Sollentuna, Sweden (chan_sip3 changes/additions)
  *
  * Mark Spencer <markster@digium.com>
@@ -33,7 +33,7 @@
 /*!
 \page chan_sip3_auth  chan_sip3: Authentication
 
-	\title New authentication scheme
+	\par New authentication scheme
 
  Lets try to scetch a new
 	CHAN_SIP3 Authentication scheme
@@ -95,7 +95,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/module.h"
 #include "asterisk/pbx.h"
 #include "asterisk/options.h"
-#include "asterisk/lock.h"
 #include "asterisk/sched.h"
 #include "asterisk/io.h"
 #include "asterisk/rtp.h"
@@ -108,7 +107,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/musiconhold.h"
 #include "asterisk/dsp.h"
 #include "asterisk/features.h"
-#include "asterisk/acl.h"
 #include "asterisk/srv.h"
 #include "asterisk/astdb.h"
 #include "asterisk/causes.h"
@@ -331,7 +329,7 @@ int do_proxy_auth(struct sip_dialog *p, struct sip_request *req, enum sip_auth_t
 	char *header, *respheader;
 	char digest[1024];
 
-	if (!p->options && !(p->options = ast_calloc(1, sizeof(*p->options))))
+	if (!p->inviteoptions && !(p->inviteoptions = ast_calloc(1, sizeof(*p->inviteoptions))))
 		return -2;
 
 	p->authtries++;
@@ -344,8 +342,8 @@ int do_proxy_auth(struct sip_dialog *p, struct sip_request *req, enum sip_auth_t
 		return -1;
 	}
 	/* Now we have a reply digest */
-	p->options->auth = digest;
-	p->options->authheader = respheader;
+	p->inviteoptions->auth = digest;
+	p->inviteoptions->authheader = respheader;
 	return transmit_invite(p, sipmethod, sipmethod == SIP_INVITE, init); 
 }
 
@@ -360,7 +358,7 @@ int reply_digest(struct sip_dialog *p, struct sip_request *req, char *header, in
 	char oldnonce[256];
 
 	/* table of recognised keywords, and places where they should be copied */
-	const struct x {
+	const struct keystruct {
 		const char *key;
 		int field_index;
 	} *i, keys[] = {

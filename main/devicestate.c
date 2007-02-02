@@ -144,21 +144,21 @@ static const char *devstatestring[] = {
 struct devstate_prov {
 	char label[40];
 	ast_devstate_prov_cb_type callback;
-	AST_LIST_ENTRY(devstate_prov) list;
+	AST_RWLIST_ENTRY(devstate_prov) list;
 };
 
 /*! \brief A list of providers */
-static AST_LIST_HEAD_STATIC(devstate_provs, devstate_prov);
+static AST_RWLIST_HEAD_STATIC(devstate_provs, devstate_prov);
 
 /*! \brief  A device state watcher (callback) */
 struct devstate_cb {
 	void *data;
 	ast_devstate_cb_type callback;	/*!< Where to report when state changes */
-	AST_LIST_ENTRY(devstate_cb) list;
+	AST_RWLIST_ENTRY(devstate_cb) list;
 };
 
 /*! \brief A device state watcher list */
-static AST_LIST_HEAD_STATIC(devstate_cbs, devstate_cb);
+static AST_RWLIST_HEAD_STATIC(devstate_cbs, devstate_cb);
 
 struct state_change {
 	AST_LIST_ENTRY(state_change) list;
@@ -226,10 +226,8 @@ int ast_device_state(const char *device)
 	
 	buf = ast_strdupa(device);
 	tech = strsep(&buf, "/");
-	number = buf;
-	if (!number) {
-		provider = strsep(&tech, ":");
-		if (!provider)
+	if (!(number = buf)) {
+		if (!(provider = strsep(&tech, ":")))
 			return AST_DEVICE_INVALID;
 		/* We have a provider */
 		number = tech;
@@ -241,29 +239,27 @@ int ast_device_state(const char *device)
 			ast_log(LOG_DEBUG, "Checking if I can find provider for \"%s\" - number: %s\n", provider, number);
 		return getproviderstate(provider, number);
 	}
+
 	if (option_debug > 3)
 		ast_log(LOG_DEBUG, "No provider found, checking channel drivers for %s - %s\n", tech, number);
 
-	chan_tech = ast_get_channel_tech(tech);
-	if (!chan_tech)
+	if (!(chan_tech = ast_get_channel_tech(tech)))
 		return AST_DEVICE_INVALID;
 
-	if (!chan_tech->devicestate) 	/* Does the channel driver support device state notification? */
-		return ast_parse_device_state(device);	/* No, try the generic function */
-	else {
-		res = chan_tech->devicestate(number);	/* Ask the channel driver for device state */
-		if (res == AST_DEVICE_UNKNOWN) {
-			res = ast_parse_device_state(device);
-			/* at this point we know the device exists, but the channel driver
-			   could not give us a state; if there is no channel state available,
-			   it must be 'not in use'
-			*/
-			if (res == AST_DEVICE_UNKNOWN)
-				res = AST_DEVICE_NOT_INUSE;
-			return res;
-		} else
-			return res;
-	}
+	if (!(chan_tech->devicestate)) /* Does the channel driver support device state notification? */
+		return ast_parse_device_state(device); /* No, try the generic function */
+
+	res = chan_tech->devicestate(number);
+
+	if (res != AST_DEVICE_UNKNOWN)
+		return res;
+
+	res = ast_parse_device_state(device);
+
+	if (res == AST_DEVICE_UNKNOWN)
+		return AST_DEVICE_NOT_INUSE;
+
+	return res;
 }
 
 /*! \brief Add device state provider */
@@ -277,9 +273,9 @@ int ast_devstate_prov_add(const char *label, ast_devstate_prov_cb_type callback)
 	devprov->callback = callback;
 	ast_copy_string(devprov->label, label, sizeof(devprov->label));
 
-	AST_LIST_LOCK(&devstate_provs);
-	AST_LIST_INSERT_HEAD(&devstate_provs, devprov, list);
-	AST_LIST_UNLOCK(&devstate_provs);
+	AST_RWLIST_WRLOCK(&devstate_provs);
+	AST_RWLIST_INSERT_HEAD(&devstate_provs, devprov, list);
+	AST_RWLIST_UNLOCK(&devstate_provs);
 
 	return 0;
 }
@@ -289,16 +285,16 @@ void ast_devstate_prov_del(const char *label)
 {
 	struct devstate_prov *devcb;
 
-	AST_LIST_LOCK(&devstate_provs);
-	AST_LIST_TRAVERSE_SAFE_BEGIN(&devstate_provs, devcb, list) {
+	AST_RWLIST_WRLOCK(&devstate_provs);
+	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&devstate_provs, devcb, list) {
 		if (!strcasecmp(devcb->label, label)) {
-			AST_LIST_REMOVE_CURRENT(&devstate_provs, list);
+			AST_RWLIST_REMOVE_CURRENT(&devstate_provs, list);
 			free(devcb);
 			break;
 		}
 	}
-	AST_LIST_TRAVERSE_SAFE_END;
-	AST_LIST_UNLOCK(&devstate_provs);
+	AST_RWLIST_TRAVERSE_SAFE_END;
+	AST_RWLIST_UNLOCK(&devstate_provs);
 }
 
 /*! \brief Get provider device state */
@@ -308,8 +304,8 @@ static int getproviderstate(const char *provider, const char *address)
 	int res = AST_DEVICE_INVALID;
 
 
-	AST_LIST_LOCK(&devstate_provs);
-	AST_LIST_TRAVERSE_SAFE_BEGIN(&devstate_provs, devprov, list) {
+	AST_RWLIST_RDLOCK(&devstate_provs);
+	AST_RWLIST_TRAVERSE(&devstate_provs, devprov, list) {
 		if (option_debug > 4)
 			ast_log(LOG_DEBUG, "Checking provider %s with %s\n", devprov->label, provider);
 
@@ -318,8 +314,7 @@ static int getproviderstate(const char *provider, const char *address)
 			break;
 		}
 	}
-	AST_LIST_TRAVERSE_SAFE_END;
-	AST_LIST_UNLOCK(&devstate_provs);
+	AST_RWLIST_UNLOCK(&devstate_provs);
 	return res;
 }
 
@@ -334,9 +329,9 @@ int ast_devstate_add(ast_devstate_cb_type callback, void *data)
 	devcb->data = data;
 	devcb->callback = callback;
 
-	AST_LIST_LOCK(&devstate_cbs);
-	AST_LIST_INSERT_HEAD(&devstate_cbs, devcb, list);
-	AST_LIST_UNLOCK(&devstate_cbs);
+	AST_RWLIST_WRLOCK(&devstate_cbs);
+	AST_RWLIST_INSERT_HEAD(&devstate_cbs, devcb, list);
+	AST_RWLIST_UNLOCK(&devstate_cbs);
 
 	return 0;
 }
@@ -346,16 +341,16 @@ void ast_devstate_del(ast_devstate_cb_type callback, void *data)
 {
 	struct devstate_cb *devcb;
 
-	AST_LIST_LOCK(&devstate_cbs);
-	AST_LIST_TRAVERSE_SAFE_BEGIN(&devstate_cbs, devcb, list) {
+	AST_RWLIST_WRLOCK(&devstate_cbs);
+	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&devstate_cbs, devcb, list) {
 		if ((devcb->callback == callback) && (devcb->data == data)) {
-			AST_LIST_REMOVE_CURRENT(&devstate_cbs, list);
+			AST_RWLIST_REMOVE_CURRENT(&devstate_cbs, list);
 			free(devcb);
 			break;
 		}
 	}
-	AST_LIST_TRAVERSE_SAFE_END;
-	AST_LIST_UNLOCK(&devstate_cbs);
+	AST_RWLIST_TRAVERSE_SAFE_END;
+	AST_RWLIST_UNLOCK(&devstate_cbs);
 }
 
 /*! \brief Notify callback watchers of change, and notify PBX core for hint updates
@@ -370,10 +365,10 @@ static void do_state_change(const char *device)
 	if (option_debug > 2)
 		ast_log(LOG_DEBUG, "Changing state for %s - state %d (%s)\n", device, state, devstate2str(state));
 
-	AST_LIST_LOCK(&devstate_cbs);
-	AST_LIST_TRAVERSE(&devstate_cbs, devcb, list)
+	AST_RWLIST_RDLOCK(&devstate_cbs);
+	AST_RWLIST_TRAVERSE(&devstate_cbs, devcb, list)
 		devcb->callback(device, state, devcb->data);
-	AST_LIST_UNLOCK(&devstate_cbs);
+	AST_RWLIST_UNLOCK(&devstate_cbs);
 
 	ast_hint_state_changed(device);
 }
@@ -390,8 +385,6 @@ static int __ast_device_state_changed_literal(char *buf)
 	if ((tmp = strrchr(device, '-')))
 		*tmp = '\0';
 
-	
-
 	if (change_thread == AST_PTHREADT_NULL || !(change = ast_calloc(1, sizeof(*change) + strlen(device)))) {
 		/* we could not allocate a change struct, or */
 		/* there is no background thread, so process the change now */
@@ -401,9 +394,7 @@ static int __ast_device_state_changed_literal(char *buf)
 		strcpy(change->device, device);
 		AST_LIST_LOCK(&state_changes);
 		AST_LIST_INSERT_TAIL(&state_changes, change, list);
-		if (AST_LIST_FIRST(&state_changes) == change)
-			/* the list was empty, signal the thread */
-			ast_cond_signal(&change_pending);
+		ast_cond_signal(&change_pending);
 		AST_LIST_UNLOCK(&state_changes);
 	}
 
@@ -432,22 +423,22 @@ int ast_device_state_changed(const char *fmt, ...)
 /*! \brief Go through the dev state change queue and update changes in the dev state thread */
 static void *do_devstate_changes(void *data)
 {
-	struct state_change *cur;
+	struct state_change *next, *current;
 
-	AST_LIST_LOCK(&state_changes);
 	for (;;) {
-		/* the list lock will _always_ be held at this point in the loop */
-		cur = AST_LIST_REMOVE_HEAD(&state_changes, list);
-		if (cur) {
-			/* we got an entry, so unlock the list while we process it */
-			AST_LIST_UNLOCK(&state_changes);
-			do_state_change(cur->device);
-			free(cur);
-			AST_LIST_LOCK(&state_changes);
-		} else {
-			/* there was no entry, so atomically unlock the list and wait for
-			   the condition to be signalled (returns with the lock held) */
+		/* This basically pops off any state change entries, resets the list back to NULL, unlocks, and processes each state change */
+		AST_LIST_LOCK(&state_changes);
+		if (AST_LIST_EMPTY(&state_changes))
 			ast_cond_wait(&change_pending, &state_changes.lock);
+		next = AST_LIST_FIRST(&state_changes);
+		AST_LIST_HEAD_INIT_NOLOCK(&state_changes);
+		AST_LIST_UNLOCK(&state_changes);
+
+		/* Process each state change */
+		while ((current = next)) {
+			next = AST_LIST_NEXT(current, list);
+			do_state_change(current->device);
+			free(current);
 		}
 	}
 

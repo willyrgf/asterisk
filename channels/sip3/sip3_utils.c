@@ -100,3 +100,67 @@ GNURK void logdebug(int level, const char *fmt, ...)
 	return;
 }
 
+GNURK void append_history_full(struct sip_dialog *p, const char *fmt, ...)
+	__attribute__ ((format (printf, 2, 3)));
+
+/*! \brief Append to SIP dialog history with arg list  */
+GNURK void append_history_va(struct sip_dialog *p, const char *fmt, va_list ap)
+{
+	char buf[80], *c = buf; /* max history length */
+	struct sip_history *hist;
+	int l;
+
+	vsnprintf(buf, sizeof(buf), fmt, ap);
+	strsep(&c, "\r\n"); /* Trim up everything after \r or \n */
+	l = strlen(buf) + 1;
+	if (!(hist = ast_calloc(1, sizeof(*hist) + l)))
+		return;
+	if (!p->history && !(p->history = ast_calloc(1, sizeof(*p->history)))) {
+		free(hist);
+		return;
+	}
+	memcpy(hist->event, buf, l);
+	AST_LIST_INSERT_TAIL(p->history, hist, list);
+}
+
+/*! \brief Append to SIP dialog history with arg list  */
+GNURK void append_history_full(struct sip_dialog *dialog, const char *fmt, ...)
+{
+	va_list ap;
+
+	if (!dialog)
+		return;
+	va_start(ap, fmt);
+	append_history_va(dialog, fmt, ap);
+	va_end(ap);
+
+	return;
+}
+
+/*! \brief Dump SIP history to debug log file at end of lifespan for SIP dialog */
+GNURK void sip_dump_history(struct sip_dialog *dialog)
+{
+	int x = 0;
+	struct sip_history *hist;
+
+	if (!dialog)
+		return;
+
+	if (!option_debug && !sipdebug) {
+		ast_log(LOG_NOTICE, "You must have debugging enabled (SIP or Asterisk) in order to dump SIP history.\n");
+		return;
+	}
+
+	ast_log(LOG_DEBUG, "\n---------- SIP HISTORY for '%s' \n", dialog->callid);
+	if (dialog->subscribed)
+		ast_log(LOG_DEBUG, "  * Subscription\n");
+	else
+		ast_log(LOG_DEBUG, "  * SIP Call\n");
+	if (dialog->history)
+		AST_LIST_TRAVERSE(dialog->history, hist, list)
+			ast_log(LOG_DEBUG, "  %-3.3d. %s\n", ++x, hist->event);
+	if (!x)
+		ast_log(LOG_DEBUG, "Call '%s' has no history\n", dialog->callid);
+	ast_log(LOG_DEBUG, "\n---------- END SIP HISTORY for '%s' \n", dialog->callid);
+}
+

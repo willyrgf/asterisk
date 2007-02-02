@@ -180,6 +180,11 @@ char *get_body(struct sip_request *req, char *name)
 
 /*! \brief Process SIP SDP offer, select formats and activate RTP channels
 	If offer is rejected, we will not change any properties of the call
+
+	The SDP contains
+	- a session description
+	- one or multiple media descriptions that starts with m=
+
 */
 int process_sdp(struct sip_dialog *p, struct sip_request *req)
 {
@@ -230,10 +235,12 @@ int process_sdp(struct sip_dialog *p, struct sip_request *req)
 	/* Initialize the temporary RTP structures we use to evaluate the offer from the peer */
 	newaudiortp = alloca(ast_rtp_alloc_size());
 	memset(newaudiortp, 0, ast_rtp_alloc_size());
+	ast_rtp_new_init(newaudiortp);
 	ast_rtp_pt_clear(newaudiortp);
 
 	newvideortp = alloca(ast_rtp_alloc_size());
 	memset(newvideortp, 0, ast_rtp_alloc_size());
+	ast_rtp_new_init(newvideortp);
 	ast_rtp_pt_clear(newvideortp);
 
 	/* Update our last rtprx when we receive an SDP, too */
@@ -374,6 +381,8 @@ int process_sdp(struct sip_dialog *p, struct sip_request *req)
 	if (p->rtp) {
 		if (portno > 0) {
 			sin.sin_port = htons(portno);
+			if (!sin.sin_port) 
+				ast_log(LOG_WARNING, "No SIN structure here, will crash\n");
 			ast_rtp_set_peer(p->rtp, &sin);
 			if (debug)
 				ast_verbose("Peer audio RTP is at port %s:%d\n", ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port));
@@ -605,7 +614,7 @@ int process_sdp(struct sip_dialog *p, struct sip_request *req)
 
 	newjointcapability = p->capability & (peercapability | vpeercapability);
 	newpeercapability = (peercapability | vpeercapability);
-	newnoncodeccapability = global.dtmf_capability & peernoncodeccapability;
+	newnoncodeccapability = p->noncodeccapability & peernoncodeccapability;
 		
 		
 	if (debug) {
@@ -619,7 +628,7 @@ int process_sdp(struct sip_dialog *p, struct sip_request *req)
 			    ast_getformatname_multiple(s4, BUFSIZ, newjointcapability));
 
 		ast_verbose("Non-codec capabilities (dtmf): us - %s, peer - %s, combined - %s\n",
-			    ast_rtp_lookup_mime_multiple(s1, BUFSIZ, global.dtmf_capability, 0, 0),
+			    ast_rtp_lookup_mime_multiple(s1, BUFSIZ, p->noncodeccapability, 0, 0),
 			    ast_rtp_lookup_mime_multiple(s2, BUFSIZ, peernoncodeccapability, 0, 0),
 			    ast_rtp_lookup_mime_multiple(s3, BUFSIZ, newnoncodeccapability, 0, 0));
 	}
@@ -640,7 +649,7 @@ int process_sdp(struct sip_dialog *p, struct sip_request *req)
 		they are acceptable */
 	p->jointcapability = newjointcapability;	/* Our joint codec profile for this call */
 	p->peercapability = newpeercapability;		/* The other sides capability in latest offer */
-	p->noncodeccapability = newnoncodeccapability;	/* DTMF capabilities */
+	p->jointnoncodeccapability = newnoncodeccapability;	/* DTMF capabilities */
 
 	ast_rtp_pt_copy(p->rtp, newaudiortp);
 	if (p->vrtp)
@@ -682,7 +691,7 @@ int process_sdp(struct sip_dialog *p, struct sip_request *req)
 	if (option_debug > 3)
 		ast_log(LOG_DEBUG, "We have an owner, now see if we need to change this call\n");
 
-	if (!(p->owner->nativeformats & p->jointcapability & AST_FORMAT_AUDIO_MASK)) {
+	if (!(p->owner->nativeformats & p->jointcapability & AST_FORMAT_AUDIO_MASK) && (p->jointcapability & AST_FORMAT_AUDIO_MASK)) {
 		if (debug) {
 			char s1[BUFSIZ], s2[BUFSIZ];
 			ast_log(LOG_DEBUG, "Oooh, we need to change our audio formats since our peer supports only %s and not %s\n", 
@@ -825,7 +834,9 @@ enum ast_rtp_get_result sip_get_rtp_peer(struct ast_channel *chan, struct ast_rt
 
 	*rtp = p->rtp;
 
-	if (ast_test_flag(&p->flags[0], SIP_CAN_REINVITE))
+	if (ast_rtp_getnat(*rtp) && !ast_test_flag(&p->flags[0], SIP_CAN_REINVITE_NAT))
+		res = AST_RTP_TRY_PARTIAL;
+	else if (ast_test_flag(&p->flags[0], SIP_CAN_REINVITE))
 		res = AST_RTP_TRY_NATIVE;
 	else if (ast_test_flag(&global.jbconf, AST_JB_FORCED))
 		res = AST_RTP_GET_FAILED;
@@ -1188,7 +1199,7 @@ int add_sdp(struct sip_request *resp, struct sip_dialog *p)
 
 	/* Now add DTMF RFC2833 telephony-event as a codec */
 	for (x = 1; x <= AST_RTP_MAX; x <<= 1) {
-		if (!(p->noncodeccapability & x))
+		if (!(p->jointnoncodeccapability & x))
 			continue;
 
 		add_noncodec_to_sdp(p, x, 8000,
