@@ -90,7 +90,7 @@ GNURK void realtime_update_peer(const char *peername, struct sockaddr_in *sin, c
 GNURK void register_peer_exten(struct sip_device *device, int onoff); 
 GNURK void update_peer(struct sip_device *device, int expiry);
 GNURK struct sip_device *temp_device(const char *name);
-GNURK void reg_source_db(struct sip_device *peer);
+GNURK void sip_reg_source_db(struct sip_device *peer);
 GNURK void destroy_association(struct sip_device *peer);
 GNURK int expire_register(void *data);
 

@@ -272,7 +272,7 @@ GNURK struct sip_device *temp_device(const char *name)
 	ast_set_flag(&peer->flags[1], SIP_PAGE2_SELFDESTRUCT);
 	ast_set_flag(&peer->flags[1], SIP_PAGE2_DYNAMIC);
 	peer->prefs = global.default_prefs;
-	reg_source_db(peer);
+	sip_reg_source_db(peer);
 
 	return peer;
 }
@@ -280,7 +280,7 @@ GNURK struct sip_device *temp_device(const char *name)
 /*! \brief Get registration details from Asterisk DB 
 	\ref chan_sip3_registrydb
 */
-GNURK void reg_source_db(struct sip_device *peer)
+GNURK void sip_reg_source_db(struct sip_device *peer)
 {
 	/*! \page chan_sip3_registrydb SIP3 :: THe registry database (astdb)
 		The SIP3 registry database contains a string that contains
@@ -301,7 +301,7 @@ GNURK void reg_source_db(struct sip_device *peer)
 
 		\b Functions:
 	
-		- \ref reg_source_db()
+		- \ref sip_reg_source_db()
 
 		A problem with this is that if Asterisk has not been running for more
 		than 30 secs, we might not be able to keep NAT relations alive and will

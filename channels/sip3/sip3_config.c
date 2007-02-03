@@ -1106,7 +1106,7 @@ static struct sip_device *build_device(const char *name, struct ast_variable *v,
 
 	/* If not realtime and dynamic - check if we have a current registration */
 	if (!found && ast_test_flag(&device->flags[1], SIP_PAGE2_DYNAMIC) && !ast_test_flag(&device->flags[0], SIP_REALTIME))
-		reg_source_db(device);
+		sip_reg_source_db(device);
 	
 
 	/* If dynamic and realtime, check registration expiry - it might have
