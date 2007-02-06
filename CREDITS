@@ -133,6 +133,8 @@ Roy Sigurd Karlsbakk - providing funding for generic jitterbuffer development
 
 Voop A/S, Nuvio Inc, Inotel S.A and Foniris Telecom A/S - funding for rewrite of SIP transfers
 
+Talkplus, inc - outbound proxy support in chan_sip
+
 Philippe Sultan - RADIUS CDR module
 	INRIA, http://www.inria.fr/
 

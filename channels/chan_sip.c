@@ -7300,19 +7300,17 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 		if (create_addr(p, r->hostname)) {
 			/* we have what we hope is a temporary network error,
 			 * probably DNS.  We need to reschedule a registration try */
-			if (!p->outboundproxy) {
-				sip_destroy(p);
-				if (r->timeout > -1) {
-					ast_sched_del(sched, r->timeout);
-					r->timeout = ast_sched_add(sched, global_reg_timeout*1000, sip_reg_timeout, r);
-					ast_log(LOG_WARNING, "Still have a registration timeout for %s@%s (create_addr() error), %d\n", r->username, r->hostname, r->timeout);
-				} else {
-					r->timeout = ast_sched_add(sched, global_reg_timeout*1000, sip_reg_timeout, r);
-					ast_log(LOG_WARNING, "Probably a DNS error for registration to %s@%s, trying REGISTER again (after %d seconds)\n", r->username, r->hostname, global_reg_timeout);
-				}
-				r->regattempts++;
-				return 0;
+			sip_destroy(p);
+			if (r->timeout > -1) {
+				ast_sched_del(sched, r->timeout);
+				r->timeout = ast_sched_add(sched, global_reg_timeout*1000, sip_reg_timeout, r);
+				ast_log(LOG_WARNING, "Still have a registration timeout for %s@%s (create_addr() error), %d\n", r->username, r->hostname, r->timeout);
+			} else {
+				r->timeout = ast_sched_add(sched, global_reg_timeout*1000, sip_reg_timeout, r);
+				ast_log(LOG_WARNING, "Probably a DNS error for registration to %s@%s, trying REGISTER again (after %d seconds)\n", r->username, r->hostname, global_reg_timeout);
 			}
+			r->regattempts++;
+			return 0;
 		}
 		/* Copy back Call-ID in case create_addr changed it */
 		ast_string_field_set(r, callid, p->callid);
