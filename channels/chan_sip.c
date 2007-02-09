@@ -15978,19 +15978,21 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 		} else if (!strcasecmp(v->name, "fromuser")) {
 			ast_copy_string(peer->fromuser, v->value, sizeof(peer->fromuser));
 		} else if (!strcasecmp(v->name, "outboundproxy")) {
-			char *force, *port;
+			char *port, *next, *force;
+			int forceopt = FALSE;
 			/* Set peer channel variable */
 			varname = ast_strdupa(v->value);
-			force = varname;
+			next = varname;
 			if ((port = strchr(varname, ':'))) {
 				*port++ = '\0';
-				force = port;
+				next = port;
 			}
-			if ((varval = strchr(force, ','))) {
-				*varval++ = '\0';
+			if ((force = strchr(next, ','))) {
+				*force++ = '\0';
+				forceopt = strcmp(force, "force");
 			}
 			/* Allocate proxy object */
-			peer->outboundproxy = proxy_allocate(varname, port, !strcmp(varval, "force"));
+			peer->outboundproxy = proxy_allocate(varname, port, forceopt);
 		} else if (!strcasecmp(v->name, "host")) {
 			if (!strcasecmp(v->value, "dynamic")) {
 				/* They'll register with us */
