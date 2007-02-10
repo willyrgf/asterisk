@@ -99,57 +99,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 	This code stays for copy/paste 
 	Will be removed finally
 */
-#ifdef OLD_VOICEMAIL_WAS_PAINFUL_AND_WILL_BE_DELETED
-
-
-static char serveremail[80];
-static char mailcmd[160];	/* Configurable mail cmd */
-static char externnotify[160]; 
-
-static char vmfmts[80];
-static int maxgreet;
-static int skipms;
-
-static struct ast_flags globalflags = {0};
-
-static int global_saydurationminfo;
-
-static char dialcontext[AST_MAX_CONTEXT];
-static char callcontext[AST_MAX_CONTEXT];
-static char exitcontext[AST_MAX_CONTEXT];
-
-static char cidinternalcontexts[MAX_NUM_CID_CONTEXTS][64];
-
-
-STANDARD_LOCAL_USER;
-
-LOCAL_USER_DECL;
-
-
-static int remove_file(char *dir, int msgnum)
-{
-	char fn[PATH_MAX];
-	char full_fn[PATH_MAX];
-	char msgnums[80];
-	
-	if (msgnum > -1) {
-		snprintf(msgnums, sizeof(msgnums), "%d", msgnum);
-		make_file(fn, sizeof(fn), dir, msgnum);
-	} else
-		ast_copy_string(fn, dir, sizeof(fn));
-	ast_filedelete(fn, NULL);	
-	snprintf(full_fn, sizeof(full_fn), "%s.txt", fn);
-	unlink(full_fn);
-	return 0;
-}
-
-
-
-
-
-
+#ifndef TRUE
+#define TRUE 1
 #endif
-/* ---------------------------- CUT HERE ------------------------------- */
+#ifndef FALSE
+#define FALSE 0
+#endif
 
 static int vmminmessage;
 static int vmmaxmessage;
@@ -179,6 +134,7 @@ static int vmmaxmessage;
 /* Default mail command to mail voicemail. Change it with the
     mailcmd= command in voicemail.conf */
 #define SENDMAIL "/usr/sbin/sendmail -t"
+
 #define INTRO "vm-intro"
 #define MAXMSG 100
 #define MAXMSGLIMIT 9999
@@ -201,8 +157,8 @@ static int vmmaxmessage;
 #define ASTERISK_USERNAME "asterisk"
 static char MVM_SPOOL_DIR[AST_CONFIG_MAX_PATH];
 
-static char *tdesc = "Comedian Mail (Voicemail System)";
-static char *app = "VoiceMail";		 /* Leave a message */
+static char *tdesc = "Mini VoiceMail (A minimal Voicemail e-mail System)";
+static char *app = "MiniVM";		 /* Leave a message */
 enum {
 	OPT_SILENT =	   (1 << 0),
 	OPT_BUSY_GREETING =    (1 << 1),
@@ -241,6 +197,7 @@ struct minivm_user {
 	char zonetag[80];		/*!< Time zone */
 	char uniqueid[20];		/*!< Unique integer identifier */
 	char exit[80];			/*!< Options for exiting from voicemail() */
+	char format[80];		/*!< Voicemail format */
 	unsigned int flags;		/*!< MVM_ flags */	
 	int saydurationm;
 	int maxmsg;			/*!< Maximum number of msgs per folder for this mailbox */
@@ -299,7 +256,7 @@ static char serveremail[80];
 static char mailcmd[160];	/* Configurable mail cmd */
 static char externnotify[160]; 
 
-static char vmfmts[80];
+static char default_vmformat[80];
 static int maxgreet;
 static int skipms;
 
@@ -536,6 +493,7 @@ static void populate_defaults(struct minivm_user *vmu)
 	ast_copy_flags(vmu, (&globalflags), AST_FLAGS_ALL);	
 	if (global_saydurationminfo)
 		vmu->saydurationm = global_saydurationminfo;
+	ast_copy_string(vmu->format, default_vmformat, sizeof(vmu->format));
 }
 
 /*! \brief Fix quote of mail headers for non-ascii characters */
@@ -674,6 +632,22 @@ static int sendpage(char *srcemail, char *pager, int msgnum, char *context, char
 	return 0;
 }
 
+
+/*! \brief Allocate new vm user and set default values */
+static struct minivm_user *mvm_user_alloc()
+{
+	struct minivm_user *new;
+
+	//new = ast_calloc(1, sizeof(struct minivm_user));
+	new = calloc(1, sizeof(struct minivm_user));
+	if (!new)
+		return NULL;
+	ast_set2_flag(new, TRUE, MVM_ALLOCED);	
+	populate_defaults(new);
+
+	return new;
+}
+
 static struct minivm_user *find_user_realtime(struct minivm_user *ivm, const char *domain, const char *username);
 
 
@@ -697,13 +671,19 @@ static struct minivm_user *find_user(struct minivm_user *ivm, const char *domain
 			vmu = ivm;
 		else
 			/* Make a copy, so that on a reload, we have no race */
-			vmu = malloc(sizeof(struct minivm_user));
-		if (vmu) {
+			vmu = mvm_user_alloc();
+		if (vmu) 
 			memcpy(vmu, cur, sizeof(struct minivm_user));
-			ast_set2_flag(vmu, !ivm, MVM_ALLOCED);	
-		}
 	} else
 		vmu = find_user_realtime(ivm, domain, username);
+	if (!vmu) {
+		/* Create a temporary user, send e-mail and be gone */
+		vmu = mvm_user_alloc();
+		if (vmu) {
+			ast_copy_string(vmu->username, username, sizeof(username));
+			ast_copy_string(vmu->username, domain, sizeof(domain));
+		}
+	}
 	ast_mutex_unlock(&minivmlock);
 	return vmu;
 }
@@ -719,11 +699,9 @@ static struct minivm_user *find_user_realtime(struct minivm_user *ivm, const cha
 	if (ivm)
 		retval = ivm;
 	else {
-		//retval = ast_calloc(sizeof(struct minivm_user));
-		retval = calloc(1,sizeof(struct minivm_user));
+		retval = mvm_user_alloc();
 		if (!retval)
 			return NULL;
-		ast_set_flag(retval, MVM_ALLOCED);	
 	}
 
 
@@ -964,6 +942,8 @@ static int create_dirpath(char *dest, int len, char *domain, char *ext, char *us
 			return 0;
 		}
 	}
+	if (option_debug > 1)
+		ast_log(LOG_DEBUG, "Creating directory for %s@%s : %s\n", username, domain, dest);
 	return 1;
 }
 
@@ -1246,53 +1226,41 @@ static int make_file(char *dest, int len, char *dir, int num)
 static int notify_new_message(struct ast_channel *chan, struct minivm_user *vmu, int msgnum, long duration, char *fmt, char *cidnum, char *cidname)
 {
 	char todir[PATH_MAX], fn[PATH_MAX], ext_context[PATH_MAX], *stringp;
-	int newmsgs = 0, oldmsgs = 0;
 
-	make_dir(todir, sizeof(todir), vmu->context, vmu->mailbox, "INBOX");
+	make_dir(todir, sizeof(todir), vmu->domain, vmu->username, "INBOX");
 	make_file(fn, sizeof(fn), todir, msgnum);
-	snprintf(ext_context, sizeof(ext_context), "%s@%s", vmu->mailbox, vmu->context);
+	snprintf(ext_context, sizeof(ext_context), "%s@%s", vmu->username, vmu->domain);
 
 	/* Attach only the first format */
 	fmt = ast_strdupa(fmt);
 	if (fmt) {
+		char *myserveremail = serveremail;
+
 		stringp = fmt;
 		strsep(&stringp, "|");
 
-		if (!ast_strlen_zero(vmu->email)) {
-			int attach_user_voicemail = ast_test_flag((&globalflags), VM_ATTACH);
-			char *myserveremail = serveremail;
-			attach_user_voicemail = ast_test_flag(vmu, VM_ATTACH);
-			if (!ast_strlen_zero(vmu->serveremail))
-				myserveremail = vmu->serveremail;
-			sendmail(myserveremail, vmu, msgnum, vmu->context, vmu->mailbox, cidnum, cidname, fn, fmt, duration, attach_user_voicemail);
-		}
+		if (!ast_strlen_zero(vmu->serveremail))
+			myserveremail = vmu->serveremail;
 
-		if (!ast_strlen_zero(vmu->pager)) {
-			char *myserveremail = serveremail;
-			if (!ast_strlen_zero(vmu->serveremail))
-				myserveremail = vmu->serveremail;
-			sendpage(myserveremail, vmu->pager, msgnum, vmu->context, vmu->mailbox, cidnum, cidname, duration, vmu);
-		}
+		sendmail(myserveremail, vmu, msgnum, vmu->domain, vmu->username, cidnum, cidname, fn, fmt, duration, TRUE);
+
+		if (!ast_strlen_zero(vmu->pager)) 
+			sendpage(myserveremail, vmu->pager, msgnum, vmu->domain, vmu->username, cidnum, cidname, duration, vmu);
 	} else {
-		ast_log(LOG_ERROR, "Out of memory\n");
+		ast_log(LOG_ERROR, "Out of memory. Can't send e-mail\n");
 	}
 
-	if (ast_test_flag(vmu, VM_DELETE)) {
+	if (ast_test_flag(vmu, MVM_DELETE)) 
 		DELETE(todir, msgnum, fn);
-	}
 
-	/* Leave voicemail for someone */
-	if (ast_app_has_voicemail(ext_context, NULL)) {
-		ast_app_messagecount(ext_context, &newmsgs, &oldmsgs);
-	}
-	manager_event(EVENT_FLAG_CALL, "MessageWaiting", "Mailbox: %s@%s\r\nWaiting: %d\r\nNew: %d\r\nOld: %d\r\n", vmu->mailbox, vmu->context, ast_app_has_voicemail(ext_context, NULL), newmsgs, oldmsgs);
-	run_externnotify(vmu->context, vmu->mailbox);
+	manager_event(EVENT_FLAG_CALL, "MiniVoiceMail", "Action: Sent\rn\nMailbox: %s@%s\r\n", vmu->username, vmu->domain);
+	// this needs to come back at a later time
+	//run_externnotify(vmu->context, vmu->mailbox);
 	return 0;
 }
 
  
-/*! \brief Leave voicemail message, store into file
- 	prepared for sending e-mail 
+/*! \brief Leave voicemail message, store into file prepared for sending e-mail 
 */
 static int leave_voicemail(struct ast_channel *chan, char *username, struct leave_vm_options *options)
 {
@@ -1368,7 +1336,6 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 		ast_copy_string(prefile, tempfile, sizeof(prefile));
 
 	/* It's easier just to try to make it than to check for its existence */
-	create_dirpath(dir, sizeof(dir), vmu->domain, username, "INBOX");
 	create_dirpath(tmpdir, sizeof(tmpdir), vmu->domain, username, "tmp");
 
 	/* Check current or macro-calling context for special extensions */
@@ -1472,10 +1439,13 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 		return -1;
 	}
 	/* The meat of recording the message...  All the announcements and beeps have been played*/
-	ast_copy_string(fmt, vmfmts, sizeof(fmt));
+	if (ast_strlen_zero(vmu->format))
+		ast_copy_string(fmt, default_vmformat, sizeof(fmt));
+	else
+		ast_copy_string(fmt, vmu->format, sizeof(fmt));
 
 	if (ast_strlen_zero(fmt)) {
-		ast_log(LOG_WARNING, "No format for saving voicemail?\n");
+		ast_log(LOG_WARNING, "No format for saving voicemail? Default %s\n", default_vmformat);
 		pbx_builtin_setvar_helper(chan, "MINIVMSTATUS", "FAILED");
 		free_user(vmu);
 		return res;
@@ -1771,7 +1741,7 @@ static int load_config(void)
 	char *thresholdstr;
 	char *fmt;
 	char *astemail;
- 	char *astmailcmd = SENDMAIL;
+ 	char *astmailcmd;
 	char *s;
 	char *emaildateformatstr;
 	int x;
@@ -1793,14 +1763,24 @@ static int load_config(void)
 	}
 	AST_LIST_UNLOCK(&minivm_zones);
 
+	/* First, set some default settings */
+	externnotify[0] = '\0';
+	silencethreshold = 256;
+	vmmaxmessage = 2000;
+	vmminmessage = 0;
+	strcpy(mailcmd, SENDMAIL);
+	maxsilence = 0;
+	global_saydurationminfo = 2;
+	skipms = 3000;
+
+
 	if (!cfg) {
 		ast_mutex_unlock(&minivmlock);
-		ast_log(LOG_WARNING, "Failed to load configuration file. Module not activated.\n");
+		ast_log(LOG_WARNING, "Failed to load configuration file. Module activated with default settings.\n");
 		return 0;
 	}
 
 	/* General settings */
-
 	/* Attach voice message to mail message ? */
 	if (!(vmattach = ast_variable_retrieve(cfg, "general", "attach"))) 
 		vmattach = "yes";
@@ -1812,11 +1792,9 @@ static int load_config(void)
 	ast_set2_flag((&globalflags), ast_true(astsearch), MVM_SEARCH);
 
 	/* Mail command */
-	strcpy(mailcmd, SENDMAIL);
 	if ((astmailcmd = ast_variable_retrieve(cfg, "general", "mailcmd")))
 		ast_copy_string(mailcmd, astmailcmd, sizeof(mailcmd)); /* User setting */
 
-	maxsilence = 0;
 	if ((silencestr = ast_variable_retrieve(cfg, "general", "maxsilence"))) {
 		maxsilence = atoi(silencestr);
 		if (maxsilence > 0)
@@ -1824,18 +1802,15 @@ static int load_config(void)
 	}
 		
 	/* Load date format config for voicemail mail */
-	if ((emaildateformatstr = ast_variable_retrieve(cfg, "general", "emaildateformat"))) {
+	if ((emaildateformatstr = ast_variable_retrieve(cfg, "general", "emaildateformat"))) 
 		ast_copy_string(global_emaildateformat, emaildateformatstr, sizeof(global_emaildateformat));
-	}
 
 	/* External voicemail notify application */
-	externnotify[0] = '\0';
 	if ((notifystr = ast_variable_retrieve(cfg, "general", "externnotify"))) {
 		ast_copy_string(externnotify, notifystr, sizeof(externnotify));
 	}
 
 	/* Silence treshold */
-	silencethreshold = 256;
 	if ((thresholdstr = ast_variable_retrieve(cfg, "general", "silencethreshold")))
 		silencethreshold = atoi(thresholdstr);
 		
@@ -1843,7 +1818,6 @@ static int load_config(void)
 		astemail = ASTERISK_USERNAME;
 	ast_copy_string(serveremail, astemail, sizeof(serveremail));
 		
-	vmmaxmessage = 2000;
 	if ((s = ast_variable_retrieve(cfg, "general", "maxmessage"))) {
 		if (sscanf(s, "%d", &x) == 1) {
 			vmmaxmessage = x;
@@ -1852,7 +1826,6 @@ static int load_config(void)
 		}
 	}
 
-	vmminmessage = 0;
 	if ((s = ast_variable_retrieve(cfg, "general", "minmessage"))) {
 		if (sscanf(s, "%d", &x) == 1) {
 			vmminmessage = x;
@@ -1865,15 +1838,13 @@ static int load_config(void)
 	fmt = ast_variable_retrieve(cfg, "general", "format");
 	if (!fmt)
 		fmt = "wav";	
-	ast_copy_string(vmfmts, fmt, sizeof(vmfmts));
+	ast_copy_string(default_vmformat, fmt, sizeof(default_vmformat));
 
-	skipms = 3000;
 	if ((s = ast_variable_retrieve(cfg, "general", "maxgreet"))) {
-		if (sscanf(s, "%d", &x) == 1) {
+		if (sscanf(s, "%d", &x) == 1)
 			maxgreet = x;
-		} else {
+		else 
 			ast_log(LOG_WARNING, "Invalid max message greeting length\n");
-		}
 	}
 
 	if ((s = ast_variable_retrieve(cfg, "general", "skipms"))) {
@@ -1926,7 +1897,6 @@ static int load_config(void)
 	}
 	ast_set2_flag((&globalflags), ast_true(astsaydurationinfo), MVM_SAYDURATION);	
 
-	global_saydurationminfo = 2;
 	if ((astsaydurationminfo = ast_variable_retrieve(cfg, "general", "saydurationm"))) {
 		if (sscanf(astsaydurationminfo, "%d", &x) == 1) {
 			global_saydurationminfo = x;
@@ -2065,7 +2035,10 @@ int unload_module(void)
 
 char *synopsis_vm = "Receive voicemail and forward via e-mail";
 char *descrip_vm = "No documentation. This is a professional application.\n"
-	"If you don't understand it, don't use it. Read the source.\n";
+	"If you don't understand it, don't use it. Read the source.\n"
+	"Syntax: minivm(username@domain[,options])\n"
+	"If there's no user account for that address, a temporary account will\n"
+	"be used with default options.\n";
 
 /*! \brief Load mini voicemail module */
 int load_module(void)
