@@ -825,14 +825,14 @@ static int sendmail(char *srcemail, struct minivm_user *vmu, int msgnum, char *c
 		if ((passdata = alloca(vmlen))) {
 			memset(passdata, 0, vmlen);
 			pbx_substitute_variables_helper(ast, fromstring, passdata, vmlen);
-			len_passdata = strlen(passdata) * 2 + 1;
+			len_passdata = strlen(passdata) * 2 + 3;
 			passdata2 = alloca(len_passdata);
 			fprintf(p, "From: %s <%s>\n", mailheader_quote(passdata, passdata2, len_passdata), who);
 		} else 
 			ast_log(LOG_WARNING, "Cannot allocate workspace for variable substitution\n");
 	} 
 
-	len_passdata = strlen(vmu->fullname) * 2 + 1;
+	len_passdata = strlen(vmu->fullname) * 2 + 3;
 	passdata2 = alloca(len_passdata);
 	fprintf(p, "To: %s <%s>\n", mailheader_quote(vmu->fullname, passdata2, len_passdata), vmu->email);
 
