@@ -165,7 +165,7 @@
 		  trying to delay parsing until we send a response.
 	- Added new CLI command "sip list configs" to list all configuration options 
 	  Mostly for debugging
-
+	- Integrated outbound proxy support from 1.4/trunk
 	- Added new configuration engine
 	- Add T1 timer configuration settings
 	- Added configurable T2 timer, see \ref sip3_timer_doc
