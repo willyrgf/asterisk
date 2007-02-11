@@ -65,7 +65,7 @@ static char *synopsis = "Place a call and connect to the current channel";
 
 static char *descrip =
 "  Dial(Technology/resource[&Tech2/resource2...][|timeout][|options][|URL]):\n"
-"This applicaiton will place calls to one or more specified channels. As soon\n"
+"This application will place calls to one or more specified channels. As soon\n"
 "as one of the requested channels answers, the originating channel will be\n"
 "answered, if it has not already been answered. These two channels will then\n"
 "be active in a bridged call. All other channels that were requested will then\n"
@@ -80,7 +80,7 @@ static char *descrip =
 "    ANSWEREDTIME - This is the amount of time for actual call.\n"
 "    DIALSTATUS   - This is the status of the call:\n"
 "                   CHANUNAVAIL | CONGESTION | NOANSWER | BUSY | ANSWER | CANCEL\n" 
-"                   DONTCALL | TORTURE\n"
+"                   DONTCALL | TORTURE | INVALIDARGS\n"
 "  For the Privacy and Screening Modes, the DIALSTATUS variable will be set to\n"
 "DONTCALL if the called party chooses to send the calling party to the 'Go Away'\n"
 "script. The DIALSTATUS variable will be set to TORTURE if the called party\n"
@@ -759,7 +759,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 	char *start_sound=NULL;
 	char *dtmfcalled=NULL, *dtmfcalling=NULL;
 	char *var;
-	char status[256];
+	char status[256] = "INVALIDARGS";
 	int play_to_caller=0,play_to_callee=0;
 	int sentringing=0, moh=0;
 	char *outbound_group = NULL;
@@ -780,21 +780,19 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 
 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_WARNING, "Dial requires an argument (technology/number)\n");
+		pbx_builtin_setvar_helper(chan, "DIALSTATUS", status);
 		return -1;
 	}
 
 	LOCAL_USER_ADD(u);
 
-	if (!(parse = ast_strdupa(data))) {
-		ast_log(LOG_WARNING, "Memory allocation failure\n");
-		LOCAL_USER_REMOVE(u);
-		return -1;
-	}
+	parse = ast_strdupa(data);
 	
 	AST_STANDARD_APP_ARGS(args, parse);
 
 	if (!ast_strlen_zero(args.options)) {
 		if (ast_app_parse_options(dial_exec_options, &opts, opt_args, args.options)) {
+			pbx_builtin_setvar_helper(chan, "DIALSTATUS", status);
 			LOCAL_USER_REMOVE(u);
 			return -1;
 		}
@@ -802,6 +800,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 
 	if (ast_strlen_zero(args.peers)) {
 		ast_log(LOG_WARNING, "Dial requires an argument (technology/number)\n");
+		pbx_builtin_setvar_helper(chan, "DIALSTATUS", status);
 		LOCAL_USER_REMOVE(u);
 		return -1;
 	}
@@ -1058,6 +1057,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			cur = rest;
 			if (!cur)
 				chan->hangupcause = cause;
+			free(tmp);
 			continue;
 		}
 		pbx_builtin_setvar_helper(tmp->chan, "DIALEDPEERNUMBER", numsubst);
@@ -1096,6 +1096,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			if (!tmp->chan) {
 				HANDLE_CAUSE(cause, chan);
 				cur = rest;
+				free(tmp);
 				continue;
 			}
 		}
@@ -1163,6 +1164,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			ast_hangup(tmp->chan);
 			tmp->chan = NULL;
 			cur = rest;
+			free(tmp);
 			continue;
 		} else {
 			senddialevent(chan, tmp->chan);
@@ -1197,6 +1199,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		strcpy(status, "NOANSWER");
 		if (ast_test_flag(outgoing, OPT_MUSICBACK)) {
 			moh=1;
+			ast_indicate(chan, AST_CONTROL_PROGRESS);
 			ast_moh_start(chan, opt_args[OPT_ARG_MUSICBACK]);
 		} else if (ast_test_flag(outgoing, OPT_RINGBACK)) {
 			ast_indicate(chan, AST_CONTROL_RINGING);
@@ -1466,7 +1469,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			ast_pbx_start(peer);
 			hanguptree(outgoing, NULL);
 			LOCAL_USER_REMOVE(u);
-			return 0;
+			return 1;
 		}
 
 		if (ast_test_flag(&opts, OPT_CALLEE_MACRO) && !ast_strlen_zero(opt_args[OPT_ARG_CALLEE_MACRO])) {
@@ -1645,8 +1648,12 @@ out:
 static int dial_exec(struct ast_channel *chan, void *data)
 {
 	struct ast_flags peerflags;
+	int res = 0;
+
 	memset(&peerflags, 0, sizeof(peerflags));
-	return dial_exec_full(chan, data, &peerflags);
+	res = dial_exec_full(chan, data, &peerflags);
+
+	return (res >= 0 ? 0 : -1);
 }
 
 static int retrydial_exec(struct ast_channel *chan, void *data)
@@ -1715,7 +1722,10 @@ static int retrydial_exec(struct ast_channel *chan, void *data)
 		if (ast_test_flag(chan, AST_FLAG_MOH))
 			ast_moh_stop(chan);
 
-		if ((res = dial_exec_full(chan, dialdata, &peerflags)) == 0) {
+		res = dial_exec_full(chan, dialdata, &peerflags);
+		if (res == 1) {
+			break;
+		} else if (res == 0) {
 			if (ast_test_flag(&peerflags, OPT_DTMF_EXIT)) {
 				if (!(res = ast_streamfile(chan, announce, chan->language)))
 					res = ast_waitstream(chan, AST_DIGIT_ANY);
@@ -1751,7 +1761,7 @@ static int retrydial_exec(struct ast_channel *chan, void *data)
 		ast_moh_stop(chan);
 
 	LOCAL_USER_REMOVE(u);
-	return loops ? res : 0;
+	return loops ? (res >= 0 ? 0 : -1) : 0;
 
 }
 

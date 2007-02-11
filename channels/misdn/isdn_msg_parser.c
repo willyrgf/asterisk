@@ -159,7 +159,7 @@ void parse_setup (struct isdn_msg msgs[], msg_t *msg, struct misdn_bchannel *bc,
 	{
 		int type,plan,present, screen;
 		char id[32];
-		dec_ie_calling_pn(setup->CALLING_PN, qi, &type, &plan, &present, &screen, (unsigned char *)id, sizeof(id)-1, nt,bc);
+		dec_ie_calling_pn(setup->CALLING_PN, qi, &type, &plan, &present, &screen, id, sizeof(id)-1, nt,bc);
 
 		bc->onumplan=type; 
 		strcpy(bc->oad, id);
@@ -183,13 +183,13 @@ void parse_setup (struct isdn_msg msgs[], msg_t *msg, struct misdn_bchannel *bc,
 	{
 		int  type, plan;
 		char number[32]; 
-		dec_ie_called_pn(setup->CALLED_PN, (Q931_info_t *)setup, &type, &plan, (unsigned char *)number, sizeof(number)-1, nt,bc);
+		dec_ie_called_pn(setup->CALLED_PN, (Q931_info_t *)setup, &type, &plan, number, sizeof(number)-1, nt,bc);
 		strcpy(bc->dad, number);
 		bc->dnumplan=type; 
 	}
 	{
 		char keypad[32];
-		dec_ie_keypad(setup->KEYPAD, (Q931_info_t *)setup, (unsigned char *)keypad, sizeof(keypad)-1, nt,bc);
+		dec_ie_keypad(setup->KEYPAD, (Q931_info_t *)setup, keypad, sizeof(keypad)-1, nt,bc);
 		strcpy(bc->keypad, keypad);
 	}
 
@@ -201,7 +201,7 @@ void parse_setup (struct isdn_msg msgs[], msg_t *msg, struct misdn_bchannel *bc,
 	{
 		int  type, plan, present, screen, reason;
 		char id[32]; 
-		dec_ie_redir_nr(setup->REDIR_NR, (Q931_info_t *)setup, &type, &plan, &present, &screen, &reason, (unsigned char *)id, sizeof(id)-1, nt,bc);
+		dec_ie_redir_nr(setup->REDIR_NR, (Q931_info_t *)setup, &type, &plan, &present, &screen, &reason, id, sizeof(id)-1, nt,bc);
     
 		strcpy(bc->rad, id);
 		bc->rnumplan=type; 
@@ -323,6 +323,10 @@ msg_t *build_setup (struct isdn_msg msgs[], struct misdn_bchannel *bc, int nt)
     
 		enc_ie_bearer(&setup->BEARER, msg, coding, capability, mode, rate, -1, user, nt,bc);
 	}
+
+	if (bc->sending_complete) {
+		enc_ie_complete(&setup->BEARER,msg, bc->sending_complete, nt, bc);
+	}
   
 #if DEBUG 
 	printf("Building SETUP Msg\n"); 
@@ -370,7 +374,7 @@ msg_t *build_connect (struct isdn_msg msgs[], struct misdn_bchannel *bc, int nt)
   
 	{
 		int type=bc->cpnnumplan, plan=1, present=2, screen=0;
-		enc_ie_connected_pn(&connect->CONNECT_PN, msg, type,plan, present, screen, (unsigned char*) bc->cad, nt , bc);
+		enc_ie_connected_pn(&connect->CONNECT_PN, msg, type,plan, present, screen, bc->cad, nt , bc);
 	}
 
 #if DEBUG 
@@ -790,10 +794,14 @@ msg_t *build_restart (struct isdn_msg msgs[], struct misdn_bchannel *bc, int nt)
 	msg_t *msg =(msg_t*)create_l3msg(CC_RESTART | REQUEST, MT_RESTART,  bc?bc->l3_id:-1, sizeof(RESTART_t) ,nt); 
  
 	restart=(RESTART_t*)((msg->data+HEADER_LEN)); 
-
+	
 #if DEBUG 
 	printf("Building RESTART Msg\n"); 
 #endif
+	enc_ie_channel_id(&restart->CHANNEL_ID, msg, 1,bc->channel, nt,bc);
+
+	cb_log(0,bc->port, "Restarting channel %d\n", bc->channel);
+	
 	return msg; 
 }
 
@@ -973,8 +981,8 @@ void parse_information (struct isdn_msg msgs[], msg_t *msg, struct misdn_bchanne
 		int  type, plan;
 		char number[32];
 		char keypad[32];
-		dec_ie_called_pn(information->CALLED_PN, (Q931_info_t *)information, &type, &plan, (unsigned char *)number, sizeof(number)-1, nt, bc);
-		dec_ie_keypad(information->KEYPAD, (Q931_info_t *)information, (unsigned char *)keypad, sizeof(keypad)-1, nt, bc);
+		dec_ie_called_pn(information->CALLED_PN, (Q931_info_t *)information, &type, &plan, number, sizeof(number)-1, nt, bc);
+		dec_ie_keypad(information->KEYPAD, (Q931_info_t *)information, keypad, sizeof(keypad)-1, nt, bc);
 		strcpy(bc->info_dad, number);
 		strcpy(bc->keypad,keypad);
 	}

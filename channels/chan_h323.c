@@ -1642,9 +1642,11 @@ static int restart_monitor(void)
                 /* Start a new monitor */
                 if (ast_pthread_create(&monitor_thread, &attr, do_monitor, NULL) < 0) {
                         ast_mutex_unlock(&monlock);
+						pthread_attr_destroy(&attr);
                         ast_log(LOG_ERROR, "Unable to start monitor thread.\n");
                         return -1;
                 }
+		pthread_attr_destroy(&attr);
 
 	}
 	ast_mutex_unlock(&monlock);
@@ -2021,7 +2023,7 @@ int reload_config(void)
 	memset(&global_options, 0, sizeof(global_options));
 	global_options.dtmfcodec = 101;
 	global_options.dtmfmode = H323_DTMF_RFC2833;
-	global_options.capability = ~0;	/* All capabilities */
+	global_options.capability = AST_FORMAT_G723_1 | AST_FORMAT_GSM | AST_FORMAT_ULAW | AST_FORMAT_ALAW | AST_FORMAT_G729A | AST_FORMAT_H261;
 	global_options.bridge = 1;		/* Do native bridging by default */
 	v = ast_variable_browse(cfg, "general");
 	while(v) {

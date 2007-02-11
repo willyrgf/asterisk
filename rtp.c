@@ -522,7 +522,7 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 	}
 
 	if(rtp_debug_test_addr(&sin))
-		ast_verbose("Got RTP packet from %s:%d (type %d, seq %d, ts %d, len %d)\n"
+		ast_verbose("Got RTP packet from %s:%u (type %d, seq %u, ts %u, len %d)\n"
 			, ast_inet_ntoa(iabuf, sizeof(iabuf), sin.sin_addr), ntohs(sin.sin_port), payloadtype, seqno, timestamp,res - hdrlen);
 
    rtpPT = ast_rtp_lookup_pt(rtp, payloadtype);
@@ -1463,6 +1463,8 @@ int ast_rtp_write(struct ast_rtp *rtp, struct ast_frame *_f)
 			f = _f;
 		}
 		ast_rtp_raw_write(rtp, f, codec);
+		if (f != _f)
+			ast_frfree(f);
 	}
 		
 	return 0;

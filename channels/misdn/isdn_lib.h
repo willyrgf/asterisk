@@ -329,17 +329,17 @@ struct misdn_bchannel {
 	int hdlc;
 	/* V110 */
   
-	unsigned char display[84];
-	unsigned char msn[32];
-	unsigned char oad[32];
-	unsigned char rad[32];
-	unsigned char dad[32];
-	unsigned char cad[32];
-	unsigned char orig_dad[32];
-	unsigned char keypad[32];
+	char display[84];
+	char msn[32];
+	char oad[32];
+	char rad[32];
+	char dad[32];
+	char cad[32];
+	char orig_dad[32];
+	char keypad[32];
 
-	unsigned char info_dad[64];
-	unsigned char infos_pending[64];
+	char info_dad[64];
+	char infos_pending[64];
 
 /* 	unsigned char info_keypad[32]; */
 /* 	unsigned char clisub[24]; */
@@ -413,6 +413,9 @@ void manager_ph_control(struct misdn_bchannel *bc, int c1, int c2);
 
 
 int misdn_lib_port_restart(int port);
+int misdn_lib_pid_restart(int pid);
+int misdn_lib_send_restart(int port);
+
 int misdn_lib_get_port_info(int port);
 
 int misdn_lib_is_port_blocked(int port);

@@ -70,7 +70,8 @@ static int group_count_exec(struct ast_channel *chan, void *data)
 
 	if (ast_strlen_zero(group)) {
 		grp = pbx_builtin_getvar_helper(chan, category);
-		strncpy(group, grp, sizeof(group) - 1);
+		if (!ast_strlen_zero(grp))
+			ast_copy_string(group, grp, sizeof(group));
 	}
 
 	count = ast_app_group_get_count(group, category);
@@ -152,6 +153,11 @@ static int group_check_exec(struct ast_channel *chan, void *data)
 	if (!deprecation_warning) {
 	        ast_log(LOG_WARNING, "The CheckGroup application has been deprecated, please use a combination of the GotoIf application and the GROUP_COUNT() function.\n");
 		deprecation_warning = 1;
+	}
+
+	if (ast_strlen_zero(data)) {
+		ast_log(LOG_WARNING, "CheckGroup requires an argument(max[@category][|options])\n");
+		return 0;
 	}
 
 	if (!(parse = ast_strdupa(data))) {

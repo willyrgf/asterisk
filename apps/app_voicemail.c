@@ -77,6 +77,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define COMMAND_TIMEOUT 5000
 #define	VOICEMAIL_DIR_MODE	0700
 #define	VOICEMAIL_FILE_MODE	0600
+#define	CHUNKSIZE	65536
 
 #define VOICEMAIL_CONFIG "voicemail.conf"
 #define ASTERISK_USERNAME "asterisk"
@@ -242,10 +243,10 @@ struct vm_zone {
 struct vm_state {
 	char curbox[80];
 	char username[80];
-	char curdir[256];
-	char vmbox[256];
-	char fn[256];
-	char fn2[256];
+	char curdir[PATH_MAX];
+	char vmbox[PATH_MAX];
+	char fn[PATH_MAX];
+	char fn2[PATH_MAX];
 	int *deleted;
 	int *heard;
 	int curmsg;
@@ -638,7 +639,7 @@ static void vm_change_password(struct ast_vm_user *vmu, const char *newpassword)
 	int linenum=0;
 	char inbuf[256];
 	char orig[256];
-	char currcontext[256] ="";
+	char currcontext[256] = "";
 	char tmpin[AST_CONFIG_MAX_PATH];
 	char tmpout[AST_CONFIG_MAX_PATH];
 	struct stat statbuf;
@@ -838,7 +839,7 @@ static int retrieve_file(char *dir, int msgnum)
 	void *fdm=NULL;
 	SQLSMALLINT colcount=0;
 	SQLHSTMT stmt;
-	char sql[256];
+	char sql[PATH_MAX];
 	char fmt[80]="";
 	char *c;
 	char coltitle[256];
@@ -849,8 +850,8 @@ static int retrieve_file(char *dir, int msgnum)
 	SQLULEN colsize;
 	FILE *f=NULL;
 	char rowdata[80];
-	char fn[256];
-	char full_fn[256];
+	char fn[PATH_MAX];
+	char full_fn[PATH_MAX];
 	char msgnums[80];
 	
 	odbc_obj *obj;
@@ -868,7 +869,12 @@ static int retrieve_file(char *dir, int msgnum)
 		else
 			ast_copy_string(fn, dir, sizeof(fn));
 		snprintf(full_fn, sizeof(full_fn), "%s.txt", fn);
-		f = fopen(full_fn, "w+");
+		
+		if (!(f = fopen(full_fn, "w+"))) {
+		        ast_log(LOG_WARNING, "Failed to open/create '%s'\n", full_fn);
+		        goto yuck;
+		}
+		
 		snprintf(full_fn, sizeof(full_fn), "%s.%s", fn, fmt);
 		res = SQLAllocHandle(SQL_HANDLE_STMT, obj->con, &stmt);
 		if ((res != SQL_SUCCESS) && (res != SQL_SUCCESS_WITH_INFO)) {
@@ -925,7 +931,8 @@ static int retrieve_file(char *dir, int msgnum)
 				goto yuck;
 			}
 			if (!strcasecmp(coltitle, "recording")) {
-				res = SQLGetData(stmt, x + 1, SQL_BINARY, NULL, 0, &colsize);
+				off_t offset;
+				res = SQLGetData(stmt, x + 1, SQL_BINARY, rowdata, 0, &colsize);
 				fdlen = colsize;
 				if (fd > -1) {
 					char tmp[1]="";
@@ -935,17 +942,24 @@ static int retrieve_file(char *dir, int msgnum)
 						fd = -1;
 						continue;
 					}
-					if (fd > -1)
-						fdm = mmap(NULL, fdlen, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-				}
-				if (fdm) {
-					memset(fdm, 0, fdlen);
-					res = SQLGetData(stmt, x + 1, SQL_BINARY, fdm, fdlen, &colsize);
-					if ((res != SQL_SUCCESS) && (res != SQL_SUCCESS_WITH_INFO)) {
-						ast_log(LOG_WARNING, "SQL Get Data error!\n[%s]\n\n", sql);
-						SQLFreeHandle (SQL_HANDLE_STMT, stmt);
-						goto yuck;
+					/* Read out in small chunks */
+					for (offset = 0; offset < colsize; offset += CHUNKSIZE) {
+						if ((fdm = mmap(NULL, CHUNKSIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, offset)) == (void *)-1) {
+							ast_log(LOG_WARNING, "Could not mmap the output file: %s (%d)\n", strerror(errno), errno);
+							SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+							goto yuck;
+						} else {
+							res = SQLGetData(stmt, x + 1, SQL_BINARY, fdm, CHUNKSIZE, NULL);
+							munmap(fdm, CHUNKSIZE);
+							if ((res != SQL_SUCCESS) && (res != SQL_SUCCESS_WITH_INFO)) {
+								ast_log(LOG_WARNING, "SQL Get Data error!\n[%s]\n\n", sql);
+								unlink(full_fn);
+								SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+								goto yuck;
+							}
+						}
 					}
+					truncate(full_fn, fdlen);
 				}
 			} else {
 				res = SQLGetData(stmt, x + 1, SQL_CHAR, rowdata, sizeof(rowdata), NULL);
@@ -964,8 +978,6 @@ static int retrieve_file(char *dir, int msgnum)
 yuck:	
 	if (f)
 		fclose(f);
-	if (fdm)
-		munmap(fdm, fdlen);
 	if (fd > -1)
 		close(fd);
 	return x - 1;
@@ -973,8 +985,8 @@ yuck:
 
 static int remove_file(char *dir, int msgnum)
 {
-	char fn[256];
-	char full_fn[256];
+	char fn[PATH_MAX];
+	char full_fn[PATH_MAX];
 	char msgnums[80];
 	
 	if (msgnum > -1) {
@@ -993,7 +1005,7 @@ static int last_message_index(struct ast_vm_user *vmu, char *dir)
 	int x = 0;
 	int res;
 	SQLHSTMT stmt;
-	char sql[256];
+	char sql[PATH_MAX];
 	char rowdata[20];
 	
 	odbc_obj *obj;
@@ -1044,7 +1056,7 @@ static int message_exists(char *dir, int msgnum)
 	int x = 0;
 	int res;
 	SQLHSTMT stmt;
-	char sql[256];
+	char sql[PATH_MAX];
 	char rowdata[20];
 	char msgnums[20];
 	
@@ -1102,7 +1114,7 @@ static void delete_file(char *sdir, int smsg)
 {
 	int res;
 	SQLHSTMT stmt;
-	char sql[256];
+	char sql[PATH_MAX];
 	char msgnums[20];
 	
 	odbc_obj *obj;
@@ -1199,10 +1211,10 @@ static int store_file(char *dir, char *mailboxuser, char *mailboxcontext, int ms
 	size_t fdlen = -1;
 	SQLHSTMT stmt;
 	SQLINTEGER len;
-	char sql[256];
+	char sql[PATH_MAX];
 	char msgnums[20];
-	char fn[256];
-	char full_fn[256];
+	char fn[PATH_MAX];
+	char full_fn[PATH_MAX];
 	char fmt[80]="";
 	char *c;
 	char *context="", *macrocontext="", *callerid="", *origtime="", *duration="";
@@ -1318,7 +1330,7 @@ static void rename_file(char *sdir, int smsg, char *mailboxuser, char *mailboxco
 {
 	int res;
 	SQLHSTMT stmt;
-	char sql[256];
+	char sql[PATH_MAX];
 	char msgnums[20];
 	char msgnumd[20];
 	odbc_obj *obj;
@@ -1395,8 +1407,8 @@ static int count_messages(struct ast_vm_user *vmu, char *dir)
 
 static void rename_file(char *sfn, char *dfn)
 {
-	char stxt[256];
-	char dtxt[256];
+	char stxt[PATH_MAX];
+	char dtxt[PATH_MAX];
 	ast_filerename(sfn,dfn,NULL);
 	snprintf(stxt, sizeof(stxt), "%s.txt", sfn);
 	snprintf(dtxt, sizeof(dtxt), "%s.txt", dfn);
@@ -1455,7 +1467,7 @@ static int copy(char *infile, char *outfile)
 
 static void copy_file(char *frompath, char *topath)
 {
-	char frompath2[256],topath2[256];
+	char frompath2[PATH_MAX], topath2[PATH_MAX];
 	ast_filecopy(frompath, topath, NULL);
 	snprintf(frompath2, sizeof(frompath2), "%s.txt", frompath);
 	snprintf(topath2, sizeof(topath2), "%s.txt", topath);
@@ -1468,7 +1480,7 @@ static void copy_file(char *frompath, char *topath)
 static int last_message_index(struct ast_vm_user *vmu, char *dir)
 {
 	int x;
-	char fn[256];
+	char fn[PATH_MAX];
 
 	if (vm_lock_path(dir))
 		return ERROR_LOCK_PATH;
@@ -1639,6 +1651,23 @@ static void prep_email_sub_vars(struct ast_channel *ast, struct ast_vm_user *vmu
 	pbx_builtin_setvar_helper(ast, "VM_DATE", date);
 }
 
+static char *quote(const char *from, char *to, size_t len)
+{
+	char *ptr = to;
+	*ptr++ = '"';
+	for (; ptr < to + len - 1; from++) {
+		if (*from == '"')
+			*ptr++ = '\\';
+		else if (*from == '\0')
+			break;
+		*ptr++ = *from;
+	}
+	if (ptr < to + len - 1)
+		*ptr++ = '"';
+	*ptr = '\0';
+	return to;
+}
+
 static int sendmail(char *srcemail, struct ast_vm_user *vmu, int msgnum, char *context, char *mailbox, char *cidnum, char *cidname, char *attach, char *format, int duration, int attach_user_voicemail)
 {
 	FILE *p=NULL;
@@ -1647,13 +1676,16 @@ static int sendmail(char *srcemail, struct ast_vm_user *vmu, int msgnum, char *c
 	char host[MAXHOSTNAMELEN] = "";
 	char who[256];
 	char bound[256];
-	char fname[256];
-	char dur[256];
+	char fname[PATH_MAX];
+	char dur[PATH_MAX];
 	char tmp[80] = "/tmp/astmail-XXXXXX";
-	char tmp2[256];
+	char tmp2[PATH_MAX];
 	time_t t;
 	struct tm tm;
 	struct vm_zone *the_zone = NULL;
+	int len_passdata;
+	char *passdata2;
+
 	if (vmu && ast_strlen_zero(vmu->email)) {
 		ast_log(LOG_WARNING, "E-mail address missing for mailbox [%s].  E-mail will not be sent.\n", vmu->mailbox);
 		return(0);
@@ -1714,13 +1746,17 @@ static int sendmail(char *srcemail, struct ast_vm_user *vmu, int msgnum, char *c
 					memset(passdata, 0, vmlen);
 					prep_email_sub_vars(ast,vmu,msgnum + 1,context,mailbox,cidnum, cidname,dur,date,passdata, vmlen);
 					pbx_substitute_variables_helper(ast,fromstring,passdata,vmlen);
-					fprintf(p, "From: %s <%s>\n",passdata,who);
+					len_passdata = strlen(passdata) * 2 + 3;
+					passdata2 = alloca(len_passdata);
+					fprintf(p, "From: %s <%s>\n", quote(passdata, passdata2, len_passdata), who);
 				} else ast_log(LOG_WARNING, "Cannot allocate workspace for variable substitution\n");
 				ast_channel_free(ast);
 			} else ast_log(LOG_WARNING, "Cannot allocate the channel for variables substitution\n");
 		} else
 			fprintf(p, "From: Asterisk PBX <%s>\n", who);
-		fprintf(p, "To: %s <%s>\n", vmu->fullname, vmu->email);
+		len_passdata = strlen(vmu->fullname) * 2 + 3;
+		passdata2 = alloca(len_passdata);
+		fprintf(p, "To: %s <%s>\n", quote(vmu->fullname, passdata2, len_passdata), vmu->email);
 
 		if (emailsubject) {
 			struct ast_channel *ast = ast_channel_alloc(0);
@@ -1806,11 +1842,11 @@ static int sendpage(char *srcemail, char *pager, int msgnum, char *context, char
 	FILE *p=NULL;
 	int pfd;
 	char date[256];
-	char host[MAXHOSTNAMELEN]="";
+	char host[MAXHOSTNAMELEN] = "";
 	char who[256];
-	char dur[256];
+	char dur[PATH_MAX];
 	char tmp[80] = "/tmp/astmail-XXXXXX";
-	char tmp2[256];
+	char tmp2[PATH_MAX];
 	time_t t;
 	struct tm tm;
 	struct vm_zone *the_zone = NULL;
@@ -1929,8 +1965,16 @@ static int get_date(char *s, int len)
 static int invent_message(struct ast_channel *chan, char *context, char *ext, int busy, char *ecodes)
 {
 	int res;
-	char fn[256];
+	char fn[PATH_MAX];
+	char dest[PATH_MAX];
+
 	snprintf(fn, sizeof(fn), "%s%s/%s/greet", VM_SPOOL_DIR, context, ext);
+
+	if (!(res = create_dirpath(dest, sizeof(dest), context, ext, "greet"))) {
+		ast_log(LOG_WARNING, "Failed to make directory(%s)\n", fn);
+		return -1;
+	}
+
 	RETRIEVE(fn, -1);
 	if (ast_fileexists(fn, NULL, NULL) > 0) {
 		res = ast_streamfile(chan, fn, chan->language);
@@ -2011,9 +2055,9 @@ static int messagecount(const char *mailbox, int *newmsgs, int *oldmsgs)
 	int x = -1;
 	int res;
 	SQLHSTMT stmt;
-	char sql[256];
+	char sql[PATH_MAX];
 	char rowdata[20];
-	char tmp[256]="";
+	char tmp[PATH_MAX] = "";
         char *context;
 
         if (newmsgs)
@@ -2115,9 +2159,9 @@ static int has_voicemail(const char *mailbox, const char *folder)
 	int nummsgs = 0;
         int res;
         SQLHSTMT stmt;
-        char sql[256];
+        char sql[PATH_MAX];
         char rowdata[20];
-        char tmp[256]="";
+        char tmp[PATH_MAX] = "";
         char *context;
 	if (!folder)
                 folder = "INBOX";
@@ -2185,8 +2229,8 @@ static int has_voicemail(const char *mailbox, const char *folder)
 {
 	DIR *dir;
 	struct dirent *de;
-	char fn[256];
-	char tmp[256]="";
+	char fn[PATH_MAX];
+	char tmp[PATH_MAX] = "";
 	char *mb, *cur;
 	char *context;
 	int ret;
@@ -2233,8 +2277,8 @@ static int messagecount(const char *mailbox, int *newmsgs, int *oldmsgs)
 {
 	DIR *dir;
 	struct dirent *de;
-	char fn[256];
-	char tmp[256]="";
+	char fn[PATH_MAX];
+	char tmp[PATH_MAX] = "";
 	char *mb, *cur;
 	char *context;
 	int ret;
@@ -2304,17 +2348,21 @@ static int messagecount(const char *mailbox, int *newmsgs, int *oldmsgs)
 
 static int notify_new_message(struct ast_channel *chan, struct ast_vm_user *vmu, int msgnum, long duration, char *fmt, char *cidnum, char *cidname);
 
-static int copy_message(struct ast_channel *chan, struct ast_vm_user *vmu, int imbox, int msgnum, long duration, struct ast_vm_user *recip, char *fmt)
+static int copy_message(struct ast_channel *chan, struct ast_vm_user *vmu, int imbox, int msgnum, long duration, struct ast_vm_user *recip, char *fmt, char *dir)
 {
-	char fromdir[256], todir[256], frompath[256], topath[256];
+	char fromdir[PATH_MAX], todir[PATH_MAX], frompath[PATH_MAX], topath[PATH_MAX];
 	char *frombox = mbox(imbox);
 	int recipmsgnum;
 
 	ast_log(LOG_NOTICE, "Copying message from %s@%s to %s@%s\n", vmu->mailbox, vmu->context, recip->mailbox, recip->context);
 
 	create_dirpath(todir, sizeof(todir), recip->context, recip->mailbox, "INBOX");
-  
-	make_dir(fromdir, sizeof(fromdir), vmu->context, vmu->mailbox, frombox);
+	
+	if (!dir)
+		make_dir(fromdir, sizeof(fromdir), vmu->context, vmu->mailbox, frombox);
+	else
+		ast_copy_string(fromdir, dir, sizeof(fromdir));
+
 	make_file(frompath, sizeof(frompath), fromdir, msgnum);
 
 	if (vm_lock_path(todir))
@@ -2367,7 +2415,7 @@ struct leave_vm_options {
 
 static int leave_voicemail(struct ast_channel *chan, char *ext, struct leave_vm_options *options)
 {
-	char txtfile[256], tmptxtfile[256];
+	char txtfile[PATH_MAX], tmptxtfile[PATH_MAX];
 	char callerid[256];
 	FILE *txt;
 	int res = 0, txtdes;
@@ -2377,10 +2425,11 @@ static int leave_voicemail(struct ast_channel *chan, char *ext, struct leave_vm_
 	int ousemacro = 0;
 	int ouseexten = 0;
 	char date[256];
-	char dir[256], tmpdir[260];
-	char fn[256];
-	char prefile[256]="";
-	char tempfile[256]="";
+	char dir[PATH_MAX], tmpdir[PATH_MAX];
+	char dest[PATH_MAX];
+	char fn[PATH_MAX];
+	char prefile[PATH_MAX] = "";
+	char tempfile[PATH_MAX] = "";
 	char ext_context[256] = "";
 	char fmt[80];
 	char *context;
@@ -2415,17 +2464,23 @@ static int leave_voicemail(struct ast_channel *chan, char *ext, struct leave_vm_
 		pbx_builtin_setvar_helper(chan, "VMSTATUS", "FAILED");
 		return res;
 	}
-
 	/* Setup pre-file if appropriate */
 	if (strcmp(vmu->context, "default"))
 		snprintf(ext_context, sizeof(ext_context), "%s@%s", ext, vmu->context);
 	else
 		ast_copy_string(ext_context, vmu->context, sizeof(ext_context));
-	if (ast_test_flag(options, OPT_BUSY_GREETING))
+	if (ast_test_flag(options, OPT_BUSY_GREETING)) {
+		res = create_dirpath(dest, sizeof(dest), vmu->context, ext, "busy");
 		snprintf(prefile, sizeof(prefile), "%s%s/%s/busy", VM_SPOOL_DIR, vmu->context, ext);
-	else if (ast_test_flag(options, OPT_UNAVAIL_GREETING))
+	} else if (ast_test_flag(options, OPT_UNAVAIL_GREETING)) {
+		res = create_dirpath(dest, sizeof(dest), vmu->context, ext, "unavail");
 		snprintf(prefile, sizeof(prefile), "%s%s/%s/unavail", VM_SPOOL_DIR, vmu->context, ext);
+	}
 	snprintf(tempfile, sizeof(tempfile), "%s%s/%s/temp", VM_SPOOL_DIR, vmu->context, ext);
+	if (!(res = create_dirpath(dest, sizeof(dest), vmu->context, ext, "temp"))) {
+		ast_log(LOG_WARNING, "Failed to make directory (%s)\n", tempfile);
+		return -1;
+	}
 	RETRIEVE(tempfile, -1);
 	if (ast_fileexists(tempfile, NULL, NULL) > 0)
 		ast_copy_string(prefile, tempfile, sizeof(prefile));
@@ -2648,7 +2703,7 @@ static int leave_voicemail(struct ast_channel *chan, char *ext, struct leave_vm_
 							context++;
 						}
 						if ((recip = find_user(&recipu, context, exten))) {
-							copy_message(chan, vmu, 0, msgnum, duration, recip, fmt);
+							copy_message(chan, vmu, 0, msgnum, duration, recip, fmt, dir);
 							free_user(recip);
 						}
 					}
@@ -2684,8 +2739,8 @@ static int resequence_mailbox(struct ast_vm_user *vmu, char *dir)
 	/* we know max messages, so stop process when number is hit */
 
 	int x,dest;
-	char sfn[256];
-	char dfn[256];
+	char sfn[PATH_MAX];
+	char dfn[PATH_MAX];
 
 	if (vm_lock_path(dir))
 		return ERROR_LOCK_PATH;
@@ -2717,9 +2772,9 @@ static int say_and_wait(struct ast_channel *chan, int num, char *language)
 
 static int save_to_folder(struct ast_vm_user *vmu, char *dir, int msg, char *context, char *username, int box)
 {
-	char sfn[256];
-	char dfn[256];
-	char ddir[256];
+	char sfn[PATH_MAX];
+	char dfn[PATH_MAX];
+	char ddir[PATH_MAX];
 	char *dbox = mbox(box);
 	int x;
  	make_file(sfn, sizeof(sfn), dir, msg);
@@ -2749,7 +2804,7 @@ static int adsi_logo(unsigned char *buf)
 {
 	int bytes = 0;
 	bytes += adsi_display(buf + bytes, ADSI_COMM_PAGE, 1, ADSI_JUST_CENT, 0, "Comedian Mail", "");
-	bytes += adsi_display(buf + bytes, ADSI_COMM_PAGE, 2, ADSI_JUST_CENT, 0, "(C)2002 LSS, Inc.", "");
+	bytes += adsi_display(buf + bytes, ADSI_COMM_PAGE, 2, ADSI_JUST_CENT, 0, "(C)2002-2006 Digium, Inc.", "");
 	return bytes;
 }
 
@@ -2981,7 +3036,7 @@ static void adsi_message(struct ast_channel *chan, struct vm_state *vms)
 	int bytes=0;
 	unsigned char buf[256]; 
 	char buf1[256], buf2[256];
-	char fn2[256];
+	char fn2[PATH_MAX];
 
 	char cid[256]="";
 	char *val;
@@ -3241,7 +3296,7 @@ static int get_folder(struct ast_channel *chan, int start)
 {
 	int x;
 	int d;
-	char fn[256];
+	char fn[PATH_MAX];
 	d = ast_play_and_wait(chan, "vm-press");	/* "Press" */
 	if (d)
 		return d;
@@ -3277,12 +3332,11 @@ static int get_folder2(struct ast_channel *chan, char *fn, int start)
 	return res;
 }
 
-static int vm_forwardoptions(struct ast_channel *chan, struct ast_vm_user *vmu, char *curdir, int curmsg, char *vmfts,
-			     char *context, signed char record_gain)
+static int vm_forwardoptions(struct ast_channel *chan, struct ast_vm_user *vmu, char *curdir, int curmsg, char *vmfmts,
+			     char *context, signed char record_gain, long *duration)
 {
 	int cmd = 0;
 	int retries = 0;
-	int duration = 0;
 	signed char zero_gain = 0;
 
 	while ((cmd >= 0) && (cmd != 't') && (cmd != '*')) {
@@ -3290,15 +3344,66 @@ static int vm_forwardoptions(struct ast_channel *chan, struct ast_vm_user *vmu, 
 			retries = 0;
 		switch (cmd) {
 		case '1': 
-			/* prepend a message to the current message and return */
+			/* prepend a message to the current message, update the metadata and return */
 		{
-			char file[200];
-			snprintf(file, sizeof(file), "%s/msg%04d", curdir, curmsg);
+			char msgfile[PATH_MAX];
+			char textfile[PATH_MAX];
+			int prepend_duration = 0;
+			struct ast_config *msg_cfg;
+			char *duration_str;
+
+			make_file(msgfile, sizeof(msgfile), curdir, curmsg);
+			strcpy(textfile, msgfile);
+			strncat(textfile, ".txt", sizeof(textfile) - 1);
+			*duration = 0;
+
+			/* if we can't read the message metadata, stop now */
+			if (!(msg_cfg = ast_config_load(textfile))) {
+				cmd = 0;
+				break;
+			}
+
 			if (record_gain)
 				ast_channel_setoption(chan, AST_OPTION_RXGAIN, &record_gain, sizeof(record_gain), 0);
-			cmd = ast_play_and_prepend(chan, NULL, file, 0, vmfmts, &duration, 1, silencethreshold, maxsilence);
+
+			cmd = ast_play_and_prepend(chan, NULL, msgfile, 0, vmfmts, &prepend_duration, 1, silencethreshold, maxsilence);
 			if (record_gain)
 				ast_channel_setoption(chan, AST_OPTION_RXGAIN, &zero_gain, sizeof(zero_gain), 0);
+
+			
+			if ((duration_str = ast_variable_retrieve(msg_cfg, "message", "duration")))
+				*duration = atoi(duration_str);
+
+			if (prepend_duration) {
+				struct ast_variable *var, *prev = NULL, *varlist;
+				struct ast_category *msg_cat;
+
+				*duration += prepend_duration;
+				msg_cat = ast_category_get(msg_cfg, "message");
+				varlist = ast_category_detach_variables(msg_cat);
+				for (var = varlist; var; prev = var, var = var->next) {
+					if (!strcmp(var->name, "duration")) {
+						if (!prev)
+							varlist = var->next;
+						else
+							prev->next = var->next;
+						free(var);
+						break;
+					}
+				}
+				/* need enough space for a maximum-length message duration */
+				duration_str = alloca(12);
+				snprintf(duration_str, 11, "%ld", *duration);
+				if ((var = ast_variable_new("duration", duration_str))) {
+					ast_variable_append(msg_cat, varlist);
+					ast_variable_append(msg_cat, var);
+					config_text_file_save(textfile, msg_cfg, "app_voicemail");
+					STORE(curdir, vmu->mailbox, context, curmsg);
+				}
+			}
+
+			ast_config_destroy(msg_cfg);
+
 			break;
 		}
 		case '2': 
@@ -3328,7 +3433,7 @@ static int vm_forwardoptions(struct ast_channel *chan, struct ast_vm_user *vmu, 
 
 static int notify_new_message(struct ast_channel *chan, struct ast_vm_user *vmu, int msgnum, long duration, char *fmt, char *cidnum, char *cidname)
 {
-	char todir[256], fn[256], ext_context[256], *stringp;
+	char todir[PATH_MAX], fn[PATH_MAX], ext_context[PATH_MAX], *stringp;
 	int newmsgs = 0, oldmsgs = 0;
 
 	make_dir(todir, sizeof(todir), vmu->context, vmu->mailbox, "INBOX");
@@ -3509,11 +3614,12 @@ static int forward_message(struct ast_channel *chan, char *context, char *dir, i
 		cmd = leave_voicemail(chan, mailbox, &leave_options);
 	} else {
 		/* Forward VoiceMail */
-		RETRIEVE(dir, curmsg);
-		cmd = vm_forwardoptions(chan, sender, dir, curmsg, vmfmts, context, record_gain);
+		long duration = 0;
+ 		RETRIEVE(dir, curmsg);
+		cmd = vm_forwardoptions(chan, sender, dir, curmsg, vmfmts, context, record_gain, &duration);
 		if (!cmd) {
 			while (!res && vmtmp) {
-				copy_message(chan, sender, 0, curmsg, 0, vmtmp, fmt);
+				copy_message(chan, sender, 0, curmsg, duration, vmtmp, fmt, dir);
 	
 				saved_messages++;
 				vmfree = vmtmp;
@@ -3639,7 +3745,7 @@ static int play_message_callerid(struct ast_channel *chan, struct vm_state *vms,
 	int res = 0;
 	int i;
 	char *callerid, *name;
-	char prefile[256]="";
+	char prefile[PATH_MAX] = "";
 	
 
 	/* If voicemail cid is not enabled, or we didn't get cid or context from the attribute file, leave now. */
@@ -3723,7 +3829,7 @@ static int play_message_duration(struct ast_channel *chan, struct vm_state *vms,
 static int play_message(struct ast_channel *chan, struct ast_vm_user *vmu, struct vm_state *vms)
 {
 	int res = 0;
-	char filename[256],*origtime, *cid, *context, *duration;
+	char filename[PATH_MAX], *origtime, *cid, *context, *duration;
 	char *category;
 	struct ast_config *msg_cfg;
 
@@ -4554,7 +4660,7 @@ static int vm_newuser(struct ast_channel *chan, struct ast_vm_user *vmu, struct 
 	int tries = 0;
 	char newpassword[80] = "";
 	char newpassword2[80] = "";
-	char prefile[256]="";
+	char prefile[PATH_MAX] = "";
 	unsigned char buf[256];
 	int bytes=0;
 
@@ -4632,7 +4738,7 @@ static int vm_options(struct ast_channel *chan, struct ast_vm_user *vmu, struct 
 	int duration = 0;
 	char newpassword[80] = "";
 	char newpassword2[80] = "";
-	char prefile[256]="";
+	char prefile[PATH_MAX] = "";
 	unsigned char buf[256];
 	int bytes=0;
 
@@ -4724,12 +4830,14 @@ static int vm_options(struct ast_channel *chan, struct ast_vm_user *vmu, struct 
 
 static int vm_tempgreeting(struct ast_channel *chan, struct ast_vm_user *vmu, struct vm_state *vms, char *fmtc, signed char record_gain)
 {
+	int res;
 	int cmd = 0;
 	int retries = 0;
 	int duration = 0;
-	char prefile[256]="";
+	char prefile[PATH_MAX] = "";
 	unsigned char buf[256];
-	int bytes=0;
+	char dest[PATH_MAX];
+	int bytes = 0;
 
 	if (adsi_available(chan))
 	{
@@ -4741,6 +4849,10 @@ static int vm_tempgreeting(struct ast_channel *chan, struct ast_vm_user *vmu, st
 		adsi_transmit_message(chan, buf, bytes, ADSI_MSG_DISPLAY);
 	}
 	snprintf(prefile,sizeof(prefile), "%s%s/%s/temp", VM_SPOOL_DIR, vmu->context, vms->username);
+	if (!(res = create_dirpath(dest, sizeof(dest), vmu->context, vms->username, "temp"))) {
+		ast_log(LOG_WARNING, "Failed to create directory (%s).\n", prefile);
+		return -1;
+	}
 	while((cmd >= 0) && (cmd != 't')) {
 		if (cmd)
 			retries = 0;
@@ -5711,22 +5823,13 @@ static int handle_show_voicemail_users(int fd, int argc, char *argv[])
 			}
 		}
 		while (vmu) {
-			char dirname[256];
-			DIR *vmdir;
-			struct dirent *vment;
-			int vmcount = 0;
-			char count[12];
+			int newmsgs = 0, oldmsgs = 0;
+			char count[12], tmp[256] = "";
 
 			if ((argc == 3) || ((argc == 5) && !strcmp(argv[4],vmu->context))) {
-				make_dir(dirname, 255, vmu->context, vmu->mailbox, "INBOX");
-				if ((vmdir = opendir(dirname))) {
-					/* No matter what the format of VM, there will always be a .txt file for each message. */
-					while ((vment = readdir(vmdir)))
-						if (strlen(vment->d_name) > 7 && !strncmp(vment->d_name + 7,".txt",4))
-							vmcount++;
-					closedir(vmdir);
-				}
-				snprintf(count,sizeof(count),"%d",vmcount);
+				snprintf(tmp, sizeof(tmp), "%s@%s", vmu->mailbox, ast_strlen_zero(vmu->context) ? "default" : vmu->context);
+				messagecount(tmp, &newmsgs, &oldmsgs);
+				snprintf(count,sizeof(count),"%d",newmsgs);
 				ast_cli(fd, output_format, vmu->context, vmu->mailbox, vmu->fullname, vmu->zonetag, count);
 			}
 			vmu = vmu->next;
@@ -6364,7 +6467,7 @@ static int advanced_options(struct ast_channel *chan, struct ast_vm_user *vmu, s
 			    int option, signed char record_gain)
 {
 	int res = 0;
-	char filename[256],*origtime, *cid, *context, *name, *num;
+	char filename[PATH_MAX], *origtime, *cid, *context, *name, *num;
 	struct ast_config *msg_cfg;
 	int retries = 0;
 

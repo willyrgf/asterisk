@@ -317,7 +317,7 @@ LIBEDIT=editline/libedit.a
 
 ifneq ($(wildcard .version),)
   ASTERISKVERSION:=$(shell cat .version)
-  ASTERISKVERSIONNUM:=$(shell awk -F. '{printf "%02d%02d%02d", $$1, $$2, $$3}' .version)
+  ASTERISKVERSIONNUM:=$(shell awk -F. '{printf "%01d%02d%02d", $$1, $$2, $$3}' .version)
   RPMVERSION:=$(shell sed 's/[-\/:]/_/g' .version)
 else
   RPMVERSION=unknown
@@ -553,10 +553,19 @@ clean:
 datafiles: all
 	if [ x`$(ID) -un` = xroot ]; then sh mkpkgconfig $(DESTDIR)/usr/lib/pkgconfig; fi
 	mkdir -p $(DESTDIR)$(ASTVARLIBDIR)/sounds/digits
+	mkdir -p $(DESTDIR)$(ASTVARLIBDIR)/sounds/silence
 	mkdir -p $(DESTDIR)$(ASTVARLIBDIR)/sounds/priv-callerintros
 	for x in sounds/digits/*.gsm; do \
 		if $(GREP) -q "^%`basename $$x`%" sounds.txt; then \
 			$(INSTALL) -m 644 $$x $(DESTDIR)$(ASTVARLIBDIR)/sounds/digits ; \
+		else \
+			echo "No description for $$x"; \
+			exit 1; \
+		fi; \
+	done
+	for x in sounds/silence/*.gsm; do \
+		if $(GREP) -q "^%`basename $$x`%" sounds.txt; then \
+			$(INSTALL) -m 644 $$x $(DESTDIR)$(ASTVARLIBDIR)/sounds/silence ; \
 		else \
 			echo "No description for $$x"; \
 			exit 1; \
