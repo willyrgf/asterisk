@@ -82,7 +82,7 @@ static char *descrip =
 "    ANSWEREDTIME - This is the amount of time for actual call.\n"
 "    DIALSTATUS   - This is the status of the call:\n"
 "                   CHANUNAVAIL | CONGESTION | NOANSWER | BUSY | ANSWER | CANCEL\n" 
-"                   DONTCALL | TORTURE\n"
+"                   DONTCALL | TORTURE | INVALIDARGS\n"
 "  For the Privacy and Screening Modes, the DIALSTATUS variable will be set to\n"
 "DONTCALL if the called party chooses to send the calling party to the 'Go Away'\n"
 "script. The DIALSTATUS variable will be set to TORTURE if the called party\n"
@@ -937,8 +937,11 @@ static int do_privacy(struct ast_channel *chan, struct ast_channel *peer,
 	   time and make the caller believe the peer hasn't picked up yet */
 
 	if (ast_test_flag(opts, OPT_MUSICBACK) && !ast_strlen_zero(opt_args[OPT_ARG_MUSICBACK])) {
+		char *original_moh = ast_strdupa(chan->musicclass);
 		ast_indicate(chan, -1);
+		ast_string_field_set(chan, musicclass, opt_args[OPT_ARG_MUSICBACK]);
 		ast_moh_start(chan, opt_args[OPT_ARG_MUSICBACK], NULL);
+		ast_string_field_set(chan, musicclass, original_moh);
 	} else if (ast_test_flag(opts, OPT_RINGBACK)) {
 		ast_indicate(chan, AST_CONTROL_RINGING);
 		pa->sentringing++;
@@ -1183,6 +1186,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 	struct privacy_args pa = {
 		.sentringing = 0,
 		.privdb_val = 0,
+		.status = "INVALIDARGS",
 	};
 	int sentringing = 0, moh = 0;
 	const char *outbound_group = NULL;
@@ -1201,23 +1205,27 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 
 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_WARNING, "Dial requires an argument (technology/number)\n");
+		pbx_builtin_setvar_helper(chan, "DIALSTATUS", pa.status);
 		return -1;
 	}
 
 	u = ast_module_user_add(chan);	/* XXX is this the right place ? */
 
 	parse = ast_strdupa(data);
-
+	
 	AST_STANDARD_APP_ARGS(args, parse);
 
 	memset(&config,0,sizeof(struct ast_bridge_config));
 
 	if (!ast_strlen_zero(args.options) &&
-			ast_app_parse_options(dial_exec_options, &opts, opt_args, args.options))
+			ast_app_parse_options(dial_exec_options, &opts, opt_args, args.options)) {
+		pbx_builtin_setvar_helper(chan, "DIALSTATUS", pa.status);
 		goto done;
+	}
 
 	if (ast_strlen_zero(args.peers)) {
 		ast_log(LOG_WARNING, "Dial requires an argument (technology/number)\n");
+		pbx_builtin_setvar_helper(chan, "DIALSTATUS", pa.status);
 		goto done;
 	}
 
@@ -1231,6 +1239,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		calldurationlimit = atoi(opt_args[OPT_ARG_DURATION_STOP]);
 		if (!calldurationlimit) {
 			ast_log(LOG_WARNING, "Dial does not accept S(%s), hanging up.\n", opt_args[OPT_ARG_DURATION_STOP]);
+			pbx_builtin_setvar_helper(chan, "DIALSTATUS", pa.status);
 			goto done;
 		}
 		if (option_verbose > 2)
@@ -1437,7 +1446,14 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		strcpy(pa.status, "NOANSWER");
 		if (ast_test_flag(outgoing, OPT_MUSICBACK)) {
 			moh = 1;
-			ast_moh_start(chan, opt_args[OPT_ARG_MUSICBACK], NULL);
+			if (!ast_strlen_zero(opt_args[OPT_ARG_MUSICBACK])) {
+				char *original_moh = ast_strdupa(chan->musicclass);
+				ast_string_field_set(chan, musicclass, opt_args[OPT_ARG_MUSICBACK]);
+				ast_moh_start(chan, opt_args[OPT_ARG_MUSICBACK], NULL);
+				ast_string_field_set(chan, musicclass, original_moh);
+			} else {
+				ast_moh_start(chan, NULL, NULL);
+			}
 			ast_indicate(chan, AST_CONTROL_PROGRESS);
 		} else if (ast_test_flag(outgoing, OPT_RINGBACK)) {
 			ast_indicate(chan, AST_CONTROL_RINGING);

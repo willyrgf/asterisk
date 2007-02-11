@@ -1465,7 +1465,6 @@ static int action_status(struct mansession *s, const struct message *m)
 	if (!ast_strlen_zero(id))
 		snprintf(idText, sizeof(idText), "ActionID: %s\r\n", id);
 
-	astman_send_ack(s, m, "Channel status will follow");
 	if (all)
 		c = ast_channel_walk_locked(NULL);
 	else {
@@ -1475,6 +1474,7 @@ static int action_status(struct mansession *s, const struct message *m)
 			return 0;
 		}
 	}
+	astman_send_ack(s, m, "Channel status will follow");
 	/* if we look by name, we break after the first iteration */
 	while (c) {
 		if (c->_bridge)
@@ -2809,16 +2809,17 @@ static struct ast_str *generic_http_callback(enum output_format format,
 	if (s->f != NULL) {	/* have temporary output */
 		char *buf;
 		size_t l = ftell(s->f);
-
-		if (format == FORMAT_XML || format == FORMAT_HTML) {
-			if (l) {
-				if ((buf = mmap(NULL, l, PROT_READ | PROT_WRITE, MAP_SHARED, s->fd, 0))) {
+		
+		if (l) {
+			if ((buf = mmap(NULL, l, PROT_READ | PROT_WRITE, MAP_SHARED, s->fd, 0))) {
+				if (format == FORMAT_XML || format == FORMAT_HTML)
 					xml_translate(&out, buf, params, format);
-					munmap(buf, l);
-				}
-			} else {
-				xml_translate(&out, "", params, format);
+				else
+					ast_str_append(&out, 0, buf);
+				munmap(buf, l);
 			}
+		} else if (format == FORMAT_XML || format == FORMAT_HTML) {
+			xml_translate(&out, "", params, format);
 		}
 		fclose(s->f);
 		s->f = NULL;

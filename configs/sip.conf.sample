@@ -149,6 +149,10 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 				; contrary to the RFC3551 specification, the peer _should_
 				; be negotiating AAL2-G726-32 instead :-(
 
+;outboundproxy=proxy.provider.domain           ; send outbound signaling to this proxy, not directly to the devices
+;outboundproxy=proxy.provider.domain:8080       ; send outbound signaling to this proxy, not directly to the devices
+;outboundproxy=proxy.provider.domain,force      ; Send ALL outbound signalling to proxy, ignoring route: headers
+
 ;
 ; If regcontext is specified, Asterisk will dynamically create and destroy a
 ; NoOp priority 1 extension for a given peer who registers or unregisters with
@@ -194,6 +198,11 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ; You will get more detailed reports (busy etc) if you have a call limit set
 ; for a device. When the call limit is filled, we will indicate busy. Note that
 ; you need at least 2 in order to be able to do attended transfers.
+;
+; If you set the busy-level in addition to the call limit, we will indicate busy
+; when we have a number of calls that matches busy-level, but still allow calls
+; up to the call-limit. This allows for transfers while still having blinking
+; lamps and queues understanding that a device is busy.
 ;
 ; For queues, you will need this level of detail in status reporting, regardless
 ; if you use SIP subscriptions. Queues and manager use the same internal interface
@@ -327,6 +336,12 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 				; at call setup (a new feature in 1.4 - setting up the
 				; call directly between the endpoints instead of sending
 				; a re-INVITE).
+
+;directrtpsetup=yes		; Enable the new experimental direct RTP setup. This sets up
+				; the call directly with media peer-2-peer without re-invites.
+				; Will not work for video and cases where the callee sends 
+				; RTP payloads and fmtp headers in the 200 OK that does not match the
+				; callers INVITE.
 
 ;canreinvite=nonat		; An additional option is to allow media path redirection
 				; (reinvite) but only when the peer where the media is being
@@ -491,6 +506,7 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ; videosupport		      videosupport
 ; maxcallbitrate	      maxcallbitrate
 ; rfc2833compensate           mailbox
+;			      busy-level
 ;                             username
 ;                             template
 ;                             fromdomain
@@ -524,10 +540,12 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ;host=box.provider.com
 ;usereqphone=yes			; This provider requires ";user=phone" on URI
 ;call-limit=5				; permit only 5 simultaneous outgoing calls to this peer
-;outboundproxy=proxy.provider.domain	; send outbound signaling to this proxy, not directly to the peer
 					; Call-limits will not be enforced on real-time peers,
 					; since they are not stored in-memory
+;busy-level=2				; Signal busy at 2 or more calls
+;outboundproxy=proxy.provider.domain	; send outbound signaling to this proxy, not directly to the peer
 ;port=80				; The port number we want to connect to on the remote side
+					; Also used as "defaultport" in combination with "defaultip" settings
 
 ;--- sample definition for a provider
 ;[provider1]

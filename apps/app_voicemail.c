@@ -28,14 +28,20 @@
  * \note This module requires res_adsi to load.
  */
 
+/*** MODULEINFO
+	<depend>res_adsi</depend>
+ ***/
+
 /*** MAKEOPTS
 <category name="MENUSELECT_OPTS_app_voicemail" displayname="Voicemail Build Options" positive_output="yes" remove_on_change="apps/app_voicemail.o">
 	<member name="ODBC_STORAGE" displayname="Storage of Voicemail using ODBC">
 		<depend>unixodbc</depend>
+		<conflict>IMAP_STORAGE</conflict>
 		<defaultenabled>no</defaultenabled>
 	</member>
 	<member name="IMAP_STORAGE" displayname="Storage of Voicemail using IMAP4">
 		<depend>imap_tk</depend>
+		<conflict>ODBC_STORAGE</conflict>
 		<use>ssl</use>
 		<defaultenabled>no</defaultenabled>
 	</member>
@@ -1883,7 +1889,7 @@ static void make_email_file(FILE *p, char *srcemail, struct ast_vm_user *vmu, in
 				memset(passdata, 0, vmlen);
 				prep_email_sub_vars(ast, vmu, msgnum + 1, context, mailbox, cidnum, cidname, dur, date, passdata, vmlen, category);
 				pbx_substitute_variables_helper(ast, fromstring, passdata, vmlen);
-				len_passdata = strlen(passdata) * 2 + 1;
+				len_passdata = strlen(passdata) * 2 + 3;
 				passdata2 = alloca(len_passdata);
 				fprintf(p, "From: %s <%s>\r\n", quote(passdata, passdata2, len_passdata), who);
 			} else
@@ -1893,7 +1899,7 @@ static void make_email_file(FILE *p, char *srcemail, struct ast_vm_user *vmu, in
 			ast_log(LOG_WARNING, "Cannot allocate the channel for variables substitution\n");
 	} else
 		fprintf(p, "From: Asterisk PBX <%s>\r\n", who);
-	len_passdata = strlen(vmu->fullname) * 2 + 1;
+	len_passdata = strlen(vmu->fullname) * 2 + 3;
 	passdata2 = alloca(len_passdata);
 	fprintf(p, "To: %s <%s>\r\n", quote(vmu->fullname, passdata2, len_passdata), vmu->email);
 	if (emailsubject) {

@@ -133,17 +133,17 @@ static char *descrip =
 "any of the join options cause the caller to not enter the queue.\n"
 "The option string may contain zero or more of the following characters:\n"
 "      'd' -- data-quality (modem) call (minimum delay).\n"
-"      'h' -- allow callee to hang up by hitting *.\n"
-"      'H' -- allow caller to hang up by hitting *.\n"
+"      'h' -- allow callee to hang up by pressing *.\n"
+"      'H' -- allow caller to hang up by pressing *.\n"
 "      'n' -- no retries on the timeout; will exit this application and \n"
 "             go to the next step.\n"
 "      'i' -- ignore call forward requests from queue members and do nothing\n"
 "             when they are requested.\n"
-"      'r' -- ring instead of playing MOH\n"
-"      't' -- allow the called user transfer the calling user\n"
-"      'T' -- to allow the calling user to transfer the call.\n"
-"      'w' -- allow the called user to write the conversation to disk via Monitor\n"
-"      'W' -- allow the calling user to write the conversation to disk via Monitor\n"
+"      'r' -- ring instead of playing MOH.\n"
+"      't' -- allow the called user to transfer the calling user.\n"
+"      'T' -- allow the calling user to transfer the call.\n"
+"      'w' -- allow the called user to write the conversation to disk via Monitor.\n"
+"      'W' -- allow the calling user to write the conversation to disk via Monitor.\n"
 "  In addition to transferring the call, a call may be parked and then picked\n"
 "up by another user.\n"
 "  The optional URL will be sent to the called party if the channel supports\n"
@@ -564,7 +564,7 @@ static void *changethread(void *data)
 	AST_LIST_UNLOCK(&interfaces);
 
 	if (!curint) {
-		if (option_debug)
+		if (option_debug > 2)
 			ast_log(LOG_DEBUG, "Device '%s/%s' changed to state '%d' (%s) but we don't care because they're not a member of any queue.\n", technology, loc, sc->state, devstate2str(sc->state));
 		free(sc);
 		return NULL;
@@ -631,6 +631,7 @@ static int statechange_queue(const char *dev, int state, void *ign)
 		ast_log(LOG_WARNING, "Failed to create update thread!\n");
 		free(sc);
 	}
+	pthread_attr_destroy(&attr);
 
 	return 0;
 }
@@ -956,15 +957,22 @@ static void queue_set_param(struct call_queue *q, const char *param, const char 
 	}
 }
 
-static void rt_handle_member_record(struct call_queue *q, char *interface, const char *membername, const char *penalty_str)
+static void rt_handle_member_record(struct call_queue *q, char *interface, const char *membername, const char *penalty_str, const char *paused_str)
 {
 	struct member *m, *prev_m;
 	int penalty = 0;
+	int paused  = 0;
 
 	if (penalty_str) {
 		penalty = atoi(penalty_str);
 		if (penalty < 0)
 			penalty = 0;
+	}
+
+	if (paused_str) {
+		paused = atoi(paused_str);
+		if (paused < 0)
+			paused = 0;
 	}
 
 	/* Find the member, or the place to put a new one. */
@@ -974,7 +982,7 @@ static void rt_handle_member_record(struct call_queue *q, char *interface, const
 
 	/* Create a new one if not found, else update penalty */
 	if (!m) {
-		if ((m = create_queue_member(interface, membername, penalty, 0))) {
+		if ((m = create_queue_member(interface, membername, penalty, paused))) {
 			m->dead = 0;
 			add_to_interfaces(interface);
 			if (prev_m) {
@@ -985,6 +993,8 @@ static void rt_handle_member_record(struct call_queue *q, char *interface, const
 		}
 	} else {
 		m->dead = 0;	/* Do not delete this one. */
+		if (paused_str)
+			m->paused = paused;
 		m->penalty = penalty;
 	}
 }
@@ -1106,7 +1116,8 @@ static struct call_queue *find_queue_by_name_rt(const char *queuename, struct as
 	while ((interface = ast_category_browse(member_config, interface))) {
 		rt_handle_member_record(q, interface,
 			S_OR(ast_variable_retrieve(member_config, interface, "membername"), interface),
-			ast_variable_retrieve(member_config, interface, "penalty"));
+			ast_variable_retrieve(member_config, interface, "penalty"),
+			ast_variable_retrieve(member_config, interface, "paused"));
 	}
 
 	/* Delete all realtime members that have been deleted in DB. */
