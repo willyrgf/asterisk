@@ -408,6 +408,10 @@ int transmit_register(struct sip_registry *r, int sipmethod, const char *auth, c
 		}
 		if (!ast_test_flag(&dialog->flags[0], SIP_NO_HISTORY))
 			append_history(dialog, "RegistryInit", "Account: %s@%s", r->username, r->hostname);
+
+		/* Get outbound proxy */
+		dialog->outboundproxy = obproxy_get(dialog, NULL);
+
 		/* Find address to hostname */
 		if (create_addr(dialog, NULL, r->hostname, NULL)) {
 			/* we have what we hope is a temporary network error,

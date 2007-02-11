@@ -106,6 +106,9 @@ GNURK const struct cfsubscription_types *find_subscription_type(enum subscriptio
 GNURK int transmit_state_notify(struct sip_dialog *p, int state, int full, int timeout);
 
 /*! sip3_network.c */
+GNURK int proxy_update(struct sip_proxy *proxy);
+GNURK struct sip_proxy *proxy_allocate(char *name, char *port, int force);
+GNURK struct sip_proxy *obproxy_get(struct sip_dialog *dialog, struct sip_device *device);
 GNURK struct sip_request *siprequest_alloc(size_t len, struct sip_network *sipnet);
 GNURK void siprequest_free(struct sip_request *req);
 GNURK int close_sip_sockets(void);

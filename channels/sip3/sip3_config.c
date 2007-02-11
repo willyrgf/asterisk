@@ -248,7 +248,7 @@ static struct sip_config_struct sip_config[] = {
 	"Registrar proxy server for service"},
 	{ SIP_CONF_PROXY,	SIP_CONFCAT_MISC,	"proxy",	SIP_CONFOBJ_SERVICE | SIP_CONFOBJ_TRUNK,
 	"Proxy server for service"},
-	{ SIP_CONF_OUTBOUNDPROXY,	SIP_CONFCAT_MISC,	"outboundproxy",	SIP_CONFOBJ_SERVICE | SIP_CONFOBJ_TRUNK,
+	{ SIP_CONF_OUTBOUNDPROXY,	SIP_CONFCAT_MISC,	"outboundproxy",	SIP_CONFOBJ_GENERAL | SIP_CONFOBJ_SERVICE | SIP_CONFOBJ_TRUNK,
 	"Outbound proxy"},
 	{ SIP_CONF_DEFAULTIP,	SIP_CONFCAT_MISC,	"defaultip",	SIP_CONFOBJ_PHONE,
 	"Default host name or IP address of phone that is not registred"},
@@ -260,8 +260,6 @@ static struct sip_config_struct sip_config[] = {
 	"Proxy port address (disables DNS SRV)"},
 	{ SIP_CONF_REGISTRARPORT,	SIP_CONFCAT_MISC,	"registrarport",	SIP_CONFOBJ_SERVICE | SIP_CONFOBJ_TRUNK,
 	"Registrar proxy port address"},
-	{ SIP_CONF_OBPROXYPORT,	SIP_CONFCAT_MISC,	"outboundproxyport",	SIP_CONFOBJ_SERVICE | SIP_CONFOBJ_TRUNK,
-	"Outbound proxy port address"},
 	{ SIP_CONF_LANGUAGE,	SIP_CONFCAT_MISC,	"language",	SIP_CONFOBJ_PHONE | SIP_CONFOBJ_TRUNK | SIP_CONFOBJ_SERVICE | SIP_CONFOBJ_DOMAIN,
 	"Default language for prompts"},
 	{ SIP_CONF_REGEXTEN,	SIP_CONFCAT_MISC,	"regexten",	SIP_CONFOBJ_PHONE,
@@ -957,8 +955,27 @@ static struct sip_device *build_device(const char *name, struct ast_variable *v,
 			ast_copy_string(device->extra.mohsuggest, v->value, sizeof(device->extra.mohsuggest));
 			break;
 		case SIP_CONF_OUTBOUNDPROXY:
-			break;
-		case SIP_CONF_OBPROXYPORT:
+			{
+				char *port, *next, *force, *proxyname;
+				int forceopt = FALSE;
+
+				/* Set peer channel variable */
+				next = proxyname = ast_strdupa(v->value);
+				if ((port = strchr(proxyname, ':'))) {
+					*port++ = '\0';
+					next = port;
+				}
+				if ((force = strchr(next, ','))) {
+					*force++ = '\0';
+					forceopt = strcmp(force, "force");
+				}
+				/* Allocate proxy object */
+				device->outboundproxy = proxy_allocate(proxyname, port, forceopt);
+				if (!device->outboundproxy) {
+					ast_log(LOG_WARNING, "Unable to resolve outbound proxy %s\n", proxyname);
+					error++;
+				}
+			}
 			break;
 		case SIP_CONF_PERMIT:
 			if(set_device_acl(device, v) != 0) {
@@ -1284,6 +1301,8 @@ static void reset_global_settings(struct sip_globals *global)
 	global->siptimer_b = SIP_TIMER_B_DEFAULT;		
 	global->siptimer_f = SIP_TIMER_F_DEFAULT;		
 	sipcounters.peers_with_mwi = 0;		/* Reset counter for mwi peers */
+	global->outboundproxy.ip.sin_port = htons(STANDARD_SIP_PORT);
+	global->outboundproxy.ip.sin_family = AF_INET;   /* Type of address: IPv4 */
 }
 
 /*! \brief Re-read SIP.conf config file
@@ -1300,7 +1319,6 @@ int reload_config(enum channelreloadreason reason)
 	char *cat, *stringp, *context, *oldregcontext;
 	char newcontexts[AST_MAX_CONTEXT], oldcontexts[AST_MAX_CONTEXT];
 	struct hostent *hp;
-	int format;
 	struct ast_flags dummy[2];
 	int auto_sip_domains = FALSE;
 	struct sockaddr_in old_bindaddr = sipnet.bindaddr;
@@ -1509,18 +1527,25 @@ int reload_config(enum channelreloadreason reason)
 			ast_copy_string(global.default_fromdomain, v->value, sizeof(global.default_fromdomain));
 			break;
 		case SIP_CONF_OUTBOUNDPROXY:
-			/* Save name for re-resolution */
-			ast_copy_string(sipnet.outboundproxy, v->value, sizeof(sipnet.outboundproxy));
-			/* Try to resolve name now */
-			if (ast_get_ip_or_srv(&sipnet.outboundproxyip, v->value, global.srvlookup ? "_sip._udp" : NULL) < 0) {
-				ast_log(LOG_WARNING, "Unable to locate host '%s'\n", v->value);
-				error++;
-				};
-			break;
-		case SIP_CONF_OBPROXYPORT:
-			/* Port needs to be after IP */
-			sscanf(v->value, "%d", &format);
-			sipnet.outboundproxyip.sin_port = htons(format);
+			{
+				char *name, *port = NULL, *force;
+
+				name = ast_strdupa(v->value);
+				if ((port = strchr(name, ':'))) {
+					*port++ = '\0';
+					global.outboundproxy.ip.sin_port = htons(atoi(port));
+				}
+
+				if ((force = strchr(port ? port : name, ','))) {
+					*force++ = '\0';
+					global.outboundproxy.force = (!strcasecmp(force, "force"));
+				}
+				ast_copy_string(global.outboundproxy.name, name, sizeof(global.outboundproxy.name));
+				if (!proxy_update(&global.outboundproxy)) {
+					ast_log(LOG_ERROR, "Unable to resolve outbound proxy: %s\n", name);
+					error++;
+				}
+			}
 			break;
 		case SIP_CONF_AUTOCREATEPEER:
 			global.autocreatepeer = ast_true(v->value);

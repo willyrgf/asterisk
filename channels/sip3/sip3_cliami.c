@@ -514,6 +514,9 @@ static int _sip_show_device(int type, int fd, struct mansession *s, const struct
 		ast_cli(fd, "  Send RPID    : %s\n", ast_test_flag(&device->flags[0], SIP_SENDRPID) ? "Yes" : "No");
 		ast_cli(fd, "  Subscriptions: %s\n", ast_test_flag(&device->flags[1], SIP_PAGE2_ALLOWSUBSCRIBE) ? "Yes" : "No");
 		ast_cli(fd, "  Overlap dial : %s\n", ast_test_flag(&device->flags[1], SIP_PAGE2_ALLOWOVERLAP) ? "Yes" : "No");
+		if (device->outboundproxy)
+			ast_cli(fd, "  Outb. proxy  : %s %s\n", ast_strlen_zero(device->outboundproxy->name) ? "<not set>" : device->outboundproxy->name,
+						device->outboundproxy->force ? "(forced)" : "");
 
 		/* - is enumerated */
 		ast_cli(fd, "  DTMFmode     : %s\n", dtmfmode2str(ast_test_flag(&device->flags[0], SIP_DTMF)));
@@ -770,7 +773,11 @@ static int sip_show_settings(int fd, int argc, char *argv[])
 	ast_cli(fd, "  Outbound reg. attempts: %d\n", global.regattempts_max);
 	ast_cli(fd, "  Notify ringing state:   %s\n", global.notifyringing ? "Yes" : "No");
 	ast_cli(fd, "  SIP Transfer mode:      %s\n", transfermode2str(global.allowtransfer));
-	ast_cli(fd, "  Max Call Bitrate:       %d kbps\r\n", global.default_maxcallbitrate);
+	ast_cli(fd, "  Max Call Bitrate:       %d kbps\n", global.default_maxcallbitrate);
+	ast_cli(fd, "  Auto-Framing:           %s\n", global.autoframing ? "Yes" : "No");
+	ast_cli(fd, "  Outb. proxy:            %s %s\n", ast_strlen_zero(global.outboundproxy.name) ? "<not set>" : global.outboundproxy.name,
+							global.outboundproxy.force ? "(forced)" : "");
+
 	ast_cli(fd, "\nTimer Settings:\n");
 	ast_cli(fd, "-----------------\n");
 	ast_cli(fd, "  SIP Timer T1 minimum: %d\n", global.t1min);

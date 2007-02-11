@@ -177,8 +177,9 @@ GNURK void register_peer_exten(struct sip_device *device, int onoff)
 GNURK void sip_destroy_device(struct sip_device *device)
 {
 	logdebug(3, "Destroying SIP device %s\n", device->name);
-	//if (option_debug > 2)
-		//ast_log(LOG_DEBUG, "Destroying SIP %s %s\n", device->type & SIP_USER ? "user" : "peer", device->name);
+
+	if (device->outboundproxy)
+		free(device->outboundproxy);
 
 	/* Delete it, it needs to disappear */
 	if (device->call)

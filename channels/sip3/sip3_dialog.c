@@ -272,6 +272,14 @@ void __sip_ack(struct sip_dialog *dialog, int seqno, int resp, int sipmethod, in
 
 	dialog_lock(dialog, TRUE);
 
+	/* If we have an outbound proxy for this dialog, then delete it now since
+	   the rest of the requests in this dialog needs to follow the routing.
+	   If obforcing is set, we will keep the outbound proxy during the whole
+	   dialog, regardless of what the SIP rfc says
+	*/
+	if (dialog->outboundproxy && !dialog->outboundproxy->force)
+		dialog->outboundproxy = NULL;
+
 	/* Find proper transaction */
 	for (cur = dialog->packets; cur; prev = cur, cur = cur->next) {
 		if (option_debug > 2)

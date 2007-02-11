@@ -110,6 +110,65 @@ struct sip_network sipnet;		/* Socket and networking data */
 /* External variables from chan_sip3.so */
 extern struct sip_globals global;
 
+/*! Resolve DNS srv name or host name in a sip_proxy structure */
+int proxy_update(struct sip_proxy *proxy)
+{
+	/* if it's actually an IP address and not a name,
+           there's no need for a managed lookup */
+        if (!inet_aton(proxy->name, &proxy->ip.sin_addr)) {
+		/* Ok, not an IP address, then let's check if it's a domain or host */
+		/* XXX Todo - if we have proxy port, don't do SRV */
+		if (ast_get_ip_or_srv(&proxy->ip, proxy->name, global.srvlookup ? "_sip._udp" : NULL) < 0) {
+			ast_log(LOG_WARNING, "Unable to locate host '%s'\n", proxy->name);
+			return FALSE;
+		}
+	}
+	proxy->last_dnsupdate = time(NULL);
+	return TRUE;
+}
+
+/*! \brief Allocate and initialize sip proxy */
+struct sip_proxy *proxy_allocate(char *name, char *port, int force)
+{
+	struct sip_proxy *proxy;
+	proxy = ast_calloc(1, sizeof(struct sip_proxy));
+	if (!proxy)
+		return NULL;
+	proxy->force = force;
+	ast_copy_string(proxy->name, name, sizeof(proxy->name));
+	if (!ast_strlen_zero(port))
+		proxy->ip.sin_port = htons(atoi(port));
+	if (!proxy_update(proxy)) {
+		free(proxy);
+		return NULL;
+	}
+
+	return proxy;
+}
+
+/*! \brief Get default outbound proxy or global proxy 
+	\todo XXX need to integrate domain->outboundproxy at some point
+*/
+struct sip_proxy *obproxy_get(struct sip_dialog *dialog, struct sip_device *device)
+{
+	if (device && device->outboundproxy) {
+		if (option_debug && sipdebug)
+			ast_log(LOG_DEBUG, "OBPROXY: Applying device OBproxy to this call\n");
+		append_history(dialog, "OBproxy", "Using device obproxy %s", device->outboundproxy->name);
+		return device->outboundproxy;
+	}
+	if (global.outboundproxy.name[0]) {
+		if (option_debug && sipdebug)
+			ast_log(LOG_DEBUG, "OBPROXY: Applying global OBproxy to this call\n");
+		append_history(dialog, "OBproxy", "Using global obproxy %s", global.outboundproxy.name);
+		return &global.outboundproxy;
+	}
+	if (option_debug && sipdebug)
+		ast_log(LOG_DEBUG, "OBPROXY: Not applying OBproxy to this call\n");
+	return NULL;
+}
+
+
 /*! \brief Initialize network lock */
 static void sipnet_lock_init(struct sip_network *sipnet)
 {
@@ -139,10 +198,6 @@ void reset_ip_interface(struct sip_network *sipnet)
 	memset(&sipnet->bindaddr, 0, sizeof(sipnet->bindaddr));
 	memset(&sipnet->localaddr, 0, sizeof(sipnet->localaddr));
 	memset(&sipnet->externip, 0, sizeof(sipnet->externip));
-
-	sipnet->outboundproxyip.sin_port = htons(STANDARD_SIP_PORT);
-	sipnet->outboundproxyip.sin_family = AF_INET;	/* Type of address: IPv4 */
-	memset(&sipnet->outboundproxyip, 0, sizeof(sipnet->outboundproxyip));
 
 	sipnet_ourport_set(sipnet, DEFAULT_LISTEN_SIP_PORT);
 	sipnet->externhost[0] = '\0';			/* External host name (for behind NAT DynDNS support) */
@@ -750,6 +805,8 @@ int send_request(struct sip_dialog *p, struct sip_request *req, enum xmittype re
 /*! \brief The real destination address for a write */
 const struct sockaddr_in *sip_real_dst(const struct sip_dialog *p)
 {
+	if (p->outboundproxy)
+		return &p->outboundproxy->ip;
 	return ast_test_flag(&p->flags[0], SIP_NAT) & SIP_NAT_ROUTE ? &p->recv : &p->sa;
 }
 

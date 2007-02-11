@@ -768,6 +768,7 @@ static int create_addr_from_peer(struct sip_dialog *dialog, struct sip_device *d
 			ast_string_field_build(dialog, callid, "%s@%s", tmpcall, device->extra.fromdomain);
 		}
 	}
+	dialog->outboundproxy = obproxy_get(dialog, device);
 	if (ast_strlen_zero(dialog->tohost))
 		ast_string_field_set(dialog, tohost, ast_inet_ntoa(dialog->sa.sin_addr));
 	if (!ast_strlen_zero(device->extra.fromdomain))
@@ -836,6 +837,15 @@ GNURK int create_addr(struct sip_dialog *dialog, const char *username, char *dom
 			return -1;	/* Can't find peer */
 		}
 	}
+	
+	ast_string_field_set(dialog, tohost, domain);
+
+	/* Get the outbound proxy information */
+	dialog->outboundproxy = obproxy_get(dialog, NULL);
+
+	/* If we have an outbound proxy, don't bother with DNS resolution at all */
+	if (dialog->outboundproxy)
+		return 0;
 
 	/* See if we have a port. If we have a given port,
 		disable SRV lookups */
@@ -870,7 +880,6 @@ GNURK int create_addr(struct sip_dialog *dialog, const char *username, char *dom
 		ast_log(LOG_WARNING, "No such host: %s\n", peername);
 		return -2;
 	}
-	ast_string_field_set(dialog, tohost, domain);
 	memcpy(&dialog->sa.sin_addr, hp->h_addr, sizeof(dialog->sa.sin_addr));
 	dialog->sa.sin_port = htons(portno);
 	dialog->recv = dialog->sa;

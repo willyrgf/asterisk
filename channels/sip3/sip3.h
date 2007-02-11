@@ -458,7 +458,6 @@ enum sip_config_options {
 	SIP_CONF_NOTIFYMIME,
 	SIP_CONF_NOTIFYRINGING,
 	SIP_CONF_OUTBOUNDPROXY,
-	SIP_CONF_OBPROXYPORT,
 	SIP_CONF_PERMIT,
 	SIP_CONF_PICKUPGROUP,
 	SIP_CONF_PORT,
@@ -708,6 +707,21 @@ struct rtptimers {
 	int rtpkeepalive;		/*!< Send RTP keepalives */
 };
 
+/*! \brief definition of a sip proxy server
+ *
+ * For outbound proxies, this is allocated in the SIP peer dynamically or
+ * statically as the global_outboundproxy. The pointer in a SIP message is just
+ * a pointer and should *not* be de-allocated.
+ */
+struct sip_proxy {
+	char name[MAXHOSTNAMELEN];      /*!< DNS name of domain/host or IP */
+	struct sockaddr_in ip;          /*!< Currently used IP address and port */
+	time_t last_dnsupdate;          /*!< When this was resolved */
+	int force;                      /*!< If it's an outbound proxy, Force use of this outbound proxy for all outbound requests */
+	/* Room for a SRV record chain based on the name */
+};
+
+
 /*! Global settings only apply to the channel */
 struct sip_globals {
 	struct ast_jb_conf jbconf;	/*!< Jitterbuffer configuration */
@@ -765,6 +779,7 @@ struct sip_globals {
 	int default_maxcallbitrate;	/*!< Maximum bitrate for call */
 	struct ast_codec_pref default_prefs;	/*!< Default codec prefs */
 	enum sipdebuglevel debuglevel;	/*!< SIP debug level */
+	struct sip_proxy outboundproxy;	/*!< SIP Outbound proxy for outbound requests */
 };
 
 
@@ -1127,6 +1142,7 @@ struct sip_dialog {
 
 	/* REGISTER (outbound) */
 	struct sip_registry *registry;		/*!< If this is a REGISTER dialog, to which registry */
+	struct sip_proxy *outboundproxy;	/*!< Outbound proxy for this dialog */
 
 	struct sip_dialog *next;		/*!< Next dialog in chain */
 };
@@ -1217,6 +1233,7 @@ struct sip_device {
 
 	struct ast_ha *ha;		/*!<  Access control list */
 	struct ast_variable *chanvars;	/*!<  Variables to set for channel created by user */
+	struct sip_proxy *outboundproxy; /*!< Outbound proxy for this device */
 };
 
 
@@ -1268,10 +1285,8 @@ struct sip_network {
 	struct ast_ha *localaddr;	/*!< Our local addresses (locanet= ) */
 	struct in_addr __ourip;		/*!< Our IP */
 	int ourport;		/*!< Our port */
-	struct sockaddr_in outboundproxyip;	/*!< First SIP route hop */
 	struct sockaddr_in debugaddr;	/*!< Debugging ??? */
 	int *read_id;			/*!< ID of IO entry for sipsock socket FD */
-	char outboundproxy[MAXHOSTNAMELEN];	/*!< Outbound proxy name or IP in text */
 	char networkbuf[SIP_MSG_BUFSIZE];	/*!< Receive buffer */
 	unsigned int req_counter;	/*!< Counter of allocated requests */
 };
