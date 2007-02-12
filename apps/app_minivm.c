@@ -36,6 +36,15 @@
  *	by userid and domain
  *
  *	Ideal Configuration :
+ *	E-mail templates are stored in separate files
+ *
+ * 	emailtemplate = <languagecode>,<filename>
+ * 	emailtemplate = se_sv, templates/email_sv_se.txt
+ * 	emailtemplate = us_en, templates/email_en_us.txt
+ * 	pagertemplate = se_sv, templates/email_sv_se.txt # Swedish
+ * 	pagertemplate = us_en, templates/pager_en_us.txt
+ *	
+ *	Language codes are like setlocale - langcode_countrycode
  *
  *	[account_name]
  *	user=olle
@@ -95,10 +104,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/linkedlists.h"
 #include "asterisk/callerid.h"
 
-/*--------------------- CUT HERE ---------------------------------
-	This code stays for copy/paste 
-	Will be removed finally
-*/
 #ifndef TRUE
 #define TRUE 1
 #endif
@@ -106,13 +111,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define FALSE 0
 #endif
 
-static int vmminmessage;
-static int vmmaxmessage;
-
-#define EXISTS(a,b,c,d) (ast_fileexists(c,NULL,d) > 0)
-#define RENAME(a,b,c,d,e,f,g,h) (rename_file(g,h));
-#define COPY(a,b,c,d,e,f,g,h) (copy_file(g,h));
-#define DELETE(a,b,c) (vm_delete(c))
 
 /* Many of these options doesn't apply to minivm */
 #define MVM_REVIEW		(1 << 0)	/*!< Review message */
@@ -135,7 +133,7 @@ static int vmmaxmessage;
     mailcmd= command in voicemail.conf */
 #define SENDMAIL "/usr/sbin/sendmail -t"
 
-#define INTRO "vm-intro"
+#define SOUND_INTRO "vm-intro"
 #define MAXMSG 100
 #define MAXMSGLIMIT 9999
 #define BASEMAXINLINE 256
@@ -153,12 +151,12 @@ static int vmmaxmessage;
 #define	CHUNKSIZE	65536
 
 #define VOICEMAIL_CONFIG "minivm.conf"
-#define VOICEMAIL_TEMPLATE_CONFIG "minivmtemplates.conf"
 #define ASTERISK_USERNAME "asterisk"
 static char MVM_SPOOL_DIR[AST_CONFIG_MAX_PATH];
 
 static char *tdesc = "Mini VoiceMail (A minimal Voicemail e-mail System)";
 static char *app = "MiniVM";		 /* Leave a message */
+
 enum {
 	OPT_SILENT =	   (1 << 0),
 	OPT_BUSY_GREETING =    (1 << 1),
@@ -249,11 +247,12 @@ static AST_LIST_HEAD_STATIC(minivm_zones, minivm_zone);	/*!< The list of e-mail 
 
 AST_MUTEX_DEFINE_STATIC(minivmlock);
 
-static int maxsilence;
-static int maxmsg;
-static int silencethreshold = 128;
-static char serveremail[80];
-static char mailcmd[160];	/* Configurable mail cmd */
+static int global_vmminmessage;		/*!< Minimum duration of messages */
+static int global_vmmaxmessage;		/*!< Maximum duration of message */
+static int global_maxsilence;		/*!< Maximum silence during recording */
+static int global_silencethreshold = 128;
+static char global_serveremail[80];	/*!< Senders email address for notification */
+static char global_mailcmd[160];	/*!< Configurable mail cmd */
 static char externnotify[160]; 
 
 static char default_vmformat[80];
@@ -539,96 +538,102 @@ static int sendpage(char *srcemail, char *pager, int msgnum, char *context, char
 		}
 	}
 
-	if (p) {
-		gethostname(host, sizeof(host)-1);
-		if (strchr(srcemail, '@'))
-			ast_copy_string(who, srcemail, sizeof(who));
-		else {
-			snprintf(who, sizeof(who), "%s@%s", srcemail, host);
-		}
-		snprintf(dur, sizeof(dur), "%d:%02d", duration / 60, duration % 60);
-		time(&t);
-
-		/* Does this user have a timezone specified? */
-		if (!ast_strlen_zero(vmu->zonetag)) {
-			/* Find the zone in the list */
-			struct minivm_zone *z;
-
-			AST_LIST_LOCK(&minivm_zones);
-			AST_LIST_TRAVERSE(&minivm_zones, z, list) {
-				if (strcmp(z->name, vmu->zonetag)) 
-					continue;
-				the_zone = z;
-			}
-			AST_LIST_UNLOCK(&minivm_zones);
-		}
-
-		if (the_zone)
-			ast_localtime(&t,&tm,the_zone->timezone);
-		else
-			ast_localtime(&t,&tm,NULL);
-
-		strftime(date, sizeof(date), "%a, %d %b %Y %H:%M:%S %z", &tm);
-		fprintf(p, "Date: %s\n", date);
-
-		if (*pagerfromstring) {
-			struct ast_channel *ast = ast_channel_alloc(0);
-			if (ast) {
-				char *passdata;
-				int vmlen = strlen(fromstring)*3 + 200;
-				if ((passdata = alloca(vmlen))) {
-					memset(passdata, 0, vmlen);
-					prep_email_sub_vars(ast, vmu, context,mailbox,cidnum, cidname,dur,date);
-					pbx_substitute_variables_helper(ast,pagerfromstring,passdata,vmlen);
-					fprintf(p, "From: %s <%s>\n",passdata,who);
-				} else 
-					ast_log(LOG_WARNING, "Cannot allocate workspace for variable substitution\n");
-				ast_channel_free(ast);
-			} else ast_log(LOG_WARNING, "Cannot allocate the channel for variables substitution\n");
-		} else
-			fprintf(p, "From: Asterisk PBX <%s>\n", who);
-		fprintf(p, "To: %s\n", pager);
-	       if (pagersubject) {
-		       struct ast_channel *ast = ast_channel_alloc(0);
-		       if (ast) {
-			       char *passdata;
-			       int vmlen = strlen(pagersubject)*3 + 200;
-			       if ((passdata = alloca(vmlen))) {
-				       memset(passdata, 0, vmlen);
-				       prep_email_sub_vars(ast,vmu,context,mailbox,cidnum, cidname,dur,date);
-				       pbx_substitute_variables_helper(ast,pagersubject,passdata,vmlen);
-				       fprintf(p, "Subject: %s\n\n",passdata);
-			       } else ast_log(LOG_WARNING, "Cannot allocate workspace for variable substitution\n");
-			       ast_channel_free(ast);
-		       } else ast_log(LOG_WARNING, "Cannot allocate the channel for variables substitution\n");
-	       } else
-		       fprintf(p, "Subject: New VM\n\n");
-		strftime(date, sizeof(date), "%A, %B %d, %Y at %r", &tm);
-	        if (pagerbody) {
-		       struct ast_channel *ast = ast_channel_alloc(0);
-		       if (ast) {
-			       char *passdata;
-			       int vmlen = strlen(pagerbody)*3 + 200;
-			       if ((passdata = alloca(vmlen))) {
-				       memset(passdata, 0, vmlen);
-				       prep_email_sub_vars(ast,vmu,context,mailbox,cidnum, cidname,dur,date);
-				       pbx_substitute_variables_helper(ast,pagerbody,passdata,vmlen);
-				       fprintf(p, "%s\n",passdata);
-			       } else ast_log(LOG_WARNING, "Cannot allocate workspace for variable substitution\n");
-			       ast_channel_free(ast);
-		       } else ast_log(LOG_WARNING, "Cannot allocate the channel for variables substitution\n");
-	       } else {
-		       fprintf(p, "New %s long msg in box %s\n"
-				       "from %s, on %s", dur, mailbox, (cidname ? cidname : (cidnum ? cidnum : "unknown")), date);
-	       }
-		fclose(p);
-		snprintf(tmp2, sizeof(tmp2), "( %s < %s ; rm -f %s ) &", mailcmd, tmp, tmp);
-		ast_safe_system(tmp2);
-		ast_log(LOG_DEBUG, "Sent page to %s with command '%s'\n", pager, mailcmd);
-	} else {
-		ast_log(LOG_WARNING, "Unable to launch '%s'\n", mailcmd);
+	if (!p) {
+		ast_log(LOG_WARNING, "Unable to launch '%s'\n", global_mailcmd);
 		return -1;
 	}
+	gethostname(host, sizeof(host)-1);
+	if (strchr(srcemail, '@'))
+		ast_copy_string(who, srcemail, sizeof(who));
+	else 
+		snprintf(who, sizeof(who), "%s@%s", srcemail, host);
+
+	snprintf(dur, sizeof(dur), "%d:%02d", duration / 60, duration % 60);
+	time(&t);
+
+	/* Does this user have a timezone specified? */
+	if (!ast_strlen_zero(vmu->zonetag)) {
+		/* Find the zone in the list */
+		struct minivm_zone *z;
+
+		AST_LIST_LOCK(&minivm_zones);
+		AST_LIST_TRAVERSE(&minivm_zones, z, list) {
+			if (strcmp(z->name, vmu->zonetag)) 
+				continue;
+			the_zone = z;
+		}
+		AST_LIST_UNLOCK(&minivm_zones);
+	}
+
+	if (the_zone)
+		ast_localtime(&t,&tm,the_zone->timezone);
+	else
+		ast_localtime(&t,&tm,NULL);
+
+	strftime(date, sizeof(date), "%a, %d %b %Y %H:%M:%S %z", &tm);
+	fprintf(p, "Date: %s\n", date);
+
+	if (*pagerfromstring) {
+		struct ast_channel *ast = ast_channel_alloc(0);
+
+		if (ast) {
+			char *passdata;
+			int vmlen = strlen(fromstring)*3 + 200;
+			if ((passdata = alloca(vmlen))) {
+				memset(passdata, 0, vmlen);
+				prep_email_sub_vars(ast, vmu, context,mailbox,cidnum, cidname,dur,date);
+				pbx_substitute_variables_helper(ast,pagerfromstring,passdata,vmlen);
+				fprintf(p, "From: %s <%s>\n",passdata,who);
+			} else 
+				ast_log(LOG_WARNING, "Cannot allocate workspace for variable substitution\n");
+			ast_channel_free(ast);
+		} else
+			ast_log(LOG_WARNING, "Cannot allocate the channel for variables substitution\n");
+	} else
+		fprintf(p, "From: Asterisk PBX <%s>\n", who);
+	fprintf(p, "To: %s\n", pager);
+	if (pagersubject) {
+	       struct ast_channel *ast = ast_channel_alloc(0);
+	       if (ast) {
+		       char *passdata;
+		       int vmlen = strlen(pagersubject)*3 + 200;
+		       if ((passdata = alloca(vmlen))) {
+			       memset(passdata, 0, vmlen);
+			       prep_email_sub_vars(ast,vmu,context,mailbox,cidnum, cidname,dur,date);
+			       pbx_substitute_variables_helper(ast,pagersubject,passdata,vmlen);
+			       fprintf(p, "Subject: %s\n\n",passdata);
+		       } else
+				ast_log(LOG_WARNING, "Cannot allocate workspace for variable substitution\n");
+		       ast_channel_free(ast);
+	       } else
+			ast_log(LOG_WARNING, "Cannot allocate the channel for variables substitution\n");
+	} else
+	       fprintf(p, "Subject: New VM\n\n");
+	strftime(date, sizeof(date), "%A, %B %d, %Y at %r", &tm);
+        if (pagerbody) {
+	       struct ast_channel *ast = ast_channel_alloc(0);
+	       if (ast) {
+		       char *passdata;
+		       int vmlen = strlen(pagerbody)*3 + 200;
+		       if ((passdata = alloca(vmlen))) {
+			       memset(passdata, 0, vmlen);
+			       prep_email_sub_vars(ast,vmu,context,mailbox,cidnum, cidname,dur,date);
+			       pbx_substitute_variables_helper(ast,pagerbody,passdata,vmlen);
+			       fprintf(p, "%s\n",passdata);
+		       } else
+				ast_log(LOG_WARNING, "Cannot allocate workspace for variable substitution\n");
+		       ast_channel_free(ast);
+	       } else
+			ast_log(LOG_WARNING, "Cannot allocate the channel for variables substitution\n");
+	} else {
+	       fprintf(p, "New %s long msg in box %s\n"
+			       "from %s, on %s", dur, mailbox, (cidname ? cidname : (cidnum ? cidnum : "unknown")), date);
+	}
+	fclose(p);
+	snprintf(tmp2, sizeof(tmp2), "( %s < %s ; rm -f %s ) &", global_mailcmd, tmp, tmp);
+	ast_safe_system(tmp2);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Sent page to %s with command '%s'\n", pager, global_mailcmd);
 	return 0;
 }
 
@@ -776,7 +781,7 @@ static int sendmail(char *srcemail, struct minivm_user *vmu, int msgnum, char *c
 		}
 	}
 	if (!p) {
-		ast_log(LOG_WARNING, "Unable to launch '%s'\n", mailcmd);
+		ast_log(LOG_WARNING, "Unable to launch '%s'\n", global_mailcmd);
 		return -1;
 	}
 	/* Allocate channel used for chanvar substitution */
@@ -897,10 +902,10 @@ static int sendmail(char *srcemail, struct minivm_user *vmu, int msgnum, char *c
 		fprintf(p, "\n\n--%s--\n.\n", bound);
 	}
 	fclose(p);
-	snprintf(tmp2, sizeof(tmp2), "( %s < %s ; rm -f %s ) &", mailcmd, tmp, tmp);
+	snprintf(tmp2, sizeof(tmp2), "( %s < %s ; rm -f %s ) &", global_mailcmd, tmp, tmp);
 	ast_safe_system(tmp2);
 	if (option_debug)
-		ast_log(LOG_DEBUG, "Sent mail to %s with command '%s'\n", vmu->email, mailcmd);
+		ast_log(LOG_DEBUG, "Sent mail to %s with command '%s'\n", vmu->email, global_mailcmd);
 	ast_channel_free(ast);
 	return 0;
 }
@@ -995,7 +1000,7 @@ static int invent_message(struct ast_channel *chan, char *context, char *ext, in
 	return res;
 }
 
-/*! Delete attribute file */
+/*! \brief Delete attribute file */
 static int vm_delete(char *file)
 {
 	char *txt;
@@ -1071,7 +1076,7 @@ static int play_record_review(struct ast_channel *chan, char *playfile, char *re
 					ast_verbose(VERBOSE_PREFIX_3 "Recording the message\n");
 			}
 			if (recorded && outsidecaller) {
- 				cmd = ast_play_and_wait(chan, INTRO);
+ 				cmd = ast_play_and_wait(chan, SOUND_INTRO);
  				cmd = ast_play_and_wait(chan, "beep");
  			}
  			recorded = 1;
@@ -1080,7 +1085,7 @@ static int play_record_review(struct ast_channel *chan, char *playfile, char *re
 				ast_channel_setoption(chan, AST_OPTION_RXGAIN, &record_gain, sizeof(record_gain), 0);
 			if (ast_test_flag(vmu, MVM_OPERATOR))
 				canceldtmf = "0";
-			cmd = ast_play_and_record_full(chan, playfile, recordfile, maxtime, fmt, duration, silencethreshold, maxsilence, unlockdir, acceptdtmf, canceldtmf);
+			cmd = ast_play_and_record_full(chan, playfile, recordfile, maxtime, fmt, duration, global_silencethreshold, global_maxsilence, unlockdir, acceptdtmf, canceldtmf);
 			if (record_gain)
 				ast_channel_setoption(chan, AST_OPTION_RXGAIN, &zero_gain, sizeof(zero_gain), 0);
  			if (cmd == -1) {
@@ -1101,7 +1106,7 @@ static int play_record_review(struct ast_channel *chan, char *playfile, char *re
  				cmd = vm_delete(recordfile);
  				break;
  			}
- 			else if (vmu->review && (cmd == 2 && *duration < (maxsilence + 3))) {
+ 			else if (vmu->review && (cmd == 2 && *duration < (global_maxsilence + 3))) {
  				/* Message is all silence */
  				if (option_verbose > 2)
 					ast_verbose(VERBOSE_PREFIX_3 "Nothing recorded\n");
@@ -1156,7 +1161,7 @@ static int play_record_review(struct ast_channel *chan, char *playfile, char *re
 					cmd = '0';
 				} else {
 					ast_play_and_wait(chan, "vm-deleted");
-					DELETE(recordfile, -1, recordfile);
+					vm_delete(recordfile);
 					cmd = '0';
 				}
 			}
@@ -1234,7 +1239,7 @@ static int notify_new_message(struct ast_channel *chan, struct minivm_user *vmu,
 	/* Attach only the first format */
 	fmt = ast_strdupa(fmt);
 	if (fmt) {
-		char *myserveremail = serveremail;
+		char *myserveremail = global_serveremail;
 
 		stringp = fmt;
 		strsep(&stringp, "|");
@@ -1251,7 +1256,7 @@ static int notify_new_message(struct ast_channel *chan, struct minivm_user *vmu,
 	}
 
 	if (ast_test_flag(vmu, MVM_DELETE)) 
-		DELETE(todir, msgnum, fn);
+		vm_delete(fn);
 
 	manager_event(EVENT_FLAG_CALL, "MiniVoiceMail", "Action: Sent\rn\nMailbox: %s@%s\r\n", vmu->username, vmu->domain);
 	// this needs to come back at a later time
@@ -1389,7 +1394,7 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 		res = 0;
 	}
 	if (!res && !ast_test_flag(options, OPT_SILENT)) {
-		res = ast_streamfile(chan, INTRO, chan->language);
+		res = ast_streamfile(chan, SOUND_INTRO, chan->language);
 		if (!res)
 			res = ast_waitstream(chan, ecodes);
 		if (res == '#') {
@@ -1493,12 +1498,12 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 	} else
 		ast_log(LOG_WARNING, "Error opening text file for output\n");
 
-	res = play_record_review(chan, NULL, tmptxtfile, 2000, fmt, 1, vmu, &duration, NULL, options->record_gain);
+	res = play_record_review(chan, NULL, tmptxtfile, global_vmmaxmessage, fmt, 1, vmu, &duration, NULL, options->record_gain);
 
 	if (txt) {
-		if (duration < vmminmessage) {
+		if (duration < global_vmminmessage) {
 			if (option_verbose > 2) 
-				ast_verbose( VERBOSE_PREFIX_3 "Recording was %d seconds long but needs to be at least %d - abandoning\n", duration, vmminmessage);
+				ast_verbose( VERBOSE_PREFIX_3 "Recording was %d seconds long but needs to be at least %d - abandoning\n", duration, global_vmminmessage);
 			fclose(txt);
 			ast_filedelete(tmptxtfile, NULL);
 			unlink(tmptxtfile);
@@ -1518,7 +1523,7 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 			} else {
 				for (;;) {
 					make_file(fn, sizeof(fn), dir, msgnum);
-					if (!EXISTS(dir, msgnum, fn, NULL))
+					if (!(ast_fileexists(fn, NULL, NULL) >0))
 						break;
 					msgnum++;
 				}
@@ -1544,7 +1549,7 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 	} else if (res > 0)
 		res = 0;
 
-	if (duration < vmminmessage)
+	if (duration < global_vmminmessage)
 		/* XXX We should really give a prompt too short/option start again, with leave_vm_out called only after a timeout XXX */
 		pbx_builtin_setvar_helper(chan, "MINIVMSTATUS", "FAILED");
 	else
@@ -1765,11 +1770,11 @@ static int load_config(void)
 
 	/* First, set some default settings */
 	externnotify[0] = '\0';
-	silencethreshold = 256;
-	vmmaxmessage = 2000;
-	vmminmessage = 0;
-	strcpy(mailcmd, SENDMAIL);
-	maxsilence = 0;
+	global_silencethreshold = 256;
+	global_vmmaxmessage = 2000;
+	global_vmminmessage = 0;
+	strcpy(global_mailcmd, SENDMAIL);
+	global_maxsilence = 0;
 	global_saydurationminfo = 2;
 	skipms = 3000;
 
@@ -1793,12 +1798,12 @@ static int load_config(void)
 
 	/* Mail command */
 	if ((astmailcmd = ast_variable_retrieve(cfg, "general", "mailcmd")))
-		ast_copy_string(mailcmd, astmailcmd, sizeof(mailcmd)); /* User setting */
+		ast_copy_string(global_mailcmd, astmailcmd, sizeof(global_mailcmd)); /* User setting */
 
 	if ((silencestr = ast_variable_retrieve(cfg, "general", "maxsilence"))) {
-		maxsilence = atoi(silencestr);
-		if (maxsilence > 0)
-			maxsilence *= 1000;
+		global_maxsilence = atoi(silencestr);
+		if (global_maxsilence > 0)
+			global_maxsilence *= 1000;
 	}
 		
 	/* Load date format config for voicemail mail */
@@ -1812,15 +1817,15 @@ static int load_config(void)
 
 	/* Silence treshold */
 	if ((thresholdstr = ast_variable_retrieve(cfg, "general", "silencethreshold")))
-		silencethreshold = atoi(thresholdstr);
+		global_silencethreshold = atoi(thresholdstr);
 		
 	if (!(astemail = ast_variable_retrieve(cfg, "general", "serveremail"))) 
 		astemail = ASTERISK_USERNAME;
-	ast_copy_string(serveremail, astemail, sizeof(serveremail));
+	ast_copy_string(global_serveremail, astemail, sizeof(global_serveremail));
 		
 	if ((s = ast_variable_retrieve(cfg, "general", "maxmessage"))) {
 		if (sscanf(s, "%d", &x) == 1) {
-			vmmaxmessage = x;
+			global_vmmaxmessage = x;
 		} else {
 			ast_log(LOG_WARNING, "Invalid max message time length\n");
 		}
@@ -1828,8 +1833,8 @@ static int load_config(void)
 
 	if ((s = ast_variable_retrieve(cfg, "general", "minmessage"))) {
 		if (sscanf(s, "%d", &x) == 1) {
-			vmminmessage = x;
-			if (maxsilence <= vmminmessage)
+			global_vmminmessage = x;
+			if (global_maxsilence <= global_vmminmessage)
 				ast_log(LOG_WARNING, "maxsilence should be less than minmessage or you may get empty messages\n");
 		} else {
 			ast_log(LOG_WARNING, "Invalid min message time length\n");
