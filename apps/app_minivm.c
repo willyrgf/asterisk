@@ -1777,6 +1777,7 @@ static int load_config(void)
 	global_maxsilence = 0;
 	global_saydurationminfo = 2;
 	skipms = 3000;
+	ast_copy_string(default_vmformat, "wav", sizeof(default_vmformat));
 
 
 	if (!cfg) {
