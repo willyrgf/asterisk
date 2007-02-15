@@ -155,7 +155,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 static char MVM_SPOOL_DIR[AST_CONFIG_MAX_PATH];
 
 static char *tdesc = "Mini VoiceMail (A minimal Voicemail e-mail System)";
-static char *app = "MiniVM";		 /* Leave a message */
+static char *app = "MiniVM";		 	/* Leave a message */
+static char *app_greet = "MiniVMgreet";		/* Play voicemail prompts */
 
 enum {
 	OPT_SILENT =	   (1 << 0),
@@ -637,6 +638,7 @@ static int sendpage(char *srcemail, char *pager, int msgnum, char *context, char
 	return 0;
 }
 
+static struct minivm_user *mvm_user_alloc(void);
 
 /*! \brief Allocate new vm user and set default values */
 static struct minivm_user *mvm_user_alloc()
@@ -662,6 +664,11 @@ static struct minivm_user *find_user(struct minivm_user *ivm, const char *domain
 	struct minivm_user *vmu = NULL, *cur;
 
 	ast_mutex_lock(&minivmlock);
+
+	if (ast_strlen_zero(domain) || ast_strlen_zero(username)) {
+		ast_log(LOG_NOTICE, "No username or domain? \n");
+		return NULL;
+	}
 
 	AST_LIST_LOCK(&minivm_accounts);
 	AST_LIST_TRAVERSE(&minivm_accounts, cur, list) {
@@ -746,6 +753,7 @@ static int sendmail(char *srcemail, struct minivm_user *vmu, int msgnum, char *c
 {
 	FILE *p = NULL;
 	int pfd;
+	char email[256];
 	char date[256];
 	char host[MAXHOSTNAMELEN];
 	char who[256];
@@ -761,10 +769,11 @@ static int sendmail(char *srcemail, struct minivm_user *vmu, int msgnum, char *c
 	char *passdata2;
 	struct ast_channel *ast;
 
-	if (vmu && ast_strlen_zero(vmu->email)) {
-		ast_log(LOG_WARNING, "E-mail address missing for mailbox [%s].  E-mail will not be sent.\n", vmu->username);
-		return(0);
-	}
+	if (vmu && !ast_strlen_zero(vmu->email)) {
+		ast_copy_string(email, vmu->email, sizeof(email));	
+	} else
+		snprintf(email, sizeof(email), "%s@%s", vmu->username, vmu->domain);
+
 	if (!strcmp(format, "wav49"))
 		format = "WAV";
 
@@ -861,14 +870,12 @@ static int sendmail(char *srcemail, struct minivm_user *vmu, int msgnum, char *c
 	fprintf(p, "Message-ID: <Asterisk-%d-%d-%s-%d@%s>\n", msgnum, (unsigned int)rand(), mailbox, getpid(), host);
 	fprintf(p, "MIME-Version: 1.0\n");
 
-	if (attach_user_voicemail) {
-		/* Something unique. */
-		snprintf(bound, sizeof(bound), "voicemail_%d%s%d%d", msgnum, mailbox, getpid(), (unsigned int)rand());
+	/* Something unique. */
+	snprintf(bound, sizeof(bound), "voicemail_%d%s%d%d", msgnum, mailbox, getpid(), (unsigned int)rand());
 
-		fprintf(p, "Content-Type: multipart/mixed; boundary=\"%s\"\n\n\n", bound);
+	fprintf(p, "Content-Type: multipart/mixed; boundary=\"%s\"\n\n\n", bound);
 
-		fprintf(p, "--%s\n", bound);
-	}
+	fprintf(p, "--%s\n", bound);
 	fprintf(p, "Content-Type: text/plain; charset=%s\nContent-Transfer-Encoding: 8bit\n\n", global_charset);
 	if (emailbody) {
 		char *passdata;
@@ -885,22 +892,20 @@ static int sendmail(char *srcemail, struct minivm_user *vmu, int msgnum, char *c
 			"want to check it when you get a chance.  Thanks!\n\n\t\t\t\t--Asterisk\n\n", vmu->fullname, 
 			dur, msgnum + 1, mailbox, (cidname ? cidname : (cidnum ? cidnum : "an unknown caller")), date);
 	}
-	if (attach_user_voicemail) {
-		/* Eww. We want formats to tell us their own MIME type */
-		char *ctype = "audio/x-";
-		if (!strcasecmp(format, "ogg"))
-			ctype = "application/";
-		
-		fprintf(p, "--%s\n", bound);
-		fprintf(p, "Content-Type: %s%s; name=\"msg%04d.%s\"\n", ctype, format, msgnum, format);
-		fprintf(p, "Content-Transfer-Encoding: base64\n");
-		fprintf(p, "Content-Description: Voicemail sound attachment.\n");
-		fprintf(p, "Content-Disposition: attachment; filename=\"msg%04d.%s\"\n\n", msgnum, format);
+	/* Eww. We want formats to tell us their own MIME type */
+	char *ctype = "audio/x-";
+	if (!strcasecmp(format, "ogg"))
+		ctype = "application/";
+	
+	fprintf(p, "--%s\n", bound);
+	fprintf(p, "Content-Type: %s%s; name=\"msg%04d.%s\"\n", ctype, format, msgnum, format);
+	fprintf(p, "Content-Transfer-Encoding: base64\n");
+	fprintf(p, "Content-Description: Voicemail sound attachment.\n");
+	fprintf(p, "Content-Disposition: attachment; filename=\"msg%04d.%s\"\n\n", msgnum, format);
 
-		snprintf(fname, sizeof(fname), "%s.%s", attach, format);
-		base_encode(fname, p);
-		fprintf(p, "\n\n--%s--\n.\n", bound);
-	}
+	snprintf(fname, sizeof(fname), "%s.%s", attach, format);
+	base_encode(fname, p);
+	fprintf(p, "\n\n--%s--\n.\n", bound);
 	fclose(p);
 	snprintf(tmp2, sizeof(tmp2), "( %s < %s ; rm -f %s ) &", global_mailcmd, tmp, tmp);
 	ast_safe_system(tmp2);
@@ -1075,10 +1080,8 @@ static int play_record_review(struct ast_channel *chan, char *playfile, char *re
 				if (option_verbose > 2)
 					ast_verbose(VERBOSE_PREFIX_3 "Recording the message\n");
 			}
-			if (recorded && outsidecaller) {
- 				cmd = ast_play_and_wait(chan, SOUND_INTRO);
+			if (recorded && outsidecaller) 
  				cmd = ast_play_and_wait(chan, "beep");
- 			}
  			recorded = 1;
  			/* After an attempt has been made to record message, we have to take care of INTRO and beep for incoming messages, but not for greetings */
 			if (record_gain)
@@ -1088,35 +1091,13 @@ static int play_record_review(struct ast_channel *chan, char *playfile, char *re
 			cmd = ast_play_and_record_full(chan, playfile, recordfile, maxtime, fmt, duration, global_silencethreshold, global_maxsilence, unlockdir, acceptdtmf, canceldtmf);
 			if (record_gain)
 				ast_channel_setoption(chan, AST_OPTION_RXGAIN, &zero_gain, sizeof(zero_gain), 0);
- 			if (cmd == -1) {
+ 			if (cmd == -1) 
  			/* User has hung up, no options to give */
  				return cmd;
-			}
- 			if (cmd == '0') {
+ 			if (cmd == '0')
  				break;
- 			} else if (cmd == '*') {
+ 			else if (cmd == '*')
  				break;
- 			} 
-#if 0			
- 			else if (vmu->review && (*duration < 5)) {
- 				/* Message is too short */
- 				if (option_verbose > 2)
-					ast_verbose(VERBOSE_PREFIX_3 "Message too short\n");
-				cmd = ast_play_and_wait(chan, "vm-tooshort");
- 				cmd = vm_delete(recordfile);
- 				break;
- 			}
- 			else if (vmu->review && (cmd == 2 && *duration < (global_maxsilence + 3))) {
- 				/* Message is all silence */
- 				if (option_verbose > 2)
-					ast_verbose(VERBOSE_PREFIX_3 "Nothing recorded\n");
- 				cmd = vm_delete(recordfile);
-				cmd = ast_play_and_wait(chan, "vm-nothingrecorded");
-				if (!cmd)
- 					cmd = ast_play_and_wait(chan, "vm-speakup");
- 				break;
- 			}
-#endif
  			else {
  				/* If all is well, a message exists */
  				message_exists = 1;
@@ -1133,20 +1114,6 @@ static int play_record_review(struct ast_channel *chan, char *playfile, char *re
 		case '#':
  			cmd = ast_play_and_wait(chan, "vm-sorry");
  			break;
-#if 0 
-/*  XXX Commented out for the moment because of the dangers of deleting
-    a message while recording (can put the message numbers out of sync) */
- 		case '*':
- 			/* Cancel recording, delete message, offer to take another message*/
- 			cmd = ast_play_and_wait(chan, "vm-deleted");
- 			cmd = vm_delete(recordfile);
- 			if (outsidecaller) {
- 				res = vm_exec(chan, NULL);
- 				return res;
- 			}
- 			else
- 				return 1;
-#endif
  		case '0':
 			if(!ast_test_flag(vmu, MVM_OPERATOR)) {
  				cmd = ast_play_and_wait(chan, "vm-sorry");
@@ -1174,8 +1141,7 @@ static int play_record_review(struct ast_channel *chan, char *playfile, char *re
 				return cmd;
  			if (message_exists) {
  				cmd = ast_play_and_wait(chan, "vm-review");
- 			}
- 			else {
+ 			} else {
  				cmd = ast_play_and_wait(chan, "vm-torerecord");
  				if (!cmd)
  					cmd = ast_waitfordigit(chan, 600);
@@ -1186,10 +1152,6 @@ static int play_record_review(struct ast_channel *chan, char *playfile, char *re
  				if (!cmd)
  					cmd = ast_waitfordigit(chan, 600);
  			}
-#if 0
-			if (!cmd)
- 				cmd = ast_play_and_wait(chan, "vm-tocancelmsg");
-#endif
  			if (!cmd)
  				cmd = ast_waitfordigit(chan, 6000);
  			if (!cmd) {
@@ -1265,7 +1227,7 @@ static int notify_new_message(struct ast_channel *chan, struct minivm_user *vmu,
 }
 
  
-/*! \brief Leave voicemail message, store into file prepared for sending e-mail 
+/*! \brief Record voicemail message, store into file prepared for sending e-mail 
 */
 static int leave_voicemail(struct ast_channel *chan, char *username, struct leave_vm_options *options)
 {
@@ -1275,19 +1237,12 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 	int res = 0, txtdes;
 	int msgnum;
 	int duration = 0;
-	int ausemacro = 0;
-	int ousemacro = 0;
-	int ouseexten = 0;
 	char date[256];
 	char dir[PATH_MAX], tmpdir[PATH_MAX];
-	char dest[PATH_MAX];
 	char fn[PATH_MAX];
-	char prefile[PATH_MAX] = "";
-	char tempfile[PATH_MAX] = "";
 	char ext_context[256] = "";
 	char fmt[80];
 	char *domain;
-	char ecodes[16] = "#";
 	char tmp[256] = "", *tmpptr;
 	struct minivm_user *vmu;
 	struct minivm_user svm;
@@ -1323,10 +1278,215 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 	else
 		ast_copy_string(ext_context, vmu->domain, sizeof(ext_context));
 
-	if (ast_test_flag(options, OPT_BUSY_GREETING)) {
+	/* The meat of recording the message...  All the announcements and beeps have been played*/
+	if (ast_strlen_zero(vmu->format))
+		ast_copy_string(fmt, default_vmformat, sizeof(fmt));
+	else
+		ast_copy_string(fmt, vmu->format, sizeof(fmt));
+
+	if (ast_strlen_zero(fmt)) {
+		ast_log(LOG_WARNING, "No format for saving voicemail? Default %s\n", default_vmformat);
+		pbx_builtin_setvar_helper(chan, "MINIVMSTATUS", "FAILED");
+		free_user(vmu);
+		return res;
+	}
+	msgnum = 0;
+
+	snprintf(tmptxtfile, sizeof(tmptxtfile), "%s/XXXXXX", tmpdir);
+	/* XXX This file needs to be in temp directory */
+	txtdes = mkstemp(tmptxtfile);
+	if (txtdes < 0) {
+		res = ast_streamfile(chan, "vm-mailboxfull", chan->language);
+		if (!res)
+			res = ast_waitstream(chan, "");
+		ast_log(LOG_ERROR, "Unable to create message file: %s\n", strerror(errno));
+		pbx_builtin_setvar_helper(chan, "MINIVMSTATUS", "FAILED");
+		goto leave_vm_out;
+	}
+
+	/* Now play the beep once we have the message number for our next message. */
+	if (res >= 0) {
+		/* Unless we're *really* silent, try to send the beep */
+		res = ast_streamfile(chan, "beep", chan->language);
+		if (!res)
+			res = ast_waitstream(chan, "");
+	}
+
+	/* OEJ XXX Maybe this can be turned into a log file? Hmm. */
+	/* Store information */
+	txt = fdopen(txtdes, "w+");
+	if (txt) {
+		struct tm tm;
+		time_t now;
+		char timebuf[30];
+		get_date(date, sizeof(date));
+		now = time(NULL);
+		//ast_localtime(&now, &tm, the_zone ? the_zone->timezone : NULL);
+		ast_localtime(&now, &tm, NULL);
+		strftime(timebuf, sizeof(timebuf), "%H:%M:%S", &tm);
+		
+		fprintf(txt, 
+			/* "Mailbox:domain:macrocontext:exten:priority:callerchan:callerid:origdate:origtime:duration" */
+			"%s:%s:%s:%s:%d:%s:%s:%s:%s:%s\n",
+			username,
+			chan->context,
+			chan->macrocontext, 
+			chan->exten,
+			chan->priority,
+			chan->name,
+			ast_callerid_merge(callerid, sizeof(callerid), chan->cid.cid_name, chan->cid.cid_num, "Unknown"),
+			date, 
+			timebuf,
+			"durationholder"); 
+	} else
+		ast_log(LOG_WARNING, "Error opening text file for output\n");
+
+	res = play_record_review(chan, NULL, tmptxtfile, global_vmmaxmessage, fmt, 1, vmu, &duration, NULL, options->record_gain);
+
+	if (txt) {
+		if (duration < global_vmminmessage) {
+			if (option_verbose > 2) 
+				ast_verbose( VERBOSE_PREFIX_3 "Recording was %d seconds long but needs to be at least %d - abandoning\n", duration, global_vmminmessage);
+			fclose(txt);
+			ast_filedelete(tmptxtfile, NULL);
+			unlink(tmptxtfile);
+		} else {
+			fprintf(txt, "duration=%d\n", duration);
+			fclose(txt);
+			if (vm_lock_path(dir)) {
+				ast_log(LOG_ERROR, "Couldn't lock directory %s.  Voicemail will be lost.\n", dir);
+				/* Delete files */
+				ast_filedelete(tmptxtfile, NULL);
+				unlink(tmptxtfile);
+			} else if (ast_fileexists(tmptxtfile, NULL, NULL) <= 0) {
+				if (option_debug) 
+					ast_log(LOG_DEBUG, "The recorded media file is gone, so we should remove the .txt file too!\n");
+				unlink(tmptxtfile);
+				ast_unlock_path(dir);
+			} else {
+				for (;;) {
+					make_file(fn, sizeof(fn), dir, msgnum);
+					if (!(ast_fileexists(fn, NULL, NULL) >0))
+						break;
+					msgnum++;
+				}
+
+				/* assign a variable with the name of the voicemail file */	  
+				pbx_builtin_setvar_helper(chan, "MVM_MESSAGEFILE", fn);
+
+				snprintf(txtfile, sizeof(txtfile), "%s.txt", fn);
+				ast_filerename(tmptxtfile, fn, NULL);
+				rename(tmptxtfile, txtfile);
+
+				ast_unlock_path(dir);
+
+				if (ast_fileexists(fn, NULL, NULL) > 0) {
+					notify_new_message(chan, vmu, msgnum, duration, fmt, chan->cid.cid_num, chan->cid.cid_name);
+				}
+			}
+		}
+	}
+
+	if (res > 0)
+		res = 0;
+
+	if (duration < global_vmminmessage)
+		/* XXX We should really give a prompt too short/option start again, with leave_vm_out called only after a timeout XXX */
+		pbx_builtin_setvar_helper(chan, "MINIVMSTATUS", "FAILED");
+	else
+		pbx_builtin_setvar_helper(chan, "MINIVMSTATUS", "SUCCESS");
+ leave_vm_out:
+	free_user(vmu);
+	
+	return res;
+}
+
+/*! \brief Play voicemail prompts - either generic or user specific */
+static int minivm_prompt_exec(struct ast_channel *chan, void *data)
+{
+	struct localuser *u;
+	struct leave_vm_options leave_options;
+	int argc;
+	char *argv[2];
+	struct ast_flags flags = { 0 };
+	char *opts[OPT_ARG_ARRAY_SIZE];
+	int res = 0;
+	int ausemacro = 0;
+	int ousemacro = 0;
+	int ouseexten = 0;
+	char tmp[PATH_MAX];
+	char tmpdir[PATH_MAX];
+	char dest[PATH_MAX];
+	char prefile[PATH_MAX] = "";
+	char tempfile[PATH_MAX] = "";
+	char ext_context[256] = "";
+	char *domain;
+	char ecodes[16] = "#";
+	char *tmpptr;
+	struct minivm_user *vmu;
+	struct minivm_user svm;
+	char *username = argv[0];
+	
+	LOCAL_USER_ADD(u);
+
+	/* Answer channel if it's not already answered */
+	if (chan->_state != AST_STATE_UP)
+		ast_answer(chan);
+
+	if (ast_strlen_zero(data))  {
+		ast_log(LOG_ERROR, "Minivm needs at least an account argument \n");
+		LOCAL_USER_REMOVE(u);
+		return -1;
+	}
+	tmpptr = ast_strdupa((char *)data);
+	if (!tmpptr) {
+		ast_log(LOG_ERROR, "Out of memory\n");
+		LOCAL_USER_REMOVE(u);
+		return -1;
+	}
+	argc = ast_app_separate_args(tmpptr, '|', argv, sizeof(argv) / sizeof(argv[0]));
+	if (argc == 2) {
+		if (ast_app_parse_options(minivm_app_options, &flags, opts, argv[1])) {
+			LOCAL_USER_REMOVE(u);
+			return -1;
+		}
+		ast_copy_flags(&leave_options, &flags, OPT_SILENT | OPT_BUSY_GREETING | OPT_UNAVAIL_GREETING | OPT_PRIORITY_JUMP);
+	}
+
+	ast_copy_string(tmp, argv[0], sizeof(tmp));
+	username = tmp;
+	domain = strchr(tmp, '@');
+	if (domain) {
+		*domain = '\0';
+		domain++;
+	} 
+	if (ast_strlen_zero(domain) || ast_strlen_zero(username)) {
+		ast_log(LOG_ERROR, "Need username@domain as argument. Sorry. Argument 0 %s\n", argv[0]);
+		LOCAL_USER_REMOVE(u);
+		return -1;
+	}
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Trying to find prompts for user %s in domain %s\n", username, domain);
+
+	if (!(vmu = find_user(&svm, domain, username))) {
+		/* We could not find user, let's exit */
+		ast_log(LOG_WARNING, "No entry in voicemail config file for '%s@%s'\n", username, domain);
+		if (ast_test_flag(&leave_options, OPT_PRIORITY_JUMP) || option_priority_jumping)
+			ast_goto_if_exists(chan, chan->context, chan->exten, chan->priority + 101);
+		pbx_builtin_setvar_helper(chan, "MINIVMGREETSTATUS", "FAILED");
+		return res;
+	}
+
+	/* Setup pre-file if appropriate */
+	if (strcmp(vmu->domain, "localhost"))
+		snprintf(ext_context, sizeof(ext_context), "%s@%s", username, vmu->domain);
+	else
+		ast_copy_string(ext_context, vmu->domain, sizeof(ext_context));
+
+	if (ast_test_flag(&leave_options, OPT_BUSY_GREETING)) {
 		res = create_dirpath(dest, sizeof(dest), vmu->domain, username, "busy");
 		snprintf(prefile, sizeof(prefile), "%s%s/%s/busy", MVM_SPOOL_DIR, vmu->domain, username);
-	} else if (ast_test_flag(options, OPT_UNAVAIL_GREETING)) {
+	} else if (ast_test_flag(&leave_options, OPT_UNAVAIL_GREETING)) {
 		res = create_dirpath(dest, sizeof(dest), vmu->domain, username, "unavail");
 		snprintf(prefile, sizeof(prefile), "%s%s/%s/unavail", MVM_SPOOL_DIR, vmu->domain, username);
 	}
@@ -1378,27 +1538,27 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 		} else {
 			if (option_debug > 1)
 				ast_log(LOG_DEBUG, "%s doesn't exist, doing what we can\n", prefile);
-			res = invent_message(chan, vmu->domain, username, ast_test_flag(options, OPT_BUSY_GREETING), ecodes);
+			res = invent_message(chan, vmu->domain, username, ast_test_flag(&leave_options, OPT_BUSY_GREETING), ecodes);
 		}
 		if (res < 0) {
 			if (option_debug > 1)
 				ast_log(LOG_DEBUG, "Hang up during prefile playback\n");
 			free_user(vmu);
-			pbx_builtin_setvar_helper(chan, "MINIVMSTATUS", "FAILED");
+			pbx_builtin_setvar_helper(chan, "MINIVMGREETSTATUS", "FAILED");
 			return -1;
 		}
 	}
 	if (res == '#') {
 		/* On a '#' we skip the instructions */
-		ast_set_flag(options, OPT_SILENT);
+		ast_set_flag(&leave_options, OPT_SILENT);
 		res = 0;
 	}
-	if (!res && !ast_test_flag(options, OPT_SILENT)) {
+	if (!res && !ast_test_flag(&leave_options, OPT_SILENT)) {
 		res = ast_streamfile(chan, SOUND_INTRO, chan->language);
 		if (!res)
 			res = ast_waitstream(chan, ecodes);
 		if (res == '#') {
-			ast_set_flag(options, OPT_SILENT);
+			ast_set_flag(&leave_options, OPT_SILENT);
 			res = 0;
 		}
 	}
@@ -1416,13 +1576,12 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 		}
 		chan->priority = 0;
 		free_user(vmu);
-		pbx_builtin_setvar_helper(chan, "MINIVMSTATUS", "USEREXIT");
+		pbx_builtin_setvar_helper(chan, "MINIVMGREETSTATUS", "USEREXIT");
 		return 0;
 	}
 
 	/* Check for a '0' here */
 	if (res == '0') {
-	transfer:
 		if(ouseexten || ousemacro) {
 			chan->exten[0] = 'o';
 			chan->exten[1] = '\0';
@@ -1434,132 +1593,26 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 			ast_play_and_wait(chan, "transfer");
 			chan->priority = 0;
 			free_user(vmu);
-			pbx_builtin_setvar_helper(chan, "MINIVMSTATUS", "USEREXIT");
+			pbx_builtin_setvar_helper(chan, "MINIVMGREETSTATUS", "USEREXIT");
 		}
 		return 0;
 	}
 	if (res < 0) {
 		free_user(vmu);
-		pbx_builtin_setvar_helper(chan, "MINIVMSTATUS", "FAILED");
+		pbx_builtin_setvar_helper(chan, "MINIVMGREETSTATUS", "FAILED");
 		return -1;
 	}
-	/* The meat of recording the message...  All the announcements and beeps have been played*/
-	if (ast_strlen_zero(vmu->format))
-		ast_copy_string(fmt, default_vmformat, sizeof(fmt));
-	else
-		ast_copy_string(fmt, vmu->format, sizeof(fmt));
 
-	if (ast_strlen_zero(fmt)) {
-		ast_log(LOG_WARNING, "No format for saving voicemail? Default %s\n", default_vmformat);
-		pbx_builtin_setvar_helper(chan, "MINIVMSTATUS", "FAILED");
-		free_user(vmu);
-		return res;
-	}
-	msgnum = 0;
+	pbx_builtin_setvar_helper(chan, "MINIVMGREETSTATUS", "SUCCESS");
 
-	snprintf(tmptxtfile, sizeof(tmptxtfile), "%s/XXXXXX", tmpdir);
-	/* XXX This file needs to be in temp directory */
-	txtdes = mkstemp(tmptxtfile);
-	if (txtdes < 0) {
-		res = ast_streamfile(chan, "vm-mailboxfull", chan->language);
-		if (!res)
-			res = ast_waitstream(chan, "");
-		ast_log(LOG_ERROR, "Unable to create message file: %s\n", strerror(errno));
-		pbx_builtin_setvar_helper(chan, "MINIVMSTATUS", "FAILED");
-		goto leave_vm_out;
-	}
+	/* Ok, we're ready to rock and roll. Return to dialplan */
+	LOCAL_USER_REMOVE(u);
 
-	/* Now play the beep once we have the message number for our next message. */
-	if (res >= 0) {
-		/* Unless we're *really* silent, try to send the beep */
-		res = ast_streamfile(chan, "beep", chan->language);
-		if (!res)
-			res = ast_waitstream(chan, "");
-	}
-
-	/* OEJ XXX Maybe this can be turned into a log file? Hmm. */
-	/* Store information */
-	txt = fdopen(txtdes, "w+");
-	if (txt) {
-		get_date(date, sizeof(date));
-		
-		fprintf(txt, 
-			/* "Mailbox:domain:macrocontext:exten:priority:callerchan:callerid:origdate:origtime:category:duration" */
-			"%s:%s:%s:%s:%s:%s:%d:%s:%d:%s\n",
-			username,
-			chan->context,
-			chan->macrocontext, 
-			chan->exten,
-			chan->priority,
-			chan->name,
-			ast_callerid_merge(callerid, sizeof(callerid), chan->cid.cid_name, chan->cid.cid_num, "Unknown"),
-			date, (long)time(NULL),
-			"durationholder"); 
-	} else
-		ast_log(LOG_WARNING, "Error opening text file for output\n");
-
-	res = play_record_review(chan, NULL, tmptxtfile, global_vmmaxmessage, fmt, 1, vmu, &duration, NULL, options->record_gain);
-
-	if (txt) {
-		if (duration < global_vmminmessage) {
-			if (option_verbose > 2) 
-				ast_verbose( VERBOSE_PREFIX_3 "Recording was %d seconds long but needs to be at least %d - abandoning\n", duration, global_vmminmessage);
-			fclose(txt);
-			ast_filedelete(tmptxtfile, NULL);
-			unlink(tmptxtfile);
-		} else {
-			fprintf(txt, "duration=%d\n", duration);
-			fclose(txt);
-			if (vm_lock_path(dir)) {
-				ast_log(LOG_ERROR, "Couldn't lock directory %s.  Voicemail will be lost.\n", dir);
-				/* Delete files */
-				ast_filedelete(tmptxtfile, NULL);
-				unlink(tmptxtfile);
-			} else if (ast_fileexists(tmptxtfile, NULL, NULL) <= 0) {
-				if (option_debug) 
-					ast_log(LOG_DEBUG, "The recorded media file is gone, so we should remove the .txt file too!\n");
-				unlink(tmptxtfile);
-				ast_unlock_path(dir);
-			} else {
-				for (;;) {
-					make_file(fn, sizeof(fn), dir, msgnum);
-					if (!(ast_fileexists(fn, NULL, NULL) >0))
-						break;
-					msgnum++;
-				}
-
-				/* assign a variable with the name of the voicemail file */	  
-				pbx_builtin_setvar_helper(chan, "MVM_MESSAGEFILE", fn);
-
-				snprintf(txtfile, sizeof(txtfile), "%s.txt", fn);
-				ast_filerename(tmptxtfile, fn, NULL);
-				rename(tmptxtfile, txtfile);
-
-				ast_unlock_path(dir);
-
-				if (ast_fileexists(fn, NULL, NULL) > 0) {
-					notify_new_message(chan, vmu, msgnum, duration, fmt, chan->cid.cid_num, chan->cid.cid_name);
-				}
-			}
-		}
-	}
-
-	if (res == '0') {
-		goto transfer;
-	} else if (res > 0)
-		res = 0;
-
-	if (duration < global_vmminmessage)
-		/* XXX We should really give a prompt too short/option start again, with leave_vm_out called only after a timeout XXX */
-		pbx_builtin_setvar_helper(chan, "MINIVMSTATUS", "FAILED");
-	else
-		pbx_builtin_setvar_helper(chan, "MINIVMSTATUS", "SUCCESS");
- leave_vm_out:
-	free_user(vmu);
-	
 	return res;
+
 }
 
+/*! \brief Dialplan core function */
 static int minivm_exec(struct ast_channel *chan, void *data)
 {
 	int res = 0;
@@ -1604,29 +1657,10 @@ static int minivm_exec(struct ast_channel *chan, void *data)
 				ast_log(LOG_WARNING, "Invalid value '%s' provided for record gain option\n", opts[OPT_ARG_RECORDGAIN]);
 				LOCAL_USER_REMOVE(u);
 				return -1;
-			} else {
-				leave_options.record_gain = (signed char) gain;
-			}
-		}
-	} else {
-		/* old style options parsing */
-		while (*argv[0]) {
-			if (*argv[0] == 's') {
-				ast_set_flag(&leave_options, OPT_SILENT);
-				argv[0]++;
-			} else if (*argv[0] == 'b') {
-				ast_set_flag(&leave_options, OPT_BUSY_GREETING);
-				argv[0]++;
-			} else if (*argv[0] == 'u') {
-				ast_set_flag(&leave_options, OPT_UNAVAIL_GREETING);
-				argv[0]++;
-			} else if (*argv[0] == 'j') {
-				ast_set_flag(&leave_options, OPT_PRIORITY_JUMP);
-				argv[0]++;
 			} else 
-				break;
+				leave_options.record_gain = (signed char) gain;
 		}
-	}
+	} 
 
 	/* Now run the appliation and good luck to you! */
 	res = leave_voicemail(chan, argv[0], &leave_options);
@@ -1640,6 +1674,7 @@ static int minivm_exec(struct ast_channel *chan, void *data)
 		pbx_builtin_setvar_helper(chan, "MINIVMSTATUS", "FAILED");
 		res = 0;
 	}
+	pbx_builtin_setvar_helper(chan, "MINIVMSTATUS", "SUCCESS");
 	
 	LOCAL_USER_REMOVE(u);
 
@@ -2030,6 +2065,7 @@ int unload_module(void)
 	int res;
 	
 	res = ast_unregister_application(app);
+	res = ast_unregister_application(app_greet);
 	//res |= ast_cli_unregister(&show_voicemail_users_cli);
 	//res |= ast_cli_unregister(&show_voicemail_zones_cli);
 	ast_uninstall_vm_functions();
@@ -2044,13 +2080,20 @@ char *descrip_vm = "No documentation. This is a professional application.\n"
 	"If you don't understand it, don't use it. Read the source.\n"
 	"Syntax: minivm(username@domain[,options])\n"
 	"If there's no user account for that address, a temporary account will\n"
-	"be used with default options.\n";
+	"be used with default options.\n\n";
+
+char *synopsis_vm_greet = "Play voicemail prompts";
+char *descrip_vm_greet = "No documentation. This is a professional application.\n"
+	"If you don't understand it, don't use it. Read the source.\n"
+	"Syntax: minivm_greet(username@domain[,options])\n"
+	"Plays default prompts or user specific prompts.\n\n";
 
 /*! \brief Load mini voicemail module */
 int load_module(void)
 {
 	int res;
 	res = ast_register_application(app, minivm_exec, synopsis_vm, descrip_vm);
+	res = ast_register_application(app_greet, minivm_prompt_exec, synopsis_vm_greet, descrip_vm_greet);
 
 	if (res)
 		return(res);
