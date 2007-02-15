@@ -3313,6 +3313,10 @@ static int function_sippeer(struct ast_channel *chan, const char *cmd, char *dat
 		ast_copy_string(buf, peer->extra.accountcode, len);
 	} else  if (!strcasecmp(colname, "useragent")) {
 		ast_copy_string(buf, peer->useragent, len);
+	} else  if (!strcasecmp(colname, "callgroup")) {
+		ast_print_group(buf, len, peer->callgroup);
+	} else  if (!strcasecmp(colname, "pickupgroup")) {
+		ast_print_group(buf, len, peer->pickupgroup);
 	} else  if (!strcasecmp(colname, "mailbox")) {
 		ast_copy_string(buf, peer->mailbox.mailbox, len);
 	} else  if (!strcasecmp(colname, "context")) {
@@ -3359,6 +3363,8 @@ struct ast_custom_function sippeer_function = {
 	"- dynamic               Is it dynamic? (yes/no).\n"
 	"- callerid_name         The configured Caller ID name.\n"
 	"- callerid_num          The configured Caller ID number.\n"
+	"- callgroup             The configured Callgroup.\n"
+	"- pickupgroup           The configured Pickupgroup.\n"
 	"- codecs                The configured codecs.\n"
 	"- status                Status (if qualify=yes).\n"
 	"- regexten              Registration extension\n"
@@ -5056,80 +5062,79 @@ static int handle_request_subscribe(struct sip_dialog *p, struct sip_request *re
 		device_unref(authpeer);
 		subscribe_counter--;
 		return 0;
-	} else {
-		/* XXX reduce nesting here */
-		/* Initialize tag for new subscriptions */	
-		if (ast_strlen_zero(p->tag))
-			make_our_tag(p->tag, sizeof(p->tag));
+	}
+	/* XXX reduce nesting here */
+	/* Initialize tag for new subscriptions */	
+	if (ast_strlen_zero(p->tag))
+		make_our_tag(p->tag, sizeof(p->tag));
 
-		if (!strcmp(event, "presence") || !strcmp(event, "dialog")) { /* Presence, RFC 3842 */
-			device_unref(authpeer);
+	if (!strcmp(event, "presence") || !strcmp(event, "dialog")) { /* Presence, RFC 3842 */
+		device_unref(authpeer);
 
-			/* Header from Xten Eye-beam Accept: multipart/related, application/rlmi+xml, application/pidf+xml, application/xpidf+xml */
-			/* Polycom phones only handle xpidf+xml, even if they say they can
-			   handle pidf+xml as well
-			*/
-			if (strstr(p->useragent, "Polycom")) {
-				p->subscribed = XPIDF_XML;
-			} else if (strstr(accept, "application/pidf+xml")) {
- 				p->subscribed = PIDF_XML;         /* RFC 3863 format */
- 			} else if (strstr(accept, "application/dialog-info+xml")) {
- 				p->subscribed = DIALOG_INFO_XML;
- 				/* IETF draft: draft-ietf-sipping-dialog-package-05.txt */
- 			} else if (strstr(accept, "application/cpim-pidf+xml")) {
- 				p->subscribed = CPIM_PIDF_XML;    /* RFC 3863 format */
- 			} else if (strstr(accept, "application/xpidf+xml")) {
- 				p->subscribed = XPIDF_XML;        /* Early pre-RFC 3863 format with MSN additions (Microsoft Messenger) */
-			} else {
- 				/* Can't find a format for events that we know about */
-				transmit_final_response(p, "489 Bad Event", req, XMIT_UNRELIABLE);
-				subscribe_counter--;
- 				return 0;
- 			}
- 		} else if (!strcmp(event, "message-summary")) { 
-			char *resp = NULL;
-			int error = FALSE;
-			if (!ast_strlen_zero(accept) && strcmp(accept, "application/simple-message-summary")) {
-				/* Format requested that we do not support */
-				resp = "406 Not acceptable";
-				if (option_debug > 1)
-					ast_log(LOG_DEBUG, "Received SIP mailbox subscription for unknown format: %s\n", accept);
-			}
-			/* Looks like they actually want a mailbox status 
-			  This version of Asterisk supports mailbox subscriptions
-			  The subscribed URI needs to exist in the dial plan
-			  In most devices, this is configurable to the voicemailmain extension you use
-			*/
-			if (!authpeer || ast_strlen_zero(authpeer->mailbox.mailbox)) {
-				resp = "404 Not found (no mailbox)";
-				ast_log(LOG_NOTICE, "Received SIP subscribe for peer without mailbox: %s\n", authpeer ? authpeer->name : "<no peername>");
-				return 0;
-			}
-			if (error) {
-				transmit_final_response(p, resp, req, XMIT_UNRELIABLE);
-				device_unref(authpeer);
-				subscribe_counter--;
-				return 0;
-			}
-
- 			p->subscribed = MWI_NOTIFICATION;
-			if (authpeer->mailbox.mwipvt && authpeer->mailbox.mwipvt != p)	/* Destroy old PVT if this is a new one */
-				/* We only allow one subscription per peer */
-				sip_destroy(authpeer->mailbox.mwipvt);
-			authpeer->mailbox.mwipvt = p;		/* Link from peer to pvt */
-			p->relatedpeer = authpeer;	/* Link from pvt to peer */
-		} else { /* At this point, Asterisk does not understand the specified event */
+		/* Header from Xten Eye-beam Accept: multipart/related, application/rlmi+xml, application/pidf+xml, application/xpidf+xml */
+		/* Polycom phones only handle xpidf+xml, even if they say they can
+		   handle pidf+xml as well
+		*/
+		if (strstr(p->useragent, "Polycom")) {
+			p->subscribed = XPIDF_XML;
+		} else if (strstr(accept, "application/pidf+xml")) {
+ 			p->subscribed = PIDF_XML;         /* RFC 3863 format */
+ 		} else if (strstr(accept, "application/dialog-info+xml")) {
+ 			p->subscribed = DIALOG_INFO_XML;
+ 			/* IETF draft: draft-ietf-sipping-dialog-package-05.txt */
+ 		} else if (strstr(accept, "application/cpim-pidf+xml")) {
+ 			p->subscribed = CPIM_PIDF_XML;    /* RFC 3863 format */
+ 		} else if (strstr(accept, "application/xpidf+xml")) {
+ 			p->subscribed = XPIDF_XML;        /* Early pre-RFC 3863 format with MSN additions (Microsoft Messenger) */
+		} else {
+ 			/* Can't find a format for events that we know about */
 			transmit_final_response(p, "489 Bad Event", req, XMIT_UNRELIABLE);
+			subscribe_counter--;
+ 			return 0;
+ 		}
+ 	} else if (!strcmp(event, "message-summary")) { 
+		char *resp = NULL;
+		int error = FALSE;
+		if (!ast_strlen_zero(accept) && strcmp(accept, "application/simple-message-summary")) {
+			/* Format requested that we do not support */
+			resp = "406 Not acceptable";
 			if (option_debug > 1)
-				ast_log(LOG_DEBUG, "Received SIP subscribe for unknown event package: %s\n", event);
+				ast_log(LOG_DEBUG, "Received SIP mailbox subscription for unknown format: %s\n", accept);
+		}
+		/* Looks like they actually want a mailbox status 
+		  This version of Asterisk supports mailbox subscriptions
+		  The subscribed URI needs to exist in the dial plan
+		  In most devices, this is configurable to the voicemailmain extension you use
+		*/
+		if (!authpeer || ast_strlen_zero(authpeer->mailbox.mailbox)) {
+			resp = "404 Not found (no mailbox)";
+			ast_log(LOG_NOTICE, "Received SIP subscribe for peer without mailbox: %s\n", authpeer ? authpeer->name : "<no peername>");
+			return 0;
+		}
+		if (error) {
+			transmit_final_response(p, resp, req, XMIT_UNRELIABLE);
 			device_unref(authpeer);
 			subscribe_counter--;
 			return 0;
 		}
-		/* Now, subscribe to status events from the PBX core */
-		if (p->subscribed != MWI_NOTIFICATION && !resubscribe)
-			p->stateid = ast_extension_state_add(p->context, p->exten, cb_extensionstate, p);
+
+ 		p->subscribed = MWI_NOTIFICATION;
+		if (authpeer->mailbox.mwipvt && authpeer->mailbox.mwipvt != p)	/* Destroy old PVT if this is a new one */
+			/* We only allow one subscription per peer */
+			sip_destroy(authpeer->mailbox.mwipvt);
+		authpeer->mailbox.mwipvt = p;		/* Link from peer to pvt */
+		p->relatedpeer = authpeer;	/* Link from pvt to peer */
+	} else { /* At this point, Asterisk does not understand the specified event */
+		transmit_final_response(p, "489 Bad Event", req, XMIT_UNRELIABLE);
+		if (option_debug > 1)
+			ast_log(LOG_DEBUG, "Received SIP subscribe for unknown event package: %s\n", event);
+		device_unref(authpeer);
+		subscribe_counter--;
+		return 0;
 	}
+	/* Now, subscribe to status events from the PBX core */
+	if (p->subscribed != MWI_NOTIFICATION && !resubscribe)
+		p->stateid = ast_extension_state_add(p->context, p->exten, cb_extensionstate, p);
 
 	if (!ast_test_flag(req, SIP_PKT_IGNORE) && p)
 		p->lastinvite = req->seqno;
