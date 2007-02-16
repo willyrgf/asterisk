@@ -883,6 +883,7 @@ int find_sdp(struct sip_request *req)
 	const char *search;
 	char *boundary;
 	unsigned int x;
+	int boundaryisquoted = FALSE;
 
 	content_type = get_header(req, "Content-Type");
 
@@ -906,10 +907,20 @@ int find_sdp(struct sip_request *req)
 	if (ast_strlen_zero(search))
 		return FALSE;
 
+	/* If the boundary is quoted with ", remove quote */
+	if (*search == '\"')  {
+		search++;
+		boundaryisquoted = TRUE;
+	}
+
 	/* make a duplicate of the string, with two extra characters
 	   at the beginning */
 	boundary = ast_strdupa(search - 2);
 	boundary[0] = boundary[1] = '-';
+
+	/* Remove final quote */
+	if (boundaryisquoted)
+		boundary[strlen(boundary) - 1] = '\0';
 
 	/* search for the boundary marker, but stop when there are not enough
 	   lines left for it, the Content-Type header and at least one line of
