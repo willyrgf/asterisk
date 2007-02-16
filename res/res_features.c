@@ -79,6 +79,7 @@ static char *parkedcall = "ParkedCall";
 
 static int parkaddhints = 0;                               /*!< Add parking hints automatically */
 static int parkedcalltransfers = 0;                        /*!< Enable DTMF based transfers on bridge when picking up parked calls */
+static int parkedcallreparking = 0;                        /*!< Enable DTMF based parking on bridge when picking up parked calls */
 static int parkingtime = DEFAULT_PARK_TIME;                /*!< No more than 45 seconds parked before you do something with them */
 static char parking_con[AST_MAX_EXTENSION];                /*!< Context for which parking is made accessible */
 static char parking_con_dial[AST_MAX_EXTENSION];           /*!< Context for dialback for parking (KLUDGE) */
@@ -1833,6 +1834,10 @@ static int park_exec(struct ast_channel *chan, void *data)
 			ast_set_flag(&(config.features_callee), AST_FEATURE_REDIRECT);
 			ast_set_flag(&(config.features_caller), AST_FEATURE_REDIRECT);
 		}
+		if (parkedcallreparking) {
+			ast_set_flag(&(config.features_callee), AST_FEATURE_PARKCALL);
+			ast_set_flag(&(config.features_caller), AST_FEATURE_PARKCALL);
+		}
 		res = ast_bridge_call(chan, peer, &config);
 
 		pbx_builtin_setvar_helper(chan, "PARKEDCHANNEL", peer->name);
@@ -1943,17 +1948,17 @@ static struct ast_cli_entry cli_features[] = {
 static int manager_parking_status( struct mansession *s, const struct message *m)
 {
 	struct parkeduser *cur;
-	const char *id = astman_get_header(m,"ActionID");
+	const char *id = astman_get_header(m, "ActionID");
 	char idText[256] = "";
 
 	if (!ast_strlen_zero(id))
-		snprintf(idText, 256, "ActionID: %s\r\n", id);
+		snprintf(idText, sizeof(idText), "ActionID: %s\r\n", id);
 
 	astman_send_ack(s, m, "Parked calls will follow");
 
-        ast_mutex_lock(&parking_lock);
+	ast_mutex_lock(&parking_lock);
 
-	for (cur=parkinglot; cur; cur = cur->next) {
+	for (cur = parkinglot; cur; cur = cur->next) {
 		astman_append(s, "Event: ParkedCall\r\n"
 			"Exten: %d\r\n"
 			"Channel: %s\r\n"
@@ -1963,21 +1968,21 @@ static int manager_parking_status( struct mansession *s, const struct message *m
 			"CallerIDName: %s\r\n"
 			"%s"
 			"\r\n",
-                        cur->parkingnum, cur->chan->name, cur->peername,
-                        (long)cur->start.tv_sec + (long)(cur->parkingtime/1000) - (long)time(NULL),
+			cur->parkingnum, cur->chan->name, cur->peername,
+			(long) cur->start.tv_sec + (long) (cur->parkingtime / 1000) - (long) time(NULL),
 			S_OR(cur->chan->cid.cid_num, ""),	/* XXX in other places it is <unknown> */
 			S_OR(cur->chan->cid.cid_name, ""),
 			idText);
-        }
+	}
 
 	astman_append(s,
 		"Event: ParkedCallsComplete\r\n"
 		"%s"
 		"\r\n",idText);
 
-        ast_mutex_unlock(&parking_lock);
+	ast_mutex_unlock(&parking_lock);
 
-        return RESULT_SUCCESS;
+	return RESULT_SUCCESS;
 }
 
 static char mandescr_park[] =
@@ -2123,6 +2128,7 @@ static int load_config(void)
 	comebacktoorigin = 1;
 	parkaddhints = 0;
 	parkedcalltransfers = 0;
+	parkedcallreparking = 0;
 
 	transferdigittimeout = DEFAULT_TRANSFER_DIGIT_TIMEOUT;
 	featuredigittimeout = DEFAULT_FEATURE_DIGIT_TIMEOUT;
@@ -2157,6 +2163,8 @@ static int load_config(void)
 			parkaddhints = ast_true(var->value);
 		} else if (!strcasecmp(var->name, "parkedcalltransfers")) {
 			parkedcalltransfers = ast_true(var->value);
+		} else if (!strcasecmp(var->name, "parkedcallreparking")) {
+			parkedcallreparking = ast_true(var->value);
 		} else if (!strcasecmp(var->name, "adsipark")) {
 			adsipark = ast_true(var->value);
 		} else if (!strcasecmp(var->name, "transferdigittimeout")) {
