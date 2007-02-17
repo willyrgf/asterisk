@@ -4063,7 +4063,7 @@ static void do_print(struct mansession *s, int fd, const char *str)
 static int __queues_show(struct mansession *s, int fd, int argc, char **argv)
 {
 	struct call_queue *q;
-	struct ast_str *out = ast_str_alloca(80);
+	struct ast_str *out = ast_str_alloca(240);
 	int found = 0;
 	time_t now = time(NULL);
 
@@ -4079,7 +4079,7 @@ static int __queues_show(struct mansession *s, int fd, int argc, char **argv)
 		float sl;
 
 		ast_mutex_lock(&q->lock);
-		if (argc == 3 && !strcasecmp(q->name, argv[2])) {
+		if (argc == 3 && strcasecmp(q->name, argv[2])) {
 			ast_mutex_unlock(&q->lock);
 			continue;
 		}
