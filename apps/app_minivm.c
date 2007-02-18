@@ -197,10 +197,10 @@ struct minivm_user {
 	char zonetag[80];		/*!< Time zone */
 	char uniqueid[20];		/*!< Unique integer identifier */
 	char exit[80];			/*!< Options for exiting from voicemail() */
-	char attachfmt[80];		/*!< Voicemail format */
+	char attachfmt[80];		/*!< Format for voicemail audio file attachment */
+	char etemplate[80];		/*!< Pager template */
+	char ptemplate[80];		/*!< Voicemail format */
 	unsigned int flags;		/*!< MVM_ flags */	
-	int saydurationm;
-	int maxmsg;			/*!< Maximum number of msgs per folder for this mailbox */
 	double volgain;			/*!< Volume gain for voicemails sent via e-mail */
 	AST_LIST_ENTRY(minivm_user) list;	
 };
@@ -449,8 +449,6 @@ static void prep_email_sub_vars(struct ast_channel *ast, struct minivm_user *vmu
 static void populate_defaults(struct minivm_user *vmu)
 {
 	ast_copy_flags(vmu, (&globalflags), AST_FLAGS_ALL);	
-	if (global_saydurationminfo)
-		vmu->saydurationm = global_saydurationminfo;
 	ast_copy_string(vmu->attachfmt, default_vmformat, sizeof(vmu->attachfmt));
 	vmu->volgain = global_volgain;
 }
@@ -1710,6 +1708,10 @@ static int create_vmaccount(char *name, struct ast_variable *var)
 			ast_copy_string(vmu->zonetag, var->value, sizeof(vmu->zonetag));
 		} else if (!strcasecmp(var->name, "envelope")) {
 			ast_set2_flag(vmu, ast_true(var->value), MVM_ENVELOPE);	
+		} else if (!strcasecmp(var->name, "etemplate")) {
+			ast_copy_string(vmu->etemplate, var->value, sizeof(vmu->etemplate));
+		} else if (!strcasecmp(var->name, "ptemplate")) {
+			ast_copy_string(vmu->ptemplate, var->value, sizeof(vmu->ptemplate));
 		} else if (!strcasecmp(var->name, "fullname")) {
 			ast_copy_string(vmu->fullname, var->value, sizeof(vmu->fullname));
 		} else if (!strcasecmp(var->name, "pager")) {
@@ -1725,6 +1727,8 @@ static int create_vmaccount(char *name, struct ast_variable *var)
 	AST_LIST_LOCK(&minivm_users);
 	AST_LIST_INSERT_TAIL(&minivm_users, vmu, list);
 	AST_LIST_UNLOCK(&minivm_users);
+	if (option_debug > 1)
+		ast_log(LOG_DEBUG, "MINIVM :: Created account %s@%s - tz %s etemplate %s\n", username, domain, vmu->zonetag, vmu->etemplate);
 	return 0;
 }
 
@@ -2030,7 +2034,7 @@ int unload_module(void)
 	
 	res = ast_unregister_application(app);
 	res = ast_unregister_application(app_greet);
-	//res |= ast_cli_unregister(&show_voicemail_users_cli);
+	//res |= ast_cli_unregister(&show_minivm_users_cli);
 	//res |= ast_cli_unregister(&show_voicemail_zones_cli);
 	ast_uninstall_vm_functions();
 	
@@ -2052,21 +2056,125 @@ char *descrip_vm_greet = "No documentation. This is a professional application.\
 	"Syntax: minivm_greet(username@domain[,options])\n"
 	"Plays default prompts or user specific prompts.\n\n";
 
+
+static const char minivm_show_users_help[] =
+"Usage: minivm show users [for <context>]\n"
+"       Lists all mailboxes currently set up\n";
+
+static const char minivm_show_zones_help[] =
+"Usage: minivm show zones\n"
+"       Lists zone message formats\n";
+
+static int handle_minivm_show_users(int fd, int argc, char *argv[])
+{
+	struct minivm_user *vmu;
+	char *output_format = "%-23s %-5s %-25s %-10s %6s\n";
+	int count = 0;
+
+	if ((argc < 3) || (argc > 5) || (argc == 4))
+		return RESULT_SHOWUSAGE;
+	if ((argc == 5) && strcmp(argv[3],"for"))
+		return RESULT_SHOWUSAGE;
+
+	AST_LIST_LOCK(&minivm_users);
+	if (AST_LIST_EMPTY(&minivm_users)) {
+		ast_cli(fd, "There are no voicemail users currently defined\n");
+		AST_LIST_UNLOCK(&minivm_users);
+		return RESULT_FAILURE;
+	}
+	ast_cli(fd, output_format, "User", "Template", "Zone", "Format");
+	AST_LIST_TRAVERSE(&minivm_users, vmu, list) {
+		char tmp[256] = "";
+
+
+		if ((argc == 3) || ((argc == 5) && !strcmp(argv[4], vmu->domain))) {
+			count++;
+			snprintf(tmp, sizeof(tmp), "%s@%s", vmu->username, vmu->domain);
+			ast_cli(fd, output_format, tmp, vmu->etemplate, vmu->zonetag, vmu->attachfmt);
+		}
+	}
+	AST_LIST_UNLOCK(&minivm_users);
+	ast_cli(fd, "\n * Total: %d minivoicemail accounts\n", count);
+	return RESULT_SUCCESS;
+}
+
+/*! \brief Show a list of voicemail zones in the CLI */
+static int handle_minivm_show_zones(int fd, int argc, char *argv[])
+{
+	struct minivm_zone *zone;
+	char *output_format = "%-15s %-20s %-45s\n";
+	int res = RESULT_SUCCESS;
+
+	if (argc != 3)
+		return RESULT_SHOWUSAGE;
+
+	AST_LIST_LOCK(&minivm_zones);
+	if (!AST_LIST_EMPTY(&minivm_zones)) {
+		ast_cli(fd, output_format, "Zone", "Timezone", "Message Format");
+		AST_LIST_TRAVERSE(&minivm_zones, zone, list) {
+			ast_cli(fd, output_format, zone->name, zone->timezone, zone->msg_format);
+		}
+	} else {
+		ast_cli(fd, "There are no voicemail zones currently defined\n");
+		res = RESULT_FAILURE;
+	}
+	AST_LIST_UNLOCK(&minivm_zones);
+
+	return res;
+}
+
+static char *complete_minivm_show_users(const char *line, const char *word, int pos, int state)
+{
+	int which = 0;
+	int wordlen;
+	struct minivm_user *vmu;
+	const char *domain = "";
+
+	/* 0 - show; 1 - voicemail; 2 - users; 3 - for; 4 - <domain> */
+	if (pos > 4)
+		return NULL;
+	if (pos == 3)
+		return (state == 0) ? strdup("for") : NULL;
+	wordlen = strlen(word);
+	AST_LIST_TRAVERSE(&minivm_users, vmu, list) {
+		if (!strncasecmp(word, vmu->domain, wordlen)) {
+			if (domain && strcmp(domain, vmu->domain) && ++which > state)
+				return strdup(vmu->domain);
+			/* ignore repeated domains ? */
+			domain = vmu->domain;
+		}
+	}
+	return NULL;
+}
+
+static struct ast_cli_entry cli_voicemail[] = {
+	{ { "minivm", "show", "users", NULL },
+	handle_minivm_show_users, "List defined mini-voicemail boxes",
+	minivm_show_users_help, complete_minivm_show_users, NULL },
+
+	{ { "minivm", "list", "zones", NULL },
+	handle_minivm_show_zones, "List zone message formats",
+	minivm_show_zones_help, NULL, NULL },
+};
+
+
+
+
 /*! \brief Load mini voicemail module */
 int load_module(void)
 {
 	int res;
+
 	res = ast_register_application(app, minivm_exec, synopsis_vm, descrip_vm);
 	res = ast_register_application(app_greet, minivm_prompt_exec, synopsis_vm_greet, descrip_vm_greet);
 
 	if (res)
 		return(res);
 
-	if ((res=load_config())) {
+	if ((res = load_config()))
 		return(res);
-	}
 
-	//ast_cli_register(&show_voicemail_users_cli);
+	//ast_cli_register(&show_minivm_users_cli);
 	//ast_cli_register(&show_voicemail_zones_cli);
 
 	/* compute the location of the voicemail spool directory */
