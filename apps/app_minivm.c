@@ -69,9 +69,15 @@
 
 /*! \page App_minivm_todo Markodian Minimail - todo
  *	- implement template list
- *	- check user account list
- *	- change configuration parser
- *	- add documentation
+ *	- Do not create directories by default for users, just check if they exist
+ *	- Record all voice files in standard temp directory - configurable
+ *	- check user account list -done
+ *	- change configuration parser -done
+ *	- add documentation -not done
+ *	- re-instate CLI commands
+ *	- Implement statistics
+ *	- Implement log file
+ *	- configure accounts from AMI?
  *	- test, test, test, test
  *	- fix "vm-theextensionis.gsm" voiceprompt from Allison in various formats
  *		"The extension you are calling"
@@ -125,6 +131,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 /* Many of these options doesn't apply to minivm */
 #define MVM_REVIEW		(1 << 0)	/*!< Review message */
 #define MVM_OPERATOR		(1 << 1)
+#define MVM_REALTIME		(1 << 2)
 #define MVM_SVMAIL		(1 << 3)
 #define MVM_ENVELOPE		(1 << 4)
 #define MVM_PBXSKIP		(1 << 9)
@@ -612,6 +619,7 @@ static struct minivm_user *mvm_user_alloc()
 	return new;
 }
 
+static int create_vmaccount(char *name, struct ast_variable *var, int realtime);
 static struct minivm_user *find_user_realtime(struct minivm_user *ivm, const char *domain, const char *username);
 
 
@@ -619,15 +627,14 @@ static struct minivm_user *find_user_realtime(struct minivm_user *ivm, const cha
 static struct minivm_user *find_user(struct minivm_user *ivm, const char *domain, const char *username)
 {
 	struct minivm_user *vmu = NULL, *cur;
-	if (option_debug > 2)
-		ast_log(LOG_DEBUG, "-_-_-_- Looking for voicemail user %s in domain %s\n", username, domain);
 
-	ast_mutex_lock(&minivmlock);
 
 	if (ast_strlen_zero(domain) || ast_strlen_zero(username)) {
 		ast_log(LOG_NOTICE, "No username or domain? \n");
 		return NULL;
 	}
+	if (option_debug > 2)
+		ast_log(LOG_DEBUG, "-_-_-_- Looking for voicemail user %s in domain %s\n", username, domain);
 
 	AST_LIST_LOCK(&minivm_accounts);
 	AST_LIST_TRAVERSE(&minivm_accounts, cur, list) {
@@ -653,9 +660,11 @@ static struct minivm_user *find_user(struct minivm_user *ivm, const char *domain
 		if (vmu) {
 			ast_copy_string(vmu->username, username, sizeof(vmu->username));
 			ast_copy_string(vmu->domain, domain, sizeof(vmu->domain));
+			if (option_debug)
+				ast_log(LOG_DEBUG, "--- Created temporary account\n");
 		}
+
 	}
-	ast_mutex_unlock(&minivmlock);
 	return vmu;
 }
 
@@ -664,8 +673,9 @@ static struct minivm_user *find_user(struct minivm_user *ivm, const char *domain
 */
 static struct minivm_user *find_user_realtime(struct minivm_user *ivm, const char *domain, const char *username)
 {
-	struct ast_variable *var, *tmp;
+	struct ast_variable *var;
 	struct minivm_user *retval;
+	char name[MAXHOSTNAMELEN];
 
 	if (ivm)
 		retval = ivm;
@@ -687,20 +697,10 @@ static struct minivm_user *find_user_realtime(struct minivm_user *ivm, const cha
 			free(retval);
 		return NULL;
 	}
-	tmp = var;
-	while(tmp) {
-		printf("%s => %s\n", tmp->name, tmp->value);
-		if (!strcasecmp(tmp->name, "uniqueid")) {
-			ast_copy_string(retval->uniqueid, tmp->value, sizeof(retval->uniqueid));
-		} else if (!strcasecmp(tmp->name, "pager")) {
-			ast_copy_string(retval->pager, tmp->value, sizeof(retval->pager));
-		} else if (!strcasecmp(tmp->name, "fullname")) {
-			ast_copy_string(retval->fullname, tmp->value, sizeof(retval->fullname));
-		} else if (!strcasecmp(tmp->name, "domain")) {
-			ast_copy_string(retval->domain, tmp->value, sizeof(retval->domain));
-		} 
-		tmp = tmp->next;
-	} 
+
+	snprintf(name, sizeof(name), "%s@%s", username, domain);
+	create_vmaccount(name, var, TRUE);
+
 	ast_variables_destroy(var);
 	return retval;
 }
@@ -949,6 +949,9 @@ static int invent_message(struct ast_channel *chan, char *domain, char *username
 	char fn[PATH_MAX];
 	char dest[PATH_MAX];
 
+	if (option_debug > 1)
+		ast_log(LOG_DEBUG, "-_-_- Still preparing to play message ...\n");
+
 	snprintf(fn, sizeof(fn), "%s%s/%s/greet", MVM_SPOOL_DIR, domain, username);
 
 	if (!(res = create_dirpath(dest, sizeof(dest), domain, username, "greet"))) {
@@ -966,10 +969,15 @@ static int invent_message(struct ast_channel *chan, char *domain, char *username
 	} else {
 		int numericusername = 1;
 		char *i = username;
+
+		if (option_debug > 1)
+			ast_log(LOG_DEBUG, "-_-_- No personal prompts. Using default prompt set for language\n");
 		
-		while (i)  {
+		while (*i)  {
+			if (option_debug > 1)
+				ast_log(LOG_DEBUG, "-_-_- Numeric? Checking %c\n", *i);
 			if (!isdigit(*i)) {
-				numericusername = 0;
+				numericusername = FALSE;
 				break;
 			}
 			i++;
@@ -987,6 +995,8 @@ static int invent_message(struct ast_channel *chan, char *domain, char *username
 		} else {
 			if(ast_streamfile(chan, "vm-theextensionis", chan->language))
 				return -1;
+			if ((res = ast_waitstream(chan, ecodes)))
+				return res;
 		}
 	}
 
@@ -1449,7 +1459,7 @@ static int minivm_prompt_exec(struct ast_channel *chan, void *data)
 		return -1;
 	}
 	if (option_debug)
-		ast_log(LOG_DEBUG, "Trying to find prompts for user %s in domain %s\n", username, domain);
+		ast_log(LOG_DEBUG, "-_-_- Trying to find prompts for user %s in domain %s\n", username, domain);
 
 	if (!(vmu = find_user(&svm, domain, username))) {
 		/* We could not find user, let's exit */
@@ -1478,6 +1488,8 @@ static int minivm_prompt_exec(struct ast_channel *chan, void *data)
 		ast_log(LOG_WARNING, "Failed to make directory (%s)\n", tempfile);
 		return -1;
 	}
+	if (option_debug > 1)
+		ast_log(LOG_DEBUG, "-_-_- Preparing to play message ...\n");
 
 	/* Play the message */
 	if (ast_fileexists(tempfile, NULL, NULL) > 0)
@@ -1671,13 +1683,16 @@ static void free_zone(struct minivm_zone *z)
 
 /*! \brief Append new mailbox to mailbox list from configuration file */
 	struct ast_variable *var;
-static int create_vmaccount(char *name, struct ast_variable *var)
+static int create_vmaccount(char *name, struct ast_variable *var, int realtime)
 {
 	/* Assumes lock is already held */
 	struct minivm_user *vmu;
 	char *domain;
 	char *username;
 	char accbuf[BUFSIZ];
+
+	if (option_debug > 2)
+		ast_log(LOG_DEBUG, "Creating static account for [%s]\n", name);
 
 	ast_copy_string(accbuf, name, sizeof(accbuf));
 	username = accbuf;
@@ -1691,6 +1706,7 @@ static int create_vmaccount(char *name, struct ast_variable *var)
 	vmu = calloc(1, sizeof(struct minivm_user));
 	if (!vmu)
 		return 0;
+	
 
 	ast_copy_string(vmu->domain, domain, sizeof(vmu->domain));
 	ast_copy_string(vmu->username, username, sizeof(vmu->username));
@@ -1698,13 +1714,15 @@ static int create_vmaccount(char *name, struct ast_variable *var)
 	populate_defaults(vmu);
 
 	while (var) {
+		if (option_debug > 2)
+			ast_log(LOG_DEBUG, "---- Configuring %s = %s for account %s\n", var->name, var->value, name);
 		if (!strcasecmp(var->name, "serveremail")) {
 			ast_copy_string(vmu->serveremail, var->value, sizeof(vmu->serveremail));
 		} else if (!strcasecmp(var->name, "domain")) {
 			ast_copy_string(vmu->domain, var->value, sizeof(vmu->domain));
 		} else if (!strcasecmp(var->name, "language")) {
 			ast_copy_string(vmu->language, var->value, sizeof(vmu->language));
-		} else if (!strcasecmp(var->name, "tz")) {
+		} else if (!strcasecmp(var->name, "zone")) {
 			ast_copy_string(vmu->zonetag, var->value, sizeof(vmu->zonetag));
 		} else if (!strcasecmp(var->name, "envelope")) {
 			ast_set2_flag(vmu, ast_true(var->value), MVM_ENVELOPE);	
@@ -1728,7 +1746,7 @@ static int create_vmaccount(char *name, struct ast_variable *var)
 	AST_LIST_INSERT_TAIL(&minivm_users, vmu, list);
 	AST_LIST_UNLOCK(&minivm_users);
 	if (option_debug > 1)
-		ast_log(LOG_DEBUG, "MINIVM :: Created account %s@%s - tz %s etemplate %s\n", username, domain, vmu->zonetag, vmu->etemplate);
+		ast_log(LOG_DEBUG, "MINIVM :: Created account %s@%s - tz %s etemplate %s %s\n", username, domain, vmu->zonetag, vmu->etemplate, realtime ? "(realtime)" : "");
 	return 0;
 }
 
@@ -1953,11 +1971,16 @@ static int load_config(void)
 	
 	cat = ast_category_browse(cfg, NULL);
 	while (cat) {
-		if (!strcasecmp(cat, "general")) 
+		if (option_debug > 2)
+			ast_log(LOG_DEBUG, "Found configuration section [%s]\n", cat);
+		if (!strcasecmp(cat, "general")) {
+			cat = ast_category_browse(cfg, cat);
 			continue;
+		}
 
 		if (!strcasecmp(cat, "templates"))  {
 			ast_log(LOG_DEBUG, "Mailbox templates not yet implemented. Sorry for that. Please come back in a few days.\n");
+			cat = ast_category_browse(cfg, cat);
 			continue;
 		}
 
@@ -1970,7 +1993,7 @@ static int load_config(void)
 			}
 		} else {
 			/* Create mailbox from this */
-			create_vmaccount(cat, var);
+			create_vmaccount(cat, var, FALSE);
 		}
 		/* Find next section in configuration file */
 		cat = ast_category_browse(cfg, cat);
