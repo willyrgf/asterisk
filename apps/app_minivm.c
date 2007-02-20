@@ -43,28 +43,15 @@
  *	Voicemail accounts are identified 
  *	by userid and domain
  *
- *	Ideal Configuration :
- *	E-mail templates are stored in separate files
- *
- * 	emailtemplate = <languagecode>,<filename>
- * 	emailtemplate = se_sv, templates/email_sv_se.txt
- * 	emailtemplate = us_en, templates/email_en_us.txt
- * 	pagertemplate = se_sv, templates/email_sv_se.txt # Swedish
- * 	pagertemplate = us_en, templates/pager_en_us.txt
- *	
  *	Language codes are like setlocale - langcode_countrycode
  *
  *	
  */
 
 /*! \page App_minivm_todo Markodian Minimail - todo
- *	- implement template list
  *	- Do not create directories by default for users, just check if they exist
  *	- Record all voice files in standard temp directory - configurable
- *	- check user account list -done
- *	- change configuration parser -done
  *	- add documentation -not done
- *	- Implement statistics
  *	- Implement log file
  *	- configure accounts from AMI?
  *	- test, test, test, test
@@ -149,6 +136,40 @@ static char MVM_SPOOL_DIR[AST_CONFIG_MAX_PATH];
 static char *tdesc = "Mini VoiceMail (A minimal Voicemail e-mail System)";
 static char *app = "MiniVM";		 	/* Leave a message */
 static char *app_greet = "MiniVMgreet";		/* Play voicemail prompts */
+
+static char *synopsis_vm = "Receive voicemail and forward via e-mail";
+static char *descrip_vm = 
+	"Syntax: minivm(username@domain[,options])\n"
+	"This application is part of the Mini-Voicemail system, configured in minivm.conf.\n"
+	"MiniVM records audio file in configured format and forwards message to e-mail and pager.\n"
+	"If there's no user account for that address, a temporary account will\n"
+	"be used with default options.\n"
+	"The application will exit if any of the following DTMF digits are \n"
+	"received and the requested extension exist in the current context.\n"
+	"    0 - Jump to the 'o' extension in the current dialplan context.\n"
+	"    * - Jump to the 'a' extension in the current dialplan context.\n"
+	"\n"
+	"Result is given in channel variable MINIVM_STATUS\n"
+	"        The possible values are:     SUCCESS | USEREXIT | FAILED\n\n"
+	"  Options:\n"
+	"    g(#) - Use the specified amount of gain when recording the voicemail\n"
+	"           message. The units are whole-number decibels (dB).\n"
+	"\n";
+
+static char *synopsis_vm_greet = "Play voicemail prompts";
+static char *descrip_vm_greet = 
+	"Syntax: minivm_greet(username@domain[,options])\n"
+	"This application is part of the Mini-Voicemail system, configured in minivm.conf.\n"
+	"minivm_greet() plays default prompts or user specific prompts.\n"
+	"\n"
+	"Result is given in channel variable MINIVM_STATUS\n"
+	"        The possible values are:     SUCCESS | USEREXIT | FAILED\n\n"
+	"  Options:\n"
+	"    b    - Play the 'busy' greeting to the calling party.\n"
+	"    s    - Skip the playback of instructions for leaving a message to the\n"
+	"           calling party.\n"
+	"    u    - Play the 'unavailable greeting.\n"
+	"\n";
 
 enum {
 	OPT_SILENT =	   (1 << 0),
@@ -2150,18 +2171,6 @@ static int load_config(void)
 }
 
 
-static char *synopsis_vm = "Receive voicemail and forward via e-mail";
-static char *descrip_vm = "No documentation. This is a professional application.\n"
-	"If you don't understand it, don't use it. Read the source.\n"
-	"Syntax: minivm(username@domain[,options])\n"
-	"If there's no user account for that address, a temporary account will\n"
-	"be used with default options.\n\n";
-
-static char *synopsis_vm_greet = "Play voicemail prompts";
-static char *descrip_vm_greet = "No documentation. This is a professional application.\n"
-	"If you don't understand it, don't use it. Read the source.\n"
-	"Syntax: minivm_greet(username@domain[,options])\n"
-	"Plays default prompts or user specific prompts.\n\n";
 
 
 static const char minivm_show_users_help[] =
