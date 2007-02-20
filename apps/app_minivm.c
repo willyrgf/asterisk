@@ -20,9 +20,11 @@
 
 /*! \file
  *
- * \brief Markodian Mail - A Minimal Voicemail System
+ * \brief MiniVoiceMail - A Minimal Voicemail System
+ *
+ * A voicemail system in small building blocks, working together
  * 
- * based on the Comedian Mail voicemail system.
+ * based on the Comedian Mail voicemail system (app_voicemail.c).
  * 
  * \par See also
  * \arg \ref Config_vm
@@ -2044,37 +2046,16 @@ static int load_config(void)
 	return 0;
 }
 
-/*! \brief Reload mini voicemail module */
-int reload(void)
-{
-	return(load_config());
-}
 
-/*! \brief Unload mini voicemail module */
-int unload_module(void)
-{
-	int res;
-	
-	res = ast_unregister_application(app);
-	res = ast_unregister_application(app_greet);
-	//res |= ast_cli_unregister(&show_minivm_users_cli);
-	//res |= ast_cli_unregister(&show_voicemail_zones_cli);
-	ast_uninstall_vm_functions();
-	
-	STANDARD_HANGUP_LOCALUSERS;
-
-	return res;
-}
-
-char *synopsis_vm = "Receive voicemail and forward via e-mail";
-char *descrip_vm = "No documentation. This is a professional application.\n"
+static char *synopsis_vm = "Receive voicemail and forward via e-mail";
+static char *descrip_vm = "No documentation. This is a professional application.\n"
 	"If you don't understand it, don't use it. Read the source.\n"
 	"Syntax: minivm(username@domain[,options])\n"
 	"If there's no user account for that address, a temporary account will\n"
 	"be used with default options.\n\n";
 
-char *synopsis_vm_greet = "Play voicemail prompts";
-char *descrip_vm_greet = "No documentation. This is a professional application.\n"
+static char *synopsis_vm_greet = "Play voicemail prompts";
+static char *descrip_vm_greet = "No documentation. This is a professional application.\n"
 	"If you don't understand it, don't use it. Read the source.\n"
 	"Syntax: minivm_greet(username@domain[,options])\n"
 	"Plays default prompts or user specific prompts.\n\n";
@@ -2197,11 +2178,31 @@ int load_module(void)
 	if ((res = load_config()))
 		return(res);
 
-	//ast_cli_register(&show_minivm_users_cli);
-	//ast_cli_register(&show_voicemail_zones_cli);
+	ast_cli_register_multiple(cli_voicemail, sizeof(cli_voicemail)/sizeof(cli_voicemail[0]));
 
 	/* compute the location of the voicemail spool directory */
 	snprintf(MVM_SPOOL_DIR, sizeof(MVM_SPOOL_DIR), "%s/voicemail/", ast_config_AST_SPOOL_DIR);
+
+	return res;
+}
+
+/*! \brief Reload mini voicemail module */
+int reload(void)
+{
+	return(load_config());
+}
+
+/*! \brief Unload mini voicemail module */
+int unload_module(void)
+{
+	int res;
+	
+	res = ast_unregister_application(app);
+	res = ast_unregister_application(app_greet);
+	ast_cli_unregister_multiple(cli_voicemail, sizeof(cli_voicemail)/sizeof(cli_voicemail[0]));
+	ast_uninstall_vm_functions();
+	
+	STANDARD_HANGUP_LOCALUSERS;
 
 	return res;
 }
