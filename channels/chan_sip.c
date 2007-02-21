@@ -1933,8 +1933,8 @@ static enum sip_result ast_sip_ouraddrfor(struct in_addr *them, struct in_addr *
 	ours.sin_addr = *us;
 
 	if (localaddr && externip.sin_addr.s_addr &&
-	    ast_apply_ha(localaddr, &theirs) &&
-	    !ast_apply_ha(localaddr, &ours)) {
+	    (ast_apply_ha(localaddr, &theirs)) &&
+	    (!ast_apply_ha(localaddr, &ours))) {
 		if (externexpire && time(NULL) >= externexpire) {
 			struct ast_hostent ahp;
 			struct hostent *hp;
