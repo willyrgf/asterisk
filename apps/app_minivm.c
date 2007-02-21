@@ -131,6 +131,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define VOICEMAIL_CONFIG "minivm.conf"
 #define ASTERISK_USERNAME "asterisk"	/*!< Default username for sending mail is asterisk@localhost */
 
+/*! \brief Message types for notification */
+enum mvm_messagetype {
+	MVM_MESSAGE_EMAIL,
+	MVM_MESSAGE_PAGE
+};
+
 static char MVM_SPOOL_DIR[AST_CONFIG_MAX_PATH];
 
 static char *tdesc = "Mini VoiceMail (A minimal Voicemail e-mail System)";
@@ -596,130 +602,8 @@ static char *mailheader_quote(const char *from, char *to, size_t len)
 }
 
 
-/*! \brief Send pager e-mail */
-static int sendpage(char *srcemail, char *pager, char *context, char *mailbox, char *cidnum, char *cidname, int duration, struct minivm_user *vmu)
-{
-	FILE *p=NULL;
-	int pfd;
-	char date[256];
-	char host[MAXHOSTNAMELEN] = "";
-	char who[256];
-	char dur[PATH_MAX];
-	char tmp[80] = "/tmp/astmail-XXXXXX";
-	char tmp2[PATH_MAX];
-	time_t t;
-	struct tm tm;
-	struct minivm_zone *the_zone = NULL;
-	pfd = mkstemp(tmp);
-	struct ast_channel *ast = ast_channel_alloc(0);
-
-	if (pfd > -1) {
-		p = fdopen(pfd, "w");
-		if (!p) {
-			close(pfd);
-			pfd = -1;
-		}
-	}
-
-	if (!p) {
-		ast_log(LOG_WARNING, "Unable to launch '%s'\n", global_mailcmd);
-		return -1;
-	}
-	gethostname(host, sizeof(host)-1);
-	if (strchr(srcemail, '@'))
-		ast_copy_string(who, srcemail, sizeof(who));
-	else 
-		snprintf(who, sizeof(who), "%s@%s", srcemail, host);
-
-	snprintf(dur, sizeof(dur), "%d:%02d", duration / 60, duration % 60);
-	time(&t);
-
-	/* Does this user have a timezone specified? */
-	if (!ast_strlen_zero(vmu->zonetag)) {
-		/* Find the zone in the list */
-		struct minivm_zone *z;
-
-		AST_LIST_LOCK(&minivm_zones);
-		AST_LIST_TRAVERSE(&minivm_zones, z, list) {
-			if (strcmp(z->name, vmu->zonetag)) 
-				continue;
-			the_zone = z;
-		}
-		AST_LIST_UNLOCK(&minivm_zones);
-	}
-
-	if (the_zone)
-		ast_localtime(&t,&tm,the_zone->timezone);
-	else
-		ast_localtime(&t,&tm,NULL);
-
-	strftime(date, sizeof(date), "%a, %d %b %Y %H:%M:%S %z", &tm);
-	fprintf(p, "Date: %s\n", date);
-
-	prep_email_sub_vars(ast, vmu, cidnum, cidname, dur, date);
-
-	if (!ast_strlen_zero(global_pagerfromstring)) {
-
-		if (ast) {
-			char *passdata;
-			int vmlen = strlen(global_fromstring)*3 + 200;
-			if ((passdata = alloca(vmlen))) {
-				memset(passdata, 0, vmlen);
-				pbx_substitute_variables_helper(ast, global_pagerfromstring, passdata, vmlen);
-				fprintf(p, "From: %s <%s>\n",passdata,who);
-			} else 
-				ast_log(LOG_WARNING, "Cannot allocate workspace for variable substitution\n");
-			ast_channel_free(ast);
-		} else
-			ast_log(LOG_WARNING, "Cannot allocate the channel for variables substitution\n");
-	} else
-		fprintf(p, "From: Asterisk PBX <%s>\n", who);
-	fprintf(p, "To: %s\n", pager);
-	if (pagersubject) {
-	       if (ast) {
-		       char *passdata;
-		       int vmlen = strlen(pagersubject)*3 + 200;
-		       if ((passdata = alloca(vmlen))) {
-			       memset(passdata, 0, vmlen);
-			       pbx_substitute_variables_helper(ast, pagersubject, passdata, vmlen);
-			       fprintf(p, "Subject: %s\n\n",passdata);
-		       } else
-				ast_log(LOG_WARNING, "Cannot allocate workspace for variable substitution\n");
-		       ast_channel_free(ast);
-	       } else
-			ast_log(LOG_WARNING, "Cannot allocate the channel for variables substitution\n");
-	} else
-	       fprintf(p, "Subject: New VM\n\n");
-	strftime(date, sizeof(date), "%A, %B %d, %Y at %r", &tm);
-        if (pagerbody) {
-	       if (ast) {
-		       char *passdata;
-		       int vmlen = strlen(pagerbody)*3 + 200;
-		       if ((passdata = alloca(vmlen))) {
-			       memset(passdata, 0, vmlen);
-			       pbx_substitute_variables_helper(ast, pagerbody, passdata, vmlen);
-			       fprintf(p, "%s\n",passdata);
-		       } else
-				ast_log(LOG_WARNING, "Cannot allocate workspace for variable substitution\n");
-		       ast_channel_free(ast);
-	       } else
-			ast_log(LOG_WARNING, "Cannot allocate the channel for variables substitution\n");
-	} else {
-	       fprintf(p, "New %s long msg in box %s\n"
-			       "from %s, on %s", dur, mailbox, (cidname ? cidname : (cidnum ? cidnum : "unknown")), date);
-	}
-	fclose(p);
-	snprintf(tmp2, sizeof(tmp2), "( %s < %s ; rm -f %s ) &", global_mailcmd, tmp, tmp);
-	ast_safe_system(tmp2);
-	if (option_debug)
-		ast_log(LOG_DEBUG, "Sent page to %s with command '%s'\n", pager, global_mailcmd);
-	return 0;
-}
-
-static struct minivm_user *mvm_user_alloc(void);
-
 /*! \brief Allocate new vm user and set default values */
-static struct minivm_user *mvm_user_alloc()
+static struct minivm_user *mvm_user_alloc(void)
 {
 	struct minivm_user *new;
 
@@ -826,11 +710,11 @@ static struct minivm_user *find_user_realtime(const char *domain, const char *us
 }
 
 /*! Send voicemail with audio file as an attachment */
-static int sendmail(struct minivm_message *template, char *srcemail, struct minivm_user *vmu, char *cidnum, char *cidname, char *attach, char *format, int duration, int attach_user_voicemail)
+static int sendmail(struct minivm_message *template, char *srcemail, struct minivm_user *vmu, char *cidnum, char *cidname, char *attach, char *format, int duration, int attach_user_voicemail, enum mvm_messagetype type)
 {
 	FILE *p = NULL;
 	int pfd;
-	char email[256];
+	char email[256] = "";
 	char date[256];
 	char host[MAXHOSTNAMELEN];
 	char who[256];
@@ -846,12 +730,17 @@ static int sendmail(struct minivm_message *template, char *srcemail, struct mini
 	char *passdata2;
 	struct ast_channel *ast;
 
-	if (vmu && !ast_strlen_zero(vmu->email)) {
-		ast_copy_string(email, vmu->email, sizeof(email));	
-	} else if (!ast_strlen_zero(vmu->username) && !ast_strlen_zero(vmu->domain))
-		snprintf(email, sizeof(email), "%s@%s", vmu->username, vmu->domain);
-	else {
-		ast_log(LOG_WARNING, "No mail address to send to.\n");
+	if (type == MVM_MESSAGE_EMAIL) {
+		if (vmu && !ast_strlen_zero(vmu->email)) {
+			ast_copy_string(email, vmu->email, sizeof(email));	
+		} else if (!ast_strlen_zero(vmu->username) && !ast_strlen_zero(vmu->domain))
+			snprintf(email, sizeof(email), "%s@%s", vmu->username, vmu->domain);
+	} else if (type == MVM_MESSAGE_PAGE) {
+		ast_copy_string(email, vmu->pager, sizeof(email));
+	}
+
+	if (ast_strlen_zero(email)) {
+		ast_log(LOG_WARNING, "No address to send message to.\n");
 		return -1;	
 	}
 
@@ -863,7 +752,7 @@ static int sendmail(struct minivm_message *template, char *srcemail, struct mini
 
 
 	/* If we have a gain option, process it now with sox */
-	if (vmu->volgain < -.001 || vmu->volgain > .001) {
+	if (type == MVM_MESSAGE_EMAIL && (vmu->volgain < -.001 || vmu->volgain > .001) ) {
 		char newtmp[PATH_MAX];
 		char tmpcmd[PATH_MAX];
 		int tmpfd;
@@ -882,7 +771,7 @@ static int sendmail(struct minivm_message *template, char *srcemail, struct mini
 	/* Create file name */
 	snprintf(fname, sizeof(fname), "%s.%s", attach, format);
 
-	if (option_debug)
+	if (option_debug && template->attachment)
 		ast_log(LOG_DEBUG, "-- Attaching file '%s', format '%s', uservm is '%d'\n", attach, format, attach_user_voicemail);
 	/* Make a temporary file instead of piping directly to sendmail, in case the mail
 	   command hangs */
@@ -1013,7 +902,7 @@ static int sendmail(struct minivm_message *template, char *srcemail, struct mini
 	snprintf(tmp2, sizeof(tmp2), "( %s < %s ; rm -f %s ) &", global_mailcmd, tmp, tmp);
 	ast_safe_system(tmp2);
 	if (option_debug)
-		ast_log(LOG_DEBUG, "Sent mail to %s with command '%s'\n", vmu->email, global_mailcmd);
+		ast_log(LOG_DEBUG, "Sent message to %s with command '%s' - %s\n", vmu->email, global_mailcmd, template->attachment ? "(media attachment)" : "");
 	ast_channel_free(ast);
 	return 0;
 }
@@ -1341,10 +1230,16 @@ static int notify_new_message(struct ast_channel *chan, struct minivm_user *vmu,
 	else
 		myserveremail = etemplate->fromstring;
 
-	sendmail(etemplate, myserveremail, vmu, cidnum, cidname, filename, fmt, duration, TRUE);
+	sendmail(etemplate, myserveremail, vmu, cidnum, cidname, filename, fmt, duration, etemplate->attachment, MVM_MESSAGE_EMAIL);
 
-	if (!ast_strlen_zero(vmu->pager)) 
-		sendpage(myserveremail, vmu->pager, vmu->domain, vmu->username, cidnum, cidname, duration, vmu);
+	if (!ast_strlen_zero(vmu->pager))  {
+		/* Find template for paging */
+		etemplate = message_template_find(vmu->ptemplate);
+		if (!etemplate)
+			etemplate = message_template_find("pager-default");
+
+		sendmail(etemplate, myserveremail, vmu, cidnum, cidname, filename, fmt, duration, etemplate->attachment, MVM_MESSAGE_PAGE);
+	}
 
 	vm_delete(filename);
 
