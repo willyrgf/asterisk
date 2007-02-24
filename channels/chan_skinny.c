@@ -73,6 +73,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/astobj.h"
 #include "asterisk/abstract_jb.h"
 #include "asterisk/threadstorage.h"
+#include "asterisk/devicestate.h"
 
 /*************************************
  * Skinny/Asterisk Protocol Settings *
@@ -1028,6 +1029,7 @@ static struct skinnysession {
 } *sessions = NULL;
 
 static struct ast_channel *skinny_request(const char *type, int format, void *data, int *cause);
+static int skinny_devicestate(void *data);
 static int skinny_call(struct ast_channel *ast, char *dest, int timeout);
 static int skinny_hangup(struct ast_channel *ast);
 static int skinny_answer(struct ast_channel *ast);
@@ -1044,6 +1046,7 @@ static const struct ast_channel_tech skinny_tech = {
 	.capabilities = ((AST_FORMAT_MAX_AUDIO << 1) - 1),
 	.properties = AST_CHAN_TP_WANTSJITTER | AST_CHAN_TP_CREATESJITTER,
 	.requester = skinny_request,
+	.devicestate = skinny_devicestate,
 	.call = skinny_call,
 	.hangup = skinny_hangup,
 	.answer = skinny_answer,
@@ -2108,6 +2111,8 @@ static struct skinny_device *build_device(const char *cat, struct ast_variable *
 						ast_copy_string(sd->label, exten, sizeof(sd->label));
 					sd->instance = speeddialInstance++;
 
+					sd->parent = d;
+
 					sd->next = d->speeddials;
 					d->speeddials = sd;
 				}
@@ -2466,6 +2471,7 @@ static int skinny_answer(struct ast_channel *ast)
 	   or you won't get keypad messages in some situations. */
 	transmit_callinfo(s, ast->cid.cid_name, ast->cid.cid_num, ast->exten, ast->exten, l->instance, sub->callid, 2);
 	transmit_callstate(s, l->instance, SKINNY_CONNECTED, sub->callid);
+	transmit_selectsoftkeys(s, l->instance, sub->callid, KEYDEF_CONNECTED);
 	transmit_displaypromptstatus(s, "Connected", 0, l->instance, sub->callid);
 	return res;
 }
@@ -3085,6 +3091,9 @@ static int handle_stimulus_message(struct skinny_req *req, struct skinnysession 
 	case STIMULUS_HOLD:
 		if (skinnydebug)
 			ast_verbose("Received Stimulus: Hold(%d)\n", instance);
+
+		if (!sub)
+			break;
 
 		if (sub->onhold) {
 			skinny_unhold(sub);
@@ -3757,7 +3766,7 @@ static int handle_soft_key_event_message(struct skinny_req *req, struct skinnyse
 
 			if (ast_strlen_zero(l->lastnumberdialed)) {
 				ast_log(LOG_WARNING, "Attempted redial, but no previously dialed number found.\n");
-				return 0;
+				break;
 			}
 			if (!ast_ignore_pattern(c->context, l->lastnumberdialed)) {
 				transmit_tone(s, SKINNY_SILENCE);
@@ -3876,7 +3885,7 @@ static int handle_soft_key_event_message(struct skinny_req *req, struct skinnyse
 					}
 				} else if (res) {
 					ast_log(LOG_WARNING, "Transfer attempt failed\n");
-					return 0;
+					break;
 				}
 #endif
 			} else {
@@ -4408,6 +4417,41 @@ static struct ast_channel *skinny_request(const char *type, int format, void *da
 	}
 	restart_monitor();
 	return tmpc;
+}
+
+static int skinny_devicestate(void *data)
+{
+	struct skinny_line *l;
+	struct skinny_subchannel *sub;
+	char *tmp;
+	int res = AST_DEVICE_UNKNOWN;
+
+	tmp = ast_strdupa(data);
+
+	l = find_line_by_name(tmp);
+
+	if (!l)
+		res = AST_DEVICE_INVALID;
+	else if (!l->parent)
+		res = AST_DEVICE_UNAVAILABLE;
+	else if (l->dnd)
+		res = AST_DEVICE_BUSY;
+	else {
+		if (l->hookstate == SKINNY_ONHOOK) {
+			res = AST_DEVICE_NOT_INUSE;
+		} else {
+			res = AST_DEVICE_INUSE;
+		}
+
+		for (sub = l->sub; sub; sub = sub->next) {
+			if (sub->onhold) {
+				res = AST_DEVICE_ONHOLD;
+				break;
+			}
+		}
+	}
+
+	return res;
 }
 
 static int reload_config(void)
