@@ -43,10 +43,6 @@
 #define TZ_STRLEN_MAX	255
 /* #define DEBUG */
 
-#include "asterisk.h"
- 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
-
 /*LINTLIBRARY*/
 
 #include <sys/types.h>
@@ -58,9 +54,14 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "private.h"
 #include "tzfile.h"
+
+#include "asterisk.h"
+
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
 #include "asterisk/lock.h"
 #include "asterisk/localtime.h"
-
+#include "asterisk/strings.h"
 
 #ifndef lint
 #ifndef NOID
@@ -1055,7 +1056,7 @@ const char * const	zone;
 #ifdef _THREAD_SAFE
 	ast_mutex_lock(&lcl_mutex);
 #endif
-	ast_tzset(zone);
+	ast_tzset(ast_strlen_zero(zone) ? "/etc/localtime" : zone);
 	localsub(timep, 0L, p_tm, zone);
 #ifdef _THREAD_SAFE
 	ast_mutex_unlock(&lcl_mutex);
@@ -1216,11 +1217,7 @@ const time_t * const	timep;
 char *buf;
 {
         struct tm tm;
-#ifdef SOLARIS
-	return asctime_r(localtime_r(timep, &tm), buf, 256);
-#else
 	return asctime_r(localtime_r(timep, &tm), buf);
-#endif
 }
 
 /*
@@ -1499,8 +1496,8 @@ const char * const	zone;
 #ifdef	_THREAD_SAFE
 	ast_mutex_lock(&lcl_mutex);
 #endif
-	ast_tzset(zone);
-	mktime_return_value = time1(tmp, localsub, 0L, zone);
+	ast_tzset(!ast_strlen_zero(zone) ? zone : "/etc/localtime");
+	mktime_return_value = time1(tmp, localsub, 0L, !ast_strlen_zero(zone) ? zone : "/etc/localtime");
 #ifdef	_THREAD_SAFE
 	ast_mutex_unlock(&lcl_mutex);
 #endif

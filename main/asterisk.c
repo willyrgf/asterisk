@@ -152,15 +152,13 @@ int daemon(int, int);  /* defined in libresolv of all places */
  */
 /*! @{ */
 
-extern int ast_language_is_prefix;	/* XXX move to some header */
-
 struct ast_flags ast_options = { AST_DEFAULT_OPTIONS };
 
-int option_verbose = 0;				/*!< Verbosity level */
-int option_debug = 0;				/*!< Debug level */
+int option_verbose;				/*!< Verbosity level */
+int option_debug;				/*!< Debug level */
 
-double option_maxload = 0.0;			/*!< Max load avg on system */
-int option_maxcalls = 0;			/*!< Max number of active calls */
+double option_maxload;				/*!< Max load avg on system */
+int option_maxcalls;				/*!< Max number of active calls */
 
 /*! @} */
 
@@ -187,8 +185,8 @@ static AST_LIST_HEAD_STATIC(atexits, ast_atexit);
 time_t ast_startuptime;
 time_t ast_lastreloadtime;
 
-static History *el_hist = NULL;
-static EditLine *el = NULL;
+static History *el_hist;
+static EditLine *el;
 static char *remotehostname;
 
 struct console consoles[AST_MAX_CONNECTS];
@@ -229,11 +227,17 @@ extern const char *ast_build_date;
 extern const char *ast_build_user;
 
 static char *_argv[256];
-static int shuttingdown = 0;
-static int restartnow = 0;
+static int shuttingdown;
+static int restartnow;
 static pthread_t consolethread = AST_PTHREADT_NULL;
 
 static char randompool[256];
+
+static int sig_alert_pipe[2] = { -1, -1 };
+static struct {
+	 unsigned int need_reload:1;
+	 unsigned int need_quit:1;
+} sig_flags;
 
 #if !defined(LOW_MEMORY)
 struct file_version {
@@ -494,13 +498,13 @@ static int handle_show_profile(int fd, int argc, char *argv[])
 
 	min = 0;
 	max = prof_data->entries;
-	if  (argc >= 3) { /* specific entries */
-		if (isdigit(argv[2][0])) {
-			min = atoi(argv[2]);
-			if (argc == 4 && strcmp(argv[3], "-"))
-				max = atoi(argv[3]);
+	if  (argc > 3) { /* specific entries */
+		if (isdigit(argv[3][0])) {
+			min = atoi(argv[3]);
+			if (argc == 5 && strcmp(argv[4], "-"))
+				max = atoi(argv[4]);
 		} else
-			search = argv[2];
+			search = argv[3];
 	}
 	if (max > prof_data->entries)
 		max = prof_data->entries;
@@ -1038,12 +1042,14 @@ static void urg_handler(int num)
 
 static void hup_handler(int num)
 {
+	int a = 0;
 	if (option_verbose > 1) 
 		printf("Received HUP signal -- Reloading configs\n");
 	if (restartnow)
 		execvp(_argv[0], _argv);
-	/* XXX This could deadlock XXX */
-	ast_module_reload(NULL);
+	sig_flags.need_reload = 1;
+	if (sig_alert_pipe[1] != -1)
+		write(sig_alert_pipe[1], &a, sizeof(a));
 	signal(num, hup_handler);
 }
 
@@ -1211,7 +1217,7 @@ static void quit_handler(int num, int nice, int safeshutdown, int restart)
 			fcntl(x, F_SETFD, FD_CLOEXEC);
 		}
 		if (option_verbose || ast_opt_console)
-			ast_verbose("Restarting Asterisk NOW...\n");
+			ast_verbose("Asterisk is now restarting...\n");
 		restartnow = 1;
 
 		/* close logger */
@@ -1235,7 +1241,12 @@ static void quit_handler(int num, int nice, int safeshutdown, int restart)
 
 static void __quit_handler(int num)
 {
-	quit_handler(num, 0, 1, 0);
+	int a = 0;
+	sig_flags.need_quit = 1;
+	if (sig_alert_pipe[1] != -1)
+		write(sig_alert_pipe[1], &a, sizeof(a));
+	/* There is no need to restore the signal handler here, since the app
+	 * is going to exit */
 }
 
 static const char *fix_header(char *outbuf, int maxout, const char *s, char *cmp)
@@ -1370,9 +1381,19 @@ static char version_help[] =
 "Usage: core show version\n"
 "       Shows Asterisk version information.\n";
 
-static int handle_version(int fd, int argc, char *argv[])
+static int handle_version_deprecated(int fd, int argc, char *argv[])
 {
 	if (argc != 2)
+		return RESULT_SHOWUSAGE;
+	ast_cli(fd, "Asterisk %s built by %s @ %s on a %s running %s on %s\n",
+		ASTERISK_VERSION, ast_build_user, ast_build_hostname,
+		ast_build_machine, ast_build_os, ast_build_date);
+	return RESULT_SUCCESS;
+}
+
+static int handle_version(int fd, int argc, char *argv[])
+{
+	if (argc != 3)
 		return RESULT_SHOWUSAGE;
 	ast_cli(fd, "Asterisk %s built by %s @ %s on a %s running %s on %s\n",
 		ASTERISK_VERSION, ast_build_user, ast_build_hostname,
@@ -1521,6 +1542,11 @@ static int show_license(int fd, int argc, char *argv[])
 
 #define ASTERISK_PROMPT2 "%s*CLI> "
 
+static struct ast_cli_entry cli_show_version_deprecated = {
+	{ "show", "version", NULL },
+	handle_version_deprecated, "Display version info",
+	version_help };
+
 #if !defined(LOW_MEMORY)
 static struct ast_cli_entry cli_show_version_files_deprecated = {
 	{ "show", "version", "files", NULL },
@@ -1576,7 +1602,7 @@ static struct ast_cli_entry cli_asterisk[] = {
 
 	{ { "core", "show", "version", NULL },
 	handle_version, "Display version info",
-	version_help },
+	version_help, NULL, &cli_show_version_deprecated },
 
 	{ { "!", NULL },
 	handle_bang, "Execute a shell command",
@@ -2024,6 +2050,8 @@ static char *cli_complete(EditLine *el, int ch)
 				retval = CC_REFRESH;
 			}
 		}
+		for (i = 0; matches[i]; i++)
+			free(matches[i]);
 		free(matches);
 	}
 
@@ -2142,9 +2170,9 @@ static void ast_remotecontrol(char * data)
 		pid = atoi(cpid);
 	else
 		pid = -1;
-	snprintf(tmp, sizeof(tmp), "core verbose atleast %d", option_verbose);
+	snprintf(tmp, sizeof(tmp), "core set verbose atleast %d", option_verbose);
 	fdprint(ast_consock, tmp);
-	snprintf(tmp, sizeof(tmp), "core debug atleast %d", option_debug);
+	snprintf(tmp, sizeof(tmp), "core set debug atleast %d", option_debug);
 	fdprint(ast_consock, tmp);
 	if (ast_opt_mute) {
 		snprintf(tmp, sizeof(tmp), "log and verbose output currently muted ('logger unmute' to unmute)");
@@ -2389,6 +2417,26 @@ static void ast_readconfig(void)
 	ast_config_destroy(cfg);
 }
 
+static void *monitor_sig_flags(void *unused)
+{
+	for (;;) {
+		struct pollfd p = { sig_alert_pipe[0], POLLIN, 0 };
+		int a;
+		poll(&p, 1, -1);
+		if (sig_flags.need_reload) {
+			sig_flags.need_reload = 0;
+			ast_module_reload(NULL);
+		}
+		if (sig_flags.need_quit) {
+			sig_flags.need_quit = 0;
+			quit_handler(0, 0, 1, 0);
+		}
+		read(sig_alert_pipe[0], &a, sizeof(a));
+	}
+
+	return NULL;
+}
+
 int main(int argc, char *argv[])
 {
 	int c;
@@ -2434,7 +2482,7 @@ int main(int argc, char *argv[])
 	if (getenv("HOME")) 
 		snprintf(filename, sizeof(filename), "%s/.asterisk_history", getenv("HOME"));
 	/* Check for options */
-	while ((c = getopt(argc, argv, "mtThfdvVqprRgciInx:U:G:C:L:M:")) != -1) {
+	while ((c = getopt(argc, argv, "mtThfFdvVqprRgciInx:U:G:C:L:M:")) != -1) {
 		switch (c) {
 #if HAVE_WORKING_FORK
 		case 'F':
@@ -2716,6 +2764,9 @@ int main(int argc, char *argv[])
 		printf(term_quit());
 		exit(1);
 	}
+
+	threadstorage_init();
+
 	if (load_modules(1)) {
 		printf(term_quit());
 		exit(1);
@@ -2795,6 +2846,9 @@ int main(int argc, char *argv[])
 	if (ast_opt_no_fork)
 		consolethread = pthread_self();
 
+	if (pipe(sig_alert_pipe))
+		sig_alert_pipe[0] = sig_alert_pipe[1] = -1;
+
 	ast_set_flag(&ast_options, AST_OPT_FLAG_FULLY_BOOTED);
 	pthread_sigmask(SIG_UNBLOCK, &sigs, NULL);
 
@@ -2809,6 +2863,14 @@ int main(int argc, char *argv[])
 		/* Console stuff now... */
 		/* Register our quit function */
 		char title[256];
+		pthread_attr_t attr;
+		pthread_t dont_care;
+
+		pthread_attr_init(&attr);
+		pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+		ast_pthread_create(&dont_care, &attr, monitor_sig_flags, NULL);
+		pthread_attr_destroy(&attr);
+
 		set_icon("Asterisk");
 		snprintf(title, sizeof(title), "Asterisk Console on '%s' (pid %ld)", hostname, (long)ast_mainpid);
 		set_title(title);
@@ -2833,14 +2895,9 @@ int main(int argc, char *argv[])
 				break;
 			}
 		}
-
 	}
-	/* Do nothing */
-	for (;;) {	/* apparently needed for Mac OS X */
-		struct pollfd p = { -1 /* no descriptor */, 0, 0 };
 
-		poll(&p, 0, -1);
-	}
+	monitor_sig_flags(NULL);
 
 	return 0;
 }

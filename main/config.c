@@ -86,6 +86,8 @@ static void CB_INIT(void)
 		comment_buffer[0] = 0;
 		comment_buffer_size = CB_INCR;
 		lline_buffer = ast_malloc(CB_INCR);
+		if (!lline_buffer)
+			return;
 		lline_buffer[0] = 0;
 		lline_buffer_size = CB_INCR;
 	} else {
@@ -127,7 +129,7 @@ static void  LLB_ADD(char *str)
 	int siz = strlen(str);
 	if (rem < siz+1) {
 		lline_buffer = ast_realloc(lline_buffer, lline_buffer_size + CB_INCR + siz + 1);
-		if (!lline_buffer)
+		if (!lline_buffer) 
 			return;
 		lline_buffer_size += CB_INCR + siz + 1;
 	}
@@ -167,6 +169,7 @@ static struct ast_config_engine *config_engine_list;
 struct ast_category {
 	char name[80];
 	int ignored;			/*!< do not let user of the config see this category */
+	int include_level;	
 	struct ast_comment *precomments;
 	struct ast_comment *sameline;
 	struct ast_variable *root;
@@ -207,6 +210,8 @@ void ast_variable_append(struct ast_category *category, struct ast_variable *var
 	else
 		category->root = variable;
 	category->last = variable;
+	while (category->last->next)
+		category->last = category->last->next;
 }
 
 void ast_variables_destroy(struct ast_variable *v)
@@ -337,6 +342,7 @@ void ast_category_append(struct ast_config *config, struct ast_category *categor
 		config->last->next = category;
 	else
 		config->root = category;
+	category->include_level = config->include_level;
 	config->last = category;
 	config->current = category;
 }
@@ -392,6 +398,7 @@ struct ast_variable *ast_category_detach_variables(struct ast_category *cat)
 
 	v = cat->root;
 	cat->root = NULL;
+	cat->last = NULL;
 
 	return v;
 }
@@ -793,8 +800,11 @@ static struct ast_config *config_text_file_load(const char *database, const char
 
 	if (withcomments) {
 		CB_INIT();
+		if (!lline_buffer || !comment_buffer) {
+			ast_log(LOG_ERROR, "Failed to initialize the comment buffer!\n");
+			return NULL;
+		}
 	}
-	
 #ifdef AST_INCLUDE_GLOB
 	{
 		int glob_ret;
@@ -844,7 +854,7 @@ static struct ast_config *config_text_file_load(const char *database, const char
 		while(!feof(f)) {
 			lineno++;
 			if (fgets(buf, sizeof(buf), f)) {
-				if ( withcomments ) {    
+				if ( withcomments ) {
 					CB_ADD(lline_buffer);       /* add the current lline buffer to the comment buffer */
 					lline_buffer[0] = 0;        /* erase the lline buffer */
 				}
@@ -905,7 +915,7 @@ static struct ast_config *config_text_file_load(const char *database, const char
 							new_buf = comment_p + 1;
 					}
 				}
-				if( comment && !process_buf )
+				if( withcomments && comment && !process_buf )
 				{
 					CB_ADD(buf);  /* the whole line is a comment, store it */
 				}
@@ -913,7 +923,7 @@ static struct ast_config *config_text_file_load(const char *database, const char
 				if (process_buf) {
 					char *buf = ast_strip(process_buf);
 					if (!ast_strlen_zero(buf)) {
-						if (process_text_line(cfg, &cat, buf, lineno, filename, withcomments)) {
+						if (process_text_line(cfg, &cat, buf, lineno, fn, withcomments)) {
 							cfg = NULL;
 							break;
 						}
@@ -934,16 +944,16 @@ static struct ast_config *config_text_file_load(const char *database, const char
 			}
 		}
 #endif
-	if (withcomments) {
-		if (comment_buffer) { 
-			free(comment_buffer);
-			free(lline_buffer);
-			comment_buffer=0; 
-			lline_buffer=0; 
-			comment_buffer_size=0; 
-			lline_buffer_size=0;
-		}
+
+	if (cfg && cfg->include_level == 1 && withcomments && comment_buffer) {
+		free(comment_buffer);
+		free(lline_buffer);
+		comment_buffer = NULL;
+		lline_buffer = NULL;
+		comment_buffer_size = 0;
+		lline_buffer_size = 0;
 	}
+	
 	if (count == 0)
 		return NULL;
 
@@ -974,10 +984,13 @@ int config_text_file_save(const char *configfile, const struct ast_config *cfg, 
 	if ((f = fopen(fn, "w"))) {
 #endif	    
 		if (option_verbose > 1)
-			ast_verbose(  VERBOSE_PREFIX_2 "Saving '%s': ", fn);
+			ast_verbose(VERBOSE_PREFIX_2 "Saving '%s': ", fn);
 		fprintf(f, ";!\n");
 		fprintf(f, ";! Automatically generated configuration file\n");
-		fprintf(f, ";! Filename: %s (%s)\n", configfile, fn);
+		if (strcmp(configfile, fn))
+			fprintf(f, ";! Filename: %s (%s)\n", configfile, fn);
+		else
+			fprintf(f, ";! Filename: %s\n", configfile);
 		fprintf(f, ";! Generator: %s\n", generator);
 		fprintf(f, ";! Creation Date: %s", date);
 		fprintf(f, ";!\n");
@@ -1027,9 +1040,9 @@ int config_text_file_save(const char *configfile, const struct ast_config *cfg, 
 			ast_verbose("Saved\n");
 	} else {
 		if (option_debug)
-			printf("Unable to open for writing: %s\n", fn);
+			ast_log(LOG_DEBUG, "Unable to open for writing: %s\n", fn);
 		if (option_verbose > 1)
-			printf( "Unable to write (%s)", strerror(errno));
+			ast_verbose(VERBOSE_PREFIX_2 "Unable to write (%s)", strerror(errno));
 		return -1;
 	}
 	fclose(f);
@@ -1090,7 +1103,7 @@ int read_config_maps(void)
 {
 	struct ast_config *config, *configtmp;
 	struct ast_variable *v;
-	char *driver, *table, *database, *stringp;
+	char *driver, *table, *database, *stringp, *tmp;
 
 	clear_config_maps();
 
@@ -1105,6 +1118,9 @@ int read_config_maps(void)
 	for (v = ast_variable_browse(config, "settings"); v; v = v->next) {
 		stringp = v->value;
 		driver = strsep(&stringp, ",");
+
+		if ((tmp = strchr(stringp, '\"')))
+			stringp = tmp;
 
 		/* check if the database text starts with a double quote */
 		if (*stringp == '"') {

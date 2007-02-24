@@ -204,7 +204,7 @@ struct ast_channel_tech {
 	int (* const send_digit_begin)(struct ast_channel *chan, char digit);
 
 	/*! \brief Stop sending a literal DTMF digit */
-	int (* const send_digit_end)(struct ast_channel *chan, char digit);
+	int (* const send_digit_end)(struct ast_channel *chan, char digit, unsigned int duration);
 
 	/*! \brief Call a given phone number (address, etc), but don't
 	   take longer than timeout seconds to do so.  */
@@ -270,7 +270,7 @@ struct ast_channel_spy_list;
 struct ast_channel_whisper_buffer;
 
 #define	DEBUGCHAN_FLAG  0x80000000
-#define	FRAMECOUNT_INC(x)	( ((x) & DEBUGCHAN_FLAG) | ((x++) & ~DEBUGCHAN_FLAG) )
+#define	FRAMECOUNT_INC(x)	( ((x) & DEBUGCHAN_FLAG) | (((x)+1) & ~DEBUGCHAN_FLAG) )
 
 enum ast_channel_adsicpe {
 	AST_ADSI_UNKNOWN,
@@ -382,6 +382,7 @@ struct ast_channel {
 	char macrocontext[AST_MAX_CONTEXT];		/*!< Macro: Current non-macro context. See app_macro.c */
 	char macroexten[AST_MAX_EXTENSION];		/*!< Macro: Current non-macro extension. See app_macro.c */
 	int macropriority;				/*!< Macro: Current non-macro priority. See app_macro.c */
+	char dialcontext[AST_MAX_CONTEXT];              /*!< Dial: Extension context that we were called from */
 
 	struct ast_pbx *pbx;				/*!< PBX private structure for this channel */
 	int amaflags;					/*!< Set BEFORE PBX is started to determine AMA flags */
@@ -426,7 +427,8 @@ struct ast_channel {
 	struct ast_jb jb;				/*!< The jitterbuffer state  */
 
 	char emulate_dtmf_digit;			/*!< Digit being emulated */
-	unsigned int emulate_dtmf_samples;		/*!< Number of samples left to emulate DTMF for */
+	unsigned int emulate_dtmf_duration;	/*!< Number of ms left to emulate DTMF for */
+	struct timeval dtmf_begin_tv;       /*!< The time that an in process digit began */
 
 	/*! \brief Data stores on the channel */
 	AST_LIST_HEAD_NOLOCK(datastores, ast_datastore) datastores;
@@ -445,34 +447,37 @@ enum {
 /*! \brief ast_channel flags */
 enum {
 	/*! Queue incoming dtmf, to be released when this flag is turned off */
-	AST_FLAG_DEFER_DTMF =   (1 << 1),
+	AST_FLAG_DEFER_DTMF =    (1 << 1),
 	/*! write should be interrupt generator */
-	AST_FLAG_WRITE_INT =    (1 << 2),
+	AST_FLAG_WRITE_INT =     (1 << 2),
 	/*! a thread is blocking on this channel */
-	AST_FLAG_BLOCKING =     (1 << 3),
+	AST_FLAG_BLOCKING =      (1 << 3),
 	/*! This is a zombie channel */
-	AST_FLAG_ZOMBIE =       (1 << 4),
+	AST_FLAG_ZOMBIE =        (1 << 4),
 	/*! There is an exception pending */
-	AST_FLAG_EXCEPTION =    (1 << 5),
+	AST_FLAG_EXCEPTION =     (1 << 5),
 	/*! Listening to moh XXX anthm promises me this will disappear XXX */
-	AST_FLAG_MOH =          (1 << 6),
+	AST_FLAG_MOH =           (1 << 6),
 	/*! This channel is spying on another channel */
-	AST_FLAG_SPYING =       (1 << 7),
+	AST_FLAG_SPYING =        (1 << 7),
 	/*! This channel is in a native bridge */
-	AST_FLAG_NBRIDGE =      (1 << 8),
+	AST_FLAG_NBRIDGE =       (1 << 8),
 	/*! the channel is in an auto-incrementing dialplan processor,
 	 *  so when ->priority is set, it will get incremented before
 	 *  finding the next priority to run */
-	AST_FLAG_IN_AUTOLOOP =  (1 << 9),
+	AST_FLAG_IN_AUTOLOOP =   (1 << 9),
 	/*! This is an outgoing call */
-	AST_FLAG_OUTGOING =     (1 << 10),
+	AST_FLAG_OUTGOING =      (1 << 10),
 	/*! This channel is being whispered on */
-	AST_FLAG_WHISPER =      (1 << 11),
+	AST_FLAG_WHISPER =       (1 << 11),
 	/*! A DTMF_BEGIN frame has been read from this channel, but not yet an END */
-	AST_FLAG_IN_DTMF =      (1 << 12),
+	AST_FLAG_IN_DTMF =       (1 << 12),
 	/*! A DTMF_END was received when not IN_DTMF, so the length of the digit is 
 	 *  currently being emulated */
-	AST_FLAG_EMULATE_DTMF = (1 << 13),
+	AST_FLAG_EMULATE_DTMF =  (1 << 13),
+	/*! This is set to tell the channel not to generate DTMF begin frames, and
+	 *  to instead only generate END frames. */
+	AST_FLAG_END_DTMF_ONLY = (1 << 14),
 };
 
 /*! \brief ast_bridge_config flags */
@@ -576,7 +581,7 @@ int ast_setstate(struct ast_channel *chan, enum ast_channel_state);
 	by default set to the "default" context and
 	extension "s"
  */
-struct ast_channel *ast_channel_alloc(int needalertpipe);
+struct ast_channel *ast_channel_alloc(int needalertpipe, int state, const char *cid_num, const char *cid_name, const char *name_fmt, ...);
 
 /*! \brief Queue an outgoing frame */
 int ast_queue_frame(struct ast_channel *chan, struct ast_frame *f);
@@ -886,7 +891,7 @@ int ast_recvchar(struct ast_channel *chan, int timeout);
 int ast_senddigit(struct ast_channel *chan, char digit);
 
 int ast_senddigit_begin(struct ast_channel *chan, char digit);
-int ast_senddigit_end(struct ast_channel *chan, char digit);
+int ast_senddigit_end(struct ast_channel *chan, char digit, unsigned int duration);
 
 /*! \brief Receives a text string from a channel
  * Read a string of text from a channel
@@ -1095,6 +1100,12 @@ int ast_activate_generator(struct ast_channel *chan, struct ast_generator *gen, 
 void ast_deactivate_generator(struct ast_channel *chan);
 
 void ast_set_callerid(struct ast_channel *chan, const char *cidnum, const char *cidname, const char *ani);
+
+
+/*! return a mallocd string with the result of sprintf of the fmt and following args */
+char *ast_safe_string_alloc(const char *fmt, ...);
+
+
 
 /*! Start a tone going */
 int ast_tonepair_start(struct ast_channel *chan, int freq1, int freq2, int duration, int vol);

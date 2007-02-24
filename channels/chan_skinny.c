@@ -322,6 +322,14 @@ struct call_info_message {
 	uint32_t type;
 	char originalCalledPartyName[40];
 	char originalCalledParty[24];
+	char lastRedirectingPartyName[40];
+	char lastRedirectingParty[24];
+	uint32_t originalCalledPartyRedirectReason;
+	uint32_t lastRedirectingReason;
+	char callingPartyVoiceMailbox[24];
+	char calledPartyVoiceMailbox[24];
+	char originalCalledPartyVoiceMailbox[24];
+	char lastRedirectingVoiceMailbox[24];
 };
 
 #define SPEED_DIAL_STAT_RES_MESSAGE 0x0091
@@ -420,7 +428,10 @@ struct displaytext_message {
 	char text[40];
 };
 
+#define CLEAR_NOTIFY_MESSAGE  0x0115
+#define CLEAR_PROMPT_MESSAGE  0x0113
 #define CLEAR_DISPLAY_MESSAGE 0x009A
+
 #define CAPABILITIES_REQ_MESSAGE 0x009B
 
 #define REGISTER_REJ_MESSAGE 0x009D
@@ -746,7 +757,6 @@ static struct in_addr __ourip;
 struct ast_hostent ahp;
 struct hostent *hp;
 static int skinnysock = -1;
-static pthread_t tcp_thread;
 static pthread_t accept_t;
 static char context[AST_MAX_CONTEXT] = "default";
 static char language[MAX_LANGUAGE] = "";
@@ -865,10 +875,6 @@ static char *skinny_cxmodes[] = {
 /* driver scheduler */
 static struct sched_context *sched;
 static struct io_context *io;
-
-/* usage count and locking */
-static int usecnt = 0;
-AST_MUTEX_DEFINE_STATIC(usecnt_lock);
 
 /* Protect the monitoring thread, so only one process can kill or start it, and not
    when it's doing something critical. */
@@ -1030,7 +1036,7 @@ static int skinny_write(struct ast_channel *ast, struct ast_frame *frame);
 static int skinny_indicate(struct ast_channel *ast, int ind, const void *data, size_t datalen);
 static int skinny_fixup(struct ast_channel *oldchan, struct ast_channel *newchan);
 static int skinny_senddigit_begin(struct ast_channel *ast, char digit);
-static int skinny_senddigit_end(struct ast_channel *ast, char digit);
+static int skinny_senddigit_end(struct ast_channel *ast, char digit, unsigned int duration);
 
 static const struct ast_channel_tech skinny_tech = {
 	.type = "Skinny",
@@ -1389,14 +1395,17 @@ static int transmit_response(struct skinnysession *s, struct skinny_req *req)
 	int res = 0;
 	ast_mutex_lock(&s->lock);
 
-#if 0
 	if (skinnydebug)
-		ast_verbose("writing packet type %04X (%d bytes) to socket %d\n", letohl(req->e), letohl(req->len)+8, s->fd);
-#endif
+		ast_log(LOG_VERBOSE, "writing packet type %04X (%d bytes) to socket %d\n", letohl(req->e), letohl(req->len)+8, s->fd);
+
+	if (letohl(req->len > SKINNY_MAX_PACKET) || letohl(req->len < 0)) {
+		ast_log(LOG_WARNING, "transmit_response: the length of the request is out of bounds\n");
+		return -1;
+	}
 
 	memset(s->outbuf,0,sizeof(s->outbuf));
 	memcpy(s->outbuf, req, skinny_header_size);
-	memcpy(s->outbuf+skinny_header_size, &req->data, sizeof(union skinny_data));
+	memcpy(s->outbuf+skinny_header_size, &req->data, letohl(req->len));
 
 	res = write(s->fd, s->outbuf, letohl(req->len)+8);
 
@@ -1485,6 +1494,9 @@ static void transmit_callinfo(struct skinnysession *s, const char *fromname, con
 
 	if (!(req = req_alloc(sizeof(struct call_info_message), CALL_INFO_MESSAGE)))
 		return;
+
+	if (skinnydebug)
+			ast_verbose("Setting Callinfo to %s(%s) from %s(%s) on %s(%d)\n", fromname, fromnum, toname, tonum, s->device->name, instance);
 
 	if (fromname) {
 		ast_copy_string(req->data.callinfo.callingPartyName, fromname, sizeof(req->data.callinfo.callingPartyName));
@@ -1750,7 +1762,7 @@ static struct ast_rtp_protocol skinny_rtp = {
 
 static int skinny_do_debug(int fd, int argc, char *argv[])
 {
-	if (argc != 2) {
+	if (argc != 3) {
 		return RESULT_SHOWUSAGE;
 	}
 	skinnydebug = 1;
@@ -1760,7 +1772,7 @@ static int skinny_do_debug(int fd, int argc, char *argv[])
 
 static int skinny_no_debug(int fd, int argc, char *argv[])
 {
-	if (argc != 3) {
+	if (argc != 4) {
 		return RESULT_SHOWUSAGE;
 	}
 	skinnydebug = 0;
@@ -1957,11 +1969,11 @@ static char show_lines_usage[] =
 "       Lists all lines known to the Skinny subsystem.\n";
 
 static char debug_usage[] =
-"Usage: skinny debug\n"
+"Usage: skinny set debug\n"
 "       Enables dumping of Skinny packets for debugging purposes\n";
 
 static char no_debug_usage[] =
-"Usage: skinny no debug\n"
+"Usage: skinny set debug off\n"
 "       Disables dumping of Skinny packets for debugging purposes\n";
 
 static char reset_usage[] =
@@ -1977,11 +1989,11 @@ static struct ast_cli_entry cli_skinny[] = {
 	skinny_show_lines, "List defined Skinny lines per device",
 	show_lines_usage },
 
-	{ { "skinny", "debug", NULL },
+	{ { "skinny", "set", "debug", NULL },
 	skinny_do_debug, "Enable Skinny debugging",
 	debug_usage },
 
-	{ { "skinny", "debug", "off", NULL },
+	{ { "skinny", "set", "debug", "off", NULL },
 	skinny_no_debug, "Disable Skinny debugging",
 	no_debug_usage },
 
@@ -2095,6 +2107,8 @@ static struct skinny_device *build_device(const char *cat, struct ast_variable *
 					else
 						ast_copy_string(sd->label, exten, sizeof(sd->label));
 					sd->instance = speeddialInstance++;
+
+					sd->parent = d;
 
 					sd->next = d->speeddials;
 					d->speeddials = sd;
@@ -2370,14 +2384,12 @@ static int skinny_call(struct ast_channel *ast, char *dest, int timeout)
 		break;
 	}
 
+	transmit_callstate(s, l->instance, SKINNY_RINGIN, sub->callid);
+	transmit_selectsoftkeys(s, l->instance, sub->callid, KEYDEF_RINGIN);
+	transmit_displaypromptstatus(s, "Ring-In", 0, l->instance, sub->callid);
+	transmit_callinfo(s, ast->cid.cid_name, ast->cid.cid_num, l->cid_name, l->cid_num, l->instance, sub->callid, 1);
 	transmit_lamp_indication(s, STIMULUS_LINE, l->instance, SKINNY_LAMP_BLINK);
 	transmit_ringer_mode(s, SKINNY_RING_INSIDE);
-
-	transmit_tone(s, tone);
-	transmit_callinfo(s, ast->cid.cid_name, ast->cid.cid_num, l->cid_name, l->cid_num, l->instance, sub->callid, 1);
-	transmit_callstate(s, l->instance, SKINNY_RINGIN, sub->callid);
-	transmit_displaypromptstatus(s, "Ring-In", 0, l->instance, sub->callid);
-	transmit_selectsoftkeys(s, l->instance, sub->callid, KEYDEF_RINGIN);
 
 	ast_setstate(ast, AST_STATE_RINGING);
 	ast_queue_control(ast, AST_CONTROL_RINGING);
@@ -2454,6 +2466,7 @@ static int skinny_answer(struct ast_channel *ast)
 	   or you won't get keypad messages in some situations. */
 	transmit_callinfo(s, ast->cid.cid_name, ast->cid.cid_num, ast->exten, ast->exten, l->instance, sub->callid, 2);
 	transmit_callstate(s, l->instance, SKINNY_CONNECTED, sub->callid);
+	transmit_selectsoftkeys(s, l->instance, sub->callid, KEYDEF_CONNECTED);
 	transmit_displaypromptstatus(s, "Connected", 0, l->instance, sub->callid);
 	return res;
 }
@@ -2561,7 +2574,7 @@ static int skinny_senddigit_begin(struct ast_channel *ast, char digit)
 	return -1; /* Start inband indications */
 }
 
-static int skinny_senddigit_end(struct ast_channel *ast, char digit)
+static int skinny_senddigit_end(struct ast_channel *ast, char digit, unsigned int duration)
 {
 #if 0
 	struct skinny_subchannel *sub = ast->tech_pvt;
@@ -2700,7 +2713,7 @@ static struct ast_channel *skinny_new(struct skinny_line *l, int state)
 	struct skinny_device *d = l->parent;
 	int fmt;
 
-	tmp = ast_channel_alloc(1);
+	tmp = ast_channel_alloc(1, state, l->cid_num, l->cid_name, "Skinny/%s@%s-%d", l->name, d->name, callnums);
 	if (!tmp) {
 		ast_log(LOG_WARNING, "Unable to allocate channel structure\n");
 		return NULL;
@@ -2732,11 +2745,9 @@ static struct ast_channel *skinny_new(struct skinny_line *l, int state)
 		fmt = ast_best_codec(tmp->nativeformats);
 		if (skinnydebug)
 			ast_verbose("skinny_new: tmp->nativeformats=%d fmt=%d\n", tmp->nativeformats, fmt);
-		ast_string_field_build(tmp, name, "Skinny/%s@%s-%d", l->name, d->name, sub->callid);
 		if (sub->rtp) {
 			tmp->fds[0] = ast_rtp_fd(sub->rtp);
 		}
-		ast_setstate(tmp, state);
 		if (state == AST_STATE_RING) {
 			tmp->rings = 1;
 		}
@@ -2751,10 +2762,7 @@ static struct ast_channel *skinny_new(struct skinny_line *l, int state)
 		if (l->amaflags)
 			tmp->amaflags = l->amaflags;
 
-		ast_mutex_lock(&usecnt_lock);
-		usecnt++;
-		ast_mutex_unlock(&usecnt_lock);
-		ast_update_use_count();
+		ast_module_ref(ast_module_info->self);
 		tmp->callgroup = l->callgroup;
 		tmp->pickupgroup = l->pickupgroup;
 		ast_string_field_set(tmp, call_forward, l->call_forward);
@@ -2762,7 +2770,7 @@ static struct ast_channel *skinny_new(struct skinny_line *l, int state)
 		ast_copy_string(tmp->exten, l->exten, sizeof(tmp->exten));
 
 		/* Don't use ast_set_callerid() here because it will
-		 * generate a NewCallerID event before the NewChannel event */
+		 * generate a needless NewCallerID event */
 		tmp->cid.cid_num = ast_strdup(l->cid_num);
 		tmp->cid.cid_ani = ast_strdup(l->cid_num);
 		tmp->cid.cid_name = ast_strdup(l->cid_name);
@@ -3077,6 +3085,9 @@ static int handle_stimulus_message(struct skinny_req *req, struct skinnysession 
 	case STIMULUS_HOLD:
 		if (skinnydebug)
 			ast_verbose("Received Stimulus: Hold(%d)\n", instance);
+
+		if (!sub)
+			break;
 
 		if (sub->onhold) {
 			skinny_unhold(sub);
@@ -3747,7 +3758,7 @@ static int handle_soft_key_event_message(struct skinny_req *req, struct skinnyse
 
 			if (ast_strlen_zero(l->lastnumberdialed)) {
 				ast_log(LOG_WARNING, "Attempted redial, but no previously dialed number found.\n");
-				return 0;
+				break;
 			}
 			if (!ast_ignore_pattern(c->context, l->lastnumberdialed)) {
 				transmit_tone(s, SKINNY_SILENCE);
@@ -3866,7 +3877,7 @@ static int handle_soft_key_event_message(struct skinny_req *req, struct skinnyse
 					}
 				} else if (res) {
 					ast_log(LOG_WARNING, "Transfer attempt failed\n");
-					return 0;
+					break;
 				}
 #endif
 			} else {
@@ -4254,7 +4265,10 @@ static void *skinny_session(void *data)
 		}
 	}
 	ast_log(LOG_NOTICE, "Skinny Session returned: %s\n", strerror(errno));
-	destroy_session(s);
+
+	if (s) 
+		destroy_session(s);
+	
 	return 0;
 }
 
@@ -4267,6 +4281,7 @@ static void *accept_thread(void *ignore)
 	struct protoent *p;
 	int arg = 1;
 	pthread_attr_t attr;
+	pthread_t tcp_thread;
 
 	pthread_attr_init(&attr);
 	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
@@ -4295,13 +4310,14 @@ static void *accept_thread(void *ignore)
 		sessions = s;
 		ast_mutex_unlock(&sessionlock);
 
-		if (ast_pthread_create(&tcp_thread, NULL, skinny_session, s)) {
+		if (ast_pthread_create(&tcp_thread, &attr, skinny_session, s)) {
 			destroy_session(s);
 		}
 	}
 	if (skinnydebug)
 		ast_verbose("killing accept thread\n");
 	close(as);
+	pthread_attr_destroy(&attr);
 	return 0;
 }
 
@@ -4361,17 +4377,19 @@ static int restart_monitor(void)
 static struct ast_channel *skinny_request(const char *type, int format, void *data, int *cause)
 {
 	int oldformat;
+	
 	struct skinny_line *l;
 	struct ast_channel *tmpc = NULL;
 	char tmp[256];
 	char *dest = data;
 
 	oldformat = format;
-	format &= default_capability;
-	if (!format) {
+	
+	if (!(format &= ((AST_FORMAT_MAX_AUDIO << 1) - 1))) {
 		ast_log(LOG_NOTICE, "Asked to get a channel of unsupported format '%d'\n", format);
-		return NULL;
-	}
+		return NULL;	
+	}		
+
 	ast_copy_string(tmp, dest, sizeof(tmp));
 	if (ast_strlen_zero(tmp)) {
 		ast_log(LOG_NOTICE, "Skinny channels require a device\n");
@@ -4674,13 +4692,6 @@ static int unload_module(void)
 	}
 	monitor_thread = AST_PTHREADT_STOP;
 	ast_mutex_unlock(&monlock);
-
-	if (tcp_thread && (tcp_thread != AST_PTHREADT_STOP)) {
-		pthread_cancel(tcp_thread);
-		pthread_kill(tcp_thread, SIGURG);
-		pthread_join(tcp_thread, NULL);
-	}
-	tcp_thread = AST_PTHREADT_STOP;
 
 	ast_mutex_lock(&netlock);
 	if (accept_t && (accept_t != AST_PTHREADT_STOP)) {

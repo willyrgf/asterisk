@@ -18,6 +18,13 @@
 #ifndef _ASTERISK_H
 #define _ASTERISK_H
 
+/* The include of 'autoconfig.h' is not necessary for any modules that
+   are part of the Asterisk source tree, because the top-level Makefile
+   will forcibly include that header in all compilations before all
+   other headers (even system headers). However, leaving this here will
+   help out-of-tree module builders, and doesn't cause any harm for the
+   in-tree modules.
+*/
 #include "asterisk/autoconfig.h"
 
 #include "asterisk/compat.h"
@@ -64,6 +71,7 @@ void ast_builtins_init(void);			/*!< Provided by cli.c */
 int dnsmgr_init(void);				/*!< Provided by dnsmgr.c */ 
 void dnsmgr_start_refresh(void);		/*!< Provided by dnsmgr.c */
 int dnsmgr_reload(void);			/*!< Provided by dnsmgr.c */
+void threadstorage_init(void);			/*!< Provided by threadstorage.c */
 
 /* Many headers need 'ast_channel' to be defined */
 struct ast_channel;

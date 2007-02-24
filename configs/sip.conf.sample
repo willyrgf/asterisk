@@ -35,6 +35,7 @@ allowoverlap=no			; Disable overlap dialing support. (Default is yes)
 				; Realms MUST be globally unique according to RFC 3261
 				; Set this to your host name or domain name
 bindport=5060			; UDP Port to bind to (SIP standard port is 5060)
+				; bindport is the local UDP port that Asterisk will listen on
 bindaddr=0.0.0.0		; IP address to bind to (0.0.0.0 binds to all)
 srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 				; Note: Asterisk only uses the first host 
@@ -65,6 +66,9 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 				; Defaults to 100 ms
 ;notifymimetype=text/plain	; Allow overriding of mime type in MWI NOTIFY
 ;checkmwi=10			; Default time between mailbox checks for peers
+;buggymwi=no			; Cisco SIP firmware doesn't support the MWI RFC
+				; fully. Enable this option to not get error messages
+				; when sending MWI to phones with this bug.
 ;vmexten=voicemail		; dialplan extension to reach mailbox sets the 
 				; Message-Account in the MWI notify message 
 				; defaults to "asterisk"
@@ -90,10 +94,6 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ;language=en			; Default language setting for all users/peers
 				; This may also be set for individual users/peers
 ;relaxdtmf=yes			; Relax dtmf handling
-;rtptimeout=60			; Terminate call if 60 seconds of no RTP activity
-				; when we're not on hold
-;rtpholdtimeout=300		; Terminate call if 300 seconds of no RTP activity
-				; when we're on hold (must be > rtptimeout)
 ;trustrpid = no			; If Remote-Party-ID should be trusted
 ;sendrpid = yes			; If Remote-Party-ID should be sent
 ;progressinband=never		; If we should generate in-band ringing always
@@ -115,7 +115,11 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 
 ;compactheaders = yes		; send compact sip headers.
 ;
-;videosupport=yes		; Turn on support for SIP video
+;videosupport=yes		; Turn on support for SIP video. You need to turn this on
+				; in the this section to get any video support at all.
+				; You can turn it off on a per peer basis if the general
+				; video support is enabled, but you can't enable it for
+				; one peer only without enabling in the general section.
 ;maxcallbitrate=384		; Maximum bitrate for video calls (default 384 kb/s)
 				; Videosupport and maxcallbitrate is settable
 				; for peers and users as well
@@ -145,6 +149,21 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ;
 ;regcontext=sipregistrations
 ;
+;--------------------------- RTP timers ----------------------------------------------------
+; These timers are currently used for both audio and video streams. The RTP timeouts
+; are only applied to the audio channel.
+; The settings are settable in the global section as well as per device
+;
+;rtptimeout=60			; Terminate call if 60 seconds of no RTP or RTCP activity
+				; on the audio channel
+				; when we're not on hold. This is to be able to hangup
+				; a call in the case of a phone disappearing from the net,
+				; like a powerloss or grandma tripping over a cable.
+;rtpholdtimeout=300		; Terminate call if 300 seconds of no RTP or RTCP activity
+				; on the audio channel
+				; when we're on hold (must be > rtptimeout)
+;rtpkeepalive=<secs>		; Send keepalives in the RTP stream to keep NAT open
+				; (default is off - zero)
 ;--------------------------- SIP DEBUGGING ---------------------------------------------------
 ;sipdebug = yes			; Turn on SIP debugging by default, from
 				; the moment the channel loads this configuration
@@ -158,6 +177,15 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ; You can subscribe to the status of extensions with a "hint" priority
 ; (See extensions.conf.sample for examples)
 ; chan_sip support two major formats for notifications: dialog-info and SIMPLE 
+;
+; You will get more detailed reports (busy etc) if you have a call limit set
+; for a device. When the call limit is filled, we will indicate busy. Note that
+; you need at least 2 in order to be able to do attended transfers.
+;
+; For queues, you will need this level of detail in status reporting, regardless
+; if you use SIP subscriptions. Queues and manager use the same internal interface
+; for reading status information.
+;
 ; Note: Subscriptions does not work if you have a realtime dialplan and use the
 ; realtime switch.
 ;
@@ -165,14 +193,26 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ;subscribecontext = default	; Set a specific context for SUBSCRIBE requests
 				; Useful to limit subscriptions to local extensions
 				; Settable per peer/user also
-;notifyringing = yes		; Notify subscriptions on RINGING state
+;notifyringing = yes		; Notify subscriptions on RINGING state (default: no)
+;notifyhold = yes		; Notify subscriptions on HOLD state (default: no)
+				; Turning on notifyringing and notifyhold will add a lot
+				; more database transactions if you are using realtime.
+;limitonpeers = yes		; Apply call limits on peers only. This will improve 
+				; status notification when you are using type=friend
+				; Inbound calls, that really apply to the user part
+				; of a friend will now be added to and compared with
+				; the peer limit instead of applying two call limits,
+				; one for the peer and one for the user.
 
 ;----------------------------------------- T.38 FAX PASSTHROUGH SUPPORT -----------------------
 ;
 ; This setting is available in the [general] section as well as in device configurations.
 ; Setting this to yes, enables T.38 fax (UDPTL) passthrough on SIP to SIP calls, provided
-; both parties have T38 support enabled in their Asterisk configuration (either general or
-; peer/user/friend sections)
+; both parties have T38 support enabled in their Asterisk configuration 
+; This has to be enabled in the general section for all devices to work. You can then
+; disable it on a per device basis. 
+;
+; T.38 faxing only works in SIP to SIP calls, with no local or agent channel being used.
 ;
 ; t38pt_udptl = yes            ; Default false
 ;
@@ -248,6 +288,12 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 				; route = Assume NAT, don't send rport 
 				; (work around more UNIDEN bugs)
 
+;----------------------------------- MEDIA HANDLING --------------------------------
+; By default, Asterisk tries to re-invite the audio to an optimal path. If there's
+; no reason for Asterisk to stay in the media path, the media will be redirected.
+; This does not really work with in the case where Asterisk is outside and have
+; clients on the inside of a NAT. In that case, you want to set canreinvite=nonat
+;
 ;canreinvite=yes		; Asterisk by default tries to redirect the
 				; RTP media stream (audio) to go directly from
 				; the caller to the callee.  Some devices do not
@@ -260,6 +306,12 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 				; at call setup (a new feature in 1.4 - setting up the
 				; call directly between the endpoints instead of sending
 				; a re-INVITE).
+
+;directrtpsetup=yes		; Enable the new experimental direct RTP setup. This sets up
+				; the call directly with media peer-2-peer without re-invites.
+				; Will not work for video and cases where the callee sends 
+				; RTP payloads and fmtp headers in the 200 OK that does not match the
+				; callers INVITE.
 
 ;canreinvite=nonat		; An additional option is to allow media path redirection
 				; (reinvite) but only when the peer where the media is being
@@ -457,8 +509,10 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ;usereqphone=yes			; This provider requires ";user=phone" on URI
 ;call-limit=5				; permit only 5 simultaneous outgoing calls to this peer
 ;outboundproxy=proxy.provider.domain	; send outbound signaling to this proxy, not directly to the peer
-				; Call-limits will not be enforced on real-time peers,
-				; since they are not stored in-memory
+					; Call-limits will not be enforced on real-time peers,
+					; since they are not stored in-memory
+;port=80				; The port number we want to connect to on the remote side
+					; Also used as "defaultport" in combination with "defaultip" settings
 
 ;------------------------------------------------------------------------------
 ; Definitions of locally connected SIP devices

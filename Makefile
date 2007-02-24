@@ -37,6 +37,11 @@ export ASTSPOOLDIR
 export ASTVARLIBDIR
 export ASTDATADIR
 export ASTLOGDIR
+export ASTLIBDIR
+export ASTMANDIR
+export ASTHEADERDIR
+export ASTBINDIR
+export ASTSBINDIR
 export AGI_DIR
 export ASTCONFPATH
 export NOISY_BUILD
@@ -52,6 +57,12 @@ export DESTDIR
 export PROC
 export SOLINK
 export STRIP
+export DOWNLOAD
+export OSARCH
+export CURSES_DIR
+export NCURSES_DIR
+export TERMCAP_DIR
+export TINFO_DIR
 
 # even though we could use '-include makeopts' here, use a wildcard
 # lookup anyway, so that make won't try to build makeopts if it doesn't
@@ -175,6 +186,8 @@ endif
 
 ASTCFLAGS+=-pipe -Wall -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations $(DEBUG)
 
+ASTCFLAGS+=-include $(ASTTOPDIR)/include/asterisk/autoconfig.h
+
 ifeq ($(AST_DEVMODE),yes)
   ASTCFLAGS+=-Werror -Wunused
 endif
@@ -214,7 +227,7 @@ endif
 ASTERISKVERSION:=$(shell build_tools/make_version .)
 
 ifneq ($(wildcard .version),)
-  ASTERISKVERSIONNUM:=$(shell awk -F. '{printf "%02d%02d%02d", $$1, $$2, $$3}' .version)
+  ASTERISKVERSIONNUM:=$(shell awk -F. '{printf "%01d%02d%02d", $$1, $$2, $$3}' .version)
   RPMVERSION:=$(shell sed 's/[-\/:]/_/g' .version)
 else
   RPMVERSION=unknown
@@ -231,10 +244,6 @@ OTHER_SUBDIRS:=utils agi
 SUBDIRS:=$(OTHER_SUBDIRS) $(MOD_SUBDIRS)
 SUBDIRS_INSTALL:=$(SUBDIRS:%=%-install)
 SUBDIRS_CLEAN:=$(SUBDIRS:%=%-clean)
-SUBDIRS_CLEAN_DEPEND:=$(SUBDIRS:%=%-clean-depend)
-MOD_SUBDIRS_DEPEND:=$(MOD_SUBDIRS:%=%-depend)
-OTHER_SUBDIRS_DEPEND:=$(OTHER_SUBDIRS:%=%-depend)
-SUBDIRS_DEPEND:=$(OTHER_SUBDIRS_DEPEND) $(MOD_SUBDIRS_DEPEND)
 SUBDIRS_UNINSTALL:=$(SUBDIRS:%=%-uninstall)
 MOD_SUBDIRS_EMBED_LDSCRIPT:=$(MOD_SUBDIRS:%=%-embed-ldscript)
 MOD_SUBDIRS_EMBED_LDFLAGS:=$(MOD_SUBDIRS:%=%-embed-ldflags)
@@ -268,14 +277,14 @@ all: _all
 	@echo " + Asterisk has successfully been built, and +"  
 	@echo " + can be installed by running:              +"
 	@echo " +                                           +"
-	@echo " +               make install                +"  
+	@echo " +               $(MAKE) install                +"  
 	@echo " +-------------------------------------------+"  
 
 _all: cleantest $(SUBDIRS)
 
 makeopts: configure
 	@echo "****"
-	@echo "**** The configure script must be executed before running 'make'."
+	@echo "**** The configure script must be executed before running '$(MAKE)'."
 	@echo "****"
 	@exit 1
 
@@ -298,7 +307,7 @@ makeopts.embed_rules: menuselect.makeopts
 	@$(MAKE) --no-print-directory $(MOD_SUBDIRS_EMBED_LDFLAGS)
 	@$(MAKE) --no-print-directory $(MOD_SUBDIRS_EMBED_LIBS)
 
-$(SUBDIRS): depend makeopts.embed_rules
+$(SUBDIRS): include/asterisk/version.h include/asterisk/buildopts.h defaults.h makeopts.embed_rules
 
 # ensure that all module subdirectories are processed before 'main' during
 # a parallel build, since if there are modules selected to be embedded the
@@ -307,10 +316,10 @@ $(SUBDIRS): depend makeopts.embed_rules
 main: $(filter-out main,$(MOD_SUBDIRS))
 
 $(MOD_SUBDIRS):
-	@ASTCFLAGS="$(MOD_SUBDIR_CFLAGS) $(ASTCFLAGS)" ASTLDFLAGS="$(ASTLDFLAGS)" AST_LIBS="$(AST_LIBS)" $(MAKE) --no-print-directory -C $@ SUBDIR=$@ all
+	@ASTCFLAGS="$(MOD_SUBDIR_CFLAGS) $(ASTCFLAGS)" ASTLDFLAGS="$(ASTLDFLAGS)" AST_LIBS="$(AST_LIBS)" $(MAKE) --no-print-directory --no-builtin-rules -C $@ SUBDIR=$@ all
 
 $(OTHER_SUBDIRS):
-	@ASTCFLAGS="$(OTHER_SUBDIR_CFLAGS) $(ASTCFLAGS)" ASTLDFLAGS="$(ASTLDFLAGS)" AUDIO_LIBS="$(AUDIO_LIBS)" $(MAKE) --no-print-directory -C $@ SUBDIR=$@ all
+	@ASTCFLAGS="$(OTHER_SUBDIR_CFLAGS) $(ASTCFLAGS)" ASTLDFLAGS="$(ASTLDFLAGS)" AUDIO_LIBS="$(AUDIO_LIBS)" $(MAKE) --no-print-directory --no-builtin-rules -C $@ SUBDIR=$@ all
 
 defaults.h: makeopts
 	@build_tools/make_defaults_h > $@.tmp
@@ -333,19 +342,13 @@ include/asterisk/buildopts.h: menuselect.makeopts
 	fi
 	@rm -f $@.tmp
 
-$(SUBDIRS_CLEAN_DEPEND):
-	@$(MAKE) --no-print-directory -C $(@:-clean-depend=) clean-depend
-
 $(SUBDIRS_CLEAN):
 	@$(MAKE) --no-print-directory -C $(@:-clean=) clean
 
-clean-depend: $(SUBDIRS_CLEAN_DEPEND)
-
-clean: $(SUBDIRS_CLEAN) clean-depend
+clean: $(SUBDIRS_CLEAN)
 	rm -f defaults.h
 	rm -f include/asterisk/build.h
 	rm -f include/asterisk/version.h
-	rm -f .depend
 	@$(MAKE) -C menuselect clean
 	cp -f .cleancount .lastclean
 
@@ -389,7 +392,6 @@ update:
 			grep ^C update.out | cut -b4- ; \
 		fi ; \
 		rm -f update.out; \
-		$(MAKE) clean-depend; \
 	else \
 		echo "Not under version control";  \
 	fi
@@ -529,27 +531,21 @@ samples: adsi
 		echo "astrundir => $(ASTVARRUNDIR)" ; \
 		echo "astlogdir => $(ASTLOGDIR)" ; \
 		echo "" ; \
+		echo ";[options]" ; \
+		echo ";internal_timing = yes" ; \
+		echo ";systemname = my_system_name ; prefix uniqueid with a system name for global uniqueness issues" ; \
 		echo "; Changing the following lines may compromise your security." ; \
 		echo ";[files]" ; \
 		echo ";astctlpermissions = 0660" ; \
 		echo ";astctlowner = root" ; \
 		echo ";astctlgroup = apache" ; \
 		echo ";astctl = asterisk.ctl" ; \
-		echo ";[options]" ; \
-		echo ";internal_timing = yes" ; \
 		) > $(DESTDIR)$(ASTCONFPATH) ; \
 	else \
 		echo "Skipping asterisk.conf creation"; \
 	fi
 	mkdir -p $(DESTDIR)$(ASTSPOOLDIR)/voicemail/default/1234/INBOX
-	:> $(DESTDIR)$(ASTSPOOLDIR)/voicemail/default/1234/unavail.gsm
-	for x in vm-theperson digits/1 digits/2 digits/3 digits/4 vm-isunavail; do \
-		cat $(DESTDIR)$(ASTDATADIR)/sounds/$$x.gsm >> $(DESTDIR)$(ASTSPOOLDIR)/voicemail/default/1234/unavail.gsm ; \
-	done
-	:> $(DESTDIR)$(ASTSPOOLDIR)/voicemail/default/1234/busy.gsm
-	for x in vm-theperson digits/1 digits/2 digits/3 digits/4 vm-isonphone; do \
-		cat $(DESTDIR)$(ASTDATADIR)/sounds/$$x.gsm >> $(DESTDIR)$(ASTSPOOLDIR)/voicemail/default/1234/busy.gsm ; \
-	done
+	build_tools/make_sample_voicemail $(DESTDIR)/$(ASTDATADIR) $(DESTDIR)/$(ASTSPOOLDIR)
 
 webvmail:
 	@[ -d $(DESTDIR)$(HTTP_DOCSDIR)/ ] || ( printf "http docs directory not found.\nUpdate assignment of variable HTTP_DOCSDIR in Makefile!\n" && exit 1 )
@@ -621,14 +617,6 @@ config:
 		echo "We could not install init scripts for your operating system."; \
 	fi
 
-$(MOD_SUBDIRS_DEPEND):
-	@ASTCFLAGS="$(MOD_SUBDIR_CFLAGS) $(ASTCFLAGS)" $(MAKE) --no-print-directory -C $(@:-depend=) depend
-
-$(OTHER_SUBDIRS_DEPEND):
-	@ASTCFLAGS="$(OTHER_SUBDIR_CFLAGS) $(ASTCFLAGS)" $(MAKE) --no-print-directory -C $(@:-depend=) depend
-
-depend: include/asterisk/version.h include/asterisk/buildopts.h defaults.h $(SUBDIRS_DEPEND)
-
 sounds:
 	$(MAKE) -C sounds all
 
@@ -676,14 +664,16 @@ uninstall-all: _uninstall
 	rm -rf $(DESTDIR)$(ASTETCDIR)
 	rm -rf $(DESTDIR)$(ASTLOGDIR)
 
+menuconfig: menuselect
+
 menuselect: menuselect/menuselect menuselect-tree
 	-@menuselect/menuselect $(GLOBAL_MAKEOPTS) $(USER_MAKEOPTS) menuselect.makeopts && (echo "menuselect changes saved!"; rm -f channels/h323/Makefile.ast main/asterisk) || echo "menuselect changes NOT saved!"
 
 menuselect/menuselect: makeopts menuselect/menuselect.c menuselect/menuselect_curses.c menuselect/menuselect_stub.c menuselect/menuselect.h menuselect/linkedlists.h makeopts
-	@unset CC LD AR RANLIB && $(MAKE) -C menuselect CONFIGURE_SILENT="--silent"
+	@CC="$(HOST_CC)" LD="" AR="" RANLIB="" $(MAKE) -C menuselect CONFIGURE_SILENT="--silent"
 
 menuselect-tree: $(foreach dir,$(filter-out main,$(MOD_SUBDIRS)),$(wildcard $(dir)/*.c) $(wildcard $(dir)/*.cc)) build_tools/cflags.xml sounds/sounds.xml build_tools/embed_modules.xml
 	@echo "Generating input for menuselect ..."
 	@build_tools/prep_moduledeps > $@
 
-.PHONY: menuselect main sounds clean clean-depend dist-clean distclean all prereqs depend cleantest uninstall _uninstall uninstall-all dont-optimize $(SUBDIRS_INSTALL) $(SUBDIRS_CLEAN) $(SUBDIRS_CLEAN_DEPEND) $(SUBDIRS_DEPEND) $(SUBDIRS_UNINSTALL) $(SUBDIRS) $(MOD_SUBDIRS_EMBED_LDSCRIPT) $(MOD_SUBDIRS_EMBED_LDFLAGS) $(MOD_SUBDIRS_EMBED_LIBS)
+.PHONY: menuselect main sounds clean dist-clean distclean all prereqs cleantest uninstall _uninstall uninstall-all dont-optimize $(SUBDIRS_INSTALL) $(SUBDIRS_CLEAN) $(SUBDIRS_UNINSTALL) $(SUBDIRS) $(MOD_SUBDIRS_EMBED_LDSCRIPT) $(MOD_SUBDIRS_EMBED_LDFLAGS) $(MOD_SUBDIRS_EMBED_LIBS)

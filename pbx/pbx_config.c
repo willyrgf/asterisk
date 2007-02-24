@@ -48,7 +48,7 @@ static char userscontext[AST_MAX_EXTENSION] = "default";
 
 static int static_config = 0;
 static int write_protect_config = 1;
-static int autofallthrough_config = 0;
+static int autofallthrough_config = 1;
 static int clearglobalvars_config = 0;
 
 AST_MUTEX_DEFINE_STATIC(save_dialplan_lock);
@@ -1508,7 +1508,7 @@ static int handle_context_add_extension(int fd, int argc, char *argv[])
 	/* check for arguments at first */
 	if (argc != 6 && argc != 7)
 		return RESULT_SHOWUSAGE;
-	if (strcmp(argv[3], "into"))
+	if (strcmp(argv[4], "into"))
 		return RESULT_SHOWUSAGE;
 	if (argc == 7) if (strcmp(argv[6], "replace")) return RESULT_SHOWUSAGE;
 
@@ -1553,7 +1553,7 @@ static int handle_context_add_extension(int fd, int argc, char *argv[])
 
 	if (!app_data)
 		app_data="";
-	if (ast_add_extension(argv[5], argc == 6 ? 1 : 0, exten, iprior, NULL, cidmatch, app,
+	if (ast_add_extension(argv[5], argc == 7 ? 1 : 0, exten, iprior, NULL, cidmatch, app,
 		(void *)strdup(app_data), free, registrar)) {
 		switch (errno) {
 		case ENOMEM:
@@ -2172,6 +2172,7 @@ static int pbx_load_config(const char *config_file)
 	struct ast_context *con;
 	struct ast_variable *v;
 	const char *cxt;
+	const char *aft;
 
 	cfg = ast_config_load(config_file);
 	if (!cfg)
@@ -2180,7 +2181,8 @@ static int pbx_load_config(const char *config_file)
 	/* Use existing config to populate the PBX table */
 	static_config = ast_true(ast_variable_retrieve(cfg, "general", "static"));
 	write_protect_config = ast_true(ast_variable_retrieve(cfg, "general", "writeprotect"));
-	autofallthrough_config = ast_true(ast_variable_retrieve(cfg, "general", "autofallthrough"));
+	if ((aft = ast_variable_retrieve(cfg, "general", "autofallthrough")))
+		autofallthrough_config = ast_true(aft);
 	clearglobalvars_config = ast_true(ast_variable_retrieve(cfg, "general", "clearglobalvars"));
 	ast_set2_flag(&ast_options, ast_true(ast_variable_retrieve(cfg, "general", "priorityjumping")), AST_OPT_FLAG_PRIORITY_JUMPING);
 
@@ -2368,7 +2370,7 @@ static void pbx_load_users(void)
 			append_interface(iface, sizeof(iface), tmp);
 		}
 		if (ast_true(ast_config_option(cfg, cat, "hasiax"))) {
-			snprintf(tmp, sizeof(tmp), "IAX/%s", cat);
+			snprintf(tmp, sizeof(tmp), "IAX2/%s", cat);
 			append_interface(iface, sizeof(iface), tmp);
 		}
 		if (ast_true(ast_config_option(cfg, cat, "hash323"))) {
@@ -2409,7 +2411,7 @@ static void pbx_load_users(void)
 		}
 		if (!ast_strlen_zero(iface)) {
 			/* Add hint */
-			ast_add_extension2(con, 0, cat, -1, NULL, NULL, iface, strdup(""), ast_free, registrar);
+			ast_add_extension2(con, 0, cat, -1, NULL, NULL, iface, NULL, NULL, registrar);
 			/* If voicemail, use "stdexten" else use plain old dial */
 			if (hasvoicemail) {
 				snprintf(tmp, sizeof(tmp), "stdexten|%s|${HINT}", cat);

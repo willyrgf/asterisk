@@ -105,14 +105,14 @@ static const struct misdn_cfg_spec port_spec[] = {
 		"\talso in switzerland this seems to be important." },
 	{ "far_alerting", MISDN_CFG_FAR_ALERTING, MISDN_CTYPE_BOOL, "no", NONE,
 		"If we should generate ringing for chan_sip and others." },
-	{ "pmp_l1_check", MISDN_CFG_PMP_L1_CHECK, MISDN_CTYPE_BOOL, "yes", NONE,
+	{ "pmp_l1_check", MISDN_CFG_PMP_L1_CHECK, MISDN_CTYPE_BOOL, "no", NONE,
 		"This option defines, if chan_misdn should check the L1 on a PMP\n"
 		"\tbefore makeing a group call on it. The L1 may go down for PMP Ports\n"
 		"\tso we might need this.\n"
 		"\tBut be aware! a broken or plugged off cable might be used for a group call\n"
 		"\tas well, since chan_misdn has no chance to distinguish if the L1 is down\n"
 		"\tbecause of a lost Link or because the Provider shut it down..." },
-	{ "block_on_alarm", MISDN_CFG_ALARM_BLOCK, MISDN_CTYPE_BOOL, "yes", NONE ,
+	{ "block_on_alarm", MISDN_CFG_ALARM_BLOCK, MISDN_CTYPE_BOOL, "no", NONE ,
 	  "Block this port if we have an alarm on it."
 	  "default: yes\n" },
 	{ "hdlc", MISDN_CFG_HDLC, MISDN_CTYPE_BOOL, "no", NONE,
@@ -308,7 +308,6 @@ static const struct misdn_cfg_spec port_spec[] = {
 		"MSN's for TE ports, listen on those numbers on the above ports, and\n"
 		"\tindicate the incoming calls to Asterisk.\n"
 		"\tHere you can give a comma seperated list, or simply an '*' for any msn." },
-
 };
 
 static const struct misdn_cfg_spec gen_spec[] = {

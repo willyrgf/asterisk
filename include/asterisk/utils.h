@@ -218,6 +218,16 @@ static force_inline void ast_slinear_saturated_divide(short *input, short *value
 
 int test_for_thread_safety(void);
 
+/*!
+ * \brief thread-safe replacement for inet_ntoa().
+ *
+ * \note It is very important to note that even though this is a thread-safe
+ *       replacement for inet_ntoa(), it is *not* reentrant.  In a single
+ *       thread, the result from a previous call to this function is no longer
+ *       valid once it is called again.  If the result from multiple calls to
+ *       this function need to be kept or used at once, then the result must be
+ *       copied to a local buffer before calling this function again.
+ */
 const char *ast_inet_ntoa(struct in_addr ia);
 
 #ifdef inet_ntoa
@@ -350,6 +360,19 @@ void * attribute_malloc _ast_calloc(size_t num, size_t len, const char *file, in
 	return p;
 }
 )
+
+/*!
+ * \brief A wrapper for calloc() for use in cache pools
+ *
+ * ast_calloc_cache() is a wrapper for calloc() that will generate an Asterisk log
+ * message in the case that the allocation fails. When memory debugging is in use,
+ * the memory allocated by this function will be marked as 'cache' so it can be
+ * distinguished from normal memory allocations.
+ *
+ * The arguments and return value are the same as calloc()
+ */
+#define ast_calloc_cache(num, len) \
+	_ast_calloc((num), (len), __FILE__, __LINE__, __PRETTY_FUNCTION__)
 
 /*!
  * \brief A wrapper for realloc()
@@ -529,5 +552,7 @@ int _ast_vasprintf(char **ret, const char *file, int lineno, const char *func, c
   to ensure that the DF bit will not be set.
  */
 void ast_enable_packet_fragmentation(int sock);
+
+#define ARRAY_LEN(a) (sizeof(a) / sizeof(a[0]))
 
 #endif /* _ASTERISK_UTILS_H */

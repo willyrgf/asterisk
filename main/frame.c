@@ -45,10 +45,11 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/linkedlists.h"
 
 #ifdef TRACE_FRAMES
-static int headers = 0;
+static int headers;
 static AST_LIST_HEAD_STATIC(headerlist, ast_frame);
 #endif
 
+#if !defined(LOW_MEMORY)
 static void frame_cache_cleanup(void *data);
 
 /*! \brief A per-thread cache of frame headers */
@@ -73,6 +74,7 @@ struct ast_frame_cache {
 	struct ast_frames list;
 	size_t size;
 };
+#endif
 
 #define SMOOTHER_SIZE 8000
 
@@ -188,6 +190,8 @@ int __ast_smoother_feed(struct ast_smoother *s, struct ast_frame *f, int swap)
 			/* Optimize by sending the frame we just got
 			   on the next read, thus eliminating the douple
 			   copy */
+			if (swap)
+				ast_swapcopy_samples(f->data, f->data, f->samples);
 			s->opt = f;
 			return 0;
 		} else {
@@ -198,6 +202,8 @@ int __ast_smoother_feed(struct ast_smoother *s, struct ast_frame *f, int swap)
 				   we were unable to optimize because there was still
 				   some cruft left over.  Lets just drop the cruft so
 				   we can move to a fully optimized path */
+				if (swap)
+					ast_swapcopy_samples(f->data, f->data, f->samples);
 				s->len = 0;
 				s->opt = f;
 				return 0;
@@ -280,6 +286,8 @@ void ast_smoother_free(struct ast_smoother *s)
 static struct ast_frame *ast_frame_header_new(void)
 {
 	struct ast_frame *f;
+
+#if !defined(LOW_MEMORY)
 	struct ast_frame_cache *frames;
 
 	if ((frames = ast_threadstorage_get(&frame_cache, sizeof(*frames)))) {
@@ -292,9 +300,12 @@ static struct ast_frame *ast_frame_header_new(void)
 			return f;
 		}
 	}
-
+	if (!(f = ast_calloc_cache(1, sizeof(*f))))
+		return NULL;
+#else
 	if (!(f = ast_calloc(1, sizeof(*f))))
 		return NULL;
+#endif
 
 	f->mallocd_hdr_len = sizeof(*f);
 #ifdef TRACE_FRAMES
@@ -307,6 +318,7 @@ static struct ast_frame *ast_frame_header_new(void)
 	return f;
 }
 
+#if !defined(LOW_MEMORY)
 static void frame_cache_cleanup(void *data)
 {
 	struct ast_frame_cache *frames = data;
@@ -317,12 +329,14 @@ static void frame_cache_cleanup(void *data)
 	
 	free(frames);
 }
+#endif
 
 void ast_frame_free(struct ast_frame *fr, int cache)
 {
 	if (!fr->mallocd)
 		return;
 
+#if !defined(LOW_MEMORY)
 	if (cache && fr->mallocd == AST_MALLOCD_HDR) {
 		/* Cool, only the header is malloc'd, let's just cache those for now 
 		 * to keep things simple... */
@@ -335,6 +349,7 @@ void ast_frame_free(struct ast_frame *fr, int cache)
 			return;
 		}
 	}
+#endif
 	
 	if (fr->mallocd & AST_MALLOCD_DATA) {
 		if (fr->data) 
@@ -418,10 +433,13 @@ struct ast_frame *ast_frisolate(struct ast_frame *fr)
 
 struct ast_frame *ast_frdup(const struct ast_frame *f)
 {
-	struct ast_frame_cache *frames;
 	struct ast_frame *out = NULL;
 	int len, srclen = 0;
 	void *buf = NULL;
+
+#if !defined(LOW_MEMORY)
+	struct ast_frame_cache *frames;
+#endif
 
 	/* Start with standard stuff */
 	len = sizeof(*out) + AST_FRIENDLY_OFFSET + f->datalen;
@@ -435,6 +453,7 @@ struct ast_frame *ast_frdup(const struct ast_frame *f)
 	if (srclen > 0)
 		len += srclen + 1;
 	
+#if !defined(LOW_MEMORY)
 	if ((frames = ast_threadstorage_get(&frame_cache, sizeof(*frames)))) {
 		AST_LIST_TRAVERSE_SAFE_BEGIN(&frames->list, out, frame_list) {
 			if (out->mallocd_hdr_len >= len) {
@@ -449,8 +468,10 @@ struct ast_frame *ast_frdup(const struct ast_frame *f)
 		}
 		AST_LIST_TRAVERSE_SAFE_END
 	}
+#endif
+
 	if (!buf) {
-		if (!(buf = ast_calloc(1, len)))
+		if (!(buf = ast_calloc_cache(1, len)))
 			return NULL;
 		out = buf;
 		out->mallocd_hdr_len = len;
@@ -475,11 +496,9 @@ struct ast_frame *ast_frdup(const struct ast_frame *f)
 		strcpy((char *)out->src, f->src);
 	}
 	out->has_timing_info = f->has_timing_info;
-	if (f->has_timing_info) {
-		out->ts = f->ts;
-		out->len = f->len;
-		out->seqno = f->seqno;
-	}
+	out->ts = f->ts;
+	out->len = f->len;
+	out->seqno = f->seqno;
 	return out;
 }
 
@@ -656,7 +675,7 @@ static int show_codecs(int fd, int argc, char *argv[])
 	ast_cli(fd, "--------------------------------------------------------------------------------\n");
 	if ((argc == 3) || (!strcasecmp(argv[3],"audio"))) {
 		found = 1;
-		for (i=0;i<12;i++) {
+		for (i=0;i<13;i++) {
 			snprintf(hex,25,"(0x%x)",1<<i);
 			ast_cli(fd, "%11u (1 << %2d) %10s  audio   %8s   (%s)\n",1 << i,i,hex,ast_getformatname(1<<i),ast_codec2str(1<<i));
 		}
@@ -1191,7 +1210,7 @@ int ast_codec_pref_setsize(struct ast_codec_pref *pref, int format, int framems)
 struct ast_format_list ast_codec_pref_getsize(struct ast_codec_pref *pref, int format)
 {
 	int x, index = -1, framems = 0;
-	struct ast_format_list fmt;
+	struct ast_format_list fmt = {0};
 
 	for (x = 0; x < sizeof(AST_FORMAT_LIST) / sizeof(AST_FORMAT_LIST[0]); x++) {
 		if(AST_FORMAT_LIST[x].bits == format) {

@@ -156,7 +156,7 @@ void ast_rtp_pt_clear(struct ast_rtp* rtp);
 void ast_rtp_pt_default(struct ast_rtp* rtp);
 
 /*! \brief Copy payload types between RTP structures */
-void ast_rtp_pt_copy(struct ast_rtp *dest, const struct ast_rtp *src);
+void ast_rtp_pt_copy(struct ast_rtp *dest, struct ast_rtp *src);
 
 void ast_rtp_set_m_type(struct ast_rtp* rtp, int pt);
 void ast_rtp_set_rtpmap_type(struct ast_rtp* rtp, int pt,
@@ -180,11 +180,16 @@ char *ast_rtp_lookup_mime_multiple(char *buf, size_t size, const int capability,
 
 void ast_rtp_setnat(struct ast_rtp *rtp, int nat);
 
+int ast_rtp_getnat(struct ast_rtp *rtp);
+
 /*! \brief Indicate whether this RTP session is carrying DTMF or not */
 void ast_rtp_setdtmf(struct ast_rtp *rtp, int dtmf);
 
 /*! \brief Compensate for devices that send RFC2833 packets all at once */
 void ast_rtp_setdtmfcompensate(struct ast_rtp *rtp, int compensate);
+
+/*! \brief Enable STUN capability */
+void ast_rtp_setstun(struct ast_rtp *rtp, int stun_enable);
 
 int ast_rtp_bridge(struct ast_channel *c0, struct ast_channel *c1, int flags, struct ast_frame **fo, struct ast_channel **rc, int timeoutms);
 
@@ -206,6 +211,8 @@ char *ast_rtp_get_quality(struct ast_rtp *rtp);
 /*! \brief Send an H.261 fast update request. Some devices need this rather than the XML message  in SIP */
 int ast_rtcp_send_h261fur(void *data);
 
+void ast_rtp_new_init(struct ast_rtp *rtp);
+
 void ast_rtp_init(void);
 
 int ast_rtp_reload(void);
@@ -215,6 +222,21 @@ int ast_rtp_codec_setpref(struct ast_rtp *rtp, struct ast_codec_pref *prefs);
 struct ast_codec_pref *ast_rtp_codec_getpref(struct ast_rtp *rtp);
 
 int ast_rtp_codec_getformat(int pt);
+
+/*! \brief Set rtp timeout */
+void ast_rtp_set_rtptimeout(struct ast_rtp *rtp, int timeout);
+/*! \brief Set rtp hold timeout */
+void ast_rtp_set_rtpholdtimeout(struct ast_rtp *rtp, int timeout);
+/*! \brief set RTP keepalive interval */
+void ast_rtp_set_rtpkeepalive(struct ast_rtp *rtp, int period);
+/*! \brief Get RTP keepalive interval */
+int ast_rtp_get_rtpkeepalive(struct ast_rtp *rtp);
+/*! \brief Get rtp hold timeout */
+int ast_rtp_get_rtpholdtimeout(struct ast_rtp *rtp);
+/*! \brief Get rtp timeout */
+int ast_rtp_get_rtptimeout(struct ast_rtp *rtp);
+/* \brief Put RTP timeout timers on hold during another transaction, like T.38 */
+void ast_rtp_set_rtptimers_onhold(struct ast_rtp *rtp);
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }

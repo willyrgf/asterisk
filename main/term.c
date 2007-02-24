@@ -43,7 +43,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/lock.h"
 #include "asterisk/utils.h"
 
-static int vt100compat = 0;
+static int vt100compat;
 
 static char prepdata[80] = "";
 static char enddata[80] = "";
@@ -262,6 +262,29 @@ char *term_prompt(char *outbuf, const char *inbuf, int maxout)
 		ESC, 0, COLOR_WHITE, COLOR_BLACK + 10,
 		inbuf + 1);
 	return outbuf;
+}
+
+/* filter escape sequences */
+void term_filter_escapes(char *line)
+{
+	int i;
+	int len = strlen(line);
+
+	for (i = 0; i < len; i++) {
+		if (line[i] != ESC)
+			continue;
+		if ((i < (len - 2)) &&
+		    (line[i + 1] == 0x5B)) {
+			switch (line[i + 2]) {
+		 	case 0x30:
+			case 0x31:
+			case 0x33:
+				continue;
+			}
+		}
+		/* replace ESC with a space */
+		line[i] = ' ';
+	}
 }
 
 char *term_prep(void)

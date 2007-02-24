@@ -48,6 +48,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <dirent.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
+#ifdef SOLARIS
+#include <thread.h>
+#endif
 
 #ifdef HAVE_ZAPTEL
 #include <zaptel/zaptel.h>
@@ -205,7 +208,7 @@ static void moh_files_release(struct ast_channel *chan, void *data)
 		if (state->origwfmt && ast_set_write_format(chan, state->origwfmt)) {
 			ast_log(LOG_WARNING, "Unable to restore channel '%s' to format '%d'\n", chan->name, state->origwfmt);
 		}
-		state->save_pos = state->pos + 1;
+		state->save_pos = state->pos;
 	}
 }
 
@@ -215,36 +218,35 @@ static int ast_moh_files_next(struct ast_channel *chan)
 	struct moh_files_state *state = chan->music_state;
 	int tries;
 
-	if (state->save_pos) {
-		state->pos = state->save_pos - 1;
-		state->save_pos = 0;
-	} else {
-		/* Try 20 times to find something good */
-		for (tries=0;tries < 20;tries++) {
-			state->samples = 0;
-			if (chan->stream) {
-				ast_closestream(chan->stream);
-				chan->stream = NULL;
-				state->pos++;
-			}
-
-			if (ast_test_flag(state->class, MOH_RANDOMIZE))
-				state->pos = ast_random();
-
-			state->pos %= state->class->total_files;
-
-			/* check to see if this file's format can be opened */
-			if (ast_fileexists(state->class->filearray[state->pos], NULL, NULL) > 0)
-				break;
-
-		}
+	/* Discontinue a stream if it is running already */
+	if (chan->stream) {
+		ast_closestream(chan->stream);
+		chan->stream = NULL;
 	}
 
-	state->pos = state->pos % state->class->total_files;
-	
+	/* If a specific file has been saved, use it */
+	if (state->save_pos) {
+		state->pos = state->save_pos;
+		state->save_pos = 0;
+	} else if (ast_test_flag(state->class, MOH_RANDOMIZE)) {
+		/* Get a random file and ensure we can open it */
+		for (tries = 0; tries < 20; tries++) {
+			state->pos = rand() % state->class->total_files;
+			if (ast_fileexists(state->class->filearray[state->pos], NULL, NULL) > 0)
+				break;
+		}
+		state->samples = 0;
+	} else {
+		/* This is easy, just increment our position and make sure we don't exceed the total file count */
+		state->pos++;
+		state->pos %= state->class->total_files;
+		state->samples = 0;
+	}
+
 	if (!ast_openstream_full(chan, state->class->filearray[state->pos], chan->language, 1)) {
 		ast_log(LOG_WARNING, "Unable to open file '%s': %s\n", state->class->filearray[state->pos], strerror(errno));
 		state->pos++;
+		state->pos %= state->class->total_files;
 		return -1;
 	}
 
@@ -311,6 +313,8 @@ static void *moh_files_alloc(struct ast_channel *chan, void *params)
 			/* initialize */
 			memset(state, 0, sizeof(*state));
 			state->class = class;
+			if (ast_test_flag(state->class, MOH_RANDOMIZE))
+				state->pos = ast_random() % class->total_files;
 		}
 
 		state->origwfmt = chan->writeformat;
@@ -340,6 +344,7 @@ static int spawn_mp3(struct mohclass *class)
 	int argc = 0;
 	DIR *dir = NULL;
 	struct dirent *de;
+	sigset_t signal_set, old_set;
 
 	
 	if (!strcasecmp(class->dir, "nodir")) {
@@ -424,6 +429,11 @@ static int spawn_mp3(struct mohclass *class)
 	if (time(NULL) - class->start < respawn_time) {
 		sleep(respawn_time - (time(NULL) - class->start));
 	}
+
+	/* Block signals during the fork() */
+	sigfillset(&signal_set);
+	pthread_sigmask(SIG_BLOCK, &signal_set, &old_set);
+
 	time(&class->start);
 	class->pid = fork();
 	if (class->pid < 0) {
@@ -437,6 +447,10 @@ static int spawn_mp3(struct mohclass *class)
 
 		if (ast_opt_high_priority)
 			ast_set_priority(0);
+
+		/* Reset ignored signals back to default */
+		signal(SIGPIPE, SIG_DFL);
+		pthread_sigmask(SIG_UNBLOCK, &signal_set, NULL);
 
 		close(fds[0]);
 		/* Stdout goes to pipe */
@@ -464,6 +478,7 @@ static int spawn_mp3(struct mohclass *class)
 		_exit(1);
 	} else {
 		/* Parent */
+		pthread_sigmask(SIG_SETMASK, &old_set, NULL);
 		close(fds[1]);
 	}
 	return fds[0];
@@ -495,6 +510,9 @@ static void *monmp3thread(void *data)
 			}
 		}
 		if (class->pseudofd > -1) {
+#ifdef SOLARIS
+			thr_yield();
+#endif
 			/* Pause some amount of time */
 			res = read(class->pseudofd, buf, sizeof(buf));
 			pthread_testcancel();

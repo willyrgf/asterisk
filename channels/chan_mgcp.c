@@ -428,7 +428,7 @@ static int mgcp_write(struct ast_channel *ast, struct ast_frame *frame);
 static int mgcp_indicate(struct ast_channel *ast, int ind, const void *data, size_t datalen);
 static int mgcp_fixup(struct ast_channel *oldchan, struct ast_channel *newchan);
 static int mgcp_senddigit_begin(struct ast_channel *ast, char digit);
-static int mgcp_senddigit_end(struct ast_channel *ast, char digit);
+static int mgcp_senddigit_end(struct ast_channel *ast, char digit, unsigned int duration);
 static int mgcp_devicestate(void *data);
 
 static const struct ast_channel_tech mgcp_tech = {
@@ -1049,11 +1049,11 @@ static char audit_endpoint_usage[] =
 "       mgcp debug MUST be on to see the results of this command.\n";
 
 static char debug_usage[] = 
-"Usage: mgcp debug\n"
+"Usage: mgcp set debug\n"
 "       Enables dumping of MGCP packets for debugging purposes\n";
 
 static char no_debug_usage[] = 
-"Usage: mgcp debug off\n"
+"Usage: mgcp set debug off\n"
 "       Disables dumping of MGCP packets for debugging purposes\n";
 
 static char mgcp_reload_usage[] =
@@ -1116,7 +1116,7 @@ static int mgcp_audit_endpoint(int fd, int argc, char *argv[])
 
 static int mgcp_do_debug(int fd, int argc, char *argv[])
 {
-	if (argc != 2)
+	if (argc != 3)
 		return RESULT_SHOWUSAGE;
 	mgcpdebug = 1;
 	ast_cli(fd, "MGCP Debugging Enabled\n");
@@ -1125,7 +1125,7 @@ static int mgcp_do_debug(int fd, int argc, char *argv[])
 
 static int mgcp_no_debug(int fd, int argc, char *argv[])
 {
-	if (argc != 3)
+	if (argc != 4)
 		return RESULT_SHOWUSAGE;
 	mgcpdebug = 0;
 	ast_cli(fd, "MGCP Debugging Disabled\n");
@@ -1141,11 +1141,11 @@ static struct ast_cli_entry cli_mgcp[] = {
 	mgcp_show_endpoints, "List defined MGCP endpoints",
 	show_endpoints_usage },
 
-	{ { "mgcp", "debug", NULL },
+	{ { "mgcp", "set", "debug", NULL },
 	mgcp_do_debug, "Enable MGCP debugging",
 	debug_usage },
 
-	{ { "mgcp", "debug", "off", NULL },
+	{ { "mgcp", "set", "debug", "off", NULL },
 	mgcp_no_debug, "Disable MGCP debugging",
 	no_debug_usage },
 
@@ -1276,7 +1276,7 @@ static int mgcp_senddigit_begin(struct ast_channel *ast, char digit)
 	return -1;
 }
 
-static int mgcp_senddigit_end(struct ast_channel *ast, char digit)
+static int mgcp_senddigit_end(struct ast_channel *ast, char digit, unsigned int duration)
 {
 	struct mgcp_subchannel *sub = ast->tech_pvt;
 	char tmp[4];
@@ -1427,7 +1427,7 @@ static struct ast_channel *mgcp_new(struct mgcp_subchannel *sub, int state)
 	struct mgcp_endpoint *i = sub->parent;
 	int fmt;
 
-	tmp = ast_channel_alloc(1);
+	tmp = ast_channel_alloc(1, state, i->cid_num, i->cid_name, "MGCP/%s@%s-%d", i->name, i->parent->name, sub->id);
 	if (tmp) {
 		tmp->tech = &mgcp_tech;
 		tmp->nativeformats = i->capability;
@@ -1445,7 +1445,6 @@ static struct ast_channel *mgcp_new(struct mgcp_subchannel *sub, int state)
 		} else {
 			i->dsp = NULL;
 		}
-		ast_setstate(tmp, state);
 		if (state == AST_STATE_RING)
 			tmp->rings = 1;
 		tmp->writeformat = fmt;
@@ -1468,7 +1467,7 @@ static struct ast_channel *mgcp_new(struct mgcp_subchannel *sub, int state)
 		ast_copy_string(tmp->exten, i->exten, sizeof(tmp->exten));
 
 		/* Don't use ast_set_callerid() here because it will
-		 * generate a NewCallerID event before the NewChannel event */
+		 * generate a needless NewCallerID event */
 		tmp->cid.cid_num = ast_strdup(i->cid_num);
 		tmp->cid.cid_ani = ast_strdup(i->cid_num);
 		tmp->cid.cid_name = ast_strdup(i->cid_name);
@@ -2996,6 +2995,7 @@ static void handle_hd_hf(struct mgcp_subchannel *sub, char *ev)
 			/*ast_queue_control(sub->owner, AST_CONTROL_ANSWER);*/
 		}
 	}
+	pthread_attr_destroy(&attr);
 }
 
 static int handle_request(struct mgcp_subchannel *sub, struct mgcp_request *req, struct sockaddr_in *sin)

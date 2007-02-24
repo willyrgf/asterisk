@@ -189,14 +189,13 @@ static void check_goto_on_transfer(struct ast_channel *chan)
 
 	goto_on_transfer = ast_strdupa(val);
 
-	if (!(xferchan = ast_channel_alloc(0)))
+	if (!(xferchan = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, chan->name)))
 		return;
 
 	for (x = goto_on_transfer; x && *x; x++) {
 		if (*x == '^')
 			*x = '|';
 	}
-	ast_string_field_set(xferchan, name, chan->name);
 	/* Make formats okay */
 	xferchan->readformat = chan->readformat;
 	xferchan->writeformat = chan->writeformat;
@@ -441,12 +440,10 @@ int ast_masq_park_call(struct ast_channel *rchan, struct ast_channel *peer, int 
 	struct ast_frame *f;
 
 	/* Make a new, fake channel that we'll use to masquerade in the real one */
-	if (!(chan = ast_channel_alloc(0))) {
+	if (!(chan = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "Parked/%s",rchan->name))) {
 		ast_log(LOG_WARNING, "Unable to create parked channel\n");
 		return -1;
 	}
-	/* Let us keep track of the channel name */
-	ast_string_field_build(chan, name, "Parked/%s",rchan->name);
 
 	/* Make formats okay */
 	chan->readformat = rchan->readformat;
@@ -827,12 +824,11 @@ static int builtin_atxfer(struct ast_channel *chan, struct ast_channel *peer, st
 		return -1;
 	}
 
-	xferchan = ast_channel_alloc(0);
+	xferchan = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "Transfered/%s", transferee->name);
 	if (!xferchan) {
 		ast_hangup(newchan);
 		return -1;
 	}
-	ast_string_field_build(xferchan, name, "Transfered/%s", transferee->name);
 	/* Make formats okay */
 	xferchan->readformat = transferee->readformat;
 	xferchan->writeformat = transferee->writeformat;
@@ -1824,11 +1820,10 @@ static int park_exec(struct ast_channel *chan, void *data)
 		memset(&config, 0, sizeof(struct ast_bridge_config));
 		ast_set_flag(&(config.features_callee), AST_FEATURE_REDIRECT);
 		ast_set_flag(&(config.features_caller), AST_FEATURE_REDIRECT);
-		config.timelimit = 0;
-		config.play_warning = 0;
-		config.warning_freq = 0;
-		config.warning_sound=NULL;
 		res = ast_bridge_call(chan, peer, &config);
+
+		pbx_builtin_setvar_helper(chan, "PARKEDCHANNEL", peer->name);
+		ast_cdr_setdestchan(chan->cdr, peer->name);
 
 		/* Simulate the PBX hanging up */
 		if (res != AST_PBX_NO_HANGUP_PEER)
@@ -1937,20 +1932,20 @@ static struct ast_cli_entry cli_features[] = {
 };
 
 /*! \brief Dump lot status */
-static int manager_parking_status( struct mansession *s, struct message *m )
+static int manager_parking_status( struct mansession *s, const struct message *m)
 {
 	struct parkeduser *cur;
-	char *id = astman_get_header(m,"ActionID");
+	const char *id = astman_get_header(m, "ActionID");
 	char idText[256] = "";
 
 	if (!ast_strlen_zero(id))
-		snprintf(idText, 256, "ActionID: %s\r\n", id);
+		snprintf(idText, sizeof(idText), "ActionID: %s\r\n", id);
 
 	astman_send_ack(s, m, "Parked calls will follow");
 
-        ast_mutex_lock(&parking_lock);
+	ast_mutex_lock(&parking_lock);
 
-	for (cur=parkinglot; cur; cur = cur->next) {
+	for (cur = parkinglot; cur; cur = cur->next) {
 		astman_append(s, "Event: ParkedCall\r\n"
 			"Exten: %d\r\n"
 			"Channel: %s\r\n"
@@ -1960,21 +1955,21 @@ static int manager_parking_status( struct mansession *s, struct message *m )
 			"CallerIDName: %s\r\n"
 			"%s"
 			"\r\n",
-                        cur->parkingnum, cur->chan->name, cur->peername,
-                        (long)cur->start.tv_sec + (long)(cur->parkingtime/1000) - (long)time(NULL),
+			cur->parkingnum, cur->chan->name, cur->peername,
+			(long) cur->start.tv_sec + (long) (cur->parkingtime / 1000) - (long) time(NULL),
 			S_OR(cur->chan->cid.cid_num, ""),	/* XXX in other places it is <unknown> */
 			S_OR(cur->chan->cid.cid_name, ""),
 			idText);
-        }
+	}
 
 	astman_append(s,
 		"Event: ParkedCallsComplete\r\n"
 		"%s"
 		"\r\n",idText);
 
-        ast_mutex_unlock(&parking_lock);
+	ast_mutex_unlock(&parking_lock);
 
-        return RESULT_SUCCESS;
+	return RESULT_SUCCESS;
 }
 
 static char mandescr_park[] =
@@ -1984,11 +1979,11 @@ static char mandescr_park[] =
 "	*Channel2: Channel to announce park info to (and return to if timeout)\n"
 "	Timeout: Number of milliseconds to wait before callback.\n";  
 
-static int manager_park(struct mansession *s, struct message *m)
+static int manager_park(struct mansession *s, const struct message *m)
 {
-	char *channel = astman_get_header(m, "Channel");
-	char *channel2 = astman_get_header(m, "Channel2");
-	char *timeout = astman_get_header(m, "Timeout");
+	const char *channel = astman_get_header(m, "Channel");
+	const char *channel2 = astman_get_header(m, "Channel2");
+	const char *timeout = astman_get_header(m, "Timeout");
 	char buf[BUFSIZ];
 	int to = 0;
 	int res = 0;
@@ -2287,7 +2282,7 @@ static int load_config(void)
 		ast_log(LOG_ERROR, "Parking context '%s' does not exist and unable to create\n", parking_con);
 		return -1;
 	}
-	res = ast_add_extension2(con, 1, ast_parking_ext(), 1, NULL, NULL, parkcall, strdup(""), ast_free, registrar);
+	res = ast_add_extension2(con, 1, ast_parking_ext(), 1, NULL, NULL, parkcall, NULL, NULL, registrar);
 	if (parkaddhints)
 		park_add_hints(parking_con, parking_start, parking_stop);
 	if (!res)

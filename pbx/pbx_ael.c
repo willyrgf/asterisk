@@ -145,6 +145,20 @@ static void fix_gotos_in_extensions(struct ael_extension *exten);
 static pval *get_extension_or_contxt(pval *p);
 static pval *get_contxt(pval *p);
 static void remove_spaces_before_equals(char *str);
+static void substitute_commas(char *str);
+
+/* I am adding this code to substitute commas with vertbars in the args to apps */
+static void substitute_commas(char *str)
+{
+	char *p = str;
+	while (p && *p)
+	{
+		if (*p == ',' && ((p != str && *(p-1) != '\\')
+				|| p == str))
+			*p = '|';
+		p++;
+	}
+}
 
 
 /* PRETTY PRINTER FOR AEL:  ============================================================================= */
@@ -204,7 +218,7 @@ static void print_pval(FILE *fin, pval *item, int depth)
 		fprintf(fin,"%s(", item->u1.str);
 		for (lp=item->u2.arglist; lp; lp=lp->next) {
 			if ( lp != item->u2.arglist )
-				fprintf(fin,", ");
+				fprintf(fin,",");
 			fprintf(fin,"%s", lp->u1.str);
 		}
 		fprintf(fin,");\n");
@@ -812,7 +826,7 @@ static void check_includes(pval *includes)
 		char *incl_context = p4->u1.str;
 		/* find a matching context name */
 		struct pval *that_other_context = find_context(incl_context);
-		if (!that_other_context) {
+		if (!that_other_context && strcmp(incl_context, "parkedcalls") != 0) {
 			ast_log(LOG_WARNING, "Warning: file %s, line %d-%d: The included context '%s' cannot be found.\n",
 					includes->filename, includes->startline, includes->endline, incl_context);
 			warns++;
@@ -3244,6 +3258,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 			for (p2 = p->u2.arglist; p2; p2 = p2->next) {
 				if (p2 != p->u2.arglist )
 					strcat(buf1,"|");
+				substitute_commas(p2->u1.str);
 				strcat(buf1,p2->u1.str);
 			}
 			pr->app = strdup(p->u1.str);
@@ -3926,7 +3941,6 @@ static int ael2_no_debug(int fd, int argc, char *argv[])
 
 static int ael2_reload(int fd, int argc, char *argv[])
 {
-	ast_context_destroy(NULL, registrar);
 	return (pbx_load_module());
 }
 
@@ -3971,7 +3985,6 @@ static int load_module(void)
 
 static int reload(void)
 {
-	ast_context_destroy(NULL, registrar);
 	return pbx_load_module();
 }
 

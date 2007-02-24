@@ -638,7 +638,7 @@ char *ast_strip_quoted(char *s, const char *beg_quotes, const char *end_quotes)
 	char *q;
 
 	s = ast_strip(s);
-	if ((q = strchr(beg_quotes, *s))) {
+	if ((q = strchr(beg_quotes, *s)) && *q != '\0') {
 		e = s + strlen(s) - 1;
 		if (*e == *(end_quotes + (q - beg_quotes))) {
 			s++;
@@ -877,15 +877,11 @@ ast_string_field __ast_string_field_alloc_space(struct ast_string_field_mgr *mgr
 	return result;
 }
 
-void __ast_string_field_index_build(struct ast_string_field_mgr *mgr,
+void __ast_string_field_index_build_va(struct ast_string_field_mgr *mgr,
 				    ast_string_field *fields, int num_fields,
-				    int index, const char *format, ...)
+				    int index, const char *format, va_list ap1, va_list ap2)
 {
 	size_t needed;
-	va_list ap1, ap2;
-
-	va_start(ap1, format);
-	va_start(ap2, format);		/* va_copy does not exist on FreeBSD */
 
 	needed = vsnprintf(mgr->pool->base + mgr->used, mgr->space, format, ap1) + 1;
 
@@ -906,7 +902,20 @@ void __ast_string_field_index_build(struct ast_string_field_mgr *mgr,
 	fields[index] = mgr->pool->base + mgr->used;
 	mgr->used += needed;
 	mgr->space -= needed;
+}
 
+void __ast_string_field_index_build(struct ast_string_field_mgr *mgr,
+				    ast_string_field *fields, int num_fields,
+				    int index, const char *format, ...)
+{
+	va_list ap1, ap2;
+
+	va_start(ap1, format);
+	va_start(ap2, format);		/* va_copy does not exist on FreeBSD */
+
+	__ast_string_field_index_build_va(mgr, fields, num_fields, index, format, ap1, ap2);
+
+	va_end(ap1);
 	va_end(ap2);
 }
 
@@ -953,6 +962,9 @@ int ast_dynamic_str_thread_build_va(struct ast_dynamic_str **buf, size_t max_len
 {
 	int res;
 	int offset = (append && (*buf)->len) ? strlen((*buf)->str) : 0;
+#if defined(DEBUG_THREADLOCALS)
+	struct ast_dynamic_str *old_buf = *buf;
+#endif /* defined(DEBUG_THREADLOCALS) */
 
 	res = vsnprintf((*buf)->str + offset, (*buf)->len - offset, fmt, ap);
 
@@ -975,8 +987,12 @@ int ast_dynamic_str_thread_build_va(struct ast_dynamic_str **buf, size_t max_len
 		if (append)
 			(*buf)->str[offset] = '\0';
 
-		if (ts)
+		if (ts) {
 			pthread_setspecific(ts->key, *buf);
+#if defined(DEBUG_THREADLOCALS)
+			__ast_threadstorage_object_replace(old_buf, *buf, (*buf)->len + sizeof(*(*buf)));
+#endif /* defined(DEBUG_THREADLOCALS) */
+		}
 
 		/* va_end() and va_start() must be done before calling
 		 * vsnprintf() again. */

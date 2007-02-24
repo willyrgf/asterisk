@@ -35,7 +35,7 @@
 
 /*** MODULEINFO
 	<depend>openh323</depend>
-	<defaultenabled>no</defaultenabled>
+	<defaultenabled>yes</defaultenabled>
  ***/
 
 #ifdef __cplusplus
@@ -234,7 +234,7 @@ static int h323_do_reload(void);
 
 static struct ast_channel *oh323_request(const char *type, int format, void *data, int *cause);
 static int oh323_digit_begin(struct ast_channel *c, char digit);
-static int oh323_digit_end(struct ast_channel *c, char digit);
+static int oh323_digit_end(struct ast_channel *c, char digit, unsigned int duration);
 static int oh323_call(struct ast_channel *c, char *dest, int timeout);
 static int oh323_hangup(struct ast_channel *c);
 static int oh323_answer(struct ast_channel *c);
@@ -366,6 +366,7 @@ static void __oh323_update_info(struct ast_channel *c, struct oh323_pvt *pvt)
 			.frametype = AST_FRAME_DTMF_END,
 			.subclass = pvt->newdigit,
 			.samples = pvt->newduration * 8,
+			.len = pvt->newduration,
 			.src = "UPDATE_INFO",
 		};
 		if (pvt->newdigit == ' ') {		/* signalUpdate message */
@@ -545,7 +546,7 @@ static int oh323_digit_begin(struct ast_channel *c, char digit)
  * Send (play) the specified digit to the channel.
  *
  */
-static int oh323_digit_end(struct ast_channel *c, char digit)
+static int oh323_digit_end(struct ast_channel *c, char digit, unsigned int duration)
 {
 	struct oh323_pvt *pvt = (struct oh323_pvt *) c->tech_pvt;
 	char *token;
@@ -558,14 +559,14 @@ static int oh323_digit_end(struct ast_channel *c, char digit)
 	if (pvt->rtp && (pvt->options.dtmfmode & H323_DTMF_RFC2833) && (pvt->dtmf_pt > 0)) {
 		/* out-of-band DTMF */
 		if (h323debug) {
-			ast_log(LOG_DTMF, "End sending out-of-band digit %c on %s\n", digit, c->name);
+			ast_log(LOG_DTMF, "End sending out-of-band digit %c on %s, duration %d\n", digit, c->name, duration);
 		}
 		ast_rtp_senddigit_end(pvt->rtp, digit);
 		ast_mutex_unlock(&pvt->lock);
 	} else {
 		/* in-band DTMF */
 		if (h323debug) {
-			ast_log(LOG_DTMF, "End sending inband digit %c on %s\n", digit, c->name);
+			ast_log(LOG_DTMF, "End sending inband digit %c on %s, duration %d\n", digit, c->name, duration);
 		}
 		pvt->txDtmfDigit = ' ';
 		token = pvt->cd.call_token ? strdup(pvt->cd.call_token) : NULL;
@@ -998,17 +999,27 @@ static int __oh323_rtp_create(struct oh323_pvt *pvt)
 static struct ast_channel *__oh323_new(struct oh323_pvt *pvt, int state, const char *host)
 {
 	struct ast_channel *ch;
+	char *cid_num, *cid_name;
 	int fmt;
 
+	if (!ast_strlen_zero(pvt->options.cid_num))
+		cid_num = pvt->options.cid_num;
+	else
+		cid_num = pvt->cd.call_source_e164;
+
+	if (!ast_strlen_zero(pvt->options.cid_name))
+		cid_name = pvt->options.cid_name;
+	else
+		cid_name = pvt->cd.call_source_name;
+	
 	/* Don't hold a oh323_pvt lock while we allocate a chanel */
 	ast_mutex_unlock(&pvt->lock);
-	ch = ast_channel_alloc(1);
+	ch = ast_channel_alloc(1, state, cid_num, cid_name, "H323/%s", host);
 	/* Update usage counter */
 	ast_module_ref(ast_module_info->self);
 	ast_mutex_lock(&pvt->lock);
 	if (ch) {
 		ch->tech = &oh323_tech;
-		ast_string_field_build(ch, name, "H323/%s", host);
 		if (!(fmt = pvt->jointcapability) && !(fmt = pvt->options.capability))
 			fmt = global_options.capability;
 		ch->nativeformats = ast_codec_choose(&pvt->options.prefs, fmt, 1)/* | (pvt->jointcapability & AST_FORMAT_VIDEO_MASK)*/;
@@ -1057,18 +1068,11 @@ static struct ast_channel *__oh323_new(struct oh323_pvt *pvt, int state, const c
 		}
 
 		/* Don't use ast_set_callerid() here because it will
-		 * generate a NewCallerID event before the NewChannel event */
-		if (!ast_strlen_zero(pvt->options.cid_num)) {
-			ch->cid.cid_num = ast_strdup(pvt->options.cid_num);
-			ch->cid.cid_ani = ast_strdup(pvt->options.cid_num);
-		} else {
-			ch->cid.cid_num = ast_strdup(pvt->cd.call_source_e164);
-			ch->cid.cid_ani = ast_strdup(pvt->cd.call_source_e164);
-		}
-		if (!ast_strlen_zero(pvt->options.cid_name))
-			ch->cid.cid_name = ast_strdup(pvt->options.cid_name);
-		else
-			ch->cid.cid_name = ast_strdup(pvt->cd.call_source_name);
+		 * generate a needless NewCallerID event */
+		ch->cid.cid_num = ast_strdup(cid_num);
+		ch->cid.cid_ani = ast_strdup(cid_num);
+		ch->cid.cid_name = ast_strdup(cid_name);
+
 		if (pvt->cd.redirect_reason >= 0) {
 			ch->cid.cid_rdnis = ast_strdup(pvt->cd.redirect_number);
 			pbx_builtin_setvar_helper(ch, "PRIREDIRECTREASON", redirectingreason2str(pvt->cd.redirect_reason));
@@ -1081,7 +1085,6 @@ static struct ast_channel *__oh323_new(struct oh323_pvt *pvt, int state, const c
 		}
 		if (pvt->cd.transfer_capability >= 0)
 			ch->transfercapability = pvt->cd.transfer_capability;
-		ast_setstate(ch, state);
 		if (state != AST_STATE_DOWN) {
 			if (ast_pbx_start(ch)) {
 				ast_log(LOG_WARNING, "Unable to start PBX on %s\n", ch->name);
@@ -1789,6 +1792,7 @@ static int receive_digit(unsigned call_reference, char digit, const char *token,
 				.frametype = AST_FRAME_DTMF_END,
 				.subclass = digit,
 				.samples = duration * 8,
+				.len = duration,
 				.src = "SEND_DIGIT",
 			};
 			if (digit == ' ') {		/* signalUpdate message */
@@ -1798,10 +1802,20 @@ static int receive_digit(unsigned call_reference, char digit, const char *token,
 					pvt->DTMFsched = -1;
 				}
 			} else {				/* Regular input or signal message */
+				if (pvt->DTMFsched >= 0) {
+					/* We still don't send DTMF END from previous event, send it now */
+					ast_sched_del(sched, pvt->DTMFsched);
+					pvt->DTMFsched = -1;
+					f.subclass = pvt->curDTMF;
+					f.samples = f.len = 0;
+					ast_queue_frame(pvt->owner, &f);
+					/* Restore values */
+					f.subclass = digit;
+					f.samples = duration * 8;
+					f.len = duration;
+				}
 				if (duration) {		/* This is a signal, signalUpdate follows */
 					f.frametype = AST_FRAME_DTMF_BEGIN;
-					if (pvt->DTMFsched >= 0)
-						ast_sched_del(sched, pvt->DTMFsched);
 					pvt->DTMFsched = ast_sched_add(sched, duration, oh323_simulate_dtmf_end, pvt);
 					if (h323debug)
 						ast_log(LOG_DTMF, "Scheduled DTMF END simulation for %d ms, id=%d\n", duration, pvt->DTMFsched);
@@ -2392,6 +2406,8 @@ static void set_peer_capabilities(unsigned call_reference, const char *token, in
 		if (h323debug) {
 			int i;
 			for (i = 0; i < 32; ++i) {
+				if (!prefs->order[i])
+					break;
 				ast_log(LOG_DEBUG, "prefs[%d]=%s:%d\n", i, (prefs->order[i] ? ast_getformatname(1 << (prefs->order[i]-1)) : "<none>"), prefs->framing[i]);
 			}
 		}
@@ -2522,8 +2538,10 @@ static int restart_monitor(void)
 			monitor_thread = AST_PTHREADT_NULL;
 			ast_mutex_unlock(&monlock);
 			ast_log(LOG_ERROR, "Unable to start monitor thread.\n");
+			pthread_attr_destroy(&attr);
 			return -1;
 		}
+		pthread_attr_destroy(&attr);
 	}
 	ast_mutex_unlock(&monlock);
 	return 0;
@@ -2531,17 +2549,17 @@ static int restart_monitor(void)
 
 static int h323_do_trace(int fd, int argc, char *argv[])
 {
-	if (argc != 3) {
+	if (argc != 4) {
 		return RESULT_SHOWUSAGE;
 	}
-	h323_debug(1, atoi(argv[2]));
+	h323_debug(1, atoi(argv[3]));
 	ast_cli(fd, "H.323 trace set to level %s\n", argv[2]);
 	return RESULT_SUCCESS;
 }
 
 static int h323_no_trace(int fd, int argc, char *argv[])
 {
-	if (argc != 3) {
+	if (argc < 3 || argc > 4) {
 		return RESULT_SHOWUSAGE;
 	}
 	h323_debug(0,0);
@@ -2551,7 +2569,7 @@ static int h323_no_trace(int fd, int argc, char *argv[])
 
 static int h323_do_debug(int fd, int argc, char *argv[])
 {
-	if (argc != 2) {
+	if (argc < 2 || argc > 3) {
 		return RESULT_SHOWUSAGE;
 	}
 	h323debug = 1;
@@ -2561,7 +2579,7 @@ static int h323_do_debug(int fd, int argc, char *argv[])
 
 static int h323_no_debug(int fd, int argc, char *argv[])
 {
-	if (argc != 3) {
+	if (argc < 3 || argc > 4) {
 		return RESULT_SHOWUSAGE;
 	}
 	h323debug = 0;
@@ -2640,41 +2658,56 @@ static char h323_reload_usage[] =
 "       Reloads H.323 configuration from h323.conf\n";
 
 static struct ast_cli_entry cli_h323_no_trace_deprecated = {
-	{ { "h.323", "no", "trace", NULL },
+	{ "h.323", "no", "trace", NULL },
 	h323_no_trace, "Disable H.323 Stack Tracing",
 	no_trace_usage };
 
 static struct ast_cli_entry cli_h323_no_debug_deprecated = {
-	{ { "h.323", "no", "debug", NULL },
+	{ "h.323", "no", "debug", NULL },
 	h323_no_debug, "Disable H.323 debug",
 	no_debug_usage };
 
-static struct ast_cli_entry cli_h323[] = {
-	{ { "h.323", "trace", NULL },
-	h323_do_trace, "Enable H.323 Stack Tracing",
-	trace_usage },
-
-	{ { "h.323", "trace", "off", NULL },
-	h323_no_trace, "Disable H.323 Stack Tracing",
-	no_trace_usage, NULL, cli_h323_no_trace_deprecated },
-
-	{ { "h.323", "debug", NULL },
+static struct ast_cli_entry cli_h323_debug_deprecated = {
+	{ "h.323", "debug", NULL },
 	h323_do_debug, "Enable H.323 debug",
-	debug_usage },
+	debug_usage };
 
-	{ { "h.323", "debug", "off", NULL },
-	h323_no_debug, "Disable H.323 debug",
-	no_debug_usage, NULL, cli_h323_no_debug_deprecated },
+static struct ast_cli_entry cli_h323_trace_deprecated = {
+	{ "h.323", "trace", NULL },
+	h323_do_trace, "Enable H.323 Stack Tracing",
+	trace_usage };
 
-	{ { "h.323", "gk", "cycle", NULL },
+static struct ast_cli_entry cli_h323_gk_cycle_deprecated = {
+	{ "h.323", "gk", "cycle", NULL },
 	h323_gk_cycle, "Manually re-register with the Gatekeper",
-	show_cycle_usage },
+	show_cycle_usage };
 
-	{ { "h.323", "hangup", NULL },
+static struct ast_cli_entry cli_h323[] = {
+	{ { "h323", "set", "trace", NULL },
+	h323_do_trace, "Enable H.323 Stack Tracing",
+	trace_usage, NULL, &cli_h323_trace_deprecated },
+
+	{ { "h323", "set", "trace", "off", NULL },
+	h323_no_trace, "Disable H.323 Stack Tracing",
+	no_trace_usage, NULL, &cli_h323_no_trace_deprecated },
+
+	{ { "h323", "set", "debug", NULL },
+	h323_do_debug, "Enable H.323 debug",
+	debug_usage, NULL, &cli_h323_debug_deprecated },
+
+	{ { "h323", "set", "debug", "off", NULL },
+	h323_no_debug, "Disable H.323 debug",
+	no_debug_usage, NULL, &cli_h323_no_debug_deprecated },
+
+	{ { "h323", "cycle", "gk", NULL },
+	h323_gk_cycle, "Manually re-register with the Gatekeper",
+	show_cycle_usage, NULL, &cli_h323_gk_cycle_deprecated },
+
+	{ { "h323", "hangup", NULL },
 	h323_ep_hangup, "Manually try to hang up a call",
 	show_hangup_usage },
 
-	{ { "h.323", "show", "tokens", NULL },
+	{ { "h323", "show", "tokens", NULL },
 	h323_tokens_show, "Show all active call tokens",
 	show_tokens_usage },
 };
@@ -3074,13 +3107,17 @@ static enum ast_module_load_result load_module(void)
 	ASTOBJ_CONTAINER_INIT(&aliasl);
 	res = reload_config(0);
 	if (res) {
+		/* No config entry */
+		ast_log(LOG_NOTICE, "Unload and load chan_h323.so again in order to receive configuration changes.\n");
 		ast_cli_unregister(&cli_h323_reload);
 		io_context_destroy(io);
+		io = NULL;
 		sched_context_destroy(sched);
+		sched = NULL;
 		ASTOBJ_CONTAINER_DESTROY(&userl);
 		ASTOBJ_CONTAINER_DESTROY(&peerl);
 		ASTOBJ_CONTAINER_DESTROY(&aliasl);
-		return /*AST_MODULE_LOAD_DECLINE*/AST_MODULE_LOAD_FAILURE;
+		return AST_MODULE_LOAD_DECLINE;
 	} else {
 		/* Make sure we can register our channel type */
 		if (ast_channel_register(&oh323_tech)) {
@@ -3210,8 +3247,10 @@ static int unload_module(void)
 	if (!gatekeeper_disable)
 		h323_gk_urq();
 	h323_end_process();
-	io_context_destroy(io);
-	sched_context_destroy(sched);
+	if (io)
+		io_context_destroy(io);
+	if (sched)
+		sched_context_destroy(sched);
 
 	ASTOBJ_CONTAINER_DESTROYALL(&userl, oh323_destroy_user);
 	ASTOBJ_CONTAINER_DESTROY(&userl);
