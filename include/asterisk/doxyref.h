@@ -152,6 +152,7 @@ DUNDi is not itself a Voice-over IP signaling or media protocol. Instead, it pub
  * \arg \link Config_mm Meetme (conference bridge) configuration  \endlink
  * \arg \link Config_qu Queue system configuration  \endlink
  * \arg \link Config_vm Voicemail configuration  \endlink
+ * \arg \link Config_minivm Mini-Voicemail configuration  \endlink
  * \section cdrconf CDR configuration files
  * \arg \link Config_cdr CDR configuration  \endlink
  * \arg \link cdr_custom Custom CDR driver configuration \endlink
@@ -168,7 +169,6 @@ DUNDi is not itself a Voice-over IP signaling or media protocol. Instead, it pub
  * \arg \link Config_dun DUNDi configuration  \endlink
  * \arg \link Config_enum ENUM configuration  \endlink
  * \arg \link Config_moh Music on Hold configuration  \endlink
- * \arg \link Config_vm Voicemail configuration  \endlink
  */
 
 /*! \page Config_ast Asterisk.conf
@@ -238,6 +238,12 @@ DUNDi is not itself a Voice-over IP signaling or media protocol. Instead, it pub
  * \section vmconf voicemail.conf
  * \arg Implemented in \ref app_voicemail.c
  * \verbinclude voicemail.conf.sample
+ */
+
+/*! \page Config_minivm Mini-VoiceMail configuration
+ * \section minivmconf minivm.conf
+ * \arg Implemented in \ref app_minivm.c
+ * \verbinclude minivm.conf.sample
  */
 
 /*! \page Config_zap Zaptel configuration

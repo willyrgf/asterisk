@@ -4,8 +4,8 @@
  * Copyright (C) 1999 - 2005, Digium, Inc.
  * and Edvina AB, Sollentuna, Sweden
  *
- * Mark Spencer <markster@digium.com>
- * and Olle E. Johansson, Edvina.net
+ * Mark Spencer <markster@digium.com> (Comedian Mail)
+ * and Olle E. Johansson, Edvina.net <oej@edvina.net> (Mini-Voicemail changes)
  *
  * See http://www.asterisk.org for more information about
  * the Asterisk project. Please do not directly contact
@@ -23,12 +23,14 @@
  * \brief MiniVoiceMail - A Minimal Voicemail System
  *
  * A voicemail system in small building blocks, working together
- * 
  * based on the Comedian Mail voicemail system (app_voicemail.c).
  * 
  * \par See also
- * \arg \ref Config_vm
+ * \arg \ref Config_minivm
+ * \arg \ref App_minivm
+ *
  * \ingroup applications
+ *
  * \page App_minivm	Markodian Mail - A minimal voicemail system
  *	
  *	This is a minimal voicemail system, building blocks for something
@@ -44,8 +46,13 @@
  *	by userid and domain
  *
  *	Language codes are like setlocale - langcode_countrycode
- *
+ *	\note Don't use language codes like the rest of Asterisk, two letter countrycode
  *	
+ * \par See also
+ * \arg \ref Config_minivm
+ * \arg \ref app_minivm.c
+ * \arg Comedian mail: app_voicemail.c
+ *
  */
 
 /*! \page App_minivm_todo Markodian Minimail - todo
@@ -57,6 +64,7 @@
  *	- test, test, test, test
  *	- fix "vm-theextensionis.gsm" voiceprompt from Allison in various formats
  *		"The extension you are calling"
+ *	- Maybe split recording from actual forwarding in e-mail into two applications
  */
 
 #include <stdlib.h>
@@ -112,38 +120,39 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define MVM_PBXSKIP		(1 << 9)
 #define MVM_ALLOCED		(1 << 13)
 
-/* Default mail command to mail voicemail. Change it with the
+/*! \brief Default mail command to mail voicemail. Change it with the
     mailcmd= command in voicemail.conf */
 #define SENDMAIL "/usr/sbin/sendmail -t"
 
-#define SOUND_INTRO "vm-intro"
-#define B64_BASEMAXINLINE 256	/*!< Buffer size for Base 64 attachment encoding */
-#define B64_BASELINELEN 72	/*!< Line length for Base 64 endoded messages */
-#define EOL "\r\n"
+#define SOUND_INTRO		"vm-intro"
+#define B64_BASEMAXINLINE 	256	/*!< Buffer size for Base 64 attachment encoding */
+#define B64_BASELINELEN 	72	/*!< Line length for Base 64 endoded messages */
+#define EOL			"\r\n"
 
 #define MAX_DATETIME_FORMAT	512
-#define MAX_NUM_CID_CONTEXTS 10
+#define MAX_NUM_CID_CONTEXTS	10
 
 #define ERROR_LOCK_PATH		-100
 #define	VOICEMAIL_DIR_MODE	0700
-#define	VOICEMAIL_FILE_MODE	0600
 
 #define VOICEMAIL_CONFIG "minivm.conf"
-#define ASTERISK_USERNAME "asterisk"	/*!< Default username for sending mail is asterisk@localhost */
+#define ASTERISK_USERNAME "asterisk"	/*!< Default username for sending mail is asterisk\@localhost */
 
 /*! \brief Message types for notification */
 enum mvm_messagetype {
 	MVM_MESSAGE_EMAIL,
 	MVM_MESSAGE_PAGE
+	/* For trunk: MVM_MESSAGE_JABBER, */
 };
 
 static char MVM_SPOOL_DIR[AST_CONFIG_MAX_PATH];
 
+/* Module declarations */
 static char *tdesc = "Mini VoiceMail (A minimal Voicemail e-mail System)";
 static char *app = "MiniVM";		 	/* Leave a message */
 static char *app_greet = "MiniVMgreet";		/* Play voicemail prompts */
 
-static char *synopsis_vm = "Receive voicemail and forward via e-mail";
+static char *synopsis_vm = "Receive Mini-Voicemail and forward via e-mail";
 static char *descrip_vm = 
 	"Syntax: minivm(username@domain[,options])\n"
 	"This application is part of the Mini-Voicemail system, configured in minivm.conf.\n"
@@ -162,7 +171,7 @@ static char *descrip_vm =
 	"           message. The units are whole-number decibels (dB).\n"
 	"\n";
 
-static char *synopsis_vm_greet = "Play voicemail prompts";
+static char *synopsis_vm_greet = "Play Mini-Voicemail prompts";
 static char *descrip_vm_greet = 
 	"Syntax: minivm_greet(username@domain[,options])\n"
 	"This application is part of the Mini-Voicemail system, configured in minivm.conf.\n"
@@ -201,8 +210,7 @@ AST_APP_OPTIONS(minivm_app_options, {
 
 
 
-/*! Structure for linked list of users 
-*/
+/*! \brief Structure for linked list of Mini-Voicemail users */
 struct minivm_user {
 	char username[AST_MAX_CONTEXT];	/*!< Mailbox username */
 	char domain[AST_MAX_CONTEXT];	/*!< Voicemail domain */
@@ -256,9 +264,7 @@ struct b64_baseio {
 	unsigned char iobuf[B64_BASEMAXINLINE];
 };
 
-
-
-/*! Voicemail time zones */
+/*! \brief Voicemail time zones */
 struct minivm_zone {
 	char name[80];	/* Name of this time zone */
 	char timezone[80];
@@ -279,9 +285,10 @@ struct minivm_stats {
 	time_t lastvoicemail;		/*!< Time for last voicemail sent */
 };
 
+/*! \brief Statistics for voicemail */
 static struct minivm_stats global_stats;
 
-AST_MUTEX_DEFINE_STATIC(minivmlock);
+AST_MUTEX_DEFINE_STATIC(minivmlock);	/*!< Lock to protect voicemail system */
 
 static int global_vmminmessage;		/*!< Minimum duration of messages */
 static int global_vmmaxmessage;		/*!< Maximum duration of message */
@@ -291,32 +298,27 @@ static char global_mailcmd[160];	/*!< Configurable mail cmd */
 static char global_externnotify[160]; 	/*!< External notification application */
 
 static char default_vmformat[80];
-static int maxgreet;
 
-static struct ast_flags globalflags = {0};
-
+static struct ast_flags globalflags = {0};	/*!< Global voicemail flags */
 static int global_saydurationminfo;
 
-/* XXX These will be replaced by the template structure */
-struct minivm_message *default_mailtemplate;
-struct minivm_message *default_pagertemplate;
-static char *emailbody = NULL;
-static char *pagerbody = NULL;
-static char *pagersubject = NULL;
+static char global_fromstring[100];		/*!< Global fromstring in voicemail */
+static char global_pagerfromstring[100];	/*!< Global fromstring in pager */
+static char global_charset[32];			/*!< Global charset in messages */
 
-static char global_fromstring[100];
-static char global_pagerfromstring[100];
-static char global_charset[32];
-
-static double global_volgain;	/* Volume gain for voicmemail via e-mail */
+static double global_volgain;	/*!< Volume gain for voicmemail via e-mail */
 
 #define DEFAULT_DATEFORMAT 	"%A, %B %d, %Y at %r"
 #define DEFAULT_CHARSET		"ISO-8859-1"
 
 STANDARD_LOCAL_USER;
-
 LOCAL_USER_DECL;
 
+/* Forward declarations */
+static char *message_template_parse_filebody(char *filename);
+static char *message_template_parse_emailbody(char *body);
+static int create_vmaccount(char *name, struct ast_variable *var, int realtime);
+static struct minivm_user *find_user_realtime(const char *domain, const char *username);
 
 /*! \brief Create message template */
 static struct minivm_message *message_template_create(char *name)
@@ -350,8 +352,13 @@ static void message_template_free(struct minivm_message *template)
 static int message_template_build(char *name, struct ast_variable *var)
 {
 	struct minivm_message *template;
-	template = message_template_create(name);
 	int error = 0;
+
+	template = message_template_create(name);
+	if (!template) {
+		ast_log(LOG_ERROR, "Out of memory, can't allocate message template object %s.\n", name);
+		return -1;
+	}
 
 	while (var) {
 		if (option_debug > 2)
@@ -367,13 +374,29 @@ static int message_template_build(char *name, struct ast_variable *var)
 		} else if (!strcasecmp(var->name, "charset")) {
 			ast_copy_string(template->charset, var->value, sizeof(template->charset));
 		} else if (!strcasecmp(var->name, "templatefile")) {
-			/* NO op */
+			if (template->body) 
+				free(template->body);
+			template->body = message_template_parse_filebody(var->value);
+			if (!template->body) {
+				ast_log(LOG_ERROR, "Error reading message body definition file %s\n", var->value);
+				error++;
+			}
+		} else if (!strcasecmp(var->name, "messagebody")) {
+			if (template->body) 
+				free(template->body);
+			template->body = message_template_parse_emailbody(var->value);
+			if (!template->body) {
+				ast_log(LOG_ERROR, "Error parsing message body definition:\n          %s\n", var->value);
+				error++;
+			}
 		} else {
 			ast_log(LOG_ERROR, "Unknown message template configuration option \"%s=%s\"\n", var->name, var->value);
 			error++;
 		}
 		var = var->next;
-	}	
+	}
+	if (error)
+		ast_log(LOG_ERROR, "-- %d errors found parsing message template definition %s\n", error, name);
 
 	AST_LIST_LOCK(&message_templates);
 	AST_LIST_INSERT_TAIL(&message_templates, template, list);
@@ -576,6 +599,7 @@ static void prep_email_sub_vars(struct ast_channel *ast, const struct minivm_use
 	pbx_builtin_setvar_helper(ast, "MVM_DATE", date);
 }
 
+/*! \brief Set default values for Mini-Voicemail users */
 static void populate_defaults(struct minivm_user *vmu)
 {
 	ast_copy_flags(vmu, (&globalflags), AST_FLAGS_ALL);	
@@ -617,8 +641,6 @@ static struct minivm_user *mvm_user_alloc(void)
 	return new;
 }
 
-static int create_vmaccount(char *name, struct ast_variable *var, int realtime);
-static struct minivm_user *find_user_realtime(const char *domain, const char *username);
 
 /*! \brief Clear list of users */
 static void vmaccounts_destroy_list(void)
@@ -907,19 +929,34 @@ static int sendmail(struct minivm_message *template, char *srcemail, struct mini
 	return 0;
 }
 
-static int make_dir(char *dest, int len, const char *context, const char *ext, const char *folder)
+/*! \brief Create directory based on components */
+static int make_dir(char *dest, int len, const char *domain, const char *username, const char *folder)
 {
-	return snprintf(dest, len, "%s%s/%s/%s", MVM_SPOOL_DIR, context, ext, folder);
+	return snprintf(dest, len, "%s%s/%s%s%s", MVM_SPOOL_DIR, domain, username, ast_strlen_zero(folder) ? "" : "/", folder);
 }
 
-/*! \brief basically mkdir -p $dest/$domain/$ext/$$username
+/*! \brief Checks if directory exists. Does not create directory, but builds string in dest
  * \param dest    String. base directory.
  * \param domain String. Ignored if is null or empty string.
- * \param ext	  String. Ignored if is null or empty string.
  * \param username String. Ignored if is null or empty string. 
- * \param returns 0 on failure, 1 on success.
+ * \param folder  String. Ignored if is null or empty string.
+ * \return 0 on failure, 1 on success.
  */
-static int create_dirpath(char *dest, int len, char *domain, char *ext, char *username)
+static int check_dirpath(char *dest, int len, char *domain, char *username, char *folder)
+{
+	make_dir(dest, len, domain, username, folder);
+	return ast_fileexists(dest, NULL, NULL);
+}
+
+/*! \brief basically mkdir -p $dest/$domain/$username/$folder
+ * \param dest    String. base directory.
+ * \param len     Length of directory string
+ * \param domain  String. Ignored if is null or empty string.
+ * \param folder  String. Ignored if is null or empty string. 
+ * \param ext	  String. Ignored if is null or empty string.
+ * \return 0 on failure, 1 on success.
+ */
+static int create_dirpath(char *dest, int len, char *domain, char *username, char *folder)
 {
 	mode_t	mode = VOICEMAIL_DIR_MODE;
 
@@ -930,45 +967,37 @@ static int create_dirpath(char *dest, int len, char *domain, char *ext, char *us
 			return 0;
 		}
 	}
-	if(!ast_strlen_zero(ext)) {
-		make_dir(dest, len, domain, ext, "");
+	if(!ast_strlen_zero(username)) {
+		make_dir(dest, len, domain, username, "");
 		if(mkdir(dest, mode) && errno != EEXIST) {
 			ast_log(LOG_WARNING, "mkdir '%s' failed: %s\n", dest, strerror(errno));
 			return 0;
 		}
 	}
-	if(!ast_strlen_zero(username)) {
-		make_dir(dest, len, domain, ext, username);
+	if(!ast_strlen_zero(folder)) {
+		make_dir(dest, len, domain, username, folder);
 		if(mkdir(dest, mode) && errno != EEXIST) {
 			ast_log(LOG_WARNING, "mkdir '%s' failed: %s\n", dest, strerror(errno));
 			return 0;
 		}
 	}
 	if (option_debug > 1)
-		ast_log(LOG_DEBUG, "Creating directory for %s@%s ext %s : %s\n", username, domain, ext, dest);
+		ast_log(LOG_DEBUG, "Creating directory for %s@%s folder %s : %s\n", username, domain, folder, dest);
 	return 1;
 }
 
 
 /*! \brief Play intro message before recording voicemail 
-	\note maybe this should be done in the dialplan, not
-		in the application
 */
 static int invent_message(struct ast_channel *chan, char *domain, char *username, int busy, char *ecodes)
 {
 	int res;
 	char fn[PATH_MAX];
-	char dest[PATH_MAX];
 
 	if (option_debug > 1)
 		ast_log(LOG_DEBUG, "-_-_- Still preparing to play message ...\n");
 
 	snprintf(fn, sizeof(fn), "%s%s/%s/greet", MVM_SPOOL_DIR, domain, username);
-
-	if (!(res = create_dirpath(dest, sizeof(dest), domain, username, "greet"))) {
-		ast_log(LOG_WARNING, "Failed to make directory(%s)\n", fn);
-		return -1;
-	}
 
 	if (ast_fileexists(fn, NULL, NULL) > 0) {
 		res = ast_streamfile(chan, fn, chan->language);
@@ -1267,6 +1296,7 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 	char *domain;
 	char tmp[256] = "";
 	struct minivm_user *vmu;
+	int userdir;
 
 	ast_copy_string(tmp, username, sizeof(tmp));
 	username = tmp;
@@ -1305,10 +1335,15 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 	}
 	msgnum = 0;
 
-	/* It's easier just to try to make it than to check for its existence */
-	create_dirpath(tmpdir, sizeof(tmpdir), vmu->domain, "tmp", username);
+	userdir = check_dirpath(tmpdir, sizeof(tmpdir), vmu->domain, username, "tmp");
+
+	/* If we have no user directory, use generic temporary directory */
+	if (!userdir)
+		create_dirpath(tmpdir, sizeof(tmpdir), "0000_minivm_temp", "mediafiles", "");
+
 
 	snprintf(tmptxtfile, sizeof(tmptxtfile), "%s/XXXXXX", tmpdir);
+
 	/* XXX This file needs to be in temp directory */
 	txtdes = mkstemp(tmptxtfile);
 	if (txtdes < 0) {
@@ -1333,8 +1368,12 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 	if (option_debug)
 		ast_log(LOG_DEBUG, "Open file for metadata: %s\n", tmptxtfile);
 
+	res = play_record_review(chan, NULL, tmptxtfile, global_vmmaxmessage, fmt, 1, vmu, &duration, NULL, options->record_gain);
+
 	txt = fdopen(txtdes, "w+");
-	if (txt) {
+	if (!txt) {
+		ast_log(LOG_WARNING, "Error opening text file for output\n");
+	} else {
 		struct tm tm;
 		time_t now;
 		char timebuf[30];
@@ -1345,8 +1384,8 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 		strftime(timebuf, sizeof(timebuf), "%H:%M:%S", &tm);
 		
 		fprintf(txt, 
-			/* "Mailbox:domain:macrocontext:exten:priority:callerchan:callerid:origdate:origtime:duration" */
-			"%s:%s:%s:%s:%d:%s:%s:%s:%s:%s\n",
+			/* "Mailbox:domain:macrocontext:exten:priority:callerchan:callerid:origdate:origtime:duration:durationstatus" */
+			"%s:%s:%s:%s:%d:%s:%s:%s:%s:%d:%s\n",
 			username,
 			chan->context,
 			chan->macrocontext, 
@@ -1356,17 +1395,11 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 			ast_callerid_merge(callerid, sizeof(callerid), chan->cid.cid_name, chan->cid.cid_num, "Unknown"),
 			date, 
 			timebuf,
-			"durationholder"); 
-	} else
-		ast_log(LOG_WARNING, "Error opening text file for output\n");
+			duration,
+			duration < global_vmminmessage ? "IGNORED" : "OK"
+		); 
 
-	res = play_record_review(chan, NULL, tmptxtfile, global_vmmaxmessage, fmt, 1, vmu, &duration, NULL, options->record_gain);
 
-// static int play_record_review(struct ast_channel *chan, char *playfile, char *recordfile, int maxtime, char *fmt,
-//			      int outsidecaller, struct minivm_user *vmu, int *duration, const char *unlockdir,
-//			      signed char record_gain)
-
-	if (txt) {
 		if (duration < global_vmminmessage) {
 			if (option_verbose > 2) 
 				ast_verbose( VERBOSE_PREFIX_3 "Recording was %d seconds long but needs to be at least %d - abandoning\n", duration, global_vmminmessage);
@@ -1377,8 +1410,7 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 			free_user(vmu);
 			return 0;
 		} 
-		fprintf(txt, "duration=%d\n", duration);
-		fclose(txt);
+		fclose(txt); /* Close log file */
 		if (vm_lock_path(dir)) {
 			ast_log(LOG_ERROR, "Couldn't lock directory %s.  Voicemail will be lost.\n", dir);
 			/* Delete files */
@@ -1400,11 +1432,17 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 
 		/* assign a variable with the name of the voicemail file */	  
 		pbx_builtin_setvar_helper(chan, "MVM_MESSAGEFILE", tmptxtfile);
-
 		ast_unlock_path(dir);
-
-		if (ast_fileexists(tmptxtfile, NULL, NULL) > 0)
-			notify_new_message(chan, vmu, tmptxtfile, duration, fmt, chan->cid.cid_num, chan->cid.cid_name);
+		/* Notify of new message to e-mail and pager */
+		notify_new_message(chan, vmu, tmptxtfile, duration, fmt, chan->cid.cid_num, chan->cid.cid_name);
+	}
+	/* Go ahead and delete audio files from system, they're not needed any more */
+	if (ast_fileexists(tmptxtfile, NULL, NULL) <= 0) {
+		vm_lock_path(dir);
+		ast_filedelete(tmptxtfile, NULL);
+		ast_unlock_path(dir);
+		if (option_debug > 1)
+			ast_log(LOG_DEBUG, "-_-_- Deleted audio file after notification :: %s \n", tmptxtfile);
 	}
 
 	if (res > 0)
@@ -1431,7 +1469,6 @@ static int minivm_prompt_exec(struct ast_channel *chan, void *data)
 	int ousemacro = 0;
 	int ouseexten = 0;
 	char tmp[PATH_MAX];
-	char tmpdir[PATH_MAX];
 	char dest[PATH_MAX];
 	char prefile[PATH_MAX] = "";
 	char tempfile[PATH_MAX] = "";
@@ -1499,26 +1536,23 @@ static int minivm_prompt_exec(struct ast_channel *chan, void *data)
 		ast_copy_string(ext_context, vmu->domain, sizeof(ext_context));
 
 	if (ast_test_flag(&leave_options, OPT_BUSY_GREETING)) {
-		res = create_dirpath(dest, sizeof(dest), vmu->domain, username, "busy");
-		snprintf(prefile, sizeof(prefile), "%s%s/%s/busy", MVM_SPOOL_DIR, vmu->domain, username);
+		res = check_dirpath(dest, sizeof(dest), vmu->domain, username, "busy");
+		if (res)
+			snprintf(prefile, sizeof(prefile), "%s%s/%s/busy", MVM_SPOOL_DIR, vmu->domain, username);
 	} else if (ast_test_flag(&leave_options, OPT_UNAVAIL_GREETING)) {
-		res = create_dirpath(dest, sizeof(dest), vmu->domain, username, "unavail");
-		snprintf(prefile, sizeof(prefile), "%s%s/%s/unavail", MVM_SPOOL_DIR, vmu->domain, username);
+		res = check_dirpath(dest, sizeof(dest), vmu->domain, username, "unavail");
+		if (res)
+			snprintf(prefile, sizeof(prefile), "%s%s/%s/unavail", MVM_SPOOL_DIR, vmu->domain, username);
 	}
+	/* Check for temporary greeting - it overrides busy and unavail */
 	snprintf(tempfile, sizeof(tempfile), "%s%s/%s/temp", MVM_SPOOL_DIR, vmu->domain, username);
-	if (!(res = create_dirpath(dest, sizeof(dest), vmu->domain, username, "temp"))) {
-		ast_log(LOG_WARNING, "Failed to make directory (%s)\n", tempfile);
-		return -1;
+	if (!(res = check_dirpath(dest, sizeof(dest), vmu->domain, username, "temp"))) {
+		if (option_debug > 1)
+			ast_log(LOG_DEBUG, "Temporary message directory does not exist, using default (%s)\n", tempfile);
+		ast_copy_string(prefile, tempfile, sizeof(prefile));
 	}
 	if (option_debug > 1)
 		ast_log(LOG_DEBUG, "-_-_- Preparing to play message ...\n");
-
-	/* Play the message */
-	if (ast_fileexists(tempfile, NULL, NULL) > 0)
-		ast_copy_string(prefile, tempfile, sizeof(prefile));
-
-	/* It's easier just to try to make it than to check for its existence */
-	create_dirpath(tmpdir, sizeof(tmpdir), vmu->domain, username, "tmp");
 
 	/* Check current or macro-calling context for special extensions */
 	if (ast_test_flag(vmu, MVM_OPERATOR)) {
@@ -1547,23 +1581,22 @@ static int minivm_prompt_exec(struct ast_channel *chan, void *data)
 		ausemacro = 1;
 	}
 
+	res = 0;	/* Reset */
 	/* Play the beginning intro if desired */
 	if (!ast_strlen_zero(prefile)) {
-		if (ast_fileexists(prefile, NULL, NULL) > 0) {
-			if (ast_streamfile(chan, prefile, chan->language) > -1) 
-				res = ast_waitstream(chan, ecodes);
-		} else {
-			if (option_debug > 1)
-				ast_log(LOG_DEBUG, "%s doesn't exist, doing what we can\n", prefile);
-			res = invent_message(chan, vmu->domain, username, ast_test_flag(&leave_options, OPT_BUSY_GREETING), ecodes);
-		}
-		if (res < 0) {
-			if (option_debug > 1)
-				ast_log(LOG_DEBUG, "Hang up during prefile playback\n");
-			free_user(vmu);
-			pbx_builtin_setvar_helper(chan, "MINIVMGREETSTATUS", "FAILED");
-			return -1;
-		}
+		if (ast_streamfile(chan, prefile, chan->language) > -1) 
+			res = ast_waitstream(chan, ecodes);
+	} else {
+		if (option_debug > 1)
+			ast_log(LOG_DEBUG, "%s doesn't exist, doing what we can\n", prefile);
+		res = invent_message(chan, vmu->domain, username, ast_test_flag(&leave_options, OPT_BUSY_GREETING), ecodes);
+	}
+	if (res < 0) {
+		if (option_debug > 1)
+			ast_log(LOG_DEBUG, "Hang up during prefile playback\n");
+		free_user(vmu);
+		pbx_builtin_setvar_helper(chan, "MINIVMGREETSTATUS", "FAILED");
+		return -1;
 	}
 	if (res == '#') {
 		/* On a '#' we skip the instructions */
@@ -1698,6 +1731,7 @@ static int minivm_exec(struct ast_channel *chan, void *data)
 	return res;
 }
 
+/*! \brief Free Mini Voicemail timezone */
 static void free_zone(struct minivm_zone *z)
 {
 	free(z);
@@ -1712,7 +1746,7 @@ static int create_vmaccount(char *name, struct ast_variable *var, int realtime)
 	char accbuf[BUFSIZ];
 
 	if (option_debug > 2)
-		ast_log(LOG_DEBUG, "Creating static account for [%s]\n", name);
+		ast_log(LOG_DEBUG, "Creating %s account for [%s]\n", realtime ? "realtime" : "static", name);
 
 	ast_copy_string(accbuf, name, sizeof(accbuf));
 	username = accbuf;
@@ -1833,8 +1867,53 @@ static int timezone_add(char *zonename, char *config)
 	return 0;
 }
 
+/*! \brief Read message template from file */
+static char *message_template_parse_filebody(char *filename) {
+	char buf[BUFSIZ * 6];
+	char readbuf[BUFSIZ];
+	char filenamebuf[BUFSIZ];
+	char *writepos;
+	char *messagebody;
+	FILE *fi;
+	int lines = 0;
+
+	if (ast_strlen_zero(filename))
+		return NULL;
+	if (*filename == '/') 
+		ast_copy_string(filenamebuf, filename, sizeof(filenamebuf));
+	else 
+		snprintf(filenamebuf, sizeof(filenamebuf), "%s/%s", ast_config_AST_CONFIG_DIR, filename);
+
+	if (!(fi = fopen(filenamebuf, "r"))) {
+		ast_log(LOG_ERROR, "Can't read message template from file: %s\n", filenamebuf);
+		return NULL;
+	}
+	writepos = buf;
+	while (fgets(readbuf, sizeof(readbuf), fi)) {
+		lines ++;
+		if (writepos != buf) {
+			*writepos = '\n';		/* Replace EOL with new line */
+			writepos++;
+		}
+		ast_copy_string(writepos, readbuf, sizeof(buf) - (writepos - buf));
+		ast_log(LOG_DEBUG, "---> Message body now: %s\n", buf);
+		writepos += strlen(readbuf) - 1;
+		if (option_debug > 3) {
+			ast_log(LOG_DEBUG, "---> Reading message template : Line %d: %s\n", lines, readbuf);
+			ast_log(LOG_DEBUG, "--->         Strlen readbuf %d Writepos %d Left %d\n", strlen(readbuf), writepos - buf, sizeof(buf) - (writepos - buf));
+		}
+	}
+	fclose(fi);
+	messagebody = calloc(1, strlen(buf + 1));
+	ast_copy_string(messagebody, buf, sizeof(messagebody));
+	if (option_debug > 3)
+		ast_log(LOG_DEBUG, "---> Reading message template : \n%s\n---- END message template--- \n", messagebody);
+
+	return messagebody;
+}
+
 /*! \brief Parse emailbody template from configuration file */
-static char *parse_emailbody(char *configuration)
+static char *message_template_parse_emailbody(char *configuration)
 {
 	char *tmpread, *tmpwrite;
 	char *emailbody = strdup(configuration);
@@ -1900,14 +1979,6 @@ static int apply_general_options(struct ast_variable *var)
 			}
 		} else if (!strcmp(var->name, "format")) {
 			ast_copy_string(default_vmformat, var->value, sizeof(default_vmformat));
-		} else if (!strcmp(var->name, "maxgreet")) {
-			int x;
-			if (sscanf(var->value, "%d", &x) == 1)
-				maxgreet = x;
-			else  {
-				ast_log(LOG_WARNING, "Invalid max message greeting length\n");
-				error ++;
-			}
 		} else if (!strcmp(var->name, "review")) {
 			ast_set2_flag((&globalflags), ast_true(var->value), MVM_REVIEW);	
 		} else if (!strcmp(var->name, "operator")) {
@@ -1962,19 +2033,6 @@ static int load_config(void)
 	/* Reset statistics */
 	memset(&global_stats, 0, sizeof(struct minivm_stats));
 	global_stats.reset = time(NULL);
-
-	if (emailbody) {
-		free(emailbody);
-		emailbody = NULL;
-	}
-	if (pagerbody) {
-		free(pagerbody);
-		pagerbody = NULL;
-	}
-	if (pagersubject) {
-		free(pagersubject);
-		pagersubject = NULL;
-	}
 
 	/* Make sure we could load configuration file */
 	if (!cfg) {
@@ -2038,7 +2096,7 @@ static int load_config(void)
 	if ((s = ast_variable_retrieve(cfg, "general", "emailsubject"))) 
 		ast_copy_string(template->subject,s,sizeof(template->subject));
 	if ((s = ast_variable_retrieve(cfg, "general", "emailbody"))) 
-		template->body = parse_emailbody(s);
+		template->body = message_template_parse_emailbody(s);
 	template->attachment = TRUE;
 
 	message_template_build("pager-default", NULL);
@@ -2050,7 +2108,7 @@ static int load_config(void)
 	if ((s = ast_variable_retrieve(cfg, "general", "pagersubject")))
 		ast_copy_string(template->subject,s,sizeof(template->subject));
 	if ((s = ast_variable_retrieve(cfg, "general", "pagerbody"))) 
-		template->body = parse_emailbody(s);
+		template->body = message_template_parse_emailbody(s);
 	template->attachment = FALSE;
 
 	if (error)
