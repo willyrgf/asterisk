@@ -1896,18 +1896,20 @@ static char *message_template_parse_filebody(char *filename) {
 			writepos++;
 		}
 		ast_copy_string(writepos, readbuf, sizeof(buf) - (writepos - buf));
-		ast_log(LOG_DEBUG, "---> Message body now: %s\n", buf);
 		writepos += strlen(readbuf) - 1;
 		if (option_debug > 3) {
 			ast_log(LOG_DEBUG, "---> Reading message template : Line %d: %s\n", lines, readbuf);
-			ast_log(LOG_DEBUG, "--->         Strlen readbuf %d Writepos %d Left %d\n", strlen(readbuf), writepos - buf, sizeof(buf) - (writepos - buf));
+			ast_log(LOG_DEBUG, "--->         Strlen readbuf %d Writepos %d Left %d\n", strlen(readbuf), (int) (writepos - buf), (int) ((int) sizeof(buf) - (writepos - buf)));
+			ast_log(LOG_DEBUG, "---> Message body now: %s\n", buf);
 		}
 	}
 	fclose(fi);
 	messagebody = calloc(1, strlen(buf + 1));
-	ast_copy_string(messagebody, buf, sizeof(messagebody));
-	if (option_debug > 3)
-		ast_log(LOG_DEBUG, "---> Reading message template : \n%s\n---- END message template--- \n", messagebody);
+	ast_copy_string(messagebody, buf, strlen(buf) + 1);
+	if (option_debug > 3) {
+		ast_log(LOG_DEBUG, "---> Size of allocation %d\n", (int) strlen(buf + 1) );
+		ast_log(LOG_DEBUG, "---> Done reading message template : \n%s\n---- END message template--- \n", messagebody);
+	}
 
 	return messagebody;
 }
@@ -2281,7 +2283,7 @@ static int handle_minivm_show_stats(int fd, int argc, char *argv[])
 }
 
 static struct ast_cli_entry cli_voicemail[] = {
-	{ { "minivm", "show", "users", NULL },
+	{ { "minivm", listshow", "users", NULL },
 	handle_minivm_show_users, "List defined mini-voicemail boxes",
 	minivm_show_users_help, complete_minivm_show_users, NULL },
 
