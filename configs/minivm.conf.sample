@@ -32,7 +32,7 @@ silencethreshold=128
 ; You can override the default program to send e-mail if you wish, too
 ; This is used both for e-mail and pager messages
 ;mailcmd=/usr/sbin/sendmail -t
-
+;
 ;--------------Default e-mail message template (used if no templates are used) ------
 ;fromstring=The Asterisk PBX
 ;
@@ -55,6 +55,7 @@ silencethreshold=128
 emaildateformat=%A, %B %d, %Y at %r
 ; 24h date format
 ;emaildateformat=%A, %d %B %Y at %H:%M:%S
+;
 ;--------------Default pager message template (used if no templates are used) ------
 ; You can also change the Pager From: string, the pager body and/or subject.
 ; The above defined variables also can be used here
@@ -155,24 +156,25 @@ dateformat=%A, %B %d, %Y at %r
 ;----------------------- Mailbox accounts --------------------------
 ;Template for mailbox definition - all options
 ;
-;	[username@domain]		; Has to be unique within domain
+;	[username@domain]		; Has to be unique within domain (MWM_USERNAME, MWM_DOMAIN)
 ;	etemplate = sv_se		; Email template from [templates]
 ;	ptemplate = en_us		; Pager template from [templates]
 ;	email = userpart@domain		; Extra e-mail address (overrides mailbox name)
+;	pager = pageremail@domain	; E-mail address for pager messages
+;	fullname = Mark Spencer		; Full name  (MWM_NAME)
 ;	options =			; E-mail options, se below
 ;	zone=se				; Time zone
-;	notifyapp
-;	xmppuri
-;	fromaddress
-;	language
+;	serveremail = asterisk@digium.com	; Who to send email from (overrides template if set)
+;	volgain =			; Volume gain setting (requires "sox")
+;	setvar= SERVICENAME=Voop.com Networks ; Extra variables to use in template
 
 ; Remember that you can use Asterisk Configuration Templates (ACT)
 
 ;	[template@domain](!)		; Declare template
 ;	fromaddress = pbx@domain
-;	language = se
 ;	etemplate = sv_se
+; 	serveremail = voicemail@voop.net
 
 ;	[user2@domain](template@domain)	; Declare user2 account using template
-;	xmppuri = jabber@gtalk.se
+;	fullname = Olle E. Johansson
 ;					; User inherits everything from template
