@@ -65,6 +65,7 @@
  *	- fix "vm-theextensionis.gsm" voiceprompt from Allison in various formats
  *		"The extension you are calling"
  *	- Maybe split recording from actual forwarding in e-mail into two applications
+ *	- For trunk, consider using channel storage for information passing between small applications
  */
 
 #include <stdlib.h>

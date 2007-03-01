@@ -166,7 +166,7 @@ dateformat=%A, %B %d, %Y at %r
 ;	zone=se				; Time zone
 ;	serveremail = asterisk@digium.com	; Who to send email from (overrides template if set)
 ;	volgain =			; Volume gain setting (requires "sox")
-;	setvar= SERVICENAME=Voop.com Networks ; Extra variables to use in template
+;	setvar=SERVICENAME=Voop.com Networks ; Extra variables to use in template
 
 ; Remember that you can use Asterisk Configuration Templates (ACT)
 
