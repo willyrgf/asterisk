@@ -20,7 +20,7 @@
 
 /*! \file
  *
- * \brief MiniVoiceMail - A Minimal Voicemail System
+ * \brief MiniVoiceMail - A Minimal Voicemail System for Asterisk
  *
  * A voicemail system in small building blocks, working together
  * based on the Comedian Mail voicemail system (app_voicemail.c).
@@ -31,32 +31,57 @@
  *
  * \ingroup applications
  *
- * \page App_minivm	Markodian Mail - A minimal voicemail system
+ * \page App_minivm	Asterisk Mini-voicemail - A minimal voicemail system
  *	
  *	This is a minimal voicemail system, building blocks for something
- *	else. Currently, there's two applications in here:
- *	- minivm_send - record voicemail and send as e-mail
- *	- minivm_greet - Play user's greeting or default greeting
+ *	else. 
  *
+ *	Dialplan applications
+ *	- minivmRecord - record voicemail and send as e-mail ( \ref minivm_record_exec() )
+ *	- minivmGreet - Play user's greeting or default greeting ( \ref minivm_greet_exec() )
+ *	- minivmNotify - Notify user of message ( \ref minivm_notify_exec() )
+ * 	- minivmDelete - Delete voicemail message ( \ref minivm_delete_exec() )
+ *
+ *	Dialplan functions
+ *	- MINIVMACCOUNT() - A dialplan function
+ *
+ *	CLI Commands
+ *	- minivm list accounts
+ *	- minivm list zones
+ *	- minivm list templates
+ *	- minivm show stats
+ *	- minivm show settings
+ *
+ *	Some notes
  *	- General configuration in minivm.conf
  *	- Users in realtime or configuration file
  *	- Or configured on the command line with just the e-mail address
  *		
- *	Voicemail accounts are identified 
- *	by userid and domain
+ *	Voicemail accounts are identified by userid and domain
  *
  *	Language codes are like setlocale - langcode_countrycode
- *	\note Don't use language codes like the rest of Asterisk, two letter countrycode
+ *	\note Don't use language codes like the rest of Asterisk, two letter countrycode. Use
+ *	language_country like setlocale(). 
+ *	
+ *	Examples:
+ *		- Swedish, Sweden	sv_se
+ *		- Swedish, Finland	sv_fi
+ *		- English, USA		en_us
+ *		- English, GB		en_gb
  *	
  * \par See also
  * \arg \ref Config_minivm
  * \arg \ref app_minivm.c
  * \arg Comedian mail: app_voicemail.c
+ * \arg \ref descrip_minivm_greet
+ * \arg \ref descrip_minivm_record
+ * \arg \ref descrip_minivm_delete
+ * \arg \ref descrip_minivm_notify
  *
+ * \arg \ref App_minivm_todo
  */
 
-/*! \page App_minivm_todo Markodian Minimail - todo
- *	- Do not create directories by default for users, just check if they exist
+/*! \page App_minivm_todo Asterisk Mini-Voicemail - todo
  *	- Record all voice files in standard temp directory - configurable
  *	- add documentation -not done
  *	- Implement log file
@@ -64,8 +89,17 @@
  *	- test, test, test, test
  *	- fix "vm-theextensionis.gsm" voiceprompt from Allison in various formats
  *		"The extension you are calling"
- *	- Maybe split recording from actual forwarding in e-mail into two applications
  *	- For trunk, consider using channel storage for information passing between small applications
+ *	- Set default directory for voicemail
+ *	- New app for recording busy, unavailable and temporary greeting
+ *	- New app for creating directory for account if it does not exist
+ *	- Re-insert code for IMAP storage at some point
+ *	- Jabber integration for notifications
+ *
+ *	For Asterisk 1.4
+ *	- Use string fields for minivm_account
+ *
+ * Back: \ref App_minivm
  */
 
 #include <stdlib.h>
@@ -150,16 +184,20 @@ static char MVM_SPOOL_DIR[AST_CONFIG_MAX_PATH];
 
 /* Module declarations */
 static char *tdesc = "Mini VoiceMail (A minimal Voicemail e-mail System)";
-static char *app = "MiniVM";		 	/* Leave a message */
-static char *app_greet = "MiniVMgreet";		/* Play voicemail prompts */
+static char *app_minivm_record = "MinivmRecord"; 	/* Leave a message */
+static char *app_minivm_greet = "MinivmGreet";		/* Play voicemail prompts */
+static char *app_minivm_notify = "MinivmNotify";	/* Notify about voicemail by using one of several methods */
+static char *app_minivm_delete = "MinivmDelete";	/* Notify about voicemail by using one of several methods */
 
-static char *synopsis_vm = "Receive Mini-Voicemail and forward via e-mail";
-static char *descrip_vm = 
-	"Syntax: minivm(username@domain[,options])\n"
+static char *synopsis_minivm_record = "Receive Mini-Voicemail and forward via e-mail";
+static char *descrip_minivm_record = 
+	"Syntax: MinivmRecord(username@domain[,options])\n"
 	"This application is part of the Mini-Voicemail system, configured in minivm.conf.\n"
 	"MiniVM records audio file in configured format and forwards message to e-mail and pager.\n"
 	"If there's no user account for that address, a temporary account will\n"
 	"be used with default options.\n"
+	"The recorded file name and path will be stored in MINIVM_FILENAME and the \n"
+	"duration of the message will be stored in MINIVM_DURATION\n"
 	"The application will exit if any of the following DTMF digits are \n"
 	"received and the requested extension exist in the current context.\n"
 	"    0 - Jump to the 'o' extension in the current dialplan context.\n"
@@ -172,19 +210,49 @@ static char *descrip_vm =
 	"           message. The units are whole-number decibels (dB).\n"
 	"\n";
 
-static char *synopsis_vm_greet = "Play Mini-Voicemail prompts";
-static char *descrip_vm_greet = 
-	"Syntax: minivm_greet(username@domain[,options])\n"
+static char *synopsis_minivm_greet = "Play Mini-Voicemail prompts";
+static char *descrip_minivm_greet = 
+	"Syntax: MinivmGreet(username@domain[,options])\n"
 	"This application is part of the Mini-Voicemail system, configured in minivm.conf.\n"
-	"minivm_greet() plays default prompts or user specific prompts.\n"
+	"MinivmGreet() plays default prompts or user specific prompts for an account.\n"
+	"Busy and unavailable messages can be choosen, but will be overridden if a temporary\n"
+	"message exists for the account.\n"
 	"\n"
-	"Result is given in channel variable MINIVM_STATUS\n"
+	"Result is given in channel variable MINIVMGREETSTATUS\n"
 	"        The possible values are:     SUCCESS | USEREXIT | FAILED\n\n"
 	"  Options:\n"
 	"    b    - Play the 'busy' greeting to the calling party.\n"
 	"    s    - Skip the playback of instructions for leaving a message to the\n"
 	"           calling party.\n"
 	"    u    - Play the 'unavailable greeting.\n"
+	"\n";
+
+static char *synopsis_minivm_notify = "Notify voicemail owner about new messages.\n";
+static char *descrip_minivm_notify = 
+	"Syntax: MinivmNotify(username@domain[,template])\n"
+	"This application is part of the Mini-Voicemail system, configured in minivm.conf.\n"
+	"MiniVMnotify forwards messages about new voicemail to e-mail and pager.\n"
+	"If there's no user account for that address, a temporary account will\n"
+	"be used with default options (set in minivm.conf).\n"
+	"The recorded file name and path will be read from MVM_FILENAME and the \n"
+	"duration of the message will be accessed from MVM_DURATION (set by MinivmRecord() )\n"
+	"If not template is given, the default email template will be used to send email and\n"
+	"default pager template to send paging message (if the user account is configured with\n"
+	"a paging address.\n"
+	"\n"
+	"Result is given in channel variable MINIVMNOTIFYSTATUS\n"
+	"        The possible values are:     SUCCESS | FAILED\n"
+	"\n";
+
+static char *synopsis_minivm_delete = "Delete Mini-Voicemail voicemail messages";
+static char *descrip_minivm_delete = 
+	"Syntax: MinivmDelete(username@domain [,filename])\n"
+	"This application is part of the Mini-Voicemail system, configured in minivm.conf.\n"
+	"It deletes voicemail file set in MVM_FILENAME or given filename.\n"
+	"\n"
+	"Result is given in channel variable MINIVMDELETESTATUS\n"
+	"        The possible values are:     SUCCESS |  FAILED\n"
+	"	 FAILED is set if the file does not exist or can't be deleted.\n"
 	"\n";
 
 enum {
@@ -211,16 +279,18 @@ AST_APP_OPTIONS(minivm_app_options, {
 
 
 
-/*! \brief Structure for linked list of Mini-Voicemail users */
-struct minivm_user {
+/*! \brief Structure for linked list of Mini-Voicemail users: \ref minivm_accounts */
+struct minivm_account {
 	char username[AST_MAX_CONTEXT];	/*!< Mailbox username */
 	char domain[AST_MAX_CONTEXT];	/*!< Voicemail domain */
-	char password[80];		/*!< Secret pin code, numbers only */
-	char fullname[80];		/*!< Full name, for directory app */
+	
+	char pincode[10];		/*!< Secret pin code, numbers only */
+	char fullname[120];		/*!< Full name, for directory app */
 	char email[80];			/*!< E-mail address - override */
 	char pager[80];			/*!< E-mail address to pager (no attachment) */
+	char accountcode[AST_MAX_ACCOUNT_CODE];	/*!< Voicemail account account code */
 	char serveremail[80];		/*!< From: Mail address */
-	char mailcmd[160];		/*!< Configurable mail command */
+	char externnotify[160];		/*!< Configurable notification command */
 	char language[MAX_LANGUAGE];    /*!< Config: Language setting */
 	char zonetag[80];		/*!< Time zone */
 	char uniqueid[20];		/*!< Unique integer identifier */
@@ -231,13 +301,17 @@ struct minivm_user {
 	unsigned int flags;		/*!< MVM_ flags */	
 	struct ast_variable *chanvars;	/*!< Variables for e-mail template */
 	double volgain;			/*!< Volume gain for voicemails sent via e-mail */
-	AST_LIST_ENTRY(minivm_user) list;	
+	AST_LIST_ENTRY(minivm_account) list;	
 };
+
+/*! \brief The list of e-mail accounts */
+static AST_LIST_HEAD_STATIC(minivm_accounts, minivm_account);
 
 /*! \brief Linked list of e-mail templates in various languages 
 	These are used as templates for e-mails, pager messages and jabber messages
+	\ref message_templates
 */
-struct minivm_message {
+struct minivm_template {
 	char	name[80];		/*!< Template name */
 	char	*body;			/*!< Body of this template */
 	char	fromstring[100];	/*!< Who's sending the e-mail? */
@@ -245,13 +319,13 @@ struct minivm_message {
 	char	charset[32];		/*!< Default character set for this template */
 	char	dateformat[80];		/*!< Date format to use in this attachment */
 	int	attachment;		/*!< Attachment of media yes/no - no for pager messages */
-	AST_LIST_ENTRY(minivm_message) list;	/*!< List mechanics */
+	AST_LIST_ENTRY(minivm_template) list;	/*!< List mechanics */
 };
 
-static AST_LIST_HEAD_STATIC(message_templates, minivm_message);	/*!< The list of e-mail templates */
-static AST_LIST_HEAD_STATIC(minivm_users, minivm_user);	/*!< The list of e-mail templates */
+/*! \brief The list of e-mail templates */
+static AST_LIST_HEAD_STATIC(message_templates, minivm_template);
 
-/*! Options for leaving voicemail with the voicemail() application */
+/*! \brief Options for leaving voicemail with the voicemail() application */
 struct leave_vm_options {
 	unsigned int flags;
 	signed char record_gain;
@@ -268,13 +342,14 @@ struct b64_baseio {
 
 /*! \brief Voicemail time zones */
 struct minivm_zone {
-	char name[80];	/* Name of this time zone */
-	char timezone[80];
-	char msg_format[512];
+	char name[80];				/*!< Name of this time zone */
+	char timezone[80];			/*!< Timezone definition */
+	char msg_format[BUFSIZ];		/*!< Not used in minivm ...yet */
 	AST_LIST_ENTRY(minivm_zone) list;	/*!< List mechanics */
 };
 
-static AST_LIST_HEAD_STATIC(minivm_zones, minivm_zone);	/*!< The list of e-mail templates */
+/*! \brief The list of e-mail time zones */
+static AST_LIST_HEAD_STATIC(minivm_zones, minivm_zone);
 
 /*! \brief Structure for gathering statistics */
 struct minivm_stats {
@@ -310,6 +385,7 @@ static char global_charset[32];			/*!< Global charset in messages */
 
 static double global_volgain;	/*!< Volume gain for voicmemail via e-mail */
 
+/*! \brief Default dateformat, can be overridden in configuration file */
 #define DEFAULT_DATEFORMAT 	"%A, %B %d, %Y at %r"
 #define DEFAULT_CHARSET		"ISO-8859-1"
 
@@ -320,14 +396,14 @@ LOCAL_USER_DECL;
 static char *message_template_parse_filebody(char *filename);
 static char *message_template_parse_emailbody(char *body);
 static int create_vmaccount(char *name, struct ast_variable *var, int realtime);
-static struct minivm_user *find_user_realtime(const char *domain, const char *username);
+static struct minivm_account *find_user_realtime(const char *domain, const char *username);
 
 /*! \brief Create message template */
-static struct minivm_message *message_template_create(char *name)
+static struct minivm_template *message_template_create(char *name)
 {
-	struct minivm_message *template;
+	struct minivm_template *template;
 
-	template = calloc(1, sizeof(struct minivm_message));
+	template = calloc(1, sizeof(struct minivm_template));
 	if (!template)
 		return NULL;
 
@@ -342,7 +418,7 @@ static struct minivm_message *message_template_create(char *name)
 }
 
 /*! \brief Release memory allocated by message template */
-static void message_template_free(struct minivm_message *template)
+static void message_template_free(struct minivm_template *template)
 {
 	if (template->body)
 		free(template->body);
@@ -353,7 +429,7 @@ static void message_template_free(struct minivm_message *template)
 /*! \brief Build message template from configuration */
 static int message_template_build(char *name, struct ast_variable *var)
 {
-	struct minivm_message *template;
+	struct minivm_template *template;
 	int error = 0;
 
 	template = message_template_create(name);
@@ -410,9 +486,9 @@ static int message_template_build(char *name, struct ast_variable *var)
 }
 
 /*! \brief Find named template */
-static struct minivm_message *message_template_find(char *name)
+static struct minivm_template *message_template_find(char *name)
 {
-	struct minivm_message *this, *res = NULL;
+	struct minivm_template *this, *res = NULL;
 
 	if (ast_strlen_zero(name))
 		return NULL;
@@ -433,7 +509,7 @@ static struct minivm_message *message_template_find(char *name)
 /*! \brief Clear list of templates */
 static void message_destroy_list(void)
 {
-	struct minivm_message *this;
+	struct minivm_template *this;
 	AST_LIST_LOCK(&message_templates);
 	while ((this = AST_LIST_REMOVE_HEAD(&message_templates, list))) 
 		message_template_free(this);
@@ -576,7 +652,7 @@ static int get_date(char *s, int len)
 
 
 /*! \brief Free user structure - if it's allocated */
-static void free_user(struct minivm_user *vmu)
+static void free_user(struct minivm_account *vmu)
 {
 	if (vmu->chanvars)
 		ast_variables_destroy(vmu->chanvars);
@@ -588,14 +664,14 @@ static void free_user(struct minivm_user *vmu)
 /*! \brief Prepare for voicemail template by adding channel variables 
 	to the channel
 */
-static void prep_email_sub_vars(struct ast_channel *channel, const struct minivm_user *vmu, const char *cidnum, const char *cidname, const char *dur, const char *date)
+static void prep_email_sub_vars(struct ast_channel *channel, const struct minivm_account *vmu, const char *cidnum, const char *cidname, const char *dur, const char *date)
 {
 	char callerid[256];
 	struct ast_variable *var;
 
-	if (vmu->chanvars) {
 	for (var = vmu->chanvars ; var ; var = var->next)
-                pbx_builtin_setvar_helper(channel, var->name, var->value);}
+                pbx_builtin_setvar_helper(channel, var->name, var->value);
+
 	/* Prepare variables for substition in email body and subject */
 	pbx_builtin_setvar_helper(channel, "MVM_NAME", vmu->fullname);
 	pbx_builtin_setvar_helper(channel, "MVM_DUR", dur);
@@ -608,7 +684,7 @@ static void prep_email_sub_vars(struct ast_channel *channel, const struct minivm
 }
 
 /*! \brief Set default values for Mini-Voicemail users */
-static void populate_defaults(struct minivm_user *vmu)
+static void populate_defaults(struct minivm_account *vmu)
 {
 	ast_copy_flags(vmu, (&globalflags), AST_FLAGS_ALL);	
 	ast_copy_string(vmu->attachfmt, default_vmformat, sizeof(vmu->attachfmt));
@@ -635,11 +711,11 @@ static char *mailheader_quote(const char *from, char *to, size_t len)
 
 
 /*! \brief Allocate new vm user and set default values */
-static struct minivm_user *mvm_user_alloc(void)
+static struct minivm_account *mvm_user_alloc(void)
 {
-	struct minivm_user *new;
+	struct minivm_account *new;
 
-	new = calloc(1, sizeof(struct minivm_user));
+	new = calloc(1, sizeof(struct minivm_account));
 	if (!new)
 		return NULL;
 	populate_defaults(new);
@@ -651,18 +727,18 @@ static struct minivm_user *mvm_user_alloc(void)
 /*! \brief Clear list of users */
 static void vmaccounts_destroy_list(void)
 {
-	struct minivm_user *this;
-	AST_LIST_LOCK(&minivm_users);
-	while ((this = AST_LIST_REMOVE_HEAD(&minivm_users, list))) 
+	struct minivm_account *this;
+	AST_LIST_LOCK(&minivm_accounts);
+	while ((this = AST_LIST_REMOVE_HEAD(&minivm_accounts, list))) 
 		free(this);
-	AST_LIST_UNLOCK(&minivm_users);
+	AST_LIST_UNLOCK(&minivm_accounts);
 }
 
 
 /*! \brief Find user from static memory object list */
-static struct minivm_user *find_user(const char *domain, const char *username)
+static struct minivm_account *find_account(const char *domain, const char *username)
 {
-	struct minivm_user *vmu = NULL, *cur;
+	struct minivm_account *vmu = NULL, *cur;
 
 
 	if (ast_strlen_zero(domain) || ast_strlen_zero(username)) {
@@ -672,18 +748,18 @@ static struct minivm_user *find_user(const char *domain, const char *username)
 	if (option_debug > 2)
 		ast_log(LOG_DEBUG, "-_-_-_- Looking for voicemail user %s in domain %s\n", username, domain);
 
-	AST_LIST_LOCK(&minivm_users);
-	AST_LIST_TRAVERSE(&minivm_users, cur, list) {
-		ast_log(LOG_DEBUG, " ---> Checking %s@%s\n", cur->username, cur->domain);
+	AST_LIST_LOCK(&minivm_accounts);
+	AST_LIST_TRAVERSE(&minivm_accounts, cur, list) {
 		/* Is this the voicemail account we're looking for? */
 		if (!strcasecmp(domain, cur->domain) && !strcasecmp(username, cur->username))
 			break;
 	}
-	AST_LIST_UNLOCK(&minivm_users);
+	AST_LIST_UNLOCK(&minivm_accounts);
 
 	if (cur) {
 		if (option_debug > 2)
 			ast_log(LOG_DEBUG, "-_-_- Found account for %s@%s\n", username, domain);
+		vmu = cur;
 
 	} else
 		vmu = find_user_realtime(domain, username);
@@ -704,12 +780,12 @@ static struct minivm_user *find_user(const char *domain, const char *username)
 }
 
 /*! \brief Find user in realtime storage 
-	Returns pointer to minivm_user structure
+	Returns pointer to minivm_account structure
 */
-static struct minivm_user *find_user_realtime(const char *domain, const char *username)
+static struct minivm_account *find_user_realtime(const char *domain, const char *username)
 {
 	struct ast_variable *var;
-	struct minivm_user *retval;
+	struct minivm_account *retval;
 	char name[MAXHOSTNAMELEN];
 
 	retval = mvm_user_alloc();
@@ -735,7 +811,7 @@ static struct minivm_user *find_user_realtime(const char *domain, const char *us
 }
 
 /*! Send voicemail with audio file as an attachment */
-static int sendmail(struct minivm_message *template, char *srcemail, struct minivm_user *vmu, char *cidnum, char *cidname, char *attach, char *format, int duration, int attach_user_voicemail, enum mvm_messagetype type)
+static int sendmail(struct minivm_template *template, char *srcemail, struct minivm_account *vmu, char *cidnum, char *cidname, const char *filename, char *format, int duration, int attach_user_voicemail, enum mvm_messagetype type)
 {
 	FILE *p = NULL;
 	int pfd;
@@ -754,6 +830,7 @@ static int sendmail(struct minivm_message *template, char *srcemail, struct mini
 	int len_passdata;
 	char *passdata2;
 	struct ast_channel *ast;
+	char *finalfilename;
 
 	if (type == MVM_MESSAGE_EMAIL) {
 		if (vmu && !ast_strlen_zero(vmu->email)) {
@@ -786,18 +863,20 @@ static int sendmail(struct minivm_message *template, char *srcemail, struct mini
 		if (option_debug > 2)
 			ast_log(LOG_DEBUG, "newtmp: %s\n", newtmp);
 		tmpfd = mkstemp(newtmp);
-		snprintf(tmpcmd, sizeof(tmpcmd), "sox -v %.4f %s.%s %s.%s", vmu->volgain, attach, format, newtmp, format);
+		snprintf(tmpcmd, sizeof(tmpcmd), "sox -v %.4f %s.%s %s.%s", vmu->volgain, filename, format, newtmp, format);
 		ast_safe_system(tmpcmd);
-		attach = newtmp;
+		finalfilename = newtmp;
 		if (option_debug > 2)
-			ast_log	(LOG_DEBUG, "-- VOLGAIN: Stored at: %s.%s - Level: %.4f - Mailbox: %s\n", attach, format, vmu->volgain, vmu->username);
+			ast_log	(LOG_DEBUG, "-- VOLGAIN: Stored at: %s.%s - Level: %.4f - Mailbox: %s\n", filename, format, vmu->volgain, vmu->username);
+	} else {
+		finalfilename = ast_strdupa(filename);
 	}
 
 	/* Create file name */
-	snprintf(fname, sizeof(fname), "%s.%s", attach, format);
+	snprintf(fname, sizeof(fname), "%s.%s", finalfilename, format);
 
 	if (option_debug && template->attachment)
-		ast_log(LOG_DEBUG, "-- Attaching file '%s', format '%s', uservm is '%d'\n", attach, format, attach_user_voicemail);
+		ast_log(LOG_DEBUG, "-- Attaching file '%s', format '%s', uservm is '%d'\n", finalfilename, format, attach_user_voicemail);
 	/* Make a temporary file instead of piping directly to sendmail, in case the mail
 	   command hangs */
 	pfd = mkstemp(tmp);
@@ -939,7 +1018,7 @@ static int sendmail(struct minivm_message *template, char *srcemail, struct mini
 /*! \brief Create directory based on components */
 static int make_dir(char *dest, int len, const char *domain, const char *username, const char *folder)
 {
-	return snprintf(dest, len, "%s%s/%s%s%s", MVM_SPOOL_DIR, domain, username, ast_strlen_zero(folder) ? "" : "/", folder);
+	return snprintf(dest, len, "%s%s/%s%s%s", MVM_SPOOL_DIR, domain, username, ast_strlen_zero(folder) ? "" : "/", folder ? folder : "");
 }
 
 /*! \brief Checks if directory exists. Does not create directory, but builds string in dest
@@ -952,7 +1031,7 @@ static int make_dir(char *dest, int len, const char *domain, const char *usernam
 static int check_dirpath(char *dest, int len, char *domain, char *username, char *folder)
 {
 	struct stat filestat;
-	make_dir(dest, len, domain, username, folder);
+	make_dir(dest, len, domain, username, folder ? folder : "");
 	if (stat(dest, &filestat)== -1)
 		return FALSE;
 	else
@@ -1063,6 +1142,7 @@ static int vm_delete(char *file)
 {
 	char *txt;
 	int txtsize = 0;
+	int res;
 
 	if (option_debug)
 		ast_log(LOG_DEBUG, "--- Deleting voicemail file %s\n", file);
@@ -1073,14 +1153,15 @@ static int vm_delete(char *file)
 	 * but trying to eliminate all sprintf's anyhow
 	 */
 	snprintf(txt, txtsize, "%s.txt", file);
-	unlink(txt);
-	return ast_filedelete(file, NULL);
+	res = unlink(txt);
+	res |=  ast_filedelete(file, NULL);
+	return res;
 }
 
 
 /*! \brief Record voicemail message & let caller review or re-record it, or set options if applicable */
 static int play_record_review(struct ast_channel *chan, char *playfile, char *recordfile, int maxtime, char *fmt,
-			      int outsidecaller, struct minivm_user *vmu, int *duration, const char *unlockdir,
+			      int outsidecaller, struct minivm_account *vmu, int *duration, const char *unlockdir,
 			      signed char record_gain)
 {
  	int cmd = 0;
@@ -1222,20 +1303,40 @@ static int vm_lock_path(const char *path)
 	}
 }
 
+/*! \brief Run external notification for voicemail message */
+static void run_externnotify(struct ast_channel *chan, struct minivm_account *vmu)
+{
+	char arguments[BUFSIZ];
+
+	if (ast_strlen_zero(vmu->externnotify) && ast_strlen_zero(global_externnotify))
+		return;
+
+	snprintf(arguments, sizeof(arguments), "%s %s@%s %s %s&", 
+		ast_strlen_zero(vmu->externnotify) ? global_externnotify : vmu->externnotify, 
+		vmu->username, vmu->domain,
+		chan->cid.cid_name, chan->cid.cid_num);
+
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Executing: %s\n", arguments);
+
+  	ast_safe_system(arguments);
+}
+
 /*! \brief Send message to voicemail account owner */
-static int notify_new_message(struct ast_channel *chan, struct minivm_user *vmu, char *filename, long duration, char *fmt, char *cidnum, char *cidname)
+static int notify_new_message(struct ast_channel *chan, struct minivm_account *vmu, const char *filename, long duration, const char *format, char *cidnum, char *cidname)
 {
 	char ext_context[PATH_MAX], *stringp;
 	char *myserveremail;
-	struct minivm_message *etemplate;
+	struct minivm_template *etemplate;
+	char *messageformat;
 
 	snprintf(ext_context, sizeof(ext_context), "%s@%s", vmu->username, vmu->domain);
 
 	if (!ast_strlen_zero(vmu->attachfmt)) {
-		if (strstr(fmt, vmu->attachfmt)) {
-			fmt = vmu->attachfmt;
+		if (strstr(format, vmu->attachfmt)) {
+			format = vmu->attachfmt;
 		} else 
-			ast_log(LOG_WARNING, "Attachment format '%s' is not one of the recorded formats '%s'.  Falling back to default format for '%s@%s'.\n", vmu->attachfmt, fmt, vmu->username, vmu->domain);
+			ast_log(LOG_WARNING, "Attachment format '%s' is not one of the recorded formats '%s'.  Falling back to default format for '%s@%s'.\n", vmu->attachfmt, format, vmu->username, vmu->domain);
 	}
 
 	etemplate = message_template_find(vmu->etemplate);
@@ -1243,8 +1344,7 @@ static int notify_new_message(struct ast_channel *chan, struct minivm_user *vmu,
 		etemplate = message_template_find("email-default");
 
 	/* Attach only the first format */
-	fmt = ast_strdupa(fmt);
-	stringp = fmt;
+	stringp = messageformat = ast_strdupa(format);
 	strsep(&stringp, "|");
 
 
@@ -1253,7 +1353,7 @@ static int notify_new_message(struct ast_channel *chan, struct minivm_user *vmu,
 	else
 		myserveremail = etemplate->fromstring;
 
-	sendmail(etemplate, myserveremail, vmu, cidnum, cidname, filename, fmt, duration, etemplate->attachment, MVM_MESSAGE_EMAIL);
+	sendmail(etemplate, myserveremail, vmu, cidnum, cidname, filename, messageformat, duration, etemplate->attachment, MVM_MESSAGE_EMAIL);
 
 	if (!ast_strlen_zero(vmu->pager))  {
 		/* Find template for paging */
@@ -1261,20 +1361,18 @@ static int notify_new_message(struct ast_channel *chan, struct minivm_user *vmu,
 		if (!etemplate)
 			etemplate = message_template_find("pager-default");
 
-		sendmail(etemplate, myserveremail, vmu, cidnum, cidname, filename, fmt, duration, etemplate->attachment, MVM_MESSAGE_PAGE);
+		sendmail(etemplate, myserveremail, vmu, cidnum, cidname, filename, messageformat, duration, etemplate->attachment, MVM_MESSAGE_PAGE);
 	}
 
-	vm_delete(filename);
 
-	manager_event(EVENT_FLAG_CALL, "MiniVoiceMail", "Action: SentMail\rn\nMailbox: %s@%s\r\n", vmu->username, vmu->domain);
-	// this needs to come back at a later time
-	//run_externnotify(vmu->context, vmu->mailbox);
+	manager_event(EVENT_FLAG_CALL, "MiniVoiceMail", "Action: SentNotification\rn\nMailbox: %s@%s\r\n", vmu->username, vmu->domain);
+
+	run_externnotify(chan, vmu);		/* Run external notification */
 	return 0;
 }
 
  
-/*! \brief Record voicemail message, store into file prepared for sending e-mail 
-*/
+/*! \brief Record voicemail message, store into file prepared for sending e-mail */
 static int leave_voicemail(struct ast_channel *chan, char *username, struct leave_vm_options *options)
 {
 	char tmptxtfile[PATH_MAX];
@@ -1289,7 +1387,7 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 	char fmt[80];
 	char *domain;
 	char tmp[256] = "";
-	struct minivm_user *vmu;
+	struct minivm_account *vmu;
 	int userdir;
 
 	ast_copy_string(tmp, username, sizeof(tmp));
@@ -1300,9 +1398,9 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 		domain++;
 	}
 
-	if (!(vmu = find_user(domain, username))) {
+	if (!(vmu = find_account(domain, username))) {
 		/* We could not find user, let's exit */
-		ast_log(LOG_WARNING, "No entry in voicemail config file for '%s@%s'\n", username, domain);
+		ast_log(LOG_ERROR, "Can't allocate temporary account for '%s@%s'\n", username, domain);
 		if (ast_test_flag(options, OPT_PRIORITY_JUMP) || option_priority_jumping)
 			ast_goto_if_exists(chan, chan->context, chan->exten, chan->priority + 101);
 		pbx_builtin_setvar_helper(chan, "MINIVMSTATUS", "FAILED");
@@ -1414,11 +1512,17 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 				ast_log(LOG_DEBUG, "The recorded media file is gone, so we should remove the .txt file too!\n");
 			unlink(tmptxtfile);
 			pbx_builtin_setvar_helper(chan, "MINIVMSTATUS", "FAILED");
+			if(ast_test_flag(vmu, MVM_ALLOCED))
+				free_user(vmu);
 			return 0;
 		}
 
-		/* assign a variable with the name of the voicemail file */	  
-		pbx_builtin_setvar_helper(chan, "MVM_MESSAGEFILE", tmptxtfile);
+		/* Set channel variables for the notify application */
+		pbx_builtin_setvar_helper(chan, "MVM_FILENAME", tmptxtfile);
+		snprintf(timebuf, sizeof(timebuf), "%d", duration);
+		pbx_builtin_setvar_helper(chan, "MVM_DURATION", timebuf);
+		pbx_builtin_setvar_helper(chan, "MVM_FORMAT", fmt);
+
 		/* Notify of new message to e-mail and pager */
 		notify_new_message(chan, vmu, tmptxtfile, duration, fmt, chan->cid.cid_num, chan->cid.cid_name);
 	}
@@ -1434,39 +1538,32 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 	if (res > 0)
 		res = 0;
 
+	if(ast_test_flag(vmu, MVM_ALLOCED))
+		free_user(vmu);
+
 	pbx_builtin_setvar_helper(chan, "MINIVMSTATUS", "SUCCESS");
 	return res;
 }
 
-/*! \brief Play voicemail prompts - either generic or user specific */
-static int minivm_prompt_exec(struct ast_channel *chan, void *data)
+/*! \brief Notify voicemail account owners - either generic template or user specific */
+static int minivm_notify_exec(struct ast_channel *chan, void *data)
 {
 	struct localuser *u;
-	struct leave_vm_options leave_options = { 0, '\0'};
 	int argc;
 	char *argv[2];
-	struct ast_flags flags = { 0 };
-	char *opts[OPT_ARG_ARRAY_SIZE];
 	int res = 0;
-	int ausemacro = 0;
-	int ousemacro = 0;
-	int ouseexten = 0;
 	char tmp[PATH_MAX];
-	char dest[PATH_MAX];
-	char prefile[PATH_MAX] = "";
-	char tempfile[PATH_MAX] = "";
-	char ext_context[256] = "";
 	char *domain;
-	char ecodes[16] = "#";
 	char *tmpptr;
-	struct minivm_user *vmu;
+	struct minivm_account *vmu;
 	char *username = argv[0];
+	const char *template;
+	const char *filename;
+	const char *format;
+	const char *duration_string;
 	
 	LOCAL_USER_ADD(u);
 
-	/* Answer channel if it's not already answered */
-	if (chan->_state != AST_STATE_UP)
-		ast_answer(chan);
 
 	if (ast_strlen_zero(data))  {
 		ast_log(LOG_ERROR, "Minivm needs at least an account argument \n");
@@ -1480,6 +1577,158 @@ static int minivm_prompt_exec(struct ast_channel *chan, void *data)
 		return -1;
 	}
 	argc = ast_app_separate_args(tmpptr, '|', argv, sizeof(argv) / sizeof(argv[0]));
+
+	if (argc == 2 && !ast_strlen_zero(argv[1]))
+		template = argv[1];
+
+	ast_copy_string(tmp, argv[0], sizeof(tmp));
+	username = tmp;
+	domain = strchr(tmp, '@');
+	if (domain) {
+		*domain = '\0';
+		domain++;
+	} 
+	if (ast_strlen_zero(domain) || ast_strlen_zero(username)) {
+		ast_log(LOG_ERROR, "Need username@domain as argument. Sorry. Argument 0 %s\n", argv[0]);
+		LOCAL_USER_REMOVE(u);
+		return -1;
+	}
+
+	if(!(vmu = find_account(domain, username))) {
+		/* We could not find user, let's exit */
+		ast_log(LOG_WARNING, "Could not allocate temporary memory for '%s@%s'\n", username, domain);
+		pbx_builtin_setvar_helper(chan, "MINIVMNOTIFYSTATUS", "FAILED");
+	}
+	
+	filename = pbx_builtin_getvar_helper(chan, "MVM_FILENAME");
+	format = pbx_builtin_getvar_helper(chan, "MVM_FORMAT");
+	duration_string = pbx_builtin_getvar_helper(chan, "MVM_DURATION");
+	/* Notify of new message to e-mail and pager */
+	if (!ast_strlen_zero(filename))
+		notify_new_message(chan, vmu, filename, atoi(duration_string), format, chan->cid.cid_num, chan->cid.cid_name);
+	else
+
+
+	if(ast_test_flag(vmu, MVM_ALLOCED))
+		free_user(vmu);
+
+
+	/* Ok, we're ready to rock and roll. Return to dialplan */
+	LOCAL_USER_REMOVE(u);
+
+	return res;
+
+}
+
+/*! \brief Dialplan function to record voicemail */
+static int minivm_record_exec(struct ast_channel *chan, void *data)
+{
+	int res = 0;
+	struct localuser *u;
+	char *tmp;
+	struct leave_vm_options leave_options;
+	int argc;
+	char *argv[2];
+	struct ast_flags flags = { 0 };
+	char *opts[OPT_ARG_ARRAY_SIZE];
+	
+	LOCAL_USER_ADD(u);
+	
+	memset(&leave_options, 0, sizeof(leave_options));
+
+	/* Answer channel if it's not already answered */
+	if (chan->_state != AST_STATE_UP)
+		ast_answer(chan);
+
+	if (ast_strlen_zero(data))  {
+		ast_log(LOG_ERROR, "Minivm needs at least an account argument \n");
+		LOCAL_USER_REMOVE(u);
+		return -1;
+	}
+	tmp = ast_strdupa((char *)data);
+	if (!tmp) {
+		ast_log(LOG_ERROR, "Out of memory\n");
+		LOCAL_USER_REMOVE(u);
+		return -1;
+	}
+	argc = ast_app_separate_args(tmp, '|', argv, sizeof(argv) / sizeof(argv[0]));
+	if (argc == 2) {
+		if (ast_app_parse_options(minivm_app_options, &flags, opts, argv[1])) {
+			LOCAL_USER_REMOVE(u);
+			return -1;
+		}
+		ast_copy_flags(&leave_options, &flags, OPT_SILENT | OPT_BUSY_GREETING | OPT_UNAVAIL_GREETING | OPT_PRIORITY_JUMP);
+		if (ast_test_flag(&flags, OPT_RECORDGAIN)) {
+			int gain;
+
+			if (sscanf(opts[OPT_ARG_RECORDGAIN], "%d", &gain) != 1) {
+				ast_log(LOG_WARNING, "Invalid value '%s' provided for record gain option\n", opts[OPT_ARG_RECORDGAIN]);
+				LOCAL_USER_REMOVE(u);
+				return -1;
+			} else 
+				leave_options.record_gain = (signed char) gain;
+		}
+	} 
+
+	/* Now run the appliation and good luck to you! */
+	res = leave_voicemail(chan, argv[0], &leave_options);
+
+	if (res == ERROR_LOCK_PATH) {
+		ast_log(LOG_ERROR, "Could not leave voicemail. The path is already locked.\n");
+		/* Send the call to n+101 priority, where n is the current priority*/
+		if (ast_test_flag(&leave_options, OPT_PRIORITY_JUMP) || option_priority_jumping)
+			if (ast_goto_if_exists(chan, chan->context, chan->exten, chan->priority + 101))
+				ast_log(LOG_WARNING, "Extension %s, priority %d doesn't exist.\n", chan->exten, chan->priority + 101);
+		pbx_builtin_setvar_helper(chan, "MINIVMSTATUS", "FAILED");
+		res = 0;
+	}
+	pbx_builtin_setvar_helper(chan, "MINIVMSTATUS", "SUCCESS");
+
+	
+	LOCAL_USER_REMOVE(u);
+
+	return res;
+}
+
+/*! \brief Play voicemail prompts - either generic or user specific */
+static int minivm_greet_exec(struct ast_channel *chan, void *data)
+{
+	struct localuser *u;
+	struct leave_vm_options leave_options = { 0, '\0'};
+	int argc;
+	char *argv[2];
+	struct ast_flags flags = { 0 };
+	char *opts[OPT_ARG_ARRAY_SIZE];
+	int res = 0;
+	int ausemacro = 0;
+	int ousemacro = 0;
+	int ouseexten = 0;
+	char tmp[PATH_MAX];
+	char dest[PATH_MAX];
+	char prefile[PATH_MAX];
+	char tempfile[PATH_MAX] = "";
+	char ext_context[256] = "";
+	char *domain;
+	char ecodes[16] = "#";
+	char *tmpptr;
+	struct minivm_account *vmu;
+	char *username = argv[0];
+	
+	LOCAL_USER_ADD(u);
+
+	if (ast_strlen_zero(data))  {
+		ast_log(LOG_ERROR, "Minivm needs at least an account argument \n");
+		LOCAL_USER_REMOVE(u);
+		return -1;
+	}
+	tmpptr = ast_strdupa((char *)data);
+	if (!tmpptr) {
+		ast_log(LOG_ERROR, "Out of memory\n");
+		LOCAL_USER_REMOVE(u);
+		return -1;
+	}
+	argc = ast_app_separate_args(tmpptr, '|', argv, sizeof(argv) / sizeof(argv[0]));
+
 	if (argc == 2) {
 		if (ast_app_parse_options(minivm_app_options, &flags, opts, argv[1])) {
 			LOCAL_USER_REMOVE(u);
@@ -1496,21 +1745,22 @@ static int minivm_prompt_exec(struct ast_channel *chan, void *data)
 		domain++;
 	} 
 	if (ast_strlen_zero(domain) || ast_strlen_zero(username)) {
-		ast_log(LOG_ERROR, "Need username@domain as argument. Sorry. Argument 0 %s\n", argv[0]);
+		ast_log(LOG_ERROR, "Need username@domain as argument. Sorry. Argument:  %s\n", argv[0]);
 		LOCAL_USER_REMOVE(u);
 		return -1;
 	}
 	if (option_debug)
-		ast_log(LOG_DEBUG, "-_-_- Trying to find prompts for user %s in domain %s\n", username, domain);
+		ast_log(LOG_DEBUG, "-_-_- Trying to find configuration for user %s in domain %s\n", username, domain);
 
-	if (!(vmu = find_user(domain, username))) {
-		/* We could not find user, let's exit */
-		ast_log(LOG_WARNING, "No entry in voicemail config file for '%s@%s'\n", username, domain);
-		if (ast_test_flag(&leave_options, OPT_PRIORITY_JUMP) || option_priority_jumping)
-			ast_goto_if_exists(chan, chan->context, chan->exten, chan->priority + 101);
-		pbx_builtin_setvar_helper(chan, "MINIVMGREETSTATUS", "FAILED");
-		return res;
+	if (!(vmu = find_account(domain, username))) {
+		ast_log(LOG_ERROR, "Could not allocate memory. \n");
+		LOCAL_USER_REMOVE(u);
+		return -1;
 	}
+
+	/* Answer channel if it's not already answered */
+	if (chan->_state != AST_STATE_UP)
+		ast_answer(chan);
 
 	/* Setup pre-file if appropriate */
 	if (strcmp(vmu->domain, "localhost"))
@@ -1578,6 +1828,9 @@ static int minivm_prompt_exec(struct ast_channel *chan, void *data)
 		if (option_debug > 1)
 			ast_log(LOG_DEBUG, "Hang up during prefile playback\n");
 		pbx_builtin_setvar_helper(chan, "MINIVMGREETSTATUS", "FAILED");
+		if(ast_test_flag(vmu, MVM_ALLOCED))
+			free_user(vmu);
+		LOCAL_USER_REMOVE(u);
 		return -1;
 	}
 	if (res == '#') {
@@ -1622,7 +1875,7 @@ static int minivm_prompt_exec(struct ast_channel *chan, void *data)
 			chan->priority = 0;
 			pbx_builtin_setvar_helper(chan, "MINIVMGREETSTATUS", "USEREXIT");
 		}
-		return 0;
+		res =  0;
 	} else if (res < 0) {
 		pbx_builtin_setvar_helper(chan, "MINIVMGREETSTATUS", "FAILED");
 		res = -1;
@@ -1640,72 +1893,42 @@ static int minivm_prompt_exec(struct ast_channel *chan, void *data)
 
 }
 
-/*! \brief Dialplan core function */
-static int minivm_exec(struct ast_channel *chan, void *data)
+/*! \brief Dialplan application to delete voicemail */
+static int minivm_delete_exec(struct ast_channel *chan, void *data)
 {
 	int res = 0;
 	struct localuser *u;
-	char *tmp;
-	struct leave_vm_options leave_options;
-	int argc;
-	char *argv[2];
-	struct ast_flags flags = { 0 };
-	char *opts[OPT_ARG_ARRAY_SIZE];
+	char *filename;
 	
 	LOCAL_USER_ADD(u);
 	
-	memset(&leave_options, 0, sizeof(leave_options));
+	if (!ast_strlen_zero(data))
+		filename = data;
+	else
+		filename = pbx_builtin_getvar_helper(chan, "MVM_FILENAME");
 
-	/* Answer channel if it's not already answered */
-	if (chan->_state != AST_STATE_UP)
-		ast_answer(chan);
-
-	if (ast_strlen_zero(data))  {
-		ast_log(LOG_ERROR, "Minivm needs at least an account argument \n");
+	if (ast_strlen_zero(filename)) {
 		LOCAL_USER_REMOVE(u);
-		return -1;
-	}
-	tmp = ast_strdupa((char *)data);
-	if (!tmp) {
-		ast_log(LOG_ERROR, "Out of memory\n");
-		LOCAL_USER_REMOVE(u);
-		return -1;
-	}
-	argc = ast_app_separate_args(tmp, '|', argv, sizeof(argv) / sizeof(argv[0]));
-	if (argc == 2) {
-		if (ast_app_parse_options(minivm_app_options, &flags, opts, argv[1])) {
-			LOCAL_USER_REMOVE(u);
-			return -1;
-		}
-		ast_copy_flags(&leave_options, &flags, OPT_SILENT | OPT_BUSY_GREETING | OPT_UNAVAIL_GREETING | OPT_PRIORITY_JUMP);
-		if (ast_test_flag(&flags, OPT_RECORDGAIN)) {
-			int gain;
-
-			if (sscanf(opts[OPT_ARG_RECORDGAIN], "%d", &gain) != 1) {
-				ast_log(LOG_WARNING, "Invalid value '%s' provided for record gain option\n", opts[OPT_ARG_RECORDGAIN]);
-				LOCAL_USER_REMOVE(u);
-				return -1;
-			} else 
-				leave_options.record_gain = (signed char) gain;
-		}
+		ast_log(LOG_ERROR, "No filename given in application arguments or channel variable MVM_FILENAME\n");
 	} 
 
-	/* Now run the appliation and good luck to you! */
-	res = leave_voicemail(chan, argv[0], &leave_options);
-
-	if (res == ERROR_LOCK_PATH) {
-		ast_log(LOG_ERROR, "Could not leave voicemail. The path is already locked.\n");
-		/* Send the call to n+101 priority, where n is the current priority*/
-		if (ast_test_flag(&leave_options, OPT_PRIORITY_JUMP) || option_priority_jumping)
-			if (ast_goto_if_exists(chan, chan->context, chan->exten, chan->priority + 101))
-				ast_log(LOG_WARNING, "Extension %s, priority %d doesn't exist.\n", chan->exten, chan->priority + 101);
-		pbx_builtin_setvar_helper(chan, "MINIVMSTATUS", "FAILED");
-		res = 0;
+	/* Go ahead and delete audio files from system, they're not needed any more */
+	if (ast_fileexists(filename, NULL, NULL) < 0) {
+		res = vm_delete(filename);
+		if (res) {
+			if (option_debug > 1)
+				ast_log(LOG_DEBUG, "Can't delete file: %s\n", filename);
+			pbx_builtin_setvar_helper(chan, "MINIVMDELETESTATUS", "FAILED");
+		} else {
+			if (option_debug > 1)
+				ast_log(LOG_DEBUG, "-_-_- Deleted voicemail file :: %s \n", filename);
+			pbx_builtin_setvar_helper(chan, "MINIVMDELETESTATUS", "SUCCESS");
+		}
+	} else {
+		if (option_debug > 1)
+			ast_log(LOG_DEBUG, "Filename does not exist: %s\n", filename);
+		pbx_builtin_setvar_helper(chan, "MINIVMDELETESTATUS", "FAILED");
 	}
-	pbx_builtin_setvar_helper(chan, "MINIVMSTATUS", "SUCCESS");
-
-	if(ast_test_flag(vmu, MVM_ALLOCED))
-		free_user(vmu);
 	
 	LOCAL_USER_REMOVE(u);
 
@@ -1716,7 +1939,7 @@ static int minivm_exec(struct ast_channel *chan, void *data)
 /*! \brief Append new mailbox to mailbox list from configuration file */
 static int create_vmaccount(char *name, struct ast_variable *var, int realtime)
 {
-	struct minivm_user *vmu;
+	struct minivm_account *vmu;
 	char *domain;
 	char *username;
 	char accbuf[BUFSIZ];
@@ -1740,7 +1963,7 @@ static int create_vmaccount(char *name, struct ast_variable *var, int realtime)
 		ast_log(LOG_DEBUG, "Creating static account for user %s domain %s\n", username, domain);
 
 	/* Allocate user account */
-	vmu = calloc(1, sizeof(struct minivm_user));
+	vmu = calloc(1, sizeof(struct minivm_account));
 	if (!vmu)
 		return 0;
 	
@@ -1759,12 +1982,18 @@ static int create_vmaccount(char *name, struct ast_variable *var, int realtime)
 			ast_copy_string(vmu->serveremail, var->value, sizeof(vmu->serveremail));
 		} else if (!strcasecmp(var->name, "email")) {
 			ast_copy_string(vmu->email, var->value, sizeof(vmu->email));
+		} else if (!strcasecmp(var->name, "accountcode")) {
+			ast_copy_string(vmu->accountcode, var->value, sizeof(vmu->accountcode));
+		} else if (!strcasecmp(var->name, "pincode")) {
+			ast_copy_string(vmu->pincode, var->value, sizeof(vmu->pincode));
 		} else if (!strcasecmp(var->name, "domain")) {
 			ast_copy_string(vmu->domain, var->value, sizeof(vmu->domain));
 		} else if (!strcasecmp(var->name, "language")) {
 			ast_copy_string(vmu->language, var->value, sizeof(vmu->language));
-		} else if (!strcasecmp(var->name, "zone")) {
+		} else if (!strcasecmp(var->name, "timezone")) {
 			ast_copy_string(vmu->zonetag, var->value, sizeof(vmu->zonetag));
+		} else if (!strcasecmp(var->name, "externnotify")) {
+			ast_copy_string(vmu->externnotify, var->value, sizeof(vmu->externnotify));
 		} else if (!strcasecmp(var->name, "etemplate")) {
 			ast_copy_string(vmu->etemplate, var->value, sizeof(vmu->etemplate));
 		} else if (!strcasecmp(var->name, "ptemplate")) {
@@ -1773,10 +2002,10 @@ static int create_vmaccount(char *name, struct ast_variable *var, int realtime)
 			ast_copy_string(vmu->fullname, var->value, sizeof(vmu->fullname));
 		} else if (!strcasecmp(var->name, "setvar")) {
 			char *varval;
-			char *varname = ast_strdupa(v->value);
+			char *varname = ast_strdupa(var->value);
 			struct ast_variable *tmpvar;
 
-			if (varname && (varval = strchr(varname,'='))) {
+			if (varname && (varval = strchr(varname, '='))) {
 				*varval = '\0';
 				varval++;
 				if ((tmpvar = ast_variable_new(varname, varval))) {
@@ -1796,9 +2025,9 @@ static int create_vmaccount(char *name, struct ast_variable *var, int realtime)
 	if (option_debug > 2)
 		ast_log(LOG_DEBUG, "...Linking account %s\n", name);
 	
-	AST_LIST_LOCK(&minivm_users);
-	AST_LIST_INSERT_TAIL(&minivm_users, vmu, list);
-	AST_LIST_UNLOCK(&minivm_users);
+	AST_LIST_LOCK(&minivm_accounts);
+	AST_LIST_INSERT_TAIL(&minivm_accounts, vmu, list);
+	AST_LIST_UNLOCK(&minivm_accounts);
 
 	global_stats.voicemailaccounts++;
 
@@ -1986,7 +2215,7 @@ static int apply_general_options(struct ast_variable *var)
 /*! \brief Load minivoicemail configuration */
 static int load_config(void)
 {
-	struct minivm_user *cur;
+	struct minivm_account *cur;
 	struct minivm_zone *zcur;
 	struct ast_config *cfg;
 	struct ast_variable *var;
@@ -1997,11 +2226,11 @@ static int load_config(void)
 	cfg = ast_config_load(VOICEMAIL_CONFIG);
 	ast_mutex_lock(&minivmlock);
 
-	AST_LIST_LOCK(&minivm_users);
-	while ((cur = AST_LIST_REMOVE_HEAD(&minivm_users, list))) {
+	AST_LIST_LOCK(&minivm_accounts);
+	while ((cur = AST_LIST_REMOVE_HEAD(&minivm_accounts, list))) {
 		free_user(cur);
 	}
-	AST_LIST_UNLOCK(&minivm_users);
+	AST_LIST_UNLOCK(&minivm_accounts);
 
 	/* Free all zones */
 	AST_LIST_LOCK(&minivm_zones);
@@ -2022,7 +2251,7 @@ static int load_config(void)
 	ast_set2_flag((&globalflags), FALSE, MVM_REVIEW);	
 	ast_set2_flag((&globalflags), FALSE, MVM_OPERATOR);	
 	strcpy(global_charset, "ISO-8859-1");
-	struct minivm_message *template;
+	struct minivm_template *template;
 	/* Reset statistics */
 	memset(&global_stats, 0, sizeof(struct minivm_stats));
 	global_stats.reset = time(NULL);
@@ -2070,15 +2299,6 @@ static int load_config(void)
 	message_template_build("email-default", NULL);
 	template = message_template_find("email-default");
 
-	//pbx_builtin_setvar_helper(ast, "MMVM_NAME", vmu->fullname);
-	//pbx_builtin_setvar_helper(ast, "MMVM_DUR", dur);
-	//pbx_builtin_setvar_helper(ast, "MMVM_DOMAIN", vmu->domain);
-	//pbx_builtin_setvar_helper(ast, "MMVM_USERNAME", vmu->username);
-	//pbx_builtin_setvar_helper(ast, "MMVM_CALLERID", ast_callerid_merge(callerid, sizeof(callerid), cidname, cidnum, "Unknown Caller"));
-	//pbx_builtin_setvar_helper(ast, "MMVM_CIDNAME", (cidname ? cidname : "an unknown caller"));
-	//pbx_builtin_setvar_helper(ast, "MMVM_CIDNUM", (cidnum ? cidnum : "an unknown caller"));
-	//pbx_builtin_setvar_helper(ast, "MMVM_DATE", date);
-
 	/* Load date format config for voicemail mail */
 	if ((s = ast_variable_retrieve(cfg, "general", "emaildateformat"))) 
 		ast_copy_string(template->dateformat, s, sizeof(template->dateformat));
@@ -2112,24 +2332,26 @@ static int load_config(void)
 	return 0;
 }
 
-
-
-
 static const char minivm_show_users_help[] =
-"Usage: minivm show users\n"
+"Usage: minivm list accounts\n"
 "       Lists all mailboxes currently set up\n";
 
 static const char minivm_show_zones_help[] =
-"Usage: minivm show zones\n"
+"Usage: minivm list zones\n"
 "       Lists zone message formats\n";
 
 static const char minivm_show_templates_help[] =
-"Usage: minivm show templates\n"
+"Usage: minivm list templates\n"
 "       Lists message templates for e-mail, paging and IM\n";
 
 static const char minivm_show_stats_help[] =
 "Usage: minivm show stats\n"
-"       List Mini-Voicemail counters\n";
+"       Display Mini-Voicemail counters\n";
+
+static const char minivm_show_settings_help[] =
+"Usage: minivm show settings\n"
+"       Display Mini-Voicemail general settings\n";
+
 
 static const char minivm_reload_help[] =
 "Usage: minivm reload\n"
@@ -2138,8 +2360,8 @@ static const char minivm_reload_help[] =
 /*! \brief CLI routine for listing templates */
 static int handle_minivm_show_templates(int fd, int argc, char *argv[])
 {
-	struct minivm_message *this;
-	char *output_format = "%-15s %-12s %-50s\n";
+	struct minivm_template *this;
+	char *output_format = "%-15s %-12s %-15.15s %-50s\n";
 	int count = 0;
 
 	if (argc > 3)
@@ -2151,10 +2373,13 @@ static int handle_minivm_show_templates(int fd, int argc, char *argv[])
 		AST_LIST_UNLOCK(&message_templates);
 		return RESULT_FAILURE;
 	}
-	ast_cli(fd, output_format, "Template name", "Charset", "Subject");
-	ast_cli(fd, output_format, "-------------", "-------", "-------");
+	ast_cli(fd, output_format, "Template name", "Charset", "Attach media", "Subject");
+	ast_cli(fd, output_format, "-------------", "-------", "------------", "-------");
 	AST_LIST_TRAVERSE(&message_templates, this, list) {
-		ast_cli(fd, output_format, this->name, this->charset ? this->charset : "-", this->subject ? this->subject : "-");
+		ast_cli(fd, output_format, this->name, 
+			this->charset ? this->charset : "-", 
+			this->attachment ? "Yes" : "No",
+			this->subject ? this->subject : "-");
 		count++;
 	}
 	AST_LIST_UNLOCK(&message_templates);
@@ -2162,10 +2387,11 @@ static int handle_minivm_show_templates(int fd, int argc, char *argv[])
 	return RESULT_SUCCESS;
 }
 
+/*! \brief CLI command to list voicemail accounts */
 static int handle_minivm_show_users(int fd, int argc, char *argv[])
 {
-	struct minivm_user *vmu;
-	char *output_format = "%-23s %-15s %-15s %-10s %-10s\n";
+	struct minivm_account *vmu;
+	char *output_format = "%-23s %-15s %-15s %-10s %-10s %-50s\n";
 	int count = 0;
 
 	if ((argc < 3) || (argc > 5) || (argc == 4))
@@ -2173,15 +2399,15 @@ static int handle_minivm_show_users(int fd, int argc, char *argv[])
 	if ((argc == 5) && strcmp(argv[3],"for"))
 		return RESULT_SHOWUSAGE;
 
-	AST_LIST_LOCK(&minivm_users);
-	if (AST_LIST_EMPTY(&minivm_users)) {
+	AST_LIST_LOCK(&minivm_accounts);
+	if (AST_LIST_EMPTY(&minivm_accounts)) {
 		ast_cli(fd, "There are no voicemail users currently defined\n");
-		AST_LIST_UNLOCK(&minivm_users);
+		AST_LIST_UNLOCK(&minivm_accounts);
 		return RESULT_FAILURE;
 	}
-	ast_cli(fd, output_format, "User", "E-Template", "P-template", "Zone", "Format");
-	ast_cli(fd, output_format, "----", "----------", "----------", "----", "------");
-	AST_LIST_TRAVERSE(&minivm_users, vmu, list) {
+	ast_cli(fd, output_format, "User", "E-Template", "P-template", "Zone", "Format", "Full name");
+	ast_cli(fd, output_format, "----", "----------", "----------", "----", "------", "---------");
+	AST_LIST_TRAVERSE(&minivm_accounts, vmu, list) {
 		char tmp[256] = "";
 
 
@@ -2191,10 +2417,11 @@ static int handle_minivm_show_users(int fd, int argc, char *argv[])
 			ast_cli(fd, output_format, tmp, vmu->etemplate ? vmu->etemplate : "-", 
 				vmu->ptemplate ? vmu->ptemplate : "-",
 				vmu->zonetag ? vmu->zonetag : "-", 
-				vmu->attachfmt ? vmu->attachfmt : "-");
+				vmu->attachfmt ? vmu->attachfmt : "-",
+				vmu->fullname);
 		}
 	}
-	AST_LIST_UNLOCK(&minivm_users);
+	AST_LIST_UNLOCK(&minivm_accounts);
 	ast_cli(fd, "\n * Total: %d minivoicemail accounts\n", count);
 	return RESULT_SUCCESS;
 }
@@ -2240,7 +2467,7 @@ static char *complete_minivm_show_users(const char *line, const char *word, int 
 {
 	int which = 0;
 	int wordlen;
-	struct minivm_user *vmu;
+	struct minivm_account *vmu;
 	const char *domain = "";
 
 	/* 0 - show; 1 - voicemail; 2 - users; 3 - for; 4 - <domain> */
@@ -2249,7 +2476,7 @@ static char *complete_minivm_show_users(const char *line, const char *word, int 
 	if (pos == 3)
 		return (state == 0) ? strdup("for") : NULL;
 	wordlen = strlen(word);
-	AST_LIST_TRAVERSE(&minivm_users, vmu, list) {
+	AST_LIST_TRAVERSE(&minivm_accounts, vmu, list) {
 		if (!strncasecmp(word, vmu->domain, wordlen)) {
 			if (domain && strcmp(domain, vmu->domain) && ++which > state)
 				return strdup(vmu->domain);
@@ -2258,6 +2485,26 @@ static char *complete_minivm_show_users(const char *line, const char *word, int 
 		}
 	}
 	return NULL;
+}
+
+/*! \brief CLI Show settings */
+static int handle_minivm_show_settings(int fd, int argc, char *argv[])
+{
+	ast_cli(fd, "* Mini-Voicemail general settings\n");
+	ast_cli(fd, "  -------------------------------\n");
+	ast_cli(fd, "\n");
+	ast_cli(fd, "  Mail command (shell):               %s\n", global_mailcmd);
+	ast_cli(fd, "  Max silence:                        %d\n", global_maxsilence);
+	ast_cli(fd, "  Silence treshold:                   %d\n", global_silencethreshold);
+	ast_cli(fd, "  Max message length (secs):          %d\n", global_vmmaxmessage);
+	ast_cli(fd, "  Min message length (secs):          %d\n", global_vmminmessage);
+	ast_cli(fd, "  Default format:                     %s\n", default_vmformat);
+	ast_cli(fd, "  Extern notify (shell):              %s\n", global_externnotify);
+	ast_cli(fd, "  Operator exit:                      %s\n", ast_test_flag(&globalflags, MVM_OPERATOR) ? "Yes" : "No");
+	ast_cli(fd, "  Message review:                     %s\n", ast_test_flag(&globalflags, MVM_REVIEW) ? "Yes" : "No");
+
+	ast_cli(fd, "\n");
+	return RESULT_SUCCESS;
 }
 
 /*! \brief Show stats */
@@ -2269,9 +2516,9 @@ static int handle_minivm_show_stats(int fd, int argc, char *argv[])
 	ast_cli(fd, "* Mini-Voicemail statistics\n");
 	ast_cli(fd, "  -------------------------\n");
 	ast_cli(fd, "\n");
-	ast_cli(fd, "  Voicemail accounts:                 %d\n", global_stats.voicemailaccounts);
-	ast_cli(fd, "  Templates:                          %d\n", global_stats.templates);
-	ast_cli(fd, "  Timezones:                          %d\n", global_stats.timezones);
+	ast_cli(fd, "  Voicemail accounts:                  %-5.5d\n", global_stats.voicemailaccounts);
+	ast_cli(fd, "  Templates:                           %-5.5d\n", global_stats.templates);
+	ast_cli(fd, "  Timezones:                           %-5.5d\n", global_stats.timezones);
 	if (global_stats.receivedmessages == 0) {
 		ast_cli(fd, "  Received messages since last reset:  <none>\n");
 	} else {
@@ -2288,9 +2535,89 @@ static int handle_minivm_show_stats(int fd, int argc, char *argv[])
 	return RESULT_SUCCESS;
 }
 
+/*! \brief  ${MINIVMACCOUNT()} Dialplan function - reads account data 
+*/
+static char *minivm_account_func_read(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len)
+{
+	char *ret = NULL;
+	struct minivm_account *vmu;
+	char *username, *domain, *colname;
+
+	if (!(username = ast_strdupa(data))) {
+		ast_log(LOG_ERROR, "Memory Error!\n");
+		return ret;
+	}
+
+	if ((colname = strchr(username, ':'))) {
+		*colname = '\0';
+		colname++;
+	} else {
+		colname = "path";
+	}
+	if ((domain = strchr(username, '@'))) {
+		*domain = '\0';
+		domain++;
+	}
+	if (ast_strlen_zero(username) || ast_strlen_zero(domain))
+		return ret;
+
+	if (!(vmu = find_account(domain, username)))
+		return ret;
+
+	if (!strcasecmp(colname, "hasaccount")) {
+		ast_copy_string(buf, (ast_test_flag(vmu, MVM_ALLOCED) ? "0" : "1"), len);
+	} else  if (!strcasecmp(colname, "fullname")) { 
+		ast_copy_string(buf, vmu->fullname, len);
+	} else  if (!strcasecmp(colname, "email")) { 
+		if (!ast_strlen_zero(vmu->email))
+			ast_copy_string(buf, vmu->email, len);
+		else
+			snprintf(buf, len, "%s@%s", vmu->username, vmu->domain);
+	} else  if (!strcasecmp(colname, "pager")) { 
+		ast_copy_string(buf, vmu->pager, len);
+	} else  if (!strcasecmp(colname, "etemplate")) { 
+		if (!ast_strlen_zero(vmu->etemplate))
+			ast_copy_string(buf, vmu->etemplate, len);
+		else
+			ast_copy_string(buf, "email-default", len);
+	} else  if (!strcasecmp(colname, "language")) { 
+		ast_copy_string(buf, vmu->language, len);
+	} else  if (!strcasecmp(colname, "timezone")) { 
+		ast_copy_string(buf, vmu->zonetag, len);
+	} else  if (!strcasecmp(colname, "ptemplate")) { 
+		if (!ast_strlen_zero(vmu->ptemplate))
+			ast_copy_string(buf, vmu->ptemplate, len);
+		else
+			ast_copy_string(buf, "email-default", len);
+	} else  if (!strcasecmp(colname, "accountcode")) {
+		ast_copy_string(buf, vmu->accountcode, len);
+	} else  if (!strcasecmp(colname, "pincode")) {
+		ast_copy_string(buf, vmu->pincode, len);
+	} else  if (!strcasecmp(colname, "path")) {
+		check_dirpath(buf, len, vmu->domain, vmu->username, NULL);
+	} else {	/* Look in channel variables */
+		struct ast_variable *var;
+		int found = 0;
+
+		for (var = vmu->chanvars ; var ; var = var->next)
+			if (!strcmp(var->name, colname)) {
+				ast_copy_string(buf, var->value, len);
+				found = 1;
+				break;
+			}
+	}
+	ret = buf;
+
+	if(ast_test_flag(vmu, MVM_ALLOCED))
+		free_user(vmu);
+
+	return ret;
+}
+
+
 /*! \brief CLI commands for Mini-voicemail */
 static struct ast_cli_entry cli_minivm[] = {
-	{ { "minivm", "list", "users", NULL },
+	{ { "minivm", "list", "accounts", NULL },
 	handle_minivm_show_users, "List defined mini-voicemail boxes",
 	minivm_show_users_help, complete_minivm_show_users, NULL },
 
@@ -2307,19 +2634,45 @@ static struct ast_cli_entry cli_minivm[] = {
 	minivm_reload_help, NULL, NULL },
 
 	{ { "minivm", "show", "stats", NULL },
-	handle_minivm_show_stats, "Show som mini-voicemail stats",
+	handle_minivm_show_stats, "Show some mini-voicemail statistics",
 	minivm_show_stats_help, NULL, NULL },
+
+	{ { "minivm", "show", "settings", NULL },
+	handle_minivm_show_settings, "Show mini-voicemail general settings",
+	minivm_show_settings_help, NULL, NULL },
 };
 
+static struct ast_custom_function minivm_account_function = {
+	.name = "MINIVMACCOUNT",
+	.synopsis = "Gets MiniVoicemail account information",
+	.syntax = "MINIVMACCOUNT(<account>:item)",
+	.read = minivm_account_func_read,
+	.desc = "Valid items are:\n"
+	"- path           Path to account mailbox (if account exists, otherwise temporary mailbox)\n"
+	"- hasaccount     1 if static Minivm account exists, 0 otherwise\n"
+	"- fullname       Full name of account owner\n"
+	"- email          Email address used for account\n"
+	"- etemplate      E-mail template for account (default template if none is configured)\n"   
+	"- ptemplate      Pager template for account (default template if none is configured)\n"   
+	"- accountcode    Account code for voicemail account\n"
+	"- pincode        Pin code for voicemail account\n"
+	"- timezone       Time zone for voicemail account\n"
+	"- language       Language for voicemail account\n"
+	"- <channel variable name> Channel variable value (set in configuration for account)\n"
+	"\n",
+};
 
 /*! \brief Load mini voicemail module */
 int load_module(void)
 {
 	int res;
 
-	res = ast_register_application(app, minivm_exec, synopsis_vm, descrip_vm);
-	res = ast_register_application(app_greet, minivm_prompt_exec, synopsis_vm_greet, descrip_vm_greet);
+	res = ast_register_application(app_minivm_record, minivm_record_exec, synopsis_minivm_record, descrip_minivm_record);
+	res = ast_register_application(app_minivm_greet, minivm_greet_exec, synopsis_minivm_greet, descrip_minivm_greet);
+	res = ast_register_application(app_minivm_notify, minivm_notify_exec, synopsis_minivm_notify, descrip_minivm_notify);
+	res = ast_register_application(app_minivm_delete, minivm_delete_exec, synopsis_minivm_delete, descrip_minivm_delete);
 
+	ast_custom_function_register(&minivm_account_function);
 	if (res)
 		return(res);
 
@@ -2349,10 +2702,13 @@ int unload_module(void)
 {
 	int res;
 	
-	res = ast_unregister_application(app);
-	res = ast_unregister_application(app_greet);
+	res = ast_unregister_application(app_minivm_record);
+	res |= ast_unregister_application(app_minivm_greet);
+	res |= ast_unregister_application(app_minivm_notify);
+	res |= ast_unregister_application(app_minivm_delete);
 	ast_cli_unregister_multiple(cli_minivm, sizeof(cli_minivm)/sizeof(cli_minivm[0]));
-	ast_uninstall_vm_functions();
+	ast_custom_function_unregister(&minivm_account_function);
+
 	message_destroy_list();		/* Destroy list of voicemail message templates */
 	timezone_destroy_list();	/* Destroy list of timezones */
 	vmaccounts_destroy_list();	/* Destroy list of voicemail accounts */

@@ -2,6 +2,15 @@
 ; Mini-Voicemail Configuration
 ; for the MiniVM set of applications
 ;
+; MiniVM consists of the following dialplan applications
+;   MinivmGreet       Play personal prompts for busy/unavailable/temporary messages or default prompts
+;   MinivmRecord      Record voice prompts to account directory or default directory
+;   MinivmNotify      Notify via e-mail or pager - with or without attachment
+;   MinivmDelete      Delete voice prompt (filename as argument or channel variable set by MinivmRecord)
+;
+; MiniVM works without accounts (just give e-mail address as argument) or with accounts in
+; this configuration file or realtime. The idea is to build voicemail as building blocks so that
+; a complete and adaptive voicemail system can be built in the dialplan
 
 [general]
 ; Default format for storing and sending voicemail
@@ -20,8 +29,10 @@ maxsilence=10
 ; Silence threshold (what we consider silence: the lower, the more sensitive)
 silencethreshold=128
 ; If you need to have an external program, i.e. /usr/bin/myapp called when a
-; voicemail is received by the server
-; this:
+; voicemail is received by the server. The arguments are
+;
+; 	<app> <username@domain> <callerid-number> <callerid-name>
+;
 ;externnotify=/usr/bin/myapp
 ; The character set for voicemail messages can be specified here
 ;charset=ISO-8859-1
@@ -163,8 +174,11 @@ dateformat=%A, %B %d, %Y at %r
 ;	pager = pageremail@domain	; E-mail address for pager messages
 ;	fullname = Mark Spencer		; Full name  (MWM_NAME)
 ;	options =			; E-mail options, se below
-;	zone=se				; Time zone
+;       accountcode =			; Account code (read in dialplan function MINIVMACCOUNT)
+;       pincode =			; Numeric pin code (read in dialplan function MINIVMACCOUNT)
+;	timezone=se			; Time zone
 ;	serveremail = asterisk@digium.com	; Who to send email from (overrides template if set)
+;	externnotify = <application>	; External application for this account
 ;	volgain =			; Volume gain setting (requires "sox")
 ;	setvar=SERVICENAME=Voop.com Networks ; Extra variables to use in template
 
