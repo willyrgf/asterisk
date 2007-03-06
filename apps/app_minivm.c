@@ -256,7 +256,7 @@ static char *descrip_minivm_greet =
 	"    u    - Play the 'unavailable greeting.\n"
 	"\n";
 
-static char *synopsis_minivm_notify = "Notify voicemail owner about new messages.\n";
+static char *synopsis_minivm_notify = "Notify voicemail owner about new messages.";
 static char *descrip_minivm_notify = 
 	"Syntax: MinivmNotify(username@domain[,template])\n"
 	"This application is part of the Mini-Voicemail system, configured in minivm.conf.\n"
@@ -284,7 +284,7 @@ static char *descrip_minivm_delete =
 	"	 FAILED is set if the file does not exist or can't be deleted.\n"
 	"\n";
 
-static char *synopsis_minivm_accmess = "Record account specific messages\n";
+static char *synopsis_minivm_accmess = "Record account specific messages";
 static char *descrip_minivm_accmess = 
 	"Syntax: MinivmAccmess(username@domain,option)\n"
 	"This application is part of the Mini-Voicemail system, configured in minivm.conf.\n"
@@ -2057,6 +2057,10 @@ static int minivm_accmess_exec(struct ast_channel *chan, void *data)
 		LOCAL_USER_REMOVE(u);
 		return -1;
 	}
+
+	/* Answer channel if it's not already answered */
+	if (chan->_state != AST_STATE_UP)
+		ast_answer(chan);
 	
 	/* Here's where the action is */
 	if (ast_test_flag(&flags, OPT_BUSY_GREETING)) {
