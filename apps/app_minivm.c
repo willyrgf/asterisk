@@ -41,6 +41,7 @@
  *	- minivmGreet - Play user's greeting or default greeting ( \ref minivm_greet_exec() )
  *	- minivmNotify - Notify user of message ( \ref minivm_notify_exec() )
  * 	- minivmDelete - Delete voicemail message ( \ref minivm_delete_exec() )
+ *	- minivmAccMess - Record personal messages (busy | unavailable | temporary)
  *
  *	Dialplan functions
  *	- MINIVMACCOUNT() - A dialplan function
@@ -71,8 +72,10 @@
  *	
  * \par See also
  * \arg \ref Config_minivm
+ * \arg \ref Minivm_directories
  * \arg \ref app_minivm.c
  * \arg Comedian mail: app_voicemail.c
+ * \arg \ref descrip_minivm_accmess
  * \arg \ref descrip_minivm_greet
  * \arg \ref descrip_minivm_record
  * \arg \ref descrip_minivm_delete
@@ -80,6 +83,28 @@
  *
  * \arg \ref App_minivm_todo
  */
+/*! \page Minivm_directories Asterisk Mini-Voicemail Directory structure
+ *
+ *	The directory structure for storing voicemail
+ *		- AST_SPOOL_DIR - usually /var/spool/asterisk (configurable in asterisk.conf)
+ *		- MVM_SPOOL_DIR - should be configurable, usually AST_SPOOL_DIR/voicemail
+ *		- Domain	MVM_SPOOL_DIR/domain
+ *		- Username	MVM_SPOOL_DIR/domain/username
+ *			- /greet	: Recording of account owner's name
+ *			- /busy		: Busy message
+ *			- /unavailable  : Unavailable message
+ *			- /temp		: Temporary message
+ *
+ *	For account anita@localdomain.xx the account directory would as a default be
+ *		\b /var/spool/asterisk/voicemail/localdomain.xx/anita
+ *
+ *	To avoid transcoding, these sound files should be converted into several formats
+ *	They are recorded in the format closest to the incoming streams
+ *
+ *
+ * Back: \ref App_minivm
+ */
+
 
 /*! \page App_minivm_todo Asterisk Mini-Voicemail - todo
  *	- Record all voice files in standard temp directory - configurable
@@ -95,6 +120,9 @@
  *	- New app for creating directory for account if it does not exist
  *	- Re-insert code for IMAP storage at some point
  *	- Jabber integration for notifications
+ *	- Figure out how to handle video in voicemail
+ *	- Integration with the HTTP server
+ *	- New app for moving messages between mailboxes, and optionally mark it as "new"
  *
  *	For Asterisk 1.4
  *	- Use string fields for minivm_account
@@ -188,6 +216,7 @@ static char *app_minivm_record = "MinivmRecord"; 	/* Leave a message */
 static char *app_minivm_greet = "MinivmGreet";		/* Play voicemail prompts */
 static char *app_minivm_notify = "MinivmNotify";	/* Notify about voicemail by using one of several methods */
 static char *app_minivm_delete = "MinivmDelete";	/* Notify about voicemail by using one of several methods */
+static char *app_minivm_accmess = "MinivmAccMess";	/* Record personal voicemail messages */
 
 static char *synopsis_minivm_record = "Receive Mini-Voicemail and forward via e-mail";
 static char *descrip_minivm_record = 
@@ -246,7 +275,7 @@ static char *descrip_minivm_notify =
 
 static char *synopsis_minivm_delete = "Delete Mini-Voicemail voicemail messages";
 static char *descrip_minivm_delete = 
-	"Syntax: MinivmDelete(username@domain [,filename])\n"
+	"Syntax: MinivmDelete(filename)\n"
 	"This application is part of the Mini-Voicemail system, configured in minivm.conf.\n"
 	"It deletes voicemail file set in MVM_FILENAME or given filename.\n"
 	"\n"
@@ -255,13 +284,31 @@ static char *descrip_minivm_delete =
 	"	 FAILED is set if the file does not exist or can't be deleted.\n"
 	"\n";
 
+static char *synopsis_minivm_accmess = "Record account specific messages\n";
+static char *descrip_minivm_accmess = 
+	"Syntax: MinivmAccmess(username@domain,option)\n"
+	"This application is part of the Mini-Voicemail system, configured in minivm.conf.\n"
+	"Use this application to record account specific audio/video messages for\n"
+	"busy, unavailable and temporary messages.\n"
+	"Account specific directories will be created if they do not exist.\n"
+	"\nThe option selects message to be recorded:\n"
+	"   u      Unavailable\n"
+	"   b      Busy\n"
+	"   t      Temporary (overrides busy and unavailable)\n"
+	"   n      Account name\n"
+	"\n"
+	"Result is given in channel variable MINIVMACCMESSSTATUS\n"
+	"        The possible values are:     SUCCESS |  FAILED\n"
+	"	 FAILED is set if the file can't be created.\n"
+	"\n";
+
 enum {
 	OPT_SILENT =	   (1 << 0),
 	OPT_BUSY_GREETING =    (1 << 1),
 	OPT_UNAVAIL_GREETING = (1 << 2),
-	OPT_RECORDGAIN =       (1 << 3),
-	OPT_PREPEND_MAILBOX =  (1 << 4),
-	OPT_PRIORITY_JUMP =    (1 << 5),
+	OPT_TEMP_GREETING = (1 << 3),
+	OPT_NAME_GREETING = (1 << 4),
+	OPT_RECORDGAIN =  (1 << 5),
 } minivm_option_flags;
 
 enum {
@@ -274,10 +321,14 @@ AST_APP_OPTIONS(minivm_app_options, {
 	AST_APP_OPTION('b', OPT_BUSY_GREETING),
 	AST_APP_OPTION('u', OPT_UNAVAIL_GREETING),
 	AST_APP_OPTION_ARG('g', OPT_RECORDGAIN, OPT_ARG_RECORDGAIN),
-	AST_APP_OPTION('j', OPT_PRIORITY_JUMP),
 });
 
-
+AST_APP_OPTIONS(minivm_accmess_options, {
+	AST_APP_OPTION('b', OPT_BUSY_GREETING),
+	AST_APP_OPTION('u', OPT_UNAVAIL_GREETING),
+	AST_APP_OPTION('t', OPT_TEMP_GREETING),
+	AST_APP_OPTION('n', OPT_NAME_GREETING),
+});
 
 /*! \brief Structure for linked list of Mini-Voicemail users: \ref minivm_accounts */
 struct minivm_account {
@@ -370,6 +421,7 @@ AST_MUTEX_DEFINE_STATIC(minivmlock);	/*!< Lock to protect voicemail system */
 static int global_vmminmessage;		/*!< Minimum duration of messages */
 static int global_vmmaxmessage;		/*!< Maximum duration of message */
 static int global_maxsilence;		/*!< Maximum silence during recording */
+static int global_maxgreet;		/*!< Maximum length of prompts  */
 static int global_silencethreshold = 128;
 static char global_mailcmd[160];	/*!< Configurable mail cmd */
 static char global_externnotify[160]; 	/*!< External notification application */
@@ -380,7 +432,6 @@ static struct ast_flags globalflags = {0};	/*!< Global voicemail flags */
 static int global_saydurationminfo;
 
 static char global_fromstring[100];		/*!< Global fromstring in voicemail */
-static char global_pagerfromstring[100];	/*!< Global fromstring in pager */
 static char global_charset[32];			/*!< Global charset in messages */
 
 static double global_volgain;	/*!< Volume gain for voicmemail via e-mail */
@@ -440,7 +491,7 @@ static int message_template_build(char *name, struct ast_variable *var)
 
 	while (var) {
 		if (option_debug > 2)
-			ast_log(LOG_DEBUG, "-_-_- Configuring template option %s = %s for template %s\n", var->name, var->value, name);
+			ast_log(LOG_DEBUG, "-_-_- Configuring template option %s = \"%s\" for template %s\n", var->name, var->value, name);
 		if (!strcasecmp(var->name, "fromaddress")) {
 			ast_copy_string(template->fromstring, var->value, sizeof(template->fromstring));
 		} else if (!strcasecmp(var->name, "subject")) {
@@ -1044,7 +1095,7 @@ static int check_dirpath(char *dest, int len, char *domain, char *username, char
  * \param domain  String. Ignored if is null or empty string.
  * \param folder  String. Ignored if is null or empty string. 
  * \param ext	  String. Ignored if is null or empty string.
- * \return 0 on failure, 1 on success.
+ * \return -1 on failure, 0 on success.
  */
 static int create_dirpath(char *dest, int len, char *domain, char *username, char *folder)
 {
@@ -1054,26 +1105,26 @@ static int create_dirpath(char *dest, int len, char *domain, char *username, cha
 		make_dir(dest, len, domain, "", "");
 		if(mkdir(dest, mode) && errno != EEXIST) {
 			ast_log(LOG_WARNING, "mkdir '%s' failed: %s\n", dest, strerror(errno));
-			return 0;
+			return -1;
 		}
 	}
 	if(!ast_strlen_zero(username)) {
 		make_dir(dest, len, domain, username, "");
 		if(mkdir(dest, mode) && errno != EEXIST) {
 			ast_log(LOG_WARNING, "mkdir '%s' failed: %s\n", dest, strerror(errno));
-			return 0;
+			return -1;
 		}
 	}
 	if(!ast_strlen_zero(folder)) {
 		make_dir(dest, len, domain, username, folder);
 		if(mkdir(dest, mode) && errno != EEXIST) {
 			ast_log(LOG_WARNING, "mkdir '%s' failed: %s\n", dest, strerror(errno));
-			return 0;
+			return -1;
 		}
 	}
 	if (option_debug > 1)
 		ast_log(LOG_DEBUG, "Creating directory for %s@%s folder %s : %s\n", username, domain, folder, dest);
-	return 1;
+	return 0;
 }
 
 
@@ -1137,7 +1188,7 @@ static int invent_message(struct ast_channel *chan, char *domain, char *username
 	return res;
 }
 
-/*! \brief Delete attribute file */
+/*! \brief Delete media files and attribute file */
 static int vm_delete(char *file)
 {
 	char *txt;
@@ -1401,8 +1452,6 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 	if (!(vmu = find_account(domain, username))) {
 		/* We could not find user, let's exit */
 		ast_log(LOG_ERROR, "Can't allocate temporary account for '%s@%s'\n", username, domain);
-		if (ast_test_flag(options, OPT_PRIORITY_JUMP) || option_priority_jumping)
-			ast_goto_if_exists(chan, chan->context, chan->exten, chan->priority + 101);
 		pbx_builtin_setvar_helper(chan, "MINIVMSTATUS", "FAILED");
 		return 0;
 	}
@@ -1598,6 +1647,8 @@ static int minivm_notify_exec(struct ast_channel *chan, void *data)
 		/* We could not find user, let's exit */
 		ast_log(LOG_WARNING, "Could not allocate temporary memory for '%s@%s'\n", username, domain);
 		pbx_builtin_setvar_helper(chan, "MINIVMNOTIFYSTATUS", "FAILED");
+		LOCAL_USER_REMOVE(u);
+		return -1;
 	}
 	
 	filename = pbx_builtin_getvar_helper(chan, "MVM_FILENAME");
@@ -1606,7 +1657,6 @@ static int minivm_notify_exec(struct ast_channel *chan, void *data)
 	/* Notify of new message to e-mail and pager */
 	if (!ast_strlen_zero(filename))
 		notify_new_message(chan, vmu, filename, atoi(duration_string), format, chan->cid.cid_num, chan->cid.cid_name);
-	else
 
 
 	if(ast_test_flag(vmu, MVM_ALLOCED))
@@ -1657,7 +1707,7 @@ static int minivm_record_exec(struct ast_channel *chan, void *data)
 			LOCAL_USER_REMOVE(u);
 			return -1;
 		}
-		ast_copy_flags(&leave_options, &flags, OPT_SILENT | OPT_BUSY_GREETING | OPT_UNAVAIL_GREETING | OPT_PRIORITY_JUMP);
+		ast_copy_flags(&leave_options, &flags, OPT_SILENT | OPT_BUSY_GREETING | OPT_UNAVAIL_GREETING );
 		if (ast_test_flag(&flags, OPT_RECORDGAIN)) {
 			int gain;
 
@@ -1676,9 +1726,6 @@ static int minivm_record_exec(struct ast_channel *chan, void *data)
 	if (res == ERROR_LOCK_PATH) {
 		ast_log(LOG_ERROR, "Could not leave voicemail. The path is already locked.\n");
 		/* Send the call to n+101 priority, where n is the current priority*/
-		if (ast_test_flag(&leave_options, OPT_PRIORITY_JUMP) || option_priority_jumping)
-			if (ast_goto_if_exists(chan, chan->context, chan->exten, chan->priority + 101))
-				ast_log(LOG_WARNING, "Extension %s, priority %d doesn't exist.\n", chan->exten, chan->priority + 101);
 		pbx_builtin_setvar_helper(chan, "MINIVMSTATUS", "FAILED");
 		res = 0;
 	}
@@ -1734,7 +1781,7 @@ static int minivm_greet_exec(struct ast_channel *chan, void *data)
 			LOCAL_USER_REMOVE(u);
 			return -1;
 		}
-		ast_copy_flags(&leave_options, &flags, OPT_SILENT | OPT_BUSY_GREETING | OPT_UNAVAIL_GREETING | OPT_PRIORITY_JUMP);
+		ast_copy_flags(&leave_options, &flags, OPT_SILENT | OPT_BUSY_GREETING | OPT_UNAVAIL_GREETING );
 	}
 
 	ast_copy_string(tmp, argv[0], sizeof(tmp));
@@ -1910,6 +1957,7 @@ static int minivm_delete_exec(struct ast_channel *chan, void *data)
 	if (ast_strlen_zero(filename)) {
 		LOCAL_USER_REMOVE(u);
 		ast_log(LOG_ERROR, "No filename given in application arguments or channel variable MVM_FILENAME\n");
+		return res;
 	} 
 
 	/* Go ahead and delete audio files from system, they're not needed any more */
@@ -1935,6 +1983,112 @@ static int minivm_delete_exec(struct ast_channel *chan, void *data)
 	return res;
 }
 
+/*! \brief Record specific messages for voicemail account */
+static int minivm_accmess_exec(struct ast_channel *chan, void *data)
+{
+	struct localuser *u;
+	int argc = 0;
+	char *argv[2];
+	int res = 0;
+	char filename[PATH_MAX];
+	char tmp[PATH_MAX];
+	char *domain;
+	char *tmpptr;
+	struct minivm_account *vmu;
+	char *username = argv[0];
+	struct ast_flags flags = { 0 };
+	char *opts[OPT_ARG_ARRAY_SIZE];
+	int error = FALSE;
+	char *message = NULL;
+	char *prompt = NULL;
+	int duration;
+	
+	LOCAL_USER_ADD(u);
+
+	if (ast_strlen_zero(data))  {
+		ast_log(LOG_ERROR, "MinivmAccmess needs at least two arguments: account and option\n");
+		error = TRUE;
+	} else 
+		tmpptr = ast_strdupa((char *)data);
+	if (!error) {
+		if (!tmpptr) {
+			ast_log(LOG_ERROR, "Out of memory\n");
+			error = TRUE;
+		} else
+			argc = ast_app_separate_args(tmpptr, '|', argv, sizeof(argv) / sizeof(argv[0]));
+	}
+
+	if (argc <=1) {
+		ast_log(LOG_ERROR, "MinivmAccmess needs at least two arguments: account and option\n");
+		error = TRUE;
+	}
+	if (!error && strlen(argv[1]) > 1) {
+		ast_log(LOG_ERROR, "MinivmAccmess can only handle one option at a time. Bad option string: %s\n", argv[1]);
+		error = TRUE;
+	}
+
+	if (!error && ast_app_parse_options(minivm_accmess_options, &flags, opts, argv[1])) {
+		ast_log(LOG_ERROR, "Can't parse option %s\n", argv[1]);
+		error = TRUE;
+	}
+
+	if (error) {
+		LOCAL_USER_REMOVE(u);
+		return -1;
+	}
+
+	ast_copy_string(tmp, argv[0], sizeof(tmp));
+	username = tmp;
+	domain = strchr(tmp, '@');
+	if (domain) {
+		*domain = '\0';
+		domain++;
+	} 
+	if (ast_strlen_zero(domain) || ast_strlen_zero(username)) {
+		ast_log(LOG_ERROR, "Need username@domain as argument. Sorry. Argument 0 %s\n", argv[0]);
+		LOCAL_USER_REMOVE(u);
+		return -1;
+	}
+
+	if(!(vmu = find_account(domain, username))) {
+		/* We could not find user, let's exit */
+		ast_log(LOG_WARNING, "Could not allocate temporary memory for '%s@%s'\n", username, domain);
+		pbx_builtin_setvar_helper(chan, "MINIVMNOTIFYSTATUS", "FAILED");
+		LOCAL_USER_REMOVE(u);
+		return -1;
+	}
+	
+	/* Here's where the action is */
+	if (ast_test_flag(&flags, OPT_BUSY_GREETING)) {
+		message = "busy";
+		prompt = "vm-rec-busy";
+	} else if (ast_test_flag(&flags, OPT_UNAVAIL_GREETING)) {
+		message = "unavailable";
+		prompt = "vm-rec-unavail";
+	} else if (ast_test_flag(&flags, OPT_TEMP_GREETING)) {
+		message = "temp";
+		prompt = "vm-temp-greeting";
+	} else if (ast_test_flag(&flags, OPT_NAME_GREETING)) {
+		message = "greet";
+		prompt = "vm-rec-name";
+	}
+	snprintf(filename,sizeof(filename), "%s%s/%s/%s", MVM_SPOOL_DIR, vmu->domain, vmu->username, message);
+	/* Maybe we should check the result of play_record_review ? */
+	play_record_review(chan, prompt, filename, global_maxgreet, default_vmformat, 0, vmu, &duration, NULL, FALSE);
+
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Recorded new %s message in %s (duration %d)\n", message, filename, duration);
+
+	if(ast_test_flag(vmu, MVM_ALLOCED))
+		free_user(vmu);
+
+
+	/* Ok, we're ready to rock and roll. Return to dialplan */
+	LOCAL_USER_REMOVE(u);
+
+	return res;
+
+}
 
 /*! \brief Append new mailbox to mailbox list from configuration file */
 static int create_vmaccount(char *name, struct ast_variable *var, int realtime)
@@ -1977,7 +2131,7 @@ static int create_vmaccount(char *name, struct ast_variable *var, int realtime)
 
 	while (var) {
 		if (option_debug > 2)
-			ast_log(LOG_DEBUG, "---- Configuring %s = %s for account %s\n", var->name, var->value, name);
+			ast_log(LOG_DEBUG, "---- Configuring %s = \"%s\" for account %s\n", var->name, var->value, name);
 		if (!strcasecmp(var->name, "serveremail")) {
 			ast_copy_string(vmu->serveremail, var->value, sizeof(vmu->serveremail));
 		} else if (!strcasecmp(var->name, "email")) {
@@ -2121,8 +2275,6 @@ static char *message_template_parse_filebody(char *filename) {
 		}
 		ast_copy_string(writepos, readbuf, sizeof(buf) - (writepos - buf));
 		writepos += strlen(readbuf) - 1;
-		if (option_debug > 3) 
-			ast_log(LOG_DEBUG, "---> Reading message template : Line %d: %s\n", lines, readbuf);
 	}
 	fclose(fi);
 	messagebody = calloc(1, strlen(buf + 1));
@@ -2171,6 +2323,8 @@ static int apply_general_options(struct ast_variable *var)
 		/* Mail command */
 		if (!strcmp(var->name, "mailcmd")) {
 			ast_copy_string(global_mailcmd, var->value, sizeof(global_mailcmd)); /* User setting */
+		} else if (!strcmp(var->name, "maxgreet")) {
+			global_maxgreet = atoi(var->value);
 		} else if (!strcmp(var->name, "maxsilence")) {
 			global_maxsilence = atoi(var->value);
 			if (global_maxsilence > 0)
@@ -2243,6 +2397,7 @@ static int load_config(void)
 	global_externnotify[0] = '\0';
 	global_silencethreshold = 256;
 	global_vmmaxmessage = 2000;
+	global_maxgreet = 2000;
 	global_vmminmessage = 0;
 	strcpy(global_mailcmd, SENDMAIL);
 	global_maxsilence = 0;
@@ -2671,6 +2826,7 @@ int load_module(void)
 	res = ast_register_application(app_minivm_greet, minivm_greet_exec, synopsis_minivm_greet, descrip_minivm_greet);
 	res = ast_register_application(app_minivm_notify, minivm_notify_exec, synopsis_minivm_notify, descrip_minivm_notify);
 	res = ast_register_application(app_minivm_delete, minivm_delete_exec, synopsis_minivm_delete, descrip_minivm_delete);
+	res = ast_register_application(app_minivm_accmess, minivm_accmess_exec, synopsis_minivm_accmess, descrip_minivm_accmess);
 
 	ast_custom_function_register(&minivm_account_function);
 	if (res)

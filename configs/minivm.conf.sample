@@ -28,6 +28,8 @@ serveremail=asterisk
 maxsilence=10
 ; Silence threshold (what we consider silence: the lower, the more sensitive)
 silencethreshold=128
+; How long greeting messages (busy/unavailable/temp/name) are allowed to be, in seconds
+;maxgreet=120
 ; If you need to have an external program, i.e. /usr/bin/myapp called when a
 ; voicemail is received by the server. The arguments are
 ;
