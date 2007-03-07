@@ -232,7 +232,7 @@ static char *descrip_minivm_record =
 	"    0 - Jump to the 'o' extension in the current dialplan context.\n"
 	"    * - Jump to the 'a' extension in the current dialplan context.\n"
 	"\n"
-	"Result is given in channel variable MINIVM_STATUS\n"
+	"Result is given in channel variable MINIVM_RECORD_STATUS\n"
 	"        The possible values are:     SUCCESS | USEREXIT | FAILED\n\n"
 	"  Options:\n"
 	"    g(#) - Use the specified amount of gain when recording the voicemail\n"
@@ -247,7 +247,7 @@ static char *descrip_minivm_greet =
 	"Busy and unavailable messages can be choosen, but will be overridden if a temporary\n"
 	"message exists for the account.\n"
 	"\n"
-	"Result is given in channel variable MINIVMGREETSTATUS\n"
+	"Result is given in channel variable MINIVM_GREET_STATUS\n"
 	"        The possible values are:     SUCCESS | USEREXIT | FAILED\n\n"
 	"  Options:\n"
 	"    b    - Play the 'busy' greeting to the calling party.\n"
@@ -269,7 +269,7 @@ static char *descrip_minivm_notify =
 	"default pager template to send paging message (if the user account is configured with\n"
 	"a paging address.\n"
 	"\n"
-	"Result is given in channel variable MINIVMNOTIFYSTATUS\n"
+	"Result is given in channel variable MINIVM_NOTIFY_STATUS\n"
 	"        The possible values are:     SUCCESS | FAILED\n"
 	"\n";
 
@@ -279,7 +279,7 @@ static char *descrip_minivm_delete =
 	"This application is part of the Mini-Voicemail system, configured in minivm.conf.\n"
 	"It deletes voicemail file set in MVM_FILENAME or given filename.\n"
 	"\n"
-	"Result is given in channel variable MINIVMDELETESTATUS\n"
+	"Result is given in channel variable MINIVM_DELETE_STATUS\n"
 	"        The possible values are:     SUCCESS |  FAILED\n"
 	"	 FAILED is set if the file does not exist or can't be deleted.\n"
 	"\n";
@@ -297,7 +297,7 @@ static char *descrip_minivm_accmess =
 	"   t      Temporary (overrides busy and unavailable)\n"
 	"   n      Account name\n"
 	"\n"
-	"Result is given in channel variable MINIVMACCMESSSTATUS\n"
+	"Result is given in channel variable MINIVM_ACCMESS_STATUS\n"
 	"        The possible values are:     SUCCESS |  FAILED\n"
 	"	 FAILED is set if the file can't be created.\n"
 	"\n";
@@ -1452,7 +1452,7 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 	if (!(vmu = find_account(domain, username))) {
 		/* We could not find user, let's exit */
 		ast_log(LOG_ERROR, "Can't allocate temporary account for '%s@%s'\n", username, domain);
-		pbx_builtin_setvar_helper(chan, "MINIVMSTATUS", "FAILED");
+		pbx_builtin_setvar_helper(chan, "MINIVM_RECORD_STATUS", "FAILED");
 		return 0;
 	}
 
@@ -1470,7 +1470,7 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 
 	if (ast_strlen_zero(fmt)) {
 		ast_log(LOG_WARNING, "No format for saving voicemail? Default %s\n", default_vmformat);
-		pbx_builtin_setvar_helper(chan, "MINIVMSTATUS", "FAILED");
+		pbx_builtin_setvar_helper(chan, "MINIVM_RECORD_STATUS", "FAILED");
 		return res;
 	}
 	msgnum = 0;
@@ -1497,7 +1497,7 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 		res = ast_streamfile(chan, "vm-mailboxfull", chan->language);
 		if (!res)
 			res = ast_waitstream(chan, "");
-		pbx_builtin_setvar_helper(chan, "MINIVMSTATUS", "FAILED");
+		pbx_builtin_setvar_helper(chan, "MINIVM_RECORD_STATUS", "FAILED");
 		return res;
 	}
 
@@ -1552,7 +1552,7 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 			fclose(txt);
 			ast_filedelete(tmptxtfile, NULL);
 			unlink(tmptxtfile);
-			pbx_builtin_setvar_helper(chan, "MINIVMSTATUS", "FAILED");
+			pbx_builtin_setvar_helper(chan, "MINIVM_RECORD_STATUS", "FAILED");
 			return 0;
 		} 
 		fclose(txt); /* Close log file */
@@ -1560,7 +1560,7 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 			if (option_debug) 
 				ast_log(LOG_DEBUG, "The recorded media file is gone, so we should remove the .txt file too!\n");
 			unlink(tmptxtfile);
-			pbx_builtin_setvar_helper(chan, "MINIVMSTATUS", "FAILED");
+			pbx_builtin_setvar_helper(chan, "MINIVM_RECORD_STATUS", "FAILED");
 			if(ast_test_flag(vmu, MVM_ALLOCED))
 				free_user(vmu);
 			return 0;
@@ -1590,7 +1590,7 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 	if(ast_test_flag(vmu, MVM_ALLOCED))
 		free_user(vmu);
 
-	pbx_builtin_setvar_helper(chan, "MINIVMSTATUS", "SUCCESS");
+	pbx_builtin_setvar_helper(chan, "MINIVM_RECORD_STATUS", "SUCCESS");
 	return res;
 }
 
@@ -1646,7 +1646,7 @@ static int minivm_notify_exec(struct ast_channel *chan, void *data)
 	if(!(vmu = find_account(domain, username))) {
 		/* We could not find user, let's exit */
 		ast_log(LOG_WARNING, "Could not allocate temporary memory for '%s@%s'\n", username, domain);
-		pbx_builtin_setvar_helper(chan, "MINIVMNOTIFYSTATUS", "FAILED");
+		pbx_builtin_setvar_helper(chan, "MINIVM_NOTIFY_STATUS", "FAILED");
 		LOCAL_USER_REMOVE(u);
 		return -1;
 	}
@@ -1726,10 +1726,10 @@ static int minivm_record_exec(struct ast_channel *chan, void *data)
 	if (res == ERROR_LOCK_PATH) {
 		ast_log(LOG_ERROR, "Could not leave voicemail. The path is already locked.\n");
 		/* Send the call to n+101 priority, where n is the current priority*/
-		pbx_builtin_setvar_helper(chan, "MINIVMSTATUS", "FAILED");
+		pbx_builtin_setvar_helper(chan, "MINIVM_RECORD_STATUS", "FAILED");
 		res = 0;
 	}
-	pbx_builtin_setvar_helper(chan, "MINIVMSTATUS", "SUCCESS");
+	pbx_builtin_setvar_helper(chan, "MINIVM_RECORD_STATUS", "SUCCESS");
 
 	
 	LOCAL_USER_REMOVE(u);
@@ -1874,7 +1874,7 @@ static int minivm_greet_exec(struct ast_channel *chan, void *data)
 	if (res < 0) {
 		if (option_debug > 1)
 			ast_log(LOG_DEBUG, "Hang up during prefile playback\n");
-		pbx_builtin_setvar_helper(chan, "MINIVMGREETSTATUS", "FAILED");
+		pbx_builtin_setvar_helper(chan, "MINIVM_GREET_STATUS", "FAILED");
 		if(ast_test_flag(vmu, MVM_ALLOCED))
 			free_user(vmu);
 		LOCAL_USER_REMOVE(u);
@@ -1907,7 +1907,7 @@ static int minivm_greet_exec(struct ast_channel *chan, void *data)
 			ast_copy_string(chan->context, chan->macrocontext, sizeof(chan->context));
 		}
 		chan->priority = 0;
-		pbx_builtin_setvar_helper(chan, "MINIVMGREETSTATUS", "USEREXIT");
+		pbx_builtin_setvar_helper(chan, "MINIVM_GREET_STATUS", "USEREXIT");
 		res = 0;
 	} else if (res == '0') { /* Check for a '0' here */
 		if(ouseexten || ousemacro) {
@@ -1920,14 +1920,14 @@ static int minivm_greet_exec(struct ast_channel *chan, void *data)
 			}
 			ast_play_and_wait(chan, "transfer");
 			chan->priority = 0;
-			pbx_builtin_setvar_helper(chan, "MINIVMGREETSTATUS", "USEREXIT");
+			pbx_builtin_setvar_helper(chan, "MINIVM_GREET_STATUS", "USEREXIT");
 		}
 		res =  0;
 	} else if (res < 0) {
-		pbx_builtin_setvar_helper(chan, "MINIVMGREETSTATUS", "FAILED");
+		pbx_builtin_setvar_helper(chan, "MINIVM_GREET_STATUS", "FAILED");
 		res = -1;
 	} else
-		pbx_builtin_setvar_helper(chan, "MINIVMGREETSTATUS", "SUCCESS");
+		pbx_builtin_setvar_helper(chan, "MINIVM_GREET_STATUS", "SUCCESS");
 
 	if(ast_test_flag(vmu, MVM_ALLOCED))
 		free_user(vmu);
@@ -1966,16 +1966,16 @@ static int minivm_delete_exec(struct ast_channel *chan, void *data)
 		if (res) {
 			if (option_debug > 1)
 				ast_log(LOG_DEBUG, "Can't delete file: %s\n", filename);
-			pbx_builtin_setvar_helper(chan, "MINIVMDELETESTATUS", "FAILED");
+			pbx_builtin_setvar_helper(chan, "MINIVM_DELETE_STATUS", "FAILED");
 		} else {
 			if (option_debug > 1)
 				ast_log(LOG_DEBUG, "-_-_- Deleted voicemail file :: %s \n", filename);
-			pbx_builtin_setvar_helper(chan, "MINIVMDELETESTATUS", "SUCCESS");
+			pbx_builtin_setvar_helper(chan, "MINIVM_DELETE_STATUS", "SUCCESS");
 		}
 	} else {
 		if (option_debug > 1)
 			ast_log(LOG_DEBUG, "Filename does not exist: %s\n", filename);
-		pbx_builtin_setvar_helper(chan, "MINIVMDELETESTATUS", "FAILED");
+		pbx_builtin_setvar_helper(chan, "MINIVM_DELETE_STATUS", "FAILED");
 	}
 	
 	LOCAL_USER_REMOVE(u);
@@ -2002,6 +2002,7 @@ static int minivm_accmess_exec(struct ast_channel *chan, void *data)
 	char *message = NULL;
 	char *prompt = NULL;
 	int duration;
+	int cmd;
 	
 	LOCAL_USER_ADD(u);
 
@@ -2053,7 +2054,7 @@ static int minivm_accmess_exec(struct ast_channel *chan, void *data)
 	if(!(vmu = find_account(domain, username))) {
 		/* We could not find user, let's exit */
 		ast_log(LOG_WARNING, "Could not allocate temporary memory for '%s@%s'\n", username, domain);
-		pbx_builtin_setvar_helper(chan, "MINIVMNOTIFYSTATUS", "FAILED");
+		pbx_builtin_setvar_helper(chan, "MINIVM_NOTIFY_STATUS", "FAILED");
 		LOCAL_USER_REMOVE(u);
 		return -1;
 	}
@@ -2078,7 +2079,7 @@ static int minivm_accmess_exec(struct ast_channel *chan, void *data)
 	}
 	snprintf(filename,sizeof(filename), "%s%s/%s/%s", MVM_SPOOL_DIR, vmu->domain, vmu->username, message);
 	/* Maybe we should check the result of play_record_review ? */
-	play_record_review(chan, prompt, filename, global_maxgreet, default_vmformat, 0, vmu, &duration, NULL, FALSE);
+	cmd = play_record_review(chan, prompt, filename, global_maxgreet, default_vmformat, 0, vmu, &duration, NULL, FALSE);
 
 	if (option_debug)
 		ast_log(LOG_DEBUG, "Recorded new %s message in %s (duration %d)\n", message, filename, duration);
