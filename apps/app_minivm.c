@@ -1029,9 +1029,13 @@ static int sendmail(struct minivm_template *template, struct minivm_account *vmu
 	if (option_debug > 3)
 		ast_log(LOG_DEBUG, "-_-_- Fromstring now: %s\n", ast_strlen_zero(passdata) ? "-default-" : passdata);
 
+	fprintf(p, "Message-ID: <Asterisk-%d-%s-%d-%s>\n", (unsigned int)rand(), vmu->username, getpid(), who);
 	len_passdata = strlen(vmu->fullname) * 2 + 3;
 	passdata2 = alloca(len_passdata);
-	fprintf(p, "To: %s <%s>\n", mailheader_quote(vmu->fullname, passdata2, len_passdata), vmu->email);
+	if (!ast_strlen_zero(vmu->email))
+		fprintf(p, "To: %s <%s>\n", mailheader_quote(vmu->fullname, passdata2, len_passdata), vmu->email);
+	else
+		fprintf(p, "To: %s <%s@%s>\n", mailheader_quote(vmu->fullname, passdata2, len_passdata), vmu->username, vmu->domain);
 
 	if (!ast_strlen_zero(template->subject)) {
 		char *passdata;
@@ -1055,7 +1059,6 @@ static int sendmail(struct minivm_template *template, struct minivm_account *vmu
 
 	if (option_debug > 2)
 		fprintf(p, "X-Asterisk-debug: template %s user account %s@%s\n", template->name, vmu->username, vmu->domain);
-	fprintf(p, "Message-ID: <Asterisk-%d-%s-%d-%s>\n", (unsigned int)rand(), vmu->username, getpid(), who);
 	fprintf(p, "MIME-Version: 1.0\n");
 
 	/* Something unique. */
