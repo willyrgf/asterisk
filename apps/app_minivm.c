@@ -990,10 +990,14 @@ static int sendmail(struct minivm_template *template, struct minivm_account *vmu
 	/* Find email address to use */
 	/* If there's a server e-mail adress in the account, user that, othterwise template */
 	fromemail = ast_strlen_zero(vmu->serveremail) ?  template->serveremail : vmu->serveremail;
+
 	/* Find name to user for server e-mail */
 	fromaddress = ast_strlen_zero(template->fromaddress) ? "" : template->fromaddress;
 
 	/* If needed, add hostname as domain */
+	if (ast_strlen_zero(fromemail))
+		fromemail = "asterisk";
+
 	if (strchr(fromemail, '@'))
 		ast_copy_string(who, fromemail, sizeof(who));
 	else  {
@@ -1023,7 +1027,7 @@ static int sendmail(struct minivm_template *template, struct minivm_account *vmu
 		}
 	} 
 	if (option_debug > 3)
-		ast_log(LOG_DEBUG, "-_-_- Fromstring now: %s\n", passdata);
+		ast_log(LOG_DEBUG, "-_-_- Fromstring now: %s\n", ast_strlen_zero(passdata) ? "-default-" : passdata);
 
 	len_passdata = strlen(vmu->fullname) * 2 + 3;
 	passdata2 = alloca(len_passdata);
@@ -1049,6 +1053,8 @@ static int sendmail(struct minivm_template *template, struct minivm_account *vmu
 	}
 
 
+	if (option_debug > 2)
+		fprintf(p, "X-Asterisk-debug: template %s user account %s@%s\n", template->name, vmu->username, vmu->domain);
 	fprintf(p, "Message-ID: <Asterisk-%d-%s-%d-%s>\n", (unsigned int)rand(), vmu->username, getpid(), who);
 	fprintf(p, "MIME-Version: 1.0\n");
 
