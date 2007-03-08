@@ -2424,6 +2424,7 @@ static int load_config(void)
 {
 	struct minivm_account *cur;
 	struct minivm_zone *zcur;
+	struct minivm_template *tcur;
 	struct ast_config *cfg;
 	struct ast_variable *var;
 	char *cat;
@@ -2445,6 +2446,13 @@ static int load_config(void)
 		free_zone(zcur);
 	}
 	AST_LIST_UNLOCK(&minivm_zones);
+
+	/* Free all templates */
+	AST_LIST_LOCK(&minivm_templates);
+	while ((tcur = AST_LIST_REMOVE_HEAD(&minivm_templates, list))) {
+		message_template_free(tcur);
+	}
+	AST_LIST_UNLOCK(&minivm_templates);
 
 	/* First, set some default settings */
 	global_externnotify[0] = '\0';
@@ -2470,6 +2478,8 @@ static int load_config(void)
 		return 0;
 	}
 
+	if (option_debug > 1)
+		ast_log(LOG_DEBUG, "-_-_- Loaded configuration file, now parsing\n");
 
 	/* General settings */
 
@@ -2897,6 +2907,8 @@ int reload(void)
 	message_destroy_list();		/* Destroy list of voicemail message templates */
 	timezone_destroy_list();	/* Destroy list of timezones */
 	vmaccounts_destroy_list();	/* Destroy list of voicemail accounts */
+	if (option_debug > 1)
+		ast_log(LOG_DEBUG, "Destroyed memory objects...\n");
 	return(load_config());
 }
 
