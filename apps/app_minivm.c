@@ -143,6 +143,7 @@
 #include <sys/mman.h>
 #include <time.h>
 #include <dirent.h>
+#include <locale.h>
 
 #include "asterisk.h"
 
@@ -371,6 +372,7 @@ struct minivm_template {
 	char	serveremail[80];	/*!< From: Mail address */
 	char	subject[100];		/*!< Subject line */
 	char	charset[32];		/*!< Default character set for this template */
+	char	locale[20];		/*!< Locale for setlocale() */
 	char	dateformat[80];		/*!< Date format to use in this attachment */
 	int	attachment;		/*!< Attachment of media yes/no - no for pager messages */
 	AST_LIST_ENTRY(minivm_template) list;	/*!< List mechanics */
@@ -500,6 +502,8 @@ static int message_template_build(char *name, struct ast_variable *var)
 			ast_copy_string(template->serveremail, var->value, sizeof(template->serveremail));
 		} else if (!strcasecmp(var->name, "subject")) {
 			ast_copy_string(template->subject, var->value, sizeof(template->subject));
+		} else if (!strcasecmp(var->name, "locale")) {
+			ast_copy_string(template->locale, var->value, sizeof(template->locale));
 		} else if (!strcasecmp(var->name, "attachmedia")) {
 			template->attachment = ast_true(var->value);
 		} else if (!strcasecmp(var->name, "dateformat")) {
@@ -1433,6 +1437,7 @@ static int notify_new_message(struct ast_channel *chan, struct minivm_account *v
 	struct minivm_template *etemplate;
 	char *messageformat;
 	int res = 0;
+	char oldlocale[100];
 
 	snprintf(ext_context, sizeof(ext_context), "%s@%s", vmu->username, vmu->domain);
 
@@ -1451,6 +1456,18 @@ static int notify_new_message(struct ast_channel *chan, struct minivm_account *v
 	stringp = messageformat = ast_strdupa(format);
 	strsep(&stringp, "|");
 
+	if (etemplate->locale) {
+		char *newlocale;
+		ast_copy_string(oldlocale, setlocale(LC_TIME, NULL), sizeof(oldlocale));
+		if (option_debug > 1)
+			ast_log(LOG_DEBUG, "-_-_- Changing locale from %s to %s\n", oldlocale, etemplate->locale);
+		newlocale = setlocale(LC_TIME, etemplate->locale);
+		if (newlocale == NULL) {
+			ast_log(LOG_WARNING, "-_-_- Changing to new locale did not work. Locale: %s\n", etemplate->locale);
+		}
+	}
+
+
 
 	res = sendmail(etemplate, vmu, cidnum, cidname, filename, messageformat, duration, etemplate->attachment, MVM_MESSAGE_EMAIL);
 
@@ -1459,6 +1476,10 @@ static int notify_new_message(struct ast_channel *chan, struct minivm_account *v
 		etemplate = message_template_find(vmu->ptemplate);
 		if (!etemplate)
 			etemplate = message_template_find("pager-default");
+		if (etemplate->locale) {
+			ast_copy_string(oldlocale, setlocale(LC_TIME, ""), sizeof(oldlocale));
+			setlocale(LC_TIME, etemplate->locale);
+		}
 
 		res = sendmail(etemplate, vmu, cidnum, cidname, filename, messageformat, duration, etemplate->attachment, MVM_MESSAGE_PAGE);
 	}
@@ -1466,6 +1487,9 @@ static int notify_new_message(struct ast_channel *chan, struct minivm_account *v
 	manager_event(EVENT_FLAG_CALL, "MiniVoiceMail", "Action: SentNotification\rn\nMailbox: %s@%s\r\n", vmu->username, vmu->domain);
 
 	run_externnotify(chan, vmu);		/* Run external notification */
+
+	if (etemplate->locale) 
+		setlocale(LC_TIME, oldlocale); /* Rest to old locale */
 	return res;
 }
 

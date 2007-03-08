@@ -74,7 +74,7 @@ emaildateformat=%A, %B %d, %Y at %r
 ; The above defined variables also can be used here
 ;pagerfromstring=The Asterisk PBX
 ;pagersubject=New VM
-;pagerbody=New ${VM_DUR} long msg in box ${VM_MAILBOX}\nfrom ${VM_CALLERID}, on ${VM_DATE}
+;pagerbody=New ${MVM_DUR} long msg in box ${MVM_MAILBOX}\nfrom ${MVM_CALLERID}, on ${MVM_DATE}
 ;
 ; 
 ;--------------Timezone definitions (used in voicemail accounts) -------------------
@@ -127,42 +127,44 @@ military=Zulu|'vm-received' q 'digits/at' H N 'hours' 'phonetic/z_p'
 ; subject = <string>
 ; attachmedia = yes | no	; Add media file as attachment?
 ; dateformat = <formatstring>   ; See above
-; charset = <charset>		; Mime charset definition
+; charset = <charset>		; Mime charset definition for e-mail messages
+; locale = <locale>		; Locale for LC_TIME - to get weekdays in local language 
+;				; See your O/S documentation for proper settings for setlocale()
 ; templatefile = <filename>	; File name (relative to Asterisk configuration directory,
 				; or absolute
 ; messagebody = Format		; Message body definition with variables
 ;
-[template-sv_se_email] 
+[template-sv_SE_email] 
 messagebody=Hej ${VM_NAME}:\n\n\tDu har fått ett röstbrevlåde-meddelande från ${VM_CALLERID}.\nLängd: ${VM_DUR}\nMailbox ${VM_MAILBOX}\nDatum:  ${VM_DATE}. \nMeddelandet bifogas det här brevet. Om du inte kan läsa det, kontakta intern support. \nHälsningar\n\n\t\t\t\t--Asterisk\n
 subject = Du har fått röstmeddelande (se bilaga)
 charset=iso-8859-1
 attachmedia=yes 
 dateformat=%A, %d %B %Y at %H:%M:%S
 
-[template-en_us_email] 
+[template-en_US_email] 
 messagebody=Dear ${VM_NAME}:\n\n\tjust wanted to let you know you were just left a ${VM_DUR} long message (number ${VM_MSGNUM})\nin mailbox ${VM_MAILBOX} from ${VM_CALLERID}, on ${VM_DATE}, so you might\nwant to check it when you get a chance.  Thanks!\n\n\t\t\t\t--Asterisk\n
 subject = New voicemail
 charset=ascii
 attachmedia=yes 
 dateformat=%A, %B %d, %Y at %r
 
-;[template-sv_se_pager]
+;[template-sv_SE_pager]
 ;templatefile = templates/pager_sv_se.txt
 ;subject = Du har fått voicemail
 ;charset=iso-8859-1
 ;attachmedia=no
 
-;[template-no_no_email]
-;templatefile = templates/email_no_no.txt
+;[template-nb_NO_email]
+;templatefile = templates/email_nb_NO.txt
 ;subject = Du har fått voicemail
 ;charset=iso-8859-1
 
-;[template-en_us_email_southern]
-;templatefile = templates/email_en_us.txt
+;[template-en_US_email_southern]
+;templatefile = templates/email_en_US.txt
 ;subject = Y'all got voicemail, honey!
 ;charset=ascii  
 
-;[template-en_uk_email]
+;[template-en_UK_email]
 ;templatefile = templates/email_en_us.txt
 ;subject = Dear old chap, you've got an electronic communique
 ;charset=ascii  
@@ -171,8 +173,8 @@ dateformat=%A, %B %d, %Y at %r
 ;Template for mailbox definition - all options
 ;
 ;	[username@domain]		; Has to be unique within domain (MWM_USERNAME, MWM_DOMAIN)
-;	etemplate = sv_se		; Email template from [templates]
-;	ptemplate = en_us		; Pager template from [templates]
+;	etemplate = sv_SE		; Email template from [templates]
+;	ptemplate = en_US		; Pager template from [templates]
 ;	email = userpart@domain		; Extra e-mail address (overrides mailbox name)
 ;	pager = pageremail@domain	; E-mail address for pager messages
 ;	fullname = Mark Spencer		; Full name  (MWM_NAME)
