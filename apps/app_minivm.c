@@ -367,7 +367,8 @@ static AST_LIST_HEAD_STATIC(minivm_accounts, minivm_account);
 struct minivm_template {
 	char	name[80];		/*!< Template name */
 	char	*body;			/*!< Body of this template */
-	char	fromstring[100];	/*!< Who's sending the e-mail? */
+	char	fromaddress[100];	/*!< Who's sending the e-mail? */
+	char	serveremail[80];	/*!< From: Mail address */
 	char	subject[100];		/*!< Subject line */
 	char	charset[32];		/*!< Default character set for this template */
 	char	dateformat[80];		/*!< Date format to use in this attachment */
@@ -432,8 +433,6 @@ static char default_vmformat[80];
 
 static struct ast_flags globalflags = {0};	/*!< Global voicemail flags */
 static int global_saydurationminfo;
-
-static char global_fromstring[100];		/*!< Global fromstring in voicemail */
 static char global_charset[32];			/*!< Global charset in messages */
 
 static double global_volgain;	/*!< Volume gain for voicmemail via e-mail */
@@ -495,7 +494,9 @@ static int message_template_build(char *name, struct ast_variable *var)
 		if (option_debug > 2)
 			ast_log(LOG_DEBUG, "-_-_- Configuring template option %s = \"%s\" for template %s\n", var->name, var->value, name);
 		if (!strcasecmp(var->name, "fromaddress")) {
-			ast_copy_string(template->fromstring, var->value, sizeof(template->fromstring));
+			ast_copy_string(template->fromaddress, var->value, sizeof(template->fromaddress));
+		} else if (!strcasecmp(var->name, "fromemail")) {
+			ast_copy_string(template->serveremail, var->value, sizeof(template->serveremail));
 		} else if (!strcasecmp(var->name, "subject")) {
 			ast_copy_string(template->subject, var->value, sizeof(template->subject));
 		} else if (!strcasecmp(var->name, "attachmedia")) {
@@ -721,6 +722,11 @@ static void prep_email_sub_vars(struct ast_channel *channel, const struct minivm
 {
 	char callerid[256];
 	struct ast_variable *var;
+	
+	if (!channel) {
+		ast_log(LOG_ERROR, "No allocated channel, giving up...\n");
+		return;
+	}
 
 	for (var = vmu->chanvars ; var ; var = var->next)
                 pbx_builtin_setvar_helper(channel, var->name, var->value);
@@ -863,15 +869,14 @@ static struct minivm_account *find_user_realtime(const char *domain, const char 
 	return retval;
 }
 
-/*! Send voicemail with audio file as an attachment */
-static int sendmail(struct minivm_template *template, char *srcemail, struct minivm_account *vmu, char *cidnum, char *cidname, const char *filename, char *format, int duration, int attach_user_voicemail, enum mvm_messagetype type)
+/*! \brief Send voicemail with audio file as an attachment */
+static int sendmail(struct minivm_template *template, struct minivm_account *vmu, char *cidnum, char *cidname, const char *filename, char *format, int duration, int attach_user_voicemail, enum mvm_messagetype type)
 {
 	FILE *p = NULL;
 	int pfd;
 	char email[256] = "";
+	char who[256] = "";
 	char date[256];
-	char host[MAXHOSTNAMELEN];
-	char who[256];
 	char bound[256];
 	char fname[PATH_MAX];
 	char dur[PATH_MAX];
@@ -881,9 +886,12 @@ static int sendmail(struct minivm_template *template, char *srcemail, struct min
 	struct tm tm;
 	struct minivm_zone *the_zone = NULL;
 	int len_passdata;
-	char *passdata2;
 	struct ast_channel *ast;
 	char *finalfilename;
+	char *passdata = NULL;
+	char *passdata2 = NULL;
+	char *fromaddress;
+	char *fromemail;
 
 	if (type == MVM_MESSAGE_EMAIL) {
 		if (vmu && !ast_strlen_zero(vmu->email)) {
@@ -930,6 +938,7 @@ static int sendmail(struct minivm_template *template, char *srcemail, struct min
 
 	if (option_debug && template->attachment)
 		ast_log(LOG_DEBUG, "-- Attaching file '%s', format '%s', uservm is '%d'\n", finalfilename, format, attach_user_voicemail);
+
 	/* Make a temporary file instead of piping directly to sendmail, in case the mail
 	   command hangs */
 	pfd = mkstemp(tmp);
@@ -943,19 +952,12 @@ static int sendmail(struct minivm_template *template, char *srcemail, struct min
 			ast_log(LOG_DEBUG, "-_-_- Opening temp file for e-mail: %s\n", tmp);
 	}
 	if (!p) {
-		ast_log(LOG_WARNING, "Unable to launch '%s'\n", global_mailcmd);
+		ast_log(LOG_WARNING, "Unable to open temporary file '%s'\n", tmp);
 		return -1;
 	}
 	/* Allocate channel used for chanvar substitution */
 	ast = ast_channel_alloc(0);
 
-	/* If needed, add hostname as domain */
-	if (strchr(srcemail, '@'))
-		ast_copy_string(who, srcemail, sizeof(who));
-	else  {
-		gethostname(host, sizeof(host)-1);
-		snprintf(who, sizeof(who), "%s@%s", srcemail, host);
-	}
 
 	snprintf(dur, sizeof(dur), "%d:%02d", duration / 60, duration % 60);
 
@@ -985,14 +987,32 @@ static int sendmail(struct minivm_template *template, char *srcemail, struct min
 	/* Populate channel with channel variables for substitution */
 	prep_email_sub_vars(ast, vmu, cidnum, cidname, dur, date);
 
-	if (ast_strlen_zero(global_fromstring)) {
+	/* Find email address to use */
+	/* If there's a server e-mail adress in the account, user that, othterwise template */
+	fromemail = ast_strlen_zero(vmu->serveremail) ?  template->serveremail : vmu->serveremail;
+	/* Find name to user for server e-mail */
+	fromaddress = ast_strlen_zero(template->fromaddress) ? "" : template->fromaddress;
+
+	/* If needed, add hostname as domain */
+	if (strchr(fromemail, '@'))
+		ast_copy_string(who, fromemail, sizeof(who));
+	else  {
+		char host[MAXHOSTNAMELEN];
+		gethostname(host, sizeof(host)-1);
+		snprintf(who, sizeof(who), "%s@%s", fromemail, host);
+	}
+
+	if (ast_strlen_zero(fromaddress)) {
 		fprintf(p, "From: Asterisk PBX <%s>\n", who);
 	} else {
-		char *passdata;
-		int vmlen = strlen(global_fromstring)*3 + 200;
+		if (option_debug > 3)
+			ast_log(LOG_DEBUG, "-_-_- Fromaddress template: %s\n", fromaddress);
+		/* Allocate a buffer big enough for variable substitution */
+		int vmlen = strlen(fromaddress) * 3 + 200;
+
 		if ((passdata = alloca(vmlen))) {
 			memset(passdata, 0, vmlen);
-			pbx_substitute_variables_helper(ast, global_fromstring, passdata, vmlen);
+			pbx_substitute_variables_helper(ast, fromaddress, passdata, vmlen);
 			len_passdata = strlen(passdata) * 2 + 3;
 			passdata2 = alloca(len_passdata);
 			fprintf(p, "From: %s <%s>\n", mailheader_quote(passdata, passdata2, len_passdata), who);
@@ -1002,6 +1022,8 @@ static int sendmail(struct minivm_template *template, char *srcemail, struct min
 			return -1;	
 		}
 	} 
+	if (option_debug > 3)
+		ast_log(LOG_DEBUG, "-_-_- Fromstring now: %s\n", passdata);
 
 	len_passdata = strlen(vmu->fullname) * 2 + 3;
 	passdata2 = alloca(len_passdata);
@@ -1019,10 +1041,15 @@ static int sendmail(struct minivm_template *template, char *srcemail, struct min
 			fclose(p);
 			return -1;	
 		}
-	} else 
+		if (option_debug > 3)
+			ast_log(LOG_DEBUG, "-_-_- Subject now: %s\n", passdata);
+	} else  {
 		fprintf(p, "Subject: New message in mailbox %s@%s\n", vmu->username, vmu->domain);
+		ast_log(LOG_DEBUG, "-_-_- Using default subject for this email \n");
+	}
 
-	fprintf(p, "Message-ID: <Asterisk-%d-%s-%d@%s>\n", (unsigned int)rand(), vmu->username, getpid(), host);
+
+	fprintf(p, "Message-ID: <Asterisk-%d-%s-%d-%s>\n", (unsigned int)rand(), vmu->username, getpid(), who);
 	fprintf(p, "MIME-Version: 1.0\n");
 
 	/* Something unique. */
@@ -1393,7 +1420,6 @@ static void run_externnotify(struct ast_channel *chan, struct minivm_account *vm
 static int notify_new_message(struct ast_channel *chan, struct minivm_account *vmu, const char *filename, long duration, const char *format, char *cidnum, char *cidname)
 {
 	char ext_context[PATH_MAX], *stringp;
-	char *myserveremail;
 	struct minivm_template *etemplate;
 	char *messageformat;
 	int res = 0;
@@ -1416,12 +1442,7 @@ static int notify_new_message(struct ast_channel *chan, struct minivm_account *v
 	strsep(&stringp, "|");
 
 
-	if (!ast_strlen_zero(vmu->serveremail))
-		myserveremail = vmu->serveremail;
-	else
-		myserveremail = etemplate->fromstring;
-
-	res = sendmail(etemplate, myserveremail, vmu, cidnum, cidname, filename, messageformat, duration, etemplate->attachment, MVM_MESSAGE_EMAIL);
+	res = sendmail(etemplate, vmu, cidnum, cidname, filename, messageformat, duration, etemplate->attachment, MVM_MESSAGE_EMAIL);
 
 	if (res == 0 && !ast_strlen_zero(vmu->pager))  {
 		/* Find template for paging */
@@ -1429,7 +1450,7 @@ static int notify_new_message(struct ast_channel *chan, struct minivm_account *v
 		if (!etemplate)
 			etemplate = message_template_find("pager-default");
 
-		res = sendmail(etemplate, myserveremail, vmu, cidnum, cidname, filename, messageformat, duration, etemplate->attachment, MVM_MESSAGE_PAGE);
+		res = sendmail(etemplate, vmu, cidnum, cidname, filename, messageformat, duration, etemplate->attachment, MVM_MESSAGE_PAGE);
 	}
 
 	manager_event(EVENT_FLAG_CALL, "MiniVoiceMail", "Action: SentNotification\rn\nMailbox: %s@%s\r\n", vmu->username, vmu->domain);
@@ -2480,7 +2501,9 @@ static int load_config(void)
 	if ((s = ast_variable_retrieve(cfg, "general", "emaildateformat"))) 
 		ast_copy_string(template->dateformat, s, sizeof(template->dateformat));
 	if ((s = ast_variable_retrieve(cfg, "general", "emailfromstring")))
-		ast_copy_string(template->fromstring, s, sizeof(template->fromstring));
+		ast_copy_string(template->fromaddress, s, sizeof(template->fromaddress));
+	if ((s = ast_variable_retrieve(cfg, "general", "emailaaddress")))
+		ast_copy_string(template->serveremail, s, sizeof(template->serveremail));
 	if ((s = ast_variable_retrieve(cfg, "general", "emailcharset")))
 		ast_copy_string(template->charset, s, sizeof(template->charset));
 	if ((s = ast_variable_retrieve(cfg, "general", "emailsubject"))) 
@@ -2492,7 +2515,9 @@ static int load_config(void)
 	message_template_build("pager-default", NULL);
 	template = message_template_find("pager-default");
 	if ((s = ast_variable_retrieve(cfg, "general", "pagerfromstring")))
-		ast_copy_string(template->fromstring, s, sizeof(template->fromstring));
+		ast_copy_string(template->fromaddress, s, sizeof(template->fromaddress));
+	if ((s = ast_variable_retrieve(cfg, "general", "pageraddress")))
+		ast_copy_string(template->serveremail, s, sizeof(template->serveremail));
 	if ((s = ast_variable_retrieve(cfg, "general", "pagercharset")))
 		ast_copy_string(template->charset, s, sizeof(template->charset));
 	if ((s = ast_variable_retrieve(cfg, "general", "pagersubject")))

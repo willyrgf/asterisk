@@ -122,7 +122,8 @@ military=Zulu|'vm-received' q 'digits/at' H N 'hours' 'phonetic/z_p'
 
 ;----------------------- Message body templates---------------------
 ; [template-name]	; "template-" is a verbatim marker
-; fromaddress = asteriskvm@digium.com
+; fromaddress = Your Friendly Asterisk Server
+; serveremail = asteriskvm@digium.com
 ; subject = <string>
 ; attachmedia = yes | no	; Add media file as attachment?
 ; dateformat = <formatstring>   ; See above
