@@ -994,8 +994,10 @@ static int sendmail(struct minivm_template *template, char *srcemail, struct min
 			len_passdata = strlen(passdata) * 2 + 3;
 			passdata2 = alloca(len_passdata);
 			fprintf(p, "From: %s <%s>\n", mailheader_quote(passdata, passdata2, len_passdata), who);
-		} else 
+		} else  {
 			ast_log(LOG_WARNING, "Cannot allocate workspace for variable substitution\n");
+			return -1;	
+		}
 	} 
 
 	len_passdata = strlen(vmu->fullname) * 2 + 3;
@@ -1382,6 +1384,7 @@ static int notify_new_message(struct ast_channel *chan, struct minivm_account *v
 	char *myserveremail;
 	struct minivm_template *etemplate;
 	char *messageformat;
+	int res = 0;
 
 	snprintf(ext_context, sizeof(ext_context), "%s@%s", vmu->username, vmu->domain);
 
@@ -1406,22 +1409,21 @@ static int notify_new_message(struct ast_channel *chan, struct minivm_account *v
 	else
 		myserveremail = etemplate->fromstring;
 
-	sendmail(etemplate, myserveremail, vmu, cidnum, cidname, filename, messageformat, duration, etemplate->attachment, MVM_MESSAGE_EMAIL);
+	res = sendmail(etemplate, myserveremail, vmu, cidnum, cidname, filename, messageformat, duration, etemplate->attachment, MVM_MESSAGE_EMAIL);
 
-	if (!ast_strlen_zero(vmu->pager))  {
+	if (res == 0 && !ast_strlen_zero(vmu->pager))  {
 		/* Find template for paging */
 		etemplate = message_template_find(vmu->ptemplate);
 		if (!etemplate)
 			etemplate = message_template_find("pager-default");
 
-		sendmail(etemplate, myserveremail, vmu, cidnum, cidname, filename, messageformat, duration, etemplate->attachment, MVM_MESSAGE_PAGE);
+		res = sendmail(etemplate, myserveremail, vmu, cidnum, cidname, filename, messageformat, duration, etemplate->attachment, MVM_MESSAGE_PAGE);
 	}
-
 
 	manager_event(EVENT_FLAG_CALL, "MiniVoiceMail", "Action: SentNotification\rn\nMailbox: %s@%s\r\n", vmu->username, vmu->domain);
 
 	run_externnotify(chan, vmu);		/* Run external notification */
-	return 0;
+	return res;
 }
 
  
@@ -1655,13 +1657,15 @@ static int minivm_notify_exec(struct ast_channel *chan, void *data)
 	format = pbx_builtin_getvar_helper(chan, "MVM_FORMAT");
 	duration_string = pbx_builtin_getvar_helper(chan, "MVM_DURATION");
 	/* Notify of new message to e-mail and pager */
-	if (!ast_strlen_zero(filename))
-		notify_new_message(chan, vmu, filename, atoi(duration_string), format, chan->cid.cid_num, chan->cid.cid_name);
+	if (!ast_strlen_zero(filename)) {
+		res = notify_new_message(chan, vmu, filename, atoi(duration_string), format, chan->cid.cid_num, chan->cid.cid_name);
+	};
+
+	pbx_builtin_setvar_helper(chan, "MINIVM_NOTIFY_STATUS", res == 0 ? "SUCCESS" : "FAILED");
 
 
 	if(ast_test_flag(vmu, MVM_ALLOCED))
 		free_user(vmu);
-
 
 	/* Ok, we're ready to rock and roll. Return to dialplan */
 	LOCAL_USER_REMOVE(u);
