@@ -449,6 +449,7 @@ static char *message_template_parse_filebody(char *filename);
 static char *message_template_parse_emailbody(char *body);
 static int create_vmaccount(char *name, struct ast_variable *var, int realtime);
 static struct minivm_account *find_user_realtime(const char *domain, const char *username);
+static int handle_minivm_reload(int fd, int argc, char *argv[]);
 
 /*! \brief Create message template */
 static struct minivm_template *message_template_create(char *name)
@@ -2346,7 +2347,7 @@ static char *message_template_parse_emailbody(char *configuration)
 	char *emailbody = strdup(configuration);
 
 	/* substitute strings \t and \n into the apropriate characters */
-	tmpread = tmpwrite = configuration;
+	tmpread = tmpwrite = emailbody;
 	while ((tmpwrite = strchr(tmpread,'\\'))) {
 	       int len = strlen("\n");
 	       switch (tmpwrite[1]) {
@@ -2663,16 +2664,6 @@ static int handle_minivm_show_zones(int fd, int argc, char *argv[])
 	return res;
 }
 
-/* Forward declaration */
-int reload(void);
-
-/*! \brief Reload cofiguration */
-static int handle_minivm_reload(int fd, int argc, char *argv[])
-{
-	reload();
-	ast_cli(fd, "\n-- Mini voicemail re-configured \n");
-	return RESULT_SUCCESS;
-}
 
 static char *complete_minivm_show_users(const char *line, const char *word, int pos, int state)
 {
@@ -2909,6 +2900,14 @@ int reload(void)
 	return(load_config());
 }
 
+/*! \brief Reload cofiguration */
+static int handle_minivm_reload(int fd, int argc, char *argv[])
+{
+	reload();
+	ast_cli(fd, "\n-- Mini voicemail re-configured \n");
+	return RESULT_SUCCESS;
+}
+
 /*! \brief Unload mini voicemail module */
 int unload_module(void)
 {
@@ -2918,6 +2917,7 @@ int unload_module(void)
 	res |= ast_unregister_application(app_minivm_greet);
 	res |= ast_unregister_application(app_minivm_notify);
 	res |= ast_unregister_application(app_minivm_delete);
+	res |= ast_unregister_application(app_minivm_accmess);
 	ast_cli_unregister_multiple(cli_minivm, sizeof(cli_minivm)/sizeof(cli_minivm[0]));
 	ast_custom_function_unregister(&minivm_account_function);
 
