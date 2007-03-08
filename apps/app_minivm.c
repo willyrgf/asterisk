@@ -2448,11 +2448,11 @@ static int load_config(void)
 	AST_LIST_UNLOCK(&minivm_zones);
 
 	/* Free all templates */
-	AST_LIST_LOCK(&minivm_templates);
-	while ((tcur = AST_LIST_REMOVE_HEAD(&minivm_templates, list))) {
+	AST_LIST_LOCK(&message_templates);
+	while ((tcur = AST_LIST_REMOVE_HEAD(&message_templates, list))) {
 		message_template_free(tcur);
 	}
-	AST_LIST_UNLOCK(&minivm_templates);
+	AST_LIST_UNLOCK(&message_templates);
 
 	/* First, set some default settings */
 	global_externnotify[0] = '\0';
