@@ -1574,17 +1574,15 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 		pbx_builtin_setvar_helper(chan, "MVM_DURATION", timebuf);
 		pbx_builtin_setvar_helper(chan, "MVM_FORMAT", fmt);
 
-		/* Notify of new message to e-mail and pager */
-		notify_new_message(chan, vmu, tmptxtfile, duration, fmt, chan->cid.cid_num, chan->cid.cid_name);
 	}
 	global_stats.lastreceived = time(NULL);
 	global_stats.receivedmessages++;
-	/* Go ahead and delete audio files from system, they're not needed any more */
-	if (ast_fileexists(tmptxtfile, NULL, NULL) <= 0) {
-		ast_filedelete(tmptxtfile, NULL);
-		if (option_debug > 1)
-			ast_log(LOG_DEBUG, "-_-_- Deleted audio file after notification :: %s \n", tmptxtfile);
-	}
+//	/* Go ahead and delete audio files from system, they're not needed any more */
+//	if (ast_fileexists(tmptxtfile, NULL, NULL) <= 0) {
+//		ast_filedelete(tmptxtfile, NULL);
+//		if (option_debug > 1)
+//			ast_log(LOG_DEBUG, "-_-_- Deleted audio file after notification :: %s \n", tmptxtfile);
+//	}
 
 	if (res > 0)
 		res = 0;
@@ -1963,11 +1961,12 @@ static int minivm_delete_exec(struct ast_channel *chan, void *data)
 	} 
 
 	/* Go ahead and delete audio files from system, they're not needed any more */
+	/* We should look for both audio and text files here */
 	if (ast_fileexists(filename, NULL, NULL) < 0) {
 		res = vm_delete(filename);
 		if (res) {
 			if (option_debug > 1)
-				ast_log(LOG_DEBUG, "Can't delete file: %s\n", filename);
+				ast_log(LOG_DEBUG, "-_-_- Can't delete file: %s\n", filename);
 			pbx_builtin_setvar_helper(chan, "MINIVM_DELETE_STATUS", "FAILED");
 		} else {
 			if (option_debug > 1)
@@ -1976,7 +1975,7 @@ static int minivm_delete_exec(struct ast_channel *chan, void *data)
 		}
 	} else {
 		if (option_debug > 1)
-			ast_log(LOG_DEBUG, "Filename does not exist: %s\n", filename);
+			ast_log(LOG_DEBUG, "-_-_- Filename does not exist: %s\n", filename);
 		pbx_builtin_setvar_helper(chan, "MINIVM_DELETE_STATUS", "FAILED");
 	}
 	
