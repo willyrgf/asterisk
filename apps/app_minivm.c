@@ -2586,7 +2586,7 @@ static const char minivm_show_zones_help[] =
 "Usage: minivm list zones\n"
 "       Lists zone message formats\n";
 
-static const char minivm_show_templates_help[] =
+static const char minivm_list_templates_help[] =
 "Usage: minivm list templates\n"
 "       Lists message templates for e-mail, paging and IM\n";
 
@@ -2604,10 +2604,10 @@ static const char minivm_reload_help[] =
 "       Reload mini-voicemail configuration and reset statistics\n";
 
 /*! \brief CLI routine for listing templates */
-static int handle_minivm_show_templates(int fd, int argc, char *argv[])
+static int handle_minivm_list_templates(int fd, int argc, char *argv[])
 {
 	struct minivm_template *this;
-	char *output_format = "%-15s %-12s %-15.15s %-50s\n";
+	char *output_format = "%-15s %-8s %8s %-15.15s %-50s\n";
 	int count = 0;
 
 	if (argc > 3)
@@ -2619,11 +2619,12 @@ static int handle_minivm_show_templates(int fd, int argc, char *argv[])
 		AST_LIST_UNLOCK(&message_templates);
 		return RESULT_FAILURE;
 	}
-	ast_cli(fd, output_format, "Template name", "Charset", "Attach media", "Subject");
-	ast_cli(fd, output_format, "-------------", "-------", "------------", "-------");
+	ast_cli(fd, output_format, "Template name", "Charset", "Locale", "Attach media", "Subject");
+	ast_cli(fd, output_format, "-------------", "-------", "------", "------------", "-------");
 	AST_LIST_TRAVERSE(&message_templates, this, list) {
 		ast_cli(fd, output_format, this->name, 
 			this->charset ? this->charset : "-", 
+			this->locale ? this->locale : "-",
 			this->attachment ? "Yes" : "No",
 			this->subject ? this->subject : "-");
 		count++;
@@ -2862,8 +2863,8 @@ static struct ast_cli_entry cli_minivm[] = {
 	minivm_show_zones_help, NULL, NULL },
 
 	{ { "minivm", "list", "templates", NULL },
-	handle_minivm_show_templates, "List message templates",
-	minivm_show_templates_help, NULL, NULL },
+	handle_minivm_list_templates, "List message templates",
+	minivm_list_templates_help, NULL, NULL },
 
 	{ { "minivm", "reload", NULL, NULL },
 	handle_minivm_reload, "Reload Mini-voicemail configuration",
