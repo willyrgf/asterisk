@@ -939,6 +939,8 @@ static int sendmail(struct minivm_template *template, char *srcemail, struct min
 			close(pfd);
 			pfd = -1;
 		}
+		if (option_debug)
+			ast_log(LOG_DEBUG, "-_-_- Opening temp file for e-mail: %s\n", tmp);
 	}
 	if (!p) {
 		ast_log(LOG_WARNING, "Unable to launch '%s'\n", global_mailcmd);
@@ -996,6 +998,7 @@ static int sendmail(struct minivm_template *template, char *srcemail, struct min
 			fprintf(p, "From: %s <%s>\n", mailheader_quote(passdata, passdata2, len_passdata), who);
 		} else  {
 			ast_log(LOG_WARNING, "Cannot allocate workspace for variable substitution\n");
+			fclose(p);
 			return -1;	
 		}
 	} 
@@ -1011,8 +1014,11 @@ static int sendmail(struct minivm_template *template, char *srcemail, struct min
 			memset(passdata, 0, vmlen);
 			pbx_substitute_variables_helper(ast, template->subject, passdata, vmlen);
 			fprintf(p, "Subject: %s\n", passdata);
-		} else
+		} else {
 			ast_log(LOG_WARNING, "Cannot allocate workspace for variable substitution\n");
+			fclose(p);
+			return -1;	
+		}
 	} else 
 		fprintf(p, "Subject: New message in mailbox %s@%s\n", vmu->username, vmu->domain);
 
@@ -1035,13 +1041,16 @@ static int sendmail(struct minivm_template *template, char *srcemail, struct min
 			if (option_debug > 2)
 				ast_log(LOG_DEBUG, "Message now: %s\n-----\n", passdata);
 			fprintf(p, "%s\n", passdata);
-		} else ast_log(LOG_WARNING, "Cannot allocate workspace for variable substitution\n");
+		} else
+			ast_log(LOG_WARNING, "Cannot allocate workspace for variable substitution\n");
 	} else {
 		fprintf(p, "Dear %s:\n\n\tJust wanted to let you know you were just left a %s long message \n"
 
 			"in mailbox %s from %s, on %s so you might\n"
 			"want to check it when you get a chance.  Thanks!\n\n\t\t\t\t--Asterisk\n\n", vmu->fullname, 
 			dur,  vmu->username, (cidname ? cidname : (cidnum ? cidnum : "an unknown caller")), date);
+		if (option_debug > 2)
+			ast_log(LOG_DEBUG, "Using default message body (no template)\n-----\n");
 	}
 	/* Eww. We want formats to tell us their own MIME type */
 	if (template->attachment) {
@@ -1063,8 +1072,11 @@ static int sendmail(struct minivm_template *template, char *srcemail, struct min
 	fclose(p);
 	snprintf(tmp2, sizeof(tmp2), "( %s < %s ; rm -f %s ) &", global_mailcmd, tmp, tmp);
 	ast_safe_system(tmp2);
-	if (option_debug)
+	if (option_debug) {
 		ast_log(LOG_DEBUG, "Sent message to %s with command '%s' - %s\n", vmu->email, global_mailcmd, template->attachment ? "(media attachment)" : "");
+		if (option_debug > 2)
+			ast_log(LOG_DEBUG, "-_-_- Actual command used: %s\n", tmp2);
+	}
 	if (ast)
 		ast_channel_free(ast);
 	return 0;
