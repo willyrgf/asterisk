@@ -1456,7 +1456,7 @@ static int notify_new_message(struct ast_channel *chan, struct minivm_account *v
 	stringp = messageformat = ast_strdupa(format);
 	strsep(&stringp, "|");
 
-	if (etemplate->locale) {
+	if (!ast_strlen_zero(etemplate->locale)) {
 		char *newlocale;
 		ast_copy_string(oldlocale, setlocale(LC_TIME, NULL), sizeof(oldlocale));
 		if (option_debug > 1)
@@ -2607,7 +2607,7 @@ static const char minivm_reload_help[] =
 static int handle_minivm_list_templates(int fd, int argc, char *argv[])
 {
 	struct minivm_template *this;
-	char *output_format = "%-15s %-8s %8s %-15.15s %-50s\n";
+	char *output_format = "%-15s %-10s %-10s %-15.15s %-50s\n";
 	int count = 0;
 
 	if (argc > 3)

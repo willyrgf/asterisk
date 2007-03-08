@@ -123,7 +123,7 @@ military=Zulu|'vm-received' q 'digits/at' H N 'hours' 'phonetic/z_p'
 ;----------------------- Message body templates---------------------
 ; [template-name]	; "template-" is a verbatim marker
 ; fromaddress = Your Friendly Asterisk Server
-; serveremail = asteriskvm@digium.com
+; fromemail = asteriskvm@digium.com
 ; subject = <string>
 ; attachmedia = yes | no	; Add media file as attachment?
 ; dateformat = <formatstring>   ; See above
@@ -137,9 +137,12 @@ military=Zulu|'vm-received' q 'digits/at' H N 'hours' 'phonetic/z_p'
 [template-sv_SE_email] 
 messagebody=Hej ${VM_NAME}:\n\n\tDu har fått ett röstbrevlåde-meddelande från ${VM_CALLERID}.\nLängd: ${VM_DUR}\nMailbox ${VM_MAILBOX}\nDatum:  ${VM_DATE}. \nMeddelandet bifogas det här brevet. Om du inte kan läsa det, kontakta intern support. \nHälsningar\n\n\t\t\t\t--Asterisk\n
 subject = Du har fått röstmeddelande (se bilaga)
+fromemail = swedish-voicemail-service@digium.com
+fromaddress = Asterisk Röstbrevlåda
 charset=iso-8859-1
 attachmedia=yes 
 dateformat=%A, %d %B %Y at %H:%M:%S
+locale=sv_SE
 
 [template-en_US_email] 
 messagebody=Dear ${VM_NAME}:\n\n\tjust wanted to let you know you were just left a ${VM_DUR} long message (number ${VM_MSGNUM})\nin mailbox ${VM_MAILBOX} from ${VM_CALLERID}, on ${VM_DATE}, so you might\nwant to check it when you get a chance.  Thanks!\n\n\t\t\t\t--Asterisk\n
@@ -153,11 +156,13 @@ dateformat=%A, %B %d, %Y at %r
 ;subject = Du har fått voicemail
 ;charset=iso-8859-1
 ;attachmedia=no
+;locale=sv_SE
 
 ;[template-nb_NO_email]
 ;templatefile = templates/email_nb_NO.txt
 ;subject = Du har fått voicemail
 ;charset=iso-8859-1
+;locale=nb_NO
 
 ;[template-en_US_email_southern]
 ;templatefile = templates/email_en_US.txt
