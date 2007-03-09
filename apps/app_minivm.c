@@ -454,7 +454,7 @@ static struct minivm_account *find_user_realtime(const char *domain, const char 
 static int handle_minivm_reload(int fd, int argc, char *argv[]);
 
 /*! \brief Create message template */
-static struct minivm_template *message_template_create(char *name)
+static struct minivm_template *message_template_create(const char *name)
 {
 	struct minivm_template *template;
 
@@ -482,7 +482,7 @@ static void message_template_free(struct minivm_template *template)
 }
 
 /*! \brief Build message template from configuration */
-static int message_template_build(char *name, struct ast_variable *var)
+static int message_template_build(const char *name, struct ast_variable *var)
 {
 	struct minivm_template *template;
 	int error = 0;
@@ -545,7 +545,7 @@ static int message_template_build(char *name, struct ast_variable *var)
 }
 
 /*! \brief Find named template */
-static struct minivm_template *message_template_find(char *name)
+static struct minivm_template *message_template_find(const char *name)
 {
 	struct minivm_template *this, *res = NULL;
 
