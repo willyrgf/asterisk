@@ -1397,20 +1397,6 @@ static int play_record_review(struct ast_channel *chan, char *playfile, char *re
  	return cmd;
 }
 
-/*! \brief Lock path
- only return failure if ast_lock_path returns 'timeout',
-   not if the path does not exist or any other reason
-*/
-static int vm_lock_path(const char *path)
-{
-	switch (ast_lock_path(path)) {
-	case AST_LOCK_TIMEOUT:
-		return -1;
-	default:
-		return 0;
-	}
-}
-
 /*! \brief Run external notification for voicemail message */
 static void run_externnotify(struct ast_channel *chan, struct minivm_account *vmu)
 {
@@ -2580,28 +2566,27 @@ static int load_config(void)
 	return 0;
 }
 
-static const char minivm_show_users_help[] =
+static char minivm_show_users_help[] =
 "Usage: minivm list accounts\n"
 "       Lists all mailboxes currently set up\n";
 
-static const char minivm_show_zones_help[] =
+static char minivm_show_zones_help[] =
 "Usage: minivm list zones\n"
 "       Lists zone message formats\n";
 
-static const char minivm_list_templates_help[] =
+static char minivm_list_templates_help[] =
 "Usage: minivm list templates\n"
 "       Lists message templates for e-mail, paging and IM\n";
 
-static const char minivm_show_stats_help[] =
+static char minivm_show_stats_help[] =
 "Usage: minivm show stats\n"
 "       Display Mini-Voicemail counters\n";
 
-static const char minivm_show_settings_help[] =
+static char minivm_show_settings_help[] =
 "Usage: minivm show settings\n"
 "       Display Mini-Voicemail general settings\n";
 
-
-static const char minivm_reload_help[] =
+static char minivm_reload_help[] =
 "Usage: minivm reload\n"
 "       Reload mini-voicemail configuration and reset statistics\n";
 
@@ -2702,7 +2687,7 @@ static int handle_minivm_show_zones(int fd, int argc, char *argv[])
 }
 
 
-static char *complete_minivm_show_users(const char *line, const char *word, int pos, int state)
+static char *complete_minivm_show_users(char *line, char *word, int pos, int state)
 {
 	int which = 0;
 	int wordlen;
