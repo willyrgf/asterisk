@@ -20,7 +20,7 @@ format=wav49
 ;
 ; Who the e-mail notification should appear to come from
 serveremail=asterisk
-;serveremail=asterisk@linux-support.net
+;serveremail=asterisk@asterisk.example.com
 ; Minimum length of a voicemail message in seconds for the message to be kept
 ; The default is no minimum.
 ;minmessage=3
@@ -137,7 +137,7 @@ military=Zulu|'vm-received' q 'digits/at' H N 'hours' 'phonetic/z_p'
 [template-sv_SE_email] 
 messagebody=Hej ${VM_NAME}:\n\n\tDu har fått ett röstbrevlåde-meddelande från ${VM_CALLERID}.\nLängd: ${VM_DUR}\nMailbox ${VM_MAILBOX}\nDatum:  ${VM_DATE}. \nMeddelandet bifogas det här brevet. Om du inte kan läsa det, kontakta intern support. \nHälsningar\n\n\t\t\t\t--Asterisk\n
 subject = Du har fått röstmeddelande (se bilaga)
-fromemail = swedish-voicemail-service@digium.com
+fromemail = swedish-voicemail-service@stockholm.example.com
 fromaddress = Asterisk Röstbrevlåda
 charset=iso-8859-1
 attachmedia=yes 
@@ -194,11 +194,12 @@ dateformat=%A, %B %d, %Y at %r
 
 ; Remember that you can use Asterisk Configuration Templates (ACT)
 
-;	[template@domain](!)		; Declare template
-;	fromaddress = pbx@domain
-;	etemplate = sv_se
-; 	serveremail = voicemail@voop.net
+;	[template@example.com](!)		; Declare template
+;	setvar=customerdomain=example.com
+;	setvar=customerclass=gold
+;	etemplate = sv_se_email
+; 	serveremail = voicemail@example.com
 
-;	[user2@domain](template@domain)	; Declare user2 account using template
+;	[user2@example.com](template@example.com)	; Declare user2 account using template
 ;	fullname = Olle E. Johansson
 ;					; User inherits everything from template

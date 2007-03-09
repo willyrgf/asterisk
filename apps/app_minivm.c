@@ -1431,7 +1431,7 @@ static void run_externnotify(struct ast_channel *chan, struct minivm_account *vm
 }
 
 /*! \brief Send message to voicemail account owner */
-static int notify_new_message(struct ast_channel *chan, struct minivm_account *vmu, const char *filename, long duration, const char *format, char *cidnum, char *cidname)
+static int notify_new_message(struct ast_channel *chan, const char *templatename, struct minivm_account *vmu, const char *filename, long duration, const char *format, char *cidnum, char *cidname)
 {
 	char ext_context[PATH_MAX], *stringp;
 	struct minivm_template *etemplate;
@@ -1449,6 +1449,8 @@ static int notify_new_message(struct ast_channel *chan, struct minivm_account *v
 	}
 
 	etemplate = message_template_find(vmu->etemplate);
+	if (!etemplate)
+		etemplate = message_template_find(templatename);
 	if (!etemplate)
 		etemplate = message_template_find("email-default");
 
@@ -1675,7 +1677,7 @@ static int minivm_notify_exec(struct ast_channel *chan, void *data)
 	char *tmpptr;
 	struct minivm_account *vmu;
 	char *username = argv[0];
-	const char *template;
+	const char *template = "";
 	const char *filename;
 	const char *format;
 	const char *duration_string;
@@ -1725,7 +1727,7 @@ static int minivm_notify_exec(struct ast_channel *chan, void *data)
 	duration_string = pbx_builtin_getvar_helper(chan, "MVM_DURATION");
 	/* Notify of new message to e-mail and pager */
 	if (!ast_strlen_zero(filename)) {
-		res = notify_new_message(chan, vmu, filename, atoi(duration_string), format, chan->cid.cid_num, chan->cid.cid_name);
+		res = notify_new_message(chan, template, vmu, filename, atoi(duration_string), format, chan->cid.cid_num, chan->cid.cid_name);
 	};
 
 	pbx_builtin_setvar_helper(chan, "MINIVM_NOTIFY_STATUS", res == 0 ? "SUCCESS" : "FAILED");
