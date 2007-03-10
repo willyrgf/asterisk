@@ -1468,6 +1468,12 @@ static int notify_new_message(struct ast_channel *chan, const char *templatename
 
 	/* Read counter if available */
 	counter = pbx_builtin_getvar_helper(chan, "MVM_COUNTER");
+	if (option_debug > 1) {
+		if (ast_strlen_zero(counter))
+			ast_log(LOG_DEBUG, "-_-_- MVM_COUNTER not found\n");
+		else
+			ast_log(LOG_DEBUG, "-_-_- MVM_COUNTER found - will use it with value %s\n", counter);
+	}
 
 	res = sendmail(etemplate, vmu, cidnum, cidname, filename, messageformat, duration, etemplate->attachment, MVM_MESSAGE_EMAIL, counter);
 
@@ -1484,7 +1490,7 @@ static int notify_new_message(struct ast_channel *chan, const char *templatename
 		res = sendmail(etemplate, vmu, cidnum, cidname, filename, messageformat, duration, etemplate->attachment, MVM_MESSAGE_PAGE, counter);
 	}
 
-	manager_event(EVENT_FLAG_CALL, "MiniVoiceMail", "Action: SentNotification\rn\nMailbox: %s@%s\r\n", vmu->username, vmu->domain);
+	manager_event(EVENT_FLAG_CALL, "MiniVoiceMail", "Action: SentNotification\rn\nMailbox: %s@%s\r\nCounter: %s\r\n", vmu->username, vmu->domain, counter);
 
 	run_externnotify(chan, vmu);		/* Run external notification */
 

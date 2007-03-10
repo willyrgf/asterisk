@@ -59,7 +59,8 @@ exten => minivmcleanup,1,noop(------------------------------------------- Minivm
 ;Increment voicemail counter with 1. The counter will be used in the e-mail message
 ;and in the filename
 exten => minivmcleanup,n,gotoif($[${MINIVM_RECORD_STATUS} != SUCCESS]?minivmrecordfailure,1)
-exten => minivmcleanup,n,set(MWM_COUNTER = ${SET(MINIVMCOUNTER(${account}:voicemailcounter:inc)=1)})
+exten => minivmcleanup,n,set(MINIVMCOUNTER(${account}:voicemailcounter:inc)=1)
+exten => minivmcleanup,n,set(MVM_COUNTER = ${MINIVMCOUNTER(${account}:voicemailcounter)})
 exten => minivmcleanup,n,minivmNotify(${account})
 exten => minivmcleanup,n,verbose(1,-- MINIVM_NOTIFY_STATUS = ${MINIVM_NOTIFY_STATUS} )
 ; Now, clean up after sending voicemail
@@ -138,9 +139,9 @@ exten => sendvoicemail,n,goto(sendvmcleanup)
 exten => sendvmcleanup,1,gotoif($[${MINIVM_RECORD_STATUS} != SUCCESS]?done)
 ; The counter is set in the domain directory, so we don't create one directory per user
 ; The counter has the email in the name of the counter, increase it
-exten => sendvmcleanup,n,set(MINIVMCOUNTER(${domain}:${account}-voicemailcounter:inc) = 1)
 ; Set the MVM_COUNTER variable that we use in the template
-exten => sendvmcleanup,n,set(MWM_COUNTER = ${MINIVMCOUNTER(${domain}:${account}-voicemailcounter)}
+exten => sendvmcleanup,n,set(MINIVMCOUNTER(${account}:voicemailcounter:inc)=1)
+exten => sendvmcleanup,n,set(MVM_COUNTER = ${MINIVMCOUNTER(${account}:voicemailcounter)})
 ; Increase a domain counter too, to see how many voicemails are sent to this domain
 ; This is just for statistics
 exten => sendvmcleanup,n,set(MINIVMCOUNTER(${domain}:${domain}-all:inc) = 1)
