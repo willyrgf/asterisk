@@ -45,6 +45,7 @@
  *
  *	Dialplan functions
  *	- MINIVMACCOUNT() - A dialplan function
+ *	- MINIVMCOUNTER() - Manage voicemail-related counters for accounts or domains
  *
  *	CLI Commands
  *	- minivm list accounts
@@ -107,16 +108,12 @@
 
 
 /*! \page App_minivm_todo Asterisk Mini-Voicemail - todo
- *	- Record all voice files in standard temp directory - configurable
- *	- add documentation -not done
- *	- Implement log file
  *	- configure accounts from AMI?
  *	- test, test, test, test
  *	- fix "vm-theextensionis.gsm" voiceprompt from Allison in various formats
  *		"The extension you are calling"
  *	- For trunk, consider using channel storage for information passing between small applications
  *	- Set default directory for voicemail
- *	- New app for recording busy, unavailable and temporary greeting
  *	- New app for creating directory for account if it does not exist
  *	- Re-insert code for IMAP storage at some point
  *	- Jabber integration for notifications
@@ -268,6 +265,8 @@ static char *descrip_minivm_notify =
 	"be used with default options (set in minivm.conf).\n"
 	"The recorded file name and path will be read from MVM_FILENAME and the \n"
 	"duration of the message will be accessed from MVM_DURATION (set by MinivmRecord() )\n"
+	"If the channel variable MWM_COUNTER is set, this will be used in the\n"
+	"message file name and available in the template for the message.\n"
 	"If not template is given, the default email template will be used to send email and\n"
 	"default pager template to send paging message (if the user account is configured with\n"
 	"a paging address.\n"
@@ -726,7 +725,7 @@ static void free_user(struct minivm_account *vmu)
 /*! \brief Prepare for voicemail template by adding channel variables 
 	to the channel
 */
-static void prep_email_sub_vars(struct ast_channel *channel, const struct minivm_account *vmu, const char *cidnum, const char *cidname, const char *dur, const char *date)
+static void prep_email_sub_vars(struct ast_channel *channel, const struct minivm_account *vmu, const char *cidnum, const char *cidname, const char *dur, const char *date, const char *counter)
 {
 	char callerid[256];
 	struct ast_variable *var;
@@ -748,6 +747,8 @@ static void prep_email_sub_vars(struct ast_channel *channel, const struct minivm
 	pbx_builtin_setvar_helper(channel, "MVM_CIDNAME", (cidname ? cidname : "an unknown caller"));
 	pbx_builtin_setvar_helper(channel, "MVM_CIDNUM", (cidnum ? cidnum : "an unknown caller"));
 	pbx_builtin_setvar_helper(channel, "MVM_DATE", date);
+	if (!ast_strlen_zero(counter))
+		pbx_builtin_setvar_helper(channel, "MVM_COUNTER", counter);
 }
 
 /*! \brief Set default values for Mini-Voicemail users */
@@ -803,7 +804,7 @@ static void vmaccounts_destroy_list(void)
 
 
 /*! \brief Find user from static memory object list */
-static struct minivm_account *find_account(const char *domain, const char *username)
+static struct minivm_account *find_account(const char *domain, const char *username, int createtemp)
 {
 	struct minivm_account *vmu = NULL, *cur;
 
@@ -831,7 +832,7 @@ static struct minivm_account *find_account(const char *domain, const char *usern
 	} else
 		vmu = find_user_realtime(domain, username);
 
-	if (!vmu) {
+	if (createtemp && !vmu) {
 		/* Create a temporary user, send e-mail and be gone */
 		vmu = mvm_user_alloc();
 		ast_set2_flag(vmu, TRUE, MVM_ALLOCED);	
@@ -878,7 +879,7 @@ static struct minivm_account *find_user_realtime(const char *domain, const char 
 }
 
 /*! \brief Send voicemail with audio file as an attachment */
-static int sendmail(struct minivm_template *template, struct minivm_account *vmu, char *cidnum, char *cidname, const char *filename, char *format, int duration, int attach_user_voicemail, enum mvm_messagetype type)
+static int sendmail(struct minivm_template *template, struct minivm_account *vmu, char *cidnum, char *cidname, const char *filename, char *format, int duration, int attach_user_voicemail, enum mvm_messagetype type, const char *counter)
 {
 	FILE *p = NULL;
 	int pfd;
@@ -992,8 +993,9 @@ static int sendmail(struct minivm_template *template, struct minivm_account *vmu
 	/* Set date format for voicemail mail */
 	strftime(date, sizeof(date), template->dateformat, &tm);
 
+
 	/* Populate channel with channel variables for substitution */
-	prep_email_sub_vars(ast, vmu, cidnum, cidname, dur, date);
+	prep_email_sub_vars(ast, vmu, cidnum, cidname, dur, date, counter);
 
 	/* Find email address to use */
 	/* If there's a server e-mail adress in the account, user that, othterwise template */
@@ -1108,7 +1110,7 @@ static int sendmail(struct minivm_template *template, struct minivm_account *vmu
 		fprintf(p, "Content-Type: %s%s; name=\"voicemailmsg.%s\"\n", ctype, format, format);
 		fprintf(p, "Content-Transfer-Encoding: base64\n");
 		fprintf(p, "Content-Description: Voicemail sound attachment.\n");
-		fprintf(p, "Content-Disposition: attachment; filename=\"voicemailmsg.%s\"\n\n", format);
+		fprintf(p, "Content-Disposition: attachment; filename=\"voicemail%s.%s\"\n\n", counter ? counter : "", format);
 
 		base_encode(fname, p);
 		fprintf(p, "\n\n--%s--\n.\n", bound);
@@ -1419,6 +1421,7 @@ static int notify_new_message(struct ast_channel *chan, const char *templatename
 	char *messageformat;
 	int res = 0;
 	char oldlocale[100];
+	const char *counter;
 
 	if (!ast_strlen_zero(vmu->attachfmt)) {
 		if (strstr(format, vmu->attachfmt)) {
@@ -1450,7 +1453,10 @@ static int notify_new_message(struct ast_channel *chan, const char *templatename
 
 
 
-	res = sendmail(etemplate, vmu, cidnum, cidname, filename, messageformat, duration, etemplate->attachment, MVM_MESSAGE_EMAIL);
+	/* Read counter if available */
+	counter = pbx_builtin_getvar_helper(chan, "MVM_COUNTER");
+
+	res = sendmail(etemplate, vmu, cidnum, cidname, filename, messageformat, duration, etemplate->attachment, MVM_MESSAGE_EMAIL, counter);
 
 	if (res == 0 && !ast_strlen_zero(vmu->pager))  {
 		/* Find template for paging */
@@ -1462,7 +1468,7 @@ static int notify_new_message(struct ast_channel *chan, const char *templatename
 			setlocale(LC_TIME, etemplate->locale);
 		}
 
-		res = sendmail(etemplate, vmu, cidnum, cidname, filename, messageformat, duration, etemplate->attachment, MVM_MESSAGE_PAGE);
+		res = sendmail(etemplate, vmu, cidnum, cidname, filename, messageformat, duration, etemplate->attachment, MVM_MESSAGE_PAGE, counter);
 	}
 
 	manager_event(EVENT_FLAG_CALL, "MiniVoiceMail", "Action: SentNotification\rn\nMailbox: %s@%s\r\n", vmu->username, vmu->domain);
@@ -1501,7 +1507,7 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 		domain++;
 	}
 
-	if (!(vmu = find_account(domain, username))) {
+	if (!(vmu = find_account(domain, username, TRUE))) {
 		/* We could not find user, let's exit */
 		ast_log(LOG_ERROR, "Can't allocate temporary account for '%s@%s'\n", username, domain);
 		pbx_builtin_setvar_helper(chan, "MINIVM_RECORD_STATUS", "FAILED");
@@ -1696,7 +1702,7 @@ static int minivm_notify_exec(struct ast_channel *chan, void *data)
 		return -1;
 	}
 
-	if(!(vmu = find_account(domain, username))) {
+	if(!(vmu = find_account(domain, username, TRUE))) {
 		/* We could not find user, let's exit */
 		ast_log(LOG_WARNING, "Could not allocate temporary memory for '%s@%s'\n", username, domain);
 		pbx_builtin_setvar_helper(chan, "MINIVM_NOTIFY_STATUS", "FAILED");
@@ -1854,7 +1860,7 @@ static int minivm_greet_exec(struct ast_channel *chan, void *data)
 	if (option_debug)
 		ast_log(LOG_DEBUG, "-_-_- Trying to find configuration for user %s in domain %s\n", username, domain);
 
-	if (!(vmu = find_account(domain, username))) {
+	if (!(vmu = find_account(domain, username, TRUE))) {
 		ast_log(LOG_ERROR, "Could not allocate memory. \n");
 		LOCAL_USER_REMOVE(u);
 		return -1;
@@ -2107,7 +2113,7 @@ static int minivm_accmess_exec(struct ast_channel *chan, void *data)
 		return -1;
 	}
 
-	if(!(vmu = find_account(domain, username))) {
+	if(!(vmu = find_account(domain, username, TRUE))) {
 		/* We could not find user, let's exit */
 		ast_log(LOG_WARNING, "Could not allocate temporary memory for '%s@%s'\n", username, domain);
 		pbx_builtin_setvar_helper(chan, "MINIVM_NOTIFY_STATUS", "FAILED");
@@ -2777,8 +2783,7 @@ static int handle_minivm_show_stats(int fd, int argc, char *argv[])
 	return RESULT_SUCCESS;
 }
 
-/*! \brief  ${MINIVMACCOUNT()} Dialplan function - reads account data 
-*/
+/*! \brief  ${MINIVMACCOUNT()} Dialplan function - reads account data */
 static char *minivm_account_func_read(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len)
 {
 	char *ret = NULL;
@@ -2803,7 +2808,7 @@ static char *minivm_account_func_read(struct ast_channel *chan, char *cmd, char 
 	if (ast_strlen_zero(username) || ast_strlen_zero(domain))
 		return ret;
 
-	if (!(vmu = find_account(domain, username)))
+	if (!(vmu = find_account(domain, username, TRUE)))
 		return ret;
 
 	if (!strcasecmp(colname, "hasaccount")) {
@@ -2856,6 +2861,212 @@ static char *minivm_account_func_read(struct ast_channel *chan, char *cmd, char 
 	return ret;
 }
 
+/*! \brief lock directory
+
+   only return failure if ast_lock_path returns 'timeout',
+   not if the path does not exist or any other reason
+*/
+static int vm_lock_path(const char *path)
+{
+        switch (ast_lock_path(path)) {
+        case AST_LOCK_TIMEOUT:
+                return -1;
+        default:
+                return 0;
+        }
+}
+
+/*! \brief Access counter file, lock directory, read and possibly write it again changed 
+	\param directory	Directory to crate file in
+	\param value		If set to zero, we only read the variable
+	\param operand		0 to read, 1 to set new value, 2 to change 
+	\return -1 on error, otherwise counter value
+*/
+static int access_counter_file(char *directory, char *countername, int value, int operand)
+{
+	char filename[BUFSIZ];
+	char readbuf[BUFSIZ];
+	FILE *counterfile;
+	int old = 0, counter = 0;
+
+	/* Lock directory */
+	if (vm_lock_path(directory)) {
+		return -1;	/* Could not lock directory */
+	}
+	snprintf(filename, sizeof(filename), "%s/%s.counter", directory, countername);
+	if (operand != 1) {
+		counterfile = fopen(filename, "r");
+		if (counterfile) {
+			if(fgets(readbuf, sizeof(readbuf), counterfile)) {
+				if (option_debug > 2)
+					ast_log(LOG_DEBUG, "Read this string from counter file: %s\n", readbuf);
+				old = counter = atoi(readbuf);
+			}
+			fclose(counterfile);
+		}
+	}
+	switch (operand) {
+	case 0:	/* Read only */
+		ast_unlock_path(directory);
+		if (option_debug > 1)
+			ast_log(LOG_DEBUG, "MINIVM Counter %s/%s: Value %d\n", directory, countername, counter);
+		return counter;
+		break;
+	case 1: /* Set new value */
+		counter = value;
+		break;
+	case 2: /* Change value */
+		counter += value;
+		if (counter < 0)	/* Don't allow counters to fall below zero */
+			counter = 0;
+		break;
+	}
+	
+	/* Now, write the new value to the file */
+	counterfile = fopen(filename, "w");
+	if (!counterfile) {
+		ast_log(LOG_ERROR, "Could not open counter file for writing : %s - %s\n", filename, strerror(errno));
+		ast_unlock_path(directory);
+		return -1;	/* Could not open file for writing */
+	}
+	fprintf(counterfile, "%d\n\n", counter);
+	fclose(counterfile);
+	ast_unlock_path(directory);
+	if (option_debug > 1)
+		ast_log(LOG_DEBUG, "MINIVM Counter %s/%s: Old value %d New value %d\n", directory, countername, old, counter);
+	return counter;
+}
+
+/*! \brief  ${MINIVMCOUNTER()} Dialplan function - read counters */
+static char *minivm_counter_func_read(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len)
+{
+	char *username, *domain, *countername;
+	struct minivm_account *vmu = NULL;
+	char userpath[BUFSIZ];
+	int res;
+
+	*buf = '\0';
+
+	if (!(username = ast_strdupa(data))) {	/* Copy indata to local buffer */
+		ast_log(LOG_WARNING, "Memory error!\n");
+		return NULL;
+	}
+	if ((countername = strchr(username, ':'))) {
+		*countername = '\0';
+		countername++;
+	} 
+
+	if ((domain = strchr(username, '@'))) {
+		*domain = '\0';
+		domain++;
+	}
+
+	/* If we have neither username nor domain now, let's give up */
+	if (ast_strlen_zero(username) && ast_strlen_zero(domain)) {
+		ast_log(LOG_ERROR, "No account given\n");
+		return buf;
+	}
+
+	if (ast_strlen_zero(countername)) {
+		ast_log(LOG_ERROR, "This function needs two arguments: Account:countername\n");
+		return buf;
+	}
+
+	/* We only have a domain, no username */
+	if (!ast_strlen_zero(username) && ast_strlen_zero(domain)) {
+		domain = username;
+		username = NULL;
+	}
+
+	/* If we can't find account or if the account is temporary, return. */
+	if (!ast_strlen_zero(username) && !(vmu = find_account(domain, username, FALSE))) {
+		ast_log(LOG_ERROR, "Minivm account does not exist: %s@%s\n", username, domain);
+		return buf;
+	}
+
+	create_dirpath(userpath, sizeof(userpath), domain, username, NULL);
+
+	/* We have the path, now read the counter file */
+	res = access_counter_file(userpath, countername, 0, 0);
+	if (res >= 0)
+		snprintf(buf, len, "%d", res);
+	return buf;
+}
+
+/*! \brief  ${MINIVMCOUNTER()} Dialplan function - changes counter data */
+static void minivm_counter_func_write(struct ast_channel *chan, char *cmd, char *data, const char *value)
+{
+	char *username, *domain, *countername, *operand;
+	char userpath[BUFSIZ];
+	struct minivm_account *vmu;
+	int change = 0;
+	int operation = 0;
+
+	if(!value)
+		return;
+	change = atoi(value);
+
+	if (!(username = ast_strdupa(data))) {	/* Copy indata to local buffer */
+		ast_log(LOG_WARNING, "Memory error!\n");
+		return;
+	}
+
+	if ((countername = strchr(username, ':'))) {
+		*countername = '\0';
+		countername++;
+	} 
+	if ((operand = strchr(countername, ':'))) {
+		*operand = '\0';
+		operand++;
+	} 
+
+	if ((domain = strchr(username, '@'))) {
+		*domain = '\0';
+		domain++;
+	}
+
+	/* If we have neither username nor domain now, let's give up */
+	if (ast_strlen_zero(username) && ast_strlen_zero(domain)) {
+		ast_log(LOG_ERROR, "No account given\n");
+		return;
+	}
+
+	/* We only have a domain, no username */
+	if (!ast_strlen_zero(username) && ast_strlen_zero(domain)) {
+		domain = username;
+		username = NULL;
+	}
+
+	if (ast_strlen_zero(operand) || ast_strlen_zero(countername)) {
+		ast_log(LOG_ERROR, "Writing to this function requires three arguments: Account:countername:operand\n");
+		return;
+	}
+
+	/* If we can't find account or if the account is temporary, return. */
+	if (!ast_strlen_zero(username) && !(vmu = find_account(domain, username, FALSE))) {
+		ast_log(LOG_ERROR, "Minivm account does not exist: %s@%s\n", username, domain);
+		return;
+	}
+
+	create_dirpath(userpath, sizeof(userpath), domain, username, NULL);
+	/* Now, find out our operator */
+	if (*operand == 'i') /* Increment */
+		operation = 2;
+	else if (*operand == 'd') {
+		change = change * -1;
+		operation = 2;
+	} else if (*operand == 's')
+		operation = 1;
+	else {
+		ast_log(LOG_ERROR, "Unknown operator: %s\n", operand);
+		return;
+	}
+
+	/* We have the path, now read the counter file */
+	access_counter_file(userpath, countername, change, operation);
+	return;
+}
+
 
 /*! \brief CLI commands for Mini-voicemail */
 static struct ast_cli_entry cli_minivm[] = {
@@ -2882,6 +3093,25 @@ static struct ast_cli_entry cli_minivm[] = {
 	{ { "minivm", "show", "settings", NULL },
 	handle_minivm_show_settings, "Show mini-voicemail general settings",
 	minivm_show_settings_help, NULL, NULL },
+};
+
+static struct ast_custom_function minivm_counter_function = {
+	.name = "MINIVMCOUNTER",
+	.synopsis = "Reads or sets counters for MiniVoicemail message",
+	.syntax = "MINIVMCOUNTER(<account>:name[:operand])",
+	.read = minivm_counter_func_read,
+	.write = minivm_counter_func_write,
+	.desc = "Valid operands for changing the value of a counter when assigning a value are:\n"
+	"- i   Increment by value\n"
+	"- d   Decrement by value\n"
+	"- s   Set to value\n"
+	"\nThe counters never goes below zero.\n"
+	"- The name of the counter is a string, up to 10 characters\n"
+	"- If account is given and it exists, the counter is specific for the account\n"
+	"- If account is a domain and the domain directory exists, counters are specific for a domain\n"
+	"The operation is atomic and the counter is locked while changing the value\n"
+	"\nThe counters are stored as text files in the minivm account directories. It might be better to use\n"
+	"realtime functions if you are using a database to operate your Asterisk\n",
 };
 
 static struct ast_custom_function minivm_account_function = {
@@ -2916,6 +3146,7 @@ int load_module(void)
 	res = ast_register_application(app_minivm_accmess, minivm_accmess_exec, synopsis_minivm_accmess, descrip_minivm_accmess);
 
 	ast_custom_function_register(&minivm_account_function);
+	ast_custom_function_register(&minivm_counter_function);
 	if (res)
 		return(res);
 
@@ -2962,6 +3193,7 @@ int unload_module(void)
 	res |= ast_unregister_application(app_minivm_accmess);
 	ast_cli_unregister_multiple(cli_minivm, sizeof(cli_minivm)/sizeof(cli_minivm[0]));
 	ast_custom_function_unregister(&minivm_account_function);
+	ast_custom_function_unregister(&minivm_counter_function);
 
 	message_destroy_list();		/* Destroy list of voicemail message templates */
 	timezone_destroy_list();	/* Destroy list of timezones */
