@@ -2021,7 +2021,7 @@ static int minivm_delete_exec(struct ast_channel *chan, void *data)
 
 	/* Go ahead and delete audio files from system, they're not needed any more */
 	/* We should look for both audio and text files here */
-	if (ast_fileexists(filename, NULL, NULL) < 0) {
+	if (ast_fileexists(filename, NULL, NULL) > 0) {
 		res = vm_delete(filename);
 		if (res) {
 			if (option_debug > 1)
