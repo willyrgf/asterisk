@@ -422,6 +422,9 @@ struct minivm_stats {
 static struct minivm_stats global_stats;
 
 AST_MUTEX_DEFINE_STATIC(minivmlock);	/*!< Lock to protect voicemail system */
+AST_MUTEX_DEFINE_STATIC(minivmloglock);	/*!< Lock to protect voicemail system log file */
+
+FILE *minivmlogfile;			/*!< The minivm log file */
 
 static int global_vmminmessage;		/*!< Minimum duration of messages */
 static int global_vmmaxmessage;		/*!< Maximum duration of message */
@@ -430,7 +433,7 @@ static int global_maxgreet;		/*!< Maximum length of prompts  */
 static int global_silencethreshold = 128;
 static char global_mailcmd[160];	/*!< Configurable mail cmd */
 static char global_externnotify[160]; 	/*!< External notification application */
-
+static char global_logfile[AST_CONFIG_MAX_PATH];	/*!< Global log file for messages */
 static char default_vmformat[80];
 
 static struct ast_flags globalflags = {0};	/*!< Global voicemail flags */
@@ -1260,7 +1263,7 @@ static int vm_delete(char *file)
 	/* Sprintf here would safe because we alloca'd exactly the right length,
 	 * but trying to eliminate all sprintf's anyhow
 	 */
-	snprintf(txt, txtsize, "%s.txt", file);
+	snprintf(txt, txtsize, "%s", file);
 	res = unlink(txt);
 	res |=  ast_filedelete(file, NULL);
 	return res;
@@ -1419,13 +1422,11 @@ static void run_externnotify(struct ast_channel *chan, struct minivm_account *vm
 /*! \brief Send message to voicemail account owner */
 static int notify_new_message(struct ast_channel *chan, const char *templatename, struct minivm_account *vmu, const char *filename, long duration, const char *format, char *cidnum, char *cidname)
 {
-	char ext_context[PATH_MAX], *stringp;
+	char *stringp;
 	struct minivm_template *etemplate;
 	char *messageformat;
 	int res = 0;
 	char oldlocale[100];
-
-	snprintf(ext_context, sizeof(ext_context), "%s@%s", vmu->username, vmu->domain);
 
 	if (!ast_strlen_zero(vmu->attachfmt)) {
 		if (strstr(format, vmu->attachfmt)) {
@@ -1548,11 +1549,9 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 	
 
 	/* XXX This file needs to be in temp directory */
-	txtdes = mkstemp(tmptxtfile);
+	txtdes = mkstemps(tmptxtfile, 4);
 	if (txtdes < 0) {
-		if (option_debug > 2)
-			ast_log(LOG_DEBUG, "Can't create temp file in %s\n", tmptxtfile);
-		ast_log(LOG_ERROR, "Unable to create message file: %s\n", strerror(errno));
+		ast_log(LOG_ERROR, "Unable to create message file %s: %s\n", tmptxtfile, strerror(errno));
 		res = ast_streamfile(chan, "vm-mailboxfull", chan->language);
 		if (!res)
 			res = ast_waitstream(chan, "");
@@ -1560,7 +1559,6 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 		return res;
 	}
 
-	/* Now play the beep once we have the message number for our next message. */
 	if (res >= 0) {
 		/* Unless we're *really* silent, try to send the beep */
 		res = ast_streamfile(chan, "beep", chan->language);
@@ -1570,7 +1568,7 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 
 	/* OEJ XXX Maybe this can be turned into a log file? Hmm. */
 	/* Store information */
-	if (option_debug)
+	if (option_debug > 1)
 		ast_log(LOG_DEBUG, "Open file for metadata: %s\n", tmptxtfile);
 
 	res = play_record_review(chan, NULL, tmptxtfile, global_vmmaxmessage, fmt, 1, vmu, &duration, NULL, options->record_gain);
@@ -1582,15 +1580,15 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 		struct tm tm;
 		time_t now;
 		char timebuf[30];
+		char logbuf[BUFSIZ];
 		get_date(date, sizeof(date));
 		now = time(NULL);
-		//ast_localtime(&now, &tm, the_zone ? the_zone->timezone : NULL);
 		ast_localtime(&now, &tm, NULL);
 		strftime(timebuf, sizeof(timebuf), "%H:%M:%S", &tm);
 		
-		fprintf(txt, 
-			/* "Mailbox:domain:macrocontext:exten:priority:callerchan:callerid:origdate:origtime:duration:durationstatus" */
-			"%s:%s:%s:%s:%d:%s:%s:%s:%s:%d:%s\n",
+		snprintf(logbuf, sizeof(logbuf),
+			/* "Mailbox:domain:macrocontext:exten:priority:callerchan:callerid:origdate:origtime:duration:durationstatus:accountcode" */
+			"%s:%s:%s:%s:%d:%s:%s:%s:%s:%d:%s:%s\n",
 			username,
 			chan->context,
 			chan->macrocontext, 
@@ -1601,9 +1599,15 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 			date, 
 			timebuf,
 			duration,
-			duration < global_vmminmessage ? "IGNORED" : "OK"
+			duration < global_vmminmessage ? "IGNORED" : "OK",
+			vmu->accountcode
 		); 
-
+		fprintf(txt, logbuf);
+		if (minivmlogfile) {
+			ast_mutex_lock(&minivmloglock);
+			fprintf(minivmlogfile, logbuf);
+			ast_mutex_unlock(&minivmloglock);
+		}
 
 		if (duration < global_vmminmessage) {
 			if (option_verbose > 2) 
@@ -2394,8 +2398,14 @@ static int apply_general_options(struct ast_variable *var)
 			global_maxsilence = atoi(var->value);
 			if (global_maxsilence > 0)
 				global_maxsilence *= 1000;
+		} else if (!strcmp(var->name, "logfile")) {
+			if (!ast_strlen_zero(var->value) ) {
+				if(*(var->value) == '/')
+					ast_copy_string(global_logfile, var->value, sizeof(global_logfile));
+				else
+					snprintf(global_logfile, sizeof(global_logfile), "%s/%s", ast_config_AST_LOG_DIR, var->value);
+			}
 		} else if (!strcmp(var->name, "externnotify")) {
-			
 			/* External voicemail notify application */
 			ast_copy_string(global_externnotify, var->value, sizeof(global_externnotify));
 		} else if (!strcmp(var->name, "silencetreshold")) {
@@ -2468,6 +2478,7 @@ static int load_config(void)
 
 	/* First, set some default settings */
 	global_externnotify[0] = '\0';
+	global_logfile[0] = '\0';
 	global_silencethreshold = 256;
 	global_vmmaxmessage = 2000;
 	global_maxgreet = 2000;
@@ -2563,6 +2574,20 @@ static int load_config(void)
 
 	ast_mutex_unlock(&minivmlock);
 	ast_config_destroy(cfg);
+
+	/* Close log file if it's open and disabled */
+	if(minivmlogfile)
+		fclose(minivmlogfile);
+
+	/* Open log file if it's enabled */
+	if(!ast_strlen_zero(global_logfile)) {
+		minivmlogfile = fopen(global_logfile, "a");
+		if(!minivmlogfile)
+			ast_log(LOG_ERROR, "Failed to open minivm log file %s : %s\n", global_logfile, strerror(errno));
+		if (option_debug > 2 && minivmlogfile)
+			ast_log(LOG_DEBUG, "Opened log file %s \n", global_logfile);
+	}
+
 	return 0;
 }
 
@@ -2724,6 +2749,7 @@ static int handle_minivm_show_settings(int fd, int argc, char *argv[])
 	ast_cli(fd, "  Min message length (secs):          %d\n", global_vmminmessage);
 	ast_cli(fd, "  Default format:                     %s\n", default_vmformat);
 	ast_cli(fd, "  Extern notify (shell):              %s\n", global_externnotify);
+	ast_cli(fd, "  Logfile:                            %s\n", global_logfile[0] ? global_logfile : "<disabled>");
 	ast_cli(fd, "  Operator exit:                      %s\n", ast_test_flag(&globalflags, MVM_OPERATOR) ? "Yes" : "No");
 	ast_cli(fd, "  Message review:                     %s\n", ast_test_flag(&globalflags, MVM_REVIEW) ? "Yes" : "No");
 
