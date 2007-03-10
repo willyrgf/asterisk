@@ -27,6 +27,7 @@
  * 
  * \par See also
  * \arg \ref Config_minivm
+ * \arg \ref Config_minivm_examples
  * \arg \ref App_minivm
  *
  * \ingroup applications
@@ -34,7 +35,12 @@
  * \page App_minivm	Asterisk Mini-voicemail - A minimal voicemail system
  *	
  *	This is a minimal voicemail system, building blocks for something
- *	else. 
+ *	else. It is built for multi-language systems.
+ *	The current version is focused on accounts where voicemail is 
+ *	forwarded to users in e-mail.
+ *
+ *	Hopefully, we can expand this to be a full replacement of voicemail() and voicemailmain()
+ *	in the future.
  *
  *	Dialplan applications
  *	- minivmRecord - record voicemail and send as e-mail ( \ref minivm_record_exec() )
@@ -73,6 +79,7 @@
  *	
  * \par See also
  * \arg \ref Config_minivm
+ * \arg \ref Config_minivm_examples
  * \arg \ref Minivm_directories
  * \arg \ref app_minivm.c
  * \arg Comedian mail: app_voicemail.c
@@ -106,6 +113,12 @@
  * Back: \ref App_minivm
  */
 
+/*! \page Config_minivm_examples Example dialplan for Mini-Voicemail
+ * \section Example dialplan scripts for Mini-Voicemail
+ *  \verbinclude extensions_minivm.conf.sample
+ *
+ * Back: \ref App_minivm
+ */
 
 /*! \page App_minivm_todo Asterisk Mini-Voicemail - todo
  *	- configure accounts from AMI?

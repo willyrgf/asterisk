@@ -59,8 +59,7 @@ exten => minivmcleanup,1,noop(------------------------------------------- Minivm
 ;Increment voicemail counter with 1. The counter will be used in the e-mail message
 ;and in the filename
 exten => minivmcleanup,n,gotoif($[${MINIVM_RECORD_STATUS} != SUCCESS]?minivmrecordfailure,1)
-exten => minivmcleanup,n,set(MINIVMCOUNTER(${account}:voicemailcounter:inc) = 1)
-exten => minivmcleanup,n,set(MWM_COUNTER = ${MINIVMCOUNTER(${account}:voicemailcounter)}
+exten => minivmcleanup,n,set(MWM_COUNTER = ${SET(MINIVMCOUNTER(${account}:voicemailcounter:inc)=1)})
 exten => minivmcleanup,n,minivmNotify(${account})
 exten => minivmcleanup,n,verbose(1,-- MINIVM_NOTIFY_STATUS = ${MINIVM_NOTIFY_STATUS} )
 ; Now, clean up after sending voicemail
