@@ -265,7 +265,7 @@ static char *descrip_minivm_notify =
 	"be used with default options (set in minivm.conf).\n"
 	"The recorded file name and path will be read from MVM_FILENAME and the \n"
 	"duration of the message will be accessed from MVM_DURATION (set by MinivmRecord() )\n"
-	"If the channel variable MWM_COUNTER is set, this will be used in the\n"
+	"If the channel variable MVM_COUNTER is set, this will be used in the\n"
 	"message file name and available in the template for the message.\n"
 	"If not template is given, the default email template will be used to send email and\n"
 	"default pager template to send paging message (if the user account is configured with\n"
