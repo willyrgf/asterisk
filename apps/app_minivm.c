@@ -1251,21 +1251,13 @@ static int invent_message(struct ast_channel *chan, char *domain, char *username
 /*! \brief Delete media files and attribute file */
 static int vm_delete(char *file)
 {
-	char *txt;
-	int txtsize = 0;
 	int res;
 
 	if (option_debug)
-		ast_log(LOG_DEBUG, "--- Deleting voicemail file %s\n", file);
+		ast_log(LOG_DEBUG, "-_-_- Deleting voicemail file %s\n", file);
 
-	txtsize = (strlen(file) + 5) * sizeof(char);
-	txt = (char *)alloca(txtsize);
-	/* Sprintf here would safe because we alloca'd exactly the right length,
-	 * but trying to eliminate all sprintf's anyhow
-	 */
-	snprintf(txt, txtsize, "%s", file);
-	res = unlink(txt);
-	res |=  ast_filedelete(file, NULL);
+	res = unlink(file);	/* Remove the meta data file */
+	res |=  ast_filedelete(file, NULL);	/* remove the media file */
 	return res;
 }
 
@@ -1549,7 +1541,7 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 	
 
 	/* XXX This file needs to be in temp directory */
-	txtdes = mkstemps(tmptxtfile, 4);
+	txtdes = mkstemp(tmptxtfile);
 	if (txtdes < 0) {
 		ast_log(LOG_ERROR, "Unable to create message file %s: %s\n", tmptxtfile, strerror(errno));
 		res = ast_streamfile(chan, "vm-mailboxfull", chan->language);
