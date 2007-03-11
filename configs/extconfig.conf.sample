@@ -48,4 +48,5 @@
 ;extensions => odbc,asterisk
 ;queues => odbc,asterisk
 ;queue_members => odbc,asterisk
+;minivm => mysql,asterisk	; Check minivm.conf for information
 
