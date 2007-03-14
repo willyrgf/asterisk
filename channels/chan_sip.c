@@ -912,6 +912,7 @@ static struct sip_pvt {
 		AST_STRING_FIELD(fromuser);	/*!< User to show in the user field */
 		AST_STRING_FIELD(fromname);	/*!< Name to show in the user field */
 		AST_STRING_FIELD(tohost);	/*!< Host we should put in the "to" field */
+		AST_STRING_FIELD(todnid);	/*!< DNID of this call (overrides host) */
 		AST_STRING_FIELD(language);	/*!< Default language for this call */
 		AST_STRING_FIELD(mohinterpret);	/*!< MOH class to use when put on hold */
 		AST_STRING_FIELD(mohsuggest);	/*!< MOH class to suggest when putting a peer on hold */
@@ -6719,16 +6720,29 @@ static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmetho
 	if (p->options && p->options->uri_options)
 		ast_build_string(&invite, &invite_max, ";%s", p->options->uri_options);
 	
+	/* This is the request URI, which is the next hop of the call
+		which may or may not be the destination of the call
+	*/
 	ast_string_field_set(p, uri, invite_buf);
 
-	if (sipmethod == SIP_NOTIFY && !ast_strlen_zero(p->theirtag)) { 
-		/* If this is a NOTIFY, use the From: tag in the subscribe (RFC 3265) */
-		snprintf(to, sizeof(to), "<sip:%s>;tag=%s", p->uri, p->theirtag);
-	} else if (p->options && p->options->vxml_url) {
-		/* If there is a VXML URL append it to the SIP URL */
-		snprintf(to, sizeof(to), "<%s>;%s", p->uri, p->options->vxml_url);
-	} else 
-		snprintf(to, sizeof(to), "<%s>", p->uri);
+	if (!ast_strlen_zero(p->todnid)) {
+		/* Need to add back the VXML URL here before commit, possibly use build_string for all this junk */
+		if (!strchr(p->todnid, '@')) {
+			/* We have no domain in the dnid */
+			snprintf(to, sizeof(to), "<sip:%s@%s>%s%s", p->todnid, p->tohost, ast_strlen_zero(p->theirtag) ? "" : ";tag=", p->theirtag);
+		} else {
+			snprintf(to, sizeof(to), "<sip:%s>%s%s", p->todnid, ast_strlen_zero(p->theirtag) ? "" : ";tag=", p->theirtag);
+		}
+	} else {
+		if (sipmethod == SIP_NOTIFY && !ast_strlen_zero(p->theirtag)) { 
+			/* If this is a NOTIFY, use the From: tag in the subscribe (RFC 3265) */
+			snprintf(to, sizeof(to), "<sip:%s>;tag=%s", p->uri, p->theirtag);
+		} else if (p->options && p->options->vxml_url) {
+			/* If there is a VXML URL append it to the SIP URL */
+			snprintf(to, sizeof(to), "<%s>;%s", p->uri, p->options->vxml_url);
+		} else 
+			snprintf(to, sizeof(to), "<%s>", p->uri);
+	}
 	
 	init_req(req, sipmethod, p->uri);
 	snprintf(tmp, sizeof(tmp), "%d %s", ++p->ocseq, sip_methods[sipmethod].text);
@@ -15286,7 +15300,13 @@ static int sip_devicestate(void *data)
 }
 
 /*! \brief PBX interface function -build SIP pvt structure 
-	SIP calls initiated by the PBX arrive here */
+	SIP calls initiated by the PBX arrive here 
+
+	SIP Dial string syntax
+		SIP/exten@host!dnid
+	or	SIP/host/exten!dnid
+	or	SIP/host!dnid
+*/
 static struct ast_channel *sip_request_call(const char *type, int format, void *data, int *cause)
 {
 	int oldformat;
@@ -15295,6 +15315,7 @@ static struct ast_channel *sip_request_call(const char *type, int format, void *
 	char *ext, *host;
 	char tmp[256];
 	char *dest = data;
+	char *dnid;
 
 	oldformat = format;
 	if (!(format &= ((AST_FORMAT_MAX_AUDIO << 1) - 1))) {
@@ -15320,7 +15341,18 @@ static struct ast_channel *sip_request_call(const char *type, int format, void *
 		return NULL;
 	}
 
+	/* Save the destination, the SIP dial string */
 	ast_copy_string(tmp, dest, sizeof(tmp));
+
+
+	/* Find DNID and take it away */
+	dnid = strchr(tmp, '!');
+	if (dnid != NULL) {
+		*dnid++ = '\0';
+		ast_string_field_set(p, todnid, dnid);
+	}
+
+	/* Find at sign - @ */
 	host = strchr(tmp, '@');
 	if (host) {
 		*host++ = '\0';
@@ -15332,6 +15364,11 @@ static struct ast_channel *sip_request_call(const char *type, int format, void *
 		host = tmp;
 	}
 
+	/* We now have 
+		host = peer name, DNS host name or DNS domain (for SRV) 
+		ext = extension (user part of URI)
+		dnid = destination of the call (applies to the To: header)
+	*/
 	if (create_addr(p, host)) {
 		*cause = AST_CAUSE_UNREGISTERED;
 		if (option_debug > 2)
@@ -15350,7 +15387,8 @@ static struct ast_channel *sip_request_call(const char *type, int format, void *
 	/* We have an extension to call, don't use the full contact here */
 	/* This to enable dialing registered peers with extension dialling,
 	   like SIP/peername/extension 	
-	   SIP/peername will still use the full contact */
+	   SIP/peername will still use the full contact 
+	 */
 	if (ext) {
 		ast_string_field_set(p, username, ext);
 		ast_string_field_free(p, fullcontact);
