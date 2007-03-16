@@ -7838,7 +7838,17 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 	
 	/* Fromdomain is what we are registering to, regardless of actual
 	   host name from SRV */
-	snprintf(addr, sizeof(addr), "sip:%s", S_OR(p->fromdomain, r->hostname));
+	if (!ast_strlen_zero(p->fromdomain)) {
+		if (r->portno && r->portno != STANDARD_SIP_PORT)
+			snprintf(addr, sizeof(addr), "sip:%s:%d", p->fromdomain, r->portno);
+		else
+			snprintf(addr, sizeof(addr), "sip:%s", p->fromdomain);
+	} else {
+		if (r->portno && r->portno != STANDARD_SIP_PORT)
+			snprintf(addr, sizeof(addr), "sip:%s:%d", r->hostname, r->portno);
+		else
+			snprintf(addr, sizeof(addr), "sip:%s", r->hostname);
+	}
 	ast_string_field_set(p, uri, addr);
 
 	p->branch ^= ast_random();
@@ -9858,6 +9868,10 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 	}
 	{
 		char *tmp = ast_strdupa(of);
+		/* We need to be able to handle auth-headers looking like
+			<sip:8164444422;phone-context=+1@1.2.3.4:5060;user=phone;tag=SDadkoa01-gK0c3bdb43>
+		*/
+		tmp = strsep(&tmp, ";");
 		if (ast_is_shrinkable_phonenumber(tmp))
 			ast_shrink_phone_number(tmp);
 		ast_string_field_set(p, cid_num, tmp);
@@ -12887,9 +12901,10 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 			break;
 		case 200:	/* 200 OK */
 			p->authtries = 0;	/* Reset authentication counter */
-			if (sipmethod == SIP_MESSAGE) {
-				/* We successfully transmitted a message */
-				ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
+			if (sipmethod == SIP_MESSAGE || sipmethod == SIP_INFO) {
+				/* We successfully transmitted a message 
+					or a video update request in INFO */
+				/* Nothing happens here - the message is inside a dialog */
 			} else if (sipmethod == SIP_INVITE) {
 				handle_response_invite(p, resp, rest, req, seqno);
 			} else if (sipmethod == SIP_NOTIFY) {
@@ -13022,7 +13037,8 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 				if ((option_verbose > 2) && (resp != 487))
 					ast_verbose(VERBOSE_PREFIX_3 "Got SIP response %d \"%s\" back from %s\n", resp, rest, ast_inet_ntoa(p->sa.sin_addr));
 	
-				stop_media_flows(p); /* Immediately stop RTP, VRTP and UDPTL as applicable */
+				if (sipmethod == SIP_INVITE)
+					stop_media_flows(p); /* Immediately stop RTP, VRTP and UDPTL as applicable */
 
 				/* XXX Locking issues?? XXX */
 				switch(resp) {
@@ -13066,14 +13082,15 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 					break;
 				default:
 					/* Send hangup */	
-					if (owner)
+					if (owner && sipmethod != SIP_MESSAGE && sipmethod != SIP_INFO)
 						ast_queue_hangup(p->owner);
 					break;
 				}
 				/* ACK on invite */
 				if (sipmethod == SIP_INVITE) 
 					transmit_request(p, SIP_ACK, seqno, XMIT_UNRELIABLE, FALSE);
-				sip_alreadygone(p);
+				if (sipmethod != SIP_MESSAGE && sipmethod != SIP_INFO) 
+					sip_alreadygone(p);
 				if (!p->owner)
 					ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
 			} else if ((resp >= 100) && (resp < 200)) {
@@ -13129,10 +13146,10 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 				}
 			} else if (sipmethod == SIP_BYE)
 				ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
-			else if (sipmethod == SIP_MESSAGE)
-				/* We successfully transmitted a message */
-				/* XXX Why destroy this pvt after message transfer? Bad */
-				ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
+			else if (sipmethod == SIP_MESSAGE || sipmethod == SIP_INFO)
+				/* We successfully transmitted a message or
+					a video update request in INFO */
+				;
 			else if (sipmethod == SIP_BYE) 
 				/* Ok, we're ready to go */
 				ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
@@ -17014,7 +17031,7 @@ static int reload_config(enum channelreloadreason reason)
 			compactheaders = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "notifymimetype")) {
 			ast_copy_string(default_notifymime, v->value, sizeof(default_notifymime));
-		} else if (!strcasecmp(v->name, "limitonpeers")) {
+		} else if (!strncasecmp(v->name, "limitonpeer", 11)) {
 			global_limitonpeers = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "directrtpsetup")) {
 			global_directrtpsetup = ast_true(v->value);
