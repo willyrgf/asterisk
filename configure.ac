@@ -153,6 +153,7 @@ AC_PATH_PROG([LN], [ln], :)
 AC_PATH_PROG([DOT], [dot], :)
 AC_PATH_PROG([STRIP], [strip], :)
 AC_PATH_PROG([WGET], [wget], :)
+AC_PATH_PROG([RUBBER], [rubber], :)
 if test "${WGET}" != ":" ; then
   DOWNLOAD=${WGET}
 else
@@ -210,6 +211,7 @@ AST_EXT_LIB_SETUP([QT], [Qt], [qt])
 AST_EXT_LIB_SETUP([RADIUS], [Radius Client], [radius])
 AST_EXT_LIB_SETUP([SPEEX], [Speex], [speex])
 AST_EXT_LIB_SETUP([SQLITE], [SQLite], [sqlite])
+AST_EXT_LIB_SETUP([SQLITE3], [SQLite], [sqlite3])
 AST_EXT_LIB_SETUP([SUPPSERV], [mISDN Supplemental Services], [suppserv])
 AST_EXT_LIB_SETUP([OPENSSL], [OpenSSL], [ssl])
 AST_EXT_LIB_SETUP([FREETDS], [FreeTDS], [tds])
@@ -832,6 +834,8 @@ AST_EXT_LIB_CHECK([SPEEX], [speex], [speex_encode], [speex/speex.h], [-lm])
 
 AST_EXT_LIB_CHECK([SQLITE], [sqlite], [sqlite_exec], [sqlite.h])
 
+AST_EXT_LIB_CHECK([SQLITE3], [sqlite3], [sqlite3_open], [sqlite3.h])
+
 AST_EXT_LIB_CHECK([OPENSSL], [ssl], [ssl2_connect], [openssl/ssl.h], [-lcrypto])
 
 AST_EXT_LIB_CHECK([FREETDS], [tds], [tds_version], [tds.h])
@@ -976,6 +980,18 @@ fi
 AC_SUBST(PBX_GTK)
 AC_SUBST(GTK_INCLUDE)
 AC_SUBST(GTK_LIB)
+
+PBX_GTK2=0
+AC_CHECK_TOOL(PKGCONFIG, pkg-config, No)
+if test ! "x${PKGCONFIG}" = xNo; then
+   GTK2_INCLUDE=$(${PKGCONFIG} gtk+-2.0 --cflags)
+   GTK2_LIB=$(${PKGCONFIG} gtk+-2.0 --libs)
+   PBX_GTK2=1
+   AC_DEFINE([HAVE_GTK2], 1, [Define if your system has the GTK2 libraries.])
+fi
+AC_SUBST(PBX_GTK2)
+AC_SUBST(GTK2_INCLUDE)
+AC_SUBST(GTK2_LIB)
 
 if test "${USE_CURL}" != "no"; then
    AC_PATH_TOOL([CURL_CONFIG], [curl-config], No)

@@ -46,6 +46,7 @@ export AGI_DIR
 export ASTCONFPATH
 export NOISY_BUILD
 export MENUSELECT_CFLAGS
+export AST_DEVMODE
 export CC
 export CXX
 export AR
@@ -673,14 +674,42 @@ uninstall-all: _uninstall
 
 menuconfig: menuselect
 
+gmenuconfig: gmenuselect
+
 menuselect: menuselect/menuselect menuselect-tree
 	-@menuselect/menuselect $(GLOBAL_MAKEOPTS) $(USER_MAKEOPTS) menuselect.makeopts && (echo "menuselect changes saved!"; rm -f channels/h323/Makefile.ast main/asterisk) || echo "menuselect changes NOT saved!"
+
+gmenuselect: menuselect/gmenuselect menuselect-tree
+	-@menuselect/gmenuselect $(GLOBAL_MAKEOPTS) $(USER_MAKEOPTS) menuselect.makeopts && (echo "menuselect changes saved!"; rm -f channels/h323/Makefile.ast main/asterisk) || echo "menuselect changes NOT saved!"
 
 menuselect/menuselect: makeopts menuselect/menuselect.c menuselect/menuselect_curses.c menuselect/menuselect_stub.c menuselect/menuselect.h menuselect/linkedlists.h makeopts
 	@CC="$(HOST_CC)" LD="" AR="" RANLIB="" $(MAKE) -C menuselect CONFIGURE_SILENT="--silent"
 
+menuselect/gmenuselect: makeopts menuselect/menuselect.c menuselect/menuselect_gtk.c menuselect/menuselect_stub.c menuselect/menuselect.h menuselect/linkedlists.h makeopts
+	@CC="$(HOST_CC)" CXX="$(CXX)" LD="" AR="" RANLIB="" $(MAKE) -C menuselect _gmenuselect CONFIGURE_SILENT="--silent"
+
 menuselect-tree: $(foreach dir,$(filter-out main,$(MOD_SUBDIRS)),$(wildcard $(dir)/*.c) $(wildcard $(dir)/*.cc)) build_tools/cflags.xml sounds/sounds.xml build_tools/embed_modules.xml
 	@echo "Generating input for menuselect ..."
 	@build_tools/prep_moduledeps > $@
+
+asterisk.pdf: doc/asterisk.pdf
+
+doc/asterisk.pdf: $(wildcard doc/*.tex)
+ifeq ($(findstring rubber,$(RUBBER)),)
+	@echo "**********************************************"
+	@echo "** You must install the \"rubber\" tool      ***"
+	@echo "** to generate the Asterisk reference PDF. ***"
+	@echo "**********************************************"
+else
+	@echo "**********************************************"
+	@echo "** The Asterisk reference PDF will now be  ***"
+	@echo "** generated.  When complete, it will be   ***"
+	@echo "** located at doc/asterisk.pdf.            ***"	
+	@echo "**********************************************"
+	@cp doc/asterisk.tex doc/asterisk.tex.orig
+	@sed -i -e 's/ASTERISKVERSION/$(ASTERISKVERSION)/' doc/asterisk.tex
+	@cd doc && $(RUBBER) --pdf asterisk.tex
+	@mv doc/asterisk.tex.orig doc/asterisk.tex
+endif
 
 .PHONY: menuselect main sounds clean dist-clean distclean all prereqs cleantest uninstall _uninstall uninstall-all dont-optimize $(SUBDIRS_INSTALL) $(SUBDIRS_CLEAN) $(SUBDIRS_UNINSTALL) $(SUBDIRS) $(MOD_SUBDIRS_EMBED_LDSCRIPT) $(MOD_SUBDIRS_EMBED_LDFLAGS) $(MOD_SUBDIRS_EMBED_LIBS)
