@@ -5082,7 +5082,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 	int codec;
 	int destiterator = 0;
 	int iterator;
-	int sendonly = 0;
+	int sendonly = -1;
 	int numberofports;
 	struct ast_rtp *newaudiortp, *newvideortp, *newtextrtp;	/* Buffers for codec handling */
 	int newjointcapability;				/* Negotiated capability */
@@ -5360,13 +5360,16 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 				continue;
 		}
 		if (!strcasecmp(a, "sendonly")) {
-			sendonly = 1;
+			if (sendonly == -1)
+				sendonly = 1;
 			continue;
 		} else if (!strcasecmp(a, "inactive")) {
-			sendonly = 2;
+			if (sendonly == -1)
+				sendonly = 2;
 			continue;
 		}  else if (!strcasecmp(a, "sendrecv")) {
-			sendonly = 0;
+			if (sendonly == -1)
+				sendonly = 0;
 			continue;
 		} else if (strlen(a) > 5 && !strncasecmp(a, "ptime", 5)) {
 			char *tmp = strrchr(a, ':');
@@ -5641,11 +5644,22 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 		ast_set_write_format(p->owner, p->owner->writeformat);
 	}
 	
-	if (sin.sin_addr.s_addr && !sendonly) {
+	if (ast_test_flag(&p->flags[1], SIP_PAGE2_CALL_ONHOLD) && sin.sin_addr.s_addr && (!sendonly || sendonly == -1)) {
 		ast_queue_control(p->owner, AST_CONTROL_UNHOLD);
 		/* Activate a re-invite */
 		ast_queue_frame(p->owner, &ast_null_frame);
-	} else if (!sin.sin_addr.s_addr || sendonly) {
+		/* Queue Manager Unhold event */
+		append_history(p, "Unhold", "%s", req->data);
+		if (global_callevents)
+			manager_event(EVENT_FLAG_CALL, "Unhold",
+				      "Channel: %s\r\n"
+				      "Uniqueid: %s\r\n",
+				      p->owner->name,
+				      p->owner->uniqueid);
+		if (global_notifyhold)
+			sip_peer_hold(p, FALSE);
+		ast_clear_flag(&p->flags[1], SIP_PAGE2_CALL_ONHOLD); /* Clear both flags */
+	} else if (!sin.sin_addr.s_addr || (sendonly && sendonly != -1)) {
 		ast_queue_control_data(p->owner, AST_CONTROL_HOLD, 
 				       S_OR(p->mohsuggest, NULL),
 				       !ast_strlen_zero(p->mohsuggest) ? strlen(p->mohsuggest) + 1 : 0);
@@ -5654,32 +5668,14 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 		/* RTCP needs to go ahead, even if we're on hold!!! */
 		/* Activate a re-invite */
 		ast_queue_frame(p->owner, &ast_null_frame);
-	}
-
-	/* Manager Hold and Unhold events must be generated, if necessary */
-	if (sin.sin_addr.s_addr && !sendonly) {
-		if (ast_test_flag(&p->flags[1], SIP_PAGE2_CALL_ONHOLD)) {
-			append_history(p, "Unhold", "%s", req->data);
-			if (global_callevents)
-				manager_event(EVENT_FLAG_CALL, "Unhold",
-					"Channel: %s\r\n"
-					"Uniqueid: %s\r\n",
-					p->owner->name, 
-					p->owner->uniqueid);
-			if (global_notifyhold)
-				sip_peer_hold(p, FALSE);
-		} 
-		ast_clear_flag(&p->flags[1], SIP_PAGE2_CALL_ONHOLD);	/* Clear both flags */
-	} else if (!sin.sin_addr.s_addr || sendonly ) {
-		/* No address for RTP, we're on hold */
+		/* Queue Manager Hold event */
 		append_history(p, "Hold", "%s", req->data);
-
 		if (global_callevents && !ast_test_flag(&p->flags[1], SIP_PAGE2_CALL_ONHOLD)) {
 			manager_event(EVENT_FLAG_CALL, "Hold",
-				"Channel: %s\r\n"
-				"Uniqueid: %s\r\n",
-				p->owner->name, 
-				p->owner->uniqueid);
+				      "Channel: %s\r\n"
+				      "Uniqueid: %s\r\n",
+				      p->owner->name, 
+				      p->owner->uniqueid);
 		}
 		if (sendonly == 1)	/* One directional hold (sendonly/recvonly) */
 			ast_set_flag(&p->flags[1], SIP_PAGE2_CALL_ONHOLD_ONEDIR);
@@ -15295,6 +15291,10 @@ static int handle_request(struct sip_pvt *p, struct sip_request *req, struct soc
 		if (sscanf(e, "%d %n", &respid, &len) != 1) {
 			ast_log(LOG_WARNING, "Invalid response: '%s'\n", e);
 		} else {
+			if (respid <= 0) {
+				ast_log(LOG_WARNING, "Invalid SIP response code: '%d'\n", respid);
+				return 0;
+			}
 			/* More SIP ridiculousness, we have to ignore bogus contacts in 100 etc responses */
 			if ((respid == 200) || ((respid >= 300) && (respid <= 399)))
 				extract_uri(p, req);
