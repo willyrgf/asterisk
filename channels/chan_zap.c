@@ -2767,7 +2767,14 @@ static int zt_hangup(struct ast_channel *ast)
 			if (p->ss7call) {
 				if (!ss7_grab(p, p->ss7)) {
 					if (!p->alreadyhungup) {
-						isup_rel(p->ss7->ss7, p->ss7call, ast->hangupcause ? ast->hangupcause : -1);
+						const char *cause = pbx_builtin_getvar_helper(ast,"SS7_CAUSE");
+						int icause = ast->hangupcause ? ast->hangupcause : -1;
+
+						if (cause) {
+							if (atoi(cause))
+								icause = atoi(cause);
+						}
+						isup_rel(p->ss7->ss7, p->ss7call, icause);
 						ss7_rel(p->ss7);
 						p->alreadyhungup = 1;
 					} else
@@ -8741,11 +8748,11 @@ static void *ss7_linkset(void *data)
 				break;
 			case ISUP_EVENT_CGB:
 				ss7_block_cics(linkset, e->cgb.startcic, e->cgb.endcic, e->cgb.status, 1);
-				isup_cgba(linkset->ss7, e->cgb.startcic, e->cgb.endcic, e->cgb.status);
+				isup_cgba(linkset->ss7, e->cgb.startcic, e->cgb.endcic, e->cgb.status, e->cgb.type);
 				break;
 			case ISUP_EVENT_CGU:
-				ss7_block_cics(linkset, e->cgu.startcic, e->cgu.endcic, e->cgb.status, 0);
-				isup_cgua(linkset->ss7, e->cgu.startcic, e->cgu.endcic, e->cgb.status);
+				ss7_block_cics(linkset, e->cgu.startcic, e->cgu.endcic, e->cgu.status, 0);
+				isup_cgua(linkset->ss7, e->cgu.startcic, e->cgu.endcic, e->cgu.status, e->cgu.type);
 				break;
 			case ISUP_EVENT_BLO:
 				chanpos = ss7_find_cic(linkset, e->blo.cic);
@@ -9565,7 +9572,7 @@ static void *pri_dchannel(void *vpri)
 							break;
 						} else {
 							/* This is where we handle initial glare */
-							ast_log(LOG_DEBUG, "Ring requested on channel %d/%d already in use or previously requested on span %d.  Attempting to renegotiating channel.\n", 
+							ast_log(LOG_DEBUG, "Ring requested on channel %d/%d already in use or previously requested on span %d.  Attempting to renegotiate channel.\n", 
 							PRI_SPAN(e->ring.channel), PRI_CHANNEL(e->ring.channel), pri->span);
 							ast_mutex_unlock(&pri->pvts[chanpos]->lock);
 							chanpos = -1;
@@ -10707,6 +10714,8 @@ static int zap_show_channels(int fd, int argc, char **argv)
 {
 #define FORMAT "%7s %-10.10s %-15.15s %-10.10s %-20.20s %-10.10s %-10.10s\n"
 #define FORMAT2 "%7s %-10.10s %-15.15s %-10.10s %-20.20s %-10.10s %-10.10s\n"
+	unsigned int targetnum = 0;
+	int filtertype = 0;
 	struct zt_pvt *tmp = NULL;
 	char tmps[20] = "";
 	char statestr[20] = "";
@@ -10722,27 +10731,42 @@ static int zap_show_channels(int fd, int argc, char **argv)
 	lock = &iflock;
 	start = iflist;
 
-#ifdef HAVE_PRI
-	if (argc == 4) {
-		if ((trunkgroup = atoi(argv[3])) < 1)
-			return RESULT_SHOWUSAGE;
-		for (x = 0; x < NUM_SPANS; x++) {
-			if (pris[x].trunkgroup == trunkgroup) {
-				pri = pris + x;
-				break;
-			}
-		}
-		if (pri) {
-			start = pri->crvs;
-			lock = &pri->lock;
-		} else {
-			ast_cli(fd, "No such trunk group %d\n", trunkgroup);
-			return RESULT_FAILURE;
-		}
-	} else
-#endif
-	if (argc != 3)
+	/* syntax: zap show channels [ group <group> | context <context> | trunkgroup <trunkgroup> ] */
+
+	if (!((argc == 3) || (argc == 5)))
 		return RESULT_SHOWUSAGE;
+
+	if (argc == 5) {
+#ifdef HAVE_PRI
+		if (!strcasecmp(argv[3], "trunkgroup")) {
+			/* this option requires no special handling, so leave filtertype to zero */
+			if ((trunkgroup = atoi(argv[4])) < 1)
+				return RESULT_SHOWUSAGE;
+			for (x = 0; x < NUM_SPANS; x++) {
+				if (pris[x].trunkgroup == trunkgroup) {
+					pri = pris + x;
+					break;
+				}
+			}
+			if (pri) {
+				start = pri->crvs;
+				lock = &pri->lock;
+			} else {
+				ast_cli(fd, "No such trunk group %d\n", trunkgroup);
+				return RESULT_FAILURE;
+			}
+		} else
+#endif	
+		if (!strcasecmp(argv[3], "group")) {
+			targetnum = atoi(argv[4]);
+			if ((targetnum < 0) || (targetnum > 63))
+				return RESULT_SHOWUSAGE;
+			targetnum = 1 << targetnum;
+			filtertype = 1;
+		} else if (!strcasecmp(argv[3], "context")) {
+			filtertype = 2;
+		}
+	}
 
 	ast_mutex_lock(lock);
 #ifdef HAVE_PRI
@@ -10753,6 +10777,24 @@ static int zap_show_channels(int fd, int argc, char **argv)
 	
 	tmp = start;
 	while (tmp) {
+		if (filtertype) {
+			switch(filtertype) {
+			case 1: /* zap show channels group <group> */
+				if (tmp->group != targetnum) {
+					tmp = tmp->next;
+					continue;
+				}
+				break;
+			case 2: /* zap show channels context <context> */
+				if (strcasecmp(tmp->context, argv[4])) {
+					tmp = tmp->next;
+					continue;
+				}
+				break;
+			default:
+				;
+			}
+		}
 		if (tmp->channel > 0) {
 			snprintf(tmps, sizeof(tmps), "%d", tmp->channel);
 		} else
@@ -11032,8 +11074,9 @@ static int zap_show_version(int fd, int argc, char *argv[])
 }
 
 static const char show_channels_usage[] =
-	"Usage: zap show channels\n"
-	"	Shows a list of available channels\n";
+	"Usage: zap show channels [ trunkgroup <trunkgroup> | group <group> | context <context> ]\n"
+	"	Shows a list of available channels with optional filtering\n"
+	"	<group> must be a number between 0 and 63\n";
 
 static const char show_channel_usage[] =
 	"Usage: zap show channel <chan num>\n"
