@@ -1384,6 +1384,7 @@ static int sip_dtmfmode(struct ast_channel *chan, void *data);
 static int sip_addheader(struct ast_channel *chan, void *data);
 static int sip_do_reload(enum channelreloadreason reason);
 static int sip_reload(int fd, int argc, char *argv[]);
+static int acf_channel_read(struct ast_channel *chan, char *funcname, char *preparse, char *buf, size_t buflen);
 
 /*--- Debugging 
 	Functions for enabling debug per IP or fully, or enabling history logging for
@@ -1548,6 +1549,7 @@ static const struct ast_channel_tech sip_tech = {
 	.send_digit_end = sip_senddigit_end,
 	.bridge = ast_rtp_bridge,
 	.send_text = sip_sendtext,
+	.func_channel_read = acf_channel_read,
 };
 
 /*! \brief This version of the sip channel tech has no send_digit_begin
@@ -3392,9 +3394,9 @@ static int sip_hangup(struct ast_channel *ast)
 				char *audioqos = "";
 				char *videoqos = "";
 				if (p->rtp)
-					audioqos = ast_rtp_get_quality(p->rtp);
+					audioqos = ast_rtp_get_quality(p->rtp, NULL);
 				if (p->vrtp)
-					videoqos = ast_rtp_get_quality(p->vrtp);
+					videoqos = ast_rtp_get_quality(p->vrtp, NULL);
 				/* Send a hangup */
 				transmit_request_with_auth(p, SIP_BYE, 0, XMIT_RELIABLE, 1);
 
@@ -5091,15 +5093,15 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 					ast_log(LOG_DEBUG, "Transcoding JBIG: %d\n",x);
 				if (x == 1)
 					peert38capability |= T38FAX_TRANSCODING_JBIG;
-			} else if ((sscanf(a, "T38FaxRateManagement:%s", s) == 1)) {
+			} else if ((sscanf(a, "T38FaxRateManagement:%255s", s) == 1)) {
 				found = 1;
 				if (option_debug > 2)
-					ast_log(LOG_DEBUG, "RateMangement: %s\n", s);
+					ast_log(LOG_DEBUG, "RateManagement: %s\n", s);
 				if (!strcasecmp(s, "localTCF"))
 					peert38capability |= T38FAX_RATE_MANAGEMENT_LOCAL_TCF;
 				else if (!strcasecmp(s, "transferredTCF"))
 					peert38capability |= T38FAX_RATE_MANAGEMENT_TRANSFERED_TCF;
-			} else if ((sscanf(a, "T38FaxUdpEC:%s", s) == 1)) {
+			} else if ((sscanf(a, "T38FaxUdpEC:%255s", s) == 1)) {
 				found = 1;
 				if (option_debug > 2)
 					ast_log(LOG_DEBUG, "UDP EC: %s\n", s);
@@ -14127,6 +14129,63 @@ static int handle_request_cancel(struct sip_pvt *p, struct sip_request *req)
 	}
 }
 
+static int acf_channel_read(struct ast_channel *chan, char *funcname, char *preparse, char *buf, size_t buflen)
+{
+	struct ast_rtp_quality qos;
+	struct sip_pvt *p = chan->tech_pvt;
+	char *all = "", *parse = ast_strdupa(preparse);
+	AST_DECLARE_APP_ARGS(args,
+		AST_APP_ARG(param);
+		AST_APP_ARG(type);
+		AST_APP_ARG(field);
+	);
+	AST_STANDARD_APP_ARGS(args, parse);
+
+	/* Sanity check */
+	if (chan->tech != &sip_tech && chan->tech != &sip_tech_info) {
+		ast_log(LOG_ERROR, "Cannot call %s on a non-SIP channel\n", funcname);
+		return 0;
+	}
+
+	if (strcasecmp(args.param, "rtpqos"))
+		return 0;
+
+	memset(buf, 0, buflen);
+	memset(&qos, 0, sizeof(qos));
+
+	if (strcasecmp(args.type, "AUDIO") == 0) {
+		all = ast_rtp_get_quality(p->rtp, &qos);
+	} else if (strcasecmp(args.type, "VIDEO") == 0) {
+		all = ast_rtp_get_quality(p->vrtp, &qos);
+	}
+
+	if (strcasecmp(args.field, "local_ssrc") == 0)
+		snprintf(buf, buflen, "%u", qos.local_ssrc);
+	else if (strcasecmp(args.field, "local_lostpackets") == 0)
+		snprintf(buf, buflen, "%u", qos.local_lostpackets);
+	else if (strcasecmp(args.field, "local_jitter") == 0)
+		snprintf(buf, buflen, "%.0lf", qos.local_jitter * 1000.0);
+	else if (strcasecmp(args.field, "local_count") == 0)
+		snprintf(buf, buflen, "%u", qos.local_count);
+	else if (strcasecmp(args.field, "remote_ssrc") == 0)
+		snprintf(buf, buflen, "%u", qos.remote_ssrc);
+	else if (strcasecmp(args.field, "remote_lostpackets") == 0)
+		snprintf(buf, buflen, "%u", qos.remote_lostpackets);
+	else if (strcasecmp(args.field, "remote_jitter") == 0)
+		snprintf(buf, buflen, "%.0lf", qos.remote_jitter * 1000.0);
+	else if (strcasecmp(args.field, "remote_count") == 0)
+		snprintf(buf, buflen, "%u", qos.remote_count);
+	else if (strcasecmp(args.field, "rtt") == 0)
+		snprintf(buf, buflen, "%.0lf", qos.rtt * 1000.0);
+	else if (strcasecmp(args.field, "all") == 0)
+		ast_copy_string(buf, all, buflen);
+	else {
+		ast_log(LOG_WARNING, "Unrecognized argument '%s' to %s\n", preparse, funcname);
+		return -1;
+	}
+	return 0;
+}
+
 /*! \brief Handle incoming BYE request */
 static int handle_request_bye(struct sip_pvt *p, struct sip_request *req)
 {
@@ -14148,14 +14207,14 @@ static int handle_request_bye(struct sip_pvt *p, struct sip_request *req)
 	if (!ast_test_flag(&p->flags[0], SIP_NO_HISTORY) || p->owner) {
 		char *audioqos, *videoqos;
 		if (p->rtp) {
-			audioqos = ast_rtp_get_quality(p->rtp);
+			audioqos = ast_rtp_get_quality(p->rtp, NULL);
 			if (!ast_test_flag(&p->flags[0], SIP_NO_HISTORY))
 				append_history(p, "RTCPaudio", "Quality:%s", audioqos);
 			if (p->owner)
 				pbx_builtin_setvar_helper(p->owner, "RTPAUDIOQOS", audioqos);
 		}
 		if (p->vrtp) {
-			videoqos = ast_rtp_get_quality(p->vrtp);
+			videoqos = ast_rtp_get_quality(p->vrtp, NULL);
 			if (!ast_test_flag(&p->flags[0], SIP_NO_HISTORY))
 				append_history(p, "RTCPvideo", "Quality:%s", videoqos);
 			if (p->owner)
@@ -14609,20 +14668,20 @@ static int handle_request(struct sip_pvt *p, struct sip_request *req, struct soc
 			ast_set_flag(req, SIP_PKT_IGNORE);
 			ast_set_flag(req, SIP_PKT_IGNORE_RESP);
 			append_history(p, "Ignore", "Ignoring this retransmit\n");
-		}
-	
-		e = ast_skip_blanks(e);
-		if (sscanf(e, "%d %n", &respid, &len) != 1) {
-			ast_log(LOG_WARNING, "Invalid response: '%s'\n", e);
-		} else {
-			if (respid <= 0) {
-				ast_log(LOG_WARNING, "Invalid SIP response code: '%d'\n", respid);
-				return 0;
+		} else if (e) {
+			e = ast_skip_blanks(e);
+			if (sscanf(e, "%d %n", &respid, &len) != 1) {
+				ast_log(LOG_WARNING, "Invalid response: '%s'\n", e);
+			} else {
+				if (respid <= 0) {
+					ast_log(LOG_WARNING, "Invalid SIP response code: '%d'\n", respid);
+					return 0;
+				}
+				/* More SIP ridiculousness, we have to ignore bogus contacts in 100 etc responses */
+				if ((respid == 200) || ((respid >= 300) && (respid <= 399)))
+					extract_uri(p, req);
+				handle_response(p, respid, e + len, req, ignore, seqno);
 			}
-			/* More SIP ridiculousness, we have to ignore bogus contacts in 100 etc responses */
-			if ((respid == 200) || ((respid >= 300) && (respid <= 399)))
-				extract_uri(p, req);
-			handle_response(p, respid, e + len, req, ignore, seqno);
 		}
 		return 0;
 	}
