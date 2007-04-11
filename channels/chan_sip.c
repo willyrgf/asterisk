@@ -1405,7 +1405,6 @@ static const struct cfsubscription_types *find_subscription_type(enum subscripti
 static int __sip_show_channels(int fd, int argc, char *argv[], int subscriptions);
 static int sip_show_channels(int fd, int argc, char *argv[]);
 static int sip_show_subscriptions(int fd, int argc, char *argv[]);
-static int __sip_show_channels(int fd, int argc, char *argv[], int subscriptions);
 static char *complete_sipch(const char *line, const char *word, int pos, int state);
 static char *complete_sip_peer(const char *word, int state, int flags2);
 static char *complete_sip_show_peer(const char *line, const char *word, int pos, int state);
@@ -16855,8 +16854,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 			peer->maxcallbitrate = atoi(v->value);
 			if (peer->maxcallbitrate < 0)
 				peer->maxcallbitrate = default_maxcallbitrate;
-		} else if (strcasecmp(v->name, "type"))
-			ast_log(LOG_WARNING, "Ignoring unknown option '%s' at line %d of sip.conf!\n", v->name, v->lineno);
+		}
 	}
 	if (!ast_test_flag(&global_flags[1], SIP_PAGE2_IGNOREREGEXPIRE) && ast_test_flag(&peer->flags[1], SIP_PAGE2_DYNAMIC) && realtime) {
 		time_t nowtime = time(NULL);
@@ -17261,8 +17259,7 @@ static int reload_config(enum channelreloadreason reason)
 				default_maxcallbitrate = DEFAULT_MAX_CALL_BITRATE;
 		} else if (!strcasecmp(v->name, "matchexterniplocally")) {
 			global_matchexterniplocally = ast_true(v->value);
-		} else
-			ast_log(LOG_WARNING, "Ignoring unknown option '%s' at line %d of sip.conf!\n", v->name, v->lineno);
+		}
 	}
 
 	if (!allow_external_domains && AST_LIST_EMPTY(&domain_list)) {
@@ -17275,8 +17272,6 @@ static int reload_config(enum channelreloadreason reason)
  		/* Format for authentication is auth = username:password@realm */
  		if (!strcasecmp(v->name, "auth"))
  			authl = add_realm_authentication(authl, v->value, v->lineno);
- 		else
-			ast_log(LOG_WARNING, "Ignoring unknown option '%s' at line %d of sip.conf!\n", v->name, v->lineno);
  	}
 	
 	ucfg = ast_config_load("users.conf");
