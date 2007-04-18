@@ -498,7 +498,7 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ; rtptimeout		Timer for disconnecting the call if no media shows up
 ; rtpholdtimeout	Timer for how long to allow "onhold" without media
 ; sendrpid		Should we send RPID to this phone?
-; outboundproxy		***Broken***
+; outboundproxy		Outbound proxy for a device
 ; rfc2833compensate	????
 
 ;---- Settings for trunks
