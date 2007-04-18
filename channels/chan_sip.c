@@ -1399,6 +1399,7 @@ static int _sip_show_peer(int type, int fd, struct mansession *s, const struct m
 static int sip_show_peer(int fd, int argc, char *argv[]);
 static int sip_show_user(int fd, int argc, char *argv[]);
 static int sip_show_registry(int fd, int argc, char *argv[]);
+static int sip_unregister(int fd, int argc, char *argv[]);
 static int sip_show_settings(int fd, int argc, char *argv[]);
 static const char *subscription_type2str(enum subscriptiontype subtype) attribute_pure;
 static const struct cfsubscription_types *find_subscription_type(enum subscriptiontype subtype);
@@ -4721,6 +4722,8 @@ static struct sip_pvt *find_call(struct sip_request *req, struct sockaddr_in *si
 	for (p = dialoglist; p; p = p->next) {
 		/* In pedantic, we do not want packets with bad syntax to be connected to a PVT */
 		int found = FALSE;
+		if (ast_strlen_zero(p->callid))
+			continue;
 		if (req->method == SIP_REGISTER)
 			found = (!strcmp(p->callid, callid));
 		else 
@@ -6014,7 +6017,7 @@ static int respprep(struct sip_request *resp, struct sip_pvt *p, const char *msg
 		snprintf(tmp, sizeof(tmp), "%d", p->expiry);
 		add_header(resp, "Expires", tmp);
 		if (p->expiry) {	/* Only add contact if we have an expiry time */
-			char contact[256];
+			char contact[BUFSIZ];
 			snprintf(contact, sizeof(contact), "%s;expires=%d", p->our_contact, p->expiry);
 			add_header(resp, "Contact", contact);	/* Not when we unregister */
 		}
@@ -7046,7 +7049,7 @@ static int transmit_reinvite_with_sdp(struct sip_pvt *p, int t38version)
 /*! \brief Check Contact: URI of SIP message */
 static void extract_uri(struct sip_pvt *p, struct sip_request *req)
 {
-	char stripped[256];
+	char stripped[BUFSIZ];
 	char *c;
 
 	ast_copy_string(stripped, get_header(req, "Contact"), sizeof(stripped));
@@ -8208,7 +8211,7 @@ static void reg_source_db(struct sip_peer *peer)
 /*! \brief Save contact header for 200 OK on INVITE */
 static int parse_ok_contact(struct sip_pvt *pvt, struct sip_request *req)
 {
-	char contact[250]; 
+	char contact[BUFSIZ]; 
 	char *c;
 
 	/* Look for brackets */
@@ -10940,6 +10943,25 @@ static int sip_show_registry(int fd, int argc, char *argv[])
 #undef FORMAT2
 }
 
+/*! \brief Unregister (force expiration) a SIP peer in the registry via CLI */
+static int sip_unregister(int fd, int argc, char *argv[])
+{
+	struct sip_peer *peer;
+	int load_realtime = 0;
+
+	if (argc != 3)
+		return RESULT_SHOWUSAGE;
+	
+	if ((peer = find_peer(argv[2], NULL, load_realtime))) {
+		expire_register(peer);
+		ast_cli(fd, "Unregistered peer \'%s\'\n\n", argv[2]);
+	} else {
+		ast_cli(fd, "Attempted to unregister an unknown peer \'%s\' via CLI\n", argv[2]);
+	}
+	
+	return 0;
+}
+
 /*! \brief List global settings for the SIP channel */
 static int sip_show_settings(int fd, int argc, char *argv[])
 {
@@ -11940,6 +11962,10 @@ static const char show_reg_usage[] =
 "Usage: sip show registry\n"
 "       Lists all registration requests and status.\n";
 
+static const char sip_unregister_usage[] =
+"Usage: sip unregister <peer>\n"
+"       Unregister (force expiration) a SIP peer from the registry\n";
+
 static const char debug_usage[] = 
 "Usage: sip debug\n"
 "       Enables dumping of SIP packets for debugging purposes\n\n"
@@ -12238,7 +12264,7 @@ static struct ast_custom_function sipchaninfo_function = {
 /*! \brief Parse 302 Moved temporalily response */
 static void parse_moved_contact(struct sip_pvt *p, struct sip_request *req)
 {
-	char tmp[256];
+	char tmp[BUFSIZ];
 	char *s, *e;
 	char *domain;
 
@@ -18062,6 +18088,10 @@ static struct ast_cli_entry cli_sip[] = {
 	{ { "sip", "show", "registry", NULL },
 	sip_show_registry, "List SIP registration status",
 	show_reg_usage },
+
+	{ { "sip", "unregister", NULL },
+	sip_unregister, "Unregister (force expiration) a SIP peer from the registery\n",
+	sip_unregister_usage },
 
 	{ { "sip", "show", "settings", NULL },
 	sip_show_settings, "Show SIP global settings",
