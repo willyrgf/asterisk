@@ -1121,6 +1121,8 @@ static void handle_updates(struct mansession *s, const struct message *m, struct
 	struct ast_variable *v;
 
 	for (x=0;x<100000;x++) {
+		unsigned int object = 0;
+
 		snprintf(hdr, sizeof(hdr), "Action-%06d", x);
 		action = astman_get_header(m, hdr);
 		if (ast_strlen_zero(action))
@@ -1131,6 +1133,10 @@ static void handle_updates(struct mansession *s, const struct message *m, struct
 		var = astman_get_header(m, hdr);
 		snprintf(hdr, sizeof(hdr), "Value-%06d", x);
 		value = astman_get_header(m, hdr);
+		if (!ast_strlen_zero(value) && *value == '>') {
+			object = 1;
+			value++;
+		}
 		snprintf(hdr, sizeof(hdr), "Match-%06d", x);
 		match = astman_get_header(m, hdr);
 		if (!strcasecmp(action, "newcat")) {
@@ -1151,7 +1157,7 @@ static void handle_updates(struct mansession *s, const struct message *m, struct
 				ast_category_delete(cfg, cat);
 		} else if (!strcasecmp(action, "update")) {
 			if (!ast_strlen_zero(cat) && !ast_strlen_zero(var) && (category = ast_category_get(cfg, cat)))
-				ast_variable_update(category, var, value, match);
+				ast_variable_update(category, var, value, match, object);
 		} else if (!strcasecmp(action, "delete")) {
 			if (!ast_strlen_zero(cat) && !ast_strlen_zero(var) && (category = ast_category_get(cfg, cat)))
 				ast_variable_delete(category, var, match);
@@ -1159,7 +1165,7 @@ static void handle_updates(struct mansession *s, const struct message *m, struct
 			if (!ast_strlen_zero(cat) && !ast_strlen_zero(var) &&
 				(category = ast_category_get(cfg, cat)) &&
 				(v = ast_variable_new(var, value))){
-				if (match && !strcasecmp(match, "object"))
+				if (object || (match && !strcasecmp(match, "object")))
 					v->object = 1;
 				ast_variable_append(category, v);
 			}
@@ -1483,7 +1489,7 @@ static int action_getvar(struct mansession *s, const struct message *m)
 	const char *name = astman_get_header(m, "Channel");
 	const char *varname = astman_get_header(m, "Variable");
 	char *varval;
-	char workspace[1024];
+	char workspace[1024] = "";
 
 	if (ast_strlen_zero(varname)) {
 		astman_send_error(s, m, "No variable specified");
@@ -1500,6 +1506,7 @@ static int action_getvar(struct mansession *s, const struct message *m)
 
 	if (varname[strlen(varname) - 1] == ')') {
 		ast_func_read(c, (char *) varname, workspace, sizeof(workspace));
+		varval = workspace;
 	} else {
 		pbx_retrieve_variable(c, varname, &varval, workspace, sizeof(workspace), NULL);
 	}
