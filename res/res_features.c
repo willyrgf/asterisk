@@ -676,7 +676,6 @@ static int builtin_blindtransfer(struct ast_channel *chan, struct ast_channel *p
 			   the thread dies -- We have to be careful now though.  We are responsible for 
 			   hanging up the channel, else it will never be hung up! */
 
-			return (transferer == peer) ? AST_PBX_KEEPALIVE : AST_PBX_NO_HANGUP_PEER;
 		} else {
 			ast_log(LOG_WARNING, "Unable to park call %s\n", transferee->name);
 		}
@@ -703,6 +702,10 @@ static int builtin_blindtransfer(struct ast_channel *chan, struct ast_channel *p
 								,transferee->name, xferto, transferer_real_context);
 			if (ast_async_goto(transferee, transferer_real_context, xferto, 1))
 				ast_log(LOG_WARNING, "Async goto failed :-(\n");
+			else  {
+				manager_event(EVENT_FLAG_CALL, "Transfer", "TransferMethod: PBX\r\nTransferType: Blind\r\nChannel: %s\r\nTransferExten: %s\r\nTransferContext: %s\r\n",
+					transferee->name, xferto, transferer_real_context);
+			}
 			res = -1;
 		} else {
 			/* Set the channel's new extension, since it exists, using transferer context */

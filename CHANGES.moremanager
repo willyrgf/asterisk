@@ -1,3 +1,6 @@
+* CHANGED EVENTS
+----------------
+
 - Manager events Newstate and Newchannel have changed headers
 	"State"		-> ChannelStateDesc	Text based channel state
 			-> ChannelState		Numeric channel state
@@ -28,8 +31,53 @@
 	- CallerID	-> CallerIDnum
 	- The event does not send "<unknown>" for unknown caller IDs just an empty field
 	
-- The "Reload" event sent at manager reload now has a new header
+- The "Reload" event sent at manager reload now has a new header and is now implemented
+  in more modules than manager to alert a reload. For channels, there's a CHANNELRELOAD 
+  event to use.
 	(new)		-> Module: manager | CDR | DNSmgr | RTP | ENUM
 	(new)		-> Status: enabled | disabled
 	- To support reload events from other modules too
 		- cdr module added
+
+- The ExtensionStatus manager command now has a "StatusDesc" field with text description of the state
+
+- The Registry and Peerstatus events in chan_sip and chan_iax now use "ChannelType" instead of "ChannelDriver"
+
+* NEW EVENTS
+------------
+
+- Event: Transfer
+	Modules: res_features, chan_sip
+	Purpose:
+		Inform about call transfer, linking transferer with transfer target
+		You should be able to trace the call flow with this missing piece
+		of information. If it works out well, the "Transfer" event should
+		be followed by a "Bridge" event
+		The transfermethod: header informs if this is a pbx core transfer
+		or something done on channel driver level. For SIP, check the example:
+		
+				Event: Transfer
+				Privilege: call,all
+				TransferMethod: SIP
+				TransferType: Blind
+				Channel: SIP/device1-01849800
+				SIP-Callid: 091386f505842c87016c4d93195ec67d@127.0.0.1
+				TargetChannel: SIP/device2-01841200
+				TransferExten: 100
+				TransferContext: default
+
+	
+
+- Event: ChannelUpdate
+	Modules: chan_sip.c, chan_iax2.c
+	Purpose:
+		Updates channel information with ID of PVT in channel driver, to
+		be able to link events on channel driver level.
+	
+			Event: ChannelUpdate
+			Privilege: system,all
+			Uniqueid: 1177271625.27
+			Channel: SIP/olle-01843c00
+			Channeltype: SIP
+			SIPcallid: NTQzYWFiOWM4NmE0MWRkZjExMzU2YzQ3OWQwNzg3ZmI.
+			SIPfullcontact: sip:olle@127.0.0.1:49054

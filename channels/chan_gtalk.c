@@ -511,8 +511,12 @@ static int gtalk_answer(struct ast_channel *ast)
 	if (option_debug)
 		ast_log(LOG_DEBUG, "Answer!\n");
 	ast_mutex_lock(&p->lock);
-	gtalk_invite(p, p->them, p->us,p->sid, 0);
+	gtalk_invite(p, p->them, p->us, p->sid, 0);
 	ast_mutex_unlock(&p->lock);
+
+	manager_event(EVENT_FLAG_SYSTEM, "ChannelUpdate",
+		"Channel: %s\r\nChanneltype: %s\r\nGtalk-SID: %s\r\n",
+		ast->name, "GTALK", p->sid);
 	return res;
 }
 
@@ -967,6 +971,10 @@ static struct ast_channel *gtalk_new(struct gtalk *client, struct gtalk_pvt *i, 
 		tmp->hangupcause = AST_CAUSE_SWITCH_CONGESTION;
 		ast_hangup(tmp);
 		tmp = NULL;
+	} else {
+		manager_event(EVENT_FLAG_SYSTEM, "ChannelUpdate",
+			"Channel: %s\r\nChanneltype: %s\r\nGtalk-SID: %s\r\n",
+			i->owner ? i->owner->name : "", "Gtalk", i->sid);
 	}
 
 	return tmp;
