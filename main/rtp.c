@@ -56,6 +56,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/cli.h"
 #include "asterisk/unaligned.h"
 #include "asterisk/utils.h"
+#include "asterisk/manager.h"
 
 #define MAX_TIMESTAMP_SKEW	640
 
@@ -3163,6 +3164,28 @@ static enum ast_bridge_result bridge_p2p_loop(struct ast_channel *c0, struct ast
 	return res;
 }
 
+/*! \brief Send manager event for bridge link and unlink events.
+	\param type	3 for nativertp, 4 for p2p, 5 for remote (redirect)
+*/
+static void manager_bridge_event(int onoff, int type, struct ast_channel *c0, struct ast_channel *c1)
+{
+	manager_event(EVENT_FLAG_CALL, "Bridge",
+			"Bridgestate: %s\r\n"
+		     "Bridgetype: %s\r\n"
+		      "Channel1: %s\r\n"
+		      "Channel2: %s\r\n"
+		      "Uniqueid1: %s\r\n"
+		      "Uniqueid2: %s\r\n"
+		      "CallerID1: %s\r\n"
+		      "CallerID2: %s\r\n",
+			onoff ? "Link" : "Unlink",
+			type == 3 ? "rtp-native" : (type == 4 ? "rtp-direct" : "rtp-remote"),	
+			c0->name, c1->name, c0->uniqueid, c1->uniqueid, 
+			S_OR(c0->cid.cid_num, ""), 
+			S_OR(c1->cid.cid_num, ""));
+}
+
+
 /*! \brief Bridge calls. If possible and allowed, initiate
 	re-invite so the peers exchange media directly outside 
 	of Asterisk. */
@@ -3290,10 +3313,12 @@ enum ast_bridge_result ast_rtp_bridge(struct ast_channel *c0, struct ast_channel
 		}
 		if (option_verbose > 2)
 			ast_verbose(VERBOSE_PREFIX_3 "Packet2Packet bridging %s and %s\n", c0->name, c1->name);
+		manager_bridge_event(1, 4, c0, c1);
 		res = bridge_p2p_loop(c0, c1, p0, p1, timeoutms, flags, fo, rc, pvt0, pvt1);
 	} else {
 		if (option_verbose > 2) 
 			ast_verbose(VERBOSE_PREFIX_3 "Native bridging %s and %s\n", c0->name, c1->name);
+		manager_bridge_event(1, 3, c0, c1);
 		res = bridge_native_loop(c0, c1, p0, p1, vp0, vp1, pr0, pr1, codec0, codec1, timeoutms, flags, fo, rc, pvt0, pvt1);
 	}
 
@@ -3679,6 +3704,7 @@ int ast_rtp_reload(void)
 	}
 	if (option_verbose > 1)
 		ast_verbose(VERBOSE_PREFIX_2 "RTP Allocating from port range %d -> %d\n", rtpstart, rtpend);
+	manager_event(EVENT_FLAG_SYSTEM, "Reload", "Module: RTP\r\nStatus: Enabled\r\nMessage: RTP reload Requested\r\n");
 	return 0;
 }
 

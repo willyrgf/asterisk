@@ -3469,6 +3469,9 @@ static int sip_answer(struct ast_channel *ast)
 			res = transmit_response_with_t38_sdp(p, "200 OK", &p->initreq, XMIT_CRITICAL);
 		} else 
 			res = transmit_response_with_sdp(p, "200 OK", &p->initreq, XMIT_CRITICAL);
+		manager_event(EVENT_FLAG_SYSTEM, "ChannelUpdate",
+			"Channel: %s\r\nChanneltype: %s\r\nSIPcallid: %s\r\nSIPfullcontact: %s\r\n",
+			ast->name, "SIP", p->callid, p->fullcontact);
 	}
 	ast_mutex_unlock(&p->lock);
 	return res;
@@ -11811,6 +11814,9 @@ static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, stru
 		if (!ast_test_flag(req, SIP_PKT_IGNORE) && p->owner) {
 			if (!reinvite) {
 				ast_queue_control(p->owner, AST_CONTROL_ANSWER);
+				manager_event(EVENT_FLAG_SYSTEM, "ChannelUpdate",
+					"Channel: %s\r\nChanneltype: %s\r\nSIPcallid: %s\r\nSIPfullcontact: %s\r\nPeername: %s\r\n",
+					p->owner->name, "SIP", p->callid, p->fullcontact, p->peername);
 			} else {	/* RE-invite */
 				ast_queue_frame(p->owner, &ast_null_frame);
 			}
@@ -15438,6 +15444,9 @@ static struct ast_channel *sip_request_call(const char *type, int format, void *
 	p->prefcodec = oldformat;				/* Format for this call */
 	ast_mutex_lock(&p->lock);
 	tmpc = sip_new(p, AST_STATE_DOWN, host);	/* Place the call */
+	manager_event(EVENT_FLAG_SYSTEM, "ChannelUpdate",
+		"Channel: %s\r\nChanneltype: %s\r\nSIPcallid: %s\r\nSIPfullcontact: %s\r\nPeername: %s\r\n",
+		p->owner? p->owner->name : "", "SIP", p->callid, p->fullcontact, p->peername);
 	ast_mutex_unlock(&p->lock);
 	if (!tmpc)
 		sip_destroy(p);

@@ -46,6 +46,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/cdr.h"
 #include "asterisk/logger.h"
 #include "asterisk/callerid.h"
+#include "asterisk/manager.h"
 #include "asterisk/causes.h"
 #include "asterisk/options.h"
 #include "asterisk/linkedlists.h"
@@ -1323,6 +1324,7 @@ static int do_reload(void)
 
 	ast_mutex_unlock(&cdr_batch_lock);
 	ast_config_destroy(config);
+	manager_event(EVENT_FLAG_SYSTEM, "Reload", "Module: CDR\r\nMessage: CDR subsystem reload requested\r\n");
 
 	return res;
 }

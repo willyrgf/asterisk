@@ -47,6 +47,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/sched.h"
 #include "asterisk/options.h"
 #include "asterisk/cli.h"
+#include "asterisk/manager.h"
 
 static struct sched_context *sched;
 static int refresh_sched = -1;
@@ -415,6 +416,7 @@ static int do_reload(int loading)
 		res = 0;
 
 	ast_mutex_unlock(&refresh_lock);
+	manager_event(EVENT_FLAG_SYSTEM, "Reload", "Module: DNSmgr\r\nStatus: %s\r/nMessage: DNSmgr reload Requested\r\n", enabled ? "Enabled" : "Disabled");
 
 	return res;
 }

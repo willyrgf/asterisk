@@ -2883,6 +2883,8 @@ int init_manager(void)
 	if (newhttptimeout > 0)
 		httptimeout = newhttptimeout;
 
+	manager_event(EVENT_FLAG_SYSTEM, "Reload", "Module: Manager\r\nStatus: %s\r\nMessage: Manager reload Requested\r\n", enabled ? "Enabled" : "Disabled");
+
 	/* If not enabled, do nothing */
 	if (!enabled)
 		return 0;
@@ -2917,6 +2919,5 @@ int init_manager(void)
 
 int reload_manager(void)
 {
-	manager_event(EVENT_FLAG_SYSTEM, "Reload", "Message: Reload Requested\r\n");
 	return init_manager();
 }

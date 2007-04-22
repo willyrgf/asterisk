@@ -374,19 +374,20 @@ static const char *get_cid_name(char *name, int namelen, struct ast_channel *cha
 	return ast_get_hint(NULL, 0, name, namelen, chan, context, exten) ? name : "";
 }
 
-static void senddialevent(struct ast_channel *src, struct ast_channel *dst)
+static void senddialevent(struct ast_channel *src, struct ast_channel *dst, char *dialstring)
 {
 	/* XXX do we need also CallerIDnum ? */
 	manager_event(EVENT_FLAG_CALL, "Dial", 
-			   "Source: %s\r\n"
+			   "Channel: %s\r\n"
 			   "Destination: %s\r\n"
 			   "CallerID: %s\r\n"
 			   "CallerIDName: %s\r\n"
-			   "SrcUniqueID: %s\r\n"
-			   "DestUniqueID: %s\r\n",
+			   "UniqueID: %s\r\n"
+			   "DestUniqueID: %s\r\n"
+			   "Dialstring: %s\r\n",
 			   src->name, dst->name, S_OR(src->cid.cid_num, "<unknown>"),
 			   S_OR(src->cid.cid_name, "<unknown>"), src->uniqueid,
-			   dst->uniqueid);
+			   dst->uniqueid, dialstring ? dialstring : "");
 }
 
 static struct ast_channel *wait_for_answer(struct ast_channel *in, struct dial_localuser *outgoing, int *to, struct ast_flags *peerflags, int *sentringing, char *status, size_t statussize, int busystart, int nochanstart, int congestionstart, int priority_jump, int *result)
@@ -546,7 +547,7 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in, struct dial_l
 						c = o->chan = NULL;
 						numnochan++;
 					} else {
-						senddialevent(in, c);
+						senddialevent(in, c, stuff);
 						/* After calling, set callerid to extension */
 						if (!ast_test_flag(peerflags, OPT_ORIGINAL_CLID)) {
 							char cidname[AST_MAX_EXTENSION];
@@ -1223,7 +1224,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			free(tmp);
 			continue;
 		} else {
-			senddialevent(chan, tmp->chan);
+			senddialevent(chan, tmp->chan, numsubst);
 			if (option_verbose > 2)
 				ast_verbose(VERBOSE_PREFIX_3 "Called %s\n", numsubst);
 			if (!ast_test_flag(peerflags, OPT_ORIGINAL_CLID))

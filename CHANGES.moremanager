@@ -1,0 +1,35 @@
+- Manager events Newstate and Newchannel have changed headers
+	"State"		-> ChannelStateDesc	Text based channel state
+			-> ChannelState		Numeric channel state
+	- The events does not send "<unknown>" for unknown caller IDs just an empty field
+
+- Newstate now has "CalleridNum" for numeric caller id, like Newchannel
+	- The event does not send "<unknown>" for unknown caller IDs just an empty field
+
+- Event Dial has new headers, to comply with other events
+	- Source	-> Channel		Channel name (caller)
+	- SrcUniqueID	-> UniqueID		Uniqueid
+	(new)		-> Dialstring		Dialstring in app data
+
+- The "Link" and "Unlink" bridge events in channel.c are now renamed to "Bridge"
+	- The link state is in the bridgestate: header as "Link" or "Unlink"
+	- For channel.c bridges, "Bridgetype: core" is added. This opens up for
+	  bridge events in rtp.c 
+	- The RTP channel also reports Bridge: events with bridgetypes
+		- rtp-native	RTP native bridge
+		- rtp-direct	RTP peer-2-peer bridge (NAT support only)
+		- rtp-remote	Remote (re-invite) bridge. (Not reported yet)
+
+- The "Rename" manager event has a renamed header, to use the same
+	terminology for the current channel as other events
+	- Oldname	-> Channel		
+
+- The "NewCallerID" manager event has a renamed header
+	- CallerID	-> CallerIDnum
+	- The event does not send "<unknown>" for unknown caller IDs just an empty field
+	
+- The "Reload" event sent at manager reload now has a new header
+	(new)		-> Module: manager | CDR | DNSmgr | RTP | ENUM
+	(new)		-> Status: enabled | disabled
+	- To support reload events from other modules too
+		- cdr module added
