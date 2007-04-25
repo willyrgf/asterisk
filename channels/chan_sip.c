@@ -3469,9 +3469,6 @@ static int sip_answer(struct ast_channel *ast)
 			res = transmit_response_with_t38_sdp(p, "200 OK", &p->initreq, XMIT_CRITICAL);
 		} else 
 			res = transmit_response_with_sdp(p, "200 OK", &p->initreq, XMIT_CRITICAL);
-		manager_event(EVENT_FLAG_SYSTEM, "ChannelUpdate",
-			"Channel: %s\r\nUniqueid: %s\r\nChanneltype: %s\r\nSIPcallid: %s\r\nSIPfullcontact: %s\r\n",
-			ast->name, ast->uniqueid, "SIP", p->callid, p->fullcontact);
 	}
 	ast_mutex_unlock(&p->lock);
 	return res;
@@ -3912,6 +3909,10 @@ static struct ast_channel *sip_new(struct sip_pvt *i, int state, const char *tit
 
 	if (!ast_test_flag(&i->flags[0], SIP_NO_HISTORY))
 		append_history(i, "NewChan", "Channel %s - from %s", tmp->name, i->callid);
+
+	manager_event(EVENT_FLAG_SYSTEM, "ChannelUpdate",
+		"Channel: %s\r\nUniqueid: %s\r\nChanneltype: %s\r\nSIPcallid: %s\r\nSIPfullcontact: %s\r\n",
+		tmp->name, tmp->uniqueid, "SIP", i->callid, i->fullcontact);
 
 	return tmp;
 }
@@ -11815,8 +11816,8 @@ static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, stru
 			if (!reinvite) {
 				ast_queue_control(p->owner, AST_CONTROL_ANSWER);
 				manager_event(EVENT_FLAG_SYSTEM, "ChannelUpdate",
-					"Channel: %s\r\nChanneltype: %s\r\nSIPcallid: %s\r\nSIPfullcontact: %s\r\nPeername: %s\r\n",
-					p->owner->name, "SIP", p->callid, p->fullcontact, p->peername);
+					"Channel: %s\r\nChanneltype: %s\r\nUniqueid: %s\r\nSIPcallid: %s\r\nSIPfullcontact: %s\r\nPeername: %s\r\n",
+					p->owner->name, p->owner->uniqueid, "SIP", p->callid, p->fullcontact, p->peername);
 			} else {	/* RE-invite */
 				ast_queue_frame(p->owner, &ast_null_frame);
 			}
@@ -13748,10 +13749,12 @@ static int local_attended_transfer(struct sip_pvt *transferer, struct sip_dual *
 	ast_set_flag(&transferer->flags[0], SIP_DEFER_BYE_ON_TRANSFER);	/* Delay hangup */
 
 	/* Perform the transfer */
-	manager_event(EVENT_FLAG_CALL, "Transfer", "TransferMethod: SIP\r\nTransferType: Attended\r\nChannel: %s\r\nSIP-Callid: %s\r\nTargetChannel: %s\r\n",
+	manager_event(EVENT_FLAG_CALL, "Transfer", "TransferMethod: SIP\r\nTransferType: Attended\r\nChannel: %s\r\nUniqueid: %s\r\nSIP-Callid: %s\r\nTargetChannel: %s\r\nTargetUniqueid: %s\r\n",
 		transferer->owner->name,
+		transferer->owner->uniqueid,
 		transferer->callid,
-		target.chan1->name);
+		target.chan1->name,
+		target.chan1->uniqueid);
 	res = attempt_transfer(current, &target);
 	ast_mutex_unlock(&targetcall_pvt->lock);
 	if (res) {
@@ -14016,10 +14019,12 @@ static int handle_request_refer(struct sip_pvt *p, struct sip_request *req, int 
 		ast_clear_flag(&p->flags[0], SIP_GOTREFER);	
 		p->refer->status = REFER_200OK;
 		append_history(p, "Xfer", "REFER to call parking.");
-		manager_event(EVENT_FLAG_CALL, "Transfer", "TransferMethod: SIP\r\nTransferType: Blind\r\nChannel: %s\r\nSIP-Callid: %s\r\nTargetChannel: %s\r\nTransferExten: %s\r\n",
+		manager_event(EVENT_FLAG_CALL, "Transfer", "TransferMethod: SIP\r\nTransferType: Blind\r\nChannel: %s\r\nUniqueid: %s\r\nSIP-Callid: %s\r\nTargetChannel: %s\r\nTargetUniqueid: %s\r\nTransferExten: %s\r\nTransfer2Parking: Yes\r\n",
 			current.chan1->name,
+			current.chan1->uniqueid,
 			p->callid,
 			current.chan2->name,
+			current.chan2->uniqueid,
 			p->refer->refer_to);
 		if (sipdebug && option_debug > 3)
 			ast_log(LOG_DEBUG, "SIP transfer to parking: trying to park %s. Parked by %s\n", current.chan2->name, current.chan1->name);
@@ -14094,10 +14099,12 @@ static int handle_request_refer(struct sip_pvt *p, struct sip_request *req, int 
 	res = ast_async_goto(current.chan2, p->refer->refer_to_context, p->refer->refer_to, 1);
 
 	if (!res) {
-		manager_event(EVENT_FLAG_CALL, "Transfer", "TransferMethod: SIP\r\nTransferType: Blind\r\nChannel: %s\r\nSIP-Callid: %s\r\nTargetChannel: %s\r\nTransferExten: %s\r\nTransferContext: %s\r\n",
+		manager_event(EVENT_FLAG_CALL, "Transfer", "TransferMethod: SIP\r\nTransferType: Blind\r\nChannel: %s\r\nUniqueid: %s\r\nSIP-Callid: %s\r\nTargetChannel: %s\r\nTargetUniqueid: %s\r\nTransferExten: %s\r\nTransferContext: %s\r\n",
 			current.chan1->name,
+			current.chan1->uniqueid,
 			p->callid,
 			current.chan2->name,
+			current.chan2->uniqueid,
 			p->refer->refer_to, p->refer->refer_to_context);
 		/* Success  - we have a new channel */
 		if (option_debug > 2)

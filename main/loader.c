@@ -250,7 +250,7 @@ static int printdigest(const unsigned char *d)
 	for (pos = 0, x = 0; x < 16; x++)
 		pos += sprintf(buf + pos, " %02x", *d++);
 
-	ast_log(LOG_DEBUG, "Unexpected signature:%s\n", buf);
+	ast_log(LOG_WARNING, "Unexpected signature:%s\n", buf);
 
 	return 0;
 }

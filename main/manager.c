@@ -68,6 +68,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/http.h"
 #include "asterisk/threadstorage.h"
 #include "asterisk/linkedlists.h"
+#include "asterisk/version.h"
 
 struct fast_originate_helper {
 	char tech[AST_MAX_EXTENSION];
@@ -1012,7 +1013,7 @@ static char mandescr_ping[] =
 
 static int action_ping(struct mansession *s, const struct message *m)
 {
-	astman_send_response(s, m, "Pong", NULL);
+	astman_send_response(s, m, "Success", "Ping: Pong\r\n");
 	return 0;
 }
 
@@ -1300,9 +1301,9 @@ static int action_events(struct mansession *s, const struct message *m)
 
 	res = set_eventmask(s, mask);
 	if (res > 0)
-		astman_send_response(s, m, "Events On", NULL);
+		astman_send_response(s, m, "Success", "Events: On\r\n");
 	else if (res == 0)
-		astman_send_response(s, m, "Events Off", NULL);
+		astman_send_response(s, m, "Success", "Events: Off\r\n");
 
 	return 0;
 }
@@ -1444,6 +1445,7 @@ static int action_status(struct mansession *s, const struct message *m)
 	char bridge[256];
 	struct timeval now = ast_tvnow();
 	long elapsed_seconds = 0;
+	int channels = 0;
 	int all = ast_strlen_zero(name); /* set if we want all channels */
 
 	if (!ast_strlen_zero(id))
@@ -1458,10 +1460,12 @@ static int action_status(struct mansession *s, const struct message *m)
 		}
 	}
 	astman_send_ack(s, m, "Channel status will follow");
+
 	/* if we look by name, we break after the first iteration */
 	while (c) {
+		channels++;
 		if (c->_bridge)
-			snprintf(bridge, sizeof(bridge), "Link: %s\r\n", c->_bridge->name);
+			snprintf(bridge, sizeof(bridge), "BridgedChannel: %s\r\nBridgedUniqueid\r\n", c->_bridge->name, c->_bridge->uniqueid);
 		else
 			bridge[0] = '\0';
 		if (c->pbx) {
@@ -1472,7 +1476,6 @@ static int action_status(struct mansession *s, const struct message *m)
 			"Event: Status\r\n"
 			"Privilege: Call\r\n"
 			"Channel: %s\r\n"
-			"CallerID: %s\r\n"		/* This parameter is deprecated and will be removed post-1.4 */
 			"CallerIDNum: %s\r\n"
 			"CallerIDName: %s\r\n"
 			"Account: %s\r\n"
@@ -1487,7 +1490,6 @@ static int action_status(struct mansession *s, const struct message *m)
 			"\r\n",
 			c->name, 
 			S_OR(c->cid.cid_num, "<unknown>"), 
-			S_OR(c->cid.cid_num, "<unknown>"), 
 			S_OR(c->cid.cid_name, "<unknown>"), 
 			c->accountcode,
 			ast_state2str(c->_state), c->context,
@@ -1497,7 +1499,6 @@ static int action_status(struct mansession *s, const struct message *m)
 			"Event: Status\r\n"
 			"Privilege: Call\r\n"
 			"Channel: %s\r\n"
-			"CallerID: %s\r\n"		/* This parameter is deprecated and will be removed post-1.4 */
 			"CallerIDNum: %s\r\n"
 			"CallerIDName: %s\r\n"
 			"Account: %s\r\n"
@@ -1507,7 +1508,6 @@ static int action_status(struct mansession *s, const struct message *m)
 			"%s"
 			"\r\n",
 			c->name, 
-			S_OR(c->cid.cid_num, "<unknown>"), 
 			S_OR(c->cid.cid_num, "<unknown>"), 
 			S_OR(c->cid.cid_name, "<unknown>"), 
 			c->accountcode,
@@ -1521,7 +1521,8 @@ static int action_status(struct mansession *s, const struct message *m)
 	astman_append(s,
 	"Event: StatusComplete\r\n"
 	"%s"
-	"\r\n",idText);
+	"Items: %d\r\n",
+	"\r\n",idText, channels);
 	return 0;
 }
 
@@ -1979,6 +1980,92 @@ static int action_userevent(struct mansession *s, const struct message *m)
 	return 0;
 }
 
+static char mandescr_coresettings[] =
+"Description: Query for Core PBX settings.\n"
+"Variables: (Names marked with * are optional)\n"
+"       *ActionID: ActionID of this transaction\n";
+
+/*! \brief Show PBX core settings information */
+static int action_coresettings(struct mansession *s, const struct message *m)
+{
+	const char *actionid = astman_get_header(m, "ActionID");
+	char idText[150];
+
+        if (!ast_strlen_zero(actionid)) {
+                snprintf(idText, sizeof(idText), "ActionID: %s\r\n", actionid);
+        }
+
+	astman_append(s, "Response: Success\r\n"
+			"%s"
+			"AMIversion: %s\r\n"
+			"AsteriskVersion: %s\r\n"
+			"SystemName: %s\r\n"
+			"CoreMaxCalls: %d\r\n"
+			"CoreMaxLoadAvg: %f\r\n"
+			"CoreRunUser: %s\r\n"
+			"CoreRunGroup: %s\r\n"
+#ifdef THIS_REQUIRES_SVN_TRUNK
+			"CoreMaxFilehandles: %d\r\n" 
+			"CoreRealTimeEnabled: %s\r\n"
+			"CoreCDRenabled: %s\r\n"
+			"CoreHTTPenabled: %s\r\n"
+#endif
+			,
+			AMI_VERSION,
+			idText,
+			ASTERISK_VERSION, 
+			ast_config_AST_SYSTEM_NAME,
+			option_maxcalls,
+			option_maxload,
+			ast_config_AST_RUN_USER,
+			ast_config_AST_RUN_GROUP
+#ifdef THIS_REQUIRES_SVN_TRUNK
+			,
+			option_maxfiles,
+			ast_realtime_enabled() ? "Yes" : "No",
+			check_cdr_enabled() ? "Yes" : "No",
+			check_webmanager_enabled() ? "Yes" : "No"
+#endif
+			);
+	return 0;
+}
+
+static char mandescr_corestatus[] =
+"Description: Query for Core PBX status.\n"
+"Variables: (Names marked with * are optional)\n"
+"       *ActionID: ActionID of this transaction\n";
+
+/*! \brief Show PBX core status information */
+static int action_corestatus(struct mansession *s, const struct message *m)
+{
+	const char *actionid = astman_get_header(m, "ActionID");
+	char idText[150];
+	char startuptime[150];
+	char reloadtime[150];
+	struct tm tm;
+
+        if (!ast_strlen_zero(actionid)) {
+                snprintf(idText, sizeof(idText), "ActionID: %s\r\n", actionid);
+        }
+	localtime_r(&ast_startuptime, &tm);
+	strftime(startuptime, sizeof(startuptime), "%H:%M:%S", &tm);
+	localtime_r(&ast_lastreloadtime, &tm);
+	strftime(reloadtime, sizeof(reloadtime), "%H:%M:%S", &tm);
+
+	astman_append(s, "Response: Success\r\n"
+			"%s"
+			"CoreStartupTime: %s\r\n"
+			"CoreReloadTime: %s\r\n"
+			"CoreCurrentCalls: %d\r\n"
+			"",
+			idText,
+			startuptime,
+			reloadtime,
+			ast_active_channels()
+			);
+	return 0;
+}
+
 static int process_message(struct mansession *s, const struct message *m)
 {
 	char action[80] = "";
@@ -2051,8 +2138,11 @@ static int process_message(struct mansession *s, const struct message *m)
 				break;
 			}
 			ast_rwlock_unlock(&actionlock);
-			if (!tmp)
-				astman_send_error(s, m, "Invalid/unknown command");
+			if (!tmp) {
+				char buf[120];
+				snprintf(buf, sizeof(buf), "Invalid/unkonwn command: %s\n", action);
+				astman_send_error(s, m, buf);
+			}
 		}
 	}
 	if (ret)
@@ -2149,7 +2239,7 @@ static void *session_do(void *data)
 	struct mansession *s = data;
 	int res;
 	
-	astman_append(s, "Asterisk Call Manager/1.0\r\n");
+	astman_append(s, "Asterisk Call Manager/%s\r\n", AMI_VERSION);
 	for (;;) {
 		if ((res = do_message(s)) < 0)
 			break;
@@ -2722,6 +2812,8 @@ int init_manager(void)
 		ast_manager_register2("ListCommands", 0, action_listcommands, "List available manager commands", mandescr_listcommands);
 		ast_manager_register2("UserEvent", EVENT_FLAG_USER, action_userevent, "Send an arbitrary event", mandescr_userevent);
 		ast_manager_register2("WaitEvent", 0, action_waitevent, "Wait for an event to occur", mandescr_waitevent);
+		ast_manager_register2("CoreStatus", EVENT_FLAG_SYSTEM, action_corestatus, "Show PBX core status variables", mandescr_corestatus);
+		ast_manager_register2("CoreSettings", EVENT_FLAG_SYSTEM, action_coresettings, "Show PBX core settings (version etc)", mandescr_coresettings);
 
 		ast_cli_register_multiple(cli_manager, sizeof(cli_manager) / sizeof(struct ast_cli_entry));
 		ast_extension_state_add(NULL, NULL, manager_state_cb, NULL);

@@ -703,8 +703,8 @@ static int builtin_blindtransfer(struct ast_channel *chan, struct ast_channel *p
 			if (ast_async_goto(transferee, transferer_real_context, xferto, 1))
 				ast_log(LOG_WARNING, "Async goto failed :-(\n");
 			else  {
-				manager_event(EVENT_FLAG_CALL, "Transfer", "TransferMethod: PBX\r\nTransferType: Blind\r\nChannel: %s\r\nTransferExten: %s\r\nTransferContext: %s\r\n",
-					transferee->name, xferto, transferer_real_context);
+				manager_event(EVENT_FLAG_CALL, "Transfer", "TransferMethod: PBX\r\nTransferType: Blind\r\nChannel: %s\r\nUniqueid: %s\r\nTargetChannel: %s\r\nTargetUniqueid: %s\r\nTransferExten: %s\r\nTransferContext: %s\r\n",
+					transferer->name, transferer->uniqueid, transferee->name, transferee->uniqueid, xferto, transferer_real_context);
 			}
 			res = -1;
 		} else {
@@ -2011,6 +2011,7 @@ static int manager_parking_status( struct mansession *s, const struct message *m
 	struct parkeduser *cur;
 	const char *id = astman_get_header(m, "ActionID");
 	char idText[256] = "";
+	int i = 0;
 
 	if (!ast_strlen_zero(id))
 		snprintf(idText, sizeof(idText), "ActionID: %s\r\n", id);
@@ -2020,6 +2021,7 @@ static int manager_parking_status( struct mansession *s, const struct message *m
 	ast_mutex_lock(&parking_lock);
 
 	for (cur = parkinglot; cur; cur = cur->next) {
+		i++;
 		astman_append(s, "Event: ParkedCall\r\n"
 			"Exten: %d\r\n"
 			"Channel: %s\r\n"
@@ -2039,7 +2041,9 @@ static int manager_parking_status( struct mansession *s, const struct message *m
 	astman_append(s,
 		"Event: ParkedCallsComplete\r\n"
 		"%s"
-		"\r\n",idText);
+		"ItemsInList: %d\r\n"
+		"\r\n",
+		idText, i);
 
 	ast_mutex_unlock(&parking_lock);
 

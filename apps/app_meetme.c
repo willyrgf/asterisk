@@ -1642,11 +1642,16 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 
 	if (!sent_event) {
 		manager_event(EVENT_FLAG_CALL, "MeetmeJoin", 
-			      "Channel: %s\r\n"
-			      "Uniqueid: %s\r\n"
-			      "Meetme: %s\r\n"
-			      "Usernum: %d\r\n",
-			      chan->name, chan->uniqueid, conf->confno, user->user_no);
+			        "Channel: %s\r\n"
+			        "Uniqueid: %s\r\n"
+				"Meetme: %s\r\n"
+				"CallerIDnum: %s\r\n"
+			      	"CallerIDname: %s\r\n"
+			      	"Duration: %ld\r\n",
+			      	chan->name, chan->uniqueid, conf->confno, 
+			      user->user_no,
+			      S_OR(user->chan->cid.cid_num, "<unknown>"),
+			      S_OR(user->chan->cid.cid_name, "<unknown>"),
 		sent_event = 1;
 	}
 

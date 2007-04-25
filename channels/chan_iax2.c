@@ -4254,6 +4254,7 @@ static int manager_iax2_show_peers(struct mansession *s, const struct message *m
 	int ret;
 	const char *id = astman_get_header(m,"ActionID");
 
+	astman_append(s, "Response: Success\r\n");
 	if (!ast_strlen_zero(id))
 		astman_append(s, "ActionID: %s\r\n",id);
 	ret = __iax2_show_peers(1, -1, s, 3, a );
