@@ -87,6 +87,17 @@
 
 - The MeetmeJoin now has caller ID name and Caller ID number fields (like MeetMeLeave)
 
+- Action ZapShowChannels
+	Header changes
+	- Channel:	-> ZapChannel
+	For active channels, the Channel: and Uniqueid: headers are added
+	You can now add a "ZapChannel: " argument to zapshowchannels actions
+	to only get information about one channel.
+
+- Event ZapShowChannelsComplete
+	New header
+	- (new)		-> Items: 	Reports number of channels reported
+
 * NEW EVENTS
 ------------
 

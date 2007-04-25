@@ -1466,7 +1466,7 @@ static int action_status(struct mansession *s, const struct message *m)
 	while (c) {
 		channels++;
 		if (c->_bridge)
-			snprintf(bridge, sizeof(bridge), "BridgedChannel: %s\r\nBridgedUniqueid\r\n", c->_bridge->name, c->_bridge->uniqueid);
+			snprintf(bridge, sizeof(bridge), "BridgedChannel: %s\r\nBridgedUniqueid: %s\r\n", c->_bridge->name, c->_bridge->uniqueid);
 		else
 			bridge[0] = '\0';
 		if (c->pbx) {
