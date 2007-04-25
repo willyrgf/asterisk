@@ -1522,7 +1522,7 @@ static int action_status(struct mansession *s, const struct message *m)
 	astman_append(s,
 	"Event: StatusComplete\r\n"
 	"%s"
-	"Items: %d\r\n",
+	"Items: %d\r\n"
 	"\r\n",idText, channels);
 	return 0;
 }
