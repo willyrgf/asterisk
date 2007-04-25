@@ -817,10 +817,14 @@ struct ast_channel *ast_channel_alloc(int needqueue, int state, const char *cid_
 			      "ChannelStateDesc: %s\r\n"
 			      "CallerIDNum: %s\r\n"
 			      "CallerIDName: %s\r\n"
+			      "AccountCode: %s\r\n"
 			      "Uniqueid: %s\r\n",
-			      tmp->name, state, ast_state2str(state),
+			      tmp->name, 
+				state, 
+			      ast_state2str(state),
 			      S_OR(cid_num, ""),
 			      S_OR(cid_name, ""),
+			      tmp->accountcode,
 			      tmp->uniqueid);
 	}
 

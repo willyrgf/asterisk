@@ -28,6 +28,9 @@
 			-> ChannelState		Numeric channel state
 	- The events does not send "<unknown>" for unknown caller IDs just an empty field
 
+- Newchannel event
+	- Now includes "AccountCode"
+
 - Newstate event
 	- Now has "CalleridNum" for numeric caller id, like Newchannel
 	- The event does not send "<unknown>" for unknown caller IDs just an empty field
@@ -68,6 +71,7 @@
 - Status action replies (Event: Status)
 	Header changes
 	- link		-> BridgedChannel
+	- Account	-> AccountCode
 	- (new)		-> BridgedUniqueid
 
 - StatusComplete Event
@@ -95,32 +99,33 @@
 		be followed by a "Bridge" event
 		The transfermethod: header informs if this is a pbx core transfer
 		or something done on channel driver level. For SIP, check the example:
+	Example:
 		
-				Event: Transfer
-				Privilege: call,all
-				TransferMethod: SIP
-				TransferType: Blind
-				Channel: SIP/device1-01849800
-				SIP-Callid: 091386f505842c87016c4d93195ec67d@127.0.0.1
-				TargetChannel: SIP/device2-01841200
-				TransferExten: 100
-				TransferContext: default
-
-	
+		Event: Transfer
+		Privilege: call,all
+		TransferMethod: SIP
+		TransferType: Blind
+		Channel: SIP/device1-01849800
+		SIP-Callid: 091386f505842c87016c4d93195ec67d@127.0.0.1
+		TargetChannel: SIP/device2-01841200
+		TransferExten: 100
+		TransferContext: default
 
 - Event: ChannelUpdate
 	Modules: chan_sip.c, chan_iax2.c
 	Purpose:
 		Updates channel information with ID of PVT in channel driver, to
 		be able to link events on channel driver level.
-	
-			Event: ChannelUpdate
-			Privilege: system,all
-			Uniqueid: 1177271625.27
-			Channel: SIP/olle-01843c00
-			Channeltype: SIP
-			SIPcallid: NTQzYWFiOWM4NmE0MWRkZjExMzU2YzQ3OWQwNzg3ZmI.
-			SIPfullcontact: sip:olle@127.0.0.1:49054
+
+	Example:
+
+		Event: ChannelUpdate
+		Privilege: system,all
+		Uniqueid: 1177271625.27
+		Channel: SIP/olle-01843c00
+		Channeltype: SIP
+		SIPcallid: NTQzYWFiOWM4NmE0MWRkZjExMzU2YzQ3OWQwNzg3ZmI.
+		SIPfullcontact: sip:olle@127.0.0.1:49054
 
 - Action: CoreSettings
 	Modules: manager.c
@@ -147,6 +152,17 @@
 		CoreStartupTime: 22:35:17
 		CoreReloadTime: 22:35:17
 		CoreCurrentCalls: 20
+
+- Event: NewAccountCode
+	Modules: cdr.c
+	Purpose: To report a change in account code for a live channel
+	Example:
+		Event: NewAccountCode
+		Privilege: call,all
+		Channel: SIP/olle-01844600
+		Uniqueid: 1177530895.2
+		AccountCode: Stinas account 1234848484
+		OldAccountCode: OllesAccount 12345
 
 * TODO
 ------

@@ -1478,7 +1478,7 @@ static int action_status(struct mansession *s, const struct message *m)
 			"Channel: %s\r\n"
 			"CallerIDNum: %s\r\n"
 			"CallerIDName: %s\r\n"
-			"Account: %s\r\n"
+			"AccountCode: %s\r\n"
 			"State: %s\r\n"
 			"Context: %s\r\n"
 			"Extension: %s\r\n"

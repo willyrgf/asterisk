@@ -822,6 +822,9 @@ char *ast_cdr_flags2str(int flag)
 int ast_cdr_setaccount(struct ast_channel *chan, const char *account)
 {
 	struct ast_cdr *cdr = chan->cdr;
+	char buf[BUFSIZ/2] = "";
+	if (!ast_strlen_zero(chan->accountcode))
+		ast_copy_string(buf, chan->accountcode, sizeof(buf));
 
 	ast_string_field_set(chan, accountcode, account);
 	for ( ; cdr ; cdr = cdr->next) {
@@ -829,6 +832,9 @@ int ast_cdr_setaccount(struct ast_channel *chan, const char *account)
 			ast_copy_string(cdr->accountcode, chan->accountcode, sizeof(cdr->accountcode));
 		}
 	}
+
+	/* Signal change of account code to manager */
+	manager_event(EVENT_FLAG_CALL, "NewAccountCode", "Channel: %s\r\nUniqueid: %s\r\nAccountCode: %s\r\nOldAccountCode: %s\r\n", chan->name, chan->uniqueid, chan->accountcode, buf);
 	return 0;
 }
 
