@@ -9134,6 +9134,7 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 				p->noncodeccapability |= AST_RTP_DTMF;
 			else
 				p->noncodeccapability &= ~AST_RTP_DTMF;
+			p->jointnoncodeccapability = p->noncodeccapability;
 			if (p->t38.peercapability)
 				p->t38.jointcapability &= p->t38.peercapability;
 			p->maxcallbitrate = user->maxcallbitrate;
@@ -9267,6 +9268,7 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 					p->noncodeccapability |= AST_RTP_DTMF;
 				else
 					p->noncodeccapability &= ~AST_RTP_DTMF;
+				p->jointnoncodeccapability = p->noncodeccapability;
 				if (p->t38.peercapability)
 					p->t38.jointcapability &= p->t38.peercapability;
 			}
