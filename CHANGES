@@ -120,6 +120,10 @@ MeetMe Changes
 --------------
   * The 'o' option to provide an optimization has been removed and its functionality 
      has been enabled by default.
+  * When a conference is created, the UNIQUEID of the channel that caused it to be
+     created is stored.  Then, every channel that joins the conference will have the
+     MEETMEUNIQUEID channel variable set with this ID.  This can be used to relate
+     callers that come and go from long standing conferences.
 
 Miscellaneous 
 -------------
@@ -185,3 +189,4 @@ Miscellaneous
   * The device state functionality in the Local channel driver has been updated
      to indicate INUSE or NOT_INUSE when a Local channel is being used as opposed
      to just UNKNOWN if the extension exists.
+  * Added support for the Hungarian language for saying numbers, dates, and times.
