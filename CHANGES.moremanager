@@ -127,6 +127,7 @@
 	Purpose:
 		Updates channel information with ID of PVT in channel driver, to
 		be able to link events on channel driver level.
+		* Integrated in SVN trunk as of May 4th, 2007
 
 	Example:
 
@@ -142,6 +143,7 @@
 	Modules: manager.c
 	Purpose: To report core settings, like AMI and Asterisk version,
 		maxcalls and maxload settings.
+		* Integrated in SVN trunk as of May 4th, 2007
 	Example:
 		Response: Success
 		ActionID: 1681692777
@@ -157,6 +159,7 @@
 	Modules: manager.c
 	Purpose: To report current PBX core status flags, like
 		number of concurrent calls, startup and reload time.
+		* Integrated in SVN trunk as of May 4th, 2007
 	Example:
 		Response: Success
 		ActionID: 1649760492

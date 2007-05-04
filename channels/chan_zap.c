@@ -10256,6 +10256,7 @@ static int action_zapshowchannels(struct mansession *s, const struct message *m)
 					"Uniqueid: %s\r\n"
 					"AccountCode: %s\r\n"
 					"Signalling: %s\r\n"
+					"SignallingCode: %d\r\n"
 					"Context: %s\r\n"
 					"DND: %s\r\n"
 					"Alarm: %s\r\n"
@@ -10266,6 +10267,7 @@ static int action_zapshowchannels(struct mansession *s, const struct message *m)
 					tmp->owner->uniqueid,
 					tmp->owner->accountcode,
 					sig2str(tmp->sig), 
+					tmp->sig,
 					tmp->context, 
 					tmp->dnd ? "Enabled" : "Disabled",
 					alarm2str(alarm), idText);
@@ -10274,12 +10276,14 @@ static int action_zapshowchannels(struct mansession *s, const struct message *m)
 					"Event: ZapShowChannels\r\n"
 					"ZapChannel: %d\r\n"
 					"Signalling: %s\r\n"
+					"SignallingCode: %d\r\n"
 					"Context: %s\r\n"
 					"DND: %s\r\n"
 					"Alarm: %s\r\n"
 					"%s"
 					"\r\n",
-					tmp->channel, sig2str(tmp->sig), tmp->context, 
+					tmp->channel, sig2str(tmp->sig), tmp->sig, 
+					tmp->context, 
 					tmp->dnd ? "Enabled" : "Disabled",
 					alarm2str(alarm), idText);
 			}
