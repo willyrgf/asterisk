@@ -1,0 +1,264 @@
+Olle E. Johansson
+EDVINA AB
+oej@edvina.net
+
+
+
+
+
+Asterisk SIP compliance
+-----------------------
+
+This document tries to document the level of standard compliance we have in Asterisk
+in regards to compatibility with other SIP devices. 
+
+Asterisk has been tested by millions of users world wide on a daily basis, but also
+at three SIPit interoperability testing events organized by the SIP forum.
+
+As an Open Source product, Asterisk is exposed to a very large number of SIP clients
+and servers, both Open Source and commercial. The user community, as well as users of
+the commercial version - Asterisk Business Edition - report problems in interoperability
+on the Asterisk bug tracker, where they are handled in an open way. The result of this
+is that Asterisk has a proven high level of interoperability with other products.
+
+On the other side, due to the success of Asterisk, we are also aware of a number of 
+products that have implemented Asterisk-specific fixes where Asterisk doesn't
+support the protocols properly, since customer demand requires interoperability
+with Asterisk. In many cases, this has not been reported to the developer team.
+We encourage these vendors to contact us so these issues can be fixed. There should
+be no requirement to implement work-arounds to support Asterisk bugs in other
+products.
+
+This document in part follows the "Hitchhiker's guide to SIP" by Jonathan Rosenberg
+(draft-ietf-sip-hitchhikers-guide-02.txt). I don't claim to list every available
+specification out there. Trying to focus on documents that we support, and specifications
+that we got requests for, or would be possible to support within the Asterisk architecture.
+
+1. Overview of Asterisk SIP implementation
+------------------------------------------
+Asterisk is a modular multiprotocol multiplatform Open Source PBX.
+
+From a SIP standpoint, Asterisk is a Back-2-back user agent, b2bua. All SIP calls
+are terminated in Asterisk and Asterisk sets up a new call or ends the call
+in the PBX. The outbound call may or may not be a SIP call.
+
+Asterisk is not a SIP proxy. The inbound and outbound SIP calls are two different
+calls, nothing is proxied through Asterisk.
+
+Asterisk is a SIP registrar. Devices register with Asterisk and use Asterisk as
+the SIP outbound proxy
+
+Asterisk is a SIP presence server. Asterisk handles SIP subscriptions and deliver
+call and device states. However, we do not handle user states, like instant messaging
+presence servers.
+
+Asterisk is a SIP client. Asterisk can register as an UA to a SIP service and
+receive calls. These calls are handled by the PBX.
+
+2. Core SIP specifications
+---------------------------
+
+- RFC3261, The Session Initiation Protocol
+	Parts not supported:
+	- SIP over TCP/TLS
+	- S/MIME encryption
+
+- RFC 3263, Locating SIP Servers
+	Partially supported
+	- Asterisk 1.2/1.4 has partial support for SRV records if enabled in the configuration
+	- Asterisk does not support NAPTR lookups
+
+- RFC 3264, An offer/answer model with SDP
+	Supported
+
+- RFC 3265, SIP-specific event notification
+	Supported (see below for event packages)
+	Asterisk supports event subscriptions and notifications in multiple formats.
+
+- RFC 3325, Private extensions to SIP for Asserted Identity within Trusted Networks
+	This RFC is not supported. However, by using the SIP header functions in the
+	dial plan, partial support can be implemented.
+
+- RFC 3581, An extension to SIP for Symmetric Response Routing
+	OEJ: Needs to be checked
+
+- RFC 3840, Indicating User Agent Capabilities in SIP
+	Not supported
+
+- RFC 4566, SDP, Session Description Protocol
+	Supported
+	Asterisk poorly handles multiple media streams in the offer. We do support
+	Audio, Video and T.140 text (trunk), but only one media stream of each type
+	per offer. Audio is always required.
+
+- RFC 3388, Grouping of Media Lines in the Session Description Protocol
+	Not supported
+
+- RFC 3604, Real Time Control Protocol (RTCP) Attribute in the Session Description Protocol
+	Not supported.
+
+3. PSTN Internetworking
+-----------------------
+
+- RFC 3398, ISUP to SIP mapping
+	Partially supported
+	The Asterisk core use ISDN hangup cause codes. Asterisk map these to SIP response codes
+	and SIP response codes to Q.850 hangup causes according to this RFC.
+- RFC 3578, Mapping of ISUP overlap signaling to SIP
+	Supported. In Asterisk 1.4 and later, may be disabled on a per device basis.
+- RFC 3960, Early media and ringtone generation in SIP
+	OEJ: Needs to be checked
+- RFC 4497: Interworking between the Session Initiation Protocol and QSIG
+	Supported
+
+4. General purpose infrastructure extensions
+--------------------------------------------
+
+- RFC 3262, Reliability of provisional responses in SIP
+	Not supported
+
+- RFC 3323, A privacy mechanism for the Session Initiation protocol
+	Not supported, partial support in the dial plan
+
+- RFC 3311, the SIP UPDATE method
+	Partial support
+
+- RFC 2976, the SIP INFO method
+	Supported for DTMF(Cisco) and Video frame update requests
+
+- RFC 3326, The Reason header field for SIP
+	Not supported
+
+- RFC 3326, The Reason header field for SIP
+	Not supported
+
+- RFC 3420, Internet Media type message/sipfrag
+	Supported
+
+- RFC 3608, SIP Extension Header Field for Service Route Discovery
+	Not supported
+
+- RFC 3841, Caller Preferences for SIP
+	Not supported
+
+- RFC 4028, Session Timers in SIP
+	Not supported
+
+
+5. Call Control Primitives
+--------------------------
+
+- RFC 3515: The REFER method
+	Supported inside of dialogs
+
+- RFC 3891: The SIP Replaces header
+	Supported
+
+- RFC 3892: The SIP Referred-By mechanism
+	Supported
+
+6. Event framework and packages
+-------------------------------
+
+- RFC 3903, SIP Extension for Event State Publication (PUBLISH)
+	Not supported
+
+- RFC 3680, A SIP Event Package for Registrations
+	Not supported
+
+- RFC 3842, A message summary and message waiting indication event package for SIP
+	Supported (server)
+
+- RFC 3856, A presence event package for SIP
+	Supported (server)
+
+- RFC 3857, A watcher information event template package for SIP
+	Not supported
+
+- RFC 4235, An INVITE initiated dialog event package for SIP
+	Supported (server)
+
+- RFC 4730, A SIP event package for keypress stimulus (KPML)
+	Not supported
+
+- RFC 3863, Presence Information Data Format (PIDF)
+	Supported (server)
+
+7. Security mechanisms
+----------------------
+
+Not implemented
+
+8. Instant messaging
+--------------------
+
+- RFC 3428, SIP Extension for Instant messaging
+	Supported within a dialog (during a call)
+
+
+9. Emergency services
+---------------------
+
+- RFC 4411, Extending the SIP Reason header for preemption events
+	Not supported
+- RFC 4412, Communications resource priority for SIP
+	Not supported
+
+10. Media
+---------
+Asterisk handles many audio codecs. Video is only handled in passthrough mode,
+as Asterisk don't transcode video streams.
+
+The G.729 codec is only available under commercial licenses.
+
+- RFC 3550, RTP: A transport Protocol for Real-Time Applications
+	Supported
+
+- RFC 3951, Internet Low Bit Rate Codec (iLBC)
+	Supported (based one availability of external libraries)
+
+- RFC 3952, RTP Payload format for iLBC
+	Supported
+
+- RFC 4749, RTP Payload format for G.729.1 Audio Codec
+	Supported
+
+- RFC 4587: RTP Payload format for H.261 video streams	
+	Supported
+
+- RFC 4629: RTP Payload format for H.263 video streams
+	Supported
+
+- RFC 2198: RTP Payload for Redundant Audio Data
+	Not supported
+
+- RFC 2429: RTP Payload format for the 1998 Version of ITU-T Rec H.263 video (H.263+)
+	Supported
+
+- RFC 4733: RTP Payload for DTMF Digits, Telephony tones and telephony signals
+	(Replaced 2833)
+	Supported
+
+- RFC 4103: RTP Payload for Text conversation (T.140)
+	Supported in SVN Trunk
+
+- RFC 3016: RTP Payload format for MPEG-4 Audio/Visual streams
+	Supported in SVN trunk
+
+- RFC 3047: RTP Payload format for ITU Recommendation G.722.1
+	OEJ: CHECK. SVN trunk ?
+
+- RFC 3389: RTP Payload for comfort noice
+	Partially supported, not recommended
+
+
+11. Other RFCs
+--------------
+
+- RFC 3761, The E.164 to URI DDDS Application (ENUM)
+	Supported
+
+
+-----
+Asterisk is a trademark registred by Digium, inc.
+(C) Copyright Digium, inc, Huntsville, AL, USA and Edvina AB, Sollentuna, Sweden
