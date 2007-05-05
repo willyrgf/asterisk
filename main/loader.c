@@ -79,6 +79,9 @@ static unsigned char expected_key[] =
 static unsigned int embedding = 1; /* we always start out by registering embedded modules,
 				      since they are here before we dlopen() any
 				   */
+/* Forward declaration */
+static int manager_moduleload(struct mansession *s, const struct message *m);
+static char mandescr_moduleload[];
 
 struct ast_module {
 	const struct ast_module_info *info;
@@ -706,6 +709,7 @@ int load_modules(unsigned int preload_only)
 	unsigned int load_count;
 	struct load_order load_order;
 	int res = 0;
+	int modulecount = 0;
 #if LOADABLE_MODULES
 	struct dirent *dirent;
 	DIR *dir;
@@ -809,6 +813,7 @@ int load_modules(unsigned int preload_only)
 	AST_LIST_TRAVERSE_SAFE_BEGIN(&load_order, order, entry) {
 		switch (load_resource(order->resource, 1)) {
 		case AST_MODULE_LOAD_SUCCESS:
+			modulecount++;
 		case AST_MODULE_LOAD_DECLINE:
 			AST_LIST_REMOVE_CURRENT(&load_order, entry);
 			free(order->resource);
@@ -828,6 +833,7 @@ int load_modules(unsigned int preload_only)
 	AST_LIST_TRAVERSE_SAFE_BEGIN(&load_order, order, entry) {
 		switch (load_resource(order->resource, 0)) {
 		case AST_MODULE_LOAD_SUCCESS:
+			modulecount++;
 		case AST_MODULE_LOAD_DECLINE:
 			AST_LIST_REMOVE_CURRENT(&load_order, entry);
 			free(order->resource);
@@ -851,6 +857,12 @@ done:
 
 	AST_LIST_UNLOCK(&module_list);
 
+	ast_manager_register2("ModuleLoad", EVENT_FLAG_SYSTEM, manager_moduleload, "Module management", mandescr_moduleload);
+
+	/* Tell manager clients that are aggressive at logging in that we're done
+	   loading modules. If there's a DNS problem in chan_sip, we might not
+	   even reach this */
+	manager_event(EVENT_FLAG_SYSTEM, "ModuleLoadReport", "ModuleLoadStatus: Done\r\nModuleSelection: %s\r\nModuleCount: %d\r\n", preload_only ? "Preload" : "All", modulecount);
 	return res;
 }
 
@@ -930,4 +942,56 @@ void ast_module_unref(struct ast_module *mod)
 {
 	ast_atomic_fetchadd_int(&mod->usecount, -1);
 	ast_update_use_count();
+}
+
+static char mandescr_moduleload[] = 
+"Description: Loads, unloads or reloads an Asterisk module in a running system.\n"
+"Variables: \n"
+"  ActionID: <id>          Action ID for this transaction. Will be returned.\n"
+"  Module: <name>          Asterisk module name (including .so extension)\n"
+"                          or subsystem identifier:\n"
+"				cdr, enum, dnsmgr, extconfig, manager, rtp, http\n"
+"  LoadType: load | unload | reload\n"
+"                          The operation to be done on module\n"
+" If no module is specified for a reload loadtype, all modules are reloaded";
+
+static int manager_moduleload(struct mansession *s, const struct message *m)
+{
+	int res;
+	const char *module = astman_get_header(m, "Module");
+	const char *loadtype = astman_get_header(m, "LoadType");
+
+	if (!loadtype || strlen(loadtype) == 0)
+		astman_send_error(s, m, "Incomplete ModuleLoad action.");
+	if ((!module || strlen(module) == 0) && strcasecmp(loadtype, "reload") != 0)
+		astman_send_error(s, m, "Need module name");
+
+	if (!strcasecmp(loadtype, "load")) {
+		res = ast_load_resource(module);
+		if (res)
+			astman_send_error(s, m, "Could not load module.");
+		else
+			astman_send_ack(s, m, "Module loaded.");
+	} else if (!strcasecmp(loadtype, "unload")) {
+		res = ast_unload_resource(module, AST_FORCE_SOFT);
+		if (res)
+			astman_send_error(s, m, "Could not unload module.");
+		else
+			astman_send_ack(s, m, "Module unloaded.");
+	} else if (!strcasecmp(loadtype, "reload")) {
+		if (module != NULL) {
+			res = ast_module_reload(module);
+			if (res == 0)
+				astman_send_error(s, m, "No such module.");
+			else if (res == 1)
+				astman_send_error(s, m, "Module does not support reload action.");
+			else
+				astman_send_ack(s, m, "Module reloaded.");
+		} else {
+			ast_module_reload(NULL);	/* Reload all modules */
+			astman_send_ack(s, m, "All modules reloaded");
+		}
+	} else 
+		astman_send_error(s, m, "Incomplete ModuleLoad action.");
+	return 0;
 }

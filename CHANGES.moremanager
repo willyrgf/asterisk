@@ -98,6 +98,21 @@
 	New header
 	- (new)		-> Items: 	Reports number of channels reported
 
+* NEW ACTIONS
+-------------
+- Action: ModuleLoad
+	Modules: loader.c
+	Purpose:
+		To be able to unload, reload and unload modules from AMI.
+	Variables: 
+	  ActionID: <id>          Action ID for this transaction. Will be returned.
+  	  Module: <name>          Asterisk module name (including .so extension)
+				  or subsystem identifier:
+				cdr, enum, dnsmgr, extconfig, manager, rtp, http
+          LoadType: load | unload | reload
+                          The operation to be done on module
+	If no module is specified for a reload loadtype, all modules are reloaded
+
 * NEW EVENTS
 ------------
 
@@ -177,6 +192,20 @@
 		Uniqueid: 1177530895.2
 		AccountCode: Stinas account 1234848484
 		OldAccountCode: OllesAccount 12345
+
+- Event: ModuleLoadReport
+	Modules: loader.c
+	Purpose: To report that module loading is complete. Some aggressive
+		clients connect very quickly to AMI and needs to know when
+		all manager events embedded in modules are loaded
+		Also, if this does not happen, something is seriously wrong.
+		This could happen to chan_sip and other modules using DNS.
+	Example:
+		Event: ModuleLoad
+		ModuleLoadStatus: Done
+		ModuleSelection: All
+		ModuleCount: 24
+		
 
 * TODO
 ------
