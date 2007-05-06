@@ -2071,7 +2071,7 @@ static int action_corestatus(struct mansession *s, const struct message *m)
 			"CoreStartupTime: %s\r\n"
 			"CoreReloadTime: %s\r\n"
 			"CoreCurrentCalls: %d\r\n"
-			"",
+			"\r\n",
 			idText,
 			startuptime,
 			reloadtime,
