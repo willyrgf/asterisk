@@ -82,6 +82,8 @@ static unsigned int embedding = 1; /* we always start out by registering embedde
 /* Forward declaration */
 static int manager_moduleload(struct mansession *s, const struct message *m);
 static char mandescr_moduleload[];
+static int manager_modulecheck(struct mansession *s, const struct message *m);
+static char mandescr_modulecheck[];
 
 struct ast_module {
 	const struct ast_module_info *info;
@@ -858,6 +860,7 @@ done:
 	AST_LIST_UNLOCK(&module_list);
 
 	ast_manager_register2("ModuleLoad", EVENT_FLAG_SYSTEM, manager_moduleload, "Module management", mandescr_moduleload);
+	ast_manager_register2("ModuleCheck", EVENT_FLAG_SYSTEM, manager_modulecheck, "Check if module is loaded", mandescr_modulecheck);
 
 	/* Tell manager clients that are aggressive at logging in that we're done
 	   loading modules. If there's a DNS problem in chan_sip, we might not
@@ -897,6 +900,20 @@ int ast_update_module_list(int (*modentry)(const char *module, const char *descr
 
 	return total_mod_loaded;
 }
+
+/*! \brief Check if module exists */
+int ast_module_check(const char *name)
+{
+	struct ast_module *cur;
+
+	if (ast_strlen_zero(name))
+		return 0;       /* FALSE */
+
+	cur = find_resource(name, 1);
+
+	return (cur != NULL);
+}
+
 
 int ast_loader_register(int (*v)(void))
 {
@@ -943,6 +960,51 @@ void ast_module_unref(struct ast_module *mod)
 	ast_atomic_fetchadd_int(&mod->usecount, -1);
 	ast_update_use_count();
 }
+
+static char mandescr_modulecheck[] = 
+"Description: Checks if Asterisk module is loaded\n"
+"Variables: \n"
+"  ActionID: <id>          Action ID for this transaction. Will be returned.\n"
+"  Module: <name>          Asterisk module name (not including extension)\n"
+"\n"
+"Will return Success/Failure\n"
+"For success returns, the module revision number is included.\n";
+
+/* Manager function to check if module is loaded */
+static int manager_modulecheck(struct mansession *s, const struct message *m)
+{
+	int res;
+	const char *module = astman_get_header(m, "Module");
+	const char *id = astman_get_header(m,"ActionID");
+	char idText[BUFSIZ];
+	const char *version;
+	char filename[BUFSIZ/2];
+	char *cut;
+
+	snprintf(filename, sizeof(filename), module);
+	if ((cut = strchr(filename, '.'))) {
+		*cut = '\0';
+	} else {
+		cut = filename + strlen(filename);
+	}
+	sprintf(cut, ".so");
+	ast_log(LOG_DEBUG, "**** ModuleCheck .so file %s\n", filename);
+	res = ast_module_check(filename);
+	if (!res) {
+		astman_send_error(s, m, "Module not loaded");
+		return 0;
+	}
+	sprintf(cut, ".c");
+	ast_log(LOG_DEBUG, "**** ModuleCheck .c file %s\n", filename);
+	version = ast_file_version_find(filename);
+
+	if (!ast_strlen_zero(id))
+		snprintf(idText, sizeof(idText), "ActionID: %s\r\n", id);
+	astman_append(s, "Response: Success\r\n%s", idText);
+	astman_append(s, "Version: %s\r\n\r\n", version ? version : "");
+	return 0;
+}
+
 
 static char mandescr_moduleload[] = 
 "Description: Loads, unloads or reloads an Asterisk module in a running system.\n"

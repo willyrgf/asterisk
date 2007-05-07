@@ -201,6 +201,9 @@ struct ast_module_info {
 void ast_module_register(const struct ast_module_info *);
 void ast_module_unregister(const struct ast_module_info *);
 
+/*! \brief Check if module exists */
+int ast_module_check(const char *name);
+
 struct ast_module_user *__ast_module_user_add(struct ast_module *, struct ast_channel *);
 void __ast_module_user_remove(struct ast_module *, struct ast_module_user *);
 void __ast_module_user_hangup_all(struct ast_module *);

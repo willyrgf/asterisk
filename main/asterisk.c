@@ -288,6 +288,23 @@ void ast_unregister_file_version(const char *file)
 		free(find);
 }
 
+/*! \brief Find version for given module name */
+const char *ast_file_version_find(const char *file)
+{
+	struct file_version *iterator;
+
+	AST_LIST_LOCK(&file_versions);
+	AST_LIST_TRAVERSE_SAFE_BEGIN(&file_versions, iterator, list) {
+		if (!strcasecmp(iterator->file, file))
+			break;
+	}
+	AST_LIST_TRAVERSE_SAFE_END;
+	AST_LIST_UNLOCK(&file_versions);
+	if (iterator)
+		return iterator->version;
+	return NULL;
+}
+
 struct thread_list_t {
 	AST_LIST_ENTRY(thread_list_t) list;
 	char *name;

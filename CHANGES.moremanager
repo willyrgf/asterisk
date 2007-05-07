@@ -10,6 +10,11 @@
 
 * CHANGED EVENTS AND ACTIONS
 ----------------------------
+- The Hold/Unhold events
+	- Both are now "Hold" events
+		For hold, there's a "Status: On" header, for unhold, status is off
+	- Modules chan_sip/chan_iax2
+
 - The Ping Action
 	- Now use Response: success
 	- New header "Ping: pong" :-)
@@ -112,6 +117,16 @@
           LoadType: load | unload | reload
                           The operation to be done on module
 	If no module is specified for a reload loadtype, all modules are reloaded
+
+- Action: ModuleCheck
+	Modules: loader.c
+	Purpose:
+		To check version of a module - if it's loaded
+	Variables:
+	  ActionID: <id>          Action ID for this transaction. Will be returned.
+  	  Module: <name>          Asterisk module name (not including extension)
+	Returns:
+		If module is loaded, returns version number of the module
 
 * NEW EVENTS
 ------------
