@@ -12,7 +12,7 @@
 ----------------------------
 - The Hold/Unhold events
 	- Both are now "Hold" events
-		For hold, there's a "Status: On" header, for unhold, status is off
+		For hold, there's a "HoldStatus: On" header, for unhold, status is off
 	- Modules chan_sip/chan_iax2
 
 - The Ping Action
@@ -127,6 +127,11 @@
   	  Module: <name>          Asterisk module name (not including extension)
 	Returns:
 		If module is loaded, returns version number of the module
+		
+		Note: This will have to change. I don't like sending Response: failure
+		on both command not found (trying this command in earlier versions of
+		Asterisk) and module not found.
+		Also, check if other manager actions behave that way.
 
 * NEW EVENTS
 ------------
