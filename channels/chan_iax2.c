@@ -6729,7 +6729,7 @@ retryowner:
 				        /* Generate Manager Hold event, if necessary*/
 					if (iaxs[fr->callno]->owner) {
 						manager_event(EVENT_FLAG_CALL, "Hold",
-							"HoldStatus: On\r\n"
+							"Status: On\r\n"
 							"Channel: %s\r\n"
 							"Uniqueid: %s\r\n",
 							iaxs[fr->callno]->owner->name, 
@@ -6752,7 +6752,7 @@ retryowner:
 				        /* Generate Manager Unhold event, if necessary*/
 					if (iaxs[fr->callno]->owner && ast_test_flag(iaxs[fr->callno], IAX_QUELCH)) {
 						manager_event(EVENT_FLAG_CALL, "Hold",
-							"HoldStatus: Off\r\n"
+							"Status: Off\r\n"
 							"Channel: %s\r\n"
 							"Uniqueid: %s\r\n",
 							iaxs[fr->callno]->owner->name, 

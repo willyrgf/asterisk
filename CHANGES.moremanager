@@ -12,7 +12,7 @@
 ----------------------------
 - The Hold/Unhold events
 	- Both are now "Hold" events
-		For hold, there's a "HoldStatus: On" header, for unhold, status is off
+		For hold, there's a "Status: On" header, for unhold, status is off
 	- Modules chan_sip/chan_iax2
 
 - The Ping Action

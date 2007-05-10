@@ -5258,7 +5258,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 		append_history(p, "Unhold", "%s", req->data);
 		if (global_callevents)
 			manager_event(EVENT_FLAG_CALL, "Hold",
-				"HoldStatus: Off\r\n"
+				      "Status: Off\r\n"
 				      "Channel: %s\r\n"
 				      "Uniqueid: %s\r\n",
 				      p->owner->name, 
@@ -5272,7 +5272,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 
 		if (global_callevents && !ast_test_flag(&p->flags[1], SIP_PAGE2_CALL_ONHOLD)) {
 			manager_event(EVENT_FLAG_CALL, "Hold",
-				"HoldStatus: On\r\n"
+				"Status: On\r\n"
 				"Channel: %s\r\n"
 				"Uniqueid: %s\r\n",
 				p->owner->name, 
