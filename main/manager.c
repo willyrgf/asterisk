@@ -68,6 +68,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/http.h"
 #include "asterisk/threadstorage.h"
 #include "asterisk/linkedlists.h"
+#include "asterisk/term.h"
 
 struct fast_originate_helper {
 	char tech[AST_MAX_EXTENSION];
@@ -478,7 +479,7 @@ static int handle_showmanager(int fd, int argc, char *argv[])
 		"          write: %s\n"
 		"displayconnects: %s\n",
 		(user->username ? user->username : "(N/A)"),
-		(user->secret ? user->secret : "(N/A)"),
+		(user->secret ? "<Set>" : "(N/A)"),
 		(user->deny ? user->deny : "(N/A)"),
 		(user->permit ? user->permit : "(N/A)"),
 		(user->read ? user->read : "(N/A)"),
@@ -926,7 +927,8 @@ static int authenticate(struct mansession *s, const struct message *m)
 				} else if (ha)
 					ast_free_ha(ha);
 				if (!strcasecmp(authtype, "MD5")) {
-					if (!ast_strlen_zero(key) && s->challenge) {
+					if (!ast_strlen_zero(key) && 
+					    !ast_strlen_zero(s->challenge) && !ast_strlen_zero(password)) {
 						int x;
 						int len = 0;
 						char md5key[256] = "";
@@ -944,6 +946,11 @@ static int authenticate(struct mansession *s, const struct message *m)
 							ast_config_destroy(cfg);
 							return -1;
 						}
+					} else {
+						ast_log(LOG_DEBUG, "MD5 authentication is not possible.  challenge: '%s'\n", 
+							S_OR(s->challenge, ""));
+						ast_config_destroy(cfg);
+						return -1;
 					}
 				} else if (password && !strcmp(password, pass)) {
 					break;
@@ -1068,6 +1075,8 @@ static void handle_updates(struct mansession *s, const struct message *m, struct
 	struct ast_variable *v;
 	
 	for (x=0;x<100000;x++) {
+		unsigned int object = 0;
+
 		snprintf(hdr, sizeof(hdr), "Action-%06d", x);
 		action = astman_get_header(m, hdr);
 		if (ast_strlen_zero(action))
@@ -1078,6 +1087,10 @@ static void handle_updates(struct mansession *s, const struct message *m, struct
 		var = astman_get_header(m, hdr);
 		snprintf(hdr, sizeof(hdr), "Value-%06d", x);
 		value = astman_get_header(m, hdr);
+		if (!ast_strlen_zero(value) && *value == '>') {
+			object = 1;
+			value++;
+		}
 		snprintf(hdr, sizeof(hdr), "Match-%06d", x);
 		match = astman_get_header(m, hdr);
 		if (!strcasecmp(action, "newcat")) {
@@ -1098,7 +1111,7 @@ static void handle_updates(struct mansession *s, const struct message *m, struct
 				ast_category_delete(cfg, (char *) cat);
 		} else if (!strcasecmp(action, "update")) {
 			if (!ast_strlen_zero(cat) && !ast_strlen_zero(var) && (category = ast_category_get(cfg, cat)))
-				ast_variable_update(category, (char *) var, (char *) value, (char *) match);
+				ast_variable_update(category, var, value, match, object);
 		} else if (!strcasecmp(action, "delete")) {
 			if (!ast_strlen_zero(cat) && !ast_strlen_zero(var) && (category = ast_category_get(cfg, cat)))
 				ast_variable_delete(category, (char *) var, (char *) match);
@@ -1106,7 +1119,7 @@ static void handle_updates(struct mansession *s, const struct message *m, struct
 			if (!ast_strlen_zero(cat) && !ast_strlen_zero(var) && 
 				(category = ast_category_get(cfg, cat)) && 
 				(v = ast_variable_new(var, value))){
-				if (match && !strcasecmp(match, "object"))
+				if (object || (match && !strcasecmp(match, "object")))
 					v->object = 1;
 				ast_variable_append(category, v);
 			}
@@ -1391,7 +1404,7 @@ static int action_getvar(struct mansession *s, const struct message *m)
 	const char *varname = astman_get_header(m, "Variable");
 	const char *id = astman_get_header(m,"ActionID");
 	char *varval;
-	char workspace[1024];
+	char workspace[1024] = "";
 
 	if (ast_strlen_zero(varname)) {
 		astman_send_error(s, m, "No variable specified");
@@ -1410,6 +1423,7 @@ static int action_getvar(struct mansession *s, const struct message *m)
 		char *copy = ast_strdupa(varname);
 
 		ast_func_read(c, copy, workspace, sizeof(workspace));
+		varval = workspace;
 	} else {
 		pbx_retrieve_variable(c, varname, &varval, workspace, sizeof(workspace), NULL);
 	}
@@ -1604,11 +1618,27 @@ static int action_command(struct mansession *s, const struct message *m)
 {
 	const char *cmd = astman_get_header(m, "Command");
 	const char *id = astman_get_header(m, "ActionID");
+	char *buf, *final_buf;
+	char template[] = "/tmp/ast-ami-XXXXXX";	/* template for temporary file */
+	int fd = mkstemp(template);
+	off_t l;
+
 	astman_append(s, "Response: Follows\r\nPrivilege: Command\r\n");
 	if (!ast_strlen_zero(id))
 		astman_append(s, "ActionID: %s\r\n", id);
 	/* FIXME: Wedge a ActionID response in here, waiting for later changes */
-	ast_cli_command(s->fd, cmd);
+	ast_cli_command(fd, cmd);	/* XXX need to change this to use a FILE * */
+	l = lseek(fd, 0, SEEK_END);	/* how many chars available */
+	buf = alloca(l + 1);
+	final_buf = alloca(l + 1);
+	lseek(fd, 0, SEEK_SET);
+	read(fd, buf, l);
+	buf[l] = '\0';
+	close(fd);
+	unlink(template);
+	term_strip(final_buf, buf, l);
+	final_buf[l] = '\0';
+	astman_append(s, final_buf);
 	astman_append(s, "--END COMMAND--\r\n\r\n");
 	return 0;
 }
@@ -1981,7 +2011,8 @@ static int process_message(struct mansession *s, const struct message *m)
 	int ret = 0;
 
 	ast_copy_string(action, astman_get_header(m, "Action"), sizeof(action));
-	ast_log( LOG_DEBUG, "Manager received command '%s'\n", action );
+	if (option_debug)
+		ast_log( LOG_DEBUG, "Manager received command '%s'\n", action );
 
 	if (ast_strlen_zero(action)) {
 		astman_send_error(s, m, "Missing action in request");

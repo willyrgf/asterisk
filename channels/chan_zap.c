@@ -203,7 +203,6 @@ static const char config[] = "zapata.conf";
 static char defaultcic[64] = "";
 static char defaultozz[64] = "";
 
-static char language[MAX_LANGUAGE] = "";
 static char progzone[10] = "";
 
 static int usedistinctiveringdetection = 0;
@@ -1399,7 +1398,8 @@ static int update_conf(struct zt_pvt *p)
 		   Kill it. */
 		p->confno = -1;
 	}
-	ast_log(LOG_DEBUG, "Updated conferencing on %d, with %d conference users\n", p->channel, needconf);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Updated conferencing on %d, with %d conference users\n", p->channel, needconf);
 	return 0;
 }
 
@@ -1544,7 +1544,8 @@ static int set_actual_txgain(int fd, int chan, float gain, int law)
 	g.chan = chan;
 	res = ioctl(fd, ZT_GETGAINS, &g);
 	if (res) {
-		ast_log(LOG_DEBUG, "Failed to read gains: %s\n", strerror(errno));
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Failed to read gains: %s\n", strerror(errno));
 		return res;
 	}
 
@@ -2440,7 +2441,8 @@ static int zt_hangup(struct ast_channel *ast)
 	if (p->exten)
 		p->exten[0] = '\0';
 
-	ast_log(LOG_DEBUG, "Hangup: channel: %d index = %d, normal = %d, callwait = %d, thirdcall = %d\n",
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Hangup: channel: %d index = %d, normal = %d, callwait = %d, thirdcall = %d\n",
 		p->channel, index, p->subs[SUB_REAL].zfd, p->subs[SUB_CALLWAIT].zfd, p->subs[SUB_THREEWAY].zfd);
 	p->ignoredtmf = 0;
 	
@@ -2867,7 +2869,8 @@ static int zt_setoption(struct ast_channel *chan, int option, void *data, int da
 		cp = (char *) data;
 		p->mate = 0;
 		if (!*cp) { /* turn it off */
-			ast_log(LOG_DEBUG, "Set option TDD MODE, value: OFF(0) on %s\n",chan->name);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Set option TDD MODE, value: OFF(0) on %s\n",chan->name);
 			if (p->tdd)
 				tdd_free(p->tdd);
 			p->tdd = 0;
@@ -5181,7 +5184,7 @@ static struct ast_channel *zt_new(struct zt_pvt *i, int state, int startpbx, int
 		}
 		y++;
 	} while (x < 3);
-	tmp = ast_channel_alloc(0, state, 0, 0, i->accountcode, i->exten, i->context, i->amaflags, b2);
+	tmp = ast_channel_alloc(0, state, i->cid_num, i->cid_name, i->accountcode, i->exten, i->context, i->amaflags, b2);
 	if (b2) /*!> b2 can be freed now, it's been copied into the channel structure */
 		free(b2);
 	if (!tmp)
@@ -5213,26 +5216,28 @@ static struct ast_channel *zt_new(struct zt_pvt *i, int state, int startpbx, int
 	i->subs[index].linear = 0;
 	zt_setlinear(i->subs[index].zfd, i->subs[index].linear);
 	features = 0;
-	if (i->busydetect && CANBUSYDETECT(i))
-		features |= DSP_FEATURE_BUSY_DETECT;
-	if ((i->callprogress & 1) && CANPROGRESSDETECT(i))
-		features |= DSP_FEATURE_CALL_PROGRESS;
-	if ((!i->outgoing && (i->callprogress & 4)) || 
-	    (i->outgoing && (i->callprogress & 2))) {
-		features |= DSP_FEATURE_FAX_DETECT;
-	}
+	if (index == SUB_REAL) {
+		if (i->busydetect && CANBUSYDETECT(i))
+			features |= DSP_FEATURE_BUSY_DETECT;
+		if ((i->callprogress & 1) && CANPROGRESSDETECT(i))
+			features |= DSP_FEATURE_CALL_PROGRESS;
+		if ((!i->outgoing && (i->callprogress & 4)) || 
+		    (i->outgoing && (i->callprogress & 2))) {
+			features |= DSP_FEATURE_FAX_DETECT;
+		}
 #ifdef ZT_TONEDETECT
-	x = ZT_TONEDETECT_ON | ZT_TONEDETECT_MUTE;
-	if (ioctl(i->subs[index].zfd, ZT_TONEDETECT, &x)) {
+		x = ZT_TONEDETECT_ON | ZT_TONEDETECT_MUTE;
+		if (ioctl(i->subs[index].zfd, ZT_TONEDETECT, &x)) {
 #endif		
-		i->hardwaredtmf = 0;
-		features |= DSP_FEATURE_DTMF_DETECT;
+			i->hardwaredtmf = 0;
+			features |= DSP_FEATURE_DTMF_DETECT;
 #ifdef ZT_TONEDETECT
-	} else if (NEED_MFDETECT(i)) {
-		i->hardwaredtmf = 1;
-		features |= DSP_FEATURE_DTMF_DETECT;
-	}
+		} else if (NEED_MFDETECT(i)) {
+			i->hardwaredtmf = 1;
+			features |= DSP_FEATURE_DTMF_DETECT;
+		}
 #endif
+	}
 	if (features) {
 		if (i->dsp) {
 			ast_log(LOG_DEBUG, "Already have a dsp on %s?\n", tmp->name);
@@ -5298,7 +5303,7 @@ static struct ast_channel *zt_new(struct zt_pvt *i, int state, int startpbx, int
 	tmp->cid.cid_num = ast_strdup(i->cid_num);
 	tmp->cid.cid_name = ast_strdup(i->cid_name);
 	if (!ast_strlen_zero(i->cid_ani))
-		tmp->cid.cid_ani = ast_strdup(i->cid_num);
+		tmp->cid.cid_ani = ast_strdup(i->cid_ani);
 	else	
 		tmp->cid.cid_ani = ast_strdup(i->cid_num);
 #else
@@ -5401,6 +5406,15 @@ static void *ss_thread(void *data)
 	int len = 0;
 	int res;
 	int index;
+
+	/* in the bizarre case where the channel has become a zombie before we
+	   even get started here, abort safely
+	*/
+	if (!p) {
+		ast_log(LOG_WARNING, "Channel became a zombie before simple switch could be started (%s)\n", chan->name);
+		ast_hangup(chan);
+		return NULL;
+	}
 
 	if (option_verbose > 2) 
 		ast_verbose( VERBOSE_PREFIX_3 "Starting simple switch on '%s'\n", chan->name);
@@ -6932,14 +6946,8 @@ static int restart_monitor(void)
 		return -1;
 	}
 	if (monitor_thread != AST_PTHREADT_NULL) {
-		/* Just signal it to be sure it wakes up */
-#if 0
-		pthread_cancel(monitor_thread);
-#endif
+		/* Wake up the thread */
 		pthread_kill(monitor_thread, SIGURG);
-#if 0
-		pthread_join(monitor_thread, NULL);
-#endif
 	} else {
 		/* Start a new monitor */
 		if (ast_pthread_create_background(&monitor_thread, &attr, do_monitor, NULL) < 0) {
@@ -7427,7 +7435,7 @@ static struct zt_pvt *mkintf(int channel, struct zt_chan_conf conf, struct zt_pr
 		tmp->canpark = conf.chan.canpark;
 		tmp->transfer = conf.chan.transfer;
 		ast_copy_string(tmp->defcontext,conf.chan.context,sizeof(tmp->defcontext));
-		ast_copy_string(tmp->language, language, sizeof(tmp->language));
+		ast_copy_string(tmp->language, conf.chan.language, sizeof(tmp->language));
 		ast_copy_string(tmp->mohinterpret, conf.chan.mohinterpret, sizeof(tmp->mohinterpret));
 		ast_copy_string(tmp->mohsuggest, conf.chan.mohsuggest, sizeof(tmp->mohsuggest));
 		ast_copy_string(tmp->context, conf.chan.context, sizeof(tmp->context));
@@ -9064,25 +9072,17 @@ static void *pri_dchannel(void *vpri)
 							else if (pri->pvts[chanpos]->owner) {
 								/* Queue a BUSY instead of a hangup if our cause is appropriate */
 								pri->pvts[chanpos]->owner->hangupcause = e->hangup.cause;
-								switch (e->hangup.cause) {
-								case PRI_CAUSE_USER_BUSY:
-									pri->pvts[chanpos]->subs[SUB_REAL].needbusy =1;
-									break;
-								case PRI_CAUSE_CALL_REJECTED:
-								case PRI_CAUSE_NETWORK_OUT_OF_ORDER:
-								case PRI_CAUSE_NORMAL_CIRCUIT_CONGESTION:
-								case PRI_CAUSE_SWITCH_CONGESTION:
-								case PRI_CAUSE_DESTINATION_OUT_OF_ORDER:
-								case PRI_CAUSE_NORMAL_TEMPORARY_FAILURE:
-									pri->pvts[chanpos]->subs[SUB_REAL].needcongestion =1;
-									break;
-								default:
+
+								if (pri->pvts[chanpos]->owner->_state == AST_STATE_UP)
 									pri->pvts[chanpos]->owner->_softhangup |= AST_SOFTHANGUP_DEV;
-								}
+								else if (pri->pvts[chanpos]->owner->hangupcause == PRI_CAUSE_USER_BUSY)
+									pri->pvts[chanpos]->subs[SUB_REAL].needbusy = 1;
+								else
+									pri->pvts[chanpos]->subs[SUB_REAL].needcongestion = 1;
 							}
 							if (option_verbose > 2) 
-								ast_verbose(VERBOSE_PREFIX_3 "Channel %d/%d, span %d got hangup\n", 
-									pri->pvts[chanpos]->logicalspan, pri->pvts[chanpos]->prioffset, pri->span);
+								ast_verbose(VERBOSE_PREFIX_3 "Channel %d/%d, span %d got hangup, cause %d\n", 
+									pri->pvts[chanpos]->logicalspan, pri->pvts[chanpos]->prioffset, pri->span, e->hangup.cause);
 						} else {
 							pri_hangup(pri->pri, pri->pvts[chanpos]->call, e->hangup.cause);
 							pri->pvts[chanpos]->call = NULL;
@@ -9128,23 +9128,16 @@ static void *pri_dchannel(void *vpri)
 							pri_hangup_all(pri->pvts[chanpos]->realcall, pri);
 						else if (pri->pvts[chanpos]->owner) {
 							pri->pvts[chanpos]->owner->hangupcause = e->hangup.cause;
-							switch (e->hangup.cause) {
-							case PRI_CAUSE_USER_BUSY:
-								pri->pvts[chanpos]->subs[SUB_REAL].needbusy =1;
-								break;
-							case PRI_CAUSE_CALL_REJECTED:
-							case PRI_CAUSE_NETWORK_OUT_OF_ORDER:
-							case PRI_CAUSE_NORMAL_CIRCUIT_CONGESTION:
-							case PRI_CAUSE_SWITCH_CONGESTION:
-							case PRI_CAUSE_DESTINATION_OUT_OF_ORDER:
-							case PRI_CAUSE_NORMAL_TEMPORARY_FAILURE:
-								pri->pvts[chanpos]->subs[SUB_REAL].needcongestion =1;
-								break;
-							default:
+
+							if (pri->pvts[chanpos]->owner->_state == AST_STATE_UP)
 								pri->pvts[chanpos]->owner->_softhangup |= AST_SOFTHANGUP_DEV;
-							}
+							else if (pri->pvts[chanpos]->owner->hangupcause == PRI_CAUSE_USER_BUSY)
+								pri->pvts[chanpos]->subs[SUB_REAL].needbusy = 1;
+							else
+								pri->pvts[chanpos]->subs[SUB_REAL].needcongestion = 1;
+
 							if (option_verbose > 2) 
-								ast_verbose(VERBOSE_PREFIX_3 "Channel %d/%d, span %d got hangup request\n", PRI_SPAN(e->hangup.channel), PRI_CHANNEL(e->hangup.channel), pri->span);
+								ast_verbose(VERBOSE_PREFIX_3 "Channel %d/%d, span %d got hangup request, cause %d\n", PRI_SPAN(e->hangup.channel), PRI_CHANNEL(e->hangup.channel), pri->span, e->hangup.cause);
 							if (e->hangup.aoc_units > -1)
 								if (option_verbose > 2)
 									ast_verbose(VERBOSE_PREFIX_3 "Channel %d/%d, span %d received AOC-E charging %d unit%s\n",

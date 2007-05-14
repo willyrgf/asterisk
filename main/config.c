@@ -467,54 +467,41 @@ int ast_variable_delete(struct ast_category *category, char *variable, char *mat
 	return res;
 }
 
-int ast_variable_update(struct ast_category *category, char *variable, char *value, char *match)
+int ast_variable_update(struct ast_category *category, const char *variable, 
+	const char *value, const char *match, unsigned int object)
 {
 	struct ast_variable *cur, *prev=NULL, *newer;
-	newer = ast_variable_new(variable, value);
-	if (!newer)
+
+	if (!(newer = ast_variable_new(variable, value)))
 		return -1;
-	cur = category->root;
-	while (cur) {
-		if (cur->name == variable) {
-			newer->next = cur->next;
-			newer->object = cur->object;
-			if (prev)
-				prev->next = newer;
-			else
-				category->root = newer;
-			if (category->last == cur)
-				category->last = newer;
-			cur->next = NULL;
-			ast_variables_destroy(cur);
-			return 0;
-		}
-		prev = cur;
-		cur = cur->next;
+	
+	newer->object = object;
+
+	for (cur = category->root; cur; prev = cur, cur = cur->next) {
+		if (strcasecmp(cur->name, variable) ||
+			(!ast_strlen_zero(match) && strcasecmp(cur->value, match)))
+			continue;
+
+		newer->next = cur->next;
+		newer->object = cur->object || object;
+		if (prev)
+			prev->next = newer;
+		else
+			category->root = newer;
+		if (category->last == cur)
+			category->last = newer;
+
+		cur->next = NULL;
+		ast_variables_destroy(cur);
+
+		return 0;
 	}
 
-	prev = NULL;
-	cur = category->root;
-	while (cur) {
-		if (!strcasecmp(cur->name, variable) && (ast_strlen_zero(match) || !strcasecmp(cur->value, match))) {
-			newer->next = cur->next;
-			newer->object = cur->object;
-			if (prev)
-				prev->next = newer;
-			else
-				category->root = newer;
-			if (category->last == cur)
-				category->last = newer;
-			cur->next = NULL;
-			ast_variables_destroy(cur);
-			return 0;
-		}
-		prev = cur;
-		cur = cur->next;
-	}
 	if (prev)
 		prev->next = newer;
 	else
 		category->root = newer;
+
 	return 0;
 }
 
@@ -643,7 +630,6 @@ static int process_text_line(struct ast_config *cfg, struct ast_category **cat, 
 				} else if (!strcasecmp(cur, "+")) {
 					*cat = category_get(cfg, catname, 1);
 					if (!(*cat)) {
-						ast_config_destroy(cfg);
 						if (newcat)
 							ast_category_destroy(newcat);
 						ast_log(LOG_WARNING, "Category addition requested, but category '%s' does not exist, line %d of %s\n", catname, lineno, configfile);
@@ -1282,6 +1268,8 @@ struct ast_config *ast_config_internal_load(const char *filename, struct ast_con
 
 	if (result)
 		result->include_level--;
+	else
+		cfg->include_level--;
 
 	return result;
 }

@@ -2379,7 +2379,8 @@ static int iax2_transmit(struct iax_frame *fr)
 	iaxq.count++;
 	AST_LIST_UNLOCK(&iaxq.queue);
 	/* Wake up the network and scheduler thread */
-	pthread_kill(netthreadid, SIGURG);
+	if (netthreadid != AST_PTHREADT_NULL)
+		pthread_kill(netthreadid, SIGURG);
 	signal_condition(&sched_lock, &sched_cond);
 	return 0;
 }
@@ -2986,8 +2987,8 @@ static int iax2_setoption(struct ast_channel *c, int option, void *data, int dat
 
 static struct ast_frame *iax2_read(struct ast_channel *c) 
 {
-	ast_log(LOG_NOTICE, "I should never be called! Hanging up.\n");
-	return NULL;
+	ast_log(LOG_NOTICE, "I should never be called!\n");
+	return &ast_null_frame;
 }
 
 static int iax2_start_transfer(unsigned short callno0, unsigned short callno1, int mediaonly)
@@ -6570,6 +6571,13 @@ static int socket_process(struct iax2_thread *thread)
 			ast_mutex_unlock(&iaxsl[fr->callno]);
 			return 1;
 		}
+		/* Ensure text frames are NULL-terminated */
+		if (f.frametype == AST_FRAME_TEXT && thread->buf[res - 1] != '\0') {
+			if (res < sizeof(thread->buf))
+				thread->buf[res++] = '\0';
+			else /* Trims one character from the text message, but that's better than overwriting the end of the buffer. */
+				thread->buf[res - 1] = '\0';
+		}
 		f.datalen = res - sizeof(*fh);
 
 		/* Handle implicit ACKing unless this is an INVAL, and only if this is 
@@ -8342,6 +8350,9 @@ static struct iax2_peer *build_peer(const char *name, struct ast_variable *v, st
 			peer->pokefreqnotok = DEFAULT_FREQ_NOTOK;
 			ast_string_field_set(peer,context,"");
 			ast_string_field_set(peer,peercontext,"");
+			ast_clear_flag(peer, IAX_HASCALLERID);
+			ast_string_field_set(peer, cid_name, "");
+			ast_string_field_set(peer, cid_num, "");
 		}
 
 		if (!v) {
@@ -8446,18 +8457,36 @@ static struct iax2_peer *build_peer(const char *name, struct ast_variable *v, st
 			} else if (!strcasecmp(v->name, "disallow")) {
 				ast_parse_allow_disallow(&peer->prefs, &peer->capability, v->value, 0);
 			} else if (!strcasecmp(v->name, "callerid")) {
-				char name2[80];
-				char num2[80];
-				ast_callerid_split(v->value, name2, 80, num2, 80);
-				ast_string_field_set(peer, cid_name, name2);
-				ast_string_field_set(peer, cid_num, num2);
-				ast_set_flag(peer, IAX_HASCALLERID);	
+				if (!ast_strlen_zero(v->value)) {
+					char name2[80];
+					char num2[80];
+					ast_callerid_split(v->value, name2, 80, num2, 80);
+					ast_string_field_set(peer, cid_name, name2);
+					ast_string_field_set(peer, cid_num, num2);
+					ast_set_flag(peer, IAX_HASCALLERID);
+				} else {
+					ast_clear_flag(peer, IAX_HASCALLERID);
+					ast_string_field_set(peer, cid_name, "");
+					ast_string_field_set(peer, cid_num, "");
+				}
 			} else if (!strcasecmp(v->name, "fullname")) {
-				ast_string_field_set(peer, cid_name, v->value);
-				ast_set_flag(peer, IAX_HASCALLERID);	
+				if (!ast_strlen_zero(v->value)) {
+					ast_string_field_set(peer, cid_name, v->value);
+					ast_set_flag(peer, IAX_HASCALLERID);
+				} else {
+					ast_string_field_set(peer, cid_name, "");
+					if (ast_strlen_zero(peer->cid_num))
+						ast_clear_flag(peer, IAX_HASCALLERID);
+				}
 			} else if (!strcasecmp(v->name, "cid_number")) {
-				ast_string_field_set(peer, cid_num, v->value);
-				ast_set_flag(peer, IAX_HASCALLERID);	
+				if (!ast_strlen_zero(v->value)) {
+					ast_string_field_set(peer, cid_num, v->value);
+					ast_set_flag(peer, IAX_HASCALLERID);
+				} else {
+					ast_string_field_set(peer, cid_num, "");
+					if (ast_strlen_zero(peer->cid_name))
+						ast_clear_flag(peer, IAX_HASCALLERID);
+				}
 			} else if (!strcasecmp(v->name, "sendani")) {
 				ast_set2_flag(peer, ast_true(v->value), IAX_SENDANI);	
 			} else if (!strcasecmp(v->name, "inkeys")) {
@@ -8565,6 +8594,9 @@ static struct iax2_user *build_user(const char *name, struct ast_variable *v, st
 			ast_string_field_set(user, name, name);
 			ast_string_field_set(user, language, language);
 			ast_copy_flags(user, &globalflags, IAX_USEJITTERBUF | IAX_FORCEJITTERBUF | IAX_CODEC_USER_FIRST | IAX_CODEC_NOPREFS | IAX_CODEC_NOCAP);	
+			ast_clear_flag(user, IAX_HASCALLERID);
+			ast_string_field_set(user, cid_name, "");
+			ast_string_field_set(user, cid_num, "");
 		}
 		if (!v) {
 			v = alt;
@@ -8641,18 +8673,36 @@ static struct iax2_user *build_user(const char *name, struct ast_variable *v, st
 				} else
 					ast_string_field_set(user, secret, v->value);
 			} else if (!strcasecmp(v->name, "callerid")) {
-				char name2[80];
-				char num2[80];
-				ast_callerid_split(v->value, name2, 80, num2, 80);
-				ast_string_field_set(user, cid_name, name2);
-				ast_string_field_set(user, cid_num, num2);
-				ast_set_flag(user, IAX_HASCALLERID);	
+				if (!ast_strlen_zero(v->value) && strcasecmp(v->value, "asreceived")) {
+					char name2[80];
+					char num2[80];
+					ast_callerid_split(v->value, name2, sizeof(name2), num2, sizeof(num2));
+					ast_string_field_set(user, cid_name, name2);
+					ast_string_field_set(user, cid_num, num2);
+					ast_set_flag(user, IAX_HASCALLERID);
+				} else {
+					ast_clear_flag(user, IAX_HASCALLERID);
+					ast_string_field_set(user, cid_name, "");
+					ast_string_field_set(user, cid_num, "");
+				}
 			} else if (!strcasecmp(v->name, "fullname")) {
-				ast_string_field_set(user, cid_name, v->value);
-				ast_set_flag(user, IAX_HASCALLERID);	
+				if (!ast_strlen_zero(v->value)) {
+					ast_string_field_set(user, cid_name, v->value);
+					ast_set_flag(user, IAX_HASCALLERID);
+				} else {
+					ast_string_field_set(user, cid_name, "");
+					if (ast_strlen_zero(user->cid_num))
+						ast_clear_flag(user, IAX_HASCALLERID);
+				}
 			} else if (!strcasecmp(v->name, "cid_number")) {
-				ast_string_field_set(user, cid_num, v->value);
-				ast_set_flag(user, IAX_HASCALLERID);	
+				if (!ast_strlen_zero(v->value)) {
+					ast_string_field_set(user, cid_num, v->value);
+					ast_set_flag(user, IAX_HASCALLERID);
+				} else {
+					ast_string_field_set(user, cid_num, "");
+					if (ast_strlen_zero(user->cid_name))
+						ast_clear_flag(user, IAX_HASCALLERID);
+				}
 			} else if (!strcasecmp(v->name, "accountcode")) {
 				ast_string_field_set(user, accountcode, v->value);
 			} else if (!strcasecmp(v->name, "mohinterpret")) {

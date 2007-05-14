@@ -516,7 +516,7 @@ int pbx_exec(struct ast_channel *c, 		/*!< Channel */
 	const char *saved_c_appl;
 	const char *saved_c_data;
 
-	if (c->cdr)
+	if (c->cdr &&  !ast_check_hangup(c))
 		ast_cdr_setapp(c->cdr, app->name, data);
 
 	/* save channel values */
@@ -1642,7 +1642,21 @@ static void pbx_substitute_variables_helper_full(struct ast_channel *c, struct v
 			parse_variable_name(vars, &offset, &offset2, &isfunction);
 			if (isfunction) {
 				/* Evaluate function */
-				cp4 = ast_func_read(c, vars, workspace, VAR_BUF_SIZE) ? NULL : workspace;
+				if (c || !headp)
+					cp4 = ast_func_read(c, vars, workspace, VAR_BUF_SIZE) ? NULL : workspace;
+				else {
+					struct varshead old;
+					struct ast_channel *c = ast_channel_alloc(0, 0, "", "", "", "", "", 0, "Bogus/%p", vars);
+					if (c) {
+						memcpy(&old, &c->varshead, sizeof(old));
+						memcpy(&c->varshead, headp, sizeof(c->varshead));
+						cp4 = ast_func_read(c, vars, workspace, VAR_BUF_SIZE) ? NULL : workspace;
+						/* Don't deallocate the varshead that was passed in */
+						memcpy(&c->varshead, &old, sizeof(c->varshead));
+						ast_channel_free(c);
+					} else
+						ast_log(LOG_ERROR, "Unable to allocate bogus channel for variable substitution.  Function results may be blank.\n");
+				}
 
 				if (option_debug)
 					ast_log(LOG_DEBUG, "Function result is '%s'\n", cp4 ? cp4 : "(null)");
@@ -4958,20 +4972,6 @@ int ast_pbx_outgoing_exten(const char *type, int format, void *data, int timeout
 				ast_channel_lock(chan);
 		}
 		if (chan) {
-			if (chan->cdr) { /* check if the channel already has a cdr record, if not give it one */
-				ast_log(LOG_WARNING, "%s already has a call record??\n", chan->name);
-			} else {
-				chan->cdr = ast_cdr_alloc();   /* allocate a cdr for the channel */
-				if (!chan->cdr) {
-					/* allocation of the cdr failed */
-					free(chan->pbx);
-					res = -1;
-					goto outgoing_exten_cleanup;
-				}
-				/* allocation of the cdr was successful */
-				ast_cdr_init(chan->cdr, chan);  /* initilize our channel's cdr */
-				ast_cdr_start(chan->cdr);
-			}
 			if (chan->_state == AST_STATE_UP) {
 					res = 0;
 				if (option_verbose > 3)
@@ -5002,7 +5002,7 @@ int ast_pbx_outgoing_exten(const char *type, int format, void *data, int timeout
 				if (option_verbose > 3)
 					ast_verbose(VERBOSE_PREFIX_4 "Channel %s was never answered.\n", chan->name);
 
-				if(chan->cdr) { /* update the cdr */
+				if (chan->cdr) { /* update the cdr */
 					/* here we update the status of the call, which sould be busy.
 					 * if that fails then we set the status to failed */
 					if (ast_cdr_disposition(chan->cdr, chan->hangupcause))

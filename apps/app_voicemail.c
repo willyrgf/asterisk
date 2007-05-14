@@ -798,7 +798,7 @@ static void vm_change_password(struct ast_vm_user *vmu, const char *newpassword)
 					ast_log(LOG_WARNING, "Failed to get category structure.\n");
 					break;
 				}
-				ast_variable_update(cat, vmu->mailbox, new, NULL);
+				ast_variable_update(cat, vmu->mailbox, new, NULL, 0);
 			}
 		}
 		/* save the results */
@@ -830,7 +830,7 @@ static void vm_change_password(struct ast_vm_user *vmu, const char *newpassword)
 					break;
 				}
 				if (!var)		
-					ast_variable_update(cat, "vmsecret", new, NULL);
+					ast_variable_update(cat, "vmsecret", new, NULL, 0);
 				else
 					ast_variable_append(cat, var);
 			}
@@ -1347,7 +1347,7 @@ static int store_file(char *dir, char *mailboxuser, char *mailboxcontext, int ms
 	void *fdm = MAP_FAILED;
 	size_t fdlen = -1;
 	SQLHSTMT stmt;
-	SQLINTEGER len;
+	SQLLEN len;
 	char sql[PATH_MAX];
 	char msgnums[20];
 	char fn[PATH_MAX];
@@ -2498,6 +2498,7 @@ static int inboxcount(const char *mailbox, int *newmsgs, int *oldmsgs)
 		/* No IMAP account available */
 		if (vmu->imapuser[0] == '\0') {
 			ast_log (LOG_WARNING,"IMAP user not set for mailbox %s\n",vmu->mailbox);
+			free_user(vmu);
 			return -1;
 		}
 	}
@@ -2512,6 +2513,7 @@ static int inboxcount(const char *mailbox, int *newmsgs, int *oldmsgs)
 			ast_log (LOG_DEBUG,"Returning before search - user is logged in\n");
 		*newmsgs = vms_p->newmessages;
 		*oldmsgs = vms_p->oldmessages;
+		free_user(vmu);
 		return 0;
 	}
 
@@ -2524,8 +2526,10 @@ static int inboxcount(const char *mailbox, int *newmsgs, int *oldmsgs)
 	if (!vms_p) {
 		if(option_debug > 2)
 			ast_log (LOG_DEBUG,"Adding new vmstate for %s\n",vmu->imapuser);
-		if (!(vms_p = ast_calloc(1, sizeof(*vms_p))))
+		if (!(vms_p = ast_calloc(1, sizeof(*vms_p)))) {
+			free_user(vmu);
 			return -1;
+		}
 		ast_copy_string(vms_p->imapuser,vmu->imapuser, sizeof(vms_p->imapuser));
 		ast_copy_string(vms_p->username, mailboxnc, sizeof(vms_p->username)); /* save for access from interactive entry point */
 		vms_p->mailstream = NIL; /* save for access from interactive entry point */
@@ -2540,6 +2544,7 @@ static int inboxcount(const char *mailbox, int *newmsgs, int *oldmsgs)
 	ret = init_mailstream(vms_p, 0);
 	if (!vms_p->mailstream) {
 		ast_log (LOG_ERROR,"IMAP mailstream is NULL\n");
+		free_user(vmu);
 		return -1;
 	}
 	if (newmsgs && ret==0 && vms_p->updated==1 ) {
@@ -2584,6 +2589,7 @@ static int inboxcount(const char *mailbox, int *newmsgs, int *oldmsgs)
 		*newmsgs = vms_p->newmessages;
 		*oldmsgs = vms_p->oldmessages;
 	}
+	free_user(vmu);
 	return 0;
 }
 
@@ -3842,7 +3848,7 @@ static int vm_forwardoptions(struct ast_channel *chan, struct ast_vm_user *vmu, 
 				*duration += prepend_duration;
 				msg_cat = ast_category_get(msg_cfg, "message");
 				snprintf(duration_str, 11, "%ld", *duration);
-				if (!ast_variable_update(msg_cat, "duration", duration_str, NULL)) {
+				if (!ast_variable_update(msg_cat, "duration", duration_str, NULL, 0)) {
 					config_text_file_save(textfile, msg_cfg, "app_voicemail");
 					STORE(curdir, vmu->mailbox, context, curmsg, chan, vmu, vmfmts, *duration, vms);
 				}
@@ -6573,21 +6579,24 @@ static int vm_execmain(struct ast_channel *chan, void *data)
 			}
 			break;
 		case '7':
-			vms.deleted[vms.curmsg] = !vms.deleted[vms.curmsg];
-			if (useadsi)
-				adsi_delete(chan, &vms);
-			if (vms.deleted[vms.curmsg]) 
-				cmd = ast_play_and_wait(chan, "vm-deleted");
-			else
-				cmd = ast_play_and_wait(chan, "vm-undeleted");
-			if (ast_test_flag((&globalflags), VM_SKIPAFTERCMD)) {
-				if (vms.curmsg < vms.lastmsg) {
-					vms.curmsg++;
-					cmd = play_message(chan, vmu, &vms);
-				} else {
-					cmd = ast_play_and_wait(chan, "vm-nomore");
+			if (vms.curmsg >= 0 && vms.curmsg <= vms.lastmsg) {
+				vms.deleted[vms.curmsg] = !vms.deleted[vms.curmsg];
+				if (useadsi)
+					adsi_delete(chan, &vms);
+				if (vms.deleted[vms.curmsg]) 
+					cmd = ast_play_and_wait(chan, "vm-deleted");
+				else
+					cmd = ast_play_and_wait(chan, "vm-undeleted");
+				if (ast_test_flag((&globalflags), VM_SKIPAFTERCMD)) {
+					if (vms.curmsg < vms.lastmsg) {
+						vms.curmsg++;
+						cmd = play_message(chan, vmu, &vms);
+					} else {
+						cmd = ast_play_and_wait(chan, "vm-nomore");
+					}
 				}
-			}
+			} else /* Delete not valid if we haven't selected a message */
+				cmd = 0;
 #ifdef IMAP_STORAGE
 			deleted = 1;
 #endif
@@ -7936,7 +7945,8 @@ static int advanced_options(struct ast_channel *chan, struct ast_vm_user *vmu, s
 			ast_config_destroy(msg_cfg);
 			return res;
 		} else {
-			if (find_user(NULL, vmu->context, num)) {
+			struct ast_vm_user vmu2;
+			if (find_user(&vmu2, vmu->context, num)) {
 				struct leave_vm_options leave_options;
 				char mailbox[AST_MAX_EXTENSION * 2 + 2];
 				snprintf(mailbox, sizeof(mailbox), "%s@%s", num, vmu->context);
