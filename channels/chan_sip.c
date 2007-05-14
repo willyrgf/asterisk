@@ -5698,7 +5698,8 @@ static int respprep(struct sip_request *resp, struct sip_pvt *p, const char *msg
 	add_header(resp, "To", ot);
 	copy_header(resp, req, "Call-ID");
 	copy_header(resp, req, "CSeq");
-	add_header(resp, "User-Agent", global_useragent);
+	if (!ast_strlen_zero(global_useragent))
+		add_header(resp, "User-Agent", global_useragent);
 	add_header(resp, "Allow", ALLOWED_METHODS);
 	add_header(resp, "Supported", SUPPORTED_EXTENSIONS);
 	if (msg[0] == '2' && (p->method == SIP_SUBSCRIBE || p->method == SIP_REGISTER)) {
@@ -5813,7 +5814,8 @@ static int reqprep(struct sip_request *req, struct sip_pvt *p, int sipmethod, in
 	copy_header(req, orig, "Call-ID");
 	add_header(req, "CSeq", tmp);
 
-	add_header(req, "User-Agent", global_useragent);
+	if (!ast_strlen_zero(global_useragent))
+		add_header(req, "User-Agent", global_useragent);
 	add_header(req, "Max-Forwards", DEFAULT_MAX_FORWARDS);
 
 	if (!ast_strlen_zero(p->rpid))
@@ -6857,7 +6859,8 @@ static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmetho
 	add_header(req, "Contact", p->our_contact);
 	add_header(req, "Call-ID", p->callid);
 	add_header(req, "CSeq", tmp);
-	add_header(req, "User-Agent", global_useragent);
+	if (!ast_strlen_zero(global_useragent))
+		add_header(req, "User-Agent", global_useragent);
 	add_header(req, "Max-Forwards", DEFAULT_MAX_FORWARDS);
 	if (!ast_strlen_zero(p->rpid))
 		add_header(req, "Remote-Party-ID", p->rpid);
@@ -7448,7 +7451,8 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 	add_header(&req, "To", to);
 	add_header(&req, "Call-ID", p->callid);
 	add_header(&req, "CSeq", tmp);
-	add_header(&req, "User-Agent", global_useragent);
+	if (!ast_strlen_zero(global_useragent))
+		add_header(&req, "User-Agent", global_useragent);
 	add_header(&req, "Max-Forwards", DEFAULT_MAX_FORWARDS);
 
 	
@@ -16051,7 +16055,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 
 	if (peer) {
 		/* Already in the list, remove it and it will be added back (or FREE'd)  */
-		found++;
+		found = 1;
 		if (!(peer->objflags & ASTOBJ_FLAG_MARKED))
 			firstpass = 0;
  	} else {
@@ -16133,8 +16137,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 		} else if (!strcasecmp(v->name, "host")) {
 			if (!strcasecmp(v->value, "dynamic")) {
 				/* They'll register with us */
-				ast_set_flag(&peer->flags[1], SIP_PAGE2_DYNAMIC);
-				if (!found) {
+				if (!found || !ast_test_flag(&peer->flags[1], SIP_PAGE2_DYNAMIC)) {
 					/* Initialize stuff iff we're not found, otherwise
 					   we keep going with what we had */
 					memset(&peer->addr.sin_addr, 0, 4);
@@ -16143,6 +16146,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 						peer->defaddr.sin_port = peer->addr.sin_port;
 						peer->addr.sin_port = 0;
 					}
+					ast_set_flag(&peer->flags[1], SIP_PAGE2_DYNAMIC);
 				}
 			} else {
 				/* Non-dynamic.  Make sure we become that way if we're not */
