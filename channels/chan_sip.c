@@ -7851,7 +7851,6 @@ static int set_address_from_contact(struct sip_pvt *pvt)
 	/* Work on a copy */
 	contact = ast_strdupa(pvt->fullcontact);
 
-	/* XXX this code is repeated all over */
 	/* Make sure it's a SIP URL */
 	if (strncasecmp(contact, "sip:", 4)) {
 		ast_log(LOG_NOTICE, "'%s' is not a valid SIP contact (missing sip:) trying to use anyway\n", contact);
@@ -7860,7 +7859,6 @@ static int set_address_from_contact(struct sip_pvt *pvt)
 
 	/* Ditch arguments */
 	/* XXX this code is replicated also shortly below */
-	contact = strsep(&contact, ";");	/* trim ; and beyond */
 
 	/* Grab host */
 	host = strchr(contact, '@');
@@ -7876,6 +7874,9 @@ static int set_address_from_contact(struct sip_pvt *pvt)
 		port = atoi(pt);
 	} else
 		port = STANDARD_SIP_PORT;
+
+	contact = strsep(&contact, ";");	/* trim ; and beyond in username part */
+	host = strsep(&host, ";");		/* trim ; and beyond in host/domain part */
 
 	/* XXX This could block for a long time XXX */
 	/* We should only do this if it's a name, not an IP */
@@ -17319,7 +17320,7 @@ static int sip_sipredirect(struct sip_pvt *p, const char *dest)
 	transmit_response_reliable(p, "302 Moved Temporarily", &p->initreq);
 
 	sip_scheddestroy(p, 32000);	/* Make sure we stop send this reply. */
-
+	sip_alreadygone(p);
 	return 0;
 }
 
