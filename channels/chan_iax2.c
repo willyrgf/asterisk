@@ -4216,6 +4216,7 @@ static int iax2_show_peers(int fd, int argc, char *argv[])
 {
 	return __iax2_show_peers(0, fd, NULL, argc, argv);
 }
+
 static int manager_iax2_show_netstats(struct mansession *s, const struct message *m)
 {
 	ast_cli_netstats(s, -1, 0);
@@ -4248,7 +4249,7 @@ static int iax2_show_firmware(int fd, int argc, char *argv[])
 #undef FORMAT2
 }
 
-/* JDG: callback to display iax peers in manager */
+/*! \brief display iax peers in manager */
 static int manager_iax2_show_peers(struct mansession *s, const struct message *m)
 {
 	char *a[] = { "iax2", "show", "users" };
@@ -4261,8 +4262,49 @@ static int manager_iax2_show_peers(struct mansession *s, const struct message *m
 	ret = __iax2_show_peers(1, -1, s, 3, a );
 	astman_append(s, "\r\n\r\n" );
 	return ret;
-} /* /JDG */
+} 
 
+/* callback to display iax peers in manager format */
+static int manager_iax2_show_peer_list(struct mansession *s, const struct message *m)
+{
+	struct iax2_peer *peer = NULL;
+	int peer_count = 0;
+	char nm[20];
+	char status[20];
+	const char *id = astman_get_header(m,"ActionID");
+	char idtext[256] = "";
+	if (!ast_strlen_zero(id))
+		snprintf(idtext, sizeof(idtext), "ActionID: %s\r\n", id);
+
+	astman_append(s, "Response: Success\r\n%sMessage: IAX Peer status list will follow\r\n\r\n", idtext);
+
+	
+	AST_LIST_LOCK(&peers);
+	AST_LIST_TRAVERSE(&peers, peer, entry) {
+
+		astman_append(s, "Event: PeerEntry\r\n%sChanneltype: IAX\r\n", idtext);
+
+		if (!ast_strlen_zero(peer->username)) {
+			astman_append(s, "ObjectName: %s\r\nObjectUsername: %s\r\n", peer->name, peer->username);
+		} else {
+			astman_append(s, "ObjectName: %s\r\n", peer->name);
+		}
+		astman_append(s, "ChanObjectType: peer\r\n");
+		astman_append(s, "IPaddress: %s\r\n", peer->addr.sin_addr.s_addr ? ast_inet_ntoa(peer->addr.sin_addr) : "-none-");
+		ast_copy_string(nm, ast_inet_ntoa(peer->mask), sizeof(nm));
+		astman_append(s, "Mask: %s\r\n", nm);
+		astman_append(s, "Port: %d\r\n", ntohs(peer->addr.sin_port));
+		astman_append(s, "Dynamic: %s\r\n", ast_test_flag(peer, IAX_DYNAMIC) ? "Yes" : "No");
+		peer_status(peer, status, sizeof(status));
+		astman_append(s, "Status: %s\r\n\r\n", status);
+		peer_count++;
+	}
+	AST_LIST_UNLOCK(&peers);
+
+	astman_append(s, "Event: PeerlistComplete\r\n%sListItems: %d\r\n\r\n", idtext, peer_count);
+	return RESULT_SUCCESS;
+}
+						
 static char *regstate2str(int regstate)
 {
 	switch(regstate) {
@@ -10049,6 +10091,7 @@ static int __unload_module(void)
 		if (iaxs[x])
 			iax2_destroy(x);
 	ast_manager_unregister( "IAXpeers" );
+	ast_manager_unregister( "IAXpeerlist" );
 	ast_manager_unregister( "IAXnetstats" );
 	ast_unregister_application(papp);
 	ast_cli_unregister_multiple(cli_iax2, sizeof(cli_iax2) / sizeof(struct ast_cli_entry));
@@ -10136,6 +10179,7 @@ static int load_module(void)
 	ast_register_application(papp, iax2_prov_app, psyn, pdescrip);
 	
 	ast_manager_register( "IAXpeers", 0, manager_iax2_show_peers, "List IAX Peers" );
+	ast_manager_register( "IAXpeerlist", 0, manager_iax2_show_peer_list, "List IAX Peers" );
 	ast_manager_register( "IAXnetstats", 0, manager_iax2_show_netstats, "Show IAX Netstats" );
 
 	if(set_config(config, 0) == -1)
