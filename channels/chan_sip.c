@@ -341,6 +341,8 @@ enum check_auth_result {
 	AUTH_NOT_FOUND = -3,
 	AUTH_FAKE_AUTH = -4,
 	AUTH_UNKNOWN_DOMAIN = -5,
+	AUTH_PEER_NOT_DYNAMIC = -6,
+	AUTH_ACL_FAILED = -7,
 };
 
 /*! \brief States for outbound registrations (with register= lines in sip.conf */
@@ -5537,9 +5539,9 @@ static void set_destination(struct sip_pvt *p, char *uri)
 		++h;
 	else {
 		h = uri;
-		if (strncmp(h, "sip:", 4) == 0)
+		if (strncasecmp(h, "sip:", 4) == 0)
 			h += 4;
-		else if (strncmp(h, "sips:", 5) == 0)
+		else if (strncasecmp(h, "sips:", 5) == 0)
 			h += 5;
 	}
 	hn = strcspn(h, ":;>") + 1;
@@ -6975,7 +6977,7 @@ static int transmit_state_notify(struct sip_pvt *p, int state, int full, int tim
 
 	ast_copy_string(from, get_header(&p->initreq, "From"), sizeof(from));
 	c = get_in_brackets(from);
-	if (strncmp(c, "sip:", 4)) {
+	if (strncasecmp(c, "sip:", 4)) {
 		ast_log(LOG_WARNING, "Huh?  Not a SIP header (%s)?\n", c);
 		return -1;
 	}
@@ -6983,7 +6985,7 @@ static int transmit_state_notify(struct sip_pvt *p, int state, int full, int tim
 
 	ast_copy_string(to, get_header(&p->initreq, "To"), sizeof(to));
 	c = get_in_brackets(to);
-	if (strncmp(c, "sip:", 4)) {
+	if (strncasecmp(c, "sip:", 4)) {
 		ast_log(LOG_WARNING, "Huh?  Not a SIP header (%s)?\n", c);
 		return -1;
 	}
@@ -7486,7 +7488,7 @@ static int transmit_refer(struct sip_pvt *p, const char *dest)
 	ast_copy_string(from, of, sizeof(from));
 	of = get_in_brackets(from);
 	ast_string_field_set(p, from, of);
-	if (strncmp(of, "sip:", 4))
+	if (strncasecmp(of, "sip:", 4))
 		ast_log(LOG_NOTICE, "From address missing 'sip:', using it anyway\n");
 	else
 		of += 4;
@@ -8320,7 +8322,7 @@ static enum check_auth_result register_verify(struct sip_pvt *p, struct sockaddr
 	c = get_in_brackets(tmp);
 	c = strsep(&c, ";");	/* Ditch ;user=phone */
 
-	if (!strncmp(c, "sip:", 4)) {
+	if (!strncasecmp(c, "sip:", 4)) {
 		name = c + 4;
 	} else {
 		name = c;
@@ -8349,6 +8351,7 @@ static enum check_auth_result register_verify(struct sip_pvt *p, struct sockaddr
 		if (peer)
 			ASTOBJ_UNREF(peer, sip_destroy_peer);
 		peer = NULL;
+		res = AUTH_ACL_FAILED;
 	}
 	if (peer) {
 		/* Set Frame packetization */
@@ -8358,6 +8361,7 @@ static enum check_auth_result register_verify(struct sip_pvt *p, struct sockaddr
 		}
 		if (!ast_test_flag(&peer->flags[1], SIP_PAGE2_DYNAMIC)) {
 			ast_log(LOG_ERROR, "Peer '%s' is trying to register, but not configured as host=dynamic\n", peer->name);
+			res = AUTH_PEER_NOT_DYNAMIC;
 		} else {
 			ast_copy_flags(&p->flags[0], &peer->flags[0], SIP_NAT);
 			transmit_response(p, "100 Trying", req);
@@ -8435,34 +8439,20 @@ static enum check_auth_result register_verify(struct sip_pvt *p, struct sockaddr
 			transmit_response(p, "403 Authentication user name does not match account name", &p->initreq);
 			break;
 		case AUTH_NOT_FOUND:
+		case AUTH_PEER_NOT_DYNAMIC:
+		case AUTH_ACL_FAILED:
 			if (global_alwaysauthreject) {
 				transmit_fake_auth_response(p, &p->initreq, 1);
 			} else {
 				/* URI not found */
-				transmit_response(p, "404 Not found", &p->initreq);
+				if (res == AUTH_UNKNOWN_DOMAIN || res == AUTH_PEER_NOT_DYNAMIC)
+					transmit_response(p, "403 Forbidden", &p->initreq);
+				else
+					transmit_response(p, "404 Not found", &p->initreq);
 			}
 			break;
 		default:
 			break;
-		}
-		if (option_debug > 1) {
-			const char *reason = "";
-
-			switch (res) {
-			case AUTH_SECRET_FAILED:
-				reason = "Bad password";
-				break;
-			case AUTH_USERNAME_MISMATCH:
-				reason = "Bad digest user";
-				break;
-			case AUTH_NOT_FOUND:
-				reason = "Peer not found";
-				break;
-			default:
-				break;
-			}
-			ast_log(LOG_DEBUG, "SIP REGISTER attempt failed for %s : %s\n",
-				peer->name, reason);
 		}
 	}
 	if (peer)
@@ -8484,7 +8474,7 @@ static int get_rdnis(struct sip_pvt *p, struct sip_request *oreq)
 	if (ast_strlen_zero(tmp))
 		return 0;
 	c = get_in_brackets(tmp);
-	if (strncmp(c, "sip:", 4)) {
+	if (strncasecmp(c, "sip:", 4)) {
 		ast_log(LOG_WARNING, "Huh?  Not an RDNIS SIP header (%s)?\n", c);
 		return -1;
 	}
@@ -8521,7 +8511,7 @@ static int get_destination(struct sip_pvt *p, struct sip_request *oreq)
 
 	uri = get_in_brackets(tmp);
 
-	if (strncmp(uri, "sip:", 4)) {
+	if (strncasecmp(uri, "sip:", 4)) {
 		ast_log(LOG_WARNING, "Huh?  Not a SIP header (%s)?\n", uri);
 		return -1;
 	}
@@ -8538,7 +8528,7 @@ static int get_destination(struct sip_pvt *p, struct sip_request *oreq)
 	}
 	
 	if (!ast_strlen_zero(from)) {
-		if (strncmp(from, "sip:", 4)) {
+		if (strncasecmp(from, "sip:", 4)) {
 			ast_log(LOG_WARNING, "Huh?  Not a SIP header (%s)?\n", from);
 			return -1;
 		}
@@ -8840,7 +8830,7 @@ static int get_also_info(struct sip_pvt *p, struct sip_request *oreq)
 	if (pedanticsipchecking)
 		ast_uri_decode(c);
 	
-	if (strncmp(c, "sip:", 4)) {
+	if (strncasecmp(c, "sip:", 4)) {
 		ast_log(LOG_WARNING, "Huh?  Not a SIP header in Also: transfer (%s)?\n", c);
 		return -1;
 	}
@@ -9053,7 +9043,7 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 	of = get_in_brackets(from);
 	if (ast_strlen_zero(p->exten)) {
 		t = uri2;
-		if (!strncmp(t, "sip:", 4))
+		if (!strncasecmp(t, "sip:", 4))
 			t+= 4;
 		ast_string_field_set(p, exten, t);
 		t = strchr(p->exten, '@');
@@ -9064,7 +9054,7 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 	}
 	/* save the URI part of the From header */
 	ast_string_field_set(p, from, of);
-	if (strncmp(of, "sip:", 4)) {
+	if (strncasecmp(of, "sip:", 4)) {
 		ast_log(LOG_NOTICE, "From address missing 'sip:', using it anyway\n");
 	} else
 		of += 4;
@@ -14660,7 +14650,7 @@ static int handle_request_register(struct sip_pvt *p, struct sip_request *req, s
 	copy_request(&p->initreq, req);
 	check_via(p, req);
 	if ((res = register_verify(p, sin, req, e)) < 0) {
-		const char *reason = "";
+		const char *reason;
 
 		switch (res) {
 		case AUTH_SECRET_FAILED:
@@ -14675,19 +14665,28 @@ static int handle_request_register(struct sip_pvt *p, struct sip_request *req, s
 		case AUTH_UNKNOWN_DOMAIN:
 			reason = "Not a local domain";
 			break;
+		case AUTH_PEER_NOT_DYNAMIC:
+			reason = "Peer is not supposed to register";
+			break;
+		case AUTH_ACL_FAILED:
+			reason = "Device does not match ACL";
+			break;
 		default:
+			reason = "Unknown failure";
 			break;
 		}
 		ast_log(LOG_NOTICE, "Registration from '%s' failed for '%s' - %s\n",
 			get_header(req, "To"), ast_inet_ntoa(sin->sin_addr),
 			reason);
-	}
+		append_history(p, "RegRequest", "Failed : Account %s : %s", get_header(req, "To"), reason);
+	} else
+		append_history(p, "RegRequest", "Succeeded : Account %s", get_header(req, "To"));
+
 	if (res < 1) {
 		/* Destroy the session, but keep us around for just a bit in case they don't
 		   get our 200 OK */
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 	}
-	append_history(p, "RegRequest", "%s : Account %s", res ? "Failed": "Succeeded", get_header(req, "To"));
 	return res;
 }
 
@@ -17206,7 +17205,7 @@ static int sip_sipredirect(struct sip_pvt *p, const char *dest)
 			ast_log(LOG_ERROR, "Cannot retrieve the 'To' header from the original SIP request!\n");
 			return 0;
 		}
-		if ((localtmp = strstr(tmp, "sip:")) && (localtmp = strchr(localtmp, '@'))) {
+		if ((localtmp = strcasestr(tmp, "sip:")) && (localtmp = strchr(localtmp, '@'))) {
 			char lhost[80], lport[80];
 			memset(lhost, 0, sizeof(lhost));
 			memset(lport, 0, sizeof(lport));
