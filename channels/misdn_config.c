@@ -261,6 +261,11 @@ static const struct misdn_cfg_spec port_spec[] = {
 		"Send Setup_Acknowledge on incoming calls anyway (instead of PROCEEDING),\n"
 		"\tthis requests additional Infos, so we can waitfordigits without much\n"
 		"\tissues. This works only for PTP Ports" },
+	{ "noautorespond_on_setup", MISDN_CFG_NOAUTORESPOND_ON_SETUP, MISDN_CTYPE_BOOL, "0", NONE,
+		"Do not send SETUP_ACKNOWLEDGE or PROCEEDING automatically to the calling Party.\n"
+		"Instead we directly jump into the dialplan. This might be useful for fast call\n"
+		"rejection, or for some broken switches, that need hangup causes like busy in the.\n"
+		"RELEASE_COMPLETE Message, instead of the DISCONNECT Message.\n"},
 	{ "jitterbuffer", MISDN_CFG_JITTERBUFFER, MISDN_CTYPE_INT, "4000", NONE,
 		"The jitterbuffer." },
 	{ "jitterbuffer_upper_threshold", MISDN_CFG_JITTERBUFFER_UPPER_THRESHOLD, MISDN_CTYPE_INT, "0", NONE,
@@ -658,9 +663,12 @@ int misdn_cfg_is_port_valid (int port)
 int misdn_cfg_is_group_method (char *group, enum misdn_cfg_method meth)
 {
 	int i, re = 0;
-	char *method = NULL;
+	char *method ;
 
 	misdn_cfg_lock();
+
+	method = port_cfg[0][map[MISDN_CFG_METHOD]].str;
+
 	for (i = 1; i <= max_ports; i++) {
 		if (port_cfg[i] && port_cfg[i][map[MISDN_CFG_GROUPNAME]].str) {
 			if (!strcasecmp(port_cfg[i][map[MISDN_CFG_GROUPNAME]].str, group))
@@ -668,11 +676,14 @@ int misdn_cfg_is_group_method (char *group, enum misdn_cfg_method meth)
 						  port_cfg[i][map[MISDN_CFG_METHOD]].str : port_cfg[0][map[MISDN_CFG_METHOD]].str);
 		}
 	}
+
 	if (method) {
 		switch (meth) {
 		case METHOD_STANDARD:		re = !strcasecmp(method, "standard");
 									break;
 		case METHOD_ROUND_ROBIN:	re = !strcasecmp(method, "round_robin");
+									break;
+		case METHOD_STANDARD_DEC:	re = !strcasecmp(method, "standard_dec");
 									break;
 		}
 	}

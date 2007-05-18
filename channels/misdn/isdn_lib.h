@@ -199,6 +199,7 @@ enum layer_e {
 
 
 struct misdn_bchannel {
+	struct send_lock *send_lock;
 
 	int nt;
 	int port;
@@ -214,6 +215,7 @@ struct misdn_bchannel {
 	int need_release;
 	int need_release_complete;
 
+	int dec;
 	/** var stuff**/
 	int l3_id;
 	int pid;
@@ -335,7 +337,9 @@ struct misdn_bchannel {
 /* 	unsigned char info_keypad[32]; */
 /* 	unsigned char clisub[24]; */
 /* 	unsigned char cldsub[24]; */
-/* 	unsigned char uu[256]; */
+
+ 	char uu[256];
+	int uulen;
   
 	int cause;
 	int out_cause;
@@ -396,7 +400,7 @@ char *manager_isdn_get_info(enum event_e event);
 
 void misdn_lib_transfer(struct misdn_bchannel* holded_bc);
 
-struct misdn_bchannel* misdn_lib_get_free_bc(int port, int channel, int inout);
+struct misdn_bchannel* misdn_lib_get_free_bc(int port, int channel, int inout, int dec);
 
 void manager_bchannel_activate(struct misdn_bchannel *bc);
 void manager_bchannel_deactivate(struct misdn_bchannel * bc);
