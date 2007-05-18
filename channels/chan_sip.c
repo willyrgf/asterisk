@@ -1349,6 +1349,7 @@ static void add_noncodec_to_sdp(const struct sip_pvt *p, int format, int sample_
 				int debug);
 static enum sip_result add_sdp(struct sip_request *resp, struct sip_pvt *p);
 static void do_setnat(struct sip_pvt *p, int natflags);
+static void stop_media_flows(struct sip_pvt *p);
 
 /*--- Authentication stuff */
 static int reply_digest(struct sip_pvt *p, struct sip_request *req, char *header, int sipmethod, char *digest, int digest_len);
@@ -3688,6 +3689,8 @@ static int sip_hangup(struct ast_channel *ast)
 		if (option_debug > 3)
 			ast_log(LOG_DEBUG, "Hanging up channel in state %s (not UP)\n", ast_state2str(ast->_state));
 	}
+
+	stop_media_flows(p); /* Immediately stop RTP, VRTP and UDPTL as applicable */
 
 	/* Disconnect */
 	if (p->vad)
@@ -8424,7 +8427,7 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 
 		destroy_association(peer);
 		
-		register_peer_exten(peer, 0);	/* Add extension from regexten= setting in sip.conf */
+		register_peer_exten(peer, FALSE);	/* Remove extension from regexten= setting in sip.conf */
 		peer->fullcontact[0] = '\0';
 		peer->useragent[0] = '\0';
 		peer->sipoptions = 0;
@@ -8492,7 +8495,7 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 		sip_poke_peer(peer);
 		if (option_verbose > 2)
 			ast_verbose(VERBOSE_PREFIX_3 "Registered SIP '%s' at %s port %d expires %d\n", peer->name, ast_inet_ntoa(peer->addr.sin_addr), ntohs(peer->addr.sin_port), expiry);
-		register_peer_exten(peer, 1);
+		register_peer_exten(peer, TRUE);
 	}
 	
 	/* Save User agent */
