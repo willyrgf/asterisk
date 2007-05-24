@@ -531,7 +531,7 @@ static enum ast_rtp_get_result gtalk_get_rtp_peer(struct ast_channel *chan, stru
 	ast_mutex_lock(&p->lock);
 	if (p->rtp){
 		*rtp = p->rtp;
-		res = AST_RTP_TRY_NATIVE;
+		res = AST_RTP_TRY_PARTIAL;
 	}
 	ast_mutex_unlock(&p->lock);
 
@@ -898,6 +898,7 @@ static struct ast_channel *gtalk_new(struct gtalk *client, struct gtalk_pvt *i, 
 	int fmt;
 	int what;
 	const char *n2;
+	char *data = NULL, *cid = NULL;
 
 	if (title)
 		n2 = title;
@@ -958,9 +959,21 @@ static struct ast_channel *gtalk_new(struct gtalk *client, struct gtalk_pvt *i, 
 	ast_copy_string(tmp->exten, i->exten, sizeof(tmp->exten));
 	/* Don't use ast_set_callerid() here because it will
 	 * generate a needless NewCallerID event */
-	tmp->cid.cid_num = ast_strdup(i->cid_num);
-	tmp->cid.cid_ani = ast_strdup(i->cid_num);
-	tmp->cid.cid_name = ast_strdup(i->cid_name);
+	if (!strcasecmp(client->name, "guest")) {
+		if (strchr(i->them, '/')) {
+			char *aux;
+			data = ast_strdupa((char *)i->them);
+			aux = data;
+			cid = strsep(&aux, "/");
+		} else
+			cid = i->them;
+	} else {
+		cid = client->user;
+	}
+	cid = strsep(&cid, "@");
+	tmp->cid.cid_num = ast_strdup(cid);
+	tmp->cid.cid_ani = ast_strdup(cid);
+	tmp->cid.cid_name = ast_strdup(i->them);
 	if (!ast_strlen_zero(i->exten) && strcmp(i->exten, "s"))
 		tmp->cid.cid_dnid = ast_strdup(i->exten);
 	tmp->priority = 1;
