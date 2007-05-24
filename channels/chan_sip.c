@@ -1935,7 +1935,14 @@ static int retrans_pkt(void *data)
 			usleep(1);
 			ast_mutex_lock(&pkt->owner->lock);
 		}
-		if (pkt->owner->owner) {
+		if (pkt->method == SIP_BYE) {
+			/* Ok, we're not getting answers on SIP BYE's. Who cares?
+		           let's take the call down anyway. */
+			if (pkt->owner->owner)
+				ast_channel_unlock(pkt->owner->owner);
+			append_history(pkt->owner, "ByeFailure", "Remote peer doesn't respond to bye. Destroying call anyway.");
+			ast_set_flag(&pkt->owner->flags[0], SIP_NEEDDESTROY);	
+		} if (pkt->owner->owner) {
 			sip_alreadygone(pkt->owner);
 			ast_log(LOG_WARNING, "Hanging up call %s - no reply to our critical packet.\n", pkt->owner->callid);
 			ast_queue_hangup(pkt->owner->owner);
@@ -2715,6 +2722,7 @@ static int create_addr_from_peer(struct sip_pvt *dialog, struct sip_peer *peer)
 		dialog->noncodeccapability |= AST_RTP_DTMF;
 	else
 		dialog->noncodeccapability &= ~AST_RTP_DTMF;
+	dialog->jointnoncodeccapability = dialog->noncodeccapability;
 	ast_string_field_set(dialog, context, peer->context);
 	dialog->rtptimeout = peer->rtptimeout;
 	if (peer->call_limit)
