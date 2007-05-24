@@ -118,7 +118,6 @@ then
    AC_CHECK_TOOL(CXX, g++, :)
    AC_CHECK_TOOL(LD, ld, :)
    AC_CHECK_TOOL(RANLIB, ranlib, :)
-   AC_CHECK_TOOL(AR, ar, :)
 fi
 
 # Checks for programs.
@@ -135,6 +134,9 @@ AC_PROG_LN_S
 AC_PROG_RANLIB
 AST_CHECK_GNU_MAKE
 
+AC_PATH_TOOL([STRIP], [strip], :)
+AC_PATH_TOOL([AR], [ar], :)
+
 GNU_LD=0
 if test "x$with_gnu_ld" = "xyes" ; then
    GNU_LD=1
@@ -142,7 +144,6 @@ fi
 AC_SUBST(GNU_LD)
 
 AC_PATH_PROG([GREP], [grep], :)
-AC_PATH_PROG([AR], [ar], :)
 AC_PATH_PROG([FIND], [find], :)
 AC_PATH_PROG([COMPRESS], [compress], :)
 AC_PATH_PROG([BASENAME], [basename], :)
@@ -151,7 +152,6 @@ AC_PATH_PROG([DIRNAME], [dirname], :)
 AC_PATH_PROG([SHELL], [sh], :)
 AC_PATH_PROG([LN], [ln], :)
 AC_PATH_PROG([DOT], [dot], :)
-AC_PATH_PROG([STRIP], [strip], :)
 AC_PATH_PROG([WGET], [wget], :)
 AC_PATH_PROG([RUBBER], [rubber], :)
 if test "${WGET}" != ":" ; then
