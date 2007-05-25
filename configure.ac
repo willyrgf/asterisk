@@ -422,10 +422,7 @@ fi
 AST_EXT_LIB_CHECK([IKSEMEL], [iksemel], [iks_start_sasl], [iksemel.h])
 
 if test "${PBX_IKSEMEL}" = 1; then
-   AST_EXT_LIB_CHECK([GNUTLS], [gnutls], [gnutls_bye])
-   if test "${PBX_GNUTLS}" = 1; then
-      IKSEMEL_LIB="${IKSEMEL_LIB} -lgnutls -lz -lgcrypt -lgpg-error"
-   fi
+   AST_EXT_LIB_CHECK([GNUTLS], [gnutls], [gnutls_bye], [gnutls/gnutls.h], [-lz -lgcrypt -lgpg-error])
 fi
 
 if test "${USE_IMAP_TK}" != "no"; then
@@ -697,8 +694,6 @@ AST_EXT_LIB_CHECK([UNIXODBC], [odbc], [SQLConnect], [sql.h], [-lltdl])
 
 AST_EXT_LIB_CHECK([OGG], [ogg], [ogg_sync_init], [])
 
-AST_EXT_LIB_CHECK([OSPTK], [osptk], [OSPPCryptoDecrypt], [osp/osp.h], [-lcrypto -lssl])
-
 if test "${USE_OSS}" != "no"; then
 PBX_OSS=0
 AC_CHECK_HEADER([linux/soundcard.h],
@@ -906,6 +901,10 @@ AST_EXT_LIB_CHECK([SPEEX], [speex], [speex_encode], [speex/speex.h], [-lm])
 AST_EXT_LIB_CHECK([SQLITE], [sqlite], [sqlite_exec], [sqlite.h])
 
 AST_EXT_LIB_CHECK([OPENSSL], [ssl], [ssl2_connect], [openssl/ssl.h], [-lcrypto])
+if test "$PBX_OPENSSL" = "1";
+then
+    AST_EXT_LIB_CHECK([OSPTK], [osptk], [OSPPCryptoDecrypt], [osp/osp.h], [-lcrypto -lssl])
+fi
 
 AST_EXT_LIB_CHECK([FREETDS], [tds], [tds_version], [tds.h])
 if test "${PBX_FREETDS}" != "0";
