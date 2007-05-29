@@ -6150,7 +6150,7 @@ static int respprep(struct sip_request *resp, struct sip_pvt *p, const char *msg
 		add_header(resp, "Contact", p->our_contact);
 	}
 
-	if (p->url) {
+	if (!ast_strlen_zero(p->url)) {
 		add_header(resp, "Access-URL", p->url);
 		ast_string_field_free(p, url);
 	}
@@ -6260,7 +6260,7 @@ static int reqprep(struct sip_request *req, struct sip_pvt *p, int sipmethod, in
 	if (!ast_strlen_zero(p->rpid))
 		add_header(req, "Remote-Party-ID", p->rpid);
 
-	if (p->url) {
+	if (!ast_strlen_zero(p->url)) {
 		add_header(req, "Access-URL", p->url);
 		ast_string_field_free(p, url);
 	}
@@ -11121,8 +11121,12 @@ static int sip_unregister(int fd, int argc, char *argv[])
 		return RESULT_SHOWUSAGE;
 	
 	if ((peer = find_peer(argv[2], NULL, load_realtime))) {
-		expire_register(peer);
-		ast_cli(fd, "Unregistered peer \'%s\'\n\n", argv[2]);
+		if (peer->expire > 0) {
+			expire_register(peer);
+			ast_cli(fd, "Unregistered peer \'%s\'\n\n", argv[2]);
+		} else {
+			ast_cli(fd, "Peer %s not registered\n", argv[2]);
+		}
 	} else {
 		ast_cli(fd, "Peer unknown: \'%s\'. Not unregistered.\n", argv[2]);
 	}
