@@ -80,13 +80,17 @@ enum {
 
 struct feature_group_exten {
 	AST_LIST_ENTRY(feature_group_exten) entry;
-	char exten[FEATURE_MAX_LEN];
+	AST_DECLARE_STRING_FIELDS(
+		AST_STRING_FIELD(exten);
+	);
 	struct ast_call_feature *feature;
 };
 
 struct feature_group {
 	AST_LIST_ENTRY(feature_group) entry;
-	char gname[80];
+	AST_DECLARE_STRING_FIELDS(
+		AST_STRING_FIELD(gname);
+	);
 	AST_LIST_HEAD_NOLOCK(, feature_group_exten) features;
 };
 
@@ -1061,14 +1065,15 @@ static struct feature_group* register_group(const char *fgname)
 		return NULL;
 	}
 
-	fg = ast_calloc(1, sizeof(*fg));
+	if (!(fg = ast_calloc(1, sizeof(*fg))))
+		return NULL;
 
-	if (!fg) {
-		ast_log(LOG_ERROR, "Failed to allocate memory for group '%s'\n", fgname);
+	if (ast_string_field_init(fg, 128)) {
+		free(fg);
 		return NULL;
 	}
 
-	ast_copy_string(fg->gname, fgname, sizeof(fg->gname));
+	ast_string_field_set(fg, gname, fgname);
 
 	AST_LIST_INSERT_HEAD(&feature_groups, fg, entry);
 
@@ -1084,9 +1089,13 @@ static void register_group_feature(struct feature_group *fg, const char *exten, 
 {
 	struct feature_group_exten *fge;
 
-	fge = ast_calloc(1, sizeof(*fge));
+	if (!(fge = ast_calloc(1, sizeof(*fge))))
+		return;
 
-	if (!fge) return;
+	if (ast_string_field_init(fge, 128)) {
+		free(fge);
+		return;
+	}
 
 	if (!fg) {
 		ast_log(LOG_NOTICE, "You didn't pass a group!\n");
@@ -1098,7 +1107,7 @@ static void register_group_feature(struct feature_group *fg, const char *exten, 
 		return;
 	}
 
-	ast_copy_string(fge->exten, (ast_strlen_zero(exten) ? feature->exten : exten), sizeof(fge->exten));
+	ast_string_field_set(fge, exten, (ast_strlen_zero(exten) ? feature->exten : exten));
 
 	fge->feature = feature;
 
@@ -1153,8 +1162,12 @@ static void ast_unregister_groups(void)
 
 	AST_RWLIST_WRLOCK(&feature_groups);
 	while ((fg = AST_LIST_REMOVE_HEAD(&feature_groups, entry))) {
-		while ((fge = AST_LIST_REMOVE_HEAD(&fg->features, entry)))
+		while ((fge = AST_LIST_REMOVE_HEAD(&fg->features, entry))) {
+			ast_string_field_free_all(fge);
 			free(fge);
+		}
+
+		ast_string_field_free_all(fg);
 		free(fg);
 	}
 	AST_RWLIST_UNLOCK(&feature_groups);
