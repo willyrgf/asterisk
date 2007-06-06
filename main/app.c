@@ -100,8 +100,10 @@ int ast_app_dtget(struct ast_channel *chan, const char *context, char *collect, 
 		if (!ast_matchmore_extension(chan, context, collect, 1, chan->cid.cid_num))
 			break;
 	}
+
 	if (res >= 0)
 		res = ast_exists_extension(chan, context, collect, 1, chan->cid.cid_num) ? 1 : 0;
+
 	return res;
 }
 
@@ -796,9 +798,9 @@ int ast_play_and_prepend(struct ast_channel *chan, char *playfile, char *recordf
 
 int ast_app_group_split_group(const char *data, char *group, int group_max, char *category, int category_max)
 {
-	int res=0;
+	int res = 0;
 	char tmp[256];
-	char *grp=NULL, *cat=NULL;
+	char *grp = NULL, *cat = NULL;
 
 	if (!ast_strlen_zero(data)) {
 		ast_copy_string(tmp, data, sizeof(tmp));
