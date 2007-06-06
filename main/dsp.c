@@ -475,7 +475,7 @@ static int dtmf_detect (dtmf_detect_state_t *s, int16_t amp[], int samples,
 #else
 		/* The following unrolled loop takes only 35% (rough estimate) of the 
 		   time of a rolled loop on the machine on which it was developed */
-		for (j=sample;j<limit;j++) {
+		for (j = sample; j < limit; j++) {
 			famp = amp[j];
 			s->energy += famp*famp;
 			/* With GCC 2.95, the following unrolled code seems to take about 35%
@@ -1350,7 +1350,7 @@ int ast_dsp_busydetect(struct ast_dsp *dsp)
 		dsp->busymaybe = 0;
 		min = 9999;
 		max = 0;
-		for (x=DSP_HISTORY - dsp->busycount;x<DSP_HISTORY;x++) {
+		for (x = DSP_HISTORY - dsp->busycount; x < DSP_HISTORY; x++) {
 #if 0
 			printf("Silence: %d, Noise: %d\n", dsp->historicsilence[x], dsp->historicnoise[x]);
 #endif			
@@ -1735,7 +1735,7 @@ int ast_dsp_set_call_progress_zone(struct ast_dsp *dsp, char *zone)
 {
 	int x;
 	
-	for (x=0;x<sizeof(aliases) / sizeof(aliases[0]);x++) {
+	for (x = 0; x < ARRAY_LEN(aliases); x++) {
 		if (!strcasecmp(aliases[x].name, zone)) {
 			dsp->progmode = aliases[x].mode;
 			ast_dsp_prog_reset(dsp);
