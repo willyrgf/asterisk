@@ -72,7 +72,7 @@ static AST_LIST_HEAD_STATIC(groups, ast_group_info);
 int ast_app_dtget(struct ast_channel *chan, const char *context, char *collect, size_t size, int maxlen, int timeout) 
 {
 	struct ind_tone_zone_sound *ts;
-	int res=0, x=0;
+	int res = 0, x = 0;
 
 	if (maxlen > size)
 		maxlen = size;
@@ -540,7 +540,7 @@ static int __ast_play_and_record(struct ast_channel *chan, const char *playfile,
 		maxsilence = global_maxsilence;
 
 	/* barf if no pointer passed to store duration in */
-	if (duration == NULL) {
+	if (!duration) {
 		ast_log(LOG_WARNING, "Error play_and_record called without duration pointer\n");
 		return -1;
 	}
@@ -1057,7 +1057,7 @@ int ast_unlock_path(const char *path)
 int ast_record_review(struct ast_channel *chan, const char *playfile, const char *recordfile, int maxtime, const char *fmt, int *duration, const char *path) 
 {
 	int silencethreshold = 128; 
-	int maxsilence=0;
+	int maxsilence = 0;
 	int res = 0;
 	int cmd = 0;
 	int max_attempts = 3;
@@ -1067,7 +1067,7 @@ int ast_record_review(struct ast_channel *chan, const char *playfile, const char
 	/* Note that urgent and private are for flagging messages as such in the future */
 
 	/* barf if no pointer passed to store duration in */
-	if (duration == NULL) {
+	if (!duration) {
 		ast_log(LOG_WARNING, "Error ast_record_review called without duration pointer\n");
 		return -1;
 	}
