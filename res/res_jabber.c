@@ -21,6 +21,11 @@
  * or a component to a jabber compliant server.
  *
  * \extref Iksemel http://iksemel.jabberstudio.org/
+ *
+ * \todo If you unload this module, chan_gtalk/jingle will be dead. How do we handle that?
+ * \todo If you have TLS, you can't unload this module. See bug #9738. This needs to be fixed,
+ *       but the bug is in the unmantained Iksemel library
+ *
  */
 
 /*** MODULEINFO
@@ -56,6 +61,14 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/manager.h"
 
 #define JABBER_CONFIG "jabber.conf"
+
+#ifndef FALSE
+#define FALSE 0
+#endif
+
+#ifndef TRUE
+#define TRUE 1
+#endif
 
 /*-- Forward declarations */
 static int aji_highest_bit(int number);
@@ -161,11 +174,11 @@ static char *ajistatus_descrip =
 "             If not in roster variable will = 7\n";
 
 struct aji_client_container clients;
-
 struct aji_capabilities *capabilities = NULL;
 
 /*! \brief Global flags, initialized to default values */
 static struct ast_flags globalflags = { AJI_AUTOPRUNE | AJI_AUTOREGISTER };
+static int tls_initialized = FALSE;
 
 /*!
  * \brief Deletes the aji_client data structure.
@@ -469,7 +482,9 @@ static void aji_log_hook(void *data, const char *xmpp, size_t size, int is_incom
 
 /*!
  * \brief The action hook parses the inbound packets, constantly running.
- * \param aji client structure, type of packet, the actual packet.
+ * \param data aji client structure 
+ * \param type type of packet 
+ * \param node the actual packet.
  * \return IKS_OK or IKS_HOOK .
  */
 static int aji_act_hook(void *data, int type, iks *node)
@@ -484,16 +499,22 @@ static int aji_act_hook(void *data, int type, iks *node)
 		return IKS_HOOK;
 	}
 
+	if (client->state == AJI_DISCONNECTING) {
+		ASTOBJ_UNREF(client, aji_client_destroy);
+		return IKS_HOOK;
+	}
+
 	pak = iks_packet(node);
 
 	if (!client->component) { /*client */
 		switch (type) {
 		case IKS_NODE_START:
 			if (client->usetls && !iks_is_secure(client->p)) {
-				if (iks_has_tls())
+				if (iks_has_tls()) {
 					iks_start_tls(client->p);
-				else
-					ast_log(LOG_ERROR, "gnuTLS not installed.\n");
+					tls_initialized = TRUE;
+				} else
+					ast_log(LOG_ERROR, "gnuTLS not installed. You need to recompile the Iksemel library with gnuTLS support\n");
 				break;
 			}
 			if (!client->usesasl) {
@@ -1511,6 +1532,12 @@ static void *aji_recv_loop(void *data)
 		}
 
 		res = iks_recv(client->p, 1);
+
+		if (client->state == AJI_DISCONNECTING) {
+			if (option_debug > 1)
+				ast_log(LOG_DEBUG, "Ending our Jabber client's thread due to a disconnect\n");
+			pthread_exit(NULL);
+		}
 		client->timeout--;
 		if (res == IKS_HOOK) 
 			ast_log(LOG_WARNING, "JABBER: Got hook event.\n");
@@ -2052,6 +2079,7 @@ static int aji_create_client(char *label, struct ast_variable *var, int debug)
 	ast_copy_string(client->name, label, sizeof(client->name));
 	ast_copy_string(client->mid, "aaaaa", sizeof(client->mid));
 
+	/* Set default values for the client object */
 	client->debug = debug;
 	ast_copy_flags(client, &globalflags, AST_FLAGS_ALL);
 	client->port = 5222;
@@ -2374,15 +2402,27 @@ static int aji_reload()
 
 static int unload_module(void)
 {
+
+	/* Check if TLS is initialized. If that's the case, we can't unload this
+	   module due to a bug in the iksemel library that will cause a crash or
+	   a deadlock. We're trying to find a way to handle this, but in the meantime
+	   we will simply refuse to die... 
+	 */
+	if (tls_initialized) {
+		ast_log(LOG_ERROR, "Module can't be unloaded due to a bug in the Iksemel library when using TLS.\n");
+		return 1;	/* You need a forced unload to get rid of this module */
+	}
+
 	ast_cli_unregister_multiple(aji_cli, sizeof(aji_cli) / sizeof(struct ast_cli_entry));
 	ast_unregister_application(app_ajisend);
 	ast_unregister_application(app_ajistatus);
 	ast_manager_unregister("JabberSend");
+	
 	ASTOBJ_CONTAINER_TRAVERSE(&clients, 1, {
 		ASTOBJ_RDLOCK(iterator);
-		if (option_verbose > 2)
-			ast_verbose(VERBOSE_PREFIX_3 "JABBER: %s\n", iterator->name);
-		iterator->state = AJI_DISCONNECTED;
+		if (option_debug > 2)
+			ast_log(LOG_DEBUG, "JABBER: Releasing and disconneing client: %s\n", iterator->name);
+		iterator->state = AJI_DISCONNECTING;
 		ast_aji_disconnect(iterator);
 		pthread_join(iterator->thread, NULL);
 		ASTOBJ_UNLOCK(iterator);
@@ -2390,8 +2430,6 @@ static int unload_module(void)
 
 	ASTOBJ_CONTAINER_DESTROYALL(&clients, aji_client_destroy);
 	ASTOBJ_CONTAINER_DESTROY(&clients);
-
-	ast_log(LOG_NOTICE, "res_jabber unloaded.\n");
 	return 0;
 }
 
@@ -2406,7 +2444,6 @@ static int load_module(void)
 	ast_register_application(app_ajistatus, aji_status_exec, ajistatus_synopsis, ajistatus_descrip);
 	ast_cli_register_multiple(aji_cli, sizeof(aji_cli) / sizeof(struct ast_cli_entry));
 
-	ast_log(LOG_NOTICE, "res_jabber.so loaded.\n");
 	return 0;
 }
 
