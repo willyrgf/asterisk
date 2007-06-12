@@ -156,7 +156,7 @@ static char regcontext[AST_MAX_CONTEXT] = "";
 
 static int maxauthreq = 3;
 static int max_retries = 4;
-static int ping_time = 20;
+static int ping_time = 21;
 static int lagrq_time = 10;
 static int maxtrunkcall = TRUNK_CALL_START;
 static int maxnontrunkcall = 1;
@@ -6377,7 +6377,8 @@ static int socket_read(int *id, int fd, short events, void *cbdata)
 		if (cur) {
 			/* we found another thread processing a full frame for this call,
 			   so we can't accept this frame */
-			ast_log(LOG_WARNING, "Dropping frame from %s (callno %d) of type %d (subclass %d) due to frame of type %d (subclass %d) already in process\n",
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Dropping frame from %s (callno %d) of type %d (subclass %d) due to frame of type %d (subclass %d) already in process\n",
 				ast_inet_ntoa(thread->iosin.sin_addr), cur->ffinfo.callno,
 				fh->type, uncompress_subclass(fh->csub),
 				cur->ffinfo.type, uncompress_subclass(cur->ffinfo.csub));
