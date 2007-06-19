@@ -1646,6 +1646,7 @@ static const struct ast_channel_tech sip_tech_info = {
 	.send_digit_end = sip_senddigit_end,
 	.bridge = ast_rtp_bridge,
 	.send_text = sip_sendtext,
+	.func_channel_read = acf_channel_read,
 };
 
 /**--- some list management macros. **/
@@ -3027,7 +3028,7 @@ static int create_addr_from_peer(struct sip_pvt *dialog, struct sip_peer *peer)
 		ast_rtp_set_rtpkeepalive(dialog->trtp, peer->rtpkeepalive);
 	}
 
-	ast_string_field_set(dialog, peername, peer->username);
+	ast_string_field_set(dialog, peername, peer->name);
 	ast_string_field_set(dialog, authname, peer->username);
 	ast_string_field_set(dialog, username, peer->username);
 	ast_string_field_set(dialog, peersecret, peer->secret);
@@ -14992,11 +14993,14 @@ static int acf_channel_read(struct ast_channel *chan, const char *funcname, char
 	if (ast_strlen_zero(args.param) || strcasecmp(args.param, "rtpqos"))
 		return -1;
 
+	/* Default arguments of audio,all */
+	if (ast_strlen_zero(args.type))
+		args.type = "audio";
+	if (ast_strlen_zero(args.field))
+		args.field = "all";
+
 	memset(buf, 0, buflen);
 	memset(&qos, 0, sizeof(qos));
-
-	if (ast_strlen_zero(args.type))
-		return -1;
 
 	if (strcasecmp(args.type, "AUDIO") == 0) {
 		all = ast_rtp_get_quality(p->rtp, &qos);
@@ -15005,9 +15009,6 @@ static int acf_channel_read(struct ast_channel *chan, const char *funcname, char
 	} else if (strcasecmp(args.type, "TEXT") == 0) {
 		all = ast_rtp_get_quality(p->trtp, &qos);
 	}
-
-	if (ast_strlen_zero(args.field))
-		return -1;
 
 	if (strcasecmp(args.field, "local_ssrc") == 0)
 		snprintf(buf, buflen, "%u", qos.local_ssrc);
@@ -15848,6 +15849,10 @@ static void check_rtp_timeout(struct sip_pvt *dialog, time_t t)
 		return;
 	/* If the call is not in UP state or redirected outside Asterisk, no need to check timers */
 	if (dialog->owner->_state != AST_STATE_UP || dialog->redirip.sin_addr.s_addr)
+		return;
+
+	/* If the call is involved in a T38 fax session do not check RTP timeout */
+	if (dialog->t38.state == T38_ENABLED)
 		return;
 
 	/* If we have no timers set, return now */
