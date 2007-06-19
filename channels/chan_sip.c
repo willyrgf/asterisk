@@ -1596,6 +1596,7 @@ static const struct ast_channel_tech sip_tech_info = {
 	.send_digit_end = sip_senddigit_end,
 	.bridge = ast_rtp_bridge,
 	.send_text = sip_sendtext,
+	.func_channel_read = acf_channel_read,
 };
 
 /**--- some list management macros. **/
@@ -14387,6 +14388,12 @@ static int acf_channel_read(struct ast_channel *chan, char *funcname, char *prep
 	if (strcasecmp(args.param, "rtpqos"))
 		return 0;
 
+	/* Default arguments of audio,all */
+	if (ast_strlen_zero(args.type))
+		args.type = "audio";
+	if (ast_strlen_zero(args.field))
+		args.field = "all";
+
 	memset(buf, 0, buflen);
 	memset(&qos, 0, sizeof(qos));
 
@@ -15288,7 +15295,8 @@ restartsearch:
 			/* Check RTP timeouts and kill calls if we have a timeout set and do not get RTP */
 			if (sip->rtp && sip->owner &&
 			    (sip->owner->_state == AST_STATE_UP) &&
-			    !sip->redirip.sin_addr.s_addr) {
+			    !sip->redirip.sin_addr.s_addr &&
+			    sip->t38.state != T38_ENABLED) {
 				if (sip->lastrtptx &&
 				    ast_rtp_get_rtpkeepalive(sip->rtp) &&
 				    (t > sip->lastrtptx + ast_rtp_get_rtpkeepalive(sip->rtp))) {
