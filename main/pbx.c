@@ -250,6 +250,7 @@ static int pbx_builtin_hangup(struct ast_channel *, void *);
 static int pbx_builtin_background(struct ast_channel *, void *);
 static int pbx_builtin_wait(struct ast_channel *, void *);
 static int pbx_builtin_waitexten(struct ast_channel *, void *);
+static int pbx_builtin_keepalive(struct ast_channel *, void *);
 static int pbx_builtin_resetcdr(struct ast_channel *, void *);
 static int pbx_builtin_setamaflags(struct ast_channel *, void *);
 static int pbx_builtin_ringing(struct ast_channel *, void *);
@@ -509,6 +510,12 @@ static struct pbx_builtin {
 	"  Options:\n"
 	"    m[(x)] - Provide music on hold to the caller while waiting for an extension.\n"
 	"               Optionally, specify the class for music on hold within parenthesis.\n"
+	},
+
+	{ "KeepAlive", pbx_builtin_keepalive,
+	"returns AST_PBX_KEEPALIVE value",
+	"  KeepAlive(): This application is chiefly meant for internal use with Gosubs.\n"
+	"Please do not run it alone from the dialplan!\n"
 	},
 
 };
@@ -2933,15 +2940,16 @@ int ast_register_application(const char *app, int (*execute)(struct ast_channel 
 {
 	struct ast_app *tmp, *cur = NULL;
 	char tmps[80];
-	int length;
+	int length, res;
 
 	AST_RWLIST_WRLOCK(&apps);
 	AST_RWLIST_TRAVERSE(&apps, tmp, list) {
-		if (!strcasecmp(app, tmp->name)) {
+		if (!(res = strcasecmp(app, tmp->name))) {
 			ast_log(LOG_WARNING, "Already have an application '%s'\n", app);
 			AST_RWLIST_UNLOCK(&apps);
 			return -1;
-		}
+		} else if (res < 0)
+			break;
 	}
 
 	length = sizeof(*tmp) + strlen(app) + 1;
@@ -5470,6 +5478,11 @@ static int pbx_builtin_answer(struct ast_channel *chan, void *data)
 		delay = atoi(data);
 
 	return __ast_answer(chan, delay);
+}
+
+static int pbx_builtin_keepalive(struct ast_channel *chan, void *data)
+{
+	return AST_PBX_KEEPALIVE;
 }
 
 AST_APP_OPTIONS(resetcdr_opts, {
