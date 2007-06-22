@@ -2468,8 +2468,14 @@ static int misdn_hangup(struct ast_channel *ast)
 		chan_misdn_log(2, bc->port, " --> state:%s\n", misdn_get_ch_state(p));
 		
 		switch (p->state) {
-		case MISDN_INCOMING_SETUP:
 		case MISDN_CALLING:
+		case MISDN_INCOMING_SETUP:
+			/* This is the only place in misdn_hangup, where we 
+			 * can call release_chan, else it might create lot's of trouble
+			 * */
+			ast_log(LOG_NOTICE, "release channel, in CALLING/INCOMING_SETUP state.. no other events happened\n");
+			release_chan(bc);
+
 			p->state=MISDN_CLEANING;
 			misdn_lib_send_event( bc, EVENT_RELEASE_COMPLETE);
 			break;
@@ -3373,6 +3379,8 @@ static struct chan_list *find_chan_by_pid(struct chan_list *list, int pid)
 static struct chan_list *find_holded(struct chan_list *list, struct misdn_bchannel *bc)
 {
 	struct chan_list *help=list;
+
+	if (bc->pri) return NULL;
 	
 	chan_misdn_log(6, bc->port, "$$$ find_holded: channel:%d oad:%s dad:%s\n",bc->channel, bc->oad,bc->dad);
 	for (;help; help=help->next) {
@@ -5289,7 +5297,6 @@ static int misdn_set_opt_exec(struct ast_channel *chan, void *data)
 				chan_misdn_log(1, ch->bc->port, "SETOPT: HDLC \n");
 				if (!ch->bc->hdlc) {
 					ch->bc->hdlc=1;
-					misdn_lib_setup_bc(ch->bc);
 				}
 			}  
 			ch->bc->capability=INFO_CAPABILITY_DIGITAL_UNRESTRICTED;
