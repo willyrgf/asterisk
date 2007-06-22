@@ -2234,10 +2234,14 @@ static int misdn_digit_end(struct ast_channel *ast, char digit, unsigned int dur
 		}
 		break;
 		
-		default:
-			if ( bc->send_dtmf ) {
+		default:	
+			/* Do not send Digits in CONNECTED State, when
+			 * the other side is too mISDN. */
+			if (p->other_ch ) 
+				return 0;
+
+			if ( bc->send_dtmf ) 
 				send_digit_to_chan(p,digit);
-			}
 		break;
 	}
 	
@@ -3795,13 +3799,6 @@ int add_out_calls(int port)
 	return 0;
 }
 
-static void wait_for_digits(struct chan_list *ch, struct misdn_bchannel *bc, struct ast_channel *chan) {
-	ch->state=MISDN_WAITING4DIGS;
-	misdn_lib_send_event(bc, EVENT_SETUP_ACKNOWLEDGE );
-	if (bc->nt)
-		dialtone_indicate(ch);
-}
-
 static void start_pbx(struct chan_list *ch, struct misdn_bchannel *bc, struct ast_channel *chan) {
 	if (pbx_start_chan(ch)<0) {
 		hangup_chan(ch);
@@ -3813,6 +3810,14 @@ static void start_pbx(struct chan_list *ch, struct misdn_bchannel *bc, struct as
 			misdn_lib_send_event(bc, EVENT_RELEASE);
 	}
 }
+
+static void wait_for_digits(struct chan_list *ch, struct misdn_bchannel *bc, struct ast_channel *chan) {
+	ch->state=MISDN_WAITING4DIGS;
+	misdn_lib_send_event(bc, EVENT_SETUP_ACKNOWLEDGE );
+	if (bc->nt && !bc->dad[0])
+		dialtone_indicate(ch);
+}
+
 
 /************************************************************/
 /*  Receive Events from isdn_lib  here                     */
