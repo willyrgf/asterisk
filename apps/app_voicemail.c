@@ -3130,7 +3130,6 @@ static int leave_voicemail(struct ast_channel *chan, char *ext, struct leave_vm_
 			return -1;
 		}
 		/* here is a big difference! We add one to it later */
-		msgnum = newmsgs + oldmsgs;
 		ast_debug(3, "Messagecount set to %d\n",msgnum);
 
 #else
@@ -3232,7 +3231,9 @@ static int leave_voicemail(struct ast_channel *chan, char *ext, struct leave_vm_
 						ast_destroy_realtime("voicemail_data", "id", tmpid, NULL);
 					}
 				} else {
+#ifndef IMAP_STORAGE
 					msgnum = last_message_index(vmu, dir) + 1;
+#endif
 					make_file(fn, sizeof(fn), dir, msgnum);
 
 					/* assign a variable with the name of the voicemail file */ 
