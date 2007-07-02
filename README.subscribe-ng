@@ -1,0 +1,15 @@
+This branch is to implement changes to handle a massive amount of
+subscriptions in one server. 
+
+Currently we have one linked list that contains both active calls
+and subscriptions. When we have 1.000 or more subscriptions
+and just a few calls, this can cause serious bad effects on
+call handling and quality.
+
+In this branch I'll work on trying to solve this by splitting up
+the linked lists into two and maybe experimenting with handling
+subscription requests in a separate thread.
+
+This branch is based on 1.2 based on the customer's requirements,
+but will be integrated in trunk at some point when it's tested
+and done.
