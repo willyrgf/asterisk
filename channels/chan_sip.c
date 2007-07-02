@@ -394,6 +394,9 @@ AST_MUTEX_DEFINE_STATIC(rand_lock);
 /*! \brief Protect the interface list (of sip_pvt's) */
 AST_MUTEX_DEFINE_STATIC(iflock);
 
+/*! \brief Protect the SIP subscription list (of sip_pvt's) */
+AST_MUTEX_DEFINE_STATIC(subscribelock);
+
 /*! \brief Protect the monitoring thread, so only one process can kill or start it, and not
    when it's doing something critical. */
 AST_MUTEX_DEFINE_STATIC(netlock);
@@ -457,6 +460,7 @@ struct sip_request {
 	int len;		/*!< Length */
 	int headers;		/*!< # of SIP Headers */
 	int method;		/*!< Method of this request */
+	int resp_method;		/*!< Method of request this response is for */
 	char *header[SIP_MAX_HEADERS];
 	int lines;		/*!< Body Content */
 	char *line[SIP_MAX_LINES];
@@ -700,6 +704,9 @@ static struct sip_pvt {
 	struct sip_pvt *next;			/*!< Next call in chain */
 	struct sip_invite_param *options;	/*!< Options for INVITE */
 } *iflist = NULL;
+
+/* List of subscriptions */
+static struct sip_pvt *subscribelist = NULL;
 
 #define FLAG_RESPONSE (1 << 0)
 #define FLAG_FATAL (1 << 1)
@@ -3186,10 +3193,17 @@ static struct sip_pvt *sip_alloc(char *callid, struct sockaddr_in *sin, int useg
 	strcpy(p->context, default_context);
 
 	/* Add to active dialog list */
-	ast_mutex_lock(&iflock);
-	p->next = iflist;
-	iflist = p;
-	ast_mutex_unlock(&iflock);
+	if (intended_method == SIP_SUBSCRIBE) {
+		ast_mutex_lock(&subscribelock);
+		p->next = subscribelist;
+		subscribelist = p;
+		ast_mutex_unlock(&subscribelock);
+	} else {
+		ast_mutex_lock(&iflock);
+		p->next = iflist;
+		iflist = p;
+		ast_mutex_unlock(&iflock);
+	}
 	if (option_debug)
 		ast_log(LOG_DEBUG, "Allocating new SIP dialog for %s - %s (%s)\n", callid ? callid : "(No Call-ID)", sip_methods[intended_method].text, p->rtp ? "With RTP" : "No RTP");
 	return p;
@@ -3197,13 +3211,15 @@ static struct sip_pvt *sip_alloc(char *callid, struct sockaddr_in *sin, int useg
 
 /*! \brief  find_call: Connect incoming SIP message to current dialog or create new dialog structure */
 /*               Called by handle_request, sipsock_read */
-static struct sip_pvt *find_call(struct sip_request *req, struct sockaddr_in *sin, const int intended_method)
+static struct sip_pvt *find_call(struct sip_request *req, struct sockaddr_in *sin, const int intended_method, int is_subscription)
 {
 	struct sip_pvt *p = NULL;
 	char *callid;
 	char *tag = "";
 	char totag[128];
 	char fromtag[128];
+
+	struct sip_pvt *dialoglist = iflist;
 
 	callid = get_header(req, "Call-ID");
 
@@ -3228,8 +3244,8 @@ static struct sip_pvt *find_call(struct sip_request *req, struct sockaddr_in *si
 			ast_log(LOG_DEBUG, "= Looking for  Call ID: %s (Checking %s) --From tag %s --To-tag %s  \n", callid, req->method==SIP_RESPONSE ? "To" : "From", fromtag, totag);
 	}
 
-	ast_mutex_lock(&iflock);
-	p = iflist;
+	ast_mutex_lock(is_subscription ? &subscribelock : &iflock);
+	p = is_subscription ? subscribelist : dialoglist;
 	while(p) {	/* In pedantic, we do not want packets with bad syntax to be connected to a PVT */
 		int found = 0;
 		if (req->method == SIP_REGISTER)
@@ -3264,7 +3280,7 @@ static struct sip_pvt *find_call(struct sip_request *req, struct sockaddr_in *si
 		}
 		p = p->next;
 	}
-	ast_mutex_unlock(&iflock);
+	ast_mutex_unlock(is_subscription ? &subscribelock : &iflock);
 
 	/* If this is a response and we have ignoring of out of dialog responses turned on, then drop it */
 	/* ...and never respond to a SIP ACK message */
@@ -3494,6 +3510,18 @@ static void parse_request(struct sip_request *req)
 		ast_log(LOG_WARNING, "Odd content, extra stuff left over ('%s')\n", c);
 	/* Split up the first line parts */
 	determine_firstline_parts(req);
+	req->method = find_sip_method(req->rlPart1);
+	if (req->method == SIP_RESPONSE) {
+		/* Ok, find the request method */
+		char *m = get_header(req, "Cseq");
+		while(*m && *m != ' ')
+			m++;
+		while(*m && *m == ' ')
+			m++;
+		req->resp_method = find_sip_method(m);
+		if (option_debug > 3)
+			ast_log(LOG_DEBUG, "** Response method %d - %s\n", req->resp_method, sip_methods[req->resp_method].text);
+	}
 }
 
 /*!
@@ -8563,8 +8591,10 @@ static int __sip_show_channels(int fd, int argc, char *argv[], int subscriptions
 	cur = iflist;
 	if (!subscriptions)
 		ast_cli(fd, FORMAT2, "Peer", "User/ANR", "Call ID", "Seq (Tx/Rx)", "Format", "Hold", "Last Message");
-	else
+	else {
 		ast_cli(fd, FORMAT3, "Peer", "User", "Call ID", "Extension", "Last state", "Type");
+		cur = subscribelist;
+	}
 	while (cur) {
 		if (cur->subscribed == NONE && !subscriptions) {
 			ast_cli(fd, FORMAT, ast_inet_ntoa(iabuf, sizeof(iabuf), cur->sa.sin_addr), 
@@ -11226,8 +11256,8 @@ static int handle_request_subscribe(struct sip_pvt *p, struct sip_request *req, 
 			   for it to expire and send NOTIFY messages to the peer only to have them
 			   ignored (or generate errors)
 			*/
-			ast_mutex_lock(&iflock);
-			for (p_old = iflist; p_old; p_old = p_old->next) {
+			ast_mutex_lock(&subscribelock);
+			for (p_old = subscribelist; p_old; p_old = p_old->next) {
 				if (p_old == p)
 					continue;
 				if (p_old->initreq.method != SIP_SUBSCRIBE)
@@ -11245,7 +11275,7 @@ static int handle_request_subscribe(struct sip_pvt *p, struct sip_request *req, 
 				}
 				ast_mutex_unlock(&p_old->lock);
 			}
-			ast_mutex_unlock(&iflock);
+			ast_mutex_unlock(&subscribelock);
 		}
 		if (!p->expiry)
 			ast_set_flag(p, SIP_NEEDDESTROY);
@@ -11505,6 +11535,7 @@ static int sipsock_read(int *id, int fd, short events, void *ignore)
 	int recount = 0;
 	char iabuf[INET_ADDRSTRLEN];
 	unsigned int lockretry = 100;
+	int is_subscription = 0;
 
 	len = sizeof(sin);
 	memset(&req, 0, sizeof(req));
@@ -11534,6 +11565,11 @@ static int sipsock_read(int *id, int fd, short events, void *ignore)
 	}
 	parse_request(&req);
 	req.method = find_sip_method(req.rlPart1);
+	if (req.method == SIP_RESPONSE) {
+		/* We need to find out the type of response we have - to what ? */
+	}
+	is_subscription = (req.method == SIP_SUBSCRIBE);
+	
 	if (ast_test_flag(&req, SIP_PKT_DEBUG)) {
 		ast_verbose("--- (%d headers %d lines)%s ---\n", req.headers, req.lines, (req.headers + req.lines == 0) ? " Nat keepalive" : "");
 	}
@@ -11547,7 +11583,7 @@ static int sipsock_read(int *id, int fd, short events, void *ignore)
 	/* Process request, with netlock held */
 retrylock:
 	ast_mutex_lock(&netlock);
-	p = find_call(&req, &sin, req.method);
+	p = find_call(&req, &sin, req.method, is_subscription);
 	if (p) {
 		/* Go ahead and lock the owner if it has one -- we may need it */
 		if (p->owner && ast_mutex_trylock(&p->owner->lock)) {
@@ -11674,6 +11710,18 @@ static void *do_monitor(void *data)
 		ast_mutex_lock(&iflock);
 restartsearch:		
 		time(&t);
+		sip = subscribelist;
+		while(!fastrestart && sip) {
+			ast_mutex_lock(&sip->lock);
+			if (ast_test_flag(sip, SIP_NEEDDESTROY) && !sip->packets && !sip->owner) {
+				ast_mutex_unlock(&sip->lock);
+				__sip_destroy(sip, 1);
+				goto restartsearch;
+			}
+			ast_mutex_unlock(&sip->lock);
+			sip = sip->next;
+		}
+
 		sip = iflist;
 		/* don't scan the interface list if it hasn't been a reasonable period
 		   of time since the last time we did it (when MWI is being sent, we can
@@ -13681,6 +13729,21 @@ int unload_module()
 		ast_mutex_unlock(&monlock);
 	} else {
 		ast_log(LOG_WARNING, "Unable to lock the monitor\n");
+		return -1;
+	}
+
+	if (!ast_mutex_lock(&subscribelock)) {
+		/* Destroy all the interfaces and free their memory */
+		p = subscribelist;
+		while (p) {
+			pl = p;
+			p = p->next;
+			__sip_destroy(pl, 1);
+		}
+		subscribelist = NULL;
+		ast_mutex_unlock(&subscribelock);
+	} else {
+		ast_log(LOG_WARNING, "Unable to lock the subscription list\n");
 		return -1;
 	}
 

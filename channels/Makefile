@@ -14,7 +14,7 @@
 # the GNU General Public License
 #
 
-CHANNEL_LIBS=chan_sip.so chan_agent.so chan_mgcp.so chan_iax2.so chan_local.so chan_skinny.so chan_features.so
+CHANNEL_LIBS=chan_sip.so chan_agent.so chan_mgcp.so chan_iax2.so chan_local.so chan_skinny.so chan_features.so chan_sip_pickup.so
 
 SUBDIRS=misdn h323
 
