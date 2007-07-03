@@ -11605,6 +11605,8 @@ static int sipsock_read(int *id, int fd, short events, void *ignore)
 retrylock:
 	ast_mutex_lock(&netlock);
 	p = find_call(&req, &sin, req.method, is_subscription);
+	if (!p && req.resp_method == SIP_NOTIFY)
+		p = find_call(&req, &sin, req.method, !is_subscription);
 	if (p) {
 		/* Go ahead and lock the owner if it has one -- we may need it */
 		if (p->owner && ast_mutex_trylock(&p->owner->lock)) {
