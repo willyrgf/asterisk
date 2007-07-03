@@ -2189,6 +2189,7 @@ static void __sip_destroy(struct sip_pvt *p, int lockowner)
 		free(hist);
 	}
 
+	/* First look in the general list */
 	cur = iflist;
 	while(cur) {
 		if (cur == p) {
@@ -2201,8 +2202,25 @@ static void __sip_destroy(struct sip_pvt *p, int lockowner)
 		prev = cur;
 		cur = cur->next;
 	}
+	/* Then start looking in the subscription list */
+	if (!cur) {
+		ast_log(LOG_DEBUG, "====== Checking subscription list! \n");
+		cur = subscribelist;
+		while(cur) {
+			if (cur == p) {
+				if (prev)
+					prev->next = cur->next;
+				else
+					subscribelist = cur->next;
+				break;
+			}
+			prev = cur;
+			cur = cur->next;
+		}
+	}
 	if (!cur) {
 		ast_log(LOG_WARNING, "Trying to destroy \"%s\", not found in dialog list?!?! \n", p->callid);
+
 		return;
 	} 
 	while((cp = p->packets)) {
@@ -3198,11 +3216,13 @@ static struct sip_pvt *sip_alloc(char *callid, struct sockaddr_in *sin, int useg
 		p->next = subscribelist;
 		subscribelist = p;
 		ast_mutex_unlock(&subscribelock);
+		ast_log(LOG_DEBUG, "======= Adding pvt to subscribe list \n");
 	} else {
 		ast_mutex_lock(&iflock);
 		p->next = iflist;
 		iflist = p;
 		ast_mutex_unlock(&iflock);
+		ast_log(LOG_DEBUG, "======= Adding pvt to default list \n");
 	}
 	if (option_debug)
 		ast_log(LOG_DEBUG, "Allocating new SIP dialog for %s - %s (%s)\n", callid ? callid : "(No Call-ID)", sip_methods[intended_method].text, p->rtp ? "With RTP" : "No RTP");
