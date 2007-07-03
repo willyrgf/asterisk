@@ -2206,6 +2206,7 @@ static void __sip_destroy(struct sip_pvt *p, int lockowner)
 	if (!cur) {
 		ast_log(LOG_DEBUG, "====== Checking subscription list! \n");
 		cur = subscribelist;
+		prev = NULL;
 		while(cur) {
 			if (cur == p) {
 				if (prev)
