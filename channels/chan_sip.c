@@ -6602,14 +6602,35 @@ static int check_auth(struct sip_pvt *p, struct sip_request *req, char *randdata
 	return res;
 }
 
+/*! \brief Structure for notification queue list */
+struct notify_data_queue_item {
+	struct sip_pvt *dialog;
+	char exten[AST_MAX_EXTENSION];
+	char context[AST_MAX_CONTEXT];
+	int state;
+};
+
 /*! \brief  cb_extensionstate: Callback for the devicestate notification (SUBSCRIBE) support subsystem ---*/
 /*    If you add an "hint" priority to the extension in the dial plan,
       you will get notifications on device state changes */
 static int cb_extensionstate(char *context, char* exten, int state, void *data)
 {
 	struct sip_pvt *p = data;
+	int lockretry = 10;
+	static int dropped_notifications = 0;
 
-	ast_mutex_lock(&p->lock);
+	while(ast_mutex_trylock(&p->lock)) {
+		if (option_debug > 1)
+                       	ast_log(LOG_DEBUG, "Failed to grab subscription dialog lock, trying again...\n");
+		if(--lockretry)
+			usleep(5);
+	}
+	if (!lockretry) {
+		dropped_notifications++;
+		ast_log(LOG_WARNING, "Failed to grab dialog lock (#%d). Not notifyinging user about Extension Changed %s new state %s \n", dropped_notifications, exten, ast_extension_state2str(state));
+		return -1;	/* Pls retry later */
+	}
+
 
 	switch(state) {
 	case AST_EXTENSION_DEACTIVATED:	/* Retry after a while */
