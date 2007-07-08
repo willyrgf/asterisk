@@ -11594,10 +11594,7 @@ static int sipsock_read(int *id, int fd, short events, void *ignore)
 	}
 	parse_request(&req);
 	req.method = find_sip_method(req.rlPart1);
-	if (req.method == SIP_RESPONSE) {
-		/* We need to find out the type of response we have - to what ? */
-	}
-	is_subscription = (req.method == SIP_SUBSCRIBE);
+	is_subscription = (req.method == SIP_SUBSCRIBE || req.resp_method == SIP_SUBSCRIBE);
 	
 	if (ast_test_flag(&req, SIP_PKT_DEBUG)) {
 		ast_verbose("--- (%d headers %d lines)%s ---\n", req.headers, req.lines, (req.headers + req.lines == 0) ? " Nat keepalive" : "");
@@ -11613,8 +11610,8 @@ static int sipsock_read(int *id, int fd, short events, void *ignore)
 retrylock:
 	ast_mutex_lock(&netlock);
 	p = find_call(&req, &sin, req.method, is_subscription);
-	if (!p && req.resp_method == SIP_NOTIFY)
-		p = find_call(&req, &sin, req.method, !is_subscription);
+	//if (!p && req.resp_method == SIP_NOTIFY)
+		//p = find_call(&req, &sin, req.method, !is_subscription);
 	if (p) {
 		/* Go ahead and lock the owner if it has one -- we may need it */
 		if (p->owner && ast_mutex_trylock(&p->owner->lock)) {
