@@ -817,6 +817,7 @@ static int callnums = 1;
 #define SKINNY_DEVICE_7911		307
 #define SKINNY_DEVICE_7961GE		308
 #define SKINNY_DEVICE_7941GE		309
+#define SKINNY_DEVICE_7921		365
 #define SKINNY_DEVICE_7905		20000
 #define SKINNY_DEVICE_7920		30002
 #define SKINNY_DEVICE_7970		30006
@@ -1163,6 +1164,7 @@ static void *get_button_template(struct skinnysession *s, struct button_definiti
 			(btn++)->buttonDefinition = BT_HOLD;
 			break;
 		case SKINNY_DEVICE_7920:
+		case SKINNY_DEVICE_7921:
 			/* XXX I don't know if this is right. */
 			for (i = 0; i < 4; i++)
 				(btn++)->buttonDefinition = BT_CUST_LINESPEEDDIAL;
@@ -1906,6 +1908,8 @@ static char *device2str(int type)
 		return "7961GE";
 	case SKINNY_DEVICE_7941GE:
 		return "7941GE";
+	case SKINNY_DEVICE_7921:
+		return "7921";
 	case SKINNY_DEVICE_7905:
 		return "7905";
 	case SKINNY_DEVICE_7920:
