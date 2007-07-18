@@ -893,7 +893,7 @@ static int cache_save(dundi_eid *eidpeer, struct dundi_request *req, int start, 
 		if (strchr(req->dr[x].dest, '|'))
 			continue;
 		snprintf(data + strlen(data), sizeof(data) - strlen(data), "%lld/%d/%d/%s/%s|", 
-			req->dr[x].flags, req->dr[x].weight, req->dr[x].techint, req->dr[x].dest, 
+			(unsigned  long long)req->dr[x].flags, req->dr[x].weight, req->dr[x].techint, req->dr[x].dest, 
 			dundi_eid_to_str_short(eidpeer_str, sizeof(eidpeer_str), &req->dr[x].eid));
 	}
 	ast_db_put("dundi/cache", key1, data);
@@ -1154,7 +1154,7 @@ static int cache_lookup_internal(time_t now, struct dundi_request *req, char *ke
 				if (option_debug)
 					ast_log(LOG_DEBUG, "Found cache expiring in %d seconds!\n", expiration);
 				ptr += length + 1;
-				while((sscanf(ptr, "%lld/%d/%d/%n", &(flags.flags), &weight, &tech, &length) == 3)) {
+				while((sscanf(ptr, "%lld/%d/%d/%n", (unsigned long long*)&(flags.flags), &weight, &tech, &length) == 3)) {
 					ptr += length;
 					term = strchr(ptr, '|');
 					if (term) {
@@ -4712,17 +4712,18 @@ static int set_config(char *config_file, struct sockaddr_in* sin)
 
 static int unload_module(void)
 {
+	pthread_t previous_netthreadid = netthreadid, previous_precachethreadid = precachethreadid;
 	ast_module_user_hangup_all();
 
 	/* Stop all currently running threads */
 	dundi_shutdown = 1;
-	if (netthreadid != AST_PTHREADT_NULL) {
-		pthread_kill(netthreadid, SIGURG);
-		pthread_join(netthreadid, NULL);
+	if (previous_netthreadid != AST_PTHREADT_NULL) {
+		pthread_kill(previous_netthreadid, SIGURG);
+		pthread_join(previous_netthreadid, NULL);
 	}
-	if (precachethreadid != AST_PTHREADT_NULL) {
-		pthread_kill(precachethreadid, SIGURG);
-		pthread_join(precachethreadid, NULL);
+	if (previous_precachethreadid != AST_PTHREADT_NULL) {
+		pthread_kill(previous_precachethreadid, SIGURG);
+		pthread_join(previous_precachethreadid, NULL);
 	}
 
 	ast_cli_unregister_multiple(cli_dundi, sizeof(cli_dundi) / sizeof(struct ast_cli_entry));
