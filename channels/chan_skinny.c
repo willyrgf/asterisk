@@ -170,6 +170,12 @@ struct keypad_button_message {
 	uint32_t callReference;
 };
 
+
+#define ENBLOC_CALL_MESSAGE 0x0004
+struct enbloc_call_message {
+       char calledParty[24];
+};
+
 #define STIMULUS_MESSAGE 0x0005
 struct stimulus_message {
 	uint32_t stimulus;
@@ -553,6 +559,7 @@ struct soft_key_definitions {
 
 static const uint8_t soft_key_default_onhook[] = {
 	SOFTKEY_REDIAL,
+	SOFTKEY_NEWCALL,
 	SOFTKEY_CFWDALL,
 	SOFTKEY_CFWDBUSY,
 	SOFTKEY_GPICKUP,
@@ -608,10 +615,8 @@ static const uint8_t soft_key_default_connwithconf[] = {
 };
 
 static const uint8_t soft_key_default_ringout[] = {
+	SOFTKEY_NONE,
 	SOFTKEY_ENDCALL,
-	SOFTKEY_TRNSFER,
-	SOFTKEY_CFWDALL,
-	SOFTKEY_CFWDBUSY,
 };
 
 static const uint8_t soft_key_default_offhookwithfeat[] = {
@@ -748,6 +753,7 @@ union skinny_data {
 	struct display_notify_message displaynotify;
 	struct dialed_number_message dialednumber;
 	struct soft_key_event_message softkeyeventmessage;
+	struct enbloc_call_message enbloccallmessage;
 };
 
 /* packet composition */
@@ -1799,16 +1805,27 @@ static void transmit_displaypromptstatus(struct skinnysession *s, const char *te
 {
 	struct skinny_req *req;
 
-	if (!(req = req_alloc(sizeof(struct display_prompt_status_message), DISPLAY_PROMPT_STATUS_MESSAGE)))
-		return;
+	if (text == 0) {
+		if (!(req = req_alloc(sizeof(struct clear_prompt_message), CLEAR_PROMPT_MESSAGE)))
+			return;
 
-	ast_copy_string(req->data.displaypromptstatus.promptMessage, text, sizeof(req->data.displaypromptstatus.promptMessage));
-	req->data.displaypromptstatus.messageTimeout = htolel(t);
-	req->data.displaypromptstatus.lineInstance = htolel(instance);
-	req->data.displaypromptstatus.callReference = htolel(callid);
+		req->data.clearpromptstatus.lineInstance = htolel(instance);
+		req->data.clearpromptstatus.callReference = htolel(callid);
 
-	if (skinnydebug)
-		ast_verbose("Displaying Prompt Status '%s'\n", text);
+		if (skinnydebug)
+			ast_verbose("Clearing Prompt\n");
+	} else {
+		if (!(req = req_alloc(sizeof(struct display_prompt_status_message), DISPLAY_PROMPT_STATUS_MESSAGE)))
+			return;
+
+		ast_copy_string(req->data.displaypromptstatus.promptMessage, text, sizeof(req->data.displaypromptstatus.promptMessage));
+		req->data.displaypromptstatus.messageTimeout = htolel(t);
+		req->data.displaypromptstatus.lineInstance = htolel(instance);
+		req->data.displaypromptstatus.callReference = htolel(callid);
+
+		if (skinnydebug)
+			ast_verbose("Displaying Prompt Status '%s'\n", text);
+	}
 
 	transmit_response(s, req);
 }
@@ -3253,6 +3270,14 @@ static int handle_stimulus_message(struct skinny_req *req, struct skinnysession 
 		if (skinnydebug)
 			ast_verbose("Received Stimulus: Redial(%d)\n", instance);
 
+		if (ast_strlen_zero(l->lastnumberdialed)) {
+			ast_log(LOG_WARNING, "Attempted redial, but no previously dialed number found.\n");
+			l->hookstate = SKINNY_ONHOOK;
+			transmit_speaker_mode(s, SKINNY_SPEAKEROFF);
+			transmit_callstate(s, l->instance, SKINNY_ONHOOK, instance);
+			break;
+		}
+
 		c = skinny_new(l, AST_STATE_DOWN);
 		if (!c) {
 			ast_log(LOG_WARNING, "Unable to create channel for %s@%s\n", l->name, d->name);
@@ -3267,11 +3292,8 @@ static int handle_stimulus_message(struct skinny_req *req, struct skinnysession 
 				ast_verbose("Attempting to Clear display on Skinny %s@%s\n", l->name, d->name);
 			transmit_displaymessage(s, NULL); /* clear display */
 			transmit_tone(s, SKINNY_DIALTONE);
+			transmit_selectsoftkeys(s, l->instance, sub->callid, KEYDEF_RINGOUT);
 
-			if (ast_strlen_zero(l->lastnumberdialed)) {
-				ast_log(LOG_WARNING, "Attempted redial, but no previously dialed number found.\n");
-				return 0;
-			}
 			if (!ast_ignore_pattern(c->context, l->lastnumberdialed)) {
 				transmit_tone(s, SKINNY_SILENCE);
 			}
@@ -3311,6 +3333,7 @@ static int handle_stimulus_message(struct skinny_req *req, struct skinnysession 
 				ast_verbose("Attempting to Clear display on Skinny %s@%s\n", l->name, d->name);
 			transmit_displaymessage(s, NULL); /* clear display */
 			transmit_tone(s, SKINNY_DIALTONE);
+			transmit_selectsoftkeys(s, l->instance, sub->callid, KEYDEF_RINGOUT);
 
 			if (!ast_ignore_pattern(c->context, sd->exten)) {
 				transmit_tone(s, SKINNY_SILENCE);
@@ -3382,6 +3405,7 @@ static int handle_stimulus_message(struct skinny_req *req, struct skinnysession 
 
 			transmit_displaymessage(s, NULL); /* clear display */
 			transmit_tone(s, SKINNY_DIALTONE);
+			transmit_selectsoftkeys(s, l->instance, sub->callid, KEYDEF_RINGOUT);
 
 			if (!ast_ignore_pattern(c->context, vmexten)) {
 				transmit_tone(s, SKINNY_SILENCE);
@@ -3735,21 +3759,21 @@ static int handle_line_state_req_message(struct skinny_req *req, struct skinnyse
 
 static int handle_time_date_req_message(struct skinny_req *req, struct skinnysession *s)
 {
-	time_t timer;
-	struct tm *cmtime;
+	struct timeval tv = ast_tvnow();
+	struct ast_tm cmtime;
 
 	if (!(req = req_alloc(sizeof(struct definetimedate_message), DEFINETIMEDATE_MESSAGE)))
 		return -1;
 
-	timer = time(NULL);
-	cmtime = localtime(&timer);
-	req->data.definetimedate.year = htolel(cmtime->tm_year+1900);
-	req->data.definetimedate.month = htolel(cmtime->tm_mon+1);
-	req->data.definetimedate.dayofweek = htolel(cmtime->tm_wday);
-	req->data.definetimedate.day = htolel(cmtime->tm_mday);
-	req->data.definetimedate.hour = htolel(cmtime->tm_hour);
-	req->data.definetimedate.minute = htolel(cmtime->tm_min);
-	req->data.definetimedate.seconds = htolel(cmtime->tm_sec);
+	ast_localtime(&tv, &cmtime, NULL);
+	req->data.definetimedate.year = htolel(cmtime.tm_year+1900);
+	req->data.definetimedate.month = htolel(cmtime.tm_mon+1);
+	req->data.definetimedate.dayofweek = htolel(cmtime.tm_wday);
+	req->data.definetimedate.day = htolel(cmtime.tm_mday);
+	req->data.definetimedate.hour = htolel(cmtime.tm_hour);
+	req->data.definetimedate.minute = htolel(cmtime.tm_min);
+	req->data.definetimedate.seconds = htolel(cmtime.tm_sec);
+	req->data.definetimedate.milliseconds = htolel(cmtime.tm_usec / 1000);
 	transmit_response(s, req);
 	return 1;
 }
@@ -4005,6 +4029,56 @@ static int handle_open_receive_channel_ack_message(struct skinny_req *req, struc
 	return 1;
 }
 
+static int handle_enbloc_call_message(struct skinny_req *req, struct skinnysession *s)
+{
+	struct skinny_device *d = s->device;
+	struct skinny_line *l;
+	struct skinny_subchannel *sub = NULL;
+	struct ast_channel *c;
+	pthread_t t;
+
+	if (skinnydebug)
+		ast_verbose("Received Enbloc Call: %s\n", req->data.enbloccallmessage.calledParty);
+
+	sub = find_subchannel_by_instance_reference(d, d->lastlineinstance, d->lastcallreference);
+
+	if (!sub) {
+		l = find_line_by_instance(d, d->lastlineinstance);
+		if (!l) {
+			return 0;
+		}
+	} else {
+		l = sub->parent;
+	}
+
+	c = skinny_new(l, AST_STATE_DOWN);
+
+	if(!c) {
+		ast_log(LOG_WARNING, "Unable to create channel for %s@%s\n", l->name, d->name);
+	} else {
+		l->hookstate = SKINNY_OFFHOOK;
+
+		sub = c->tech_pvt;
+		transmit_callstate(s, l->instance, SKINNY_OFFHOOK, sub->callid);
+		if (skinnydebug)
+			ast_verbose("Attempting to Clear display on Skinny %s@%s\n", l->name, d->name);
+		transmit_displaymessage(s, NULL); /* clear display */
+		transmit_tone(s, SKINNY_DIALTONE);
+
+		if (!ast_ignore_pattern(c->context, req->data.enbloccallmessage.calledParty)) {
+			transmit_tone(s, SKINNY_SILENCE);
+		}
+		ast_copy_string(c->exten, req->data.enbloccallmessage.calledParty, sizeof(c->exten));
+		if (ast_pthread_create(&t, NULL, skinny_newcall, c)) {
+			ast_log(LOG_WARNING, "Unable to create new call thread: %s\n", strerror(errno));
+			ast_hangup(c);
+		}
+	}
+	
+	return 1;
+}
+
+
 static int handle_soft_key_set_req_message(struct skinny_req *req, struct skinnysession *s)
 {
 	int i;
@@ -4026,6 +4100,7 @@ static int handle_soft_key_set_req_message(struct skinny_req *req, struct skinny
 			for (i = 0; i < (sizeof(soft_key_template_default) / sizeof(struct soft_key_template_definition)); i++) {
 				if (defaults[y] == i+1) {
 					req->data.softkeysets.softKeySetDefinition[softkeymode->mode].softKeyTemplateIndex[y] = htolel(i+1);
+					req->data.softkeysets.softKeySetDefinition[softkeymode->mode].softKeyInfoIndex[y] = htolel(i+301);
 				}
 			}
 		}
@@ -4079,6 +4154,14 @@ static int handle_soft_key_event_message(struct skinny_req *req, struct skinnyse
 		if (skinnydebug)
 			ast_verbose("Received Softkey Event: Redial(%d)\n", instance);
 
+		if (ast_strlen_zero(l->lastnumberdialed)) {
+			ast_log(LOG_WARNING, "Attempted redial, but no previously dialed number found.\n");
+			l->hookstate = SKINNY_ONHOOK;
+			transmit_speaker_mode(s, SKINNY_SPEAKEROFF);
+			transmit_callstate(s, l->instance, SKINNY_ONHOOK, instance);
+			break;
+		}
+
 		if (!sub || !sub->owner) {
 			c = skinny_new(l, AST_STATE_DOWN);
 		} else {
@@ -4098,11 +4181,8 @@ static int handle_soft_key_event_message(struct skinny_req *req, struct skinnyse
 				ast_verbose("Attempting to Clear display on Skinny %s@%s\n", l->name, d->name);
 			transmit_displaymessage(s, NULL); /* clear display */
 			transmit_tone(s, SKINNY_DIALTONE);
+			transmit_selectsoftkeys(s, l->instance, sub->callid, KEYDEF_RINGOUT);
 
-			if (ast_strlen_zero(l->lastnumberdialed)) {
-				ast_log(LOG_WARNING, "Attempted redial, but no previously dialed number found.\n");
-				break;
-			}
 			if (!ast_ignore_pattern(c->context, l->lastnumberdialed)) {
 				transmit_tone(s, SKINNY_SILENCE);
 			}
@@ -4410,6 +4490,9 @@ static int handle_message(struct skinny_req *req, struct skinnysession *s)
 		} else
 			res = handle_keypad_button_message(req, s);
 	    }
+		break;
+	case ENBLOC_CALL_MESSAGE:
+		res = handle_enbloc_call_message(req, s);
 		break;
 	case STIMULUS_MESSAGE:
 		res = handle_stimulus_message(req, s);
