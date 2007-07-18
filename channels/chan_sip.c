@@ -3287,7 +3287,7 @@ static void __sip_destroy(struct sip_pvt *p, int lockowner, int lockdialoglist)
 	if (sip_debug_test_pvt(p))
 		ast_verbose("Really destroying SIP dialog '%s' Method: %s\n", p->callid, sip_methods[p->method].text);
 
-	if (ast_test_flag(&p->flags[0], SIP_INC_COUNT)) {
+	if (ast_test_flag(&p->flags[0], SIP_INC_COUNT) || ast_test_flag(&p->flags[1], SIP_PAGE2_CALL_ONHOLD)) {
 		update_call_counter(p, DEC_CALL_LIMIT);
 		ast_debug(2, "This call did not properly clean up call limits. Call ID %s\n", p->callid);
 	}
@@ -3405,9 +3405,10 @@ static int update_call_counter(struct sip_pvt *fup, int event)
 
 	ast_debug(3, "Updating call counter for %s call\n", outgoing ? "outgoing" : "incoming");
 
+
 	/* Test if we need to check call limits, in order to avoid 
 	   realtime lookups if we do not need it */
-	if (!ast_test_flag(&fup->flags[0], SIP_CALL_LIMIT))
+	if (!ast_test_flag(&fup->flags[0], SIP_CALL_LIMIT) && !ast_test_flag(&fup->flags[1], SIP_PAGE2_CALL_ONHOLD))
 		return 0;
 
 	ast_copy_string(name, fup->username, sizeof(name));
@@ -3682,7 +3683,7 @@ static int sip_hangup(struct ast_channel *ast)
 	}
 
 	if (ast_test_flag(&p->flags[0], SIP_DEFER_BYE_ON_TRANSFER)) {
-		if (ast_test_flag(&p->flags[0], SIP_INC_COUNT)) {
+		if (ast_test_flag(&p->flags[0], SIP_INC_COUNT) || ast_test_flag(&p->flags[1], SIP_PAGE2_CALL_ONHOLD)) {
 			if (sipdebug)
 				ast_debug(1, "update_call_counter(%s) - decrement call limit counter on hangup\n", p->username);
 			update_call_counter(p, DEC_CALL_LIMIT);
@@ -3706,7 +3707,7 @@ static int sip_hangup(struct ast_channel *ast)
 		ast_debug(1, "Hanging up zombie call. Be scared.\n");
 
 	sip_pvt_lock(p);
-	if (ast_test_flag(&p->flags[0], SIP_INC_COUNT)) {
+	if (ast_test_flag(&p->flags[0], SIP_INC_COUNT) || ast_test_flag(&p->flags[1], SIP_PAGE2_CALL_ONHOLD)) {
 		if (sipdebug)
 			ast_debug(1, "update_call_counter(%s) - decrement call limit counter on hangup\n", p->username);
 		update_call_counter(p, DEC_CALL_LIMIT);
@@ -15010,7 +15011,7 @@ static int handle_request_cancel(struct sip_pvt *p, struct sip_request *req)
 		return 0;
 	}
 
-	if (ast_test_flag(&p->flags[0], SIP_INC_COUNT)) 
+	if (ast_test_flag(&p->flags[0], SIP_INC_COUNT) || ast_test_flag(&p->flags[1], SIP_PAGE2_CALL_ONHOLD)) 
 		update_call_counter(p, DEC_CALL_LIMIT);
 
 	stop_media_flows(p); /* Immediately stop RTP, VRTP and UDPTL as applicable */
