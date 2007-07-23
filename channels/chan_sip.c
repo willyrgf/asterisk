@@ -351,13 +351,35 @@ enum check_auth_result {
 /*! \brief States for outbound registrations (with register= lines in sip.conf */
 enum sipregistrystate {
 	REG_STATE_UNREGISTERED = 0,	/*!< We are not registred */
+		/* Initial state. We should have a timeout scheduled for the initial
+		 * (or next) registration transmission, calling sip_reregister
+		 */
+
 	REG_STATE_REGSENT,	/*!< Registration request sent */
+		/* sent initial request, waiting for an ack or a timeout to
+		 * retransmit the initial request.
+		*/
+
 	REG_STATE_AUTHSENT,	/*!< We have tried to authenticate */
+		/* entered after transmit_register with auth info,
+		 * waiting for an ack.
+		 */
+
 	REG_STATE_REGISTERED,	/*!< Registered and done */
 	REG_STATE_REJECTED,	/*!< Registration rejected */
+		/* only used when the remote party has an expire larger than
+		 * our max-expire. This is a final state from which we do not
+		 * recover (not sure how correctly).
+		 */
+
 	REG_STATE_TIMEOUT,	/*!< Registration timed out */
+		/* XXX unused */
+
 	REG_STATE_NOAUTH,	/*!< We have no accepted credentials */
+		/* fatal - no chance to proceed */
+
 	REG_STATE_FAILED,	/*!< Registration failed after several tries */
+		/* fatal - no chance to proceed */
 };
 
 /*! \brief definition of a sip proxy server
@@ -1094,7 +1116,12 @@ static void dialoglist_unlock(void)
 	ast_mutex_unlock(&dialoglock);
 }
 
-/*! \brief sip packet - raw format for outbound packets that are sent or scheduled for transmission */
+/*! \brief sip packet - raw format for outbound packets that are sent or scheduled for transmission
+ * Packets are linked in a list, whose head is in the struct sip_pvt they belong to.
+ * Each packet holds a reference to the parent struct sip_pvt.
+ * This structure is allocated in __sip_reliable_xmit() and only for packets that
+ * require retransmissions.
+ */
 struct sip_pkt {
 	struct sip_pkt *next;			/*!< Next packet in linked list */
 	int retrans;				/*!< Retransmission number */
@@ -1214,8 +1241,21 @@ struct sip_peer {
 };
 
 
-
-/*! \brief Registrations with other SIP proxies */
+/*! \brief Registrations with other SIP proxies
+ * Created by sip_register(), the entry is linked in the 'regl' list,
+ * and never deleted (other than at 'sip reload' or module unload times).
+ * The entry always has a pending timeout, either waiting for an ACK to
+ * the REGISTER message (in which case we have to retransmit the request),
+ * or waiting for the next REGISTER message to be sent (either the initial one,
+ * or once the previously completed registration one expires).
+ * The registration can be in one of many states, though at the moment
+ * the handling is a bit mixed.
+ * Note that the entire evolution of sip_registry (transmissions,
+ * incoming packets and timeouts) is driven by one single thread,
+ * do_monitor(), so there is almost no synchronization issue.
+ * The only exception  is the sip_pvt creation/lookup,
+ * as the dialoglist is also manipulated by other threads.
+ */
 struct sip_registry {
 	ASTOBJ_COMPONENTS_FULL(struct sip_registry,1,1);
 	AST_DECLARE_STRING_FIELDS(
@@ -4729,7 +4769,10 @@ static void make_our_tag(char *tagbuf, size_t len)
 	snprintf(tagbuf, len, "as%08lx", ast_random());
 }
 
-/*! \brief Allocate SIP_PVT structure and set defaults */
+/*! \brief Allocate sip_pvt structure, set defaults and link in the container.
+ * Returns a reference to the object so whoever uses it later must
+ * remember to release the reference.
+ */
 static struct sip_pvt *sip_alloc(ast_string_field callid, struct sockaddr_in *sin,
 				 int useglobal_nat, const int intended_method)
 {
@@ -4862,8 +4905,11 @@ static struct sip_pvt *sip_alloc(ast_string_field callid, struct sockaddr_in *si
 	return p;
 }
 
-/*! \brief Connect incoming SIP message to current dialog or create new dialog structure
-	Called by handle_request, sipsock_read */
+/*! \brief find or create a dialog structure for an incoming SIP message.
+ * Connect incoming SIP message to current dialog or create new dialog structure
+ * Returns a reference to the sip_pvt object, remember to give it back once done.
+ *     Called by handle_request, sipsock_read
+ */
 static struct sip_pvt *find_call(struct sip_request *req, struct sockaddr_in *sin, const int intended_method)
 {
 	struct sip_pvt *p = NULL;
@@ -4973,7 +5019,7 @@ static struct sip_pvt *find_call(struct sip_request *req, struct sockaddr_in *si
 				ast_debug(4, "Failed allocating SIP dialog, sending 500 Server internal error and giving up\n");
 			}
 		}
-		return p;
+		return p; /* can be NULL */
 	} else if( sip_methods[intended_method].can_create == CAN_CREATE_DIALOG_UNSUPPORTED_METHOD) {
 		/* A method we do not support, let's take it on the volley */
 		transmit_response_using_temp(callid, sin, 1, intended_method, req, "501 Method Not Implemented");
@@ -5065,7 +5111,7 @@ static int sip_register(char *value, int lineno)
 	reg->callid_valid = FALSE;
 	reg->ocseq = INITIAL_CSEQ;
 	ASTOBJ_CONTAINER_LINK(&regl, reg);	/* Add the new registry entry to the list */
-	registry_unref(reg);
+	registry_unref(reg);	/* release the reference given by ASTOBJ_INIT. The container has another reference */
 	return 0;
 }
 
@@ -7821,7 +7867,12 @@ static char *regstate2str(enum sipregistrystate regstate)
 	}
 }
 
-/*! \brief Update registration with SIP Proxy */
+/*! \brief Update registration with SIP Proxy.
+ * Called from the scheduler when the previous registration expires,
+ * so we don't have to cancel the pending event.
+ * We assume the reference so the sip_registry is valid, since it
+ * is stored in the scheduled event anyways.
+ */
 static int sip_reregister(void *data) 
 {
 	/* if we are here, we know that we need to reregister. */
@@ -7853,7 +7904,12 @@ static int __sip_do_register(struct sip_registry *r)
 	return res;
 }
 
-/*! \brief Registration timeout, register again */
+/*! \brief Registration timeout, register again
+ * Registered as a timeout handler during transmit_register(),
+ * to retransmit the packet if a reply does not come back.
+ * This is called by the scheduler so the event is not pending anymore when
+ * we are called.
+ */
 static int sip_reg_timeout(void *data)
 {
 
@@ -7867,6 +7923,10 @@ static int sip_reg_timeout(void *data)
 		return 0;
 
 	ast_log(LOG_NOTICE, "   -- Registration for '%s@%s' timed out, trying again (Attempt #%d)\n", r->username, r->hostname, r->regattempts); 
+	/* If the initial tranmission failed, we may not have an existing dialog,
+	 * so it is possible that r->call == NULL.
+	 * Otherwise destroy it, as we have a timeout so we don't want it.
+	 */
 	if (r->call) {
 		/* Unlink us, destroy old call.  Locking is not relevant here because all this happens
 		   in the single SIP manager thread. */
@@ -7897,7 +7957,9 @@ static int sip_reg_timeout(void *data)
 	return 0;
 }
 
-/*! \brief Transmit register to SIP proxy or UA */
+/*! \brief Transmit register to SIP proxy or UA
+ * auth = NULL on the initial registration (from sip_reregister())
+ */
 static int transmit_register(struct sip_registry *r, int sipmethod, const char *auth, const char *authheader)
 {
 	struct sip_request req;
@@ -9226,6 +9288,9 @@ static int get_rdnis(struct sip_pvt *p, struct sip_request *oreq)
 
 /*! \brief Find out who the call is for 
 	We use the INVITE uri to find out
+	\return 0 on success (found a matching extension),
+	1 for pickup extension or overlap dialling support (if we support it),
+	-1 on error.
 */
 static int get_destination(struct sip_pvt *p, struct sip_request *oreq)
 {
@@ -9338,6 +9403,7 @@ static int get_destination(struct sip_pvt *p, struct sip_request *oreq)
 	- Their tag is fromtag, our tag is to-tag
 	- This means that in some transactions, totag needs to be their tag :-)
 	  depending upon the direction
+	Returns a reference, remember to release it when done XXX
 */
 static struct sip_pvt *get_sip_pvt_byid_locked(const char *callid, const char *totag, const char *fromtag) 
 {
