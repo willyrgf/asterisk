@@ -35,6 +35,16 @@ Core:
   like sin, cos, tan, log, pow, etc. The ability to call external functions
   like CDR(), etc. was also added, without having to use the ${...} notation.
  
+* The delimiter passed to applications has been changed to the comma (','), as
+  that is what people are used to using within extensions.conf.  If you are
+  using realtime extensions, you will need to translate your existing dialplan
+  to use this separator.  To use a literal comma, you need merely to escape it
+  with a backslash ('\').  Another possible side effect is that you may need to
+  remove the obscene level of backslashing that was necessary for the dialplan
+  to work correctly in 1.4 and previous versions.  This should make writing
+  dialplans less painful in the future, albeit with the pain of a one-time
+  conversion.
+
 Voicemail:
 
 * The voicemail configuration values 'maxmessage' and 'minmessage' have
@@ -85,4 +95,8 @@ Channel Drivers:
   file names and formats are all controlled via the normal mechanisms. If the
   user has not configured the automon feature, the normal "415 Unsupported media type"
   is returned, and nothing is done.
+
+* chan_local.c: the comma delimiter inside the channel name has been changed to a
+  semicolon, in order to make the Local channel driver compatible with the comma
+  delimiter change in applications.
 
