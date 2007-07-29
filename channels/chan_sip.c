@@ -1116,6 +1116,15 @@ struct sip_pvt {
 							you know more) */
 };
 
+/*
+ * Here we implement the container for dialogs (sip_pvt), defining
+ * generic wrapper functions to ease the transition from the current
+ * implementation (a single linked list) to a different container.
+ * In addition to a reference to the container, we need functions to lock/unlock
+ * the container and individual items, and functions to add/remove
+ * references to the individual items.
+ */
+
 static struct sip_pvt *dialoglist = NULL;
 
 /*! \brief Protect the SIP dialog list (of sip_pvt's) */
@@ -1130,6 +1139,21 @@ static void dialoglist_lock(void)
 static void dialoglist_unlock(void)
 {
 	ast_mutex_unlock(&dialoglock);
+}
+
+/*!
+ * when we create or delete references, make sure to use these
+ * functions so we keep track of the refcounts.
+ * To simplify the code, we allow a NULL to be passed to dialog_unref().
+ */
+static struct sip_pvt *dialog_ref(struct sip_pvt *p)
+{
+	return p;
+}
+
+static struct sip_pvt *dialog_unref(struct sip_pvt *p)
+{
+	return NULL;
 }
 
 /*! \brief sip packet - raw format for outbound packets that are sent or scheduled for transmission
@@ -1463,7 +1487,7 @@ static void __sip_destroy(struct sip_pvt *p, int lockowner, int lockdialoglist);
 static void __sip_ack(struct sip_pvt *p, int seqno, int resp, int sipmethod);
 static void __sip_pretend_ack(struct sip_pvt *p);
 static int __sip_semi_ack(struct sip_pvt *p, int seqno, int resp, int sipmethod);
-static int auto_congest(void *nothing);
+static int auto_congest(void *arg);
 static int update_call_counter(struct sip_pvt *fup, int event);
 static int hangup_sip2cause(int cause);
 static const char *hangup_cause2sip(int cause);
@@ -1854,10 +1878,11 @@ static void unref_user(struct sip_user *user)
 	ASTOBJ_UNREF(user, sip_destroy_user);
 }
 
-static void registry_unref(struct sip_registry *reg)
+static void *registry_unref(struct sip_registry *reg)
 {
 	ast_debug(3, "SIP Registry %s: refcount now %d\n", reg->hostname, reg->refcount - 1);
 	ASTOBJ_UNREF(reg, sip_registry_destroy);
+	return NULL;
 }
 
 /*! \brief Add object reference to SIP registry */
@@ -2329,7 +2354,7 @@ static enum sip_result __sip_reliable_xmit(struct sip_pvt *p, int seqno, int res
 	pkt->method = sipmethod;
 	pkt->packetlen = len;
 	pkt->next = p->packets;
-	pkt->owner = p;
+	pkt->owner = dialog_ref(p);
 	pkt->seqno = seqno;
 	if (resp)
 		pkt->is_resp = 1;
@@ -2362,7 +2387,11 @@ static enum sip_result __sip_reliable_xmit(struct sip_pvt *p, int seqno, int res
 		return AST_SUCCESS;
 }
 
-/*! \brief Kill a SIP dialog (called by scheduler) */
+/*! \brief Kill a SIP dialog (called only by the scheduler)
+ * The scheduler has a reference to this dialog when p->autokillid != -1,
+ * and we are called using that reference. So if the event is not
+ * rescheduled, we need to call dialog_unref().
+ */
 static int __sip_autodestruct(void *data)
 {
 	struct sip_pvt *p = data;
@@ -2386,15 +2415,18 @@ static int __sip_autodestruct(void *data)
 	if (p->owner) {
 		ast_log(LOG_WARNING, "Autodestruct on dialog '%s' with owner in place (Method: %s)\n", p->callid, sip_methods[p->method].text);
 		ast_queue_hangup(p->owner);
+		dialog_unref(p);
 	} else if (p->refer) {
 		ast_debug(3, "Finally hanging up channel after transfer: %s\n", p->callid);
 		transmit_request_with_auth(p, SIP_BYE, 0, XMIT_RELIABLE, 1);
 		append_history(p, "ReferBYE", "Sending BYE on transferer call leg %s", p->callid);
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
+		dialog_unref(p);
 	} else {
 		append_history(p, "AutoDestroy", "%s", p->callid);
 		ast_debug(3, "Auto destroying SIP dialog '%s'\n", p->callid);
 		sip_destroy(p);		/* Go ahead and destroy dialog. All attempts to recover is done */
+		/* sip_destroy also absorbs the reference */
 	}
 	return 0;
 }
@@ -2409,21 +2441,23 @@ static void sip_scheddestroy(struct sip_pvt *p, int ms)
 	}
 	if (sip_debug_test_pvt(p))
 		ast_verbose("Scheduling destruction of SIP dialog '%s' in %d ms (Method: %s)\n", p->callid, ms, sip_methods[p->method].text);
+	sip_cancel_destroy(p);
 	if (p->do_history)
 		append_history(p, "SchedDestroy", "%d ms", ms);
-
-	if (p->autokillid > -1)
-		ast_sched_del(sched, p->autokillid);
-	p->autokillid = ast_sched_add(sched, ms, __sip_autodestruct, p);
+	p->autokillid = ast_sched_add(sched, ms, __sip_autodestruct, dialog_ref(p));
 }
 
-/*! \brief Cancel destruction of SIP dialog */
+/*! \brief Cancel destruction of SIP dialog.
+ * Be careful as this also absorbs the reference - if you call it
+ * from within the scheduler, this might be the last reference.
+ */
 static void sip_cancel_destroy(struct sip_pvt *p)
 {
 	if (p->autokillid > -1) {
 		ast_sched_del(sched, p->autokillid);
 		append_history(p, "CancelDestroy", "");
 		p->autokillid = -1;
+		dialog_unref(p);
 	}
 }
 
@@ -2459,6 +2493,7 @@ static void __sip_ack(struct sip_pvt *p, int seqno, int resp, int sipmethod)
 				cur->retransid = -1;
 			}
 			UNLINK(cur, p->packets, prev);
+			dialog_unref(cur->owner);
 			ast_free(cur);
 			break;
 		}
@@ -2862,6 +2897,7 @@ static void sip_destroy_peer(struct sip_peer *peer)
 
 	if (peer->outboundproxy)
 		ast_free(peer->outboundproxy);
+	peer->outboundproxy = NULL;
 
 	/* Delete it, it needs to disappear */
 	if (peer->call)
@@ -2936,11 +2972,9 @@ static struct sip_peer *realtime_peer(const char *newpeername, struct sockaddr_i
 		var = ast_load_realtime("sippeers", "host", ipaddr, NULL);	/* First check for fixed IP hosts */
 		if (var) {
 			if (realtimeregs) {
-				tmp = var;
-				while (tmp) {
+				for (tmp = var; tmp; tmp = tmp->next) {
 					if (!newpeername && !strcasecmp(tmp->name, "name"))
 						newpeername = tmp->value;
-					tmp = tmp->next;
 				}
 				varregs = ast_load_realtime("sipregs", "name", newpeername, NULL);
 			}
@@ -2950,11 +2984,9 @@ static struct sip_peer *realtime_peer(const char *newpeername, struct sockaddr_i
 			else
 				var = ast_load_realtime("sippeers", "ipaddr", ipaddr, NULL); /* Then check for registered hosts */
 			if (varregs) {
-				tmp = varregs;
-				while (tmp) {
+				for (tmp = varregs; tmp; tmp = tmp->next) {
 					if (!newpeername && !strcasecmp(tmp->name, "name"))
 						newpeername = tmp->value;
-					tmp = tmp->next;
 				}
 				var = ast_load_realtime("sippeers", "name", newpeername, NULL);
 			}
@@ -3000,7 +3032,7 @@ static struct sip_peer *realtime_peer(const char *newpeername, struct sockaddr_i
 			if (peer->expire > -1) {
 				ast_sched_del(sched, peer->expire);
 			}
-			peer->expire = ast_sched_add(sched, (global_rtautoclear) * 1000, expire_register, (void *)peer);
+			peer->expire = ast_sched_add(sched, global_rtautoclear * 1000, expire_register, (void *)peer);
 		}
 		ASTOBJ_CONTAINER_LINK(&peerl,peer);
 	} else {
@@ -3316,13 +3348,15 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer)
 	return 0;
 }
 
-/*! \brief Scheduled congestion on a call */
-static int auto_congest(void *nothing)
+/*! \brief Scheduled congestion on a call.
+ * Only called by the scheduler, must return the reference when done.
+ */
+static int auto_congest(void *arg)
 {
-	struct sip_pvt *p = nothing;
+	struct sip_pvt *p = arg;
 
 	sip_pvt_lock(p);
-	p->initid = -1;
+	p->initid = -1;	/* event gone, will not be rescheduled */
 	if (p->owner) {
 		/* XXX fails on possible deadlock */
 		if (!ast_channel_trylock(p->owner)) {
@@ -3333,6 +3367,7 @@ static int auto_congest(void *nothing)
 		}
 	}
 	sip_pvt_unlock(p);
+	dialog_unref(p);
 	return 0;
 }
 
@@ -3342,12 +3377,11 @@ static int auto_congest(void *nothing)
 static int sip_call(struct ast_channel *ast, char *dest, int timeout)
 {
 	int res;
-	struct sip_pvt *p;
+	struct sip_pvt *p = ast->tech_pvt;	/* chan is locked, so the reference cannot go away */
 	struct varshead *headp;
 	struct ast_var_t *current;
 	const char *referer = NULL;   /* SIP referrer */	
 
-	p = ast->tech_pvt;
 	if ((ast->_state != AST_STATE_DOWN) && (ast->_state != AST_STATE_RESERVED)) {
 		ast_log(LOG_WARNING, "sip_call called on %s, neither down nor reserved\n", ast->name);
 		return -1;
@@ -3420,7 +3454,7 @@ static int sip_call(struct ast_channel *ast, char *dest, int timeout)
 		p->invitestate = INV_CALLING;
 	
 		/* Initialize auto-congest time */
-		p->initid = ast_sched_add(sched, SIP_TRANS_TIMEOUT, auto_congest, p);
+		p->initid = ast_sched_add(sched, SIP_TRANS_TIMEOUT, auto_congest, dialog_ref(p));
 	}
 
 	return res;
@@ -3466,7 +3500,7 @@ static void __sip_destroy(struct sip_pvt *p, int lockowner, int lockdialoglist)
 
 	/* Remove link from peer to subscription of MWI */
 	if (p->relatedpeer && p->relatedpeer->mwipvt) 
-		p->relatedpeer->mwipvt = NULL;
+		p->relatedpeer->mwipvt = dialog_unref(p->relatedpeer->mwipvt);
 
 	if (dumphistory)
 		sip_dump_history(p);
@@ -3498,7 +3532,7 @@ static void __sip_destroy(struct sip_pvt *p, int lockowner, int lockdialoglist)
 	if (p->registry) {
 		if (p->registry->call == p)
 			p->registry->call = NULL;
-		registry_unref(p->registry);
+		p->registry = registry_unref(p->registry);
 	}
 
 	/* Unlink us from the owner if we have one */
@@ -3540,6 +3574,7 @@ static void __sip_destroy(struct sip_pvt *p, int lockowner, int lockdialoglist)
 		p->packets = p->packets->next;
 		if (cp->retransid > -1)
 			ast_sched_del(sched, cp->retransid);
+		dialog_unref(cp->owner);
 		ast_free(cp);
 	}
 	if (p->chanvars) {
@@ -3873,7 +3908,7 @@ static int sip_hangup(struct ast_channel *ast)
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 		ast_clear_flag(&p->flags[0], SIP_DEFER_BYE_ON_TRANSFER);	/* Really hang up next time */
 		p->needdestroy = 0;
-		p->owner->tech_pvt = NULL;
+		p->owner->tech_pvt = dialog_unref(p->owner->tech_pvt);
 		p->owner = NULL;  /* Owner will be gone after we return, so take it away */
 		return 0;
 	}
@@ -3914,7 +3949,7 @@ static int sip_hangup(struct ast_channel *ast)
 		ast_dsp_free(p->vad);
 
 	p->owner = NULL;
-	ast->tech_pvt = NULL;
+	ast->tech_pvt = dialog_unref(ast->tech_pvt);
 
 	ast_module_unref(ast_module_info->self);
 	/* Do not destroy this pvt until we have timeout or
@@ -4461,7 +4496,7 @@ static struct ast_channel *sip_new(struct sip_pvt *i, int state, const char *tit
 	tmp->rawwriteformat = fmt;
 	tmp->readformat = fmt;
 	tmp->rawreadformat = fmt;
-	tmp->tech_pvt = i;
+	tmp->tech_pvt = dialog_ref(i);
 
 	tmp->callgroup = i->callgroup;
 	tmp->pickupgroup = i->pickupgroup;
@@ -4935,7 +4970,7 @@ static struct sip_pvt *sip_alloc(ast_string_field callid, struct sockaddr_in *si
 	/* Add to active dialog list */
 	dialoglist_lock();
 	p->next = dialoglist;
-	dialoglist = p;
+	dialoglist = dialog_ref(p);
 	dialoglist_unlock();
 	ast_debug(1, "Allocating new SIP dialog for %s - %s (%s)\n", callid ? callid : "(No Call-ID)", sip_methods[intended_method].text, p->rtp ? "With RTP" : "No RTP");
 	return p;
@@ -7960,17 +7995,18 @@ static int sip_reg_timeout(void *data)
 		/* Unlink us, destroy old call.  Locking is not relevant here because all this happens
 		   in the single SIP manager thread. */
 		p = r->call;
-		if (p->registry) {
-			registry_unref(p->registry);
-			p->registry = NULL;
-		}
-		r->call = NULL;
 		p->needdestroy = 1;
 		/* Pretend to ACK anything just in case */
 		__sip_pretend_ack(p); /* XXX we need p locked, not sure we have */
+
+		/* decouple the two objects */
+		/* p->registry == r, so r has 2 refs, and the unref won't take the object away */
+		if (p->registry)
+			p->registry = registry_unref(p->registry);
+		r->call = dialog_unref(r->call);
 	}
 	/* If we have a limit, stop registration and give up */
-	if (global_regattempts_max && (r->regattempts > global_regattempts_max)) {
+	if (global_regattempts_max && r->regattempts > global_regattempts_max) {
 		/* Ok, enough is enough. Don't try any more */
 		/* We could add an external notification here... 
 			steal it from app_voicemail :-) */
@@ -8019,7 +8055,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 			build_callid_registry(r, internip.sin_addr, default_fromdomain);
 			r->callid_valid = TRUE;
 		}
-		/* Allocate SIP packet for registration */
+		/* Allocate SIP dialog for registration */
 		if (!(p = sip_alloc( r->callid, NULL, 0, SIP_REGISTER))) {
 			ast_log(LOG_WARNING, "Unable to allocate registration transaction (memory or socket error)\n");
 			return 0;
@@ -8052,7 +8088,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 		else 	/* Set registry port to the port set from the peer definition/srv or default */
 			r->portno = ntohs(p->sa.sin_port);
 		ast_set_flag(&p->flags[0], SIP_OUTGOING);	/* Registration is outgoing call */
-		r->call=p;			/* Save pointer to SIP packet */
+		r->call = dialog_ref(p);		/* Save pointer to SIP dialog */
 		p->registry = registry_addref(r);	/* Add pointer to registry in packet */
 		if (!ast_strlen_zero(r->secret))	/* Secret (password) */
 			ast_string_field_set(p, peersecret, r->secret);
@@ -8158,8 +8194,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 		ast_string_field_set(p, domain, r->domain);
 		ast_string_field_set(p, opaque, r->opaque);
 		ast_string_field_set(p, qop, r->qop);
-		r->noncecount++;
-		p->noncecount = r->noncecount;
+		p->noncecount = ++r->noncecount;
 
 		memset(digest,0,sizeof(digest));
 		if(!build_reply_digest(p, sipmethod, digest, sizeof(digest)))
@@ -8366,13 +8401,9 @@ static int transmit_request_with_auth(struct sip_pvt *p, int sipmethod, int seqn
 /*! \brief Remove registration data from realtime database or AST/DB when registration expires */
 static void destroy_association(struct sip_peer *peer)
 {
-	int realtimeregs;
-	char *tablename;
-	realtimeregs = ast_check_realtime("sipregs");
-	if (realtimeregs)
-		tablename = "sipregs";
-	else
-		tablename = "sippeers";
+	int realtimeregs = ast_check_realtime("sipregs");
+	char *tablename = (realtimeregs) ? "sipregs" : "sippeers";
+
 	if (!ast_test_flag(&global_flags[1], SIP_PAGE2_IGNOREREGEXPIRE)) {
 		if (ast_test_flag(&peer->flags[1], SIP_PAGE2_RT_FROMCONTACT))
 			ast_update_realtime(tablename, "name", peer->name, "fullcontact", "", "ipaddr", "", "port", "", "regseconds", "0", "username", "", "regserver", "", NULL);
@@ -9691,7 +9722,7 @@ static int get_also_info(struct sip_pvt *p, struct sip_request *oreq)
 		ast_copy_string(referdata->refer_to, c, sizeof(referdata->refer_to));
 		ast_copy_string(referdata->referred_by, "", sizeof(referdata->referred_by));
 		ast_copy_string(referdata->refer_contact, "", sizeof(referdata->refer_contact));
-		referdata->refer_call = NULL;
+		referdata->refer_call = dialog_unref(referdata->refer_call);
 		/* Set new context */
 		ast_string_field_set(p, context, transfer_context);
 		return 0;
@@ -12153,6 +12184,7 @@ static int sip_notify(int fd, int argc, char *argv[])
 		ast_cli(fd, "Sending NOTIFY of type '%s' to '%s'\n", argv[2], argv[i]);
 		transmit_sip_request(p, &req);
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
+		dialog_unref(p);
 	}
 
 	return RESULT_SUCCESS;
@@ -13297,7 +13329,7 @@ static void handle_response_peerpoke(struct sip_pvt *p, int resp, struct sip_req
 		|| was_reachable != is_reachable;
 
 	peer->lastms = pingtime;
-	peer->call = NULL;
+	peer->call = dialog_unref(peer->call);
 	if (statechanged) {
 		const char *s = is_reachable ? "Reachable" : "Lagged";
 
@@ -14285,7 +14317,7 @@ static int handle_invite_replaces(struct sip_pvt *p, struct sip_request *req, in
 	sip_pvt_unlock(p);	/* Unlock SIP structure */
 
 	/* The call should be down with no ast_channel, so hang it up */
-	c->tech_pvt = NULL;
+	c->tech_pvt = dialog_unref(c->tech_pvt);
 	ast_hangup(c);
 	return 0;
 }
@@ -14424,7 +14456,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 
 		if (p->refer->refer_call == p) {
 			ast_log(LOG_NOTICE, "INVITE with replaces into it's own call id (%s == %s)!\n", replace_id, p->callid);
-			p->refer->refer_call = NULL;
+			p->refer->refer_call = dialog_unref(p->refer->refer_call);
 			transmit_response(p, "400 Bad request", req);	/* The best way to not not accept the transfer */
 			error = 1;
 		}
@@ -16139,7 +16171,7 @@ static int sip_send_mwi_to_peer(struct sip_peer *peer, const struct ast_event *e
 	
 	if (peer->mwipvt) {
 		/* Base message on subscription */
-		p = peer->mwipvt;
+		p = dialog_ref(peer->mwipvt);
 	} else {
 		/* Build temporary dialog for this message */
 		if (!(p = sip_alloc(NULL, NULL, 0, SIP_NOTIFY))) 
