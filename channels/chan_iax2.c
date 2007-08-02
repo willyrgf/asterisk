@@ -5943,7 +5943,8 @@ static void vnak_retransmit(int callno, int last)
 	AST_LIST_TRAVERSE(&iaxq.queue, f, list) {
 		/* Send a copy immediately */
 		if ((f->callno == callno) && iaxs[f->callno] &&
-			((unsigned char ) (f->oseqno - last) < 128)) {
+			((unsigned char ) (f->oseqno - last) < 128) &&
+			(f->retries >= 0)) {
 			send_packet(f);
 		}
 	}
@@ -7873,14 +7874,29 @@ static void *iax2_process_thread(void *data)
 			ts.tv_sec = tv.tv_sec;
 			ts.tv_nsec = tv.tv_usec * 1000;
 			if (ast_cond_timedwait(&thread->cond, &thread->lock, &ts) == ETIMEDOUT) {
-				ast_mutex_unlock(&thread->lock);
+				/* This thread was never put back into the available dynamic
+				 * thread list, so just go away. */
+				if (!put_into_idle) {
+					ast_mutex_unlock(&thread->lock);
+					break;
+				}
 				AST_LIST_LOCK(&dynamic_list);
 				/* Account for the case where this thread is acquired *right* after a timeout */
 				if ((t = AST_LIST_REMOVE(&dynamic_list, thread, list)))
 					iaxdynamicthreadcount--;
 				AST_LIST_UNLOCK(&dynamic_list);
-				if (t)
-					break;		/* exiting the main loop */
+				if (t) {
+					/* This dynamic thread timed out waiting for a task and was
+					 * not acquired immediately after the timeout, 
+					 * so it's time to go away. */
+					ast_mutex_unlock(&thread->lock);
+					break;
+				}
+				/* Someone grabbed our thread *right* after we timed out.
+				 * Wait for them to set us up with something to do and signal
+				 * us to continue. */
+				ast_cond_timedwait(&thread->cond, &thread->lock, &ts);
+				ast_mutex_unlock(&thread->lock);
 			}
 			if (!t)
 				ast_mutex_unlock(&thread->lock);
