@@ -284,7 +284,25 @@ AC_CHECK_FUNCS([asprintf atexit bzero dup2 endpwent floor ftruncate getcwd getho
 AC_CHECK_FUNCS([funopen fopencookie])
 
 # some systems already have gethostbyname_r so we don't need to build ours in main/utils.c
-AC_CHECK_FUNCS([gethostbyname_r])
+AC_SEARCH_LIBS(gethostbyname_r, [socket nsl])
+
+AC_MSG_CHECKING(for gethostbyname_r with 6 arguments)
+AC_LINK_IFELSE(
+        AC_LANG_PROGRAM([#include <netdb.h>],
+                        [struct hostent *he = gethostbyname_r((const char *)NULL, (struct hostent *)NULL, (char *)NULL, (int)0, (struct hostent **)NULL, (int *)NULL);]),
+        AC_MSG_RESULT(yes)
+        AC_DEFINE([HAVE_GETHOSTBYNAME_R_6], 1, [Define to 1 if your system has gethostbyname_r with 6 arguments.]),
+        AC_MSG_RESULT(no)
+)
+
+AC_MSG_CHECKING(for gethostbyname_r with 5 arguments)
+AC_LINK_IFELSE(
+        AC_LANG_PROGRAM([#include <netdb.h>],
+                        [struct hostent *he = gethostbyname_r((const char *)NULL, (struct hostent *)NULL, (char *)NULL, (int)0, (int *)NULL);]),
+        AC_MSG_RESULT(yes)
+        AC_DEFINE([HAVE_GETHOSTBYNAME_R_5], 1, [Define to 1 if your system has gethostbyname_r with 5 arguments.]),
+        AC_MSG_RESULT(no)
+)
 
 AC_CHECK_HEADER([byteswap.h], [AC_DEFINE_UNQUOTED([HAVE_BYTESWAP_H], 1, [Define to 1 if byteswap.h macros are available.])])
 
@@ -304,7 +322,10 @@ AC_DEFINE([HAVE_SYS_ENDIAN_BSWAP16], 1, [Define to 1 if your sys/endian.h header
 AC_MSG_RESULT(no)
 )
 
-AC_CHECK_FILE(/dev/urandom, AC_DEFINE([HAVE_DEV_URANDOM], 1, [Define to 1 if your system has /dev/urandom.]))
+if test "${cross_compiling}" = "no";
+then
+  AC_CHECK_FILE(/dev/urandom, AC_DEFINE([HAVE_DEV_URANDOM], 1, [Define to 1 if your system has /dev/urandom.]))
+fi
 
 AST_C_DEFINE_CHECK([PTHREAD_RWLOCK_INITIALIZER], [PTHREAD_RWLOCK_INITIALIZER], [pthread.h])
 AST_C_DEFINE_CHECK([PTHREAD_RWLOCK_PREFER_WRITER_NP], [PTHREAD_RWLOCK_PREFER_WRITER_NP], [pthread.h])
@@ -361,7 +382,7 @@ AC_SUBST(AST_DECLARATION_AFTER_STATEMENT)
 AC_MSG_CHECKING(for sysinfo)
 AC_LINK_IFELSE(
         AC_LANG_PROGRAM([#include <sys/sysinfo.h>],
-                        [struct sysinfo sys_info;]),
+                        [struct sysinfo sys_info; int uptime = sys_info.uptime]),
         AC_MSG_RESULT(yes)
         AC_DEFINE([HAVE_SYSINFO], 1, [Define to 1 if your system has sysinfo support]),
         AC_MSG_RESULT(no)

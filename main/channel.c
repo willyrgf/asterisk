@@ -929,11 +929,13 @@ static struct ast_channel *channel_find_locked(const struct ast_channel *prev,
 	const char *msg = prev ? "deadlock" : "initial deadlock";
 	int retries;
 	struct ast_channel *c;
+	const struct ast_channel *_prev = prev;
 
 	for (retries = 0; retries < 10; retries++) {
 		int done;
 		AST_RWLIST_RDLOCK(&channels);
 		AST_RWLIST_TRAVERSE(&channels, c, chan_list) {
+			prev = _prev;
 			if (prev) {	/* look for next item */
 				if (c != prev)	/* not this one */
 					continue;
@@ -947,6 +949,7 @@ static struct ast_channel *channel_find_locked(const struct ast_channel *prev,
 				/* We want prev to be NULL in case we end up doing more searching through
 				 * the channel list to find the channel (ie: name searching). If we didn't
 				 * set this to NULL the logic would just blow up
+				 * XXX Need a better explanation for this ...
 				 */
 			}
 			if (name) { /* want match by name */
@@ -988,6 +991,11 @@ static struct ast_channel *channel_find_locked(const struct ast_channel *prev,
 		AST_RWLIST_UNLOCK(&channels);
 		if (done)
 			return c;
+		/* If we reach this point we basically tried to lock a channel and failed. Instead of
+		 * starting from the beginning of the list we can restore our saved pointer to the previous
+		 * channel and start from there.
+		 */
+		prev = _prev;
 		usleep(1);	/* give other threads a chance before retrying */
 	}
 
@@ -3107,7 +3115,7 @@ struct ast_channel *ast_request(const char *type, int format, void *data, int *c
 		fmt = format & AST_FORMAT_AUDIO_MASK;
 		res = ast_translator_best_choice(&fmt, &capabilities);
 		if (res < 0) {
-			ast_log(LOG_WARNING, "No translator path exists for channel type %s (native %d) to %d\n", type, chan->tech->capabilities, format);
+			ast_log(LOG_WARNING, "No translator path exists for channel type %s (native 0x%x) to 0x%x\n", type, chan->tech->capabilities, format);
 			*cause = AST_CAUSE_BEARERCAPABILITY_NOTAVAIL;
 			AST_RWLIST_UNLOCK(&channels);
 			return NULL;

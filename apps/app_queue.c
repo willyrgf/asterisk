@@ -130,7 +130,7 @@ static char *app = "Queue";
 static char *synopsis = "Queue a call for a call queue";
 
 static char *descrip =
-"  Queue(queuename[|options[|URL][|announceoverride][|timeout][|AGI][|macro][|gosub]):\n"
+"  Queue(queuename[,options[,URL][,announceoverride][,timeout][,AGI][,macro][,gosub]):\n"
 "Queues an incoming call in a particular call queue as defined in queues.conf.\n"
 "This application will return to the dialplan if the queue does not exist, or\n"
 "any of the join options cause the caller to not enter the queue.\n"
@@ -167,33 +167,33 @@ static char *descrip =
 static char *app_aqm = "AddQueueMember" ;
 static char *app_aqm_synopsis = "Dynamically adds queue members" ;
 static char *app_aqm_descrip =
-"   AddQueueMember(queuename[|interface[|penalty[|options[|membername]]]]):\n"
+"   AddQueueMember(queuename[,interface[,penalty[,options[,membername]]]]):\n"
 "Dynamically adds interface to an existing queue.\n"
 "If the interface is already in the queue it will return an error.\n"
 "  This application sets the following channel variable upon completion:\n"
 "     AQMSTATUS    The status of the attempt to add a queue member as a \n"
 "                     text string, one of\n"
 "           ADDED | MEMBERALREADY | NOSUCHQUEUE \n"
-"Example: AddQueueMember(techsupport|SIP/3000)\n"
+"Example: AddQueueMember(techsupport,SIP/3000)\n"
 "";
 
 static char *app_rqm = "RemoveQueueMember" ;
 static char *app_rqm_synopsis = "Dynamically removes queue members" ;
 static char *app_rqm_descrip =
-"   RemoveQueueMember(queuename[|interface[|options]]):\n"
+"   RemoveQueueMember(queuename[,interface[,options]]):\n"
 "Dynamically removes interface to an existing queue\n"
 "If the interface is NOT in the queue it will return an error.\n"
 "  This application sets the following channel variable upon completion:\n"
 "     RQMSTATUS      The status of the attempt to remove a queue member as a\n"
 "                     text string, one of\n"
 "           REMOVED | NOTINQUEUE | NOSUCHQUEUE \n"
-"Example: RemoveQueueMember(techsupport|SIP/3000)\n"
+"Example: RemoveQueueMember(techsupport,SIP/3000)\n"
 "";
 
 static char *app_pqm = "PauseQueueMember" ;
 static char *app_pqm_synopsis = "Pauses a queue member" ;
 static char *app_pqm_descrip =
-"   PauseQueueMember([queuename]|interface[|options]):\n"
+"   PauseQueueMember([queuename],interface[,options]):\n"
 "Pauses (blocks calls for) a queue member.\n"
 "The given interface will be paused in the given queue.  This prevents\n"
 "any calls from being sent from the queue to the interface until it is\n"
@@ -204,12 +204,12 @@ static char *app_pqm_descrip =
 "     PQMSTATUS      The status of the attempt to pause a queue member as a\n"
 "                     text string, one of\n"
 "           PAUSED | NOTFOUND\n"
-"Example: PauseQueueMember(|SIP/3000)\n";
+"Example: PauseQueueMember(,SIP/3000)\n";
 
 static char *app_upqm = "UnpauseQueueMember" ;
 static char *app_upqm_synopsis = "Unpauses a queue member" ;
 static char *app_upqm_descrip =
-"   UnpauseQueueMember([queuename]|interface[|options]):\n"
+"   UnpauseQueueMember([queuename],interface[,options]):\n"
 "Unpauses (resumes calls to) a queue member.\n"
 "This is the counterpart to PauseQueueMember and operates exactly the\n"
 "same way, except it unpauses instead of pausing the given interface.\n"
@@ -217,14 +217,14 @@ static char *app_upqm_descrip =
 "     UPQMSTATUS       The status of the attempt to unpause a queue \n"
 "                      member as a text string, one of\n"
 "            UNPAUSED | NOTFOUND\n"
-"Example: UnpauseQueueMember(|SIP/3000)\n";
+"Example: UnpauseQueueMember(,SIP/3000)\n";
 
 static char *app_ql = "QueueLog" ;
 static char *app_ql_synopsis = "Writes to the queue_log" ;
 static char *app_ql_descrip =
-"   QueueLog(queuename|uniqueid|agent|event[|additionalinfo]):\n"
+"   QueueLog(queuename,uniqueid,agent,event[,additionalinfo]):\n"
 "Allows you to write your own events into the queue log\n"
-"Example: QueueLog(101|${UNIQUEID}|${AGENT}|WENTONBREAK|600)\n";
+"Example: QueueLog(101,${UNIQUEID},${AGENT},WENTONBREAK,600)\n";
 
 /*! \brief Persistent Members astdb family */
 static const char *pm_family = "Queue/PersistentMembers";
@@ -1256,6 +1256,56 @@ static struct call_queue *load_realtime_queue(const char *queuename)
 		AST_LIST_UNLOCK(&queues);
 	}
 	return q;
+}
+
+static void update_realtime_members(struct call_queue *q)
+{
+	struct ast_config *member_config = NULL;
+	struct member *m, *prev_m, *next_m;
+	char *interface = NULL;
+
+	member_config = ast_load_realtime_multientry("queue_members", "interface LIKE", "%", "queue_name", q->name , NULL);
+	if (!member_config) {
+		/*This queue doesn't have realtime members*/
+		ast_debug(3, "Queue %s has no realtime members defined. No need for update\n", q->name);
+		return;
+	}
+
+	ast_mutex_lock(&q->lock);
+	
+	/* Temporarily set non-dynamic members dead so we can detect deleted ones.*/ 
+	for (m = q->members; m; m = m->next) {
+		if (!m->dynamic)
+			m->dead = 1;
+	}
+
+	while ((interface = ast_category_browse(member_config, interface))) {
+		rt_handle_member_record(q, interface,
+			S_OR(ast_variable_retrieve(member_config, interface, "membername"), interface),
+			ast_variable_retrieve(member_config, interface, "penalty"),
+			ast_variable_retrieve(member_config, interface, "paused"));
+	}
+
+	/* Delete all realtime members that have been deleted in DB. */
+	m = q->members;
+	prev_m = NULL;
+	while (m) {
+		next_m = m->next;
+		if (m->dead) {
+			if (prev_m) {
+				prev_m->next = next_m;
+			} else {
+				q->members = next_m;
+			}
+			remove_from_interfaces(m->interface);
+			q->membercount--;
+			free(m);
+		} else {
+			prev_m = m;
+		}
+		m = next_m;
+	}
+	ast_mutex_unlock(&q->lock);
 }
 
 static int join_queue(char *queuename, struct queue_ent *qe, enum queue_result *reason)
@@ -2410,7 +2460,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 {
 	struct member *cur;
 	struct callattempt *outgoing = NULL; /* the list of calls we are building */
-	int to;
+	int to, orig;
 	char oldexten[AST_MAX_EXTENSION]="";
 	char oldcontext[AST_MAX_CONTEXT]="";
 	char queuename[256]="";
@@ -2444,6 +2494,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 	char vars[2048];
 	int forwardsallowed = 1;
 	int callcompletedinsl;
+	int noption = 0;
 
 	memset(&bridge_config, 0, sizeof(bridge_config));
 	time(&now);
@@ -2476,11 +2527,15 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 				(*go_on)++;
 			else
 				*go_on = qe->parent->membercount;
+			noption = 1;
 			break;
 		case 'i':
 			forwardsallowed = 0;
 			break;
 		}
+
+	if(!noption)
+		*go_on = -1;
 
 	/* Hold the lock while we setup the outgoing calls */
 	if (use_weight)
@@ -2528,6 +2583,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 		to = (qe->expire - now) * 1000;
 	else
 		to = (qe->parent->timeout) ? qe->parent->timeout * 1000 : -1;
+	orig = to;
 	ring_one(qe, outgoing, &numbusies);
 	ast_mutex_unlock(&qe->parent->lock);
 	if (use_weight)
@@ -2596,7 +2652,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 				}
 			}
 			res2 |= ast_autoservice_stop(qe->chan);
-			if (peer->_softhangup) {
+			if (ast_check_hangup(peer)) {
 				/* Agent must have hung up */
 				ast_log(LOG_WARNING, "Agent on %s hungup on the customer.\n", peer->name);
 				ast_queue_log(queuename, qe->chan->uniqueid, member->membername, "AGENTDUMP", "%s", "");
@@ -2863,7 +2919,8 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 			} else
 				ast_log(LOG_WARNING, "Asked to execute an AGI on this channel, but could not find application (agi)!\n");
 		}
-		ast_queue_log(queuename, qe->chan->uniqueid, member->membername, "CONNECT", "%ld|%s", (long) time(NULL) - qe->start, peer->uniqueid);
+		ast_queue_log(queuename, qe->chan->uniqueid, member->membername, "CONNECT", "%ld|%s|%ld", (long) time(NULL) - qe->start, peer->uniqueid,
+													(long)(orig - to > 0 ? (orig - to) / 1000 : 0));
 		if (qe->parent->eventwhencalled)
 			manager_event(EVENT_FLAG_AGENT, "AgentConnect",
 					"Queue: %s\r\n"
@@ -2873,9 +2930,10 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 					"MemberName: %s\r\n"
 					"Holdtime: %ld\r\n"
 					"BridgedChannel: %s\r\n"
+					"Ringtime: %ld\r\n"
 					"%s",
 					queuename, qe->chan->uniqueid, peer->name, member->interface, member->membername,
-					(long) time(NULL) - qe->start, peer->uniqueid,
+					(long) time(NULL) - qe->start, peer->uniqueid, (long)(orig - to > 0 ? (orig - to) / 1000 : 0),
 					qe->parent->eventwhencalled == QUEUE_EVENT_VARIABLES ? vars2manager(qe->chan, vars, sizeof(vars)) : "");
 		ast_copy_string(oldcontext, qe->chan->context, sizeof(oldcontext));
 		ast_copy_string(oldexten, qe->chan->exten, sizeof(oldexten));
@@ -2888,7 +2946,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 				qe->chan->exten, qe->chan->context, (long) (callstart - qe->start),
 				(long) (time(NULL) - callstart));
 			send_agent_complete(qe, queuename, peer, member, callstart, vars, sizeof(vars), TRANSFER);
-		} else if (qe->chan->_softhangup) {
+		} else if (ast_check_hangup(qe->chan)) {
 			ast_queue_log(queuename, qe->chan->uniqueid, member->membername, "COMPLETECALLER", "%ld|%ld|%d",
 				(long) (callstart - qe->start), (long) (time(NULL) - callstart), qe->opos);
 			send_agent_complete(qe, queuename, peer, member, callstart, vars, sizeof(vars), CALLER);
@@ -3623,6 +3681,9 @@ check_turns:
 				ast_queue_log(qe.parent->name, qe.chan->uniqueid,"NONE", "EXITWITHTIMEOUT", "%d|%d|%ld", qe.pos, qe.opos, (long) time(NULL) - qe.start);
 				break;
 			}
+
+			/* If using dynamic realtime members, we should regenerate the member list for this queue */
+			update_realtime_members(qe.parent);
 
 			/* OK, we didn't get anybody; wait for 'retry' seconds; may get a digit to exit with */
 			res = wait_a_bit(&qe);

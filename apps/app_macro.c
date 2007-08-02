@@ -51,7 +51,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define MACRO_EXIT_RESULT 1024
 
 static char *descrip =
-"  Macro(macroname|arg1|arg2...): Executes a macro using the context\n"
+"  Macro(macroname,arg1,arg2...): Executes a macro using the context\n"
 "'macro-<macroname>', jumping to the 's' extension of that context and\n"
 "executing each step, then returning when the steps end. \n"
 "The calling extension, context, and priority are stored in ${MACRO_EXTEN}, \n"
@@ -76,13 +76,13 @@ static char *descrip =
 "         (now allows arguments like a Macro) with explict Return() calls instead.\n";
 
 static char *if_descrip =
-"  MacroIf(<expr>?macroname_a[|arg1][:macroname_b[|arg1]])\n"
+"  MacroIf(<expr>?macroname_a[,arg1][:macroname_b[,arg1]])\n"
 "Executes macro defined in <macroname_a> if <expr> is true\n"
 "(otherwise <macroname_b> if provided)\n"
 "Arguments and return values as in application macro()\n";
 
 static char *exclusive_descrip =
-"  MacroExclusive(macroname|arg1|arg2...):\n"
+"  MacroExclusive(macroname,arg1,arg2...):\n"
 "Executes macro defined in the context 'macro-macroname'\n"
 "Only one call at a time may run the macro.\n"
 "(we'll wait if another call is busy executing in the Macro)\n"
@@ -168,7 +168,7 @@ static int _macro_exec(struct ast_channel *chan, void *data, int exclusive)
 	char *save_macro_offset;
  
 	if (ast_strlen_zero(data)) {
-		ast_log(LOG_WARNING, "Macro() requires arguments. See \"show application macro\" for help.\n");
+		ast_log(LOG_WARNING, "Macro() requires arguments. See \"core show application macro\" for help.\n");
 		return -1;
 	}
 
@@ -385,7 +385,7 @@ static int _macro_exec(struct ast_channel *chan, void *data, int exclusive)
 		}
 
 		/* don't stop executing extensions when we're in "h" */
-		if (chan->_softhangup && !inhangup) {
+		if (ast_check_hangup(chan) && !inhangup) {
 			ast_debug(1, "Extension %s, macroexten %s, priority %d returned normally even though call was hung up\n", chan->exten, chan->macroexten, chan->priority);
 			goto out;
 		}
@@ -434,7 +434,7 @@ static int _macro_exec(struct ast_channel *chan, void *data, int exclusive)
   		/* If we're leaving the macro normally, restore original information */
 		chan->priority = oldpriority;
 		ast_copy_string(chan->context, oldcontext, sizeof(chan->context));
-		if (!(chan->_softhangup & AST_SOFTHANGUP_ASYNCGOTO)) {
+		if (!(ast_check_hangup(chan) & AST_SOFTHANGUP_ASYNCGOTO)) {
 			/* Copy the extension, so long as we're not in softhangup, where we could be given an asyncgoto */
 			const char *offsets;
 			ast_copy_string(chan->exten, oldexten, sizeof(chan->exten));
@@ -493,9 +493,9 @@ static int macroif_exec(struct ast_channel *chan, void *data)
 			label_b++;
 		}
 		if (pbx_checkcondition(expr))
-			macro_exec(chan, label_a);
+			res = macro_exec(chan, label_a);
 		else if (label_b) 
-			macro_exec(chan, label_b);
+			res = macro_exec(chan, label_b);
 	} else
 		ast_log(LOG_WARNING, "Invalid Syntax.\n");
 

@@ -736,17 +736,15 @@ static int builtin_blindtransfer(struct ast_channel *chan, struct ast_channel *p
 			ast_cdr_setdestchan(transferer->cdr, transferee->name);
 			ast_cdr_setapp(transferer->cdr, "BLINDTRANSFER","");
 		}
-		if (!transferee->pbx) {
-			/* Doh!  Use our handy async_goto functions */
-			ast_verb(3, "Transferring %s to '%s' (context %s) priority 1\n"
-								,transferee->name, xferto, transferer_real_context);
-			if (ast_async_goto(transferee, transferer_real_context, xferto, 1))
-				ast_log(LOG_WARNING, "Async goto failed :-(\n");
+
+		if (!transferee->pbx)
 			res = -1;
-		} else {
-			/* Set the channel's new extension, since it exists, using transferer context */
-			set_c_e_p(transferee, transferer_real_context, xferto, 0);
-		}
+		
+		/* Doh!  Use our handy async_goto functions */
+		ast_verb(3, "Transferring %s to '%s' (context %s) priority 1\n"
+			 ,transferee->name, xferto, transferer_real_context);
+		if (ast_async_goto(transferee, transferer_real_context, xferto, 1))
+			ast_log(LOG_WARNING, "Async goto failed :-(\n");
 		check_goto_on_transfer(transferer);
 		return res;
 	} else {
@@ -856,7 +854,7 @@ static int builtin_atxfer(struct ast_channel *chan, struct ast_channel *peer, st
 		ast_set_flag(&(bconfig.features_caller), AST_FEATURE_DISCONNECT);
 		ast_set_flag(&(bconfig.features_callee), AST_FEATURE_DISCONNECT);
 		res = ast_bridge_call(transferer, newchan, &bconfig);
-		if (newchan->_softhangup || !transferer->_softhangup) {
+		if (ast_check_hangup(newchan) || !ast_check_hangup(transferer)) {
 			ast_hangup(newchan);
 			if (ast_stream_and_wait(transferer, xfersound, ""))
 				ast_log(LOG_WARNING, "Failed to play transfer sound!\n");
@@ -1452,7 +1450,7 @@ static struct ast_channel *ast_feature_request_and_dial(struct ast_channel *call
 			x = 0;
 			started = ast_tvnow();
 			to = timeout;
-			while (!((transferee && transferee->_softhangup) && (!igncallerstate && ast_check_hangup(caller))) && timeout && (chan->_state != AST_STATE_UP)) {
+			while (!((transferee && ast_check_hangup(transferee)) && (!igncallerstate && ast_check_hangup(caller))) && timeout && (chan->_state != AST_STATE_UP)) {
 				struct ast_frame *f = NULL;
 
 				monitor_chans[0] = caller;
@@ -1506,7 +1504,7 @@ static struct ast_channel *ast_feature_request_and_dial(struct ast_channel *call
 					f = ast_read(caller);
 					if (f == NULL) { /*doh! where'd he go?*/
 						if (!igncallerstate) {
-							if (caller->_softhangup && !chan->_softhangup) {
+							if (ast_check_hangup(caller) && !ast_check_hangup(chan)) {
 								/* make this a blind transfer */
 								ready = 1;
 								break;

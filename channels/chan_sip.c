@@ -989,6 +989,7 @@ struct sip_refer {
  * descriptors (dialoglist).
  */
 struct sip_pvt {
+	struct sip_pvt *next;			/*!< Next dialog in chain */
 	ast_mutex_t pvt_lock;			/*!< Dialog private lock */
 	enum invitestates invitestate;		/*!< Track state of SIP_INVITEs */
 	int method;				/*!< SIP method that opened this dialog */
@@ -1114,7 +1115,6 @@ struct sip_pvt {
 	struct sip_pkt *packets;		/*!< Packets scheduled for re-transmission */
 	struct sip_history_head *history;	/*!< History of this SIP dialog */
 	struct ast_variable *chanvars;		/*!< Channel variables to set for inbound call */
-	struct sip_pvt *next;			/*!< Next dialog in chain */
 	struct sip_invite_param *options;	/*!< Options for INVITE */
 	int autoframing;			/*!< The number of Asters we group in a Pyroflax
 							before strolling to the Grokyzpå
@@ -1136,6 +1136,7 @@ static struct sip_pvt *dialoglist = NULL;
 /*! \brief Protect the SIP dialog list (of sip_pvt's) */
 AST_MUTEX_DEFINE_STATIC(dialoglock);
 
+#ifndef DETECT_DEADLOCKS
 /*! \brief hide the way the list is locked/unlocked */
 static void dialoglist_lock(void)
 {
@@ -1146,6 +1147,12 @@ static void dialoglist_unlock(void)
 {
 	ast_mutex_unlock(&dialoglock);
 }
+#else
+/* we don't want to HIDE the information about where the lock was requested if trying to debug 
+ * deadlocks!  So, just make these macros! */
+#define dialoglist_lock(x) ast_mutex_lock(&dialoglock)
+#define dialoglist_unlock(x) ast_mutex_unlock(&dialoglock)
+#endif
 
 /*!
  * when we create or delete references, make sure to use these
@@ -1841,17 +1848,8 @@ static struct ast_rtp_protocol sip_rtp = {
 	get_codec: sip_get_codec,
 };
 
-/*! \brief Helper function to lock, hiding the underlying locking mechanism.  */
-static void sip_pvt_lock(struct sip_pvt *pvt)
-{
-	ast_mutex_lock(&pvt->pvt_lock);
-}
-
-/*! \brief Helper function to unlock pvt, hiding the underlying locking mechanism. */
-static void sip_pvt_unlock(struct sip_pvt *pvt)
-{
-	ast_mutex_unlock(&pvt->pvt_lock);
-}
+#define sip_pvt_lock(x) ast_mutex_lock(&x->pvt_lock)
+#define sip_pvt_unlock(x) ast_mutex_unlock(&x->pvt_lock)
 
 /*!
  * helper functions to unreference various types of objects.
@@ -2340,18 +2338,19 @@ static enum sip_result __sip_reliable_xmit(struct sip_pvt *p, int seqno, int res
 
 	if (!(pkt = ast_calloc(1, sizeof(*pkt) + len + 1)))
 		return AST_FAILURE;
+	/* copy data, add a terminator and save length */
 	memcpy(pkt->data, data, len);
-	pkt->method = sipmethod;
-	pkt->packetlen = len;
-	pkt->next = p->packets;
-	pkt->owner = dialog_ref(p);
-	pkt->seqno = seqno;
-	if (resp)
-		pkt->is_resp = 1;
 	pkt->data[len] = '\0';
+	pkt->packetlen = len;
+	/* copy other parameters from the caller */
+	pkt->method = sipmethod;
+	pkt->seqno = seqno;
+	pkt->is_resp = resp;
+	pkt->is_fatal = fatal;
+	pkt->owner = dialog_ref(p);
+	pkt->next = p->packets;
+	p->packets = pkt;
 	pkt->timer_t1 = p->timer_t1;	/* Set SIP timer T1 */
-	if (fatal)
-		pkt->is_fatal = 1;
 	if (pkt->timer_t1)
 		siptimer_a = pkt->timer_t1 * 2;
 
@@ -2359,8 +2358,6 @@ static enum sip_result __sip_reliable_xmit(struct sip_pvt *p, int seqno, int res
 	pkt->retransid = ast_sched_add_variable(sched, siptimer_a, retrans_pkt, pkt, 1);
 	if (sipdebug)
 		ast_debug(4, "*** SIP TIMER: Initalizing retransmit timer on packet: Id  #%d\n", pkt->retransid);
-	pkt->next = p->packets;
-	p->packets = pkt;
 	if (sipmethod == SIP_INVITE) {
 		/* Note this is a pending invite */
 		p->pendinginvite = seqno;
@@ -14730,6 +14727,8 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 		case AST_STATE_UP:
 			ast_debug(2, "%s: This call is UP.... \n", c->name);
 
+			transmit_response(p, "100 Trying", req);
+
 			if (p->t38.state == T38_PEER_REINVITE) {
 				struct ast_channel *bridgepeer = NULL;
 				struct sip_pvt *bridgepvt = NULL;
@@ -18648,11 +18647,11 @@ static int load_module(void)
 		return AST_MODULE_LOAD_DECLINE;
 
 	/* Prepare the version that does not require DTMF BEGIN frames.
-	 * We need to use tricks such as memcopy and casts because the variable
+	 * We need to use tricks such as memcpy and casts because the variable
 	 * has const fields.
 	 */
 	memcpy(&sip_tech_info, &sip_tech, sizeof(sip_tech));
-	*((void **)&sip_tech_info.send_digit_begin) = NULL;
+	memset((void *) &sip_tech_info.send_digit_begin, 0, sizeof(sip_tech_info.send_digit_begin));
 
 	/* Make sure we can register our sip channel type */
 	if (ast_channel_register(&sip_tech)) {

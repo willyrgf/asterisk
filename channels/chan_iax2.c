@@ -745,6 +745,7 @@ struct iax2_thread {
 	time_t checktime;
 	ast_mutex_t lock;
 	ast_cond_t cond;
+	unsigned int ready_for_signal:1;
 	/*! if this thread is processing a full frame,
 	  some information about that frame will be stored
 	  here, so we can avoid dispatching any more full
@@ -1042,13 +1043,16 @@ static struct iax2_thread *find_idle_thread(void)
 		ast_cond_destroy(&thread->cond);
 		ast_mutex_destroy(&thread->lock);
 		ast_free(thread);
-		thread = NULL;
+		return NULL;
 	}
 
 	/* this thread is not processing a full frame (since it is idle),
 	   so ensure that the field for the full frame call number is empty */
-	if (thread)
-		memset(&thread->ffinfo, 0, sizeof(thread->ffinfo));
+	memset(&thread->ffinfo, 0, sizeof(thread->ffinfo));
+
+	/* Wait for the thread to be ready before returning it to the caller */
+	while (!thread->ready_for_signal)
+		usleep(1);
 
 	return thread;
 }
@@ -1511,7 +1515,7 @@ static void destroy_firmware(struct iax_firmware *cur)
 {
 	/* Close firmware */
 	if (cur->fwh) {
-		munmap(cur->fwh, ntohl(cur->fwh->datalen) + sizeof(*(cur->fwh)));
+		munmap((void*)cur->fwh, ntohl(cur->fwh->datalen) + sizeof(*(cur->fwh)));
 	}
 	close(cur->fd);
 	ast_free(cur);
@@ -1607,7 +1611,7 @@ static int try_firmware(char *s)
 		close(fd);
 		return -1;
 	}
-	fwh = mmap(NULL, stbuf.st_size, PROT_READ, MAP_PRIVATE, fd, 0); 
+	fwh = (struct ast_iax2_firmware_header*)mmap(NULL, stbuf.st_size, PROT_READ, MAP_PRIVATE, fd, 0); 
 	if (fwh == (void *) -1) {
 		ast_log(LOG_WARNING, "mmap failed: %s\n", strerror(errno));
 		close(fd);
@@ -1618,7 +1622,7 @@ static int try_firmware(char *s)
 	MD5Final(sum, &md5);
 	if (memcmp(sum, fwh->chksum, sizeof(sum))) {
 		ast_log(LOG_WARNING, "Firmware file '%s' fails checksum\n", s);
-		munmap(fwh, stbuf.st_size);
+		munmap((void*)fwh, stbuf.st_size);
 		close(fd);
 		return -1;
 	}
@@ -1631,7 +1635,7 @@ static int try_firmware(char *s)
 				break;
 			/* This version is no newer than what we have.  Don't worry about it.
 			   We'll consider it a proper load anyhow though */
-			munmap(fwh, stbuf.st_size);
+			munmap((void*)fwh, stbuf.st_size);
 			close(fd);
 			return 0;
 		}
@@ -1644,7 +1648,7 @@ static int try_firmware(char *s)
 	
 	if (cur) {
 		if (cur->fwh)
-			munmap(cur->fwh, cur->mmaplen);
+			munmap((void*)cur->fwh, cur->mmaplen);
 		if (cur->fd > -1)
 			close(cur->fd);
 		cur->fwh = fwh;
@@ -2006,7 +2010,7 @@ static void __attempt_transmit(void *data)
 	/* Attempt to transmit the frame to the remote peer...
 	   Called without iaxsl held. */
 	struct iax_frame *f = data;
-	int freeme=0;
+	int freeme = 0;
 	int callno = f->callno;
 	/* Make sure this call is still active */
 	if (callno) 
@@ -2046,7 +2050,7 @@ static void __attempt_transmit(void *data)
 					}
 
 				}
-				freeme++;
+				freeme = 1;
 		} else {
 			/* Update it if it needs it */
 			update_packet(f);
@@ -2065,7 +2069,7 @@ static void __attempt_transmit(void *data)
 	} else {
 		/* Make sure it gets freed */
 		f->retries = -1;
-		freeme++;
+		freeme = 1;
 	}
 	if (callno)
 		ast_mutex_unlock(&iaxsl[callno]);
@@ -8369,11 +8373,15 @@ static void *iax2_process_thread(void *data)
 		/* Wait for something to signal us to be awake */
 		ast_mutex_lock(&thread->lock);
 
+		/* Flag that we're ready to accept signals */
+		thread->ready_for_signal = 1;
+		
 		/* Put into idle list if applicable */
 		if (put_into_idle)
 			insert_idle_thread(thread);
 
 		if (thread->type == IAX_THREAD_TYPE_DYNAMIC) {
+			struct iax2_thread *t = NULL;
 			/* Wait to be signalled or time out */
 			tv = ast_tvadd(ast_tvnow(), ast_samp2tv(30000, 1000));
 			ts.tv_sec = tv.tv_sec;
@@ -8381,15 +8389,19 @@ static void *iax2_process_thread(void *data)
 			if (ast_cond_timedwait(&thread->cond, &thread->lock, &ts) == ETIMEDOUT) {
 				ast_mutex_unlock(&thread->lock);
 				AST_LIST_LOCK(&dynamic_list);
-				AST_LIST_REMOVE(&dynamic_list, thread, list);
+				/* Account for the case where this thread is acquired *right* after a timeout */
+				if ((t = AST_LIST_REMOVE(&dynamic_list, thread, list)))
+					ast_atomic_fetchadd_int(&iaxdynamicthreadcount, -1);
 				AST_LIST_UNLOCK(&dynamic_list);
-				ast_atomic_dec_and_test(&iaxdynamicthreadcount);
-				break;		/* exiting the main loop */
+				if (t)
+					break;		/* exiting the main loop */
 			}
+			if (!t)
+				ast_mutex_unlock(&thread->lock);
 		} else {
 			ast_cond_wait(&thread->cond, &thread->lock);
+			ast_mutex_unlock(&thread->lock);
 		}
-		ast_mutex_unlock(&thread->lock);
 
 		/* Add ourselves to the active list now */
 		AST_LIST_LOCK(&active_list);
@@ -8839,7 +8851,7 @@ static void *network_thread(void *ignore)
 				continue;
 			}
 
-			f->sentyet++;
+			f->sentyet = 1;
 
 			if (iaxs[f->callno]) {
 				send_packet(f);
@@ -8850,7 +8862,7 @@ static void *network_thread(void *ignore)
 
 			if (f->retries < 0) {
 				/* This is not supposed to be retransmitted */
-				AST_LIST_REMOVE(&frame_queue, f, list);
+				AST_LIST_REMOVE_CURRENT(&frame_queue, list);
 				/* Free the iax frame */
 				iax_frame_free(f);
 			} else {
