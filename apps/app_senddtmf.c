@@ -60,10 +60,11 @@ static int senddtmf_exec(struct ast_channel *chan, void *vdata)
 {
 	int res = 0;
 	char *data;
-	int timeout;
+	int timeout = 0, duration = 0;
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(digits);
 		AST_APP_ARG(timeout);
+		AST_APP_ARG(duration);
 	);
 
 	if (ast_strlen_zero(vdata)) {
@@ -74,8 +75,11 @@ static int senddtmf_exec(struct ast_channel *chan, void *vdata)
 	data = ast_strdupa(vdata);
 	AST_STANDARD_APP_ARGS(args, data);
 
-	timeout = atoi(args.timeout);
-	res = ast_dtmf_stream(chan, NULL, args.digits, timeout <= 0 ? 250 : timeout);
+	if (!ast_strlen_zero(args.timeout))
+		timeout = atoi(args.timeout);
+	if (!ast_strlen_zero(args.duration))
+		duration = atoi(args.duration);
+	res = ast_dtmf_stream(chan, NULL, args.digits, timeout <= 0 ? 250 : timeout, duration);
 
 	return res;
 }
@@ -102,7 +106,7 @@ static int manager_play_dtmf(struct mansession *s, const struct message *m)
 		return 0;
 	}
 
-	ast_senddigit(chan, *digit);
+	ast_senddigit(chan, *digit, 0);
 
 	ast_mutex_unlock(&chan->lock);
 	astman_send_ack(s, m, "DTMF successfully queued");
