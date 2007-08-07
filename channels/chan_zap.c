@@ -12087,7 +12087,7 @@ static int process_zap(struct zt_chan_conf *confp, struct ast_variable *v, int r
 		} else if (!strcasecmp(v->name, "sendcalleridafter")) {
 			confp->chan.sendcalleridafter = atoi(v->value);
 		} else if (!reload){ 
-			 if (!strcasecmp(v->name, "signalling")) {
+			 if (!strcasecmp(v->name, "signalling") || !strcasecmp(v->name, "signaling")) {
 				confp->chan.outsigmod = -1;
 				if (!strcasecmp(v->value, "em")) {
 					confp->chan.sig = SIG_EM;
@@ -12215,7 +12215,7 @@ static int process_zap(struct zt_chan_conf *confp, struct ast_variable *v, int r
 				} else {
 					ast_log(LOG_ERROR, "Unknown signalling method '%s'\n", v->value);
 				}
-			 } else if (!strcasecmp(v->name, "outsignalling")) {
+			 } else if (!strcasecmp(v->name, "outsignalling") || !strcasecmp(v->name, "outsignaling")) {
 				if (!strcasecmp(v->value, "em")) {
 					confp->chan.outsigmod = SIG_EM;
 				} else if (!strcasecmp(v->value, "em_e1")) {
