@@ -1042,6 +1042,10 @@ static int uncompress_subclass(unsigned char csub)
 		return csub;
 }
 
+/*!
+ * \note This funtion calls realtime_peer -> reg_source_db -> iax2_poke_peer -> find_callno,
+ *       so do not call it with a pvt lock held.
+ */
 static struct iax2_peer *find_peer(const char *name, int realtime) 
 {
 	struct iax2_peer *peer = NULL;
@@ -1244,6 +1248,9 @@ static int make_trunk(unsigned short callno, int locked)
 	return res;
 }
 
+/*!
+ * \note Calling this function while holding another pvt lock can cause a deadlock.
+ */
 static int find_callno(unsigned short callno, unsigned short dcallno, struct sockaddr_in *sin, int new, int lockpeer, int sockfd)
 {
 	int res = 0;
@@ -2502,6 +2509,10 @@ static int iax2_fixup(struct ast_channel *oldchannel, struct ast_channel *newcha
 	return 0;
 }
 
+/*!
+ * \note This function calls reg_source_db -> iax2_poke_peer -> find_callno,
+ *       so do not call this with a pvt lock held.
+ */
 static struct iax2_peer *realtime_peer(const char *peername, struct sockaddr_in *sin)
 {
 	struct ast_variable *var;
@@ -5052,10 +5063,11 @@ static int register_verify(int callno, struct sockaddr_in *sin, struct iax_ies *
 	}
 
 	/* SLD: first call to lookup peer during registration */
+	ast_mutex_unlock(&iaxsl[callno]);
 	p = find_peer(peer, 1);
-
-	if (!p) {
-		if (authdebug)
+	ast_mutex_lock(&iaxsl[callno]);
+	if (!p || !iaxs[callno]) {
+		if (authdebug && !p)
 			ast_log(LOG_NOTICE, "No registration for peer '%s' (from %s)\n", peer, ast_inet_ntoa(sin->sin_addr));
 		return -1;
 	}
@@ -5162,8 +5174,8 @@ static int register_verify(int callno, struct sockaddr_in *sin, struct iax_ies *
 
 	if (ast_test_flag(p, IAX_TEMPONLY))
 		destroy_peer(p);
+
 	return 0;
-	
 }
 
 static int authenticate(const char *challenge, const char *secret, const char *keyn, int authmethods, struct iax_ie_data *ied, struct sockaddr_in *sin, aes_encrypt_ctx *ecx, aes_decrypt_ctx *dcx)
@@ -5219,6 +5231,10 @@ static int authenticate(const char *challenge, const char *secret, const char *k
 	return res;
 }
 
+/*!
+ * \note This function calls realtime_peer -> reg_source_db -> iax2_poke_peer -> find_callno,
+ *       so do not call this function with a pvt lock held.
+ */
 static int authenticate_reply(struct chan_iax2_pvt *p, struct sockaddr_in *sin, struct iax_ies *ies, const char *override, const char *okey)
 {
 	struct iax2_peer *peer = NULL;
@@ -5226,7 +5242,8 @@ static int authenticate_reply(struct chan_iax2_pvt *p, struct sockaddr_in *sin, 
 	int res = -1;
 	int authmethods = 0;
 	struct iax_ie_data ied;
-	
+	uint16_t callno = p->callno;
+
 	memset(&ied, 0, sizeof(ied));
 	
 	if (ies->username)
@@ -5263,10 +5280,20 @@ static int authenticate_reply(struct chan_iax2_pvt *p, struct sockaddr_in *sin, 
 		if (!peer) {
 			/* We checked our list and didn't find one.  It's unlikely, but possible, 
 			   that we're trying to authenticate *to* a realtime peer */
-			if ((peer = realtime_peer(p->peer, NULL))) {
+			const char *peer_name = ast_strdupa(p->peer);
+			ast_mutex_unlock(&iaxsl[callno]);
+			if ((peer = realtime_peer(peer_name, NULL))) {
+				ast_mutex_lock(&iaxsl[callno]);
+				if (!(p = iaxs[callno]))
+					return -1;
 				res = authenticate(p->challenge, peer->secret,peer->outkey, authmethods, &ied, sin, &p->ecx, &p->dcx);
 				if (ast_test_flag(peer, IAX_TEMPONLY))
 					destroy_peer(peer);
+			}
+			if (!peer) {
+				ast_mutex_lock(&iaxsl[callno]);
+				if (!(p = iaxs[callno]))
+					return -1;
 			}
 		}
 	}
@@ -5652,7 +5679,7 @@ static void reg_source_db(struct iax2_peer *p)
 	}
 }
 
-static int update_registry(const char *name, struct sockaddr_in *sin, int callno, char *devtype, int fd, unsigned short refresh)
+static int update_registry(struct sockaddr_in *sin, int callno, char *devtype, int fd, unsigned short refresh)
 {
 	/* Called from IAX thread only, with proper iaxsl lock */
 	struct iax_ie_data ied;
@@ -5660,22 +5687,30 @@ static int update_registry(const char *name, struct sockaddr_in *sin, int callno
 	int msgcount;
 	char data[80];
 	int version;
+	const char *peer_name;
 
 	memset(&ied, 0, sizeof(ied));
 
+	peer_name = ast_strdupa(iaxs[callno]->peer);
+
 	/* SLD: Another find_peer call during registration - this time when we are really updating our registration */
-	if (!(p = find_peer(name, 1))) {
-		ast_log(LOG_WARNING, "No such peer '%s'\n", name);
+	ast_mutex_unlock(&iaxsl[callno]);
+	if (!(p = find_peer(peer_name, 1))) {
+		ast_mutex_lock(&iaxsl[callno]);
+		ast_log(LOG_WARNING, "No such peer '%s'\n", peer_name);
 		return -1;
 	}
+	ast_mutex_lock(&iaxsl[callno]);
+	if (!iaxs[callno])
+		return -1;
 
 	if (ast_test_flag((&globalflags), IAX_RTUPDATE) && (ast_test_flag(p, IAX_TEMPONLY|IAX_RTCACHEFRIENDS))) {
 		if (sin->sin_addr.s_addr) {
 			time_t nowtime;
 			time(&nowtime);
-			realtime_update_peer(name, sin, nowtime);
+			realtime_update_peer(peer_name, sin, nowtime);
 		} else {
-			realtime_update_peer(name, sin, 0);
+			realtime_update_peer(peer_name, sin, 0);
 		}
 	}
 	if (inaddrcmp(&p->addr, sin)) {
@@ -5875,7 +5910,6 @@ static int auth_fail(int callno, int failcode)
 {
 	/* Schedule sending the authentication failure in one second, to prevent
 	   guessing */
-	ast_mutex_lock(&iaxsl[callno]);
 	if (iaxs[callno]) {
 		iaxs[callno]->authfail = failcode;
 		if (delayreject) {
@@ -5885,7 +5919,6 @@ static int auth_fail(int callno, int failcode)
 		} else
 			auth_reject((void *)(long)callno);
 	}
-	ast_mutex_unlock(&iaxsl[callno]);
 	return 0;
 }
 
@@ -7384,6 +7417,10 @@ retryowner2:
 						"I don't know how to authenticate %s to %s\n", 
 						ies.username ? ies.username : "<unknown>", ast_inet_ntoa(iaxs[fr->callno]->addr.sin_addr));
 				}
+				if (!iaxs[fr->callno]) {
+					ast_mutex_unlock(&iaxsl[fr->callno]);
+					return 1;
+				}
 				break;
 			case IAX_COMMAND_AUTHREP:
 				/* For security, always ack immediately */
@@ -7580,16 +7617,28 @@ retryowner2:
 				if (delayreject)
 					send_command_immediate(iaxs[fr->callno], AST_FRAME_IAX, IAX_COMMAND_ACK, fr->ts, NULL, 0,fr->iseqno);
 				if (register_verify(fr->callno, &sin, &ies)) {
+					if (!iaxs[fr->callno]) {
+						ast_mutex_unlock(&iaxsl[fr->callno]);
+						return 1;
+					}
 					/* Send delayed failure */
 					auth_fail(fr->callno, IAX_COMMAND_REGREJ);
 					break;
+				}
+				if (!iaxs[fr->callno]) {
+					ast_mutex_unlock(&iaxsl[fr->callno]);
+					return 1;
 				}
 				if ((ast_strlen_zero(iaxs[fr->callno]->secret) && ast_strlen_zero(iaxs[fr->callno]->inkeys)) || 
 						ast_test_flag(&iaxs[fr->callno]->state, IAX_STATE_AUTHENTICATED | IAX_STATE_UNCHANGED)) {
 					if (f.subclass == IAX_COMMAND_REGREL)
 						memset(&sin, 0, sizeof(sin));
-					if (update_registry(iaxs[fr->callno]->peer, &sin, fr->callno, ies.devicetype, fd, ies.refresh))
+					if (update_registry(&sin, fr->callno, ies.devicetype, fd, ies.refresh))
 						ast_log(LOG_WARNING, "Registry error\n");
+					if (!iaxs[fr->callno]) {
+						ast_mutex_unlock(&iaxsl[fr->callno]);
+						return 1;
+					}
 					if (ies.provverpres && ies.serviceident && sin.sin_addr.s_addr) {
 						ast_mutex_unlock(&iaxsl[fr->callno]);
 						check_provisioning(&sin, fd, ies.serviceident, ies.provver);
