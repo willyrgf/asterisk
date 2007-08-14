@@ -1934,6 +1934,12 @@ static struct ast_channel *ast_waitfor_nandfds_complex(struct ast_channel **c, i
 struct ast_channel *ast_waitfor_nandfds(struct ast_channel **c, int n, int *fds, int nfds,
 					int *exception, int *outfd, int *ms)
 {
+	/* Clear all provided values in one place. */
+	if (outfd)
+		*outfd = -99999;
+	if (exception)
+		*exception = 0;
+
 	/* If no epoll file descriptor is available resort to classic nandfds */
 	if (!n || nfds || c[0]->epfd == -1)
 		return ast_waitfor_nandfds_classic(c, n, fds, nfds, exception, outfd, ms);
@@ -1991,12 +1997,14 @@ int ast_waitfordigit_full(struct ast_channel *c, int ms, int audiofd, int cmdfd)
 	if (ast_test_flag(c, AST_FLAG_ZOMBIE) || ast_check_hangup(c))
 		return -1;
 	/* Wait for a digit, no more than ms milliseconds total. */
+	
 	while (ms) {
 		struct ast_channel *rchan;
-		int outfd;
+		int outfd=-1;
 
 		errno = 0;
 		rchan = ast_waitfor_nandfds(&c, 1, &cmdfd, (cmdfd > -1) ? 1 : 0, NULL, &outfd, &ms);
+		
 		if (!rchan && outfd < 0 && ms) {
 			if (errno == 0 || errno == EINTR)
 				continue;
@@ -2004,6 +2012,7 @@ int ast_waitfordigit_full(struct ast_channel *c, int ms, int audiofd, int cmdfd)
 			return -1;
 		} else if (outfd > -1) {
 			/* The FD we were watching has something waiting */
+			ast_log(LOG_WARNING, "The FD we were waiting for has something waiting. Waitfordigit returning numeric 1\n");
 			return 1;
 		} else if (rchan) {
 			int res;
