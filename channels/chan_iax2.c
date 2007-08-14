@@ -5758,8 +5758,11 @@ static int update_registry(struct sockaddr_in *sin, int callno, char *devtype, i
 		return -1;
 	}
 	ast_mutex_lock(&iaxsl[callno]);
-	if (!iaxs[callno])
+	if (!iaxs[callno]) {
+		if (ast_test_flag(p, IAX_TEMPONLY))
+			destroy_peer(p);
 		return -1;
+	}
 
 	if (ast_test_flag((&globalflags), IAX_RTUPDATE) && (ast_test_flag(p, IAX_TEMPONLY|IAX_RTCACHEFRIENDS))) {
 		if (sin->sin_addr.s_addr) {
@@ -5799,8 +5802,11 @@ static int update_registry(struct sockaddr_in *sin, int callno, char *devtype, i
 	}		
 
 	/* Make sure our call still exists, an INVAL at the right point may make it go away */
-	if (!iaxs[callno])
+	if (!iaxs[callno]) {
+		if (ast_test_flag(p, IAX_TEMPONLY))
+			destroy_peer(p);
 		return 0;
+	}
 
 	/* Store socket fd */
 	p->sockfd = fd;
@@ -5864,8 +5870,11 @@ static int registry_authrequest(int callno)
 	ast_mutex_unlock(&iaxsl[callno]);
 	p = find_peer(peer_name, 1);
 	ast_mutex_lock(&iaxsl[callno]);
-	if (!iaxs[callno])
+	if (!iaxs[callno]) {
+		if (p && ast_test_flag(p, IAX_TEMPONLY))
+			destroy_peer(p);
 		return -1;
+	}
 	if (p) {
 		memset(&ied, 0, sizeof(ied));
 		iax_ie_append_short(&ied, IAX_IE_AUTHMETHODS, p->authmethods);
@@ -10091,6 +10100,9 @@ static int function_iaxpeer(struct ast_channel *chan, char *cmd, char *data, cha
 			ast_copy_string(buf, ast_getformatname(codec), len);
 		}
 	}
+
+	if (ast_test_flag(peer, IAX_TEMPONLY))
+		destroy_peer(peer);
 
 	return 0;
 }
