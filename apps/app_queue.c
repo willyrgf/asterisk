@@ -3633,6 +3633,7 @@ static int queue_function_qac(struct ast_channel *chan, char *cmd, char *data, c
 	int count = 0;
 	struct call_queue *q;
 	struct ast_module_user *lu;
+	struct member *m;
 
 	buf[0] = '\0';
 	
@@ -3653,7 +3654,12 @@ static int queue_function_qac(struct ast_channel *chan, char *cmd, char *data, c
 	AST_LIST_UNLOCK(&queues);
 
 	if (q) {
-		count = q->membercount;
+		for (m = q->members; m; m = m->next) {
+			/* Count the agents who are logged in and presently answering calls */
+			if ((m->status != AST_DEVICE_UNAVAILABLE) && (m->status != AST_DEVICE_INVALID)) {
+				count++;
+			}
+		}
 		ast_mutex_unlock(&q->lock);
 	} else
 		ast_log(LOG_WARNING, "queue %s was not found\n", data);
