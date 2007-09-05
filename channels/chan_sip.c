@@ -8434,11 +8434,11 @@ static enum check_auth_result check_auth(struct sip_pvt *p, struct sip_request *
 	}
 
 	/* Ok, we have a bad username/secret pair */
-	/* Challenge again, and again, and again */
-	transmit_response_with_auth(p, response, req, p->randdata, reliable, respheader, 0);
-	sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
+	/* Tell the UAS not to re-send this authentication data, because
+	   it will continue to fail
+	*/
 
-	return AUTH_CHALLENGE_SENT;
+	return AUTH_SECRET_FAILED;
 }
 
 /*! \brief Change onhold state of a peer using a pvt structure */
@@ -8658,7 +8658,7 @@ static enum check_auth_result register_verify(struct sip_pvt *p, struct sockaddr
 				transmit_fake_auth_response(p, &p->initreq, 1);
 			} else {
 				/* URI not found */
-				if (res == AUTH_UNKNOWN_DOMAIN || res == AUTH_PEER_NOT_DYNAMIC)
+				if (res == AUTH_PEER_NOT_DYNAMIC)
 					transmit_response(p, "403 Forbidden", &p->initreq);
 				else
 					transmit_response(p, "404 Not found", &p->initreq);
@@ -15430,15 +15430,12 @@ restartsearch:
 								ast_mutex_lock(&sip->lock);
 							}
 							if (sip->owner) {
-								if (!(ast_rtp_get_bridged(sip->rtp))) {
-									ast_log(LOG_NOTICE,
-										"Disconnecting call '%s' for lack of RTP activity in %ld seconds\n",
-										sip->owner->name,
-										(long) (t - sip->lastrtprx));
-									/* Issue a softhangup */
-									ast_softhangup_nolock(sip->owner, AST_SOFTHANGUP_DEV);
-								} else
-									ast_log(LOG_NOTICE, "'%s' will not be disconnected in %ld seconds because it is directly bridged to another RTP stream\n", sip->owner->name, (long) (t - sip->lastrtprx));
+								ast_log(LOG_NOTICE,
+									"Disconnecting call '%s' for lack of RTP activity in %ld seconds\n",
+									sip->owner->name,
+									(long) (t - sip->lastrtprx));
+								/* Issue a softhangup */
+								ast_softhangup_nolock(sip->owner, AST_SOFTHANGUP_DEV);
 								ast_channel_unlock(sip->owner);
 								/* forget the timeouts for this call, since a hangup
 								   has already been requested and we don't want to
