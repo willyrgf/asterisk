@@ -654,10 +654,10 @@ static struct ast_iax2_queue {
 #define MAX_PEER_BUCKETS 1
 /* #define MAX_PEER_BUCKETS 563 */
 #endif
-static ao2_container *peers;
+static struct ao2_container *peers;
 
 #define MAX_USER_BUCKETS MAX_PEER_BUCKETS
-static ao2_container *users;
+static struct ao2_container *users;
 
 static struct ast_firmware_list {
 	struct iax_firmware *wares;
@@ -1162,7 +1162,7 @@ static int iax2_getpeername(struct sockaddr_in sin, char *host, int len)
 {
 	struct iax2_peer *peer = NULL;
 	int res = 0;
-	ao2_iterator i;
+	struct ao2_iterator i;
 
 	i = ao2_iterator_init(peers, 0);
 	while ((peer = ao2_iterator_next(&i))) {
@@ -1741,7 +1741,7 @@ static int iax_firmware_append(struct iax_ie_data *ied, const unsigned char *dev
 }
 
 
-static void reload_firmware(void)
+static void reload_firmware(int unload)
 {
 	struct iax_firmware *cur, *curl, *curp;
 	DIR *fwd;
@@ -1755,22 +1755,25 @@ static void reload_firmware(void)
 		cur->dead = 1;
 		cur = cur->next;
 	}
+
 	/* Now that we've freed them, load the new ones */
-	snprintf(dir, sizeof(dir), "%s/firmware/iax", (char *)ast_config_AST_DATA_DIR);
-	fwd = opendir(dir);
-	if (fwd) {
-		while((de = readdir(fwd))) {
-			if (de->d_name[0] != '.') {
-				snprintf(fn, sizeof(fn), "%s/%s", dir, de->d_name);
-				if (!try_firmware(fn)) {
-					if (option_verbose > 1)
-						ast_verbose(VERBOSE_PREFIX_2 "Loaded firmware '%s'\n", de->d_name);
+	if (!unload) {
+		snprintf(dir, sizeof(dir), "%s/firmware/iax", (char *)ast_config_AST_DATA_DIR);
+		fwd = opendir(dir);
+		if (fwd) {
+			while((de = readdir(fwd))) {
+				if (de->d_name[0] != '.') {
+					snprintf(fn, sizeof(fn), "%s/%s", dir, de->d_name);
+					if (!try_firmware(fn)) {
+						if (option_verbose > 1)
+							ast_verbose(VERBOSE_PREFIX_2 "Loaded firmware '%s'\n", de->d_name);
+					}
 				}
 			}
-		}
-		closedir(fwd);
-	} else 
-		ast_log(LOG_WARNING, "Error opening firmware directory '%s': %s\n", dir, strerror(errno));
+			closedir(fwd);
+		} else 
+			ast_log(LOG_WARNING, "Error opening firmware directory '%s': %s\n", dir, strerror(errno));
+	}
 
 	/* Clean up leftovers */
 	cur = waresl.wares;
@@ -2290,7 +2293,7 @@ static char *complete_iax2_show_peer(const char *line, const char *word, int pos
 	struct iax2_peer *peer;
 	char *res = NULL;
 	int wordlen = strlen(word);
-	ao2_iterator i;
+	struct ao2_iterator i;
 
 	/* 0 - iax2; 1 - show; 2 - peer; 3 - <peername> */
 	if (pos != 3)
@@ -3529,7 +3532,7 @@ static int iax2_getpeertrunk(struct sockaddr_in sin)
 {
 	struct iax2_peer *peer;
 	int res = 0;
-	ao2_iterator i;
+	struct ao2_iterator i;
 
 	i = ao2_iterator_init(peers, 0);
 	while ((peer = ao2_iterator_next(&i))) {
@@ -4272,7 +4275,7 @@ static int iax2_show_users(int fd, int argc, char *argv[])
 	struct iax2_user *user = NULL;
 	char auth[90];
 	char *pstr = "";
-	ao2_iterator i;
+	struct ao2_iterator i;
 
 	switch (argc) {
 	case 5:
@@ -4330,7 +4333,7 @@ static int __iax2_show_peers(int manager, int fd, struct mansession *s, int argc
 	int online_peers = 0;
 	int offline_peers = 0;
 	int unmonitored_peers = 0;
-	ao2_iterator i;
+	struct ao2_iterator i;
 
 #define FORMAT2 "%-15.15s  %-15.15s %s  %-15.15s  %-8s  %s %-10s%s"
 #define FORMAT "%-15.15s  %-15.15s %s  %-15.15s  %-5d%s  %s %-10s%s"
@@ -4895,7 +4898,7 @@ static int check_access(int callno, struct sockaddr_in *sin, struct iax_ies *ies
 	int bestscore = 0;
 	int gotcapability = 0;
 	struct ast_variable *v = NULL, *tmpvar = NULL;
-	ao2_iterator i;
+	struct ao2_iterator i;
 
 	if (!iaxs[callno])
 		return res;
@@ -5486,7 +5489,7 @@ static int authenticate_reply(struct chan_iax2_pvt *p, struct sockaddr_in *sin, 
 		/* Normal password authentication */
 		res = authenticate(p->challenge, override, okey, authmethods, &ied, sin, &p->ecx, &p->dcx);
 	} else {
-		ao2_iterator i = ao2_iterator_init(peers, 0);
+		struct ao2_iterator i = ao2_iterator_init(peers, 0);
 		while ((peer = ao2_iterator_next(&i))) {
 			if ((ast_strlen_zero(p->peer) || !strcmp(p->peer, peer->name)) 
 			    /* No peer specified at our end, or this is the peer */
@@ -9084,20 +9087,16 @@ static struct iax2_peer *build_peer(const char *name, struct ast_variable *v, st
 						ast_sched_del(sched, peer->expire);
 					peer->expire = -1;
 					ast_clear_flag(peer, IAX_DYNAMIC);
-					if (ast_dnsmgr_lookup(v->value, &peer->addr.sin_addr, &peer->dnsmgr)) {
-						ast_string_field_free_pools(peer);
+					if (ast_dnsmgr_lookup(v->value, &peer->addr.sin_addr, &peer->dnsmgr))
 						return peer_unref(peer);
-					}
 					if (!peer->addr.sin_port)
 						peer->addr.sin_port = htons(IAX_DEFAULT_PORTNO);
 				}
 				if (!maskfound)
 					inet_aton("255.255.255.255", &peer->mask);
 			} else if (!strcasecmp(v->name, "defaultip")) {
-				if (ast_get_ip(&peer->defaddr, v->value)) {
-					ast_string_field_free_pools(peer);
+				if (ast_get_ip(&peer->defaddr, v->value))
 					return peer_unref(peer);
-				}
 			} else if (!strcasecmp(v->name, "sourceaddress")) {
 				peer_set_srcaddr(peer, v->value);
 			} else if (!strcasecmp(v->name, "permit") ||
@@ -9477,7 +9476,7 @@ static void delete_users(void)
 static void prune_users(void)
 {
 	struct iax2_user *user;
-	ao2_iterator i;
+	struct ao2_iterator i;
 
 	i = ao2_iterator_init(users, 0);
 	while ((user = ao2_iterator_next(&i))) {
@@ -9491,7 +9490,7 @@ static void prune_users(void)
 static void prune_peers(void)
 {
 	struct iax2_peer *peer;
-	ao2_iterator i;
+	struct ao2_iterator i;
 
 	i = ao2_iterator_init(peers, 0);
 	while ((peer = ao2_iterator_next(&i))) {
@@ -9910,7 +9909,7 @@ static int reload_config(void)
 	AST_LIST_UNLOCK(&registrations);
 	/* Qualify hosts, too */
 	ao2_callback(peers, 0, iax2_poke_peer_cb, NULL);
-	reload_firmware();
+	reload_firmware(0);
 	iax_provision_reload();
 
 	return 0;
@@ -10703,6 +10702,7 @@ static int __unload_module(void)
 	delete_users();
 	iax_provision_unload();
 	sched_context_destroy(sched);
+	reload_firmware(1);
 
 	ast_mutex_destroy(&waresl.lock);
 
@@ -10834,7 +10834,7 @@ static int load_module(void)
 	ao2_callback(peers, 0, peer_set_sock_cb, NULL);
 	ao2_callback(peers, 0, iax2_poke_peer_cb, NULL);
 
-	reload_firmware();
+	reload_firmware(0);
 	iax_provision_reload();
 	return res;
 }
