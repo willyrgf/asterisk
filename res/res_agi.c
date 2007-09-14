@@ -67,6 +67,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #define MAX_ARGS 128
 #define MAX_COMMANDS 128
+#define AGI_NANDFS_RETRY 3
+#define AGI_BUF_LEN 2048
 
 /* Recycle some stuff from the CLI interface */
 #define fdprintf agi_debug_cli
@@ -1204,7 +1206,7 @@ static int handle_getvariablefull(struct ast_channel *chan, AGI *agi, int argc, 
 	} else {
 		chan2 = chan;
 	}
-	if (chan) { /* XXX isn't this chan2 ? */
+	if (chan2) {
 		pbx_substitute_variables_helper(chan2, argv[3], tmp, sizeof(tmp) - 1);
 		fdprintf(agi->fd, "200 result=1 (%s)\n", tmp);
 	} else {
@@ -1823,7 +1825,6 @@ static int agi_handle_command(struct ast_channel *chan, AGI *agi, char *buf)
 	}
 	return 0;
 }
-#define RETRY	3
 static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi, int pid, int *status, int dead)
 {
 	struct ast_channel *c;
@@ -1831,11 +1832,11 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 	int ms;
 	enum agi_result returnstatus = AGI_RESULT_SUCCESS;
 	struct ast_frame *f;
-	char buf[2048];
+	char buf[AGI_BUF_LEN];
 	FILE *readf;
 	/* how many times we'll retry if ast_waitfor_nandfs will return without either 
 	  channel or file descriptor in case select is interrupted by a system call (EINTR) */
-	int retry = RETRY;
+	int retry = AGI_NANDFS_RETRY;
 
 	if (!(readf = fdopen(agi->ctrl, "r"))) {
 		ast_log(LOG_WARNING, "Unable to fdopen file descriptor\n");
@@ -1850,7 +1851,7 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 		ms = -1;
 		c = ast_waitfor_nandfds(&chan, dead ? 0 : 1, &agi->ctrl, 1, NULL, &outfd, &ms);
 		if (c) {
-			retry = RETRY;
+			retry = AGI_NANDFS_RETRY;
 			/* Idle the channel until we get a command */
 			f = ast_read(c);
 			if (!f) {
@@ -1866,8 +1867,9 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 				ast_frfree(f);
 			}
 		} else if (outfd > -1) {
-			retry = RETRY;
+			retry = AGI_NANDFS_RETRY;
 			buf[0] = '\0';
+
 			if (!fgets(buf, sizeof(buf), readf)) {
 				/* Program terminated */
 				if (returnstatus)
@@ -1880,6 +1882,7 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 				pid = -1;
 				break;
 			}
+
 			/* get rid of trailing newline, if any */
 			if (*buf && buf[strlen(buf) - 1] == '\n')
 				buf[strlen(buf) - 1] = 0;
@@ -1993,7 +1996,7 @@ static int agi_exec_full(struct ast_channel *chan, void *data, int enhanced, int
 	enum agi_result res;
 	struct ast_module_user *u;
 	char *argv[MAX_ARGS];
-	char buf[2048]="";
+	char buf[AGI_BUF_LEN] = "";
 	char *tmp = (char *)buf;
 	int argc = 0;
 	int fds[2];
