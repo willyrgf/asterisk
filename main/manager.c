@@ -683,9 +683,9 @@ static void destroy_session(struct mansession *s)
 {
 	AST_LIST_LOCK(&sessions);
 	AST_LIST_REMOVE(&sessions, s, list);
+	num_sessions--;
 	AST_LIST_UNLOCK(&sessions);
 
-	ast_atomic_fetchadd_int(&num_sessions, -1);
 	free_session(s);
 }
 
@@ -1976,19 +1976,25 @@ static int process_events(struct mansession *s)
 	struct eventqent *eqe;
 	int ret = 0;
 	ast_mutex_lock(&s->__lock);
-	if (s->fd > -1) {
-		if (!s->eventq)
-			s->eventq = master_eventq;
-		while(s->eventq->next) {
-			eqe = s->eventq->next;
-			if ((s->authenticated && (s->readperm & eqe->category) == eqe->category) &&
-			    ((s->send_events & eqe->category) == eqe->category)) {
+	if (!s->eventq)
+		s->eventq = master_eventq;
+	while(s->eventq->next) {
+		eqe = s->eventq->next;
+		if ((s->authenticated && (s->readperm & eqe->category) == eqe->category) &&
+				   ((s->send_events & eqe->category) == eqe->category)) {
+			if (s->fd > -1) {
 				if (!ret && ast_carefulwrite(s->fd, eqe->eventdata, strlen(eqe->eventdata), s->writetimeout) < 0)
 					ret = -1;
+			} else {
+				if (!s->outputstr && !(s->outputstr = ast_calloc(1, sizeof(*s->outputstr)))) {
+					ast_mutex_unlock(&s->__lock);
+					return;
+				}
+				ast_dynamic_str_append(&s->outputstr, 0, "%s", buf->str);
 			}
-			unuse_eventqent(s->eventq);
-			s->eventq = eqe;
-		}
+				   }
+				   unuse_eventqent(s->eventq);
+				   s->eventq = eqe;
 	}
 	ast_mutex_unlock(&s->__lock);
 	return ret;
@@ -2235,6 +2241,7 @@ static void *accept_thread(void *ignore)
 		AST_LIST_TRAVERSE_SAFE_BEGIN(&sessions, s, list) {
 			if (s->sessiontimeout && (now > s->sessiontimeout) && !s->inuse) {
 				AST_LIST_REMOVE_CURRENT(&sessions, list);
+				num_sessions--;
 				if (s->authenticated && (option_verbose > 1) && displayconnects) {
 					ast_verbose(VERBOSE_PREFIX_2 "HTTP Manager '%s' timed out from %s\n",
 						s->username, ast_inet_ntoa(s->sin.sin_addr));
@@ -2253,8 +2260,6 @@ static void *accept_thread(void *ignore)
 			free(eqe);
 		}
 		AST_LIST_UNLOCK(&sessions);
-		if (s)
-			ast_atomic_fetchadd_int(&num_sessions, -1);
 
 		sinlen = sizeof(sin);
 		pfds[0].fd = asock;
@@ -2277,8 +2282,6 @@ static void *accept_thread(void *ignore)
 		if (!(s = ast_calloc(1, sizeof(*s))))
 			continue;
 
-		ast_atomic_fetchadd_int(&num_sessions, 1);
-		
 		memcpy(&s->sin, &sin, sizeof(sin));
 		s->writetimeout = 100;
 		s->waiting_thread = AST_PTHREADT_NULL;
@@ -2296,13 +2299,14 @@ static void *accept_thread(void *ignore)
 		s->send_events = -1;
 		AST_LIST_LOCK(&sessions);
 		AST_LIST_INSERT_HEAD(&sessions, s, list);
+		num_sessions++;
 		/* Find the last place in the master event queue and hook ourselves
 		   in there */
 		s->eventq = master_eventq;
 		while(s->eventq->next)
 			s->eventq = s->eventq->next;
-		AST_LIST_UNLOCK(&sessions);
 		ast_atomic_fetchadd_int(&s->eventq->usecount, 1);
+		AST_LIST_UNLOCK(&sessions);
 		if (ast_pthread_create_background(&s->t, &attr, session_do, s))
 			destroy_session(s);
 	}
@@ -2580,9 +2584,9 @@ static char *generic_http_callback(int format, struct sockaddr_in *requestor, co
 		s->eventq = master_eventq;
 		while (s->eventq->next)
 			s->eventq = s->eventq->next;
-		AST_LIST_UNLOCK(&sessions);
 		ast_atomic_fetchadd_int(&s->eventq->usecount, 1);
 		ast_atomic_fetchadd_int(&num_sessions, 1);
+		AST_LIST_UNLOCK(&sessions);
 	}
 
 	/* Reset HTTP timeout.  If we're not yet authenticated, keep it extremely short */
