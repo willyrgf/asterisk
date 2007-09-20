@@ -2106,7 +2106,7 @@ static enum sip_result __sip_reliable_xmit(struct sip_pvt *p, int seqno, int res
 		ast_sched_del(sched, pkt->retransid);
 	pkt->retransid = ast_sched_add_variable(sched, siptimer_a, retrans_pkt, pkt, 1);
 	if (option_debug > 3 && sipdebug)
-		ast_log(LOG_DEBUG, "*** SIP TIMER: Initalizing retransmit timer on packet: Id  #%d\n", pkt->retransid);
+		ast_log(LOG_DEBUG, "*** SIP TIMER: Initializing retransmit timer on packet: Id  #%d\n", pkt->retransid);
 	pkt->next = p->packets;
 	p->packets = pkt;
 	if (sipmethod == SIP_INVITE) {
@@ -9438,7 +9438,7 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 			if (peer->callingpres)	/* Peer calling pres setting will override RPID */
 				p->callingpres = peer->callingpres;
 			if (peer->maxms && peer->lastms)
-				p->timer_t1 = peer->lastms;
+				p->timer_t1 = peer->lastms < global_t1min ? global_t1min : peer->lastms;
 			if (ast_test_flag(&peer->flags[0], SIP_INSECURE_INVITE)) {
 				/* Pretend there is no required authentication */
 				ast_string_field_free(p, peersecret);
