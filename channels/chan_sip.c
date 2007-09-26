@@ -13771,8 +13771,12 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 		if (!replace_id && gotdest) {	/* No matching extension found */
 			if (gotdest == 1 && ast_test_flag(&p->flags[1], SIP_PAGE2_ALLOWOVERLAP))
 				transmit_response_reliable(p, "484 Address Incomplete", req);
-			else
+			else {
 				transmit_response_reliable(p, "404 Not Found", req);
+				ast_log(LOG_NOTICE, "Call from '%s' to extension"
+					" '%s' rejected because extension not found.\n",
+					S_OR(p->username, p->peername), p->exten);
+			}
 			p->invitestate = INV_COMPLETED;	
 			update_call_counter(p, DEC_CALL_LIMIT);
 			sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
