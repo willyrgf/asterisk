@@ -11848,7 +11848,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, stru
 	/* RFC3261 says we must treat every 1xx response (but not 100)
 	   that we don't recognize as if it was 183.
 	*/
-	if (resp > 100 && resp < 200 && resp!=101 && resp != 180 && resp != 183)
+	if (resp > 100 && resp < 200 && resp!=101 && resp != 180 && resp != 182 && resp != 183)
 		resp = 183;
 
  	/* Any response between 100 and 199 is PROCEEDING */
@@ -11869,6 +11869,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, stru
 		break;
 
 	case 180:	/* 180 Ringing */
+	case 182:       /* 182 Queued */
 		if (!ast_test_flag(req, SIP_PKT_IGNORE))
 			sip_cancel_destroy(p);
 		if (!ast_test_flag(req, SIP_PKT_IGNORE) && p->owner) {
@@ -11881,7 +11882,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, stru
 			p->invitestate = INV_EARLY_MEDIA;
 			res = process_sdp(p, req);
 			if (!ast_test_flag(req, SIP_PKT_IGNORE) && p->owner) {
-				/* Queue a progress frame only if we have SDP in 180 */
+				/* Queue a progress frame only if we have SDP in 180 or 182 */
 				ast_queue_control(p->owner, AST_CONTROL_PROGRESS);
 			}
 		}
@@ -12428,6 +12429,10 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 			break;
 		case 180:	/* 180 Ringing */
 			if (sipmethod == SIP_INVITE) 
+				handle_response_invite(p, resp, rest, req, seqno);
+			break;
+		case 182:       /* 182 Queued */
+			if (sipmethod == SIP_INVITE)
 				handle_response_invite(p, resp, rest, req, seqno);
 			break;
 		case 200:	/* 200 OK */
@@ -15639,6 +15644,9 @@ static int sip_devicestate(void *data)
 		}
 		ASTOBJ_UNREF(p,sip_destroy_peer);
 	} else {
+		char *port = strchr(host, ':');
+		if (port)
+			*port = '\0';
 		hp = ast_gethostbyname(host, &ahp);
 		if (hp)
 			res = AST_DEVICE_UNKNOWN;
