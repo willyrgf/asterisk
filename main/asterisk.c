@@ -832,16 +832,18 @@ int ast_safe_system(const char *s)
 /*!
  * \brief mute or unmute a console from logging
  */
-void ast_console_toggle_mute(int fd) {
+void ast_console_toggle_mute(int fd, int silent) {
 	int x;
 	for (x = 0;x < AST_MAX_CONNECTS; x++) {
 		if (fd == consoles[x].fd) {
 			if (consoles[x].mute) {
 				consoles[x].mute = 0;
-				ast_cli(fd, "Console is not muted anymore.\n");
+				if (!silent)
+					ast_cli(fd, "Console is not muted anymore.\n");
 			} else {
 				consoles[x].mute = 1;
-				ast_cli(fd, "Console is muted.\n");
+				if (!silent)
+					ast_cli(fd, "Console is muted.\n");
 			}
 			return;
 		}
@@ -936,7 +938,7 @@ static void *netconsole(void *vconsole)
 				break;
 			}
 			tmp[res] = 0;
-			ast_cli_command(con->fd, tmp);
+			ast_cli_command_multiple(con->fd, res, tmp);
 		}
 		if (fds[1].revents) {
 			res = read(con->p[0], tmp, sizeof(tmp));
@@ -1000,7 +1002,7 @@ static void *listener(void *unused)
 					flags = fcntl(consoles[x].p[1], F_GETFL);
 					fcntl(consoles[x].p[1], F_SETFL, flags | O_NONBLOCK);
 					consoles[x].fd = s;
-					consoles[x].mute = ast_opt_mute;
+					consoles[x].mute = 1; /* Default is muted, we will un-mute if necessary */
 					if (ast_pthread_create_background(&consoles[x].t, &attr, netconsole, &consoles[x])) {
 						ast_log(LOG_ERROR, "Unable to spawn thread to handle connection: %s\n", strerror(errno));
 						close(consoles[x].p[0]);
@@ -1762,6 +1764,10 @@ static int ast_el_read_char(EditLine *el, char *cp)
 							fprintf(stderr, "Reconnect succeeded after %.3f seconds\n", 1.0 / reconnects_per_second * tries);
 							printf(term_quit());
 							WELCOME_MESSAGE;
+							if (!ast_opt_mute)
+								fdprint(ast_consock, "logger mute silent");
+							else 
+								printf("log and verbose output currently muted ('logger mute' to unmute)\n");
 							break;
 						} else {
 							usleep(1000000 / reconnects_per_second);
@@ -2256,13 +2262,15 @@ static void ast_remotecontrol(char * data)
 		pid = atoi(cpid);
 	else
 		pid = -1;
-	snprintf(tmp, sizeof(tmp), "core set verbose atleast %d", option_verbose);
-	fdprint(ast_consock, tmp);
-	snprintf(tmp, sizeof(tmp), "core set debug atleast %d", option_debug);
-	fdprint(ast_consock, tmp);
-	if (ast_opt_mute) {
-		snprintf(tmp, sizeof(tmp), "log and verbose output currently muted ('logger unmute' to unmute)");
+	if (!data) {
+		snprintf(tmp, sizeof(tmp), "core set verbose atleast %d", option_verbose);
 		fdprint(ast_consock, tmp);
+		snprintf(tmp, sizeof(tmp), "core set debug atleast %d", option_debug);
+		fdprint(ast_consock, tmp);
+		if (!ast_opt_mute)
+			fdprint(ast_consock, "logger mute silent");
+		else 
+			printf("log and verbose output currently muted ('logger mute' to unmute)\n");
 	}
 	ast_verbose("Connected to Asterisk %s currently running on %s (pid = %d)\n", version, hostname, pid);
 	remotehostname = hostname;
