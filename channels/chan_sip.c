@@ -3101,7 +3101,7 @@ static void sip_registry_destroy(struct sip_registry *reg)
 		ast_sched_del(sched, reg->expire);
 	if (reg->timeout > -1)
 		ast_sched_del(sched, reg->timeout);
-	ast_string_field_free_pools(reg);
+	ast_string_field_free_memory(reg);
 	regobjs--;
 	free(reg);
 	
@@ -3202,7 +3202,7 @@ static void __sip_destroy(struct sip_pvt *p, int lockowner)
 	}
 	ast_mutex_destroy(&p->lock);
 
-	ast_string_field_free_pools(p);
+	ast_string_field_free_memory(p);
 
 	free(p);
 }
@@ -5994,7 +5994,7 @@ static void temp_pvt_cleanup(void *data)
 {
 	struct sip_pvt *p = data;
 
-	ast_string_field_free_pools(p);
+	ast_string_field_free_memory(p);
 
 	free(data);
 }
@@ -6044,7 +6044,7 @@ static int transmit_response_using_temp(ast_string_field callid, struct sockaddr
 	__transmit_response(p, msg, req, XMIT_UNRELIABLE);
 
 	/* Free the string fields, but not the pool space */
-	ast_string_field_free_all(p);
+	ast_string_field_reset_all(p);
 
 	return 0;
 }
