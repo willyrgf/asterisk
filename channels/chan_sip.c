@@ -7056,38 +7056,44 @@ static int transmit_invite(struct sip_pvt *p, int sipmethod, int sdp, int init)
 	add_header(&req, "Allow", ALLOWED_METHODS);
 	add_header(&req, "Supported", SUPPORTED_EXTENSIONS);
 	if (p->options && p->options->addsipheaders && p->owner) {
-		struct ast_channel *ast = p->owner; /* The owner channel */
-		struct varshead *headp = &ast->varshead;
+		struct ast_channel *chan = p->owner; /* The owner channel */
+		struct varshead *headp;
+	
+		ast_channel_lock(chan);
 
-			if (!headp)
-				ast_log(LOG_WARNING,"No Headp for the channel...ooops!\n");
-			else {
-				const struct ast_var_t *current;
-				AST_LIST_TRAVERSE(headp, current, entries) {  
-					/* SIPADDHEADER: Add SIP header to outgoing call */
-					if (!strncasecmp(ast_var_name(current), "SIPADDHEADER", strlen("SIPADDHEADER"))) {
-						char *content, *end;
-						const char *header = ast_var_value(current);
-						char *headdup = ast_strdupa(header);
+		headp = &chan->varshead;
 
-						/* Strip of the starting " (if it's there) */
-						if (*headdup == '"')
-					 		headdup++;
-						if ((content = strchr(headdup, ':'))) {
-							*content++ = '\0';
-							content = ast_skip_blanks(content); /* Skip white space */
-							/* Strip the ending " (if it's there) */
-					 		end = content + strlen(content) -1;	
-							if (*end == '"')
-								*end = '\0';
-						
-							add_header(&req, headdup, content);
-							if (sipdebug)
-								ast_log(LOG_DEBUG, "Adding SIP Header \"%s\" with content :%s: \n", headdup, content);
-						}
+		if (!headp)
+			ast_log(LOG_WARNING,"No Headp for the channel...ooops!\n");
+		else {
+			const struct ast_var_t *current;
+			AST_LIST_TRAVERSE(headp, current, entries) {  
+				/* SIPADDHEADER: Add SIP header to outgoing call */
+				if (!strncasecmp(ast_var_name(current), "SIPADDHEADER", strlen("SIPADDHEADER"))) {
+					char *content, *end;
+					const char *header = ast_var_value(current);
+					char *headdup = ast_strdupa(header);
+
+					/* Strip of the starting " (if it's there) */
+					if (*headdup == '"')
+				 		headdup++;
+					if ((content = strchr(headdup, ':'))) {
+						*content++ = '\0';
+						content = ast_skip_blanks(content); /* Skip white space */
+						/* Strip the ending " (if it's there) */
+				 		end = content + strlen(content) -1;	
+						if (*end == '"')
+							*end = '\0';
+					
+						add_header(&req, headdup, content);
+						if (sipdebug)
+							ast_log(LOG_DEBUG, "Adding SIP Header \"%s\" with content :%s: \n", headdup, content);
 					}
 				}
 			}
+		}
+
+		ast_channel_unlock(chan);
 	}
 	if (sdp) {
 		if (p->udptl && p->t38.state == T38_LOCAL_DIRECT) {
