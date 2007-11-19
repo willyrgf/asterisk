@@ -19,7 +19,6 @@
 /*! \file
  *
  * \brief Distributed Universal Number Discovery (DUNDi)
- *
  */
 
 /*** MODULEINFO
@@ -253,7 +252,8 @@ struct dundi_peer {
 	struct dundi_transaction *qualtrans;   /*!< Qualify transaction */
 	int model;                             /*!< Pull model */
 	int pcmodel;                           /*!< Push/precache model */
-	int dynamic;                           /*!< Are we dynamic? */
+	/*! Dynamic peers register with us */
+	unsigned int dynamic:1;
 	int lastms;                            /*!< Last measured latency */
 	int maxms;                             /*!< Max permissible latency */
 	struct timeval qualtx;                 /*!< Time of transmit */
@@ -265,6 +265,13 @@ static AST_LIST_HEAD_STATIC(pcq, dundi_precache_queue);
 static AST_LIST_HEAD_NOLOCK_STATIC(mappings, dundi_mapping);
 static AST_LIST_HEAD_NOLOCK_STATIC(requests, dundi_request);
 static AST_LIST_HEAD_NOLOCK_STATIC(alltrans, dundi_transaction);
+
+/*!
+ * \brief Wildcard peer
+ *
+ * This peer is created if the [*] entry is specified in dundi.conf
+ */
+static struct dundi_peer *any_peer;
 
 static int dundi_xmit(struct dundi_packet *pack);
 
@@ -487,6 +494,9 @@ static struct dundi_peer *find_peer(dundi_eid *eid)
 			break;
 	}
 
+	if (!cur && any_peer)
+		cur = any_peer;
+
 	return cur;
 }
 
@@ -568,8 +578,8 @@ static int dundi_lookup_local(struct dundi_result *dr, struct dundi_mapping *map
 		} else {
 			/* No answers...  Find the fewest number of digits from the
 			   number for which we have no answer. */
-			char tmp[AST_MAX_EXTENSION];
-			for (x=0;x<AST_MAX_EXTENSION;x++) {
+			char tmp[AST_MAX_EXTENSION + 1] = "";
+			for (x = 0; x < (sizeof(tmp) - 1); x++) {
 				tmp[x] = called_number[x];
 				if (!tmp[x])
 					break;
@@ -1265,9 +1275,9 @@ static void apply_peer(struct dundi_transaction *trans, struct dundi_peer *p)
 }
 
 /*! \note Called with the peers list already locked */
-static int do_register_expire(void *data)
+static int do_register_expire(const void *data)
 {
-	struct dundi_peer *peer = data;
+	struct dundi_peer *peer = (struct dundi_peer *)data;
 	char eid_str[20];
 	ast_log(LOG_DEBUG, "Register expired for '%s'\n", dundi_eid_to_str(eid_str, sizeof(eid_str), &peer->eid));
 	peer->registerexpire = -1;
@@ -1493,6 +1503,36 @@ static int check_key(struct dundi_peer *peer, unsigned char *newkey, unsigned ch
 	return 1;
 }
 
+static void deep_copy_peer(struct dundi_peer *peer_dst, const struct dundi_peer *peer_src)
+{
+	struct permission *cur, *perm;
+
+	memcpy(peer_dst, peer_src, sizeof(*peer_dst));
+	
+	memset(&peer_dst->permit, 0, sizeof(peer_dst->permit));
+	memset(&peer_dst->include, 0, sizeof(peer_dst->permit));
+
+	AST_LIST_TRAVERSE(&peer_src->permit, cur, list) {
+		if (!(perm = ast_calloc(1, sizeof(*perm) + strlen(cur->name) + 1)))
+			continue;
+
+		perm->allow = cur->allow;
+		strcpy(perm->name, cur->name);
+
+		AST_LIST_INSERT_HEAD(&peer_dst->permit, perm, list);
+	}
+
+	AST_LIST_TRAVERSE(&peer_src->include, cur, list) {
+		if (!(perm = ast_calloc(1, sizeof(*perm) + strlen(cur->name) + 1)))
+			continue;
+
+		perm->allow = cur->allow;
+		strcpy(perm->name, cur->name);
+
+		AST_LIST_INSERT_HEAD(&peer_dst->include, perm, list);
+	}
+}
+
 static int handle_command_response(struct dundi_transaction *trans, struct dundi_hdr *hdr, int datalen, int encrypted)
 {
 	/* Handle canonical command / response */
@@ -1505,7 +1545,7 @@ static int handle_command_response(struct dundi_transaction *trans, struct dundi
 	unsigned char *bufcpy;
 	struct dundi_ie_data ied;
 	struct dundi_ies ies;
-	struct dundi_peer *peer;
+	struct dundi_peer *peer = NULL;
 	char eid_str[20];
 	char eid_str2[20];
 	memset(&ied, 0, sizeof(ied));
@@ -1589,6 +1629,23 @@ static int handle_command_response(struct dundi_transaction *trans, struct dundi
 	case DUNDI_COMMAND_REGREQ:
 		/* A register request -- should only have one entity */
 		peer = find_peer(ies.eids[0]);
+		
+		/* if the peer is not found and we have a valid 'any_peer' setting */
+		if (any_peer && peer == any_peer) {
+			/* copy any_peer into a new peer object */
+			peer = ast_calloc(1, sizeof(*peer));
+			if (peer) {
+				deep_copy_peer(peer, any_peer);
+
+				/* set EID to remote EID */
+				peer->eid = *ies.eids[0];
+
+				AST_LIST_LOCK(&peers);
+				AST_LIST_INSERT_HEAD(&peers, peer, list);
+				AST_LIST_UNLOCK(&peers);
+			}
+		}
+
 		if (!peer || !peer->dynamic) {
 			dundi_ie_append_cause(&ied, DUNDI_IE_CAUSE, DUNDI_CAUSE_NOAUTH, NULL);
 			dundi_send(trans, DUNDI_COMMAND_REGRESPONSE, 0, 1, &ied);
@@ -2239,8 +2296,10 @@ static char *complete_peer_helper(const char *line, const char *word, int pos, i
 	len = strlen(word);
 	AST_LIST_TRAVERSE(&peers, p, list) {
 		const char *s = dundi_eid_to_str(eid_str, sizeof(eid_str), &p->eid);
-		if (!strncasecmp(word, s, len) && ++which > state)
+		if (!strncasecmp(word, s, len) && ++which > state) {
 			ret = ast_strdup(s);
+			break;
+		}
 	}
 	AST_LIST_UNLOCK(&peers);
 	return ret;
@@ -2895,12 +2954,11 @@ static void destroy_trans(struct dundi_transaction *trans, int fromtimeout)
 		free(trans);
 }
 
-static int dundi_rexmit(void *data)
+static int dundi_rexmit(const void *data)
 {
-	struct dundi_packet *pack;
+	struct dundi_packet *pack = (struct dundi_packet *)data;
 	int res;
 	AST_LIST_LOCK(&peers);
-	pack = data;
 	if (pack->retrans < 1) {
 		pack->retransid = -1;
 		if (!ast_test_flag(pack->parent, FLAG_ISQUAL))
@@ -2990,9 +3048,9 @@ static int dundi_send(struct dundi_transaction *trans, int cmdresp, int flags, i
 	return -1;
 }
 
-static int do_autokill(void *data)
+static int do_autokill(const void *data)
 {
-	struct dundi_transaction *trans = data;
+	struct dundi_transaction *trans = (struct dundi_transaction *)data;
 	char eid_str[20];
 	ast_log(LOG_NOTICE, "Transaction to '%s' took too long to ACK, destroying\n", 
 		dundi_eid_to_str(eid_str, sizeof(eid_str), &trans->them_eid));
@@ -3964,10 +4022,10 @@ static void build_mapping(char *name, char *value)
 }
 
 /* \note Called with the peers list already locked */
-static int do_register(void *data)
+static int do_register(const void *data)
 {
 	struct dundi_ie_data ied;
-	struct dundi_peer *peer = data;
+	struct dundi_peer *peer = (struct dundi_peer *)data;
 	char eid_str[20];
 	char eid_str2[20];
 	ast_log(LOG_DEBUG, "Register us as '%s' to '%s'\n", dundi_eid_to_str(eid_str, sizeof(eid_str), &peer->us_eid), dundi_eid_to_str(eid_str2, sizeof(eid_str2), &peer->eid));
@@ -3990,10 +4048,9 @@ static int do_register(void *data)
 	return 0;
 }
 
-static int do_qualify(void *data)
+static int do_qualify(const void *data)
 {
-	struct dundi_peer *peer;
-	peer = data;
+	struct dundi_peer *peer = (struct dundi_peer *)data;
 	peer->qualifyid = -1;
 	qualify_peer(peer, 0);
 	return 0;
@@ -4329,8 +4386,9 @@ static int set_config(char *config_file, struct sockaddr_in* sin)
 
 	dundi_ttl = DUNDI_DEFAULT_TTL;
 	dundi_cache_time = DUNDI_DEFAULT_CACHE_TIME;
-	cfg = ast_config_load(config_file);
+	any_peer = NULL;
 	
+	cfg = ast_config_load(config_file);
 	
 	if (!cfg) {
 		ast_log(LOG_ERROR, "Unable to load config %s\n", config_file);
@@ -4453,7 +4511,10 @@ static int set_config(char *config_file, struct sockaddr_in* sin)
 			/* Entries */
 			if (!dundi_str_to_eid(&testeid, cat))
 				build_peer(&testeid, ast_variable_browse(cfg, cat), &globalpcmodel);
-			else
+			else if (!strcasecmp(cat, "*")) {
+				build_peer(&empty_eid, ast_variable_browse(cfg, cat), &globalpcmodel);
+				any_peer = find_peer(NULL);
+			} else
 				ast_log(LOG_NOTICE, "Ignoring invalid EID entry '%s'\n", cat);
 		}
 		cat = ast_category_browse(cfg, cat);
@@ -4488,6 +4549,11 @@ static int unload_module(void)
 	close(netsocket);
 	io_context_destroy(io);
 	sched_context_destroy(sched);
+
+	mark_mappings();
+	prune_mappings();
+	mark_peers();
+	prune_peers();
 
 	return 0;
 }

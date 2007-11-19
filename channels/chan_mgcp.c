@@ -604,7 +604,7 @@ static void mgcp_queue_control(struct mgcp_subchannel *sub, int control)
 	return mgcp_queue_frame(sub, &f);
 }
 
-static int retrans_pkt(void *data)
+static int retrans_pkt(const void *data)
 {
 	struct mgcp_gateway *gw = (struct mgcp_gateway *)data;
 	struct mgcp_message *cur, *exq = NULL, *w, *prev;
@@ -1469,9 +1469,7 @@ static struct ast_channel *mgcp_new(struct mgcp_subchannel *sub, int state)
 
 		/* Don't use ast_set_callerid() here because it will
 		 * generate a needless NewCallerID event */
-		tmp->cid.cid_num = ast_strdup(i->cid_num);
 		tmp->cid.cid_ani = ast_strdup(i->cid_num);
-		tmp->cid.cid_name = ast_strdup(i->cid_name);
 		
 		if (!i->adsi)
 			tmp->adsicpe = AST_ADSI_UNAVAILABLE;
@@ -3241,19 +3239,16 @@ static int handle_request(struct mgcp_subchannel *sub, struct mgcp_request *req,
 				(((ev[0] >= '0') && (ev[0] <= '9')) ||
 				 ((ev[0] >= 'A') && (ev[0] <= 'D')) ||
 				  (ev[0] == '*') || (ev[0] == '#'))) {
-			if (sub && (sub->owner->_state >=  AST_STATE_UP)) {
+			if (sub && sub->owner && (sub->owner->_state >=  AST_STATE_UP)) {
 				f.frametype = AST_FRAME_DTMF;
 				f.subclass = ev[0];
 				f.src = "mgcp";
-				if (sub->owner) {
-					/* XXX MUST queue this frame to all subs in threeway call if threeway call is active */
-					mgcp_queue_frame(sub, &f);
-					ast_mutex_lock(&sub->next->lock);
-					if (sub->next->owner) {
-						mgcp_queue_frame(sub->next, &f);
-					}
-					ast_mutex_unlock(&sub->next->lock);
-				}
+				/* XXX MUST queue this frame to all subs in threeway call if threeway call is active */
+				mgcp_queue_frame(sub, &f);
+				ast_mutex_lock(&sub->next->lock);
+				if (sub->next->owner)
+					mgcp_queue_frame(sub->next, &f);
+				ast_mutex_unlock(&sub->next->lock);
 				if (strstr(p->curtone, "wt") && (ev[0] == 'A')) {
 					memset(p->curtone, 0, sizeof(p->curtone));
 				}

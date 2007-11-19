@@ -228,8 +228,7 @@ static const char *descrip =
 "      'D' -- dynamically add conference, prompting for a PIN\n"
 "      'e' -- select an empty conference\n"
 "      'E' -- select an empty pinless conference\n"
-"      'F' -- Pass DTMF through the conference.  DTMF used to activate any\n"
-"             conference features will not be passed through.\n"
+"      'F' -- Pass DTMF through the conference.\n"
 "      'i' -- announce user join/leave with review\n"
 "      'I' -- announce user join/leave without review\n"
 "      'l' -- set listen only mode (Listen only, no talking)\n"
@@ -332,6 +331,7 @@ struct ast_conference {
 	unsigned int isdynamic:1;               /*!< Created on the fly? */
 	unsigned int locked:1;                  /*!< Is the conference locked? */
 	pthread_t recordthread;                 /*!< thread for recording */
+	ast_mutex_t recordthreadlock;		/*!< control threads trying to start recordthread */
 	pthread_attr_t attr;                    /*!< thread attribute */
 	const char *recordingfilename;          /*!< Filename to record the Conference into */
 	const char *recordingformat;            /*!< Format to record the Conference in */
@@ -758,6 +758,8 @@ static struct ast_conference *build_conf(char *confno, char *pin, char *pinadmin
 
 	ast_mutex_init(&cnf->playlock);
 	ast_mutex_init(&cnf->listenlock);
+	cnf->recordthread = AST_PTHREADT_NULL;
+	ast_mutex_init(&cnf->recordthreadlock);
 	ast_copy_string(cnf->confno, confno, sizeof(cnf->confno));
 	ast_copy_string(cnf->pin, pin, sizeof(cnf->pin));
 	ast_copy_string(cnf->pinadmin, pinadmin, sizeof(cnf->pinadmin));
@@ -1254,7 +1256,10 @@ static int conf_free(struct ast_conference *conf)
 		ast_hangup(conf->chan);
 	else
 		close(conf->fd);
-	
+
+	ast_mutex_destroy(&conf->playlock);
+	ast_mutex_destroy(&conf->listenlock);
+	ast_mutex_destroy(&conf->recordthreadlock);
 	free(conf);
 
 	return 0;
@@ -1430,7 +1435,8 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 		}
 	}
 
-	if ((conf->recording == MEETME_RECORD_OFF) && (confflags & CONFFLAG_RECORDCONF) && ((conf->lchan = ast_request("zap", AST_FORMAT_SLINEAR, "pseudo", NULL)))) {
+	ast_mutex_lock(&conf->recordthreadlock);
+	if ((conf->recordthread == AST_PTHREADT_NULL) && (confflags & CONFFLAG_RECORDCONF) && ((conf->lchan = ast_request("zap", AST_FORMAT_SLINEAR, "pseudo", NULL)))) {
 		ast_set_read_format(conf->lchan, AST_FORMAT_SLINEAR);
 		ast_set_write_format(conf->lchan, AST_FORMAT_SLINEAR);
 		ztc.chan = 0;
@@ -1447,6 +1453,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 			pthread_attr_destroy(&conf->attr);
 		}
 	}
+	ast_mutex_unlock(&conf->recordthreadlock);
 
 	time(&user->jointime);
 
@@ -1565,7 +1572,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 		goto outrun;
 	}
 
-	retryzap = strcasecmp(chan->tech->type, "Zap");
+	retryzap = (strcasecmp(chan->tech->type, "Zap") || chan->spies ? 1 : 0);
 	user->zapchannel = !retryzap;
 
  zapretry:
@@ -1786,13 +1793,6 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 					if (musiconhold == 0 && (confflags & CONFFLAG_MOH)) {
 						ast_moh_start(chan, NULL, NULL);
 						musiconhold = 1;
-					} else {
-						ztc.confmode = ZT_CONF_CONF;
-						if (ioctl(fd, ZT_SETCONF, &ztc)) {
-							ast_log(LOG_WARNING, "Error setting conference\n");
-							close(fd);
-							goto outrun;
-						}
 					}
 				} else if(currentmarked >= 1 && lastmarked == 0) {
 					/* Marked user entered, so cancel timeout */
@@ -1895,14 +1895,14 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 				break;
 
 			if (c) {
-				if (c->fds[0] != origfd) {
+				if (c->fds[0] != origfd || (user->zapchannel && c->spies)) {
 					if (using_pseudo) {
 						/* Kill old pseudo */
 						close(fd);
 						using_pseudo = 0;
 					}
 					ast_log(LOG_DEBUG, "Ooh, something swapped out under us, starting over\n");
-					retryzap = strcasecmp(c->tech->type, "Zap");
+					retryzap = (strcasecmp(c->tech->type, "Zap") || c->spies ? 1 : 0);
 					user->zapchannel = !retryzap;
 					goto zapretry;
 				}
@@ -1965,6 +1965,9 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 				} else if ((f->frametype == AST_FRAME_DTMF) && (confflags & CONFFLAG_EXIT_CONTEXT)) {
 					char tmp[2];
 
+					if (confflags & CONFFLAG_PASS_DTMF)
+						conf_queue_dtmf(conf, user, f);
+
 					tmp[0] = f->subclass;
 					tmp[1] = '\0';
 					if (!ast_goto_if_exists(chan, exitcontext, tmp, 1)) {
@@ -1975,10 +1978,14 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 					} else if (option_debug > 1)
 						ast_log(LOG_DEBUG, "Exit by single digit did not work in meetme. Extension %s does not exist in context %s\n", tmp, exitcontext);
 				} else if ((f->frametype == AST_FRAME_DTMF) && (f->subclass == '#') && (confflags & CONFFLAG_POUNDEXIT)) {
+					if (confflags & CONFFLAG_PASS_DTMF)
+						conf_queue_dtmf(conf, user, f);
 					ret = 0;
 					ast_frfree(f);
 					break;
 				} else if (((f->frametype == AST_FRAME_DTMF) && (f->subclass == '*') && (confflags & CONFFLAG_STARMENU)) || ((f->frametype == AST_FRAME_DTMF) && menu_active)) {
+					if (confflags & CONFFLAG_PASS_DTMF)
+						conf_queue_dtmf(conf, user, f);
 					if (ioctl(fd, ZT_SETCONF, &ztc_empty)) {
 						ast_log(LOG_WARNING, "Error setting conference\n");
 						close(fd);
@@ -4404,7 +4411,7 @@ static void destroy_trunk(struct sla_trunk *trunk)
 	while ((station_ref = AST_LIST_REMOVE_HEAD(&trunk->stations, entry)))
 		free(station_ref);
 
-	ast_string_field_free_all(trunk);
+	ast_string_field_free_memory(trunk);
 	free(trunk);
 }
 
@@ -4430,7 +4437,7 @@ static void destroy_station(struct sla_station *station)
 	while ((trunk_ref = AST_LIST_REMOVE_HEAD(&station->trunks, entry)))
 		free(trunk_ref);
 
-	ast_string_field_free_all(station);
+	ast_string_field_free_memory(station);
 	free(station);
 }
 

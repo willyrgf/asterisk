@@ -202,9 +202,11 @@ struct station_capabilities {
 	} payloads;
 };
 
+#define SKINNY_MAX_CAPABILITIES 18
+
 struct capabilities_res_message {
 	uint32_t count;
-	struct station_capabilities caps[18];
+	struct station_capabilities caps[SKINNY_MAX_CAPABILITIES];
 };
 
 #define SPEED_DIAL_STAT_REQ_MESSAGE 0x000A
@@ -2861,9 +2863,7 @@ static struct ast_channel *skinny_new(struct skinny_line *l, int state)
 
 		/* Don't use ast_set_callerid() here because it will
 		 * generate a needless NewCallerID event */
-		tmp->cid.cid_num = ast_strdup(l->cid_num);
 		tmp->cid.cid_ani = ast_strdup(l->cid_num);
-		tmp->cid.cid_name = ast_strdup(l->cid_name);
 
 		tmp->priority = 1;
 		tmp->adsicpe = AST_ADSI_UNAVAILABLE;
@@ -3459,11 +3459,15 @@ static int handle_capabilities_res_message(struct skinny_req *req, struct skinny
 {
 	struct skinny_device *d = s->device;
 	struct skinny_line *l;
-	int count = 0;
+	uint32_t count = 0;
 	int codecs = 0;
 	int i;
 
 	count = letohl(req->data.caps.count);
+	if (count > SKINNY_MAX_CAPABILITIES) {
+		count = SKINNY_MAX_CAPABILITIES;
+		ast_log(LOG_WARNING, "Received more capabilities than we can handle (%d).  Ignoring the rest.\n", SKINNY_MAX_CAPABILITIES);
+	}
 
 	for (i = 0; i < count; i++) {
 		int acodec = 0;

@@ -322,7 +322,7 @@ static int odbc_show_command(int fd, int argc, char **argv)
 				ast_cli(fd, "Pooled: yes\nLimit: %d\nConnections in use: %d\n", class->limit, class->count);
 
 				AST_LIST_TRAVERSE(&(class->odbc_obj), current, list) {
-					ast_cli(fd, "  Connection %d: %s\n", ++count, current->up && ast_odbc_sanity_check(current) ? "connected" : "disconnected");
+					ast_cli(fd, "  Connection %d: %s\n", ++count, current->used ? "in use" : current->up && ast_odbc_sanity_check(current) ? "connected" : "disconnected");
 				}
 			} else {
 				/* Should only ever be one of these */
@@ -413,8 +413,16 @@ struct odbc_obj *ast_odbc_request_obj(const char *name, int check)
 			}
 			ast_mutex_init(&obj->lock);
 			obj->parent = class;
-			odbc_obj_connect(obj);
-			AST_LIST_INSERT_TAIL(&class->odbc_obj, obj, list);
+			if (odbc_obj_connect(obj) == ODBC_FAIL) {
+				ast_log(LOG_WARNING, "Failed to connect to %s\n", name);
+				ast_mutex_destroy(&obj->lock);
+				free(obj);
+				obj = NULL;
+				class->count--;
+			} else {
+				obj->used = 1;
+				AST_LIST_INSERT_TAIL(&class->odbc_obj, obj, list);
+			}
 		}
 	} else {
 		/* Non-pooled connection: multiple modules can use the same connection. */
@@ -483,10 +491,7 @@ static odbc_status odbc_obj_connect(struct odbc_obj *obj)
 	res = SQLAllocHandle(SQL_HANDLE_DBC, obj->parent->env, &obj->con);
 
 	if ((res != SQL_SUCCESS) && (res != SQL_SUCCESS_WITH_INFO)) {
-
 		ast_log(LOG_WARNING, "res_odbc: Error AllocHDB %d\n", res);
-		SQLFreeHandle(SQL_HANDLE_ENV, obj->parent->env);
-
 		ast_mutex_unlock(&obj->lock);
 		return ODBC_FAIL;
 	}

@@ -1135,6 +1135,7 @@ void pbx_retrieve_variable(struct ast_channel *c, const char *var, char **ret, c
 	struct varshead *places[2] = { headp, &globals };	/* list of places where we may look */
 
 	if (c) {
+		ast_channel_lock(c);
 		places[0] = &c->varshead;
 	}
 	/*
@@ -1232,6 +1233,9 @@ void pbx_retrieve_variable(struct ast_channel *c, const char *var, char **ret, c
 		if (need_substring)
 			*ret = substring(*ret, offset, length, workspace, workspacelen);
 	}
+
+	if (c)
+		ast_channel_unlock(c);
 }
 
 /*! \brief CLI function to show installed custom functions
@@ -1573,6 +1577,8 @@ static void pbx_substitute_variables_helper_full(struct ast_channel *c, struct v
 				nextexp = nextthing;
 				pos = nextexp - whereweare;
 				break;
+			default:
+				pos = 1;
 			}
 		}
 
@@ -1731,8 +1737,7 @@ static void pbx_substitute_variables_helper_full(struct ast_channel *c, struct v
 				count -= length;
 				cp2 += length;
 			}
-		} else
-			break;
+		}
 	}
 }
 
@@ -3480,7 +3485,7 @@ static void print_ext(struct ast_exten *e, char * buf, int buflen)
 	} else {
 		snprintf(buf, buflen, "%d. %s(%s)",
 			prio, ast_get_extension_app(e),
-			(char *)ast_get_extension_app_data(e));
+			(!ast_strlen_zero(ast_get_extension_app_data(e)) ? (char *)ast_get_extension_app_data(e) : ""));
 	}
 }
 
@@ -5034,10 +5039,13 @@ int ast_pbx_outgoing_exten(const char *type, int format, void *data, int timeout
 			if (ast_exists_extension(chan, context, "failed", 1, NULL)) {
 				chan = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, "OutgoingSpoolFailed");
 				if (chan) {
+					char failed_reason[4] = "";
 					if (!ast_strlen_zero(context))
 						ast_copy_string(chan->context, context, sizeof(chan->context));
 					set_ext_pri(chan, "failed", 1);
 					ast_set_variables(chan, vars);
+					snprintf(failed_reason, sizeof(failed_reason), "%d", *reason);
+					pbx_builtin_setvar_helper(chan, "REASON", failed_reason);
 					if (account)
 						ast_cdr_setaccount(chan, account);
 					ast_pbx_run(chan);
@@ -5718,6 +5726,8 @@ int pbx_builtin_serialize_variables(struct ast_channel *chan, char *buf, size_t 
 
 	memset(buf, 0, size);
 
+	ast_channel_lock(chan);
+
 	AST_LIST_TRAVERSE(&chan->varshead, variables, entries) {
 		if ((var=ast_var_name(variables)) && (val=ast_var_value(variables))
 		   /* && !ast_strlen_zero(var) && !ast_strlen_zero(val) */
@@ -5731,6 +5741,8 @@ int pbx_builtin_serialize_variables(struct ast_channel *chan, char *buf, size_t 
 			break;
 	}
 
+	ast_channel_unlock(chan);
+
 	return total;
 }
 
@@ -5743,8 +5755,11 @@ const char *pbx_builtin_getvar_helper(struct ast_channel *chan, const char *name
 
 	if (!name)
 		return NULL;
-	if (chan)
+
+	if (chan) {
+		ast_channel_lock(chan);
 		places[0] = &chan->varshead;
+	}
 
 	for (i = 0; i < 2; i++) {
 		if (!places[i])
@@ -5763,6 +5778,9 @@ const char *pbx_builtin_getvar_helper(struct ast_channel *chan, const char *name
 			break;
 	}
 
+	if (chan)
+		ast_channel_unlock(chan);
+
 	return ret;
 }
 
@@ -5779,18 +5797,25 @@ void pbx_builtin_pushvar_helper(struct ast_channel *chan, const char *name, cons
 		return;
 	}
 
-	headp = (chan) ? &chan->varshead : &globals;
+	if (chan) {
+		ast_channel_lock(chan);
+		headp = &chan->varshead;
+	} else {
+		ast_mutex_lock(&globalslock);
+		headp = &globals;
+	}
 
 	if (value) {
 		if ((option_verbose > 1) && (headp == &globals))
 			ast_verbose(VERBOSE_PREFIX_2 "Setting global variable '%s' to '%s'\n", name, value);
 		newvariable = ast_var_assign(name, value);
-		if (headp == &globals)
-			ast_mutex_lock(&globalslock);
 		AST_LIST_INSERT_HEAD(headp, newvariable, entries);
-		if (headp == &globals)
-			ast_mutex_unlock(&globalslock);
 	}
+
+	if (chan)
+		ast_channel_unlock(chan);
+	else
+		ast_mutex_unlock(&globalslock);
 }
 
 void pbx_builtin_setvar_helper(struct ast_channel *chan, const char *name, const char *value)
@@ -5799,7 +5824,6 @@ void pbx_builtin_setvar_helper(struct ast_channel *chan, const char *name, const
 	struct varshead *headp;
 	const char *nametail = name;
 
-	/* XXX may need locking on the channel ? */
 	if (name[strlen(name)-1] == ')') {
 		char *function = ast_strdupa(name);
 
@@ -5807,7 +5831,13 @@ void pbx_builtin_setvar_helper(struct ast_channel *chan, const char *name, const
 		return;
 	}
 
-	headp = (chan) ? &chan->varshead : &globals;
+	if (chan) {
+		ast_channel_lock(chan);
+		headp = &chan->varshead;
+	} else {
+		ast_mutex_lock(&globalslock);
+		headp = &globals;
+	}
 
 	/* For comparison purposes, we have to strip leading underscores */
 	if (*nametail == '_') {
@@ -5816,8 +5846,6 @@ void pbx_builtin_setvar_helper(struct ast_channel *chan, const char *name, const
 			nametail++;
 	}
 
-	if (headp == &globals)
-		ast_mutex_lock(&globalslock);
 	AST_LIST_TRAVERSE (headp, newvariable, entries) {
 		if (strcasecmp(ast_var_name(newvariable), nametail) == 0) {
 			/* there is already such a variable, delete it */
@@ -5834,7 +5862,9 @@ void pbx_builtin_setvar_helper(struct ast_channel *chan, const char *name, const
 		AST_LIST_INSERT_HEAD(headp, newvariable, entries);
 	}
 
-	if (headp == &globals)
+	if (chan)
+		ast_channel_unlock(chan);
+	else
 		ast_mutex_unlock(&globalslock);
 }
 
@@ -5857,9 +5887,14 @@ int pbx_builtin_setvar(struct ast_channel *chan, void *data)
 	/* check for a trailing flags argument */
 	if ((argc > 1) && !strchr(argv[argc-1], '=')) {
 		argc--;
-		if (strchr(argv[argc], 'g'))
+		if (strchr(argv[argc], 'g')) {
+			ast_log(LOG_WARNING, "The use of the 'g' flag is deprecated.  Please use Set(GLOBAL(foo)=bar) instead\n");
 			global = 1;
+		}
 	}
+
+	if (argc > 1)
+		ast_log(LOG_WARNING, "Setting multiple variables at once within Set is deprecated.  Please separate each name/value pair into its own line.\n");
 
 	for (x = 0; x < argc; x++) {
 		name = argv[x];

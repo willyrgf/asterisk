@@ -538,8 +538,9 @@ struct thr_lock_info {
 		const char *lock_name;
 		void *lock_addr;
 		int times_locked;
+		enum ast_lock_type type;
 		/*! This thread is waiting on this lock */
-		unsigned int pending:1;
+		int pending:2;
 	} locks[AST_MAX_LOCKS];
 	/*! This is the number of locks currently held by this thread.
 	 *  The index (num_locks - 1) has the info on the last one in the
@@ -583,8 +584,8 @@ static void lock_info_destroy(void *data)
  */
 AST_THREADSTORAGE_CUSTOM(thread_lock_info, thread_lock_info_init, lock_info_destroy);
 
-void ast_store_lock_info(const char *filename, int line_num, 
-	const char *func, const char *lock_name, void *lock_addr)
+void ast_store_lock_info(enum ast_lock_type type, const char *filename,
+	int line_num, const char *func, const char *lock_name, void *lock_addr)
 {
 	struct thr_lock_info *lock_info;
 	int i;
@@ -616,6 +617,7 @@ void ast_store_lock_info(const char *filename, int line_num,
 	lock_info->locks[i].lock_name = lock_name;
 	lock_info->locks[i].lock_addr = lock_addr;
 	lock_info->locks[i].times_locked = 1;
+	lock_info->locks[i].type = type;
 	lock_info->locks[i].pending = 1;
 	lock_info->num_locks++;
 
@@ -631,6 +633,19 @@ void ast_mark_lock_acquired(void)
 
 	pthread_mutex_lock(&lock_info->lock);
 	lock_info->locks[lock_info->num_locks - 1].pending = 0;
+	pthread_mutex_unlock(&lock_info->lock);
+}
+
+void ast_mark_lock_failed(void)
+{
+	struct thr_lock_info *lock_info;
+
+	if (!(lock_info = ast_threadstorage_get(&thread_lock_info, sizeof(*lock_info))))
+		return;
+
+	pthread_mutex_lock(&lock_info->lock);
+	lock_info->locks[lock_info->num_locks - 1].pending = -1;
+	lock_info->locks[lock_info->num_locks - 1].times_locked--;
 	pthread_mutex_unlock(&lock_info->lock);
 }
 
@@ -672,11 +687,29 @@ void ast_remove_lock_info(void *lock_addr)
 	pthread_mutex_unlock(&lock_info->lock);
 }
 
+static const char *locktype2str(enum ast_lock_type type)
+{
+	switch (type) {
+	case AST_MUTEX:
+		return "MUTEX";
+	case AST_RDLOCK:
+		return "RDLOCK";
+	case AST_WRLOCK:
+		return "WRLOCK";
+	}
+
+	return "UNKNOWN";
+}
+
 static int handle_show_locks(int fd, int argc, char *argv[])
 {
 	struct thr_lock_info *lock_info;
+	struct ast_dynamic_str *str;
 
-	ast_cli(fd, "\n" 
+	if (!(str = ast_dynamic_str_create(4096)))
+		return RESULT_FAILURE;
+
+	ast_dynamic_str_append(&str, 0, "\n" 
 	            "=======================================================================\n"
 	            "=== Currently Held Locks ==============================================\n"
 	            "=======================================================================\n"
@@ -684,30 +717,65 @@ static int handle_show_locks(int fd, int argc, char *argv[])
 				"=== <file> <line num> <function> <lock name> <lock addr> (times locked)\n"
 				"===\n");
 
+	if (!str)
+		return RESULT_FAILURE;
+
 	pthread_mutex_lock(&lock_infos_lock.mutex);
 	AST_LIST_TRAVERSE(&lock_infos, lock_info, entry) {
 		int i;
-		ast_cli(fd, "=== Thread ID: %d (%s)\n", (int) lock_info->thread_id,
+		ast_dynamic_str_append(&str, 0, "=== Thread ID: %u (%s)\n", (int) lock_info->thread_id,
 			lock_info->thread_name);
 		pthread_mutex_lock(&lock_info->lock);
-		for (i = 0; i < lock_info->num_locks; i++) {
-			ast_cli(fd, "=== ---> %sLock #%d: %s %d %s %s %p (%d)\n", 
-				lock_info->locks[i].pending ? "Waiting for " : "", i,
-				lock_info->locks[i].file, lock_info->locks[i].line_num,
+		for (i = 0; str && i < lock_info->num_locks; i++) {
+			int j;
+			ast_mutex_t *lock;
+
+			ast_dynamic_str_append(&str, 0, "=== ---> %sLock #%d (%s): %s %d %s %s %p (%d)\n", 
+				lock_info->locks[i].pending > 0 ? "Waiting for " : 
+					lock_info->locks[i].pending < 0 ? "Tried and failed to get " : "", i,
+				lock_info->locks[i].file, 
+				locktype2str(lock_info->locks[i].type),
+				lock_info->locks[i].line_num,
 				lock_info->locks[i].func, lock_info->locks[i].lock_name,
 				lock_info->locks[i].lock_addr, 
 				lock_info->locks[i].times_locked);
+
+			if (!lock_info->locks[i].pending)
+				continue;
+
+			lock = lock_info->locks[i].lock_addr;
+
+			ast_reentrancy_lock(lock);
+			for (j = 0; str && j < lock->reentrancy; j++) {
+				ast_dynamic_str_append(&str, 0, "=== --- ---> Locked Here: %s line %d (%s)\n",
+					lock->file[j], lock->lineno[j], lock->func[j]);
+			}
+			ast_reentrancy_unlock(lock);	
 		}
 		pthread_mutex_unlock(&lock_info->lock);
-		ast_cli(fd, "=== -------------------------------------------------------------------\n"
+		if (!str)
+			break;
+		ast_dynamic_str_append(&str, 0, "=== -------------------------------------------------------------------\n"
 		            "===\n");
+		if (!str)
+			break;
 	}
 	pthread_mutex_unlock(&lock_infos_lock.mutex);
 
-	ast_cli(fd, "=======================================================================\n"
+	if (!str)
+		return RESULT_FAILURE;
+
+	ast_dynamic_str_append(&str, 0, "=======================================================================\n"
 	            "\n");
 
-	return 0;
+	if (!str)
+		return RESULT_FAILURE;
+
+	ast_cli(fd, "%s", str->str);
+
+	free(str);
+
+	return RESULT_SUCCESS;
 }
 
 static char show_locks_help[] =
@@ -874,6 +942,23 @@ char *ast_strip_quoted(char *s, const char *beg_quotes, const char *end_quotes)
 		if (*e == *(end_quotes + (q - beg_quotes))) {
 			s++;
 			*e = '\0';
+		}
+	}
+
+	return s;
+}
+
+char *ast_unescape_semicolon(char *s)
+{
+	char *e;
+	char *work = s;
+
+	while ((e = strchr(work, ';'))) {
+		if ((e > work) && (*(e-1) == '\\')) {
+			memmove(e - 1, e, strlen(e) + 1);
+			work = e;
+		} else {
+			work = e + 1;
 		}
 	}
 

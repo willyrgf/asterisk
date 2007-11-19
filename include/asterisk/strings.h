@@ -23,6 +23,7 @@
 #ifndef _ASTERISK_STRINGS_H
 #define _ASTERISK_STRINGS_H
 
+#include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
 
@@ -49,7 +50,7 @@ static force_inline int ast_strlen_zero(const char *s)
 AST_INLINE_API(
 char *ast_skip_blanks(const char *str),
 {
-	while (*str && *str < 33)
+	while (*str && ((unsigned char) *str) < 33)
 		str++;
 	return (char *)str;
 }
@@ -74,7 +75,7 @@ char *ast_trim_blanks(char *str),
 		   actually set anything unless we must, and it's easier just
 		   to set each position to \0 than to keep track of a variable
 		   for it */
-		while ((work >= str) && *work < 33)
+		while ((work >= str) && ((unsigned char) *work) < 33)
 			*(work--) = '\0';
 	}
 	return str;
@@ -90,7 +91,7 @@ char *ast_trim_blanks(char *str),
 AST_INLINE_API(
 char *ast_skip_nonblanks(char *str),
 {
-	while (*str && *str > 32)
+	while (*str && ((unsigned char) *str) > 32)
 		str++;
 	return str;
 }
@@ -140,6 +141,13 @@ char *ast_strip(char *s),
   \endcode
  */
 char *ast_strip_quoted(char *s, const char *beg_quotes, const char *end_quotes);
+
+/*!
+  \brief Strip backslash for "escaped" semicolons.
+  \brief s The string to be stripped (will be modified).
+  \return The stripped string.
+ */
+char *ast_unescape_semicolon(char *s);
 
 /*!
   \brief Size-limited null-terminating string copy.
@@ -255,5 +263,23 @@ struct ast_realloca {
 		} \
 		(ra)->ptr; \
 	})
+
+/*!
+ * \brief Compute a hash value on a string
+ *
+ * This famous hash algorithm was written by Dan Bernstein and is
+ * commonly used.
+ *
+ * http://www.cse.yorku.ca/~oz/hash.html
+ */
+static force_inline int ast_str_hash(const char *str)
+{
+	int hash = 5381;
+
+	while (*str)
+		hash = hash * 33 ^ *str++;
+
+	return abs(hash);
+}
 
 #endif /* _ASTERISK_STRINGS_H */

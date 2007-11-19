@@ -905,7 +905,13 @@ static int zt_open(char *fn)
 		}
 	}
 	bs = READ_SIZE;
-	if (ioctl(fd, ZT_SET_BLOCKSIZE, &bs) == -1) return -1;
+	if (ioctl(fd, ZT_SET_BLOCKSIZE, &bs) == -1) {
+		ast_log(LOG_WARNING, "Unable to set blocksize '%d': %s\n", bs,  strerror(errno));
+		x = errno;
+		close(fd);
+		errno = x;
+		return -1;
+	}
 	return fd;
 }
 
@@ -1193,23 +1199,23 @@ static char *zap_sig2str(int sig)
 	case SIG_FXOKS:
 		return "FXO Kewlstart";
 	case SIG_PRI:
-		return "PRI Signalling";
+		return "ISDN PRI";
 	case SIG_SF:
-		return "SF (Tone) Signalling Immediate";
+		return "SF (Tone) Immediate";
 	case SIG_SFWINK:
-		return "SF (Tone) Signalling Wink";
+		return "SF (Tone) Wink";
 	case SIG_SF_FEATD:
-		return "SF (Tone) Signalling with Feature Group D (DTMF)";
+		return "SF (Tone) with Feature Group D (DTMF)";
 	case SIG_SF_FEATDMF:
-		return "SF (Tone) Signalling with Feature Group D (MF)";
+		return "SF (Tone) with Feature Group D (MF)";
 	case SIG_SF_FEATB:
-		return "SF (Tone) Signalling with Feature Group B (MF)";
+		return "SF (Tone) with Feature Group B (MF)";
 	case SIG_GR303FXOKS:
-		return "GR-303 Signalling with FXOKS";
+		return "GR-303 with FXOKS";
 	case SIG_GR303FXSKS:
-		return "GR-303 Signalling with FXSKS";
+		return "GR-303 with FXSKS";
 	case 0:
-		return "Pseudo Signalling";
+		return "Pseudo";
 	default:
 		snprintf(buf, sizeof(buf), "Unknown signalling %d", sig);
 		return buf;
@@ -1607,20 +1613,14 @@ static int restore_gains(struct zt_pvt *p)
 
 static inline int zt_set_hook(int fd, int hs)
 {
-	int x, res, count = 0;
+	int x, res;
 
 	x = hs;
 	res = ioctl(fd, ZT_HOOK, &x);
 
-	while (res < 0 && count < 20) {
-		usleep(100000); /* 1/10 sec. */
-		x = hs;
-		res = ioctl(fd, ZT_HOOK, &x);
-		count++;
-	}
-
 	if (res < 0) {
-		if (errno == EINPROGRESS) return 0;
+		if (errno == EINPROGRESS)
+			return 0;
 		ast_log(LOG_WARNING, "zt hook failed: %s\n", strerror(errno));
 	}
 
@@ -2064,17 +2064,18 @@ static int zt_call(struct ast_channel *ast, char *rdest, int timeout)
 			c++;
 		else
 			c = dest;
-		if (!p->hidecalleridname)
-			n = ast->cid.cid_name;
-		else
-			n = NULL;
+
+		l = NULL;
+		n = NULL;
+
 		if (!p->hidecallerid) {
 			l = ast->cid.cid_num;
-			n = ast->cid.cid_name;
-		} else {
-			l = NULL;
-			n = NULL;
+			if (!p->hidecalleridname) {
+				n = ast->cid.cid_name;
+			}
 		}
+
+
 		if (strlen(c) < p->stripmsd) {
 			ast_log(LOG_WARNING, "Number '%s' is shorter than stripmsd (%d)\n", c, p->stripmsd);
 			ast_mutex_unlock(&p->lock);
@@ -3173,7 +3174,11 @@ static enum ast_bridge_result zt_bridge(struct ast_channel *c0, struct ast_chann
 		return AST_BRIDGE_FAILED_NOWARN;
 
 	ast_mutex_lock(&c0->lock);
-	ast_mutex_lock(&c1->lock);
+	while (ast_mutex_trylock(&c1->lock)) {
+		ast_mutex_unlock(&c0->lock);
+		usleep(1);
+		ast_mutex_lock(&c0->lock);
+	}
 
 	p0 = c0->tech_pvt;
 	p1 = c1->tech_pvt;
@@ -3341,7 +3346,12 @@ static enum ast_bridge_result zt_bridge(struct ast_channel *c0, struct ast_chann
 		/* Here's our main loop...  Start by locking things, looking for private parts, 
 		   and then balking if anything is wrong */
 		ast_mutex_lock(&c0->lock);
-		ast_mutex_lock(&c1->lock);
+		while (ast_mutex_trylock(&c1->lock)) {
+			ast_mutex_unlock(&c0->lock);
+			usleep(1);
+			ast_mutex_lock(&c0->lock);
+		}
+
 		p0 = c0->tech_pvt;
 		p1 = c1->tech_pvt;
 
@@ -4920,7 +4930,6 @@ static int zt_write(struct ast_channel *ast, struct ast_frame *frame)
 {
 	struct zt_pvt *p = ast->tech_pvt;
 	int res;
-	unsigned char outbuf[4096];
 	int index;
 	index = zt_get_index(ast, p, 0);
 	if (index < 0) {
@@ -4974,10 +4983,6 @@ static int zt_write(struct ast_channel *ast, struct ast_frame *frame)
 	/* Return if it's not valid data */
 	if (!frame->data || !frame->datalen)
 		return 0;
-	if (frame->datalen > sizeof(outbuf) * 2) {
-		ast_log(LOG_WARNING, "Frame too large\n");
-		return 0;
-	}
 
 	if (frame->subclass == AST_FORMAT_SLINEAR) {
 		if (!p->subs[index].linear) {
@@ -5323,16 +5328,12 @@ static struct ast_channel *zt_new(struct zt_pvt *i, int state, int startpbx, int
 	/* Don't use ast_set_callerid() here because it will
 	 * generate a needless NewCallerID event */
 #ifdef PRI_ANI
-	tmp->cid.cid_num = ast_strdup(i->cid_num);
-	tmp->cid.cid_name = ast_strdup(i->cid_name);
 	if (!ast_strlen_zero(i->cid_ani))
 		tmp->cid.cid_ani = ast_strdup(i->cid_ani);
 	else	
 		tmp->cid.cid_ani = ast_strdup(i->cid_num);
 #else
-	tmp->cid.cid_num = ast_strdup(i->cid_num);
 	tmp->cid.cid_ani = ast_strdup(i->cid_num);
-	tmp->cid.cid_name = ast_strdup(i->cid_name);
 #endif
 	tmp->cid.cid_pres = i->callingpres;
 	tmp->cid.cid_ton = i->cid_ton;
@@ -6121,6 +6122,8 @@ static void *ss_thread(void *data)
 						return NULL;
 					} 
 					f = ast_read(chan);
+					if (!f)
+						break;
 					if (f->frametype == AST_FRAME_DTMF) {
 						dtmfbuf[i++] = f->subclass;
 						ast_log(LOG_DEBUG, "CID got digit '%c'\n", f->subclass);
@@ -6787,8 +6790,10 @@ static void *do_monitor(void *data)
 		/* Lock the interface list */
 		ast_mutex_lock(&iflock);
 		if (!pfds || (lastalloc != ifcount)) {
-			if (pfds)
+			if (pfds) {
 				free(pfds);
+				pfds = NULL;
+			}
 			if (ifcount) {
 				if (!(pfds = ast_calloc(1, ifcount * sizeof(*pfds)))) {
 					ast_mutex_unlock(&iflock);
@@ -9135,7 +9140,7 @@ static void *pri_dchannel(void *vpri)
 									pri->pvts[chanpos]->logicalspan, pri->pvts[chanpos]->prioffset, pri->span, (int)e->hangup.aoc_units, (e->hangup.aoc_units == 1) ? "" : "s");
 
 #ifdef SUPPORT_USERUSER
-						if (!ast_strlen_zero(e->hangup.useruserinfo)) {
+						if (pri->pvts[chanpos]->owner && !ast_strlen_zero(e->hangup.useruserinfo)) {
 							pbx_builtin_setvar_helper(pri->pvts[chanpos]->owner, "USERUSERINFO", e->hangup.useruserinfo);
 						}
 #endif
@@ -10354,8 +10359,9 @@ static int action_zapshowchannels(struct mansession *s, const struct message *m)
 
 static int __unload_module(void)
 {
-	int x = 0;
+	int x;
 	struct zt_pvt *p, *pl;
+
 #ifdef HAVE_PRI
 	int i;
 	for (i = 0; i < NUM_SPANS; i++) {
@@ -10404,7 +10410,7 @@ static int __unload_module(void)
 			zt_close(p->subs[SUB_REAL].zfd);
 		pl = p;
 		p = p->next;
-		x++;
+		x = pl->channel;
 		/* Free associated memory */
 		if (pl)
 			destroy_zt_pvt(&pl);
@@ -11448,8 +11454,10 @@ static int zt_sendtext(struct ast_channel *c, const char *text)
 			continue;
 		}
 		  /* if got exception */
-		if (fds[0].revents & POLLPRI)
+		if (fds[0].revents & POLLPRI) {
+			ast_free(mybuf);
 			return -1;
+		}
 		if (!(fds[0].revents & POLLOUT)) {
 			ast_log(LOG_DEBUG, "write fd not ready on channel %d\n", p->channel);
 			continue;

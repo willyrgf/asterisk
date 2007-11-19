@@ -303,9 +303,9 @@ static void oh323_destroy_peer(struct oh323_peer *peer)
 	free(peer);
 }
 
-static int oh323_simulate_dtmf_end(void *data)
+static int oh323_simulate_dtmf_end(const void *data)
 {
-	struct oh323_pvt *pvt = data;
+	struct oh323_pvt *pvt = (struct oh323_pvt *)data;
 
 	if (pvt) {
 		ast_mutex_lock(&pvt->lock);
@@ -1069,9 +1069,7 @@ static struct ast_channel *__oh323_new(struct oh323_pvt *pvt, int state, const c
 
 		/* Don't use ast_set_callerid() here because it will
 		 * generate a needless NewCallerID event */
-		ch->cid.cid_num = ast_strdup(cid_num);
 		ch->cid.cid_ani = ast_strdup(cid_num);
-		ch->cid.cid_name = ast_strdup(cid_name);
 
 		if (pvt->cd.redirect_reason >= 0) {
 			ch->cid.cid_rdnis = ast_strdup(pvt->cd.redirect_number);

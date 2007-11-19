@@ -120,7 +120,7 @@ struct ast_speech_result *ast_speech_results_get(struct ast_speech *speech)
 {
 	struct ast_speech_result *result = NULL;
 
-	if (speech->engine->get != NULL && ast_test_flag(speech, AST_SPEECH_HAVE_RESULTS)) {
+	if (speech->engine->get != NULL) {
 		result = speech->engine->get(speech);
 	}
 
@@ -188,6 +188,21 @@ int ast_speech_write(struct ast_speech *speech, void *data, int len)
 
 	if (speech->engine->write != NULL) {
 		speech->engine->write(speech, data, len);
+	}
+
+	return res;
+}
+
+/*! \brief Signal to the engine that DTMF was received */
+int ast_speech_dtmf(struct ast_speech *speech, const char *dtmf)
+{
+	int res = 0;
+
+	if (speech->state != AST_SPEECH_STATE_READY)
+		return -1;
+
+	if (speech->engine->dtmf != NULL) {
+		res = speech->engine->dtmf(speech, dtmf);
 	}
 
 	return res;

@@ -58,6 +58,8 @@ export PROC
 export SOLINK
 export STRIP
 export DOWNLOAD
+export GREP
+export ID
 export OSARCH
 export CURSES_DIR
 export NCURSES_DIR
@@ -72,6 +74,11 @@ export GTK2_INCLUDE
 ifneq ($(wildcard makeopts),)
   include makeopts
 endif
+
+# Some build systems, such as the one in openwrt, like to pass custom target
+# CFLAGS and LDFLAGS in the COPTS and LDOPTS variables.
+ASTCFLAGS+=$(COPTS)
+ASTLDFLAGS+=$(LDOPTS)
 
 #Uncomment this to see all build commands instead of 'quiet' output
 #NOISY_BUILD=yes
@@ -187,7 +194,11 @@ ifeq ($(OSARCH),linux-gnu)
   endif
 endif
 
-ASTCFLAGS+=-pipe -Wall -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations $(DEBUG)
+ifeq ($(findstring -save-temps,$(ASTCFLAGS)),)
+ASTCFLAGS+=-pipe
+endif
+
+ASTCFLAGS+=-Wall -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations $(DEBUG)
 
 ASTCFLAGS+=-include $(ASTTOPDIR)/include/asterisk/autoconfig.h
 
@@ -247,6 +258,7 @@ OTHER_SUBDIRS:=utils agi
 SUBDIRS:=$(OTHER_SUBDIRS) $(MOD_SUBDIRS)
 SUBDIRS_INSTALL:=$(SUBDIRS:%=%-install)
 SUBDIRS_CLEAN:=$(SUBDIRS:%=%-clean)
+SUBDIRS_DIST_CLEAN:=$(SUBDIRS:%=%-dist-clean)
 SUBDIRS_UNINSTALL:=$(SUBDIRS:%=%-uninstall)
 MOD_SUBDIRS_EMBED_LDSCRIPT:=$(MOD_SUBDIRS:%=%-embed-ldscript)
 MOD_SUBDIRS_EMBED_LDFLAGS:=$(MOD_SUBDIRS:%=%-embed-ldflags)
@@ -280,7 +292,11 @@ all: _all
 	@echo " + Asterisk has successfully been built, and +"  
 	@echo " + can be installed by running:              +"
 	@echo " +                                           +"
+ifeq ($(MAKE), gmake)
+	@echo " +               $(MAKE) install               +"  
+else
 	@echo " +               $(MAKE) install                +"  
+endif
 	@echo " +-------------------------------------------+"  
 
 _all: cleantest $(SUBDIRS)
@@ -349,6 +365,9 @@ include/asterisk/buildopts.h: menuselect.makeopts
 $(SUBDIRS_CLEAN):
 	@$(MAKE) --no-print-directory -C $(@:-clean=) clean
 
+$(SUBDIRS_DIST_CLEAN):
+	@$(MAKE) --no-print-directory -C $(@:-dist-clean=) dist-clean
+
 clean: $(SUBDIRS_CLEAN)
 	rm -f defaults.h
 	rm -f include/asterisk/build.h
@@ -358,7 +377,7 @@ clean: $(SUBDIRS_CLEAN)
 
 dist-clean: distclean
 
-distclean: clean
+distclean: $(SUBDIRS_DIST_CLEAN) clean
 	@$(MAKE) -C menuselect dist-clean
 	@$(MAKE) -C sounds dist-clean
 	rm -f menuselect.makeopts makeopts menuselect-tree menuselect.makedeps
@@ -482,14 +501,22 @@ install: datafiles bininstall $(SUBDIRS_INSTALL)
 	@echo " + configuration files (overwriting any      +"
 	@echo " + existing config files), run:              +"  
 	@echo " +                                           +"
+ifeq ($(MAKE), gmake)
+	@echo " +               $(MAKE) samples               +"
+else
 	@echo " +               $(MAKE) samples                +"
+endif
 	@echo " +                                           +"
 	@echo " +-----------------  or ---------------------+"
 	@echo " +                                           +"
 	@echo " + You can go ahead and install the asterisk +"
 	@echo " + program documentation now or later run:   +"
 	@echo " +                                           +"
+ifeq ($(MAKE), gmake)
+	@echo " +              $(MAKE) progdocs               +"
+else
 	@echo " +              $(MAKE) progdocs                +"
+endif
 	@echo " +                                           +"
 	@echo " + **Note** This requires that you have      +"
 	@echo " + doxygen installed on your local system    +"
@@ -536,8 +563,31 @@ samples: adsi
 		echo "astlogdir => $(ASTLOGDIR)" ; \
 		echo "" ; \
 		echo ";[options]" ; \
+		echo ";verbose = 3" ; \
+		echo ";debug = 3" ; \
+		echo ";alwaysfork = yes ; same as -F at startup" ; \
+		echo ";nofork = yes ; same as -f at startup" ; \
+		echo ";quiet = yes ; same as -q at startup" ; \
+		echo ";timestamp = yes ; same as -T at startup" ; \
+		echo ";execincludes = yes ; support #exec in config files" ; \
+		echo ";console = yes ; Run as console (same as -c at startup)" ; \
+		echo ";highpriority = yes ; Run realtime priority (same as -p at startup)" ; \
+		echo ";initcrypto = yes ; Initialize crypto keys (same as -i at startup)" ; \
+		echo ";nocolor = yes ; Disable console colors" ; \
+		echo ";dontwarn = yes ; Disable some warnings" ; \
+		echo ";dumpcore = yes ; Dump core on crash (same as -g at startup)" ; \
+		echo ";languageprefix = yes ; Use the new sound prefix path syntax" ; \
 		echo ";internal_timing = yes" ; \
 		echo ";systemname = my_system_name ; prefix uniqueid with a system name for global uniqueness issues" ; \
+		echo ";maxcalls = 10 ; Maximum amount of calls allowed" ; \
+		echo ";maxload = 0.9 ; Asterisk stops accepting new calls if the load average exceed this limit" ; \
+		echo ";cache_record_files = yes ; Cache recorded sound files to another directory during recording" ; \
+		echo ";record_cache_dir = /tmp ; Specify cache directory (used in cnjunction with cache_record_files)" ; \
+		echo ";transmit_silence_during_record = yes ; Transmit SLINEAR silence while a channel is being recorded" ; \
+		echo ";transcode_via_sln = yes ; Build transcode paths via SLINEAR, instead of directly" ; \
+		echo ";runuser = asterisk ; The user to run as" ; \
+		echo ";rungroup = asterisk ; The group to run as" ; \
+		echo "" ; \
 		echo "; Changing the following lines may compromise your security." ; \
 		echo ";[files]" ; \
 		echo ";astctlpermissions = 0660" ; \
@@ -598,20 +648,20 @@ progdocs:
 config:
 	@if [ "${OSARCH}" = "linux-gnu" ]; then \
 		if [ -f /etc/redhat-release -o -f /etc/fedora-release ]; then \
-			$(INSTALL) -m 755 contrib/init.d/rc.redhat.asterisk /etc/rc.d/init.d/asterisk; \
-			/sbin/chkconfig --add asterisk; \
+			$(INSTALL) -m 755 contrib/init.d/rc.redhat.asterisk $(DESTDIR)/etc/rc.d/init.d/asterisk; \
+			if [ -z "$(DESTDIR)" ]; then /sbin/chkconfig --add asterisk; fi; \
 		elif [ -f /etc/debian_version ]; then \
-			$(INSTALL) -m 755 contrib/init.d/rc.debian.asterisk /etc/init.d/asterisk; \
-			/usr/sbin/update-rc.d asterisk start 10 2 3 4 5 . stop 91 2 3 4 5 .; \
+			$(INSTALL) -m 755 contrib/init.d/rc.debian.asterisk $(DESTDIR)/etc/init.d/asterisk; \
+			if [ -z "$(DESTDIR)" ]; then /usr/sbin/update-rc.d asterisk start 10 2 3 4 5 . stop 91 2 3 4 5 .; fi; \
 		elif [ -f /etc/gentoo-release ]; then \
-			$(INSTALL) -m 755 contrib/init.d/rc.gentoo.asterisk /etc/init.d/asterisk; \
-			/sbin/rc-update add asterisk default; \
+			$(INSTALL) -m 755 contrib/init.d/rc.gentoo.asterisk $(DESTDIR)/etc/init.d/asterisk; \
+			if [ -z "$(DESTDIR)" ]; then /sbin/rc-update add asterisk default; fi; \
 		elif [ -f /etc/mandrake-release ]; then \
-			$(INSTALL) -m 755 contrib/init.d/rc.mandrake.asterisk /etc/rc.d/init.d/asterisk; \
-			/sbin/chkconfig --add asterisk; \
+			$(INSTALL) -m 755 contrib/init.d/rc.mandrake.asterisk $(DESTDIR)/etc/rc.d/init.d/asterisk; \
+			if [ -z "$(DESTDIR)" ]; then /sbin/chkconfig --add asterisk; fi; \
 		elif [ -f /etc/SuSE-release -o -f /etc/novell-release ]; then \
-			$(INSTALL) -m 755 contrib/init.d/rc.suse.asterisk /etc/init.d/asterisk; \
-			/sbin/chkconfig --add asterisk; \
+			$(INSTALL) -m 755 contrib/init.d/rc.suse.asterisk $(DESTDIR)/etc/init.d/asterisk; \
+			if [ -z "$(DESTDIR)" ]; then /sbin/chkconfig --add asterisk; fi; \
 		elif [ -f /etc/slackware-version ]; then \
 			echo "Slackware is not currently supported, although an init script does exist for it." \
 		else \
@@ -629,9 +679,7 @@ sounds:
 # last clean count we had
 
 cleantest:
-	@if ! cmp -s .cleancount .lastclean ; then \
-		$(MAKE) clean;\
-	fi
+	@cmp -s .cleancount .lastclean || $(MAKE) clean
 
 $(SUBDIRS_UNINSTALL):
 	@$(MAKE) --no-print-directory -C $(@:-uninstall=) uninstall
@@ -660,7 +708,11 @@ uninstall: _uninstall
 	@echo " + directories, and logs, run the following  +"
 	@echo " + command:                                  +"
 	@echo " +                                           +"
+ifeq ($(MAKE), gmake)
+	@echo " +            $(MAKE) uninstall-all            +"  
+else
 	@echo " +            $(MAKE) uninstall-all             +"  
+endif
 	@echo " +-------------------------------------------+"  
 
 uninstall-all: _uninstall
@@ -687,8 +739,8 @@ menuselect/menuselect: makeopts menuselect/menuselect.c menuselect/menuselect_cu
 menuselect/gmenuselect: makeopts menuselect/menuselect.c menuselect/menuselect_gtk.c menuselect/menuselect_stub.c menuselect/menuselect.h menuselect/linkedlists.h makeopts
 	@CC="$(HOST_CC)" CXX="$(CXX)" LD="" AR="" RANLIB="" CFLAGS="" $(MAKE) -C menuselect _gmenuselect CONFIGURE_SILENT="--silent"
 
-menuselect-tree: $(foreach dir,$(filter-out main,$(MOD_SUBDIRS)),$(wildcard $(dir)/*.c) $(wildcard $(dir)/*.cc)) build_tools/cflags.xml sounds/sounds.xml build_tools/embed_modules.xml
+menuselect-tree: $(foreach dir,$(filter-out main,$(MOD_SUBDIRS)),$(wildcard $(dir)/*.c) $(wildcard $(dir)/*.cc)) build_tools/cflags.xml sounds/sounds.xml build_tools/embed_modules.xml configure
 	@echo "Generating input for menuselect ..."
 	@build_tools/prep_moduledeps > $@
 
-.PHONY: menuselect main sounds clean dist-clean distclean all prereqs cleantest uninstall _uninstall uninstall-all dont-optimize $(SUBDIRS_INSTALL) $(SUBDIRS_CLEAN) $(SUBDIRS_UNINSTALL) $(SUBDIRS) $(MOD_SUBDIRS_EMBED_LDSCRIPT) $(MOD_SUBDIRS_EMBED_LDFLAGS) $(MOD_SUBDIRS_EMBED_LIBS) menuselect.makeopts
+.PHONY: menuselect main sounds clean dist-clean distclean all prereqs cleantest uninstall _uninstall uninstall-all dont-optimize $(SUBDIRS_INSTALL) $(SUBDIRS_DIST_CLEAN) $(SUBDIRS_CLEAN) $(SUBDIRS_UNINSTALL) $(SUBDIRS) $(MOD_SUBDIRS_EMBED_LDSCRIPT) $(MOD_SUBDIRS_EMBED_LDFLAGS) $(MOD_SUBDIRS_EMBED_LIBS) menuselect.makeopts

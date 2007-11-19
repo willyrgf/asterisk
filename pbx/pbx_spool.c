@@ -202,7 +202,7 @@ static int apply_outgoing(struct outgoing *o, char *fn, FILE *f)
 					}
 				} else if (!strcasecmp(buf, "waittime")) {
 					if ((sscanf(c, "%d", &o->waittime) != 1) || (o->waittime < 1)) {
-						ast_log(LOG_WARNING, "Invalid retrytime at line %d of %s\n", lineno, fn);
+						ast_log(LOG_WARNING, "Invalid waittime at line %d of %s\n", lineno, fn);
 						o->waittime = 45;
 					}
 				} else if (!strcasecmp(buf, "retry")) {
@@ -338,7 +338,7 @@ static void *attempt_thread(void *data)
 		res = ast_pbx_outgoing_exten(o->tech, AST_FORMAT_SLINEAR, o->dest, o->waittime * 1000, o->context, o->exten, o->priority, &reason, 2 /* wait to finish */, o->cid_num, o->cid_name, o->vars, o->account, NULL);
 	}
 	if (res) {
-		ast_log(LOG_NOTICE, "Call failed to go through, reason %d\n", reason);
+		ast_log(LOG_NOTICE, "Call failed to go through, reason (%d) %s\n", reason, ast_channel_reason2str(reason));
 		if (o->retries >= o->maxretries + 1) {
 			/* Max retries exceeded */
 			ast_log(LOG_EVENT, "Queued call to %s/%s expired without completion after %d attempt%s\n", o->tech, o->dest, o->retries - 1, ((o->retries - 1) != 1) ? "s" : "");

@@ -58,7 +58,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/utils.h"
 #include "asterisk/manager.h"
 
-#define MAX_TIMESTAMP_SKEW	20
+#define MAX_TIMESTAMP_SKEW	640
 
 #define RTP_SEQ_MOD     (1<<16) 	/*!< A sequence number can't be more than 16 bits */
 #define RTCP_DEFAULT_INTERVALMS   5000	/*!< Default milli-seconds between RTCP reports we send */
@@ -176,10 +176,10 @@ struct ast_rtp {
 };
 
 /* Forward declarations */
-static int ast_rtcp_write(void *data);
+static int ast_rtcp_write(const void *data);
 static void timeval2ntp(struct timeval tv, unsigned int *msw, unsigned int *lsw);
-static int ast_rtcp_write_sr(void *data);
-static int ast_rtcp_write_rr(void *data);
+static int ast_rtcp_write_sr(const void *data);
+static int ast_rtcp_write_rr(const void *data);
 static unsigned int ast_rtcp_calc_interval(struct ast_rtp *rtp);
 static int ast_rtp_senddigit_continuation(struct ast_rtp *rtp);
 int ast_rtp_senddigit_end(struct ast_rtp *rtp, char digit);
@@ -738,6 +738,10 @@ static struct ast_frame *process_rfc2833(struct ast_rtp *rtp, unsigned char *dat
 		resp = 'A' + (event - 12);
 	} else if (event < 17) {	/* Event 16: Hook flash */
 		resp = 'X';	
+	} else {
+		/* Not a supported event */
+		ast_log(LOG_DEBUG, "Ignoring RTP 2833 Event: %08x. Not a DTMF Digit.\n", event);
+		return &ast_null_frame;
 	}
 
 	if (ast_test_flag(rtp, FLAG_DTMF_COMPENSATE)) {
@@ -2094,7 +2098,7 @@ void ast_rtp_destroy(struct ast_rtp *rtp)
 		ast_verbose("  SSRC:		 %u\n", rtp->ssrc);
 		ast_verbose("  Sent packets:	 %u\n", rtp->txcount);
 		ast_verbose("  Lost packets:	 %u\n", rtp->rtcp->reported_lost);
-		ast_verbose("  Jitter:		 %u\n", rtp->rtcp->reported_jitter);
+		ast_verbose("  Jitter:		 %u\n", rtp->rtcp->reported_jitter / (unsigned int)65536.0);
 		ast_verbose("  SR-count:	 %u\n", rtp->rtcp->sr_count);
 		ast_verbose("  RTT:		 %f\n", rtp->rtcp->rtt);
 	}
@@ -2308,9 +2312,9 @@ int ast_rtcp_send_h261fur(void *data)
 }
 
 /*! \brief Send RTCP sender's report */
-static int ast_rtcp_write_sr(void *data)
+static int ast_rtcp_write_sr(const void *data)
 {
-	struct ast_rtp *rtp = data;
+	struct ast_rtp *rtp = (struct ast_rtp *)data;
 	int res;
 	int len = 0;
 	struct timeval now;
@@ -2422,9 +2426,9 @@ static int ast_rtcp_write_sr(void *data)
 }
 
 /*! \brief Send RTCP recepient's report */
-static int ast_rtcp_write_rr(void *data)
+static int ast_rtcp_write_rr(const void *data)
 {
-	struct ast_rtp *rtp = data;
+	struct ast_rtp *rtp = (struct ast_rtp *)data;
 	int res;
 	int len = 32;
 	unsigned int lost;
@@ -2521,9 +2525,9 @@ static int ast_rtcp_write_rr(void *data)
 /*! \brief Write and RTCP packet to the far end
  * \note Decide if we are going to send an SR (with Reception Block) or RR 
  * RR is sent if we have not sent any rtp packets in the previous interval */
-static int ast_rtcp_write(void *data)
+static int ast_rtcp_write(const void *data)
 {
-	struct ast_rtp *rtp = data;
+	struct ast_rtp *rtp = (struct ast_rtp *)data;
 	int res;
 	
 	if (!rtp || !rtp->rtcp)
@@ -2836,7 +2840,8 @@ static enum ast_bridge_result bridge_native_loop(struct ast_channel *c0, struct 
 		/* Check if anything changed */
 		if ((c0->tech_pvt != pvt0) ||
 		    (c1->tech_pvt != pvt1) ||
-		    (c0->masq || c0->masqr || c1->masq || c1->masqr)) {
+		    (c0->masq || c0->masqr || c1->masq || c1->masqr) ||
+		    (c0->monitor || c0->spies || c1->monitor || c1->spies)) {
 			ast_log(LOG_DEBUG, "Oooh, something is weird, backing out\n");
 			if (c0->tech_pvt == pvt0)
 				if (pr0->set_rtp_peer(c0, NULL, NULL, 0, 0))
@@ -2909,7 +2914,7 @@ static enum ast_bridge_result bridge_native_loop(struct ast_channel *c0, struct 
 		}
 		fr = ast_read(who);
 		other = (who == c0) ? c1 : c0;
-		if (!fr || ((fr->frametype == AST_FRAME_DTMF) &&
+		if (!fr || ((fr->frametype == AST_FRAME_DTMF_BEGIN || fr->frametype == AST_FRAME_DTMF_END) &&
 			    (((who == c0) && (flags & AST_BRIDGE_DTMF_CHANNEL_0)) ||
 			     ((who == c1) && (flags & AST_BRIDGE_DTMF_CHANNEL_1))))) {
 			/* Break out of bridge */
@@ -2941,6 +2946,16 @@ static enum ast_bridge_result bridge_native_loop(struct ast_channel *c0, struct 
 					else
 						pr0->set_rtp_peer(c0, p1, vp1, codec1, ast_test_flag(p1, FLAG_NAT_ACTIVE));
 				}
+				/* Update local address information */
+				ast_rtp_get_peer(p0, &t0);
+				memcpy(&ac0, &t0, sizeof(ac0));
+				ast_rtp_get_peer(p1, &t1);
+				memcpy(&ac1, &t1, sizeof(ac1));
+				/* Update codec information */
+				if (pr0->get_codec && c0->tech_pvt)
+					oldcodec0 = codec0 = pr0->get_codec(c0);
+				if (pr1->get_codec && c1->tech_pvt)
+					oldcodec1 = codec1 = pr1->get_codec(c1);
 				ast_indicate_data(other, fr->subclass, fr->data, fr->datalen);
 				ast_frfree(fr);
 			} else {
@@ -2951,7 +2966,7 @@ static enum ast_bridge_result bridge_native_loop(struct ast_channel *c0, struct 
 			}
 		} else {
 			if ((fr->frametype == AST_FRAME_DTMF_BEGIN) ||
-			    (fr->frametype == AST_FRAME_DTMF) ||
+			    (fr->frametype == AST_FRAME_DTMF_END) ||
 			    (fr->frametype == AST_FRAME_VOICE) ||
 			    (fr->frametype == AST_FRAME_VIDEO) ||
 			    (fr->frametype == AST_FRAME_IMAGE) ||
@@ -3103,7 +3118,8 @@ static enum ast_bridge_result bridge_p2p_loop(struct ast_channel *c0, struct ast
 		/* Check if anything changed */
 		if ((c0->tech_pvt != pvt0) ||
 		    (c1->tech_pvt != pvt1) ||
-		    (c0->masq || c0->masqr || c1->masq || c1->masqr)) {
+		    (c0->masq || c0->masqr || c1->masq || c1->masqr) ||
+		    (c0->monitor || c0->spies || c1->monitor || c1->spies)) {
 			ast_log(LOG_DEBUG, "Oooh, something is weird, backing out\n");
 			if ((c0->masq || c0->masqr) && (fr = ast_read(c0)))
 				ast_frfree(fr);
@@ -3128,7 +3144,7 @@ static enum ast_bridge_result bridge_p2p_loop(struct ast_channel *c0, struct ast
 		fr = ast_read(who);
 		other = (who == c0) ? c1 : c0;
 		/* Dependong on the frame we may need to break out of our bridge */
-		if (!fr || ((fr->frametype == AST_FRAME_DTMF) &&
+		if (!fr || ((fr->frametype == AST_FRAME_DTMF_BEGIN || fr->frametype == AST_FRAME_DTMF_END) &&
 			    ((who == c0) && (flags & AST_BRIDGE_DTMF_CHANNEL_0)) |
 			    ((who == c1) && (flags & AST_BRIDGE_DTMF_CHANNEL_1)))) {
 			/* Record received frame and who */
@@ -3170,7 +3186,7 @@ static enum ast_bridge_result bridge_p2p_loop(struct ast_channel *c0, struct ast
 			}
 		} else {
 			if ((fr->frametype == AST_FRAME_DTMF_BEGIN) ||
-			    (fr->frametype == AST_FRAME_DTMF) ||
+			    (fr->frametype == AST_FRAME_DTMF_END) ||
 			    (fr->frametype == AST_FRAME_VOICE) ||
 			    (fr->frametype == AST_FRAME_VIDEO) ||
 			    (fr->frametype == AST_FRAME_IMAGE) ||

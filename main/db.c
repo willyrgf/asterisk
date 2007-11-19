@@ -63,7 +63,7 @@ AST_MUTEX_DEFINE_STATIC(dblock);
 static int dbinit(void) 
 {
 	if (!astdb && !(astdb = dbopen((char *)ast_config_AST_DB, O_CREAT | O_RDWR, 0664, DB_BTREE, NULL))) {
-		ast_log(LOG_WARNING, "Unable to open Asterisk database\n");
+		ast_log(LOG_WARNING, "Unable to open Asterisk database '%s': %s\n", ast_config_AST_DB, strerror(errno));
 		return -1;
 	}
 	return 0;
@@ -194,7 +194,8 @@ int ast_db_get(const char *family, const char *keys, char *value, int valuelen)
 
 	/* Be sure to NULL terminate our data either way */
 	if (res) {
-		ast_log(LOG_DEBUG, "Unable to find key '%s' in family '%s'\n", keys, family);
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Unable to find key '%s' in family '%s'\n", keys, family);
 	} else {
 #if 0
 		printf("Got value of size %d\n", data.size);
@@ -232,7 +233,7 @@ int ast_db_del(const char *family, const char *keys)
 	
 	ast_mutex_unlock(&dblock);
 
-	if (res) 
+	if (res && option_debug)
 		ast_log(LOG_DEBUG, "Unable to find key '%s' in family '%s'\n", keys, family);
 	return res;
 }

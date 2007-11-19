@@ -422,8 +422,12 @@ int ast_park_call(struct ast_channel *chan, struct ast_channel *peer, int timeou
 	if (!con)	/* Still no context? Bad */
 		ast_log(LOG_ERROR, "Parking context '%s' does not exist and unable to create\n", parking_con);
 	/* Tell the peer channel the number of the parking space */
-	if (peer && pu->parkingnum != -1) /* Only say number if it's a number */
+	if (peer && pu->parkingnum != -1) { /* Only say number if it's a number */
+		/* Make sure we don't start saying digits to the channel being parked */
+		ast_set_flag(peer, AST_FLAG_MASQ_NOSTREAM);
 		ast_say_digits(peer, pu->parkingnum, "", peer->language);
+		ast_clear_flag(peer, AST_FLAG_MASQ_NOSTREAM);
+	}
 	if (con) {
 		if (!ast_add_extension2(con, 1, pu->parkingexten, 1, NULL, NULL, parkedcall, strdup(pu->parkingexten), ast_free, registrar))
 			notify_metermaids(pu->parkingexten, parking_con);
@@ -475,6 +479,7 @@ int ast_masq_park_call(struct ast_channel *rchan, struct ast_channel *peer, int 
 #define FEATURE_RETURN_PASSDIGITS	 21
 #define FEATURE_RETURN_STOREDIGITS	 22
 #define FEATURE_RETURN_SUCCESS	 	 23
+#define FEATURE_RETURN_KEEPTRYING    24
 
 #define FEATURE_SENSE_CHAN	(1 << 0)
 #define FEATURE_SENSE_PEER	(1 << 1)
@@ -495,7 +500,7 @@ static void set_peers(struct ast_channel **caller, struct ast_channel **callee,
 }
 
 /*! \brief support routing for one touch call parking */
-static int builtin_parkcall(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config, char *code, int sense)
+static int builtin_parkcall(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config, char *code, int sense, void *data)
 {
 	struct ast_channel *parker;
         struct ast_channel *parkee;
@@ -528,7 +533,7 @@ static int builtin_parkcall(struct ast_channel *chan, struct ast_channel *peer, 
 
 }
 
-static int builtin_automonitor(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config, char *code, int sense)
+static int builtin_automonitor(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config, char *code, int sense, void *data)
 {
 	char *caller_chan_id = NULL, *callee_chan_id = NULL, *args = NULL, *touch_filename = NULL;
 	int x = 0;
@@ -612,7 +617,7 @@ static int builtin_automonitor(struct ast_channel *chan, struct ast_channel *pee
 	return -1;
 }
 
-static int builtin_disconnect(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config, char *code, int sense)
+static int builtin_disconnect(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config, char *code, int sense, void *data)
 {
 	if (option_verbose > 3)
 		ast_verbose(VERBOSE_PREFIX_3 "User hit '%s' to disconnect call.\n", code);
@@ -639,7 +644,7 @@ static const char *real_ctx(struct ast_channel *transferer, struct ast_channel *
         return s;  
 }
 
-static int builtin_blindtransfer(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config, char *code, int sense)
+static int builtin_blindtransfer(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config, char *code, int sense, void *data)
 {
 	struct ast_channel *transferer;
 	struct ast_channel *transferee;
@@ -743,7 +748,7 @@ static int check_compat(struct ast_channel *c, struct ast_channel *newchan)
 	return 0;
 }
 
-static int builtin_atxfer(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config, char *code, int sense)
+static int builtin_atxfer(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config, char *code, int sense, void *data)
 {
 	struct ast_channel *transferer;
 	struct ast_channel *transferee;
@@ -812,8 +817,11 @@ static int builtin_atxfer(struct ast_channel *chan, struct ast_channel *peer, st
 		return FEATURE_RETURN_SUCCESS;
 	}
 
-	if (check_compat(transferer, newchan))
+	if (check_compat(transferer, newchan)) {
+		/* we do mean transferee here, NOT transferer */
+		finishup(transferee);
 		return -1;
+	}
 	memset(&bconfig,0,sizeof(struct ast_bridge_config));
 	ast_set_flag(&(bconfig.features_caller), AST_FEATURE_DISCONNECT);
 	ast_set_flag(&(bconfig.features_callee), AST_FEATURE_DISCONNECT);
@@ -827,8 +835,10 @@ static int builtin_atxfer(struct ast_channel *chan, struct ast_channel *peer, st
 		return FEATURE_RETURN_SUCCESS;
 	}
 	
-	if (check_compat(transferee, newchan))
+	if (check_compat(transferee, newchan)) {
+		finishup(transferee);
 		return -1;
+	}
 
 	ast_indicate(transferee, AST_CONTROL_UNHOLD);
 	
@@ -949,19 +959,12 @@ static struct ast_call_feature *find_dynamic_feature(const char *name)
 }
 
 /*! \brief exec an app by feature */
-static int feature_exec_app(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config, char *code, int sense)
+static int feature_exec_app(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config, char *code, int sense, void *data)
 {
 	struct ast_app *app;
-	struct ast_call_feature *feature;
+	struct ast_call_feature *feature = data;
 	struct ast_channel *work, *idle;
 	int res;
-
-	AST_LIST_LOCK(&feature_list);
-	AST_LIST_TRAVERSE(&feature_list, feature, feature_entry) {
-		if (!strcasecmp(feature->exten, code))
-			break;
-	}
-	AST_LIST_UNLOCK(&feature_list);
 
 	if (!feature) { /* shouldn't ever happen! */
 		ast_log(LOG_NOTICE, "Found feature before, but at execing we've lost it??\n");
@@ -970,7 +973,7 @@ static int feature_exec_app(struct ast_channel *chan, struct ast_channel *peer, 
 
 	if (sense == FEATURE_SENSE_CHAN) {
 		if (!ast_test_flag(feature, AST_FEATURE_FLAG_BYCALLER))
-			return FEATURE_RETURN_PASSDIGITS;
+			return FEATURE_RETURN_KEEPTRYING;
 		if (ast_test_flag(feature, AST_FEATURE_FLAG_ONSELF)) {
 			work = chan;
 			idle = peer;
@@ -980,7 +983,7 @@ static int feature_exec_app(struct ast_channel *chan, struct ast_channel *peer, 
 		}
 	} else {
 		if (!ast_test_flag(feature, AST_FEATURE_FLAG_BYCALLEE))
-			return FEATURE_RETURN_PASSDIGITS;
+			return FEATURE_RETURN_KEEPTRYING;
 		if (ast_test_flag(feature, AST_FEATURE_FLAG_ONSELF)) {
 			work = peer;
 			idle = chan;
@@ -1067,7 +1070,7 @@ static int ast_feature_interpret(struct ast_channel *chan, struct ast_channel *p
 		    !ast_strlen_zero(builtin_features[x].exten)) {
 			/* Feature is up for consideration */
 			if (!strcmp(builtin_features[x].exten, code)) {
-				res = builtin_features[x].operation(chan, peer, config, code, sense);
+				res = builtin_features[x].operation(chan, peer, config, code, sense, NULL);
 				break;
 			} else if (!strncmp(builtin_features[x].exten, code, strlen(code))) {
 				if (res == FEATURE_RETURN_PASSDIGITS)
@@ -1093,9 +1096,12 @@ static int ast_feature_interpret(struct ast_channel *chan, struct ast_channel *p
 		if (!strcmp(feature->exten, code)) {
 			if (option_verbose > 2)
 				ast_verbose(VERBOSE_PREFIX_3 " Feature Found: %s exten: %s\n",feature->sname, tok);
-			res = feature->operation(chan, peer, config, code, sense);
-			AST_LIST_UNLOCK(&feature_list);
-			break;
+			res = feature->operation(chan, peer, config, code, sense, feature);
+			if (res != FEATURE_RETURN_KEEPTRYING) {
+				AST_LIST_UNLOCK(&feature_list);
+				break;
+			}
+			res = FEATURE_RETURN_PASSDIGITS;
 		} else if (!strncmp(feature->exten, code, strlen(code)))
 			res = FEATURE_RETURN_STOREDIGITS;
 
@@ -1238,7 +1244,7 @@ static struct ast_channel *ast_feature_request_and_dial(struct ast_channel *call
 							f = NULL;
 							ready=1;
 							break;
-						} else {
+						} else if (f->subclass != -1) {
 							ast_log(LOG_NOTICE, "Don't know what to do about control frame: %d\n", f->subclass);
 						}
 						/* else who cares */
@@ -1458,7 +1464,8 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 			}
 		}
 		if (res < 0) {
-			ast_log(LOG_WARNING, "Bridge failed on channels %s and %s\n", chan->name, peer->name);
+			if (!ast_test_flag(chan, AST_FLAG_ZOMBIE) && !ast_test_flag(peer, AST_FLAG_ZOMBIE) && !ast_check_hangup(chan) && !ast_check_hangup(peer))
+				ast_log(LOG_WARNING, "Bridge failed on channels %s and %s\n", chan->name, peer->name);
 			return -1;
 		}
 		
@@ -1571,7 +1578,7 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 			
 			/* absorb the peer cdr */
 			ast_cdr_merge(bridge_cdr, peer->cdr);
-			if (ast_test_flag(peer->cdr, AST_CDR_FLAG_LOCKED))
+			if (!ast_test_flag(peer->cdr, AST_CDR_FLAG_LOCKED))
 				ast_cdr_discard(peer->cdr); /* if locked cdrs are in peer, they are taken over in the merge */
 			
 			peer->cdr = NULL;
