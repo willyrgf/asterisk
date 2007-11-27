@@ -211,14 +211,14 @@ static void *mixmonitor_thread(void *obj)
 	if (option_verbose > 1)
 		ast_verbose(VERBOSE_PREFIX_2 "End MixMonitor Recording %s\n", mixmonitor->name);
 
+	if (fs)
+		ast_closestream(fs);
+
 	if (mixmonitor->post_process) {
 		if (option_verbose > 2)
 			ast_verbose(VERBOSE_PREFIX_2 "Executing [%s]\n", mixmonitor->post_process);
 		ast_safe_system(mixmonitor->post_process);
 	}
-		
-	if (fs)
-		ast_closestream(fs);
 
 	free(mixmonitor);
 
@@ -332,7 +332,7 @@ static int mixmonitor_exec(struct ast_channel *chan, void *data)
 		return -1;
 	}
 
-	if (args.argc > 1 && args.options) {
+	if (args.options) {
 		char *opts[OPT_ARG_ARRAY_SIZE] = { NULL, };
 
 		ast_app_parse_options(mixmonitor_opts, &flags, opts, args.options);
@@ -378,7 +378,7 @@ static int mixmonitor_exec(struct ast_channel *chan, void *data)
 	}
 
 	pbx_builtin_setvar_helper(chan, "MIXMONITOR_FILENAME", args.filename);
-	launch_monitor_thread(chan, args.filename, flags.flags, readvol, writevol, args.argc > 2 ? args.post_process : "");
+	launch_monitor_thread(chan, args.filename, flags.flags, readvol, writevol, args.post_process);
 
 	ast_module_user_remove(u);
 

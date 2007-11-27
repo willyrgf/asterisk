@@ -2002,6 +2002,7 @@ void ast_hint_state_changed(const char *device)
 {
 	struct ast_hint *hint;
 
+	ast_mutex_lock(&conlock);
 	AST_LIST_LOCK(&hints);
 
 	AST_LIST_TRAVERSE(&hints, hint, list) {
@@ -2039,6 +2040,7 @@ void ast_hint_state_changed(const char *device)
 	}
 
 	AST_LIST_UNLOCK(&hints);
+	ast_mutex_unlock(&conlock);
 }
 
 /*! \brief  ast_extension_state_add: Add watcher for extension states */
@@ -2296,8 +2298,10 @@ int ast_spawn_extension(struct ast_channel *c, const char *context, const char *
 /* helper function to set extension and priority */
 static void set_ext_pri(struct ast_channel *c, const char *exten, int pri)
 {
+	ast_channel_lock(c);
 	ast_copy_string(c->exten, exten, sizeof(c->exten));
 	c->priority = pri;
+	ast_channel_unlock(c);
 }
 
 /*!
