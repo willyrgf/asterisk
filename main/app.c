@@ -1408,10 +1408,9 @@ int ast_app_parse_options(const struct ast_app_option *options, struct ast_flags
 				break;
 			}
 		} else if (argloc) {
-			args[argloc - 1] = NULL;
+			args[argloc - 1] = "";
 		}
-		if (!argloc || !ast_strlen_zero(args[argloc - 1]))
-			ast_set_flag(flags, options[curarg].flag);
+		ast_set_flag(flags, options[curarg].flag);
 	}
 
 	return res;
