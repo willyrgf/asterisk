@@ -2296,7 +2296,7 @@ static int is_our_turn(struct queue_ent *qe)
 	
 		if (qe->parent->strategy == QUEUE_STRATEGY_RINGALL) {
 			if (option_debug)
-				ast_log(LOG_DEBUG, "Even though there are %d available members, the strategy is ringall so only the head call is allowed in\n", avl);
+				ast_log(LOG_DEBUG, "Even though there may be multiple members available, the strategy is ringall so only the head call is allowed in\n");
 			avl = 1;
 		} else {
 			struct ao2_iterator mem_iter = ao2_iterator_init(qe->parent->members, 0);
@@ -3757,17 +3757,9 @@ static int queue_function_qac(struct ast_channel *chan, char *cmd, char *data, c
 	}
 
 	lu = ast_module_user_add(chan);
-	
-	AST_LIST_LOCK(&queues);
-	AST_LIST_TRAVERSE(&queues, q, list) {
-		if (!strcasecmp(q->name, data)) {
-			ast_mutex_lock(&q->lock);
-			break;
-		}
-	}
-	AST_LIST_UNLOCK(&queues);
 
-	if (q) {
+	if((q = load_realtime_queue(data))) {
+		ast_mutex_lock(&q->lock);
 		mem_iter = ao2_iterator_init(q->members, 0);
 		while ((m = ao2_iterator_next(&mem_iter))) {
 			/* Count the agents who are logged in and presently answering calls */

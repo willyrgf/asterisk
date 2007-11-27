@@ -4799,6 +4799,8 @@ static int find_sdp(struct sip_request *req)
 	char *boundary;
 	unsigned int x;
 	int boundaryisquoted = FALSE;
+	int found_application_sdp = FALSE;
+	int found_end_of_headers = FALSE;
 
 	content_type = get_header(req, "Content-Type");
 
@@ -4831,31 +4833,36 @@ static int find_sdp(struct sip_request *req)
 	   at the beginning */
 	boundary = ast_strdupa(search - 2);
 	boundary[0] = boundary[1] = '-';
-
 	/* Remove final quote */
 	if (boundaryisquoted)
 		boundary[strlen(boundary) - 1] = '\0';
 
-	/* search for the boundary marker, but stop when there are not enough
-	   lines left for it, the Content-Type header and at least one line of
-	   body */
-	for (x = 0; x < (req->lines - 2); x++) {
-		if (!strncasecmp(req->line[x], boundary, strlen(boundary)) &&
-		    !strcasecmp(req->line[x + 1], "Content-Type: application/sdp")) {
-			x += 2;
-			req->sdp_start = x;
+	/* search for the boundary marker, the empty line delimiting headers from
+	   sdp part and the end boundry if it exists */
 
-			/* search for the end of the body part */
-			for ( ; x < req->lines; x++) {
-				if (!strncasecmp(req->line[x], boundary, strlen(boundary)))
-					break;
+	for (x = 0; x < (req->lines ); x++) {
+		if(!strncasecmp(req->line[x], boundary, strlen(boundary))){
+			if(found_application_sdp && found_end_of_headers){
+				req->sdp_end = x-1;
+				return 1;
 			}
-			req->sdp_end = x;
-			return 1;
+			found_application_sdp = FALSE;
+		}
+		if(!strcasecmp(req->line[x], "Content-Type: application/sdp"))
+			found_application_sdp = TRUE;
+		
+		if(strlen(req->line[x]) == 0 ){
+			if(found_application_sdp && !found_end_of_headers){
+				req->sdp_start = x;
+				found_end_of_headers = TRUE;
+			}
 		}
 	}
-
-	return 0;
+	if(found_application_sdp && found_end_of_headers) {
+		req->sdp_end = x;
+		return TRUE;
+	}
+	return FALSE;
 }
 
 /*! \brief Change hold state for a call */
@@ -5196,16 +5203,37 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 			continue;
 		} else if (sscanf(a, "rtpmap: %u %[^/]/", &codec, mimeSubtype) == 2) {
 			/* We have a rtpmap to handle */
-			if (debug)
-				ast_verbose("Found description format %s for ID %d\n", mimeSubtype, codec);
-			found_rtpmap_codecs[last_rtpmap_codec] = codec;
-			last_rtpmap_codec++;
+			int found = FALSE;
+			/* We should propably check if this is an audio or video codec
+				so we know where to look */
 
 			/* Note: should really look at the 'freq' and '#chans' params too */
-			ast_rtp_set_rtpmap_type(newaudiortp, codec, "audio", mimeSubtype,
-					ast_test_flag(&p->flags[0], SIP_G726_NONSTANDARD) ? AST_RTP_OPT_G726_NONSTANDARD : 0);
-			if (p->vrtp)
-				ast_rtp_set_rtpmap_type(newvideortp, codec, "video", mimeSubtype, 0);
+			if(ast_rtp_set_rtpmap_type(newaudiortp, codec, "audio", mimeSubtype,
+					ast_test_flag(&p->flags[0], SIP_G726_NONSTANDARD) ? AST_RTP_OPT_G726_NONSTANDARD : 0) != -1) {
+				if (debug)
+					ast_verbose("Found audio description format %s for ID %d\n", mimeSubtype, codec);
+				found_rtpmap_codecs[last_rtpmap_codec] = codec;
+				last_rtpmap_codec++;
+				found = TRUE;
+
+			} else if (p->vrtp) {
+				if(ast_rtp_set_rtpmap_type(newvideortp, codec, "video", mimeSubtype, 0) != -1) {
+					if (debug)
+						ast_verbose("Found video description format %s for ID %d\n", mimeSubtype, codec);
+					found_rtpmap_codecs[last_rtpmap_codec] = codec;
+					last_rtpmap_codec++;
+					found = TRUE;
+				}
+			}
+			if (!found) {
+				/* Remove this codec since it's an unknown media type for us */
+				/* XXX This is buggy since the media line for audio and video can have the
+					same numbers. We need to check as described above, but for testing this works... */
+				ast_rtp_unset_m_type(newaudiortp, codec);
+				ast_rtp_unset_m_type(newvideortp, codec);
+				if (debug) 
+					ast_verbose("Found unknown media description format %s for ID %d\n", mimeSubtype, codec);
+			}
 		}
 	}
 	
@@ -11847,16 +11875,29 @@ static void check_pendings(struct sip_pvt *p)
 			transmit_request(p, SIP_CANCEL, p->ocseq, XMIT_RELIABLE, FALSE);
 			/* Actually don't destroy us yet, wait for the 487 on our original 
 			   INVITE, but do set an autodestruct just in case we never get it. */
-		else 
+		else {
+			/* We have a pending outbound invite, don't send someting
+				new in-transaction */
+			if (p->pendinginvite)
+				return;
+
+			/* Perhaps there is an SD change INVITE outstanding */
 			transmit_request_with_auth(p, SIP_BYE, 0, XMIT_RELIABLE, TRUE);
+		}
 		ast_clear_flag(&p->flags[0], SIP_PENDINGBYE);	
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 	} else if (ast_test_flag(&p->flags[0], SIP_NEEDREINVITE)) {
-		if (option_debug)
-			ast_log(LOG_DEBUG, "Sending pending reinvite on '%s'\n", p->callid);
-		/* Didn't get to reinvite yet, so do it now */
-		transmit_reinvite_with_sdp(p);
-		ast_clear_flag(&p->flags[0], SIP_NEEDREINVITE);	
+		/* if we can't REINVITE, hold it for later */
+		if (p->pendinginvite || p->invitestate == INV_CALLING || p->invitestate == INV_PROCEEDING || p->invitestate == INV_EARLY_MEDIA) {
+			if (option_debug)
+				ast_log(LOG_DEBUG, "NOT Sending pending reinvite (yet) on '%s'\n", p->callid);
+		} else {
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Sending pending reinvite on '%s'\n", p->callid);
+			/* Didn't get to reinvite yet, so do it now */
+			transmit_reinvite_with_sdp(p);
+			ast_clear_flag(&p->flags[0], SIP_NEEDREINVITE);	
+		}
 	}
 }
 
@@ -15596,7 +15637,7 @@ static int sip_poke_peer(struct sip_peer *peer)
 	else {
 		if (peer->pokeexpire > -1)
 			ast_sched_del(sched, peer->pokeexpire);
-		peer->pokeexpire = ast_sched_add(sched, DEFAULT_MAXMS * 2, sip_poke_noanswer, peer);
+		peer->pokeexpire = ast_sched_add(sched, peer->maxms * 2, sip_poke_noanswer, peer);
 	}
 
 	return 0;
@@ -16502,7 +16543,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 			if (!strcasecmp(v->value, "no")) {
 				peer->maxms = 0;
 			} else if (!strcasecmp(v->value, "yes")) {
-				peer->maxms = DEFAULT_MAXMS;
+				peer->maxms = default_qualify ? default_qualify : DEFAULT_MAXMS;
 			} else if (sscanf(v->value, "%d", &peer->maxms) != 1) {
 				ast_log(LOG_WARNING, "Qualification of peer '%s' should be 'yes', 'no', or a number of milliseconds at line %d of sip.conf\n", peer->name, v->lineno);
 				peer->maxms = 0;
