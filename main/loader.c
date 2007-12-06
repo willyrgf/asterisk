@@ -244,6 +244,7 @@ static struct reload_classes {
 	{ "manager",	reload_manager },
 	{ "rtp",	ast_rtp_reload },
 	{ "http",	ast_http_reload },
+	{ "logger",	logger_reload },
 	{ NULL, 	NULL }
 };
 
