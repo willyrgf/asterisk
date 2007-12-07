@@ -180,7 +180,7 @@ static inline void ast_reentrancy_unlock(ast_mutex_t *p_ast_mutex)
 static inline void ast_reentrancy_init(ast_mutex_t *p_ast_mutex)
 {
 	int i;
-	static pthread_mutexattr_t reentr_attr;
+	pthread_mutexattr_t reentr_attr;
 
 	for (i = 0; i < AST_MAX_REENTRANCY; i++) {
 		p_ast_mutex->file[i] = NULL;
@@ -206,7 +206,7 @@ static inline int __ast_pthread_mutex_init(int track, const char *filename, int 
 						const char *mutex_name, ast_mutex_t *t) 
 {
 	int res;
-	static pthread_mutexattr_t  attr;
+	pthread_mutexattr_t  attr;
 
 #ifdef AST_MUTEX_INIT_W_CONSTRUCTORS
 
