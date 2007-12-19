@@ -69,6 +69,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/threadstorage.h"
 #include "asterisk/linkedlists.h"
 #include "asterisk/term.h"
+#include "asterisk/astobj2.h"
 
 struct fast_originate_helper {
 	char tech[AST_MAX_EXTENSION];
@@ -274,6 +275,47 @@ static void xml_copy_escape(char **dst, size_t *maxlen, const char *src, int low
 	}
 }
 
+struct variable_count {
+	char *varname;
+	int count;
+};
+
+static int compress_char(char c)
+{
+	c &= 0x7f;
+	if (c < 32)
+		return 0;
+	else if (c >= 'a' && c <= 'z')
+		return c - 64;
+	else if (c > 'z')
+		return '_';
+	else
+		return c - 32;
+}
+
+static int variable_count_hash_fn(const void *vvc, const int flags)
+{
+	const struct variable_count *vc = vvc;
+	int res = 0, i;
+	for (i = 0; i < 5; i++) {
+		if (vc->varname[i] == '\0')
+			break;
+		res += compress_char(vc->varname[i]) << (i * 6);
+	}
+	return res;
+}
+
+static int variable_count_cmp_fn(void *obj, void *vstr, int flags)
+{
+	/* Due to the simplicity of struct variable_count, it makes no difference
+	 * if you pass in objects or strings, the same operation applies. This is
+	 * due to the fact that the hash occurs on the first element, which means
+	 * the address of both the struct and the string are exactly the same. */
+	struct variable_count *vc = obj;
+	char *str = vstr;
+	return !strcmp(vc->varname, str) ? CMP_MATCH : 0;
+}
+
 static char *xml_translate(char *in, struct ast_variable *vars)
 {
 	struct ast_variable *v;
@@ -287,7 +329,9 @@ static char *xml_translate(char *in, struct ast_variable *vars)
 	int escaped = 0;
 	int inobj = 0;
 	int x;
-	
+	struct variable_count *vc = NULL;
+	struct ao2_container *vco = NULL;
+
 	for (v = vars; v; v = v->next) {
 		if (!dest && !strcasecmp(v->name, "ajaxdest"))
 			dest = v->value;
@@ -303,7 +347,7 @@ static char *xml_translate(char *in, struct ast_variable *vars)
 			colons++;
 		else if (in[x] == '\n')
 			breaks++;
-		else if (strchr("&\"<>", in[x]))
+		else if (strchr("&\"<>\'", in[x]))
 			escaped++;
 	}
 	len = (size_t) (strlen(in) + colons * 5 + breaks * (40 + strlen(dest) + strlen(objtype)) + escaped * 10); /* foo="bar", "<response type=\"object\" id=\"dest\"", "&amp;" */
@@ -319,6 +363,10 @@ static char *xml_translate(char *in, struct ast_variable *vars)
 			if ((count > 3) && inobj) {
 				ast_build_string(&tmp, &len, " /></response>\n");
 				inobj = 0;
+
+				/* Entity is closed, so close out the name cache */
+				ao2_ref(vco, -1);
+				vco = NULL;
 			}
 			count = 0;
 			while (*in && (*in < 32)) {
@@ -333,19 +381,37 @@ static char *xml_translate(char *in, struct ast_variable *vars)
 				if (*val == ' ')
 					val++;
 				if (!inobj) {
+					vco = ao2_container_alloc(37, variable_count_hash_fn, variable_count_cmp_fn);
 					ast_build_string(&tmp, &len, "<response type='object' id='%s'><%s", dest, objtype);
 					inobj = 1;
 				}
-				ast_build_string(&tmp, &len, " ");				
+
+				/* Check if the var has been used already */
+				if ((vc = ao2_find(vco, var, 0)))
+					vc->count++;
+				else {
+					/* Create a new entry for this one */
+					vc = ao2_alloc(sizeof(*vc), NULL);
+					vc->varname = var;
+					vc->count = 1;
+					ao2_link(vco, vc);
+				}
+
+				ast_build_string(&tmp, &len, " ");
 				xml_copy_escape(&tmp, &len, var, 1);
+				if (vc->count > 1)
+					ast_build_string(&tmp, &len, "-%d", vc->count);
 				ast_build_string(&tmp, &len, "='");
 				xml_copy_escape(&tmp, &len, val, 0);
 				ast_build_string(&tmp, &len, "'");
+				ao2_ref(vc, -1);
 			}
 		}
 	}
 	if (inobj)
 		ast_build_string(&tmp, &len, " /></response>\n");
+	if (vco)
+		ao2_ref(vco, -1);
 	return out;
 }
 
@@ -683,10 +749,9 @@ static void destroy_session(struct mansession *s)
 {
 	AST_LIST_LOCK(&sessions);
 	AST_LIST_REMOVE(&sessions, s, list);
-	AST_LIST_UNLOCK(&sessions);
-
-	ast_atomic_fetchadd_int(&num_sessions, -1);
+	num_sessions--;
 	free_session(s);
+	AST_LIST_UNLOCK(&sessions);
 }
 
 const char *astman_get_header(const struct message *m, char *var)
@@ -987,6 +1052,9 @@ static int authenticate(struct mansession *s, const struct message *m)
 		struct ast_variable *v;
 		const char *password = NULL;
 		int hasmanager = 0;
+		const char *readperms = NULL;
+		const char *writeperms = NULL;
+
 		if (strcasecmp(cat, user) || !strcasecmp(cat, "general")) {
 			cat = ast_category_browse(cfg, cat);
 			continue;
@@ -996,6 +1064,10 @@ static int authenticate(struct mansession *s, const struct message *m)
 				password = v->value;
 			else if (!strcasecmp(v->name, "hasmanager"))
 				hasmanager = ast_true(v->value);
+			else if (!strcasecmp(v->name, "managerread"))
+				readperms = v->value;
+			else if (!strcasecmp(v->name, "managerwrite"))
+				writeperms = v->value;
 		}
 		if (!hasmanager)
 			break;
@@ -1005,8 +1077,8 @@ static int authenticate(struct mansession *s, const struct message *m)
 			return -1;
 		}
 		ast_copy_string(s->username, cat, sizeof(s->username));
-		s->readperm = -1;
-		s->writeperm = -1;
+		s->readperm = readperms ? get_perm(readperms) : -1;
+		s->writeperm = writeperms ? get_perm(writeperms) : -1;
 		ast_config_destroy(cfg);
 		if (events)
 			set_eventmask(s, events);
@@ -1134,8 +1206,8 @@ static void handle_updates(struct mansession *s, const struct message *m, struct
 }
 
 static char mandescr_updateconfig[] =
-"Description: A 'UpdateConfig' action will dump the contents of a configuration\n"
-"file by category and contents.\n"
+"Description: A 'UpdateConfig' action will modify, create, or delete\n"
+"configuration elements in Asterisk configuration files.\n"
 "Variables (X's represent 6 digit number beginning with 000000):\n"
 "   SrcFilename:   Configuration filename to read(e.g. foo.conf)\n"
 "   DstFilename:   Configuration filename to write(e.g. foo.conf)\n"
@@ -1649,7 +1721,7 @@ static int action_command(struct mansession *s, const struct message *m)
 			term_strip(final_buf, buf, l);
 			final_buf[l] = '\0';
 		}
-		astman_append(s, S_OR(final_buf, buf));
+		astman_append(s, "%s", S_OR(final_buf, buf));
 		ast_free(buf);
 	}
 	close(fd);
@@ -1976,19 +2048,22 @@ static int process_events(struct mansession *s)
 	struct eventqent *eqe;
 	int ret = 0;
 	ast_mutex_lock(&s->__lock);
-	if (s->fd > -1) {
-		if (!s->eventq)
-			s->eventq = master_eventq;
-		while(s->eventq->next) {
-			eqe = s->eventq->next;
-			if ((s->authenticated && (s->readperm & eqe->category) == eqe->category) &&
-			    ((s->send_events & eqe->category) == eqe->category)) {
+	if (!s->eventq)
+		s->eventq = master_eventq;
+	while(s->eventq->next) {
+		eqe = s->eventq->next;
+		if ((s->authenticated && (s->readperm & eqe->category) == eqe->category) &&
+				   ((s->send_events & eqe->category) == eqe->category)) {
+			if (s->fd > -1) {
 				if (!ret && ast_carefulwrite(s->fd, eqe->eventdata, strlen(eqe->eventdata), s->writetimeout) < 0)
 					ret = -1;
-			}
-			unuse_eventqent(s->eventq);
-			s->eventq = eqe;
+			} else if (!s->outputstr && !(s->outputstr = ast_calloc(1, sizeof(*s->outputstr)))) 
+				ret = -1;
+			else 
+				ast_dynamic_str_append(&s->outputstr, 0, "%s", eqe->eventdata);
 		}
+		unuse_eventqent(s->eventq);
+		s->eventq = eqe;
 	}
 	ast_mutex_unlock(&s->__lock);
 	return ret;
@@ -2235,6 +2310,7 @@ static void *accept_thread(void *ignore)
 		AST_LIST_TRAVERSE_SAFE_BEGIN(&sessions, s, list) {
 			if (s->sessiontimeout && (now > s->sessiontimeout) && !s->inuse) {
 				AST_LIST_REMOVE_CURRENT(&sessions, list);
+				num_sessions--;
 				if (s->authenticated && (option_verbose > 1) && displayconnects) {
 					ast_verbose(VERBOSE_PREFIX_2 "HTTP Manager '%s' timed out from %s\n",
 						s->username, ast_inet_ntoa(s->sin.sin_addr));
@@ -2253,8 +2329,6 @@ static void *accept_thread(void *ignore)
 			free(eqe);
 		}
 		AST_LIST_UNLOCK(&sessions);
-		if (s)
-			ast_atomic_fetchadd_int(&num_sessions, -1);
 
 		sinlen = sizeof(sin);
 		pfds[0].fd = asock;
@@ -2277,8 +2351,6 @@ static void *accept_thread(void *ignore)
 		if (!(s = ast_calloc(1, sizeof(*s))))
 			continue;
 
-		ast_atomic_fetchadd_int(&num_sessions, 1);
-		
 		memcpy(&s->sin, &sin, sizeof(sin));
 		s->writetimeout = 100;
 		s->waiting_thread = AST_PTHREADT_NULL;
@@ -2296,13 +2368,14 @@ static void *accept_thread(void *ignore)
 		s->send_events = -1;
 		AST_LIST_LOCK(&sessions);
 		AST_LIST_INSERT_HEAD(&sessions, s, list);
+		num_sessions++;
 		/* Find the last place in the master event queue and hook ourselves
 		   in there */
 		s->eventq = master_eventq;
 		while(s->eventq->next)
 			s->eventq = s->eventq->next;
-		AST_LIST_UNLOCK(&sessions);
 		ast_atomic_fetchadd_int(&s->eventq->usecount, 1);
+		AST_LIST_UNLOCK(&sessions);
 		if (ast_pthread_create_background(&s->t, &attr, session_do, s))
 			destroy_session(s);
 	}
@@ -2580,9 +2653,9 @@ static char *generic_http_callback(int format, struct sockaddr_in *requestor, co
 		s->eventq = master_eventq;
 		while (s->eventq->next)
 			s->eventq = s->eventq->next;
-		AST_LIST_UNLOCK(&sessions);
 		ast_atomic_fetchadd_int(&s->eventq->usecount, 1);
 		ast_atomic_fetchadd_int(&num_sessions, 1);
+		AST_LIST_UNLOCK(&sessions);
 	}
 
 	/* Reset HTTP timeout.  If we're not yet authenticated, keep it extremely short */

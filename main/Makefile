@@ -26,7 +26,7 @@ OBJS=	io.o sched.o logger.o frame.o loader.o config.o channel.o \
 	utils.o plc.o jitterbuf.o dnsmgr.o devicestate.o \
 	netsock.o slinfactory.o ast_expr2.o ast_expr2f.o \
 	cryptostub.o sha1.o http.o fixedjitterbuf.o abstract_jb.o \
-	strcompat.o threadstorage.o dial.o astobj2.o
+	strcompat.o threadstorage.o dial.o astobj2.o global_datastores.o
 
 # we need to link in the objects statically, not as a library, because
 # otherwise modules will not have them available if none of the static
@@ -106,6 +106,8 @@ ast_expr2.c ast_expr2.h:
 
 ast_expr2f.c:
 	flex -o $@ --full ast_expr2.fl
+	sed 's@free( (char \*) ptr );@if(ptr) free( (char *) ptr );@' ast_expr2f.c > zz
+	mv zz ast_expr2f.c
 
 testexpr2: ast_expr2f.c ast_expr2.c ast_expr2.h
 	$(CC) -g -c -Iinclude -DSTANDALONE ast_expr2f.c

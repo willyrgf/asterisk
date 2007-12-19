@@ -699,22 +699,26 @@ static char *complete_show_version_files(const char *line, const char *word, int
 
 int ast_register_atexit(void (*func)(void))
 {
-	int res = -1;
 	struct ast_atexit *ae;
+
+	if (!(ae = ast_calloc(1, sizeof(*ae))))
+		return -1;
+
+	ae->func = func;
+
 	ast_unregister_atexit(func);	
+
 	AST_LIST_LOCK(&atexits);
-	if ((ae = ast_calloc(1, sizeof(*ae)))) {
-		AST_LIST_INSERT_HEAD(&atexits, ae, list);
-		ae->func = func;
-		res = 0;
-	}
+	AST_LIST_INSERT_HEAD(&atexits, ae, list);
 	AST_LIST_UNLOCK(&atexits);
-	return res;
+
+	return 0;
 }
 
 void ast_unregister_atexit(void (*func)(void))
 {
-	struct ast_atexit *ae;
+	struct ast_atexit *ae = NULL;
+
 	AST_LIST_LOCK(&atexits);
 	AST_LIST_TRAVERSE_SAFE_BEGIN(&atexits, ae, list) {
 		if (ae->func == func) {
@@ -724,6 +728,9 @@ void ast_unregister_atexit(void (*func)(void))
 	}
 	AST_LIST_TRAVERSE_SAFE_END
 	AST_LIST_UNLOCK(&atexits);
+
+	if (ae)
+		free(ae);
 }
 
 static int fdprint(int fd, const char *s)
@@ -825,16 +832,18 @@ int ast_safe_system(const char *s)
 /*!
  * \brief mute or unmute a console from logging
  */
-void ast_console_toggle_mute(int fd) {
+void ast_console_toggle_mute(int fd, int silent) {
 	int x;
 	for (x = 0;x < AST_MAX_CONNECTS; x++) {
 		if (fd == consoles[x].fd) {
 			if (consoles[x].mute) {
 				consoles[x].mute = 0;
-				ast_cli(fd, "Console is not muted anymore.\n");
+				if (!silent)
+					ast_cli(fd, "Console is not muted anymore.\n");
 			} else {
 				consoles[x].mute = 1;
-				ast_cli(fd, "Console is muted.\n");
+				if (!silent)
+					ast_cli(fd, "Console is muted.\n");
 			}
 			return;
 		}
@@ -929,7 +938,7 @@ static void *netconsole(void *vconsole)
 				break;
 			}
 			tmp[res] = 0;
-			ast_cli_command(con->fd, tmp);
+			ast_cli_command_multiple(con->fd, res, tmp);
 		}
 		if (fds[1].revents) {
 			res = read(con->p[0], tmp, sizeof(tmp));
@@ -993,7 +1002,7 @@ static void *listener(void *unused)
 					flags = fcntl(consoles[x].p[1], F_GETFL);
 					fcntl(consoles[x].p[1], F_SETFL, flags | O_NONBLOCK);
 					consoles[x].fd = s;
-					consoles[x].mute = ast_opt_mute;
+					consoles[x].mute = 1; /* Default is muted, we will un-mute if necessary */
 					if (ast_pthread_create_background(&consoles[x].t, &attr, netconsole, &consoles[x])) {
 						ast_log(LOG_ERROR, "Unable to spawn thread to handle connection: %s\n", strerror(errno));
 						close(consoles[x].p[0]);
@@ -1755,6 +1764,10 @@ static int ast_el_read_char(EditLine *el, char *cp)
 							fprintf(stderr, "Reconnect succeeded after %.3f seconds\n", 1.0 / reconnects_per_second * tries);
 							printf(term_quit());
 							WELCOME_MESSAGE;
+							if (!ast_opt_mute)
+								fdprint(ast_consock, "logger mute silent");
+							else 
+								printf("log and verbose output currently muted ('logger mute' to unmute)\n");
 							break;
 						} else {
 							usleep(1000000 / reconnects_per_second);
@@ -2249,13 +2262,15 @@ static void ast_remotecontrol(char * data)
 		pid = atoi(cpid);
 	else
 		pid = -1;
-	snprintf(tmp, sizeof(tmp), "core set verbose atleast %d", option_verbose);
-	fdprint(ast_consock, tmp);
-	snprintf(tmp, sizeof(tmp), "core set debug atleast %d", option_debug);
-	fdprint(ast_consock, tmp);
-	if (ast_opt_mute) {
-		snprintf(tmp, sizeof(tmp), "log and verbose output currently muted ('logger unmute' to unmute)");
+	if (!data) {
+		snprintf(tmp, sizeof(tmp), "core set verbose atleast %d", option_verbose);
 		fdprint(ast_consock, tmp);
+		snprintf(tmp, sizeof(tmp), "core set debug atleast %d", option_debug);
+		fdprint(ast_consock, tmp);
+		if (!ast_opt_mute)
+			fdprint(ast_consock, "logger mute silent");
+		else 
+			printf("log and verbose output currently muted ('logger mute' to unmute)\n");
 	}
 	ast_verbose("Connected to Asterisk %s currently running on %s (pid = %d)\n", version, hostname, pid);
 	remotehostname = hostname;
@@ -2326,14 +2341,16 @@ static int show_cli_help(void) {
 	printf("   -I              Enable internal timing if Zaptel timer is available\n");
 	printf("   -L <load>       Limit the maximum load average before rejecting new calls\n");
 	printf("   -M <value>      Limit the maximum number of calls to the specified value\n");
-	printf("   -m              Mute the console from debugging and verbose output\n");
+	printf("   -m              Mute debugging and console output on the console\n");
 	printf("   -n              Disable console colorization\n");
 	printf("   -p              Run as pseudo-realtime thread\n");
 	printf("   -q              Quiet mode (suppress output)\n");
 	printf("   -r              Connect to Asterisk on this machine\n");
-	printf("   -R              Connect to Asterisk, and attempt to reconnect if disconnected\n");
-	printf("   -t              Record soundfiles in /var/tmp and move them where they belong after they are done.\n");
-	printf("   -T              Display the time in [Mmm dd hh:mm:ss] format for each line of output to the CLI.\n");
+	printf("   -R              Same as -r, except attempt to reconnect if disconnected\n");
+	printf("   -t              Record soundfiles in /var/tmp and move them where they\n");
+	printf("                   belong after they are done\n");
+	printf("   -T              Display the time in [Mmm dd hh:mm:ss] format for each line\n");
+	printf("                   of output to the CLI\n");
 	printf("   -v              Increase verbosity (multiple v's = more verbose)\n");
 	printf("   -x <cmd>        Execute command <cmd> (only valid with -r)\n");
 	printf("\n");
@@ -2530,7 +2547,7 @@ int main(int argc, char *argv[])
 	FILE *f;
 	sigset_t sigs;
 	int num;
-	int is_child_of_nonroot = 0;
+	int isroot = 1;
 	char *buf;
 	char *runuser = NULL, *rungroup = NULL;
 
@@ -2542,6 +2559,9 @@ int main(int argc, char *argv[])
 	for (x=0; x<argc; x++)
 		_argv[x] = argv[x];
 	_argv[x] = NULL;
+
+	if (geteuid() != 0)
+		isroot = 0;
 
 	/* if the progname is rasterisk consider it a remote console */
 	if (argv[0] && (strstr(argv[0], "rasterisk")) != NULL) {
@@ -2556,11 +2576,7 @@ int main(int argc, char *argv[])
 	ast_builtins_init();
 	ast_utils_init();
 	tdd_init();
-	/* When Asterisk restarts after it has dropped the root privileges,
-	 * it can't issue setuid(), setgid(), setgroups() or set_priority() 
-	 */
-	if (getenv("ASTERISK_ALREADY_NONROOT"))
-		is_child_of_nonroot=1;
+
 	if (getenv("HOME")) 
 		snprintf(filename, sizeof(filename), "%s/.asterisk_history", getenv("HOME"));
 	/* Check for options */
@@ -2695,10 +2711,10 @@ int main(int argc, char *argv[])
 
 #ifndef __CYGWIN__
 
-	if (!is_child_of_nonroot) 
+	if (isroot) 
 		ast_set_priority(ast_opt_high_priority);
 
-	if (!is_child_of_nonroot && rungroup) {
+	if (isroot && rungroup) {
 		struct group *gr;
 		gr = getgrnam(rungroup);
 		if (!gr) {
@@ -2717,11 +2733,15 @@ int main(int argc, char *argv[])
 			ast_verbose("Running as group '%s'\n", rungroup);
 	}
 
-	if (!is_child_of_nonroot && runuser) {
+	if (runuser && !ast_test_flag(&ast_options, AST_OPT_FLAG_REMOTE)) {
 		struct passwd *pw;
 		pw = getpwnam(runuser);
 		if (!pw) {
 			ast_log(LOG_WARNING, "No such user '%s'!\n", runuser);
+			exit(1);
+		}
+		if (!isroot && pw->pw_uid != geteuid()) {
+			ast_log(LOG_ERROR, "Asterisk started as nonroot, but runuser '%s' requested.\n", runuser);
 			exit(1);
 		}
 		if (!rungroup) {
@@ -2738,7 +2758,6 @@ int main(int argc, char *argv[])
 			ast_log(LOG_WARNING, "Unable to setuid to %d (%s)\n", (int)pw->pw_uid, runuser);
 			exit(1);
 		}
-		setenv("ASTERISK_ALREADY_NONROOT", "yes", 1);
 		if (option_verbose)
 			ast_verbose("Running as user '%s'\n", runuser);
 	}
@@ -2804,7 +2823,7 @@ int main(int argc, char *argv[])
 
 #if HAVE_WORKING_FORK
 	if (ast_opt_always_fork || !ast_opt_no_fork) {
-		daemon(0, 0);
+		daemon(1, 0);
 		ast_mainpid = getpid();
 		/* Blindly re-write pid file since we are forking */
 		unlink(ast_config_AST_PID);
@@ -2848,6 +2867,8 @@ int main(int argc, char *argv[])
 	}
 
 	threadstorage_init();
+
+	astobj2_init();
 
 	if (load_modules(1)) {
 		printf(term_quit());

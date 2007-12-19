@@ -89,6 +89,7 @@ static pthread_t cdr_thread = AST_PTHREADT_NULL;
 #define BATCH_SAFE_SHUTDOWN_DEFAULT 1
 
 static int enabled;		/*! Is the CDR subsystem enabled ? */
+static int unanswered;
 static int batchmode;
 static int batchsize;
 static int batchtime;
@@ -101,6 +102,11 @@ AST_MUTEX_DEFINE_STATIC(cdr_batch_lock);
 AST_MUTEX_DEFINE_STATIC(cdr_pending_lock);
 static ast_cond_t cdr_pending_cond;
 
+
+int ast_cdr_log_unanswered(void)
+{
+	return unanswered;
+}
 
 /*! Register a CDR driver. Each registered CDR driver generates a CDR 
 	\return 0 on success, -1 on failure 
@@ -311,20 +317,22 @@ int ast_cdr_setvar(struct ast_cdr *cdr, const char *name, const char *value, int
 	}
 
 	for (; cdr; cdr = recur ? cdr->next : NULL) {
-		headp = &cdr->varshead;
-		AST_LIST_TRAVERSE_SAFE_BEGIN(headp, newvariable, entries) {
-			if (!strcasecmp(ast_var_name(newvariable), name)) {
-				/* there is already such a variable, delete it */
-				AST_LIST_REMOVE_CURRENT(headp, entries);
-				ast_var_delete(newvariable);
-				break;
+		if (!ast_test_flag(cdr, AST_CDR_FLAG_LOCKED)) {
+			headp = &cdr->varshead;
+			AST_LIST_TRAVERSE_SAFE_BEGIN(headp, newvariable, entries) {
+				if (!strcasecmp(ast_var_name(newvariable), name)) {
+					/* there is already such a variable, delete it */
+					AST_LIST_REMOVE_CURRENT(headp, entries);
+					ast_var_delete(newvariable);
+					break;
+				}
 			}
-		}
-		AST_LIST_TRAVERSE_SAFE_END;
+			AST_LIST_TRAVERSE_SAFE_END;
 
-		if (value) {
-			newvariable = ast_var_assign(name, value);
-			AST_LIST_INSERT_HEAD(headp, newvariable, entries);
+			if (value) {
+				newvariable = ast_var_assign(name, value);
+				AST_LIST_INSERT_HEAD(headp, newvariable, entries);
+			}
 		}
 	}
 
@@ -693,11 +701,13 @@ void ast_cdr_answer(struct ast_cdr *cdr)
 {
 
 	for (; cdr; cdr = cdr->next) {
-		check_post(cdr);
-		if (cdr->disposition < AST_CDR_ANSWERED)
-			cdr->disposition = AST_CDR_ANSWERED;
-		if (ast_tvzero(cdr->answer))
-			cdr->answer = ast_tvnow();
+		if (!ast_test_flag(cdr, AST_CDR_FLAG_LOCKED)) {
+			check_post(cdr);
+			if (cdr->disposition < AST_CDR_ANSWERED)
+				cdr->disposition = AST_CDR_ANSWERED;
+			if (ast_tvzero(cdr->answer))
+				cdr->answer = ast_tvnow();
+		}
 	}
 }
 
@@ -842,15 +852,17 @@ int ast_cdr_init(struct ast_cdr *cdr, struct ast_channel *c)
 void ast_cdr_end(struct ast_cdr *cdr)
 {
 	for ( ; cdr ; cdr = cdr->next) {
-		check_post(cdr);
-		if (ast_tvzero(cdr->end))
-			cdr->end = ast_tvnow();
-		if (ast_tvzero(cdr->start)) {
-			ast_log(LOG_WARNING, "CDR on channel '%s' has not started\n", S_OR(cdr->channel, "<unknown>"));
-			cdr->disposition = AST_CDR_FAILED;
-		} else
-			cdr->duration = cdr->end.tv_sec - cdr->start.tv_sec;
-		cdr->billsec = ast_tvzero(cdr->answer) ? 0 : cdr->end.tv_sec - cdr->answer.tv_sec;
+		if (!ast_test_flag(cdr, AST_CDR_FLAG_LOCKED)) {
+			check_post(cdr);
+			if (ast_tvzero(cdr->end))
+				cdr->end = ast_tvnow();
+			if (ast_tvzero(cdr->start)) {
+				ast_log(LOG_WARNING, "CDR on channel '%s' has not started\n", S_OR(cdr->channel, "<unknown>"));
+				cdr->disposition = AST_CDR_FAILED;
+			} else
+				cdr->duration = cdr->end.tv_sec - cdr->start.tv_sec;
+			cdr->billsec = ast_tvzero(cdr->answer) ? 0 : cdr->end.tv_sec - cdr->answer.tv_sec;
+		}
 	}
 }
 
@@ -1122,7 +1134,7 @@ void ast_cdr_submit_batch(int shutdown)
 	}
 }
 
-static int submit_scheduled_batch(void *data)
+static int submit_scheduled_batch(const void *data)
 {
 	ast_cdr_submit_batch(0);
 	/* manually reschedule from this point in time */
@@ -1239,6 +1251,7 @@ static int handle_cli_status(int fd, int argc, char *argv[])
 	ast_cli(fd, "CDR logging: %s\n", enabled ? "enabled" : "disabled");
 	ast_cli(fd, "CDR mode: %s\n", batchmode ? "batch" : "simple");
 	if (enabled) {
+		ast_cli(fd, "CDR output unanswered calls: %s\n", unanswered ? "yes" : "no");
 		if (batchmode) {
 			if (batch)
 				cnt = batch->size;
@@ -1290,6 +1303,7 @@ static int do_reload(void)
 {
 	struct ast_config *config;
 	const char *enabled_value;
+	const char *unanswered_value;
 	const char *batched_value;
 	const char *scheduleronly_value;
 	const char *batchsafeshutdown_value;
@@ -1320,6 +1334,9 @@ static int do_reload(void)
 	if ((config = ast_config_load("cdr.conf"))) {
 		if ((enabled_value = ast_variable_retrieve(config, "general", "enable"))) {
 			enabled = ast_true(enabled_value);
+		}
+		if ((unanswered_value = ast_variable_retrieve(config, "general", "unanswered"))) {
+			unanswered = ast_true(unanswered_value);
 		}
 		if ((batched_value = ast_variable_retrieve(config, "general", "batch"))) {
 			batchmode = ast_true(batched_value);

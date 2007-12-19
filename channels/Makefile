@@ -11,8 +11,14 @@
 
 -include ../menuselect.makeopts ../menuselect.makedeps
 
-C_MODS:=$(filter-out $(MENUSELECT_CHANNELS),$(patsubst %.c,%,$(wildcard chan_*.c)))
-CC_MODS:=$(filter-out $(MENUSELECT_CHANNELS),$(patsubst %.cc,%,$(wildcard chan_*.cc)))
+MENUSELECT_CATEGORY=CHANNELS
+MENUSELECT_DESCRIPTION=Channel Drivers
+
+ALL_C_MODS:=$(patsubst %.c,%,$(wildcard chan_*.c))
+ALL_CC_MODS:=$(patsubst %.cc,%,$(wildcard chan_*.cc))
+
+C_MODS:=$(filter-out $(MENUSELECT_CHANNELS),$(ALL_C_MODS))
+CC_MODS:=$(filter-out $(MENUSELECT_CHANNELS),$(ALL_CC_MODS))
 
 ifeq ($(OSARCH),OpenBSD)
   PTLIB=-lpt_OpenBSD_x86_r
@@ -67,7 +73,7 @@ ifneq ($(wildcard h323/Makefile.ast),)
   include h323/Makefile.ast
 H323LDFLAGS+=-Wl,--version-script=h323/noexport.map
 clean::
-	$(MAKE) -C h323 clean
+	if [ -f h323/Makefile ]; then $(MAKE) -C h323 clean; fi
 else
 h323/libchanh323.a h323/Makefile.ast:
 	$(CMD_PREFIX) $(MAKE) -C h323
@@ -79,6 +85,9 @@ h323/libchanh323.a h323/Makefile.ast:
 	$(CMD_PREFIX) echo "***************************************************************"
 	$(CMD_PREFIX) exit 1
 endif
+
+dist-clean::
+	rm -f h323/Makefile
 
 gentone: gentone.c
 	$(ECHO_PREFIX) echo "   [LD] $^ -> $@"

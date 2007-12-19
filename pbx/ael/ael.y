@@ -46,7 +46,7 @@ extern char *my_file;
 #ifdef AAL_ARGCHECK
 int ael_is_funcname(char *name);
 #endif
-static char *ael_token_subst(char *mess);
+static char *ael_token_subst(const char *mess);
 
 %}
 
@@ -80,7 +80,7 @@ static pval *update_last(pval *, YYLTYPE *);
 
 
 %token KW_CONTEXT LC RC LP RP SEMI EQ COMMA COLON AMPER BAR AT
-%token KW_MACRO KW_GLOBALS KW_IGNOREPAT KW_SWITCH KW_IF KW_IFTIME KW_ELSE KW_RANDOM KW_ABSTRACT
+%token KW_MACRO KW_GLOBALS KW_IGNOREPAT KW_SWITCH KW_IF KW_IFTIME KW_ELSE KW_RANDOM KW_ABSTRACT KW_EXTEND
 %token EXTENMARK KW_GOTO KW_JUMP KW_RETURN KW_BREAK KW_CONTINUE KW_REGEXTEN KW_HINT
 %token KW_FOR KW_WHILE KW_CASE KW_PATTERN KW_DEFAULT KW_CATCH KW_SWITCHES KW_ESWITCHES
 %token KW_INCLUDES
@@ -201,22 +201,19 @@ context_name : word { $$ = $1; }
 	;
 
 context : opt_abstract KW_CONTEXT context_name LC elements RC {
-		if (!$5) {
-                        ast_log(LOG_WARNING, "==== File: %s, Line %d, Cols: %d-%d: Warning! The empty context %s will be IGNORED!\n", 
-				my_file, @4.first_line, @4.first_column, @4.last_column, $3 );
-			free($3);
-
-		} else {
-			$$ = npval2(PV_CONTEXT, &@1, &@6);
-			$$->u1.str = $3;
-			$$->u2.statements = $5;
-			set_dads($$,$5);
-			$$->u3.abstract = $1;} }
+		$$ = npval2(PV_CONTEXT, &@1, &@6);
+		$$->u1.str = $3;
+		$$->u2.statements = $5;
+		set_dads($$,$5);
+		$$->u3.abstract = $1;} 
 	;
 
 /* optional "abstract" keyword  XXX there is no regression test for this */
 opt_abstract: KW_ABSTRACT { $$ = 1; }
 	| /* nothing */ { $$ = 0; }
+	| KW_EXTEND { $$ = 2; }
+	| KW_EXTEND KW_ABSTRACT { $$=3; }
+	| KW_ABSTRACT KW_EXTEND { $$=3; }
 	;
 
 macro : KW_MACRO word LP arglist RP LC macro_statements RC {
@@ -352,6 +349,10 @@ hint_word : word { $$ = $1; }
 		asprintf(&($$), "%s %s", $1, $2);
 		free($1);
 		free($2); }
+	| hint_word COLON word {
+		asprintf(&($$), "%s:%s", $1, $3);
+		free($1);
+		free($3); }
 	| hint_word AMPER word {  /* there are often '&' in hints */
 		asprintf(&($$), "%s&%s", $1, $3);
 		free($1);
@@ -705,11 +706,11 @@ static char *token_equivs2[] =
 };
 
 
-static char *ael_token_subst(char *mess)
+static char *ael_token_subst(const char *mess)
 {
 	/* calc a length, malloc, fill, and return; yyerror had better free it! */
 	int len=0,i;
-	char *p;
+	const char *p;
 	char *res, *s,*t;
 	int token_equivs_entries = sizeof(token_equivs1)/sizeof(char*);
 
@@ -750,7 +751,7 @@ static char *ael_token_subst(char *mess)
 
 void yyerror(YYLTYPE *locp, struct parse_io *parseio,  char const *s)
 {
-	char *s2 = ael_token_subst((char *)s);
+	char *s2 = ael_token_subst(s);
 	if (locp->first_line == locp->last_line) {
 		ast_log(LOG_ERROR, "==== File: %s, Line %d, Cols: %d-%d: Error: %s\n", my_file, locp->first_line, locp->first_column, locp->last_column, s2);
 	} else {

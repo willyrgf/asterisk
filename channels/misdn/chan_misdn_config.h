@@ -48,6 +48,7 @@ enum misdn_cfg_elements {
 	MISDN_CFG_NODIALTONE,    /* int (bool) */
 	MISDN_CFG_IMMEDIATE,           /* int (bool) */
 	MISDN_CFG_SENDDTMF,           /* int (bool) */
+	MISDN_CFG_ASTDTMF,            /* int (bool) */
 	MISDN_CFG_HOLD_ALLOWED,        /* int (bool) */
 	MISDN_CFG_EARLY_BCONNECT,      /* int (bool) */
 	MISDN_CFG_INCOMING_EARLY_AUDIO,      /* int (bool) */
@@ -96,6 +97,7 @@ enum misdn_cfg_elements {
 	MISDN_GEN_DYNAMIC_CRYPT,       /* int (bool) */
 	MISDN_GEN_CRYPT_PREFIX,        /* char[] */
 	MISDN_GEN_CRYPT_KEYS,          /* char[] */
+	MISDN_GEN_NTKEEPCALLS,          /* int (bool) */
 	MISDN_GEN_NTDEBUGFLAGS,          /* int */
 	MISDN_GEN_NTDEBUGFILE,          /* char[] */
 	MISDN_GEN_LAST

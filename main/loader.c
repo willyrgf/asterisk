@@ -76,6 +76,8 @@ static unsigned char expected_key[] =
 { 0x87, 0x76, 0x79, 0x35, 0x23, 0xea, 0x3a, 0xd3,
   0x25, 0x2a, 0xbb, 0x35, 0x87, 0xe4, 0x22, 0x24 };
 
+static char buildopt_sum[33] = AST_BUILDOPT_SUM;
+
 static unsigned int embedding = 1; /* we always start out by registering embedded modules,
 				      since they are here before we dlopen() any
 				   */
@@ -237,6 +239,7 @@ static struct reload_classes {
 	{ "manager",	reload_manager },
 	{ "rtp",	ast_rtp_reload },
 	{ "http",	ast_http_reload },
+	{ "logger",	logger_reload },
 	{ NULL, 	NULL }
 };
 
@@ -318,7 +321,7 @@ static struct ast_module *find_resource(const char *resource, int do_lock)
 	return cur;
 }
 
-#if LOADABLE_MODULES
+#ifdef LOADABLE_MODULES
 static void unload_dynamic_module(struct ast_module *mod)
 {
 	void *lib = mod->lib;
@@ -502,7 +505,7 @@ int ast_unload_resource(const char *resource_name, enum ast_module_unload_mode f
 
 	AST_LIST_UNLOCK(&module_list);
 
-#if LOADABLE_MODULES
+#ifdef LOADABLE_MODULES
 	if (!error)
 		unload_dynamic_module(mod);
 #endif
@@ -613,6 +616,15 @@ static unsigned int inspect_module(const struct ast_module *mod)
 		return 1;
 	}
 
+	if (!ast_test_flag(mod->info, AST_MODFLAG_BUILDSUM)) {
+		ast_log(LOG_WARNING, "Module '%s' was not compiled against a recent version of Asterisk and may cause instability.\n", mod->resource);
+	} else if (!ast_strlen_zero(mod->info->buildopt_sum) &&
+		   strcmp(buildopt_sum, mod->info->buildopt_sum)) {
+		ast_log(LOG_WARNING, "Module '%s' was not compiled with the same compile-time options as this version of Asterisk.\n", mod->resource);
+		ast_log(LOG_WARNING, "Module '%s' will not be initialized as it may cause instability.\n", mod->resource);
+		return 1;
+	}
+
 	return 0;
 }
 
@@ -630,7 +642,7 @@ static enum ast_module_load_result load_resource(const char *resource_name, unsi
 		if (global_symbols_only && !ast_test_flag(mod->info, AST_MODFLAG_GLOBAL_SYMBOLS))
 			return AST_MODULE_LOAD_SKIP;
 	} else {
-#if LOADABLE_MODULES
+#ifdef LOADABLE_MODULES
 		if (!(mod = load_dynamic_module(resource_name, global_symbols_only))) {
 			/* don't generate a warning message during load_modules() */
 			if (!global_symbols_only) {
@@ -648,7 +660,7 @@ static enum ast_module_load_result load_resource(const char *resource_name, unsi
 
 	if (inspect_module(mod)) {
 		ast_log(LOG_WARNING, "Module '%s' could not be loaded.\n", resource_name);
-#if LOADABLE_MODULES
+#ifdef LOADABLE_MODULES
 		unload_dynamic_module(mod);
 #endif
 		return AST_MODULE_LOAD_DECLINE;
@@ -731,7 +743,7 @@ int load_modules(unsigned int preload_only)
 	unsigned int load_count;
 	struct load_order load_order;
 	int res = 0;
-#if LOADABLE_MODULES
+#ifdef LOADABLE_MODULES
 	struct dirent *dirent;
 	DIR *dir;
 #endif
@@ -771,7 +783,7 @@ int load_modules(unsigned int preload_only)
 			order = add_to_load_order(mod->resource, &load_order);
 		}
 
-#if LOADABLE_MODULES
+#ifdef LOADABLE_MODULES
 		/* if we are allowed to load dynamic modules, scan the directory for
 		   for all available modules and add them as well */
 		if ((dir  = opendir(ast_config_AST_MODULE_DIR))) {

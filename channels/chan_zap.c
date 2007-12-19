@@ -42,6 +42,7 @@
 	<depend>zaptel_vldtmf</depend>
 	<depend>zaptel</depend>
 	<depend>tonezone</depend>
+	<depend>res_features</depend>
 	<use>pri</use>
  ***/
 
@@ -905,7 +906,13 @@ static int zt_open(char *fn)
 		}
 	}
 	bs = READ_SIZE;
-	if (ioctl(fd, ZT_SET_BLOCKSIZE, &bs) == -1) return -1;
+	if (ioctl(fd, ZT_SET_BLOCKSIZE, &bs) == -1) {
+		ast_log(LOG_WARNING, "Unable to set blocksize '%d': %s\n", bs,  strerror(errno));
+		x = errno;
+		close(fd);
+		errno = x;
+		return -1;
+	}
 	return fd;
 }
 
@@ -1193,23 +1200,23 @@ static char *zap_sig2str(int sig)
 	case SIG_FXOKS:
 		return "FXO Kewlstart";
 	case SIG_PRI:
-		return "PRI Signalling";
+		return "ISDN PRI";
 	case SIG_SF:
-		return "SF (Tone) Signalling Immediate";
+		return "SF (Tone) Immediate";
 	case SIG_SFWINK:
-		return "SF (Tone) Signalling Wink";
+		return "SF (Tone) Wink";
 	case SIG_SF_FEATD:
-		return "SF (Tone) Signalling with Feature Group D (DTMF)";
+		return "SF (Tone) with Feature Group D (DTMF)";
 	case SIG_SF_FEATDMF:
-		return "SF (Tone) Signalling with Feature Group D (MF)";
+		return "SF (Tone) with Feature Group D (MF)";
 	case SIG_SF_FEATB:
-		return "SF (Tone) Signalling with Feature Group B (MF)";
+		return "SF (Tone) with Feature Group B (MF)";
 	case SIG_GR303FXOKS:
-		return "GR-303 Signalling with FXOKS";
+		return "GR-303 with FXOKS";
 	case SIG_GR303FXSKS:
-		return "GR-303 Signalling with FXSKS";
+		return "GR-303 with FXSKS";
 	case 0:
-		return "Pseudo Signalling";
+		return "Pseudo";
 	default:
 		snprintf(buf, sizeof(buf), "Unknown signalling %d", sig);
 		return buf;
@@ -2058,17 +2065,18 @@ static int zt_call(struct ast_channel *ast, char *rdest, int timeout)
 			c++;
 		else
 			c = dest;
-		if (!p->hidecalleridname)
-			n = ast->cid.cid_name;
-		else
-			n = NULL;
+
+		l = NULL;
+		n = NULL;
+
 		if (!p->hidecallerid) {
 			l = ast->cid.cid_num;
-			n = ast->cid.cid_name;
-		} else {
-			l = NULL;
-			n = NULL;
+			if (!p->hidecalleridname) {
+				n = ast->cid.cid_name;
+			}
 		}
+
+
 		if (strlen(c) < p->stripmsd) {
 			ast_log(LOG_WARNING, "Number '%s' is shorter than stripmsd (%d)\n", c, p->stripmsd);
 			ast_mutex_unlock(&p->lock);
@@ -3167,7 +3175,11 @@ static enum ast_bridge_result zt_bridge(struct ast_channel *c0, struct ast_chann
 		return AST_BRIDGE_FAILED_NOWARN;
 
 	ast_mutex_lock(&c0->lock);
-	ast_mutex_lock(&c1->lock);
+	while (ast_mutex_trylock(&c1->lock)) {
+		ast_mutex_unlock(&c0->lock);
+		usleep(1);
+		ast_mutex_lock(&c0->lock);
+	}
 
 	p0 = c0->tech_pvt;
 	p1 = c1->tech_pvt;
@@ -3335,7 +3347,12 @@ static enum ast_bridge_result zt_bridge(struct ast_channel *c0, struct ast_chann
 		/* Here's our main loop...  Start by locking things, looking for private parts, 
 		   and then balking if anything is wrong */
 		ast_mutex_lock(&c0->lock);
-		ast_mutex_lock(&c1->lock);
+		while (ast_mutex_trylock(&c1->lock)) {
+			ast_mutex_unlock(&c0->lock);
+			usleep(1);
+			ast_mutex_lock(&c0->lock);
+		}
+
 		p0 = c0->tech_pvt;
 		p1 = c1->tech_pvt;
 
@@ -3780,6 +3797,11 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 							ast_setstate(ast, AST_STATE_UP);
 							p->subs[index].f.frametype = AST_FRAME_CONTROL;
 							p->subs[index].f.subclass = AST_CONTROL_ANSWER;
+							/* If aops=0 and hops=1, this is necessary */
+							p->polarity = POLARITY_REV;
+						} else {
+							/* Start clean, so we can catch the change to REV polarity when party answers */
+							p->polarity = POLARITY_IDLE;
 						}
 					}
 				}
@@ -4068,14 +4090,6 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 				if (ast->_state == AST_STATE_RING) {
 					p->ringt = p->ringt_base;
 				}
-
-				/* If we get a ring then we cannot be in 
-				 * reversed polarity. So we reset to idle */
-				if (option_debug)
-					ast_log(LOG_DEBUG, "Setting IDLE polarity due "
-						"to ring. Old polarity was %d\n", 
-						p->polarity);
-				p->polarity = POLARITY_IDLE;
 
 				/* Fall through */
 			case SIG_EM:
@@ -4914,7 +4928,6 @@ static int zt_write(struct ast_channel *ast, struct ast_frame *frame)
 {
 	struct zt_pvt *p = ast->tech_pvt;
 	int res;
-	unsigned char outbuf[4096];
 	int index;
 	index = zt_get_index(ast, p, 0);
 	if (index < 0) {
@@ -4968,10 +4981,6 @@ static int zt_write(struct ast_channel *ast, struct ast_frame *frame)
 	/* Return if it's not valid data */
 	if (!frame->data || !frame->datalen)
 		return 0;
-	if (frame->datalen > sizeof(outbuf) * 2) {
-		ast_log(LOG_WARNING, "Frame too large\n");
-		return 0;
-	}
 
 	if (frame->subclass == AST_FORMAT_SLINEAR) {
 		if (!p->subs[index].linear) {
@@ -6365,6 +6374,14 @@ static void *ss_thread(void *data)
 					if (i & ZT_IOMUX_SIGEVENT) {
 						res = zt_get_event(p->subs[index].zfd);
 						ast_log(LOG_NOTICE, "Got event %d (%s)...\n", res, event2str(res));
+						/* If we get a PR event, they hung up while processing calerid */
+						if ( res == ZT_EVENT_POLARITY && p->hanguponpolarityswitch && p->polarity == POLARITY_REV) {
+							ast_log(LOG_DEBUG, "Hanging up due to polarity reversal on channel %d while detecting callerid\n", p->channel);
+							p->polarity = POLARITY_IDLE;
+							callerid_free(cs);
+							ast_hangup(chan);
+							return NULL;
+						}
 						res = 0;
 						/* Let us detect callerid when the telco uses distinctive ring */
 
@@ -6727,6 +6744,13 @@ static int handle_init_event(struct zt_pvt *i, int event)
 		case SIG_FXSLS:
 		case SIG_FXSKS:
 		case SIG_FXSGS:
+			/* We have already got a PR before the channel was 
+			   created, but it wasn't handled. We need polarity 
+			   to be REV for remote hangup detection to work. 
+			   At least in Spain */
+			if (i->hanguponpolarityswitch)
+				i->polarity = POLARITY_REV;
+
 			if (i->cid_start == CID_START_POLARITY) {
 				i->polarity = POLARITY_REV;
 				ast_verbose(VERBOSE_PREFIX_2 "Starting post polarity "
@@ -6779,8 +6803,10 @@ static void *do_monitor(void *data)
 		/* Lock the interface list */
 		ast_mutex_lock(&iflock);
 		if (!pfds || (lastalloc != ifcount)) {
-			if (pfds)
+			if (pfds) {
 				free(pfds);
+				pfds = NULL;
+			}
 			if (ifcount) {
 				if (!(pfds = ast_calloc(1, ifcount * sizeof(*pfds)))) {
 					ast_mutex_unlock(&iflock);
@@ -8723,8 +8749,13 @@ static void *pri_dchannel(void *vpri)
 					else if (!ast_strlen_zero(e->ring.callednum)) {
 						ast_copy_string(pri->pvts[chanpos]->exten, e->ring.callednum, sizeof(pri->pvts[chanpos]->exten));
 						ast_copy_string(pri->pvts[chanpos]->dnid, e->ring.callednum, sizeof(pri->pvts[chanpos]->dnid));
-					} else
+					} else if (pri->overlapdial)
 						pri->pvts[chanpos]->exten[0] = '\0';
+					else {
+						/* Some PRI circuits are set up to send _no_ digits.  Handle them as 's'. */
+						pri->pvts[chanpos]->exten[0] = 's';
+						pri->pvts[chanpos]->exten[1] = '\0';
+					}
 					/* Set DNID on all incoming calls -- even immediate */
 					if (!ast_strlen_zero(e->ring.callednum))
 						ast_copy_string(pri->pvts[chanpos]->dnid, e->ring.callednum, sizeof(pri->pvts[chanpos]->dnid));
@@ -9127,7 +9158,7 @@ static void *pri_dchannel(void *vpri)
 									pri->pvts[chanpos]->logicalspan, pri->pvts[chanpos]->prioffset, pri->span, (int)e->hangup.aoc_units, (e->hangup.aoc_units == 1) ? "" : "s");
 
 #ifdef SUPPORT_USERUSER
-						if (!ast_strlen_zero(e->hangup.useruserinfo)) {
+						if (pri->pvts[chanpos]->owner && !ast_strlen_zero(e->hangup.useruserinfo)) {
 							pbx_builtin_setvar_helper(pri->pvts[chanpos]->owner, "USERUSERINFO", e->hangup.useruserinfo);
 						}
 #endif
@@ -9466,7 +9497,7 @@ static int handle_pri_set_debug_file(int fd, int argc, char **argv)
 		if (ast_strlen_zero(argv[4]))
 			return RESULT_SHOWUSAGE;
 
-		myfd = open(argv[4], O_CREAT|O_WRONLY);
+		myfd = open(argv[4], O_CREAT|O_WRONLY, 0600);
 		if (myfd < 0) {
 			ast_cli(fd, "Unable to open '%s' for writing\n", argv[4]);
 			return RESULT_SUCCESS;
@@ -11399,8 +11430,10 @@ static int zt_sendtext(struct ast_channel *c, const char *text)
 			continue;
 		}
 		  /* if got exception */
-		if (fds[0].revents & POLLPRI)
+		if (fds[0].revents & POLLPRI) {
+			ast_free(mybuf);
 			return -1;
+		}
 		if (!(fds[0].revents & POLLOUT)) {
 			ast_log(LOG_DEBUG, "write fd not ready on channel %d\n", p->channel);
 			continue;

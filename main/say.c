@@ -124,7 +124,7 @@ static int say_character_str_full(struct ast_channel *chan, const char *str, con
 			fnbuf[8] = ltr;
 			fn = fnbuf;
 		}
-		if (fn && ast_fileexists(fn, NULL, NULL) > 0) {
+		if (fn && ast_fileexists(fn, NULL, lang) > 0) {
 			res = ast_streamfile(chan, fn, lang);
 			if (!res) {
 				if ((audiofd  > -1) && (ctrlfd > -1))
@@ -204,7 +204,7 @@ static int say_phonetic_str_full(struct ast_channel *chan, const char *str, cons
 			fnbuf[9] = ltr;
 			fn = fnbuf;
 		}
-		if (fn && ast_fileexists(fn, NULL, NULL) > 0) {
+		if (fn && ast_fileexists(fn, NULL, lang) > 0) {
 			res = ast_streamfile(chan, fn, lang);
 			if (!res) {
 				if ((audiofd  > -1) && (ctrlfd > -1))
@@ -254,13 +254,13 @@ static int say_digit_str_full(struct ast_channel *chan, const char *str, const c
 			fn = fnbuf;
 			break;
 		}
-		if (fn && ast_fileexists(fn, NULL, NULL) > 0) {
+		if (fn && ast_fileexists(fn, NULL, lang) > 0) {
 			res = ast_streamfile(chan, fn, lang);
 			if (!res) {
 				if ((audiofd  > -1) && (ctrlfd > -1))
-                                        res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
-                                else
-                                        res = ast_waitstream(chan, ints);
+					res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+				else
+					res = ast_waitstream(chan, ints);
 			}
 			ast_stopstream(chan);
 		}
@@ -1506,21 +1506,35 @@ static int ast_say_number_full_nl(struct ast_channel *chan, int num, const char 
 				snprintf(fn, sizeof(fn), "digits/%d", num - units);
 				num = 0;
 			}
+		} else if (num < 200) {
+			/* hundred, not one-hundred */
+			ast_copy_string(fn, "digits/hundred", sizeof(fn));
+			num -= ((num / 100) * 100);
+		} else if (num < 1000) {
+			snprintf(fn, sizeof(fn), "digits/%d", num / 100);
+			playh++;
+			num -= ((num / 100) * 100);
 		} else {
-			if (num < 1000) {
-				snprintf(fn, sizeof(fn), "digits/%d", (num/100));
-				playh++;
-				num -= ((num / 100) * 100);
+			if (num < 1100) {
+				/* thousand, not one-thousand */
+				num = num % 1000;
+				ast_copy_string(fn, "digits/thousand", sizeof(fn));
+			} else if (num < 10000)	{ /* 1,100 to 9,9999 */
+				res = ast_say_number_full_nl(chan, num / 100, ints, language, audiofd, ctrlfd);
+				if (res)
+					return res;
+				num = num % 100;
+				ast_copy_string(fn, "digits/hundred", sizeof(fn));
 			} else {
 				if (num < 1000000) { /* 1,000,000 */
-					res = ast_say_number_full_en(chan, num / 1000, ints, language, audiofd, ctrlfd);
+					res = ast_say_number_full_nl(chan, num / 1000, ints, language, audiofd, ctrlfd);
 					if (res)
 						return res;
 					num = num % 1000;
 					snprintf(fn, sizeof(fn), "digits/thousand");
 				} else {
 					if (num < 1000000000) { /* 1,000,000,000 */
-						res = ast_say_number_full_en(chan, num / 1000000, ints, language, audiofd, ctrlfd);
+						res = ast_say_number_full_nl(chan, num / 1000000, ints, language, audiofd, ctrlfd);
 						if (res)
 							return res;
 						num = num % 1000000;
@@ -4206,7 +4220,7 @@ int ast_say_date_with_format_fr(struct ast_channel *chan, time_t time, const cha
 				break;
 			case 'S':
 				/* Seconds */
-				res = ast_say_number(chan, tm.tm_hour, ints, lang, (char * ) NULL);
+				res = ast_say_number(chan, tm.tm_sec, ints, lang, (char * ) NULL);
 				if (!res) {
 					res = wait_file(chan,ints, "digits/second",lang);
 				}
@@ -5212,13 +5226,9 @@ int ast_say_date_with_format_tw(struct ast_channel *chan, time_t time, const cha
 			case 'B':
 			case 'b':
 			case 'h':
+			case 'm':
 				/* January - December */
 				snprintf(nextmsg,sizeof(nextmsg), "digits/mon-%d", tm.tm_mon);
-				res = wait_file(chan,ints,nextmsg,lang);
-				break;
-			case 'm':
-				/* First - Twelfth */
-				snprintf(nextmsg,sizeof(nextmsg), "digits/h-%d", tm.tm_mon +1);
 				res = wait_file(chan,ints,nextmsg,lang);
 				break;
 			case 'd':
@@ -5235,7 +5245,7 @@ int ast_say_date_with_format_tw(struct ast_channel *chan, time_t time, const cha
 						res = wait_file(chan,ints,nextmsg,lang);
 					}
 				}
-                if(!res) res = wait_file(chan,ints,"ri",lang);
+				if(!res) res = wait_file(chan,ints,"digits/day",lang);
 				break;
 			case 'Y':
 				/* Year */

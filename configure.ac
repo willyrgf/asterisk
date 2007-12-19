@@ -2,11 +2,7 @@
 
 AC_PREREQ(2.60)
 
-m4_define([PBX_VERSION],
-          m4_bpatsubst(m4_esyscmd([build_tools/make_version .]),
-                       [\([0-9.]*\)\(\w\|\W\)*],
-                       [\1]))
-AC_INIT(asterisk, PBX_VERSION, www.asterisk.org)
+AC_INIT(asterisk, 1.4, www.asterisk.org)
 
 # cross-compile macros
 AC_CANONICAL_BUILD
@@ -136,6 +132,7 @@ if test "x$with_gnu_ld" = "xyes" ; then
 fi
 AC_SUBST(GNU_LD)
 
+AC_PATH_PROG([AWK], [awk], :)
 AC_PATH_PROG([GREP], [grep], :)
 AC_PATH_PROG([FIND], [find], :)
 AC_PATH_PROG([COMPRESS], [compress], :)
@@ -204,6 +201,7 @@ AST_EXT_LIB_SETUP([FREETDS], [FreeTDS], [tds])
 AST_EXT_LIB_SETUP([TERMCAP], [Termcap], [termcap])
 AST_EXT_LIB_SETUP([TINFO], [Term Info], [tinfo])
 AST_EXT_LIB_SETUP([TONEZONE], [tonezone], [tonezone])
+AST_EXT_LIB_SETUP([USB], [usb], [usb])
 AST_EXT_LIB_SETUP([VORBIS], [Vorbis], [vorbis])
 AST_EXT_LIB_SETUP([VPB], [Voicetronix API], [vpb])
 AST_EXT_LIB_SETUP([ZLIB], [zlib], [z])
@@ -315,6 +313,7 @@ AST_GCC_ATTRIBUTE(malloc)
 AST_GCC_ATTRIBUTE(const)
 AST_GCC_ATTRIBUTE(unused)
 AST_GCC_ATTRIBUTE(always_inline)
+AST_GCC_ATTRIBUTE(deprecated)
 
 AC_MSG_CHECKING(for -ffunction-sections support)
 saved_CFLAGS="${CFLAGS}"
@@ -787,10 +786,10 @@ if test "${PG_CONFIG}" != No; then
          exit 1
 	  fi
    else 
-      AC_CHECK_LIB([pq], [PQexec], AC_DEFINE_UNQUOTED([HAVE_PGSQL], 1,
+      AC_CHECK_LIB([pq], [PQescapeStringConn], AC_DEFINE_UNQUOTED([HAVE_PGSQL], 1,
       [Define to indicate the PostgreSQL library]), [], -L${PGSQL_libdir} -lz)
 
-      if test "${ac_cv_lib_pq_PQexec}" = "yes"; then
+      if test "${ac_cv_lib_pq_PQescapeStringConn}" = "yes"; then
          PGSQL_LIB="-L${PGSQL_libdir} -lpq -lz"
          PGSQL_INCLUDE="-I${PGSQL_includedir}"
          PBX_PGSQL=1
@@ -979,6 +978,8 @@ if test "${host_os}" != "linux-gnu" ; then
 fi
 
 AST_EXT_LIB_CHECK([TONEZONE], [tonezone], [tone_zone_find], [zaptel/tonezone.h], [${tonezone_extra}])
+
+AST_EXT_LIB_CHECK([USB], [usb], [usb_init], [usb.h], [])
 
 AST_EXT_LIB_CHECK([VORBIS], [vorbis], [vorbis_info_init], [vorbis/codec.h], [-lm -lvorbisenc])
 

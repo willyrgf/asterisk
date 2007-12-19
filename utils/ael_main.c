@@ -58,8 +58,8 @@ void destroy_namelist(struct namelist *x)
 	}
 }
 
-struct namelist *create_name(char *name);
-struct namelist *create_name(char *name)
+struct namelist *create_name(const char *name);
+struct namelist *create_name(const char *name)
 {
 	struct namelist *x = calloc(1, sizeof(*x));
 	if (!x)
@@ -88,6 +88,7 @@ int ast_add_extension2(struct ast_context *con,
 					   const char *registrar);
 void pbx_builtin_setvar(void *chan, void *data);
 struct ast_context * ast_context_create(void **extcontexts, const char *name, const char *registrar);
+struct ast_context * ast_context_find_or_create(void **extcontexts, const char *name, const char *registrar);
 void ast_context_add_ignorepat2(struct ast_context *con, const char *value, const char *registrar);
 void ast_context_add_include2(struct ast_context *con, const char *value, const char *registrar);
 void ast_context_add_switch2(struct ast_context *con, const char *value, const char *data, int eval, const char *registrar);
@@ -286,12 +287,12 @@ int ast_add_extension2(struct ast_context *con,
 
 void pbx_builtin_setvar(void *chan, void *data)
 {
-	struct namelist *x = create_name((char*)data);
+	struct namelist *x = create_name(data);
 	if(!no_comp)
 		printf("Executed pbx_builtin_setvar(chan, data=%s);\n", (char*)data);
 
 	if( dump_extensions ) {
-		x = create_name((char*)data);
+		x = create_name(data);
 		ADD_LAST(globalvars,x);
 	}
 }
@@ -312,13 +313,28 @@ struct ast_context * ast_context_create(void **extcontexts, const char *name, co
 	return x;
 }
 
+struct ast_context * ast_context_find_or_create(void **extcontexts, const char *name, const char *registrar)
+{
+	struct ast_context *x = calloc(1, sizeof(*x));
+	if (!x)
+		return NULL;
+	x->next = context_list;
+	context_list = x;
+	if (!no_comp)
+		printf("Executed ast_context_find_or_create(conts, name=%s, registrar=%s);\n", name, registrar);
+	conts++;
+	strncpy(x->name, name, sizeof(x->name) - 1);
+	strncpy(x->registrar, registrar, sizeof(x->registrar) - 1);
+	return x;
+}
+
 void ast_context_add_ignorepat2(struct ast_context *con, const char *value, const char *registrar)
 {
 	if(!no_comp)
 		printf("Executed ast_context_add_ignorepat2(con, value=%s, registrar=%s);\n", value, registrar);
 	if( dump_extensions ) {
 		struct namelist *x;
-		x = create_name((char*)value);
+		x = create_name(value);
 		ADD_LAST(con->ignorepats,x);
 	}
 }

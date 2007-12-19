@@ -220,6 +220,10 @@ static const struct misdn_cfg_spec port_spec[] = {
 		"\tinstead." },
 	{ "senddtmf", MISDN_CFG_SENDDTMF, MISDN_CTYPE_BOOL, "no", NONE,
 		"Enable this if we should produce DTMF Tones ourselves." },
+	{ "astdtmf", MISDN_CFG_ASTDTMF, MISDN_CTYPE_BOOL, "no", NONE,
+		"Enable this if you want to use the Asterisk dtmf detector\n"
+		"instead of the mISDN_dsp/hfcmulti one."
+		},
 	{ "hold_allowed", MISDN_CFG_HOLD_ALLOWED, MISDN_CTYPE_BOOL, "no", NONE,
 		"Enable this to have support for hold and retrieve." },
 	{ "early_bconnect", MISDN_CFG_EARLY_BCONNECT, MISDN_CTYPE_BOOL, "yes", NONE,
@@ -354,6 +358,10 @@ static const struct misdn_cfg_spec gen_spec[] = {
 	{ "crypt_keys", MISDN_GEN_CRYPT_KEYS, MISDN_CTYPE_STR, NO_DEFAULT, NONE,
 		"Keys for cryption, you reference them in the dialplan\n"
 		"\tLater also in dynamic encr." },
+ 	{ "ntkeepcalls", MISDN_GEN_NTKEEPCALLS, MISDN_CTYPE_BOOL, "no", NONE, 
+		"avoid dropping calls if the L2 goes down. some nortel pbx\n" 
+		"do put down the L2/L1 for some milliseconds even if there\n"
+		"are running calls. with this option you can avoid dropping them\n" },
 	{ "ntdebugflags", MISDN_GEN_NTDEBUGFLAGS, MISDN_CTYPE_INT, "0", NONE,
 	  	"No description yet."},
 	{ "ntdebugfile", MISDN_GEN_NTDEBUGFILE, MISDN_CTYPE_STR, "/var/log/misdn-nt.log", NONE,
@@ -996,7 +1004,7 @@ void misdn_cfg_update_ptp (void)
 
 	misdn_cfg_get(0, MISDN_GEN_MISDN_INIT, &misdn_init, sizeof(misdn_init));
 
-	if (misdn_init) {
+	if (!ast_strlen_zero(misdn_init)) {
 		fp = fopen(misdn_init, "r");
 		if (fp) {
 			while(fgets(line, sizeof(line), fp)) {

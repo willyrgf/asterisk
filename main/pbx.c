@@ -269,13 +269,13 @@ static struct pbx_builtin {
 	{ "BackGround", pbx_builtin_background,
 	"Play an audio file while waiting for digits of an extension to go to.",
 	"  Background(filename1[&filename2...][|options[|langoverride][|context]]):\n"
-	"This application will play the given list of files while waiting for an\n"
-	"extension to be dialed by the calling channel. To continue waiting for digits\n"
-	"after this application has finished playing files, the WaitExten application\n"
-	"should be used. The 'langoverride' option explicitly specifies which language\n"
-	"to attempt to use for the requested sound files. If a 'context' is specified,\n"
-	"this is the dialplan context that this application will use when exiting to a\n"
-	"dialed extension."
+	"This application will play the given list of files (do not put extension)\n"
+	"while waiting for an extension to be dialed by the calling channel. To\n"
+	"continue waiting for digits after this application has finished playing\n"
+	"files, the WaitExten application should be used. The 'langoverride' option\n"
+	"explicitly specifies which language to attempt to use for the requested sound\n"
+	"files. If a 'context' is specified, this is the dialplan context that this\n"
+	"application will use when exiting to a dialed extension."
 	"  If one of the requested sound files does not exist, call processing will be\n"
 	"terminated.\n"
 	"  Options:\n"
@@ -1031,7 +1031,15 @@ static struct ast_exten *pbx_find_extension(struct ast_channel *chan,
 		else /* action == E_MATCH */
 			aswf = asw->exists;
 		datap = sw->eval ? sw->tmpdata : sw->data;
-		res = !aswf ? 0 : aswf(chan, context, exten, priority, callerid, datap);
+		if (!aswf)
+			res = 0;
+		else {
+			if (chan)
+				ast_autoservice_start(chan);
+			res = aswf(chan, context, exten, priority, callerid, datap);
+			if (chan)
+				ast_autoservice_stop(chan);
+		}
 		if (res) {	/* Got a match */
 			q->swo = asw;
 			q->data = datap;
@@ -1135,6 +1143,7 @@ void pbx_retrieve_variable(struct ast_channel *c, const char *var, char **ret, c
 	struct varshead *places[2] = { headp, &globals };	/* list of places where we may look */
 
 	if (c) {
+		ast_channel_lock(c);
 		places[0] = &c->varshead;
 	}
 	/*
@@ -1232,6 +1241,9 @@ void pbx_retrieve_variable(struct ast_channel *c, const char *var, char **ret, c
 		if (need_substring)
 			*ret = substring(*ret, offset, length, workspace, workspacelen);
 	}
+
+	if (c)
+		ast_channel_unlock(c);
 }
 
 /*! \brief CLI function to show installed custom functions
@@ -1573,6 +1585,8 @@ static void pbx_substitute_variables_helper_full(struct ast_channel *c, struct v
 				nextexp = nextthing;
 				pos = nextexp - whereweare;
 				break;
+			default:
+				pos = 1;
 			}
 		}
 
@@ -1731,8 +1745,7 @@ static void pbx_substitute_variables_helper_full(struct ast_channel *c, struct v
 				count -= length;
 				cp2 += length;
 			}
-		} else
-			break;
+		}
 	}
 }
 
@@ -1759,7 +1772,8 @@ static void pbx_substitute_variables(char *passdata, int datalen, struct ast_cha
 	pbx_substitute_variables_helper(c, e->data, passdata, datalen - 1);
 }
 
-/*! \brief The return value depends on the action:
+/*! 
+ * \brief The return value depends on the action:
  *
  * E_MATCH, E_CANMATCH, E_MATCHMORE require a real match,
  *	and return 0 on failure, -1 on match;
@@ -1767,6 +1781,12 @@ static void pbx_substitute_variables(char *passdata, int datalen, struct ast_cha
  *	the priority on success, ... XXX
  * E_SPAWN, spawn an application,
  *	and return 0 on success, -1 on failure.
+ *
+ * \note The channel is auto-serviced in this function, because doing an extension
+ * match may block for a long time.  For example, if the lookup has to use a network
+ * dialplan switch, such as DUNDi or IAX2, it may take a while.  However, the channel
+ * auto-service code will queue up any important signalling frames to be processed
+ * after this is done.
  */
 static int pbx_extension_helper(struct ast_channel *c, struct ast_context *con,
 	const char *context, const char *exten, int priority,
@@ -1804,13 +1824,7 @@ static int pbx_extension_helper(struct ast_channel *c, struct ast_context *con,
 			c->priority = priority;
 			pbx_substitute_variables(passdata, sizeof(passdata), c, e);
 			if (option_debug) {
-				char atmp[80];
-				char atmp2[EXT_DATA_SIZE+100];
 				ast_log(LOG_DEBUG, "Launching '%s'\n", app->name);
-				snprintf(atmp, sizeof(atmp), "STACK-%s-%s-%d", context, exten, priority);
-				snprintf(atmp2, sizeof(atmp2), "%s(\"%s\", \"%s\") %s",
-					app->name, c->name, passdata, "in new stack");
-				pbx_builtin_setvar_helper(c, atmp, atmp2);
 			}
 			if (option_verbose > 2) {
 				char tmp[80], tmp2[80], tmp3[EXT_DATA_SIZE];
@@ -1834,9 +1848,9 @@ static int pbx_extension_helper(struct ast_channel *c, struct ast_context *con,
 		}
 	} else if (q.swo) {	/* not found here, but in another switch */
 		ast_mutex_unlock(&conlock);
-		if (matching_action)
+		if (matching_action) {
 			return -1;
-		else {
+		} else {
 			if (!q.swo->exec) {
 				ast_log(LOG_WARNING, "No execution engine for switch %s\n", q.swo->name);
 				res = -1;
@@ -1997,6 +2011,7 @@ void ast_hint_state_changed(const char *device)
 {
 	struct ast_hint *hint;
 
+	ast_mutex_lock(&conlock);
 	AST_LIST_LOCK(&hints);
 
 	AST_LIST_TRAVERSE(&hints, hint, list) {
@@ -2034,6 +2049,7 @@ void ast_hint_state_changed(const char *device)
 	}
 
 	AST_LIST_UNLOCK(&hints);
+	ast_mutex_unlock(&conlock);
 }
 
 /*! \brief  ast_extension_state_add: Add watcher for extension states */
@@ -2291,8 +2307,10 @@ int ast_spawn_extension(struct ast_channel *c, const char *context, const char *
 /* helper function to set extension and priority */
 static void set_ext_pri(struct ast_channel *c, const char *exten, int pri)
 {
+	ast_channel_lock(c);
 	ast_copy_string(c->exten, exten, sizeof(c->exten));
 	c->priority = pri;
+	ast_channel_unlock(c);
 }
 
 /*!
@@ -3045,7 +3063,7 @@ static char show_function_help[] =
 "       Describe a particular dialplan function.\n";
 
 static char show_dialplan_help[] =
-"Usage: core show dialplan [exten@][context]\n"
+"Usage: dialplan show [exten@][context]\n"
 "       Show dialplan\n";
 
 static char set_global_help[] =
@@ -3480,7 +3498,7 @@ static void print_ext(struct ast_exten *e, char * buf, int buflen)
 	} else {
 		snprintf(buf, buflen, "%d. %s(%s)",
 			prio, ast_get_extension_app(e),
-			(char *)ast_get_extension_app_data(e));
+			(!ast_strlen_zero(ast_get_extension_app_data(e)) ? (char *)ast_get_extension_app_data(e) : ""));
 	}
 }
 
@@ -4547,6 +4565,8 @@ int ast_explicit_goto(struct ast_channel *chan, const char *context, const char 
 	if (!chan)
 		return -1;
 
+	ast_channel_lock(chan);
+
 	if (!ast_strlen_zero(context))
 		ast_copy_string(chan->context, context, sizeof(chan->context));
 	if (!ast_strlen_zero(exten))
@@ -4557,6 +4577,8 @@ int ast_explicit_goto(struct ast_channel *chan, const char *context, const char 
 		if (ast_test_flag(chan, AST_FLAG_IN_AUTOLOOP))
 			chan->priority--;
 	}
+
+	ast_channel_unlock(chan);
 
 	return 0;
 }
@@ -5721,6 +5743,8 @@ int pbx_builtin_serialize_variables(struct ast_channel *chan, char *buf, size_t 
 
 	memset(buf, 0, size);
 
+	ast_channel_lock(chan);
+
 	AST_LIST_TRAVERSE(&chan->varshead, variables, entries) {
 		if ((var=ast_var_name(variables)) && (val=ast_var_value(variables))
 		   /* && !ast_strlen_zero(var) && !ast_strlen_zero(val) */
@@ -5734,6 +5758,8 @@ int pbx_builtin_serialize_variables(struct ast_channel *chan, char *buf, size_t 
 			break;
 	}
 
+	ast_channel_unlock(chan);
+
 	return total;
 }
 
@@ -5746,8 +5772,11 @@ const char *pbx_builtin_getvar_helper(struct ast_channel *chan, const char *name
 
 	if (!name)
 		return NULL;
-	if (chan)
+
+	if (chan) {
+		ast_channel_lock(chan);
 		places[0] = &chan->varshead;
+	}
 
 	for (i = 0; i < 2; i++) {
 		if (!places[i])
@@ -5766,6 +5795,9 @@ const char *pbx_builtin_getvar_helper(struct ast_channel *chan, const char *name
 			break;
 	}
 
+	if (chan)
+		ast_channel_unlock(chan);
+
 	return ret;
 }
 
@@ -5782,18 +5814,25 @@ void pbx_builtin_pushvar_helper(struct ast_channel *chan, const char *name, cons
 		return;
 	}
 
-	headp = (chan) ? &chan->varshead : &globals;
+	if (chan) {
+		ast_channel_lock(chan);
+		headp = &chan->varshead;
+	} else {
+		ast_mutex_lock(&globalslock);
+		headp = &globals;
+	}
 
 	if (value) {
 		if ((option_verbose > 1) && (headp == &globals))
 			ast_verbose(VERBOSE_PREFIX_2 "Setting global variable '%s' to '%s'\n", name, value);
 		newvariable = ast_var_assign(name, value);
-		if (headp == &globals)
-			ast_mutex_lock(&globalslock);
 		AST_LIST_INSERT_HEAD(headp, newvariable, entries);
-		if (headp == &globals)
-			ast_mutex_unlock(&globalslock);
 	}
+
+	if (chan)
+		ast_channel_unlock(chan);
+	else
+		ast_mutex_unlock(&globalslock);
 }
 
 void pbx_builtin_setvar_helper(struct ast_channel *chan, const char *name, const char *value)
@@ -5802,7 +5841,6 @@ void pbx_builtin_setvar_helper(struct ast_channel *chan, const char *name, const
 	struct varshead *headp;
 	const char *nametail = name;
 
-	/* XXX may need locking on the channel ? */
 	if (name[strlen(name)-1] == ')') {
 		char *function = ast_strdupa(name);
 
@@ -5810,7 +5848,13 @@ void pbx_builtin_setvar_helper(struct ast_channel *chan, const char *name, const
 		return;
 	}
 
-	headp = (chan) ? &chan->varshead : &globals;
+	if (chan) {
+		ast_channel_lock(chan);
+		headp = &chan->varshead;
+	} else {
+		ast_mutex_lock(&globalslock);
+		headp = &globals;
+	}
 
 	/* For comparison purposes, we have to strip leading underscores */
 	if (*nametail == '_') {
@@ -5819,8 +5863,6 @@ void pbx_builtin_setvar_helper(struct ast_channel *chan, const char *name, const
 			nametail++;
 	}
 
-	if (headp == &globals)
-		ast_mutex_lock(&globalslock);
 	AST_LIST_TRAVERSE (headp, newvariable, entries) {
 		if (strcasecmp(ast_var_name(newvariable), nametail) == 0) {
 			/* there is already such a variable, delete it */
@@ -5837,7 +5879,9 @@ void pbx_builtin_setvar_helper(struct ast_channel *chan, const char *name, const
 		AST_LIST_INSERT_HEAD(headp, newvariable, entries);
 	}
 
-	if (headp == &globals)
+	if (chan)
+		ast_channel_unlock(chan);
+	else
 		ast_mutex_unlock(&globalslock);
 }
 

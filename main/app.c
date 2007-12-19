@@ -449,6 +449,10 @@ int ast_control_streamfile(struct ast_channel *chan, const char *file,
 			break;
 	}
 
+	/* If we are returning a digit cast it as char */
+	if (res > 0 || chan->stream)
+		res = (char)res;
+
 	ast_stopstream(chan);
 
 	return res;
@@ -685,8 +689,6 @@ static int __ast_play_and_record(struct ast_channel *chan, const char *playfile,
 		} else {
 			ast_frfree(f);
 		}
-		if (end == start)
-			end = time(NULL);
 	} else {
 		ast_log(LOG_WARNING, "Error creating writestream '%s', format '%s'\n", recordfile, sfmt[x]);
 	}
@@ -695,14 +697,29 @@ static int __ast_play_and_record(struct ast_channel *chan, const char *playfile,
 		if (silgen)
 			ast_channel_stop_silence_generator(chan, silgen);
 	}
-	*duration = end - start;
+
+	/*!\note
+	 * Instead of asking how much time passed (end - start), calculate the number
+	 * of seconds of audio which actually went into the file.  This fixes a
+	 * problem where audio is stopped up on the network and never gets to us.
+	 *
+	 * Note that we still want to use the number of seconds passed for the max
+	 * message, otherwise we could get a situation where this stream is never
+	 * closed (which would create a resource leak).
+	 */
+	*duration = ast_tellstream(others[0]) / 8000;
 
 	if (!prepend) {
 		for (x = 0; x < fmtcnt; x++) {
 			if (!others[x])
 				break;
-			if (res > 0)
-				ast_stream_rewind(others[x], totalsilence ? totalsilence - 200 : 200);
+			/*!\note
+			 * If we ended with silence, trim all but the first 200ms of silence
+			 * off the recording.  However, if we ended with '#', we don't want
+			 * to trim ANY part of the recording.
+			 */
+			if (res > 0 && totalsilence)
+				ast_stream_rewind(others[x], totalsilence - 200);
 			ast_truncstream(others[x]);
 			ast_closestream(others[x]);
 		}
@@ -717,7 +734,9 @@ static int __ast_play_and_record(struct ast_channel *chan, const char *playfile,
 			realfiles[x] = ast_readfile(recordfile, sfmt[x], comment, O_RDONLY, 0, 0);
 			if (!others[x] || !realfiles[x])
 				break;
-			ast_stream_rewind(others[x], totalsilence ? totalsilence - 200 : 200);
+			/*!\note Same logic as above. */
+			if (totalsilence)
+				ast_stream_rewind(others[x], totalsilence - 200);
 			ast_truncstream(others[x]);
 			/* add the original file too */
 			while ((fr = ast_readframe(realfiles[x]))) {
@@ -782,7 +801,7 @@ int ast_app_group_split_group(const char *data, char *group, int group_max, char
 	if (!ast_strlen_zero(grp))
 		ast_copy_string(group, grp, group_max);
 	else
-		res = -1;
+		*group = '\0';
 
 	if (!ast_strlen_zero(cat))
 		ast_copy_string(category, cat, category_max);
@@ -814,8 +833,10 @@ int ast_app_group_set_channel(struct ast_channel *chan, const char *data)
 		}
 	}
 	AST_LIST_TRAVERSE_SAFE_END
-	
-	if ((gi = calloc(1, len))) {
+
+	if (ast_strlen_zero(group)) {
+		/* Enable unsetting the group */
+	} else if ((gi = calloc(1, len))) {
 		gi->chan = chan;
 		gi->group = (char *) gi + sizeof(*gi);
 		strcpy(gi->group, group);
@@ -1373,7 +1394,6 @@ int ast_app_parse_options(const struct ast_app_option *options, struct ast_flags
 	s = optstr;
 	while (*s) {
 		curarg = *s++ & 0x7f;	/* the array (in app.h) has 128 entries */
-		ast_set_flag(flags, options[curarg].flag);
 		argloc = options[curarg].arg_index;
 		if (*s == '(') {
 			/* Has argument */
@@ -1388,8 +1408,9 @@ int ast_app_parse_options(const struct ast_app_option *options, struct ast_flags
 				break;
 			}
 		} else if (argloc) {
-			args[argloc - 1] = NULL;
+			args[argloc - 1] = "";
 		}
+		ast_set_flag(flags, options[curarg].flag);
 	}
 
 	return res;

@@ -1334,7 +1334,7 @@ static int handle_save_dialplan(int fd, int argc, char *argv[])
 							if (*s == '|')
 								*t = ',';
 							else {
-								if (*s == ',')
+								if (*s == ',' || *s == ';')
 									*t++ = '\\';
 								*t = *s;
 							}
@@ -1472,7 +1472,7 @@ static int handle_context_add_extension_deprecated(int fd, int argc, char *argv[
 	if (!app_data)
 		app_data="";
 	if (ast_add_extension(argv[4], argc == 6 ? 1 : 0, exten, iprior, NULL, cidmatch, app,
-		(void *)strdup(app_data), free, registrar)) {
+		(void *)strdup(app_data), ast_free, registrar)) {
 		switch (errno) {
 		case ENOMEM:
 			ast_cli(fd, "Out of free memory\n");
@@ -1565,7 +1565,7 @@ static int handle_context_add_extension(int fd, int argc, char *argv[])
 	if (!app_data)
 		app_data="";
 	if (ast_add_extension(argv[5], argc == 7 ? 1 : 0, exten, iprior, NULL, cidmatch, app,
-		(void *)strdup(app_data), free, registrar)) {
+		(void *)strdup(app_data), ast_free, registrar)) {
 		switch (errno) {
 		case ENOMEM:
 			ast_cli(fd, "Out of free memory\n");
@@ -2366,13 +2366,10 @@ static void pbx_load_users(void)
 	int len;
 	int hasvoicemail;
 	int start, finish, x;
-	struct ast_context *con;
+	struct ast_context *con = NULL;
 	
 	cfg = ast_config_load("users.conf");
 	if (!cfg)
-		return;
-	con = ast_context_find_or_create(&local_contexts, userscontext, registrar);
-	if (!con)
 		return;
 
 	for (cat = ast_category_browse(cfg, NULL); cat ; cat = ast_category_browse(cfg, cat)) {
@@ -2425,6 +2422,16 @@ static void pbx_load_users(void)
 			}
 		}
 		if (!ast_strlen_zero(iface)) {
+			/* Only create a context here when it is really needed. Otherwise default empty context
+			created by pbx_config may conflict with the one explicitly created by pbx_ael */
+			if (!con)
+				con = ast_context_find_or_create(&local_contexts, userscontext, registrar);
+
+			if (!con) {
+				ast_log(LOG_ERROR, "Can't find/create user context '%s'\n", userscontext);
+				return;
+			}
+
 			/* Add hint */
 			ast_add_extension2(con, 0, cat, -1, NULL, NULL, iface, NULL, NULL, registrar);
 			/* If voicemail, use "stdexten" else use plain old dial */

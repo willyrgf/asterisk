@@ -118,6 +118,7 @@ extern "C" {
 #include "asterisk/stringfields.h"
 #include "asterisk/compiler.h"
 
+#define DATASTORE_INHERIT_FOREVER	INT_MAX
 
 #define AST_MAX_FDS		8
 /*
@@ -141,12 +142,14 @@ typedef unsigned long long ast_group_t;
 struct ast_generator {
 	void *(*alloc)(struct ast_channel *chan, void *params);
 	void (*release)(struct ast_channel *chan, void *data);
+	/*! This function gets called with the channel locked */
 	int (*generate)(struct ast_channel *chan, void *data, int len, int samples);
 };
 
 /*! \brief Structure for a data store type */
 struct ast_datastore_info {
 	const char *type;		/*!< Type of data store */
+	void *(*duplicate)(void *data); /*!< Duplicate item data (used for inheritance) */
 	void (*destroy)(void *data);	/*!< Destroy function */
 };
 
@@ -155,6 +158,7 @@ struct ast_datastore {
 	char *uid;		/*!< Unique data store identifier */
 	void *data;		/*!< Contained data */
 	const struct ast_datastore_info *info;	/*!< Data store type information */
+	unsigned int inheritance;	/*!Number of levels this item will continue to be inherited */
 	AST_LIST_ENTRY(ast_datastore) entry; /*!< Used for easy linking */
 };
 
@@ -264,6 +268,12 @@ struct ast_channel_tech {
 
 	/*! \brief Provide additional write items for CHANNEL() dialplan function */
 	int (* func_channel_write)(struct ast_channel *chan, char *function, char *data, const char *value);
+
+	/*! \brief Retrieve base channel (agent and local) */
+	struct ast_channel* (* get_base_channel)(struct ast_channel *chan);
+	
+	/*! \brief Set base channel (agent and local) */
+	int (* set_base_channel)(struct ast_channel *chan, struct ast_channel *base);
 };
 
 struct ast_channel_spy_list;
@@ -367,7 +377,7 @@ struct ast_channel {
 	int oldwriteformat;				/*!< Original writer format */
 	
 	int timingfd;					/*!< Timing fd */
-	int (*timingfunc)(void *data);
+	int (*timingfunc)(const void *data);
 	void *timingdata;
 
 	enum ast_channel_state _state;			/*!< State of line -- Don't write directly, use ast_setstate */
@@ -430,6 +440,8 @@ struct ast_channel {
 	unsigned int emulate_dtmf_duration;	/*!< Number of ms left to emulate DTMF for */
 	struct timeval dtmf_tv;       /*!< The time that an in process digit began, or the last digit ended */
 
+	int visible_indication;                         /*!< Indication currently playing on the channel */
+
 	/*! \brief Data stores on the channel */
 	AST_LIST_HEAD_NOLOCK(datastores, ast_datastore) datastores;
 };
@@ -481,6 +493,9 @@ enum {
 	/*! Flag to show channels that this call is hangup due to the fact that the call
 	    was indeed anwered, but in another channel */
 	AST_FLAG_ANSWERED_ELSEWHERE = (1 << 15),
+	/*! This flag indicates that on a masquerade, an active stream should not
+	 *  be carried over */
+	AST_FLAG_MASQ_NOSTREAM = (1 << 16),
 };
 
 /*! \brief ast_bridge_config flags */
@@ -565,6 +580,9 @@ struct ast_datastore *ast_channel_datastore_alloc(const struct ast_datastore_inf
 
 /*! \brief Free a channel datastore structure */
 int ast_channel_datastore_free(struct ast_datastore *datastore);
+
+/*! \brief Inherit datastores from a parent to a child. */
+int ast_channel_datastore_inherit(struct ast_channel *from, struct ast_channel *to);
 
 /*! \brief Add a datastore to a channel */
 int ast_channel_datastore_add(struct ast_channel *chan, struct ast_datastore *datastore);
@@ -1102,6 +1120,9 @@ int ast_activate_generator(struct ast_channel *chan, struct ast_generator *gen, 
 /*! Deactive an active generator */
 void ast_deactivate_generator(struct ast_channel *chan);
 
+/*!
+ * \note The channel does not need to be locked before calling this function.
+ */
 void ast_set_callerid(struct ast_channel *chan, const char *cidnum, const char *cidname, const char *ani);
 
 
@@ -1135,7 +1156,7 @@ int ast_autoservice_stop(struct ast_channel *chan);
 
 /* If built with zaptel optimizations, force a scheduled expiration on the
    timer fd, at which point we call the callback function / data */
-int ast_settimeout(struct ast_channel *c, int samples, int (*func)(void *data), void *data);
+int ast_settimeout(struct ast_channel *c, int samples, int (*func)(const void *data), void *data);
 
 /*!	\brief Transfer a channel (if supported).  Returns -1 on error, 0 if not supported
    and 1 if supported and requested 
