@@ -2717,7 +2717,7 @@ static int iax2_fixup(struct ast_channel *oldchannel, struct ast_channel *newcha
  */
 static struct iax2_peer *realtime_peer(const char *peername, struct sockaddr_in *sin)
 {
-	struct ast_variable *var;
+	struct ast_variable *var = NULL;
 	struct ast_variable *tmp;
 	struct iax2_peer *peer=NULL;
 	time_t regseconds = 0, nowtime;
@@ -2739,7 +2739,7 @@ static struct iax2_peer *realtime_peer(const char *peername, struct sockaddr_in 
 			}
 		}
 	}
-	if (!var) { /* Last ditch effort */
+	if (!var && peername) { /* Last ditch effort */
 		var = ast_load_realtime("iaxpeers", "name", peername, NULL);
 		/*!\note
 		 * If this one loaded something, then we need to ensure that the host
