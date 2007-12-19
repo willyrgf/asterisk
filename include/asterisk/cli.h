@@ -27,8 +27,6 @@
 extern "C" {
 #endif
 
-#include <stdarg.h>
-
 #include "asterisk/linkedlists.h"
 
 void ast_cli(int fd, const char *fmt, ...)
@@ -84,7 +82,7 @@ void ast_cli(int fd, const char *fmt, ...)
 
 	...
 	// this is how we create the entry to register 
-	NEW_CLI(new_setdebug, "short description")
+	AST_CLI_DEFINE(new_setdebug, "short description")
 	...
 
    To help the transition, we make the pointer to the struct ast_cli_entry
@@ -144,60 +142,40 @@ struct ast_cli_args {
 };
 
 struct ast_cli_entry;
-typedef int (*old_cli_fn)(int fd, int argc, char *argv[]);
-typedef char *(*new_cli_fn)(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
+typedef char *(*cli_fn)(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
 
 /*! \brief descriptor for a cli entry. 
  * \arg \ref CLI_command_API
  */
 struct ast_cli_entry {
 	char * const cmda[AST_MAX_CMD_LEN];	/*!< words making up the command.
-		* set the first entry to NULL for a new-style entry. */
+						* set the first entry to NULL for a new-style entry. */
 
-	/*! Handler for the command (fd for output, # of args, argument list).
-	  Returns RESULT_SHOWUSAGE for improper arguments.
-	  argv[] has argc 'useful' entries, and an additional NULL entry
-	  at the end so that clients requiring NULL terminated arrays
-	  can use it without need for copies.
-	  You can overwrite argv or the strings it points to, but remember
-	  that this memory is deallocated after the handler returns.
-	 */
-	old_cli_fn handler;
+	const char *summary; 			/*!< Summary of the command (< 60 characters) */
+	const char *usage; 			/*!< Detailed usage information */
 
-	const char *summary; /*!< Summary of the command (< 60 characters) */
-	const char *usage; /*!< Detailed usage information */
-
-	/*! Generate the n-th (starting from 0) possible completion
-	  for a given 'word' following 'line' in position 'pos'.
-	  'line' and 'word' must not be modified.
-	  Must return a malloc'ed string with the n-th value when available,
-	  or NULL if the n-th completion does not exist.
-	  Typically, the function is called with increasing values for n
-	  until a NULL is returned.
-	 */
-	char *(*generator)(const char *line, const char *word, int pos, int n);
 	struct ast_cli_entry *deprecate_cmd;
 
-	int inuse; /*!< For keeping track of usage */
-	struct module *module;	/*!< module this belongs to */
-	char *_full_cmd;	/*!< built at load time from cmda[] */
-	int cmdlen;		/*!< len up to the first invalid char [<{% */
+	int inuse; 				/*!< For keeping track of usage */
+	struct module *module;			/*!< module this belongs to */
+	char *_full_cmd;			/*!< built at load time from cmda[] */
+	int cmdlen;				/*!< len up to the first invalid char [<{% */
 	/*! \brief This gets set in ast_cli_register()
 	  It then gets set to something different when the deprecated command
 	  is run for the first time (ie; after we warn the user that it's deprecated)
 	 */
-	int args;		/*!< number of non-null entries in cmda */
-	char *command;		/*!< command, non-null for new-style entries */
+	int args;				/*!< number of non-null entries in cmda */
+	char *command;				/*!< command, non-null for new-style entries */
 	int deprecated;
-	new_cli_fn new_handler;
-	char *_deprecated_by;	/*!< copied from the "parent" _full_cmd, on deprecated commands */
+	cli_fn handler;
+	char *_deprecated_by;			/*!< copied from the "parent" _full_cmd, on deprecated commands */
 	/*! For linking */
 	AST_LIST_ENTRY(ast_cli_entry) list;
 };
 
 /* XXX the parser in gcc 2.95 gets confused if you don't put a space
  * between the last arg before VA_ARGS and the comma */
-#define NEW_CLI(fn, txt , ... )	{ .new_handler = fn, .summary = txt, ## __VA_ARGS__ }
+#define AST_CLI_DEFINE(fn, txt , ... )	{ .handler = fn, .summary = txt, ## __VA_ARGS__ }
 
 /*!
  * Helper function to generate cli entries from a NULL-terminated array.
@@ -220,14 +198,25 @@ char *ast_cli_complete(const char *word, char *const choices[], int pos);
 /*! 
  * \brief Interprets a command
  * Interpret a command s, sending output to fd
+ * \param fd pipe
+ * \param s incoming string
  * \retval 0 on success
  * \retval -1 on failure
  */
 int ast_cli_command(int fd, const char *s);
 
 /*! 
- * \brief Registers a command or an array of commands
- * \param e which cli entry to register
+ * \brief Executes multiple CLI commands
+ * Interpret strings separated by NULL and execute each one, sending output to fd
+ * \param fd pipe
+ * \param size is the total size of the string
+ * \param s incoming string
+ * \retval number of commands executed
+ */
+int ast_cli_command_multiple(int fd, size_t size, const char *s);
+
+/*! \brief Registers a command or an array of commands
+ * \param e which cli entry to register.
  * Register your own command
  * \retval 0 on success
  * \retval -1 on failure
@@ -245,7 +234,7 @@ int ast_cli_register_multiple(struct ast_cli_entry *e, int len);
  * \brief Unregisters a command or an array of commands
  * \param e which cli entry to unregister
  * Unregister your own command.  You must pass a completed ast_cli_entry structure
- * \return 0.
+ * \return 0
  */
 int ast_cli_unregister(struct ast_cli_entry *e);
 
@@ -273,14 +262,14 @@ int ast_cli_generatornummatches(const char *, const char *);
  *
  * The first entry (offset 0) of the result is the longest common substring
  * in the results, useful to extend the string that has been completed.
- * Subsequent entries are all possible values, followe by a NULL.
+ * Subsequent entries are all possible values, followed by a NULL.
  * All strings and the array itself are malloc'ed and must be freed
  * by the caller.
  */
 char **ast_cli_completion_matches(const char *, const char *);
 
 /*!
- * \brief Command completion for the list of active channels
+ * \brief Command completion for the list of active channels.
  *
  * This can be called from a CLI command completion function that wants to
  * complete from the list of active channels.  'rpos' is the required

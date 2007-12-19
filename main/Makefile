@@ -26,7 +26,8 @@ OBJS=	io.o sched.o logger.o frame.o loader.o config.o channel.o \
 	utils.o plc.o jitterbuf.o dnsmgr.o devicestate.o \
 	netsock.o slinfactory.o ast_expr2.o ast_expr2f.o \
 	cryptostub.o sha1.o http.o fixedjitterbuf.o abstract_jb.o \
-	strcompat.o threadstorage.o dial.o event.o adsistub.o audiohook.o
+	strcompat.o threadstorage.o dial.o event.o adsistub.o audiohook.o \
+	astobj2.o hashtab.o global_datastores.o
 
 # we need to link in the objects statically, not as a library, because
 # otherwise modules will not have them available if none of the static
@@ -40,14 +41,8 @@ OBJS+=say.o
 AST_LIBS += $(SSL_LIB)
 AST_LIBS += $(BKTR_LIB)
 
-ifneq ($(findstring darwin,$(OSARCH)),)
+ifeq ($(POLL_AVAILABLE),)
   OBJS+=poll.o
-  ASTCFLAGS+=-DPOLLCOMPAT
-else
-  ifeq ($(wildcard /usr/include/sys/poll.h),)
-    OBJS+=poll.o
-    ASTCFLAGS+=-DPOLLCOMPAT
-  endif
 endif
 
 ifeq ($(wildcard /usr/include/dlfcn.h),)
@@ -84,9 +79,16 @@ else
 endif
 
 ifeq ($(OSARCH),FreeBSD)
+  # -V is understood by BSD Make, not by GNU make.
+  BSDVERSION=$(shell make -V OSVERSION -f /usr/share/mk/bsd.port.subdir.mk)
+  AST_LIBS+=$(shell if test $(BSDVERSION) -lt 502102 ; then echo "-lc_r"; else echo "-pthread"; fi)
   AST_LIBS+=-lcrypto
 endif
 
+ifneq ($(findstring $(OSARCH), mingw32 cygwin ),)
+  AST_LIBS+=-lminires -ldl
+  ASTLINK+= -shared -Wl,--out-implib,libasterisk.a
+endif
 ifeq ($(OSARCH),NetBSD)
   AST_LIBS+=-lpthread -lcrypto -lm -L/usr/pkg/lib $(EDITLINE_LIB)
 endif
@@ -114,6 +116,8 @@ ast_expr2.c ast_expr2.h:
 
 ast_expr2f.c:
 	flex -o $@ --full ast_expr2.fl
+	sed 's@free( (char \*) ptr );@if(ptr) free( (char *) ptr );@' ast_expr2f.c > zz
+	mv zz ast_expr2f.c
 
 testexpr2: ast_expr2f.c ast_expr2.c ast_expr2.h
 	$(CC) -g -c -Iinclude -DSTANDALONE ast_expr2f.c
@@ -138,10 +142,24 @@ endif
 minimime/libmmime.a: CHECK_SUBDIR
 	@cd minimime && $(MAKE) libmmime.a
 
-asterisk: $(OBJS) editline/libedit.a db1-ast/libdb1.a minimime/libmmime.a $(AST_EMBED_LDSCRIPTS)
+ifneq ($(findstring $(OSARCH), mingw32 cygwin ),)
+MAIN_TGT:=asterisk.dll
+asterisk: cygload
+	mv cygload.exe asterisk.exe
+
+cygload: asterisk.dll
+else
+MAIN_TGT:=asterisk
+endif
+
+$(MAIN_TGT): $(OBJS) editline/libedit.a db1-ast/libdb1.a minimime/libmmime.a $(AST_EMBED_LDSCRIPTS)
 	@$(CC) -c -o buildinfo.o $(ASTCFLAGS) buildinfo.c
 	$(ECHO_PREFIX) echo "   [LD] $^ -> $@"
+ifneq ($(findstring chan_h323,$(MENUSELECT_CHANNELS)),)
+	$(CMD_PREFIX) $(CC) $(STATIC_BUILD) -o $@ $(ASTLINK) $(AST_EMBED_LDFLAGS) $(ASTLDFLAGS) $^ buildinfo.o $(AST_LIBS) $(AST_EMBED_LIBS)
+else
 	$(CMD_PREFIX) $(CXX) $(STATIC_BUILD) -o $@ $(ASTLINK) $(AST_EMBED_LDFLAGS) $(ASTLDFLAGS) $(H323LDFLAGS) $^ buildinfo.o $(AST_LIBS) $(AST_EMBED_LIBS) $(H323LDLIBS)
+endif
 	@$(ASTTOPDIR)/build_tools/strip_nonapi $@
 
 clean::

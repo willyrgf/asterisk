@@ -30,16 +30,10 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <errno.h>
-
 #include "chan_misdn_config.h"
 
 #include "asterisk/config.h"
 #include "asterisk/channel.h"
-#include "asterisk/logger.h"
 #include "asterisk/lock.h"
 #include "asterisk/pbx.h"
 #include "asterisk/strings.h"
@@ -231,6 +225,10 @@ static const struct misdn_cfg_spec port_spec[] = {
 		"\tinstead." },
 	{ "senddtmf", MISDN_CFG_SENDDTMF, MISDN_CTYPE_BOOL, "no", NONE,
 		"Enable this if we should produce DTMF Tones ourselves." },
+	{ "astdtmf", MISDN_CFG_ASTDTMF, MISDN_CTYPE_BOOL, "no", NONE,
+		"Enable this if you want to use the Asterisk dtmf detector\n"
+		"instead of the mISDN_dsp/hfcmulti one."
+		},
 	{ "hold_allowed", MISDN_CFG_HOLD_ALLOWED, MISDN_CTYPE_BOOL, "no", NONE,
 		"Enable this to have support for hold and retrieve." },
 	{ "early_bconnect", MISDN_CFG_EARLY_BCONNECT, MISDN_CTYPE_BOOL, "yes", NONE,
@@ -365,6 +363,10 @@ static const struct misdn_cfg_spec gen_spec[] = {
 	{ "crypt_keys", MISDN_GEN_CRYPT_KEYS, MISDN_CTYPE_STR, NO_DEFAULT, NONE,
 		"Keys for cryption, you reference them in the dialplan\n"
 		"\tLater also in dynamic encr." },
+ 	{ "ntkeepcalls", MISDN_GEN_NTKEEPCALLS, MISDN_CTYPE_BOOL, "no", NONE, 
+		"avoid dropping calls if the L2 goes down. some nortel pbx\n" 
+		"do put down the L2/L1 for some milliseconds even if there\n"
+		"are running calls. with this option you can avoid dropping them\n" },
 	{ "ntdebugflags", MISDN_GEN_NTDEBUGFLAGS, MISDN_CTYPE_INT, "0", NONE,
 	  	"No description yet."},
 	{ "ntdebugfile", MISDN_GEN_NTDEBUGFILE, MISDN_CTYPE_STR, "/var/log/misdn-nt.log", NONE,
@@ -427,7 +429,7 @@ static int _enum_array_map (void)
 	return 0;
 }
 
-static int get_cfg_position (char *name, int type)
+static int get_cfg_position (const char *name, int type)
 {
 	int i;
 
@@ -853,11 +855,12 @@ int misdn_cfg_get_next_port_spin (int port)
 	return (p > 0) ? p : misdn_cfg_get_next_port(0);
 }
 
-static int _parse (union misdn_cfg_pt *dest, char *value, enum misdn_cfg_type type, int boolint_def)
+static int _parse (union misdn_cfg_pt *dest, const char *value, enum misdn_cfg_type type, int boolint_def)
 {
 	int re = 0;
 	int len, tmp;
 	char *valtmp;
+	char *tmp2 = ast_strdupa(value);
 
 	switch (type) {
 	case MISDN_CTYPE_STR:
@@ -897,7 +900,7 @@ static int _parse (union misdn_cfg_pt *dest, char *value, enum misdn_cfg_type ty
 		}
 		break;
 	case MISDN_CTYPE_MSNLIST:
-		for (valtmp = strsep(&value, ","); valtmp; valtmp = strsep(&value, ",")) {
+		for (valtmp = strsep(&tmp2, ","); valtmp; valtmp = strsep(&tmp2, ",")) {
 			if ((len = strlen(valtmp))) {
 				struct msn_list *ml = ast_malloc(sizeof(*ml));
 				ml->msn = ast_calloc(len+1, sizeof(char));
@@ -953,10 +956,10 @@ static void _build_port_config (struct ast_variable *v, char *cat)
 
 	for (; v; v = v->next) {
 		if (!strcasecmp(v->name, "ports")) {
-			char *token;
+			char *token, *tmp = ast_strdupa(v->value);
 			char ptpbuf[BUFFERSIZE] = "";
 			int start, end;
-			for (token = strsep(&v->value, ","); token; token = strsep(&v->value, ","), *ptpbuf = 0) { 
+			for (token = strsep(&tmp, ","); token; token = strsep(&tmp, ","), *ptpbuf = 0) { 
 				if (!*token)
 					continue;
 				if (sscanf(token, "%d-%d%s", &start, &end, ptpbuf) >= 2) {
@@ -1003,7 +1006,7 @@ void misdn_cfg_update_ptp (void)
 
 	misdn_cfg_get(0, MISDN_GEN_MISDN_INIT, &misdn_init, sizeof(misdn_init));
 
-	if (misdn_init) {
+	if (!ast_strlen_zero(misdn_init)) {
 		fp = fopen(misdn_init, "r");
 		if (fp) {
 			while(fgets(line, sizeof(line), fp)) {
@@ -1063,7 +1066,7 @@ static void _fill_defaults (void)
 
 void misdn_cfg_reload (void)
 {
-	misdn_cfg_init (0);
+	misdn_cfg_init(0, 1);
 }
 
 void misdn_cfg_destroy (void)
@@ -1082,18 +1085,20 @@ void misdn_cfg_destroy (void)
 	ast_mutex_destroy(&config_mutex);
 }
 
-int misdn_cfg_init (int this_max_ports)
+int misdn_cfg_init(int this_max_ports, int reload)
 {
 	char config[] = "misdn.conf";
 	char *cat, *p;
 	int i;
 	struct ast_config *cfg;
 	struct ast_variable *v;
+	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
 
-	if (!(cfg = AST_LOAD_CFG(config))) {
+	if (!(cfg = AST_LOAD_CFG(config, config_flags))) {
 		ast_log(LOG_WARNING, "missing file: misdn.conf\n");
 		return -1;
-	}
+	} else if (cfg == CONFIG_STATUS_FILEUNCHANGED)
+		return 0;
 
 	ast_mutex_init(&config_mutex);
 

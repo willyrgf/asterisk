@@ -29,18 +29,8 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <fcntl.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <netinet/in.h>
-#include <string.h>
-#include <stdio.h>
-
-#include "asterisk/lock.h"
 #include "asterisk/translate.h"
 #include "asterisk/module.h"
-#include "asterisk/logger.h"
-#include "asterisk/channel.h"
 #include "asterisk/utils.h"
 
 #include "ilbc/iLBC_encode.h"
@@ -237,8 +227,9 @@ static int load_module(void)
 		res=ast_register_translator(&lintoilbc);
 	else
 		ast_unregister_translator(&ilbctolin);
-
-	return res;
+	if (res)
+		return AST_MODULE_LOAD_FAILURE;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "iLBC Coder/Decoder");

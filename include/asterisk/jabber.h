@@ -32,8 +32,6 @@
  *
  * \section External dependencies
  * AJI use the IKSEMEL library found at http://iksemel.jabberstudio.org/
- * To use TLS connections, IKSEMEL depends on the GNUTLS library
- * available at http://iksemel.jabberstudio.org/
  *
  * \section Files
  * - res_jabber.c
@@ -45,9 +43,35 @@
 #ifndef _ASTERISK_JABBER_H
 #define _ASTERISK_JABBER_H
 
+#ifdef HAVE_OPENSSL
+
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#define TRY_SECURE 2
+#define SECURE 4
+/* file is read by blocks with this size */
+#define NET_IO_BUF_SIZE 4096
+/* Return value for timeout connection expiration */
+#define IKS_NET_EXPIRED 12
+
+#endif /* HAVE_OPENSSL */
+
 #include <iksemel.h>
 #include "asterisk/astobj.h"
 #include "asterisk/linkedlists.h"
+
+/* 
+ * As per RFC 3920 - section 3.1, the maximum length for a full Jabber ID 
+ * is 3071 bytes.
+ * The ABNF syntax for jid :
+ * jid = [node "@" ] domain [ "/" resource ]
+ * Each allowable portion of a JID (node identifier, domain identifier,
+ * and resource identifier) MUST NOT be more than 1023 bytes in length,
+ * resulting in a maximum total size (including the '@' and '/' separators) 
+ * of 3071 bytes.
+ */
+#define AJI_MAX_JIDLEN 3071
+#define AJI_MAX_RESJIDLEN 1023
 
 enum aji_state {
 	AJI_DISCONNECTING,
@@ -82,7 +106,7 @@ struct aji_capabilities {
 
 struct aji_resource {
 	int status;
-	char resource[80];
+	char resource[AJI_MAX_RESJIDLEN];
 	char *description;
 	struct aji_version *cap;
 	int priority;
@@ -98,7 +122,7 @@ struct aji_message {
 };
 
 struct aji_buddy {
-	ASTOBJ_COMPONENTS(struct aji_buddy);
+	ASTOBJ_COMPONENTS_FULL(struct aji_buddy, AJI_MAX_JIDLEN, 1);
 	char channel[160];
 	struct aji_resource *resources;
 	enum aji_btype btype;
@@ -116,16 +140,22 @@ struct aji_transport_container {
 struct aji_client {
 	ASTOBJ_COMPONENTS(struct aji_client);
 	char password[160];
-	char user[160];
-	char serverhost[160];
-	char context[100];
+	char user[AJI_MAX_JIDLEN];
+	char serverhost[AJI_MAX_RESJIDLEN];
 	char statusmessage[256];
+	char name_space[256];
 	char sid[10]; /* Session ID */
 	char mid[6]; /* Message ID */
 	iksid *jid;
 	iksparser *p;
 	iksfilter *f;
 	ikstack *stack;
+#ifdef HAVE_OPENSSL
+	SSL_CTX *ssl_context;
+	SSL *ssl_session;
+	SSL_METHOD *ssl_method;
+	unsigned int stream_flags;
+#endif /* HAVE_OPENSSL */
 	enum aji_state state;
 	int port;
 	int debug;
@@ -143,14 +173,18 @@ struct aji_client {
 	AST_LIST_HEAD(messages,aji_message) messages;
 	void *jingle;
 	pthread_t thread;
+	int priority;
+	enum ikshowtype status;
 };
 
 struct aji_client_container{
 	ASTOBJ_CONTAINER_COMPONENTS(struct aji_client);
 };
 
-/*! Send jabber message from connected client to jabber URI */
-int ast_aji_send(struct aji_client *client, const char *address, const char *message);
+/* !Send XML stanza over the established XMPP connection */
+int ast_aji_send(struct aji_client *client, iks *x);
+/*! Send jabber chat message from connected client to jabber URI */
+int ast_aji_send_chat(struct aji_client *client, const char *address, const char *message);
 /*! Disconnect jabber client */
 int ast_aji_disconnect(struct aji_client *client);
 int ast_aji_check_roster(void);

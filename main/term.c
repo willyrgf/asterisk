@@ -27,19 +27,13 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include "asterisk/_private.h"
 #include <sys/time.h>
 #include <signal.h>
-#include <errno.h>
-#include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-#include <unistd.h>
 
 #include "asterisk/term.h"
-#include "asterisk/options.h"
 #include "asterisk/lock.h"
 #include "asterisk/utils.h"
 

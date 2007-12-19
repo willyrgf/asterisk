@@ -97,7 +97,7 @@ int ast_unload_resource(const char *resource_name, enum ast_module_unload_mode);
  * This function calulates use counts and notifies anyone trying to keep track
  * of them.  It should be called whenever your module's usecount changes.
  *
- * \note The LOCAL_USER macros take care of calling this function for you.
+ * \note The ast_module_user_* functions take care of calling this function for you.
  */
 void ast_update_use_count(void);
 
@@ -194,10 +194,11 @@ enum ast_module_flags {
 
 struct ast_module_info {
 
-	/*! The 'self' pointer for a module; it will be set by the loader before
-	   it calls the module's load_module() entrypoint, and used by various
-	   other macros that need to identify the module.
-	*/
+	/*!
+	 * The 'self' pointer for a module; it will be set by the loader before
+	 * it calls the module's load_module() entrypoint, and used by various
+	 * other macros that need to identify the module.
+	 */
 
 	struct ast_module *self;
 	enum ast_module_load_result (*load)(void);	/*!< register stuff etc. Optional. */
@@ -216,6 +217,9 @@ struct ast_module_info {
 
 	const char *key;
 	unsigned int flags;
+
+	/*! The value of AST_BUILDOPT_SUM when this module was compiled */
+	const char buildopt_sum[33];
 };
 
 void ast_module_register(const struct ast_module_info *);
@@ -237,12 +241,13 @@ void ast_module_unref(struct ast_module *);
 	static struct ast_module_info __mod_info = {	\
 		NULL,					\
 		load_func,				\
-		unload_func,				\
 		reload_func,				\
+		unload_func,				\
 		AST_MODULE,				\
 		desc,					\
 		keystr,					\
-		flags_to_set				\
+		flags_to_set,				\
+		AST_BUILDOPT_SUM,			\
 	};						\
 	static void  __attribute__ ((constructor)) __reg_module(void) \
 	{ \
@@ -343,6 +348,7 @@ static void __restore_globals(void)
 		.flags = flags_to_set,				\
 		.description = desc,				\
 		.key = keystr,					\
+		.buildopt_sum = AST_BUILDOPT_SUM,		\
 		fields						\
 	};							\
 	static void  __attribute__ ((constructor)) __reg_module(void) \
@@ -363,6 +369,59 @@ static void __restore_globals(void)
 			.unload = unload_module,		\
 		       )
 #endif
+
+/*! 
+ * \brief Register an application.
+ *
+ * \param app Short name of the application
+ * \param execute a function callback to execute the application. It should return
+ *                non-zero if the channel needs to be hung up.
+ * \param synopsis a short description (one line synopsis) of the application
+ * \param description long description with all of the details about the use of 
+ *                    the application
+ * 
+ * This registers an application with Asterisk's internal application list. 
+ * \note The individual applications themselves are responsible for registering and unregistering
+ *       and unregistering their own CLI commands.
+ * 
+ * \retval 0 success 
+ * \retval -1 failure.
+ */
+#define ast_register_application(app, execute, synopsis, description) ast_register_application2(app, execute, synopsis, description, ast_module_info->self)
+
+/*!
+ * \brief Register an application.
+ *
+ * \param app Short name of the application
+ * \param execute a function callback to execute the application. It should return
+ *                non-zero if the channel needs to be hung up.
+ * \param synopsis a short description (one line synopsis) of the application
+ * \param description long description with all of the details about the use of
+ *                    the application
+ * \param mod module this application belongs to
+ *
+ * This registers an application with Asterisk's internal application list.
+ * \note The individual applications themselves are responsible for registering and unregistering
+ *       and unregistering their own CLI commands.
+ *
+ * \retval 0 success
+ * \retval -1 failure.
+ */
+int ast_register_application2(const char *app, int (*execute)(struct ast_channel *, void *),
+				     const char *synopsis, const char *description, void *mod);
+
+/*! 
+ * \brief Unregister an application
+ * 
+ * \param app name of the application (does not have to be the same string as the one that was registered)
+ * 
+ * This unregisters an application from Asterisk's internal application list.
+ * 
+ * \retval 0 success 
+ * \retval -1 failure
+ */
+int ast_unregister_application(const char *app);
+
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }

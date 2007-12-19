@@ -27,17 +27,13 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <unistd.h>
-#include <stdlib.h>
+#include "asterisk/_private.h"
+#include "asterisk/paths.h"	/* use ast_config_AST_MODULE_DIR */
 #include <sys/signal.h>
-#include <stdio.h>
 #include <signal.h>
-#include <string.h>
 #include <ctype.h>
 #include <regex.h>
 
-#include "asterisk/logger.h"
-#include "asterisk/options.h"
 #include "asterisk/cli.h"
 #include "asterisk/linkedlists.h"
 #include "asterisk/module.h"
@@ -122,22 +118,6 @@ unsigned int ast_verbose_get_by_file(const char *file)
 }
 
 static AST_RWLIST_HEAD_STATIC(helpers, ast_cli_entry);
-
-static const char logger_mute_help[] = 
-"Usage: logger mute\n"
-"       Disables logging output to the current console, making it possible to\n"
-"       gather information without being disturbed by scrolling lines.\n";
-
-static const char softhangup_help[] =
-"Usage: soft hangup <channel>\n"
-"       Request that a channel be hung up. The hangup takes effect\n"
-"       the next time the driver reads or writes from the channel\n";
-
-static const char group_show_channels_help[] = 
-"Usage: group show channels [pattern]\n"
-"       Lists all currently active channels with channel group(s) specified.\n"
-"       Optional regular expression pattern is matched to group names for each\n"
-"       channel.\n";
 
 static char *complete_fn(const char *word, int state)
 {
@@ -373,12 +353,29 @@ done:
 	return CLI_SUCCESS;
 }
 
-static int handle_logger_mute(int fd, int argc, char *argv[])
+static char *handle_logger_mute(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	if (argc != 2)
-		return RESULT_SHOWUSAGE;
-	ast_console_toggle_mute(fd);
-	return RESULT_SUCCESS;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "logger mute";
+		e->usage = 
+			"Usage: logger mute\n"
+			"       Disables logging output to the current console, making it possible to\n"
+			"       gather information without being disturbed by scrolling lines.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc < 2 || a->argc > 3)
+		return CLI_SHOWUSAGE;
+
+	if (a->argc == 3 && !strcasecmp(a->argv[2], "silent"))
+		ast_console_toggle_mute(a->fd, 1);
+	else
+		ast_console_toggle_mute(a->fd, 0);
+
+	return CLI_SUCCESS;
 }
 
 static char *handle_unload(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
@@ -568,16 +565,71 @@ static char *handle_modlist(struct ast_cli_entry *e, int cmd, struct ast_cli_arg
 	ast_cli(a->fd,"%d modules loaded\n", ast_update_module_list(modlist_modentry, like));
 	climodentryfd = -1;
 	ast_mutex_unlock(&climodentrylock);
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 #undef MODLIST_FORMAT
 #undef MODLIST_FORMAT2
+
+static char *handle_showcalls(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	struct timeval curtime = ast_tvnow();
+	int showuptime, printsec;
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "core show calls [uptime]";
+		e->usage =
+			"Usage: core show calls [uptime] [seconds]\n"
+			"       Lists number of currently active calls and total number of calls\n"
+			"       processed through PBX since last restart. If 'uptime' is specified\n"
+			"       the system uptime is also displayed. If 'seconds' is specified in\n"
+			"       addition to 'uptime', the system uptime is displayed in seconds.\n";
+		return NULL;
+
+	case CLI_GENERATE:
+		if (a->pos != e->args)
+			return NULL;
+		return a->n == 0  ? ast_strdup("seconds") : NULL;
+	}
+
+	/* regular handler */
+	if (a->argc >= e->args && !strcasecmp(a->argv[e->args-1],"uptime")) {
+		showuptime = 1;
+
+		if (a->argc == e->args+1 && !strcasecmp(a->argv[e->args],"seconds"))
+			printsec = 1;
+		else if (a->argc == e->args)
+			printsec = 0;
+		else
+			return CLI_SHOWUSAGE;
+	} else if (a->argc == e->args-1) {
+		showuptime = 0;
+		printsec = 0;
+	} else
+		return CLI_SHOWUSAGE;
+
+	if (option_maxcalls) {
+		ast_cli(a->fd, "%d of %d max active call%s (%5.2f%% of capacity)\n",
+		   ast_active_calls(), option_maxcalls, ESS(ast_active_calls()),
+		   ((double)ast_active_calls() / (double)option_maxcalls) * 100.0);
+	} else {
+		ast_cli(a->fd, "%d active call%s\n", ast_active_calls(), ESS(ast_active_calls()));
+	}
+   
+	ast_cli(a->fd, "%d call%s processed\n", ast_processed_calls(), ESS(ast_processed_calls()));
+
+	if (ast_startuptime.tv_sec && showuptime) {
+		print_uptimestr(a->fd, ast_tvsub(curtime, ast_startuptime), "System uptime", printsec);
+	}
+
+	return RESULT_SUCCESS;
+}
 
 static char *handle_chanlist(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 #define FORMAT_STRING  "%-20.20s %-20.20s %-7.7s %-30.30s\n"
 #define FORMAT_STRING2 "%-20.20s %-20.20s %-7.7s %-30.30s\n"
-#define CONCISE_FORMAT_STRING  "%s!%s!%s!%d!%s!%s!%s!%s!%s!%d!%s!%s\n"
+#define CONCISE_FORMAT_STRING  "%s!%s!%s!%d!%s!%s!%s!%s!%s!%d!%s!%s!%s\n"
 #define VERBOSE_FORMAT_STRING  "%-20.20s %-20.20s %-16.16s %4d %-7.7s %-12.12s %-25.25s %-15.15s %8.8s %-11.11s %-20.20s\n"
 #define VERBOSE_FORMAT_STRING2 "%-20.20s %-20.20s %-16.16s %-4.4s %-7.7s %-12.12s %-25.25s %-15.15s %8.8s %-11.11s %-20.20s\n"
 
@@ -595,7 +647,9 @@ static char *handle_chanlist(struct ast_cli_entry *e, int cmd, struct ast_cli_ar
 			"       'concise' is specified, the format is abridged and in a more easily\n"
 			"       machine parsable format. If 'verbose' is specified, the output includes\n"
 			"       more and longer fields. If 'count' is specified only the channel and call\n"
-			"       count is output.\n";
+			"       count is output.\n"
+			"	The 'concise' option is deprecated and will be removed from future versions\n"
+			"	of Asterisk.\n";
 		return NULL;
 
 	case CLI_GENERATE:
@@ -649,7 +703,8 @@ static char *handle_chanlist(struct ast_cli_entry *e, int cmd, struct ast_cli_ar
 					S_OR(c->accountcode, ""),
 					c->amaflags, 
 					durbuf,
-					bc ? bc->name : "(None)");
+					bc ? bc->name : "(None)",
+					c->uniqueid);
 			} else if (verbose) {
 				ast_cli(fd, VERBOSE_FORMAT_STRING, c->name, c->context, c->exten, c->priority, ast_state2str(c->_state),
 					c->appl ? c->appl : "(None)",
@@ -680,6 +735,8 @@ static char *handle_chanlist(struct ast_cli_entry *e, int cmd, struct ast_cli_ar
 				((double)ast_active_calls() / (double)option_maxcalls) * 100.0);
 		else
 			ast_cli(fd, "%d active call%s\n", ast_active_calls(), ESS(ast_active_calls()));
+
+		ast_cli(fd, "%d call%s processed\n", ast_processed_calls(), ESS(ast_processed_calls()));
 	}
 	return CLI_SUCCESS;
 	
@@ -690,56 +747,61 @@ static char *handle_chanlist(struct ast_cli_entry *e, int cmd, struct ast_cli_ar
 #undef VERBOSE_FORMAT_STRING2
 }
 
-static const char showchan_help[] = 
-"Usage: core show channel <channel>\n"
-"       Shows lots of information about the specified channel.\n";
-
-static const char commandcomplete_help[] = 
-"Usage: _command complete \"<line>\" text state\n"
-"       This function is used internally to help with command completion and should.\n"
-"       never be called by the user directly.\n";
-
-static const char commandnummatches_help[] = 
-"Usage: _command nummatches \"<line>\" text \n"
-"       This function is used internally to help with command completion and should.\n"
-"       never be called by the user directly.\n";
-
-static const char commandmatchesarray_help[] = 
-"Usage: _command matchesarray \"<line>\" text \n"
-"       This function is used internally to help with command completion and should.\n"
-"       never be called by the user directly.\n";
-
-static int handle_softhangup(int fd, int argc, char *argv[])
+static char *handle_softhangup(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	struct ast_channel *c=NULL;
-	if (argc != 3)
-		return RESULT_SHOWUSAGE;
-	c = ast_get_channel_by_name_locked(argv[2]);
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "soft hangup";
+		e->usage =
+			"Usage: soft hangup <channel>\n"
+			"       Request that a channel be hung up. The hangup takes effect\n"
+			"       the next time the driver reads or writes from the channel\n";
+		return NULL;
+	case CLI_GENERATE:
+		return ast_complete_channels(a->line, a->word, a->pos, a->n, 2);
+	}
+	if (a->argc != 3)
+		return CLI_SHOWUSAGE;
+	c = ast_get_channel_by_name_locked(a->argv[2]);
 	if (c) {
-		ast_cli(fd, "Requested Hangup on channel '%s'\n", c->name);
+		ast_cli(a->fd, "Requested Hangup on channel '%s'\n", c->name);
 		ast_softhangup(c, AST_SOFTHANGUP_EXPLICIT);
 		ast_channel_unlock(c);
 	} else
-		ast_cli(fd, "%s is not a known channel\n", argv[2]);
-	return RESULT_SUCCESS;
+		ast_cli(a->fd, "%s is not a known channel\n", a->argv[2]);
+	return CLI_SUCCESS;
 }
 
 static char *__ast_cli_generator(const char *text, const char *word, int state, int lock);
 
-static int handle_commandmatchesarray(int fd, int argc, char *argv[])
+static char *handle_commandmatchesarray(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	char *buf, *obuf;
 	int buflen = 2048;
 	int len = 0;
 	char **matches;
 	int x, matchlen;
+	
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "_command matchesarray";
+		e->usage = 
+			"Usage: _command matchesarray \"<line>\" text \n"
+			"       This function is used internally to help with command completion and should.\n"
+			"       never be called by the user directly.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
 
-	if (argc != 4)
-		return RESULT_SHOWUSAGE;
+	if (a->argc != 4)
+		return CLI_SHOWUSAGE;
 	if (!(buf = ast_malloc(buflen)))
-		return RESULT_FAILURE;
+		return CLI_FAILURE;
 	buf[len] = '\0';
-	matches = ast_cli_completion_matches(argv[2], argv[3]);
+	matches = ast_cli_completion_matches(a->argv[2], a->argv[3]);
 	if (matches) {
 		for (x=0; matches[x]; x++) {
 			matchlen = strlen(matches[x]) + 1;
@@ -759,43 +821,65 @@ static int handle_commandmatchesarray(int fd, int argc, char *argv[])
 	}
 
 	if (buf) {
-		ast_cli(fd, "%s%s",buf, AST_CLI_COMPLETE_EOF);
+		ast_cli(a->fd, "%s%s",buf, AST_CLI_COMPLETE_EOF);
 		ast_free(buf);
 	} else
-		ast_cli(fd, "NULL\n");
+		ast_cli(a->fd, "NULL\n");
 
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 
 
 
-static int handle_commandnummatches(int fd, int argc, char *argv[])
+static char *handle_commandnummatches(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	int matches = 0;
 
-	if (argc != 4)
-		return RESULT_SHOWUSAGE;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "_command nummatches";
+		e->usage = 
+			"Usage: _command nummatches \"<line>\" text \n"
+			"       This function is used internally to help with command completion and should.\n"
+			"       never be called by the user directly.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
 
-	matches = ast_cli_generatornummatches(argv[2], argv[3]);
+	if (a->argc != 4)
+		return CLI_SHOWUSAGE;
 
-	ast_cli(fd, "%d", matches);
+	matches = ast_cli_generatornummatches(a->argv[2], a->argv[3]);
 
-	return RESULT_SUCCESS;
+	ast_cli(a->fd, "%d", matches);
+
+	return CLI_SUCCESS;
 }
 
-static int handle_commandcomplete(int fd, int argc, char *argv[])
+static char *handle_commandcomplete(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	char *buf;
-
-	if (argc != 5)
-		return RESULT_SHOWUSAGE;
-	buf = __ast_cli_generator(argv[2], argv[3], atoi(argv[4]), 0);
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "_command complete";
+		e->usage = 
+			"Usage: _command complete \"<line>\" text state\n"
+			"       This function is used internally to help with command completion and should.\n"
+			"       never be called by the user directly.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+	if (a->argc != 5)
+		return CLI_SHOWUSAGE;
+	buf = __ast_cli_generator(a->argv[2], a->argv[3], atoi(a->argv[4]), 0);
 	if (buf) {
-		ast_cli(fd, buf);
+		ast_cli(a->fd, buf);
 		ast_free(buf);
 	} else
-		ast_cli(fd, "NULL\n");
-	return RESULT_SUCCESS;
+		ast_cli(a->fd, "NULL\n");
+	return CLI_SUCCESS;
 }
 
 static char *handle_core_set_debug_channel(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
@@ -858,7 +942,7 @@ static char *handle_core_set_debug_channel(struct ast_cli_entry *e, int cmd, str
 		c = ast_channel_walk_locked(c);
 	}
 	ast_cli(a->fd, "Debugging on new channels is %s\n", is_off ? "disabled" : "enabled");
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 
 static char *handle_debugchan_deprecated(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
@@ -891,7 +975,7 @@ static char *handle_nodebugchan_deprecated(struct ast_cli_entry *e, int cmd, str
 	return res;
 }
 		
-static int handle_showchan(int fd, int argc, char *argv[])
+static char *handle_showchan(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	struct ast_channel *c=NULL;
 	struct timeval now;
@@ -900,14 +984,25 @@ static int handle_showchan(int fd, int argc, char *argv[])
 	char nf[256], wf[256], rf[256];
 	long elapsed_seconds=0;
 	int hour=0, min=0, sec=0;
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "core show channel";
+		e->usage = 
+			"Usage: core show channel <channel>\n"
+			"       Shows lots of information about the specified channel.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return ast_complete_channels(a->line, a->word, a->pos, a->n, 3);
+	}
 	
-	if (argc != 4)
-		return RESULT_SHOWUSAGE;
+	if (a->argc != 4)
+		return CLI_SHOWUSAGE;
 	now = ast_tvnow();
-	c = ast_get_channel_by_name_locked(argv[3]);
+	c = ast_get_channel_by_name_locked(a->argv[3]);
 	if (!c) {
-		ast_cli(fd, "%s is not a known channel\n", argv[3]);
-		return RESULT_SUCCESS;
+		ast_cli(a->fd, "%s is not a known channel\n", a->argv[3]);
+		return CLI_SUCCESS;
 	}
 	if (c->cdr) {
 		elapsed_seconds = now.tv_sec - c->cdr->start.tv_sec;
@@ -917,7 +1012,7 @@ static int handle_showchan(int fd, int argc, char *argv[])
 		snprintf(cdrtime, sizeof(cdrtime), "%dh%dm%ds", hour, min, sec);
 	} else
 		strcpy(cdrtime, "N/A");
-	ast_cli(fd, 
+	ast_cli(a->fd, 
 		" -- General --\n"
 		"           Name: %s\n"
 		"           Type: %s\n"
@@ -970,12 +1065,12 @@ static int handle_showchan(int fd, int argc, char *argv[])
 		(ast_test_flag(c, AST_FLAG_BLOCKING) ? c->blockproc : "(Not Blocking)"));
 	
 	if (pbx_builtin_serialize_variables(c, &out))
-		ast_cli(fd,"      Variables:\n%s\n", out->str);
+		ast_cli(a->fd,"      Variables:\n%s\n", out->str);
 	if (c->cdr && ast_cdr_serialize_variables(c->cdr, &out, '=', '\n', 1))
-		ast_cli(fd,"  CDR Variables:\n%s\n", out->str);
+		ast_cli(a->fd,"  CDR Variables:\n%s\n", out->str);
 	
 	ast_channel_unlock(c);
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 
 /*
@@ -1015,17 +1110,7 @@ char *ast_complete_channels(const char *line, const char *word, int pos, int sta
 	return ret == &notfound ? NULL : ret;
 }
 
-static char *complete_ch_3(const char *line, const char *word, int pos, int state)
-{
-	return ast_complete_channels(line, word, pos, state, 2);
-}
-
-static char *complete_ch_4(const char *line, const char *word, int pos, int state)
-{
-	return ast_complete_channels(line, word, pos, state, 3);
-}
-
-static int group_show_channels(int fd, int argc, char *argv[])
+static char *group_show_channels(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 #define FORMAT_STRING  "%-25s  %-20s  %-20s\n"
 
@@ -1034,23 +1119,36 @@ static int group_show_channels(int fd, int argc, char *argv[])
 	regex_t regexbuf;
 	int havepattern = 0;
 
-	if (argc < 3 || argc > 4)
-		return RESULT_SHOWUSAGE;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "group show channels";
+		e->usage = 
+			"Usage: group show channels [pattern]\n"
+			"       Lists all currently active channels with channel group(s) specified.\n"
+			"       Optional regular expression pattern is matched to group names for each\n"
+			"       channel.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc < 3 || a->argc > 4)
+		return CLI_SHOWUSAGE;
 	
-	if (argc == 4) {
-		if (regcomp(&regexbuf, argv[3], REG_EXTENDED | REG_NOSUB))
-			return RESULT_SHOWUSAGE;
+	if (a->argc == 4) {
+		if (regcomp(&regexbuf, a->argv[3], REG_EXTENDED | REG_NOSUB))
+			return CLI_SHOWUSAGE;
 		havepattern = 1;
 	}
 
-	ast_cli(fd, FORMAT_STRING, "Channel", "Group", "Category");
+	ast_cli(a->fd, FORMAT_STRING, "Channel", "Group", "Category");
 
 	ast_app_group_list_rdlock();
 	
 	gi = ast_app_group_list_head();
 	while (gi) {
 		if (!havepattern || !regexec(&regexbuf, gi->group, 0, NULL, 0)) {
-			ast_cli(fd, FORMAT_STRING, gi->chan->name, gi->group, (ast_strlen_zero(gi->category) ? "(default)" : gi->category));
+			ast_cli(a->fd, FORMAT_STRING, gi->chan->name, gi->group, (ast_strlen_zero(gi->category) ? "(default)" : gi->category));
 			numchans++;
 		}
 		gi = AST_LIST_NEXT(gi, list);
@@ -1061,77 +1159,54 @@ static int group_show_channels(int fd, int argc, char *argv[])
 	if (havepattern)
 		regfree(&regexbuf);
 
-	ast_cli(fd, "%d active channel%s\n", numchans, ESS(numchans));
-	return RESULT_SUCCESS;
+	ast_cli(a->fd, "%d active channel%s\n", numchans, ESS(numchans));
+	return CLI_SUCCESS;
 #undef FORMAT_STRING
 }
 
-/* XXX Nothing in this array can currently be deprecated...
-   You have to change the way find_cli works in order to remove this array
-   I recommend doing this eventually...
- */
-static struct ast_cli_entry builtins[] = {
-	/* Keep alphabetized, with longer matches first (example: abcd before abc) */
-	{ { "_command", "complete", NULL },
-	handle_commandcomplete, "Command complete",
-	commandcomplete_help },
-
-	{ { "_command", "nummatches", NULL },
-	handle_commandnummatches, "Returns number of command matches",
-	commandnummatches_help },
-
-	{ { "_command", "matchesarray", NULL },
-	handle_commandmatchesarray, "Returns command matches array",
-	commandmatchesarray_help },
-
-	{ { NULL }, NULL, NULL, NULL }
-};
-
-static struct ast_cli_entry cli_debug_channel_deprecated = NEW_CLI(handle_debugchan_deprecated, "Enable debugging on channel");
-static struct ast_cli_entry cli_module_load_deprecated = NEW_CLI(handle_load_deprecated, "Load a module");
-static struct ast_cli_entry cli_module_reload_deprecated = NEW_CLI(handle_reload_deprecated, "reload modules by name");
-static struct ast_cli_entry cli_module_unload_deprecated = NEW_CLI(handle_unload_deprecated, "unload modules by name");
+static struct ast_cli_entry cli_debug_channel_deprecated = AST_CLI_DEFINE(handle_debugchan_deprecated, "Enable debugging on channel");
+static struct ast_cli_entry cli_module_load_deprecated = AST_CLI_DEFINE(handle_load_deprecated, "Load a module");
+static struct ast_cli_entry cli_module_reload_deprecated = AST_CLI_DEFINE(handle_reload_deprecated, "reload modules by name");
+static struct ast_cli_entry cli_module_unload_deprecated = AST_CLI_DEFINE(handle_unload_deprecated, "unload modules by name");
 
 static char *handle_help(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
 
 static struct ast_cli_entry cli_cli[] = {
 	/* Deprecated, but preferred command is now consolidated (and already has a deprecated command for it). */
-	NEW_CLI(handle_nodebugchan_deprecated, "Disable debugging on channel(s)"),
+	AST_CLI_DEFINE(handle_commandcomplete, "Command complete"),
+	AST_CLI_DEFINE(handle_commandnummatches, "Returns number of command matches"),
+	AST_CLI_DEFINE(handle_commandmatchesarray, "Returns command matches array"),
 
-	NEW_CLI(handle_chanlist, "Display information on channels"),
+	AST_CLI_DEFINE(handle_nodebugchan_deprecated, "Disable debugging on channel(s)"),
 
-	{ { "core", "show", "channel", NULL },
-	handle_showchan, "Display information on a specific channel",
-	showchan_help, complete_ch_4 },
+	AST_CLI_DEFINE(handle_chanlist, "Display information on channels"),
 
-	NEW_CLI(handle_core_set_debug_channel, "Enable/disable debugging on a channel",
+	AST_CLI_DEFINE(handle_showcalls, "Display information on calls"),
+
+	AST_CLI_DEFINE(handle_showchan, "Display information on a specific channel"),
+
+	AST_CLI_DEFINE(handle_core_set_debug_channel, "Enable/disable debugging on a channel",
 		.deprecate_cmd = &cli_debug_channel_deprecated),
 
-	NEW_CLI(handle_verbose, "Set level of debug/verbose chattiness"),
+	AST_CLI_DEFINE(handle_verbose, "Set level of debug/verbose chattiness"),
 
-	{ { "group", "show", "channels", NULL },
-	group_show_channels, "Display active channels with group(s)",
-	group_show_channels_help },
+	AST_CLI_DEFINE(group_show_channels, "Display active channels with group(s)"),
 
-	NEW_CLI(handle_help, "Display help list, or specific help on a command"),
+	AST_CLI_DEFINE(handle_help, "Display help list, or specific help on a command"),
 
-	{ { "logger", "mute", NULL },
-	handle_logger_mute, "Toggle logging output to a console",
-	logger_mute_help },
+	AST_CLI_DEFINE(handle_logger_mute, "Toggle logging output to a console"),
 
-	NEW_CLI(handle_modlist, "List modules and info"),
+	AST_CLI_DEFINE(handle_modlist, "List modules and info"),
 
-	NEW_CLI(handle_load, "Load a module by name", .deprecate_cmd = &cli_module_load_deprecated),
+	AST_CLI_DEFINE(handle_load, "Load a module by name", .deprecate_cmd = &cli_module_load_deprecated),
 
-	NEW_CLI(handle_reload, "Reload configuration", .deprecate_cmd = &cli_module_reload_deprecated),
+	AST_CLI_DEFINE(handle_reload, "Reload configuration", .deprecate_cmd = &cli_module_reload_deprecated),
 
-	NEW_CLI(handle_unload, "Unload a module by name", .deprecate_cmd = &cli_module_unload_deprecated ),
+	AST_CLI_DEFINE(handle_unload, "Unload a module by name", .deprecate_cmd = &cli_module_unload_deprecated ),
 
-	NEW_CLI(handle_showuptime, "Show uptime information"),
+	AST_CLI_DEFINE(handle_showuptime, "Show uptime information"),
 
-	{ { "soft", "hangup", NULL },
-	handle_softhangup, "Request a hangup on a given channel",
-	softhangup_help, complete_ch_3 },
+	AST_CLI_DEFINE(handle_softhangup, "Request a hangup on a given channel"),
 };
 
 /*!
@@ -1164,47 +1239,15 @@ static int set_full_cmd(struct ast_cli_entry *e)
 /*! \brief initialize the _full_cmd string in * each of the builtins. */
 void ast_builtins_init(void)
 {
-	struct ast_cli_entry *e;
-
-	for (e = builtins; e->cmda[0] != NULL; e++)
-		set_full_cmd(e);
-
 	ast_cli_register_multiple(cli_cli, sizeof(cli_cli) / sizeof(struct ast_cli_entry));
 }
 
-/*
- * We have two sets of commands: builtins are stored in a
- * NULL-terminated array of ast_cli_entry, whereas external
- * commands are in a list.
- * When navigating, we need to keep two pointers and get
- * the next one in lexicographic order. For the purpose,
- * we use a structure.
- */
-
-struct cli_iterator {
-	struct ast_cli_entry *builtins;
-	struct ast_cli_entry *helpers;
-};
-
-static struct ast_cli_entry *cli_next(struct cli_iterator *i)
+static struct ast_cli_entry *cli_next(struct ast_cli_entry *e)
 {
-	struct ast_cli_entry *e;
-
-	if (i->builtins == NULL && i->helpers == NULL) {
-		/* initialize */
-		i->builtins = builtins;
-		i->helpers = AST_LIST_FIRST(&helpers);
-	}
-	e = i->builtins; /* temporary */
-	if (!e->cmda[0] || (i->helpers &&
-		    strcmp(i->helpers->_full_cmd, e->_full_cmd) < 0)) {
-		/* Use helpers */
-		e = i->helpers;
-		if (e)
-			i->helpers = AST_LIST_NEXT(e, list);
-	} else { /* use builtin. e is already set  */
-		(i->builtins)++;	/* move to next */
-	}
+	if (e == NULL)
+		e = AST_LIST_FIRST(&helpers);
+	if (e) 
+		e = AST_LIST_NEXT(e, list);
 	return e;
 }
 
@@ -1299,9 +1342,8 @@ static struct ast_cli_entry *find_cli(char *const cmds[], int match_type)
 {
 	int matchlen = -1;	/* length of longest match so far */
 	struct ast_cli_entry *cand = NULL, *e=NULL;
-	struct cli_iterator i = { NULL, NULL};
 
-	while ( (e = cli_next(&i)) ) {
+	while ( (e = cli_next(e)) ) {
 		/* word-by word regexp comparison */
 		char * const *src = cmds;
 		char * const *dst = e->cmda;
@@ -1371,7 +1413,7 @@ static int __ast_cli_unregister(struct ast_cli_entry *e, struct ast_cli_entry *e
 		AST_RWLIST_UNLOCK(&helpers);
 		ast_free(e->_full_cmd);
 		e->_full_cmd = NULL;
-		if (e->new_handler) {
+		if (e->handler) {
 			/* this is a new-style entry. Reset fields and free memory. */
 			bzero((char **)(e->cmda), sizeof(e->cmda));
 			ast_free(e->command);
@@ -1387,36 +1429,33 @@ static int __ast_cli_register(struct ast_cli_entry *e, struct ast_cli_entry *ed)
 	struct ast_cli_entry *cur;
 	int i, lf, ret = -1;
 
-	if (e->handler == NULL) {	/* new style entry, run the handler to init fields */
-		struct ast_cli_args a;	/* fake argument */
-		char **dst = (char **)e->cmda;	/* need to cast as the entry is readonly */
-		char *s;
+	struct ast_cli_args a;	/* fake argument */
+	char **dst = (char **)e->cmda;	/* need to cast as the entry is readonly */
+	char *s;
 
-		bzero (&a, sizeof(a));
-		e->new_handler(e, CLI_INIT, &a);
-		/* XXX check that usage and command are filled up */
-		s = ast_skip_blanks(e->command);
-		s = e->command = ast_strdup(s);
-		for (i=0; !ast_strlen_zero(s) && i < AST_MAX_CMD_LEN-1; i++) {
-			*dst++ = s;	/* store string */
-			s = ast_skip_nonblanks(s);
-			if (*s == '\0')	/* we are done */
-				break;
-			*s++ = '\0';
-			s = ast_skip_blanks(s);
-		}
-		*dst++ = NULL;
+	bzero (&a, sizeof(a));
+	e->handler(e, CLI_INIT, &a);
+	/* XXX check that usage and command are filled up */
+	s = ast_skip_blanks(e->command);
+	s = e->command = ast_strdup(s);
+	for (i=0; !ast_strlen_zero(s) && i < AST_MAX_CMD_LEN-1; i++) {
+		*dst++ = s;	/* store string */
+		s = ast_skip_nonblanks(s);
+		if (*s == '\0')	/* we are done */
+			break;
+		*s++ = '\0';
+		s = ast_skip_blanks(s);
 	}
-	if (set_full_cmd(e))
-		goto done;
+	*dst++ = NULL;
+	
 	AST_RWLIST_WRLOCK(&helpers);
 	
 	if (find_cli(e->cmda, 1)) {
 		ast_log(LOG_WARNING, "Command '%s' already registered (or something close enough)\n", e->_full_cmd);
-		ast_free(e->_full_cmd);
-		e->_full_cmd = NULL;
 		goto done;
 	}
+	if (set_full_cmd(e))
+		goto done;
 	if (!ed) {
 		e->deprecated = 0;
 	} else {
@@ -1437,7 +1476,7 @@ static int __ast_cli_register(struct ast_cli_entry *e, struct ast_cli_entry *ed)
 		if (lf < len)
 			len = lf;
 		if (strncasecmp(e->_full_cmd, cur->_full_cmd, len) < 0) {
-			AST_RWLIST_INSERT_BEFORE_CURRENT(&helpers, e, list); 
+			AST_RWLIST_INSERT_BEFORE_CURRENT(e, list); 
 			break;
 		}
 	}
@@ -1502,10 +1541,9 @@ int ast_cli_unregister_multiple(struct ast_cli_entry *e, int len)
 static char *help1(int fd, char *match[], int locked)
 {
 	char matchstr[80] = "";
-	struct ast_cli_entry *e;
+	struct ast_cli_entry *e = NULL;
 	int len = 0;
 	int found = 0;
-	struct cli_iterator i = { NULL, NULL};
 
 	if (match) {
 		ast_join(matchstr, sizeof(matchstr), match);
@@ -1513,7 +1551,7 @@ static char *help1(int fd, char *match[], int locked)
 	}
 	if (!locked)
 		AST_RWLIST_RDLOCK(&helpers);
-	while ( (e = cli_next(&i)) ) {
+	while ( (e = cli_next(e)) ) {
 		/* Hide commands that start with '_' */
 		if (e->_full_cmd[0] == '_')
 			continue;
@@ -1569,7 +1607,7 @@ static char *handle_help(struct ast_cli_entry *e, int cmd, struct ast_cli_args *
 		ast_cli(a->fd, "No help text available for '%s'.\n", fullcmd);
 	}
 	AST_RWLIST_UNLOCK(&helpers);
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 
 static char *parse_args(const char *s, int *argc, char *argv[], int max, int *trailingwhitespace)
@@ -1719,8 +1757,7 @@ static int more_words (char * const *dst)
 static char *__ast_cli_generator(const char *text, const char *word, int state, int lock)
 {
 	char *argv[AST_MAX_ARGS];
-	struct ast_cli_entry *e;
-	struct cli_iterator i = { NULL, NULL };
+	struct ast_cli_entry *e = NULL;
 	int x = 0, argindex, matchlen;
 	int matchnum=0;
 	char *ret = NULL;
@@ -1745,9 +1782,12 @@ static char *__ast_cli_generator(const char *text, const char *word, int state, 
 	}
 	if (lock)
 		AST_RWLIST_RDLOCK(&helpers);
-	while ( (e = cli_next(&i)) ) {
+	while ( (e = cli_next(e)) ) {
 		/* XXX repeated code */
 		int src = 0, dst = 0, n = 0;
+
+		if (e->command[0] == '_')
+			continue;
 
 		/*
 		 * Try to match words, up to and excluding the last word, which
@@ -1778,14 +1818,12 @@ static char *__ast_cli_generator(const char *text, const char *word, int state, 
 			 * (only one entry in the list should have this property).
 			 * Run the generator if one is available. In any case we are done.
 			 */
-			if (e->generator)
-				ret = e->generator(matchstr, word, argindex, state - matchnum);
-			else if (e->new_handler) {	/* new style command */
+			if (e->handler) {	/* new style command */
 				struct ast_cli_args a = {
 					.line = matchstr, .word = word,
 					.pos = argindex,
 					.n = state - matchnum };
-				ret = e->new_handler(e, CLI_GENERATE, &a);
+				ret = e->handler(e, CLI_GENERATE, &a);
 			}
 			if (ret)
 				break;
@@ -1807,8 +1845,10 @@ int ast_cli_command(int fd, const char *s)
 	char *args[AST_MAX_ARGS + 1];
 	struct ast_cli_entry *e;
 	int x;
-	int res;
 	char *dup = parse_args(s, &x, args + 1, AST_MAX_ARGS, NULL);
+	char *retval = NULL;
+	struct ast_cli_args a = {
+		.fd = fd, .argc = x, .argv = args+1 };
 
 	if (dup == NULL)
 		return -1;
@@ -1831,42 +1871,43 @@ int ast_cli_command(int fd, const char *s)
 	 */
 	args[0] = (char *)e;
 
-	if (!e->new_handler)	/* old style */
-		res = e->handler(fd, x, args + 1);
-	else {
-		struct ast_cli_args a = {
-			.fd = fd, .argc = x, .argv = args+1 };
-		char *retval = e->new_handler(e, CLI_HANDLER, &a);
+	retval = e->handler(e, CLI_HANDLER, &a);
 
-		if (retval == CLI_SUCCESS)
-			res = RESULT_SUCCESS;
-		else if (retval == CLI_SHOWUSAGE)
-			res = RESULT_SHOWUSAGE;
-		else
-			res = RESULT_FAILURE;
-	}
-	switch (res) {
-	case RESULT_SHOWUSAGE:
+	if (retval == CLI_SHOWUSAGE) {
 		ast_cli(fd, "%s", S_OR(e->usage, "Invalid usage, but no usage information available.\n"));
 		AST_RWLIST_RDLOCK(&helpers);
 		if (e->deprecated)
 			ast_cli(fd, "The '%s' command is deprecated and will be removed in a future release. Please use '%s' instead.\n", e->_full_cmd, e->_deprecated_by);
 		AST_RWLIST_UNLOCK(&helpers);
-		break;
-	case RESULT_FAILURE:
-		ast_cli(fd, "Command '%s' failed.\n", s);
-		/* FALLTHROUGH */
-	default:
+	} else {
+		if (retval == CLI_FAILURE)
+			ast_cli(fd, "Command '%s' failed.\n", s);
 		AST_RWLIST_RDLOCK(&helpers);
 		if (e->deprecated == 1) {
 			ast_cli(fd, "The '%s' command is deprecated and will be removed in a future release. Please use '%s' instead.\n", e->_full_cmd, e->_deprecated_by);
 			e->deprecated = 2;
 		}
 		AST_RWLIST_UNLOCK(&helpers);
-		break;
 	}
 	ast_atomic_fetchadd_int(&e->inuse, -1);
 done:
 	ast_free(dup);
 	return 0;
+}
+
+int ast_cli_command_multiple(int fd, size_t size, const char *s)
+{
+	char cmd[512];
+	int x, y = 0, count = 0;
+
+	for (x = 0; x < size; x++) {
+		cmd[y] = s[x];
+		y++;
+		if (s[x] == '\0') {
+			ast_cli_command(fd, cmd);
+			y = 0;
+			count++;
+		}
+	}
+	return count;
 }

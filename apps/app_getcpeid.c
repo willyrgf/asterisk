@@ -29,26 +29,19 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <unistd.h>
-#include <string.h>
-
 #include "asterisk/lock.h"
 #include "asterisk/file.h"
-#include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
 #include "asterisk/adsi.h"
-#include "asterisk/options.h"
 
 static char *app = "GetCPEID";
 
 static char *synopsis = "Get ADSI CPE ID";
 
 static char *descrip =
-"  GetCPEID: Obtains and displays ADSI CPE ID and other information in order\n"
+"  GetCPEID(): Obtains and displays ADSI CPE ID and other information in order\n"
 "to properly setup zapata.conf for on-hook operations.\n";
 
 

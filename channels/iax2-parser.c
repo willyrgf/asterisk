@@ -27,14 +27,9 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <sys/types.h>
 #include <sys/socket.h>
-#include <string.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include <unistd.h>
-#include <stdlib.h>
-#include <stdio.h>
 
 #include "asterisk/frame.h"
 #include "asterisk/utils.h"
@@ -82,7 +77,7 @@ static void dump_addr(char *output, int maxlen, void *value, int len)
 		memcpy(&sin, value, len);
 		snprintf(output, maxlen, "IPV4 %s:%d", ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port));
 	} else {
-		snprintf(output, maxlen, "Invalid Address");
+		ast_copy_string(output, "Invalid Address", maxlen);
 	}
 }
 
@@ -917,7 +912,7 @@ int iax_parse_ies(struct iax_ies *ies, unsigned char *data, int datalen)
 					int len = strlen(var2->value) + strlen(tmp2) + 1;
 					char *tmp3 = alloca(len);
 					snprintf(tmp3, len, "%s%s", var2->value, tmp2);
-					var = ast_variable_new(tmp, tmp3);
+					var = ast_variable_new(tmp, tmp3, var2->file);
 					var->next = var2->next;
 					if (prev)
 						prev->next = var;
@@ -928,7 +923,7 @@ int iax_parse_ies(struct iax_ies *ies, unsigned char *data, int datalen)
 				}
 			}
 			if (!var2) {
-				var = ast_variable_new(tmp, tmp2);
+				var = ast_variable_new(tmp, tmp2, "");
 				var->next = ies->vars;
 				ies->vars = var;
 			}
@@ -996,20 +991,20 @@ struct iax_frame *iax_frame_new(int direction, int datalen, unsigned int cacheab
 	struct iax_frame *fr = NULL;
 
 #if !defined(LOW_MEMORY)
-	struct iax_frames *iax_frames;
+	struct iax_frames *iax_frames = NULL;
 
 	/* Attempt to get a frame from this thread's cache */
 	if ((iax_frames = ast_threadstorage_get(&frame_cache, sizeof(*iax_frames)))) {
 		AST_LIST_TRAVERSE_SAFE_BEGIN(iax_frames, fr, list) {
 			if (fr->afdatalen >= datalen) {
 				size_t afdatalen = fr->afdatalen;
-				AST_LIST_REMOVE_CURRENT(iax_frames, list);
+				AST_LIST_REMOVE_CURRENT(list);
 				memset(fr, 0, sizeof(*fr));
 				fr->afdatalen = afdatalen;
 				break;
 			}
 		}
-		AST_LIST_TRAVERSE_SAFE_END
+		AST_LIST_TRAVERSE_SAFE_END;
 	}
 	if (!fr) {
 		if (!(fr = ast_calloc_cache(1, sizeof(*fr) + datalen)))
@@ -1040,7 +1035,7 @@ struct iax_frame *iax_frame_new(int direction, int datalen, unsigned int cacheab
 void iax_frame_free(struct iax_frame *fr)
 {
 #if !defined(LOW_MEMORY)
-	struct iax_frames *iax_frames;
+	struct iax_frames *iax_frames = NULL;
 #endif
 
 	/* Note: does not remove from scheduler! */

@@ -25,9 +25,7 @@
 #ifndef _ASTERISK_LOGGER_H
 #define _ASTERISK_LOGGER_H
 
-#include "asterisk/compat.h"
-
-#include <stdarg.h>
+#include "asterisk/options.h"	/* need option_debug */
 
 #if defined(__cplusplus) || defined(c_plusplus)
 extern "C" {
@@ -45,9 +43,8 @@ extern "C" {
 #define VERBOSE_PREFIX_3 "    -- "
 #define VERBOSE_PREFIX_4 "       > "
 
-/*! Used for sending a log message */
-/*!
-	\brief This is the standard logger function.  Probably the only way you will invoke it would be something like this:
+/*! \brief Used for sending a log message 
+	This is the standard logger function.  Probably the only way you will invoke it would be something like this:
 	ast_log(LOG_WHATEVER, "Problem with the %s Captain.  We should get some more.  Will %d be enough?\n", "flux capacitor", 10);
 	where WHATEVER is one of ERROR, DEBUG, EVENT, NOTICE, or WARNING depending
 	on which log you wish to output to. These are implemented as macros, that
@@ -64,6 +61,9 @@ void ast_log(int level, const char *file, int line, const char *function, const 
 	__attribute__ ((format (printf, 5, 6)));
 
 void ast_backtrace(void);
+
+/*! \brief Reload logger without rotating log files */
+int logger_reload(void);
 
 void ast_queue_log(const char *queuename, const char *callid, const char *agent, const char *event, const char *fmt, ...)
 	__attribute__ ((format (printf, 5, 6)));
@@ -84,7 +84,7 @@ int ast_unregister_verbose(void (*verboser)(const char *string));
 void ast_console_puts(const char *string);
 
 void ast_console_puts_mutable(const char *string);
-void ast_console_toggle_mute(int fd);
+void ast_console_toggle_mute(int fd, int silent);
 
 #define _A_ __FILE__, __LINE__, __PRETTY_FUNCTION__
 
@@ -154,8 +154,10 @@ unsigned int ast_verbose_get_by_file(const char *file);
 		ast_log(LOG_DEBUG, __VA_ARGS__); \
 } while (0)
 
+#define VERBOSITY_ATLEAST(level) (option_verbose >= (level) || (ast_opt_verb_file && ast_verbose_get_by_file(__FILE__) >= (level)))
+
 #define ast_verb(level, ...) do { \
-	if (option_verbose >= (level) || (ast_opt_verb_file && ast_verbose_get_by_file(__FILE__) >= (level)) ) { \
+	if (VERBOSITY_ATLEAST((level)) ) { \
 		if (level >= 4) \
 			ast_verbose(VERBOSE_PREFIX_4 __VA_ARGS__); \
 		else if (level == 3) \

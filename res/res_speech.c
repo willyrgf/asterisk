@@ -27,18 +27,12 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$");
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <string.h>
-
 #include "asterisk/channel.h"
 #include "asterisk/module.h"
 #include "asterisk/lock.h"
 #include "asterisk/linkedlists.h"
 #include "asterisk/cli.h"
 #include "asterisk/term.h"
-#include "asterisk/options.h"
 #include "asterisk/speech.h"
 
 
@@ -92,7 +86,7 @@ int ast_speech_grammar_unload(struct ast_speech *speech, char *grammar_name)
 /*! \brief Return the results of a recognition from the speech structure */
 struct ast_speech_result *ast_speech_results_get(struct ast_speech *speech)
 {
-	return ((speech->engine->get && ast_test_flag(speech, AST_SPEECH_HAVE_RESULTS)) ? speech->engine->get(speech) : NULL);
+	return (speech->engine->get ? speech->engine->get(speech) : NULL);
 }
 
 /*! \brief Free a list of results */
@@ -317,7 +311,7 @@ int ast_speech_unregister(char *engine_name)
 	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&engines, engine, list) {
 		if (!strcasecmp(engine->name, engine_name)) {
 			/* We have our engine... removed it */
-			AST_RWLIST_REMOVE_CURRENT(&engines, list);
+			AST_RWLIST_REMOVE_CURRENT(list);
 			/* If this was the default engine, we need to pick a new one */
 			if (!default_engine)
 				default_engine = AST_RWLIST_FIRST(&engines);
@@ -327,7 +321,7 @@ int ast_speech_unregister(char *engine_name)
 			break;
 		}
 	}
-	AST_RWLIST_TRAVERSE_SAFE_END
+	AST_RWLIST_TRAVERSE_SAFE_END;
 	AST_RWLIST_UNLOCK(&engines);
 
 	return res;
@@ -341,7 +335,7 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	return 0;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_GLOBAL_SYMBOLS, "Generic Speech Recognition API",

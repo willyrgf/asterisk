@@ -28,23 +28,9 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <sys/types.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <stdlib.h>
-#include <sys/time.h>
-#include <stdio.h>
-#include <unistd.h>
-#include <errno.h>
-#include <string.h>
-
-#include "asterisk/channel.h"
-#include "asterisk/file.h"
-#include "asterisk/logger.h"
-#include "asterisk/sched.h"
+#include "asterisk/mod_format.h"
 #include "asterisk/module.h"
 #include "asterisk/image.h"
-#include "asterisk/lock.h"
 #include "asterisk/endian.h"
 
 static struct ast_frame *jpeg_read_image(int fd, int len)
@@ -103,18 +89,20 @@ static int jpeg_write_image(int fd, struct ast_frame *fr)
 }
 
 static struct ast_imager jpeg_format = {
-	"jpg",
-	"JPEG (Joint Picture Experts Group)",
-	"jpg|jpeg",
-	AST_FORMAT_JPEG,
-	jpeg_read_image,
-	jpeg_identify,
-	jpeg_write_image,
+	.name = "jpg",
+	.desc = "JPEG (Joint Picture Experts Group)",
+	.exts = "jpg|jpeg",
+	.format = AST_FORMAT_JPEG,
+	.read_image = jpeg_read_image,
+	.identify = jpeg_identify,
+	.write_image = jpeg_write_image,
 };
 
 static int load_module(void)
 {
-	return ast_image_register(&jpeg_format);
+	if (ast_image_register(&jpeg_format))
+		return AST_MODULE_LOAD_FAILURE;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 static int unload_module(void)

@@ -50,6 +50,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+#include "asterisk/compat.h"
 #include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/astobj.h"
@@ -287,7 +288,9 @@ int MyH323EndPoint::MyMakeCall(const PString & dest, PString & token, void *_cal
 		cout << "\t-- " << GetLocalUserName() << " is calling host " << fullAddress << endl;
 		cout << "\t-- Call token is " << (const char *)token << endl;
 		cout << "\t-- Call reference is " << *callReference << endl;
+#ifdef PTRACING
 		cout << "\t-- DTMF Payload is " << connection->dtmfCodec << endl;
+#endif
 	}
 	connection->Unlock();
 	return 0;
@@ -1662,10 +1665,12 @@ void MyH323Connection::OnSendCapabilitySet(H245_TerminalCapabilitySet & pdu)
 				H245_AudioTelephonyEventCapability & atec = cap;
 				atec.m_dynamicRTPPayloadType = dtmfCodec[0];
 //				on_set_rfc2833_payload(GetCallReference(), (const char *)GetCallToken(), (int)dtmfCodec[0]);
+#ifdef PTRACING
 				if (h323debug) {
 					cout << "\t-- Receiving RFC2833 on payload " <<
 						atec.m_dynamicRTPPayloadType << endl;
 				}
+#endif
 			}
 		}
 	}
@@ -1762,9 +1767,11 @@ BOOL MyH323Connection::OnReceivedCapabilitySet(const H323Capabilities & remoteCa
 //					if (sendUserInputMode == SendUserInputAsTone)
 //						sendUserInputMode = SendUserInputAsInlineRFC2833;
 				}
+#ifdef PTRACING
 				if (h323debug) {
 					cout << "\t-- Outbound Cisco RTP DTMF on payload " << pt << endl;
 				}
+#endif
 			}
 			break;
 		case H323Capability::e_UserInput:
@@ -1775,9 +1782,11 @@ BOOL MyH323Connection::OnReceivedCapabilitySet(const H323Capabilities & remoteCa
 //					if (sendUserInputMode == SendUserInputAsTone)
 //						sendUserInputMode = SendUserInputAsInlineRFC2833;
 				}
+#ifdef PTRACING
 				if (h323debug) {
 					cout << "\t-- Outbound RFC2833 on payload " << pt << endl;
 				}
+#endif
 			}
 			break;
 #if 0
@@ -1882,8 +1891,6 @@ void MyH323Connection::SetCapabilities(int caps, int dtmf_mode, void *_prefs, in
 		else if (y || (!(codec = ast_codec_pref_index(prefs, x)))) {
 			if (!y)
 				y = 1;
-			else if (y == AST_FORMAT_MAX_AUDIO)
-				break;
 			else
 				y <<= 1;
 			codec = y;

@@ -35,12 +35,7 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdio.h>
-#include <string.h>
-#include <errno.h>
-#include <unistd.h>
 #include <sys/socket.h>
-#include <stdlib.h>
 #include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
@@ -50,11 +45,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/lock.h"
 #include "asterisk/channel.h"
 #include "asterisk/config.h"
-#include "asterisk/logger.h"
 #include "asterisk/module.h"
 #include "asterisk/pbx.h"
-#include "asterisk/options.h"
-#include "asterisk/lock.h"
 #include "asterisk/sched.h"
 #include "asterisk/io.h"
 #include "asterisk/rtp.h"
@@ -83,13 +75,13 @@ static const char synopsis[] = "Call agent login";
 static const char synopsis3[] = "Record agent's outgoing call";
 
 static const char descrip[] =
-"  AgentLogin([AgentNo][|options]):\n"
+"  AgentLogin([AgentNo][,options]):\n"
 "Asks the agent to login to the system.  Always returns -1.  While\n"
 "logged in, the agent can receive calls and will hear a 'beep'\n"
 "when a new call comes in. The agent can dump the call by pressing\n"
 "the star key.\n"
 "The option string may contain zero or more of the following characters:\n"
-"      's' -- silent login - do not announce the login ok segment after agent logged in/off\n";
+"      's' -- silent login - do not announce the login ok segment after agent logged on/off\n";
 
 static const char descrip3[] =
 "  AgentMonitorOutgoing([options]):\n"
@@ -97,11 +89,11 @@ static const char descrip3[] =
 "comparison of the callerid of the current interface and the global variable \n"
 "placed by the AgentCallbackLogin application. That's why it should be used only\n"
 "with the AgentCallbackLogin app. Uses the monitoring functions in chan_agent \n"
-"instead of Monitor application. That have to be configured in the agents.conf file.\n"
+"instead of Monitor application. That has to be configured in the agents.conf file.\n"
 "\nReturn value:\n"
 "Normally the app returns 0 unless the options are passed.\n"
 "\nOptions:\n"
-"	'd' - make the app return -1 if there is an error condition"
+"	'd' - make the app return -1 if there is an error condition\n"
 "	'c' - change the CDR so that the source of the call is 'Agent/agent_id'\n"
 "	'n' - don't generate the warnings when there is no callerid or the\n"
 "	      agentid is not known.\n"
@@ -230,6 +222,9 @@ static int agent_indicate(struct ast_channel *ast, int condition, const void *da
 static int agent_fixup(struct ast_channel *oldchan, struct ast_channel *newchan);
 static struct ast_channel *agent_bridgedchannel(struct ast_channel *chan, struct ast_channel *bridge);
 static void set_agentbycallerid(const char *callerid, const char *agent);
+static char *complete_agent_logoff_cmd(const char *line, const char *word, int pos, int state);
+static struct ast_channel* agent_get_base_channel(struct ast_channel *chan);
+static int agent_set_base_channel(struct ast_channel *chan, struct ast_channel *base);
 
 /*! \brief Channel interface description for PBX integration */
 static const struct ast_channel_tech agent_tech = {
@@ -252,6 +247,8 @@ static const struct ast_channel_tech agent_tech = {
 	.indicate = agent_indicate,
 	.fixup = agent_fixup,
 	.bridged_channel = agent_bridgedchannel,
+	.get_base_channel = agent_get_base_channel,
+	.set_base_channel = agent_set_base_channel,
 };
 
 /*!
@@ -262,7 +259,7 @@ static const struct ast_channel_tech agent_tech = {
  * @return The just created agent.
  * \sa agent_pvt, agents.
  */
-static struct agent_pvt *add_agent(char *agent, int pending)
+static struct agent_pvt *add_agent(const char *agent, int pending)
 {
 	char *parse;
 	AST_DECLARE_APP_ARGS(args,
@@ -472,6 +469,12 @@ static struct ast_frame *agent_read(struct ast_channel *ast)
  			}
  			break;
 		case AST_FRAME_DTMF_BEGIN:
+			/*ignore DTMF begin's as it can cause issues with queue announce files*/
+			if((!p->acknowledged && f->subclass == '#') || (f->subclass == '*' && endcall)){
+				ast_frfree(f);
+				f = &ast_null_frame;
+			}
+			break;
  		case AST_FRAME_DTMF_END:
  			if (!p->acknowledged && (f->subclass == '#')) {
  				ast_verb(3, "%s acknowledged\n", p->chan->name);
@@ -689,6 +692,40 @@ static void set_agentbycallerid(const char *callerid, const char *agent)
 
 	snprintf(buf, sizeof(buf), "%s_%s", GETAGENTBYCALLERID, callerid);
 	pbx_builtin_setvar_helper(NULL, buf, agent);
+}
+
+/*! \brief return the channel or base channel if one exists.  This function assumes the channel it is called on is already locked */
+struct ast_channel* agent_get_base_channel(struct ast_channel *chan)
+{
+	struct agent_pvt *p = NULL;
+	struct ast_channel *base = chan;
+
+	/* chan is locked by the calling function */
+	if (!chan || !chan->tech_pvt) {
+		ast_log(LOG_ERROR, "whoa, you need a channel (0x%ld) with a tech_pvt (0x%ld) to get a base channel.\n", (long)chan, (chan)?(long)chan->tech_pvt:(long)NULL);
+		return NULL;
+	}
+	p = chan->tech_pvt;
+	if (p->chan) 
+		base = p->chan;
+	return base;
+}
+
+int agent_set_base_channel(struct ast_channel *chan, struct ast_channel *base)
+{
+	struct agent_pvt *p = NULL;
+	
+	if (!chan || !base) {
+		ast_log(LOG_ERROR, "whoa, you need a channel (0x%ld) and a base channel (0x%ld) for setting.\n", (long)chan, (long)base);
+		return -1;
+	}
+	p = chan->tech_pvt;
+	if (!p) {
+		ast_log(LOG_ERROR, "whoa, channel %s is missing his tech_pvt structure!!.\n", chan->name);
+		return -1;
+	}
+	p->chan = base;
+	return 0;
 }
 
 static int agent_hangup(struct ast_channel *ast)
@@ -976,7 +1013,7 @@ static struct ast_channel *agent_new(struct agent_pvt *p, int state)
  *
  * \returns Always 0, or so it seems.
  */
-static int read_agent_config(void)
+static int read_agent_config(int reload)
 {
 	struct ast_config *cfg;
 	struct ast_config *ucfg;
@@ -986,17 +1023,19 @@ static int read_agent_config(void)
 	const char *catname;
 	const char *hasagent;
 	int genhasagent;
+	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
 
 	group = 0;
 	autologoff = 0;
 	wrapuptime = 0;
 	ackcall = 0;
 	endcall = 1;
-	cfg = ast_config_load(config);
+	cfg = ast_config_load(config, config_flags);
 	if (!cfg) {
 		ast_log(LOG_NOTICE, "No agent configuration found -- agent support disabled\n");
 		return 0;
-	}
+	} else if (cfg == CONFIG_STATUS_FILEUNCHANGED)
+		return -1;
 	AST_LIST_LOCK(&agents);
 	AST_LIST_TRAVERSE(&agents, p, list) {
 		p->dead = 1;
@@ -1081,7 +1120,7 @@ static int read_agent_config(void)
 		}
 		v = v->next;
 	}
-	if ((ucfg = ast_config_load("users.conf"))) {
+	if ((ucfg = ast_config_load("users.conf", config_flags)) && ucfg != CONFIG_STATUS_FILEUNCHANGED) {
 		genhasagent = ast_true(ast_variable_retrieve(ucfg, "general", "hasagent"));
 		catname = ast_category_browse(ucfg, NULL);
 		while(catname) {
@@ -1105,7 +1144,7 @@ static int read_agent_config(void)
 	}
 	AST_LIST_TRAVERSE_SAFE_BEGIN(&agents, p, list) {
 		if (p->dead) {
-			AST_LIST_REMOVE_CURRENT(&agents, list);
+			AST_LIST_REMOVE_CURRENT(list);
 			/* Destroy if  appropriate */
 			if (!p->owner) {
 				if (!p->chan) {
@@ -1119,7 +1158,7 @@ static int read_agent_config(void)
 			}
 		}
 	}
-	AST_LIST_TRAVERSE_SAFE_END
+	AST_LIST_TRAVERSE_SAFE_END;
 	AST_LIST_UNLOCK(&agents);
 	ast_config_destroy(cfg);
 	return 1;
@@ -1175,10 +1214,8 @@ static int check_availability(struct agent_pvt *newlyavailable, int needlock)
 				ast_copy_string(parent->context, chan->context, sizeof(parent->context));
 				/* Go ahead and mark the channel as a zombie so that masquerade will
 				   destroy it for us, and we need not call ast_hangup */
-				ast_mutex_lock(&parent->lock);
 				ast_set_flag(chan, AST_FLAG_ZOMBIE);
 				ast_channel_masquerade(parent, chan);
-				ast_mutex_unlock(&parent->lock);
 				p->abouttograb = 0;
 			} else {
 				ast_debug(1, "Sneaky, parent disappeared in the mean time...\n");
@@ -1490,22 +1527,34 @@ static int agent_logoff(const char *agent, int soft)
 	return ret;
 }
 
-static int agent_logoff_cmd(int fd, int argc, char **argv)
+static char *agent_logoff_cmd(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	int ret;
 	char *agent;
 
-	if (argc < 3 || argc > 4)
-		return RESULT_SHOWUSAGE;
-	if (argc == 4 && strcasecmp(argv[3], "soft"))
-		return RESULT_SHOWUSAGE;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "agent logoff";
+		e->usage =
+			"Usage: agent logoff <channel> [soft]\n"
+			"       Sets an agent as no longer logged in.\n"
+			"       If 'soft' is specified, do not hangup existing calls.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return complete_agent_logoff_cmd(a->line, a->word, a->pos, a->n); 
+	}
 
-	agent = argv[2] + 6;
-	ret = agent_logoff(agent, argc == 4);
+	if (a->argc < 3 || a->argc > 4)
+		return CLI_SHOWUSAGE;
+	if (a->argc == 4 && strcasecmp(a->argv[3], "soft"))
+		return CLI_SHOWUSAGE;
+
+	agent = a->argv[2] + 6;
+	ret = agent_logoff(agent, a->argc == 4);
 	if (ret == 0)
-		ast_cli(fd, "Logging out %s\n", agent);
+		ast_cli(a->fd, "Logging out %s\n", agent);
 
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 
 /*!
@@ -1559,7 +1608,7 @@ static char *complete_agent_logoff_cmd(const char *line, const char *word, int p
 /*!
  * Show agents in cli.
  */
-static int agents_show(int fd, int argc, char **argv)
+static char *agents_show(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	struct agent_pvt *p;
 	char username[AST_MAX_BUF];
@@ -1569,16 +1618,29 @@ static int agents_show(int fd, int argc, char **argv)
 	int count_agents = 0;		/*!< Number of agents configured */
 	int online_agents = 0;		/*!< Number of online agents */
 	int offline_agents = 0;		/*!< Number of offline agents */
-	if (argc != 2)
-		return RESULT_SHOWUSAGE;
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "agent show";
+		e->usage =
+			"Usage: agent show\n"
+			"       Provides summary information on agents.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc != 2)
+		return CLI_SHOWUSAGE;
+
 	AST_LIST_LOCK(&agents);
 	AST_LIST_TRAVERSE(&agents, p, list) {
 		ast_mutex_lock(&p->lock);
 		if (p->pending) {
 			if (p->group)
-				ast_cli(fd, "-- Pending call to group %d\n", powerof(p->group));
+				ast_cli(a->fd, "-- Pending call to group %d\n", powerof(p->group));
 			else
-				ast_cli(fd, "-- Pending call to agent %s\n", p->agent);
+				ast_cli(a->fd, "-- Pending call to agent %s\n", p->agent);
 		} else {
 			if (!ast_strlen_zero(p->name))
 				snprintf(username, sizeof(username), "(%s) ", p->name);
@@ -1607,7 +1669,7 @@ static int agents_show(int fd, int argc, char **argv)
 			}
 			if (!ast_strlen_zero(p->moh))
 				snprintf(moh, sizeof(moh), " (musiconhold is '%s')", p->moh);
-			ast_cli(fd, "%-12.12s %s%s%s%s\n", p->agent, 
+			ast_cli(a->fd, "%-12.12s %s%s%s%s\n", p->agent, 
 				username, location, talkingto, moh);
 			count_agents++;
 		}
@@ -1615,16 +1677,16 @@ static int agents_show(int fd, int argc, char **argv)
 	}
 	AST_LIST_UNLOCK(&agents);
 	if ( !count_agents ) 
-		ast_cli(fd, "No Agents are configured in %s\n",config);
+		ast_cli(a->fd, "No Agents are configured in %s\n",config);
 	else 
-		ast_cli(fd, "%d agents configured [%d online , %d offline]\n",count_agents, online_agents, offline_agents);
-	ast_cli(fd, "\n");
+		ast_cli(a->fd, "%d agents configured [%d online , %d offline]\n",count_agents, online_agents, offline_agents);
+	ast_cli(a->fd, "\n");
 	                
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 
 
-static int agents_show_online(int fd, int argc, char **argv)
+static char *agents_show_online(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	struct agent_pvt *p;
 	char username[AST_MAX_BUF];
@@ -1634,8 +1696,21 @@ static int agents_show_online(int fd, int argc, char **argv)
 	int count_agents = 0;           /* Number of agents configured */
 	int online_agents = 0;          /* Number of online agents */
 	int agent_status = 0;           /* 0 means offline, 1 means online */
-	if (argc != 3)
-		return RESULT_SHOWUSAGE;
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "agent show online";
+		e->usage =
+			"Usage: agent show online\n"
+			"       Provides a list of all online agents.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc != 3)
+		return CLI_SHOWUSAGE;
+
 	AST_LIST_LOCK(&agents);
 	AST_LIST_TRAVERSE(&agents, p, list) {
 		agent_status = 0;       /* reset it to offline */
@@ -1663,28 +1738,18 @@ static int agents_show_online(int fd, int argc, char **argv)
 		if (!ast_strlen_zero(p->moh))
 			snprintf(moh, sizeof(moh), " (musiconhold is '%s')", p->moh);
 		if (agent_status)
-			ast_cli(fd, "%-12.12s %s%s%s%s\n", p->agent, username, location, talkingto, moh);
+			ast_cli(a->fd, "%-12.12s %s%s%s%s\n", p->agent, username, location, talkingto, moh);
 		count_agents++;
 		ast_mutex_unlock(&p->lock);
 	}
 	AST_LIST_UNLOCK(&agents);
 	if (!count_agents) 
-		ast_cli(fd, "No Agents are configured in %s\n", config);
+		ast_cli(a->fd, "No Agents are configured in %s\n", config);
 	else
-		ast_cli(fd, "%d agents online\n", online_agents);
-	ast_cli(fd, "\n");
-	return RESULT_SUCCESS;
+		ast_cli(a->fd, "%d agents online\n", online_agents);
+	ast_cli(a->fd, "\n");
+	return CLI_SUCCESS;
 }
-
-
-
-static const char show_agents_usage[] = 
-"Usage: agent show\n"
-"       Provides summary information on agents.\n";
-
-static const char show_agents_online_usage[] =
-"Usage: agent show online\n"
-"	Provides a list of all online agents.\n";
 
 static const char agent_logoff_usage[] =
 "Usage: agent logoff <channel> [soft]\n"
@@ -1692,17 +1757,9 @@ static const char agent_logoff_usage[] =
 "       If 'soft' is specified, do not hangup existing calls.\n";
 
 static struct ast_cli_entry cli_agents[] = {
-	{ { "agent", "show", NULL },
-	agents_show, "Show status of agents",
-	show_agents_usage },
-
-	{ { "agent", "show", "online" },
-	agents_show_online, "Show all online agents",
-	show_agents_online_usage },
-
-	{ { "agent", "logoff", NULL },
-	agent_logoff_cmd, "Sets an agent offline",
-	agent_logoff_usage, complete_agent_logoff_cmd },
+	AST_CLI_DEFINE(agents_show, "Show status of agents"),
+	AST_CLI_DEFINE(agents_show_online, "Show all online agents"),
+	AST_CLI_DEFINE(agent_logoff_cmd, "Sets an agent offline"),
 };
 
 /*!
@@ -1918,6 +1975,7 @@ static int login_exec(struct ast_channel *chan, void *data)
 								if (ast_tvdiff_ms(ast_tvnow(), p->lastdisc) > 0) {
 									ast_debug(1, "Wrapup time for %s expired!\n", p->agent);
 									p->lastdisc = ast_tv(0, 0);
+									ast_device_state_changed("Agent/%s", p->agent);
 									if (p->ackcall > 1)
 										check_beep(p, 0);
 									else
@@ -2273,10 +2331,10 @@ static int load_module(void)
 	/* Make sure we can register our agent channel type */
 	if (ast_channel_register(&agent_tech)) {
 		ast_log(LOG_ERROR, "Unable to register channel class 'Agent'\n");
-		return -1;
+		return AST_MODULE_LOAD_FAILURE;
 	}
 	/* Read in the config */
-	if (!read_agent_config())
+	if (!read_agent_config(0))
 		return AST_MODULE_LOAD_DECLINE;
 	if (persistent_agents)
 		reload_agents();
@@ -2294,14 +2352,15 @@ static int load_module(void)
 	/* Dialplan Functions */
 	ast_custom_function_register(&agent_function);
 
-	return 0;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 static int reload(void)
 {
-	read_agent_config();
-	if (persistent_agents)
-		reload_agents();
+	if (!read_agent_config(1)) {
+		if (persistent_agents)
+			reload_agents();
+	}
 	return 0;
 }
 

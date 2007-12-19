@@ -23,10 +23,7 @@
 #ifndef _ASTERISK_ASTOBJ_H
 #define _ASTERISK_ASTOBJ_H
 
-#include <string.h>
-
 #include "asterisk/lock.h"
-#include "asterisk/compiler.h"
 
 /*! \file
  * \brief A set of macros implementing objects and containers.

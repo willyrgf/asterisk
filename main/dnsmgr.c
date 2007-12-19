@@ -27,15 +27,7 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <sys/types.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <arpa/inet.h>
-#include <resolv.h>
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
-#include <stdlib.h>
+#include "asterisk/_private.h"
 #include <regex.h>
 #include <signal.h>
 
@@ -43,10 +35,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/linkedlists.h"
 #include "asterisk/utils.h"
 #include "asterisk/config.h"
-#include "asterisk/logger.h"
 #include "asterisk/sched.h"
-#include "asterisk/options.h"
 #include "asterisk/cli.h"
+#include "asterisk/manager.h"
 
 static struct sched_context *sched;
 static int refresh_sched = -1;
@@ -217,9 +208,9 @@ static void *do_refresh(void *data)
 	return NULL;
 }
 
-static int refresh_list(void *data)
+static int refresh_list(const void *data)
 {
-	struct refresh_info *info = data;
+	struct refresh_info *info = (struct refresh_info *)data;
 	struct ast_dnsmgr_entry *entry;
 
 	/* if a refresh or reload is already in progress, exit now */
@@ -255,28 +246,48 @@ void dnsmgr_start_refresh(void)
 
 static int do_reload(int loading);
 
-static int handle_cli_reload(int fd, int argc, char *argv[])
+static char *handle_cli_reload(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	if (argc > 2)
-		return RESULT_SHOWUSAGE;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "dnsmgr reload";
+		e->usage = 
+			"Usage: dnsmgr reload\n"
+			"       Reloads the DNS manager configuration.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;	
+	}
+	if (a->argc > 2)
+		return CLI_SHOWUSAGE;
 
 	do_reload(0);
-	return 0;
+	return CLI_SUCCESS;
 }
 
-static int handle_cli_refresh(int fd, int argc, char *argv[])
+static char *handle_cli_refresh(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	struct refresh_info info = {
 		.entries = &entry_list,
 		.verbose = 1,
 	};
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "dnsmgr refresh";
+		e->usage = 
+			"Usage: dnsmgr refresh [pattern]\n"
+			"       Peforms an immediate refresh of the managed DNS entries.\n"
+			"       Optional regular expression pattern is used to filter the entries to refresh.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;	
+	}
+	if (a->argc > 3)
+		return CLI_SHOWUSAGE;
 
-	if (argc > 3)
-		return RESULT_SHOWUSAGE;
-
-	if (argc == 3) {
-		if (regcomp(&info.filter, argv[2], REG_EXTENDED | REG_NOSUB))
-			return RESULT_SHOWUSAGE;
+	if (a->argc == 3) {
+		if ( regcomp(&info.filter, a->argv[2], REG_EXTENDED | REG_NOSUB) )
+			return CLI_SHOWUSAGE;
 		else
 			info.regex_present = 1;
 	}
@@ -286,49 +297,41 @@ static int handle_cli_refresh(int fd, int argc, char *argv[])
 	if (info.regex_present)
 		regfree(&info.filter);
 
-	return 0;
+	return CLI_SUCCESS;
 }
 
-static int handle_cli_status(int fd, int argc, char *argv[])
+static char *handle_cli_status(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	int count = 0;
 	struct ast_dnsmgr_entry *entry;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "dnsmgr status";
+		e->usage = 
+			"Usage: dnsmgr status\n"
+			"       Displays the DNS manager status.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;	
+	}
 
-	if (argc > 2)
-		return RESULT_SHOWUSAGE;
+	if (a->argc > 2)
+		return CLI_SHOWUSAGE;
 
-	ast_cli(fd, "DNS Manager: %s\n", enabled ? "enabled" : "disabled");
-	ast_cli(fd, "Refresh Interval: %d seconds\n", refresh_interval);
+	ast_cli(a->fd, "DNS Manager: %s\n", enabled ? "enabled" : "disabled");
+	ast_cli(a->fd, "Refresh Interval: %d seconds\n", refresh_interval);
 	AST_RWLIST_RDLOCK(&entry_list);
 	AST_RWLIST_TRAVERSE(&entry_list, entry, list)
 		count++;
 	AST_RWLIST_UNLOCK(&entry_list);
-	ast_cli(fd, "Number of entries: %d\n", count);
+	ast_cli(a->fd, "Number of entries: %d\n", count);
 
-	return 0;
+	return CLI_SUCCESS;
 }
 
-static struct ast_cli_entry cli_reload = {
-	{ "dnsmgr", "reload", NULL },
-	handle_cli_reload, "Reloads the DNS manager configuration",
-	"Usage: dnsmgr reload\n"
-	"       Reloads the DNS manager configuration.\n"
-};
-
-static struct ast_cli_entry cli_refresh = {
-	{ "dnsmgr", "refresh", NULL },
-	handle_cli_refresh, "Performs an immediate refresh",
-	"Usage: dnsmgr refresh [pattern]\n"
-	"       Peforms an immediate refresh of the managed DNS entries.\n"
-	"       Optional regular expression pattern is used to filter the entries to refresh.\n",
-};
-
-static struct ast_cli_entry cli_status = {
-	{ "dnsmgr", "status", NULL },
-	handle_cli_status, "Display the DNS manager status",
-	"Usage: dnsmgr status\n"
-	"       Displays the DNS manager status.\n"
-};
+static struct ast_cli_entry cli_reload = AST_CLI_DEFINE(handle_cli_reload, "Reloads the DNS manager configuration");
+static struct ast_cli_entry cli_refresh = AST_CLI_DEFINE(handle_cli_refresh, "Performs an immediate refresh");
+static struct ast_cli_entry cli_status = AST_CLI_DEFINE(handle_cli_status, "Display the DNS manager status");
 
 int dnsmgr_init(void)
 {
@@ -338,6 +341,7 @@ int dnsmgr_init(void)
 	}
 	ast_cli_register(&cli_reload);
 	ast_cli_register(&cli_status);
+	ast_cli_register(&cli_refresh);
 	return do_reload(1);
 }
 
@@ -349,11 +353,15 @@ int dnsmgr_reload(void)
 static int do_reload(int loading)
 {
 	struct ast_config *config;
+	struct ast_flags config_flags = { loading ? 0 : CONFIG_FLAG_FILEUNCHANGED };
 	const char *interval_value;
 	const char *enabled_value;
 	int interval;
 	int was_enabled;
 	int res = -1;
+
+	if ((config = ast_config_load("dnsmgr.conf", config_flags)) == CONFIG_STATUS_FILEUNCHANGED)
+		return 0;
 
 	/* ensure that no refresh cycles run while the reload is in progress */
 	ast_mutex_lock(&refresh_lock);
@@ -366,7 +374,7 @@ static int do_reload(int loading)
 	if (refresh_sched > -1)
 		ast_sched_del(sched, refresh_sched);
 
-	if ((config = ast_config_load("dnsmgr.conf"))) {
+	if (config) {
 		if ((enabled_value = ast_variable_retrieve(config, "general", "enable"))) {
 			enabled = ast_true(enabled_value);
 		}
@@ -391,7 +399,6 @@ static int do_reload(int loading)
 			if (ast_pthread_create_background(&refresh_thread, NULL, do_refresh, NULL) < 0) {
 				ast_log(LOG_ERROR, "Unable to start refresh thread.\n");
 			}
-			ast_cli_register(&cli_refresh);
 		}
 		/* make a background refresh happen right away */
 		refresh_sched = ast_sched_add_variable(sched, 100, refresh_list, &master_refresh_info, 1);
@@ -412,6 +419,7 @@ static int do_reload(int loading)
 		res = 0;
 
 	ast_mutex_unlock(&refresh_lock);
+	manager_event(EVENT_FLAG_SYSTEM, "Reload", "Module: DNSmgr\r\nStatus: %s\r/nMessage: DNSmgr reload Requested\r\n", enabled ? "Enabled" : "Disabled");
 
 	return res;
 }

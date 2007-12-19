@@ -8,10 +8,16 @@
 ; of the logging system.
 
 [general]
+;
 ; Customize the display of debug message time stamps
 ; this example is the ISO 8601 date format (yyyy-mm-dd HH:MM:SS)
-; see strftime(3) Linux manual for format specifiers
-;dateformat=%F %T
+;
+; see strftime(3) Linux manual for format specifiers.  Note that there is also
+; a fractional second parameter which may be used in this field.  Use %1q
+; for tenths, %2q for hundredths, etc.
+; 
+;dateformat=%F %T       ; ISO 8601 date format
+;dateformat=%F %T.%3q   ; with milliseconds
 ;
 ; This appends the hostname to the name of the log files.
 ;appendhostname = yes
@@ -24,10 +30,22 @@
 ; (defaults to queue_log)
 ;queue_log_name = queue_log
 ;
-; Rename the logfiles using a timestamp instead of a
-; sequence number when "logger rotate" is executed
-; (defaults to no).
-;rotatetimestamp = yes
+; Log rotation strategy:
+; sequential:  Rename archived logs in order, such that the newest
+;              has the highest sequence number [default].
+; rotate:  Rotate all the old files, such that the oldest has the
+;          highest sequence number [this is the expected behavior
+;          for Unix administrators].
+; timestamp:  Rename the logfiles using a timestamp instead of a
+;             sequence number when "logger rotate" is executed.
+;rotatestrategy = rotate
+;
+; Run a system command after rotating the files.  This is mainly
+; useful for rotatestrategy=rotate. The example allows the last
+; two archive files to remain uncompressed, but after that point,
+; they are compressed on disk.
+;
+; exec_after_rotate=gzip -9 ${filename}.2
 ;
 ; This determines whether or not we log generic events to a file
 ; (defaults to yes).

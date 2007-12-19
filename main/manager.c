@@ -45,20 +45,11 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include "asterisk/_private.h"
+#include "asterisk/paths.h"	/* use various ast_config_AST_* */
 #include <ctype.h>
 #include <sys/time.h>
-#include <sys/types.h>
-#include <netdb.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <arpa/inet.h>
 #include <signal.h>
-#include <errno.h>
-#include <unistd.h>
 #include <sys/mman.h>
 
 #include "asterisk/channel.h"
@@ -67,8 +58,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/config.h"
 #include "asterisk/callerid.h"
 #include "asterisk/lock.h"
-#include "asterisk/logger.h"
-#include "asterisk/options.h"
 #include "asterisk/cli.h"
 #include "asterisk/app.h"
 #include "asterisk/pbx.h"
@@ -79,7 +68,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/version.h"
 #include "asterisk/threadstorage.h"
 #include "asterisk/linkedlists.h"
+#include "asterisk/version.h"
 #include "asterisk/term.h"
+#include "asterisk/astobj2.h"
 
 /*!
  * Linked list of events.
@@ -147,6 +138,7 @@ struct mansession {
 	int needdestroy;	/*!< Whether an HTTP session should be destroyed */
 	pthread_t waiting_thread;	/*!< Sleeping thread using this descriptor */
 	unsigned long managerid;	/*!< Unique manager identifier, 0 for AMI sessions */
+	time_t sessionstart;    /*!< Session start time */
 	time_t sessiontimeout;	/*!< Session timeout if HTTP */
 	char username[80];	/*!< Logged in username */
 	char challenge[10];	/*!< Authentication challenge */
@@ -175,10 +167,10 @@ static AST_LIST_HEAD_STATIC(sessions, mansession);
 struct ast_manager_user {
 	char username[80];
 	char *secret;
-	char *deny;
-	char *permit;
-	char *read;
-	char *write;
+	struct ast_ha *ha;		/*!< ACL setting */
+	int readperm;			/*! Authorization for reading */
+	int writeperm;			/*! Authorization for writing */
+	int writetimeout;		/*! Per user Timeout for ast_carefulwrite() */
 	int displayconnects;	/*!< XXX unused */
 	int keep;	/*!< mark entries created on a reload */
 	AST_RWLIST_ENTRY(ast_manager_user) list;
@@ -318,6 +310,7 @@ static struct permalias {
 	{ EVENT_FLAG_CONFIG, "config" },
 	{ EVENT_FLAG_DTMF, "dtmf" },
 	{ EVENT_FLAG_REPORTING, "reporting" },
+	{ EVENT_FLAG_CDR, "cdr" },
 	{ -1, "all" },
 	{ 0, "none" },
 };
@@ -406,45 +399,6 @@ static int strings_to_mask(const char *string)
 	return get_perm(string);
 }
 
-static char *complete_show_mancmd(const char *line, const char *word, int pos, int state)
-{
-	struct manager_action *cur;
-	int l = strlen(word), which = 0;
-	char *ret = NULL;
-
-	AST_RWLIST_RDLOCK(&actions);
-	AST_RWLIST_TRAVERSE(&actions, cur, list) {
-		if (!strncasecmp(word, cur->action, l) && ++which > state) {
-			ret = ast_strdup(cur->action);
-			break;	/* make sure we exit even if ast_strdup() returns NULL */
-		}
-	}
-	AST_RWLIST_UNLOCK(&actions);
-
-	return ret;
-}
-
-static char *complete_show_manuser(const char *line, const char *word, int pos, int state)
-{
-	struct ast_manager_user *user = NULL;
-	int l = strlen(word), which = 0;
-	char *ret = NULL;
-
-	if (pos != 3)
-		return NULL;
-	
-	AST_RWLIST_RDLOCK(&users);
-	AST_RWLIST_TRAVERSE(&users, user, list) {
-		if (!strncasecmp(word, user->username, l) && ++which > state) {
-			ret = ast_strdup(user->username);
-			break;
-		}
-	}
-	AST_RWLIST_UNLOCK(&users);
-
-	return ret;
-}
-
 static int check_manager_session_inuse(const char *name)
 {
 	struct mansession *session = NULL;
@@ -491,223 +445,299 @@ static int manager_displayconnects (struct mansession *s)
 	return ret;
 }
 
-static int handle_showmancmd(int fd, int argc, char *argv[])
+static char *handle_showmancmd(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	struct manager_action *cur;
-	struct ast_str *authority = ast_str_alloca(80);
-	int num;
-
-	if (argc != 4)
-		return RESULT_SHOWUSAGE;
+	struct ast_str *authority;
+	int num, l, which;
+	char *ret = NULL;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "manager show command";
+		e->usage = 
+			"Usage: manager show command <actionname>\n"
+			"	Shows the detailed description for a specific Asterisk manager interface command.\n";
+		return NULL;
+	case CLI_GENERATE:
+		l = strlen(a->word);
+		which = 0;
+		AST_RWLIST_RDLOCK(&actions);
+		AST_RWLIST_TRAVERSE(&actions, cur, list) {
+			if (!strncasecmp(a->word, cur->action, l) && ++which > a->n) {
+				ret = ast_strdup(cur->action);
+				break;	/* make sure we exit even if ast_strdup() returns NULL */
+			}
+		}
+		AST_RWLIST_UNLOCK(&actions);
+		return ret;
+	}
+	authority = ast_str_alloca(80);
+	if (a->argc != 4)
+		return CLI_SHOWUSAGE;
 
 	AST_RWLIST_RDLOCK(&actions);
 	AST_RWLIST_TRAVERSE(&actions, cur, list) {
-		for (num = 3; num < argc; num++) {
-			if (!strcasecmp(cur->action, argv[num])) {
-				ast_cli(fd, "Action: %s\nSynopsis: %s\nPrivilege: %s\n%s\n",
+		for (num = 3; num < a->argc; num++) {
+			if (!strcasecmp(cur->action, a->argv[num])) {
+				ast_cli(a->fd, "Action: %s\nSynopsis: %s\nPrivilege: %s\n%s\n",
 					cur->action, cur->synopsis,
 					authority_to_str(cur->authority, &authority),
-					S_OR(cur->description, "") );
+					S_OR(cur->description, ""));
 			}
 		}
 	}
 	AST_RWLIST_UNLOCK(&actions);
 
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 
-static int handle_mandebug(int fd, int argc, char *argv[])
+static char *handle_mandebug(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	if (argc == 2)
-		ast_cli(fd, "manager debug is %s\n", manager_debug? "on" : "off");
-	else if (argc == 3) {
-		if (!strcasecmp(argv[2], "on"))
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "manager debug [on|off]";
+		e->usage = "Usage: manager debug [on|off]\n	Show, enable, disable debugging of the manager code.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;	
+	}
+	if (a->argc == 2)
+		ast_cli(a->fd, "manager debug is %s\n", manager_debug? "on" : "off");
+	else if (a->argc == 3) {
+		if (!strcasecmp(a->argv[2], "on"))
 			manager_debug = 1;
-		else if (!strcasecmp(argv[2], "off"))
+		else if (!strcasecmp(a->argv[2], "off"))
 			manager_debug = 0;
 		else
-			return RESULT_SHOWUSAGE;
+			return CLI_SHOWUSAGE;
 	}
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 
-static int handle_showmanager(int fd, int argc, char *argv[])
+static char *handle_showmanager(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	struct ast_manager_user *user = NULL;
+	int l, which;
+	char *ret = NULL;
+	struct ast_str *rauthority = ast_str_alloca(80);
+	struct ast_str *wauthority = ast_str_alloca(80);
 
-	if (argc != 4)
-		return RESULT_SHOWUSAGE;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "manager show user";
+		e->usage = 
+			" Usage: manager show user <user>\n"
+			"        Display all information related to the manager user specified.\n";
+		return NULL;
+	case CLI_GENERATE:
+		l = strlen(a->word);
+		which = 0;
+		if (a->pos != 3)
+			return NULL;
+		AST_RWLIST_RDLOCK(&users);
+		AST_RWLIST_TRAVERSE(&users, user, list) {
+			if ( !strncasecmp(a->word, user->username, l) && ++which > a->n ) {
+				ret = ast_strdup(user->username);
+				break;
+			}
+		}
+		AST_RWLIST_UNLOCK(&users);
+		return ret;
+	}
+
+	if (a->argc != 4)
+		return CLI_SHOWUSAGE;
 
 	AST_RWLIST_RDLOCK(&users);
 
-	if (!(user = get_manager_by_name_locked(argv[3]))) {
-		ast_cli(fd, "There is no manager called %s\n", argv[3]);
+	if (!(user = get_manager_by_name_locked(a->argv[3]))) {
+		ast_cli(a->fd, "There is no manager called %s\n", a->argv[3]);
 		AST_RWLIST_UNLOCK(&users);
-		return -1;
+		return CLI_SUCCESS;
 	}
 
-	ast_cli(fd,"\n");
-	ast_cli(fd,
+	ast_cli(a->fd,"\n");
+	ast_cli(a->fd,
 		"       username: %s\n"
 		"         secret: %s\n"
-		"           deny: %s\n"
-		"         permit: %s\n"
-		"           read: %s\n"
-		"          write: %s\n"
+		"            acl: %s\n"
+		"      read perm: %s\n"
+		"     write perm: %s\n"
 		"displayconnects: %s\n",
 		(user->username ? user->username : "(N/A)"),
 		(user->secret ? "<Set>" : "(N/A)"),
-		(user->deny ? user->deny : "(N/A)"),
-		(user->permit ? user->permit : "(N/A)"),
-		(user->read ? user->read : "(N/A)"),
-		(user->write ? user->write : "(N/A)"),
+		(user->ha ? "yes" : "no"),
+		authority_to_str(user->readperm, &rauthority),
+		authority_to_str(user->writeperm, &wauthority),
 		(user->displayconnects ? "yes" : "no"));
 
 	AST_RWLIST_UNLOCK(&users);
 
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 
 
-static int handle_showmanagers(int fd, int argc, char *argv[])
+static char *handle_showmanagers(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	struct ast_manager_user *user = NULL;
 	int count_amu = 0;
-
-	if (argc != 3)
-		return RESULT_SHOWUSAGE;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "manager show users";
+		e->usage = 
+			"Usage: manager show users\n"
+			"       Prints a listing of all managers that are currently configured on that\n"
+			" system.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+	if (a->argc != 3)
+		return CLI_SHOWUSAGE;
 
 	AST_RWLIST_RDLOCK(&users);
 
 	/* If there are no users, print out something along those lines */
 	if (AST_RWLIST_EMPTY(&users)) {
-		ast_cli(fd, "There are no manager users.\n");
+		ast_cli(a->fd, "There are no manager users.\n");
 		AST_RWLIST_UNLOCK(&users);
-		return RESULT_SUCCESS;
+		return CLI_SUCCESS;
 	}
 
-	ast_cli(fd, "\nusername\n--------\n");
+	ast_cli(a->fd, "\nusername\n--------\n");
 
 	AST_RWLIST_TRAVERSE(&users, user, list) {
-		ast_cli(fd, "%s\n", user->username);
+		ast_cli(a->fd, "%s\n", user->username);
 		count_amu++;
 	}
 
 	AST_RWLIST_UNLOCK(&users);
 
-	ast_cli(fd,"-------------------\n");
-	ast_cli(fd,"%d manager users configured.\n", count_amu);
+	ast_cli(a->fd,"-------------------\n");
+	ast_cli(a->fd,"%d manager users configured.\n", count_amu);
 
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 
 
 /*! \brief  CLI command  manager list commands */
-static int handle_showmancmds(int fd, int argc, char *argv[])
+static char *handle_showmancmds(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	struct manager_action *cur;
-	struct ast_str *authority = ast_str_alloca(80);
-	char *format = "  %-15.15s  %-15.15s  %-55.55s\n";
-
-	ast_cli(fd, format, "Action", "Privilege", "Synopsis");
-	ast_cli(fd, format, "------", "---------", "--------");
+	struct ast_str *authority;
+	static const char *format = "  %-15.15s  %-15.15s  %-55.55s\n";
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "manager show commands";
+		e->usage = 
+			"Usage: manager show commands\n"
+			"	Prints a listing of all the available Asterisk manager interface commands.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;	
+	}	
+	authority = ast_str_alloca(80);
+	ast_cli(a->fd, format, "Action", "Privilege", "Synopsis");
+	ast_cli(a->fd, format, "------", "---------", "--------");
 
 	AST_RWLIST_RDLOCK(&actions);
 	AST_RWLIST_TRAVERSE(&actions, cur, list)
-		ast_cli(fd, format, cur->action, authority_to_str(cur->authority, &authority), cur->synopsis);
+		ast_cli(a->fd, format, cur->action, authority_to_str(cur->authority, &authority), cur->synopsis);
 	AST_RWLIST_UNLOCK(&actions);
 
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 
 /*! \brief CLI command manager list connected */
-static int handle_showmanconn(int fd, int argc, char *argv[])
+static char *handle_showmanconn(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	struct mansession *s;
-	char *format = "  %-15.15s  %-15.15s\n";
+	time_t now = time(NULL);
+	static const char *format = "  %-15.15s  %-15.15s  %-10.10s  %-10.10s  %-8.8s  %-8.8s  %-5.5s  %-5.5s\n";
+	static const char *format2 = "  %-15.15s  %-15.15s  %-10d  %-10d  %-8d  %-8d  %-5.5d  %-5.5d\n";
+	int count = 0;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "manager show connected";
+		e->usage = 
+			"Usage: manager show connected\n"
+			"	Prints a listing of the users that are currently connected to the\n"
+			"Asterisk manager interface.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;	
+	}
 
-	ast_cli(fd, format, "Username", "IP Address");
+	ast_cli(a->fd, format, "Username", "IP Address", "Start", "Elapsed", "FileDes", "HttpCnt", "Read", "Write");
 
 	AST_LIST_LOCK(&sessions);
-	AST_LIST_TRAVERSE(&sessions, s, list)
-		ast_cli(fd, format,s->username, ast_inet_ntoa(s->sin.sin_addr));
+	AST_LIST_TRAVERSE(&sessions, s, list) {
+		ast_cli(a->fd, format2, s->username, ast_inet_ntoa(s->sin.sin_addr), (int)(s->sessionstart), (int)(now - s->sessionstart), s->fd, s->inuse, s->readperm, s->writeperm);
+		count++;
+	}
 	AST_LIST_UNLOCK(&sessions);
 
-	return RESULT_SUCCESS;
+	ast_cli(a->fd, "%d users connected.\n", count);
+
+	return CLI_SUCCESS;
 }
 
 /*! \brief CLI command manager list eventq */
 /* Should change to "manager show connected" */
-static int handle_showmaneventq(int fd, int argc, char *argv[])
+static char *handle_showmaneventq(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	struct eventqent *s;
-
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "manager show eventq";
+		e->usage = 
+			"Usage: manager show eventq\n"
+			"	Prints a listing of all events pending in the Asterisk manger\n"
+			"event queue.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
 	AST_LIST_LOCK(&all_events);
 	AST_LIST_TRAVERSE(&all_events, s, eq_next) {
-		ast_cli(fd, "Usecount: %d\n",s->usecount);
-		ast_cli(fd, "Category: %d\n", s->category);
-		ast_cli(fd, "Event:\n%s", s->eventdata);
+		ast_cli(a->fd, "Usecount: %d\n",s->usecount);
+		ast_cli(a->fd, "Category: %d\n", s->category);
+		ast_cli(a->fd, "Event:\n%s", s->eventdata);
 	}
 	AST_LIST_UNLOCK(&all_events);
 
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 
-static char showmancmd_help[] =
-"Usage: manager show command <actionname>\n"
-"	Shows the detailed description for a specific Asterisk manager interface command.\n";
+/*! \brief CLI command manager reload */
+static char *handle_manager_reload(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "manager reload";
+		e->usage =
+			"Usage: manager reload\n"
+			"       Reloads the manager configuration.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+	if (a->argc > 2)
+		return CLI_SHOWUSAGE;
+	reload_manager();
+	return CLI_SUCCESS;
+}
 
-static char showmancmds_help[] =
-"Usage: manager show commands\n"
-"	Prints a listing of all the available Asterisk manager interface commands.\n";
-
-static char showmanconn_help[] =
-"Usage: manager show connected\n"
-"	Prints a listing of the users that are currently connected to the\n"
-"Asterisk manager interface.\n";
-
-static char showmaneventq_help[] =
-"Usage: manager show eventq\n"
-"	Prints a listing of all events pending in the Asterisk manger\n"
-"event queue.\n";
-
-static char showmanagers_help[] =
-"Usage: manager show users\n"
-"       Prints a listing of all managers that are currently configured on that\n"
-" system.\n";
-
-static char showmanager_help[] =
-" Usage: manager show user <user>\n"
-"        Display all information related to the manager user specified.\n";
 
 static struct ast_cli_entry cli_manager[] = {
-	{ { "manager", "show", "command", NULL },
-	handle_showmancmd, "Show a manager interface command",
-	showmancmd_help, complete_show_mancmd },
-
-	{ { "manager", "show", "commands", NULL },
-	handle_showmancmds, "List manager interface commands",
-	showmancmds_help },
-
-	{ { "manager", "show", "connected", NULL },
-	handle_showmanconn, "List connected manager interface users",
-	showmanconn_help },
-
-	{ { "manager", "show", "eventq", NULL },
-	handle_showmaneventq, "List manager interface queued events",
-	showmaneventq_help },
-
-	{ { "manager", "show", "users", NULL },
-	handle_showmanagers, "List configured manager users",
-	showmanagers_help, NULL, NULL },
-
-	{ { "manager", "show", "user", NULL },
-	handle_showmanager, "Display information on a specific manager user",
-	showmanager_help, complete_show_manuser, NULL },
-
-	{ { "manager", "debug", NULL },
-	handle_mandebug, "Show, enable, disable debugging of the manager code",
-	"Usage: manager debug [on|off]\n	Show, enable, disable debugging of the manager code.\n", NULL, NULL },
+	AST_CLI_DEFINE(handle_showmancmd, "Show a manager interface command"),
+	AST_CLI_DEFINE(handle_showmancmds, "List manager interface commands"),
+	AST_CLI_DEFINE(handle_showmanconn, "List connected manager interface users"),
+	AST_CLI_DEFINE(handle_showmaneventq, "List manager interface queued events"),
+	AST_CLI_DEFINE(handle_showmanagers, "List configured manager users"),
+	AST_CLI_DEFINE(handle_showmanager, "Display information on a specific manager user"),
+	AST_CLI_DEFINE(handle_mandebug, "Show, enable, disable debugging of the manager code"),
+	AST_CLI_DEFINE(handle_manager_reload, "Reload manager configurations"),
 };
 
 /*
@@ -744,10 +774,9 @@ static void destroy_session(struct mansession *s)
 {
 	AST_LIST_LOCK(&sessions);
 	AST_LIST_REMOVE(&sessions, s, list);
-	AST_LIST_UNLOCK(&sessions);
-
 	ast_atomic_fetchadd_int(&num_sessions, -1);
 	free_session(s);
+	AST_LIST_UNLOCK(&sessions);
 }
 
 const char *astman_get_header(const struct message *m, char *var)
@@ -791,7 +820,7 @@ struct ast_variable *astman_get_variables(const struct message *m)
 			strsep(&val, "=");
 			if (!val || ast_strlen_zero(var))
 				continue;
-			cur = ast_variable_new(var, val);
+			cur = ast_variable_new(var, val, "");
 			cur->next = head;
 			head = cur;
 		}
@@ -949,110 +978,22 @@ static int set_eventmask(struct mansession *s, const char *eventmask)
 /* helper function for action_login() */
 static int authenticate(struct mansession *s, const struct message *m)
 {
-	const char *user = astman_get_header(m, "Username");
+	const char *username = astman_get_header(m, "Username");
+	const char *password = astman_get_header(m, "Secret");
 	int error = -1;
-	struct ast_ha *ha = NULL;
-	char *password = NULL;
-	int readperm = 0, writeperm = 0;
+	struct ast_manager_user *user = NULL;
 
-	if (ast_strlen_zero(user))	/* missing username */
+	if (ast_strlen_zero(username))	/* missing username */
 		return -1;
 
-    {
-	/*
-	 * XXX there should be no need to scan the config file again here,
-	 * suffices to call get_manager_by_name_locked() to fetch
-	 * the user's entry.
-	 */
-	struct ast_config *cfg = ast_config_load("manager.conf");
-	char *cat = NULL;
-	struct ast_variable *v;
+	/* locate user in locked state */
+	AST_RWLIST_WRLOCK(&users);
 
-	if (!cfg)
-		return -1;
-	while ( (cat = ast_category_browse(cfg, cat)) ) {
-		/* "general" is not a valid user */
-		if (strcasecmp(cat, user) || !strcasecmp(cat, "general"))
-			continue;
-		/* collect parameters for the user's entry */
-		for (v = ast_variable_browse(cfg, cat); v; v = v->next) {
-			if (!strcasecmp(v->name, "secret"))
-				password = ast_strdupa(v->value);
-			else if (!strcasecmp(v->name, "read"))
-				readperm = get_perm(v->value);
-			else if (!strcasecmp(v->name, "write"))
-				writeperm = get_perm(v->value);
-			else if (!strcasecmp(v->name, "permit") ||
-				   !strcasecmp(v->name, "deny")) {
-				ha = ast_append_ha(v->name, v->value, ha, NULL);
-			} else if (!strcasecmp(v->name, "writetimeout")) {
-				int val = atoi(v->value);
-	
-				if (val < 100)
-					ast_log(LOG_WARNING, "Invalid writetimeout value '%s' at line %d\n", v->value, v->lineno);
-				else
-					s->writetimeout = val;
-			}
-		}
-		break;
-	}
-
-	ast_config_destroy(cfg);
-	if (!cat) {
-		/* Didn't find the user in manager.conf, check users.conf */
-		int hasmanager = 0;
-		cfg = ast_config_load("users.conf");
-		if (!cfg)
-			return -1;
-		while ( (cat = ast_category_browse(cfg, cat)) ) {
-			if (!strcasecmp(cat, user) && strcasecmp(cat, "general"))
-				break;
-		}
-		if (!cat) {
-			ast_log(LOG_NOTICE, "%s tried to authenticate with nonexistent user '%s'\n", ast_inet_ntoa(s->sin.sin_addr), user);
-			ast_config_destroy(cfg);
-			return -1;
-		}
-		/* collect parameters for the user's entry from users.conf */
-		for (v = ast_variable_browse(cfg, cat); v; v = v->next) {
-			if (!strcasecmp(v->name, "secret"))
-				password = ast_strdupa(v->value);
-			else if (!strcasecmp(v->name, "read"))
-				readperm = get_perm(v->value);
-			else if (!strcasecmp(v->name, "write"))
-				writeperm = get_perm(v->value);
-			else if (!strcasecmp(v->name, "permit") ||
-				   !strcasecmp(v->name, "deny")) {
-				ha = ast_append_ha(v->name, v->value, ha, NULL);
-			} else if (!strcasecmp(v->name, "writetimeout")) {
-				int val = atoi(v->value);
-	
-				if (val < 100)
-					ast_log(LOG_WARNING, "Invalid writetimeout value '%s' at line %d\n", v->value, v->lineno);
-				else
-					s->writetimeout = val;
-			} else if (!strcasecmp(v->name, "hasmanager")) {
-				hasmanager = ast_true(v->value);
-			}
-		}
-		ast_config_destroy(cfg);
-		if (!hasmanager) {
-			ast_log(LOG_NOTICE, "%s tried to authenticate with nonexistent user '%s'\n", ast_inet_ntoa(s->sin.sin_addr), user);
-			return -1;
-		}
-	}
-
-	}
-
-	if (ha) {
-		int good = ast_apply_ha(ha, &(s->sin));
-		ast_free_ha(ha);
-		if (!good) {
-			ast_log(LOG_NOTICE, "%s failed to pass IP ACL as '%s'\n", ast_inet_ntoa(s->sin.sin_addr), user);
-			return -1;
-		}
-	}
-	if (!strcasecmp(astman_get_header(m, "AuthType"), "MD5")) {
+	if (!(user = get_manager_by_name_locked(username))) {
+		ast_log(LOG_NOTICE, "%s tried to authenticate with nonexistent user '%s'\n", ast_inet_ntoa(s->sin.sin_addr), username);
+	} else if (user->ha && !ast_apply_ha(user->ha, &(s->sin))) {
+		ast_log(LOG_NOTICE, "%s failed to pass IP ACL as '%s'\n", ast_inet_ntoa(s->sin.sin_addr), username);
+	} else if (!strcasecmp(astman_get_header(m, "AuthType"), "MD5")) {
 		const char *key = astman_get_header(m, "Key");
 		if (!ast_strlen_zero(key) && !ast_strlen_zero(s->challenge) &&
 		    !ast_strlen_zero(password)) {
@@ -1073,21 +1014,26 @@ static int authenticate(struct mansession *s, const struct message *m)
 		} else {
 			ast_debug(1, "MD5 authentication is not possible.  challenge: '%s'\n", 
 				S_OR(s->challenge, ""));
-			return -1;
 		}
-	} else if (password) {
-		const char *pass = astman_get_header(m, "Secret");
-		if (!strcmp(password, pass))
-			error = 0;
-	}
+	} else if (password && user->secret && !strcmp(password, user->secret))
+		error = 0;
+
 	if (error) {
-		ast_log(LOG_NOTICE, "%s failed to authenticate as '%s'\n", ast_inet_ntoa(s->sin.sin_addr), user);
+		ast_log(LOG_NOTICE, "%s failed to authenticate as '%s'\n", ast_inet_ntoa(s->sin.sin_addr), username);
+		AST_RWLIST_UNLOCK(&users);
 		return -1;
 	}
-	ast_copy_string(s->username, user, sizeof(s->username));
-	s->readperm = readperm;
-	s->writeperm = writeperm;
+
+	/* auth complete */
+	
+	ast_copy_string(s->username, username, sizeof(s->username));
+	s->readperm = user->readperm;
+	s->writeperm = user->writeperm;
+	s->writetimeout = user->writetimeout;
+	s->sessionstart = time(NULL);
 	set_eventmask(s, astman_get_header(m, "Events"));
+	
+	AST_RWLIST_UNLOCK(&users);
 	return 0;
 }
 
@@ -1099,7 +1045,7 @@ static char mandescr_ping[] =
 
 static int action_ping(struct mansession *s, const struct message *m)
 {
-	astman_send_response(s, m, "Pong", NULL);
+	astman_send_response(s, m, "Success", "Ping: Pong\r\n");
 	return 0;
 }
 
@@ -1117,12 +1063,13 @@ static int action_getconfig(struct mansession *s, const struct message *m)
 	int lineno = 0;
 	char *category=NULL;
 	struct ast_variable *v;
+	struct ast_flags config_flags = { CONFIG_FLAG_WITHCOMMENTS | CONFIG_FLAG_NOCACHE };
 
 	if (ast_strlen_zero(fn)) {
 		astman_send_error(s, m, "Filename not specified");
 		return 0;
 	}
-	if (!(cfg = ast_config_load_with_comments(fn))) {
+	if (!(cfg = ast_config_load(fn, config_flags))) {
 		astman_send_error(s, m, "Config file not found");
 		return 0;
 	}
@@ -1167,13 +1114,14 @@ static int action_getconfigjson(struct mansession *s, const struct message *m)
 	int comma1 = 0;
 	char *buf = NULL;
 	unsigned int buf_len = 0;
+	struct ast_flags config_flags = { CONFIG_FLAG_WITHCOMMENTS | CONFIG_FLAG_NOCACHE };
 
 	if (ast_strlen_zero(fn)) {
 		astman_send_error(s, m, "Filename not specified");
 		return 0;
 	}
 
-	if (!(cfg = ast_config_load_with_comments(fn))) {
+	if (!(cfg = ast_config_load(fn, config_flags))) {
 		astman_send_error(s, m, "Config file not found");
 		return 0;
 	}
@@ -1221,7 +1169,7 @@ static int action_getconfigjson(struct mansession *s, const struct message *m)
 }
 
 /* helper function for action_updateconfig */
-static void handle_updates(struct mansession *s, const struct message *m, struct ast_config *cfg)
+static void handle_updates(struct mansession *s, const struct message *m, struct ast_config *cfg, const char *dfn)
 {
 	int x;
 	char hdr[40];
@@ -1250,7 +1198,7 @@ static void handle_updates(struct mansession *s, const struct message *m, struct
 		match = astman_get_header(m, hdr);
 		if (!strcasecmp(action, "newcat")) {
 			if (!ast_strlen_zero(cat)) {
-				category = ast_category_new(cat);
+				category = ast_category_new(cat, dfn, 99999);
 				if (category) {
 					ast_category_append(cfg, category);
 				}
@@ -1273,7 +1221,7 @@ static void handle_updates(struct mansession *s, const struct message *m, struct
 		} else if (!strcasecmp(action, "append")) {
 			if (!ast_strlen_zero(cat) && !ast_strlen_zero(var) &&
 				(category = ast_category_get(cfg, cat)) &&
-				(v = ast_variable_new(var, value))){
+				(v = ast_variable_new(var, value, dfn))){
 				if (object || (match && !strcasecmp(match, "object")))
 					v->object = 1;
 				ast_variable_append(category, v);
@@ -1283,8 +1231,8 @@ static void handle_updates(struct mansession *s, const struct message *m, struct
 }
 
 static char mandescr_updateconfig[] =
-"Description: A 'UpdateConfig' action will dump the contents of a configuration\n"
-"file by category and contents.\n"
+"Description: A 'UpdateConfig' action will modify, create, or delete\n"
+"configuration elements in Asterisk configuration files.\n"
 "Variables (X's represent 6 digit number beginning with 000000):\n"
 "   SrcFilename:   Configuration filename to read(e.g. foo.conf)\n"
 "   DstFilename:   Configuration filename to write(e.g. foo.conf)\n"
@@ -1302,16 +1250,18 @@ static int action_updateconfig(struct mansession *s, const struct message *m)
 	const char *dfn = astman_get_header(m, "DstFilename");
 	int res;
 	const char *rld = astman_get_header(m, "Reload");
+	struct ast_flags config_flags = { CONFIG_FLAG_WITHCOMMENTS | CONFIG_FLAG_NOCACHE };
 
 	if (ast_strlen_zero(sfn) || ast_strlen_zero(dfn)) {
 		astman_send_error(s, m, "Filename not specified");
 		return 0;
 	}
-	if (!(cfg = ast_config_load_with_comments(sfn))) {
+	if (!(cfg = ast_config_load(sfn, config_flags))) {
 		astman_send_error(s, m, "Config file not found");
 		return 0;
 	}
-	handle_updates(s, m, cfg);
+	handle_updates(s, m, cfg, dfn);
+	ast_include_rename(cfg, sfn, dfn); /* change the include references from dfn to sfn, so things match up */
 	res = config_text_file_save(dfn, cfg, "Manager");
 	ast_config_destroy(cfg);
 	if (res) {
@@ -1464,9 +1414,9 @@ static int action_events(struct mansession *s, const struct message *m)
 
 	res = set_eventmask(s, mask);
 	if (res > 0)
-		astman_send_response(s, m, "Events On", NULL);
+		astman_send_response(s, m, "Success", "Events: On\r\n");
 	else if (res == 0)
-		astman_send_response(s, m, "Events Off", NULL);
+		astman_send_response(s, m, "Success", "Events: Off\r\n");
 
 	return 0;
 }
@@ -1627,6 +1577,7 @@ static int action_status(struct mansession *s, const struct message *m)
 	char bridge[256];
 	struct timeval now = ast_tvnow();
 	long elapsed_seconds = 0;
+	int channels = 0;
 	int all = ast_strlen_zero(name); /* set if we want all channels */
 	const char *id = astman_get_header(m,"ActionID");
 	char idText[256] = "";
@@ -1644,10 +1595,12 @@ static int action_status(struct mansession *s, const struct message *m)
 		}
 	}
 	astman_send_ack(s, m, "Channel status will follow");
+
 	/* if we look by name, we break after the first iteration */
 	while (c) {
+		channels++;
 		if (c->_bridge)
-			snprintf(bridge, sizeof(bridge), "Link: %s\r\n", c->_bridge->name);
+			snprintf(bridge, sizeof(bridge), "BridgedChannel: %s\r\nBridgedUniqueid: %s\r\n", c->_bridge->name, c->_bridge->uniqueid);
 		else
 			bridge[0] = '\0';
 		if (c->pbx) {
@@ -1660,8 +1613,9 @@ static int action_status(struct mansession *s, const struct message *m)
 			"Channel: %s\r\n"
 			"CallerIDNum: %s\r\n"
 			"CallerIDName: %s\r\n"
-			"Account: %s\r\n"
-			"State: %s\r\n"
+			"Accountcode: %s\r\n"
+			"ChannelState: %d\r\n"
+			"ChannelStateDesc: %s\r\n"
 			"Context: %s\r\n"
 			"Extension: %s\r\n"
 			"Priority: %d\r\n"
@@ -1671,9 +1625,10 @@ static int action_status(struct mansession *s, const struct message *m)
 			"%s"
 			"\r\n",
 			c->name,
-			S_OR(c->cid.cid_num, "<unknown>"),
-			S_OR(c->cid.cid_name, "<unknown>"),
+			S_OR(c->cid.cid_num, ""),
+			S_OR(c->cid.cid_name, ""),
 			c->accountcode,
+			c->_state,
 			ast_state2str(c->_state), c->context,
 			c->exten, c->priority, (long)elapsed_seconds, bridge, c->uniqueid, idText);
 		} else {
@@ -1703,7 +1658,8 @@ static int action_status(struct mansession *s, const struct message *m)
 	astman_append(s,
 	"Event: StatusComplete\r\n"
 	"%s"
-	"\r\n",idText);
+	"Items: %d\r\n"
+	"\r\n",idText, channels);
 	return 0;
 }
 
@@ -1738,7 +1694,7 @@ static int action_sendtext(struct mansession *s, const struct message *m)
 	}
 
 	res = ast_sendtext(c, textmsg);
-	ast_mutex_unlock(&c->lock);
+	ast_channel_unlock(c);
 	
 	if (res > 0)
 		astman_send_ack(s, m, "Success");
@@ -2316,6 +2272,94 @@ static int action_corestatus(struct mansession *s, const struct message *m)
 	return 0;
 }
 
+static char mandescr_reload[] =
+"Description: Send a reload event.\n"
+"Variables: (Names marked with * are optional)\n"
+"       *ActionID: ActionID of this transaction\n"
+"       *Module: Name of the module to reload\n";
+
+/*! \brief Send a reload event */
+static int action_reload(struct mansession *s, const struct message *m)
+{
+	const char *actionid = astman_get_header(m, "ActionID");
+	const char *module = astman_get_header(m, "Module");
+	int res = ast_module_reload(S_OR(module, NULL));
+	char idText[80] = "";
+
+	if (!ast_strlen_zero(actionid))
+		snprintf(idText, sizeof(idText), "ActionID: %s\r\n", actionid);
+	if (res == 2)
+		astman_append(s, "Response: Success\r\n%s", idText);
+	else
+		astman_send_error(s, m, s == 0 ? "No such module" : "Module does not support reload");
+	return 0;
+}
+
+static char mandescr_coreshowchannels[] =
+"Description: List currently defined channels and some information\n"
+"             about them.\n"
+"Variables:\n"
+"          ActionID: Optional Action id for message matching.\n";
+
+/*! \brief  Manager command "CoreShowChannels" - List currently defined channels 
+ *          and some information about them. */
+static int action_coreshowchannels(struct mansession *s, const struct message *m)
+{
+	const char *actionid = astman_get_header(m, "ActionID");
+	char actionidtext[256] = "";
+	struct ast_channel *c = NULL;
+	int numchans = 0;
+	int duration, durh, durm, durs;
+
+	if (!ast_strlen_zero(actionid))
+		snprintf(actionidtext, sizeof(actionidtext), "ActionID: %s\r\n", actionid);
+
+	astman_send_listack(s, m, "Channels will follow", "start");	
+
+	while ((c = ast_channel_walk_locked(c)) != NULL) {
+		struct ast_channel *bc = ast_bridged_channel(c);
+		char durbuf[10] = "";
+
+		if (c->cdr && !ast_tvzero(c->cdr->start)) {
+			duration = (int)(ast_tvdiff_ms(ast_tvnow(), c->cdr->start) / 1000);
+			durh = duration / 3600;
+			durm = (duration % 3600) / 60;
+			durs = duration % 60;
+			snprintf(durbuf, sizeof(durbuf), "%02d:%02d:%02d", durh, durm, durs);
+		}
+
+		astman_append(s,
+			"Channel: %s\r\n"
+			"UniqueID: %s\r\n"
+			"Context: %s\r\n"
+			"Extension: %s\r\n"
+			"Priority: %d\r\n"
+			"ChannelState: %d\r\n"
+			"ChannelStateDesc: %s\r\n"
+			"Application: %s\r\n"
+			"ApplicationData: %s\r\n"
+			"CallerIDnum: %s\r\n"
+			"Duration: %s\r\n"
+			"AccountCode: %s\r\n"
+			"BridgedChannel: %s\r\n"
+			"BridgedUniqueID: %s\r\n"
+			"\r\n", c->name, c->uniqueid, c->context, c->exten, c->priority, c->_state, ast_state2str(c->_state),
+			c->appl ? c->appl : "", c->data ? S_OR(c->data, ""): "",
+			S_OR(c->cid.cid_num, ""), durbuf, S_OR(c->accountcode, ""), bc ? bc->name : "", bc ? bc->uniqueid : "");
+		ast_channel_unlock(c);
+		numchans++;
+	}
+
+	astman_append(s,
+                "Event: CoreShowChannelsComplete\r\n"
+                "EventList: Complete\r\n"
+                "ListItems: %d\r\n"
+                "%s"
+                "\r\n", numchans, actionidtext);
+
+	return 0;
+}
+
 
 /*
  * Done with the action handlers here, we start with the code in charge
@@ -2341,7 +2385,9 @@ static int process_message(struct mansession *s, const struct message *m)
 	ast_debug(1, "Manager received command '%s'\n", action);
 
 	if (ast_strlen_zero(action)) {
+		ast_mutex_lock(&s->__lock);
 		astman_send_error(s, m, "Missing action in request");
+		ast_mutex_unlock(&s->__lock);
 		return 0;
 	}
 
@@ -2356,7 +2402,9 @@ static int process_message(struct mansession *s, const struct message *m)
 		(!strcasecmp(action, "Login") || !strcasecmp(action, "Challenge"))) {
 		if (check_manager_session_inuse(user)) {
 			sleep(1);
+			ast_mutex_lock(&s->__lock);
 			astman_send_error(s, m, "Login Already In Use");
+			ast_mutex_unlock(&s->__lock);
 			return -1;
 		}
 	}
@@ -2374,8 +2422,10 @@ static int process_message(struct mansession *s, const struct message *m)
 	AST_RWLIST_UNLOCK(&actions);
 
 	if (!tmp) {
+		char buf[BUFSIZ];
+		snprintf(buf, sizeof(buf), "Invalid/unknown command: %s. Use Action: ListCommands to show available commands.", action);
 		ast_mutex_lock(&s->__lock);
-		astman_send_error(s, m, "Invalid/unknown command. Use Action: ListCommands to show available commands.");
+		astman_send_error(s, m, buf);
 		ast_mutex_unlock(&s->__lock);
 	}
 	if (ret)
@@ -2517,9 +2567,9 @@ static void *session_do(void *data)
 	s->f = ser->f;
 	s->sin = ser->requestor;
 
-	ast_atomic_fetchadd_int(&num_sessions, 1);
 	AST_LIST_LOCK(&sessions);
 	AST_LIST_INSERT_HEAD(&sessions, s, list);
+	ast_atomic_fetchadd_int(&num_sessions, 1);
 	AST_LIST_UNLOCK(&sessions);
 	/* Hook to the tail of the event queue */
 	s->last_ev = grab_last();
@@ -2555,9 +2605,9 @@ static void purge_sessions(int n_max)
 	AST_LIST_LOCK(&sessions);
 	AST_LIST_TRAVERSE_SAFE_BEGIN(&sessions, s, list) {
 		if (s->sessiontimeout && (now > s->sessiontimeout) && !s->inuse) {
-			AST_LIST_REMOVE_CURRENT(&sessions, list);
+			AST_LIST_REMOVE_CURRENT(list);
 			ast_atomic_fetchadd_int(&num_sessions, -1);
-			if (s->authenticated && (option_verbose > 1) && manager_displayconnects(s)) {
+			if (s->authenticated && (VERBOSITY_ATLEAST(2)) && manager_displayconnects(s)) {
 				ast_verb(2, "HTTP Manager '%s' timed out from %s\n",
 					s->username, ast_inet_ntoa(s->sin.sin_addr));
 			}
@@ -2566,7 +2616,7 @@ static void purge_sessions(int n_max)
 				break;
 		}
 	}
-	AST_LIST_TRAVERSE_SAFE_END
+	AST_LIST_TRAVERSE_SAFE_END;
 	AST_LIST_UNLOCK(&sessions);
 }
 
@@ -2676,13 +2726,13 @@ int ast_manager_unregister(char *action)
 	AST_RWLIST_WRLOCK(&actions);
 	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&actions, cur, list) {
 		if (!strcasecmp(action, cur->action)) {
-			AST_RWLIST_REMOVE_CURRENT(&actions, list);
+			AST_RWLIST_REMOVE_CURRENT(list);
 			ast_free(cur);
 			ast_verb(2, "Manager unregistered action %s\n", action);
 			break;
 		}
 	}
-	AST_RWLIST_TRAVERSE_SAFE_END
+	AST_RWLIST_TRAVERSE_SAFE_END;
 	AST_RWLIST_UNLOCK(&actions);
 
 	return 0;
@@ -2899,6 +2949,47 @@ static void xml_copy_escape(struct ast_str **out, const char *src, int mode)
 	}
 }
 
+struct variable_count {
+	char *varname;
+	int count;
+};
+
+static int compress_char(char c)
+{
+	c &= 0x7f;
+	if (c < 32)
+		return 0;
+	else if (c >= 'a' && c <= 'z')
+		return c - 64;
+	else if (c > 'z')
+		return '_';
+	else
+		return c - 32;
+}
+
+static int variable_count_hash_fn(const void *vvc, const int flags)
+{
+	const struct variable_count *vc = vvc;
+	int res = 0, i;
+	for (i = 0; i < 5; i++) {
+		if (vc->varname[i] == '\0')
+			break;
+		res += compress_char(vc->varname[i]) << (i * 6);
+	}
+	return res;
+}
+
+static int variable_count_cmp_fn(void *obj, void *vstr, int flags)
+{
+	/* Due to the simplicity of struct variable_count, it makes no difference
+	 * if you pass in objects or strings, the same operation applies. This is
+	 * due to the fact that the hash occurs on the first element, which means
+	 * the address of both the struct and the string are exactly the same. */
+	struct variable_count *vc = obj;
+	char *str = vstr;
+	return !strcmp(vc->varname, str) ? CMP_MATCH : 0;
+}
+
 /*! \brief Convert the input into XML or HTML.
  * The input is supposed to be a sequence of lines of the form
  *	Name: value
@@ -2930,12 +3021,14 @@ static void xml_copy_escape(struct ast_str **out, const char *src, int mode)
 static void xml_translate(struct ast_str **out, char *in, struct ast_variable *vars, enum output_format format)
 {
 	struct ast_variable *v;
-	char *dest = NULL;
+	const char *dest = NULL;
 	char *var, *val;
-	char *objtype = NULL;
+	const char *objtype = NULL;
 	int in_data = 0;	/* parsing data */
 	int inobj = 0;
 	int xml = (format == FORMAT_XML);
+	struct variable_count *vc = NULL;
+	struct ao2_container *vco = NULL;
 
 	for (v = vars; v; v = v->next) {
 		if (!dest && !strcasecmp(v->name, "ajaxdest"))
@@ -2947,36 +3040,14 @@ static void xml_translate(struct ast_str **out, char *in, struct ast_variable *v
 		dest = "unknown";
 	if (!objtype)
 		objtype = "generic";
-#if 0
-	/* determine how large is the response.
-	 * This is a heuristic - counting colons (for headers),
-	 * newlines (for extra arguments), and escaped chars.
-	 * XXX needs to be checked carefully for overflows.
-	 * Even better, use some code that allows extensible strings.
-	 */
-	for (x = 0; in[x]; x++) {
-		if (in[x] == ':')
-			colons++;
-		else if (in[x] == '\n')
-			breaks++;
-		else if (strchr("&\"<>", in[x]))
-			escaped++;
-	}
-	len = (size_t) (1 + strlen(in) + colons * 5 + breaks * (40 + strlen(dest) + strlen(objtype)) + escaped * 10); /* foo="bar", "<response type=\"object\" id=\"dest\"", "&amp;" */
-	out = ast_malloc(len);
-	if (!out)
-		return NULL;
-	tmp = out;
-	*tmp = '\0';
-#endif
+
 	/* we want to stop when we find an empty line */
 	while (in && *in) {
 		val = strsep(&in, "\r\n");	/* mark start and end of line */
 		if (in && *in == '\n')		/* remove trailing \n if any */
 			in++;
 		ast_trim_blanks(val);
-		if (0)
-			ast_verbose("inobj %d in_data %d line <%s>\n", inobj, in_data, val);
+		ast_debug(5, "inobj %d in_data %d line <%s>\n", inobj, in_data, val);
 		if (ast_strlen_zero(val)) {
 			if (in_data) { /* close data */
 				ast_str_append(out, 0, xml ? "'" : "</td></tr>\n");
@@ -2985,8 +3056,11 @@ static void xml_translate(struct ast_str **out, char *in, struct ast_variable *v
 			ast_str_append(out, 0, xml ? " /></response>\n" :
 				"<tr><td colspan=\"2\"><hr></td></tr>\r\n");
 			inobj = 0;
+			ao2_ref(vco, -1);
+			vco = NULL;
 			continue;
 		}
+
 		/* we expect Name: value lines */
 		if (in_data) {
 			var = NULL;
@@ -3000,16 +3074,31 @@ static void xml_translate(struct ast_str **out, char *in, struct ast_variable *v
 				var = "Opaque-data";
 			}
 		}
+
 		if (!inobj) {
 			if (xml)
 				ast_str_append(out, 0, "<response type='object' id='%s'><%s", dest, objtype);
 			else
 				ast_str_append(out, 0, "<body>\n");
+			vco = ao2_container_alloc(37, variable_count_hash_fn, variable_count_cmp_fn);
 			inobj = 1;
 		}
+
 		if (!in_data) {	/* build appropriate line start */
 			ast_str_append(out, 0, xml ? " " : "<tr><td>");
+			if ((vc = ao2_find(vco, var, 0)))
+				vc->count++;
+			else {
+				/* Create a new entry for this one */
+				vc = ao2_alloc(sizeof(*vc), NULL);
+				vc->varname = var;
+				vc->count = 1;
+				ao2_link(vco, vc);
+			}
 			xml_copy_escape(out, var, xml ? 1 | 2 : 0);
+			if (vc->count > 1)
+				ast_str_append(out, 0, "-%d", vc->count);
+			ao2_ref(vc, -1);
 			ast_str_append(out, 0, xml ? "='" : "</td><td>");
 			if (!strcmp(var, "Opaque-data"))
 				in_data = 1;
@@ -3020,9 +3109,11 @@ static void xml_translate(struct ast_str **out, char *in, struct ast_variable *v
 		else
 			ast_str_append(out, 0, xml ? "\n" : "<br>\n");
 	}
-	if (inobj)
+	if (inobj) {
 		ast_str_append(out, 0, xml ? " /></response>\n" :
 			"<tr><td colspan=\"2\"><hr></td></tr>\r\n");
+		ao2_ref(vco, -1);
+	}
 }
 
 static struct ast_str *generic_http_callback(enum output_format format,
@@ -3066,8 +3157,8 @@ static struct ast_str *generic_http_callback(enum output_format format,
 		s->last_ev = grab_last();
 		AST_LIST_LOCK(&sessions);
 		AST_LIST_INSERT_HEAD(&sessions, s, list);
-		AST_LIST_UNLOCK(&sessions);
 		ast_atomic_fetchadd_int(&num_sessions, 1);
+		AST_LIST_UNLOCK(&sessions);
 	}
 
 	ast_mutex_unlock(&s->__lock);
@@ -3246,9 +3337,9 @@ static struct server_args amis_desc = {
         .worker_fn = session_do,	/* thread handling the session */
 };
 
-int init_manager(void)
+static int __init_manager(int reload)
 {
-	struct ast_config *cfg = NULL;
+	struct ast_config *ucfg = NULL, *cfg = NULL;
 	const char *val;
 	char *cat = NULL;
 	int newhttptimeout = 60;
@@ -3257,6 +3348,7 @@ int init_manager(void)
 	struct ast_hostent ahp;
 	struct ast_manager_user *user = NULL;
 	struct ast_variable *var;
+	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
 
 	if (!registered) {
 		/* Register default actions */
@@ -3285,6 +3377,8 @@ int init_manager(void)
 		ast_manager_register2("WaitEvent", 0, action_waitevent, "Wait for an event to occur", mandescr_waitevent);
 		ast_manager_register2("CoreSettings", EVENT_FLAG_SYSTEM, action_coresettings, "Show PBX core settings (version etc)", mandescr_coresettings);
 		ast_manager_register2("CoreStatus", EVENT_FLAG_SYSTEM, action_corestatus, "Show PBX core status variables", mandescr_corestatus);
+		ast_manager_register2("Reload", EVENT_FLAG_CONFIG, action_reload, "Send a reload event", mandescr_reload);
+		ast_manager_register2("CoreShowChannels", EVENT_FLAG_SYSTEM, action_coreshowchannels, "List currently active channels", mandescr_coreshowchannels);
 
 		ast_cli_register_multiple(cli_manager, sizeof(cli_manager) / sizeof(struct ast_cli_entry));
 		ast_extension_state_add(NULL, NULL, manager_state_cb, NULL);
@@ -3292,10 +3386,12 @@ int init_manager(void)
 		/* Append placeholder event so master_eventq never runs dry */
 		append_event("Event: Placeholder\r\n\r\n", 0);
 	}
+	if ((cfg = ast_config_load("manager.conf", config_flags)) == CONFIG_STATUS_FILEUNCHANGED)
+		return 0;
+
 	displayconnects = 1;
-	cfg = ast_config_load("manager.conf");
 	if (!cfg) {
-		ast_log(LOG_NOTICE, "Unable to open management configuration manager.conf.  Call management disabled.\n");
+		ast_log(LOG_NOTICE, "Unable to open AMI configuration manager.conf. Asterisk management interface (AMI) disabled.\n");
 		return 0;
 	}
 
@@ -3371,7 +3467,83 @@ int init_manager(void)
 	
 	AST_RWLIST_WRLOCK(&users);
 
+	/* First, get users from users.conf */
+	ucfg = ast_config_load("users.conf", config_flags);
+	if (ucfg && (ucfg != CONFIG_STATUS_FILEUNCHANGED)) {
+		const char *hasmanager;
+		int genhasmanager = ast_true(ast_variable_retrieve(ucfg, "general", "hasmanager"));
+
+		while ((cat = ast_category_browse(ucfg, cat))) {
+			if (!strcasecmp(cat, "general"))
+				continue;
+			
+			hasmanager = ast_variable_retrieve(ucfg, cat, "hasmanager");
+			if ((!hasmanager && genhasmanager) || ast_true(hasmanager)) {
+				const char *user_secret = ast_variable_retrieve(ucfg, cat, "secret");
+				const char *user_read = ast_variable_retrieve(ucfg, cat, "read");
+				const char *user_write = ast_variable_retrieve(ucfg, cat, "write");
+				const char *user_displayconnects = ast_variable_retrieve(ucfg, cat, "displayconnects");
+				const char *user_writetimeout = ast_variable_retrieve(ucfg, cat, "writetimeout");
+				
+				/* Look for an existing entry,
+				 * if none found - create one and add it to the list
+				 */
+				if (!(user = get_manager_by_name_locked(cat))) {
+					if (!(user = ast_calloc(1, sizeof(*user))))
+						break;
+
+					/* Copy name over */
+					ast_copy_string(user->username, cat, sizeof(user->username));
+					/* Insert into list */
+					AST_LIST_INSERT_TAIL(&users, user, list);
+					user->ha = NULL;
+					user->readperm = -1;
+					user->writeperm = -1;
+					/* Default displayconnect from [general] */
+					user->displayconnects = displayconnects;
+					user->writetimeout = 100;
+				}
+
+				if (!user_secret)
+					user_secret = ast_variable_retrieve(ucfg, "general", "secret");
+				if (!user_read)
+					user_read = ast_variable_retrieve(ucfg, "general", "read");
+				if (!user_write)
+					user_write = ast_variable_retrieve(ucfg, "general", "write");
+				if (!user_displayconnects)
+					user_displayconnects = ast_variable_retrieve(ucfg, "general", "displayconnects");
+				if (!user_writetimeout)
+					user_writetimeout = ast_variable_retrieve(ucfg, "general", "writetimeout");
+
+				if (!ast_strlen_zero(user_secret)) {
+					if (user->secret)
+						ast_free(user->secret);
+					user->secret = ast_strdup(user_secret);
+				}
+
+				if (user_read)
+					user->readperm = get_perm(user_read);
+				if (user_write)
+					user->writeperm = get_perm(user_write);
+				if (user_displayconnects)
+					user->displayconnects = ast_true(user_displayconnects);
+
+				if (user_writetimeout) {
+					int val = atoi(user_writetimeout);
+					if (val < 100)
+						ast_log(LOG_WARNING, "Invalid writetimeout value '%s' at users.conf line %d\n", var->value, var->lineno);
+					else
+						user->writetimeout = val;
+				}
+			}
+		}
+		ast_config_destroy(ucfg);
+	}
+
+	/* cat is NULL here in any case */
+
 	while ((cat = ast_category_browse(cfg, cat))) {
+		struct ast_ha *oldha;
 
 		if (!strcasecmp(cat, "general"))
 			continue;
@@ -3382,45 +3554,50 @@ int init_manager(void)
 				break;
 			/* Copy name over */
 			ast_copy_string(user->username, cat, sizeof(user->username));
+
+			user->ha = NULL;
+			user->readperm = 0;
+			user->writeperm = 0;
+			/* Default displayconnect from [general] */
+			user->displayconnects = displayconnects;
+			user->writetimeout = 100;
+
 			/* Insert into list */
 			AST_RWLIST_INSERT_TAIL(&users, user, list);
 		}
 
 		/* Make sure we keep this user and don't destroy it during cleanup */
 		user->keep = 1;
-		/* Default displayconnect to [general] */
-		user->displayconnects = displayconnects;
+		oldha = user->ha;
+		user->ha = NULL;
 
 		var = ast_variable_browse(cfg, cat);
-		while (var) {
+		for (; var; var = var->next) {
 			if (!strcasecmp(var->name, "secret")) {
 				if (user->secret)
 					ast_free(user->secret);
 				user->secret = ast_strdup(var->value);
-			} else if (!strcasecmp(var->name, "deny") ) {
-				if (user->deny)
-					ast_free(user->deny);
-				user->deny = ast_strdup(var->value);
-			} else if (!strcasecmp(var->name, "permit") ) {
-				if (user->permit)
-					ast_free(user->permit);
-				user->permit = ast_strdup(var->value);
+			} else if (!strcasecmp(var->name, "deny") ||
+				       !strcasecmp(var->name, "permit")) {
+				user->ha = ast_append_ha(var->name, var->value, user->ha, NULL);
 			}  else if (!strcasecmp(var->name, "read") ) {
-				if (user->read)
-					ast_free(user->read);
-				user->read = ast_strdup(var->value);
+				user->readperm = get_perm(var->value);
 			}  else if (!strcasecmp(var->name, "write") ) {
-				if (user->write)
-					ast_free(user->write);
-				user->write = ast_strdup(var->value);
-			}  else if (!strcasecmp(var->name, "displayconnects") )
+				user->writeperm = get_perm(var->value);
+			}  else if (!strcasecmp(var->name, "displayconnects") ) {
 				user->displayconnects = ast_true(var->value);
-			else {
+			} else if (!strcasecmp(var->name, "writetimeout")) {
+				int val = atoi(var->value);
+				if (val < 100)
+					ast_log(LOG_WARNING, "Invalid writetimeout value '%s' at line %d\n", var->value, var->lineno);
+				else
+					user->writetimeout = val;
+			} else
 				ast_debug(1, "%s is an unknown option.\n", var->name);
-			}
-			var = var->next;
 		}
+		ast_free_ha(oldha);
 	}
+	ast_config_destroy(cfg);
 
 	/* Perform cleanup - essentially prune out old users that no longer exist */
 	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&users, user, list) {
@@ -3429,25 +3606,16 @@ int init_manager(void)
 			continue;
 		}
 		/* We do not need to keep this user so take them out of the list */
-		AST_RWLIST_REMOVE_CURRENT(&users, list);
+		AST_RWLIST_REMOVE_CURRENT(list);
 		/* Free their memory now */
 		if (user->secret)
 			ast_free(user->secret);
-		if (user->deny)
-			ast_free(user->deny);
-		if (user->permit)
-			ast_free(user->permit);
-		if (user->read)
-			ast_free(user->read);
-		if (user->write)
-			ast_free(user->write);
+		ast_free_ha(user->ha);
 		ast_free(user);
 	}
-	AST_RWLIST_TRAVERSE_SAFE_END
+	AST_RWLIST_TRAVERSE_SAFE_END;
 
 	AST_RWLIST_UNLOCK(&users);
-
-	ast_config_destroy(cfg);
 
 	if (webmanager_enabled && manager_enabled) {
 		if (!webregged) {
@@ -3468,14 +3636,20 @@ int init_manager(void)
 	if (newhttptimeout > 0)
 		httptimeout = newhttptimeout;
 
+	manager_event(EVENT_FLAG_SYSTEM, "Reload", "Module: Manager\r\nStatus: %s\r\nMessage: Manager reload Requested\r\n", manager_enabled ? "Enabled" : "Disabled");
+
 	server_start(&ami_desc);
 	if (ssl_setup(amis_desc.tls_cfg))
 		server_start(&amis_desc);
 	return 0;
 }
 
+int init_manager(void)
+{
+	return __init_manager(0);
+}
+
 int reload_manager(void)
 {
-	manager_event(EVENT_FLAG_SYSTEM, "Reload", "Message: Reload Requested\r\n");
-	return init_manager();
+	return __init_manager(1);
 }

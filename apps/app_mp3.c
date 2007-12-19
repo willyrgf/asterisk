@@ -29,23 +29,16 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <string.h>
-#include <stdio.h>
-#include <signal.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <fcntl.h>
 #include <sys/time.h>
+#include <signal.h>
 
 #include "asterisk/lock.h"
 #include "asterisk/file.h"
-#include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/frame.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
 #include "asterisk/translate.h"
-#include "asterisk/options.h"
 
 #define LOCAL_MPG_123 "/usr/local/bin/mpg123"
 #define MPG_123 "/usr/bin/mpg123"
@@ -55,7 +48,7 @@ static char *app = "MP3Player";
 static char *synopsis = "Play an MP3 file or stream";
 
 static char *descrip = 
-"  MP3Player(location) Executes mpg123 to play the given location,\n"
+"  MP3Player(location): Executes mpg123 to play the given location,\n"
 "which typically would be a filename or a URL. User can exit by pressing\n"
 "any key on the dialpad, or by hanging up."; 
 

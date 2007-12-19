@@ -9,38 +9,22 @@
 # the GNU General Public License
 #
 
--include ../menuselect.makeopts ../menuselect.makedeps
+-include $(ASTTOPDIR)/menuselect.makeopts $(ASTTOPDIR)/menuselect.makedeps
 
-C_MODS:=$(filter-out $(MENUSELECT_PBX),$(patsubst %.c,%,$(wildcard pbx_*.c)))
-CC_MODS:=$(filter-out $(MENUSELECT_PBX),$(patsubst %.cc,%,$(wildcard pbx_*.cc)))
-
-LOADABLE_MODS:=$(C_MODS) $(CC_MODS)
-
-ifneq ($(findstring pbx,$(MENUSELECT_EMBED)),)
-  EMBEDDED_MODS:=$(LOADABLE_MODS)
-  LOADABLE_MODS:=
-endif
+MODULE_PREFIX=pbx
+MENUSELECT_CATEGORY=PBX
+MENUSELECT_DESCRIPTION=PBX Modules
 
 all: _all
 
 include $(ASTTOPDIR)/Makefile.moddir_rules
 
+ifneq ($(findstring $(OSARCH), mingw32 cygwin ),)
+  LIBS+= -lres_ael_share.so -lres_monitor.so
+endif
+
 clean::
 	rm -f ael/*.o
-
-ael/ael_lex.o: ael/ael_lex.c ../include/asterisk/ael_structs.h ael/ael.tab.h
-ael/ael_lex.o: ASTCFLAGS+=-I.
-
-ael/ael.tab.o: ael/ael.tab.c ael/ael.tab.h ../include/asterisk/ael_structs.h
-ael/ael.tab.o: ASTCFLAGS+=-I. -DYYENABLE_NLS=0
-
-$(if $(filter pbx_ael,$(EMBEDDED_MODS)),modules.link,pbx_ael.so): ael/ael.tab.o ael/ael_lex.o
-
-ael/ael_lex.c:
-	(cd ael; flex ael.flex; sed -i -e "/begin standard C headers/i#include \"asterisk.h\"" ael_lex.c)
-
-ael/ael.tab.c ael/ael.tab.h:
-	(cd ael; bison -v -d ael.y)
 
 dundi-parser.o: dundi-parser.h
 dundi-parser.o: ASTCFLAGS+=-I.

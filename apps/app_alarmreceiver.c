@@ -33,23 +33,17 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <string.h>
-#include <stdlib.h>
-#include <stdio.h>
 #include <math.h>
 #include <sys/wait.h>
-#include <unistd.h>
 #include <sys/time.h>
 
 #include "asterisk/lock.h"
 #include "asterisk/file.h"
-#include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
 #include "asterisk/translate.h"
 #include "asterisk/ulaw.h"
-#include "asterisk/options.h"
 #include "asterisk/app.h"
 #include "asterisk/dsp.h"
 #include "asterisk/config.h"
@@ -714,10 +708,11 @@ static int load_config(void)
 {
 	struct ast_config *cfg;
 	const char *p;
+	struct ast_flags config_flags = { 0 };
 
 	/* Read in the config file */
 
-	cfg = ast_config_load(ALMRCV_CONFIG);
+	cfg = ast_config_load(ALMRCV_CONFIG, config_flags);
                                                                                                                                   
 	if(!cfg){
 	

@@ -29,44 +29,34 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <sys/types.h>
 #include <regex.h>
 
 #include "asterisk/module.h"
-#include "asterisk/options.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
-#include "asterisk/logger.h"
 #include "asterisk/utils.h"
 #include "asterisk/app.h"
 #include "asterisk/localtime.h"
-#include "asterisk/options.h"
 
 static int function_fieldqty(struct ast_channel *chan, const char *cmd,
 			     char *parse, char *buf, size_t len)
 {
-	char *varsubst, varval[8192] = "", *varval2 = varval;
+	char *varsubst, varval[8192], *varval2 = varval;
 	int fieldcount = 0;
 	AST_DECLARE_APP_ARGS(args,
 			     AST_APP_ARG(varname);
 			     AST_APP_ARG(delim);
 		);
+	char delim[2] = "";
+	size_t delim_used;
+
+	if (chan)
+		ast_autoservice_start(chan);
 
 	AST_STANDARD_APP_ARGS(args, parse);
 	if (args.delim) {
-		if (args.delim[0] == '\\') {
-			if (args.delim[1] == 'n')
-				ast_copy_string(args.delim, "\n", 2);
-			else if (args.delim[1] == 't')
-				ast_copy_string(args.delim, "\t", 2);
-			else if (args.delim[1])
-				ast_copy_string(args.delim, &args.delim[1], 2);
-			else
-				ast_copy_string(args.delim, "-", 2);
-		}
+		ast_get_encoded_char(args.delim, delim, &delim_used);
+
 		varsubst = alloca(strlen(args.varname) + 4);
 
 		sprintf(varsubst, "${%s}", args.varname);
@@ -74,13 +64,16 @@ static int function_fieldqty(struct ast_channel *chan, const char *cmd,
 		if (ast_strlen_zero(varval2))
 			fieldcount = 0;
 		else {
-			while (strsep(&varval2, args.delim))
+			while (strsep(&varval2, delim))
 				fieldcount++;
 		}
 	} else {
 		fieldcount = 1;
 	}
 	snprintf(buf, len, "%d", fieldcount);
+
+	if (chan)
+		ast_autoservice_stop(chan);
 
 	return 0;
 }
@@ -99,7 +92,9 @@ static int filter(struct ast_channel *chan, const char *cmd, char *parse, char *
 			     AST_APP_ARG(allowed);
 			     AST_APP_ARG(string);
 	);
-	char *outbuf = buf;
+	char *outbuf = buf, ac;
+	char allowed[256] = "";
+	size_t allowedlen = 0;
 
 	AST_STANDARD_APP_ARGS(args, parse);
 
@@ -108,8 +103,40 @@ static int filter(struct ast_channel *chan, const char *cmd, char *parse, char *
 		return -1;
 	}
 
+	/* Expand ranges */
+	for (; *(args.allowed) && allowedlen < sizeof(allowed); (args.allowed)++) {
+		char c1 = 0, c2 = 0;
+		size_t consumed = 0;
+
+		if (ast_get_encoded_char(args.allowed, &c1, &consumed))
+			return -1;
+		args.allowed += consumed;
+
+		if (*(args.allowed) == '-') {
+			if (ast_get_encoded_char(args.allowed + 1, &c2, &consumed))
+				c2 = -1;
+			args.allowed += consumed + 1;
+
+			/*!\note
+			 * Looks a little strange, until you realize that we can overflow
+			 * the size of a char.
+			 */
+			for (ac = c1; ac != c2 && allowedlen < sizeof(allowed) - 1; ac++)
+				allowed[allowedlen++] = ac;
+			allowed[allowedlen++] = ac;
+
+			ast_debug(4, "c1=%d, c2=%d\n", c1, c2);
+
+			/* Decrement before the loop increment */
+			(args.allowed)--;
+		} else
+			allowed[allowedlen++] = c1;
+	}
+
+	ast_debug(1, "Allowed: %s\n", allowed);
+
 	for (; *(args.string) && (buf + len - 1 > outbuf); (args.string)++) {
-		if (strchr(args.allowed, *(args.string)))
+		if (strchr(allowed, *(args.string)))
 			*outbuf++ = *(args.string);
 	}
 	*outbuf = '\0';
@@ -122,6 +149,13 @@ static struct ast_custom_function filter_function = {
 	.synopsis = "Filter the string to include only the allowed characters",
 	.syntax = "FILTER(<allowed-chars>,<string>)",
 	.read = filter,
+	.desc =
+"Permits all characters listed in <allowed-chars>, filtering all others out.\n"
+"In addition to literally listing the characters, you may also use ranges of\n"
+"characters (delimited by a '-'), as well as hexadecimal characters started\n"
+"with a \\x (i.e. \\x20) and octal characters started with \\0 (i.e. \\040).\n"
+"Also, \\t, \\n, and \\r are recognized.  If you want a literal '-' character,\n"
+"simply prefix it with a '\\'\n",
 };
 
 static int regex(struct ast_channel *chan, const char *cmd, char *parse, char *buf,
@@ -189,7 +223,7 @@ static void clearvar_prefix(struct ast_channel *chan, const char *prefix)
 	int len = strlen(prefix);
 	AST_LIST_TRAVERSE_SAFE_BEGIN(&chan->varshead, var, entries) {
 		if (strncasecmp(prefix, ast_var_name(var), len) == 0) {
-			AST_LIST_REMOVE_CURRENT(&chan->varshead, entries);
+			AST_LIST_REMOVE_CURRENT(entries);
 			ast_free(var);
 		}
 	}
@@ -220,13 +254,19 @@ static int array(struct ast_channel *chan, const char *cmd, char *var,
 	if (!var || !value2)
 		return -1;
 
+	if (chan)
+		ast_autoservice_start(chan);
+
 	if (!strcmp(cmd, "HASH")) {
 		const char *var2 = pbx_builtin_getvar_helper(chan, "~ODBCFIELDS~");
 		origvar = var;
 		if (var2)
 			var = ast_strdupa(var2);
-		else
+		else {
+			if (chan)
+				ast_autoservice_stop(chan);
 			return -1;
+		}
 		ishash = 1;
 	}
 
@@ -262,6 +302,9 @@ static int array(struct ast_channel *chan, const char *cmd, char *var,
 			}
 		}
 	}
+
+	if (chan)
+		ast_autoservice_stop(chan);
 
 	return 0;
 }
@@ -659,7 +702,8 @@ static int acf_strptime(struct ast_channel *chan, const char *cmd, char *data,
 	if (!strptime(args.timestring, args.format, &t.time)) {
 		ast_log(LOG_WARNING, "C function strptime() output nothing?!!\n");
 	} else {
-		snprintf(buf, len, "%d", (int) ast_mktime(&t.atm, args.timezone));
+		struct timeval tv = ast_mktime(&t.atm, args.timezone);
+		snprintf(buf, len, "%d", (int) tv.tv_sec);
 	}
 
 	return 0;
@@ -683,14 +727,16 @@ static struct ast_custom_function strptime_function = {
 static int function_eval(struct ast_channel *chan, const char *cmd, char *data,
 			 char *buf, size_t len)
 {
-	memset(buf, 0, len);
-
 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_WARNING, "EVAL requires an argument: EVAL(<string>)\n");
 		return -1;
 	}
 
+	if (chan)
+		ast_autoservice_start(chan);
 	pbx_substitute_variables_helper(chan, data, buf, len - 1);
+	if (chan)
+		ast_autoservice_stop(chan);
 
 	return 0;
 }

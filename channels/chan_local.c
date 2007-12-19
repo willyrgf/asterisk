@@ -29,26 +29,14 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
-#include <sys/socket.h>
-#include <errno.h>
-#include <stdlib.h>
 #include <fcntl.h>
-#include <netdb.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
 #include <sys/signal.h>
 
 #include "asterisk/lock.h"
 #include "asterisk/channel.h"
 #include "asterisk/config.h"
-#include "asterisk/logger.h"
 #include "asterisk/module.h"
 #include "asterisk/pbx.h"
-#include "asterisk/options.h"
-#include "asterisk/lock.h"
 #include "asterisk/sched.h"
 #include "asterisk/io.h"
 #include "asterisk/rtp.h"
@@ -65,6 +53,13 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 static const char tdesc[] = "Local Proxy Channel Driver";
 
 #define IS_OUTBOUND(a,b) (a == b->chan ? 1 : 0)
+
+static struct ast_jb_conf g_jb_conf = {
+	.flags = 0,
+	.max_size = -1,
+	.resync_threshold = -1,
+	.impl = "",
+};
 
 static struct ast_channel *local_request(const char *type, int format, void *data, int *cause);
 static int local_digit_begin(struct ast_channel *ast, char digit);
@@ -108,6 +103,7 @@ struct local_pvt {
 	char context[AST_MAX_CONTEXT];		/* Context to call */
 	char exten[AST_MAX_EXTENSION];		/* Extension to call */
 	int reqformat;				/* Requested format */
+	struct ast_jb_conf jb_conf;		/*!< jitterbuffer configuration for this local channel */
 	struct ast_channel *owner;		/* Master Channel */
 	struct ast_channel *chan;		/* Outbound channel */
 	struct ast_module_user *u_owner;	/*! reference to keep the module loaded while in use */
@@ -184,11 +180,11 @@ retrylock:
 		ast_clear_flag(p, LOCAL_GLARE_DETECT);
 		return 0;
 	}
-	if (ast_mutex_trylock(&other->lock)) {
+	if (ast_channel_trylock(other)) {
 		/* Failed to lock.  Release main lock and try again */
 		ast_mutex_unlock(&p->lock);
 		if (us) {
-			if (ast_mutex_unlock(&us->lock)) {
+			if (ast_channel_unlock(us)) {
 				ast_log(LOG_WARNING, "%s wasn't locked while sending %d/%d\n",
 					us->name, f->frametype, f->subclass);
 				us = NULL;
@@ -198,12 +194,12 @@ retrylock:
 		usleep(1);
 		/* Only we can destroy ourselves, so we can't disappear here */
 		if (us)
-			ast_mutex_lock(&us->lock);
+			ast_channel_lock(us);
 		ast_mutex_lock(&p->lock);
 		goto retrylock;
 	}
 	ast_queue_frame(other, f);
-	ast_mutex_unlock(&other->lock);
+	ast_channel_unlock(other);
 	ast_clear_flag(p, LOCAL_GLARE_DETECT);
 	return 0;
 }
@@ -245,16 +241,16 @@ static void check_bridge(struct local_pvt *p, int isoutbound)
 		/* Lock everything we need, one by one, and give up if
 		   we can't get everything.  Remember, we'll get another
 		   chance in just a little bit */
-		if (!ast_mutex_trylock(&(p->chan->_bridge)->lock)) {
+		if (!ast_channel_trylock(p->chan->_bridge)) {
 			if (!ast_check_hangup(p->chan->_bridge)) {
-				if (!ast_mutex_trylock(&p->owner->lock)) {
+				if (!ast_channel_trylock(p->owner)) {
 					if (!ast_check_hangup(p->owner)) {
 						ast_channel_masquerade(p->owner, p->chan->_bridge);
 						ast_set_flag(p, LOCAL_ALREADY_MASQED);
 					}
-					ast_mutex_unlock(&p->owner->lock);
+					ast_channel_unlock(p->owner);
 				}
-				ast_mutex_unlock(&(p->chan->_bridge)->lock);
+				ast_channel_unlock(p->chan->_bridge);
 			}
 		}
 	/* We only allow masquerading in one 'direction'... it's important to preserve the state
@@ -453,6 +449,12 @@ static int local_call(struct ast_channel *ast, char *dest, int timeout)
 	
 	ast_mutex_lock(&p->lock);
 
+	/*
+	 * Note that cid_num and cid_name aren't passed in the ast_channel_alloc
+	 * call, so it's done here instead.
+	 */
+	p->chan->cid.cid_num = ast_strdup(p->owner->cid.cid_num);
+	p->chan->cid.cid_name = ast_strdup(p->owner->cid.cid_name);
 	p->chan->cid.cid_rdnis = ast_strdup(p->owner->cid.cid_rdnis);
 	p->chan->cid.cid_ani = ast_strdup(p->owner->cid.cid_ani);
 	p->chan->cid.cid_pres = p->owner->cid.cid_pres;
@@ -471,6 +473,7 @@ static int local_call(struct ast_channel *ast, char *dest, int timeout)
 			AST_LIST_INSERT_TAIL(&p->chan->varshead, new, entries);
 		}
 	}
+	ast_channel_datastore_inherit(p->owner, p->chan);
 
 	/* Start switch on sub channel */
 	if (!(res = ast_pbx_start(p->chan)))
@@ -557,11 +560,21 @@ static struct local_pvt *local_alloc(const char *data, int format)
 	ast_mutex_init(&tmp->lock);
 	ast_copy_string(tmp->exten, data, sizeof(tmp->exten));
 
+	memcpy(&tmp->jb_conf, &g_jb_conf, sizeof(tmp->jb_conf));
+
 	/* Look for options */
 	if ((opts = strchr(tmp->exten, '/'))) {
 		*opts++ = '\0';
 		if (strchr(opts, 'n'))
 			ast_set_flag(tmp, LOCAL_NO_OPTIMIZATION);
+		if (strchr(opts, 'j')) {
+			if (ast_test_flag(tmp, LOCAL_NO_OPTIMIZATION))
+				ast_set_flag(&tmp->jb_conf, AST_JB_ENABLED);
+			else {
+				ast_log(LOG_ERROR, "You must use the 'n' option for chan_local "
+					"to use the 'j' option to enable the jitterbuffer\n");
+			}
+		}
 	}
 
 	/* Look for a context */
@@ -646,6 +659,8 @@ static struct ast_channel *local_new(struct local_pvt *p, int state)
 	tmp->priority = 1;
 	tmp2->priority = 1;
 
+	ast_jb_configure(tmp, &p->jb_conf);
+
 	return tmp;
 }
 
@@ -664,35 +679,40 @@ static struct ast_channel *local_request(const char *type, int format, void *dat
 }
 
 /*! \brief CLI command "local show channels" */
-static int locals_show(int fd, int argc, char **argv)
+static char *locals_show(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	struct local_pvt *p = NULL;
 
-	if (argc != 3)
-		return RESULT_SHOWUSAGE;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "local show channels";
+		e->usage =
+			"Usage: local show channels\n"
+			"       Provides summary information on active local proxy channels.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc != 3)
+		return CLI_SHOWUSAGE;
 
 	AST_LIST_LOCK(&locals);
 	if (!AST_LIST_EMPTY(&locals)) {
 		AST_LIST_TRAVERSE(&locals, p, list) {
 			ast_mutex_lock(&p->lock);
-			ast_cli(fd, "%s -- %s@%s\n", p->owner ? p->owner->name : "<unowned>", p->exten, p->context);
+			ast_cli(a->fd, "%s -- %s@%s\n", p->owner ? p->owner->name : "<unowned>", p->exten, p->context);
 			ast_mutex_unlock(&p->lock);
 		}
 	} else
-		ast_cli(fd, "No local channels in use\n");
+		ast_cli(a->fd, "No local channels in use\n");
 	AST_LIST_UNLOCK(&locals);
 
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 
-static const char show_locals_usage[] = 
-"Usage: local show channels\n"
-"       Provides summary information on active local proxy channels.\n";
-
 static struct ast_cli_entry cli_local[] = {
-	{ { "local", "show", "channels", NULL },
-	locals_show, "List status of local channels",
-	show_locals_usage },
+	AST_CLI_DEFINE(locals_show, "List status of local channels"),
 };
 
 /*! \brief Load module into PBX, register channel */
@@ -701,10 +721,10 @@ static int load_module(void)
 	/* Make sure we can register our channel type */
 	if (ast_channel_register(&local_tech)) {
 		ast_log(LOG_ERROR, "Unable to register channel class 'Local'\n");
-		return -1;
+		return AST_MODULE_LOAD_FAILURE;
 	}
 	ast_cli_register_multiple(cli_local, sizeof(cli_local) / sizeof(struct ast_cli_entry));
-	return 0;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 /*! \brief Unload the local proxy channel from Asterisk */

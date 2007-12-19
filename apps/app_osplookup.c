@@ -37,14 +37,10 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <sys/types.h>
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
-#include <errno.h>
 #include <osp/osp.h>
 #include <osp/osputils.h>
 
+#include "asterisk/paths.h"
 #include "asterisk/lock.h"
 #include "asterisk/config.h"
 #include "asterisk/utils.h"
@@ -53,9 +49,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/app.h"
 #include "asterisk/module.h"
 #include "asterisk/pbx.h"
-#include "asterisk/options.h"
 #include "asterisk/cli.h"
-#include "asterisk/logger.h"
 #include "asterisk/astosp.h"
 
 /* OSP Buffer Sizes */
@@ -520,8 +514,8 @@ static int osp_validate_token(
 	int res;
 	int tokenlen;
 	unsigned char tokenstr[OSP_TOKSTR_SIZE];
-	char src[OSP_TOKSTR_SIZE];
-	char dst[OSP_TOKSTR_SIZE];
+	char src[OSP_NORSTR_SIZE];
+	char dst[OSP_NORSTR_SIZE];
 	unsigned int authorised;
 	unsigned int dummy = 0;
 	int error;
@@ -1773,15 +1767,22 @@ static int ospfinished_exec(
 
 /* OSP Module APIs */
 
-static int osp_load(void)
+static int osp_unload(void);
+static int osp_load(int reload)
 {
 	const char* t;
 	unsigned int v;
 	struct ast_config* cfg;
+	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
 	int error = OSPC_ERR_NO_ERROR;
 
-	cfg = ast_config_load(OSP_CONFIG_FILE);
+	if ((cfg = ast_config_load(OSP_CONFIG_FILE, config_flags)) == CONFIG_STATUS_FILEUNCHANGED)
+		return 0;
+
 	if (cfg) {
+		if (reload)
+			osp_unload();
+
 		t = ast_variable_retrieve(cfg, OSP_GENERAL_CAT, "accelerate");
 		if (t && ast_true(t)) {
 			if ((error = OSPPInit(1)) != OSPC_ERR_NO_ERROR) {
@@ -1854,10 +1855,7 @@ static int osp_unload(void)
 	return 0;
 }
 
-static int osp_show(
-	int fd,
-	int argc,
-	char* argv[])
+static char *handle_cli_osp_show(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	int i;
 	int found = 0;
@@ -1865,12 +1863,21 @@ static int osp_show(
 	const char* provider = NULL;
 	const char* tokenalgo;
 
-	if ((argc < 2) || (argc > 3)) {
-		return RESULT_SHOWUSAGE;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "osp show";
+		e->usage =
+			"Usage: osp show\n"
+			"       Displays information on Open Settlement Protocol support\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
 	}
-	if (argc > 2) {
-		provider = argv[2];
-	}
+
+	if ((a->argc < 2) || (a->argc > 3))
+		return CLI_SHOWUSAGE;
+	if (a->argc > 2) 
+		provider = a->argv[2];
 	if (!provider) {
 		switch (osp_tokenformat) {
 			case TOKEN_ALGO_BOTH:
@@ -1884,7 +1891,7 @@ static int osp_show(
 				tokenalgo = "Signed";
 				break;
 		}
-		ast_cli(fd, "OSP: %s %s %s\n",
+		ast_cli(a->fd, "OSP: %s %s %s\n",
 			osp_initialized ? "Initialized" : "Uninitialized", osp_hardware ? "Accelerated" : "Normal", tokenalgo);
 	}
 
@@ -1893,25 +1900,25 @@ static int osp_show(
 	while(p) {
 		if (!provider || !strcasecmp(p->name, provider)) {
 			if (found) {
-				ast_cli(fd, "\n");
+				ast_cli(a->fd, "\n");
 			}
-			ast_cli(fd, " == OSP Provider '%s' == \n", p->name);
-			ast_cli(fd, "Local Private Key: %s\n", p->privatekey);
-			ast_cli(fd, "Local Certificate: %s\n", p->localcert);
+			ast_cli(a->fd, " == OSP Provider '%s' == \n", p->name);
+			ast_cli(a->fd, "Local Private Key: %s\n", p->privatekey);
+			ast_cli(a->fd, "Local Certificate: %s\n", p->localcert);
 			for (i = 0; i < p->cacount; i++) {
-				ast_cli(fd, "CA Certificate %d:  %s\n", i + 1, p->cacerts[i]);
+				ast_cli(a->fd, "CA Certificate %d:  %s\n", i + 1, p->cacerts[i]);
 			}
 			for (i = 0; i < p->spcount; i++) {
-				ast_cli(fd, "Service Point %d:   %s\n", i + 1, p->srvpoints[i]);
+				ast_cli(a->fd, "Service Point %d:   %s\n", i + 1, p->srvpoints[i]);
 			}
-			ast_cli(fd, "Max Connections:   %d\n", p->maxconnections);
-			ast_cli(fd, "Retry Delay:       %d seconds\n", p->retrydelay);
-			ast_cli(fd, "Retry Limit:       %d\n", p->retrylimit);
-			ast_cli(fd, "Timeout:           %d milliseconds\n", p->timeout);
-			ast_cli(fd, "Source:            %s\n", strlen(p->source) ? p->source : "<unspecified>");
-			ast_cli(fd, "Auth Policy        %d\n", p->authpolicy);
-			ast_cli(fd, "Default protocol   %s\n", p->defaultprotocol);
-			ast_cli(fd, "OSP Handle:        %d\n", p->handle);
+			ast_cli(a->fd, "Max Connections:   %d\n", p->maxconnections);
+			ast_cli(a->fd, "Retry Delay:       %d seconds\n", p->retrydelay);
+			ast_cli(a->fd, "Retry Limit:       %d\n", p->retrylimit);
+			ast_cli(a->fd, "Timeout:           %d milliseconds\n", p->timeout);
+			ast_cli(a->fd, "Source:            %s\n", strlen(p->source) ? p->source : "<unspecified>");
+			ast_cli(a->fd, "Auth Policy        %d\n", p->authpolicy);
+			ast_cli(a->fd, "Default protocol   %s\n", p->defaultprotocol);
+			ast_cli(a->fd, "OSP Handle:        %d\n", p->handle);
 			found++;
 		}
 		p = p->next;
@@ -1920,12 +1927,12 @@ static int osp_show(
 
 	if (!found) {
 		if (provider) {
-			ast_cli(fd, "Unable to find OSP provider '%s'\n", provider);
+			ast_cli(a->fd, "Unable to find OSP provider '%s'\n", provider);
 		} else {
-			ast_cli(fd, "No OSP providers configured\n");
-		}
+			ast_cli(a->fd, "No OSP providers configured\n");
+		}	
 	}
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 
 static const char* app1= "OSPAuth";
@@ -1986,21 +1993,15 @@ static const char* descrip4 =
 "	OSPFINISHSTATUS The status of the OSP Finish attempt as a text string, one of\n"
 "		SUCCESS | FAILED | ERROR \n";
 
-static const char osp_usage[] =
-"Usage: osp show\n"
-"       Displays information on Open Settlement Protocol support\n";
-
 static struct ast_cli_entry cli_osp[] = {
-	{ {"osp", "show", NULL},
-	osp_show, "Displays OSP information",
-	osp_usage },
+	AST_CLI_DEFINE(handle_cli_osp_show, "Displays OSF information")
 };
 
 static int load_module(void)
 {
 	int res;
 
-	if(!osp_load())
+	if (!osp_load(0))
 		return AST_MODULE_LOAD_DECLINE;
 
 	ast_cli_register_multiple(cli_osp, sizeof(cli_osp) / sizeof(struct ast_cli_entry));
@@ -2028,8 +2029,7 @@ static int unload_module(void)
 
 static int reload(void)
 {
-	osp_unload();
-	osp_load();
+	osp_load(1);
 
 	return 0;
 }

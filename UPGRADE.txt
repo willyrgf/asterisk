@@ -1,12 +1,6 @@
 Information for Upgrading From Previous Asterisk Releases
 =========================================================
 
-Manager:
-
-* The CallerID fields across Manager events have now been made more
-  consistent. CallerID Number will be sent as CallerIDNum and CallerID
-  Name will be sent as CallerIDName wherever used.
-
 AEL:
 
 * Macros are now implemented underneath with the Gosub() application.
@@ -16,6 +10,10 @@ AEL:
   best to insert a Return() app call at the end of your macro if you did
   not include it, but really, you should make sure that all execution
   paths within your macros end in "return;".
+
+* The conf2ael program is 'introduced' in this release; it is in a rather
+  crude state, but deemed useful for making a first pass at converting
+  extensions.conf code into AEL. More intelligence will come with time.
 
 Core:
 
@@ -44,6 +42,13 @@ Core:
   to work correctly in 1.4 and previous versions.  This should make writing
   dialplans less painful in the future, albeit with the pain of a one-time
   conversion.
+
+* The logger.conf option 'rotatetimestamp' has been deprecated in favor of
+  'rotatestrategy'.  This new option supports a 'rotate' strategy that more
+  closely mimics the system logger in terms of file rotation.
+
+* The concise versions of various CLI commands are now deprecated. We recommend
+  using the manager interface (AMI) for application integration with Asterisk.
 
 Voicemail:
 
@@ -76,6 +81,16 @@ Applications:
   introduced dialplan functions LOCK(), TRYLOCK(), and UNLOCK().  You may use
   these functions in any location where you desire to ensure that only one
   channel is executing that path at any one time.
+* Read() now sets a READSTATUS variable on exit.  It does NOT automatically
+  return -1 (and hangup) anymore on error.  If you want to hangup on error,
+  you need to do so explicitly in your dialplan.
+* Privacy() no longer uses privacy.conf, so any options must be specified
+  directly in the application arguments.
+
+Dialplan Functions:
+
+* QUEUE_MEMBER_COUNT() has been deprecated in favor of the QUEUE_MEMBER() function. For
+  more information, issue a "show function QUEUE_MEMBER" from the CLI.
 
 CDR:
 
@@ -83,25 +98,59 @@ CDR:
   cdr_sqlite3_custom.  It will potentially be removed from the tree
   after Asterisk 1.6 is released.
 
+* The cdr_odbc module now uses res_odbc to manage its connections.  The
+  username and password parameters in cdr_odbc.conf, therefore, are no
+  longer used.  The dsn parameter now points to an entry in res_odbc.conf.
+
 Formats:
 
 * format_wav: The GAIN preprocessor definition and source code that used it
   is removed.  This change was made in response to user complaints of
-  choppiness or the clipping of loud signal peaks.  To increasing the volume
+  choppiness or the clipping of loud signal peaks.  To increase the volume
   of voicemail messages, use the 'volgain' option in voicemail.conf
 
 Channel Drivers:
 
-* chan_sip.c: a small upgrade to support the "Record" button on the SNOM360,
+* SIP: a small upgrade to support the "Record" button on the SNOM360,
   which sends a sip INFO message with a "Record: on" or "Record: off" 
-  header. If asterisk is set up (via features.conf) to accept "One Touch Monitor"
+  header. If Asterisk is set up (via features.conf) to accept "One Touch Monitor"
   requests (by default, via '*1'), then the user-configured dialpad sequence
   is generated, and recording can be started and stopped via this button. The
   file names and formats are all controlled via the normal mechanisms. If the
   user has not configured the automon feature, the normal "415 Unsupported media type"
   is returned, and nothing is done.
+* SIP: The "call-limit" option is marked as deprecated. It still works in this version of
+  Asterisk, but will be removed in the following version. Please use the groupcount functions
+  in the dialplan to enforce call limits. The "limitonpeer" configuration option is
+  now renamed to "counteronpeer".
+* SIP: The "username" option is now renamed to "defaultuser" to match "defaultip".
+  These are used only before registration to call a peer with the uri 
+	sip:defaultuser@defaultip
+  The "username" setting still work, but is deprecated and will not work in 
+  the next version of Asterisk.
 
 * chan_local.c: the comma delimiter inside the channel name has been changed to a
   semicolon, in order to make the Local channel driver compatible with the comma
   delimiter change in applications.
+* H323: The "tos" setting has changed name to "tos_audio" and "cos" to "cos_audio"
+  to be compatible with settings in sip.conf. The "tos" and "cos" configuration
+  is deprecated and will stop working in the next release of Asterisk.
+
+Configuration:
+
+* pbx_dundi.c: tos parameter changed to use new values. Old values like lowdelay,
+  lowcost and other is not acceptable now. Look into qos.tex for description of 
+  this parameter.
+
+Manager:
+
+* Manager has been upgraded to version 1.1 with a lot of changes. 
+  Please check doc/manager_1_1.txt for information
+
+* The IAXpeers command output has been changed to more closely resemble the
+  output of the SIPpeers command.
+
+* cdr_manager now reports at the "cdr" level, not at "call"  You may need to
+   change your manager.conf to add the level to existing AMI users, if they
+   want to see the CDR events generated.
 

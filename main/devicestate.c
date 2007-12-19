@@ -112,21 +112,14 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <sys/types.h>
-#include <unistd.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdio.h>
-
+#include "asterisk/_private.h"
 #include "asterisk/channel.h"
 #include "asterisk/utils.h"
 #include "asterisk/lock.h"
 #include "asterisk/linkedlists.h"
-#include "asterisk/logger.h"
 #include "asterisk/devicestate.h"
 #include "asterisk/pbx.h"
 #include "asterisk/app.h"
-#include "asterisk/options.h"
 #include "asterisk/event.h"
 
 /*! \brief Device state strings for printing */
@@ -372,7 +365,7 @@ int ast_devstate_prov_del(const char *label)
 	AST_RWLIST_WRLOCK(&devstate_provs);
 	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&devstate_provs, devcb, list) {
 		if (!strcasecmp(devcb->label, label)) {
-			AST_RWLIST_REMOVE_CURRENT(&devstate_provs, list);
+			AST_RWLIST_REMOVE_CURRENT(list);
 			ast_free(devcb);
 			res = 0;
 			break;

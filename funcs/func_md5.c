@@ -30,17 +30,8 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/types.h>
-
 #include "asterisk/module.h"
-#include "asterisk/channel.h"
 #include "asterisk/pbx.h"
-#include "asterisk/logger.h"
-#include "asterisk/utils.h"
-#include "asterisk/app.h"
 
 static int md5(struct ast_channel *chan, const char *cmd, char *data,
 	       char *buf, size_t len)

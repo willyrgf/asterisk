@@ -36,19 +36,13 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define DEBUG(a) 
 #endif
 
-#include <stdio.h>
-#include <stdlib.h>
 #include <sys/time.h>
-#include <unistd.h>
-#include <string.h>
 
 #include "asterisk/sched.h"
-#include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/lock.h"
 #include "asterisk/utils.h"
 #include "asterisk/linkedlists.h"
-#include "asterisk/options.h"
 
 struct sched {
 	AST_LIST_ENTRY(sched) list;
@@ -56,7 +50,7 @@ struct sched {
 	struct timeval when;          /*!< Absolute time event should take place */
 	int resched;                  /*!< When to reschedule */
 	int variable;                 /*!< Use return value from callback to reschedule */
-	void *data;                   /*!< Data */
+	const void *data;             /*!< Data */
 	ast_sched_cb callback;        /*!< Callback */
 };
 
@@ -177,11 +171,11 @@ static void schedule(struct sched_context *con, struct sched *s)
 	
 	AST_LIST_TRAVERSE_SAFE_BEGIN(&con->schedq, cur, list) {
 		if (ast_tvcmp(s->when, cur->when) == -1) {
-			AST_LIST_INSERT_BEFORE_CURRENT(&con->schedq, s, list);
+			AST_LIST_INSERT_BEFORE_CURRENT(s, list);
 			break;
 		}
 	}
-	AST_LIST_TRAVERSE_SAFE_END
+	AST_LIST_TRAVERSE_SAFE_END;
 	if (!cur)
 		AST_LIST_INSERT_TAIL(&con->schedq, s, list);
 	
@@ -207,11 +201,18 @@ static int sched_settime(struct timeval *tv, int when)
 	return 0;
 }
 
+int ast_sched_replace_variable(int old_id, struct sched_context *con, int when, ast_sched_cb callback, const void *data, int variable)
+{
+	/* 0 means the schedule item is new; do not delete */
+	if (old_id > 0)
+		ast_sched_del(con, old_id);
+	return ast_sched_add_variable(con, when, callback, data, variable);
+}
 
 /*! \brief
  * Schedule callback(data) to happen when ms into the future
  */
-int ast_sched_add_variable(struct sched_context *con, int when, ast_sched_cb callback, void *data, int variable)
+int ast_sched_add_variable(struct sched_context *con, int when, ast_sched_cb callback, const void *data, int variable)
 {
 	struct sched *tmp;
 	int res = -1;
@@ -244,7 +245,14 @@ int ast_sched_add_variable(struct sched_context *con, int when, ast_sched_cb cal
 	return res;
 }
 
-int ast_sched_add(struct sched_context *con, int when, ast_sched_cb callback, void *data)
+int ast_sched_replace(int old_id, struct sched_context *con, int when, ast_sched_cb callback, const void *data)
+{
+	if (old_id > -1)
+		ast_sched_del(con, old_id);
+	return ast_sched_add(con, when, callback, data);
+}
+
+int ast_sched_add(struct sched_context *con, int when, ast_sched_cb callback, const void *data)
 {
 	return ast_sched_add_variable(con, when, callback, data, 0);
 }
@@ -264,13 +272,13 @@ int ast_sched_del(struct sched_context *con, int id)
 	ast_mutex_lock(&con->lock);
 	AST_LIST_TRAVERSE_SAFE_BEGIN(&con->schedq, s, list) {
 		if (s->id == id) {
-			AST_LIST_REMOVE_CURRENT(&con->schedq, list);
+			AST_LIST_REMOVE_CURRENT(list);
 			con->schedcnt--;
 			sched_release(con, s);
 			break;
 		}
 	}
-	AST_LIST_TRAVERSE_SAFE_END
+	AST_LIST_TRAVERSE_SAFE_END;
 
 #ifdef DUMP_SCHEDULER
 	/* Dump contents of the context while we have the lock so nothing gets screwed up by accident. */

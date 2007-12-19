@@ -32,21 +32,7 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <unistd.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <stdlib.h>
-#include <sys/time.h>
-#include <stdio.h>
-#include <errno.h>
-#include <string.h>
-
-#include "asterisk/lock.h"
-#include "asterisk/options.h"
-#include "asterisk/channel.h"
-#include "asterisk/file.h"
-#include "asterisk/logger.h"
-#include "asterisk/sched.h"
+#include "asterisk/mod_format.h"
 #include "asterisk/module.h"
 #include "asterisk/endian.h"
 
@@ -76,7 +62,7 @@ struct g726_desc  {
  */
 static int g726_open(struct ast_filestream *tmp, int rate)
 {
-	struct g726_desc *s = (struct g726_desc *)tmp->private;
+	struct g726_desc *s = (struct g726_desc *)tmp->_private;
 	s->rate = rate;
 	ast_debug(1, "Created filestream G.726-%dk.\n", 40 - s->rate * 8);
 	return 0;
@@ -129,7 +115,7 @@ static int g726_16_rewrite(struct ast_filestream *s, const char *comment)
 static struct ast_frame *g726_read(struct ast_filestream *s, int *whennext)
 {
 	int res;
-	struct g726_desc *fs = (struct g726_desc *)s->private;
+	struct g726_desc *fs = (struct g726_desc *)s->_private;
 
 	/* Send a frame from the file to the appropriate channel */
 	s->fr.frametype = AST_FRAME_VOICE;
@@ -149,7 +135,7 @@ static struct ast_frame *g726_read(struct ast_filestream *s, int *whennext)
 static int g726_write(struct ast_filestream *s, struct ast_frame *f)
 {
 	int res;
-	struct g726_desc *fs = (struct g726_desc *)s->private;
+	struct g726_desc *fs = (struct g726_desc *)s->_private;
 
 	if (f->frametype != AST_FRAME_VOICE) {
 		ast_log(LOG_WARNING, "Asked to write non-voice frame!\n");
@@ -255,10 +241,10 @@ static int load_module(void)
 	for (i = 0; f[i].format ; i++) {
 		if (ast_format_register(&f[i])) {	/* errors are fatal */
 			ast_log(LOG_WARNING, "Failed to register format %s.\n", f[i].name);
-			return -1;
+			return AST_MODULE_LOAD_FAILURE;
 		}
 	}
-	return 0;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 static int unload_module(void)

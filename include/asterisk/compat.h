@@ -11,15 +11,67 @@
 
 /*! \file
  * \brief General Definitions for Asterisk top level program
+ * Included by asterisk.h to handle platform-specific issues
+ * especially those related to header files.
  */
+
+#include "asterisk/compiler.h"
 
 #ifndef _COMPAT_H
 #define _COMPAT_H
 
-#include "asterisk/autoconfig.h"
+#ifndef __STDC_VERSION__
+/* flex output wants to find this defined. */
+#define	__STDC_VERSION__ 0
+#endif
+
+#ifdef HAVE_INTTYPES_H
 #include <inttypes.h>
+#endif
+
+#ifdef HAVE_LIMITS_H
+#include <limits.h>
+#endif
+
+#ifdef HAVE_UNISTD_H
+#include <unistd.h>
+#endif
+
+#ifdef HAVE_STDDEF_H
+#include <stddef.h>
+#endif
+
+#ifdef HAVE_STDINT_H
+#include <stdint.h>
+#endif
+
+#ifdef HAVE_SYS_TYPES_H
 #include <sys/types.h>
+#endif
+
 #include <stdarg.h>
+
+#ifdef HAVE_STDLIB_H
+#include <stdlib.h>
+#endif
+
+#ifdef HAVE_ALLOCA_H
+#include <alloca.h>    /* not necessarily present - could be in stdlib */
+#elif defined(HAVE_ALLOCA) && defined(__MINGW32__)
+#include <malloc.h>    /* see if it is here... */
+#endif
+
+#include <stdio.h>	/* this is always present */
+
+#ifdef HAVE_STRING_H
+#include <string.h>
+#endif
+
+#ifdef HAVE_SYS_POLL_H
+#include <sys/poll.h>
+#else
+#include "asterisk/poll-compat.h"
+#endif
 
 #if !defined(HAVE_ASPRINTF) && !defined(__AST_DEBUG_MALLOC)
 int asprintf(char **str, const char *fmt, ...);
@@ -69,6 +121,8 @@ size_t strlcat(char *dst, const char *src, size_t siz);
 size_t strlcpy(char *dst, const char *src, size_t siz);
 #endif
 
+#include <errno.h>
+
 #ifdef SOLARIS
 #define __BEGIN_DECLS
 #define __END_DECLS
@@ -84,6 +138,7 @@ size_t strlcpy(char *dst, const char *src, size_t siz);
 #include <sys/stat.h>
 #include <signal.h>
 #include <netinet/in.h>
+#include <sys/loadavg.h>
 #include <dat/dat_platform_specific.h>
 
 #ifndef BYTE_ORDER

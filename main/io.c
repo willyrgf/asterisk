@@ -27,17 +27,11 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdio.h>
-#include <unistd.h>
-#include <stdlib.h>
 #include <termios.h>
-#include <string.h>
 #include <sys/ioctl.h>
 
 #include "asterisk/io.h"
-#include "asterisk/logger.h"
 #include "asterisk/utils.h"
-#include "asterisk/options.h"
 
 #ifdef DEBUG_IO
 #define DEBUG DEBUG_M

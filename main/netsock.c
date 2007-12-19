@@ -29,38 +29,12 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/time.h>
-#include <signal.h>
-#include <errno.h>
-#include <unistd.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <sys/socket.h>
-#include <netdb.h>
-#include <net/if.h>
-#include <netinet/in_systm.h>
-#include <netinet/ip.h>
-#include <sys/ioctl.h>
-
-#if defined(__OpenBSD__) || defined(__NetBSD__) || defined(__FreeBSD__)
-#include <fcntl.h>
-#include <net/route.h>
-#endif
-
 #if defined (SOLARIS)
 #include <sys/sockio.h>
 #endif
 
 #include "asterisk/netsock.h"
-#include "asterisk/logger.h"
-#include "asterisk/channel.h"
-#include "asterisk/options.h"
 #include "asterisk/utils.h"
-#include "asterisk/lock.h"
-#include "asterisk/srv.h"
 
 struct ast_netsock {
 	ASTOBJ_COMPONENTS(struct ast_netsock);
@@ -143,7 +117,7 @@ struct ast_netsock *ast_netsock_bindaddr(struct ast_netsock_list *list, struct i
 		return NULL;
 	}
 
-	ast_netsock_set_qos(netsocket, tos, cos);
+	ast_netsock_set_qos(netsocket, tos, cos, "IAX2");
 		
 	ast_enable_packet_fragmentation(netsocket);
 
@@ -169,24 +143,20 @@ struct ast_netsock *ast_netsock_bindaddr(struct ast_netsock_list *list, struct i
 	return ns;
 }
 
-int ast_netsock_set_qos(int netsocket, int tos, int cos)
+int ast_netsock_set_qos(int netsocket, int tos, int cos, const char *desc)
 {
 	int res;
 	
 	if ((res = setsockopt(netsocket, IPPROTO_IP, IP_TOS, &tos, sizeof(tos))))
-		ast_log(LOG_WARNING, "Unable to set TOS to %d\n", tos);
-	else {
-	    if (option_verbose > 1)
-		ast_verbose(VERBOSE_PREFIX_2 "Using TOS bits %d\n", tos);
-	}
+		ast_log(LOG_WARNING, "Unable to set %s TOS to %d, may be you have no root privileges\n", desc, tos);
+	else if (tos)
+                ast_verb(2, "Using %s TOS bits %d\n", desc, tos);
 
 #if defined(linux)								
 	if (setsockopt(netsocket, SOL_SOCKET, SO_PRIORITY, &cos, sizeof(cos)))
-	    ast_log(LOG_WARNING, "Unable to set CoS to %d\n", cos);
-	else {
-	    if (option_verbose > 1)
-		ast_verbose(VERBOSE_PREFIX_2 "Using CoS mark %d\n", cos);
-	}
+		ast_log(LOG_WARNING, "Unable to set %s CoS to %d\n", desc, cos);
+	else if (cos)
+		ast_verb(2, "Using %s CoS mark %d\n", desc, cos);
 #endif
 							
 	return res;

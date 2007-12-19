@@ -37,30 +37,21 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
-
+#include "asterisk/paths.h"	/* use ast_config_AST_MONITOR_DIR */
 #include "asterisk/file.h"
-#include "asterisk/logger.h"
-#include "asterisk/channel.h"
 #include "asterisk/audiohook.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
-#include "asterisk/lock.h"
 #include "asterisk/cli.h"
-#include "asterisk/options.h"
 #include "asterisk/app.h"
-#include "asterisk/linkedlists.h"
-#include "asterisk/utils.h"
+#include "asterisk/channel.h"
 
 #define get_volfactor(x) x ? ((x > 0) ? (1 << x) : ((1 << abs(x)) * -1)) : 0
 
 static const char *app = "MixMonitor";
 static const char *synopsis = "Record a call and mix the audio during the recording";
 static const char *desc = ""
-"  MixMonitor(<file>.<ext>[,<options>[,<command>]])\n\n"
+"  MixMonitor(<file>.<ext>[,<options>[,<command>]]):\n"
 "Records the audio on the current channel to the specified file.\n"
 "If the filename is an absolute path, uses that path, otherwise\n"
 "creates the file in the configured monitoring directory from\n"
@@ -83,7 +74,7 @@ static const char *desc = ""
 static const char *stop_app = "StopMixMonitor";
 static const char *stop_synopsis = "Stop recording a call through MixMonitor";
 static const char *stop_desc = ""
-"  StopMixMonitor()\n\n"
+"  StopMixMonitor():\n"
 "Stops the audio recording that was started with a call to MixMonitor()\n"
 "on the current channel.\n"
 "";
@@ -98,6 +89,7 @@ struct mixmonitor {
 	char *post_process;
 	char *name;
 	unsigned int flags;
+	struct ast_channel *chan;
 };
 
 enum {
@@ -149,8 +141,7 @@ static void *mixmonitor_thread(void *obj)
 	char *ext;
 	int errflag = 0;
 
-	if (option_verbose > 1)
-		ast_verbose(VERBOSE_PREFIX_2 "Begin MixMonitor Recording %s\n", mixmonitor->name);
+	ast_verb(2, "Begin MixMonitor Recording %s\n", mixmonitor->name);
 	
 	ast_audiohook_lock(&mixmonitor->audiohook);
 
@@ -165,25 +156,27 @@ static void *mixmonitor_thread(void *obj)
 		if (!(fr = ast_audiohook_read_frame(&mixmonitor->audiohook, SAMPLES_PER_FRAME, AST_AUDIOHOOK_DIRECTION_BOTH, AST_FORMAT_SLINEAR)))
 			continue;
 
-		/* Initialize the file if not already done so */
-		if (!fs && !errflag) {
-			oflags = O_CREAT | O_WRONLY;
-			oflags |= ast_test_flag(mixmonitor, MUXFLAG_APPEND) ? O_APPEND : O_TRUNC;
-
-			if ((ext = strrchr(mixmonitor->filename, '.')))
-				*(ext++) = '\0';
-			else
-				ext = "raw";
-
-			if (!(fs = ast_writefile(mixmonitor->filename, ext, NULL, oflags, 0, 0644))) {
-				ast_log(LOG_ERROR, "Cannot open %s.%s\n", mixmonitor->filename, ext);
-				errflag = 1;
+		if (!ast_test_flag(mixmonitor, MUXFLAG_BRIDGED) || ast_bridged_channel(mixmonitor->chan)) {
+			/* Initialize the file if not already done so */
+			if (!fs && !errflag) {
+				oflags = O_CREAT | O_WRONLY;
+				oflags |= ast_test_flag(mixmonitor, MUXFLAG_APPEND) ? O_APPEND : O_TRUNC;
+				
+				if ((ext = strrchr(mixmonitor->filename, '.')))
+					*(ext++) = '\0';
+				else
+					ext = "raw";
+				
+				if (!(fs = ast_writefile(mixmonitor->filename, ext, NULL, oflags, 0, 0644))) {
+					ast_log(LOG_ERROR, "Cannot open %s.%s\n", mixmonitor->filename, ext);
+					errflag = 1;
+				}
 			}
+			
+			/* Write out frame */
+			if (fs)
+				ast_writestream(fs, fr);
 		}
-
-		/* Write out frame */
-		if (fs)
-			ast_writestream(fs, fr);
 
 		/* All done! free it. */
 		ast_frame_free(fr, 0);
@@ -194,17 +187,15 @@ static void *mixmonitor_thread(void *obj)
 	ast_audiohook_unlock(&mixmonitor->audiohook);
 	ast_audiohook_destroy(&mixmonitor->audiohook);
 
-	if (option_verbose > 1)
-		ast_verbose(VERBOSE_PREFIX_2 "End MixMonitor Recording %s\n", mixmonitor->name);
+	ast_verb(2, "End MixMonitor Recording %s\n", mixmonitor->name);
 
-	if (mixmonitor->post_process) {
-		if (option_verbose > 2)
-			ast_verbose(VERBOSE_PREFIX_2 "Executing [%s]\n", mixmonitor->post_process);
-		ast_safe_system(mixmonitor->post_process);
-	}
-		
 	if (fs)
 		ast_closestream(fs);
+
+	if (mixmonitor->post_process) {
+		ast_verb(2, "Executing [%s]\n", mixmonitor->post_process);
+		ast_safe_system(mixmonitor->post_process);
+	}
 
 	ast_free(mixmonitor);
 
@@ -222,6 +213,7 @@ static void launch_monitor_thread(struct ast_channel *chan, const char *filename
 
 	len = sizeof(*mixmonitor) + strlen(chan->name) + strlen(filename) + 2;
 
+	postprocess2[0] = 0;
 	/* If a post process system command is given attach it to the structure */
 	if (!ast_strlen_zero(post_process)) {
 		char *p1, *p2;
@@ -232,7 +224,6 @@ static void launch_monitor_thread(struct ast_channel *chan, const char *filename
 				*p2 = '$';
 			}
 		}
-
 		pbx_substitute_variables_helper(chan, p1, postprocess2, sizeof(postprocess2) - 1);
 		if (!ast_strlen_zero(postprocess2))
 			len += strlen(postprocess2) + 1;
@@ -245,6 +236,7 @@ static void launch_monitor_thread(struct ast_channel *chan, const char *filename
 
 	/* Copy over flags and channel name */
 	mixmonitor->flags = flags;
+	mixmonitor->chan = chan;
 	mixmonitor->name = (char *) mixmonitor + sizeof(*mixmonitor);
 	strcpy(mixmonitor->name, chan->name);
 	if (!ast_strlen_zero(postprocess2)) {
@@ -257,11 +249,16 @@ static void launch_monitor_thread(struct ast_channel *chan, const char *filename
 
 	/* Setup the actual spy before creating our thread */
 	if (ast_audiohook_init(&mixmonitor->audiohook, AST_AUDIOHOOK_TYPE_SPY, mixmonitor_spy_type)) {
-		free(mixmonitor);
+		ast_free(mixmonitor);
 		return;
 	}
 
 	ast_set_flag(&mixmonitor->audiohook, AST_AUDIOHOOK_TRIGGER_WRITE);
+
+	if (readvol)
+		mixmonitor->audiohook.options.read_volume = readvol;
+	if (writevol)
+		mixmonitor->audiohook.options.write_volume = writevol;
 
 	if (startmon(chan, &mixmonitor->audiohook)) {
 		ast_log(LOG_WARNING, "Unable to add '%s' spy to channel '%s'\n",
@@ -362,46 +359,44 @@ static int stop_mixmonitor_exec(struct ast_channel *chan, void *data)
 	return 0;
 }
 
-static int mixmonitor_cli(int fd, int argc, char **argv) 
+static char *handle_cli_mixmonitor(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	struct ast_channel *chan;
 
-	if (argc < 3)
-		return RESULT_SHOWUSAGE;
-
-	if (!(chan = ast_get_channel_by_name_prefix_locked(argv[2], strlen(argv[2])))) {
-		ast_cli(fd, "No channel matching '%s' found.\n", argv[2]);
-		return RESULT_SUCCESS;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "mixmonitor [start|stop]";
+		e->usage =
+			"Usage: mixmonitor <start|stop> <chan_name> [args]\n"
+			"       The optional arguments are passed to the MixMonitor\n"
+			"       application when the 'start' command is used.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return ast_complete_channels(a->line, a->word, a->pos, a->n, 2);
 	}
 
-	if (!strcasecmp(argv[1], "start")) {
-		mixmonitor_exec(chan, argv[3]);
+	if (a->argc < 3)
+		return CLI_SHOWUSAGE;
+
+	if (!(chan = ast_get_channel_by_name_prefix_locked(a->argv[2], strlen(a->argv[2])))) {
+		ast_cli(a->fd, "No channel matching '%s' found.\n", a->argv[2]);
+		/* Technically this is a failure, but we don't want 2 errors printing out */
+		return CLI_SUCCESS;
+	}
+
+	if (!strcasecmp(a->argv[1], "start")) {
+		mixmonitor_exec(chan, a->argv[3]);
 		ast_channel_unlock(chan);
 	} else {
 		ast_channel_unlock(chan);
 		ast_audiohook_detach_source(chan, mixmonitor_spy_type);
 	}
 
-	return RESULT_SUCCESS;
-}
-
-static char *complete_mixmonitor_cli(const char *line, const char *word, int pos, int state)
-{
-	char *options[] = {"start", "stop", NULL};
-
-	if (pos == 1)
-		return ast_cli_complete (word, options, state);
-
-	return ast_complete_channels(line, word, pos, state, 2);
+	return CLI_SUCCESS;
 }
 
 static struct ast_cli_entry cli_mixmonitor[] = {
-	{ { "mixmonitor", NULL, NULL },
-	mixmonitor_cli, "Execute a MixMonitor command.",
-	"mixmonitor <start|stop> <chan_name> [args]\n\n"
-	"The optional arguments are passed to the\n"
-	"MixMonitor application when the 'start' command is used.\n",
-	complete_mixmonitor_cli },
+	AST_CLI_DEFINE(handle_cli_mixmonitor, "Execute a MixMonitor command")
 };
 
 static int unload_module(void)

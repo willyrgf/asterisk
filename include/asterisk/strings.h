@@ -23,12 +23,7 @@
 #ifndef _ASTERISK_STRINGS_H
 #define _ASTERISK_STRINGS_H
 
-#include <string.h>
-#include <stdarg.h>
-
 #include "asterisk/inline_api.h"
-#include "asterisk/compiler.h"
-#include "asterisk/compat.h"
 #include "asterisk/utils.h"
 #include "asterisk/threadstorage.h"
 
@@ -42,7 +37,13 @@ static force_inline int ast_strlen_zero(const char *s)
 /*! \brief returns the equivalent of logic or for strings:
  * first one if not empty, otherwise second one.
  */
-#define S_OR(a, b)	(!ast_strlen_zero(a) ? (a) : (b))
+#define S_OR(a, b)           (!ast_strlen_zero(a) ? (a) : (b))
+
+/*! \brief returns the equivalent of logic or for strings, with an additional boolean check:
+ * second one if not empty and first one is true, otherwise third one.
+ * example: S_COR(usewidget, widget, "<no widget>")
+ */
+#define S_COR(a, b, c)   ((a && !ast_strlen_zero(b)) ? (b) : (c))
 
 /*!
   \brief Gets a pointer to the first non-whitespace character in a string.
@@ -53,7 +54,7 @@ static force_inline int ast_strlen_zero(const char *s)
 AST_INLINE_API(
 char *ast_skip_blanks(const char *str),
 {
-	while (*str && *str < 33)
+	while (*str && ((unsigned char) *str) < 33)
 		str++;
 	return (char *)str;
 }
@@ -78,7 +79,7 @@ char *ast_trim_blanks(char *str),
 		   actually set anything unless we must, and it's easier just
 		   to set each position to \0 than to keep track of a variable
 		   for it */
-		while ((work >= str) && *work < 33)
+		while ((work >= str) && ((unsigned char) *work) < 33)
 			*(work--) = '\0';
 	}
 	return str;
@@ -94,7 +95,7 @@ char *ast_trim_blanks(char *str),
 AST_INLINE_API(
 char *ast_skip_nonblanks(char *str),
 {
-	while (*str && *str > 32)
+	while (*str && ((unsigned char) *str) > 32)
 		str++;
 	return str;
 }
@@ -145,6 +146,13 @@ char *ast_strip(char *s),
   \endcode
  */
 char *ast_strip_quoted(char *s, const char *beg_quotes, const char *end_quotes);
+
+/*!
+  \brief Strip backslash for "escaped" semicolons.
+  \brief s The string to be stripped (will be modified).
+  \return The stripped string.
+ */
+char *ast_unescape_semicolon(char *s);
 
 /*!
   \brief Size-limited null-terminating string copy.
@@ -230,14 +238,14 @@ int ast_true(const char *val);
 int ast_false(const char *val);
 
 /*
-  \brief Join an array of strings into a single string.
-  \param s the resulting string buffer
-  \param len the length of the result buffer, s
-  \param w an array of strings to join
-
-  This function will join all of the strings in the array 'w' into a single
-  string.  It will also place a space in the result buffer in between each
-  string from 'w'.
+ *  \brief Join an array of strings into a single string.
+ * \param s the resulting string buffer
+ * \param len the length of the result buffer, s
+ * \param w an array of strings to join.
+ *
+ * This function will join all of the strings in the array 'w' into a single
+ * string.  It will also place a space in the result buffer in between each
+ * string from 'w'.
 */
 void ast_join(char *s, size_t len, char * const w[]);
 
@@ -410,7 +418,6 @@ int ast_str_make_space(struct ast_str **buf, size_t new_len),
 		buf->str[0] = '\0';			\
 		(buf);					\
 	})
-
 
 /*!
  * \brief Retrieve a thread locally stored dynamic string
@@ -654,5 +661,23 @@ int __attribute__ ((format (printf, 3, 4))) ast_str_append(
 	return res;
 }
 )
+
+/*!
+ * \brief Compute a hash value on a string
+ *
+ * This famous hash algorithm was written by Dan Bernstein and is
+ * commonly used.
+ *
+ * http://www.cse.yorku.ca/~oz/hash.html
+ */
+static force_inline int ast_str_hash(const char *str)
+{
+	int hash = 5381;
+
+	while (*str)
+		hash = hash * 33 ^ *str++;
+
+	return abs(hash);
+}
 
 #endif /* _ASTERISK_STRINGS_H */

@@ -30,13 +30,10 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-
 #include "asterisk/module.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/utils.h"
-#include "asterisk/linkedlists.h"
 #include "asterisk/audiohook.h"
 
 struct volume_information {
@@ -58,8 +55,8 @@ static void destroy_callback(void *data)
 
 /*! \brief Static structure for datastore information */
 static const struct ast_datastore_info volume_datastore = {
-        .type = "volume",
-        .destroy = destroy_callback
+	.type = "volume",
+	.destroy = destroy_callback
 };
 
 static int volume_callback(struct ast_audiohook *audiohook, struct ast_channel *chan, struct ast_frame *frame, enum ast_audiohook_direction direction)

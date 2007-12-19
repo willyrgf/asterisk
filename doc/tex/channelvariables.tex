@@ -4,8 +4,8 @@ There are two levels of parameter evaluation done in the Asterisk
 dial plan in extensions.conf.
 \begin{enumerate}
 \item The first, and most frequently used, is the substitution of variable
-  references with their values. 
-\item Then there are the evaluations of expressions done in \$[ .. ]. 
+  references with their values.
+\item Then there are the evaluations of expressions done in \$[ .. ].
   This will be discussed below.
 \end{enumerate}
 Asterisk has user-defined variables and standard variables set
@@ -13,149 +13,172 @@ by various modules in Asterisk. These standard variables are
 listed at the end of this document.
 
 \section{Parameter Quoting}
+\begin{astlisting}
 \begin{verbatim}
 exten => s,5,BackGround,blabla
 \end{verbatim}
-The parameter (blabla) can be quoted ("blabla"). In this case, a 
+\end{astlisting}
+The parameter (blabla) can be quoted ("blabla"). In this case, a
 comma does not terminate the field. However, the double quotes
 will be passed down to the Background command, in this example.
 
 Also, characters special to variable substitution, expression evaluation, etc
-(see below), can be quoted. For example, to literally use a \$ on the 
+(see below), can be quoted. For example, to literally use a \$ on the
 string "\$1231", quote it with a preceding \textbackslash. Special characters that must
-be quoted to be used, are [ ] \$ " \textbackslash. (to write \textbackslash itself, use \textbackslash). 
+be quoted to be used, are [ ] \$ " \textbackslash. (to write \textbackslash itself, use \textbackslash).
 
 These Double quotes and escapes are evaluated at the level of the
-asterisk config file parser. 
+asterisk config file parser.
 
 Double quotes can also be used inside expressions, as discussed below.
 
 \section{Variables}
 
-Parameter strings can include variables. Variable names are arbitrary strings. 
-They are stored in the respective channel structure. 
+Parameter strings can include variables. Variable names are arbitrary strings.
+They are stored in the respective channel structure.
 
-To set a variable to a particular value, do: 
+To set a variable to a particular value, do:
+\begin{astlisting}
 \begin{verbatim}
     exten => 1,2,Set(varname=value)
 \end{verbatim}
-You can substitute the value of a variable everywhere using \${variablename}.
-For example, to stringwise append \$lala to \$blabla and store result in \$koko, 
-do: 
+\end{astlisting}
+You can substitute the value of a variable everywhere using \$\{variablename\}.
+For example, to stringwise append \$lala to \$blabla and store result in \$koko,
+do:
+\begin{astlisting}
 \begin{verbatim}
    exten => 1,2,Set(koko=${blabla}${lala})
 \end{verbatim}
+\end{astlisting}
 
-There are two reference modes - reference by value and reference by name. 
-To refer to a variable with its name (as an argument to a function that 
-requires a variable), just write the name. To refer to the variable's value, 
-enclose it inside \${}. For example, Set takes as the first argument 
-(before the =) a variable name, so: 
+There are two reference modes - reference by value and reference by name.
+To refer to a variable with its name (as an argument to a function that
+requires a variable), just write the name. To refer to the variable's value,
+enclose it inside \$\{\}. For example, Set takes as the first argument
+(before the =) a variable name, so:
+\begin{astlisting}
 \begin{verbatim}
   exten => 1,2,Set(koko=lala)
   exten => 1,3,Set(${koko}=blabla)
 \end{verbatim}
-stores to the variable "koko" the value "lala" and to variable "lala" the 
-value "blabla". 
+\end{astlisting}
+stores to the variable "koko" the value "lala" and to variable "lala" the
+value "blabla".
 
-In fact, everything contained \${here} is just replaced with the value of 
-the variable "here". 
+In fact, everything contained \$\{here\} is just replaced with the value of
+the variable "here".
 
 \section{Variable Inheritance}
 
-Variable names which are prefixed by "\_" will be inherited to channels 
-that are created in the process of servicing the original channel in 
-which the variable was set.  When the inheritance takes place, the 
-prefix will be removed in the channel inheriting the variable.  If the 
-name is prefixed by "\_\_" in the channel, then the variable is 
+Variable names which are prefixed by "\_" will be inherited to channels
+that are created in the process of servicing the original channel in
+which the variable was set.  When the inheritance takes place, the
+prefix will be removed in the channel inheriting the variable.  If the
+name is prefixed by "\_\_" in the channel, then the variable is
 inherited and the "\_\_" will remain intact in the new channel.
 
-In the dialplan, all references to these variables refer to the same 
-variable, regardless of having a prefix or not.  Note that setting any 
-version of the variable removes any other version of the variable, 
+In the dialplan, all references to these variables refer to the same
+variable, regardless of having a prefix or not.  Note that setting any
+version of the variable removes any other version of the variable,
 regardless of prefix.
 
 \subsection{Example}
+\begin{astlisting}
 \begin{verbatim}
-Set(__FOO=bar) ; Sets an inherited version of "FOO" variable 
-Set(FOO=bar)   ; Removes the inherited version and sets a local 
+Set(__FOO=bar) ; Sets an inherited version of "FOO" variable
+Set(FOO=bar)   ; Removes the inherited version and sets a local
                ; variable.
-
-However,
-
-NoOp(${__FOO}) is identical to NoOp(${FOO})
 \end{verbatim}
+\end{astlisting}
 
+However, NoOp(\$\{\_\_FOO\}) is identical to NoOp(\$\{FOO\})
 
 \section{Selecting Characters from Variables}
 
 The format for selecting characters from a variable can be expressed as:
+\begin{astlisting}
 \begin{verbatim}
   ${variable_name[:offset[:length]]}
 \end{verbatim}
+\end{astlisting}
 If you want to select the first N characters from the string assigned
 to a variable, simply append a colon and the number of characters to
 skip from the beginning of the string to the variable name.
+\begin{astlisting}
 \begin{verbatim}
   ; Remove the first character of extension, save in "number" variable
   exten => _9X.,1,Set(number=${EXTEN:1})
 \end{verbatim}
+\end{astlisting}
 Assuming we've dialed 918005551234, the value saved to the 'number' variable
-would be 18005551234. This is useful in situations when we require users to 
-dial a number to access an outside line, but do not wish to pass the first 
+would be 18005551234. This is useful in situations when we require users to
+dial a number to access an outside line, but do not wish to pass the first
 digit.
 
-If you use a negative offset number, Asterisk starts counting from the end 
+If you use a negative offset number, Asterisk starts counting from the end
 of the string and then selects everything after the new position. The following
 example will save the numbers 1234 to the 'number' variable, still assuming
 we've dialed 918005551234.
+\begin{astlisting}
 \begin{verbatim}
   ; Remove everything before the last four digits of the dialed string
   exten => _9X.,1,Set(number=${EXTEN:-4})
 \end{verbatim}
+\end{astlisting}
 We can also limit the number of characters from our offset position that we
 wish to use. This is done by appending a second colon and length value to the
 variable name. The following example will save the numbers 555 to the 'number'
 variable.
+\begin{astlisting}
 \begin{verbatim}
   ; Only save the middle numbers 555 from the string 918005551234
   exten => _9X.,1,Set(number=${EXTEN:5:3})
 \end{verbatim}
+\end{astlisting}
 The length value can also be used in conjunction with a negative offset. This
 may be useful if the length of the string is unknown, but the trailing digits
 are. The following example will save the numbers 555 to the 'number' variable,
 even if the string starts with more characters than expected (unlike the
 previous example).
+\begin{astlisting}
 \begin{verbatim}
   ; Save the numbers 555 to the 'number' variable
   exten => _9X.,1,Set(number=${EXTEN:-7:3})
 \end{verbatim}
+\end{astlisting}
 If a negative length value is entered, Asterisk will remove that many characters
 from the end of the string.
+\begin{astlisting}
 \begin{verbatim}
   ; Set pin to everything but the trailing #.
   exten => _XXXX#,1,Set(pin=${EXTEN:0:-1})
 \end{verbatim}
+\end{astlisting}
 
-\section{Expressions} 
+\section{Expressions}
 
-Everything contained inside a bracket pair prefixed by a \$ (like \$[this]) is 
-considered as an expression and it is evaluated. Evaluation works similar to 
-(but is done on a later stage than) variable substitution: the expression 
-(including the square brackets) is replaced by the result of the expression 
-evaluation. 
+Everything contained inside a bracket pair prefixed by a \$ (like \$[this]) is
+considered as an expression and it is evaluated. Evaluation works similar to
+(but is done on a later stage than) variable substitution: the expression
+(including the square brackets) is replaced by the result of the expression
+evaluation.
 
 For example, after the sequence:
+\begin{astlisting}
 \begin{verbatim}
 exten => 1,1,Set(lala=$[1 + 2])
 exten => 1,2,Set(koko=$[2 * ${lala}])
 \end{verbatim}
+\end{astlisting}
 the value of variable koko is "6".
 
 and, further:
+\begin{astlisting}
 \begin{verbatim}
 exten => 1,1,Set,(lala=$[  1 +    2   ]);
 \end{verbatim}
+\end{astlisting}
 will parse as intended. Extra spaces are ignored.
 
 
@@ -169,9 +192,11 @@ The double quotes will be counted as part of that lexical token.
 
 As an example:
 
+\begin{astlisting}
 \begin{verbatim}
-exten => s,6,GotoIf($[ "${CALLERID(name)}" : "Privacy Manager" ]?callerid-liar|s|1:s|7)
+exten => s,6,GotoIf($[ "${CALLERID(name)}" : "Privacy Manager" ]?callerid-liar,s,1:s,7)
 \end{verbatim}
+\end{astlisting}
 
 The variable CALLERID(name) could evaluate to "DELOREAN MOTORS" (with a space)
 but the above will evaluate to:
@@ -189,13 +214,13 @@ DELOREAN MOTORS : Privacy Manager
 \end{verbatim}
 
 and will result in syntax errors, because token DELOREAN is immediately
-followed by token MOTORS and the expression parser will not know how to 
+followed by token MOTORS and the expression parser will not know how to
 evaluate this expression, because it does not match its grammar.
 
 \subsection{Operators}
 
 Operators are listed below in order of increasing precedence.  Operators
-with equal precedence are grouped within { } symbols.
+with equal precedence are grouped within \{ \} symbols.
 
 \begin{itemize}
   \item \verb!expr1 | expr2!
@@ -246,8 +271,8 @@ with equal precedence are grouped within { } symbols.
        regular expression.  The regular expression is anchored to the
        beginning of  the string with an implicit `\^'.
 
-       If the match succeeds and the pattern contains at least one regular 
-       expression subexpression `\(...\)', the string corresponing 
+       If the match succeeds and the pattern contains at least one regular
+       expression subexpression `\(...\)', the string corresponing
        to `\textbackslash1' is returned; otherwise the matching operator
        returns the number of characters matched.  If the match fails and
        the pattern contains a regular expression subexpression the null
@@ -288,13 +313,13 @@ or C derived languages.
 
 In 1.6 and above, we shifted the \$[...] expressions to be calculated
 via floating point numbers instead of integers. We use 'long double' numbers
-when possible, which provide around 16 digits of precision with 12 byte numbers. 
+when possible, which provide around 16 digits of precision with 12 byte numbers.
 
-To specify a floating point constant, the number has to have this format: D.D, where D is 
+To specify a floating point constant, the number has to have this format: D.D, where D is
 a string of base 10 digits. So, you can say 0.10, but you can't say .10 or 20.-- we hope
 this is not an excessive restriction!
 
-Floating point numbers are turned into strings via the '%g'/'%Lg' format of the printf
+Floating point numbers are turned into strings via the '\%g'/'\%Lg' format of the printf
 function set. This allows numbers to still 'look' like integers to those counting
 on integer behavior. If you were counting on 1/4 evaluating to 0, you need to now say
 TRUNC(1/4). For a list of all the truncation/rounding capabilities, see the next section.
@@ -309,7 +334,7 @@ added to the core of the Expr2 parser. Indeed, dialplan functions can be called 
 \$[..] expressions without the \$\{...\} operators. The only trouble might be in the fact that
 the arguments to these functions must be specified with a comma. If you try to call
 the MATH function, for example, and try to say 3 + MATH(7*8), the expression parser will
-evaluate 7*8 for you into 56, and the MATH function will most likely complain that its 
+evaluate 7*8 for you into 56, and the MATH function will most likely complain that its
 input doesn't make any sense.
 
 We also provide access to most of the floating point functions in the C library. (but not all of them).
@@ -323,7 +348,7 @@ surround function calls in \$[...] expressions with \$\{...\}. Don't jump to con
 though! -- you still need to wrap variable names in curly braces!
 
 \begin{enumerate}
-\item COS(x) x is in radians. Results vary from -1 to 1. 
+\item COS(x) x is in radians. Results vary from -1 to 1.
 \item SIN(x) x is in radians. Results vary from -1 to 1.
 \item TAN(x) x is in radians.
 \item ACOS(x) x should be a value between -1 and 1.
@@ -337,8 +362,7 @@ though! -- you still need to wrap variable names in curly braces!
 \item ROUND(x) rounds x to the nearest integer, but round halfway cases away from zero.
 \item RINT(x) rounds x to the nearest integer, rounding halfway cases to the nearest even integer.
 \item TRUNC(x) rounds x to the nearest integer not larger in absolute value.
-\item REMAINDER(x,y) computes the remainder of dividing x by y. The return value is x - n*y, where n is the value x/y, rounded to the nearest integer.
-If this quotient is 1/2, it is rounded to the nearest even number.
+\item REMAINDER(x,y) computes the remainder of dividing x by y. The return value is x - n*y, where n is the value x/y, rounded to the nearest integer. If this quotient is 1/2, it is rounded to the nearest even number.
 \item EXP(x) returns e to the x power.
 \item EXP2(x) returns 2 to the x power.
 \item LOG(x) returns the natural logarithm of x.
@@ -431,13 +455,12 @@ TRUNC(3.5)
 
 TRUNC(-3.5)
    returns -3.
-
 \end{verbatim}
 \end{astlisting}
 
 Of course, all of the above examples use constants, but would work the
 same if any of the numeric or string constants were replaced with a
-variable reference \${CALLERID(num)}, for instance.
+variable reference \$\{CALLERID(num)\}, for instance.
 
 
 \subsection{Numbers Vs. Strings}
@@ -450,32 +473,36 @@ case.
 
 \subsection{Conditionals}
 
-There is one conditional application - the conditional goto : 
-
+There is one conditional application - the conditional goto :
+\begin{astlisting}
 \begin{verbatim}
   exten => 1,2,GotoIf(condition?label1:label2)
 \end{verbatim}
+\end{astlisting}
 
 If condition is true go to label1, else go to label2. Labels are interpreted
 exactly as in the normal goto command.
 
 "condition" is just a string. If the string is empty or "0", the condition
-is considered to be false, if it's anything else, the condition is true. 
-This is designed to be used together with the expression syntax described 
-above, eg : 
+is considered to be false, if it's anything else, the condition is true.
+This is designed to be used together with the expression syntax described
+above, eg :
 
+\begin{astlisting}
 \begin{verbatim}
-  exten => 1,2,GotoIf($[${CALLERID(all)} = 123456]?2|1:3|1)
+  exten => 1,2,GotoIf($[${CALLERID(all)} = 123456]?2,1:3,1)
 \end{verbatim}
+\end{astlisting}
 
-Example of use : 
-
+Example of use :
+\begin{astlisting}
 \begin{verbatim}
 exten => s,2,Set(vara=1)
 exten => s,3,Set(varb=$[${vara} + 2])
 exten => s,4,Set(varc=$[${varb} * 2])
-exten => s,5,GotoIf($[${varc} = 6]?99|1:s|6)
+exten => s,5,GotoIf($[${varc} = 6]?99,1:s,6)
 \end{verbatim}
+\end{astlisting}
 
 \subsection{Parse Errors}
 
@@ -483,16 +510,20 @@ Syntax errors are now output with 3 lines.
 
 If the extensions.conf file contains a line like:
 
+\begin{astlisting}
 \begin{verbatim}
-exten => s,6,GotoIf($[ "${CALLERID(num)}"  = "3071234567" & &  "${CALLERID(name)}" : "Privacy Manager" ]?callerid-liar|s|1:s|7)
+exten => s,6,GotoIf($[ "${CALLERID(num)}"  = "3071234567" & &  "${CALLERID(name)}" : "Privacy Manager" ]?callerid-liar,s,1:s,7)
 \end{verbatim}
+\end{astlisting}
 
-You may see an error in /var/log/asterisk/messages like this:
+You may see an error in \path{/var/log/asterisk/messages} like this:
+\begin{astlisting}
 \begin{verbatim}
 Jul 15 21:27:49 WARNING[1251240752]: ast_yyerror(): syntax error: parse error, unexpected TOK_AND, expecting TOK_MINUS or TOK_LP or TOKEN; Input:
-"3072312154"  = "3071234567" & & "Steves Extension" : "Privacy Manager" 
-                               ^
+"3072312154"  = "3071234567" & & "Steves Extension" : "Privacy Manager"
+               ^
 \end{verbatim}
+\end{astlisting}
 
 The log line tells you that a syntax error was encountered. It now
 also tells you (in grand standard bison format) that it hit an "AND"
@@ -505,13 +536,15 @@ marked with the "\^" character.
 
 \subsection{NULL Strings}
 Testing to see if a string is null can be done in one of two different ways:
+\begin{astlisting}
 \begin{verbatim}
-  exten => _XX.,1,GotoIf($["${calledid}" != ""]?3) 
-
-  exten => _XX.,1,GotoIf($[foo${calledid} != foo]?3) 
+  exten => _XX.,1,GotoIf($["${calledid}" != ""]?3)
+    or
+  exten => _XX.,1,GotoIf($[foo${calledid} != foo]?3)
 \end{verbatim}
+\end{astlisting}
 
-The second example above is the way suggested by the WIKI. It will 
+The second example above is the way suggested by the WIKI. It will
 work as long as there are no spaces in the evaluated value.
 
 The first way should work in all cases, and indeed, might now
@@ -529,7 +562,7 @@ Pascal, APL, assembler, etc.
 \subsection{Incompatabilities}
 
 The asterisk expression parser has undergone some evolution. It is hoped
-that the changes will be viewed as positive. 
+that the changes will be viewed as positive.
 
 The "original" expression parser had a simple, hand-written scanner,
 and a simple bison grammar. This was upgraded to a more involved bison
@@ -545,7 +578,7 @@ allow it.
 
 If you have not touched your extensions.conf files in a year or so, the
 above upgrades may cause you some heartburn in certain circumstances, as
-several changes have been made, and these will affect asterisk's behavior on 
+several changes have been made, and these will affect asterisk's behavior on
 legacy extension.conf constructs.  The changes have been engineered
 to minimize these conflicts, but there are bound to be problems.
 
@@ -558,27 +591,27 @@ of possible concern with "legacy" extension.conf files:
    to the value '2', but '1+1' would evaluate to the string '1+1'. If this
    behavior was depended on, then the expression evaluation will break. '1+1'
    will now evaluate to '2', and something is not going to work right.
-   To keep such strings from being evaluated, simply wrap them in double 
+   To keep such strings from being evaluated, simply wrap them in double
    quotes: '  "1+1" '
 
 \item The colon operator. In versions previous to double quoting, the
-   colon operator takes the right hand string, and using it as a 
+   colon operator takes the right hand string, and using it as a
    regex pattern, looks for it in the left hand string. It is given
-   an implicit \^ operator at the beginning, meaning the pattern 
-   will match only at the beginning of the left hand string. 
+   an implicit \^ operator at the beginning, meaning the pattern
+   will match only at the beginning of the left hand string.
    If the pattern or the matching string had double quotes around
    them, these could get in the way of the pattern match. Now,
-   the wrapping double quotes are stripped from both the pattern 
+   the wrapping double quotes are stripped from both the pattern
    and the left hand string before applying the pattern. This
    was done because it recognized that the new way of
    scanning the expression doesn't use spaces to separate tokens,
-   and the average regex expression is full of operators that 
+   and the average regex expression is full of operators that
    the scanner will recognize as expression operators. Thus, unless
    the pattern is wrapped in double quotes, there will be trouble.
-   For instance,      \${VAR1} : (Who|What*)+
+   For instance,      \$\{VAR1\} : (Who$|$What*)+
    may have have worked before, but unless you wrap the pattern
    in double quotes now, look out for trouble! This is better:
-         "\${VAR1}" : "(Who|What*)+"
+         "\$\{VAR1\}" : "(Who$|$What*)+"
    and should work as previous.
 
 \item Variables and Double Quotes
@@ -599,9 +632,9 @@ of possible concern with "legacy" extension.conf files:
     match anywhere in the string. The only diff with the ':' is that
     match doesn't have to be anchored to the beginning of the string.
 
-\item  Added the conditional operator  'expr1 ? true\_expr :: false\_expr'
+\item  Added the conditional operator  'expr1 ? true\_expr : false\_expr'
     First, all 3 exprs are evaluated, and if expr1 is false, the 'false\_expr'
-    is returned as the result. See above for details. 
+    is returned as the result. See above for details.
 
 \item  Unary operators '-' and '!' were made right associative.
 \end{enumerate}
@@ -612,23 +645,29 @@ There are two utilities you can build to help debug the \$[ ] in
 your extensions.conf file.
 
 The first, and most simplistic, is to issue the command:
-
+\begin{astlisting}
+\begin{verbatim}
 make testexpr2
-
+\end{verbatim}
+\end{astlisting}
 in the top level asterisk source directory. This will build a small
 executable, that is able to take the first command line argument, and
 run it thru the expression parser. No variable substitutions will be
 performed. It might be safest to wrap the expression in single
 quotes...
-
+\begin{astlisting}
+\begin{verbatim}
 testexpr2 '2*2+2/2'
-
+\end{verbatim}
+\end{astlisting}
 is an example.
 
 And, in the utils directory, you can say:
-
-make check\_expr
-
+\begin{astlisting}
+\begin{verbatim}
+make check_expr
+\end{verbatim}
+\end{astlisting}
 and a small program will be built, that will check the file mentioned
 in the first command line argument, for any expressions that might be
 have problems when you move to flex-2.5.31.  It was originally
@@ -642,33 +681,41 @@ are any parse errors, they will be reported in the log file. You can
 use check\_expr to do a quick sanity check of the expressions in your
 extensions.conf file, to see if they pass a crude syntax check.
 
-The "simple-minded" variable substitution replaces \${varname} variable
+The "simple-minded" variable substitution replaces \$\{varname\} variable
 references with '555'. You can override the 555 for variable values,
 by entering in var=val arguments after the filename on the command
 line.  So...
-
- check\_expr /etc/asterisk/extensions.conf CALLERID(num)=3075551212 DIALSTATUS=TORTURE EXTEN=121
-
-will substitute any \${CALLERIDNUM} variable references with
-3075551212, any \${DIALSTATUS} variable references with 'TORTURE', and
-any \${EXTEN} references with '121'.  If there is any fancy stuff
-going on in the reference, like \${EXTEN:2}, then the override will
-not work. Everything in the \${...} has to match. So, to substitute
-\${EXTEN:2} references, you'd best say:
-
- check\_expr /etc/asterisk/extensions.conf CALLERID(num)=3075551212 DIALSTATUS=TORTURE EXTEN:2=121
-
+\begin{astlisting}
+\begin{verbatim}
+ check_expr /etc/asterisk/extensions.conf CALLERID(num)=3075551212 DIALSTATUS=TORTURE EXTEN=121
+\end{verbatim}
+\end{astlisting}
+will substitute any \$\{CALLERID(num)\} variable references with
+3075551212, any \$\{DIALSTATUS\} variable references with 'TORTURE', and
+any \$\{EXTEN\} references with '121'.  If there is any fancy stuff
+going on in the reference, like \$\{EXTEN:2\}, then the override will
+not work. Everything in the \$\{...\} has to match. So, to substitute
+\$\{EXTEN:2\} references, you'd best say:
+\begin{astlisting}
+\begin{verbatim}
+ check_expr /etc/asterisk/extensions.conf CALLERID(num)=3075551212 DIALSTATUS=TORTURE EXTEN:2=121
+\end{verbatim}
+\end{astlisting}
 on stdout, you will see something like:
 
+\begin{astlisting}
 \begin{verbatim}
  OK -- $[ "${DIALSTATUS}"  = "TORTURE" | "${DIALSTATUS}" = "DONTCALL" ] at line 416
 \end{verbatim}
+\end{astlisting}
 
 In the expr2\_log file that is generated, you will see:
 
+\begin{astlisting}
 \begin{verbatim}
  line 416, evaluation of $[  "TORTURE"  = "TORTURE" | "TORTURE" = "DONTCALL"  ] result: 1
 \end{verbatim}
+\end{astlisting}
 
 check\_expr is a very simplistic algorithm, and it is far from being
 guaranteed to work in all cases, but it is hoped that it will be
@@ -682,7 +729,7 @@ available in each application's help text. All these variables
 are in UPPER CASE only.
 
 Variables marked with a * are builtin functions and can't be set,
-only read in the dialplan.  Writes to such variables are silently 
+only read in the dialplan.  Writes to such variables are silently
 ignored.
 
 \begin{verbatim}
@@ -690,6 +737,7 @@ ${CDR(accountcode)}    * Account code (if specified)
 ${BLINDTRANSFER}         The name of the channel on the other side of a blind transfer
 ${BRIDGEPEER}            Bridged peer
 ${CALLERID(ani)}       * Caller ANI (PRI channels)
+${CALLERID(ani2)}      * ANI2 (Info digits) also called Originating line information or OLI
 ${CALLERID(all)}       * Caller ID
 ${CALLERID(dnid)}      * Dialed Number Identifier
 ${CALLERID(name)}      * Caller ID Name only
@@ -701,7 +749,7 @@ ${CALLINGTNS}          * Transit Network Selector (PRI channels)
 ${CALLINGTON}          * Caller Type of Number (PRI channels)
 ${CHANNEL}             * Current channel name
 ${CONTEXT}             * Current context
-${DATETIME}            * Current date time in the format: DDMMYYYY-HH:MM:SS 
+${DATETIME}            * Current date time in the format: DDMMYYYY-HH:MM:SS
                          (Deprecated; use ${STRFTIME(${EPOCH},,%d%m%Y-%H:%M:%S)})
 ${DB_RESULT}             Result value of DB_EXISTS() dial plan function
 ${EPOCH}               * Current unix style epoch
@@ -719,7 +767,7 @@ ${LANGUAGE}            * Current language (Deprecated; use ${LANGUAGE()})
 ${LEN(VAR)}            * String length of VAR (integer)
 ${PRIORITY}            * Current priority in the dialplan
 ${PRIREDIRECTREASON}     Reason for redirect on PRI, if a call was directed
-${TIMESTAMP}           * Current date time in the format: YYYYMMDD-HHMMSS 
+${TIMESTAMP}           * Current date time in the format: YYYYMMDD-HHMMSS
                          (Deprecated; use ${STRFTIME(${EPOCH},,%Y%m%d-%H%M%S)})
 ${TRANSFER_CONTEXT}      Context for transferred calls
 ${FORWARD_CONTEXT}       Context for forwarded calls
@@ -783,6 +831,7 @@ ${QUEUESTATUS}            Status of the call, one of:
 ${RECORDED_FILE}        * Recorded file in record()
 ${TALK_DETECTED}        * Result from talkdetect()
 ${TOUCH_MONITOR}          The filename base to use with Touch Monitor (auto record)
+${TOUCH_MONITOR_PREF}   * The prefix for automonitor recording filenames.
 ${TOUCH_MONITOR_FORMAT}   The audio format to use with Touch Monitor (auto record)
 ${TOUCH_MONITOR_OUTPUT} * Recorded file from Touch Monitor (auto record)
 ${TXTCIDNAME}           * Result of application TXTCIDName
@@ -791,12 +840,15 @@ ${VPB_GETDTMF}            chan_vpb
 
 \subsection{The MeetMe Conference Bridge}
 \begin{verbatim}
-${MEETME_RECORDINGFILE}     Name of file for recording a conference with 
-                            the "r" option
-${MEETME_RECORDINGFORMAT}   Format of file to be recorded
-${MEETME_EXIT_CONTEXT}      Context for exit out of meetme meeting
-${MEETME_AGI_BACKGROUND}    AGI script for Meetme (zap only)
-${MEETMESECS}             * Number of seconds a user participated in a MeetMe conference
+${MEETME_RECORDINGFILE}      Name of file for recording a conference with
+                             the "r" option
+${MEETME_RECORDINGFORMAT}    Format of file to be recorded
+${MEETME_EXIT_CONTEXT}       Context for exit out of meetme meeting
+${MEETME_AGI_BACKGROUND}     AGI script for Meetme (zap only)
+${MEETMESECS}              * Number of seconds a user participated in a MeetMe conference
+${CONF_LIMIT_TIMEOUT_FILE}   File to play when time is up.  Used with the L() option.
+${CONF_LIMIT_WARNING_FILE}   File to play as warning if 'y' is defined.
+                             The default is to say the time remaining.  Used with the L() option.
 \end{verbatim}
 
 \subsection{The VoiceMail() application}
@@ -826,14 +878,14 @@ ${DUNDDEST}       * The Destination of the result from a call to DUNDiLookup()
 
 \subsection{chan\_zap}
 \begin{verbatim}
-${ANI2}               * The ANI2 Code provided by the network on the incoming call. 
+${ANI2}               * The ANI2 Code provided by the network on the incoming call.
                         (ie, Code 29 identifies call as a Prison/Inmate Call)
 ${CALLTYPE}           * Type of call (Speech, Digital, etc)
 ${CALLEDTON}          * Type of number for incoming PRI extension
-                        i.e. 0=unknown, 1=international, 2=domestic, 3=net_specific, 
-                        4=subscriber, 6=abbreviated, 7=reserved 
+                        i.e. 0=unknown, 1=international, 2=domestic, 3=net_specific,
+                        4=subscriber, 6=abbreviated, 7=reserved
 ${CALLINGSUBADDR}     * Called PRI Subaddress
-${FAXEXTEN}           * The extension called before being redirected to "fax" 
+${FAXEXTEN}           * The extension called before being redirected to "fax"
 ${PRIREDIRECTREASON}  * Reason for redirect, if a call was directed
 ${SMDI_VM_TYPE}       * When an call is received with an SMDI message, the 'type'
                         of message 'b' or 'u'
@@ -845,7 +897,7 @@ ${SIPCALLID}         * SIP Call-ID: header verbatim (for logging or CDR matching
 ${SIPDOMAIN}         * SIP destination domain of an inbound call (if appropriate)
 ${SIPUSERAGENT}      * SIP user agent (deprecated)
 ${SIPURI}            * SIP uri
-${SIP_CODEC}           Set the SIP codec for a call  
+${SIP_CODEC}           Set the SIP codec for a call
 ${SIP_URI_OPTIONS}   * additional options to add to the URI for an outgoing call
 ${RTPAUDIOQOS}         RTCP QoS report for the audio of this call
 ${RTPVIDEOQOS}         RTCP QoS report for the video of this call
@@ -872,7 +924,7 @@ ${DIALEDPEERNUMBER}   * Dialed peer number
 ${DIALEDTIME}         * Time for the call (seconds)
 ${ANSWEREDTIME}       * Time from dial to answer (seconds)
 ${DIALSTATUS}         * Status of the call, one of:
-                        (CHANUNAVAIL | CONGESTION | BUSY | NOANSWER 
+                        (CHANUNAVAIL | CONGESTION | BUSY | NOANSWER
                         | ANSWER | CANCEL | DONTCALL | TORTURE)
 ${DYNAMIC_FEATURES}   * The list of features (from the [applicationmap] section of
                         features.conf) to activate during the call, with feature
@@ -888,7 +940,7 @@ ${OUTBOUND_GROUP}          Default groups for peer channels (as in SetGroup)
 
 \subsection{The chanisavail() application}
 \begin{verbatim}
-${AVAILCHAN}          * the name of the available channel if one was found  
+${AVAILCHAN}          * the name of the available channel if one was found
 ${AVAILORIGCHAN}      * the canonical channel name that was used to create the channel
 ${AVAILSTATUS}        * Status of requested channel
 \end{verbatim}
@@ -912,7 +964,7 @@ ${SPYGROUP}           * A ':' (colon) separated list of group names.
 ${OSPINHANDLE}          OSP handle of in_bound call
 ${OSPINTIMELIMIT}       Duration limit for in_bound call
 ${OSPOUTHANDLE}         OSP handle of out_bound call
-${OSPTECH}              OSP technology 
+${OSPTECH}              OSP technology
 ${OSPDEST}              OSP destination
 ${OSPCALLING}           OSP calling number
 ${OSPOUTTOKEN}          OSP token to use for out_bound call

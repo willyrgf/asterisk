@@ -30,14 +30,7 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <string.h>
-
 #include "asterisk/file.h"
-#include "asterisk/logger.h"
-#include "asterisk/options.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
@@ -61,8 +54,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 static char *app_exec = "Exec";
 static char *exec_synopsis = "Executes dialplan application";
 static char *exec_descrip =
-"Usage: Exec(appname(arguments))\n"
-"  Allows an arbitrary application to be invoked even when not\n"
+"  Exec(appname(arguments)):\n"
+"Allows an arbitrary application to be invoked even when not\n"
 "hardcoded into the dialplan.  If the underlying application\n"
 "terminates the dialplan, or if the application cannot be found,\n"
 "Exec will terminate the dialplan.\n"
@@ -72,11 +65,11 @@ static char *exec_descrip =
 static char *app_tryexec = "TryExec";
 static char *tryexec_synopsis = "Executes dialplan application, always returning";
 static char *tryexec_descrip =
-"Usage: TryExec(appname(arguments))\n"
-"  Allows an arbitrary application to be invoked even when not\n"
+"  TryExec(appname(arguments)):\n"
+"Allows an arbitrary application to be invoked even when not\n"
 "hardcoded into the dialplan. To invoke external applications\n"
 "see the application System.  Always returns to the dialplan.\n"
-"The channel variable TRYSTATUS will be set to:\n"
+"The channel variable TRYSTATUS will be set to one of:\n"
 "    SUCCESS   if the application returned zero\n"
 "    FAILED    if the application returned non-zero\n"
 "    NOAPP     if the application was not found or was not specified\n";
@@ -84,7 +77,7 @@ static char *tryexec_descrip =
 static char *app_execif = "ExecIf";
 static char *execif_synopsis = "Executes dialplan application, conditionally";
 static char *execif_descrip = 
-"Usage:  ExecIF (<expr>?<app>(<data>):<app2>(<data2>))\n"
+"  ExecIF (<expr>?<app>(<data>):<app2>(<data2>))\n"
 "If <expr> is true, execute and return the result of <app>(<data>).\n"
 "If <expr> is true, but <app> is not found, then the application\n"
 "will return a non-zero value.\n";
@@ -92,13 +85,14 @@ static char *execif_descrip =
 static int exec_exec(struct ast_channel *chan, void *data)
 {
 	int res = 0;
-	char *s, *appname, *endargs, args[MAXRESULT] = "";
+	char *s, *appname, *endargs, args[MAXRESULT];
 	struct ast_app *app;
 
 	if (ast_strlen_zero(data))
 		return 0;
 	
 	s = ast_strdupa(data);
+	args[0] = 0;
 	appname = strsep(&s, "(");
 	if (s) {
 		endargs = strrchr(s, ')');
@@ -122,13 +116,14 @@ static int exec_exec(struct ast_channel *chan, void *data)
 static int tryexec_exec(struct ast_channel *chan, void *data)
 {
 	int res = 0;
-	char *s, *appname, *endargs, args[MAXRESULT] = "";
+	char *s, *appname, *endargs, args[MAXRESULT];
 	struct ast_app *app;
 
 	if (ast_strlen_zero(data))
 		return 0;
 
 	s = ast_strdupa(data);
+	args[0] = 0;
 	appname = strsep(&s, "(");
 	if (s) {
 		endargs = strrchr(s, ')');
@@ -166,6 +161,11 @@ static int execif_exec(struct ast_channel *chan, void *data)
 	char *parse = ast_strdupa(data);
 
 	AST_NONSTANDARD_APP_ARGS(expr, parse, '?');
+	if (ast_strlen_zero(expr.remainder)) {
+		ast_log(LOG_ERROR, "Usage: ExecIf(<cond>?<appiftrue>(<args>):<appiffalse>(<args))\n");
+		return -1;
+	}
+
 	AST_NONSTANDARD_APP_ARGS(apps, expr.remainder, ':');
 
 	if (apps.t && (truedata = strchr(apps.t, '('))) {

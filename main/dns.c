@@ -33,18 +33,13 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/nameser.h>
+#include "asterisk/network.h"
+#include <arpa/nameser.h>	/* res_* functions */
 #include <resolv.h>
-#include <unistd.h>
 
-#include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/dns.h"
 #include "asterisk/endian.h"
-#include "asterisk/options.h"
 
 #define MAX_SIZE 4096
 
@@ -280,7 +275,7 @@ int ast_search_dns(void *context,
 			ast_log(LOG_WARNING, "DNS Parse error for %s\n", dname);
 			ret = -1;
 		}
-		else if (ret == 0) {
+		else if (res == 0) {
 			ast_debug(1, "No matches found in DNS for %s\n", dname);
 			ret = 0;
 		}

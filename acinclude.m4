@@ -1,3 +1,7 @@
+# Various support functions for configure.ac in asterisk
+#
+
+# Helper function to check for gcc attributes.
 # AST_GCC_ATTRIBUTE([attribute name])
 
 AC_DEFUN([AST_GCC_ATTRIBUTE],
@@ -11,35 +15,43 @@ AC_COMPILE_IFELSE(
 	AC_MSG_RESULT(no))
 ])
 
-# AST_EXT_LIB_SETUP([package symbol name], [package friendly name], [package option name], [additional help text])
+# Helper function to setup variables for a package.
+# $1 -> the package name. Used in configure.ac and also as a prefix
+#	for the variables ($1_DIR, $1_INCLUDE, $1_LIB) in makeopts
+# $3 ->	option name, used in --with-$3 or --without-$3 when calling configure.
+# $2 and $4 are just text describing the package (short and long form)
+
+# AST_EXT_LIB_SETUP([package], [short description], [configure option name], [long description])
 
 AC_DEFUN([AST_EXT_LIB_SETUP],
 [
-$1_DESCRIP="$2"
-$1_OPTION="$3"
-AC_ARG_WITH([$3], AC_HELP_STRING([--with-$3=PATH],[use $2 files in PATH $4]),[
-case ${withval} in
-     n|no)
-     USE_$1=no
-     ;;
-     y|ye|yes)
-     ac_mandatory_list="${ac_mandatory_list} $1"
-     ;;
-     *)
-     $1_DIR="${withval}"
-     ac_mandatory_list="${ac_mandatory_list} $1"
-     ;;
-esac
-])
-PBX_$1=0
-AC_SUBST([$1_LIB])
-AC_SUBST([$1_INCLUDE])
-AC_SUBST([$1_DIR])
-AC_SUBST([PBX_$1])
+    $1_DESCRIP="$2"
+    $1_OPTION="$3"
+    AC_ARG_WITH([$3], AC_HELP_STRING([--with-$3=PATH],[use $2 files in PATH $4]),
+    [
+	case ${withval} in
+	n|no)
+	USE_$1=no
+	;;
+	y|ye|yes)
+	ac_mandatory_list="${ac_mandatory_list} $1"
+	;;
+	*)
+	$1_DIR="${withval}"
+	ac_mandatory_list="${ac_mandatory_list} $1"
+	;;
+	esac
+    ])
+    PBX_$1=0
+    AC_SUBST([$1_LIB])
+    AC_SUBST([$1_INCLUDE])
+    AC_SUBST([$1_DIR])
+    AC_SUBST([PBX_$1])
 ])
 
 # Check whether any of the mandatory modules are not present, and
-# print error messages in case.
+# print error messages in case. The mandatory list is built using
+# --with-* arguments when invoking configure.
 
 AC_DEFUN([AST_CHECK_MANDATORY],
 [
@@ -61,16 +73,22 @@ AC_DEFUN([AST_CHECK_MANDATORY],
 	AC_MSG_RESULT(ok)
 ])
 
-#-- The following two tests are only performed if PBX_$1 != 1,
-#   so you can use multiple tests and stop at the first matching one.
-#   On success, set PBX_$1 = 1, and also #define HAVE_$1 1
-#   and #define HAVE_$1_VERSION ${last_argument} so you can tell which
-#   test succeeded.
-#   They should be called after AST_EXT_LIB_SETUP($1, ...)
+# The next three functions check for the availability of a given package.
+# AST_C_DEFINE_CHECK looks for the presence of a #define in a header file,
+# AST_EXT_LIB_CHECK looks for a symbol in a given library, or at least
+#	for the presence of a header file.
+# AST_EXT_TOOL_CHECK looks for a symbol in using $1-config to determine CFLAGS and LIBS
+#
+# They are only run if PBX_$1 != 1 (where $1 is the package),
+# so you can call them multiple times and stop at the first matching one.
+# On success, they both set PBX_$1 = 1, set $1_INCLUDE and $1_LIB as applicable,
+# and also #define HAVE_$1 1 and #define HAVE_$1_VERSION ${last_argument}
+# in autoconfig.h so you can tell which test succeeded.
+# They should be called after AST_EXT_LIB_SETUP($1, ...)
 
 # Check if a given macro is defined in a certain header.
 
-# AST_C_DEFINE_CHECK([package symbol name], [macro name], [header file], [version])
+# AST_C_DEFINE_CHECK([package], [macro name], [header file], [version])
 AC_DEFUN([AST_C_DEFINE_CHECK],
 [
     if test "x${PBX_$1}" != "x1" -a "${USE_$1}" != "no"; then
@@ -99,11 +117,13 @@ AC_DEFUN([AST_C_DEFINE_CHECK],
 # in a library, or, if no function is supplied, only check for the
 # existence of the header files.
 
-# AST_EXT_LIB_CHECK([package symbol name], [package library name], [function to check], [package header], [additional LIB data], [version])
+# AST_EXT_LIB_CHECK([package], [library], [function], [header],
+#	 [extra libs], [extra cflags], [version])
 AC_DEFUN([AST_EXT_LIB_CHECK],
 [
 if test "x${PBX_$1}" != "x1" -a "${USE_$1}" != "no"; then
    pbxlibdir=""
+   # if --with-$1=DIR has been specified, use it.
    if test "x${$1_DIR}" != "x"; then
       if test -d ${$1_DIR}/lib; then
       	 pbxlibdir="-L${$1_DIR}/lib"
@@ -118,22 +138,21 @@ if test "x${PBX_$1}" != "x1" -a "${USE_$1}" != "no"; then
       AC_CHECK_LIB([$2], [${pbxfuncname}], [AST_$1_FOUND=yes], [AST_$1_FOUND=no], ${pbxlibdir} $5)
    fi
 
+   # now check for the header.
    if test "${AST_$1_FOUND}" = "yes"; then
-      $1_LIB="-l$2 $5"
-      $1_HEADER_FOUND="1"
+      $1_LIB="${pbxlibdir} -l$2 $5"
+      # if --with-$1=DIR has been specified, use it.
       if test "x${$1_DIR}" != "x"; then
-         $1_LIB="${pbxlibdir} ${$1_LIB}"
 	 $1_INCLUDE="-I${$1_DIR}/include"
-	 saved_cppflags="${CPPFLAGS}"
-	 CPPFLAGS="${CPPFLAGS} -I${$1_DIR}/include"
-	 if test "x$4" != "x" ; then
-	    AC_CHECK_HEADER([${$1_DIR}/include/$4], [$1_HEADER_FOUND=1], [$1_HEADER_FOUND=0])
-	 fi
-	 CPPFLAGS="${saved_cppflags}"
-      else
-	 if test "x$4" != "x" ; then
-            AC_CHECK_HEADER([$4], [$1_HEADER_FOUND=1], [$1_HEADER_FOUND=0])
-	 fi
+      fi
+      $1_INCLUDE="${$1_INCLUDE} $6"
+      if test "x$4" = "x" ; then	# no header, assume found
+         $1_HEADER_FOUND="1"
+      else				# check for the header
+         saved_cppflags="${CPPFLAGS}"
+         CPPFLAGS="${CPPFLAGS} ${$1_INCLUDE} $6"
+	 AC_CHECK_HEADER([$4], [$1_HEADER_FOUND=1], [$1_HEADER_FOUND=0])
+         CPPFLAGS="${saved_cppflags}"
       fi
       if test "x${$1_HEADER_FOUND}" = "x0" ; then
          $1_LIB=""
@@ -145,12 +164,33 @@ if test "x${PBX_$1}" != "x1" -a "${USE_$1}" != "no"; then
          PBX_$1=1
          # XXX don't know how to evaluate the description (third argument) in AC_DEFINE_UNQUOTED
          AC_DEFINE_UNQUOTED([HAVE_$1], 1, [Define this to indicate the ${$1_DESCRIP} library])
-	 AC_DEFINE_UNQUOTED([HAVE_$1_VERSION], [$6], [Define to indicate the ${$1_DESCRIP} library version])
+	 AC_DEFINE_UNQUOTED([HAVE_$1_VERSION], [$7], [Define to indicate the ${$1_DESCRIP} library version])
       fi
    fi
 fi
 ])
 
+
+# Check for a package using $2-config. Similar to AST_EXT_LIB_CHECK,
+# but use $2-config to determine cflags and libraries to use.
+# $3 and $4 can be used to replace --cflags and --libs in the request 
+
+# AST_EXT_TOOL_CHECK([package], [tool name], [--cflags], [--libs])
+AC_DEFUN([AST_EXT_TOOL_CHECK],
+[
+    if test "x${PBX_$1}" != "x1" -a "${USE_$1}" != "no"; then
+	PBX_$1=0
+	AC_CHECK_TOOL(CONFIG_$1, $2-config, No)
+	if test ! "x${CONFIG_$1}" = xNo; then
+	    if test x"$3" = x ; then A=--cflags ; else A="$3" ; fi
+	    $1_INCLUDE=$(${CONFIG_$1} $A)
+	    if test x"$4" = x ; then A=--libs ; else A="$4" ; fi
+	    $1_LIB=$(${CONFIG_$1} $A)
+	    PBX_$1=1
+	    AC_DEFINE([HAVE_$1], 1, [Define if your system has the $1 libraries.])
+	fi
+    fi
+])
 
 AC_DEFUN(
 [AST_CHECK_GNU_MAKE], [AC_CACHE_CHECK(for GNU make, GNU_MAKE,
@@ -813,7 +853,8 @@ dnl @author Steven G. Johnson <stevenj@alum.mit.edu>
 dnl @version 2006-05-29
 dnl @license GPLWithACException
 
-AC_DEFUN([ACX_PTHREAD], [
+AC_DEFUN([ACX_PTHREAD],
+[
 AC_REQUIRE([AC_CANONICAL_HOST])
 AC_LANG_SAVE
 AC_LANG_C

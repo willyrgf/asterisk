@@ -1,7 +1,7 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 1999 - 2005, Digium, Inc.
+ * Copyright (C) 1999 - 2007, Digium, Inc.
  *
  * Mark Spencer <markster@digium.com>
  *
@@ -19,6 +19,7 @@
  * at the top of the source tree.
  */
 
+// #define HAVE_VIDEO_CONSOLE	// uncomment to enable video
 /*! \file
  *
  * \brief Channel driver for OSS sound cards
@@ -40,40 +41,25 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdio.h>
-#include <ctype.h>
+#include <ctype.h>		/* isalnum() used here */
 #include <math.h>
-#include <string.h>
-#include <unistd.h>
-#include <sys/ioctl.h>
-#include <fcntl.h>
-#include <sys/time.h>
-#include <stdlib.h>
-#include <errno.h>
+#include <sys/ioctl.h>		
 
 #ifdef __linux
 #include <linux/soundcard.h>
-#elif defined(__FreeBSD__)
+#elif defined(__FreeBSD__) || defined(__CYGWIN__)
 #include <sys/soundcard.h>
 #else
 #include <soundcard.h>
 #endif
 
-#include "asterisk/lock.h"
-#include "asterisk/frame.h"
-#include "asterisk/logger.h"
-#include "asterisk/callerid.h"
 #include "asterisk/channel.h"
+#include "asterisk/file.h"
+#include "asterisk/callerid.h"
 #include "asterisk/module.h"
-#include "asterisk/options.h"
 #include "asterisk/pbx.h"
-#include "asterisk/config.h"
 #include "asterisk/cli.h"
-#include "asterisk/utils.h"
 #include "asterisk/causes.h"
-#include "asterisk/endian.h"
-#include "asterisk/stringfields.h"
-#include "asterisk/abstract_jb.h"
 #include "asterisk/musiconhold.h"
 #include "asterisk/app.h"
 
@@ -212,7 +198,7 @@ END_CONFIG
  * Likely we will come up with a better way of doing config file parsing.
  */
 #define M_START(var, val) \
-        char *__s = var; char *__val = val;
+        const char *__s = var; const char *__val = val;
 #define M_END(x)   x;
 #define M_F(tag, f)			if (!strcasecmp((__s), tag)) { f; } else
 #define M_BOOL(tag, dst)	M_F(tag, (dst) = ast_true(__val) )
@@ -310,6 +296,7 @@ static struct sound sounds[] = {
 	{ -1, NULL, 0, 0, 0, 0 },	/* end marker */
 };
 
+struct video_desc;		/* opaque type for video support */
 
 /*!
  * \brief descriptor for one of our channels.
@@ -366,6 +353,9 @@ struct chan_oss_pvt {
 	pthread_t sthread;
 
 	struct ast_channel *owner;
+
+	struct video_desc *env;			/*!< parameters for video support */
+
 	char ext[AST_MAX_EXTENSION];
 	char ctx[AST_MAX_CONTEXT];
 	char language[MAX_LANGUAGE];
@@ -384,6 +374,15 @@ struct chan_oss_pvt {
 	struct ast_frame read_f;	/*!< returned by oss_read */
 };
 
+/*! forward declaration */
+static struct chan_oss_pvt *find_desc(char *dev);
+
+/*! \brief return the pointer to the video descriptor */
+static attribute_unused struct video_desc *get_video_desc(struct ast_channel *c)
+{
+	struct chan_oss_pvt *o = c->tech_pvt;
+	return o ? o->env : NULL;
+}
 static struct chan_oss_pvt oss_default = {
 	.cursound = -1,
 	.sounddev = -1,
@@ -417,10 +416,24 @@ static int oss_indicate(struct ast_channel *chan, int cond, const void *data, si
 static int oss_fixup(struct ast_channel *oldchan, struct ast_channel *newchan);
 static char tdesc[] = "OSS Console Channel Driver";
 
+#ifdef HAVE_VIDEO_CONSOLE
+#include "console_video.c"
+#else
+#define CONSOLE_VIDEO_CMDS					\
+		"console {device}"
+/* provide replacements for some symbols used */
+#define	console_write_video		NULL
+#define	console_video_start(x, y)	{}
+#define	console_video_uninit(x)		{}
+#define	console_video_config(x, y, z)	1	/* pretend nothing recognised */
+#define	console_video_cli(x, y, z)	0	/* pretend nothing recognised */
+#define	CONSOLE_FORMAT_VIDEO		0
+#endif
+
 static const struct ast_channel_tech oss_tech = {
 	.type = "Console",
 	.description = tdesc,
-	.capabilities = AST_FORMAT_SLINEAR,
+	.capabilities = AST_FORMAT_SLINEAR | CONSOLE_FORMAT_VIDEO,
 	.requester = oss_request,
 	.send_digit_begin = oss_digit_begin,
 	.send_digit_end = oss_digit_end,
@@ -430,6 +443,7 @@ static const struct ast_channel_tech oss_tech = {
 	.read = oss_read,
 	.call = oss_call,
 	.write = oss_write,
+	.write_video = console_write_video,
 	.indicate = oss_indicate,
 	.fixup = oss_fixup,
 };
@@ -864,6 +878,7 @@ static int oss_hangup(struct ast_channel *c)
 	c->tech_pvt = NULL;
 	o->owner = NULL;
 	ast_verbose(" << Hangup on console >> \n");
+	console_video_uninit(o->env);
 	ast_module_unref(ast_module_info->self);
 	if (o->hookstate) {
 		if (o->autoanswer || o->autohangup) {
@@ -1028,6 +1043,10 @@ static struct ast_channel *oss_new(struct chan_oss_pvt *o, char *ext, char *ctx,
 		setformat(o, O_RDWR);
 	ast_channel_set_fd(c, 0, o->sounddev); /* -1 if device closed, override later */
 	c->nativeformats = AST_FORMAT_SLINEAR;
+	/* if the console makes the call, add video to the offer */
+	if (state == AST_STATE_RINGING)
+		c->nativeformats |= CONSOLE_FORMAT_VIDEO;
+
 	c->readformat = AST_FORMAT_SLINEAR;
 	c->writeformat = AST_FORMAT_SLINEAR;
 	c->tech_pvt = o;
@@ -1051,6 +1070,7 @@ static struct ast_channel *oss_new(struct chan_oss_pvt *o, char *ext, char *ctx,
 			/* XXX what about the channel itself ? */
 		}
 	}
+	console_video_start(get_video_desc(c), c); /* XXX cleanup */
 
 	return c;
 }
@@ -1089,6 +1109,46 @@ static struct ast_channel *oss_request(const char *type, int format, void *data,
 		return NULL;
 	}
 	return c;
+}
+
+static void store_config_core(struct chan_oss_pvt *o, const char *var, const char *value);
+
+/*! Generic console command handler. Basically a wrapper for a subset
+ *  of config file options which are also available from the CLI
+ */
+static char *console_cmd(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	struct chan_oss_pvt *o = find_desc(oss_active);
+	const char *var, *value;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = CONSOLE_VIDEO_CMDS;
+		e->usage = "Usage: " CONSOLE_VIDEO_CMDS "...\n"
+		"       Generic handler for console commands.\n";
+		return NULL;
+
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc < e->args)
+		return CLI_SHOWUSAGE;
+	if (o == NULL) {
+		ast_log(LOG_WARNING, "Cannot find device %s (should not happen!)\n",
+			oss_active);
+		return CLI_FAILURE;
+	}
+	var = a->argv[e->args-1];
+	value = a->argc > e->args ? a->argv[e->args] : NULL;
+	if (value)      /* handle setting */
+		store_config_core(o, var, value);
+	if (console_video_cli(o->env, var, a->fd))	/* print video-related values */
+		return CLI_SUCCESS;
+	/* handle other values */
+	if (!strcasecmp(var, "device")) {
+		ast_cli(a->fd, "device is [%s]\n", o->device);
+	}
+	return CLI_SUCCESS;
 }
 
 static char *console_autoanswer(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
@@ -1333,73 +1393,87 @@ static char *console_mute(struct ast_cli_entry *e, int cmd, struct ast_cli_args 
 	return CLI_SUCCESS;
 }
 
-static int console_transfer(int fd, int argc, char *argv[])
+static char *console_transfer(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	struct chan_oss_pvt *o = find_desc(oss_active);
 	struct ast_channel *b = NULL;
 	char *tmp, *ext, *ctx;
 
-	if (argc != 3)
-		return RESULT_SHOWUSAGE;
-	if (o == NULL)
-		return RESULT_FAILURE;
-	if (o->owner == NULL || (b = ast_bridged_channel(o->owner)) == NULL) {
-		ast_cli(fd, "There is no call to transfer\n");
-		return RESULT_SUCCESS;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "console transfer";
+		e->usage =
+			"Usage: console transfer <extension>[@context]\n"
+			"       Transfers the currently connected call to the given extension (and\n"
+			"       context if specified)\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
 	}
 
-	tmp = ast_ext_ctx(argv[2], &ext, &ctx);
+	if (a->argc != 3)
+		return CLI_SHOWUSAGE;
+	if (o == NULL)
+		return CLI_FAILURE;
+	if (o->owner == NULL || (b = ast_bridged_channel(o->owner)) == NULL) {
+		ast_cli(a->fd, "There is no call to transfer\n");
+		return CLI_SUCCESS;
+	}
+
+	tmp = ast_ext_ctx(a->argv[2], &ext, &ctx);
 	if (ctx == NULL)			/* supply default context if needed */
 		ctx = o->owner->context;
 	if (!ast_exists_extension(b, ctx, ext, 1, b->cid.cid_num))
-		ast_cli(fd, "No such extension exists\n");
+		ast_cli(a->fd, "No such extension exists\n");
 	else {
-		ast_cli(fd, "Whee, transferring %s to %s@%s.\n", b->name, ext, ctx);
+		ast_cli(a->fd, "Whee, transferring %s to %s@%s.\n", b->name, ext, ctx);
 		if (ast_async_goto(b, ctx, ext, 1))
-			ast_cli(fd, "Failed to transfer :(\n");
+			ast_cli(a->fd, "Failed to transfer :(\n");
 	}
 	if (tmp)
 		ast_free(tmp);
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 
-static const char transfer_usage[] =
-	"Usage: console transfer <extension>[@context]\n"
-	"       Transfers the currently connected call to the given extension (and\n"
-	"context if specified)\n";
-
-static int console_active(int fd, int argc, char *argv[])
+static char *console_active(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	if (argc == 2)
-		ast_cli(fd, "active console is [%s]\n", oss_active);
-	else if (argc != 3)
-		return RESULT_SHOWUSAGE;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "console active";
+		e->usage =
+			"Usage: console active [device]\n"
+			"       If used without a parameter, displays which device is the current\n"
+			"       console.  If a device is specified, the console sound device is changed to\n"
+			"       the device specified.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc == 2)
+		ast_cli(a->fd, "active console is [%s]\n", oss_active);
+	else if (a->argc != 3)
+		return CLI_SHOWUSAGE;
 	else {
 		struct chan_oss_pvt *o;
-		if (strcmp(argv[2], "show") == 0) {
+		if (strcmp(a->argv[2], "show") == 0) {
 			for (o = oss_default.next; o; o = o->next)
-				ast_cli(fd, "device [%s] exists\n", o->name);
-			return RESULT_SUCCESS;
+				ast_cli(a->fd, "device [%s] exists\n", o->name);
+			return CLI_SUCCESS;
 		}
-		o = find_desc(argv[2]);
+		o = find_desc(a->argv[2]);
 		if (o == NULL)
-			ast_cli(fd, "No device [%s] exists\n", argv[2]);
+			ast_cli(a->fd, "No device [%s] exists\n", a->argv[2]);
 		else
 			oss_active = o->name;
 	}
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
-
-static const char active_usage[] =
-	"Usage: console active [device]\n"
-	"       If used without a parameter, displays which device is the current\n"
-	"console.  If a device is specified, the console sound device is changed to\n"
-	"the device specified.\n";
 
 /*!
  * \brief store the boost factor
  */
-static void store_boost(struct chan_oss_pvt *o, char *s)
+static void store_boost(struct chan_oss_pvt *o, const char *s)
 {
 	double boost = 0;
 	if (sscanf(s, "%lf", &boost) != 1) {
@@ -1418,37 +1492,40 @@ static void store_boost(struct chan_oss_pvt *o, char *s)
 	ast_log(LOG_WARNING, "setting boost %s to %d\n", s, o->boost);
 }
 
-static int do_boost(int fd, int argc, char *argv[])
+static char *console_boost(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	struct chan_oss_pvt *o = find_desc(oss_active);
 
-	if (argc == 2)
-		ast_cli(fd, "boost currently %5.1f\n", 20 * log10(((double) o->boost / (double) BOOST_SCALE)));
-	else if (argc == 3)
-		store_boost(o, argv[2]);
-	return RESULT_SUCCESS;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "console boost";
+		e->usage =
+			"Usage: console boost [boost in dB]\n"
+			"       Sets or display mic boost in dB\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc == 2)
+		ast_cli(a->fd, "boost currently %5.1f\n", 20 * log10(((double) o->boost / (double) BOOST_SCALE)));
+	else if (a->argc == 3)
+		store_boost(o, a->argv[2]);
+	return CLI_SUCCESS;
 }
 
 static struct ast_cli_entry cli_oss[] = {
-	NEW_CLI(console_answer, "Answer an incoming console call"),
-	NEW_CLI(console_hangup, "Hangup a call on the console"),
-	NEW_CLI(console_flash, "Flash a call on the console"),
-	NEW_CLI(console_dial, "Dial an extension on the console"),
-	NEW_CLI(console_mute, "Disable/Enable mic input"),
-	{ { "console", "transfer", NULL },
-	console_transfer, "Transfer a call to a different extension",
-	transfer_usage },
-
-	NEW_CLI(console_sendtext, "Send text to the remote device"),
-	NEW_CLI(console_autoanswer, "Sets/displays autoanswer"),
-
-	{ { "console", "boost", NULL },
-	do_boost, "Sets/displays mic boost in dB",
-	NULL },
-
-	{ { "console", "active", NULL },
-	console_active, "Sets/displays active console",
-	active_usage },
+	AST_CLI_DEFINE(console_answer, "Answer an incoming console call"),
+	AST_CLI_DEFINE(console_hangup, "Hangup a call on the console"),
+	AST_CLI_DEFINE(console_flash, "Flash a call on the console"),
+	AST_CLI_DEFINE(console_dial, "Dial an extension on the console"),
+	AST_CLI_DEFINE(console_mute, "Disable/Enable mic input"),
+	AST_CLI_DEFINE(console_transfer, "Transfer a call to a different extension"),	
+	AST_CLI_DEFINE(console_cmd, "Generic console command"),
+	AST_CLI_DEFINE(console_sendtext, "Send text to the remote device"),
+	AST_CLI_DEFINE(console_autoanswer, "Sets/displays autoanswer"),
+	AST_CLI_DEFINE(console_boost, "Sets/displays mic boost in dB"),
+	AST_CLI_DEFINE(console_active, "Sets/displays active console"),
 };
 
 /*!
@@ -1456,7 +1533,7 @@ static struct ast_cli_entry cli_oss[] = {
  * invalid or dangerous values (the string is used as argument for
  * system("mixer %s")
  */
-static void store_mixer(struct chan_oss_pvt *o, char *s)
+static void store_mixer(struct chan_oss_pvt *o, const char *s)
 {
 	int i;
 
@@ -1475,9 +1552,37 @@ static void store_mixer(struct chan_oss_pvt *o, char *s)
 /*!
  * store the callerid components
  */
-static void store_callerid(struct chan_oss_pvt *o, char *s)
+static void store_callerid(struct chan_oss_pvt *o, const char *s)
 {
 	ast_callerid_split(s, o->cid_name, sizeof(o->cid_name), o->cid_num, sizeof(o->cid_num));
+}
+
+static void store_config_core(struct chan_oss_pvt *o, const char *var, const char *value)
+{
+	M_START(var, value);
+
+	/* handle jb conf */
+	if (!ast_jb_read_conf(&global_jbconf, (char *)var,(char *) value))
+		return;
+
+	if (!console_video_config(&o->env, var, value))
+		return;
+	M_BOOL("autoanswer", o->autoanswer)
+	M_BOOL("autohangup", o->autohangup)
+	M_BOOL("overridecontext", o->overridecontext)
+	M_STR("device", o->device)
+	M_UINT("frags", o->frags)
+	M_UINT("debug", oss_debug)
+	M_UINT("queuesize", o->queuesize)
+	M_STR("context", o->ctx)
+	M_STR("language", o->language)
+	M_STR("mohinterpret", o->mohinterpret)
+	M_STR("extension", o->ext)
+	M_F("mixer", store_mixer(o, value))
+	M_F("callerid", store_callerid(o, value))  
+	M_F("boost", store_boost(o, value))
+
+	M_END(/* */);
 }
 
 /*!
@@ -1509,28 +1614,7 @@ static struct chan_oss_pvt *store_config(struct ast_config *cfg, char *ctg)
 	o->lastopen = ast_tvnow();	/* don't leave it 0 or tvdiff may wrap */
 	/* fill other fields from configuration */
 	for (v = ast_variable_browse(cfg, ctg); v; v = v->next) {
-		M_START(v->name, v->value);
-
-		/* handle jb conf */
-		if (!ast_jb_read_conf(&global_jbconf, v->name, v->value))
-			continue;
-
-		M_BOOL("autoanswer", o->autoanswer)
-		M_BOOL("autohangup", o->autohangup)
-		M_BOOL("overridecontext", o->overridecontext)
-		M_STR("device", o->device)
-		M_UINT("frags", o->frags)
-		M_UINT("debug", oss_debug)
-		M_UINT("queuesize", o->queuesize)
-		M_STR("context", o->ctx)
-		M_STR("language", o->language)
-		M_STR("mohinterpret", o->mohinterpret)
-		M_STR("extension", o->ext)
-		M_F("mixer", store_mixer(o, v->value))
-		M_F("callerid", store_callerid(o, v->value))
-		M_F("boost", store_boost(o, v->value))
-
-		M_END(/* */);
+		store_config_core(o, v->name, v->value);
 	}
 	if (ast_strlen_zero(o->device))
 		ast_copy_string(o->device, DEV_DSP, sizeof(o->device));
@@ -1577,12 +1661,13 @@ static int load_module(void)
 {
 	struct ast_config *cfg = NULL;
 	char *ctg = NULL;
+	struct ast_flags config_flags = { 0 };
 
 	/* Copy the default jb config over global_jbconf */
 	memcpy(&global_jbconf, &default_jbconf, sizeof(struct ast_jb_conf));
 
 	/* load config file */
-	if (!(cfg = ast_config_load(config))) {
+	if (!(cfg = ast_config_load(config, config_flags))) {
 		ast_log(LOG_NOTICE, "Unable to load config %s\n", config);
 		return AST_MODULE_LOAD_DECLINE;
 	}

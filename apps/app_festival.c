@@ -31,25 +31,15 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <sys/types.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <string.h>
-#include <stdlib.h>
-#include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include <stdio.h>
 #include <signal.h>
-#include <stdlib.h>
-#include <unistd.h>
 #include <fcntl.h>
 #include <ctype.h>
 
 #include "asterisk/file.h"
-#include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
@@ -57,7 +47,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/config.h"
 #include "asterisk/utils.h"
 #include "asterisk/lock.h"
-#include "asterisk/options.h"
 #include "asterisk/app.h"
 
 #define FESTIVAL_CONFIG "festival.conf"
@@ -69,7 +58,7 @@ static char *app = "Festival";
 static char *synopsis = "Say text to the user";
 
 static char *descrip = 
-"  Festival(text[,intkeys]):  Connect to Festival, send the argument, get back the waveform,"
+"  Festival(text[,intkeys]):  Connect to Festival, send the argument, get back the waveform,\n"
 "play it to the user, allowing any given interrupt keys to immediately terminate and return\n"
 "the value, or 'any' to allow any number back (useful in dialplan)\n";
 
@@ -306,6 +295,7 @@ static int festival_exec(struct ast_channel *chan, void *vdata)
 	char *data;	
 	struct ast_config *cfg;
 	char *newfestivalcommand;
+	struct ast_flags config_flags = { 0 };
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(text);
 		AST_APP_ARG(interrupt);
@@ -316,7 +306,7 @@ static int festival_exec(struct ast_channel *chan, void *vdata)
 		return -1;
 	}
 
-	cfg = ast_config_load(FESTIVAL_CONFIG);
+	cfg = ast_config_load(FESTIVAL_CONFIG, config_flags);
 	if (!cfg) {
 		ast_log(LOG_WARNING, "No such configuration file %s\n", FESTIVAL_CONFIG);
 		return -1;
@@ -520,7 +510,8 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	struct ast_config *cfg = ast_config_load(FESTIVAL_CONFIG);
+	struct ast_flags config_flags = { 0 };
+	struct ast_config *cfg = ast_config_load(FESTIVAL_CONFIG, config_flags);
 	if (!cfg) {
 		ast_log(LOG_WARNING, "No such configuration file %s\n", FESTIVAL_CONFIG);
 		return AST_MODULE_LOAD_DECLINE;

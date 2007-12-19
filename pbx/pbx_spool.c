@@ -27,17 +27,11 @@
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <sys/stat.h>
-#include <errno.h>
 #include <time.h>
 #include <utime.h>
-#include <stdlib.h>
-#include <unistd.h>
 #include <dirent.h>
-#include <string.h>
-#include <string.h>
-#include <stdio.h>
-#include <unistd.h>
 
+#include "asterisk/paths.h"	/* use ast_config_AST_SPOOL_DIR */
 #include "asterisk/lock.h"
 #include "asterisk/file.h"
 #include "asterisk/logger.h"
@@ -45,7 +39,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/callerid.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
-#include "asterisk/options.h"
 #include "asterisk/utils.h"
 
 /*
@@ -201,7 +194,7 @@ static int apply_outgoing(struct outgoing *o, char *fn, FILE *f)
 					}
 				} else if (!strcasecmp(buf, "waittime")) {
 					if ((sscanf(c, "%d", &o->waittime) != 1) || (o->waittime < 1)) {
-						ast_log(LOG_WARNING, "Invalid retrytime at line %d of %s\n", lineno, fn);
+						ast_log(LOG_WARNING, "Invalid waittime at line %d of %s\n", lineno, fn);
 						o->waittime = 45;
 					}
 				} else if (!strcasecmp(buf, "retry")) {
@@ -219,7 +212,7 @@ static int apply_outgoing(struct outgoing *o, char *fn, FILE *f)
 					c2 = c;
 					strsep(&c2, "=");
 					if (c2) {
-						var = ast_variable_new(c, c2);
+						var = ast_variable_new(c, c2, fn);
 						if (var) {
 							var->next = o->vars;
 							o->vars = var;

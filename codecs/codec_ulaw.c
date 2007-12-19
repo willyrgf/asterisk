@@ -27,20 +27,9 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <fcntl.h>
-#include <netinet/in.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-
-#include "asterisk/lock.h"
-#include "asterisk/logger.h"
 #include "asterisk/module.h"
 #include "asterisk/config.h"
-#include "asterisk/options.h"
 #include "asterisk/translate.h"
-#include "asterisk/channel.h"
 #include "asterisk/ulaw.h"
 #include "asterisk/utils.h"
 
@@ -147,12 +136,15 @@ static struct ast_translator lintoulaw = {
 	.buffer_samples = BUFFER_SAMPLES,
 };
 
-static void parse_config(void)
+static int parse_config(int reload)
 {
 	struct ast_variable *var;
-	struct ast_config *cfg = ast_config_load("codecs.conf");
-	if (!cfg)
-		return;
+	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
+	struct ast_config *cfg = ast_config_load("codecs.conf", config_flags);
+	if (cfg == NULL)
+		return -1;
+	if (cfg == CONFIG_STATUS_FILEUNCHANGED)
+		return 0;
 	for (var = ast_variable_browse(cfg, "plc"); var; var = var->next) {
 		if (!strcasecmp(var->name, "genericplc")) {
 			ulawtolin.useplc = ast_true(var->value) ? 1 : 0;
@@ -160,13 +152,14 @@ static void parse_config(void)
 		}
 	}
 	ast_config_destroy(cfg);
+	return 0;
 }
 
 static int reload(void)
 {
-	parse_config();
-
-	return 0;
+	if (parse_config(1))
+		return AST_MODULE_LOAD_DECLINE;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 static int unload_module(void)
@@ -183,14 +176,16 @@ static int load_module(void)
 {
 	int res;
 
-	parse_config();
+	if (parse_config(0))
+		return AST_MODULE_LOAD_DECLINE;
 	res = ast_register_translator(&ulawtolin);
 	if (!res)
 		res = ast_register_translator(&lintoulaw);
 	else
 		ast_unregister_translator(&ulawtolin);
-
-	return res;
+	if (res)
+		return AST_MODULE_LOAD_FAILURE;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "mu-Law Coder/Decoder",

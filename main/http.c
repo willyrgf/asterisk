@@ -32,21 +32,13 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <sys/types.h>
-#include <stdio.h>
-#include <unistd.h>
-#include <stdlib.h>
+#include "asterisk/paths.h"	/* use ast_config_AST_DATA_DIR */
+#include "asterisk/network.h"
 #include <time.h>
-#include <string.h>
-#include <netinet/in.h>
 #include <sys/time.h>
-#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/signal.h>
-#include <arpa/inet.h>
-#include <errno.h>
 #include <fcntl.h>
-#include <pthread.h>
 
 #include "minimime/mm.h"
 
@@ -54,7 +46,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/http.h"
 #include "asterisk/utils.h"
 #include "asterisk/strings.h"
-#include "asterisk/options.h"
 #include "asterisk/config.h"
 #include "asterisk/stringfields.h"
 #include "asterisk/version.h"
@@ -567,7 +558,7 @@ static struct ast_str *handle_uri(struct server_instance *ser, char *uri, int *s
 			else 
 				val = "";
 			ast_uri_decode(var);
-			if ((v = ast_variable_new(var, val))) {
+			if ((v = ast_variable_new(var, val, ""))) {
 				if (vars)
 					prev->next = v;
 				else
@@ -778,7 +769,7 @@ static void *httpd_helper_thread(void *data)
 			value = ast_skip_blanks(value);
 			if (ast_strlen_zero(value))
 				continue;
-			var = ast_variable_new(name, value);
+			var = ast_variable_new(name, value, "");
 			if (!var)
 				continue;
 			var->next = headers;
@@ -818,7 +809,7 @@ static void *httpd_helper_thread(void *data)
 			vval++;
 		if ( (l = strlen(vval)) )
 			vval[l - 1] = '\0';	/* trim trailing quote */
-		var = ast_variable_new(vname, vval);
+		var = ast_variable_new(vname, vval, "");
 		if (var) {
 			if (prev)
 				prev->next = var;
@@ -841,6 +832,9 @@ static void *httpd_helper_thread(void *data)
 	/* If they aren't mopped up already, clean up the cookies */
 	if (vars)
 		ast_variables_destroy(vars);
+	/* Clean up all the header information pulled as well */
+	if (headers)
+		ast_variables_destroy(headers);
 
 	if (out) {
 		struct timeval tv = ast_tvnow();
@@ -1134,6 +1128,10 @@ static int __ast_http_load(int reload)
 	char newprefix[MAX_PREFIX];
 	int have_sslbindaddr = 0;
 	struct http_uri_redirect *redirect;
+	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
+
+	if ((cfg = ast_config_load("http.conf", config_flags)) == CONFIG_STATUS_FILEUNCHANGED)
+		return 0;
 
 	/* default values */
 	memset(&http_desc.sin, 0, sizeof(http_desc.sin));
@@ -1159,7 +1157,6 @@ static int __ast_http_load(int reload)
 
 	destroy_post_mappings();
 
-	cfg = ast_config_load("http.conf");
 	if (cfg) {
 		v = ast_variable_browse(cfg, "general");
 		for (; v; v = v->next) {
@@ -1226,56 +1223,65 @@ static int __ast_http_load(int reload)
 	return 0;
 }
 
-static int handle_show_http(int fd, int argc, char *argv[])
+static char *handle_show_http(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	struct ast_http_uri *urih;
 	struct http_uri_redirect *redirect;
 	struct ast_http_post_mapping *post_map;
-
-	if (argc != 3)
-		return RESULT_SHOWUSAGE;
-
-	ast_cli(fd, "HTTP Server Status:\n");
-	ast_cli(fd, "Prefix: %s\n", prefix);
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "http show status";
+		e->usage = 
+			"Usage: http show status\n"
+			"       Lists status of internal HTTP engine\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+	
+	if (a->argc != 3)
+		return CLI_SHOWUSAGE;
+	ast_cli(a->fd, "HTTP Server Status:\n");
+	ast_cli(a->fd, "Prefix: %s\n", prefix);
 	if (!http_desc.oldsin.sin_family)
-		ast_cli(fd, "Server Disabled\n\n");
+		ast_cli(a->fd, "Server Disabled\n\n");
 	else {
-		ast_cli(fd, "Server Enabled and Bound to %s:%d\n\n",
+		ast_cli(a->fd, "Server Enabled and Bound to %s:%d\n\n",
 			ast_inet_ntoa(http_desc.oldsin.sin_addr),
 			ntohs(http_desc.oldsin.sin_port));
 		if (http_tls_cfg.enabled)
-			ast_cli(fd, "HTTPS Server Enabled and Bound to %s:%d\n\n",
+			ast_cli(a->fd, "HTTPS Server Enabled and Bound to %s:%d\n\n",
 				ast_inet_ntoa(https_desc.oldsin.sin_addr),
 				ntohs(https_desc.oldsin.sin_port));
 	}
 
-	ast_cli(fd, "Enabled URI's:\n");
+	ast_cli(a->fd, "Enabled URI's:\n");
 	AST_RWLIST_RDLOCK(&uris);
 	if (AST_RWLIST_EMPTY(&uris)) {
-		ast_cli(fd, "None.\n");
+		ast_cli(a->fd, "None.\n");
 	} else {
 		AST_RWLIST_TRAVERSE(&uris, urih, entry)
-			ast_cli(fd, "%s/%s%s => %s\n", prefix, urih->uri, (urih->has_subtree ? "/..." : "" ), urih->description);
+			ast_cli(a->fd, "%s/%s%s => %s\n", prefix, urih->uri, (urih->has_subtree ? "/..." : "" ), urih->description);
 	}
 	AST_RWLIST_UNLOCK(&uris);
 
-	ast_cli(fd, "\nEnabled Redirects:\n");
+	ast_cli(a->fd, "\nEnabled Redirects:\n");
 	AST_RWLIST_RDLOCK(&uri_redirects);
 	AST_RWLIST_TRAVERSE(&uri_redirects, redirect, entry)
-		ast_cli(fd, "  %s => %s\n", redirect->target, redirect->dest);
+		ast_cli(a->fd, "  %s => %s\n", redirect->target, redirect->dest);
 	if (AST_RWLIST_EMPTY(&uri_redirects))
-		ast_cli(fd, "  None.\n");
+		ast_cli(a->fd, "  None.\n");
 	AST_RWLIST_UNLOCK(&uri_redirects);
 
 
-	ast_cli(fd, "\nPOST mappings:\n");
+	ast_cli(a->fd, "\nPOST mappings:\n");
 	AST_RWLIST_RDLOCK(&post_mappings);
 	AST_LIST_TRAVERSE(&post_mappings, post_map, entry)
-		ast_cli(fd, "%s/%s => %s\n", prefix, post_map->from, post_map->to);
-	ast_cli(fd, "%s\n", AST_LIST_EMPTY(&post_mappings) ? "None.\n" : "");
+		ast_cli(a->fd, "%s/%s => %s\n", prefix, post_map->from, post_map->to);
+	ast_cli(a->fd, "%s\n", AST_LIST_EMPTY(&post_mappings) ? "None.\n" : "");
 	AST_RWLIST_UNLOCK(&post_mappings);
 
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 
 int ast_http_reload(void)
@@ -1283,14 +1289,8 @@ int ast_http_reload(void)
 	return __ast_http_load(1);
 }
 
-static char show_http_help[] =
-"Usage: http show status\n"
-"       Lists status of internal HTTP engine\n";
-
 static struct ast_cli_entry cli_http[] = {
-	{ { "http", "show", "status", NULL },
-	handle_show_http, "Display HTTP server status",
-	show_http_help },
+	AST_CLI_DEFINE(handle_show_http, "Display HTTP server status"),
 };
 
 int ast_http_init(void)

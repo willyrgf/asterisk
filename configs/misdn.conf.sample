@@ -56,6 +56,12 @@ debug=0
 ntdebugflags=0
 ntdebugfile=/var/log/misdn-nt.log
 
+
+; some pbx systems do cut the L1 for some milliseconds, to avoid 
+; dropping running calls, we can set this flag to yes and tell
+; mISDNuser not to drop the calls on L2_RELEASE
+ntkeepcalls=no
+
 ; the big trace
 ;
 ; default value: [not set]
@@ -227,8 +233,6 @@ te_choose_channel=no
 ; default: no
 ;
 pmp_l1_check=no
-pp_l2_check=no
-
 
 
 ;
@@ -264,6 +268,13 @@ nttimeout=no
 ; default value: standard
 ;
 method=standard
+
+
+; specify if chan_misdn should collect digits before going into the 
+; dialplan, you can choose yes=4 Seconds, no, or specify the amount
+; of seconds you need;
+; 
+overlapdial=yes
 
 ;
 ; dialplan means Type Of Number in ISDN Terms (for outgoing calls)
@@ -369,14 +380,6 @@ screen=-1
 ; default value: no
 ;
 ;echocancel=no
-
-; this disables echocancellation when the call is bridged between 
-; mISDN channels
-;
-; default value: no
-;
-echocancelwhenbridged=no
-
 
 ; Set this to no to disable echotraining. You can enter a number > 10
 ; the value is a multiple of 0.125 ms. 

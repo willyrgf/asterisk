@@ -29,24 +29,18 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <string.h>
-#include <stdio.h>
-#include <signal.h>
-#include <stdlib.h>
-#include <unistd.h>
 #include <fcntl.h>
 #include <sys/time.h>
 #include <sys/socket.h>
+#include <signal.h>
 
 #include "asterisk/lock.h"
 #include "asterisk/file.h"
-#include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/frame.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
 #include "asterisk/translate.h"
-#include "asterisk/options.h"
 
 #define LOCAL_NBSCAT "/usr/local/bin/nbscat8k"
 #define NBSCAT "/usr/bin/nbscat8k"
@@ -60,8 +54,8 @@ static char *app = "NBScat";
 static char *synopsis = "Play an NBS local stream";
 
 static char *descrip = 
-"  NBScat: Executes nbscat to listen to the local NBS stream.\n"
-"User can exit by pressing any key\n.";
+"  NBScat(): Executes nbscat to listen to the local NBS stream.\n"
+"User can exit by pressing any key.\n";
 
 
 static int NBScatplay(int fd)

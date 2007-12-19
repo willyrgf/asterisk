@@ -27,19 +27,17 @@
  *
  * \ingroup channel_drivers
  */
+/*** MODULEINFO
+        <depend>res_features</depend>
+ ***/
 
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
 #include <net/if.h>
-#include <errno.h>
-#include <stdlib.h>
 #include <fcntl.h>
 #include <netdb.h>
 #include <sys/signal.h>
@@ -53,11 +51,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/lock.h"
 #include "asterisk/channel.h"
 #include "asterisk/config.h"
-#include "asterisk/logger.h"
 #include "asterisk/module.h"
 #include "asterisk/pbx.h"
-#include "asterisk/options.h"
-#include "asterisk/lock.h"
 #include "asterisk/sched.h"
 #include "asterisk/io.h"
 #include "asterisk/rtp.h"
@@ -78,10 +73,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/stringfields.h"
 #include "asterisk/abstract_jb.h"
 #include "asterisk/event.h"
-
-#ifndef IPTOS_MINCOST
-#define IPTOS_MINCOST 0x02
-#endif
 
 /*
  * Define to work around buggy dlink MGCP phone firmware which
@@ -165,8 +156,9 @@ static ast_group_t cur_callergroup = 0;
 static ast_group_t cur_pickupgroup = 0;
 
 static unsigned int tos = 0;
-
+static unsigned int tos_audio = 0;
 static unsigned int cos = 0;
+static unsigned int cos_audio = 0;
 
 static int immediate = 0;
 
@@ -422,8 +414,8 @@ static void start_rtp(struct mgcp_subchannel *sub);
 static void handle_response(struct mgcp_endpoint *p, struct mgcp_subchannel *sub,  
                             int result, unsigned int ident, struct mgcp_request *resp);
 static void dump_cmd_queues(struct mgcp_endpoint *p, struct mgcp_subchannel *sub);
-static int mgcp_do_reload(void);
-static int mgcp_reload(int fd, int argc, char *argv[]);
+static char *mgcp_reload(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
+static int reload_config(int reload);
 
 static struct ast_channel *mgcp_request(const char *type, int format, void *data, int *cause);
 static int mgcp_call(struct ast_channel *ast, char *dest, int timeout);
@@ -599,9 +591,9 @@ static void mgcp_queue_frame(struct mgcp_subchannel *sub, struct ast_frame *f)
 {
 	for(;;) {
 		if (sub->owner) {
-			if (!ast_mutex_trylock(&sub->owner->lock)) {
+			if (!ast_channel_trylock(sub->owner)) {
 				ast_queue_frame(sub->owner, f);
-				ast_mutex_unlock(&sub->owner->lock);
+				ast_channel_unlock(sub->owner);
 				break;
 			} else {
 				ast_mutex_unlock(&sub->lock);
@@ -617,9 +609,9 @@ static void mgcp_queue_hangup(struct mgcp_subchannel *sub)
 {
 	for(;;) {
 		if (sub->owner) {
-			if (!ast_mutex_trylock(&sub->owner->lock)) {
+			if (!ast_channel_trylock(sub->owner)) {
 				ast_queue_hangup(sub->owner);
-				ast_mutex_unlock(&sub->owner->lock);
+				ast_channel_unlock(sub->owner);
 				break;
 			} else {
 				ast_mutex_unlock(&sub->lock);
@@ -638,7 +630,7 @@ static void mgcp_queue_control(struct mgcp_subchannel *sub, int control)
 	return mgcp_queue_frame(sub, &f);
 }
 
-static int retrans_pkt(void *data)
+static int retrans_pkt(const void *data)
 {
 	struct mgcp_gateway *gw = (struct mgcp_gateway *)data;
 	struct mgcp_message *cur, *exq = NULL, *w, *prev;
@@ -882,7 +874,7 @@ static int mgcp_call(struct ast_channel *ast, char *dest, int timeout)
 				ast_verb(3, "MGCP distinctive callwait %s\n", tone);
 			}
 		} else {
-			snprintf(tone, sizeof(tone), "L/wt");
+			ast_copy_string(tone, "L/wt", sizeof(tone));
 			if (mgcpdebug) {
 				ast_verb(3, "MGCP normal callwait %s\n", tone);
 			}
@@ -896,7 +888,7 @@ static int mgcp_call(struct ast_channel *ast, char *dest, int timeout)
 				ast_verb(3, "MGCP distinctive ring %s\n", tone);
 			}
 		} else {
-			snprintf(tone, sizeof(tone), "L/rg");
+			ast_copy_string(tone, "L/rg", sizeof(tone));
 			if (mgcpdebug) {
 				ast_verb(3, "MGCP default ring\n");
 			}
@@ -1041,71 +1033,72 @@ static int mgcp_hangup(struct ast_channel *ast)
 	return 0;
 }
 
-static int mgcp_show_endpoints(int fd, int argc, char *argv[])
+static char *handle_mgcp_show_endpoints(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	struct mgcp_gateway  *g;
-	struct mgcp_endpoint *e;
+	struct mgcp_gateway  *mg;
+	struct mgcp_endpoint *me;
 	int hasendpoints = 0;
 
-	if (argc != 3) 
-		return RESULT_SHOWUSAGE;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "mgcp show endpoints";
+		e->usage =
+			"Usage: mgcp show endpoints\n"
+			"       Lists all endpoints known to the MGCP (Media Gateway Control Protocol) subsystem.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc != 3) 
+		return CLI_SHOWUSAGE;
 	ast_mutex_lock(&gatelock);
-	g = gateways;
-	while(g) {
-		e = g->endpoints;
-		ast_cli(fd, "Gateway '%s' at %s (%s)\n", g->name, g->addr.sin_addr.s_addr ? ast_inet_ntoa(g->addr.sin_addr) : ast_inet_ntoa(g->defaddr.sin_addr), g->dynamic ? "Dynamic" : "Static");
-		while(e) {
+	mg = gateways;
+	while(mg) {
+		me = mg->endpoints;
+		ast_cli(a->fd, "Gateway '%s' at %s (%s)\n", mg->name, mg->addr.sin_addr.s_addr ? ast_inet_ntoa(mg->addr.sin_addr) : ast_inet_ntoa(mg->defaddr.sin_addr), mg->dynamic ? "Dynamic" : "Static");
+		while(me) {
 			/* Don't show wilcard endpoint */
-			if (strcmp(e->name, g->wcardep) !=0)
-				ast_cli(fd, "   -- '%s@%s in '%s' is %s\n", e->name, g->name, e->context, e->sub->owner ? "active" : "idle");
+			if (strcmp(me->name, mg->wcardep) != 0)
+				ast_cli(a->fd, "   -- '%s@%s in '%s' is %s\n", me->name, mg->name, me->context, me->sub->owner ? "active" : "idle");
 			hasendpoints = 1;
-			e = e->next;
+			me = me->next;
 		}
 		if (!hasendpoints) {
-			ast_cli(fd, "   << No Endpoints Defined >>     ");
+			ast_cli(a->fd, "   << No Endpoints Defined >>     ");
 		}
-		g = g->next;
+		mg = mg->next;
 	}
 	ast_mutex_unlock(&gatelock);
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 
-static const char show_endpoints_usage[] = 
-"Usage: mgcp show endpoints\n"
-"       Lists all endpoints known to the MGCP (Media Gateway Control Protocol) subsystem.\n";
-
-static const char audit_endpoint_usage[] = 
-"Usage: mgcp audit endpoint <endpointid>\n"
-"       Lists the capabilities of an endpoint in the MGCP (Media Gateway Control Protocol) subsystem.\n"
-"       mgcp debug MUST be on to see the results of this command.\n";
-
-static const char debug_usage[] = 
-"Usage: mgcp set debug\n"
-"       Enables dumping of MGCP packets for debugging purposes\n";
-
-static const char no_debug_usage[] = 
-"Usage: mgcp set debug off\n"
-"       Disables dumping of MGCP packets for debugging purposes\n";
-
-static const char mgcp_reload_usage[] =
-"Usage: mgcp reload\n"
-"       Reloads MGCP configuration from mgcp.conf\n"
-"       Deprecated:  please use 'reload chan_mgcp.so' instead.\n";
-
-static int mgcp_audit_endpoint(int fd, int argc, char *argv[])
+static char *handle_mgcp_audit_endpoint(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	struct mgcp_gateway  *g;
-	struct mgcp_endpoint *e;
+	struct mgcp_gateway  *mg;
+	struct mgcp_endpoint *me;
 	int found = 0;
 	char *ename,*gname, *c;
 
-	if (!mgcpdebug) {
-		return RESULT_SHOWUSAGE;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "mgcp audit endpoint";
+		e->usage =
+			"Usage: mgcp audit endpoint <endpointid>\n"
+			"       Lists the capabilities of an endpoint in the MGCP (Media Gateway Control Protocol) subsystem.\n"
+			"       mgcp debug MUST be on to see the results of this command.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
 	}
-	if (argc != 4) 
-		return RESULT_SHOWUSAGE;
+
+	if (!mgcpdebug) {
+		return CLI_SHOWUSAGE;
+	}
+	if (a->argc != 4)
+		return CLI_SHOWUSAGE;
 	/* split the name into parts by null */
-	ename = argv[3];
+	ename = a->argv[3];
 	gname = ename;
 	while (*gname) {
 		if (*gname == '@') {
@@ -1120,69 +1113,77 @@ static int mgcp_audit_endpoint(int fd, int argc, char *argv[])
 	if ((c = strrchr(gname, ']')))
 		*c = '\0';
 	ast_mutex_lock(&gatelock);
-	g = gateways;
-	while(g) {
-		if (!strcasecmp(g->name, gname)) {
-			e = g->endpoints;
-			while(e) {
-				if (!strcasecmp(e->name, ename)) {
+	mg = gateways;
+	while(mg) {
+		if (!strcasecmp(mg->name, gname)) {
+			me = mg->endpoints;
+			while(me) {
+				if (!strcasecmp(me->name, ename)) {
 					found = 1;
-					transmit_audit_endpoint(e);
+					transmit_audit_endpoint(me);
 					break;
 				}
-				e = e->next;
+				me = me->next;
 			}
 			if (found) {
 				break;
 			}
 		}
-		g = g->next;
+		mg = mg->next;
 	}
 	if (!found) {
-		ast_cli(fd, "   << Could not find endpoint >>     ");
+		ast_cli(a->fd, "   << Could not find endpoint >>     ");
 	}
 	ast_mutex_unlock(&gatelock);
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 
-static int mgcp_do_debug(int fd, int argc, char *argv[])
+static char *handle_mgcp_set_debug(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	if (argc != 3)
-		return RESULT_SHOWUSAGE;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "mgcp set debug";
+		e->usage =
+			"Usage: mgcp set debug\n"
+			"       Enables dumping of MGCP packets for debugging purposes\n";	
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc != 3)
+		return CLI_SHOWUSAGE;
 	mgcpdebug = 1;
-	ast_cli(fd, "MGCP Debugging Enabled\n");
-	return RESULT_SUCCESS;
+	ast_cli(a->fd, "MGCP Debugging Enabled\n");
+	return CLI_SUCCESS;
 }
 
-static int mgcp_no_debug(int fd, int argc, char *argv[])
+static char *handle_mgcp_set_debug_off(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	if (argc != 4)
-		return RESULT_SHOWUSAGE;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "mgcp set debug off";
+		e->usage =
+			"Usage: mgcp set debug off\n"
+			"       Disables dumping of MGCP packets for debugging purposes\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc != 4)
+		return CLI_SHOWUSAGE;
 	mgcpdebug = 0;
-	ast_cli(fd, "MGCP Debugging Disabled\n");
-	return RESULT_SUCCESS;
+	ast_cli(a->fd, "MGCP Debugging Disabled\n");
+	return CLI_SUCCESS;
 }
 
 static struct ast_cli_entry cli_mgcp[] = {
-	{ { "mgcp", "audit", "endpoint", NULL },
-	mgcp_audit_endpoint, "Audit specified MGCP endpoint",
-	audit_endpoint_usage },
-
-	{ { "mgcp", "show", "endpoints", NULL },
-	mgcp_show_endpoints, "List defined MGCP endpoints",
-	show_endpoints_usage },
-
-	{ { "mgcp", "set", "debug", NULL },
-	mgcp_do_debug, "Enable MGCP debugging",
-	debug_usage },
-
-	{ { "mgcp", "set", "debug", "off", NULL },
-	mgcp_no_debug, "Disable MGCP debugging",
-	no_debug_usage },
-
-	{ { "mgcp", "reload", NULL },
-	mgcp_reload, "Reload MGCP configuration",
-	mgcp_reload_usage },
+	AST_CLI_DEFINE(handle_mgcp_audit_endpoint, "Audit specified MGCP endpoint"),
+	AST_CLI_DEFINE(handle_mgcp_show_endpoints, "List defined MGCP endpoints"),
+	AST_CLI_DEFINE(handle_mgcp_set_debug, "Enable MGCP debugging"),
+	AST_CLI_DEFINE(handle_mgcp_set_debug_off, "Disable MGCP debugging"),
+	AST_CLI_DEFINE(mgcp_reload, "Reload MGCP configuration"),
 };
 
 static int mgcp_answer(struct ast_channel *ast)
@@ -1932,7 +1933,7 @@ static int add_line(struct mgcp_request *req, char *line)
 	}
 	if (!req->lines) {
 		/* Add extra empty return */
-		snprintf(req->data + req->len, sizeof(req->data) - req->len, "\r\n");
+		ast_copy_string(req->data + req->len, "\r\n", sizeof(req->data) - req->len);
 		req->len += strlen(req->data + req->len);
 	}
 	req->line[req->lines] = req->data + req->len;
@@ -2065,13 +2066,13 @@ static int add_sdp(struct mgcp_request *resp, struct mgcp_subchannel *sub, struc
 	if (mgcpdebug) {
 		ast_verbose("We're at %s port %d\n", ast_inet_ntoa(p->parent->ourip), ntohs(sin.sin_port));
 	}
-	snprintf(v, sizeof(v), "v=0\r\n");
+	ast_copy_string(v, "v=0\r\n", sizeof(v));
 	snprintf(o, sizeof(o), "o=root %d %d IN IP4 %s\r\n", (int)getpid(), (int)getpid(), ast_inet_ntoa(dest.sin_addr));
-	snprintf(s, sizeof(s), "s=session\r\n");
+	ast_copy_string(s, "s=session\r\n", sizeof(s));
 	snprintf(c, sizeof(c), "c=IN IP4 %s\r\n", ast_inet_ntoa(dest.sin_addr));
-	snprintf(t, sizeof(t), "t=0 0\r\n");
+	ast_copy_string(t, "t=0 0\r\n", sizeof(t));
 	snprintf(m, sizeof(m), "m=audio %d RTP/AVP", ntohs(dest.sin_port));
-	for (x = 1; x <= AST_FORMAT_MAX_AUDIO; x <<= 1) {
+	for (x = 1; x <= AST_FORMAT_AUDIO_MASK; x <<= 1) {
 		if (p->capability & x) {
 			if (mgcpdebug) {
 				ast_verbose("Answering with capability %d\n", x);
@@ -2136,8 +2137,8 @@ static int transmit_modify_with_sdp(struct mgcp_subchannel *sub, struct ast_rtp 
 		ast_rtp_get_peer(rtp, &sub->tmpdest);
 		return 0;
 	}
-	snprintf(local, sizeof(local), "p:20");
-	for (x=1;x<= AST_FORMAT_MAX_AUDIO; x <<= 1) {
+	ast_copy_string(local, "p:20", sizeof(local));
+	for (x = 1; x <= AST_FORMAT_AUDIO_MASK; x <<= 1) {
 		if (p->capability & x) {
 			snprintf(tmp, sizeof(tmp), ", a:%s", ast_rtp_lookup_mime_subtype(1, x, 0));
 			strncat(local, tmp, sizeof(local) - strlen(local) - 1);
@@ -2166,8 +2167,8 @@ static int transmit_connect_with_sdp(struct mgcp_subchannel *sub, struct ast_rtp
 	int x;
 	struct mgcp_endpoint *p = sub->parent;
 
-	snprintf(local, sizeof(local), "p:20");
-	for (x=1;x<= AST_FORMAT_MAX_AUDIO; x <<= 1) {
+	ast_copy_string(local, "p:20", sizeof(local));
+	for (x = 1; x <= AST_FORMAT_AUDIO_MASK; x <<= 1) {
 		if (p->capability & x) {
 			snprintf(tmp, sizeof(tmp), ", a:%s", ast_rtp_lookup_mime_subtype(1, x, 0));
 			strncat(local, tmp, sizeof(local) - strlen(local) - 1);
@@ -2594,8 +2595,10 @@ static void start_rtp(struct mgcp_subchannel *sub)
 	sub->rtp = ast_rtp_new_with_bindaddr(sched, io, 1, 0, bindaddr.sin_addr);
 	if (sub->rtp && sub->owner)
 		ast_channel_set_fd(sub->owner, 0, ast_rtp_fd(sub->rtp));
-	if (sub->rtp)
+	if (sub->rtp) {
+		ast_rtp_setqos(sub->rtp, tos_audio, cos_audio, "MGCP RTP");
 		ast_rtp_setnat(sub->rtp, sub->nat);
+	}
 #if 0
 	ast_rtp_set_callback(p->rtp, rtpready);
 	ast_rtp_set_data(p->rtp, p);
@@ -2626,7 +2629,7 @@ static void *mgcp_ss(void *data)
 		while (strlen(p->dtmf_buf) == len){
 			ast_safe_sleep(chan, loop_pause);
 			timeout -= loop_pause;
-			if ( (timeout -= loop_pause) <= 0){
+			if (timeout <= 0){
 				res = 0;
 				break;
 			}
@@ -2699,6 +2702,7 @@ static void *mgcp_ss(void *data)
 			transmit_notify_request(sub, "G/cg");
 			/*zt_wait_event(p->subs[index].zfd);*/
 			ast_hangup(chan);
+			memset(p->dtmf_buf, 0, sizeof(p->dtmf_buf));
 			return NULL;
 		} else if (p->hascallwaiting && p->callwaiting && !strcmp(p->dtmf_buf, "*70")) {
 			ast_verb(3, "Disabling call waiting on %s\n", chan->name);
@@ -3200,19 +3204,16 @@ static int handle_request(struct mgcp_subchannel *sub, struct mgcp_request *req,
 				(((ev[0] >= '0') && (ev[0] <= '9')) ||
 				 ((ev[0] >= 'A') && (ev[0] <= 'D')) ||
 				  (ev[0] == '*') || (ev[0] == '#'))) {
-			if (sub && (sub->owner->_state >=  AST_STATE_UP)) {
+			if (sub && sub->owner && (sub->owner->_state >=  AST_STATE_UP)) {
 				f.frametype = AST_FRAME_DTMF;
 				f.subclass = ev[0];
 				f.src = "mgcp";
-				if (sub->owner) {
-					/* XXX MUST queue this frame to all subs in threeway call if threeway call is active */
-					mgcp_queue_frame(sub, &f);
-					ast_mutex_lock(&sub->next->lock);
-					if (sub->next->owner) {
-						mgcp_queue_frame(sub->next, &f);
-					}
-					ast_mutex_unlock(&sub->next->lock);
-				}
+				/* XXX MUST queue this frame to all subs in threeway call if threeway call is active */
+				mgcp_queue_frame(sub, &f);
+				ast_mutex_lock(&sub->next->lock);
+				if (sub->next->owner)
+					mgcp_queue_frame(sub->next, &f);
+				ast_mutex_unlock(&sub->next->lock);
 				if (strstr(p->curtone, "wt") && (ev[0] == 'A')) {
 					memset(p->curtone, 0, sizeof(p->curtone));
 				}
@@ -3379,7 +3380,7 @@ static void *do_monitor(void *data)
 		ast_mutex_unlock(&mgcp_reload_lock);
 		if (reloading) {
 			ast_verb(1, "Reloading MGCP\n");
-			mgcp_do_reload();
+			reload_config(1);
 			/* Add an I/O event to our UDP socket */
 			if (mgcpsock > -1) 
 				mgcpsock_read_id = ast_io_add(io, mgcpsock, mgcpsock_read, AST_IO_IN, NULL);
@@ -4042,7 +4043,7 @@ static void prune_gateways(void)
 	ast_mutex_unlock(&gatelock);
 }
 
-static int reload_config(void)
+static int reload_config(int reload)
 {
 	struct ast_config *cfg;
 	struct ast_variable *v;
@@ -4052,18 +4053,21 @@ static int reload_config(void)
 	struct ast_hostent ahp;
 	struct hostent *hp;
 	int format;
+	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
 	
 	if (gethostname(ourhost, sizeof(ourhost)-1)) {
 		ast_log(LOG_WARNING, "Unable to get hostname, MGCP disabled\n");
 		return 0;
 	}
-	cfg = ast_config_load(config);
+	cfg = ast_config_load(config, config_flags);
 
 	/* We *must* have a config file otherwise stop immediately */
 	if (!cfg) {
 		ast_log(LOG_NOTICE, "Unable to load config %s, MGCP disabled\n", config);
 		return 0;
-	}
+	} else if (cfg == CONFIG_STATUS_FILEUNCHANGED)
+		return 0;
+
 	memset(&bindaddr, 0, sizeof(bindaddr));
 	dtmfmode = 0;
 
@@ -4099,10 +4103,16 @@ static int reload_config(void)
 				capability &= ~format;
 		} else if (!strcasecmp(v->name, "tos")) {
 			if (ast_str2tos(v->value, &tos))
-			    ast_log(LOG_WARNING, "Invalid tos value at line %d, see doc/qos.tex for more information.\n", v->lineno);
+			    ast_log(LOG_WARNING, "Invalid tos value at line %d, refer to QoS documentation\n", v->lineno);
+		} else if (!strcasecmp(v->name, "tos_audio")) {
+			if (ast_str2tos(v->value, &tos_audio))
+			    ast_log(LOG_WARNING, "Invalid tos_audio value at line %d, refer to QoS documentation\n", v->lineno);
 		} else if (!strcasecmp(v->name, "cos")) {				
 			if (ast_str2cos(v->value, &cos))
-			    ast_log(LOG_WARNING, "Invalid cos value at line %d, see doc/qos.tex for more information.\n", v->lineno);
+			    ast_log(LOG_WARNING, "Invalid cos value at line %d, refer to QoS documentation\n", v->lineno);
+		} else if (!strcasecmp(v->name, "cos_audio")) {				
+			if (ast_str2cos(v->value, &cos_audio))
+			    ast_log(LOG_WARNING, "Invalid cos_audio value at line %d, refer to QoS documentation\n", v->lineno);
 		} else if (!strcasecmp(v->name, "port")) {
 			if (sscanf(v->value, "%d", &ourport) == 1) {
 				bindaddr.sin_port = htons(ourport);
@@ -4186,7 +4196,7 @@ static int reload_config(void)
 		} else {
 			ast_verb(2, "MGCP Listening on %s:%d\n",
 					ast_inet_ntoa(bindaddr.sin_addr), ntohs(bindaddr.sin_port));
-			ast_netsock_set_qos(mgcpsock, tos, cos);
+			ast_netsock_set_qos(mgcpsock, tos, cos, "MGCP");
 		}
 	}
 	ast_mutex_unlock(&netlock);
@@ -4222,7 +4232,7 @@ static int load_module(void)
 		return AST_MODULE_LOAD_FAILURE;
 	}
 
-	if (reload_config())
+	if (reload_config(0))
 		return AST_MODULE_LOAD_DECLINE;
 
 	/* Make sure we can register our mgcp channel type */
@@ -4242,17 +4252,24 @@ static int load_module(void)
 	return AST_MODULE_LOAD_SUCCESS;
 }
 
-/*! \brief  mgcp_do_reload: Reload module */
-static int mgcp_do_reload(void)
-{
-	reload_config();
-	return 0;
-}
-
-static int mgcp_reload(int fd, int argc, char *argv[])
+static char *mgcp_reload(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	static int deprecated = 0;
-	if (!deprecated && argc > 0) {
+
+	if (e) {
+		switch (cmd) {
+		case CLI_INIT:
+			e->command = "mgcp reload";
+			e->usage =
+				"Usage: mgcp reload\n"
+				"       'mgcp reload' is deprecated.  Please use 'reload chan_mgcp.so' instead.\n";
+			return NULL;
+		case CLI_GENERATE:
+			return NULL;
+		}
+	}
+
+	if (!deprecated && a && a->argc > 0) {
 		ast_log(LOG_WARNING, "'mgcp reload' is deprecated.  Please use 'reload chan_mgcp.so' instead.\n");
 		deprecated = 1;
 	}
@@ -4264,12 +4281,12 @@ static int mgcp_reload(int fd, int argc, char *argv[])
 		mgcp_reloading = 1;
 	ast_mutex_unlock(&mgcp_reload_lock);
 	restart_monitor();
-	return 0;
+	return CLI_SUCCESS;
 }
 
 static int reload(void)
 {
-	mgcp_reload(0, 0, NULL);
+	mgcp_reload(NULL, 0, NULL);
 	return 0;
 }
 
@@ -4304,7 +4321,7 @@ static int unload_module(void)
 		/* We always want to leave this in a consistent state */
 		ast_channel_register(&mgcp_tech);
 		mgcp_reloading = 0;
-		mgcp_reload(0, 0, NULL);
+		mgcp_reload(NULL, 0, NULL);
 		return -1;
 	}
 
@@ -4324,7 +4341,7 @@ static int unload_module(void)
 		/* Allow the monitor to restart */
 		monitor_thread = AST_PTHREADT_NULL;
 		mgcp_reloading = 0;
-		mgcp_reload(0, 0, NULL);
+		mgcp_reload(NULL, 0, NULL);
 		return -1;
 	}
 

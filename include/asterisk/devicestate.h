@@ -41,7 +41,7 @@
 extern "C" {
 #endif
 
-/*! Device States 
+/*! \brief Device States 
  *  \note The order of these states may not change because they are included
  *        in Asterisk events which may be transmitted across the network to
  *        other servers.
@@ -125,8 +125,6 @@ enum ast_device_state ast_device_state(const char *device);
  *
  * \retval 0 on success 
  * \retval -1 on failure
- *
- * \note This is deprecated in favor of ast_devstate_changed()
  */
 int ast_devstate_changed(enum ast_device_state state, const char *fmt, ...)
 	__attribute__ ((format (printf, 2, 3)));
@@ -135,7 +133,7 @@ int ast_devstate_changed(enum ast_device_state state, const char *fmt, ...)
  * \brief Tells Asterisk the State for Device is changed
  *
  * \param state the new state of the device
- * \param fmt device name like a dial string with format parameters
+ * \param device device name like a dial string with format parameters
  *
  * The new state of the device will be sent off to any subscribers
  * of device states.  It will also be stored in the internal event
@@ -143,8 +141,6 @@ int ast_devstate_changed(enum ast_device_state state, const char *fmt, ...)
  *
  * \retval 0 on success 
  * \retval -1 on failure
- *
- * \note This is deprecated in favor of ast_devstate_changed()
  */
 int ast_devstate_changed_literal(enum ast_device_state state, const char *device);
 

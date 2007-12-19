@@ -29,14 +29,7 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <string.h>
-
 #include "asterisk/file.h"
-#include "asterisk/logger.h"
-#include "asterisk/options.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
@@ -50,19 +43,19 @@ static char *sayunixtime_synopsis = "Says a specified time in a custom format";
 
 static char *sayunixtime_descrip =
 "SayUnixTime([unixtime][,[timezone][,format]])\n"
-"  unixtime: time, in seconds since Jan 1, 1970.  May be negative.\n"
+"  unixtime  - time, in seconds since Jan 1, 1970.  May be negative.\n"
 "              defaults to now.\n"
-"  timezone: timezone, see /usr/share/zoneinfo for a list.\n"
+"  timezone  - timezone, see /usr/share/zoneinfo for a list.\n"
 "              defaults to machine default.\n"
-"  format:   a format the time is to be said in.  See voicemail.conf.\n"
+"  format    - a format the time is to be said in.  See voicemail.conf.\n"
 "              defaults to \"ABdY 'digits/at' IMp\"\n";
 static char *datetime_descrip =
 "DateTime([unixtime][,[timezone][,format]])\n"
-"  unixtime: time, in seconds since Jan 1, 1970.  May be negative.\n"
+"  unixtime  - time, in seconds since Jan 1, 1970.  May be negative.\n"
 "              defaults to now.\n"
-"  timezone: timezone, see /usr/share/zoneinfo for a list.\n"
+"  timezone  - timezone, see /usr/share/zoneinfo for a list.\n"
 "              defaults to machine default.\n"
-"  format:   a format the time is to be said in.  See voicemail.conf.\n"
+"  format:   - a format the time is to be said in.  See voicemail.conf.\n"
 "              defaults to \"ABdY 'digits/at' IMp\"\n";
 
 

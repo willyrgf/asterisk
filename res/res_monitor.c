@@ -27,17 +27,12 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <errno.h>
-#include <string.h>
-#include <sys/types.h>
 #include <sys/stat.h>
 #include <libgen.h>
 
+#include "asterisk/paths.h"	/* use ast_config_AST_MONITOR_DIR */
 #include "asterisk/lock.h"
 #include "asterisk/channel.h"
-#include "asterisk/logger.h"
 #include "asterisk/file.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
@@ -47,7 +42,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/app.h"
 #include "asterisk/utils.h"
 #include "asterisk/config.h"
-#include "asterisk/options.h"
 
 AST_MUTEX_DEFINE_STATIC(monitorlock);
 
@@ -65,7 +59,7 @@ static unsigned long seq = 0;
 
 static char *monitor_synopsis = "Monitor a channel";
 
-static char *monitor_descrip = "Monitor([file_format[:urlbase],[fname_base],[options]]):\n"
+static char *monitor_descrip = "  Monitor([file_format[:urlbase],[fname_base],[options]]):\n"
 "Used to start monitoring a channel. The channel's input and output\n"
 "voice packets are logged to files until the channel hangs up or\n"
 "monitoring is stopped by the StopMonitor application.\n"
@@ -80,14 +74,12 @@ static char *monitor_descrip = "Monitor([file_format[:urlbase],[fname_base],[opt
 "          and a target mixed file name which is the same as the leg file names\n"
 "          only without the in/out designator.\n"
 "          If MONITOR_EXEC_ARGS is set, the contents will be passed on as\n"
-"          additional arguements to MONITOR_EXEC\n"
+"          additional arguments to MONITOR_EXEC\n"
 "          Both MONITOR_EXEC and the Mix flag can be set from the\n"
 "          administrator interface\n"
 "\n"
 "    b   - Don't begin recording unless a call is bridged to another channel\n"
-"\n"
 "    i   - Skip recording of input stream (disables m option)\n"
-"\n"
 "    o   - Skip recording of output stream (disables m option)\n"
 "\nReturns -1 if monitor files can't be opened or if the channel is already\n"
 "monitored, otherwise 0.\n"
@@ -95,23 +87,23 @@ static char *monitor_descrip = "Monitor([file_format[:urlbase],[fname_base],[opt
 
 static char *stopmonitor_synopsis = "Stop monitoring a channel";
 
-static char *stopmonitor_descrip = "StopMonitor\n"
+static char *stopmonitor_descrip = "  StopMonitor():\n"
 	"Stops monitoring a channel. Has no effect if the channel is not monitored\n";
 
 static char *changemonitor_synopsis = "Change monitoring filename of a channel";
 
-static char *changemonitor_descrip = "ChangeMonitor(filename_base)\n"
-	"Changes monitoring filename of a channel. Has no effect if the channel is not monitored\n"
+static char *changemonitor_descrip = "  ChangeMonitor(filename_base):\n"
+	"Changes monitoring filename of a channel. Has no effect if the channel is not monitored.\n"
 	"The argument is the new filename base to use for monitoring this channel.\n";
 
 static char *pausemonitor_synopsis = "Pause monitoring of a channel";
 
-static char *pausemonitor_descrip = "PauseMonitor\n"
+static char *pausemonitor_descrip = "  PauseMonitor():\n"
 	"Pauses monitoring of a channel until it is re-enabled by a call to UnpauseMonitor.\n";
 
 static char *unpausemonitor_synopsis = "Unpause monitoring of a channel";
 
-static char *unpausemonitor_descrip = "UnpauseMonitor\n"
+static char *unpausemonitor_descrip = "  UnpauseMonitor():\n"
 	"Unpauses monitoring of a channel on which monitoring had\n"
 	"previously been paused with PauseMonitor.\n";
 
@@ -241,6 +233,13 @@ int ast_monitor_start(	struct ast_channel *chan, const char *format_spec,
 		ast_monitor_set_state(chan, AST_MONITOR_RUNNING);
 		/* so we know this call has been monitored in case we need to bill for it or something */
 		pbx_builtin_setvar_helper(chan, "__MONITORED","true");
+
+		manager_event(EVENT_FLAG_CALL, "MonitorStart",
+        	                "Channel: %s\r\n"
+                	        "Uniqueid: %s\r\n",                        
+	                        chan->name,
+        	                chan->uniqueid                        
+                	        );
 	} else {
 		ast_debug(1,"Cannot start monitoring %s, already monitored\n", chan->name);
 		res = -1;
@@ -321,7 +320,7 @@ int ast_monitor_stop(struct ast_channel *chan, int need_lock)
 			const char *format = !strcasecmp(chan->monitor->format,"wav49") ? "WAV" : chan->monitor->format;
 			char *name = chan->monitor->filename_base;
 			int directory = strchr(name, '/') ? 1 : 0;
-			char *dir = directory ? "" : ast_config_AST_MONITOR_DIR;
+			const char *dir = directory ? "" : ast_config_AST_MONITOR_DIR;
 			const char *execute, *execute_args;
 
 			/* Set the execute application */
@@ -349,6 +348,13 @@ int ast_monitor_stop(struct ast_channel *chan, int need_lock)
 		ast_free(chan->monitor->format);
 		ast_free(chan->monitor);
 		chan->monitor = NULL;
+
+		manager_event(EVENT_FLAG_CALL, "MonitorStop",
+        	                "Channel: %s\r\n"
+	                        "Uniqueid: %s\r\n",
+	                        chan->name,
+	                        chan->uniqueid
+	                        );
 	}
 
 	UNLOCK_IF_NEEDED(chan, need_lock);
@@ -421,7 +427,7 @@ int ast_monitor_change_fname(struct ast_channel *chan, const char *fname_base, i
 /*!
  * \brief Start monitor
  * \param chan
- * \param data arguements passed  fname|options
+ * \param data arguments passed fname|options
  * \retval 0 on success.
  * \retval -1 on failure.
 */
@@ -452,14 +458,16 @@ static int start_monitor_exec(struct ast_channel *chan, void *data)
 	parse = ast_strdupa((char*)data);
 	AST_STANDARD_APP_ARGS(args, parse);
 
-	if (strchr(args.options, 'm'))
-		stream_action |= X_JOIN;
-	if (strchr(args.options, 'b'))
-		waitforbridge = 1;
-	if (strchr(args.options, 'i'))
-		stream_action &= ~X_REC_IN;
-	if (strchr(args.options, 'o'))
-		stream_action &= ~X_REC_OUT;
+	if (!ast_strlen_zero(args.options)) {
+		if (strchr(args.options, 'm'))
+			stream_action |= X_JOIN;
+		if (strchr(args.options, 'b'))
+			waitforbridge = 1;
+		if (strchr(args.options, 'i'))
+			stream_action &= ~X_REC_IN;
+		if (strchr(args.options, 'o'))
+			stream_action &= ~X_REC_OUT;
+	}
 
 	arg = strchr(args.format, ':');
 	if (arg) {
@@ -722,7 +730,7 @@ static int load_module(void)
 	ast_manager_register2("PauseMonitor", EVENT_FLAG_CALL, pause_monitor_action, pausemonitor_synopsis, pause_monitor_action_help);
 	ast_manager_register2("UnpauseMonitor", EVENT_FLAG_CALL, unpause_monitor_action, unpausemonitor_synopsis, unpause_monitor_action_help);
 
-	return 0;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 static int unload_module(void)

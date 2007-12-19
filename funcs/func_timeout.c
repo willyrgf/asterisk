@@ -28,18 +28,11 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <sys/types.h>
-
 #include "asterisk/module.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
-#include "asterisk/logger.h"
 #include "asterisk/utils.h"
 #include "asterisk/app.h"
-#include "asterisk/options.h"
 
 static int timeout_read(struct ast_channel *chan, const char *cmd, char *data,
 			char *buf, size_t len)
@@ -106,19 +99,23 @@ static int timeout_write(struct ast_channel *chan, const char *cmd, char *data,
 		return -1;
 
 	x = atoi(value);
+	if (x < 0)
+		x = 0;
 
 	switch (*data) {
 	case 'a':
 	case 'A':
 		ast_channel_setwhentohangup(chan, x);
+		if (VERBOSITY_ATLEAST(3)) {
 			if (chan->whentohangup) {
 				struct timeval tv = { chan->whentohangup, 0 };
 				ast_strftime(timestr, sizeof(timestr), "%Y-%m-%d %H:%M:%S.%3q %Z",
 					ast_localtime(&tv, &myt, NULL));
-			ast_verb(3, "Channel will hangup at %s.\n", timestr);
+				ast_verbose("Channel will hangup at %s.\n", timestr);
 			} else {
-			ast_verb(3, "Channel hangup cancelled.\n");
+				ast_verbose("Channel hangup cancelled.\n");
 			}
+		}
 		break;
 
 	case 'r':

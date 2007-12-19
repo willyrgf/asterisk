@@ -36,23 +36,16 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
-
 #include "asterisk/file.h"
-#include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/dsp.h"
 #include "asterisk/module.h"
-#include "asterisk/options.h"
 
 static char *app = "WaitForSilence";
 static char *synopsis = "Waits for a specified amount of silence";
 static char *descrip =
-"  WaitForSilence(silencerequired[,iterations][,timeout]) \n"
+"  WaitForSilence(silencerequired[,iterations][,timeout]):\n"
 "Wait for Silence: Waits for up to 'silencerequired' \n"
 "milliseconds of silence, 'iterations' times or once if omitted.\n"
 "An optional timeout specified the number of seconds to return\n"

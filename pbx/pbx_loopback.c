@@ -26,21 +26,13 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <unistd.h>
-#include <string.h>
-#include <errno.h>
-
 #include "asterisk/file.h"
 #include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/config.h"
-#include "asterisk/options.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
 #include "asterisk/frame.h"
-#include "asterisk/file.h"
 #include "asterisk/cli.h"
 #include "asterisk/lock.h"
 #include "asterisk/md5.h"
@@ -87,7 +79,6 @@ static char *loopback_helper(char *buf, int buflen, const char *exten, const cha
 	char tmp[80];
 
 	snprintf(tmp, sizeof(tmp), "%d", priority);
-	memset(buf, 0, buflen);
 	AST_LIST_HEAD_INIT_NOLOCK(&headp);
 	AST_LIST_INSERT_HEAD(&headp, ast_var_assign("EXTEN", exten), entries);
 	AST_LIST_INSERT_HEAD(&headp, ast_var_assign("CONTEXT", context), entries);
@@ -141,8 +132,9 @@ static int loopback_canmatch(struct ast_channel *chan, const char *context, cons
 
 static int loopback_exec(struct ast_channel *chan, const char *context, const char *exten, int priority, const char *callerid, const char *data)
 {
+	int found;
 	LOOPBACK_COMMON;
-	res = ast_spawn_extension(chan, newcontext, newexten, newpriority, callerid);
+	res = ast_spawn_extension(chan, newcontext, newexten, newpriority, callerid, &found, 0);
 	/* XXX hmmm... res is overridden ? */
 	if (newpattern && !ast_extension_match(newpattern, exten))
 		res = -1;

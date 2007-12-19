@@ -23,22 +23,13 @@
 #ifndef _ASTERISK_UTILS_H
 #define _ASTERISK_UTILS_H
 
-#include "asterisk/compat.h"
+#include "asterisk/network.h"
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <stdarg.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>	/* we want to override inet_ntoa */
-#include <netdb.h>
-#include <limits.h>
-#include <string.h>
 #include <time.h>	/* we want to override localtime_r */
 
 #include "asterisk/lock.h"
 #include "asterisk/time.h"
 #include "asterisk/logger.h"
-#include "asterisk/compiler.h"
 #include "asterisk/localtime.h"
 
 /*! 
@@ -283,6 +274,19 @@ static force_inline void ast_slinear_saturated_add(short *input, short *value)
 	else
 		*input = (short) res;
 }
+
+static force_inline void ast_slinear_saturated_subtract(short *input, short *value)
+{
+	int res;
+
+	res = (int) *input - *value;
+	if (res > 32767)
+		*input = 32767;
+	else if (res < -32767)
+		*input = -32767;
+	else
+		*input = (short) res;
+}
 	
 static force_inline void ast_slinear_saturated_multiply(short *input, short *value)
 {
@@ -304,23 +308,6 @@ static force_inline void ast_slinear_saturated_divide(short *input, short *value
 
 int test_for_thread_safety(void);
 
-/*!
- * \brief thread-safe replacement for inet_ntoa().
- *
- * \note It is very important to note that even though this is a thread-safe
- *       replacement for inet_ntoa(), it is *not* reentrant.  In a single
- *       thread, the result from a previous call to this function is no longer
- *       valid once it is called again.  If the result from multiple calls to
- *       this function need to be kept or used at once, then the result must be
- *       copied to a local buffer before calling this function again.
- */
-const char *ast_inet_ntoa(struct in_addr ia);
-
-#ifdef inet_ntoa
-#undef inet_ntoa
-#endif
-#define inet_ntoa __dont__use__inet_ntoa__use__ast_inet_ntoa__instead__
-
 #ifdef localtime_r
 #undef localtime_r
 #endif
@@ -340,13 +327,10 @@ int ast_wait_for_input(int fd, int ms);
 */
 int ast_carefulwrite(int fd, char *s, int len, int timeoutms);
 
-/*! \brief Compares the source address and port of two sockaddr_in */
-static force_inline int inaddrcmp(const struct sockaddr_in *sin1, const struct sockaddr_in *sin2)
-{
-	return ((sin1->sin_addr.s_addr != sin2->sin_addr.s_addr) 
-		|| (sin1->sin_port != sin2->sin_port));
-}
-
+/*
+ * Thread management support (should be moved to lock.h or a different header)
+ */
+ 
 #define AST_STACKSIZE 240 * 1024
 
 #if defined(LOW_MEMORY)
@@ -366,24 +350,25 @@ int ast_pthread_create_detached_stack(pthread_t *thread, pthread_attr_t *attr, v
 				 void *data, size_t stacksize, const char *file, const char *caller,
 				 int line, const char *start_fn);
 
-#define ast_pthread_create(a, b, c, d) ast_pthread_create_stack(a, b, c, d,			\
-							        0,				\
-	 						        __FILE__, __FUNCTION__,		\
- 							        __LINE__, #c)
-#define ast_pthread_create_detached(a, b, c, d) ast_pthread_create_detached_stack(a, b, c, d, \
-									0, \
-									__FILE__, __FUNCTION__, \
-									__LINE__, #c)
+#define ast_pthread_create(a, b, c, d) 				\
+	ast_pthread_create_stack(a, b, c, d,			\
+		0, __FILE__, __FUNCTION__, __LINE__, #c)
 
-#define ast_pthread_create_background(a, b, c, d) ast_pthread_create_stack(a, b, c, d,			\
-									   AST_BACKGROUND_STACKSIZE,	\
-									   __FILE__, __FUNCTION__,	\
-									   __LINE__, #c)
+#define ast_pthread_create_detached(a, b, c, d)			\
+	ast_pthread_create_detached_stack(a, b, c, d,		\
+		0, __FILE__, __FUNCTION__, __LINE__, #c)
 
-#define ast_pthread_create_detached_background(a, b, c, d) ast_pthread_create_detached_stack(a, b, c, d, \
-									AST_BACKGROUND_STACKSIZE, \
-									__FILE__, __FUNCTION__, \
-									__LINE__, #c)
+#define ast_pthread_create_background(a, b, c, d)		\
+	ast_pthread_create_stack(a, b, c, d,			\
+		AST_BACKGROUND_STACKSIZE,			\
+		__FILE__, __FUNCTION__, __LINE__, #c)
+
+#define ast_pthread_create_detached_background(a, b, c, d)	\
+	ast_pthread_create_detached_stack(a, b, c, d,		\
+		AST_BACKGROUND_STACKSIZE,			\
+		__FILE__, __FUNCTION__, __LINE__, #c)
+
+/* End of thread management support */
 
 /*!
 	\brief Process a string to find and replace characters
@@ -395,20 +380,22 @@ char *ast_process_quotes_and_slashes(char *start, char find, char replace_with);
 
 long int ast_random(void);
 
+#define ast_free free
+
 /*! 
  * \brief free() wrapper
  *
- * ast_free should be used when a function pointer for free() needs to be passed
+ * ast_free_ptr should be used when a function pointer for free() needs to be passed
  * as the argument to a function. Otherwise, astmm will cause seg faults.
  */
 #ifdef __AST_DEBUG_MALLOC
-static void ast_free(void *ptr) attribute_unused;
-static void ast_free(void *ptr)
+static void ast_free_ptr(void *ptr) attribute_unused;
+static void ast_free_ptr(void *ptr)
 {
-	free(ptr);
+	ast_free(ptr);
 }
 #else
-#define ast_free free
+#define ast_free_ptr ast_free
 #endif
 
 #ifndef __AST_DEBUG_MALLOC

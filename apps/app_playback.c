@@ -29,23 +29,15 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <string.h>
-#include <stdlib.h>
-#include <stdio.h>
-
-#include "asterisk/lock.h"
 #include "asterisk/file.h"
-#include "asterisk/logger.h"
-#include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
-#include "asterisk/translate.h"
-#include "asterisk/utils.h"
-#include "asterisk/options.h"
 #include "asterisk/app.h"
+/* This file provides config-file based 'say' functions, and implenents
+ * some CLI commands.
+ */
+#include "asterisk/say.h"	/* provides config-file based 'say' functions */
 #include "asterisk/cli.h"
-#include "asterisk/localtime.h"
-#include "asterisk/say.h"
 
 static char *app = "Playback";
 
@@ -53,8 +45,8 @@ static char *synopsis = "Play a file";
 
 static char *descrip = 
 "  Playback(filename[&filename2...][,option]):  Plays back given filenames (do not put\n"
-"extension). Options may also be included following a pipe symbol. The 'skip'\n"
-"option causes the playback of the message to be skipped if the channel\n"
+"extension). Options may also be included following a comma.\n"
+"The 'skip' option causes the playback of the message to be skipped if the channel\n"
 "is not in the 'up' state (i.e. it hasn't been  answered  yet). If 'skip' is \n"
 "specified, the application will return immediately should the channel not be\n"
 "off hook.  Otherwise, unless 'noanswer' is specified, the channel will\n"
@@ -75,14 +67,6 @@ static struct ast_config *say_cfg = NULL;
 static const void *say_api_buf[40];
 static const char *say_old = "old";
 static const char *say_new = "new";
-static const char say_load_usage[] = 
-"Usage: say load [new|old]\n"
-"       say load\n"
-"	   Report status of current say mode\n"
-"       say load new\n"
-"          Set say method, configured in say.conf\n"
-"       say load old\n"
-"          Set old say metod, coded in asterisk core\n";
 
 static void save_say_mode(const void *arg)
 {
@@ -158,7 +142,7 @@ static int do_say(say_args_t *a, const char *s, const char *options, int depth)
 	struct varshead head = { .first = NULL, .last = NULL };
 	struct ast_var_t *n;
 
-	ast_log(LOG_WARNING, "string <%s> depth <%d>\n", s, depth);
+	ast_debug(2, "string <%s> depth <%d>\n", s, depth);
 	if (depth++ > 10) {
 		ast_log(LOG_WARNING, "recursion too deep, exiting\n");
 		return -1;
@@ -170,7 +154,7 @@ static int do_say(say_args_t *a, const char *s, const char *options, int depth)
 	/* scan languages same as in file.c */
 	if (a->language == NULL)
 		a->language = "en";     /* default */
-	ast_log(LOG_WARNING, "try <%s> in <%s>\n", s, a->language);
+	ast_debug(2, "try <%s> in <%s>\n", s, a->language);
 	lang = ast_strdupa(a->language);
 	for (;;) {
 		for (v = ast_variable_browse(say_cfg, lang); v ; v = v->next) {
@@ -196,12 +180,12 @@ static int do_say(say_args_t *a, const char *s, const char *options, int depth)
 		s = x + 1;
 	if ( (x = strchr(s, ':')) )
 		s = x + 1;
-	ast_log(LOG_WARNING, "value is <%s>\n", s);
+	ast_debug(2, "value is <%s>\n", s);
 	n = ast_var_assign("SAY", s);
 	AST_LIST_INSERT_HEAD(&head, n, entries);
 
 	/* scan the body, one piece at a time */
-	while ( ret <= 0 && (x = strsep(&rule, ",")) ) { /* exit on key */
+	while ( !ret && (x = strsep(&rule, ",")) ) { /* exit on key */
 		char fn[128];
 		const char *p, *fmt, *data; /* format and data pointers */
 
@@ -210,9 +194,8 @@ static int do_say(say_args_t *a, const char *s, const char *options, int depth)
 		ast_trim_blanks(x);
 
 		/* replace variables */
-		memset(fn, 0, sizeof(fn)); /* XXX why isn't done in pbx_substitute_variables_helper! */
 		pbx_substitute_variables_varshead(&head, x, fn, sizeof(fn));
-		ast_log(LOG_WARNING, "doing [%s]\n", fn);
+		ast_debug(2, "doing [%s]\n", fn);
 
 		/* locate prefix and data, if any */
 		fmt = index(fn, ':');
@@ -250,6 +233,10 @@ static int do_say(say_args_t *a, const char *s, const char *options, int depth)
 				fn2[l++] = *p;
 				strcpy(fn2 + l, data);
 				ret = do_say(a, fn2, options, depth);
+			}
+			
+			if (ret) {
+				break;
 			}
 		}
 	}
@@ -334,10 +321,10 @@ static int say_datetime(struct ast_channel *chan, time_t t, const char *ints, co
 /*
  * remap the 'say' functions to use those in this file
  */
-static int say_init_mode(char *mode) {
+static int say_init_mode(const char *mode) {
 	if (!strcmp(mode, say_new)) {
 		if (say_cfg == NULL) {
-			ast_log(LOG_ERROR,"There is no say.conf file to use new mode\n");
+			ast_log(LOG_ERROR, "There is no say.conf file to use new mode\n");
 			return -1;
 		}
 		save_say_mode(say_new);
@@ -357,7 +344,7 @@ static int say_init_mode(char *mode) {
 		ast_say_date_with_format = say_date_with_format;
 	} else if (!strcmp(mode, say_old) && say_api_buf[0] == say_new) {
 		restore_say_mode(NULL);
-	} else {
+	} else if (strcmp(mode, say_old)) {
 		ast_log(LOG_WARNING, "unrecognized mode %s\n", mode);
 		return -1;
 	}
@@ -365,43 +352,42 @@ static int say_init_mode(char *mode) {
 	return 0;
 }
 
-
-static int __say_cli_init(int fd, int argc, char *argv[])
+static char *__say_cli_init(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	const char *old_mode = say_api_buf[0] ? say_new : say_old;
 	char *mode;
-
-	if (argc == 2) {
-		ast_cli(fd, "say mode is [%s]\n", old_mode);
-		return RESULT_SUCCESS;
-        } else if (argc != 3)
-                return RESULT_SHOWUSAGE;
-        mode = argv[2];
-	
-	if (!strcmp(mode, old_mode)) {
-		ast_log(LOG_NOTICE, "say mode is %s already\n", mode);
-	} else {
-		if (say_init_mode(mode) == 0) {
-			ast_log(LOG_NOTICE, "init say.c from %s to %s\n", old_mode, mode);
-		}
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "say load [new|old]";
+		e->usage = 
+			"Usage: say load [new|old]\n"
+			"       say load\n"
+			"           Report status of current say mode\n"
+			"       say load new\n"
+			"           Set say method, configured in say.conf\n"
+			"       say load old\n"
+			"           Set old say method, coded in asterisk core\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
 	}
+	if (a->argc == 2) {
+		ast_cli(a->fd, "say mode is [%s]\n", old_mode);
+		return CLI_SUCCESS;
+	} else if (a->argc != 3)
+		return CLI_SHOWUSAGE;
+	mode = a->argv[2];
+	if (!strcmp(mode, old_mode))
+		ast_cli(a->fd, "say mode is %s already\n", mode);
+	else
+		if (say_init_mode(mode) == 0)
+			ast_cli(a->fd, "setting say mode from %s to %s\n", old_mode, mode);
 
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 
-
 static struct ast_cli_entry cli_playback[] = {
-        { { "say", "load", NULL },
-	__say_cli_init, "Set or show the say mode",
-	say_load_usage },
-
-        { { "say", "load", "new", NULL },
-	__say_cli_init, "Set the say mode",
-	say_load_usage },
-
-        { { "say", "load", "old", NULL },
-	__say_cli_init, "Set the say mode",
-	say_load_usage },
+	AST_CLI_DEFINE(__say_cli_init, "Set or show the say mode"),
 };
 
 static int playback_exec(struct ast_channel *chan, void *data)
@@ -470,12 +456,17 @@ done:
 static int reload(void)
 {
 	struct ast_variable *v;
+	struct ast_flags config_flags = { CONFIG_FLAG_FILEUNCHANGED };
+	struct ast_config *newcfg;
+
+	if ((newcfg = ast_config_load("say.conf", config_flags)) == CONFIG_STATUS_FILEUNCHANGED)
+		return 0;
 
 	if (say_cfg) {
 		ast_config_destroy(say_cfg);
 		ast_log(LOG_NOTICE, "Reloading say.conf\n");
+		say_cfg = newcfg;
 	}
-	say_cfg = ast_config_load("say.conf");
 
 	if (say_cfg) {
 		for (v = ast_variable_browse(say_cfg, "general"); v ; v = v->next) {
@@ -510,8 +501,9 @@ static int unload_module(void)
 static int load_module(void)
 {
 	struct ast_variable *v;
+	struct ast_flags config_flags = { 0 };
 
-	say_cfg = ast_config_load("say.conf");
+	say_cfg = ast_config_load("say.conf", config_flags);
 	if (say_cfg) {
 		for (v = ast_variable_browse(say_cfg, "general"); v ; v = v->next) {
     			if (ast_extension_match(v->name, "mode")) {

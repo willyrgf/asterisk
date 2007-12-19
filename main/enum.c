@@ -44,7 +44,6 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/nameser.h>
@@ -54,20 +53,15 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #endif
 #endif
 #include <resolv.h>
-#include <stdlib.h>
-#include <string.h>
 #include <ctype.h>
 #include <regex.h>
-#include <unistd.h>
-#include <errno.h>
 
-#include "asterisk/logger.h"
-#include "asterisk/options.h"
 #include "asterisk/enum.h"
 #include "asterisk/dns.h"
 #include "asterisk/channel.h"
 #include "asterisk/config.h"
 #include "asterisk/utils.h"
+#include "asterisk/manager.h"
 
 #ifdef __APPLE__
 #undef T_NAPTR
@@ -594,7 +588,7 @@ int ast_get_txt(struct ast_channel *chan, const char *number, char *dst, int dst
 }
 
 /*! \brief Add enum tree to linked list */
-static struct enum_search *enum_newtoplev(char *s)
+static struct enum_search *enum_newtoplev(const char *s)
 {
 	struct enum_search *tmp;
 
@@ -605,11 +599,15 @@ static struct enum_search *enum_newtoplev(char *s)
 }
 
 /*! \brief Initialize the ENUM support subsystem */
-int ast_enum_init(void)
+static int private_enum_init(int reload)
 {
 	struct ast_config *cfg;
 	struct enum_search *s, *sl;
 	struct ast_variable *v;
+	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
+
+	if ((cfg = ast_config_load("enum.conf", config_flags)) == CONFIG_STATUS_FILEUNCHANGED)
+		return 0;
 
 	/* Destroy existing list */
 	ast_mutex_lock(&enumlock);
@@ -620,7 +618,6 @@ int ast_enum_init(void)
 		ast_free(sl);
 	}
 	toplevs = NULL;
-	cfg = ast_config_load("enum.conf");
 	if (cfg) {
 		sl = NULL;
 		v = ast_variable_browse(cfg, "general");
@@ -643,10 +640,16 @@ int ast_enum_init(void)
 	}
 	enumver++;
 	ast_mutex_unlock(&enumlock);
+	manager_event(EVENT_FLAG_SYSTEM, "Reload", "Module: Enum\r\nStatus: Enabled\r\nMessage: ENUM reload Requested\r\n");
 	return 0;
+}
+
+int ast_enum_init(void)
+{
+	return private_enum_init(0);
 }
 
 int ast_enum_reload(void)
 {
-	return ast_enum_init();
+	return private_enum_init(1);
 }

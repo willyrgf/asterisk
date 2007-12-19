@@ -33,12 +33,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/logger.h"
 #include "asterisk/ael_structs.h"
 
-static pval * linku1(pval *head, pval *tail);
+pval * linku1(pval *head, pval *tail);
 static void set_dads(pval *dad, pval *child_list);
 void reset_parencount(yyscan_t yyscanner);
 void reset_semicount(yyscan_t yyscanner);
 void reset_argcount(yyscan_t yyscanner );
-
+ 
 #define YYLEX_PARAM ((struct parse_io *)parseio)->scanner
 #define YYERROR_VERBOSE 1
 
@@ -46,7 +46,7 @@ extern char *my_file;
 #ifdef AAL_ARGCHECK
 int ael_is_funcname(char *name);
 #endif
-static char *ael_token_subst(char *mess);
+static char *ael_token_subst(const char *mess);
 
 %}
 
@@ -63,7 +63,7 @@ void yyerror(YYLTYPE *locp, struct parse_io *parseio, char const *s);
 int ael_yylex (YYSTYPE * yylval_param, YYLTYPE * yylloc_param , void * yyscanner);
 
 /* create a new object with start-end marker */
-static pval *npval(pvaltype type, int first_line, int last_line,
+pval *npval(pvaltype type, int first_line, int last_line,
 	int first_column, int last_column);
 
 /* create a new object with start-end marker, simplified interface.
@@ -80,7 +80,7 @@ static pval *update_last(pval *, YYLTYPE *);
 
 
 %token KW_CONTEXT LC RC LP RP SEMI EQ COMMA COLON AMPER BAR AT
-%token KW_MACRO KW_GLOBALS KW_IGNOREPAT KW_SWITCH KW_IF KW_IFTIME KW_ELSE KW_RANDOM KW_ABSTRACT
+%token KW_MACRO KW_GLOBALS KW_IGNOREPAT KW_SWITCH KW_IF KW_IFTIME KW_ELSE KW_RANDOM KW_ABSTRACT KW_EXTEND
 %token EXTENMARK KW_GOTO KW_JUMP KW_RETURN KW_BREAK KW_CONTINUE KW_REGEXTEN KW_HINT
 %token KW_FOR KW_WHILE KW_CASE KW_PATTERN KW_DEFAULT KW_CATCH KW_SWITCHES KW_ESWITCHES
 %token KW_INCLUDES KW_LOCAL
@@ -154,7 +154,7 @@ static pval *update_last(pval *, YYLTYPE *);
 
 /* there will be two shift/reduce conflicts, they involve the if statement, where a single statement occurs not wrapped in curlies in the "true" section
    the default action to shift will attach the else to the preceeding if. */
-%expect 8
+%expect 3
 %error-verbose
 
 /*
@@ -202,22 +202,19 @@ context_name : word { $$ = $1; }
 	;
 
 context : opt_abstract KW_CONTEXT context_name LC elements RC {
-		if (!$5) {
-                        ast_log(LOG_WARNING, "==== File: %s, Line %d, Cols: %d-%d: Warning! The empty context %s will be IGNORED!\n", 
-				my_file, @4.first_line, @4.first_column, @4.last_column, $3 );
-			free($3);
-
-		} else {
-			$$ = npval2(PV_CONTEXT, &@1, &@6);
-			$$->u1.str = $3;
-			$$->u2.statements = $5;
-			set_dads($$,$5);
-			$$->u3.abstract = $1;} }
+		$$ = npval2(PV_CONTEXT, &@1, &@6);
+		$$->u1.str = $3;
+		$$->u2.statements = $5;
+		set_dads($$,$5);
+		$$->u3.abstract = $1;} 
 	;
 
 /* optional "abstract" keyword  XXX there is no regression test for this */
 opt_abstract: KW_ABSTRACT { $$ = 1; }
 	| /* nothing */ { $$ = 0; }
+	| KW_EXTEND { $$ = 2; }
+	| KW_EXTEND KW_ABSTRACT { $$=3; }
+	| KW_ABSTRACT KW_EXTEND { $$=3; }
 	;
 
 macro : KW_MACRO word LP arglist RP LC macro_statements RC {
@@ -234,7 +231,7 @@ globals : KW_GLOBALS LC global_statements RC {
 
 global_statements : { $$ = NULL; }
 	| assignment global_statements {$$ = linku1($1, $2); }
-	| global_statements error {$$=$1;}
+	| error global_statements {$$=$2;}
 	;
 
 assignment : word EQ { reset_semicount(parseio->scanner); }  word SEMI {
@@ -258,7 +255,7 @@ arglist : /* empty */ { $$ = NULL; }
 
 elements : {$$=0;}
 	| element elements { $$ = linku1($1, $2); }
-	| elements error   { $$=$1;}
+	| error elements  { $$=$2;}
 	;
 
 element : extension {$$=$1;}
@@ -281,6 +278,14 @@ extension : word EXTENMARK statement {
 		$$ = npval2(PV_EXTENSION, &@1, &@3);
 		$$->u1.str = $1;
 		$$->u2.statements = $3; set_dads($$,$3);}
+	| word AT word EXTENMARK statement {
+		$$ = npval2(PV_EXTENSION, &@1, &@3);
+		$$->u1.str = malloc(strlen($1)+strlen($3)+2);
+		strcpy($$->u1.str,$1);
+		strcat($$->u1.str,"@");
+		strcat($$->u1.str,$3);
+		free($1);
+		$$->u2.statements = $5; set_dads($$,$5);}
 	| KW_REGEXTEN word EXTENMARK statement {
 		$$ = npval2(PV_EXTENSION, &@1, &@4);
 		$$->u1.str = $2;
@@ -297,13 +302,12 @@ extension : word EXTENMARK statement {
 		$$->u2.statements = $8; set_dads($$,$8);
 		$$->u4.regexten=1;
 		$$->u3.hints = $4;}
-
 	;
 
 /* list of statements in a block or after a case label - can be empty */
 statements : /* empty */ { $$ = NULL; }
 	| statement statements { $$ = linku1($1, $2); }
-	| statements error {$$=$1;}
+	| error statements {$$=$2;}
 	;
 
 /* hh:mm-hh:mm, due to the way the parser works we do not
@@ -360,6 +364,10 @@ hint_word : word { $$ = $1; }
 		asprintf(&($$), "%s %s", $1, $2);
 		free($1);
 		free($2); }
+	| hint_word COLON word {
+		asprintf(&($$), "%s:%s", $1, $3);
+		free($1);
+		free($3); }
 	| hint_word AMPER word {  /* there are often '&' in hints */
 		asprintf(&($$), "%s&%s", $1, $3);
 		free($1);
@@ -478,7 +486,7 @@ statement : LC statements RC {
 opt_else : KW_ELSE statement { $$ = $2; }
 	| { $$ = NULL ; }
 
-
+ 
 target : goto_word { $$ = nword($1, &@1); }
 	| goto_word BAR goto_word {
 		$$ = nword($1, &@1);
@@ -607,7 +615,7 @@ switchlist : /* empty */ { $$ = NULL; }
 	| word SEMI switchlist { $$ = linku1(nword($1, &@1), $3); }
 	| word AT word SEMI switchlist { char *x; asprintf(&x,"%s@%s", $1,$3); free($1); free($3);
 									  $$ = linku1(nword(x, &@1), $5);}
-	| switchlist error {$$=$1;}
+	| error switchlist {$$=$2;}
 	;
 
 included_entry : context_name { $$ = nword($1, &@1); }
@@ -714,11 +722,11 @@ static char *token_equivs2[] =
 };
 
 
-static char *ael_token_subst(char *mess)
+static char *ael_token_subst(const char *mess)
 {
 	/* calc a length, malloc, fill, and return; yyerror had better free it! */
 	int len=0,i;
-	char *p;
+	const char *p;
 	char *res, *s,*t;
 	int token_equivs_entries = sizeof(token_equivs1)/sizeof(char*);
 
@@ -769,7 +777,7 @@ void yyerror(YYLTYPE *locp, struct parse_io *parseio,  char const *s)
 	parseio->syntax_error_count++;
 }
 
-static struct pval *npval(pvaltype type, int first_line, int last_line,
+struct pval *npval(pvaltype type, int first_line, int last_line,
 	int first_column, int last_column)
 {
 	pval *z = calloc(1, sizeof(struct pval));
@@ -802,23 +810,6 @@ static pval *nword(char *string, YYLTYPE *pos)
 	if (p)
 		p->u1.str = string;
 	return p;
-}
-
-/* append second element to the list in the first one */
-static pval * linku1(pval *head, pval *tail)
-{
-	if (!head)
-		return tail;
-	if (tail) {
-		if (!head->next) {
-			head->next = tail;
-		} else {
-			head->u1_last->next = tail;
-		}
-		head->u1_last = tail;
-		tail->prev = head; /* the dad link only points to containers */
-	}
-	return head;
 }
 
 /* this routine adds a dad ptr to each element in the list */

@@ -15,6 +15,11 @@
  * the GNU General Public License
  */
 
+/*! \file \brief
+ * Interface to mISDN
+ * \author Christian Richter <crich@beronet.com>
+ */
+
 /*
   the pointer of enc_ie_* always points to the IE itself
   if qi is not NULL (TE-mode), offset is set
@@ -1356,7 +1361,7 @@ static void enc_ie_useruser(unsigned char **ntmode, msg_t *msg, int protocol, ch
 		qi->QI_ELEMENT(useruser) = p - (unsigned char *)qi - sizeof(Q931_info_t);
 	p[0] = IE_USER_USER;
 	p[1] = l;
-	p[2] = 0x80 + protocol;
+	p[2] = protocol;
 	memcpy(p+3, user, user_len);
 }
 #endif

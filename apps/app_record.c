@@ -29,21 +29,12 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-
-#include "asterisk/lock.h"
 #include "asterisk/file.h"
-#include "asterisk/logger.h"
-#include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
-#include "asterisk/translate.h"
-#include "asterisk/dsp.h"
-#include "asterisk/utils.h"
-#include "asterisk/options.h"
 #include "asterisk/app.h"
+#include "asterisk/channel.h"
+#include "asterisk/dsp.h"	/* use dsp routines for silence detection */
 
 
 static char *app = "Record";
@@ -117,7 +108,7 @@ static int record_exec(struct ast_channel *chan, void *data)
 	int ioflags;
 	int waitres;
 	struct ast_silence_generator *silgen = NULL;
-	struct ast_flags flags;
+	struct ast_flags flags = { 0, };
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(filename);
 		AST_APP_ARG(silence);

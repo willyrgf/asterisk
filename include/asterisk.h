@@ -29,7 +29,7 @@
 
 #include "asterisk/compat.h"
 
-#include "asterisk/paths.h"
+#include "asterisk/logger.h"
 
 /* Default to allowing the umask or filesystem ACLs to determine actual file
  * creation permissions
@@ -48,69 +48,7 @@
 #define	setpriority	__PLEASE_USE_ast_set_priority_INSTEAD_OF_setpriority__
 #define	sched_setscheduler	__PLEASE_USE_ast_set_priority_INSTEAD_OF_sched_setscheduler__
 
-/* provided in asterisk.c */
-extern char ast_config_AST_CONFIG_DIR[PATH_MAX];
-extern char ast_config_AST_CONFIG_FILE[PATH_MAX];
-extern char ast_config_AST_MODULE_DIR[PATH_MAX];
-extern char ast_config_AST_SPOOL_DIR[PATH_MAX];
-extern char ast_config_AST_MONITOR_DIR[PATH_MAX];
-extern char ast_config_AST_VAR_DIR[PATH_MAX];
-extern char ast_config_AST_DATA_DIR[PATH_MAX];
-extern char ast_config_AST_LOG_DIR[PATH_MAX];
-extern char ast_config_AST_AGI_DIR[PATH_MAX];
-extern char ast_config_AST_DB[PATH_MAX];
-extern char ast_config_AST_KEY_DIR[PATH_MAX];
-extern char ast_config_AST_PID[PATH_MAX];
-extern char ast_config_AST_SOCKET[PATH_MAX];
-extern char ast_config_AST_RUN_DIR[PATH_MAX];
-extern char ast_config_AST_RUN_GROUP[PATH_MAX];
-extern char ast_config_AST_RUN_USER[PATH_MAX];
-extern char ast_config_AST_CTL_PERMISSIONS[PATH_MAX];
-extern char ast_config_AST_CTL_OWNER[PATH_MAX];
-extern char ast_config_AST_CTL_GROUP[PATH_MAX];
-extern char ast_config_AST_CTL[PATH_MAX];
-extern char ast_config_AST_SYSTEM_NAME[20];
-
 int ast_set_priority(int);			/*!< Provided by asterisk.c */
-int load_modules(unsigned int);			/*!< Provided by loader.c */
-int load_pbx(void);				/*!< Provided by pbx.c */
-int init_logger(void);				/*!< Provided by logger.c */
-void close_logger(void);			/*!< Provided by logger.c */
-int reload_logger(int);				/*!< Provided by logger.c */
-int init_framer(void);				/*!< Provided by frame.c */
-int ast_term_init(void);			/*!< Provided by term.c */
-int astdb_init(void);				/*!< Provided by db.c */
-void ast_channels_init(void);			/*!< Provided by channel.c */
-void ast_builtins_init(void);			/*!< Provided by cli.c */
-int dnsmgr_init(void);				/*!< Provided by dnsmgr.c */ 
-void dnsmgr_start_refresh(void);		/*!< Provided by dnsmgr.c */
-int dnsmgr_reload(void);			/*!< Provided by dnsmgr.c */
-void threadstorage_init(void);			/*!< Provided by threadstorage.c */
-void ast_event_init(void);          /*!< Provided by event.c */
-int ast_device_state_engine_init(void); /*!< Provided by devicestate.c */
-
-/* Many headers need 'ast_channel' to be defined */
-struct ast_channel;
-
-/* Many headers need 'ast_module' to be defined */
-struct ast_module;
-
-/*!
- * \brief Reload asterisk modules.
- * \param name the name of the module to reload
- *
- * This function reloads the specified module, or if no modules are specified,
- * it will reload all loaded modules.
- *
- * \note Modules are reloaded using their reload() functions, not unloading
- * them and loading them again.
- * 
- * \return 0 if the specified module was not found.
- * \retval 1 if the module was found but cannot be reloaded.
- * \retval -1 if a reload operation is already in progress.
- * \retval 2 if the specfied module was found and reloaded.
- */
-int ast_module_reload(const char *name);
 
 /*!
  * \brief Register a function to be executed before Asterisk exits.
@@ -149,6 +87,13 @@ void ast_register_file_version(const char *file, const char *version);
  * the file when the module is unloaded.
  */
 void ast_unregister_file_version(const char *file);
+
+/*! \brief Find version for given module name
+ * \param file Module name (i.e. chan_sip.so)
+ * \return version string or NULL if the module is not found
+ */
+const char *ast_file_version_find(const char *file);
+
 
 /*!
  * \brief Register/unregister a source code file with the core.
@@ -223,5 +168,17 @@ int64_t ast_mark(int, int start1_stop0);
 #define ast_profile(a, b) do { } while (0)
 #define ast_mark(a, b) do { } while (0)
 #endif /* LOW_MEMORY */
+
+/*! \brief
+ * Definition of various structures that many asterisk files need,
+ * but only because they need to know that the type exists.
+ *
+ */
+
+struct ast_channel;
+struct ast_frame;
+struct ast_module;
+struct ast_variable;
+struct ast_str;
 
 #endif /* _ASTERISK_H */

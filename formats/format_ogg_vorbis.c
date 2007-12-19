@@ -34,30 +34,15 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <sys/types.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <stdlib.h>
-#include <sys/time.h>
-#include <stdio.h>
-#include <unistd.h>
-#include <errno.h>
-#include <string.h>
-
 #include <vorbis/codec.h>
 #include <vorbis/vorbisenc.h>
 
 #ifdef _WIN32
 #include <io.h>
-#include <fcntl.h>
 #endif
 
-#include "asterisk/lock.h"
-#include "asterisk/channel.h"
-#include "asterisk/file.h"
-#include "asterisk/logger.h"
+#include "asterisk/mod_format.h"
 #include "asterisk/module.h"
-#include "asterisk/options.h"
 
 /*
  * this is the number of samples we deal with. Samples are converted
@@ -100,7 +85,7 @@ static int ogg_vorbis_open(struct ast_filestream *s)
 	int result;
 	char **ptr;
 	char *buffer;
-	struct vorbis_desc *tmp = (struct vorbis_desc *)s->private;
+	struct vorbis_desc *tmp = (struct vorbis_desc *)s->_private;
 
 	tmp->writing = 0;
 
@@ -210,7 +195,7 @@ static int ogg_vorbis_rewrite(struct ast_filestream *s,
 	ogg_packet header;
 	ogg_packet header_comm;
 	ogg_packet header_code;
-	struct vorbis_desc *tmp = (struct vorbis_desc *)s->private;
+	struct vorbis_desc *tmp = (struct vorbis_desc *)s->_private;
 
 	tmp->writing = 1;
 
@@ -287,7 +272,7 @@ static int ogg_vorbis_write(struct ast_filestream *fs, struct ast_frame *f)
 	int i;
 	float **buffer;
 	short *data;
-	struct vorbis_desc *s = (struct vorbis_desc *)fs->private;
+	struct vorbis_desc *s = (struct vorbis_desc *)fs->_private;
 
 	if (!s->writing) {
 		ast_log(LOG_ERROR, "This stream is not set up for writing!\n");
@@ -326,7 +311,7 @@ static int ogg_vorbis_write(struct ast_filestream *fs, struct ast_frame *f)
  */
 static void ogg_vorbis_close(struct ast_filestream *fs)
 {
-	struct vorbis_desc *s = (struct vorbis_desc *)fs->private;
+	struct vorbis_desc *s = (struct vorbis_desc *)fs->_private;
 
 	if (s->writing) {
 		/* Tell the Vorbis encoder that the stream is finished
@@ -358,7 +343,7 @@ static int read_samples(struct ast_filestream *fs, float ***pcm)
 	int result;
 	char *buffer;
 	int bytes;
-	struct vorbis_desc *s = (struct vorbis_desc *)fs->private;
+	struct vorbis_desc *s = (struct vorbis_desc *)fs->_private;
 
 	while (1) {
 		samples_in = vorbis_synthesis_pcmout(&s->vd, pcm);
@@ -441,7 +426,7 @@ static struct ast_frame *ogg_vorbis_read(struct ast_filestream *fs,
 	int val;
 	int samples_in;
 	int samples_out = 0;
-	struct vorbis_desc *s = (struct vorbis_desc *)fs->private;
+	struct vorbis_desc *s = (struct vorbis_desc *)fs->_private;
 	short *buf;	/* SLIN data buffer */
 
 	fs->fr.frametype = AST_FRAME_VOICE;
@@ -553,7 +538,9 @@ static const struct ast_format vorbis_f = {
 
 static int load_module(void)
 {
-	return ast_format_register(&vorbis_f);
+	if (ast_format_register(&vorbis_f))
+		return AST_MODULE_LOAD_FAILURE;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 static int unload_module(void)

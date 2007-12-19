@@ -27,17 +27,24 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-#include <stdio.h>
-
+#include "asterisk/_private.h"
 #include "asterisk/event.h"
 #include "asterisk/linkedlists.h"
 #include "asterisk/lock.h"
 #include "asterisk/utils.h"
+#include "asterisk/unaligned.h"
 
 /* Only use one thread for now to ensure ordered delivery */
 #define NUM_EVENT_THREADS 1
 
+/*!
+ * \brief An event information element
+ *
+ * \note The format of this structure is important.  Since these events may
+ *       be sent directly over a network, changing this structure will break
+ *       compatibility with older versions.  However, at this point, this code
+ *       has not made it into a release, so it is still fair game for change.
+ */
 struct ast_event_ie {
 	enum ast_event_ie_type ie_type:16;
 	/*! Total length of the IE payload */
@@ -48,9 +55,13 @@ struct ast_event_ie {
 /*!
  * \brief An event
  *
- * \note The format of this structure is important, and can not change, since
- *       they are sent directly over the network (via IAX2).
+ * An ast_event consists of an event header (this structure), and zero or
+ * more information elements defined by ast_event_ie.
  *
+ * \note The format of this structure is important.  Since these events may
+ *       be sent directly over a network, changing this structure will break
+ *       compatibility with older versions.  However, at this point, this code
+ *       has not made it into a release, so it is still fair game for change.
  */
 struct ast_event {
 	/*! Event type */
@@ -64,6 +75,12 @@ struct ast_event {
 struct ast_event_ref {
 	struct ast_event *event;
 	AST_LIST_ENTRY(ast_event_ref) entry;
+};
+
+struct ast_event_iterator {
+	uint16_t event_len;
+	const struct ast_event *event;
+	struct ast_event_ie *ie;
 };
 
 /*! \brief data shared between event dispatching threads */
@@ -355,6 +372,40 @@ void ast_event_unsubscribe(struct ast_event_sub *sub)
 	ast_event_sub_destroy(sub);
 }
 
+void ast_event_iterator_init(struct ast_event_iterator *iterator, const struct ast_event *event)
+{
+	iterator->event_len = ntohs(event->event_len);
+	iterator->event = event;
+	iterator->ie = (struct ast_event_ie *) ( ((char *) event) + sizeof(*event) );
+	return;
+}
+
+int ast_event_iterator_next(struct ast_event_iterator *iterator)
+{
+	iterator->ie = (struct ast_event_ie *) ( ((char *) iterator->ie) + sizeof(*iterator->ie) + ntohs(iterator->ie->ie_payload_len));
+	return ((iterator->event_len < (((char *) iterator->ie) - ((char *) iterator->event))) ? -1 : 0);
+}
+
+enum ast_event_ie_type ast_event_iterator_get_ie_type(struct ast_event_iterator *iterator)
+{
+	return iterator->ie->ie_type;
+}
+
+uint32_t ast_event_iterator_get_ie_uint(struct ast_event_iterator *iterator)
+{
+	return ntohl(get_unaligned_uint32(iterator->ie->ie_payload));
+}
+
+const char *ast_event_iterator_get_ie_str(struct ast_event_iterator *iterator)
+{
+	return (const char*)iterator->ie->ie_payload;
+}
+
+void *ast_event_iterator_get_ie_raw(struct ast_event_iterator *iterator)
+{
+	return iterator->ie->ie_payload;
+}
+
 enum ast_event_type ast_event_get_type(const struct ast_event *event)
 {
 	return ntohs(event->type);
@@ -366,7 +417,7 @@ uint32_t ast_event_get_ie_uint(const struct ast_event *event, enum ast_event_ie_
 
 	ie_val = ast_event_get_ie_raw(event, ie_type);
 
-	return ie_val ? ntohl(*ie_val) : 0;
+	return ie_val ? ntohl(get_unaligned_uint32(ie_val)) : 0;
 }
 
 const char *ast_event_get_ie_str(const struct ast_event *event, enum ast_event_ie_type ie_type)
@@ -376,18 +427,14 @@ const char *ast_event_get_ie_str(const struct ast_event *event, enum ast_event_i
 
 const void *ast_event_get_ie_raw(const struct ast_event *event, enum ast_event_ie_type ie_type)
 {
-	struct ast_event_ie *ie;
-	uint16_t event_len;
+	struct ast_event_iterator iterator;
+	int res = 0;
 
 	ie_type = ntohs(ie_type);
-	event_len = ntohs(event->event_len);
 
-	ie = ((void *) event) + sizeof(*event);
-
-	while ((((void *) ie) - ((void *) event)) < event_len) {
-		if (ie->ie_type == ie_type)
-			return ie->ie_payload;
-		ie = ((void *) ie) + sizeof(*ie) + ntohs(ie->ie_payload_len);
+	for (ast_event_iterator_init(&iterator, event); !res; res = ast_event_iterator_next(&iterator)) {
+		if (ast_event_iterator_get_ie_type(&iterator) == ie_type)
+			return ast_event_iterator_get_ie_raw(&iterator);
 	}
 
 	return NULL;
@@ -419,7 +466,7 @@ int ast_event_append_ie_raw(struct ast_event **event, enum ast_event_ie_type ie_
 	if (!(*event = ast_realloc(*event, event_len + extra_len)))
 		return -1;
 
-	ie = ((void *) *event) + event_len;
+	ie = (struct ast_event_ie *) ( ((char *) *event) + event_len );
 	ie->ie_type = htons(ie_type);
 	ie->ie_payload_len = htons(data_len);
 	memcpy(ie->ie_payload, data, data_len);
@@ -660,11 +707,11 @@ int ast_event_queue_and_cache(struct ast_event *event, ...)
 		}
 		if (!cache_arg) {
 			/* All parameters were matched on this cache entry, so remove it */
-			AST_LIST_REMOVE_CURRENT(&ast_event_cache[host_event_type], entry);
+			AST_LIST_REMOVE_CURRENT(entry);
 			ast_event_ref_destroy(event_ref);
 		}
 	}
-	AST_RWLIST_TRAVERSE_SAFE_END
+	AST_RWLIST_TRAVERSE_SAFE_END;
 	res = ast_event_dup_and_cache(event);
 	AST_RWLIST_UNLOCK(&ast_event_cache[host_event_type]);
 

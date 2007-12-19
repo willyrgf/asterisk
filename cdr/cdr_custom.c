@@ -34,21 +34,14 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <sys/types.h>
-#include <stdio.h>
-#include <string.h>
-#include <errno.h>
-
-#include <stdlib.h>
-#include <unistd.h>
 #include <time.h>
 
+#include "asterisk/paths.h"	/* use ast_config_AST_LOG_DIR */
 #include "asterisk/channel.h"
 #include "asterisk/cdr.h"
 #include "asterisk/module.h"
 #include "asterisk/config.h"
 #include "asterisk/pbx.h"
-#include "asterisk/logger.h"
 #include "asterisk/utils.h"
 
 #define CUSTOM_LOG_DIR "/cdr_custom"
@@ -68,12 +61,16 @@ static int load_config(int reload)
 {
 	struct ast_config *cfg;
 	struct ast_variable *var;
+	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
 	int res = -1;
+
+	if ((cfg = ast_config_load("cdr_custom.conf", config_flags)) == CONFIG_STATUS_FILEUNCHANGED)
+		return 0;
 
 	strcpy(format, "");
 	strcpy(master, "");
 	ast_mutex_lock(&lock);
-	if((cfg = ast_config_load("cdr_custom.conf"))) {
+	if (cfg) {
 		var = ast_variable_browse(cfg, "mappings");
 		while(var) {
 			if (!ast_strlen_zero(var->name) && !ast_strlen_zero(var->value)) {
@@ -115,7 +112,6 @@ static int custom_log(struct ast_cdr *cdr)
 	if (ast_strlen_zero(master))
 		return 0;
 
-	memset(buf, 0 , sizeof(buf));
 	/* Quite possibly the first use of a static struct ast_channel, we need it so the var funcs will work */
 	memset(&dummy, 0, sizeof(dummy));
 	dummy.cdr = cdr;

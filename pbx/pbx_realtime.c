@@ -27,23 +27,15 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <unistd.h>
-#include <string.h>
-#include <errno.h>
-
 #include "asterisk/file.h"
 #include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/config.h"
-#include "asterisk/options.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
 #include "asterisk/frame.h"
 #include "asterisk/term.h"
 #include "asterisk/manager.h"
-#include "asterisk/file.h"
 #include "asterisk/cli.h"
 #include "asterisk/lock.h"
 #include "asterisk/md5.h"
@@ -178,12 +170,12 @@ static int realtime_exec(struct ast_channel *chan, const char *context, const ch
 
 	if (var) {
 		char *tmp="";
-		char app[256];
+		char *app = NULL;
 		struct ast_variable *v;
 
 		for (v = var; v ; v = v->next) {
 			if (!strcasecmp(v->name, "app"))
-				ast_copy_string(app, v->value, sizeof(app));
+				app = ast_strdupa(v->value);
 			else if (!strcasecmp(v->name, "appdata"))
 				tmp = ast_strdupa(v->value);
 		}
@@ -191,11 +183,12 @@ static int realtime_exec(struct ast_channel *chan, const char *context, const ch
 		if (!ast_strlen_zero(app)) {
 			struct ast_app *a = pbx_findapp(app);
 			if (a) {
-				char appdata[512]="";
+				char appdata[512];
 				char tmp1[80];
 				char tmp2[80];
 				char tmp3[EXT_DATA_SIZE];
 
+				appdata[0] = 0; /* just in case the substitute var func isn't called */
 				if(!ast_strlen_zero(tmp))
 					pbx_substitute_variables_helper(chan, tmp, appdata, sizeof(appdata) - 1);
 				ast_verb(3, "Executing %s(\"%s\", \"%s\")\n",
@@ -215,6 +208,8 @@ static int realtime_exec(struct ast_channel *chan, const char *context, const ch
 				res = pbx_exec(chan, a, appdata);
 			} else
 				ast_log(LOG_NOTICE, "No such application '%s' for extension '%s' in context '%s'\n", app, exten, context);
+		} else {
+			ast_log(LOG_WARNING, "No application specified for realtime extension '%s' in context '%s'\n", exten, context);
 		}
 	}
 	return res;

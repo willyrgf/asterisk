@@ -29,12 +29,7 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
 #include <dirent.h>
-#include <sys/types.h>
 
 #include "asterisk/file.h"
 #include "asterisk/channel.h"
@@ -43,7 +38,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/lock.h"
 #include "asterisk/utils.h"
 #include "asterisk/app.h"
-#include "asterisk/options.h"
 
 static int acf_vmcount_exec(struct ast_channel *chan, const char *cmd, char *argsstr, char *buf, size_t len)
 {
@@ -54,6 +48,9 @@ static int acf_vmcount_exec(struct ast_channel *chan, const char *cmd, char *arg
 	);
 
 	buf[0] = '\0';
+
+	if (ast_strlen_zero(argsstr))
+		return -1;
 
 	AST_STANDARD_APP_ARGS(args, argsstr);
 

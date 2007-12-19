@@ -33,10 +33,6 @@
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <sys/types.h>
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-#include <unistd.h>
 #include <time.h>
 
 #include <sql.h>
@@ -44,14 +40,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <sqltypes.h>
 
 #include "asterisk/config.h"
-#include "asterisk/options.h"
 #include "asterisk/channel.h"
 #include "asterisk/lock.h"
 #include "asterisk/linkedlists.h"
 #include "asterisk/res_odbc.h"
 #include "asterisk/cdr.h"
 #include "asterisk/module.h"
-#include "asterisk/logger.h"
 
 #define	CONFIG	"cdr_adaptive_odbc.conf"
 
@@ -95,8 +89,9 @@ static int load_config(void)
 	SQLLEN sqlptr;
 	int res = 0;
 	SQLHSTMT stmt = NULL;
+	struct ast_flags config_flags = { 0 }; /* Part of our config comes from the database */
 
-	cfg = ast_config_load(CONFIG);
+	cfg = ast_config_load(CONFIG, config_flags);
 	if (!cfg) {
 		ast_log(LOG_WARNING, "Unable to load " CONFIG ".  No adaptive ODBC CDRs.\n");
 		return -1;
@@ -313,14 +308,30 @@ static int odbc_log(struct ast_cdr *cdr)
 	SQLHSTMT stmt = NULL;
 	SQLLEN rows = 0;
 
+	if (!sql || !sql2) {
+		if (sql)
+			ast_free(sql);
+		if (sql2)
+			ast_free(sql2);
+		return -1;
+	}
+
 	if (AST_RWLIST_RDLOCK(&odbc_tables)) {
 		ast_log(LOG_ERROR, "Unable to lock table list.  Insert CDR(s) failed.\n");
+		ast_free(sql);
+		ast_free(sql2);
 		return -1;
 	}
 
 	AST_LIST_TRAVERSE(&odbc_tables, tableptr, list) {
 		lensql = snprintf(sql, sizesql, "INSERT INTO %s (", tableptr->table);
 		lensql2 = snprintf(sql2, sizesql2, " VALUES (");
+
+		/* No need to check the connection now; we'll handle any failure in prepare_and_execute */
+		if (!(obj = ast_odbc_request_obj(tableptr->connection, 0))) {
+			ast_log(LOG_WARNING, "cdr_adaptive_odbc: Unable to retrieve database handle for '%s:%s'.  CDR failed: %s\n", tableptr->connection, tableptr->table, sql);
+			continue;
+		}
 
 		AST_LIST_TRAVERSE(&(tableptr->columns), entry, list) {
 			/* Check if we have a similarly named variable */
@@ -364,7 +375,7 @@ static int odbc_log(struct ast_cdr *cdr)
 						if (*tmp == '\'') {
 							strcpy(sql2 + lensql2, "''");
 							lensql2 += 2;
-						} else if (*tmp == '\\') {
+						} else if (*tmp == '\\' && ast_odbc_backslash_is_escape(obj)) {
 							strcpy(sql2 + lensql2, "\\\\");
 							lensql2 += 2;
 						} else {
@@ -547,21 +558,16 @@ static int odbc_log(struct ast_cdr *cdr)
 		strcat(sql + lensql, sql2);
 
 		ast_verb(11, "[%s]\n", sql);
-		/* No need to check the connection now; we'll handle any failure in prepare_and_execute */
-		obj = ast_odbc_request_obj(tableptr->connection, 0);
-		if (obj) {
-			stmt = ast_odbc_prepare_and_execute(obj, generic_prepare, sql);
-			if (stmt) {
-				SQLRowCount(stmt, &rows);
-				SQLFreeHandle(SQL_HANDLE_STMT, stmt);
-			}
-			if (rows == 0) {
-				ast_log(LOG_WARNING, "cdr_adaptive_odbc: Insert failed on '%s:%s'.  CDR failed: %s\n", tableptr->connection, tableptr->table, sql);
-			}
-			ast_odbc_release_obj(obj);
-		} else {
-			ast_log(LOG_WARNING, "cdr_adaptive_odbc: Unable to retrieve database handle for '%s:%s'.  CDR failed: %s\n", tableptr->connection, tableptr->table, sql);
+
+		stmt = ast_odbc_prepare_and_execute(obj, generic_prepare, sql);
+		if (stmt) {
+			SQLRowCount(stmt, &rows);
+			SQLFreeHandle(SQL_HANDLE_STMT, stmt);
 		}
+		if (rows == 0) {
+			ast_log(LOG_WARNING, "cdr_adaptive_odbc: Insert failed on '%s:%s'.  CDR failed: %s\n", tableptr->connection, tableptr->table, sql);
+		}
+		ast_odbc_release_obj(obj);
 	}
 	AST_RWLIST_UNLOCK(&odbc_tables);
 

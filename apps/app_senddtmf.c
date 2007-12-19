@@ -29,21 +29,11 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-
-#include "asterisk/lock.h"
-#include "asterisk/file.h"
-#include "asterisk/logger.h"
-#include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
-#include "asterisk/translate.h"
-#include "asterisk/options.h"
-#include "asterisk/utils.h"
 #include "asterisk/app.h"
 #include "asterisk/manager.h"
+#include "asterisk/channel.h"
 
 static char *app = "SendDTMF";
 
@@ -102,13 +92,13 @@ static int manager_play_dtmf(struct mansession *s, const struct message *m)
 	}
 	if (!digit) {
 		astman_send_error(s, m, "No digit specified");
-		ast_mutex_unlock(&chan->lock);
+		ast_channel_unlock(chan);
 		return 0;
 	}
 
 	ast_senddigit(chan, *digit, 0);
 
-	ast_mutex_unlock(&chan->lock);
+	ast_channel_unlock(chan);
 	astman_send_ack(s, m, "DTMF successfully queued");
 	
 	return 0;

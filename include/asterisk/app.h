@@ -17,11 +17,13 @@
 
 /*! \file
  * \brief Application convenience functions, designed to give consistent
- look and feel to Asterisk apps.
+ *        look and feel to Asterisk apps.
  */
 
 #ifndef _ASTERISK_APP_H
 #define _ASTERISK_APP_H
+
+struct ast_flags64;
 
 #if defined(__cplusplus) || defined(c_plusplus)
 extern "C" {
@@ -107,16 +109,16 @@ void ast_install_vm_functions(int (*has_voicemail_func)(const char *mailbox, con
   
 void ast_uninstall_vm_functions(void);
 
-/*! Determine if a given mailbox has any voicemail */
+/*! \brief Determine if a given mailbox has any voicemail */
 int ast_app_has_voicemail(const char *mailbox, const char *folder);
 
-/*! Determine number of new/old messages in a mailbox */
+/*! \brief Determine number of new/old messages in a mailbox */
 int ast_app_inboxcount(const char *mailbox, int *newmsgs, int *oldmsgs);
 
-/*! Determine number of messages in a given mailbox and folder */
+/*! \brief Determine number of messages in a given mailbox and folder */
 int ast_app_messagecount(const char *context, const char *mailbox, const char *folder);
 
-/*! Safely spawn an external program while closing file descriptors 
+/*! \brief Safely spawn an external program while closing file descriptors 
 	\note This replaces the \b system call in all Asterisk modules
 */
 int ast_safe_system(const char *s);
@@ -161,7 +163,7 @@ void ast_unreplace_sigchld(void);
 */
 int ast_dtmf_stream(struct ast_channel *chan, struct ast_channel *peer, const char *digits, int between, unsigned int duration);
 
-/*! Stream a filename (or file descriptor) as a generator. */
+/*! \brief Stream a filename (or file descriptor) as a generator. */
 int ast_linear_stream(struct ast_channel *chan, const char *filename, int fd, int allowoverride);
 
 /*! 
@@ -169,6 +171,7 @@ int ast_linear_stream(struct ast_channel *chan, const char *filename, int fd, in
  * \param chan 
  * \param file filename
  * \param fwd, rev, stop, pause, restart, skipms, offsetms 
+ *
  * Before calling this function, set this to be the number 
  * of ms to start from the beginning of the file.  When the function
  * returns, it will be the number of ms from the beginning where the
@@ -176,23 +179,21 @@ int ast_linear_stream(struct ast_channel *chan, const char *filename, int fd, in
  */
 int ast_control_streamfile(struct ast_channel *chan, const char *file, const char *fwd, const char *rev, const char *stop, const char *pause, const char *restart, int skipms, long *offsetms);
 
-/*! Play a stream and wait for a digit, returning the digit that was pressed */
+/*! \brief Play a stream and wait for a digit, returning the digit that was pressed */
 int ast_play_and_wait(struct ast_channel *chan, const char *fn);
 
 int ast_play_and_record_full(struct ast_channel *chan, const char *playfile, const char *recordfile, int maxtime_sec, const char *fmt, int *duration, int silencethreshold, int maxsilence_ms, const char *path, const char *acceptdtmf, const char *canceldtmf);
 
-/*! Record a file for a max amount of time (in seconds), in a given list of formats separated by '|', outputting the duration of the recording, and with a maximum 
+/*! \brief Record a file for a max amount of time (in seconds), in a given list of formats separated by '|', outputting the duration of the recording, and with a maximum 
  \n
  permitted silence time in milliseconds of 'maxsilence' under 'silencethreshold' or use '-1' for either or both parameters for defaults. 
      calls ast_unlock_path() on 'path' if passed */
 int ast_play_and_record(struct ast_channel *chan, const char *playfile, const char *recordfile, int maxtime_sec, const char *fmt, int *duration, int silencethreshold, int maxsilence_ms, const char *path);
 
-/*! Record a message and prepend the message to the given record file after 
+/*! \brief Record a message and prepend the message to the given record file after 
     playing the optional playfile (or a beep), storing the duration in 
-    'duration' and with a maximum  
-\n
-  permitted silence time in milliseconds of 'maxsilence' under 
-  'silencethreshold' or use '-1' for either or both parameters for defaults. */
+    'duration' and with a maximum permitted silence time in milliseconds of 'maxsilence' under 
+    'silencethreshold' or use '-1' for either or both parameters for defaults. */
 int ast_play_and_prepend(struct ast_channel *chan, char *playfile, char *recordfile, int maxtime_sec, char *fmt, int *duration, int beep, int silencethreshold, int maxsilence_ms);
 
 enum AST_LOCK_RESULT {
@@ -202,6 +203,18 @@ enum AST_LOCK_RESULT {
 	AST_LOCK_FAILURE = -3,
 };
 
+/*! \brief Type of locking to use in ast_lock_path / ast_unlock_path */
+enum AST_LOCK_TYPE {
+	AST_LOCK_TYPE_LOCKFILE = 0,
+	AST_LOCK_TYPE_FLOCK = 1,
+};
+
+/*!
+ * \brief Set the type of locks used by ast_lock_path()
+ * \param type the locking type to use
+ */
+void ast_set_lock_type(enum AST_LOCK_TYPE type);
+
 /*!
  * \brief Lock a filesystem path.
  * \param path the path to be locked
@@ -209,47 +222,42 @@ enum AST_LOCK_RESULT {
  */
 enum AST_LOCK_RESULT ast_lock_path(const char *path);
 
-/*! Unlock a path */
+/*! \brief Unlock a path */
 int ast_unlock_path(const char *path);
 
-/*! Read a file into asterisk*/
+/*! \brief Read a file into asterisk*/
 char *ast_read_textfile(const char *file);
 
-struct ast_group_info {
-	struct ast_channel *chan;
-	char *category;
-	char *group;
-	AST_LIST_ENTRY(ast_group_info) list;
-};
+struct ast_group_info;
 
-/*! Split a group string into group and category, returning a default category if none is provided. */
+/*! \brief Split a group string into group and category, returning a default category if none is provided. */
 int ast_app_group_split_group(const char *data, char *group, int group_max, char *category, int category_max);
 
-/*! Set the group for a channel, splitting the provided data into group and category, if specified. */
+/*! \brief Set the group for a channel, splitting the provided data into group and category, if specified. */
 int ast_app_group_set_channel(struct ast_channel *chan, const char *data);
 
-/*! Get the current channel count of the specified group and category. */
+/*! \brief Get the current channel count of the specified group and category. */
 int ast_app_group_get_count(const char *group, const char *category);
 
-/*! Get the current channel count of all groups that match the specified pattern and category. */
+/*! \brief Get the current channel count of all groups that match the specified pattern and category. */
 int ast_app_group_match_get_count(const char *groupmatch, const char *category);
 
-/*! Discard all group counting for a channel */
+/*! \brief Discard all group counting for a channel */
 int ast_app_group_discard(struct ast_channel *chan);
 
-/*! Update all group counting for a channel to a new one */
+/*! \brief Update all group counting for a channel to a new one */
 int ast_app_group_update(struct ast_channel *oldchan, struct ast_channel *newchan);
 
-/*! Write Lock the group count list */
+/*! \brief Write Lock the group count list */
 int ast_app_group_list_wrlock(void);
 
-/*! Read Lock the group count list */
+/*! \brief Read Lock the group count list */
 int ast_app_group_list_rdlock(void);
 
-/*! Get the head of the group count list */
+/*! \brief Get the head of the group count list */
 struct ast_group_info *ast_app_group_list_head(void);
 
-/*! Unlock the group count list */
+/*! \brief Unlock the group count list */
 int ast_app_group_list_unlock(void);
 
 /*!
@@ -335,7 +343,7 @@ unsigned int ast_app_separate_args(char *buf, char delim, char **array, int arra
  */
 struct ast_app_option {
 	/*! \brief The flag bit that represents this option. */
-	unsigned int flag;
+	uint64_t flag;
 	/*! \brief The index of the entry in the arguments array
 	  that should be used for this option's argument. */
 	unsigned int arg_index;
@@ -386,7 +394,7 @@ struct ast_app_option {
   	... do any argument parsing here ...
 
 	if (ast_parseoptions(my_app_options, &opts, opt_args, options)) {
-		LOCAL_USER_REMOVE(u);
+		ast_module_user_remove(u);
 		return -1;
 	}
   }
@@ -442,8 +450,11 @@ int ast_app_parse_options64(const struct ast_app_option *options, struct ast_fla
 \note Note that if 'collect' holds digits already, new digits will be appended, so be sure it's initialized properly */
 int ast_app_dtget(struct ast_channel *chan, const char *context, char *collect, size_t size, int maxlen, int timeout);
 
-/*! Allow to record message and have a review option */
+/*! \brief Allow to record message and have a review option */
 int ast_record_review(struct ast_channel *chan, const char *playfile, const char *recordfile, int maxtime, const char *fmt, int *duration, const char *path);
+
+/*! \brief Decode an encoded control or extended ASCII character */
+int ast_get_encoded_char(const char *stream, char *result, size_t *consumed);
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }

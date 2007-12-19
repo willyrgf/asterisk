@@ -29,12 +29,8 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <sys/types.h>
-#include <stdlib.h>
-
 #include "asterisk/channel.h"
 #include "asterisk/module.h"
-#include "asterisk/pbx.h"
 
 static char *nocdr_descrip = 
 "  NoCDR(): This application will tell Asterisk not to maintain a CDR for the\n"

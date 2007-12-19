@@ -29,10 +29,8 @@
 extern "C" {
 #endif
 
-#include <sys/types.h>
 #include <sys/time.h>
 
-#include "asterisk/compiler.h"
 #include "asterisk/endian.h"
 #include "asterisk/linkedlists.h"
 
@@ -243,8 +241,8 @@ extern struct ast_frame ast_null_frame;
 #define AST_FORMAT_G726		(1 << 11)
 /*! G.722 */
 #define AST_FORMAT_G722		(1 << 12)
-/*! Maximum audio format */
-#define AST_FORMAT_MAX_AUDIO	(1 << 15)
+/*! Raw 16-bit Signed Linear (16000 Hz) PCM */
+#define AST_FORMAT_SLINEAR16	(1 << 15)
 /*! Maximum audio mask */
 #define AST_FORMAT_AUDIO_MASK   ((1 << 16)-1)
 /*! JPEG Images */
@@ -261,14 +259,10 @@ extern struct ast_frame ast_null_frame;
 #define AST_FORMAT_H264		(1 << 21)
 /*! MPEG4 Video */
 #define AST_FORMAT_MP4_VIDEO	(1 << 22)
-/*! Maximum video format */
-#define AST_FORMAT_MAX_VIDEO	(1 << 24)
 #define AST_FORMAT_VIDEO_MASK   (((1 << 25)-1) & ~(AST_FORMAT_AUDIO_MASK))
 /*! T.140 Text format - ITU T.140, RFC 4351*/
 #define AST_FORMAT_T140		(1 << 25)
-/*! Maximum text mask */
-#define AST_FORMAT_MAX_TEXT	(1 << 26)
-#define AST_FORMAT_TEXT_MASK   (((1 << 27)-1) & ~(AST_FORMAT_AUDIO_MASK) & ~(AST_FORMAT_VIDEO_MASK))
+#define AST_FORMAT_TEXT_MASK   (((1 << 30)-1) & ~(AST_FORMAT_AUDIO_MASK) & ~(AST_FORMAT_VIDEO_MASK))
 
 enum ast_control_frame_type {
 	AST_CONTROL_HANGUP = 1,		/*!< Other end has hungup */
@@ -361,9 +355,9 @@ struct ast_option_header {
 
 /*! \brief Definition of supported media formats (codecs) */
 struct ast_format_list {
-	int visible;	/*!< Can we see this entry */
 	int bits;	/*!< bitmask value */
 	char *name;	/*!< short name */
+	int samplespersecond; /*!< Number of samples per second (8000/16000) */
 	char *desc;	/*!< Description */
 	int fr_len;	/*!< Single frame length in bytes */
 	int min_ms;	/*!< Min value */
@@ -393,10 +387,7 @@ struct ast_frame *ast_fralloc(char *source, int len);
  */
 void ast_frame_free(struct ast_frame *fr, int cache);
 
-static void force_inline ast_frfree(struct ast_frame *fr)
-{
-	ast_frame_free(fr, 1);
-}
+#define ast_frfree(fr) ast_frame_free(fr, 1)
 
 /*! \brief Makes a frame independent of any static storage
  * \param fr frame to act upon
@@ -458,7 +449,10 @@ int ast_getformatbyname(const char *name);
  */
 char *ast_codec2str(int codec);
 
-/*! \page ast_smooth
+/*! \name AST_Smoother 
+*/
+/*@{ */
+/*! \page ast_smooth The AST Frame Smoother
 The ast_smoother interface was designed specifically
 to take frames of variant sizes and produce frames of a single expected
 size, precisely what you want to do.
@@ -473,8 +467,6 @@ The basic interface is:
 */
 struct ast_smoother;
 
-struct ast_format_list *ast_get_format_list_index(int index);
-struct ast_format_list *ast_get_format_list(size_t *size);
 struct ast_smoother *ast_smoother_new(int bytes);
 void ast_smoother_set_flags(struct ast_smoother *smoother, int flags);
 int ast_smoother_get_flags(struct ast_smoother *smoother);
@@ -491,7 +483,10 @@ struct ast_frame *ast_smoother_read(struct ast_smoother *s);
 #define ast_smoother_feed_be(s,f) __ast_smoother_feed(s, f, 0)
 #define ast_smoother_feed_le(s,f) __ast_smoother_feed(s, f, 1)
 #endif
+/*@} Doxygen marker */
 
+struct ast_format_list *ast_get_format_list_index(int index);
+struct ast_format_list *ast_get_format_list(size_t *size);
 void ast_frame_dump(const char *name, struct ast_frame *f, char *prefix);
 
 /*! \page AudioCodecPref Audio Codec Preferences

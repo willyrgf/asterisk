@@ -38,23 +38,15 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
-#include <errno.h>
-
 #include "asterisk/zapata.h"
 
 #include "asterisk/lock.h"
 #include "asterisk/file.h"
-#include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
 #include "asterisk/config.h"
 #include "asterisk/app.h"
-#include "asterisk/options.h"
 #include "asterisk/utils.h"
 #include "asterisk/cli.h"
 #include "asterisk/say.h"
@@ -332,7 +324,7 @@ static int conf_exec(struct ast_channel *chan, void *data)
 			if((mygroup = pbx_builtin_getvar_helper(tempchan, "GROUP")) && (!strcmp(mygroup, desired_group))) {
 				ast_verb(3, "Found Matching Channel %s in group %s\n", tempchan->name, desired_group);
 			} else {
-				ast_mutex_unlock(&tempchan->lock);
+				ast_channel_unlock(tempchan);
 				lastchan = tempchan;
 				continue;
 			}
@@ -340,7 +332,7 @@ static int conf_exec(struct ast_channel *chan, void *data)
 		if (tempchan && (!strcmp(tempchan->tech->type, "Zap")) && (tempchan != chan) ) {
 			ast_verb(3, "Zap channel %s is in-use, monitoring...\n", tempchan->name);
 			ast_copy_string(confstr, tempchan->name, sizeof(confstr));
-			ast_mutex_unlock(&tempchan->lock);
+			ast_channel_unlock(tempchan);
 			if ((tmp = strchr(confstr,'-'))) {
 				*tmp = '\0';
 			}
@@ -351,7 +343,7 @@ static int conf_exec(struct ast_channel *chan, void *data)
 			if (res<0) break;
 			input = res;
 		} else if (tempchan)
-			ast_mutex_unlock(&tempchan->lock);
+			ast_channel_unlock(tempchan);
 		lastchan = tempchan;
 	}
 	return res;

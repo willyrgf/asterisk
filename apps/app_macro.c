@@ -29,18 +29,10 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
-#include <sys/types.h>
-
 #include "asterisk/file.h"
-#include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
-#include "asterisk/options.h"
 #include "asterisk/config.h"
 #include "asterisk/utils.h"
 #include "asterisk/lock.h"
@@ -79,7 +71,7 @@ static char *if_descrip =
 "  MacroIf(<expr>?macroname_a[,arg1][:macroname_b[,arg1]])\n"
 "Executes macro defined in <macroname_a> if <expr> is true\n"
 "(otherwise <macroname_b> if provided)\n"
-"Arguments and return values as in application macro()\n";
+"Arguments and return values as in application Macro()\n";
 
 static char *exclusive_descrip =
 "  MacroExclusive(macroname,arg1,arg2...):\n"
@@ -271,6 +263,7 @@ static int _macro_exec(struct ast_channel *chan, void *data, int exclusive)
 	while(ast_exists_extension(chan, chan->context, chan->exten, chan->priority, chan->cid.cid_num)) {
 		struct ast_context *c;
 		struct ast_exten *e;
+		int foundx;
 		runningapp[0] = '\0';
 		runningdata[0] = '\0';
 
@@ -299,7 +292,7 @@ static int _macro_exec(struct ast_channel *chan, void *data, int exclusive)
 		/* Reset the macro depth, if it was changed in the last iteration */
 		pbx_builtin_setvar_helper(chan, "MACRO_DEPTH", depthc);
 
-		if ((res = ast_spawn_extension(chan, chan->context, chan->exten, chan->priority, chan->cid.cid_num))) {
+		if ((res = ast_spawn_extension(chan, chan->context, chan->exten, chan->priority, chan->cid.cid_num, &foundx,1))) {
 			/* Something bad happened, or a hangup has been requested. */
 			if (((res >= '0') && (res <= '9')) || ((res >= 'A') && (res <= 'F')) ||
 		    	(res == '*') || (res == '#')) {
@@ -330,7 +323,7 @@ static int _macro_exec(struct ast_channel *chan, void *data, int exclusive)
 			gosub_level++;
 			ast_debug(1, "Incrementing gosub_level\n");
 		} else if (!strcasecmp(runningapp, "GOSUBIF")) {
-			char tmp2[1024] = "", *cond, *app, *app2 = tmp2;
+			char tmp2[1024], *cond, *app, *app2 = tmp2;
 			pbx_substitute_variables_helper(chan, runningdata, tmp2, sizeof(tmp2) - 1);
 			cond = strsep(&app2, "?");
 			app = strsep(&app2, ":");
@@ -353,7 +346,7 @@ static int _macro_exec(struct ast_channel *chan, void *data, int exclusive)
 			ast_debug(1, "Decrementing gosub_level\n");
 		} else if (!strncasecmp(runningapp, "EXEC", 4)) {
 			/* Must evaluate args to find actual app */
-			char tmp2[1024] = "", *tmp3 = NULL;
+			char tmp2[1024], *tmp3 = NULL;
 			pbx_substitute_variables_helper(chan, runningdata, tmp2, sizeof(tmp2) - 1);
 			if (!strcasecmp(runningapp, "EXECIF")) {
 				tmp3 = strchr(tmp2, '|');

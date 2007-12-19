@@ -29,15 +29,9 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/types.h>
-
 #include "asterisk/module.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
-#include "asterisk/logger.h"
 #include "asterisk/utils.h"
 #include "asterisk/app.h"
 
@@ -49,6 +43,9 @@ static int shell_helper(struct ast_channel *chan, const char *cmd, char *data,
 		return -1;
 	}
 
+	if (chan)
+		ast_autoservice_start(chan);
+
 	if (len >= 1) {
 		FILE *ptr;
 		char plbuff[4096];
@@ -59,6 +56,9 @@ static int shell_helper(struct ast_channel *chan, const char *cmd, char *data,
 		}
 		pclose(ptr);
 	}
+
+	if (chan)
+		ast_autoservice_stop(chan);
 
 	return 0;
 }

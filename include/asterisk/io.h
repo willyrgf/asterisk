@@ -23,10 +23,10 @@
 #ifndef _ASTERISK_IO_H
 #define _ASTERISK_IO_H
 
-#ifdef POLLCOMPAT
-#include "asterisk/poll-compat.h"
-#else
+#ifdef HAVE_SYS_POLL_H
 #include <sys/poll.h>		/* For POLL* constants */
+#else
+#include "asterisk/poll-compat.h"
 #endif
 
 #if defined(__cplusplus) || defined(c_plusplus)
@@ -48,7 +48,7 @@ extern "C" {
 /*! Invalid fd */
 #define AST_IO_NVAL	POLLNVAL
 
-/*!
+/*! \brief
  * An Asterisk IO callback takes its id, a file descriptor, list of events, and
  * callback data as arguments and returns 0 if it should not be
  * run again, or non-zero if it should be run again.

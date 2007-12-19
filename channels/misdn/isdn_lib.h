@@ -11,6 +11,13 @@
  * the GNU General Public License
  */
 
+/*! \file \brief
+ * 
+ * Interface to mISDN
+ *
+ * \author Christian Richter <crich@beronet.com>
+ */
+
 #ifndef TE_LIB
 #define TE_LIB
 
@@ -382,6 +389,8 @@ struct misdn_lib_iface {
 
 /***** USER IFACE **********/
 
+void misdn_lib_nt_keepcalls(int kc);
+
 void misdn_lib_nt_debug_init( int flags, char *file );
 
 int misdn_lib_init(char *portlist, struct misdn_lib_iface* iface, void *user_data);
@@ -421,6 +430,7 @@ int misdn_lib_port_block(int port);
 int misdn_lib_port_unblock(int port);
 
 int misdn_lib_port_is_pri(int port);
+int misdn_lib_port_is_nt(int port);
 
 int misdn_lib_port_up(int port, int notcheck);
 
@@ -471,5 +481,8 @@ char *bc_state2str(enum bchannel_state state);
 void bc_state_change(struct misdn_bchannel *bc, enum bchannel_state state);
 
 void misdn_dump_chanlist(void);
+
+void misdn_make_dummy(struct misdn_bchannel *dummybc, int port, int l3id, int nt, int channel);
+
 
 #endif

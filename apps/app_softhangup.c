@@ -29,14 +29,7 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
-#include <sys/types.h>
-
 #include "asterisk/file.h"
-#include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
@@ -45,11 +38,11 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 static char *synopsis = "Soft Hangup Application";
 
-static char *desc = "SoftHangup(Technology/resource[,options])\n"
+static char *desc = "  SoftHangup(Technology/resource[,options]):\n"
 "Hangs up the requested channel.  If there are no channels to hangup,\n"
 "the application will report it.\n"
-"- 'options' may contain the following letter:\n"
-"     'a' : hang up all channels on a specified device instead of a single resource\n";
+"  Options:\n"
+"     'a'  - hang up all channels on a specified device instead of a single resource\n";
 
 static char *app = "SoftHangup";
 
@@ -104,11 +97,11 @@ static int softhangup_exec(struct ast_channel *chan, void *data)
 			ast_log(LOG_WARNING, "Soft hanging %s up.\n", c->name);
 			ast_softhangup(c, AST_SOFTHANGUP_EXPLICIT);
 			if (!ast_test_flag(&flags, OPTION_ALL)) {
-				ast_mutex_unlock(&c->lock);
+				ast_channel_unlock(c);
 				break;
 			}
 		}
-		ast_mutex_unlock(&c->lock);
+		ast_channel_unlock(c);
 	}
 
 	return 0;

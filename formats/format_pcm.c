@@ -28,20 +28,7 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <unistd.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <stdlib.h>
-#include <sys/time.h>
-#include <stdio.h>
-#include <errno.h>
-#include <string.h>
-
-#include "asterisk/lock.h"
-#include "asterisk/channel.h"
-#include "asterisk/file.h"
-#include "asterisk/logger.h"
-#include "asterisk/sched.h"
+#include "asterisk/mod_format.h"
 #include "asterisk/module.h"
 #include "asterisk/endian.h"
 #include "asterisk/ulaw.h"
@@ -180,7 +167,7 @@ static int pcm_write(struct ast_filestream *fs, struct ast_frame *f)
 
 #ifdef REALTIME_WRITE
 	if (s->fmt->format == AST_FORMAT_ALAW) {
-		struct pcm_desc *pd = (struct pcm_desc *)fs->private;
+		struct pcm_desc *pd = (struct pcm_desc *)fs->_private;
 		struct stat stat_buf;
 		unsigned long cur_time = get_time();
 		unsigned long fpos = ( cur_time - pd->start_time ) * 8;	/* 8 bytes per msec */
@@ -479,10 +466,12 @@ static int load_module(void)
 	for (index = 0; index < (sizeof(alaw_silence) / sizeof(alaw_silence[0])); index++)
 		alaw_silence[index] = AST_LIN2A(0);
 
-	return ast_format_register(&pcm_f)
+	if ( ast_format_register(&pcm_f)
 		|| ast_format_register(&alaw_f)
 		|| ast_format_register(&au_f)
-		|| ast_format_register(&g722_f);
+		|| ast_format_register(&g722_f) )
+		return AST_MODULE_LOAD_FAILURE;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 static int unload_module(void)

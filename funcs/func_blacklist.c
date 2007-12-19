@@ -30,22 +30,10 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-
-#include "asterisk/lock.h"
-#include "asterisk/file.h"
-#include "asterisk/logger.h"
-#include "asterisk/options.h"
-#include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
-#include "asterisk/translate.h"
-#include "asterisk/image.h"
-#include "asterisk/callerid.h"
+#include "asterisk/channel.h"
 #include "asterisk/astdb.h"
-#include "asterisk/options.h"
 
 static int blacklist_read(struct ast_channel *chan, const char *cmd, char *data, char *buf, size_t len)
 {

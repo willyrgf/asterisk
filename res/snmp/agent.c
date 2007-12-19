@@ -18,6 +18,35 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
+/*
+ * There is some collision collision between netsmp and asterisk names,
+ * causing build under AST_DEVMODE to fail.
+ *
+ * The following PACKAGE_* macros are one place.
+ * Also netsnmp has an improper check for HAVE_DMALLOC_H, using
+ *    #if HAVE_DMALLOC_H   instead of #ifdef HAVE_DMALLOC_H
+ * As a countermeasure we define it to 0, however this will fail
+ * when the proper check is implemented.
+ */
+#ifdef PACKAGE_NAME
+#undef PACKAGE_NAME
+#endif
+#ifdef PACKAGE_BUGREPORT
+#undef PACKAGE_BUGREPORT
+#endif
+#ifdef PACKAGE_STRING
+#undef PACKAGE_STRING
+#endif
+#ifdef PACKAGE_TARNAME
+#undef PACKAGE_TARNAME
+#endif
+#ifdef PACKAGE_VERSION
+#undef PACKAGE_VERSION
+#endif
+#ifndef HAVE_DMALLOC_H
+#define HAVE_DMALLOC_H 0	/* XXX we shouldn't do this */
+#endif
+
 #include <net-snmp/net-snmp-config.h>
 #include <net-snmp/net-snmp-includes.h>
 #include <net-snmp/agent/net-snmp-agent-includes.h>
@@ -67,6 +96,8 @@ static oid asterisk_oid[] = { 1, 3, 6, 1, 4, 1, 22736, 1 };
 #define		ASTCONFRELOADTIME		2
 #define		ASTCONFPID				3
 #define		ASTCONFSOCKET			4
+#define		ASTCONFACTIVECALLS	5
+#define		ASTCONFPROCESSEDCALLS   6
 
 #define	ASTMODULES				3
 #define		ASTMODCOUNT				1
@@ -138,11 +169,12 @@ static oid asterisk_oid[] = { 1, 3, 6, 1, 4, 1, 22736, 1 };
 #define			ASTCHANTYPETRANSFER		6
 #define			ASTCHANTYPECHANNELS		7
 
-#define			ASTCHANBRIDGECOUNT	  5
+#define		ASTCHANSCALARS			5
+#define			ASTCHANBRIDGECOUNT		1
 
 void *agent_thread(void *arg)
 {
-	ast_verbose(VERBOSE_PREFIX_2 "Starting %sAgent\n", res_snmp_agentx_subagent ? "Sub" : "");
+	ast_verb(2, "Starting %sAgent\n", res_snmp_agentx_subagent ? "Sub" : "");
 
 	snmp_enable_stderrlog();
 
@@ -165,8 +197,7 @@ void *agent_thread(void *arg)
 
 	snmp_shutdown("asterisk");
 
-	ast_verbose(VERBOSE_PREFIX_2 "Terminating %sAgent\n",
-				res_snmp_agentx_subagent ? "Sub" : "");
+	ast_verb(2, "Terminating %sAgent\n", res_snmp_agentx_subagent ? "Sub" : "");
 
 	return NULL;
 }
@@ -546,9 +577,10 @@ static u_char *ast_var_channel_types_table(struct variable *vp, oid *name, size_
 static u_char *ast_var_channel_bridge(struct variable *vp, oid *name, size_t *length,
 	int exact, size_t *var_len, WriteMethod **write_method)
 {
-	static unsigned long long_ret = 0;
+	static unsigned long long_ret;
 	struct ast_channel *chan = NULL;
 
+	long_ret = 0;
 	if (header_generic(vp, name, length, exact, var_len, write_method))
 		return NULL;
 
@@ -590,6 +622,12 @@ static u_char *ast_var_Config(struct variable *vp, oid *name, size_t *length,
 	case ASTCONFSOCKET:
 		*var_len = strlen(ast_config_AST_SOCKET);
 		return (u_char *)ast_config_AST_SOCKET;
+	case ASTCONFACTIVECALLS:
+		long_ret = ast_active_calls();
+		return (u_char *)&long_ret;
+	case ASTCONFPROCESSEDCALLS:
+		long_ret = ast_processed_calls();
+		return (u_char *)&long_ret;
 	default:
 		break;
 	}
@@ -721,6 +759,8 @@ static void init_asterisk_mib(void)
 		{ASTCONFRELOADTIME,      ASN_TIMETICKS, RONLY, ast_var_Config,              2, {ASTCONFIGURATION, ASTCONFRELOADTIME}},
 		{ASTCONFPID,             ASN_INTEGER,   RONLY, ast_var_Config,              2, {ASTCONFIGURATION, ASTCONFPID}},
 		{ASTCONFSOCKET,          ASN_OCTET_STR, RONLY, ast_var_Config,              2, {ASTCONFIGURATION, ASTCONFSOCKET}},
+		{ASTCONFACTIVECALLS,     ASN_GAUGE,   	RONLY, ast_var_Config,              2, {ASTCONFIGURATION, ASTCONFACTIVECALLS}},
+		{ASTCONFPROCESSEDCALLS,  ASN_INTEGER,   RONLY, ast_var_Config,              2, {ASTCONFIGURATION, ASTCONFPROCESSEDCALLS}},
 		{ASTMODCOUNT,            ASN_INTEGER,   RONLY, ast_var_Modules ,            2, {ASTMODULES, ASTMODCOUNT}},
 		{ASTINDCOUNT,            ASN_INTEGER,   RONLY, ast_var_indications,         2, {ASTINDICATIONS, ASTINDCOUNT}},
 		{ASTINDCURRENT,          ASN_OCTET_STR, RONLY, ast_var_indications,         2, {ASTINDICATIONS, ASTINDCURRENT}},
@@ -778,7 +818,7 @@ static void init_asterisk_mib(void)
 		{ASTCHANTYPEINDICATIONS, ASN_INTEGER,   RONLY, ast_var_channel_types_table, 4, {ASTCHANNELS, ASTCHANTYPETABLE, 1, ASTCHANTYPEINDICATIONS}},
 		{ASTCHANTYPETRANSFER,    ASN_INTEGER,   RONLY, ast_var_channel_types_table, 4, {ASTCHANNELS, ASTCHANTYPETABLE, 1, ASTCHANTYPETRANSFER}},
 		{ASTCHANTYPECHANNELS,    ASN_GAUGE,     RONLY, ast_var_channel_types_table, 4, {ASTCHANNELS, ASTCHANTYPETABLE, 1, ASTCHANTYPECHANNELS}},
-		{ASTCHANBRIDGECOUNT,     ASN_GAUGE,     RONLY, ast_var_channel_bridge,      2, {ASTCHANNELS, ASTCHANBRIDGECOUNT}},
+		{ASTCHANBRIDGECOUNT,     ASN_GAUGE,     RONLY, ast_var_channel_bridge,      3, {ASTCHANNELS, ASTCHANSCALARS, ASTCHANBRIDGECOUNT}},
 	};
 
 	register_sysORTable(asterisk_oid, OID_LENGTH(asterisk_oid),

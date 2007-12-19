@@ -27,16 +27,9 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <signal.h>
-#include <errno.h>
-#include <unistd.h>
 
-#include "asterisk/logger.h"
 #include "asterisk/channel.h"
-#include "asterisk/options.h"
 #include "asterisk/utils.h"
 #include "asterisk/lock.h"
 #include "asterisk/linkedlists.h"
@@ -60,6 +53,8 @@ struct ast_audiohook_list {
 
 /*! \brief Initialize an audiohook structure
  * \param audiohook Audiohook structure
+ * \param type
+ * \param source
  * \return Returns 0 on success, -1 on failure
  */
 int ast_audiohook_init(struct ast_audiohook *audiohook, enum ast_audiohook_type type, const char *source)
@@ -189,39 +184,41 @@ static struct ast_frame *audiohook_read_frame_both(struct ast_audiohook *audioho
 
 	/* Start with the read factory... if there are enough samples, read them in */
 	if (ast_slinfactory_available(&audiohook->read_factory) >= samples) {
-		if (ast_slinfactory_read(&audiohook->read_factory, buf1, samples))
+		if (ast_slinfactory_read(&audiohook->read_factory, buf1, samples)) {
 			read_buf = buf1;
-		/* Adjust read volume if need be */
-		if (audiohook->options.read_volume) {
-			int count = 0;
-			short adjust_value = abs(audiohook->options.read_volume);
-			for (count = 0; count < samples; count++) {
-				if (audiohook->options.read_volume > 0)
-					ast_slinear_saturated_multiply(&buf1[count], &adjust_value);
-				else if (audiohook->options.read_volume < 0)
-					ast_slinear_saturated_divide(&buf1[count], &adjust_value);
+			/* Adjust read volume if need be */
+			if (audiohook->options.read_volume) {
+				int count = 0;
+				short adjust_value = abs(audiohook->options.read_volume);
+				for (count = 0; count < samples; count++) {
+					if (audiohook->options.read_volume > 0)
+						ast_slinear_saturated_multiply(&buf1[count], &adjust_value);
+					else if (audiohook->options.read_volume < 0)
+						ast_slinear_saturated_divide(&buf1[count], &adjust_value);
+				}
 			}
 		}
 	} else if (option_debug)
-		ast_log(LOG_DEBUG, "Failed to get %zd samples from read factory %p\n", samples, &audiohook->read_factory);
+		ast_log(LOG_DEBUG, "Failed to get %d samples from read factory %p\n", (int)samples, &audiohook->read_factory);
 
 	/* Move on to the write factory... if there are enough samples, read them in */
 	if (ast_slinfactory_available(&audiohook->write_factory) >= samples) {
-		if (ast_slinfactory_read(&audiohook->write_factory, buf2, samples))
+		if (ast_slinfactory_read(&audiohook->write_factory, buf2, samples)) {
 			write_buf = buf2;
-		/* Adjust write volume if need be */
-		if (audiohook->options.write_volume) {
-			int count = 0;
-			short adjust_value = abs(audiohook->options.write_volume);
-			for (count = 0; count < samples; count++) {
-				if (audiohook->options.write_volume > 0)
-					ast_slinear_saturated_multiply(&buf2[count], &adjust_value);
-				else if (audiohook->options.write_volume < 0)
-					ast_slinear_saturated_divide(&buf2[count], &adjust_value);
+			/* Adjust write volume if need be */
+			if (audiohook->options.write_volume) {
+				int count = 0;
+				short adjust_value = abs(audiohook->options.write_volume);
+				for (count = 0; count < samples; count++) {
+					if (audiohook->options.write_volume > 0)
+						ast_slinear_saturated_multiply(&buf2[count], &adjust_value);
+					else if (audiohook->options.write_volume < 0)
+						ast_slinear_saturated_divide(&buf2[count], &adjust_value);
+				}
 			}
 		}
 	} else if (option_debug)
-		ast_log(LOG_DEBUG, "Failed to get %zd samples from write factory %p\n", samples, &audiohook->write_factory);
+		ast_log(LOG_DEBUG, "Failed to get %d samples from write factory %p\n", (int)samples, &audiohook->write_factory);
 
 	/* Basically we figure out which buffer to use... and if mixing can be done here */
 	if (!read_buf && !write_buf)
@@ -342,35 +339,29 @@ int ast_audiohook_detach_list(struct ast_audiohook_list *audiohook_list)
 	struct ast_audiohook *audiohook = NULL;
 
 	/* Drop any spies */
-	AST_LIST_TRAVERSE_SAFE_BEGIN(&audiohook_list->spy_list, audiohook, list) {
+	while ((audiohook = AST_LIST_REMOVE_HEAD(&audiohook_list->spy_list, list))) {
 		ast_audiohook_lock(audiohook);
-		AST_LIST_REMOVE_CURRENT(&audiohook_list->spy_list, list);
 		audiohook->status = AST_AUDIOHOOK_STATUS_DONE;
 		ast_cond_signal(&audiohook->trigger);
 		ast_audiohook_unlock(audiohook);
 	}
-	AST_LIST_TRAVERSE_SAFE_END
 
 	/* Drop any whispering sources */
-	AST_LIST_TRAVERSE_SAFE_BEGIN(&audiohook_list->whisper_list, audiohook, list) {
+	while ((audiohook = AST_LIST_REMOVE_HEAD(&audiohook_list->whisper_list, list))) {
 		ast_audiohook_lock(audiohook);
-		AST_LIST_REMOVE_CURRENT(&audiohook_list->whisper_list, list);
 		audiohook->status = AST_AUDIOHOOK_STATUS_DONE;
 		ast_cond_signal(&audiohook->trigger);
 		ast_audiohook_unlock(audiohook);
 	}
-	AST_LIST_TRAVERSE_SAFE_END
 
 	/* Drop any manipulaters */
-	AST_LIST_TRAVERSE_SAFE_BEGIN(&audiohook_list->manipulate_list, audiohook, list) {
+	while ((audiohook = AST_LIST_REMOVE_HEAD(&audiohook_list->manipulate_list, list))) {
 		ast_audiohook_lock(audiohook);
 		ast_mutex_lock(&audiohook->lock);
-		AST_LIST_REMOVE_CURRENT(&audiohook_list->manipulate_list, list);
 		audiohook->status = AST_AUDIOHOOK_STATUS_DONE;
 		ast_audiohook_unlock(audiohook);
 		audiohook->manipulate_callback(audiohook, NULL, NULL, 0);
 	}
-	AST_LIST_TRAVERSE_SAFE_END
 
 	/* Drop translation paths if present */
 	for (i = 0; i < 2; i++) {
@@ -449,7 +440,7 @@ static struct ast_frame *dtmf_audiohook_write_list(struct ast_channel *chan, str
 	AST_LIST_TRAVERSE_SAFE_BEGIN(&audiohook_list->manipulate_list, audiohook, list) {
 		ast_audiohook_lock(audiohook);
 		if (audiohook->status != AST_AUDIOHOOK_STATUS_RUNNING) {
-			AST_LIST_REMOVE_CURRENT(&audiohook_list->manipulate_list, list);
+			AST_LIST_REMOVE_CURRENT(list);
 			audiohook->status = AST_AUDIOHOOK_STATUS_DONE;
 			ast_audiohook_unlock(audiohook);
 			audiohook->manipulate_callback(audiohook, NULL, NULL, 0);
@@ -459,7 +450,7 @@ static struct ast_frame *dtmf_audiohook_write_list(struct ast_channel *chan, str
 			audiohook->manipulate_callback(audiohook, chan, frame, direction);
 		ast_audiohook_unlock(audiohook);
 	}
-	AST_LIST_TRAVERSE_SAFE_END
+	AST_LIST_TRAVERSE_SAFE_END;
 
 	return frame;
 }
@@ -496,7 +487,7 @@ static struct ast_frame *audio_audiohook_write_list(struct ast_channel *chan, st
 	AST_LIST_TRAVERSE_SAFE_BEGIN(&audiohook_list->spy_list, audiohook, list) {
 		ast_audiohook_lock(audiohook);
 		if (audiohook->status != AST_AUDIOHOOK_STATUS_RUNNING) {
-			AST_LIST_REMOVE_CURRENT(&audiohook_list->spy_list, list);
+			AST_LIST_REMOVE_CURRENT(list);
 			audiohook->status = AST_AUDIOHOOK_STATUS_DONE;
 			ast_cond_signal(&audiohook->trigger);
 			ast_audiohook_unlock(audiohook);
@@ -515,7 +506,7 @@ static struct ast_frame *audio_audiohook_write_list(struct ast_channel *chan, st
 		AST_LIST_TRAVERSE_SAFE_BEGIN(&audiohook_list->whisper_list, audiohook, list) {
 			ast_audiohook_lock(audiohook);
 			if (audiohook->status != AST_AUDIOHOOK_STATUS_RUNNING) {
-				AST_LIST_REMOVE_CURRENT(&audiohook_list->whisper_list, list);
+				AST_LIST_REMOVE_CURRENT(list);
 				audiohook->status = AST_AUDIOHOOK_STATUS_DONE;
 				ast_cond_signal(&audiohook->trigger);
 				ast_audiohook_unlock(audiohook);
@@ -540,7 +531,7 @@ static struct ast_frame *audio_audiohook_write_list(struct ast_channel *chan, st
 		AST_LIST_TRAVERSE_SAFE_BEGIN(&audiohook_list->manipulate_list, audiohook, list) {
 			ast_audiohook_lock(audiohook);
 			if (audiohook->status != AST_AUDIOHOOK_STATUS_RUNNING) {
-				AST_LIST_REMOVE_CURRENT(&audiohook_list->manipulate_list, list);
+				AST_LIST_REMOVE_CURRENT(list);
 				audiohook->status = AST_AUDIOHOOK_STATUS_DONE;
 				ast_audiohook_unlock(audiohook);
 				/* We basically drop all of our links to the manipulate audiohook and prod it to do it's own destructive things */
@@ -578,8 +569,6 @@ static struct ast_frame *audio_audiohook_write_list(struct ast_channel *chan, st
 			/* Here's the scoop... middle frame is no longer of use to us */
 			ast_frfree(middle_frame);
 		}
-		/* Yay let's rid ourselves of the start frame */
-		ast_frfree(start_frame);
 	} else {
 		/* No frame was modified, we can just drop our middle frame and pass the frame we got in out */
 		ast_frfree(middle_frame);
@@ -623,3 +612,83 @@ void ast_audiohook_trigger_wait(struct ast_audiohook *audiohook)
 	
 	return;
 }
+
+/* Count number of channel audiohooks by type, regardless of type */
+int ast_channel_audiohook_count_by_source(struct ast_channel *chan, const char *source, enum ast_audiohook_type type)
+{
+	int count = 0;
+	struct ast_audiohook *ah = NULL;
+
+	if (!chan->audiohooks)
+		return -1;
+
+	switch (type) {
+		case AST_AUDIOHOOK_TYPE_SPY:
+			AST_LIST_TRAVERSE_SAFE_BEGIN(&chan->audiohooks->spy_list, ah, list) {
+				if (!strcmp(ah->source, source)) {
+					count++;
+				}
+			}
+			AST_LIST_TRAVERSE_SAFE_END;
+			break;
+		case AST_AUDIOHOOK_TYPE_WHISPER:
+			AST_LIST_TRAVERSE_SAFE_BEGIN(&chan->audiohooks->whisper_list, ah, list) {
+				if (!strcmp(ah->source, source)) {
+					count++;
+				}
+			}
+			AST_LIST_TRAVERSE_SAFE_END;
+			break;
+		case AST_AUDIOHOOK_TYPE_MANIPULATE:
+			AST_LIST_TRAVERSE_SAFE_BEGIN(&chan->audiohooks->manipulate_list, ah, list) {
+				if (!strcmp(ah->source, source)) {
+					count++;
+				}
+			}
+			AST_LIST_TRAVERSE_SAFE_END;
+			break;
+		default:
+			ast_log(LOG_DEBUG, "Invalid audiohook type supplied, (%d)\n", type);
+			return -1;
+	}
+
+	return count;
+}
+
+/* Count number of channel audiohooks by type that are running */
+int ast_channel_audiohook_count_by_source_running(struct ast_channel *chan, const char *source, enum ast_audiohook_type type)
+{
+	int count = 0;
+	struct ast_audiohook *ah = NULL;
+	if (!chan->audiohooks)
+		return -1;
+
+	switch (type) {
+		case AST_AUDIOHOOK_TYPE_SPY:
+			AST_LIST_TRAVERSE_SAFE_BEGIN(&chan->audiohooks->spy_list, ah, list) {
+				if ((!strcmp(ah->source, source)) && (ah->status == AST_AUDIOHOOK_STATUS_RUNNING))
+					count++;
+			}
+			AST_LIST_TRAVERSE_SAFE_END;
+			break;
+		case AST_AUDIOHOOK_TYPE_WHISPER:
+			AST_LIST_TRAVERSE_SAFE_BEGIN(&chan->audiohooks->whisper_list, ah, list) {
+				if ((!strcmp(ah->source, source)) && (ah->status == AST_AUDIOHOOK_STATUS_RUNNING))
+					count++;
+			}
+			AST_LIST_TRAVERSE_SAFE_END;
+			break;
+		case AST_AUDIOHOOK_TYPE_MANIPULATE:
+			AST_LIST_TRAVERSE_SAFE_BEGIN(&chan->audiohooks->manipulate_list, ah, list) {
+				if ((!strcmp(ah->source, source)) && (ah->status == AST_AUDIOHOOK_STATUS_RUNNING))
+					count++;
+			}
+			AST_LIST_TRAVERSE_SAFE_END;
+			break;
+		default:
+			ast_log(LOG_DEBUG, "Invalid audiohook type supplied, (%d)\n", type);
+			return -1;
+	}
+	return count;
+}
+

@@ -19,6 +19,10 @@ ifeq ($(OSARCH),SunOS)
   LIBS+=-lsocket -lnsl
 endif
 
+ifeq ($(OSARCH),mingw32)
+    AGIS:=
+endif
+
 include $(ASTTOPDIR)/Makefile.rules
 
 all: $(AGIS)
@@ -40,6 +44,7 @@ uninstall:
 clean:
 	rm -f *.so *.o look eagi-test eagi-sphinx-test
 	rm -f .*.o.d .*.oo.d
+	rm -f *.s *.i
 	rm -f strcompat.c
 
 ifneq ($(wildcard .*.d),)

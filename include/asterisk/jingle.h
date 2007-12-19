@@ -37,18 +37,25 @@
 #define JINGLE_NODE "jingle"
 #define GOOGLE_NODE "session"
 
-#define JINGLE_NS "http://jabber.org/protocol/jingle"
+#define JINGLE_NS "http://www.xmpp.org/extensions/xep-0166.html#ns"
+#define JINGLE_AUDIO_RTP_NS "http://www.xmpp.org/extensions/xep-0167.html#ns"
+#define JINGLE_ICE_UDP_NS "http://www.xmpp.org/extensions/xep-0176.html#ns-udp"
+#define JINGLE_DTMF_NS "http://www.xmpp.org/extensions/xep-0181.html#ns"
+#define JINGLE_DTMF_NS_ERRORS "http://www.xmpp.org/extensions/xep-0181.html#ns-errors"
 #define GOOGLE_NS "http://www.google.com/session"
 
 #define JINGLE_SID "sid"
 #define GOOGLE_SID "id"
 
-#define JINGLE_INITIATE "initiate"
+#define JINGLE_INITIATE "session-initiate"
 
-#define JINGLE_ACCEPT "accept"
+#define JINGLE_ACCEPT "session-accept"
 #define GOOGLE_ACCEPT "accept"
 
-#define JINGLE_NEGOTIATE "negotiate"
+#define JINGLE_NEGOTIATE "transport-info"
 #define GOOGLE_NEGOTIATE "candidates"
+
+#define JINGLE_INFO "session-info"
+#define JINGLE_TERMINATE "session-terminate"
 
 #endif

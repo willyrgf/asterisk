@@ -27,27 +27,44 @@
 extern "C" {
 #endif
 
-#include <stdarg.h>
+#include "asterisk/utils.h"
 
 struct ast_config;
 
 struct ast_category;
 
+/*! Options for ast_config_load()
+ */
+enum {
+	/*! Load the configuration, including comments */
+	CONFIG_FLAG_WITHCOMMENTS  = (1 << 0),
+	/*! On a reload, give us a -1 if the file hasn't changed. */
+	CONFIG_FLAG_FILEUNCHANGED = (1 << 1),
+	/*! Don't attempt to cache mtime on this config file. */
+	CONFIG_FLAG_NOCACHE       = (1 << 2),
+};
+
+#define	CONFIG_STATUS_FILEUNCHANGED	(void *)-1
+
 /*! \brief Structure for variables, used for configurations and for channel variables 
 */
 struct ast_variable {
-	char *name;
-	char *value;
+	const char *name;
+	const char *value;
+	struct ast_variable *next;
+
+	char *file;
+
 	int lineno;
 	int object;		/*!< 0 for variable, 1 for object */
 	int blanklines; 	/*!< Number of blanklines following entry */
 	struct ast_comment *precomments;
 	struct ast_comment *sameline;
-	struct ast_variable *next;
+	struct ast_comment *trailing; /*!< the last object in the list will get assigned any trailing comments when EOF is hit */
 	char stuff[0];
 };
 
-typedef struct ast_config *config_load_func(const char *database, const char *table, const char *configfile, struct ast_config *config, int withcomments);
+typedef struct ast_config *config_load_func(const char *database, const char *table, const char *configfile, struct ast_config *config, struct ast_flags flags, const char *suggested_include_file);
 typedef struct ast_variable *realtime_var_get(const char *database, const char *table, va_list ap);
 typedef struct ast_config *realtime_multi_get(const char *database, const char *table, va_list ap);
 typedef int realtime_update(const char *database, const char *table, const char *keyfield, const char *entity, va_list ap);
@@ -69,12 +86,15 @@ struct ast_config_engine {
 /*! \brief Load a config file 
  * \param filename path of file to open.  If no preceding '/' character, path is considered relative to AST_CONFIG_DIR
  * Create a config structure from a given configuration file.
+ * \param flags Optional flags:
+ * CONFIG_FLAG_WITHCOMMENTS - load the file with comments intact;
+ * CONFIG_FLAG_FILEUNCHANGED - check the file mtime and return CONFIG_STATUS_FILEUNCHANGED if the mtime is the same; or
+ * CONFIG_FLAG_NOCACHE - don't cache file mtime (main purpose of this option is to save memory on temporary files).
  *
  * \retval an ast_config data structure on success
  * \retval NULL on error
  */
-struct ast_config *ast_config_load(const char *filename);
-struct ast_config *ast_config_load_with_comments(const char *filename);
+struct ast_config *ast_config_load(const char *filename, struct ast_flags flags);
 
 /*! \brief Destroys a config 
  * \param config pointer to config data structure
@@ -94,7 +114,7 @@ struct ast_variable *ast_category_root(struct ast_config *config, char *cat);
 /*! \brief Goes through categories 
  * \param config Which config structure you wish to "browse"
  * \param prev A pointer to a previous category.
- * This funtion is kind of non-intuitive in it's use.  To begin, one passes NULL as the second arguement.  It will return a pointer to the string of the first category in the file.  From here on after, one must then pass the previous usage's return value as the second pointer, and it will return a pointer to the category name afterwards.
+ * This function is kind of non-intuitive in it's use.  To begin, one passes NULL as the second argument.  It will return a pointer to the string of the first category in the file.  From here on after, one must then pass the previous usage's return value as the second pointer, and it will return a pointer to the category name afterwards.
  *
  * \retval a category on success
  * \retval NULL on failure/no-more-categories
@@ -110,6 +130,13 @@ char *ast_category_browse(struct ast_config *config, const char *prev);
  * \retval NULL on failure
  */
 struct ast_variable *ast_variable_browse(const struct ast_config *config, const char *category);
+
+/*!
+ * \brief given a pointer to a category, return the root variable.
+ * This is equivalent to ast_variable_browse(), but more efficient if we
+ * already have the struct ast_category * (e.g. from ast_category_get())
+ */
+struct ast_variable *ast_category_first(struct ast_category *cat);
 
 /*! 
  * \brief Gets a variable 
@@ -225,23 +252,25 @@ struct ast_category *ast_config_get_current_category(const struct ast_config *cf
 void ast_config_set_current_category(struct ast_config *cfg, const struct ast_category *cat);
 const char *ast_config_option(struct ast_config *cfg, const char *cat, const char *var);
 
-struct ast_category *ast_category_new(const char *name);
+struct ast_category *ast_category_new(const char *name, const char *in_file, int lineno);
 void ast_category_append(struct ast_config *config, struct ast_category *cat);
 int ast_category_delete(struct ast_config *cfg, const char *category);
 void ast_category_destroy(struct ast_category *cat);
 struct ast_variable *ast_category_detach_variables(struct ast_category *cat);
 void ast_category_rename(struct ast_category *cat, const char *name);
 
-struct ast_variable *ast_variable_new(const char *name, const char *value);
+struct ast_variable *ast_variable_new(const char *name, const char *value, const char *filename);
+struct ast_config_include *ast_include_new(struct ast_config *conf, const char *from_file, const char *included_file, int is_exec, const char *exec_file, int from_lineno, char *real_included_file_name, int real_included_file_name_size);
+struct ast_config_include *ast_include_find(struct ast_config *conf, const char *included_file);
+void ast_include_rename(struct ast_config *conf, const char *from_file, const char *to_file);
 void ast_variable_append(struct ast_category *category, struct ast_variable *variable);
 int ast_variable_delete(struct ast_category *category, const char *variable, const char *match);
 int ast_variable_update(struct ast_category *category, const char *variable, 
-	const char *value, const char *match, unsigned int object);
+						const char *value, const char *match, unsigned int object);
 
 int config_text_file_save(const char *filename, const struct ast_config *cfg, const char *generator);
 
-struct ast_config *ast_config_internal_load(const char *configfile, struct ast_config *cfg, int withcomments);
-
+struct ast_config *ast_config_internal_load(const char *configfile, struct ast_config *cfg, struct ast_flags flags, const char *suggested_incl_file);
 /*! \brief Support code to parse config file arguments
  *
  * The function ast_parse_arg() provides a generic interface to parse

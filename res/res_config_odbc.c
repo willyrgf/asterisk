@@ -38,19 +38,12 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <string.h>
-
 #include "asterisk/file.h"
-#include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/config.h"
 #include "asterisk/module.h"
 #include "asterisk/lock.h"
-#include "asterisk/options.h"
 #include "asterisk/res_odbc.h"
 #include "asterisk/utils.h"
 
@@ -98,7 +91,8 @@ static SQLHSTMT custom_prepare(struct odbc_obj *obj, void *data)
  * \brief Excute an SQL query and return ast_variable list
  * \param database
  * \param table
- * \param ap list containing one or more field/operator/value set
+ * \param ap list containing one or more field/operator/value set.
+ *
  * Select database and preform query on table, prepare the sql statement
  * Sub-in the values to the prepared statement and execute it. Return results
  * as a ast_variable list.
@@ -148,11 +142,12 @@ static struct ast_variable *realtime_odbc(const char *database, const char *tabl
 		return NULL;
 	newval = va_arg(aq, const char *);
 	op = !strchr(newparam, ' ') ? " =" : "";
-	snprintf(sql, sizeof(sql), "SELECT * FROM %s WHERE %s%s ?", table, newparam, op);
+	snprintf(sql, sizeof(sql), "SELECT * FROM %s WHERE %s%s ?%s", table, newparam, op,
+		strcasestr(newparam, "LIKE") && !ast_odbc_backslash_is_escape(obj) ? " ESCAPE '\\'" : "");
 	while((newparam = va_arg(aq, const char *))) {
 		op = !strchr(newparam, ' ') ? " =" : "";
 		snprintf(sql + strlen(sql), sizeof(sql) - strlen(sql), " AND %s%s ?%s", newparam, op,
-			strcasestr(newparam, "LIKE") ? " ESCAPE '\\'" : "");
+			strcasestr(newparam, "LIKE") && !ast_odbc_backslash_is_escape(obj) ? " ESCAPE '\\'" : "");
 		newval = va_arg(aq, const char *);
 	}
 	va_end(aq);
@@ -219,11 +214,11 @@ static struct ast_variable *realtime_odbc(const char *database, const char *tabl
 			chunk = strsep(&stringp, ";");
 			if (!ast_strlen_zero(ast_strip(chunk))) {
 				if (prev) {
-					prev->next = ast_variable_new(coltitle, chunk);
+					prev->next = ast_variable_new(coltitle, chunk, "");
 					if (prev->next)
 						prev = prev->next;
 				} else 
-					prev = var = ast_variable_new(coltitle, chunk);
+					prev = var = ast_variable_new(coltitle, chunk, "");
 			}
 		}
 	}
@@ -238,7 +233,8 @@ static struct ast_variable *realtime_odbc(const char *database, const char *tabl
  * \brief Excute an Select query and return ast_config list
  * \param database
  * \param table
- * \param ap list containing one or more field/operator/value set
+ * \param ap list containing one or more field/operator/value set.
+ *
  * Select database and preform query on table, prepare the sql statement
  * Sub-in the values to the prepared statement and execute it. 
  * Execute this prepared query against several ODBC connected databases.
@@ -294,11 +290,12 @@ static struct ast_config *realtime_multi_odbc(const char *database, const char *
 		*op = '\0';
 	newval = va_arg(aq, const char *);
 	op = !strchr(newparam, ' ') ? " =" : "";
-	snprintf(sql, sizeof(sql), "SELECT * FROM %s WHERE %s%s ?", table, newparam, op);
+	snprintf(sql, sizeof(sql), "SELECT * FROM %s WHERE %s%s ?%s", table, newparam, op,
+		strcasestr(newparam, "LIKE") && !ast_odbc_backslash_is_escape(obj) ? " ESCAPE '\\'" : "");
 	while((newparam = va_arg(aq, const char *))) {
 		op = !strchr(newparam, ' ') ? " =" : "";
 		snprintf(sql + strlen(sql), sizeof(sql) - strlen(sql), " AND %s%s ?%s", newparam, op,
-			strcasestr(newparam, "LIKE") ? " ESCAPE '\\'" : "");
+			strcasestr(newparam, "LIKE") && !ast_odbc_backslash_is_escape(obj) ? " ESCAPE '\\'" : "");
 		newval = va_arg(aq, const char *);
 	}
 	if (initfield)
@@ -334,7 +331,7 @@ static struct ast_config *realtime_multi_odbc(const char *database, const char *
 			ast_log(LOG_WARNING, "SQL Fetch error!\n[%s]\n\n", sql);
 			continue;
 		}
-		cat = ast_category_new("");
+		cat = ast_category_new("","",99999);
 		if (!cat) {
 			ast_log(LOG_WARNING, "Out of memory!\n");
 			continue;
@@ -366,7 +363,7 @@ static struct ast_config *realtime_multi_odbc(const char *database, const char *
 				if (!ast_strlen_zero(ast_strip(chunk))) {
 					if (initfield && !strcmp(initfield, coltitle))
 						ast_category_rename(cat, chunk);
-					var = ast_variable_new(coltitle, chunk);
+					var = ast_variable_new(coltitle, chunk, "");
 					ast_variable_append(cat, var);
 				}
 			}
@@ -385,7 +382,8 @@ static struct ast_config *realtime_multi_odbc(const char *database, const char *
  * \param table
  * \param keyfield where clause field
  * \param lookup value of field for where clause
- * \param ap list containing one or more field/value set(s)
+ * \param ap list containing one or more field/value set(s).
+ *
  * Update a database table, prepare the sql statement using keyfield and lookup
  * control the number of records to change. All values to be changed are stored in ap list.
  * Sub-in the values to the prepared statement and execute it.
@@ -450,6 +448,147 @@ static int update_odbc(const char *database, const char *table, const char *keyf
 	return -1;
 }
 
+/*!
+ * \brief Excute an INSERT query
+ * \param database
+ * \param table
+ * \param ap list containing one or more field/value set(s)
+ *
+ * Insert a new record into database table, prepare the sql statement.
+ * All values to be changed are stored in ap list.
+ * Sub-in the values to the prepared statement and execute it.
+ *
+ * \retval number of rows affected
+ * \retval -1 on failure
+*/
+static int store_odbc(const char *database, const char *table, va_list ap)
+{
+	struct odbc_obj *obj;
+	SQLHSTMT stmt;
+	char sql[256];
+	char keys[256];
+	char vals[256];
+	SQLLEN rowcount=0;
+	const char *newparam, *newval;
+	int res;
+	va_list aq;
+	struct custom_prepare_struct cps = { .sql = sql, .extra = NULL };
+
+	va_copy(cps.ap, ap);
+	va_copy(aq, ap);
+	
+	if (!table)
+		return -1;
+
+	obj = ast_odbc_request_obj(database, 0);
+	if (!obj)
+		return -1;
+
+	newparam = va_arg(aq, const char *);
+	if (!newparam)  {
+		ast_odbc_release_obj(obj);
+		return -1;
+	}
+	newval = va_arg(aq, const char *);
+	snprintf(keys, sizeof(keys), "%s", newparam);
+	ast_copy_string(vals, "?", sizeof(vals));
+	while ((newparam = va_arg(aq, const char *))) {
+		snprintf(keys + strlen(keys), sizeof(keys) - strlen(keys), ", %s", newparam);
+		snprintf(vals + strlen(vals), sizeof(vals) - strlen(vals), ", ?");
+		newval = va_arg(aq, const char *);
+	}
+	va_end(aq);
+	snprintf(sql, sizeof(sql), "INSERT INTO %s (%s) VALUES (%s)", table, keys, vals);
+
+	stmt = ast_odbc_prepare_and_execute(obj, custom_prepare, &cps);
+
+	if (!stmt) {
+		ast_odbc_release_obj(obj);
+		return -1;
+	}
+
+	res = SQLRowCount(stmt, &rowcount);
+	SQLFreeHandle (SQL_HANDLE_STMT, stmt);
+	ast_odbc_release_obj(obj);
+
+	if ((res != SQL_SUCCESS) && (res != SQL_SUCCESS_WITH_INFO)) {
+		ast_log(LOG_WARNING, "SQL Row Count error!\n[%s]\n\n", sql);
+		return -1;
+	}
+
+	if (rowcount >= 0)
+		return (int)rowcount;
+
+	return -1;
+}
+
+/*!
+ * \brief Excute an DELETE query
+ * \param database
+ * \param table
+ * \param keyfield where clause field
+ * \param lookup value of field for where clause
+ * \param ap list containing one or more field/value set(s)
+ *
+ * Delete a row from a database table, prepare the sql statement using keyfield and lookup
+ * control the number of records to change. Additional params to match rows are stored in ap list.
+ * Sub-in the values to the prepared statement and execute it.
+ *
+ * \retval number of rows affected
+ * \retval -1 on failure
+*/
+static int destroy_odbc(const char *database, const char *table, const char *keyfield, const char *lookup, va_list ap)
+{
+	struct odbc_obj *obj;
+	SQLHSTMT stmt;
+	char sql[256];
+	SQLLEN rowcount=0;
+	const char *newparam, *newval;
+	int res;
+	va_list aq;
+	struct custom_prepare_struct cps = { .sql = sql, .extra = lookup };
+
+	va_copy(cps.ap, ap);
+	va_copy(aq, ap);
+	
+	if (!table)
+		return -1;
+
+	obj = ast_odbc_request_obj(database, 0);
+	if (!obj)
+		return -1;
+
+	snprintf(sql, sizeof(sql), "DELETE FROM %s WHERE ", table);
+	while((newparam = va_arg(aq, const char *))) {
+		snprintf(sql + strlen(sql), sizeof(sql) - strlen(sql), "%s=? AND ", newparam);
+		newval = va_arg(aq, const char *);
+	}
+	va_end(aq);
+	snprintf(sql + strlen(sql), sizeof(sql) - strlen(sql), "%s=?", keyfield);
+
+	stmt = ast_odbc_prepare_and_execute(obj, custom_prepare, &cps);
+
+	if (!stmt) {
+		ast_odbc_release_obj(obj);
+		return -1;
+	}
+
+	res = SQLRowCount(stmt, &rowcount);
+	SQLFreeHandle (SQL_HANDLE_STMT, stmt);
+	ast_odbc_release_obj(obj);
+
+	if ((res != SQL_SUCCESS) && (res != SQL_SUCCESS_WITH_INFO)) {
+		ast_log(LOG_WARNING, "SQL Row Count error!\n[%s]\n\n", sql);
+		return -1;
+	}
+
+	if (rowcount >= 0)
+		return (int)rowcount;
+
+	return -1;
+}
+
+
 struct config_odbc_obj {
 	char *sql;
 	unsigned long cat_metric;
@@ -486,7 +625,7 @@ static SQLHSTMT config_odbc_prepare(struct odbc_obj *obj, void *data)
 	return sth;
 }
 
-static struct ast_config *config_odbc(const char *database, const char *table, const char *file, struct ast_config *cfg, int withcomments)
+static struct ast_config *config_odbc(const char *database, const char *table, const char *file, struct ast_config *cfg, struct ast_flags flags, const char *sugg_incl)
 {
 	struct ast_variable *new_v;
 	struct ast_category *cur_cat;
@@ -500,6 +639,7 @@ static struct ast_config *config_odbc(const char *database, const char *table, c
 	SQLHSTMT stmt;
 	char last[128] = "";
 	struct config_odbc_obj q;
+	struct ast_flags loader_flags = { 0 };
 
 	memset(&q, 0, sizeof(q));
 
@@ -542,7 +682,7 @@ static struct ast_config *config_odbc(const char *database, const char *table, c
 
 	while ((res = SQLFetch(stmt)) != SQL_NO_DATA) {
 		if (!strcmp (q.var_name, "#include")) {
-			if (!ast_config_internal_load(q.var_val, cfg, 0)) {
+			if (!ast_config_internal_load(q.var_val, cfg, loader_flags, "")) {
 				SQLFreeHandle(SQL_HANDLE_STMT, stmt);
 				ast_odbc_release_obj(obj);
 				return NULL;
@@ -550,7 +690,7 @@ static struct ast_config *config_odbc(const char *database, const char *table, c
 			continue;
 		} 
 		if (strcmp(last, q.category) || last_cat_metric != q.cat_metric) {
-			cur_cat = ast_category_new(q.category);
+			cur_cat = ast_category_new(q.category, "", 99999);
 			if (!cur_cat) {
 				ast_log(LOG_WARNING, "Out of memory!\n");
 				break;
@@ -560,7 +700,7 @@ static struct ast_config *config_odbc(const char *database, const char *table, c
 			ast_category_append(cfg, cur_cat);
 		}
 
-		new_v = ast_variable_new(q.var_name, q.var_val);
+		new_v = ast_variable_new(q.var_name, q.var_val, "");
 		ast_variable_append(cur_cat, new_v);
 	}
 
@@ -574,6 +714,8 @@ static struct ast_config_engine odbc_engine = {
 	.load_func = config_odbc,
 	.realtime_func = realtime_odbc,
 	.realtime_multi_func = realtime_multi_odbc,
+	.store_func = store_odbc,
+	.destroy_func = destroy_odbc,
 	.update_func = update_odbc
 };
 

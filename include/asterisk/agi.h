@@ -28,9 +28,11 @@ extern "C" {
 #endif
 
 typedef struct agi_state {
-	int fd;		/* FD for general output */
-	int audio;	/* FD for audio output */
-	int ctrl;		/* FD for input control */
+	int fd;		        /*!< FD for general output */
+	int audio;	        /*!< FD for audio output */
+	int ctrl;		/*!< FD for input control */
+	unsigned int fast:1;    /*!< flag for fast agi or not */
+	struct ast_speech *speech; /*!< Speech structure for speech recognition */
 } AGI;
 
 typedef struct agi_command {
@@ -51,7 +53,7 @@ typedef struct agi_command {
 	AST_LIST_ENTRY(agi_command) list;
 } agi_command;
 
-int ast_agi_fdprintf(int fd, char *fmt, ...);
+int ast_agi_fdprintf(struct ast_channel *chan, int fd, char *fmt, ...);
 int ast_agi_register(struct ast_module *mod, agi_command *cmd);
 int ast_agi_unregister(struct ast_module *mod, agi_command *cmd);
 void ast_agi_register_multiple(struct ast_module *mod, agi_command *cmd, int len);

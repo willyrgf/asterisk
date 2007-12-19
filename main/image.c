@@ -27,19 +27,13 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <sys/time.h>
 #include <sys/stat.h>
 #include <signal.h>
-#include <errno.h>
-#include <unistd.h>
 
+#include "asterisk/paths.h"	/* use ast_config_AST_DATA_DIR */
 #include "asterisk/sched.h"
-#include "asterisk/options.h"
 #include "asterisk/channel.h"
-#include "asterisk/logger.h"
 #include "asterisk/file.h"
 #include "asterisk/image.h"
 #include "asterisk/translate.h"
@@ -51,27 +45,20 @@ static AST_RWLIST_HEAD_STATIC(imagers, ast_imager);
 
 int ast_image_register(struct ast_imager *img)
 {
-	ast_verb(2, "Registered format '%s' (%s)\n", img->name, img->desc);
 	AST_RWLIST_WRLOCK(&imagers);
 	AST_RWLIST_INSERT_HEAD(&imagers, img, list);
 	AST_RWLIST_UNLOCK(&imagers);
+	ast_verb(2, "Registered format '%s' (%s)\n", img->name, img->desc);
 	return 0;
 }
 
 void ast_image_unregister(struct ast_imager *img)
 {
-	struct ast_imager *i;
-	
 	AST_RWLIST_WRLOCK(&imagers);
-	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&imagers, i, list) {	
-		if (i == img) {
-			AST_RWLIST_REMOVE_CURRENT(&imagers, list);
-			break;
-		}
-	}
-	AST_RWLIST_TRAVERSE_SAFE_END
+	img = AST_RWLIST_REMOVE(&imagers, img, list);
 	AST_RWLIST_UNLOCK(&imagers);
-	if (i)
+
+	if (img)
 		ast_verb(2, "Unregistered format '%s' (%s)\n", img->name, img->desc);
 }
 
@@ -179,31 +166,43 @@ int ast_send_image(struct ast_channel *chan, char *filename)
 	return res;
 }
 
-static int show_image_formats(int fd, int argc, char *argv[])
+static char *handle_core_show_image_formats(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 #define FORMAT "%10s %10s %50s %10s\n"
 #define FORMAT2 "%10s %10s %50s %10s\n"
 	struct ast_imager *i;
-	if (argc != 4)
-		return RESULT_SHOWUSAGE;
-	ast_cli(fd, FORMAT, "Name", "Extensions", "Description", "Format");
+	int count_fmt = 0;
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "core show image formats";
+		e->usage =
+			"Usage: core show image formats\n"
+			"       Displays currently registered image formats (if any).\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+	if (a->argc != 4)
+		return CLI_SHOWUSAGE;
+	ast_cli(a->fd, FORMAT, "Name", "Extensions", "Description", "Format");
+	ast_cli(a->fd, FORMAT, "----", "----------", "-----------", "------");
 	AST_RWLIST_RDLOCK(&imagers);
 	AST_RWLIST_TRAVERSE(&imagers, i, list) {
-		ast_cli(fd, FORMAT2, i->name, i->exts, i->desc, ast_getformatname(i->format));
+		ast_cli(a->fd, FORMAT2, i->name, i->exts, i->desc, ast_getformatname(i->format));
+		count_fmt++;
 	}
 	AST_RWLIST_UNLOCK(&imagers);
-	return RESULT_SUCCESS;
+	ast_cli(a->fd, "\n%d image format%s registered.\n", count_fmt, count_fmt == 1 ? "" : "s");
+	return CLI_SUCCESS;
 }
 
 struct ast_cli_entry cli_image[] = {
-	{ { "core", "show", "image", "formats" },
-	show_image_formats, "Displays image formats",
-	"Usage: core show image formats\n"
-	"       displays currently registered image formats (if any)\n" },
+	AST_CLI_DEFINE(handle_core_show_image_formats, "Displays image formats")
 };
 
 int ast_image_init(void)
 {
-	ast_cli_register_multiple(cli_image, sizeof(cli_image) / sizeof(struct ast_cli_entry));
+	ast_cli_register_multiple(cli_image, ARRAY_LEN(cli_image));
 	return 0;
 }

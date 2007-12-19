@@ -32,18 +32,13 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <string.h>
 #include <signal.h>
 
+#include "asterisk/paths.h"	/* use ast_config_AST_SPOOL_DIR */
 #include "asterisk/lock.h"
 #include "asterisk/file.h"
-#include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
-#include "asterisk/options.h"
 #include "asterisk/module.h"
 #include "asterisk/translate.h"
 #include "asterisk/say.h"
@@ -61,7 +56,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 static char *app = "FollowMe";
 static char *synopsis = "Find-Me/Follow-Me application";
 static char *descrip = 
-"  FollowMe(followmeid,options):\n"
+"  FollowMe(followmeid[,options]):\n"
 "This application performs Find-Me/Follow-Me functionality for the caller\n"
 "as defined in the profile matching the <followmeid> parameter in\n"
 "followme.conf. If the specified <followmeid> profile doesn't exist in\n"
@@ -275,7 +270,7 @@ static struct number *create_followme_number(char *number, int timeout, int numo
 }
 
 /*! \brief Reload followme application module */
-static int reload_followme(void)
+static int reload_followme(int reload)
 {
 	struct call_followme *f;
 	struct ast_config *cfg;
@@ -289,11 +284,13 @@ static int reload_followme(void)
 	const char *takecallstr;
 	const char *declinecallstr;
 	const char *tmpstr;
+	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
 
-	if (!(cfg = ast_config_load("followme.conf"))) {
+	if (!(cfg = ast_config_load("followme.conf", config_flags))) {
 		ast_log(LOG_WARNING, "No follow me config file (followme.conf), so no follow me\n");
 		return 0;
-	}
+	} else if (cfg == CONFIG_STATUS_FILEUNCHANGED)
+		return 0;
 
 	AST_RWLIST_WRLOCK(&followmes);
 
@@ -838,13 +835,12 @@ static void findmeexec(struct fm_args *tpargs)
 			winner = wait_for_winner(findme_user_list, nm, caller, tpargs->namerecloc, &status, tpargs);
 		
 					
-		AST_LIST_TRAVERSE_SAFE_BEGIN(findme_user_list, fmuser, entry) {
+		while ((fmuser = AST_LIST_REMOVE_HEAD(findme_user_list, entry))) {
 			if (!fmuser->cleared && fmuser->ochan != winner)
 				clear_caller(fmuser);
-			AST_LIST_REMOVE_CURRENT(findme_user_list, entry);
 			ast_free(fmuser);
 		}
-		AST_LIST_TRAVERSE_SAFE_END
+
 		fmuser = NULL;
 		tmpuser = NULL;
 		headuser = NULL;	
@@ -961,12 +957,8 @@ static int app_exec(struct ast_channel *chan, void *data)
 		if (ast_play_and_record(chan, "vm-rec-name", namerecloc, 5, "sln", &duration, 128, 0, NULL) < 0)
 			goto outrun;
 	
-	/* The following call looks like we're going to playback the file, but we're actually	*/
-	/* just checking to see if we *can* play it. 						*/
-	if (ast_streamfile(chan, namerecloc, chan->language))
+	if (!ast_fileexists(namerecloc, NULL, chan->language))
 		ast_copy_string(namerecloc, "", sizeof(namerecloc));					
-	else
-		ast_stopstream(chan);
 	
 	if (ast_streamfile(chan, targs.plsholdprompt, chan->language))
 		goto outrun;
@@ -980,11 +972,8 @@ static int app_exec(struct ast_channel *chan, void *data)
 	
 	findmeexec(&targs);		
 	
-	AST_LIST_TRAVERSE_SAFE_BEGIN(&targs.cnumbers, nm, entry) {
-		AST_LIST_REMOVE_CURRENT(&targs.cnumbers, entry);
+	while ((nm = AST_LIST_REMOVE_HEAD(&targs.cnumbers, entry)))
 		ast_free(nm);
-	}
-	AST_LIST_TRAVERSE_SAFE_END
 		
 	if (!ast_strlen_zero(namerecloc))
 		unlink(namerecloc);	
@@ -1051,7 +1040,7 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	if(!reload_followme())
+	if(!reload_followme(0))
 		return AST_MODULE_LOAD_DECLINE;
 
 	return ast_register_application(app, app_exec, synopsis, descrip);
@@ -1059,7 +1048,7 @@ static int load_module(void)
 
 static int reload(void)
 {
-	reload_followme();
+	reload_followme(1);
 
 	return 0;	
 }

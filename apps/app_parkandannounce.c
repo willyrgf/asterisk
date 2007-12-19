@@ -33,20 +33,11 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
-#include <sys/types.h>
-
 #include "asterisk/file.h"
-#include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
 #include "asterisk/features.h"
-#include "asterisk/options.h"
-#include "asterisk/logger.h"
 #include "asterisk/say.h"
 #include "asterisk/lock.h"
 #include "asterisk/utils.h"
@@ -130,7 +121,7 @@ static int parkandannounce_exec(struct ast_channel *chan, void *data)
 
 	snprintf(buf, sizeof(buf), "%d", lot);
 	oh.parent_channel = chan;
-	oh.vars = ast_variable_new("_PARKEDAT", buf);
+	oh.vars = ast_variable_new("_PARKEDAT", buf, "");
 	dchan = __ast_request_and_dial(dialtech, AST_FORMAT_SLINEAR, args.dial, 30000, &outstate, chan->cid.cid_num, chan->cid.cid_name, &oh);
 
 	if (dchan) {

@@ -14,98 +14,170 @@
 
 #include <sys/types.h>
 #include <stdio.h>
+#include "asterisk.h"
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#ifdef STANDALONE /* I guess somewhere, the feature is set in the asterisk includes */
-#ifndef __USE_ISOC99
-#define __USE_ISOC99 1
-#endif
-#endif
-
-#ifdef __USE_ISOC99
 #define FP___PRINTF "%.18Lg"
-#define FP___FMOD   fmodl
-#define FP___STRTOD  strtold
 #define FP___TYPE    long double
-#define FUNC_COS     cosl
-#define FUNC_SIN     sinl
-#define FUNC_TAN     tanl
-#define FUNC_ACOS     acosl
-#define FUNC_ASIN     asinl
-#define FUNC_ATAN     atanl
-#define FUNC_ATAN2     atan2l
-#define FUNC_POW       powl
-#define FUNC_SQRT       sqrtl
+
+#ifdef HAVE_COSL
+#define FUNC_COS   cosl
+#elif defined(HAVE_COS)
+#define FUNC_COS	(long double)cos
+#endif
+
+#ifdef HAVE_SINL
+#define FUNC_SIN   sinl
+#elif defined(HAVE_SIN)
+#define FUNC_SIN	(long double)sin
+#endif
+
+#ifdef HAVE_TANL
+#define FUNC_TAN   tanl
+#elif defined(HAVE_TAN)
+#define FUNC_TAN	(long double)tan
+#endif
+
+#ifdef HAVE_ACOSL
+#define FUNC_ACOS   acosl
+#elif defined(HAVE_ACOS)
+#define FUNC_ACOS	(long double)acos
+#endif
+
+#ifdef HAVE_ASINL
+#define FUNC_ASIN   asinl
+#elif defined(HAVE_ASIN)
+#define FUNC_ASIN	(long double)asin
+#endif
+
+#ifdef HAVE_ATANL
+#define FUNC_ATAN   atanl
+#elif defined(HAVE_ATAN)
+#define FUNC_ATAN	(long double)atan
+#endif
+
+#ifdef HAVE_ATAN2L
+#define FUNC_ATAN2   atan2l
+#elif defined(HAVE_ATAN2)
+#define FUNC_ATAN2	(long double)atan2
+#endif
+
+#ifdef HAVE_POWL
+#define FUNC_POW   powl
+#elif defined(HAVE_POW)
+#define FUNC_POW	(long double)pow
+#endif
+
+#ifdef HAVE_SQRTL
+#define FUNC_SQRT   sqrtl
+#elif defined(HAVE_SQRT)
+#define FUNC_SQRT	(long double)sqrt
+#endif
+
+#ifdef HAVE_RINTL
+#define FUNC_RINT   rintl
+#elif defined(HAVE_RINT)
+#define FUNC_RINT	(long double)rint
+#endif
+
+#ifdef HAVE_EXPL
+#define FUNC_EXP   expl
+#elif defined(HAVE_EXP)
+#define FUNC_EXP	(long double)exp
+#endif
+
+#ifdef HAVE_LOGL
+#define FUNC_LOG   logl
+#elif defined(HAVE_LOG)
+#define FUNC_LOG	(long double)log
+#endif
+
+#ifdef HAVE_REMINDERL
+#define FUNC_REMINDER   reminderl
+#elif defined(HAVE_REMINDER)
+#define FUNC_REMINDER	(long double)reminder
+#endif
+
+#ifdef HAVE_FMODL
+#define FUNC_FMOD   fmodl
+#elif defined(HAVE_FMOD)
+#define FUNC_FMOD	(long double)fmod
+#endif
+
+#ifdef HAVE_STRTOLD
+#define FUNC_STRTOD  strtold
+#elif defined(HAVE_STRTOD)
+#define FUNC_STRTOD  (long double)strtod
+#endif
+
+#ifdef HAVE_FLOORL
 #define FUNC_FLOOR      floorl
+#elif defined(HAVE_FLOOR)
+#define FUNC_FLOOR	(long double)floor
+#endif
+
+#ifdef HAVE_CEILL
 #define FUNC_CEIL      ceill
+#elif defined(HAVE_CEIL)
+#define FUNC_CEIL	(long double)ceil
+#endif
+
+#ifdef HAVE_ROUNDL
 #define FUNC_ROUND     roundl
-#define FUNC_RINT     rintl
+#elif defined(HAVE_ROUND)
+#define FUNC_ROUND     (long double)round
+#endif
+
+#ifdef HAVE_TRUNCL
 #define FUNC_TRUNC     truncl
-#define FUNC_EXP       expl
+#elif defined(HAVE_TRUNC)
+#define FUNC_TRUNC     (long double)trunc
+#endif
+
+/*! \note
+ * Oddly enough, some platforms have some ISO C99 functions, but not others, so
+ * we define the missing functions in terms of their mathematical identities.
+ */
 #ifdef HAVE_EXP2L
 #define FUNC_EXP2       exp2l
-#else
-#define	FUNC_EXP2(x)	expl((x) * logl(2))
+#elif (defined(HAVE_EXPL) && defined(HAVE_LOGL))
+#define	FUNC_EXP2(x)	expl((x) * logl(2.0))
+#elif (defined(HAVE_EXP) && defined(HAVE_LOG))
+#define	FUNC_EXP2(x)	(long double)exp((x) * log(2.0))
 #endif
+
 #ifdef HAVE_EXP10L
 #define FUNC_EXP10       exp10l
-#else
-#define	FUNC_EXP10(x)	expl((x) * logl(10))
+#elif (defined(HAVE_EXPL) && defined(HAVE_LOGL))
+#define	FUNC_EXP10(x)	expl((x) * logl(10.0))
+#elif (defined(HAVE_EXP) && defined(HAVE_LOG))
+#define	FUNC_EXP10(x)	(long double)exp((x) * log(10.0))
 #endif
-#define FUNC_LOG       logl
+
 #ifdef HAVE_LOG2L
 #define FUNC_LOG2       log2l
-#else
-#define	FUNC_LOG2(x)	(logl(x) / logl(2))
+#elif defined(HAVE_LOGL)
+#define	FUNC_LOG2(x)	(logl(x) / logl(2.0))
+#elif defined(HAVE_LOG10L)
+#define	FUNC_LOG2(x)	(log10l(x) / log10l(2.0))
+#elif defined(HAVE_LOG2)
+#define FUNC_LOG2       (long double)log2
+#elif defined(HAVE_LOG)
+#define	FUNC_LOG2(x)	((long double)log(x) / log(2.0))
 #endif
+
 #ifdef HAVE_LOG10L
 #define FUNC_LOG10       log10l
-#else
-#define	FUNC_LOG10(x)	(logl(x) / logl(10))
+#elif defined(HAVE_LOGL)
+#define	FUNC_LOG10(x)	(logl(x) / logl(10.0))
+#elif defined(HAVE_LOG2L)
+#define	FUNC_LOG10(x)	(log2l(x) / log2l(10.0))
+#elif defined(HAVE_LOG10)
+#define	FUNC_LOG10(x)	(long double)log10(x)
+#elif defined(HAVE_LOG)
+#define	FUNC_LOG10(x)	((long double)log(x) / log(10.0))
 #endif
-#define FUNC_REMAINDER       remainderl
-#else
-#define FP___PRINTF "%.16g"
-#define FP___FMOD   fmod
-#define FP___STRTOD  strtod
-#define FP___TYPE    double
-#define FUNC_COS     cos
-#define FUNC_SIN     sin
-#define FUNC_TAN     tan
-#define FUNC_ACOS     acos
-#define FUNC_ASIN     asin
-#define FUNC_ATAN     atan
-#define FUNC_ATAN2     atan2
-#define FUNC_POW       pow
-#define FUNC_SQRT       sqrt
-#define FUNC_FLOOR      floor
-#define FUNC_CEIL      ceil
-#define FUNC_ROUND     round
-#define FUNC_RINT     rint
-#define FUNC_TRUNC     trunc
-#define FUNC_EXP       exp
-#ifdef HAVE_EXP2
-#define FUNC_EXP2       exp2
-#else
-#define	FUNC_EXP2(x)	exp((x) * log(2))
-#endif
-#ifdef HAVE_EXP10
-#define FUNC_EXP10       exp10
-#else
-#define	FUNC_EXP10(x)	exp((x) * log(10))
-#endif
-#define FUNC_LOG       log
-#ifdef HAVE_LOG2
-#define FUNC_LOG2       log2
-#else
-#define	FUNC_LOG2(x)	(log(x) / log(2))
-#endif
-#ifdef HAVE_LOG10
-#define FUNC_LOG10       log10
-#else
-#define	FUNC_LOG10(x)	(log(x) / log(10))
-#endif
-#define FUNC_REMAINDER       remainder
-#endif
+
 
 #include <stdlib.h>
 #ifndef _GNU_SOURCE
@@ -125,7 +197,6 @@
 #include <regex.h>
 #include <limits.h>
 
-#include "asterisk.h"
 #include "asterisk/ast_expr.h"
 #include "asterisk/logger.h"
 #ifndef STANDALONE
@@ -489,7 +560,7 @@ to_number (struct val *vp)
 
 	/* vp->type == AST_EXPR_numeric_string, make it numeric */
 	errno = 0;
-	i  = FP___STRTOD(vp->u.s, (char**)0); /* either strtod, or strtold on a good day */
+	i  = FUNC_STRTOD(vp->u.s, (char**)0); /* either strtod, or strtold on a good day */
 	if (errno != 0) {
 		ast_log(LOG_WARNING,"Conversion of %s to number under/overflowed!\n", vp->u.s);
 		free(vp->u.s);
@@ -699,8 +770,9 @@ static struct val *op_func(struct val *funcname, struct expr_node *arglist, stru
 	if (strspn(funcname->u.s,"ABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789") == strlen(funcname->u.s))
 	{
 		struct val *result;
-		
-		if (strcmp(funcname->u.s,"COS") == 0) {
+		if (0) {
+#ifdef FUNC_COS
+		} else if (strcmp(funcname->u.s,"COS") == 0) {
 			if (arglist && !arglist->right && arglist->val){
 				to_number(arglist->val);
 				result = make_number(FUNC_COS(arglist->val->u.i));
@@ -709,6 +781,8 @@ static struct val *op_func(struct val *funcname, struct expr_node *arglist, stru
 				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
 				return make_number(0.0);
 			}
+#endif
+#ifdef FUNC_SIN
 		} else if (strcmp(funcname->u.s,"SIN") == 0) {
 			if (arglist && !arglist->right && arglist->val){
 				to_number(arglist->val);
@@ -718,6 +792,8 @@ static struct val *op_func(struct val *funcname, struct expr_node *arglist, stru
 				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
 				return make_number(0.0);
 			}
+#endif
+#ifdef FUNC_TAN
 		} else if (strcmp(funcname->u.s,"TAN") == 0) {
 			if (arglist && !arglist->right && arglist->val){
 				to_number(arglist->val);
@@ -727,6 +803,8 @@ static struct val *op_func(struct val *funcname, struct expr_node *arglist, stru
 				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
 				return make_number(0.0);
 			}
+#endif
+#ifdef FUNC_ACOS
 		} else if (strcmp(funcname->u.s,"ACOS") == 0) {
 			if (arglist && !arglist->right && arglist->val){
 				to_number(arglist->val);
@@ -736,6 +814,8 @@ static struct val *op_func(struct val *funcname, struct expr_node *arglist, stru
 				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
 				return make_number(0.0);
 			}
+#endif
+#ifdef FUNC_ASIN
 		} else if (strcmp(funcname->u.s,"ASIN") == 0) {
 			if (arglist && !arglist->right && arglist->val){
 				to_number(arglist->val);
@@ -745,6 +825,8 @@ static struct val *op_func(struct val *funcname, struct expr_node *arglist, stru
 				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
 				return make_number(0.0);
 			}
+#endif
+#ifdef FUNC_ATAN
 		} else if (strcmp(funcname->u.s,"ATAN") == 0) {
 			if (arglist && !arglist->right && arglist->val){
 				to_number(arglist->val);
@@ -754,6 +836,8 @@ static struct val *op_func(struct val *funcname, struct expr_node *arglist, stru
 				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
 				return make_number(0.0);
 			}
+#endif
+#ifdef FUNC_ATAN2
 		} else if (strcmp(funcname->u.s,"ATAN2") == 0) {
 			if (arglist && arglist->right && !arglist->right->right && arglist->val && arglist->right->val){
 				to_number(arglist->val);
@@ -764,6 +848,8 @@ static struct val *op_func(struct val *funcname, struct expr_node *arglist, stru
 				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
 				return make_number(0.0);
 			}
+#endif
+#ifdef FUNC_POW
 		} else if (strcmp(funcname->u.s,"POW") == 0) {
 			if (arglist && arglist->right && !arglist->right->right && arglist->val && arglist->right->val){
 				to_number(arglist->val);
@@ -774,6 +860,8 @@ static struct val *op_func(struct val *funcname, struct expr_node *arglist, stru
 				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
 				return make_number(0.0);
 			}
+#endif
+#ifdef FUNC_SQRT
 		} else if (strcmp(funcname->u.s,"SQRT") == 0) {
 			if (arglist && !arglist->right && arglist->val){
 				to_number(arglist->val);
@@ -783,6 +871,8 @@ static struct val *op_func(struct val *funcname, struct expr_node *arglist, stru
 				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
 				return make_number(0.0);
 			}
+#endif
+#ifdef FUNC_FLOOR
 		} else if (strcmp(funcname->u.s,"FLOOR") == 0) {
 			if (arglist && !arglist->right && arglist->val){
 				to_number(arglist->val);
@@ -792,6 +882,8 @@ static struct val *op_func(struct val *funcname, struct expr_node *arglist, stru
 				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
 				return make_number(0.0);
 			}
+#endif
+#ifdef FUNC_CEIL
 		} else if (strcmp(funcname->u.s,"CEIL") == 0) {
 			if (arglist && !arglist->right && arglist->val){
 				to_number(arglist->val);
@@ -801,6 +893,8 @@ static struct val *op_func(struct val *funcname, struct expr_node *arglist, stru
 				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
 				return make_number(0.0);
 			}
+#endif
+#ifdef FUNC_ROUND
 		} else if (strcmp(funcname->u.s,"ROUND") == 0) {
 			if (arglist && !arglist->right && arglist->val){
 				to_number(arglist->val);
@@ -810,6 +904,8 @@ static struct val *op_func(struct val *funcname, struct expr_node *arglist, stru
 				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
 				return make_number(0.0);
 			}
+#endif /* defined(FUNC_ROUND) */
+#ifdef FUNC_RINT
 		} else if (strcmp(funcname->u.s,"RINT") == 0) {
 			if (arglist && !arglist->right && arglist->val){
 				to_number(arglist->val);
@@ -819,6 +915,8 @@ static struct val *op_func(struct val *funcname, struct expr_node *arglist, stru
 				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
 				return make_number(0.0);
 			}
+#endif
+#ifdef FUNC_TRUNC
 		} else if (strcmp(funcname->u.s,"TRUNC") == 0) {
 			if (arglist && !arglist->right && arglist->val){
 				to_number(arglist->val);
@@ -828,6 +926,8 @@ static struct val *op_func(struct val *funcname, struct expr_node *arglist, stru
 				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
 				return make_number(0.0);
 			}
+#endif /* defined(FUNC_TRUNC) */
+#ifdef FUNC_EXP
 		} else if (strcmp(funcname->u.s,"EXP") == 0) {
 			if (arglist && !arglist->right && arglist->val){
 				to_number(arglist->val);
@@ -837,6 +937,8 @@ static struct val *op_func(struct val *funcname, struct expr_node *arglist, stru
 				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
 				return make_number(0.0);
 			}
+#endif
+#ifdef FUNC_EXP2
 		} else if (strcmp(funcname->u.s,"EXP2") == 0) {
 			if (arglist && !arglist->right && arglist->val){
 				to_number(arglist->val);
@@ -846,6 +948,8 @@ static struct val *op_func(struct val *funcname, struct expr_node *arglist, stru
 				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
 				return make_number(0.0);
 			}
+#endif
+#ifdef FUNC_EXP10
 		} else if (strcmp(funcname->u.s,"EXP10") == 0) {
 			if (arglist && !arglist->right && arglist->val){
 				to_number(arglist->val);
@@ -855,6 +959,8 @@ static struct val *op_func(struct val *funcname, struct expr_node *arglist, stru
 				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
 				return make_number(0.0);
 			}
+#endif
+#ifdef FUNC_LOG
 		} else if (strcmp(funcname->u.s,"LOG") == 0) {
 			if (arglist && !arglist->right && arglist->val){
 				to_number(arglist->val);
@@ -864,6 +970,8 @@ static struct val *op_func(struct val *funcname, struct expr_node *arglist, stru
 				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
 				return make_number(0.0);
 			}
+#endif
+#ifdef FUNC_LOG2
 		} else if (strcmp(funcname->u.s,"LOG2") == 0) {
 			if (arglist && !arglist->right && arglist->val){
 				to_number(arglist->val);
@@ -873,6 +981,8 @@ static struct val *op_func(struct val *funcname, struct expr_node *arglist, stru
 				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
 				return make_number(0.0);
 			}
+#endif
+#ifdef FUNC_LOG10
 		} else if (strcmp(funcname->u.s,"LOG10") == 0) {
 			if (arglist && !arglist->right && arglist->val){
 				to_number(arglist->val);
@@ -882,6 +992,8 @@ static struct val *op_func(struct val *funcname, struct expr_node *arglist, stru
 				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
 				return make_number(0.0);
 			}
+#endif
+#ifdef FUNC_REMAINDER
 		} else if (strcmp(funcname->u.s,"REMAINDER") == 0) {
 			if (arglist && arglist->right && !arglist->right->right && arglist->val && arglist->right->val){
 				to_number(arglist->val);
@@ -892,6 +1004,7 @@ static struct val *op_func(struct val *funcname, struct expr_node *arglist, stru
 				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
 				return make_number(0.0);
 			}
+#endif
 		} else {
 			/* is this a custom function we should execute and collect the results of? */
 #ifndef STANDALONE
@@ -908,7 +1021,7 @@ static struct val *op_func(struct val *funcname, struct expr_node *arglist, stru
 					f->read(chan, funcname->u.s, argbuf, workspace, sizeof(workspace));
 					free(argbuf);
 					if (is_really_num(workspace))
-						return make_number(FP___STRTOD(workspace,(char **)NULL));
+						return make_number(FUNC_STRTOD(workspace,(char **)NULL));
 					else
 						return make_str(workspace);
 				} else {
@@ -1386,7 +1499,7 @@ op_rem (struct val *a, struct val *b)
 		return(b);
 	}
 
-	r = make_number (FP___FMOD(a->u.i, b->u.i)); /* either fmod or fmodl if FP___TYPE is available */
+	r = make_number (FUNC_FMOD(a->u.i, b->u.i)); /* either fmod or fmodl if FP___TYPE is available */
 	/* chk_rem necessary ??? */
 	free_value (a);
 	free_value (b);

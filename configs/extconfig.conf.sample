@@ -58,6 +58,7 @@
 ;extensions => odbc,asterisk
 ;queues => odbc,asterisk
 ;queue_members => odbc,asterisk
+;musiconhold => mysql,asterisk
 ;aumusers => mysql,asterisk
 ;aumgroups => mysql,asterisk
 

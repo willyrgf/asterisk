@@ -38,18 +38,13 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <curl/curl.h>
 
 #include "asterisk/lock.h"
 #include "asterisk/file.h"
-#include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/cli.h"
-#include "asterisk/options.h"
 #include "asterisk/module.h"
 #include "asterisk/app.h"
 #include "asterisk/utils.h"
@@ -148,6 +143,9 @@ static int acf_curl_exec(struct ast_channel *chan, const char *cmd, char *info, 
 
 	AST_STANDARD_APP_ARGS(args, info);	
 
+	if (chan)
+		ast_autoservice_start(chan);
+
 	if (!curl_internal(&chunk, args.url, args.postdata)) {
 		if (chunk.memory) {
 			chunk.memory[chunk.size] = '\0';
@@ -161,6 +159,9 @@ static int acf_curl_exec(struct ast_channel *chan, const char *cmd, char *info, 
 		ast_log(LOG_ERROR, "Cannot allocate curl structure\n");
 	}
 
+	if (chan)
+		ast_autoservice_stop(chan);
+	
 	return 0;
 }
 

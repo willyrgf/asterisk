@@ -28,20 +28,14 @@
 /*** MODULEINFO
 	<depend>iksemel</depend>
 	<depend>res_jabber</depend>
-	<use>gnutls</use>
+	<use>openssl</use>
  ***/
 
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
 #include <sys/socket.h>
-#include <errno.h>
-#include <stdlib.h>
 #include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
@@ -50,19 +44,11 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <iksemel.h>
 #include <pthread.h>
 
-#ifdef HAVE_GNUTLS
-#include <gcrypt.h>
-GCRY_THREAD_OPTION_PTHREAD_IMPL;
-#endif /* HAVE_GNUTLS */
-
 #include "asterisk/lock.h"
 #include "asterisk/channel.h"
 #include "asterisk/config.h"
-#include "asterisk/logger.h"
 #include "asterisk/module.h"
 #include "asterisk/pbx.h"
-#include "asterisk/options.h"
-#include "asterisk/lock.h"
 #include "asterisk/sched.h"
 #include "asterisk/io.h"
 #include "asterisk/rtp.h"
@@ -111,8 +97,8 @@ struct gtalk_pvt {
 	time_t laststun;
 	struct gtalk *parent;	         /*!< Parent client */
 	char sid[100];
-	char us[100];
-	char them[100];
+	char us[AJI_MAX_JIDLEN];
+	char them[AJI_MAX_JIDLEN];
 	char ring[10];                   /*!< Message ID of ring */
 	iksrule *ringrule;               /*!< Rule for matching RING request */
 	int initiator;                   /*!< If we're the initiator */
@@ -154,8 +140,8 @@ struct gtalk {
 	struct gtalk_pvt *p;
 	struct ast_codec_pref prefs;
 	int amaflags;			/*!< AMA Flags */
-	char user[100];
-	char context[100];
+	char user[AJI_MAX_JIDLEN];
+	char context[AST_MAX_CONTEXT];
 	char accountcode[AST_MAX_ACCOUNT_CODE];	/*!< Account code */
 	int capability;
 	ast_group_t callgroup;	/*!< Call group */
@@ -191,8 +177,8 @@ static int gtalk_indicate(struct ast_channel *ast, int condition, const void *da
 static int gtalk_fixup(struct ast_channel *oldchan, struct ast_channel *newchan);
 static int gtalk_sendhtml(struct ast_channel *ast, int subclass, const char *data, int datalen);
 static struct gtalk_pvt *gtalk_alloc(struct gtalk *client, const char *us, const char *them, const char *sid);
-static int gtalk_do_reload(int fd, int argc, char **argv);
-static int gtalk_show_channels(int fd, int argc, char **argv);
+static char *gtalk_do_reload(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
+static char *gtalk_show_channels(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
 /*----- RTP interface functions */
 static int gtalk_set_rtp_peer(struct ast_channel *chan, struct ast_rtp *rtp,
 							   struct ast_rtp *vrtp, struct ast_rtp *trtp, int codecs, int nat_active);
@@ -203,7 +189,7 @@ static int gtalk_get_codec(struct ast_channel *chan);
 static const struct ast_channel_tech gtalk_tech = {
 	.type = "Gtalk",
 	.description = "Gtalk Channel Driver",
-	.capabilities = ((AST_FORMAT_MAX_AUDIO << 1) - 1),
+	.capabilities = AST_FORMAT_AUDIO_MASK,
 	.requester = gtalk_request,
 	.send_digit_begin = gtalk_digit_begin,
 	.send_digit_end = gtalk_digit_end,
@@ -226,7 +212,6 @@ static struct sched_context *sched;	/*!< The scheduling context */
 static struct io_context *io;	/*!< The IO context */
 static struct in_addr __ourip;
 
-
 /*! \brief RTP driver interface */
 static struct ast_rtp_protocol gtalk_rtp = {
 	type: "Gtalk",
@@ -235,21 +220,10 @@ static struct ast_rtp_protocol gtalk_rtp = {
 	get_codec: gtalk_get_codec,
 };
 
-static const char debug_usage[] = 
-"Usage: gtalk show channels\n" 
-"       Shows current state of the Gtalk channels.\n";
-
-static const char reload_usage[] = 
-"Usage: gtalk reload\n" 
-"       Reload gtalk channel driver.\n";
-
-
 static struct ast_cli_entry gtalk_cli[] = {
-	{{ "gtalk", "reload", NULL}, gtalk_do_reload, "Enable Jabber debugging", reload_usage },
-	{{ "gtalk", "show", "channels", NULL}, gtalk_show_channels, "Show GoogleTalk Channels", debug_usage },
- };
-
-
+	AST_CLI_DEFINE(gtalk_do_reload, "Reload GoogleTalk configuration"),
+	AST_CLI_DEFINE(gtalk_show_channels, "Show GoogleTalk channels"),
+};
 
 static char externip[16];
 
@@ -265,7 +239,7 @@ static struct gtalk *find_gtalk(char *name, char *connection)
 	struct gtalk *gtalk = NULL;
 	char *domain = NULL , *s = NULL;
 
-	if(strchr(connection, '@')) {
+	if (strchr(connection, '@')) {
 		s = ast_strdupa(connection);
 		domain = strsep(&s, "@");
 		ast_verbose("OOOOH domain = %s\n", domain);
@@ -453,7 +427,7 @@ static int gtalk_invite(struct gtalk_pvt *p, char *to, char *from, char *sid, in
 	iks_insert_node(gtalk, transport);
 	iks_insert_node(dcodecs, payload_telephone);
 
-	iks_send(client->connection->p, iq);
+	ast_aji_send(client->connection, iq);
 	iks_delete(payload_telephone);
 	iks_delete(transport);
 	iks_delete(dcodecs);
@@ -490,7 +464,7 @@ static int gtalk_invite_response(struct gtalk_pvt *p, char *to , char *from, cha
 	iks_insert_attrib(transport, "xmlns", "http://www.google.com/transport/p2p");
 	iks_insert_node(iq,session);
 	iks_insert_node(session,transport);
-	iks_send(p->parent->connection->p, iq);
+	ast_aji_send(p->parent->connection, iq);
 	iks_delete(transport);
 	iks_delete(session);
 	iks_delete(iq);
@@ -518,6 +492,8 @@ static int gtalk_answer(struct ast_channel *ast)
 	ast_debug(1, "Answer!\n");
 	ast_mutex_lock(&p->lock);
 	gtalk_invite(p, p->them, p->us,p->sid, 0);
+ 	manager_event(EVENT_FLAG_SYSTEM, "ChannelUpdate", "Channel: %s\r\nChanneltype: %s\r\nGtalk-SID: %s\r\n",
+		ast->name, "GTALK", p->sid);
 	ast_mutex_unlock(&p->lock);
 	return res;
 }
@@ -587,7 +563,7 @@ static int gtalk_response(struct gtalk *client, char *from, ikspak *pak, const c
 				iks_insert_node(response, error);
 			}
 		}
-		iks_send(client->connection->p, response);
+		ast_aji_send(client->connection, response);
 		if (reason)
 			iks_delete(reason);
 		if (error)
@@ -622,15 +598,39 @@ static int gtalk_is_answered(struct gtalk *client, ikspak *pak)
 	return 1;
 }
 
+static int gtalk_is_accepted(struct gtalk *client, ikspak *pak)
+{
+	struct gtalk_pvt *tmp;
+	char *from;
+
+	ast_log(LOG_DEBUG, "The client is %s\n", client->name);
+	/* find corresponding call */
+	for (tmp = client->p; tmp; tmp = tmp->next) {
+		if (iks_find_with_attrib(pak->x, "session", "id", tmp->sid))
+			break;
+	}
+
+	from = iks_find_attrib(pak->x, "to");
+	if(!from)
+		from = client->connection->jid->full;
+
+	if (!tmp)
+		ast_log(LOG_NOTICE, "Whoa, didn't find call!\n");
+
+	/* answer 'iq' packet to let the remote peer know that we're alive */
+	gtalk_response(client, from, pak, NULL, NULL);
+	return 1;
+}
+
 static int gtalk_handle_dtmf(struct gtalk *client, ikspak *pak)
 {
 	struct gtalk_pvt *tmp;
-	iks *dtmfnode = NULL;
+	iks *dtmfnode = NULL, *dtmfchild = NULL;
 	char *dtmf;
 	char *from;
 	/* Make sure our new call doesn't exist yet */
 	for (tmp = client->p; tmp; tmp = tmp->next) {
-		if (iks_find_with_attrib(pak->x, "session", "id", tmp->sid))
+		if (iks_find_with_attrib(pak->x, "session", "id", tmp->sid) || iks_find_with_attrib(pak->x, "gtalk", "sid", tmp->sid))
 			break;
 	}
 	from = iks_find_attrib(pak->x, "to");
@@ -664,6 +664,22 @@ static int gtalk_handle_dtmf(struct gtalk *client, ikspak *pak)
 					ast_verbose("GOOGLE! DTMF-relay event received: %c\n", f.subclass);
 				}
 			}
+		} else if ((dtmfnode = iks_find_with_attrib(pak->x, "gtalk", "action", "session-info"))) {
+			if((dtmfchild = iks_find(dtmfnode, "dtmf"))) {
+				if((dtmf = iks_find_attrib(dtmfchild, "code"))) {
+					if(iks_find_with_attrib(dtmfnode, "dtmf", "action", "button-up")) {
+						struct ast_frame f = {AST_FRAME_DTMF_END, };
+						f.subclass = dtmf[0];
+						ast_queue_frame(tmp->owner, &f);
+						ast_verbose("GOOGLE! DTMF-relay event received: %c\n", f.subclass);
+					} else if(iks_find_with_attrib(dtmfnode, "dtmf", "action", "button-down")) {
+						struct ast_frame f = {AST_FRAME_DTMF_BEGIN, };
+						f.subclass = dtmf[0];
+						ast_queue_frame(tmp->owner, &f);
+						ast_verbose("GOOGLE! DTMF-relay event received: %c\n", f.subclass);
+					}
+				}
+			}
 		}
 		gtalk_response(client, from, pak, NULL, NULL);
 		return 1;
@@ -673,7 +689,6 @@ static int gtalk_handle_dtmf(struct gtalk *client, ikspak *pak)
 	gtalk_response(client, from, pak, NULL, NULL);
 	return 1;
 }
-
 
 static int gtalk_hangup_farend(struct gtalk *client, ikspak *pak)
 {
@@ -808,7 +823,7 @@ static int gtalk_create_candidates(struct gtalk *client, struct gtalk_pvt *p, ch
 			iks_insert_attrib(candidate, "type", "relay");
 		iks_insert_attrib(candidate, "network", "0");
 		iks_insert_attrib(candidate, "generation", "0");
-		iks_send(c->p, iq);
+		ast_aji_send(c, iq);
 	}
 	p->laststun = 0;
 
@@ -990,8 +1005,11 @@ static struct ast_channel *gtalk_new(struct gtalk *client, struct gtalk_pvt *i, 
 		tmp->hangupcause = AST_CAUSE_SWITCH_CONGESTION;
 		ast_hangup(tmp);
 		tmp = NULL;
+	} else {
+		manager_event(EVENT_FLAG_SYSTEM, "ChannelUpdate",
+			"Channel: %s\r\nChanneltype: %s\r\nGtalk-SID: %s\r\n",
+			i->owner ? i->owner->name : "", "Gtalk", i->sid);
 	}
-
 	return tmp;
 }
 
@@ -1014,7 +1032,7 @@ static int gtalk_action(struct gtalk *client, struct gtalk_pvt *p, const char *a
 			iks_insert_attrib(session, "initiator", p->initiator ? p->us : p->them);
 			iks_insert_attrib(session, "xmlns", "http://www.google.com/session");
 			iks_insert_node(request, session);
-			iks_send(client->connection->p, request);
+			ast_aji_send(client->connection, request);
 			iks_delete(session);
 			res = 0;
 		}
@@ -1188,9 +1206,6 @@ static int gtalk_add_candidate(struct gtalk *client, ikspak *pak)
 	if(!from)
 		from = c->jid->full;
 
-	newcandidate = ast_calloc(1, sizeof(*newcandidate));
-	if (!newcandidate)
-		return 0;
 	for (tmp = client->p; tmp; tmp = tmp->next) {
 		if (iks_find_with_attrib(pak->x, "session", "id", tmp->sid)) {
 			p = tmp;
@@ -1255,7 +1270,7 @@ static int gtalk_add_candidate(struct gtalk *client, ikspak *pak)
 	iks_insert_attrib(receipt, "from", from);
 	iks_insert_attrib(receipt, "to", iks_find_attrib(pak->x, "from"));
 	iks_insert_attrib(receipt, "id", iks_find_attrib(pak->x, "id"));
-	iks_send(c->p, receipt);
+	ast_aji_send(c, receipt);
 	iks_delete(receipt);
 
 	return 1;
@@ -1414,7 +1429,7 @@ static int gtalk_digit(struct ast_channel *ast, char digit, unsigned int duratio
 	iks_insert_attrib(iq, "id", client->connection->mid);
 	ast_aji_increment_mid(client->connection->mid);
 	iks_insert_attrib(gtalk, "xmlns", "http://jabber.org/protocol/gtalk");
-	iks_insert_attrib(gtalk, "action", "content-info");
+	iks_insert_attrib(gtalk, "action", "session-info");
 	iks_insert_attrib(gtalk, "initiator", p->initiator ? p->us: p->them);
 	iks_insert_attrib(gtalk, "sid", p->sid);
 	iks_insert_attrib(dtmf, "xmlns", "http://jabber.org/protocol/gtalk/info/dtmf");
@@ -1423,12 +1438,12 @@ static int gtalk_digit(struct ast_channel *ast, char digit, unsigned int duratio
 	iks_insert_node(gtalk, dtmf);
 
 	ast_mutex_lock(&p->lock);
-	if (ast->dtmff.frametype == AST_FRAME_DTMF_BEGIN) {
+	if (ast->dtmff.frametype == AST_FRAME_DTMF_BEGIN || duration == 0) {
 		iks_insert_attrib(dtmf, "action", "button-down");
-	} else if (ast->dtmff.frametype == AST_FRAME_DTMF_END) {
+	} else if (ast->dtmff.frametype == AST_FRAME_DTMF_END || duration != 0) {
 		iks_insert_attrib(dtmf, "action", "button-up");
 	}
-	iks_send(client->connection->p, iq);
+	ast_aji_send(client->connection, iq);
 	iks_delete(iq);
 	iks_delete(gtalk);
 	iks_delete(dtmf);
@@ -1542,22 +1557,85 @@ static struct ast_channel *gtalk_request(const char *type, int format, void *dat
 }
 
 /*! \brief CLI command "gtalk show channels" */
-static int gtalk_show_channels(int fd, int argc, char **argv)
+static char *gtalk_show_channels(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	if (argc != 3)
-		return RESULT_SHOWUSAGE;
+#define FORMAT  "%-30.30s  %-30.30s  %-15.15s  %-5.5s %-5.5s \n"
+	struct gtalk_pvt *p;
+	struct ast_channel *chan;
+	int numchans = 0;
+	char them[AJI_MAX_JIDLEN];
+	char *jid = NULL;
+	char *resource = NULL;
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "gtalk show channels";
+		e->usage =
+			"Usage: gtalk show channels\n"
+			"       Shows current state of the Gtalk channels.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc != 3)
+		return CLI_SHOWUSAGE;
+
 	ast_mutex_lock(&gtalklock);
-//	if (!gtalk_list->p)
-		ast_cli(fd, "No gtalk channels in use\n");
+	ast_cli(a->fd, FORMAT, "Channel", "Jabber ID", "Resource", "Read", "Write");
+	ASTOBJ_CONTAINER_TRAVERSE(&gtalk_list, 1, {
+		ASTOBJ_WRLOCK(iterator);
+		p = iterator->p;
+		while(p) {
+			chan = p->owner;
+			ast_copy_string(them, p->them, sizeof(them));
+			jid = them;
+			resource = strchr(them, '/');
+			if (!resource)
+				resource = "None";
+			else {
+				*resource = '\0';
+				resource ++;
+			}
+			if (chan)
+				ast_cli(a->fd, FORMAT, 
+					chan->name,
+					jid,
+					resource,
+					ast_getformatname(chan->readformat),
+					ast_getformatname(chan->writeformat)					
+					);
+			else 
+				ast_log(LOG_WARNING, "No available channel\n");
+			numchans ++;
+			p = p->next;
+		}
+		ASTOBJ_UNLOCK(iterator);
+	});
+
 	ast_mutex_unlock(&gtalklock);
-	return RESULT_SUCCESS;
+
+	ast_cli(a->fd, "%d active gtalk channel%s\n", numchans, (numchans != 1) ? "s" : "");
+	return CLI_SUCCESS;
+#undef FORMAT
 }
 
-/*! \brief CLI command "gtalk show channels" */
-static int gtalk_do_reload(int fd, int argc, char **argv)
+/*! \brief CLI command "gtalk reload" */
+static char *gtalk_do_reload(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "gtalk reload";
+		e->usage =
+			"Usage: gtalk reload\n"
+			"       Reload gtalk channel driver.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}	
+	
 	ast_verbose("IT DOES WORK!\n");
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 
 static int gtalk_parser(void *data, ikspak *pak)
@@ -1571,9 +1649,11 @@ static int gtalk_parser(void *data, ikspak *pak)
 		ast_debug(3, "About to add candidate!\n");
 		gtalk_add_candidate(client, pak);
 		ast_debug(3, "Candidate Added!\n");
-	} else if (iks_find_with_attrib(pak->x, "session", "type", "accept") || iks_find_with_attrib(pak->x, "session", "type", "transport-accept")) {
+	} else if (iks_find_with_attrib(pak->x, "session", "type", "accept")) {
 		gtalk_is_answered(client, pak);
-	} else if (iks_find_with_attrib(pak->x, "session", "type", "content-info")) {
+	} else if (iks_find_with_attrib(pak->x, "session", "type", "transport-accept")) {
+		gtalk_is_accepted(client, pak);
+	} else if (iks_find_with_attrib(pak->x, "session", "type", "content-info") || iks_find_with_attrib(pak->x, "gtalk", "action", "session-info")) {
 		gtalk_handle_dtmf(client, pak);
 	} else if (iks_find_with_attrib(pak->x, "session", "type", "terminate")) {
 		gtalk_hangup_farend(client, pak);
@@ -1669,10 +1749,11 @@ static int gtalk_create_member(char *label, struct ast_variable *var, int allowg
 		else if (!strcasecmp(var->name, "connection")) {
 			if ((client = ast_aji_get_client(var->value))) {
 				member->connection = client;
-				iks_filter_add_rule(client->f, gtalk_parser, member, IKS_RULE_TYPE,
-									IKS_PAK_IQ, IKS_RULE_FROM_PARTIAL, member->user,
-									IKS_RULE_NS, "http://www.google.com/session",
-									IKS_RULE_DONE);
+				iks_filter_add_rule(client->f, gtalk_parser, member, 
+						    IKS_RULE_TYPE, IKS_PAK_IQ, 
+						    IKS_RULE_FROM_PARTIAL, member->user,
+						    IKS_RULE_NS, "http://www.google.com/session",
+						    IKS_RULE_DONE);
 
 			} else {
 				ast_log(LOG_ERROR, "connection referenced not found!\n");
@@ -1693,7 +1774,7 @@ static int gtalk_load_config(void)
 {
 	char *cat = NULL;
 	struct ast_config *cfg = NULL;
-	char context[100];
+	char context[AST_MAX_CONTEXT];
 	int allowguest = 1;
 	struct ast_variable *var;
 	struct gtalk *member;
@@ -1702,8 +1783,9 @@ static int gtalk_load_config(void)
 	struct gtalk_candidate *global_candidates = NULL;
 	struct hostent *hp;
 	struct ast_hostent ahp;
+	struct ast_flags config_flags = { 0 };
 
-	cfg = ast_config_load(GOOGLE_CONFIG);
+	cfg = ast_config_load(GOOGLE_CONFIG, config_flags);
 	if (!cfg)
 		return 0;
 
@@ -1784,8 +1866,8 @@ static int gtalk_load_config(void)
 						ASTOBJ_WRLOCK(iterator);
 						ASTOBJ_WRLOCK(member);
 						member->connection = iterator;
-						iks_filter_add_rule(iterator->f, gtalk_parser, member, IKS_RULE_TYPE, IKS_PAK_IQ, IKS_RULE_NS,
-										"http://www.google.com/session", IKS_RULE_DONE);
+						iks_filter_add_rule(iterator->f, gtalk_parser, member, IKS_RULE_TYPE, IKS_PAK_IQ, IKS_RULE_NS, "http://www.google.com/session", IKS_RULE_DONE);
+						iks_filter_add_rule(iterator->f, gtalk_parser, member, IKS_RULE_TYPE, IKS_PAK_IQ, IKS_RULE_NS, "http://jabber.org/protocol/gtalk", IKS_RULE_DONE);
 						ASTOBJ_UNLOCK(member);
 						ASTOBJ_CONTAINER_LINK(&gtalk_list, member);
 						ASTOBJ_UNLOCK(iterator);
@@ -1810,10 +1892,6 @@ static int gtalk_load_config(void)
 /*! \brief Load module into PBX, register channel */
 static int load_module(void)
 {
-#ifdef HAVE_GNUTLS	
-        gcry_control (GCRYCTL_SET_THREAD_CBS, &gcry_threads_pthread);
-#endif /* HAVE_GNUTLS */
-
 	ASTOBJ_CONTAINER_INIT(&gtalk_list);
 	if (!gtalk_load_config()) {
 		ast_log(LOG_ERROR, "Unable to read config file %s. Not loading module.\n", GOOGLE_CONFIG);

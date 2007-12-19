@@ -28,20 +28,7 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <unistd.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <stdlib.h>
-#include <sys/time.h>
-#include <stdio.h>
-#include <errno.h>
-#include <string.h>
-
-#include "asterisk/lock.h"
-#include "asterisk/channel.h"
-#include "asterisk/file.h"
-#include "asterisk/logger.h"
-#include "asterisk/sched.h"
+#include "asterisk/mod_format.h"
 #include "asterisk/module.h"
 #include "asterisk/endian.h"
 
@@ -320,7 +307,7 @@ static int wav_open(struct ast_filestream *s)
 	/* We don't have any header to read or anything really, but
 	   if we did, it would go here.  We also might want to check
 	   and be sure it's a valid file.  */
-	struct wav_desc *tmp = (struct wav_desc *)s->private;
+	struct wav_desc *tmp = (struct wav_desc *)s->_private;
 	if ((tmp->maxlen = check_header(s->f)) < 0)
 		return -1;
 	return 0;
@@ -340,7 +327,7 @@ static int wav_rewrite(struct ast_filestream *s, const char *comment)
 static void wav_close(struct ast_filestream *s)
 {
 	char zero = 0;
-	struct wav_desc *fs = (struct wav_desc *)s->private;
+	struct wav_desc *fs = (struct wav_desc *)s->_private;
 	/* Pad to even length */
 	if (fs->bytes & 0x1)
 		fwrite(&zero, 1, 1, s->f);
@@ -357,7 +344,7 @@ static struct ast_frame *wav_read(struct ast_filestream *s, int *whennext)
 	int bytes = WAV_BUF_SIZE;	/* in bytes */
 	off_t here;
 	/* Send a frame from the file to the appropriate channel */
-	struct wav_desc *fs = (struct wav_desc *)s->private;
+	struct wav_desc *fs = (struct wav_desc *)s->_private;
 
 	here = ftello(s->f);
 	if (fs->maxlen - here < bytes)		/* truncate if necessary */
@@ -395,7 +382,7 @@ static int wav_write(struct ast_filestream *fs, struct ast_frame *f)
 	int x;
 	short tmp[8000], *tmpi;
 #endif
-	struct wav_desc *s = (struct wav_desc *)fs->private;
+	struct wav_desc *s = (struct wav_desc *)fs->_private;
 	int res;
 
 	if (f->frametype != AST_FRAME_VOICE) {
@@ -491,7 +478,9 @@ static const struct ast_format wav_f = {
 
 static int load_module(void)
 {
-	return ast_format_register(&wav_f);
+	if (ast_format_register(&wav_f))
+		return AST_MODULE_LOAD_FAILURE;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 static int unload_module(void)

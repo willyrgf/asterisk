@@ -27,20 +27,13 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <string.h>
-
 #include "asterisk/file.h"
-#include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
 #include "asterisk/lock.h"
 #include "asterisk/app.h"
 #include "asterisk/features.h"
-#include "asterisk/options.h"
 
 static char *app = "ChannelRedirect";
 static char *synopsis = "Redirects given channel to a dialplan target.";
@@ -81,7 +74,7 @@ static int asyncgoto_exec(struct ast_channel *chan, void *data)
 
 	res = ast_parseable_goto(chan2, args.label);
 
-	ast_mutex_unlock(&chan2->lock);
+	ast_channel_unlock(chan2);
 quit:
 
 	return res;

@@ -34,20 +34,13 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-#include <errno.h>
 #include <ctype.h>
-#include <unistd.h>
-#include <string.h>
 #include <signal.h>
-#include <stdlib.h>
-#include <stdio.h>
 #include <sys/time.h>
 #include <sys/signal.h>
 #include <netinet/in.h>
 #include <sys/stat.h>
 #include <dirent.h>
-#include <unistd.h>
 #include <sys/ioctl.h>
 #ifdef SOLARIS
 #include <thread.h>
@@ -57,10 +50,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/lock.h"
 #include "asterisk/file.h"
-#include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
-#include "asterisk/options.h"
 #include "asterisk/module.h"
 #include "asterisk/translate.h"
 #include "asterisk/say.h"
@@ -73,41 +64,41 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #define INITIAL_NUM_FILES   8
 
-static char *app0 = "MusicOnHold";
-static char *app1 = "WaitMusicOnHold";
-static char *app2 = "SetMusicOnHold";
-static char *app3 = "StartMusicOnHold";
-static char *app4 = "StopMusicOnHold";
+static char *play_moh = "MusicOnHold";
+static char *wait_moh = "WaitMusicOnHold";
+static char *set_moh = "SetMusicOnHold";
+static char *start_moh = "StartMusicOnHold";
+static char *stop_moh = "StopMusicOnHold";
 
-static char *synopsis0 = "Play Music On Hold indefinitely";
-static char *synopsis1 = "Wait, playing Music On Hold";
-static char *synopsis2 = "Set default Music On Hold class";
-static char *synopsis3 = "Play Music On Hold";
-static char *synopsis4 = "Stop Playing Music On Hold";
+static char *play_moh_syn = "Play Music On Hold indefinitely";
+static char *wait_moh_syn = "Wait, playing Music On Hold";
+static char *set_moh_syn = "Set default Music On Hold class";
+static char *start_moh_syn = "Play Music On Hold";
+static char *stop_moh_syn = "Stop Playing Music On Hold";
 
-static char *descrip0 = "MusicOnHold(class): "
+static char *play_moh_desc = "  MusicOnHold(class):\n"
 "Plays hold music specified by class.  If omitted, the default\n"
 "music source for the channel will be used. Set the default \n"
 "class with the SetMusicOnHold() application.\n"
 "Returns -1 on hangup.\n"
 "Never returns otherwise.\n";
 
-static char *descrip1 = "WaitMusicOnHold(delay): "
+static char *wait_moh_desc = "  WaitMusicOnHold(delay):\n"
 "Plays hold music specified number of seconds.  Returns 0 when\n"
 "done, or -1 on hangup.  If no hold music is available, the delay will\n"
 "still occur with no sound.\n";
 
-static char *descrip2 = "SetMusicOnHold(class): "
+static char *set_moh_desc = "  SetMusicOnHold(class):\n"
 "Sets the default class for music on hold for a given channel.  When\n"
 "music on hold is activated, this class will be used to select which\n"
 "music is played.\n";
 
-static char *descrip3 = "StartMusicOnHold(class): "
+static char *start_moh_desc = "  StartMusicOnHold(class):\n"
 "Starts playing music on hold, uses default music class for channel.\n"
 "Starts playing music specified by class.  If omitted, the default\n"
 "music source for the channel will be used.  Always returns 0.\n";
 
-static char *descrip4 = "StopMusicOnHold: "
+static char *stop_moh_desc = "  StopMusicOnHold(): "
 "Stops playing music on hold.\n";
 
 static int respawn_time = 20;
@@ -117,14 +108,19 @@ struct moh_files_state {
 	int origwfmt;
 	int samples;
 	int sample_queue;
-	unsigned char pos;
-	unsigned char save_pos;
+	int pos;
+	int save_pos;
 };
 
 #define MOH_QUIET		(1 << 0)
 #define MOH_SINGLE		(1 << 1)
 #define MOH_CUSTOM		(1 << 2)
 #define MOH_RANDOMIZE		(1 << 3)
+#define MOH_SORTALPHA		(1 << 4)
+
+#define MOH_CACHERTCLASSES      (1 << 5)        /*!< Should we use a separate instance of MOH for each user or not */
+
+static struct ast_flags global_flags[1] = {{0}};        /*!< global MOH_ flags */
 
 struct mohclass {
 	char name[MAX_MUSICCLASS];
@@ -149,6 +145,11 @@ struct mohclass {
 	int srcfd;
 	/*! FD for timing source */
 	int pseudofd;
+	/*! Number of users */
+	int inuse;
+	/*! Created on the fly, from RT engine */
+	int realtime;
+	unsigned int delete:1;
 	AST_LIST_HEAD_NOLOCK(, mohdata) members;
 	AST_LIST_ENTRY(mohclass) list;
 };
@@ -167,6 +168,8 @@ AST_RWLIST_HEAD_STATIC(mohclasses, mohclass);
 #define MPG_123 "/usr/bin/mpg123"
 #define MAX_MP3S 256
 
+static int ast_moh_destroy_one(struct mohclass *moh);
+static int reload(void);
 
 static void ast_moh_free_class(struct mohclass **mohclass) 
 {
@@ -209,6 +212,8 @@ static void moh_files_release(struct ast_channel *chan, void *data)
 		}
 		state->save_pos = state->pos;
 	}
+	if (ast_atomic_dec_and_test(&state->class->inuse) && state->class->delete)
+		ast_moh_destroy_one(state->class);
 }
 
 
@@ -223,10 +228,15 @@ static int ast_moh_files_next(struct ast_channel *chan)
 		chan->stream = NULL;
 	}
 
+	if (!state->class->total_files) {
+		ast_log(LOG_WARNING, "No files available for class '%s'\n", state->class->name);
+		return -1;
+	}
+
 	/* If a specific file has been saved, use it */
-	if (state->save_pos) {
+	if (state->save_pos >= 0) {
 		state->pos = state->save_pos;
-		state->save_pos = 0;
+		state->save_pos = -1;
 	} else if (ast_test_flag(state->class, MOH_RANDOMIZE)) {
 		/* Get a random file and ensure we can open it */
 		for (tries = 0; tries < 20; tries++) {
@@ -303,6 +313,7 @@ static void *moh_files_alloc(struct ast_channel *chan, void *params)
 	if (!chan->music_state && (state = ast_calloc(1, sizeof(*state)))) {
 		chan->music_state = state;
 		state->class = class;
+		state->save_pos = -1;
 	} else 
 		state = chan->music_state;
 
@@ -311,7 +322,7 @@ static void *moh_files_alloc(struct ast_channel *chan, void *params)
 			/* initialize */
 			memset(state, 0, sizeof(*state));
 			state->class = class;
-			if (ast_test_flag(state->class, MOH_RANDOMIZE))
+			if (ast_test_flag(state->class, MOH_RANDOMIZE) && class->total_files)
 				state->pos = ast_random() % class->total_files;
 		}
 
@@ -597,7 +608,7 @@ static void *monmp3thread(void *data)
 	return NULL;
 }
 
-static int moh0_exec(struct ast_channel *chan, void *data)
+static int play_moh_exec(struct ast_channel *chan, void *data)
 {
 	if (ast_moh_start(chan, data, NULL)) {
 		ast_log(LOG_WARNING, "Unable to start music on hold (class '%s') on channel %s\n", (char *)data, chan->name);
@@ -608,7 +619,7 @@ static int moh0_exec(struct ast_channel *chan, void *data)
 	return -1;
 }
 
-static int moh1_exec(struct ast_channel *chan, void *data)
+static int wait_moh_exec(struct ast_channel *chan, void *data)
 {
 	int res;
 	if (!data || !atoi(data)) {
@@ -624,7 +635,7 @@ static int moh1_exec(struct ast_channel *chan, void *data)
 	return res;
 }
 
-static int moh2_exec(struct ast_channel *chan, void *data)
+static int set_moh_exec(struct ast_channel *chan, void *data)
 {
 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_WARNING, "SetMusicOnHold requires an argument (class)\n");
@@ -634,7 +645,7 @@ static int moh2_exec(struct ast_channel *chan, void *data)
 	return 0;
 }
 
-static int moh3_exec(struct ast_channel *chan, void *data)
+static int start_moh_exec(struct ast_channel *chan, void *data)
 {
 	char *class = NULL;
 	if (data && strlen(data))
@@ -645,7 +656,7 @@ static int moh3_exec(struct ast_channel *chan, void *data)
 	return 0;
 }
 
-static int moh4_exec(struct ast_channel *chan, void *data)
+static int stop_moh_exec(struct ast_channel *chan, void *data)
 {
 	ast_moh_stop(chan);
 
@@ -663,7 +674,7 @@ static struct mohclass *get_mohbyname(const char *name, int warn)
 	}
 
 	if (!moh && warn)
-		ast_log(LOG_WARNING, "Music on Hold class '%s' not found\n", name);
+		ast_log(LOG_DEBUG, "Music on Hold class '%s' not found in memory\n", name);
 
 	return moh;
 }
@@ -705,6 +716,7 @@ static void moh_release(struct ast_channel *chan, void *data)
 {
 	struct mohdata *moh = data;
 	int oldwfmt;
+	struct moh_files_state *state;
 
 	AST_RWLIST_WRLOCK(&mohclasses);
 	AST_RWLIST_REMOVE(&moh->parent->members, moh, list);	
@@ -713,6 +725,12 @@ static void moh_release(struct ast_channel *chan, void *data)
 	close(moh->pipe[0]);
 	close(moh->pipe[1]);
 	oldwfmt = moh->origwfmt;
+	state = chan->music_state;
+	if (moh->parent->delete && ast_atomic_dec_and_test(&moh->parent->inuse))
+		ast_moh_destroy_one(moh->parent);
+	if (ast_atomic_dec_and_test(&state->class->inuse) && state->class->delete)
+		ast_moh_destroy_one(state->class);
+
 	ast_free(moh);
 	if (chan) {
 		if (oldwfmt && ast_set_write_format(chan, oldwfmt)) 
@@ -725,6 +743,18 @@ static void *moh_alloc(struct ast_channel *chan, void *params)
 {
 	struct mohdata *res;
 	struct mohclass *class = params;
+	struct moh_files_state *state;
+
+	/* Initiating music_state for current channel. Channel should know name of moh class */
+	if (!chan->music_state && (state = ast_calloc(1, sizeof(*state)))) {
+		chan->music_state = state;
+		state->class = class;
+	} else
+		state = chan->music_state;
+	if (state && state->class != class) {
+		memset(state, 0, sizeof(*state));
+		state->class = class;
+	}
 
 	if ((res = mohalloc(class))) {
 		res->origwfmt = chan->writeformat;
@@ -800,6 +830,16 @@ static int moh_add_file(struct mohclass *class, const char *filepath)
 	return 0;
 }
 
+static int moh_sort_compare(const void *i1, const void *i2)
+{
+	char *s1, *s2;
+
+	s1 = ((char **)i1)[0];
+	s2 = ((char **)i2)[0];
+
+	return strcasecmp(s1, s2);
+}
+
 static int moh_scan_files(struct mohclass *class) {
 
 	DIR *files_DIR;
@@ -810,7 +850,7 @@ static int moh_scan_files(struct mohclass *class) {
 	struct stat statbuf;
 	int dirnamelen;
 	int i;
-	
+
 	files_DIR = opendir(class->dir);
 	if (!files_DIR) {
 		ast_log(LOG_WARNING, "Cannot open dir %s or dir does not exist\n", class->dir);
@@ -845,10 +885,8 @@ static int moh_scan_files(struct mohclass *class) {
 		if (!S_ISREG(statbuf.st_mode))
 			continue;
 
-		if ((ext = strrchr(filepath, '.'))) {
+		if ((ext = strrchr(filepath, '.')))
 			*ext = '\0';
-			ext++;
-		}
 
 		/* if the file is present in multiple formats, ensure we only put it into the list once */
 		for (i = 0; i < class->total_files; i++)
@@ -863,7 +901,26 @@ static int moh_scan_files(struct mohclass *class) {
 
 	closedir(files_DIR);
 	chdir(path);
+	if (ast_test_flag(class, MOH_SORTALPHA))
+		qsort(&class->filearray[0], class->total_files, sizeof(char *), moh_sort_compare);
 	return class->total_files;
+}
+
+static int moh_diff(struct mohclass *old, struct mohclass *new)
+{
+	if (!old || !new)
+		return -1;
+
+	if (strcmp(old->dir, new->dir))
+		return -1;
+	else if (strcmp(old->mode, new->mode))
+		return -1;
+	else if (strcmp(old->args, new->args))
+		return -1;
+	else if (old->flags != new->flags)
+		return -1;
+
+	return 0;
 }
 
 static int moh_register(struct mohclass *moh, int reload)
@@ -871,8 +928,11 @@ static int moh_register(struct mohclass *moh, int reload)
 #ifdef HAVE_ZAPTEL
 	int x;
 #endif
+	struct mohclass *mohclass = NULL;
+
 	AST_RWLIST_WRLOCK(&mohclasses);
-	if (get_mohbyname(moh->name, 0)) {
+	if ((mohclass = get_mohbyname(moh->name, 0)) && !moh_diff(mohclass, moh)) {
+		mohclass->delete = 0;
 		if (reload) {
 			ast_debug(1, "Music on Hold class '%s' left alone from initial load.\n", moh->name);
 		} else {
@@ -941,15 +1001,51 @@ static int moh_register(struct mohclass *moh, int reload)
 
 static void local_ast_moh_cleanup(struct ast_channel *chan)
 {
-	if (chan->music_state) {
+	struct moh_files_state *state = chan->music_state;
+
+	if (state) {
+		if (state->class->realtime) {
+			if (ast_test_flag(global_flags, MOH_CACHERTCLASSES)) {
+				/* We are cleaning out cached RT class, we should remove it from list, if no one else using it */
+				if (!(state->class->inuse)) {
+					/* Remove this class from list */
+					AST_RWLIST_WRLOCK(&mohclasses);
+					AST_RWLIST_REMOVE(&mohclasses, state->class, list);
+					AST_RWLIST_UNLOCK(&mohclasses);
+	
+					/* Free some memory */
+					ast_moh_destroy_one(state->class);
+				}
+			} else {
+				ast_moh_destroy_one(state->class);
+			}
+		}
 		ast_free(chan->music_state);
 		chan->music_state = NULL;
 	}
 }
 
+static struct mohclass *moh_class_malloc(void)
+{
+	struct mohclass *class;
+
+	if ((class = ast_calloc(1, sizeof(*class)))) {
+		class->format = AST_FORMAT_SLINEAR;
+		class->realtime = 0;
+	}
+
+	return class;
+}
+
 static int local_ast_moh_start(struct ast_channel *chan, const char *mclass, const char *interpclass)
 {
 	struct mohclass *mohclass = NULL;
+	struct ast_variable *var = NULL;
+	struct ast_variable *tmp = NULL;
+	struct moh_files_state *state = chan->music_state;
+#ifdef HAVE_ZAPTEL
+	int x;
+#endif
 
 	/* The following is the order of preference for which class to use:
 	 * 1) The channels explicitly set musicclass, which should *only* be
@@ -962,6 +1058,8 @@ static int local_ast_moh_start(struct ast_channel *chan, const char *mclass, con
 	 *    option.
 	 * 4) The default class.
 	 */
+	
+	/* First, let's check in memory for static and cached RT classes */
 	AST_RWLIST_RDLOCK(&mohclasses);
 	if (!ast_strlen_zero(chan->musicclass))
 		mohclass = get_mohbyname(chan->musicclass, 1);
@@ -969,9 +1067,163 @@ static int local_ast_moh_start(struct ast_channel *chan, const char *mclass, con
 		mohclass = get_mohbyname(mclass, 1);
 	if (!mohclass && !ast_strlen_zero(interpclass))
 		mohclass = get_mohbyname(interpclass, 1);
-	if (!mohclass)	
-		mohclass = get_mohbyname("default", 1);
 	AST_RWLIST_UNLOCK(&mohclasses);
+
+	/* If no moh class found in memory, then check RT */
+	if (!mohclass && ast_check_realtime("musiconhold")) {
+		if (!ast_strlen_zero(chan->musicclass)) {
+			var = ast_load_realtime("musiconhold", "name", chan->musicclass, NULL);
+		}
+		if (!var && !ast_strlen_zero(mclass))
+			var = ast_load_realtime("musiconhold", "name", mclass, NULL);
+		if (!var && !ast_strlen_zero(interpclass))
+			var = ast_load_realtime("musiconhold", "name", interpclass, NULL);
+		if (!var)
+			var = ast_load_realtime("musiconhold", "name", "default", NULL);
+		if (var && (mohclass = moh_class_malloc())) {
+			mohclass->realtime = 1;
+			for (tmp = var; tmp; tmp = tmp->next) {
+				if (!strcasecmp(tmp->name, "name"))
+					ast_copy_string(mohclass->name, tmp->value, sizeof(mohclass->name));
+				else if (!strcasecmp(tmp->name, "mode"))
+					ast_copy_string(mohclass->mode, tmp->value, sizeof(mohclass->mode)); 
+				else if (!strcasecmp(tmp->name, "directory"))
+					ast_copy_string(mohclass->dir, tmp->value, sizeof(mohclass->dir));
+				else if (!strcasecmp(tmp->name, "application"))
+					ast_copy_string(mohclass->args, tmp->value, sizeof(mohclass->args));
+				else if (!strcasecmp(tmp->name, "digit") && (isdigit(*tmp->value) || strchr("*#", *tmp->value)))
+					mohclass->digit = *tmp->value;
+				else if (!strcasecmp(tmp->name, "random"))
+					ast_set2_flag(mohclass, ast_true(tmp->value), MOH_RANDOMIZE);
+				else if (!strcasecmp(tmp->name, "sort") && !strcasecmp(tmp->value, "random"))
+					ast_set_flag(mohclass, MOH_RANDOMIZE);
+				else if (!strcasecmp(tmp->name, "sort") && !strcasecmp(tmp->value, "alpha")) 
+					ast_set_flag(mohclass, MOH_SORTALPHA);
+				else if (!strcasecmp(tmp->name, "format")) {
+					mohclass->format = ast_getformatbyname(tmp->value);
+					if (!mohclass->format) {
+						ast_log(LOG_WARNING, "Unknown format '%s' -- defaulting to SLIN\n", tmp->value);
+						mohclass->format = AST_FORMAT_SLINEAR;
+					}
+				}
+			}
+			ast_variables_destroy(var);
+			if (ast_strlen_zero(mohclass->dir)) {
+				if (!strcasecmp(mohclass->mode, "custom")) {
+					strcpy(mohclass->dir, "nodir");
+				} else {
+					ast_log(LOG_WARNING, "A directory must be specified for class '%s'!\n", mohclass->name);
+					ast_free(mohclass);
+					return -1;
+				}
+			}
+			if (ast_strlen_zero(mohclass->mode)) {
+				ast_log(LOG_WARNING, "A mode must be specified for class '%s'!\n", mohclass->name);
+				ast_free(mohclass);
+				return -1;
+			}
+			if (ast_strlen_zero(mohclass->args) && !strcasecmp(mohclass->mode, "custom")) {
+				ast_log(LOG_WARNING, "An application must be specified for class '%s'!\n", mohclass->name);
+				ast_free(mohclass);
+				return -1;
+			}
+
+			if (ast_test_flag(global_flags, MOH_CACHERTCLASSES)) {
+				/* CACHERTCLASSES enabled, let's add this class to default tree */
+				if (state && state->class) {
+					/* Class already exist for this channel */
+					ast_log(LOG_NOTICE, "This channel already has a MOH class attached (%s)!\n", state->class->name);
+					if (state->class->realtime && !ast_test_flag(global_flags, MOH_CACHERTCLASSES) && !strcasecmp(mohclass->name, state->class->name)) {
+						/* we found RT class with the same name, seems like we should continue playing existing one */
+						ast_moh_free_class(&mohclass);
+						mohclass = state->class;
+					}
+				}
+				moh_register(mohclass, 0);
+			} else {
+
+				/* We don't register RT moh class, so let's init it manualy */
+
+				time(&mohclass->start);
+				mohclass->start -= respawn_time;
+	
+				if (!strcasecmp(mohclass->mode, "files")) {
+					if (!moh_scan_files(mohclass)) {
+						ast_moh_free_class(&mohclass);
+						return -1;
+					}
+					if (strchr(mohclass->args, 'r'))
+						ast_set_flag(mohclass, MOH_RANDOMIZE);
+				} else if (!strcasecmp(mohclass->mode, "mp3") || !strcasecmp(mohclass->mode, "mp3nb") || !strcasecmp(mohclass->mode, "quietmp3") || !strcasecmp(mohclass->mode, "quietmp3nb") || !strcasecmp(mohclass->mode, "httpmp3") || !strcasecmp(mohclass->mode, "custom")) {
+
+					if (!strcasecmp(mohclass->mode, "custom"))
+						ast_set_flag(mohclass, MOH_CUSTOM);
+					else if (!strcasecmp(mohclass->mode, "mp3nb"))
+						ast_set_flag(mohclass, MOH_SINGLE);
+					else if (!strcasecmp(mohclass->mode, "quietmp3nb"))
+						ast_set_flag(mohclass, MOH_SINGLE | MOH_QUIET);
+					else if (!strcasecmp(mohclass->mode, "quietmp3"))
+						ast_set_flag(mohclass, MOH_QUIET);
+			
+					mohclass->srcfd = -1;
+#ifdef HAVE_ZAPTEL
+					/* Open /dev/zap/pseudo for timing...  Is
+					   there a better, yet reliable way to do this? */
+					mohclass->pseudofd = open("/dev/zap/pseudo", O_RDONLY);
+					if (mohclass->pseudofd < 0) {
+						ast_log(LOG_WARNING, "Unable to open pseudo channel for timing...  Sound may be choppy.\n");
+					} else {
+						x = 320;
+						ioctl(mohclass->pseudofd, ZT_SET_BLOCKSIZE, &x);
+					}
+#else
+					mohclass->pseudofd = -1;
+#endif
+					/* Let's check if this channel already had a moh class before */
+					if (state && state->class) {
+						/* Class already exist for this channel */
+						ast_log(LOG_NOTICE, "This channel already has a MOH class attached (%s)!\n", state->class->name);
+						if (state->class->realtime && !ast_test_flag(global_flags, MOH_CACHERTCLASSES) && !strcasecmp(mohclass->name, state->class->name)) {
+							/* we found RT class with the same name, seems like we should continue playing existing one */
+							ast_moh_free_class(&mohclass);
+							mohclass = state->class;
+	
+						}
+					} else {
+						if (ast_pthread_create_background(&mohclass->thread, NULL, monmp3thread, mohclass)) {
+							ast_log(LOG_WARNING, "Unable to create moh...\n");
+							if (mohclass->pseudofd > -1)
+								close(mohclass->pseudofd);
+							ast_moh_free_class(&mohclass);
+							return -1;
+						}
+					}
+				} else {
+					ast_log(LOG_WARNING, "Don't know how to do a mode '%s' music on hold\n", mohclass->mode);
+					ast_moh_free_class(&mohclass);
+					return -1;
+				}
+
+			}
+
+		} else if (var)
+			ast_variables_destroy(var);
+	}
+
+	
+
+	/* Requested MOH class not found, check for 'default' class in musiconhold.conf  */
+	if (!mohclass) {
+		AST_RWLIST_RDLOCK(&mohclasses);
+		mohclass = get_mohbyname("default", 1);
+		if (mohclass)
+			ast_atomic_fetchadd_int(&mohclass->inuse, +1);
+		AST_RWLIST_UNLOCK(&mohclasses);
+	} else {
+		AST_RWLIST_RDLOCK(&mohclasses);
+		ast_atomic_fetchadd_int(&mohclass->inuse, +1);
+		AST_RWLIST_UNLOCK(&mohclasses);
+	}
 
 	if (!mohclass)
 		return -1;
@@ -985,25 +1237,16 @@ static int local_ast_moh_start(struct ast_channel *chan, const char *mclass, con
 
 static void local_ast_moh_stop(struct ast_channel *chan)
 {
+	struct moh_files_state *state = chan->music_state;
 	ast_clear_flag(chan, AST_FLAG_MOH);
 	ast_deactivate_generator(chan);
 
-	if (chan->music_state) {
+	if (state) {
 		if (chan->stream) {
 			ast_closestream(chan->stream);
 			chan->stream = NULL;
 		}
 	}
-}
-
-static struct mohclass *moh_class_malloc(void)
-{
-	struct mohclass *class;
-
-	if ((class = ast_calloc(1, sizeof(*class))))		
-		class->format = AST_FORMAT_SLINEAR;
-
-	return class;
 }
 
 static int load_moh_classes(int reload)
@@ -1013,16 +1256,39 @@ static int load_moh_classes(int reload)
 	struct mohclass *class;	
 	char *cat;
 	int numclasses = 0;
+	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
 
-	cfg = ast_config_load("musiconhold.conf");
+	cfg = ast_config_load("musiconhold.conf", config_flags);
 
-	if (!cfg)
+	if (cfg == NULL || cfg == CONFIG_STATUS_FILEUNCHANGED)
 		return 0;
+
+	if (reload) {
+		AST_RWLIST_WRLOCK(&mohclasses);
+		AST_RWLIST_TRAVERSE(&mohclasses, class, list) {
+			class->delete = 1;
+		}
+		AST_RWLIST_UNLOCK(&mohclasses);
+	}
+	
+	ast_clear_flag(global_flags, AST_FLAGS_ALL);
 
 	cat = ast_category_browse(cfg, NULL);
 	for (; cat; cat = ast_category_browse(cfg, cat)) {
+		/* Setup common options from [general] section */
+		if (!strcasecmp(cat, "general")) {
+			var = ast_variable_browse(cfg, cat);
+			while (var) {
+				if (!strcasecmp(var->name, "cachertclasses")) {
+					ast_set2_flag(global_flags, ast_true(var->value), MOH_CACHERTCLASSES);
+				} else {
+					ast_log(LOG_WARNING, "Unknown option '%s' in [general] section of musiconhold.conf\n", var->name);
+				}
+				var = var->next;
+			}
+		}
 		/* These names were deprecated in 1.4 and should not be used until after the next major release. */
-		if (strcasecmp(cat, "classes") && strcasecmp(cat, "moh_files")) {			
+		if (strcasecmp(cat, "classes") && strcasecmp(cat, "moh_files") && strcasecmp(cat, "general")) {
 			if (!(class = moh_class_malloc()))
 				break;
 
@@ -1039,6 +1305,10 @@ static int load_moh_classes(int reload)
 					class->digit = *var->value;
 				else if (!strcasecmp(var->name, "random"))
 					ast_set2_flag(class, ast_true(var->value), MOH_RANDOMIZE);
+				else if (!strcasecmp(var->name, "sort") && !strcasecmp(var->value, "random"))
+					ast_set_flag(class, MOH_RANDOMIZE);
+				else if (!strcasecmp(var->name, "sort") && !strcasecmp(var->value, "alpha")) 
+					ast_set_flag(class, MOH_SORTALPHA);
 				else if (!strcasecmp(var->name, "format")) {
 					class->format = ast_getformatbyname(var->value);
 					if (!class->format) {
@@ -1081,16 +1351,12 @@ static int load_moh_classes(int reload)
 	return numclasses;
 }
 
-static void ast_moh_destroy(void)
+static int ast_moh_destroy_one(struct mohclass *moh)
 {
-	struct mohclass *moh;
 	char buff[8192];
 	int bytes, tbytes = 0, stime = 0, pid = 0;
 
-	ast_verb(2, "Destroying musiconhold processes\n");
-
-	AST_RWLIST_WRLOCK(&mohclasses);
-	while ((moh = AST_RWLIST_REMOVE_HEAD(&mohclasses, list))) {
+	if (moh) {
 		if (moh->pid > 1) {
 			ast_debug(1, "killing %d!\n", moh->pid);
 			stime = time(NULL) + 2;
@@ -1111,88 +1377,119 @@ static void ast_moh_destroy(void)
 		}
 		ast_moh_free_class(&moh);
 	}
-	AST_RWLIST_UNLOCK(&mohclasses);
-}
 
-static void moh_on_off(int on)
-{
-	struct ast_channel *chan = NULL;
-
-	while ( (chan = ast_channel_walk_locked(chan)) != NULL) {
-		if (ast_test_flag(chan, AST_FLAG_MOH)) {
-			if (on)
-				local_ast_moh_start(chan, NULL, NULL);
-			else
-				ast_deactivate_generator(chan);
-		}
-		ast_channel_unlock(chan);
-	}
-}
-
-static int moh_cli(int fd, int argc, char *argv[]) 
-{
-	int x;
-
-	moh_on_off(0);
-	ast_moh_destroy();
-	x = load_moh_classes(1);
-	moh_on_off(1);
-	ast_cli(fd, "\n%d class%s reloaded.\n", x, x == 1 ? "" : "es");
 	return 0;
 }
 
-static int cli_files_show(int fd, int argc, char *argv[])
+static void ast_moh_destroy(void)
+{
+	struct mohclass *moh;
+
+	ast_verb(2, "Destroying musiconhold processes\n");
+
+	AST_RWLIST_WRLOCK(&mohclasses);
+	while ((moh = AST_RWLIST_REMOVE_HEAD(&mohclasses, list))) {
+		ast_moh_destroy_one(moh);
+	}
+	AST_RWLIST_UNLOCK(&mohclasses);
+}
+
+static char *handle_cli_moh_reload(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "moh reload";
+		e->usage =
+			"Usage: moh reload\n"
+			"       Reloads the MusicOnHold module.\n"
+			"       Alias for 'module reload res_musiconhold.so'\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc != e->args)
+		return CLI_SHOWUSAGE;
+
+	reload();
+
+	return CLI_SUCCESS;
+}
+
+static char *handle_cli_moh_show_files(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	int i;
 	struct mohclass *class;
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "moh show files";
+		e->usage =
+			"Usage: moh show files\n"
+			"       Lists all loaded file-based MusicOnHold classes and their\n"
+			"       files.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc != e->args)
+		return CLI_SHOWUSAGE;
 
 	AST_RWLIST_RDLOCK(&mohclasses);
 	AST_RWLIST_TRAVERSE(&mohclasses, class, list) {
 		if (!class->total_files)
 			continue;
 
-		ast_cli(fd, "Class: %s\n", class->name);
+		ast_cli(a->fd, "Class: %s\n", class->name);
 		for (i = 0; i < class->total_files; i++)
-			ast_cli(fd, "\tFile: %s\n", class->filearray[i]);
+			ast_cli(a->fd, "\tFile: %s\n", class->filearray[i]);
 	}
 	AST_RWLIST_UNLOCK(&mohclasses);
 
-	return 0;
+	return CLI_SUCCESS;
 }
 
-static int moh_classes_show(int fd, int argc, char *argv[])
+static char *handle_cli_moh_show_classes(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	struct mohclass *class;
 
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "moh show classes";
+		e->usage =
+			"Usage: moh show classes\n"
+			"       Lists all MusicOnHold classes.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc != e->args)
+		return CLI_SHOWUSAGE;
+
 	AST_RWLIST_RDLOCK(&mohclasses);
 	AST_RWLIST_TRAVERSE(&mohclasses, class, list) {
-		ast_cli(fd, "Class: %s\n", class->name);
-		ast_cli(fd, "\tMode: %s\n", S_OR(class->mode, "<none>"));
-		ast_cli(fd, "\tDirectory: %s\n", S_OR(class->dir, "<none>"));
+		ast_cli(a->fd, "Class: %s\n", class->name);
+		ast_cli(a->fd, "\tMode: %s\n", S_OR(class->mode, "<none>"));
+		ast_cli(a->fd, "\tDirectory: %s\n", S_OR(class->dir, "<none>"));
+		ast_cli(a->fd, "\tUse Count: %d\n", class->inuse);
 		if (class->digit)
-			ast_cli(fd, "\tDigit: %c\n", class->digit);
+			ast_cli(a->fd, "\tDigit: %c\n", class->digit);
 		if (ast_test_flag(class, MOH_CUSTOM))
-			ast_cli(fd, "\tApplication: %s\n", S_OR(class->args, "<none>"));
+			ast_cli(a->fd, "\tApplication: %s\n", S_OR(class->args, "<none>"));
 		if (strcasecmp(class->mode, "files"))
-			ast_cli(fd, "\tFormat: %s\n", ast_getformatname(class->format));
+			ast_cli(a->fd, "\tFormat: %s\n", ast_getformatname(class->format));
 	}
 	AST_RWLIST_UNLOCK(&mohclasses);
 
-	return 0;
+	return CLI_SUCCESS;
 }
 
 static struct ast_cli_entry cli_moh[] = {
-	{ { "moh", "reload"},
-	moh_cli, "Music On Hold",
-	"Music On Hold" },
-
-	{ { "moh", "show", "classes"},
-	moh_classes_show, "List MOH classes",
-	"Lists all MOH classes" },
-
-	{ { "moh", "show", "files"},
-	cli_files_show, "List MOH file-based classes",
-	"Lists all loaded file-based MOH classes and their files" },
+	AST_CLI_DEFINE(handle_cli_moh_reload,       "Reload MusicOnHold"),
+	AST_CLI_DEFINE(handle_cli_moh_show_classes, "List MusicOnHold classes"),
+	AST_CLI_DEFINE(handle_cli_moh_show_files,   "List MusicOnHold file-based classes")
 };
 
 static int init_classes(int reload) 
@@ -1203,10 +1500,22 @@ static int init_classes(int reload)
 		return 0;			/* Return if nothing is found */
 
 	AST_RWLIST_WRLOCK(&mohclasses);
-	AST_RWLIST_TRAVERSE(&mohclasses, moh, list) {
-		if (moh->total_files)
-			moh_scan_files(moh);
+	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&mohclasses, moh, list) {
+		if (reload && moh->delete) {
+			AST_RWLIST_REMOVE_CURRENT(list);
+			if (!moh->inuse)
+				ast_moh_destroy_one(moh);
+		} else if (moh->total_files) {
+			if (moh_scan_files(moh) <= 0) {
+				ast_log(LOG_WARNING, "No files found for class '%s'\n", moh->name);
+				moh->delete = 1;
+				AST_LIST_REMOVE_CURRENT(list);
+				if (!moh->inuse)
+					ast_moh_destroy_one(moh);
+			}
+		}
 	}
+	AST_RWLIST_TRAVERSE_SAFE_END
 	AST_RWLIST_UNLOCK(&mohclasses);
 
 	return 1;
@@ -1216,17 +1525,17 @@ static int load_module(void)
 {
 	int res;
 
-	res = ast_register_application(app0, moh0_exec, synopsis0, descrip0);
+	res = ast_register_application(play_moh, play_moh_exec, play_moh_syn, play_moh_desc);
 	ast_register_atexit(ast_moh_destroy);
 	ast_cli_register_multiple(cli_moh, sizeof(cli_moh) / sizeof(struct ast_cli_entry));
 	if (!res)
-		res = ast_register_application(app1, moh1_exec, synopsis1, descrip1);
+		res = ast_register_application(wait_moh, wait_moh_exec, wait_moh_syn, wait_moh_desc);
 	if (!res)
-		res = ast_register_application(app2, moh2_exec, synopsis2, descrip2);
+		res = ast_register_application(set_moh, set_moh_exec, set_moh_syn, set_moh_desc);
 	if (!res)
-		res = ast_register_application(app3, moh3_exec, synopsis3, descrip3);
+		res = ast_register_application(start_moh, start_moh_exec, start_moh_syn, start_moh_desc);
 	if (!res)
-		res = ast_register_application(app4, moh4_exec, synopsis4, descrip4);
+		res = ast_register_application(stop_moh, stop_moh_exec, stop_moh_syn, stop_moh_desc);
 
 	if (!init_classes(0)) { 	/* No music classes configured, so skip it */
 		ast_log(LOG_WARNING, "No music on hold classes configured, disabling music on hold.\n");
@@ -1234,7 +1543,7 @@ static int load_module(void)
 		ast_install_music_functions(local_ast_moh_start, local_ast_moh_stop, local_ast_moh_cleanup);
 	}
 
-	return 0;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 static int reload(void)

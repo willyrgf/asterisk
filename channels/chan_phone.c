@@ -33,14 +33,9 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdio.h>
-#include <string.h>
 #include <ctype.h>
 #include <sys/socket.h>
 #include <sys/time.h>
-#include <errno.h>
-#include <unistd.h>
-#include <stdlib.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
@@ -56,10 +51,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/lock.h"
 #include "asterisk/channel.h"
 #include "asterisk/config.h"
-#include "asterisk/logger.h"
 #include "asterisk/module.h"
 #include "asterisk/pbx.h"
-#include "asterisk/options.h"
 #include "asterisk/utils.h"
 #include "asterisk/callerid.h"
 #include "asterisk/causes.h"
@@ -594,7 +587,7 @@ static struct ast_frame  *phone_read(struct ast_channel *ast)
 	}
 	p->fr.samples = 240;
 	p->fr.datalen = res;
-	p->fr.frametype = p->lastinput <= AST_FORMAT_MAX_AUDIO ?
+	p->fr.frametype = p->lastinput <= AST_FORMAT_AUDIO_MASK ?
                           AST_FRAME_VOICE : 
 			  p->lastinput <= AST_FORMAT_PNG ? AST_FRAME_IMAGE 
 			  : AST_FRAME_VIDEO;
@@ -1155,7 +1148,7 @@ static int restart_monitor()
 	return 0;
 }
 
-static struct phone_pvt *mkif(char *iface, int mode, int txgain, int rxgain)
+static struct phone_pvt *mkif(const char *iface, int mode, int txgain, int rxgain)
 {
 	/* Make a phone_pvt structure for this interface */
 	struct phone_pvt *tmp;
@@ -1258,7 +1251,7 @@ static struct ast_channel *phone_request(const char *type, int format, void *dat
 }
 
 /* parse gain value from config file */
-static int parse_gain_value(char *gain_type, char *value)
+static int parse_gain_value(const char *gain_type, const char *value)
 {
 	float gain;
 
@@ -1284,7 +1277,8 @@ static int __unload_module(void)
 {
 	struct phone_pvt *p, *pl;
 	/* First, take us out of the channel loop */
-	ast_channel_unregister(cur_tech);
+	if (cur_tech)
+		ast_channel_unregister(cur_tech);
 	if (!ast_mutex_lock(&iflock)) {
 		/* Hangup all interfaces if they have an owner */
 		p = iflist;
@@ -1347,7 +1341,9 @@ static int load_module(void)
 	struct phone_pvt *tmp;
 	int mode = MODE_IMMEDIATE;
 	int txgain = DEFAULT_GAIN, rxgain = DEFAULT_GAIN; /* default gain 1.0 */
-	cfg = ast_config_load(config);
+	struct ast_flags config_flags = { 0 };
+
+	cfg = ast_config_load(config, config_flags);
 
 	/* We *must* have a config file otherwise stop immediately */
 	if (!cfg) {
@@ -1357,7 +1353,7 @@ static int load_module(void)
 	if (ast_mutex_lock(&iflock)) {
 		/* It's a little silly to lock it, but we mind as well just to be sure */
 		ast_log(LOG_ERROR, "Unable to lock interface list???\n");
-		return -1;
+		return AST_MODULE_LOAD_FAILURE;
 	}
 	v = ast_variable_browse(cfg, "interfaces");
 	while(v) {
@@ -1373,7 +1369,7 @@ static int load_module(void)
 					ast_config_destroy(cfg);
 					ast_mutex_unlock(&iflock);
 					__unload_module();
-					return -1;
+					return AST_MODULE_LOAD_FAILURE;
 				}
 		} else if (!strcasecmp(v->name, "silencesupression")) {
 			silencesupression = ast_true(v->value);
@@ -1443,12 +1439,12 @@ static int load_module(void)
 		ast_log(LOG_ERROR, "Unable to register channel class 'Phone'\n");
 		ast_config_destroy(cfg);
 		__unload_module();
-		return -1;
+		return AST_MODULE_LOAD_FAILURE;
 	}
 	ast_config_destroy(cfg);
 	/* And start the monitor for the first time */
 	restart_monitor();
-	return 0;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Linux Telephony API Support");

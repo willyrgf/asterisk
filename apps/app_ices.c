@@ -31,24 +31,18 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <string.h>
-#include <stdio.h>
 #include <signal.h>
-#include <stdlib.h>
-#include <unistd.h>
 #include <fcntl.h>
 #include <sys/time.h>
-#include <errno.h>
 
+#include "asterisk/paths.h"	/* use ast_config_AST_CONFIG_DIR */
 #include "asterisk/lock.h"
 #include "asterisk/file.h"
-#include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/frame.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
 #include "asterisk/translate.h"
-#include "asterisk/options.h"
 
 #define ICES "/usr/bin/ices"
 #define LOCAL_ICES "/usr/local/bin/ices"
@@ -151,7 +145,7 @@ static int ices_exec(struct ast_channel *chan, void *data)
 	if (((char *)data)[0] == '/')
 		ast_copy_string(filename, (char *) data, sizeof(filename));
 	else
-		snprintf(filename, sizeof(filename), "%s/%s", (char *)ast_config_AST_CONFIG_DIR, (char *)data);
+		snprintf(filename, sizeof(filename), "%s/%s", ast_config_AST_CONFIG_DIR, (char *)data);
 	/* Placeholder for options */		
 	c = strchr(filename, '|');
 	if (c)

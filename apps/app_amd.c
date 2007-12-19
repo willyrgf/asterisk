@@ -31,12 +31,8 @@
  
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdio.h>
-#include <stdlib.h>
-
 #include "asterisk/module.h"
 #include "asterisk/lock.h"
-#include "asterisk/options.h"
 #include "asterisk/channel.h"
 #include "asterisk/dsp.h"
 #include "asterisk/pbx.h"
@@ -69,7 +65,7 @@ static char *descrip =
 "- 'maximumNumberOfWords'is the maximum number of words in the greeting. \n"
 "   If exceeded then MACHINE.\n"
 "- 'silenceThreshold' is the silence threshold.\n"
-"This application sets the following channel variable upon completion:\n"
+"This application sets the following channel variables upon completion:\n"
 "    AMDSTATUS - This is the status of the answering machine detection.\n"
 "                Possible values are:\n"
 "                MACHINE | HUMAN | NOTSURE | HANGUP\n"
@@ -203,8 +199,7 @@ static void isAnsweringMachine(struct ast_channel *chan, void *data)
 			framelength = (ast_codec_get_samples(f) / DEFAULT_SAMPLES_PER_MS);
 			iTotalTime += framelength;
 			if (iTotalTime >= totalAnalysisTime) {
-				if (option_verbose > 2)	
-					ast_verbose(VERBOSE_PREFIX_3 "AMD: Channel [%s]. Too long...\n", chan->name );
+				ast_verb(3, "AMD: Channel [%s]. Too long...\n", chan->name );
 				ast_frfree(f);
 				strcpy(amdStatus , "NOTSURE");
 				sprintf(amdCause , "TOOLONG-%d", iTotalTime);
@@ -220,16 +215,14 @@ static void isAnsweringMachine(struct ast_channel *chan, void *data)
 				if (silenceDuration >= betweenWordsSilence) {
 					if (currentState != STATE_IN_SILENCE ) {
 						previousState = currentState;
-						if (option_verbose > 2)
-							ast_verbose(VERBOSE_PREFIX_3 "AMD: Changed state to STATE_IN_SILENCE\n");
+						ast_verb(3, "AMD: Changed state to STATE_IN_SILENCE\n");
 					}
 					currentState  = STATE_IN_SILENCE;
 					consecutiveVoiceDuration = 0;
 				}
 				
 				if (inInitialSilence == 1  && silenceDuration >= initialSilence) {
-					if (option_verbose > 2)
-						ast_verbose(VERBOSE_PREFIX_3 "AMD: ANSWERING MACHINE: silenceDuration:%d initialSilence:%d\n",
+					ast_verb(3, "AMD: ANSWERING MACHINE: silenceDuration:%d initialSilence:%d\n",
 							    silenceDuration, initialSilence);
 					ast_frfree(f);
 					strcpy(amdStatus , "MACHINE");
@@ -254,15 +247,13 @@ static void isAnsweringMachine(struct ast_channel *chan, void *data)
 				   number of words if my previous state was Silence, which means that I moved into a word. */
 				if (consecutiveVoiceDuration >= minimumWordLength && currentState == STATE_IN_SILENCE) {
 					iWordsCount++;
-					if (option_verbose > 2)
-						ast_verbose(VERBOSE_PREFIX_3 "AMD: Word detected. iWordsCount:%d\n", iWordsCount);
+					ast_verb(3, "AMD: Word detected. iWordsCount:%d\n", iWordsCount);
 					previousState = currentState;
 					currentState = STATE_IN_WORD;
 				}
 				
 				if (iWordsCount >= maximumNumberOfWords) {
-					if (option_verbose > 2)
-						ast_verbose(VERBOSE_PREFIX_3 "AMD: ANSWERING MACHINE: iWordsCount:%d\n", iWordsCount);
+					ast_verb(3, "AMD: ANSWERING MACHINE: iWordsCount:%d\n", iWordsCount);
 					ast_frfree(f);
 					strcpy(amdStatus , "MACHINE");
 					sprintf(amdCause , "MAXWORDS-%d-%d", iWordsCount, maximumNumberOfWords);
@@ -317,16 +308,18 @@ static int amd_exec(struct ast_channel *chan, void *data)
 	return 0;
 }
 
-static void load_config(void)
+static void load_config(int reload)
 {
 	struct ast_config *cfg = NULL;
 	char *cat = NULL;
 	struct ast_variable *var = NULL;
+	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
 
-	if (!(cfg = ast_config_load("amd.conf"))) {
+	if (!(cfg = ast_config_load("amd.conf", config_flags))) {
 		ast_log(LOG_ERROR, "Configuration file amd.conf missing.\n");
 		return;
-	}
+	} else if (cfg == CONFIG_STATUS_FILEUNCHANGED)
+		return;
 
 	cat = ast_category_browse(cfg, NULL);
 
@@ -377,13 +370,13 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	load_config();
+	load_config(0);
 	return ast_register_application(app, amd_exec, synopsis, descrip);
 }
 
 static int reload(void)
 {
-	load_config();
+	load_config(1);
 	return 0;
 }
 

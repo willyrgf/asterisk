@@ -27,26 +27,19 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <sys/types.h>
-#include <sys/socket.h>
 #include <sys/time.h>
-#include <unistd.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdio.h>
+#include <sys/resource.h>
 
 #include "asterisk/lock.h"
 #include "asterisk/channel.h"
-#include "asterisk/logger.h"
 #include "asterisk/translate.h"
 #include "asterisk/module.h"
-#include "asterisk/options.h"
 #include "asterisk/frame.h"
 #include "asterisk/sched.h"
 #include "asterisk/cli.h"
 #include "asterisk/term.h"
 
-#define MAX_RECALC 200 /* max sample recalc */
+#define MAX_RECALC 1000 /* max sample recalc */
 
 /*! \brief the list of translators */
 static AST_RWLIST_HEAD_STATIC(translators, ast_translator);
@@ -370,7 +363,8 @@ static void calc_cost(struct ast_translator *t, int seconds)
 {
 	int sofar=0;
 	struct ast_trans_pvt *pvt;
-	struct timeval start;
+	struct rusage start;
+	struct rusage end;
 	int cost;
 
 	if (!seconds)
@@ -379,23 +373,23 @@ static void calc_cost(struct ast_translator *t, int seconds)
 	/* If they don't make samples, give them a terrible score */
 	if (!t->sample) {
 		ast_log(LOG_WARNING, "Translator '%s' does not produce sample frames.\n", t->name);
-		t->cost = 99999;
+		t->cost = 999999;
 		return;
 	}
 	pvt = newpvt(t);
 	if (!pvt) {
 		ast_log(LOG_WARNING, "Translator '%s' appears to be broken and will probably fail.\n", t->name);
-		t->cost = 99999;
+		t->cost = 999999;
 		return;
 	}
-	start = ast_tvnow();
+	getrusage(RUSAGE_SELF, &start);
 	/* Call the encoder until we've processed the required number of samples */
 	while (sofar < seconds * 8000) {
 		struct ast_frame *f = t->sample();
 		if (!f) {
 			ast_log(LOG_WARNING, "Translator '%s' failed to produce a sample frame.\n", t->name);
 			destroy(pvt);
-			t->cost = 99999;
+			t->cost = 999999;
 			return;
 		}
 		framein(pvt, f);
@@ -405,7 +399,9 @@ static void calc_cost(struct ast_translator *t, int seconds)
 			ast_frfree(f);
 		}
 	}
-	cost = ast_tvdiff_ms(ast_tvnow(), start);
+	getrusage(RUSAGE_SELF, &end);
+	cost = ((end.ru_utime.tv_sec - start.ru_utime.tv_sec)*1000000) + end.ru_utime.tv_usec - start.ru_utime.tv_usec;
+	cost += ((end.ru_stime.tv_sec - start.ru_stime.tv_sec)*1000000) + end.ru_stime.tv_usec - start.ru_stime.tv_usec;
 	destroy(pvt);
 	t->cost = cost / seconds;
 	if (!t->cost)
@@ -487,40 +483,55 @@ static void rebuild_matrix(int samples)
 	}
 }
 
-static int show_translation(int fd, int argc, char *argv[])
+static char *handle_cli_core_show_translation(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 #define SHOW_TRANS 13
 	int x, y, z;
 	int curlen = 0, longest = 0;
 
-	if (argc > 5)
-		return RESULT_SHOWUSAGE;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "core show translation [recalc]";
+		e->usage =
+			"Usage: core show translation [recalc [<recalc seconds>]]\n"
+			"       Displays known codec translators and the cost associated\n"
+			"       with each conversion.  If the argument 'recalc' is supplied along\n"
+			"       with optional number of seconds to test a new test will be performed\n"
+			"       as the chart is being displayed.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc > 5)
+		return CLI_SHOWUSAGE;
 	
-	if (argv[3] && !strcasecmp(argv[3], "recalc")) {
-		z = argv[4] ? atoi(argv[4]) : 1;
+	if (a->argv[3] && !strcasecmp(a->argv[3], "recalc")) {
+		z = a->argv[4] ? atoi(a->argv[4]) : 1;
 
 		if (z <= 0) {
-			ast_cli(fd, "         C'mon let's be serious here... defaulting to 1.\n");
+			ast_cli(a->fd, "         Recalc must be greater than 0.  Defaulting to 1.\n");
 			z = 1;
 		}
 
 		if (z > MAX_RECALC) {
-			ast_cli(fd, "         Maximum limit of recalc exceeded by %d, truncating value to %d\n", z - MAX_RECALC, MAX_RECALC);
+			ast_cli(a->fd, "         Maximum limit of recalc exceeded by %d, truncating value to %d\n", z - MAX_RECALC, MAX_RECALC);
 			z = MAX_RECALC;
 		}
-		ast_cli(fd, "         Recalculating Codec Translation (number of sample seconds: %d)\n\n", z);
+		ast_cli(a->fd, "         Recalculating Codec Translation (number of sample seconds: %d)\n\n", z);
 		AST_RWLIST_WRLOCK(&translators);
 		rebuild_matrix(z);
 		AST_RWLIST_UNLOCK(&translators);
-	}
+	} else if (a->argc > 3)
+		return CLI_SHOWUSAGE;
 
 	AST_RWLIST_RDLOCK(&translators);
 
-	ast_cli(fd, "         Translation times between formats (in milliseconds) for one second of data\n");
-	ast_cli(fd, "          Source Format (Rows) Destination Format (Columns)\n\n");
+	ast_cli(a->fd, "         Translation times between formats (in microseconds) for one second of data\n");
+	ast_cli(a->fd, "          Source Format (Rows) Destination Format (Columns)\n\n");
 	/* Get the length of the longest (usable?) codec name, so we know how wide the left side should be */
 	for (x = 0; x < SHOW_TRANS; x++) {
-		curlen = strlen(ast_getformatname(1 << (x + 1)));
+		curlen = strlen(ast_getformatname(1 << (x)));
 		if (curlen > longest)
 			longest = curlen;
 	}
@@ -529,19 +540,21 @@ static int show_translation(int fd, int argc, char *argv[])
 		
 		ast_str_set(&out, -1, " ");
 		for (y = -1; y < SHOW_TRANS; y++) {
-			curlen = strlen(ast_getformatname(1 << (y)));
-
+			if (y >= 0)
+				curlen = strlen(ast_getformatname(1 << (y)));
+			if (curlen < 5)
+				curlen = 5;
 			if (x >= 0 && y >= 0 && tr_matrix[x][y].step) {
-				/* XXX 999 is a little hackish
+				/* XXX 99999 is a little hackish
 				   We don't want this number being larger than the shortest (or current) codec
 				   For now, that is "gsm" */
-				ast_str_append(&out, -1, "%*d", curlen + 1, tr_matrix[x][y].cost > 999 ? 0 : tr_matrix[x][y].cost);
+				ast_str_append(&out, -1, "%*d", curlen + 1, tr_matrix[x][y].cost > 99999 ? 0 : tr_matrix[x][y].cost);
 			} else if (x == -1 && y >= 0) {
 				/* Top row - use a dynamic size */
-				ast_str_append(&out, -1, "%*s", curlen + 1, ast_getformatname(1 << (x + y + 1)) );
+				ast_str_append(&out, -1, "%*s", curlen + 1, ast_getformatname(1 << (y)) );
 			} else if (y == -1 && x >= 0) {
 				/* Left column - use a static size. */
-				ast_str_append(&out, -1, "%*s", longest, ast_getformatname(1 << (x + y + 1)) );
+				ast_str_append(&out, -1, "%*s", longest, ast_getformatname(1 << (x)) );
 			} else if (x >= 0 && y >= 0) {
 				ast_str_append(&out, -1, "%*s", curlen + 1, "-");
 			} else {
@@ -549,23 +562,14 @@ static int show_translation(int fd, int argc, char *argv[])
 			}
 		}
 		ast_str_append(&out, -1, "\n");
-		ast_cli(fd, out->str);			
+		ast_cli(a->fd, out->str);			
 	}
 	AST_RWLIST_UNLOCK(&translators);
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 
-static const char show_trans_usage[] =
-"Usage: core show translation [recalc] [<recalc seconds>]\n"
-"       Displays known codec translators and the cost associated\n"
-"with each conversion.  If the argument 'recalc' is supplied along\n"
-"with optional number of seconds to test a new test will be performed\n"
-"as the chart is being displayed.\n";
-
 static struct ast_cli_entry cli_translate[] = {
-	{ { "core", "show", "translation", NULL },
-	show_translation, "Display translation matrix",
-	show_trans_usage, NULL, NULL },
+	AST_CLI_DEFINE(handle_cli_core_show_translation, "Display translation matrix")
 };
 
 /*! \brief register codec translator */
@@ -644,7 +648,7 @@ int __ast_register_translator(struct ast_translator *t, struct ast_module *mod)
 		if ((u->srcfmt == t->srcfmt) &&
 		    (u->dstfmt == t->dstfmt) &&
 		    (u->cost > t->cost)) {
-			AST_RWLIST_INSERT_BEFORE_CURRENT(&translators, t, list);
+			AST_RWLIST_INSERT_BEFORE_CURRENT(t, list);
 			t = NULL;
 		}
 	}
@@ -672,7 +676,7 @@ int ast_unregister_translator(struct ast_translator *t)
 	AST_RWLIST_WRLOCK(&translators);
 	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&translators, u, list) {
 		if (u == t) {
-			AST_RWLIST_REMOVE_CURRENT(&translators, list);
+			AST_RWLIST_REMOVE_CURRENT(list);
 			ast_verb(2, "Unregistered translator '%s' from format %s to %s\n", term_color(tmp, t->name, COLOR_MAGENTA, COLOR_BLACK, sizeof(tmp)), ast_getformatname(1 << t->srcfmt), ast_getformatname(1 << t->dstfmt));
 			found = 1;
 			break;
@@ -796,7 +800,7 @@ unsigned int ast_translate_available_formats(unsigned int dest, unsigned int src
 	   known audio formats to determine whether there exists
 	   a translation path from the source format to the
 	   destination format. */
-	for (x = 1; src_audio && x < AST_FORMAT_MAX_AUDIO; x <<= 1) {
+	for (x = 1; src_audio && (x & AST_FORMAT_AUDIO_MASK); x <<= 1) {
 		/* if this is not a desired format, nothing to do */
 		if (!dest & x)
 			continue;
@@ -822,7 +826,7 @@ unsigned int ast_translate_available_formats(unsigned int dest, unsigned int src
 	   known video formats to determine whether there exists
 	   a translation path from the source format to the
 	   destination format. */
-	for (; src_video && x < AST_FORMAT_MAX_VIDEO; x <<= 1) {
+	for (; src_video && (x & AST_FORMAT_VIDEO_MASK); x <<= 1) {
 		/* if this is not a desired format, nothing to do */
 		if (!dest & x)
 			continue;

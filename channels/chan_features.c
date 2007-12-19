@@ -34,26 +34,14 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
-#include <sys/socket.h>
-#include <errno.h>
-#include <stdlib.h>
 #include <fcntl.h>
-#include <netdb.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
 #include <sys/signal.h>
 
 #include "asterisk/lock.h"
 #include "asterisk/channel.h"
 #include "asterisk/config.h"
-#include "asterisk/logger.h"
 #include "asterisk/module.h"
 #include "asterisk/pbx.h"
-#include "asterisk/options.h"
-#include "asterisk/lock.h"
 #include "asterisk/sched.h"
 #include "asterisk/io.h"
 #include "asterisk/rtp.h"
@@ -509,36 +497,41 @@ static struct ast_channel *features_request(const char *type, int format, void *
 	return chan;
 }
 
-static int features_show(int fd, int argc, char **argv)
+static char *features_show(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	struct feature_pvt *p;
 
-	if (argc != 3)
-		return RESULT_SHOWUSAGE;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "feature show channels";
+		e->usage =
+			"Usage: feature show channels\n"
+			"       Provides summary information on feature channels.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc != 3)
+		return CLI_SHOWUSAGE;
 
 	if (AST_LIST_EMPTY(&features)) {
-		ast_cli(fd, "No feature channels in use\n");
-		return RESULT_SUCCESS;
+		ast_cli(a->fd, "No feature channels in use\n");
+		return CLI_SUCCESS;
 	}
 
 	AST_LIST_LOCK(&features);
 	AST_LIST_TRAVERSE(&features, p, list) {
 		ast_mutex_lock(&p->lock);
-		ast_cli(fd, "%s -- %s/%s\n", p->owner ? p->owner->name : "<unowned>", p->tech, p->dest);
+		ast_cli(a->fd, "%s -- %s/%s\n", p->owner ? p->owner->name : "<unowned>", p->tech, p->dest);
 		ast_mutex_unlock(&p->lock);
 	}
 	AST_LIST_UNLOCK(&features);
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 
-static const char show_features_usage[] = 
-"Usage: feature show channels\n"
-"       Provides summary information on feature channels.\n";
-
 static struct ast_cli_entry cli_features[] = {
-	{ { "feature", "show", "channels", NULL },
-	features_show, "List status of feature channels",
-	show_features_usage },
+	AST_CLI_DEFINE(features_show, "List status of feature channels"),
 };
 
 static int load_module(void)
@@ -546,10 +539,10 @@ static int load_module(void)
 	/* Make sure we can register our sip channel type */
 	if (ast_channel_register(&features_tech)) {
 		ast_log(LOG_ERROR, "Unable to register channel class 'Feature'\n");
-		return -1;
+		return AST_MODULE_LOAD_FAILURE;
 	}
 	ast_cli_register_multiple(cli_features, sizeof(cli_features) / sizeof(struct ast_cli_entry));
-	return 0;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 static int unload_module(void)
@@ -563,13 +556,11 @@ static int unload_module(void)
 	if (!AST_LIST_LOCK(&features))
 		return -1;
 	/* Hangup all interfaces if they have an owner */
-	AST_LIST_TRAVERSE_SAFE_BEGIN(&features, p, list) {
+	while ((p = AST_LIST_REMOVE_HEAD(&features, list))) {
 		if (p->owner)
 			ast_softhangup(p->owner, AST_SOFTHANGUP_APPUNLOAD);
-		AST_LIST_REMOVE_CURRENT(&features, list);
 		ast_free(p);
 	}
-	AST_LIST_TRAVERSE_SAFE_END
 	AST_LIST_UNLOCK(&features);
 	
 	return 0;

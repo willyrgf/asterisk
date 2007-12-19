@@ -5,7 +5,7 @@
 ; inbound and outbound calls in Asterisk. 
 ; 
 ; This configuration file is reloaded 
-; - With the "extensions reload" command in the CLI
+; - With the "dialplan reload" command in the CLI
 ; - With the "reload" command (that reloads everything) in the CLI
 
 ;
@@ -22,7 +22,7 @@
 static=yes
 ;
 ; if static=yes and writeprotect=no, you can save dialplan by
-; CLI command 'save dialplan' too
+; CLI command "dialplan save" too
 ;
 writeprotect=no
 ;
@@ -36,6 +36,39 @@ writeprotect=no
 ;
 ;autofallthrough=no
 ;
+;
+;
+; If extenpatternmatchnew is set (true, yes, etc), then a new algorithm that uses
+; a Trie to find the best matching pattern is used. In dialplans
+; with more than about 20-40 extensions in a single context, this
+; new algorithm can provide a noticeable speedup. 
+; With 50 extensions, the speedup is 1.32x
+; with 88 extensions, the speedup is 2.23x
+; with 138 extensions, the speedup is 3.44x
+; with 238 extensions, the speedup is 5.8x
+; with 438 extensions, the speedup is 10.4x
+; With 1000 extensions, the speedup is ~25x
+; with 10,000 extensions, the speedup is 374x
+; Basically, the new algorithm provides a flat response 
+; time, no matter the number of extensions.
+;
+; By default, the old pattern matcher is used. 
+;
+; ****This is a new feature! *********************
+; The new pattern matcher is for the brave, the bold, and 
+; the desperate. If you have large dialplans (more than about 50 extensions
+; in a context), and/or high call volume, you might consider setting 
+; this value to "yes" !!
+; Please, if you try this out, and are forced to return to the
+; old pattern matcher, please report your reasons in a bug report
+; on bugs.digium.com. We have made good progress in providing something
+; compatible with the old matcher; help us finish the job!
+;
+; This value can be switched at runtime using the cli command "dialplan set extenpatternmatchnew true"
+; or "dialplan set extenpatternmatchnew false", so you can experiment to your hearts content.
+;
+;extenpatternmatchnew=no
+;
 ; If clearglobalvars is set, global variables will be cleared 
 ; and reparsed on an extensions reload, or Asterisk reload.
 ;
@@ -45,10 +78,10 @@ writeprotect=no
 ;
 ; NOTE: A complication sets in, if you put your global variables into
 ; the AEL file, instead of the extensions.conf file. With clearglobalvars
-; set, a 'reload' will often leave the globals vars cleared, because it
+; set, a "reload" will often leave the globals vars cleared, because it
 ; is not unusual to have extensions.conf (which will have no globals)
 ; load after the extensions.ael file (where the global vars are stored).
-; So, with 'reload' in this particular situation, first the AEL file will
+; So, with "reload" in this particular situation, first the AEL file will
 ; clear and then set all the global vars, then, later, when the extensions.conf
 ; file is loaded, the global vars are all cleared, and then not set, because
 ; they are not stored in the extensions.conf file.
@@ -534,7 +567,7 @@ include => demo
 ; room to overlap extensions and menu options without conflict.  You can alias
 ; them with names, too, and use global variables
 
-;exten => 6245,hint,SIP/Grandstream1&SIP/Xlite1,Joe Schmoe ; Channel hints for presence
+;exten => 6245,hint,SIP/Grandstream1&SIP/Xlite1(Joe Schmoe) ; Channel hints for presence
 ;exten => 6245,1,Dial(SIP/Grandstream1,20,rt)	; permit transfer
 ;exten => 6245,n(dial),Dial(${HINT},20,rtT)	; Use hint as listed
 ;exten => 6245,n,Voicemail(6245,u)		; Voicemail (unavailable)
@@ -574,8 +607,8 @@ include => demo
 ; For more information on applications, just type "core show applications" at your
 ; friendly Asterisk CLI prompt.
 ;
-; 'core show application <command>' will show details of how you
+; "core show application <command>" will show details of how you
 ; use that particular application in this file, the dial plan. 
-; 'core show functions" will list all dialplan functions
-; 'core show function <COMMAND>' will show you more information about
+; "core show functions" will list all dialplan functions
+; "core show function <COMMAND>" will show you more information about
 ; one function. Remember that function names are UPPER CASE.

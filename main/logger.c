@@ -25,19 +25,22 @@
  * \author Mark Spencer <markster@digium.com>
  */
 
+/*
+ * define _ASTERISK_LOGGER_H to prevent the inclusion of logger.h;
+ * it redefines LOG_* which we need to define syslog_level_map.
+ * Later, we force the inclusion of logger.h again.
+ */
+#define _ASTERISK_LOGGER_H
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
+#include "asterisk/_private.h"
+#include "asterisk/paths.h"	/* use ast_config_AST_LOG_DIR */
 #include <signal.h>
-#include <stdarg.h>
-#include <stdio.h>
-#include <unistd.h>
 #include <time.h>
-#include <string.h>
-#include <stdlib.h>
-#include <errno.h>
 #include <sys/stat.h>
+#include <fcntl.h>
 #if ((defined(AST_DEVMODE)) && (defined(linux)))
 #include <execinfo.h>
 #define MAX_BACKTRACE_FRAMES 20
@@ -59,9 +62,9 @@ static int syslog_level_map[] = {
 
 #define SYSLOG_NLEVELS sizeof(syslog_level_map) / sizeof(int)
 
+#undef _ASTERISK_LOGGER_H	/* now include logger.h */
 #include "asterisk/logger.h"
 #include "asterisk/lock.h"
-#include "asterisk/options.h"
 #include "asterisk/channel.h"
 #include "asterisk/config.h"
 #include "asterisk/term.h"
@@ -70,6 +73,7 @@ static int syslog_level_map[] = {
 #include "asterisk/manager.h"
 #include "asterisk/threadstorage.h"
 #include "asterisk/strings.h"
+#include "asterisk/pbx.h"
 
 #if defined(__linux__) && !defined(__NR_gettid)
 #include <asm/unistd.h>
@@ -84,10 +88,16 @@ static int syslog_level_map[] = {
 static char dateformat[256] = "%b %e %T";		/* Original Asterisk Format */
 
 static char queue_log_name[256] = QUEUELOG;
+static char exec_after_rotate[256] = "";
 
 static int filesize_reload_needed;
 static int global_logmask = -1;
-static int rotatetimestamp;
+
+enum rotatestrategy {
+	SEQUENTIAL = 1 << 0,     /* Original method - create a new file, in order */
+	ROTATE = 1 << 1,         /* Rotate all files, such that the oldest file has the highest suffix */
+	TIMESTAMP = 1 << 2,      /* Append the epoch timestamp onto the end of the archived file */
+} rotatestrategy = SEQUENTIAL;
 
 static struct {
 	unsigned int queue_log:1;
@@ -138,6 +148,7 @@ static int close_logger_thread;
 static FILE *eventlog;
 static FILE *qlog;
 
+/*! \brief Logging channels used in the Asterisk logging system */
 static char *levels[] = {
 	"DEBUG",
 	"EVENT",
@@ -148,6 +159,7 @@ static char *levels[] = {
 	"DTMF"
 };
 
+/*! \brief Colors used in the console for logging */
 static int colors[] = {
 	COLOR_BRGREEN,
 	COLOR_BRBLUE,
@@ -164,11 +176,11 @@ AST_THREADSTORAGE(verbose_buf);
 AST_THREADSTORAGE(log_buf);
 #define LOG_BUF_INIT_SIZE       256
 
-static int make_components(char *s, int lineno)
+static int make_components(const char *s, int lineno)
 {
 	char *w;
 	int res = 0;
-	char *stringp = s;
+	char *stringp = ast_strdupa(s);
 
 	while ((w = strsep(&stringp, ","))) {
 		w = ast_skip_blanks(w);
@@ -194,7 +206,7 @@ static int make_components(char *s, int lineno)
 	return res;
 }
 
-static struct logchannel *make_logchannel(char *channel, char *components, int lineno)
+static struct logchannel *make_logchannel(const char *channel, const char *components, int lineno)
 {
 	struct logchannel *chan;
 	char *facility;
@@ -273,7 +285,7 @@ static struct logchannel *make_logchannel(char *channel, char *components, int l
 
 		if (0 > chan->facility) {
 			fprintf(stderr, "Logger Warning: bad syslog facility in logger.conf\n");
-			free(chan);
+			ast_free(chan);
 			return NULL;
 		}
 
@@ -305,25 +317,29 @@ static struct logchannel *make_logchannel(char *channel, char *components, int l
 	return chan;
 }
 
-static void init_logger_chain(void)
+static void init_logger_chain(int reload, int locked)
 {
 	struct logchannel *chan;
 	struct ast_config *cfg;
 	struct ast_variable *var;
 	const char *s;
+	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
+
+	if ((cfg = ast_config_load("logger.conf", config_flags)) == CONFIG_STATUS_FILEUNCHANGED)
+		return;
 
 	/* delete our list of log channels */
-	AST_RWLIST_WRLOCK(&logchannels);
+	if (!locked)
+		AST_RWLIST_WRLOCK(&logchannels);
 	while ((chan = AST_RWLIST_REMOVE_HEAD(&logchannels, list)))
-		free(chan);
-	AST_RWLIST_UNLOCK(&logchannels);
+		ast_free(chan);
+	if (!locked)
+		AST_RWLIST_UNLOCK(&logchannels);
 	
 	global_logmask = 0;
 	errno = 0;
 	/* close syslog */
 	closelog();
-	
-	cfg = ast_config_load("logger.conf");
 	
 	/* If no config file, we're fine, set default options. */
 	if (!cfg) {
@@ -335,9 +351,11 @@ static void init_logger_chain(void)
 			return;
 		chan->type = LOGTYPE_CONSOLE;
 		chan->logmask = 28; /*warning,notice,error */
-		AST_RWLIST_WRLOCK(&logchannels);
+		if (!locked)
+			AST_RWLIST_WRLOCK(&logchannels);
 		AST_RWLIST_INSERT_HEAD(&logchannels, chan, list);
-		AST_RWLIST_UNLOCK(&logchannels);
+		if (!locked)
+			AST_RWLIST_UNLOCK(&logchannels);
 		global_logmask |= chan->logmask;
 		return;
 	}
@@ -346,7 +364,7 @@ static void init_logger_chain(void)
 		if (ast_true(s)) {
 			if (gethostname(hostname, sizeof(hostname) - 1)) {
 				ast_copy_string(hostname, "unknown", sizeof(hostname));
-				ast_log(LOG_WARNING, "What box has no hostname???\n");
+				fprintf(stderr, "What box has no hostname???\n");
 			}
 		} else
 			hostname[0] = '\0';
@@ -362,10 +380,26 @@ static void init_logger_chain(void)
 		logfiles.event_log = ast_true(s);
 	if ((s = ast_variable_retrieve(cfg, "general", "queue_log_name")))
 		ast_copy_string(queue_log_name, s, sizeof(queue_log_name));
-	if ((s = ast_variable_retrieve(cfg, "general", "rotatetimestamp")))
-		rotatetimestamp = ast_true(s);
+	if ((s = ast_variable_retrieve(cfg, "general", "exec_after_rotate")))
+		ast_copy_string(exec_after_rotate, s, sizeof(exec_after_rotate));
+	if ((s = ast_variable_retrieve(cfg, "general", "rotatestrategy"))) {
+		if (strcasecmp(s, "timestamp") == 0)
+			rotatestrategy = TIMESTAMP;
+		else if (strcasecmp(s, "rotate") == 0)
+			rotatestrategy = ROTATE;
+		else if (strcasecmp(s, "sequential") == 0)
+			rotatestrategy = SEQUENTIAL;
+		else
+			fprintf(stderr, "Unknown rotatestrategy: %s\n", s);
+	} else {
+		if ((s = ast_variable_retrieve(cfg, "general", "rotatetimestamp"))) {
+			rotatestrategy = ast_true(s) ? TIMESTAMP : SEQUENTIAL;
+			fprintf(stderr, "rotatetimestamp option has been deprecated.  Please use rotatestrategy instead.\n");
+		}
+	}
 
-	AST_RWLIST_WRLOCK(&logchannels);
+	if (!locked)
+		AST_RWLIST_WRLOCK(&logchannels);
 	var = ast_variable_browse(cfg, "logfiles");
 	for (; var; var = var->next) {
 		if (!(chan = make_logchannel(var->name, var->value, var->lineno)))
@@ -373,7 +407,8 @@ static void init_logger_chain(void)
 		AST_RWLIST_INSERT_HEAD(&logchannels, chan, list);
 		global_logmask |= chan->logmask;
 	}
-	AST_RWLIST_UNLOCK(&logchannels);
+	if (!locked)
+		AST_RWLIST_UNLOCK(&logchannels);
 
 	ast_config_destroy(cfg);
 }
@@ -397,26 +432,130 @@ void ast_queue_log(const char *queuename, const char *callid, const char *agent,
 	AST_RWLIST_UNLOCK(&logchannels);
 }
 
-int reload_logger(int rotate)
+static int rotate_file(const char *filename)
+{
+	char old[PATH_MAX];
+	char new[PATH_MAX];
+	int x, y, which, found, res = 0, fd;
+	char *suffixes[4] = { "", ".gz", ".bz2", ".Z" };
+
+	switch (rotatestrategy) {
+	case SEQUENTIAL:
+		for (x = 0; ; x++) {
+			snprintf(new, sizeof(new), "%s.%d", filename, x);
+			fd = open(new, O_RDONLY);
+			if (fd > -1)
+				close(fd);
+			else
+				break;
+		}
+		if (rename(filename, new)) {
+			fprintf(stderr, "Unable to rename file '%s' to '%s'\n", filename, new);
+			res = -1;
+		}
+		break;
+	case TIMESTAMP:
+		snprintf(new, sizeof(new), "%s.%ld", filename, (long)time(NULL));
+		if (rename(filename, new)) {
+			fprintf(stderr, "Unable to rename file '%s' to '%s'\n", filename, new);
+			res = -1;
+		}
+		break;
+	case ROTATE:
+		/* Find the next empty slot, including a possible suffix */
+		for (x = 0; ; x++) {
+			found = 0;
+			for (which = 0; which < sizeof(suffixes) / sizeof(suffixes[0]); which++) {
+				snprintf(new, sizeof(new), "%s.%d%s", filename, x, suffixes[which]);
+				fd = open(new, O_RDONLY);
+				if (fd > -1)
+					close(fd);
+				else {
+					found = 1;
+					break;
+				}
+			}
+			if (!found)
+				break;
+		}
+
+		/* Found an empty slot */
+		for (y = x; y > -1; y--) {
+			for (which = 0; which < sizeof(suffixes) / sizeof(suffixes[0]); which++) {
+				snprintf(old, sizeof(old), "%s.%d%s", filename, y - 1, suffixes[which]);
+				fd = open(old, O_RDONLY);
+				if (fd > -1) {
+					/* Found the right suffix */
+					close(fd);
+					snprintf(new, sizeof(new), "%s.%d%s", filename, y, suffixes[which]);
+					if (rename(old, new)) {
+						fprintf(stderr, "Unable to rename file '%s' to '%s'\n", old, new);
+						res = -1;
+					}
+					break;
+				}
+			}
+		}
+
+		/* Finally, rename the current file */
+		snprintf(new, sizeof(new), "%s.0", filename);
+		if (rename(filename, new)) {
+			fprintf(stderr, "Unable to rename file '%s' to '%s'\n", filename, new);
+			res = -1;
+		}
+	}
+
+	if (!ast_strlen_zero(exec_after_rotate)) {
+		struct ast_channel *c = ast_channel_alloc(0, 0, "", "", "", "", "", 0, "Logger/rotate");
+		char buf[512];
+		pbx_builtin_setvar_helper(c, "filename", filename);
+		pbx_substitute_variables_helper(c, exec_after_rotate, buf, sizeof(buf));
+		system(buf);
+		ast_channel_free(c);
+	}
+	return res;
+}
+
+static int reload_logger(int rotate)
 {
 	char old[PATH_MAX] = "";
-	char new[PATH_MAX];
 	int event_rotate = rotate, queue_rotate = rotate;
 	struct logchannel *f;
-	FILE *myf;
-	int x, res = 0;
+	int res = 0;
+	struct stat st;
 
 	AST_RWLIST_WRLOCK(&logchannels);
 
-	if (eventlog) 
-		fclose(eventlog);
-	else 
+	if (eventlog) {
+		if (rotate < 0) {
+			/* Check filesize - this one typically doesn't need an auto-rotate */
+			snprintf(old, sizeof(old), "%s/%s", ast_config_AST_LOG_DIR, EVENTLOG);
+			if (stat(old, &st) != 0 || st.st_size > 0x40000000) { /* Arbitrarily, 1 GB */
+				fclose(eventlog);
+				eventlog = NULL;
+			} else
+				event_rotate = 0;
+		} else {
+			fclose(eventlog);
+			eventlog = NULL;
+		}
+	} else
 		event_rotate = 0;
-	eventlog = NULL;
 
-	if (qlog) 
-		fclose(qlog);
-	else 
+	if (qlog) {
+		if (rotate < 0) {
+			/* Check filesize - this one typically doesn't need an auto-rotate */
+			snprintf(old, sizeof(old), "%s/%s", ast_config_AST_LOG_DIR, queue_log_name);
+			if (stat(old, &st) != 0 || st.st_size > 0x40000000) { /* Arbitrarily, 1 GB */
+				fclose(qlog);
+				qlog = NULL;
+			} else
+				event_rotate = 0;
+		} else {
+			fclose(qlog);
+			qlog = NULL;
+		}
+	} else 
 		queue_rotate = 0;
 	qlog = NULL;
 
@@ -430,57 +569,24 @@ int reload_logger(int rotate)
 		if (f->fileptr && (f->fileptr != stdout) && (f->fileptr != stderr)) {
 			fclose(f->fileptr);	/* Close file */
 			f->fileptr = NULL;
-			if (rotate) {
-				ast_copy_string(old, f->filename, sizeof(old));
-				
-				if (!rotatetimestamp) { 
-					for (x = 0; ; x++) {
-						snprintf(new, sizeof(new), "%s.%d", f->filename, x);
-						myf = fopen(new, "r");
-						if (myf)
-							fclose(myf);
-						else
-							break;
-					}
-				} else 
-					snprintf(new, sizeof(new), "%s.%ld", f->filename, (long)time(NULL));
-
-				/* do it */
-				if (rename(old,new))
-					fprintf(stderr, "Unable to rename file '%s' to '%s'\n", old, new);
-			}
+			if (rotate)
+				rotate_file(f->filename);
 		}
 	}
 
 	filesize_reload_needed = 0;
-	
-	init_logger_chain();
+
+	init_logger_chain(rotate ? 0 : 1 /* reload */, 1 /* locked */);
 
 	if (logfiles.event_log) {
 		snprintf(old, sizeof(old), "%s/%s", ast_config_AST_LOG_DIR, EVENTLOG);
-		if (event_rotate) {
-			if (!rotatetimestamp) { 
-				for (x=0;;x++) {
-					snprintf(new, sizeof(new), "%s/%s.%d", ast_config_AST_LOG_DIR, EVENTLOG,x);
-					myf = fopen(new, "r");
-					if (myf) 	/* File exists */
-						fclose(myf);
-					else
-						break;
-				}
-			} else 
-				snprintf(new, sizeof(new), "%s/%s.%ld", ast_config_AST_LOG_DIR, EVENTLOG,(long)time(NULL));
-	
-			/* do it */
-			if (rename(old,new))
-				ast_log(LOG_ERROR, "Unable to rename file '%s' to '%s'\n", old, new);
-		}
+		if (event_rotate)
+			rotate_file(old);
 
 		eventlog = fopen(old, "a");
 		if (eventlog) {
 			ast_log(LOG_EVENT, "Restarted Asterisk Event Logger\n");
-			if (option_verbose)
-				ast_verbose("Asterisk Event Logger restarted\n");
+			ast_verb(1, "Asterisk Event Logger restarted\n");
 		} else {
 			ast_log(LOG_ERROR, "Unable to create event log: %s\n", strerror(errno));
 			res = -1;
@@ -489,30 +595,16 @@ int reload_logger(int rotate)
 
 	if (logfiles.queue_log) {
 		snprintf(old, sizeof(old), "%s/%s", ast_config_AST_LOG_DIR, queue_log_name);
-		if (queue_rotate) {
-			if (!rotatetimestamp) { 
-				for (x = 0; ; x++) {
-					snprintf(new, sizeof(new), "%s/%s.%d", ast_config_AST_LOG_DIR, queue_log_name, x);
-					myf = fopen(new, "r");
-					if (myf) 	/* File exists */
-						fclose(myf);
-					else
-						break;
-				}
-	
-			} else 
-				snprintf(new, sizeof(new), "%s/%s.%ld", ast_config_AST_LOG_DIR, queue_log_name,(long)time(NULL));
-			/* do it */
-			if (rename(old, new))
-				ast_log(LOG_ERROR, "Unable to rename file '%s' to '%s'\n", old, new);
-		}
+		if (queue_rotate)
+			rotate_file(old);
 
 		qlog = fopen(old, "a");
 		if (qlog) {
+			AST_RWLIST_UNLOCK(&logchannels);
 			ast_queue_log("NONE", "NONE", "NONE", "CONFIGRELOAD", "%s", "");
+			AST_RWLIST_WRLOCK(&logchannels);
 			ast_log(LOG_EVENT, "Restarted Asterisk Queue Logger\n");
-			if (option_verbose)
-				ast_verbose("Asterisk Queue Logger restarted\n");
+			ast_verb(1, "Asterisk Queue Logger restarted\n");
 		} else {
 			ast_log(LOG_ERROR, "Unable to create queue log: %s\n", strerror(errno));
 			res = -1;
@@ -524,59 +616,97 @@ int reload_logger(int rotate)
 	return res;
 }
 
-static int handle_logger_reload(int fd, int argc, char *argv[])
+/*! \brief Reload the logger module without rotating log files (also used from loader.c during
+	a full Asterisk reload) */
+int logger_reload(void)
 {
-	if (reload_logger(0)) {
-		ast_cli(fd, "Failed to reload the logger\n");
+	if(reload_logger(0))
 		return RESULT_FAILURE;
-	} else
-		return RESULT_SUCCESS;
+	return RESULT_SUCCESS;
 }
 
-static int handle_logger_rotate(int fd, int argc, char *argv[])
+static char *handle_logger_reload(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "logger reload";
+		e->usage = 
+			"Usage: logger reload\n"
+			"       Reloads the logger subsystem state.  Use after restarting syslogd(8) if you are using syslog logging.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+	if (reload_logger(0)) {
+		ast_cli(a->fd, "Failed to reload the logger\n");
+		return CLI_FAILURE;
+	}
+	return CLI_SUCCESS;
+}
+
+static char *handle_logger_rotate(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "logger rotate";
+		e->usage = 
+			"Usage: logger rotate\n"
+			"       Rotates and Reopens the log files.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;	
+	}
 	if (reload_logger(1)) {
-		ast_cli(fd, "Failed to reload the logger and rotate log files\n");
-		return RESULT_FAILURE;
-	} else
-		return RESULT_SUCCESS;
+		ast_cli(a->fd, "Failed to reload the logger and rotate log files\n");
+		return CLI_FAILURE;
+	} 
+	return CLI_SUCCESS;
 }
 
 /*! \brief CLI command to show logging system configuration */
-static int handle_logger_show_channels(int fd, int argc, char *argv[])
+static char *handle_logger_show_channels(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 #define FORMATL	"%-35.35s %-8.8s %-9.9s "
 	struct logchannel *chan;
-
-	ast_cli(fd,FORMATL, "Channel", "Type", "Status");
-	ast_cli(fd, "Configuration\n");
-	ast_cli(fd,FORMATL, "-------", "----", "------");
-	ast_cli(fd, "-------------\n");
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "logger show channels";
+		e->usage = 
+			"Usage: logger show channels\n"
+			"       List configured logger channels.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;	
+	}
+	ast_cli(a->fd,FORMATL, "Channel", "Type", "Status");
+	ast_cli(a->fd, "Configuration\n");
+	ast_cli(a->fd,FORMATL, "-------", "----", "------");
+	ast_cli(a->fd, "-------------\n");
 	AST_RWLIST_RDLOCK(&logchannels);
 	AST_RWLIST_TRAVERSE(&logchannels, chan, list) {
-		ast_cli(fd, FORMATL, chan->filename, chan->type==LOGTYPE_CONSOLE ? "Console" : (chan->type==LOGTYPE_SYSLOG ? "Syslog" : "File"),
+		ast_cli(a->fd, FORMATL, chan->filename, chan->type==LOGTYPE_CONSOLE ? "Console" : (chan->type==LOGTYPE_SYSLOG ? "Syslog" : "File"),
 			chan->disabled ? "Disabled" : "Enabled");
-		ast_cli(fd, " - ");
+		ast_cli(a->fd, " - ");
 		if (chan->logmask & (1 << __LOG_DEBUG)) 
-			ast_cli(fd, "Debug ");
+			ast_cli(a->fd, "Debug ");
 		if (chan->logmask & (1 << __LOG_DTMF)) 
-			ast_cli(fd, "DTMF ");
+			ast_cli(a->fd, "DTMF ");
 		if (chan->logmask & (1 << __LOG_VERBOSE)) 
-			ast_cli(fd, "Verbose ");
+			ast_cli(a->fd, "Verbose ");
 		if (chan->logmask & (1 << __LOG_WARNING)) 
-			ast_cli(fd, "Warning ");
+			ast_cli(a->fd, "Warning ");
 		if (chan->logmask & (1 << __LOG_NOTICE)) 
-			ast_cli(fd, "Notice ");
+			ast_cli(a->fd, "Notice ");
 		if (chan->logmask & (1 << __LOG_ERROR)) 
-			ast_cli(fd, "Error ");
+			ast_cli(a->fd, "Error ");
 		if (chan->logmask & (1 << __LOG_EVENT)) 
-			ast_cli(fd, "Event ");
-		ast_cli(fd, "\n");
+			ast_cli(a->fd, "Event ");
+		ast_cli(a->fd, "\n");
 	}
 	AST_RWLIST_UNLOCK(&logchannels);
-	ast_cli(fd, "\n");
+	ast_cli(a->fd, "\n");
  		
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 
 struct verb {
@@ -586,30 +716,10 @@ struct verb {
 
 static AST_RWLIST_HEAD_STATIC(verbosers, verb);
 
-static char logger_reload_help[] =
-"Usage: logger reload\n"
-"       Reloads the logger subsystem state.  Use after restarting syslogd(8) if you are using syslog logging.\n";
-
-static char logger_rotate_help[] =
-"Usage: logger rotate\n"
-"       Rotates and Reopens the log files.\n";
-
-static char logger_show_channels_help[] =
-"Usage: logger show channels\n"
-"       List configured logger channels.\n";
-
 static struct ast_cli_entry cli_logger[] = {
-	{ { "logger", "show", "channels", NULL }, 
-	handle_logger_show_channels, "List configured log channels",
-	logger_show_channels_help },
-
-	{ { "logger", "reload", NULL }, 
-	handle_logger_reload, "Reopens the log files",
-	logger_reload_help },
-
-	{ { "logger", "rotate", NULL }, 
-	handle_logger_rotate, "Rotates and reopens the log files",
-	logger_rotate_help },
+	AST_CLI_DEFINE(handle_logger_show_channels, "List configured log channels"),
+	AST_CLI_DEFINE(handle_logger_reload, "Reopens the log files"),
+	AST_CLI_DEFINE(handle_logger_rotate, "Rotates and reopens the log files")
 };
 
 static int handle_SIGXFSZ(int sig) 
@@ -644,7 +754,7 @@ static void ast_log_vsyslog(int level, const char *file, int line, const char *f
         syslog(syslog_level_map[level], "%s", buf);
 }
 
-/* Print a normal log message to the channels */
+/*! \brief Print a normal log message to the channels */
 static void logger_print_normal(struct logmsg *logmsg)
 {
 	struct logchannel *chan = NULL;
@@ -721,7 +831,7 @@ static void logger_print_normal(struct logmsg *logmsg)
 
 	/* If we need to reload because of the file size, then do so */
 	if (filesize_reload_needed) {
-		reload_logger(1);
+		reload_logger(-1);
 		ast_log(LOG_EVENT, "Rotated Logs Per SIGXFSZ (Exceeded file size limit)\n");
 		if (option_verbose)
 			ast_verbose("Rotated Logs Per SIGXFSZ (Exceeded file size limit)\n");
@@ -730,7 +840,7 @@ static void logger_print_normal(struct logmsg *logmsg)
 	return;
 }
 
-/* Print a verbose message to the verbosers */
+/*! \brief Print a verbose message to the verbosers */
 static void logger_print_verbose(struct logmsg *logmsg)
 {
 	struct verb *v = NULL;
@@ -744,7 +854,7 @@ static void logger_print_verbose(struct logmsg *logmsg)
 	return;
 }
 
-/* Actual logging thread */
+/*! \brief Actual logging thread */
 static void *logger_thread(void *data)
 {
 	struct logmsg *next = NULL, *msg = NULL;
@@ -758,10 +868,6 @@ static void *logger_thread(void *data)
 		AST_LIST_HEAD_INIT_NOLOCK(&logmsgs);
 		AST_LIST_UNLOCK(&logmsgs);
 
-		/* If we should stop, then stop */
-		if (close_logger_thread)
-			break;
-
 		/* Otherwise go through and process each message in the order added */
 		while ((msg = next)) {
 			/* Get the next entry now so that we can free our current structure later */
@@ -774,8 +880,12 @@ static void *logger_thread(void *data)
 				logger_print_verbose(msg);
 
 			/* Free the data since we are done */
-			free(msg);
+			ast_free(msg);
 		}
+
+		/* If we should stop, then stop */
+		if (close_logger_thread)
+			break;
 	}
 
 	return NULL;
@@ -802,7 +912,7 @@ int init_logger(void)
 	ast_mkdir(ast_config_AST_LOG_DIR, 0777);
   
 	/* create log channels */
-	init_logger_chain();
+	init_logger_chain(0 /* reload */, 0 /* locked */);
 
 	/* create the eventlog */
 	if (logfiles.event_log) {
@@ -835,6 +945,9 @@ void close_logger(void)
 	close_logger_thread = 1;
 	ast_cond_signal(&logcond);
 	AST_LIST_UNLOCK(&logmsgs);
+
+	if (logthread != AST_PTHREADT_NULL)
+		pthread_join(logthread, NULL);
 
 	AST_RWLIST_WRLOCK(&logchannels);
 
@@ -945,7 +1058,7 @@ void ast_log(int level, const char *file, int line, const char *function, const 
 		AST_LIST_UNLOCK(&logmsgs);
 	} else {
 		logger_print_normal(logmsg);
-		free(logmsg);
+		ast_free(logmsg);
 	}
 
 	return;
@@ -974,7 +1087,7 @@ void ast_backtrace(void)
 		} else {
 			ast_debug(1, "Could not allocate memory for backtrace\n");
 		}
-		free(addresses);
+		ast_free(addresses);
 	}
 #else
 	ast_log(LOG_WARNING, "Must run configure with '--enable-dev-mode' for stack backtraces.\n");
@@ -1000,7 +1113,7 @@ void ast_verbose(const char *fmt, ...)
                 char date[40];
                 char *datefmt;
 
-				tv = ast_tvnow();
+		tv = ast_tvnow();
                 ast_localtime(&tv, &tm, NULL);
                 ast_strftime(date, sizeof(date), dateformat, &tm);
                 datefmt = alloca(strlen(date) + 3 + strlen(fmt) + 1);
@@ -1035,7 +1148,7 @@ void ast_verbose(const char *fmt, ...)
 		AST_LIST_UNLOCK(&logmsgs);
 	} else {
 		logger_print_verbose(logmsg);
-		free(logmsg);
+		ast_free(logmsg);
 	}
 }
 
@@ -1062,12 +1175,12 @@ int ast_unregister_verbose(void (*v)(const char *string))
 	AST_RWLIST_WRLOCK(&verbosers);
 	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&verbosers, cur, list) {
 		if (cur->verboser == v) {
-			AST_RWLIST_REMOVE_CURRENT(&verbosers, list);
-			free(cur);
+			AST_RWLIST_REMOVE_CURRENT(list);
+			ast_free(cur);
 			break;
 		}
 	}
-	AST_RWLIST_TRAVERSE_SAFE_END
+	AST_RWLIST_TRAVERSE_SAFE_END;
 	AST_RWLIST_UNLOCK(&verbosers);
 	
 	return cur ? 0 : -1;

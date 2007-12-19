@@ -16,10 +16,16 @@
  * at the top of the source tree.
  */
 
+/*! \file
+ *  
+ *      ???????  
+ *	\todo Explain this file!
+ */
+
+
 #ifndef _ASTERISK_EXPR_H
 #define _ASTERISK_EXPR_H
 #ifndef STANDALONE
-#include "asterisk/channel.h"
 #endif
 #if defined(__cplusplus) || defined(c_plusplus)
 extern "C" {

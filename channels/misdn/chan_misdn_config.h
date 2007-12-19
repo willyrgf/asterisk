@@ -11,6 +11,12 @@
  * the GNU General Public License
  */
 
+/*! \file \brief
+ * Interface to mISDN - Config
+ * \author Christian Richter <crich@beronet.com>
+ */
+
+
 
 
 #ifndef CHAN_MISDN_CONFIG_H
@@ -48,6 +54,7 @@ enum misdn_cfg_elements {
 	MISDN_CFG_NODIALTONE,    /* int (bool) */
 	MISDN_CFG_IMMEDIATE,           /* int (bool) */
 	MISDN_CFG_SENDDTMF,           /* int (bool) */
+	MISDN_CFG_ASTDTMF,            /* int (bool) */
 	MISDN_CFG_HOLD_ALLOWED,        /* int (bool) */
 	MISDN_CFG_EARLY_BCONNECT,      /* int (bool) */
 	MISDN_CFG_INCOMING_EARLY_AUDIO,      /* int (bool) */
@@ -96,6 +103,7 @@ enum misdn_cfg_elements {
 	MISDN_GEN_DYNAMIC_CRYPT,       /* int (bool) */
 	MISDN_GEN_CRYPT_PREFIX,        /* char[] */
 	MISDN_GEN_CRYPT_KEYS,          /* char[] */
+	MISDN_GEN_NTKEEPCALLS,          /* int (bool) */
 	MISDN_GEN_NTDEBUGFLAGS,          /* int */
 	MISDN_GEN_NTDEBUGFILE,          /* char[] */
 	MISDN_GEN_LAST
@@ -108,7 +116,7 @@ enum misdn_cfg_method {
 };
 
 /* you must call misdn_cfg_init before any other function of this header file */
-int misdn_cfg_init(int max_ports); 
+int misdn_cfg_init(int max_ports, int reload); 
 void misdn_cfg_reload(void);
 void misdn_cfg_destroy(void);
 

@@ -209,17 +209,10 @@ enum {HF_SCAN_OFF, HF_SCAN_DOWN_SLOW, HF_SCAN_DOWN_QUICK,
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <signal.h>
-#include <stdio.h>
-#include <unistd.h>
-#include <string.h>
-#include <stdlib.h>
 #include <search.h>
-#include <sys/types.h>
 #include <sys/stat.h>
-#include <errno.h>
 #include <dirent.h>
 #include <ctype.h>
-#include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/file.h>
 #include <sys/ioctl.h>
@@ -231,14 +224,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/utils.h"
 #include "asterisk/lock.h"
 #include "asterisk/file.h"
-#include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/callerid.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
 #include "asterisk/translate.h"
 #include "asterisk/features.h"
-#include "asterisk/options.h"
 #include "asterisk/cli.h"
 #include "asterisk/config.h"
 #include "asterisk/say.h"
@@ -295,11 +286,6 @@ static int nrpts = 0;
 char *discstr = "!!DISCONNECT!!";
 static char *remote_rig_ft897 = "ft897";
 static char *remote_rig_rbi = "rbi";
-
-#ifdef	OLD_ASTERISK
-STANDARD_LOCAL_USER;
-#endif
-
 
 #define	MSWAIT 200
 #define	HANGTIME 5000
@@ -699,60 +685,20 @@ static void _rpt_mutex_unlock(ast_mutex_t *lockp, struct rpt *myrpt, int line)
 */
 
 /* Debug mode */
-static int rpt_do_debug(int fd, int argc, char *argv[]);
-static int rpt_do_dump(int fd, int argc, char *argv[]);
-static int rpt_do_stats(int fd, int argc, char *argv[]);
-static int rpt_do_lstats(int fd, int argc, char *argv[]);
-static int rpt_do_reload(int fd, int argc, char *argv[]);
-static int rpt_do_restart(int fd, int argc, char *argv[]);
-
-static char debug_usage[] =
-"Usage: rpt debug level {0-7}\n"
-"       Enables debug messages in app_rpt\n";
-
-static char dump_usage[] =
-"Usage: rpt dump <nodename>\n"
-"       Dumps struct debug info to log\n";
-
-static char dump_stats[] =
-"Usage: rpt stats <nodename>\n"
-"       Dumps node statistics to console\n";
-
-static char dump_lstats[] =
-"Usage: rpt lstats <nodename>\n"
-"       Dumps link statistics to console\n";
-
-static char reload_usage[] =
-"Usage: rpt reload\n"
-"       Reloads app_rpt running config parameters\n";
-
-static char restart_usage[] =
-"Usage: rpt restart\n"
-"       Restarts app_rpt\n";
+static char *handle_cli_rpt_debug_level(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
+static char *handle_cli_rpt_dump(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
+static char *handle_cli_rpt_stats(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
+static char *handle_cli_rpt_lstats(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
+static char *handle_cli_rpt_reload(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
+static char *handle_cli_rpt_restart(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
 
 static struct ast_cli_entry cli_rpt[] = {
-	{ { "rpt", "debug", "level" },
-		rpt_do_debug, "Enable app_rpt debugging",
-		debug_usage },
-
-	{ { "rpt", "dump" },
-		rpt_do_dump, "Dump app_rpt structs for debugging",
-		dump_usage },
-
-	{ { "rpt", "stats" },
-		rpt_do_stats, "Dump node statistics",
-		dump_stats },
-	{ { "rpt", "lstats" },
-		rpt_do_lstats, "Dump link statistics",
-		dump_lstats },
-
-	{ { "rpt", "reload" },
-		rpt_do_reload, "Reload app_rpt config",
-		reload_usage },
-
-	{ { "rpt", "restart" },
-		rpt_do_restart, "Restart app_rpt",
-		restart_usage },
+	AST_CLI_DEFINE(handle_cli_rpt_debug_level, "Enable app_rpt debuggin"),
+	AST_CLI_DEFINE(handle_cli_rpt_dump,        "Dump app_rpt structs for debugging"),
+	AST_CLI_DEFINE(handle_cli_rpt_stats,       "Dump node statistics"),
+	AST_CLI_DEFINE(handle_cli_rpt_lstats,      "Dump link statistics"),
+	AST_CLI_DEFINE(handle_cli_rpt_reload,      "Reload app_rpt config"),
+	AST_CLI_DEFINE(handle_cli_rpt_restart,     "Restart app_rpt")
 };
 
 /*
@@ -918,6 +864,7 @@ static void load_rpt_vars(int n, int init)
 	int	j;
 	struct ast_variable *vp, *var;
 	struct ast_config *cfg;
+	struct ast_flags config_flags = { CONFIG_FLAG_NOCACHE };
 #ifdef	__RPT_NOTCH
 	AST_DECLARE_APP_ARGS(strs,
 		AST_APP_ARG(str)[100];
@@ -929,7 +876,7 @@ static void load_rpt_vars(int n, int init)
 	ast_mutex_lock(&rpt_vars[n].lock);
 	if (rpt_vars[n].cfg)
 		ast_config_destroy(rpt_vars[n].cfg);
-	cfg = ast_config_load("rpt.conf");
+	cfg = ast_config_load("rpt.conf", config_flags);
 	if (!cfg) {
 		ast_mutex_unlock(&rpt_vars[n].lock);
 		ast_log(LOG_NOTICE, "Unable to open radio repeater configuration rpt.conf.  Radio Repeater disabled.\n");
@@ -1129,48 +1076,70 @@ static void load_rpt_vars(int n, int init)
 /*
 * Enable or disable debug output at a given level at the console
 */
-static int rpt_do_debug(int fd, int argc, char *argv[])
+static char *handle_cli_rpt_debug_level(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	int newlevel;
 
-	if (argc != 4)
-		return RESULT_SHOWUSAGE;
-	newlevel = myatoi(argv[3]);
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "rpt debug level";
+		e->usage =
+			"Usage: rpt debug level {0-7}\n"
+			"       Enables debug messages in app_rpt\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+	if (a->argc != 4)
+		return CLI_SHOWUSAGE;
+	newlevel = myatoi(a->argv[3]);
 	if ((newlevel < 0) || (newlevel > 7))
-		return RESULT_SHOWUSAGE;
+		return CLI_SHOWUSAGE;
 	if (newlevel)
-		ast_cli(fd, "app_rpt Debugging enabled, previous level: %d, new level: %d\n", debug, newlevel);
+		ast_cli(a->fd, "app_rpt Debugging enabled, previous level: %d, new level: %d\n", debug, newlevel);
 	else
-		ast_cli(fd, "app_rpt Debugging disabled\n");
+		ast_cli(a->fd, "app_rpt Debugging disabled\n");
 
-	debug = newlevel;                                                                                                                          
-	return RESULT_SUCCESS;
+	debug = newlevel;
+
+	return CLI_SUCCESS;
 }
 
 /*
 * Dump rpt struct debugging onto console
 */
-static int rpt_do_dump(int fd, int argc, char *argv[])
+static char *handle_cli_rpt_dump(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	int i;
 
-	if (argc != 3)
-		return RESULT_SHOWUSAGE;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "rpt dump";
+		e->usage =
+			"Usage: rpt dump <nodename>\n"
+			"       Dumps struct debug info to log\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc != 3)
+		return CLI_SHOWUSAGE;
 
 	for (i = 0; i < nrpts; i++) {
-		if (!strcmp(argv[2], rpt_vars[i].name)) {
+		if (!strcmp(a->argv[2], rpt_vars[i].name)) {
 			rpt_vars[i].disgorgetime = time(NULL) + 10; /* Do it 10 seconds later */
-			ast_cli(fd, "app_rpt struct dump requested for node %s\n", argv[2]);
-			return RESULT_SUCCESS;
+			ast_cli(a->fd, "app_rpt struct dump requested for node %s\n", a->argv[2]);
+			return CLI_SUCCESS;
 		}
 	}
-	return RESULT_FAILURE;
+	return CLI_FAILURE;
 }
 
 /*
 * Dump statistics onto console
 */
-static int rpt_do_stats(int fd, int argc, char *argv[])
+static char *handle_cli_rpt_stats(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	int i, j;
 	int dailytxtime, dailykerchunks;
@@ -1186,8 +1155,19 @@ static int rpt_do_stats(int fd, int argc, char *argv[])
 
 	static char *not_applicable = "N/A";
 
-	if (argc != 3)
-		return RESULT_SHOWUSAGE;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "rpt stats";
+		e->usage =
+			"Usage: rpt stats <nodename>\n"
+			"       Dumps node statistics to console\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc != 3)
+		return CLI_SHOWUSAGE;
 
 	for (i = 0 ; i <= MAX_STAT_LINKS; i++)
 		listoflinks[i] = NULL;
@@ -1198,7 +1178,7 @@ static int rpt_do_stats(int fd, int argc, char *argv[])
 	lastdtmfcommand = not_applicable;
 
 	for (i = 0; i < nrpts; i++) {
-		if (!strcmp(argv[2], rpt_vars[i].name)) {
+		if (!strcmp(a->argv[2], rpt_vars[i].name)) {
 			/* Make a copy of all stat variables while locked */
 			myrpt = &rpt_vars[i];
 			rpt_mutex_lock(&myrpt->lock); /* LOCK */
@@ -1282,19 +1262,19 @@ static int rpt_do_stats(int fd, int argc, char *argv[])
 
 			rpt_mutex_unlock(&myrpt->lock); /* UNLOCK */
 
-			ast_cli(fd, "************************ NODE %s STATISTICS *************************\n\n", myrpt->name);
-			ast_cli(fd, "Signal on input..................................: %s\n", input_signal);
-			ast_cli(fd, "Transmitter enabled..............................: %s\n", enable_state);
-			ast_cli(fd, "Time out timer state.............................: %s\n", tot_state);
-			ast_cli(fd, "Time outs since system initialization............: %d\n", timeouts);
-			ast_cli(fd, "Identifier state.................................: %s\n", ider_state);
-			ast_cli(fd, "Kerchunks today..................................: %d\n", dailykerchunks);
-			ast_cli(fd, "Kerchunks since system initialization............: %d\n", totalkerchunks);
-			ast_cli(fd, "Keyups today.....................................: %d\n", dailykeyups);
-			ast_cli(fd, "Keyups since system initialization...............: %d\n", totalkeyups);
-			ast_cli(fd, "DTMF commands today..............................: %d\n", dailyexecdcommands);
-			ast_cli(fd, "DTMF commands since system initialization........: %d\n", totalexecdcommands);
-			ast_cli(fd, "Last DTMF command executed.......................: %s\n", lastdtmfcommand);
+			ast_cli(a->fd, "************************ NODE %s STATISTICS *************************\n\n", myrpt->name);
+			ast_cli(a->fd, "Signal on input..................................: %s\n", input_signal);
+			ast_cli(a->fd, "Transmitter enabled..............................: %s\n", enable_state);
+			ast_cli(a->fd, "Time out timer state.............................: %s\n", tot_state);
+			ast_cli(a->fd, "Time outs since system initialization............: %d\n", timeouts);
+			ast_cli(a->fd, "Identifier state.................................: %s\n", ider_state);
+			ast_cli(a->fd, "Kerchunks today..................................: %d\n", dailykerchunks);
+			ast_cli(a->fd, "Kerchunks since system initialization............: %d\n", totalkerchunks);
+			ast_cli(a->fd, "Keyups today.....................................: %d\n", dailykeyups);
+			ast_cli(a->fd, "Keyups since system initialization...............: %d\n", totalkeyups);
+			ast_cli(a->fd, "DTMF commands today..............................: %d\n", dailyexecdcommands);
+			ast_cli(a->fd, "DTMF commands since system initialization........: %d\n", totalexecdcommands);
+			ast_cli(a->fd, "Last DTMF command executed.......................: %s\n", lastdtmfcommand);
 
 			hours = dailytxtime / 3600000;
 			dailytxtime %= 3600000;
@@ -1303,7 +1283,7 @@ static int rpt_do_stats(int fd, int argc, char *argv[])
 			seconds = dailytxtime / 1000;
 			dailytxtime %= 1000;
 
-			ast_cli(fd, "TX time today ...................................: %02d:%02d:%02d.%d\n",
+			ast_cli(a->fd, "TX time today ...................................: %02d:%02d:%02d.%d\n",
 				hours, minutes, seconds, dailytxtime);
 
 			hours = (int) totaltxtime / 3600000;
@@ -1313,57 +1293,69 @@ static int rpt_do_stats(int fd, int argc, char *argv[])
 			seconds = (int)  totaltxtime / 1000;
 			totaltxtime %= 1000;
 
-			ast_cli(fd, "TX time since system initialization..............: %02d:%02d:%02d.%d\n",
+			ast_cli(a->fd, "TX time since system initialization..............: %02d:%02d:%02d.%d\n",
 				 hours, minutes, seconds, (int) totaltxtime);
-			ast_cli(fd, "Nodes currently connected to us..................: ");
+			ast_cli(a->fd, "Nodes currently connected to us..................: ");
 			for (j = 0;; j++) {
 				if (!listoflinks[j]) {
 					if (!j) {
-						ast_cli(fd, "<NONE>");
+						ast_cli(a->fd, "<NONE>");
 					}
 					break;
 				}
-				ast_cli(fd, "%s", listoflinks[j]);
+				ast_cli(a->fd, "%s", listoflinks[j]);
 				if (j % 4 == 3) {
-					ast_cli(fd, "\n");
-					ast_cli(fd, "                                                 : ");
+					ast_cli(a->fd, "\n");
+					ast_cli(a->fd, "                                                 : ");
 				} else {
 					if (listoflinks[j + 1])
-						ast_cli(fd, ", ");
+						ast_cli(a->fd, ", ");
 				}
 			}
-			ast_cli(fd, "\n");
+			ast_cli(a->fd, "\n");
 
-			ast_cli(fd, "Last node which transmitted to us................: %s\n", lastnodewhichkeyedusup);
-			ast_cli(fd, "Autopatch state..................................: %s\n", patch_state);
-			ast_cli(fd, "Autopatch called number..........................: %s\n", called_number);
-			ast_cli(fd, "Reverse patch/IAXRPT connected...................: %s\n\n", reverse_patch_state);
+			ast_cli(a->fd, "Last node which transmitted to us................: %s\n", lastnodewhichkeyedusup);
+			ast_cli(a->fd, "Autopatch state..................................: %s\n", patch_state);
+			ast_cli(a->fd, "Autopatch called number..........................: %s\n", called_number);
+			ast_cli(a->fd, "Reverse patch/IAXRPT connected...................: %s\n\n", reverse_patch_state);
 
-			return RESULT_SUCCESS;
+			return CLI_SUCCESS;
 		}
 	}
-	return RESULT_FAILURE;
+	return CLI_FAILURE;
 }
 
 /*
 * Link stats function
 */
-static int rpt_do_lstats(int fd, int argc, char *argv[])
+static char *handle_cli_rpt_lstats(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	int i, j;
 	struct rpt *myrpt;
 	struct rpt_link *l;
 	struct rpt_lstat *s, *t;
 	struct rpt_lstat s_head;
-	if (argc != 3)
-		return RESULT_SHOWUSAGE;
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "rpt lstats";
+		e->usage =
+			"Usage: rpt lstats <nodename>\n"
+			"       Dumps link statistics to console\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc != 3)
+		return CLI_SHOWUSAGE;
 
 	s = NULL;
 	s_head.next = &s_head;
 	s_head.prev = &s_head;
 
 	for (i = 0; i < nrpts; i++) {
-		if (!strcmp(argv[2], rpt_vars[i].name)) {
+		if (!strcmp(a->argv[2], rpt_vars[i].name)) {
 			/* Make a copy of all stat variables while locked */
 			myrpt = &rpt_vars[i];
 			rpt_mutex_lock(&myrpt->lock); /* LOCK */
@@ -1378,7 +1370,7 @@ static int rpt_do_lstats(int fd, int argc, char *argv[])
 				if ((s = ast_calloc(1, sizeof(*s))) == NULL) {
 					ast_log(LOG_ERROR, "Malloc failed in rpt_do_lstats\n");
 					rpt_mutex_unlock(&myrpt->lock); /* UNLOCK */
-					return RESULT_FAILURE;
+					return CLI_FAILURE;
 				}
 				ast_copy_string(s->name, l->name, MAXREMSTR);
 				pbx_substitute_variables_helper(l->chan, "${IAXPEER(CURRENTCHANNEL)}", s->peer, MAXPEERSTR - 1);
@@ -1390,8 +1382,8 @@ static int rpt_do_lstats(int fd, int argc, char *argv[])
 				l = l->next;
 			}
 			rpt_mutex_unlock(&myrpt->lock); /* UNLOCK */
-			ast_cli(fd, "NODE      PEER                RECONNECTS  DIRECTION  CONNECT TIME\n");
-			ast_cli(fd, "----      ----                ----------  ---------  ------------\n");
+			ast_cli(a->fd, "NODE      PEER                RECONNECTS  DIRECTION  CONNECT TIME\n");
+			ast_cli(a->fd, "----      ----                ----------  ---------  ------------\n");
 
 			for (s = s_head.next; s != &s_head; s = s->next) {
 				int hours, minutes, seconds;
@@ -1405,7 +1397,7 @@ static int rpt_do_lstats(int fd, int argc, char *argv[])
 				connecttime %= 1000;
 				snprintf(conntime, sizeof(conntime), "%02d:%02d:%02d.%d",
 					hours, minutes, seconds, (int) connecttime);
-				ast_cli(fd, "%-10s%-20s%-12d%-11s%-30s\n",
+				ast_cli(a->fd, "%-10s%-20s%-12d%-11s%-30s\n",
 					s->name, s->peer, s->reconnects, (s->outbound)? "OUT":"IN", conntime);
 			}	
 			/* destroy our local link queue */
@@ -1416,42 +1408,65 @@ static int rpt_do_lstats(int fd, int argc, char *argv[])
 				remque((struct qelem *)t);
 				ast_free(t);
 			}			
-			return RESULT_SUCCESS;
+			return CLI_SUCCESS;
 		}
 	}
-	return RESULT_FAILURE;
+
+	return CLI_FAILURE;
 }
 
 /*
 * reload vars 
 */
-static int rpt_do_reload(int fd, int argc, char *argv[])
+static char *handle_cli_rpt_reload(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	int	n;
 
-	if (argc > 2)
-		return RESULT_SHOWUSAGE;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "rpt reload";
+		e->usage =
+			"Usage: rpt reload\n"
+			"       Reloads app_rpt running config parameters\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc > 2)
+		return CLI_SHOWUSAGE;
 
 	for (n = 0; n < nrpts; n++)
 		rpt_vars[n].reload = 1;
 
-	return RESULT_FAILURE;
+	return CLI_SUCCESS;
 }
 
 /*
 * restart app_rpt
 */
-static int rpt_do_restart(int fd, int argc, char *argv[])
+static char *handle_cli_rpt_restart(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	int	i;
 
-	if (argc > 2)
-		return RESULT_SHOWUSAGE;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "rpt restart";
+		e->usage =
+			"Usage: rpt restart\n"
+			"       Restarts app_rpt\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc > 2)
+		return CLI_SHOWUSAGE;
 	for (i = 0; i < nrpts; i++) {
 		if (rpt_vars[i].rxchannel)
 			ast_softhangup(rpt_vars[i].rxchannel, AST_SOFTHANGUP_DEV);
 	}
-	return RESULT_FAILURE;
+	return CLI_SUCCESS;
 }
 
 static int play_tone_pair(struct ast_channel *chan, int f1, int f2, int duration, int amplitude)
@@ -4626,7 +4641,7 @@ static int function_remote(struct rpt *myrpt, char *param, char *digitbuf, int c
 	char multimode = 0;
 	char oc;
 	char tmp[20], freq[20] = "", savestr[20] = "";
-	int mhz, decimals;
+	int mhz = 0, decimals = 0;
 	struct ast_channel *mychannel;
 	AST_DECLARE_APP_ARGS(args1,
 		AST_APP_ARG(freq);
@@ -6799,7 +6814,7 @@ static int rpt_exec(struct ast_channel *chan, void *data)
 {
 	int res = -1, i, rem_totx, n, phone_mode = 0;
 	char *tmp, keyed = 0;
-	char *options, *tele, c;
+	char *options = NULL, *tele, c;
 	struct rpt *myrpt;
 	struct ast_frame *f;
 	struct ast_channel *who;
@@ -6908,7 +6923,7 @@ static int rpt_exec(struct ast_channel *chan, void *data)
 		struct ast_hostent ahp;
 		struct hostent *hp;
 		struct in_addr ia;
-		char hisip[100] = "", nodeip[100];
+		char hisip[100], nodeip[100];
 		const char *val;
 		char *s, *s1, *s2;
 
@@ -7437,7 +7452,8 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	struct ast_config *cfg = ast_config_load("rpt.conf");
+	struct ast_flags config_flags = { CONFIG_FLAG_NOCACHE };
+	struct ast_config *cfg = ast_config_load("rpt.conf", config_flags);
 	if (!cfg) {
 		ast_log(LOG_WARNING, "No such configuration file rpt.conf\n");
 		return AST_MODULE_LOAD_DECLINE;

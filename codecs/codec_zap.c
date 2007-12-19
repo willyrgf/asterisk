@@ -36,22 +36,16 @@
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <fcntl.h>
-#include <stdlib.h>
-#include <unistd.h>
 #include <netinet/in.h>
-#include <string.h>
-#include <stdio.h>
 #include <sys/ioctl.h>
-#include <errno.h>
 #include <sys/mman.h>
 #include <zaptel/zaptel.h>
 
 #include "asterisk/lock.h"
 #include "asterisk/translate.h"
 #include "asterisk/config.h"
-#include "asterisk/options.h"
 #include "asterisk/module.h"
-#include "asterisk/logger.h"
+#include "asterisk/cli.h"
 #include "asterisk/channel.h"
 #include "asterisk/utils.h"
 #include "asterisk/linkedlists.h"
@@ -59,6 +53,18 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define BUFFER_SAMPLES	8000
 
 static unsigned int global_useplc = 0;
+
+static struct channel_usage {
+	int total;
+	int encoders;
+	int decoders;
+} channels;
+
+static char *handle_cli_transcoder_show(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
+
+static struct ast_cli_entry cli[] = {
+	AST_CLI_DEFINE(handle_cli_transcoder_show, "Display Zaptel transcoder utilization.")
+};
 
 struct format_map {
 	unsigned int map[32][32];
@@ -83,6 +89,34 @@ struct pvt {
 	struct zt_transcode_header *hdr;
 	struct ast_frame f;
 };
+
+static char *handle_cli_transcoder_show(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	struct channel_usage copy;
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "transcoder show";
+		e->usage =
+			"Usage: transcoder show\n"
+			"       Displays channel utilization of Zaptel transcoder(s).\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc != 2)
+		return CLI_SHOWUSAGE;
+
+	copy = channels;
+
+	if (copy.total == 0)
+		ast_cli(a->fd, "No Zaptel transcoders found.\n");
+	else
+		ast_cli(a->fd, "%d/%d encoders/decoders of %d channels are in use.\n", copy.encoders, copy.decoders, copy.total);
+
+	return CLI_SUCCESS;
+}
 
 static int zap_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 {
@@ -172,6 +206,21 @@ static struct ast_frame *zap_frameout(struct ast_trans_pvt *pvt)
 static void zap_destroy(struct ast_trans_pvt *pvt)
 {
 	struct pvt *ztp = pvt->pvt;
+	unsigned int x;
+
+	x = ZT_TCOP_RELEASE;
+	if (ioctl(ztp->fd, ZT_TRANSCODE_OP, &x))
+		ast_log(LOG_WARNING, "Failed to release transcoder channel: %s\n", strerror(errno));
+
+	switch (ztp->hdr->dstfmt) {
+	case AST_FORMAT_G729A:
+	case AST_FORMAT_G723_1:
+		ast_atomic_fetchadd_int(&channels.encoders, -1);
+		break;
+	default:
+		ast_atomic_fetchadd_int(&channels.decoders, -1);
+		break;
+	}
 
 	munmap(ztp->hdr, sizeof(*ztp->hdr));
 	close(ztp->fd);
@@ -223,6 +272,16 @@ static int zap_translate(struct ast_trans_pvt *pvt, int dest, int source)
 	ztp = pvt->pvt;
 	ztp->fd = fd;
 	ztp->hdr = hdr;
+
+	switch (hdr->dstfmt) {
+	case AST_FORMAT_G729A:
+	case AST_FORMAT_G723_1:
+		ast_atomic_fetchadd_int(&channels.encoders, +1);
+		break;
+	default:
+		ast_atomic_fetchadd_int(&channels.decoders, +1);
+		break;
+	}
 
 	return 0;
 }
@@ -290,7 +349,7 @@ static void drop_translator(int dst, int src)
 		if (cur->t.dstfmt != dst)
 			continue;
 
-		AST_LIST_REMOVE_CURRENT(&translators, entry);
+		AST_LIST_REMOVE_CURRENT(entry);
 		ast_unregister_translator(&cur->t);
 		ast_free(cur);
 		global_format_map.map[dst][src] = 0;
@@ -312,13 +371,16 @@ static void unregister_translators(void)
 	AST_LIST_UNLOCK(&translators);
 }
 
-static void parse_config(void)
+static int parse_config(int reload)
 {
 	struct ast_variable *var;
-	struct ast_config *cfg = ast_config_load("codecs.conf");
+	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
+	struct ast_config *cfg = ast_config_load("codecs.conf", config_flags);
 
 	if (!cfg)
-		return;
+		return -1;
+	if (cfg == CONFIG_STATUS_FILEUNCHANGED)
+		return 0;
 
 	for (var = ast_variable_browse(cfg, "plc"); var; var = var->next) {
 	       if (!strcasecmp(var->name, "genericplc")) {
@@ -327,8 +389,8 @@ static void parse_config(void)
 					   global_useplc ? "" : "not ");
 	       }
 	}
-
 	ast_config_destroy(cfg);
+	return 0;
 }
 
 static void build_translators(struct format_map *map, unsigned int dstfmts, unsigned int srcfmts)
@@ -367,6 +429,7 @@ static int find_transcoders(void)
 	for (info.tcnum = 0; !(res = ioctl(fd, ZT_TRANSCODE_OP, &info)); info.tcnum++) {
 		ast_verb(2, "Found transcoder '%s'.\n", info.name);
 		build_translators(&map, info.dstfmts, info.srcfmts);
+		ast_atomic_fetchadd_int(&channels.total, info.numchannels / 2);
 	}
 	close(fd);
 
@@ -387,18 +450,20 @@ static int reload(void)
 {
 	struct translator *cur;
 
-	parse_config();
+	if (parse_config(1))
+		return AST_MODULE_LOAD_DECLINE;
 
 	AST_LIST_LOCK(&translators);
 	AST_LIST_TRAVERSE(&translators, cur, entry)
 		cur->t.useplc = global_useplc;
 	AST_LIST_UNLOCK(&translators);
 
-	return 0;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 static int unload_module(void)
 {
+	ast_cli_unregister_multiple(cli, sizeof(cli) / sizeof(cli[0]));
 	unregister_translators();
 
 	return 0;
@@ -406,14 +471,15 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	parse_config();
+	if (parse_config(0))
+		return AST_MODULE_LOAD_DECLINE;
 	find_transcoders();
-
-	return 0;
+	ast_cli_register_multiple(cli, sizeof(cli) / sizeof(cli[0]));
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "Generic Zaptel Transcoder Codec Translator",
 		.load = load_module,
 		.unload = unload_module,
 		.reload = reload,
-	       );
+		);

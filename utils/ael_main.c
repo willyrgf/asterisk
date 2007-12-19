@@ -1,20 +1,30 @@
-#include <sys/types.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdarg.h>
-#include <string.h>
+/*
+ * XXX this file probably need a fair amount of cleanup, at the very least:
+ *
+ * - documenting its purpose;
+ * - removing all unnecessary headers and other stuff from the sources
+ *   it was copied from;
+ * - fixing the formatting
+ */
+#include "asterisk.h"
+
 #include <locale.h>
 #include <ctype.h>
-#include <errno.h>
 #include <regex.h>
 #include <limits.h>
 
-#include "asterisk/compat.h"
-#include "asterisk/ast_expr.h"
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
 #include "asterisk/channel.h"
+#include "asterisk/ast_expr.h"
 #include "asterisk/module.h"
 #include "asterisk/app.h"
 #include "asterisk/ael_structs.h"
+#include "asterisk/extconf.h"
+
+/*** MODULEINFO
+  	<depend>res_ael_share</depend>
+ ***/
 
 struct namelist
 {
@@ -55,8 +65,8 @@ void destroy_namelist(struct namelist *x)
 	}
 }
 
-struct namelist *create_name(char *name);
-struct namelist *create_name(char *name)
+struct namelist *create_name(const char *name);
+struct namelist *create_name(const char *name)
 {
 	struct namelist *x = calloc(1, sizeof(*x));
 	if (!x)
@@ -72,19 +82,17 @@ struct namelist *globalvars_last;
 
 int conts=0, extens=0, priors=0;
 char last_exten[18000];
-char ast_config_AST_CONFIG_DIR[PATH_MAX];
-char ast_config_AST_VAR_DIR[PATH_MAX];
+const char ast_config_AST_CONFIG_DIR[PATH_MAX];
+const char ast_config_AST_VAR_DIR[PATH_MAX];
 
-void ast_add_profile(void);
 void ast_cli_register_multiple(void);
-void ast_register_file_version(void);
-void ast_unregister_file_version(void);
 int ast_add_extension2(struct ast_context *con,
 					   int replace, const char *extension, int priority, const char *label, const char *callerid,
 						const char *application, void *data, void (*datad)(void *),
 					   const char *registrar);
 void pbx_builtin_setvar(void *chan, void *data);
 struct ast_context * ast_context_create(void **extcontexts, const char *name, const char *registrar);
+struct ast_context * ast_context_find_or_create(void **extcontexts, const char *name, const char *registrar);
 void ast_context_add_ignorepat2(struct ast_context *con, const char *value, const char *registrar);
 void ast_context_add_include2(struct ast_context *con, const char *value, const char *registrar);
 void ast_context_add_switch2(struct ast_context *con, const char *value, const char *data, int eval, const char *registrar);
@@ -106,6 +114,41 @@ static int dump_extensions = 0;
 static int FIRST_TIME = 0;
 static FILE *dumpfile;
 
+void ast_log(int level, const char *file, int line, const char *function, const char *fmt, ...)
+{
+	        va_list vars;
+		        va_start(vars,fmt);
+			
+			        printf("LOG: lev:%d file:%s  line:%d func: %s  ",
+						                   level, file, line, function);
+				        vprintf(fmt, vars);
+					        fflush(stdout);
+						        va_end(vars);
+}
+
+struct ast_exten *pbx_find_extension(struct ast_channel *chan,
+									 struct ast_context *bypass,
+									 struct pbx_find_info *q,
+									 const char *context, 
+									 const char *exten, 
+									 int priority,
+									 const char *label, 
+									 const char *callerid, 
+									 enum ext_match_t action);
+
+struct ast_exten *pbx_find_extension(struct ast_channel *chan,
+									 struct ast_context *bypass,
+									 struct pbx_find_info *q,
+									 const char *context, 
+									 const char *exten, 
+									 int priority,
+									 const char *label, 
+									 const char *callerid, 
+									 enum ext_match_t action)
+{
+	return localized_find_extension(bypass, q, context, exten, priority, label, callerid, action);
+}
+
 struct ast_app *pbx_findapp(const char *app)
 {
 	return (struct ast_app*)1; /* so as not to trigger an error */
@@ -119,11 +162,20 @@ struct ast_custom_function *ast_custom_function_find(const char *name)
 	return 0; /* in "standalone" mode, functions are just not avail */
 }
 
+void ast_register_file_version(const char *file, const char *version)
+{
+}
 
-void ast_add_profile(void)
+void ast_unregister_file_version(const char *file)
+{
+}
+
+int ast_add_profile(const char *x, uint64_t scale)
 {
 	if (!no_comp)
 		printf("Executed ast_add_profile();\n");
+
+	return 0;
 }
 
 int ast_loader_register(int (*updater)(void))
@@ -150,20 +202,6 @@ void ast_cli_register_multiple(void)
         	printf("Executed ast_cli_register_multiple();\n");
 }
 
-void ast_register_file_version(void)
-{
-	/* if(!no_comp)
-		printf("Executed ast_register_file_version();\n"); */
-	/* I'm erasing this, because I don't think anyone really ever needs to see it anyway */
-}
-
-void ast_unregister_file_version(void)
-{
-	/* if(!no_comp)
-		printf("Executed ast_unregister_file_version();\n"); */
-	/* I'm erasing this, because I don't think anyone really ever needs to see it anyway */
-
-}
 void pbx_substitute_variables_helper(struct ast_channel *c,const char *cp1,char *cp2,int count);
 void pbx_substitute_variables_helper(struct ast_channel *c,const char *cp1,char *cp2,int count)
 {
@@ -292,12 +330,12 @@ int ast_add_extension2(struct ast_context *con,
 
 void pbx_builtin_setvar(void *chan, void *data)
 {
-	struct namelist *x = create_name((char*)data);
+	struct namelist *x = create_name(data);
 	if(!no_comp)
 		printf("Executed pbx_builtin_setvar(chan, data=%s);\n", (char*)data);
 
 	if( dump_extensions ) {
-		x = create_name((char*)data);
+		x = create_name(data);
 		ADD_LAST(globalvars,x);
 	}
 }
@@ -318,13 +356,28 @@ struct ast_context * ast_context_create(void **extcontexts, const char *name, co
 	return x;
 }
 
+struct ast_context * ast_context_find_or_create(void **extcontexts, const char *name, const char *registrar)
+{
+	struct ast_context *x = calloc(1, sizeof(*x));
+	if (!x)
+		return NULL;
+	x->next = context_list;
+	context_list = x;
+	if (!no_comp)
+		printf("Executed ast_context_find_or_create(conts, name=%s, registrar=%s);\n", name, registrar);
+	conts++;
+	strncpy(x->name, name, sizeof(x->name) - 1);
+	strncpy(x->registrar, registrar, sizeof(x->registrar) - 1);
+	return x;
+}
+
 void ast_context_add_ignorepat2(struct ast_context *con, const char *value, const char *registrar)
 {
 	if(!no_comp)
 		printf("Executed ast_context_add_ignorepat2(con, value=%s, registrar=%s);\n", value, registrar);
 	if( dump_extensions ) {
 		struct namelist *x;
-		x = create_name((char*)value);
+		x = create_name(value);
 		ADD_LAST(con->ignorepats,x);
 	}
 }
@@ -390,56 +443,6 @@ void ast_context_destroy(void)
 		printf("Executed ast_context_destroy();\n");
 }
 
-void ast_log(int level, const char *file, int line, const char *function, const char *fmt, ...)
-{
-        va_list vars;
-        va_start(vars,fmt);
-	if( !quiet || level > 2 ) {
-    	    printf("LOG: lev:%d file:%s  line:%d func: %s  ",
-                   level, file, line, function);
-            vprintf(fmt, vars);
-            fflush(stdout);
-            va_end(vars);
-	}
-}
-
-void ast_verbose(const char *fmt, ...)
-{
-        va_list vars;
-        va_start(vars,fmt);
-
-        printf("VERBOSE: ");
-        vprintf(fmt, vars);
-        fflush(stdout);
-        va_end(vars);
-}
-
-char *ast_process_quotes_and_slashes(char *start, char find, char replace_with)
-{
-        char *dataPut = start;
-        int inEscape = 0;
-        int inQuotes = 0;
-
-        for (; *start; start++) {
-                if (inEscape) {
-                        *dataPut++ = *start;       /* Always goes verbatim */
-                        inEscape = 0;
-                } else {
-                        if (*start == '\\') {
-                                inEscape = 1;      /* Do not copy \ into the data */
-                        } else if (*start == '\'') {
-                                inQuotes = 1-inQuotes;   /* Do not copy ' into the data */
-                        } else {
-                                /* Replace , with |, unless in quotes */
-                                *dataPut++ = inQuotes ? *start : ((*start==find) ? replace_with : *start);
-                        }
-                }
-        }
-        if (start != dataPut)
-                *dataPut = 0;
-        return dataPut;
-}
-
 void filter_leading_space_from_exprs(char *str)
 {
 	/*  Mainly for aesthetics */
@@ -478,7 +481,8 @@ void filter_newlines(char *str)
 
 
 extern struct module_symbols mod_data;
-extern int ael_external_load_module(void);
+int ael_external_load_module(void);
+
 
 int main(int argc, char **argv)
 {
@@ -510,12 +514,14 @@ int main(int argc, char **argv)
 	}
 
 	if( use_curr_dir ) {
-		strcpy(ast_config_AST_CONFIG_DIR, ".");
+		strcpy((char *)ast_config_AST_CONFIG_DIR, ".");
+		localized_use_local_dir();
 	}
 	else {
-		strcpy(ast_config_AST_CONFIG_DIR, "/etc/asterisk");
+		strcpy((char *)ast_config_AST_CONFIG_DIR, "/etc/asterisk");
+		localized_use_conf_dir();
 	}
-	strcpy(ast_config_AST_VAR_DIR, "/var/lib/asterisk");
+	strcpy((char *)ast_config_AST_VAR_DIR, "/var/lib/asterisk");
 	
 	if( dump_extensions ) {
 		dumpfile = fopen("extensions.conf.aeldump","w");

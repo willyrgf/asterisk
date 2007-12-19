@@ -27,45 +27,14 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/time.h>
-#include <signal.h>
-#include <errno.h>
-#include <unistd.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <sys/socket.h>
-#include <netdb.h>
-#include <net/if.h>
-#include <netinet/in.h>
-#include <netinet/in_systm.h>
-#include <netinet/ip.h>
-#include <sys/ioctl.h>
-
-#if defined(__OpenBSD__) || defined(__NetBSD__) || defined(__FreeBSD__)
-#include <fcntl.h>
-#include <net/route.h>
-#endif
+#include "asterisk/network.h"
 
 #if defined(SOLARIS)
 #include <sys/sockio.h>
 #endif
 
-/* netinet/ip.h may not define the following (See RFCs 791 and 1349) */
-#if !defined(IPTOS_LOWCOST)
-#define       IPTOS_LOWCOST           0x02
-#endif
-
-#if !defined(IPTOS_MINCOST)
-#define       IPTOS_MINCOST           IPTOS_LOWCOST
-#endif
-
 #include "asterisk/acl.h"
-#include "asterisk/logger.h"
 #include "asterisk/channel.h"
-#include "asterisk/options.h"
 #include "asterisk/utils.h"
 #include "asterisk/lock.h"
 #include "asterisk/srv.h"
@@ -129,67 +98,74 @@ struct ast_ha *ast_duplicate_ha_list(struct ast_ha *original)
 	return ret;    			/* Return start of list */
 }
 
-struct ast_ha *ast_append_ha(char *sense, char *stuff, struct ast_ha *path, int *error)
+struct ast_ha *ast_append_ha(const char *sense, const char *stuff, struct ast_ha *path, int *error)
 {
 	struct ast_ha *ha;
-	char *nm = "255.255.255.255";
-	char tmp[256];
+	char *nm;
 	struct ast_ha *prev = NULL;
 	struct ast_ha *ret;
-	int x, z;
-	unsigned int y;
+	int x;
+	char *tmp = ast_strdupa(stuff);
 
 	ret = path;
 	while (path) {
 		prev = path;
 		path = path->next;
 	}
-	if ((ha = ast_malloc(sizeof(*ha)))) {
-		ast_copy_string(tmp, stuff, sizeof(tmp));
-		nm = strchr(tmp, '/');
-		if (!nm) {
-			nm = "255.255.255.255";
-		} else {
-			*nm = '\0';
-			nm++;
-		}
+
+	ha = ast_malloc(sizeof(*ha));
+	if (!ha)
+		return ret;
+
+	nm = strchr(tmp, '/');
+	if (!nm) {
+		/* assume /32. Yes, htonl does not do anything for this particular mask
+		   but we better use it to show we remember about byte order */
+		ha->netmask.s_addr = htonl(0xFFFFFFFF);
+	} else {
+		*nm = '\0';
+		nm++;
+
 		if (!strchr(nm, '.')) {
-			if ((sscanf(nm, "%d", &x) == 1) && (x >= 0) && (x <= 32)) {
-				y = 0;
-				for (z = 0; z < x; z++) {
-					y >>= 1;
-					y |= 0x80000000;
-				}
-				ha->netmask.s_addr = htonl(y);
+			if ((sscanf(nm, "%d", &x) == 1) && (x >= 0) && (x <= 32))
+				ha->netmask.s_addr = htonl(0xFFFFFFFF << (32 - x));
+			else {
+				ast_log(LOG_WARNING, "Invalid CIDR in %s\n", stuff);
+				ast_free(ha);
+				if (error)
+					*error = 1;
+				return ret;
 			}
 		} else if (!inet_aton(nm, &ha->netmask)) {
-			ast_log(LOG_WARNING, "%s is not a valid netmask\n", nm);
+			ast_log(LOG_WARNING, "Invalid mask in %s\n", stuff);
+			ast_free(ha);
 			if (error)
 				*error = 1;
-			ast_free(ha);
 			return ret;
-		}
-		if (!inet_aton(tmp, &ha->netaddr)) {
-			ast_log(LOG_WARNING, "%s is not a valid IP\n", tmp);
-			if (error)
-				*error = 1;
-			ast_free(ha);
-			return ret;
-		}
-		ha->netaddr.s_addr &= ha->netmask.s_addr;
-		if (!strncasecmp(sense, "p", 1)) {
-			ha->sense = AST_SENSE_ALLOW;
-		} else {
-			ha->sense = AST_SENSE_DENY;
-		}
-		ha->next = NULL;
-		if (prev) {
-			prev->next = ha;
-		} else {
-			ret = ha;
 		}
 	}
-	ast_debug(1, "%s/%s appended to acl for peer\n", stuff, nm);
+
+	if (!inet_aton(tmp, &ha->netaddr)) {
+		ast_log(LOG_WARNING, "Invalid IP address in %s\n", stuff);
+		ast_free(ha);
+		if (error)
+			*error = 1;
+		return ret;
+	}
+
+	ha->netaddr.s_addr &= ha->netmask.s_addr;
+
+	ha->sense = strncasecmp(sense, "p", 1) ? AST_SENSE_DENY : AST_SENSE_ALLOW;
+
+	ha->next = NULL;
+	if (prev) {
+		prev->next = ha;
+	} else {
+		ret = ha;
+	}
+
+	ast_debug(1, "%s/%s sense %d appended to acl for peer\n", ast_strdupa(ast_inet_ntoa(ha->netaddr)), ast_strdupa(ast_inet_ntoa(ha->netmask)), ha->sense);
+
 	return ret;
 }
 
@@ -326,9 +302,10 @@ int ast_ouraddrfor(struct in_addr *them, struct in_addr *us)
 	int s;
 	struct sockaddr_in sin;
 	socklen_t slen;
+
 	s = socket(PF_INET, SOCK_DGRAM, 0);
 	if (s < 0) {
-		ast_log(LOG_WARNING, "Cannot create socket\n");
+		ast_log(LOG_ERROR, "Cannot create socket\n");
 		return -1;
 	}
 	sin.sin_family = AF_INET;
@@ -346,6 +323,7 @@ int ast_ouraddrfor(struct in_addr *them, struct in_addr *us)
 		return -1;
 	}
 	close(s);
+	ast_debug(3, "Found IP address for this socket\n");
 	*us = sin.sin_addr;
 	return 0;
 }
@@ -360,6 +338,7 @@ int ast_find_ourip(struct in_addr *ourip, struct sockaddr_in bindaddr)
 	/* just use the bind address if it is nonzero */
 	if (ntohl(bindaddr.sin_addr.s_addr)) {
 		memcpy(ourip, &bindaddr.sin_addr, sizeof(*ourip));
+		ast_debug(3, "Attached to given IP address\n");
 		return 0;
 	}
 	/* try to use our hostname */
@@ -369,12 +348,15 @@ int ast_find_ourip(struct in_addr *ourip, struct sockaddr_in bindaddr)
 		hp = ast_gethostbyname(ourhost, &ahp);
 		if (hp) {
 			memcpy(ourip, hp->h_addr, sizeof(*ourip));
+			ast_debug(3, "Found one IP address based on local hostname %s.\n", ourhost);
 			return 0;
 		}
 	}
+	ast_debug(3, "Trying to check A.ROOT-SERVERS.NET and get our IP address for that connection\n");
 	/* A.ROOT-SERVERS.NET. */
 	if (inet_aton("198.41.0.4", &saddr) && !ast_ouraddrfor(&saddr, ourip))
 		return 0;
+	ast_debug(3, "Failed to find any IP address for us\n");
 	return -1;
 }
 

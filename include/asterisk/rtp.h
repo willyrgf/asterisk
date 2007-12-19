@@ -26,7 +26,7 @@
 #ifndef _ASTERISK_RTP_H
 #define _ASTERISK_RTP_H
 
-#include <netinet/in.h>
+#include "asterisk/network.h"
 
 #include "asterisk/frame.h"
 #include "asterisk/io.h"
@@ -168,7 +168,7 @@ int ast_rtp_senddigit_end(struct ast_rtp *rtp, char digit);
 
 int ast_rtp_sendcng(struct ast_rtp *rtp, int level);
 
-int ast_rtp_setqos(struct ast_rtp *rtp, int tos, int cos);
+int ast_rtp_setqos(struct ast_rtp *rtp, int tos, int cos, char *desc);
 
 /*! \brief  Setting RTP payload types from lines in a SDP description: */
 void ast_rtp_pt_clear(struct ast_rtp* rtp);
@@ -178,8 +178,14 @@ void ast_rtp_pt_default(struct ast_rtp* rtp);
 /*! \brief Copy payload types between RTP structures */
 void ast_rtp_pt_copy(struct ast_rtp *dest, struct ast_rtp *src);
 
+/*! \brief Activate payload type */
 void ast_rtp_set_m_type(struct ast_rtp* rtp, int pt);
-void ast_rtp_set_rtpmap_type(struct ast_rtp* rtp, int pt,
+
+/*! \brief clear payload type */
+void ast_rtp_unset_m_type(struct ast_rtp* rtp, int pt);
+
+/*! \brief Initiate payload type to a known MIME media type for a codec */
+int ast_rtp_set_rtpmap_type(struct ast_rtp* rtp, int pt,
 			     char *mimeType, char *mimeSubtype,
 			     enum ast_rtp_options options);
 

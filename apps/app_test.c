@@ -31,31 +31,24 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <sys/types.h>
 #include <sys/stat.h>
 
+#include "asterisk/paths.h"	/* use ast_config_AST_LOG_DIR */
 #include "asterisk/channel.h"
-#include "asterisk/options.h"
 #include "asterisk/module.h"
-#include "asterisk/logger.h"
 #include "asterisk/lock.h"
 #include "asterisk/app.h"
 #include "asterisk/pbx.h"
 #include "asterisk/utils.h"
 
 static char *tests_descrip = 
-	 "TestServer(): Perform test server function and write call report.\n"
+	 "  TestServer(): Perform test server function and write call report.\n"
 	 "Results stored in /var/log/asterisk/testreports/<testid>-server.txt";
 static char *tests_app = "TestServer";
 static char *tests_synopsis = "Execute Interface Test Server";
 
 static char *testc_descrip = 
-	 "TestClient(testid): Executes test client with given testid.\n"
+	 "  TestClient(testid): Executes test client with given testid.\n"
 	 "Results stored in /var/log/asterisk/testreports/<testid>-client.txt";
 
 static char *testc_app = "TestClient";

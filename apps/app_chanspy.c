@@ -31,18 +31,13 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
 #include <ctype.h>
 
+#include "asterisk/paths.h"	/* use ast_config_AST_MONITOR_DIR */
 #include "asterisk/file.h"
-#include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/audiohook.h"
 #include "asterisk/features.h"
-#include "asterisk/options.h"
 #include "asterisk/app.h"
 #include "asterisk/utils.h"
 #include "asterisk/say.h"
@@ -73,7 +68,7 @@ static const char *desc_chan =
 "        and a digit sequence.\n"
 "  Options:\n"
 "    b             - Only spy on channels involved in a bridged call.\n"
-"    g(grp)        - Match only channels where their ${SPYGROUP} variable is set to\n"
+"    g(grp)        - Match only channels where their SPYGROUP variable is set to\n"
 "                    contain 'grp' in an optional : delimited list.\n"
 "    q             - Don't play a beep when beginning to spy on a channel, or speak the\n"
 "                    selected channel name.\n"
@@ -266,6 +261,15 @@ static int channel_spy(struct ast_channel *chan, struct ast_channel *spyee, int 
 		start_spying(spyee, chan, &csth.whisper_audiohook);
 	}
 
+	csth.volfactor = *volfactor;
+
+	if (csth.volfactor) {
+		csth.spy_audiohook.options.read_volume = csth.volfactor;
+		csth.spy_audiohook.options.write_volume = csth.volfactor;
+	}
+
+	csth.fd = fd;
+
 	if (ast_test_flag(flags, OPTION_PRIVATE))
 		silgen = ast_channel_start_silence_generator(chan);
 	else
@@ -341,6 +345,10 @@ static int channel_spy(struct ast_channel *chan, struct ast_channel *spyee, int 
 			if (*volfactor > 4)
 				*volfactor = -4;
 			ast_verb(3, "Setting spy volume on %s to %d\n", chan->name, *volfactor);
+
+			csth.volfactor = *volfactor;
+			csth.spy_audiohook.options.read_volume = csth.volfactor;
+			csth.spy_audiohook.options.write_volume = csth.volfactor;
 		}
 	}
 
@@ -361,8 +369,7 @@ static int channel_spy(struct ast_channel *chan, struct ast_channel *spyee, int 
 	ast_audiohook_unlock(&csth.spy_audiohook);
 	ast_audiohook_destroy(&csth.spy_audiohook);
 	
-	if (option_verbose >= 2)
-		ast_verbose(VERBOSE_PREFIX_2 "Done Spying on channel %s\n", name);
+	ast_verb(2, "Done Spying on channel %s\n", name);
 	
 	return running;
 }

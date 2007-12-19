@@ -41,22 +41,14 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <sys/types.h>
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-#include <unistd.h>
 #include <time.h>
 
 #include <libpq-fe.h>
 
 #include "asterisk/config.h"
-#include "asterisk/options.h"
 #include "asterisk/channel.h"
 #include "asterisk/cdr.h"
 #include "asterisk/module.h"
-#include "asterisk/logger.h"
-#include "asterisk.h"
 
 #define DATE_FORMAT "%Y-%m-%d %T"
 
@@ -96,28 +88,33 @@ static int pgsql_log(struct ast_cdr *cdr)
 
 	if (connected) {
 		char *clid=NULL, *dcontext=NULL, *channel=NULL, *dstchannel=NULL, *lastapp=NULL, *lastdata=NULL;
-		char *uniqueid=NULL, *userfield=NULL;
+		char *src=NULL, *dst=NULL, *uniqueid=NULL, *userfield=NULL;
+		int pgerr;
 
 		/* Maximum space needed would be if all characters needed to be escaped, plus a trailing NULL */
 		if ((clid = alloca(strlen(cdr->clid) * 2 + 1)) != NULL)
-			PQescapeString(clid, cdr->clid, strlen(cdr->clid));
+			PQescapeStringConn(conn, clid, cdr->clid, strlen(cdr->clid), &pgerr);
 		if ((dcontext = alloca(strlen(cdr->dcontext) * 2 + 1)) != NULL)
-			PQescapeString(dcontext, cdr->dcontext, strlen(cdr->dcontext));
+			PQescapeStringConn(conn, dcontext, cdr->dcontext, strlen(cdr->dcontext), &pgerr);
 		if ((channel = alloca(strlen(cdr->channel) * 2 + 1)) != NULL)
-			PQescapeString(channel, cdr->channel, strlen(cdr->channel));
+			PQescapeStringConn(conn, channel, cdr->channel, strlen(cdr->channel), &pgerr);
 		if ((dstchannel = alloca(strlen(cdr->dstchannel) * 2 + 1)) != NULL)
-			PQescapeString(dstchannel, cdr->dstchannel, strlen(cdr->dstchannel));
+			PQescapeStringConn(conn, dstchannel, cdr->dstchannel, strlen(cdr->dstchannel), &pgerr);
 		if ((lastapp = alloca(strlen(cdr->lastapp) * 2 + 1)) != NULL)
-			PQescapeString(lastapp, cdr->lastapp, strlen(cdr->lastapp));
+			PQescapeStringConn(conn, lastapp, cdr->lastapp, strlen(cdr->lastapp), &pgerr);
 		if ((lastdata = alloca(strlen(cdr->lastdata) * 2 + 1)) != NULL)
-			PQescapeString(lastdata, cdr->lastdata, strlen(cdr->lastdata));
+			PQescapeStringConn(conn, lastdata, cdr->lastdata, strlen(cdr->lastdata), &pgerr);
 		if ((uniqueid = alloca(strlen(cdr->uniqueid) * 2 + 1)) != NULL)
-			PQescapeString(uniqueid, cdr->uniqueid, strlen(cdr->uniqueid));
+			PQescapeStringConn(conn, uniqueid, cdr->uniqueid, strlen(cdr->uniqueid), &pgerr);
 		if ((userfield = alloca(strlen(cdr->userfield) * 2 + 1)) != NULL)
-			PQescapeString(userfield, cdr->userfield, strlen(cdr->userfield));
+			PQescapeStringConn(conn, userfield, cdr->userfield, strlen(cdr->userfield), &pgerr);
+		if ((src = alloca(strlen(cdr->src) * 2 + 1)) != NULL)
+			PQescapeStringConn(conn, src, cdr->src, strlen(cdr->src), &pgerr);
+		if ((dst = alloca(strlen(cdr->dst) * 2 + 1)) != NULL)
+			PQescapeStringConn(conn, dst, cdr->dst, strlen(cdr->dst), &pgerr);
 
 		/* Check for all alloca failures above at once */
-		if ((!clid) || (!dcontext) || (!channel) || (!dstchannel) || (!lastapp) || (!lastdata) || (!uniqueid) || (!userfield)) {
+		if ((!clid) || (!dcontext) || (!channel) || (!dstchannel) || (!lastapp) || (!lastdata) || (!uniqueid) || (!userfield) || (!src) || (!dst)) {
 			ast_log(LOG_ERROR, "cdr_pgsql:  Out of memory error (insert fails)\n");
 			ast_mutex_unlock(&pgsql_lock);
 			return -1;
@@ -128,7 +125,7 @@ static int pgsql_log(struct ast_cdr *cdr)
 		snprintf(sqlcmd,sizeof(sqlcmd),"INSERT INTO %s (calldate,clid,src,dst,dcontext,channel,dstchannel,"
 				 "lastapp,lastdata,duration,billsec,disposition,amaflags,accountcode,uniqueid,userfield) VALUES"
 				 " ('%s','%s','%s','%s','%s', '%s','%s','%s','%s',%ld,%ld,'%s',%ld,'%s','%s','%s')",
-				 table,timestr,clid,cdr->src, cdr->dst, dcontext,channel, dstchannel, lastapp, lastdata,
+				 table, timestr, clid, src, dst, dcontext, channel, dstchannel, lastapp, lastdata,
 				 cdr->duration,cdr->billsec,ast_cdr_disp2str(cdr->disposition),cdr->amaflags, cdr->accountcode, uniqueid, userfield);
 		
 		ast_debug(3, "cdr_pgsql: SQL command executed:  %s\n",sqlcmd);
@@ -183,7 +180,7 @@ static int pgsql_log(struct ast_cdr *cdr)
 	return 0;
 }
 
-static int my_unload_module(void)
+static int unload_module(void)
 { 
 	PQfinish(conn);
 	if (pghostname)
@@ -202,62 +199,96 @@ static int my_unload_module(void)
 	return 0;
 }
 
-static int process_my_load_module(struct ast_config *cfg)
+static int config_module(int reload)
 {
 	struct ast_variable *var;
-        char *pgerror;
+	char *pgerror;
 	const char *tmp;
+	struct ast_config *cfg;
+	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
 
-	if (!(var = ast_variable_browse(cfg, "global")))
+	if ((cfg = ast_config_load(config, config_flags)) == NULL) {
+		ast_log(LOG_WARNING, "Unable to load config for PostgreSQL CDR's: %s\n", config);
+		return -1;
+	} else if (cfg == CONFIG_STATUS_FILEUNCHANGED)
 		return 0;
 
-	if (!(tmp = ast_variable_retrieve(cfg,"global","hostname"))) {
-		ast_log(LOG_WARNING,"PostgreSQL server hostname not specified.  Assuming unix socket connection\n");
+	if (!(var = ast_variable_browse(cfg, "global"))) {
+		ast_config_destroy(cfg);
+		return 0;
+	}
+
+	if (!(tmp = ast_variable_retrieve(cfg, "global", "hostname"))) {
+		ast_log(LOG_WARNING, "PostgreSQL server hostname not specified.  Assuming unix socket connection\n");
 		tmp = "";	/* connect via UNIX-socket by default */
 	}
-	
-	if (!(pghostname = ast_strdup(tmp)))
+
+	if (pghostname)
+		ast_free(pghostname);
+	if (!(pghostname = ast_strdup(tmp))) {
+		ast_config_destroy(cfg);
 		return -1;
+	}
 
 	if (!(tmp = ast_variable_retrieve(cfg, "global", "dbname"))) {
 		ast_log(LOG_WARNING,"PostgreSQL database not specified.  Assuming asterisk\n");
 		tmp = "asteriskcdrdb";
 	}
 
-	if (!(pgdbname = ast_strdup(tmp)))
+	if (pgdbname)
+		ast_free(pgdbname);
+	if (!(pgdbname = ast_strdup(tmp))) {
+		ast_config_destroy(cfg);
 		return -1;
+	}
 
 	if (!(tmp = ast_variable_retrieve(cfg, "global", "user"))) {
 		ast_log(LOG_WARNING,"PostgreSQL database user not specified.  Assuming asterisk\n");
 		tmp = "asterisk";
 	}
 
-	if (!(pgdbuser = ast_strdup(tmp)))
+	if (pgdbuser)
+		ast_free(pgdbuser);
+	if (!(pgdbuser = ast_strdup(tmp))) {
+		ast_config_destroy(cfg);
 		return -1;
+	}
 
 	if (!(tmp = ast_variable_retrieve(cfg, "global", "password"))) {
 		ast_log(LOG_WARNING,"PostgreSQL database password not specified.  Assuming blank\n");
 		tmp = "";
 	}
 
-	if (!(pgpassword = ast_strdup(tmp)))
+	if (pgpassword)
+		ast_free(pgpassword);
+	if (!(pgpassword = ast_strdup(tmp))) {
+		ast_config_destroy(cfg);
 		return -1;
+	}
 
 	if (!(tmp = ast_variable_retrieve(cfg,"global","port"))) {
 		ast_log(LOG_WARNING,"PostgreSQL database port not specified.  Using default 5432.\n");
 		tmp = "5432";
 	}
 
-	if (!(pgdbport = ast_strdup(tmp)))
+	if (pgdbport)
+		ast_free(pgdbport);
+	if (!(pgdbport = ast_strdup(tmp))) {
+		ast_config_destroy(cfg);
 		return -1;
+	}
 
 	if (!(tmp = ast_variable_retrieve(cfg, "global", "table"))) {
 		ast_log(LOG_WARNING,"CDR table not specified.  Assuming cdr\n");
 		tmp = "cdr";
 	}
 
-	if (!(table = ast_strdup(tmp)))
+	if (table)
+		ast_free(table);
+	if (!(table = ast_strdup(tmp))) {
+		ast_config_destroy(cfg);
 		return -1;
+	}
 
 	if (option_debug) {
 	    	if (ast_strlen_zero(pghostname))
@@ -276,49 +307,25 @@ static int process_my_load_module(struct ast_config *cfg)
 		ast_debug(1, "Successfully connected to PostgreSQL database.\n");
 		connected = 1;
 	} else {
-                pgerror = PQerrorMessage(conn);
+		pgerror = PQerrorMessage(conn);
 		ast_log(LOG_ERROR, "cdr_pgsql: Unable to connect to database server %s.  CALLS WILL NOT BE LOGGED!!\n", pghostname);
-                ast_log(LOG_ERROR, "cdr_pgsql: Reason: %s\n", pgerror);
+		ast_log(LOG_ERROR, "cdr_pgsql: Reason: %s\n", pgerror);
 		connected = 0;
 	}
+
+	ast_config_destroy(cfg);
 
 	return ast_cdr_register(name, ast_module_info->description, pgsql_log);
 }
 
-static int my_load_module(void)
-{
-	struct ast_config *cfg;
-	int res;
-
-	if (!(cfg = ast_config_load(config))) {
-		ast_log(LOG_WARNING, "Unable to load config for PostgreSQL CDR's: %s\n", config);
-		return AST_MODULE_LOAD_DECLINE;
-	}
-
-	res = process_my_load_module(cfg);
-	ast_config_destroy(cfg);
-
-	return res;
-}
-
 static int load_module(void)
 {
-	return my_load_module();
-}
-
-static int unload_module(void)
-{
-	return my_unload_module();
+	return config_module(0) ? AST_MODULE_LOAD_DECLINE : 0;
 }
 
 static int reload(void)
 {
-	int res;
-	ast_mutex_lock(&pgsql_lock);
-	my_unload_module();
-	res = my_load_module();
-	ast_mutex_unlock(&pgsql_lock);
-	return res;
+	return config_module(1);
 }
 
 AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "PostgreSQL CDR Backend",

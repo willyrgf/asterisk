@@ -6,13 +6,9 @@
 # this file just have to remember to set the AC_PREREQ argument
 # to something that suits their needs.
 
-AC_PREREQ(2.59)
+AC_PREREQ(2.60)
 
-m4_define([PBX_VERSION],
-          m4_bpatsubst(m4_esyscmd([build_tools/make_version .]),
-                       [\([0-9.]*\)\(\w\|\W\)*],
-                       [\1]))
-AC_INIT(asterisk, PBX_VERSION, www.asterisk.org)
+AC_INIT(asterisk, 1.4, www.asterisk.org)
 
 # cross-compile macros
 AC_CANONICAL_BUILD
@@ -72,6 +68,8 @@ AC_SUBST(HOST_CPU)
 AC_SUBST(HOST_VENDOR)
 AC_SUBST(HOST_OS)
 
+WINARCH=0
+
 case "${host_os}" in
      freebsd*)
      OSARCH=FreeBSD
@@ -85,12 +83,21 @@ case "${host_os}" in
      solaris*)
      OSARCH=SunOS
      ;;
+     mingw32)
+     OSARCH=mingw32
+     WINARCH=1
+     ;;
+     cygwin)
+     OSARCH=cygwin
+     WINARCH=1
+     ;;
      *)
-     OSARCH=${HOST_OS}
+     OSARCH=${host_os}
      ;;
 esac
 
 AC_SUBST(OSARCH)
+AC_SUBST(WINARCH)
 
 #  check for uname
 AC_PATH_TOOL([UNAME], [uname], No)
@@ -143,6 +150,7 @@ if test "x$with_gnu_ld" = "xyes" ; then
 fi
 AC_SUBST(GNU_LD)
 
+AC_PATH_PROG([AWK], [awk], :)
 AC_PATH_PROG([GREP], [grep], :)
 AC_PATH_PROG([FIND], [find], :)
 AC_PATH_PROG([COMPRESS], [compress], :)
@@ -175,8 +183,15 @@ AC_ARG_ENABLE(dev-mode,
 	esac])
 AC_SUBST(AST_DEVMODE)
 
-# package option names should be in alphabetical order
-# by the --with option name, to make things easier for the users :-)
+# AST_EXT_LIB_SETUP is used to tell configure to handle variables for
+# various packages.
+# $1 is the prefix for the variables in makeopts and autoconfig.h
+# $2 is the short comment, $4 is the long comment
+# $3 is the name used in --with- or --without- flags for configure.
+#
+# Package option names should be in alphabetical order
+# by the --with option name (the third field),
+# to make things easier for the users.
 
 AST_EXT_LIB_SETUP([ALSA], [Advanced Linux Sound Architecture], [asound])
 
@@ -187,13 +202,15 @@ AST_EXT_LIB_SETUP([CAP], [POSIX 1.e capabilities], [cap])
 AST_EXT_LIB_SETUP([CURL], [cURL], [curl])
 AST_EXT_LIB_SETUP([CURSES], [curses], [curses])
 AST_EXT_LIB_SETUP([CRYPTO], [OpenSSL Cryptography support], [crypto])
-AST_EXT_LIB_SETUP([GNUTLS], [GNU TLS support (used for iksemel only)], [gnutls])
-AST_EXT_LIB_SETUP([GSM], [GSM], [gsm], [, or 'internal'])
+AST_EXT_LIB_SETUP([GSM], [External GSM library], [gsm], [, use 'internal' GSM otherwise])
+AST_EXT_LIB_SETUP([GTK], [gtk libraries], [gtk])
+AST_EXT_LIB_SETUP([GTK2], [gtk2 libraries], [gtk2])
 AST_EXT_LIB_SETUP([IKSEMEL], [Iksemel Jabber Library], [iksemel])
 AST_EXT_LIB_SETUP([IMAP_TK], [UW IMAP Toolkit], [imap])
 AST_EXT_LIB_SETUP([ISDNNET], [ISDN4Linux Library], [isdnnet])
 AST_EXT_LIB_SETUP([KDE], [KDE], [kde])
 AST_EXT_LIB_SETUP([LTDL], [libtool], [ltdl])
+AST_EXT_LIB_SETUP([LUA], [Lua], [lua])
 AST_EXT_LIB_SETUP([MISDN], [mISDN User Library], [misdn])
 AST_EXT_LIB_SETUP([NBS], [Network Broadcast Sound], [nbs])
 AST_EXT_LIB_SETUP([NCURSES], [ncurses], [ncurses])
@@ -220,12 +237,18 @@ AST_EXT_LIB_SETUP([FREETDS], [FreeTDS], [tds])
 AST_EXT_LIB_SETUP([TERMCAP], [Termcap], [termcap])
 AST_EXT_LIB_SETUP([TINFO], [Term Info], [tinfo])
 AST_EXT_LIB_SETUP([TONEZONE], [tonezone], [tonezone])
+AST_EXT_LIB_SETUP([USB], [usb], [usb])
 AST_EXT_LIB_SETUP([VORBIS], [Vorbis], [vorbis])
 AST_EXT_LIB_SETUP([VPB], [Voicetronix API], [vpb])
+AST_EXT_LIB_SETUP([X11], [X11 support], [x11])
 AST_EXT_LIB_SETUP([ZLIB], [zlib], [z])
 AST_EXT_LIB_SETUP([ZAPTEL], [Zaptel], [zaptel])
 AST_EXT_LIB_SETUP([ZAPTEL_TRANSCODE], [Zaptel_transcode], [zaptel_transcode])
 AST_EXT_LIB_SETUP([ZAPTEL_VLDTMF], [Zaptel_vldtmf], [zaptel_vldtmf])
+
+AST_EXT_LIB_SETUP([SDL], [Sdl], [sdl])
+AST_EXT_LIB_SETUP([SDL_IMAGE], [Sdl Image library], [SDL_image])
+AST_EXT_LIB_SETUP([FFMPEG], [Ffmpeg and avcodec library], [avcodec])
 
 # check for basic system features and functionality before
 # checking for package libraries
@@ -235,6 +258,8 @@ AC_HEADER_DIRENT
 AC_HEADER_STDC
 AC_HEADER_SYS_WAIT
 AC_CHECK_HEADERS([arpa/inet.h fcntl.h inttypes.h libintl.h limits.h locale.h malloc.h netdb.h netinet/in.h stddef.h stdint.h stdlib.h string.h strings.h sys/file.h sys/ioctl.h sys/param.h sys/socket.h sys/time.h syslog.h termios.h unistd.h utime.h])
+
+AC_CHECK_HEADERS([winsock.h winsock2.h])
 
 AC_SYS_LARGEFILE
 
@@ -277,11 +302,40 @@ AC_FUNC_STRNLEN
 AC_FUNC_STRTOD
 AC_FUNC_UTIME_NULL
 AC_FUNC_VPRINTF
-AC_CHECK_FUNCS([asprintf atexit bzero dup2 endpwent floor ftruncate getcwd gethostbyname gethostname getloadavg gettimeofday inet_ntoa isascii localtime_r memchr memmove memset mkdir munmap pow putenv re_comp regcomp rint select setenv socket sqrt strcasecmp strcasestr strchr strcspn strdup strerror strlcat strlcpy strncasecmp strndup strnlen strrchr strsep strspn strstr strtol strtoq unsetenv utime vasprintf])
+AC_CHECK_FUNCS([asprintf atexit bzero dup2 endpwent ftruncate getcwd gethostbyname gethostname getloadavg gettimeofday inet_ntoa isascii localtime_r memchr memmove memset mkdir munmap putenv re_comp regcomp select setenv socket strcasecmp strcasestr strchr strcspn strdup strerror strlcat strlcpy strncasecmp strndup strnlen strrchr strsep strspn strstr strtol strtoq unsetenv utime vasprintf])
+
+AC_CHECK_FUNCS([glob])
+
+AC_MSG_CHECKING(for timersub in time.h)
+AC_LINK_IFELSE(
+	AC_LANG_PROGRAM([#include <sys/time.h>],
+		[struct timeval *a; timersub(a, a, a);]),
+	AC_MSG_RESULT(yes)
+		AC_DEFINE([HAVE_TIMERSUB], 1, [Define to 1 if your system defines timersub.]),
+	AC_MSG_RESULT(no)
+)
+
+AC_CHECK_HEADER([sys/poll.h], 
+   [HAS_POLL=1]
+   AC_DEFINE([HAVE_SYS_POLL_H], 1, [Define to 1 if your system has working sys/poll.h]),
+   )
+AC_SUBST(HAS_POLL)
 
 # https support (in main/http.c) uses funopen on BSD systems,
 # fopencookie on linux
 AC_CHECK_FUNCS([funopen fopencookie])
+
+AC_CHECK_FUNCS([inet_aton])
+
+# check if we have IP_PKTINFO constant defined
+AC_MSG_CHECKING(for IP_PKTINFO)
+AC_LINK_IFELSE(
+		AC_LANG_PROGRAM([#include <netinet/in.h>],
+						[int pi = IP_PKTINFO;]),
+		AC_MSG_RESULT(yes)
+		AC_DEFINE([HAVE_PKTINFO], 1, [Define to 1 if your system defines IP_PKTINFO.]),
+		AC_MSG_RESULT(no)
+)
 
 # some systems already have gethostbyname_r so we don't need to build ours in main/utils.c
 AC_SEARCH_LIBS(gethostbyname_r, [socket nsl])
@@ -331,14 +385,23 @@ fi
 
 AST_C_DEFINE_CHECK([PTHREAD_RWLOCK_INITIALIZER], [PTHREAD_RWLOCK_INITIALIZER], [pthread.h])
 AST_C_DEFINE_CHECK([PTHREAD_RWLOCK_PREFER_WRITER_NP], [PTHREAD_RWLOCK_PREFER_WRITER_NP], [pthread.h])
+AST_C_DEFINE_CHECK([PTHREAD_MUTEX_RECURSIVE_NP], [PTHREAD_MUTEX_RECURSIVE_NP], [pthread.h])
+AST_C_DEFINE_CHECK([PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP], [PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP], [pthread.h])
 
+if test "${cross_compiling}" = "no";
+then
 AC_MSG_CHECKING(for working epoll support)
 AC_LINK_IFELSE(
-AC_LANG_PROGRAM([#include <sys/epoll.h>], [epoll_create(10);]),
+AC_LANG_PROGRAM([#include <sys/epoll.h>], [int res = epoll_create(10);
+					  if (res < 0)
+					     return 1;
+					  close (res);
+					  return 0;]),
 AC_MSG_RESULT(yes)
 AC_DEFINE([HAVE_EPOLL], 1, [Define to 1 if your system has working epoll support.]),
 AC_MSG_RESULT(no)
 )
+fi
 
 AC_MSG_CHECKING(for compiler atomic operations)
 AC_LINK_IFELSE(
@@ -439,10 +502,48 @@ AST_EXT_LIB_CHECK([EXP2L], [m], [exp2l])
 AST_EXT_LIB_CHECK([LOG2L], [m], [log2l])
 AST_EXT_LIB_CHECK([EXP10L], [m], [exp10l])
 AST_EXT_LIB_CHECK([LOG10L], [m], [log10l])
+AST_EXT_LIB_CHECK([SINL], [m], [sinl])
+AST_EXT_LIB_CHECK([COSL], [m], [cosl])
+AST_EXT_LIB_CHECK([TANL], [m], [tanl])
+AST_EXT_LIB_CHECK([ASINL], [m], [asinl])
+AST_EXT_LIB_CHECK([ACOSL], [m], [acosl])
+AST_EXT_LIB_CHECK([ATANL], [m], [atanl])
+AST_EXT_LIB_CHECK([ATAN2L], [m], [atan2l])
+AST_EXT_LIB_CHECK([POWL], [m], [powl])
+AST_EXT_LIB_CHECK([SQRTL], [m], [sqrtl])
+AST_EXT_LIB_CHECK([RINTL], [m], [rintl])
+AST_EXT_LIB_CHECK([EXPL], [m], [expl])
+AST_EXT_LIB_CHECK([LOGL], [m], [logl])
+AST_EXT_LIB_CHECK([REMAINDERL], [m], [remainderl])
+AST_EXT_LIB_CHECK([FMODL], [m], [fmodl])
+AST_EXT_LIB_CHECK([ROUNDL], [m], [roundl])
+AST_EXT_LIB_CHECK([TRUNCL], [m], [truncl])
+AST_EXT_LIB_CHECK([STRTOLD], [c], [strtold], [stdlib.h])
+AST_EXT_LIB_CHECK([FLOORL], [m], [floorl])
+AST_EXT_LIB_CHECK([CEILL], [m], [ceill])
 AST_EXT_LIB_CHECK([EXP2], [m], [exp2])
 AST_EXT_LIB_CHECK([LOG2], [m], [log2])
 AST_EXT_LIB_CHECK([EXP10], [m], [exp10])
 AST_EXT_LIB_CHECK([LOG10], [m], [log10])
+AST_EXT_LIB_CHECK([SIN], [m], [sin])
+AST_EXT_LIB_CHECK([COS], [m], [cos])
+AST_EXT_LIB_CHECK([TAN], [m], [tan])
+AST_EXT_LIB_CHECK([ASIN], [m], [asin])
+AST_EXT_LIB_CHECK([ACOS], [m], [acos])
+AST_EXT_LIB_CHECK([ATAN], [m], [atan])
+AST_EXT_LIB_CHECK([ATAN2], [m], [atan2])
+AST_EXT_LIB_CHECK([POW], [m], [pow])
+AST_EXT_LIB_CHECK([SQRT], [m], [sqrt])
+AST_EXT_LIB_CHECK([RINT], [m], [rint])
+AST_EXT_LIB_CHECK([EXP], [m], [exp])
+AST_EXT_LIB_CHECK([LOG], [m], [log])
+AST_EXT_LIB_CHECK([REMAINDER], [m], [remainder])
+AST_EXT_LIB_CHECK([FMOD], [m], [fmod])
+AST_EXT_LIB_CHECK([ROUND], [m], [round])
+AST_EXT_LIB_CHECK([TRUNC], [m], [trunc])
+AST_EXT_LIB_CHECK([STRTOD], [c], [strtod], [stdlib.h])
+AST_EXT_LIB_CHECK([FLOOR], [m], [floor])
+AST_EXT_LIB_CHECK([CEIL], [m], [ceil])
 
 GSM_INTERNAL="yes"
 AC_SUBST(GSM_INTERNAL)
@@ -511,10 +612,6 @@ if test "${USE_GSM}" != "no"; then
 fi
 
 AST_EXT_LIB_CHECK([IKSEMEL], [iksemel], [iks_start_sasl], [iksemel.h])
-
-if test "${PBX_IKSEMEL}" = 1; then
-   AST_EXT_LIB_CHECK([GNUTLS], [gnutls], [gnutls_bye], [gnutls/gnutls.h], [-lz -lgcrypt -lgpg-error])
-fi
 
 if test "${USE_IMAP_TK}" != "no"; then
    if test "${IMAP_TK_DIR}" = "system" ; then
@@ -737,6 +834,8 @@ AST_EXT_LIB_CHECK([MISDN], [mISDN], [mISDN_open], [mISDNuser/mISDNlib.h])
 if test "${PBX_MISDN}" = 1; then
    AST_EXT_LIB_CHECK([ISDNNET], [isdnnet], [init_manager], [mISDNuser/isdn_net.h], [-lmISDN -lpthread])
    AST_EXT_LIB_CHECK([SUPPSERV], [suppserv], [encodeFac], [mISDNuser/suppserv.h])
+   AST_C_DEFINE_CHECK([MISDN_FAC_RESULT], [Fac_RESULT], [mISDNuser/suppserv.h])
+   AST_C_DEFINE_CHECK([MISDN_FAC_ERROR], [Fac_ERROR], [mISDNuser/suppserv.h])
    AC_CHECK_HEADER([linux/mISDNdsp.h], [AC_DEFINE_UNQUOTED([MISDN_1_2], 1, [Build chan_misdn for mISDN 1.2 or later.])])
 fi
 
@@ -744,33 +843,8 @@ AST_EXT_LIB_CHECK([NBS], [nbs], [nbs_connect], [nbs.h])
 
 AST_EXT_LIB_CHECK([NCURSES], [ncurses], [initscr], [curses.h])
 
-NETSNMP_CONFIG=No
-if test "${USE_NETSNMP}" != "no"; then	
-   if test "x${NETSNMP_DIR}" != "x"; then
-      AC_PATH_TOOL([NETSNMP_CONFIG], [net-snmp-config], No, [${NETSNMP_DIR}/bin])
-      if test x"${NETSNMP_CONFIG}" = xNo; then
-         AC_MSG_NOTICE([***])
-         AC_MSG_NOTICE([*** net-snmp-config was not found in the path you specified:])
-         AC_MSG_NOTICE([*** ${NETSNMP_DIR}/bin])
-         AC_MSG_NOTICE([*** Either correct the installation, or run configure])
-         AC_MSG_NOTICE([*** including --without-netsnmp])
-         exit 1
-      fi
-   else
-      AC_PATH_TOOL([NETSNMP_CONFIG], [net-snmp-config], No)
-   fi
-fi
-if test x"${NETSNMP_CONFIG}" != xNo; then
-   NETSNMP_libs=`${NETSNMP_CONFIG} --agent-libs`
-   
-   AC_CHECK_LIB([netsnmp], [snmp_register_callback], AC_DEFINE_UNQUOTED([HAVE_NETSNMP], 1,
-   [Define to indicate the Net-SNMP library]), [], ${NETSNMP_libs})
-
-   if test "${ac_cv_lib_netsnmp_snmp_register_callback}" = "yes"; then
-      NETSNMP_LIB="${NETSNMP_libs}"
-      PBX_NETSNMP=1
-   fi
-fi
+# XXX do we need to check for snmp_register_callback ?
+AST_EXT_TOOL_CHECK([NETSNMP], [net-snmp], , [--agent-libs])
 
 AST_EXT_LIB_CHECK([NEWT], [newt], [newtBell], [newt.h])
 
@@ -778,7 +852,7 @@ AST_EXT_LIB_CHECK([UNIXODBC], [odbc], [SQLConnect], [sql.h], [])
 
 AST_EXT_LIB_CHECK([OGG], [ogg], [ogg_sync_init], [])
 
-AST_EXT_LIB_CHECK([BKTR], [execinfo], [backtrace], [execinfo.h], [-lexecinfo])
+AST_EXT_LIB_CHECK([BKTR], [execinfo], [backtrace], [execinfo.h])
 
 # possible places for oss definitions
 AST_EXT_LIB_CHECK([OSS], [ossaudio], [], [linux/soundcard.h])
@@ -813,10 +887,10 @@ if test "${PG_CONFIG}" != No; then
          exit 1
 	  fi
    else 
-      AC_CHECK_LIB([pq], [PQexec], AC_DEFINE_UNQUOTED([HAVE_PGSQL], 1,
+      AC_CHECK_LIB([pq], [PQescapeStringConn], AC_DEFINE_UNQUOTED([HAVE_PGSQL], 1,
       [Define to indicate the PostgreSQL library]), [], -L${PGSQL_libdir} -lz)
 
-      if test "${ac_cv_lib_pq_PQexec}" = "yes"; then
+      if test "${ac_cv_lib_pq_PQescapeStringConn}" = "yes"; then
          PGSQL_LIB="-L${PGSQL_libdir} -lpq -lz"
          PGSQL_INCLUDE="-I${PGSQL_includedir}"
          PBX_PGSQL=1
@@ -833,9 +907,9 @@ fi
 
 AST_EXT_LIB_CHECK([POPT], [popt], [poptStrerror], [popt.h])
 
-AST_EXT_LIB_CHECK([PRI], [pri], [pri_keypad_facility], [libpri.h])
+AST_EXT_LIB_CHECK([PRI], [pri], [pri_new_bri], [libpri.h])
 
-AST_EXT_LIB_CHECK([SS7], [ss7], [ss7_new], [libss7.h])
+AST_EXT_LIB_CHECK([SS7], [ss7], [isup_cqr], [libss7.h])
 
 if test "${USE_PWLIB}" != "no"; then
 	if test -n "${PWLIB_DIR}"; then
@@ -937,6 +1011,10 @@ fi
 
 AC_LANG_POP
 
+LUA_INCLUDE="-I/usr/include/lua5.1"
+LUA_LIB="-llua5.1"
+AST_EXT_LIB_CHECK([LUA], [lua5.1], [luaL_newstate], [lua5.1/lua.h]) 
+
 AST_EXT_LIB_CHECK([RADIUS], [radiusclient-ng], [rc_read_config], [radiusclient-ng.h])
 
 AST_EXT_LIB_CHECK([SPEEX], [speex], [speex_encode], [speex/speex.h], [-lm])
@@ -985,9 +1063,11 @@ if test "${host_os}" != "linux-gnu" ; then
 fi
 
 # new tonezone, version 1.4.0
-AST_EXT_LIB_CHECK([TONEZONE], [tonezone], [tone_zone_find], [zaptel/tonezone.h], [${tonezone_extra}], [140])
+AST_EXT_LIB_CHECK([TONEZONE], [tonezone], [tone_zone_find], [zaptel/tonezone.h], [${tonezone_extra}], [], [140])
 # other case, old tonezone (0.80)
-AST_EXT_LIB_CHECK([TONEZONE], [tonezone], [tone_zone_find], [zaptel/zaptel.h], [${tonezone_extra}], [80])
+AST_EXT_LIB_CHECK([TONEZONE], [tonezone], [tone_zone_find], [zaptel/zaptel.h], [${tonezone_extra}], [], [80])
+
+AST_EXT_LIB_CHECK([USB], [usb], [usb_init], [usb.h], [])
 
 AST_EXT_LIB_CHECK([VORBIS], [vorbis], [vorbis_info_init], [vorbis/codec.h], [-lm -lvorbisenc])
 
@@ -1051,15 +1131,18 @@ AST_C_DEFINE_CHECK([ZAPTEL_VLDTMF], [ZT_EVENT_REMOVED], [zaptel/zaptel.h])
 # Check for transcode support
 AST_C_DEFINE_CHECK([ZAPTEL_TRANSCODE], [ZT_TCOP_ALLOCATE], [zaptel/zaptel.h])
 
+# Check for Zaptel hwgain support
+AST_C_DEFINE_CHECK([ZAPTEL_HWGAIN], [ZT_SET_HWGAIN], [zaptel/zaptel.h])
+
 # On FreeBSD, try old zaptel (0.80 or so) and pretend we have vldtmf
 case "${host_os}" in
     freebsd*)
-	AST_EXT_LIB_CHECK([ZAPTEL], [zaptel],, [zaptel.h],, [80])
-	AST_EXT_LIB_CHECK([ZAPTEL_VLDTMF], [zaptel],, [zaptel/zaptel.h],, [90])
-	AST_EXT_LIB_CHECK([ZAPTEL_VLDTMF], [zaptel],, [zaptel.h],, [80])
+	AST_EXT_LIB_CHECK([ZAPTEL], [zaptel],, [zaptel.h],,, [80])
+	AST_EXT_LIB_CHECK([ZAPTEL_VLDTMF], [zaptel],, [zaptel/zaptel.h],,, [90])
+	AST_EXT_LIB_CHECK([ZAPTEL_VLDTMF], [zaptel],, [zaptel.h],,, [80])
 
 	# other case, old tonezone (0.80)
-	AST_EXT_LIB_CHECK([TONEZONE], [tonezone], [tone_zone_find], [zaptel.h], [${tonezone_extra}], [80])
+	AST_EXT_LIB_CHECK([TONEZONE], [tonezone], [tone_zone_find], [zaptel.h], [${tonezone_extra}],, [80])
 	;;
 esac
 
@@ -1091,17 +1174,20 @@ AC_CHECK_HEADER([linux/ixjuser.h], [PBX_IXJUSER=1], [PBX_IXJUSER=0], [
 				   ])
 AC_SUBST(PBX_IXJUSER)
 
-PBX_GTK=0
-AC_CHECK_TOOL(GTKCONFIG, gtk-config, No)
-if test ! "x${GTKCONFIG}" = xNo; then
-   GTK_INCLUDE=$(${GTKCONFIG} --cflags gthread)
-   GTK_LIB=$(${GTKCONFIG} --libs gthread)
-   PBX_GTK=1
-   AC_DEFINE([HAVE_GTK], 1, [Define if your system has the GTK libraries.])
-fi
-AC_SUBST(PBX_GTK)
-AC_SUBST(GTK_INCLUDE)
-AC_SUBST(GTK_LIB)
+AST_EXT_TOOL_CHECK([SDL], [sdl])
+AST_EXT_LIB_CHECK([SDL_IMAGE], [SDL_image], [IMG_Load], [SDL_image.h], [${SDL_LIB}], [${SDL_INCLUDE}])
+AST_EXT_LIB_CHECK([FFMPEG], [avcodec], [sws_getContext], [ffmpeg/avcodec.h], [-lpthread -lz -lm])
+
+# possible places for video4linux version 1
+AC_CHECK_HEADER([linux/videodev.h],
+	[AC_DEFINE_UNQUOTED([HAVE_VIDEODEV_H], 1, [Define to 1 if your system has linux/videodev.h.])])
+
+# possible places for X11
+AST_EXT_LIB_CHECK([X11], [X11], [XOpenDisplay], [X11/Xlib.h],,, [standard_path])
+AST_EXT_LIB_CHECK([X11], [X11], [XOpenDisplay], [X11/Xlib.h],, [-I/usr/X11R6/include], [X11R6])
+
+# we don't use gtk right now...
+AST_EXT_TOOL_CHECK([GTK], [gtk])
 
 PBX_GTK2=0
 AC_CHECK_TOOL(PKGCONFIG, pkg-config, No)
@@ -1181,6 +1267,8 @@ fi
 AC_MSG_NOTICE(Package configured for: )
 AC_MSG_NOTICE( OS type  : $host_os)
 AC_MSG_NOTICE( Host CPU : $host_cpu)
+AC_MSG_NOTICE( build-cpu:vendor:os: $build_cpu : $build_vendor : $build_os :) 
+AC_MSG_NOTICE( host-cpu:vendor:os: $host_cpu : $host_vendor : $host_os :) 
 if test "${cross_compiling}" = "yes"; then
    AC_MSG_NOTICE( Cross Compilation = YES)
 fi

@@ -31,20 +31,9 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <fcntl.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <netinet/in.h>
-#include <string.h>
-#include <stdio.h>
-
-#include "asterisk/lock.h"
 #include "asterisk/translate.h"
 #include "asterisk/config.h"
-#include "asterisk/options.h"
 #include "asterisk/module.h"
-#include "asterisk/logger.h"
-#include "asterisk/channel.h"
 #include "asterisk/utils.h"
 
 #include "lpc10/lpc10.h"
@@ -261,27 +250,31 @@ static struct ast_translator lintolpc10 = {
 	.buf_size = LPC10_BYTES_IN_COMPRESSED_FRAME * (1 + BUFFER_SAMPLES / LPC10_SAMPLES_PER_FRAME),
 };
 
-static void parse_config(void)
+static int parse_config(int reload)
 {
-        struct ast_variable *var;
-        struct ast_config *cfg = ast_config_load("codecs.conf");
-	if (!cfg)
-		return;
+	struct ast_variable *var;
+	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
+	struct ast_config *cfg = ast_config_load("codecs.conf", config_flags);
+	if (cfg == NULL)
+		return -1;
+	if (cfg == CONFIG_STATUS_FILEUNCHANGED)
+		return 0;
 	for (var = ast_variable_browse(cfg, "plc"); var; var = var->next) {
-	       if (!strcasecmp(var->name, "genericplc")) {
+		if (!strcasecmp(var->name, "genericplc")) {
 			lpc10tolin.useplc = ast_true(var->value) ? 1 : 0;
 			ast_verb(3, "codec_lpc10: %susing generic PLC\n",
 					lpc10tolin.useplc ? "" : "not ");
 		}
-        }
+	}
 	ast_config_destroy(cfg);
+	return 0;
 }
 
 static int reload(void)
 {
-        parse_config();
-
-        return 0;
+	if (parse_config(1))
+		return AST_MODULE_LOAD_DECLINE;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 
@@ -299,14 +292,16 @@ static int load_module(void)
 {
 	int res;
 
-	parse_config();
-	res=ast_register_translator(&lpc10tolin);
+	if (parse_config(0))
+		return AST_MODULE_LOAD_DECLINE;
+	res = ast_register_translator(&lpc10tolin);
 	if (!res) 
-		res=ast_register_translator(&lintolpc10);
+		res = ast_register_translator(&lintolpc10);
 	else
 		ast_unregister_translator(&lpc10tolin);
-
-	return res;
+	if (res)
+		return AST_MODULE_LOAD_FAILURE;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "LPC10 2.4kbps Coder/Decoder",

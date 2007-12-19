@@ -29,15 +29,11 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <sys/types.h>
-#include <strings.h>
-#include <unistd.h>
 #include <time.h>
 
 #include "asterisk/channel.h"
 #include "asterisk/cdr.h"
 #include "asterisk/module.h"
-#include "asterisk/logger.h"
 #include "asterisk/utils.h"
 #include "asterisk/manager.h"
 #include "asterisk/config.h"
@@ -52,18 +48,30 @@ static char *name = "cdr_manager";
 static int enablecdr = 0;
 struct ast_str *customfields;
 
-static int load_config(void)
+static int manager_log(struct ast_cdr *cdr);
+
+static int load_config(int reload)
 {
 	char *cat = NULL;
 	struct ast_config *cfg;
 	struct ast_variable *v;
-	
+	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
+	int newenablecdr = 0;
+
+	cfg = ast_config_load(CONF_FILE, config_flags);
+	if (cfg == CONFIG_STATUS_FILEUNCHANGED)
+		return 0;
+
+	if (reload && customfields) {
+		ast_free(customfields);
+	}
 	customfields = NULL;
 
-	cfg = ast_config_load(CONF_FILE);
 	if (!cfg) {
 		/* Standard configuration */
 		ast_log(LOG_WARNING, "Failed to load configuration file. Module not activated.\n");
+		if (enablecdr)
+			ast_cdr_unregister(name);
 		enablecdr = 0;
 		return 0;
 	}
@@ -72,9 +80,8 @@ static int load_config(void)
 		if (!strcasecmp(cat, "general")) {
 			v = ast_variable_browse(cfg, cat);
 			while (v) {
-				if (!strcasecmp(v->name, "enabled")) {
-					enablecdr = ast_true(v->value);
-				}
+				if (!strcasecmp(v->name, "enabled"))
+					newenablecdr = ast_true(v->value);
 				
 				v = v->next;
 			}
@@ -98,6 +105,13 @@ static int load_config(void)
 	}
 	
 	ast_config_destroy(cfg);
+
+	if (enablecdr && !newenablecdr)
+		ast_cdr_unregister(name);
+	else if (!enablecdr && newenablecdr)
+		ast_cdr_register(name, "Asterisk Manager Interface CDR Backend", manager_log);
+	enablecdr = newenablecdr;
+
 	return 1;
 }
 
@@ -124,15 +138,15 @@ static int manager_log(struct ast_cdr *cdr)
 	ast_localtime(&cdr->end, &timeresult, NULL);
 	ast_strftime(strEndTime, sizeof(strEndTime), DATE_FORMAT, &timeresult);
 
+	buf[0] = 0;
 	/* Custom fields handling */
-	memset(buf, 0 , sizeof(buf));
 	if (customfields != NULL && customfields->used > 0) {
 		memset(&dummy, 0, sizeof(dummy));
 		dummy.cdr = cdr;
 		pbx_substitute_variables_helper(&dummy, customfields->str, buf, sizeof(buf) - 1);
 	}
 
-	manager_event(EVENT_FLAG_CALL, "Cdr",
+	manager_event(EVENT_FLAG_CDR, "Cdr",
 	    "AccountCode: %s\r\n"
 	    "Source: %s\r\n"
 	    "Destination: %s\r\n"
@@ -171,28 +185,16 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	int res;
-
 	/* Configuration file */
-	if (!load_config())
+	if (!load_config(0))
 		return AST_MODULE_LOAD_DECLINE;
-	
-	res = ast_cdr_register(name, "Asterisk Manager Interface CDR Backend", manager_log);
-	if (res) {
-		ast_log(LOG_ERROR, "Unable to register Asterisk Call Manager CDR handling\n");
-	}
-	
-	return res;
+
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 static int reload(void)
 {
-	if (customfields) {
-		ast_free(customfields);
-	}
-	
-	load_config();
-	return 0;
+	return load_config(1);
 }
 
 AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "Asterisk Manager Interface CDR Backend",

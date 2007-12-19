@@ -24,8 +24,7 @@
 #define _ASTERISK_PBX_H
 
 #include "asterisk/sched.h"
-#include "asterisk/channel.h"
-#include "asterisk/linkedlists.h"
+#include "asterisk/chanvars.h"
 
 #if defined(__cplusplus) || defined(c_plusplus)
 extern "C" {
@@ -37,6 +36,9 @@ extern "C" {
 #define AST_PBX_REPLACE 1
 
 /*! \brief Special return values from applications to the PBX { */
+#define AST_PBX_HANGUP	        -1	/*!< Jump to the 'h' exten */
+#define AST_PBX_OK	        0	/*!< No errors */
+#define AST_PBX_ERROR	        1	/*!< Jump to the 'e' exten */
 #define AST_PBX_KEEPALIVE	10	/*!< Destroy the thread, but don't hang up the channel */
 #define AST_PBX_NO_HANGUP_PEER	11
 /*! } */
@@ -298,58 +300,6 @@ int ast_add_extension2(struct ast_context *con, int replace, const char *extensi
 
 
 /*! 
- * \brief Register an application.
- *
- * \param app Short name of the application
- * \param execute a function callback to execute the application. It should return
- *                non-zero if the channel needs to be hung up.
- * \param synopsis a short description (one line synopsis) of the application
- * \param description long description with all of the details about the use of 
- *                    the application
- * 
- * This registers an application with Asterisk's internal application list. 
- * \note The individual applications themselves are responsible for registering and unregistering
- *       and unregistering their own CLI commands.
- * 
- * \retval 0 success 
- * \retval -1 failure.
- */
-#define ast_register_application(app, execute, synopsis, description) ast_register_application2(app, execute, synopsis, description, ast_module_info->self)
-
-/*!
- * \brief Register an application.
- *
- * \param app Short name of the application
- * \param execute a function callback to execute the application. It should return
- *                non-zero if the channel needs to be hung up.
- * \param synopsis a short description (one line synopsis) of the application
- * \param description long description with all of the details about the use of
- *                    the application
- * \param mod module this application belongs to
- *
- * This registers an application with Asterisk's internal application list.
- * \note The individual applications themselves are responsible for registering and unregistering
- *       and unregistering their own CLI commands.
- *
- * \retval 0 success
- * \retval -1 failure.
- */
-int ast_register_application2(const char *app, int (*execute)(struct ast_channel *, void *),
-				     const char *synopsis, const char *description, void *mod);
-
-/*! 
- * \brief Unregister an application
- * 
- * \param app name of the application (does not have to be the same string as the one that was registered)
- * 
- * This unregisters an application from Asterisk's internal application list.
- * 
- * \retval 0 success 
- * \retval -1 failure
- */
-int ast_unregister_application(const char *app);
-
-/*! 
  * \brief Uses hint and devicestate callback to get the state of an extension
  *
  * \param c this is not important
@@ -505,6 +455,20 @@ int ast_extension_match(const char *pattern, const char *extension);
 int ast_extension_close(const char *pattern, const char *data, int needmore);
 
 /*! 
+ * \brief Determine if one extension should match before another
+ * 
+ * \param a extension to compare with b
+ * \param b extension to compare with a
+ *
+ * Checks whether or extension a should match before extension b
+ *
+ * \retval 0 if the two extensions have equal matching priority
+ * \retval 1 on a > b
+ * \retval -1 on a < b
+ */
+int ast_extension_cmp(const char *a, const char *b);
+
+/*! 
  * \brief Launch a new extension (i.e. new stack)
  * 
  * \param c not important
@@ -512,6 +476,8 @@ int ast_extension_close(const char *pattern, const char *data, int needmore);
  * \param exten new extension to add
  * \param priority priority of new extension
  * \param callerid callerid of extension
+ * \param found
+ * \param combined_find_spawn 
  *
  * This adds a new extension to the asterisk extension list.
  *
@@ -519,7 +485,7 @@ int ast_extension_close(const char *pattern, const char *data, int needmore);
  * \retval -1 on failure.
  */
 int ast_spawn_extension(struct ast_channel *c, const char *context, 
-	const char *exten, int priority, const char *callerid);
+      const char *exten, int priority, const char *callerid, int *found, int combined_find_spawn);
 
 /*! 
  * \brief Add a context include
@@ -833,13 +799,39 @@ struct ast_ignorepat *ast_walk_context_ignorepats(struct ast_context *con,
 	struct ast_ignorepat *ip);
 struct ast_sw *ast_walk_context_switches(struct ast_context *con, struct ast_sw *sw);
 
+/*!
+ * \note Will lock the channel.
+ */
 int pbx_builtin_serialize_variables(struct ast_channel *chan, struct ast_str **buf);
+
+/*!
+ * \note Will lock the channel.
+ */
 const char *pbx_builtin_getvar_helper(struct ast_channel *chan, const char *name);
+
+/*!
+ * \note Will lock the channel.
+ */
 void pbx_builtin_pushvar_helper(struct ast_channel *chan, const char *name, const char *value);
+
+/*!
+ * \note Will lock the channel.
+ */
 void pbx_builtin_setvar_helper(struct ast_channel *chan, const char *name, const char *value);
+
+/*!
+ * \note Will lock the channel.
+ */
 void pbx_retrieve_variable(struct ast_channel *c, const char *var, char **ret, char *workspace, int workspacelen, struct varshead *headp);
 void pbx_builtin_clear_globals(void);
+
+/*!
+ * \note Will lock the channel.
+ */
 int pbx_builtin_setvar(struct ast_channel *chan, void *data);
+
+int pbx_builtin_raise_exception(struct ast_channel *chan, void *data);
+
 void pbx_substitute_variables_helper(struct ast_channel *c,const char *cp1,char *cp2,int count);
 void pbx_substitute_variables_varshead(struct varshead *headp, const char *cp1, char *cp2, int count);
 
@@ -849,10 +841,34 @@ int ast_extension_patmatch(const char *pattern, const char *data);
   set to 1, sets to auto fall through.  If newval set to 0, sets to no auto
   fall through (reads extension instead).  Returns previous value. */
 int pbx_set_autofallthrough(int newval);
+
+/*! Set "extenpatternmatchnew" flag, if newval is <0, does not acutally set.  If
+  set to 1, sets to use the new Trie-based pattern matcher.  If newval set to 0, sets to use
+  the old linear-search algorithm.  Returns previous value. */
+int pbx_set_extenpatternmatchnew(int newval);
+
+/*!
+ * \note This function will handle locking the channel as needed.
+ */
 int ast_goto_if_exists(struct ast_channel *chan, const char *context, const char *exten, int priority);
-/* I can find neither parsable nor parseable at dictionary.com, but google gives me 169000 hits for parseable and only 49,800 for parsable */
+
+/*!
+ * \note I can find neither parsable nor parseable at dictionary.com, 
+ *       but google gives me 169000 hits for parseable and only 49,800 
+ *       for parsable 
+ *
+ * \note This function will handle locking the channel as needed.
+ */
 int ast_parseable_goto(struct ast_channel *chan, const char *goto_string);
+
+/*!
+ * \note This function will handle locking the channel as needed.
+ */
 int ast_explicit_goto(struct ast_channel *chan, const char *context, const char *exten, int priority);
+
+/*!
+ * \note This function will handle locking the channel as needed.
+ */
 int ast_async_goto_if_exists(struct ast_channel *chan, const char *context, const char *exten, int priority);
 
 struct ast_custom_function* ast_custom_function_find(const char *name);
@@ -876,6 +892,11 @@ int __ast_custom_function_register(struct ast_custom_function *acf, struct ast_m
  * \brief Retrieve the number of active calls
  */
 int ast_active_calls(void);
+
+/*! 
+ * \brief Retrieve the total number of calls processed through the PBX since last restart
+ */
+int ast_processed_calls(void);
 	
 /*!
  * \brief executes a read operation on a function 
@@ -903,6 +924,52 @@ int ast_func_read(struct ast_channel *chan, const char *function, char *workspac
  * \return zero on success, non-zero on failure
  */
 int ast_func_write(struct ast_channel *chan, const char *function, const char *value);
+
+/*!
+ * When looking up extensions, we can have different requests
+ * identified by the 'action' argument, as follows.
+ * Note that the coding is such that the low 4 bits are the
+ * third argument to extension_match_core.
+ */
+
+enum ext_match_t {
+	E_MATCHMORE = 	0x00,	/* extension can match but only with more 'digits' */
+	E_CANMATCH =	0x01,	/* extension can match with or without more 'digits' */
+	E_MATCH =	0x02,	/* extension is an exact match */
+	E_MATCH_MASK =	0x03,	/* mask for the argument to extension_match_core() */
+	E_SPAWN =	0x12,	/* want to spawn an extension. Requires exact match */
+	E_FINDLABEL =	0x22	/* returns the priority for a given label. Requires exact match */
+};
+
+#define STATUS_NO_CONTEXT	1
+#define STATUS_NO_EXTENSION	2
+#define STATUS_NO_PRIORITY	3
+#define STATUS_NO_LABEL		4
+#define STATUS_SUCCESS		5 
+#define AST_PBX_MAX_STACK  128
+
+/* request and result for pbx_find_extension */
+struct pbx_find_info {
+#if 0
+	const char *context;
+	const char *exten;
+	int priority;
+#endif
+
+	char *incstack[AST_PBX_MAX_STACK];      /* filled during the search */
+	int stacklen;                   /* modified during the search */
+	int status;                     /* set on return */
+	struct ast_switch *swo;         /* set on return */
+	const char *data;               /* set on return */
+	const char *foundcontext;       /* set on return */
+};
+ 
+struct ast_exten *pbx_find_extension(struct ast_channel *chan,
+									 struct ast_context *bypass, struct pbx_find_info *q,
+									 const char *context, const char *exten, int priority,
+									 const char *label, const char *callerid, enum ext_match_t action);
+	
+
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }

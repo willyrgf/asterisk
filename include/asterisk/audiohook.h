@@ -27,6 +27,10 @@
 extern "C" {
 #endif
 
+/* these two are used in struct ast_audiohook */
+#include "asterisk/lock.h"
+#include "asterisk/linkedlists.h"
+
 #include "asterisk/slinfactory.h"
 
 enum ast_audiohook_type {
@@ -141,10 +145,15 @@ int ast_audiohook_detach(struct ast_audiohook *audiohook);
  */
 int ast_audiohook_detach_list(struct ast_audiohook_list *audiohook_list);
 
-/*! \brief Detach specified source audiohook from channel
+/*! 
+ * \brief Detach specified source audiohook from channel
+ *
  * \param chan Channel to detach from
  * \param source Name of source to detach
+ *
  * \return Returns 0 on success, -1 on failure
+ *
+ * \note The channel does not need to be locked before calling this function.
  */
 int ast_audiohook_detach_source(struct ast_channel *chan, const char *source);
 
@@ -162,21 +171,37 @@ struct ast_frame *ast_audiohook_write_list(struct ast_channel *chan, struct ast_
  */
 void ast_audiohook_trigger_wait(struct ast_audiohook *audiohook);
 
+/*!
+  \brief Find out how many audiohooks from  a certain source exist on a given channel, regardless of status.
+  \param chan The channel on which to find the spies 
+  \param source The audiohook's source
+  \param type The type of audiohook 
+  \return Return the number of audiohooks which are from the source specified
+
+  Note: Function performs nlocking.
+*/
+int ast_channel_audiohook_count_by_source(struct ast_channel *chan, const char *source, enum ast_audiohook_type type);
+
+/*!
+  \brief Find out how many spies of a certain type exist on a given channel, and are in state running.
+  \param chan The channel on which to find the spies
+  \param source The source of the audiohook
+  \param type The type of spy to look for
+  \return Return the number of running audiohooks which are from the source specified
+
+  Note: Function performs no locking.
+*/
+int ast_channel_audiohook_count_by_source_running(struct ast_channel *chan, const char *source, enum ast_audiohook_type type);
+
 /*! \brief Lock an audiohook
- * \param audiohook Audiohook structure
+ * \param ah Audiohook structure
  */
-static inline int ast_audiohook_lock(struct ast_audiohook *audiohook)
-{
-	return ast_mutex_lock(&audiohook->lock);
-}
+#define ast_audiohook_lock(ah) ast_mutex_lock(&(ah)->lock)
 
 /*! \brief Unlock an audiohook
- * \param audiohook Audiohook structure
+ * \param ah Audiohook structure
  */
-static inline int ast_audiohook_unlock(struct ast_audiohook *audiohook)
-{
-	return ast_mutex_unlock(&audiohook->lock);
-}
+#define ast_audiohook_unlock(ah) ast_mutex_unlock(&(ah)->lock)
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }

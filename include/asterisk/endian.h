@@ -27,8 +27,6 @@
  * Autodetect system endianess
  */
 
-#include "asterisk/compat.h"
-
 #ifndef __BYTE_ORDER
 #ifdef __linux__
 #include <endian.h>
@@ -38,6 +36,15 @@
 #define __LITTLE_ENDIAN LITTLE_ENDIAN
 #define __BIG_ENDIAN BIG_ENDIAN
 #else
+
+#ifndef	__LITTLE_ENDIAN
+#define	__LITTLE_ENDIAN		1234
+#endif
+
+#ifndef	__BIG_ENDIAN
+#define	__BIG_ENDIAN		4321
+#endif
+
 #ifdef __LITTLE_ENDIAN__
 #define __BYTE_ORDER __LITTLE_ENDIAN
 #endif /* __LITTLE_ENDIAN */

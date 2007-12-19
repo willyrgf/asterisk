@@ -28,10 +28,6 @@
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <time.h>
-#include <string.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
 #include <math.h>
 #include <ctype.h>
 
@@ -40,9 +36,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/frame.h"
 #include "asterisk/channel.h"
 #include "asterisk/callerid.h"
-#include "asterisk/logger.h"
 #include "asterisk/fskmodem.h"
-#include "asterisk/options.h"
 #include "asterisk/utils.h"
 
 struct callerid_state {
@@ -561,7 +555,7 @@ int callerid_feed(struct callerid_state *cid, unsigned char *ubuf, int len, int 
 					cid->sawflag = 2;
 				break;
 			case 2: /* Get lead-in */
-				if ((b == 0x04) || (b == 0x80)) {
+				if ((b == 0x04) || (b == 0x80) || (b == 0x06) || (b == 0x82)) {
 					cid->type = b;
 					cid->sawflag = 3;
 					cid->cksum = b;
@@ -597,8 +591,10 @@ int callerid_feed(struct callerid_state *cid, unsigned char *ubuf, int len, int 
 		
 				cid->number[0] = '\0';
 				cid->name[0] = '\0';
+				/* Update flags */
+				cid->flags = 0;
 				/* If we get this far we're fine.  */
-				if (cid->type == 0x80) {
+				if ((cid->type == 0x80) || (cid->type == 0x82)) {
 					/* MDMF */
 					/* Go through each element and process */
 					for (x = 0; x < cid->pos;) {
@@ -632,6 +628,13 @@ int callerid_feed(struct callerid_state *cid, unsigned char *ubuf, int len, int 
 							memcpy(cid->name, cid->rawdata + x + 1, res);
 							cid->name[res] = '\0';
 							break;
+						case 11: /* Message Waiting */
+							res = cid->rawdata[x + 1];
+							if (res)
+								cid->flags |= CID_MSGWAITING;
+							else
+								cid->flags |= CID_NOMSGWAITING;
+							break;
 						case 17: /* UK: Call type, 1=Voice Call, 2=Ringback when free, 129=Message waiting  */
 						case 19: /* UK: Network message system status (Number of messages waiting) */
 						case 22: /* Something French */
@@ -649,12 +652,17 @@ int callerid_feed(struct callerid_state *cid, unsigned char *ubuf, int len, int 
 						x += cid->rawdata[x];
 						x++;
 					}
+				} else if (cid->type == 0x6) {
+					/* VMWI SDMF */
+					if (cid->rawdata[2] == 0x42) {
+						cid->flags |= CID_MSGWAITING;
+					} else if (cid->rawdata[2] == 0x6f) {
+						cid->flags |= CID_NOMSGWAITING;
+					}
 				} else {
 					/* SDMF */
 					ast_copy_string(cid->number, cid->rawdata + 8, sizeof(cid->number));
 				}
-				/* Update flags */
-				cid->flags = 0;
 				if (!strcmp(cid->number, "P")) {
 					strcpy(cid->number, "");
 					cid->flags |= CID_PRIVATE_NUMBER;

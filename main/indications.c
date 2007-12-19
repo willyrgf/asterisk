@@ -32,18 +32,13 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <math.h>
 
 #include "asterisk/lock.h"
 #include "asterisk/linkedlists.h"
 #include "asterisk/indications.h"
 #include "asterisk/frame.h"
-#include "asterisk/options.h"
 #include "asterisk/channel.h"
-#include "asterisk/logger.h"
 #include "asterisk/utils.h"
 
 static int midi_tohz[128] = {
@@ -480,12 +475,12 @@ int ast_register_indication_country(struct ind_tone_zone *zone)
 		if (tz == current_tonezone)
 			current_tonezone = zone;
 		/* Remove from the linked list */
-		AST_RWLIST_REMOVE_CURRENT(&tone_zones, list);
+		AST_RWLIST_REMOVE_CURRENT(list);
 		/* Finally free the zone itself */
 		free_zone(tz);
 		break;
 	}
-	AST_RWLIST_TRAVERSE_SAFE_END
+	AST_RWLIST_TRAVERSE_SAFE_END;
 
 	/* Add zone to the list */
 	AST_RWLIST_INSERT_TAIL(&tone_zones, zone, list);
@@ -515,12 +510,12 @@ int ast_unregister_indication_country(const char *country)
 			current_tonezone = NULL;
 		}
 		/* Remove from the list */
-		AST_RWLIST_REMOVE_CURRENT(&tone_zones, list);
+		AST_RWLIST_REMOVE_CURRENT(list);
 		ast_verb(3, "Unregistered indication country '%s'\n", tz->country);
 		free_zone(tz);
 		res = 0;
 	}
-	AST_RWLIST_TRAVERSE_SAFE_END
+	AST_RWLIST_TRAVERSE_SAFE_END;
 	AST_RWLIST_UNLOCK(&tone_zones);
 
 	return res;

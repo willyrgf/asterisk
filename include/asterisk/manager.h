@@ -19,12 +19,7 @@
 #ifndef _ASTERISK_MANAGER_H
 #define _ASTERISK_MANAGER_H
 
-#include <stdarg.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-
+#include "asterisk/network.h"
 #include "asterisk/lock.h"
 
 /*!
@@ -37,21 +32,31 @@
 
 \verbatim
 
+ For Actions replies, the first line of the reply is a "Response:" header with
+ values "success", "error" or "follows". "Follows" implies that the
+ response is coming as separate events with the same ActionID. If the
+ Action request has no ActionID, it will be hard matching events
+ to the Action request in the manager client.
+
  The first header type is the "Event" header.  Other headers vary from
- event to event.  Headers end with standard \r\n termination.
+ event to event.  Headers end with standard \\r\\n termination.
  The last line of the manager response or event is an empty line.
- (\r\n)
+ (\\r\\n)
 
 \endverbatim
 
- ** Please try to re-use existing headers to simplify manager message parsing in clients.
+ \note Please try to \b re-use \b existing \b headers to simplify manager message parsing in clients.
     Don't re-use an existing header with a new meaning, please.
     You can find a reference of standard headers in doc/manager.txt
+
+- \ref manager.c Main manager code file
  */
 
-#define AMI_VERSION			"1.0"
+#define AMI_VERSION                     "1.1"
 #define DEFAULT_MANAGER_PORT 5038	/* Default port for Asterisk management via TCP */
 
+/*! \name Manager event classes */
+/*@{ */
 #define EVENT_FLAG_SYSTEM 		(1 << 0) /* System events such as module load/unload */
 #define EVENT_FLAG_CALL			(1 << 1) /* Call event, such as state change, etc */
 #define EVENT_FLAG_LOG			(1 << 2) /* Log events */
@@ -62,10 +67,13 @@
 #define EVENT_FLAG_CONFIG		(1 << 7) /* Ability to modify configurations */
 #define EVENT_FLAG_DTMF  		(1 << 8) /* Ability to read DTMF events */
 #define EVENT_FLAG_REPORTING		(1 << 9) /* Reporting events such as rtcp sent */
-/* Export manager structures */
+#define EVENT_FLAG_CDR			(1 << 10) /* CDR events */
+/*@} */
+
+/*! \brief Export manager structures */
 #define AST_MAX_MANHEADERS 128
 
-/* Manager Helper Function */
+/*! \brief Manager Helper Function */
 typedef int (*manager_hook_t)(int, const char *, char *); 
 
 
@@ -84,13 +92,13 @@ int check_manager_enabled(void);
 /*! \brief Check if AMI/HTTP is enabled */
 int check_webmanager_enabled(void);
 
-/*! Add a custom hook to be called when an event is fired */
-/*! \param hook struct manager_custom_hook object to add
+/*! Add a custom hook to be called when an event is fired 
+ \param hook struct manager_custom_hook object to add
 */
 void ast_manager_register_hook(struct manager_custom_hook *hook);
 
-/*! Delete a custom hook to be called when an event is fired */
-/*! \param hook struct manager_custom_hook object to delete
+/*! Delete a custom hook to be called when an event is fired
+    \param hook struct manager_custom_hook object to delete
 */
 void ast_manager_unregister_hook(struct manager_custom_hook *hook);
 
@@ -116,13 +124,13 @@ struct manager_action {
 	AST_RWLIST_ENTRY(manager_action) list;
 };
 
-/* External routines may register/unregister manager callbacks this way */
+/*! \brief External routines may register/unregister manager callbacks this way 
+ * \note  Use ast_manager_register2() to register with help text for new manager commands */
 #define ast_manager_register(a, b, c, d) ast_manager_register2(a, b, c, d, NULL)
 
-/* Use ast_manager_register2 to register with help text for new manager commands */
 
-/*! Register a manager command with the manager interface */
-/*! 	\param action Name of the requested Action:
+/*! \brief Register a manager command with the manager interface 
+ 	\param action Name of the requested Action:
 	\param authority Required authority for this command
 	\param func Function to call for this command
 	\param synopsis Help text (one line, up to 30 chars) for CLI manager show commands
@@ -135,8 +143,8 @@ int ast_manager_register2(
 	const char *synopsis,
 	const char *description);
 
-/*! Unregister a registred manager command */
-/*!	\param action Name of registred Action:
+/*! \brief Unregister a registred manager command 
+	\param action Name of registred Action:
 */
 int ast_manager_unregister( char *action );
 
@@ -158,8 +166,8 @@ int astman_verify_session_readpermissions(unsigned long ident, int perm);
  */
 int astman_verify_session_writepermissions(unsigned long ident, int perm);
 
-/*! External routines may send asterisk manager events this way */
-/*! 	\param category	Event category, matches manager authorization
+/*! \brief External routines may send asterisk manager events this way 
+ *  	\param category	Event category, matches manager authorization
 	\param event	Event name
 	\param contents	Contents of event
 */
@@ -173,22 +181,30 @@ int __attribute__ ((format(printf, 6, 7))) __manager_event(int category, const c
 							   const char *file, int line, const char *func,
 							   const char *contents, ...);
 
-/*! Get header from mananger transaction */
+/*! \brief Get header from mananger transaction */
 const char *astman_get_header(const struct message *m, char *var);
 
-/*! Get a linked list of the Variable: headers */
+/*! \brief Get a linked list of the Variable: headers */
 struct ast_variable *astman_get_variables(const struct message *m);
 
-/*! Send error in manager transaction */
+/*! \brief Send error in manager transaction */
 void astman_send_error(struct mansession *s, const struct message *m, char *error);
+
+/*! \brief Send response in manager transaction */
 void astman_send_response(struct mansession *s, const struct message *m, char *resp, char *msg);
+
+/*! \brief Send ack in manager transaction */
 void astman_send_ack(struct mansession *s, const struct message *m, char *msg);
+
+/*! \brief Send ack in manager list transaction */
 void astman_send_listack(struct mansession *s, const struct message *m, char *msg, char *listflag);
 
 void __attribute__ ((format (printf, 2, 3))) astman_append(struct mansession *s, const char *fmt, ...);
 
-/*! Called by Asterisk initialization */
+/*! \brief Called by Asterisk initialization */
 int init_manager(void);
+
+/*! \brief Called by Asterisk module functions and the CLI command */
 int reload_manager(void);
 
 /* \brief Convert permission string to integer 

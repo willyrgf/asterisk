@@ -28,20 +28,7 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <unistd.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <stdlib.h>
-#include <sys/time.h>
-#include <stdio.h>
-#include <errno.h>
-#include <string.h>
-
-#include "asterisk/lock.h"
-#include "asterisk/channel.h"
-#include "asterisk/file.h"
-#include "asterisk/logger.h"
-#include "asterisk/sched.h"
+#include "asterisk/mod_format.h"
 #include "asterisk/module.h"
 #include "asterisk/endian.h"
 
@@ -72,7 +59,7 @@ static struct ast_frame *h264_read(struct ast_filestream *s, int *whennext)
 	int mark=0;
 	unsigned short len;
 	unsigned int ts;
-	struct h264_desc *fs = (struct h264_desc *)s->private;
+	struct h264_desc *fs = (struct h264_desc *)s->_private;
 
 	/* Send a frame from the file to the appropriate channel */
 	if ((res = fread(&len, 1, sizeof(len), s->f)) < 1)
@@ -175,7 +162,9 @@ static const struct ast_format h264_f = {
 
 static int load_module(void)
 {
-	return ast_format_register(&h264_f);
+	if (ast_format_register(&h264_f))
+		return AST_MODULE_LOAD_FAILURE;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 static int unload_module(void)

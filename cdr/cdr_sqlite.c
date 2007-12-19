@@ -42,17 +42,12 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <sys/types.h>
-#include <unistd.h>
-#include <string.h>
-#include <stdlib.h>
-#include <stdio.h>
 #include <sqlite.h>
 
 #include "asterisk/channel.h"
 #include "asterisk/module.h"
-#include "asterisk/logger.h"
 #include "asterisk/utils.h"
+#include "asterisk/paths.h"
 
 #define LOG_UNIQUEID	0
 #define LOG_USERFIELD	0

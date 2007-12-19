@@ -37,18 +37,12 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-#include <stdio.h>
-
 #include "asterisk/module.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/utils.h"
 #include "asterisk/lock.h"
 #include "asterisk/file.h"
-#include "asterisk/logger.h"
-#include "asterisk/pbx.h"
-#include "asterisk/options.h"
 #include "asterisk/enum.h"
 #include "asterisk/app.h"
 
@@ -201,7 +195,9 @@ static int enum_query_read(struct ast_channel *chan, const char *cmd, char *data
 
 	datastore->data = erds;
 
+	ast_channel_lock(chan);
 	ast_channel_datastore_add(chan, datastore);
+	ast_channel_unlock(chan);
    
 	res = 0;
     
@@ -246,7 +242,10 @@ static int enum_result_read(struct ast_channel *chan, const char *cmd, char *dat
 		goto finish;
 	}
 
-	if (!(datastore = ast_channel_datastore_find(chan, &enum_result_datastore_info, args.id))) {
+	ast_channel_lock(chan);
+	datastore = ast_channel_datastore_find(chan, &enum_result_datastore_info, args.id);
+	ast_channel_unlock(chan);
+	if (!datastore) {
 		ast_log(LOG_WARNING, "No ENUM results found for query id!\n");
 		goto finish;
 	}
