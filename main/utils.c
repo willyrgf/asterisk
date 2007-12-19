@@ -511,7 +511,7 @@ const char *ast_inet_ntoa(struct in_addr ia)
 #ifdef DEBUG_THREADS
 
 /*! \brief A reasonable maximum number of locks a thread would be holding ... */
-#define AST_MAX_LOCKS 16
+#define AST_MAX_LOCKS 32
 
 /* Allow direct use of pthread_mutex_t and friends */
 #undef pthread_mutex_t
@@ -740,7 +740,11 @@ static int handle_show_locks(int fd, int argc, char *argv[])
 				lock_info->locks[i].lock_addr, 
 				lock_info->locks[i].times_locked);
 
-			if (!lock_info->locks[i].pending)
+			if (!lock_info->locks[i].pending || lock_info->locks[i].pending == -1)
+				continue;
+
+			/* We only have further details for mutexes right now */
+			if (lock_info->locks[i].type != AST_MUTEX)
 				continue;
 
 			lock = lock_info->locks[i].lock_addr;
@@ -816,6 +820,7 @@ static void *dummy_start(void *data)
 	struct thr_arg a = *((struct thr_arg *) data);	/* make a local copy */
 #ifdef DEBUG_THREADS
 	struct thr_lock_info *lock_info;
+	pthread_mutexattr_t mutex_attr;
 #endif
 
 	/* note that even though data->name is a pointer to allocated memory,
@@ -833,7 +838,11 @@ static void *dummy_start(void *data)
 
 	lock_info->thread_id = pthread_self();
 	lock_info->thread_name = strdup(a.name);
-	pthread_mutex_init(&lock_info->lock, NULL);
+
+	pthread_mutexattr_init(&mutex_attr);
+	pthread_mutexattr_settype(&mutex_attr, AST_MUTEX_KIND);
+	pthread_mutex_init(&lock_info->lock, &mutex_attr);
+	pthread_mutexattr_destroy(&mutex_attr);
 
 	pthread_mutex_lock(&lock_infos_lock.mutex); /* Intentionally not the wrapper */
 	AST_LIST_INSERT_TAIL(&lock_infos, lock_info, entry);

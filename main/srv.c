@@ -141,7 +141,7 @@ static int srv_callback(void *context, unsigned char *answer, int len, unsigned 
 	if (entry)
 		AST_LIST_INSERT_TAIL(&c->entries, entry, list);
 
-	return 0;
+	return 1;
 }
 
 /* Do the bizarre SRV record weight-handling algorithm
@@ -190,6 +190,7 @@ static void process_weights(struct srv_context *context)
 
 				AST_LIST_REMOVE_CURRENT(&temp_list, list);
 				AST_LIST_INSERT_TAIL(&newlist, current, list);
+				break;
 			}
 			AST_LIST_TRAVERSE_SAFE_END;
 		}
