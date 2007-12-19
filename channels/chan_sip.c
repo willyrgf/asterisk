@@ -87,6 +87,10 @@
  * - the ALERT_INFO dialplan variable
  */
 
+/*** MODULEINFO
+        <depend>res_features</depend>
+ ***/
+
 
 #include "asterisk.h"
 
@@ -145,6 +149,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/compiler.h"
 #include "asterisk/threadstorage.h"
 #include "asterisk/translate.h"
+#include "asterisk/dnsmgr.h"
 
 #ifndef FALSE
 #define FALSE    0
@@ -2493,9 +2498,35 @@ static struct sip_peer *realtime_peer(const char *newpeername, struct sockaddr_i
 	unsigned short portnum;
 
 	/* First check on peer name */
-	if (newpeername) 
-		var = ast_load_realtime("sippeers", "name", newpeername, NULL);
-	else if (sin) {	/* Then check on IP address */
+	if (newpeername) {
+		var = ast_load_realtime("sippeers", "name", newpeername, "host", "dynamic", NULL);
+		if (!var && sin) {
+			var = ast_load_realtime("sippeers", "name", newpeername, "host", ast_inet_ntoa(sin->sin_addr), NULL);
+			if (!var) {
+				var = ast_load_realtime("sippeers", "name", newpeername, NULL);
+				/*!\note
+				 * If this one loaded something, then we need to ensure that the host
+				 * field matched.  The only reason why we can't have this as a criteria
+				 * is because we only have the IP address and the host field might be
+				 * set as a name (and the reverse PTR might not match).
+				 */
+				if (var) {
+					for (tmp = var; tmp; tmp = tmp->next) {
+						if (!strcasecmp(var->name, "host")) {
+							struct in_addr sin2 = { 0, };
+							struct ast_dnsmgr_entry *dnsmgr = NULL;
+							if ((ast_dnsmgr_lookup(tmp->value, &sin2, &dnsmgr) < 0) || (memcmp(&sin2, &sin->sin_addr, sizeof(sin2)) != 0)) {
+								/* No match */
+								ast_variables_destroy(var);
+								var = NULL;
+							}
+							break;
+						}
+					}
+				}
+			}
+		}
+	} else if (sin) {	/* Then check on IP address */
 		iabuf = ast_inet_ntoa(sin->sin_addr);
 		portnum = ntohs(sin->sin_port);
 		sprintf(portstring, "%d", portnum);
@@ -10674,8 +10705,8 @@ static int sip_show_subscriptions(int fd, int argc, char *argv[])
 static int __sip_show_channels(int fd, int argc, char *argv[], int subscriptions)
 {
 #define FORMAT3 "%-15.15s  %-10.10s  %-11.11s  %-15.15s  %-13.13s  %-15.15s %-10.10s\n"
-#define FORMAT2 "%-15.15s  %-10.10s  %-11.11s  %-11.11s  %-4.4s  %-7.7s  %-15.15s\n"
-#define FORMAT  "%-15.15s  %-10.10s  %-11.11s  %5.5d/%5.5d  %-4.4s  %-3.3s %-3.3s  %-15.15s %-10.10s\n"
+#define FORMAT2 "%-15.15s  %-10.10s  %-11.11s  %-11.11s  %-15.15s  %-7.7s  %-15.15s\n"
+#define FORMAT  "%-15.15s  %-10.10s  %-11.11s  %5.5d/%5.5d  %-15.15s  %-3.3s %-3.3s  %-15.15s %-10.10s\n"
 	struct sip_pvt *cur;
 	int numchans = 0;
 	char *referstatus = NULL;
@@ -16660,6 +16691,36 @@ static int reload_config(enum channelreloadreason reason)
 		return -1;
 	}
 	
+	if (option_debug > 3)
+		ast_log(LOG_DEBUG, "--------------- SIP reload started\n");
+
+	clear_realm_authentication(authl);
+	clear_sip_domains();
+	authl = NULL;
+
+	/* First, destroy all outstanding registry calls */
+	/* This is needed, since otherwise active registry entries will not be destroyed */
+	ASTOBJ_CONTAINER_TRAVERSE(&regl, 1, do {
+		ASTOBJ_RDLOCK(iterator);
+		if (iterator->call) {
+			if (option_debug > 2)
+				ast_log(LOG_DEBUG, "Destroying active SIP dialog for registry %s@%s\n", iterator->username, iterator->hostname);
+			/* This will also remove references to the registry */
+			sip_destroy(iterator->call);
+		}
+		ASTOBJ_UNLOCK(iterator);
+	
+	} while(0));
+
+	/* Then, actually destroy users and registry */
+	ASTOBJ_CONTAINER_DESTROYALL(&userl, sip_destroy_user);
+	if (option_debug > 3)
+		ast_log(LOG_DEBUG, "--------------- Done destroying user list\n");
+	ASTOBJ_CONTAINER_DESTROYALL(&regl, sip_registry_destroy);
+	if (option_debug > 3)
+		ast_log(LOG_DEBUG, "--------------- Done destroying registry list\n");
+	ASTOBJ_CONTAINER_MARKALL(&peerl);
+
 	/* Initialize copy of current global_regcontext for later use in removing stale contexts */
 	ast_copy_string(oldcontexts, global_regcontext, sizeof(oldcontexts));
 	oldregcontext = oldcontexts;
@@ -17668,35 +17729,6 @@ static void sip_send_all_registers(void)
 /*! \brief Reload module */
 static int sip_do_reload(enum channelreloadreason reason)
 {
-	if (option_debug > 3)
-		ast_log(LOG_DEBUG, "--------------- SIP reload started\n");
-
-	clear_realm_authentication(authl);
-	clear_sip_domains();
-	authl = NULL;
-
-	/* First, destroy all outstanding registry calls */
-	/* This is needed, since otherwise active registry entries will not be destroyed */
-	ASTOBJ_CONTAINER_TRAVERSE(&regl, 1, do {
-		ASTOBJ_RDLOCK(iterator);
-		if (iterator->call) {
-			if (option_debug > 2)
-				ast_log(LOG_DEBUG, "Destroying active SIP dialog for registry %s@%s\n", iterator->username, iterator->hostname);
-			/* This will also remove references to the registry */
-			sip_destroy(iterator->call);
-		}
-		ASTOBJ_UNLOCK(iterator);
-	
-	} while(0));
-
-	/* Then, actually destroy users and registry */
-	ASTOBJ_CONTAINER_DESTROYALL(&userl, sip_destroy_user);
-	if (option_debug > 3)
-		ast_log(LOG_DEBUG, "--------------- Done destroying user list\n");
-	ASTOBJ_CONTAINER_DESTROYALL(&regl, sip_registry_destroy);
-	if (option_debug > 3)
-		ast_log(LOG_DEBUG, "--------------- Done destroying registry list\n");
-	ASTOBJ_CONTAINER_MARKALL(&peerl);
 	reload_config(reason);
 
 	/* Prune peers who still are supposed to be deleted */

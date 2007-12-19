@@ -30,6 +30,7 @@
 
 /*** MODULEINFO
 	<use>zaptel</use>
+        <depend>res_features</depend>
  ***/
 
 #include "asterisk.h"
@@ -2722,9 +2723,11 @@ static struct iax2_peer *realtime_peer(const char *peername, struct sockaddr_in 
 	time_t regseconds = 0, nowtime;
 	int dynamic=0;
 
-	if (peername)
-		var = ast_load_realtime("iaxpeers", "name", peername, NULL);
-	else {
+	if (peername) {
+		var = ast_load_realtime("iaxpeers", "name", peername, "host", "dynamic", NULL);
+		if (!var && sin)
+			var = ast_load_realtime("iaxpeers", "name", peername, "host", ast_inet_ntoa(sin->sin_addr));
+	} else if (sin) {
 		char porta[25];
 		sprintf(porta, "%d", ntohs(sin->sin_port));
 		var = ast_load_realtime("iaxpeers", "ipaddr", ast_inet_ntoa(sin->sin_addr), "port", porta, NULL);
@@ -2733,6 +2736,29 @@ static struct iax2_peer *realtime_peer(const char *peername, struct sockaddr_in 
 			for (tmp = var; tmp; tmp = tmp->next) {
 				if (!strcasecmp(tmp->name, "name"))
 					peername = tmp->value;
+			}
+		}
+	}
+	if (!var) { /* Last ditch effort */
+		var = ast_load_realtime("iaxpeers", "name", peername, NULL);
+		/*!\note
+		 * If this one loaded something, then we need to ensure that the host
+		 * field matched.  The only reason why we can't have this as a criteria
+		 * is because we only have the IP address and the host field might be
+		 * set as a name (and the reverse PTR might not match).
+		 */
+		if (var) {
+			for (tmp = var; tmp; tmp = tmp->next) {
+				if (!strcasecmp(tmp->name, "host")) {
+					struct in_addr sin2 = { 0, };
+					struct ast_dnsmgr_entry *dnsmgr = NULL;
+					if ((ast_dnsmgr_lookup(tmp->value, &sin2, &dnsmgr) < 0) || (memcmp(&sin2, &sin->sin_addr, sizeof(sin2)) != 0)) {
+						/* No match */
+						ast_variables_destroy(var);
+						var = NULL;
+					}
+					break;
+				}
 			}
 		}
 	}
@@ -2811,13 +2837,45 @@ static struct iax2_peer *realtime_peer(const char *peername, struct sockaddr_in 
 	return peer;
 }
 
-static struct iax2_user *realtime_user(const char *username)
+static struct iax2_user *realtime_user(const char *username, struct sockaddr_in *sin)
 {
 	struct ast_variable *var;
 	struct ast_variable *tmp;
 	struct iax2_user *user=NULL;
 
-	var = ast_load_realtime("iaxusers", "name", username, NULL);
+	var = ast_load_realtime("iaxusers", "name", username, "host", "dynamic", NULL);
+	if (!var)
+		var = ast_load_realtime("iaxusers", "name", username, "host", ast_inet_ntoa(sin->sin_addr));
+	if (!var && sin) {
+		char porta[6];
+		snprintf(porta, sizeof(porta), "%d", ntohs(sin->sin_port));
+		var = ast_load_realtime("iaxusers", "name", username, "ipaddr", ast_inet_ntoa(sin->sin_addr), "port", porta, NULL);
+		if (!var)
+			var = ast_load_realtime("iaxusers", "ipaddr", ast_inet_ntoa(sin->sin_addr), "port", porta, NULL);
+	}
+	if (!var) { /* Last ditch effort */
+		var = ast_load_realtime("iaxusers", "name", username, NULL);
+		/*!\note
+		 * If this one loaded something, then we need to ensure that the host
+		 * field matched.  The only reason why we can't have this as a criteria
+		 * is because we only have the IP address and the host field might be
+		 * set as a name (and the reverse PTR might not match).
+		 */
+		if (var) {
+			for (tmp = var; tmp; tmp = tmp->next) {
+				if (!strcasecmp(tmp->name, "host")) {
+					struct in_addr sin2 = { 0, };
+					struct ast_dnsmgr_entry *dnsmgr = NULL;
+					if ((ast_dnsmgr_lookup(tmp->value, &sin2, &dnsmgr) < 0) || (memcmp(&sin2, &sin->sin_addr, sizeof(sin2)) != 0)) {
+						/* No match */
+						ast_variables_destroy(var);
+						var = NULL;
+					}
+					break;
+				}
+			}
+		}
+	}
 	if (!var)
 		return NULL;
 
@@ -5026,7 +5084,7 @@ static int check_access(int callno, struct sockaddr_in *sin, struct iax_ies *ies
 	}
 	user = best;
 	if (!user && !ast_strlen_zero(iaxs[callno]->username)) {
-		user = realtime_user(iaxs[callno]->username);
+		user = realtime_user(iaxs[callno]->username, sin);
 		if (user && !ast_strlen_zero(iaxs[callno]->context) &&			/* No context specified */
 		    !apply_context(user->contexts, iaxs[callno]->context)) {		/* Context is permitted */
 			user = user_unref(user);
@@ -9592,6 +9650,20 @@ static void set_timing(void)
 #endif
 }
 
+static void set_config_destroy(void)
+{
+	strcpy(accountcode, "");
+	strcpy(language, "");
+	strcpy(mohinterpret, "default");
+	strcpy(mohsuggest, "");
+	amaflags = 0;
+	delayreject = 0;
+	ast_clear_flag((&globalflags), IAX_NOTRANSFER);	
+	ast_clear_flag((&globalflags), IAX_TRANSFERMEDIA);	
+	ast_clear_flag((&globalflags), IAX_USEJITTERBUF);	
+	ast_clear_flag((&globalflags), IAX_FORCEJITTERBUF);	
+	delete_users();
+}
 
 /*! \brief Load configuration */
 static int set_config(char *config_file, int reload)
@@ -9618,6 +9690,10 @@ static int set_config(char *config_file, int reload)
 	if (!cfg) {
 		ast_log(LOG_ERROR, "Unable to load config %s\n", config_file);
 		return -1;
+	}
+
+	if (reload) {
+		set_config_destroy();
 	}
 
 	/* Reset global codec prefs */	
@@ -9954,7 +10030,7 @@ static int set_config(char *config_file, int reload)
 	}
 	ast_config_destroy(cfg);
 	set_timing();
-	return capability;
+	return 1;
 }
 
 static void poke_all_peers(void)
@@ -9973,30 +10049,16 @@ static int reload_config(void)
 	char *config = "iax.conf";
 	struct iax2_registry *reg;
 
-	strcpy(accountcode, "");
-	strcpy(language, "");
-	strcpy(mohinterpret, "default");
-	strcpy(mohsuggest, "");
-	global_max_trunk_mtu = MAX_TRUNK_MTU;
-	amaflags = 0;
-	delayreject = 0;
-	ast_clear_flag((&globalflags), IAX_NOTRANSFER);	
-	ast_clear_flag((&globalflags), IAX_TRANSFERMEDIA);	
-	ast_clear_flag((&globalflags), IAX_USEJITTERBUF);	
-	ast_clear_flag((&globalflags), IAX_FORCEJITTERBUF);	
-	delete_users();
-	set_config(config, 1);
-	prune_peers();
-	prune_users();
-        trunk_timed = trunk_untimed = 0; 
-	trunk_nmaxmtu = trunk_maxmtu = 0; 
-
-	AST_LIST_LOCK(&registrations);
-	AST_LIST_TRAVERSE(&registrations, reg, entry)
-		iax2_do_register(reg);
-	AST_LIST_UNLOCK(&registrations);
-	/* Qualify hosts, too */
-	poke_all_peers();
+	if (set_config(config, 1) > 0) {
+		prune_peers();
+		prune_users();
+		AST_LIST_LOCK(&registrations);
+		AST_LIST_TRAVERSE(&registrations, reg, entry)
+			iax2_do_register(reg);
+		AST_LIST_UNLOCK(&registrations);
+		/* Qualify hosts, too */
+		poke_all_peers();
+	}
 	reload_firmware(0);
 	iax_provision_reload();
 
