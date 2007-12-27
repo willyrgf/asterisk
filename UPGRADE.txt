@@ -248,6 +248,9 @@ Applications:
 
 Manager:
 
+* Manager has upgraded to version 1.1. Changes are documented in 
+  doc/manager_1_1.txt
+
 * After executing the 'status' manager action, the "Status" manager events
   included the header "CallerID:" which was actually only the CallerID number,
   and not the full CallerID string.  This header has been renamed to
