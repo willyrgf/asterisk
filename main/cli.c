@@ -1724,10 +1724,9 @@ void ast_cli_unregister_multiple(struct ast_cli_entry *e, int len)
 }
 
 
-/*! \brief helper for help_workhorse and final part of
- * handle_help. if locked = 0 it's just help_workhorse,
- * otherwise assume the list is already locked and print
- * an error message if not found.
+/*! \brief helper for help_workhorse and final part of handle_help
+ * if locked = 0 it's just help_workhorse, otherwise assume the
+ * list is already locked.
  */
 static int help1(int fd, char *match[], int locked)
 {
@@ -1755,10 +1754,11 @@ static int help1(int fd, char *match[], int locked)
 		ast_cli(fd, "%25.25s  %s\n", e->_full_cmd, S_OR(e->summary, ""));
 		found++;
 	}
-	AST_LIST_UNLOCK(&helpers);
-	if (!locked && !found && matchstr[0])
+	if (!locked)
+		AST_LIST_UNLOCK(&helpers);
+	if (!found && matchstr[0])
 		ast_cli(fd, "No such command '%s'.\n", matchstr);
-	return 0;
+	return RESULT_SUCCESS;
 }
 
 static int help_workhorse(int fd, char *match[])
@@ -1770,6 +1770,7 @@ static int handle_help(int fd, int argc, char *argv[])
 {
 	char fullcmd[80];
 	struct ast_cli_entry *e;
+	int res = RESULT_SUCCESS;
 
 	if (argc < 1)
 		return RESULT_SHOWUSAGE;
@@ -1778,8 +1779,11 @@ static int handle_help(int fd, int argc, char *argv[])
 
 	AST_LIST_LOCK(&helpers);
 	e = find_cli(argv + 1, 1);	/* try exact match first */
-	if (!e)
-		return help1(fd, argv + 1, 1 /* locked */);
+	if (!e) {
+		res = help1(fd, argv + 1, 1 /* locked */);
+		AST_LIST_UNLOCK(&helpers);
+		return res;
+	}
 	if (e->usage)
 		ast_cli(fd, "%s", e->usage);
 	else {
@@ -1787,7 +1791,7 @@ static int handle_help(int fd, int argc, char *argv[])
 		ast_cli(fd, "No help text available for '%s'.\n", fullcmd);
 	}
 	AST_LIST_UNLOCK(&helpers);
-	return RESULT_SUCCESS;
+	return res;
 }
 
 static char *parse_args(const char *s, int *argc, char *argv[], int max, int *trailingwhitespace)
