@@ -1310,7 +1310,7 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 			ast_frame_byteswap_be(&rtp->f);
 		calc_rxstamp(&rtp->f.delivery, rtp, timestamp, mark);
 		/* Add timing data to let ast_generic_bridge() put the frame into a jitterbuf */
-		rtp->f.has_timing_info = 1;
+		ast_set_flag(&rtp->f, AST_FRFLAG_HAS_TIMING_INFO);
 		rtp->f.ts = timestamp / 8;
 		rtp->f.len = rtp->f.samples / 8;
 	} else {
@@ -1339,7 +1339,9 @@ static struct {
 	{{1, AST_FORMAT_G723_1}, "audio", "G723"},
 	{{1, AST_FORMAT_GSM}, "audio", "GSM"},
 	{{1, AST_FORMAT_ULAW}, "audio", "PCMU"},
+	{{1, AST_FORMAT_ULAW}, "audio", "G711U"},
 	{{1, AST_FORMAT_ALAW}, "audio", "PCMA"},
+	{{1, AST_FORMAT_ALAW}, "audio", "G711A"},
 	{{1, AST_FORMAT_G726}, "audio", "G726-32"},
 	{{1, AST_FORMAT_ADPCM}, "audio", "DVI4"},
 	{{1, AST_FORMAT_SLINEAR}, "audio", "L16"},
@@ -2657,7 +2659,7 @@ static int ast_rtp_raw_write(struct ast_rtp *rtp, struct ast_frame *f, int codec
 	if (rtp->lastts > rtp->lastdigitts)
 		rtp->lastdigitts = rtp->lastts;
 
-	if (f->has_timing_info)
+	if (ast_test_flag(f, AST_FRFLAG_HAS_TIMING_INFO))
 		rtp->lastts = f->ts * 8;
 
 	/* Get a pointer to the header */
@@ -2872,7 +2874,7 @@ static enum ast_bridge_result bridge_native_loop(struct ast_channel *c0, struct 
 		if ((c0->tech_pvt != pvt0) ||
 		    (c1->tech_pvt != pvt1) ||
 		    (c0->masq || c0->masqr || c1->masq || c1->masqr) ||
-		    (c0->monitor || c0->spies || c1->monitor || c1->spies)) {
+		    (c0->monitor || c0->audiohooks || c1->monitor || c1->audiohooks)) {
 			ast_log(LOG_DEBUG, "Oooh, something is weird, backing out\n");
 			if (c0->tech_pvt == pvt0)
 				if (pr0->set_rtp_peer(c0, NULL, NULL, 0, 0))
@@ -3156,7 +3158,7 @@ static enum ast_bridge_result bridge_p2p_loop(struct ast_channel *c0, struct ast
 		if ((c0->tech_pvt != pvt0) ||
 		    (c1->tech_pvt != pvt1) ||
 		    (c0->masq || c0->masqr || c1->masq || c1->masqr) ||
-		    (c0->monitor || c0->spies || c1->monitor || c1->spies)) {
+		    (c0->monitor || c0->audiohooks || c1->monitor || c1->audiohooks)) {
 			ast_log(LOG_DEBUG, "Oooh, something is weird, backing out\n");
 			if ((c0->masq || c0->masqr) && (fr = ast_read(c0)))
 				ast_frfree(fr);
