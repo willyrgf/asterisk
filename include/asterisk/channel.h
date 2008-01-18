@@ -276,9 +276,6 @@ struct ast_channel_tech {
 	int (* set_base_channel)(struct ast_channel *chan, struct ast_channel *base);
 };
 
-struct ast_channel_spy_list;
-struct ast_channel_whisper_buffer;
-
 #define	DEBUGCHAN_FLAG  0x80000000
 #define	FRAMECOUNT_INC(x)	( ((x) & DEBUGCHAN_FLAG) | (((x)+1) & ~DEBUGCHAN_FLAG) )
 
@@ -430,8 +427,11 @@ struct ast_channel {
 	int rawreadformat;				/*!< Raw read format */
 	int rawwriteformat;				/*!< Raw write format */
 
-	struct ast_channel_spy_list *spies;		/*!< Chan Spy stuff */
-	struct ast_channel_whisper_buffer *whisper;	/*!< Whisper Paging buffer */
+	struct ast_audiohook_list *audiohooks;
+	/*! This pointer should stay for Asterisk 1.4.  It just keeps the struct size the same
+	 *  for the sake of ABI compatability. */
+	void *__unused;
+
 	AST_LIST_ENTRY(ast_channel) chan_list;		/*!< For easy linking */
 	
 	struct ast_jb jb;				/*!< The jitterbuffer state  */
