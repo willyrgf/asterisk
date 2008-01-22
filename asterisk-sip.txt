@@ -1,7 +1,6 @@
 Olle E. Johansson
 EDVINA AB
-oej@edvina.net
-
+oej@edvina.net					updated 2008-01-22
 
 
 
@@ -142,7 +141,7 @@ receive calls. These calls are handled by the PBX.
 	Not supported
 
 - RFC 4028, Session Timers in SIP
-	Not supported
+	Not supported (integrated in Asterisk 1.6)
 
 
 5. Call Control Primitives
@@ -258,6 +257,12 @@ The G.729 codec is only available under commercial licenses.
 - RFC 3761, The E.164 to URI DDDS Application (ENUM)
 	Supported
 
+12. Coming Asterisk releases
+----------------------------
+Asterisk 1.6 will add support for
+- TCP and TLS sessions (experimental)
+- SIP session timers
+	- RFC 4028, Session Timers in SIP
 
 -----
 Asterisk is a trademark registred by Digium, inc.
