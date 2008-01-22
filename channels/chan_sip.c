@@ -2450,11 +2450,18 @@ static void sip_destroy_peer(struct sip_peer *peer)
 		ast_variables_destroy(peer->chanvars);
 		peer->chanvars = NULL;
 	}
-	if (peer->expire > -1)
-		ast_sched_del(sched, peer->expire);
 
-	if (peer->pokeexpire > -1)
-		ast_sched_del(sched, peer->pokeexpire);
+	/* If the schedule delete fails, that means the schedule is currently
+	 * running, which means we should wait for that thread to complete.
+	 * Otherwise, there's a crashable race condition.
+	 *
+	 * NOTE: once peer is refcounted, this probably is no longer necessary.
+	 */
+	while (peer->expire > -1 && ast_sched_del(sched, peer->expire))
+		usleep(1);
+	while (peer->pokeexpire > -1 && ast_sched_del(sched, peer->pokeexpire))
+		usleep(1);
+
 	register_peer_exten(peer, FALSE);
 	ast_free_ha(peer->ha);
 	if (ast_test_flag(&peer->flags[1], SIP_PAGE2_SELFDESTRUCT))
@@ -4861,10 +4868,13 @@ static int find_sdp(struct sip_request *req)
 		return 0;
 
 	/* if there is no boundary marker, it's invalid */
-	if (!(search = strcasestr(content_type, ";boundary=")))
+	if ((search = strcasestr(content_type, ";boundary=")))
+		search += 10;
+	else if ((search = strcasestr(content_type, "; boundary=")))
+		search += 11;
+	else
 		return 0;
 
-	search += 10;
 	if (ast_strlen_zero(search))
 		return 0;
 
@@ -5544,10 +5554,6 @@ static int add_header(struct sip_request *req, const char *var, const char *valu
 	snprintf(req->header[req->headers], maxlen, "%s: %s\r\n", var, value);
 	req->len += strlen(req->header[req->headers]);
 	req->headers++;
-	if (req->headers < SIP_MAX_HEADERS)
-		req->headers++;
-	else
-		ast_log(LOG_WARNING, "Out of SIP header space... Will generate broken SIP message\n");
 
 	return 0;	
 }
@@ -5624,14 +5630,14 @@ static int copy_via_headers(struct sip_pvt *p, struct sip_request *req, const st
 	int start = 0;
 
 	for (;;) {
-		char new[256];
+		char new[512];
 		const char *oh = __get_header(orig, field, &start);
 
 		if (ast_strlen_zero(oh))
 			break;
 
 		if (!copied) {	/* Only check for empty rport in topmost via header */
-			char leftmost[256], *others, *rport;
+			char leftmost[512], *others, *rport;
 
 			/* Only work on leftmost value */
 			ast_copy_string(leftmost, oh, sizeof(leftmost));
@@ -5843,7 +5849,7 @@ static int respprep(struct sip_request *resp, struct sip_pvt *p, const char *msg
 			snprintf(contact, sizeof(contact), "%s;expires=%d", p->our_contact, p->expiry);
 			add_header(resp, "Contact", contact);	/* Not when we unregister */
 		}
-	} else if (msg[0] != '4' && p->our_contact[0]) {
+	} else if (msg[0] != '4' && !ast_strlen_zero(p->our_contact)) {
 		add_header(resp, "Contact", p->our_contact);
 	}
 	return 0;
@@ -8281,6 +8287,8 @@ static void build_route(struct sip_pvt *p, struct sip_request *req, int backward
 		list_route(p->route);
 }
 
+AST_THREADSTORAGE(check_auth_buf, check_auth_buf_init);
+#define CHECK_AUTH_BUF_INITLEN   256
 
 /*! \brief  Check user authorization from peer definition 
 	Some actions, like REGISTER and INVITEs from peers require
@@ -8297,11 +8305,12 @@ static enum check_auth_result check_auth(struct sip_pvt *p, struct sip_request *
 	const char *authtoken;
 	char a1_hash[256];
 	char resp_hash[256]="";
-	char tmp[BUFSIZ * 2];                /* Make a large enough buffer */
 	char *c;
 	int  wrongnonce = FALSE;
 	int  good_response;
 	const char *usednonce = p->randdata;
+	struct ast_dynamic_str *buf;
+	int res;
 
 	/* table of recognised keywords, and their value in the digest */
 	enum keys { K_RESP, K_URI, K_USER, K_NONCE, K_LAST };
@@ -8353,10 +8362,16 @@ static enum check_auth_result check_auth(struct sip_pvt *p, struct sip_request *
 	/* Whoever came up with the authentication section of SIP can suck my %&#$&* for not putting
    	   an example in the spec of just what it is you're doing a hash on. */
 
+	if (!(buf = ast_dynamic_str_thread_get(&check_auth_buf, CHECK_AUTH_BUF_INITLEN)))
+		return AUTH_SECRET_FAILED; /*! XXX \todo need a better return code here */
 
 	/* Make a copy of the response and parse it */
-	ast_copy_string(tmp, authtoken, sizeof(tmp));
-	c = tmp;
+	res = ast_dynamic_str_thread_set(&buf, 0, &check_auth_buf, "%s", authtoken);
+
+	if (res == AST_DYNSTR_BUILD_FAILED)
+		return AUTH_SECRET_FAILED; /*! XXX \todo need a better return code here */
+
+	c = buf->str;
 
 	while(c && *(c = ast_skip_blanks(c)) ) { /* lookup for keys */
 		for (i = keys; i->key != NULL; i++) {
@@ -9058,9 +9073,14 @@ static int get_also_info(struct sip_pvt *p, struct sip_request *oreq)
 {
 	char tmp[256] = "", *c, *a;
 	struct sip_request *req = oreq ? oreq : &p->initreq;
-	struct sip_refer *referdata = p->refer;
+	struct sip_refer *referdata = NULL;
 	const char *transfer_context = NULL;
 	
+	if (!p->refer && !sip_refer_allocate(p))
+		return -1;
+
+	referdata = p->refer;
+
 	ast_copy_string(tmp, get_header(req, "Also"), sizeof(tmp));
 	c = get_in_brackets(tmp);
 
@@ -9111,7 +9131,7 @@ static int get_also_info(struct sip_pvt *p, struct sip_request *oreq)
 /*! \brief check Via: header for hostname, port and rport request/answer */
 static void check_via(struct sip_pvt *p, struct sip_request *req)
 {
-	char via[256];
+	char via[512];
 	char *c, *pt;
 	struct hostent *hp;
 	struct ast_hostent ahp;
@@ -12082,7 +12102,8 @@ static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, stru
 			} 
 
 			/* Save Record-Route for any later requests we make on this dialogue */
-			build_route(p, req, 1);
+			if (!reinvite)
+				build_route(p, req, 1);
 		}
 		
 		if (p->owner && (p->owner->_state == AST_STATE_UP) && (bridgepeer = ast_bridged_channel(p->owner))) { /* if this is a re-invite */
@@ -12262,17 +12283,18 @@ static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, stru
 		}
 		break;
 	case 491: /* Pending */
-		/* we really should have to wait a while, then retransmit */
-			/* We should support the retry-after at some point */
-		/* At this point, we treat this as a congestion */
+		/* we really should have to wait a while, then retransmit
+		 * We should support the retry-after at some point 
+		 * At this point, we treat this as a congestion if the call is not in UP state 
+ 		 */
 		xmitres = transmit_request(p, SIP_ACK, seqno, XMIT_UNRELIABLE, FALSE);
 		if (p->owner && !ast_test_flag(req, SIP_PKT_IGNORE)) {
 			if (p->owner->_state != AST_STATE_UP) {
 				ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
 				ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
 			} else {
-				/* This is a re-invite that failed. */
-				/* Reset the flag after a while 
+				/* This is a re-invite that failed.
+				 * Reset the flag after a while 
 				 */
 				int wait = 3 + ast_random() % 5;
 				p->waitid = ast_sched_add(sched, wait, sip_reinvite_retry, p); 
@@ -15516,6 +15538,9 @@ static void *do_monitor(void *data)
 					sipsock_read_id = ast_io_change(io, sipsock_read_id, sipsock, NULL, 0, NULL);
 				else
 					sipsock_read_id = ast_io_add(io, sipsock, sipsock_read, AST_IO_IN, NULL);
+			} else if (sipsock_read_id) {
+				ast_io_remove(io, sipsock_read_id);
+				sipsock_read_id = NULL;
 			}
 		}
 		/* Check for interfaces needing to be killed */

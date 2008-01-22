@@ -221,6 +221,7 @@ static int local_answer(struct ast_channel *ast)
 
 static void check_bridge(struct local_pvt *p, int isoutbound)
 {
+	struct ast_channel_monitor *tmp;
 	if (ast_test_flag(p, LOCAL_ALREADY_MASQED) || ast_test_flag(p, LOCAL_NO_OPTIMIZATION) || !p->chan || !p->owner || (p->chan->_bridge != ast_bridged_channel(p->chan)))
 		return;
 
@@ -238,6 +239,16 @@ static void check_bridge(struct local_pvt *p, int isoutbound)
 			if (!p->chan->_bridge->_softhangup) {
 				if (!ast_mutex_trylock(&p->owner->lock)) {
 					if (!p->owner->_softhangup) {
+						if(p->owner->monitor && !p->chan->_bridge->monitor) {
+							/* If a local channel is being monitored, we don't want a masquerade
+							 * to cause the monitor to go away. Since the masquerade swaps the monitors,
+							 * pre-swapping the monitors before the masquerade will ensure that the monitor
+							 * ends up where it is expected.
+							 */
+							tmp = p->owner->monitor;
+							p->owner->monitor = p->chan->_bridge->monitor;
+							p->chan->_bridge->monitor = tmp;
+						}
 						ast_channel_masquerade(p->owner, p->chan->_bridge);
 						ast_set_flag(p, LOCAL_ALREADY_MASQED);
 					}
@@ -493,8 +504,16 @@ static int local_hangup(struct ast_channel *ast)
 	isoutbound = IS_OUTBOUND(ast, p);
 	if (isoutbound) {
 		const char *status = pbx_builtin_getvar_helper(p->chan, "DIALSTATUS");
-		if ((status) && (p->owner))
+		if ((status) && (p->owner)) {
+			/* Deadlock avoidance */
+			while (ast_channel_trylock(p->owner)) {
+				ast_mutex_unlock(&p->lock);
+				usleep(1);
+				ast_mutex_lock(&p->lock);
+			}
 			pbx_builtin_setvar_helper(p->owner, "CHANLOCALSTATUS", status);
+			ast_channel_unlock(p->owner);
+		}
 		p->chan = NULL;
 		ast_clear_flag(p, LOCAL_LAUNCHED_PBX);
 		ast_module_user_remove(p->u_chan);

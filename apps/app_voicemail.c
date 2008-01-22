@@ -2569,11 +2569,11 @@ static int copy_message(struct ast_channel *chan, struct ast_vm_user *vmu, int i
 		ast_log(LOG_WARNING, "Unable to copy mail, mailbox %s is full\n", recip->mailbox);
 		return -1;
 	}
-	if (!(sendvms = get_vm_state_by_imapuser(vmu->imapuser, 2))) {
+	if (!(sendvms = get_vm_state_by_imapuser(vmu->imapuser, 0))) {
 		ast_log(LOG_ERROR, "Couldn't get vm_state for originator's mailbox!!\n");
 		return -1;
 	}
-	if (!(destvms = get_vm_state_by_imapuser(recip->imapuser, 2))) {
+	if (!(destvms = get_vm_state_by_imapuser(recip->imapuser, 0))) {
 		ast_log(LOG_ERROR, "Couldn't get vm_state for destination mailbox!\n");
 		return -1;
 	}
@@ -4070,8 +4070,8 @@ static int forward_message(struct ast_channel *chan, char *context, struct vm_st
 		/* start optimistic */
 		valid_extensions = 1;
 		while (s) {
-			/* Don't forward to ourselves.  find_user is going to malloc since we have a NULL as first argument */
-			if (strcmp(s,sender->mailbox) && (receiver = find_user(NULL, context, s))) {
+			/* Don't forward to ourselves but allow leaving a message for ourselves (flag == 1).  find_user is going to malloc since we have a NULL as first argument */
+			if ((flag == 1 || strcmp(s,sender->mailbox)) && (receiver = find_user(NULL, context, s))) {
 				AST_LIST_INSERT_HEAD(&extensions, receiver, list);
 				found++;
 			} else {
@@ -4721,7 +4721,7 @@ static int init_mailstream(struct vm_state *vms, int box)
 		stream = mail_open (stream, tmp, debug ? OP_DEBUG : NIL);
 		if (stream == NIL) {
 			ast_log (LOG_ERROR, "Can't connect to imap server %s\n", tmp);
-			return NIL;
+			return -1;
 		}
 		get_mailbox_delimiter(stream);
 		/* update delimiter in imapfolder */
@@ -8805,14 +8805,17 @@ static struct vm_state *get_vm_state_by_imapuser(char *user, int interactive)
 {
 	struct vmstate *vlist = NULL;
 
+	ast_mutex_lock(&vmstate_lock);
 	vlist = vmstates;
 	while (vlist) {
 		if (vlist->vms) {
 			if (vlist->vms->imapuser) {
 				if (!strcmp(vlist->vms->imapuser,user)) {
 					if (interactive == 2) {
+						ast_mutex_unlock(&vmstate_lock);
 						return vlist->vms;
 					} else if (vlist->vms->interactive == interactive) {
+						ast_mutex_unlock(&vmstate_lock);
 						return vlist->vms;
 					}
 				}
@@ -8826,6 +8829,7 @@ static struct vm_state *get_vm_state_by_imapuser(char *user, int interactive)
 		}
 		vlist = vlist->next;
 	}
+	ast_mutex_unlock(&vmstate_lock);
 	if (option_debug > 2)
 		ast_log(LOG_DEBUG, "%s not found in vmstates\n",user);
 	return NULL;
@@ -8834,7 +8838,8 @@ static struct vm_state *get_vm_state_by_imapuser(char *user, int interactive)
 static struct vm_state *get_vm_state_by_mailbox(const char *mailbox, int interactive)
 { 
 	struct vmstate *vlist = NULL;
-	
+
+	ast_mutex_lock(&vmstate_lock);
 	vlist = vmstates;
 	if (option_debug > 2) 
 		ast_log(LOG_DEBUG, "Mailbox set to %s\n",mailbox);
@@ -8846,6 +8851,7 @@ static struct vm_state *get_vm_state_by_mailbox(const char *mailbox, int interac
 				if (!strcmp(vlist->vms->username,mailbox) && vlist->vms->interactive == interactive) {
 					if (option_debug > 2)
 						ast_log(LOG_DEBUG, "	Found it!\n");
+					ast_mutex_unlock(&vmstate_lock);
 					return vlist->vms;
 				}
 			} else {
@@ -8858,6 +8864,7 @@ static struct vm_state *get_vm_state_by_mailbox(const char *mailbox, int interac
 		}
 		vlist = vlist->next;
 	}
+	ast_mutex_unlock(&vmstate_lock);
 	if (option_debug > 2)
 		ast_log(LOG_DEBUG, "%s not found in vmstates\n",mailbox);
 	return NULL;

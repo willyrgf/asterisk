@@ -62,6 +62,9 @@
 /* Define to 1 if you have the `bzero' function. */
 #undef HAVE_BZERO
 
+/* Define to indicate the ${CAP_DESCRIP} library */
+#undef HAVE_CAP
+
 /* Define to 1 if your system has a working `chown' function. */
 #undef HAVE_CHOWN
 
@@ -289,9 +292,6 @@
 /* Define if your system has the PWLib libraries. */
 #undef HAVE_PWLIB
 
-/* Define if your system has the Qt library */
-#undef HAVE_QT
-
 /* Define to indicate the ${RADIUS_DESCRIP} library */
 #undef HAVE_RADIUS
 
@@ -328,6 +328,9 @@
 
 /* Define to indicate the ${SPEEX_DESCRIP} library */
 #undef HAVE_SPEEX
+
+/* Define to indicate the ${SPEEXDSP_DESCRIP} library */
+#undef HAVE_SPEEXDSP
 
 /* Define to indicate the ${SQLITE_DESCRIP} library */
 #undef HAVE_SQLITE

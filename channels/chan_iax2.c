@@ -1812,7 +1812,7 @@ static int __do_deliver(void *data)
 	  the IAX thread with the iaxsl lock held. */
 	struct iax_frame *fr = data;
 	fr->retrans = -1;
-	fr->af.has_timing_info = 0;
+	ast_clear_flag(&fr->af, AST_FRFLAG_HAS_TIMING_INFO);
 	if (iaxs[fr->callno] && !ast_test_flag(iaxs[fr->callno], IAX_ALREADYGONE))
 		iax2_queue_frame(fr->callno, &fr->af);
 	/* Free our iax frame */
@@ -2694,7 +2694,7 @@ static struct iax2_peer *realtime_peer(const char *peername, struct sockaddr_in 
 	if (peername) {
 		var = ast_load_realtime("iaxpeers", "name", peername, "host", "dynamic", NULL);
 		if (!var && sin)
-			var = ast_load_realtime("iaxpeers", "name", peername, "host", ast_inet_ntoa(sin->sin_addr));
+			var = ast_load_realtime("iaxpeers", "name", peername, "host", ast_inet_ntoa(sin->sin_addr), NULL);
 	} else if (sin) {
 		char porta[25];
 		sprintf(porta, "%d", ntohs(sin->sin_port));
@@ -2813,7 +2813,7 @@ static struct iax2_user *realtime_user(const char *username, struct sockaddr_in 
 
 	var = ast_load_realtime("iaxusers", "name", username, "host", "dynamic", NULL);
 	if (!var)
-		var = ast_load_realtime("iaxusers", "name", username, "host", ast_inet_ntoa(sin->sin_addr));
+		var = ast_load_realtime("iaxusers", "name", username, "host", ast_inet_ntoa(sin->sin_addr), NULL);
 	if (!var && sin) {
 		char porta[6];
 		snprintf(porta, sizeof(porta), "%d", ntohs(sin->sin_port));
@@ -2907,12 +2907,13 @@ struct create_addr_info {
 	char mohsuggest[MAX_MUSICCLASS];
 };
 
-static int create_addr(const char *peername, struct sockaddr_in *sin, struct create_addr_info *cai)
+static int create_addr(const char *peername, struct ast_channel *c, struct sockaddr_in *sin, struct create_addr_info *cai)
 {
 	struct ast_hostent ahp;
 	struct hostent *hp;
 	struct iax2_peer *peer;
 	int res = -1;
+	struct ast_codec_pref ourprefs;
 
 	ast_clear_flag(cai, IAX_SENDANI | IAX_TRUNK);
 	cai->sockfd = defaultsockfd;
@@ -2927,7 +2928,11 @@ static int create_addr(const char *peername, struct sockaddr_in *sin, struct cre
 			memcpy(&sin->sin_addr, hp->h_addr, sizeof(sin->sin_addr));
 			sin->sin_port = htons(IAX_DEFAULT_PORTNO);
 			/* use global iax prefs for unknown peer/user */
-			ast_codec_pref_convert(&prefs, cai->prefs, sizeof(cai->prefs), 1);
+			/* But move the calling channel's native codec to the top of the preference list */
+			memcpy(&ourprefs, &prefs, sizeof(ourprefs));
+			if (c)
+				ast_codec_pref_prepend(&ourprefs, c->nativeformats, 1);
+			ast_codec_pref_convert(&ourprefs, cai->prefs, sizeof(cai->prefs), 1);
 			return 0;
 		} else {
 			ast_log(LOG_WARNING, "No such host: %s\n", peername);
@@ -2951,7 +2956,13 @@ static int create_addr(const char *peername, struct sockaddr_in *sin, struct cre
 	cai->encmethods = peer->encmethods;
 	cai->sockfd = peer->sockfd;
 	cai->adsi = peer->adsi;
-	ast_codec_pref_convert(&peer->prefs, cai->prefs, sizeof(cai->prefs), 1);
+	memcpy(&ourprefs, &peer->prefs, sizeof(ourprefs));
+	/* Move the calling channel's native codec to the top of the preference list */
+	if (c) {
+		ast_log(LOG_DEBUG, "prepending %x to prefs\n", c->nativeformats);
+		ast_codec_pref_prepend(&ourprefs, c->nativeformats, 1);
+	}
+	ast_codec_pref_convert(&ourprefs, cai->prefs, sizeof(cai->prefs), 1);
 	ast_copy_string(cai->context, peer->context, sizeof(cai->context));
 	ast_copy_string(cai->peercontext, peer->peercontext, sizeof(cai->peercontext));
 	ast_copy_string(cai->username, peer->username, sizeof(cai->username));
@@ -3126,7 +3137,7 @@ static int iax2_call(struct ast_channel *c, char *dest, int timeout)
 	if (!pds.exten)
 		pds.exten = defaultrdest;
 
-	if (create_addr(pds.peer, &sin, &cai)) {
+	if (create_addr(pds.peer, c, &sin, &cai)) {
 		ast_log(LOG_WARNING, "No address associated with '%s'\n", pds.peer);
 		return -1;
 	}
@@ -8310,11 +8321,11 @@ retryowner2:
 	iax_frame_wrap(fr, &f);
 
 	/* If this is our most recent packet, use it as our basis for timestamping */
-	if (iaxs[fr->callno]->last < fr->ts) {
+	if (iaxs[fr->callno] && iaxs[fr->callno]->last < fr->ts) {
 		/*iaxs[fr->callno]->last = fr->ts; (do it afterwards cos schedule/forward_delivery needs the last ts too)*/
 		fr->outoforder = 0;
 	} else {
-		if (option_debug && iaxdebug)
+		if (option_debug && iaxdebug && iaxs[fr->callno])
 			ast_log(LOG_DEBUG, "Received out of order packet... (type=%d, subclass %d, ts = %d, last = %d)\n", f.frametype, f.subclass, fr->ts, iaxs[fr->callno]->last);
 		fr->outoforder = -1;
 	}
@@ -8559,7 +8570,7 @@ static int iax2_provision(struct sockaddr_in *end, int sockfd, char *dest, const
 	if (end) {
 		memcpy(&sin, end, sizeof(sin));
 		cai.sockfd = sockfd;
-	} else if (create_addr(dest, &sin, &cai))
+	} else if (create_addr(dest, NULL, &sin, &cai))
 		return -1;
 
 	/* Build the rest of the message */
@@ -8782,7 +8793,7 @@ static struct ast_channel *iax2_request(const char *type, int format, void *data
 	       
 	
 	/* Populate our address from the given */
-	if (create_addr(pds.peer, &sin, &cai)) {
+	if (create_addr(pds.peer, NULL, &sin, &cai)) {
 		*cause = AST_CAUSE_UNREGISTERED;
 		return NULL;
 	}
@@ -10097,7 +10108,7 @@ static int cache_get_callno_locked(const char *data)
 	parse_dial_string(tmpstr, &pds);
 
 	/* Populate our address from the given */
-	if (create_addr(pds.peer, &sin, &cai))
+	if (create_addr(pds.peer, NULL, &sin, &cai))
 		return -1;
 
 	if (option_debug)

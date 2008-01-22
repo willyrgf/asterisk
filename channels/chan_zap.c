@@ -1429,12 +1429,12 @@ static void zt_enable_ec(struct zt_pvt *p)
 			x = 1;
 			res = ioctl(p->subs[SUB_REAL].zfd, ZT_AUDIOMODE, &x);
 			if (res)
-				ast_log(LOG_WARNING, "Unable to enable echo cancellation on channel %d\n", p->channel);
+				ast_log(LOG_WARNING, "Unable to enable audio mode on channel %d (%s)\n", p->channel, strerror(errno));
 		}
 		x = p->echocancel;
 		res = ioctl(p->subs[SUB_REAL].zfd, ZT_ECHOCANCEL, &x);
 		if (res) 
-			ast_log(LOG_WARNING, "Unable to enable echo cancellation on channel %d\n", p->channel);
+			ast_log(LOG_WARNING, "Unable to enable echo cancellation on channel %d (%s)\n", p->channel, strerror(errno));
 		else {
 			p->echocanon = 1;
 			if (option_debug)
@@ -8954,7 +8954,7 @@ static void *pri_dchannel(void *vpri)
 						if (!ast_strlen_zero(e->ringing.useruserinfo)) {
 							struct ast_channel *owner = pri->pvts[chanpos]->owner;
 							ast_mutex_unlock(&pri->pvts[chanpos]->lock);
-							pbx_builtin_setvar_helper(pri->pvts[chanpos]->owner, "USERUSERINFO", e->ringing.useruserinfo);
+							pbx_builtin_setvar_helper(owner, "USERUSERINFO", e->ringing.useruserinfo);
 							ast_mutex_lock(&pri->pvts[chanpos]->lock);
 						}
 #endif
@@ -9112,7 +9112,7 @@ static void *pri_dchannel(void *vpri)
 						if (!ast_strlen_zero(e->answer.useruserinfo)) {
 							struct ast_channel *owner = pri->pvts[chanpos]->owner;
 							ast_mutex_unlock(&pri->pvts[chanpos]->lock);
-							pbx_builtin_setvar_helper(pri->pvts[chanpos]->owner, "USERUSERINFO", e->answer.useruserinfo);
+							pbx_builtin_setvar_helper(owner, "USERUSERINFO", e->answer.useruserinfo);
 							ast_mutex_lock(&pri->pvts[chanpos]->lock);
 						}
 #endif
@@ -9181,7 +9181,7 @@ static void *pri_dchannel(void *vpri)
 						if (pri->pvts[chanpos]->owner && !ast_strlen_zero(e->hangup.useruserinfo)) {
 							struct ast_channel *owner = pri->pvts[chanpos]->owner;
 							ast_mutex_unlock(&pri->pvts[chanpos]->lock);
-							pbx_builtin_setvar_helper(pri->pvts[chanpos]->owner, "USERUSERINFO", e->hangup.useruserinfo);
+							pbx_builtin_setvar_helper(owner, "USERUSERINFO", e->hangup.useruserinfo);
 							ast_mutex_lock(&pri->pvts[chanpos]->lock);
 						}
 #endif
@@ -9250,7 +9250,7 @@ static void *pri_dchannel(void *vpri)
 						if (!ast_strlen_zero(e->hangup.useruserinfo)) {
 							struct ast_channel *owner = pri->pvts[chanpos]->owner;
 							ast_mutex_unlock(&pri->pvts[chanpos]->lock);
-							pbx_builtin_setvar_helper(pri->pvts[chanpos]->owner, "USERUSERINFO", e->hangup.useruserinfo);
+							pbx_builtin_setvar_helper(owner, "USERUSERINFO", e->hangup.useruserinfo);
 							ast_mutex_lock(&pri->pvts[chanpos]->lock);
 						}
 #endif
@@ -9281,7 +9281,7 @@ static void *pri_dchannel(void *vpri)
 						if (!ast_strlen_zero(e->hangup.useruserinfo)) {
 							struct ast_channel *owner = pri->pvts[chanpos]->owner;
 							ast_mutex_unlock(&pri->pvts[chanpos]->lock);
-							pbx_builtin_setvar_helper(pri->pvts[chanpos]->owner, "USERUSERINFO", e->hangup.useruserinfo);
+							pbx_builtin_setvar_helper(owner, "USERUSERINFO", e->hangup.useruserinfo);
 							ast_mutex_lock(&pri->pvts[chanpos]->lock);
 						}
 #endif
