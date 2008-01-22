@@ -1322,6 +1322,10 @@ static int bridge_p2p_rtp_write(struct ast_rtp *rtp, struct ast_rtp *bridged, un
 	/* Check what the payload value should be */
 	rtpPT = ast_rtp_lookup_pt(rtp, payload);
 
+	/* If the payload coming in is not one of the negotiated ones then send it to the core, this will cause formats to change and the bridge to break */
+	if (!bridged->current_RTP_PT[payload].code)
+		return -1;
+
 	/* If the payload is DTMF, and we are listening for DTMF - then feed it into the core */
 	if (ast_test_flag(rtp, FLAG_P2P_NEED_DTMF) && !rtpPT.isAstFormat && rtpPT.code == AST_RTP_DTMF)
 		return -1;
@@ -1579,7 +1583,7 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 			ast_frame_byteswap_be(&rtp->f);
 		calc_rxstamp(&rtp->f.delivery, rtp, timestamp, mark);
 		/* Add timing data to let ast_generic_bridge() put the frame into a jitterbuf */
-		rtp->f.has_timing_info = 1;
+		ast_set_flag(&rtp->f, AST_FRFLAG_HAS_TIMING_INFO);
 		rtp->f.ts = timestamp / 8;
 		rtp->f.len = rtp->f.samples / 8;
 	} else if(rtp->f.subclass & AST_FORMAT_VIDEO_MASK) {
@@ -1620,7 +1624,9 @@ static struct {
 	{{1, AST_FORMAT_G723_1}, "audio", "G723"},
 	{{1, AST_FORMAT_GSM}, "audio", "GSM"},
 	{{1, AST_FORMAT_ULAW}, "audio", "PCMU"},
+	{{1, AST_FORMAT_ULAW}, "audio", "G711U"},
 	{{1, AST_FORMAT_ALAW}, "audio", "PCMA"},
+	{{1, AST_FORMAT_ALAW}, "audio", "G711A"},
 	{{1, AST_FORMAT_G726}, "audio", "G726-32"},
 	{{1, AST_FORMAT_ADPCM}, "audio", "DVI4"},
 	{{1, AST_FORMAT_SLINEAR}, "audio", "L16"},
@@ -3024,7 +3030,7 @@ static int ast_rtp_raw_write(struct ast_rtp *rtp, struct ast_frame *f, int codec
 	if (rtp->lastts > rtp->lastdigitts)
 		rtp->lastdigitts = rtp->lastts;
 
-	if (f->has_timing_info)
+	if (ast_test_flag(f, AST_FRFLAG_HAS_TIMING_INFO))
 		rtp->lastts = f->ts * 8;
 
 	/* Get a pointer to the header */
@@ -3534,6 +3540,12 @@ static enum ast_bridge_result bridge_p2p_loop(struct ast_channel *c0, struct ast
 	cs[1] = c1;
 	cs[2] = NULL;
 	for (;;) {
+		/* If the underlying formats have changed force this bridge to break */
+		if ((c0->rawreadformat != c1->rawwriteformat) || (c1->rawreadformat != c0->rawwriteformat)) {
+			ast_debug(3, "p2p-rtp-bridge: Oooh, formats changed, backing out\n");
+			res = AST_BRIDGE_FAILED_NOWARN;
+			break;
+		}
 		/* Check if anything changed */
 		if ((c0->tech_pvt != pvt0) ||
 		    (c1->tech_pvt != pvt1) ||

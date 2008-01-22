@@ -249,8 +249,8 @@ static const char *descrip =
 "      'I' -- announce user join/leave without review\n"
 "      'l' -- set listen only mode (Listen only, no talking)\n"
 "      'm' -- set initially muted\n"
-"      'M[(<class>]\n"
-"        ' -- enable music on hold when the conference has a single caller.\n"
+"      'M[(<class>)]'\n"
+"          -- enable music on hold when the conference has a single caller.\n"
 "             Optionally, specify a musiconhold class to use.  If one is not\n"
 "             provided, it will use the channel's currently set music class,\n"
 "             or \"default\".\n"
@@ -1796,7 +1796,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 		goto outrun;
 	}
 
-	retryzap = (strcasecmp(chan->tech->type, "Zap") || chan->audiohooks ? 1 : 0);
+	retryzap = (strcasecmp(chan->tech->type, "Zap") || (chan->audiohooks || chan->monitor) ? 1 : 0);
 	user->zapchannel = !retryzap;
 
  zapretry:
@@ -2240,14 +2240,14 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 				break;
 
 			if (c) {
-				if (c->fds[0] != origfd || (user->zapchannel && c->audiohooks)) {
+				if (c->fds[0] != origfd || (user->zapchannel && (c->audiohooks || c->monitor))) {
 					if (using_pseudo) {
 						/* Kill old pseudo */
 						close(fd);
 						using_pseudo = 0;
 					}
 					ast_debug(1, "Ooh, something swapped out under us, starting over\n");
-					retryzap = (strcasecmp(c->tech->type, "Zap") || c->audiohooks ? 1 : 0);
+					retryzap = (strcasecmp(c->tech->type, "Zap") || (c->audiohooks || c->monitor) ? 1 : 0);
 					user->zapchannel = !retryzap;
 					goto zapretry;
 				}
@@ -2696,7 +2696,7 @@ static struct ast_conference *find_conf_realtime(struct ast_channel *chan, char 
 		char useropts[32] = "";
 		char adminopts[32] = "";
 		struct ast_tm tm, etm;
-		struct timeval starttime, endtime;
+		struct timeval starttime = { .tv_sec = 0 }, endtime = { .tv_sec = 0 };
 
 		if (rt_schedule) {
 			now = ast_tvnow();

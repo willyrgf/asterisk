@@ -80,11 +80,6 @@ static char buildopt_sum[33] = AST_BUILDOPT_SUM;
 static unsigned int embedding = 1; /* we always start out by registering embedded modules,
 				      since they are here before we dlopen() any
 				   */
-/* Forward declaration */
-static int manager_moduleload(struct mansession *s, const struct message *m);
-static char mandescr_moduleload[];
-static int manager_modulecheck(struct mansession *s, const struct message *m);
-static char mandescr_modulecheck[];
 
 struct ast_module {
 	const struct ast_module_info *info;
@@ -348,28 +343,31 @@ static void unload_dynamic_module(struct ast_module *mod)
 
 static struct ast_module *load_dynamic_module(const char *resource_in, unsigned int global_symbols_only)
 {
-	char fn[256] = "";
+	char fn[PATH_MAX] = "";
 	void *lib = NULL;
 	struct ast_module *mod;
-	char *resource = (char *) resource_in;
 	unsigned int wants_global;
+	int space;	/* room needed for the descriptor */
+	int missing_so = 0;
 
-	if (strcasecmp(resource + strlen(resource) - 3, ".so")) {
-		resource = alloca(strlen(resource_in) + 3);
-	        strcpy(resource, resource_in);
-		strcat(resource, ".so");
+	space = sizeof(*resource_being_loaded) + strlen(resource_in) + 1;
+	if (strcasecmp(resource_in + strlen(resource_in) - 3, ".so")) {
+		missing_so = 1;
+		space += 3;	/* room for the extra ".so" */
 	}
 
-	snprintf(fn, sizeof(fn), "%s/%s", ast_config_AST_MODULE_DIR, resource);
+	snprintf(fn, sizeof(fn), "%s/%s%s", ast_config_AST_MODULE_DIR, resource_in, missing_so ? ".so" : "");
 
 	/* make a first load of the module in 'quiet' mode... don't try to resolve
 	   any symbols, and don't export any symbols. this will allow us to peek into
 	   the module's info block (if available) to see what flags it has set */
 
-	if (!(resource_being_loaded = ast_calloc(1, sizeof(*resource_being_loaded) + strlen(resource) + 1)))
+	resource_being_loaded = ast_calloc(1, space);
+	if (!resource_being_loaded)
 		return NULL;
-
-	strcpy(resource_being_loaded->resource, resource);
+	strcpy(resource_being_loaded->resource, resource_in);
+	if (missing_so)
+		strcat(resource_being_loaded->resource, ".so");
 
 	if (!(lib = dlopen(fn, RTLD_LAZY | RTLD_LOCAL))) {
 		ast_log(LOG_WARNING, "Error loading module '%s': %s\n", resource_in, dlerror());
@@ -418,11 +416,12 @@ static struct ast_module *load_dynamic_module(const char *resource_in, unsigned 
 	resource_being_loaded = NULL;
 
 	/* start the load process again */
-
-	if (!(resource_being_loaded = ast_calloc(1, sizeof(*resource_being_loaded) + strlen(resource) + 1)))
+	resource_being_loaded = ast_calloc(1, space);
+	if (!resource_being_loaded)
 		return NULL;
-
-	strcpy(resource_being_loaded->resource, resource);
+	strcpy(resource_being_loaded->resource, resource_in);
+	if (missing_so)
+		strcat(resource_being_loaded->resource, ".so");
 
 	if (!(lib = dlopen(fn, wants_global ? RTLD_LAZY | RTLD_GLOBAL : RTLD_NOW | RTLD_LOCAL))) {
 		ast_log(LOG_WARNING, "Error loading module '%s': %s\n", resource_in, dlerror());
@@ -512,7 +511,7 @@ int ast_unload_resource(const char *resource_name, enum ast_module_unload_mode f
 
 	AST_LIST_UNLOCK(&module_list);
 
-	if (!error && !mod->lib)
+	if (!error && !mod->lib && mod->info && mod->info->restore_globals)
 		mod->info->restore_globals();
 
 #ifdef LOADABLE_MODULES
@@ -743,7 +742,6 @@ static struct load_order_entry *add_to_load_order(const char *resource, struct l
 
 	return order;
 }
-
 int load_modules(unsigned int preload_only)
 {
 	struct ast_config *cfg;
@@ -906,14 +904,12 @@ done:
 	}
 
 	AST_LIST_UNLOCK(&module_list);
-
-	ast_manager_register2("ModuleLoad", EVENT_FLAG_SYSTEM, manager_moduleload, "Module management", mandescr_moduleload);
-	ast_manager_register2("ModuleCheck", EVENT_FLAG_SYSTEM, manager_modulecheck, "Check if module is loaded", mandescr_modulecheck);
-
+	
 	/* Tell manager clients that are aggressive at logging in that we're done
 	   loading modules. If there's a DNS problem in chan_sip, we might not
 	   even reach this */
 	manager_event(EVENT_FLAG_SYSTEM, "ModuleLoadReport", "ModuleLoadStatus: Done\r\nModuleSelection: %s\r\nModuleCount: %d\r\n", preload_only ? "Preload" : "All", modulecount);
+	
 	return res;
 }
 
@@ -1007,101 +1003,4 @@ void ast_module_unref(struct ast_module *mod)
 {
 	ast_atomic_fetchadd_int(&mod->usecount, -1);
 	ast_update_use_count();
-}
-
-static char mandescr_modulecheck[] = 
-"Description: Checks if Asterisk module is loaded\n"
-"Variables: \n"
-"  ActionID: <id>          Action ID for this transaction. Will be returned.\n"
-"  Module: <name>          Asterisk module name (not including extension)\n"
-"\n"
-"Will return Success/Failure\n"
-"For success returns, the module revision number is included.\n";
-
-/* Manager function to check if module is loaded */
-static int manager_modulecheck(struct mansession *s, const struct message *m)
-{
-	int res;
-	const char *module = astman_get_header(m, "Module");
-	const char *id = astman_get_header(m,"ActionID");
-	char idText[BUFSIZ];
-	const char *version;
-	char filename[BUFSIZ/2];
-	char *cut;
-
-	snprintf(filename, sizeof(filename), module);
-	if ((cut = strchr(filename, '.'))) {
-		*cut = '\0';
-	} else {
-		cut = filename + strlen(filename);
-	}
-	sprintf(cut, ".so");
-	ast_log(LOG_DEBUG, "**** ModuleCheck .so file %s\n", filename);
-	res = ast_module_check(filename);
-	if (!res) {
-		astman_send_error(s, m, "Module not loaded");
-		return 0;
-	}
-	sprintf(cut, ".c");
-	ast_log(LOG_DEBUG, "**** ModuleCheck .c file %s\n", filename);
-	version = ast_file_version_find(filename);
-
-	if (!ast_strlen_zero(id))
-		snprintf(idText, sizeof(idText), "ActionID: %s\r\n", id);
-	astman_append(s, "Response: Success\r\n%s", idText);
-	astman_append(s, "Version: %s\r\n\r\n", version ? version : "");
-	return 0;
-}
-
-
-static char mandescr_moduleload[] = 
-"Description: Loads, unloads or reloads an Asterisk module in a running system.\n"
-"Variables: \n"
-"  ActionID: <id>          Action ID for this transaction. Will be returned.\n"
-"  Module: <name>          Asterisk module name (including .so extension)\n"
-"                          or subsystem identifier:\n"
-"				cdr, enum, dnsmgr, extconfig, manager, rtp, http\n"
-"  LoadType: load | unload | reload\n"
-"                          The operation to be done on module\n"
-" If no module is specified for a reload loadtype, all modules are reloaded";
-
-static int manager_moduleload(struct mansession *s, const struct message *m)
-{
-	int res;
-	const char *module = astman_get_header(m, "Module");
-	const char *loadtype = astman_get_header(m, "LoadType");
-
-	if (!loadtype || strlen(loadtype) == 0)
-		astman_send_error(s, m, "Incomplete ModuleLoad action.");
-	if ((!module || strlen(module) == 0) && strcasecmp(loadtype, "reload") != 0)
-		astman_send_error(s, m, "Need module name");
-
-	if (!strcasecmp(loadtype, "load")) {
-		res = ast_load_resource(module);
-		if (res)
-			astman_send_error(s, m, "Could not load module.");
-		else
-			astman_send_ack(s, m, "Module loaded.");
-	} else if (!strcasecmp(loadtype, "unload")) {
-		res = ast_unload_resource(module, AST_FORCE_SOFT);
-		if (res)
-			astman_send_error(s, m, "Could not unload module.");
-		else
-			astman_send_ack(s, m, "Module unloaded.");
-	} else if (!strcasecmp(loadtype, "reload")) {
-		if (module != NULL) {
-			res = ast_module_reload(module);
-			if (res == 0)
-				astman_send_error(s, m, "No such module.");
-			else if (res == 1)
-				astman_send_error(s, m, "Module does not support reload action.");
-			else
-				astman_send_ack(s, m, "Module reloaded.");
-		} else {
-			ast_module_reload(NULL);	/* Reload all modules */
-			astman_send_ack(s, m, "All modules reloaded");
-		}
-	} else 
-		astman_send_error(s, m, "Incomplete ModuleLoad action.");
-	return 0;
 }

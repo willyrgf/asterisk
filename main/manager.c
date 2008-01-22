@@ -55,6 +55,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/channel.h"
 #include "asterisk/file.h"
 #include "asterisk/manager.h"
+#include "asterisk/module.h"
 #include "asterisk/config.h"
 #include "asterisk/callerid.h"
 #include "asterisk/lock.h"
@@ -64,6 +65,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/md5.h"
 #include "asterisk/acl.h"
 #include "asterisk/utils.h"
+#include "asterisk/tcptls.h"
 #include "asterisk/http.h"
 #include "asterisk/version.h"
 #include "asterisk/threadstorage.h"
@@ -311,6 +313,7 @@ static struct permalias {
 	{ EVENT_FLAG_DTMF, "dtmf" },
 	{ EVENT_FLAG_REPORTING, "reporting" },
 	{ EVENT_FLAG_CDR, "cdr" },
+	{ EVENT_FLAG_DIALPLAN, "dialplan" },
 	{ -1, "all" },
 	{ 0, "none" },
 };
@@ -995,8 +998,7 @@ static int authenticate(struct mansession *s, const struct message *m)
 		ast_log(LOG_NOTICE, "%s failed to pass IP ACL as '%s'\n", ast_inet_ntoa(s->sin.sin_addr), username);
 	} else if (!strcasecmp(astman_get_header(m, "AuthType"), "MD5")) {
 		const char *key = astman_get_header(m, "Key");
-		if (!ast_strlen_zero(key) && !ast_strlen_zero(s->challenge) &&
-		    !ast_strlen_zero(password)) {
+		if (!ast_strlen_zero(key) && !ast_strlen_zero(s->challenge) && user->secret) {
 			int x;
 			int len = 0;
 			char md5key[256] = "";
@@ -1005,7 +1007,7 @@ static int authenticate(struct mansession *s, const struct message *m)
 
 			MD5Init(&md5);
 			MD5Update(&md5, (unsigned char *) s->challenge, strlen(s->challenge));
-			MD5Update(&md5, (unsigned char *) password, strlen(password));
+			MD5Update(&md5, (unsigned char *) user->secret, strlen(user->secret));
 			MD5Final(digest, &md5);
 			for (x=0; x<16; x++)
 				len += sprintf(md5key + len, "%2.2x", digest[x]);
@@ -1390,7 +1392,7 @@ static int action_listcommands(struct mansession *s, const struct message *m)
 
 	astman_start_ack(s, m);
 	AST_RWLIST_TRAVERSE(&actions, cur, list) {
-		if ((s->writeperm & cur->authority) == cur->authority)
+		if (s->writeperm & cur->authority || cur->authority == 0)
 			astman_append(s, "%s: %s (Priv: %s)\r\n",
 				cur->action, cur->synopsis, authority_to_str(cur->authority, &temp));
 	}
@@ -2222,7 +2224,7 @@ static int action_coresettings(struct mansession *s, const struct message *m)
 			,
 		        idText,
 			AMI_VERSION,
-			ASTERISK_VERSION, 
+			ast_get_version(), 
 			ast_config_AST_SYSTEM_NAME,
 			option_maxcalls,
 			option_maxload,
@@ -2360,6 +2362,101 @@ static int action_coreshowchannels(struct mansession *s, const struct message *m
 	return 0;
 }
 
+static char mandescr_modulecheck[] = 
+"Description: Checks if Asterisk module is loaded\n"
+"Variables: \n"
+"  ActionID: <id>          Action ID for this transaction. Will be returned.\n"
+"  Module: <name>          Asterisk module name (not including extension)\n"
+"\n"
+"Will return Success/Failure\n"
+"For success returns, the module revision number is included.\n";
+
+/* Manager function to check if module is loaded */
+static int manager_modulecheck(struct mansession *s, const struct message *m)
+{
+	int res;
+	const char *module = astman_get_header(m, "Module");
+	const char *id = astman_get_header(m,"ActionID");
+	char idText[BUFSIZ];
+	const char *version;
+	char filename[BUFSIZ/2];
+	char *cut;
+
+	snprintf(filename, sizeof(filename), module);
+	if ((cut = strchr(filename, '.'))) {
+		*cut = '\0';
+	} else {
+		cut = filename + strlen(filename);
+	}
+	sprintf(cut, ".so");
+	ast_log(LOG_DEBUG, "**** ModuleCheck .so file %s\n", filename);
+	res = ast_module_check(filename);
+	if (!res) {
+		astman_send_error(s, m, "Module not loaded");
+		return 0;
+	}
+	sprintf(cut, ".c");
+	ast_log(LOG_DEBUG, "**** ModuleCheck .c file %s\n", filename);
+	version = ast_file_version_find(filename);
+
+	if (!ast_strlen_zero(id))
+		snprintf(idText, sizeof(idText), "ActionID: %s\r\n", id);
+	astman_append(s, "Response: Success\r\n%s", idText);
+	astman_append(s, "Version: %s\r\n\r\n", version ? version : "");
+	return 0;
+}
+
+static char mandescr_moduleload[] = 
+"Description: Loads, unloads or reloads an Asterisk module in a running system.\n"
+"Variables: \n"
+"  ActionID: <id>          Action ID for this transaction. Will be returned.\n"
+"  Module: <name>          Asterisk module name (including .so extension)\n"
+"                          or subsystem identifier:\n"
+"				cdr, enum, dnsmgr, extconfig, manager, rtp, http\n"
+"  LoadType: load | unload | reload\n"
+"                          The operation to be done on module\n"
+" If no module is specified for a reload loadtype, all modules are reloaded";
+
+static int manager_moduleload(struct mansession *s, const struct message *m)
+{
+	int res;
+	const char *module = astman_get_header(m, "Module");
+	const char *loadtype = astman_get_header(m, "LoadType");
+
+	if (!loadtype || strlen(loadtype) == 0)
+		astman_send_error(s, m, "Incomplete ModuleLoad action.");
+	if ((!module || strlen(module) == 0) && strcasecmp(loadtype, "reload") != 0)
+		astman_send_error(s, m, "Need module name");
+
+	if (!strcasecmp(loadtype, "load")) {
+		res = ast_load_resource(module);
+		if (res)
+			astman_send_error(s, m, "Could not load module.");
+		else
+			astman_send_ack(s, m, "Module loaded.");
+	} else if (!strcasecmp(loadtype, "unload")) {
+		res = ast_unload_resource(module, AST_FORCE_SOFT);
+		if (res)
+			astman_send_error(s, m, "Could not unload module.");
+		else
+			astman_send_ack(s, m, "Module unloaded.");
+	} else if (!strcasecmp(loadtype, "reload")) {
+		if (module != NULL) {
+			res = ast_module_reload(module);
+			if (res == 0)
+				astman_send_error(s, m, "No such module.");
+			else if (res == 1)
+				astman_send_error(s, m, "Module does not support reload action.");
+			else
+				astman_send_ack(s, m, "Module reloaded.");
+		} else {
+			ast_module_reload(NULL);	/* Reload all modules */
+			astman_send_ack(s, m, "All modules reloaded");
+		}
+	} else 
+		astman_send_error(s, m, "Incomplete ModuleLoad action.");
+	return 0;
+}
 
 /*
  * Done with the action handlers here, we start with the code in charge
@@ -2413,7 +2510,7 @@ static int process_message(struct mansession *s, const struct message *m)
 	AST_RWLIST_TRAVERSE(&actions, tmp, list) {
 		if (strcasecmp(action, tmp->action))
 			continue;
-		if ((s->writeperm & tmp->authority) == tmp->authority)
+		if (s->writeperm & tmp->authority || tmp->authority == 0)
 			ret = tmp->func(s, m);
 		else
 			astman_send_error(s, m, "Permission denied");
@@ -2589,6 +2686,20 @@ static void *session_do(void *data)
 			ast_verb(2, "Connect attempt from '%s' unable to authenticate\n", ast_inet_ntoa(s->sin.sin_addr));
 		ast_log(LOG_EVENT, "Failed attempt from %s\n", ast_inet_ntoa(s->sin.sin_addr));
 	}
+
+	/* It is possible under certain circumstances for this session thread
+	   to complete its work and exit *before* the thread that created it
+	   has finished executing the ast_pthread_create_background() function.
+	   If this occurs, some versions of glibc appear to act in a buggy
+	   fashion and attempt to write data into memory that it thinks belongs
+	   to the thread but is in fact not owned by the thread (or may have
+	   been freed completely).
+
+	   Causing this thread to yield to other threads at least one time
+	   appears to work around this bug.
+	*/
+	usleep(1);
+
 	destroy_session(s);
 
 done:
@@ -3315,7 +3426,7 @@ static void purge_old_stuff(void *data)
 	purge_events();
 }
 
-struct tls_config ami_tls_cfg;
+struct ast_tls_config ami_tls_cfg;
 static struct server_args ami_desc = {
         .accept_fd = -1,
         .master = AST_PTHREADT_NULL,
@@ -3357,28 +3468,30 @@ static int __init_manager(int reload)
 		ast_manager_register2("Logoff", 0, action_logoff, "Logoff Manager", mandescr_logoff);
 		ast_manager_register2("Login", 0, action_login, "Login Manager", NULL);
 		ast_manager_register2("Challenge", 0, action_challenge, "Generate Challenge for MD5 Auth", NULL);
-		ast_manager_register2("Hangup", EVENT_FLAG_CALL, action_hangup, "Hangup Channel", mandescr_hangup);
-		ast_manager_register("Status", EVENT_FLAG_CALL, action_status, "Lists channel status" );
+		ast_manager_register2("Hangup", EVENT_FLAG_SYSTEM | EVENT_FLAG_CALL, action_hangup, "Hangup Channel", mandescr_hangup);
+		ast_manager_register("Status", EVENT_FLAG_SYSTEM | EVENT_FLAG_CALL | EVENT_FLAG_REPORTING, action_status, "Lists channel status" );
 		ast_manager_register2("Setvar", EVENT_FLAG_CALL, action_setvar, "Set Channel Variable", mandescr_setvar );
-		ast_manager_register2("Getvar", EVENT_FLAG_CALL, action_getvar, "Gets a Channel Variable", mandescr_getvar );
-		ast_manager_register2("GetConfig", EVENT_FLAG_CONFIG, action_getconfig, "Retrieve configuration", mandescr_getconfig);
-		ast_manager_register2("GetConfigJSON", EVENT_FLAG_CONFIG, action_getconfigjson, "Retrieve configuration (JSON format)", mandescr_getconfigjson);
+		ast_manager_register2("Getvar", EVENT_FLAG_CALL | EVENT_FLAG_REPORTING, action_getvar, "Gets a Channel Variable", mandescr_getvar );
+		ast_manager_register2("GetConfig", EVENT_FLAG_SYSTEM | EVENT_FLAG_CONFIG, action_getconfig, "Retrieve configuration", mandescr_getconfig);
+		ast_manager_register2("GetConfigJSON", EVENT_FLAG_SYSTEM | EVENT_FLAG_CONFIG, action_getconfigjson, "Retrieve configuration (JSON format)", mandescr_getconfigjson);
 		ast_manager_register2("UpdateConfig", EVENT_FLAG_CONFIG, action_updateconfig, "Update basic configuration", mandescr_updateconfig);
 		ast_manager_register2("Redirect", EVENT_FLAG_CALL, action_redirect, "Redirect (transfer) a call", mandescr_redirect );
 		ast_manager_register2("Originate", EVENT_FLAG_CALL, action_originate, "Originate Call", mandescr_originate);
 		ast_manager_register2("Command", EVENT_FLAG_COMMAND, action_command, "Execute Asterisk CLI Command", mandescr_command );
-		ast_manager_register2("ExtensionState", EVENT_FLAG_CALL, action_extensionstate, "Check Extension Status", mandescr_extensionstate );
-		ast_manager_register2("AbsoluteTimeout", EVENT_FLAG_CALL, action_timeout, "Set Absolute Timeout", mandescr_timeout );
-		ast_manager_register2("MailboxStatus", EVENT_FLAG_CALL, action_mailboxstatus, "Check Mailbox", mandescr_mailboxstatus );
-		ast_manager_register2("MailboxCount", EVENT_FLAG_CALL, action_mailboxcount, "Check Mailbox Message Count", mandescr_mailboxcount );
+		ast_manager_register2("ExtensionState", EVENT_FLAG_CALL | EVENT_FLAG_REPORTING, action_extensionstate, "Check Extension Status", mandescr_extensionstate );
+		ast_manager_register2("AbsoluteTimeout", EVENT_FLAG_SYSTEM | EVENT_FLAG_CALL, action_timeout, "Set Absolute Timeout", mandescr_timeout );
+		ast_manager_register2("MailboxStatus", EVENT_FLAG_CALL | EVENT_FLAG_REPORTING, action_mailboxstatus, "Check Mailbox", mandescr_mailboxstatus );
+		ast_manager_register2("MailboxCount", EVENT_FLAG_CALL | EVENT_FLAG_REPORTING, action_mailboxcount, "Check Mailbox Message Count", mandescr_mailboxcount );
 		ast_manager_register2("ListCommands", 0, action_listcommands, "List available manager commands", mandescr_listcommands);
 		ast_manager_register2("SendText", EVENT_FLAG_CALL, action_sendtext, "Send text message to channel", mandescr_sendtext);
 		ast_manager_register2("UserEvent", EVENT_FLAG_USER, action_userevent, "Send an arbitrary event", mandescr_userevent);
 		ast_manager_register2("WaitEvent", 0, action_waitevent, "Wait for an event to occur", mandescr_waitevent);
-		ast_manager_register2("CoreSettings", EVENT_FLAG_SYSTEM, action_coresettings, "Show PBX core settings (version etc)", mandescr_coresettings);
-		ast_manager_register2("CoreStatus", EVENT_FLAG_SYSTEM, action_corestatus, "Show PBX core status variables", mandescr_corestatus);
-		ast_manager_register2("Reload", EVENT_FLAG_CONFIG, action_reload, "Send a reload event", mandescr_reload);
-		ast_manager_register2("CoreShowChannels", EVENT_FLAG_SYSTEM, action_coreshowchannels, "List currently active channels", mandescr_coreshowchannels);
+		ast_manager_register2("CoreSettings", EVENT_FLAG_SYSTEM | EVENT_FLAG_REPORTING, action_coresettings, "Show PBX core settings (version etc)", mandescr_coresettings);
+		ast_manager_register2("CoreStatus", EVENT_FLAG_SYSTEM | EVENT_FLAG_REPORTING, action_corestatus, "Show PBX core status variables", mandescr_corestatus);
+		ast_manager_register2("Reload", EVENT_FLAG_CONFIG | EVENT_FLAG_SYSTEM, action_reload, "Send a reload event", mandescr_reload);
+		ast_manager_register2("CoreShowChannels", EVENT_FLAG_SYSTEM | EVENT_FLAG_REPORTING, action_coreshowchannels, "List currently active channels", mandescr_coreshowchannels);
+		ast_manager_register2("ModuleLoad", EVENT_FLAG_SYSTEM, manager_moduleload, "Module management", mandescr_moduleload);
+		ast_manager_register2("ModuleCheck", EVENT_FLAG_SYSTEM, manager_modulecheck, "Check if module is loaded", mandescr_modulecheck);
 
 		ast_cli_register_multiple(cli_manager, sizeof(cli_manager) / sizeof(struct ast_cli_entry));
 		ast_extension_state_add(NULL, NULL, manager_state_cb, NULL);

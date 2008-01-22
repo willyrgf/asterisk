@@ -324,6 +324,12 @@
 /* Define if your system has the GTK2 libraries. */
 #undef HAVE_GTK2
 
+/* Define this to indicate the ${ICONV_DESCRIP} library */
+#undef HAVE_ICONV
+
+/* Define to indicate the ${ICONV_DESCRIP} library version */
+#undef HAVE_ICONV_VERSION
+
 /* Define this to indicate the ${IKSEMEL_DESCRIP} library */
 #undef HAVE_IKSEMEL
 
@@ -361,11 +367,14 @@
 /* Define to indicate the ${ISDNNET_DESCRIP} library version */
 #undef HAVE_ISDNNET_VERSION
 
+/* Define this to indicate the ${JACK_DESCRIP} library */
+#undef HAVE_JACK
+
+/* Define to indicate the ${JACK_DESCRIP} library version */
+#undef HAVE_JACK_VERSION
+
 /* Define to 1 if you have the <libintl.h> header file. */
 #undef HAVE_LIBINTL_H
-
-/* Define if your system has the KDE libraries. */
-#undef HAVE_LIBKDE
 
 /* Define to 1 if you have the <limits.h> header file. */
 #undef HAVE_LIMITS_H
@@ -541,6 +550,12 @@
 /* Define to indicate the ${POPT_DESCRIP} library version */
 #undef HAVE_POPT_VERSION
 
+/* Define this to indicate the ${PORTAUDIO_DESCRIP} library */
+#undef HAVE_PORTAUDIO
+
+/* Define to indicate the ${PORTAUDIO_DESCRIP} library version */
+#undef HAVE_PORTAUDIO_VERSION
+
 /* Define this to indicate the ${POW_DESCRIP} library */
 #undef HAVE_POW
 
@@ -562,11 +577,9 @@
 /* Define if you have POSIX threads libraries and header files. */
 #undef HAVE_PTHREAD
 
-/* Define if your system has the PTHREAD_MUTEX_RECURSIVE_NP headers. */
+/* Define to 1 if your system defines PTHREAD_MUTEX_RECURSIVE_NP in pthread.h
+   */
 #undef HAVE_PTHREAD_MUTEX_RECURSIVE_NP
-
-/* Define PTHREAD_MUTEX_RECURSIVE_NP headers version */
-#undef HAVE_PTHREAD_MUTEX_RECURSIVE_NP_VERSION
 
 /* Define if your system has the PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP
    headers. */
@@ -581,11 +594,9 @@
 /* Define PTHREAD_RWLOCK_INITIALIZER headers version */
 #undef HAVE_PTHREAD_RWLOCK_INITIALIZER_VERSION
 
-/* Define if your system has the PTHREAD_RWLOCK_PREFER_WRITER_NP headers. */
+/* Define to 1 if your system defines PTHREAD_RWLOCK_PREFER_WRITER_NP in
+   pthread.h */
 #undef HAVE_PTHREAD_RWLOCK_PREFER_WRITER_NP
-
-/* Define PTHREAD_RWLOCK_PREFER_WRITER_NP headers version */
-#undef HAVE_PTHREAD_RWLOCK_PREFER_WRITER_NP_VERSION
 
 /* Define to 1 if the system has the type `ptrdiff_t'. */
 #undef HAVE_PTRDIFF_T
@@ -595,9 +606,6 @@
 
 /* Define if your system has the PWLib libraries. */
 #undef HAVE_PWLIB
-
-/* Define if your system has the Qt library */
-#undef HAVE_QT
 
 /* Define this to indicate the ${RADIUS_DESCRIP} library */
 #undef HAVE_RADIUS
@@ -694,6 +702,12 @@
 
 /* Define this to indicate the ${SPEEX_DESCRIP} library */
 #undef HAVE_SPEEX
+
+/* Define this to indicate the ${SPEEXDSP_DESCRIP} library */
+#undef HAVE_SPEEXDSP
+
+/* Define to indicate the ${SPEEXDSP_DESCRIP} library version */
+#undef HAVE_SPEEXDSP_VERSION
 
 /* Define to indicate the ${SPEEX_DESCRIP} library version */
 #undef HAVE_SPEEX_VERSION
@@ -999,6 +1013,18 @@
 
 /* Define this to indicate the ${ZAPTEL_DESCRIP} library */
 #undef HAVE_ZAPTEL
+
+/* Define if your system has the ZAPTEL_CHANALARMS headers. */
+#undef HAVE_ZAPTEL_CHANALARMS
+
+/* Define ZAPTEL_CHANALARMS headers version */
+#undef HAVE_ZAPTEL_CHANALARMS_VERSION
+
+/* Define if your system has the ZAPTEL_ECHOCANPARAMS headers. */
+#undef HAVE_ZAPTEL_ECHOCANPARAMS
+
+/* Define ZAPTEL_ECHOCANPARAMS headers version */
+#undef HAVE_ZAPTEL_ECHOCANPARAMS_VERSION
 
 /* Define if your system has the ZAPTEL_HWGAIN headers. */
 #undef HAVE_ZAPTEL_HWGAIN

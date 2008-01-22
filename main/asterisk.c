@@ -135,7 +135,7 @@ int daemon(int, int);  /* defined in libresolv of all places */
 
 /*! \brief Welcome message when starting a CLI interface */
 #define WELCOME_MESSAGE \
-    ast_verbose("Asterisk " ASTERISK_VERSION ", Copyright (C) 1999 - 2007 Digium, Inc. and others.\n" \
+    ast_verbose("Asterisk %s, Copyright (C) 1999 - 2007 Digium, Inc. and others.\n" \
                 "Created by Mark Spencer <markster@digium.com>\n" \
                 "Asterisk comes with ABSOLUTELY NO WARRANTY; type 'core show warranty' for details.\n" \
                 "This is free software, with components licensed under the GNU General Public\n" \
@@ -143,7 +143,7 @@ int daemon(int, int);  /* defined in libresolv of all places */
                 "certain conditions. Type 'core show license' for details.\n" \
                 "=========================================================================\n" \
                 "NOTE: This is a development version of Asterisk, and should not be used in\n" \
-                "production installations.\n");
+                "production installations.\n", ast_get_version());
 
 /*! \defgroup main_options Main Configuration Options
  * \brief Main configuration options from asterisk.conf or OS command line on starting Asterisk.
@@ -394,7 +394,7 @@ static char *handle_show_settings(struct ast_cli_entry *e, int cmd, struct ast_c
 
 	ast_cli(a->fd, "\nPBX Core settings\n");
 	ast_cli(a->fd, "-----------------\n");
-	ast_cli(a->fd, "  Version:                     %s\n", "" ASTERISK_VERSION "" );
+	ast_cli(a->fd, "  Version:                     %s\n", ast_get_version());
 	if (option_maxcalls)
 		ast_cli(a->fd, "  Max. calls:                  %d (Current %d)\n", option_maxcalls, ast_active_channels());
 	else
@@ -980,7 +980,7 @@ static void *netconsole(void *vconsole)
 	
 	if (gethostname(hostname, sizeof(hostname)-1))
 		ast_copy_string(hostname, "<Unknown>", sizeof(hostname));
-	snprintf(tmp, sizeof(tmp), "%s/%ld/%s\n", hostname, (long)ast_mainpid, ASTERISK_VERSION);
+	snprintf(tmp, sizeof(tmp), "%s/%ld/%s\n", hostname, (long)ast_mainpid, ast_get_version());
 	fdprint(con->fd, tmp);
 	for (;;) {
 		fds[0].fd = con->fd;
@@ -1515,7 +1515,7 @@ static char *handle_version(struct ast_cli_entry *e, int cmd, struct ast_cli_arg
 	if (a->argc != 3)
 		return CLI_SHOWUSAGE;
 	ast_cli(a->fd, "Asterisk %s built by %s @ %s on a %s running %s on %s\n",
-		ASTERISK_VERSION, ast_build_user, ast_build_hostname,
+		ast_get_version(), ast_build_user, ast_build_hostname,
 		ast_build_machine, ast_build_os, ast_build_date);
 	return CLI_SUCCESS;
 }
@@ -2387,12 +2387,12 @@ static void ast_remotecontrol(char * data)
 
 static int show_version(void)
 {
-	printf("Asterisk " ASTERISK_VERSION "\n");
+	printf("Asterisk %s\n", ast_get_version());
 	return 0;
 }
 
 static int show_cli_help(void) {
-	printf("Asterisk " ASTERISK_VERSION ", Copyright (C) 1999 - 2007, Digium, Inc. and others.\n");
+	printf("Asterisk %s, Copyright (C) 1999 - 2007, Digium, Inc. and others.\n", ast_get_version());
 	printf("Usage: asterisk [OPTIONS]\n");
 	printf("Valid Options:\n");
 	printf("   -V              Display version number and exit\n");
@@ -2664,7 +2664,7 @@ static void *canary_thread(void *unused)
 		stat(canary_filename, &canary_stat);
 		tv = ast_tvnow();
 		if (tv.tv_sec > canary_stat.st_mtime + 60) {
-			ast_log(LOG_WARNING, "The canary is no more.  He has ceased to be!  He's expired and gone to meet his maker!  He's a stiff!  Bereft of life, he rests in peace.  His metabolic processes are now history!  He's off the twig!  He's kicked the bucket.  He's shuffled off his mortal coil, run down the curtain, and joined the bleeding choir invisibile!!  THIS is an EX-CANARY.  (Reducing priority)\n");
+			ast_log(LOG_WARNING, "The canary is no more.  He has ceased to be!  He's expired and gone to meet his maker!  He's a stiff!  Bereft of life, he rests in peace.  His metabolic processes are now history!  He's off the twig!  He's kicked the bucket.  He's shuffled off his mortal coil, run down the curtain, and joined the bleeding choir invisible!!  THIS is an EX-CANARY.  (Reducing priority)\n");
 			ast_set_priority(0);
 			pthread_exit(NULL);
 		}
@@ -2679,6 +2679,40 @@ static void canary_exit(void)
 {
 	if (canary_pid > 0)
 		kill(canary_pid, SIGKILL);
+}
+
+static void run_startup_commands(void)
+{
+	char filename[PATH_MAX];
+	char buf[256];
+	FILE *f;
+	int fd;
+	
+	fd = open("/dev/null", O_RDWR);
+	if (fd < 0)
+		return;
+
+	snprintf(filename, sizeof(filename), "%s/startup_commands", ast_config_AST_CONFIG_DIR);
+
+	if (!(f = fopen(filename, "r"))) {
+		close(fd);
+		return;
+	}
+
+	while (fgets(buf, sizeof(buf), f)) {
+		size_t res = strlen(buf);
+
+		if (!res)
+			continue;
+
+		if (buf[res - 1] == '\n')
+			buf[res - 1] = '\0';
+
+		ast_cli_command(fd, buf);
+	}
+
+	fclose(f);
+	close(fd);
 }
 
 int main(int argc, char *argv[])
@@ -2788,7 +2822,7 @@ int main(int argc, char *argv[])
 			break;
 		case 'x':
 			ast_set_flag(&ast_options, AST_OPT_FLAG_EXEC);
-			xarg = optarg;
+			xarg = ast_strdupa(optarg);
 			break;
 		case 'C':
 			ast_copy_string(cfg_paths.config_file, optarg, sizeof(cfg_paths.config_file));
@@ -2810,13 +2844,13 @@ int main(int argc, char *argv[])
 			show_version();
 			exit(0);
 		case 'U':
-			runuser = optarg;
+			runuser = ast_strdupa(optarg);
 			break;
 		case 'G':
-			rungroup = optarg;
+			rungroup = ast_strdupa(optarg);
 			break;
 		case 's':
-			remotesock = optarg;
+			remotesock = ast_strdupa(optarg);
 			break;
 		case '?':
 			exit(1);
@@ -2851,7 +2885,7 @@ int main(int argc, char *argv[])
 	ast_readconfig();
 
 	if (ast_opt_remote && remotesock != NULL)
-		ast_copy_string((char *) ast_config_AST_SOCKET, remotesock, sizeof(ast_config_AST_SOCKET));
+		ast_copy_string((char *) cfg_paths.socket_path, remotesock, sizeof(cfg_paths.socket_path));
 
 	if (!ast_language_is_prefix && !ast_opt_remote)
 		ast_log(LOG_WARNING, "The 'languageprefix' option in asterisk.conf is deprecated; in a future release it will be removed, and your sound files will need to be organized in the 'new style' language layout.\n");
@@ -2894,13 +2928,13 @@ int main(int argc, char *argv[])
 				for (fd = 0; fd < 100; fd++)
 					close(fd);
 
-				execlp("astcanary", "astcanary", canary_filename, NULL);
+				execlp("astcanary", "astcanary", canary_filename, (char *)NULL);
 
 				/* If not found, try the same path as used to execute asterisk */
 				ast_copy_string(canary_binary, argv[0], sizeof(canary_binary));
 				if ((lastslash = strrchr(canary_binary, '/'))) {
 					ast_copy_string(lastslash + 1, "astcanary", sizeof(canary_binary) + canary_binary - (lastslash + 1));
-					execl(canary_binary, "astcanary", canary_filename, NULL);
+					execl(canary_binary, "astcanary", canary_filename, (char *)NULL);
 				}
 
 				/* Should never happen */
@@ -3185,6 +3219,8 @@ int main(int argc, char *argv[])
 
 	ast_lastreloadtime = ast_startuptime = ast_tvnow();
 	ast_cli_register_multiple(cli_asterisk, sizeof(cli_asterisk) / sizeof(struct ast_cli_entry));
+
+	run_startup_commands();
 
 	if (ast_opt_console) {
 		/* Console stuff now... */

@@ -36,6 +36,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/utils.h"
 #include "asterisk/threadstorage.h"
 #include "asterisk/linkedlists.h"
+#include "asterisk/translate.h"
 
 #ifdef TRACE_FRAMES
 static int headers;
@@ -320,6 +321,9 @@ static void frame_cache_cleanup(void *data)
 
 void ast_frame_free(struct ast_frame *fr, int cache)
 {
+	if (ast_test_flag(fr, AST_FRFLAG_FROM_TRANSLATOR))
+		ast_translate_frame_freed(fr);
+
 	if (!fr->mallocd)
 		return;
 
@@ -366,7 +370,9 @@ struct ast_frame *ast_frisolate(struct ast_frame *fr)
 {
 	struct ast_frame *out;
 	void *newdata;
-	
+
+	ast_clear_flag(fr, AST_FRFLAG_FROM_TRANSLATOR);
+
 	if (!(fr->mallocd & AST_MALLOCD_HDR)) {
 		/* Allocate a new header if needed */
 		if (!(out = ast_frame_header_new()))
@@ -378,8 +384,8 @@ struct ast_frame *ast_frisolate(struct ast_frame *fr)
 		out->offset = fr->offset;
 		out->data = fr->data;
 		/* Copy the timing data */
-		out->has_timing_info = fr->has_timing_info;
-		if (fr->has_timing_info) {
+		ast_copy_flags(out, fr, AST_FRFLAG_HAS_TIMING_INFO);
+		if (ast_test_flag(fr, AST_FRFLAG_HAS_TIMING_INFO)) {
 			out->ts = fr->ts;
 			out->len = fr->len;
 			out->seqno = fr->seqno;
@@ -483,7 +489,7 @@ struct ast_frame *ast_frdup(const struct ast_frame *f)
 		/* Must have space since we allocated for it */
 		strcpy((char *)out->src, f->src);
 	}
-	out->has_timing_info = f->has_timing_info;
+	ast_copy_flags(out, f, AST_FRFLAG_HAS_TIMING_INFO);
 	out->ts = f->ts;
 	out->len = f->len;
 	out->seqno = f->seqno;
@@ -1019,7 +1025,7 @@ void ast_codec_pref_remove(struct ast_codec_pref *pref, int format)
 /*! \brief Append codec to list */
 int ast_codec_pref_append(struct ast_codec_pref *pref, int format)
 {
-	int x, newindex = -1;
+	int x, newindex = 0;
 
 	ast_codec_pref_remove(pref, format);
 
@@ -1042,6 +1048,42 @@ int ast_codec_pref_append(struct ast_codec_pref *pref, int format)
 	return x;
 }
 
+/*! \brief Prepend codec to list */
+void ast_codec_pref_prepend(struct ast_codec_pref *pref, int format, int only_if_existing)
+{
+	int x, newindex = 0;
+
+	/* First step is to get the codecs "index number" */
+	for (x = 0; x < ARRAY_LEN(AST_FORMAT_LIST); x++) {
+		if (AST_FORMAT_LIST[x].bits == format) {
+			newindex = x + 1;
+			break;
+		}
+	}
+	/* Done if its unknown */
+	if (!newindex)
+		return;
+
+	/* Now find any existing occurrence, or the end */
+	for (x = 0; x < 32; x++) {
+		if (!pref->order[x] || pref->order[x] == newindex)
+			break;
+	}
+
+	if (only_if_existing && !pref->order[x])
+		return;
+
+	/* Move down to make space to insert - either all the way to the end,
+	   or as far as the existing location (which will be overwritten) */
+	for (; x > 0; x--) {
+		pref->order[x] = pref->order[x - 1];
+		pref->framing[x] = pref->framing[x - 1];
+	}
+
+	/* And insert the new entry */
+	pref->order[0] = newindex;
+	pref->framing[0] = 0; /* ? */
+}
 
 /*! \brief Set packet size for codec */
 int ast_codec_pref_setsize(struct ast_codec_pref *pref, int format, int framems)
@@ -1372,9 +1414,9 @@ int ast_codec_get_samples(struct ast_frame *f)
 		break;
 	case AST_FORMAT_ULAW:
 	case AST_FORMAT_ALAW:
-	case AST_FORMAT_G722:
 		samples = f->datalen;
 		break;
+	case AST_FORMAT_G722:
 	case AST_FORMAT_ADPCM:
 	case AST_FORMAT_G726:
 	case AST_FORMAT_G726_AAL2:
@@ -1410,9 +1452,9 @@ int ast_codec_get_len(int format, int samples)
 		break;
 	case AST_FORMAT_ULAW:
 	case AST_FORMAT_ALAW:
-	case AST_FORMAT_G722:
 		len = samples;
 		break;
+	case AST_FORMAT_G722:
 	case AST_FORMAT_ADPCM:
 	case AST_FORMAT_G726:
 	case AST_FORMAT_G726_AAL2:

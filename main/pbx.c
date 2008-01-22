@@ -2268,6 +2268,7 @@ int ast_custom_function_unregister(struct ast_custom_function *acf)
 int __ast_custom_function_register(struct ast_custom_function *acf, struct ast_module *mod)
 {
 	struct ast_custom_function *cur;
+	char tmps[80];
 
 	if (!acf)
 		return -1;
@@ -2297,7 +2298,7 @@ int __ast_custom_function_register(struct ast_custom_function *acf, struct ast_m
 
 	AST_RWLIST_UNLOCK(&acf_root);
 
-	ast_verb(2, "Registered custom function %s\n", acf->name);
+	ast_verb(2, "Registered custom function '%s'\n", term_color(tmps, acf->name, COLOR_BRCYAN, 0, sizeof(tmps)));
 
 	return 0;
 }
@@ -2658,7 +2659,7 @@ static int pbx_extension_helper(struct ast_channel *c, struct ast_context *con,
 					term_color(tmp3, passdata, COLOR_BRMAGENTA, 0, sizeof(tmp3)),
 					"in new stack");
 			}
-			manager_event(EVENT_FLAG_CALL, "Newexten",
+			manager_event(EVENT_FLAG_DIALPLAN, "Newexten",
 					"Channel: %s\r\n"
 					"Context: %s\r\n"
 					"Extension: %s\r\n"
@@ -4930,11 +4931,49 @@ static char *handle_set_global(struct ast_cli_entry *e, int cmd, struct ast_cli_
 		return NULL;	
 	}
 
-	if (a->argc != 5)
+	if (a->argc != e->args + 2)
 		return CLI_SHOWUSAGE;
 
 	pbx_builtin_setvar_helper(NULL, a->argv[3], a->argv[4]);
 	ast_cli(a->fd, "\n    -- Global variable %s set to %s\n", a->argv[3], a->argv[4]);
+
+	return CLI_SUCCESS;
+}
+
+static char *handle_set_chanvar(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	struct ast_channel *chan;
+	const char *chan_name, *var_name, *var_value;
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "core set chanvar";
+		e->usage = 
+			"Usage: core set chanvar <channel> <varname> <value>\n"
+			"       Set channel variable <varname> to <value>\n";
+		return NULL;
+	case CLI_GENERATE:
+		return ast_complete_channels(a->line, a->word, a->pos, a->n, 3);
+	}
+
+	if (a->argc != e->args + 3)
+		return CLI_SHOWUSAGE;
+
+	chan_name = a->argv[e->args];
+	var_name = a->argv[e->args + 1];
+	var_value = a->argv[e->args + 2];
+
+	if (!(chan = ast_get_channel_by_name_locked(chan_name))) {
+		ast_cli(a->fd, "Channel '%s' not found\n", chan_name);
+		return CLI_FAILURE;
+	}
+
+	pbx_builtin_setvar_helper(chan, var_name, var_value);
+
+	ast_channel_unlock(chan);
+
+	ast_cli(a->fd, "\n    -- Channel variable '%s' set to '%s' for '%s'\n", 
+		var_name, var_value, chan_name);
 
 	return CLI_SUCCESS;
 }
@@ -5008,6 +5047,7 @@ static struct ast_cli_entry pbx_cli[] = {
 	AST_CLI_DEFINE(handle_show_function, "Describe a specific dialplan function"),
 	AST_CLI_DEFINE(handle_show_application, "Describe a specific dialplan application"),
 	AST_CLI_DEFINE(handle_set_global, "Set global dialplan variable"),
+	AST_CLI_DEFINE(handle_set_chanvar, "Set a channel variable"),
 	AST_CLI_DEFINE(handle_show_dialplan, "Show dialplan"),
 	AST_CLI_DEFINE(handle_unset_extenpatternmatchnew, "Use the Old extension pattern matching algorithm."),
 	AST_CLI_DEFINE(handle_set_extenpatternmatchnew, "Use the New extension pattern matching algorithm."),
@@ -5211,7 +5251,8 @@ void ast_merge_contexts_and_delete(struct ast_context **extcontexts, const char 
 	   cannot be restored
 	*/
 	while ((this = AST_LIST_REMOVE_HEAD(&store, list))) {
-		exten = ast_hint_extension(NULL, this->context, this->exten);
+		struct pbx_find_info q = { .stacklen = 0 };
+		exten = pbx_find_extension(NULL, NULL, &q, this->context, this->exten, PRIORITY_HINT, NULL, "", E_MATCH);
 		/* Find the hint in the list of hints */
 		AST_RWLIST_TRAVERSE(&hints, hint, list) {
 			if (hint->exten == exten)
@@ -7230,7 +7271,7 @@ void pbx_builtin_setvar_helper(struct ast_channel *chan, const char *name, const
 			ast_verb(2, "Setting global variable '%s' to '%s'\n", name, value);
 		newvariable = ast_var_assign(name, value);
 		AST_LIST_INSERT_HEAD(headp, newvariable, entries);
-		manager_event(EVENT_FLAG_CALL, "VarSet", 
+		manager_event(EVENT_FLAG_DIALPLAN, "VarSet", 
 			"Channel: %s\r\n"
 			"Variable: %s\r\n"
 			"Value: %s\r\n"
@@ -7257,6 +7298,8 @@ int pbx_builtin_setvar(struct ast_channel *chan, void *data)
 	mydata = ast_strdupa(data);
 	name = strsep(&mydata, "=");
 	value = mydata;
+	if (strchr(name, ' '))
+		ast_log(LOG_WARNING, "Please avoid unnecessary spaces on variables as it may lead to unexpected results ('%s' set to '%s').\n", name, mydata);
 
 	pbx_builtin_setvar_helper(chan, name, value);
 	return(0);
@@ -7284,10 +7327,13 @@ static int pbx_builtin_setvar_multiple(struct ast_channel *chan, void *vdata)
 
 	for (x = 0; x < args.argc; x++) {
 		AST_NONSTANDARD_APP_ARGS(pair, args.pair[x], '=');
-		if (pair.argc == 2)
+		if (pair.argc == 2) {
 			pbx_builtin_setvar_helper(chan, pair.name, pair.value);
-		else
+			if (strchr(pair.name, ' '))
+				ast_log(LOG_WARNING, "Please avoid unnecessary spaces on variables as it may lead to unexpected results ('%s' set to '%s').\n", pair.name, pair.value);
+		} else {
 			ast_log(LOG_WARNING, "MSet: ignoring entry '%s' with no '=' (in %s@%s:%d\n", pair.name, chan->exten, chan->context, chan->priority);
+		}
 	}
 
 	return 0;
@@ -7463,7 +7509,7 @@ int load_pbx(void)
 	}
 	
 	/* Register manager application */
-	ast_manager_register2("ShowDialPlan", EVENT_FLAG_CONFIG, manager_show_dialplan, "List dialplan", mandescr_show_dialplan);
+	ast_manager_register2("ShowDialPlan", EVENT_FLAG_CONFIG | EVENT_FLAG_REPORTING, manager_show_dialplan, "List dialplan", mandescr_show_dialplan);
 
 	ast_mutex_init(&device_state.lock);
 	ast_cond_init(&device_state.cond, NULL);

@@ -17,7 +17,9 @@ all: asterisk
 
 include $(ASTTOPDIR)/Makefile.moddir_rules
 
-OBJS=	io.o sched.o logger.o frame.o loader.o config.o channel.o \
+RESAMPLE_OBJS:=libresample/src/resample.o libresample/src/resamplesubs.o libresample/src/filterkit.o
+
+OBJS= tcptls.o io.o sched.o logger.o frame.o loader.o config.o channel.o \
 	translate.o file.o pbx.o cli.o md5.o term.o \
 	ulaw.o alaw.o callerid.o fskmodem.o image.o app.o \
 	cdr.o tdd.o acl.o rtp.o udptl.o manager.o asterisk.o \
@@ -27,7 +29,7 @@ OBJS=	io.o sched.o logger.o frame.o loader.o config.o channel.o \
 	netsock.o slinfactory.o ast_expr2.o ast_expr2f.o \
 	cryptostub.o sha1.o http.o fixedjitterbuf.o abstract_jb.o \
 	strcompat.o threadstorage.o dial.o event.o adsistub.o audiohook.o \
-	astobj2.o hashtab.o global_datastores.o
+	astobj2.o hashtab.o global_datastores.o $(RESAMPLE_OBJS) version.o
 
 # we need to link in the objects statically, not as a library, because
 # otherwise modules will not have them available if none of the static
@@ -115,8 +117,8 @@ ast_expr2.c ast_expr2.h:
 	bison -o $@ -d --name-prefix=ast_yy ast_expr2.y
 
 ast_expr2f.c:
-	flex -o $@ --full ast_expr2.fl
-	sed 's@free( (char \*) ptr );@if(ptr) free( (char *) ptr );@' ast_expr2f.c > zz
+	flex -o $@ --full ast_expr2.fl # moved the correction of yyfree into the flex input file itself.
+	sed 's@#if __STDC_VERSION__ >= 199901L@#if !defined __STDC_VERSION__ || __STDC_VERSION__ >= 199901L@' ast_expr2f.c > zz
 	mv zz ast_expr2f.c
 
 testexpr2: ast_expr2f.c ast_expr2.c ast_expr2.h
@@ -169,3 +171,4 @@ clean::
 	@$(MAKE) -C db1-ast clean
 	@$(MAKE) -C stdtime clean
 	@$(MAKE) -C minimime clean
+	rm -f libresample/src/*.o

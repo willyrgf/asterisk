@@ -101,7 +101,7 @@ endif
 
 # Some build systems, such as the one in openwrt, like to pass custom target
 # CFLAGS and LDFLAGS in the COPTS and LDOPTS variables.
-ASTCFLAGS+=$(COPTS) -D_XPG4_2
+ASTCFLAGS+=$(COPTS)
 ASTLDFLAGS+=$(LDOPTS)
 
 #Uncomment this to see all build commands instead of 'quiet' output
@@ -257,7 +257,7 @@ ifeq ($(OSARCH),OpenBSD)
 endif
 
 ifeq ($(OSARCH),SunOS)
-  ASTCFLAGS+=-Wcast-align -DSOLARIS -I../include/solaris-compat -I/opt/ssl/include -I/usr/local/ssl/include
+  ASTCFLAGS+=-Wcast-align -DSOLARIS -I../include/solaris-compat -I/opt/ssl/include -I/usr/local/ssl/include -D_XPG4_2
 endif
 
 ASTERISKVERSION:=$(shell GREP=$(GREP) AWK=$(AWK) build_tools/make_version .)
@@ -275,11 +275,9 @@ endif
 
 # XXX MALLOC_DEBUG is probably unused, Makefile.moddir_rules adds the
 #	value directly to ASTCFLAGS
-# XXX BUSYDETECT is probably useless, the only similar reference is to
-#	#ifdef BUSYDETECT in main/dsp.c
-ASTCFLAGS+=$(MALLOC_DEBUG)$(BUSYDETECT)$(OPTIONS)
+ASTCFLAGS+=$(MALLOC_DEBUG)$(OPTIONS)
 
-MOD_SUBDIRS:=channels pbx apps codecs formats cdr funcs main res $(LOCAL_MOD_SUBDIRS)
+MOD_SUBDIRS:=channels pbx apps codecs formats cdr funcs tests main res $(LOCAL_MOD_SUBDIRS)
 OTHER_SUBDIRS:=utils agi
 SUBDIRS:=$(OTHER_SUBDIRS) $(MOD_SUBDIRS)
 SUBDIRS_INSTALL:=$(SUBDIRS:%=%-install)
@@ -309,10 +307,11 @@ endif
 # comment to print directories during submakes
 #PRINT_DIR=yes
 
+SILENTMAKE:=$(MAKE) --quiet --no-print-directory
 ifneq ($(PRINT_DIR)$(NOISY_BUILD),)
-SUBMAKE=$(MAKE) --quiet
+SUBMAKE:=$(MAKE) --quiet
 else
-SUBMAKE=$(MAKE) --quiet --no-print-directory
+SUBMAKE:=$(MAKE) --quiet --no-print-directory
 endif
 
 # This is used when generating the doxygen documentation
@@ -352,13 +351,13 @@ menuselect.makeopts: menuselect/menuselect menuselect-tree
 	menuselect/menuselect --check-deps $(GLOBAL_MAKEOPTS) $(USER_MAKEOPTS) menuselect.makeopts
 
 $(MOD_SUBDIRS_EMBED_LDSCRIPT):
-	@echo "EMBED_LDSCRIPTS+="`$(SUBMAKE) -C $(@:-embed-ldscript=) SUBDIR=$(@:-embed-ldscript=) __embed_ldscript` >> makeopts.embed_rules
+	@echo "EMBED_LDSCRIPTS+="`$(SILENTMAKE) -C $(@:-embed-ldscript=) SUBDIR=$(@:-embed-ldscript=) __embed_ldscript` >> makeopts.embed_rules
 
 $(MOD_SUBDIRS_EMBED_LDFLAGS):
-	@echo "EMBED_LDFLAGS+="`$(SUBMAKE) -C $(@:-embed-ldflags=) SUBDIR=$(@:-embed-ldflags=) __embed_ldflags` >> makeopts.embed_rules
+	@echo "EMBED_LDFLAGS+="`$(SILENTMAKE) -C $(@:-embed-ldflags=) SUBDIR=$(@:-embed-ldflags=) __embed_ldflags` >> makeopts.embed_rules
 
 $(MOD_SUBDIRS_EMBED_LIBS):
-	@echo "EMBED_LIBS+="`$(SUBMAKE) -C $(@:-embed-libs=) SUBDIR=$(@:-embed-libs=) __embed_libs` >> makeopts.embed_rules
+	@echo "EMBED_LIBS+="`$(SILENTMAKE) -C $(@:-embed-libs=) SUBDIR=$(@:-embed-libs=) __embed_libs` >> makeopts.embed_rules
 
 $(MOD_SUBDIRS_MENUSELECT_TREE):
 	@$(SUBMAKE) -C $(@:-menuselect-tree=) SUBDIR=$(@:-menuselect-tree=) moduleinfo
@@ -371,7 +370,7 @@ makeopts.embed_rules: menuselect.makeopts
 	@$(MAKE) $(PRINT_DIR) $(MOD_SUBDIRS_EMBED_LDFLAGS)
 	@$(MAKE) $(PRINT_DIR) $(MOD_SUBDIRS_EMBED_LIBS)
 
-$(SUBDIRS): include/asterisk/version.h include/asterisk/build.h include/asterisk/buildopts.h defaults.h makeopts.embed_rules
+$(SUBDIRS): main/version.c include/asterisk/build.h include/asterisk/buildopts.h defaults.h makeopts.embed_rules
 
 ifeq ($(findstring $(OSARCH), mingw32 cygwin ),)
     # Non-windows:
@@ -402,8 +401,8 @@ defaults.h: makeopts
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 	@rm -f $@.tmp
 
-include/asterisk/version.h:
-	@build_tools/make_version_h > $@.tmp
+main/version.c:
+	@build_tools/make_version_c > $@.tmp
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 	@rm -f $@.tmp
 
@@ -426,7 +425,7 @@ $(SUBDIRS_DIST_CLEAN):
 clean: $(SUBDIRS_CLEAN)
 	rm -f defaults.h
 	rm -f include/asterisk/build.h
-	rm -f include/asterisk/version.h
+	rm -f main/version.c
 	@$(MAKE) -C menuselect clean
 	cp -f .cleancount .lastclean
 
@@ -449,10 +448,20 @@ datafiles: _all
 # Should static HTTP be installed during make samples or even with its own target ala
 # webvoicemail?  There are portions here that *could* be customized but might also be
 # improved a lot.  I'll put it here for now.
+	mkdir -p $(DESTDIR)$(ASTDATADIR)/phoneprov
+	for x in phoneprov/*; do \
+		$(INSTALL) -m 644 $$x $(DESTDIR)$(ASTDATADIR)/phoneprov ; \
+	done
 	mkdir -p $(DESTDIR)$(ASTDATADIR)/static-http
 	for x in static-http/*; do \
 		$(INSTALL) -m 644 $$x $(DESTDIR)$(ASTDATADIR)/static-http ; \
 	done
+	if [ -d doc/tex/asterisk ] ; then \
+			mkdir -p $(DESTDIR)$(ASTDATADIR)/static-http/docs ; \
+			for n in doc/tex/asterisk/* ; do \
+				$(INSTALL) -m 644 $$n $(DESTDIR)$(ASTDATADIR)/static-http/docs ; \
+			done \
+	fi
 	mkdir -p $(DESTDIR)$(ASTDATADIR)/images
 	for x in images/*.jpg; do \
 		$(INSTALL) -m 644 $$x $(DESTDIR)$(ASTDATADIR)/images ; \
@@ -463,7 +472,10 @@ datafiles: _all
 update: 
 	@if [ -d .svn ]; then \
 		echo "Updating from Subversion..." ; \
+		fromrev="`svn info | $(AWK) '/Revision: / {print $$2}'`"; \
 		svn update | tee update.out; \
+		torev="`svn info | $(AWK) '/Revision: / {print $$2}'`"; \
+		echo "`date`  Updated from revision $${fromrev} to $${torev}." >> update.log; \
 		rm -f .version; \
 		if [ `grep -c ^C update.out` -gt 0 ]; then \
 			echo ; echo "The following files have conflicts:" ; \
@@ -694,7 +706,7 @@ spec:
 
 rpm: __rpm
 
-__rpm: include/asterisk/version.h include/asterisk/buildopts.h spec
+__rpm: main/version.c include/asterisk/buildopts.h spec
 	rm -rf /tmp/asterisk ; \
 	mkdir -p /tmp/asterisk/redhat/RPMS/i386 ; \
 	$(MAKE) DESTDIR=/tmp/asterisk install ; \
@@ -819,4 +831,4 @@ pdf: asterisk.pdf
 asterisk.pdf:
 	$(MAKE) -C doc/tex asterisk.pdf
 
-.PHONY: menuselect main sounds clean dist-clean distclean all prereqs cleantest uninstall _uninstall uninstall-all pdf dont-optimize $(SUBDIRS_INSTALL) $(SUBDIRS_DIST_CLEAN) $(SUBDIRS_CLEAN) $(SUBDIRS_UNINSTALL) $(SUBDIRS) $(MOD_SUBDIRS_EMBED_LDSCRIPT) $(MOD_SUBDIRS_EMBED_LDFLAGS) $(MOD_SUBDIRS_EMBED_LIBS)
+.PHONY: menuselect main sounds clean dist-clean distclean all prereqs cleantest uninstall _uninstall uninstall-all pdf dont-optimize $(SUBDIRS_INSTALL) $(SUBDIRS_DIST_CLEAN) $(SUBDIRS_CLEAN) $(SUBDIRS_UNINSTALL) $(SUBDIRS) $(MOD_SUBDIRS_EMBED_LDSCRIPT) $(MOD_SUBDIRS_EMBED_LDFLAGS) $(MOD_SUBDIRS_EMBED_LIBS) main/version.c

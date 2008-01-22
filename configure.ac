@@ -162,6 +162,7 @@ AC_PATH_PROG([LN], [ln], :)
 AC_PATH_PROG([DOT], [dot], :)
 AC_PATH_PROG([WGET], [wget], :)
 AC_PATH_PROG([RUBBER], [rubber], :)
+AC_PATH_PROG([KPATHSEA], [kpsewhich], :)
 if test "${WGET}" != ":" ; then
   DOWNLOAD=${WGET}
 else
@@ -210,10 +211,11 @@ AST_EXT_LIB_SETUP([CRYPTO], [OpenSSL Cryptography support], [crypto])
 AST_EXT_LIB_SETUP([GSM], [External GSM library], [gsm], [, use 'internal' GSM otherwise])
 AST_EXT_LIB_SETUP([GTK], [gtk libraries], [gtk])
 AST_EXT_LIB_SETUP([GTK2], [gtk2 libraries], [gtk2])
+AST_EXT_LIB_SETUP([ICONV], [Iconv Library], [iconv])
 AST_EXT_LIB_SETUP([IKSEMEL], [Iksemel Jabber Library], [iksemel])
 AST_EXT_LIB_SETUP([IMAP_TK], [UW IMAP Toolkit], [imap])
 AST_EXT_LIB_SETUP([ISDNNET], [ISDN4Linux Library], [isdnnet])
-AST_EXT_LIB_SETUP([KDE], [KDE], [kde])
+AST_EXT_LIB_SETUP([JACK], [Jack Audio Connection Kit], [jack])
 AST_EXT_LIB_SETUP([LTDL], [libtool], [ltdl])
 AST_EXT_LIB_SETUP([LUA], [Lua], [lua])
 AST_EXT_LIB_SETUP([MISDN], [mISDN User Library], [misdn])
@@ -225,15 +227,16 @@ AST_EXT_LIB_SETUP([UNIXODBC], [unixODBC], [odbc])
 AST_EXT_LIB_SETUP([OGG], [OGG], [ogg])
 AST_EXT_LIB_SETUP([OSPTK], [OSP Toolkit], [osptk])
 AST_EXT_LIB_SETUP([OSS], [Open Sound System], [oss])
-AST_EXT_LIB_SETUP([POPT], [popt], [popt])
 AST_EXT_LIB_SETUP([PGSQL], [PostgreSQL], [postgres])
+AST_EXT_LIB_SETUP([POPT], [popt], [popt])
+AST_EXT_LIB_SETUP([PORTAUDIO], [PortAudio], [portaudio])
 AST_EXT_LIB_SETUP([PRI], [ISDN PRI], [pri])
 AST_EXT_LIB_SETUP([SS7], [ISDN SS7], [ss7])
 AST_EXT_LIB_SETUP([PWLIB], [PWlib], [pwlib])
 AST_EXT_LIB_SETUP([OPENH323], [OpenH323], [h323])
-AST_EXT_LIB_SETUP([QT], [Qt], [qt])
 AST_EXT_LIB_SETUP([RADIUS], [Radius Client], [radius])
 AST_EXT_LIB_SETUP([SPEEX], [Speex], [speex])
+AST_EXT_LIB_SETUP([SPEEXDSP], [Speexdsp], [speexdsp])
 AST_EXT_LIB_SETUP([SQLITE], [SQLite], [sqlite])
 AST_EXT_LIB_SETUP([SQLITE3], [SQLite], [sqlite3])
 AST_EXT_LIB_SETUP([SUPPSERV], [mISDN Supplemental Services], [suppserv])
@@ -248,8 +251,11 @@ AST_EXT_LIB_SETUP([VPB], [Voicetronix API], [vpb])
 AST_EXT_LIB_SETUP([X11], [X11 support], [x11])
 AST_EXT_LIB_SETUP([ZLIB], [zlib], [z])
 AST_EXT_LIB_SETUP([ZAPTEL], [Zaptel], [zaptel])
-AST_EXT_LIB_SETUP([ZAPTEL_TRANSCODE], [Zaptel_transcode], [zaptel_transcode])
-AST_EXT_LIB_SETUP([ZAPTEL_VLDTMF], [Zaptel_vldtmf], [zaptel_vldtmf])
+AST_EXT_LIB_SETUP([ZAPTEL_TRANSCODE], [Zaptel Transcoder Support], [zaptel_transcode])
+AST_EXT_LIB_SETUP([ZAPTEL_VLDTMF], [Zaptel VLDTMF Support], [zaptel_vldtmf])
+AST_EXT_LIB_SETUP([ZAPTEL_HWGAIN], [Zaptel Hardware Gain Support], [zaptel_hwgain])
+AST_EXT_LIB_SETUP([ZAPTEL_ECHOCANPARAMS], [Zaptel Echo Canceler Parameter Support], [zaptel_echocanparams])
+AST_EXT_LIB_SETUP([ZAPTEL_CHANALARMS], [Zaptel Channel Alarm Support], [zaptel_chanalarms])
 
 AST_EXT_LIB_SETUP([SDL], [Sdl], [sdl])
 AST_EXT_LIB_SETUP([SDL_IMAGE], [Sdl Image library], [SDL_image])
@@ -389,8 +395,23 @@ then
 fi
 
 AST_C_DEFINE_CHECK([PTHREAD_RWLOCK_INITIALIZER], [PTHREAD_RWLOCK_INITIALIZER], [pthread.h])
-AST_C_DEFINE_CHECK([PTHREAD_RWLOCK_PREFER_WRITER_NP], [PTHREAD_RWLOCK_PREFER_WRITER_NP], [pthread.h])
-AST_C_DEFINE_CHECK([PTHREAD_MUTEX_RECURSIVE_NP], [PTHREAD_MUTEX_RECURSIVE_NP], [pthread.h])
+
+AC_MSG_CHECKING(for PTHREAD_RWLOCK_PREFER_WRITER_NP in pthread.h)
+AC_LINK_IFELSE(
+AC_LANG_PROGRAM([#include <pthread.h>], [int a = PTHREAD_RWLOCK_PREFER_WRITER_NP;]),
+AC_MSG_RESULT(yes)
+AC_DEFINE([HAVE_PTHREAD_RWLOCK_PREFER_WRITER_NP], 1, [Define to 1 if your system defines PTHREAD_RWLOCK_PREFER_WRITER_NP in pthread.h]),
+AC_MSG_RESULT(no)
+)
+
+AC_MSG_CHECKING(for PTHREAD_MUTEX_RECURSIVE_NP in pthread.h)
+AC_LINK_IFELSE(
+AC_LANG_PROGRAM([#include <pthread.h>], [int a = PTHREAD_MUTEX_RECURSIVE_NP;]),
+AC_MSG_RESULT(yes)
+AC_DEFINE([HAVE_PTHREAD_MUTEX_RECURSIVE_NP], 1, [Define to 1 if your system defines PTHREAD_MUTEX_RECURSIVE_NP in pthread.h]),
+AC_MSG_RESULT(no)
+)
+
 AST_C_DEFINE_CHECK([PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP], [PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP], [pthread.h])
 
 if test "${cross_compiling}" = "no";
@@ -616,6 +637,12 @@ if test "${USE_GSM}" != "no"; then
    fi
 fi
 
+if test "${host_os}" != "linux-gnu" ; then
+  AST_EXT_LIB_CHECK([ICONV], [iconv], [iconv_open], [iconv.h])
+else
+  PBX_ICONV=1
+fi
+
 AST_EXT_LIB_CHECK([IKSEMEL], [iksemel], [iks_start_sasl], [iksemel.h])
 
 if test "${USE_IMAP_TK}" != "no"; then
@@ -782,57 +809,10 @@ if test "${USE_IMAP_TK}" != "no"; then
    fi
 fi
 
+AST_EXT_LIB_CHECK([JACK], [jack], [jack_activate], [jack/jack.h])
+
 # Needed by unixodbc
 AST_EXT_LIB_CHECK([LTDL], [ltdl], [lt_dlinit], [ltdl.h], [])
-
-AC_LANG_PUSH(C++)
-
-if test "${USE_KDE}" != "no"; then
-   AC_MSG_CHECKING(for crashHandler in -lkdecore)
-   saved_libs="${LIBS}"
-   saved_cppflags="${CPPFLAGS}"
-   CPPFLAGS="${CPPFLAGS} -I${KDE_DIR}/include"
-   if test -d ${KDE_DIR}/lib; then
-      kdelibdir="${KDE_DIR}/lib"
-   else
-      kdelibdir="${KDE_DIR}"
-   fi
-   LIBS="${LIBS} -L${kdelibdir} -lkdecore"
-
-   AC_LINK_IFELSE(
-	[AC_LANG_PROGRAM(
-			[#include "kcrash.h"],
-			[KCrash::defaultCrashHandler(1);])
-	],
-	[ac_cv_lib_kde_crash="yes"],
-	[ac_cv_lib_kde_crash="no"])
-		
-   LIBS="${saved_libs}"
-   CPPFLAGS="${saved_cppflags}"
-	
-   if test "${ac_cv_lib_kde_crash}" = "yes"; then
-      AC_MSG_RESULT(yes) 
-      KDE_LIB="-lkdecore -lkdeui"
-      if test "${KDE_DIR}" != ""; then
-      	 KDE_LIB="-L${kdelibdir} ${KDE_LIB}"
-	 KDE_INCLUDE="-I${KDE_DIR}/include"
-      fi
-      PBX_KDE=1
-      AC_DEFINE([HAVE_LIBKDE], 1, [Define if your system has the KDE libraries.])
-   else
-      AC_MSG_RESULT(no) 
-   fi
-fi
-if test "${PBX_KDE}" = 1; then
-   AC_PATH_TOOL(KDEINIT, kdeinit, No)
-   if test ! x"${KDEINIT}" = xNo; then
-      KDEDIR=$(${DIRNAME} ${KDEINIT})
-      KDEDIR=$(${DIRNAME} ${KDEDIR})
-   fi
-   AC_SUBST([KDEDIR])
-fi
-
-AC_LANG_POP
 
 AST_EXT_LIB_CHECK([MISDN], [mISDN], [mISDN_open], [mISDNuser/mISDNlib.h])
 
@@ -848,8 +828,11 @@ AST_EXT_LIB_CHECK([NBS], [nbs], [nbs_connect], [nbs.h])
 
 AST_EXT_LIB_CHECK([NCURSES], [ncurses], [initscr], [curses.h])
 
-# XXX do we need to check for snmp_register_callback ?
-AST_EXT_TOOL_CHECK([NETSNMP], [net-snmp], , [--agent-libs])
+AST_EXT_TOOL_CHECK([NETSNMP], [net-snmp], , [--agent-libs],
+[#include <net-snmp/net-snmp-config.h>
+#include <net-snmp/net-snmp-includes.h>
+#include <net-snmp/agent/net-snmp-agent-includes.h>],
+[int callback = snmp_register_callback(0, 0, NULL, NULL)])
 
 AST_EXT_LIB_CHECK([NEWT], [newt], [newtBell], [newt.h])
 
@@ -912,6 +895,8 @@ fi
 
 AST_EXT_LIB_CHECK([POPT], [popt], [poptStrerror], [popt.h])
 
+AST_EXT_LIB_CHECK([PORTAUDIO], [portaudio], [Pa_GetDeviceCount], [portaudio.h])
+
 AST_EXT_LIB_CHECK([PRI], [pri], [pri_new_bri], [libpri.h])
 
 AST_EXT_LIB_CHECK([SS7], [ss7], [isup_cqr], [libss7.h])
@@ -952,70 +937,6 @@ if test "${PBX_PWLIB}" = "1" -a "${USE_OPENH323}" != "no" ; then
 		[${PWLIB_INCLUDE}], [${PWLIB_LIB}])
 fi
 
-AC_LANG_PUSH(C++)
-
-if test "${USE_QT}" != "no"; then
-   AC_MSG_CHECKING(for QDate in -lqt)
-   saved_libs="${LIBS}"
-   saved_cppflags="${CPPFLAGS}"
-   if test "x${QT_DIR}" != "x"; then
-      LIBS="${LIBS} -L${QT_DIR}/lib"
-      CPPFLAGS="${CPPFLAGS} -I${QT_DIR}/include"
-   fi
-   LIBS="${LIBS} -lqt"
-   qtlib="qt"
-   AC_LINK_IFELSE(
-	[
-		AC_LANG_PROGRAM(
-		[#include <qt3/qdatetime.h>],
-		[QDate date();])
-	],
-	[ac_cv_lib_qt_qt_date="yes"],
-	[ac_cv_lib_qt_qt_date="no"])
-   LIBS="${saved_libs}"
-   CPPFLAGS="${saved_cppflags}"
-	
-   if test "${ac_cv_lib_qt_qt_date}" = "no"; then
-      saved_libs="${LIBS}"
-      saved_cppflags="${CPPFLAGS}"
-      if test "x${QT_DIR}" != "x"; then
-      	 LIBS="${LIBS} -L${QT_DIR}/lib"
-	 CPPFLAGS="${CPPFLAGS} -I${QT_DIR}/include"
-      fi
-      LIBS="${LIBS} -lqt-mt"
-      qtlib="qt-mt"	
-      AC_LINK_IFELSE(
-		[
-			AC_LANG_PROGRAM(
-			[#include <qt3/qdatetime.h>],
-			[QDate date();])
-		],
-		[ac_cv_lib_qt_qt_date="yes"],
-		[ac_cv_lib_qt_qt_date="no"])
-      LIBS="${saved_libs}"
-      CPPFLAGS="${saved_cppflags}"
-   fi	
-
-   if test "${ac_cv_lib_qt_qt_date}" = "yes"; then
-      AC_MSG_RESULT(yes) 
-   else
-      AC_MSG_RESULT(no) 
-   fi
-	
-   if test "${ac_cv_lib_qt_qt_date}" = "yes"; then
-      QT_LIB="-l${qtlib}"
-      if test "${QT_DIR}" != ""; then
-      	 QT_LIB="-L${QT_DIR}/lib ${QT_LIB}"
-	 QT_INCLUDE="-I${QT_DIR}/include"
-      fi
-      PBX_QT=1
-      AC_DEFINE([HAVE_QT], 1, [Define if your system has the Qt library])
-      AC_PATH_TOOL(QTMOC, moc, No)
-   fi
-fi
-
-AC_LANG_POP
-
 LUA_INCLUDE="-I/usr/include/lua5.1"
 LUA_LIB="-llua5.1"
 AST_EXT_LIB_CHECK([LUA], [lua5.1], [luaL_newstate], [lua5.1/lua.h]) 
@@ -1023,6 +944,8 @@ AST_EXT_LIB_CHECK([LUA], [lua5.1], [luaL_newstate], [lua5.1/lua.h])
 AST_EXT_LIB_CHECK([RADIUS], [radiusclient-ng], [rc_read_config], [radiusclient-ng.h])
 
 AST_EXT_LIB_CHECK([SPEEX], [speex], [speex_encode], [speex/speex.h], [-lm])
+
+AST_EXT_LIB_CHECK([SPEEXDSP], [speexdsp], [speex_preprocess_ctl], [speex/speex.h], [-lm])
 
 AST_EXT_LIB_CHECK([SQLITE], [sqlite], [sqlite_exec], [sqlite.h])
 
@@ -1133,11 +1056,17 @@ AST_C_DEFINE_CHECK([ZAPTEL], [ZT_DIAL_OP_CANCEL], [zaptel/zaptel.h], [90])
 # Check for VLDTMF support
 AST_C_DEFINE_CHECK([ZAPTEL_VLDTMF], [ZT_EVENT_REMOVED], [zaptel/zaptel.h])
 
-# Check for transcode support
+# Check for echo canceler parameters support
+AST_C_DEFINE_CHECK([ZAPTEL_ECHOCANPARAMS], [ZT_ECHOCANCEL_PARAMS], [zaptel/zaptel.h])
+
+# Check for transcoder support
 AST_C_DEFINE_CHECK([ZAPTEL_TRANSCODE], [ZT_TCOP_ALLOCATE], [zaptel/zaptel.h])
 
-# Check for Zaptel hwgain support
+# Check for hwgain support
 AST_C_DEFINE_CHECK([ZAPTEL_HWGAIN], [ZT_SET_HWGAIN], [zaptel/zaptel.h])
+
+# Check for channel alarm support
+AST_C_COMPILE_CHECK([ZAPTEL_CHANALARMS], [size_t foo = sizeof(struct zt_params_v1)], [zaptel/zaptel.h])
 
 # On FreeBSD, try old zaptel (0.80 or so) and pretend we have vldtmf
 case "${host_os}" in
@@ -1191,8 +1120,8 @@ AC_CHECK_HEADER([linux/videodev.h],
 AST_EXT_LIB_CHECK([X11], [X11], [XOpenDisplay], [X11/Xlib.h],,, [standard_path])
 AST_EXT_LIB_CHECK([X11], [X11], [XOpenDisplay], [X11/Xlib.h],, [-I/usr/X11R6/include], [X11R6])
 
-# we don't use gtk right now...
-AST_EXT_TOOL_CHECK([GTK], [gtk])
+PBX_GTK=0
+AST_EXT_TOOL_CHECK([GTK], [gtk], [--cflags gthread], [--libs gthread])
 
 PBX_GTK2=0
 AC_CHECK_TOOL(PKGCONFIG, pkg-config, No)

@@ -121,7 +121,7 @@ static AST_RWLIST_HEAD_STATIC(helpers, ast_cli_entry);
 
 static char *complete_fn(const char *word, int state)
 {
-	char *c;
+	char *c, *d;
 	char filename[256];
 
 	if (word[0] == '/')
@@ -129,13 +129,16 @@ static char *complete_fn(const char *word, int state)
 	else
 		snprintf(filename, sizeof(filename), "%s/%s", ast_config_AST_MODULE_DIR, word);
 
-	/* XXX the following function is not reentrant, so we better not use it */
-	c = filename_completion_function(filename, state);
+	c = d = filename_completion_function(filename, state);
 	
 	if (c && word[0] != '/')
 		c += (strlen(ast_config_AST_MODULE_DIR) + 1);
+	if (c)
+		c = ast_strdup(c);
+	if (d)
+		free(d);
 	
-	return c ? ast_strdup(c) : c;
+	return c;
 }
 
 static char *handle_load(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
@@ -1533,10 +1536,8 @@ int ast_cli_unregister_multiple(struct ast_cli_entry *e, int len)
 }
 
 
-/*! \brief helper for final part of
- * handle_help. if locked = 0 it's just "help_workhorse",
- * otherwise assume the list is already locked and print
- * an error message if not found.
+/*! \brief helper for final part of handle_help
+ *  if locked = 1, assume the list is already locked
  */
 static char *help1(int fd, char *match[], int locked)
 {
@@ -1565,7 +1566,7 @@ static char *help1(int fd, char *match[], int locked)
 	}
 	if (!locked)
 		AST_RWLIST_UNLOCK(&helpers);
-	if (!locked && !found && matchstr[0])
+	if (!found && matchstr[0])
 		ast_cli(fd, "No such command '%s'.\n", matchstr);
 	return CLI_SUCCESS;
 }
@@ -1574,6 +1575,7 @@ static char *handle_help(struct ast_cli_entry *e, int cmd, struct ast_cli_args *
 {
 	char fullcmd[80];
 	struct ast_cli_entry *my_e;
+	char *res = CLI_SUCCESS;
 
 	if (cmd == CLI_INIT) {
 		e->command = "help";
@@ -1598,8 +1600,11 @@ static char *handle_help(struct ast_cli_entry *e, int cmd, struct ast_cli_args *
 
 	AST_RWLIST_RDLOCK(&helpers);
 	my_e = find_cli(a->argv + 1, 1);	/* try exact match first */
-	if (!my_e)
-		return help1(a->fd, a->argv + 1, 1 /* locked */);
+	if (!my_e) {
+		res = help1(a->fd, a->argv + 1, 1 /* locked */);
+		AST_RWLIST_UNLOCK(&helpers);
+		return res;
+	}
 	if (my_e->usage)
 		ast_cli(a->fd, "%s", my_e->usage);
 	else {
@@ -1607,7 +1612,7 @@ static char *handle_help(struct ast_cli_entry *e, int cmd, struct ast_cli_args *
 		ast_cli(a->fd, "No help text available for '%s'.\n", fullcmd);
 	}
 	AST_RWLIST_UNLOCK(&helpers);
-	return CLI_SUCCESS;
+	return res;
 }
 
 static char *parse_args(const char *s, int *argc, char *argv[], int max, int *trailingwhitespace)

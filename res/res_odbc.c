@@ -46,14 +46,15 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/cli.h"
 #include "asterisk/lock.h"
 #include "asterisk/res_odbc.h"
+#include "asterisk/time.h"
 
 struct odbc_class
 {
 	AST_LIST_ENTRY(odbc_class) list;
 	char name[80];
 	char dsn[80];
-	char username[80];
-	char password[80];
+	char *username;
+	char *password;
 	char sanitysql[256];
 	SQLHENV env;
 	unsigned int haspool:1;         /* Boolean - TDS databases need this */
@@ -61,6 +62,7 @@ struct odbc_class
 	unsigned int count:10;          /* Running count of pooled connections */
 	unsigned int delme:1;			/* Purge the class */
 	unsigned int backslash_is_escape:1;	/* On this database, the backslash is a native escape sequence */
+	unsigned int idlecheck;			/* Recheck the connection if it is idle for this long */
 	AST_LIST_HEAD(, odbc_obj) odbc_obj;
 };
 
@@ -135,7 +137,8 @@ SQLHSTMT ast_odbc_prepare_and_execute(struct odbc_obj *obj, SQLHSTMT (*prepare_c
 				 */
 				ast_odbc_sanity_check(obj);
 				continue;
-			}
+			} else
+				obj->last_used = ast_tvnow();
 			break;
 		} else if (attempt == 0)
 			ast_odbc_sanity_check(obj);
@@ -180,7 +183,8 @@ int ast_odbc_smart_execute(struct odbc_obj *obj, SQLHSTMT stmt)
 		odbc_obj_connect(obj);
 		res = SQLExecute(stmt);
 #endif
-	}
+	} else
+		obj->last_used = ast_tvnow();
 	
 	return res;
 }
@@ -229,6 +233,7 @@ static int load_odbc_config(void)
 	char *cat;
 	const char *dsn, *username, *password, *sanitysql;
 	int enabled, pooling, limit, bse;
+	unsigned int idlecheck;
 	int connect = 0, res = 0;
 	struct ast_flags config_flags = { 0 };
 
@@ -249,7 +254,7 @@ static int load_odbc_config(void)
 			/* Reset all to defaults for each class of odbc connections */
 			dsn = username = password = sanitysql = NULL;
 			enabled = 1;
-			connect = 0;
+			connect = idlecheck = 0;
 			pooling = 0;
 			limit = 0;
 			bse = 1;
@@ -267,6 +272,8 @@ static int load_odbc_config(void)
 						enabled = 0;
 						break;
 					}
+				} else if (!strcasecmp(v->name, "idlecheck")) {
+					sscanf(v->value, "%d", &idlecheck);
 				} else if (!strcasecmp(v->name, "enabled")) {
 					enabled = ast_true(v->value);
 				} else if (!strcasecmp(v->name, "pre-connect")) {
@@ -297,9 +304,9 @@ static int load_odbc_config(void)
 				if (dsn)
 					ast_copy_string(new->dsn, dsn, sizeof(new->dsn));
 				if (username)
-					ast_copy_string(new->username, username, sizeof(new->username));
+					new->username = ast_strdup(username);
 				if (password)
-					ast_copy_string(new->password, password, sizeof(new->password));
+					new->password = ast_strdup(password);
 				if (sanitysql)
 					ast_copy_string(new->sanitysql, sanitysql, sizeof(new->sanitysql));
 
@@ -323,6 +330,7 @@ static int load_odbc_config(void)
 				}
 
 				new->backslash_is_escape = bse ? 1 : 0;
+				new->idlecheck = idlecheck;
 
 				odbc_register_class(new, connect);
 				ast_log(LOG_NOTICE, "Registered ODBC class '%s' dsn->[%s]\n", cat, dsn);
@@ -508,7 +516,9 @@ struct odbc_obj *ast_odbc_request_obj(const char *name, int check)
 
 	if (obj && check) {
 		ast_odbc_sanity_check(obj);
-	}
+	} else if (obj->parent->idlecheck > 0 && ast_tvdiff_ms(ast_tvnow(), obj->last_used) / 1000 > obj->parent->idlecheck)
+		odbc_obj_connect(obj);
+
 	return obj;
 }
 
@@ -550,6 +560,7 @@ static odbc_status odbc_obj_connect(struct odbc_obj *obj)
 		return ODBC_FAIL;
 	}
 	SQLSetConnectAttr(obj->con, SQL_LOGIN_TIMEOUT, (SQLPOINTER *) 10, 0);
+	SQLSetConnectAttr(obj->con, SQL_ATTR_CONNECTION_TIMEOUT, (SQLPOINTER *) 10, 0);
 #ifdef NEEDTRACE
 	SQLSetConnectAttr(obj->con, SQL_ATTR_TRACE, &enable, SQL_IS_INTEGER);
 	SQLSetConnectAttr(obj->con, SQL_ATTR_TRACEFILE, tracefile, strlen(tracefile));
@@ -575,6 +586,7 @@ static odbc_status odbc_obj_connect(struct odbc_obj *obj)
 	} else {
 		ast_log(LOG_NOTICE, "res_odbc: Connected to %s [%s]\n", obj->parent->name, obj->parent->dsn);
 		obj->up = 1;
+		obj->last_used = ast_tvnow();
 	}
 
 	ast_mutex_unlock(&obj->lock);
@@ -589,6 +601,7 @@ static int reload(void)
 	char *cat;
 	const char *dsn, *username, *password, *sanitysql;
 	int enabled, pooling, limit, bse;
+	unsigned int idlecheck;
 	int connect = 0, res = 0;
 	struct ast_flags config_flags = { CONFIG_FLAG_FILEUNCHANGED };
 
@@ -610,10 +623,11 @@ static int reload(void)
 					ast_log(LOG_NOTICE, "Adding ENV var: %s=%s\n", v->name, v->value);
 				}
 			} else {
+				char *freeme = NULL;
 				/* Reset all to defaults for each class of odbc connections */
 				dsn = username = password = sanitysql = NULL;
 				enabled = 1;
-				connect = 0;
+				connect = idlecheck = 0;
 				pooling = 0;
 				limit = 0;
 				bse = 1;
@@ -630,6 +644,8 @@ static int reload(void)
 							enabled = 0;
 							break;
 						}
+					} else if (!strcasecmp(v->name, "idlecheck")) {
+						sscanf(v->value, "%ud", &idlecheck);
 					} else if (!strcasecmp(v->name, "enabled")) {
 						enabled = ast_true(v->value);
 					} else if (!strcasecmp(v->name, "pre-connect")) {
@@ -671,10 +687,27 @@ static int reload(void)
 						ast_copy_string(new->name, cat, sizeof(new->name));
 					if (dsn)
 						ast_copy_string(new->dsn, dsn, sizeof(new->dsn));
+
+					/* Safely replace username */
+					if (class && class->username)
+						freeme = class->username;
 					if (username)
-						ast_copy_string(new->username, username, sizeof(new->username));
+						new->username = ast_strdup(username);
+					if (freeme) {
+						ast_free(freeme);
+						freeme = NULL;
+					}
+
+					/* Safely replace password */
+					if (class && class->password)
+						 freeme = class->password;
 					if (password)
-						ast_copy_string(new->password, password, sizeof(new->password));
+						new->password = ast_strdup(password);
+					if (freeme) {
+						ast_free(freeme);
+						freeme = NULL;
+					}
+
 					if (sanitysql)
 						ast_copy_string(new->sanitysql, sanitysql, sizeof(new->sanitysql));
 
@@ -701,6 +734,7 @@ static int reload(void)
 					}
 
 					new->backslash_is_escape = bse;
+					new->idlecheck = idlecheck;
 
 					if (class) {
 						ast_log(LOG_NOTICE, "Refreshing ODBC class '%s' dsn->[%s]\n", cat, dsn);
@@ -724,6 +758,10 @@ static int reload(void)
 			}
 
 			AST_LIST_REMOVE_CURRENT(list);
+			if (class->username)
+				ast_free(class->username);
+			if (class->password)
+				ast_free(class->password);
 			ast_free(class);
 		}
 	}
@@ -741,7 +779,7 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	if(load_odbc_config() == -1)
+	if (load_odbc_config() == -1)
 		return AST_MODULE_LOAD_DECLINE;
 	ast_cli_register_multiple(cli_odbc, sizeof(cli_odbc) / sizeof(struct ast_cli_entry));
 	ast_log(LOG_NOTICE, "res_odbc loaded.\n");

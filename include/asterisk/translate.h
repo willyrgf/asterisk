@@ -24,7 +24,7 @@
 #ifndef _ASTERISK_TRANSLATE_H
 #define _ASTERISK_TRANSLATE_H
 
-//#define MAX_FORMAT 15	/* Do not include video here */
+#define MAX_AUDIO_FORMAT 15 /* Do not include video here */
 #define MAX_FORMAT 32	/* Do include video here */
 
 #if defined(__cplusplus) || defined(c_plusplus)
@@ -138,13 +138,15 @@ struct ast_trans_pvt {
 	struct ast_translator *t;
 	struct ast_frame f;	/*!< used in frameout */
 	int samples;		/*!< samples available in outbuf */
-	int datalen;		/*!< actual space used in outbuf */
+	/*! \brief actual space used in outbuf */
+	int datalen;
 	void *pvt;		/*!< more private data, if any */
 	char *outbuf;		/*!< the useful portion of the buffer */
 	plc_state_t *plc;	/*!< optional plc pointer */
 	struct ast_trans_pvt *next;	/*!< next in translator chain */
 	struct timeval nextin;
 	struct timeval nextout;
+	unsigned int destroy:1;
 };
 
 /*! \brief generic frameout function */
@@ -249,6 +251,20 @@ unsigned int ast_translate_path_steps(unsigned int dest, unsigned int src);
  * present in 'src', or the function will produce unexpected results.
  */
 unsigned int ast_translate_available_formats(unsigned int dest, unsigned int src);
+
+/*!
+ * \brief Hint that a frame from a translator has been freed
+ *
+ * This is sort of a hack.  This function gets called when ast_frame_free() gets
+ * called on a frame that has the AST_FRFLAG_FROM_TRANSLATOR flag set.  This is
+ * because it is possible for a translation path to be destroyed while a frame
+ * from a translator is still in use.  Specifically, this happens if a masquerade
+ * happens after a call to ast_read() but before the frame is done being processed, 
+ * since the frame processing is generally done without the channel lock held.
+ *
+ * \return nothing
+ */
+void ast_translate_frame_freed(struct ast_frame *fr);
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }

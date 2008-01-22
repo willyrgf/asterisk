@@ -451,7 +451,7 @@ char *ast_uri_encode(const char *string, char *outbuf, int buflen, int doreserve
 
 	/* If there's no characters to convert, just go through and don't do anything */
 	while (*ptr) {
-		if (((unsigned char) *ptr) > 127 || (doreserved && strchr(reserved, *ptr)) ) {
+		if ((*ptr < 32 || (unsigned char) *ptr) > 127 || (doreserved && strchr(reserved, *ptr)) ) {
 			/* Oops, we need to start working here */
 			if (!buf) {
 				buf = outbuf;
@@ -510,7 +510,7 @@ static int dev_urandom_fd;
 #ifdef DEBUG_THREADS
 
 /*! \brief A reasonable maximum number of locks a thread would be holding ... */
-#define AST_MAX_LOCKS 32
+#define AST_MAX_LOCKS 64
 
 /* Allow direct use of pthread_mutex_t and friends */
 #undef pthread_mutex_t

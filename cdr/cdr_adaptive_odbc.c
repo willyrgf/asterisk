@@ -56,6 +56,7 @@ static int maxsize = 512, maxsize2 = 512;
 struct columns {
 	char *name;
 	char *cdrname;
+	char *filtervalue;
 	SQLSMALLINT type;
 	SQLINTEGER size;
 	SQLSMALLINT decimals;
@@ -152,6 +153,31 @@ static int load_config(void)
 
 		ast_verb(3, "Found adaptive CDR table %s@%s.\n", tableptr->table, tableptr->connection);
 
+		/* Check for filters first */
+		for (var = ast_variable_browse(cfg, catg); var; var = var->next) {
+			if (strncmp(var->name, "filter", 6) == 0) {
+				char *cdrvar = ast_strdupa(var->name + 6);
+				cdrvar = ast_strip(cdrvar);
+				ast_verb(3, "Found filter %s for cdr variable %s in %s@%s\n", var->value, cdrvar, tableptr->table, tableptr->connection);
+
+				entry = ast_calloc(sizeof(char), sizeof(*entry) + strlen(cdrvar) + 1 + strlen(var->value) + 1);
+				if (!entry) {
+					ast_log(LOG_ERROR, "Out of memory creating filter entry for CDR variable '%s' in table '%s' on connection '%s'\n", cdrvar, table, connection);
+					res = -1;
+					break;
+				}
+
+				/* NULL column entry means this isn't a column in the database */
+				entry->name = NULL;
+				entry->cdrname = (char *)entry + sizeof(*entry);
+				entry->filtervalue = (char *)entry + sizeof(*entry) + strlen(cdrvar) + 1;
+				strcpy(entry->cdrname, cdrvar);
+				strcpy(entry->filtervalue, var->value);
+
+				AST_LIST_INSERT_TAIL(&(tableptr->columns), entry, list);
+			}
+		}
+
 		while ((res = SQLFetch(stmt)) != SQL_NO_DATA && res != SQL_ERROR) {
 			char *cdrvar = "";
 
@@ -164,13 +190,14 @@ static int load_config(void)
 			 * really don't parse this file all that often, anyway.
 			 */
 			for (var = ast_variable_browse(cfg, catg); var; var = var->next) {
-				if (strcasecmp(var->value, columnname) == 0) {
+				if (strncmp(var->name, "alias", 5) == 0 && strcasecmp(var->value, columnname) == 0) {
 					char *tmp = ast_strdupa(var->name + 5);
 					cdrvar = ast_strip(tmp);
 					ast_verb(3, "Found alias %s for column %s in %s@%s\n", cdrvar, columnname, tableptr->table, tableptr->connection);
 					break;
 				}
 			}
+
 			entry = ast_calloc(sizeof(char), sizeof(*entry) + strlen(columnname) + 1 + strlen(cdrvar) + 1);
 			if (!entry) {
 				ast_log(LOG_ERROR, "Out of memory creating entry for column '%s' in table '%s' on connection '%s'\n", columnname, table, connection);
@@ -341,6 +368,21 @@ static int odbc_log(struct ast_cdr *cdr)
 				 strcasecmp(entry->cdrname, "end") == 0) ? 0 : 1);
 
 			if (colptr) {
+				/* Check first if the column filters this entry.  Note that this
+				 * is very specifically NOT ast_strlen_zero(), because the filter
+				 * could legitimately specify that the field is blank, which is
+				 * different from the field being unspecified (NULL). */
+				if (entry->filtervalue && strcasecmp(colptr, entry->filtervalue) != 0) {
+					ast_verb(4, "CDR column '%s' with value '%s' does not match filter of"
+						" '%s'.  Cancelling this CDR.\n",
+						entry->cdrname, colptr, entry->filtervalue);
+					goto early_release;
+				}
+
+				/* Only a filter? */
+				if (ast_strlen_zero(entry->name))
+					continue;
+
 				LENGTHEN_BUF1(strlen(entry->name));
 
 				switch (entry->type) {
@@ -404,8 +446,8 @@ static int odbc_log(struct ast_cdr *cdr)
 							year += 2000;
 
 						lensql += snprintf(sql + lensql, sizesql - lensql, "%s,", entry->name);
-						LENGTHEN_BUF2(10);
-						lensql2 += snprintf(sql2 + lensql2, sizesql2 - lensql2, "'%04d-%02d-%02d',", year, month, day);
+						LENGTHEN_BUF2(17);
+						lensql2 += snprintf(sql2 + lensql2, sizesql2 - lensql2, "{ d '%04d-%02d-%02d' },", year, month, day);
 					}
 					break;
 				case SQL_TYPE_TIME:
@@ -419,8 +461,8 @@ static int odbc_log(struct ast_cdr *cdr)
 						}
 
 						lensql += snprintf(sql + lensql, sizesql - lensql, "%s,", entry->name);
-						LENGTHEN_BUF2(8);
-						lensql2 += snprintf(sql2 + lensql2, sizesql2 - lensql2, "'%02d:%02d:%02d',", hour, minute, second);
+						LENGTHEN_BUF2(15);
+						lensql2 += snprintf(sql2 + lensql2, sizesql2 - lensql2, "{ t '%02d:%02d:%02d' },", hour, minute, second);
 					}
 					break;
 				case SQL_TYPE_TIMESTAMP:
@@ -445,8 +487,8 @@ static int odbc_log(struct ast_cdr *cdr)
 							year += 2000;
 
 						lensql += snprintf(sql + lensql, sizesql - lensql, "%s,", entry->name);
-						LENGTHEN_BUF2(19);
-						lensql2 += snprintf(sql2 + lensql2, sizesql2 - lensql2, "'%04d-%02d-%02d %02d:%02d:%02d',", year, month, day, hour, minute, second);
+						LENGTHEN_BUF2(26);
+						lensql2 += snprintf(sql2 + lensql2, sizesql2 - lensql2, "{ ts '%04d-%02d-%02d %02d:%02d:%02d' },", year, month, day, hour, minute, second);
 					}
 					break;
 				case SQL_INTEGER:
@@ -567,6 +609,7 @@ static int odbc_log(struct ast_cdr *cdr)
 		if (rows == 0) {
 			ast_log(LOG_WARNING, "cdr_adaptive_odbc: Insert failed on '%s:%s'.  CDR failed: %s\n", tableptr->connection, tableptr->table, sql);
 		}
+early_release:
 		ast_odbc_release_obj(obj);
 	}
 	AST_RWLIST_UNLOCK(&odbc_tables);

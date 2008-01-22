@@ -99,22 +99,22 @@
 ; pridialplan may be also set at dialtime, by prefixing the dialled number with
 ; one of the following letters:
 ; U - Unknown
-; P - Private
-; L - Local
-; N - National
 ; I - International
-; D - Dynamic
-; R - Redundant
+; N - National
+; L - Local (Net Specific)
+; S - Subscriber
+; V - Abbreviated
+; R - Reserved (should probably never be used but is included for completeness)
 ;
 ; Additionally, you may also set the following NPI bits (also by prefixing the
 ; dialled string with one of the following letters):
 ; u - Unknown
-; e - E.163/E.164
-; x - X.121
-; f - F.69
+; e - E.163/E.164 (ISDN/telephony)
+; x - X.121 (Data)
+; f - F.69 (Telex)
 ; n - National
 ; p - Private
-; r - Reserved
+; r - Reserved (should probably never be used but is included for completeness)
 ;
 ; You may also set the prilocaldialplan in the same way, but by prefixing the
 ; Caller*ID Number, rather than the dialled number.  Please note that telcos
@@ -197,7 +197,8 @@
 ;
 ; pritimer cannot be changed on a reload.
 ;
-; Signalling method (default is fxs).  Valid values:
+; Signalling method. The default is "auto". Valid values:
+; auto:           Use the current value from Zaptel.
 ; em:             E & M
 ; em_e1:          E & M E1
 ; em_w:           E & M Wink
@@ -249,7 +250,7 @@
 ;
 ; signalling of a channel can not be changed on a reload.
 ;
-signalling=fxo_ls
+;signalling=fxo_ls
 ;
 ; If you have an outbound signalling format that is different from format
 ; specified above (but compatible), you can specify outbound signalling format,
@@ -342,9 +343,11 @@ usecallerid=yes
 ; the script specified by the mwimonitornotify option is executed.  Also, an
 ; internal Asterisk MWI event will be generated so that any other part of
 ; Asterisk that cares about MWI state changes will get notified, just as if
-; the state change came from app_voicemail.
+; the state change came from app_voicemail. The energy level that must be seen
+; before starting the MWI detection process can be set with 'mwilevel'.
 ;
 ;mwimonitor=no
+;mwilevel=512
 ;
 ; This option is used in conjunction with mwimonitor.  This will get executed
 ; when incoming MWI state changes.  The script is passed 2 arguments.  The
@@ -436,17 +439,28 @@ callreturn=yes
 ; modules, they take precedence over the software echo canceller compiled
 ; into Zaptel automatically.
 ;
+;
 echocancel=yes
+;
+; As of Zaptel 1.4.8, some Zaptel echo cancellers (software and hardware)
+; support adjustable parameters; these parameters can be supplied as
+; additional options to the 'echocancel' setting. Note that Asterisk
+; does not attempt to validate the parameters or their values, so if you
+; supply an invalid parameter you will not know the specific reason it
+; failed without checking the kernel message log for the error(s)
+; put there by Zaptel.
+;
+;echocancel=128,param1=32,param2=0,param3=14
 ;
 ; Generally, it is not necessary (and in fact undesirable) to echo cancel when
 ; the circuit path is entirely TDM.  You may, however, change this behavior
-; by enabling the echo cancel during pure TDM bridging below.
+; by enabling the echo canceller during pure TDM bridging below.
 ;
 echocancelwhenbridged=yes
 ;
 ; In some cases, the echo canceller doesn't train quickly enough and there
 ; is echo at the beginning of the call.  Enabling echo training will cause
-; asterisk to briefly mute the channel, send an impulse, and use the impulse
+; Zaptel to briefly mute the channel, send an impulse, and use the impulse
 ; response to pre-train the echo canceller so it can start out with a much
 ; closer idea of the actual echo.  Value may be "yes", "no", or a number of
 ; milliseconds to delay before training (default = 400)
@@ -508,6 +522,8 @@ pickupgroup=1
 ;
 ; Specify whether the channel should be answered immediately or if the simple
 ; switch should provide dialtone, read digits, etc.
+; Note: If immediate=yes the dialplan execution will always start at extension
+; 's' priority 1 regardless of the dialed number!
 ;
 ;immediate=yes
 ;
@@ -583,10 +599,14 @@ pickupgroup=1
 ;
 ;busypattern=500,500
 ;
-; NOTE: In the Asterisk Makefile you'll find further options to tweak the busy
+; NOTE: In make menuselect, you'll find further options to tweak the busy
 ; detector.  If your country has a busy tone with the same length tone and
-; silence (as many countries do), consider defining the
-; -DBUSYDETECT_COMPARE_TONE_AND_SILENCE option.
+; silence (as many countries do), consider enabling the
+; BUSYDETECT_COMPARE_TONE_AND_SILENCE option.
+;
+; To further detect which hangup tone your telco provider is sending, it is
+; useful to use the ztmonitor utility to record the audio that main/dsp.c
+; is receiving after the caller hangs up.
 ;
 ; Use a polarity reversal to mark when a outgoing call is answered by the
 ; remote party.
@@ -822,7 +842,7 @@ pickupgroup=1
 ; ---------------- Options for use with signalling=ss7 -----------------
 ; None of them can be changed by a reload.
 ;
-; Variant of SS7 signaling:
+; Variant of SS7 signalling:
 ; Options are itu and ansi
 ;ss7type = itu
 
@@ -862,7 +882,7 @@ pickupgroup=1
 ; number format or in the xxx-xxx-xxx format
 ;pointcode = 1
 
-; Point code of node adjacent to this signaling link (Possibly the STP between you and
+; Point code of node adjacent to this signalling link (Possibly the STP between you and
 ; your destination).  Point code format follows the same rules as above.
 ;adjpointcode = 2
 
@@ -878,7 +898,7 @@ pickupgroup=1
 ; national, national_spare, international, international_spare
 ;networkindicator=international
 
-; First signaling channel
+; First signalling channel
 ;sigchan = 48
 
 ; Channels to associate with CICs on this linkset

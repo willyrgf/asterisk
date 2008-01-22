@@ -70,6 +70,20 @@ allowoverlap=no			; Disable overlap dialing support. (Default is yes)
 bindport=5060			; UDP Port to bind to (SIP standard port is 5060)
 				; bindport is the local UDP port that Asterisk will listen on
 bindaddr=0.0.0.0		; IP address to bind to (0.0.0.0 binds to all)
+
+tcpenable=yes                   ; Enable server for incoming TCP connections (default is yes)
+tcpbindaddr=0.0.0.0	        ; IP address for TCP server to bind to (0.0.0.0 binds to all interfaces)
+                                ; Optionally add a port number, 192.168.1.1:5062 (default is port 5060)
+
+;tlsenable=no                   ; Enable server for incoming TLS (secure) connections (default is no)
+;tlsbindaddr=0.0.0.0            ; IP address for TLS server to bind to (0.0.0.0) binds to all interfaces)
+                                ; Optionally add a port number, 192.168.1.1:5063 (default is port 5061)
+				; Remember that the IP address must match the common name (hostname) in the
+				; certificate, so you don't want to bind a TLS socket to multiple IP addresses.
+
+;tlscertfile=asterisk.pem	; Certificate file (*.pem only) to use for TLS connections 
+			 	; default is to look for "asterisk.pem" in current directory
+
 srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 				; Note: Asterisk only uses the first host 
 				; in SRV records
@@ -101,6 +115,10 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 				; and subscriptions (seconds)
 ;minexpiry=60			; Minimum length of registrations/subscriptions (default 60)
 ;defaultexpiry=120		; Default length of incoming/outgoing registration
+;qualifyfreq=60                 ; Qualification: How often to check for the 
+                                ; host to be up in seconds
+                                ; Set to low value if you use low timeout for
+                                ; NAT of UDP sessions
 ;notifymimetype=text/plain	; Allow overriding of mime type in MWI NOTIFY
 ;buggymwi=no			; Cisco SIP firmware doesn't support the MWI RFC
 				; fully. Enable this option to not get error messages
@@ -212,7 +230,8 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ;t1min=100			; Minimum roundtrip time for messages to monitored hosts
 				; Defaults to 100 ms
 ;timert1=500		        ; Default T1 timer
-				; Defaults to 500 ms
+				; Defaults to 500 ms or the measured round-trip
+				; time to a peer (qualify=yes).
 ;timerb=32000		        ; Call setup timer. If a provisional response is not received
 				; in this amount of time, the call will autocongest
 				; Defaults to 64*timert1
@@ -232,6 +251,28 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 				; when we're on hold (must be > rtptimeout)
 ;rtpkeepalive=<secs>		; Send keepalives in the RTP stream to keep NAT open
 				; (default is off - zero)
+
+;--------------------------- SIP Session-Timers (RFC 4028)------------------------------------
+; SIP Session-Timers provide an end-to-end keep-alive mechanism for active SIP sessions.
+; This mechanism can detect and reclaim SIP channels that do not terminate through normal
+; signaling procedures. Session-Timers can be configured globally or at a user/peer level.
+; The operation of Session-Timers is driven by the following configuration parameters:
+;
+; * session-timers    - Session-Timers feature operates in the following three modes:
+;                            originate : Request and run session-timers always
+;                            accept    : Run session-timers only when requested by other UA
+;                            refuse    : Do not run session timers in any case
+;                       The default mode of operation is 'accept'.
+; * session-expires   - Maximum session refresh interval in seconds. Defaults to 1800 secs.
+; * session-minse     - Minimum session refresh interval in seconds. Defualts to 90 secs.
+; * session-refresher - The session refresher (uac|uas). Defaults to 'uas'.
+;
+;session-timers=originate
+;session-expires=600
+;session-minse=90
+;session-refresher=uas
+
+
 ;--------------------------- SIP DEBUGGING ---------------------------------------------------
 ;sipdebug = yes			; Turn on SIP debugging by default, from
 				; the moment the channel loads this configuration
@@ -294,7 +335,9 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ;----------------------------------------- OUTBOUND SIP REGISTRATIONS  ------------------------
 ; Asterisk can register as a SIP user agent to a SIP proxy (provider)
 ; Format for the register statement is:
-;       register => user[:secret[:authuser]]@host[:port][/extension]
+;       register => [transport://]user[:secret[:authuser]]@host[:port][/extension]
+;
+; 
 ;
 ; If no extension is given, the 's' extension is used. The extension needs to
 ; be defined in extensions.conf to be able to accept calls from this SIP proxy
@@ -581,7 +624,7 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ; User config options:        Peer configuration:
 ; --------------------        -------------------
 ; context                     context
-; callingpres		      callingpres
+; callingpres                 callingpres
 ; permit                      permit
 ; deny                        deny
 ; secret                      secret
@@ -612,13 +655,14 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ; videosupport		      videosupport
 ; maxcallbitrate	      maxcallbitrate
 ; rfc2833compensate           mailbox
-;			      busylevel
-;                             template
-;                             fromdomain
-;                             regexten
-;                             fromuser
-;                             host
-;                             port
+; session-timers             busylevel
+; session-expires            
+; session-minse              template
+; session-refresher          fromdomain
+;                            regexten
+;                            fromuser
+;                            host
+;                            port
 ;                             qualify
 ;                             defaultip
 ;                             defaultuser
@@ -629,8 +673,14 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ;                             rfc2833compensate
 ;                             callbackextension
 ;                             registertrying
+;                             session-timers
+;                             session-expires
+;                             session-minse
+;                             session-refresher
 ;                             timert1
 ;                             timerb
+;                             qualifyfreq
+
 
 ;[sip_proxy]
 ; For incoming calls only. Example: FWD (Free World Dialup)
@@ -812,6 +862,10 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ;qualify=1000			; Consider it down if it's 1 second to reply
 				; Helps with NAT session
 				; qualify=yes uses default value
+;qualifyfreq=60 ; Qualification: How often to check for the 
+				; host to be up in seconds
+				; Set to low value if you use low timeout for
+				; NAT of UDP sessions
 ;
 ; Call group and Pickup group should be in the range from 0 to 63
 ;
