@@ -83,7 +83,7 @@
  */
 
 /*** MODULEINFO
-        <depend>res_features</depend>
+        <depend>chan_local</depend>
  ***/
 
 /*!  \page sip_session_timers SIP Session Timers in Asterisk Chan_sip
