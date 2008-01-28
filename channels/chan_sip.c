@@ -2820,8 +2820,6 @@ static enum sip_result __sip_reliable_xmit(struct sip_pvt *p, int seqno, int res
 		append_history(pkt->owner, "XmitErr", "%s", pkt->is_fatal ? "(Critical)" : "(Non-critical)");
 		return AST_FAILURE;
 	} else {
-		/* Schedule retransmission */
-		pkt->retransid = ast_sched_add_variable(sched, siptimer_a, retrans_pkt, pkt, 1);
 		return AST_SUCCESS;
 	}
 }
@@ -2946,6 +2944,7 @@ static void __sip_ack(struct sip_pvt *p, int seqno, int resp, int sipmethod)
 				if (sipdebug)
 					ast_debug(4, "** SIP TIMER: Cancelling retransmit of packet (reply received) Retransid #%d\n", cur->retransid);
 			}
+			AST_SCHED_DEL(sched, cur->retransid);
 			UNLINK(cur, p->packets, prev);
 			dialog_unref(cur->owner);
 			ast_free(cur);
@@ -9445,8 +9444,9 @@ static int set_address_from_contact(struct sip_pvt *pvt)
 	struct ast_hostent ahp;
 	int port;
 	char *host, *pt;
+	char contact_buf[256];
+	char contact2_buf[256];
 	char *contact, *contact2;
-
 
 	if (ast_test_flag(&pvt->flags[0], SIP_NAT_ROUTE)) {
 		/* NAT: Don't trust the contact field.  Just use what they came to us
@@ -9455,10 +9455,12 @@ static int set_address_from_contact(struct sip_pvt *pvt)
 		return 0;
 	}
 
-
 	/* Work on a copy */
-	contact = ast_strdupa(pvt->fullcontact);
-	contact2 = ast_strdupa(pvt->fullcontact);
+	ast_copy_string(contact_buf, pvt->fullcontact, sizeof(contact_buf));
+	ast_copy_string(contact2_buf, pvt->fullcontact, sizeof(contact2_buf));
+	contact = contact_buf;
+	contact2 = contact2_buf;
+
 	/* We have only the part in <brackets> here so we just need to parse a SIP URI.*/
 
 	if (pvt->socket.type == SIP_TRANSPORT_TLS) {
