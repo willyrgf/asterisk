@@ -481,7 +481,7 @@ const char *ast_cause2str(int cause)
 {
 	int x;
 
-	for (x=0; x < sizeof(causes) / sizeof(causes[0]); x++) {
+	for (x = 0; x < ARRAY_LEN(causes); x++) {
 		if (causes[x].cause == cause)
 			return causes[x].desc;
 	}
@@ -494,8 +494,8 @@ int ast_str2cause(const char *name)
 {
 	int x;
 
-	for (x = 0; x < sizeof(causes) / sizeof(causes[0]); x++)
-		if (strncasecmp(causes[x].name, name, strlen(causes[x].name)) == 0)
+	for (x = 0; x < ARRAY_LEN(causes); x++)
+		if (!strncasecmp(causes[x].name, name, strlen(causes[x].name)))
 			return causes[x].cause;
 
 	return -1;
@@ -4561,14 +4561,14 @@ void ast_moh_cleanup(struct ast_channel *chan)
 
 void ast_channels_init(void)
 {
-	ast_cli_register_multiple(cli_channel, sizeof(cli_channel) / sizeof(struct ast_cli_entry));
+	ast_cli_register_multiple(cli_channel, ARRAY_LEN(cli_channel));
 }
 
 /*! \brief Print call group and pickup group ---*/
 char *ast_print_group(char *buf, int buflen, ast_group_t group)
 {
 	unsigned int i;
-	int first=1;
+	int first = 1;
 	char num[3];
 
 	buf[0] = '\0';
@@ -4581,7 +4581,7 @@ char *ast_print_group(char *buf, int buflen, ast_group_t group)
 	   		if (!first) {
 				strncat(buf, ", ", buflen);
 			} else {
-				first=0;
+				first = 0;
 	  		}
 			snprintf(num, sizeof(num), "%u", i);
 			strncat(buf, num, buflen);
@@ -4619,9 +4619,12 @@ static int silence_generator_generate(struct ast_channel *chan, void *data, int 
 		.samples = samples,
 		.datalen = sizeof(buf),
 	};
+
 	memset(buf, 0, sizeof(buf));
+
 	if (ast_write(chan, &frame))
 		return -1;
+
 	return 0;
 }
 
@@ -4803,44 +4806,45 @@ int ast_channel_trylock(struct ast_channel *chan)
 int ast_say_number(struct ast_channel *chan, int num,
 	const char *ints, const char *language, const char *options)
 {
-        return ast_say_number_full(chan, num, ints, language, options, -1, -1);
+	return ast_say_number_full(chan, num, ints, language, options, -1, -1);
 }
 
 int ast_say_enumeration(struct ast_channel *chan, int num,
 	const char *ints, const char *language, const char *options)
 {
-        return ast_say_enumeration_full(chan, num, ints, language, options, -1, -1);
+	return ast_say_enumeration_full(chan, num, ints, language, options, -1, -1);
 }
 
 int ast_say_digits(struct ast_channel *chan, int num,
 	const char *ints, const char *lang)
 {
-        return ast_say_digits_full(chan, num, ints, lang, -1, -1);
+	return ast_say_digits_full(chan, num, ints, lang, -1, -1);
 }
 
 int ast_say_digit_str(struct ast_channel *chan, const char *str,
 	const char *ints, const char *lang)
 {
-        return ast_say_digit_str_full(chan, str, ints, lang, -1, -1);
+	return ast_say_digit_str_full(chan, str, ints, lang, -1, -1);
 }
 
 int ast_say_character_str(struct ast_channel *chan, const char *str,
 	const char *ints, const char *lang)
 {
-        return ast_say_character_str_full(chan, str, ints, lang, -1, -1);
+	return ast_say_character_str_full(chan, str, ints, lang, -1, -1);
 }
 
 int ast_say_phonetic_str(struct ast_channel *chan, const char *str,
 	const char *ints, const char *lang)
 {
-        return ast_say_phonetic_str_full(chan, str, ints, lang, -1, -1);
+	return ast_say_phonetic_str_full(chan, str, ints, lang, -1, -1);
 }
 
 int ast_say_digits_full(struct ast_channel *chan, int num,
 	const char *ints, const char *lang, int audiofd, int ctrlfd)
 {
-        char buf[256];
+	char buf[256];
 
-        snprintf(buf, sizeof(buf), "%d", num);
-        return ast_say_digit_str_full(chan, buf, ints, lang, audiofd, ctrlfd);
+	snprintf(buf, sizeof(buf), "%d", num);
+
+	return ast_say_digit_str_full(chan, buf, ints, lang, audiofd, ctrlfd);
 }
