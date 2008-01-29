@@ -1251,10 +1251,19 @@ static char *handle_cli_misdn_show_channels(struct ast_cli_entry *e, int cmd, st
 	help = cl_te;
   
 	ast_cli(a->fd, "Channel List: %p\n", cl_te); 
-  
+
 	for (; help; help = help->next) {
 		struct misdn_bchannel *bc = help->bc;   
 		struct ast_channel *ast = help->ast;
+		if (!ast) {
+			if (!bc) {
+				ast_cli(a->fd, "chan_list obj. with l3id:%x has no bc and no ast Leg\n", help->l3id);
+				continue;
+			}
+			ast_cli(a->fd, "bc with pid:%d has no Ast Leg\n", bc->pid);
+			continue;
+		}
+
 		if (misdn_debug[0] > 2)
 			ast_cli(a->fd, "Bc:%p Ast:%p\n", bc, ast);
 		if (bc) {
@@ -4163,6 +4172,7 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 			/*  sending INFOS as DTMF-Frames :) */
 			struct ast_frame fr;
 			int digits;
+			memset(&fr, 0, sizeof(fr));
 			fr.frametype = AST_FRAME_DTMF;
 			fr.subclass = bc->info_dad[0] ;
 			fr.src = NULL;
