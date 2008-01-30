@@ -1798,7 +1798,6 @@ static struct ast_rtp_protocol *get_proto(struct ast_channel *chan)
 
 int ast_rtp_early_bridge(struct ast_channel *c0, struct ast_channel *c1)
 {
-	// dest = c0, src = c1
 	struct ast_rtp *destp = NULL, *srcp = NULL;		/* Audio RTP Channels */
 	struct ast_rtp *vdestp = NULL, *vsrcp = NULL;		/* Video RTP channels */
 	struct ast_rtp *tdestp = NULL, *tsrcp = NULL;		/* Text RTP channels */
@@ -2034,8 +2033,6 @@ void ast_rtp_get_current_formats(struct ast_rtp* rtp,
 	}
 
 	rtp_bridge_unlock(rtp);
-	
-	return;
 }
 
 struct rtpPayloadType ast_rtp_lookup_pt(struct ast_rtp* rtp, int pt) 
@@ -2217,8 +2214,6 @@ void ast_rtp_new_init(struct ast_rtp *rtp)
 	rtp->seqno = ast_random() & 0xffff;
 	ast_set_flag(rtp, FLAG_HAS_DTMF);
 	rtp->strict_rtp_state = (strictrtp ? STRICT_RTP_LEARN : STRICT_RTP_OPEN);
-
-	return;
 }
 
 struct ast_rtp *ast_rtp_new_with_bindaddr(struct sched_context *sched, struct io_context *io, int rtcpenable, int callbackmode, struct in_addr addr)
@@ -2610,10 +2605,10 @@ static int ast_rtp_senddigit_continuation(struct ast_rtp *rtp)
 
 	/* Setup packet to send */
 	rtpheader = (unsigned int *)data;
-        rtpheader[0] = htonl((2 << 30) | (1 << 23) | (rtp->send_payload << 16) | (rtp->seqno));
-        rtpheader[1] = htonl(rtp->lastdigitts);
-        rtpheader[2] = htonl(rtp->ssrc);
-        rtpheader[3] = htonl((rtp->send_digit << 24) | (0xa << 16) | (rtp->send_duration));
+	rtpheader[0] = htonl((2 << 30) | (1 << 23) | (rtp->send_payload << 16) | (rtp->seqno));
+	rtpheader[1] = htonl(rtp->lastdigitts);
+	rtpheader[2] = htonl(rtp->ssrc);
+	rtpheader[3] = htonl((rtp->send_digit << 24) | (0xa << 16) | (rtp->send_duration));
 	rtpheader[0] = htonl((2 << 30) | (rtp->send_payload << 16) | (rtp->seqno));
 	
 	/* Transmit */
@@ -3059,7 +3054,7 @@ static int ast_rtp_raw_write(struct ast_rtp *rtp, struct ast_frame *f, int codec
 
 	if (rtp->them.sin_port && rtp->them.sin_addr.s_addr) {
 		res = sendto(rtp->s, (void *)rtpheader, f->datalen + hdrlen, 0, (struct sockaddr *)&rtp->them, sizeof(rtp->them));
-		if (res <0) {
+		if (res < 0) {
 			if (!rtp->nat || (rtp->nat && (ast_test_flag(rtp, FLAG_NAT_ACTIVE) == FLAG_NAT_ACTIVE))) {
 				ast_debug(1, "RTP Transmission error of packet %d to %s:%d: %s\n", rtp->seqno, ast_inet_ntoa(rtp->them.sin_addr), ntohs(rtp->them.sin_port), strerror(errno));
 			} else if (((ast_test_flag(rtp, FLAG_NAT_ACTIVE) == FLAG_NAT_INACTIVE) || rtpdebug) && !ast_test_flag(rtp, FLAG_NAT_INACTIVE_NOWARN)) {
@@ -3073,7 +3068,7 @@ static int ast_rtp_raw_write(struct ast_rtp *rtp, struct ast_frame *f, int codec
 			rtp->txoctetcount +=(res - hdrlen);
 			
 			if (rtp->rtcp && rtp->rtcp->schedid < 1) 
-			    rtp->rtcp->schedid = ast_sched_add(rtp->sched, ast_rtcp_calc_interval(rtp), ast_rtcp_write, rtp);
+				rtp->rtcp->schedid = ast_sched_add(rtp->sched, ast_rtcp_calc_interval(rtp), ast_rtcp_write, rtp);
 		}
 				
 		if (rtp_debug_test_addr(&rtp->them))
@@ -3086,7 +3081,7 @@ static int ast_rtp_raw_write(struct ast_rtp *rtp, struct ast_frame *f, int codec
 	return 0;
 }
 
-int ast_rtp_codec_setpref(struct ast_rtp *rtp, struct ast_codec_pref *prefs)
+void ast_rtp_codec_setpref(struct ast_rtp *rtp, struct ast_codec_pref *prefs)
 {
 	int x;
 	for (x = 0; x < 32; x++) {  /* Ugly way */
@@ -3096,7 +3091,6 @@ int ast_rtp_codec_setpref(struct ast_rtp *rtp, struct ast_codec_pref *prefs)
 	if (rtp->smoother)
 		ast_smoother_free(rtp->smoother);
 	rtp->smoother = NULL;
-	return 0;
 }
 
 struct ast_codec_pref *ast_rtp_codec_getpref(struct ast_rtp *rtp)
@@ -3179,7 +3173,7 @@ int ast_rtp_write(struct ast_rtp *rtp, struct ast_frame *_f)
 		while ((f = ast_smoother_read(rtp->smoother)) && (f->data))
 			ast_rtp_raw_write(rtp, f, codec);
 	} else {
-	        /* Don't buffer outgoing frames; send them one-per-packet: */
+		/* Don't buffer outgoing frames; send them one-per-packet: */
 		if (_f->offset < hdrlen) 
 			f = ast_frdup(_f);	/*! \bug XXX this might never be free'd. Why do we do this? */
 		else
@@ -3516,10 +3510,8 @@ static int p2p_callback_disable(struct ast_channel *chan, struct ast_rtp *rtp, i
 static void p2p_set_bridge(struct ast_rtp *rtp0, struct ast_rtp *rtp1)
 {
 	rtp_bridge_lock(rtp0);
-        rtp0->bridged = rtp1;
+	rtp0->bridged = rtp1;
 	rtp_bridge_unlock(rtp0);
-
-        return;
 }
 
 /*! \brief Bridge loop for partial native bridge (packet2packet) 
