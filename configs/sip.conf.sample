@@ -498,7 +498,8 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ;                             sendrpid
 ;                             outboundproxy
 ;                             rfc2833compensate
-;			      failoverpeer
+;			      failoverhost
+;			      failoverhostport
 
 ;[sip_proxy]
 ; For incoming calls only. Example: FWD (Free World Dialup)
@@ -522,8 +523,9 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 					; since they are not stored in-memory
 ;port=80				; The port number we want to connect to on the remote side
 					; Also used as "defaultport" in combination with "defaultip" settings
-;failoverpeer:proxy2.provider.domain	; In case the first proxy fails, use proxy2 for SIP signalling. Media will 
+;failoverhost=proxy2.provider.domain	; In case the first proxy fails, use proxy2 for SIP signalling. Media will 
 					; not be affected. Also, NAT support won't affect failoverproxy at all.
+					; This only works with non-dynamic peers, peers that does not register.
 
 ;------------------------------------------------------------------------------
 ; Definitions of locally connected SIP devices

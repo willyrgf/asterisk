@@ -15801,24 +15801,57 @@ static int restart_monitor(void)
 	return 0;
 }
 
+/*! \brief Activate failover state for all calls 
+	when peer becomes unreachable 
+
+	This is advisory only, so if we can't lock a dialog, let's 
+	just skip it and move on. The dialog will failover when xmit fails.
+*/
+static void device_failover_calls(struct sip_peer *device) 
+{
+	struct sip_pvt *dialog;
+	int dialogs = 0;
+
+	ast_mutex_lock(&iflock);
+	for (dialog = iflist; dialog; dialog = dialog->next) {
+		if (strcmp(device->tohost, dialog->tohost))
+			continue;
+		/* If dialog is locked for some reason, don't deadlock, just continue */
+		if (ast_mutex_trylock(&dialog->lock))
+			continue;
+		dialogs++;
+		dialog->failoverstate = ACTIVE;
+		append_history(dialog, "FailOver", "Activated failover peer for unreachable peer %s :: %s", device->name, device->tohost);
+		ast_mutex_unlock(&dialog->lock);
+		if (dialogs == device->inUse)
+			break;	/* We've found all, let's release the iflock quickly */
+	}
+	if (option_debug > 2)
+		ast_log(LOG_DEBUG, "FAILOVER :: Activated failover for %d dialogs. Unreachable peer has %d active calls\n", dialogs, device->inUse);
+	ast_mutex_unlock(&iflock);
+}
+
 /*! \brief React to lack of answer to Qualify poke */
 static int sip_poke_noanswer(const void *data)
 {
 	struct sip_peer *peer = (struct sip_peer *)data;
 	
+	AST_SCHED_DEL(sched, peer->pokeexpire);
 	peer->pokeexpire = -1;
 	if (peer->lastms > -1) {
 		ast_log(LOG_NOTICE, "Peer '%s' is now UNREACHABLE!  Last qualify: %d\n", peer->name, peer->lastms);
 		manager_event(EVENT_FLAG_SYSTEM, "PeerStatus", "Peer: SIP/%s\r\nPeerStatus: Unreachable\r\nTime: %d\r\n", peer->name, -1);
 	}
-	if (peer->call)
+	if (peer->call)		/* Delete the NOTIFY operation */
 		sip_destroy(peer->call);
 	peer->call = NULL;
 	peer->lastms = -1;
 	ast_device_state_changed("SIP/%s", peer->name);
 	/* Try again quickly */
-	AST_SCHED_DEL(sched, peer->pokeexpire);
 	peer->pokeexpire = ast_sched_add(sched, DEFAULT_FREQ_NOTOK, sip_poke_peer_s, peer);
+	if (!ast_strlen_zero(peer->failoverhostname) && peer->inUse) 
+		/* We have a failover solution and active calls for this peer */
+		device_failover_calls(peer);
 	return 0;
 }
 
