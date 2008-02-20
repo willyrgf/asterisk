@@ -70,9 +70,19 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <ctype.h>
 #include <signal.h>
 #include <pwd.h>
+#ifdef USE_SYSTEM_IMAP
+#include <imap/c-client.h>
+#include <imap/imap4r1.h>
+#include <imap/linkage.h>
+#elif defined (USE_SYSTEM_CCLIENT)
+#include <c-client/c-client.h>
+#include <c-client/imap4r1.h>
+#include <c-client/linkage.h>
+#else
 #include "c-client.h"
 #include "imap4r1.h"
 #include "linkage.h"
+#endif
 #endif
 #include "asterisk/lock.h"
 #include "asterisk/file.h"
@@ -4759,7 +4769,13 @@ static int init_mailstream(struct vm_state *vms, int box)
 
 	if (delimiter == '\0') {		/* did not probe the server yet */
 		char *cp;
+#ifdef USE_SYSTEM_IMAP
+#include <imap/linkage.c>
+#elif defined(USE_SYSTEM_CCLIENT)
+#include <c-client/linkage.c>
+#else
 #include "linkage.c"
+#endif
 		/* Connect to INBOX first to get folders delimiter */
 		imap_mailbox_name(tmp, sizeof(tmp), vms, 0, 1);
 		stream = mail_open (stream, tmp, debug ? OP_DEBUG : NIL);
