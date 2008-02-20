@@ -1474,7 +1474,7 @@ static int get_refer_info(struct sip_pvt *transferer, struct sip_request *outgoi
 static int get_also_info(struct sip_pvt *p, struct sip_request *oreq);
 static int parse_ok_contact(struct sip_pvt *pvt, struct sip_request *req);
 static int set_address_from_contact(struct sip_pvt *pvt);
-static void check_via(struct sip_pvt *p, struct sip_request *req);
+static void check_via(struct sip_pvt *p, const struct sip_request *req);
 static char *get_calleridname(const char *input, char *output, size_t outputsize);
 static int get_rpid_num(const char *input, char *output, int maxlen);
 static int get_rdnis(struct sip_pvt *p, struct sip_request *oreq);
@@ -3065,6 +3065,21 @@ static void __sip_destroy(struct sip_pvt *p, int lockowner)
 			ast_log(LOG_DEBUG, "This call did not properly clean up call limits. Call ID %s\n", p->callid);
 	}
 
+	/* Unlink us from the owner if we have one */
+	if (p->owner) {
+		if (lockowner)
+			ast_channel_lock(p->owner);
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Detaching from %s\n", p->owner->name);
+		p->owner->tech_pvt = NULL;
+		/* Make sure that the channel knows its backend is going away */
+		p->owner->_softhangup |= AST_SOFTHANGUP_DEV;
+		if (lockowner)
+			ast_channel_unlock(p->owner);
+		/* Give the channel a chance to react before deallocation */
+		usleep(1);
+	}
+
 	/* Remove link from peer to subscription of MWI */
 	if (p->relatedpeer && p->relatedpeer->mwipvt)
 		p->relatedpeer->mwipvt = NULL;
@@ -3081,10 +3096,17 @@ static void __sip_destroy(struct sip_pvt *p, int lockowner)
 	AST_SCHED_DEL(sched, p->waitid);
 	AST_SCHED_DEL(sched, p->autokillid);
 
-	if (p->rtp)
+	/* We absolutely cannot destroy the rtp struct while a bridge is active or we WILL crash */
+	if (p->rtp) {
+		while (ast_rtp_get_bridged(p->rtp))
+			usleep(1);
 		ast_rtp_destroy(p->rtp);
-	if (p->vrtp)
+	}
+	if (p->vrtp) {
+		while (ast_rtp_get_bridged(p->vrtp))
+			usleep(1);
 		ast_rtp_destroy(p->vrtp);
+	}
 	if (p->udptl)
 		ast_udptl_destroy(p->udptl);
 	if (p->refer)
@@ -3099,16 +3121,6 @@ static void __sip_destroy(struct sip_pvt *p, int lockowner)
 		ASTOBJ_UNREF(p->registry, sip_registry_destroy);
 	}
 
-	/* Unlink us from the owner if we have one */
-	if (p->owner) {
-		if (lockowner)
-			ast_channel_lock(p->owner);
-		if (option_debug)
-			ast_log(LOG_DEBUG, "Detaching from %s\n", p->owner->name);
-		p->owner->tech_pvt = NULL;
-		if (lockowner)
-			ast_channel_unlock(p->owner);
-	}
 	/* Clear history */
 	if (p->history) {
 		struct sip_history *hist;
@@ -6015,6 +6027,7 @@ static int transmit_response_using_temp(ast_string_field callid, struct sockaddr
 		p->recv = *sin;
 		do_setnat(p, ast_test_flag(&p->flags[0], SIP_NAT) & SIP_NAT_ROUTE);
 	}
+	check_via(p, req);
 
 	ast_string_field_set(p, fromdomain, default_fromdomain);
 	build_via(p);
@@ -9143,7 +9156,7 @@ static int get_also_info(struct sip_pvt *p, struct sip_request *oreq)
 	return -1;
 }
 /*! \brief check Via: header for hostname, port and rport request/answer */
-static void check_via(struct sip_pvt *p, struct sip_request *req)
+static void check_via(struct sip_pvt *p, const struct sip_request *req)
 {
 	char via[512];
 	char *c, *pt;
@@ -14877,7 +14890,7 @@ static int handle_request_subscribe(struct sip_pvt *p, struct sip_request *req, 
 	parse_ok_contact(p, req);
 
 	build_contact(p);
-	if (gotdest) {
+	if (strcmp(event, "message-summary") && gotdest) {
 		transmit_response(p, "404 Not Found", req);
 		ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
 		if (authpeer)
