@@ -389,6 +389,17 @@ enum ast_channel_state {
 	AST_STATE_MUTE = (1 << 16),	/*!< Do not transmit voice data */
 };
 
+/*!
+ * \brief Possible T38 states on channels
+ */
+enum ast_t38_state {
+	T38_STATE_UNAVAILABLE,	/*!< T38 is unavailable on this channel or disabled by configuration */
+	T38_STATE_UNKNOWN,	/*!< The channel supports T38 but the current status is unknown */
+	T38_STATE_NEGOTIATING,	/*!< T38 is being negotiated */
+	T38_STATE_REJECTED,	/*!< Remote side has rejected our offer */
+	T38_STATE_NEGOTIATED,	/*!< T38 established */
+};
+
 /*! \brief Main Channel structure associated with a channel. 
  * This is the side of it mostly used by the pbx and call management.
  *
@@ -825,6 +836,34 @@ void ast_channel_unregister(const struct ast_channel_tech *tech);
  * \return a pointer to the structure, or NULL if no matching technology found
  */
 const struct ast_channel_tech *ast_get_channel_tech(const char *name);
+
+#ifdef CHANNEL_TRACE
+/*! \brief Update the context backtrace if tracing is enabled
+ * \return Returns 0 on success, -1 on failure
+ */
+int ast_channel_trace_update(struct ast_channel *chan);
+
+/*! \brief Enable context tracing in the channel
+ * \return Returns 0 on success, -1 on failure
+ */
+int ast_channel_trace_enable(struct ast_channel *chan);
+
+/*! \brief Disable context tracing in the channel.
+ * \note Does not remove current trace entries
+ * \return Returns 0 on success, -1 on failure
+ */
+int ast_channel_trace_disable(struct ast_channel *chan);
+
+/*! \brief Whether or not context tracing is enabled
+ * \return Returns -1 when the trace is enabled. 0 if not.
+ */
+int ast_channel_trace_is_enabled(struct ast_channel *chan);
+
+/*! \brief Put the channel backtrace in a string
+ * \return Returns the amount of lines in the backtrace. -1 on error.
+ */
+int ast_channel_trace_serialize(struct ast_channel *chan, struct ast_str **out);
+#endif
 
 /*! \brief Hang up a channel  
  * \note This function performs a hard hangup on a channel.  Unlike the soft-hangup, this function
@@ -1272,10 +1311,10 @@ int ast_best_codec(int fmts);
 
 /*! Checks the value of an option */
 /*! 
- * Query the value of an option, optionally blocking until a reply is received
+ * Query the value of an option
  * Works similarly to setoption except only reads the options.
  */
-struct ast_frame *ast_channel_queryoption(struct ast_channel *channel, int option, void *data, int *datalen, int block);
+int ast_channel_queryoption(struct ast_channel *channel, int option, void *data, int *datalen, int block);
 
 /*! Checks for HTML support on a channel */
 /*! Returns 0 if channel does not support HTML or non-zero if it does */
@@ -1528,6 +1567,18 @@ static inline int ast_select(int nfds, fd_set *rfds, fd_set *wfds, fd_set *efds,
 		return select(nfds, rfds, wfds, efds, NULL);
 #endif
 }
+
+/*! \brief Retrieves the current T38 state of a channel */
+static inline enum ast_t38_state ast_channel_get_t38_state(struct ast_channel *chan)
+{
+	enum ast_t38_state state = T38_STATE_UNAVAILABLE;
+	int datalen = sizeof(state);
+
+	ast_channel_queryoption(chan, AST_OPTION_T38_STATE, &state, &datalen, 0);
+
+	return state;
+}
+
 
 #ifdef DO_CRASH
 #define CRASH do { fprintf(stderr, "!! Forcing immediate crash a-la abort !!\n"); *((int *)0) = 0; } while(0)

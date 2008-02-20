@@ -478,6 +478,7 @@ int ast_unload_resource(const char *resource_name, enum ast_module_unload_mode f
 
 	if (!(mod = find_resource(resource_name, 0))) {
 		AST_LIST_UNLOCK(&module_list);
+		ast_log(LOG_WARNING, "Unload failed, '%s' could not be found\n", resource_name);
 		return 0;
 	}
 
@@ -589,8 +590,16 @@ int ast_module_reload(const char *name)
 		if (name && resource_name_match(name, cur->resource))
 			continue;
 
-		if (!(cur->flags.running || cur->flags.declined))
-			continue;
+		if (!cur->flags.running || cur->flags.declined) {
+			if (!name)
+				continue;
+			ast_log(LOG_NOTICE, "The module '%s' was not properly initialized.  "
+				"Before reloading the module, you must run \"module load %s\" "
+				"and fix whatever is preventing the module from being initialized.\n",
+				name, name);
+			res = 2; /* Don't report that the module was not found */
+			break;
+		}
 
 		if (!info->reload) {	/* cannot be reloaded */
 			if (res < 1)	/* store result if possible */

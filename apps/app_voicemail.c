@@ -427,7 +427,6 @@ struct vm_state {
 #endif
 };
 
-
 #ifdef ODBC_STORAGE
 static char odbc_database[80];
 static char odbc_table[80];
@@ -662,7 +661,7 @@ static int play_record_review(struct ast_channel *chan, char *playfile, char *re
 			signed char record_gain, struct vm_state *vms);
 static int vm_tempgreeting(struct ast_channel *chan, struct ast_vm_user *vmu, struct vm_state *vms, char *fmtc, signed char record_gain);
 static int vm_play_folder_name(struct ast_channel *chan, char *mbox);
-static int notify_new_message(struct ast_channel *chan, struct ast_vm_user *vmu, int msgnum, long duration, char *fmt, char *cidnum, char *cidname);
+static int notify_new_message(struct ast_channel *chan, struct ast_vm_user *vmu, struct vm_state *vms, int msgnum, long duration, char *fmt, char *cidnum, char *cidname);
 static void make_email_file(FILE *p, char *srcemail, struct ast_vm_user *vmu, int msgnum, char *context, char *mailbox, char *cidnum, char *cidname, char *attach, char *format, int duration, int attach_user_voicemail, struct ast_channel *chan, const char *category, int imap);
 static void apply_options(struct ast_vm_user *vmu, const char *options);
 static int is_valid_dtmf(const char *key);
@@ -2841,7 +2840,7 @@ static int copy_message(struct ast_channel *chan, struct ast_vm_user *vmu, int i
 		ast_log(LOG_ERROR, "Recipient mailbox %s@%s is full\n", recip->mailbox, recip->context);
 	}
 	ast_unlock_path(todir);
-	notify_new_message(chan, recip, recipmsgnum, duration, fmt, S_OR(chan->cid.cid_num, NULL), S_OR(chan->cid.cid_name, NULL));
+	notify_new_message(chan, recip, NULL, recipmsgnum, duration, fmt, S_OR(chan->cid.cid_num, NULL), S_OR(chan->cid.cid_name, NULL));
 	
 	return 0;
 }
@@ -3403,7 +3402,11 @@ static int leave_voicemail(struct ast_channel *chan, char *ext, struct leave_vm_
 					}
 					/* Notification and disposal needs to happen after the copy, though. */
 					if (ast_fileexists(fn, NULL, NULL)) {
-						notify_new_message(chan, vmu, msgnum, duration, fmt, S_OR(chan->cid.cid_num, NULL), S_OR(chan->cid.cid_name, NULL));
+#ifdef IMAP_STORAGE
+						notify_new_message(chan, vmu, vms, msgnum, duration, fmt, S_OR(chan->cid.cid_num, NULL), S_OR(chan->cid.cid_name, NULL));
+#else
+						notify_new_message(chan, vmu, NULL, msgnum, duration, fmt, S_OR(chan->cid.cid_num, NULL), S_OR(chan->cid.cid_name, NULL));
+#endif
 						DISPOSE(dir, msgnum);
 					}
 				}
@@ -3471,11 +3474,20 @@ static int save_to_folder(struct ast_vm_user *vmu, struct vm_state *vms, int msg
 	/* simple. huh? */
 	long res;
 	char sequence[10];
+	char mailbox[256];
 
 	/* if save to Old folder, just leave in INBOX */
 	if (box == 1) return 10;
 	/* get the real IMAP message number for this message */
 	snprintf(sequence, sizeof(sequence), "%ld", vms->msgArray[msg]);
+	/* Create the folder if it don't exist */
+	imap_mailbox_name(mailbox, sizeof(mailbox), vms, box, 1); /* Get the full mailbox name */
+	ast_debug(5, "Checking if folder exists: %s\n",mailbox);
+	if (mail_create(vms->mailstream, mailbox) == NIL) 
+		ast_debug(5, "Folder exists.\n");
+	else
+		ast_log(LOG_NOTICE, "Folder %s created!\n",mbox(box));
+
 	ast_debug(3, "Copying sequence %s to mailbox %s\n", sequence, mbox(box));
 	res = mail_copy(vms->mailstream, sequence, (char *)mbox(box));
 	if (res == 1) return 0;
@@ -4183,7 +4195,7 @@ static void queue_mwi_event(const char *mbox, int new, int old)
 		AST_EVENT_IE_END);
 }
 
-static int notify_new_message(struct ast_channel *chan, struct ast_vm_user *vmu, int msgnum, long duration, char *fmt, char *cidnum, char *cidname)
+static int notify_new_message(struct ast_channel *chan, struct ast_vm_user *vmu, struct vm_state *vms, int msgnum, long duration, char *fmt, char *cidnum, char *cidname)
 {
 	char todir[PATH_MAX], fn[PATH_MAX], ext_context[PATH_MAX], *stringp;
 	int newmsgs = 0, oldmsgs = 0;
@@ -4230,9 +4242,6 @@ static int notify_new_message(struct ast_channel *chan, struct ast_vm_user *vmu,
 	if (ast_test_flag(vmu, VM_DELETE))
 		DELETE(todir, msgnum, fn);
 
-#ifdef IMAP_STORAGE
-	DELETE(todir, msgnum, fn);
-#endif
 	/* Leave voicemail for someone */
 	if (ast_app_has_voicemail(ext_context, NULL)) 
 		ast_app_inboxcount(ext_context, &newmsgs, &oldmsgs);
@@ -4241,6 +4250,14 @@ static int notify_new_message(struct ast_channel *chan, struct ast_vm_user *vmu,
 
 	manager_event(EVENT_FLAG_CALL, "MessageWaiting", "Mailbox: %s@%s\r\nWaiting: %d\r\nNew: %d\r\nOld: %d\r\n", vmu->mailbox, vmu->context, ast_app_has_voicemail(ext_context, NULL), newmsgs, oldmsgs);
 	run_externnotify(vmu->context, vmu->mailbox);
+
+#ifdef IMAP_STORAGE
+	DELETE(todir, msgnum, fn);  /* Delete the file, but not the IMAP message */
+	if (ast_test_flag(vmu, VM_DELETE))  { /* Delete the IMAP message if delete = yes */
+		IMAP_DELETE(vms->curdir, vms->curmsg, vms->fn, vms);
+		vms->newmessages--;  /* Fix new message count */
+	}
+#endif
 	return 0;
 }
 
@@ -4414,12 +4431,6 @@ static int forward_message(struct ast_channel *chan, char *context, struct vm_st
 		long duration = 0;
 		char origmsgfile[PATH_MAX], msgfile[PATH_MAX];
 		struct vm_state vmstmp;
-#ifdef IMAP_STORAGE
-		char *myserveremail = serveremail;
-		char buf[1024] = "";
-		int attach_user_voicemail = ast_test_flag((&globalflags), VM_ATTACH);
-#endif
-
 		memcpy(&vmstmp, vms, sizeof(vmstmp));
 
 		make_file(origmsgfile, sizeof(origmsgfile), dir, curmsg);
@@ -4435,8 +4446,9 @@ static int forward_message(struct ast_channel *chan, char *context, struct vm_st
 		if (!cmd) {
 			AST_LIST_TRAVERSE_SAFE_BEGIN(&extensions, vmtmp, list) {
 #ifdef IMAP_STORAGE
-				char *myserveremail;
+				char *myserveremail = serveremail;
 				int attach_user_voicemail;
+				char buf[1024] = "";
 
  				/* Need to get message content */
 	 			ast_debug(3, "Before mail_fetchheaders, curmsg is: %d, imap messages is %lu\n", vms->curmsg, vms->msgArray[vms->curmsg]);
@@ -9451,6 +9463,7 @@ void mm_flags(MAILSTREAM * stream, unsigned long number)
 
 void mm_notify(MAILSTREAM * stream, char *string, long errflg)
 {
+	ast_debug(5, "Entering NOTIFY callback, errflag is %ld, string is %s\n", errflg, string);
 	mm_log (string, errflg);
 }
 

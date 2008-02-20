@@ -104,6 +104,22 @@ struct chanlist {
 	AST_LIST_ENTRY(chanlist) list;
 };
 
+#ifdef CHANNEL_TRACE
+/*! \brief Structure to hold channel context backtrace data */
+struct ast_chan_trace_data {
+	int enabled;
+	AST_LIST_HEAD_NOLOCK(, ast_chan_trace) trace;
+};
+
+/*! \brief Structure to save contexts where an ast_chan has been into */
+struct ast_chan_trace {
+	char context[AST_MAX_CONTEXT];
+	char exten[AST_MAX_EXTENSION];
+	int priority;
+	AST_LIST_ENTRY(ast_chan_trace) entry;
+};
+#endif
+
 /*! \brief the list of registered channel types */
 static AST_LIST_HEAD_NOLOCK_STATIC(backends, chanlist);
 
@@ -313,6 +329,133 @@ static struct ast_cli_entry cli_channel[] = {
 	AST_CLI_DEFINE(handle_cli_core_show_channeltypes, "List available channel types"),
 	AST_CLI_DEFINE(handle_cli_core_show_channeltype,  "Give more details on that channel type")
 };
+
+#ifdef CHANNEL_TRACE
+/*! \brief Destructor for the channel trace datastore */
+static void ast_chan_trace_destroy_cb(void *data)
+{
+	struct ast_chan_trace *trace;
+	struct ast_chan_trace_data *traced = data;
+	while ((trace = AST_LIST_REMOVE_HEAD(&traced->trace, entry))) {
+		ast_free(trace);
+	}
+	ast_free(traced);
+}
+
+/*! \brief Datastore to put the linked list of ast_chan_trace and trace status */
+const struct ast_datastore_info ast_chan_trace_datastore_info = {
+	.type = "ChanTrace",
+	.destroy = ast_chan_trace_destroy_cb
+};
+
+/*! \brief Put the channel backtrace in a string */
+int ast_channel_trace_serialize(struct ast_channel *chan, struct ast_str **buf)
+{
+	int total = 0;
+	struct ast_chan_trace *trace;
+	struct ast_chan_trace_data *traced;
+	struct ast_datastore *store;
+
+	ast_channel_lock(chan);
+	store = ast_channel_datastore_find(chan, &ast_chan_trace_datastore_info, NULL);
+	if (!store) {
+		ast_channel_unlock(chan);
+		return total;
+	}
+	traced = store->data;
+	(*buf)->used = 0;
+	(*buf)->str[0] = '\0';
+	AST_LIST_TRAVERSE(&traced->trace, trace, entry) {
+		if (ast_str_append(buf, 0, "[%d] => %s, %s, %d\n", total, trace->context, trace->exten, trace->priority) < 0) {
+			ast_log(LOG_ERROR, "Data Buffer Size Exceeded!\n");
+			total = -1;
+			break;
+		}
+		total++;
+	}
+	ast_channel_unlock(chan);
+	return total;
+}
+
+/* !\brief Whether or not context tracing is enabled */
+int ast_channel_trace_is_enabled(struct ast_channel *chan)
+{
+	struct ast_datastore *store = ast_channel_datastore_find(chan, &ast_chan_trace_datastore_info, NULL);
+	if (!store)
+		return 0;
+	return ((struct ast_chan_trace_data *)store->data)->enabled;
+}
+
+/*! \brief Update the context backtrace data if tracing is enabled */
+static int ast_channel_trace_data_update(struct ast_channel *chan, struct ast_chan_trace_data *traced)
+{
+	struct ast_chan_trace *trace;
+	if (!traced->enabled)
+		return 0;
+	/* If the last saved context does not match the current one
+	   OR we have not saved any context so far, then save the current context */
+	if ((!AST_LIST_EMPTY(&traced->trace) && strcasecmp(AST_LIST_FIRST(&traced->trace)->context, chan->context)) || 
+	    (AST_LIST_EMPTY(&traced->trace))) {
+		/* Just do some debug logging */
+		if (AST_LIST_EMPTY(&traced->trace))
+			ast_log(LOG_DEBUG, "Setting initial trace context to %s\n", chan->context);
+		else
+			ast_log(LOG_DEBUG, "Changing trace context from %s to %s\n", AST_LIST_FIRST(&traced->trace)->context, chan->context);
+		/* alloc or bail out */
+		trace = ast_malloc(sizeof(*trace));
+		if (!trace) 
+			return -1;
+		/* save the current location and store it in the trace list */
+		ast_copy_string(trace->context, chan->context, sizeof(trace->context));
+		ast_copy_string(trace->exten, chan->exten, sizeof(trace->exten));
+		trace->priority = chan->priority;
+		AST_LIST_INSERT_HEAD(&traced->trace, trace, entry);
+	}
+	return 0;
+}
+
+/*! \brief Update the context backtrace if tracing is enabled */
+int ast_channel_trace_update(struct ast_channel *chan)
+{
+	struct ast_datastore *store = ast_channel_datastore_find(chan, &ast_chan_trace_datastore_info, NULL);
+	if (!store)
+		return 0;
+	return ast_channel_trace_data_update(chan, store->data);
+}
+
+/*! \brief Enable context tracing in the channel */
+int ast_channel_trace_enable(struct ast_channel *chan)
+{
+	struct ast_datastore *store = ast_channel_datastore_find(chan, &ast_chan_trace_datastore_info, NULL);
+	struct ast_chan_trace_data *traced;
+	if (!store) {
+		store = ast_channel_datastore_alloc(&ast_chan_trace_datastore_info, "ChanTrace");
+		if (!store) 
+			return -1;
+		traced = ast_calloc(1, sizeof(*traced));
+		if (!traced) {
+			ast_channel_datastore_free(store);
+			return -1;
+		}	
+		store->data = traced;
+		AST_LIST_HEAD_INIT_NOLOCK(&traced->trace);
+		ast_channel_datastore_add(chan, store);
+	}	
+	((struct ast_chan_trace_data *)store->data)->enabled = 1;
+	ast_channel_trace_data_update(chan, store->data);
+	return 0;
+}
+
+/*! \brief Disable context tracing in the channel */
+int ast_channel_trace_disable(struct ast_channel *chan)
+{
+	struct ast_datastore *store = ast_channel_datastore_find(chan, &ast_chan_trace_datastore_info, NULL);
+	if (!store)
+		return 0;
+	((struct ast_chan_trace_data *)store->data)->enabled = 0;
+	return 0;
+}
+#endif /* CHANNEL_TRACE */
 
 /*! \brief Checks to see if a channel is needing hang up */
 int ast_check_hangup(struct ast_channel *chan)
@@ -2381,7 +2524,7 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 		case AST_FRAME_DTMF_BEGIN:
 			send_dtmf_event(chan, "Received", f->subclass, "Yes", "No");
 			ast_log(LOG_DTMF, "DTMF begin '%c' received on %s\n", f->subclass, chan->name);
-			if ( ast_test_flag(chan, AST_FLAG_DEFER_DTMF | AST_FLAG_END_DTMF_ONLY) || 
+			if ( ast_test_flag(chan, AST_FLAG_DEFER_DTMF | AST_FLAG_END_DTMF_ONLY | AST_FLAG_EMULATE_DTMF) || 
 			    (!ast_tvzero(chan->dtmf_tv) && 
 			      ast_tvdiff_ms(ast_tvnow(), chan->dtmf_tv) < AST_MIN_DTMF_GAP) ) {
 				ast_log(LOG_DTMF, "DTMF begin ignored '%c' on %s\n", f->subclass, chan->name);
@@ -2951,11 +3094,15 @@ static int set_format(struct ast_channel *chan, int fmt, int *rawformat, int *fo
 {
 	int native;
 	int res;
-	
+
 	/* Make sure we only consider audio */
 	fmt &= AST_FORMAT_AUDIO_MASK;
 	
 	native = chan->nativeformats;
+
+	if (!fmt || !native)	/* No audio requested */
+		return 0;	/* Let's try a call without any sounds (video, text) */
+	
 	/* Find a translation path from the native format to one of the desired formats */
 	if (!direction)
 		/* reading */
@@ -3194,12 +3341,17 @@ struct ast_channel *ast_request(const char *type, int format, void *data, int *c
 
 		capabilities = chan->tech->capabilities;
 		fmt = format & AST_FORMAT_AUDIO_MASK;
-		res = ast_translator_best_choice(&fmt, &capabilities);
-		if (res < 0) {
-			ast_log(LOG_WARNING, "No translator path exists for channel type %s (native 0x%x) to 0x%x\n", type, chan->tech->capabilities, format);
-			*cause = AST_CAUSE_BEARERCAPABILITY_NOTAVAIL;
-			AST_RWLIST_UNLOCK(&channels);
-			return NULL;
+		if (fmt) {
+			/* We have audio - is it possible to connect the various calls to each other? 
+				(Avoid this check for calls without audio, like text+video calls)
+			*/
+			res = ast_translator_best_choice(&fmt, &capabilities);
+			if (res < 0) {
+				ast_log(LOG_WARNING, "No translator path exists for channel type %s (native 0x%x) to 0x%x\n", type, chan->tech->capabilities, format);
+				*cause = AST_CAUSE_BEARERCAPABILITY_NOTAVAIL;
+				AST_RWLIST_UNLOCK(&channels);
+				return NULL;
+			}
 		}
 		AST_RWLIST_UNLOCK(&channels);
 		if (!chan->tech->requester)
@@ -3340,6 +3492,11 @@ static int ast_channel_make_compatible_helper(struct ast_channel *from, struct a
 	/* Set up translation from the 'from' channel to the 'to' channel */
 	src = from->nativeformats;
 	dst = to->nativeformats;
+
+	/* If there's no audio in this call, don't bother with trying to find a translation path */
+	if ((src & AST_FORMAT_AUDIO_MASK) == 0 || (dst & AST_FORMAT_AUDIO_MASK) == 0)
+		return 0;
+
 	if (ast_translator_best_choice(&dst, &src) < 0) {
 		ast_log(LOG_WARNING, "No path to translate from %s(%d) to %s(%d)\n", from->name, src, to->name, dst);
 		return -1;
@@ -4059,7 +4216,10 @@ int ast_channel_early_bridge(struct ast_channel *c0, struct ast_channel *c1)
 }
 
 /*! \brief Send manager event for bridge link and unlink events.
-	\param type	1 for core, 2 for native
+ * \param onoff Link/Unlinked 
+ * \param type 1 for core, 2 for native
+ * \param c0 first channel in bridge
+ * \param c1 second channel in bridge
 */
 static void manager_bridge_event(int onoff, int type, struct ast_channel *c0, struct ast_channel *c1)
 {
@@ -4322,23 +4482,28 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 /*! \brief Sets an option on a channel */
 int ast_channel_setoption(struct ast_channel *chan, int option, void *data, int datalen, int block)
 {
-	int res;
-
-	if (chan->tech->setoption) {
-		res = chan->tech->setoption(chan, option, data, datalen);
-		if (res < 0)
-			return res;
-	} else {
+	if (!chan->tech->setoption) {
 		errno = ENOSYS;
 		return -1;
 	}
-	if (block) {
-		/* XXX Implement blocking -- just wait for our option frame reply, discarding
-		   intermediate packets. XXX */
+
+	if (block)
 		ast_log(LOG_ERROR, "XXX Blocking not implemented yet XXX\n");
+
+	return chan->tech->setoption(chan, option, data, datalen);
+}
+
+int ast_channel_queryoption(struct ast_channel *chan, int option, void *data, int *datalen, int block)
+{
+	if (!chan->tech->queryoption) {
+		errno = ENOSYS;
 		return -1;
 	}
-	return 0;
+
+	if (block)
+		ast_log(LOG_ERROR, "XXX Blocking not implemented yet XXX\n");
+
+	return chan->tech->queryoption(chan, option, data, datalen);
 }
 
 struct tonepair_def {

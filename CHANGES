@@ -47,6 +47,7 @@ AMI - The manager (TCP/TLS/HTTP)
   * Added new action insert to add new variable to category at specified line.
   * Updated action newcat to allow new category to be inserted in file above another
     existing category.
+  * Added new event "JitterBufStats" in the IAX2 channel
 
 Dialplan functions
 ------------------
@@ -364,6 +365,10 @@ Other Dialplan Application Changes
      direct options to the app.
   * AMD() has a new "maximum word length" option. "show application AMD" from the CLI
      for more details
+  * GotoIfTime() now may branch based on a "false" condition, like other Goto-related applications
+  * The ChannelRedirect application no longer exits the dialplan if the given channel
+     does not exist. It will now set the CHANNELREDIRECT_STATUS variable to SUCCESS upon success
+     or NOCHANNEL if the given channel was not found.
 
 Music On Hold Changes
 ---------------------
@@ -512,3 +517,6 @@ Miscellaneous
      do not come from the remote party.
   * Added the 'n' option to the SpeechBackground application to tell it to not
      answer the channel if it has not already been answered.
+  * Added a compiler flag, CHANNEL_TRACE, which permits channel tracing to be
+     turned on, via the CHANNEL(trace) dialplan function.  Could be useful for
+     dialplan debugging.

@@ -2784,7 +2784,9 @@ static int schedule_delivery(struct iax_frame *fr, int updatehistory, int fromtr
 	int type, len;
 	int ret;
 	int needfree = 0;
-
+	struct ast_channel *owner = NULL;
+	struct ast_channel *bridge = NULL;
+	
 	/* Attempt to recover wrapped timestamps */
 	unwrap_timestamp(fr);
 
@@ -2815,11 +2817,12 @@ static int schedule_delivery(struct iax_frame *fr, int updatehistory, int fromtr
 		return -1;
 	}
 
+	if ((owner = iaxs[fr->callno]->owner))
+		bridge = ast_bridged_channel(owner);
+
 	/* if the user hasn't requested we force the use of the jitterbuffer, and we're bridged to
 	 * a channel that can accept jitter, then flush and suspend the jb, and send this frame straight through */
-	if( (!ast_test_flag(iaxs[fr->callno], IAX_FORCEJITTERBUF)) &&
-	    iaxs[fr->callno]->owner && ast_bridged_channel(iaxs[fr->callno]->owner) &&
-	    (ast_bridged_channel(iaxs[fr->callno]->owner)->tech->properties & AST_CHAN_TP_WANTSJITTER)) {
+	if ( (!ast_test_flag(iaxs[fr->callno], IAX_FORCEJITTERBUF)) && owner && bridge && (bridge->tech->properties & AST_CHAN_TP_WANTSJITTER) ) {
 		jb_frame frame;
 
 		/* deliver any frames in the jb */
@@ -7300,6 +7303,61 @@ static void save_osptoken(struct iax_frame *fr, struct iax_ies *ies)
 	ast_string_field_set(iaxs[fr->callno], osptoken, full_osptoken);
 }
 
+static void log_jitterstats(unsigned short callno)
+{
+	int localjitter = -1, localdelay = 0, locallost = -1, locallosspct = -1, localdropped = 0, localooo = -1, localpackets = -1;
+	jb_info jbinfo;
+
+	ast_mutex_lock(&iaxsl[callno]);
+	if (iaxs[callno] && iaxs[callno]->owner && iaxs[callno]->owner->name) {
+		if(ast_test_flag(iaxs[callno], IAX_USEJITTERBUF)) {
+			jb_getinfo(iaxs[callno]->jb, &jbinfo);
+			localjitter = jbinfo.jitter;
+			localdelay = jbinfo.current - jbinfo.min;
+			locallost = jbinfo.frames_lost;
+			locallosspct = jbinfo.losspct/1000;
+			localdropped = jbinfo.frames_dropped;
+			localooo = jbinfo.frames_ooo;
+			localpackets = jbinfo.frames_in;
+		}
+		ast_verb(3, "JB STATS:%s ping=%d ljitterms=%d ljbdelayms=%d ltotlost=%d lrecentlosspct=%d ldropped=%d looo=%d lrecvd=%d rjitterms=%d rjbdelayms=%d rtotlost=%d rrecentlosspct=%d rdropped=%d rooo=%d rrecvd=%d\n",
+			iaxs[callno]->owner->name,
+			iaxs[callno]->pingtime,
+			localjitter,
+			localdelay,
+			locallost,
+			locallosspct,
+			localdropped,
+			localooo,
+			localpackets,
+			iaxs[callno]->remote_rr.jitter,
+			iaxs[callno]->remote_rr.delay,
+			iaxs[callno]->remote_rr.losscnt,
+			iaxs[callno]->remote_rr.losspct/1000,
+			iaxs[callno]->remote_rr.dropped,
+			iaxs[callno]->remote_rr.ooo,
+			iaxs[callno]->remote_rr.packets);
+		manager_event(EVENT_FLAG_REPORTING, "JitterBufStats", "Owner: %s\r\nPing: %d\r\nLocalJitter: %d\r\nLocalJBDelay: %d\t\nLocalTotalLost: %d LocalLossPercent: %d\r\nLocalDropped: %d\r\nLocalooo: %d\r\nLocalReceived: %d\r\nRemoteJitter: %d\r\nRemoteJBDelay: %d\r\nRemoteTotalLost: %d\r\nRemoteLossPercent: %d\r\nRemoteDropped: %d\r\nRemoteooo: %d\r\nRemoteReceived: %d\r\n",
+			iaxs[callno]->owner->name,
+			iaxs[callno]->pingtime,
+			localjitter,
+			localdelay,
+			locallost,
+			locallosspct,
+			localdropped,
+			localooo,
+			localpackets,
+			iaxs[callno]->remote_rr.jitter,
+			iaxs[callno]->remote_rr.delay,
+			iaxs[callno]->remote_rr.losscnt,
+			iaxs[callno]->remote_rr.losspct/1000,
+			iaxs[callno]->remote_rr.dropped,
+			iaxs[callno]->remote_rr.ooo,
+			iaxs[callno]->remote_rr.packets);
+	}
+	ast_mutex_unlock(&iaxsl[callno]);
+}
+
 static int socket_process(struct iax2_thread *thread);
 
 /*!
@@ -8463,6 +8521,9 @@ retryowner2:
 				iaxs[fr->callno]->pingtime =  calc_timestamp(iaxs[fr->callno], 0, &f) - fr->ts;
 				/* save RR info */
 				save_rr(fr, &ies);
+
+				/* Good time to write jb stats for this call */
+				log_jitterstats(fr->callno);
 
 				if (iaxs[fr->callno]->peerpoke) {
 					peer = iaxs[fr->callno]->peerpoke;

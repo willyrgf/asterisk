@@ -77,6 +77,9 @@ Applications:
 * ChanIsAvail() now has a 't' option, which allows the specified device
   to be queried for state without consulting the channel drivers. This
   performs mostly a 'ChanExists' sort of function.
+* ChannelRedirect() will not terminate the channel that fails to do a
+  channelredirect as it has done previously. Instead CHANNELREDIRECT_STATUS
+  will reflect if the attempt was successful of not.
 * SetCallerPres() has been replaced with the CALLERPRES() dialplan function
   and is now deprecated.
 * DISA()'s fifth argument is now an options argument.  If you have previously
@@ -92,6 +95,11 @@ Applications:
   you need to do so explicitly in your dialplan.
 * Privacy() no longer uses privacy.conf, so any options must be specified
   directly in the application arguments.
+* MusicOnHold application now has duration parameter which allows specifying
+  timeout in seconds.
+* WaitMusicOnHold application is now deprecated in favor of extended MusicOnHold.
+* SetMusicOnHold is now deprecated. You should use Set(CHANNEL(musicclass)=...)
+  instead.
 
 Dialplan Functions:
 
@@ -154,6 +162,9 @@ Configuration:
 * pbx_dundi.c: tos parameter changed to use new values. Old values like lowdelay,
   lowcost and other is not acceptable now. Look into qos.tex for description of 
   this parameter.
+
+* queues.conf: the queue-lessthan sound file option is no longer available, and the
+  queue-round-seconds option no longer takes '1' as a valid parameter.
 
 Manager:
 

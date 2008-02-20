@@ -98,6 +98,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/smdi.h"
 #include "asterisk/astobj.h"
 #include "asterisk/event.h"
+#include "asterisk/devicestate.h"
 
 #define SMDI_MD_WAIT_TIMEOUT 1500 /* 1.5 seconds */
 
@@ -684,6 +685,7 @@ static struct zt_pvt {
 	char charge_number[50];
 	char gen_add_number[50];
 	char gen_dig_number[50];
+	char orig_called_num[50];
 	unsigned char gen_add_num_plan;
 	unsigned char gen_add_nai;
 	unsigned char gen_add_pres_ind;
@@ -5729,6 +5731,8 @@ static int zt_indicate(struct ast_channel *chan, int condition, const void *data
 					isup_cpg(p->ss7->ss7, p->ss7call, CPG_EVENT_INBANDINFO);
 					p->progress = 1;
 					ss7_rel(p->ss7);
+					/* enable echo canceler here on SS7 calls */
+					zt_enable_ec(p);
 
 				}
 			}
@@ -5987,6 +5991,8 @@ static struct ast_channel *zt_new(struct zt_pvt *i, int state, int startpbx, int
 	/* Configure the new channel jb */
 	ast_jb_configure(tmp, &global_jbconf);
 
+	ast_device_state_changed_literal(tmp->name);
+
 	for (v = i->vars ; v ; v = v->next)
                 pbx_builtin_setvar_helper(tmp, v->name, v->value);
 
@@ -6041,15 +6047,14 @@ static int zt_wink(struct zt_pvt *p, int index)
 	return 0;
 }
 
-/*! enable or disable the chan_zap Do-Not-Disturb mode for a Zaptel channel
- * @zapchan "Physical" Zaptel channel (e.g: Zap/5)
- * @on: 1 to enable, 0 to disable
+/*! \brief enable or disable the chan_zap Do-Not-Disturb mode for a Zaptel channel
+ * \param zapchan "Physical" Zaptel channel (e.g: Zap/5)
+ * \param on 1 to enable, 0 to disable
  *
  * chan_zap has a DND (Do Not Disturb) mode for each zapchan (physical 
  * zaptel channel). Use this to enable or disable it.
  *
- * \fixme the use of the word "channel" for those zapchans is really
- * confusing.
+ * \bug the use of the word "channel" for those zapchans is really confusing.
  */
 static void zap_dnd(struct zt_pvt *zapchan, int on)
 {
@@ -8364,7 +8369,17 @@ static struct zt_pvt *mkintf(int channel, struct zt_chan_conf conf, struct zt_pr
 		tmp->echocancel = conf.chan.echocancel;
 		tmp->echotraining = conf.chan.echotraining;
 		tmp->pulse = conf.chan.pulse;
-		tmp->echocanbridged = conf.chan.echocanbridged;
+#if defined(HAVE_ZAPTEL_ECHOCANPARAMS)
+		if (tmp->echocancel.head.tap_length) {
+#else
+		if (tmp->echocancel) {
+#endif
+			tmp->echocanbridged = conf.chan.echocanbridged;
+		} else {
+			if (conf.chan.echocanbridged)
+				ast_log(LOG_NOTICE, "echocancelwhenbridged requires echocancel to be enabled; ignoring\n");
+			tmp->echocanbridged = 0;
+		}
 		tmp->busydetect = conf.chan.busydetect;
 		tmp->busycount = conf.chan.busycount;
 		tmp->busy_tonelength = conf.chan.busy_tonelength;
@@ -8679,7 +8694,10 @@ static struct zt_pvt *chandup(struct zt_pvt *src)
 	}
 	p->destroy = 1;
 	p->next = iflist;
+	p->prev = NULL;
 	iflist = p;
+	if (iflist->next)
+		iflist->next->prev = p;
 	return p;
 }
 	
@@ -8941,26 +8959,27 @@ static int zt_setlaw(int zfd, int law)
 
 #ifdef HAVE_SS7
 
-static int ss7_find_cic(struct zt_ss7 *linkset, int cic)
+static int ss7_find_cic(struct zt_ss7 *linkset, int cic, unsigned int dpc)
 {
 	int i;
 	int winner = -1;
 	for (i = 0; i < linkset->numchans; i++) {
-		if (linkset->pvts[i] && (linkset->pvts[i]->cic == cic)) {
+		if (linkset->pvts[i] && (linkset->pvts[i]->dpc == dpc && linkset->pvts[i]->cic == cic)) {
 			winner = i;
+			break;
 		}
 	}
 	return winner;
 }
 
-static void ss7_handle_cqm(struct zt_ss7 *linkset, int startcic, int endcic)
+static void ss7_handle_cqm(struct zt_ss7 *linkset, int startcic, int endcic, unsigned int dpc)
 {
 	unsigned char status[32];
 	struct zt_pvt *p = NULL;
 	int i, offset;
 
 	for (i = 0; i < linkset->numchans; i++) {
-		if (linkset->pvts[i] && ((linkset->pvts[i]->cic >= startcic) && (linkset->pvts[i]->cic <= endcic))) {
+		if (linkset->pvts[i] && (linkset->pvts[i]->dpc == dpc && ((linkset->pvts[i]->cic >= startcic) && (linkset->pvts[i]->cic <= endcic)))) {
 			p = linkset->pvts[i];
 			offset = p->cic - startcic;
 			status[offset] = 0;
@@ -8979,18 +8998,18 @@ static void ss7_handle_cqm(struct zt_ss7 *linkset, int startcic, int endcic)
 	}
 
 	if (p)
-		isup_cqr(linkset->ss7, startcic, endcic, p->dpc, status);
+		isup_cqr(linkset->ss7, startcic, endcic, dpc, status);
 	else
 		ast_log(LOG_WARNING, "Could not find any equipped circuits within CQM CICs\n");
 	
 }
 
-static inline void ss7_block_cics(struct zt_ss7 *linkset, int startcic, int endcic, unsigned char state[], int block)
+static inline void ss7_block_cics(struct zt_ss7 *linkset, int startcic, int endcic, unsigned int dpc, unsigned char state[], int block)
 {
 	int i;
 
 	for (i = 0; i < linkset->numchans; i++) {
-		if (linkset->pvts[i] && ((linkset->pvts[i]->cic >= startcic) && (linkset->pvts[i]->cic <= endcic))) {
+		if (linkset->pvts[i] && (linkset->pvts[i]->dpc == dpc && ((linkset->pvts[i]->cic >= startcic) && (linkset->pvts[i]->cic <= endcic)))) {
 			if (state) {
 				if (state[i])
 					linkset->pvts[i]->remotelyblocked = block;
@@ -9000,12 +9019,12 @@ static inline void ss7_block_cics(struct zt_ss7 *linkset, int startcic, int endc
 	}
 }
 
-static void ss7_inservice(struct zt_ss7 *linkset, int startcic, int endcic)
+static void ss7_inservice(struct zt_ss7 *linkset, int startcic, int endcic, unsigned int dpc)
 {
 	int i;
 
 	for (i = 0; i < linkset->numchans; i++) {
-		if (linkset->pvts[i] && (linkset->pvts[i]->cic >= startcic) && (linkset->pvts[i]->cic <= endcic))
+		if (linkset->pvts[i] && (linkset->pvts[i]->dpc == dpc && ((linkset->pvts[i]->cic >= startcic) && (linkset->pvts[i]->cic <= endcic))))
 			linkset->pvts[i]->inservice = 1;
 	}
 }
@@ -9099,6 +9118,11 @@ static void ss7_start_call(struct zt_pvt *p, struct zt_ss7 *linkset)
 		pbx_builtin_setvar_helper(c, "SS7_GENERIC_DIGITS", p->gen_dig_number);
 		/* Clear this after we set it */
 		p->gen_dig_number[0] = 0;
+	}
+	if (!ast_strlen_zero(p->orig_called_num)) {
+		pbx_builtin_setvar_helper(c, "SS7_ORIG_CALLED_NUM", p->orig_called_num);
+		/* Clear this after we set it */
+		p->orig_called_num[0] = 0;
 	}
 
 	snprintf(tmp, sizeof(tmp), "%d", p->gen_dig_type);
@@ -9282,7 +9306,7 @@ static void *ss7_linkset(void *data)
 				ast_debug(1, "MTP2 link up\n");
 				break;
 			case ISUP_EVENT_CPG:
-				chanpos = ss7_find_cic(linkset, e->cpg.cic);
+				chanpos = ss7_find_cic(linkset, e->cpg.cic, e->cpg.opc);
 				if (chanpos < 0) {
 					ast_log(LOG_WARNING, "CPG on unconfigured CIC %d\n", e->cpg.cic);
 					break;
@@ -9315,7 +9339,7 @@ static void *ss7_linkset(void *data)
 				break;
 			case ISUP_EVENT_RSC:
 				ast_verbose("Resetting CIC %d\n", e->rsc.cic);
-				chanpos = ss7_find_cic(linkset, e->rsc.cic);
+				chanpos = ss7_find_cic(linkset, e->rsc.cic, e->rsc.opc);
 				if (chanpos < 0) {
 					ast_log(LOG_WARNING, "RSC on unconfigured CIC %d\n", e->rsc.cic);
 					break;
@@ -9331,27 +9355,27 @@ static void *ss7_linkset(void *data)
 				break;
 			case ISUP_EVENT_GRS:
 				ast_debug(1, "Got Reset for CICs %d to %d: Acknowledging\n", e->grs.startcic, e->grs.endcic);
-				chanpos = ss7_find_cic(linkset, e->grs.startcic);
+				chanpos = ss7_find_cic(linkset, e->grs.startcic, e->grs.opc);
 				if (chanpos < 0) {
 					ast_log(LOG_WARNING, "GRS on unconfigured CIC %d\n", e->grs.startcic);
 					break;
 				}
 				p = linkset->pvts[chanpos];
-				isup_gra(ss7, e->grs.startcic, e->grs.endcic, p->dpc);
-				ss7_block_cics(linkset, e->grs.startcic, e->grs.endcic, NULL, 0);
+				isup_gra(ss7, e->grs.startcic, e->grs.endcic, e->grs.opc);
+				ss7_block_cics(linkset, e->grs.startcic, e->grs.endcic, e->grs.opc, NULL, 0);
 				break;
 			case ISUP_EVENT_CQM:
 				ast_debug(1, "Got Circuit group query message from CICs %d to %d\n", e->cqm.startcic, e->cqm.endcic);
-				ss7_handle_cqm(linkset, e->cqm.startcic, e->cqm.endcic);
+				ss7_handle_cqm(linkset, e->cqm.startcic, e->cqm.endcic, e->cqm.opc);
 				break;
 			case ISUP_EVENT_GRA:
 				ast_verbose("Got reset acknowledgement from CIC %d to %d.\n", e->gra.startcic, e->gra.endcic);
-				ss7_inservice(linkset, e->gra.startcic, e->gra.endcic);
-				ss7_block_cics(linkset, e->gra.startcic, e->gra.endcic, e->gra.status, 1);
+				ss7_inservice(linkset, e->gra.startcic, e->gra.endcic, e->gra.opc);
+				ss7_block_cics(linkset, e->gra.startcic, e->gra.endcic, e->gra.opc, e->gra.status, 1);
 				break;
 			case ISUP_EVENT_IAM:
  				ast_debug(1, "Got IAM for CIC %d and called number %s, calling number %s\n", e->iam.cic, e->iam.called_party_num, e->iam.calling_party_num);
-				chanpos = ss7_find_cic(linkset, e->iam.cic);
+				chanpos = ss7_find_cic(linkset, e->iam.cic, e->iam.opc);
 				if (chanpos < 0) {
 					ast_log(LOG_WARNING, "IAM on unconfigured CIC %d\n", e->iam.cic);
 					isup_rel(ss7, e->iam.call, -1);
@@ -9409,6 +9433,7 @@ static void *ss7_linkset(void *data)
 				p->gen_dig_type = e->iam.gen_dig_type;
 				p->gen_dig_scheme = e->iam.gen_dig_scheme;
 				ast_copy_string(p->jip_number, e->iam.jip_number, sizeof(p->jip_number));
+				ast_copy_string(p->orig_called_num, e->iam.orig_called_num, sizeof(p->orig_called_num));
 					
 				/* Set DNID */
 				if (!ast_strlen_zero(e->iam.called_party_num))
@@ -9427,7 +9452,7 @@ static void *ss7_linkset(void *data)
 				ast_mutex_unlock(&p->lock);
 				break;
 			case ISUP_EVENT_COT:
-				chanpos = ss7_find_cic(linkset, e->cot.cic);
+				chanpos = ss7_find_cic(linkset, e->cot.cic, e->cot.opc);
 				if (chanpos < 0) {
 					ast_log(LOG_WARNING, "COT on unconfigured CIC %d\n", e->cot.cic);
 					isup_rel(ss7, e->cot.call, -1);
@@ -9441,7 +9466,7 @@ static void *ss7_linkset(void *data)
 				break;
 			case ISUP_EVENT_CCR:
 				ast_debug(1, "Got CCR request on CIC %d\n", e->ccr.cic);
-				chanpos = ss7_find_cic(linkset, e->ccr.cic);
+				chanpos = ss7_find_cic(linkset, e->ccr.cic, e->ccr.opc);
 				if (chanpos < 0) {
 					ast_log(LOG_WARNING, "CCR on unconfigured CIC %d\n", e->ccr.cic);
 					break;
@@ -9456,7 +9481,7 @@ static void *ss7_linkset(void *data)
 				isup_lpa(linkset->ss7, e->ccr.cic, p->dpc);
 				break;
 			case ISUP_EVENT_REL:
-				chanpos = ss7_find_cic(linkset, e->rel.cic);
+				chanpos = ss7_find_cic(linkset, e->rel.cic, e->rel.opc);
 				if (chanpos < 0) {
 					ast_log(LOG_WARNING, "REL on unconfigured CIC %d\n", e->rel.cic);
 					break;
@@ -9478,7 +9503,7 @@ static void *ss7_linkset(void *data)
 				ast_mutex_unlock(&p->lock);
 				break;
 			case ISUP_EVENT_ACM:
-				chanpos = ss7_find_cic(linkset, e->acm.cic);
+				chanpos = ss7_find_cic(linkset, e->acm.cic, e->acm.opc);
 				if (chanpos < 0) {
 					ast_log(LOG_WARNING, "ACM on unconfigured CIC %d\n", e->acm.cic);
 					isup_rel(ss7, e->acm.call, -1);
@@ -9502,27 +9527,27 @@ static void *ss7_linkset(void *data)
 				}
 				break;
 			case ISUP_EVENT_CGB:
- 				chanpos = ss7_find_cic(linkset, e->cgb.startcic);
+ 				chanpos = ss7_find_cic(linkset, e->cgb.startcic, e->cgb.opc);
  				if (chanpos < 0) {
  					ast_log(LOG_WARNING, "CGB on unconfigured CIC %d\n", e->cgb.startcic);
  					break;
  				}
  				p = linkset->pvts[chanpos];
-				ss7_block_cics(linkset, e->cgb.startcic, e->cgb.endcic, e->cgb.status, 1);
- 				isup_cgba(linkset->ss7, e->cgb.startcic, e->cgb.endcic, p->dpc, e->cgb.status, e->cgb.type);
+				ss7_block_cics(linkset, e->cgb.startcic, e->cgb.endcic, e->cgb.opc, e->cgb.status, 1);
+ 				isup_cgba(linkset->ss7, e->cgb.startcic, e->cgb.endcic, e->cgb.opc, e->cgb.status, e->cgb.type);
 				break;
 			case ISUP_EVENT_CGU:
- 				chanpos = ss7_find_cic(linkset, e->cgu.startcic);
+ 				chanpos = ss7_find_cic(linkset, e->cgu.startcic, e->cgu.opc);
  				if (chanpos < 0) {
  					ast_log(LOG_WARNING, "CGU on unconfigured CIC %d\n", e->cgu.startcic);
  					break;
  				}
  				p = linkset->pvts[chanpos];
-				ss7_block_cics(linkset, e->cgu.startcic, e->cgu.endcic, e->cgu.status, 0);
- 				isup_cgua(linkset->ss7, e->cgu.startcic, e->cgu.endcic, p->dpc, e->cgu.status, e->cgu.type);
+				ss7_block_cics(linkset, e->cgu.startcic, e->cgu.endcic, e->cgu.opc, e->cgu.status, 0);
+ 				isup_cgua(linkset->ss7, e->cgu.startcic, e->cgu.endcic, e->cgu.opc, e->cgu.status, e->cgu.type);
 				break;
 			case ISUP_EVENT_UCIC:
-				chanpos = ss7_find_cic(linkset, e->ucic.cic);
+				chanpos = ss7_find_cic(linkset, e->ucic.cic, e->ucic.opc);
 				if (chanpos < 0) {
 					ast_log(LOG_WARNING, "UCIC on unconfigured CIC %d\n", e->ucic.cic);
 					break;
@@ -9535,7 +9560,7 @@ static void *ss7_linkset(void *data)
 				ast_mutex_unlock(&p->lock);			//doesn't require a SS7 acknowledgement
 				break;
 			case ISUP_EVENT_BLO:
-				chanpos = ss7_find_cic(linkset, e->blo.cic);
+				chanpos = ss7_find_cic(linkset, e->blo.cic, e->blo.opc);
 				if (chanpos < 0) {
 					ast_log(LOG_WARNING, "BLO on unconfigured CIC %d\n", e->blo.cic);
 					break;
@@ -9548,7 +9573,7 @@ static void *ss7_linkset(void *data)
 				isup_bla(linkset->ss7, e->blo.cic, p->dpc);
 				break;
 			case ISUP_EVENT_BLA:
-				chanpos = ss7_find_cic(linkset, e->bla.cic);
+				chanpos = ss7_find_cic(linkset, e->bla.cic, e->bla.opc);
 				if (chanpos < 0) {
 					ast_log(LOG_WARNING, "BLA on unconfigured CIC %d\n", e->bla.cic);
 					break;
@@ -9560,7 +9585,7 @@ static void *ss7_linkset(void *data)
 				ast_mutex_unlock(&p->lock);
 				break;
 			case ISUP_EVENT_UBL:
-				chanpos = ss7_find_cic(linkset, e->ubl.cic);
+				chanpos = ss7_find_cic(linkset, e->ubl.cic, e->ubl.opc);
 				if (chanpos < 0) {
 					ast_log(LOG_WARNING, "UBL on unconfigured CIC %d\n", e->ubl.cic);
 					break;
@@ -9573,7 +9598,7 @@ static void *ss7_linkset(void *data)
 				isup_uba(linkset->ss7, e->ubl.cic, p->dpc);
 				break;
 			case ISUP_EVENT_UBA:
-				chanpos = ss7_find_cic(linkset, e->uba.cic);
+				chanpos = ss7_find_cic(linkset, e->uba.cic, e->uba.opc);
 				if (chanpos < 0) {
 					ast_log(LOG_WARNING, "UBA on unconfigured CIC %d\n", e->uba.cic);
 					break;
@@ -9591,7 +9616,7 @@ static void *ss7_linkset(void *data)
 				else
 					cic = e->anm.cic;
 
-				chanpos = ss7_find_cic(linkset, cic);
+				chanpos = ss7_find_cic(linkset, cic, (e->e == ISUP_EVENT_ANM) ? e->anm.opc : e->con.opc);
 				if (chanpos < 0) {
 					ast_log(LOG_WARNING, "ANM/CON on unconfigured CIC %d\n", cic);
 					isup_rel(ss7, (e->e == ISUP_EVENT_ANM) ? e->anm.call : e->con.call, -1);
@@ -9609,7 +9634,7 @@ static void *ss7_linkset(void *data)
 				}
 				break;
 			case ISUP_EVENT_RLC:
-				chanpos = ss7_find_cic(linkset, e->rlc.cic);
+				chanpos = ss7_find_cic(linkset, e->rlc.cic, e->rlc.opc);
 				if (chanpos < 0) {
 					ast_log(LOG_WARNING, "RLC on unconfigured CIC %d\n", e->rlc.cic);
 					break;
@@ -9624,7 +9649,7 @@ static void *ss7_linkset(void *data)
 					}
 					break;
 			case ISUP_EVENT_FAA:
-				chanpos = ss7_find_cic(linkset, e->faa.cic);
+				chanpos = ss7_find_cic(linkset, e->faa.cic, e->faa.opc);
 				if (chanpos < 0) {
 					ast_log(LOG_WARNING, "FAA on unconfigured CIC %d\n", e->faa.cic);
 					break;
