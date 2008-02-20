@@ -7426,7 +7426,13 @@ static struct zt_pvt *mkintf(int channel, struct zt_chan_conf conf, struct zt_pr
 		tmp->echocancel = conf.chan.echocancel;
 		tmp->echotraining = conf.chan.echotraining;
 		tmp->pulse = conf.chan.pulse;
-		tmp->echocanbridged = conf.chan.echocanbridged;
+		if (tmp->echocancel)
+			tmp->echocanbridged = conf.chan.echocanbridged;
+		else {
+			if (conf.chan.echocanbridged)
+				ast_log(LOG_NOTICE, "echocancelwhenbridged requires echocancel to be enabled; ignoring\n");
+			tmp->echocanbridged = 0;
+		}
 		tmp->busydetect = conf.chan.busydetect;
 		tmp->busycount = conf.chan.busycount;
 		tmp->busy_tonelength = conf.chan.busy_tonelength;
@@ -7706,7 +7712,10 @@ static struct zt_pvt *chandup(struct zt_pvt *src)
 	}
 	p->destroy = 1;
 	p->next = iflist;
+	p->prev = NULL;
 	iflist = p;
+	if (iflist->next)
+		iflist->next->prev = p;
 	return p;
 }
 	
