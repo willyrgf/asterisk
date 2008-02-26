@@ -222,6 +222,7 @@ static AST_LIST_HEAD_STATIC(vmstates, vmstate);
 #define VM_TEMPGREETWARN (1 << 15)  /*!< Remind user tempgreeting is set */
 #define VM_MOVEHEARD     (1 << 16)  /*!< Move a "heard" message to Old after listening to it */
 #define ERROR_LOCK_PATH  -100
+#define ERROR_MAILBOX_FULL	-200
 
 
 enum {
@@ -2975,8 +2976,8 @@ static void run_externnotify(char *context, char *extension)
 		else
 			ast_smdi_mwi_unset(smdi_iface, extension);
 
-		if ((mwi_msg = ast_smdi_mwi_message_wait(smdi_iface, SMDI_MWI_WAIT_TIMEOUT))) {
-			ast_log(LOG_ERROR, "Error executing SMDI MWI change for %s on %s\n", extension, smdi_iface->name);
+		if ((mwi_msg = ast_smdi_mwi_message_wait_station(smdi_iface, SMDI_MWI_WAIT_TIMEOUT, extension))) {
+			ast_log(LOG_ERROR, "Error executing SMDI MWI change for %s\n", extension);
 			if (!strncmp(mwi_msg->cause, "INV", 3))
 				ast_log(LOG_ERROR, "Invalid MWI extension: %s\n", mwi_msg->fwd_st);
 			else if (!strncmp(mwi_msg->cause, "BLK", 3))
@@ -2984,7 +2985,7 @@ static void run_externnotify(char *context, char *extension)
 			ast_log(LOG_WARNING, "The switch reported '%s'\n", mwi_msg->cause);
 			ASTOBJ_UNREF(mwi_msg, ast_smdi_mwi_message_destroy);
 		} else {
-			ast_debug(1, "Successfully executed SMDI MWI change for %s on %s\n", extension, smdi_iface->name);
+			ast_debug(1, "Successfully executed SMDI MWI change for %s\n", extension);
 		}
 	}
 
@@ -3522,7 +3523,7 @@ static int save_to_folder(struct ast_vm_user *vmu, struct vm_state *vms, int msg
 	} else {
 		if (x >= vmu->maxmsg) {
 			ast_unlock_path(ddir);
-			return -1;
+			return ERROR_MAILBOX_FULL;
 		}
 	}
 	make_file(sfn, sizeof(sfn), dir, msg);
@@ -5336,8 +5337,9 @@ static int close_mailbox(struct vm_state *vms, struct ast_vm_user *vmu)
 		} else if (!strcasecmp(vms->curbox, "INBOX") && vms->heard[x] && ast_test_flag(vmu, VM_MOVEHEARD) && !vms->deleted[x]) { 
 			/* Move to old folder before deleting */ 
 			res = save_to_folder(vmu, vms, x, 1);
-			if (res == ERROR_LOCK_PATH) {
+			if (res == ERROR_LOCK_PATH || res == ERROR_MAILBOX_FULL) {
 				/* If save failed do not delete the message */
+				ast_log(LOG_WARNING, "Save failed.  Not moving message: %s.\n", res == ERROR_LOCK_PATH ? "unable to lock path" : "destination folder full");
 				vms->deleted[x] = 0;
 				vms->heard[x] = 0;
 				--x;
@@ -8409,8 +8411,6 @@ static int load_config(int reload)
 			}
 			if (!smdi_iface) {
 				ast_log(LOG_ERROR, "No valid SMDI interface specfied, disabling SMDI voicemail notification\n");
-			} else {
-				ast_debug(1, "Using SMDI port %s\n", smdi_iface->name);
 			}
 		}
 

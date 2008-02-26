@@ -2879,7 +2879,7 @@ static int agi_exec_full(struct ast_channel *chan, void *data, int enhanced, int
 		return -1;
 	}
 	if (dead)
-		ast_log(LOG_NOTICE, "Hungup channel detected, running agi in dead mode.\n");
+		ast_debug(3, "Hungup channel detected, running agi in dead mode.\n");
 	ast_copy_string(buf, data, sizeof(buf));
 	memset(&agi, 0, sizeof(agi));
 	AST_STANDARD_APP_ARGS(args, tmp);
