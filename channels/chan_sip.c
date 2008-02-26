@@ -1434,7 +1434,7 @@ static void sip_dump_history(struct sip_pvt *dialog);
 /*--- Device object handling */
 static struct sip_peer *temp_peer(const char *name);
 static struct sip_peer *build_peer(const char *name, struct ast_variable *v, struct ast_variable *alt, int realtime);
-static struct sip_user *build_user(const char *name, struct ast_variable *v, int realtime);
+static struct sip_user *build_user(const char *name, struct ast_variable *v, struct ast_variable *alt, int realtime);
 static int update_call_counter(struct sip_pvt *fup, int event);
 static void sip_destroy_peer(struct sip_peer *peer);
 static void sip_destroy_user(struct sip_user *user);
@@ -2250,7 +2250,7 @@ static void __sip_ack(struct sip_pvt *p, int seqno, int resp, int sipmethod)
 	}
 	ast_mutex_unlock(&p->lock);
 	if (option_debug)
-		ast_log(LOG_DEBUG, "Stopping retransmission on '%s' of %s %d: Match %s\n", p->callid, resp ? "Response" : "Request", seqno, res ? "Not Found" : "Found");
+		ast_log(LOG_DEBUG, "Stopping retransmission on '%s' of %s %d: Match %s\n", p->callid, resp ? "Response" : "Request", seqno, res == FALSE ? "Not Found" : "Found");
 }
 
 
@@ -2292,7 +2292,7 @@ static int __sip_semi_ack(struct sip_pvt *p, int seqno, int resp, int sipmethod)
 		}
 	}
 	if (option_debug)
-		ast_log(LOG_DEBUG, "(Provisional) Stopping retransmission (but retaining packet) on '%s' %s %d: %s\n", p->callid, resp ? "Response" : "Request", seqno, res ? "Not Found" : "Found");
+		ast_log(LOG_DEBUG, "(Provisional) Stopping retransmission (but retaining packet) on '%s' %s %d: %s\n", p->callid, resp ? "Response" : "Request", seqno, res == -1 ? "Not Found" : "Found");
 	return res;
 }
 
@@ -2787,7 +2787,7 @@ static struct sip_user *realtime_user(const char *username)
 		}
 	}
 
-	user = build_user(username, var, !ast_test_flag(&global_flags[1], SIP_PAGE2_RTCACHEFRIENDS));
+	user = build_user(username, var, NULL, !ast_test_flag(&global_flags[1], SIP_PAGE2_RTCACHEFRIENDS));
 	
 	if (!user) {	/* No user found */
 		ast_variables_destroy(var);
@@ -4669,7 +4669,7 @@ static struct sip_pvt *find_call(struct sip_request *req, struct sockaddr_in *si
 			found = (!strcmp(p->callid, callid));
 		else 
 			found = (!strcmp(p->callid, callid) && 
-			(!pedanticsipchecking || !tag || ast_strlen_zero(p->theirtag) || !strcmp(p->theirtag, tag))) ;
+			(!pedanticsipchecking || ast_strlen_zero(tag) || ast_strlen_zero(p->theirtag) || !strcmp(p->theirtag, tag))) ;
 
 		if (option_debug > 4)
 			ast_log(LOG_DEBUG, "= %s Their Call ID: %s Their Tag %s Our tag: %s\n", found ? "Found" : "No match", p->callid, p->theirtag, p->tag);
@@ -14924,6 +14924,18 @@ static int handle_request_subscribe(struct sip_pvt *p, struct sip_request *req, 
 	}
 
 	if (!ast_test_flag(req, SIP_PKT_IGNORE) && !resubscribe) {	/* Set up dialog, new subscription */
+		const char *to = get_header(req, "To");
+		char totag[128];
+
+		/* Check to see if a tag was provided, if so this is actually a resubscription of a dialog we no longer know about */
+		if (!ast_strlen_zero(to) && gettag(req, "To", totag, sizeof(totag))) {
+			if (ast_test_flag(req, SIP_PKT_DEBUG))
+				ast_verbose("Received resubscription for a dialog we no longer know about. Telling remote side to subscribe again.\n");
+			transmit_response(p, "481 Subscription does not exist", req);
+			ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);
+			return 0;
+		}
+
 		/* Use this as the basis */
 		if (ast_test_flag(req, SIP_PKT_DEBUG))
 			ast_verbose("Creating new subscription\n");
@@ -16396,7 +16408,7 @@ static struct sip_auth *find_realm_authentication(struct sip_auth *authlist, con
 }
 
 /*! \brief Initiate a SIP user structure from configuration (configuration or realtime) */
-static struct sip_user *build_user(const char *name, struct ast_variable *v, int realtime)
+static struct sip_user *build_user(const char *name, struct ast_variable *v, struct ast_variable *alt, int realtime)
 {
 	struct sip_user *user;
 	int format;
@@ -16427,7 +16439,7 @@ static struct sip_user *build_user(const char *name, struct ast_variable *v, int
 	strcpy(user->language, default_language);
 	strcpy(user->mohinterpret, default_mohinterpret);
 	strcpy(user->mohsuggest, default_mohsuggest);
-	for (; v; v = v->next) {
+	for (; v || ((v = alt) && !(alt=NULL)); v = v->next) {
 		if (handle_common_options(&userflags[0], &mask[0], v))
 			continue;
 
@@ -17259,6 +17271,12 @@ static int reload_config(enum channelreloadreason reason)
 				hassip = ast_variable_retrieve(ucfg, cat, "hassip");
 				registersip = ast_variable_retrieve(ucfg, cat, "registersip");
 				if (ast_true(hassip) || (!hassip && genhassip)) {
+					user = build_user(cat, gen, ast_variable_browse(ucfg, cat), 0);
+					if (user) {
+						ASTOBJ_CONTAINER_LINK(&userl,user);
+						ASTOBJ_UNREF(user, sip_destroy_user);
+						user_count++;
+					}
 					peer = build_peer(cat, gen, ast_variable_browse(ucfg, cat), 0);
 					if (peer) {
 						ast_device_state_changed("SIP/%s", peer->name);
@@ -17320,7 +17338,7 @@ static int reload_config(enum channelreloadreason reason)
 				continue;
 			}
 			if (is_user) {
-				user = build_user(cat, ast_variable_browse(cfg, cat), 0);
+				user = build_user(cat, ast_variable_browse(cfg, cat), NULL, 0);
 				if (user) {
 					ASTOBJ_CONTAINER_LINK(&userl,user);
 					ASTOBJ_UNREF(user, sip_destroy_user);
