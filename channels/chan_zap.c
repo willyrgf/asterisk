@@ -2219,7 +2219,7 @@ static void destroy_zt_pvt(struct zt_pvt **pvt)
 	if (p->next)
 		p->next->prev = p->prev;
 	if (p->use_smdi)
-		ASTOBJ_UNREF(p->smdi_iface, ast_smdi_interface_destroy);
+		ast_smdi_interface_unref(p->smdi_iface);
 	ast_mutex_destroy(&p->lock);
 	free(p);
 	*pvt = NULL;
@@ -6938,12 +6938,6 @@ static void *do_monitor(void *data)
 					} else {
 						ast_log(LOG_WARNING, "Read failed with %d: %s\n", res, strerror(errno));
 					}
-					if (option_debug)
-						ast_log(LOG_DEBUG, "Monitor doohicky got event %s on channel %d\n", event2str(res), i->channel);
-					/* Don't hold iflock while handling init events -- race with chlock */
-					ast_mutex_unlock(&iflock);
-					handle_init_event(i, res);
-					ast_mutex_lock(&iflock);	
 				}
 				if (pollres & POLLPRI) {
 					if (i->owner || i->subs[SUB_REAL].owner) {
