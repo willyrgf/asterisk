@@ -2818,7 +2818,7 @@ static int do_message(struct mansession *s)
  */
 static void *session_do(void *data)
 {
-	struct server_instance *ser = data;
+	struct ast_tcptls_server_instance *ser = data;
 	struct mansession *s = ast_calloc(1, sizeof(*s));
 	int flags;
 	int res;
@@ -3562,17 +3562,17 @@ generic_callback_out:
 	return out;
 }
 
-static struct ast_str *manager_http_callback(struct server_instance *ser, const char *uri, struct ast_variable *params, int *status, char **title, int *contentlength)
+static struct ast_str *manager_http_callback(struct ast_tcptls_server_instance *ser, const char *uri, struct ast_variable *params, int *status, char **title, int *contentlength)
 {
 	return generic_http_callback(FORMAT_HTML, &ser->requestor, uri, params, status, title, contentlength);
 }
 
-static struct ast_str *mxml_http_callback(struct server_instance *ser, const char *uri, struct ast_variable *params, int *status, char **title, int *contentlength)
+static struct ast_str *mxml_http_callback(struct ast_tcptls_server_instance *ser, const char *uri, struct ast_variable *params, int *status, char **title, int *contentlength)
 {
 	return generic_http_callback(FORMAT_XML, &ser->requestor, uri, params, status, title, contentlength);
 }
 
-static struct ast_str *rawman_http_callback(struct server_instance *ser, const char *uri, struct ast_variable *params, int *status, char **title, int *contentlength)
+static struct ast_str *rawman_http_callback(struct ast_tcptls_server_instance *ser, const char *uri, struct ast_variable *params, int *status, char **title, int *contentlength)
 {
 	return generic_http_callback(FORMAT_RAW, &ser->requestor, uri, params, status, title, contentlength);
 }
@@ -3618,7 +3618,7 @@ static struct server_args ami_desc = {
 	.poll_timeout = 5000,	/* wake up every 5 seconds */
 	.periodic_fn = purge_old_stuff,
 	.name = "AMI server",
-	.accept_fn = server_root,	/* thread doing the accept() */
+	.accept_fn = ast_tcptls_server_root,	/* thread doing the accept() */
 	.worker_fn = session_do,	/* thread handling the session */
 };
 
@@ -3628,7 +3628,7 @@ static struct server_args amis_desc = {
 	.tls_cfg = &ami_tls_cfg, 
 	.poll_timeout = -1,	/* the other does the periodic cleanup */
 	.name = "AMI TLS server",
-	.accept_fn = server_root,	/* thread doing the accept() */
+	.accept_fn = ast_tcptls_server_root,	/* thread doing the accept() */
 	.worker_fn = session_do,	/* thread handling the session */
 };
 
@@ -3937,9 +3937,9 @@ static int __init_manager(int reload)
 
 	manager_event(EVENT_FLAG_SYSTEM, "Reload", "Module: Manager\r\nStatus: %s\r\nMessage: Manager reload Requested\r\n", manager_enabled ? "Enabled" : "Disabled");
 
-	server_start(&ami_desc);
-	if (ssl_setup(amis_desc.tls_cfg))
-		server_start(&amis_desc);
+	ast_tcptls_server_start(&ami_desc);
+	if (ast_ssl_setup(amis_desc.tls_cfg))
+		ast_tcptls_server_start(&amis_desc);
 	return 0;
 }
 
