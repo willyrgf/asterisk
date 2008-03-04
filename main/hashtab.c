@@ -45,12 +45,12 @@ static void *ast_hashtab_lookup_internal(struct ast_hashtab *tab, const void *ob
 
 int ast_hashtab_compare_strings(const void *a, const void *b)
 {
-	return strcmp((char*)a,(char*)b);
+	return strcmp(a, b);
 }
 
 int ast_hashtab_compare_strings_nocase(const void *a, const void *b)
 {
-	return strcasecmp((const char*)a,(const char*)b);
+	return strcasecmp(a, b);
 }
 
 int ast_hashtab_compare_ints(const void *a, const void *b)
@@ -165,7 +165,7 @@ unsigned int ast_hashtab_hash_string(const void *obj)
 
 unsigned int ast_hashtab_hash_string_sax(const void *obj) /* from Josh */
 {
-	unsigned char *str = (unsigned char *) obj;
+	const unsigned char *str = obj;
 	unsigned int total = 0, c = 0;
 
 	while ((c = *str++))
@@ -176,7 +176,7 @@ unsigned int ast_hashtab_hash_string_sax(const void *obj) /* from Josh */
 
 unsigned int ast_hashtab_hash_string_nocase(const void *obj)
 {
-	unsigned char *str = (unsigned char*)obj;
+	const unsigned char *str = obj;
 	unsigned int total;
 
 	for (total = 0; *str; str++) {
