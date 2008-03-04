@@ -1616,7 +1616,7 @@ struct ast_channel *ast_waitfor_nandfds(struct ast_channel **c, int n, int *fds,
 	int *exception, int *outfd, int *ms)
 {
 	struct timeval start = { 0 , 0 };
-	struct pollfd *pfds;
+	struct pollfd *pfds = NULL;
 	int res;
 	long rms;
 	int x, y, max;
@@ -1627,11 +1627,12 @@ struct ast_channel *ast_waitfor_nandfds(struct ast_channel **c, int n, int *fds,
 	struct fdmap {
 		int chan;
 		int fdno;
-	} *fdmap;
+	} *fdmap = NULL;
 
-	sz = n * AST_MAX_FDS + nfds;
-	pfds = alloca(sizeof(*pfds) * sz);
-	fdmap = alloca(sizeof(*fdmap) * sz);
+	if ((sz = n * AST_MAX_FDS + nfds)) {
+		pfds = alloca(sizeof(*pfds) * sz);
+		fdmap = alloca(sizeof(*fdmap) * sz);
+	}
 
 	if (outfd)
 		*outfd = -99999;
@@ -2166,9 +2167,16 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 			}
 			break;
 		case AST_FRAME_NULL:
+			/* The EMULATE_DTMF flag must be cleared here as opposed to when the duration
+			 * is reached , because we want to make sure we pass at least one
+			 * voice frame through before starting the next digit, to ensure a gap
+			 * between DTMF digits. */
 			if (ast_test_flag(chan, AST_FLAG_EMULATE_DTMF)) {
 				struct timeval now = ast_tvnow();
-				if (ast_tvdiff_ms(now, chan->dtmf_tv) >= chan->emulate_dtmf_duration) {
+				if (!chan->emulate_dtmf_duration) {
+					ast_clear_flag(chan, AST_FLAG_EMULATE_DTMF);
+					chan->emulate_dtmf_digit = 0;
+				} else if (ast_tvdiff_ms(now, chan->dtmf_tv) >= chan->emulate_dtmf_duration) {
 					chan->emulate_dtmf_duration = 0;
 					ast_frfree(f);
 					f = &chan->dtmff;
