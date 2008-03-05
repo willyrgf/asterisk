@@ -811,13 +811,23 @@ uninstall-all: _uninstall
 
 menuconfig: menuselect
 
+cmenuconfig: cmenuselect
+
 gmenuconfig: gmenuselect
+
+nmenuconfig: nmenuselect
 
 menuselect: menuselect/menuselect menuselect-tree
 	-@menuselect/menuselect $(GLOBAL_MAKEOPTS) $(USER_MAKEOPTS) menuselect.makeopts && (echo "menuselect changes saved!"; rm -f channels/h323/Makefile.ast main/asterisk) || echo "menuselect changes NOT saved!"
 
+cmenuselect: menuselect/cmenuselect menuselect-tree
+	-@menuselect/cmenuselect $(GLOBAL_MAKEOPTS) $(USER_MAKEOPTS) menuselect.makeopts && (echo "menuselect changes saved!"; rm -f channels/h323/Makefile.ast main/asterisk) || echo "menuselect changes NOT saved!"
+
 gmenuselect: menuselect/gmenuselect menuselect-tree
 	-@menuselect/gmenuselect $(GLOBAL_MAKEOPTS) $(USER_MAKEOPTS) menuselect.makeopts && (echo "menuselect changes saved!"; rm -f channels/h323/Makefile.ast main/asterisk) || echo "menuselect changes NOT saved!"
+
+nmenuselect: menuselect/nmenuselect menuselect-tree
+	-@menuselect/nmenuselect $(GLOBAL_MAKEOPTS) $(USER_MAKEOPTS) menuselect.makeopts && (echo "menuselect changes saved!"; rm -f channels/h323/Makefile.ast main/asterisk) || echo "menuselect changes NOT saved!"
 
 # options for make in menuselect/
 MAKE_MENUSELECT=CC="$(HOST_CC)" CXX="$(CXX)" LD="" AR="" RANLIB="" CFLAGS="" $(MAKE) -C menuselect CONFIGURE_SILENT="--silent"
@@ -825,8 +835,14 @@ MAKE_MENUSELECT=CC="$(HOST_CC)" CXX="$(CXX)" LD="" AR="" RANLIB="" CFLAGS="" $(M
 menuselect/menuselect: menuselect/makeopts
 	$(MAKE_MENUSELECT)
 
+menuselect/cmenuselect: menuselect/makeopts
+	$(MAKE_MENUSELECT) cmenuselect
+
 menuselect/gmenuselect: menuselect/makeopts
 	$(MAKE_MENUSELECT) gmenuselect
+
+menuselect/nmenuselect: menuselect/makeopts
+	$(MAKE_MENUSELECT) nmenuselect
 
 menuselect/makeopts:
 	$(MAKE_MENUSELECT) makeopts
