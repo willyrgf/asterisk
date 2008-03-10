@@ -102,11 +102,6 @@ int check_cdr_enabled()
 	return enabled;
 }
 
-int ast_cdr_log_unanswered(void)
-{
-	return unanswered;
-}
-
 /*! Register a CDR driver. Each registered CDR driver generates a CDR 
 	\return 0 on success, -1 on failure 
 */
@@ -205,11 +200,13 @@ static void cdr_get_tv(struct timeval tv, const char *fmt, char *buf, int bufsiz
 {
 	if (fmt == NULL) {	/* raw mode */
 		snprintf(buf, bufsize, "%ld.%06ld", (long)tv.tv_sec, (long)tv.tv_usec);
-	} else {  
-		struct ast_tm tm;
-
-		ast_localtime(&tv, &tm, NULL);
-		ast_strftime(buf, bufsize, fmt, &tm);
+	} else {
+		if (tv.tv_sec) {
+			struct ast_tm tm;
+			
+			ast_localtime(&tv, &tm, NULL);
+			ast_strftime(buf, bufsize, fmt, &tm);
+		}
 	}
 }
 
@@ -985,6 +982,12 @@ static void post_cdr(struct ast_cdr *cdr)
 	struct ast_cdr_beitem *i;
 
 	for ( ; cdr ; cdr = cdr->next) {
+		if (!unanswered && cdr->disposition < AST_CDR_ANSWERED && (ast_strlen_zero(cdr->channel) || ast_strlen_zero(cdr->dstchannel))) {
+			/* For people, who don't want to see unanswered single-channel events */
+			ast_set_flag(cdr, AST_CDR_FLAG_POST_DISABLED);
+			continue;
+		}
+
 		chan = S_OR(cdr->channel, "<unknown>");
 		check_post(cdr);
 		if (ast_tvzero(cdr->end))
