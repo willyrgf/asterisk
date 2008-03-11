@@ -354,6 +354,16 @@ else
 fi
 AC_SUBST(AST_DECLARATION_AFTER_STATEMENT)
 
+AC_MSG_CHECKING(for -fno-strict-overflow)
+if $(${CC} -O2 -fno-strict-overflow -S -o /dev/null -xc /dev/null > /dev/null 2>&1); then
+   AC_MSG_RESULT(yes)
+   AST_NO_STRICT_OVERFLOW=-fno-strict-overflow
+else
+	AC_MSG_RESULT(no)
+	AST_NO_STRICT_OVERFLOW=
+fi
+AC_SUBST(AST_NO_STRICT_OVERFLOW)
+
 AC_MSG_CHECKING(for res_ninit)
 AC_LINK_IFELSE(
 	AC_LANG_PROGRAM([#include <resolv.h>],
@@ -618,7 +628,7 @@ if test "${USE_IMAP_TK}" != "no"; then
 				CPPFLAGS="${saved_cppflags}"
 				LIBS="${saved_libs}"
 				imap_include="-I${IMAP_TK_DIR}/include"
-				imap_ldflags="-I${IMAP_TK_DIR}/lib"
+				imap_ldflags="-L${IMAP_TK_DIR}/lib"
 				imap_libs="-lc-client"
 				CPPFLAGS="${CPPFLAGS} ${imap_include}"
 				LIBS="${LIBS} ${imap_libs} ${imap_ldflags}"
