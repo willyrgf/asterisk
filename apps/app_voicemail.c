@@ -8017,6 +8017,7 @@ static void mwi_unsub_event_cb(const struct ast_event *event, void *userdata)
 static void mwi_sub_event_cb(const struct ast_event *event, void *userdata)
 {
 	const char *mailbox;
+	const char *context;
 	uint32_t uniqueid;
 	unsigned int len;
 	struct mwi_sub *mwi_sub;
@@ -8028,11 +8029,15 @@ static void mwi_sub_event_cb(const struct ast_event *event, void *userdata)
 		return;
 
 	mailbox = ast_event_get_ie_str(event, AST_EVENT_IE_MAILBOX);
+	context = ast_event_get_ie_str(event, AST_EVENT_IE_CONTEXT);
 	uniqueid = ast_event_get_ie_uint(event, AST_EVENT_IE_UNIQUEID);
 
 	len = sizeof(*mwi_sub);
 	if (!ast_strlen_zero(mailbox))
 		len += strlen(mailbox);
+
+	if (!ast_strlen_zero(context))
+		len += strlen(context) + 1; /* Allow for seperator */
 
 	if (!(mwi_sub = ast_calloc(1, len)))
 		return;
@@ -8041,6 +8046,11 @@ static void mwi_sub_event_cb(const struct ast_event *event, void *userdata)
 	if (!ast_strlen_zero(mailbox))
 		strcpy(mwi_sub->mailbox, mailbox);
 
+	if (!ast_strlen_zero(context)) {
+		strcat(mwi_sub->mailbox, "@");
+		strcat(mwi_sub->mailbox, context);
+	}
+
 	AST_RWLIST_WRLOCK(&mwi_subs);
 	AST_RWLIST_INSERT_TAIL(&mwi_subs, mwi_sub, entry);
 	AST_RWLIST_UNLOCK(&mwi_subs);
@@ -8048,8 +8058,6 @@ static void mwi_sub_event_cb(const struct ast_event *event, void *userdata)
 
 static void start_poll_thread(void)
 {
-	pthread_attr_t attr;
-
 	mwi_sub_sub = ast_event_subscribe(AST_EVENT_SUB, mwi_sub_event_cb, NULL,
 		AST_EVENT_IE_EVENTTYPE, AST_EVENT_IE_PLTYPE_UINT, AST_EVENT_MWI,
 		AST_EVENT_IE_END);
@@ -8063,9 +8071,7 @@ static void start_poll_thread(void)
 
 	poll_thread_run = 1;
 
-	pthread_attr_init(&attr);
-	ast_pthread_create(&poll_thread, &attr, mb_poll_thread, NULL);
-	pthread_attr_destroy(&attr);
+	ast_pthread_create(&poll_thread, NULL, mb_poll_thread, NULL);
 }
 
 static void stop_poll_thread(void)
