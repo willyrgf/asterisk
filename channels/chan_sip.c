@@ -1544,7 +1544,6 @@ struct sip_registry {
 	struct timeval regtime;		/*!< Last successful registration time */
 	int callid_valid;		/*!< 0 means we haven't chosen callid for this registry yet. */
 	unsigned int ocseq;		/*!< Sequence number we got to for REGISTERs for this registry */
-	struct sockaddr_in us;		/*!< Who the server thinks we are */
 	int noncecount;			/*!< Nonce-count */
 	char lastmsg[256];		/*!< Last Message sent/received */
 };
@@ -16733,7 +16732,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 				/* Respond to normal re-invite */
 				if (sendok) {
 					/* If this is not a re-invite or something to ignore - it's critical */
-					transmit_response_with_sdp(p, "200 OK", req, (reinvite || req->ignore) ?  XMIT_UNRELIABLE : XMIT_CRITICAL, p->session_modify == TRUE ? FALSE:TRUE); 
+					transmit_response_with_sdp(p, "200 OK", req, (reinvite ? XMIT_RELIABLE : (req->ignore ?  XMIT_UNRELIABLE : XMIT_CRITICAL)), p->session_modify == TRUE ? FALSE:TRUE); 
 				}
 			}
 			p->invitestate = INV_TERMINATED;
