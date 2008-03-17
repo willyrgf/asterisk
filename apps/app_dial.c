@@ -1242,6 +1242,8 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		/* If we have an outbound group, set this peer channel to it */
 		if (outbound_group)
 			ast_app_group_set_channel(tmp->chan, outbound_group);
+		if (ast_test_flag(&opts, OPT_CANCEL_ELSEWHERE))
+			ast_set_flag(tmp->chan, AST_FLAG_ANSWERED_ELSEWHERE);
 
 		/* Inherit context and extension */
 		if (!ast_strlen_zero(chan->macrocontext))
