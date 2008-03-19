@@ -3206,7 +3206,7 @@ static int ast_remove_hint(struct ast_exten *e)
 {
 	/* Cleanup the Notifys if hint is removed */
 	struct ast_hint *hint;
-	struct ast_state_cb *cblist, *cbprev;
+	struct ast_state_cb *cblist;
 	int res = -1;
 
 	if (!e)
@@ -3219,7 +3219,7 @@ static int ast_remove_hint(struct ast_exten *e)
 		while ((cblist = AST_LIST_REMOVE_HEAD(&hint->callbacks, entry))) {
 			/* Notify with -1 and remove all callbacks */
 			cblist->callback(hint->exten->parent->name, hint->exten->exten, 
-				AST_EXTENSION_DEACTIVATED, cbprev->data);
+				AST_EXTENSION_DEACTIVATED, cblist->data);
 			ast_free(cblist);
 		}
 
@@ -5433,7 +5433,7 @@ void ast_merge_contexts_and_delete(struct ast_context **extcontexts, struct ast_
 	struct ast_hint *hint;
 	struct ast_exten *exten;
 	int length;
-	struct ast_state_cb *thiscb, *prevcb;
+	struct ast_state_cb *thiscb;
 	struct ast_hashtab_iter *iter;
 	
 	/* it is very important that this function hold the hint list lock _and_ the conlock
@@ -5451,7 +5451,7 @@ void ast_merge_contexts_and_delete(struct ast_context **extcontexts, struct ast_
 	begintime = ast_tvnow();
 	ast_rdlock_contexts();
 	iter = ast_hashtab_start_traversal(contexts_table);
-	while ((tmp=ast_hashtab_next(iter))) {
+	while ((tmp = ast_hashtab_next(iter))) {
 		context_merge(extcontexts, exttable, tmp, registrar);
 	}
 	ast_hashtab_end_traversal(iter);
@@ -5506,11 +5506,11 @@ void ast_merge_contexts_and_delete(struct ast_context **extcontexts, struct ast_
 		if (!exten || !hint) {
 			/* this hint has been removed, notify the watchers */
 			while ((thiscb = AST_LIST_REMOVE_HEAD(&this->callbacks, entry))) {
-				prevcb->callback(this->context, this->exten, AST_EXTENSION_REMOVED, prevcb->data);
-				ast_free(prevcb);
+				thiscb->callback(this->context, this->exten, AST_EXTENSION_REMOVED, thiscb->data);
+				ast_free(thiscb);
 			}
 		} else {
-			AST_LIST_INSERT_TAIL(&this->callbacks, thiscb, entry);
+			AST_LIST_APPEND_LIST(&hint->callbacks, &this->callbacks, entry);
 			hint->laststate = this->laststate;
 		}
 		ast_free(this);
