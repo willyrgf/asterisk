@@ -4236,8 +4236,7 @@ static int sip_call(struct ast_channel *ast, char *dest, int timeout)
 		p->invitestate = INV_CALLING;
 	
 		/* Initialize auto-congest time */
-		ast_sched_del(sched, p->initid);
-		p->initid = ast_sched_add(sched, p->timer_b, auto_congest, dialog_ref(p));
+		AST_SCHED_REPLACE(p->initid, sched, p->timer_b, auto_congest, dialog_ref(p));
 	}
 
 	return res;
@@ -4307,7 +4306,7 @@ static void __sip_destroy(struct sip_pvt *p, int lockowner, int lockdialoglist)
 
 	if (p->stateid > -1)
 		ast_extension_state_del(p->stateid, NULL);
-	ast_sched_del(sched, p->initid);
+	AST_SCHED_DEL(sched, p->initid);
 	AST_SCHED_DEL(sched, p->waitid);
 	AST_SCHED_DEL(sched, p->autokillid);
 
@@ -7305,7 +7304,7 @@ static int respprep(struct sip_request *resp, struct sip_pvt *p, const char *msg
 	copy_header(resp, req, "Call-ID");
 	copy_header(resp, req, "CSeq");
 	if (!ast_strlen_zero(global_useragent))
-		add_header(resp, "User-Agent", global_useragent);
+		add_header(resp, "Server", global_useragent);
 	add_header(resp, "Allow", ALLOWED_METHODS);
 	add_header(resp, "Supported", SUPPORTED_EXTENSIONS);
 
@@ -9382,7 +9381,6 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 	snprintf(tmp, sizeof(tmp), "%d", r->expiry);
 	add_header(&req, "Expires", tmp);
 	add_header(&req, "Contact", p->our_contact);
-	add_header(&req, "Event", "registration");
 	add_header_contentLength(&req, 0);
 
 	initialize_initreq(p, &req);
@@ -9745,7 +9743,9 @@ static int set_address_from_contact(struct sip_pvt *pvt)
 		port = !ast_strlen_zero(pt) ? atoi(pt) : STANDARD_SIP_PORT;
 	}
 
-	ast_verbose("--- set_address_from_contact host '%s'\n", host);
+	if (sip_debug_test_pvt(pvt)) {
+		ast_verbose("--- set_address_from_contact host '%s'\n", host);
+	}
 
 	/* XXX This could block for a long time XXX */
 	/* We should only do this if it's a name, not an IP */
@@ -14550,7 +14550,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, stru
 
 	/* Acknowledge sequence number - This only happens on INVITE from SIP-call */
 	/* Don't auto congest anymore since we've gotten something useful back */
-	ast_sched_del(sched, p->initid);
+	AST_SCHED_DEL(sched, p->initid);
 
 	/* RFC3261 says we must treat every 1xx response (but not 100)
 	   that we don't recognize as if it was 183.
@@ -16869,6 +16869,17 @@ static int local_attended_transfer(struct sip_pvt *transferer, struct sip_dual *
 
 	ast_set_flag(&transferer->flags[0], SIP_DEFER_BYE_ON_TRANSFER);	/* Delay hangup */
 
+	/* If we are performing an attended transfer and we have two channels involved then copy sound file information to play upon attended transfer completion */
+	if (target.chan2) {
+		const char *chan1_attended_sound = pbx_builtin_getvar_helper(target.chan1, "ATTENDED_TRANSFER_COMPLETE_SOUND"), *chan2_attended_sound = pbx_builtin_getvar_helper(target.chan2, "ATTENDED_TRANSFER_COMPLETE_SOUND");
+		if (!ast_strlen_zero(chan1_attended_sound)) {
+			pbx_builtin_setvar_helper(target.chan1, "BRIDGE_PLAY_SOUND", chan1_attended_sound);
+		}
+		if (!ast_strlen_zero(chan2_attended_sound)) {
+			pbx_builtin_setvar_helper(target.chan2, "BRIDGE_PLAY_SOUND", chan2_attended_sound);
+		}
+	}
+
 	/* Perform the transfer */
 	manager_event(EVENT_FLAG_CALL, "Transfer", "TransferMethod: SIP\r\nTransferType: Attended\r\nChannel: %s\r\nUniqueid: %s\r\nSIP-Callid: %s\r\nTargetChannel: %s\r\nTargetUniqueid: %s\r\n",
 		transferer->owner->name,
@@ -17277,7 +17288,6 @@ static int handle_request_cancel(struct sip_pvt *p, struct sip_request *req)
 		update_call_counter(p, DEC_CALL_LIMIT);
 
 	stop_media_flows(p); /* Immediately stop RTP, VRTP and UDPTL as applicable */
-
 	if (p->owner)
 		ast_queue_hangup(p->owner);
 	else
