@@ -822,7 +822,6 @@ static void init_queue(struct call_queue *q)
 	q->reportholdtime = 0;
 	q->monjoin = 0;
 	q->wrapuptime = 0;
-	q->autofill = 0;
 	q->joinempty = 0;
 	q->leavewhenempty = 0;
 	q->memberdelay = 0;
@@ -1243,7 +1242,11 @@ static struct call_queue *find_queue_by_name_rt(const char *queuename, struct as
 				*tmp++ = '-';
 		} else
 			tmp_name = v->name;
-		queue_set_param(q, tmp_name, v->value, -1, 0);
+
+		if (!ast_strlen_zero(v->value)) {
+			/* Don't want to try to set the option if the value is empty */
+			queue_set_param(q, tmp_name, v->value, -1, 0);
+		}
 	}
 
 	if (q->strategy == QUEUE_STRATEGY_ROUNDROBIN)
@@ -2753,8 +2756,13 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 	if (use_weight)
 		AST_LIST_UNLOCK(&queues);
 	lpeer = wait_for_answer(qe, outgoing, &to, &digit, numbusies, ast_test_flag(&(bridge_config.features_caller), AST_FEATURE_DISCONNECT), forwardsallowed);
-	if (datastore) {
-		ast_channel_datastore_remove(qe->chan, datastore);
+	/* The ast_channel_datastore_remove() function could fail here if the
+	 * datastore was moved to another channel during a masquerade. If this is
+	 * the case, don't free the datastore here because later, when the channel
+	 * to which the datastore was moved hangs up, it will attempt to free this
+	 * datastore again, causing a crash
+	 */
+	if (datastore && !ast_channel_datastore_remove(qe->chan, datastore)) {
 		ast_channel_datastore_free(datastore);
 	}
 	ast_mutex_lock(&qe->parent->lock);
