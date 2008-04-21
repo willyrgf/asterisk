@@ -4509,7 +4509,7 @@ static struct ast_frame *sip_read(struct ast_channel *ast)
 	}
 
 	/* Only allow audio through if they sent progress with SDP, or if the channel is actually answered */
-	if (p->invitestate != INV_EARLY_MEDIA && ast->_state != AST_STATE_UP) {
+	if (fr->frametype == AST_FRAME_VOICE && p->invitestate != INV_EARLY_MEDIA && ast->_state != AST_STATE_UP) {
 		fr = &ast_null_frame;
 	}
 
@@ -5612,7 +5612,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 	}
 	if (!newjointcapability) {
 		/* If T.38 was not negotiated either, totally bail out... */
-		if (!p->t38.jointcapability || !p->t38.peercapability) {
+		if (!p->t38.jointcapability || !udptlportno) {
 			ast_log(LOG_NOTICE, "No compatible codecs, not accepting this offer!\n");
 			/* Do NOT Change current setting */
 			return -1;
@@ -7157,7 +7157,7 @@ static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmetho
 	}
 
 	/* If custom URI options have been provided, append them */
-	if (p->options && p->options->uri_options)
+	if (p->options && !ast_strlen_zero(p->options->uri_options))
 		ast_build_string(&invite, &invite_max, ";%s", p->options->uri_options);
 	
 	ast_string_field_set(p, uri, invite_buf);
@@ -11009,6 +11009,10 @@ static char *complete_sipch(const char *line, const char *word, int pos, int sta
 	char *c = NULL;
 	int wordlen = strlen(word);
 
+	if (pos != 3) {
+		return NULL;
+	}
+
 	ast_mutex_lock(&iflock);
 	for (cur = iflist; cur; cur = cur->next) {
 		if (!strncasecmp(word, cur->callid, wordlen) && ++which > state) {
@@ -13110,7 +13114,12 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 					/* ast_queue_hangup(p->owner); Disabled */
 				} else {
 					if (!p->subscribed && !p->refer)
-						ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
+						ast_set_flag(&p->flags[0], SIP_NEEDDESTROY); 
+					if (ast_test_flag(&p->flags[1], SIP_PAGE2_STATECHANGEQUEUE)) {
+						/* Ready to send the next state we have on queue */
+						ast_clear_flag(&p->flags[1], SIP_PAGE2_STATECHANGEQUEUE);
+						cb_extensionstate((char *)p->context, (char *)p->exten, p->laststate, (void *) p);
+					}
 				}
 			} else if (sipmethod == SIP_BYE)
 				ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
@@ -14295,7 +14304,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 				struct ast_channel *bridgepeer = NULL;
 				struct sip_pvt *bridgepvt = NULL;
 				if ((bridgepeer = ast_bridged_channel(p->owner))) {
-					if (bridgepeer->tech == &sip_tech || bridgepeer->tech == &sip_tech_info) {
+					if ((bridgepeer->tech == &sip_tech || bridgepeer->tech == &sip_tech_info) && !ast_check_hangup(bridgepeer)) {
 						bridgepvt = (struct sip_pvt*)bridgepeer->tech_pvt;
 						/* Does the bridged peer have T38 ? */
 						if (bridgepvt->t38.state == T38_ENABLED) {

@@ -6223,7 +6223,7 @@ static void *ss_thread(void *data)
 							}
 
 							if (res < 0) {
-								ast_log(LOG_WARNING, "CallerID feed failed: %s\n", strerror(errno));
+								ast_log(LOG_WARNING, "CallerID feed failed on channel '%s'\n", chan->name);
 								break;
 							} else if (res)
 								break;
@@ -6234,9 +6234,6 @@ static void *ss_thread(void *data)
 					if (res == 1) {
 						callerid_get(cs, &name, &number, &flags);
 						ast_log(LOG_NOTICE, "CallerID number: %s, name: %s, flags=%d\n", number, name, flags);
-					}
-					if (res < 0) {
-						ast_log(LOG_WARNING, "CallerID returned with error on channel '%s'\n", chan->name);
 					}
 
 					if (p->cid_signalling == CID_SIG_V23_JP) {
@@ -11216,6 +11213,8 @@ static int process_zap(struct zt_chan_conf *confp, struct ast_variable *v, int r
 
 				toneduration = atoi(v->value);
 				if (toneduration > -1) {
+					memset(&dps, 0, sizeof(dps));
+
 					dps.dtmf_tonelen = dps.mfv1_tonelen = toneduration;
 					res = ioctl(ctlfd, ZT_SET_DIALPARAMS, &dps);
 					if (res < 0) {
@@ -11367,11 +11366,10 @@ static int setup_zap(int reload)
 				continue;
 			chans = ast_variable_retrieve(cfg, cat, "zapchan");
 			if (!ast_strlen_zero(chans)) {
-				/** \todo At this point we should probably 
-				 * duplicate conf, and pass a copy, to prevent 
-				 * one section from affecting another
-				 */
-				process_zap(&conf, ast_variable_browse(cfg, cat), reload, 0);
+				struct zt_chan_conf sect_conf;
+				memcpy(&sect_conf, &conf, sizeof(sect_conf));
+
+				process_zap(&sect_conf, ast_variable_browse(cfg, cat), reload, 0);
 			}
 		}
 		ast_config_destroy(cfg);
