@@ -513,7 +513,7 @@ const static unsigned char packet_recv_r2[] = { 0x00, 0x00, 0x00, 0x13, 0x96, 0x
 const static unsigned char packet_recv_resume_connection_with_server[] =
 	{ 0xff, 0xff, 0xff, 0xff, 0x9e, 0x03, 0x08 };
 const static unsigned char packet_recv_mac_addr[] =
-	{ 0xff, 0xff, 0xff, 0xff, 0x9a, 0x0d, 0x07, 0x31, 0x38 /*MacAddr */  };
+	{ 0xff, 0xff, 0xff, 0xff, 0x9a, 0x0d, 0x07 /*MacAddr */  };
 
 const static unsigned char packet_send_date_time3[] =
 	{ 0x11, 0x09, 0x02, 0x02, /*Month */ 0x05, /*Day */ 0x06, /*Hour */ 0x07,
@@ -1141,7 +1141,7 @@ static void close_client(struct unistimsession *s)
 		ast_mutex_destroy(&s->lock);
 		ast_free(s);
 	} else
-		ast_log(LOG_WARNING, "Trying to delete non-existant session %p?\n", s);
+		ast_log(LOG_WARNING, "Trying to delete non-existent session %p?\n", s);
 	ast_mutex_unlock(&sessionlock);
 	return;
 }
@@ -3546,7 +3546,7 @@ static void parsing(int size, unsigned char *buf, struct unistimsession *pte,
 		}
 		if (pte->seq_server < seq) {
 			ast_log(LOG_NOTICE,
-					"%s Error : ACK received for a non-existant packet : #0x%.4x\n",
+					"%s Error : ACK received for a non-existent packet : #0x%.4x\n",
 					tmpbuf, pte->seq_server);
 			ast_mutex_unlock(&pte->lock);
 			return;
@@ -3598,7 +3598,7 @@ static void parsing(int size, unsigned char *buf, struct unistimsession *pte,
 		}
 		if (pte->seq_server < seq) {
 			ast_log(LOG_NOTICE,
-					"%s Error : received a request for a non-existant packet : #0x%.4x\n",
+					"%s Error : received a request for a non-existent packet : #0x%.4x\n",
 					tmpbuf, pte->seq_server);
 			return;
 		}
@@ -4459,6 +4459,7 @@ static struct ast_channel *unistim_new(struct unistim_subchannel *sub, int state
 	ast_setstate(tmp, state);
 	if (state == AST_STATE_RING)
 		tmp->rings = 1;
+	tmp->adsicpe = AST_ADSI_UNAVAILABLE;
 	tmp->writeformat = fmt;
 	tmp->rawwriteformat = fmt;
 	tmp->readformat = fmt;

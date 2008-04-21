@@ -1086,7 +1086,7 @@ static struct ast_channel *channel_find_locked(const struct ast_channel *prev,
 	struct ast_channel *c;
 	const struct ast_channel *_prev = prev;
 
-	for (retries = 0; retries < 10; retries++) {
+	for (retries = 0; retries < 200; retries++) {
 		int done;
 		AST_RWLIST_RDLOCK(&channels);
 		AST_RWLIST_TRAVERSE(&channels, c, chan_list) {
@@ -1127,7 +1127,7 @@ static struct ast_channel *channel_find_locked(const struct ast_channel *prev,
 		done = c == NULL || ast_channel_trylock(c) == 0;
 		if (!done) {
 			ast_debug(1, "Avoiding %s for channel '%p'\n", msg, c);
-			if (retries == 9) {
+			if (retries == 199) {
 				/* We are about to fail due to a deadlock, so report this
 				 * while we still have the list lock.
 				 */
@@ -2255,12 +2255,12 @@ static void ast_read_generator_actions(struct ast_channel *chan, struct ast_fram
 {
 	if (chan->generatordata &&  !ast_internal_timing_enabled(chan)) {
 		void *tmp = chan->generatordata;
+		int (*generate)(struct ast_channel *chan, void *tmp, int datalen, int samples) = NULL;
 		int res;
 		int samples;
 
 		if (chan->timingfunc) {
-			if (option_debug > 1)
-				ast_log(LOG_DEBUG, "Generator got voice, switching to phase locked mode\n");
+			ast_debug(1, "Generator got voice, switching to phase locked mode\n");
 			ast_settimeout(chan, 0, NULL, NULL);
 		}
 
@@ -2273,6 +2273,10 @@ static void ast_read_generator_actions(struct ast_channel *chan, struct ast_fram
 		} else {
 			samples = f->samples;
 		}
+		
+		if (chan->generator->generate) {
+			generate = chan->generator->generate;
+		}
 		/* This unlock is here based on two assumptions that hold true at this point in the
 		 * code. 1) this function is only called from within __ast_read() and 2) all generators
 		 * call ast_write() in their generate callback.
@@ -2282,19 +2286,17 @@ static void ast_read_generator_actions(struct ast_channel *chan, struct ast_fram
 		 * avoidance not to work in deeper functions
 		 */
 		ast_channel_unlock(chan);
-		res = chan->generator->generate(chan, tmp, f->datalen, samples);
+		res = generate(chan, tmp, f->datalen, f->samples);
 		ast_channel_lock(chan);
 		chan->generatordata = tmp;
 		if (res) {
-			if (option_debug > 1)
-				ast_log(LOG_DEBUG, "Auto-deactivating generator\n");
+			ast_debug(1, "Auto-deactivating generator\n");
 			ast_deactivate_generator(chan);
 		}
 
 	} else if (f->frametype == AST_FRAME_CNG) {
 		if (chan->generator && !chan->timingfunc && (chan->timingfd > -1)) {
-			if (option_debug > 1)
-				ast_log(LOG_DEBUG, "Generator got CNG, switching to timed mode\n");
+			ast_debug(1, "Generator got CNG, switching to timed mode\n");
 			ast_settimeout(chan, 160, generator_force, chan);
 		}
 	}
