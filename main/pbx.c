@@ -320,7 +320,7 @@ static int pbx_builtin_sayphonetic(struct ast_channel *, void *);
 static int matchcid(const char *cidpattern, const char *callerid);
 int pbx_builtin_setvar(struct ast_channel *, void *);
 void log_match_char_tree(struct match_char *node, char *prefix); /* for use anywhere */
-static int pbx_builtin_setvar_multiple(struct ast_channel *, void *);
+int pbx_builtin_setvar_multiple(struct ast_channel *, void *);
 static int pbx_builtin_importvar(struct ast_channel *, void *);
 static void set_ext_pri(struct ast_channel *c, const char *exten, int pri); 
 static void new_find_extension(const char *str, struct scoreboard *score, struct match_char *tree, int length, int spec, const char *callerid, enum ext_match_t action);
@@ -6467,11 +6467,12 @@ static int add_pri(struct ast_context *con, struct ast_exten *tmp,
 			el->next = tmp;
 			/* The pattern trie points to this exten; replace the pointer,
 			   and all will be well */
-			
-			if (x->exten) { /* this test for safety purposes */
-				x->exten = tmp; /* replace what would become a bad pointer */
-			} else {
-				ast_log(LOG_ERROR,"Trying to delete an exten from a context, but the pattern tree node returned isn't an extension\n");
+			if (x) { /* if the trie isn't formed yet, don't sweat this */
+				if (x->exten) { /* this test for safety purposes */
+					x->exten = tmp; /* replace what would become a bad pointer */
+				} else {
+					ast_log(LOG_ERROR,"Trying to delete an exten from a context, but the pattern tree node returned isn't an extension\n");
+				}
 			}
 		} else {			/* We're the very first extension.  */
 			struct match_char *x = add_exten_to_pattern_tree(con, e, 1);
@@ -6490,10 +6491,12 @@ static int add_pri(struct ast_context *con, struct ast_exten *tmp,
  			con->root = tmp;
 			/* The pattern trie points to this exten; replace the pointer,
 			   and all will be well */
-			if (x->exten) { /* this test for safety purposes */
-				x->exten = tmp; /* replace what would become a bad pointer */
-			} else {
-				ast_log(LOG_ERROR,"Trying to delete an exten from a context, but the pattern tree node returned isn't an extension\n");
+			if (x) { /* if the trie isn't formed yet; no problem */
+				if (x->exten) { /* this test for safety purposes */
+					x->exten = tmp; /* replace what would become a bad pointer */
+				} else {
+					ast_log(LOG_ERROR,"Trying to delete an exten from a context, but the pattern tree node returned isn't an extension\n");
+				}
 			}
 		}
 		if (tmp->priority == PRIORITY_HINT)
@@ -7869,7 +7872,7 @@ int pbx_builtin_setvar(struct ast_channel *chan, void *data)
 	return(0);
 }
 
-static int pbx_builtin_setvar_multiple(struct ast_channel *chan, void *vdata)
+int pbx_builtin_setvar_multiple(struct ast_channel *chan, void *vdata)
 {
 	char *data;
 	int x;
@@ -8009,7 +8012,12 @@ static int pbx_builtin_saynumber(struct ast_channel *chan, void *data)
 			return -1;
 		}
 	}
-	return ast_say_number(chan, atoi(tmp), "", chan->language, options);
+
+	if (ast_say_number(chan, atoi(tmp), "", chan->language, options)) {
+		ast_log(LOG_WARNING, "We were unable to say the number %s, is it too large?\n", tmp);
+	}
+
+	return 0;
 }
 
 static int pbx_builtin_saydigits(struct ast_channel *chan, void *data)

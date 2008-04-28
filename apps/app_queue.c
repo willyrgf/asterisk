@@ -57,7 +57,7 @@
  */
 
 /*** MODULEINFO
-        <depend>res_monitor</depend>
+	<depend>res_monitor</depend>
  ***/
 
 #include "asterisk.h"
@@ -135,7 +135,7 @@ static const struct strategy {
 #define DEFAULT_TIMEOUT		15
 #define RECHECK			1		/*!< Recheck every second to see we we're at the top yet */
 #define MAX_PERIODIC_ANNOUNCEMENTS 10           /*!< The maximum periodic announcements we can have */
-#define DEFAULT_MIN_ANNOUNCE_FREQUENCY 15       /*!< The minimum number of seconds between position announcements
+#define DEFAULT_MIN_ANNOUNCE_FREQUENCY 15       /*!< The minimum number of seconds between position announcements \
                                                      The default value of 15 provides backwards compatibility */
 #define MAX_QUEUE_BUCKETS 53
 
@@ -581,18 +581,18 @@ static void set_queue_variables(struct queue_ent *qe)
 {
 	char interfacevar[256]="";
 	float sl = 0;
-        
+
 	if (qe->parent->setqueuevar) {
 		sl = 0;
 		if (qe->parent->callscompleted > 0) 
 			sl = 100 * ((float) qe->parent->callscompletedinsl / (float) qe->parent->callscompleted);
 
 		snprintf(interfacevar, sizeof(interfacevar),
-			"QUEUENAME=%s|QUEUEMAX=%d|QUEUESTRATEGY=%s|QUEUECALLS=%d|QUEUEHOLDTIME=%d|QUEUECOMPLETED=%d|QUEUEABANDONED=%d|QUEUESRVLEVEL=%d|QUEUESRVLEVELPERF=%2.1f",
+			"QUEUENAME=%s,QUEUEMAX=%d,QUEUESTRATEGY=%s,QUEUECALLS=%d,QUEUEHOLDTIME=%d,QUEUECOMPLETED=%d,QUEUEABANDONED=%d,QUEUESRVLEVEL=%d,QUEUESRVLEVELPERF=%2.1f",
 			qe->parent->name, qe->parent->maxlen, int2strat(qe->parent->strategy), qe->parent->count, qe->parent->holdtime, qe->parent->callscompleted,
 			qe->parent->callsabandoned,  qe->parent->servicelevel, sl);
 	
-		pbx_builtin_setvar(qe->chan, interfacevar); 
+		pbx_builtin_setvar_multiple(qe->chan, interfacevar); 
 	}
 }
 
@@ -1904,10 +1904,11 @@ playout:
 
 	/* Don't restart music on hold if we're about to exit the caller from the queue */
 	if (!res) {
-                if (ringing)
-                        ast_indicate(qe->chan, AST_CONTROL_RINGING);
-                else
-                        ast_moh_start(qe->chan, qe->moh, NULL);
+		if (ringing) {
+			ast_indicate(qe->chan, AST_CONTROL_RINGING);
+		} else {
+			ast_moh_start(qe->chan, qe->moh, NULL);
+		}
 	}
 	return res;
 }
@@ -2077,10 +2078,10 @@ static char *vars2manager(struct ast_channel *chan, char *vars, size_t len)
 				j += 9;
 			}
 		}
-		if (j > len - 1)
-			j = len - 1;
-		vars[j - 2] = '\r';
-		vars[j - 1] = '\n';
+		if (j > len - 3)
+			j = len - 3;
+		vars[j++] = '\r';
+		vars[j++] = '\n';
 		vars[j] = '\0';
 	} else {
 		/* there are no channel variables; leave it blank */
@@ -2644,6 +2645,8 @@ static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callatte
 				/* Got hung up */
 				*to = -1;
 				if (f) {
+					if (f->seqno)
+						in->hangupcause = f->seqno;
 					ast_frfree(f);
 				}
 				return NULL;
@@ -3111,12 +3114,12 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 		case 'H':
 			ast_set_flag(&(bridge_config.features_caller), AST_FEATURE_DISCONNECT);
 			break;
-                case 'k':
-                        ast_set_flag(&(bridge_config.features_callee), AST_FEATURE_PARKCALL);
-                        break;
-                case 'K':
-                        ast_set_flag(&(bridge_config.features_caller), AST_FEATURE_PARKCALL);
-                        break;
+		case 'k':
+			ast_set_flag(&(bridge_config.features_callee), AST_FEATURE_PARKCALL);
+			break;
+		case 'K':
+			ast_set_flag(&(bridge_config.features_caller), AST_FEATURE_PARKCALL);
+			break;
 		case 'n':
 			if (qe->parent->strategy == QUEUE_STRATEGY_RRMEMORY || qe->parent->strategy == QUEUE_STRATEGY_LINEAR)
 				(*tries)++;
@@ -3395,17 +3398,17 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 		/* if setinterfacevar is defined, make member variables available to the channel */
 		/* use  pbx_builtin_setvar to set a load of variables with one call */
 		if (qe->parent->setinterfacevar) {
-			snprintf(interfacevar, sizeof(interfacevar), "MEMBERINTERFACE=%s|MEMBERNAME=%s|MEMBERCALLS=%d|MEMBERLASTCALL=%ld|MEMBERPENALTY=%d|MEMBERDYNAMIC=%d|MEMBERREALTIME=%d",
+			snprintf(interfacevar, sizeof(interfacevar), "MEMBERINTERFACE=%s,MEMBERNAME=%s,MEMBERCALLS=%d,MEMBERLASTCALL=%ld,MEMBERPENALTY=%d,MEMBERDYNAMIC=%d,MEMBERREALTIME=%d",
 				member->interface, member->membername, member->calls, (long)member->lastcall, member->penalty, member->dynamic, member->realtime);
-		 	pbx_builtin_setvar(qe->chan, interfacevar);
+		 	pbx_builtin_setvar_multiple(qe->chan, interfacevar);
 		}
 		
 		/* if setqueueentryvar is defined, make queue entry (i.e. the caller) variables available to the channel */
 		/* use  pbx_builtin_setvar to set a load of variables with one call */
 		if (qe->parent->setqueueentryvar) {
-			snprintf(interfacevar, sizeof(interfacevar), "QEHOLDTIME=%ld|QEORIGINALPOS=%d",
+			snprintf(interfacevar, sizeof(interfacevar), "QEHOLDTIME=%ld,QEORIGINALPOS=%d",
 				(long) time(NULL) - qe->start, qe->opos);
-			pbx_builtin_setvar(qe->chan, interfacevar);
+			pbx_builtin_setvar_multiple(qe->chan, interfacevar);
 		}
 	
 		/* try to set queue variables if configured to do so*/
@@ -4641,8 +4644,8 @@ static int queue_function_var(struct ast_channel *chan, const char *cmd, char *d
 		.name = data,	
 	};
 
-	char interfacevar[256]="";
-        float sl = 0;
+	char interfacevar[256] = "";
+	float sl = 0;
 
 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_ERROR, "%s requires an argument: queuename\n", cmd);
@@ -4651,24 +4654,26 @@ static int queue_function_var(struct ast_channel *chan, const char *cmd, char *d
 
 	if ((q = ao2_find(queues, &tmpq, OBJ_POINTER))) {
 		ao2_lock(q);
-        	if (q->setqueuevar) {
-		        sl = 0;
+		if (q->setqueuevar) {
+			sl = 0;
 			res = 0;
 
-		        if (q->callscompleted > 0)
-		                sl = 100 * ((float) q->callscompletedinsl / (float) q->callscompleted);
+			if (q->callscompleted > 0) {
+				sl = 100 * ((float) q->callscompletedinsl / (float) q->callscompleted);
+			}
 
-		        snprintf(interfacevar, sizeof(interfacevar),
-                		"QUEUEMAX=%d|QUEUESTRATEGY=%s|QUEUECALLS=%d|QUEUEHOLDTIME=%d|QUEUECOMPLETED=%d|QUEUEABANDONED=%d|QUEUESRVLEVEL=%d|QUEUESRVLEVELPERF=%2.1f",
-		                q->maxlen, int2strat(q->strategy), q->count, q->holdtime, q->callscompleted, q->callsabandoned,  q->servicelevel, sl);
+			snprintf(interfacevar, sizeof(interfacevar),
+				"QUEUEMAX=%d,QUEUESTRATEGY=%s,QUEUECALLS=%d,QUEUEHOLDTIME=%d,QUEUECOMPLETED=%d,QUEUEABANDONED=%d,QUEUESRVLEVEL=%d,QUEUESRVLEVELPERF=%2.1f",
+				q->maxlen, int2strat(q->strategy), q->count, q->holdtime, q->callscompleted, q->callsabandoned,  q->servicelevel, sl);
 
-		        pbx_builtin_setvar(chan, interfacevar);
-	        }
+			pbx_builtin_setvar_multiple(chan, interfacevar);
+		}
 
 		ao2_unlock(q);
 		queue_unref(q);
-	} else
+	} else {
 		ast_log(LOG_WARNING, "queue %s was not found\n", data);
+	}
 
 	snprintf(buf, len, "%d", res);
 
@@ -4863,7 +4868,7 @@ static int queue_function_memberpenalty_read(struct ast_channel *chan, const cha
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(queuename);
 		AST_APP_ARG(interface);
-        );
+	);
 	/* Make sure the returned value on error is NULL. */
 	buf[0] = '\0';
 

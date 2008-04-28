@@ -1383,13 +1383,13 @@ static struct iax_frame *iaxfrdup2(struct iax_frame *fr)
 #define NEW_ALLOW 	1
 #define NEW_FORCE 	2
 
-static int match(struct sockaddr_in *sin, unsigned short callno, unsigned short dcallno, const struct chan_iax2_pvt *cur)
+static int match(struct sockaddr_in *sin, unsigned short callno, unsigned short dcallno, const struct chan_iax2_pvt *cur, int full_frame)
 {
 	if ((cur->addr.sin_addr.s_addr == sin->sin_addr.s_addr) &&
 		(cur->addr.sin_port == sin->sin_port)) {
 		/* This is the main host */
-		if ((cur->peercallno == callno) ||
-			((dcallno == cur->callno) && !cur->peercallno)) {
+		if ( (cur->peercallno == 0 || cur->peercallno == callno) &&
+			 (full_frame ? dcallno == cur->callno : 1) ) {
 			/* That's us.  Be sure we keep track of the peer call number */
 			return 1;
 		}
@@ -1491,7 +1491,7 @@ static int make_trunk(unsigned short callno, int locked)
  *
  * \note Calling this function while holding another pvt lock can cause a deadlock.
  */
-static int __find_callno(unsigned short callno, unsigned short dcallno, struct sockaddr_in *sin, int new, int sockfd, int return_locked)
+static int __find_callno(unsigned short callno, unsigned short dcallno, struct sockaddr_in *sin, int new, int sockfd, int return_locked, int full_frame)
 {
 	int res = 0;
 	int x;
@@ -1499,28 +1499,32 @@ static int __find_callno(unsigned short callno, unsigned short dcallno, struct s
 	char host[80];
 
 	if (new <= NEW_ALLOW) {
-		for (x=1;(res < 1) && (x<maxnontrunkcall);x++) {
+		for (x = 1; !res && x < maxnontrunkcall; x++) {
 			ast_mutex_lock(&iaxsl[x]);
 			if (iaxs[x]) {
 				/* Look for an exact match */
-				if (match(sin, callno, dcallno, iaxs[x])) {
+				if (match(sin, callno, dcallno, iaxs[x], full_frame)) {
 					res = x;
 				}
 			}
-			ast_mutex_unlock(&iaxsl[x]);
+			if (!res || !return_locked)
+				ast_mutex_unlock(&iaxsl[x]);
 		}
-		for (x=TRUNK_CALL_START;(res < 1) && (x<maxtrunkcall);x++) {
+		for (x = TRUNK_CALL_START; !res && x < maxtrunkcall; x++) {
 			ast_mutex_lock(&iaxsl[x]);
 			if (iaxs[x]) {
 				/* Look for an exact match */
-				if (match(sin, callno, dcallno, iaxs[x])) {
+				if (match(sin, callno, dcallno, iaxs[x], full_frame)) {
 					res = x;
 				}
 			}
-			ast_mutex_unlock(&iaxsl[x]);
+			if (!res || !return_locked)
+				ast_mutex_unlock(&iaxsl[x]);
 		}
 	}
-	if ((res < 1) && (new >= NEW_ALLOW)) {
+	if (!res && (new >= NEW_ALLOW)) {
+		int start, found = 0;
+
 		/* It may seem odd that we look through the peer list for a name for
 		 * this *incoming* call.  Well, it is weird.  However, users don't
 		 * have an IP address/port number that we can match against.  So,
@@ -1529,15 +1533,29 @@ static int __find_callno(unsigned short callno, unsigned short dcallno, struct s
 		 * correct, but it will be changed if needed after authentication. */
 		if (!iax2_getpeername(*sin, host, sizeof(host)))
 			snprintf(host, sizeof(host), "%s:%d", ast_inet_ntoa(sin->sin_addr), ntohs(sin->sin_port));
+
 		now = ast_tvnow();
-		for (x=1;x<TRUNK_CALL_START;x++) {
+		start = 1 + (ast_random() % (TRUNK_CALL_START - 1));
+		for (x = start; 1; x++) {
+			if (x == TRUNK_CALL_START) {
+				x = 0;
+				continue;
+			}
+
 			/* Find first unused call number that hasn't been used in a while */
 			ast_mutex_lock(&iaxsl[x]);
-			if (!iaxs[x] && ((now.tv_sec - lastused[x].tv_sec) > MIN_REUSE_TIME)) break;
+			if (!iaxs[x] && ((now.tv_sec - lastused[x].tv_sec) > MIN_REUSE_TIME)) {
+				found = 1;
+				break;
+			}
 			ast_mutex_unlock(&iaxsl[x]);
+			
+			if (x == start - 1) {
+				break;
+			}
 		}
 		/* We've still got lock held if we found a spot */
-		if (x >= TRUNK_CALL_START) {
+		if (x == start - 1 && !found) {
 			ast_log(LOG_WARNING, "No more space\n");
 			return 0;
 		}
@@ -1575,14 +1593,14 @@ static int __find_callno(unsigned short callno, unsigned short dcallno, struct s
 	return res;
 }
 
-static int find_callno(unsigned short callno, unsigned short dcallno, struct sockaddr_in *sin, int new, int sockfd) {
+static int find_callno(unsigned short callno, unsigned short dcallno, struct sockaddr_in *sin, int new, int sockfd, int full_frame) {
 
-	return __find_callno(callno, dcallno, sin, new, sockfd, 0);
+	return __find_callno(callno, dcallno, sin, new, sockfd, 0, full_frame);
 }
 
-static int find_callno_locked(unsigned short callno, unsigned short dcallno, struct sockaddr_in *sin, int new, int sockfd) {
+static int find_callno_locked(unsigned short callno, unsigned short dcallno, struct sockaddr_in *sin, int new, int sockfd, int full_frame) {
 
-	return __find_callno(callno, dcallno, sin, new, sockfd, 1);
+	return __find_callno(callno, dcallno, sin, new, sockfd, 1, full_frame);
 }
 
 static void iax2_frame_free(struct iax_frame *fr)
@@ -1644,7 +1662,7 @@ static int iax2_queue_hangup(int callno)
 				usleep(1);
 				ast_mutex_lock(&iaxsl[callno]);
 			} else {
-				ast_queue_hangup(iaxs[callno]->owner);
+				ast_queue_hangup(iaxs[callno]->owner, -1);
 				ast_channel_unlock(iaxs[callno]->owner);
 				break;
 			}
@@ -2128,7 +2146,7 @@ retry:
 			/* If there's an owner, prod it to give up */
 			/* It is ok to use ast_queue_hangup() here instead of iax2_queue_hangup()
 			 * because we already hold the owner channel lock. */
-			ast_queue_hangup(owner);
+			ast_queue_hangup(owner, -1);
 		}
 
 		AST_LIST_LOCK(&frame_queue);
@@ -2202,10 +2220,8 @@ static void __attempt_transmit(const void *data)
 							ast_log(LOG_WARNING, "Max retries exceeded to host %s on %s (type = %d, subclass = %d, ts=%d, seqno=%d)\n", ast_inet_ntoa(iaxs[f->callno]->addr.sin_addr),iaxs[f->callno]->owner->name , f->af.frametype, f->af.subclass, f->ts, f->oseqno);
 						iaxs[callno]->error = ETIMEDOUT;
 						if (iaxs[callno]->owner) {
-							struct ast_frame fr = { 0, };
+							struct ast_frame fr = { AST_FRAME_CONTROL, AST_CONTROL_HANGUP, .seqno = AST_CAUSE_DESTINATION_OUT_OF_ORDER };
 							/* Hangup the fd */
-							fr.frametype = AST_FRAME_CONTROL;
-							fr.subclass = AST_CONTROL_HANGUP;
 							iax2_queue_frame(callno, &fr); /* XXX */
 							/* Remember, owner could disappear */
 							if (iaxs[callno] && iaxs[callno]->owner)
@@ -3397,8 +3413,12 @@ static int iax2_call(struct ast_channel *c, char *dest, int timeout)
 		return -1;
 	}
 
-	if (!pds.exten)
-		pds.exten = defaultrdest;
+	if (!pds.exten) {
+		if (!ast_strlen_zero(c->exten))
+			pds.exten = c->exten;
+		else
+			pds.exten = defaultrdest;
+	}
 
 	if (create_addr(pds.peer, c, &sin, &cai)) {
 		ast_log(LOG_WARNING, "No address associated with '%s'\n", pds.peer);
@@ -7620,7 +7640,7 @@ static int socket_process_meta(int packet_len, struct ast_iax2_meta_hdr *meta, s
 		/* Stop if we don't have enough data */
 		if (len > packet_len)
 			break;
-		fr->callno = find_callno_locked(callno & ~IAX_FLAG_FULL, 0, sin, NEW_PREVENT, sockfd);
+		fr->callno = find_callno_locked(callno & ~IAX_FLAG_FULL, 0, sin, NEW_PREVENT, sockfd, 0);
 		if (!fr->callno)
 			continue;
 
@@ -7803,7 +7823,7 @@ static int socket_process(struct iax2_thread *thread)
 		}
 
 		/* This is a video frame, get call number */
-		fr->callno = find_callno(ntohs(vh->callno) & ~0x8000, dcallno, &sin, new, fd);
+		fr->callno = find_callno(ntohs(vh->callno) & ~0x8000, dcallno, &sin, new, fd, 0);
 		minivid = 1;
 	} else if ((meta->zeros == 0) && !(ntohs(meta->metacmd) & 0x8000))
 		return socket_process_meta(res, meta, &sin, fd, fr);
@@ -7838,7 +7858,7 @@ static int socket_process(struct iax2_thread *thread)
 	}
 
 	if (!fr->callno)
-		fr->callno = find_callno(ntohs(mh->callno) & ~IAX_FLAG_FULL, dcallno, &sin, new, fd);
+		fr->callno = find_callno(ntohs(mh->callno) & ~IAX_FLAG_FULL, dcallno, &sin, new, fd, ntohs(mh->callno) & IAX_FLAG_FULL);
 
 	if (fr->callno > 0)
 		ast_mutex_lock(&iaxsl[fr->callno]);
@@ -9420,7 +9440,7 @@ static int iax2_do_register(struct iax2_registry *reg)
 
 	if (!reg->callno) {
 		ast_debug(1, "Allocate call number\n");
-		reg->callno = find_callno_locked(0, 0, &reg->addr, NEW_FORCE, defaultsockfd);
+		reg->callno = find_callno_locked(0, 0, &reg->addr, NEW_FORCE, defaultsockfd, 0);
 		if (reg->callno < 1) {
 			ast_log(LOG_WARNING, "Unable to create call for registration\n");
 			return -1;
@@ -9471,7 +9491,7 @@ static int iax2_provision(struct sockaddr_in *end, int sockfd, char *dest, const
 	memset(&ied, 0, sizeof(ied));
 	iax_ie_append_raw(&ied, IAX_IE_PROVISIONING, provdata.buf, provdata.pos);
 
-	callno = find_callno_locked(0, 0, &sin, NEW_FORCE, cai.sockfd);
+	callno = find_callno_locked(0, 0, &sin, NEW_FORCE, cai.sockfd, 0);
 	if (!callno)
 		return -1;
 
@@ -9627,7 +9647,7 @@ static int iax2_poke_peer(struct iax2_peer *peer, int heldcall)
 	}
 	if (heldcall)
 		ast_mutex_unlock(&iaxsl[heldcall]);
-	peer->callno = find_callno(0, 0, &peer->addr, NEW_FORCE, peer->sockfd);
+	peer->callno = find_callno(0, 0, &peer->addr, NEW_FORCE, peer->sockfd, 0);
 	if (heldcall)
 		ast_mutex_lock(&iaxsl[heldcall]);
 	if (peer->callno < 1) {
@@ -9706,7 +9726,7 @@ static struct ast_channel *iax2_request(const char *type, int format, void *data
 	if (pds.port)
 		sin.sin_port = htons(atoi(pds.port));
 
-	callno = find_callno_locked(0, 0, &sin, NEW_FORCE, cai.sockfd);
+	callno = find_callno_locked(0, 0, &sin, NEW_FORCE, cai.sockfd, 0);
 	if (callno < 1) {
 		ast_log(LOG_WARNING, "Unable to create call\n");
 		*cause = AST_CAUSE_CONGESTION;
@@ -11079,7 +11099,7 @@ static int cache_get_callno_locked(const char *data)
 	ast_debug(1, "peer: %s, username: %s, password: %s, context: %s\n",
 		pds.peer, pds.username, pds.password, pds.context);
 
-	callno = find_callno_locked(0, 0, &sin, NEW_FORCE, cai.sockfd);
+	callno = find_callno_locked(0, 0, &sin, NEW_FORCE, cai.sockfd, 0);
 	if (callno < 1) {
 		ast_log(LOG_WARNING, "Unable to create call\n");
 		return -1;

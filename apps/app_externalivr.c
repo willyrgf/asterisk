@@ -87,8 +87,8 @@ struct gen_state {
 };
 
 static int eivr_comm(struct ast_channel *chan, struct ivr_localuser *u, 
-              int eivr_events_fd, int eivr_commands_fd, int eivr_errors_fd, 
-              const char *args);
+	int eivr_events_fd, int eivr_commands_fd, int eivr_errors_fd, 
+	const char *args);
 
 int eivr_connect_socket(struct ast_channel *chan, const char *host, int port);
 
@@ -560,6 +560,9 @@ static int eivr_comm(struct ast_channel *chan, struct ivr_localuser *u,
  			} else if ((f->frametype == AST_FRAME_CONTROL) && (f->subclass == AST_CONTROL_HANGUP)) {
  				ast_chan_log(LOG_NOTICE, chan, "Got AST_CONTROL_HANGUP\n");
  				send_eivr_event(eivr_events, 'H', NULL, chan);
+				if (f->seqno) {
+					chan->hangupcause = f->seqno;
+				}
  				ast_frfree(f);
  				res = -1;
  				break;

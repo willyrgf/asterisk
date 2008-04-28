@@ -148,6 +148,7 @@ enum {
 	OPTION_EXIT      = (1 << 8),    /* Exit to a valid single digit extension */
 	OPTION_ENFORCED  = (1 << 9),    /* Enforced mode */
 	OPTION_NOTECH    = (1 << 10),   /* Skip technology name playback */
+	OPTION_BARGE     = (1 << 11),   /* Barge mode (whisper to both channels) */
 } chanspy_opt_flags;
 
 enum {
@@ -161,6 +162,7 @@ enum {
 AST_APP_OPTIONS(spy_opts, {
 	AST_APP_OPTION('q', OPTION_QUIET),
 	AST_APP_OPTION('b', OPTION_BRIDGED),
+	AST_APP_OPTION('B', OPTION_BARGE),
 	AST_APP_OPTION('w', OPTION_WHISPER),
 	AST_APP_OPTION('W', OPTION_PRIVATE),
 	AST_APP_OPTION_ARG('v', OPTION_VOLUME, OPT_ARG_VOLUME),
@@ -177,6 +179,7 @@ struct chanspy_translation_helper {
 	/* spy data */
 	struct ast_audiohook spy_audiohook;
 	struct ast_audiohook whisper_audiohook;
+	struct ast_audiohook bridge_whisper_audiohook;
 	int fd;
 	int volfactor;
 };
@@ -230,7 +233,7 @@ static struct ast_generator spygen = {
 	.generate = spy_generate,
 };
 
-static int start_spying(struct ast_channel *chan, const char *spychan_name, struct ast_audiohook *audiohook) 
+static int start_spying(struct ast_channel *chan, const char *spychan_name, struct ast_audiohook *audiohook)
 {
 	int res = 0;
 	struct ast_channel *peer = NULL;
@@ -239,12 +242,9 @@ static int start_spying(struct ast_channel *chan, const char *spychan_name, stru
 
 	res = ast_audiohook_attach(chan, audiohook);
 
-	if (!res && ast_test_flag(chan, AST_FLAG_NBRIDGE) && (peer = ast_bridged_channel(chan))) {
-		ast_channel_unlock(chan);
+	if (!res && ast_test_flag(chan, AST_FLAG_NBRIDGE) && (peer = ast_bridged_channel(chan))) { 
 		ast_softhangup(peer, AST_SOFTHANGUP_UNBRIDGE);
-	} else
-		ast_channel_unlock(chan);
-
+	}
 	return res;
 }
 
@@ -293,16 +293,23 @@ static int channel_spy(struct ast_channel *chan, struct chanspy_ds *spyee_chansp
 
 	ast_audiohook_init(&csth.spy_audiohook, AST_AUDIOHOOK_TYPE_SPY, "ChanSpy");
 
-	if (start_spying(spyee, spyer_name, &csth.spy_audiohook)) { /* Unlocks spyee */
+	if (start_spying(spyee, spyer_name, &csth.spy_audiohook)) {
 		ast_audiohook_destroy(&csth.spy_audiohook);
+		ast_channel_unlock(spyee);
 		return 0;
 	}
 
-	if (ast_test_flag(flags, OPTION_WHISPER)) {
+	if (ast_test_flag(flags, OPTION_BARGE)) {
+  		ast_audiohook_init(&csth.whisper_audiohook, AST_AUDIOHOOK_TYPE_WHISPER, "ChanSpy");
+		ast_audiohook_init(&csth.bridge_whisper_audiohook, AST_AUDIOHOOK_TYPE_WHISPER, "Chanspy");
+  		start_spying(spyee, spyer_name, &csth.whisper_audiohook); /* Unlocks spyee */
+		start_spying(ast_bridged_channel(spyee), spyer_name, &csth.bridge_whisper_audiohook);
+	} else if (ast_test_flag(flags, OPTION_WHISPER)) {
 		ast_audiohook_init(&csth.whisper_audiohook, AST_AUDIOHOOK_TYPE_WHISPER, "ChanSpy");
 		start_spying(spyee, spyer_name, &csth.whisper_audiohook); /* Unlocks spyee */
-	}
+  	}
 
+	ast_channel_unlock(spyee);
 	spyee = NULL;
 
 	csth.volfactor = *volfactor;
@@ -339,7 +346,16 @@ static int channel_spy(struct ast_channel *chan, struct chanspy_ds *spyee_chansp
 			break;
 		}
 
-		if (ast_test_flag(flags, OPTION_WHISPER) && f->frametype == AST_FRAME_VOICE) {
+		if (ast_test_flag(flags, OPTION_BARGE) && f->frametype == AST_FRAME_VOICE) {
+			ast_audiohook_lock(&csth.whisper_audiohook);
+			ast_audiohook_lock(&csth.bridge_whisper_audiohook);
+			ast_audiohook_write_frame(&csth.whisper_audiohook, AST_AUDIOHOOK_DIRECTION_WRITE, f);
+			ast_audiohook_write_frame(&csth.bridge_whisper_audiohook, AST_AUDIOHOOK_DIRECTION_WRITE, f);
+			ast_audiohook_unlock(&csth.whisper_audiohook);
+			ast_audiohook_unlock(&csth.bridge_whisper_audiohook);
+			ast_frfree(f);
+			continue;
+		} else if (ast_test_flag(flags, OPTION_WHISPER) && f->frametype == AST_FRAME_VOICE) {
 			ast_audiohook_lock(&csth.whisper_audiohook);
 			ast_audiohook_write_frame(&csth.whisper_audiohook, AST_AUDIOHOOK_DIRECTION_WRITE, f);
 			ast_audiohook_unlock(&csth.whisper_audiohook);
@@ -401,7 +417,16 @@ static int channel_spy(struct ast_channel *chan, struct chanspy_ds *spyee_chansp
 	else
 		ast_deactivate_generator(chan);
 
-	if (ast_test_flag(flags, OPTION_WHISPER)) {
+	if (ast_test_flag(flags, OPTION_BARGE)) {
+		ast_audiohook_lock(&csth.whisper_audiohook);
+		ast_audiohook_detach(&csth.whisper_audiohook);
+		ast_audiohook_unlock(&csth.whisper_audiohook);
+		ast_audiohook_destroy(&csth.whisper_audiohook);
+		ast_audiohook_lock(&csth.bridge_whisper_audiohook);
+		ast_audiohook_detach(&csth.bridge_whisper_audiohook);
+		ast_audiohook_unlock(&csth.bridge_whisper_audiohook);
+		ast_audiohook_destroy(&csth.bridge_whisper_audiohook);
+	} else if (ast_test_flag(flags, OPTION_WHISPER)) {
 		ast_audiohook_lock(&csth.whisper_audiohook);
 		ast_audiohook_detach(&csth.whisper_audiohook);
 		ast_audiohook_unlock(&csth.whisper_audiohook);
@@ -705,12 +730,11 @@ static int common_exec(struct ast_channel *chan, const struct ast_flags *flags,
 
 			for (s = peer_name; s < ptr; s++)
 				*s = tolower(*s);
-		
 			/* We have to unlock the peer channel here to avoid a deadlock.
-			 * So, when we need it again, we have to lock the datastore and get
-			 * the pointer from there to see if the channel is still valid. */
+			 * So, when we need to dereference it again, we have to lock the 
+			 * datastore and get the pointer from there to see if the channel 
+			 * is still valid. */
 			ast_channel_unlock(peer);
-			peer = NULL;
 
 			if (!ast_test_flag(flags, OPTION_QUIET)) {
 				if (!ast_test_flag(flags, OPTION_NOTECH)) {
@@ -731,7 +755,6 @@ static int common_exec(struct ast_channel *chan, const struct ast_flags *flags,
 					ast_say_digits(chan, atoi(ptr), "", chan->language);
 			}
 
-			waitms = 5000;
 			res = channel_spy(chan, peer_chanspy_ds, &volfactor, fd, flags, exitcontext);
 			num_spyed_upon++;	
 

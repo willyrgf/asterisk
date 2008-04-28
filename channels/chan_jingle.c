@@ -573,7 +573,7 @@ static int jingle_hangup_farend(struct jingle *client, ikspak *pak)
 	if (tmp) {
 		tmp->alreadygone = 1;
 		if (tmp->owner)
-			ast_queue_hangup(tmp->owner);
+			ast_queue_hangup(tmp->owner, -1);
 	} else
 		ast_log(LOG_NOTICE, "Whoa, didn't find call!\n");
 	jingle_response(client, pak, NULL, NULL);
@@ -1793,8 +1793,13 @@ static int load_module(void)
 	char *jabber_loaded = ast_module_helper("", "res_jabber.so", 0, 0, 0, 0);
 	free(jabber_loaded);
 	if (!jabber_loaded) {
-		ast_log(LOG_ERROR, "chan_jingle.so depends upon res_jabber.so\n");
-		return AST_MODULE_LOAD_DECLINE;
+		/* Dependency module has a different name, if embedded */
+		jabber_loaded = ast_module_helper("", "res_jabber", 0, 0, 0, 0);
+		free(jabber_loaded);
+		if (!jabber_loaded) {
+			ast_log(LOG_ERROR, "chan_jingle.so depends upon res_jabber.so\n");
+			return AST_MODULE_LOAD_DECLINE;
+		}
 	}
 
 	ASTOBJ_CONTAINER_INIT(&jingle_list);
