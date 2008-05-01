@@ -3522,7 +3522,11 @@ static int leave_voicemail(struct ast_channel *chan, char *ext, struct leave_vm_
 	if (tmpptr)
 		*tmpptr++ = '\0';
 
-	category = pbx_builtin_getvar_helper(chan, "VM_CATEGORY");
+	ast_channel_lock(chan);
+	if ((category = pbx_builtin_getvar_helper(chan, "VM_CATEGORY"))) {
+		category = ast_strdupa(category);
+	}
+	ast_channel_unlock(chan);
 
 	ast_debug(3, "Before find_user\n");
 	if (!(vmu = find_user(&svm, context, ext))) {
@@ -4741,8 +4745,14 @@ static int notify_new_message(struct ast_channel *chan, struct ast_vm_user *vmu,
 {
 	char todir[PATH_MAX], fn[PATH_MAX], ext_context[PATH_MAX], *stringp;
 	int newmsgs = 0, oldmsgs = 0;
-	const char *category = pbx_builtin_getvar_helper(chan, "VM_CATEGORY");
+	const char *category;
 	char *myserveremail = serveremail;
+
+	ast_channel_lock(chan);
+	if ((category = pbx_builtin_getvar_helper(chan, "VM_CATEGORY"))) {
+		category = ast_strdupa(category);
+	}
+	ast_channel_unlock(chan);
 
 	make_dir(todir, sizeof(todir), vmu->context, vmu->mailbox, "INBOX");
 	make_file(fn, sizeof(fn), todir, msgnum);
@@ -9528,6 +9538,20 @@ static int load_config(int reload)
 	}
 }
 
+static int sayname(struct ast_channel *chan, const char *mailbox, const char *context)
+{
+	int res = -1;
+	char dir[PATH_MAX];
+	snprintf(dir, sizeof(dir), "%s%s/%s/greet", VM_SPOOL_DIR, context, mailbox);
+	ast_debug(2, "About to try retrieving name file %s\n", dir);
+	RETRIEVE(dir, -1, mailbox, context);
+	if (ast_fileexists(dir, NULL, NULL)) {
+		res = ast_stream_and_wait(chan, dir, AST_DIGIT_ANY);
+	}
+	DISPOSE(dir, -1);
+	return res;
+}
+
 static int reload(void)
 {
 	return load_config(1);
@@ -9575,7 +9599,7 @@ static int load_module(void)
 
 	ast_cli_register_multiple(cli_voicemail, sizeof(cli_voicemail) / sizeof(struct ast_cli_entry));
 
-	ast_install_vm_functions(has_voicemail, inboxcount, messagecount);
+	ast_install_vm_functions(has_voicemail, inboxcount, messagecount, sayname);
 
 	return res;
 }
