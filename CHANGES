@@ -82,11 +82,20 @@ CLI Changes
   * New CLI command, "config reload <file.conf>" which reloads any module that
      references that particular configuration file.  Also added "config list"
      which shows which configuration files are in use.
+  * New CLI commands, "pri show version" and "ss7 show version" that will
+     display which version of libpri and libss7 are being used, respectively.
+	 A new API call was added so trunk will now have to be compiled against
+	 a versions of libpri and libss7 that have them or it will not know that
+	 these libraries exist.
 
 DNS manager changes
 -------------------
   * Addresses managed by DNS manager now can check to see if there is a DNS
     SRV record for a given domain and will use that hostname/port if present.
+
+Dialplan function changes
+-------------------------
+ * TIMEOUT() has been modified to be accurate down to the millisecond.
 
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 1.4.X to Asterisk 1.6.0  -------------
