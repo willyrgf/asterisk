@@ -277,6 +277,9 @@
 /* Define to indicate the ${PRI_DESCRIP} library */
 #undef HAVE_PRI
 
+/* Define to indicate the ${PRI_VERSION_DESCRIP} library */
+#undef HAVE_PRI_VERSION
+
 /* Define if you have POSIX threads libraries and header files. */
 #undef HAVE_PTHREAD
 
@@ -337,6 +340,9 @@
 
 /* Define to indicate the ${SPEEXDSP_DESCRIP} library */
 #undef HAVE_SPEEXDSP
+
+/* Define to indicate the ${SPEEX_PREPROCESS_DESCRIP} library */
+#undef HAVE_SPEEX_PREPROCESS
 
 /* Define to indicate the ${SQLITE_DESCRIP} library */
 #undef HAVE_SQLITE
