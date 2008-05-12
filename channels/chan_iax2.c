@@ -95,7 +95,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/netsock.h"
 #include "asterisk/stringfields.h"
 #include "asterisk/linkedlists.h"
-#include "asterisk/dlinkedlists.h"
 #include "asterisk/astobj2.h"
 
 #include "iax2.h"
@@ -623,8 +622,6 @@ struct chan_iax2_pvt {
 	int frames_dropped;
 	/*! received frame count: (just for stats) */
 	int frames_received;
-
-	AST_DLLIST_ENTRY(chan_iax2_pvt) entry;
 };
 
 static struct ast_iax2_queue {
@@ -3635,6 +3632,21 @@ static int iax2_indicate(struct ast_channel *c, int condition, const void *data,
 
 	ast_mutex_lock(&iaxsl[callno]);
 	pvt = iaxs[callno];
+
+	if (!pvt->peercallno) {
+		/* We don't know the remote side's call number, yet.  :( */
+		int count = 10;
+		while (count-- && pvt && !pvt->peercallno) {
+			ast_mutex_unlock(&iaxsl[callno]);
+			usleep(1);
+			ast_mutex_lock(&iaxsl[callno]);
+			pvt = iaxs[callno];
+		}
+		if (!pvt->peercallno) {
+			res = -1;
+			goto done;
+		}
+	}
 
 	switch (condition) {
 	case AST_CONTROL_HOLD:
