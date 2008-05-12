@@ -9315,7 +9315,7 @@ static void *ss7_linkset(void *data)
 
 		for (i = 0; i < linkset->numsigchans; i++) {
 			pollers[i].fd = linkset->fds[i];
-			pollers[i].events = POLLIN | POLLOUT | POLLPRI;
+			pollers[i].events = ss7_pollflags(ss7, linkset->fds[i]);
 			pollers[i].revents = 0;
 		}
 
@@ -9369,20 +9369,16 @@ static void *ss7_linkset(void *data)
 				res = ss7_read(ss7, pollers[i].fd);
 				ast_mutex_unlock(&linkset->lock);
 			}
+
 			if (pollers[i].revents & POLLOUT) {
 				ast_mutex_lock(&linkset->lock);
 				res = ss7_write(ss7, pollers[i].fd);
 				ast_mutex_unlock(&linkset->lock);
 				if (res < 0) {
-					ast_log(LOG_ERROR, "Error in write %s", strerror(errno));
+					ast_debug(1, "Error in write %s\n", strerror(errno));
 				}
 			}
 		}
-
-#if 0
-		if (res < 0)
-			exit(-1);
-#endif
 
 		while ((e = ss7_check_event(ss7))) {
 			switch (e->e) {
@@ -9636,6 +9632,7 @@ static void *ss7_linkset(void *data)
 					break;
 				} else {
 					struct ast_frame f = { AST_FRAME_CONTROL, AST_CONTROL_PROCEEDING, };
+					struct ast_frame g = { AST_FRAME_CONTROL, AST_CONTROL_PROGRESS, };
 
 					p = linkset->pvts[chanpos];
 
@@ -9648,6 +9645,8 @@ static void *ss7_linkset(void *data)
 					ast_mutex_lock(&p->lock);
 					zap_queue_frame(p, &f, linkset);
 					p->proceeding = 1;
+					zap_queue_frame(p, &g, linkset);
+					p->progress = 1;
 
 					ast_mutex_unlock(&p->lock);
 				}
@@ -12850,7 +12849,11 @@ static int linkset_addsigchan(int sigchan)
 			ast_log(LOG_ERROR, "Unable to get parameters for sigchan %d (%s)\n", sigchan, strerror(errno));
 			return -1;
 		}
-		if ((p.sigtype != ZT_SIG_HDLCFCS) && (p.sigtype != ZT_SIG_HARDHDLC)) {
+		if ((p.sigtype != ZT_SIG_HDLCFCS) && (p.sigtype != ZT_SIG_HARDHDLC) 
+#if defined(HAVE_ZAPTEL_SIG_MTP2)
+				&& (p.sigtype != ZT_SIG_MTP2)
+#endif
+				) {
 			zt_close(link->fds[curfd]);
 			link->fds[curfd] = -1;
 			ast_log(LOG_ERROR, "sigchan %d is not in HDLC/FCS mode.  See /etc/zaptel.conf\n", sigchan);

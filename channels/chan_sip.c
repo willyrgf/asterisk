@@ -6171,11 +6171,6 @@ static struct sip_pvt *find_call(struct sip_request *req, struct sockaddr_in *si
 	const char *cseq = get_header(req, "Cseq");
 	struct sip_pvt *sip_pvt_ptr;
 
-	callid = get_header(req, "Call-ID");
-	from = get_header(req, "From");
-	to = get_header(req, "To");
-	cseq = get_header(req, "Cseq");
-
 	/* Call-ID, to, from and Cseq are required by RFC 3261. (Max-forwards and via too - ignored now) */
 	/* get_header always returns non-NULL so we must use ast_strlen_zero() */
 	if (ast_strlen_zero(callid) || ast_strlen_zero(to) ||
@@ -15975,8 +15970,6 @@ static int handle_response_register(struct sip_pvt *p, int resp, char *rest, str
 		}
 		break;
 	case 408:	/* Request timeout */
-		if (global_regattempts_max)
-			p->registry->regattempts = global_regattempts_max+1;
 		p->needdestroy = 1;
 		if (r->call)
 			r->call = dialog_unref(r->call, "unsetting registry->call pointer-- case 408");
@@ -19361,7 +19354,7 @@ static int sip_send_mwi_to_peer(struct sip_peer *peer, const struct ast_event *e
 {
 	/* Called with peerl lock, but releases it */
 	struct sip_pvt *p;
-	int newmsgs = 0, oldmsgs = 0;
+	int newmsgs = 0, oldmsgs = 0, urgentmsgs = 0;
 
 	if (ast_test_flag((&peer->flags[1]), SIP_PAGE2_SUBSCRIBEMWIONLY) && !peer->mwipvt)
 		return 0;
@@ -19380,7 +19373,7 @@ static int sip_send_mwi_to_peer(struct sip_peer *peer, const struct ast_event *e
 	} else { /* Fall back to manually checking the mailbox */
 		struct ast_str *mailbox_str = ast_str_alloca(512);
 		peer_mailboxes_to_str(&mailbox_str, peer);
-		ast_app_inboxcount(mailbox_str->str, &newmsgs, &oldmsgs);
+		ast_app_inboxcount(mailbox_str->str, &urgentmsgs, &newmsgs, &oldmsgs);
 	}
 	
 	if (peer->mwipvt) {
