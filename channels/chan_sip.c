@@ -25,15 +25,21 @@
  * See Also:
  * \arg \ref AstCREDITS
  *
- * Implementation of RFC 3261 - without S/MIME, TCP and TLS support
+ * Implementation of RFC 3261 - without S/MIME, and experimental TCP and TLS support
  * Configuration file \link Config_sip sip.conf \endlink
  *
+ * ********** IMPORTANT *
+ * \note TCP/TLS support is EXPERIMENTAL and WILL CHANGE. This applies to configuration
+ *	settings, dialplan commands and dialplans apps/functions
+ * 
  *
+ * TODO:s
  * \todo Better support of forking
  * \todo VIA branch tag transaction checking
  * \todo Transaction support
  * \todo We need to test TCP sessions with SIP proxies and in regards
  *       to the SIP outbound specs.
+ * \todo Fix TCP/TLS handling in dialplan, SRV records, transfers and much more
  *
  * \ingroup channel_drivers
  *
@@ -1317,6 +1323,8 @@ struct sip_pvt {
 							(A bit unsure of this, please correct if
 							you know more) */
 	struct sip_st_dlg *stimer;		/*!< SIP Session-Timers */              
+  
+	int red; 
 };
 
 /*! Max entires in the history list for a sip_pvt */
@@ -2085,7 +2093,7 @@ static char *get_calleridname(const char *input, char *output, size_t outputsize
 static int get_rpid_num(const char *input, char *output, int maxlen);
 static int get_rdnis(struct sip_pvt *p, struct sip_request *oreq);
 static int get_destination(struct sip_pvt *p, struct sip_request *oreq);
-static int get_msg_text(char *buf, int len, struct sip_request *req);
+static int get_msg_text(char *buf, int len, struct sip_request *req, int addnewline);
 static int transmit_state_notify(struct sip_pvt *p, int state, int full, int timeout);
 
 /*--- Constructing requests and responses */
@@ -5202,16 +5210,20 @@ static int sip_write(struct ast_channel *ast, struct ast_frame *frame)
 	case AST_FRAME_TEXT:
 		if (p) {
 			sip_pvt_lock(p);
-			if (p->trtp) {
-				/* Activate text early media */
-				if ((ast->_state != AST_STATE_UP) &&
-				    !ast_test_flag(&p->flags[0], SIP_PROGRESS_SENT) &&
-				    !ast_test_flag(&p->flags[0], SIP_OUTGOING)) {
-					transmit_response_with_sdp(p, "183 Session Progress", &p->initreq, XMIT_UNRELIABLE, FALSE);
-					ast_set_flag(&p->flags[0], SIP_PROGRESS_SENT);	
+			if (p->red) {
+				red_buffer_t140(p->trtp, frame);
+			} else {
+				if (p->trtp) {
+					/* Activate text early media */
+					if ((ast->_state != AST_STATE_UP) &&
+					    !ast_test_flag(&p->flags[0], SIP_PROGRESS_SENT) &&
+					    !ast_test_flag(&p->flags[0], SIP_OUTGOING)) {
+						transmit_response_with_sdp(p, "183 Session Progress", &p->initreq, XMIT_UNRELIABLE, FALSE);
+						ast_set_flag(&p->flags[0], SIP_PROGRESS_SENT);	
+					}
+					p->lastrtptx = time(NULL);
+					res = ast_rtp_write(p->trtp, frame);
 				}
-				p->lastrtptx = time(NULL);
-				res = ast_rtp_write(p->trtp, frame);
 			}
 			sip_pvt_unlock(p);
 		}
@@ -6645,6 +6657,13 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 
 	char buf[SIPBUFSIZE];
 	int rua_version;
+	
+	int red_data_pt[10];
+	int red_num_gen = 0;
+	int red_pt = 0;
+
+	char *red_cp; 				/* For T.140 red */
+	char red_fmtp[100] = "empty";		/* For T.140 red */
 
 	if (!p->rtp) {
 		ast_log(LOG_ERROR, "Got SDP but have no RTP session allocated.\n");
@@ -6987,6 +7006,20 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 			memset(&found_rtpmap_codecs, 0, sizeof(found_rtpmap_codecs));
 			last_rtpmap_codec = 0;
 			continue;
+			
+		} else if (!strncmp(a, red_fmtp, strlen(red_fmtp))) {
+			/* count numbers of generations in fmtp */
+			red_cp = &red_fmtp[strlen(red_fmtp)];
+			strncpy(red_fmtp, a, 100);
+
+			sscanf(red_cp, "%u", &red_data_pt[red_num_gen]);
+			red_cp = strtok(red_cp, "/");
+			while (red_cp && red_num_gen++ < RED_MAX_GENERATION) {
+				sscanf(red_cp, "%u", &red_data_pt[red_num_gen]);
+				red_cp = strtok(NULL, "/");
+			}
+			red_cp = red_fmtp;
+
 		} else if (sscanf(a, "rtpmap: %u %[^/]/", &codec, mimeSubtype) == 2) {
 			/* We have a rtpmap to handle */
 
@@ -7008,6 +7041,15 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 					if (p->trtp) {
 						/* ast_verbose("Adding t140 mimeSubtype to textrtp struct\n"); */
 						ast_rtp_set_rtpmap_type(newtextrtp, codec, "text", mimeSubtype, 0);
+					}
+				} else if (!strncasecmp(mimeSubtype, "RED", 3)) { /* Text with Redudancy */
+					if (p->trtp) {
+						ast_rtp_set_rtpmap_type(newtextrtp, codec, "text", mimeSubtype, 0);
+						red_pt = codec;
+						sprintf(red_fmtp, "fmtp:%d ", red_pt); 
+
+						if (debug)
+							ast_verbose("Red submimetype has payload type: %d\n", red_pt);
 					}
 				} else {                                          /* Must be audio?? */
 					if(ast_rtp_set_rtpmap_type(newaudiortp, codec, "audio", mimeSubtype,
@@ -7184,6 +7226,13 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 	p->jointcapability = newjointcapability;	        /* Our joint codec profile for this call */
 	p->peercapability = newpeercapability;		        /* The other sides capability in latest offer */
 	p->jointnoncodeccapability = newnoncodeccapability;	/* DTMF capabilities */
+
+	if (p->jointcapability & AST_FORMAT_T140RED) {
+		p->red = 1; 
+		rtp_red_init(p->trtp, 300, red_data_pt, 2);
+	} else {
+		p->red = 0; 
+	}
 
 	ast_rtp_pt_copy(p->rtp, newaudiortp);
 	if (p->vrtp)
@@ -7953,7 +8002,7 @@ static int transmit_response_with_auth(struct sip_pvt *p, const char *msg, const
 static int add_text(struct sip_request *req, const char *text)
 {
 	/* XXX Convert \n's to \r\n's XXX */
-	add_header(req, "Content-Type", "text/plain");
+	add_header(req, "Content-Type", "text/plain;charset=UTF-8");
 	add_header_contentLength(req, strlen(text));
 	add_line(req, text);
 	return 0;
@@ -8097,6 +8146,14 @@ static void add_tcodec_to_sdp(const struct sip_pvt *p, int codec, int sample_rat
 	ast_str_append(a_buf, 0, "a=rtpmap:%d %s/%d\r\n", rtp_code,
 			 ast_rtp_lookup_mime_subtype(1, codec, 0), sample_rate);
 	/* Add fmtp code here */
+
+	if (codec == AST_FORMAT_T140RED) {
+		ast_str_append(a_buf, 0, "a=fmtp:%d %d/%d/%d\r\n", rtp_code, 
+			 ast_rtp_lookup_code(p->trtp, 1, AST_FORMAT_T140),
+			 ast_rtp_lookup_code(p->trtp, 1, AST_FORMAT_T140),
+			 ast_rtp_lookup_code(p->trtp, 1, AST_FORMAT_T140));
+
+	}
 }
 
 
@@ -11940,7 +11997,7 @@ static int check_user(struct sip_pvt *p, struct sip_request *req, int sipmethod,
 }
 
 /*! \brief  Get text out of a SIP MESSAGE packet */
-static int get_msg_text(char *buf, int len, struct sip_request *req)
+static int get_msg_text(char *buf, int len, struct sip_request *req, int addnewline)
 {
 	int x;
 	int y;
@@ -11949,12 +12006,12 @@ static int get_msg_text(char *buf, int len, struct sip_request *req)
 	y = len - strlen(buf) - 5;
 	if (y < 0)
 		y = 0;
-	for (x=0;x<req->lines;x++) {
+	for (x=0; x < req->lines; x++) {
 		strncat(buf, req->line[x], y); /* safe */
 		y -= strlen(req->line[x]) + 1;
 		if (y < 0)
 			y = 0;
-		if (y != 0)
+		if (y != 0 && addnewline)
 			strcat(buf, "\n"); /* safe */
 	}
 	return 0;
@@ -11966,18 +12023,18 @@ static int get_msg_text(char *buf, int len, struct sip_request *req)
 	Reference: RFC 3428 */
 static void receive_message(struct sip_pvt *p, struct sip_request *req)
 {
-	char buf[1024];
+	char buf[1400];	
 	struct ast_frame f;
 	const char *content_type = get_header(req, "Content-Type");
 
-	if (strcmp(content_type, "text/plain")) { /* No text/plain attachment */
-		transmit_response(p, "415 Unsupported Media Type", req); 
+	if (strncmp(content_type, "text/plain", strlen("text/plain"))) { /* No text/plain attachment */
+		transmit_response(p, "415 Unsupported Media Type", req); /* Good enough, or? */
 		if (!p->owner)
 			sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 		return;
 	}
 
-	if (get_msg_text(buf, sizeof(buf), req)) {
+	if (get_msg_text(buf, sizeof(buf), req, FALSE)) {
 		ast_log(LOG_WARNING, "Unable to retrieve text from %s\n", p->callid);
 		transmit_response(p, "202 Accepted", req);
 		if (!p->owner)
@@ -11987,7 +12044,7 @@ static void receive_message(struct sip_pvt *p, struct sip_request *req)
 
 	if (p->owner) {
 		if (sip_debug_test_pvt(p))
-			ast_verbose("Message received: '%s'\n", buf);
+			ast_verbose("SIP Text message received: '%s'\n", buf);
 		memset(&f, 0, sizeof(f));
 		f.frametype = AST_FRAME_TEXT;
 		f.subclass = 0;
@@ -11996,11 +12053,13 @@ static void receive_message(struct sip_pvt *p, struct sip_request *req)
 		f.datalen = strlen(buf);
 		ast_queue_frame(p->owner, &f);
 		transmit_response(p, "202 Accepted", req); /* We respond 202 accepted, since we relay the message */
-	} else { /* Message outside of a call, we do not support that */
-		ast_log(LOG_WARNING, "Received message to %s from %s, dropped it...\n  Content-Type:%s\n  Message: %s\n", get_header(req, "To"), get_header(req, "From"), content_type, buf);
-		transmit_response(p, "405 Method Not Allowed", req);
-		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
+		return;
 	}
+
+	/* Message outside of a call, we do not support that */
+	ast_log(LOG_WARNING, "Received message to %s from %s, dropped it...\n  Content-Type:%s\n  Message: %s\n", get_header(req, "To"), get_header(req, "From"), content_type, buf);
+	transmit_response(p, "405 Method Not Allowed", req);
+	sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 	return;
 }
 
@@ -14595,7 +14654,7 @@ static void handle_request_info(struct sip_pvt *p, struct sip_request *req)
 			return;
 		}
 
-		get_msg_text(buf, sizeof(buf), req);
+		get_msg_text(buf, sizeof(buf), req, TRUE);
 		duration = 100; /* 100 ms */
 
 		if (ast_strlen_zero(buf)) {
@@ -16877,7 +16936,7 @@ static int handle_request_notify(struct sip_pvt *p, struct sip_request *req, str
 		}
 
 		/* Get the text of the attachment */
-		if (get_msg_text(buf, sizeof(buf), req)) {
+		if (get_msg_text(buf, sizeof(buf), req, TRUE)) {
 			ast_log(LOG_WARNING, "Unable to retrieve attachment from NOTIFY %s\n", p->callid);
 			transmit_response(p, "400 Bad request", req);
 			sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
