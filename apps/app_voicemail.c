@@ -3177,6 +3177,7 @@ static int messagecount(const char *context, const char *mailbox, const char *fo
 	struct vm_state *vms_p;
 	int ret = 0;
 	int fold = folder_int(folder);
+	int urgent = 0;
 	
 	if (ast_strlen_zero(mailbox))
 		return 0;
@@ -3225,6 +3226,12 @@ static int messagecount(const char *context, const char *mailbox, const char *fo
 		vms_p = get_vm_state_by_mailbox(mailbox,0);
 	}
 
+	/* If URGENT, then look at INBOX */
+	if (fold == 11) {
+		fold = NEW_FOLDER;
+		urgent = 1;
+	}
+
 	if (!vms_p) {
 		ast_debug(3,"Adding new vmstate for %s\n",vmu->imapuser);
 		if (!(vms_p = ast_calloc(1, sizeof(*vms_p)))) {
@@ -3235,7 +3242,6 @@ static int messagecount(const char *context, const char *mailbox, const char *fo
 		vms_p->mailstream = NIL; /* save for access from interactive entry point */
 		ast_debug(3, "Copied %s to %s\n",vmu->imapuser,vms_p->imapuser);
 		vms_p->updated = 1;
-		/* set mailbox to INBOX! */
 		ast_copy_string(vms_p->curbox, mbox(fold), sizeof(vms_p->curbox));
 		init_vm_state(vms_p);
 		vmstate_insert(vms_p);
@@ -3261,7 +3267,7 @@ static int messagecount(const char *context, const char *mailbox, const char *fo
 			pgm->seen = 1;
 		}
 		/* look for urgent messages */
-		if (fold == 11) {
+		if (urgent == 1) {
                 	pgm->flagged = 1;
                 	pgm->unflagged = 0;
 		}
@@ -3270,11 +3276,11 @@ static int messagecount(const char *context, const char *mailbox, const char *fo
 
 		vms_p->vmArrayIndex = 0;
 		mail_search_full (vms_p->mailstream, NULL, pgm, NIL);
-		if (fold == 0)
+		if (fold == 0 && urgent == 0)
 			vms_p->newmessages = vms_p->vmArrayIndex;
 		if (fold == 1)
 			vms_p->oldmessages = vms_p->vmArrayIndex;
-		if(fold == 11)
+		if (fold == 0 && urgent == 1)
 			vms_p->urgentmessages = vms_p->vmArrayIndex;
 		/*Freeing the searchpgm also frees the searchhdr*/
 		mail_free_searchpgm(&pgm);
@@ -3450,7 +3456,7 @@ static int copy_message(struct ast_channel *chan, struct ast_vm_user *vmu, int i
 
 	ast_log(AST_LOG_NOTICE, "Copying message from %s@%s to %s@%s\n", vmu->mailbox, vmu->context, recip->mailbox, recip->context);
 
-	if (!strcmp(flag, "Urgent")) { /* If urgent, copy to Urgent folder */
+	if (!ast_strlen_zero(flag) && !strcmp(flag, "Urgent")) { /* If urgent, copy to Urgent folder */
 		create_dirpath(todir, sizeof(todir), recip->context, recip->mailbox, "Urgent");
 	} else {
 		create_dirpath(todir, sizeof(todir), recip->context, recip->mailbox, "INBOX");
@@ -3648,7 +3654,7 @@ static void run_externnotify(char *context, char *extension, const char *flag)
 		if (inboxcount(ext_context, &urgentvoicemails, &newvoicemails, &oldvoicemails)) {
 			ast_log(AST_LOG_ERROR, "Problem in calculating number of voicemail messages available for extension %s\n", extension);
 		} else {
-			snprintf(arguments, sizeof(arguments), "%s %s %s %d %s&", externnotify, context, extension, newvoicemails, S_OR(flag,""));
+			snprintf(arguments, sizeof(arguments), "%s %s %s %d %d&", externnotify, context, extension, newvoicemails, urgentvoicemails);
 			ast_debug(1, "Executing %s\n", arguments);
 			ast_safe_system(arguments);
 		}
@@ -4121,7 +4127,7 @@ static int leave_voicemail(struct ast_channel *chan, char *ext, struct leave_vm_
 						}
 					}
 #ifndef IMAP_STORAGE
-					if (!strcmp(flag, "Urgent")) { /* If this is an Urgent message */
+					if (!ast_strlen_zero(flag) && !strcmp(flag, "Urgent")) { /* If this is an Urgent message */
 						/* Move the message from INBOX to Urgent folder if this is urgent! */
 						char sfn[PATH_MAX];
 						char dfn[PATH_MAX];
@@ -10502,7 +10508,7 @@ static int play_record_review(struct ast_channel *chan, char *playfile, char *re
 		case '4':
 			if (outsidecaller) {  /* only mark vm messages */
 				/* Mark Urgent */
-				if (strcmp(flag, "Urgent")) {
+				if (!ast_strlen_zero(flag) && strcmp(flag, "Urgent")) {
 					ast_verbose(VERBOSE_PREFIX_3 "marking message as Urgent\n");
 					ast_debug(1000, "This message is too urgent!\n");
 					res = ast_play_and_wait(chan, "vm-marked-urgent");
@@ -10573,7 +10579,7 @@ static int play_record_review(struct ast_channel *chan, char *playfile, char *re
 			if (message_exists) {
 				cmd = ast_play_and_wait(chan, "vm-review");
 				if (!cmd && outsidecaller) {
-					if (strcmp(flag, "Urgent")) {
+					if (!ast_strlen_zero(flag) && strcmp(flag, "Urgent")) {
 						cmd = ast_play_and_wait(chan, "vm-review-urgent");
 					} else {
 						cmd = ast_play_and_wait(chan, "vm-review-unurgent");
