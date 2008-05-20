@@ -136,6 +136,10 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 				; contrary to the RFC3551 specification, the peer _should_
 				; be negotiating AAL2-G726-32 instead :-(
 
+;outboundproxy=proxy.provider.domain	   	; send outbound signaling to this proxy, not directly to the devices
+;outboundproxy=proxy.provider.domain:8080       ; send outbound signaling to this proxy, not directly to the devices
+;outboundproxy=proxy.provider.domain,force      ; Send ALL outbound signalling to proxy, ignoring route: headers
+
 ;matchexterniplocally = yes     ; Only substitute the externip or externhost setting if it matches
                                 ; your localnet setting. Unless you have some sort of strange network
                                 ; setup you will not need to enable this.
@@ -517,6 +521,7 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ;usereqphone=yes			; This provider requires ";user=phone" on URI
 ;call-limit=5				; permit only 5 simultaneous outgoing calls to this peer
 ;outboundproxy=proxy.provider.domain	; send outbound signaling to this proxy, not directly to the peer
+;outboundproxy=proxy.provider.domain,force ; Send ALL outbound signalling to proxy, ignoring route: headers
 					; Call-limits will not be enforced on real-time peers,
 					; since they are not stored in-memory
 ;port=80				; The port number we want to connect to on the remote side
