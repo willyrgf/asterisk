@@ -2669,8 +2669,9 @@ static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callatte
 				/* Got hung up */
 				*to = -1;
 				if (f) {
-					if (f->seqno)
-						in->hangupcause = f->seqno;
+					if (f->data.uint32) {
+						in->hangupcause = f->data.uint32;
+					}
 					ast_frfree(f);
 				}
 				return NULL;
@@ -3943,12 +3944,15 @@ static int set_member_paused(const char *queuename, const char *interface, const
 				ao2_ref(mem, -1);
 			}
 		}
-		ao2_unlock(q);
-		queue_unref(q);
 		
-		if (!ast_strlen_zero(queuename) && found) {
+		if (!ast_strlen_zero(queuename) && !strcasecmp(queuename, q->name)) {
+			ao2_unlock(q);
+			queue_unref(q);
 			break;
 		}
+		
+		ao2_unlock(q);
+		queue_unref(q);
 	}
 
 	return found ? RESULT_SUCCESS : RESULT_FAILURE;
