@@ -233,6 +233,7 @@ AST_EXT_LIB_SETUP([PGSQL], [PostgreSQL], [postgres])
 AST_EXT_LIB_SETUP([POPT], [popt], [popt])
 AST_EXT_LIB_SETUP([PORTAUDIO], [PortAudio], [portaudio])
 AST_EXT_LIB_SETUP([PRI], [ISDN PRI], [pri])
+AST_EXT_LIB_SETUP([SPANDSP], [SPANDSP], [spandsp])
 AST_EXT_LIB_SETUP([SS7], [ISDN SS7], [ss7])
 AST_EXT_LIB_SETUP([PWLIB], [PWlib], [pwlib])
 AST_EXT_LIB_SETUP([OPENH323], [OpenH323], [h323])
@@ -1289,6 +1290,19 @@ AST_EXT_LIB_CHECK([POPT], [popt], [poptStrerror], [popt.h])
 AST_EXT_LIB_CHECK([PORTAUDIO], [portaudio], [Pa_GetDeviceCount], [portaudio.h])
 
 AST_EXT_LIB_CHECK([PRI], [pri], [pri_get_version], [libpri.h])
+
+AST_C_COMPILE_CHECK([SPANDSP], [
+		#if SPANDSP_RELEASE_DATE < 20080516
+		#error "spandsp 0.0.5 or greater is required"
+		#endif
+	], [spandsp/version.h])
+
+if test "x${PBX_SPANDSP}" = "x1" ; then
+	# We found the correct version in the header, now let's make sure it links
+	# properly, and that libtiff is available
+	PBX_SPANDSP=0
+	AST_EXT_LIB_CHECK([SPANDSP], [spandsp], [span_set_message_handler], [spandsp.h], [-ltiff])
+fi
 
 AST_EXT_LIB_CHECK([SS7], [ss7], [ss7_pollflags], [libss7.h])
 
