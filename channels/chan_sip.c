@@ -2485,7 +2485,7 @@ static void *dialog_unlink_all(struct sip_pvt *dialog, int lockowner, int lockdi
 		dialog->stateid = -1; /* shouldn't we 'zero' this out? */
 	}
 	/* Remove link from peer to subscription of MWI */
-	if (dialog->relatedpeer && dialog->relatedpeer->mwipvt)
+	if (dialog->relatedpeer && dialog->relatedpeer->mwipvt == dialog)
 		dialog->relatedpeer->mwipvt = dialog_unref(dialog->relatedpeer->mwipvt, "delete ->relatedpeer->mwipvt");
 	if (dialog->relatedpeer && dialog->relatedpeer->call == dialog)
 		dialog->relatedpeer->call = dialog_unref(dialog->relatedpeer->call, "unset the relatedpeer->call field in tandem with relatedpeer field itself");
@@ -7845,8 +7845,13 @@ static int reqprep(struct sip_request *req, struct sip_pvt *p, int sipmethod, in
 		ast_string_field_set(p, url, NULL);
 	}
 
-	/* Add Session-Timers related headers if the feature is active for this session */
-	if (p->stimer && p->stimer->st_active == TRUE && p->stimer->st_active_peer_ua == TRUE) {
+	/* Add Session-Timers related headers if the feature is active for this session.
+	   An exception to this behavior is the ACK request. Since Asterisk never requires 
+	   session-timers support from a remote end-point (UAS) in an INVITE, it must 
+	   not send 'Require: timer' header in the ACK request. Also, Require: header 
+	   is not applicable for CANCEL method. */
+	if (p->stimer && p->stimer->st_active == TRUE && p->stimer->st_active_peer_ua == TRUE 
+	    && sipmethod != SIP_ACK && sipmethod != SIP_CANCEL) {
 		char se_hdr[256];
 		snprintf(se_hdr, sizeof(se_hdr), "%d;refresher=%s", p->stimer->st_interval, 
 			strefresher2str(p->stimer->st_ref));
@@ -9168,6 +9173,7 @@ static int transmit_invite(struct sip_pvt *p, int sipmethod, int sdp, int init)
 		
 		snprintf(i2astr, sizeof(i2astr), "%d", p->stimer->st_interval);
 		add_header(&req, "Session-Expires", i2astr);
+		snprintf(i2astr, sizeof(i2astr), "%d", st_get_se(p, FALSE));
 		add_header(&req, "Min-SE", i2astr);
 	}
 
