@@ -23,7 +23,11 @@
  */
 
 #include "asterisk.h"
+
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
+#include <signal.h>
+#include <sys/time.h>
 
 #include "asterisk/_private.h"
 #include "asterisk/module.h"
@@ -31,8 +35,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/astobj2.h"
 #include "asterisk/cli.h"
 #include "asterisk/taskprocessor.h"
-#include "signal.h"
-#include "sys/time.h"
 
 
 /*! \brief tps_task structure is queued to a taskprocessor
@@ -84,8 +86,9 @@ static struct ao2_container *tps_singletons;
 
 /*! \brief CLI 'taskprocessor ping <blah>' operation requires a ping condition */
 static ast_cond_t cli_ping_cond;
+
 /*! \brief CLI 'taskprocessor ping <blah>' operation requires a ping condition lock */
-static ast_mutex_t cli_ping_cond_lock;
+AST_MUTEX_DEFINE_STATIC(cli_ping_cond_lock);
 
 /*! \brief The astobj2 hash callback for taskprocessors */
 static int tps_hash_cb(const void *obj, const int flags);
@@ -122,6 +125,9 @@ int ast_tps_init(void)
 		ast_log(LOG_ERROR, "taskprocessor container failed to initialize!\n");
 		return -1;
 	}
+
+	ast_cond_init(&cli_ping_cond, NULL);
+
 	ast_cli_register_multiple(taskprocessor_clis, ARRAY_LEN(taskprocessor_clis));
 	return 0;
 }
