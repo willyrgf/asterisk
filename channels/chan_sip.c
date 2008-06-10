@@ -1376,6 +1376,7 @@ static const char *subscription_type2str(enum subscriptiontype subtype) attribut
 static const struct cfsubscription_types *find_subscription_type(enum subscriptiontype subtype);
 static int __sip_show_channels(int fd, int argc, char *argv[], int subscriptions);
 static int sip_show_channels(int fd, int argc, char *argv[]);
+static int sip_show_channelstats(int fd, int argc, char *argv[]);
 static int sip_show_subscriptions(int fd, int argc, char *argv[]);
 static int __sip_show_channels(int fd, int argc, char *argv[], int subscriptions);
 static char *complete_sipch(const char *line, const char *word, int pos, int state);
@@ -10909,6 +10910,61 @@ static int __sip_show_channels(int fd, int argc, char *argv[], int subscriptions
 #undef FORMAT3
 }
 
+/*! \brief SIP show channelstats CLI (main function) */
+ /*Print some info on the call here */
+                //ast_verbose("  RTP-stats\n");
+                //ast_verbose("* Our Receiver:\n");
+                //ast_verbose("  SSRC:             %u\n", rtp->themssrc);
+                //ast_verbose("  Received packets: %u\n", rtp->rxcount);
+                //ast_verbose("  Lost packets:     %u\n", rtp->rtcp->expected_prior - rtp->rtcp->received_prior);
+                //ast_verbose("  Jitter:           %.4f\n", rtp->rxjitter);
+                //ast_verbose("  Transit:          %.4f\n", rtp->rxtransit);
+                //ast_verbose("  RR-count:         %u\n", rtp->rtcp->rr_count);
+                //ast_verbose("* Our Sender:\n");
+                //ast_verbose("  SSRC:             %u\n", rtp->ssrc);
+                //ast_verbose("  Sent packets:     %u\n", rtp->txcount);
+                //ast_verbose("  Lost packets:     %u\n", rtp->rtcp->reported_lost);
+                //ast_verbose("  Jitter:           %u\n", rtp->rtcp->reported_jitter / (unsigned int)65536.0);
+                //ast_verbose("  SR-count:         %u\n", rtp->rtcp->sr_count);
+                //ast_verbose("  RTT:              %f\n", rtp->rtcp->rtt);
+
+static int sip_show_channelstats(int fd, int argc, char *argv[])
+{
+#define FORMAT2 "%-15.15s  %-11.11s  %-10.10s  %-10.10s (%-2.2s) %-6.6s %-10.10s  %-10.10s ( %%) %-6.6s\n"
+#define FORMAT  "%-15.15s  %-11.11s  %-10.10u%-1.1s %-10.10u (%-2.2u%%) %-6.6u %-10.10u%-1.1s %-10.10u (%-2.2u%%) %-6.6u\n"
+	struct sip_pvt *cur;
+	int numchans = 0;
+
+	if (argc != 3)
+		return RESULT_SHOWUSAGE;
+	ast_mutex_lock(&iflock);
+	cur = iflist;
+	ast_cli(fd, FORMAT2, "Peer", "Call ID", "Recv: Pack", "Lost", "%", "Jitter", "Send: Pack", "Lost", "Jitter");
+	for (; cur && cur->rtp; cur = cur->next) {
+		unsigned int rxcount = ast_rtp_get_qosvalue(cur->rtp, AST_RTP_RXCOUNT);
+		unsigned int txcount = ast_rtp_get_qosvalue(cur->rtp, AST_RTP_TXCOUNT);
+		ast_cli(fd, FORMAT, ast_inet_ntoa(cur->sa.sin_addr), 
+			cur->callid, 
+			rxcount > (unsigned int) 100000 ? (unsigned int) (rxcount)/(unsigned int) 1000 : rxcount,
+			rxcount > (unsigned int) 100000 ? "K":" ",
+			ast_rtp_get_qosvalue(cur->rtp, AST_RTP_RXPLOSS),
+			rxcount > ast_rtp_get_qosvalue(cur->rtp, AST_RTP_RXPLOSS) ? (unsigned int) (ast_rtp_get_qosvalue(cur->rtp, AST_RTP_RXPLOSS) / rxcount * 100) : 0,
+			ast_rtp_get_qosvalue(cur->rtp, AST_RTP_RXJITTER),
+			txcount > (unsigned int) 100000 ? (unsigned int) (txcount)/(unsigned int) 1000 : txcount,
+			txcount > (unsigned int) 100000 ? "K":" ",
+			ast_rtp_get_qosvalue(cur->rtp, AST_RTP_TXPLOSS),
+			txcount > ast_rtp_get_qosvalue(cur->rtp, AST_RTP_TXPLOSS) ? (unsigned int) (ast_rtp_get_qosvalue(cur->rtp, AST_RTP_TXPLOSS)/ txcount * 100) : 0,
+			ast_rtp_get_qosvalue(cur->rtp, AST_RTP_TXJITTER)
+		);
+		numchans++;
+	}
+	ast_mutex_unlock(&iflock);
+	ast_cli(fd, "%d active SIP channel%s\n", numchans, (numchans != 1) ? "s" : "");
+	return RESULT_SUCCESS;
+#undef FORMAT
+#undef FORMAT2
+}
+
 /*! \brief Support routine for 'sip show channel' CLI */
 static char *complete_sipch(const char *line, const char *word, int pos, int state)
 {
@@ -11702,6 +11758,10 @@ static char show_inuse_usage[] =
 static char show_channels_usage[] = 
 "Usage: sip show channels\n"
 "       Lists all currently active SIP channels.\n";
+
+static char show_channelstats_usage[] = 
+"Usage: sip show channelstats\n"
+"       Lists all currently active SIP channel's RTCP statistics.\n";
 
 static char show_channel_usage[] = 
 "Usage: sip show channel <channel>\n"
@@ -18037,6 +18097,10 @@ static struct ast_cli_entry cli_sip[] = {
 	{ { "sip", "show", "channels", NULL },
 	sip_show_channels, "List active SIP channels",
 	show_channels_usage },
+
+	{ { "sip", "show", "channelstats", NULL },
+	sip_show_channelstats, "List active SIP channel statistics (based on RTCP)",
+	show_channelstats_usage },
 
 	{ { "sip", "show", "domains", NULL },
 	sip_show_domains, "List our local SIP domains.",

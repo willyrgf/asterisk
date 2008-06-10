@@ -2077,6 +2077,27 @@ void ast_rtp_reset(struct ast_rtp *rtp)
 	rtp->rxseqno = 0;
 }
 
+unsigned int ast_rtp_get_qosvalue(struct ast_rtp *rtp, enum ast_rtp_qos_vars value)
+{
+	switch (value) {
+	case AST_RTP_TXCOUNT:
+		return rtp->txcount;
+	case AST_RTP_RXCOUNT:
+		return rtp->rxcount;
+	case AST_RTP_TXJITTER:
+		return (unsigned int) (rtp->rxjitter * 100.0);
+	case AST_RTP_RXJITTER:
+		return (unsigned int) (rtp->rtcp->reported_jitter / (unsigned int) 65536.0);
+	case AST_RTP_RXPLOSS:
+		return (rtp->rtcp->expected_prior - rtp->rtcp->received_prior);
+	case AST_RTP_TXPLOSS:
+		return rtp->rtcp->reported_lost;
+	case AST_RTP_RTT:
+		return (unsigned int) rtp->rtcp->rtt * 100;
+	}
+	return 0;	/* To make the compiler happy */
+}
+
 char *ast_rtp_get_quality(struct ast_rtp *rtp, struct ast_rtp_quality *qual)
 {
 	/*

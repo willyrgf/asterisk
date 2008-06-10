@@ -63,6 +63,17 @@ enum ast_rtp_get_result {
 	AST_RTP_TRY_NATIVE,
 };
 
+/*! \brief Variables used in ast_rtcp_get function */
+enum ast_rtp_qos_vars {
+	AST_RTP_TXCOUNT,
+	AST_RTP_RXCOUNT,
+	AST_RTP_TXJITTER,
+	AST_RTP_RXJITTER,
+	AST_RTP_RXPLOSS,
+	AST_RTP_TXPLOSS,
+	AST_RTP_RTT
+};
+
 struct ast_rtp;
 
 struct ast_rtp_protocol {
@@ -227,6 +238,9 @@ void ast_rtp_stop(struct ast_rtp *rtp);
 
 /*! \brief Return RTCP quality string */
 char *ast_rtp_get_quality(struct ast_rtp *rtp, struct ast_rtp_quality *qual);
+
+/*! \brief Return RTP and RTCP QoS values */
+unsigned int ast_rtp_get_qosvalue(struct ast_rtp *rtp, enum ast_rtp_qos_vars value);
 
 /*! \brief Send an H.261 fast update request. Some devices need this rather than the XML message  in SIP */
 int ast_rtcp_send_h261fur(void *data);
