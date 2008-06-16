@@ -264,6 +264,22 @@ enum invitestates {
 	INV_CANCELLED = 7,	/*!< Transaction cancelled by client or server in non-terminated state */
 };
 
+/*! \brief Readable descriptions of device states. 
+	\note Should be aligned to above table as index */
+static const struct invstate2stringtable { 
+	const enum invitestates state;
+	const char const *desc;
+} invitestate2string[] = {
+	{INV_NONE,		"None"	},
+	{INV_CALLING,		"Calling (Trying)"},
+	{INV_PROCEEDING,	"Proceeding "},
+	{INV_EARLY_MEDIA,	"Early media"},
+	{INV_COMPLETED,		"Completed (done)"},
+	{INV_CONFIRMED,		"Confirmed (up)"},
+	{INV_TERMINATED,	"Done"},
+	{INV_CANCELLED,		"Cancelled"}
+};
+
 /* Do _NOT_ make any changes to this enum, or the array following it;
    if you think you are doing the right thing, you are probably
    not doing the right thing. If you think there are changes
@@ -10912,39 +10928,49 @@ static int __sip_show_channels(int fd, int argc, char *argv[], int subscriptions
 
 /*! \brief SIP show channelstats CLI (main function) */
  /*Print some info on the call here */
-                //ast_verbose("  RTP-stats\n");
-                //ast_verbose("* Our Receiver:\n");
-                //ast_verbose("  SSRC:             %u\n", rtp->themssrc);
-                //ast_verbose("  Received packets: %u\n", rtp->rxcount);
-                //ast_verbose("  Lost packets:     %u\n", rtp->rtcp->expected_prior - rtp->rtcp->received_prior);
-                //ast_verbose("  Jitter:           %.4f\n", rtp->rxjitter);
-                //ast_verbose("  Transit:          %.4f\n", rtp->rxtransit);
-                //ast_verbose("  RR-count:         %u\n", rtp->rtcp->rr_count);
-                //ast_verbose("* Our Sender:\n");
-                //ast_verbose("  SSRC:             %u\n", rtp->ssrc);
-                //ast_verbose("  Sent packets:     %u\n", rtp->txcount);
-                //ast_verbose("  Lost packets:     %u\n", rtp->rtcp->reported_lost);
-                //ast_verbose("  Jitter:           %u\n", rtp->rtcp->reported_jitter / (unsigned int)65536.0);
-                //ast_verbose("  SR-count:         %u\n", rtp->rtcp->sr_count);
-                //ast_verbose("  RTT:              %f\n", rtp->rtcp->rtt);
-
 static int sip_show_channelstats(int fd, int argc, char *argv[])
 {
-#define FORMAT2 "%-15.15s  %-11.11s  %-10.10s  %-10.10s (%-2.2s) %-6.6s %-10.10s  %-10.10s ( %%) %-6.6s\n"
-#define FORMAT  "%-15.15s  %-11.11s  %-10.10u%-1.1s %-10.10u (%-2.2u%%) %-6.6u %-10.10u%-1.1s %-10.10u (%-2.2u%%) %-6.6u\n"
+#define FORMAT2 "%-15.15s  %-11.11s  %-8.8s %-10.10s  %-10.10s (%-2.2s) %-6.6s %-10.10s  %-10.10s ( %%) %-6.6s\n"
+#define FORMAT  "%-15.15s  %-11.11s  %-8.8s %-10.10u%-1.1s %-10.10u (%-2.2u%%) %-6.6u %-10.10u%-1.1s %-10.10u (%-2.2u%%) %-6.6u\n"
 	struct sip_pvt *cur;
 	int numchans = 0;
+	char durbuf[10];
+        int duration;
+        int durh, durm, durs;
 
 	if (argc != 3)
 		return RESULT_SHOWUSAGE;
 	ast_mutex_lock(&iflock);
 	cur = iflist;
-	ast_cli(fd, FORMAT2, "Peer", "Call ID", "Recv: Pack", "Lost", "%", "Jitter", "Send: Pack", "Lost", "Jitter");
-	for (; cur && cur->rtp; cur = cur->next) {
+	ast_cli(fd, FORMAT2, "Peer", "Call ID", "Duration", "Recv: Pack", "Lost", "%", "Jitter", "Send: Pack", "Lost", "Jitter");
+	for (; cur; cur = cur->next) {
 		unsigned int rxcount = ast_rtp_get_qosvalue(cur->rtp, AST_RTP_RXCOUNT);
 		unsigned int txcount = ast_rtp_get_qosvalue(cur->rtp, AST_RTP_TXCOUNT);
-		ast_cli(fd, FORMAT, ast_inet_ntoa(cur->sa.sin_addr), 
+		struct ast_channel *c = cur->owner;
+		if (cur->subscribed != NONE) /* Subscriptions */
+			continue;
+
+		if (!cur->rtp) {
+			if (sipdebug)
+				ast_cli(fd, "%-15.15s  %-11.11s (inv state: %s) -- %s\n", ast_inet_ntoa(cur->sa.sin_addr), cur->callid, invitestate2string[cur->invitestate].desc, "-- No RTP active");
+			continue;
+		}
+
+		/* Find the duration of this channel */
+		if (c && c->cdr && !ast_tvzero(c->cdr->start)) {
+                        duration = (int)(ast_tvdiff_ms(ast_tvnow(), c->cdr->start) / 1000);
+			durh = duration / 3600;
+			durm = (duration % 3600) / 60;
+			durs = duration % 60;
+			snprintf(durbuf, sizeof(durbuf), "%02d:%02d:%02d", durh, durm, durs);
+                } else {
+                        durbuf[0] = '\0';
+                }
+		/* Print stats for every call with RTP */
+		ast_cli(fd, FORMAT, 
+			ast_inet_ntoa(cur->sa.sin_addr), 
 			cur->callid, 
+			durbuf,
 			rxcount > (unsigned int) 100000 ? (unsigned int) (rxcount)/(unsigned int) 1000 : rxcount,
 			rxcount > (unsigned int) 100000 ? "K":" ",
 			ast_rtp_get_qosvalue(cur->rtp, AST_RTP_RXPLOSS),
@@ -10957,6 +10983,13 @@ static int sip_show_channelstats(int fd, int argc, char *argv[])
 			ast_rtp_get_qosvalue(cur->rtp, AST_RTP_TXJITTER)
 		);
 		numchans++;
+		/* If we have a lot of channels, give other processes a chance to get the iflock. Calls are more important than the CLI. */
+		if (numchans % 100 == 0) {
+			ast_mutex_unlock(&iflock);
+			/* Sleep for a short amount of time */
+			usleep(5);
+			ast_mutex_lock(&iflock);
+		}
 	}
 	ast_mutex_unlock(&iflock);
 	ast_cli(fd, "%d active SIP channel%s\n", numchans, (numchans != 1) ? "s" : "");
