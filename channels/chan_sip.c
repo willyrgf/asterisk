@@ -375,13 +375,31 @@ struct sip_proxy {
 	char name[MAXHOSTNAMELEN];	/*!< DNS name of domain/host or IP */
 	struct sockaddr_in ip;		/*!< Currently used IP address and port */
 	time_t last_dnsupdate;		/*!< When this was resolved */
-	int force;			/*!< If it's an outbound proxy, Force use of this outbound proxy for all outbound requests */
-	/* Room for a SRV record chain based on the name */
+	struct sip_proxy *next;		/*!< Next proxy in lists */
+	int srvlookup;			/*!< Do SRV lookup? If port is given in configuration, don't do it */
 };
 
+enum proxy_scheme {
+	OBPROXY_ROUNDROBIN=0;		/*!< Take the first one, then next one, then next one and start all over again at the end. Switch every dialog (load balancing) If one fails, move on */
+	OBPROXY_FAILOVER;		/*!< Pick the first one, stay until it fails, then move to the next one in chain */
+	OBPROXY_RANDOM;			/*!< Randomly jump between proxys between each call */
+	/* OBPROXY_SRV */		/*!< SRV record based failover */
+};
 
-#define CAN_NOT_CREATE_DIALOG	0
-#define CAN_CREATE_DIALOG	1
+/*! \brief Holding pattern for proxy list, including scheme 
+	\note At some time we could implement named lists so that we only have to declare lists once for each list and use the same failover scheme.
+		Realtime hosts could then refer to named proxy lists for outbound services
+*/
+struct outbound_proxys {
+	struct sip_proxy *first;	/*!< Linked list of proxys */
+	struct sip_proxy *current;	/*!< The current one we use */	
+	enum proxy_scheme scheme;	/*!< Scheme */
+	int force;			/*!< If it's an outbound proxy, Force use of this outbound proxy for all outbound requests */
+	int count;			/*!< Count of proxys in list (for random scheme) */
+};
+
+#define CAN_NOT_CREATE_DIALOG			0
+#define CAN_CREATE_DIALOG			1
 #define CAN_CREATE_DIALOG_UNSUPPORTED_METHOD	2
 
 /*! XXX Note that sip_methods[i].id == i must hold or the code breaks */
@@ -583,7 +601,7 @@ static int global_callevents;		/*!< Whether we send manager events or not */
 static int global_t1min;		/*!< T1 roundtrip time minimum */
 static int global_autoframing;          /*!< Turn autoframing on or off. */
 static enum transfermodes global_allowtransfer;	/*!< SIP Refer restriction scheme */
-static struct sip_proxy global_outboundproxy;	/*!< Outbound proxy */
+static struct outbound_proxys *global_outboundproxy = NULL;	/*!< Outbound proxy */
 
 static int global_matchexterniplocally; /*!< Match externip/externhost setting against localnet setting */
 
@@ -980,7 +998,7 @@ static struct sip_pvt {
 	int jointnoncodeccapability;            /*!< Joint Non codec capability */
 	int redircodecs;			/*!< Redirect codecs */
 	int maxcallbitrate;			/*!< Maximum Call Bitrate for Video Calls */	
-	struct sip_proxy *outboundproxy;	/*!< Outbound proxy for this dialog */
+	struct outbound_proxys *outboundproxy;	/*!< Outbound proxy for this dialog */
 	struct t38properties t38;		/*!< T38 settings */
 	struct sockaddr_in udptlredirip;	/*!< Where our T.38 UDPTL should be going if not to us */
 	struct ast_udptl *udptl;		/*!< T.38 UDPTL session */
@@ -1134,7 +1152,7 @@ struct sip_peer {
 	int rtpkeepalive;		/*!<  Send RTP packets for keepalive */
 	ast_group_t callgroup;		/*!<  Call group */
 	ast_group_t pickupgroup;	/*!<  Pickup group */
-	struct sip_proxy *outboundproxy; /*!<  Outbound proxy for this peer */
+	struct outbound_proxys *outboundproxy;	/*!< Outbound proxy for this dialog */
 	struct sockaddr_in addr;	/*!<  IP address of peer */
 	int maxcallbitrate;		/*!< Maximum Bitrate for a video call */
 	
@@ -1357,6 +1375,9 @@ static int sip_addrcmp(char *name, struct sockaddr_in *sin);	/* Support for peer
 static int sip_refer_allocate(struct sip_pvt *p);
 static void ast_quiet_chan(struct ast_channel *chan);
 static int attempt_transfer(struct sip_dual *transferer, struct sip_dual *target);
+static struct outbound_proxys *outbound_proxys_allocate(struct sip_pvt *p);
+static int outbound_proxys_free(struct outbound_proxys *proxylist);
+static int outbound_proxys_add(struct outbound_proxys *proxylist, char *name);
 
 /*--- Device monitoring and Device/extension state handling */
 static int cb_extensionstate(char *context, char* exten, int state, void *data);
@@ -1688,9 +1709,12 @@ static int proxy_update(struct sip_proxy *proxy)
 	/* if it's actually an IP address and not a name,
            there's no need for a managed lookup */
         if (!inet_aton(proxy->name, &proxy->ip.sin_addr)) {
+		int usersrv = srvlookup;	/* Global setting */
+		if (!proxy->srvlookup)		/* Turn off if we've got host name */
+			usesrv = FALSE;
+
 		/* Ok, not an IP address, then let's check if it's a domain or host */
-		/* XXX Todo - if we have proxy port, don't do SRV */
-		if (ast_get_ip_or_srv(&proxy->ip, proxy->name, srvlookup ? "_sip._udp" : NULL) < 0) {
+		if (ast_get_ip_or_srv(&proxy->ip, proxy->name, usesrv ? "_sip._udp" : NULL) < 0) {
 			ast_log(LOG_WARNING, "Unable to locate host '%s'\n", proxy->name);
 			return FALSE;
 		}
@@ -1706,12 +1730,56 @@ static struct sip_proxy *proxy_allocate(char *name, char *port, int force)
 	proxy = ast_calloc(1, sizeof(struct sip_proxy));
 	if (!proxy)
 		return NULL;
+	proxy->ip.sin_family = AF_INET;
 	proxy->force = force;
 	ast_copy_string(proxy->name, name, sizeof(proxy->name));
-	if (!ast_strlen_zero(port))
+	if (!ast_strlen_zero(port)) {
 		proxy->ip.sin_port = htons(atoi(port));
+		proxy->srvlookup = FALSE;
+	} else {
+		proxy->ip.sin_port = htons(STANDARD_SIP_PORT);
+		proxy->srvlookup = TRUE;	/* No port given, use proxy SRV lookup */
+	}
 	proxy_update(proxy);
 	return proxy;
+}
+
+/*! \brief Select outbound proxy to use based on scheme */
+enum proxy_scheme {
+        OBPROXY_FAILOVER = 0;            /*!< DEFAULT: Pick the first one, stay until it fails, then move to the next one in chain */
+        OBPROXY_ROUNDROBIN;              /*!< Take the first one, then next one, then next one and start all over again at the end. Switch every dialog (load balancing) If one fails, move on */
+        OBPROXY_RANDOM;                 /*!< Randomly jump between proxys between each call */
+        /* OBPROXY_SRV */               /*!< SRV record based failover */
+
+static struct sip_proxy *outbound_proxy_select(struct outbound_proxys *proxys)
+{
+	if (proxys->scheme == OBPROXY_FAILOVER) {
+		return proxys->current;
+	}
+	if (proxys->scheme == OBPROXY_ROUNDROBIN) {
+		if (proxys->current->next) {
+			return proxys->current = proxys->current->next;
+		}
+		proxys->current = proxys->first;
+		return proxys->current;
+	}
+	if (proxys->scheme == OBPROXY_RANDOM) {
+		struct sip_proxy *start = proxys->first;
+		int winner = ast_random()  % proxys->count);
+		if (option_debug > 1)
+			ast_log(LOG_DEBUG, "**** OUR WINNER TONIGHT IS OUTBOUND PROXY %d\n", winner + 1;
+		if (winner > 0) {
+			int i ;
+			for (i = 0; i < winner; i++) {
+				if (start->next) {
+					start = start->next;
+				}
+			}
+		}
+		return start;
+	}
+	/* Placeholder for another scheme */
+	return NULL;
 }
 
 /*! \brief Get default outbound proxy or global proxy */
@@ -1720,14 +1788,14 @@ static struct sip_proxy *obproxy_get(struct sip_pvt *dialog, struct sip_peer *pe
 	if (peer && peer->outboundproxy) {
 		if (option_debug && sipdebug)
 			ast_log(LOG_DEBUG, "OBPROXY: Applying peer OBproxy to this call\n");
-		append_history(dialog, "OBproxy", "Using peer obproxy %s", peer->outboundproxy->name);
-		return peer->outboundproxy;
+		append_history(dialog, "OBproxy", "Using peer obproxy %s", peer->outboundproxy->current->name);
+		return outbound_proxy_select(peer->outboundproxy);
 	}
-	if (global_outboundproxy.name[0]) {
+	if (global_outboundproxy) {
 		if (option_debug && sipdebug)
 			ast_log(LOG_DEBUG, "OBPROXY: Applying global OBproxy to this call\n");
-		append_history(dialog, "OBproxy", "Using global obproxy %s", global_outboundproxy.name);
-		return &global_outboundproxy;
+		append_history(dialog, "OBproxy", "Using global obproxy %s", global_outboundproxy->current->name);
+		return outbound_proxy_select(global_outboundproxy);
 	}
 	if (option_debug && sipdebug)
 		ast_log(LOG_DEBUG, "OBPROXY: Not applying OBproxy to this call\n");
@@ -10886,8 +10954,8 @@ static int sip_show_settings(int fd, int argc, char *argv[])
 	ast_cli(fd, "  SIP Transfer mode:      %s\n", transfermode2str(global_allowtransfer));
 	ast_cli(fd, "  Max Call Bitrate:       %d kbps\n", default_maxcallbitrate);
 	ast_cli(fd, "  Auto-Framing:           %s\n", global_autoframing ? "Yes" : "No");
-	ast_cli(fd, "  Outb. proxy:            %s %s\n", ast_strlen_zero(global_outboundproxy.name) ? "<not set>" : global_outboundproxy.name,
-							global_outboundproxy.force ? "(forced)" : "");
+	ast_cli(fd, "  Outb. proxy:            %s %s\n", global_outboundproxy ? "<not set>" : global_outboundproxy->current->name,
+							global_outboundproxy ? "" : global_outboundproxy->force ? "(forced) : "");
 
 	ast_cli(fd, "\nDefault Settings:\n");
 	ast_cli(fd, "-----------------\n");
@@ -16414,6 +16482,92 @@ static int handle_common_options(struct ast_flags *flags, struct ast_flags *mask
 	return res;
 }
 
+//static int  outbound_proxys_free(struct sip_pvt *p);
+/*! \brief Allocate holding structure for outbound proxy list in peer or in general section */
+static struct outbound_proxys *outbound_proxys_allocate(struct sip_pvt *p)
+{
+	struct outbound_proxys *proxys = ast_calloc(1, sizeof(struct outbound_proxys));
+	if (!proxys)
+		return 0;
+	proxys->scheme = OBPROXY_ROUNDROBIN;
+	return 1;
+}
+
+/*! \brief Free proxy list */
+static int outbound_proxys_free(struct outbound_proxys *proxylist)
+{
+	struct sip_proxy *proxy, *prevproxy;;
+	if (!proxylist)
+		return 0;
+	proxy = proxylist->proxys;
+	while (proxy) {
+		prevproxy = proxy;
+		proxy = proxy->next;
+		ast_free(proxy);
+	};
+	ast_free(proxylist);
+	return 1;
+}
+
+/*! \brief Set outbound proxy scheme
+	\param name Configuration parameter like "scheme[,force]"
+*/
+static int outbound_proxys_scheme(struct outbound_proxys *proxylist, const char *name)
+{
+	char *scheme = ast_strdupa(name)
+	char *force = strchr(varname, ",");
+
+	if (force) {
+		*force = '\0';
+		force++;
+		while (*force == ' ') {
+			force++;
+		}
+		if (!strcasecmp(force, "force")) {
+			proxylist->force = TRUE;
+		}
+	}
+	if strcasecmp(scheme, "
+skrep
+	
+	
+}
+
+/*! \brief Add outbound proxy to list 
+	\param name Configuration parameter like hostname:port
+*/
+static int outbound_proxys_add(struct outbound_proxys *proxylist, const char *name)
+{
+	char *port, *next, *force;
+	int forceopt = FALSE;
+	struct sip_proxy *proxy;
+	char *varname;
+
+	/* Set peer channel variable */
+	varname = ast_strdupa(name);
+	next = varname;
+	if ((port = strchr(varname, ':'))) {
+		*port++ = '\0';
+		next = port;
+	}
+	/* Allocate proxy object */
+	proxy  = proxy_allocate(varname, port, forceopt);
+	if (!proxy)
+		return 0;
+
+	if (!proxylist->current && !proxylist->first) {
+		/* Set current to first one in configuration file */
+		proxylist->current = proxylist->first = proxy;
+		proxylist->count = 1;
+	} else {
+		proxy->next = proxylist->first;
+		proxylist->first = proxy->next;
+		proxylist->count++;
+	}
+	
+}
+
+
 /*! \brief Add SIP domain to list of domains we are responsible for */
 static int add_sip_domain(const char *domain, const enum domain_mode mode, const char *context)
 {
@@ -16838,22 +16992,12 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 			ast_set2_flag(&peer->flags[0], ast_true(v->value), SIP_USEREQPHONE);
 		} else if (!strcasecmp(v->name, "fromuser")) {
 			ast_copy_string(peer->fromuser, v->value, sizeof(peer->fromuser));
+		} else if (!strcasecmp(v->name, "outboundproxyscheme")) {
+			outbound_proxys_scheme(peer->outboundproxy, v->value);
 		} else if (!strcasecmp(v->name, "outboundproxy")) {
-			char *port, *next, *force;
-			int forceopt = FALSE;
-			/* Set peer channel variable */
-			varname = ast_strdupa(v->value);
-			next = varname;
-			if ((port = strchr(varname, ':'))) {
-				*port++ = '\0';
-				next = port;
-			}
-			if ((force = strchr(next, ','))) {
-				*force++ = '\0';
-				forceopt = strcmp(force, "force");
-			}
-			/* Allocate proxy object */
-			peer->outboundproxy = proxy_allocate(varname, port, forceopt);
+			if (!peer->outboundproxy)
+				peer->outboundproxy = outbound_proxys_allocate();
+			outbound_proxys_add(peer->outboundproxy, v->value);
 		} else if (!strcasecmp(v->name, "host")) {
 			if (!strcasecmp(v->value, "dynamic")) {
 				/* They'll register with us */
@@ -17080,9 +17224,6 @@ static int reload_config(enum channelreloadreason reason)
 	memset(&localaddr, 0, sizeof(localaddr));
 	memset(&externip, 0, sizeof(externip));
 	memset(&default_prefs, 0 , sizeof(default_prefs));
-	memset(&global_outboundproxy, 0, sizeof(struct sip_proxy));
-	global_outboundproxy.ip.sin_port = htons(STANDARD_SIP_PORT);
-	global_outboundproxy.ip.sin_family = AF_INET;	/* Type of address: IPv4 */
 	ourport = STANDARD_SIP_PORT;
 	srvlookup = DEFAULT_SRVLOOKUP;
 	global_tos_sip = DEFAULT_TOS_SIP;
@@ -17102,6 +17243,10 @@ static int reload_config(enum channelreloadreason reason)
 	global_notifyhold = FALSE;
 	global_alwaysauthreject = 0;
 	global_allowsubscribe = FALSE;
+	if (global_outboundproxy) {
+		outbound_proxys_free(global_outboundproxy);
+		global_outboundproxy = NULL;
+	}
 	ast_copy_string(global_useragent, DEFAULT_USERAGENT, sizeof(global_useragent));
 	ast_copy_string(default_notifymime, DEFAULT_NOTIFYMIME, sizeof(default_notifymime));
 	if (ast_strlen_zero(ast_config_AST_SYSTEM_NAME))
@@ -17259,21 +17404,15 @@ static int reload_config(enum channelreloadreason reason)
 			ast_copy_string(default_callerid, v->value, sizeof(default_callerid));
 		} else if (!strcasecmp(v->name, "fromdomain")) {
 			ast_copy_string(default_fromdomain, v->value, sizeof(default_fromdomain));
+		} else if (!strcasecmp(v->name, "outboundproxyscheme")) {
+			if (!global_outboundproxy) {
+				global_outboundproxy = outbound_proxys_allocate();
+			}
+			outbound_proxys_scheme(global_outboundproxy, v->value);
 		} else if (!strcasecmp(v->name, "outboundproxy")) {
-			char *name, *port = NULL, *force;
-
-			name = ast_strdupa(v->value);
-			if ((port = strchr(name, ':'))) {
-				*port++ = '\0';
-				global_outboundproxy.ip.sin_port = htons(atoi(port));
-			}
-	
-			if ((force = strchr(port ? port : name, ','))) {
-				*force++ = '\0';
-				global_outboundproxy.force = (!strcasecmp(force, "force"));
-			}
-			ast_copy_string(global_outboundproxy.name, name, sizeof(global_outboundproxy.name));
-			proxy_update(&global_outboundproxy);
+			if (!global_outboundproxy)
+				global_outboundproxy = outbound_proxys_allocate();
+			outbound_proxys_add(global_outboundproxy, v->value);
 		} else if (!strcasecmp(v->name, "autocreatepeer")) {
 			autocreatepeer = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "srvlookup")) {
