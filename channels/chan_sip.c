@@ -10968,9 +10968,10 @@ static int sip_show_channelstats(int fd, int argc, char *argv[])
 	cur = iflist;
 	ast_cli(fd, FORMAT2, "Peer", "Call ID", "Duration", "Recv: Pack", "Lost", "%", "Jitter", "Send: Pack", "Lost", "Jitter");
 	for (; cur; cur = cur->next) {
-		unsigned int rxcount = ast_rtp_get_qosvalue(cur->rtp, AST_RTP_RXCOUNT);
-		unsigned int txcount = ast_rtp_get_qosvalue(cur->rtp, AST_RTP_TXCOUNT);
+		unsigned int rxcount;
+		unsigned int txcount;
 		struct ast_channel *c = cur->owner;
+
 		if (cur->subscribed != NONE) /* Subscriptions */
 			continue;
 
@@ -10979,6 +10980,8 @@ static int sip_show_channelstats(int fd, int argc, char *argv[])
 				ast_cli(fd, "%-15.15s  %-11.11s (inv state: %s) -- %s\n", ast_inet_ntoa(cur->sa.sin_addr), cur->callid, invitestate2string[cur->invitestate].desc, "-- No RTP active");
 			continue;
 		}
+		rxcount = ast_rtp_get_qosvalue(cur->rtp, AST_RTP_RXCOUNT);
+		txcount = ast_rtp_get_qosvalue(cur->rtp, AST_RTP_TXCOUNT);
 
 		/* Find the duration of this channel */
 		if (c && c->cdr && !ast_tvzero(c->cdr->start)) {
