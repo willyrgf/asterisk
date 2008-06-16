@@ -1210,6 +1210,13 @@ static void temp_pvt_cleanup(void *);
 /*! \brief A per-thread temporary pvt structure */
 AST_THREADSTORAGE_CUSTOM(ts_temp_pvt, temp_pvt_init, temp_pvt_cleanup);
 
+#ifdef LOW_MEMORY
+static void ts_ast_rtp_destroy(void *);
+
+AST_THREADSTORAGE_CUSTOM(ts_audio_rtp, ts_audio_rtp_init, ts_ast_rtp_destroy);
+AST_THREADSTORAGE_CUSTOM(ts_video_rtp, ts_video_rtp_init, ts_ast_rtp_destroy);
+#endif
+
 /*! \todo Move the sip_auth list to AST_LIST */
 static struct sip_auth *authl = NULL;		/*!< Authentication list for realm authentication */
 
@@ -3125,7 +3132,9 @@ static int __sip_destroy(struct sip_pvt *p, int lockowner)
 
 	/* Remove link from peer to subscription of MWI */
 	if (p->relatedpeer) {
-		p->relatedpeer->mwipvt = NULL;
+		if (p->relatedpeer->mwipvt == p) {
+			p->relatedpeer->mwipvt = NULL;
+		}
 		ASTOBJ_UNREF(p->relatedpeer, sip_destroy_peer);
 	}
 
@@ -5077,12 +5086,20 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 	}
 
 	/* Initialize the temporary RTP structures we use to evaluate the offer from the peer */
+#ifdef LOW_MEMORY
+	newaudiortp = ast_threadstorage_get(&ts_audio_rtp, ast_rtp_alloc_size());
+#else
 	newaudiortp = alloca(ast_rtp_alloc_size());
+#endif
 	memset(newaudiortp, 0, ast_rtp_alloc_size());
 	ast_rtp_new_init(newaudiortp);
 	ast_rtp_pt_clear(newaudiortp);
 
+#ifdef LOW_MEMORY
+	newvideortp = ast_threadstorage_get(&ts_video_rtp, ast_rtp_alloc_size());
+#else
 	newvideortp = alloca(ast_rtp_alloc_size());
+#endif
 	memset(newvideortp, 0, ast_rtp_alloc_size());
 	ast_rtp_new_init(newvideortp);
 	ast_rtp_pt_clear(newvideortp);
@@ -5614,6 +5631,13 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 	return 0;
 }
 
+#ifdef LOW_MEMORY
+static void ts_ast_rtp_destroy(void *data)
+{
+    struct ast_rtp *tmp = data;
+    ast_rtp_destroy(tmp);
+}
+#endif
 
 /*! \brief Add header to SIP message */
 static int add_header(struct sip_request *req, const char *var, const char *value)

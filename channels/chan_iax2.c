@@ -29,7 +29,7 @@
  */
 
 /*** MODULEINFO
-	<use>zaptel</use>
+	<use>dahdi</use>
         <depend>res_features</depend>
  ***/
 
@@ -59,9 +59,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <sys/stat.h>
 #include <regex.h>
 
-#ifdef HAVE_ZAPTEL
+#if defined(HAVE_ZAPTEL) || defined (HAVE_DAHDI)
 #include <sys/ioctl.h>
-#include <zaptel/zaptel.h>
+#include "asterisk/dahdi_compat.h"
 #endif
 
 #include "asterisk/lock.h"
@@ -1010,10 +1010,19 @@ static void __send_ping(const void *data)
 
 static int send_ping(const void *data)
 {
+	int callno = (long) data;
+
+	ast_mutex_lock(&iaxsl[callno]);
+	if (iaxs[callno]) {
+		iaxs[callno]->pingid = -1;
+	}
+	ast_mutex_unlock(&iaxsl[callno]);
+
 #ifdef SCHED_MULTITHREADED
 	if (schedule_action(__send_ping, data))
 #endif		
 		__send_ping(data);
+
 	return 0;
 }
 
@@ -1050,10 +1059,19 @@ static void __send_lagrq(const void *data)
 
 static int send_lagrq(const void *data)
 {
+	int callno = (long) data;
+
+	ast_mutex_lock(&iaxsl[callno]);
+	if (iaxs[callno]) {
+		iaxs[callno]->lagid = -1;
+	}
+	ast_mutex_unlock(&iaxsl[callno]);
+
 #ifdef SCHED_MULTITHREADED
 	if (schedule_action(__send_lagrq, data))
 #endif		
 		__send_lagrq(data);
+	
 	return 0;
 }
 
@@ -6520,7 +6538,7 @@ static int timing_read(int *id, int fd, short events, void *cbdata)
 	struct iax2_trunk_peer *tpeer, *prev = NULL, *drop=NULL;
 	int processed = 0;
 	int totalcalls = 0;
-#ifdef ZT_TIMERACK
+#ifdef DAHDI_TIMERACK
 	int x = 1;
 #endif
 	struct timeval now;
@@ -6528,9 +6546,9 @@ static int timing_read(int *id, int fd, short events, void *cbdata)
 		ast_verbose("Beginning trunk processing. Trunk queue ceiling is %d bytes per host\n", MAX_TRUNKDATA);
 	gettimeofday(&now, NULL);
 	if (events & AST_IO_PRI) {
-#ifdef ZT_TIMERACK
+#ifdef DAHDI_TIMERACK
 		/* Great, this is a timing interface, just call the ioctl */
-		if (ioctl(fd, ZT_TIMERACK, &x)) {
+		if (ioctl(fd, DAHDI_TIMERACK, &x)) {
 			ast_log(LOG_WARNING, "Unable to acknowledge zap timer. IAX trunking will fail!\n");
 			usleep(1);
 			return -1;
@@ -8801,15 +8819,17 @@ static int iax2_prov_cmd(int fd, int argc, char *argv[])
 static void __iax2_poke_noanswer(const void *data)
 {
 	struct iax2_peer *peer = (struct iax2_peer *)data;
+	int callno;
+
 	if (peer->lastms > -1) {
 		ast_log(LOG_NOTICE, "Peer '%s' is now UNREACHABLE! Time: %d\n", peer->name, peer->lastms);
 		manager_event(EVENT_FLAG_SYSTEM, "PeerStatus", "Peer: IAX2/%s\r\nPeerStatus: Unreachable\r\nTime: %d\r\n", peer->name, peer->lastms);
 		ast_device_state_changed("IAX2/%s", peer->name); /* Activate notification */
 	}
-	if (peer->callno > 0) {
-		ast_mutex_lock(&iaxsl[peer->callno]);
-		iax2_destroy(peer->callno);
-		ast_mutex_unlock(&iaxsl[peer->callno]);
+	if ((callno = peer->callno) > 0) {
+		ast_mutex_lock(&iaxsl[callno]);
+		iax2_destroy(callno);
+		ast_mutex_unlock(&iaxsl[callno]);
 	}
 	peer->callno = 0;
 	peer->lastms = -1;
@@ -8862,7 +8882,7 @@ static int iax2_poke_peer(struct iax2_peer *peer, int heldcall)
 	}
 	if (heldcall)
 		ast_mutex_unlock(&iaxsl[heldcall]);
-	peer->callno = find_callno(0, 0, &peer->addr, NEW_FORCE, peer->sockfd, 0);
+	callno = peer->callno = find_callno(0, 0, &peer->addr, NEW_FORCE, peer->sockfd, 0);
 	if (heldcall)
 		ast_mutex_lock(&iaxsl[heldcall]);
 	if (peer->callno < 1) {
@@ -8893,11 +8913,11 @@ static int iax2_poke_peer(struct iax2_peer *peer, int heldcall)
 		peer_unref(peer);
 
 	/* And send the poke */
-	ast_mutex_lock(&iaxsl[peer->callno]);
-	if (iaxs[peer->callno]) {
-		send_command(iaxs[peer->callno], AST_FRAME_IAX, IAX_COMMAND_POKE, 0, NULL, 0, -1);
+	ast_mutex_lock(&iaxsl[callno]);
+	if (iaxs[callno]) {
+		send_command(iaxs[callno], AST_FRAME_IAX, IAX_COMMAND_POKE, 0, NULL, 0, -1);
 	}
-	ast_mutex_unlock(&iaxsl[peer->callno]);
+	ast_mutex_unlock(&iaxsl[callno]);
 
 	return 0;
 }
@@ -9790,14 +9810,14 @@ static void prune_peers(void)
 
 static void set_timing(void)
 {
-#ifdef HAVE_ZAPTEL
+#ifdef HAVE_DAHDI
 	int bs = trunkfreq * 8;
 	if (timingfd > -1) {
 		if (
-#ifdef ZT_TIMERACK
-			ioctl(timingfd, ZT_TIMERCONFIG, &bs) &&
+#ifdef DAHDI_TIMERACK
+			ioctl(timingfd, DAHDI_TIMERCONFIG, &bs) &&
 #endif			
-			ioctl(timingfd, ZT_SET_BLOCKSIZE, &bs))
+			ioctl(timingfd, DAHDI_SET_BLOCKSIZE, &bs))
 			ast_log(LOG_WARNING, "Unable to set blocksize on timing source\n");
 	}
 #endif
@@ -11073,14 +11093,22 @@ static int load_module(void)
 	jb_setoutput(jb_error_output, jb_warning_output, NULL);
 	
 #ifdef HAVE_ZAPTEL
-#ifdef ZT_TIMERACK
+#ifdef ZAPTEL_TIMERACK
 	timingfd = open("/dev/zap/timer", O_RDWR);
 	if (timingfd < 0)
 #endif
 		timingfd = open("/dev/zap/pseudo", O_RDWR);
 	if (timingfd < 0) 
 		ast_log(LOG_WARNING, "Unable to open IAX timing interface: %s\n", strerror(errno));
-#endif		
+#elif defined(HAVE_DAHDI)
+#ifdef DAHDI_TIMERACK
+	timingfd = open("/dev/dahdi/timer", O_RDWR);
+	if (timingfd < 0)
+#endif
+		timingfd = open("/dev/dahdi/pseudo", O_RDWR);
+	if (timingfd < 0) 
+		ast_log(LOG_WARNING, "Unable to open IAX timing interface: %s\n", strerror(errno));
+#endif
 
 	memset(iaxs, 0, sizeof(iaxs));
 

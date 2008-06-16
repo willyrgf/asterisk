@@ -64,7 +64,7 @@ of 'maxlen' or 'size' minus the original strlen() of collect digits.
 */
 int ast_app_dtget(struct ast_channel *chan, const char *context, char *collect, size_t size, int maxlen, int timeout) 
 {
-	struct tone_zone_sound *ts;
+	struct ind_tone_zone_sound *ts;
 	int res=0, x=0;
 
 	if (maxlen > size)
@@ -1385,6 +1385,18 @@ char *ast_read_textfile(const char *filename)
 	}
 	close(fd);
 	return output;
+}
+
+void ast_app_options2str(const struct ast_app_option *options, struct ast_flags *flags, char *buf, size_t len)
+{
+	unsigned int i, found = 0;
+
+	for (i = 32; i < 128 && found < len;i++) {
+		if (ast_test_flag(flags, options[i].flag)) {
+			buf[found++] = i;
+		}
+	}
+	buf[found] = '\0';
 }
 
 int ast_app_parse_options(const struct ast_app_option *options, struct ast_flags *flags, char **args, char *optstr)
