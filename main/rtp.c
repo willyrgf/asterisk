@@ -2079,21 +2079,27 @@ void ast_rtp_reset(struct ast_rtp *rtp)
 
 unsigned int ast_rtp_get_qosvalue(struct ast_rtp *rtp, enum ast_rtp_qos_vars value)
 {
+	if (rtp == NULL) {
+		if (option_debug > 1)
+			ast_log(LOG_DEBUG, "NO RTP Structure? Kidding me? \n");
+		return 0;
+	}
+
 	switch (value) {
 	case AST_RTP_TXCOUNT:
-		return rtp->txcount;
+		return (unsigned int) rtp->txcount;
 	case AST_RTP_RXCOUNT:
-		return rtp->rxcount;
+		return (unsigned int) rtp->rxcount;
 	case AST_RTP_TXJITTER:
 		return (unsigned int) (rtp->rxjitter * 100.0);
 	case AST_RTP_RXJITTER:
-		return (unsigned int) (rtp->rtcp->reported_jitter / (unsigned int) 65536.0);
+		return (unsigned int) rtp->rtcp ? (rtp->rtcp->reported_jitter / (unsigned int) 65536.0) : 0;
 	case AST_RTP_RXPLOSS:
-		return (rtp->rtcp->expected_prior - rtp->rtcp->received_prior);
+		return rtp->rtcp ? (rtp->rtcp->expected_prior - rtp->rtcp->received_prior) : 0;
 	case AST_RTP_TXPLOSS:
-		return rtp->rtcp->reported_lost;
+		return rtp->rtcp ? rtp->rtcp->reported_lost : 0;
 	case AST_RTP_RTT:
-		return (unsigned int) rtp->rtcp->rtt * 100;
+		return (unsigned int) rtp->rtcp ? rtp->rtcp->rtt * 100 : 0;
 	}
 	return 0;	/* To make the compiler happy */
 }
