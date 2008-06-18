@@ -3109,7 +3109,7 @@ static int attended_transfer_occurred(struct ast_channel *chan)
 static void setup_transfer_datastore(struct queue_ent *qe, struct member *member, int starttime)
 {
 	struct ast_datastore *ds;
-	struct queue_transfer_ds *qtds = ast_calloc(1, sizeof(qtds));
+	struct queue_transfer_ds *qtds = ast_calloc(1, sizeof(*qtds));
 
 	if (!qtds) {
 		ast_log(LOG_WARNING, "Memory allocation error!\n");
@@ -4752,8 +4752,11 @@ stop:
 				ast_queue_log(args.queuename, chan->uniqueid, "NONE", "ABANDON",
 					"%d|%d|%ld", qe.pos, qe.opos,
 					(long) time(NULL) - qe.start);
+				res = -1;
+			} else if (qcontinue) {
+				reason = QUEUE_CONTINUE;
+				res = 0;
 			}
-			res = -1;
 		} else if (qe.valid_digits) {
 			ast_queue_log(args.queuename, chan->uniqueid, "NONE", "EXITWITHKEY",
 				"%s|%d", qe.digits, qe.pos);
