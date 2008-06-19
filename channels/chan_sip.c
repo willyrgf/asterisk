@@ -11821,7 +11821,8 @@ static char show_channels_usage[] =
 
 static char show_channelstats_usage[] = 
 "Usage: sip show channelstats\n"
-"       Lists all currently active SIP channel's RTCP statistics.\n";
+"       Lists all currently active SIP channel's RTCP statistics.\n"
+"       Note that calls in the much optimized P2P bridge mode will not show any packets here.";
 
 static char show_channel_usage[] = 
 "Usage: sip show channel <channel>\n"

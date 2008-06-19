@@ -2084,6 +2084,9 @@ unsigned int ast_rtp_get_qosvalue(struct ast_rtp *rtp, enum ast_rtp_qos_vars val
 			ast_log(LOG_DEBUG, "NO RTP Structure? Kidding me? \n");
 		return 0;
 	}
+	if (option_debug > 1 && rtp->rtcp == NULL) {
+		ast_log(LOG_DEBUG, "NO RTCP structure. Maybe in RTP p2p bridging mode? \n");
+	}
 
 	switch (value) {
 	case AST_RTP_TXCOUNT:
