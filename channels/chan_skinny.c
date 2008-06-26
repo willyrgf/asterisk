@@ -1109,10 +1109,6 @@ AST_MUTEX_DEFINE_STATIC(netlock);
 AST_MUTEX_DEFINE_STATIC(sessionlock);
 /* Protect the device list */
 AST_MUTEX_DEFINE_STATIC(devicelock);
-#if 0
-/* Protect the paging device list */
-AST_MUTEX_DEFINE_STATIC(pagingdevicelock);
-#endif
 
 /* This is the thread for the monitor which checks for input on the channels
    which are not currently in use. */
@@ -1255,13 +1251,6 @@ static struct skinny_device {
 	struct skinny_device *next;
 	struct skinny_line *activeline;
 } *devices = NULL;
-
-struct skinny_paging_device {
-	char name[80];
-	char id[16];
-	struct skinny_device ** devices;
-	struct skinny_paging_device *next;
-};
 
 static struct skinnysession {
 	pthread_t t;
@@ -3003,13 +2992,6 @@ static struct ast_cli_entry cli_skinny[] = {
 	AST_CLI_DEFINE(handle_skinny_reset, "Reset Skinny device(s)"),
 };
 
-#if 0
-static struct skinny_paging_device *build_paging_device(const char *cat, struct ast_variable *v)
-{
-	return NULL;
-}
-#endif
-
 static struct skinny_device *build_device(const char *cat, struct ast_variable *v)
 {
 	struct skinny_device *d;
@@ -3237,17 +3219,6 @@ static struct skinny_device *build_device(const char *cat, struct ast_variable *
 		if (/*d->addr.sin_addr.s_addr && */!ntohs(d->addr.sin_port)) {
 			d->addr.sin_port = htons(DEFAULT_SKINNY_PORT);
 		}
-#if 0
-		/* I don't think we need this anymore at all, since d->ourip is set in skinny_register now */
-		if (d->addr.sin_addr.s_addr) {
-			/* XXX See note above, in 'host' option. */
-			if (ast_ouraddrfor(&d->addr.sin_addr, &d->ourip)) {
-				d->ourip = __ourip;
-			}
-		} else {
-			d->ourip = __ourip;
-		}
-#endif
 	}
 	return d;
 }
@@ -6338,12 +6309,6 @@ static int reload_config(void)
 	while(cat) {
 		if (!strcasecmp(cat, "general")) {
 			/* Nothing to do */
-#if 0
-		} else if (!strncasecmp(cat, "paging-", 7)) {
-			p = build_paging_device(cat, ast_variable_browse(cfg, cat));
-			if (p) {
-			}
-#endif
 		} else {
 			d = build_device(cat, ast_variable_browse(cfg, cat));
 			if (d) {
