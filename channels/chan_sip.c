@@ -7585,6 +7585,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 	char tmp[80];
 	char addr[80];
 	struct sip_pvt *p;
+	char *fromdomain;
 
 	/* exit if we are already in process with this registrar ?*/
 	if ( r == NULL || ((auth==NULL) && (r->regstate==REG_STATE_REGSENT || r->regstate==REG_STATE_AUTHSENT))) {
@@ -7679,12 +7680,19 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 			ast_log(LOG_DEBUG, "Scheduled a registration timeout for %s id  #%d \n", r->hostname, r->timeout);
 	}
 
-	if (strchr(r->username, '@')) {
+	if ((fromdomain = strchr(r->username, '@'))) {
+		/* We have a domain in the username for registration */
 		snprintf(from, sizeof(from), "<sip:%s>;tag=%s", r->username, p->tag);
 		if (!ast_strlen_zero(p->theirtag))
 			snprintf(to, sizeof(to), "<sip:%s>;tag=%s", r->username, p->theirtag);
 		else
 			snprintf(to, sizeof(to), "<sip:%s>", r->username);
+
+		/* If the registration username contains '@', then the domain should be used as
+		   the equivalent of "fromdomain" for the registration */
+		if (ast_strlen_zero(p->fromdomain)) {
+			ast_string_field_set(p, fromdomain, ++fromdomain);
+		}
 	} else {
 		snprintf(from, sizeof(from), "<sip:%s@%s>;tag=%s", r->username, p->tohost, p->tag);
 		if (!ast_strlen_zero(p->theirtag))
@@ -8888,6 +8896,7 @@ static int get_destination(struct sip_pvt *p, struct sip_request *oreq)
 	char tmpf[256] = "", *from;
 	struct sip_request *req;
 	char *colon;
+	char *decoded_uri;
 	
 	req = oreq;
 	if (!req)
@@ -8979,25 +8988,25 @@ static int get_destination(struct sip_pvt *p, struct sip_request *oreq)
 		char hint[AST_MAX_EXTENSION];
 		return (ast_get_hint(hint, sizeof(hint), NULL, 0, NULL, p->context, p->exten) ? 0 : -1);
 	} else {
+		decoded_uri = ast_strdupa(uri);
+		ast_uri_decode(decoded_uri);
 		/* Check the dialplan for the username part of the request URI,
 		   the domain will be stored in the SIPDOMAIN variable
 		   Since extensions.conf can have unescaped characters, try matching a decoded
 		   uri in addition to the non-decoded uri
 		   Return 0 if we have a matching extension */
-		char *decoded_uri = ast_strdupa(uri);
-		ast_uri_decode(decoded_uri);
 		if (ast_exists_extension(NULL, p->context, uri, 1, S_OR(p->cid_num, from)) || ast_exists_extension(NULL, p->context, decoded_uri, 1, S_OR(p->cid_num, from)) ||
-		    !strcmp(uri, ast_pickup_ext())) {
+		    !strcmp(decoded_uri, ast_pickup_ext())) {
 			if (!oreq)
-				ast_string_field_set(p, exten, uri);
+				ast_string_field_set(p, exten, decoded_uri);
 			return 0;
 		} 
 	}
 
 	/* Return 1 for pickup extension or overlap dialling support (if we support it) */
 	if((ast_test_flag(&global_flags[1], SIP_PAGE2_ALLOWOVERLAP) && 
- 	    ast_canmatch_extension(NULL, p->context, uri, 1, S_OR(p->cid_num, from))) ||
-	    !strncmp(uri, ast_pickup_ext(), strlen(uri))) {
+ 	    ast_canmatch_extension(NULL, p->context, decoded_uri, 1, S_OR(p->cid_num, from))) ||
+	    !strncmp(decoded_uri, ast_pickup_ext(), strlen(decoded_uri))) {
 		return 1;
 	}
 	
@@ -14074,10 +14083,13 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 			if (gotdest == 1 && ast_test_flag(&p->flags[1], SIP_PAGE2_ALLOWOVERLAP))
 				transmit_response_reliable(p, "484 Address Incomplete", req);
 			else {
+				char *decoded_exten = ast_strdupa(p->exten);
+				
 				transmit_response_reliable(p, "404 Not Found", req);
+				ast_uri_decode(decoded_exten);
 				ast_log(LOG_NOTICE, "Call from '%s' to extension"
 					" '%s' rejected because extension not found.\n",
-					S_OR(p->username, p->peername), p->exten);
+					S_OR(p->username, p->peername), decoded_exten);
 			}
 			p->invitestate = INV_COMPLETED;	
 			update_call_counter(p, DEC_CALL_LIMIT);
