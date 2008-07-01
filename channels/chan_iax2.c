@@ -1573,6 +1573,7 @@ static int __find_callno(unsigned short callno, unsigned short dcallno, struct s
 			return res;
 		}
 
+#ifdef IAX_OLD_FIND
 		/* If we get here, we SHOULD NOT find a call structure for this
 		   callno; if we do, it means that there is a call structure that
 		   has a peer callno but did NOT get entered into the hash table,
@@ -1611,6 +1612,7 @@ static int __find_callno(unsigned short callno, unsigned short dcallno, struct s
 		if (res) {
 			ast_log(LOG_WARNING, "Old call search code found call number %d that was not in hash table!\n", res);
 		}
+#endif
 	}
 	if (!res && (new >= NEW_ALLOW)) {
 		int start, found = 0;
