@@ -5111,6 +5111,10 @@ static int sip_hangup(struct ast_channel *ast)
 				p->invitestate = INV_TERMINATED;
 			}
 		} else {	/* Call is in UP state, send BYE */
+			if (p->stimer->st_active == TRUE) {
+				stop_session_timer(p);
+			}
+
 			if (!p->pendinginvite) {
 				struct ast_channel *bridge = ast_bridged_channel(oldowner);
 				char *audioqos = "";
@@ -7711,8 +7715,8 @@ static int respprep(struct sip_request *resp, struct sip_pvt *p, const char *msg
 	add_header(resp, "Allow", ALLOWED_METHODS);
 	add_header(resp, "Supported", SUPPORTED_EXTENSIONS);
 
-	/* Add Session-Timers related headers if the feature is active for this session */
-	if (p->stimer && p->stimer->st_active == TRUE && p->stimer->st_active_peer_ua == TRUE) {
+	/* If this is an invite, add Session-Timers related headers if the feature is active for this session */
+	if (p->method == SIP_INVITE && p->stimer && p->stimer->st_active == TRUE && p->stimer->st_active_peer_ua == TRUE) {
 		char se_hdr[256];
 		snprintf(se_hdr, sizeof(se_hdr), "%d;refresher=%s", p->stimer->st_interval, 
 			strefresher2str(p->stimer->st_ref));
@@ -7854,10 +7858,12 @@ static int reqprep(struct sip_request *req, struct sip_pvt *p, int sipmethod, in
 	/* Add Session-Timers related headers if the feature is active for this session.
 	   An exception to this behavior is the ACK request. Since Asterisk never requires 
 	   session-timers support from a remote end-point (UAS) in an INVITE, it must 
-	   not send 'Require: timer' header in the ACK request. Also, Require: header 
-	   is not applicable for CANCEL method. */
+	   not send 'Require: timer' header in the ACK request. 
+	   This should only be added in the INVITE transactions, not MESSAGE or REFER or other
+	   in-dialog messages.
+	*/
 	if (p->stimer && p->stimer->st_active == TRUE && p->stimer->st_active_peer_ua == TRUE 
-	    && sipmethod != SIP_ACK && sipmethod != SIP_CANCEL) {
+	    && sipmethod == SIP_INVITE) {
 		char se_hdr[256];
 		snprintf(se_hdr, sizeof(se_hdr), "%d;refresher=%s", p->stimer->st_interval, 
 			strefresher2str(p->stimer->st_ref));
@@ -17067,19 +17073,6 @@ static int attempt_transfer(struct sip_dual *transferer, struct sip_dual *target
 		if (peerd)
 			ast_quiet_chan(peerd);
 
-		/* Fix CDRs so they're attached to the remaining channel */
-		if (peera->cdr && peerb->cdr)
-			peerb->cdr = ast_cdr_append(peerb->cdr, peera->cdr);
-		else if (peera->cdr) 
-			peerb->cdr = peera->cdr;
-		peera->cdr = NULL;
-
-		if (peerb->cdr && peerc->cdr) 
-			peerb->cdr = ast_cdr_append(peerb->cdr, peerc->cdr);
-		else if (peerc->cdr)
-			peerb->cdr = peerc->cdr;
-		peerc->cdr = NULL;
-	
 		ast_debug(4, "SIP transfer: trying to masquerade %s into %s\n", peerc->name, peerb->name);
 		if (ast_channel_masquerade(peerb, peerc)) {
 			ast_log(LOG_WARNING, "Failed to masquerade %s into %s\n", peerb->name, peerc->name);
