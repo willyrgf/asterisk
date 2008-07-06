@@ -11672,8 +11672,8 @@ static enum check_auth_result check_peer_ok(struct sip_pvt *p, char *of,
 	/* First find device on name */
 	peer = find_peer(of, NULL, TRUE, FALSE);
 
-	/* Then find device on IP (if it's not a SUBSCRIBE) */
-	if (sipmethod != SIP_SUBSCRIBE)
+	/* If not found, then find device on IP (if it's not a SUBSCRIBE) */
+	if (!peer && sipmethod != SIP_SUBSCRIBE)
 		find_peer(NULL, &p->recv, TRUE, FALSE);
 
 	if (!peer) {
@@ -21379,10 +21379,8 @@ static int reload_config(enum channelreloadreason reason)
 		} else {
 			int is_peer = 0;
 			if (!strcasecmp(utype, "user")) {
-				ast_log(LOG_WARNING, "type=user is deprecated. Please use type=peer only.");
 				is_peer = 1;
 			} else if (!strcasecmp(utype, "friend")) {
-				ast_log(LOG_WARNING, "type=friend is deprecated. Please use type=peer only.");
 				is_peer = 1;
 			} else if (!strcasecmp(utype, "peer"))
 				is_peer = 2;
