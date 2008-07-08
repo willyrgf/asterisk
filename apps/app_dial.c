@@ -348,6 +348,7 @@ static void hanguptree(struct dial_localuser *outgoing, struct ast_channel *exce
 			ast_cdr_failed(chan->cdr); \
 		numcongestion++; \
 		break; \
+	case AST_CAUSE_NO_ROUTE_DESTINATION: \
 	case AST_CAUSE_UNREGISTERED: \
 		if (chan->cdr) \
 			ast_cdr_failed(chan->cdr); \
