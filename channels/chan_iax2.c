@@ -2788,23 +2788,27 @@ static char *handle_cli_iax2_show_cache(struct ast_cli_entry *e, int cmd, struct
 		if (dp->flags & CACHE_FLAG_UNKNOWN)
 			strncat(tmp, "UNKNOWN|", sizeof(tmp) - strlen(tmp) - 1);
 		/* Trim trailing pipe */
-		if (!ast_strlen_zero(tmp))
+		if (!ast_strlen_zero(tmp)) {
 			tmp[strlen(tmp) - 1] = '\0';
-		else
+		} else {
 			ast_copy_string(tmp, "(none)", sizeof(tmp));
+		}
 		y = 0;
 		pc = strchr(dp->peercontext, '@');
-		if (!pc)
+		if (!pc) {
 			pc = dp->peercontext;
-		else
+		} else {
 			pc++;
-		for (x = 0; x < sizeof(dp->waiters) / sizeof(dp->waiters[0]); x++)
+		}
+		for (x = 0; x < ARRAY_LEN(dp->waiters); x++) {
 			if (dp->waiters[x] > -1)
 				y++;
-		if (s > 0)
+		}
+		if (s > 0) {
 			ast_cli(a->fd, "%-20.20s %-12.12s %-9d %-8d %s\n", pc, dp->exten, s, y, tmp);
-		else
+		} else {
 			ast_cli(a->fd, "%-20.20s %-12.12s %-9.9s %-8d %s\n", pc, dp->exten, "(expired)", y, tmp);
+		}
 	}
 
 	AST_LIST_LOCK(&dpcache);
@@ -2816,25 +2820,31 @@ static unsigned int calc_rxstamp(struct chan_iax2_pvt *p, unsigned int offset);
 
 static void unwrap_timestamp(struct iax_frame *fr)
 {
-	int x;
+	/* Video mini frames only encode the lower 15 bits of the session
+	 * timestamp, but other frame types (e.g. audio) encode 16 bits. */
+	const int ts_shift = (fr->af.frametype == AST_FRAME_VIDEO) ? 15 : 16;
+	const int lower_mask = (1 << ts_shift) - 1;
+	const int upper_mask = ~lower_mask;
+	const int last_upper = iaxs[fr->callno]->last & upper_mask;
 
-	if ( (fr->ts & 0xFFFF0000) == (iaxs[fr->callno]->last & 0xFFFF0000) ) {
-		x = fr->ts - iaxs[fr->callno]->last;
-		if (x < -50000) {
+	if ( (fr->ts & upper_mask) == last_upper ) {
+		const int x = fr->ts - iaxs[fr->callno]->last;
+		const int threshold = (ts_shift == 15) ? 25000 : 50000;
+
+		if (x < -threshold) {
 			/* Sudden big jump backwards in timestamp:
 			   What likely happened here is that miniframe timestamp has circled but we haven't
 			   gotten the update from the main packet.  We'll just pretend that we did, and
 			   update the timestamp appropriately. */
-			fr->ts = ( (iaxs[fr->callno]->last & 0xFFFF0000) + 0x10000) | (fr->ts & 0xFFFF);
+			fr->ts = (last_upper + (1 << ts_shift)) | (fr->ts & lower_mask);
 			if (iaxdebug)
 				ast_debug(1, "schedule_delivery: pushed forward timestamp\n");
-		}
-		if (x > 50000) {
+		} else if (x > threshold) {
 			/* Sudden apparent big jump forwards in timestamp:
 			   What's likely happened is this is an old miniframe belonging to the previous
-			   top-16-bit timestamp that has turned up out of order.
+			   top 15 or 16-bit timestamp that has turned up out of order.
 			   Adjust the timestamp appropriately. */
-			fr->ts = ( (iaxs[fr->callno]->last & 0xFFFF0000) - 0x10000) | (fr->ts & 0xFFFF);
+			fr->ts = (last_upper - (1 << ts_shift)) | (fr->ts & lower_mask);
 			if (iaxdebug)
 				ast_debug(1, "schedule_delivery: pushed back timestamp\n");
 		}
@@ -6527,9 +6537,10 @@ static int complete_dpreply(struct chan_iax2_pvt *pvt, struct iax_ies *ies)
 			dp->flags |= matchmore;
 		}
 		/* Wake up waiters */
-		for (x=0;x<sizeof(dp->waiters) / sizeof(dp->waiters[0]); x++)
+		for (x = 0; x < ARRAY_LEN(dp->waiters); x++) {
 			if (dp->waiters[x] > -1)
 				write(dp->waiters[x], "asdf", 4);
+		}
 	}
 	AST_LIST_TRAVERSE_SAFE_END;
 	AST_LIST_UNLOCK(&dpcache);
@@ -11440,7 +11451,7 @@ static struct iax2_dpcache *find_cache(struct ast_channel *chan, const char *dat
 		/* Expires in 30 mins by default */
 		dp->expiry.tv_sec += iaxdefaultdpcache;
 		dp->flags = CACHE_FLAG_PENDING;
-		for (x=0;x<sizeof(dp->waiters) / sizeof(dp->waiters[0]); x++)
+		for (x = 0; x < ARRAY_LEN(dp->waiters); x++)
 			dp->waiters[x] = -1;
 		/* Insert into the lists */
 		AST_LIST_INSERT_TAIL(&dpcache, dp, cache_list);
@@ -11455,12 +11466,12 @@ static struct iax2_dpcache *find_cache(struct ast_channel *chan, const char *dat
 	if (dp->flags & CACHE_FLAG_PENDING) {
 		/* Okay, here it starts to get nasty.  We need a pipe now to wait
 		   for a reply to come back so long as it's pending */
-		for (x=0;x<sizeof(dp->waiters) / sizeof(dp->waiters[0]); x++) {
+		for (x = 0; x < ARRAY_LEN(dp->waiters); x++) {
 			/* Find an empty slot */
 			if (dp->waiters[x] < 0)
 				break;
 		}
-		if (x >= sizeof(dp->waiters) / sizeof(dp->waiters[0])) {
+		if (x >= ARRAY_LEN(dp->waiters)) {
 			ast_log(LOG_WARNING, "No more waiter positions available\n");
 			return NULL;
 		}
@@ -11513,9 +11524,10 @@ static struct iax2_dpcache *find_cache(struct ast_channel *chan, const char *dat
 				/* Expire after only 60 seconds now.  This is designed to help reduce backlog in heavily loaded
 				   systems without leaving it unavailable once the server comes back online */
 				dp->expiry.tv_sec = dp->orig.tv_sec + 60;
-				for (x=0;x<sizeof(dp->waiters) / sizeof(dp->waiters[0]); x++)
+				for (x = 0; x < ARRAY_LEN(dp->waiters); x++) {
 					if (dp->waiters[x] > -1)
 						write(dp->waiters[x], "asdf", 4);
+				}
 			}
 		}
 		/* Our caller will obtain the rest */
