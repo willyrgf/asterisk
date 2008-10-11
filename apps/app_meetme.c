@@ -313,14 +313,14 @@ static const char *slatrunk_desc =
 "   FAILURE | SUCCESS | UNANSWERED | RINGTIMEOUT\n" 
 "";
 
-#define MAX_CONFNUM 80
-#define MAX_PIN     80
+#define MAX_CONFNUM 80				/*!< Maximum length of conference name */
+#define MAX_PIN     80				/*!< Maximum length of pin code */
 
 /*! \brief The MeetMe Conference object */
 struct ast_conference {
 	ast_mutex_t playlock;                   /*!< Conference specific lock (players) */
 	ast_mutex_t listenlock;                 /*!< Conference specific lock (listeners) */
-	char confno[MAX_CONFNUM];               /*!< Conference */
+	char confno[MAX_CONFNUM];               /*!< Conference name */
 	struct ast_channel *chan;               /*!< Announcements channel */
 	struct ast_channel *lchan;              /*!< Listen/Record channel */
 	int fd;                                 /*!< Announcements fd */
@@ -348,6 +348,7 @@ struct ast_conference {
 
 static AST_LIST_HEAD_STATIC(confs, ast_conference);
 
+/* List of conferences that are active on this server */
 static unsigned int conf_map[1024] = {0, };
 
 struct volume {
@@ -1363,6 +1364,8 @@ static int dispose_conf(struct ast_conference *conf)
 		if ((sscanf(conf->confno, "%d", &confno_int) == 1) && (confno_int >= 0 && confno_int < 1024))
 			conf_map[confno_int] = 0;
 		conf_free(conf);
+		/* Make sure we reset the number of members and the systemname */
+		ast_update_realtime("meetme", "confno", conf->confno, "members", "0", "systemname", NULL, NULL);
 		res = 1;
 	}
 	AST_LIST_UNLOCK(&confs);
@@ -2335,6 +2338,7 @@ static struct ast_conference *find_conf_realtime(struct ast_channel *chan, char 
 {
 	struct ast_variable *var;
 	struct ast_conference *cnf;
+	char *systemname = NULL;
 
 	/* Check first in the conference list */
 	AST_LIST_LOCK(&confs);
@@ -2360,12 +2364,21 @@ static struct ast_conference *find_conf_realtime(struct ast_channel *chan, char 
 				pin = ast_strdupa(var->value);
 			} else if (!strcasecmp(var->name, "adminpin")) {
 				pinadmin = ast_strdupa(var->value);
+			} else if (!strcasecmp(var->name, "systemname")) {
+				systemname = ast_strdupa(var->value);
 			}
 			var = var->next;
 		}
 		ast_variables_destroy(var);
-		
-		cnf = build_conf(confno, pin ? pin : "", pinadmin ? pinadmin : "", make, dynamic, refcount);
+
+		/* Check if this conference is running on a different system 
+		   If it is, don't build the conference here. Return the system name in MEETME_SYSTEMNAME
+		*/
+		if (!ast_strlen_zero(systemname) && !ast_strcmp(ast_config_AST_SYSTEM_NAME, systemname)) {
+			pbx_builtin_setvar_helper(chan, "MEETME_SYSTEMNAME", systemname);
+		} else {
+			cnf = build_conf(confno, pin ? pin : "", pinadmin ? pinadmin : "", make, dynamic, refcount);
+		}
 	}
 
 	if (cnf) {
