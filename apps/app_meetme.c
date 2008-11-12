@@ -1330,6 +1330,10 @@ static void sla_queue_event_full(enum sla_event_type type,
 {
 	struct sla_event *event;
 
+	if (sla.thread == AST_PTHREADT_NULL) {
+		return;
+	}
+
 	if (!(event = ast_calloc(1, sizeof(*event))))
 		return;
 
@@ -1451,7 +1455,7 @@ static void *announce_thread(void *data)
 			break;
 		}
 
-		for (; !conf->announcethread_stop && (current = AST_LIST_REMOVE_HEAD(&local_list, entry)); ao2_ref(current, -1)) {
+		for (res = 1; !conf->announcethread_stop && (current = AST_LIST_REMOVE_HEAD(&local_list, entry)); ao2_ref(current, -1)) {
 			ast_log(LOG_DEBUG, "About to play %s\n", current->namerecloc);
 			if (!ast_fileexists(current->namerecloc, NULL, NULL))
 				continue;
