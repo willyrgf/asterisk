@@ -1524,18 +1524,18 @@ int ast_rtp_early_bridge(struct ast_channel *dest, struct ast_channel *src)
 	}
 
 	/* Check if bridge is still possible (In SIP canreinvite=no stops this, like NAT) */
-	if (audio_dest_res != AST_RTP_TRY_NATIVE) {
+	if (audio_dest_res != AST_RTP_TRY_NATIVE || (video_dest_res != AST_RTP_GET_FAILED && video_dest_res != AST_RTP_TRY_NATIVE)) {
 		/* Somebody doesn't want to play... */
 		ast_channel_unlock(dest);
 		if (src)
 			ast_channel_unlock(src);
 		return 0;
 	}
-	if (audio_src_res == AST_RTP_TRY_NATIVE && srcpr->get_codec)
+	if (audio_src_res == AST_RTP_TRY_NATIVE && (video_src_res == AST_RTP_GET_FAILED || video_src_res == AST_RTP_TRY_NATIVE) && srcpr->get_codec)
 		srccodec = srcpr->get_codec(src);
 	else
 		srccodec = 0;
-	if (audio_dest_res == AST_RTP_TRY_NATIVE && destpr->get_codec)
+	if (audio_dest_res == AST_RTP_TRY_NATIVE && (video_dest_res == AST_RTP_GET_FAILED || video_dest_res == AST_RTP_TRY_NATIVE) && destpr->get_codec)
 		destcodec = destpr->get_codec(dest);
 	else
 		destcodec = 0;
@@ -1613,7 +1613,7 @@ int ast_rtp_make_compatible(struct ast_channel *dest, struct ast_channel *src, i
 		destcodec = 0;
 
 	/* Check if bridge is still possible (In SIP canreinvite=no stops this, like NAT) */
-	if (audio_dest_res != AST_RTP_TRY_NATIVE || audio_src_res != AST_RTP_TRY_NATIVE || !(srccodec & destcodec)) {
+	if (audio_dest_res != AST_RTP_TRY_NATIVE || (video_dest_res != AST_RTP_GET_FAILED && video_dest_res != AST_RTP_TRY_NATIVE) || audio_src_res != AST_RTP_TRY_NATIVE || (video_src_res != AST_RTP_GET_FAILED && video_src_res != AST_RTP_TRY_NATIVE) || !(srccodec & destcodec)) {
 		/* Somebody doesn't want to play... */
 		ast_channel_unlock(dest);
 		ast_channel_unlock(src);
@@ -2215,6 +2215,7 @@ int ast_rtp_senddigit_begin(struct ast_rtp *rtp, char digit)
 
 	rtp->dtmfmute = ast_tvadd(ast_tvnow(), ast_tv(0, 500000));
 	rtp->send_duration = 160;
+	rtp->lastdigitts = rtp->lastts + rtp->send_duration;
 	
 	/* Get a pointer to the header */
 	rtpheader = (unsigned int *)data;
@@ -2334,10 +2335,9 @@ int ast_rtp_senddigit_end(struct ast_rtp *rtp, char digit)
 				    ast_inet_ntoa(rtp->them.sin_addr),
 				    ntohs(rtp->them.sin_port), rtp->send_payload, rtp->seqno, rtp->lastdigitts, res - hdrlen);
 	}
+	rtp->lastts += rtp->send_duration;
 	rtp->sending_digit = 0;
 	rtp->send_digit = 0;
-	/* Increment lastdigitts */
-	rtp->lastdigitts += 960;
 	rtp->seqno++;
 
 	return res;
@@ -2620,6 +2620,10 @@ static int ast_rtp_raw_write(struct ast_rtp *rtp, struct ast_frame *f, int codec
 	unsigned int ms;
 	int pred;
 	int mark = 0;
+
+	if (rtp->sending_digit) {
+		return 0;
+	}
 
 	ms = calc_txstamp(rtp, &f->delivery);
 	/* Default prediction */
