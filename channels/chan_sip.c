@@ -167,8 +167,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define IPTOS_MINCOST           0x02
 #endif
 
-#define SIP_RESERVED ";/?:@&=+$,# "
-
 /* #define VOCAL_DATA_HACK */
 
 #define DEFAULT_DEFAULT_EXPIRY  120
@@ -4750,11 +4748,9 @@ static int sip_register(char *value, int lineno)
 	struct sip_registry *reg;
 	int portnum = 0;
 	char username[256] = "";
-	char *user;
 	char *hostname=NULL, *secret=NULL, *authuser=NULL;
 	char *porta=NULL;
 	char *contact=NULL;
-	char *reserved = NULL;
 
 	if (!value)
 		return -1;
@@ -4775,16 +4771,6 @@ static int sip_register(char *value, int lineno)
 		if (authuser)
 			*authuser++ = '\0';
 	}
-	user = username;
-	if ((reserved = strpbrk(user, SIP_RESERVED))) {
-		goto invalid_char;
-	}
-	if (!ast_strlen_zero(secret) && (reserved = strpbrk(secret, SIP_RESERVED))) {
-		goto invalid_char;
-	}
-	if (!ast_strlen_zero(authuser) && (reserved = strpbrk(authuser, SIP_RESERVED))) {
-		goto invalid_char;
-	}
 	/* split host[:port][/contact] */
 	contact = strchr(hostname, '/');
 	if (contact)
@@ -4799,9 +4785,6 @@ static int sip_register(char *value, int lineno)
 			ast_log(LOG_WARNING, "%s is not a valid port number at line %d\n", porta, lineno);
 			return -1;
 		}
-	}
-	if ((reserved = strpbrk(hostname, SIP_RESERVED))) {
-		goto invalid_char;
 	}
 	if (!(reg = ast_calloc(1, sizeof(*reg)))) {
 		ast_log(LOG_ERROR, "Out of memory. Can't allocate SIP registry entry\n");
@@ -4834,10 +4817,6 @@ static int sip_register(char *value, int lineno)
 	ASTOBJ_CONTAINER_LINK(&regl, reg);	/* Add the new registry entry to the list */
 	ASTOBJ_UNREF(reg,sip_registry_destroy);
 	return 0;
-
-invalid_char:
-	ast_log(LOG_ERROR, "A reserved character ('%c') was used in a \"register\" line. This registration will not occur\n", *reserved);
-	return -1;
 }
 
 /*! \brief  Parse multiline SIP headers into one header
