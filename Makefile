@@ -204,7 +204,14 @@ endif
 ASTCFLAGS+=-Wall -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations $(DEBUG)
 
 ifeq ($(AST_DEVMODE),yes)
-  ASTCFLAGS+=-Werror  -Wunused $(AST_DECLARATION_AFTER_STATEMENT)
+  ASTCFLAGS+=-Werror
+  ASTCFLAGS+=-Wunused
+  ASTCFLAGS+=$(AST_DECLARATION_AFTER_STATEMENT)
+  ASTCFLAGS+=$(AST_FORTIFY_SOURCE)
+# ASTCFLAGS+=-Wundef 
+  ASTCFLAGS+=-Wformat -Wformat-security
+  ASTCFLAGS+=-Wmissing-format-attribute
+# ASTCFLAGS+=-Wformat=2
 endif
 
 ifneq ($(findstring BSD,$(OSARCH)),)
@@ -373,7 +380,9 @@ $(SUBDIRS_CLEAN):
 $(SUBDIRS_DIST_CLEAN):
 	@$(MAKE) --no-print-directory -C $(@:-dist-clean=) dist-clean
 
-clean: $(SUBDIRS_CLEAN)
+clean: $(SUBDIRS_CLEAN) _clean
+
+_clean:
 	rm -f defaults.h
 	rm -f include/asterisk/build.h
 	rm -f include/asterisk/version.h
@@ -382,7 +391,7 @@ clean: $(SUBDIRS_CLEAN)
 
 dist-clean: distclean
 
-distclean: $(SUBDIRS_DIST_CLEAN) clean
+distclean: $(SUBDIRS_DIST_CLEAN) _clean
 	@$(MAKE) -C menuselect dist-clean
 	@$(MAKE) -C sounds dist-clean
 	rm -f menuselect.makeopts makeopts menuselect-tree menuselect.makedeps
@@ -758,6 +767,6 @@ menuselect-tree: $(foreach dir,$(filter-out main,$(MOD_SUBDIRS)),$(wildcard $(di
 	@cat sounds/sounds.xml >> $@
 	@echo "</menu>" >> $@
 
-.PHONY: menuselect main sounds clean dist-clean distclean all prereqs cleantest uninstall _uninstall uninstall-all dont-optimize $(SUBDIRS_INSTALL) $(SUBDIRS_DIST_CLEAN) $(SUBDIRS_CLEAN) $(SUBDIRS_UNINSTALL) $(SUBDIRS) $(MOD_SUBDIRS_EMBED_LDSCRIPT) $(MOD_SUBDIRS_EMBED_LDFLAGS) $(MOD_SUBDIRS_EMBED_LIBS) badshell menuselect.makeopts installdirs
+.PHONY: menuselect main sounds clean dist-clean distclean all prereqs cleantest uninstall _uninstall uninstall-all dont-optimize $(SUBDIRS_INSTALL) $(SUBDIRS_DIST_CLEAN) $(SUBDIRS_CLEAN) $(SUBDIRS_UNINSTALL) $(SUBDIRS) $(MOD_SUBDIRS_EMBED_LDSCRIPT) $(MOD_SUBDIRS_EMBED_LDFLAGS) $(MOD_SUBDIRS_EMBED_LIBS) badshell menuselect.makeopts installdirs _clean
 
 FORCE:

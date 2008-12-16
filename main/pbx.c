@@ -665,13 +665,13 @@ static int ext_cmp1(const char **p)
 		return 0x0000 | (c & 0xff);
 
 	case 'N':	/* 2..9 */
-		return 0x0700 | '2' ;
+		return 0x0800 | '2' ;
 
 	case 'X':	/* 0..9 */
-		return 0x0900 | '0';
+		return 0x0A00 | '0';
 
 	case 'Z':	/* 1..9 */
-		return 0x0800 | '1';
+		return 0x0900 | '1';
 
 	case '.':	/* wildcard */
 		return 0x10000;
@@ -2645,6 +2645,7 @@ enum ast_pbx_result ast_pbx_start(struct ast_channel *c)
 	if (ast_pthread_create(&t, &attr, pbx_thread, c)) {
 		ast_log(LOG_WARNING, "Failed to create new channel thread\n");
 		pthread_attr_destroy(&attr);
+		decrease_call_count();
 		return AST_PBX_FAILED;
 	}
 	pthread_attr_destroy(&attr);
@@ -4494,14 +4495,19 @@ int ast_context_add_ignorepat2(struct ast_context *con, const char *value, const
 {
 	struct ast_ignorepat *ignorepat, *ignorepatc, *ignorepatl = NULL;
 	int length;
+	char *pattern;
 	length = sizeof(struct ast_ignorepat);
 	length += strlen(value) + 1;
 	if (!(ignorepat = ast_calloc(1, length)))
 		return -1;
 	/* The cast to char * is because we need to write the initial value.
-	 * The field is not supposed to be modified otherwise
+	 * The field is not supposed to be modified otherwise.  Also, gcc 4.2
+	 * sees the cast as dereferencing a type-punned pointer and warns about
+	 * it.  This is the workaround (we're telling gcc, yes, that's really
+	 * what we wanted to do).
 	 */
-	strcpy((char *)ignorepat->pattern, value);
+	pattern = (char *) ignorepat->pattern;
+	strcpy(pattern, value);
 	ignorepat->next = NULL;
 	ignorepat->registrar = registrar;
 	ast_mutex_lock(&con->lock);
@@ -4826,7 +4832,7 @@ int ast_add_extension2(struct ast_context *con,
 	ast_mutex_lock(&con->lock);
 	res = 0; /* some compilers will think it is uninitialized otherwise */
 	for (e = con->root; e; el = e, e = e->next) {   /* scan the extension list */
-		res = ext_cmp(e->exten, extension);
+		res = ext_cmp(e->exten, tmp->exten);
 		if (res == 0) { /* extension match, now look at cidmatch */
 			if (!e->matchcid && !tmp->matchcid)
 				res = 0;
@@ -4961,7 +4967,7 @@ static void *async_wait(void *data)
 static int ast_pbx_outgoing_cdr_failed(void)
 {
 	/* allocate a channel */
-	struct ast_channel *chan = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, 0);
+	struct ast_channel *chan = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, "%s", "");
 
 	if (!chan)
 		return -1;  /* failure */

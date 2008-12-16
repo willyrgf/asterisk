@@ -167,8 +167,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define IPTOS_MINCOST           0x02
 #endif
 
-#define SIP_RESERVED ";/?:@&=+$,# "
-
 /* #define VOCAL_DATA_HACK */
 
 #define DEFAULT_DEFAULT_EXPIRY  120
@@ -258,7 +256,7 @@ enum invitestates {
 	INV_NONE = 0,	        /*!< No state at all, maybe not an INVITE dialog */
 	INV_CALLING = 1,	/*!< Invite sent, no answer */
 	INV_PROCEEDING = 2,	/*!< We got/sent 1xx message */
-	INV_EARLY_MEDIA = 3,    /*!< We got 18x message with to-tag back */
+	INV_EARLY_MEDIA = 3,    /*!< We got/sent 18x message with to-tag back */
 	INV_COMPLETED = 4,	/*!< Got final response with error. Wait for ACK, then CONFIRMED */
 	INV_CONFIRMED = 5,	/*!< Confirmed response - we've got an ack (Incoming calls only) */
 	INV_TERMINATED = 6,	/*!< Transaction done - either successful (AST_STATE_UP) or failed, but done 
@@ -1813,7 +1811,7 @@ static void build_via(struct sip_pvt *p)
 
 	/* z9hG4bK is a magic cookie.  See RFC 3261 section 8.1.1.7 */
 	ast_string_field_build(p, via, "SIP/2.0/UDP %s:%d;branch=z9hG4bK%08x%s",
-			 ast_inet_ntoa(p->ourip), ourport, p->branch, rport);
+			       ast_inet_ntoa(p->ourip), ourport, (int) p->branch, rport);
 }
 
 /*! \brief NAT fix - decide which IP address to use for ASterisk server?
@@ -1859,10 +1857,10 @@ static enum sip_result ast_sip_ouraddrfor(struct in_addr *them, struct in_addr *
 #define append_history(p, event, fmt , args... )	append_history_full(p, "%-15s " fmt, event, ## args)
 
 static void append_history_full(struct sip_pvt *p, const char *fmt, ...)
-	__attribute__ ((format (printf, 2, 3)));
+	__attribute__((format(printf, 2, 3)));
 
 /*! \brief Append to SIP dialog history with arg list  */
-static void append_history_va(struct sip_pvt *p, const char *fmt, va_list ap)
+static void __attribute__((format(printf, 2, 0))) append_history_va(struct sip_pvt *p, const char *fmt, va_list ap)
 {
 	char buf[80], *c = buf; /* max history length */
 	struct sip_history *hist;
@@ -3067,6 +3065,8 @@ static int sip_call(struct ast_channel *ast, char *dest, int timeout)
 			AST_SCHED_DEL(sched, p->initid);
 			p->initid = ast_sched_add(sched, p->maxtime ? (p->maxtime * 4) : SIP_TRANS_TIMEOUT, auto_congest, p);
 		}
+	} else {
+		ast->hangupcause = AST_CAUSE_USER_BUSY;
 	}
 	return res;
 }
@@ -3763,8 +3763,9 @@ static int sip_write(struct ast_channel *ast, struct ast_frame *frame)
 				    !ast_test_flag(&p->flags[0], SIP_PROGRESS_SENT) &&
 				    !ast_test_flag(&p->flags[0], SIP_OUTGOING)) {
 					ast_rtp_new_source(p->rtp);
+					p->invitestate = INV_EARLY_MEDIA;
 					transmit_response_with_sdp(p, "183 Session Progress", &p->initreq, XMIT_UNRELIABLE);
-					ast_set_flag(&p->flags[0], SIP_PROGRESS_SENT);	
+					ast_set_flag(&p->flags[0], SIP_PROGRESS_SENT);
 				}
 				p->lastrtptx = time(NULL);
 				res = ast_rtp_write(p->rtp, frame);
@@ -3780,6 +3781,7 @@ static int sip_write(struct ast_channel *ast, struct ast_frame *frame)
 				if ((ast->_state != AST_STATE_UP) &&
 				    !ast_test_flag(&p->flags[0], SIP_PROGRESS_SENT) &&
 				    !ast_test_flag(&p->flags[0], SIP_OUTGOING)) {
+					p->invitestate = INV_EARLY_MEDIA;
 					transmit_response_with_sdp(p, "183 Session Progress", &p->initreq, XMIT_UNRELIABLE);
 					ast_set_flag(&p->flags[0], SIP_PROGRESS_SENT);	
 				}
@@ -4735,11 +4737,9 @@ static int sip_register(char *value, int lineno)
 	struct sip_registry *reg;
 	int portnum = 0;
 	char username[256] = "";
-	char *user;
 	char *hostname=NULL, *secret=NULL, *authuser=NULL;
 	char *porta=NULL;
 	char *contact=NULL;
-	char *reserved = NULL;
 
 	if (!value)
 		return -1;
@@ -4760,16 +4760,6 @@ static int sip_register(char *value, int lineno)
 		if (authuser)
 			*authuser++ = '\0';
 	}
-	user = username;
-	if ((reserved = strpbrk(user, SIP_RESERVED))) {
-		goto invalid_char;
-	}
-	if (!ast_strlen_zero(secret) && (reserved = strpbrk(secret, SIP_RESERVED))) {
-		goto invalid_char;
-	}
-	if (!ast_strlen_zero(authuser) && (reserved = strpbrk(authuser, SIP_RESERVED))) {
-		goto invalid_char;
-	}
 	/* split host[:port][/contact] */
 	contact = strchr(hostname, '/');
 	if (contact)
@@ -4784,9 +4774,6 @@ static int sip_register(char *value, int lineno)
 			ast_log(LOG_WARNING, "%s is not a valid port number at line %d\n", porta, lineno);
 			return -1;
 		}
-	}
-	if ((reserved = strpbrk(hostname, SIP_RESERVED))) {
-		goto invalid_char;
 	}
 	if (!(reg = ast_calloc(1, sizeof(*reg)))) {
 		ast_log(LOG_ERROR, "Out of memory. Can't allocate SIP registry entry\n");
@@ -4819,10 +4806,6 @@ static int sip_register(char *value, int lineno)
 	ASTOBJ_CONTAINER_LINK(&regl, reg);	/* Add the new registry entry to the list */
 	ASTOBJ_UNREF(reg,sip_registry_destroy);
 	return 0;
-
-invalid_char:
-	ast_log(LOG_ERROR, "A reserved character ('%c') was used in a \"register\" line. This registration will not occur\n", *reserved);
-	return -1;
 }
 
 /*! \brief  Parse multiline SIP headers into one header
@@ -5187,8 +5170,9 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 		int audio = FALSE;
 
 		numberofports = 1;
-		if ((sscanf(m, "audio %d/%d RTP/AVP %n", &x, &numberofports, &len) == 2) ||
-		    (sscanf(m, "audio %d RTP/AVP %n", &x, &len) == 1)) {
+		len = -1;
+		if ((sscanf(m, "audio %d/%d RTP/AVP %n", &x, &numberofports, &len) == 2 && len > 0) ||
+		    (sscanf(m, "audio %d RTP/AVP %n", &x, &len) == 1 && len > 0)) {
 			audio = TRUE;
 			numberofmediastreams++;
 			/* Found audio stream in this media definition */
@@ -5203,8 +5187,8 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 					ast_verbose("Found RTP audio format %d\n", codec);
 				ast_rtp_set_m_type(newaudiortp, codec);
 			}
-		} else if ((sscanf(m, "video %d/%d RTP/AVP %n", &x, &numberofports, &len) == 2) ||
-		    (sscanf(m, "video %d RTP/AVP %n", &x, &len) == 1)) {
+		} else if ((sscanf(m, "video %d/%d RTP/AVP %n", &x, &numberofports, &len) == 2 && len > 0) ||
+		    (sscanf(m, "video %d RTP/AVP %n", &x, &len) == 1 && len >= 0)) {
 			/* If it is not audio - is it video ? */
 			ast_clear_flag(&p->flags[0], SIP_NOVIDEO);	
 			numberofmediastreams++;
@@ -5219,8 +5203,8 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 					ast_verbose("Found RTP video format %d\n", codec);
 				ast_rtp_set_m_type(newvideortp, codec);
 			}
-		} else if (p->udptl && ( (sscanf(m, "image %d udptl t38%n", &x, &len) == 1) || 
-		 (sscanf(m, "image %d UDPTL t38%n", &x, &len) == 1) )) {
+		} else if (p->udptl && ( (sscanf(m, "image %d udptl t38%n", &x, &len) == 1 && len > 0) || 
+		 (sscanf(m, "image %d UDPTL t38%n", &x, &len) == 1 && len >= 0) )) {
 			if (debug)
 				ast_verbose("Got T.38 offer in SDP in dialog %s\n", p->callid);
 			udptlportno = x;
@@ -5285,7 +5269,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 				struct sockaddr_in peer;
 				ast_rtp_get_peer(p->rtp, &peer);
 				if (peer.sin_addr.s_addr) {
-					memcpy(&sin.sin_addr, &peer.sin_addr, sizeof(&sin.sin_addr));
+					memcpy(&sin.sin_addr, &peer.sin_addr, sizeof(sin.sin_addr));
 					if (debug) {
 						ast_log(LOG_DEBUG, "Peer T.38 UDPTL is set behind NAT and with destination, destination address now %s\n", ast_inet_ntoa(sin.sin_addr));
 					}
@@ -7070,7 +7054,7 @@ static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmetho
 				break;
 		}
 		/* If we have only digits, add ;user=phone to the uri */
-		if (*s)
+		if (!*s)
 			urioptions = ";user=phone";
 	}
 
@@ -7144,7 +7128,7 @@ static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmetho
 
 	if (sipmethod == SIP_NOTIFY && !ast_strlen_zero(p->theirtag)) { 
 		/* If this is a NOTIFY, use the From: tag in the subscribe (RFC 3265) */
-		snprintf(to, sizeof(to), "<%s%s>;tag=%s", (strncasecmp(p->uri, "sip:", 4) ? "" : "sip:"), p->uri, p->theirtag);
+		snprintf(to, sizeof(to), "<%s%s>;tag=%s", (!strncasecmp(p->uri, "sip:", 4) ? "" : "sip:"), p->uri, p->theirtag);
 	} else if (p->options && p->options->vxml_url) {
 		/* If there is a VXML URL append it to the SIP URL */
 		snprintf(to, sizeof(to), "<%s>;%s", p->uri, p->options->vxml_url);
@@ -8277,6 +8261,7 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 		peer->useragent[0] = '\0';
 		peer->sipoptions = 0;
 		peer->lastms = 0;
+		pvt->expiry = 0;
 
 		if (option_verbose > 2)
 			ast_verbose(VERBOSE_PREFIX_3 "Unregistered SIP '%s'\n", peer->name);
@@ -12694,7 +12679,7 @@ static int handle_response_register(struct sip_pvt *p, int resp, char *rest, str
 		break;
 	case 200:	/* 200 OK */
 		if (!r) {
-			ast_log(LOG_WARNING, "Got 200 OK on REGISTER that isn't a register\n");
+			ast_log(LOG_WARNING, "Got 200 OK on REGISTER, but there isn't a registry entry for '%s' (we probably already got the OK)\n", S_OR(p->peername, p->username));
 			ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
 			return 0;
 		}
@@ -12874,6 +12859,19 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 		gettag(req, "To", tag, sizeof(tag));
 		ast_string_field_set(p, theirtag, tag);
 	}
+
+	/* RFC 3261 Section 15 specifies that if we receive a 408 or 481
+	 * in response to a BYE, then we should end the current dialog
+	 * and session.  It is known that at least one phone manufacturer
+	 * potentially will send a 404 in response to a BYE, so we'll be
+	 * liberal in what we accept and end the dialog and session if we
+	 * receive any of those responses to a BYE.
+	 */
+	if ((resp == 404 || resp == 408 || resp == 481) && sipmethod == SIP_BYE) {
+		ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);
+		return;
+	}
+
 	if (p->relatedpeer && p->method == SIP_OPTIONS) {
 		/* We don't really care what the response is, just that it replied back. 
 		   Well, as long as it's not a 100 response...  since we might
@@ -14324,7 +14322,9 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 			ast_mutex_unlock(&p->lock);
 			if (p->refer->refer_call) {
 				ast_mutex_unlock(&p->refer->refer_call->lock);
-				ast_channel_unlock(p->refer->refer_call->owner);
+				if (p->refer->refer_call->owner) {
+					ast_channel_unlock(p->refer->refer_call->owner);
+				}
 			}
 			p->invitestate = INV_COMPLETED;
 			return -1;
@@ -15453,7 +15453,7 @@ static int handle_request_subscribe(struct sip_pvt *p, struct sip_request *req, 
 	parse_ok_contact(p, req);
 
 	build_contact(p);
-	if (strcmp(event, "message-summary") && gotdest) {
+	if (gotdest) {
 		transmit_response(p, "404 Not Found", req);
 		ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
 		if (authpeer)
@@ -17333,6 +17333,14 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 				peer->maxms = default_qualify ? default_qualify : DEFAULT_MAXMS;
 			} else if (sscanf(v->value, "%d", &peer->maxms) != 1) {
 				ast_log(LOG_WARNING, "Qualification of peer '%s' should be 'yes', 'no', or a number of milliseconds at line %d of sip.conf\n", peer->name, v->lineno);
+				peer->maxms = 0;
+			}
+			if (realtime && !ast_test_flag(&global_flags[1], SIP_PAGE2_RTCACHEFRIENDS) && peer->maxms > 0) {
+				/* This would otherwise cause a network storm, where the
+				 * qualify response refreshes the peer from the database,
+				 * which in turn causes another qualify to be sent, ad
+				 * infinitum. */
+				ast_log(LOG_WARNING, "Qualify is incompatible with dynamic uncached realtime.  Please either turn rtcachefriends on or turn qualify off on peer '%s'\n", peer->name);
 				peer->maxms = 0;
 			}
 		} else if (!strcasecmp(v->name, "maxcallbitrate")) {

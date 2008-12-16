@@ -228,68 +228,6 @@ struct hostent *ast_gethostbyname(const char *host, struct ast_hostent *hp)
 	return &hp->hp;
 }
 
-
-
-AST_MUTEX_DEFINE_STATIC(test_lock);
-AST_MUTEX_DEFINE_STATIC(test_lock2);
-static pthread_t test_thread; 
-static int lock_count = 0;
-static int test_errors = 0;
-
-/*! \brief This is a regression test for recursive mutexes.
-   test_for_thread_safety() will return 0 if recursive mutex locks are
-   working properly, and non-zero if they are not working properly. */
-static void *test_thread_body(void *data) 
-{ 
-	ast_mutex_lock(&test_lock);
-	lock_count += 10;
-	if (lock_count != 10) 
-		test_errors++;
-	ast_mutex_lock(&test_lock);
-	lock_count += 10;
-	if (lock_count != 20) 
-		test_errors++;
-	ast_mutex_lock(&test_lock2);
-	ast_mutex_unlock(&test_lock);
-	lock_count -= 10;
-	if (lock_count != 10) 
-		test_errors++;
-	ast_mutex_unlock(&test_lock);
-	lock_count -= 10;
-	ast_mutex_unlock(&test_lock2);
-	if (lock_count != 0) 
-		test_errors++;
-	return NULL;
-} 
-
-int test_for_thread_safety(void)
-{ 
-	ast_mutex_lock(&test_lock2);
-	ast_mutex_lock(&test_lock);
-	lock_count += 1;
-	ast_mutex_lock(&test_lock);
-	lock_count += 1;
-	ast_pthread_create(&test_thread, NULL, test_thread_body, NULL); 
-	usleep(100);
-	if (lock_count != 2) 
-		test_errors++;
-	ast_mutex_unlock(&test_lock);
-	lock_count -= 1;
-	usleep(100); 
-	if (lock_count != 1) 
-		test_errors++;
-	ast_mutex_unlock(&test_lock);
-	lock_count -= 1;
-	if (lock_count != 0) 
-		test_errors++;
-	ast_mutex_unlock(&test_lock2);
-	usleep(100);
-	if (lock_count != 0) 
-		test_errors++;
-	pthread_join(test_thread, NULL);
-	return(test_errors);          /* return 0 on success. */
-}
-
 /*! \brief Produce 32 char MD5 hash of value. */
 void ast_md5_hash(char *output, char *input)
 {
@@ -954,8 +892,11 @@ int ast_pthread_create_stack(pthread_t *thread, pthread_attr_t *attr, void *(*st
 		a->start_routine = start_routine;
 		a->data = data;
 		start_routine = dummy_start;
-		asprintf(&a->name, "%-20s started at [%5d] %s %s()",
-			 start_fn, line, file, caller);
+		if (asprintf(&a->name, "%-20s started at [%5d] %s %s()",
+			     start_fn, line, file, caller) < 0) {
+			ast_log(LOG_WARNING, "asprintf() failed: %s\n", strerror(errno));
+			a->name = NULL;
+		}
 		data = a;
 	}
 #endif /* !LOW_MEMORY */

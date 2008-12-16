@@ -666,9 +666,15 @@ static int agent_indicate(struct ast_channel *ast, int condition, const void *da
 	struct agent_pvt *p = ast->tech_pvt;
 	int res = -1;
 	ast_mutex_lock(&p->lock);
-	if (p->chan && !ast_check_hangup(p->chan))
-		res = p->chan->tech->indicate ? p->chan->tech->indicate(p->chan, condition, data, datalen) : -1;
-	else
+	if (p->chan && !ast_check_hangup(p->chan)) {
+		while (ast_channel_trylock(p->chan)) {
+			ast_channel_unlock(ast);
+			usleep(1);
+			ast_channel_lock(ast);
+		}
+  		res = p->chan->tech->indicate ? p->chan->tech->indicate(p->chan, condition, data, datalen) : -1;
+		ast_channel_unlock(p->chan);
+	} else
 		res = 0;
 	ast_mutex_unlock(&p->lock);
 	return res;
@@ -729,7 +735,8 @@ static int agent_call(struct ast_channel *ast, char *dest, int timeout)
 		ast_mutex_unlock(&p->lock);
 		return res;
 	}
-	ast_verbose( VERBOSE_PREFIX_3 "agent_call, call to agent '%s' call on '%s'\n", p->agent, p->chan->name);
+	if (option_verbose > 2)
+		ast_verbose(VERBOSE_PREFIX_3 "agent_call, call to agent '%s' call on '%s'\n", p->agent, p->chan->name);
 	if (option_debug > 2)
 		ast_log(LOG_DEBUG, "Playing beep, lang '%s'\n", p->chan->language);
 	res = ast_streamfile(p->chan, beep, p->chan->language);
@@ -1029,7 +1036,7 @@ static struct ast_channel *agent_new(struct agent_pvt *p, int state)
 	}
 #endif	
 	if (p->pending)
-		tmp = ast_channel_alloc(0, state, 0, 0, "", p->chan ? p->chan->exten:"", p->chan ? p->chan->context:"", 0, "Agent/P%s-%d", p->agent, ast_random() & 0xffff);
+		tmp = ast_channel_alloc(0, state, 0, 0, "", p->chan ? p->chan->exten:"", p->chan ? p->chan->context:"", 0, "Agent/P%s-%d", p->agent, (int) ast_random() & 0xffff);
 	else
 		tmp = ast_channel_alloc(0, state, 0, 0, "", p->chan ? p->chan->exten:"", p->chan ? p->chan->context:"", 0, "Agent/%s", p->agent);
 	if (!tmp) {
@@ -2453,7 +2460,7 @@ static int action_agent_callback_login(struct mansession *s, const struct messag
 				p->wrapuptime = 0;
 		}
 
-		if (strcasecmp(ackcall_s, "always"))
+		if (!strcasecmp(ackcall_s, "always"))
 			p->ackcall = 2;
 		else if (ast_true(ackcall_s))
 			p->ackcall = 1;

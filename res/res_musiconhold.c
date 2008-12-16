@@ -371,7 +371,7 @@ static int spawn_mp3(struct mohclass *class)
 		files = 1;
 	} else {
 		dir = opendir(class->dir);
-		if (!dir && !strstr(class->dir,"http://") && !strstr(class->dir,"HTTP://")) {
+		if (!dir && strncasecmp(class->dir, "http://", 7)) {
 			ast_log(LOG_WARNING, "%s is not a valid directory\n", class->dir);
 			return -1;
 		}
@@ -414,8 +414,7 @@ static int spawn_mp3(struct mohclass *class)
 		}
 	}
 
-
-	if (strstr(class->dir,"http://") || strstr(class->dir,"HTTP://")) {
+	if (!strncasecmp(class->dir, "http://", 7)) {
 		ast_copy_string(fns[files], class->dir, sizeof(fns[files]));
 		argv[argc++] = fns[files];
 		files++;
@@ -446,7 +445,7 @@ static int spawn_mp3(struct mohclass *class)
 		close(fds[1]);
 		return -1;
 	}
-	if (time(NULL) - class->start < respawn_time) {
+	if (!strncasecmp(class->dir, "http://", 7) && time(NULL) - class->start < respawn_time) {
 		sleep(respawn_time - (time(NULL) - class->start));
 	}
 
@@ -482,7 +481,10 @@ static int spawn_mp3(struct mohclass *class)
 			}
 		}
 		/* Child */
-		chdir(class->dir);
+		if (chdir(class->dir) < 0) {
+			ast_log(LOG_WARNING, "chdir() failed: %s\n", strerror(errno));
+			_exit(1);
+		}
 		if (ast_test_flag(class, MOH_CUSTOM)) {
 			execv(argv[0], argv);
 		} else {
@@ -740,8 +742,9 @@ static int moh_generate(struct ast_channel *chan, void *data, int len, int sampl
 	short buf[1280 + AST_FRIENDLY_OFFSET / 2];
 	int res;
 
-	if (!moh->parent->pid)
+	if (!moh->parent->pid && moh->parent->inuse == 0) {
 		return -1;
+	}
 
 	len = ast_codec_get_len(moh->parent->format, samples);
 
@@ -817,8 +820,14 @@ static int moh_scan_files(struct mohclass *class) {
 
 	class->total_files = 0;
 	dirnamelen = strlen(class->dir) + 2;
-	getcwd(path, sizeof(path));
-	chdir(class->dir);
+	if (!getcwd(path, sizeof(path))) {
+		ast_log(LOG_WARNING, "getcwd() failed: %s\n", strerror(errno));
+		return -1;
+	}
+	if (chdir(class->dir) < 0) {
+		ast_log(LOG_WARNING, "chdir() failed: %s\n", strerror(errno));
+		return -1;
+	}
 	while ((files_dirent = readdir(files_DIR))) {
 		/* The file name must be at least long enough to have the file type extension */
 		if ((strlen(files_dirent->d_name) < 4))
@@ -857,7 +866,10 @@ static int moh_scan_files(struct mohclass *class) {
 	}
 
 	closedir(files_DIR);
-	chdir(path);
+	if (chdir(path) < 0) {
+		ast_log(LOG_WARNING, "chdir() failed: %s\n", strerror(errno));
+		return -1;
+	}
 	return class->total_files;
 }
 

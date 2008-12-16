@@ -537,6 +537,7 @@ static char *app4 = "VMAuthenticate";
 
 static AST_LIST_HEAD_STATIC(users, ast_vm_user);
 static AST_LIST_HEAD_STATIC(zones, vm_zone);
+static char zonetag[80];
 static int maxsilence;
 static int maxmsg;
 static int silencethreshold = 128;
@@ -602,6 +603,7 @@ static void populate_defaults(struct ast_vm_user *vmu)
 	ast_copy_string(vmu->callback, callcontext, sizeof(vmu->callback));
 	ast_copy_string(vmu->dialout, dialcontext, sizeof(vmu->dialout));
 	ast_copy_string(vmu->exit, exitcontext, sizeof(vmu->exit));
+	ast_copy_string(vmu->zonetag, zonetag, sizeof(vmu->zonetag));
 	if (maxmsg)
 		vmu->maxmsg = maxmsg;
 	vmu->volgain = volgain;
@@ -2287,7 +2289,9 @@ static int retrieve_file(char *dir, int msgnum)
 							}
 						}
 					}
-					truncate(full_fn, fdlen);
+					if (truncate(full_fn, fdlen) < 0) {
+						ast_log(LOG_WARNING, "Unable to truncate '%s': %s\n", full_fn, strerror(errno));
+					}
 				}
 			} else {
 				SQLLEN ind;
@@ -3097,7 +3101,7 @@ static void make_email_file(FILE *p, char *srcemail, struct ast_vm_user *vmu, in
 
 	if (*fromstring) {
 		struct ast_channel *ast;
-		if ((ast = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, 0))) {
+		if ((ast = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, "Substitution/voicemail"))) {
 			char *ptr;
 			memset(passdata2, 0, len_passdata2);
 			prep_email_sub_vars(ast, vmu, msgnum + 1, context, mailbox, enc_cidnum, enc_cidname, dur, date, passdata2, len_passdata2, category);
@@ -3139,7 +3143,7 @@ static void make_email_file(FILE *p, char *srcemail, struct ast_vm_user *vmu, in
 	}
 	if (emailsubject) {
 		struct ast_channel *ast;
-		if ((ast = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, 0))) {
+		if ((ast = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, "Substitution/voicemail"))) {
 			int vmlen = strlen(emailsubject) * 3 + 200;
 			/* Only allocate more space if the previous was not large enough */
 			if (vmlen > len_passdata) {
@@ -3213,7 +3217,7 @@ static void make_email_file(FILE *p, char *srcemail, struct ast_vm_user *vmu, in
 	fprintf(p, "Content-Type: text/plain; charset=%s" ENDL "Content-Transfer-Encoding: 8bit" ENDL ENDL, charset);
 	if (emailbody) {
 		struct ast_channel *ast;
-		if ((ast = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, 0))) {
+		if ((ast = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, "Substitution/voicemail"))) {
 			char *passdata;
 			int vmlen = strlen(emailbody)*3 + 200;
 			if ((passdata = alloca(vmlen))) {
@@ -3334,7 +3338,7 @@ static int sendpage(char *srcemail, char *pager, int msgnum, char *context, char
 
 		if (*pagerfromstring) {
 			struct ast_channel *ast;
-			if ((ast = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, 0))) {
+			if ((ast = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, "Substitution/voicemail"))) {
 				char *passdata;
 				int vmlen = strlen(fromstring)*3 + 200;
 				if ((passdata = alloca(vmlen))) {
@@ -3351,7 +3355,7 @@ static int sendpage(char *srcemail, char *pager, int msgnum, char *context, char
 		fprintf(p, "To: %s\n", pager);
 		if (pagersubject) {
 			struct ast_channel *ast;
-			if ((ast = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, 0))) {
+			if ((ast = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, "Substitution/voicemail"))) {
 				char *passdata;
 				int vmlen = strlen(pagersubject) * 3 + 200;
 				if ((passdata = alloca(vmlen))) {
@@ -3367,7 +3371,7 @@ static int sendpage(char *srcemail, char *pager, int msgnum, char *context, char
 		strftime(date, sizeof(date), "%A, %B %d, %Y at %r", &tm);
 		if (pagerbody) {
 			struct ast_channel *ast;
-			if ((ast = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, 0))) {
+			if ((ast = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, "Substitution/voicemail"))) {
 				char *passdata;
 				int vmlen = strlen(pagerbody)*3 + 200;
 				if ((passdata = alloca(vmlen))) {
@@ -4541,7 +4545,9 @@ static void adsi_message(struct ast_channel *chan, struct vm_state *vms)
 	f = fopen(fn2, "r");
 	if (f) {
 		while (!feof(f)) {	
-			fgets((char *)buf, sizeof(buf), f);
+			if (!fgets((char *)buf, sizeof(buf), f)) {
+				continue;
+			}
 			if (!feof(f)) {
 				char *stringp=NULL;
 				stringp = (char *)buf;
@@ -6845,7 +6851,7 @@ static int vm_options(struct ast_channel *chan, struct ast_vm_user *vmu, struct 
 				if (cmd < 0)
 					break;
 
-				if ((cmd = ast_readstring(chan,newpassword2 + strlen(newpassword2),sizeof(newpassword2)-1,2000,10000,"#"))) {
+				if ((cmd = ast_readstring(chan,newpassword2 + strlen(newpassword2),sizeof(newpassword2)-1,2000,10000,"#")) < 0) {
 					break;
 				}
 			}
@@ -7738,7 +7744,7 @@ out:
 	/* expunge message - use UID Expunge if supported on IMAP server*/
 	if (option_debug > 2)
 		ast_log(LOG_DEBUG, "*** Checking if we can expunge, deleted set to %d, expungeonhangup set to %d\n",deleted,expungeonhangup);
-	if (vmu && deleted == 1 && expungeonhangup == 1) {
+	if (vmu && deleted == 1 && expungeonhangup == 1 && vms.mailstream != NULL) {
 #ifdef HAVE_IMAP_TK2006
 		if (LEVELUIDPLUS (vms.mailstream)) {
 			mail_expunge_full(vms.mailstream,NIL,EX_UID);
@@ -8660,6 +8666,9 @@ static int load_config(void)
 				}
 				tmpread = tmpwrite + 1;
 			}
+		}
+		if ((s = ast_variable_retrieve(cfg, "general", "tz"))) {
+			ast_copy_string(zonetag, s, sizeof(zonetag));
 		}
 		if ((s = ast_variable_retrieve(cfg, "general", "pagersubject")))
 			pagersubject = ast_strdup(s);
