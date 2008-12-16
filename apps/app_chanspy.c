@@ -38,6 +38,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <string.h>
 #include <unistd.h>
 #include <ctype.h>
+#include <errno.h>
 
 #include "asterisk/file.h"
 #include "asterisk/logger.h"
@@ -190,8 +191,11 @@ static int spy_generate(struct ast_channel *chan, void *data, int len, int sampl
 		return -1;
 	}
 
-	if (csth->fd)
-		write(csth->fd, f->data, f->datalen);
+	if (csth->fd) {
+		if (write(csth->fd, f->data, f->datalen) < 0) {
+			ast_log(LOG_WARNING, "write() failed: %s\n", strerror(errno));
+		}
+	}
 
 	ast_frfree(f);
 
@@ -555,7 +559,7 @@ static int common_exec(struct ast_channel *chan, const struct ast_flags *flags,
 			int igrp = !mygroup;
 			char *groups[25];
 			int num_groups = 0;
-			char *dup_group;
+			char dup_group[512];
 			int x;
 			char *s;
 
@@ -587,7 +591,7 @@ static int common_exec(struct ast_channel *chan, const struct ast_flags *flags,
 
 			if (mygroup) {
 				if ((group = pbx_builtin_getvar_helper(peer, "SPYGROUP"))) {
-					dup_group = ast_strdupa(group);
+					ast_copy_string(dup_group, group, sizeof(dup_group));
 					num_groups = ast_app_separate_args(dup_group, ':', groups,
 									   sizeof(groups) / sizeof(groups[0]));
 				}
@@ -674,6 +678,8 @@ static int common_exec(struct ast_channel *chan, const struct ast_flags *flags,
 
 	ast_channel_setoption(chan, AST_OPTION_TXGAIN, &zero_volume, sizeof(zero_volume), 0);
 
+	ast_mutex_lock(&chanspy_ds.lock);
+	ast_mutex_unlock(&chanspy_ds.lock);
 	ast_mutex_destroy(&chanspy_ds.lock);
 
 	return res;
