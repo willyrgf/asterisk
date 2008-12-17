@@ -437,12 +437,12 @@ void ast_cdr_free(struct ast_cdr *cdr)
 	while (cdr) {
 		struct ast_cdr *next = cdr->next;
 		char *chan = S_OR(cdr->channel, "<unknown>");
-		if (!ast_test_flag(cdr, AST_CDR_FLAG_POSTED) && !ast_test_flag(cdr, AST_CDR_FLAG_POST_DISABLED))
-			ast_log(LOG_NOTICE, "CDR on channel '%s' not posted\n", chan);
-		if (ast_tvzero(cdr->end))
-			ast_log(LOG_NOTICE, "CDR on channel '%s' lacks end\n", chan);
-		if (ast_tvzero(cdr->start))
-			ast_log(LOG_NOTICE, "CDR on channel '%s' lacks start\n", chan);
+		if (option_verbose > 1 && !ast_test_flag(cdr, AST_CDR_FLAG_POSTED) && !ast_test_flag(cdr, AST_CDR_FLAG_POST_DISABLED))
+			ast_verbose(VERBOSE_PREFIX_2 "CDR on channel '%s' not posted\n", chan);
+		if (option_verbose > 1 && ast_tvzero(cdr->end))
+			ast_verbose(VERBOSE_PREFIX_2 "CDR on channel '%s' lacks end\n", chan);
+		if (option_verbose > 1 && ast_tvzero(cdr->start))
+			ast_verbose(VERBOSE_PREFIX_2 "CDR on channel '%s' lacks start\n", chan);
 
 		ast_cdr_free_vars(cdr, 0);
 		free(cdr);
@@ -766,6 +766,9 @@ int ast_cdr_disposition(struct ast_cdr *cdr, int cause)
 		case AST_CAUSE_BUSY:
 			ast_cdr_busy(cdr);
 			break;
+		case AST_CAUSE_NO_ANSWER:
+			ast_cdr_noanswer(cdr);
+			break;
 		case AST_CAUSE_NORMAL:
 			break;
 		default:
@@ -1015,10 +1018,10 @@ static void post_cdr(struct ast_cdr *cdr)
 
 		chan = S_OR(cdr->channel, "<unknown>");
 		check_post(cdr);
-		if (ast_tvzero(cdr->end))
-			ast_log(LOG_WARNING, "CDR on channel '%s' lacks end\n", chan);
-		if (ast_tvzero(cdr->start))
-			ast_log(LOG_WARNING, "CDR on channel '%s' lacks start\n", chan);
+		if (option_verbose > 1 && ast_tvzero(cdr->end))
+			ast_verbose(VERBOSE_PREFIX_2 "CDR on channel '%s' lacks end\n", chan);
+		if (option_verbose > 1 && ast_tvzero(cdr->start))
+			ast_verbose(VERBOSE_PREFIX_2 "CDR on channel '%s' lacks start\n", chan);
 		ast_set_flag(cdr, AST_CDR_FLAG_POSTED);
 		if (ast_test_flag(cdr, AST_CDR_FLAG_POST_DISABLED))
 			continue;
@@ -1073,12 +1076,15 @@ void ast_cdr_specialized_reset(struct ast_cdr *cdr, struct ast_flags *_flags)
 
 	if (_flags)
 		ast_copy_flags(&flags, _flags, AST_FLAGS_ALL);
-
-	if (_flags)
-		ast_copy_flags(&flags, _flags, AST_FLAGS_ALL);
 	
 	/* Reset to initial state */
-	ast_clear_flag(cdr, AST_FLAGS_ALL);	
+	if (ast_test_flag(cdr, AST_CDR_FLAG_POST_DISABLED)) { /* But do NOT lose the NoCDR() setting */
+		ast_clear_flag(cdr, AST_FLAGS_ALL);	
+		ast_set_flag(cdr, AST_CDR_FLAG_POST_DISABLED);
+	} else {
+		ast_clear_flag(cdr, AST_FLAGS_ALL);	
+	}
+	
 	memset(&cdr->start, 0, sizeof(cdr->start));
 	memset(&cdr->end, 0, sizeof(cdr->end));
 	memset(&cdr->answer, 0, sizeof(cdr->answer));
@@ -1392,7 +1398,7 @@ static int do_reload(void)
 		if ((size_value = ast_variable_retrieve(config, "general", "size"))) {
 			if (sscanf(size_value, "%d", &cfg_size) < 1)
 				ast_log(LOG_WARNING, "Unable to convert '%s' to a numeric value.\n", size_value);
-			else if (size_value < 0)
+			else if (cfg_size < 0)
 				ast_log(LOG_WARNING, "Invalid maximum batch size '%d' specified, using default\n", cfg_size);
 			else
 				batchsize = cfg_size;
@@ -1400,7 +1406,7 @@ static int do_reload(void)
 		if ((time_value = ast_variable_retrieve(config, "general", "time"))) {
 			if (sscanf(time_value, "%d", &cfg_time) < 1)
 				ast_log(LOG_WARNING, "Unable to convert '%s' to a numeric value.\n", time_value);
-			else if (time_value < 0)
+			else if (cfg_time < 0)
 				ast_log(LOG_WARNING, "Invalid maximum batch time '%d' specified, using default\n", cfg_time);
 			else
 				batchtime = cfg_time;

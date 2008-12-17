@@ -509,7 +509,8 @@ static void rebuild_matrix(int samples)
 					tr_matrix[x][z].cost = newcost;
 					tr_matrix[x][z].multistep = 1;
 					if (option_debug)
-						ast_log(LOG_DEBUG, "Discovered %d cost path from %s to %s, via %d\n", tr_matrix[x][z].cost, ast_getformatname(x), ast_getformatname(z), y);
+						ast_log(LOG_DEBUG, "Discovered %d cost path from %s to %s, via %s\n", tr_matrix[x][z].cost,
+							ast_getformatname(1 << x), ast_getformatname(1 << z), ast_getformatname(1 << y));
 					changed++;
 				}
 			}
@@ -584,7 +585,7 @@ static int show_translation_deprecated(int fd, int argc, char *argv[])
 			}
 		}
 		ast_build_string(&buf, &left, "\n");
-		ast_cli(fd, line);			
+		ast_cli(fd, "%s", line);			
 	}
 	AST_LIST_UNLOCK(&translators);
 	return RESULT_SUCCESS;
@@ -653,7 +654,7 @@ static int show_translation(int fd, int argc, char *argv[])
 			}
 		}
 		ast_build_string(&buf, &left, "\n");
-		ast_cli(fd, line);			
+		ast_cli(fd, "%s", line);			
 	}
 	AST_LIST_UNLOCK(&translators);
 	return RESULT_SUCCESS;

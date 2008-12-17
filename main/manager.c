@@ -73,7 +73,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 struct fast_originate_helper {
 	char tech[AST_MAX_EXTENSION];
-	char data[AST_MAX_EXTENSION];
+	/*! data can contain a channel name, extension number, username, password, etc. */
+	char data[512];
 	int timeout;
 	int format;
 	char app[AST_MAX_APP];
@@ -137,6 +138,7 @@ static struct {
 } command_blacklist[] = {
 	{{ "module", "load", NULL }},
 	{{ "module", "unload", NULL }},
+	{{ "restart", "gracefully", NULL }},
 };
 
 struct mansession {
@@ -318,7 +320,7 @@ static int variable_count_cmp_fn(void *obj, void *vstr, int flags)
 	 * the address of both the struct and the string are exactly the same. */
 	struct variable_count *vc = obj;
 	char *str = vstr;
-	return !strcmp(vc->varname, str) ? CMP_MATCH : 0;
+	return !strcmp(vc->varname, str) ? CMP_MATCH | CMP_STOP : 0;
 }
 
 static char *xml_translate(char *in, struct ast_variable *vars)
@@ -1499,8 +1501,15 @@ static int action_getvar(struct mansession *s, const struct message *m)
 
 	if (varname[strlen(varname) - 1] == ')') {
 		char *copy = ast_strdupa(varname);
-
-		ast_func_read(c, copy, workspace, sizeof(workspace));
+		if (!c) {
+			c = ast_channel_alloc(0, 0, "", "", "", "", "", 0, "Bogus/manager");
+			if (c) {
+				ast_func_read(c, copy, workspace, sizeof(workspace));
+				ast_channel_free(c);
+			} else
+				ast_log(LOG_ERROR, "Unable to allocate bogus channel for variable substitution.  Function results may be blank.\n");
+		} else
+			ast_func_read(c, copy, workspace, sizeof(workspace));
 		varval = workspace;
 	} else {
 		pbx_retrieve_variable(c, varname, &varval, workspace, sizeof(workspace), NULL);
@@ -1758,7 +1767,9 @@ static int action_command(struct mansession *s, const struct message *m)
 	final_buf = ast_calloc(1, l + 1);
 	if (buf) {
 		lseek(fd, 0, SEEK_SET);
-		read(fd, buf, l);
+		if (read(fd, buf, l) < 0) {
+			ast_log(LOG_WARNING, "read() failed: %s\n", strerror(errno));
+		}
 		buf[l] = '\0';
 		if (final_buf) {
 			term_strip(final_buf, buf, l);
@@ -1866,7 +1877,7 @@ static int action_originate(struct mansession *s, const struct message *m)
 	
 	pthread_t th;
 	pthread_attr_t attr;
-	if (!name) {
+	if (ast_strlen_zero(name)) {
 		astman_send_error(s, m, "Channel not specified");
 		return 0;
 	}

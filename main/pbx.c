@@ -595,7 +595,8 @@ static void pbx_destroy(struct ast_pbx *p)
  * Special characters used in patterns:
  *	'_'	underscore is the leading character of a pattern.
  *		In other position it is treated as a regular char.
- *	' ' '-'	space and '-' are separator and ignored.
+ *	' ' '-'	space and '-' are separator and ignored. Why? so
+ *	        patterns like NXX-XXX-XXXX or NXX XXX XXXX will work.
  *	.	one or more of any character. Only allowed at the end of
  *		a pattern.
  *	!	zero or more of anything. Also impacts the result of CANMATCH
@@ -665,13 +666,13 @@ static int ext_cmp1(const char **p)
 		return 0x0000 | (c & 0xff);
 
 	case 'N':	/* 2..9 */
-		return 0x0700 | '2' ;
+		return 0x0800 | '2' ;
 
 	case 'X':	/* 0..9 */
-		return 0x0900 | '0';
+		return 0x0A00 | '0';
 
 	case 'Z':	/* 1..9 */
-		return 0x0800 | '1';
+		return 0x0900 | '1';
 
 	case '.':	/* wildcard */
 		return 0x10000;
@@ -2539,7 +2540,7 @@ static int __ast_pbx_run(struct ast_channel *c)
 		ast_log(LOG_WARNING, "Don't know what to do with '%s'\n", c->name);
 	if (res != AST_PBX_KEEPALIVE)
 		ast_softhangup(c, c->hangupcause ? c->hangupcause : AST_CAUSE_NORMAL_CLEARING);
-	if ((res != AST_PBX_KEEPALIVE) && ast_exists_extension(c, c->context, "h", 1, c->cid.cid_num)) {
+	if ((res != AST_PBX_KEEPALIVE) && !ast_test_flag(c, AST_FLAG_BRIDGE_HANGUP_RUN) && ast_exists_extension(c, c->context, "h", 1, c->cid.cid_num)) {
 		set_ext_pri(c, "h", 1);
 		while(ast_exists_extension(c, c->context, c->exten, c->priority, c->cid.cid_num)) {
 			if ((res = ast_spawn_extension(c, c->context, c->exten, c->priority, c->cid.cid_num))) {
@@ -2554,7 +2555,7 @@ static int __ast_pbx_run(struct ast_channel *c)
 		}
 	}
 	ast_set2_flag(c, autoloopflag, AST_FLAG_IN_AUTOLOOP);
-
+	ast_clear_flag(c, AST_FLAG_BRIDGE_HANGUP_RUN); /* from one round to the next, make sure this gets cleared */
 	pbx_destroy(c->pbx);
 	c->pbx = NULL;
 	if (res != AST_PBX_KEEPALIVE)
@@ -2645,6 +2646,7 @@ enum ast_pbx_result ast_pbx_start(struct ast_channel *c)
 	if (ast_pthread_create(&t, &attr, pbx_thread, c)) {
 		ast_log(LOG_WARNING, "Failed to create new channel thread\n");
 		pthread_attr_destroy(&attr);
+		decrease_call_count();
 		return AST_PBX_FAILED;
 	}
 	pthread_attr_destroy(&attr);
@@ -4494,14 +4496,19 @@ int ast_context_add_ignorepat2(struct ast_context *con, const char *value, const
 {
 	struct ast_ignorepat *ignorepat, *ignorepatc, *ignorepatl = NULL;
 	int length;
+	char *pattern;
 	length = sizeof(struct ast_ignorepat);
 	length += strlen(value) + 1;
 	if (!(ignorepat = ast_calloc(1, length)))
 		return -1;
 	/* The cast to char * is because we need to write the initial value.
-	 * The field is not supposed to be modified otherwise
+	 * The field is not supposed to be modified otherwise.  Also, gcc 4.2
+	 * sees the cast as dereferencing a type-punned pointer and warns about
+	 * it.  This is the workaround (we're telling gcc, yes, that's really
+	 * what we wanted to do).
 	 */
-	strcpy((char *)ignorepat->pattern, value);
+	pattern = (char *) ignorepat->pattern;
+	strcpy(pattern, value);
 	ignorepat->next = NULL;
 	ignorepat->registrar = registrar;
 	ast_mutex_lock(&con->lock);
@@ -4609,17 +4616,23 @@ int ast_async_goto(struct ast_channel *chan, const char *context, const char *ex
 				S_OR(context, chan->context), S_OR(exten, chan->exten), priority);
 
 			/* Masquerade into temp channel */
-			ast_channel_masquerade(tmpchan, chan);
-
-			/* Grab the locks and get going */
-			ast_channel_lock(tmpchan);
-			ast_do_masquerade(tmpchan);
-			ast_channel_unlock(tmpchan);
-			/* Start the PBX going on our stolen channel */
-			if (ast_pbx_start(tmpchan)) {
-				ast_log(LOG_WARNING, "Unable to start PBX on %s\n", tmpchan->name);
+			if (ast_channel_masquerade(tmpchan, chan)) {
+				/* Failed to set up the masquerade.  It's probably chan_local
+				 * in the middle of optimizing itself out.  Sad. :( */
 				ast_hangup(tmpchan);
+				tmpchan = NULL;
 				res = -1;
+			} else {
+				/* Grab the locks and get going */
+				ast_channel_lock(tmpchan);
+				ast_do_masquerade(tmpchan);
+				ast_channel_unlock(tmpchan);
+				/* Start the PBX going on our stolen channel */
+				if (ast_pbx_start(tmpchan)) {
+					ast_log(LOG_WARNING, "Unable to start PBX on %s\n", tmpchan->name);
+					ast_hangup(tmpchan);
+					res = -1;
+				}
 			}
 		}
 	}
@@ -4820,7 +4833,7 @@ int ast_add_extension2(struct ast_context *con,
 	ast_mutex_lock(&con->lock);
 	res = 0; /* some compilers will think it is uninitialized otherwise */
 	for (e = con->root; e; el = e, e = e->next) {   /* scan the extension list */
-		res = ext_cmp(e->exten, extension);
+		res = ext_cmp(e->exten, tmp->exten);
 		if (res == 0) { /* extension match, now look at cidmatch */
 			if (!e->matchcid && !tmp->matchcid)
 				res = 0;
@@ -4955,7 +4968,7 @@ static void *async_wait(void *data)
 static int ast_pbx_outgoing_cdr_failed(void)
 {
 	/* allocate a channel */
-	struct ast_channel *chan = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, 0);
+	struct ast_channel *chan = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, "%s", "");
 
 	if (!chan)
 		return -1;  /* failure */
@@ -4972,6 +4985,7 @@ static int ast_pbx_outgoing_cdr_failed(void)
 	ast_cdr_end(chan->cdr);
 	ast_cdr_failed(chan->cdr);      /* set the status to failed */
 	ast_cdr_detach(chan->cdr);      /* post and free the record */
+	chan->cdr = NULL;
 	ast_channel_free(chan);         /* free the channel */
 
 	return 0;  /* success */

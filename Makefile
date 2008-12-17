@@ -203,10 +203,15 @@ endif
 
 ASTCFLAGS+=-Wall -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations $(DEBUG)
 
-ASTCFLAGS+=-include $(ASTTOPDIR)/include/asterisk/autoconfig.h
-
 ifeq ($(AST_DEVMODE),yes)
-  ASTCFLAGS+=-Werror  -Wunused $(AST_DECLARATION_AFTER_STATEMENT)
+  ASTCFLAGS+=-Werror
+  ASTCFLAGS+=-Wunused
+  ASTCFLAGS+=$(AST_DECLARATION_AFTER_STATEMENT)
+  ASTCFLAGS+=$(AST_FORTIFY_SOURCE)
+# ASTCFLAGS+=-Wundef 
+  ASTCFLAGS+=-Wformat -Wformat-security
+  ASTCFLAGS+=-Wmissing-format-attribute
+# ASTCFLAGS+=-Wformat=2
 endif
 
 ifneq ($(findstring BSD,$(OSARCH)),)
@@ -245,9 +250,6 @@ ASTERISKVERSION:=$(shell GREP=$(GREP) AWK=$(AWK) build_tools/make_version .)
 
 ifneq ($(wildcard .version),)
   ASTERISKVERSIONNUM:=$(shell $(AWK) -F. '{printf "%01d%02d%02d", $$1, $$2, $$3}' .version)
-  RPMVERSION:=$(shell sed 's/[-\/:]/_/g' .version)
-else
-  RPMVERSION=unknown
 endif
 
 ifneq ($(wildcard .svn),)
@@ -274,7 +276,7 @@ ifneq ($(findstring darwin,$(OSARCH)),)
   SOLINK=-dynamic -bundle -undefined suppress -force_flat_namespace
 else
 # These are used for all but Darwin
-  SOLINK=-shared -Xlinker -x
+  SOLINK=-shared
   ifneq ($(findstring BSD,$(OSARCH)),)
     LDFLAGS+=-L/usr/local/lib
   endif
@@ -378,7 +380,9 @@ $(SUBDIRS_CLEAN):
 $(SUBDIRS_DIST_CLEAN):
 	@$(MAKE) --no-print-directory -C $(@:-dist-clean=) dist-clean
 
-clean: $(SUBDIRS_CLEAN)
+clean: $(SUBDIRS_CLEAN) _clean
+
+_clean:
 	rm -f defaults.h
 	rm -f include/asterisk/build.h
 	rm -f include/asterisk/version.h
@@ -387,7 +391,7 @@ clean: $(SUBDIRS_CLEAN)
 
 dist-clean: distclean
 
-distclean: $(SUBDIRS_DIST_CLEAN) clean
+distclean: $(SUBDIRS_DIST_CLEAN) _clean
 	@$(MAKE) -C menuselect dist-clean
 	@$(MAKE) -C sounds dist-clean
 	rm -f menuselect.makeopts makeopts menuselect-tree menuselect.makedeps
@@ -583,7 +587,8 @@ samples: adsi
 		echo "astrundir => $(ASTVARRUNDIR)" ; \
 		echo "astlogdir => $(ASTLOGDIR)" ; \
 		echo "" ; \
-		echo ";[options]" ; \
+		echo "[options]" ; \
+		echo "languageprefix = yes ; Use the new sound prefix path syntax" ; \
 		echo ";verbose = 3" ; \
 		echo ";debug = 3" ; \
 		echo ";alwaysfork = yes ; same as -F at startup" ; \
@@ -597,7 +602,6 @@ samples: adsi
 		echo ";nocolor = yes ; Disable console colors" ; \
 		echo ";dontwarn = yes ; Disable some warnings" ; \
 		echo ";dumpcore = yes ; Dump core on crash (same as -g at startup)" ; \
-		echo ";languageprefix = yes ; Use the new sound prefix path syntax" ; \
 		echo ";internal_timing = yes" ; \
 		echo ";systemname = my_system_name ; prefix uniqueid with a system name for global uniqueness issues" ; \
 		echo ";maxcalls = 10 ; Maximum amount of calls allowed" ; \
@@ -649,20 +653,6 @@ webvmail:
 	@echo " + HTTP_DOCSDIR                              +"
 	@echo " +                                           +"
 	@echo " +-------------------------------------------+"  
-
-spec: 
-	sed "s/^Version:.*/Version: $(RPMVERSION)/g" redhat/asterisk.spec > asterisk.spec ; \
-
-rpm: __rpm
-
-__rpm: include/asterisk/version.h include/asterisk/buildopts.h spec
-	rm -rf /tmp/asterisk ; \
-	mkdir -p /tmp/asterisk/redhat/RPMS/i386 ; \
-	$(MAKE) DESTDIR=/tmp/asterisk install ; \
-	$(MAKE) DESTDIR=/tmp/asterisk samples ; \
-	mkdir -p /tmp/asterisk/etc/rc.d/init.d ; \
-	cp -f contrib/init.d/rc.redhat.asterisk /tmp/asterisk/etc/rc.d/init.d/asterisk ; \
-	rpmbuild --rcfile /usr/lib/rpm/rpmrc:redhat/rpmrc -bb asterisk.spec
 
 progdocs:
 	(cat contrib/asterisk-ng-doxygen; echo "HAVE_DOT=$(HAVEDOT)"; \
@@ -777,6 +767,6 @@ menuselect-tree: $(foreach dir,$(filter-out main,$(MOD_SUBDIRS)),$(wildcard $(di
 	@cat sounds/sounds.xml >> $@
 	@echo "</menu>" >> $@
 
-.PHONY: menuselect main sounds clean dist-clean distclean all prereqs cleantest uninstall _uninstall uninstall-all dont-optimize $(SUBDIRS_INSTALL) $(SUBDIRS_DIST_CLEAN) $(SUBDIRS_CLEAN) $(SUBDIRS_UNINSTALL) $(SUBDIRS) $(MOD_SUBDIRS_EMBED_LDSCRIPT) $(MOD_SUBDIRS_EMBED_LDFLAGS) $(MOD_SUBDIRS_EMBED_LIBS) badshell menuselect.makeopts installdirs
+.PHONY: menuselect main sounds clean dist-clean distclean all prereqs cleantest uninstall _uninstall uninstall-all dont-optimize $(SUBDIRS_INSTALL) $(SUBDIRS_DIST_CLEAN) $(SUBDIRS_CLEAN) $(SUBDIRS_UNINSTALL) $(SUBDIRS) $(MOD_SUBDIRS_EMBED_LDSCRIPT) $(MOD_SUBDIRS_EMBED_LDFLAGS) $(MOD_SUBDIRS_EMBED_LIBS) badshell menuselect.makeopts installdirs _clean
 
 FORCE:

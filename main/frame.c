@@ -45,6 +45,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/linkedlists.h"
 #include "asterisk/translate.h"
 #include "asterisk/dsp.h"
+#include "asterisk/file.h"
 
 #ifdef TRACE_FRAMES
 static int headers;
@@ -320,10 +321,13 @@ static void frame_cache_cleanup(void *data)
 
 void ast_frame_free(struct ast_frame *fr, int cache)
 {
-	if (ast_test_flag(fr, AST_FRFLAG_FROM_TRANSLATOR))
+	if (ast_test_flag(fr, AST_FRFLAG_FROM_TRANSLATOR)) {
 		ast_translate_frame_freed(fr);
-	else if (ast_test_flag(fr, AST_FRFLAG_FROM_DSP))
+	} else if (ast_test_flag(fr, AST_FRFLAG_FROM_DSP)) {
 		ast_dsp_frame_freed(fr);
+	} else if (ast_test_flag(fr, AST_FRFLAG_FROM_FILESTREAM)) {
+		ast_filestream_frame_freed(fr);
+	}
 
 	if (!fr->mallocd)
 		return;
@@ -486,9 +490,12 @@ struct ast_frame *ast_frdup(const struct ast_frame *f)
 		memcpy(out->data, f->data, out->datalen);	
 	}
 	if (srclen > 0) {
+		/* This may seem a little strange, but it's to avoid a gcc (4.2.4) compiler warning */
+		char *src;
 		out->src = buf + sizeof(*out) + AST_FRIENDLY_OFFSET + f->datalen;
+		src = (char *) out->src;
 		/* Must have space since we allocated for it */
-		strcpy((char *)out->src, f->src);
+		strcpy(src, f->src);
 	}
 	ast_copy_flags(out, f, AST_FRFLAG_HAS_TIMING_INFO);
 	out->ts = f->ts;
@@ -932,23 +939,6 @@ void ast_frame_dump(const char *name, struct ast_frame *f, char *prefix)
 
 
 #ifdef TRACE_FRAMES
-static int show_frame_stats_deprecated(int fd, int argc, char *argv[])
-{
-	struct ast_frame *f;
-	int x=1;
-	if (argc != 3)
-		return RESULT_SHOWUSAGE;
-	AST_LIST_LOCK(&headerlist);
-	ast_cli(fd, "     Framer Statistics     \n");
-	ast_cli(fd, "---------------------------\n");
-	ast_cli(fd, "Total allocated headers: %d\n", headers);
-	ast_cli(fd, "Queue Dump:\n");
-	AST_LIST_TRAVERSE(&headerlist, f, frame_list)
-		ast_cli(fd, "%d.  Type %d, subclass %d from %s\n", x++, f->frametype, f->subclass, f->src ? f->src : "<Unknown>");
-	AST_LIST_UNLOCK(&headerlist);
-	return RESULT_SUCCESS;
-}
-
 static int show_frame_stats(int fd, int argc, char *argv[])
 {
 	struct ast_frame *f;

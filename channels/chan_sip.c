@@ -7733,7 +7733,9 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 
 	/* exit if we are already in process with this registrar ?*/
 	if ( r == NULL || ((auth==NULL) && (r->regstate==REG_STATE_REGSENT || r->regstate==REG_STATE_AUTHSENT))) {
-		ast_log(LOG_NOTICE, "Strange, trying to register %s@%s when registration already pending\n", r->username, r->hostname);
+		if (r) {
+			ast_log(LOG_NOTICE, "Strange, trying to register %s@%s when registration already pending\n", r->username, r->hostname);
+		}
 		return 0;
 	}
 
@@ -9676,11 +9678,13 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 	if (user && ast_apply_ha(user->ha, sin)) {
 		ast_copy_flags(&p->flags[0], &user->flags[0], SIP_FLAGS_TO_COPY);
 		ast_copy_flags(&p->flags[1], &user->flags[1], SIP_PAGE2_FLAGS_TO_COPY);
-		/* copy channel vars */
-		for (v = user->chanvars ; v ; v = v->next) {
-			if ((tmpvar = ast_variable_new(v->name, v->value))) {
-				tmpvar->next = p->chanvars; 
-				p->chanvars = tmpvar;
+		if (sipmethod == SIP_INVITE) {
+			/* copy channel vars */
+			for (v = user->chanvars ; v ; v = v->next) {
+				if ((tmpvar = ast_variable_new(v->name, v->value))) {
+					tmpvar->next = p->chanvars; 
+					p->chanvars = tmpvar;
+				}
 			}
 		}
 		p->prefs = user->prefs;
@@ -9834,11 +9838,13 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 				ast_string_field_set(p, peername, peer->name);
 				ast_string_field_set(p, authname, peer->name);
 
-				/* copy channel vars */
-				for (v = peer->chanvars ; v ; v = v->next) {
-					if ((tmpvar = ast_variable_new(v->name, v->value))) {
-						tmpvar->next = p->chanvars; 
-						p->chanvars = tmpvar;
+				if (sipmethod == SIP_INVITE) {
+					/* copy channel vars */
+					for (v = peer->chanvars ; v ; v = v->next) {
+						if ((tmpvar = ast_variable_new(v->name, v->value))) {
+							tmpvar->next = p->chanvars; 
+							p->chanvars = tmpvar;
+						}
 					}
 				}
 				if (authpeer) {
@@ -17343,6 +17349,9 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 				ast_copy_string(peer->tohost, v->value, sizeof(peer->tohost));
 				if (!peer->addr.sin_port)
 					peer->addr.sin_port = htons(STANDARD_SIP_PORT);
+				if (global_dynamic_exclude_static) {
+					global_contact_ha = ast_append_ha("deny", (char *)ast_inet_ntoa(peer->addr.sin_addr), global_contact_ha);
+				}
 				if (global_dynamic_exclude_static) {
 					global_contact_ha = ast_append_ha("deny", (char *)ast_inet_ntoa(peer->addr.sin_addr), global_contact_ha);
 				}

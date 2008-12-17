@@ -1157,8 +1157,11 @@ static void hup_handler(int num)
 	if (restartnow)
 		execvp(_argv[0], _argv);
 	sig_flags.need_reload = 1;
-	if (sig_alert_pipe[1] != -1)
-		write(sig_alert_pipe[1], &a, sizeof(a));
+	if (sig_alert_pipe[1] != -1) {
+		if (write(sig_alert_pipe[1], &a, sizeof(a)) < 0) {
+			fprintf(stderr, "hup_handler: write() failed: %s\n", strerror(errno));
+		}
+	}
 	signal(num, hup_handler);
 }
 
@@ -1316,7 +1319,7 @@ static void quit_handler(int num, int nice, int safeshutdown, int restart)
 		close(ast_consock);
 	if (!ast_opt_remote)
 		unlink(ast_config_AST_PID);
-	printf(term_quit());
+	printf("%s", term_quit());
 	if (restart) {
 		if (option_verbose || ast_opt_console)
 			ast_verbose("Preparing for Asterisk restart...\n");
@@ -1351,10 +1354,18 @@ static void __quit_handler(int num)
 {
 	int a = 0;
 	sig_flags.need_quit = 1;
-	if (sig_alert_pipe[1] != -1)
-		write(sig_alert_pipe[1], &a, sizeof(a));
+	if (sig_alert_pipe[1] != -1) {
+		if (write(sig_alert_pipe[1], &a, sizeof(a)) < 0) {
+			fprintf(stderr, "hup_handler: write() failed: %s\n", strerror(errno));
+		}
+	}
 	/* There is no need to restore the signal handler here, since the app
 	 * is going to exit */
+}
+
+static void __remote_quit_handler(int num)
+{
+	sig_flags.need_quit = 1;
 }
 
 static const char *fix_header(char *outbuf, int maxout, const char *s, char *cmp)
@@ -1411,7 +1422,7 @@ static int ast_all_zeros(char *s)
 
 static void consolehandler(char *s)
 {
-	printf(term_end());
+	printf("%s", term_end());
 	fflush(stdout);
 
 	/* Called when readline data is available */
@@ -1621,8 +1632,8 @@ static int show_warranty(int fd, int argc, char *argv[])
 {
 	int x;
 
-	for (x = 0; x < sizeof(warranty_lines) / sizeof(warranty_lines[0]); x++)
-		ast_cli(fd, (char *) warranty_lines[x]);
+	for (x = 0; x < ARRAY_LEN(warranty_lines); x++)
+		ast_cli(fd, "%s", (char *) warranty_lines[x]);
 
 	return RESULT_SUCCESS;
 }
@@ -1650,8 +1661,8 @@ static int show_license(int fd, int argc, char *argv[])
 {
 	int x;
 
-	for (x = 0; x < sizeof(license_lines) / sizeof(license_lines[0]); x++)
-		ast_cli(fd, (char *) license_lines[x]);
+	for (x = 0; x < ARRAY_LEN(license_lines); x++)
+		ast_cli(fd, "%s", (char *) license_lines[x]);
 
 	return RESULT_SUCCESS;
 }
@@ -1766,6 +1777,8 @@ static int ast_el_read_char(EditLine *el, char *cp)
 		}
 		res = poll(fds, max, -1);
 		if (res < 0) {
+			if (sig_flags.need_quit)
+				break;
 			if (errno == EINTR)
 				continue;
 			ast_log(LOG_ERROR, "poll failed: %s\n", strerror(errno));
@@ -1794,7 +1807,7 @@ static int ast_el_read_char(EditLine *el, char *cp)
 					for (tries=0; tries < 30 * reconnects_per_second; tries++) {
 						if (ast_tryconnect()) {
 							fprintf(stderr, "Reconnect succeeded after %.3f seconds\n", 1.0 / reconnects_per_second * tries);
-							printf(term_quit());
+							printf("%s", term_quit());
 							WELCOME_MESSAGE;
 							if (!ast_opt_mute)
 								fdsend(ast_consock, "logger mute silent");
@@ -1823,9 +1836,12 @@ static int ast_el_read_char(EditLine *el, char *cp)
 			}
 
 			/* Write over the CLI prompt */
-			if (!ast_opt_exec && !lastpos)
-				write(STDOUT_FILENO, "\r", 1);
-			write(STDOUT_FILENO, buf, res);
+			if (!ast_opt_exec && !lastpos) {
+				if (write(STDOUT_FILENO, "\r", 1) < 0) {
+				}
+			}
+			if (write(STDOUT_FILENO, buf, res) < 0) {
+			}
 			if ((res < EL_BUF_SIZE - 1) && ((buf[res-1] == '\n') || (buf[res-2] == '\n'))) {
 				*cp = CC_REFRESH;
 				return(1);
@@ -1912,8 +1928,13 @@ static char *cli_prompt(EditLine *el)
 					if ((LOADAVG = fopen("/proc/loadavg", "r"))) {
 						float avg1, avg2, avg3;
 						int actproc, totproc, npid, which;
-						fscanf(LOADAVG, "%f %f %f %d/%d %d",
-							&avg1, &avg2, &avg3, &actproc, &totproc, &npid);
+
+						if (fscanf(LOADAVG, "%f %f %f %d/%d %d",
+							   &avg1, &avg2, &avg3, &actproc, &totproc, &npid) != 6) {
+							ast_log(LOG_WARNING, "parsing /proc/loadavg failed\n");
+							fclose(LOADAVG);
+							break;
+						}
 						if (sscanf(t, "%d", &which) == 1) {
 							switch (which) {
 							case 1:
@@ -1933,6 +1954,7 @@ static char *cli_prompt(EditLine *el)
 								break;
 							}
 						}
+						fclose(LOADAVG);
 					}
 					break;
 #endif
@@ -2261,7 +2283,9 @@ static int ast_el_read_history(char *filename)
 		return ret;
 
 	while (!feof(f)) {
-		fgets(buf, sizeof(buf), f);
+		if (!fgets(buf, sizeof(buf), f)) {
+			continue;
+		}
 		if (!strcmp(buf, "_HiStOrY_V2_\n"))
 			continue;
 		if (ast_all_zeros(buf))
@@ -2274,7 +2298,7 @@ static int ast_el_read_history(char *filename)
 	return ret;
 }
 
-static void ast_remotecontrol(char * data)
+static void ast_remotecontrol(char *data)
 {
 	char buf[80];
 	int res;
@@ -2289,9 +2313,23 @@ static void ast_remotecontrol(char * data)
 	char *ebuf;
 	int num = 0;
 
-	read(ast_consock, buf, sizeof(buf));
-	if (data)
-		write(ast_consock, data, strlen(data) + 1);
+	memset(&sig_flags, 0, sizeof(sig_flags));
+	signal(SIGINT, __remote_quit_handler);
+	signal(SIGTERM, __remote_quit_handler);
+	signal(SIGHUP, __remote_quit_handler);
+
+	if (read(ast_consock, buf, sizeof(buf)) < 0) {
+		ast_log(LOG_ERROR, "read() failed: %s\n", strerror(errno));
+		return;
+	}
+	if (data) {
+		if (write(ast_consock, data, strlen(data) + 1) < 0) {
+			ast_log(LOG_ERROR, "write() failed: %s\n", strerror(errno));
+			if (sig_flags.need_quit == 1) {
+				return;
+			}
+		}
+	}
 	stringp = buf;
 	hostname = strsep(&stringp, "/");
 	cpid = strsep(&stringp, "/");
@@ -2335,6 +2373,10 @@ static void ast_remotecontrol(char * data)
 			char buf[512] = "", *curline = buf, *nextline;
 			int not_written = 1;
 
+			if (sig_flags.need_quit == 1) {
+				break;
+			}
+
 			if (read(ast_consock, buf, sizeof(buf) - 1) <= 0) {
 				break;
 			}
@@ -2349,7 +2391,9 @@ static void ast_remotecontrol(char * data)
 				/* Skip verbose lines */
 				if (*curline != 127) {
 					not_written = 0;
-					write(STDOUT_FILENO, curline, nextline - curline);
+					if (write(STDOUT_FILENO, curline, nextline - curline) < 0) {
+						ast_log(LOG_WARNING, "write() failed: %s\n", strerror(errno));
+					}
 				}
 				curline = nextline;
 			} while (!ast_strlen_zero(curline));
@@ -2363,6 +2407,10 @@ static void ast_remotecontrol(char * data)
 	}
 	for (;;) {
 		ebuf = (char *)el_gets(el, &num);
+
+		if (sig_flags.need_quit == 1) {
+			break;
+		}
 
 		if (!ebuf && write(1, "", 1) < 0)
 			break;
@@ -2619,7 +2667,8 @@ static void *monitor_sig_flags(void *unused)
 			sig_flags.need_quit = 0;
 			quit_handler(0, 0, 1, 0);
 		}
-		read(sig_alert_pipe[0], &a, sizeof(a));
+		if (read(sig_alert_pipe[0], &a, sizeof(a)) != sizeof(a)) {
+		}
 	}
 
 	return NULL;
@@ -2764,11 +2813,6 @@ int main(int argc, char *argv[])
 	if (ast_opt_console && !option_verbose) 
 		ast_verbose("[ Booting...\n");
 
-	if (ast_opt_always_fork && (ast_opt_remote || ast_opt_console)) {
-		ast_log(LOG_WARNING, "'alwaysfork' is not compatible with console or remote console mode; ignored\n");
-		ast_clear_flag(&ast_options, AST_OPT_FLAG_ALWAYS_FORK);
-	}
-
 	/* For remote connections, change the name of the remote connection.
 	 * We do this for the benefit of init scripts (which need to know if/when
 	 * the main asterisk process has died yet). */
@@ -2779,9 +2823,16 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	if (ast_opt_console && !option_verbose) 
+	if (ast_opt_console && !option_verbose) {
 		ast_verbose("[ Reading Master Configuration ]\n");
+	}
+
 	ast_readconfig();
+
+	if (ast_opt_always_fork && (ast_opt_remote || ast_opt_console)) {
+		ast_log(LOG_WARNING, "'alwaysfork' is not compatible with console or remote console mode; ignored\n");
+		ast_clear_flag(&ast_options, AST_OPT_FLAG_ALWAYS_FORK);
+	}
 
 	if (ast_opt_dump_core) {
 		struct rlimit l;
@@ -2884,7 +2935,7 @@ int main(int argc, char *argv[])
 #endif
 
 	ast_term_init();
-	printf(term_end());
+	printf("%s", term_end());
 	fflush(stdout);
 
 	if (ast_opt_console && !option_verbose) 
@@ -2909,18 +2960,18 @@ int main(int argc, char *argv[])
 				quit_handler(0, 0, 0, 0);
 				exit(0);
 			}
-			printf(term_quit());
+			printf("%s", term_quit());
 			ast_remotecontrol(NULL);
 			quit_handler(0, 0, 0, 0);
 			exit(0);
 		} else {
 			ast_log(LOG_ERROR, "Asterisk already running on %s.  Use 'asterisk -r' to connect.\n", ast_config_AST_SOCKET);
-			printf(term_quit());
+			printf("%s", term_quit());
 			exit(1);
 		}
 	} else if (ast_opt_remote || ast_opt_exec) {
 		ast_log(LOG_ERROR, "Unable to connect to remote asterisk (does %s exist?)\n", ast_config_AST_SOCKET);
-		printf(term_quit());
+		printf("%s", term_quit());
 		exit(1);
 	}
 	/* Blindly write pid file since we couldn't connect */
@@ -2935,7 +2986,9 @@ int main(int argc, char *argv[])
 #if HAVE_WORKING_FORK
 	if (ast_opt_always_fork || !ast_opt_no_fork) {
 #ifndef HAVE_SBIN_LAUNCHD
-		daemon(1, 0);
+		if (daemon(1, 0) < 0) {
+			ast_log(LOG_ERROR, "daemon() failed: %s\n", strerror(errno));
+		}
 		ast_mainpid = getpid();
 		/* Blindly re-write pid file since we are forking */
 		unlink(ast_config_AST_PID);
@@ -2950,10 +3003,6 @@ int main(int argc, char *argv[])
 #endif
 	}
 #endif
-
-	/* Test recursive mutex locking. */
-	if (test_for_thread_safety())
-		ast_verbose("Warning! Asterisk is not thread safe.\n");
 
 	ast_makesocket();
 	sigemptyset(&sigs);
@@ -2977,7 +3026,7 @@ int main(int argc, char *argv[])
 	initstate((unsigned int) getpid() * 65536 + (unsigned int) time(NULL), randompool, sizeof(randompool));
 
 	if (init_logger()) {
-		printf(term_quit());
+		printf("%s", term_quit());
 		exit(1);
 	}
 
@@ -3048,12 +3097,12 @@ int main(int argc, char *argv[])
 	ast_autoservice_init();
 
 	if (load_modules(1)) {
-		printf(term_quit());
+		printf("%s", term_quit());
 		exit(1);
 	}
 
 	if (dnsmgr_init()) {
-		printf(term_quit());
+		printf("%s", term_quit());
 		exit(1);
 	}
 
@@ -3061,18 +3110,13 @@ int main(int argc, char *argv[])
 
 	ast_channels_init();
 
-	if (init_manager()) {
-		printf(term_quit());
-		exit(1);
-	}
-
 	if (ast_cdr_engine_init()) {
-		printf(term_quit());
+		printf("%s", term_quit());
 		exit(1);
 	}
 
 	if (ast_device_state_engine_init()) {
-		printf(term_quit());
+		printf("%s", term_quit());
 		exit(1);
 	}
 
@@ -3081,37 +3125,46 @@ int main(int argc, char *argv[])
 	ast_udptl_init();
 
 	if (ast_image_init()) {
-		printf(term_quit());
+		printf("%s", term_quit());
 		exit(1);
 	}
 
 	if (ast_file_init()) {
-		printf(term_quit());
+		printf("%s", term_quit());
 		exit(1);
 	}
 
 	if (load_pbx()) {
-		printf(term_quit());
+		printf("%s", term_quit());
 		exit(1);
 	}
 
 	if (init_framer()) {
-		printf(term_quit());
+		printf("%s", term_quit());
 		exit(1);
 	}
 
 	if (astdb_init()) {
-		printf(term_quit());
+		printf("%s", term_quit());
 		exit(1);
 	}
 
 	if (ast_enum_init()) {
-		printf(term_quit());
+		printf("%s", term_quit());
 		exit(1);
 	}
 
 	if (load_modules(0)) {
-		printf(term_quit());
+		printf("%s", term_quit());
+		exit(1);
+	}
+
+	/* AMI is initialized after loading modules because of a potential
+	 * conflict between issuing a module reload from manager and
+	 * registering manager actions.  This will cause reversed locking
+	 * order between the module list and manager actions list. */
+	if (init_manager()) {
+		printf("%s", term_quit());
 		exit(1);
 	}
 
@@ -3122,7 +3175,7 @@ int main(int argc, char *argv[])
 	if (ast_opt_console && !option_verbose)
 		ast_verbose(" ]\n");
 	if (option_verbose || ast_opt_console)
-		ast_verbose(term_color(tmp, "Asterisk Ready.\n", COLOR_BRWHITE, COLOR_BLACK, sizeof(tmp)));
+		ast_verbose("%s", term_color(tmp, "Asterisk Ready.\n", COLOR_BRWHITE, COLOR_BLACK, sizeof(tmp)));
 	if (ast_opt_no_fork)
 		consolethread = pthread_self();
 
