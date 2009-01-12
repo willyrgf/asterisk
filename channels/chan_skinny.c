@@ -1476,6 +1476,7 @@ static int transmit_response(struct skinnysession *s, struct skinny_req *req)
 
 	if (letohl(req->len > SKINNY_MAX_PACKET) || letohl(req->len < 0)) {
 		ast_log(LOG_WARNING, "transmit_response: the length of the request is out of bounds\n");
+		ast_mutex_unlock(&s->lock);
 		return -1;
 	}
 
@@ -2202,6 +2203,10 @@ static struct skinny_device *build_device(const char *cat, struct ast_variable *
 				cancallforward = ast_true(v->value);
 			} else if (!strcasecmp(v->name, "mailbox")) {
 				ast_copy_string(mailbox, v->value, sizeof(mailbox));
+			} else if (!strcasecmp(v->name, "hasvoicemail")) {
+				if (ast_true(v->value) && ast_strlen_zero(mailbox)) {
+					ast_copy_string(mailbox, cat, sizeof(mailbox));
+				}
 			} else if (!strcasecmp(v->name, "callreturn")) {
 				callreturn = ast_true(v->value);
 			} else if (!strcasecmp(v->name, "callwaiting")) {
@@ -3582,8 +3587,8 @@ static int handle_speed_dial_stat_req_message(struct skinny_req *req, struct ski
 		return -1;
 
 	req->data.speeddialreq.speedDialNumber = htolel(instance);
-	snprintf(req->data.speeddial.speedDialDirNumber, sizeof(req->data.speeddial.speedDialDirNumber), sd->exten);
-	snprintf(req->data.speeddial.speedDialDisplayName, sizeof(req->data.speeddial.speedDialDisplayName), sd->label);
+	ast_copy_string(req->data.speeddial.speedDialDirNumber, sd->exten, sizeof(req->data.speeddial.speedDialDirNumber));
+	ast_copy_string(req->data.speeddial.speedDialDisplayName, sd->label, sizeof(req->data.speeddial.speedDialDisplayName));
 
 	transmit_response(s, req);
 	return 1;
@@ -3759,7 +3764,7 @@ static int handle_version_req_message(struct skinny_req *req, struct skinnysessi
 	if (!(req = req_alloc(sizeof(struct version_res_message), VERSION_RES_MESSAGE)))
 		return -1;
 
-	snprintf(req->data.version.version, sizeof(req->data.version.version), d->version_id);
+	ast_copy_string(req->data.version.version, d->version_id, sizeof(req->data.version.version));
 	transmit_response(s, req);
 	return 1;
 }
@@ -4813,6 +4818,7 @@ static int reload_config(void)
 		if(setsockopt(skinnysock, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) == -1) {
 			ast_log(LOG_ERROR, "Set Socket Options failed: errno %d, %s\n", errno, strerror(errno));
 			ast_config_destroy(cfg);
+			ast_mutex_unlock(&netlock);
 			return 0;
 		}
 		if (skinnysock < 0) {
@@ -4825,6 +4831,7 @@ static int reload_config(void)
 				close(skinnysock);
 				skinnysock = -1;
 				ast_config_destroy(cfg);
+				ast_mutex_unlock(&netlock);
 				return 0;
 			}
 			if (listen(skinnysock,DEFAULT_SKINNY_BACKLOG)) {
@@ -4834,6 +4841,7 @@ static int reload_config(void)
 					close(skinnysock);
 					skinnysock = -1;
 					ast_config_destroy(cfg);
+					ast_mutex_unlock(&netlock);
 					return 0;
 			}
 			if (option_verbose > 1)

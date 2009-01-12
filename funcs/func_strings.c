@@ -53,9 +53,6 @@ static int function_fieldqty(struct ast_channel *chan, char *cmd,
 			     AST_APP_ARG(delim);
 		);
 
-	if (chan)
-		ast_autoservice_start(chan);
-
 	AST_STANDARD_APP_ARGS(args, parse);
 	if (args.delim) {
 		varsubst = alloca(strlen(args.varname) + 4);
@@ -72,9 +69,6 @@ static int function_fieldqty(struct ast_channel *chan, char *cmd,
 		fieldcount = 1;
 	}
 	snprintf(buf, len, "%d", fieldcount);
-
-	if (chan)
-		ast_autoservice_stop(chan);
 
 	return 0;
 }
@@ -184,9 +178,6 @@ static int array(struct ast_channel *chan, char *cmd, char *var,
 	if (!var || !value2)
 		return -1;
 
-	if (chan)
-		ast_autoservice_start(chan);
-
 	/* The functions this will generally be used with are SORT and ODBC_*, which
 	 * both return comma-delimited lists.  However, if somebody uses literal lists,
 	 * their commas will be translated to vertical bars by the load, and I don't
@@ -217,9 +208,6 @@ static int array(struct ast_channel *chan, char *cmd, char *var,
 			pbx_builtin_setvar_helper(chan, arg1.var[i], "");
 		}
 	}
-
-	if (chan)
-		ast_autoservice_stop(chan);
 
 	return 0;
 }
@@ -300,8 +288,13 @@ static int acf_sprintf(struct ast_channel *chan, char *cmd, char *data, char *bu
 				formatbuf[&arg.format[i] - formatstart + 1] = '\0';
 
 				/* Convert the argument into the required type */
-				if (sscanf(arg.var[argcount++], "%d", &tmpi) != 1) {
-					ast_log(LOG_ERROR, "Argument '%s' is not an integer number for format '%s'\n", arg.var[argcount - 1], formatbuf);
+				if (arg.var[argcount]) {
+					if (sscanf(arg.var[argcount++], "%d", &tmpi) != 1) {
+						ast_log(LOG_ERROR, "Argument '%s' is not an integer number for format '%s'\n", arg.var[argcount - 1], formatbuf);
+						goto sprintf_fail;
+					}
+				} else {
+					ast_log(LOG_ERROR, "SPRINTF() has more format specifiers than arguments!\n");
 					goto sprintf_fail;
 				}
 
@@ -318,8 +311,13 @@ static int acf_sprintf(struct ast_channel *chan, char *cmd, char *data, char *bu
 				formatbuf[&arg.format[i] - formatstart + 1] = '\0';
 
 				/* Convert the argument into the required type */
-				if (sscanf(arg.var[argcount++], "%lf", &tmpd) != 1) {
-					ast_log(LOG_ERROR, "Argument '%s' is not a floating point number for format '%s'\n", arg.var[argcount - 1], formatbuf);
+				if (arg.var[argcount]) {
+					if (sscanf(arg.var[argcount++], "%lf", &tmpd) != 1) {
+						ast_log(LOG_ERROR, "Argument '%s' is not a floating point number for format '%s'\n", arg.var[argcount - 1], formatbuf);
+						goto sprintf_fail;
+					}
+				} else {
+					ast_log(LOG_ERROR, "SPRINTF() has more format specifiers than arguments!\n");
 					goto sprintf_fail;
 				}
 
@@ -366,6 +364,7 @@ static int acf_sprintf(struct ast_channel *chan, char *cmd, char *data, char *bu
 			}
 		}
 	}
+	*bufptr = '\0';
 	return 0;
 sprintf_fail:
 	return -1;
@@ -532,11 +531,7 @@ static int function_eval(struct ast_channel *chan, char *cmd, char *data,
 		return -1;
 	}
 
-	if (chan)
-		ast_autoservice_start(chan);
 	pbx_substitute_variables_helper(chan, data, buf, len - 1);
-	if (chan)
-		ast_autoservice_stop(chan);
 
 	return 0;
 }
@@ -562,7 +557,10 @@ static int keypadhash(struct ast_channel *chan, char *cmd, char *data, char *buf
 	char *bufptr, *dataptr;
 
 	for (bufptr = buf, dataptr = data; bufptr < buf + len - 1; dataptr++) {
-		if (*dataptr == '1') {
+		if (*dataptr == '\0') {
+			*bufptr++ = '\0';
+			break;
+		} else if (*dataptr == '1') {
 			*bufptr++ = '1';
 		} else if (strchr("AaBbCc2", *dataptr)) {
 			*bufptr++ = '2';
@@ -582,9 +580,6 @@ static int keypadhash(struct ast_channel *chan, char *cmd, char *data, char *buf
 			*bufptr++ = '9';
 		} else if (*dataptr == '0') {
 			*bufptr++ = '0';
-		} else if (*dataptr == '\0') {
-			*bufptr++ = '\0';
-			break;
 		}
 	}
 	buf[len - 1] = '\0';

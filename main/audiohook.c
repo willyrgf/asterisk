@@ -130,12 +130,19 @@ int ast_audiohook_write_frame(struct ast_audiohook *audiohook, enum ast_audiohoo
 	struct ast_slinfactory *factory = (direction == AST_AUDIOHOOK_DIRECTION_READ ? &audiohook->read_factory : &audiohook->write_factory);
 	struct ast_slinfactory *other_factory = (direction == AST_AUDIOHOOK_DIRECTION_READ ? &audiohook->write_factory : &audiohook->read_factory);
 	struct timeval *time = (direction == AST_AUDIOHOOK_DIRECTION_READ ? &audiohook->read_time : &audiohook->write_time), previous_time = *time;
+	int our_factory_ms;
+	int other_factory_samples;
+	int other_factory_ms;
 
 	/* Update last feeding time to be current */
 	*time = ast_tvnow();
 
+	our_factory_ms = ast_tvdiff_ms(*time, previous_time) + (ast_slinfactory_available(factory) / 8);
+	other_factory_samples = ast_slinfactory_available(other_factory);
+	other_factory_ms = other_factory_samples / 8;
+
 	/* If we are using a sync trigger and this factory suddenly got audio fed in after a lapse, then flush both factories to ensure they remain in sync */
-	if (ast_test_flag(audiohook, AST_AUDIOHOOK_TRIGGER_SYNC) && ast_slinfactory_available(other_factory) && (ast_tvdiff_ms(*time, previous_time) > (ast_slinfactory_available(other_factory) / 8))) {
+	if (ast_test_flag(audiohook, AST_AUDIOHOOK_TRIGGER_SYNC) && other_factory_samples && (our_factory_ms - other_factory_ms > AST_AUDIOHOOK_SYNC_TOLERANCE)) {
 		if (option_debug)
 			ast_log(LOG_DEBUG, "Flushing audiohook %p so it remains in sync\n", audiohook);
 		ast_slinfactory_flush(factory);
@@ -210,20 +217,20 @@ static struct ast_frame *audiohook_read_frame_both(struct ast_audiohook *audioho
 
 	/* If we want to provide only a read factory make sure we aren't waiting for other audio */
 	if (usable_read && !usable_write && (ast_tvdiff_ms(ast_tvnow(), audiohook->write_time) < (samples/8)*2)) {
-		if (option_debug)
+		if (option_debug > 2)
 			ast_log(LOG_DEBUG, "Write factory %p was pretty quick last time, waiting for them.\n", &audiohook->write_factory);
 		return NULL;
 	}
 
 	/* If we want to provide only a write factory make sure we aren't waiting for other audio */
-	if (usable_write && !usable_read && (ast_tvdiff_ms(ast_tvnow(), audiohook->write_time) < (samples/8)*2)) {
-		if (option_debug)
+	if (usable_write && !usable_read && (ast_tvdiff_ms(ast_tvnow(), audiohook->read_time) < (samples/8)*2)) {
+		if (option_debug > 2)
 			ast_log(LOG_DEBUG, "Read factory %p was pretty quick last time, waiting for them.\n", &audiohook->read_factory);
 		return NULL;
 	}
 
 	/* Start with the read factory... if there are enough samples, read them in */
-	if (usable_read && ast_slinfactory_available(&audiohook->read_factory) >= samples) {
+	if (usable_read) {
 		if (ast_slinfactory_read(&audiohook->read_factory, buf1, samples)) {
 			read_buf = buf1;
 			/* Adjust read volume if need be */
@@ -242,7 +249,7 @@ static struct ast_frame *audiohook_read_frame_both(struct ast_audiohook *audioho
 		ast_log(LOG_DEBUG, "Failed to get %zd samples from read factory %p\n", samples, &audiohook->read_factory);
 
 	/* Move on to the write factory... if there are enough samples, read them in */
-	if (usable_write && ast_slinfactory_available(&audiohook->write_factory) >= samples) {
+	if (usable_write) {
 		if (ast_slinfactory_read(&audiohook->write_factory, buf2, samples)) {
 			write_buf = buf2;
 			/* Adjust write volume if need be */
@@ -444,6 +451,25 @@ static struct ast_audiohook *find_audiohook_by_source(struct ast_audiohook_list 
 	return NULL;
 }
 
+void ast_audiohook_move_by_source (struct ast_channel *old_chan, struct ast_channel *new_chan, const char *source)
+{
+	struct ast_audiohook *audiohook = find_audiohook_by_source(old_chan->audiohooks, source);
+
+	if (!audiohook) {
+		return;
+	}
+	
+	/* By locking both channels and the audiohook, we can assure that
+	 * another thread will not have a chance to read the audiohook's status
+	 * as done, even though ast_audiohook_remove signals the trigger
+	 * condition
+	 */
+	ast_audiohook_lock(audiohook);
+	ast_audiohook_remove(old_chan, audiohook);
+	ast_audiohook_attach(new_chan, audiohook);
+	ast_audiohook_unlock(audiohook);
+}
+
 /*! \brief Detach specified source audiohook from channel
  * \param chan Channel to detach from
  * \param source Name of source to detach
@@ -469,6 +495,42 @@ int ast_audiohook_detach_source(struct ast_channel *chan, const char *source)
 		audiohook->status = AST_AUDIOHOOK_STATUS_SHUTDOWN;
 
 	return (audiohook ? 0 : -1);
+}
+
+/*!
+ * \brief Remove an audiohook from a specified channel
+ *
+ * \param chan Channel to remove from
+ * \param audiohook Audiohook to remove
+ *
+ * \return Returns 0 on success, -1 on failure
+ *
+ * \note The channel does not need to be locked before calling this function
+ */
+int ast_audiohook_remove(struct ast_channel *chan, struct ast_audiohook *audiohook)
+{
+	ast_channel_lock(chan);
+
+	if (!chan->audiohooks) {
+		ast_channel_unlock(chan);
+		return -1;
+	}
+
+	if (audiohook->type == AST_AUDIOHOOK_TYPE_SPY)
+		AST_LIST_REMOVE(&chan->audiohooks->spy_list, audiohook, list);
+	else if (audiohook->type == AST_AUDIOHOOK_TYPE_WHISPER)
+		AST_LIST_REMOVE(&chan->audiohooks->whisper_list, audiohook, list);
+	else if (audiohook->type == AST_AUDIOHOOK_TYPE_MANIPULATE)
+		AST_LIST_REMOVE(&chan->audiohooks->manipulate_list, audiohook, list);
+
+	ast_audiohook_lock(audiohook);
+	audiohook->status = AST_AUDIOHOOK_STATUS_DONE;
+	ast_cond_signal(&audiohook->trigger);
+	ast_audiohook_unlock(audiohook);
+
+	ast_channel_unlock(chan);
+
+	return 0;
 }
 
 /*! \brief Pass a DTMF frame off to be handled by the audiohook core

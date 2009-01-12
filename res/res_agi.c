@@ -64,6 +64,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/lock.h"
 #include "asterisk/strings.h"
 #include "asterisk/agi.h"
+#include "asterisk/features.h"
 
 #define MAX_ARGS 128
 #define MAX_COMMANDS 128
@@ -112,13 +113,13 @@ static int agidebug = 0;
 #define AGI_PORT 4573
 
 enum agi_result {
+	AGI_RESULT_FAILURE = -1,
 	AGI_RESULT_SUCCESS,
 	AGI_RESULT_SUCCESS_FAST,
-	AGI_RESULT_FAILURE,
 	AGI_RESULT_HANGUP
 };
 
-static int agi_debug_cli(int fd, char *fmt, ...)
+static int __attribute__((format(printf, 2, 3))) agi_debug_cli(int fd, char *fmt, ...)
 {
 	char *stuff;
 	int res = 0;
@@ -346,6 +347,8 @@ static enum agi_result launch_script(char *script, char *argv[], int *fds, int *
 		execv(script, argv);
 		/* Can't use ast_log since FD's are closed */
 		fprintf(stdout, "verbose \"Failed to execute '%s': %s\" 2\n", script, strerror(errno));
+		/* Special case to set status of AGI to failure */
+		fprintf(stdout, "failure\n");
 		fflush(stdout);
 		_exit(1);
 	}
@@ -967,7 +970,7 @@ static int handle_recordfile(struct ast_channel *chan, AGI *agi, int argc, char 
 		
 		start = ast_tvnow();
 		while ((ms < 0) || ast_tvdiff_ms(ast_tvnow(), start) < ms) {
-			res = ast_waitfor(chan, -1);
+			res = ast_waitfor(chan, ms - ast_tvdiff_ms(ast_tvnow(), start));
 			if (res < 0) {
 				ast_closestream(fs);
 				fdprintf(agi->fd, "200 result=%d (waitfor) endpos=%ld\n", res,sample_offset);
@@ -1108,6 +1111,9 @@ static int handle_exec(struct ast_channel *chan, AGI *agi, int argc, char **argv
 	app = pbx_findapp(argv[1]);
 
 	if (app) {
+		if(!strcasecmp(argv[1], PARK_APP_NAME)) {
+			ast_masq_park_call(chan, NULL, 0, NULL);
+		}
 		res = pbx_exec(chan, app, argv[2]);
 	} else {
 		ast_log(LOG_WARNING, "Could not find application (%s)\n", argv[1]);
@@ -1256,16 +1262,35 @@ static int handle_verbose(struct ast_channel *chan, AGI *agi, int argc, char **a
 static int handle_dbget(struct ast_channel *chan, AGI *agi, int argc, char **argv)
 {
 	int res;
-	char tmp[256];
+	size_t bufsize = 16;
+	char *buf, *tmp;
 
 	if (argc != 4)
 		return RESULT_SHOWUSAGE;
-	res = ast_db_get(argv[2], argv[3], tmp, sizeof(tmp));
+
+	if (!(buf = ast_malloc(bufsize))) {
+		fdprintf(agi->fd, "200 result=-1\n");
+		return RESULT_SUCCESS;
+	}
+
+	do {
+		res = ast_db_get(argv[2], argv[3], buf, bufsize);
+		if (strlen(buf) < bufsize - 1) {
+			break;
+		}
+		bufsize *= 2;
+		if (!(tmp = ast_realloc(buf, bufsize))) {
+			break;
+		}
+		buf = tmp;
+	} while (1);
+	
 	if (res) 
 		fdprintf(agi->fd, "200 result=0\n");
 	else
-		fdprintf(agi->fd, "200 result=1 (%s)\n", tmp);
+		fdprintf(agi->fd, "200 result=1 (%s)\n", buf);
 
+	ast_free(buf);
 	return RESULT_SUCCESS;
 }
 
@@ -1809,7 +1834,7 @@ static int agi_handle_command(struct ast_channel *chan, AGI *agi, char *buf)
 		switch(res) {
 		case RESULT_SHOWUSAGE:
 			fdprintf(agi->fd, "520-Invalid command syntax.  Proper usage follows:\n");
-			fdprintf(agi->fd, c->usage);
+			fdprintf(agi->fd, "%s", c->usage);
 			fdprintf(agi->fd, "520 End of proper usage.\n");
 			break;
 		case AST_PBX_KEEPALIVE:
@@ -1864,7 +1889,8 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 				/* If it's voice, write it to the audio pipe */
 				if ((agi->audio > -1) && (f->frametype == AST_FRAME_VOICE)) {
 					/* Write, ignoring errors */
-					write(agi->audio, f->data, f->datalen);
+					if (write(agi->audio, f->data, f->datalen) < 0) {
+					}
 				}
 				ast_frfree(f);
 			}
@@ -1904,6 +1930,12 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 				break;
 			}
 
+			/* Special case for inability to execute child process */
+			if (*buf && strncasecmp(buf, "failure", 7) == 0) {
+				returnstatus = AGI_RESULT_FAILURE;
+				break;
+			}
+
 			/* get rid of trailing newline, if any */
 			if (*buf && buf[strlen(buf) - 1] == '\n')
 				buf[strlen(buf) - 1] = 0;
@@ -1926,9 +1958,13 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 	if (pid > -1) {
 		const char *sighup = pbx_builtin_getvar_helper(chan, "AGISIGHUP");
 		if (ast_strlen_zero(sighup) || !ast_false(sighup)) {
-			if (kill(pid, SIGHUP))
+			if (kill(pid, SIGHUP)) {
 				ast_log(LOG_WARNING, "unable to send SIGHUP to AGI process %d: %s\n", pid, strerror(errno));
+			} else { /* Give the process a chance to die */
+				usleep(1);
+			}
 		}
+		waitpid(pid, status, WNOHANG);
 	}
 	fclose(readf);
 	return returnstatus;
@@ -1943,7 +1979,7 @@ static int handle_showagi(int fd, int argc, char *argv[])
 	if (argc > 2) {
 		e = find_command(argv + 2, 1);
 		if (e) 
-			ast_cli(fd, e->usage);
+			ast_cli(fd, "%s", e->usage);
 		else {
 			if (find_command(argv + 2, -1)) {
 				return help_workhorse(fd, argv + 1);
@@ -2023,7 +2059,7 @@ static int agi_exec_full(struct ast_channel *chan, void *data, int enhanced, int
 	int fds[2];
 	int efd = -1;
 	int pid;
-        char *stringp;
+	char *stringp;
 	AGI agi;
 
 	if (ast_strlen_zero(data)) {
@@ -2047,6 +2083,7 @@ static int agi_exec_full(struct ast_channel *chan, void *data, int enhanced, int
 		}
 	}
 #endif
+	ast_replace_sigchld();
 	res = launch_script(argv[0], argv, fds, enhanced ? &efd : NULL, &pid);
 	if (res == AGI_RESULT_SUCCESS || res == AGI_RESULT_SUCCESS_FAST) {
 		int status = 0;
@@ -2062,8 +2099,8 @@ static int agi_exec_full(struct ast_channel *chan, void *data, int enhanced, int
 			close(fds[1]);
 		if (efd > -1)
 			close(efd);
-		ast_unreplace_sigchld();
 	}
+	ast_unreplace_sigchld();
 	ast_module_user_remove(u);
 
 	switch (res) {

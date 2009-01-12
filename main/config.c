@@ -765,7 +765,7 @@ static int process_text_line(struct ast_config *cfg, struct ast_category **cat, 
 			}
 		}
 		else 
-			ast_log(LOG_WARNING, "Unknown directive '%s' at line %d of %s\n", cur, lineno, configfile);
+			ast_log(LOG_WARNING, "Unknown directive '#%s' at line %d of %s\n", cur, lineno, configfile);
 	} else {
 		/* Just a line (variable = value) */
 		if (!(*cat)) {
@@ -812,7 +812,11 @@ static int process_text_line(struct ast_config *cfg, struct ast_category **cat, 
 static struct ast_config *config_text_file_load(const char *database, const char *table, const char *filename, struct ast_config *cfg, int withcomments)
 {
 	char fn[256];
+#if defined(LOW_MEMORY)
+	char buf[512];
+#else
 	char buf[8192];
+#endif
 	char *new_buf, *comment_p, *process_buf;
 	FILE *f;
 	int lineno=0;
@@ -1009,6 +1013,7 @@ int config_text_file_save(const char *configfile, const struct ast_config *cfg, 
 	struct ast_comment *cmt;
 	struct stat s;
 	int blanklines = 0;
+	int stat_result = 0;
 
 	if (configfile[0] == '/') {
 		snprintf(fntmp, sizeof(fntmp), "%s.XXXXXX", configfile);
@@ -1120,10 +1125,11 @@ int config_text_file_save(const char *configfile, const struct ast_config *cfg, 
 			close(fd);
 		return -1;
 	}
-	stat(fn, &s);
-	fchmod(fd, s.st_mode);
+	if (!(stat_result = stat(fn, &s))) {
+		fchmod(fd, s.st_mode);
+	}
 	fclose(f);
-	if (unlink(fn) || link(fntmp, fn)) {
+	if ((!stat_result && unlink(fn)) || link(fntmp, fn)) {
 		if (option_debug)
 			ast_log(LOG_DEBUG, "Unable to open for writing: %s (%s)\n", fn, strerror(errno));
 		if (option_verbose > 1)

@@ -31,6 +31,9 @@
 /* Define to 1 if you have the <arpa/inet.h> header file. */
 #undef HAVE_ARPA_INET_H
 
+/* Define to 1 if you have the <arpa/nameser.h> header file. */
+#undef HAVE_ARPA_NAMESER_H
+
 /* Define to 1 if you have the `asprintf' function. */
 #undef HAVE_ASPRINTF
 
@@ -70,6 +73,12 @@
 
 /* Define to indicate the ${CURSES_DESCRIP} library */
 #undef HAVE_CURSES
+
+/* Define if your system has the DAHDI headers. */
+#undef HAVE_DAHDI
+
+/* Define DAHDI headers version */
+#undef HAVE_DAHDI_VERSION
 
 /* Define to 1 if you have the <dirent.h> header file, and it defines `DIR'.
    */
@@ -168,6 +177,9 @@
 
 /* Define to 1 if you have the <inttypes.h> header file. */
 #undef HAVE_INTTYPES_H
+
+/* Define to 1 if you have the `ioperm' function. */
+#undef HAVE_IOPERM
 
 /* Define to 1 if your system has PMTU discovery on UDP sockets. */
 #undef HAVE_IP_MTU_DISCOVER
@@ -277,6 +289,12 @@
 /* Define to indicate the ${PRI_DESCRIP} library */
 #undef HAVE_PRI
 
+/* Define to indicate the ${PRI_INBANDDISCONNECT_DESCRIP} library */
+#undef HAVE_PRI_INBANDDISCONNECT
+
+/* Define to indicate the ${PRI_VERSION_DESCRIP} library */
+#undef HAVE_PRI_VERSION
+
 /* Define if you have POSIX threads libraries and header files. */
 #undef HAVE_PTHREAD
 
@@ -337,6 +355,9 @@
 
 /* Define to indicate the ${SPEEXDSP_DESCRIP} library */
 #undef HAVE_SPEEXDSP
+
+/* Define to indicate the ${SPEEX_PREPROCESS_DESCRIP} library */
+#undef HAVE_SPEEX_PREPROCESS
 
 /* Define to indicate the ${SQLITE_DESCRIP} library */
 #undef HAVE_SQLITE
@@ -443,6 +464,9 @@
 /* Define to 1 if you have the <sys/ioctl.h> header file. */
 #undef HAVE_SYS_IOCTL_H
 
+/* Define to 1 if you have the <sys/io.h> header file. */
+#undef HAVE_SYS_IO_H
+
 /* Define to 1 if you have the <sys/ndir.h> header file, and it defines `DIR'.
    */
 #undef HAVE_SYS_NDIR_H
@@ -473,6 +497,9 @@
 
 /* Define to 1 if you have the <termios.h> header file. */
 #undef HAVE_TERMIOS_H
+
+/* Define to 1 if your system has timersub in time.h */
+#undef HAVE_TIMERSUB
 
 /* Define to indicate the ${TINFO_DESCRIP} library */
 #undef HAVE_TINFO
@@ -527,6 +554,9 @@
 
 /* Define if your system has the Zaptel headers. */
 #undef HAVE_ZAPTEL
+
+/* Define if your Zaptel drivers have chan_alarms. */
+#undef HAVE_ZAPTEL_CHANALARMS
 
 /* Define to indicate the ${ZLIB_DESCRIP} library */
 #undef HAVE_ZLIB

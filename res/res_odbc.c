@@ -482,16 +482,33 @@ struct odbc_obj *ast_odbc_request_obj(const char *name, int check)
 static odbc_status odbc_obj_disconnect(struct odbc_obj *obj)
 {
 	int res;
+	SQLINTEGER err;
+	short int mlen;
+	unsigned char msg[200], stat[10];
+
+	/* Nothing to disconnect */
+	if (!obj->con) {
+		return ODBC_SUCCESS;
+	}
+
 	ast_mutex_lock(&obj->lock);
 
 	res = SQLDisconnect(obj->con);
 
-	if (res == ODBC_SUCCESS) {
-		ast_log(LOG_WARNING, "res_odbc: disconnected %d from %s [%s]\n", res, obj->parent->name, obj->parent->dsn);
+	if (res == SQL_SUCCESS || res == SQL_SUCCESS_WITH_INFO) {
+		ast_log(LOG_DEBUG, "Disconnected %d from %s [%s]\n", res, obj->parent->name, obj->parent->dsn);
 	} else {
-		ast_log(LOG_WARNING, "res_odbc: %s [%s] already disconnected\n",
-		obj->parent->name, obj->parent->dsn);
+		ast_log(LOG_DEBUG, "res_odbc: %s [%s] already disconnected\n", obj->parent->name, obj->parent->dsn);
 	}
+
+	if ((res = SQLFreeHandle(SQL_HANDLE_DBC, obj->con) == SQL_SUCCESS)) {
+		obj->con = NULL;
+		ast_log(LOG_DEBUG, "Database handle deallocated\n");
+	} else {
+		SQLGetDiagRec(SQL_HANDLE_DBC, obj->con, 1, stat, &err, msg, 100, &mlen);
+		ast_log(LOG_WARNING, "Unable to deallocate database handle? %d errno=%d %s\n", res, (int)err, msg);
+	}
+
 	obj->up = 0;
 	ast_mutex_unlock(&obj->lock);
 	return ODBC_SUCCESS;
@@ -509,6 +526,13 @@ static odbc_status odbc_obj_connect(struct odbc_obj *obj)
 #endif
 	ast_mutex_lock(&obj->lock);
 
+	if (obj->up) {
+		odbc_obj_disconnect(obj);
+		ast_log(LOG_NOTICE, "Re-connecting %s\n", obj->parent->name);
+	} else {
+		ast_log(LOG_NOTICE, "Connecting %s\n", obj->parent->name);
+	}
+
 	res = SQLAllocHandle(SQL_HANDLE_DBC, obj->parent->env, &obj->con);
 
 	if ((res != SQL_SUCCESS) && (res != SQL_SUCCESS_WITH_INFO)) {
@@ -522,13 +546,6 @@ static odbc_status odbc_obj_connect(struct odbc_obj *obj)
 	SQLSetConnectAttr(obj->con, SQL_ATTR_TRACE, &enable, SQL_IS_INTEGER);
 	SQLSetConnectAttr(obj->con, SQL_ATTR_TRACEFILE, tracefile, strlen(tracefile));
 #endif
-
-	if (obj->up) {
-		odbc_obj_disconnect(obj);
-		ast_log(LOG_NOTICE, "Re-connecting %s\n", obj->parent->name);
-	} else {
-		ast_log(LOG_NOTICE, "Connecting %s\n", obj->parent->name);
-	}
 
 	res = SQLConnect(obj->con,
 		   (SQLCHAR *) obj->parent->dsn, SQL_NTS,

@@ -33,6 +33,7 @@
 #include <netdb.h>
 #include <limits.h>
 #include <time.h>	/* we want to override localtime_r */
+#include <unistd.h>
 
 #include "asterisk/lock.h"
 #include "asterisk/time.h"
@@ -217,8 +218,6 @@ static force_inline void ast_slinear_saturated_divide(short *input, short *value
 {
 	*input /= *value;
 }
-
-int test_for_thread_safety(void);
 
 /*!
  * \brief thread-safe replacement for inet_ntoa().
@@ -473,20 +472,7 @@ char * attribute_malloc _ast_strndup(const char *str, size_t len, const char *fi
 #define ast_asprintf(ret, fmt, ...) \
 	_ast_asprintf((ret), __FILE__, __LINE__, __PRETTY_FUNCTION__, fmt, __VA_ARGS__)
 
-AST_INLINE_API(
-int _ast_asprintf(char **ret, const char *file, int lineno, const char *func, const char *fmt, ...),
-{
-	int res;
-	va_list ap;
-
-	va_start(ap, fmt);
-	if ((res = vasprintf(ret, fmt, ap)) == -1)
-		MALLOC_FAILURE_MSG;
-	va_end(ap);
-
-	return res;
-}
-)
+int _ast_asprintf(char **ret, const char *file, int lineno, const char *func, const char *fmt, ...) __attribute__((format(printf, 5, 6)));
 
 /*!
  * \brief A wrapper for vasprintf()
@@ -500,7 +486,7 @@ int _ast_asprintf(char **ret, const char *file, int lineno, const char *func, co
 	_ast_vasprintf((ret), __FILE__, __LINE__, __PRETTY_FUNCTION__, (fmt), (ap))
 
 AST_INLINE_API(
-int _ast_vasprintf(char **ret, const char *file, int lineno, const char *func, const char *fmt, va_list ap),
+int __attribute__((format(printf, 5, 0))) _ast_vasprintf(char **ret, const char *file, int lineno, const char *func, const char *fmt, va_list ap),
 {
 	int res;
 
@@ -521,7 +507,7 @@ int _ast_vasprintf(char **ret, const char *file, int lineno, const char *func, c
 #define ast_realloc(a,b)	realloc(a,b)
 #define ast_strdup(a)		strdup(a)
 #define ast_strndup(a,b)	strndup(a,b)
-#define ast_asprintf(a,b,c)	asprintf(a,b,c)
+#define ast_asprintf(a,b,...)	asprintf(a,b,__VA_ARGS__)
 #define ast_vasprintf(a,b,c)	vasprintf(a,b,c)
 
 #endif /* AST_DEBUG_MALLOC */
@@ -561,5 +547,32 @@ int _ast_vasprintf(char **ret, const char *file, int lineno, const char *func, c
 void ast_enable_packet_fragmentation(int sock);
 
 #define ARRAY_LEN(a) (sizeof(a) / sizeof(a[0]))
+
+#ifdef AST_DEVMODE
+#define ast_assert(a) _ast_assert(a, # a, __FILE__, __LINE__, __PRETTY_FUNCTION__)
+static void force_inline _ast_assert(int condition, const char *condition_str, 
+	const char *file, int line, const char *function)
+{
+	if (__builtin_expect(!condition, 1)) {
+		/* Attempt to put it into the logger, but hope that at least someone saw the
+		 * message on stderr ... */
+		ast_log(LOG_ERROR, "FRACK!, Failed assertion %s (%d) at line %d in %s of %s\n",
+			condition_str, condition, line, function, file);
+		fprintf(stderr, "FRACK!, Failed assertion %s (%d) at line %d in %s of %s\n",
+			condition_str, condition, line, function, file);
+		/* Give the logger a chance to get the message out, just in case we abort(), or
+		 * Asterisk crashes due to whatever problem just happened after we exit ast_assert(). */
+		usleep(1);
+#ifdef DO_CRASH
+		abort();
+		/* Just in case abort() doesn't work or something else super silly,
+		 * and for Qwell's amusement. */
+		*((int*)0)=0;
+#endif
+	}
+}
+#else
+#define ast_assert(a)
+#endif
 
 #endif /* _ASTERISK_UTILS_H */
