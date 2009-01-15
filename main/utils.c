@@ -228,68 +228,6 @@ struct hostent *ast_gethostbyname(const char *host, struct ast_hostent *hp)
 	return &hp->hp;
 }
 
-
-
-AST_MUTEX_DEFINE_STATIC(test_lock);
-AST_MUTEX_DEFINE_STATIC(test_lock2);
-static pthread_t test_thread; 
-static int lock_count = 0;
-static int test_errors = 0;
-
-/*! \brief This is a regression test for recursive mutexes.
-   test_for_thread_safety() will return 0 if recursive mutex locks are
-   working properly, and non-zero if they are not working properly. */
-static void *test_thread_body(void *data) 
-{ 
-	ast_mutex_lock(&test_lock);
-	lock_count += 10;
-	if (lock_count != 10) 
-		test_errors++;
-	ast_mutex_lock(&test_lock);
-	lock_count += 10;
-	if (lock_count != 20) 
-		test_errors++;
-	ast_mutex_lock(&test_lock2);
-	ast_mutex_unlock(&test_lock);
-	lock_count -= 10;
-	if (lock_count != 10) 
-		test_errors++;
-	ast_mutex_unlock(&test_lock);
-	lock_count -= 10;
-	ast_mutex_unlock(&test_lock2);
-	if (lock_count != 0) 
-		test_errors++;
-	return NULL;
-} 
-
-int test_for_thread_safety(void)
-{ 
-	ast_mutex_lock(&test_lock2);
-	ast_mutex_lock(&test_lock);
-	lock_count += 1;
-	ast_mutex_lock(&test_lock);
-	lock_count += 1;
-	ast_pthread_create(&test_thread, NULL, test_thread_body, NULL); 
-	usleep(100);
-	if (lock_count != 2) 
-		test_errors++;
-	ast_mutex_unlock(&test_lock);
-	lock_count -= 1;
-	usleep(100); 
-	if (lock_count != 1) 
-		test_errors++;
-	ast_mutex_unlock(&test_lock);
-	lock_count -= 1;
-	if (lock_count != 0) 
-		test_errors++;
-	ast_mutex_unlock(&test_lock2);
-	usleep(100);
-	if (lock_count != 0) 
-		test_errors++;
-	pthread_join(test_thread, NULL);
-	return(test_errors);          /* return 0 on success. */
-}
-
 /*! \brief Produce 32 char MD5 hash of value. */
 void ast_md5_hash(char *output, char *input)
 {
@@ -577,6 +515,12 @@ static void lock_info_destroy(void *data)
 
 
 	for (i = 0; i < lock_info->num_locks; i++) {
+		if (lock_info->locks[i].pending == -1) {
+			/* This just means that the last lock this thread went for was by
+			 * using trylock, and it failed.  This is fine. */
+			break;
+		}
+
 		ast_log(LOG_ERROR, 
 			"Thread '%s' still has a lock! - '%s' (%p) from '%s' in %s:%d!\n", 
 			lock_info->thread_name,
@@ -954,8 +898,11 @@ int ast_pthread_create_stack(pthread_t *thread, pthread_attr_t *attr, void *(*st
 		a->start_routine = start_routine;
 		a->data = data;
 		start_routine = dummy_start;
-		asprintf(&a->name, "%-20s started at [%5d] %s %s()",
-			 start_fn, line, file, caller);
+		if (asprintf(&a->name, "%-20s started at [%5d] %s %s()",
+			     start_fn, line, file, caller) < 0) {
+			ast_log(LOG_WARNING, "asprintf() failed: %s\n", strerror(errno));
+			a->name = NULL;
+		}
 		data = a;
 	}
 #endif /* !LOW_MEMORY */
@@ -974,29 +921,71 @@ int ast_wait_for_input(int fd, int ms)
 
 int ast_carefulwrite(int fd, char *s, int len, int timeoutms) 
 {
-	/* Try to write string, but wait no more than ms milliseconds
-	   before timing out */
+	struct timeval start = ast_tvnow();
 	int res = 0;
-	struct pollfd fds[1];
+	int elapsed = 0;
+
 	while (len) {
+		struct pollfd pfd = {
+			.fd = fd,
+			.events = POLLOUT,
+		};
+
+		/* poll() until the fd is writable without blocking */
+		while ((res = poll(&pfd, 1, timeoutms - elapsed)) <= 0) {
+			if (res == 0) {
+				/* timed out. */
+				ast_log(LOG_NOTICE, "Timed out trying to write\n");
+				return -1;
+			} else if (res == -1) {
+				/* poll() returned an error, check to see if it was fatal */
+
+				if (errno == EINTR || errno == EAGAIN) {
+					elapsed = ast_tvdiff_ms(ast_tvnow(), start);
+					if (elapsed > timeoutms) {
+						/* We've taken too long to write 
+						 * This is only an error condition if we haven't finished writing. */
+						res = len ? -1 : 0;
+						break;
+					}
+					/* This was an acceptable error, go back into poll() */
+					continue;
+				}
+
+				/* Fatal error, bail. */
+				ast_log(LOG_ERROR, "poll returned error: %s\n", strerror(errno));
+
+				return -1;
+			}
+		}
+
 		res = write(fd, s, len);
-		if ((res < 0) && (errno != EAGAIN)) {
+
+		if (res < 0 && errno != EAGAIN && errno != EINTR) {
+			/* fatal error from write() */
+			ast_log(LOG_ERROR, "write() returned error: %s\n", strerror(errno));
 			return -1;
 		}
-		if (res < 0)
+
+		if (res < 0) {
+			/* It was an acceptable error */
 			res = 0;
+		}
+
+		/* Update how much data we have left to write */
 		len -= res;
 		s += res;
 		res = 0;
-		if (len) {
-			fds[0].fd = fd;
-			fds[0].events = POLLOUT;
-			/* Wait until writable again */
-			res = poll(fds, 1, timeoutms);
-			if (res < 1)
-				return -1;
+
+		elapsed = ast_tvdiff_ms(ast_tvnow(), start);
+		if (elapsed > timeoutms) {
+			/* We've taken too long to write 
+			 * This is only an error condition if we haven't finished writing. */
+			res = len ? -1 : 0;
+			break;
 		}
 	}
+
 	return res;
 }
 

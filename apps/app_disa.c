@@ -98,7 +98,7 @@ static char *descrip =
 
 static void play_dialtone(struct ast_channel *chan, char *mailbox)
 {
-	const struct ind_tone_zone_sound *ts = NULL;
+	const struct tone_zone_sound *ts = NULL;
 	if(ast_app_has_voicemail(mailbox, NULL))
 		ts = ast_get_indication_tone(chan->zone, "dialrecall");
 	else
@@ -298,8 +298,14 @@ static int disa_exec(struct ast_channel *chan, void *data)
 					continue;
 				}
 			} else {
-				if (j == '#') { /* end of extension */
-					break;
+				if (j == '#') { /* end of extension .. maybe */
+					if (i == 0 && 
+							(ast_matchmore_extension(chan, args.context, "#", 1, chan->cid.cid_num) ||
+							 ast_exists_extension(chan, args.context, "#", 1, chan->cid.cid_num)) ) {
+						/* Let the # be the part of, or the entire extension */
+					} else {
+						break;
+					}
 				}
 			}
 

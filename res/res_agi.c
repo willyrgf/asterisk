@@ -64,6 +64,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/lock.h"
 #include "asterisk/strings.h"
 #include "asterisk/agi.h"
+#include "asterisk/features.h"
 
 #define MAX_ARGS 128
 #define MAX_COMMANDS 128
@@ -118,7 +119,7 @@ enum agi_result {
 	AGI_RESULT_HANGUP
 };
 
-static int agi_debug_cli(int fd, char *fmt, ...)
+static int __attribute__((format(printf, 2, 3))) agi_debug_cli(int fd, char *fmt, ...)
 {
 	char *stuff;
 	int res = 0;
@@ -969,7 +970,7 @@ static int handle_recordfile(struct ast_channel *chan, AGI *agi, int argc, char 
 		
 		start = ast_tvnow();
 		while ((ms < 0) || ast_tvdiff_ms(ast_tvnow(), start) < ms) {
-			res = ast_waitfor(chan, -1);
+			res = ast_waitfor(chan, ms - ast_tvdiff_ms(ast_tvnow(), start));
 			if (res < 0) {
 				ast_closestream(fs);
 				fdprintf(agi->fd, "200 result=%d (waitfor) endpos=%ld\n", res,sample_offset);
@@ -1110,6 +1111,9 @@ static int handle_exec(struct ast_channel *chan, AGI *agi, int argc, char **argv
 	app = pbx_findapp(argv[1]);
 
 	if (app) {
+		if(!strcasecmp(argv[1], PARK_APP_NAME)) {
+			ast_masq_park_call(chan, NULL, 0, NULL);
+		}
 		res = pbx_exec(chan, app, argv[2]);
 	} else {
 		ast_log(LOG_WARNING, "Could not find application (%s)\n", argv[1]);
@@ -1258,16 +1262,35 @@ static int handle_verbose(struct ast_channel *chan, AGI *agi, int argc, char **a
 static int handle_dbget(struct ast_channel *chan, AGI *agi, int argc, char **argv)
 {
 	int res;
-	char tmp[256];
+	size_t bufsize = 16;
+	char *buf, *tmp;
 
 	if (argc != 4)
 		return RESULT_SHOWUSAGE;
-	res = ast_db_get(argv[2], argv[3], tmp, sizeof(tmp));
+
+	if (!(buf = ast_malloc(bufsize))) {
+		fdprintf(agi->fd, "200 result=-1\n");
+		return RESULT_SUCCESS;
+	}
+
+	do {
+		res = ast_db_get(argv[2], argv[3], buf, bufsize);
+		if (strlen(buf) < bufsize - 1) {
+			break;
+		}
+		bufsize *= 2;
+		if (!(tmp = ast_realloc(buf, bufsize))) {
+			break;
+		}
+		buf = tmp;
+	} while (1);
+	
 	if (res) 
 		fdprintf(agi->fd, "200 result=0\n");
 	else
-		fdprintf(agi->fd, "200 result=1 (%s)\n", tmp);
+		fdprintf(agi->fd, "200 result=1 (%s)\n", buf);
 
+	ast_free(buf);
 	return RESULT_SUCCESS;
 }
 
@@ -1807,11 +1830,16 @@ static int agi_handle_command(struct ast_channel *chan, AGI *agi, char *buf)
 	parse_args(buf, &argc, argv);
 	c = find_command(argv, 0);
 	if (c) {
+		/* If the AGI command being executed is an actual application (using agi exec)
+		the app field will be updated in pbx_exec via handle_exec */
+		if (chan->cdr && !ast_check_hangup(chan) && strcasecmp(argv[0], "EXEC"))
+			ast_cdr_setapp(chan->cdr, "AGI", buf);
+
 		res = c->handler(chan, agi, argc, argv);
 		switch(res) {
 		case RESULT_SHOWUSAGE:
 			fdprintf(agi->fd, "520-Invalid command syntax.  Proper usage follows:\n");
-			fdprintf(agi->fd, c->usage);
+			fdprintf(agi->fd, "%s", c->usage);
 			fdprintf(agi->fd, "520 End of proper usage.\n");
 			break;
 		case AST_PBX_KEEPALIVE:
@@ -1866,7 +1894,8 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 				/* If it's voice, write it to the audio pipe */
 				if ((agi->audio > -1) && (f->frametype == AST_FRAME_VOICE)) {
 					/* Write, ignoring errors */
-					write(agi->audio, f->data, f->datalen);
+					if (write(agi->audio, f->data, f->datalen) < 0) {
+					}
 				}
 				ast_frfree(f);
 			}
@@ -1955,7 +1984,7 @@ static int handle_showagi(int fd, int argc, char *argv[])
 	if (argc > 2) {
 		e = find_command(argv + 2, 1);
 		if (e) 
-			ast_cli(fd, e->usage);
+			ast_cli(fd, "%s", e->usage);
 		else {
 			if (find_command(argv + 2, -1)) {
 				return help_workhorse(fd, argv + 1);
@@ -2035,7 +2064,7 @@ static int agi_exec_full(struct ast_channel *chan, void *data, int enhanced, int
 	int fds[2];
 	int efd = -1;
 	int pid;
-        char *stringp;
+	char *stringp;
 	AGI agi;
 
 	if (ast_strlen_zero(data)) {

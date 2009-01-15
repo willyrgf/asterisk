@@ -147,83 +147,272 @@ enum misdn_chan_state {
 #define ORG_MISDN 2
 
 struct hold_info {
+	/*!
+	 * \brief Logical port the channel call record is HOLDED on 
+	 * because the B channel is no longer associated. 
+	 */
 	int port;
+
+	/*!
+	 * \brief Original B channel number the HOLDED call was using. 
+	 * \note Used only for debug display messages.
+	 */
 	int channel;
 };
 
+/*!
+ * \brief Channel call record structure
+ */
 struct chan_list {
-  
+	/*! 
+	 * \brief The "allowed_bearers" string read in from /etc/asterisk/misdn.conf
+	 */
 	char allowed_bearers[BUFFERSIZE + 1];
 	
+	/*! 
+	 * \brief State of the channel
+	 */
 	enum misdn_chan_state state;
+
+	/*! 
+	 * \brief TRUE if a hangup needs to be queued 
+	 * \note This is a debug flag only used to catch calls to hangup_chan() that are already hungup.
+	 */
 	int need_queue_hangup;
+
+	/*!
+	 * \brief TRUE if a channel can be hung up by calling asterisk directly when done.
+	 */
 	int need_hangup;
+
+	/*!
+	 * \brief TRUE if we could send an AST_CONTROL_BUSY if needed.
+	 */
 	int need_busy;
 	
+	/*!
+	 * \brief Who originally created this channel. ORG_AST or ORG_MISDN
+	 */
 	int originator;
+
+	/*! 
+	 * \brief TRUE of we are not to respond immediately to a SETUP message.  Check the dialplan first.
+	 * \note The "noautorespond_on_setup" boolean read in from /etc/asterisk/misdn.conf
+	 */
 	int noautorespond_on_setup;
 	
-	int norxtone;
+	int norxtone;	/* Boolean assigned values but the value is not used. */
+
+	/*!
+	 * \brief TRUE if we are not to generate tones (Playtones)
+	 */
 	int notxtone; 
 
+	/*!
+	 * \brief TRUE if echo canceller is enabled.  Value is toggled.
+	 */
 	int toggle_ec;
 	
+	/*!
+	 * \brief TRUE if you want to send Tone Indications to an incoming
+	 * ISDN channel on a TE Port.
+	 * \note The "incoming_early_audio" boolean read in from /etc/asterisk/misdn.conf
+	 */
 	int incoming_early_audio;
 
+	/*!
+	 * \brief TRUE if DTMF digits are to be passed inband only.
+	 * \note It is settable by the misdn_set_opt() application.
+	 */
 	int ignore_dtmf;
 
+	/*!
+	 * \brief Pipe file descriptor handles array. 
+	 * Read from pipe[0], write to pipe[1] 
+	 */
 	int pipe[2];
+
+	/*!
+	 * \brief Read buffer for inbound audio from pipe[0]
+	 */
 	char ast_rd_buf[4096];
+
+	/*!
+	 * \brief Inbound audio frame returned by misdn_read().
+	 */
 	struct ast_frame frame;
 
-	int faxdetect; /*!<  0:no 1:yes 2:yes+nojump */
+	/*!
+	 * \brief Fax detection option. (0:no 1:yes 2:yes+nojump)
+	 * \note The "faxdetect" option string read in from /etc/asterisk/misdn.conf
+	 * \note It is settable by the misdn_set_opt() application.
+	 */
+	int faxdetect;
+
+	/*!
+	 * \brief Number of seconds to detect a Fax machine when detection enabled.
+	 * \note 0 disables the timeout.
+	 * \note The "faxdetect_timeout" value read in from /etc/asterisk/misdn.conf
+	 */
 	int faxdetect_timeout;
+
+	/*!
+	 * \brief Starting time of fax detection with timeout when nonzero.
+	 */
 	struct timeval faxdetect_tv;
+
+	/*!
+	 * \brief TRUE if a fax has been detected.
+	 */
 	int faxhandled;
 
+	/*!
+	 * \brief TRUE if we will use the Asterisk DSP to detect DTMF/Fax
+	 * \note The "astdtmf" boolean read in from /etc/asterisk/misdn.conf
+	 */
 	int ast_dsp;
 
+	/*!
+	 * \brief Jitterbuffer length
+	 * \note The "jitterbuffer" value read in from /etc/asterisk/misdn.conf
+	 */
 	int jb_len;
+
+	/*!
+	 * \brief Jitterbuffer upper threshold
+	 * \note The "jitterbuffer_upper_threshold" value read in from /etc/asterisk/misdn.conf
+	 */
 	int jb_upper_threshold;
+
+	/*!
+	 * \brief Allocated jitterbuffer controller
+	 * \note misdn_jb_init() creates the jitterbuffer.
+	 * \note Must use misdn_jb_destroy() to clean up. 
+	 */
 	struct misdn_jb *jb;
 	
+	/*!
+	 * \brief Allocated DSP controller
+	 * \note ast_dsp_new() creates the DSP controller.
+	 * \note Must use ast_dsp_free() to clean up. 
+	 */
 	struct ast_dsp *dsp;
+
+	/*!
+	 * \brief Allocated audio frame sample translator
+	 * \note ast_translator_build_path() creates the translator path.
+	 * \note Must use ast_translator_free_path() to clean up. 
+	 */
 	struct ast_trans_pvt *trans;
   
+	/*!
+	 * \brief Associated Asterisk channel structure.
+	 */
 	struct ast_channel * ast;
 
-	int dummy;
+	//int dummy;	/* Not used */
   
+	/*!
+	 * \brief Associated B channel structure.
+	 */
 	struct misdn_bchannel *bc;
 
+	/*!
+	 * \brief HOLDED channel information
+	 */
 	struct hold_info hold_info;
 
+	/*! 
+	 * \brief From associated B channel: Layer 3 process ID 
+	 * \note Used to find the HOLDED channel call record when retrieving a call. 
+	 */
 	unsigned int l3id;
+
+	/*! 
+	 * \brief From associated B channel: B Channel mISDN driver layer ID from mISDN_get_layerid()
+	 * \note Used only for debug display messages.
+	 */
 	int addr;
 
-	char context[BUFFERSIZE];
+	/*!
+	 * \brief Incoming call dialplan context identifier.
+	 * \note The "context" string read in from /etc/asterisk/misdn.conf
+	 */
+	char context[AST_MAX_CONTEXT];
 
-	int zero_read_cnt;
+	/*!
+	 * \brief The configured music-on-hold class to use for this call.
+	 * \note The "musicclass" string read in from /etc/asterisk/misdn.conf
+	 */
+	char mohinterpret[MAX_MUSICCLASS];
+
+	//int zero_read_cnt;	/* Not used */
+
+	/*!
+	 * \brief Number of outgoing audio frames dropped since last debug gripe message.
+	 */
 	int dropped_frame_cnt;
 
+	/*!
+	 * \brief TRUE if we must do the ringback tones.
+	 * \note The "far_alerting" boolean read in from /etc/asterisk/misdn.conf
+	 */
 	int far_alerting;
 
+	/*!
+	 * \brief TRUE if NT should disconnect an overlap dialing call when a timeout occurs.
+	 * \note The "nttimeout" boolean read in from /etc/asterisk/misdn.conf
+	 */
 	int nttimeout;
 
+	/*!
+	 * \brief Other channel call record PID 
+	 * \note Value imported from Asterisk environment variable MISDN_PID 
+	 */
 	int other_pid;
+
+	/*!
+	 * \brief Bridged other channel call record
+	 * \note Pointer set when other_pid imported from Asterisk environment 
+	 * variable MISDN_PID by either side.
+	 */
 	struct chan_list *other_ch;
 
-	const struct ind_tone_zone_sound *ts;
+	/*!
+	 * \brief Tone zone sound used for dialtone generation.
+	 * \note Used as a boolean.  Non-NULL to prod generation if enabled. 
+	 */
+	const struct tone_zone_sound *ts;
 	
+	/*!
+	 * \brief Enables overlap dialing for the set amount of seconds.  (0 = Disabled)
+	 * \note The "overlapdial" value read in from /etc/asterisk/misdn.conf
+	 */
 	int overlap_dial;
+
+	/*!
+	 * \brief Overlap dialing timeout Task ID.  -1 if not running.
+	 */
 	int overlap_dial_task;
+
+	/*!
+	 * \brief overlap_tv access lock.
+	 */
 	ast_mutex_t overlap_tv_lock;
+
+	/*!
+	 * \brief Overlap timer start time.  Timer restarted for every digit received.
+	 */
 	struct timeval overlap_tv;
   
-	struct chan_list *peer;
+	//struct chan_list *peer;	/* Not used */
+
+	/*!
+	 * \brief Next channel call record in the list.
+	 */
 	struct chan_list *next;
-	struct chan_list *prev;
-	struct chan_list *first;
+	//struct chan_list *prev;		/* Not used */
+	//struct chan_list *first;	/* Not used */
 };
 
 
@@ -291,7 +480,7 @@ static pthread_t misdn_tasks_thread;
 static int *misdn_ports;
 
 static void chan_misdn_log(int level, int port, char *tmpl, ...)
-	__attribute__ ((format (printf, 3, 4)));
+	__attribute__((format(printf, 3, 4)));
 
 static struct ast_channel *misdn_new(struct chan_list *cl, int state,  char *exten, char *callerid, int format, int port, int c);
 static void send_digit_to_chan(struct chan_list *cl, char digit );
@@ -323,6 +512,9 @@ static int *misdn_out_calls;
 
 struct chan_list dummy_cl;
 
+/*!
+ * \brief Global channel call record list head.
+ */
 struct chan_list *cl_te=NULL;
 ast_mutex_t cl_te_lock;
 
@@ -431,7 +623,7 @@ static void print_facility(struct FacParm *fac, struct misdn_bchannel *bc)
 {
 	switch (fac->Function) {
 	case Fac_CD:
-		chan_misdn_log(1,bc->port," --> calldeflect to: %s, screened: %s\n", fac->u.CDeflection.DeflectedToNumber,
+		chan_misdn_log(1,bc->port," --> calldeflect to: %s, presentable: %s\n", fac->u.CDeflection.DeflectedToNumber,
 			fac->u.CDeflection.PresentationAllowed ? "yes" : "no");
 		break;
 	case Fac_AOCDCurrency:
@@ -1537,6 +1729,7 @@ static struct ast_cli_entry chan_misdn_clis[] = {
 		"Usage: misdn set crypt debug <level>\n" }
 };
 
+/*! \brief Updates caller ID information from config */
 static int update_config(struct chan_list *ch, int orig) 
 {
 	struct ast_channel *ast;
@@ -1725,7 +1918,6 @@ static int read_config(struct chan_list *ch, int orig)
 	int port;
 	int hdlc = 0;
 	char lang[BUFFERSIZE + 1];
-	char localmusicclass[BUFFERSIZE + 1];
 	char faxdetect[BUFFERSIZE + 1];
 	char buf[256];
 	char buf2[256];
@@ -1750,8 +1942,7 @@ static int read_config(struct chan_list *ch, int orig)
 	misdn_cfg_get(port, MISDN_CFG_LANGUAGE, lang, BUFFERSIZE);
 	ast_string_field_set(ast, language, lang);
 
-	misdn_cfg_get(port, MISDN_CFG_MUSICCLASS, localmusicclass, BUFFERSIZE);
-	ast_string_field_set(ast, musicclass, localmusicclass);
+	misdn_cfg_get(port, MISDN_CFG_MUSICCLASS, ch->mohinterpret, sizeof(ch->mohinterpret));
 
 	misdn_cfg_get(port, MISDN_CFG_TXGAIN, &bc->txgain, sizeof(int));
 	misdn_cfg_get(port, MISDN_CFG_RXGAIN, &bc->rxgain, sizeof(int));
@@ -1822,6 +2013,8 @@ static int read_config(struct chan_list *ch, int orig)
 	if (orig == ORG_AST) {
 		char callerid[BUFFERSIZE + 1];
 
+		/* ORIGINATOR Asterisk (outgoing call) */
+
 		misdn_cfg_get(port, MISDN_CFG_TE_CHOOSE_CHANNEL, &(bc->te_choose_channel), sizeof(int));
 
  		if (strstr(faxdetect, "outgoing") || strstr(faxdetect, "both")) {
@@ -1845,7 +2038,8 @@ static int read_config(struct chan_list *ch, int orig)
 		debug_numplan(port, bc->cpnnumplan, "CTON");
 
 		ch->overlap_dial = 0;
-	} else { /** ORIGINATOR MISDN **/
+	} else {
+		/* ORIGINATOR MISDN (incoming call) */
 		char prefix[BUFFERSIZE + 1] = "";
 
  		if (strstr(faxdetect, "incoming") || strstr(faxdetect, "both")) {
@@ -1946,22 +2140,10 @@ static int misdn_call(struct ast_channel *ast, char *dest, int timeout)
 	int r;
 	int exceed;
 	int bridging;
-	struct chan_list *ch = MISDN_ASTERISK_TECH_PVT(ast);
+	struct chan_list *ch;
 	struct misdn_bchannel *newbc;
-	char *opts = NULL, *ext, *tokb;
-	char *dest_cp = ast_strdupa(dest);
-
-	ext = strtok_r(dest_cp, "/", &tokb);
-
-	if (ext) {
-		ext = strtok_r(NULL, "/", &tokb);
-		if (ext) {
-			opts = strtok_r(NULL, "/", &tokb);
-		} else {
-			chan_misdn_log(0, 0, "misdn_call: No Extension given!\n");
-			return -1;
-		}
-	}
+	char *opts, *ext;
+	char *dest_cp;
 
 	if (!ast) {
 		ast_log(LOG_WARNING, " --> ! misdn_call called on ast_channel *ast where ast == NULL\n");
@@ -1975,6 +2157,7 @@ static int misdn_call(struct ast_channel *ast, char *dest, int timeout)
 		return -1;
 	}
 
+	ch = MISDN_ASTERISK_TECH_PVT(ast);
 	if (!ch) {
 		ast_log(LOG_WARNING, " --> ! misdn_call called on %s, neither down nor reserved (or dest==NULL)\n", ast->name);
 		ast->hangupcause = AST_CAUSE_NORMAL_TEMPORARY_FAILURE;
@@ -1983,13 +2166,28 @@ static int misdn_call(struct ast_channel *ast, char *dest, int timeout)
 	}
 	
 	newbc = ch->bc;
-	
 	if (!newbc) {
 		ast_log(LOG_WARNING, " --> ! misdn_call called on %s, neither down nor reserved (or dest==NULL)\n", ast->name);
 		ast->hangupcause = AST_CAUSE_NORMAL_TEMPORARY_FAILURE;
 		ast_setstate(ast, AST_STATE_DOWN);
 		return -1;
 	}
+	
+	/*
+	 * dest is ---v
+	 * Dial(mISDN/g:group_name[/extension[/options]])
+	 * Dial(mISDN/port[:preselected_channel][/extension[/options]])
+	 *
+	 * The dial extension could be empty if you are using MISDN_KEYPAD
+	 * to control ISDN provider features.
+	 */
+	dest_cp = ast_strdupa(dest);
+	strsep(&dest_cp, "/");/* Discard port/group token */
+	ext = strsep(&dest_cp, "/");
+	if (!ext) {
+		ext = "";
+	}
+	opts = dest_cp;
 	
 	port = newbc->port;
 
@@ -2091,7 +2289,7 @@ static int misdn_answer(struct ast_channel *ast)
 	}
 
 	if (!p->bc) {
-		chan_misdn_log(1, 0, " --> Got Answer, but theres no bc obj ??\n");
+		chan_misdn_log(1, 0, " --> Got Answer, but there is no bc obj ??\n");
 
 		ast_queue_hangup(ast);
 	}
@@ -2267,7 +2465,7 @@ static int misdn_indication(struct ast_channel *ast, int cond, const void *data,
 			}
 
 			chan_misdn_log(3, p->bc->port, " --> * SEND: State Ring pid:%d\n", p->bc ? p->bc->pid : -1);
-			ast_setstate(ast, AST_STATE_RINGING);
+			ast_setstate(ast, AST_STATE_RING);
 
 			if (!p->bc->nt && (p->originator == ORG_MISDN) && !p->incoming_early_audio)
 				chan_misdn_log(2, p->bc->port, " --> incoming_early_audio off\n");
@@ -2316,7 +2514,7 @@ static int misdn_indication(struct ast_channel *ast, int cond, const void *data,
 			start_bc_tones(p);
 		break;
 	case AST_CONTROL_HOLD:
-		ast_moh_start(ast,data,ast->musicclass); 
+		ast_moh_start(ast, data, p->mohinterpret); 
 		chan_misdn_log(1, p->bc->port, " --> *\tHOLD pid:%d\n", p->bc ? p->bc->pid : -1);
 		break;
 	case AST_CONTROL_UNHOLD:
@@ -2726,7 +2924,7 @@ static int misdn_write(struct ast_channel *ast, struct ast_frame *frame)
 		return 0;
 	}
 	
-#if MISDN_DEBUG
+#ifdef MISDN_DEBUG
 	{
 		int i, max = 5 > frame->samples ? frame->samples : 5;
 
@@ -2881,7 +3079,7 @@ static enum ast_bridge_result  misdn_bridge (struct ast_channel *c0,
 
 static int dialtone_indicate(struct chan_list *cl)
 {
-	const struct ind_tone_zone_sound *ts = NULL;
+	const struct tone_zone_sound *ts = NULL;
 	struct ast_channel *ast = cl->ast;
 	int nd = 0;
 
@@ -2979,23 +3177,30 @@ static struct ast_channel *misdn_request(const char *type, int format, void *dat
 {
 	struct ast_channel *tmp = NULL;
 	char group[BUFFERSIZE + 1] = "";
-	char buf[128];
-	char buf2[128], *ext = NULL, *port_str;
-	char *tokb = NULL, *p = NULL;
-	int channel = 0, port = 0;
+	char dial_str[128];
+	char *buf2 = ast_strdupa(data);
+	char *ext;
+	char *port_str;
+	char *p = NULL;
+	int channel = 0;
+	int port = 0;
 	struct misdn_bchannel *newbc = NULL;
 	int dec = 0;
 
 	struct chan_list *cl = init_chan_list(ORG_AST);
 
-	snprintf(buf, sizeof(buf), "%s/%s", misdn_type, (char*)data);
-	ast_copy_string(buf2, data, 128);
+	snprintf(dial_str, sizeof(dial_str), "%s/%s", misdn_type, (char *) data);
 
-	port_str = strtok_r(buf2, "/", &tokb);
-
-	ext = strtok_r(NULL, "/", &tokb);
-
-	if (port_str) {
+	/*
+	 * data is ---v
+	 * Dial(mISDN/g:group_name[/extension[/options]])
+	 * Dial(mISDN/port[:preselected_channel][/extension[/options]])
+	 *
+	 * The dial extension could be empty if you are using MISDN_KEYPAD
+	 * to control ISDN provider features.
+	 */
+	port_str = strsep(&buf2, "/");
+	if (!ast_strlen_zero(port_str)) {
 		if (port_str[0] == 'g' && port_str[1] == ':' ) {
 			/* We make a group call lets checkout which ports are in my group */
 			port_str += 2;
@@ -3011,8 +3216,13 @@ static struct ast_channel *misdn_request(const char *type, int format, void *dat
 			port = atoi(port_str);
 		}
 	} else {
-		ast_log(LOG_WARNING, " --> ! IND : CALL dad:%s WITHOUT PORT/Group, check extensions.conf\n", ext);
+		ast_log(LOG_WARNING, " --> ! IND : Dial(%s) WITHOUT Port or Group, check extensions.conf\n", dial_str);
 		return NULL;
+	}
+
+	ext = strsep(&buf2, "/");
+	if (!ext) {
+		ext = "";
 	}
 
 	if (misdn_cfg_is_group_method(group, METHOD_STANDARD_DEC)) {
@@ -3023,6 +3233,8 @@ static struct ast_channel *misdn_request(const char *type, int format, void *dat
 	if (!ast_strlen_zero(group)) {
 		char cfg_group[BUFFERSIZE + 1];
 		struct robin_list *rr = NULL;
+
+		/* Group dial */
 
 		if (misdn_cfg_is_group_method(group, METHOD_ROUND_ROBIN)) {
 			chan_misdn_log(4, port, " --> STARTING ROUND ROBIN...\n");
@@ -3124,7 +3336,8 @@ static struct ast_channel *misdn_request(const char *type, int format, void *dat
 					, group);
 			return NULL;
 		}
-	} else { /* 'Normal' Port dial * Port dial */
+	} else {
+		/* 'Normal' Port dial * Port dial */
 		if (channel)
 			chan_misdn_log(1, port, " --> preselected_channel: %d\n", channel);
 		newbc = misdn_lib_get_free_bc(port, channel, 0, dec);
@@ -3571,7 +3784,7 @@ static void do_immediate_setup(struct misdn_bchannel *bc, struct chan_list *ch, 
 
 	chan_misdn_log(1, bc->port, "* Starting Ast ctx:%s dad:%s oad:%s with 's' extension\n", ast->context, ast->exten, ast->cid.cid_num);
   
-	strncpy(ast->exten, "s", 2);
+	strcpy(ast->exten, "s");
   
 	if (pbx_start_chan(ch) < 0) {
 		ast = NULL;
@@ -3661,6 +3874,7 @@ static void send_cause2ast(struct ast_channel *ast, struct misdn_bchannel *bc, s
 }
 
 
+/*! \brief Import parameters from the dialplan environment variables */
 void import_ch(struct ast_channel *chan, struct misdn_bchannel *bc, struct chan_list *ch)
 {
 	const char *tmp;
@@ -3694,6 +3908,7 @@ void import_ch(struct ast_channel *chan, struct misdn_bchannel *bc, struct chan_
 	}
 }
 
+/*! \brief Export parameters to the dialplan environment variables */
 void export_ch(struct ast_channel *chan, struct misdn_bchannel *bc, struct chan_list *ch)
 {
 	char tmp[32];
@@ -4049,7 +4264,6 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 		ch->originator = ORG_MISDN;
 
 		chan = misdn_new(ch, AST_STATE_RESERVED, bc->dad, bc->oad, AST_FORMAT_ALAW, bc->port, bc->channel);
-
 		if (!chan) {
 			misdn_lib_send_event(bc,EVENT_RELEASE_COMPLETE);
 			ast_log(LOG_ERROR, "cb_events: misdn_new failed !\n"); 
@@ -4169,9 +4383,9 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 		}
 
 		/*
-		   added support for s extension hope it will help those poor cretains
-		   which haven't overlap dial.
-		   */
+		 * added support for s extension hope it will help those poor cretains
+		 * which haven't overlap dial.
+		 */
 		misdn_cfg_get(bc->port, MISDN_CFG_ALWAYS_IMMEDIATE, &ai, sizeof(ai));
 		if (ai) {
 			do_immediate_setup(bc, ch, chan);
@@ -4921,7 +5135,8 @@ static int load_module(void)
 		"   jb - Set jitter buffer length, optarg is length\n"
 		"   jt - Set jitter buffer upper threshold, optarg is threshold\n"
 		"   jn - Disable jitter buffer\n"
-		"    n - disable DSP on channel, disables: Echocancel, DTMF Detection and Volume Control.\n"
+		"    n - Disable mISDN DSP on channel.\n"
+		"        Disables: echo cancel, DTMF detection, and volume control.\n"
 		"    p - Caller ID presentation,\n"
 		"        optarg is either 'allowed' or 'restricted'\n"
 		"    s - Send Non-inband DTMF as inband\n"
@@ -5375,6 +5590,7 @@ void misdn_jb_destroy(struct misdn_jb *jb)
 {
 	ast_mutex_destroy(&jb->mutexjb);
 	
+	free(jb->ok);
 	free(jb->samples);
 	free(jb);
 }

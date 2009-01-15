@@ -915,11 +915,7 @@ static int dahdi_open(char *fn)
 			ast_log(LOG_WARNING, "Invalid channel number '%s'\n", fn);
 			return -1;
 		}
-#ifdef HAVE_ZAPTEL
-		fn = "/dev/zap/channel";
-#else
-		fn = "/dev/dahdi/channel";
-#endif
+		fn = DAHDI_FILE_CHANNEL;
 	}
 	fd = open(fn, O_RDWR | O_NONBLOCK);
 	if (fd < 0) {
@@ -981,11 +977,7 @@ static int alloc_sub(struct dahdi_pvt *p, int x)
 	struct dahdi_bufferinfo bi;
 	int res;
 	if (p->subs[x].dfd < 0) {
-#ifdef HAVE_ZAPTEL
-		p->subs[x].dfd = dahdi_open("/dev/zap/pseudo");
-#else
-		p->subs[x].dfd = dahdi_open("/dev/dahdi/pseudo");
-#endif
+		p->subs[x].dfd = dahdi_open(DAHDI_FILE_PSEUDO);
 		if (p->subs[x].dfd > -1) {
 			res = ioctl(p->subs[x].dfd, DAHDI_GET_BUFINFO, &bi);
 			if (!res) {
@@ -3668,7 +3660,7 @@ static int get_alarms(struct dahdi_pvt *p)
 {
 	int res;
 	struct dahdi_spaninfo zi;
-#if defined(HAVE_DAHDI) || defined(HAVE_ZAPTEL_CHANALARMS)
+#if !defined(HAVE_ZAPTEL) || defined(HAVE_ZAPTEL_CHANALARMS)
 	/*
 	 * The conditional compilation is needed only in asterisk-1.4 for
 	 * backward compatibility with old zaptel drivers that don't have
@@ -3687,7 +3679,7 @@ static int get_alarms(struct dahdi_pvt *p)
 	}
 	if (zi.alarms != DAHDI_ALARM_NONE)
 		return zi.alarms;
-#if defined(HAVE_DAHDI) || defined(HAVE_ZAPTEL_CHANALARMS)
+#if !defined(HAVE_ZAPTEL) || defined(HAVE_ZAPTEL_CHANALARMS)
 	/* No alarms on the span. Check for channel alarms. */
 	if ((res = ioctl(p->subs[SUB_REAL].dfd, DAHDI_GET_PARAMS, &params)) >= 0)
 		return params.chan_alarms;
@@ -3735,15 +3727,26 @@ static void dahdi_handle_dtmfup(struct ast_channel *ast, int index, struct ast_f
 			if (strcmp(ast->exten, "fax")) {
 				const char *target_context = S_OR(ast->macrocontext, ast->context);
 
+				/* We need to unlock 'ast' here because ast_exists_extension has the
+				 * potential to start autoservice on the channel. Such action is prone
+				 * to deadlock.
+				 */
+				ast_mutex_unlock(&p->lock);
+				ast_channel_unlock(ast);
 				if (ast_exists_extension(ast, target_context, "fax", 1, ast->cid.cid_num)) {
+					ast_channel_lock(ast);
+					ast_mutex_lock(&p->lock);
 					if (option_verbose > 2)
 						ast_verbose(VERBOSE_PREFIX_3 "Redirecting %s to fax extension\n", ast->name);
 					/* Save the DID/DNIS when we transfer the fax call to a "fax" extension */
 					pbx_builtin_setvar_helper(ast, "FAXEXTEN", ast->exten);
 					if (ast_async_goto(ast, target_context, "fax", 1))
 						ast_log(LOG_WARNING, "Failed to async goto '%s' into fax of '%s'\n", ast->name, target_context);
-				} else
+				} else {
+					ast_channel_lock(ast);
+					ast_mutex_lock(&p->lock);
 					ast_log(LOG_NOTICE, "Fax detected, but no fax extension\n");
+				}
 			} else if (option_debug)
 				ast_log(LOG_DEBUG, "Already in a fax extension, not redirecting\n");
 		} else if (option_debug)
@@ -7222,11 +7225,7 @@ static int pri_create_trunkgroup(int trunkgroup, int *channels)
 			break;
 		memset(&si, 0, sizeof(si));
 		memset(&p, 0, sizeof(p));
-#ifdef HAVE_ZAPTEL
-		fd = open("/dev/zap/channel", O_RDWR);
-#else
-		fd = open("/dev/dahdi/channel", O_RDWR);
-#endif
+		fd = open(DAHDI_FILE_CHANNEL, O_RDWR);
 		if (fd < 0) {
 			ast_log(LOG_WARNING, "Failed to open channel: %s\n", strerror(errno));
 			return -1;
@@ -7886,11 +7885,7 @@ static struct dahdi_pvt *chandup(struct dahdi_pvt *src)
 	if ((p = ast_malloc(sizeof(*p)))) {
 		memcpy(p, src, sizeof(struct dahdi_pvt));
 		ast_mutex_init(&p->lock);
-#ifdef HAVE_ZAPTEL
-		p->subs[SUB_REAL].dfd = dahdi_open("/dev/zap/pseudo");
-#else
-		p->subs[SUB_REAL].dfd = dahdi_open("/dev/dahdi/pseudo");
-#endif
+		p->subs[SUB_REAL].dfd = dahdi_open(DAHDI_FILE_PSEUDO);
 		/* Allocate a DAHDI structure */
 		if (p->subs[SUB_REAL].dfd < 0) {
 			ast_log(LOG_ERROR, "Unable to dup channel: %s\n",  strerror(errno));
@@ -8379,8 +8374,11 @@ static void dahdi_pri_message(struct pri *pri, char *s)
 
 	ast_mutex_lock(&pridebugfdlock);
 
-	if (pridebugfd >= 0)
-		write(pridebugfd, s, strlen(s));
+	if (pridebugfd >= 0) {
+		if (write(pridebugfd, s, strlen(s)) < 0) {
+			ast_log(LOG_WARNING, "write() failed: %s\n", strerror(errno));
+		}
+	}
 
 	ast_mutex_unlock(&pridebugfdlock);
 }
@@ -8418,8 +8416,11 @@ static void dahdi_pri_error(struct pri *pri, char *s)
 
 	ast_mutex_lock(&pridebugfdlock);
 
-	if (pridebugfd >= 0)
-		write(pridebugfd, s, strlen(s));
+	if (pridebugfd >= 0) {
+		if (write(pridebugfd, s, strlen(s)) < 0) {
+			ast_log(LOG_WARNING, "write() failed: %s\n", strerror(errno));
+		}
+	}
 
 	ast_mutex_unlock(&pridebugfdlock);
 }
@@ -9632,11 +9633,7 @@ static int start_pri(struct dahdi_pri *pri)
 	for (i = 0; i < NUM_DCHANS; i++) {
 		if (!pri->dchannels[i])
 			break;
-#ifdef HAVE_ZAPTEL
-		pri->fds[i] = open("/dev/zap/channel", O_RDWR, 0600);
-#else
-		pri->fds[i] = open("/dev/dahdi/channel", O_RDWR, 0600);
-#endif
+		pri->fds[i] = open(DAHDI_FILE_CHANNEL, O_RDWR, 0600);
 		x = pri->dchannels[i];
 		if ((pri->fds[i] < 0) || (ioctl(pri->fds[i],DAHDI_SPECIFY,&x) == -1)) {
 			ast_log(LOG_ERROR, "Unable to open D-channel %d (%s)\n", x, strerror(errno));
@@ -9722,7 +9719,9 @@ static char *complete_span_helper(const char *line, const char *word, int pos, i
 
 	for (which = span = 0; span < NUM_SPANS; span++) {
 		if (pris[span].pri && ++which > state) {
-			asprintf(&ret, "%d", span + 1);	/* user indexes start from 1 */
+			if (asprintf(&ret, "%d", span + 1) < 0) {	/* user indexes start from 1 */
+				ast_log(LOG_WARNING, "asprintf() failed: %s\n", strerror(errno));
+			}
 			break;
 		}
 	}
@@ -10409,19 +10408,11 @@ static int dahdi_show_status(int fd, int argc, char *argv[]) {
 	int ctl;
 	struct dahdi_spaninfo s;
 
-#ifdef HAVE_ZAPTEL
-	if ((ctl = open("/dev/zap/ctl", O_RDWR)) < 0) {
-		ast_log(LOG_WARNING, "Unable to open /dev/zap/ctl: %s\n", strerror(errno));
-		ast_cli(fd, "No Zaptel interface found.\n");
+	if ((ctl = open(DAHDI_FILE_CTL, O_RDWR)) < 0) {
+		ast_log(LOG_WARNING, "Unable to open " DAHDI_FILE_CTL ": %s\n", strerror(errno));
+		ast_cli(fd, "No " DAHDI_NAME " interface found.\n");
 		return RESULT_FAILURE;
 	}
-#else
-	if ((ctl = open("/dev/dahdi/ctl", O_RDWR)) < 0) {
-		ast_log(LOG_WARNING, "Unable to open /dev/dahdi/ctl: %s\n", strerror(errno));
-		ast_cli(fd, "No DAHDI interface found.\n");
-		return RESULT_FAILURE;
-	}
-#endif
 	ast_cli(fd, FORMAT2, "Description", "Alarms", "IRQ", "bpviol", "CRC4");
 
 	for (span = 1; span < DAHDI_MAX_SPANS; ++span) {
@@ -10990,8 +10981,9 @@ static int process_dahdi(struct dahdi_chan_conf *confp, const char *cat, struct 
 					return -1;
 		} else if (!strcasecmp(v->name, "buffers")) {
 			int res;
-			char policy[8] = "";
-			res = sscanf(v->value, "%d,%s", &confp->chan.buf_no, policy);
+			char policy[21] = "";
+
+			res = sscanf(v->value, "%d,%20s", &confp->chan.buf_no, policy);
 			if (res != 2) {
 				ast_log(LOG_WARNING, "Parsing buffers option data failed, using defaults.\n");
 				confp->chan.buf_no = numbufs;
@@ -11001,8 +10993,6 @@ static int process_dahdi(struct dahdi_chan_conf *confp, const char *cat, struct 
 				confp->chan.buf_no = numbufs;
 			if (!strcasecmp(policy, "full")) {
 				confp->chan.buf_policy = DAHDI_POLICY_WHEN_FULL;
-			} else if (!strcasecmp(policy, "half")) {
-				confp->chan.buf_policy = DAHDI_POLICY_IMMEDIATE /* TODO: change to HALF_FULL */;
 			} else if (!strcasecmp(policy, "immediate")) {
 				confp->chan.buf_policy = DAHDI_POLICY_IMMEDIATE;
 			} else {
@@ -11609,14 +11599,10 @@ static int process_dahdi(struct dahdi_chan_conf *confp, const char *cat, struct 
 				int res;
 				struct dahdi_dialparams dps;
 
-#ifdef HAVE_ZAPTEL
-				ctlfd = open("/dev/zap/ctl", O_RDWR);
-#else
-				ctlfd = open("/dev/dahdi/ctl", O_RDWR);
-#endif
+				ctlfd = open(DAHDI_FILE_CTL, O_RDWR);
 
 				if (ctlfd == -1) {
-					ast_log(LOG_ERROR, "Unable to open /dev/dahdi/ctl to set toneduration\n");
+					ast_log(LOG_ERROR, "Unable to open " DAHDI_FILE_CTL " to set toneduration\n");
 					return -1;
 				}
 
@@ -11650,14 +11636,13 @@ static int process_dahdi(struct dahdi_chan_conf *confp, const char *cat, struct 
 	/*< \todo why check for the pseudo in the per-channel section.
 	 * Any actual use for manual setup of the pseudo channel? */
 	if (!found_pseudo && reload == 0) {
-		/* Make sure pseudo isn't a member of any groups if
-		   we're automatically making it. */	
-		
-		confp->chan.group = 0;
-		confp->chan.callgroup = 0;
-		confp->chan.pickupgroup = 0;
+		/* use the default configuration for a channel, so
+		   that any settings from real configured channels
+		   don't "leak" into the pseudo channel config
+		*/
+		struct dahdi_chan_conf conf = dahdi_chan_conf_default();
 
-		tmp = mkintf(CHAN_PSEUDO, confp, NULL, reload);
+		tmp = mkintf(CHAN_PSEUDO, &conf, NULL, reload);
 
 		if (tmp) {
 			if (option_verbose > 2)
@@ -11992,7 +11977,7 @@ static int reload(void)
  * AST_MODULE_INFO(, , "DAHDI Telephony"
  */
 
-#ifdef DAHDI_PRI
+#ifdef HAVE_PRI
 #define tdesc "DAHDI Telephony w/PRI"
 #else
 #define tdesc "DAHDI Telephony"

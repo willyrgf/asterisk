@@ -223,7 +223,7 @@ AC_FUNC_ALLOCA
 AC_HEADER_DIRENT
 AC_HEADER_STDC
 AC_HEADER_SYS_WAIT
-AC_CHECK_HEADERS([arpa/inet.h fcntl.h inttypes.h libintl.h limits.h locale.h malloc.h netdb.h netinet/in.h stddef.h stdint.h stdlib.h string.h strings.h sys/file.h sys/ioctl.h sys/param.h sys/socket.h sys/time.h syslog.h termios.h unistd.h utime.h arpa/nameser.h])
+AC_CHECK_HEADERS([arpa/inet.h fcntl.h inttypes.h libintl.h limits.h locale.h malloc.h netdb.h netinet/in.h stddef.h stdint.h stdlib.h string.h strings.h sys/file.h sys/ioctl.h sys/param.h sys/socket.h sys/time.h syslog.h termios.h unistd.h utime.h arpa/nameser.h sys/io.h])
 
 AC_SYS_LARGEFILE
 
@@ -265,7 +265,16 @@ AC_FUNC_STRNLEN
 AC_FUNC_STRTOD
 AC_FUNC_UTIME_NULL
 AC_FUNC_VPRINTF
-AC_CHECK_FUNCS([asprintf atexit bzero dup2 endpwent floor ftruncate getcwd gethostbyname gethostname getloadavg gettimeofday inet_ntoa isascii localtime_r memchr memmove memset mkdir munmap pow putenv re_comp regcomp rint select setenv socket sqrt strcasecmp strcasestr strchr strcspn strdup strerror strlcat strlcpy strncasecmp strndup strnlen strrchr strsep strspn strstr strtol strtoq unsetenv utime vasprintf])
+AC_CHECK_FUNCS([asprintf atexit bzero dup2 endpwent floor ftruncate getcwd gethostbyname gethostname getloadavg gettimeofday inet_ntoa isascii localtime_r memchr memmove memset mkdir munmap pow putenv re_comp regcomp rint select setenv socket sqrt strcasecmp strcasestr strchr strcspn strdup strerror strlcat strlcpy strncasecmp strndup strnlen strrchr strsep strspn strstr strtol strtoq unsetenv utime vasprintf ioperm])
+
+AC_MSG_CHECKING(for timersub in time.h)
+AC_LINK_IFELSE(
+	AC_LANG_PROGRAM([#include <sys/time.h>],
+			[struct timeval *zombies; timersub(zombies, zombies, zombies);]),
+	AC_MSG_RESULT(yes)
+	AC_DEFINE([HAVE_TIMERSUB], 1, [Define to 1 if your system has timersub in time.h]),
+	AC_MSG_RESULT(no)
+)
 
 # some systems already have gethostbyname_r so we don't need to build ours in main/utils.c
 AC_SEARCH_LIBS(gethostbyname_r, [socket nsl])
@@ -351,18 +360,28 @@ if $(${CC} -Wdeclaration-after-statement -S -o /dev/null -xc /dev/null > /dev/nu
    AC_MSG_RESULT(yes)
    AST_DECLARATION_AFTER_STATEMENT=-Wdeclaration-after-statement
 else
-	AC_MSG_RESULT(no)
-	AST_DECLARATION_AFTER_STATEMENT=
+   AC_MSG_RESULT(no)
+   AST_DECLARATION_AFTER_STATEMENT=
 fi
 AC_SUBST(AST_DECLARATION_AFTER_STATEMENT)
+
+AC_MSG_CHECKING(for _FORTIFY_SOURCE support)
+if $(${CC} -D_FORTIFY_SOURCE=2 -S -o /dev/null -xc /dev/null > /dev/null 2>&1); then
+   AC_MSG_RESULT(yes)
+   AST_FORTIFY_SOURCE=-D_FORTIFY_SOURCE=2
+else
+   AC_MSG_RESULT(no)
+   AST_FORTIFY_SOURCE=
+fi
+AC_SUBST(AST_FORTIFY_SOURCE)
 
 AC_MSG_CHECKING(for -fno-strict-overflow)
 if $(${CC} -O2 -fno-strict-overflow -S -o /dev/null -xc /dev/null > /dev/null 2>&1); then
    AC_MSG_RESULT(yes)
    AST_NO_STRICT_OVERFLOW=-fno-strict-overflow
 else
-	AC_MSG_RESULT(no)
-	AST_NO_STRICT_OVERFLOW=
+   AC_MSG_RESULT(no)
+   AST_NO_STRICT_OVERFLOW=
 fi
 AC_SUBST(AST_NO_STRICT_OVERFLOW)
 
@@ -1257,7 +1276,7 @@ if test "${USE_PWLIB}" != "no"; then
 	AST_CHECK_PWLIB_VERSION([PWLib], [PWLIB], [ptbuildopts.h], [1], [9], [2])
 		
 	if test "${HAS_PWLIB:-unset}" != "unset"; then
-		AST_CHECK_OPENH323_PLATFORM()
+		AST_CHECK_PWLIB_PLATFORM()
 
 		PLATFORM_PWLIB="pt_${PWLIB_PLATFORM}_r"
 
@@ -1464,8 +1483,6 @@ if test "${USE_ZAPTEL}" != "no" && test "x${PBX_DAHDI}" != "x1"; then
 	CPPFLAGS="${saved_cppflags}"
 	if test "${ac_cv_member_ZT_PARAMS_chan_alarms}" = "yes"; then
 	     AC_DEFINE([HAVE_ZAPTEL_CHANALARMS], 1, [Define if your Zaptel drivers have chan_alarms.])
-	else
-	     AC_DEFINE([HAVE_ZAPTEL_CHANALARMS], 0, [Define if your Zaptel drivers have chan_alarms.])
 	fi
    elif test -n "${ZAPTEL_MANDATORY}"; 
    then
