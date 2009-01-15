@@ -7770,6 +7770,8 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 	}
 
 	if ((fromdomain = strchr(r->username, '@'))) {
+		/* the domain name is just behind '@' */
+		fromdomain++ ;
 		/* We have a domain in the username for registration */
 		snprintf(from, sizeof(from), "<sip:%s>;tag=%s", r->username, p->tag);
 		if (!ast_strlen_zero(p->theirtag))
@@ -7780,7 +7782,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 		/* If the registration username contains '@', then the domain should be used as
 		   the equivalent of "fromdomain" for the registration */
 		if (ast_strlen_zero(p->fromdomain)) {
-			ast_string_field_set(p, fromdomain, ++fromdomain);
+			ast_string_field_set(p, fromdomain, fromdomain);
 		}
 	} else {
 		snprintf(from, sizeof(from), "<sip:%s@%s>;tag=%s", r->username, p->tohost, p->tag);
@@ -11424,7 +11426,6 @@ static void handle_request_info(struct sip_pvt *p, struct sip_request *req)
 	unsigned int event;
 	const char *c = get_header(req, "Content-Type");
 
-	check_via(p, req);
 	/* Need to check the media/type */
 	if (!strcasecmp(c, "application/dtmf-relay") ||
 	    !strcasecmp(c, "application/vnd.nortelnetworks.digits")) {
@@ -13678,7 +13679,6 @@ static int handle_request_notify(struct sip_pvt *p, struct sip_request *req, str
 	char *eventid = NULL;
 	char *sep;
 
-	check_via(p, req);
 	if( (sep = strchr(event, ';')) ) {	/* XXX bug here - overwriting string ? */
 		*sep++ = '\0';
 		eventid = sep;
@@ -13806,7 +13806,7 @@ static int handle_request_options(struct sip_pvt *p, struct sip_request *req)
 {
 	int res;
 
-	check_via(p, req);
+
 	/* XXX Should we authenticate OPTIONS? XXX */
 
 	if (p->lastinvite) {
@@ -15002,7 +15002,6 @@ static int handle_request_refer(struct sip_pvt *p, struct sip_request *req, int 
 
 	int res = 0;
 
-	check_via(p, req);
 	if (ast_test_flag(req, SIP_PKT_DEBUG))
 		ast_verbose("Call %s got a SIP call transfer from %s: (REFER)!\n", p->callid, ast_test_flag(&p->flags[0], SIP_OUTGOING) ? "callee" : "caller");
 
@@ -15453,7 +15452,6 @@ static int handle_request_bye(struct sip_pvt *p, struct sip_request *req)
 static int handle_request_message(struct sip_pvt *p, struct sip_request *req)
 {
 	if (!ast_test_flag(req, SIP_PKT_IGNORE)) {
-		check_via(p, req);
 		if (ast_test_flag(req, SIP_PKT_DEBUG))
 			ast_verbose("Receiving message!\n");
 		receive_message(p, req);
