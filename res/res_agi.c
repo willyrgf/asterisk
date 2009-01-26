@@ -105,6 +105,8 @@ static char *descrip =
 
 static int agidebug = 0;
 
+static pthread_t shaun_of_the_dead_thread = AST_PTHREADT_NULL;
+
 #define TONE_BLOCK_SIZE 200
 
 /* Max time to connect to an AGI remote host */
@@ -118,6 +120,13 @@ enum agi_result {
 	AGI_RESULT_SUCCESS_FAST,
 	AGI_RESULT_HANGUP
 };
+
+struct zombie {
+	pid_t pid;
+	AST_LIST_ENTRY(zombie) list;
+};
+
+static AST_LIST_HEAD_STATIC(zombies, zombie);
 
 static int __attribute__((format(printf, 2, 3))) agi_debug_cli(int fd, char *fmt, ...)
 {
@@ -970,7 +979,7 @@ static int handle_recordfile(struct ast_channel *chan, AGI *agi, int argc, char 
 		
 		start = ast_tvnow();
 		while ((ms < 0) || ast_tvdiff_ms(ast_tvnow(), start) < ms) {
-			res = ast_waitfor(chan, -1);
+			res = ast_waitfor(chan, ms - ast_tvdiff_ms(ast_tvnow(), start));
 			if (res < 0) {
 				ast_closestream(fs);
 				fdprintf(agi->fd, "200 result=%d (waitfor) endpos=%ld\n", res,sample_offset);
@@ -1262,16 +1271,35 @@ static int handle_verbose(struct ast_channel *chan, AGI *agi, int argc, char **a
 static int handle_dbget(struct ast_channel *chan, AGI *agi, int argc, char **argv)
 {
 	int res;
-	char tmp[256];
+	size_t bufsize = 16;
+	char *buf, *tmp;
 
 	if (argc != 4)
 		return RESULT_SHOWUSAGE;
-	res = ast_db_get(argv[2], argv[3], tmp, sizeof(tmp));
+
+	if (!(buf = ast_malloc(bufsize))) {
+		fdprintf(agi->fd, "200 result=-1\n");
+		return RESULT_SUCCESS;
+	}
+
+	do {
+		res = ast_db_get(argv[2], argv[3], buf, bufsize);
+		if (strlen(buf) < bufsize - 1) {
+			break;
+		}
+		bufsize *= 2;
+		if (!(tmp = ast_realloc(buf, bufsize))) {
+			break;
+		}
+		buf = tmp;
+	} while (1);
+	
 	if (res) 
 		fdprintf(agi->fd, "200 result=0\n");
 	else
-		fdprintf(agi->fd, "200 result=1 (%s)\n", tmp);
+		fdprintf(agi->fd, "200 result=1 (%s)\n", buf);
 
+	ast_free(buf);
 	return RESULT_SUCCESS;
 }
 
@@ -1811,6 +1839,11 @@ static int agi_handle_command(struct ast_channel *chan, AGI *agi, char *buf)
 	parse_args(buf, &argc, argv);
 	c = find_command(argv, 0);
 	if (c) {
+		/* If the AGI command being executed is an actual application (using agi exec)
+		the app field will be updated in pbx_exec via handle_exec */
+		if (chan->cdr && !ast_check_hangup(chan) && strcasecmp(argv[0], "EXEC"))
+			ast_cdr_setapp(chan->cdr, "AGI", buf);
+
 		res = c->handler(chan, agi, argc, argv);
 		switch(res) {
 		case RESULT_SHOWUSAGE:
@@ -1945,7 +1978,26 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 				usleep(1);
 			}
 		}
-		waitpid(pid, status, WNOHANG);
+		/* This is essentially doing the same as without WNOHANG, except that
+		 * it allows the main thread to proceed, even without the child PID
+		 * dying immediately (the child may be doing cleanup, etc.).  Without
+		 * this code, zombie processes accumulate for as long as child
+		 * processes exist (which on busy systems may be always, filling up the
+		 * process table).
+		 *
+		 * Note that in trunk, we don't stop interaction at the hangup event
+		 * (instead we transparently switch to DeadAGI operation), so this is a
+		 * short-lived code addition.
+		 */
+		if (waitpid(pid, status, WNOHANG) == 0) {
+			struct zombie *cur = ast_calloc(1, sizeof(*cur));
+			if (cur) {
+				cur->pid = pid;
+				AST_LIST_LOCK(&zombies);
+				AST_LIST_INSERT_TAIL(&zombies, cur, list);
+				AST_LIST_UNLOCK(&zombies);
+			}
+		}
 	}
 	fclose(readf);
 	return returnstatus;
@@ -2179,17 +2231,58 @@ static struct ast_cli_entry cli_agi[] = {
 	dumpagihtml_help, NULL, &cli_dump_agihtml_deprecated },
 };
 
+static void *shaun_of_the_dead(void *data)
+{
+	struct zombie *cur;
+	int status;
+	for (;;) {
+		if (!AST_LIST_EMPTY(&zombies)) {
+			/* Don't allow cancellation while we have a lock. */
+			pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
+			AST_LIST_LOCK(&zombies);
+			AST_LIST_TRAVERSE_SAFE_BEGIN(&zombies, cur, list) {
+				if (waitpid(cur->pid, &status, WNOHANG) != 0) {
+					AST_LIST_REMOVE_CURRENT(&zombies, list);
+					ast_free(cur);
+				}
+			}
+			AST_LIST_TRAVERSE_SAFE_END
+			AST_LIST_UNLOCK(&zombies);
+			pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
+		}
+		pthread_testcancel();
+		/* Wait for 60 seconds, without engaging in a busy loop. */
+		poll(NULL, 0, 60000);
+	}
+	return NULL;
+}
+
 static int unload_module(void)
 {
+	int res;
+	struct zombie *cur;
 	ast_module_user_hangup_all();
 	ast_cli_unregister_multiple(cli_agi, sizeof(cli_agi) / sizeof(struct ast_cli_entry));
 	ast_unregister_application(eapp);
 	ast_unregister_application(deadapp);
-	return ast_unregister_application(app);
+	res = ast_unregister_application(app);
+	if (shaun_of_the_dead_thread != AST_PTHREADT_NULL) {
+		pthread_cancel(shaun_of_the_dead_thread);
+		pthread_kill(shaun_of_the_dead_thread, SIGURG);
+		pthread_join(shaun_of_the_dead_thread, NULL);
+	}
+	while ((cur = AST_LIST_REMOVE_HEAD(&zombies, list))) {
+		ast_free(cur);
+	}
+	return res;
 }
 
 static int load_module(void)
 {
+	if (ast_pthread_create_background(&shaun_of_the_dead_thread, NULL, shaun_of_the_dead, NULL)) {
+		ast_log(LOG_ERROR, "Shaun of the Dead wants to kill zombies, but can't?!!\n");
+		shaun_of_the_dead_thread = AST_PTHREADT_NULL;
+	}
 	ast_cli_register_multiple(cli_agi, sizeof(cli_agi) / sizeof(struct ast_cli_entry));
 	ast_register_application(deadapp, deadagi_exec, deadsynopsis, descrip);
 	ast_register_application(eapp, eagi_exec, esynopsis, descrip);

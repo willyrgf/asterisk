@@ -398,7 +398,7 @@ struct ast_channel {
 	enum ast_channel_state _state;			/*!< State of line -- Don't write directly, use ast_setstate */
 	int rings;					/*!< Number of rings so far */
 	struct ast_callerid cid;			/*!< Caller ID, name, presentation etc */
-	char dtmfq[AST_MAX_EXTENSION];			/*!< Any/all queued DTMF characters */
+	char unused_old_dtmfq[AST_MAX_EXTENSION];	/*!< The DTMFQ is deprecated.  All frames should go to the readq. */
 	struct ast_frame dtmff;				/*!< DTMF frame */
 
 	char context[AST_MAX_CONTEXT];			/*!< Dialplan: Current extension context */
@@ -414,7 +414,7 @@ struct ast_channel {
 	struct ast_cdr *cdr;				/*!< Call Detail Record */
 	enum ast_channel_adsicpe adsicpe;		/*!< Whether or not ADSI is detected on CPE */
 
-	struct ind_tone_zone *zone;				/*!< Tone zone as set in indications.conf or
+	struct tone_zone *zone;				/*!< Tone zone as set in indications.conf or
 								in the CHANNEL dialplan function */
 
 	struct ast_channel_monitor *monitor;		/*!< Channel monitoring */
@@ -631,6 +631,20 @@ struct ast_channel *ast_channel_alloc(int needqueue, int state, const char *cid_
 
 /*! \brief Queue an outgoing frame */
 int ast_queue_frame(struct ast_channel *chan, struct ast_frame *f);
+
+/*!
+ * \brief Queue an outgoing frame to the head of the frame queue
+ *
+ * \param chan the channel to queue the frame on
+ * \param f the frame to queue.  Note that this frame will be duplicated by
+ *        this function.  It is the responsibility of the caller to handle
+ *        freeing the memory associated with the frame being passed if
+ *        necessary.
+ *
+ * \retval 0 success
+ * \retval non-zero failure
+ */
+int ast_queue_frame_head(struct ast_channel *chan, struct ast_frame *f);
 
 /*! \brief Queue a hangup frame */
 int ast_queue_hangup(struct ast_channel *chan);
@@ -1173,6 +1187,11 @@ int ast_autoservice_start(struct ast_channel *chan);
 /*! 
  * \brief Stop servicing a channel for us...  
  *
+ * \note if chan is locked prior to calling ast_autoservice_stop, it
+ * is likely that there will be a deadlock between the thread that calls
+ * ast_autoservice_stop and the autoservice thread. It is important
+ * that chan is not locked prior to this call
+ *
  * \retval 0 success
  * \retval -1 error, or the channel has been hungup 
  */
@@ -1301,7 +1320,7 @@ static inline int ast_fdisset(struct pollfd *pfds, int fd, int max, int *start)
 	return 0;
 }
 
-#ifdef SOLARIS
+#ifndef HAVE_TIMERSUB
 static inline void timersub(struct timeval *tvend, struct timeval *tvstart, struct timeval *tvdiff)
 {
 	tvdiff->tv_sec = tvend->tv_sec - tvstart->tv_sec;

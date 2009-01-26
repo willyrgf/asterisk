@@ -744,11 +744,7 @@ struct ast_channel *ast_channel_alloc(int needqueue, int state, const char *cid_
 
 #ifdef HAVE_DAHDI
 
-#ifdef HAVE_ZAPTEL
-	tmp->timingfd = open("/dev/zap/timer", O_RDWR);
-#else
-	tmp->timingfd = open("/dev/dahdi/timer", O_RDWR);
-#endif
+	tmp->timingfd = open(DAHDI_FILE_TIMER, O_RDWR);
 
 	if (tmp->timingfd > -1) {
 		/* Check if timing interface supports new
@@ -899,7 +895,7 @@ alertpipe_failed:
 }
 
 /*! \brief Queue an outgoing media frame */
-int ast_queue_frame(struct ast_channel *chan, struct ast_frame *fin)
+static int __ast_queue_frame(struct ast_channel *chan, struct ast_frame *fin, int head)
 {
 	struct ast_frame *f;
 	struct ast_frame *cur;
@@ -908,9 +904,9 @@ int ast_queue_frame(struct ast_channel *chan, struct ast_frame *fin)
 
 	/* Build us a copy and free the original one */
 	if (!(f = ast_frdup(fin))) {
-		ast_log(LOG_WARNING, "Unable to duplicate frame\n");
 		return -1;
 	}
+
 	ast_channel_lock(chan);
 
 	/* See if the last frame on the queue is a hangup, if so don't queue anything */
@@ -938,11 +934,18 @@ int ast_queue_frame(struct ast_channel *chan, struct ast_frame *fin)
 			return 0;
 		}
 	}
-	AST_LIST_INSERT_TAIL(&chan->readq, f, frame_list);
+
+	if (head) {
+		AST_LIST_INSERT_HEAD(&chan->readq, f, frame_list);
+	} else {
+		AST_LIST_INSERT_TAIL(&chan->readq, f, frame_list);
+	}
+
 	if (chan->alertpipe[1] > -1) {
-		if (write(chan->alertpipe[1], &blah, sizeof(blah)) != sizeof(blah))
+		if (write(chan->alertpipe[1], &blah, sizeof(blah)) != sizeof(blah)) {
 			ast_log(LOG_WARNING, "Unable to write to alert pipe on %s, frametype/subclass %d/%d (qlen = %d): %s!\n",
 				chan->name, f->frametype, f->subclass, qlen, strerror(errno));
+		}
 #ifdef HAVE_DAHDI
 	} else if (chan->timingfd > -1) {
 		ioctl(chan->timingfd, DAHDI_TIMERPING, &blah);
@@ -950,8 +953,20 @@ int ast_queue_frame(struct ast_channel *chan, struct ast_frame *fin)
 	} else if (ast_test_flag(chan, AST_FLAG_BLOCKING)) {
 		pthread_kill(chan->blocker, SIGURG);
 	}
+
 	ast_channel_unlock(chan);
+
 	return 0;
+}
+
+int ast_queue_frame(struct ast_channel *chan, struct ast_frame *fin)
+{
+	return __ast_queue_frame(chan, fin, 0);
+}
+
+int ast_queue_frame_head(struct ast_channel *chan, struct ast_frame *fin)
+{
+	return __ast_queue_frame(chan, fin, 1);
 }
 
 /*! \brief Queue a hangup frame for channel */
@@ -1344,7 +1359,7 @@ int ast_channel_datastore_inherit(struct ast_channel *from, struct ast_channel *
 		if (datastore->inheritance > 0) {
 			datastore2 = ast_channel_datastore_alloc(datastore->info, datastore->uid);
 			if (datastore2) {
-				datastore2->data = datastore->info->duplicate(datastore->data);
+				datastore2->data = datastore->info->duplicate ? datastore->info->duplicate(datastore->data) : NULL;
 				datastore2->inheritance = datastore->inheritance == DATASTORE_INHERIT_FOREVER ? DATASTORE_INHERIT_FOREVER : datastore->inheritance - 1;
 				AST_LIST_INSERT_TAIL(&to->datastores, datastore2, entry);
 			}
@@ -1563,6 +1578,7 @@ int ast_answer(struct ast_channel *chan)
 	default:
 		break;
 	}
+	ast_indicate(chan, -1);
 	chan->visible_indication = 0;
 	ast_channel_unlock(chan);
 	return res;
@@ -1968,6 +1984,42 @@ static void ast_read_generator_actions(struct ast_channel *chan, struct ast_fram
 	}
 }
 
+static inline void queue_dtmf_readq(struct ast_channel *chan, struct ast_frame *f)
+{
+	struct ast_frame *fr = &chan->dtmff;
+
+	fr->frametype = AST_FRAME_DTMF_END;
+	fr->subclass = f->subclass;
+	fr->len = f->len;
+
+	/* The only time this function will be called is for a frame that just came
+	 * out of the channel driver.  So, we want to stick it on the tail of the
+	 * readq. */
+
+	ast_queue_frame(chan, fr);
+}
+
+/*!
+ * \brief Determine whether or not we should ignore DTMF in the readq
+ */
+static inline int should_skip_dtmf(struct ast_channel *chan)
+{
+	if (ast_test_flag(chan, AST_FLAG_DEFER_DTMF | AST_FLAG_EMULATE_DTMF)) {
+		/* We're in the middle of emulating a digit, or DTMF has been
+		 * explicitly deferred.  Skip this digit, then. */
+		return 1;
+	}
+			
+	if (!ast_tvzero(chan->dtmf_tv) && 
+			ast_tvdiff_ms(ast_tvnow(), chan->dtmf_tv) < AST_MIN_DTMF_GAP) {
+		/* We're not in the middle of a digit, but it hasn't been long enough
+		 * since the last digit, so we'll have to skip DTMF for now. */
+		return 1;
+	}
+
+	return 0;
+}
+
 static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 {
 	struct ast_frame *f = NULL;	/* the return value */
@@ -2001,28 +2053,6 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 	}
 	prestate = chan->_state;
 
-	if (!ast_test_flag(chan, AST_FLAG_DEFER_DTMF | AST_FLAG_EMULATE_DTMF | AST_FLAG_IN_DTMF) && 
-	    !ast_strlen_zero(chan->dtmfq) && 
-		(ast_tvzero(chan->dtmf_tv) || ast_tvdiff_ms(ast_tvnow(), chan->dtmf_tv) > AST_MIN_DTMF_GAP) ) {
-		/* We have DTMF that has been deferred.  Return it now */
-		chan->dtmff.subclass = chan->dtmfq[0];
-		/* Drop first digit from the buffer */
-		memmove(chan->dtmfq, chan->dtmfq + 1, sizeof(chan->dtmfq) - 1);
-		f = &chan->dtmff;
-		if (ast_test_flag(chan, AST_FLAG_END_DTMF_ONLY)) {
-			ast_log(LOG_DTMF, "DTMF end emulation of '%c' queued on %s\n", f->subclass, chan->name);
-			chan->dtmff.frametype = AST_FRAME_DTMF_END;
-		} else {
-			ast_log(LOG_DTMF, "DTMF begin emulation of '%c' with duration %d queued on %s\n", f->subclass, AST_DEFAULT_EMULATE_DTMF_DURATION, chan->name);
-			chan->dtmff.frametype = AST_FRAME_DTMF_BEGIN;
-			ast_set_flag(chan, AST_FLAG_EMULATE_DTMF);
-			chan->emulate_dtmf_digit = f->subclass;
-			chan->emulate_dtmf_duration = AST_DEFAULT_EMULATE_DTMF_DURATION;
-		}
-		chan->dtmf_tv = ast_tvnow();
-		goto done;
-	}
-	
 	/* Read and ignore anything on the alertpipe, but read only
 	   one sizeof(blah) per frame that we send from it */
 	if (chan->alertpipe[0] > -1) {
@@ -2095,7 +2125,35 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 
 	/* Check for pending read queue */
 	if (!AST_LIST_EMPTY(&chan->readq)) {
-		f = AST_LIST_REMOVE_HEAD(&chan->readq, frame_list);
+		int skip_dtmf = should_skip_dtmf(chan);
+
+		AST_LIST_TRAVERSE_SAFE_BEGIN(&chan->readq, f, frame_list) {
+			/* We have to be picky about which frame we pull off of the readq because
+			 * there are cases where we want to leave DTMF frames on the queue until
+			 * some later time. */
+
+			if ( (f->frametype == AST_FRAME_DTMF_BEGIN || f->frametype == AST_FRAME_DTMF_END) && skip_dtmf) {
+				continue;
+			}
+
+			AST_LIST_REMOVE_CURRENT(&chan->readq, frame_list);
+			break;
+		}
+		AST_LIST_TRAVERSE_SAFE_END
+		
+		if (!f) {
+			/* There were no acceptable frames on the readq. */
+			f = &ast_null_frame;
+			if (chan->alertpipe[0] > -1) {
+				int poke = 0;
+				/* Restore the state of the alertpipe since we aren't ready for any
+				 * of the frames in the readq. */
+				if (write(chan->alertpipe[1], &poke, sizeof(poke)) != sizeof(poke)) {
+					ast_log(LOG_ERROR, "Failed to write to alertpipe: %s\n", strerror(errno));
+				}
+			}
+		}
+
 		/* Interpret hangup and return NULL */
 		/* XXX why not the same for frames from the channel ? */
 		if (f->frametype == AST_FRAME_CONTROL && f->subclass == AST_CONTROL_HANGUP) {
@@ -2152,26 +2210,16 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 			break;
 		case AST_FRAME_DTMF_END:
 			ast_log(LOG_DTMF, "DTMF end '%c' received on %s, duration %ld ms\n", f->subclass, chan->name, f->len);
-			/* Queue it up if DTMF is deffered, or if DTMF emulation is forced.
-			 * However, only let emulation be forced if the other end cares about BEGIN frames */
-			if ( ast_test_flag(chan, AST_FLAG_DEFER_DTMF) ||
-				(ast_test_flag(chan, AST_FLAG_EMULATE_DTMF) && !ast_test_flag(chan, AST_FLAG_END_DTMF_ONLY)) ) {
-				if (strlen(chan->dtmfq) < sizeof(chan->dtmfq) - 2) {
-					ast_log(LOG_DTMF, "DTMF end '%c' put into dtmf queue on %s\n", f->subclass, chan->name);
-					chan->dtmfq[strlen(chan->dtmfq)] = f->subclass;
-				} else
-					ast_log(LOG_WARNING, "Dropping deferred DTMF digits on %s\n", chan->name);
+			/* Queue it up if DTMF is deferred, or if DTMF emulation is forced. */
+			if (ast_test_flag(chan, AST_FLAG_DEFER_DTMF) || ast_test_flag(chan, AST_FLAG_EMULATE_DTMF)) {
+				queue_dtmf_readq(chan, f);
 				ast_frfree(f);
 				f = &ast_null_frame;
 			} else if (!ast_test_flag(chan, AST_FLAG_IN_DTMF | AST_FLAG_END_DTMF_ONLY)) {
 				if (!ast_tvzero(chan->dtmf_tv) && 
 				    ast_tvdiff_ms(ast_tvnow(), chan->dtmf_tv) < AST_MIN_DTMF_GAP) {
 					/* If it hasn't been long enough, defer this digit */
-					if (strlen(chan->dtmfq) < sizeof(chan->dtmfq) - 2) {
-						ast_log(LOG_DTMF, "DTMF end '%c' put into dtmf queue on %s\n", f->subclass, chan->name);
-						chan->dtmfq[strlen(chan->dtmfq)] = f->subclass;
-					} else
-						ast_log(LOG_WARNING, "Dropping deferred DTMF digits on %s\n", chan->name);
+					queue_dtmf_readq(chan, f);
 					ast_frfree(f);
 					f = &ast_null_frame;
 				} else {
@@ -2397,65 +2445,129 @@ int ast_indicate(struct ast_channel *chan, int condition)
 	return ast_indicate_data(chan, condition, NULL, 0);
 }
 
-int ast_indicate_data(struct ast_channel *chan, int condition, const void *data, size_t datalen)
+static int attribute_const is_visible_indication(enum ast_control_frame_type condition)
 {
+	/* Don't include a default case here so that we get compiler warnings
+	 * when a new type is added. */
+
+	switch (condition) {
+	case AST_CONTROL_PROGRESS:
+	case AST_CONTROL_PROCEEDING:
+	case AST_CONTROL_VIDUPDATE:
+	case AST_CONTROL_SRCUPDATE:
+	case AST_CONTROL_RADIO_KEY:
+	case AST_CONTROL_RADIO_UNKEY:
+	case AST_CONTROL_OPTION:
+	case AST_CONTROL_WINK:
+	case AST_CONTROL_FLASH:
+	case AST_CONTROL_OFFHOOK:
+	case AST_CONTROL_TAKEOFFHOOK:
+	case AST_CONTROL_ANSWER:
+	case AST_CONTROL_HANGUP:
+		return 0;
+
+	case AST_CONTROL_CONGESTION:
+	case AST_CONTROL_BUSY:
+	case AST_CONTROL_RINGING:
+	case AST_CONTROL_RING:
+	case AST_CONTROL_HOLD:
+	case AST_CONTROL_UNHOLD:
+		return 1;
+	}
+
+	return 0;
+}
+
+int ast_indicate_data(struct ast_channel *chan, int _condition,
+		const void *data, size_t datalen)
+{
+	/* By using an enum, we'll get compiler warnings for values not handled 
+	 * in switch statements. */
+	enum ast_control_frame_type condition = _condition;
+	const struct tone_zone_sound *ts = NULL;
 	int res = -1;
 
 	ast_channel_lock(chan);
-	/* Stop if we're a zombie or need a soft hangup */
+
+	/* Don't bother if the channel is about to go away, anyway. */
 	if (ast_test_flag(chan, AST_FLAG_ZOMBIE) || ast_check_hangup(chan)) {
 		ast_channel_unlock(chan);
 		return -1;
 	}
-	if (chan->tech->indicate)
+
+	if (chan->tech->indicate) {
+		/* See if the channel driver can handle this condition. */
 		res = chan->tech->indicate(chan, condition, data, datalen);
+	}
+
 	ast_channel_unlock(chan);
-	if (!chan->tech->indicate || res) {
-		/*
-		 * Device does not support (that) indication, lets fake
-		 * it by doing our own tone generation. (PM2002)
-		 */
-		if (condition < 0)
-			ast_playtones_stop(chan);
-		else {
-			const struct ind_tone_zone_sound *ts = NULL;
-			switch (condition) {
-			case AST_CONTROL_RINGING:
-				ts = ast_get_indication_tone(chan->zone, "ring");
-				break;
-			case AST_CONTROL_BUSY:
-				ts = ast_get_indication_tone(chan->zone, "busy");
-				break;
-			case AST_CONTROL_CONGESTION:
-				ts = ast_get_indication_tone(chan->zone, "congestion");
-				break;
-			}
-			if (ts && ts->data[0]) {
-				if (option_debug)
-					ast_log(LOG_DEBUG, "Driver for channel '%s' does not support indication %d, emulating it\n", chan->name, condition);
-				ast_playtones_start(chan,0,ts->data, 1);
-				res = 0;
-				chan->visible_indication = condition;
-			} else if (condition == AST_CONTROL_PROGRESS) {
-				/* ast_playtones_stop(chan); */
-			} else if (condition == AST_CONTROL_PROCEEDING) {
-				/* Do nothing, really */
-			} else if (condition == AST_CONTROL_HOLD) {
-				/* Do nothing.... */
-			} else if (condition == AST_CONTROL_UNHOLD) {
-				/* Do nothing.... */
-			} else if (condition == AST_CONTROL_VIDUPDATE) {
-				/* Do nothing.... */
-			} else if (condition == AST_CONTROL_SRCUPDATE) {
-				/* Do nothing... */
-			} else {
-				/* not handled */
-				ast_log(LOG_WARNING, "Unable to handle indication %d for '%s'\n", condition, chan->name);
-				res = -1;
-			}
+
+	if (chan->tech->indicate && !res) {
+		/* The channel driver successfully handled this indication */
+		if (is_visible_indication(condition)) {
+			chan->visible_indication = condition;
 		}
-	} else
+		return 0;
+	}
+
+	/* The channel driver does not support this indication, let's fake
+	 * it by doing our own tone generation if applicable. */
+
+	/*!\note If we compare the enumeration type, which does not have any
+	 * negative constants, the compiler may optimize this code away.
+	 * Therefore, we must perform an integer comparison here. */
+	if (_condition < 0) {
+		/* Stop any tones that are playing */
+		ast_playtones_stop(chan);
+		return 0;
+	}
+
+	/* Handle conditions that we have tones for. */
+	switch (condition) {
+	case AST_CONTROL_RINGING:
+		ts = ast_get_indication_tone(chan->zone, "ring");
+		break;
+	case AST_CONTROL_BUSY:
+		ts = ast_get_indication_tone(chan->zone, "busy");
+		break;
+	case AST_CONTROL_CONGESTION:
+		ts = ast_get_indication_tone(chan->zone, "congestion");
+		break;
+	case AST_CONTROL_PROGRESS:
+	case AST_CONTROL_PROCEEDING:
+	case AST_CONTROL_VIDUPDATE:
+	case AST_CONTROL_SRCUPDATE:
+	case AST_CONTROL_RADIO_KEY:
+	case AST_CONTROL_RADIO_UNKEY:
+	case AST_CONTROL_OPTION:
+	case AST_CONTROL_WINK:
+	case AST_CONTROL_FLASH:
+	case AST_CONTROL_OFFHOOK:
+	case AST_CONTROL_TAKEOFFHOOK:
+	case AST_CONTROL_ANSWER:
+	case AST_CONTROL_HANGUP:
+	case AST_CONTROL_RING:
+	case AST_CONTROL_HOLD:
+	case AST_CONTROL_UNHOLD:
+		/* Nothing left to do for these. */
+		res = 0;
+		break;
+	}
+
+	if (ts && ts->data[0]) {
+		/* We have a tone to play, yay. */
+		if (option_debug) {
+				ast_log(LOG_DEBUG, "Driver for channel '%s' does not support indication %d, emulating it\n", chan->name, condition);
+		}
+		ast_playtones_start(chan, 0, ts->data, 1);
+		res = 0;
 		chan->visible_indication = condition;
+	}
+
+	if (res) {
+		/* not handled */
+		ast_log(LOG_WARNING, "Unable to handle indication %d for '%s'\n", condition, chan->name);
+	}
 
 	return res;
 }
@@ -3557,11 +3669,11 @@ int ast_do_masquerade(struct ast_channel *original)
 	/* Move data stores over */
 	if (AST_LIST_FIRST(&clone->datastores)) {
 		struct ast_datastore *ds;
-		AST_LIST_APPEND_LIST(&original->datastores, &clone->datastores, entry);
-		AST_LIST_TRAVERSE(&original->datastores, ds, entry) {
+		AST_LIST_TRAVERSE(&clone->datastores, ds, entry) {
 			if (ds->info->chan_fixup)
 				ds->info->chan_fixup(ds->data, clone, original);
 		}
+		AST_LIST_APPEND_LIST(&original->datastores, &clone->datastores, entry);
 	}
 
 	clone_variables(original, clone);
@@ -3572,7 +3684,7 @@ int ast_do_masquerade(struct ast_channel *original)
 	/* XXX What about blocking, softhangup, blocker, and lock and blockproc? XXX */
 	/* Application and data remain the same */
 	/* Clone exception  becomes real one, as with fdno */
-	ast_copy_flags(original, clone, AST_FLAG_EXCEPTION);
+	ast_set_flag(original, ast_test_flag(clone, AST_FLAG_OUTGOING | AST_FLAG_EXCEPTION));
 	original->fdno = clone->fdno;
 	/* Schedule context remains the same */
 	/* Stream stuff stays the same */
@@ -3619,9 +3731,17 @@ int ast_do_masquerade(struct ast_channel *original)
 		ast_log(LOG_WARNING, "Channel type '%s' does not have a fixup routine (for %s)!  Bad things may happen.\n",
 			original->tech->type, original->name);
 
-	/* If an indication is currently playing maintain it on the channel that is taking the place of original */
-	if (original->visible_indication)
+	/* 
+	 * If an indication is currently playing, maintain it on the channel 
+	 * that is taking the place of original 
+	 *
+	 * This is needed because the masquerade is swapping out in the internals
+	 * of this channel, and the new channel private data needs to be made
+	 * aware of the current visible indication (RINGING, CONGESTION, etc.)
+	 */
+	if (original->visible_indication) {
 		ast_indicate(original, original->visible_indication);
+	}
 	
 	/* Now, at this point, the "clone" channel is totally F'd up.  We mark it as
 	   a zombie so nothing tries to touch it.  If it's already been marked as a

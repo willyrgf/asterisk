@@ -1015,7 +1015,9 @@ static void vm_imap_delete(int msgnum, struct ast_vm_user *vmu)
 		ast_log(LOG_DEBUG, "deleting msgnum %d, which is mailbox message %lu\n",msgnum,messageNum);
 	/* delete message */
 	snprintf (arg, sizeof(arg), "%lu",messageNum);
+	ast_mutex_lock(&vms->lock);
 	mail_setflag (vms->mailstream,arg,"\\DELETED");
+	ast_mutex_unlock(&vms->lock);
 }
 
 static int imap_retrieve_file(const char *dir, const int msgnum, const struct ast_vm_user *vmu)
@@ -1069,15 +1071,19 @@ static int imap_retrieve_file(const char *dir, const int msgnum, const struct as
 	}
 
 	/* This will only work for new messages... */
+	ast_mutex_lock(&vms->lock);
 	header_content = mail_fetchheader (vms->mailstream, vms->msgArray[msgnum]);
+	ast_mutex_unlock(&vms->lock);
 	/* empty string means no valid header */
 	if (ast_strlen_zero(header_content)) {
 		ast_log (LOG_ERROR,"Could not fetch header for message number %ld\n",vms->msgArray[msgnum]);
 		return -1;
 	}
 
+	ast_mutex_lock(&vms->lock);
 	mail_fetchstructure (vms->mailstream,vms->msgArray[msgnum],&body);
-	
+	ast_mutex_unlock(&vms->lock);
+
 	/* We have the body, now we extract the file name of the first attachment. */
 	if (body->nested.part && body->nested.part->next && body->nested.part->next->body.parameter->value) {
 		attachedfilefmt = ast_strdupa(body->nested.part->next->body.parameter->value);
@@ -1211,6 +1217,7 @@ static int messagecount(const char *context, const char *mailbox, const char *fo
 		return -1;
 	}
 	if (ret == 0) {
+		ast_mutex_lock(&vms_p->lock);
 		pgm = mail_newsearchpgm ();
 		hdr = mail_newsearchheader ("X-Asterisk-VM-Extension", (char *)mailbox);
 		pgm->header = hdr;
@@ -1236,10 +1243,13 @@ static int messagecount(const char *context, const char *mailbox, const char *fo
 			vms_p->oldmessages = vms_p->vmArrayIndex;
 		/*Freeing the searchpgm also frees the searchhdr*/
 		mail_free_searchpgm(&pgm);
+		ast_mutex_unlock(&vms_p->lock);
 		vms_p->updated = 0;
 		return vms_p->vmArrayIndex;
-	} else {  
+	} else {
+		ast_mutex_lock(&vms_p->lock);
 		mail_ping(vms_p->mailstream);
+		ast_mutex_unlock(&vms_p->lock);
 	}
 	return 0;
 }
@@ -1301,13 +1311,17 @@ static int imap_store_file(char *dir, char *mailboxuser, char *mailboxcontext, i
 			fclose(p);
 			return -1;
 		}
-		fread(buf, len, 1, p);
+		if (fread(buf, len, 1, p) != 1) {
+			ast_log(LOG_WARNING, "Short read: %s\n", strerror(errno));
+		}
 		((char *)buf)[len] = '\0';
 		INIT(&str, mail_string, buf, len);
 		init_mailstream(vms, 0);
 		imap_mailbox_name(mailbox, sizeof(mailbox), vms, 0, 1);
+		ast_mutex_lock(&vms->lock);
 		if (!mail_append(vms->mailstream, mailbox, &str))
 			ast_log(LOG_ERROR, "Error while sending the message to %s\n", mailbox);
+		ast_mutex_unlock(&vms->lock);
 		fclose(p);
 		unlink(tmp);
 		ast_free(buf);
@@ -1419,8 +1433,12 @@ static int copy_message(struct ast_channel *chan, struct ast_vm_user *vmu, int i
 		return -1;
 	}
 	snprintf(messagestring, sizeof(messagestring), "%ld", sendvms->msgArray[msgnum]);
-	if ((mail_copy(sendvms->mailstream, messagestring, (char *) mbox(imbox)) == T))
+	ast_mutex_lock(&sendvms->lock);
+	if ((mail_copy(sendvms->mailstream, messagestring, (char *) mbox(imbox)) == T)) {
+		ast_mutex_unlock(&sendvms->lock);
 		return 0;
+	}
+	ast_mutex_unlock(&sendvms->lock);
 	ast_log(LOG_WARNING, "Unable to copy message from mailbox %s to mailbox %s\n", vmu->mailbox, recip->mailbox);
 	return -1;
 }
@@ -1541,6 +1559,7 @@ static int open_mailbox(struct vm_state *vms, struct ast_vm_user *vmu, int box)
 		check_quota(vms,(char *)mbox(box));
 	}
 
+	ast_mutex_lock(&vms->lock);
 	pgm = mail_newsearchpgm();
 
 	/* Check IMAP folder for Asterisk messages only... */
@@ -1566,6 +1585,7 @@ static int open_mailbox(struct vm_state *vms, struct ast_vm_user *vmu, int box)
 	vms->lastmsg = vms->vmArrayIndex - 1;
 
 	mail_free_searchpgm(&pgm);
+	ast_mutex_unlock(&vms->lock);
 	return 0;
 }
 
@@ -1574,7 +1594,9 @@ static void write_file(char *filename, char *buffer, unsigned long len)
 	FILE *output;
 
 	output = fopen (filename, "w");
-	fwrite (buffer, len, 1, output);
+	if (fwrite (buffer, len, 1, output) != 1) {
+		ast_log(LOG_WARNING, "Short write: %s\n", strerror(errno));
+	}
 	fclose (output);
 }
 
@@ -2089,7 +2111,9 @@ static int save_body(BODY *body, struct vm_state *vms, char *section, char *form
 	
 	if (!body || body == NIL)
 		return -1;
+	ast_mutex_lock(&vms->lock);
 	body_content = mail_fetchbody (vms->mailstream, vms->msgArray[vms->curmsg], section, &len);
+	ast_mutex_unlock(&vms->lock);
 	if (body_content != NIL) {
 		snprintf(filename, sizeof(filename), "%s.%s", vms->fn, format);
 		/* ast_log (LOG_DEBUG,body_content); */
@@ -2100,6 +2124,7 @@ static int save_body(BODY *body, struct vm_state *vms, char *section, char *form
 }
 
 /* get delimiter via mm_list callback */
+/* MUTEX should already be held */
 static void get_mailbox_delimiter(MAILSTREAM *stream) {
 	char tmp[50];
 	snprintf(tmp, sizeof(tmp), "{%s}", imapserver);
@@ -2108,6 +2133,7 @@ static void get_mailbox_delimiter(MAILSTREAM *stream) {
 
 /* Check Quota for user */
 static void check_quota(struct vm_state *vms, char *mailbox) {
+	ast_mutex_lock(&vms->lock);
 	mail_parameters(NULL, SET_QUOTA, (void *) mm_parsequota);
 	if (option_debug > 2)
 		ast_log(LOG_DEBUG, "Mailbox name set to: %s, about to check quotas\n", mailbox);
@@ -2116,6 +2142,7 @@ static void check_quota(struct vm_state *vms, char *mailbox) {
 	} else {
 		ast_log(LOG_WARNING,"Mailstream not available for mailbox: %s\n",mailbox);
 	}
+	ast_mutex_unlock(&vms->lock);
 }
 #endif
 
@@ -4246,15 +4273,20 @@ static int save_to_folder(struct ast_vm_user *vmu, struct vm_state *vms, int msg
 	snprintf(sequence, sizeof(sequence), "%ld", vms->msgArray[msg]);
 	if (option_debug > 2)
 		ast_log(LOG_DEBUG, "Copying sequence %s to mailbox %s\n",sequence,(char *) mbox(box));
+	ast_mutex_lock(&vms->lock);
 	if (box == 1) {
 		mail_setflag(vms->mailstream, sequence, "\\Seen");
 	} else if (box == 0) {
 		mail_clearflag(vms->mailstream, sequence, "\\Seen");
 	}
-	if (!strcasecmp(mbox(0), vms->curbox) && (box == 0 || box == 1))
+	if (!strcasecmp(mbox(0), vms->curbox) && (box == 0 || box == 1)) {
+		ast_mutex_unlock(&vms->lock);
 		return 0;
-	else 
-		return !mail_copy(vms->mailstream,sequence,(char *) mbox(box)); 
+	} else {
+		int res = !mail_copy(vms->mailstream,sequence,(char *) mbox(box)); 
+		ast_mutex_unlock(&vms->lock);
+		return res;
+	}
 #else
 	char *dir = vms->curdir;
 	char *username = vms->username;
@@ -5784,7 +5816,7 @@ static int vm_intro_gr(struct ast_channel *chan, struct vm_state *vms)
 		res = ast_play_and_wait(chan, "vm-denExeteMynhmata"); 
 	return res;
 }
-	
+
 /* Default English syntax */
 static int vm_intro_en(struct ast_channel *chan, struct vm_state *vms)
 {
@@ -5826,6 +5858,101 @@ static int vm_intro_en(struct ast_channel *chan, struct vm_state *vms)
 			}
 		}
 	}
+	return res;
+}
+
+/* Version of vm_intro() designed to work for many languages.
+ *
+ * It is hoped that this function can prevent the proliferation of 
+ * language-specific vm_intro() functions and in time replace the language-
+ * specific functions which already exist.  An examination of the language-
+ * specific functions revealed that they all corrected the same deficiencies
+ * in vm_intro_en() (which was the default function). Namely:
+ *
+ *  1) The vm-Old and vm-INBOX sound files were overloaded.  The English 
+ *     wording of the voicemail greeting hides this problem.  For example,
+ *     vm-INBOX contains only the word "new".  This means that both of these
+ *     sequences produce valid utterances:
+ *      * vm-youhave digit/1 vm-INBOX vm-message (you have one new message)
+ *      * vm-press digit/1 vm-for vm-INBOX vm-messages (press 1 for new messages)
+ *     However, if we rerecord vm-INBOX to say "the new" (which is unavoidable
+ *     in many languages) the first utterance becomes "you have 1 the new message".
+ *  2) The function contains hardcoded rules for pluralizing the word "message".
+ *     These rules are correct for English, but not for many other languages.
+ *  3) No attempt is made to pluralize the adjectives ("old" and "new") as
+ *     required in many languages.
+ *  4) The gender of the word for "message" is not specified. This is a problem
+ *     because in many languages the gender of the number in phrases such
+ *     as "you have one new message" must match the gender of the word
+ *     meaning "message".
+ *
+ * Fixing these problems for each new language has meant duplication of effort.
+ * This new function solves the problems in the following general ways:
+ *  1) Add new sound files vm-new and vm-old.  These can be linked to vm-INBOX
+ *     and vm-Old respectively for those languages where it makes sense.
+ *  2) Call ast_say_counted_noun() to put the proper gender and number prefix
+ *     on vm-message.
+ *  3) Call ast_say_counted_adjective() to put the proper gender and number
+ *     prefix on vm-new and vm-old (none for English).
+ *  4) Pass the gender of the language's word for "message" as an agument to
+ *     this function which is can in turn pass on to the functions which 
+ *     say numbers and put endings on nounds and adjectives.
+ *
+ * All languages require these messages:
+ *  vm-youhave		"You have..."
+ *  vm-and		"and"
+ *  vm-no		"no" (in the sense of "none", as in "you have no messages")
+ *
+ * To use it for English, you will need these additional sound files:
+ *  vm-new		"new"
+ *  vm-message		"message", singular
+ *  vm-messages		"messages", plural
+ *
+ * If you use it for Russian and other slavic languages, you will need these additional sound files:
+ *
+ *  vm-newn		"novoye" (singular, neuter)
+ *  vm-newx		"novikh" (counting plural form, genative plural)
+ *  vm-message		"sobsheniye" (singular form)
+ *  vm-messagex1	"sobsheniya" (first counting plural form, genative singular)
+ *  vm-messagex2	"sobsheniy" (second counting plural form, genative plural)
+ *  digits/1n		"odno" (neuter singular for phrases such as "one message" or "thirty one messages")
+ *  digits/2n		"dva" (neuter singular)
+ */
+static int vm_intro_multilang(struct ast_channel *chan, struct vm_state *vms, const char message_gender[])
+{
+	int res;
+	int lastnum = 0;
+
+	res = ast_play_and_wait(chan, "vm-youhave");
+
+	if (!res && vms->newmessages) {
+		lastnum = vms->newmessages;
+
+		if (!(res = ast_say_number(chan, lastnum, AST_DIGIT_ANY, chan->language, message_gender))) {
+			res = ast_say_counted_adjective(chan, lastnum, "vm-new", message_gender);
+		}
+
+		if (!res && vms->oldmessages) {
+			res = ast_play_and_wait(chan, "vm-and");
+		}
+	}
+
+	if (!res && vms->oldmessages) {
+		lastnum = vms->oldmessages;
+
+		if (!(res = ast_say_number(chan, lastnum, AST_DIGIT_ANY, chan->language, message_gender))) {
+			res = ast_say_counted_adjective(chan, lastnum, "vm-old", message_gender);
+		}
+	}
+
+	if (!res) {
+		if (lastnum == 0) {
+			res = ast_play_and_wait(chan, "vm-no");
+		} else {
+			res = ast_say_counted_noun(chan, lastnum, "vm-message");
+		}
+	}
+
 	return res;
 }
 
@@ -6459,151 +6586,6 @@ static int vm_intro_cz(struct ast_channel *chan,struct vm_state *vms)
 	return res;
 }
 
-static int get_lastdigits(int num)
-{
-	num %= 100;
-	return (num < 20) ? num : num % 10;
-}
-
-static int vm_intro_ru(struct ast_channel *chan,struct vm_state *vms)
-{
-	int res;
-	int lastnum = 0;
-	int dcnum;
-
-	res = ast_play_and_wait(chan, "vm-youhave");
-	if (!res && vms->newmessages) {
-		lastnum = get_lastdigits(vms->newmessages);
-		dcnum = vms->newmessages - lastnum;
-		if (dcnum)
-			res = say_and_wait(chan, dcnum, chan->language);
-		if (!res && lastnum) {
-			if (lastnum == 1) 
-				res = ast_play_and_wait(chan, "digits/odno");
-			else
-				res = say_and_wait(chan, lastnum, chan->language);
-		}
-
-		if (!res)
-			res = ast_play_and_wait(chan, (lastnum == 1) ? "vm-novoe" : "vm-novyh");
-
-		if (!res && vms->oldmessages)
-			res = ast_play_and_wait(chan, "vm-and");
-	}
-
-	if (!res && vms->oldmessages) {
-		lastnum = get_lastdigits(vms->oldmessages);
-		dcnum = vms->oldmessages - lastnum;
-		if (dcnum)
-			res = say_and_wait(chan, dcnum, chan->language);
-		if (!res && lastnum) {
-			if (lastnum == 1) 
-				res = ast_play_and_wait(chan, "digits/odno");
-			else
-				res = say_and_wait(chan, lastnum, chan->language);
-		}
-
-		if (!res)
-			res = ast_play_and_wait(chan, (lastnum == 1) ? "vm-staroe" : "vm-staryh");
-	}
-
-	if (!res && !vms->newmessages && !vms->oldmessages) {
-		lastnum = 0;
-		res = ast_play_and_wait(chan, "vm-no");
-	}
-
-	if (!res) {
-		switch (lastnum) {
-		case 1:
-			res = ast_play_and_wait(chan, "vm-soobshenie");
-			break;
-		case 2:
-		case 3:
-		case 4:
-			res = ast_play_and_wait(chan, "vm-soobsheniya");
-			break;
-		default:
-			res = ast_play_and_wait(chan, "vm-soobsheniy");
-			break;
-		}
-	}
-
-	return res;
-}
-
-/* UKRAINIAN syntax */
-/* in ukrainian the syntax is different so we need the following files
- * --------------------------------------------------------
- * /digits/ua/1e 'odne'
- * vm-nove       'nove'
- * vm-stare      'stare'
- */
-
-static int vm_intro_ua(struct ast_channel *chan,struct vm_state *vms)
-{
-	int res;
-	int lastnum = 0;
-	int dcnum;
-
-	res = ast_play_and_wait(chan, "vm-youhave");
-	if (!res && vms->newmessages) {
-		lastnum = get_lastdigits(vms->newmessages);
-		dcnum = vms->newmessages - lastnum;
-		if (dcnum)
-			res = say_and_wait(chan, dcnum, chan->language);
-		if (!res && lastnum) {
-			if (lastnum == 1) 
-				res = ast_play_and_wait(chan, "digits/ua/1e");
-			else
-				res = say_and_wait(chan, lastnum, chan->language);
-		}
-
-		if (!res)
-			res = ast_play_and_wait(chan, (lastnum == 1) ? "vm-nove" : "vm-INBOX");
-
-		if (!res && vms->oldmessages)
-			res = ast_play_and_wait(chan, "vm-and");
-	}
-
-	if (!res && vms->oldmessages) {
-		lastnum = get_lastdigits(vms->oldmessages);
-		dcnum = vms->oldmessages - lastnum;
-		if (dcnum)
-			res = say_and_wait(chan, dcnum, chan->language);
-		if (!res && lastnum) {
-			if (lastnum == 1) 
-				res = ast_play_and_wait(chan, "digits/ua/1e");
-			else
-				res = say_and_wait(chan, lastnum, chan->language);
-		}
-
-		if (!res)
-			res = ast_play_and_wait(chan, (lastnum == 1) ? "vm-stare" : "vm-Old");
-	}
-
-	if (!res && !vms->newmessages && !vms->oldmessages) {
-		lastnum = 0;
-		res = ast_play_and_wait(chan, "vm-no");
-	}
-
-	if (!res) {
-		switch (lastnum) {
-		case 1:
-		case 2:
-		case 3:
-		case 4:
-			res = ast_play_and_wait(chan, "vm-message");
-			break;
-		default:
-			res = ast_play_and_wait(chan, "vm-messages");
-			break;
-		}
-	}
-
-	return res;
-}
-
-
 static int vm_intro(struct ast_channel *chan, struct ast_vm_user *vmu, struct vm_state *vms)
 {
 	char prefile[256];
@@ -6643,9 +6625,9 @@ static int vm_intro(struct ast_channel *chan, struct ast_vm_user *vmu, struct vm
 	} else if (!strcasecmp(chan->language, "no")) {	/* NORWEGIAN syntax */
 		return vm_intro_no(chan, vms);
 	} else if (!strcasecmp(chan->language, "ru")) { /* RUSSIAN syntax */
-		return vm_intro_ru(chan, vms);
+		return vm_intro_multilang(chan, vms, "n");
 	} else if (!strcasecmp(chan->language, "ua")) { /* UKRAINIAN syntax */
-		return vm_intro_ua(chan, vms);
+		return vm_intro_multilang(chan, vms, "n");
 	} else if (!strcasecmp(chan->language, "he")) { /* HEBREW syntax */
 		return vm_intro_he(chan, vms);
 	} else {					/* Default to ENGLISH */
@@ -7745,12 +7727,14 @@ out:
 	if (option_debug > 2)
 		ast_log(LOG_DEBUG, "*** Checking if we can expunge, deleted set to %d, expungeonhangup set to %d\n",deleted,expungeonhangup);
 	if (vmu && deleted == 1 && expungeonhangup == 1 && vms.mailstream != NULL) {
+		ast_mutex_lock(&vms.lock);
 #ifdef HAVE_IMAP_TK2006
 		if (LEVELUIDPLUS (vms.mailstream)) {
 			mail_expunge_full(vms.mailstream,NIL,EX_UID);
 		} else 
 #endif
 			mail_expunge(vms.mailstream);
+		ast_mutex_unlock(&vms.lock);
 	}
 	/*  before we delete the state, we should copy pertinent info
 	 *  back to the persistent model */

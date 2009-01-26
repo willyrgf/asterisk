@@ -155,6 +155,7 @@ static int trunkfreq = 20;
 static int authdebug = 1;
 static int autokill = 0;
 static int iaxcompat = 0;
+static int last_authmethod = 0;
 
 static int iaxdefaultdpcache=10 * 60;	/* Cache dialplan entries for 10 minutes by default */
 
@@ -5606,6 +5607,9 @@ static int register_verify(int callno, struct sockaddr_in *sin, struct iax_ies *
 	p = find_peer(peer, 1);
 	ast_mutex_lock(&iaxsl[callno]);
 	if (!p || !iaxs[callno]) {
+		if (iaxs[callno]) {
+			ast_string_field_set(iaxs[callno], secret, "badsecret");
+		}
 		if (authdebug && !p)
 			ast_log(LOG_NOTICE, "No registration for peer '%s' (from %s)\n", peer, ast_inet_ntoa(sin->sin_addr));
 		goto return_unref;
@@ -5685,21 +5689,24 @@ static int register_verify(int callno, struct sockaddr_in *sin, struct iax_ies *
 			goto return_unref;
 		} else
 			ast_set_flag(&iaxs[callno]->state, IAX_STATE_AUTHENTICATED);
-	} else if (!ast_strlen_zero(md5secret) || !ast_strlen_zero(secret)) {
-		if (authdebug)
-			ast_log(LOG_NOTICE, "Inappropriate authentication received\n");
+	} else if (!ast_strlen_zero(iaxs[callno]->secret) || !ast_strlen_zero(iaxs[callno]->inkeys)) {
+		if (authdebug &&
+			((!ast_strlen_zero(iaxs[callno]->secret) && (p->authmethods & IAX_AUTH_MD5) && !ast_strlen_zero(iaxs[callno]->challenge)) ||
+			 (!ast_strlen_zero(iaxs[callno]->inkeys) && (p->authmethods & IAX_AUTH_RSA) && !ast_strlen_zero(iaxs[callno]->challenge)))) {
+			ast_log(LOG_NOTICE, "Inappropriate authentication received for '%s'\n", p->name);
+		} /* ELSE this is the first time through and no challenge exists, so it's not quite yet a failure. */
 		goto return_unref;
 	}
+	ast_device_state_changed("IAX2/%s", p->name); /* Activate notification */
+
+return_unref:
 	ast_string_field_set(iaxs[callno], peer, peer);
 	/* Choose lowest expiry number */
 	if (expire && (expire < iaxs[callno]->expiry)) 
 		iaxs[callno]->expiry = expire;
 
-	ast_device_state_changed("IAX2/%s", p->name); /* Activate notification */
-
 	res = 0;
 
-return_unref:
 	if (p)
 		peer_unref(p);
 
@@ -6375,24 +6382,30 @@ static int registry_authrequest(int callno)
 	struct iax2_peer *p;
 	char challenge[10];
 	const char *peer_name;
-	int res = -1;
+	int sentauthmethod;
 
 	peer_name = ast_strdupa(iaxs[callno]->peer);
 
 	/* SLD: third call to find_peer in registration */
 	ast_mutex_unlock(&iaxsl[callno]);
-	p = find_peer(peer_name, 1);
+	if ((p = find_peer(peer_name, 1))) {
+		last_authmethod = p->authmethods;
+	}
+
 	ast_mutex_lock(&iaxsl[callno]);
 	if (!iaxs[callno])
 		goto return_unref;
-	if (!p) {
-		ast_log(LOG_WARNING, "No such peer '%s'\n", peer_name);
-		goto return_unref;
-	}
-	
+
 	memset(&ied, 0, sizeof(ied));
-	iax_ie_append_short(&ied, IAX_IE_AUTHMETHODS, p->authmethods);
-	if (p->authmethods & (IAX_AUTH_RSA | IAX_AUTH_MD5)) {
+	/* The selection of which delayed reject is sent may leak information,
+	 * if it sets a static response.  For example, if a host is known to only
+	 * use MD5 authentication, then an RSA response would indicate that the
+	 * peer does not exist, and vice-versa.
+	 * Therefore, we use whatever the last peer used (which may vary over the
+	 * course of a server, which should leak minimal information). */
+	sentauthmethod = p ? p->authmethods : last_authmethod ? last_authmethod : (IAX_AUTH_MD5 | IAX_AUTH_PLAINTEXT);
+	iax_ie_append_short(&ied, IAX_IE_AUTHMETHODS, sentauthmethod);
+	if (sentauthmethod & (IAX_AUTH_RSA | IAX_AUTH_MD5)) {
 		/* Build the challenge */
 		snprintf(challenge, sizeof(challenge), "%d", (int)ast_random());
 		ast_string_field_set(iaxs[callno], challenge, challenge);
@@ -6400,12 +6413,12 @@ static int registry_authrequest(int callno)
 	}
 	iax_ie_append_str(&ied, IAX_IE_USERNAME, peer_name);
 
-	res = 0;
-
 return_unref:
-	peer_unref(p);
+	if (p) {
+		peer_unref(p);
+	}
 
-	return res ? res : send_command(iaxs[callno], AST_FRAME_IAX, IAX_COMMAND_REGAUTH, 0, ied.buf, ied.pos, -1);;
+	return iaxs[callno] ? send_command(iaxs[callno], AST_FRAME_IAX, IAX_COMMAND_REGAUTH, 0, ied.buf, ied.pos, -1) : -1;
 }
 
 static int registry_rerequest(struct iax_ies *ies, int callno, struct sockaddr_in *sin)
@@ -11231,20 +11244,12 @@ static int load_module(void)
 	iax_set_error(iax_error_output);
 	jb_setoutput(jb_error_output, jb_warning_output, NULL);
 	
-#ifdef HAVE_ZAPTEL
-#ifdef ZAPTEL_TIMERACK
-	timingfd = open("/dev/zap/timer", O_RDWR);
-	if (timingfd < 0)
-#endif
-		timingfd = open("/dev/zap/pseudo", O_RDWR);
-	if (timingfd < 0) 
-		ast_log(LOG_WARNING, "Unable to open IAX timing interface: %s\n", strerror(errno));
-#elif defined(HAVE_DAHDI)
+#ifdef HAVE_DAHDI
 #ifdef DAHDI_TIMERACK
-	timingfd = open("/dev/dahdi/timer", O_RDWR);
+	timingfd = open(DAHDI_FILE_TIMER, O_RDWR);
 	if (timingfd < 0)
 #endif
-		timingfd = open("/dev/dahdi/pseudo", O_RDWR);
+		timingfd = open(DAHDI_FILE_PSEUDO, O_RDWR);
 	if (timingfd < 0) 
 		ast_log(LOG_WARNING, "Unable to open IAX timing interface: %s\n", strerror(errno));
 #endif

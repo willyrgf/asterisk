@@ -795,11 +795,7 @@ static struct ast_conference *build_conf(char *confno, char *pin, char *pinadmin
 	/* Setup a new zap conference */
 	ztc.confno = -1;
 	ztc.confmode = DAHDI_CONF_CONFANN | DAHDI_CONF_CONFANNMON;
-#ifdef HAVE_ZAPTEL
-	cnf->fd = open("/dev/zap/pseudo", O_RDWR);
-#else
-	cnf->fd = open("/dev/dahdi/pseudo", O_RDWR);
-#endif
+	cnf->fd = open(DAHDI_FILE_PSEUDO, O_RDWR);
 	if (cnf->fd < 0 || ioctl(cnf->fd, DAHDI_SETCONF, &ztc)) {
 		ast_log(LOG_WARNING, "Unable to open pseudo device\n");
 		if (cnf->fd >= 0)
@@ -1732,11 +1728,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
  zapretry:
 	origfd = chan->fds[0];
 	if (retryzap) {
-#ifdef HAVE_ZAPTEL
-		fd = open("/dev/zap/pseudo", O_RDWR);
-#else
-		fd = open("/dev/dahdi/pseudo", O_RDWR);
-#endif
+		fd = open(DAHDI_FILE_PSEUDO, O_RDWR);
 		if (fd < 0) {
 			ast_log(LOG_WARNING, "Unable to open pseudo channel: %s\n", strerror(errno));
 			goto outrun;
@@ -2477,7 +2469,7 @@ bailoutandtrynormal:
 static struct ast_conference *find_conf_realtime(struct ast_channel *chan, char *confno, int make, int dynamic,
 						 char *dynamic_pin, size_t pin_buf_len, int refcount, struct ast_flags *confflags)
 {
-	struct ast_variable *var;
+	struct ast_variable *var, *save;
 	struct ast_conference *cnf;
 
 	/* Check first in the conference list */
@@ -2499,6 +2491,7 @@ static struct ast_conference *find_conf_realtime(struct ast_channel *chan, char 
 		if (!var)
 			return NULL;
 
+		save = var;
 		while (var) {
 			if (!strcasecmp(var->name, "pin")) {
 				pin = ast_strdupa(var->value);
@@ -2507,7 +2500,7 @@ static struct ast_conference *find_conf_realtime(struct ast_channel *chan, char 
 			}
 			var = var->next;
 		}
-		ast_variables_destroy(var);
+		ast_variables_destroy(save);
 		
 		cnf = build_conf(confno, pin ? pin : "", pinadmin ? pinadmin : "", make, dynamic, refcount);
 	}
@@ -2515,9 +2508,9 @@ static struct ast_conference *find_conf_realtime(struct ast_channel *chan, char 
 	if (cnf) {
 		if (confflags && !cnf->chan &&
 		    !ast_test_flag(confflags, CONFFLAG_QUIET) &&
-		    ast_test_flag(confflags, CONFFLAG_INTROUSER)) {
+		    ast_test_flag(confflags, CONFFLAG_INTROUSER | CONFFLAG_INTROUSERNOREVIEW)) {
 			ast_log(LOG_WARNING, "No %s channel available for conference, user introduction disabled\n", dahdi_chan_name);
-			ast_clear_flag(confflags, CONFFLAG_INTROUSER);
+			ast_clear_flag(confflags, CONFFLAG_INTROUSER | CONFFLAG_INTROUSERNOREVIEW);
 		}
 		
 		if (confflags && !cnf->chan &&
@@ -2609,9 +2602,9 @@ static struct ast_conference *find_conf(struct ast_channel *chan, char *confno, 
 	if (cnf) {
 		if (confflags && !cnf->chan &&
 		    !ast_test_flag(confflags, CONFFLAG_QUIET) &&
-		    ast_test_flag(confflags, CONFFLAG_INTROUSER)) {
+		    ast_test_flag(confflags, CONFFLAG_INTROUSER | CONFFLAG_INTROUSERNOREVIEW)) {
 			ast_log(LOG_WARNING, "No %s channel available for conference, user introduction disabled\n", dahdi_chan_name);
-			ast_clear_flag(confflags, CONFFLAG_INTROUSER);
+			ast_clear_flag(confflags, CONFFLAG_INTROUSER | CONFFLAG_INTROUSERNOREVIEW);
 		}
 		
 		if (confflags && !cnf->chan &&

@@ -595,7 +595,8 @@ static void pbx_destroy(struct ast_pbx *p)
  * Special characters used in patterns:
  *	'_'	underscore is the leading character of a pattern.
  *		In other position it is treated as a regular char.
- *	' ' '-'	space and '-' are separator and ignored.
+ *	' ' '-'	space and '-' are separator and ignored. Why? so
+ *	        patterns like NXX-XXX-XXXX or NXX XXX XXXX will work.
  *	.	one or more of any character. Only allowed at the end of
  *		a pattern.
  *	!	zero or more of anything. Also impacts the result of CANMATCH
@@ -2026,6 +2027,7 @@ void ast_hint_state_changed(const char *device)
 {
 	struct ast_hint *hint;
 
+	ast_rdlock_contexts();
 	AST_LIST_LOCK(&hints);
 
 	AST_LIST_TRAVERSE(&hints, hint, list) {
@@ -2063,6 +2065,7 @@ void ast_hint_state_changed(const char *device)
 	}
 
 	AST_LIST_UNLOCK(&hints);
+	ast_unlock_contexts();
 }
 
 /*! \brief  ast_extension_state_add: Add watcher for extension states */
@@ -5719,7 +5722,7 @@ static int pbx_builtin_background(struct ast_channel *chan, void *data)
 			ast_stopstream(chan);
 		}
 	}
-	if (args.context != chan->context && res) {
+	if (strcmp(args.context, chan->context) && res) {
 		snprintf(chan->exten, sizeof(chan->exten), "%c", res);
 		ast_copy_string(chan->context, args.context, sizeof(chan->context));
 		chan->priority = 0;

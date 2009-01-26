@@ -1363,6 +1363,11 @@ static void __quit_handler(int num)
 	 * is going to exit */
 }
 
+static void __remote_quit_handler(int num)
+{
+	sig_flags.need_quit = 1;
+}
+
 static const char *fix_header(char *outbuf, int maxout, const char *s, char *cmp)
 {
 	const char *c;
@@ -1772,6 +1777,8 @@ static int ast_el_read_char(EditLine *el, char *cp)
 		}
 		res = poll(fds, max, -1);
 		if (res < 0) {
+			if (sig_flags.need_quit)
+				break;
 			if (errno == EINTR)
 				continue;
 			ast_log(LOG_ERROR, "poll failed: %s\n", strerror(errno));
@@ -1825,6 +1832,7 @@ static int ast_el_read_char(EditLine *el, char *cp)
 				if (*tmp == 127) {
 					memmove(tmp, tmp + 1, strlen(tmp));
 					tmp--;
+					res--;
 				}
 			}
 
@@ -2306,6 +2314,11 @@ static void ast_remotecontrol(char *data)
 	char *ebuf;
 	int num = 0;
 
+	memset(&sig_flags, 0, sizeof(sig_flags));
+	signal(SIGINT, __remote_quit_handler);
+	signal(SIGTERM, __remote_quit_handler);
+	signal(SIGHUP, __remote_quit_handler);
+
 	if (read(ast_consock, buf, sizeof(buf)) < 0) {
 		ast_log(LOG_ERROR, "read() failed: %s\n", strerror(errno));
 		return;
@@ -2313,6 +2326,9 @@ static void ast_remotecontrol(char *data)
 	if (data) {
 		if (write(ast_consock, data, strlen(data) + 1) < 0) {
 			ast_log(LOG_ERROR, "write() failed: %s\n", strerror(errno));
+			if (sig_flags.need_quit == 1) {
+				return;
+			}
 		}
 	}
 	stringp = buf;
@@ -2358,6 +2374,10 @@ static void ast_remotecontrol(char *data)
 			char buf[512] = "", *curline = buf, *nextline;
 			int not_written = 1;
 
+			if (sig_flags.need_quit == 1) {
+				break;
+			}
+
 			if (read(ast_consock, buf, sizeof(buf) - 1) <= 0) {
 				break;
 			}
@@ -2388,6 +2408,10 @@ static void ast_remotecontrol(char *data)
 	}
 	for (;;) {
 		ebuf = (char *)el_gets(el, &num);
+
+		if (sig_flags.need_quit == 1) {
+			break;
+		}
 
 		if (!ebuf && write(1, "", 1) < 0)
 			break;
@@ -3011,53 +3035,36 @@ int main(int argc, char *argv[])
 	dahdi_chan_name_len = &_dahdi_chan_name_len;
 	dahdi_chan_mode = &_dahdi_chan_mode;
 
-#ifdef HAVE_ZAPTEL
+#ifdef HAVE_DAHDI
 	{
 		int fd;
 		int x = 160;
-		fd = open("/dev/zap/timer", O_RDWR);
+		fd = open(DAHDI_FILE_TIMER, O_RDWR);
 		if (fd >= 0) {
 			if (ioctl(fd, DAHDI_TIMERCONFIG, &x)) {
-				ast_log(LOG_ERROR, "You have Zaptel built and drivers loaded, but the Zaptel timer test failed to set ZT_TIMERCONFIG to %d.\n", x);
+				ast_log(LOG_ERROR, "You have " DAHDI_NAME
+						" built and drivers loaded, but the "
+						DAHDI_NAME " timer test failed to set DAHDI_TIMERCONFIG to %d.\n", x);
 				exit(1);
 			}
 			if ((x = ast_wait_for_input(fd, 300)) < 0) {
-				ast_log(LOG_ERROR, "You have Zaptel built and drivers loaded, but the Zaptel timer could not be polled during the Zaptel timer test.\n");
-				exit(1);
-			}
-			if (!x) {
-				const char zaptel_timer_error[] = {
-					"Asterisk has detected a problem with your Zaptel configuration and will shutdown for your protection.  You have options:"
-					"\n\t1. You only have to compile Zaptel support into Asterisk if you need it.  One option is to recompile without Zaptel support."
-					"\n\t2. You only have to load Zaptel drivers if you want to take advantage of Zaptel services.  One option is to unload zaptel modules if you don't need them."
-					"\n\t3. If you need Zaptel services, you must correctly configure Zaptel."
-				};
-				ast_log(LOG_ERROR, "%s\n", zaptel_timer_error);
-				exit(1);
-			}
-			close(fd);
-		}
-	}
-#elif defined(HAVE_DAHDI)
-{
-		int fd;
-		int x = 160;
-		fd = open("/dev/dahdi/timer", O_RDWR);
-		if (fd >= 0) {
-			if (ioctl(fd, DAHDI_TIMERCONFIG, &x)) {
-				ast_log(LOG_ERROR, "You have DAHDI built and drivers loaded, but the DAHDI timer test failed to set DAHDI_TIMERCONFIG to %d.\n", x);
-				exit(1);
-			}
-			if ((x = ast_wait_for_input(fd, 300)) < 0) {
-				ast_log(LOG_ERROR, "You have DAHDI built and drivers loaded, but the DAHDI timer could not be polled during the DAHDI timer test.\n");
+				ast_log(LOG_ERROR, "You have " DAHDI_NAME 
+						"built and drivers loaded, but the " 
+						DAHDI_NAME " timer could not be polled during the " 
+						DAHDI_NAME " timer test.\n");
 				exit(1);
 			}
 			if (!x) {
 				const char dahdi_timer_error[] = {
-					"Asterisk has detected a problem with your DAHDI configuration and will shutdown for your protection.  You have options:"
-					"\n\t1. You only have to compile DAHDI support into Asterisk if you need it.  One option is to recompile without DAHDI support."
-					"\n\t2. You only have to load DAHDI drivers if you want to take advantage of DAHDI services.  One option is to unload DAHDI modules if you don't need them."
-					"\n\t3. If you need DAHDI services, you must correctly configure DAHDI."
+					"Asterisk has detected a problem with your " DAHDI_NAME 
+						" configuration and will shutdown for your protection.  You have options:"
+					"\n\t1. You only have to compile " DAHDI_NAME 
+						" support into Asterisk if you need it.  One option is to recompile without " 
+						DAHDI_NAME " support."
+					"\n\t2. You only have to load " DAHDI_NAME " drivers if you want to take advantage of " 
+						DAHDI_NAME " services.  One option is to unload " 
+						DAHDI_NAME " modules if you don't need them."
+					"\n\t3. If you need Zaptel services, you must correctly configure " DAHDI_NAME "."
 				};
 				ast_log(LOG_ERROR, "%s\n", dahdi_timer_error);
 				exit(1);
@@ -3065,7 +3072,6 @@ int main(int argc, char *argv[])
 			close(fd);
 		}
 	}
-
 #endif
 	threadstorage_init();
 

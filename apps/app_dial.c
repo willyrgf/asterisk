@@ -564,6 +564,9 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in, struct dial_l
 							ast_set_callerid(c, S_OR(in->macroexten, in->exten), get_cid_name(cidname, sizeof(cidname), in), NULL);
 						}
 					}
+					if (single) {
+						ast_indicate(in, -1);
+					}
 				}
 				/* Hangup the original channel now, in case we needed it */
 				ast_hangup(winner);
@@ -876,7 +879,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 	char numsubst[256];
 	char cidname[AST_MAX_EXTENSION] = "";
 	int privdb_val = 0;
-	unsigned int calldurationlimit = 0;
+	int calldurationlimit = -1;
 	long timelimit = 0;
 	long play_warning = 0;
 	long warning_freq = 0;
@@ -1017,7 +1020,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		start_sound = S_OR(var, NULL);	/* XXX not much of a point in doing this! */
 
 		/* undo effect of S(x) in case they are both used */
-		calldurationlimit = 0;
+		calldurationlimit = -1;
 		/* more efficient to do it like S(x) does since no advanced opts */
 		if (!play_warning && !start_sound && !end_sound && timelimit) {
 			calldurationlimit = timelimit / 1000;
@@ -1751,7 +1754,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		if (!res) {
 			if (calldurationlimit > 0) {
 				peer->whentohangup = time(NULL) + calldurationlimit;
-			} else if (timelimit > 0) {
+			} else if (calldurationlimit != -1 && timelimit > 0) {
 				/* Not enough granularity to make it less, but we can't use the special value 0 */
 				peer->whentohangup = time(NULL) + 1;
 			}
@@ -1837,37 +1840,29 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			res = -1;
 		}
 
-		if (res != AST_PBX_NO_HANGUP_PEER && res != AST_PBX_NO_HANGUP_PEER_PARKED) {
-			if (res != AST_PBX_KEEPALIVE && !chan->_softhangup)
-				chan->hangupcause = peer->hangupcause;
-			ast_hangup(peer);
-		}
+		if (!chan->_softhangup)
+			chan->hangupcause = peer->hangupcause;
+		ast_hangup(peer);
 	}	
 out:
-	/* cleaning up chan is not a good idea here if AST_PBX_KEEPALIVE
-	   is returned; chan will get the love it needs from another
-	   thread */
-	if (res != AST_PBX_KEEPALIVE) {
-		if (moh) {
-			moh = 0;
-			ast_moh_stop(chan);
-		} else if (sentringing) {
-			sentringing = 0;
-			ast_indicate(chan, -1);
-		}
-		ast_rtp_early_bridge(chan, NULL);
-		hanguptree(outgoing, NULL);
-		pbx_builtin_setvar_helper(chan, "DIALSTATUS", status);
-		if (option_debug)
-			ast_log(LOG_DEBUG, "Exiting with DIALSTATUS=%s.\n", status);
-		
-		if ((ast_test_flag(peerflags, OPT_GO_ON)) && (!chan->_softhangup) && (res != AST_PBX_KEEPALIVE)) {
-			if (timelimit)
-				chan->whentohangup = 0;
-			res = 0;
-		}
+	if (moh) {
+		moh = 0;
+		ast_moh_stop(chan);
+	} else if (sentringing) {
+		sentringing = 0;
+		ast_indicate(chan, -1);
 	}
-
+	ast_rtp_early_bridge(chan, NULL);
+	hanguptree(outgoing, NULL);
+	pbx_builtin_setvar_helper(chan, "DIALSTATUS", status);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Exiting with DIALSTATUS=%s.\n", status);
+	
+	if (ast_test_flag(peerflags, OPT_GO_ON) && !chan->_softhangup) {
+		if (calldurationlimit)
+			chan->whentohangup = 0;
+		res = 0;
+	}
 done:
 	ast_module_user_remove(u);    
 	return res;
