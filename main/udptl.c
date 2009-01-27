@@ -74,8 +74,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define TRUE (!FALSE)
 #endif
 
-static int udptlstart;
-static int udptlend;
+static int udptlstart = 4500;
+static int udptlend = 4599;
 static int udptldebug;	                    /*!< Are we debugging? */
 static struct sockaddr_in udptldebugaddr;   /*!< Debug packets to/from this host */
 #ifdef SO_NO_CHECK
@@ -176,15 +176,15 @@ static inline int udptl_debug_test_addr(struct sockaddr_in *addr)
 
 static int decode_length(uint8_t *buf, int limit, int *len, int *pvalue)
 {
+	if (*len >= limit)
+		return -1;
 	if ((buf[*len] & 0x80) == 0) {
-		if (*len >= limit)
-			return -1;
 		*pvalue = buf[*len];
 		(*len)++;
 		return 0;
 	}
 	if ((buf[*len] & 0x40) == 0) {
-		if (*len >= limit - 1)
+		if (*len == limit - 1)
 			return -1;
 		*pvalue = (buf[*len] & 0x3F) << 8;
 		(*len)++;
@@ -192,8 +192,6 @@ static int decode_length(uint8_t *buf, int limit, int *len, int *pvalue)
 		(*len)++;
 		return 0;
 	}
-	if (*len >= limit)
-		return -1;
 	*pvalue = (buf[*len] & 0x3F) << 14;
 	(*len)++;
 	/* Indicate we have a fragment */
@@ -205,12 +203,12 @@ static int decode_open_type(uint8_t *buf, int limit, int *len, const uint8_t **p
 {
 	int octet_cnt;
 	int octet_idx;
-	int stat;
+	int length;
 	int i;
 	const uint8_t **pbuf;
 
 	for (octet_idx = 0, *p_num_octets = 0; ; octet_idx += octet_cnt) {
-		if ((stat = decode_length(buf, limit, len, &octet_cnt)) < 0)
+		if ((length = decode_length(buf, limit, len, &octet_cnt)) < 0)
 			return -1;
 		if (octet_cnt > 0) {
 			*p_num_octets += octet_cnt;
@@ -224,7 +222,7 @@ static int decode_open_type(uint8_t *buf, int limit, int *len, const uint8_t **p
 			*pbuf = &buf[*len];
 			*len += octet_cnt;
 		}
-		if (stat == 0)
+		if (length == 0)
 			break;
 	}
 	return 0;
@@ -289,7 +287,7 @@ static int encode_open_type(uint8_t *buf, int *len, const uint8_t *data, int num
 
 static int udptl_rx_packet(struct ast_udptl *s, uint8_t *buf, int len)
 {
-	int stat;
+	int stat1;
 	int stat2;
 	int i;
 	int j;
@@ -324,7 +322,7 @@ static int udptl_rx_packet(struct ast_udptl *s, uint8_t *buf, int len)
 	ptr += 2;
 
 	/* Break out the primary packet */
-	if ((stat = decode_open_type(buf, len, &ptr, &ifp, &ifp_len)) != 0)
+	if ((stat1 = decode_open_type(buf, len, &ptr, &ifp, &ifp_len)) != 0)
 		return -1;
 	/* Decode error_recovery */
 	if (ptr + 1 > len)
@@ -339,7 +337,7 @@ static int udptl_rx_packet(struct ast_udptl *s, uint8_t *buf, int len)
 				if ((stat2 = decode_length(buf, len, &ptr, &count)) < 0)
 					return -1;
 				for (i = 0; i < count; i++) {
-					if ((stat = decode_open_type(buf, len, &ptr, &bufs[total_count + i], &lengths[total_count + i])) != 0)
+					if ((stat1 = decode_open_type(buf, len, &ptr, &bufs[total_count + i], &lengths[total_count + i])) != 0)
 						return -1;
 				}
 				total_count += count;
@@ -411,7 +409,7 @@ static int udptl_rx_packet(struct ast_udptl *s, uint8_t *buf, int len)
 
 		/* Decode the elements */
 		for (i = 0; i < entries; i++) {
-			if ((stat = decode_open_type(buf, len, &ptr, &data, &s->rx[x].fec_len[i])) != 0)
+			if ((stat1 = decode_open_type(buf, len, &ptr, &data, &s->rx[x].fec_len[i])) != 0)
 				return -1;
 			if (s->rx[x].fec_len[i] > LOCAL_FAX_MAX_DATAGRAM)
 				return -1;
@@ -808,7 +806,7 @@ struct ast_udptl *ast_udptl_new_with_bindaddr(struct sched_context *sched, struc
 		setsockopt(udptl->fd, SOL_SOCKET, SO_NO_CHECK, &nochecksums, sizeof(nochecksums));
 #endif
 	/* Find us a place */
-	x = (ast_random() % (udptlend - udptlstart)) + udptlstart;
+	x = (udptlstart == udptlend) ? udptlstart : (ast_random() % (udptlend - udptlstart)) + udptlstart;
 	startplace = x;
 	for (;;) {
 		udptl->us.sin_port = htons(x);
@@ -1089,66 +1087,6 @@ int ast_udptl_bridge(struct ast_channel *c0, struct ast_channel *c1, int flags, 
 	return -1;
 }
 
-static char *handle_cli_udptl_debug_deprecated(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
-{
-	struct hostent *hp;
-	struct ast_hostent ahp;
-	int port;
-	char *p;
-	char *arg;
-
-	switch (cmd) {
-	case CLI_INIT:
-		e->command = "udptl debug [off|ip]";
-		e->usage = 
-			"Usage: udptl debug [off]|[ip host[:port]]\n"
-			"       Enable or disable dumping of UDPTL packets.\n"
-			"       If ip is specified, limit the dumped packets to those to and from\n"
-			"       the specified 'host' with optional port.\n";
-		return NULL;
-	case CLI_GENERATE:
-		return NULL;
-	}
-
-	if (a->argc < 2 || a->argc > 4)
-		return CLI_SHOWUSAGE;
-
-	if (a->argc == 2) { 
-		udptldebug = 1;
-		memset(&udptldebugaddr, 0, sizeof(udptldebugaddr));
-		ast_cli(a->fd, "UDPTL Debugging Enabled\n");
-	} else if (a->argc == 3) {
-		if (strncasecmp(a->argv[2], "off", 3))
-			return CLI_SHOWUSAGE;
-		udptldebug = 0;
-		ast_cli(a->fd, "UDPTL Debugging Disabled\n");
-	} else {
-		if (strncasecmp(a->argv[2], "ip", 2))
-			return CLI_SHOWUSAGE;
-		port = 0;
-		arg = a->argv[3];
-		p = strstr(arg, ":");
-		if (p) {
-			*p = '\0';
-			p++;
-			port = atoi(p);
-		}
-		hp = ast_gethostbyname(arg, &ahp);
-		if (hp == NULL)
-			return CLI_SHOWUSAGE;
-		udptldebugaddr.sin_family = AF_INET;
-		memcpy(&udptldebugaddr.sin_addr, hp->h_addr, sizeof(udptldebugaddr.sin_addr));
-		udptldebugaddr.sin_port = htons(port);
-		if (port == 0)
-			ast_cli(a->fd, "UDPTL Debugging Enabled for IP: %s\n", ast_inet_ntoa(udptldebugaddr.sin_addr));
-		else
-			ast_cli(a->fd, "UDPTL Debugging Enabled for IP: %s:%d\n", ast_inet_ntoa(udptldebugaddr.sin_addr), port);
-		udptldebug = 1;
-	}
-
-	return CLI_SUCCESS;
-}
-
 static char *handle_cli_udptl_set_debug(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	struct hostent *hp;
@@ -1211,10 +1149,9 @@ static char *handle_cli_udptl_set_debug(struct ast_cli_entry *e, int cmd, struct
 	return CLI_SUCCESS;
 }
 
-static struct ast_cli_entry cli_handle_udptl_debug_deprecated = AST_CLI_DEFINE(handle_cli_udptl_debug_deprecated, "Enable/Disable UDPTL debugging");
 
 static struct ast_cli_entry cli_udptl[] = {
-	AST_CLI_DEFINE(handle_cli_udptl_set_debug, "Enable/Disable UDPTL debugging", .deprecate_cmd = &cli_handle_udptl_debug_deprecated)
+	AST_CLI_DEFINE(handle_cli_udptl_set_debug, "Enable/Disable UDPTL debugging")
 };
 
 static void __ast_udptl_reload(int reload)
@@ -1223,8 +1160,10 @@ static void __ast_udptl_reload(int reload)
 	const char *s;
 	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
 
-	if ((cfg = ast_config_load2("udptl.conf", "udptl", config_flags)) == CONFIG_STATUS_FILEUNCHANGED)
+	cfg = ast_config_load2("udptl.conf", "udptl", config_flags);
+	if (cfg == CONFIG_STATUS_FILEMISSING || cfg == CONFIG_STATUS_FILEUNCHANGED || cfg == CONFIG_STATUS_FILEINVALID) {
 		return;
+	}
 
 	udptlstart = 4500;
 	udptlend = 4999;
@@ -1304,6 +1243,6 @@ int ast_udptl_reload(void)
 
 void ast_udptl_init(void)
 {
-	ast_cli_register_multiple(cli_udptl, sizeof(cli_udptl) / sizeof(struct ast_cli_entry));
+	ast_cli_register_multiple(cli_udptl, ARRAY_LEN(cli_udptl));
 	__ast_udptl_reload(0);
 }

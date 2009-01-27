@@ -59,6 +59,11 @@ struct ht_element
 	char *val;
 };
 
+char *pbx_substitute_variables_helper_full(struct ast_channel *chan, struct varshead *head, const char *cp1, char *cp2, int maxlen, size_t *used);
+char *pbx_substitute_variables_helper_full(struct ast_channel *chan, struct varshead *head, const char *cp1, char *cp2, int maxlen, size_t *used)
+{
+	return NULL;
+}
 
 static int hash_string(const void *obj, const int flags)
 {
@@ -83,7 +88,7 @@ static int hash_string(const void *obj, const int flags)
 static int hashtab_compare_strings(void *a, void *b, int flags)
 {
 	const struct ht_element *ae = a, *be = b;
-	return !strcmp(ae->key, be->key) ? CMP_MATCH : 0;
+	return !strcmp(ae->key, be->key) ? CMP_MATCH | CMP_STOP : 0;
 }
 
 /* random numbers */

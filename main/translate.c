@@ -451,7 +451,7 @@ static void rebuild_matrix(int samples)
 
 	ast_debug(1, "Resetting translation matrix\n");
 
-	bzero(tr_matrix, sizeof(tr_matrix));
+	memset(tr_matrix, '\0', sizeof(tr_matrix));
 
 	/* first, compute all direct costs */
 	AST_RWLIST_TRAVERSE(&translators, t, list) {
@@ -503,7 +503,8 @@ static void rebuild_matrix(int samples)
 					tr_matrix[x][z].step = tr_matrix[x][y].step;
 					tr_matrix[x][z].cost = newcost;
 					tr_matrix[x][z].multistep = 1;
-					ast_debug(3, "Discovered %d cost path from %s to %s, via %d\n", tr_matrix[x][z].cost, ast_getformatname(x), ast_getformatname(z), y);
+					ast_debug(3, "Discovered %d cost path from %s to %s, via %s\n", tr_matrix[x][z].cost,
+						  ast_getformatname(1 << x), ast_getformatname(1 << z), ast_getformatname(1 << y));
 					changed++;
 				}
 			}
@@ -597,7 +598,7 @@ static char *handle_cli_core_show_translation(struct ast_cli_entry *e, int cmd, 
 			}
 		}
 		ast_str_append(&out, -1, "\n");
-		ast_cli(a->fd, "%s", out->str);			
+		ast_cli(a->fd, "%s", ast_str_buffer(out));			
 	}
 	AST_RWLIST_UNLOCK(&translators);
 	return CLI_SUCCESS;
@@ -675,7 +676,7 @@ int __ast_register_translator(struct ast_translator *t, struct ast_module *mod)
 			    ast_getformatname(1 << t->srcfmt), ast_getformatname(1 << t->dstfmt), t->cost);
 
 	if (!added_cli) {
-		ast_cli_register_multiple(cli_translate, sizeof(cli_translate) / sizeof(struct ast_cli_entry));
+		ast_cli_register_multiple(cli_translate, ARRAY_LEN(cli_translate));
 		added_cli++;
 	}
 

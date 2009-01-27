@@ -226,68 +226,6 @@ struct hostent *ast_gethostbyname(const char *host, struct ast_hostent *hp)
 	return &hp->hp;
 }
 
-
-
-AST_MUTEX_DEFINE_STATIC(test_lock);
-AST_MUTEX_DEFINE_STATIC(test_lock2);
-static pthread_t test_thread; 
-static int lock_count = 0;
-static int test_errors = 0;
-
-/*! \brief This is a regression test for recursive mutexes.
-   test_for_thread_safety() will return 0 if recursive mutex locks are
-   working properly, and non-zero if they are not working properly. */
-static void *test_thread_body(void *data) 
-{ 
-	ast_mutex_lock(&test_lock);
-	lock_count += 10;
-	if (lock_count != 10) 
-		test_errors++;
-	ast_mutex_lock(&test_lock);
-	lock_count += 10;
-	if (lock_count != 20) 
-		test_errors++;
-	ast_mutex_lock(&test_lock2);
-	ast_mutex_unlock(&test_lock);
-	lock_count -= 10;
-	if (lock_count != 10) 
-		test_errors++;
-	ast_mutex_unlock(&test_lock);
-	lock_count -= 10;
-	ast_mutex_unlock(&test_lock2);
-	if (lock_count != 0) 
-		test_errors++;
-	return NULL;
-} 
-
-int test_for_thread_safety(void)
-{ 
-	ast_mutex_lock(&test_lock2);
-	ast_mutex_lock(&test_lock);
-	lock_count += 1;
-	ast_mutex_lock(&test_lock);
-	lock_count += 1;
-	ast_pthread_create(&test_thread, NULL, test_thread_body, NULL); 
-	usleep(100);
-	if (lock_count != 2) 
-		test_errors++;
-	ast_mutex_unlock(&test_lock);
-	lock_count -= 1;
-	usleep(100); 
-	if (lock_count != 1) 
-		test_errors++;
-	ast_mutex_unlock(&test_lock);
-	lock_count -= 1;
-	if (lock_count != 0) 
-		test_errors++;
-	ast_mutex_unlock(&test_lock2);
-	usleep(100);
-	if (lock_count != 0) 
-		test_errors++;
-	pthread_join(test_thread, NULL);
-	return(test_errors);          /* return 0 on success. */
-}
-
 /*! \brief Produce 32 char MD5 hash of value. */
 void ast_md5_hash(char *output, char *input)
 {
@@ -582,6 +520,12 @@ static void lock_info_destroy(void *data)
 
 
 	for (i = 0; i < lock_info->num_locks; i++) {
+		if (lock_info->locks[i].pending == -1) {
+			/* This just means that the last lock this thread went for was by
+			 * using trylock, and it failed.  This is fine. */
+			break;
+		}
+
 		ast_log(LOG_ERROR, 
 			"Thread '%s' still has a lock! - '%s' (%p) from '%s' in %s:%d!\n", 
 			lock_info->thread_name,
@@ -882,7 +826,7 @@ void log_show_lock(void *this_lock_addr)
 			   it's acquired... */
 			if (lock_info->locks[i].lock_addr == this_lock_addr) {
 				append_lock_information(&str, lock_info, i);
-				ast_log(LOG_NOTICE, "%s", str->str);
+				ast_log(LOG_NOTICE, "%s", ast_str_buffer(str));
 				break;
 			}
 		}
@@ -955,7 +899,7 @@ static char *handle_show_locks(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	if (!str)
 		return CLI_FAILURE;
 
-	ast_cli(a->fd, "%s", str->str);
+	ast_cli(a->fd, "%s", ast_str_buffer(str));
 
 	ast_free(str);
 
@@ -1066,8 +1010,11 @@ int ast_pthread_create_stack(pthread_t *thread, pthread_attr_t *attr, void *(*st
 		a->start_routine = start_routine;
 		a->data = data;
 		start_routine = dummy_start;
-		asprintf(&a->name, "%-20s started at [%5d] %s %s()",
-			 start_fn, line, file, caller);
+		if (asprintf(&a->name, "%-20s started at [%5d] %s %s()",
+			     start_fn, line, file, caller) < 0) {
+			ast_log(LOG_WARNING, "asprintf() failed: %s\n", strerror(errno));
+			a->name = NULL;
+		}
 		data = a;
 	}
 #endif /* !LOW_MEMORY */
@@ -1110,6 +1057,48 @@ int ast_wait_for_input(int fd, int ms)
 	return poll(pfd, 1, ms);
 }
 
+static int ast_wait_for_output(int fd, int timeoutms)
+{
+	struct pollfd pfd = {
+		.fd = fd,
+		.events = POLLOUT,
+	};
+	int res;
+	struct timeval start = ast_tvnow();
+	int elapsed = 0;
+
+	/* poll() until the fd is writable without blocking */
+	while ((res = poll(&pfd, 1, timeoutms - elapsed)) <= 0) {
+		if (res == 0) {
+			/* timed out. */
+			ast_log(LOG_NOTICE, "Timed out trying to write\n");
+			return -1;
+		} else if (res == -1) {
+			/* poll() returned an error, check to see if it was fatal */
+
+			if (errno == EINTR || errno == EAGAIN) {
+				elapsed = ast_tvdiff_ms(ast_tvnow(), start);
+				if (elapsed >= timeoutms) {
+					return -1;
+				}
+				/* This was an acceptable error, go back into poll() */
+				continue;
+			}
+
+			/* Fatal error, bail. */
+			ast_log(LOG_ERROR, "poll returned error: %s\n", strerror(errno));
+
+			return -1;
+		}
+		elapsed = ast_tvdiff_ms(ast_tvnow(), start);
+		if (elapsed >= timeoutms) {
+			return -1;
+		}
+	}
+
+	return 0;
+}
+
 /*!
  * Try to write string, but wait no more than ms milliseconds before timing out.
  *
@@ -1118,39 +1107,101 @@ int ast_wait_for_input(int fd, int ms)
  * have a need to wait.  This way, we get better performance.
  * If the descriptor is blocking, all assumptions on the guaranteed
  * detail do not apply anymore.
- * Also note that in the current implementation, the delay is per-write,
- * so you still have no guarantees, anyways.
- * Fortunately the routine is only used in a few places (cli.c, manager.c,
- * res_agi.c) so it is reasonably easy to check how it behaves there.
- *
- * XXX We either need to fix the code, or fix the documentation.
  */
 int ast_carefulwrite(int fd, char *s, int len, int timeoutms) 
 {
-	/* Try to write string, but wait no more than ms milliseconds
-	   before timing out */
+	struct timeval start = ast_tvnow();
 	int res = 0;
-	struct pollfd fds[1];
+	int elapsed = 0;
+
 	while (len) {
-		res = write(fd, s, len);
-		if ((res < 0) && (errno != EAGAIN)) {
+		if (ast_wait_for_output(fd, timeoutms - elapsed)) {
 			return -1;
 		}
-		if (res < 0)
+
+		res = write(fd, s, len);
+
+		if (res < 0 && errno != EAGAIN && errno != EINTR) {
+			/* fatal error from write() */
+			ast_log(LOG_ERROR, "write() returned error: %s\n", strerror(errno));
+			return -1;
+		}
+
+		if (res < 0) {
+			/* It was an acceptable error */
 			res = 0;
+		}
+
+		/* Update how much data we have left to write */
 		len -= res;
 		s += res;
 		res = 0;
-		if (len) {
-			fds[0].fd = fd;
-			fds[0].events = POLLOUT;
-			/* Wait until writable again */
-			res = poll(fds, 1, timeoutms);
-			if (res < 1)
-				return -1;
+
+		elapsed = ast_tvdiff_ms(ast_tvnow(), start);
+		if (elapsed >= timeoutms) {
+			/* We've taken too long to write 
+			 * This is only an error condition if we haven't finished writing. */
+			res = len ? -1 : 0;
+			break;
 		}
 	}
+
 	return res;
+}
+
+int ast_careful_fwrite(FILE *f, int fd, const char *src, size_t len, int timeoutms)
+{
+	struct timeval start = ast_tvnow();
+	int n = 0;
+	int elapsed = 0;
+
+	while (len) {
+		if (ast_wait_for_output(fd, timeoutms - elapsed)) {
+			/* poll returned a fatal error, so bail out immediately. */
+			return -1;
+		}
+
+		/* Clear any errors from a previous write */
+		clearerr(f);
+
+		n = fwrite(src, 1, len, f);
+
+		if (ferror(f) && errno != EINTR && errno != EAGAIN) {
+			/* fatal error from fwrite() */
+			if (!feof(f)) {
+				/* Don't spam the logs if it was just that the connection is closed. */
+				ast_log(LOG_ERROR, "fwrite() returned error: %s\n", strerror(errno));
+			}
+			n = -1;
+			break;
+		}
+
+		/* Update for data already written to the socket */
+		len -= n;
+		src += n;
+
+		elapsed = ast_tvdiff_ms(ast_tvnow(), start);
+		if (elapsed >= timeoutms) {
+			/* We've taken too long to write 
+			 * This is only an error condition if we haven't finished writing. */
+			n = len ? -1 : 0;
+			break;
+		}
+	}
+
+	while (fflush(f)) {
+		if (errno == EAGAIN || errno == EINTR) {
+			continue;
+		}
+		if (!feof(f)) {
+			/* Don't spam the logs if it was just that the connection is closed. */
+			ast_log(LOG_ERROR, "fflush() returned error: %s\n", strerror(errno));
+		}
+		n = -1;
+		break;
+	}
+
+	return n < 0 ? -1 : 0;
 }
 
 char *ast_strip_quoted(char *s, const char *beg_quotes, const char *end_quotes)
@@ -1534,7 +1585,6 @@ int __ast_string_field_ptr_grow(struct ast_string_field_mgr *mgr, size_t needed,
 	return 0;
 }
 
-__attribute((format (printf, 4, 0)))
 void __ast_string_field_ptr_build_va(struct ast_string_field_mgr *mgr,
 				     struct ast_string_field_pool **pool_head,
 				     const ast_string_field *ptr, const char *format, va_list ap1, va_list ap2)
@@ -1566,7 +1616,6 @@ void __ast_string_field_ptr_build_va(struct ast_string_field_mgr *mgr,
 	mgr->used += needed;
 }
 
-__attribute((format (printf, 4, 5)))
 void __ast_string_field_ptr_build(struct ast_string_field_mgr *mgr,
 				  struct ast_string_field_pool **pool_head,
 				  const ast_string_field *ptr, const char *format, ...)
@@ -1646,59 +1695,6 @@ int ast_get_time_t(const char *src, time_t *dst, time_t _default, int *consumed)
 		return 0;
 	} else
 		return -1;
-}
-
-/*!
- * core handler for dynamic strings.
- * This is not meant to be called directly, but rather through the
- * various wrapper macros
- *	ast_str_set(...)
- *	ast_str_append(...)
- *	ast_str_set_va(...)
- *	ast_str_append_va(...)
- */
-
-__attribute__((format (printf, 4, 0)))
-int __ast_str_helper(struct ast_str **buf, size_t max_len,
-	int append, const char *fmt, va_list ap)
-{
-	int res, need;
-	int offset = (append && (*buf)->len) ? (*buf)->used : 0;
-
-	if (max_len < 0)
-		max_len = (*buf)->len;	/* don't exceed the allocated space */
-	/*
-	 * Ask vsnprintf how much space we need. Remember that vsnprintf
-	 * does not count the final '\0' so we must add 1.
-	 */
-	res = vsnprintf((*buf)->str + offset, (*buf)->len - offset, fmt, ap);
-
-	need = res + offset + 1;
-	/*
-	 * If there is not enough space and we are below the max length,
-	 * reallocate the buffer and return a message telling to retry.
-	 */
-	if (need > (*buf)->len && (max_len == 0 || (*buf)->len < max_len) ) {
-		if (max_len && max_len < need)	/* truncate as needed */
-			need = max_len;
-		else if (max_len == 0)	/* if unbounded, give more room for next time */
-			need += 16 + need/4;
-		if (0)	/* debugging */
-			ast_verbose("extend from %d to %d\n", (int)(*buf)->len, need);
-		if (ast_str_make_space(buf, need)) {
-			ast_verbose("failed to extend from %d to %d\n", (int)(*buf)->len, need);
-			return AST_DYNSTR_BUILD_FAILED;
-		}
-		(*buf)->str[offset] = '\0';	/* Truncate the partial write. */
-
-		/* va_end() and va_start() must be done before calling
-		 * vsnprintf() again. */
-		return AST_DYNSTR_BUILD_RETRY;
-	}
-	/* update space used, keep in mind the truncation */
-	(*buf)->used = (res + offset > (*buf)->len) ? (*buf)->len : res + offset;
-
-	return res;
 }
 
 void ast_enable_packet_fragmentation(int sock)

@@ -250,11 +250,11 @@ void ast_module_unref(struct ast_module *);
 		flags_to_set,				\
 		AST_BUILDOPT_SUM,			\
 	};						\
-	static void  __attribute__ ((constructor)) __reg_module(void) \
+	static void  __attribute__((constructor)) __reg_module(void) \
 	{ \
 		ast_module_register(&__mod_info); \
 	} \
-	static void  __attribute__ ((destructor)) __unreg_module(void) \
+	static void  __attribute__((destructor)) __unreg_module(void) \
 	{ \
 		ast_module_unregister(&__mod_info); \
 	} \
@@ -344,11 +344,11 @@ static void __restore_globals(void)
 		.buildopt_sum = AST_BUILDOPT_SUM,		\
 		fields						\
 	};							\
-	static void  __attribute__ ((constructor)) __reg_module(void) \
+	static void  __attribute__((constructor)) __reg_module(void) \
 	{ \
 		ast_module_register(&__mod_info); \
 	} \
-	static void  __attribute__ ((destructor)) __unreg_module(void) \
+	static void  __attribute__((destructor)) __unreg_module(void) \
 	{ \
 		ast_module_unregister(&__mod_info); \
 	} \
@@ -379,6 +379,23 @@ static void __restore_globals(void)
  * \retval -1 failure.
  */
 #define ast_register_application(app, execute, synopsis, description) ast_register_application2(app, execute, synopsis, description, ast_module_info->self)
+
+/*! 
+ * \brief Register an application using XML documentation.
+ *
+ * \param app Short name of the application
+ * \param execute a function callback to execute the application. It should return
+ *                non-zero if the channel needs to be hung up.
+ * 
+ * This registers an application with Asterisk's internal application list. 
+ * \note The individual applications themselves are responsible for registering and unregistering
+ *       and unregistering their own CLI commands.
+ * 
+ * \retval 0 success 
+ * \retval -1 failure.
+ */
+#define ast_register_application_xml(app, execute) ast_register_application(app, execute, NULL, NULL)
+
 
 /*!
  * \brief Register an application.

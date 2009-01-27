@@ -24,6 +24,8 @@
 
 #include "asterisk.h"
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+#include "asterisk.h"
+
 #include <newt.h>
 #include <stdio.h>
 #include <sys/time.h>
@@ -145,14 +147,18 @@ static void del_chan(char *name)
 }
 
 
-static void __attribute__((format (printf, 2, 3))) fdprintf(int fd, char *fmt, ...)
+static void __attribute__((format(printf, 2, 3))) fdprintf(int fd, char *fmt, ...)
 {
 	char stuff[4096];
 	va_list ap;
+	int res;
+
 	va_start(ap, fmt);
 	vsnprintf(stuff, sizeof(stuff), fmt, ap);
 	va_end(ap);
-	write(fd, stuff, strlen(stuff));
+	if ((res = write(fd, stuff, strlen(stuff))) < 0) {
+		fprintf(stderr, "write() failed: %s\n", strerror(errno));
+	}
 }
 
 static char *get_header(struct message *m, char *var)
@@ -411,18 +417,21 @@ static struct message *wait_for_response(int timeout)
 }
 
 
-static int __attribute__((format (printf, 2, 3))) manager_action(char *action, char *fmt, ...)
+static int __attribute__((format(printf, 2, 3))) manager_action(char *action, char *fmt, ...)
 {
 	struct ast_mansession *s;
 	char tmp[4096];
 	va_list ap;
+	int res;
 
 	s = &session;
 	fdprintf(s->fd, "Action: %s\r\n", action);
 	va_start(ap, fmt);
 	vsnprintf(tmp, sizeof(tmp), fmt, ap);
 	va_end(ap);
-	write(s->fd, tmp, strlen(tmp));
+	if ((res = write(s->fd, tmp, strlen(tmp))) < 0) {
+		fprintf(stderr, "write() failed: %s\n", strerror(errno));
+	}
 	fdprintf(s->fd, "\r\n");
 	return 0;
 }
@@ -626,7 +635,7 @@ static int manage_calls(char *host)
 	return 0;
 }
 
-static int login(char *hostname)
+static int manager_login(char *hostname)
 {
 	newtComponent form;
 	newtComponent cancel;
@@ -756,7 +765,7 @@ int main(int argc, char *argv[])
 	newtCls();
 	newtDrawRootText(0, 0, "Asterisk Manager (C)2002, Linux Support Services, Inc.");
 	newtPushHelpLine("Welcome to the Asterisk Manager!");
-	if (login(argv[1])) {
+	if (manager_login(argv[1])) {
 		newtFinished();
 		exit(1);
 	}

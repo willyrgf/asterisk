@@ -43,7 +43,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 static char *cli_realtime_load(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a) 
 {
 #define CRL_HEADER_FORMAT "%30s  %-30s\n"
-	struct ast_variable *var=NULL;
+	struct ast_variable *var = NULL, *orig_var = NULL;
 
 	switch (cmd) {
 	case CLI_INIT:
@@ -66,6 +66,7 @@ static char *cli_realtime_load(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	if (var) {
 		ast_cli(a->fd, CRL_HEADER_FORMAT, "Column Name", "Column Value");
 		ast_cli(a->fd, CRL_HEADER_FORMAT, "--------------------", "--------------------");
+		orig_var = var;
 		while (var) {
 			ast_cli(a->fd, CRL_HEADER_FORMAT, var->name, var->value);
 			var = var->next;
@@ -73,17 +74,19 @@ static char *cli_realtime_load(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	} else {
 		ast_cli(a->fd, "No rows found matching search criteria.\n");
 	}
+	ast_variables_destroy(orig_var);
 	return CLI_SUCCESS;
 }
 
-static char *cli_realtime_update(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a) {
+static char *cli_realtime_update(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
 	int res = 0;
 
 	switch (cmd) {
 	case CLI_INIT:
 		e->command = "realtime update";
 		e->usage =
-			"Usage: realtime update <family> <colupdate> <newvalue> <colmatch> <valuematch>\n"
+			"Usage: realtime update <family> <colmatch> <valuematch> <colupdate> <newvalue>\n"
 			"       Update a single variable using the RealTime driver.\n"
 			"       You must supply a family name, a column to update on, a new value, column to match, and value to match.\n"
 			"       Ex: realtime update sipfriends name bobsphone port 4343\n"
@@ -93,18 +96,149 @@ static char *cli_realtime_update(struct ast_cli_entry *e, int cmd, struct ast_cl
 		return NULL;
 	}
 
-
 	if (a->argc < 7) 
 		return CLI_SHOWUSAGE;
 
 	res = ast_update_realtime(a->argv[2], a->argv[3], a->argv[4], a->argv[5], a->argv[6], SENTINEL);
 
-	if(res < 0) {
+	if (res < 0) {
 		ast_cli(a->fd, "Failed to update. Check the debug log for possible SQL related entries.\n");
 		return CLI_FAILURE;
 	}
 
-       ast_cli(a->fd, "Updated %d RealTime record%s.\n", res, ESS(res));
+	ast_cli(a->fd, "Updated %d RealTime record%s.\n", res, ESS(res));
+
+	return CLI_SUCCESS;
+}
+
+static char *cli_realtime_update2(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	int res = -1;
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "realtime update2";
+		e->usage =
+			"Usage: realtime update2 <family> <colmatch> <valuematch> [... <colmatch5> <valuematch5>] NULL <colupdate> <newvalue>\n"
+			"       Update a single variable using the RealTime driver.\n"
+			"       You must supply a family name, a column to update on, a new value, column to match, and value to match.\n"
+			"       Ex: realtime update sipfriends name bobsphone port 4343\n"
+			"       will execute SQL as UPDATE sipfriends SET port = 4343 WHERE name = bobsphone\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc < 7) 
+		return CLI_SHOWUSAGE;
+
+	if (a->argc == 7) {
+		res = ast_update2_realtime(a->argv[2], a->argv[3], a->argv[4], SENTINEL, a->argv[5], a->argv[6], SENTINEL);
+	} else if (a->argc == 9) {
+		res = ast_update2_realtime(a->argv[2], a->argv[3], a->argv[4], a->argv[5], a->argv[6], SENTINEL, a->argv[7], a->argv[8], SENTINEL);
+	} else if (a->argc == 11) {
+		res = ast_update2_realtime(a->argv[2], a->argv[3], a->argv[4], a->argv[5], a->argv[6], a->argv[7], a->argv[8], SENTINEL, a->argv[9], a->argv[10], SENTINEL);
+	} else if (a->argc == 13) {
+		res = ast_update2_realtime(a->argv[2], a->argv[3], a->argv[4], a->argv[5], a->argv[6], a->argv[7], a->argv[8], a->argv[9], a->argv[10], SENTINEL, a->argv[11], a->argv[12], SENTINEL);
+	} else if (a->argc == 15) {
+		res = ast_update2_realtime(a->argv[2], a->argv[3], a->argv[4], a->argv[5], a->argv[6], a->argv[7], a->argv[8], a->argv[9], a->argv[10], a->argv[11], a->argv[12], SENTINEL, a->argv[13], a->argv[14], SENTINEL);
+	} else {
+		return CLI_SHOWUSAGE;
+	}
+
+	if (res < 0) {
+		ast_cli(a->fd, "Failed to update. Check the debug log for possible SQL related entries.\n");
+		return CLI_FAILURE;
+	}
+
+	ast_cli(a->fd, "Updated %d RealTime record%s.\n", res, ESS(res));
+
+	return CLI_SUCCESS;
+}
+
+static char *cli_realtime_store(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	int res = -1;
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "realtime store";
+		e->usage =
+			"Usage: realtime store <family> <colname1> <value1> [<colname2> <value2> [... <colname5> <value5>]]\n"
+			"       Create a stored row using the RealTime driver.\n"
+			"       You must supply a family name and name/value pairs (up to 5).  If\n"
+			"       you need to store more than 5 key/value pairs, start with the first\n"
+			"       five, then use 'realtime update' or 'realtime update2' to add\n"
+			"       additional columns.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc < 5) {
+		return CLI_SHOWUSAGE;
+	} else if (a->argc == 5) {
+		res = ast_store_realtime(a->argv[2], a->argv[3], a->argv[4], SENTINEL);
+	} else if (a->argc == 7) {
+		res = ast_store_realtime(a->argv[2], a->argv[3], a->argv[4], a->argv[5], a->argv[6], SENTINEL);
+	} else if (a->argc == 9) {
+		res = ast_store_realtime(a->argv[2], a->argv[3], a->argv[4], a->argv[5], a->argv[6], a->argv[7], a->argv[8], SENTINEL);
+	} else if (a->argc == 11) {
+		res = ast_store_realtime(a->argv[2], a->argv[3], a->argv[4], a->argv[5], a->argv[6], a->argv[7], a->argv[8], a->argv[9], a->argv[10], SENTINEL);
+	} else if (a->argc == 13) {
+		res = ast_store_realtime(a->argv[2], a->argv[3], a->argv[4], a->argv[5], a->argv[6], a->argv[7], a->argv[8], a->argv[9], a->argv[10], a->argv[11], a->argv[12], SENTINEL);
+	} else {
+		return CLI_SHOWUSAGE;
+	}
+
+	if (res < 0) {
+		ast_cli(a->fd, "Failed to store record. Check the debug log for possible SQL related entries.\n");
+		return CLI_FAILURE;
+	}
+
+	ast_cli(a->fd, "Stored RealTime record.\n");
+
+	return CLI_SUCCESS;
+}
+
+static char *cli_realtime_destroy(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	int res = -1;
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "realtime destroy";
+		e->usage =
+			"Usage: realtime destroy <family> <colmatch1> <valuematch1> [<colmatch2> <valuematch2> [... <colmatch5> <valuematch5>]]\n"
+			"       Remove a stored row using the RealTime driver.\n"
+			"       You must supply a family name and name/value pairs (up to 5).\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc < 5) {
+		return CLI_SHOWUSAGE;
+	} else if (a->argc == 5) {
+		res = ast_destroy_realtime(a->argv[2], a->argv[3], a->argv[4], SENTINEL);
+	} else if (a->argc == 7) {
+		res = ast_destroy_realtime(a->argv[2], a->argv[3], a->argv[4], a->argv[5], a->argv[6], SENTINEL);
+	} else if (a->argc == 9) {
+		res = ast_destroy_realtime(a->argv[2], a->argv[3], a->argv[4], a->argv[5], a->argv[6], a->argv[7], a->argv[8], SENTINEL);
+	} else if (a->argc == 11) {
+		res = ast_destroy_realtime(a->argv[2], a->argv[3], a->argv[4], a->argv[5], a->argv[6], a->argv[7], a->argv[8], a->argv[9], a->argv[10], SENTINEL);
+	} else if (a->argc == 13) {
+		res = ast_destroy_realtime(a->argv[2], a->argv[3], a->argv[4], a->argv[5], a->argv[6], a->argv[7], a->argv[8], a->argv[9], a->argv[10], a->argv[11], a->argv[12], SENTINEL);
+	} else {
+		return CLI_SHOWUSAGE;
+	}
+
+	if (res < 0) {
+		ast_cli(a->fd, "Failed to remove record. Check the debug log for possible SQL related entries.\n");
+		return CLI_FAILURE;
+	}
+
+	ast_cli(a->fd, "Removed %d RealTime record%s.\n", res, ESS(res));
 
 	return CLI_SUCCESS;
 }
@@ -112,17 +246,20 @@ static char *cli_realtime_update(struct ast_cli_entry *e, int cmd, struct ast_cl
 static struct ast_cli_entry cli_realtime[] = {
 	AST_CLI_DEFINE(cli_realtime_load, "Used to print out RealTime variables."),
 	AST_CLI_DEFINE(cli_realtime_update, "Used to update RealTime variables."),
+	AST_CLI_DEFINE(cli_realtime_update2, "Used to test the RealTime update2 method"),
+	AST_CLI_DEFINE(cli_realtime_store, "Store a new row into a RealTime database"),
+	AST_CLI_DEFINE(cli_realtime_destroy, "Delete a row from a RealTime database"),
 };
 
 static int unload_module(void)
 {
-	ast_cli_unregister_multiple(cli_realtime, sizeof(cli_realtime) / sizeof(struct ast_cli_entry));
+	ast_cli_unregister_multiple(cli_realtime, ARRAY_LEN(cli_realtime));
 	return 0;
 }
 
 static int load_module(void)
 {
-	ast_cli_register_multiple(cli_realtime, sizeof(cli_realtime) / sizeof(struct ast_cli_entry));
+	ast_cli_register_multiple(cli_realtime, ARRAY_LEN(cli_realtime));
 	return AST_MODULE_LOAD_SUCCESS;
 }
 

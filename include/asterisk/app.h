@@ -23,11 +23,16 @@
 #ifndef _ASTERISK_APP_H
 #define _ASTERISK_APP_H
 
+#include "asterisk/strings.h"
+#include "asterisk/threadstorage.h"
+
 struct ast_flags64;
 
 #if defined(__cplusplus) || defined(c_plusplus)
 extern "C" {
 #endif
+
+AST_THREADSTORAGE_EXTERNAL(global_app_buf);
 
 /* IVR stuff */
 
@@ -487,6 +492,9 @@ int ast_record_review(struct ast_channel *chan, const char *playfile, const char
 
 /*! \brief Decode an encoded control or extended ASCII character */
 int ast_get_encoded_char(const char *stream, char *result, size_t *consumed);
+
+/*! \brief Decode a stream of encoded control or extended ASCII characters */
+int ast_get_encoded_str(const char *stream, char *result, size_t result_len);
 
 /*! \brief Common routine for child processes, to close all fds prior to exec(2) */
 void ast_close_fds_above_n(int n);

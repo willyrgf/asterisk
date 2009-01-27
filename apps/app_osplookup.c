@@ -30,7 +30,7 @@
 
 /*** MODULEINFO
 	<depend>osptk</depend>
-	<depend>ssl</depend>
+	<depend>openssl</depend>
  ***/
 
 #include "asterisk.h"
@@ -1193,7 +1193,7 @@ static int osp_finish(
 	int recorded,
 	int cause,
 	time_t start,
-	time_t connect,
+	time_t connect_time,
 	time_t end,
 	unsigned int release)
 {
@@ -1216,11 +1216,11 @@ static int osp_finish(
 
 	error = OSPPTransactionReportUsage(
 				handle,
-				difftime(end, connect),
+				difftime(end, connect_time),
 				start,
 				end,
 				alert,
-				connect,
+				connect_time,
 				isPddInfoPresent,
 				pdd,
 				release,
@@ -1664,7 +1664,7 @@ static int ospfinished_exec(
 	int inhandle = OSP_INVALID_HANDLE;
 	int outhandle = OSP_INVALID_HANDLE;
 	int recorded = 0;
-	time_t start, connect, end;
+	time_t start, connect_time, end;
 	unsigned int release;
 	char buffer[OSP_INTSTR_SIZE];
 	const char* status;
@@ -1713,24 +1713,24 @@ static int ospfinished_exec(
 
 	if (chan->cdr) {
 		start = chan->cdr->start.tv_sec;
-		connect = chan->cdr->answer.tv_sec;
-		if (connect) {
+		connect_time = chan->cdr->answer.tv_sec;
+		if (connect_time) {
 			end = time(NULL);
 		} else {
-			end = connect;
+			end = connect_time;
 		}
 	} else {
 		start = 0;
-		connect = 0;
+		connect_time = 0;
 		end = 0;
 	}
 	ast_debug(1, "OSPFinish: start '%ld'\n", start);
-	ast_debug(1, "OSPFinish: connect '%ld'\n", connect);
+	ast_debug(1, "OSPFinish: connect '%ld'\n", connect_time);
 	ast_debug(1, "OSPFinish: end '%ld'\n", end);
 
 	release = ast_check_hangup(chan) ? 0 : 1;
 
-	if (osp_finish(outhandle, recorded, cause, start, connect, end, release) <= 0) {
+	if (osp_finish(outhandle, recorded, cause, start, connect_time, end, release) <= 0) {
 		ast_debug(1, "OSPFinish: Unable to report usage for outbound call\n");
 	}
 	switch (cause) {
@@ -1740,7 +1740,7 @@ static int ospfinished_exec(
 			cause = AST_CAUSE_NO_ROUTE_DESTINATION;
 			break;
 	}
-	if (osp_finish(inhandle, recorded, cause, start, connect, end, release) <= 0) {
+	if (osp_finish(inhandle, recorded, cause, start, connect_time, end, release) <= 0) {
 		ast_debug(1, "OSPFinish: Unable to report usage for inbound call\n");
 	}
 	snprintf(buffer, sizeof(buffer), "%d", OSP_INVALID_HANDLE);
@@ -1776,8 +1776,12 @@ static int osp_load(int reload)
 	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
 	int error = OSPC_ERR_NO_ERROR;
 
-	if ((cfg = ast_config_load(OSP_CONFIG_FILE, config_flags)) == CONFIG_STATUS_FILEUNCHANGED)
+	if ((cfg = ast_config_load(OSP_CONFIG_FILE, config_flags)) == CONFIG_STATUS_FILEUNCHANGED) {
 		return 0;
+	} else if (cfg == CONFIG_STATUS_FILEINVALID) {
+		ast_log(LOG_ERROR, "Config file %s is in an invalid format.  Aborting.\n", OSP_CONFIG_FILE);
+		return 0;
+	}
 
 	if (cfg) {
 		if (reload)

@@ -151,40 +151,40 @@ static void wakeup_sub(struct feature_pvt *p, int a)
 }
 #endif
 
-static void restore_channel(struct feature_pvt *p, int index)
+static void restore_channel(struct feature_pvt *p, int idx)
 {
 	/* Restore timing/alertpipe */
-	p->subs[index].owner->timingfd = p->subs[index].timingfdbackup;
-	p->subs[index].owner->alertpipe[0] = p->subs[index].alertpipebackup[0];
-	p->subs[index].owner->alertpipe[1] = p->subs[index].alertpipebackup[1];
-	ast_channel_set_fd(p->subs[index].owner, AST_ALERT_FD, p->subs[index].alertpipebackup[0]);
-	ast_channel_set_fd(p->subs[index].owner, AST_TIMING_FD, p->subs[index].timingfdbackup);
+	p->subs[idx].owner->timingfd = p->subs[idx].timingfdbackup;
+	p->subs[idx].owner->alertpipe[0] = p->subs[idx].alertpipebackup[0];
+	p->subs[idx].owner->alertpipe[1] = p->subs[idx].alertpipebackup[1];
+	ast_channel_set_fd(p->subs[idx].owner, AST_ALERT_FD, p->subs[idx].alertpipebackup[0]);
+	ast_channel_set_fd(p->subs[idx].owner, AST_TIMING_FD, p->subs[idx].timingfdbackup);
 }
 
-static void update_features(struct feature_pvt *p, int index)
+static void update_features(struct feature_pvt *p, int idx)
 {
 	int x;
-	if (p->subs[index].owner) {
+	if (p->subs[idx].owner) {
 		for (x=0; x<AST_MAX_FDS; x++) {
-			if (index) 
-				ast_channel_set_fd(p->subs[index].owner, x, -1);
+			if (idx) 
+				ast_channel_set_fd(p->subs[idx].owner, x, -1);
 			else
-				ast_channel_set_fd(p->subs[index].owner, x, p->subchan->fds[x]);
+				ast_channel_set_fd(p->subs[idx].owner, x, p->subchan->fds[x]);
 		}
-		if (!index) {
+		if (!idx) {
 			/* Copy timings from master channel */
-			p->subs[index].owner->timingfd = p->subchan->timingfd;
-			p->subs[index].owner->alertpipe[0] = p->subchan->alertpipe[0];
-			p->subs[index].owner->alertpipe[1] = p->subchan->alertpipe[1];
-			if (p->subs[index].owner->nativeformats != p->subchan->readformat) {
-				p->subs[index].owner->nativeformats = p->subchan->readformat;
-				if (p->subs[index].owner->readformat)
-					ast_set_read_format(p->subs[index].owner, p->subs[index].owner->readformat);
-				if (p->subs[index].owner->writeformat)
-					ast_set_write_format(p->subs[index].owner, p->subs[index].owner->writeformat);
+			p->subs[idx].owner->timingfd = p->subchan->timingfd;
+			p->subs[idx].owner->alertpipe[0] = p->subchan->alertpipe[0];
+			p->subs[idx].owner->alertpipe[1] = p->subchan->alertpipe[1];
+			if (p->subs[idx].owner->nativeformats != p->subchan->readformat) {
+				p->subs[idx].owner->nativeformats = p->subchan->readformat;
+				if (p->subs[idx].owner->readformat)
+					ast_set_read_format(p->subs[idx].owner, p->subs[idx].owner->readformat);
+				if (p->subs[idx].owner->writeformat)
+					ast_set_write_format(p->subs[idx].owner, p->subs[idx].owner->writeformat);
 			}
 		} else{
-			restore_channel(p, index);
+			restore_channel(p, idx);
 		}
 	}
 }
@@ -432,7 +432,7 @@ static struct feature_pvt *features_alloc(char *data, int format)
 	return tmp;
 }
 
-static struct ast_channel *features_new(struct feature_pvt *p, int state, int index)
+static struct ast_channel *features_new(struct feature_pvt *p, int state, int idx)
 {
 	struct ast_channel *tmp;
 	int x,y;
@@ -441,17 +441,21 @@ static struct ast_channel *features_new(struct feature_pvt *p, int state, int in
 		ast_log(LOG_WARNING, "Called upon channel with no subchan:(\n");
 		return NULL;
 	}
-	if (p->subs[index].owner) {
-		ast_log(LOG_WARNING, "Called to put index %d already there!\n", index);
+	if (p->subs[idx].owner) {
+		ast_log(LOG_WARNING, "Called to put index %d already there!\n", idx);
 		return NULL;
 	}
 	/* figure out what you want the name to be */
 	for (x=1;x<4;x++) {
 		if (b2)
 			ast_free(b2);
-		asprintf(&b2, "%s/%s-%d", p->tech, p->dest, x);
+		if (asprintf(&b2, "%s/%s-%d", p->tech, p->dest, x) < 0) {
+			ast_log(LOG_WARNING, "Unable to create channel name: %s\n", strerror(errno));
+			b2 = NULL;
+			continue;
+		}
 		for (y=0;y<3;y++) {
-			if (y == index)
+			if (y == idx)
 				continue;
 			if (p->subs[y].owner && !strcasecmp(p->subs[y].owner->name, b2))
 				break;
@@ -474,7 +478,7 @@ static struct ast_channel *features_new(struct feature_pvt *p, int state, int in
 	tmp->rawreadformat = p->subchan->rawreadformat;
 	tmp->nativeformats = p->subchan->readformat;
 	tmp->tech_pvt = p;
-	p->subs[index].owner = tmp;
+	p->subs[idx].owner = tmp;
 	if (!p->owner)
 		p->owner = tmp;
 	ast_module_ref(ast_module_info->self);
@@ -501,9 +505,9 @@ static char *features_show(struct ast_cli_entry *e, int cmd, struct ast_cli_args
 
 	switch (cmd) {
 	case CLI_INIT:
-		e->command = "feature show channels";
+		e->command = "features show channels";
 		e->usage =
-			"Usage: feature show channels\n"
+			"Usage: features show channels\n"
 			"       Provides summary information on feature channels.\n";
 		return NULL;
 	case CLI_GENERATE:

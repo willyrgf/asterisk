@@ -57,7 +57,7 @@ struct ast_dnsmgr_entry {
 	/*! SRV record to lookup, if provided. Composed of service, protocol, and domain name: _Service._Proto.Name */
 	char *service;
 	/*! Set to 1 if the entry changes */
-	int changed:1;
+	unsigned int changed:1;
 	ast_mutex_t lock;
 	AST_RWLIST_ENTRY(ast_dnsmgr_entry) list;
 	/*! just 1 here, but we use calloc to allocate the correct size */
@@ -164,6 +164,8 @@ static int dnsmgr_refresh(struct ast_dnsmgr_entry *entry, int verbose)
 	if (verbose)
 		ast_verb(3, "refreshing '%s'\n", entry->name);
 
+	tmp.sin_port = entry->last.sin_port;
+	
 	if (!ast_get_ip_or_srv(&tmp, entry->name, entry->service) && inaddrcmp(&tmp, &entry->last)) {
 		ast_copy_string(iabuf, ast_inet_ntoa(entry->last.sin_addr), sizeof(iabuf));
 		ast_copy_string(iabuf2, ast_inet_ntoa(tmp.sin_addr), sizeof(iabuf2));
@@ -372,8 +374,10 @@ static int do_reload(int loading)
 	int was_enabled;
 	int res = -1;
 
-	if ((config = ast_config_load2("dnsmgr.conf", "dnsmgr", config_flags)) == CONFIG_STATUS_FILEUNCHANGED)
+	config = ast_config_load2("dnsmgr.conf", "dnsmgr", config_flags);
+	if (config == CONFIG_STATUS_FILEMISSING || config == CONFIG_STATUS_FILEUNCHANGED || config == CONFIG_STATUS_FILEINVALID) {
 		return 0;
+	}
 
 	/* ensure that no refresh cycles run while the reload is in progress */
 	ast_mutex_lock(&refresh_lock);

@@ -27,6 +27,13 @@
 
 #include "asterisk.h"
 
+/* Include these now to prevent them from being needed later */
+#include <sys/types.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+#include <stdarg.h>
+
 /* Undefine any macros */
 #undef malloc
 #undef calloc
@@ -44,9 +51,9 @@ void *__ast_realloc(void *ptr, size_t size, const char *file, int lineno, const 
 char *__ast_strdup(const char *s, const char *file, int lineno, const char *func);
 char *__ast_strndup(const char *s, size_t n, const char *file, int lineno, const char *func);
 int __ast_asprintf(const char *file, int lineno, const char *func, char **strp, const char *format, ...)
-	__attribute__ ((format (printf, 5, 6)));
+	__attribute__((format(printf, 5, 6)));
 int __ast_vasprintf(char **strp, const char *format, va_list ap, const char *file, int lineno, const char *func)
-	__attribute__ ((format (printf, 2, 0)));
+	__attribute__((format(printf, 2, 0)));
 void __ast_mm_init(void);
 
 

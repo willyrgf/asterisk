@@ -29,6 +29,10 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <tiffio.h>
 
 #include <spandsp.h>
+#ifdef HAVE_SPANDSP_EXPOSE_H
+#include <spandsp/expose.h>
+#endif
+#include <spandsp/version.h>
 
 #include "asterisk/lock.h"
 #include "asterisk/file.h"
@@ -40,56 +44,105 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/module.h"
 #include "asterisk/manager.h"
 
-static char *app_sndfax_name = "SendFAX";
-static char *app_sndfax_synopsis = "Send a FAX";
-static char *app_sndfax_desc = 
-"  SendFAX(filename[|options]):\n"
-"Send a given TIFF file to the channel as a FAX.\n"
-"The option string may contain zero or more of the following characters:\n"
-"     'a' -- makes the application behave as an answering machine\n"
-"	    The default behaviour is to behave as a calling machine.\n"
-"\n"
-"This application uses following variables:\n"
-"     LOCALSTATIONID to identify itself to the remote end.\n"
-"     LOCALHEADERINFO to generate a header line on each page.\n"
-"\n"
-"This application sets the following channel variables upon completion:\n"
-"     FAXSTATUS       - status of operation:\n"
-"			   SUCCESS | FAILED\n"
-"     FAXERROR	- Error when FAILED\n"
-"     REMOTESTATIONID - CSID of the remote side.\n"
-"     FAXPAGES	- number of pages sent.\n"
-"     FAXBITRATE      - transmition rate.\n"
-"     FAXRESOLUTION   - resolution.\n"
-"\n"
-"Returns -1 in case of user hang up or any channel error.\n"
-"Returns 0 on success.\n";
+/*** DOCUMENTATION
+	<application name="SendFAX" language="en_US">
+		<synopsis>
+			Send a Fax
+		</synopsis>
+		<syntax>
+			<parameter name="filename" required="true">
+				<para>Filename of TIFF file to fax</para>
+			</parameter>
+			<parameter name="a" required="false">
+				<para>Makes the application behave as the answering machine</para>
+				<para>(Default behavior is as calling machine)</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Send a given TIFF file to the channel as a FAX.</para>
+			<para>This application sets the following channel variables:</para>
+			<variablelist>
+				<variable name="LOCALSTATIONID">
+					<para>To identify itself to the remote end</para>
+				</variable>
+				<variable name="LOCALHEADERINFO">
+					<para>To generate a header line on each page</para>
+				</variable>
+				<variable name="FAXSTATUS">
+					<value name="SUCCESS"/>
+					<value name="FAILED"/>
+				</variable>
+				<variable name="FAXERROR">
+					<para>Cause of failure</para>
+				</variable>
+				<variable name="REMOTESTATIONID">
+					<para>The CSID of the remote side</para>
+				</variable>
+				<variable name="FAXPAGES">
+					<para>Number of pages sent</para>
+				</variable>
+				<variable name="FAXBITRATE">
+					<para>Transmission rate</para>
+				</variable>
+				<variable name="FAXRESOLUTION">
+					<para>Resolution of sent fax</para>
+				</variable>
+			</variablelist>
+		</description>
+	</application>
+	<application name="ReceiveFAX" language="en_US">
+		<synopsis>
+			Receive a Fax
+		</synopsis>
+		<syntax>
+			<parameter name="filename" required="true">
+				<para>Filename of TIFF file save incoming fax</para>
+			</parameter>
+			<parameter name="c" required="false">
+				<para>Makes the application behave as the calling machine</para> 
+				<para>(Default behavior is as answering machine)</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Receives a FAX from the channel into the given filename 
+			overwriting the file if it already exists.</para>
+			<para>File created will be in TIFF format.</para>
 
+			<para>This application sets the following channel variables:</para>
+			<variablelist>
+				<variable name="LOCALSTATIONID">
+					<para>To identify itself to the remote end</para>
+				</variable>
+				<variable name="LOCALHEADERINFO">
+					<para>To generate a header line on each page</para>
+				</variable>
+				<variable name="FAXSTATUS">
+					<value name="SUCCESS"/>
+					<value name="FAILED"/>
+				</variable>
+				<variable name="FAXERROR">
+					<para>Cause of failure</para>
+				</variable>
+				<variable name="REMOTESTATIONID">
+					<para>The CSID of the remote side</para>
+				</variable>
+				<variable name="FAXPAGES">
+					<para>Number of pages sent</para>
+				</variable>
+				<variable name="FAXBITRATE">
+					<para>Transmission rate</para>
+				</variable>
+				<variable name="FAXRESOLUTION">
+					<para>Resolution of sent fax</para>
+				</variable>
+			</variablelist>
+		</description>
+	</application>
+
+ ***/
+
+static char *app_sndfax_name = "SendFAX";
 static char *app_rcvfax_name = "ReceiveFAX";
-static char *app_rcvfax_synopsis = "Receive a FAX";
-static char *app_rcvfax_desc = 
-"  ReceiveFAX(filename[|options]):\n"
-"Receives a fax from the channel into the given filename overwriting\n"
-"the file if it already exists. File created will have TIFF format.\n"
-"The option string may contain zero or more of the following characters:\n"
-"     'c' -- makes the application behave as a calling machine\n"
-"	    The default behaviour is to behave as an answering machine.\n"
-"\n"
-"This application uses following variables:\n"
-"     LOCALSTATIONID to identify itself to the remote end.\n"
-"     LOCALHEADERINFO to generate a header line on each page.\n"
-"\n"
-"This application sets the following channel variables upon completion:\n"
-"     FAXSTATUS       - status of operation:\n"
-"			   SUCCESS | FAILED\n"
-"     FAXERROR	- Error when FAILED\n"
-"     REMOTESTATIONID - CSID of the remote side.\n"
-"     FAXPAGES	- number of pages sent.\n"
-"     FAXBITRATE      - transmition rate.\n"
-"     FAXRESOLUTION   - resolution.\n"
-"\n"
-"Returns -1 in case of user hang up or any channel error.\n"
-"Returns 0 on success.\n";
 
 #define MAX_SAMPLES 240
 
@@ -306,6 +359,7 @@ static int transmit_audio(fax_session *s)
 	int original_read_fmt = AST_FORMAT_SLINEAR;
 	int original_write_fmt = AST_FORMAT_SLINEAR;
 	fax_state_t fax;
+	t30_state_t *t30state;
 	struct ast_dsp *dsp = NULL;
 	int detect_tone = 0;
 	struct ast_frame *inf = NULL;
@@ -313,6 +367,14 @@ static int transmit_audio(fax_session *s)
 	int last_state = 0;
 	struct timeval now, start, state_change;
 	enum ast_control_t38 t38control;
+
+#if SPANDSP_RELEASE_DATE >= 20081012
+        /* for spandsp shaphots 0.0.6 and higher */
+        t30state = &fax.t30;
+#else
+        /* for spandsp release 0.0.5 */
+        t30state = &fax.t30_state;
+#endif
 
 	original_read_fmt = s->chan->readformat;
 	if (original_read_fmt != AST_FORMAT_SLINEAR) {
@@ -337,16 +399,16 @@ static int transmit_audio(fax_session *s)
 
 	/* Setup logging */
 	set_logging(&fax.logging);
-	set_logging(&fax.t30_state.logging);
+	set_logging(&t30state->logging);
 
 	/* Configure terminal */
-	set_local_info(&fax.t30_state, s);
-	set_file(&fax.t30_state, s);
-	set_ecm(&fax.t30_state, TRUE);
+	set_local_info(t30state, s);
+	set_file(t30state, s);
+	set_ecm(t30state, TRUE);
 
 	fax_set_transmit_on_idle(&fax, TRUE);
 
-	t30_set_phase_e_handler(&fax.t30_state, phase_e_handler, s);
+	t30_set_phase_e_handler(t30state, phase_e_handler, s);
 
 	if (s->t38state == T38_STATE_UNAVAILABLE) {
 		ast_debug(1, "T38 is unavailable on %s\n", s->chan->name);
@@ -411,9 +473,9 @@ static int transmit_audio(fax_session *s)
 			}
 
 			/* Watchdog */
-			if (last_state != fax.t30_state.state) {
+			if (last_state != t30state->state) {
 				state_change = ast_tvnow();
-				last_state = fax.t30_state.state;
+				last_state = t30state->state;
 			}
 		} else if (inf->frametype == AST_FRAME_CONTROL && inf->subclass == AST_CONTROL_T38 &&
 				inf->datalen == sizeof(enum ast_control_t38)) {
@@ -452,10 +514,10 @@ static int transmit_audio(fax_session *s)
 	   by t30_terminate, display diagnostics and set status variables although no transmittion
 	   has taken place yet. */
 	if (res > 0) {
-		t30_set_phase_e_handler(&fax.t30_state, NULL, NULL);
+		t30_set_phase_e_handler(t30state, NULL, NULL);
 	}
 
-	t30_terminate(&fax.t30_state);
+	t30_terminate(t30state);
 	fax_release(&fax);
 
 done:
@@ -482,6 +544,19 @@ static int transmit_t38(fax_session *s)
 	struct timeval now, start, state_change, last_frame;
 	enum ast_control_t38 t38control;
 
+	t30_state_t *t30state;
+	t38_core_state_t *t38state;
+
+#if SPANDSP_RELEASE_DATE >= 20081012
+	/* for spandsp shaphots 0.0.6 and higher */
+	t30state = &t38.t30;
+	t38state = &t38.t38_fe.t38;
+#else
+	/* for spandsp releases 0.0.5 */
+	t30state = &t38.t30_state;
+	t38state = &t38.t38;
+#endif
+
 	/* Initialize terminal */
 	memset(&t38, 0, sizeof(t38));
 	if (t38_terminal_init(&t38, s->caller_mode, t38_tx_packet_handler, s->chan) == NULL) {
@@ -491,15 +566,15 @@ static int transmit_t38(fax_session *s)
 
 	/* Setup logging */
 	set_logging(&t38.logging);
-	set_logging(&t38.t30_state.logging);
-	set_logging(&t38.t38.logging);
+	set_logging(&t30state->logging);
+	set_logging(&t38state->logging);
 
 	/* Configure terminal */
-	set_local_info(&t38.t30_state, s);
-	set_file(&t38.t30_state, s);
-	set_ecm(&t38.t30_state, TRUE);
+	set_local_info(t30state, s);
+	set_file(t30state, s);
+	set_ecm(t30state, TRUE);
 
-	t30_set_phase_e_handler(&t38.t30_state, phase_e_handler, s);
+	t30_set_phase_e_handler(t30state, phase_e_handler, s);
 
 	now = start = state_change = ast_tvnow();
 
@@ -525,12 +600,12 @@ static int transmit_t38(fax_session *s)
 		ast_debug(10, "frame %d/%d, len=%d\n", inf->frametype, inf->subclass, inf->datalen);
 
 		if (inf->frametype == AST_FRAME_MODEM && inf->subclass == AST_MODEM_T38) {
-			t38_core_rx_ifp_packet(&t38.t38, inf->data.ptr, inf->datalen, inf->seqno);
+			t38_core_rx_ifp_packet(t38state, inf->data.ptr, inf->datalen, inf->seqno);
 
 			/* Watchdog */
-			if (last_state != t38.t30_state.state) {
+			if (last_state != t30state->state) {
 				state_change = ast_tvnow();
-				last_state = t38.t30_state.state;
+				last_state = t30state->state;
 			}
 		} else if (inf->frametype == AST_FRAME_CONTROL && inf->subclass == AST_CONTROL_T38 &&
 				inf->datalen == sizeof(enum ast_control_t38)) {
@@ -560,7 +635,7 @@ static int transmit_t38(fax_session *s)
 	if (inf)
 		ast_frfree(inf);
 
-	t30_terminate(&t38.t30_state);
+	t30_terminate(t30state);
 	t38_terminal_release(&t38);
 
 	return res;
@@ -575,6 +650,7 @@ static int transmit(fax_session *s)
 	pbx_builtin_setvar_helper(s->chan, "FAXSTATUS", "FAILED"); 
 	pbx_builtin_setvar_helper(s->chan, "FAXERROR", "Channel problems"); 
 
+	pbx_builtin_setvar_helper(s->chan, "FAXMODE", NULL);
 	pbx_builtin_setvar_helper(s->chan, "REMOTESTATIONID", NULL);
 	pbx_builtin_setvar_helper(s->chan, "FAXPAGES", NULL);
 	pbx_builtin_setvar_helper(s->chan, "FAXRESOLUTION", NULL);
@@ -593,6 +669,7 @@ static int transmit(fax_session *s)
 	s->t38state = ast_channel_get_t38_state(s->chan);
 	if (s->t38state != T38_STATE_NEGOTIATED) {
 		/* T38 is not negotiated on the channel yet. First start regular transmission. If it switches to T38, follow */	
+		pbx_builtin_setvar_helper(s->chan, "FAXMODE", "audio"); 
 		res = transmit_audio(s);
 		if (res > 0) {
 			/* transmit_audio reports switchover to T38. Update t38state */
@@ -604,6 +681,7 @@ static int transmit(fax_session *s)
 	}
 
 	if (s->t38state == T38_STATE_NEGOTIATED) {
+		pbx_builtin_setvar_helper(s->chan, "FAXMODE", "T38"); 
 		res = transmit_t38(s);
 	}
 
@@ -723,8 +801,8 @@ static int load_module(void)
 {
 	int res ;
 
-	res = ast_register_application(app_sndfax_name, sndfax_exec, app_sndfax_synopsis, app_sndfax_desc);
-	res |= ast_register_application(app_rcvfax_name, rcvfax_exec, app_rcvfax_synopsis, app_rcvfax_desc);
+	res = ast_register_application_xml(app_sndfax_name, sndfax_exec);
+	res |= ast_register_application_xml(app_rcvfax_name, rcvfax_exec);
 
 	/* The default SPAN message handler prints to stderr. It is something we do not want */
 	span_set_message_handler(NULL);

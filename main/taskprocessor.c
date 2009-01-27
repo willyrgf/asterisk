@@ -114,7 +114,7 @@ static char *cli_tps_ping(struct ast_cli_entry *e, int cmd, struct ast_cli_args 
 static char *cli_tps_report(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
 
 static struct ast_cli_entry taskprocessor_clis[] = {
-	AST_CLI_DEFINE(cli_tps_ping, "Ping a named task processors"),
+	AST_CLI_DEFINE(cli_tps_ping, "Ping a named task processor"),
 	AST_CLI_DEFINE(cli_tps_report, "List instantiated task processors and statistics"),
 };
 
@@ -160,7 +160,7 @@ static char *tps_taskprocessor_tab_complete(struct ast_taskprocessor *p, struct 
 	char *name = NULL;
 	struct ao2_iterator i;
 
-	if (a->pos != 2)
+	if (a->pos != 3)
 		return NULL;
 
 	tklen = strlen(a->word);
@@ -190,33 +190,33 @@ static char *cli_tps_ping(struct ast_cli_entry *e, int cmd, struct ast_cli_args 
 {
 	struct timeval begin, end, delta;
 	char *name;
-	struct timeval tv;
+	struct timeval when;
 	struct timespec ts;
 	struct ast_taskprocessor *tps = NULL;
 
 	switch (cmd) {
 	case CLI_INIT:
-		e->command = "taskprocessor ping";
+		e->command = "core ping taskprocessor";
 		e->usage = 
-			"Usage: taskprocessor ping <taskprocessor>\n"
-			"	Displays the time required for a processor to deliver a task\n";
+			"Usage: core ping taskprocessor <taskprocessor>\n"
+			"	Displays the time required for a task to be processed\n";
 		return NULL;
 	case CLI_GENERATE:
 		return tps_taskprocessor_tab_complete(tps, a);
 	}
 
-	if (a->argc != 3)
+	if (a->argc != 4)
 		return CLI_SHOWUSAGE;
 
-	name = a->argv[2];
+	name = a->argv[3];
 	if (!(tps = ast_taskprocessor_get(name, TPS_REF_IF_EXISTS))) {
 		ast_cli(a->fd, "\nping failed: %s not found\n\n", name);
 		return CLI_SUCCESS;
 	}
 	ast_cli(a->fd, "\npinging %s ...", name);
-	tv = ast_tvadd((begin = ast_tvnow()), ast_samp2tv(1000, 1000));
-	ts.tv_sec = tv.tv_sec;
-	ts.tv_nsec = tv.tv_usec * 1000;
+	when = ast_tvadd((begin = ast_tvnow()), ast_samp2tv(1000, 1000));
+	ts.tv_sec = when.tv_sec;
+	ts.tv_nsec = when.tv_usec * 1000;
 	ast_mutex_lock(&cli_ping_cond_lock);
 	if (ast_taskprocessor_push(tps, tps_ping_handler, 0) < 0) {
 		ast_cli(a->fd, "\nping failed: could not push task to %s\n\n", name);
@@ -232,7 +232,6 @@ static char *cli_tps_ping(struct ast_cli_entry *e, int cmd, struct ast_cli_args 
 	return CLI_SUCCESS;	
 }
 
-/* TPS reports are cool */
 static char *cli_tps_report(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	char name[256];
@@ -245,9 +244,9 @@ static char *cli_tps_report(struct ast_cli_entry *e, int cmd, struct ast_cli_arg
 
 	switch (cmd) {
 	case CLI_INIT:
-		e->command = "taskprocessor show stats";
+		e->command = "core show taskprocessors";
 		e->usage = 
-			"Usage: taskprocessor show stats\n"
+			"Usage: core show taskprocessors\n"
 			"	Shows a list of instantiated task processors and their statistics\n";
 		return NULL;
 	case CLI_GENERATE:
@@ -332,7 +331,7 @@ static int tps_hash_cb(const void *obj, const int flags)
 {
 	const struct ast_taskprocessor *tps = obj;
 
-	return ast_str_hash(tps->name);
+	return ast_str_case_hash(tps->name);
 }
 
 /* compare callback for astobj2 */
@@ -340,7 +339,7 @@ static int tps_cmp_cb(void *obj, void *arg, int flags)
 {
 	struct ast_taskprocessor *lhs = obj, *rhs = arg;
 
-	return !strcasecmp(lhs->name, rhs->name) ? CMP_MATCH : 0;
+	return !strcasecmp(lhs->name, rhs->name) ? CMP_MATCH | CMP_STOP : 0;
 }
 
 /* destroy the taskprocessor */

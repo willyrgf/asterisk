@@ -14,6 +14,9 @@
  * This program is free software, distributed under the terms of
  * the GNU General Public License Version 2. See the LICENSE file
  * at the top of the source tree.
+ *
+ * Please follow coding guidelines 
+ * http://svn.digium.com/view/asterisk/trunk/doc/CODING-GUIDELINES
  */
 
 /*! \file
@@ -41,11 +44,35 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/lock.h"
 #include "asterisk/app.h"
 
+/*** DOCUMENTATION
+	<application name="Skel" language="en_US">
+		<synopsis>
+			Simple one line explaination.
+		</synopsis>
+		<syntax>
+			<parameter name="dummy" required="true"/>
+			<parameter name="options">
+				<optionlist>
+					<option name="a">
+						<para>Option A.</para>
+					</option>
+					<option name="b">
+						<para>Option B.</para>
+					</option>
+					<option name="c">
+						<para>Option C.</para>
+					</option>
+				</optionlist>
+			</parameter>
+		</syntax>
+		<description>
+		<para>This application is a template to build other applications from. 
+		It shows you the basic structure to create your own Asterisk applications.</para>
+		</description>
+	</application>
+ ***/
+
 static char *app = "Skel";
-static char *synopsis = 
-"Skeleton application.";
-static char *descrip = "This application is a template to build other applications from.\n"
- " It shows you the basic structure to create your own Asterisk applications.\n";
 
 enum {
 	OPTION_A = (1 << 0),
@@ -89,20 +116,25 @@ static int app_exec(struct ast_channel *chan, void *data)
 
 	AST_STANDARD_APP_ARGS(args, parse);
 
-	if (args.argc == 2)
+	if (args.argc == 2) {
 		ast_app_parse_options(app_opts, &flags, opts, args.options);
+	}
 
-	if (!ast_strlen_zero(args.dummy)) 
+	if (!ast_strlen_zero(args.dummy)) {
 		ast_log(LOG_NOTICE, "Dummy value is : %s\n", args.dummy);
+	}
 
-	if (ast_test_flag(&flags, OPTION_A))
+	if (ast_test_flag(&flags, OPTION_A)) {
 		ast_log(LOG_NOTICE, "Option A is set\n");
+	}
 
-	if (ast_test_flag(&flags, OPTION_B))
+	if (ast_test_flag(&flags, OPTION_B)) {
 		ast_log(LOG_NOTICE, "Option B is set with : %s\n", opts[OPTION_ARG_B] ? opts[OPTION_ARG_B] : "<unspecified>");
+	}
 
-	if (ast_test_flag(&flags, OPTION_C))
+	if (ast_test_flag(&flags, OPTION_C)) {
 		ast_log(LOG_NOTICE, "Option C is set with : %s\n", opts[OPTION_ARG_C] ? opts[OPTION_ARG_C] : "<unspecified>");
+	}
 
 	return res;
 }
@@ -114,7 +146,7 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	return ast_register_application(app, app_exec, synopsis, descrip) ? 
+	return ast_register_application_xml(app, app_exec) ? 
 		AST_MODULE_LOAD_DECLINE : AST_MODULE_LOAD_SUCCESS;
 }
 

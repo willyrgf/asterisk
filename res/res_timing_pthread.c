@@ -23,6 +23,11 @@
  * \brief pthread timing interface 
  */
 
+/*** MODULEINFO
+	<conflict>res_timing_timerfd</conflict>
+	<conflict>res_timing_dahdi</conflict>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$");
@@ -87,7 +92,7 @@ struct pthread_timer {
 };
 
 static void pthread_timer_destructor(void *obj);
-static struct pthread_timer *find_timer(int handle, int unlink);
+static struct pthread_timer *find_timer(int handle, int unlinkobj);
 static void write_byte(int wr_fd);
 static void read_pipe(int rd_fd, unsigned int num, int clear);
 
@@ -146,6 +151,23 @@ static void pthread_timer_close(int handle)
 	ao2_ref(timer, -1);
 }
 
+static void set_state(struct pthread_timer *timer)
+{
+	unsigned int rate = timer->rate;
+
+	if (rate) {
+		timer->state = TIMER_STATE_TICKING;
+		timer->interval = roundf(1000.0 / ((float) rate));
+		timer->start = ast_tvnow();
+	} else {
+		timer->state = TIMER_STATE_IDLE;
+		timer->interval = 0;
+		timer->start = ast_tv(0, 0);
+	}
+
+	timer->tick_count = 0;
+}
+
 static int pthread_timer_set_rate(int handle, unsigned int rate)
 {
 	struct pthread_timer *timer;
@@ -164,10 +186,10 @@ static int pthread_timer_set_rate(int handle, unsigned int rate)
 
 	ao2_lock(timer);
 	timer->rate = rate;
-	timer->state = rate ? TIMER_STATE_TICKING : TIMER_STATE_IDLE;
-	timer->interval = rate ? roundf(1000.0 / ((float) rate)) : 0;
-	timer->start = rate ? ast_tvnow() : ast_tv(0, 0);
-	timer->tick_count = 0;
+	if (timer->state != TIMER_STATE_CONTINUOUS) {
+		set_state(timer);
+	}
+	
 	ao2_unlock(timer);
 
 	ao2_ref(timer, -1);
@@ -224,7 +246,7 @@ static int pthread_timer_disable_continuous(int handle)
 	}
 
 	ao2_lock(timer);
-	timer->state = timer->rate ? TIMER_STATE_TICKING : TIMER_STATE_IDLE;
+	set_state(timer);
 	read_pipe(timer->pipe[PIPE_READ], 0, 1);
 	ao2_unlock(timer);
 
@@ -256,7 +278,7 @@ static unsigned int pthread_timer_get_max_rate(int handle)
 	return MAX_RATE;
 }
 
-static struct pthread_timer *find_timer(int handle, int unlink)
+static struct pthread_timer *find_timer(int handle, int unlinkobj)
 {
 	struct pthread_timer *timer;
 	struct pthread_timer tmp_timer;
@@ -264,7 +286,7 @@ static struct pthread_timer *find_timer(int handle, int unlink)
 
 	tmp_timer.pipe[PIPE_READ] = handle;
 
-	if (unlink) {
+	if (unlinkobj) {
 		flags |= OBJ_UNLINK;
 	}
 
@@ -308,7 +330,7 @@ static int pthread_timer_cmp(void *obj, void *arg, int flags)
 {
 	struct pthread_timer *timer1 = obj, *timer2 = arg;
 
-	return (timer1->pipe[PIPE_READ] == timer2->pipe[PIPE_READ]) ? CMP_MATCH : 0;
+	return (timer1->pipe[PIPE_READ] == timer2->pipe[PIPE_READ]) ? CMP_MATCH | CMP_STOP : 0;
 }
 
 /*!
@@ -348,7 +370,7 @@ static void read_pipe(int rd_fd, unsigned int quantity, int clear)
 		unsigned char buf[1024];
 		ssize_t res;
 		fd_set rfds;
-		struct timeval tv = {
+		struct timeval timeout = {
 			.tv_sec = 0,
 		};
 
@@ -356,7 +378,7 @@ static void read_pipe(int rd_fd, unsigned int quantity, int clear)
 		FD_ZERO(&rfds);
 		FD_SET(rd_fd, &rfds);
 
-		if (select(rd_fd + 1, &rfds, NULL, NULL, &tv) != 1) {
+		if (select(rd_fd + 1, &rfds, NULL, NULL, &timeout) != 1) {
 			break;
 		}
 

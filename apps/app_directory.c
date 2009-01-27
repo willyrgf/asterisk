@@ -42,48 +42,78 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/app.h"
 #include "asterisk/utils.h"
 
-static char *app = "Directory";
+/*** DOCUMENTATION
+	<application name="Directory" language="en_US">
+		<synopsis>
+			Provide directory of voicemail extensions.
+		</synopsis>
+		<syntax>
+			<parameter name="vm-context">
+				<para>This is the context within voicemail.conf to use for the Directory. If not specified and
+				<literal>searchcontexts=no</literal> in <filename>voicemail.conf</filename>, then <literal>default</literal>
+				will be assumed.</para>
+			</parameter>
+			<parameter name="dial-context" required="false">
+				<para>This is the dialplan context to use when looking for an
+				extension that the user has selected, or when jumping to the
+				<literal>o</literal> or <literal>a</literal> extension.</para>
+			</parameter>
+			<parameter name="options" required="false">
+				<optionlist>
+					<option name="e">
+						<para>In addition to the name, also read the extension number to the
+						caller before presenting dialing options.</para>
+					</option>
+					<option name="f">
+						<para>Allow the caller to enter the first name of a user in the
+						directory instead of using the last name.  If specified, the
+						optional number argument will be used for the number of
+						characters the user should enter.</para>
+						<argument name="n" required="true" />
+					</option>
+					<option name="l">
+						<para>Allow the caller to enter the last name of a user in the
+						directory.  This is the default.  If specified, the
+						optional number argument will be used for the number of
+						characters the user should enter.</para>
+						<argument name="n" required="true" />
+					</option>
+					<option name="b">
+						<para> Allow the caller to enter either the first or the last name
+						of a user in the directory.  If specified, the optional number
+						argument will be used for the number of characters the user should enter.</para>
+						<argument name="n" required="true" />
+					</option>
+					<option name="m">
+						<para>Instead of reading each name sequentially and asking for
+						confirmation, create a menu of up to 8 names.</para>
+					</option>
+					<option name="p">
+						<para>Pause for n milliseconds after the digits are typed.  This is
+						helpful for people with cellphones, who are not holding the
+						receiver to their ear while entering DTMF.</para>
+						<argument name="n" required="true" />
+					</option>
+				</optionlist>
+				<note><para>Only one of the <replaceable>f</replaceable>, <replaceable>l</replaceable>, or <replaceable>b</replaceable>
+				options may be specified. <emphasis>If more than one is specified</emphasis>, then Directory will act as 
+				if <replaceable>b</replaceable> was specified.  The number
+				of characters for the user to type defaults to <literal>3</literal>.</para></note>
+			</parameter>
+		</syntax>
+		<description>
+			<para>This application will present the calling channel with a directory of extensions from which they can search
+			by name. The list of names and corresponding extensions is retrieved from the
+			voicemail configuration file, <filename>voicemail.conf</filename>.</para>
+			<para>This application will immediately exit if one of the following DTMF digits are
+			received and the extension to jump to exists:</para>
+			<para><literal>0</literal> - Jump to the 'o' extension, if it exists.</para>
+			<para><literal>*</literal> - Jump to the 'a' extension, if it exists.</para>
+		</description>
+	</application>
 
-static char *synopsis = "Provide directory of voicemail extensions";
-static char *descrip =
-"  Directory(vm-context[,dial-context[,options]]): This application will present\n"
-"the calling channel with a directory of extensions from which they can search\n"
-"by name. The list of names and corresponding extensions is retrieved from the\n"
-"voicemail configuration file, voicemail.conf.\n"
-"  This application will immediately exit if one of the following DTMF digits are\n"
-"received and the extension to jump to exists:\n"
-"    0 - Jump to the 'o' extension, if it exists.\n"
-"    * - Jump to the 'a' extension, if it exists.\n\n"
-"  Parameters:\n"
-"    vm-context   - This is the context within voicemail.conf to use for the\n"
-"                   Directory.\n"
-"    dial-context - This is the dialplan context to use when looking for an\n"
-"                   extension that the user has selected, or when jumping to the\n"
-"                   'o' or 'a' extension.\n\n"
-"  Options:\n"
-"    e           In addition to the name, also read the extension number to the\n"
-"              caller before presenting dialing options.\n"
-"    f[(<n>)]    Allow the caller to enter the first name of a user in the\n"
-"              directory instead of using the last name.  If specified, the\n"
-"              optional number argument will be used for the number of\n"
-"              characters the user should enter.\n"
-"    l[(<n>)]    Allow the caller to enter the last name of a user in the\n"
-"              directory.  This is the default.  If specified, the\n"
-"              optional number argument will be used for the number of\n"
-"              characters the user should enter.\n"
-"    b[(<n>)]    Allow the caller to enter either the first or the last name\n"
-"              of a user in the directory.  If specified, the optional number\n"
-"              argument will be used for the number of characters the user\n"
-"              should enter.\n"
-"    m           Instead of reading each name sequentially and asking for\n"
-"              confirmation, create a menu of up to 8 names.\n"
-"    p(<n>)      Pause for n milliseconds after the digits are typed.  This is\n"
-"              helpful for people with cellphones, who are not holding the\n"
-"              receiver to their ear while entering DTMF.\n"
-"\n"
-"    Only one of the f, l, or b options may be specified.  If more than one is\n"
-"    specified, then Directory will act as if 'b' was specified.  The number\n"
-"    of characters for the user to type defaults to 3.\n";
+ ***/
+static char *app = "Directory";
 
 /* For simplicity, I'm keeping the format compatible with the voicemail config,
    but i'm open to suggestions for isolating it */
@@ -112,6 +142,7 @@ enum {
 struct directory_item {
 	char exten[AST_MAX_EXTENSION + 1];
 	char name[AST_MAX_EXTENSION + 1];
+	char context[AST_MAX_CONTEXT + 1];
 	char key[50]; /* Text to order items. Either lastname+firstname or firstname+lastname */
 
 	AST_LIST_ENTRY(directory_item) entry;
@@ -130,6 +161,10 @@ AST_APP_OPTIONS(directory_app_options, {
 static int compare(const char *text, const char *template)
 {
 	char digit;
+
+	if (ast_strlen_zero(text)) {
+		return -1;
+	}
 
 	while (*template) {
 		digit = toupper(*text++);
@@ -230,25 +265,25 @@ static int play_mailbox_owner(struct ast_channel *chan, const char *context,
 	return res;
 }
 
-static int select_entry(struct ast_channel *chan, const char *context, const char *dialcontext, const struct directory_item *item, struct ast_flags *flags)
+static int select_entry(struct ast_channel *chan, const char *dialcontext, const struct directory_item *item, struct ast_flags *flags)
 {
-	ast_debug(1, "Selecting '%s' - %s@%s\n", item->name, item->exten, dialcontext);
+	ast_debug(1, "Selecting '%s' - %s@%s\n", item->name, item->exten, S_OR(dialcontext, item->context));
 
 	if (ast_test_flag(flags, OPT_FROMVOICEMAIL)) {
 		/* We still want to set the exten though */
 		ast_copy_string(chan->exten, item->exten, sizeof(chan->exten));
-	} else if (ast_goto_if_exists(chan, dialcontext, item->exten, 1)) {
+	} else if (ast_goto_if_exists(chan, S_OR(dialcontext, item->context), item->exten, 1)) {
 		ast_log(LOG_WARNING,
 			"Can't find extension '%s' in context '%s'.  "
 			"Did you pass the wrong context to Directory?\n",
-			item->exten, dialcontext);
+			item->exten, S_OR(dialcontext, item->context));
 		return -1;
 	}
 
 	return 0;
 }
 
-static int select_item_seq(struct ast_channel *chan, struct directory_item **items, int count, const char *context, const char *dialcontext, struct ast_flags *flags)
+static int select_item_seq(struct ast_channel *chan, struct directory_item **items, int count, const char *dialcontext, struct ast_flags *flags)
 {
 	struct directory_item *item, **ptr;
 	int i, res, loop;
@@ -257,7 +292,7 @@ static int select_item_seq(struct ast_channel *chan, struct directory_item **ite
 		item = *ptr;
 
 		for (loop = 3 ; loop > 0; loop--) {
-			res = play_mailbox_owner(chan, context, item->exten, item->name, flags);
+			res = play_mailbox_owner(chan, item->context, item->exten, item->name, flags);
 
 			if (!res)
 				res = ast_stream_and_wait(chan, "dir-instr", AST_DIGIT_ANY);
@@ -266,7 +301,7 @@ static int select_item_seq(struct ast_channel *chan, struct directory_item **ite
 			ast_stopstream(chan);
 	
 			if (res == '1') { /* Name selected */
-				return select_entry(chan, context, dialcontext, item, flags) ? -1 : 1;
+				return select_entry(chan, dialcontext, item, flags) ? -1 : 1;
 			} else if (res == '*') {
 				/* Skip to next match in list */
 				break;
@@ -283,7 +318,7 @@ static int select_item_seq(struct ast_channel *chan, struct directory_item **ite
 	return 0;
 }
 
-static int select_item_menu(struct ast_channel *chan, struct directory_item **items, int count, const char *context, const char *dialcontext, struct ast_flags *flags)
+static int select_item_menu(struct ast_channel *chan, struct directory_item **items, int count, const char *dialcontext, struct ast_flags *flags)
 {
 	struct directory_item **block, *item;
 	int i, limit, res = 0;
@@ -311,7 +346,7 @@ static int select_item_menu(struct ast_channel *chan, struct directory_item **it
 			if (!res)
 				res = ast_waitstream(chan, AST_DIGIT_ANY);
 			if (!res)
-				res = play_mailbox_owner(chan, context, item->exten, item->name, flags);
+				res = play_mailbox_owner(chan, item->context, item->exten, item->name, flags);
 			if (!res)
 				res = ast_waitstream(chan, AST_DIGIT_ANY);
 			if (!res)
@@ -330,7 +365,7 @@ static int select_item_menu(struct ast_channel *chan, struct directory_item **it
 		}
 
 		if (res && res > '0' && res < '1' + limit) {
-			return select_entry(chan, context, dialcontext, block[res - '1'], flags) ? -1 : 1;
+			return select_entry(chan, dialcontext, block[res - '1'], flags) ? -1 : 1;
 		}
 
 		if (res < 0)
@@ -351,7 +386,7 @@ static struct ast_config *realtime_directory(char *context)
 	struct ast_variable *var;
 	char *mailbox;
 	const char *fullname;
-	const char *hidefromdir;
+	const char *hidefromdir, *searchcontexts = NULL;
 	char tmp[100];
 	struct ast_flags config_flags = { 0 };
 
@@ -362,53 +397,74 @@ static struct ast_config *realtime_directory(char *context)
 		/* Loading config failed. */
 		ast_log(LOG_WARNING, "Loading config failed.\n");
 		return NULL;
+	} else if (cfg == CONFIG_STATUS_FILEINVALID) {
+		ast_log(LOG_ERROR, "Config file %s is in an invalid format.  Aborting.\n", VOICEMAIL_CONFIG);
+		return NULL;
 	}
 
 	/* Get realtime entries, categorized by their mailbox number
 	   and present in the requested context */
-	rtdata = ast_load_realtime_multientry("voicemail", "mailbox LIKE", "%", "context", context, SENTINEL);
+	if (ast_strlen_zero(context) && (searchcontexts = ast_variable_retrieve(cfg, "general", "searchcontexts"))) {
+		if (ast_true(searchcontexts)) {
+			rtdata = ast_load_realtime_multientry("voicemail", "mailbox LIKE", "%", SENTINEL);
+			context = NULL;
+		} else {
+			rtdata = ast_load_realtime_multientry("voicemail", "mailbox LIKE", "%", "context", "default", SENTINEL);
+			context = "default";
+		}
+	} else {
+		rtdata = ast_load_realtime_multientry("voicemail", "mailbox LIKE", "%", "context", context, SENTINEL);
+	}
 
 	/* if there are no results, just return the entries from the config file */
-	if (!rtdata)
+	if (!rtdata) {
 		return cfg;
-
-	/* Does the context exist within the config file? If not, make one */
-	cat = ast_category_get(cfg, context);
-	if (!cat) {
-		cat = ast_category_new(context, "", 99999);
-		if (!cat) {
-			ast_log(LOG_WARNING, "Out of memory\n");
-			ast_config_destroy(cfg);
-			return NULL;
-		}
-		ast_category_append(cfg, cat);
 	}
 
 	mailbox = NULL;
 	while ( (mailbox = ast_category_browse(rtdata, mailbox)) ) {
+		const char *context = ast_variable_retrieve(rtdata, mailbox, "context");
+
 		fullname = ast_variable_retrieve(rtdata, mailbox, "fullname");
 		if (ast_true((hidefromdir = ast_variable_retrieve(rtdata, mailbox, "hidefromdir")))) {
 			/* Skip hidden */
 			continue;
 		}
 		snprintf(tmp, sizeof(tmp), "no-password,%s", S_OR(fullname, ""));
-		var = ast_variable_new(mailbox, tmp, "");
-		if (var)
+
+		/* Does the context exist within the config file? If not, make one */
+		if (!(cat = ast_category_get(cfg, context))) {
+			if (!(cat = ast_category_new(context, "", 99999))) {
+				ast_log(LOG_WARNING, "Out of memory\n");
+				ast_config_destroy(cfg);
+				if (rtdata) {
+					ast_config_destroy(rtdata);
+				}
+				return NULL;
+			}
+			ast_category_append(cfg, cat);
+		}
+
+		if ((var = ast_variable_new(mailbox, tmp, ""))) {
 			ast_variable_append(cat, var);
-		else
+		} else {
 			ast_log(LOG_WARNING, "Out of memory adding mailbox '%s'\n", mailbox);
+		}
 	}
 	ast_config_destroy(rtdata);
 
 	return cfg;
 }
 
-static int check_match(struct directory_item **result, const char *item_fullname, const char *item_ext, const char *pattern_ext, int use_first_name)
+static int check_match(struct directory_item **result, const char *item_context, const char *item_fullname, const char *item_ext, const char *pattern_ext, int use_first_name)
 {
 	struct directory_item *item;
 	const char *key = NULL;
 	int namelen;
 
+	if (ast_strlen_zero(item_fullname)) {
+		return 0;
+	}
 
 	/* Set key to last name or first name depending on search mode */
 	if (!use_first_name)
@@ -422,10 +478,13 @@ static int check_match(struct directory_item **result, const char *item_fullname
 	if (compare(key, pattern_ext))
 		return 0;
 
+	ast_debug(1, "Found match %s@%s\n", item_ext, item_context);
+
 	/* Match */
 	item = ast_calloc(1, sizeof(*item));
 	if (!item)
 		return -1;
+	ast_copy_string(item->context, item_context, sizeof(item->context));
 	ast_copy_string(item->name, item_fullname, sizeof(item->name));
 	ast_copy_string(item->exten, item_ext, sizeof(item->exten));
 
@@ -444,7 +503,7 @@ static int check_match(struct directory_item **result, const char *item_fullname
 
 typedef AST_LIST_HEAD_NOLOCK(, directory_item) itemlist;
 
-static int search_directory(const char *context, struct ast_config *vmcfg, struct ast_config *ucfg, const char *ext, struct ast_flags flags, itemlist *alist)
+static int search_directory_sub(const char *context, struct ast_config *vmcfg, struct ast_config *ucfg, const char *ext, struct ast_flags flags, itemlist *alist)
 {
 	struct ast_variable *v;
 	char buf[AST_MAX_EXTENSION + 1], *pos, *bufptr, *cat;
@@ -468,10 +527,10 @@ static int search_directory(const char *context, struct ast_config *vmcfg, struc
 
 		res = 0;
 		if (ast_test_flag(&flags, OPT_LISTBYLASTNAME)) {
-			res = check_match(&item, pos, v->name, ext, 0 /* use_first_name */);
+			res = check_match(&item, context, pos, v->name, ext, 0 /* use_first_name */);
 		}
 		if (!res && ast_test_flag(&flags, OPT_LISTBYFIRSTNAME)) {
-			res = check_match(&item, pos, v->name, ext, 1 /* use_first_name */);
+			res = check_match(&item, context, pos, v->name, ext, 1 /* use_first_name */);
 		}
 
 		if (!res)
@@ -484,23 +543,23 @@ static int search_directory(const char *context, struct ast_config *vmcfg, struc
 
 	if (ucfg) {
 		for (cat = ast_category_browse(ucfg, NULL); cat ; cat = ast_category_browse(ucfg, cat)) {
-			const char *pos;
+			const char *position;
 			if (!strcasecmp(cat, "general"))
 				continue;
 			if (!ast_true(ast_config_option(ucfg, cat, "hasdirectory")))
 				continue;
 
 			/* Find all candidate extensions */
-			pos = ast_variable_retrieve(ucfg, cat, "fullname");
-			if (!pos)
+			position = ast_variable_retrieve(ucfg, cat, "fullname");
+			if (!position)
 				continue;
 
 			res = 0;
 			if (ast_test_flag(&flags, OPT_LISTBYLASTNAME)) {
-				res = check_match(&item, pos, cat, ext, 0 /* use_first_name */);
+				res = check_match(&item, context, position, cat, ext, 0 /* use_first_name */);
 			}
 			if (!res && ast_test_flag(&flags, OPT_LISTBYFIRSTNAME)) {
-				res = check_match(&item, pos, cat, ext, 1 /* use_first_name */);
+				res = check_match(&item, context, position, cat, ext, 1 /* use_first_name */);
 			}
 
 			if (!res)
@@ -512,6 +571,35 @@ static int search_directory(const char *context, struct ast_config *vmcfg, struc
 		}
 	}
 	return 0;
+}
+
+static int search_directory(const char *context, struct ast_config *vmcfg, struct ast_config *ucfg, const char *ext, struct ast_flags flags, itemlist *alist)
+{
+	const char *searchcontexts = ast_variable_retrieve(vmcfg, "general", "searchcontexts");
+	if (ast_strlen_zero(context)) {
+		if (!ast_strlen_zero(searchcontexts) && ast_true(searchcontexts)) {
+			/* Browse each context for a match */
+			int res;
+			const char *catg;
+			for (catg = ast_category_browse(vmcfg, NULL); catg; catg = ast_category_browse(vmcfg, catg)) {
+				if (!strcmp(catg, "general") || !strcmp(catg, "zonemessages")) {
+					continue;
+				}
+
+				if ((res = search_directory_sub(catg, vmcfg, ucfg, ext, flags, alist))) {
+					return res;
+				}
+			}
+			return 0;
+		} else {
+			ast_debug(1, "Searching by category default\n");
+			return search_directory_sub("default", vmcfg, ucfg, ext, flags, alist);
+		}
+	} else {
+		/* Browse only the listed context for a match */
+		ast_debug(1, "Searching by category %s\n", context);
+		return search_directory_sub(context, vmcfg, ucfg, ext, flags, alist);
+	}
 }
 
 static void sort_items(struct directory_item **sorted, int count)
@@ -558,18 +646,11 @@ static int do_directory(struct ast_channel *chan, struct ast_config *vmcfg, stru
 	int count, i;
 	char ext[10] = "";
 
-	if (ast_strlen_zero(context)) {
-		ast_log(LOG_WARNING,
-			"Directory must be called with an argument "
-			"(context in which to interpret extensions)\n");
-		return -1;
-	}
-
-	if (digit == '0' && !goto_exten(chan, dialcontext, "o")) {
+	if (digit == '0' && !goto_exten(chan, S_OR(dialcontext, "default"), "o")) {
 		return 0;
 	}
 
-	if (digit == '*' && !goto_exten(chan, dialcontext, "a")) {
+	if (digit == '*' && !goto_exten(chan, S_OR(dialcontext, "default"), "a")) {
 		return 0;
 	}
 
@@ -607,16 +688,16 @@ static int do_directory(struct ast_channel *chan, struct ast_config *vmcfg, stru
 	if (option_debug) {
 		ast_debug(2, "Listing matching entries:\n");
 		for (ptr = sorted, i = 0; i < count; i++, ptr++) {
-			ast_log(LOG_DEBUG, "%s: %s\n", ptr[0]->exten, ptr[0]->name);
+			ast_debug(2, "%s: %s\n", ptr[0]->exten, ptr[0]->name);
 		}
 	}
 
 	if (ast_test_flag(flags, OPT_SELECTFROMMENU)) {
 		/* Offer multiple entries at the same time */
-		res = select_item_menu(chan, sorted, count, context, dialcontext, flags);
+		res = select_item_menu(chan, sorted, count, dialcontext, flags);
 	} else {
 		/* Offer entries one by one */
-		res = select_item_seq(chan, sorted, count, context, dialcontext, flags);
+		res = select_item_seq(chan, sorted, count, dialcontext, flags);
 	}
 
 	if (!res) {
@@ -638,7 +719,7 @@ static int directory_exec(struct ast_channel *chan, void *data)
 	int res = 0, digit = 3;
 	struct ast_config *cfg, *ucfg;
 	const char *dirintro;
-	char *parse, *opts[OPT_ARG_ARRAY_SIZE];
+	char *parse, *opts[OPT_ARG_ARRAY_SIZE] = { 0, };
 	struct ast_flags flags = { 0 };
 	struct ast_flags config_flags = { 0 };
 	enum { FIRST, LAST, BOTH } which = LAST;
@@ -649,11 +730,6 @@ static int directory_exec(struct ast_channel *chan, void *data)
 		AST_APP_ARG(options);
 	);
 
-	if (ast_strlen_zero(data)) {
-		ast_log(LOG_WARNING, "Directory requires an argument (context[,dialcontext])\n");
-		return -1;
-	}
-
 	parse = ast_strdupa(data);
 
 	AST_STANDARD_APP_ARGS(args, parse);
@@ -661,16 +737,15 @@ static int directory_exec(struct ast_channel *chan, void *data)
 	if (args.options && ast_app_parse_options(directory_app_options, &flags, opts, args.options))
 		return -1;
 
-	if (ast_strlen_zero(args.dialcontext))
-		args.dialcontext = args.vmcontext;
-
-	cfg = realtime_directory(args.vmcontext);
-	if (!cfg) {
+	if (!(cfg = realtime_directory(args.vmcontext))) {
 		ast_log(LOG_ERROR, "Unable to read the configuration data!\n");
 		return -1;
 	}
 
-	ucfg = ast_config_load("users.conf", config_flags);
+	if ((ucfg = ast_config_load("users.conf", config_flags)) == CONFIG_STATUS_FILEINVALID) {
+		ast_log(LOG_ERROR, "Config file users.conf is in an invalid format.  Aborting.\n");
+		ucfg = NULL;
+	}
 
 	dirintro = ast_variable_retrieve(cfg, args.vmcontext, "directoryintro");
 	if (ast_strlen_zero(dirintro))
@@ -765,7 +840,7 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	return ast_register_application(app, directory_exec, synopsis, descrip);
+	return ast_register_application_xml(app, directory_exec);
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Extension Directory");

@@ -30,33 +30,50 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/manager.h"
 #include "asterisk/app.h"
 
+/*** DOCUMENTATION
+	<application name="UserEvent" language="en_US">
+		<synopsis>
+			Send an arbitrary event to the manager interface.
+		</synopsis>
+		<syntax>
+			<parameter name="eventname" required="true" />
+			<parameter name="body" />
+		</syntax>
+		<description>
+			<para>Sends an arbitrary event to the manager interface, with an optional
+			<replaceable>body</replaceable> representing additional arguments. The
+			<replaceable>body</replaceable> may be specified as
+			a <literal>|</literal> delimited list of headers. Each additional
+			argument will be placed on a new line in the event. The format of the
+			event will be:</para>
+			<para>    Event: UserEvent</para>
+			<para>    UserEvent: &lt;specified event name&gt;</para>
+			<para>    [body]</para>
+			<para>If no <replaceable>body</replaceable> is specified, only Event and UserEvent headers will be present.</para>
+		</description>
+	</application>
+ ***/
+
 static char *app = "UserEvent";
-
-static char *synopsis = "Send an arbitrary event to the manager interface";
-
-static char *descrip = 
-"  UserEvent(eventname[,body]): Sends an arbitrary event to the manager\n"
-"interface, with an optional body representing additional arguments.  The\n"
-"body may be specified as a | delimeted list of headers. Each additional\n"
-"argument will be placed on a new line in the event. The format of the\n"
-"event will be:\n"
-"    Event: UserEvent\n"
-"    UserEvent: <specified event name>\n"
-"    [body]\n"
-"If no body is specified, only Event and UserEvent headers will be present.\n";
-
 
 static int userevent_exec(struct ast_channel *chan, void *data)
 {
-	char *parse, buf[2048] = "";
-	int x, buflen = 0;
+	char *parse;
+	int x;
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(eventname);
 		AST_APP_ARG(extra)[100];
 	);
+	struct ast_str *body = ast_str_create(16);
 
 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_WARNING, "UserEvent requires an argument (eventname,optional event body)\n");
+		ast_free(body);
+		return -1;
+	}
+
+	if (!body) {
+		ast_log(LOG_WARNING, "Unable to allocate buffer\n");
 		return -1;
 	}
 
@@ -65,13 +82,11 @@ static int userevent_exec(struct ast_channel *chan, void *data)
 	AST_STANDARD_APP_ARGS(args, parse);
 
 	for (x = 0; x < args.argc - 1; x++) {
-		ast_copy_string(buf + buflen, args.extra[x], sizeof(buf) - buflen - 2);
-		buflen += strlen(args.extra[x]);
-		ast_copy_string(buf + buflen, "\r\n", 3);
-		buflen += 2;
+		ast_str_append(&body, 0, "%s\r\n", args.extra[x]);
 	}
 
-	manager_event(EVENT_FLAG_USER, "UserEvent", "UserEvent: %s\r\n%s", args.eventname, buf);
+	manager_event(EVENT_FLAG_USER, "UserEvent", "UserEvent: %s\r\n%s", args.eventname, ast_str_buffer(body));
+	ast_free(body);
 
 	return 0;
 }
@@ -83,7 +98,7 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	return ast_register_application(app, userevent_exec, synopsis, descrip);
+	return ast_register_application_xml(app, userevent_exec);
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Custom User Event Application");

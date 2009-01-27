@@ -32,11 +32,14 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 111213 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <gmime/gmime.h>
+#if defined (__OpenBSD__) || defined(__FreeBSD__)
+#include <libgen.h>
+#endif
 
 #include "asterisk/linkedlists.h"
 #include "asterisk/http.h"
@@ -69,7 +72,7 @@ static void post_raw(GMimePart *part, const char *post_dir, const char *fn)
 
 	ast_debug(1, "Posting raw data to %s\n", filename);
 
-	if ((fd = open(filename, O_CREAT | O_WRONLY, 0666)) == -1) {
+	if ((fd = open(filename, O_CREAT | O_WRONLY | O_TRUNC, 0666)) == -1) {
 		ast_log(LOG_WARNING, "Unable to open %s for writing file from a POST!\n", filename);
 
 		return;
@@ -153,17 +156,153 @@ static int process_message(GMimeMessage *message, const char *post_dir)
 	return cbinfo.count;
 }
 
+
+/* Find a sequence of bytes within a binary array. */
+static int find_sequence(char * inbuf, int inlen, char * matchbuf, int matchlen)
+{
+	int current;
+	int comp;
+	int found = 0;
+
+	for (current = 0; current < inlen-matchlen; current++, inbuf++) {
+		if (*inbuf == *matchbuf) {
+			found=1;
+			for (comp = 1; comp < matchlen; comp++) {
+				if (inbuf[comp] != matchbuf[comp]) {
+					found = 0;
+					break;
+				}
+			}
+			if (found) {
+				break;
+			}
+		}
+	}
+	if (found) {
+		return current;
+	} else {
+		return -1;
+	}
+}
+
+/*
+* The following is a work around to deal with how IE7 embeds the local file name
+* within the Mime header using full WINDOWS file path with backslash directory delimiters.
+* This section of code attempts to isolate the directory path and remove it
+* from what is written into the output file.  In addition, it changes
+* esc chars (i.e. backslashes) to forward slashes.
+* This function has two modes.  The first to find a boundary marker.  The
+* second is to find the filename immediately after the boundary.
+*/
+static int readmimefile(FILE * fin, FILE * fout, char * boundary, int contentlen)
+{
+	int find_filename = 0;
+	char buf[4096];
+	int marker;
+	int x;
+	int char_in_buf = 0;
+	int num_to_read;
+	int boundary_len;
+	char * path_end, * path_start, * filespec;
+
+	if (NULL == fin || NULL == fout || NULL == boundary || 0 >= contentlen) {
+		return -1;
+	}
+
+	boundary_len = strlen(boundary);
+	while (0 < contentlen || 0 < char_in_buf) {
+		/* determine how much I will read into the buffer */
+		if (contentlen > sizeof(buf) - char_in_buf) {
+			num_to_read = sizeof(buf)- char_in_buf;
+		} else {
+			num_to_read = contentlen;
+		}
+
+		if (0 < num_to_read) {
+			if (fread(&(buf[char_in_buf]), 1, num_to_read, fin) < num_to_read) {
+				ast_log(LOG_WARNING, "fread() failed: %s\n", strerror(errno));
+				num_to_read = 0;
+			}
+			contentlen -= num_to_read;
+			char_in_buf += num_to_read;
+		}
+		/* If I am looking for the filename spec */
+		if (find_filename) {
+			path_end = filespec = NULL;
+			x = strlen("filename=\"");
+			marker = find_sequence(buf, char_in_buf, "filename=\"", x );
+			if (0 <= marker) {
+				marker += x;  /* Index beyond the filename marker */
+				path_start = &buf[marker];
+				for (path_end = path_start, x = 0; x < char_in_buf-marker; x++, path_end++) {
+					if ('\\' == *path_end) {	/* convert backslashses to forward slashes */
+						*path_end = '/';
+					}
+					if ('\"' == *path_end) {	/* If at the end of the file name spec */
+						*path_end = '\0';		/* temporarily null terminate the file spec for basename */
+						filespec = basename(path_start);
+						*path_end = '\"';
+						break;
+					}
+				}
+			}
+			if (filespec) {	/* If the file name path was found in the header */
+				if (fwrite(buf, 1, marker, fout) != marker) {
+					ast_log(LOG_WARNING, "fwrite() failed: %s\n", strerror(errno));
+				}
+				x = (int)(path_end+1 - filespec);
+				if (fwrite(filespec, 1, x, fout) != x) {
+					ast_log(LOG_WARNING, "fwrite() failed: %s\n", strerror(errno));
+				}
+				x = (int)(path_end+1 - buf);
+				memmove(buf, &(buf[x]), char_in_buf-x);
+				char_in_buf -= x;
+			}
+			find_filename = 0;
+		} else { /* I am looking for the boundary marker */
+			marker = find_sequence(buf, char_in_buf, boundary, boundary_len);
+			if (0 > marker) {
+				if (char_in_buf < (boundary_len)) {
+					/*no possibility to find the boundary, write all you have */
+					if (fwrite(buf, 1, char_in_buf, fout) != char_in_buf) {
+						ast_log(LOG_WARNING, "fwrite() failed: %s\n", strerror(errno));
+					}
+					char_in_buf = 0;
+				} else {
+					/* write all except for area where the boundary marker could be */
+					if (fwrite(buf, 1, char_in_buf -(boundary_len -1), fout) != char_in_buf - (boundary_len - 1)) {
+						ast_log(LOG_WARNING, "fwrite() failed: %s\n", strerror(errno));
+					}
+					x = char_in_buf -(boundary_len -1);
+					memmove(buf, &(buf[x]), char_in_buf-x);
+					char_in_buf = (boundary_len -1);
+				}
+			} else {
+				/* write up through the boundary, then look for filename in the rest */
+				if (fwrite(buf, 1, marker + boundary_len, fout) != marker + boundary_len) {
+					ast_log(LOG_WARNING, "fwrite() failed: %s\n", strerror(errno));
+				}
+				x = marker + boundary_len;
+				memmove(buf, &(buf[x]), char_in_buf-x);
+				char_in_buf -= marker + boundary_len;
+				find_filename =1;
+			}
+		}
+	}
+	return 0;
+}
+
+
 static struct ast_str *http_post_callback(struct ast_tcptls_session_instance *ser, const struct ast_http_uri *urih, const char *uri, enum ast_http_method method, struct ast_variable *vars, struct ast_variable *headers, int *status, char **title, int *contentlength)
 {
 	struct ast_variable *var;
 	unsigned long ident = 0;
-	char buf[4096];
 	FILE *f;
-	size_t res;
 	int content_len = 0;
 	struct ast_str *post_dir;
 	GMimeMessage *message;
 	int message_count = 0;
+	char * boundary_marker = NULL;
 
 	if (!urih) {
 		return ast_http_error((*status = 400),
@@ -213,17 +352,23 @@ static struct ast_str *http_post_callback(struct ast_tcptls_session_instance *se
 				return NULL;
 			}
 			ast_debug(1, "Got a Content-Length of %d\n", content_len);
+		} else if (!strcasecmp(var->name, "Content-Type")) {
+			boundary_marker = strstr(var->value, "boundary=");
+			if (boundary_marker) {
+				boundary_marker += strlen("boundary=");
+			}
 		}
 	}
 
 	fprintf(f, "\r\n");
 
-	for (res = sizeof(buf); content_len; content_len -= res) {
-		if (content_len < res) {
-			res = content_len;
+	if (0 > readmimefile(ser->f, f, boundary_marker, content_len)) {
+		if (option_debug) {
+			ast_log(LOG_DEBUG, "Cannot find boundary marker in POST request.\n");
 		}
-		fread(buf, 1, res, ser->f);
-		fwrite(buf, 1, res, f);
+		fclose(f);
+		
+		return NULL;
 	}
 
 	if (fseek(f, SEEK_SET, 0)) {
@@ -245,7 +390,7 @@ static struct ast_str *http_post_callback(struct ast_tcptls_session_instance *se
 				      NULL, "The was an error parsing the request.");
 	}
 
-	if (!(message_count = process_message(message, post_dir->str))) {
+	if (!(message_count = process_message(message, ast_str_buffer(post_dir)))) {
 		ast_log(LOG_ERROR, "Invalid MIME data, found no parts!\n");
 		g_object_unref(message);
 		return ast_http_error((*status = 400),
@@ -266,7 +411,8 @@ static int __ast_http_post_load(int reload)
 	struct ast_variable *v;
 	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
 
-	if ((cfg = ast_config_load2("http.conf", "http", config_flags)) == CONFIG_STATUS_FILEUNCHANGED) {
+	cfg = ast_config_load2("http.conf", "http", config_flags);
+	if (cfg == CONFIG_STATUS_FILEMISSING || cfg == CONFIG_STATUS_FILEUNCHANGED || cfg == CONFIG_STATUS_FILEINVALID) {
 		return 0;
 	}
 

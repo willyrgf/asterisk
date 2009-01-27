@@ -28,7 +28,7 @@
  */
 
 /*** MODULEINFO
-	<depend>asound</depend>
+	<depend>alsa</depend>
  ***/
 
 #include "asterisk.h"
@@ -381,13 +381,17 @@ static int alsa_write(struct ast_channel *chan, struct ast_frame *f)
 		state = snd_pcm_state(alsa.ocard);
 		if (state == SND_PCM_STATE_XRUN)
 			snd_pcm_prepare(alsa.ocard);
-		res = snd_pcm_writei(alsa.ocard, sizbuf, len / 2);
+		while ((res = snd_pcm_writei(alsa.ocard, sizbuf, len / 2)) == -EAGAIN) {
+			usleep(1);
+		}
 		if (res == -EPIPE) {
 #if DEBUG
 			ast_debug(1, "XRUN write\n");
 #endif
 			snd_pcm_prepare(alsa.ocard);
-			res = snd_pcm_writei(alsa.ocard, sizbuf, len / 2);
+			while ((res = snd_pcm_writei(alsa.ocard, sizbuf, len / 2)) == -EAGAIN) {
+				usleep(1);
+			}
 			if (res != len / 2) {
 				ast_log(LOG_ERROR, "Write error: %s\n", snd_strerror(res));
 				res = -1;
@@ -560,12 +564,12 @@ static struct ast_channel *alsa_new(struct chan_alsa_pvt *p, int state)
 	return tmp;
 }
 
-static struct ast_channel *alsa_request(const char *type, int format, void *data, int *cause)
+static struct ast_channel *alsa_request(const char *type, int fmt, void *data, int *cause)
 {
-	int oldformat = format;
+	int oldformat = fmt;
 	struct ast_channel *tmp = NULL;
 
-	if (!(format &= AST_FORMAT_SLINEAR)) {
+	if (!(fmt &= AST_FORMAT_SLINEAR)) {
 		ast_log(LOG_NOTICE, "Asked to get a channel of format '%d'\n", oldformat);
 		return NULL;
 	}
@@ -857,8 +861,12 @@ static int load_module(void)
 
 	strcpy(mohinterpret, "default");
 
-	if (!(cfg = ast_config_load(config, config_flags)))
+	if (!(cfg = ast_config_load(config, config_flags))) {
 		return AST_MODULE_LOAD_DECLINE;
+	} else if (cfg == CONFIG_STATUS_FILEINVALID) {
+		ast_log(LOG_ERROR, "%s is in an invalid format.  Aborting.\n", config);
+		return AST_MODULE_LOAD_DECLINE;
+	}
 
 	v = ast_variable_browse(cfg, "general");
 	for (; v; v = v->next) {
@@ -898,7 +906,7 @@ static int load_module(void)
 		return AST_MODULE_LOAD_FAILURE;
 	}
 
-	ast_cli_register_multiple(cli_alsa, sizeof(cli_alsa) / sizeof(struct ast_cli_entry));
+	ast_cli_register_multiple(cli_alsa, ARRAY_LEN(cli_alsa));
 
 	return AST_MODULE_LOAD_SUCCESS;
 }
@@ -906,7 +914,7 @@ static int load_module(void)
 static int unload_module(void)
 {
 	ast_channel_unregister(&alsa_tech);
-	ast_cli_unregister_multiple(cli_alsa, sizeof(cli_alsa) / sizeof(struct ast_cli_entry));
+	ast_cli_unregister_multiple(cli_alsa, ARRAY_LEN(cli_alsa));
 
 	if (alsa.icard)
 		snd_pcm_close(alsa.icard);

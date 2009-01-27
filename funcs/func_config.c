@@ -36,6 +36,23 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/pbx.h"
 #include "asterisk/app.h"
 
+/*** DOCUMENTATION
+	<function name="AST_CONFIG" language="en_US">
+		<synopsis>
+			Retrieve a variable from a configuration file.
+		</synopsis>
+		<syntax>
+			<parameter name="config_file" required="true" />
+			<parameter name="category" required="true" />
+			<parameter name="variable_name" required="true" />
+		</syntax>
+		<description>
+			<para>This function reads a variable from an Asterisk configuration file.</para>
+		</description>
+	</function>
+
+***/
+
 struct config_item {
 	AST_RWLIST_ENTRY(config_item) entry;
 	struct ast_config *cfg;
@@ -82,7 +99,7 @@ static int config_function_read(struct ast_channel *chan, const char *cmd, char 
 		return -1;
 	}
 
-	if (!(cfg = ast_config_load(args.filename, cfg_flags))) {
+	if (!(cfg = ast_config_load(args.filename, cfg_flags)) || cfg == CONFIG_STATUS_FILEINVALID) {
 		return -1;
 	}
 
@@ -107,7 +124,7 @@ static int config_function_read(struct ast_channel *chan, const char *cmd, char 
 			strcpy(cur->filename, args.filename);
 
 			ast_clear_flag(&cfg_flags, CONFIG_FLAG_FILEUNCHANGED);
-			if (!(cfg = ast_config_load(args.filename, cfg_flags))) {
+			if (!(cfg = ast_config_load(args.filename, cfg_flags)) || cfg == CONFIG_STATUS_FILEINVALID) {
 				ast_free(cur);
 				AST_RWLIST_UNLOCK(&configs);
 				return -1;
@@ -160,23 +177,18 @@ static int config_function_read(struct ast_channel *chan, const char *cmd, char 
 
 static struct ast_custom_function config_function = {
 	.name = "AST_CONFIG",
-	.syntax = "AST_CONFIG(config_file,category,variable_name)",
-	.synopsis = "Retrieve a variable from a configuration file",
-	.desc = 
-	"   This function reads a variable from an Asterisk configuration file.\n"
-	"",
 	.read = config_function_read,
 };
 
 static int unload_module(void)
 {
-	struct config_item *cur;
+	struct config_item *current;
 	int res = ast_custom_function_unregister(&config_function);
 
 	AST_RWLIST_WRLOCK(&configs);
-	while ((cur = AST_RWLIST_REMOVE_HEAD(&configs, entry))) {
-		ast_config_destroy(cur->cfg);
-		ast_free(cur);
+	while ((current = AST_RWLIST_REMOVE_HEAD(&configs, entry))) {
+		ast_config_destroy(current->cfg);
+		ast_free(current);
 	}
 	AST_RWLIST_UNLOCK(&configs);
 

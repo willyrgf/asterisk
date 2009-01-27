@@ -52,16 +52,25 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/say.h"
 #include "asterisk/utils.h"
 
+/*** DOCUMENTATION
+	<application name="DAHDIBarge" language="en_US">
+		<synopsis>
+			Barge in (monitor) DAHDI channel.
+		</synopsis>
+		<syntax>
+			<parameter name="channel">
+				<para>Channel to barge.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Barges in on a specified DAHDI <replaceable>channel</replaceable> or prompts
+			if one is not specified. Returns <literal>-1</literal> when caller user hangs
+			up and is independent of the state of the channel being monitored.
+			</para>
+		</description>
+	</application>
+ ***/
 static char *app = "DAHDIBarge";
-
-static char *synopsis = "Barge in (monitor) DAHDI channel";
-
-static char *descrip = 
-"  DAHDIBarge([channel]): Barges in on a specified DAHDI\n"
-"channel or prompts if one is not specified.  Returns\n"
-"-1 when caller user hangs up and is independent of the\n"
-"state of the channel being monitored.";
-
 
 #define CONF_SIZE 160
 
@@ -251,11 +260,11 @@ outrun:
 
 static int conf_exec(struct ast_channel *chan, void *data)
 {
-	int res=-1;
+	int res = -1;
 	int retrycnt = 0;
 	int confflags = 0;
 	int confno = 0;
-	char confstr[80] = "";
+	char confnostr[80] = "";
 	
 	if (!ast_strlen_zero(data)) {
 		if ((sscanf(data, "DAHDI/%d", &confno) != 1) &&
@@ -270,10 +279,10 @@ static int conf_exec(struct ast_channel *chan, void *data)
 
 	while(!confno && (++retrycnt < 4)) {
 		/* Prompt user for conference number */
-		confstr[0] = '\0';
-		res = ast_app_getdata(chan, "conf-getchannel",confstr, sizeof(confstr) - 1, 0);
+		confnostr[0] = '\0';
+		res = ast_app_getdata(chan, "conf-getchannel",confnostr, sizeof(confnostr) - 1, 0);
 		if (res <0) goto out;
-		if (sscanf(confstr, "%d", &confno) != 1)
+		if (sscanf(confnostr, "%d", &confno) != 1)
 			confno = 0;
 	}
 	if (confno) {
@@ -293,7 +302,7 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	return ((ast_register_application(app, conf_exec, synopsis, descrip)) ? AST_MODULE_LOAD_FAILURE : AST_MODULE_LOAD_SUCCESS);
+	return ((ast_register_application_xml(app, conf_exec)) ? AST_MODULE_LOAD_FAILURE : AST_MODULE_LOAD_SUCCESS);
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Barge in on DAHDI channel application");

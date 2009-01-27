@@ -39,6 +39,240 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/app.h"
 #include "asterisk/localtime.h"
 
+AST_THREADSTORAGE(result_buf);
+
+/*** DOCUMENTATION
+	<function name="FIELDQTY" language="en_US">
+		<synopsis>
+			Count the fields with an arbitrary delimiter
+		</synopsis>
+		<syntax>
+			<parameter name="varname" required="true" />
+			<parameter name="delim" required="true" />
+		</syntax>
+		<description>
+			<para>Example: ${FIELDQTY(ex-amp-le,-)} returns 3</para>
+		</description>
+	</function>
+	<function name="LISTFILTER" language="en_US">
+		<synopsis>Remove an item from a list, by name.</synopsis>
+		<syntax>
+			<parameter name="varname" required="true" />
+			<parameter name="delim" required="true" default="," />
+			<parameter name="value" required="true" />
+		</syntax>
+		<description>
+			<para>Remove <replaceable>value</replaceable> from the list contained in the <replaceable>varname</replaceable>
+			variable, where the list delimiter is specified by the <replaceable>delim</replaceable> parameter.  This is
+			very useful for removing a single channel name from a list of channels, for example.</para>
+		</description>
+	</function>
+	<function name="FILTER" language="en_US">
+		<synopsis>
+			Filter the string to include only the allowed characters
+		</synopsis>
+		<syntax>
+			<parameter name="allowed-chars" required="true" />
+			<parameter name="string" required="true" />
+		</syntax>
+		<description>
+			<para>Permits all characters listed in <replaceable>allowed-chars</replaceable>, 
+			filtering all others outs. In addition to literally listing the characters, 
+			you may also use ranges of characters (delimited by a <literal>-</literal></para>
+			<para>Hexadecimal characters started with a <literal>\x</literal>(i.e. \x20)</para>
+			<para>Octal characters started with a <literal>\0</literal> (i.e. \040)</para>
+			<para>Also <literal>\t</literal>,<literal>\n</literal> and <literal>\r</literal> are recognized.</para> 
+			<note><para>If you want the <literal>-</literal> character it needs to be prefixed with a 
+			<literal>\</literal></para></note>
+		</description>
+	</function>
+	<function name="REGEX" language="en_US">
+		<synopsis>
+			Check string against a regular expression.
+		</synopsis>
+		<syntax argsep=" ">
+			<parameter name="&quot;regular expression&quot;" required="true" />
+			<parameter name="string" required="true" />
+		</syntax>
+		<description>
+			<para>Return <literal>1</literal> on regular expression match or <literal>0</literal> otherwise</para>
+			<para>Please note that the space following the double quotes separating the 
+			regex from the data is optional and if present, is skipped. If a space is 
+			desired at the beginning of the data, then put two spaces there; the second 
+			will not be skipped.</para>
+		</description>
+	</function>
+	<application name="ClearHash" language="en_US">
+		<synopsis>
+			Clear the keys from a specified hashname.
+		</synopsis>
+		<syntax>
+			<parameter name="hashname" required="true" />
+		</syntax>
+		<description>
+			<para>Clears all keys out of the specified <replaceable>hashname</replaceable>.</para>
+		</description>
+	</application>
+	<function name="HASH" language="en_US">
+		<synopsis>
+			Implementation of a dialplan associative array
+		</synopsis>
+		<syntax>
+			<parameter name="hashname" required="true" />
+			<parameter name="hashkey" />
+		</syntax>
+		<description>
+			<para>In two arguments mode, gets and sets values to corresponding keys within
+			a named associative array. The single-argument mode will only work when assigned
+			to from a function defined by func_odbc</para>
+		</description>
+	</function>
+	<function name="HASHKEYS" language="en_US">
+		<synopsis>
+			Retrieve the keys of the HASH() function.
+		</synopsis>
+		<syntax>
+			<parameter name="hashname" required="true" />
+		</syntax>
+		<description>
+			<para>Returns a comma-delimited list of the current keys of the associative array 
+			defined by the HASH() function. Note that if you iterate over the keys of 
+			the result, adding keys during iteration will cause the result of the HASHKEYS()
+			function to change.</para>
+		</description>
+	</function>
+	<function name="KEYPADHASH" language="en_US">
+		<synopsis>
+			Hash the letters in string into equivalent keypad numbers.
+		</synopsis>
+		<syntax>
+			<parameter name="string" required="true" />
+		</syntax>
+		<description>
+			<para>Example: ${KEYPADHASH(Les)} returns "537"</para>
+		</description>
+	</function>
+	<function name="ARRAY" language="en_US">
+		<synopsis>
+			Allows setting multiple variables at once.
+		</synopsis>
+		<syntax>
+			<parameter name="var1" required="true" />
+			<parameter name="var2" required="false" multiple="true" />
+			<parameter name="varN" required="false" />
+		</syntax>
+		<description>
+			<para>The comma-delimited list passed as a value to which the function is set will 
+			be interpreted as a set of values to which the comma-delimited list of 
+			variable names in the argument should be set.</para>
+			<para>Example: Set(ARRAY(var1,var2)=1,2) will set var1 to 1 and var2 to 2</para>
+		</description>
+	</function>
+	<function name="STRPTIME" language="en_US">
+		<synopsis>
+			Returns the epoch of the arbitrary date/time string structured as described by the format.
+		</synopsis>
+		<syntax>
+			<parameter name="datetime" required="true" />
+			<parameter name="timezone" required="true" />
+			<parameter name="format" required="true" />
+		</syntax>
+		<description>
+			<para>This is useful for converting a date into <literal>EPOCH</literal> time, 
+			possibly to pass to an application like SayUnixTime or to calculate the difference
+			between the two date strings</para>
+			<para>Example: ${STRPTIME(2006-03-01 07:30:35,America/Chicago,%Y-%m-%d %H:%M:%S)} returns 1141219835</para>
+		</description>
+	</function>
+	<function name="STRFTIME" language="en_US">
+		<synopsis>
+			Returns the current date/time in the specified format.
+		</synopsis>
+		<syntax>
+			<parameter name="epoch" />
+			<parameter name="timezone" />
+			<parameter name="format" />
+		</syntax>
+		<description>
+			<para>STRFTIME supports all of the same formats as the underlying C function
+			<emphasis>strftime(3)</emphasis>.
+			It also supports the following format: <literal>%[n]q</literal> - fractions of a second,
+			with leading zeros.</para>
+			<para>Example: <literal>%3q</literal> will give milliseconds and <literal>%1q</literal>
+			will give tenths of a second. The default is set at milliseconds (n=3).
+			The common case is to use it in combination with %S, as in <literal>%S.%3q</literal>.</para>
+		</description>
+		<see-also>
+			<ref type="manpage">strftime(3)</ref>
+		</see-also>
+	</function>
+	<function name="EVAL" language="en_US">
+		<synopsis>
+			Evaluate stored variables
+		</synopsis>
+		<syntax>
+			<parameter name="variable" required="true" />
+		</syntax>
+		<description>
+			<para>Using EVAL basically causes a string to be evaluated twice.
+			When a variable or expression is in the dialplan, it will be
+			evaluated at runtime. However, if the results of the evaluation
+			is in fact another variable or expression, using EVAL will have it
+			evaluated a second time.</para>
+			<para>Example: If the <variable>MYVAR</variable> contains
+			<variable>OTHERVAR</variable>, then the result of ${EVAL(
+			<variable>MYVAR</variable>)} in the dialplan will be the
+			contents of <variable>OTHERVAR</variable>. Normally just
+			putting <variable>MYVAR</variable> in the dialplan the result
+			would be <variable>OTHERVAR</variable>.</para>
+		</description>
+	</function>
+	<function name="TOUPPER" language="en_US">
+		<synopsis>
+			Convert string to all uppercase letters.
+		</synopsis>
+		<syntax>
+			<parameter name="string" required="true" />
+		</syntax>
+		<description>
+			<para>Example: ${TOUPPER(Example)} returns "EXAMPLE"</para>
+		</description>
+	</function>
+	<function name="TOLOWER" language="en_US">
+		<synopsis>
+			Convert string to all lowercase letters.
+		</synopsis>
+		<syntax>
+			<parameter name="string" required="true" />
+		</syntax>
+		<description>
+			<para>Example: ${TOLOWER(Example)} returns "example"</para>
+		</description>
+	</function>
+	<function name="LEN" language="en_US">
+		<synopsis>
+			Return the length of the string given.
+		</synopsis>
+		<syntax>
+			<parameter name="string" required="true" />
+		</syntax>
+		<description>
+			<para>Example: ${LEN(example)} returns 7</para>
+		</description>
+	</function>
+	<function name="QUOTE" language="en_US">
+		<synopsis>
+			Quotes a given string, escaping embedded quotes as necessary
+		</synopsis>
+		<syntax>
+			<parameter name="string" required="true" />
+		</syntax>
+		<description>
+			<para>Example: ${QUOTE(ab"c"de)} will return "abcde"</para>
+		</description>
+	</function>
+ ***/
+
 static int function_fieldqty(struct ast_channel *chan, const char *cmd,
 			     char *parse, char *buf, size_t len)
 {
@@ -50,9 +284,6 @@ static int function_fieldqty(struct ast_channel *chan, const char *cmd,
 		);
 	char delim[2] = "";
 	size_t delim_used;
-
-	if (chan)
-		ast_autoservice_start(chan);
 
 	AST_STANDARD_APP_ARGS(args, parse);
 	if (args.delim) {
@@ -73,17 +304,108 @@ static int function_fieldqty(struct ast_channel *chan, const char *cmd,
 	}
 	snprintf(buf, len, "%d", fieldcount);
 
-	if (chan)
-		ast_autoservice_stop(chan);
-
 	return 0;
 }
 
 static struct ast_custom_function fieldqty_function = {
 	.name = "FIELDQTY",
-	.synopsis = "Count the fields, with an arbitrary delimiter",
-	.syntax = "FIELDQTY(<varname>,<delim>)",
 	.read = function_fieldqty,
+};
+
+static int listfilter(struct ast_channel *chan, const char *cmd, char *parse, char *buf, size_t len)
+{
+	AST_DECLARE_APP_ARGS(args,
+		AST_APP_ARG(listname);
+		AST_APP_ARG(delimiter);
+		AST_APP_ARG(fieldvalue);
+	);
+	const char *orig_list, *ptr;
+	const char *begin, *cur, *next;
+	int dlen, flen, first = 1;
+	struct ast_str *result = ast_str_thread_get(&result_buf, 16);
+	char *delim;
+
+	AST_STANDARD_APP_ARGS(args, parse);
+
+	if (args.argc < 3) {
+		ast_log(LOG_ERROR, "Usage: LISTFILTER(<listname>,<delimiter>,<fieldvalue>)\n");
+		return -1;
+	}
+
+	/* If we don't lock the channel, the variable could disappear out from underneath us. */
+	if (chan) {
+		ast_channel_lock(chan);
+	}
+	if (!(orig_list = pbx_builtin_getvar_helper(chan, args.listname))) {
+		ast_log(LOG_ERROR, "List variable '%s' not found\n", args.listname);
+		if (chan) {
+			ast_channel_unlock(chan);
+		}
+		return -1;
+	}
+
+	/* If the string isn't there, just copy out the string and be done with it. */
+	if (!(ptr = strstr(orig_list, args.fieldvalue))) {
+		ast_copy_string(buf, orig_list, len);
+		if (chan) {
+			ast_channel_unlock(chan);
+		}
+		return 0;
+	}
+
+	dlen = strlen(args.delimiter);
+	delim = alloca(dlen + 1);
+	ast_get_encoded_str(args.delimiter, delim, dlen + 1);
+
+	if ((dlen = strlen(delim)) == 0) {
+		delim = ",";
+		dlen = 1;
+	}
+
+	flen = strlen(args.fieldvalue);
+
+	ast_str_reset(result);
+	/* Enough space for any result */
+	ast_str_make_space(&result, strlen(orig_list) + 1);
+
+	begin = orig_list;
+	next = strstr(begin, delim);
+
+	do {
+		/* Find next boundary */
+		if (next) {
+			cur = next;
+			next = strstr(cur + dlen, delim);
+		} else {
+			cur = strchr(begin + dlen, '\0');
+		}
+
+		if (flen == cur - begin && !strncmp(begin, args.fieldvalue, flen)) {
+			/* Skip field */
+			begin += flen + dlen;
+		} else {
+			/* Copy field to output */
+			if (!first) {
+				ast_str_append(&result, 0, "%s", delim);
+			}
+
+			ast_str_append_substr(&result, 0, begin, cur - begin + 1);
+			first = 0;
+			begin = cur + dlen;
+		}
+	} while (*cur != '\0');
+	if (chan) {
+		ast_channel_unlock(chan);
+	}
+
+	ast_copy_string(buf, ast_str_buffer(result), len);
+
+	return 0;
+}
+
+static struct ast_custom_function listfilter_function = {
+	.name = "LISTFILTER",
+	.read = listfilter,
 };
 
 static int filter(struct ast_channel *chan, const char *cmd, char *parse, char *buf,
@@ -147,16 +469,7 @@ static int filter(struct ast_channel *chan, const char *cmd, char *parse, char *
 
 static struct ast_custom_function filter_function = {
 	.name = "FILTER",
-	.synopsis = "Filter the string to include only the allowed characters",
-	.syntax = "FILTER(<allowed-chars>,<string>)",
 	.read = filter,
-	.desc =
-"Permits all characters listed in <allowed-chars>, filtering all others out.\n"
-"In addition to literally listing the characters, you may also use ranges of\n"
-"characters (delimited by a '-'), as well as hexadecimal characters started\n"
-"with a \\x (i.e. \\x20) and octal characters started with \\0 (i.e. \\040).\n"
-"Also, \\t, \\n, and \\r are recognized.  If you want a literal '-' character,\n"
-"simply prefix it with a '\\'\n",
 };
 
 static int regex(struct ast_channel *chan, const char *cmd, char *parse, char *buf,
@@ -198,13 +511,6 @@ static int regex(struct ast_channel *chan, const char *cmd, char *parse, char *b
 
 static struct ast_custom_function regex_function = {
 	.name = "REGEX",
-	.synopsis = "Regular Expression",
-	.desc =  
-		"Returns 1 if data matches regular expression, or 0 otherwise.\n"
-		"Please note that the space following the double quotes separating the regex from the data\n"
-		"is optional and if present, is skipped. If a space is desired at the beginning of the data,\n"
-	        "then put two spaces there; the second will not be skipped.\n",
-	.syntax = "REGEX(\"<regular expression>\" <data>)",
 	.read = regex,
 };
 
@@ -212,10 +518,6 @@ static struct ast_custom_function regex_function = {
 #define HASH_FORMAT	HASH_PREFIX "%s~"
 
 static char *app_clearhash = "ClearHash";
-static char *syn_clearhash = "Clear the keys from a specified hashname";
-static char *desc_clearhash =
-"ClearHash(<hashname>)\n"
-"  Clears all keys out of the specified hashname\n";
 
 /* This function probably should migrate to main/pbx.c, as pbx_builtin_clearvar_prefix() */
 static void clearvar_prefix(struct ast_channel *chan, const char *prefix)
@@ -254,9 +556,6 @@ static int array(struct ast_channel *chan, const char *cmd, char *var,
 	value2 = ast_strdupa(value);
 	if (!var || !value2)
 		return -1;
-
-	if (chan)
-		ast_autoservice_start(chan);
 
 	if (!strcmp(cmd, "HASH")) {
 		const char *var2 = pbx_builtin_getvar_helper(chan, "~ODBCFIELDS~");
@@ -303,9 +602,6 @@ static int array(struct ast_channel *chan, const char *cmd, char *var,
 			}
 		}
 	}
-
-	if (chan)
-		ast_autoservice_stop(chan);
 
 	return 0;
 }
@@ -400,182 +696,18 @@ static int hash_read(struct ast_channel *chan, const char *cmd, char *data, char
 
 static struct ast_custom_function hash_function = {
 	.name = "HASH",
-	.synopsis = "Implementation of a dialplan associative array",
-	.syntax = "HASH(hashname[,hashkey])",
 	.write = hash_write,
 	.read = hash_read,
-	.desc =
-		"In two argument mode, gets and sets values to corresponding keys within a named\n"
-		"associative array.  The single-argument mode will only work when assigned to from\n"
-		"a function defined by func_odbc.so.\n",
 };
 
 static struct ast_custom_function hashkeys_function = {
 	.name = "HASHKEYS",
-	.synopsis = "Retrieve the keys of a HASH()",
-	.syntax = "HASHKEYS(<hashname>)",
 	.read = hashkeys_read,
-	.desc =
-		"Returns a comma-delimited list of the current keys of an associative array\n"
-	   	"defined by the HASH() function.  Note that if you iterate over the keys of\n"
-		"the result, adding keys during iteration will cause the result of the HASHKEYS\n"
-		"function to change.\n",
 };
 
 static struct ast_custom_function array_function = {
 	.name = "ARRAY",
-	.synopsis = "Allows setting multiple variables at once",
-	.syntax = "ARRAY(var1[,var2[...][,varN]])",
 	.write = array,
-	.desc =
-		"The comma-separated list passed as a value to which the function is set will\n"
-		"be interpreted as a set of values to which the comma-separated list of\n"
-		"variable names in the argument should be set.\n"
-		"Hence, Set(ARRAY(var1,var2)=1,2) will set var1 to 1 and var2 to 2.\n",
-};
-
-static int acf_sprintf(struct ast_channel *chan, const char *cmd, char *data, char *buf, size_t len)
-{
-#define SPRINTF_FLAG	0
-#define SPRINTF_WIDTH	1
-#define SPRINTF_PRECISION	2
-#define SPRINTF_LENGTH	3
-#define SPRINTF_CONVERSION	4
-	int i, state = -1, argcount = 0;
-	char *formatstart = NULL, *bufptr = buf;
-	char formatbuf[256] = "";
-	int tmpi;
-	double tmpd;
-	AST_DECLARE_APP_ARGS(arg,
-				AST_APP_ARG(format);
-				AST_APP_ARG(var)[100];
-	);
-
-	AST_STANDARD_APP_ARGS(arg, data);
-
-	/* Scan the format, converting each argument into the requisite format type. */
-	for (i = 0; arg.format[i]; i++) {
-		switch (state) {
-		case SPRINTF_FLAG:
-			if (strchr("#0- +'I", arg.format[i]))
-				break;
-			state = SPRINTF_WIDTH;
-		case SPRINTF_WIDTH:
-			if (arg.format[i] >= '0' && arg.format[i] <= '9')
-				break;
-
-			/* Next character must be a period to go into a precision */
-			if (arg.format[i] == '.') {
-				state = SPRINTF_PRECISION;
-			} else {
-				state = SPRINTF_LENGTH;
-				i--;
-			}
-			break;
-		case SPRINTF_PRECISION:
-			if (arg.format[i] >= '0' && arg.format[i] <= '9')
-				break;
-			state = SPRINTF_LENGTH;
-		case SPRINTF_LENGTH:
-			if (strchr("hl", arg.format[i])) {
-				if (arg.format[i + 1] == arg.format[i])
-					i++;
-				state = SPRINTF_CONVERSION;
-				break;
-			} else if (strchr("Lqjzt", arg.format[i])) {
-				state = SPRINTF_CONVERSION;
-				break;
-			}
-			state = SPRINTF_CONVERSION;
-		case SPRINTF_CONVERSION:
-			if (strchr("diouxXc", arg.format[i])) {
-				/* Integer */
-
-				/* Isolate this format alone */
-				ast_copy_string(formatbuf, formatstart, sizeof(formatbuf));
-				formatbuf[&arg.format[i] - formatstart + 1] = '\0';
-
-				/* Convert the argument into the required type */
-				if (sscanf(arg.var[argcount++], "%d", &tmpi) != 1) {
-					ast_log(LOG_ERROR, "Argument '%s' is not an integer number for format '%s'\n", arg.var[argcount - 1], formatbuf);
-					goto sprintf_fail;
-				}
-
-				/* Format the argument */
-				snprintf(bufptr, buf + len - bufptr, formatbuf, tmpi);
-
-				/* Update the position of the next parameter to print */
-				bufptr = strchr(buf, '\0');
-			} else if (strchr("eEfFgGaA", arg.format[i])) {
-				/* Double */
-
-				/* Isolate this format alone */
-				ast_copy_string(formatbuf, formatstart, sizeof(formatbuf));
-				formatbuf[&arg.format[i] - formatstart + 1] = '\0';
-
-				/* Convert the argument into the required type */
-				if (sscanf(arg.var[argcount++], "%lf", &tmpd) != 1) {
-					ast_log(LOG_ERROR, "Argument '%s' is not a floating point number for format '%s'\n", arg.var[argcount - 1], formatbuf);
-					goto sprintf_fail;
-				}
-
-				/* Format the argument */
-				snprintf(bufptr, buf + len - bufptr, formatbuf, tmpd);
-
-				/* Update the position of the next parameter to print */
-				bufptr = strchr(buf, '\0');
-			} else if (arg.format[i] == 's') {
-				/* String */
-
-				/* Isolate this format alone */
-				ast_copy_string(formatbuf, formatstart, sizeof(formatbuf));
-				formatbuf[&arg.format[i] - formatstart + 1] = '\0';
-
-				/* Format the argument */
-				snprintf(bufptr, buf + len - bufptr, formatbuf, arg.var[argcount++]);
-
-				/* Update the position of the next parameter to print */
-				bufptr = strchr(buf, '\0');
-			} else if (arg.format[i] == '%') {
-				/* Literal data to copy */
-				*bufptr++ = arg.format[i];
-			} else {
-				/* Not supported */
-
-				/* Isolate this format alone */
-				ast_copy_string(formatbuf, formatstart, sizeof(formatbuf));
-				formatbuf[&arg.format[i] - formatstart + 1] = '\0';
-
-				ast_log(LOG_ERROR, "Format type not supported: '%s' with argument '%s'\n", formatbuf, arg.var[argcount++]);
-				goto sprintf_fail;
-			}
-			state = -1;
-			break;
-		default:
-			if (arg.format[i] == '%') {
-				state = SPRINTF_FLAG;
-				formatstart = &arg.format[i];
-				break;
-			} else {
-				/* Literal data to copy */
-				*bufptr++ = arg.format[i];
-			}
-		}
-	}
-	return 0;
-sprintf_fail:
-	return -1;
-}
-
-static struct ast_custom_function sprintf_function = {
-	.name = "SPRINTF",
-	.synopsis = "Format a variable according to a format string",
-	.syntax = "SPRINTF(<format>,<arg1>[,...<argN>])",
-	.read = acf_sprintf,
-	.desc =
-"Parses the format string specified and returns a string matching that format.\n"
-"Supports most options supported by sprintf(3).  Returns a shortened string if\n"
-"a format specifier is not recognized.\n",
 };
 
 static int quote(struct ast_channel *chan, const char *cmd, char *data, char *buf, size_t len)
@@ -602,88 +734,71 @@ static int quote(struct ast_channel *chan, const char *cmd, char *data, char *bu
 
 static struct ast_custom_function quote_function = {
 	.name = "QUOTE",
-	.synopsis = "Quotes a given string, escaping embedded quotes as necessary",
-	.syntax = "QUOTE(<string>)",
 	.read = quote,
 };
 
 
 static int len(struct ast_channel *chan, const char *cmd, char *data, char *buf,
-	       size_t len)
+	       size_t buflen)
 {
 	int length = 0;
 
 	if (data)
 		length = strlen(data);
 
-	snprintf(buf, len, "%d", length);
+	snprintf(buf, buflen, "%d", length);
 
 	return 0;
 }
 
 static struct ast_custom_function len_function = {
 	.name = "LEN",
-	.synopsis = "Returns the length of the argument given",
-	.syntax = "LEN(<string>)",
 	.read = len,
 };
 
 static int acf_strftime(struct ast_channel *chan, const char *cmd, char *parse,
-			char *buf, size_t len)
+			char *buf, size_t buflen)
 {
 	AST_DECLARE_APP_ARGS(args,
 			     AST_APP_ARG(epoch);
 			     AST_APP_ARG(timezone);
 			     AST_APP_ARG(format);
 	);
-	struct timeval tv;
+	struct timeval when;
 	struct ast_tm tm;
 
 	buf[0] = '\0';
 
 	AST_STANDARD_APP_ARGS(args, parse);
 
-	ast_get_timeval(args.epoch, &tv, ast_tvnow(), NULL);
-	ast_localtime(&tv, &tm, args.timezone);
+	ast_get_timeval(args.epoch, &when, ast_tvnow(), NULL);
+	ast_localtime(&when, &tm, args.timezone);
 
 	if (!args.format)
 		args.format = "%c";
 
-	if (ast_strftime(buf, len, args.format, &tm) <= 0)
+	if (ast_strftime(buf, buflen, args.format, &tm) <= 0)
 		ast_log(LOG_WARNING, "C function strftime() output nothing?!!\n");
 
-	buf[len - 1] = '\0';
+	buf[buflen - 1] = '\0';
 
 	return 0;
 }
 
 static struct ast_custom_function strftime_function = {
 	.name = "STRFTIME",
-	.synopsis = "Returns the current date/time in a specified format.",
-	.syntax = "STRFTIME([<epoch>][,[timezone][,format]])",
-	.desc =
-"STRFTIME sports all of the same formats as the underlying C function\n"
-"strftime(3) - see the man page for details.  It also supports the\n"
-"following format:\n"
-" %[n]q - fractions of a second, with leading zeroes.  For example, %3q will\n"
-"         give milliseconds and %1q will give tenths of a second.  The default\n"
-"         is to output milliseconds (n=3).  The common case is to use it in\n"
-"         combination with %S, as in \"%S.%3q\".\n",
 	.read = acf_strftime,
 };
 
 static int acf_strptime(struct ast_channel *chan, const char *cmd, char *data,
-			char *buf, size_t len)
+			char *buf, size_t buflen)
 {
 	AST_DECLARE_APP_ARGS(args,
 			     AST_APP_ARG(timestring);
 			     AST_APP_ARG(timezone);
 			     AST_APP_ARG(format);
 	);
-	union {
-		struct ast_tm atm;
-		struct tm time;
-	} t = { { 0, }, };
+	struct ast_tm tm;
 
 	buf[0] = '\0';
 
@@ -701,14 +816,12 @@ static int acf_strptime(struct ast_channel *chan, const char *cmd, char *data,
 		return -1;
 	}
 
-	if (!strptime(args.timestring, args.format, &t.time)) {
-		ast_log(LOG_WARNING, "C function strptime() output nothing?!!\n");
+	if (!ast_strptime(args.timestring, args.format, &tm)) {
+		ast_log(LOG_WARNING, "STRPTIME() found no time specified within the string\n");
 	} else {
-		struct timeval tv;
-		/* Since strptime(3) does not check DST, force ast_mktime() to calculate it. */
-		t.atm.tm_isdst = -1;
-		tv = ast_mktime(&t.atm, args.timezone);
-		snprintf(buf, len, "%d", (int) tv.tv_sec);
+		struct timeval when;
+		when = ast_mktime(&tm, args.timezone);
+		snprintf(buf, buflen, "%d", (int) when.tv_sec);
 	}
 
 	return 0;
@@ -716,58 +829,36 @@ static int acf_strptime(struct ast_channel *chan, const char *cmd, char *data,
 
 static struct ast_custom_function strptime_function = {
 	.name = "STRPTIME",
-	.synopsis =
-		"Returns the epoch of the arbitrary date/time string structured as described in the format.",
-	.syntax = "STRPTIME(<datetime>,<timezone>,<format>)",
-	.desc =
-		"This is useful for converting a date into an EPOCH time, possibly to pass to\n"
-		"an application like SayUnixTime or to calculate the difference between two\n"
-		"date strings.\n"
-		"\n"
-		"Example:\n"
-		"  ${STRPTIME(2006-03-01 07:30:35,America/Chicago,%Y-%m-%d %H:%M:%S)} returns 1141219835\n",
 	.read = acf_strptime,
 };
 
 static int function_eval(struct ast_channel *chan, const char *cmd, char *data,
-			 char *buf, size_t len)
+			 char *buf, size_t buflen)
 {
 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_WARNING, "EVAL requires an argument: EVAL(<string>)\n");
 		return -1;
 	}
 
-	if (chan)
-		ast_autoservice_start(chan);
-	pbx_substitute_variables_helper(chan, data, buf, len - 1);
-	if (chan)
-		ast_autoservice_stop(chan);
+	pbx_substitute_variables_helper(chan, data, buf, buflen - 1);
 
 	return 0;
 }
 
 static struct ast_custom_function eval_function = {
 	.name = "EVAL",
-	.synopsis = "Evaluate stored variables.",
-	.syntax = "EVAL(<variable>)",
-	.desc = "Using EVAL basically causes a string to be evaluated twice.\n"
-		"When a variable or expression is in the dialplan, it will be\n"
-		"evaluated at runtime. However, if the result of the evaluation\n"
-		"is in fact a variable or expression, using EVAL will have it\n"
-		"evaluated a second time. For example, if the variable ${MYVAR}\n"
-		"contains \"${OTHERVAR}\", then the result of putting ${EVAL(${MYVAR})}\n"
-		"in the dialplan will be the contents of the variable, OTHERVAR.\n"
-		"Normally, by just putting ${MYVAR} in the dialplan, you would be\n"
-		"left with \"${OTHERVAR}\".\n",
 	.read = function_eval,
 };
 
-static int keypadhash(struct ast_channel *chan, const char *cmd, char *data, char *buf, size_t len)
+static int keypadhash(struct ast_channel *chan, const char *cmd, char *data, char *buf, size_t buflen)
 {
 	char *bufptr, *dataptr;
 
-	for (bufptr = buf, dataptr = data; bufptr < buf + len - 1; dataptr++) {
-		if (*dataptr == '1') {
+	for (bufptr = buf, dataptr = data; bufptr < buf + buflen - 1; dataptr++) {
+		if (*dataptr == '\0') {
+			*bufptr++ = '\0';
+			break;
+		} else if (*dataptr == '1') {
 			*bufptr++ = '1';
 		} else if (strchr("AaBbCc2", *dataptr)) {
 			*bufptr++ = '2';
@@ -787,56 +878,44 @@ static int keypadhash(struct ast_channel *chan, const char *cmd, char *data, cha
 			*bufptr++ = '9';
 		} else if (*dataptr == '0') {
 			*bufptr++ = '0';
-		} else if (*dataptr == '\0') {
-			*bufptr++ = '\0';
-			break;
 		}
 	}
-	buf[len - 1] = '\0';
+	buf[buflen - 1] = '\0';
 
 	return 0;
 }
 
 static struct ast_custom_function keypadhash_function = {
 	.name = "KEYPADHASH",
-	.synopsis = "Hash the letters in the string into the equivalent keypad numbers.",
-	.syntax = "KEYPADHASH(<string>)",
 	.read = keypadhash,
-	.desc = "Example:  ${KEYPADHASH(Les)} returns \"537\"\n",
 };
 
-static int string_toupper(struct ast_channel *chan, const char *cmd, char *data, char *buf, size_t len)
+static int string_toupper(struct ast_channel *chan, const char *cmd, char *data, char *buf, size_t buflen)
 {
 	char *bufptr = buf, *dataptr = data;
 
-	while ((bufptr < buf + len - 1) && (*bufptr++ = toupper(*dataptr++)));
+	while ((bufptr < buf + buflen - 1) && (*bufptr++ = toupper(*dataptr++)));
 
 	return 0;
 }
 
 static struct ast_custom_function toupper_function = {
 	.name = "TOUPPER",
-	.synopsis = "Convert the string to upper case.",
-	.syntax = "TOUPPER(<string>)",
 	.read = string_toupper,
-	.desc = "Example: ${TOUPPER(Example)} returns \"EXAMPLE\"\n",
 };
 
-static int string_tolower(struct ast_channel *chan, const char *cmd, char *data, char *buf, size_t len)
+static int string_tolower(struct ast_channel *chan, const char *cmd, char *data, char *buf, size_t buflen)
 {
 	char *bufptr = buf, *dataptr = data;
 
-	while ((bufptr < buf + len - 1) && (*bufptr++ = tolower(*dataptr++)));
+	while ((bufptr < buf + buflen - 1) && (*bufptr++ = tolower(*dataptr++)));
 
 	return 0;
 }
 
 static struct ast_custom_function tolower_function = {
 	.name = "TOLOWER",
-	.synopsis = "Convert the string to lower case.",
-	.syntax = "TOLOWER(<string>)",
 	.read = string_tolower,
-	.desc = "Example: ${TOLOWER(Example)} returns \"example\"\n",
 };
 
 static int unload_module(void)
@@ -845,6 +924,7 @@ static int unload_module(void)
 
 	res |= ast_custom_function_unregister(&fieldqty_function);
 	res |= ast_custom_function_unregister(&filter_function);
+	res |= ast_custom_function_unregister(&listfilter_function);
 	res |= ast_custom_function_unregister(&regex_function);
 	res |= ast_custom_function_unregister(&array_function);
 	res |= ast_custom_function_unregister(&quote_function);
@@ -853,7 +933,6 @@ static int unload_module(void)
 	res |= ast_custom_function_unregister(&strptime_function);
 	res |= ast_custom_function_unregister(&eval_function);
 	res |= ast_custom_function_unregister(&keypadhash_function);
-	res |= ast_custom_function_unregister(&sprintf_function);
 	res |= ast_custom_function_unregister(&hashkeys_function);
 	res |= ast_custom_function_unregister(&hash_function);
 	res |= ast_unregister_application(app_clearhash);
@@ -869,6 +948,7 @@ static int load_module(void)
 
 	res |= ast_custom_function_register(&fieldqty_function);
 	res |= ast_custom_function_register(&filter_function);
+	res |= ast_custom_function_register(&listfilter_function);
 	res |= ast_custom_function_register(&regex_function);
 	res |= ast_custom_function_register(&array_function);
 	res |= ast_custom_function_register(&quote_function);
@@ -877,10 +957,9 @@ static int load_module(void)
 	res |= ast_custom_function_register(&strptime_function);
 	res |= ast_custom_function_register(&eval_function);
 	res |= ast_custom_function_register(&keypadhash_function);
-	res |= ast_custom_function_register(&sprintf_function);
 	res |= ast_custom_function_register(&hashkeys_function);
 	res |= ast_custom_function_register(&hash_function);
-	res |= ast_register_application(app_clearhash, exec_clearhash, syn_clearhash, desc_clearhash);
+	res |= ast_register_application_xml(app_clearhash, exec_clearhash);
 	res |= ast_custom_function_register(&toupper_function);
 	res |= ast_custom_function_register(&tolower_function);
 

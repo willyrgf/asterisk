@@ -1,26 +1,21 @@
 ;
-; DAHDI telephony
-;
-; Configuration file
+; DAHDI Telephony Configuration file
 ;
 ; You need to restart Asterisk to re-configure the DAHDI channel
-; CLI> reload chan_dahdi.so 
-;		will reload the configuration file,
-;		but not all configuration options are 
-; 		re-configured during a reload (signalling, as well as
-;               PRI and SS7-related settings cannot be changed on a
-;               reload.
+; CLI> module reload chan_dahdi.so
+;      will reload the configuration file, but not all configuration options
+;      are re-configured during a reload (signalling, as well as PRI and
+;      SS7-related settings cannot be changed on a reload).
 ; 
-; This file documents many configuration variables.  Normally unless you
-; know what a variable means or that it should be changed, there's no
-; reason to unrem lines.
+; This file documents many configuration variables.  Normally unless you know
+; what a variable means or that it should be changed, there's no reason to
+; un-comment those lines.
 ;
-; remmed-out examples below (those lines that begin with a ';' but no
-; space afterwards) typically show a value that is not the defauult value,
-; but would make sense under cetain circumstances. The default values
-; are usually sane. Thus you should typically not touch them unless you 
-; know what they mean or you know you should change them.
-
+; Examples below that are commented out (those lines that begin with a ';' but
+; no space afterwards) typically show a value that is not the default value,
+; but would make sense under certain circumstances. The default values are
+; usually sane. Thus you should typically not touch them unless you know what
+; they mean or you know you should change them.
 
 [trunkgroups]
 ;
@@ -40,7 +35,7 @@
 ; Spanmap: Associates a span with a trunk group
 ;        spanmap => <dahdispan>,<trunkgroup>[,<logicalspan>]
 ;
-;        dahdispan     is the DAHDI span number to associate
+;        dahdispan   is the DAHDI span number to associate
 ;        trunkgroup  is the trunkgroup (specified above) for the mapping
 ;        logicalspan is the logical span number within the trunk group to use.
 ;                    if unspecified, no logical span number is used.
@@ -62,13 +57,13 @@
 ;
 ; Switchtype:  Only used for PRI.
 ;
-; national:	  National ISDN 2 (default)
-; dms100:	  Nortel DMS100
-; 4ess:           AT&T 4ESS
-; 5ess:	          Lucent 5ESS
-; euroisdn:       EuroISDN (common in Europe)
-; ni1:            Old National ISDN 1
-; qsig:           Q.SIG
+; national:    National ISDN 2 (default)
+; dms100:      Nortel DMS100
+; 4ess:        AT&T 4ESS
+; 5ess:        Lucent 5ESS
+; euroisdn:    EuroISDN (common in Europe)
+; ni1:         Old National ISDN 1
+; qsig:        Q.SIG
 ;
 ;switchtype=euroisdn
 ;
@@ -185,6 +180,20 @@
 ;
 ;priexclusive = yes
 ;
+;
+; If you need to use the logical channel mapping with your Q.SIG PRI instead
+; of the physical mapping you must use the qsigchannelmapping option.
+;
+; logical:  Use the logical channel mapping
+; physical: Use physical channel mapping (default)
+;
+;qsigchannelmapping=logical
+;
+; If you wish to ignore remote hold indications (and use MOH that is supplied over
+; the B channel) enable this option.
+;
+;discardremoteholdretrieval=yes
+;
 ; ISDN Timers
 ; All of the ISDN timers and counters that are used are configurable.  Specify
 ; the timer name, and its value (in ms for timers).
@@ -221,8 +230,8 @@
 ; featdmf_ta:     Feature Group D (The real thing, MF (domestic, US)) through
 ;                 a Tandem Access point
 ; featb:          Feature Group B (MF (domestic, US))
-; fgccama	  Feature Group C-CAMA (DP DNIS, MF ANI)
-; fgccamamf	  Feature Group C-CAMA MF (MF DNIS, MF ANI)
+; fgccama:        Feature Group C-CAMA (DP DNIS, MF ANI)
+; fgccamamf:      Feature Group C-CAMA MF (MF DNIS, MF ANI)
 ; fxs_ls:         FXS (Loop Start)
 ; fxs_gs:         FXS (Ground Start)
 ; fxs_ks:         FXS (Kewl Start)
@@ -233,8 +242,8 @@
 ; pri_net:        PRI signalling, Network side
 ; gr303fxoks_net: GR-303 Signalling, FXO Loopstart, Network side
 ; gr303fxsks_cpe: GR-303 Signalling, FXS Loopstart, CPE side
-; sf:	          SF (Inband Tone) Signalling
-; sf_w:	          SF Wink
+; sf:             SF (Inband Tone) Signalling
+; sf_w:           SF Wink
 ; sf_featd:       SF Feature Group D (The fake, Adtran style, DTMF)
 ; sf_featdmf:     SF Feature Group D (The real thing, MF (domestic, US))
 ; sf_featb:       SF Feature Group B (MF (domestic, US))
@@ -319,7 +328,7 @@
 ; enable dring detection after caller ID for those countries like Australia
 ; where the ring cadence is changed *after* the caller ID spill:
 ;
-;distinctiveringaftercid=yes	
+;distinctiveringaftercid=yes
 ;
 ; Whether or not to use caller ID:
 ;
@@ -352,13 +361,28 @@ usecallerid=yes
 ;
 ;hidecallerid=yes
 ;
+; On UK analog lines, the caller hanging up determines the end of calls.  So
+; Asterisk hanging up the line may or may not end a call (DAHDI could just as
+; easily be re-attaching to a prior incoming call that was not yet hung up).
+; This option changes the hangup to wait for a dialtone on the line, before
+; marking the line as once again available for use with outgoing calls.
+;waitfordialtone=yes
+;
 ; The following option enables receiving MWI on FXO lines.  The default
-; value is no.  When this is enabled, and MWI notification indicates on or off,
-; the script specified by the mwimonitornotify option is executed.  Also, an
-; internal Asterisk MWI event will be generated so that any other part of
-; Asterisk that cares about MWI state changes will get notified, just as if
-; the state change came from app_voicemail. The energy level that must be seen
-; before starting the MWI detection process can be set with 'mwilevel'.
+; value is no.
+; 	The mwimonitor can take the following values
+;		no - No mwimonitoring occurs. (default)
+; 		yes - The same as specifying fsk
+; 		fsk - the FXO line is monitored for MWI FSK spills
+;		fsk,rpas - the FXO line is monitored for MWI FSK spills preceded
+;			by a ring pulse alert signal.
+;		neon - The fxo line is monitored for the presence of NEON pulses
+;			indicating MWI.   
+; When detected, an internal Asterisk MWI event is generated so that any other
+; part of Asterisk that cares about MWI state changes is notified, just as if
+; the state change came from app_voicemail.
+; For FSK MWI Spills, the energy level that must be seen before starting the
+; MWI detection process can be set with 'mwilevel'.
 ;
 ;mwimonitor=no
 ;mwilevel=512
@@ -369,6 +393,17 @@ usecallerid=yes
 ; there are messages waiting or not.
 ;
 ;mwimonitornotify=/usr/local/bin/dahdinotify.sh
+;
+; The following keyword 'mwisendtype' enables various VMWI methods on FXS lines (if supported).
+; The default is to send FSK only.
+; The following options are available;
+; 'rpas' Ring Pulse Alert Signal, alerts intelligent phones that a FSK message is about to be sent.
+; 'lrev' Line reversed to indicate messages waiting.
+; 'hvdc' 90Vdc OnHook DC voltage to indicate messages waiting.
+; 'hvac' or 'neon' 90Vac OnHook AC voltage to light Neon bulb.
+; 'nofsk' Disables FSK MWI spills from being sent out.
+; It is feasible that multiple options can be enabled.
+;mwisendtype=rpas,lrev
 ;
 ; Whether or not to enable call waiting on internal extensions
 ; With this set to 'yes', busy extensions will hear the call-waiting
@@ -878,9 +913,9 @@ pickupgroup=1
 ;
 ; unknown:        Unknown
 ; subscriber:     Subscriber
-; national:	  National
+; national:       National
 ; international:  International
-; dynamic:	  Dynamically selects the appropriate dialplan
+; dynamic:        Dynamically selects the appropriate dialplan
 ;
 ;ss7_called_nai=dynamic
 ;
@@ -888,9 +923,9 @@ pickupgroup=1
 ;
 ; unknown:        Unknown
 ; subscriber:     Subscriber
-; national:	  National
+; national:       National
 ; international:  International
-; dynamic:	  Dynamically selects the appropriate dialplan
+; dynamic:        Dynamically selects the appropriate dialplan
 ;
 ;ss7_calling_nai=dynamic
 ;

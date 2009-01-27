@@ -55,6 +55,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/pval.h"
 #include "asterisk/extconf.h"
 
+struct ast_flags ast_compat = { 7 };
 const char *ast_config_AST_CONFIG_DIR = "/etc/asterisk";	/* placeholder */
 
 void get_start_stop(unsigned int *word, int bitsperword, int totalbits, int *start, int *end);
@@ -77,6 +78,8 @@ char ast_config_AST_SYSTEM_NAME[20] = ""; */
 #define AST_PBX_MAX_STACK	128
 /* static AST_RWLIST_HEAD_STATIC(acf_root, ast_custom_function); */
 //extern char ast_config_AST_CONFIG_DIR[PATH_MAX];
+int option_debug = 0;
+int option_verbose = 0;
 
 void ast_register_file_version(const char *file, const char *version);
 void ast_register_file_version(const char *file, const char *version)
@@ -91,7 +94,7 @@ void ast_unregister_file_version(const char *file)
 int ast_add_profile(const char *x, uint64_t scale) { return 0;}
 #endif
 /* Our own version of ast_log, since the expr parser uses it. -- stolen from utils/check_expr.c */
-void ast_log(int level, const char *file, int line, const char *function, const char *fmt, ...) __attribute__ ((format (printf,5,6)));
+void ast_log(int level, const char *file, int line, const char *function, const char *fmt, ...) __attribute__((format(printf,5,6)));
 
 void ast_log(int level, const char *file, int line, const char *function, const char *fmt, ...)
 {

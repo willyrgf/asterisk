@@ -42,16 +42,43 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/indications.h"
 #include "asterisk/utils.h"
 
+/*** DOCUMENTATION
+	<application name="PlayTones" language="en_US">
+		<synopsis>
+			Play a tone list.
+		</synopsis>
+		<syntax>
+			<parameter name="arg" required="true">
+				<para>Arg is either the tone name defined in the <filename>indications.conf</filename>
+				configuration file, or a directly specified list of frequencies and durations.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Plays a tone list. Execution will continue with the next step immediately,
+			while the tones continue to play.</para>
+			<para>See the sample <filename>indications.conf</filename> for a description of the
+			specification of a tonelist.</para>
+		</description>
+		<see-also>
+			<ref type="application">StopPlayTones</ref>
+		</see-also>
+	</application>
+	<application name="StopPlayTones" language="en_US">
+		<synopsis>
+			Stop playing a tone list.
+		</synopsis>
+		<syntax />
+		<description>
+			<para>Stop playing a tone list, initiated by PlayTones().</para>
+		</description>
+		<see-also>
+			<ref type="application">PlayTones</ref>
+		</see-also>
+	</application>
+ ***/
+
 /* Globals */
 static const char config[] = "indications.conf";
-
-char *playtones_desc=
-"  PlayTones(arg): Plays a tone list. Execution will continue with the next step immediately,\n"
-"while the tones continue to play.\n"
-"Arg is either the tone name defined in the indications.conf configuration file, or a directly\n"
-"specified list of frequencies and durations.\n"
-"See the sample indications.conf for a description of the specification of a tonelist.\n\n"
-"Use the StopPlayTones application to stop the tones playing. \n";
 
 /*
  * Implementation of functions provided by this module
@@ -65,7 +92,7 @@ char *playtones_desc=
  */
 static char *handle_cli_indication_add(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	struct ind_tone_zone *tz;
+	struct tone_zone *tz;
 	int created_country = 0;
 
 	switch (cmd) {
@@ -115,7 +142,7 @@ static char *handle_cli_indication_add(struct ast_cli_entry *e, int cmd, struct 
  */
 static char *handle_cli_indication_remove(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	struct ind_tone_zone *tz;
+	struct tone_zone *tz;
 
 	switch (cmd) {
 	case CLI_INIT:
@@ -160,7 +187,7 @@ static char *handle_cli_indication_remove(struct ast_cli_entry *e, int cmd, stru
  */
 static char *handle_cli_indication_show(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	struct ind_tone_zone *tz = NULL;
+	struct tone_zone *tz = NULL;
 	char buf[256];
 	int found_country = 0;
 
@@ -189,7 +216,7 @@ static char *handle_cli_indication_show(struct ast_cli_entry *e, int cmd, struct
 		int i, j;
 		for (i = 2; i < a->argc; i++) {
 			if (strcasecmp(tz->country, a->argv[i]) == 0 && !tz->alias[0]) {
-				struct ind_tone_zone_sound* ts;
+				struct tone_zone_sound *ts;
 				if (!found_country) {
 					found_country = 1;
 					ast_cli(a->fd, "Country Indication      PlayList\n");
@@ -203,8 +230,9 @@ static char *handle_cli_indication_show(struct ast_cli_entry *e, int cmd, struct
 					j--;
 				ast_copy_string(buf + j, "\n", sizeof(buf) - j);
 				ast_cli(a->fd, "%s", buf);
-				for (ts = tz->tones; ts; ts = ts->next)
+				AST_LIST_TRAVERSE(&tz->tones, ts, list) {
 					ast_cli(a->fd, "%-7.7s %-15.15s %s\n", tz->country, ts->name, ts->data);
+				}
 				break;
 			}
 		}
@@ -221,7 +249,7 @@ static char *handle_cli_indication_show(struct ast_cli_entry *e, int cmd, struct
  */
 static int handle_playtones(struct ast_channel *chan, void *data)
 {
-	struct ind_tone_zone_sound *ts;
+	struct tone_zone_sound *ts;
 	int res;
 
 	if (!data || !((char*)data)[0]) {
@@ -256,17 +284,18 @@ static int ind_load_module(int reload)
 	struct ast_variable *v;
 	char *cxt;
 	char *c;
-	struct ind_tone_zone *tones;
+	struct tone_zone *tones;
 	const char *country = NULL;
 	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
 
 	/* that the following cast is needed, is yuk! */
 	/* yup, checked it out. It is NOT written to. */
 	cfg = ast_config_load((char *)config, config_flags);
-	if (!cfg)
+	if (cfg == CONFIG_STATUS_FILEMISSING || cfg == CONFIG_STATUS_FILEINVALID) {
 		return -1;
-	else if (cfg == CONFIG_STATUS_FILEUNCHANGED)
+	} else if (cfg == CONFIG_STATUS_FILEUNCHANGED) {
 		return 0;
+	}
 
 	if (reload)
 		ast_unregister_indication_country(NULL);
@@ -302,6 +331,7 @@ static int ind_load_module(int reload)
 					}					
 					if (!(tmp = ast_realloc(tones->ringcadence, (tones->nrringcadence + 1) * sizeof(int)))) {
 						ast_config_destroy(cfg);
+						ast_destroy_indication_zone(tones);
 						return -1;
 					}
 					tones->ringcadence = tmp;
@@ -315,59 +345,62 @@ static int ind_load_module(int reload)
 				c = countries;
 				country = strsep(&c,",");
 				while (country) {
-					struct ind_tone_zone* azone;
+					struct tone_zone* azone;
 					if (!(azone = ast_calloc(1, sizeof(*azone)))) {
 						ast_config_destroy(cfg);
+						ast_destroy_indication_zone(tones);
 						return -1;
 					}
 					ast_copy_string(azone->country, country, sizeof(azone->country));
 					ast_copy_string(azone->alias, cxt, sizeof(azone->alias));
 					if (ast_register_indication_country(azone)) {
 						ast_log(LOG_WARNING, "Unable to register indication alias at line %d.\n",v->lineno);
-						ast_free(tones);
+						ast_destroy_indication_zone(tones);
 					}
 					/* next item */
 					country = strsep(&c,",");
 				}
 			} else {
+				struct tone_zone_sound *ts;
+
 				/* add tone to country */
-				struct ind_tone_zone_sound *ps,*ts;
-				for (ps=NULL,ts=tones->tones; ts; ps=ts, ts=ts->next) {
-					if (strcasecmp(v->name,ts->name)==0) {
+				AST_LIST_TRAVERSE(&tones->tones, ts, list) {
+					if (!strcasecmp(v->name, ts->name)) {
 						/* already there */
-						ast_log(LOG_NOTICE,"Duplicate entry '%s', skipped.\n",v->name);
+						ast_log(LOG_NOTICE, "Duplicate entry '%s' skipped.\n", v->name);
 						goto out;
 					}
 				}
-				/* not there, add it to the back */				
-				if (!(ts = ast_malloc(sizeof(*ts)))) {
+
+				/* not there, add it to the back */
+				if (!(ts = ast_calloc(1, sizeof(*ts)))) {
 					ast_config_destroy(cfg);
 					return -1;
 				}
-				ts->next = NULL;
 				ts->name = ast_strdup(v->name);
 				ts->data = ast_strdup(v->value);
-				if (ps)
-					ps->next = ts;
-				else
-					tones->tones = ts;
+
+				AST_LIST_INSERT_TAIL(&tones->tones, ts, list);
 			}
 out:			v = v->next;
 		}
-		if (tones->description[0] || tones->alias[0] || tones->tones) {
+		if (tones->description[0] || tones->alias[0] || !AST_LIST_EMPTY(&tones->tones)) {
 			if (ast_register_indication_country(tones)) {
 				ast_log(LOG_WARNING, "Unable to register indication at line %d.\n",v->lineno);
-				ast_free(tones);
+				ast_destroy_indication_zone(tones);
 			}
-		} else ast_free(tones);
+		} else {
+			ast_destroy_indication_zone(tones);
+		}
 
 		cxt = ast_category_browse(cfg, cxt);
 	}
 
 	/* determine which country is the default */
 	country = ast_variable_retrieve(cfg,"general","country");
-	if (!country || !*country || ast_set_indication_country(country))
+	if (ast_strlen_zero(country) || ast_set_indication_country(country)) {
 		ast_log(LOG_WARNING,"Unable to set the default country (for indication tones)\n");
+	}
 
 	ast_config_destroy(cfg);
 	return 0;
@@ -387,7 +420,7 @@ static int unload_module(void)
 	ast_unregister_indication_country(NULL);
 
 	/* and the functions */
-	ast_cli_unregister_multiple(cli_indications, sizeof(cli_indications) / sizeof(struct ast_cli_entry));
+	ast_cli_unregister_multiple(cli_indications, ARRAY_LEN(cli_indications));
 	ast_unregister_application("PlayTones");
 	ast_unregister_application("StopPlayTones");
 	return 0;
@@ -399,9 +432,9 @@ static int load_module(void)
 {
 	if (ind_load_module(0))
 		return AST_MODULE_LOAD_DECLINE; 
-	ast_cli_register_multiple(cli_indications, sizeof(cli_indications) / sizeof(struct ast_cli_entry));
-	ast_register_application("PlayTones", handle_playtones, "Play a tone list", playtones_desc);
-	ast_register_application("StopPlayTones", handle_stopplaytones, "Stop playing a tone list","  StopPlayTones(): Stop playing a tone list");
+	ast_cli_register_multiple(cli_indications, ARRAY_LEN(cli_indications));
+	ast_register_application_xml("PlayTones", handle_playtones);
+	ast_register_application_xml("StopPlayTones", handle_stopplaytones);
 
 	return AST_MODULE_LOAD_SUCCESS;
 }

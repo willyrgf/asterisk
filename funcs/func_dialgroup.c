@@ -37,6 +37,41 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/utils.h"
 #include "asterisk/app.h"
 #include "asterisk/astobj2.h"
+#include "asterisk/astdb.h"
+
+/*** DOCUMENTATION
+	<function name="DIALGROUP" language="en_US">
+		<synopsis>
+			Manages a group of users for dialing.
+		</synopsis>
+		<syntax>
+			<parameter name="group" required="true" />
+			<parameter name="op">
+				<para>The operation name, possible values are:</para>
+				<para><literal>add</literal> - add a channel name or interface (write-only)</para>
+				<para><literal>del</literal> - remove a channel name or interface (write-only)</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Presents an interface meant to be used in concert with the Dial
+			application, by presenting a list of channels which should be dialled when
+			referenced.</para>
+			<para>When DIALGROUP is read from, the argument is interpreted as the particular
+			<replaceable>group</replaceable> for which a dial should be attempted.  When DIALGROUP is written to
+			with no arguments, the entire list is replaced with the argument specified.</para>
+			<para>Functionality is similar to a queue, except that when no interfaces are
+			available, execution may continue in the dialplan.  This is useful when
+			you want certain people to be the first to answer any calls, with immediate
+			fallback to a queue when the front line people are busy or unavailable, but
+			you still want front line people to log in and out of that group, just like
+			a queue.</para>
+			<para>Example:</para>
+			<para>exten => 1,1,Set(DIALGROUP(mygroup,add)=SIP/10)</para>
+			<para>exten => 1,n,Set(DIALGROUP(mygroup,add)=SIP/20)</para>
+			<para>exten => 1,n,Dial(${DIALGROUP(mygroup)})</para>
+		</description>
+	</function>
+ ***/
 
 static struct ao2_container *group_container = NULL;
 
@@ -66,9 +101,9 @@ static int group_cmp_fn(void *obj1, void *name2, int flags)
 	struct group *g1 = obj1, *g2 = name2;
 	char *name = name2;
 	if (flags & OBJ_POINTER)
-		return strcmp(g1->name, g2->name) ? 0 : CMP_MATCH;
+		return strcmp(g1->name, g2->name) ? 0 : CMP_MATCH | CMP_STOP;
 	else
-		return strcmp(g1->name, name) ? 0 : CMP_MATCH;
+		return strcmp(g1->name, name) ? 0 : CMP_MATCH | CMP_STOP;
 }
 
 static int entry_hash_fn(const void *obj, const int flags)
@@ -82,9 +117,9 @@ static int entry_cmp_fn(void *obj1, void *name2, int flags)
 	struct group_entry *e1 = obj1, *e2 = name2;
 	char *name = name2;
 	if (flags & OBJ_POINTER)
-		return strcmp(e1->name, e2->name) ? 0 : CMP_MATCH;
+		return strcmp(e1->name, e2->name) ? 0 : CMP_MATCH | CMP_STOP;
 	else
-		return strcmp(e1->name, name) ? 0 : CMP_MATCH;
+		return strcmp(e1->name, name) ? 0 : CMP_MATCH | CMP_STOP;
 }
 
 static int dialgroup_read(struct ast_channel *chan, const char *cmd, char *data, char *buf, size_t len)
@@ -94,13 +129,18 @@ static int dialgroup_read(struct ast_channel *chan, const char *cmd, char *data,
 	struct group_entry *entry;
 	size_t bufused = 0;
 	int trunc_warning = 0;
+	int res = 0;
 
 	if (!grhead) {
-		ast_log(LOG_WARNING, "No such dialgroup '%s'\n", data);
+		if (!ast_strlen_zero(cmd)) {
+			ast_log(LOG_WARNING, "No such dialgroup '%s'\n", data);
+		}
 		return -1;
 	}
 
-	i = ao2_iterator_init(grhead->entries, 0);
+	buf[0] = '\0';
+
+	i = ao2_iterator_init(grhead->entries, OBJ_POINTER);
 	while ((entry = ao2_iterator_next(&i))) {
 		int tmp = strlen(entry->name);
 		/* Ensure that we copy only complete names, not partials */
@@ -109,10 +149,43 @@ static int dialgroup_read(struct ast_channel *chan, const char *cmd, char *data,
 				buf[bufused++] = '&';
 			ast_copy_string(buf + bufused, entry->name, len - bufused);
 			bufused += tmp;
-		} else if (trunc_warning++ == 0)
-			ast_log(LOG_WARNING, "Dialgroup '%s' is too large.  Truncating list.\n", data);
+		} else if (trunc_warning++ == 0) {
+			if (!ast_strlen_zero(cmd)) {
+				ast_log(LOG_WARNING, "Dialgroup '%s' is too large.  Truncating list.\n", data);
+			} else {
+				res = 1;
+				ao2_ref(entry, -1);
+				break;
+			}
+		}
+		ao2_ref(entry, -1);
 	}
 
+	return res;
+}
+
+static int dialgroup_refreshdb(struct ast_channel *chan, const char *cdialgroup)
+{
+	int len = 500, res = 0;
+	char *buf = NULL;
+	char *dialgroup = ast_strdupa(cdialgroup);
+
+	do {
+		len *= 2;
+		buf = ast_realloc(buf, len);
+
+		if ((res = dialgroup_read(chan, "", dialgroup, buf, len)) < 0) {
+			ast_free(buf);
+			return -1;
+		}
+	} while (res == 1);
+
+	if (ast_strlen_zero(buf)) {
+		ast_db_del("dialgroup", cdialgroup);
+	} else {
+		ast_db_put("dialgroup", cdialgroup, buf);
+	}
+	ast_free(buf);
 	return 0;
 }
 
@@ -120,7 +193,7 @@ static int dialgroup_write(struct ast_channel *chan, const char *cmd, char *data
 {
 	struct group *grhead;
 	struct group_entry *entry;
-	int j;
+	int j, needrefresh = 1;
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(group);
 		AST_APP_ARG(op);
@@ -133,7 +206,7 @@ static int dialgroup_write(struct ast_channel *chan, const char *cmd, char *data
 	AST_STANDARD_APP_ARGS(args, data);
 	AST_NONSTANDARD_APP_ARGS(inter, value, '&');
 
-	if (!(grhead = ao2_find(group_container, data, 0))) {
+	if (!(grhead = ao2_find(group_container, args.group, 0))) {
 		/* Create group */
 		grhead = ao2_alloc(sizeof(*grhead), group_destroy);
 		if (!grhead)
@@ -153,8 +226,11 @@ static int dialgroup_write(struct ast_channel *chan, const char *cmd, char *data
 
 		/* Remove all existing */
 		ao2_ref(grhead->entries, -1);
-		if (!(grhead->entries = ao2_container_alloc(37, entry_hash_fn, entry_cmp_fn)))
+		if (!(grhead->entries = ao2_container_alloc(37, entry_hash_fn, entry_cmp_fn))) {
+			ao2_unlink(group_container, grhead);
+			ao2_ref(grhead, -1);
 			return -1;
+		}
 	}
 
 	if (strcasecmp(args.op, "add") == 0) {
@@ -162,42 +238,34 @@ static int dialgroup_write(struct ast_channel *chan, const char *cmd, char *data
 			if ((entry = ao2_alloc(sizeof(*entry), NULL))) {
 				ast_copy_string(entry->name, inter.faces[j], sizeof(entry->name));
 				ao2_link(grhead->entries, entry);
-			} else
+				ao2_ref(entry, -1);
+			} else {
 				ast_log(LOG_WARNING, "Unable to add '%s' to dialgroup '%s'\n", inter.faces[j], grhead->name);
+			}
 		}
 	} else if (strncasecmp(args.op, "del", 3) == 0) {
 		for (j = 0; j < inter.argc; j++) {
-			if ((entry = ao2_find(grhead->entries, inter.faces[j], OBJ_UNLINK)))
+			if ((entry = ao2_find(grhead->entries, inter.faces[j], OBJ_UNLINK))) {
 				ao2_ref(entry, -1);
-			else
+			} else {
 				ast_log(LOG_WARNING, "Interface '%s' not found in dialgroup '%s'\n", inter.faces[j], grhead->name);
+			}
 		}
-	} else
+	} else {
 		ast_log(LOG_ERROR, "Unrecognized operation: %s\n", args.op);
+		needrefresh = 0;
+	}
+	ao2_ref(grhead, -1);
+
+	if (needrefresh) {
+		dialgroup_refreshdb(chan, args.group);
+	}
 
 	return 0;
 }
 
 static struct ast_custom_function dialgroup_function = {
 	.name = "DIALGROUP",
-	.synopsis = "Manages a group of users for dialing",
-	.syntax = "DIALGROUP(<group>[,op])",
-	.desc =
-"  DIALGROUP presents an interface meant to be used in concert with the Dial\n"
-"application, by presenting a list of channels which should be dialled when\n"
-"referenced.\n"
-"  When DIALGROUP is read from, the argument is interpreted as the particular\n"
-"group for which a dial should be attempted.  When DIALGROUP is written to\n"
-"with no arguments, the entire list is replaced with the argument specified.\n"
-"Other operations are as follows:\n"
-"  add - add a channel name or interface (write-only)\n"
-"  del - remove a channel name or interface (write-only)\n\n"
-"Functionality is similar to a queue, except that when no interfaces are\n"
-"available, execution may continue in the dialplan.  This is useful when\n"
-"you want certain people to be the first to answer any calls, with immediate\n"
-"fallback to a queue when the front line people are busy or unavailable, but\n"
-"you still want front line people to log in and out of that group, just like\n"
-"a queue.\n",
 	.read = dialgroup_read,
 	.write = dialgroup_write,
 };
@@ -211,10 +279,25 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	if ((group_container = ao2_container_alloc(37, group_hash_fn, group_cmp_fn)))
+	struct ast_db_entry *dbtree, *tmp;
+	char groupname[AST_MAX_EXTENSION], *ptr;
+
+	if ((group_container = ao2_container_alloc(37, group_hash_fn, group_cmp_fn))) {
+		/* Refresh groups from astdb */
+		if ((dbtree = ast_db_gettree("dialgroup", NULL))) {
+			for (tmp = dbtree; tmp; tmp = tmp->next) {
+				ast_copy_string(groupname, tmp->key, sizeof(groupname));
+				if ((ptr = strrchr(groupname, '/'))) {
+					ptr++;
+					dialgroup_write(NULL, "", ptr, tmp->data);
+				}
+			}
+			ast_db_freetree(dbtree);
+		}
 		return ast_custom_function_register(&dialgroup_function);
-	else
+	} else {
 		return AST_MODULE_LOAD_DECLINE;
+	}
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Dialgroup dialplan function");

@@ -29,8 +29,13 @@ all: $(AGIS)
 
 strcompat.c: ../main/strcompat.c
 	@cp $< $@
+strcompat.o: ASTCFLAGS+=-DSTANDALONE
+
+eagi-test.o: ASTCFLAGS+=-DSTANDALONE
 
 eagi-test: eagi-test.o strcompat.o
+
+eagi-sphinx-test.o: ASTCFLAGS+=-DSTANDALONE
 
 eagi-sphinx-test: eagi-sphinx-test.o
 
@@ -43,8 +48,7 @@ uninstall:
 
 clean:
 	rm -f *.so *.o look eagi-test eagi-sphinx-test
-	rm -f .*.o.d .*.oo.d
-	rm -f *.s *.i
+	rm -f .*.d *.s *.i
 	rm -f strcompat.c
 
 ifneq ($(wildcard .*.d),)

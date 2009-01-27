@@ -245,17 +245,16 @@ static void schedule(struct sched_context *con, struct sched *s)
  * given the last event *tv and the offset in milliseconds 'when',
  * computes the next value,
  */
-static int sched_settime(struct timeval *tv, int when)
+static int sched_settime(struct timeval *t, int when)
 {
 	struct timeval now = ast_tvnow();
 
 	/*ast_debug(1, "TV -> %lu,%lu\n", tv->tv_sec, tv->tv_usec);*/
-	if (ast_tvzero(*tv))	/* not supplied, default to now */
-		*tv = now;
-	*tv = ast_tvadd(*tv, ast_samp2tv(when, 1000));
-	if (ast_tvcmp(*tv, now) < 0) {
-		ast_debug(1, "Request to schedule in the past?!?!\n");
-		*tv = now;
+	if (ast_tvzero(*t))	/* not supplied, default to now */
+		*t = now;
+	*t = ast_tvadd(*t, ast_samp2tv(when, 1000));
+	if (ast_tvcmp(*t, now) < 0) {
+		*t = now;
 	}
 	return 0;
 }
@@ -276,11 +275,9 @@ int ast_sched_add_variable(struct sched_context *con, int when, ast_sched_cb cal
 {
 	struct sched *tmp;
 	int res = -1;
+
 	DEBUG(ast_debug(1, "ast_sched_add()\n"));
-	if (!when) {
-		ast_log(LOG_NOTICE, "Scheduled event in 0 ms?\n");
-		return -1;
-	}
+
 	ast_mutex_lock(&con->lock);
 	if ((tmp = sched_alloc(con))) {
 		tmp->id = con->eventcnt++;
@@ -302,6 +299,7 @@ int ast_sched_add_variable(struct sched_context *con, int when, ast_sched_cb cal
 		ast_sched_dump(con);
 #endif
 	ast_mutex_unlock(&con->lock);
+
 	return res;
 }
 
@@ -428,7 +426,7 @@ char *ast_sched_report(struct sched_context *con, char *buf, int bufsiz, struct 
 void ast_sched_dump(const struct sched_context *con)
 {
 	struct sched *q;
-	struct timeval tv = ast_tvnow();
+	struct timeval when = ast_tvnow();
 #ifdef SCHED_MAX_CACHE
 	ast_debug(1, "Asterisk Schedule Dump (%d in Q, %d Total, %d Cache, %d high-water)\n", con->schedcnt, con->eventcnt - 1, con->schedccnt, con->highwater);
 #else
@@ -439,7 +437,7 @@ void ast_sched_dump(const struct sched_context *con)
 	ast_debug(1, "|ID    Callback          Data              Time  (sec:ms)   |\n");
 	ast_debug(1, "+-----+-----------------+-----------------+-----------------+\n");
 	AST_DLLIST_TRAVERSE(&con->schedq, q, list) {
-		struct timeval delta = ast_tvsub(q->when, tv);
+		struct timeval delta = ast_tvsub(q->when, when);
 
 		ast_debug(1, "|%.4d | %-15p | %-15p | %.6ld : %.6ld |\n", 
 			q->id,
@@ -458,7 +456,7 @@ void ast_sched_dump(const struct sched_context *con)
 int ast_sched_runq(struct sched_context *con)
 {
 	struct sched *current;
-	struct timeval tv;
+	struct timeval when;
 	int numevents;
 	int res;
 
@@ -472,8 +470,8 @@ int ast_sched_runq(struct sched_context *con)
 		 * help us get more than one event at one time if they are very
 		 * close together.
 		 */
-		tv = ast_tvadd(ast_tvnow(), ast_tv(0, 1000));
-		if (ast_tvcmp(AST_DLLIST_FIRST(&con->schedq)->when, tv) != -1)
+		when = ast_tvadd(ast_tvnow(), ast_tv(0, 1000));
+		if (ast_tvcmp(AST_DLLIST_FIRST(&con->schedq)->when, when) != -1)
 			break;
 		
 		current = AST_DLLIST_REMOVE_HEAD(&con->schedq, list);

@@ -38,6 +38,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <signal.h>
 #include <fcntl.h>
 #include <ctype.h>
+#include <errno.h>
 
 #include "asterisk/file.h"
 #include "asterisk/channel.h"
@@ -53,15 +54,24 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define MAXLEN 180
 #define MAXFESTLEN 2048
 
+/*** DOCUMENTATION
+	<application name="Festival" language="en_US">
+		<synopsis>
+			Say text to the user.
+		</synopsis>
+		<syntax>
+			<parameter name="text" required="true" />
+			<parameter name="intkeys" />
+		</syntax>
+		<description>
+			<para>Connect to Festival, send the argument, get back the waveform, play it to the user,
+			allowing any given interrupt keys to immediately terminate and return the value, or
+			<literal>any</literal> to allow any number back (useful in dialplan).</para>
+		</description>
+	</application>
+ ***/
+
 static char *app = "Festival";
-
-static char *synopsis = "Say text to the user";
-
-static char *descrip = 
-"  Festival(text[,intkeys]):  Connect to Festival, send the argument, get back the waveform,\n"
-"play it to the user, allowing any given interrupt keys to immediately terminate and return\n"
-"the value, or 'any' to allow any number back (useful in dialplan)\n";
-
 
 static char *socket_receive_file_to_buff(int fd, int *size)
 {
@@ -138,7 +148,11 @@ static int send_waveform_to_fd(char *waveform, int length, int fd)
 		*(waveform + x) = c;
 	}
 #endif
-	write(fd, waveform, length);
+	
+	if (write(fd, waveform, length) < 0) {
+		ast_log(LOG_WARNING, "write() failed: %s\n", strerror(errno));
+	}
+
 	close(fd);
 	exit(0);
 }
@@ -300,7 +314,11 @@ static int festival_exec(struct ast_channel *chan, void *vdata)
 	if (!cfg) {
 		ast_log(LOG_WARNING, "No such configuration file %s\n", FESTIVAL_CONFIG);
 		return -1;
+	} else if (cfg == CONFIG_STATUS_FILEINVALID) {
+		ast_log(LOG_ERROR, "Config file " FESTIVAL_CONFIG " is in an invalid format.  Aborting.\n");
+		return -1;
 	}
+
 	if (!(host = ast_variable_retrieve(cfg, "general", "host"))) {
 		host = "localhost";
 	}
@@ -330,22 +348,22 @@ static int festival_exec(struct ast_channel *chan, void *vdata)
 		snprintf(newfestivalcommand, strln, "%s%s%s", startcmd, args.text, endcmd);
 		festivalcommand = newfestivalcommand;
 	} else { /* This else parses the festivalcommand that we're sent from the config file for \n's, etc */
-		int i, j;
+		int x, j;
 		newfestivalcommand = alloca(strlen(festivalcommand) + strlen(args.text) + 1);
 
-		for (i = 0, j = 0; i < strlen(festivalcommand); i++) {
-			if (festivalcommand[i] == '\\' && festivalcommand[i + 1] == 'n') {
+		for (x = 0, j = 0; x < strlen(festivalcommand); x++) {
+			if (festivalcommand[x] == '\\' && festivalcommand[x + 1] == 'n') {
 				newfestivalcommand[j++] = '\n';
-				i++;
-			} else if (festivalcommand[i] == '\\') {
-				newfestivalcommand[j++] = festivalcommand[i + 1];
-				i++;
-			} else if (festivalcommand[i] == '%' && festivalcommand[i + 1] == 's') {
+				x++;
+			} else if (festivalcommand[x] == '\\') {
+				newfestivalcommand[j++] = festivalcommand[x + 1];
+				x++;
+			} else if (festivalcommand[x] == '%' && festivalcommand[x + 1] == 's') {
 				sprintf(&newfestivalcommand[j], "%s", args.text); /* we know it is big enough */
 				j += strlen(args.text);
-				i++;
+				x++;
 			} else
-				newfestivalcommand[j++] = festivalcommand[i];
+				newfestivalcommand[j++] = festivalcommand[x];
 		}
 		newfestivalcommand[j] = '\0';
 		festivalcommand = newfestivalcommand;
@@ -411,17 +429,25 @@ static int festival_exec(struct ast_channel *chan, void *vdata)
 				writecache = 1;
 				strln = strlen(args.text);
 				ast_debug(1, "line length : %d\n", strln);
-				write(fdesc, &strln, sizeof(strln));
-				write(fdesc, args.text, strln);
+    				if (write(fdesc,&strln,sizeof(int)) < 0) {
+					ast_log(LOG_WARNING, "write() failed: %s\n", strerror(errno));
+				}
+    				if (write(fdesc,data,strln) < 0) {
+					ast_log(LOG_WARNING, "write() failed: %s\n", strerror(errno));
+				}
 				seekpos = lseek(fdesc, 0, SEEK_CUR);
 				ast_debug(1, "Seek position : %d\n", seekpos);
 			}
 		} else {
-			read(fdesc, &strln, sizeof(strln));
+    			if (read(fdesc,&strln,sizeof(int)) != sizeof(int)) {
+				ast_log(LOG_WARNING, "read() failed: %s\n", strerror(errno));
+			}
 			ast_debug(1, "Cache file exists, strln=%d, strlen=%d\n", strln, (int)strlen(args.text));
 			if (strlen(args.text) == strln) {
 				ast_debug(1, "Size OK\n");
-				read(fdesc, &bigstring, strln);
+    				if (read(fdesc,&bigstring,strln) != strln) {
+					ast_log(LOG_WARNING, "read() failed: %s\n", strerror(errno));
+				}
 				bigstring[strln] = 0;
 				if (strcmp(bigstring, args.text) == 0) { 
 					readcache = 1;
@@ -451,7 +477,9 @@ static int festival_exec(struct ast_channel *chan, void *vdata)
 	if (writecache == 1) {
 		ast_debug(1, "Writing result to cache...\n");
 		while ((strln = read(fd, buffer, 16384)) != 0) {
-			write(fdesc, buffer, strln);
+			if (write(fdesc,buffer,strln) < 0) {
+				ast_log(LOG_WARNING, "write() failed: %s\n", strerror(errno));
+			}
 		}
 		close(fd);
 		close(fdesc);
@@ -517,9 +545,12 @@ static int load_module(void)
 	if (!cfg) {
 		ast_log(LOG_WARNING, "No such configuration file %s\n", FESTIVAL_CONFIG);
 		return AST_MODULE_LOAD_DECLINE;
+	} else if (cfg == CONFIG_STATUS_FILEINVALID) {
+		ast_log(LOG_ERROR, "Config file " FESTIVAL_CONFIG " is in an invalid format.  Aborting.\n");
+		return AST_MODULE_LOAD_DECLINE;
 	}
 	ast_config_destroy(cfg);
-	return ast_register_application(app, festival_exec, synopsis, descrip);
+	return ast_register_application_xml(app, festival_exec);
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Simple Festival Interface");

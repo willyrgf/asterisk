@@ -122,13 +122,19 @@ int ast_audiohook_write_frame(struct ast_audiohook *audiohook, enum ast_audiohoo
 {
 	struct ast_slinfactory *factory = (direction == AST_AUDIOHOOK_DIRECTION_READ ? &audiohook->read_factory : &audiohook->write_factory);
 	struct ast_slinfactory *other_factory = (direction == AST_AUDIOHOOK_DIRECTION_READ ? &audiohook->write_factory : &audiohook->read_factory);
-	struct timeval *time = (direction == AST_AUDIOHOOK_DIRECTION_READ ? &audiohook->read_time : &audiohook->write_time), previous_time = *time;
+	struct timeval *rwtime = (direction == AST_AUDIOHOOK_DIRECTION_READ ? &audiohook->read_time : &audiohook->write_time), previous_time = *rwtime;
+	int our_factory_ms;
+	int other_factory_samples;
+	int other_factory_ms;
 
 	/* Update last feeding time to be current */
-	*time = ast_tvnow();
+	*rwtime = ast_tvnow();
 
-	/* If we are using a sync trigger and this factory suddenly got audio fed in after a lapse, then flush both factories to ensure they remain in sync */
-	if (ast_test_flag(audiohook, AST_AUDIOHOOK_TRIGGER_SYNC) && ast_slinfactory_available(other_factory) && (ast_tvdiff_ms(*time, previous_time) > (ast_slinfactory_available(other_factory) / 8))) {
+	our_factory_ms = ast_tvdiff_ms(*rwtime, previous_time) + (ast_slinfactory_available(factory) / 8);
+	other_factory_samples = ast_slinfactory_available(other_factory);
+	other_factory_ms = other_factory_samples / 8;
+
+	if (ast_test_flag(audiohook, AST_AUDIOHOOK_TRIGGER_SYNC) && other_factory_samples && (our_factory_ms - other_factory_ms > AST_AUDIOHOOK_SYNC_TOLERANCE)) {
 		if (option_debug)
 			ast_log(LOG_DEBUG, "Flushing audiohook %p so it remains in sync\n", audiohook);
 		ast_slinfactory_flush(factory);
@@ -406,6 +412,11 @@ int ast_audiohook_detach_list(struct ast_audiohook_list *audiohook_list)
 	return 0;
 }
 
+/*! \brief find an audiohook based on its source
+ * \param audiohook_list The list of audiohooks to search in
+ * \param source The source of the audiohook we wish to find
+ * \return Return the corresponding audiohook or NULL if it cannot be found.
+ */
 static struct ast_audiohook *find_audiohook_by_source(struct ast_audiohook_list *audiohook_list, const char *source)
 {
 	struct ast_audiohook *audiohook = NULL;
@@ -426,6 +437,25 @@ static struct ast_audiohook *find_audiohook_by_source(struct ast_audiohook_list 
 	}
 
 	return NULL;
+}
+
+void ast_audiohook_move_by_source(struct ast_channel *old_chan, struct ast_channel *new_chan, const char *source)
+{
+	struct ast_audiohook *audiohook = find_audiohook_by_source(old_chan->audiohooks, source);
+
+	if (!audiohook) {
+		return;
+	}
+	
+	/* By locking both channels and the audiohook, we can assure that
+	 * another thread will not have a chance to read the audiohook's status
+	 * as done, even though ast_audiohook_remove signals the trigger
+	 * condition
+	 */
+	ast_audiohook_lock(audiohook);
+	ast_audiohook_remove(old_chan, audiohook);
+	ast_audiohook_attach(new_chan, audiohook);
+	ast_audiohook_unlock(audiohook);
 }
 
 /*! \brief Detach specified source audiohook from channel
@@ -666,12 +696,12 @@ struct ast_frame *ast_audiohook_write_list(struct ast_channel *chan, struct ast_
  */
 void ast_audiohook_trigger_wait(struct ast_audiohook *audiohook)
 {
-	struct timeval tv;
+	struct timeval wait;
 	struct timespec ts;
 
-	tv = ast_tvadd(ast_tvnow(), ast_samp2tv(50000, 1000));
-	ts.tv_sec = tv.tv_sec;
-	ts.tv_nsec = tv.tv_usec * 1000;
+	wait = ast_tvadd(ast_tvnow(), ast_samp2tv(50000, 1000));
+	ts.tv_sec = wait.tv_sec;
+	ts.tv_nsec = wait.tv_usec * 1000;
 	
 	ast_cond_timedwait(&audiohook->trigger, &audiohook->lock, &ts);
 	

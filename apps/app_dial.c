@@ -1,7 +1,7 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 1999 - 2006, Digium, Inc.
+ * Copyright (C) 1999 - 2008, Digium, Inc.
  *
  * Mark Spencer <markster@digium.com>
  *
@@ -62,177 +62,396 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/global_datastores.h"
 #include "asterisk/dsp.h"
 
+/*** DOCUMENTATION
+	<application name="Dial" language="en_US">
+		<synopsis>
+			Attempt to connect to another device or endpoint and bridge the call.
+		</synopsis>
+		<syntax>
+			<parameter name="Technology/Resource" required="true" argsep="&amp;">
+				<argument name="Technology/Resource" required="true">
+					<para>Specification of the device(s) to dial.  These must be in the format of
+					<literal>Technology/Resource</literal>, where <replaceable>Technology</replaceable>
+					represents a particular channel driver, and <replaceable>Resource</replaceable>
+					represents a resource available to that particular channel driver.</para>
+				</argument>
+				<argument name="Technology2/Resource2" required="false" multiple="true">
+					<para>Optional extra devices to dial in parallel</para>
+					<para>If you need more then one enter them as
+					Technology2/Resource2&amp;Technology3/Resourse3&amp;.....</para>
+				</argument>
+			</parameter>
+			<parameter name="timeout" required="false">
+				<para>Specifies the number of seconds we attempt to dial the specified devices</para>
+				<para>If not specified, this defaults to 136 years.</para>
+			</parameter>
+			<parameter name="options" required="false">
+			   <optionlist>
+				<option name="A">
+					<argument name="x" required="true">
+						<para>The file to play to the called party</para>
+					</argument>
+					<para>Play an announcement to the called party, where <replaceable>x</replaceable> is the prompt to be played</para>
+				</option>
+				<option name="C">
+					<para>Reset the call detail record (CDR) for this call.</para>
+				</option>
+				<option name="c">
+					<para>If the Dial() application cancels this call, always set the flag to tell the channel
+					driver that the call is answered elsewhere.</para>
+				</option>
+				<option name="d">
+					<para>Allow the calling user to dial a 1 digit extension while waiting for
+					a call to be answered. Exit to that extension if it exists in the
+					current context, or the context defined in the <variable>EXITCONTEXT</variable> variable,
+					if it exists.</para>
+				</option>
+				<option name="D" argsep=":">
+					<argument name="called" />
+					<argument name="calling" />
+					<para>Send the specified DTMF strings <emphasis>after</emphasis> the called
+					party has answered, but before the call gets bridged. The 
+					<replaceable>called</replaceable> DTMF string is sent to the called party, and the 
+					<replaceable>calling</replaceable> DTMF string is sent to the calling party. Both arguments 
+					can be used alone.</para>
+				</option>
+				<option name="e">
+					<para>Execute the <literal>h</literal> extension for peer after the call ends</para>
+				</option>
+				<option name="f">
+					<para>Force the callerid of the <emphasis>calling</emphasis> channel to be set as the
+					extension associated with the channel using a dialplan <literal>hint</literal>.
+					For example, some PSTNs do not allow CallerID to be set to anything
+					other than the number assigned to the caller.</para>
+				</option>
+				<option name="F" argsep="^">
+					<argument name="context" required="false" />
+					<argument name="exten" required="false" />
+					<argument name="priority" required="true" />
+					<para>When the caller hangs up, transfer the called party
+					to the specified destination and continue execution at that location.</para>
+				</option>
+				<option name="g">
+					<para>Proceed with dialplan execution at the next priority in the current extension if the
+					destination channel hangs up.</para>
+				</option>
+				<option name="G" argsep="^">
+					<argument name="context" required="false" />
+					<argument name="exten" required="false" />
+					<argument name="priority" required="true" />
+					<para>If the call is answered, transfer the calling party to
+					the specified <replaceable>priority</replaceable> and the called party to the specified 
+					<replaceable>priority</replaceable> plus one.</para>
+					<note>
+						<para>You cannot use any additional action post answer options in conjunction with this option.</para>
+					</note>
+				</option>
+				<option name="h">
+					<para>Allow the called party to hang up by sending the <literal>*</literal> DTMF digit.</para>
+				</option>
+				<option name="H">
+					<para>Allow the calling party to hang up by hitting the <literal>*</literal> DTMF digit.</para>
+				</option>
+				<option name="i">
+					<para>Asterisk will ignore any forwarding requests it may receive on this dial attempt.</para>
+				</option>
+				<option name="k">
+					<para>Allow the called party to enable parking of the call by sending
+					the DTMF sequence defined for call parking in <filename>features.conf</filename>.</para>
+				</option>
+				<option name="K">
+					<para>Allow the calling party to enable parking of the call by sending
+					the DTMF sequence defined for call parking in <filename>features.conf</filename>.</para>
+				</option>
+				<option name="L" argsep=":">
+					<argument name="x" required="true">
+						<para>Maximum call time, in milliseconds</para>
+					</argument>
+					<argument name="y">
+						<para>Warning time, in milliseconds</para>
+					</argument>
+					<argument name="z">
+						<para>Repeat time, in milliseconds</para>
+					</argument>
+					<para>Limit the call to <replaceable>x</replaceable> milliseconds. Play a warning when <replaceable>y</replaceable> milliseconds are
+					left. Repeat the warning every <replaceable>z</replaceable> milliseconds until time expires.</para>
+					<para>This option is affected by the following variables:</para>
+					<variablelist>
+						<variable name="LIMIT_PLAYAUDIO_CALLER">
+							<value name="yes" default="true" />
+							<value name="no" />
+							<para>If set, this variable causes Asterisk to play the prompts to the caller.</para>
+						</variable>
+						<variable name="LIMIT_PLAYAUDIO_CALLEE">
+							<value name="yes" />
+							<value name="no" default="true"/>
+							<para>If set, this variable causes Asterisk to play the prompts to the callee.</para>
+						</variable>
+						<variable name="LIMIT_TIMEOUT_FILE">
+							<value name="filename"/>
+							<para>If specified, <replaceable>filename</replaceable> specifies the sound prompt to play when the timeout is reached.
+							If not set, the time remaining will be announced.</para>
+						</variable>
+						<variable name="LIMIT_CONNECT_FILE">
+							<value name="filename"/>
+							<para>If specified, <replaceable>filename</replaceable> specifies the sound prompt to play when the call begins.
+							If not set, the time remaining will be announced.</para>
+						</variable>
+						<variable name="LIMIT_WARNING_FILE">
+							<value name="filename"/>
+							<para>If specified, <replaceable>filename</replaceable> specifies the sound prompt to play as
+							a warning when time <replaceable>x</replaceable> is reached. If not set, the time remaining will be announced.</para>
+						</variable>
+					</variablelist>
+				</option>
+				<option name="m">
+					<argument name="class" required="false"/>
+					<para>Provide hold music to the calling party until a requested
+					channel answers. A specific music on hold <replaceable>class</replaceable>
+					(as defined in <filename>musiconhold.conf</filename>) can be specified.</para>
+				</option>
+				<option name="M" argsep="^">
+					<argument name="macro" required="true">
+						<para>Name of the macro that should be executed.</para>
+					</argument>
+					<argument name="arg" multiple="true">
+						<para>Macro arguments</para>
+					</argument>
+					<para>Execute the specified <replaceable>macro</replaceable> for the <emphasis>called</emphasis> channel 
+					before connecting to the calling channel. Arguments can be specified to the Macro
+					using <literal>^</literal> as a delimiter. The macro can set the variable
+					<variable>MACRO_RESULT</variable> to specify the following actions after the macro is
+					finished executing:</para>
+					<variablelist>
+						<variable name="MACRO_RESULT">
+							<para>If set, this action will be taken after the macro finished executing.</para>
+							<value name="ABORT">
+								Hangup both legs of the call
+							</value>
+							<value name="CONGESTION">
+								Behave as if line congestion was encountered
+							</value>
+							<value name="BUSY">
+								Behave as if a busy signal was encountered
+							</value>
+							<value name="CONTINUE">
+								Hangup the called party and allow the calling party to continue dialplan execution at the next priority
+							</value>
+							<!-- TODO: Fix this syntax up, once we've figured out how to specify the GOTO syntax -->
+							<value name="GOTO:&lt;context&gt;^&lt;exten&gt;^&lt;priority&gt;">
+								Transfer the call to the specified destination.
+							</value>
+						</variable>
+					</variablelist>
+					<note>
+						<para>You cannot use any additional action post answer options in conjunction
+						with this option. Also, pbx services are not run on the peer (called) channel,
+						so you will not be able to set timeouts via the TIMEOUT() function in this macro.</para>
+					</note>
+				</option>
+				<option name="n">
+					<para>This option is a modifier for the call screening/privacy mode. (See the 
+					<literal>p</literal> and <literal>P</literal> options.) It specifies
+					that no introductions are to be saved in the <directory>priv-callerintros</directory>
+					directory.</para>
+				</option>
+				<option name="N">
+					<para>This option is a modifier for the call screening/privacy mode. It specifies
+					that if Caller*ID is present, do not screen the call.</para>
+				</option>
+				<option name="o">
+					<para>Specify that the Caller*ID that was present on the <emphasis>calling</emphasis> channel
+					be set as the Caller*ID on the <emphasis>called</emphasis> channel. This was the
+					behavior of Asterisk 1.0 and earlier.</para>
+				</option>
+				<option name="O">
+					<argument name="mode">
+						<para>With <replaceable>mode</replaceable> either not specified or set to <literal>1</literal>,
+						the originator hanging up will cause the phone to ring back immediately.</para>
+						<para>With <replaceable>mode</replaceable> set to <literal>2</literal>, when the operator 
+						flashes the trunk, it will ring their phone back.</para>
+					</argument>
+					<para>Enables <emphasis>operator services</emphasis> mode.  This option only
+					works when bridging a DAHDI channel to another DAHDI channel
+					only. if specified on non-DAHDI interfaces, it will be ignored.
+					When the destination answers (presumably an operator services
+					station), the originator no longer has control of their line.
+					They may hang up, but the switch will not release their line
+					until the destination party (the operator) hangs up.</para>
+				</option>
+				<option name="p">
+					<para>This option enables screening mode. This is basically Privacy mode
+					without memory.</para>
+				</option>
+				<option name="P">
+					<argument name="x" />
+					<para>Enable privacy mode. Use <replaceable>x</replaceable> as the family/key in the AstDB database if
+					it is provided. The current extension is used if a database family/key is not specified.</para>
+				</option>
+				<option name="r">
+					<para>Indicate ringing to the calling party, even if the called party isn't actually ringing. Pass no audio to the calling
+					party until the called channel has answered.</para>
+				</option>
+				<option name="S">
+					<argument name="x" required="true" />
+					<para>Hang up the call <replaceable>x</replaceable> seconds <emphasis>after</emphasis> the called party has
+					answered the call.</para>
+				</option>
+				<option name="t">
+					<para>Allow the called party to transfer the calling party by sending the
+					DTMF sequence defined in <filename>features.conf</filename>.</para>
+				</option>
+				<option name="T">
+					<para>Allow the calling party to transfer the called party by sending the
+					DTMF sequence defined in <filename>features.conf</filename>.</para>
+				</option>
+				<option name="U" argsep="^">
+					<argument name="x" required="true">
+						<para>Name of the subroutine to execute via Gosub</para>
+					</argument>
+					<argument name="arg" multiple="true" required="false">
+						<para>Arguments for the Gosub routine</para>
+					</argument>
+					<para>Execute via Gosub the routine <replaceable>x</replaceable> for the <emphasis>called</emphasis> channel before connecting
+					to the calling channel. Arguments can be specified to the Gosub
+					using <literal>^</literal> as a delimiter. The Gosub routine can set the variable
+					<variable>GOSUB_RESULT</variable> to specify the following actions after the Gosub returns.</para>
+					<variablelist>
+						<variable name="GOSUB_RESULT">
+							<value name="ABORT">
+								Hangup both legs of the call.
+							</value>
+							<value name="CONGESTION">
+								Behave as if line congestion was encountered.
+							</value>
+							<value name="BUSY">
+								Behave as if a busy signal was encountered.
+							</value>
+							<value name="CONTINUE">
+								Hangup the called party and allow the calling party
+								to continue dialplan execution at the next priority.
+							</value>
+							<!-- TODO: Fix this syntax up, once we've figured out how to specify the GOTO syntax -->
+							<value name="GOTO:&lt;context&gt;^&lt;exten&gt;^&lt;priority&gt;">
+								Transfer the call to the specified priority. Optionally, an extension, or
+								extension and priority can be specified.
+							</value>
+						</variable>
+					</variablelist>
+					<note>
+						<para>You cannot use any additional action post answer options in conjunction
+						with this option. Also, pbx services are not run on the peer (called) channel,
+						so you will not be able to set timeouts via the TIMEOUT() function in this routine.</para>
+					</note>
+				</option>
+				<option name="w">
+					<para>Allow the called party to enable recording of the call by sending
+					the DTMF sequence defined for one-touch recording in <filename>features.conf</filename>.</para>
+				</option>
+				<option name="W">
+					<para>Allow the calling party to enable recording of the call by sending
+					the DTMF sequence defined for one-touch recording in <filename>features.conf</filename>.</para>
+				</option>
+				<option name="x">
+					<para>Allow the called party to enable recording of the call by sending
+					the DTMF sequence defined for one-touch automixmonitor in <filename>features.conf</filename>.</para>
+				</option>
+				<option name="X">
+					<para>Allow the calling party to enable recording of the call by sending
+					the DTMF sequence defined for one-touch automixmonitor in <filename>features.conf</filename>.</para>
+				</option>
+				</optionlist>
+			</parameter>
+			<parameter name="URL">
+				<para>The optional URL will be sent to the called party if the channel driver supports it.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>This application will place calls to one or more specified channels. As soon
+			as one of the requested channels answers, the originating channel will be
+			answered, if it has not already been answered. These two channels will then
+			be active in a bridged call. All other channels that were requested will then
+			be hung up.</para>
+
+			<para>Unless there is a timeout specified, the Dial application will wait
+			indefinitely until one of the called channels answers, the user hangs up, or
+			if all of the called channels are busy or unavailable. Dialplan executing will
+			continue if no requested channels can be called, or if the timeout expires.
+			This application will report normal termination if the originating channel
+			hangs up, or if the call is bridged and either of the parties in the bridge
+			ends the call.</para>
+
+			<para>If the <variable>OUTBOUND_GROUP</variable> variable is set, all peer channels created by this
+			application will be put into that group (as in Set(GROUP()=...).
+			If the <variable>OUTBOUND_GROUP_ONCE</variable> variable is set, all peer channels created by this
+			application will be put into that group (as in Set(GROUP()=...). Unlike OUTBOUND_GROUP,
+			however, the variable will be unset after use.</para>
+
+			<para>This application sets the following channel variables:</para>
+			<variablelist>
+				<variable name="DIALEDTIME">
+					<para>This is the time from dialing a channel until when it is disconnected.</para>
+				</variable>
+				<variable name="ANSWEREDTIME">
+					<para>This is the amount of time for actual call.</para>
+				</variable>
+				<variable name="DIALSTATUS">
+					<para>This is the status of the call</para>
+					<value name="CHANUNAVAIL" />
+					<value name="CONGESTION" />
+					<value name="NOANSWER" />
+					<value name="BUSY" />
+					<value name="ANSWER" />
+					<value name="CANCEL" />
+					<value name="DONTCALL">
+						For the Privacy and Screening Modes.
+						Will be set if the called party chooses to send the calling party to the 'Go Away' script.
+					</value>
+					<value name="TORTURE">
+						For the Privacy and Screening Modes.
+						Will be set if the called party chooses to send the calling party to the 'torture' script.
+					</value>
+					<value name="INVALIDARGS" />
+				</variable>
+			</variablelist>
+		</description>
+	</application>
+	<application name="RetryDial" language="en_US">
+		<synopsis>
+			Place a call, retrying on failure allowing an optional exit extension.
+		</synopsis>
+		<syntax>
+			<parameter name="announce" required="true">
+				<para>Filename of sound that will be played when no channel can be reached</para>
+			</parameter>
+			<parameter name="sleep" required="true">
+				<para>Number of seconds to wait after a dial attempt failed before a new attempt is made</para>
+			</parameter>
+			<parameter name="retries" required="true">
+				<para>Number of retries</para>
+				<para>When this is reached flow will continue at the next priority in the dialplan</para>
+			</parameter>
+			<parameter name="dialargs" required="true">
+				<para>Same format as arguments provided to the Dial application</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>This application will attempt to place a call using the normal Dial application.
+			If no channel can be reached, the <replaceable>announce</replaceable> file will be played.
+			Then, it will wait <replaceable>sleep</replaceable> number of seconds before retrying the call.
+			After <replaceable>retries</replaceable> number of attempts, the calling channel will continue at the next priority in the dialplan.
+			If the <replaceable>retries</replaceable> setting is set to 0, this application will retry endlessly.
+			While waiting to retry a call, a 1 digit extension may be dialed. If that
+			extension exists in either the context defined in <variable>EXITCONTEXT</variable> or the current
+			one, The call will jump to that extension immediately.
+			The <replaceable>dialargs</replaceable> are specified in the same format that arguments are provided
+			to the Dial application.</para>
+		</description>
+	</application>
+ ***/
+
 static char *app = "Dial";
-
-static char *synopsis = "Place a call and connect to the current channel";
-
-static char *descrip =
-"  Dial(Technology/resource[&Tech2/resource2...][,timeout][,options][,URL]):\n"
-"This application will place calls to one or more specified channels. As soon\n"
-"as one of the requested channels answers, the originating channel will be\n"
-"answered, if it has not already been answered. These two channels will then\n"
-"be active in a bridged call. All other channels that were requested will then\n"
-"be hung up.\n"
-"  Unless there is a timeout specified, the Dial application will wait\n"
-"indefinitely until one of the called channels answers, the user hangs up, or\n"
-"if all of the called channels are busy or unavailable. Dialplan executing will\n"
-"continue if no requested channels can be called, or if the timeout expires.\n\n"
-"  This application sets the following channel variables upon completion:\n"
-"    DIALEDTIME   - This is the time from dialing a channel until when it\n"
-"                   is disconnected.\n"
-"    ANSWEREDTIME - This is the amount of time for actual call.\n"
-"    DIALSTATUS   - This is the status of the call:\n"
-"                   CHANUNAVAIL | CONGESTION | NOANSWER | BUSY | ANSWER | CANCEL\n"
-"                   DONTCALL | TORTURE | INVALIDARGS\n"
-"  For the Privacy and Screening Modes, the DIALSTATUS variable will be set to\n"
-"DONTCALL if the called party chooses to send the calling party to the 'Go Away'\n"
-"script. The DIALSTATUS variable will be set to TORTURE if the called party\n"
-"wants to send the caller to the 'torture' script.\n"
-"  This application will report normal termination if the originating channel\n"
-"hangs up, or if the call is bridged and either of the parties in the bridge\n"
-"ends the call.\n"
-"  The optional URL will be sent to the called party if the channel supports it.\n"
-"  If the OUTBOUND_GROUP variable is set, all peer channels created by this\n"
-"application will be put into that group (as in Set(GROUP()=...).\n"
-"  If the OUTBOUND_GROUP_ONCE variable is set, all peer channels created by this\n"
-"application will be put into that group (as in Set(GROUP()=...). Unlike OUTBOUND_GROUP,\n"
-"however, the variable will be unset after use.\n\n"
-"  Options:\n"
-"    A(x) - Play an announcement to the called party, using 'x' as the file.\n"
-"    C    - Reset the CDR for this call.\n"
-"    c    - If DIAL cancels this call, always set the flag to tell the channel\n"
-"           driver that the call is answered elsewhere.\n"
-"    d    - Allow the calling user to dial a 1 digit extension while waiting for\n"
-"           a call to be answered. Exit to that extension if it exists in the\n"
-"           current context, or the context defined in the EXITCONTEXT variable,\n"
-"           if it exists.\n"
-"    D([called][:calling]) - Send the specified DTMF strings *after* the called\n"
-"           party has answered, but before the call gets bridged. The 'called'\n"
-"           DTMF string is sent to the called party, and the 'calling' DTMF\n"
-"           string is sent to the calling party. Both parameters can be used\n"
-"           alone.\n"
-"    e    - execute the 'h' extension for peer after the call ends\n"
-"    f    - Force the callerid of the *calling* channel to be set as the\n"
-"           extension associated with the channel using a dialplan 'hint'.\n"
-"           For example, some PSTNs do not allow CallerID to be set to anything\n"
-"           other than the number assigned to the caller.\n"
-"    F(context^exten^pri) - When the caller hangs up, transfer the called party\n"
-"           to the specified context and extension and continue execution.\n"
-"    g    - Proceed with dialplan execution at the current extension if the\n"
-"           destination channel hangs up.\n"
-"    G(context^exten^pri) - If the call is answered, transfer the calling party to\n"
-"           the specified priority and the called party to the specified priority+1.\n"
-"           Optionally, an extension, or extension and context may be specified. \n"
-"           Otherwise, the current extension is used. You cannot use any additional\n"
-"           action post answer options in conjunction with this option.\n"
-"    h    - Allow the called party to hang up by sending the '*' DTMF digit.\n"
-"    H    - Allow the calling party to hang up by hitting the '*' DTMF digit.\n"
-"    i    - Asterisk will ignore any forwarding requests it may receive on this\n"
-"           dial attempt.\n"
-"    k    - Allow the called party to enable parking of the call by sending\n"
-"           the DTMF sequence defined for call parking in features.conf.\n"
-"    K    - Allow the calling party to enable parking of the call by sending\n"
-"           the DTMF sequence defined for call parking in features.conf.\n"
-"    L(x[:y][:z]) - Limit the call to 'x' ms. Play a warning when 'y' ms are\n"
-"           left. Repeat the warning every 'z' ms. The following special\n"
-"           variables can be used with this option:\n"
-"           * LIMIT_PLAYAUDIO_CALLER   yes|no (default yes)\n"
-"                                      Play sounds to the caller.\n"
-"           * LIMIT_PLAYAUDIO_CALLEE   yes|no\n"
-"                                      Play sounds to the callee.\n"
-"           * LIMIT_TIMEOUT_FILE       File to play when time is up.\n"
-"           * LIMIT_CONNECT_FILE       File to play when call begins.\n"
-"           * LIMIT_WARNING_FILE       File to play as warning if 'y' is defined.\n"
-"                                      The default is to say the time remaining.\n"
-"    m([class]) - Provide hold music to the calling party until a requested\n"
-"           channel answers. A specific MusicOnHold class can be\n"
-"           specified.\n"
-"    M(x[^arg]) - Execute the Macro for the *called* channel before connecting\n"
-"           to the calling channel. Arguments can be specified to the Macro\n"
-"           using '^' as a delimiter. The Macro can set the variable\n"
-"           MACRO_RESULT to specify the following actions after the Macro is\n"
-"           finished executing.\n"
-"           * ABORT        Hangup both legs of the call.\n"
-"           * CONGESTION   Behave as if line congestion was encountered.\n"
-"           * BUSY         Behave as if a busy signal was encountered.\n"
-"           * CONTINUE     Hangup the called party and allow the calling party\n"
-"                          to continue dialplan execution at the next priority.\n"
-"           * GOTO:<context>^<exten>^<priority> - Transfer the call to the\n"
-"                          specified priority. Optionally, an extension, or\n"
-"                          extension and priority can be specified.\n"
-"           You cannot use any additional action post answer options in conjunction\n"
-"           with this option. Also, pbx services are not run on the peer (called) channel,\n"
-"           so you will not be able to set timeouts via the TIMEOUT() function in this macro.\n"
-"    n    - This option is a modifier for the screen/privacy mode. It specifies\n"
-"           that no introductions are to be saved in the priv-callerintros\n"
-"           directory.\n"
-"    N    - This option is a modifier for the screen/privacy mode. It specifies\n"
-"           that if callerID is present, do not screen the call.\n"
-"    o    - Specify that the CallerID that was present on the *calling* channel\n"
-"           be set as the CallerID on the *called* channel. This was the\n"
-"           behavior of Asterisk 1.0 and earlier.\n"
-"    O([x]) - \"Operator Services\" mode (DAHDI channel to DAHDI channel\n"
-"             only, if specified on non-DAHDI interface, it will be ignored).\n"
-"             When the destination answers (presumably an operator services\n"
-"             station), the originator no longer has control of their line.\n"
-"             They may hang up, but the switch will not release their line\n"
-"             until the destination party hangs up (the operator). Specified\n"
-"             without an arg, or with 1 as an arg, the originator hanging up\n"
-"             will cause the phone to ring back immediately. With a 2 specified,\n"
-"             when the \"operator\" flashes the trunk, it will ring their phone\n"
-"             back.\n"
-"    p    - This option enables screening mode. This is basically Privacy mode\n"
-"           without memory.\n"
-"    P([x]) - Enable privacy mode. Use 'x' as the family/key in the database if\n"
-"           it is provided. The current extension is used if a database\n"
-"           family/key is not specified.\n"
-"    r    - Indicate ringing to the calling party. Pass no audio to the calling\n"
-"           party until the called channel has answered.\n"
-"    S(x) - Hang up the call after 'x' seconds *after* the called party has\n"
-"           answered the call.\n"
-"    t    - Allow the called party to transfer the calling party by sending the\n"
-"           DTMF sequence defined in features.conf.\n"
-"    T    - Allow the calling party to transfer the called party by sending the\n"
-"           DTMF sequence defined in features.conf.\n"
-"    U(x[^arg]) - Execute via Gosub the routine 'x' for the *called* channel before connecting\n"
-"           to the calling channel. Arguments can be specified to the Gosub\n"
-"           using '^' as a delimiter. The Gosub routine can set the variable\n"
-"           GOSUB_RESULT to specify the following actions after the Gosub returns.\n"
-"           * ABORT        Hangup both legs of the call.\n"
-"           * CONGESTION   Behave as if line congestion was encountered.\n"
-"           * BUSY         Behave as if a busy signal was encountered.\n"
-"           * CONTINUE     Hangup the called party and allow the calling party\n"
-"                          to continue dialplan execution at the next priority.\n"
-"           * GOTO:<context>^<exten>^<priority> - Transfer the call to the\n"
-"                          specified priority. Optionally, an extension, or\n"
-"                          extension and priority can be specified.\n"
-"           You cannot use any additional action post answer options in conjunction\n"
-"           with this option. Also, pbx services are not run on the peer (called) channel,\n"
-"           so you will not be able to set timeouts via the TIMEOUT() function in this routine.\n"
-"    w    - Allow the called party to enable recording of the call by sending\n"
-"           the DTMF sequence defined for one-touch recording in features.conf.\n"
-"    W    - Allow the calling party to enable recording of the call by sending\n"
-"           the DTMF sequence defined for one-touch recording in features.conf.\n"
-"    x    - Allow the called party to enable recording of the call by sending\n"
-"           the DTMF sequence defined for one-touch automixmonitor in features.conf\n"
-"    X    - Allow the calling party to enable recording of the call by sending\n"
-"           the DTMF sequence defined for one-touch automixmonitor in features.conf\n";
-
-/* RetryDial App by Anthony Minessale II <anthmct@yahoo.com> Jan/2005 */
 static char *rapp = "RetryDial";
-static char *rsynopsis = "Place a call, retrying on failure allowing optional exit extension.";
-static char *rdescrip =
-"  RetryDial(announce,sleep,retries,dialargs): This application will attempt to\n"
-"place a call using the normal Dial application. If no channel can be reached,\n"
-"the 'announce' file will be played. Then, it will wait 'sleep' number of\n"
-"seconds before retrying the call. After 'retries' number of attempts, the\n"
-"calling channel will continue at the next priority in the dialplan. If the\n"
-"'retries' setting is set to 0, this application will retry endlessly.\n"
-"  While waiting to retry a call, a 1 digit extension may be dialed. If that\n"
-"extension exists in either the context defined in ${EXITCONTEXT} or the current\n"
-"one, The call will jump to that extension immediately.\n"
-"  The 'dialargs' are specified in the same format that arguments are provided\n"
-"to the Dial application.\n";
 
 enum {
 	OPT_ANNOUNCE =          (1 << 0),
@@ -516,6 +735,7 @@ static void do_forward(struct chanlist *o,
 	if (!c) {
 		ast_clear_flag64(o, DIAL_STILLGOING);
 		handle_cause(cause, num);
+		ast_hangup(original);
 	} else {
 		char *new_cid_num, *new_cid_name;
 		struct ast_channel *src;
@@ -543,6 +763,7 @@ static void do_forward(struct chanlist *o,
 			ast_log(LOG_NOTICE, "Failed to dial on local channel for call forward to '%s'\n", tmpchan);
 			ast_clear_flag64(o, DIAL_STILLGOING);
 			ast_hangup(original);
+			ast_hangup(c);
 			c = o->chan = NULL;
 			num->nochan++;
 		} else {
@@ -554,6 +775,9 @@ static void do_forward(struct chanlist *o,
 			}
 			/* Hangup the original channel now, in case we needed it */
 			ast_hangup(original);
+		}
+		if (single) {
+			ast_indicate(in, -1);
 		}
 	}
 }
@@ -891,7 +1115,7 @@ static int valid_priv_reply(struct ast_flags64 *opts, int res)
 }
 
 static int do_timelimit(struct ast_channel *chan, struct ast_bridge_config *config,
-	char *parse, unsigned int *calldurationlimit)
+	char *parse, struct timeval *calldurationlimit)
 {
 	char *stringp = ast_strdupa(parse);
 	char *limit_str, *warning_str, *warnfreq_str;
@@ -951,7 +1175,7 @@ static int do_timelimit(struct ast_channel *chan, struct ast_bridge_config *conf
 		play_to_caller = 1;
 
 	var = pbx_builtin_getvar_helper(chan, "LIMIT_WARNING_FILE");
-	config->warning_sound = !ast_strlen_zero(var) ? ast_strdupa(var) : "timeleft";
+	config->warning_sound = !ast_strlen_zero(var) ? ast_strdup(var) : ast_strdup("timeleft");
 
 	/* The code looking at config wants a NULL, not just "", to decide
 	 * that the message should not be played, so we replace "" with NULL.
@@ -960,20 +1184,23 @@ static int do_timelimit(struct ast_channel *chan, struct ast_bridge_config *conf
 	 */
 
 	var = pbx_builtin_getvar_helper(chan, "LIMIT_TIMEOUT_FILE");
-	config->end_sound = !ast_strlen_zero(var) ? ast_strdupa(var) : NULL;
+	config->end_sound = !ast_strlen_zero(var) ? ast_strdup(var) : NULL;
 
 	var = pbx_builtin_getvar_helper(chan, "LIMIT_CONNECT_FILE");
-	config->start_sound = !ast_strlen_zero(var) ? ast_strdupa(var) : NULL;
+	config->start_sound = !ast_strlen_zero(var) ? ast_strdup(var) : NULL;
 
 	ast_channel_unlock(chan);
 
 	/* undo effect of S(x) in case they are both used */
-	*calldurationlimit = 0;
+	calldurationlimit->tv_sec = 0;
+	calldurationlimit->tv_usec = 0;
+
 	/* more efficient to do it like S(x) does since no advanced opts */
 	if (!config->play_warning && !config->start_sound && !config->end_sound && config->timelimit) {
-		*calldurationlimit = config->timelimit / 1000;
-		ast_verb(3, "Setting call duration limit to %d seconds.\n",
-			*calldurationlimit);
+		calldurationlimit->tv_sec = config->timelimit / 1000;
+		calldurationlimit->tv_usec = (config->timelimit % 1000) * 1000;
+		ast_verb(3, "Setting call duration limit to %.3lf seconds.\n",
+			calldurationlimit->tv_sec + calldurationlimit->tv_usec / 1000000.0);
 		config->timelimit = play_to_caller = play_to_callee =
 		config->play_warning = config->warning_freq = 0;
 	} else {
@@ -1243,6 +1470,35 @@ static void set_dial_features(struct ast_flags64 *opts, struct ast_dial_features
 	ast_app_options2str64(dial_exec_options, &perm_opts, features->options, sizeof(features->options));
 }
 
+static void end_bridge_callback(void *data)
+{
+	char buf[80];
+	time_t end;
+	struct ast_channel *chan = data;
+
+	if (!chan->cdr) {
+		return;
+	}
+
+	time(&end);
+
+	ast_channel_lock(chan);
+	if (chan->cdr->answer.tv_sec) {
+		snprintf(buf, sizeof(buf), "%ld", end - chan->cdr->answer.tv_sec);
+		pbx_builtin_setvar_helper(chan, "ANSWEREDTIME", buf);
+	}
+
+	if (chan->cdr->start.tv_sec) {
+		snprintf(buf, sizeof(buf), "%ld", end - chan->cdr->start.tv_sec);
+		pbx_builtin_setvar_helper(chan, "DIALEDTIME", buf);
+	}
+	ast_channel_unlock(chan);
+}
+
+static void end_bridge_callback_data_fixup(struct ast_bridge_config *bconfig, struct ast_channel *originator, struct ast_channel *terminator) {
+	bconfig->end_bridge_callback_data = originator;
+}
+
 static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags64 *peerflags, int *continue_exec)
 {
 	int res = -1; /* default: error */
@@ -1256,7 +1512,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 	char cidname[AST_MAX_EXTENSION] = "";
 
 	struct ast_bridge_config config = { { 0, } };
-	unsigned int calldurationlimit = 0;
+	struct timeval calldurationlimit = { 0, };
 	char *dtmfcalled = NULL, *dtmfcalling = NULL;
 	struct privacy_args pa = {
 		.sentringing = 0,
@@ -1266,7 +1522,6 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 	int sentringing = 0, moh = 0;
 	const char *outbound_group = NULL;
 	int result = 0;
-	time_t start_time;
 	char *parse;
 	int opermode = 0;
 	AST_DECLARE_APP_ARGS(args,
@@ -1282,6 +1537,13 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 	struct ast_datastore *ds_callee_features = NULL;
 	struct ast_dial_features *caller_features;
 	int fulldial = 0, num_dialed = 0;
+
+	/* Reset all DIAL variables back to blank, to prevent confusion (in case we don't reset all of them). */
+	pbx_builtin_setvar_helper(chan, "DIALSTATUS", "");
+	pbx_builtin_setvar_helper(chan, "DIALEDPEERNUMBER", "");
+	pbx_builtin_setvar_helper(chan, "DIALEDPEERNAME", "");
+	pbx_builtin_setvar_helper(chan, "ANSWEREDTIME", "");
+	pbx_builtin_setvar_helper(chan, "DIALEDTIME", "");
 
 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_WARNING, "Dial requires an argument (technology/number)\n");
@@ -1311,13 +1573,13 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 	}
 	
 	if (ast_test_flag64(&opts, OPT_DURATION_STOP) && !ast_strlen_zero(opt_args[OPT_ARG_DURATION_STOP])) {
-		calldurationlimit = atoi(opt_args[OPT_ARG_DURATION_STOP]);
-		if (!calldurationlimit) {
+		calldurationlimit.tv_sec = atoi(opt_args[OPT_ARG_DURATION_STOP]);
+		if (!calldurationlimit.tv_sec) {
 			ast_log(LOG_WARNING, "Dial does not accept S(%s), hanging up.\n", opt_args[OPT_ARG_DURATION_STOP]);
 			pbx_builtin_setvar_helper(chan, "DIALSTATUS", pa.status);
 			goto done;
 		}
-		ast_verb(3, "Setting call duration limit to %d seconds.\n", calldurationlimit);
+		ast_verb(3, "Setting call duration limit to %.3lf seconds.\n", calldurationlimit.tv_sec + calldurationlimit.tv_usec / 1000000.0);
 	}
 
 	if (ast_test_flag64(&opts, OPT_SENDDTMF) && !ast_strlen_zero(opt_args[OPT_ARG_SENDDTMF])) {
@@ -1492,6 +1754,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		
 		/* Inherit specially named variables from parent channel */
 		ast_channel_inherit_variables(chan, tc);
+		ast_channel_datastore_inherit(chan, tc);
 
 		tc->appl = "AppDial";
 		tc->data = "(Outgoing Line)";
@@ -1560,6 +1823,9 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			/* Again, keep going even if there's an error */
 			ast_debug(1, "ast call on peer returned %d\n", res);
 			ast_verb(3, "Couldn't call %s\n", numsubst);
+			if (tc->hangupcause) {
+				chan->hangupcause = tc->hangupcause;
+			}
 			ast_hangup(tc);
 			tc = NULL;
 			ast_free(tmp);
@@ -1588,8 +1854,10 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		to = atoi(args.timeout);
 		if (to > 0)
 			to *= 1000;
-		else
-			ast_log(LOG_WARNING, "Invalid timeout specified: '%s'\n", args.timeout);
+		else {
+			ast_log(LOG_WARNING, "Invalid timeout specified: '%s'. Setting timeout to infinite\n", args.timeout);
+			to = -1;
+		}
 	}
 
 	if (!outgoing) {
@@ -1618,7 +1886,6 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		}
 	}
 
-	time(&start_time);
 	peer = wait_for_answer(chan, outgoing, &to, peerflags, &pa, &num, &result);
 
 	/* The ast_channel_datastore_remove() function could fail here if the
@@ -1647,10 +1914,9 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		/* almost done, although the 'else' block is 400 lines */
 	} else {
 		const char *number;
-		time_t end_time, answer_time = time(NULL);
-		char toast[80]; /* buffer to set variables */
 
 		strcpy(pa.status, "ANSWER");
+		pbx_builtin_setvar_helper(chan, "DIALSTATUS", pa.status);
 		/* Ah ha!  Someone answered within the desired timeframe.  Of course after this
 		   we will always return with -1 so that it is hung up properly after the
 		   conversation.  */
@@ -1728,6 +1994,10 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			theapp = pbx_findapp("Macro");
 
 			if (theapp && !res) { /* XXX why check res here ? */
+				/* Set peer->exten and peer->context so that MACRO_EXTEN and MACRO_CONTEXT get set */
+				ast_copy_string(peer->context, chan->context, sizeof(peer->context));
+				ast_copy_string(peer->exten, chan->exten, sizeof(peer->exten));
+
 				replace_macro_delimiter(opt_args[OPT_ARG_CALLEE_MACRO]);
 				res = pbx_exec(peer, theapp, opt_args[OPT_ARG_CALLEE_MACRO]);
 				ast_debug(1, "Macro exited with status %d\n", res);
@@ -1783,16 +2053,17 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			struct ast_app *theapp;
 			const char *gosub_result;
 			char *gosub_args, *gosub_argstart;
+			int res9 = -1;
 
-			res = ast_autoservice_start(chan);
-			if (res) {
+			res9 = ast_autoservice_start(chan);
+			if (res9) {
 				ast_log(LOG_ERROR, "Unable to start autoservice on calling channel\n");
-				res = -1;
+				res9 = -1;
 			}
 
 			theapp = pbx_findapp("Gosub");
 
-			if (theapp && !res) {
+			if (theapp && !res9) {
 				replace_macro_delimiter(opt_args[OPT_ARG_CALLEE_GOSUB]);
 
 				/* Set where we came from */
@@ -1803,57 +2074,68 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 				gosub_argstart = strchr(opt_args[OPT_ARG_CALLEE_GOSUB], ',');
 				if (gosub_argstart) {
 					*gosub_argstart = 0;
-					asprintf(&gosub_args, "%s,s,1(%s)", opt_args[OPT_ARG_CALLEE_GOSUB], gosub_argstart + 1);
+					if (asprintf(&gosub_args, "%s,s,1(%s)", opt_args[OPT_ARG_CALLEE_GOSUB], gosub_argstart + 1) < 0) {
+						ast_log(LOG_WARNING, "asprintf() failed: %s\n", strerror(errno));
+						gosub_args = NULL;
+					}
 					*gosub_argstart = ',';
 				} else {
-					asprintf(&gosub_args, "%s,s,1", opt_args[OPT_ARG_CALLEE_GOSUB]);
+					if (asprintf(&gosub_args, "%s,s,1", opt_args[OPT_ARG_CALLEE_GOSUB]) < 0) {
+						ast_log(LOG_WARNING, "asprintf() failed: %s\n", strerror(errno));
+						gosub_args = NULL;
+					}
 				}
 
 				if (gosub_args) {
-					res = pbx_exec(peer, theapp, gosub_args);
-					ast_pbx_run(peer);
+					res9 = pbx_exec(peer, theapp, gosub_args);
+					if (!res9) {
+						struct ast_pbx_args args;
+						/* A struct initializer fails to compile for this case ... */
+						memset(&args, 0, sizeof(args));
+						args.no_hangup_chan = 1;
+						ast_pbx_run_args(peer, &args);
+					}
 					ast_free(gosub_args);
-					if (option_debug)
-						ast_log(LOG_DEBUG, "Gosub exited with status %d\n", res);
-				} else
+					ast_debug(1, "Gosub exited with status %d\n", res9);
+				} else {
 					ast_log(LOG_ERROR, "Could not Allocate string for Gosub arguments -- Gosub Call Aborted!\n");
+				}
 
-				res = 0;
-			} else if (!res) {
+			} else if (!res9) {
 				ast_log(LOG_ERROR, "Could not find application Gosub\n");
-				res = -1;
+				res9 = -1;
 			}
 
 			if (ast_autoservice_stop(chan) < 0) {
 				ast_log(LOG_ERROR, "Could not stop autoservice on calling channel\n");
-				res = -1;
+				res9 = -1;
 			}
 			
 			ast_channel_lock(peer);
 
-			if (!res && (gosub_result = pbx_builtin_getvar_helper(peer, "GOSUB_RESULT"))) {
+			if (!res9 && (gosub_result = pbx_builtin_getvar_helper(peer, "GOSUB_RESULT"))) {
 				char *gosub_transfer_dest;
 
 				if (!strcasecmp(gosub_result, "BUSY")) {
 					ast_copy_string(pa.status, gosub_result, sizeof(pa.status));
 					ast_set_flag64(peerflags, OPT_GO_ON);
-					res = -1;
+					res9 = -1;
 				} else if (!strcasecmp(gosub_result, "CONGESTION") || !strcasecmp(gosub_result, "CHANUNAVAIL")) {
 					ast_copy_string(pa.status, gosub_result, sizeof(pa.status));
 					ast_set_flag64(peerflags, OPT_GO_ON);
-					res = -1;
+					res9 = -1;
 				} else if (!strcasecmp(gosub_result, "CONTINUE")) {
 					/* hangup peer and keep chan alive assuming the macro has changed
 					   the context / exten / priority or perhaps
 					   the next priority in the current exten is desired.
 					*/
 					ast_set_flag64(peerflags, OPT_GO_ON);
-					res = -1;
+					res9 = -1;
 				} else if (!strcasecmp(gosub_result, "ABORT")) {
 					/* Hangup both ends unless the caller has the g flag */
-					res = -1;
+					res9 = -1;
 				} else if (!strncasecmp(gosub_result, "GOTO:", 5) && (gosub_transfer_dest = ast_strdupa(gosub_result + 5))) {
-					res = -1;
+					res9 = -1;
 					/* perform a transfer to a new extension */
 					if (strchr(gosub_transfer_dest, '^')) { /* context^exten^priority*/
 						replace_macro_delimiter(gosub_transfer_dest);
@@ -1867,8 +2149,8 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		}
 
 		if (!res) {
-			if (calldurationlimit > 0) {
-				struct timeval whentohangup = { calldurationlimit, 0 };
+			if (!ast_tvzero(calldurationlimit)) {
+				struct timeval whentohangup = calldurationlimit;
 				peer->whentohangup = ast_tvadd(ast_tvnow(), whentohangup);
 			}
 			if (!ast_strlen_zero(dtmfcalled)) {
@@ -1880,10 +2162,9 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 				res = ast_dtmf_stream(chan, peer, dtmfcalling, 250, 0);
 			}
 		}
-		
+
 		if (res) { /* some error */
 			res = -1;
-			end_time = time(NULL);
 		} else {
 			if (ast_test_flag64(peerflags, OPT_CALLEE_TRANSFER))
 				ast_set_flag(&(config.features_callee), AST_FEATURE_REDIRECT);
@@ -1905,7 +2186,13 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 				ast_set_flag(&(config.features_callee), AST_FEATURE_AUTOMIXMON);
 			if (ast_test_flag64(peerflags, OPT_CALLER_MIXMONITOR))
 				ast_set_flag(&(config.features_caller), AST_FEATURE_AUTOMIXMON);
+			if (ast_test_flag64(peerflags, OPT_GO_ON))
+				ast_set_flag(&(config.features_caller), AST_FEATURE_NO_H_EXTEN);
 
+			config.end_bridge_callback = end_bridge_callback;
+			config.end_bridge_callback_data = chan;
+			config.end_bridge_callback_data_fixup = end_bridge_callback_data_fixup;
+			
 			if (moh) {
 				moh = 0;
 				ast_moh_stop(chan);
@@ -1923,11 +2210,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 				res = -1;
 				goto done;
 			}
-			if (opermode && !strncmp(chan->tech->type, "DAHDI", 3) && !strncmp(peer->name, "DAHDI", 3)) {
-				/* what's this special handling for dahdi <-> dahdi ?
-				 * A: dahdi to dahdi calls are natively bridged at the kernel driver
-				 * level, so we need to ensure that this mode gets propagated
-				 * all the way down. */
+			if (opermode) {
 				struct oprmode oprmode;
 
 				oprmode.peer = peer;
@@ -1936,17 +2219,6 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 				ast_channel_setoption(chan, AST_OPTION_OPRMODE, &oprmode, sizeof(oprmode), 0);
 			}
 			res = ast_bridge_call(chan, peer, &config);
-			end_time = time(NULL);
-			snprintf(toast, sizeof(toast), "%ld", (long)(end_time - answer_time));
-			pbx_builtin_setvar_helper(chan, "ANSWEREDTIME", toast);
-		}
-
-		snprintf(toast, sizeof(toast), "%ld", (long)(end_time - start_time));
-		pbx_builtin_setvar_helper(chan, "DIALEDTIME", toast);
-
-		if (ast_test_flag64(&opts, OPT_PEER_H)) {
-			ast_log(LOG_NOTICE, "PEER context: %s; PEER exten: %s;  PEER priority: %d\n",
-				peer->context, peer->exten, peer->priority);
 		}
 
 		strcpy(peer->context, chan->context);
@@ -1954,31 +2226,31 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		if (ast_test_flag64(&opts, OPT_PEER_H) && ast_exists_extension(peer, peer->context, "h", 1, peer->cid.cid_num)) {
 			int autoloopflag;
 			int found;
+			int res9;
+			
 			strcpy(peer->exten, "h");
 			peer->priority = 1;
 			autoloopflag = ast_test_flag(peer, AST_FLAG_IN_AUTOLOOP); /* save value to restore at the end */
 			ast_set_flag(peer, AST_FLAG_IN_AUTOLOOP);
 
-			while ((res = ast_spawn_extension(peer, peer->context, peer->exten, peer->priority, peer->cid.cid_num, &found, 1)))
+			while ((res9 = ast_spawn_extension(peer, peer->context, peer->exten, peer->priority, peer->cid.cid_num, &found, 1)) == 0)
 				peer->priority++;
 
-			if (found && res) {
+			if (found && res9) {
 				/* Something bad happened, or a hangup has been requested. */
 				ast_debug(1, "Spawn extension (%s,%s,%d) exited non-zero on '%s'\n", peer->context, peer->exten, peer->priority, peer->name);
 				ast_verb(2, "Spawn extension (%s, %s, %d) exited non-zero on '%s'\n", peer->context, peer->exten, peer->priority, peer->name);
 			}
 			ast_set2_flag(peer, autoloopflag, AST_FLAG_IN_AUTOLOOP);  /* set it back the way it was */
 		}
-		if (res != AST_PBX_NO_HANGUP_PEER) {
-			if (!ast_check_hangup(peer) && ast_test_flag64(&opts, OPT_CALLEE_GO_ON) && !ast_strlen_zero(opt_args[OPT_ARG_CALLEE_GO_ON])) {		
-				replace_macro_delimiter(opt_args[OPT_ARG_CALLEE_GO_ON]);
-				ast_parseable_goto(peer, opt_args[OPT_ARG_CALLEE_GO_ON]);
-				ast_pbx_start(peer);
-			} else {
-				if (!ast_check_hangup(chan))
-					chan->hangupcause = peer->hangupcause;
-				ast_hangup(peer);
-			}
+		if (!ast_check_hangup(peer) && ast_test_flag64(&opts, OPT_CALLEE_GO_ON) && !ast_strlen_zero(opt_args[OPT_ARG_CALLEE_GO_ON])) {		
+			replace_macro_delimiter(opt_args[OPT_ARG_CALLEE_GO_ON]);
+			ast_parseable_goto(peer, opt_args[OPT_ARG_CALLEE_GO_ON]);
+			ast_pbx_start(peer);
+		} else {
+			if (!ast_check_hangup(chan))
+				chan->hangupcause = peer->hangupcause;
+			ast_hangup(peer);
 		}
 	}
 out:
@@ -1994,14 +2266,23 @@ out:
 	pbx_builtin_setvar_helper(chan, "DIALSTATUS", pa.status);
 	senddialendevent(chan, pa.status);
 	ast_debug(1, "Exiting with DIALSTATUS=%s.\n", pa.status);
-
-	if ((ast_test_flag64(peerflags, OPT_GO_ON)) && !ast_check_hangup(chan) && (res != AST_PBX_KEEPALIVE) && (res != AST_PBX_INCOMPLETE)) {
-		if (calldurationlimit)
+	
+	if ((ast_test_flag64(peerflags, OPT_GO_ON)) && !ast_check_hangup(chan) && (res != AST_PBX_INCOMPLETE)) {
+		if (!ast_tvzero(calldurationlimit))
 			memset(&chan->whentohangup, 0, sizeof(chan->whentohangup));
 		res = 0;
 	}
 
 done:
+	if (config.warning_sound) {
+		ast_free((char *)config.warning_sound);
+	}
+	if (config.end_sound) {
+		ast_free((char *)config.end_sound);
+	}
+	if (config.start_sound) {
+		ast_free((char *)config.start_sound);
+	}
 	return res;
 }
 
@@ -2018,7 +2299,7 @@ static int retrydial_exec(struct ast_channel *chan, void *data)
 {
 	char *parse;
 	const char *context = NULL;
-	int sleep = 0, loops = 0, res = -1;
+	int sleepms = 0, loops = 0, res = -1;
 	struct ast_flags64 peerflags = { 0, };
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(announce);
@@ -2035,8 +2316,8 @@ static int retrydial_exec(struct ast_channel *chan, void *data)
 	parse = ast_strdupa(data);
 	AST_STANDARD_APP_ARGS(args, parse);
 
-	if ((sleep = atoi(args.sleep)))
-		sleep *= 1000;
+	if ((sleepms = atoi(args.sleep)))
+		sleepms *= 1000;
 
 	loops = atoi(args.retries);
 
@@ -2045,8 +2326,8 @@ static int retrydial_exec(struct ast_channel *chan, void *data)
 		goto done;
 	}
 
-	if (sleep < 1000)
-		sleep = 10000;
+	if (sleepms < 1000)
+		sleepms = 10000;
 
 	if (!loops)
 		loops = -1; /* run forever */
@@ -2077,10 +2358,10 @@ static int retrydial_exec(struct ast_channel *chan, void *data)
 					} else
 						ast_log(LOG_WARNING, "Announce file \"%s\" specified in Retrydial does not exist\n", args.announce);
 				}
-				if (!res && sleep) {
+				if (!res && sleepms) {
 					if (!ast_test_flag(chan, AST_FLAG_MOH))
 						ast_moh_start(chan, NULL, NULL);
-					res = ast_waitfordigit(chan, sleep);
+					res = ast_waitfordigit(chan, sleepms);
 				}
 			} else {
 				if (!ast_strlen_zero(args.announce)) {
@@ -2090,11 +2371,11 @@ static int retrydial_exec(struct ast_channel *chan, void *data)
 					} else
 						ast_log(LOG_WARNING, "Announce file \"%s\" specified in Retrydial does not exist\n", args.announce);
 				}
-				if (sleep) {
+				if (sleepms) {
 					if (!ast_test_flag(chan, AST_FLAG_MOH))
 						ast_moh_start(chan, NULL, NULL);
 					if (!res)
-						res = ast_waitfordigit(chan, sleep);
+						res = ast_waitfordigit(chan, sleepms);
 				}
 			}
 		}
@@ -2145,10 +2426,10 @@ static int load_module(void)
 	if (!con)
 		ast_log(LOG_ERROR, "Dial virtual context 'app_dial_gosub_virtual_context' does not exist and unable to create\n");
 	else
-		ast_add_extension2(con, 1, "s", 1, NULL, NULL, "KeepAlive", ast_strdup(""), ast_free_ptr, "app_dial");
+		ast_add_extension2(con, 1, "s", 1, NULL, NULL, "NoOp", ast_strdup(""), ast_free_ptr, "app_dial");
 
-	res = ast_register_application(app, dial_exec, synopsis, descrip);
-	res |= ast_register_application(rapp, retrydial_exec, rsynopsis, rdescrip);
+	res = ast_register_application_xml(app, dial_exec);
+	res |= ast_register_application_xml(rapp, retrydial_exec);
 
 	return res;
 }

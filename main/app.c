@@ -33,6 +33,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <regex.h>
 #include <sys/file.h> /* added this to allow to compile, sorry! */
 #include <signal.h>
+#include <sys/time.h>       /* for getrlimit(2) */
+#include <sys/resource.h>   /* for getrlimit(2) */
+#include <stdlib.h>         /* for closefrom(3) */
 
 #include "asterisk/paths.h"	/* use ast_config_AST_DATA_DIR */
 #include "asterisk/channel.h"
@@ -44,6 +47,10 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/lock.h"
 #include "asterisk/indications.h"
 #include "asterisk/linkedlists.h"
+#include "asterisk/threadstorage.h"
+
+AST_THREADSTORAGE_PUBLIC(global_app_buf);
+
 
 #define MAX_OTHER_FORMATS 10
 
@@ -65,7 +72,7 @@ static AST_RWLIST_HEAD_STATIC(groups, ast_group_info);
 */
 int ast_app_dtget(struct ast_channel *chan, const char *context, char *collect, size_t size, int maxlen, int timeout) 
 {
-	struct ind_tone_zone_sound *ts;
+	struct tone_zone_sound *ts;
 	int res = 0, x = 0;
 
 	if (maxlen > size)
@@ -452,7 +459,7 @@ int ast_linear_stream(struct ast_channel *chan, const char *filename, int fd, in
 
 int ast_control_streamfile(struct ast_channel *chan, const char *file,
 			   const char *fwd, const char *rev,
-			   const char *stop, const char *pause,
+			   const char *stop, const char *suspend,
 			   const char *restart, int skipms, long *offsetms) 
 {
 	char *breaks = NULL;
@@ -467,8 +474,8 @@ int ast_control_streamfile(struct ast_channel *chan, const char *file,
 
 	if (stop)
 		blen += strlen(stop);
-	if (pause)
-		blen += strlen(pause);
+	if (suspend)
+		blen += strlen(suspend);
 	if (restart)
 		blen += strlen(restart);
 
@@ -477,8 +484,8 @@ int ast_control_streamfile(struct ast_channel *chan, const char *file,
 		breaks[0] = '\0';
 		if (stop)
 			strcat(breaks, stop);
-		if (pause)
-			strcat(breaks, pause);
+		if (suspend)
+			strcat(breaks, suspend);
 		if (restart)
 			strcat(breaks, restart);
 	}
@@ -528,17 +535,17 @@ int ast_control_streamfile(struct ast_channel *chan, const char *file,
 			continue;
 		}
 
-		if (pause && strchr(pause, res)) {
+		if (suspend && strchr(suspend, res)) {
 			pause_restart_point = ast_tellstream(chan->stream);
 			for (;;) {
 				ast_stopstream(chan);
 				res = ast_waitfordigit(chan, 1000);
 				if (!res)
 					continue;
-				else if (res == -1 || strchr(pause, res) || (stop && strchr(stop, res)))
+				else if (res == -1 || strchr(suspend, res) || (stop && strchr(stop, res)))
 					break;
 			}
-			if (res == *pause) {
+			if (res == *suspend) {
 				res = 0;
 				continue;
 			}
@@ -1010,10 +1017,15 @@ int ast_app_group_update(struct ast_channel *old, struct ast_channel *new)
 	struct ast_group_info *gi = NULL;
 
 	AST_RWLIST_WRLOCK(&groups);
-	AST_RWLIST_TRAVERSE(&groups, gi, list) {
-		if (gi->chan == old)
+	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&groups, gi, list) {
+		if (gi->chan == old) {
 			gi->chan = new;
+		} else if (gi->chan == new) {
+			AST_RWLIST_REMOVE_CURRENT(list);
+			ast_free(gi);
+		}
 	}
+	AST_RWLIST_TRAVERSE_SAFE_END
 	AST_RWLIST_UNLOCK(&groups);
 
 	return 0;
@@ -1748,6 +1760,11 @@ int ast_get_encoded_char(const char *stream, char *result, size_t *consumed)
 	int i;
 	*consumed = 1;
 	*result = 0;
+	if (ast_strlen_zero(stream)) {
+		*consumed = 0;
+		return -1;
+	}
+
 	if (*stream == '\\') {
 		*consumed = 2;
 		switch (*(stream + 1)) {
@@ -1810,20 +1827,39 @@ int ast_get_encoded_char(const char *stream, char *result, size_t *consumed)
 	return 0;
 }
 
+int ast_get_encoded_str(const char *stream, char *result, size_t result_size)
+{
+	char *cur = result;
+	size_t consumed;
+
+	while (cur < result + result_size - 1 && !ast_get_encoded_char(stream, cur, &consumed)) {
+		cur++;
+		stream += consumed;
+	}
+	*cur = '\0';
+	return 0;
+}
+
 void ast_close_fds_above_n(int n)
 {
+#ifdef HAVE_CLOSEFROM
+	closefrom(n + 1);
+#else
 	int x, null;
+	struct rlimit rl;
+	getrlimit(RLIMIT_NOFILE, &rl);
 	null = open("/dev/null", O_RDONLY);
-	for (x = n + 1; x <= (null >= 8192 ? null : 8192); x++) {
+	for (x = n + 1; x < rl.rlim_max; x++) {
 		if (x != null) {
 			/* Side effect of dup2 is that it closes any existing fd without error.
 			 * This prevents valgrind and other debugging tools from sending up
 			 * false error reports. */
-			dup2(null, x);
+			while (dup2(null, x) < 0 && errno == EINTR);
 			close(x);
 		}
 	}
 	close(null);
+#endif
 }
 
 int ast_safe_fork(int stop_reaper)

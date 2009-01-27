@@ -37,6 +37,110 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/utils.h"
 #include "asterisk/app.h"
 
+/*** DOCUMENTATION
+	<function name="REALTIME" language="en_US">
+		<synopsis>
+			RealTime Read/Write Functions.
+		</synopsis>
+		<syntax>
+			<parameter name="family" required="true" />
+			<parameter name="fieldmatch" required="true" />
+			<parameter name="value" />
+			<parameter name="delim1|field">
+				<para>Use <replaceable>delim1</replaceable> with <replaceable>delim2</replaceable> on
+				read and <replaceable>field</replaceable> without <replaceable>delim2</replaceable> on
+				write</para>
+				<para>If we are reading and <replaceable>delim1</replaceable> is not specified, defaults
+				to <literal>,</literal></para>
+			</parameter>
+			<parameter name="delim2">
+				<para>Parameter only used when reading, if not specified defaults to <literal>=</literal></para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>This function will read or write values from/to a RealTime repository.
+			REALTIME(....) will read names/values from the repository, and 
+			REALTIME(....)= will write a new value/field to the repository. On a
+			read, this function returns a delimited text string. The name/value
+			pairs are delimited by <replaceable>delim1</replaceable>, and the name and value are delimited
+			between each other with delim2. 
+			If there is no match, NULL will be returned by the function.
+			On a write, this function will always return NULL.</para>
+		</description>
+	</function>
+	<function name="REALTIME_STORE" language="en_US">
+		<synopsis>
+			RealTime Store Function.
+		</synopsis>
+		<syntax>
+			<parameter name="family" required="true" />
+			<parameter name="field1" required="true" />
+			<parameter name="fieldN" required="true" multiple="true" />
+			<parameter name="field30" required="true" />
+		</syntax>
+		<description>
+			<para>This function will insert a new set of values into the RealTime repository.
+			If RT engine provides an unique ID of the stored record, REALTIME_STORE(...)=..
+			creates channel variable named RTSTOREID, which contains value of unique ID.
+			Currently, a maximum of 30 field/value pairs is supported.</para>
+		</description>
+	</function>
+	<function name="REALTIME_DESTROY" language="en_US">
+		<synopsis>
+			RealTime Destroy Function.
+		</synopsis>
+		<syntax>
+			<parameter name="family" required="true" />
+			<parameter name="fieldmatch" required="true" />
+			<parameter name="value" />
+			<parameter name="delim1" />
+			<parameter name="delim2" />
+		</syntax>
+		<description>
+			<para>This function acts in the same way as REALTIME(....) does, except that
+			it destroys the matched record in the RT engine.</para>
+		</description>
+	</function>
+	<function name="REALTIME_FIELD" language="en_US">
+		<synopsis>
+			RealTime query function.
+		</synopsis>
+		<syntax>
+			<parameter name="family" required="true" />
+			<parameter name="fieldmatch" required="true" />
+			<parameter name="value" required="true" />
+			<parameter name="fieldname" required="true" />
+		</syntax>
+		<description>
+			<para>This function retrieves a single item, <replaceable>fieldname</replaceable>
+			from the RT engine, where <replaceable>fieldmatch</replaceable> contains the value
+			<replaceable>value</replaceable>.  When written to, the REALTIME_FIELD() function
+			performs identically to the REALTIME() function.</para>
+		</description>
+	</function>
+	<function name="REALTIME_HASH" language="en_US">
+		<synopsis>
+			RealTime query function.
+		</synopsis>
+		<syntax>
+			<parameter name="family" required="true" />
+			<parameter name="fieldmatch" required="true" />
+			<parameter name="value" required="true" />
+		</syntax>
+		<description>
+			<para>This function retrieves a single record from the RT engine, where
+			<replaceable>fieldmatch</replaceable> contains the value
+			<replaceable>value</replaceable> and formats the output suitably, such that
+			it can be assigned to the HASH() function.  The HASH() function then provides
+			a suitable method for retrieving each field value of the record.</para>
+		</description>
+	</function>
+ ***/
+
+AST_THREADSTORAGE(buf1);
+AST_THREADSTORAGE(buf2);
+AST_THREADSTORAGE(buf3);
+
 static int function_realtime_read(struct ast_channel *chan, const char *cmd, char *data, char *buf, size_t len) 
 {
 	struct ast_variable *var, *head;
@@ -84,7 +188,7 @@ static int function_realtime_read(struct ast_channel *chan, const char *cmd, cha
 	out = ast_str_alloca(resultslen);
 	for (var = head; var; var = var->next)
 		ast_str_append(&out, 0, "%s%s%s%s", var->name, args.delim2, var->value, args.delim1);
-	ast_copy_string(buf, out->str, len);
+	ast_copy_string(buf, ast_str_buffer(out), len);
 
 	if (chan)
 		ast_autoservice_stop(chan);
@@ -103,7 +207,7 @@ static int function_realtime_write(struct ast_channel *chan, const char *cmd, ch
 	);
 
 	if (ast_strlen_zero(data)) {
-		ast_log(LOG_WARNING, "Syntax: REALTIME(family,fieldmatch,value,newcol) - missing argument!\n");
+		ast_log(LOG_WARNING, "Syntax: %s(family,fieldmatch,value,newcol) - missing argument!\n", cmd);
 		return -1;
 	}
 
@@ -120,6 +224,82 @@ static int function_realtime_write(struct ast_channel *chan, const char *cmd, ch
 
 	if (chan)
 		ast_autoservice_stop(chan);
+
+	return 0;
+}
+
+static int realtimefield_read(struct ast_channel *chan, const char *cmd, char *data, char *buf, size_t len) 
+{
+	struct ast_variable *var, *head;
+	struct ast_str *escapebuf = ast_str_thread_get(&buf1, 16);
+	struct ast_str *fields = ast_str_thread_get(&buf2, 16);
+	struct ast_str *values = ast_str_thread_get(&buf3, 16);
+	int first = 0;
+	enum { rtfield, rthash } which;
+	AST_DECLARE_APP_ARGS(args,
+		AST_APP_ARG(family);
+		AST_APP_ARG(fieldmatch);
+		AST_APP_ARG(value);
+		AST_APP_ARG(fieldname);
+	);
+
+	if (!strcmp(cmd, "REALTIME_FIELD")) {
+		which = rtfield;
+	} else {
+		which = rthash;
+	}
+
+	if (ast_strlen_zero(data)) {
+		ast_log(LOG_WARNING, "Syntax: %s(family,fieldmatch,value%s) - missing argument!\n", cmd, which == rtfield ? ",fieldname" : "");
+		return -1;
+	}
+
+	AST_STANDARD_APP_ARGS(args, data);
+
+	if ((which == rtfield && args.argc != 4) || (which == rthash && args.argc != 3)) {
+		ast_log(LOG_WARNING, "Syntax: %s(family,fieldmatch,value%s) - missing argument!\n", cmd, which == rtfield ? ",fieldname" : "");
+		return -1;
+	}
+
+	if (chan) {
+		ast_autoservice_start(chan);
+	}
+
+	if (!(head = ast_load_realtime_all(args.family, args.fieldmatch, args.value, SENTINEL))) {
+		if (chan) {
+			ast_autoservice_stop(chan);
+		}
+		return -1;
+	}
+
+	ast_str_reset(fields);
+	ast_str_reset(values);
+
+	for (var = head; var; var = var->next) {
+		if (which == rtfield) {
+			ast_debug(1, "Comparing %s to %s\n", var->name, args.fieldname);
+			if (!strcasecmp(var->name, args.fieldname)) {
+				ast_debug(1, "Match! Value is %s\n", var->value);
+				ast_copy_string(buf, var->value, len);
+				break;
+			}
+		} else if (which == rthash) {
+			ast_debug(1, "Setting hash key %s to value %s\n", var->name, var->value);
+			ast_str_append(&fields, 0, "%s%s", first ? "" : ",", ast_str_set_escapecommas(&escapebuf, 0, var->name, INT_MAX));
+			ast_str_append(&values, 0, "%s%s", first ? "" : ",", ast_str_set_escapecommas(&escapebuf, 0, var->value, INT_MAX));
+			first = 0;
+		}
+	}
+	ast_variables_destroy(head);
+
+	if (which == rthash) {
+		pbx_builtin_setvar_helper(chan, "~ODBCFIELDS~", ast_str_buffer(fields));
+		ast_copy_string(buf, ast_str_buffer(values), len);
+	}
+
+	if (chan) {
+		ast_autoservice_stop(chan);
+	}
 
 	return 0;
 }
@@ -220,7 +400,7 @@ static int function_realtime_readdestroy(struct ast_channel *chan, const char *c
 	for (var = head; var; var = var->next) {
 		ast_str_append(&out, 0, "%s%s%s%s", var->name, args.delim2, var->value, args.delim1);
 	}
-	ast_copy_string(buf, out->str, len);
+	ast_copy_string(buf, ast_str_buffer(out), len);
 
 	ast_destroy_realtime(args.family, args.fieldmatch, args.value, SENTINEL);
 
@@ -232,39 +412,28 @@ static int function_realtime_readdestroy(struct ast_channel *chan, const char *c
 
 struct ast_custom_function realtime_function = {
 	.name = "REALTIME",
-	.synopsis = "RealTime Read/Write Functions",
-	.syntax = "REALTIME(family,fieldmatch[,value[,delim1[,delim2]]]) on read\n"
-		  "REALTIME(family,fieldmatch,value,field) on write",
-	.desc = "This function will read or write values from/to a RealTime repository.\n"
-		"REALTIME(....) will read names/values from the repository, and \n"
-		"REALTIME(....)= will write a new value/field to the repository. On a\n"
-		"read, this function returns a delimited text string. The name/value \n"
-		"pairs are delimited by delim1, and the name and value are delimited \n"
-		"between each other with delim2. The default for delim1 is ',' and   \n"
-		"the default for delim2 is '='. If there is no match, NULL will be   \n"
-		"returned by the function. On a write, this function will always     \n"
-		"return NULL. \n",
 	.read = function_realtime_read,
 	.write = function_realtime_write,
 };
 
+struct ast_custom_function realtimefield_function = {
+	.name = "REALTIME_FIELD",
+	.read = realtimefield_read,
+	.write = function_realtime_write,
+};
+
+struct ast_custom_function realtimehash_function = {
+	.name = "REALTIME_HASH",
+	.read = realtimefield_read,
+};
+
 struct ast_custom_function realtime_store_function = {
 	.name = "REALTIME_STORE",
-	.synopsis = "RealTime Store Function",
-	.syntax = "REALTIME_STORE(family,field1,field2,...,field30) = value1,value2,...,value30",
-	.desc = "This function will insert a new set of values into the RealTime repository.\n"
-		"If RT engine provides an unique ID of the stored record, REALTIME_STORE(...)=..\n"
-		"creates channel variable named RTSTOREID, which contains value of unique ID.\n"
-		"Currently, a maximum of 30 field/value pairs is supported.\n",
 	.write = function_realtime_store,
 };
 
 struct ast_custom_function realtime_destroy_function = {
 	.name = "REALTIME_DESTROY",
-	.synopsis = "RealTime Destroy Function",
-	.syntax = "REALTIME_DESTROY(family,fieldmatch[,value[,delim1[,delim2]]])\n",
-	.desc = "This function acts in the same way as REALTIME(....) does, except that\n"
-		"it destroys matched record in RT engine.\n",
 	.read = function_realtime_readdestroy,
 };
 
@@ -274,6 +443,8 @@ static int unload_module(void)
 	res |= ast_custom_function_unregister(&realtime_function);
 	res |= ast_custom_function_unregister(&realtime_store_function);
 	res |= ast_custom_function_unregister(&realtime_destroy_function);
+	res |= ast_custom_function_unregister(&realtimefield_function);
+	res |= ast_custom_function_unregister(&realtimehash_function);
 	return res;
 }
 
@@ -283,6 +454,8 @@ static int load_module(void)
 	res |= ast_custom_function_register(&realtime_function);
 	res |= ast_custom_function_register(&realtime_store_function);
 	res |= ast_custom_function_register(&realtime_destroy_function);
+	res |= ast_custom_function_register(&realtimefield_function);
+	res |= ast_custom_function_register(&realtimehash_function);
 	return res;
 }
 

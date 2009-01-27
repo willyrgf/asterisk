@@ -91,6 +91,9 @@
 /* Define to 1 if you have the `atexit' function. */
 #undef HAVE_ATEXIT
 
+/* Define to 1 if your GCC C compiler supports the 'alias' attribute. */
+#undef HAVE_ATTRIBUTE_alias
+
 /* Define to 1 if your GCC C compiler supports the 'always_inline' attribute.
    */
 #undef HAVE_ATTRIBUTE_always_inline
@@ -117,6 +120,9 @@
    attribute. */
 #undef HAVE_ATTRIBUTE_warn_unused_result
 
+/* Define to 1 if your GCC C compiler supports the 'weak' attribute. */
+#undef HAVE_ATTRIBUTE_weak
+
 /* Define this to indicate the ${BKTR_DESCRIP} library */
 #undef HAVE_BKTR
 
@@ -125,9 +131,6 @@
 
 /* Define to 1 if byteswap.h macros are available. */
 #undef HAVE_BYTESWAP_H
-
-/* Define to 1 if you have the `bzero' function. */
-#undef HAVE_BZERO
 
 /* Define this to indicate the ${CAP_DESCRIP} library */
 #undef HAVE_CAP
@@ -149,6 +152,9 @@
 
 /* Define to 1 if your system has a working `chown' function. */
 #undef HAVE_CHOWN
+
+/* Define to 1 if you have the `closefrom' function. */
+#undef HAVE_CLOSEFROM
 
 /* Define this to indicate the ${COS_DESCRIP} library */
 #undef HAVE_COS
@@ -179,6 +185,18 @@
 
 /* Define if your system has the DAHDI headers. */
 #undef HAVE_DAHDI
+
+/* Define if your system has the DAHDI_HALF_FULL headers. */
+#undef HAVE_DAHDI_HALF_FULL
+
+/* Define DAHDI_HALF_FULL headers version */
+#undef HAVE_DAHDI_HALF_FULL_VERSION
+
+/* Define if your system has the DAHDI_LINEREVERSE_VMWI headers. */
+#undef HAVE_DAHDI_LINEREVERSE_VMWI
+
+/* Define DAHDI_LINEREVERSE_VMWI headers version */
+#undef HAVE_DAHDI_LINEREVERSE_VMWI_VERSION
 
 /* Define DAHDI headers version */
 #undef HAVE_DAHDI_VERSION
@@ -319,6 +337,9 @@
 /* Define to 1 if you have the `getpagesize' function. */
 #undef HAVE_GETPAGESIZE
 
+/* Define to 1 if you have the `getpeereid' function. */
+#undef HAVE_GETPEEREID
+
 /* Define to 1 if you have the `gettimeofday' function. */
 #undef HAVE_GETTIMEOFDAY
 
@@ -377,6 +398,15 @@
 /* Define to 1 if you have the <inttypes.h> header file. */
 #undef HAVE_INTTYPES_H
 
+/* Define this to indicate the ${IODBC_DESCRIP} library */
+#undef HAVE_IODBC
+
+/* Define to indicate the ${IODBC_DESCRIP} library version */
+#undef HAVE_IODBC_VERSION
+
+/* Define to 1 if you have the `ioperm' function. */
+#undef HAVE_IOPERM
+
 /* Define if your system has the IP_MTU_DISCOVER headers. */
 #undef HAVE_IP_MTU_DISCOVER
 
@@ -406,6 +436,9 @@
 
 /* Define to 1 if you have the <libintl.h> header file. */
 #undef HAVE_LIBINTL_H
+
+/* Define if your system has the LIBXML2 libraries. */
+#undef HAVE_LIBXML2
 
 /* Define to 1 if you have the <limits.h> header file. */
 #undef HAVE_LIMITS_H
@@ -614,6 +647,12 @@
 /* Define to indicate the ${PRI_INBANDDISCONNECT_DESCRIP} library version */
 #undef HAVE_PRI_INBANDDISCONNECT_VERSION
 
+/* Define this to indicate the ${PRI_PROG_W_CAUSE_DESCRIP} library */
+#undef HAVE_PRI_PROG_W_CAUSE
+
+/* Define to indicate the ${PRI_PROG_W_CAUSE_DESCRIP} library version */
+#undef HAVE_PRI_PROG_W_CAUSE_VERSION
+
 /* Define to indicate the ${PRI_DESCRIP} library version */
 #undef HAVE_PRI_VERSION
 
@@ -754,6 +793,9 @@
 
 /* Define this to indicate the ${SPANDSP_DESCRIP} library */
 #undef HAVE_SPANDSP
+
+/* Define to 1 if spandsp/expose.h is available. */
+#undef HAVE_SPANDSP_EXPOSE_H
 
 /* Define to indicate the ${SPANDSP_DESCRIP} library version */
 #undef HAVE_SPANDSP_VERSION
@@ -907,6 +949,12 @@
 /* Define to indicate the ${SUPPSERV_DESCRIP} library version */
 #undef HAVE_SUPPSERV_VERSION
 
+/* Define to 1 if you have the `swapctl' function. */
+#undef HAVE_SWAPCTL
+
+/* Define to 1 if you have the `sysctl' function. */
+#undef HAVE_SYSCTL
+
 /* Define to 1 if your system has sysinfo support */
 #undef HAVE_SYSINFO
 
@@ -929,6 +977,9 @@
 
 /* Define to 1 if you have the <sys/ioctl.h> header file. */
 #undef HAVE_SYS_IOCTL_H
+
+/* Define to 1 if you have the <sys/io.h> header file. */
+#undef HAVE_SYS_IO_H
 
 /* Define to 1 if you have the <sys/ndir.h> header file, and it defines `DIR'.
    */
@@ -978,6 +1029,12 @@
 
 /* Define to 1 if you have the <termios.h> header file. */
 #undef HAVE_TERMIOS_H
+
+/* Define if your system has the TIMERFD headers. */
+#undef HAVE_TIMERFD
+
+/* Define TIMERFD headers version */
+#undef HAVE_TIMERFD_VERSION
 
 /* Define to 1 if your system defines timersub. */
 #undef HAVE_TIMERSUB

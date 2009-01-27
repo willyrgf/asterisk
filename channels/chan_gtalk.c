@@ -1619,6 +1619,7 @@ static struct ast_channel *gtalk_request(const char *type, int format, void *dat
 		client->connection = ast_aji_get_client(sender);
 		if (!client->connection) {
 			ast_log(LOG_ERROR, "No XMPP client to talk to, us (partial JID) : %s\n", sender);
+			ASTOBJ_UNREF(client, gtalk_member_destroy);
 			return NULL;
 		}
 	}
@@ -1868,8 +1869,12 @@ static int gtalk_load_config(void)
 	struct ast_flags config_flags = { 0 };
 
 	cfg = ast_config_load(GOOGLE_CONFIG, config_flags);
-	if (!cfg)
+	if (!cfg) {
 		return 0;
+	} else if (cfg == CONFIG_STATUS_FILEINVALID) {
+		ast_log(LOG_ERROR, "Config file %s is in an invalid format.  Aborting.\n", GOOGLE_CONFIG);
+		return 0;
+	}
 
 	/* Copy the default jb config over global_jbconf */
 	memcpy(&global_jbconf, &default_jbconf, sizeof(struct ast_jb_conf));
@@ -1960,6 +1965,7 @@ static int gtalk_load_config(void)
 						ASTOBJ_UNLOCK(iterator);
 					});
 					ASTOBJ_CONTAINER_LINK(&gtalk_list, member);
+					ASTOBJ_UNREF(member, gtalk_member_destroy);
 				} else {
 					ASTOBJ_UNLOCK(member);
 					ASTOBJ_UNREF(member, gtalk_member_destroy);

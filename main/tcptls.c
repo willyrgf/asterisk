@@ -42,6 +42,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/strings.h"
 #include "asterisk/options.h"
 #include "asterisk/manager.h"
+#include "asterisk/astobj2.h"
 
 /*! \brief
  * replacement read/write functions for SSL support.
@@ -81,34 +82,34 @@ static int ssl_close(void *cookie)
 }
 #endif	/* DO_SSL */
 
-HOOK_T ast_tcptls_server_read(struct ast_tcptls_session_instance *ser, void *buf, size_t count)
+HOOK_T ast_tcptls_server_read(struct ast_tcptls_session_instance *tcptls_session, void *buf, size_t count)
 {
-	if (ser->fd == -1) {
+	if (tcptls_session->fd == -1) {
 		ast_log(LOG_ERROR, "server_read called with an fd of -1\n");
 		errno = EIO;
 		return -1;
 	}
 
 #ifdef DO_SSL
-	if (ser->ssl)
-		return ssl_read(ser->ssl, buf, count);
+	if (tcptls_session->ssl)
+		return ssl_read(tcptls_session->ssl, buf, count);
 #endif
-	return read(ser->fd, buf, count);
+	return read(tcptls_session->fd, buf, count);
 }
 
-HOOK_T ast_tcptls_server_write(struct ast_tcptls_session_instance *ser, void *buf, size_t count)
+HOOK_T ast_tcptls_server_write(struct ast_tcptls_session_instance *tcptls_session, const void *buf, size_t count)
 {
-	if (ser->fd == -1) {
+	if (tcptls_session->fd == -1) {
 		ast_log(LOG_ERROR, "server_write called with an fd of -1\n");
 		errno = EIO;
 		return -1;
 	}
 
 #ifdef DO_SSL
-	if (ser->ssl)
-		return ssl_write(ser->ssl, buf, count);
+	if (tcptls_session->ssl)
+		return ssl_write(tcptls_session->ssl, buf, count);
 #endif
-	return write(ser->fd, buf, count);
+	return write(tcptls_session->fd, buf, count);
 }
 
 static void session_instance_destructor(void *obj)
@@ -117,13 +118,114 @@ static void session_instance_destructor(void *obj)
 	ast_mutex_destroy(&i->lock);
 }
 
+/*! \brief
+* creates a FILE * from the fd passed by the accept thread.
+* This operation is potentially expensive (certificate verification),
+* so we do it in the child thread context.
+*/
+static void *handle_tls_connection(void *data)
+{
+	struct ast_tcptls_session_instance *tcptls_session = data;
+#ifdef DO_SSL
+	int (*ssl_setup)(SSL *) = (tcptls_session->client) ? SSL_connect : SSL_accept;
+	int ret;
+	char err[256];
+#endif
+
+	/*
+	* open a FILE * as appropriate.
+	*/
+	if (!tcptls_session->parent->tls_cfg)
+		tcptls_session->f = fdopen(tcptls_session->fd, "w+");
+#ifdef DO_SSL
+	else if ( (tcptls_session->ssl = SSL_new(tcptls_session->parent->tls_cfg->ssl_ctx)) ) {
+		SSL_set_fd(tcptls_session->ssl, tcptls_session->fd);
+		if ((ret = ssl_setup(tcptls_session->ssl)) <= 0) {
+			ast_verb(2, "Problem setting up ssl connection: %s\n", ERR_error_string(ERR_get_error(), err));
+		} else {
+#if defined(HAVE_FUNOPEN)	/* the BSD interface */
+			tcptls_session->f = funopen(tcptls_session->ssl, ssl_read, ssl_write, NULL, ssl_close);
+
+#elif defined(HAVE_FOPENCOOKIE)	/* the glibc/linux interface */
+			static const cookie_io_functions_t cookie_funcs = {
+				ssl_read, ssl_write, NULL, ssl_close
+			};
+			tcptls_session->f = fopencookie(tcptls_session->ssl, "w+", cookie_funcs);
+#else
+			/* could add other methods here */
+			ast_debug(2, "no tcptls_session->f methods attempted!");
+#endif
+			if ((tcptls_session->client && !ast_test_flag(&tcptls_session->parent->tls_cfg->flags, AST_SSL_DONT_VERIFY_SERVER))
+				|| (!tcptls_session->client && ast_test_flag(&tcptls_session->parent->tls_cfg->flags, AST_SSL_VERIFY_CLIENT))) {
+				X509 *peer;
+				long res;
+				peer = SSL_get_peer_certificate(tcptls_session->ssl);
+				if (!peer)
+					ast_log(LOG_WARNING, "No peer SSL certificate\n");
+				res = SSL_get_verify_result(tcptls_session->ssl);
+				if (res != X509_V_OK)
+					ast_log(LOG_ERROR, "Certificate did not verify: %s\n", X509_verify_cert_error_string(res));
+				if (!ast_test_flag(&tcptls_session->parent->tls_cfg->flags, AST_SSL_IGNORE_COMMON_NAME)) {
+					ASN1_STRING *str;
+					unsigned char *str2;
+					X509_NAME *name = X509_get_subject_name(peer);
+					int pos = -1;
+					int found = 0;
+				
+					for (;;) {
+						/* Walk the certificate to check all available "Common Name" */
+						/* XXX Probably should do a gethostbyname on the hostname and compare that as well */
+						pos = X509_NAME_get_index_by_NID(name, NID_commonName, pos);
+						if (pos < 0)
+							break;
+						str = X509_NAME_ENTRY_get_data(X509_NAME_get_entry(name, pos));
+						ASN1_STRING_to_UTF8(&str2, str);
+						if (str2) {
+							if (!strcasecmp(tcptls_session->parent->hostname, (char *) str2))
+								found = 1;
+							ast_debug(3, "SSL Common Name compare s1='%s' s2='%s'\n", tcptls_session->parent->hostname, str2);
+							OPENSSL_free(str2);
+						}
+						if (found)
+							break;
+					}
+					if (!found) {
+						ast_log(LOG_ERROR, "Certificate common name did not match (%s)\n", tcptls_session->parent->hostname);
+						if (peer)
+							X509_free(peer);
+						fclose(tcptls_session->f);
+						return NULL;
+					}
+				}
+				if (peer)
+					X509_free(peer);
+			}
+		}
+		if (!tcptls_session->f)	/* no success opening descriptor stacking */
+			SSL_free(tcptls_session->ssl);
+   }
+#endif /* DO_SSL */
+
+	if (!tcptls_session->f) {
+		close(tcptls_session->fd);
+		ast_log(LOG_WARNING, "FILE * open failed!\n");
+		ao2_ref(tcptls_session, -1);
+		return NULL;
+	}
+
+	if (tcptls_session && tcptls_session->parent->worker_fn)
+		return tcptls_session->parent->worker_fn(tcptls_session);
+	else
+		return tcptls_session;
+}
+
 void *ast_tcptls_server_root(void *data)
 {
-	struct server_args *desc = data;
+	struct ast_tcptls_session_args *desc = data;
 	int fd;
 	struct sockaddr_in sin;
 	socklen_t sinlen;
-	struct ast_tcptls_session_instance *ser;
+	struct ast_tcptls_session_instance *tcptls_session;
 	pthread_t launched;
 	
 	for (;;) {
@@ -135,33 +237,33 @@ void *ast_tcptls_server_root(void *data)
 		if (i <= 0)
 			continue;
 		sinlen = sizeof(sin);
-		fd = accept(desc->accept_fd, (struct sockaddr *)&sin, &sinlen);
+		fd = accept(desc->accept_fd, (struct sockaddr *) &sin, &sinlen);
 		if (fd < 0) {
 			if ((errno != EAGAIN) && (errno != EINTR))
 				ast_log(LOG_WARNING, "Accept failed: %s\n", strerror(errno));
 			continue;
 		}
-		ser = ao2_alloc(sizeof(*ser), session_instance_destructor);
-		if (!ser) {
+		tcptls_session = ao2_alloc(sizeof(*tcptls_session), session_instance_destructor);
+		if (!tcptls_session) {
 			ast_log(LOG_WARNING, "No memory for new session: %s\n", strerror(errno));
 			close(fd);
 			continue;
 		}
 
-		ast_mutex_init(&ser->lock);
+		ast_mutex_init(&tcptls_session->lock);
 
 		flags = fcntl(fd, F_GETFL);
 		fcntl(fd, F_SETFL, flags & ~O_NONBLOCK);
-		ser->fd = fd;
-		ser->parent = desc;
-		memcpy(&ser->requestor, &sin, sizeof(ser->requestor));
+		tcptls_session->fd = fd;
+		tcptls_session->parent = desc;
+		memcpy(&tcptls_session->remote_address, &sin, sizeof(tcptls_session->remote_address));
 
-		ser->client = 0;
+		tcptls_session->client = 0;
 			
-		if (ast_pthread_create_detached_background(&launched, NULL, ast_make_file_from_fd, ser)) {
+		if (ast_pthread_create_detached_background(&launched, NULL, handle_tls_connection, tcptls_session)) {
 			ast_log(LOG_WARNING, "Unable to launch helper thread: %s\n", strerror(errno));
-			close(ser->fd);
-			ao2_ref(ser, -1);
+			close(tcptls_session->fd);
+			ao2_ref(tcptls_session, -1);
 		}
 	}
 	return NULL;
@@ -225,18 +327,19 @@ int ast_ssl_setup(struct ast_tls_config *cfg)
 /*! \brief A generic client routine for a TCP client
  *  and starts a thread for handling accept()
  */
-struct ast_tcptls_session_instance *ast_tcptls_client_start(struct server_args *desc)
+struct ast_tcptls_session_instance *ast_tcptls_client_start(struct ast_tcptls_session_args *desc)
 {
 	int flags;
-	struct ast_tcptls_session_instance *ser = NULL;
+	int x = 1;
+	struct ast_tcptls_session_instance *tcptls_session = NULL;
 
 	/* Do nothing if nothing has changed */
-	if(!memcmp(&desc->oldsin, &desc->sin, sizeof(desc->oldsin))) {
+	if (!memcmp(&desc->old_address, &desc->remote_address, sizeof(desc->old_address))) {
 		ast_debug(1, "Nothing changed in %s\n", desc->name);
 		return NULL;
 	}
 
-	desc->oldsin = desc->sin;
+	desc->old_address = desc->remote_address;
 
 	if (desc->accept_fd != -1)
 		close(desc->accept_fd);
@@ -248,45 +351,58 @@ struct ast_tcptls_session_instance *ast_tcptls_client_start(struct server_args *
 		return NULL;
 	}
 
-	if (connect(desc->accept_fd, (const struct sockaddr *)&desc->sin, sizeof(desc->sin))) {
+	/* if a local address was specified, bind to it so the connection will
+	   originate from the desired address */
+	if (desc->local_address.sin_family != 0) {
+		setsockopt(desc->accept_fd, SOL_SOCKET, SO_REUSEADDR, &x, sizeof(x));
+		if (bind(desc->accept_fd, (struct sockaddr *) &desc->local_address, sizeof(desc->local_address))) {
+			ast_log(LOG_ERROR, "Unable to bind %s to %s:%d: %s\n",
+			desc->name,
+				ast_inet_ntoa(desc->local_address.sin_addr), ntohs(desc->local_address.sin_port),
+				strerror(errno));
+			goto error;
+		}
+	}
+
+	if (connect(desc->accept_fd, (const struct sockaddr *) &desc->remote_address, sizeof(desc->remote_address))) {
 		ast_log(LOG_ERROR, "Unable to connect %s to %s:%d: %s\n",
 			desc->name,
-			ast_inet_ntoa(desc->sin.sin_addr), ntohs(desc->sin.sin_port),
+			ast_inet_ntoa(desc->remote_address.sin_addr), ntohs(desc->remote_address.sin_port),
 			strerror(errno));
 		goto error;
 	}
 
-	if (!(ser = ao2_alloc(sizeof(*ser), session_instance_destructor)))
+	if (!(tcptls_session = ao2_alloc(sizeof(*tcptls_session), session_instance_destructor)))
 		goto error;
 
-	ast_mutex_init(&ser->lock);
+	ast_mutex_init(&tcptls_session->lock);
 
 	flags = fcntl(desc->accept_fd, F_GETFL);
 	fcntl(desc->accept_fd, F_SETFL, flags & ~O_NONBLOCK);
 
-	ser->fd = desc->accept_fd;
-	ser->parent = desc;
-	ser->parent->worker_fn = NULL;
-	memcpy(&ser->requestor, &desc->sin, sizeof(ser->requestor));
+	tcptls_session->fd = desc->accept_fd;
+	tcptls_session->parent = desc;
+	tcptls_session->parent->worker_fn = NULL;
+	memcpy(&tcptls_session->remote_address, &desc->remote_address, sizeof(tcptls_session->remote_address));
 
-	ser->client = 1;
+	tcptls_session->client = 1;
 
 	if (desc->tls_cfg) {
 		desc->tls_cfg->enabled = 1;
 		__ssl_setup(desc->tls_cfg, 1);
 	}
 
-	ao2_ref(ser, +1);
-	if (!ast_make_file_from_fd(ser))
+	ao2_ref(tcptls_session, +1);
+	if (!handle_tls_connection(tcptls_session))
 		goto error;
 
-	return ser;
+	return tcptls_session;
 
 error:
 	close(desc->accept_fd);
 	desc->accept_fd = -1;
-	if (ser)
-		ao2_ref(ser, -1);
+	if (tcptls_session)
+		ao2_ref(tcptls_session, -1);
 	return NULL;
 }
 
@@ -295,18 +411,18 @@ error:
  * which does the socket/bind/listen and starts a thread for handling
  * accept().
  */
-void ast_tcptls_server_start(struct server_args *desc)
+void ast_tcptls_server_start(struct ast_tcptls_session_args *desc)
 {
 	int flags;
 	int x = 1;
 	
 	/* Do nothing if nothing has changed */
-	if (!memcmp(&desc->oldsin, &desc->sin, sizeof(desc->oldsin))) {
+	if (!memcmp(&desc->old_address, &desc->local_address, sizeof(desc->old_address))) {
 		ast_debug(1, "Nothing changed in %s\n", desc->name);
 		return;
 	}
 	
-	desc->oldsin = desc->sin;
+	desc->old_address = desc->local_address;
 	
 	/* Shutdown a running server if there is one */
 	if (desc->master != AST_PTHREADT_NULL) {
@@ -319,21 +435,22 @@ void ast_tcptls_server_start(struct server_args *desc)
 		close(desc->accept_fd);
 
 	/* If there's no new server, stop here */
-	if (desc->sin.sin_family == 0)
+	if (desc->local_address.sin_family == 0) {
+		ast_debug(2, "Server disabled:  %s\n", desc->name);
 		return;
+	}
 
 	desc->accept_fd = socket(AF_INET, SOCK_STREAM, 0);
 	if (desc->accept_fd < 0) {
-		ast_log(LOG_ERROR, "Unable to allocate socket for %s: %s\n",
-			desc->name, strerror(errno));
+		ast_log(LOG_ERROR, "Unable to allocate socket for %s: %s\n", desc->name, strerror(errno));
 		return;
 	}
 	
 	setsockopt(desc->accept_fd, SOL_SOCKET, SO_REUSEADDR, &x, sizeof(x));
-	if (bind(desc->accept_fd, (struct sockaddr *)&desc->sin, sizeof(desc->sin))) {
+	if (bind(desc->accept_fd, (struct sockaddr *) &desc->local_address, sizeof(desc->local_address))) {
 		ast_log(LOG_ERROR, "Unable to bind %s to %s:%d: %s\n",
 			desc->name,
-			ast_inet_ntoa(desc->sin.sin_addr), ntohs(desc->sin.sin_port),
+			ast_inet_ntoa(desc->local_address.sin_addr), ntohs(desc->local_address.sin_port),
 			strerror(errno));
 		goto error;
 	}
@@ -346,7 +463,7 @@ void ast_tcptls_server_start(struct server_args *desc)
 	if (ast_pthread_create_background(&desc->master, NULL, desc->accept_fn, desc)) {
 		ast_log(LOG_ERROR, "Unable to launch thread for %s on %s:%d: %s\n",
 			desc->name,
-			ast_inet_ntoa(desc->sin.sin_addr), ntohs(desc->sin.sin_port),
+			ast_inet_ntoa(desc->local_address.sin_addr), ntohs(desc->local_address.sin_port),
 			strerror(errno));
 		goto error;
 	}
@@ -358,7 +475,7 @@ error:
 }
 
 /*! \brief Shutdown a running server if there is one */
-void ast_tcptls_server_stop(struct server_args *desc)
+void ast_tcptls_server_stop(struct ast_tcptls_session_args *desc)
 {
 	if (desc->master != AST_PTHREADT_NULL) {
 		pthread_cancel(desc->master);
@@ -368,106 +485,5 @@ void ast_tcptls_server_stop(struct server_args *desc)
 	if (desc->accept_fd != -1)
 		close(desc->accept_fd);
 	desc->accept_fd = -1;
+	ast_debug(2, "Stopped server :: %s\n", desc->name);
 }
-
-/*! \brief
-* creates a FILE * from the fd passed by the accept thread.
-* This operation is potentially expensive (certificate verification),
-* so we do it in the child thread context.
-*/
-void *ast_make_file_from_fd(void *data)
-{
-	struct ast_tcptls_session_instance *ser = data;
-#ifdef DO_SSL
-	int (*ssl_setup)(SSL *) = (ser->client) ? SSL_connect : SSL_accept;
-	int ret;
-	char err[256];
-#endif
-
-	/*
-	* open a FILE * as appropriate.
-	*/
-	if (!ser->parent->tls_cfg)
-		ser->f = fdopen(ser->fd, "w+");
-#ifdef DO_SSL
-	else if ( (ser->ssl = SSL_new(ser->parent->tls_cfg->ssl_ctx)) ) {
-		SSL_set_fd(ser->ssl, ser->fd);
-		if ((ret = ssl_setup(ser->ssl)) <= 0) {
-			ast_verb(2, "Problem setting up ssl connection: %s\n", ERR_error_string(ERR_get_error(), err));
-		} else {
-#if defined(HAVE_FUNOPEN)	/* the BSD interface */
-			ser->f = funopen(ser->ssl, ssl_read, ssl_write, NULL, ssl_close);
-
-#elif defined(HAVE_FOPENCOOKIE)	/* the glibc/linux interface */
-			static const cookie_io_functions_t cookie_funcs = {
-				ssl_read, ssl_write, NULL, ssl_close
-			};
-			ser->f = fopencookie(ser->ssl, "w+", cookie_funcs);
-#else
-			/* could add other methods here */
-			ast_debug(2, "no ser->f methods attempted!");
-#endif
-			if ((ser->client && !ast_test_flag(&ser->parent->tls_cfg->flags, AST_SSL_DONT_VERIFY_SERVER))
-				|| (!ser->client && ast_test_flag(&ser->parent->tls_cfg->flags, AST_SSL_VERIFY_CLIENT))) {
-				X509 *peer;
-				long res;
-				peer = SSL_get_peer_certificate(ser->ssl);
-				if (!peer)
-					ast_log(LOG_WARNING, "No peer SSL certificate\n");
-				res = SSL_get_verify_result(ser->ssl);
-				if (res != X509_V_OK)
-					ast_log(LOG_ERROR, "Certificate did not verify: %s\n", X509_verify_cert_error_string(res));
-				if (!ast_test_flag(&ser->parent->tls_cfg->flags, AST_SSL_IGNORE_COMMON_NAME)) {
-					ASN1_STRING *str;
-					unsigned char *str2;
-					X509_NAME *name = X509_get_subject_name(peer);
-					int pos = -1;
-					int found = 0;
-				
-					for (;;) {
-						/* Walk the certificate to check all available "Common Name" */
-						/* XXX Probably should do a gethostbyname on the hostname and compare that as well */
-						pos = X509_NAME_get_index_by_NID(name, NID_commonName, pos);
-						if (pos < 0)
-							break;
-						str = X509_NAME_ENTRY_get_data(X509_NAME_get_entry(name, pos));
-						ASN1_STRING_to_UTF8(&str2, str);
-						if (str2) {
-							if (!strcasecmp(ser->parent->hostname, (char *) str2))
-								found = 1;
-							ast_debug(3, "SSL Common Name compare s1='%s' s2='%s'\n", ser->parent->hostname, str2);
-							OPENSSL_free(str2);
-						}
-						if (found)
-							break;
-					}
-					if (!found) {
-						ast_log(LOG_ERROR, "Certificate common name did not match (%s)\n", ser->parent->hostname);
-						if (peer)
-							X509_free(peer);
-						fclose(ser->f);
-						return NULL;
-					}
-				}
-				if (peer)
-					X509_free(peer);
-			}
-		}
-		if (!ser->f)	/* no success opening descriptor stacking */
-			SSL_free(ser->ssl);
-   }
-#endif /* DO_SSL */
-
-	if (!ser->f) {
-		close(ser->fd);
-		ast_log(LOG_WARNING, "FILE * open failed!\n");
-		ao2_ref(ser, -1);
-		return NULL;
-	}
-
-	if (ser && ser->parent->worker_fn)
-		return ser->parent->worker_fn(ser);
-	else
-		return ser;
-}
-

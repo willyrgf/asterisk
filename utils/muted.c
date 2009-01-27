@@ -35,6 +35,8 @@
  *
  */
 
+#include "asterisk/autoconfig.h"
+
 #ifdef __Darwin__
 #include <CoreAudio/AudioHardware.h> 
 #elif defined(__linux__) || defined(__FreeBSD__)
@@ -114,7 +116,9 @@ static int load_config(void)
 		return -1;
 	}
 	while(!feof(f)) {
-		fgets(buf, sizeof(buf), f);
+		if (!fgets(buf, sizeof(buf), f)) {
+			continue;
+		}
 		if (!feof(f)) {
 			lineno++;
 			val = strchr(buf, '#');
@@ -410,19 +414,19 @@ static float mutevol = 0;
 #endif
 
 #ifndef __Darwin__
-static int mutedlevel(int orig, int mutelevel)
+static int mutedlevel(int orig, int level)
 {
 	int l = orig >> 8;
 	int r = orig & 0xff;
-	l = (float)(mutelevel) * (float)(l) / 100.0;
-	r = (float)(mutelevel) * (float)(r) / 100.0;
+	l = (float)(level) * (float)(l) / 100.0;
+	r = (float)(level) * (float)(r) / 100.0;
 
 	return (l << 8) | r;
 #else
-static float mutedlevel(float orig, float mutelevel)
+static float mutedlevel(float orig, float level)
 {
 	float master = orig;
-	master = mutelevel * master / 100.0;
+	master = level * master / 100.0;
 	return master;
 #endif
 	
@@ -682,7 +686,10 @@ int main(int argc, char *argv[])
 	}
 	if (needfork) {
 #ifndef HAVE_SBIN_LAUNCHD
-		daemon(0,0);
+		if (daemon(0,0) < 0) {
+			fprintf(stderr, "daemon() failed: %s\n", strerror(errno));
+			exit(1);
+		}
 #else
 		fprintf(stderr, "Mac OS X detected.  Use 'launchd -d muted -f' to launch.\n");
 		exit(1);

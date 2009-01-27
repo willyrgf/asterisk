@@ -23,11 +23,28 @@
 #ifndef _ASTERISK_STRINGS_H
 #define _ASTERISK_STRINGS_H
 
-#include "asterisk/inline_api.h"
+/* #define DEBUG_OPAQUE */
+
+#include <ctype.h>
+
 #include "asterisk/utils.h"
 #include "asterisk/threadstorage.h"
 
+#if defined(DEBUG_OPAQUE)
+#define __AST_STR_USED used2
+#define __AST_STR_LEN len2
+#define __AST_STR_STR str2
+#define __AST_STR_TS ts2
+#else
+#define __AST_STR_USED used
+#define __AST_STR_LEN len
+#define __AST_STR_STR str
+#define __AST_STR_TS ts
+#endif
+
 /* You may see casts in this header that may seem useless but they ensure this file is C++ clean */
+
+#define AS_OR(a,b)	(a && ast_str_strlen(a)) ? ast_str_buffer(a) : (b)
 
 #ifdef AST_DEVMODE
 #define ast_strlen_zero(foo)	_ast_strlen_zero(foo, __FILE__, __PRETTY_FUNCTION__, __LINE__)
@@ -43,7 +60,7 @@ static force_inline int _ast_strlen_zero(const char *s, const char *file, const 
 }
 
 #else
-static force_inline int ast_strlen_zero(const char *s)
+static force_inline int attribute_pure ast_strlen_zero(const char *s)
 {
 	return (!s || (*s == '\0'));
 }
@@ -52,13 +69,13 @@ static force_inline int ast_strlen_zero(const char *s)
 /*! \brief returns the equivalent of logic or for strings:
  * first one if not empty, otherwise second one.
  */
-#define S_OR(a, b)           (!ast_strlen_zero(a) ? (a) : (b))
+#define S_OR(a, b) ({typeof(&((a)[0])) __x = (a); ast_strlen_zero(__x) ? (b) : __x;})
 
 /*! \brief returns the equivalent of logic or for strings, with an additional boolean check:
  * second one if not empty and first one is true, otherwise third one.
  * example: S_COR(usewidget, widget, "<no widget>")
  */
-#define S_COR(a, b, c)   ((a && !ast_strlen_zero(b)) ? (b) : (c))
+#define S_COR(a, b, c) ({typeof(&((b)[0])) __x = (b); (a) && !ast_strlen_zero(__x) ? (__x) : (c);})
 
 /*!
   \brief Gets a pointer to the first non-whitespace character in a string.
@@ -66,11 +83,11 @@ static force_inline int ast_strlen_zero(const char *s)
   \return a pointer to the first non-whitespace character
  */
 AST_INLINE_API(
-char *ast_skip_blanks(const char *str),
+char * attribute_pure ast_skip_blanks(const char *str),
 {
 	while (*str && ((unsigned char) *str) < 33)
 		str++;
-	return (char *)str;
+	return (char *) str;
 }
 )
 
@@ -105,11 +122,11 @@ char *ast_trim_blanks(char *str),
   \return a pointer to the first whitespace character
  */
 AST_INLINE_API(
-char *ast_skip_nonblanks(char *str),
+char * attribute_pure ast_skip_nonblanks(const char *str),
 {
 	while (*str && ((unsigned char) *str) > 32)
 		str++;
-	return str;
+	return (char *) str;
 }
 )
   
@@ -125,9 +142,9 @@ char *ast_skip_nonblanks(char *str),
 AST_INLINE_API(
 char *ast_strip(char *s),
 {
-	s = ast_skip_blanks(s);
-	if (s)
+	if ((s = ast_skip_blanks(s))) {
 		ast_trim_blanks(s);
+	}
 	return s;
 } 
 )
@@ -200,7 +217,6 @@ void ast_copy_string(char *dst, const char *src, size_t size),
 }
 )
 
-
 /*!
   \brief Build a string in a buffer, designed to be called repeatedly
   
@@ -215,7 +231,7 @@ void ast_copy_string(char *dst, const char *src, size_t size),
   \retval 0 on success
   \retval non-zero on failure.
 */
-int ast_build_string(char **buffer, size_t *space, const char *fmt, ...) __attribute__ ((format (printf, 3, 4)));
+int ast_build_string(char **buffer, size_t *space, const char *fmt, ...) __attribute__((format(printf, 3, 4)));
 
 /*!
   \brief Build a string in a buffer, designed to be called repeatedly
@@ -229,7 +245,7 @@ int ast_build_string(char **buffer, size_t *space, const char *fmt, ...) __attri
   \param fmt printf-style format string
   \param ap varargs list of arguments for format
 */
-int ast_build_string_va(char **buffer, size_t *space, const char *fmt, va_list ap) __attribute__((format (printf, 3, 0)));
+int ast_build_string_va(char **buffer, size_t *space, const char *fmt, va_list ap) __attribute__((format(printf, 3, 0)));
 
 /*! 
  * \brief Make sure something is true.
@@ -241,7 +257,7 @@ int ast_build_string_va(char **buffer, size_t *space, const char *fmt, va_list a
  * \retval -1 if "true".
  * \retval 0 otherwise.
  */
-int ast_true(const char *val);
+int attribute_pure ast_true(const char *val);
 
 /*! 
  * \brief Make sure something is false.
@@ -253,7 +269,7 @@ int ast_true(const char *val);
  * \retval -1 if "true".
  * \retval 0 otherwise.
  */
-int ast_false(const char *val);
+int attribute_pure ast_false(const char *val);
 
 /*
  *  \brief Join an array of strings into a single string.
@@ -336,13 +352,13 @@ int ast_get_timeval(const char *src, struct timeval *tv, struct timeval _default
  * struct ast_threadstorage pointer.
  */
 struct ast_str {
-	size_t len;	/*!< The current maximum length of the string */
-	size_t used;	/*!< Amount of space used */
-	struct ast_threadstorage *ts;	/*!< What kind of storage is this ? */
+	size_t __AST_STR_LEN;			/*!< The current maximum length of the string */
+	size_t __AST_STR_USED;			/*!< Amount of space used */
+	struct ast_threadstorage *__AST_STR_TS;	/*!< What kind of storage is this ? */
 #define DS_MALLOC	((struct ast_threadstorage *)1)
 #define DS_ALLOCA	((struct ast_threadstorage *)2)
 #define DS_STATIC	((struct ast_threadstorage *)3)	/* not supported yet */
-	char str[0];	/*!< The string buffer */
+	char __AST_STR_STR[0];			/*!< The string buffer */
 };
 
 /*!
@@ -364,10 +380,10 @@ struct ast_str * attribute_malloc ast_str_create(size_t init_len),
 	buf = (struct ast_str *)ast_calloc(1, sizeof(*buf) + init_len);
 	if (buf == NULL)
 		return NULL;
-	
-	buf->len = init_len;
-	buf->used = 0;
-	buf->ts = DS_MALLOC;
+
+	buf->__AST_STR_LEN = init_len;
+	buf->__AST_STR_USED = 0;
+	buf->__AST_STR_TS = DS_MALLOC;
 
 	return buf;
 }
@@ -380,13 +396,82 @@ AST_INLINE_API(
 void ast_str_reset(struct ast_str *buf),
 {
 	if (buf) {
-		buf->used = 0;
-		if (buf->len)
-			buf->str[0] = '\0';
+		buf->__AST_STR_USED = 0;
+		if (buf->__AST_STR_LEN) {
+			buf->__AST_STR_STR[0] = '\0';
+		}
 	}
 }
 )
 
+/*! \brief Update the length of the buffer, after using ast_str merely as a buffer.
+ *  \param buf A pointer to the ast_str string.
+ */
+AST_INLINE_API(
+void ast_str_update(struct ast_str *buf),
+{
+	buf->__AST_STR_USED = strlen(buf->__AST_STR_STR);
+}
+)
+
+/*! \brief Trims trailing whitespace characters from an ast_str string.
+ *  \param buf A pointer to the ast_str string.
+ */
+AST_INLINE_API(
+void ast_str_trim_blanks(struct ast_str *buf),
+{
+	if (!buf) {
+		return;
+	}
+	while (buf->__AST_STR_USED && buf->__AST_STR_STR[buf->__AST_STR_USED - 1] < 33) {
+		buf->__AST_STR_STR[--(buf->__AST_STR_USED)] = '\0';
+	}
+}
+)
+
+/*!\brief Returns the current length of the string stored within buf.
+ * \param A pointer to the ast_str string.
+ */
+AST_INLINE_API(
+size_t attribute_pure ast_str_strlen(struct ast_str *buf),
+{
+	return buf->__AST_STR_USED;
+}
+)
+
+/*!\brief Returns the current maximum length (without reallocation) of the current buffer.
+ * \param A pointer to the ast_str string.
+ */
+AST_INLINE_API(
+size_t attribute_pure ast_str_size(struct ast_str *buf),
+{
+	return buf->__AST_STR_LEN;
+}
+)
+
+/*!\brief Returns the string buffer within the ast_str buf.
+ * \param A pointer to the ast_str string.
+ */
+AST_INLINE_API(
+char * attribute_pure ast_str_buffer(struct ast_str *buf),
+{
+	return buf->__AST_STR_STR;
+}
+)
+
+AST_INLINE_API(
+char *ast_str_truncate(struct ast_str *buf, ssize_t len),
+{
+	if (len < 0) {
+		buf->__AST_STR_USED += ((ssize_t) abs(len)) > (ssize_t) buf->__AST_STR_USED ? -buf->__AST_STR_USED : len;
+	} else {
+		buf->__AST_STR_USED = len;
+	}
+	buf->__AST_STR_STR[buf->__AST_STR_USED] = '\0';
+	return buf->__AST_STR_STR;
+}
+)
+	
 /*
  * AST_INLINE_API() is a macro that takes a block of code as an argument.
  * Using preprocessor #directives in the argument is not supported by all
@@ -404,37 +489,66 @@ void ast_str_reset(struct ast_str *buf),
 /*!
  * Make space in a new string (e.g. to read in data from a file)
  */
+#if (defined(MALLOC_DEBUG) && !defined(STANDALONE))
 AST_INLINE_API(
-int ast_str_make_space(struct ast_str **buf, size_t new_len),
+int _ast_str_make_space(struct ast_str **buf, size_t new_len, const char *file, int lineno, const char *function),
 {
-	_DB1(struct ast_str *old_buf = *buf;)
+	struct ast_str *old_buf = *buf;
 
-	if (new_len <= (*buf)->len) 
+	if (new_len <= (*buf)->__AST_STR_LEN) 
 		return 0;	/* success */
-	if ((*buf)->ts == DS_ALLOCA || (*buf)->ts == DS_STATIC)
+	if ((*buf)->__AST_STR_TS == DS_ALLOCA || (*buf)->__AST_STR_TS == DS_STATIC)
 		return -1;	/* cannot extend */
-	*buf = (struct ast_str *)ast_realloc(*buf, new_len + sizeof(struct ast_str));
-	if (*buf == NULL) /* XXX watch out, we leak memory here */
+	*buf = (struct ast_str *)__ast_realloc(*buf, new_len + sizeof(struct ast_str), file, lineno, function);
+	if (*buf == NULL) {
+		*buf = old_buf;
 		return -1;
-	if ((*buf)->ts != DS_MALLOC) {
-		pthread_setspecific((*buf)->ts->key, *buf);
+	}
+	if ((*buf)->__AST_STR_TS != DS_MALLOC) {
+		pthread_setspecific((*buf)->__AST_STR_TS->key, *buf);
 		_DB1(__ast_threadstorage_object_replace(old_buf, *buf, new_len + sizeof(struct ast_str));)
 	}
 
-        (*buf)->len = new_len;
-        return 0;
+	(*buf)->__AST_STR_LEN = new_len;
+	return 0;
 }
 )
+#define ast_str_make_space(a,b)	_ast_str_make_space(a,b,__FILE__,__LINE__,__PRETTY_FUNCTION__)
+#else
+AST_INLINE_API(
+int ast_str_make_space(struct ast_str **buf, size_t new_len),
+{
+	struct ast_str *old_buf = *buf;
+
+	if (new_len <= (*buf)->__AST_STR_LEN) 
+		return 0;	/* success */
+	if ((*buf)->__AST_STR_TS == DS_ALLOCA || (*buf)->__AST_STR_TS == DS_STATIC)
+		return -1;	/* cannot extend */
+	*buf = (struct ast_str *)ast_realloc(*buf, new_len + sizeof(struct ast_str));
+	if (*buf == NULL) {
+		*buf = old_buf;
+		return -1;
+	}
+	if ((*buf)->__AST_STR_TS != DS_MALLOC) {
+		pthread_setspecific((*buf)->__AST_STR_TS->key, *buf);
+		_DB1(__ast_threadstorage_object_replace(old_buf, *buf, new_len + sizeof(struct ast_str));)
+	}
+
+	(*buf)->__AST_STR_LEN = new_len;
+	return 0;
+}
+)
+#endif
 
 #define ast_str_alloca(init_len)			\
 	({						\
-		struct ast_str *buf;			\
-		buf = alloca(sizeof(*buf) + init_len);	\
-		buf->len = init_len;			\
-		buf->used = 0;				\
-		buf->ts = DS_ALLOCA;			\
-		buf->str[0] = '\0';			\
-		(buf);					\
+		struct ast_str *__ast_str_buf;			\
+		__ast_str_buf = alloca(sizeof(*__ast_str_buf) + init_len);	\
+		__ast_str_buf->__AST_STR_LEN = init_len;			\
+		__ast_str_buf->__AST_STR_USED = 0;				\
+		__ast_str_buf->__AST_STR_TS = DS_ALLOCA;			\
+		__ast_str_buf->__AST_STR_STR[0] = '\0';			\
+		(__ast_str_buf);					\
 	})
 
 /*!
@@ -478,11 +592,11 @@ struct ast_str *ast_str_thread_get(struct ast_threadstorage *ts,
 	buf = (struct ast_str *)ast_threadstorage_get(ts, sizeof(*buf) + init_len);
 	if (buf == NULL)
 		return NULL;
-	
-	if (!buf->len) {
-		buf->len = init_len;
-		buf->used = 0;
-		buf->ts = ts;
+
+	if (!buf->__AST_STR_LEN) {
+		buf->__AST_STR_LEN = init_len;
+		buf->__AST_STR_USED = 0;
+		buf->__AST_STR_TS = ts;
 	}
 
 	return buf;
@@ -498,11 +612,11 @@ struct ast_str *__ast_str_thread_get(struct ast_threadstorage *ts,
 	buf = (struct ast_str *)__ast_threadstorage_get(ts, sizeof(*buf) + init_len, file, function, line);
 	if (buf == NULL)
 		return NULL;
-	
-	if (!buf->len) {
-		buf->len = init_len;
-		buf->used = 0;
-		buf->ts = ts;
+
+	if (!buf->__AST_STR_LEN) {
+		buf->__AST_STR_LEN = init_len;
+		buf->__AST_STR_USED = 0;
+		buf->__AST_STR_TS = ts;
 	}
 
 	return buf;
@@ -515,23 +629,46 @@ struct ast_str *__ast_str_thread_get(struct ast_threadstorage *ts,
 /*!
  * \brief Error codes from __ast_str_helper()
  * The undelying processing to manipulate dynamic string is done
- * by __ast_str_helper(), which can return a success, a
- * permanent failure (e.g. no memory), or a temporary one (when
- * the string needs to be reallocated, and we must run va_start()
- * again; XXX this convoluted interface is only here because
- * FreeBSD 4 lacks va_copy, but this will be fixed and the
- * interface simplified).
+ * by __ast_str_helper(), which can return a success or a
+ * permanent failure (e.g. no memory).
  */
 enum {
-	/*! An error has occured and the contents of the dynamic string
+	/*! An error has occurred and the contents of the dynamic string
 	 *  are undefined */
 	AST_DYNSTR_BUILD_FAILED = -1,
 	/*! The buffer size for the dynamic string had to be increased, and
 	 *  __ast_str_helper() needs to be called again after
-	 *  a va_end() and va_start().
+	 *  a va_end() and va_start().  This return value is legacy and will
+	 *  no longer be used.
 	 */
 	AST_DYNSTR_BUILD_RETRY = -2
 };
+
+/*!
+ * \brief Core functionality of ast_str_(set|append)_va
+ *
+ * The arguments to this function are the same as those described for
+ * ast_str_set_va except for an addition argument, append.
+ * If append is non-zero, this will append to the current string instead of
+ * writing over it.
+ *
+ * AST_DYNSTR_BUILD_RETRY is a legacy define.  It should probably never
+ * again be used.
+ *
+ * A return of AST_DYNSTR_BUILD_FAILED indicates a memory allocation error.
+ *
+ * A return value greater than or equal to zero indicates the number of
+ * characters that have been written, not including the terminating '\0'.
+ * In the append case, this only includes the number of characters appended.
+ *
+ * \note This function should never need to be called directly.  It should
+ *       through calling one of the other functions or macros defined in this
+ *       file.
+ */
+int __attribute__((format(printf, 4, 0))) __ast_str_helper(struct ast_str **buf, size_t max_len,
+							   int append, const char *fmt, va_list ap);
+char *__ast_str_helper2(struct ast_str **buf, size_t max_len,
+	const char *src, size_t maxsrc, int append, int escapecommas);
 
 /*!
  * \brief Set a dynamic string from a va_list
@@ -570,62 +707,51 @@ enum {
  *      ...
  * }
  * \endcode
- *
- * \note: the following two functions must be implemented as macros
- *	because we must do va_end()/va_start() on the original arguments.
  */
-#define ast_str_set_va(buf, max_len, fmt, ap)			\
-	({								\
-		int __res;						\
-		while ((__res = __ast_str_helper(buf, max_len,		\
-			0, fmt, ap)) == AST_DYNSTR_BUILD_RETRY) {	\
-			va_end(ap);					\
-			va_start(ap, fmt);				\
-		}							\
-		(__res);						\
-	})
+AST_INLINE_API(int __attribute__((format(printf, 3, 0))) ast_str_set_va(struct ast_str **buf, size_t max_len, const char *fmt, va_list ap),
+{
+	return __ast_str_helper(buf, max_len, 0, fmt, ap);
+}
+)
 
 /*!
  * \brief Append to a dynamic string using a va_list
  *
  * Same as ast_str_set_va(), but append to the current content.
  */
-#define ast_str_append_va(buf, max_len, fmt, ap)		\
-	({								\
-		int __res;						\
-		while ((__res = __ast_str_helper(buf, max_len,		\
-			1, fmt, ap)) == AST_DYNSTR_BUILD_RETRY) {	\
-			va_end(ap);					\
-			va_start(ap, fmt);				\
-		}							\
-		(__res);						\
-	})
+AST_INLINE_API(int __attribute__((format(printf, 3, 0))) ast_str_append_va(struct ast_str **buf, size_t max_len, const char *fmt, va_list ap),
+{
+	return __ast_str_helper(buf, max_len, 1, fmt, ap);
+}
+)
 
-/*!
- * \brief Core functionality of ast_str_(set|append)_va
- *
- * The arguments to this function are the same as those described for
- * ast_str_set_va except for an addition argument, append.
- * If append is non-zero, this will append to the current string instead of
- * writing over it.
- *
- * In the case that this function is called and the buffer was not large enough
- * to hold the result, the partial write will be truncated, and the result
- * AST_DYNSTR_BUILD_RETRY will be returned to indicate that the buffer size
- * was increased, and the function should be called a second time.
- *
- * A return of AST_DYNSTR_BUILD_FAILED indicates a memory allocation error.
- *
- * A return value greater than or equal to zero indicates the number of
- * characters that have been written, not including the terminating '\0'.
- * In the append case, this only includes the number of characters appended.
- *
- * \note This function should never need to be called directly.  It should
- *       through calling one of the other functions or macros defined in this
- *       file.
- */
-int __ast_str_helper(struct ast_str **buf, size_t max_len,
-	int append, const char *fmt, va_list ap);
+/*!\brief Set a dynamic string to a non-NULL terminated substring. */
+AST_INLINE_API(char *ast_str_set_substr(struct ast_str **buf, size_t maxlen, const char *src, size_t maxsrc),
+{
+	return __ast_str_helper2(buf, maxlen, src, maxsrc, 0, 0);
+}
+)
+
+/*!\brief Append a non-NULL terminated substring to the end of a dynamic string. */
+AST_INLINE_API(char *ast_str_append_substr(struct ast_str **buf, size_t maxlen, const char *src, size_t maxsrc),
+{
+	return __ast_str_helper2(buf, maxlen, src, maxsrc, 1, 0);
+}
+)
+
+/*!\brief Set a dynamic string to a non-NULL terminated substring, with escaping of commas. */
+AST_INLINE_API(char *ast_str_set_escapecommas(struct ast_str **buf, size_t maxlen, const char *src, size_t maxsrc),
+{
+	return __ast_str_helper2(buf, maxlen, src, maxsrc, 0, 1);
+}
+)
+
+/*!\brief Append a non-NULL terminated substring to the end of a dynamic string, with escaping of commas. */
+AST_INLINE_API(char *ast_str_append_escapecommas(struct ast_str **buf, size_t maxlen, const char *src, size_t maxsrc),
+{
+	return __ast_str_helper2(buf, maxlen, src, maxsrc, 1, 1);
+}
+)
 
 /*!
  * \brief Set a dynamic string using variable arguments
@@ -645,7 +771,7 @@ int __ast_str_helper(struct ast_str **buf, size_t max_len,
  * All the rest is the same as ast_str_set_va()
  */
 AST_INLINE_API(
-int __attribute__ ((format (printf, 3, 4))) ast_str_set(
+int __attribute__((format(printf, 3, 4))) ast_str_set(
 	struct ast_str **buf, size_t max_len, const char *fmt, ...),
 {
 	int res;
@@ -666,7 +792,7 @@ int __attribute__ ((format (printf, 3, 4))) ast_str_set(
  * ast_str_set(), but the new data is appended to the current value.
  */
 AST_INLINE_API(
-int __attribute__ ((format (printf, 3, 4))) ast_str_append(
+int __attribute__((format(printf, 3, 4))) ast_str_append(
 	struct ast_str **buf, size_t max_len, const char *fmt, ...),
 {
 	int res;
@@ -688,12 +814,30 @@ int __attribute__ ((format (printf, 3, 4))) ast_str_append(
  *
  * http://www.cse.yorku.ca/~oz/hash.html
  */
-static force_inline int ast_str_hash(const char *str)
+static force_inline int attribute_pure ast_str_hash(const char *str)
 {
 	int hash = 5381;
 
 	while (*str)
 		hash = hash * 33 ^ *str++;
+
+	return abs(hash);
+}
+
+/*!
+ * \brief Compute a hash value on a case-insensitive string
+ *
+ * Uses the same hash algorithm as ast_str_hash, but converts
+ * all characters to lowercase prior to computing a hash. This
+ * allows for easy case-insensitive lookups in a hash table.
+ */
+static force_inline int attribute_pure ast_str_case_hash(const char *str)
+{
+	int hash = 5381;
+
+	while (*str) {
+		hash = hash * 33 ^ tolower(*str++);
+	}
 
 	return abs(hash);
 }

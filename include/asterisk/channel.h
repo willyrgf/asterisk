@@ -424,7 +424,7 @@ struct ast_channel {
 	struct ast_trans_pvt *readtrans;		/*!< Read translation path */
 	struct ast_audiohook_list *audiohooks;
 	struct ast_cdr *cdr;				/*!< Call Detail Record */
-	struct ind_tone_zone *zone;			/*!< Tone zone as set in indications.conf or
+	struct tone_zone *zone;			/*!< Tone zone as set in indications.conf or
 							     in the CHANNEL dialplan function */
 	struct ast_channel_monitor *monitor;		/*!< Channel monitoring */
 #ifdef HAVE_EPOLL
@@ -496,7 +496,7 @@ struct ast_channel {
 
 	unsigned short transfercapability;		/*!< ISDN Transfer Capbility - AST_FLAG_DIGITAL is not enough */
 
-	char dtmfq[AST_MAX_EXTENSION];			/*!< Any/all queued DTMF characters */
+	char unused_old_dtmfq[AST_MAX_EXTENSION];			/*!< (deprecated, use readq instead) Any/all queued DTMF characters */
 	char context[AST_MAX_CONTEXT];			/*!< Dialplan: Current extension context */
 	char exten[AST_MAX_EXTENSION];			/*!< Dialplan: Current extension number */
 	char macrocontext[AST_MAX_CONTEXT];		/*!< Macro: Current non-macro context. See app_macro.c */
@@ -552,6 +552,10 @@ enum {
 	/*! This flag indicates that on a masquerade, an active stream should not
 	 *  be carried over */
 	AST_FLAG_MASQ_NOSTREAM = (1 << 16),
+	/*! This flag indicates that the hangup exten was run when the bridge terminated,
+	 *  a message aimed at preventing a subsequent hangup exten being run at the pbx_run
+	 *  level */
+	AST_FLAG_BRIDGE_HANGUP_RUN = (1 << 17),
 };
 
 /*! \brief ast_bridge_config flags */
@@ -563,6 +567,7 @@ enum {
 	AST_FEATURE_AUTOMON =      (1 << 4),
 	AST_FEATURE_PARKCALL =     (1 << 5),
 	AST_FEATURE_AUTOMIXMON =   (1 << 6),
+	AST_FEATURE_NO_H_EXTEN =   (1 << 7),
 };
 
 /*! \brief bridge configuration */
@@ -579,6 +584,12 @@ struct ast_bridge_config {
 	const char *start_sound;
 	int firstpass;
 	unsigned int flags;
+	void (* end_bridge_callback)(void *);   /*!< A callback that is called after a bridge attempt */
+	void *end_bridge_callback_data;         /*!< Data passed to the callback */
+	/*! If the end_bridge_callback_data refers to a channel which no longer is going to
+	 * exist when the end_bridge_callback is called, then it needs to be fixed up properly
+	 */
+	void (*end_bridge_callback_data_fixup)(struct ast_bridge_config *bconfig, struct ast_channel *originator, struct ast_channel *terminator);
 };
 
 struct chanmon;
@@ -633,14 +644,14 @@ enum channelreloadreason {
  * \deprecated You should use the ast_datastore_alloc() generic function instead.
  */
 struct ast_datastore *ast_channel_datastore_alloc(const struct ast_datastore_info *info, const char *uid)
-	__attribute__ ((deprecated));
+	__attribute__((deprecated));
 
 /*!
  * \brief Free a channel data store object
  * \deprecated You should use the ast_datastore_free() generic function instead.
  */
 int ast_channel_datastore_free(struct ast_datastore *datastore)
-	__attribute__ ((deprecated));
+	__attribute__((deprecated));
 
 /*! \brief Inherit datastores from a parent to a child. */
 int ast_channel_datastore_inherit(struct ast_channel *from, struct ast_channel *to);
@@ -691,7 +702,7 @@ int ast_setstate(struct ast_channel *chan, enum ast_channel_state);
  * \note By default, new channels are set to the "s" extension
  *       and "default" context.
  */
-struct ast_channel *ast_channel_alloc(int needqueue, int state, const char *cid_num, const char *cid_name, const char *acctcode, const char *exten, const char *context, const int amaflag, const char *name_fmt, ...);
+struct ast_channel *ast_channel_alloc(int needqueue, int state, const char *cid_num, const char *cid_name, const char *acctcode, const char *exten, const char *context, const int amaflag, const char *name_fmt, ...) __attribute__((format(printf, 9, 10)));
 
 /*! 
  * \brief Queue an outgoing frame 
@@ -699,6 +710,20 @@ struct ast_channel *ast_channel_alloc(int needqueue, int state, const char *cid_
  * \note The channel does not need to be locked before calling this function.
  */
 int ast_queue_frame(struct ast_channel *chan, struct ast_frame *f);
+
+/*!
+ * \brief Queue an outgoing frame to the head of the frame queue
+ *
+ * \param chan the channel to queue the frame on
+ * \param f the frame to queue.  Note that this frame will be duplicated by
+ *        this function.  It is the responsibility of the caller to handle
+ *        freeing the memory associated with the frame being passed if
+ *        necessary.
+ *
+ * \retval 0 success
+ * \retval non-zero failure
+ */
+int ast_queue_frame_head(struct ast_channel *chan, struct ast_frame *f);
 
 /*! 
  * \brief Queue a hangup frame 
@@ -910,7 +935,7 @@ int ast_check_hangup(struct ast_channel *chan);
  * is earlier than current time plus the offset, it returns 1, if the two
  * time values are equal, it return 0, otherwise, it return -1.
  */
-int ast_channel_cmpwhentohangup(struct ast_channel *chan, time_t offset) __attribute__ ((deprecated));
+int ast_channel_cmpwhentohangup(struct ast_channel *chan, time_t offset) __attribute__((deprecated));
 int ast_channel_cmpwhentohangup_tv(struct ast_channel *chan, struct timeval offset);
 
 /*! \brief Set when to hang a channel up 
@@ -925,7 +950,7 @@ int ast_channel_cmpwhentohangup_tv(struct ast_channel *chan, struct timeval offs
  *
  * \return Nothing
  */
-void ast_channel_setwhentohangup(struct ast_channel *chan, time_t offset) __attribute__ ((deprecated));
+void ast_channel_setwhentohangup(struct ast_channel *chan, time_t offset) __attribute__((deprecated));
 void ast_channel_setwhentohangup_tv(struct ast_channel *chan, struct timeval offset);
 
 /*! 
@@ -1171,6 +1196,18 @@ struct ast_channel *ast_get_channel_by_exten_locked(const char *exten, const cha
 struct ast_channel *ast_walk_channel_by_exten_locked(const struct ast_channel *chan, const char *exten,
 						     const char *context);
 
+/*! \brief Search for a channel based on the passed channel matching callback
+ * Search for a channel based on the specified is_match callback, and return the
+ * first channel that we match.  When returned, the channel will be locked.  Note
+ * that the is_match callback is called with the passed channel locked, and should
+ * return 0 if there is no match, and non-zero if there is.
+ * \param is_match callback executed on each channel until non-zero is returned, or we
+ *        run out of channels to search.
+ * \param data data passed to the is_match callback during each invocation.
+ * \return Returns the matched channel, or NULL if no channel was matched.
+ */
+struct ast_channel *ast_channel_search_locked(int (*is_match)(struct ast_channel *, void *), void *data);
+
 /*! ! \brief Waits for a digit
  * \param c channel to wait for a digit on
  * \param ms how many milliseconds to wait
@@ -1392,6 +1429,11 @@ int ast_autoservice_start(struct ast_channel *chan);
 /*! 
  * \brief Stop servicing a channel for us...  
  *
+ * \note if chan is locked prior to calling ast_autoservice_stop, it
+ * is likely that there will be a deadlock between the thread that calls
+ * ast_autoservice_stop and the autoservice thread. It is important
+ * that chan is not locked prior to this call
+ *
  * \retval 0 success
  * \retval -1 error, or the channel has been hungup 
  */
@@ -1510,16 +1552,16 @@ static inline int ast_add_fd(struct pollfd *pfd, int fd)
 }
 
 /*! \brief Helper function for migrating select to poll */
-static inline int ast_fdisset(struct pollfd *pfds, int fd, int max, int *start)
+static inline int ast_fdisset(struct pollfd *pfds, int fd, int maximum, int *start)
 {
 	int x;
-	int dummy=0;
+	int dummy = 0;
 
 	if (fd < 0)
 		return 0;
 	if (!start)
 		start = &dummy;
-	for (x = *start; x<max; x++)
+	for (x = *start; x < maximum; x++)
 		if (pfds[x].fd == fd) {
 			if (x == *start)
 				(*start)++;

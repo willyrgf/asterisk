@@ -44,9 +44,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define BUFFER_SAMPLES   8096	/* size for the translation buffers */
 
 /* Sample frame data */
-
-#include "slin_adpcm_ex.h"
-#include "adpcm_slin_ex.h"
+#include "asterisk/slin.h"
+#include "ex_adpcm.h"
 
 /*
  * Step size index shift table 
@@ -285,43 +284,12 @@ static struct ast_frame *lintoadpcm_frameout(struct ast_trans_pvt *pvt)
 }
 
 
-/*! \brief AdpcmToLin_Sample */
-static struct ast_frame *adpcmtolin_sample(void)
-{
-	static struct ast_frame f;
-	f.frametype = AST_FRAME_VOICE;
-	f.subclass = AST_FORMAT_ADPCM;
-	f.datalen = sizeof(adpcm_slin_ex);
-	f.samples = sizeof(adpcm_slin_ex) * 2;
-	f.mallocd = 0;
-	f.offset = 0;
-	f.src = __PRETTY_FUNCTION__;
-	f.data.ptr = adpcm_slin_ex;
-	return &f;
-}
-
-/*! \brief LinToAdpcm_Sample */
-static struct ast_frame *lintoadpcm_sample(void)
-{
-	static struct ast_frame f;
-	f.frametype = AST_FRAME_VOICE;
-	f.subclass = AST_FORMAT_SLINEAR;
-	f.datalen = sizeof(slin_adpcm_ex);
-	/* Assume 8000 Hz */
-	f.samples = sizeof(slin_adpcm_ex) / 2;
-	f.mallocd = 0;
-	f.offset = 0;
-	f.src = __PRETTY_FUNCTION__;
-	f.data.ptr = slin_adpcm_ex;
-	return &f;
-}
-
 static struct ast_translator adpcmtolin = {
 	.name = "adpcmtolin",
 	.srcfmt = AST_FORMAT_ADPCM,
 	.dstfmt = AST_FORMAT_SLINEAR,
 	.framein = adpcmtolin_framein,
-	.sample = adpcmtolin_sample,
+	.sample = adpcm_sample,
 	.desc_size = sizeof(struct adpcm_decoder_pvt),
 	.buffer_samples = BUFFER_SAMPLES,
 	.buf_size = BUFFER_SAMPLES * 2,
@@ -334,7 +302,7 @@ static struct ast_translator lintoadpcm = {
 	.dstfmt = AST_FORMAT_ADPCM,
 	.framein = lintoadpcm_framein,
 	.frameout = lintoadpcm_frameout,
-	.sample = lintoadpcm_sample,
+	.sample = slin8_sample,
 	.desc_size = sizeof (struct adpcm_encoder_pvt),
 	.buffer_samples = BUFFER_SAMPLES,
 	.buf_size = BUFFER_SAMPLES/ 2,	/* 2 samples per byte */
@@ -345,9 +313,7 @@ static int parse_config(int reload)
 	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
 	struct ast_config *cfg = ast_config_load("codecs.conf", config_flags);
 	struct ast_variable *var;
-	if (cfg == NULL)
-		return 0;
-	if (cfg == CONFIG_STATUS_FILEUNCHANGED)
+	if (cfg == CONFIG_STATUS_FILEMISSING || cfg == CONFIG_STATUS_FILEUNCHANGED || cfg == CONFIG_STATUS_FILEINVALID)
 		return 0;
 	for (var = ast_variable_browse(cfg, "plc"); var ; var = var->next) {
 		if (!strcasecmp(var->name, "genericplc")) {

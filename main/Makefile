@@ -28,7 +28,8 @@ OBJS= tcptls.o io.o sched.o logger.o frame.o loader.o config.o channel.o \
 	cryptostub.o sha1.o http.o fixedjitterbuf.o abstract_jb.o \
 	strcompat.o threadstorage.o dial.o event.o adsistub.o audiohook.o \
 	astobj2.o hashtab.o global_datastores.o version.o \
-	features.o taskprocessor.o timing.o datastore.o
+	features.o taskprocessor.o timing.o datastore.o xml.o xmldoc.o \
+	strings.o
 
 # we need to link in the objects statically, not as a library, because
 # otherwise modules will not have them available if none of the static
@@ -39,9 +40,9 @@ OBJS+=stdtime/localtime.o
 # by a module.
 OBJS+=say.o
 
-AST_LIBS += $(SSL_LIB)
+AST_LIBS += $(OPENSSL_LIB)
 AST_LIBS += $(BKTR_LIB)
-
+AST_LIBS += $(LIBXML2_LIB) 
 
 ifeq ($(POLL_AVAILABLE),)
   OBJS+=poll.o
@@ -123,9 +124,12 @@ ast_expr2.c ast_expr2.h:
 	bison -o $@ -d --name-prefix=ast_yy ast_expr2.y
 
 ast_expr2f.c:
-	flex -o $@ --full ast_expr2.fl # moved the correction of yyfree into the flex input file itself.
-	sed 's@#if __STDC_VERSION__ >= 199901L@#if !defined __STDC_VERSION__ || __STDC_VERSION__ >= 199901L@' ast_expr2f.c > zz
-	mv zz ast_expr2f.c
+	flex -o $@ --full ast_expr2.fl
+	sed 's@#if __STDC_VERSION__ >= 199901L@#if !defined __STDC_VERSION__ || __STDC_VERSION__ >= 199901L@' $@ > $@.fix
+	echo "#include \"asterisk.h\"" > $@
+	echo >> $@
+	cat $@.fix >> $@
+	rm $@.fix
 
 ast_expr2f.o: ASTCFLAGS+=-Wno-unused
 
@@ -139,7 +143,7 @@ ifneq ($(findstring ENABLE_UPLOADS,$(MENUSELECT_CFLAGS)),)
 http.o: ASTCFLAGS+=$(GMIME_INCLUDE)
 endif
 
-stdtime/localtime.o: ASTCFLAGS+=$(AST_NO_STRICT_OVERFLOW)
+stdtime/localtime.o: ASTCFLAGS+=$(AST_NO_STRICT_OVERFLOW) -Wno-format-nonliteral
 
 AST_EMBED_LDSCRIPTS:=$(sort $(EMBED_LDSCRIPTS))
 AST_EMBED_LDFLAGS:=$(foreach dep,$(EMBED_LDFLAGS),$(value $(dep)))

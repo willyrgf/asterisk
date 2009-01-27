@@ -722,14 +722,14 @@ void callerid_free(struct callerid_state *cid)
 
 static int callerid_genmsg(char *msg, int size, const char *number, const char *name, int flags)
 {
-	struct timeval tv = ast_tvnow();
+	struct timeval now = ast_tvnow();
 	struct ast_tm tm;
 	char *ptr;
 	int res;
 	int i, x;
 
 	/* Get the time */
-	ast_localtime(&tv, &tm, NULL);
+	ast_localtime(&now, &tm, NULL);
 	
 	ptr = msg;
 	
@@ -994,16 +994,15 @@ int ast_is_shrinkable_phonenumber(const char *exten)
 	return ast_is_valid_string(exten, "0123456789*#+()-.");
 }
 
-/*! \brief parse string for caller id information 
-	\return always returns 0, as the code always returns something.
-  XXX note that 'name' is not parsed consistently e.g. we have
-
-	input			location	name
-	" foo bar " <123>	123		' foo bar ' (with spaces around)
-	" foo bar "		NULL		'foo bar' (without spaces around)
-	" foo bar  <123>"	123		'" foo bar'
-  The parsing of leading and trailing space/quotes should be more consistent.
-*/
+/*!
+ * \brief Destructively parse instr for caller id information 
+ * \return always returns 0, as the code always returns something.
+ * \note XXX 'name' is not parsed consistently e.g. we have
+ * input                   location        name
+ * " foo bar " <123>       123             ' foo bar ' (with spaces around)
+ * " foo bar "             NULL            'foo bar' (without spaces around)
+ * The parsing of leading and trailing space/quotes should be more consistent.
+ */
 int ast_callerid_parse(char *instr, char **name, char **location)
 {
 	char *ns, *ne, *ls, *le;
@@ -1015,6 +1014,15 @@ int ast_callerid_parse(char *instr, char **name, char **location)
 		if ((ns = strchr(instr, '"')) && (ne = strchr(ns + 1, '"'))) {
 			*ns = *ne = '\0';	/* trim off the quotes */
 			*name = ns + 1;		/* and this is the name */
+		} else if (ns) {
+			/* An opening quote was found but no closing quote was. The closing
+			 * quote may actually be after the end of the bracketed number
+			 */
+			if (strchr(le + 1, '\"')) {
+				*ns = '\0';
+				*name = ns + 1;
+				ast_trim_blanks(*name);
+			}
 		} else { /* no quotes, trim off leading and trailing spaces */
 			*name = ast_skip_blanks(instr);
 			ast_trim_blanks(*name);

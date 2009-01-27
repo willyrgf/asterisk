@@ -27,57 +27,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define AST_API_MODULE 1
 #include "asterisk/lock.h"
 
-#include "asterisk/strings.h"
-
-/* I included this from utils.c, so as not to have everything in that .c
-   file included */
-/*!
- * core handler for dynamic strings.
- * This is not meant to be called directly, but rather through the
- * various wrapper macros
- *	ast_str_set(...)
- *	ast_str_append(...)
- *	ast_str_set_va(...)
- *	ast_str_append_va(...)
- */
-int __attribute__((format (printf, 4, 0))) __ast_str_helper(struct ast_str **buf, size_t max_len,
-	int append, const char *fmt, va_list ap)
-{
-	int res, need;
-	int offset = (append && (*buf)->len) ? (*buf)->used : 0;
-
-	if (max_len < 0)
-		max_len = (*buf)->len;	/* don't exceed the allocated space */
-	/*
-	 * Ask vsnprintf how much space we need. Remember that vsnprintf
-	 * does not count the final '\0' so we must add 1.
-	 */
-	res = vsnprintf((*buf)->str + offset, (*buf)->len - offset, fmt, ap);
-
-	need = res + offset + 1;
-	/*
-	 * If there is not enough space and we are below the max length,
-	 * reallocate the buffer and return a message telling to retry.
-	 */
-	if (need > (*buf)->len && (max_len == 0 || (*buf)->len < max_len) ) {
-		if (max_len && max_len < need)	/* truncate as needed */
-			need = max_len;
-		else if (max_len == 0)	/* if unbounded, give more room for next time */
-			need += 16 + need/4;
-		if (ast_str_make_space(buf, need)) {
-			return AST_DYNSTR_BUILD_FAILED;
-		}
-		(*buf)->str[offset] = '\0';	/* Truncate the partial write. */
-
-		/* va_end() and va_start() must be done before calling
-		 * vsnprintf() again. */
-		return AST_DYNSTR_BUILD_RETRY;
-	}
-	/* update space used, keep in mind the truncation */
-	(*buf)->used = (res + offset > (*buf)->len) ? (*buf)->len : res + offset;
-
-	return res;
-}
 #ifndef DEBUG_THREADS
 enum ast_lock_type {
 	        AST_MUTEX,
@@ -85,6 +34,23 @@ enum ast_lock_type {
 	        AST_WRLOCK,
 };
 #endif
+#ifdef DEBUG_THREADLOCALS
+#define MALLOC_FAILURE_MSG \
+	ast_log(LOG_ERROR, "Memory Allocation Failure in function %s at line %d of %s\n", func, lineno, file);
+
+void * attribute_malloc _ast_calloc(size_t num, size_t len, const char *file, int lineno, const char *func);
+
+void * attribute_malloc _ast_calloc(size_t num, size_t len, const char *file, int lineno, const char *func)
+{
+	void *p;
+
+	if (!(p = calloc(num, len)))
+		MALLOC_FAILURE_MSG;
+
+	return p;
+}
+#endif
+
 #if !defined(LOW_MEMORY)
 #ifdef HAVE_BKTR
 void ast_store_lock_info(enum ast_lock_type type, const char *filename,
@@ -148,7 +114,7 @@ struct varz *global_varlist;
 
 /* Our own version of ast_log, since the expr parser uses it. */
 
-void ast_log(int level, const char *file, int line, const char *function, const char *fmt, ...) __attribute__ ((format (printf,5,6)));
+void ast_log(int level, const char *file, int line, const char *function, const char *fmt, ...) __attribute__((format(printf,5,6)));
 
 void ast_log(int level, const char *file, int line, const char *function, const char *fmt, ...)
 {

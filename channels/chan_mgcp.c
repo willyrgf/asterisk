@@ -153,10 +153,12 @@ static int nat = 0;
 static ast_group_t cur_callergroup = 0;
 static ast_group_t cur_pickupgroup = 0;
 
-static unsigned int tos = 0;
-static unsigned int tos_audio = 0;
-static unsigned int cos = 0;
-static unsigned int cos_audio = 0;
+static struct {
+	unsigned int tos;
+	unsigned int tos_audio;
+	unsigned int cos;
+	unsigned int cos_audio;
+} qos = { 0, 0, 0, 0 };
 
 static int immediate = 0;
 
@@ -460,16 +462,16 @@ static int has_voicemail(struct mgcp_endpoint *p)
 {
 	int new_msgs;
 	struct ast_event *event;
-	char *mailbox, *context;
+	char *mbox, *cntx;
 
-	context = mailbox = ast_strdupa(p->mailbox);
-	strsep(&context, "@");
-	if (ast_strlen_zero(context))
-		context = "default";
+	cntx = mbox = ast_strdupa(p->mailbox);
+	strsep(&cntx, "@");
+	if (ast_strlen_zero(cntx))
+		cntx = "default";
 
 	event = ast_event_get_cached(AST_EVENT_MWI,
-		AST_EVENT_IE_MAILBOX, AST_EVENT_IE_PLTYPE_STR, mailbox,
-		AST_EVENT_IE_CONTEXT, AST_EVENT_IE_PLTYPE_STR, context,
+		AST_EVENT_IE_MAILBOX, AST_EVENT_IE_PLTYPE_STR, mbox,
+		AST_EVENT_IE_CONTEXT, AST_EVENT_IE_PLTYPE_STR, cntx,
 		AST_EVENT_IE_NEWMSGS, AST_EVENT_IE_PLTYPE_EXISTS,
 		AST_EVENT_IE_END);
 
@@ -694,7 +696,7 @@ static int mgcp_postrequest(struct mgcp_endpoint *p, struct mgcp_subchannel *sub
 	struct mgcp_message *msg;
 	struct mgcp_message *cur;
 	struct mgcp_gateway *gw;
- 	struct timeval tv;
+ 	struct timeval now;
 
 	msg = ast_malloc(sizeof(*msg) + len);
 	if (!msg) {
@@ -731,8 +733,8 @@ static int mgcp_postrequest(struct mgcp_endpoint *p, struct mgcp_subchannel *sub
 		gw->msgs = msg;
 	}
 
-	tv = ast_tvnow();
-	msg->expire = tv.tv_sec * 1000 + tv.tv_usec / 1000 + DEFAULT_RETRANS;
+	now = ast_tvnow();
+	msg->expire = now.tv_sec * 1000 + now.tv_usec / 1000 + DEFAULT_RETRANS;
 
 	if (gw->retransid == -1)
 		gw->retransid = ast_sched_add(sched, DEFAULT_RETRANS, retrans_pkt, (void *)gw);
@@ -1137,31 +1139,6 @@ static char *handle_mgcp_audit_endpoint(struct ast_cli_entry *e, int cmd, struct
 	return CLI_SUCCESS;
 }
 
-static char *handle_mgcp_set_debug_deprecated(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
-{
-	switch (cmd) {
-	case CLI_INIT:
-		e->command = "mgcp set debug [off]";
-		e->usage =
-			"Usage: mgcp set debug [off]\n"
-			"       Enables/Disables dumping of MGCP packets for debugging purposes\n";	
-		return NULL;
-	case CLI_GENERATE:
-		return NULL;
-	}
-
-	if (a->argc < 3 || a->argc > 4)
-		return CLI_SHOWUSAGE;
-	if (a->argc == 3) {
-		mgcpdebug = 1;
-		ast_cli(a->fd, "MGCP Debugging Enabled\n");
-	} else if (!strncasecmp(a->argv[3], "off", 3)) {
-		mgcpdebug = 0;
-		ast_cli(a->fd, "MGCP Debugging Disabled\n");
-	}
-	return CLI_SUCCESS;
-}
-
 static char *handle_mgcp_set_debug(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	switch (cmd) {
@@ -1190,11 +1167,10 @@ static char *handle_mgcp_set_debug(struct ast_cli_entry *e, int cmd, struct ast_
 	return CLI_SUCCESS;
 }
 
-static struct ast_cli_entry cli_mgcp_set_debug_deprecated = AST_CLI_DEFINE(handle_mgcp_set_debug_deprecated, "Enable/Disable MGCP debugging");
 static struct ast_cli_entry cli_mgcp[] = {
 	AST_CLI_DEFINE(handle_mgcp_audit_endpoint, "Audit specified MGCP endpoint"),
 	AST_CLI_DEFINE(handle_mgcp_show_endpoints, "List defined MGCP endpoints"),
-	AST_CLI_DEFINE(handle_mgcp_set_debug, "Enable/Disable MGCP debugging", .deprecate_cmd = &cli_mgcp_set_debug_deprecated),
+	AST_CLI_DEFINE(handle_mgcp_set_debug, "Enable/Disable MGCP debugging"),
 	AST_CLI_DEFINE(mgcp_reload, "Reload MGCP configuration"),
 };
 
@@ -2644,7 +2620,7 @@ static void start_rtp(struct mgcp_subchannel *sub)
 	if (sub->rtp && sub->owner)
 		ast_channel_set_fd(sub->owner, 0, ast_rtp_fd(sub->rtp));
 	if (sub->rtp) {
-		ast_rtp_setqos(sub->rtp, tos_audio, cos_audio, "MGCP RTP");
+		ast_rtp_setqos(sub->rtp, qos.tos_audio, qos.cos_audio, "MGCP RTP");
 		ast_rtp_setnat(sub->rtp, sub->nat);
 	}
 #if 0
@@ -3429,8 +3405,9 @@ static void *do_monitor(void *data)
 			ast_verb(1, "Reloading MGCP\n");
 			reload_config(1);
 			/* Add an I/O event to our UDP socket */
-			if (mgcpsock > -1) 
+			if (mgcpsock > -1 && !mgcpsock_read_id) {
 				mgcpsock_read_id = ast_io_add(io, mgcpsock, mgcpsock_read, AST_IO_IN, NULL);
+			}
 		}
 
 		/* Check for interfaces needing to be killed */
@@ -3750,14 +3727,14 @@ static struct mgcp_gateway *build_gateway(char *cat, struct ast_variable *v)
 					ast_copy_string(e->mailbox, mailbox, sizeof(e->mailbox));
 					ast_copy_string(e->parkinglot, parkinglot, sizeof(e->parkinglot));
 					if (!ast_strlen_zero(e->mailbox)) {
-						char *mailbox, *context;
-						context = mailbox = ast_strdupa(e->mailbox);
-						strsep(&context, "@");
-						if (ast_strlen_zero(context))
-							context = "default";
+						char *mbox, *cntx;
+						cntx = mbox = ast_strdupa(e->mailbox);
+						strsep(&cntx, "@");
+						if (ast_strlen_zero(cntx))
+							cntx = "default";
 						e->mwi_event_sub = ast_event_subscribe(AST_EVENT_MWI, mwi_event_cb, NULL,
-							AST_EVENT_IE_MAILBOX, AST_EVENT_IE_PLTYPE_STR, mailbox,
-							AST_EVENT_IE_CONTEXT, AST_EVENT_IE_PLTYPE_STR, context,
+							AST_EVENT_IE_MAILBOX, AST_EVENT_IE_PLTYPE_STR, mbox,
+							AST_EVENT_IE_CONTEXT, AST_EVENT_IE_PLTYPE_STR, cntx,
 							AST_EVENT_IE_NEWMSGS, AST_EVENT_IE_PLTYPE_EXISTS,
 							AST_EVENT_IE_END);
 					}
@@ -4118,8 +4095,12 @@ static int reload_config(int reload)
 	if (!cfg) {
 		ast_log(LOG_NOTICE, "Unable to load config %s, MGCP disabled\n", config);
 		return 0;
-	} else if (cfg == CONFIG_STATUS_FILEUNCHANGED)
+	} else if (cfg == CONFIG_STATUS_FILEUNCHANGED) {
 		return 0;
+	} else if (cfg == CONFIG_STATUS_FILEINVALID) {
+		ast_log(LOG_ERROR, "Config file %s is in an invalid format.  Aborting.\n", config);
+		return 0;
+	}
 
 	memset(&bindaddr, 0, sizeof(bindaddr));
 	dtmfmode = 0;
@@ -4155,16 +4136,16 @@ static int reload_config(int reload)
 			else
 				capability &= ~format;
 		} else if (!strcasecmp(v->name, "tos")) {
-			if (ast_str2tos(v->value, &tos))
+			if (ast_str2tos(v->value, &qos.tos))
 			    ast_log(LOG_WARNING, "Invalid tos value at line %d, refer to QoS documentation\n", v->lineno);
 		} else if (!strcasecmp(v->name, "tos_audio")) {
-			if (ast_str2tos(v->value, &tos_audio))
+			if (ast_str2tos(v->value, &qos.tos_audio))
 			    ast_log(LOG_WARNING, "Invalid tos_audio value at line %d, refer to QoS documentation\n", v->lineno);
 		} else if (!strcasecmp(v->name, "cos")) {				
-			if (ast_str2cos(v->value, &cos))
+			if (ast_str2cos(v->value, &qos.cos))
 			    ast_log(LOG_WARNING, "Invalid cos value at line %d, refer to QoS documentation\n", v->lineno);
 		} else if (!strcasecmp(v->name, "cos_audio")) {				
-			if (ast_str2cos(v->value, &cos_audio))
+			if (ast_str2cos(v->value, &qos.cos_audio))
 			    ast_log(LOG_WARNING, "Invalid cos_audio value at line %d, refer to QoS documentation\n", v->lineno);
 		} else if (!strcasecmp(v->name, "port")) {
 			if (sscanf(v->value, "%d", &ourport) == 1) {
@@ -4249,7 +4230,7 @@ static int reload_config(int reload)
 		} else {
 			ast_verb(2, "MGCP Listening on %s:%d\n",
 					ast_inet_ntoa(bindaddr.sin_addr), ntohs(bindaddr.sin_port));
-			ast_netsock_set_qos(mgcpsock, tos, cos, "MGCP");
+			ast_netsock_set_qos(mgcpsock, qos.tos, qos.cos, "MGCP");
 		}
 	}
 	ast_mutex_unlock(&netlock);

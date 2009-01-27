@@ -54,29 +54,56 @@ AST_APP_OPTIONS(auth_app_options, {
 
 
 static char *app = "Authenticate";
-
-static char *synopsis = "Authenticate a user";
-
-static char *descrip =
-"  Authenticate(password[,options[,maxdigits]]): This application asks the caller\n"
-"to enter a given password in order to continue dialplan execution. If the password\n"
-"begins with the '/' character, it is interpreted as a file which contains a list of\n"
-"valid passwords, listed 1 password per line in the file.\n"
-"  When using a database key, the value associated with the key can be anything.\n"
-"Users have three attempts to authenticate before the channel is hung up.\n"
-"  Options:\n"
-"     a - Set the channels' account code to the password that is entered\n"
-"     d - Interpret the given path as database key, not a literal file\n"
-"     m - Interpret the given path as a file which contains a list of account\n"
-"         codes and password hashes delimited with ':', listed one per line in\n"
-"         the file. When one of the passwords is matched, the channel will have\n"
-"         its account code set to the corresponding account code in the file.\n"
-"     r - Remove the database key upon successful entry (valid with 'd' only)\n"
-"     maxdigits  - maximum acceptable number of digits. Stops reading after\n"
-"         maxdigits have been entered (without requiring the user to\n"
-"         press the '#' key).\n"
-"         Defaults to 0 - no limit - wait for the user press the '#' key.\n"
-;
+/*** DOCUMENTATION
+	<application name="Authenticate" language="en_US">
+		<synopsis>
+			Authenticate a user
+		</synopsis>
+		<syntax>
+			<parameter name="password" required="true">
+				<para>Password the user should know</para>
+			</parameter>
+			<parameter name="options" required="false">
+				<optionlist>
+					<option name="a">
+						<para>Set the channels' account code to the password that is entered</para>
+					</option>
+					<option name="d">
+						<para>Interpret the given path as database key, not a literal file</para>
+					</option>
+					<option name="m">
+						<para>Interpret the given path as a file which contains a list of account
+						codes and password hashes delimited with <literal>:</literal>, listed one per line in
+						the file. When one of the passwords is matched, the channel will have
+						its account code set to the corresponding account code in the file.</para>
+					</option>
+					<option name="r">
+						<para>Remove the database key upon successful entry (valid with <literal>d</literal> only)</para>
+					</option>
+				</optionlist>
+			</parameter>
+			<parameter name="maxdigits" required="false">
+				<para>maximum acceptable number of digits. Stops reading after
+				maxdigits have been entered (without requiring the user to press the <literal>#</literal> key).
+				Defaults to 0 - no limit - wait for the user press the <literal>#</literal> key.</para>
+			</parameter>
+			<parameter name="prompt" required="false">
+				<para>Override the agent-pass prompt file.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>This application asks the caller to enter a given password in order to continue dialplan execution.</para>
+			<para>If the password begins with the <literal>/</literal> character, 
+			it is interpreted as a file which contains a list of valid passwords, listed 1 password per line in the file.</para>
+			<para>When using a database key, the value associated with the key can be anything.</para>
+			<para>Users have three attempts to authenticate before the channel is hung up.</para>
+		</description>
+		<see-also>
+			<ref type="application">VMAuthenticate</ref>
+			<ref type="application">DISA</ref>
+		</see-also>
+	</application>
+ ***/
 
 static int auth_exec(struct ast_channel *chan, void *data)
 {
@@ -88,6 +115,7 @@ static int auth_exec(struct ast_channel *chan, void *data)
 		AST_APP_ARG(password);
 		AST_APP_ARG(options);
 		AST_APP_ARG(maxdigits);
+		AST_APP_ARG(prompt);
 	);
 
 	if (ast_strlen_zero(data)) {
@@ -115,6 +143,12 @@ static int auth_exec(struct ast_channel *chan, void *data)
 		maxdigits = sizeof(passwd) - 2;
 	}
 
+	if (!ast_strlen_zero(arglist.prompt)) {
+		prompt = arglist.prompt;
+	} else {
+		prompt = "agent-pass";
+	}
+   
 	/* Start asking for password */
 	for (retries = 0; retries < 3; retries++) {
 		if ((res = ast_app_getdata(chan, prompt, passwd, maxdigits, 0)) < 0)
@@ -151,7 +185,9 @@ static int auth_exec(struct ast_channel *chan, void *data)
 				if (feof(f))
 					break;
 
-				fgets(buf, sizeof(buf), f);
+				if (!fgets(buf, sizeof(buf), f)) {
+					continue;
+				}
 
 				if (ast_strlen_zero(buf))
 					continue;
@@ -216,7 +252,7 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	if (ast_register_application(app, auth_exec, synopsis, descrip))
+	if (ast_register_application_xml(app, auth_exec))
 		return AST_MODULE_LOAD_FAILURE;
 	return AST_MODULE_LOAD_SUCCESS;
 }

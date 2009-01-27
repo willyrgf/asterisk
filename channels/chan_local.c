@@ -217,6 +217,10 @@ static int local_queue_frame(struct local_pvt *p, int isoutbound, struct ast_fra
 		return 0;
 	}
 
+	/* do not queue frame if generator is on both local channels */
+	if (us && us->generator && other->generator)
+		return 0;
+
 	/* Ensure that we have both channels locked */
 	while (other && ast_channel_trylock(other)) {
 		ast_mutex_unlock(&p->lock);
@@ -283,7 +287,7 @@ static void check_bridge(struct local_pvt *p, int isoutbound)
 			if (!ast_check_hangup(p->chan->_bridge)) {
 				if (!ast_channel_trylock(p->owner)) {
 					if (!ast_check_hangup(p->owner)) {
-						if(p->owner->monitor && !p->chan->_bridge->monitor) {
+						if (p->owner->monitor && !p->chan->_bridge->monitor) {
 							/* If a local channel is being monitored, we don't want a masquerade
 							 * to cause the monitor to go away. Since the masquerade swaps the monitors,
 							 * pre-swapping the monitors before the masquerade will ensure that the monitor
@@ -292,6 +296,12 @@ static void check_bridge(struct local_pvt *p, int isoutbound)
 							tmp = p->owner->monitor;
 							p->owner->monitor = p->chan->_bridge->monitor;
 							p->chan->_bridge->monitor = tmp;
+						}
+						if (p->chan->audiohooks) {
+							struct ast_audiohook_list *audiohooks_swapper;
+							audiohooks_swapper = p->chan->audiohooks;
+							p->chan->audiohooks = p->owner->audiohooks;
+							p->owner->audiohooks = audiohooks_swapper;
 						}
 						ast_channel_masquerade(p->owner, p->chan->_bridge);
 						ast_set_flag(p, LOCAL_ALREADY_MASQED);
@@ -501,15 +511,26 @@ static int local_call(struct ast_channel *ast, char *dest, int timeout)
 	 * Note that cid_num and cid_name aren't passed in the ast_channel_alloc
 	 * call, so it's done here instead.
 	 */
+	p->chan->cid.cid_dnid = ast_strdup(p->owner->cid.cid_dnid);
 	p->chan->cid.cid_num = ast_strdup(p->owner->cid.cid_num);
 	p->chan->cid.cid_name = ast_strdup(p->owner->cid.cid_name);
 	p->chan->cid.cid_rdnis = ast_strdup(p->owner->cid.cid_rdnis);
 	p->chan->cid.cid_ani = ast_strdup(p->owner->cid.cid_ani);
 	p->chan->cid.cid_pres = p->owner->cid.cid_pres;
+	p->chan->cid.cid_ani2 = p->owner->cid.cid_ani2;
+	p->chan->cid.cid_ton = p->owner->cid.cid_ton;
+	p->chan->cid.cid_tns = p->owner->cid.cid_tns;
 	ast_string_field_set(p->chan, language, p->owner->language);
 	ast_string_field_set(p->chan, accountcode, p->owner->accountcode);
+	ast_string_field_set(p->chan, musicclass, p->owner->musicclass);
 	ast_cdr_update(p->chan);
 	p->chan->cdrflags = p->owner->cdrflags;
+
+	if (!ast_exists_extension(NULL, p->chan->context, p->chan->exten, 1, p->owner->cid.cid_num)) {
+		ast_log(LOG_NOTICE, "No such extension/context %s@%s while calling Local channel\n", p->chan->exten, p->chan->context);
+		ast_mutex_unlock(&p->lock);
+		return -1;
+	}
 
 	/* copy the channel variables from the incoming channel to the outgoing channel */
 	/* Note that due to certain assumptions, they MUST be in the same order */
@@ -575,8 +596,12 @@ static int local_hangup(struct ast_channel *ast)
 	} else {
 		p->owner = NULL;
 		ast_module_user_remove(p->u_owner);
+		while (p->chan && ast_channel_trylock(p->chan)) {
+			DEADLOCK_AVOIDANCE(&p->lock);
+		}
 		if (p->chan) {
 			ast_queue_hangup(p->chan);
+			ast_channel_unlock(p->chan);
 		}
 	}
 	
@@ -656,15 +681,22 @@ static struct local_pvt *local_alloc(const char *data, int format)
 
 	tmp->reqformat = format;
 
+#if 0
+	/* We can't do this check here, because we don't know the CallerID yet, and
+	 * the CallerID could potentially affect what step is actually taken (or
+	 * even if that step exists). */
 	if (!ast_exists_extension(NULL, tmp->context, tmp->exten, 1, NULL)) {
 		ast_log(LOG_NOTICE, "No such extension/context %s@%s creating local channel\n", tmp->exten, tmp->context);
 		tmp = local_pvt_destroy(tmp);
 	} else {
+#endif
 		/* Add to list */
 		AST_LIST_LOCK(&locals);
 		AST_LIST_INSERT_HEAD(&locals, tmp, list);
 		AST_LIST_UNLOCK(&locals);
+#if 0
 	}
+#endif
 	
 	return tmp;
 }

@@ -55,6 +55,10 @@ maxlogins=3
 ; Move heard messages to the 'Old' folder automagically.  Defaults to on.
 ;moveheard=yes
 ;
+; Forward an urgent message as an urgent message.  Defaults to no so
+; sender can set the urgency on the envelope of the forwarded message.
+;forward_urgent_auto=no
+;
 ; User context is where entries from users.conf are registered.  The
 ; default value is 'default'
 ;
@@ -306,8 +310,6 @@ european=Europe/Copenhagen|'vm-received' a d b 'digits/at' HM
 
 
 [default]
-; Define maximum number of messages per folder for a particular context.
-;maxmsg=50
 
 1234 => 4242,Example Mailbox,root@localhost
 ;4200 => 9855,Mark Spencer,markster@linux-support.net,mypager@digium.com,attach=no|serveremail=myaddy@digium.com|tz=central|maxmsg=10
@@ -334,7 +336,14 @@ european=Europe/Copenhagen|'vm-received' a d b 'digits/at' HM
 ; Pete telecommutes from Chicago, so we'll customize timestamps for him.
 ;
 ;[acme]
-;tz=eastern
 ;111 => 7383,Pete,pete@acme-widgets.com,,tz=central
 ;112 => 6262,Nancy,nancy@acme-widgets.com
 ;
+
+;
+; When using IMAP storage, imapuser and imappassword can be used to specify the
+; user's credentials.
+;
+;[imapvm]
+;4324 => 7764,Ellis Redding,red@buxton.us,,imapuser=eredding|imappassword=g3tbusy
+;4325 => 2392,Andrew Dufresne,andy@dufresne.info,,imapuser=adufresne|imappassword=rockh@mmer

@@ -69,6 +69,11 @@ struct rc_obj /* short for refcounted object */
 	struct rc_hist *last;
 };
 
+void pbx_substitute_variables_helper_full(struct ast_channel *c, struct varshead *headp, const char *cp1, char *cp2, int cp2_size, size_t *used);
+void pbx_substitute_variables_helper_full(struct ast_channel *c, struct varshead *headp, const char *cp1, char *cp2, int cp2_size, size_t *used)
+{
+}
+
 static unsigned int hashtab_hash_rc(const void *obj)
 {
 	const struct rc_obj *rc = obj;
@@ -156,7 +161,7 @@ int main(int argc,char **argv)
 		} else {
 			/* NO obj at ALL? -- better make one! */
 			if (*(t+1) != '=') {
-				printf("BAD: object %x appears without previous allocation marker!\n", count1_obj->addr);
+				printf("BAD: object %x appears without previous allocation marker!\n", un);
 			}
 			curr_obj = count1_obj = alloc_obj(un, 1);
 			/* put it in the hashtable */

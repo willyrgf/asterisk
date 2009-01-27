@@ -2,7 +2,7 @@
  * Asterisk -- A telephony toolkit for Linux.
  *
  * General Definitions for Asterisk top level program
- * 
+ *
  * Copyright (C) 1999-2006, Digium, Inc.
  *
  * Mark Spencer <markster@digium.com>
@@ -18,18 +18,13 @@
 #ifndef _ASTERISK_H
 #define _ASTERISK_H
 
-/* The include of 'autoconfig.h' is not necessary for any modules that
-   are part of the Asterisk source tree, because the top-level Makefile
-   will forcibly include that header in all compilations before all
-   other headers (even system headers). However, leaving this here will
-   help out-of-tree module builders, and doesn't cause any harm for the
-   in-tree modules.
-*/
 #include "asterisk/autoconfig.h"
 
-#include "asterisk/compat.h"
+#if !defined(NO_MALLOC_DEBUG) && !defined(STANDALONE) && defined(MALLOC_DEBUG)
+#include "asterisk/astmm.h"
+#endif
 
-#include "asterisk/logger.h"
+#include "asterisk/compat.h"
 
 /* Default to allowing the umask or filesystem ACLs to determine actual file
  * creation permissions
@@ -59,9 +54,9 @@ int ast_set_priority(int);			/*!< Provided by asterisk.c */
  */
 int ast_register_atexit(void (*func)(void));
 
-/*!   
+/*!
  * \brief Unregister a function registered with ast_register_atexit().
- * \param func The callback function to unregister.   
+ * \param func The callback function to unregister.
  */
 void ast_unregister_atexit(void (*func)(void));
 
@@ -69,7 +64,7 @@ void ast_unregister_atexit(void (*func)(void));
 /*!
  * \brief Register the version of a source code file with the core.
  * \param file the source file name
- * \param version the version string (typically a CVS revision keyword string)
+ * \param version the version string (typically a SVN revision keyword string)
  * \return nothing
  *
  * This function should not be called directly, but instead the
@@ -94,11 +89,12 @@ void ast_unregister_file_version(const char *file);
  */
 const char *ast_file_version_find(const char *file);
 
+char *ast_complete_source_filename(const char *partial, int n);
 
 /*!
  * \brief Register/unregister a source code file with the core.
  * \param file the source file name
- * \param version the version string (typically a CVS revision keyword string)
+ * \param version the version string (typically a SVN revision keyword string)
  *
  * This macro will place a file-scope constructor and destructor into the
  * source of the module using it; this will cause the version of this file
@@ -112,8 +108,8 @@ const char *ast_file_version_find(const char *file);
  * \endcode
  *
  * \note The dollar signs above have been protected with backslashes to keep
- * CVS from modifying them in this file; under normal circumstances they would
- * not be present and CVS would expand the Revision keyword into the file's
+ * SVN from modifying them in this file; under normal circumstances they would
+ * not be present and SVN would expand the Revision keyword into the file's
  * revision number.
  */
 #ifdef MTX_PROFILE
@@ -180,5 +176,16 @@ struct ast_frame;
 struct ast_module;
 struct ast_variable;
 struct ast_str;
+
+#ifdef bzero
+#undef bzero
+#endif
+
+#ifdef bcopy
+#undef bcopy
+#endif
+
+#define bzero  0x__dont_use_bzero__use_memset_instead""
+#define bcopy  0x__dont_use_bcopy__use_memmove_instead()
 
 #endif /* _ASTERISK_H */

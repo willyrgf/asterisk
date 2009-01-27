@@ -271,9 +271,10 @@ static int check_header(FILE *f)
 	if (magic != (uint32_t) AU_MAGIC) {
 		ast_log(LOG_WARNING, "Bad magic: 0x%x\n", magic);
 	}
-/*	hdr_size = ltohl(header[AU_HDR_HDR_SIZE_OFF]);
-	if (hdr_size < AU_HEADER_SIZE)*/
-	hdr_size = AU_HEADER_SIZE;
+	hdr_size = ltohl(header[AU_HDR_HDR_SIZE_OFF]);
+	if (hdr_size < AU_HEADER_SIZE) {
+		hdr_size = AU_HEADER_SIZE;
+	}
 /*	data_size = ltohl(header[AU_HDR_DATA_SIZE_OFF]); */
 	encoding = ltohl(header[AU_HDR_ENCODING_OFF]);
 	if (encoding != AU_ENC_8BIT_ULAW) {
@@ -414,7 +415,7 @@ static off_t au_tell(struct ast_filestream *fs)
 
 static const struct ast_format alaw_f = {
 	.name = "alaw",
-	.exts = "alaw|al",
+	.exts = "alaw|al|alw",
 	.format = AST_FORMAT_ALAW,
 	.write = pcm_write,
 	.seek = pcm_seek,
@@ -431,7 +432,7 @@ static const struct ast_format alaw_f = {
 
 static const struct ast_format pcm_f = {
 	.name = "pcm",
-	.exts = "pcm|ulaw|ul|mu",
+	.exts = "pcm|ulaw|ul|mu|ulw",
 	.format = AST_FORMAT_ULAW,
 	.write = pcm_write,
 	.seek = pcm_seek,
@@ -469,13 +470,13 @@ static const struct ast_format au_f = {
 
 static int load_module(void)
 {
-	int index;
+	int i;
 
 	/* XXX better init ? */
-	for (index = 0; index < ARRAY_LEN(ulaw_silence); index++)
-		ulaw_silence[index] = AST_LIN2MU(0);
-	for (index = 0; index < ARRAY_LEN(alaw_silence); index++)
-		alaw_silence[index] = AST_LIN2A(0);
+	for (i = 0; i < ARRAY_LEN(ulaw_silence); i++)
+		ulaw_silence[i] = AST_LIN2MU(0);
+	for (i = 0; i < ARRAY_LEN(alaw_silence); i++)
+		alaw_silence[i] = AST_LIN2A(0);
 
 	if ( ast_format_register(&pcm_f)
 		|| ast_format_register(&alaw_f)

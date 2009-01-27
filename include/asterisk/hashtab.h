@@ -189,16 +189,30 @@ unsigned int ast_hashtab_hash_short(const short num);
  * \param hash a func ptr to do the hashing
  * \param do_locking use locks to guarantee safety of iterators/insertion/deletion -- real simpleminded right now
 */
+#if (defined(MALLOC_DEBUG) && !defined(STANDALONE))
+struct ast_hashtab * _ast_hashtab_create(int initial_buckets,
+					int (*compare)(const void *a, const void *b), 
+					int (*resize)(struct ast_hashtab *),	
+					int (*newsize)(struct ast_hashtab *tab),
+					unsigned int (*hash)(const void *obj), 
+					int do_locking, const char *file, int lineno, const char *function);
+#define ast_hashtab_create(a,b,c,d,e,f)	_ast_hashtab_create(a,b,c,d,e,f,__FILE__,__LINE__,__PRETTY_FUNCTION__)
+#else
 struct ast_hashtab * ast_hashtab_create(int initial_buckets,
 					int (*compare)(const void *a, const void *b), 
 					int (*resize)(struct ast_hashtab *),	
 					int (*newsize)(struct ast_hashtab *tab),
 					unsigned int (*hash)(const void *obj), 
 					int do_locking );
+#endif
 
 /*!
  * \brief This func will free the hash table and all its memory. 
- * \note It doesn't touch the objects stored in it
+ * \note It doesn't touch the objects stored in it, unless you
+ *       specify a destroy func; it will call that func for each
+ *       object in the hashtab, remove all the objects, and then
+ *       free the hashtab itself. If no destroyfunc is specified
+ *       then the routine will assume you will free it yourself.
  * \param tab
  * \param objdestroyfunc
 */

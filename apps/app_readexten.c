@@ -1,9 +1,8 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 2007 Dave Chappell
- *
- * David Chappell <David.Chappell@trincoll.edu>
+ * Copyright (C) 2007-2008, Trinity College Computing Center
+ * Written by David Chappell <David.Chappell@trincoll.edu>
  *
  * See http://www.asterisk.org for more information about
  * the Asterisk project. Please do not directly contact
@@ -36,6 +35,82 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/indications.h"
 #include "asterisk/channel.h"
 
+/*** DOCUMENTATION
+	<application name="ReadExten" language="en_US">
+		<synopsis>
+			Read an extension into a variable.
+		</synopsis>
+		<syntax>
+			<parameter name="variable" required="true" />
+			<parameter name="filename">
+				<para>File to play before reading digits or tone with option <literal>i</literal></para>
+			</parameter>
+			<parameter name="context">
+				<para>Context in which to match extensions.</para>
+			</parameter>
+			<parameter name="option">
+				<optionlist>
+					<option name="s">
+						<para>Return immediately if the channel is not answered.</para>
+					</option>
+					<option name="i">
+						<para>Play <replaceable>filename</replaceable> as an indication tone from your
+						<filename>indications.conf</filename></para>
+					</option>
+					<option name="n">
+						<para>Read digits even if the channel is not answered.</para>
+					</option>
+				</optionlist>
+			</parameter>
+			<parameter name="timeout">
+				<para>An integer number of seconds to wait for a digit response. If
+				greater than <literal>0</literal>, that value will override the default timeout.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Reads a <literal>#</literal> terminated string of digits from the user into the given variable.</para>
+			<para>Will set READEXTENSTATUS on exit with one of the following statuses:</para>
+			<variablelist>
+				<variable name="READEXTENSTATUS">
+					<value name="OK">
+						A valid extension exists in ${variable}.
+					</value>
+					<value name="TIMEOUT">
+						No extension was entered in the specified time.  Also sets ${variable} to "t".
+					</value>
+					<value name="INVALID">
+						An invalid extension, ${INVALID_EXTEN}, was entered.  Also sets ${variable} to "i".
+					</value>
+					<value name="SKIP">
+						Line was not up and the option 's' was specified.
+					</value>
+					<value name="ERROR">
+						Invalid arguments were passed.
+					</value>
+				</variable>
+			</variablelist>
+		</description>
+	</application>
+	<function name="VALID_EXTEN" language="en_US">
+		<synopsis>
+			Determine whether an extension exists or not.
+		</synopsis>
+		<syntax>
+			<parameter name="context">
+				<para>Defaults to the current context</para>
+			</parameter>
+			<parameter name="extension" required="true" />
+			<parameter name="priority">
+				<para>Priority defaults to <literal>1</literal>.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Returns a true value if the indicated <replaceable>context</replaceable>,
+			<replaceable>extension</replaceable>, and <replaceable>priority</replaceable> exist.</para>
+		</description>
+	</function>
+ ***/
+
 enum {
 	OPT_SKIP = (1 << 0),
 	OPT_INDICATION = (1 << 1),
@@ -50,28 +125,6 @@ AST_APP_OPTIONS(readexten_app_options, {
 
 static char *app = "ReadExten";
 
-static char *synopsis = "Read an extension into a variable";
-
-static char *descrip = 
-"  ReadExten(<variable>[,[<filename>][,[<context>][,[<option>][,<timeout>]]]])\n\n"
-"Reads a #-terminated string of digits from the user into the given variable.\n"
-"  filename  file to play before reading digits or tone with option i\n"
-"  context   context in which to match extensions\n"
-"  option    options are:\n"
-"              s - Return immediately if the channel is not answered,\n"
-"              i - Play filename as an indication tone from your\n"
-"                  indications.conf\n"
-"              n - Read digits even if the channel is not answered.\n"
-"  timeout   An integer number of seconds to wait for a digit response. If\n"
-"            greater than 0, that value will override the default timeout.\n\n"
-"ReadExten will set READEXTENSTATUS on exit with one of the following statuses:\n"
-"  OK        A valid extension exists in ${variable}\n"
-"  TIMEOUT   No extension was entered in the specified time\n"
-"  INVALID   An invalid extension, ${INVALID_EXTEN}, was entered\n"
-"  SKIP      Line was not up and the option 's' was specified\n"
-"  ERROR     Invalid arguments were passed\n";
-
-
 static int readexten_exec(struct ast_channel *chan, void *data)
 {
 	int res = 0;
@@ -79,7 +132,7 @@ static int readexten_exec(struct ast_channel *chan, void *data)
 	int maxdigits = sizeof(exten) - 1;
 	int timeout = 0, digit_timeout = 0, x = 0;
 	char *argcopy = NULL, *status = "";
-	struct ind_tone_zone_sound *ts = NULL;
+	struct tone_zone_sound *ts = NULL;
 	struct ast_flags flags = {0};
 
 	 AST_DECLARE_APP_ARGS(arglist,
@@ -100,7 +153,7 @@ static int readexten_exec(struct ast_channel *chan, void *data)
 	AST_STANDARD_APP_ARGS(arglist, argcopy);
 
 	if (ast_strlen_zero(arglist.variable)) {
-		ast_log(LOG_WARNING, "Invalid! Usage: ReadExten(variable[|filename][|context][|options][|timeout])\n\n");
+		ast_log(LOG_WARNING, "Usage: ReadExten(variable[,filename[,context[,options[,timeout]]]])\n");
 		pbx_builtin_setvar_helper(chan, "READEXTENSTATUS", "ERROR");
 		return 0;
 	}
@@ -164,17 +217,20 @@ static int readexten_exec(struct ast_channel *chan, void *data)
 			timeout = digit_timeout;
 
 			if (res < 1) {		/* timeout expired or hangup */
-				if (ast_check_hangup(chan))
+				if (ast_check_hangup(chan)) {
 					status = "HANGUP";
-				else
+				} else {
+					pbx_builtin_setvar_helper(chan, arglist.variable, "t");
 					status = "TIMEOUT";
-				break;
-			} else if (res == '#') {
+				}
 				break;
 			}
 
 			exten[x] = res;
 			if (!ast_matchmore_extension(chan, arglist.context, exten, 1 /* priority */, chan->cid.cid_num)) {
+				if (!ast_exists_extension(chan, arglist.context, exten, 1, chan->cid.cid_num) && res == '#') {
+					exten[x] = '\0';
+				}
 				break;
 			}
 		}
@@ -188,6 +244,7 @@ static int readexten_exec(struct ast_channel *chan, void *data)
 			status = "OK";
 		} else {
 			ast_debug(3, "User dialed invalid extension '%s' in context '%s' on %s\n", exten, arglist.context, chan->name);
+			pbx_builtin_setvar_helper(chan, arglist.variable, "i");
 			pbx_builtin_setvar_helper(chan, "INVALID_EXTEN", exten);
 			status = "INVALID";
 		}
@@ -232,11 +289,6 @@ static int acf_isexten_exec(struct ast_channel *chan, const char *cmd, char *par
 
 static struct ast_custom_function acf_isexten = {
 	.name = "VALID_EXTEN",
-	.synopsis = "Determine whether an extension exists or not",
-	.syntax = "VALID_EXTEN([<context>],<extension>[,<priority>])",
-	.desc =
-"Returns a true value if the indicated context, extension, and priority exist.\n"
-"Context defaults to the current context, priority defaults to 1.\n",
 	.read = acf_isexten_exec,
 };
 
@@ -250,7 +302,7 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	int res = ast_register_application(app, readexten_exec, synopsis, descrip);
+	int res = ast_register_application_xml(app, readexten_exec);
 	res |= ast_custom_function_register(&acf_isexten);
 	return res;
 }

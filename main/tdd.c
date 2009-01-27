@@ -35,6 +35,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <math.h>
 #include <ctype.h>
 
+#include "asterisk/logger.h"
 #include "asterisk/ulaw.h"
 #include "asterisk/tdd.h"
 #include "asterisk/fskmodem.h"
@@ -234,8 +235,8 @@ static inline float tdd_getcarrier(float *cr, float *ci, int bit)
 } while(0)
 
 #define PUT_AUDIO_SAMPLE(y) do { \
-	int index = (short)(rint(8192.0 * (y))); \
-	*(buf++) = AST_LIN2MU(index); \
+	int __pas_idx = (short)(rint(8192.0 * (y))); \
+	*(buf++) = AST_LIN2MU(__pas_idx); \
 	bytes++; \
 } while(0)
 	

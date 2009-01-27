@@ -34,7 +34,7 @@
  */
 
 /*** MODULEINFO
-	<depend>ossaudio</depend>
+	<depend>oss</depend>
  ***/
 
 #include "asterisk.h"
@@ -255,9 +255,9 @@ struct chan_oss_pvt {
 	int total_blocks;			/*!< total blocks in the output device */
 	int sounddev;
 	enum { M_UNSET, M_FULL, M_READ, M_WRITE } duplex;
-	int autoanswer;
-	int autohangup;
-	int hookstate;
+	int autoanswer;             /*!< Boolean: whether to answer the immediately upon calling */
+	int autohangup;             /*!< Boolean: whether to hangup the call when the remote end hangs up */
+	int hookstate;              /*!< Boolean: 1 if offhook; 0 if onhook */
 	char *mixer_cmd;			/*!< initial command to issue to the mixer */
 	unsigned int queuesize;		/*!< max fragments in queue */
 	unsigned int frags;			/*!< parameter for SETFRAGMENT */
@@ -289,8 +289,8 @@ struct chan_oss_pvt {
 	char ext[AST_MAX_EXTENSION];
 	char ctx[AST_MAX_CONTEXT];
 	char language[MAX_LANGUAGE];
-	char cid_name[256];			/*XXX */
-	char cid_num[256];			/*XXX */
+	char cid_name[256];         /*!< Initial CallerID name */
+	char cid_num[256];          /*!< Initial CallerID number  */
 	char mohinterpret[MAX_MUSICCLASS];
 
 	/*! buffers used in oss_write */
@@ -332,8 +332,7 @@ static struct chan_oss_pvt oss_default = {
 
 static int setformat(struct chan_oss_pvt *o, int mode);
 
-static struct ast_channel *oss_request(const char *type, int format, void *data
-, int *cause);
+static struct ast_channel *oss_request(const char *type, int format, void *data, int *cause);
 static int oss_digit_begin(struct ast_channel *c, char digit);
 static int oss_digit_end(struct ast_channel *c, char digit, unsigned int duration);
 static int oss_text(struct ast_channel *c, const char *text);
@@ -622,6 +621,7 @@ static int oss_call(struct ast_channel *c, char *dest, int timeout)
 		f.frametype = AST_FRAME_CONTROL;
 		f.subclass = AST_CONTROL_ANSWER;
 		ast_queue_frame(c, &f);
+		o->hookstate = 1;
 	} else {
 		ast_verbose("<< Type 'answer' to answer, or use 'autoanswer' for future calls >> \n");
 		f.frametype = AST_FRAME_CONTROL;
@@ -637,8 +637,10 @@ static int oss_call(struct ast_channel *c, char *dest, int timeout)
  */
 static int oss_answer(struct ast_channel *c)
 {
+	struct chan_oss_pvt *o = c->tech_pvt;
 	ast_verbose(" << Console call has been answered >> \n");
 	ast_setstate(c, AST_STATE_UP);
+	o->hookstate = 1;
 	return 0;
 }
 
@@ -701,7 +703,7 @@ static struct ast_frame *oss_read(struct ast_channel *c)
 
 	/* XXX can be simplified returning &ast_null_frame */
 	/* prepare a NULL frame in case we don't have enough data to return */
-	bzero(f, sizeof(struct ast_frame));
+	memset(f, '\0', sizeof(struct ast_frame));
 	f->frametype = AST_FRAME_NULL;
 	f->src = oss_tech.type;
 
@@ -821,7 +823,6 @@ static struct ast_channel *oss_new(struct chan_oss_pvt *o, char *ext, char *ctx,
 			ast_log(LOG_WARNING, "Unable to start PBX on %s\n", c->name);
 			ast_hangup(c);
 			o->owner = c = NULL;
-			/* XXX what about the channel itself ? */
 		}
 	}
 	console_video_start(get_video_desc(c), c); /* XXX cleanup */
@@ -877,8 +878,9 @@ static char *console_cmd(struct ast_cli_entry *e, int cmd, struct ast_cli_args *
 	switch (cmd) {
 	case CLI_INIT:
 		e->command = CONSOLE_VIDEO_CMDS;
-		e->usage = "Usage: " CONSOLE_VIDEO_CMDS "...\n"
-		"       Generic handler for console commands.\n";
+		e->usage = 
+			"Usage: " CONSOLE_VIDEO_CMDS "...\n"
+			"       Generic handler for console commands.\n";
 		return NULL;
 
 	case CLI_GENERATE:
@@ -911,9 +913,9 @@ static char *console_autoanswer(struct ast_cli_entry *e, int cmd, struct ast_cli
 
 	switch (cmd) {
 	case CLI_INIT:
-		e->command = "console autoanswer [on|off]";
+		e->command = "console {set|show} autoanswer [on|off]";
 		e->usage =
-			"Usage: console autoanswer [on|off]\n"
+			"Usage: console {set|show} autoanswer [on|off]\n"
 			"       Enables or disables autoanswer feature.  If used without\n"
 			"       argument, displays the current on/off status of autoanswer.\n"
 			"       The default value of autoanswer is in 'oss.conf'.\n";
@@ -1066,7 +1068,7 @@ static char *console_flash(struct ast_cli_entry *e, int cmd, struct ast_cli_args
 		return CLI_FAILURE;
 	}
 	o->hookstate = 0;
-	if (o->owner)				/* XXX must be true, right ? */
+	if (o->owner)
 		ast_queue_frame(o->owner, &f);
 	return CLI_SUCCESS;
 }
@@ -1200,7 +1202,7 @@ static char *console_active(struct ast_cli_entry *e, int cmd, struct ast_cli_arg
 {
 	switch (cmd) {
 	case CLI_INIT:
-		e->command = "console active";
+		e->command = "console {set|show} active [<device>]";
 		e->usage =
 			"Usage: console active [device]\n"
 			"       If used without a parameter, displays which device is the current\n"
@@ -1211,20 +1213,20 @@ static char *console_active(struct ast_cli_entry *e, int cmd, struct ast_cli_arg
 		return NULL;
 	}
 
-	if (a->argc == 2)
+	if (a->argc == 3)
 		ast_cli(a->fd, "active console is [%s]\n", oss_active);
-	else if (a->argc != 3)
+	else if (a->argc != 4)
 		return CLI_SHOWUSAGE;
 	else {
 		struct chan_oss_pvt *o;
-		if (strcmp(a->argv[2], "show") == 0) {
+		if (strcmp(a->argv[3], "show") == 0) {
 			for (o = oss_default.next; o; o = o->next)
 				ast_cli(a->fd, "device [%s] exists\n", o->name);
 			return CLI_SUCCESS;
 		}
-		o = find_desc(a->argv[2]);
+		o = find_desc(a->argv[3]);
 		if (o == NULL)
-			ast_cli(a->fd, "No device [%s] exists\n", a->argv[2]);
+			ast_cli(a->fd, "No device [%s] exists\n", a->argv[3]);
 		else
 			oss_active = o->name;
 	}
@@ -1299,7 +1301,7 @@ static void store_mixer(struct chan_oss_pvt *o, const char *s)
 	int i;
 
 	for (i = 0; i < strlen(s); i++) {
-		if (!isalnum(s[i]) && index(" \t-/", s[i]) == NULL) {
+		if (!isalnum(s[i]) && strchr(" \t-/", s[i]) == NULL) {
 			ast_log(LOG_WARNING, "Suspect char %c in mixer cmd, ignoring:\n\t%s\n", s[i], s);
 			return;
 		}
@@ -1382,10 +1384,15 @@ static struct chan_oss_pvt *store_config(struct ast_config *cfg, char *ctg)
 	if (o->mixer_cmd) {
 		char *cmd;
 
-		asprintf(&cmd, "mixer %s", o->mixer_cmd);
-		ast_log(LOG_WARNING, "running [%s]\n", cmd);
-		system(cmd);
-		ast_free(cmd);
+		if (asprintf(&cmd, "mixer %s", o->mixer_cmd) < 0) {
+			ast_log(LOG_WARNING, "asprintf() failed: %s\n", strerror(errno));
+		} else {
+			ast_log(LOG_WARNING, "running [%s]\n", cmd);
+			if (system(cmd) < 0) {
+				ast_log(LOG_WARNING, "system() failed: %s\n", strerror(errno));
+			}
+			ast_free(cmd);
+		}
 	}
 
 	/* if the config file requested to start the GUI, do it */
@@ -1434,6 +1441,9 @@ static int load_module(void)
 	if (!(cfg = ast_config_load(config, config_flags))) {
 		ast_log(LOG_NOTICE, "Unable to load config %s\n", config);
 		return AST_MODULE_LOAD_DECLINE;
+	} else if (cfg == CONFIG_STATUS_FILEINVALID) {
+		ast_log(LOG_ERROR, "Config file %s is in an invalid format.  Aborting.\n", config);
+		return AST_MODULE_LOAD_DECLINE;
 	}
 
 	do {
@@ -1456,7 +1466,7 @@ static int load_module(void)
 		return AST_MODULE_LOAD_FAILURE;
 	}
 
-	ast_cli_register_multiple(cli_oss, sizeof(cli_oss) / sizeof(struct ast_cli_entry));
+	ast_cli_register_multiple(cli_oss, ARRAY_LEN(cli_oss));
 
 	return AST_MODULE_LOAD_SUCCESS;
 }
@@ -1464,18 +1474,22 @@ static int load_module(void)
 
 static int unload_module(void)
 {
-	struct chan_oss_pvt *o;
+	struct chan_oss_pvt *o, *next;
 
 	ast_channel_unregister(&oss_tech);
-	ast_cli_unregister_multiple(cli_oss, sizeof(cli_oss) / sizeof(struct ast_cli_entry));
+	ast_cli_unregister_multiple(cli_oss, ARRAY_LEN(cli_oss));
 
-	for (o = oss_default.next; o; o = o->next) {
+	o = oss_default.next;
+	while (o) {
 		close(o->sounddev);
 		if (o->owner)
 			ast_softhangup(o->owner, AST_SOFTHANGUP_APPUNLOAD);
-		if (o->owner)			/* XXX how ??? */
+		if (o->owner)
 			return -1;
-		/* XXX what about the memory allocated ? */
+		next = o->next;
+		ast_free(o->name);
+		ast_free(o);
+		o = next;
 	}
 	return 0;
 }

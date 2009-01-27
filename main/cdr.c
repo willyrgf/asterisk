@@ -201,15 +201,15 @@ static const char *ast_cdr_getvar_internal(struct ast_cdr *cdr, const char *name
 	return NULL;
 }
 
-static void cdr_get_tv(struct timeval tv, const char *fmt, char *buf, int bufsize)
+static void cdr_get_tv(struct timeval when, const char *fmt, char *buf, int bufsize)
 {
 	if (fmt == NULL) {	/* raw mode */
-		snprintf(buf, bufsize, "%ld.%06ld", (long)tv.tv_sec, (long)tv.tv_usec);
+		snprintf(buf, bufsize, "%ld.%06ld", (long)when.tv_sec, (long)when.tv_usec);
 	} else {
-		if (tv.tv_sec) {
+		if (when.tv_sec) {
 			struct ast_tm tm;
 			
-			ast_localtime(&tv, &tm, NULL);
+			ast_localtime(&when, &tm, NULL);
 			ast_strftime(buf, bufsize, fmt, &tm);
 		}
 	}
@@ -367,8 +367,7 @@ int ast_cdr_serialize_variables(struct ast_cdr *cdr, struct ast_str **buf, char 
 	char workspace[256];
 	int total = 0, x = 0, i;
 
-	(*buf)->used = 0;
-	(*buf)->str[0] = '\0';
+	ast_str_reset(*buf);
 
 	for (; cdr; cdr = recur ? cdr->next : NULL) {
 		if (++x > 1)
@@ -431,13 +430,6 @@ void ast_cdr_free(struct ast_cdr *cdr)
 
 	while (cdr) {
 		struct ast_cdr *next = cdr->next;
-		char *chan = S_OR(cdr->channel, "<unknown>");
-		if (!ast_test_flag(cdr, AST_CDR_FLAG_POSTED) && !ast_test_flag(cdr, AST_CDR_FLAG_POST_DISABLED))
-			ast_log(LOG_NOTICE, "CDR on channel '%s' not posted\n", chan);
-		if (ast_tvzero(cdr->end))
-			ast_log(LOG_NOTICE, "CDR on channel '%s' lacks end\n", chan);
-		if (ast_tvzero(cdr->start))
-			ast_log(LOG_NOTICE, "CDR on channel '%s' lacks start\n", chan);
 
 		ast_cdr_free_vars(cdr, 0);
 		ast_free(cdr);
@@ -761,6 +753,9 @@ int ast_cdr_disposition(struct ast_cdr *cdr, int cause)
 		case AST_CAUSE_BUSY:
 			ast_cdr_busy(cdr);
 			break;
+		case AST_CAUSE_NO_ANSWER:
+			ast_cdr_noanswer(cdr);
+			break;
 		case AST_CAUSE_NORMAL:
 			break;
 		default:
@@ -780,7 +775,7 @@ void ast_cdr_setdestchan(struct ast_cdr *cdr, const char *chann)
 	}
 }
 
-void ast_cdr_setapp(struct ast_cdr *cdr, char *app, char *data)
+void ast_cdr_setapp(struct ast_cdr *cdr, const char *app, const char *data)
 {
 
 	for (; cdr; cdr = cdr->next) {
@@ -874,8 +869,11 @@ void ast_cdr_end(struct ast_cdr *cdr)
 				ast_log(LOG_WARNING, "CDR on channel '%s' has no answer time but is 'ANSWERED'\n", S_OR(cdr->channel, "<unknown>"));
 				cdr->disposition = AST_CDR_FAILED;
 			}
-		} else
+		} else {
 			cdr->billsec = cdr->end.tv_sec - cdr->answer.tv_sec;
+			if (ast_test_flag(&ast_options, AST_OPT_FLAG_INITIATED_SECONDS))
+				cdr->billsec += cdr->end.tv_usec > cdr->answer.tv_usec ? 1 : 0;
+		}
 	}
 }
 
@@ -1017,10 +1015,6 @@ static void post_cdr(struct ast_cdr *cdr)
 
 		chan = S_OR(cdr->channel, "<unknown>");
 		check_post(cdr);
-		if (ast_tvzero(cdr->end))
-			ast_log(LOG_WARNING, "CDR on channel '%s' lacks end\n", chan);
-		if (ast_tvzero(cdr->start))
-			ast_log(LOG_WARNING, "CDR on channel '%s' lacks start\n", chan);
 		ast_set_flag(cdr, AST_CDR_FLAG_POSTED);
 		if (ast_test_flag(cdr, AST_CDR_FLAG_POST_DISABLED))
 			continue;
@@ -1034,7 +1028,7 @@ static void post_cdr(struct ast_cdr *cdr)
 
 void ast_cdr_reset(struct ast_cdr *cdr, struct ast_flags *_flags)
 {
-	struct ast_cdr *dup;
+	struct ast_cdr *duplicate;
 	struct ast_flags flags = { 0 };
 
 	if (_flags)
@@ -1045,8 +1039,8 @@ void ast_cdr_reset(struct ast_cdr *cdr, struct ast_flags *_flags)
 		if (ast_test_flag(&flags, AST_CDR_FLAG_LOCKED) || !ast_test_flag(cdr, AST_CDR_FLAG_LOCKED)) {
 			if (ast_test_flag(&flags, AST_CDR_FLAG_POSTED)) {
 				ast_cdr_end(cdr);
-				if ((dup = ast_cdr_dup(cdr))) {
-					ast_cdr_detach(dup);
+				if ((duplicate = ast_cdr_dup(cdr))) {
+					ast_cdr_detach(duplicate);
 				}
 				ast_set_flag(cdr, AST_CDR_FLAG_POSTED);
 			}
@@ -1081,12 +1075,15 @@ void ast_cdr_specialized_reset(struct ast_cdr *cdr, struct ast_flags *_flags)
 
 	if (_flags)
 		ast_copy_flags(&flags, _flags, AST_FLAGS_ALL);
-
-	if (_flags)
-		ast_copy_flags(&flags, _flags, AST_FLAGS_ALL);
 	
 	/* Reset to initial state */
-	ast_clear_flag(cdr, AST_FLAGS_ALL);	
+	if (ast_test_flag(cdr, AST_CDR_FLAG_POST_DISABLED)) { /* But do NOT lose the NoCDR() setting */
+		ast_clear_flag(cdr, AST_FLAGS_ALL);	
+		ast_set_flag(cdr, AST_CDR_FLAG_POST_DISABLED);
+	} else {
+		ast_clear_flag(cdr, AST_FLAGS_ALL);	
+	}
+	
 	memset(&cdr->start, 0, sizeof(cdr->start));
 	memset(&cdr->end, 0, sizeof(cdr->end));
 	memset(&cdr->answer, 0, sizeof(cdr->answer));
@@ -1150,7 +1147,7 @@ static void *do_batch_backend_process(void *data)
 	return NULL;
 }
 
-void ast_cdr_submit_batch(int shutdown)
+void ast_cdr_submit_batch(int do_shutdown)
 {
 	struct ast_cdr_batch_item *oldbatchitems = NULL;
 	pthread_t batch_post_thread = AST_PTHREADT_NULL;
@@ -1167,7 +1164,7 @@ void ast_cdr_submit_batch(int shutdown)
 
 	/* if configured, spawn a new thread to post these CDRs,
 	   also try to save as much as possible if we are shutting down safely */
-	if (batchscheduleronly || shutdown) {
+	if (batchscheduleronly || do_shutdown) {
 		ast_debug(1, "CDR single-threaded batch processing begins now\n");
 		do_batch_backend_process(oldbatchitems);
 	} else {
@@ -1339,14 +1336,6 @@ static char *handle_cli_status(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	return CLI_SUCCESS;
 }
 
-static char *handle_cli_status_deprecated(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
-{
-	char *res = handle_cli_status(e, cmd, a);
-	if (cmd == CLI_INIT)
-		e->command = "cdr status";
-	return res;
-}
-
 static char *handle_cli_submit(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	switch (cmd) {
@@ -1369,8 +1358,7 @@ static char *handle_cli_submit(struct ast_cli_entry *e, int cmd, struct ast_cli_
 }
 
 static struct ast_cli_entry cli_submit = AST_CLI_DEFINE(handle_cli_submit, "Posts all pending batched CDR data");
-static struct ast_cli_entry cli_status_deprecated = AST_CLI_DEFINE(handle_cli_status_deprecated, "Display the CDR status");
-static struct ast_cli_entry cli_status = AST_CLI_DEFINE(handle_cli_status, "Display the CDR status", .deprecate_cmd = &cli_status_deprecated);
+static struct ast_cli_entry cli_status = AST_CLI_DEFINE(handle_cli_status, "Display the CDR status");
 
 static int do_reload(int reload)
 {
@@ -1383,6 +1371,7 @@ static int do_reload(int reload)
 	const char *size_value;
 	const char *time_value;
 	const char *end_before_h_value;
+	const char *initiatedseconds_value;
 	int cfg_size;
 	int cfg_time;
 	int was_enabled;
@@ -1392,6 +1381,9 @@ static int do_reload(int reload)
 
 	if ((config = ast_config_load2("cdr.conf", "cdr", config_flags)) == CONFIG_STATUS_FILEUNCHANGED)
 		return 0;
+	if (config == CONFIG_STATUS_FILEMISSING || config == CONFIG_STATUS_FILEUNCHANGED || config == CONFIG_STATUS_FILEINVALID) {
+		return 0;
+	}
 
 	ast_mutex_lock(&cdr_batch_lock);
 
@@ -1426,7 +1418,7 @@ static int do_reload(int reload)
 		if ((size_value = ast_variable_retrieve(config, "general", "size"))) {
 			if (sscanf(size_value, "%d", &cfg_size) < 1)
 				ast_log(LOG_WARNING, "Unable to convert '%s' to a numeric value.\n", size_value);
-			else if (size_value < 0)
+			else if (cfg_size < 0)
 				ast_log(LOG_WARNING, "Invalid maximum batch size '%d' specified, using default\n", cfg_size);
 			else
 				batchsize = cfg_size;
@@ -1434,13 +1426,15 @@ static int do_reload(int reload)
 		if ((time_value = ast_variable_retrieve(config, "general", "time"))) {
 			if (sscanf(time_value, "%d", &cfg_time) < 1)
 				ast_log(LOG_WARNING, "Unable to convert '%s' to a numeric value.\n", time_value);
-			else if (time_value < 0)
+			else if (cfg_time < 0)
 				ast_log(LOG_WARNING, "Invalid maximum batch time '%d' specified, using default\n", cfg_time);
 			else
 				batchtime = cfg_time;
 		}
 		if ((end_before_h_value = ast_variable_retrieve(config, "general", "endbeforehexten")))
 			ast_set2_flag(&ast_options, ast_true(end_before_h_value), AST_OPT_FLAG_END_CDR_BEFORE_H_EXTEN);
+		if ((initiatedseconds_value = ast_variable_retrieve(config, "general", "initiatedseconds")))
+			ast_set2_flag(&ast_options, ast_true(initiatedseconds_value), AST_OPT_FLAG_INITIATED_SECONDS);
 	}
 
 	if (enabled && !batchmode) {

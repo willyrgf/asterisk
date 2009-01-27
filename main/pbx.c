@@ -12,7 +12,7 @@
  * channels for your use.
  *
  * This program is free software, distributed under the terms of
- * the GNU General Public License Version 2. See the LICENSE file
+* the GNU General Public License Version 2. See the LICENSE file
  * at the top of the source tree.
  */
 
@@ -59,12 +59,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/musiconhold.h"
 #include "asterisk/app.h"
 #include "asterisk/devicestate.h"
-#include "asterisk/stringfields.h"
 #include "asterisk/event.h"
 #include "asterisk/hashtab.h"
 #include "asterisk/module.h"
 #include "asterisk/indications.h"
 #include "asterisk/taskprocessor.h"
+#include "asterisk/xmldoc.h"
 
 /*!
  * \note I M P O R T A N T :
@@ -86,6 +86,633 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
  * speed in small dialplans, they are worth the trouble in large dialplans.
  *
  */
+
+/*** DOCUMENTATION
+	<application name="Answer" language="en_US">
+		<synopsis>
+			Answer a channel if ringing.
+		</synopsis>
+		<syntax>
+			<parameter name="delay">
+				<para>Asterisk will wait this number of milliseconds before returning to
+				the dialplan after answering the call.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>If the call has not been answered, this application will
+			answer it. Otherwise, it has no effect on the call.</para>
+		</description>
+		<see-also>
+			<ref type="application">Hangup</ref>
+		</see-also>
+	</application>
+	<application name="BackGround" language="en_US">
+		<synopsis>
+			Play an audio file while waiting for digits of an extension to go to.
+		</synopsis>
+		<syntax>
+			<parameter name="filenames" required="true" argsep="&amp;">
+				<argument name="filename1" required="true" />
+				<argument name="filename2" multiple="true" />
+			</parameter>
+			<parameter name="options">
+				<optionlist>
+					<option name="s">
+						<para>Causes the playback of the message to be skipped
+						if the channel is not in the <literal>up</literal> state (i.e. it
+						hasn't been answered yet). If this happens, the
+						application will return immediately.</para>
+					</option>
+					<option name="n">
+						<para>Don't answer the channel before playing the files.</para>
+					</option>
+					<option name="m">
+						<para>Only break if a digit hit matches a one digit
+						extension in the destination context.</para>
+					</option>
+				</optionlist>
+			</parameter>
+			<parameter name="langoverride">
+				<para>Explicitly specifies which language to attempt to use for the requested sound files.</para>
+			</parameter>
+			<parameter name="context">
+				<para>This is the dialplan context that this application will use when exiting
+				to a dialed extension.</para>
+			</parameter>	
+		</syntax>
+		<description>
+			<para>This application will play the given list of files <emphasis>(do not put extension)</emphasis>
+			while waiting for an extension to be dialed by the calling channel. To continue waiting
+			for digits after this application has finished playing files, the <literal>WaitExten</literal>
+			application should be used.</para>
+			<para>If one of the requested sound files does not exist, call processing will be terminated.</para>
+			<para>This application sets the following channel variable upon completion:</para>
+			<variablelist>
+				<variable name="BACKGROUNDSTATUS">
+					<para>The status of the background attempt as a text string.</para>
+					<value name="SUCCESS" />
+					<value name="FAILED" />
+				</variable>
+			</variablelist>
+		</description>
+		<see-also>
+			<ref type="application">ControlPlayback</ref>
+			<ref type="application">WaitExten</ref>
+			<ref type="application">BackgroundDetect</ref>
+			<ref type="function">TIMEOUT</ref>
+		</see-also>
+	</application>
+	<application name="Busy" language="en_US">
+		<synopsis>
+			Indicate the Busy condition.
+		</synopsis>
+		<syntax>
+			<parameter name="timeout">
+				<para>If specified, the calling channel will be hung up after the specified number of seconds.
+				Otherwise, this application will wait until the calling channel hangs up.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>This application will indicate the busy condition to the calling channel.</para>
+		</description>
+		<see-also>
+			<ref type="application">Congestion</ref>
+			<ref type="application">Progess</ref>
+			<ref type="application">Playtones</ref>
+			<ref type="application">Hangup</ref>
+		</see-also>
+	</application>
+	<application name="Congestion" language="en_US">
+		<synopsis>
+			Indicate the Congestion condition.
+		</synopsis>
+		<syntax>
+			<parameter name="timeout">
+				<para>If specified, the calling channel will be hung up after the specified number of seconds.
+				Otherwise, this application will wait until the calling channel hangs up.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>This application will indicate the congestion condition to the calling channel.</para>
+		</description>
+		<see-also>
+			<ref type="application">Busy</ref>
+			<ref type="application">Progess</ref>
+			<ref type="application">Playtones</ref>
+			<ref type="application">Hangup</ref>
+		</see-also>
+	</application>
+	<application name="ExecIfTime" language="en_US">
+		<synopsis>
+			Conditional application execution based on the current time.
+		</synopsis>
+		<syntax argsep="?">
+			<parameter name="day_condition" required="true">
+				<argument name="times" required="true" />
+				<argument name="weekdays" required="true" />
+				<argument name="mdays" required="true" />
+				<argument name="months" required="true" />
+				<argument name="timezone" required="false" />
+			</parameter>
+			<parameter name="appname" required="true" hasparams="optional">
+				<argument name="appargs" required="true" />
+			</parameter>
+		</syntax>
+		<description>
+			<para>This application will execute the specified dialplan application, with optional
+			arguments, if the current time matches the given time specification.</para>
+		</description>
+		<see-also>
+			<ref type="application">Exec</ref>
+			<ref type="application">TryExec</ref>
+		</see-also>
+	</application>
+	<application name="Goto" language="en_US">
+		<synopsis>
+			Jump to a particular priority, extension, or context.
+		</synopsis>
+		<syntax>
+			<parameter name="context" />
+			<parameter name="extensions" />
+			<parameter name="priority" required="true" />
+		</syntax>
+		<description>
+			<para>This application will set the current context, extension, and priority in the channel structure.
+			After it completes, the pbx engine will continue dialplan execution at the specified location.
+			If no specific <replaceable>extension</replaceable>, or <replaceable>extension</replaceable> and
+			<replaceable>context</replaceable>, are specified, then this application will
+			just set the specified <replaceable>priority</replaceable> of the current extension.</para>
+			<para>At least a <replaceable>priority</replaceable> is required as an argument, or the goto will
+			return a <literal>-1</literal>,	and the channel and call will be terminated.</para>
+			<para>If the location that is put into the channel information is bogus, and asterisk cannot
+			find that location in the dialplan, then the execution engine will try to find and execute the code in
+			the <literal>i</literal> (invalid) extension in the current context. If that does not exist, it will try to execute the
+			<literal>h</literal> extension. If either or neither the <literal>h</literal> or <literal>i</literal> extensions
+			have been defined, the channel is hung up, and the execution of instructions on the channel is terminated.
+			What this means is that, for example, you specify a context that does not exist, then
+			it will not be possible to find the <literal>h</literal> or <literal>i</literal> extensions,
+			and the call will terminate!</para>
+		</description>
+		<see-also>
+			<ref type="application">GotoIf</ref>
+			<ref type="application">GotoIfTime</ref>
+			<ref type="application">Gosub</ref>
+			<ref type="application">Macro</ref>
+		</see-also>
+	</application>
+	<application name="GotoIf" language="en_US">
+		<synopsis>
+			Conditional goto.
+		</synopsis>
+		<syntax argsep="?">
+			<parameter name="condition" required="true" />
+			<parameter name="destination" required="true" argsep=":">
+				<argument name="labeliftrue">
+					<para>Continue at <replaceable>labeliftrue</replaceable> if the condition is true.</para>
+				</argument>
+				<argument name="labeliffalse">
+					<para>Continue at <replaceable>labeliffalse</replaceable> if the condition is false.</para>
+				</argument>
+			</parameter>
+		</syntax>
+		<description>
+			<para>This application will set the current context, extension, and priority in the channel structure
+			based on the evaluation of the given condition. After this application completes, the
+			pbx engine will continue dialplan execution at the specified location in the dialplan.
+			The labels are specified with the same syntax as used within the Goto application.
+			If the label chosen by the condition is omitted, no jump is performed, and the execution passes to the
+			next instruction. If the target location is bogus, and does not exist, the execution engine will try
+			to find and execute the code in the <literal>i</literal> (invalid) extension in the current context.
+			If that does not exist, it will try to execute the <literal>h</literal> extension.
+			If either or neither the <literal>h</literal> or <literal>i</literal> extensions have been defined,
+			the channel is hung up, and the execution of instructions on the channel is terminated.
+			Remember that this command can set the current context, and if the context specified
+			does not exist, then it will not be able to find any 'h' or 'i' extensions there, and
+			the channel and call will both be terminated!.</para>
+		</description>
+		<see-also>
+			<ref type="application">Goto</ref>
+			<ref type="application">GotoIfTime</ref>
+			<ref type="application">GosubIf</ref>
+			<ref type="application">MacroIf</ref>
+		</see-also>
+	</application>
+	<application name="GotoIfTime" language="en_US">
+		<synopsis>
+			Conditional Goto based on the current time.
+		</synopsis>
+		<syntax argsep="?">
+			<parameter name="condition" required="true">
+				<argument name="times" required="true" />
+				<argument name="weekdays" required="true" />
+				<argument name="mdays" required="true" />
+				<argument name="months" required="true" />
+				<argument name="timezone" required="false" />
+			</parameter>
+			<parameter name="destination" required="true" argsep=":">
+				<argument name="labeliftrue" />
+				<argument name="labeliffalse" />
+			</parameter>
+		</syntax>
+		<description>
+			<para>This application will set the context, extension, and priority in the channel structure
+			based on the evaluation of the given time specification. After this application completes,
+			the pbx engine will continue dialplan execution at the specified location in the dialplan.
+			If the current time is within the given time specification, the channel will continue at
+			<replaceable>labeliftrue</replaceable>. Otherwise the channel will continue at <replaceable>labeliffalse</replaceable>.
+			If the label chosen by the condition is omitted, no jump is performed, and execution passes to the next
+			instruction. If the target jump location is bogus, the same actions would be taken as for <literal>Goto</literal>.
+			Further information on the time specification can be found in examples
+			illustrating how to do time-based context includes in the dialplan.</para>
+		</description>
+		<see-also>
+			<ref type="application">GotoIf</ref>
+			<ref type="function">IFTIME</ref>
+		</see-also>
+	</application>
+	<application name="ImportVar" language="en_US">
+		<synopsis>
+			Import a variable from a channel into a new variable.
+		</synopsis>
+		<syntax argsep="=">
+			<parameter name="newvar" required="true" />
+			<parameter name="vardata" required="true">
+				<argument name="channelname" required="true" />
+				<argument name="variable" required="true" />
+			</parameter>
+		</syntax>
+		<description>
+			<para>This application imports a <replaceable>variable</replaceable> from the specified
+			<replaceable>channel</replaceable> (as opposed to the current one) and stores it as a variable
+			(<replaceable>newvar</replaceable>) in the current channel (the channel that is calling this
+			application). Variables created by this application have the same inheritance properties as those
+			created with the <literal>Set</literal> application.</para>
+		</description>
+		<see-also>
+			<ref type="application">Set</ref>
+		</see-also>
+	</application>
+	<application name="Hangup" language="en_US">
+		<synopsis>
+			Hang up the calling channel.
+		</synopsis>
+		<syntax>
+			<parameter name="causecode">
+				<para>If a <replaceable>causecode</replaceable> is given the channel's
+				hangup cause will be set to the given value.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>This application will hang up the calling channel.</para>
+		</description>
+		<see-also>
+			<ref type="application">Answer</ref>
+			<ref type="application">Busy</ref>
+			<ref type="application">Congestion</ref>
+		</see-also>
+	</application>
+	<application name="Incomplete" language="en_US">
+		<synopsis>
+			Returns AST_PBX_INCOMPLETE value.
+		</synopsis>
+		<syntax>
+			<parameter name="n">
+				<para>If specified, then Incomplete will not attempt to answer the channel first.</para>
+				<note><para>Most channel types need to be in Answer state in order to receive DTMF.</para></note>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Signals the PBX routines that the previous matched extension is incomplete
+			and that further input should be allowed before matching can be considered
+			to be complete.  Can be used within a pattern match when certain criteria warrants
+			a longer match.</para>
+		</description>
+	</application>
+	<application name="NoOp" language="en_US">
+		<synopsis>
+			Do Nothing (No Operation).
+		</synopsis>
+		<syntax>
+			<parameter name="text">
+				<para>Any text provided can be viewed at the Asterisk CLI.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>This application does nothing. However, it is useful for debugging purposes.</para>
+			<para>This method can be used to see the evaluations of variables or functions without having any effect.</para>
+		</description>
+		<see-also>
+			<ref type="application">Verbose</ref>
+			<ref type="application">Log</ref>
+		</see-also>
+	</application>
+	<application name="Proceeding" language="en_US">
+		<synopsis>
+			Indicate proceeding.
+		</synopsis>
+		<syntax />
+		<description>
+			<para>This application will request that a proceeding message be provided to the calling channel.</para>
+		</description>
+	</application>
+	<application name="Progress" language="en_US">
+		<synopsis>
+			Indicate progress.
+		</synopsis>
+		<syntax />
+		<description>
+			<para>This application will request that in-band progress information be provided to the calling channel.</para>
+		</description>
+		<see-also>
+			<ref type="application">Busy</ref>
+			<ref type="application">Congestion</ref>
+			<ref type="application">Ringing</ref>
+			<ref type="application">Playtones</ref>
+		</see-also>
+	</application>
+	<application name="RaiseException" language="en_US">
+		<synopsis>
+			Handle an exceptional condition.
+		</synopsis>
+		<syntax>
+			<parameter name="reason" required="true" />
+		</syntax>
+		<description>
+			<para>This application will jump to the <literal>e</literal> extension in the current context, setting the
+			dialplan function EXCEPTION(). If the <literal>e</literal> extension does not exist, the call will hangup.</para>
+		</description>
+		<see-also>
+			<ref type="function">Exception</ref>
+		</see-also>
+	</application>
+	<application name="ResetCDR" language="en_US">
+		<synopsis>
+			Resets the Call Data Record.
+		</synopsis>
+		<syntax>
+			<parameter name="options">
+				<optionlist>
+					<option name="w">
+						<para>Store the current CDR record before resetting it.</para>
+					</option>
+					<option name="a">
+						<para>Store any stacked records.</para>
+					</option>
+					<option name="v">
+						<para>Save CDR variables.</para>
+					</option>
+					<option name="e">
+						<para>Enable CDR only (negate effects of NoCDR).</para>
+					</option>
+				</optionlist>
+			</parameter>
+		</syntax>
+		<description>
+			<para>This application causes the Call Data Record to be reset.</para>
+		</description>
+		<see-also>
+			<ref type="application">ForkCDR</ref>
+			<ref type="application">NoCDR</ref>
+		</see-also>
+	</application>
+	<application name="Ringing" language="en_US">
+		<synopsis>
+			Indicate ringing tone.
+		</synopsis>
+		<syntax />
+		<description>
+			<para>This application will request that the channel indicate a ringing tone to the user.</para>
+		</description>
+		<see-also>
+			<ref type="application">Busy</ref>
+			<ref type="application">Congestion</ref>
+			<ref type="application">Progress</ref>
+			<ref type="application">Playtones</ref>
+		</see-also>
+	</application>
+	<application name="SayAlpha" language="en_US">
+		<synopsis>
+			Say Alpha.
+		</synopsis>
+		<syntax>
+			<parameter name="string" required="true" />
+		</syntax>
+		<description>
+			<para>This application will play the sounds that correspond to the letters of the
+			given <replaceable>string</replaceable>.</para>
+		</description>
+		<see-also>
+			<ref type="application">SayDigits</ref>
+			<ref type="application">SayNumber</ref>
+			<ref type="application">SayPhonetic</ref>
+			<ref type="function">CHANNEL</ref>
+		</see-also>
+	</application>
+	<application name="SayDigits" language="en_US">
+		<synopsis>
+			Say Digits.
+		</synopsis>
+		<syntax>
+			<parameter name="digits" required="true" />
+		</syntax>
+		<description>
+			<para>This application will play the sounds that correspond to the digits of
+			the given number. This will use the language that is currently set for the channel.</para>
+		</description>
+		<see-also>
+			<ref type="application">SayAlpha</ref>
+			<ref type="application">SayNumber</ref>
+			<ref type="application">SayPhonetic</ref>
+			<ref type="function">CHANNEL</ref>
+		</see-also>
+	</application>
+	<application name="SayNumber" language="en_US">
+		<synopsis>
+			Say Number.
+		</synopsis>
+		<syntax>
+			<parameter name="digits" required="true" />
+			<parameter name="gender" />
+		</syntax>
+		<description>
+			<para>This application will play the sounds that correspond to the given <replaceable>digits</replaceable>.
+			Optionally, a <replaceable>gender</replaceable> may be specified. This will use the language that is currently
+			set for the channel. See the LANGUAGE() function for more information on setting the language for the channel.</para>
+		</description>
+		<see-also>
+			<ref type="application">SayAlpha</ref>
+			<ref type="application">SayDigits</ref>
+			<ref type="application">SayPhonetic</ref>
+			<ref type="function">CHANNEL</ref>
+		</see-also>
+	</application>
+	<application name="SayPhonetic" language="en_US">
+		<synopsis>
+			Say Phonetic.
+		</synopsis>
+		<syntax>
+			<parameter name="string" required="true" />
+		</syntax>
+		<description>
+			<para>This application will play the sounds from the phonetic alphabet that correspond to the
+			letters in the given <replaceable>string</replaceable>.</para>
+		</description>
+		<see-also>
+			<ref type="application">SayAlpha</ref>
+			<ref type="application">SayDigits</ref>
+			<ref type="application">SayNumber</ref>
+		</see-also>
+	</application>
+	<application name="Set" language="en_US">
+		<synopsis>
+			Set channel variable or function value.
+		</synopsis>
+		<syntax argsep="=">
+			<parameter name="name" required="true" />
+			<parameter name="value" required="true" />
+		</syntax>
+		<description>
+			<para>This function can be used to set the value of channel variables or dialplan functions.
+			When setting variables, if the variable name is prefixed with <literal>_</literal>,
+			the variable will be inherited into channels created from the current channel.
+			If the variable name is prefixed with <literal>__</literal>, the variable will be
+			inherited into channels created from the current channel and all children channels.</para>
+			<note><para>If (and only if), in <filename>/etc/asterisk/asterisk.conf</filename>, you have
+			a <literal>[compat]</literal> category, and you have <literal>app_set = 1.6</literal> under that,then
+			the behavior of this app changes, and does not strip surrounding quotes from the right hand side as
+			it did previously in 1.4. The <literal>app_set = 1.6</literal> is only inserted if <literal>make samples</literal>
+			is executed, or if users insert this by hand into the <filename>asterisk.conf</filename> file.
+			The advantages of not stripping out quoting, and not caring about the separator characters (comma and vertical bar)
+			were sufficient to make these changes in 1.6. Confusion about how many backslashes would be needed to properly
+			protect separators and quotes in various database access strings has been greatly
+			reduced by these changes.</para></note>
+		</description>
+		<see-also>
+			<ref type="application">MSet</ref>
+			<ref type="function">GLOBAL</ref>
+			<ref type="function">SET</ref>
+			<ref type="function">ENV</ref>
+		</see-also>
+	</application>
+	<application name="MSet" language="en_US">
+		<synopsis>
+			Set channel variable(s) or function value(s).
+		</synopsis>
+		<syntax>
+			<parameter name="set1" required="true" argsep="=">
+				<argument name="name1" required="true" />
+				<argument name="value1" required="true" />
+			</parameter>
+			<parameter name="set2" multiple="true" argsep="=">
+				<argument name="name2" required="true" />
+				<argument name="value2" required="true" />
+			</parameter>
+		</syntax>
+		<description>
+			<para>This function can be used to set the value of channel variables or dialplan functions.
+			When setting variables, if the variable name is prefixed with <literal>_</literal>,
+			the variable will be inherited into channels created from the current channel
+			If the variable name is prefixed with <literal>__</literal>, the variable will be
+			inherited into channels created from the current channel and all children channels.
+			MSet behaves in a similar fashion to the way Set worked in 1.2/1.4 and is thus
+			prone to doing things that you may not expect. For example, it strips surrounding
+			double-quotes from the right-hand side (value). If you need to put a separator
+			character (comma or vert-bar), you will need to escape them by inserting a backslash
+			before them. Avoid its use if possible.</para>
+		</description>
+		<see-also>
+			<ref type="application">Set</ref>
+		</see-also>
+	</application>
+	<application name="SetAMAFlags" language="en_US">
+		<synopsis>
+			Set the AMA Flags.
+		</synopsis>
+		<syntax>
+			<parameter name="flag" />
+		</syntax>
+		<description>
+			<para>This application will set the channel's AMA Flags for billing purposes.</para>
+		</description>
+		<see-also>
+			<ref type="function">CDR</ref>
+		</see-also>
+	</application>
+	<application name="Wait" language="en_US">
+		<synopsis>
+			Waits for some time.
+		</synopsis>
+		<syntax>
+			<parameter name="seconds" required="true">
+				<para>Can be passed with fractions of a second. For example, <literal>1.5</literal> will ask the
+				application to wait for 1.5 seconds.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>This application waits for a specified number of <replaceable>seconds</replaceable>.</para>
+		</description>
+	</application>
+	<application name="WaitExten" language="en_US">
+		<synopsis>
+			Waits for an extension to be entered.
+		</synopsis>
+		<syntax>
+			<parameter name="seconds">
+				<para>Can be passed with fractions of a second. For example, <literal>1.5</literal> will ask the
+				application to wait for 1.5 seconds.</para>
+			</parameter>
+			<parameter name="options">
+				<optionlist>
+					<option name="m">
+						<para>Provide music on hold to the caller while waiting for an extension.</para>
+						<argument name="x">
+							<para>Specify the class for music on hold.</para>
+						</argument>
+					</option>
+				</optionlist>
+			</parameter>
+		</syntax>
+		<description>
+			<para>This application waits for the user to enter a new extension for a specified number
+			of <replaceable>seconds</replaceable>.</para>
+		</description>
+		<see-also>
+			<ref type="application">Background</ref>
+			<ref type="function">TIMEOUT</ref>
+		</see-also>
+	</application>
+	<function name="EXCEPTION" language="en_US">
+		<synopsis>
+			Retrieve the details of the current dialplan exception.
+		</synopsis>
+		<syntax>
+			<parameter name="field" required="true">
+				<para>The following fields are available for retrieval:</para>
+				<enumlist>
+					<enum name="reason">
+						<para>INVALID, ERROR, RESPONSETIMEOUT, ABSOLUTETIMEOUT, or custom
+						value set by the RaiseException() application</para>
+					</enum>
+					<enum name="context">
+						<para>The context executing when the exception occurred.</para>
+					</enum>
+					<enum name="exten">
+						<para>The extension executing when the exception occurred.</para>
+					</enum>
+					<enum name="priority">
+						<para>The numeric priority executing when the exception occurred.</para>
+					</enum>
+				</enumlist>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Retrieve the details (specified <replaceable>field</replaceable>) of the current dialplan exception.</para>
+		</description>
+		<see-also>
+			<ref type="application">RaiseException</ref>
+		</see-also>
+	</function>
+ ***/
 
 #ifdef LOW_MEMORY
 #define EXT_DATA_SIZE 256
@@ -127,6 +754,7 @@ struct ast_app;
 static struct ast_taskprocessor *device_state_tps;
 
 AST_THREADSTORAGE(switch_data);
+AST_THREADSTORAGE(extensionstate_buf);
 
 /*!
    \brief ast_exten: An extension
@@ -220,12 +848,17 @@ struct ast_context {
 	char name[0];				/*!< Name of the context */
 };
 
-
 /*! \brief ast_app: A registered application */
 struct ast_app {
 	int (*execute)(struct ast_channel *chan, void *data);
-	const char *synopsis;			/*!< Synopsis text for 'show applications' */
-	const char *description;		/*!< Description (help text) for 'show application &lt;name&gt;' */
+	AST_DECLARE_STRING_FIELDS(
+		AST_STRING_FIELD(synopsis);     /*!< Synopsis text for 'show applications' */
+		AST_STRING_FIELD(description);  /*!< Description (help text) for 'show application &lt;name&gt;' */
+		AST_STRING_FIELD(syntax);       /*!< Syntax text for 'core show applications' */
+		AST_STRING_FIELD(arguments);    /*!< Arguments description */
+		AST_STRING_FIELD(seealso);      /*!< See also */
+	);
+	enum ast_doc_src docsrc;/*!< Where the documentation come from. */
 	AST_RWLIST_ENTRY(ast_app) list;		/*!< Next app in list */
 	struct ast_module *module;		/*!< Module this app belongs to */
 	char name[0];				/*!< Name of the application */
@@ -288,7 +921,6 @@ static int pbx_builtin_background(struct ast_channel *, void *);
 static int pbx_builtin_wait(struct ast_channel *, void *);
 static int pbx_builtin_waitexten(struct ast_channel *, void *);
 static int pbx_builtin_incomplete(struct ast_channel *, void *);
-static int pbx_builtin_keepalive(struct ast_channel *, void *);
 static int pbx_builtin_resetcdr(struct ast_channel *, void *);
 static int pbx_builtin_setamaflags(struct ast_channel *, void *);
 static int pbx_builtin_ringing(struct ast_channel *, void *);
@@ -310,10 +942,15 @@ void log_match_char_tree(struct match_char *node, char *prefix); /* for use anyw
 int pbx_builtin_setvar_multiple(struct ast_channel *, void *);
 static int pbx_builtin_importvar(struct ast_channel *, void *);
 static void set_ext_pri(struct ast_channel *c, const char *exten, int pri); 
-static void new_find_extension(const char *str, struct scoreboard *score, struct match_char *tree, int length, int spec, const char *callerid, const char *label, enum ext_match_t action);
+static void new_find_extension(const char *str, struct scoreboard *score, 
+		struct match_char *tree, int length, int spec, const char *callerid, 
+		const char *label, enum ext_match_t action);
 static struct match_char *already_in_tree(struct match_char *current, char *pat);
-static struct match_char *add_exten_to_pattern_tree(struct ast_context *con, struct ast_exten *e1, int findonly);
-static struct match_char *add_pattern_node(struct ast_context *con, struct match_char *current, char *pattern, int is_pattern, int already, int specificity, struct match_char **parent);
+static struct match_char *add_exten_to_pattern_tree(struct ast_context *con, 
+		struct ast_exten *e1, int findonly);
+static struct match_char *add_pattern_node(struct ast_context *con, 
+		struct match_char *current, char *pattern, int is_pattern, 
+		int already, int specificity, struct match_char **parent);
 static void create_match_char_tree(struct ast_context *con);
 static struct ast_exten *get_canmatch_exten(struct match_char *node);
 static void destroy_pattern_tree(struct match_char *pattern_tree);
@@ -433,283 +1070,37 @@ static AST_RWLIST_HEAD_STATIC(acf_root, ast_custom_function);
 static struct pbx_builtin {
 	char name[AST_MAX_APP];
 	int (*execute)(struct ast_channel *chan, void *data);
-	char *synopsis;
-	char *description;
 } builtins[] =
 {
 	/* These applications are built into the PBX core and do not
 	   need separate modules */
 
-	{ "Answer", pbx_builtin_answer,
-	"Answer a channel if ringing",
-	"  Answer([delay]): If the call has not been answered, this application will\n"
-	"answer it. Otherwise, it has no effect on the call. If a delay is specified,\n"
-	"Asterisk will wait this number of milliseconds before returning to\n"
-	"the dialplan after answering the call.\n"
-	},
-
-	{ "BackGround", pbx_builtin_background,
-	"Play an audio file while waiting for digits of an extension to go to.",
-	"  Background(filename1[&filename2...][,options[,langoverride][,context]]):\n"
-	"This application will play the given list of files (do not put extension)\n"
-	"while waiting for an extension to be dialed by the calling channel. To\n"
-	"continue waiting for digits after this application has finished playing\n"
-	"files, the WaitExten application should be used. The 'langoverride' option\n"
-	"explicitly specifies which language to attempt to use for the requested sound\n"
-	"files. If a 'context' is specified, this is the dialplan context that this\n"
-	"application will use when exiting to a dialed extension."
-	"  If one of the requested sound files does not exist, call processing will be\n"
-	"terminated.\n"
-	"  Options:\n"
-	"    s - Causes the playback of the message to be skipped\n"
-	"          if the channel is not in the 'up' state (i.e. it\n"
-	"          hasn't been answered yet). If this happens, the\n"
-	"          application will return immediately.\n"
-	"    n - Don't answer the channel before playing the files.\n"
-	"    m - Only break if a digit hit matches a one digit\n"
-	"          extension in the destination context.\n"
-	"This application sets the following channel variable upon completion:\n"
-	" BACKGROUNDSTATUS    The status of the background attempt as a text string, one of\n"
-	"               SUCCESS | FAILED\n"
-	"See Also: Playback (application) -- Play sound file(s) to the channel,\n"
-	"                                    that cannot be interrupted\n"
-	},
-
-	{ "Busy", pbx_builtin_busy,
-	"Indicate the Busy condition",
-	"  Busy([timeout]): This application will indicate the busy condition to\n"
-	"the calling channel. If the optional timeout is specified, the calling channel\n"
-	"will be hung up after the specified number of seconds. Otherwise, this\n"
-	"application will wait until the calling channel hangs up.\n"
-	},
-
-	{ "Congestion", pbx_builtin_congestion,
-	"Indicate the Congestion condition",
-	"  Congestion([timeout]): This application will indicate the congestion\n"
-	"condition to the calling channel. If the optional timeout is specified, the\n"
-	"calling channel will be hung up after the specified number of seconds.\n"
-	"Otherwise, this application will wait until the calling channel hangs up.\n"
-	},
-
-	{ "ExecIfTime", pbx_builtin_execiftime,
-	"Conditional application execution based on the current time",
-	"  ExecIfTime(<times>,<weekdays>,<mdays>,<months>?appname[(appargs)]):\n"
-	"This application will execute the specified dialplan application, with optional\n"
-	"arguments, if the current time matches the given time specification.\n"
-	},
-
-	{ "Goto", pbx_builtin_goto,
-	"Jump to a particular priority, extension, or context",
-	"  Goto([[context,]extension,]priority): This application will set the current\n"
-	"context, extension, and priority in the channel structure. After it completes, the\n"
-	"pbx engine will continue dialplan execution at the specified location.\n"
-	"If no specific extension, or extension and context, are specified, then this\n"
-	"application will just set the specified priority of the current extension.\n"
-	"  At least a priority is required as an argument, or the goto will return a -1,\n"
-	"and the channel and call will be terminated.\n"
-	"  If the location that is put into the channel information is bogus, and asterisk cannot\n"
-	"find that location in the dialplan,\n"
-	"then the execution engine will try to find and execute the code in the 'i' (invalid)\n"
-	"extension in the current context. If that does not exist, it will try to execute the\n"
-	"'h' extension. If either or neither the 'h' or 'i' extensions have been defined, the\n"
-	"channel is hung up, and the execution of instructions on the channel is terminated.\n"
-	"What this means is that, for example, you specify a context that does not exist, then\n"
-	"it will not be possible to find the 'h' or 'i' extensions, and the call will terminate!\n"
-	},
-
-	{ "GotoIf", pbx_builtin_gotoif,
-	"Conditional goto",
-	"  GotoIf(condition?[labeliftrue]:[labeliffalse]): This application will set the current\n"
-	"context, extension, and priority in the channel structure based on the evaluation of\n"
-	"the given condition. After this application completes, the\n"
-	"pbx engine will continue dialplan execution at the specified location in the dialplan.\n"
-	"The channel will continue at\n"
-	"'labeliftrue' if the condition is true, or 'labeliffalse' if the condition is\n"
-	"false. The labels are specified with the same syntax as used within the Goto\n"
-	"application.  If the label chosen by the condition is omitted, no jump is\n"
-	"performed, and the execution passes to the next instruction.\n"
-	"If the target location is bogus, and does not exist, the execution engine will try \n"
-	"to find and execute the code in the 'i' (invalid)\n"
-	"extension in the current context. If that does not exist, it will try to execute the\n"
-	"'h' extension. If either or neither the 'h' or 'i' extensions have been defined, the\n"
-	"channel is hung up, and the execution of instructions on the channel is terminated.\n"
-	"Remember that this command can set the current context, and if the context specified\n"
-	"does not exist, then it will not be able to find any 'h' or 'i' extensions there, and\n"
-	"the channel and call will both be terminated!\n"
-	},
-
-	{ "GotoIfTime", pbx_builtin_gotoiftime,
-	"Conditional Goto based on the current time",
-	"  GotoIfTime(<times>,<weekdays>,<mdays>,<months>?[labeliftrue]:[labeliffalse]):\n"
-	"This application will set the context, extension, and priority in the channel structure\n"
-	"based on the evaluation of the given time specification. After this application completes,\n"
-	"the pbx engine will continue dialplan execution at the specified location in the dialplan.\n"
-	"If the current time is within the given time specification, the channel will continue at\n"
-	"'labeliftrue'. Otherwise the channel will continue at 'labeliffalse'. If the label chosen\n"
-	"by the condition is omitted, no jump is performed, and execution passes to the next\n"
-	"instruction. If the target jump location is bogus, the same actions would be taken as for\n"
-	"Goto.\n"
-	"Further information on the time specification can be found in examples\n"
-	"illustrating how to do time-based context includes in the dialplan.\n"
-	},
-
-	{ "ImportVar", pbx_builtin_importvar,
-	"Import a variable from a channel into a new variable",
-	"  ImportVar(newvar=channelname,variable): This application imports a variable\n"
-	"from the specified channel (as opposed to the current one) and stores it as\n"
-	"a variable in the current channel (the channel that is calling this\n"
-	"application). Variables created by this application have the same inheritance\n"
-	"properties as those created with the Set application. See the documentation for\n"
-	"Set for more information.\n"
-	},
-
-	{ "Hangup", pbx_builtin_hangup,
-	"Hang up the calling channel",
-	"  Hangup([causecode]): This application will hang up the calling channel.\n"
-	"If a causecode is given the channel's hangup cause will be set to the given\n"
-	"value.\n"
-	},
-
-	{ "Incomplete", pbx_builtin_incomplete,
-	"returns AST_PBX_INCOMPLETE value",
-	"  Incomplete([n]): Signals the PBX routines that the previous matched extension\n"
-	"is incomplete and that further input should be allowed before matching can\n"
-	"be considered to be complete.  Can be used within a pattern match when\n"
-	"certain criteria warrants a longer match.\n"
-	"  If the 'n' option is specified, then Incomplete will not attempt to answer\n"
-	"the channel first.  Note that most channel types need to be in Answer state\n"
-	"in order to receive DTMF.\n"
-	},
-
-	{ "KeepAlive", pbx_builtin_keepalive,
-	"returns AST_PBX_KEEPALIVE value",
-	"  KeepAlive(): This application is chiefly meant for internal use with Gosubs.\n"
-	"Please do not run it alone from the dialplan!\n"
-	},
-
-	{ "NoOp", pbx_builtin_noop,
-	"Do Nothing (No Operation)",
-	"  NoOp(): This application does nothing. However, it is useful for debugging\n"
-	"purposes. Any text that is provided as arguments to this application can be\n"
-	"viewed at the Asterisk CLI. This method can be used to see the evaluations of\n"
-	"variables or functions without having any effect. Alternatively, see the\n"
-		"Verbose() application for finer grain control of output at custom verbose levels.\n"
-	},
-	
-	{ "Proceeding", pbx_builtin_proceeding,
-	"Indicate proceeding",
-	"  Proceeding(): This application will request that a proceeding message\n"
-	"be provided to the calling channel.\n"
-	},
-	
-	{ "Progress", pbx_builtin_progress,
-	"Indicate progress",
-	"  Progress(): This application will request that in-band progress information\n"
-	"be provided to the calling channel.\n"
-	},
-
-	{ "RaiseException", pbx_builtin_raise_exception,
-	"Handle an exceptional condition",
-	"  RaiseException(<reason>): This application will jump to the \"e\" extension\n"
-	"in the current context, setting the dialplan function EXCEPTION(). If the \"e\"\n"
-	"extension does not exist, the call will hangup.\n"
-	},
-
-	{ "ResetCDR", pbx_builtin_resetcdr,
-	"Resets the Call Data Record",
-	"  ResetCDR([options]):  This application causes the Call Data Record to be\n"
-	"reset.\n"
-	"  Options:\n"
-	"    w -- Store the current CDR record before resetting it.\n"
-	"    a -- Store any stacked records.\n"
-	"    v -- Save CDR variables.\n"
-	"    e -- Enable CDR only (negate effects of NoCDR).\n"
-	},
-
-	{ "Ringing", pbx_builtin_ringing,
-	"Indicate ringing tone",
-	"  Ringing(): This application will request that the channel indicate a ringing\n"
-	"tone to the user.\n"
-	},
-
-	{ "SayAlpha", pbx_builtin_saycharacters,
-	"Say Alpha",
-	"  SayAlpha(string): This application will play the sounds that correspond to\n"
-	"the letters of the given string.\n"
-	},
-
-	{ "SayDigits", pbx_builtin_saydigits,
-	"Say Digits",
-	"  SayDigits(digits): This application will play the sounds that correspond\n"
-	"to the digits of the given number. This will use the language that is currently\n"
-	"set for the channel. See the LANGUAGE function for more information on setting\n"
-	"the language for the channel.\n"
-	},
-
-	{ "SayNumber", pbx_builtin_saynumber,
-	"Say Number",
-	"  SayNumber(digits[,gender]): This application will play the sounds that\n"
-	"correspond to the given number. Optionally, a gender may be specified.\n"
-	"This will use the language that is currently set for the channel. See the\n"
-	"LANGUAGE function for more information on setting the language for the channel.\n"
-	},
-
-	{ "SayPhonetic", pbx_builtin_sayphonetic,
-	"Say Phonetic",
-	"  SayPhonetic(string): This application will play the sounds from the phonetic\n"
-	"alphabet that correspond to the letters in the given string.\n"
-	},
-
-	{ "Set", pbx_builtin_setvar,
-	"Set channel variable or function value",
-	"  Set(name=value)\n"
-	"This function can be used to set the value of channel variables or dialplan\n"
-	"functions. When setting variables, if the variable name is prefixed with _,\n"
-	"the variable will be inherited into channels created from the current\n"
-	"channel. If the variable name is prefixed with __, the variable will be\n"
-	"inherited into channels created from the current channel and all children\n"
-	"channels.\n"
-	},
-
-	{ "MSet", pbx_builtin_setvar_multiple,
-	"Set channel variable(s) or function value(s)",
-	"  MSet(name1=value1,name2=value2,...)\n"
-	"This function can be used to set the value of channel variables or dialplan\n"
-	"functions. When setting variables, if the variable name is prefixed with _,\n"
-	"the variable will be inherited into channels created from the current\n"
-	"channel. If the variable name is prefixed with __, the variable will be\n"
-	"inherited into channels created from the current channel and all children\n"
-	"channels.\n\n"
-	"MSet behaves in a similar fashion to the way Set worked in 1.2/1.4 and is thus\n"
-	"prone to doing things that you may not expect.  Avoid its use if possible.\n"
-	},
-
-	{ "SetAMAFlags", pbx_builtin_setamaflags,
-	"Set the AMA Flags",
-	"  SetAMAFlags([flag]): This application will set the channel's AMA Flags for\n"
- 	"  billing purposes.\n"
-	},
-
-	{ "Wait", pbx_builtin_wait,
-	"Waits for some time",
-	"  Wait(seconds): This application waits for a specified number of seconds.\n"
-	"Then, dialplan execution will continue at the next priority.\n"
-	"  Note that the seconds can be passed with fractions of a second. For example,\n"
-	"'1.5' will ask the application to wait for 1.5 seconds.\n"
-	},
-
-	{ "WaitExten", pbx_builtin_waitexten,
-	"Waits for an extension to be entered",
-	"  WaitExten([seconds][,options]): This application waits for the user to enter\n"
-	"a new extension for a specified number of seconds.\n"
-	"  Note that the seconds can be passed with fractions of a second. For example,\n"
-	"'1.5' will ask the application to wait for 1.5 seconds.\n"
-	"  Options:\n"
-	"    m[(x)] - Provide music on hold to the caller while waiting for an extension.\n"
-	"               Optionally, specify the class for music on hold within parenthesis.\n"
-	"See Also: Playback(application), Background(application).\n"
-	},
-
+	{ "Answer",         pbx_builtin_answer },
+	{ "BackGround",     pbx_builtin_background },
+	{ "Busy",           pbx_builtin_busy },
+	{ "Congestion",     pbx_builtin_congestion },
+	{ "ExecIfTime",     pbx_builtin_execiftime },
+	{ "Goto",           pbx_builtin_goto },
+	{ "GotoIf",         pbx_builtin_gotoif },
+	{ "GotoIfTime",     pbx_builtin_gotoiftime },
+	{ "ImportVar",      pbx_builtin_importvar },
+	{ "Hangup",         pbx_builtin_hangup },
+	{ "Incomplete",     pbx_builtin_incomplete },
+	{ "NoOp",           pbx_builtin_noop },
+	{ "Proceeding",     pbx_builtin_proceeding },
+	{ "Progress",       pbx_builtin_progress },
+	{ "RaiseException", pbx_builtin_raise_exception },
+	{ "ResetCDR",       pbx_builtin_resetcdr },
+	{ "Ringing",        pbx_builtin_ringing },
+	{ "SayAlpha",       pbx_builtin_saycharacters },
+	{ "SayDigits",      pbx_builtin_saydigits },
+	{ "SayNumber",      pbx_builtin_saynumber },
+	{ "SayPhonetic",    pbx_builtin_sayphonetic },
+	{ "Set",            pbx_builtin_setvar },
+	{ "MSet",           pbx_builtin_setvar_multiple },
+	{ "SetAMAFlags",    pbx_builtin_setamaflags },
+	{ "Wait",           pbx_builtin_wait },
+	{ "WaitExten",      pbx_builtin_waitexten }
 };
 
 static struct ast_context *contexts;
@@ -1035,7 +1426,7 @@ static void pbx_destroy(struct ast_pbx *p)
  *     NULL
  *
  *   In the above, I could easily turn "N" into "23456789", but I think that a quick "if( *z >= '2' && *z <= '9' )" might take
- *   fewer CPU cycles than a call to index("23456789",*z), where *z is the char to match...
+ *   fewer CPU cycles than a call to strchr("23456789",*z), where *z is the char to match...
  *
  *   traversal is pretty simple: one routine merely traverses the alt list, and for each matching char in the pattern,  it calls itself
  *   on the corresponding next pointer, incrementing also the pointer of the string to be matched, and passing the total specificity and length.
@@ -1103,7 +1494,7 @@ void log_match_char_tree(struct match_char *node, char *prefix)
 	ast_str_set(&my_prefix, 0, "%s+       ", prefix);
 
 	if (node->next_char)
-		log_match_char_tree(node->next_char, my_prefix->str);
+		log_match_char_tree(node->next_char, ast_str_buffer(my_prefix));
 
 	if (node->alt_char)
 		log_match_char_tree(node->alt_char, prefix);
@@ -1132,7 +1523,7 @@ static void cli_match_char_tree(struct match_char *node, char *prefix, int fd)
 	ast_str_set(&my_prefix, 0, "%s+       ", prefix);
 
 	if (node->next_char)
-		cli_match_char_tree(node->next_char, my_prefix->str, fd);
+		cli_match_char_tree(node->next_char, ast_str_buffer(my_prefix), fd);
 
 	if (node->alt_char)
 		cli_match_char_tree(node->alt_char, prefix, fd);
@@ -1333,7 +1724,7 @@ static void new_find_extension(const char *str, struct scoreboard *score, struct
 					return; /* the first match is all we need */
 				}
 			}
-		} else if (index(p->x, *str)) {
+		} else if (strchr(p->x, *str)) {
 			ast_debug(4, "Nothing strange about this match\n");
 			NEW_MATCHER_CHK_MATCH;
 			NEW_MATCHER_RECURSE;
@@ -1401,8 +1792,7 @@ static void insert_in_next_chars_alt_char_list(struct match_char **parent_ptr, s
 				}
 				lcurr = curr;
 			}
-			if (!curr)
-			{
+			if (!curr) {
 				lcurr->alt_char = node;
 			}
 		}
@@ -1617,7 +2007,6 @@ static void destroy_pattern_tree(struct match_char *pattern_tree) /* pattern tre
  * Special characters used in patterns:
  *	'_'	underscore is the leading character of a pattern.
  *		In other position it is treated as a regular char.
- *	' ' '-'	space and '-' are separator and ignored.
  *	.	one or more of any character. Only allowed at the end of
  *		a pattern.
  *	!	zero or more of anything. Also impacts the result of CANMATCH
@@ -1640,8 +2029,7 @@ static void destroy_pattern_tree(struct match_char *pattern_tree) /* pattern tre
  *		considered specially.
  *
  * When we compare a pattern with a specific extension, all characters in the extension
- * itself are considered literally with the only exception of '-' which is considered
- * as a separator and thus ignored.
+ * itself are considered literally.
  * XXX do we want to consider space as a separator as well ?
  * XXX do we want to consider the separators in non-patterns as well ?
  */
@@ -1678,8 +2066,7 @@ static int ext_cmp1(const char **p)
 	/* load, sign extend and advance pointer until we find
 	 * a valid character.
 	 */
-	while ( (c = *(*p)++) && (c == ' ' || c == '-') )
-		;	/* ignore some characters */
+	c = *(*p)++;
 
 	/* always return unless we have a set of chars */
 	switch (toupper(c)) {
@@ -1687,13 +2074,13 @@ static int ext_cmp1(const char **p)
 		return 0x0000 | (c & 0xff);
 
 	case 'N':	/* 2..9 */
-		return 0x0700 | '2' ;
+		return 0x0800 | '2' ;
 
 	case 'X':	/* 0..9 */
-		return 0x0900 | '0';
+		return 0x0A00 | '0';
 
 	case 'Z':	/* 1..9 */
-		return 0x0800 | '1';
+		return 0x0900 | '1';
 
 	case '.':	/* wildcard */
 		return 0x10000;
@@ -1716,7 +2103,7 @@ static int ext_cmp1(const char **p)
 		return 0x40000;	/* XXX make this entry go last... */
 	}
 
-	bzero(chars, sizeof(chars));	/* clear all chars in the set */
+	memset(chars, '\0', sizeof(chars));	/* clear all chars in the set */
 	for (; *p < end  ; (*p)++) {
 		unsigned char c1, c2;	/* first-last char in range */
 		c1 = (unsigned char)((*p)[0]);
@@ -2043,9 +2430,6 @@ struct ast_exten *pbx_find_extension(struct ast_channel *chan,
 	ast_log(LOG_NOTICE,"Looking for cont/ext/prio/label/action = %s/%s/%d/%s/%d\n", context, exten, priority, label, (int)action);
 #endif
 
-	if (ast_strlen_zero(exten))
-		return NULL;
-
 	/* Initialize status if appropriate */
 	if (q->stacklen == 0) {
 		q->status = STATUS_NO_CONTEXT;
@@ -2128,8 +2512,8 @@ struct ast_exten *pbx_find_extension(struct ast_channel *chan,
 				break;
 			} else if (eval) {
 				/* Substitute variables now */
-				pbx_substitute_variables_helper(chan, osw, tmpdata->str, tmpdata->len);
-				datap = tmpdata->str;
+				pbx_substitute_variables_helper(chan, osw, ast_str_buffer(tmpdata), ast_str_size(tmpdata));
+				datap = ast_str_buffer(tmpdata);
 			} else {
 				datap = osw;
 			}
@@ -2298,7 +2682,7 @@ struct ast_exten *pbx_find_extension(struct ast_channel *chan,
 				ast_log(LOG_WARNING, "Can't evaluate switch?!");
 				continue;
 			}
-			pbx_substitute_variables_helper(chan, sw->data, tmpdata->str, tmpdata->len);
+			pbx_substitute_variables_helper(chan, sw->data, ast_str_buffer(tmpdata), ast_str_size(tmpdata));
 		}
 
 		/* equivalent of extension_match_core() at the switch level */
@@ -2308,7 +2692,7 @@ struct ast_exten *pbx_find_extension(struct ast_channel *chan,
 			aswf = asw->matchmore;
 		else /* action == E_MATCH */
 			aswf = asw->exists;
-		datap = sw->eval ? tmpdata->str : sw->data;
+		datap = sw->eval ? ast_str_buffer(tmpdata) : sw->data;
 		if (!aswf)
 			res = 0;
 		else {
@@ -2606,15 +2990,6 @@ static int acf_exception_read(struct ast_channel *chan, const char *name, char *
 
 static struct ast_custom_function exception_function = {
 	.name = "EXCEPTION",
-	.synopsis = "Retrieve the details of the current dialplan exception",
-	.desc =
-"The following fields are available for retrieval:\n"
-"  reason    INVALID, ERROR, RESPONSETIMEOUT, ABSOLUTETIMEOUT, or custom\n"
-"               value set by the RaiseException() application\n"
-"  context   The context executing when the exception occurred\n"
-"  exten     The extension executing when the exception occurred\n"
-"  priority  The numeric priority executing when the exception occurred\n",
-	.syntax = "EXCEPTION(<field>)",
 	.read = acf_exception_read,
 };
 
@@ -2661,10 +3036,10 @@ static char *handle_show_function(struct ast_cli_entry *e, int cmd, struct ast_c
 {
 	struct ast_custom_function *acf;
 	/* Maximum number of characters added by terminal coloring is 22 */
-	char infotitle[64 + AST_MAX_APP + 22], syntitle[40], destitle[40];
-	char info[64 + AST_MAX_APP], *synopsis = NULL, *description = NULL;
-	char stxtitle[40], *syntax = NULL;
-	int synopsis_size, description_size, syntax_size;
+	char infotitle[64 + AST_MAX_APP + 22], syntitle[40], destitle[40], argtitle[40], seealsotitle[40];
+	char info[64 + AST_MAX_APP], *synopsis = NULL, *description = NULL, *seealso = NULL;
+	char stxtitle[40], *syntax = NULL, *arguments = NULL;
+	int syntax_size, description_size, synopsis_size, arguments_size, seealso_size;
 	char *ret = NULL;
 	int which = 0;
 	int wordlen;
@@ -2691,49 +3066,75 @@ static char *handle_show_function(struct ast_cli_entry *e, int cmd, struct ast_c
 		return ret;
 	}
 
-	if (a->argc < 4)
+	if (a->argc < 4) {
 		return CLI_SHOWUSAGE;
+	}
 
 	if (!(acf = ast_custom_function_find(a->argv[3]))) {
 		ast_cli(a->fd, "No function by that name registered.\n");
 		return CLI_FAILURE;
-
 	}
 
-	if (acf->synopsis)
-		synopsis_size = strlen(acf->synopsis) + 23;
-	else
-		synopsis_size = strlen("Not available") + 23;
-	synopsis = alloca(synopsis_size);
+	syntax_size = strlen(S_OR(acf->syntax, "Not Available")) + AST_TERM_MAX_ESCAPE_CHARS;
+	if (!(syntax = ast_malloc(syntax_size))) {
+		ast_cli(a->fd, "Memory allocation failure!\n");
+		return CLI_FAILURE;
+	}
 
-	if (acf->desc)
-		description_size = strlen(acf->desc) + 23;
-	else
-		description_size = strlen("Not available") + 23;
-	description = alloca(description_size);
-
-	if (acf->syntax)
-		syntax_size = strlen(acf->syntax) + 23;
-	else
-		syntax_size = strlen("Not available") + 23;
-	syntax = alloca(syntax_size);
-
-	snprintf(info, 64 + AST_MAX_APP, "\n  -= Info about function '%s' =- \n\n", acf->name);
-	term_color(infotitle, info, COLOR_MAGENTA, 0, 64 + AST_MAX_APP + 22);
-	term_color(stxtitle, "[Syntax]\n", COLOR_MAGENTA, 0, 40);
+	snprintf(info, sizeof(info), "\n  -= Info about function '%s' =- \n\n", acf->name);
+	term_color(infotitle, info, COLOR_MAGENTA, 0, sizeof(infotitle));
 	term_color(syntitle, "[Synopsis]\n", COLOR_MAGENTA, 0, 40);
 	term_color(destitle, "[Description]\n", COLOR_MAGENTA, 0, 40);
-	term_color(syntax,
-		   acf->syntax ? acf->syntax : "Not available",
-		   COLOR_CYAN, 0, syntax_size);
-	term_color(synopsis,
-		   acf->synopsis ? acf->synopsis : "Not available",
-		   COLOR_CYAN, 0, synopsis_size);
-	term_color(description,
-		   acf->desc ? acf->desc : "Not available",
-		   COLOR_CYAN, 0, description_size);
+	term_color(stxtitle, "[Syntax]\n", COLOR_MAGENTA, 0, 40);
+	term_color(argtitle, "[Arguments]\n", COLOR_MAGENTA, 0, 40);
+	term_color(seealsotitle, "[See Also]\n", COLOR_MAGENTA, 0, 40);
+	term_color(syntax, S_OR(acf->syntax, "Not available"), COLOR_CYAN, 0, syntax_size);
+#ifdef AST_XML_DOCS
+	if (acf->docsrc == AST_XML_DOC) {
+		arguments = ast_xmldoc_printable(S_OR(acf->arguments, "Not available"), 1);
+		synopsis = ast_xmldoc_printable(S_OR(acf->synopsis, "Not available"), 1);
+		description = ast_xmldoc_printable(S_OR(acf->desc, "Not available"), 1);
+		seealso = ast_xmldoc_printable(S_OR(acf->seealso, "Not available"), 1);
+	} else
+#endif
+	{
+		synopsis_size = strlen(S_OR(acf->synopsis, "Not Available")) + AST_TERM_MAX_ESCAPE_CHARS;
+		synopsis = ast_malloc(synopsis_size);
 
-	ast_cli(a->fd,"%s%s%s\n\n%s%s\n\n%s%s\n", infotitle, stxtitle, syntax, syntitle, synopsis, destitle, description);
+		description_size = strlen(S_OR(acf->desc, "Not Available")) + AST_TERM_MAX_ESCAPE_CHARS;
+		description = ast_malloc(description_size);
+
+		arguments_size = strlen(S_OR(acf->arguments, "Not Available")) + AST_TERM_MAX_ESCAPE_CHARS;
+		arguments = ast_malloc(arguments_size);
+
+		seealso_size = strlen(S_OR(acf->seealso, "Not Available")) + AST_TERM_MAX_ESCAPE_CHARS;
+		seealso = ast_malloc(seealso_size);
+
+		/* check allocated memory. */
+		if (!synopsis || !description || !arguments || !seealso) {
+			ast_free(synopsis);
+			ast_free(description);
+			ast_free(arguments);
+			ast_free(seealso);
+			ast_free(syntax);
+			return CLI_FAILURE;
+		}
+
+		term_color(arguments, S_OR(acf->arguments, "Not available"), COLOR_CYAN, 0, arguments_size);
+		term_color(synopsis, S_OR(acf->synopsis, "Not available"), COLOR_CYAN, 0, synopsis_size);
+		term_color(description, S_OR(acf->desc, "Not available"), COLOR_CYAN, 0, description_size);
+		term_color(seealso, S_OR(acf->seealso, "Not available"), COLOR_CYAN, 0, seealso_size);
+	}
+
+	ast_cli(a->fd,"%s%s%s\n\n%s%s\n\n%s%s\n\n%s%s\n\n%s%s\n", 
+			infotitle, syntitle, synopsis, destitle, description, 
+			stxtitle, syntax, argtitle, arguments, seealsotitle, seealso);
+
+	ast_free(arguments);
+	ast_free(synopsis);
+	ast_free(description);
+	ast_free(seealso);
+	ast_free(syntax);
 
 	return CLI_SUCCESS;
 }
@@ -2760,11 +3161,68 @@ int ast_custom_function_unregister(struct ast_custom_function *acf)
 		return -1;
 
 	AST_RWLIST_WRLOCK(&acf_root);
-	if ((cur = AST_RWLIST_REMOVE(&acf_root, acf, acflist)))
+	if ((cur = AST_RWLIST_REMOVE(&acf_root, acf, acflist))) {
+		if (cur->docsrc == AST_XML_DOC) {
+			ast_string_field_free_memory(acf);
+		}
 		ast_verb(2, "Unregistered custom function %s\n", cur->name);
+	}
 	AST_RWLIST_UNLOCK(&acf_root);
 
 	return cur ? 0 : -1;
+}
+
+/*! \internal
+ *  \brief Retrieve the XML documentation of a specified ast_custom_function,
+ *         and populate ast_custom_function string fields.
+ *  \param acf ast_custom_function structure with empty 'desc' and 'synopsis'
+ *             but with a function 'name'.
+ *  \retval -1 On error.
+ *  \retval 0 On succes.
+ */
+static int acf_retrieve_docs(struct ast_custom_function *acf)
+{
+#ifdef AST_XML_DOCS
+	char *tmpxml;
+
+	/* Let's try to find it in the Documentation XML */
+	if (!ast_strlen_zero(acf->desc) || !ast_strlen_zero(acf->synopsis)) {
+		return 0;
+	}
+
+	if (ast_string_field_init(acf, 128)) {
+		return -1;
+	}
+
+	/* load synopsis */
+	tmpxml = ast_xmldoc_build_synopsis("function", acf->name);
+	ast_string_field_set(acf, synopsis, tmpxml);
+	ast_free(tmpxml);
+
+	/* load description */
+	tmpxml = ast_xmldoc_build_description("function", acf->name);
+	ast_string_field_set(acf, desc, tmpxml);
+	ast_free(tmpxml);
+
+	/* load syntax */
+	tmpxml = ast_xmldoc_build_syntax("function", acf->name);
+	ast_string_field_set(acf, syntax, tmpxml);
+	ast_free(tmpxml);
+
+	/* load arguments */
+	tmpxml = ast_xmldoc_build_arguments("function", acf->name);
+	ast_string_field_set(acf, arguments, tmpxml);
+	ast_free(tmpxml);
+
+	/* load seealso */
+	tmpxml = ast_xmldoc_build_seealso("function", acf->name);
+	ast_string_field_set(acf, seealso, tmpxml);
+	ast_free(tmpxml);
+
+	acf->docsrc = AST_XML_DOC;
+#endif
+
+	return 0;
 }
 
 int __ast_custom_function_register(struct ast_custom_function *acf, struct ast_module *mod)
@@ -2772,10 +3230,16 @@ int __ast_custom_function_register(struct ast_custom_function *acf, struct ast_m
 	struct ast_custom_function *cur;
 	char tmps[80];
 
-	if (!acf)
+	if (!acf) {
 		return -1;
+	}
 
 	acf->mod = mod;
+	acf->docsrc = AST_STATIC_DOC;
+
+	if (acf_retrieve_docs(acf)) {
+		return -1;
+	}
 
 	AST_RWLIST_WRLOCK(&acf_root);
 
@@ -2795,8 +3259,10 @@ int __ast_custom_function_register(struct ast_custom_function *acf, struct ast_m
 		}
 	}
 	AST_RWLIST_TRAVERSE_SAFE_END;
-	if (!cur)
+
+	if (!cur) {
 		AST_RWLIST_INSERT_TAIL(&acf_root, acf, acflist);
+	}
 
 	AST_RWLIST_UNLOCK(&acf_root);
 
@@ -2872,11 +3338,11 @@ int ast_func_write(struct ast_channel *chan, const char *function, const char *v
 	return -1;
 }
 
-static void pbx_substitute_variables_helper_full(struct ast_channel *c, struct varshead *headp, const char *cp1, char *cp2, int count)
+void pbx_substitute_variables_helper_full(struct ast_channel *c, struct varshead *headp, const char *cp1, char *cp2, int count, size_t *used)
 {
 	/* Substitutes variables into cp2, based on string cp1, cp2 NO LONGER NEEDS TO BE ZEROED OUT!!!!  */
 	char *cp4;
-	const char *tmp, *whereweare;
+	const char *tmp, *whereweare, *orig_cp2 = cp2;
 	int length, offset, offset2, isfunction;
 	char *workspace = NULL;
 	char *ltmp = NULL, *var = NULL;
@@ -2956,10 +3422,11 @@ static void pbx_substitute_variables_helper_full(struct ast_channel *c, struct v
 
 			/* Substitute if necessary */
 			if (needsub) {
+				size_t used;
 				if (!ltmp)
 					ltmp = alloca(VAR_BUF_SIZE);
 
-				pbx_substitute_variables_helper_full(c, headp, var, ltmp, VAR_BUF_SIZE - 1);
+				pbx_substitute_variables_helper_full(c, headp, var, ltmp, VAR_BUF_SIZE - 1, &used);
 				vars = ltmp;
 			} else {
 				vars = var;
@@ -2977,14 +3444,14 @@ static void pbx_substitute_variables_helper_full(struct ast_channel *c, struct v
 					cp4 = ast_func_read(c, vars, workspace, VAR_BUF_SIZE) ? NULL : workspace;
 				else {
 					struct varshead old;
-					struct ast_channel *c = ast_channel_alloc(0, 0, "", "", "", "", "", 0, "Bogus/%p", vars);
-					if (c) {
-						memcpy(&old, &c->varshead, sizeof(old));
-						memcpy(&c->varshead, headp, sizeof(c->varshead));
-						cp4 = ast_func_read(c, vars, workspace, VAR_BUF_SIZE) ? NULL : workspace;
+					struct ast_channel *bogus = ast_channel_alloc(0, 0, "", "", "", "", "", 0, "Bogus/%p", vars);
+					if (bogus) {
+						memcpy(&old, &bogus->varshead, sizeof(old));
+						memcpy(&bogus->varshead, headp, sizeof(bogus->varshead));
+						cp4 = ast_func_read(bogus, vars, workspace, VAR_BUF_SIZE) ? NULL : workspace;
 						/* Don't deallocate the varshead that was passed in */
-						memcpy(&c->varshead, &old, sizeof(c->varshead));
-						ast_channel_free(c);
+						memcpy(&bogus->varshead, &old, sizeof(bogus->varshead));
+						ast_channel_free(bogus);
 					} else
 						ast_log(LOG_ERROR, "Unable to allocate bogus channel for variable substitution.  Function results may be blank.\n");
 				}
@@ -3043,10 +3510,11 @@ static void pbx_substitute_variables_helper_full(struct ast_channel *c, struct v
 
 			/* Substitute if necessary */
 			if (needsub) {
+				size_t used;
 				if (!ltmp)
 					ltmp = alloca(VAR_BUF_SIZE);
 
-				pbx_substitute_variables_helper_full(c, headp, var, ltmp, VAR_BUF_SIZE - 1);
+				pbx_substitute_variables_helper_full(c, headp, var, ltmp, VAR_BUF_SIZE - 1, &used);
 				vars = ltmp;
 			} else {
 				vars = var;
@@ -3062,16 +3530,19 @@ static void pbx_substitute_variables_helper_full(struct ast_channel *c, struct v
 			}
 		}
 	}
+	*used = cp2 - orig_cp2;
 }
 
 void pbx_substitute_variables_helper(struct ast_channel *c, const char *cp1, char *cp2, int count)
 {
-	pbx_substitute_variables_helper_full(c, (c) ? &c->varshead : NULL, cp1, cp2, count);
+	size_t used;
+	pbx_substitute_variables_helper_full(c, (c) ? &c->varshead : NULL, cp1, cp2, count, &used);
 }
 
 void pbx_substitute_variables_varshead(struct varshead *headp, const char *cp1, char *cp2, int count)
 {
-	pbx_substitute_variables_helper_full(NULL, headp, cp1, cp2, count);
+	size_t used;
+	pbx_substitute_variables_helper_full(NULL, headp, cp1, cp2, count, &used);
 }
 
 static void pbx_substitute_variables(char *passdata, int datalen, struct ast_channel *c, struct ast_exten *e)
@@ -3176,6 +3647,8 @@ static int pbx_extension_helper(struct ast_channel *c, struct ast_context *con,
 			return pbx_exec(c, app, passdata);	/* 0 on success, -1 on failure */
 		}
 	} else if (q.swo) {	/* not found here, but in another switch */
+		if (found)
+			*found = 1;
 		ast_unlock_contexts();
 		if (matching_action) {
 			return -1;
@@ -3214,22 +3687,25 @@ static int pbx_extension_helper(struct ast_channel *c, struct ast_context *con,
 }
 
 /*! \brief Find hint for given extension in context */
+static struct ast_exten *ast_hint_extension_nolock(struct ast_channel *c, const char *context, const char *exten)
+{
+	struct pbx_find_info q = { .stacklen = 0 }; /* the rest is set in pbx_find_context */
+	return pbx_find_extension(c, NULL, &q, context, exten, PRIORITY_HINT, NULL, "", E_MATCH);
+}
+
 static struct ast_exten *ast_hint_extension(struct ast_channel *c, const char *context, const char *exten)
 {
 	struct ast_exten *e;
-	struct pbx_find_info q = { .stacklen = 0 }; /* the rest is set in pbx_find_context */
-
 	ast_rdlock_contexts();
-	e = pbx_find_extension(c, NULL, &q, context, exten, PRIORITY_HINT, NULL, "", E_MATCH);
+	e = ast_hint_extension_nolock(c, context, exten);
 	ast_unlock_contexts();
-
 	return e;
 }
 
 /*! \brief Check state of extension by using hints */
 static int ast_extension_state2(struct ast_exten *e)
 {
-	char hint[AST_MAX_EXTENSION] = "";
+	struct ast_str *hint = ast_str_thread_get(&extensionstate_buf, 16);
 	char *cur, *rest;
 	struct ast_devstate_aggregate agg;
 	enum ast_device_state state;
@@ -3239,9 +3715,9 @@ static int ast_extension_state2(struct ast_exten *e)
 
 	ast_devstate_aggregate_init(&agg);
 
-	ast_copy_string(hint, ast_get_extension_app(e), sizeof(hint));
+	ast_str_set(&hint, 0, "%s", ast_get_extension_app(e));
 
-	rest = hint;	/* One or more devices separated with a & character */
+	rest = ast_str_buffer(hint);	/* One or more devices separated with a & character */
 
 	while ( (cur = strsep(&rest, "&")) )
 		ast_devstate_aggregate_add(&agg, ast_device_state(cur));
@@ -3298,6 +3774,8 @@ static int handle_statechange(void *datap)
 {
 	struct ast_hint *hint;
 	struct statechange *sc = datap;
+
+	ast_rdlock_contexts();
 	AST_RWLIST_RDLOCK(&hints);
 
 	AST_RWLIST_TRAVERSE(&hints, hint, list) {
@@ -3336,6 +3814,7 @@ static int handle_statechange(void *datap)
 		hint->laststate = state;	/* record we saw the change */
 	}
 	AST_RWLIST_UNLOCK(&hints);
+	ast_unlock_contexts();
 	ast_free(sc);
 	return 0;
 }
@@ -3391,7 +3870,7 @@ int ast_extension_state_add(const char *context, const char *exten,
 	 */
 	if (e->exten[0] == '_') {
 		ast_add_extension(e->parent->name, 0, exten, e->priority, e->label,
-			e->cidmatch, e->app, strdup(e->data), free,
+			e->cidmatch, e->app, ast_strdup(e->data), ast_free_ptr,
 			e->registrar);
 		e = ast_hint_extension(NULL, context, exten);
 		if (!e || e->exten[0] == '_') {
@@ -3621,6 +4100,7 @@ static void set_ext_pri(struct ast_channel *c, const char *exten, int pri)
 
 /*!
  * \brief collect digits from the channel into the buffer.
+ * \param waittime is in milliseconds
  * \retval 0 on timeout or done.
  * \retval -1 on error.
 */
@@ -3632,7 +4112,7 @@ static int collect_digits(struct ast_channel *c, int waittime, char *buf, int bu
 	while (ast_matchmore_extension(c, c->context, buf, 1, c->cid.cid_num)) {
 		/* As long as we're willing to wait, and as long as it's not defined,
 		   keep reading digits until we can't possibly get a right answer anymore.  */
-		digit = ast_waitfordigit(c, waittime * 1000);
+		digit = ast_waitfordigit(c, waittime);
 		if (c->_softhangup == AST_SOFTHANGUP_ASYNCGOTO) {
 			c->_softhangup = 0;
 		} else {
@@ -3650,7 +4130,8 @@ static int collect_digits(struct ast_channel *c, int waittime, char *buf, int bu
 	return 0;
 }
 
-static int __ast_pbx_run(struct ast_channel *c)
+static enum ast_pbx_result __ast_pbx_run(struct ast_channel *c, 
+		struct ast_pbx_args *args)
 {
 	int found = 0;	/* set if we find at least one match */
 	int res = 0;
@@ -3724,10 +4205,6 @@ static int __ast_pbx_run(struct ast_channel *c)
 				pos = 0;
 				dst_exten[pos++] = digit = res;
 				dst_exten[pos] = '\0';
-			} else if (res == AST_PBX_KEEPALIVE) {
-				ast_debug(1, "Spawn extension (%s,%s,%d) exited KEEPALIVE on '%s'\n", c->context, c->exten, c->priority, c->name);
-				ast_verb(2, "Spawn extension (%s, %s, %d) exited KEEPALIVE on '%s'\n", c->context, c->exten, c->priority, c->name);
-				error = 1;
 			} else if (res == AST_PBX_INCOMPLETE) {
 				ast_debug(1, "Spawn extension (%s,%s,%d) exited INCOMPLETE on '%s'\n", c->context, c->exten, c->priority, c->name);
 				ast_verb(2, "Spawn extension (%s, %s, %d) exited INCOMPLETE on '%s'\n", c->context, c->exten, c->priority, c->name);
@@ -3863,11 +4340,18 @@ static int __ast_pbx_run(struct ast_channel *c)
 			}
 		}
 	}
-	if (!found && !error)
+
+	if (!found && !error) {
 		ast_log(LOG_WARNING, "Don't know what to do with '%s'\n", c->name);
-	if (res != AST_PBX_KEEPALIVE)
+	}
+
+	if (!args || !args->no_hangup_chan) {
 		ast_softhangup(c, c->hangupcause ? c->hangupcause : AST_CAUSE_NORMAL_CLEARING);
-	if ((res != AST_PBX_KEEPALIVE) && ast_exists_extension(c, c->context, "h", 1, c->cid.cid_num)) {
+	}
+
+	if ((!args || !args->no_hangup_chan) &&
+			!ast_test_flag(c, AST_FLAG_BRIDGE_HANGUP_RUN) && 
+			ast_exists_extension(c, c->context, "h", 1, c->cid.cid_num)) {
 		set_ext_pri(c, "h", 1);
 		while ((res = ast_spawn_extension(c, c->context, c->exten, c->priority, c->cid.cid_num, &found, 1)) == 0) {
 			c->priority++;
@@ -3879,11 +4363,14 @@ static int __ast_pbx_run(struct ast_channel *c)
 		}
 	}
 	ast_set2_flag(c, autoloopflag, AST_FLAG_IN_AUTOLOOP);
-
+	ast_clear_flag(c, AST_FLAG_BRIDGE_HANGUP_RUN); /* from one round to the next, make sure this gets cleared */
 	pbx_destroy(c->pbx);
 	c->pbx = NULL;
-	if (res != AST_PBX_KEEPALIVE)
+
+	if (!args || !args->no_hangup_chan) {
 		ast_hangup(c);
+	}
+
 	return 0;
 }
 
@@ -3973,7 +4460,7 @@ static void *pbx_thread(void *data)
 	 */
 	struct ast_channel *c = data;
 
-	__ast_pbx_run(c);
+	__ast_pbx_run(c, NULL);
 	decrease_call_count();
 
 	pthread_exit(NULL);
@@ -3996,23 +4483,31 @@ enum ast_pbx_result ast_pbx_start(struct ast_channel *c)
 	/* Start a new thread, and get something handling this channel. */
 	if (ast_pthread_create_detached(&t, NULL, pbx_thread, c)) {
 		ast_log(LOG_WARNING, "Failed to create new channel thread\n");
+		decrease_call_count();
 		return AST_PBX_FAILED;
 	}
 
 	return AST_PBX_SUCCESS;
 }
 
-enum ast_pbx_result ast_pbx_run(struct ast_channel *c)
+enum ast_pbx_result ast_pbx_run_args(struct ast_channel *c, struct ast_pbx_args *args)
 {
 	enum ast_pbx_result res = AST_PBX_SUCCESS;
 
-	if (increase_call_count(c))
+	if (increase_call_count(c)) {
 		return AST_PBX_CALL_LIMIT;
+	}
 
-	res = __ast_pbx_run(c);
+	res = __ast_pbx_run(c, args);
+
 	decrease_call_count();
 
 	return res;
+}
+
+enum ast_pbx_result ast_pbx_run(struct ast_channel *c)
+{
+	return ast_pbx_run_args(c, NULL);
 }
 
 int ast_active_calls(void)
@@ -4125,6 +4620,7 @@ int ast_context_remove_include2(struct ast_context *con, const char *include, co
 			else
 				con->includes = i->next;
 			/* free include and return */
+			ast_destroy_timing(&(i->timing));
 			ast_free(i);
 			ret = 0;
 			break;
@@ -4198,13 +4694,13 @@ int ast_context_remove_extension(const char *context, const char *extension, int
 	return ast_context_remove_extension_callerid(context, extension, priority, NULL, 0, registrar);
 }
 
-int ast_context_remove_extension_callerid(const char *context, const char *extension, int priority, const char *callerid, int matchcid, const char *registrar)
+int ast_context_remove_extension_callerid(const char *context, const char *extension, int priority, const char *callerid, int matchcallerid, const char *registrar)
 {
 	int ret = -1; /* default error return */
 	struct ast_context *c = find_context_locked(context);
 
 	if (c) { /* ... remove extension ... */
-		ret = ast_context_remove_extension_callerid2(c, extension, priority, callerid, matchcid, registrar, 1);
+		ret = ast_context_remove_extension_callerid2(c, extension, priority, callerid, matchcallerid, registrar, 1);
 		ast_unlock_contexts();
 	}
 	return ret;
@@ -4225,7 +4721,7 @@ int ast_context_remove_extension2(struct ast_context *con, const char *extension
 	return ast_context_remove_extension_callerid2(con, extension, priority, NULL, 0, registrar, already_locked);
 }
 
-int ast_context_remove_extension_callerid2(struct ast_context *con, const char *extension, int priority, const char *callerid, int matchcid, const char *registrar, int already_locked)
+int ast_context_remove_extension_callerid2(struct ast_context *con, const char *extension, int priority, const char *callerid, int matchcallerid, const char *registrar, int already_locked)
 {
 	struct ast_exten *exten, *prev_exten = NULL;
 	struct ast_exten *peer;
@@ -4243,14 +4739,14 @@ int ast_context_remove_extension_callerid2(struct ast_context *con, const char *
 	/* FIXME For backwards compatibility, if callerid==NULL, then remove ALL
 	 * peers, not just those matching the callerid. */
 #ifdef NEED_DEBUG
-	ast_verb(3,"Removing %s/%s/%d%s%s from trees, registrar=%s\n", con->name, extension, priority, matchcid ? "/" : "", matchcid ? callerid : "", registrar);
+	ast_verb(3,"Removing %s/%s/%d%s%s from trees, registrar=%s\n", con->name, extension, priority, matchcallerid ? "/" : "", matchcallerid ? callerid : "", registrar);
 #endif
 #ifdef CONTEXT_DEBUG
 	check_contexts(__FILE__, __LINE__);
 #endif
 	/* find this particular extension */
 	ex.exten = dummy_name;
-	ex.matchcid = matchcid && !ast_strlen_zero(callerid); /* don't say match if there's no callerid */
+	ex.matchcid = matchcallerid && !ast_strlen_zero(callerid); /* don't say match if there's no callerid */
 	ex.cidmatch = callerid;
 	ast_copy_string(dummy_name, extension, sizeof(dummy_name));
 	exten = ast_hashtab_lookup(con->root_table, &ex);
@@ -4323,7 +4819,7 @@ int ast_context_remove_extension_callerid2(struct ast_context *con, const char *
 	for (exten = con->root; exten; prev_exten = exten, exten = exten->next) {
 		if (!strcmp(exten->exten, extension) &&
 			(!registrar || !strcmp(exten->registrar, registrar)) &&
-			(!matchcid || (!ast_strlen_zero(callerid) && !ast_strlen_zero(exten->cidmatch) && !strcmp(exten->cidmatch, callerid)) || (ast_strlen_zero(callerid) && ast_strlen_zero(exten->cidmatch))))
+			(!matchcallerid || (!ast_strlen_zero(callerid) && !ast_strlen_zero(exten->cidmatch) && !strcmp(exten->cidmatch, callerid)) || (ast_strlen_zero(callerid) && ast_strlen_zero(exten->cidmatch))))
 			break;
 	}
 	if (!exten) {
@@ -4335,10 +4831,10 @@ int ast_context_remove_extension_callerid2(struct ast_context *con, const char *
 
 	/* scan the priority list to remove extension with exten->priority == priority */
 	for (peer = exten, next_peer = exten->peer ? exten->peer : exten->next;
-		 peer && !strcmp(peer->exten, extension) && (!matchcid || (!ast_strlen_zero(callerid) && !ast_strlen_zero(peer->cidmatch) && !strcmp(peer->cidmatch,callerid)) || (ast_strlen_zero(callerid) && ast_strlen_zero(peer->cidmatch)));
+		 peer && !strcmp(peer->exten, extension) && (!matchcallerid || (!ast_strlen_zero(callerid) && !ast_strlen_zero(peer->cidmatch) && !strcmp(peer->cidmatch,callerid)) || (ast_strlen_zero(callerid) && ast_strlen_zero(peer->cidmatch)));
 			peer = next_peer, next_peer = next_peer ? (next_peer->peer ? next_peer->peer : next_peer->next) : NULL) {
 		if ((priority == 0 || peer->priority == priority) &&
-				(!callerid || !matchcid || (matchcid && !strcmp(peer->cidmatch, callerid))) &&
+				(!callerid || !matchcallerid || (matchcallerid && !strcmp(peer->cidmatch, callerid))) &&
 				(!registrar || !strcmp(peer->registrar, registrar) )) {
 			found = 1;
 
@@ -4461,6 +4957,9 @@ int ast_register_application2(const char *app, int (*execute)(struct ast_channel
 	struct ast_app *tmp, *cur = NULL;
 	char tmps[80];
 	int length, res;
+#ifdef AST_XML_DOCS
+	char *tmpxml;
+#endif
 
 	AST_RWLIST_WRLOCK(&apps);
 	AST_RWLIST_TRAVERSE(&apps, tmp, list) {
@@ -4479,10 +4978,50 @@ int ast_register_application2(const char *app, int (*execute)(struct ast_channel
 		return -1;
 	}
 
+	if (ast_string_field_init(tmp, 128)) {
+		ast_free(tmp);
+		return -1;
+	}
+
+#ifdef AST_XML_DOCS
+	/* Try to lookup the docs in our XML documentation database */
+	if (ast_strlen_zero(synopsis) && ast_strlen_zero(description)) {
+		/* load synopsis */
+		tmpxml = ast_xmldoc_build_synopsis("application", app);
+		ast_string_field_set(tmp, synopsis, tmpxml);
+		ast_free(tmpxml);
+
+		/* load description */
+		tmpxml = ast_xmldoc_build_description("application", app);
+		ast_string_field_set(tmp, description, tmpxml);
+		ast_free(tmpxml);
+
+		/* load syntax */
+		tmpxml = ast_xmldoc_build_syntax("application", app);
+		ast_string_field_set(tmp, syntax, tmpxml);
+		ast_free(tmpxml);
+
+		/* load arguments */
+		tmpxml = ast_xmldoc_build_arguments("application", app);
+		ast_string_field_set(tmp, arguments, tmpxml);
+		ast_free(tmpxml);
+
+		/* load seealso */
+		tmpxml = ast_xmldoc_build_seealso("application", app);
+		ast_string_field_set(tmp, seealso, tmpxml);
+		ast_free(tmpxml);
+		tmp->docsrc = AST_XML_DOC;
+	} else {
+#endif
+		ast_string_field_set(tmp, synopsis, synopsis);
+		ast_string_field_set(tmp, description, description);
+		tmp->docsrc = AST_STATIC_DOC;
+#ifdef AST_XML_DOCS
+	}
+#endif
+
 	strcpy(tmp->name, app);
 	tmp->execute = execute;
-	tmp->synopsis = synopsis;
-	tmp->description = description;
 	tmp->module = mod;
 
 	/* Store in alphabetical order */
@@ -4536,6 +5075,78 @@ void ast_unregister_switch(struct ast_switch *sw)
  * Help for CLI commands ...
  */
 
+static void print_app_docs(struct ast_app *aa, int fd)
+{
+	/* Maximum number of characters added by terminal coloring is 22 */
+	char infotitle[64 + AST_MAX_APP + 22], syntitle[40], destitle[40], stxtitle[40], argtitle[40];
+	char seealsotitle[40];
+	char info[64 + AST_MAX_APP], *synopsis = NULL, *description = NULL, *syntax = NULL, *arguments = NULL;
+	char *seealso = NULL;
+	int syntax_size, synopsis_size, description_size, arguments_size, seealso_size;
+
+	snprintf(info, sizeof(info), "\n  -= Info about application '%s' =- \n\n", aa->name);
+	term_color(infotitle, info, COLOR_MAGENTA, 0, sizeof(infotitle));
+
+	term_color(syntitle, "[Synopsis]\n", COLOR_MAGENTA, 0, 40);
+	term_color(destitle, "[Description]\n", COLOR_MAGENTA, 0, 40);
+	term_color(stxtitle, "[Syntax]\n", COLOR_MAGENTA, 0, 40);
+	term_color(argtitle, "[Arguments]\n", COLOR_MAGENTA, 0, 40);
+	term_color(seealsotitle, "[See Also]\n", COLOR_MAGENTA, 0, 40);
+
+#ifdef AST_XML_DOCS
+	if (aa->docsrc == AST_XML_DOC) {
+		description = ast_xmldoc_printable(S_OR(aa->description, "Not available"), 1);
+		arguments = ast_xmldoc_printable(S_OR(aa->arguments, "Not available"), 1);
+		synopsis = ast_xmldoc_printable(S_OR(aa->synopsis, "Not available"), 1);
+		seealso = ast_xmldoc_printable(S_OR(aa->seealso, "Not available"), 1);
+
+		if (!synopsis || !description || !arguments || !seealso) {
+			goto return_cleanup;
+		}
+	} else
+#endif
+	{
+		synopsis_size = strlen(S_OR(aa->synopsis, "Not Available")) + AST_TERM_MAX_ESCAPE_CHARS;
+		synopsis = ast_malloc(synopsis_size);
+
+		description_size = strlen(S_OR(aa->description, "Not Available")) + AST_TERM_MAX_ESCAPE_CHARS;
+		description = ast_malloc(description_size);
+
+		arguments_size = strlen(S_OR(aa->arguments, "Not Available")) + AST_TERM_MAX_ESCAPE_CHARS;
+		arguments = ast_malloc(arguments_size);
+
+		seealso_size = strlen(S_OR(aa->seealso, "Not Available")) + AST_TERM_MAX_ESCAPE_CHARS;
+		seealso = ast_malloc(seealso_size);
+
+		if (!synopsis || !description || !arguments || !seealso) {
+			goto return_cleanup;
+		}
+
+		term_color(synopsis, S_OR(aa->synopsis, "Not available"), COLOR_CYAN, 0, synopsis_size);
+		term_color(description, S_OR(aa->description, "Not available"),	COLOR_CYAN, 0, description_size);
+		term_color(arguments, S_OR(aa->arguments, "Not available"), COLOR_CYAN, 0, arguments_size);
+		term_color(seealso, S_OR(aa->seealso, "Not available"), COLOR_CYAN, 0, seealso_size);
+	}
+
+	/* Handle the syntax the same for both XML and raw docs */
+	syntax_size = strlen(S_OR(aa->syntax, "Not Available")) + AST_TERM_MAX_ESCAPE_CHARS;
+	if (!(syntax = ast_malloc(syntax_size))) {
+		goto return_cleanup;
+	}
+	term_color(syntax, S_OR(aa->syntax, "Not available"), COLOR_CYAN, 0, syntax_size);
+
+	ast_cli(fd, "%s%s%s\n\n%s%s\n\n%s%s\n\n%s%s\n\n%s%s\n", 
+			infotitle, syntitle, synopsis, destitle, description, 
+			stxtitle, syntax, argtitle, arguments, seealsotitle, seealso);
+
+return_cleanup:
+	ast_free(description);
+	ast_free(arguments);
+	ast_free(synopsis);
+	ast_free(seealso);
+	ast_free(syntax);
+}
+
 /*
  * \brief 'show application' CLI command implementation function...
  */
@@ -4574,58 +5185,22 @@ static char *handle_show_application(struct ast_cli_entry *e, int cmd, struct as
 		return ret;
 	}
 
-	if (a->argc < 4)
+	if (a->argc < 4) {
 		return CLI_SHOWUSAGE;
+	}
 
-	/* ... go through all applications ... */
 	AST_RWLIST_RDLOCK(&apps);
 	AST_RWLIST_TRAVERSE(&apps, aa, list) {
-		/* ... compare this application name with all arguments given
-		 * to 'show application' command ... */
+		/* Check for each app that was supplied as an argument */
 		for (app = 3; app < a->argc; app++) {
-			if (!strcasecmp(aa->name, a->argv[app])) {
-				/* Maximum number of characters added by terminal coloring is 22 */
-				char infotitle[64 + AST_MAX_APP + 22], syntitle[40], destitle[40];
-				char info[64 + AST_MAX_APP], *synopsis = NULL, *description = NULL;
-				int synopsis_size, description_size;
-
-				no_registered_app = 0;
-
-				if (aa->synopsis)
-					synopsis_size = strlen(aa->synopsis) + 23;
-				else
-					synopsis_size = strlen("Not available") + 23;
-				synopsis = alloca(synopsis_size);
-
-				if (aa->description)
-					description_size = strlen(aa->description) + 23;
-				else
-					description_size = strlen("Not available") + 23;
-				description = alloca(description_size);
-
-				if (synopsis && description) {
-					snprintf(info, 64 + AST_MAX_APP, "\n  -= Info about application '%s' =- \n\n", aa->name);
-					term_color(infotitle, info, COLOR_MAGENTA, 0, 64 + AST_MAX_APP + 22);
-					term_color(syntitle, "[Synopsis]\n", COLOR_MAGENTA, 0, 40);
-					term_color(destitle, "[Description]\n", COLOR_MAGENTA, 0, 40);
-					term_color(synopsis,
-									aa->synopsis ? aa->synopsis : "Not available",
-									COLOR_CYAN, 0, synopsis_size);
-					term_color(description,
-									aa->description ? aa->description : "Not available",
-									COLOR_CYAN, 0, description_size);
-
-					ast_cli(a->fd,"%s%s%s\n\n%s%s\n", infotitle, syntitle, synopsis, destitle, description);
-				} else {
-					/* ... one of our applications, show info ...*/
-					ast_cli(a->fd,"\n  -= Info about application '%s' =- \n\n"
-						"[Synopsis]\n  %s\n\n"
-						"[Description]\n%s\n",
-						aa->name,
-						aa->synopsis ? aa->synopsis : "Not available",
-						aa->description ? aa->description : "Not available");
-				}
+			if (strcasecmp(aa->name, a->argv[app])) {
+				continue;
 			}
+
+			/* We found it! */
+			no_registered_app = 0;
+
+			print_app_docs(aa, a->fd);
 		}
 	}
 	AST_RWLIST_UNLOCK(&apps);
@@ -5075,18 +5650,57 @@ static int show_dialplan_helper(int fd, const char *context, const char *exten, 
 			}
 		}
 		
-		if (option_debug && c->pattern_tree)
-		{
-			ast_cli(fd,"\r\n     In-mem exten Trie for Fast Extension Pattern Matching:\r\n\r\n");
+		ast_unlock_context(c);
 
-			ast_cli(fd,"\r\n           Explanation: Node Contents Format = <char(s) to match>:<pattern?>:<specif>:[matched extension]\r\n");
-			ast_cli(fd,    "                        Where <char(s) to match> is a set of chars, any one of which should match the current character\r\n");
-			ast_cli(fd,    "                              <pattern?>: Y if this a pattern match (eg. _XZN[5-7]), N otherwise\r\n");
-			ast_cli(fd,    "                              <specif>: an assigned 'exactness' number for this matching char. The lower the number, the more exact the match\r\n");
-			ast_cli(fd,    "                              [matched exten]: If all chars matched to this point, which extension this matches. In form: EXTEN:<exten string> \r\n");
-			ast_cli(fd,    "                        In general, you match a trie node to a string character, from left to right. All possible matching chars\r\n");
-			ast_cli(fd,    "                        are in a string vertically, separated by an unbroken string of '+' characters.\r\n\r\n");
+		/* if we print something in context, make an empty line */
+		if (context_info_printed)
+			ast_cli(fd, "\r\n");
+	}
+	ast_unlock_contexts();
+
+	return (dpc->total_exten == old_total_exten) ? -1 : res;
+}
+
+static int show_debug_helper(int fd, const char *context, const char *exten, struct dialplan_counters *dpc, struct ast_include *rinclude, int includecount, const char *includes[])
+{
+	struct ast_context *c = NULL;
+	int res = 0, old_total_exten = dpc->total_exten;
+
+	ast_cli(fd,"\r\n     In-mem exten Trie for Fast Extension Pattern Matching:\r\n\r\n");
+
+	ast_cli(fd,"\r\n           Explanation: Node Contents Format = <char(s) to match>:<pattern?>:<specif>:[matched extension]\r\n");
+	ast_cli(fd,    "                        Where <char(s) to match> is a set of chars, any one of which should match the current character\r\n");
+	ast_cli(fd,    "                              <pattern?>: Y if this a pattern match (eg. _XZN[5-7]), N otherwise\r\n");
+	ast_cli(fd,    "                              <specif>: an assigned 'exactness' number for this matching char. The lower the number, the more exact the match\r\n");
+	ast_cli(fd,    "                              [matched exten]: If all chars matched to this point, which extension this matches. In form: EXTEN:<exten string> \r\n");
+	ast_cli(fd,    "                        In general, you match a trie node to a string character, from left to right. All possible matching chars\r\n");
+	ast_cli(fd,    "                        are in a string vertically, separated by an unbroken string of '+' characters.\r\n\r\n");
+	ast_rdlock_contexts();
+
+	/* walk all contexts ... */
+	while ( (c = ast_walk_contexts(c)) ) {
+		int context_info_printed = 0;
+
+		if (context && strcmp(ast_get_context_name(c), context))
+			continue;	/* skip this one, name doesn't match */
+
+		dpc->context_existence = 1;
+
+		if (!c->pattern_tree)
+			ast_exists_extension(NULL, c->name, "s", 1, ""); /* do this to force the trie to built, if it is not already */
+
+		ast_rdlock_context(c);
+
+		dpc->total_context++;
+		ast_cli(fd, "[ Context '%s' created by '%s' ]\n",
+			ast_get_context_name(c), ast_get_context_registrar(c));
+		context_info_printed = 1;
+		
+		if (c->pattern_tree)
+		{
 			cli_match_char_tree(c->pattern_tree, " ", fd);
+		} else {
+			ast_cli(fd,"\r\n     No Pattern Trie present. Perhaps the context is empty...or there is trouble...\r\n\r\n");
 		}
 
 		ast_unlock_context(c);
@@ -5161,6 +5775,62 @@ static char *handle_show_dialplan(struct ast_cli_entry *e, int cmd, struct ast_c
 				counters.total_exten, counters.total_exten == 1 ? "extension" : "extensions",
 				counters.total_prio, counters.total_prio == 1 ? "priority" : "priorities",
 				counters.total_context, counters.total_context == 1 ? "context" : "contexts");
+
+	/* everything ok */
+	return CLI_SUCCESS;
+}
+
+/*! \brief Send ack once */
+static char *handle_debug_dialplan(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	char *exten = NULL, *context = NULL;
+	/* Variables used for different counters */
+	struct dialplan_counters counters;
+	const char *incstack[AST_PBX_MAX_STACK];
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "dialplan debug";
+		e->usage = 
+			"Usage: dialplan debug [context]\n"
+			"       Show dialplan context Trie(s). Usually only useful to folks debugging the deep internals of the fast pattern matcher\n";
+		return NULL;
+	case CLI_GENERATE:	
+		return complete_show_dialplan_context(a->line, a->word, a->pos, a->n);
+	}
+
+	memset(&counters, 0, sizeof(counters));
+
+	if (a->argc != 2 && a->argc != 3)
+		return CLI_SHOWUSAGE;
+
+	/* we obtain [exten@]context? if yes, split them ... */
+	/* note: we ignore the exten totally here .... */
+	if (a->argc == 3) {
+		if (strchr(a->argv[2], '@')) {	/* split into exten & context */
+			context = ast_strdupa(a->argv[2]);
+			exten = strsep(&context, "@");
+			/* change empty strings to NULL */
+			if (ast_strlen_zero(exten))
+				exten = NULL;
+		} else { /* no '@' char, only context given */
+			context = a->argv[2];
+		}
+		if (ast_strlen_zero(context))
+			context = NULL;
+	}
+	/* else Show complete dial plan, context and exten are NULL */
+	show_debug_helper(a->fd, context, exten, &counters, NULL, 0, incstack);
+
+	/* check for input failure and throw some error messages */
+	if (context && !counters.context_existence) {
+		ast_cli(a->fd, "There is no existence of '%s' context\n", context);
+		return CLI_FAILURE;
+	}
+
+
+	ast_cli(a->fd,"-= %d %s. =-\n",
+			counters.total_context, counters.total_context == 1 ? "context" : "contexts");
 
 	/* everything ok */
 	return CLI_SUCCESS;
@@ -5403,15 +6073,6 @@ static char *handle_show_globals(struct ast_cli_entry *e, int cmd, struct ast_cl
 	return CLI_SUCCESS;
 }
 
-static char *handle_show_globals_deprecated(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
-{
-
-	char *res = handle_show_globals(e, cmd, a);
-	if (cmd == CLI_INIT)
-		e->command = "core show globals";
-	return res;
-}
-
 /*! \brief CLI support for listing chanvar's variables in a parseable way */
 static char *handle_show_chanvar(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
@@ -5438,8 +6099,8 @@ static char *handle_show_chanvar(struct ast_cli_entry *e, int cmd, struct ast_cl
 	}
 
 	pbx_builtin_serialize_variables(chan, &vars);
-	if (vars->str) {
-		ast_cli(a->fd, "\nVariables for channel %s:\n%s\n", a->argv[e->args], vars->str);
+	if (ast_str_strlen(vars)) {
+		ast_cli(a->fd, "\nVariables for channel %s:\n%s\n", a->argv[e->args], ast_str_buffer(vars));
 	}
 	ast_channel_unlock(chan);
 	return CLI_SUCCESS;
@@ -5465,14 +6126,6 @@ static char *handle_set_global(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	ast_cli(a->fd, "\n    -- Global variable '%s' set to '%s'\n", a->argv[3], a->argv[4]);
 
 	return CLI_SUCCESS;
-}
-
-static char *handle_set_global_deprecated(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
-{
-	char *res = handle_set_global(e, cmd, a);
-	if (cmd == CLI_INIT)
-		e->command = "core set global";
-	return res;
 }
 
 static char *handle_set_chanvar(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
@@ -5508,14 +6161,6 @@ static char *handle_set_chanvar(struct ast_cli_entry *e, int cmd, struct ast_cli
 	ast_cli(a->fd, "\n    -- Channel variable '%s' set to '%s' for '%s'\n",  var_name, var_value, chan_name);
 
 	return CLI_SUCCESS;
-}
-
-static char *handle_set_chanvar_deprecated(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
-{
-	char *res = handle_set_chanvar(e, cmd, a);
-	if (cmd == CLI_INIT)
-		e->command = "core set chanvar";
-	return res;
 }
 
 static char *handle_set_extenpatternmatchnew(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
@@ -5575,14 +6220,6 @@ static char *handle_unset_extenpatternmatchnew(struct ast_cli_entry *e, int cmd,
 }
 
 /*
- * Deprecated CLI commands
- */
-
-static struct ast_cli_entry cli_show_globals_deprecated = AST_CLI_DEFINE(handle_show_globals_deprecated, "Show global dialplan variables.");
-static struct ast_cli_entry cli_set_chanvar_deprecated = AST_CLI_DEFINE(handle_set_chanvar_deprecated, "Set a channel variable.");
-static struct ast_cli_entry cli_set_global_deprecated = AST_CLI_DEFINE(handle_set_global_deprecated, "Set global dialplan variable.");
-
-/*
  * CLI entries for upper commands ...
  */
 static struct ast_cli_entry pbx_cli[] = {
@@ -5591,13 +6228,14 @@ static struct ast_cli_entry pbx_cli[] = {
 	AST_CLI_DEFINE(handle_show_switches, "Show alternative switches"),
 	AST_CLI_DEFINE(handle_show_hints, "Show dialplan hints"),
 	AST_CLI_DEFINE(handle_show_hint, "Show dialplan hint"),
-	AST_CLI_DEFINE(handle_show_globals, "Show global dialplan variables", .deprecate_cmd = &cli_show_globals_deprecated),
+	AST_CLI_DEFINE(handle_show_globals, "Show global dialplan variables"),
 	AST_CLI_DEFINE(handle_show_chanvar, "Show channel variables"),
 	AST_CLI_DEFINE(handle_show_function, "Describe a specific dialplan function"),
 	AST_CLI_DEFINE(handle_show_application, "Describe a specific dialplan application"),
-	AST_CLI_DEFINE(handle_set_global, "Set global dialplan variable", .deprecate_cmd = &cli_set_global_deprecated),
-	AST_CLI_DEFINE(handle_set_chanvar, "Set a channel variable", .deprecate_cmd = &cli_set_chanvar_deprecated),
+	AST_CLI_DEFINE(handle_set_global, "Set global dialplan variable"),
+	AST_CLI_DEFINE(handle_set_chanvar, "Set a channel variable"),
 	AST_CLI_DEFINE(handle_show_dialplan, "Show dialplan"),
+	AST_CLI_DEFINE(handle_debug_dialplan, "Show fast extension pattern matching data structures"),
 	AST_CLI_DEFINE(handle_unset_extenpatternmatchnew, "Use the Old extension pattern matching algorithm."),
 	AST_CLI_DEFINE(handle_set_extenpatternmatchnew, "Use the New extension pattern matching algorithm."),
 };
@@ -5631,6 +6269,11 @@ int ast_unregister_application(const char *app)
 			unreference_cached_app(tmp);
 			AST_RWLIST_REMOVE_CURRENT(list);
 			ast_verb(2, "Unregistered application '%s'\n", tmp->name);
+#ifdef AST_XML_DOCS
+			if (tmp->docsrc == AST_XML_DOC) {
+				ast_string_field_free_memory(tmp);
+			}
+#endif
 			ast_free(tmp);
 			break;
 		}
@@ -5921,8 +6564,9 @@ void ast_merge_contexts_and_delete(struct ast_context **extcontexts, struct ast_
 		 */
 		if (exten && exten->exten[0] == '_') {
 			ast_add_extension(exten->parent->name, 0, this->exten, PRIORITY_HINT, NULL,
-				0, exten->app, strdup(exten->data), free, registrar);
-			exten = ast_hint_extension(NULL, this->context, this->exten);
+				0, exten->app, ast_strdup(exten->data), ast_free_ptr, registrar);
+			/* rwlocks are not recursive locks */
+			exten = ast_hint_extension_nolock(NULL, this->context, this->exten);
 		}
 
 		/* Find the hint in the list of hints */
@@ -6003,15 +6647,20 @@ static int lookup_name(const char *s, char *const names[], int max)
 {
 	int i;
 
-	if (names) {
+	if (names && *s > '9') {
 		for (i = 0; names[i]; i++) {
-			if (!strcasecmp(s, names[i]))
-				return i+1;
+			if (!strcasecmp(s, names[i])) {
+				return i;
+			}
 		}
-	} else if (sscanf(s, "%d", &i) == 1 && i >= 1 && i <= max) {
-		return i;
 	}
-	return 0; /* error return */
+
+	/* Allow months and weekdays to be specified as numbers, as well */
+	if (sscanf(s, "%d", &i) == 1 && i >= 1 && i <= max) {
+		/* What the array offset would have been: "1" would be at offset 0 */
+		return i - 1;
+	}
+	return -1; /* error return */
 }
 
 /*! \brief helper function to return a range up to max (7, 12, 31 respectively).
@@ -6019,131 +6668,104 @@ static int lookup_name(const char *s, char *const names[], int max)
  */
 static unsigned get_range(char *src, int max, char *const names[], const char *msg)
 {
-	int s, e; /* start and ending position */
+	int start, end; /* start and ending position */
 	unsigned int mask = 0;
+	char *part;
 
 	/* Check for whole range */
 	if (ast_strlen_zero(src) || !strcmp(src, "*")) {
-		s = 0;
-		e = max - 1;
-	} else {
-		/* Get start and ending position */
-		char *c = strchr(src, '-');
-		if (c)
-			*c++ = '\0';
-		/* Find the start */
-		s = lookup_name(src, names, max);
-		if (!s) {
-			ast_log(LOG_WARNING, "Invalid %s '%s', assuming none\n", msg, src);
-			return 0;
-		}
-		s--;
-		if (c) { /* find end of range */
-			e = lookup_name(c, names, max);
-			if (!e) {
-				ast_log(LOG_WARNING, "Invalid end %s '%s', assuming none\n", msg, c);
-				return 0;
-			}
-			e--;
-		} else
-			e = s;
+		return (1 << max) - 1;
 	}
-	/* Fill the mask. Remember that ranges are cyclic */
-	mask = 1 << e;	/* initialize with last element */
-	while (s != e) {
-		if (s >= max) {
-			s = 0;
-			mask |= (1 << s);
+
+	while ((part = strsep(&src, "&"))) {
+		/* Get start and ending position */
+		char *endpart = strchr(part, '-');
+		if (endpart) {
+			*endpart++ = '\0';
+		}
+		/* Find the start */
+		if ((start = lookup_name(part, names, max)) < 0) {
+			ast_log(LOG_WARNING, "Invalid %s '%s', skipping element\n", msg, part);
+			continue;
+		}
+		if (endpart) { /* find end of range */
+			if ((end = lookup_name(endpart, names, max)) < 0) {
+				ast_log(LOG_WARNING, "Invalid end %s '%s', skipping element\n", msg, endpart);
+				continue;
+			}
 		} else {
-			mask |= (1 << s);
-			s++;
+			end = start;
+		}
+		/* Fill the mask. Remember that ranges are cyclic */
+		mask |= (1 << end);   /* initialize with last element */
+		while (start != end) {
+			if (start >= max) {
+				start = 0;
+			}
+			mask |= (1 << start);
+			start++;
 		}
 	}
 	return mask;
 }
 
-/*! \brief store a bitmask of valid times, one bit each 2 minute */
+/*! \brief store a bitmask of valid times, one bit each 1 minute */
 static void get_timerange(struct ast_timing *i, char *times)
 {
-	char *e;
+	char *endpart, *part;
 	int x;
-	int s1, s2;
-	int e1, e2;
-	/*	int cth, ctm; */
+	int st_h, st_m;
+	int endh, endm;
+	int minute_start, minute_end;
 
 	/* start disabling all times, fill the fields with 0's, as they may contain garbage */
 	memset(i->minmask, 0, sizeof(i->minmask));
 
-	/* 2-minutes per bit, since the mask has only 32 bits :( */
+	/* 1-minute per bit */
 	/* Star is all times */
 	if (ast_strlen_zero(times) || !strcmp(times, "*")) {
-		for (x = 0; x < 24; x++)
+		/* 48, because each hour takes 2 integers; 30 bits each */
+		for (x = 0; x < 48; x++) {
 			i->minmask[x] = 0x3fffffff; /* 30 bits */
+		}
 		return;
 	}
 	/* Otherwise expect a range */
-	e = strchr(times, '-');
-	if (!e) {
-		ast_log(LOG_WARNING, "Time range is not valid. Assuming no restrictions based on time.\n");
-		return;
-	}
-	*e++ = '\0';
-	/* XXX why skip non digits ? */
-	while (*e && !isdigit(*e))
-		e++;
-	if (!*e) {
-		ast_log(LOG_WARNING, "Invalid time range.  Assuming no restrictions based on time.\n");
-		return;
-	}
-	if (sscanf(times, "%d:%d", &s1, &s2) != 2) {
-		ast_log(LOG_WARNING, "%s isn't a time.  Assuming no restrictions based on time.\n", times);
-		return;
-	}
-	if (sscanf(e, "%d:%d", &e1, &e2) != 2) {
-		ast_log(LOG_WARNING, "%s isn't a time.  Assuming no restrictions based on time.\n", e);
-		return;
-	}
-	/* XXX this needs to be optimized */
-#if 1
-	s1 = s1 * 30 + s2/2;
-	if ((s1 < 0) || (s1 >= 24*30)) {
-		ast_log(LOG_WARNING, "%s isn't a valid start time. Assuming no time.\n", times);
-		return;
-	}
-	e1 = e1 * 30 + e2/2;
-	if ((e1 < 0) || (e1 >= 24*30)) {
-		ast_log(LOG_WARNING, "%s isn't a valid end time. Assuming no time.\n", e);
-		return;
-	}
-	/* Go through the time and enable each appropriate bit */
-	for (x=s1;x != e1;x = (x + 1) % (24 * 30)) {
-		i->minmask[x/30] |= (1 << (x % 30));
-	}
-	/* Do the last one */
-	i->minmask[x/30] |= (1 << (x % 30));
-#else
-	for (cth = 0; cth < 24; cth++) {
-		/* Initialize masks to blank */
-		i->minmask[cth] = 0;
-		for (ctm = 0; ctm < 30; ctm++) {
-			if (
-			/* First hour with more than one hour */
-			      (((cth == s1) && (ctm >= s2)) &&
-			       ((cth < e1)))
-			/* Only one hour */
-			||    (((cth == s1) && (ctm >= s2)) &&
-			       ((cth == e1) && (ctm <= e2)))
-			/* In between first and last hours (more than 2 hours) */
-			||    ((cth > s1) &&
-			       (cth < e1))
-			/* Last hour with more than one hour */
-			||    ((cth > s1) &&
-			       ((cth == e1) && (ctm <= e2)))
-			)
-				i->minmask[cth] |= (1 << (ctm / 2));
+	while ((part = strsep(&times, "&"))) {
+		if (!(endpart = strchr(part, '-'))) {
+			if (sscanf(part, "%d:%d", &st_h, &st_m) != 2 || st_h < 0 || st_h > 23 || st_m < 0 || st_m > 59) {
+				ast_log(LOG_WARNING, "%s isn't a valid time.\n", part);
+				continue;
+			}
+			i->minmask[st_h * 2 + (st_m >= 30 ? 1 : 0)] |= (1 << (st_m % 30));
+			continue;
 		}
+		*endpart++ = '\0';
+		/* why skip non digits? Mostly to skip spaces */
+		while (*endpart && !isdigit(*endpart)) {
+			endpart++;
+		}
+		if (!*endpart) {
+			ast_log(LOG_WARNING, "Invalid time range starting with '%s-'.\n", part);
+			continue;
+		}
+		if (sscanf(part, "%d:%d", &st_h, &st_m) != 2 || st_h < 0 || st_h > 23 || st_m < 0 || st_m > 59) {
+			ast_log(LOG_WARNING, "'%s' isn't a valid start time.\n", part);
+			continue;
+		}
+		if (sscanf(endpart, "%d:%d", &endh, &endm) != 2 || endh < 0 || endh > 23 || endm < 0 || endm > 59) {
+			ast_log(LOG_WARNING, "'%s' isn't a valid end time.\n", endpart);
+			continue;
+		}
+		minute_start = st_h * 60 + st_m;
+		minute_end = endh * 60 + endm;
+		/* Go through the time and enable each appropriate bit */
+		for (x = minute_start; x != minute_end; x = (x + 1) % (24 * 60)) {
+			i->minmask[x / 30] |= (1 << (x % 30));
+		}
+		/* Do the last one */
+		i->minmask[x / 30] |= (1 << (x % 30));
 	}
-#endif
 	/* All done */
 	return;
 }
@@ -6179,15 +6801,32 @@ static char *months[] =
 
 int ast_build_timing(struct ast_timing *i, const char *info_in)
 {
-	char info_save[256];
-	char *info;
+	char *info_save, *info;
+	int j, num_fields, last_sep = -1;
 
 	/* Check for empty just in case */
-	if (ast_strlen_zero(info_in))
+	if (ast_strlen_zero(info_in)) {
 		return 0;
+	}
+
 	/* make a copy just in case we were passed a static string */
-	ast_copy_string(info_save, info_in, sizeof(info_save));
-	info = info_save;
+	info_save = info = ast_strdupa(info_in);
+
+	/* count the number of fields in the timespec */
+	for (j = 0, num_fields = 1; info[j] != '\0'; j++) {
+		if (info[j] == ',') {
+			last_sep = j;
+			num_fields++;
+		}
+	}
+
+	/* save the timezone, if it is specified */
+	if (num_fields == 5) {
+		i->timezone = ast_strdup(info + last_sep + 1);
+	} else {
+		i->timezone = NULL;
+	}
+
 	/* Assume everything except time */
 	i->monthmask = 0xfff;	/* 12 bits */
 	i->daymask = 0x7fffffffU; /* 31 bits */
@@ -6206,9 +6845,9 @@ int ast_build_timing(struct ast_timing *i, const char *info_in)
 int ast_check_timing(const struct ast_timing *i)
 {
 	struct ast_tm tm;
-	struct timeval tv = ast_tvnow();
+	struct timeval now = ast_tvnow();
 
-	ast_localtime(&tv, &tm, NULL);
+	ast_localtime(&now, &tm, i->timezone);
 
 	/* If it's not the right month, return */
 	if (!(i->monthmask & (1 << tm.tm_mon)))
@@ -6231,13 +6870,21 @@ int ast_check_timing(const struct ast_timing *i)
 
 	/* Now the tough part, we calculate if it fits
 	   in the right time based on min/hour */
-	if (!(i->minmask[tm.tm_hour] & (1 << (tm.tm_min / 2))))
+	if (!(i->minmask[tm.tm_hour * 2 + (tm.tm_min >= 30 ? 1 : 0)] & (1 << (tm.tm_min >= 30 ? tm.tm_min - 30 : tm.tm_min))))
 		return 0;
 
 	/* If we got this far, then we're good */
 	return 1;
 }
 
+int ast_destroy_timing(struct ast_timing *i)
+{
+	if (i->timezone) {
+		ast_free(i->timezone);
+		i->timezone = NULL;
+	}
+	return 0;
+}
 /*
  * errno values
  *  ENOMEM - out of memory
@@ -6272,7 +6919,7 @@ int ast_context_add_include2(struct ast_context *con, const char *value,
 	/* Strip off timing info, and process if it is there */
 	if ( (c = strchr(p, ',')) ) {
 		*c++ = '\0';
-	        new_include->hastime = ast_build_timing(&(new_include->timing), c);
+		new_include->hastime = ast_build_timing(&(new_include->timing), c);
 	}
 	new_include->next      = NULL;
 	new_include->registrar = registrar;
@@ -6282,6 +6929,7 @@ int ast_context_add_include2(struct ast_context *con, const char *value,
 	/* ... go to last include and check if context is already included too... */
 	for (i = con->includes; i; i = i->next) {
 		if (!strcasecmp(i->name, new_include->name)) {
+			ast_destroy_timing(&(new_include->timing));
 			ast_free(new_include);
 			ast_unlock_context(con);
 			errno = EEXIST;
@@ -6445,14 +7093,19 @@ int ast_context_add_ignorepat2(struct ast_context *con, const char *value, const
 {
 	struct ast_ignorepat *ignorepat, *ignorepatc, *ignorepatl = NULL;
 	int length;
+	char *pattern;
 	length = sizeof(struct ast_ignorepat);
 	length += strlen(value) + 1;
 	if (!(ignorepat = ast_calloc(1, length)))
 		return -1;
 	/* The cast to char * is because we need to write the initial value.
-	 * The field is not supposed to be modified otherwise
+	 * The field is not supposed to be modified otherwise.  Also, gcc 4.2
+	 * sees the cast as dereferencing a type-punned pointer and warns about
+	 * it.  This is the workaround (we're telling gcc, yes, that's really
+	 * what we wanted to do).
 	 */
-	strcpy((char *)ignorepat->pattern, value);
+	pattern = (char *) ignorepat->pattern;
+	strcpy(pattern, value);
 	ignorepat->next = NULL;
 	ignorepat->registrar = registrar;
 	ast_wrlock_context(con);
@@ -6561,17 +7214,23 @@ int ast_async_goto(struct ast_channel *chan, const char *context, const char *ex
 				S_OR(context, chan->context), S_OR(exten, chan->exten), priority);
 
 			/* Masquerade into temp channel */
-			ast_channel_masquerade(tmpchan, chan);
-
-			/* Grab the locks and get going */
-			ast_channel_lock(tmpchan);
-			ast_do_masquerade(tmpchan);
-			ast_channel_unlock(tmpchan);
-			/* Start the PBX going on our stolen channel */
-			if (ast_pbx_start(tmpchan)) {
-				ast_log(LOG_WARNING, "Unable to start PBX on %s\n", tmpchan->name);
+			if (ast_channel_masquerade(tmpchan, chan)) {
+				/* Failed to set up the masquerade.  It's probably chan_local
+				 * in the middle of optimizing itself out.  Sad. :( */
 				ast_hangup(tmpchan);
+				tmpchan = NULL;
 				res = -1;
+			} else {
+				/* Grab the locks and get going */
+				ast_channel_lock(tmpchan);
+				ast_do_masquerade(tmpchan);
+				ast_channel_unlock(tmpchan);
+				/* Start the PBX going on our stolen channel */
+				if (ast_pbx_start(tmpchan)) {
+					ast_log(LOG_WARNING, "Unable to start PBX on %s\n", tmpchan->name);
+					ast_hangup(tmpchan);
+					res = -1;
+				}
 			}
 		}
 	}
@@ -6596,18 +7255,19 @@ int ast_async_goto_by_name(const char *channame, const char *context, const char
 static int ext_strncpy(char *dst, const char *src, int len)
 {
 	int count = 0;
+	int insquares = 0;
 
 	while (*src && (count < len - 1)) {
-		switch (*src) {
-		case ' ':
-			/*	otherwise exten => [a-b],1,... doesn't work */
-			/*		case '-': */
-			/* Ignore */
-			break;
-		default:
-			*dst = *src;
-			dst++;
+		if (*src == '[') {
+			insquares = 1;
+		} else if (*src == ']') {
+			insquares = 0;
+		} else if (*src == ' ' && !insquares) {
+			src++;
+			continue;
 		}
+		*dst = *src;
+		dst++;
 		src++;
 		count++;
 	}
@@ -6818,18 +7478,10 @@ int ast_add_extension2(struct ast_context *con,
 	if (priority == PRIORITY_HINT && strstr(application, "${") && !strstr(extension, "_")) {
 		struct ast_channel c = {0, };
 
-		/* Start out with regular variables */
 		ast_copy_string(c.exten, extension, sizeof(c.exten));
 		ast_copy_string(c.context, con->name, sizeof(c.context));
 		pbx_substitute_variables_helper(&c, application, expand_buf, sizeof(expand_buf));
-
-		/* Move on to global variables if they exist */
-		ast_rwlock_rdlock(&globalslock);
-		if (AST_LIST_FIRST(&globals)) {
-			pbx_substitute_variables_varshead(&globals, application, expand_buf, sizeof(expand_buf));
-			application = expand_buf;
-		}
-		ast_rwlock_unlock(&globalslock);
+		application = expand_buf;
 	}
 
 	length = sizeof(struct ast_exten);
@@ -6891,7 +7543,7 @@ int ast_add_extension2(struct ast_context *con,
 	}
 	res = 0; /* some compilers will think it is uninitialized otherwise */
 	for (e = con->root; e; el = e, e = e->next) {   /* scan the extension list */
-		res = ext_cmp(e->exten, extension);
+		res = ext_cmp(e->exten, tmp->exten);
 		if (res == 0) { /* extension match, now look at cidmatch */
 			if (!e->matchcid && !tmp->matchcid)
 				res = 0;
@@ -7064,7 +7716,7 @@ static void *async_wait(void *data)
 static int ast_pbx_outgoing_cdr_failed(void)
 {
 	/* allocate a channel */
-	struct ast_channel *chan = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, 0);
+	struct ast_channel *chan = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, "%s", "");
 
 	if (!chan)
 		return -1;  /* failure */
@@ -7081,19 +7733,20 @@ static int ast_pbx_outgoing_cdr_failed(void)
 	ast_cdr_end(chan->cdr);
 	ast_cdr_failed(chan->cdr);      /* set the status to failed */
 	ast_cdr_detach(chan->cdr);      /* post and free the record */
+	chan->cdr = NULL;
 	ast_channel_free(chan);         /* free the channel */
 
 	return 0;  /* success */
 }
 
-int ast_pbx_outgoing_exten(const char *type, int format, void *data, int timeout, const char *context, const char *exten, int priority, int *reason, int sync, const char *cid_num, const char *cid_name, struct ast_variable *vars, const char *account, struct ast_channel **channel)
+int ast_pbx_outgoing_exten(const char *type, int format, void *data, int timeout, const char *context, const char *exten, int priority, int *reason, int synchronous, const char *cid_num, const char *cid_name, struct ast_variable *vars, const char *account, struct ast_channel **channel)
 {
 	struct ast_channel *chan;
 	struct async_stat *as;
 	int res = -1, cdr_res = -1;
 	struct outgoing_helper oh;
 
-	if (sync) {
+	if (synchronous) {
 		oh.context = context;
 		oh.exten = exten;
 		oh.priority = priority;
@@ -7114,7 +7767,7 @@ int ast_pbx_outgoing_exten(const char *type, int format, void *data, int timeout
 					res = 0;
 				ast_verb(4, "Channel %s was answered.\n", chan->name);
 
-				if (sync > 1) {
+				if (synchronous > 1) {
 					if (channel)
 						ast_channel_unlock(chan);
 					if (ast_pbx_run(chan)) {
@@ -7252,7 +7905,7 @@ static void *ast_pbx_run_app(void *data)
 	return NULL;
 }
 
-int ast_pbx_outgoing_app(const char *type, int format, void *data, int timeout, const char *app, const char *appdata, int *reason, int sync, const char *cid_num, const char *cid_name, struct ast_variable *vars, const char *account, struct ast_channel **locked_channel)
+int ast_pbx_outgoing_app(const char *type, int format, void *data, int timeout, const char *app, const char *appdata, int *reason, int synchronous, const char *cid_num, const char *cid_name, struct ast_variable *vars, const char *account, struct ast_channel **locked_channel)
 {
 	struct ast_channel *chan;
 	struct app_tmp *tmp;
@@ -7269,7 +7922,7 @@ int ast_pbx_outgoing_app(const char *type, int format, void *data, int timeout, 
 		res = -1;
 		goto outgoing_app_cleanup;
 	}
-	if (sync) {
+	if (synchronous) {
 		chan = __ast_request_and_dial(type, format, data, timeout, reason, cid_num, cid_name, &oh);
 		if (chan) {
 			ast_set_variables(chan, vars);
@@ -7286,7 +7939,7 @@ int ast_pbx_outgoing_app(const char *type, int format, void *data, int timeout, 
 					if (appdata)
 						ast_copy_string(tmp->data, appdata, sizeof(tmp->data));
 					tmp->chan = chan;
-					if (sync > 1) {
+					if (synchronous > 1) {
 						if (locked_channel)
 							ast_channel_unlock(chan);
 						ast_pbx_run_app(tmp);
@@ -7655,12 +8308,11 @@ static int pbx_builtin_answer(struct ast_channel *chan, void *data)
 	if ((chan->_state != AST_STATE_UP) && !ast_strlen_zero(data))
 		delay = atoi(data);
 
-	return __ast_answer(chan, delay);
-}
+	if (delay < 0) {
+		delay = 0;
+	}
 
-static int pbx_builtin_keepalive(struct ast_channel *chan, void *data)
-{
-	return AST_PBX_KEEPALIVE;
+	return __ast_answer(chan, delay);
 }
 
 static int pbx_builtin_incomplete(struct ast_channel *chan, void *data)
@@ -7757,7 +8409,7 @@ static int pbx_builtin_gotoiftime(struct ast_channel *chan, void *data)
 	struct ast_timing timing;
 
 	if (ast_strlen_zero(data)) {
-		ast_log(LOG_WARNING, "GotoIfTime requires an argument:\n  <time range>,<days of week>,<days of month>,<months>?'labeliftrue':'labeliffalse'\n");
+		ast_log(LOG_WARNING, "GotoIfTime requires an argument:\n  <time range>,<days of week>,<days of month>,<months>[,<timezone>]?'labeliftrue':'labeliffalse'\n");
 		return -1;
 	}
 
@@ -7773,6 +8425,7 @@ static int pbx_builtin_gotoiftime(struct ast_channel *chan, void *data)
 		branch = branch1;
 	else
 		branch = branch2;
+	ast_destroy_timing(&timing);
 
 	if (ast_strlen_zero(branch)) {
 		ast_debug(1, "Not taking any branch\n");
@@ -7790,7 +8443,7 @@ static int pbx_builtin_execiftime(struct ast_channel *chan, void *data)
 	char *s, *appname;
 	struct ast_timing timing;
 	struct ast_app *app;
-	static const char *usage = "ExecIfTime requires an argument:\n  <time range>,<days of week>,<days of month>,<months>?<appname>[(<appargs>)]";
+	static const char *usage = "ExecIfTime requires an argument:\n  <time range>,<days of week>,<days of month>,<months>[,<timezone>]?<appname>[(<appargs>)]";
 
 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_WARNING, "%s\n", usage);
@@ -7807,11 +8460,15 @@ static int pbx_builtin_execiftime(struct ast_channel *chan, void *data)
 
 	if (!ast_build_timing(&timing, s)) {
 		ast_log(LOG_WARNING, "Invalid Time Spec: %s\nCorrect usage: %s\n", s, usage);
+		ast_destroy_timing(&timing);
 		return -1;
 	}
 
-	if (!ast_check_timing(&timing))	/* outside the valid time window, just return */
+	if (!ast_check_timing(&timing))	{ /* outside the valid time window, just return */
+		ast_destroy_timing(&timing);
 		return 0;
+	}
+	ast_destroy_timing(&timing);
 
 	/* now split appname(appargs) */
 	if ((s = strchr(appname, '('))) {
@@ -7877,7 +8534,7 @@ static int pbx_builtin_waitexten(struct ast_channel *chan, void *data)
 	} else if (ast_test_flag(&flags, WAITEXTEN_MOH)) {
 		ast_indicate_data(chan, AST_CONTROL_HOLD, opts[0], strlen(opts[0]));
 	} else if (ast_test_flag(&flags, WAITEXTEN_DIALTONE)) {
-		const struct ind_tone_zone_sound *ts = ast_get_indication_tone(chan->zone, "dial");
+		const struct tone_zone_sound *ts = ast_get_indication_tone(chan->zone, "dial");
 		if (ts)
 			ast_playtones_start(chan, 0, ts->data, 0);
 		else
@@ -7987,7 +8644,7 @@ static int pbx_builtin_background(struct ast_channel *chan, void *data)
 			ast_stopstream(chan);
 		}
 	}
-	if (args.context != chan->context && res) {
+	if (strcmp(args.context, chan->context) && res) {
 		snprintf(chan->exten, sizeof(chan->exten), "%c", res);
 		ast_copy_string(chan->context, args.context, sizeof(chan->context));
 		chan->priority = 0;
@@ -8019,8 +8676,7 @@ int pbx_builtin_serialize_variables(struct ast_channel *chan, struct ast_str **b
 	if (!chan)
 		return 0;
 
-	(*buf)->used = 0;
-	(*buf)->str[0] = '\0';
+	ast_str_reset(*buf);
 
 	ast_channel_lock(chan);
 
@@ -8403,18 +9059,18 @@ int load_pbx(void)
 	}
 
 	ast_verb(1, "Registering builtin applications:\n");
-	ast_cli_register_multiple(pbx_cli, sizeof(pbx_cli) / sizeof(struct ast_cli_entry));
+	ast_cli_register_multiple(pbx_cli, ARRAY_LEN(pbx_cli));
 	__ast_custom_function_register(&exception_function, NULL);
 
 	/* Register builtin applications */
-	for (x = 0; x < sizeof(builtins) / sizeof(struct pbx_builtin); x++) {
+	for (x = 0; x < ARRAY_LEN(builtins); x++) {
 		ast_verb(1, "[%s]\n", builtins[x].name);
-		if (ast_register_application2(builtins[x].name, builtins[x].execute, builtins[x].synopsis, builtins[x].description, NULL)) {
+		if (ast_register_application2(builtins[x].name, builtins[x].execute, NULL, NULL, NULL)) {
 			ast_log(LOG_ERROR, "Unable to register builtin application '%s'\n", builtins[x].name);
 			return -1;
 		}
 	}
-	
+
 	/* Register manager application */
 	ast_manager_register2("ShowDialPlan", EVENT_FLAG_CONFIG | EVENT_FLAG_REPORTING, manager_show_dialplan, "List dialplan", mandescr_show_dialplan);
 

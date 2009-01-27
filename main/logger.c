@@ -35,6 +35,10 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
+/*
+ * WARNING: additional #include directives should NOT be placed here, they 
+ * should be placed AFTER '#undef _ASTERISK_LOGGER_H' below
+ */
 #include "asterisk/_private.h"
 #include "asterisk/paths.h"	/* use ast_config_AST_LOG_DIR */
 #include <signal.h>
@@ -74,6 +78,7 @@ static int syslog_level_map[] = {
 #include "asterisk/threadstorage.h"
 #include "asterisk/strings.h"
 #include "asterisk/pbx.h"
+#include "asterisk/app.h"
 
 #if defined(__linux__) && !defined(__NR_gettid)
 #include <asm/unistd.h>
@@ -326,7 +331,7 @@ static void init_logger_chain(int locked)
 	const char *s;
 	struct ast_flags config_flags = { 0 };
 
-	if (!(cfg = ast_config_load2("logger.conf", "logger", config_flags)))
+	if (!(cfg = ast_config_load2("logger.conf", "logger", config_flags)) || cfg == CONFIG_STATUS_FILEINVALID)
 		return;
 
 	/* delete our list of log channels */
@@ -576,7 +581,9 @@ static int rotate_file(const char *filename)
 		char buf[512];
 		pbx_builtin_setvar_helper(c, "filename", filename);
 		pbx_substitute_variables_helper(c, exec_after_rotate, buf, sizeof(buf));
-		system(buf);
+		if (ast_safe_system(buf) != -1) {
+			ast_log(LOG_WARNING, "error executing '%s'\n", buf);
+		}
 		ast_channel_free(c);
 	}
 	return res;
@@ -1011,7 +1018,7 @@ int init_logger(void)
 	}
 
 	/* register the logger cli commands */
-	ast_cli_register_multiple(cli_logger, sizeof(cli_logger) / sizeof(struct ast_cli_entry));
+	ast_cli_register_multiple(cli_logger, ARRAY_LEN(cli_logger));
 
 	ast_mkdir(ast_config_AST_LOG_DIR, 0777);
   
@@ -1086,7 +1093,7 @@ void ast_log(int level, const char *file, int line, const char *function, const 
 	struct logmsg *logmsg = NULL;
 	struct ast_str *buf = NULL;
 	struct ast_tm tm;
-	struct timeval tv = ast_tvnow();
+	struct timeval now = ast_tvnow();
 	int res = 0;
 	va_list ap;
 
@@ -1099,13 +1106,13 @@ void ast_log(int level, const char *file, int line, const char *function, const 
 		 * so just log to stdout
 		 */
 		if (level != __LOG_VERBOSE) {
-			int res;
+			int result;
 			va_start(ap, fmt);
-			res = ast_str_set_va(&buf, BUFSIZ, fmt, ap); /* XXX BUFSIZ ? */
+			result = ast_str_set_va(&buf, BUFSIZ, fmt, ap); /* XXX BUFSIZ ? */
 			va_end(ap);
-			if (res != AST_DYNSTR_BUILD_FAILED) {
-				term_filter_escapes(buf->str);
-				fputs(buf->str, stdout);
+			if (result != AST_DYNSTR_BUILD_FAILED) {
+				term_filter_escapes(ast_str_buffer(buf));
+				fputs(ast_str_buffer(buf), stdout);
 			}
 		}
 		return;
@@ -1138,13 +1145,13 @@ void ast_log(int level, const char *file, int line, const char *function, const 
 		return;
 
 	/* Copy string over */
-	strcpy(logmsg->str, buf->str);
+	strcpy(logmsg->str, ast_str_buffer(buf));
 
 	/* Set type to be normal */
 	logmsg->type = LOGMSG_NORMAL;
 
 	/* Create our date/time */
-	ast_localtime(&tv, &tm, NULL);
+	ast_localtime(&now, &tm, NULL);
 	ast_strftime(logmsg->date, sizeof(logmsg->date), dateformat, &tm);
 
 	/* Copy over data */
@@ -1206,48 +1213,47 @@ void *ast_bt_destroy(struct ast_bt *bt)
 void ast_backtrace(void)
 {
 #ifdef HAVE_BKTR
-	struct ast_bt *backtrace;
+	struct ast_bt *bt;
 	int i = 0;
 	char **strings;
 
-	if (!(backtrace = ast_bt_create())) {
+	if (!(bt = ast_bt_create())) {
 		ast_log(LOG_WARNING, "Unable to allocate space for backtrace structure\n");
 		return;
 	}
 
-	if ((strings = backtrace_symbols(backtrace->addresses, backtrace->num_frames))) {
-		ast_debug(1, "Got %d backtrace record%c\n", backtrace->num_frames, backtrace->num_frames != 1 ? 's' : ' ');
-		for (i = 0; i < backtrace->num_frames; i++) {
-			ast_log(LOG_DEBUG, "#%d: [%p] %s\n", i, backtrace->addresses[i], strings[i]);
+	if ((strings = backtrace_symbols(bt->addresses, bt->num_frames))) {
+		ast_debug(1, "Got %d backtrace record%c\n", bt->num_frames, bt->num_frames != 1 ? 's' : ' ');
+		for (i = 0; i < bt->num_frames; i++) {
+			ast_log(LOG_DEBUG, "#%d: [%p] %s\n", i, bt->addresses[i], strings[i]);
 		}
 		free(strings);
 	} else {
 		ast_debug(1, "Could not allocate memory for backtrace\n");
 	}
-	ast_bt_destroy(backtrace);
+	ast_bt_destroy(bt);
 #else
 	ast_log(LOG_WARNING, "Must run configure with '--with-execinfo' for stack backtraces.\n");
 #endif
 }
 
-void __ast_verbose(const char *file, int line, const char *func, const char *fmt, ...)
+void __ast_verbose_ap(const char *file, int line, const char *func, const char *fmt, va_list ap)
 {
 	struct logmsg *logmsg = NULL;
 	struct ast_str *buf = NULL;
 	int res = 0;
-	va_list ap;
 
 	if (!(buf = ast_str_thread_get(&verbose_buf, VERBOSE_BUF_INIT_SIZE)))
 		return;
 
 	if (ast_opt_timestamp) {
-		struct timeval tv;
+		struct timeval now;
 		struct ast_tm tm;
 		char date[40];
 		char *datefmt;
 
-		tv = ast_tvnow();
-		ast_localtime(&tv, &tm, NULL);
+		now = ast_tvnow();
+		ast_localtime(&now, &tm, NULL);
 		ast_strftime(date, sizeof(date), dateformat, &tm);
 		datefmt = alloca(strlen(date) + 3 + strlen(fmt) + 1);
 		sprintf(datefmt, "%c[%s] %s", 127, date, fmt);
@@ -1259,9 +1265,7 @@ void __ast_verbose(const char *file, int line, const char *func, const char *fmt
 	}
 
 	/* Build string */
-	va_start(ap, fmt);
 	res = ast_str_set_va(&buf, 0, fmt, ap);
-	va_end(ap);
 
 	/* If the build failed then we can drop this allocated message */
 	if (res == AST_DYNSTR_BUILD_FAILED)
@@ -1270,7 +1274,7 @@ void __ast_verbose(const char *file, int line, const char *func, const char *fmt
 	if (!(logmsg = ast_calloc(1, sizeof(*logmsg) + res + 1)))
 		return;
 
-	strcpy(logmsg->str, buf->str);
+	strcpy(logmsg->str, ast_str_buffer(buf));
 
 	ast_log(__LOG_VERBOSE, file, line, func, "%s", logmsg->str + 1);
 
@@ -1287,6 +1291,25 @@ void __ast_verbose(const char *file, int line, const char *func, const char *fmt
 		logger_print_verbose(logmsg);
 		ast_free(logmsg);
 	}
+}
+
+void __ast_verbose(const char *file, int line, const char *func, const char *fmt, ...)
+{
+	va_list ap;
+	va_start(ap, fmt);
+	__ast_verbose_ap(file, line, func, fmt, ap);
+	va_end(ap);
+}
+
+/* No new code should use this directly, but we have the ABI for backwards compat */
+#undef ast_verbose
+void __attribute__((format(printf, 1,2))) ast_verbose(const char *fmt, ...);
+void ast_verbose(const char *fmt, ...)
+{
+	va_list ap;
+	va_start(ap, fmt);
+	__ast_verbose_ap("", 0, "", fmt, ap);
+	va_end(ap);
 }
 
 int ast_register_verbose(void (*v)(const char *string)) 

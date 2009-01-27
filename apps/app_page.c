@@ -44,26 +44,69 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/devicestate.h"
 #include "asterisk/dial.h"
 
+/*** DOCUMENTATION
+	<application name="Page" language="en_US">
+		<synopsis>
+			Page series of phones
+		</synopsis>
+		<syntax>
+			<parameter name="Technology/Resource" required="true" argsep="&amp;">
+				<argument name="Technology/Resource" required="true">
+					<para>Specification of the device(s) to dial. These must be in the format of
+					<literal>Technology/Resource</literal>, where <replaceable>Technology</replaceable>
+					represents a particular channel driver, and <replaceable>Resource</replaceable> represents a resource
+					available to that particular channel driver.</para>
+				</argument>
+				<argument name="Technology2/Resource2" multiple="true">
+					<para>Optional extra devices to dial inparallel</para>
+					<para>If you need more then one enter them as Technology2/Resource2&amp;
+					Technology3/Resourse3&amp;.....</para>
+				</argument>
+			</parameter>
+			<parameter name="options">
+				<optionlist>
+					<option name="d">
+						<para>Full duplex audio</para>
+					</option>
+					<option name="i">
+						<para>Ignore attempts to forward the call</para>
+					</option>
+					<option name="q">
+						<para>Quiet, do not play beep to caller</para>
+					</option>
+					<option name="r">
+						<para>Record the page into a file (meetme option <literal>r</literal>)</para>
+					</option>
+					<option name="s">
+						<para>Only dial a channel if its device state says that it is <literal>NOT_INUSE</literal></para>
+					</option>
+				</optionlist>
+			</parameter>
+			<parameter name="timeout">
+				<para>Specify the length of time that the system will attempt to connect a call.
+				After this duration, any intercom calls that have not been answered will be hung up by the
+				system.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Places outbound calls to the given <replaceable>technology</replaceable>/<replaceable>resource</replaceable>
+			and dumps them into a conference bridge as muted participants. The original
+			caller is dumped into the conference as a speaker and the room is
+			destroyed when the original callers leaves.</para>
+		</description>
+		<see-also>
+			<ref type="application">MeetMe</ref>
+		</see-also>
+	</application>
+ ***/
 static const char *app_page= "Page";
-
-static const char *page_synopsis = "Pages phones";
-
-static const char *page_descrip =
-"Page(Technology/Resource&Technology2/Resource2[,options])\n"
-"  Places outbound calls to the given technology / resource and dumps\n"
-"them into a conference bridge as muted participants.  The original\n"
-"caller is dumped into the conference as a speaker and the room is\n"
-"destroyed when the original caller leaves.  Valid options are:\n"
-"        d - full duplex audio\n"
-"        q - quiet, do not play beep to caller\n"
-"        r - record the page into a file (see 'r' for app_meetme)\n"
-"        s - only dial channel if devicestate says it is not in use\n";
 
 enum {
 	PAGE_DUPLEX = (1 << 0),
 	PAGE_QUIET = (1 << 1),
 	PAGE_RECORD = (1 << 2),
 	PAGE_SKIP = (1 << 3),
+	PAGE_IGNORE_FORWARDS = (1 << 4),
 } page_opt_flags;
 
 AST_APP_OPTIONS(page_opts, {
@@ -71,19 +114,28 @@ AST_APP_OPTIONS(page_opts, {
 	AST_APP_OPTION('q', PAGE_QUIET),
 	AST_APP_OPTION('r', PAGE_RECORD),
 	AST_APP_OPTION('s', PAGE_SKIP),
+	AST_APP_OPTION('i', PAGE_IGNORE_FORWARDS),
 });
 
-#define MAX_DIALS 128
 
 static int page_exec(struct ast_channel *chan, void *data)
 {
-	char *options, *tech, *resource, *tmp;
+	char *tech, *resource, *tmp;
 	char meetmeopts[88], originator[AST_CHANNEL_NAME], *opts[0];
 	struct ast_flags flags = { 0 };
 	unsigned int confid = ast_random();
 	struct ast_app *app;
 	int res = 0, pos = 0, i = 0;
-	struct ast_dial *dials[MAX_DIALS];
+	struct ast_dial **dial_list;
+	unsigned int num_dials;
+	int timeout = 0;
+	char *parse;
+
+	AST_DECLARE_APP_ARGS(args,
+		AST_APP_ARG(devices);
+		AST_APP_ARG(options);
+		AST_APP_ARG(timeout);
+	);
 
 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_WARNING, "This application requires at least one argument (destination(s) to page)\n");
@@ -95,21 +147,43 @@ static int page_exec(struct ast_channel *chan, void *data)
 		return -1;
 	};
 
-	options = ast_strdupa(data);
+	parse = ast_strdupa(data);
+
+	AST_STANDARD_APP_ARGS(args, parse);
 
 	ast_copy_string(originator, chan->name, sizeof(originator));
-	if ((tmp = strchr(originator, '-')))
+	if ((tmp = strchr(originator, '-'))) {
 		*tmp = '\0';
+	}
 
-	tmp = strsep(&options, ",");
-	if (options)
-		ast_app_parse_options(page_opts, &flags, opts, options);
+	if (!ast_strlen_zero(args.options)) {
+		ast_app_parse_options(page_opts, &flags, opts, args.options);
+	}
+
+	if (!ast_strlen_zero(args.timeout)) {
+		timeout = atoi(args.timeout);
+	}
 
 	snprintf(meetmeopts, sizeof(meetmeopts), "MeetMe,%ud,%s%sqxdw(5)", confid, (ast_test_flag(&flags, PAGE_DUPLEX) ? "" : "m"),
 		(ast_test_flag(&flags, PAGE_RECORD) ? "r" : "") );
 
+	/* Count number of extensions in list by number of ampersands + 1 */
+	num_dials = 1;
+	tmp = args.devices;
+	while (*tmp) {
+		if (*tmp == '&') {
+			num_dials++;
+		}
+		tmp++;
+	}
+
+	if (!(dial_list = ast_calloc(num_dials, sizeof(struct ast_dial *)))) {
+		ast_log(LOG_ERROR, "Can't allocate %ld bytes for dial list\n", (long)(sizeof(struct ast_dial *) * num_dials));
+		return -1;
+	}
+
 	/* Go through parsing/calling each device */
-	while ((tech = strsep(&tmp, "&"))) {
+	while ((tech = strsep(&args.devices, "&"))) {
 		int state = 0;
 		struct ast_dial *dial = NULL;
 
@@ -127,9 +201,9 @@ static int page_exec(struct ast_channel *chan, void *data)
 		if (ast_test_flag(&flags, PAGE_SKIP)) {
 			state = ast_device_state(tech);
 			if (state == AST_DEVICE_UNKNOWN) {
-				ast_log(LOG_WARNING, "Destination '%s' has device state '%s'. Paging anyway.\n", tech, devstate2str(state));
+				ast_log(LOG_WARNING, "Destination '%s' has device state '%s'. Paging anyway.\n", tech, ast_devstate2str(state));
 			} else if (state != AST_DEVICE_NOT_INUSE) {
-				ast_log(LOG_WARNING, "Destination '%s' has device state '%s'.\n", tech, devstate2str(state));
+				ast_log(LOG_WARNING, "Destination '%s' has device state '%s'.\n", tech, ast_devstate2str(state));
 				continue;
 			}
 		}
@@ -143,16 +217,27 @@ static int page_exec(struct ast_channel *chan, void *data)
 		}
 
 		/* Append technology and resource */
-		ast_dial_append(dial, tech, resource);
+		if (ast_dial_append(dial, tech, resource) == -1) {
+			ast_log(LOG_ERROR, "Failed to add %s to outbound dial\n", tech);
+			continue;
+		}
 
 		/* Set ANSWER_EXEC as global option */
 		ast_dial_option_global_enable(dial, AST_DIAL_OPTION_ANSWER_EXEC, meetmeopts);
+
+		if (timeout) {
+			ast_dial_set_global_timeout(dial, timeout * 1000);
+		}
+
+		if (ast_test_flag(&flags, PAGE_IGNORE_FORWARDS)) {
+			ast_dial_option_global_enable(dial, AST_DIAL_OPTION_DISABLE_CALL_FORWARDING, NULL);
+		}
 
 		/* Run this dial in async mode */
 		ast_dial_run(dial, chan, 1);
 
 		/* Put in our dialing array */
-		dials[pos++] = dial;
+		dial_list[pos++] = dial;
 	}
 
 	if (!ast_test_flag(&flags, PAGE_QUIET)) {
@@ -169,7 +254,7 @@ static int page_exec(struct ast_channel *chan, void *data)
 
 	/* Go through each dial attempt cancelling, joining, and destroying */
 	for (i = 0; i < pos; i++) {
-		struct ast_dial *dial = dials[i];
+		struct ast_dial *dial = dial_list[i];
 
 		/* We have to wait for the async thread to exit as it's possible Meetme won't throw them out immediately */
 		ast_dial_join(dial);
@@ -191,7 +276,7 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	return ast_register_application(app_page, page_exec, page_synopsis, page_descrip);
+	return ast_register_application_xml(app_page, page_exec);
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Page Multiple Phones");

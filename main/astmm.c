@@ -23,9 +23,9 @@
  * \author Mark Spencer <markster@digium.com>
  */
 
-#ifdef __AST_DEBUG_MALLOC
-
 #include "asterisk.h"
+
+#ifdef __AST_DEBUG_MALLOC
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
@@ -114,6 +114,7 @@ static inline void *__ast_alloc_region(size_t size, const enum func_type which, 
 	if (!(reg = malloc(size + sizeof(*reg) + sizeof(*fence)))) {
 		astmm_log("Memory Allocation Failure - '%d' bytes in function %s "
 			  "at line %d of %s\n", (int) size, func, lineno, file);
+		return NULL;
 	}
 
 	ast_copy_string(reg->file, file, sizeof(reg->file));
@@ -156,9 +157,14 @@ static inline size_t __ast_sizeof_region(void *ptr)
 
 static void __ast_free_region(void *ptr, const char *file, int lineno, const char *func)
 {
-	int hash = HASH(ptr);
+	int hash;
 	struct ast_region *reg, *prev = NULL;
 	unsigned int *fence;
+
+	if (!ptr)
+		return;
+
+	hash = HASH(ptr);
 
 	ast_mutex_lock(&reglock);
 	for (reg = regions[hash]; reg; reg = reg->next) {
@@ -481,7 +487,7 @@ void __ast_mm_init(void)
 		ast_log(LOG_ERROR, "struct ast_region has %d bytes of padding! This must be eliminated for low-fence checking to work properly!\n", (int) pad);
 	}
 
-	ast_cli_register_multiple(cli_memory, sizeof(cli_memory) / sizeof(struct ast_cli_entry));
+	ast_cli_register_multiple(cli_memory, ARRAY_LEN(cli_memory));
 	
 	snprintf(filename, sizeof(filename), "%s/mmlog", ast_config_AST_LOG_DIR);
 	

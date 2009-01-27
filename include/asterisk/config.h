@@ -45,7 +45,9 @@ enum {
 	CONFIG_FLAG_NOCACHE       = (1 << 2),
 };
 
+#define	CONFIG_STATUS_FILEMISSING	(void *)0
 #define	CONFIG_STATUS_FILEUNCHANGED	(void *)-1
+#define	CONFIG_STATUS_FILEINVALID	(void *)-2
 
 /*!
  * \brief Types used in ast_realtime_require_field
@@ -89,6 +91,7 @@ typedef struct ast_config *config_load_func(const char *database, const char *ta
 typedef struct ast_variable *realtime_var_get(const char *database, const char *table, va_list ap);
 typedef struct ast_config *realtime_multi_get(const char *database, const char *table, va_list ap);
 typedef int realtime_update(const char *database, const char *table, const char *keyfield, const char *entity, va_list ap);
+typedef int realtime_update2(const char *database, const char *table, va_list ap);
 typedef int realtime_store(const char *database, const char *table, va_list ap);
 typedef int realtime_destroy(const char *database, const char *table, const char *keyfield, const char *entity, va_list ap);
 typedef int realtime_require(const char *database, const char *table, va_list ap);
@@ -101,6 +104,7 @@ struct ast_config_engine {
 	realtime_var_get *realtime_func;
 	realtime_multi_get *realtime_multi_func;
 	realtime_update *update_func;
+	realtime_update2 *update2_func;
 	realtime_store *store_func;
 	realtime_destroy *destroy_func;
 	realtime_require *require_func;
@@ -206,6 +210,9 @@ int ast_category_exist(const struct ast_config *config, const char *category_nam
  * entity in realtime and return a variable list of its parameters.  Note
  * that unlike the variables in ast_config, the resulting list of variables
  * MUST be freed with ast_variables_destroy() as there is no container.
+ *
+ * Note that you should use the constant SENTINEL to terminate arguments, in
+ * order to preserve cross-platform compatibility.
  */
 struct ast_variable *ast_load_realtime(const char *family, ...) attribute_sentinel;
 struct ast_variable *ast_load_realtime_all(const char *family, ...) attribute_sentinel;
@@ -241,6 +248,9 @@ int ast_unload_realtime(const char *family);
  * a timeout value may reasonably be specified as an INTEGER2, with size 5.
  * Even though values above 32767 seconds are possible, they are unlikely
  * to be useful, and we should not complain about that size).
+ *
+ * Note that you should use the constant SENTINEL to terminate arguments, in
+ * order to preserve cross-platform compatibility.
  */
 int ast_realtime_require_field(const char *family, ...) attribute_sentinel;
 
@@ -252,6 +262,9 @@ int ast_realtime_require_field(const char *family, ...) attribute_sentinel;
  * the ast_load_realtime, this function can return more than one entry and
  * is thus stored inside a taditional ast_config structure rather than 
  * just returning a linked list of variables.
+ *
+ * Note that you should use the constant SENTINEL to terminate arguments, in
+ * order to preserve cross-platform compatibility.
  */
 struct ast_config *ast_load_realtime_multientry(const char *family, ...) attribute_sentinel;
 
@@ -262,14 +275,31 @@ struct ast_config *ast_load_realtime_multientry(const char *family, ...) attribu
  * \param lookup which value to look for in the key field to match the entry.
  * This function is used to update a parameter in realtime configuration space.
  *
+ * Note that you should use the constant SENTINEL to terminate arguments, in
+ * order to preserve cross-platform compatibility.
  */
 int ast_update_realtime(const char *family, const char *keyfield, const char *lookup, ...) attribute_sentinel;
+
+/*! 
+ * \brief Update realtime configuration 
+ * \param family which family/config to be updated
+ * This function is used to update a parameter in realtime configuration space.
+ * It includes the ability to lookup a row based upon multiple key criteria.
+ * As a result, this function includes two sentinel values, one to terminate
+ * lookup values and the other to terminate the listing of fields to update.
+ *
+ * Note that you should use the constant SENTINEL to terminate arguments, in
+ * order to preserve cross-platform compatibility.
+ */
+int ast_update2_realtime(const char *family, ...) attribute_sentinel;
 
 /*! 
  * \brief Create realtime configuration 
  * \param family which family/config to be created
  * This function is used to create a parameter in realtime configuration space.
  *
+ * Note that you should use the constant SENTINEL to terminate arguments, in
+ * order to preserve cross-platform compatibility.
  */
 int ast_store_realtime(const char *family, ...) attribute_sentinel;
 
@@ -281,6 +311,8 @@ int ast_store_realtime(const char *family, ...) attribute_sentinel;
  * This function is used to destroy an entry in realtime configuration space.
  * Additional params are used as keys.
  *
+ * Note that you should use the constant SENTINEL to terminate arguments, in
+ * order to preserve cross-platform compatibility.
  */
 int ast_destroy_realtime(const char *family, const char *keyfield, const char *lookup, ...) attribute_sentinel;
 
@@ -332,7 +364,12 @@ void ast_category_destroy(struct ast_category *cat);
 struct ast_variable *ast_category_detach_variables(struct ast_category *cat);
 void ast_category_rename(struct ast_category *cat, const char *name);
 
+#ifdef MALLOC_DEBUG
+struct ast_variable *_ast_variable_new(const char *name, const char *value, const char *filename, const char *file, const char *function, int lineno);
+#define ast_variable_new(a, b, c) _ast_variable_new(a, b, c, __FILE__, __PRETTY_FUNCTION__, __LINE__)
+#else
 struct ast_variable *ast_variable_new(const char *name, const char *value, const char *filename);
+#endif
 struct ast_config_include *ast_include_new(struct ast_config *conf, const char *from_file, const char *included_file, int is_exec, const char *exec_file, int from_lineno, char *real_included_file_name, int real_included_file_name_size);
 struct ast_config_include *ast_include_find(struct ast_config *conf, const char *included_file);
 void ast_include_rename(struct ast_config *conf, const char *from_file, const char *to_file);
@@ -351,7 +388,8 @@ int ast_variable_delete(struct ast_category *category, const char *variable, con
 int ast_variable_update(struct ast_category *category, const char *variable, 
 						const char *value, const char *match, unsigned int object);
 
-int config_text_file_save(const char *filename, const struct ast_config *cfg, const char *generator);
+int ast_config_text_file_save(const char *filename, const struct ast_config *cfg, const char *generator);
+int config_text_file_save(const char *filename, const struct ast_config *cfg, const char *generator) __attribute__((deprecated));
 
 struct ast_config *ast_config_internal_load(const char *configfile, struct ast_config *cfg, struct ast_flags flags, const char *suggested_incl_file, const char *who_asked);
 

@@ -307,8 +307,6 @@ static force_inline void ast_slinear_saturated_divide(short *input, short *value
 	*input /= *value;
 }
 
-int test_for_thread_safety(void);
-
 #ifdef localtime_r
 #undef localtime_r
 #endif
@@ -327,6 +325,25 @@ int ast_wait_for_input(int fd, int ms);
 	have a need to wait.  This way, we get better performance.
 */
 int ast_carefulwrite(int fd, char *s, int len, int timeoutms);
+
+/*!
+ * \brief Write data to a file stream with a timeout
+ *
+ * \param f the file stream to write to
+ * \param fd the file description to poll on to know when the file stream can
+ *        be written to without blocking.
+ * \param s the buffer to write from
+ * \param len the number of bytes to write
+ * \param timeoutms The maximum amount of time to block in this function trying
+ *        to write, specified in milliseconds.
+ *
+ * \note This function assumes that the associated file stream has been set up
+ *       as non-blocking.
+ *
+ * \retval 0 success
+ * \retval -1 error
+ */
+int ast_careful_fwrite(FILE *f, int fd, const char *s, size_t len, int timeoutms);
 
 /*
  * Thread management support (should be moved to lock.h or a different header)
@@ -554,7 +571,7 @@ char * attribute_malloc _ast_strndup(const char *str, size_t len, const char *fi
 #define ast_asprintf(ret, fmt, ...) \
 	_ast_asprintf((ret), __FILE__, __LINE__, __PRETTY_FUNCTION__, fmt, __VA_ARGS__)
 
-int __attribute__((format (printf, 5, 6)))
+int __attribute__((format(printf, 5, 6)))
 	_ast_asprintf(char **ret, const char *file, int lineno, const char *func, const char *fmt, ...);
 
 /*!
@@ -569,7 +586,7 @@ int __attribute__((format (printf, 5, 6)))
 	_ast_vasprintf((ret), __FILE__, __LINE__, __PRETTY_FUNCTION__, (fmt), (ap))
 
 AST_INLINE_API(
-__attribute__((format (printf, 5, 0)))
+__attribute__((format(printf, 5, 0)))
 int _ast_vasprintf(char **ret, const char *file, int lineno, const char *func, const char *fmt, va_list ap),
 {
 	int res;
@@ -640,7 +657,7 @@ void ast_enable_packet_fragmentation(int sock);
  */
 int ast_mkdir(const char *path, int mode);
 
-#define ARRAY_LEN(a) (sizeof(a) / sizeof(a[0]))
+#define ARRAY_LEN(a) (sizeof(a) / sizeof(0[a]))
 
 #ifdef AST_DEVMODE
 #define ast_assert(a) _ast_assert(a, # a, __FILE__, __LINE__, __PRETTY_FUNCTION__)
@@ -676,7 +693,7 @@ static void force_inline _ast_assert(int condition, const char *condition_str,
  */
 struct ast_eid {
 	unsigned char eid[6];
-} __attribute__ ((__packed__));
+} __attribute__((__packed__));
 
 /*!
  * \brief Global EID

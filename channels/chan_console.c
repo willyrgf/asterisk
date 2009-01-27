@@ -311,7 +311,7 @@ static int open_stream(struct console_pvt *pvt)
 			.suggestedLatency = (1.0 / 50.0), /* 20 ms */
 			.device = paNoDevice,
 		};
-		PaDeviceIndex index, num_devices, def_input, def_output;
+		PaDeviceIndex idx, num_devices, def_input, def_output;
 
 		if (!(num_devices = Pa_GetDeviceCount()))
 			return res;
@@ -319,23 +319,23 @@ static int open_stream(struct console_pvt *pvt)
 		def_input = Pa_GetDefaultInputDevice();
 		def_output = Pa_GetDefaultOutputDevice();
 
-		for (index = 0; 
-			index < num_devices && (input_params.device == paNoDevice 
+		for (idx = 0; 
+			idx < num_devices && (input_params.device == paNoDevice 
 				|| output_params.device == paNoDevice); 
-			index++) 
+			idx++) 
 		{
-			const PaDeviceInfo *dev = Pa_GetDeviceInfo(index);
+			const PaDeviceInfo *dev = Pa_GetDeviceInfo(idx);
 
 			if (dev->maxInputChannels) {
-				if ( (index == def_input && !strcasecmp(pvt->input_device, "default")) ||
+				if ( (idx == def_input && !strcasecmp(pvt->input_device, "default")) ||
 					!strcasecmp(pvt->input_device, dev->name) )
-					input_params.device = index;
+					input_params.device = idx;
 			}
 
 			if (dev->maxOutputChannels) {
-				if ( (index == def_output && !strcasecmp(pvt->output_device, "default")) ||
+				if ( (idx == def_output && !strcasecmp(pvt->output_device, "default")) ||
 					!strcasecmp(pvt->output_device, dev->name) )
-					output_params.device = index;
+					output_params.device = idx;
 			}
 		}
 
@@ -694,9 +694,9 @@ static char *cli_console_autoanswer(struct ast_cli_entry *e, int cmd,
 
 	switch (cmd) {
 	case CLI_INIT:
-		e->command = "console set autoanswer [on|off]";
+		e->command = "console {set|show} autoanswer [on|off]";
 		e->usage =
-			"Usage: console set autoanswer [on|off]\n"
+			"Usage: console {set|show} autoanswer [on|off]\n"
 			"       Enables or disables autoanswer feature.  If used without\n"
 			"       argument, displays the current on/off status of autoanswer.\n"
 			"       The default value of autoanswer is in 'oss.conf'.\n";
@@ -922,7 +922,7 @@ static char *cli_console_mute(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 
 static char *cli_list_available(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	PaDeviceIndex index, num, def_input, def_output;
+	PaDeviceIndex idx, num, def_input, def_output;
 
 	if (cmd == CLI_INIT) {
 		e->command = "console list available";
@@ -950,16 +950,16 @@ static char *cli_list_available(struct ast_cli_entry *e, int cmd, struct ast_cli
 
 	def_input = Pa_GetDefaultInputDevice();
 	def_output = Pa_GetDefaultOutputDevice();
-	for (index = 0; index < num; index++) {
-		const PaDeviceInfo *dev = Pa_GetDeviceInfo(index);
+	for (idx = 0; idx < num; idx++) {
+		const PaDeviceInfo *dev = Pa_GetDeviceInfo(idx);
 		if (!dev)
 			continue;
 		ast_cli(a->fd, "=== ---------------------------------------------------------\n"
 		               "=== Device Name: %s\n", dev->name);
 		if (dev->maxInputChannels)
-			ast_cli(a->fd, "=== ---> %sInput Device\n", (index == def_input) ? "Default " : "");
+			ast_cli(a->fd, "=== ---> %sInput Device\n", (idx == def_input) ? "Default " : "");
 		if (dev->maxOutputChannels)
-			ast_cli(a->fd, "=== ---> %sOutput Device\n", (index == def_output) ? "Default " : "");
+			ast_cli(a->fd, "=== ---> %sOutput Device\n", (idx == def_output) ? "Default " : "");
 		ast_cli(a->fd, "=== ---------------------------------------------------------\n===\n");
 	}
 
@@ -1154,12 +1154,10 @@ static char *cli_console_active(struct ast_cli_entry *e, int cmd, struct ast_cli
 
 	switch (cmd) {
 	case CLI_INIT:
-		e->command = "console active";
+		e->command = "console {set|show} active [<device>]";
 		e->usage =
-			"Usage: console active [device]\n"
-			"       If no device is specified.  The active console device will be shown.\n"
-			"Otherwise, the specified device will become the console device active for\n"
-			"the Asterisk CLI.\n";
+			"Usage: console {set|show} active [<device>]\n"
+			"       Set or show the active console device for the Asterisk CLI.\n";
 		return NULL;
 	case CLI_GENERATE:
 		if (a->pos == e->args) {
@@ -1181,7 +1179,7 @@ static char *cli_console_active(struct ast_cli_entry *e, int cmd, struct ast_cli
 	if (a->argc < e->args)
 		return CLI_SHOWUSAGE;
 
-	if (a->argc == e->args) {
+	if (a->argc == 3) {
 		pvt = get_active_pvt();
 
 		if (!pvt)
@@ -1400,6 +1398,9 @@ static int load_config(int reload)
 	if (!(cfg = ast_config_load(config_file, config_flags))) {
 		ast_log(LOG_NOTICE, "Unable to open configuration file %s!\n", config_file);
 		return -1;
+	} else if (cfg == CONFIG_STATUS_FILEINVALID) {
+		ast_log(LOG_NOTICE, "Config file %s has an invalid format\n", config_file);
+		return -1;
 	}
 	
 	ao2_callback(pvts, OBJ_NODATA, pvt_mark_destroy_cb, NULL);
@@ -1425,14 +1426,14 @@ static int pvt_hash_cb(const void *obj, const int flags)
 {
 	const struct console_pvt *pvt = obj;
 
-	return ast_str_hash(pvt->name);
+	return ast_str_case_hash(pvt->name);
 }
 
 static int pvt_cmp_cb(void *obj, void *arg, int flags)
 {
 	struct console_pvt *pvt = obj, *pvt2 = arg;
 
-	return !strcasecmp(pvt->name, pvt2->name) ? CMP_MATCH : 0;
+	return !strcasecmp(pvt->name, pvt2->name) ? CMP_MATCH | CMP_STOP : 0;
 }
 
 static void stop_streams(void)

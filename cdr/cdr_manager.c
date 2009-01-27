@@ -17,7 +17,7 @@
 /*! \file
  *
  * \brief Asterisk Call Manager CDR records.
- * 
+ *
  * See also
  * \arg \ref AstCDR
  * \arg \ref AstAMI
@@ -62,6 +62,11 @@ static int load_config(int reload)
 	if (cfg == CONFIG_STATUS_FILEUNCHANGED)
 		return 0;
 
+	if (cfg == CONFIG_STATUS_FILEINVALID) {
+		ast_log(LOG_ERROR, "Config file '%s' could not be parsed\n", CONF_FILE);
+		return 1;
+	}
+
 	if (reload && customfields) {
 		ast_free(customfields);
 	}
@@ -75,14 +80,14 @@ static int load_config(int reload)
 		enablecdr = 0;
 		return 0;
 	}
-	
+
 	while ( (cat = ast_category_browse(cfg, cat)) ) {
 		if (!strcasecmp(cat, "general")) {
 			v = ast_variable_browse(cfg, cat);
 			while (v) {
 				if (!strcasecmp(v->name, "enabled"))
 					newenablecdr = ast_true(v->value);
-				
+
 				v = v->next;
 			}
 		} else if (!strcasecmp(cat, "mappings")) {
@@ -90,20 +95,20 @@ static int load_config(int reload)
 			v = ast_variable_browse(cfg, cat);
 			while (v) {
 				if (customfields && !ast_strlen_zero(v->name) && !ast_strlen_zero(v->value)) {
-					if( (customfields->used + strlen(v->value) + strlen(v->name) + 14) < customfields->len) {
+					if ((ast_str_strlen(customfields) + strlen(v->value) + strlen(v->name) + 14) < ast_str_size(customfields)) {
 						ast_str_append(&customfields, -1, "%s: ${CDR(%s)}\r\n", v->value, v->name);
 						ast_log(LOG_NOTICE, "Added mapping %s: ${CDR(%s)}\n", v->value, v->name);
 					} else {
 						ast_log(LOG_WARNING, "No more buffer space to add other custom fields\n");
 						break;
 					}
-					
+
 				}
 				v = v->next;
 			}
 		}
 	}
-	
+
 	ast_config_destroy(cfg);
 
 	if (enablecdr && !newenablecdr)
@@ -129,7 +134,7 @@ static int manager_log(struct ast_cdr *cdr)
 
 	ast_localtime(&cdr->start, &timeresult, NULL);
 	ast_strftime(strStartTime, sizeof(strStartTime), DATE_FORMAT, &timeresult);
-	
+
 	if (cdr->answer.tv_sec)	{
 		ast_localtime(&cdr->answer, &timeresult, NULL);
 		ast_strftime(strAnswerTime, sizeof(strAnswerTime), DATE_FORMAT, &timeresult);
@@ -140,10 +145,10 @@ static int manager_log(struct ast_cdr *cdr)
 
 	buf[0] = 0;
 	/* Custom fields handling */
-	if (customfields != NULL && customfields->used > 0) {
+	if (customfields != NULL && ast_str_strlen(customfields)) {
 		memset(&dummy, 0, sizeof(dummy));
 		dummy.cdr = cdr;
-		pbx_substitute_variables_helper(&dummy, customfields->str, buf, sizeof(buf) - 1);
+		pbx_substitute_variables_helper(&dummy, ast_str_buffer(customfields), buf, sizeof(buf) - 1);
 	}
 
 	manager_event(EVENT_FLAG_CDR, "Cdr",

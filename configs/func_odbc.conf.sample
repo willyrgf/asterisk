@@ -31,6 +31,8 @@
 ;              readhandle.  "dsn" is a synonym for "writehandle".
 ; readsql      The statement to execute when reading from the function class.
 ; writesql     The statement to execute when writing to the function class.
+; insertsql    The statement to execute when writing to the function class
+;              succeeds, but initially indicates that 0 rows were affected.
 ; prefix       Normally, all function classes are prefixed with "ODBC" to keep
 ;              them uniquely named.  You may choose to change this prefix, which
 ;              may be useful to segregate a collection of certain function
@@ -57,6 +59,8 @@ dsn=mysql1,mysql2   ; Use mysql1 as the primary handle, but fall back to mysql2
                     ; "writehandle", if it is important to separate reads and
                     ; writes to different databases.
 readsql=SELECT COUNT(*) FROM exgirlfriends WHERE callerid='${SQL_ESC(${ARG1})}'
+syntax=<callerid>
+synopsis=Check if a specified callerid is contained in the ex-gf database
 
 ; ODBC_PRESENCE - Retrieve and update presence
 [PRESENCE]

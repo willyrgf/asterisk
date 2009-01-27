@@ -85,7 +85,11 @@ void __ast_threadstorage_object_replace(void *key_old, void *key_new, size_t len
  * \endcode
  */
 #define AST_THREADSTORAGE(name) \
-	AST_THREADSTORAGE_CUSTOM(name, NULL, ast_free_ptr) 
+	AST_THREADSTORAGE_CUSTOM_SCOPE(name, NULL, ast_free_ptr, static) 
+#define AST_THREADSTORAGE_PUBLIC(name) \
+	AST_THREADSTORAGE_CUSTOM_SCOPE(name, NULL, ast_free_ptr,) 
+#define AST_THREADSTORAGE_EXTERNAL(name) \
+	extern struct ast_threadstorage name
 
 /*!
  * \brief Define a thread storage variable, with custom initialization and cleanup
@@ -103,10 +107,12 @@ void __ast_threadstorage_object_replace(void *key_old, void *key_new, size_t len
  * AST_THREADSTORAGE_CUSTOM(my_buf, my_init, my_cleanup);
  * \endcode
  */
+#define AST_THREADSTORAGE_CUSTOM(a,b,c)	AST_THREADSTORAGE_CUSTOM_SCOPE(a,b,c,static)
+
 #if !defined(DEBUG_THREADLOCALS)
-#define AST_THREADSTORAGE_CUSTOM(name, c_init, c_cleanup)	\
+#define AST_THREADSTORAGE_CUSTOM_SCOPE(name, c_init, c_cleanup, scope)	\
 static void __init_##name(void);				\
-static struct ast_threadstorage name = {			\
+scope struct ast_threadstorage name = {			\
 	.once = THREADSTORAGE_ONCE_INIT,			\
 	.key_init = __init_##name,				\
 	.custom_init = c_init,					\
@@ -116,9 +122,9 @@ static void __init_##name(void)					\
 	pthread_key_create(&(name).key, c_cleanup);		\
 }
 #else /* defined(DEBUG_THREADLOCALS) */
-#define AST_THREADSTORAGE_CUSTOM(name, c_init, c_cleanup)	\
+#define AST_THREADSTORAGE_CUSTOM_SCOPE(name, c_init, c_cleanup, scope)	\
 static void __init_##name(void);				\
-static struct ast_threadstorage name = {			\
+scope struct ast_threadstorage name = {			\
 	.once = THREADSTORAGE_ONCE_INIT,			\
 	.key_init = __init_##name,				\
 	.custom_init = c_init,					\
@@ -139,8 +145,7 @@ static void __init_##name(void)					\
  *
  * \param ts This is a pointer to the thread storage structure declared by using
  *      the AST_THREADSTORAGE macro.  If declared with 
- *      AST_THREADSTORAGE(my_buf, my_buf_init), then this argument would be 
- *      (&my_buf).
+ *      AST_THREADSTORAGE(my_buf), then this argument would be (&my_buf).
  * \param init_size This is the amount of space to be allocated the first time
  *      this thread requests its data. Thus, this should be the size that the
  *      code accessing this thread storage is assuming the size to be.
@@ -151,7 +156,7 @@ static void __init_##name(void)					\
  *
  * Example usage:
  * \code
- * AST_THREADSTORAGE(my_buf, my_buf_init);
+ * AST_THREADSTORAGE(my_buf);
  * #define MY_BUF_SIZE   128
  * ...
  * void my_func(const char *fmt, ...)
@@ -199,7 +204,7 @@ void *__ast_threadstorage_get(struct ast_threadstorage *ts, size_t init_size, co
 			return NULL;
 		}
 		pthread_setspecific(ts->key, buf);
-		__ast_threadstorage_object_add(ts->key, init_size, file, function, line);
+		__ast_threadstorage_object_add(buf, init_size, file, function, line);
 	}
 
 	return buf;

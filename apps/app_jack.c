@@ -27,7 +27,9 @@
  * another application, or to play audio from another application.
  *
  * \arg http://www.jackaudio.org/
- * \arg http://svn.digium.com/svn/libresample/trunk
+ *
+ * \note To install libresample, check it out of the following repository:
+ * <code>$ svn co http://svn.digium.com/svn/thirdparty/libresample/trunk</code>
  *
  * \ingroup applications
  */
@@ -71,18 +73,46 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 "                running.\n" \
 "    c(<name>) - By default, Asterisk will use the channel name for the jack client\n" \
 "                name.  Use this option to specify a custom client name.\n"
-
+/*** DOCUMENTATION
+	<application name="JACK" language="en_US">
+		<synopsis>
+			Jack Audio Connection Kit
+		</synopsis>
+		<syntax>
+			<parameter name="options" required="false">
+				<optionlist>
+					<option name="s">
+						<argument name="name" required="true">
+							<para>Connect to the specified jack server name</para>
+						</argument>
+					</option>
+					<option name="i">
+						<argument name="name" required="true">
+							<para>Connect the output port that gets created to the specified jack input port</para>
+						</argument>
+					</option>
+					<option name="o">
+						<argument name="name" required="true">
+							<para>Connect the input port that gets created to the specified jack output port</para>
+						</argument>
+					</option>
+					<option name="c">
+						<argument name="name" required="true">
+							<para>By default, Asterisk will use the channel name for the jack client name.</para>
+							<para>Use this option to specify a custom client name.</para>
+						</argument>
+					</option>
+				</optionlist>
+			</parameter>
+		</syntax>
+		<description>
+			<para>When executing this application, two jack ports will be created; 
+			one input and one output. Other applications can be hooked up to 
+			these ports to access audio coming from, or being send to the channel.</para>
+		</description>
+	</application>
+ ***/
 static char *jack_app = "JACK";
-static char *jack_synopsis = 
-"JACK (Jack Audio Connection Kit) Application";
-static char *jack_desc = 
-"JACK([options])\n"
-"  When this application is executed, two jack ports will be created; one input\n"
-"and one output.  Other applications can be hooked up to these ports to access\n"
-"the audio coming from, or being sent to the channel.\n"
-"  Valid options:\n"
-COMMON_OPTIONS
-"";
 
 struct jack_data {
 	AST_DECLARE_STRING_FIELDS(
@@ -152,7 +182,7 @@ static void log_jack_status(const char *prefix, jack_status_t status)
 			ast_str_append(&str, 0, ", %s", jack_status_to_str((1 << i)));
 	}
 	
-	ast_log(LOG_NOTICE, "%s: %s\n", prefix, str->str);
+	ast_log(LOG_NOTICE, "%s: %s\n", prefix, ast_str_buffer(str));
 }
 
 static int alloc_resampler(struct jack_data *jack_data, int input)
@@ -859,7 +889,7 @@ static int enable_jack_hook(struct ast_channel *chan, char *data)
 	if (init_jack_data(chan, jack_data))
 		goto return_error;
 
-	if (!(datastore = ast_channel_datastore_alloc(&jack_hook_ds_info, NULL)))
+	if (!(datastore = ast_datastore_alloc(&jack_hook_ds_info, NULL)))
 		goto return_error;
 
 	jack_data->has_audiohook = 1;
@@ -908,7 +938,7 @@ static int disable_jack_hook(struct ast_channel *chan)
 	/* Keep the channel locked while we destroy the datastore, so that we can
 	 * ensure that all of the jack stuff is stopped just in case another frame
 	 * tries to come through the audiohook callback. */
-	ast_channel_datastore_free(datastore);
+	ast_datastore_free(datastore);
 
 	ast_channel_unlock(chan);
 
@@ -980,7 +1010,7 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	if (ast_register_application(jack_app, jack_exec, jack_synopsis, jack_desc)) {
+	if (ast_register_application_xml(jack_app, jack_exec)) {
 		return AST_MODULE_LOAD_DECLINE;
 	}
 

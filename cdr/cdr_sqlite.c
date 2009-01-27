@@ -20,14 +20,14 @@
 /*! \file
  *
  * \brief Store CDR records in a SQLite database.
- * 
+ *
  * \author Holger Schurig <hs4233@mail.mn-solutions.de>
  * \extref SQLite http://www.sqlite.org/
  *
  * See also
  * \arg \ref Config_cdr
  * \arg http://www.sqlite.org/
- * 
+ *
  * Creates the database and table on-the-fly
  * \ingroup cdr_drivers
  *
@@ -87,24 +87,26 @@ static char sql_create_table[] = "CREATE TABLE cdr ("
 #endif
 ");";
 
+static void format_date(char *buffer, size_t length, struct timeval *when)
+{
+	struct ast_tm tm;
+
+	ast_localtime(when, &tm, NULL);
+	ast_strftime(buffer, length, DATE_FORMAT, &tm);
+}
+
 static int sqlite_log(struct ast_cdr *cdr)
 {
 	int res = 0;
 	char *zErr = 0;
-	struct ast_tm tm;
 	char startstr[80], answerstr[80], endstr[80];
 	int count;
 
 	ast_mutex_lock(&sqlite_lock);
 
-	ast_localtime(&cdr->start, &tm, NULL);
-	ast_strftime(startstr, sizeof(startstr), DATE_FORMAT, &tm);
-
-	ast_localtime(&cdr->answer, &tm, NULL);
-	ast_strftime(answerstr, sizeof(answerstr), DATE_FORMAT, &tm);
-
-	ast_localtime(&cdr->end, &tm, NULL);
-	ast_strftime(endstr, sizeof(endstr), DATE_FORMAT, &tm);
+	format_date(startstr, sizeof(startstr), &cdr->start);
+	format_date(answerstr, sizeof(answerstr), &cdr->answer);
+	format_date(endstr, sizeof(endstr), &cdr->end);
 
 	for(count=0; count<5; count++) {
 		res = sqlite_exec_printf(db,
@@ -149,7 +151,7 @@ static int sqlite_log(struct ast_cdr *cdr)
 			break;
 		usleep(200);
 	}
-	
+
 	if (zErr) {
 		ast_log(LOG_ERROR, "cdr_sqlite: %s\n", zErr);
 		ast_free(zErr);
@@ -197,7 +199,7 @@ static int load_module(void)
 
 		/* TODO: here we should probably create an index */
 	}
-	
+
 	res = ast_cdr_register(name, ast_module_info->description, sqlite_log);
 	if (res) {
 		ast_log(LOG_ERROR, "Unable to register SQLite CDR handling\n");

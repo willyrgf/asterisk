@@ -481,7 +481,7 @@ struct ast_db_entry *ast_db_gettree(const char *family, const char *keytree)
 	if (!ast_strlen_zero(family)) {
 		if (!ast_strlen_zero(keytree)) {
 			/* Family and key tree */
-			snprintf(prefix, sizeof(prefix), "/%s/%s", family, prefix);
+			snprintf(prefix, sizeof(prefix), "/%s/%s", family, keytree);
 		} else {
 			/* Family only */
 			snprintf(prefix, sizeof(prefix), "/%s", family);
@@ -662,7 +662,7 @@ static int manager_dbdeltree(struct mansession *s, const struct message *m)
 int astdb_init(void)
 {
 	dbinit();
-	ast_cli_register_multiple(cli_database, sizeof(cli_database) / sizeof(struct ast_cli_entry));
+	ast_cli_register_multiple(cli_database, ARRAY_LEN(cli_database));
 	ast_manager_register("DBGet", EVENT_FLAG_SYSTEM | EVENT_FLAG_REPORTING, manager_dbget, "Get DB Entry");
 	ast_manager_register("DBPut", EVENT_FLAG_SYSTEM, manager_dbput, "Put DB Entry");
 	ast_manager_register("DBDel", EVENT_FLAG_SYSTEM, manager_dbdel, "Delete DB Entry");

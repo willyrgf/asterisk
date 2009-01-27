@@ -1,3 +1,143 @@
+======================================================================
+===
+=== This file documents the new and/or enhanced functionality added in
+=== the Asterisk versions listed below. This file does NOT include
+=== changes in behavior that would not be backwards compatible with
+=== previous versions; for that information see the UPGRADE.txt file
+=== and the other UPGRADE files for older releases.
+===
+======================================================================
+
+------------------------------------------------------------------------------
+--- Functionality changes from Asterisk 1.6.1 to Asterisk 1.6.2  -------------
+------------------------------------------------------------------------------
+
+SIP Changes
+-----------
+ * Added support for SUBSCRIBE/NOTIFY with dialog-info based call pickups.
+   Snom phones use this for call pickup of extensions that the phone is
+   subscribed to.
+ * Added support for subscribing to a voice mailbox on a remote server and
+   making the new/old message count available to local devices.
+ * Added support for setting the domain in the URI for caller of an
+   outbound call by using the SIPFROMDOMAIN channel variable.
+ * Added a new configuration option "remotesecret" for authentication to
+   remote services. For backwards compatibility, "secret" still has the
+   same function as before, but now you can configure both a remote secret and a
+   local secret for mutual authentication.
+ * Added a new 'faxdetect=yes|no' configuration option to sip.conf.  When this
+   option is enabled, a SIP channel will go to the fax extension (if it exists)
+   after T38 is negotiated.  This option is disabled by default.
+ * If ATTENDED_TRANSFER_COMPLETE_SOUND is set, the sound will be played to the
+   target of an attended transfer
+ * Added two new configuration options, "qualifygap" and "qualifypeers", which allow
+   finer control over how many peers Asterisk will qualify and the gap between them
+   when all peers need to be qualified at the same time.
+ * Added a new 'ignoresdpversion' option to sip.conf.  When this is enabled
+   (either globally or for a specific peer), chan_sip will treat any SDP data
+   it receives as new data and update the media stream accordingly.  By
+   default, Asterisk will only modify the media stream if the SDP session
+   version received is different from the current SDP session version.  This
+   option is required to interoperate with devices that have non-standard SDP
+   session version implementations (observed with Microsoft OCS).  This option
+   is disabled by default.
+ * The parsing of register => lines in sip.conf has been modified to allow a port
+   to be present in the "user" portion. Please see the sip.conf.sample file for more
+   information
+ * Added a function to remove SIP headers added in the dialplan before the
+   first INVITE is generated - SIPRemoveHeader()
+
+Skinny Changes
+--------------
+ * The configuration file now holds separate sections for devices and lines.
+   Please have a look at configs/skinny.conf.sample and change your skinny.conf
+   accordingly.
+
+DAHDI Changes
+-------------
+ * The UK option waitfordialtone has been added for use with BT analog
+   lines.
+
+Dialplan Functions
+------------------
+ * Added a new dialplan function, CURLOPT, which permits setting various
+   options that may be useful with the CURL dialplan function, such as
+   cookies, proxies, connection timeouts, passwords, etc.
+ * Permit the syntax and synopsis fields of the corresponding dialplan
+   functions to be individually set from func_odbc.conf.
+ * Added debugging CLI functions to func_odbc, 'odbc read' and 'odbc write'.
+ * func_odbc now may specify an insert query to execute, when the write query
+   affects 0 rows (usually indicating that no such row exists).
+ * Added a new dialplan function, LISTFILTER, which permits removing elements
+   from a set list, by name.  Uses the same general syntax as the existing CUT
+   and FIELDQTY dialplan functions, which also manage lists.
+ * Added REALTIME_FIELD and REALTIME_HASH, which should aid users in better
+   obtaining realtime data from the dialplan.
+ * Added LOCAL_PEEK, which I have no idea how to use, but Leif Madsen wanted it.
+   Russell says it's, like, a scope resolution function for LOCAL variables.
+   Totally.  Hopefully, that means more to you than it does to me.
+ * Added AUDIOHOOK_INHERIT. For information on its use, please see the output
+   of "core show function AUDIOHOOK_INHERIT" from the CLI
+
+Applications
+------------
+ * DAHDISendCallreroutingFacility parameters are now comma-separated,
+   instead of the old pipe.
+ * Scheduled meetme conferences may now have their end times extended by
+   using MeetMeAdmin.
+ * app_authenticate now gives the ability to select a prompt other than
+   the default.
+ * app_directory now pays attention to the searchcontexts setting in
+   voicemail.conf and will look through all contexts, if no context is
+   specified in the initial argument.
+ * A new application, Originate, has been introduced, that allows asynchronous
+   call origination from the dialplan.
+
+Miscellaneous
+-------------
+ * The Asterisk CLI has a new command, "channel redirect", which is similar in
+   operation to the AMI Redirect action.
+ * res_jabber: autoprune has been disabled by default, to avoid misconfiguration 
+   that would end up being interpreted as a bug once Asterisk started removing 
+   the contacts from a user list.
+ * extensions.conf now allows you to use keyword "same" to define an extension
+   without actually specifying an extension.  It uses exactly the same pattern
+   as previously used on the last "exten" line.  For example:
+     exten => 123,1,NoOp(something)
+     same  =>     n,SomethingElse()
+ * musiconhold.conf classes of type 'files' can now use relative directory paths,
+   which are interpreted as relative to the astvarlibdir setting in asterisk.conf.
+ * All deprecated CLI commands are removed from the sourcecode. They are now handled
+   by the new clialiases module. See cli_aliases.conf.sample file.
+ * Times within timespecs are now accurate down to the minute.  This is a change
+   from historical Asterisk, which only provided timespecs rounded to the nearest
+   even (read: evenly divisible by 2) minute mark.
+ * The realtime switch now supports an option flag, 'p', which disables searches for
+   pattern matches.
+ * In addition to a time range and date range, timespecs now accept a 5th optional
+   argument, timezone.  This allows you to perform time checks on alternate
+   timezones, especially if those daylight savings time ranges vary from your
+   machine's native timezone.  See GotoIfTime, ExecIfTime, IFTIME(), and timed
+   includes.
+ * The contrib/scripts/ directory now has a script called sip_nat_settings that will
+   give you the correct output for an asterisk box behind nat. It will give you the
+   externhost and localnet settings.
+
+Asterisk Manager Interface
+--------------------------
+ * When using the AMI over HTTP, you can now include a 'SuppressEvents' header (with
+   a non-empty value) in your request. If you do this, any pending AMI events will
+   *not* be included in the response to your request as they would normally, but
+   will be left in the event queue for the next request you make to retrieve. For
+   some applications, this will allow you to guarantee that you will only see
+   events in responses to 'WaitEvent' actions, and can better know when to expect them.
+   To know whether the Asterisk server supports this header or not, your client can
+   inspect the first response back from the server to see if it includes this header:
+
+   Pragma: SuppressEvents
+
+   If this is included, the server supports event suppression.
+
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 1.6.0 to Asterisk 1.6.1  -------------
 ------------------------------------------------------------------------------
@@ -88,6 +228,8 @@ Application Changes
  * ExternalIVR now takes several options that affect the way it performs, as
    well as having several new commands.  Please see doc/externalivr.txt for the
    complete documentation.
+ * Added ability to communicate over a TCP socket instead of forking a child process for the 
+   ExternalIVR application.
  * ChanIsAvail has a new option, 'a', which will return all available channels instead
    of just the first one if you give the function more then one channel to check.
  * PrivacyManager now takes an option where you can specify a context where the 
@@ -106,6 +248,9 @@ Application Changes
    status variable SENDIMAGESTATUS to one of 'SUCCESS', 'FAILURE', or
    'UNSUPPORTED'.  This change makes SendImage() more consistent with other
    applications.
+ * Park has a new option, 's', which silences the announcement of the parking space number.
+ * A non-numeric, zero, or negative timeout specified to Dial() will now be interpreted as
+   invalid input and will be assumed to mean that no timeout is desired.
 
 SIP Changes
 -----------
@@ -167,6 +312,7 @@ AMI - The manager (TCP/TLS/HTTP)
 --------------------------------
   * The Status command now takes an optional list of variables to display
     along with channel status.
+  * The QueueEntry event now also includes the channel's uniqueid
 
 ODBC Changes
 ------------
@@ -203,6 +349,11 @@ Miscellaneous
     operator.  This is most helpful when working with long SQL queries in
     func_odbc.conf, as the queries no longer need to be specified on a single
     line.
+  * CDR config file, cdr.conf, has an added option, "initiatedseconds", 
+    which will add a second to the billsec when the ending
+    time is set, if the number in the microseconds field of the end time is 
+    greater than the number of microseconds in the answer time. This allows
+    users to count the 'initiated' seconds in their billing records. 
 
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 1.4.X to Asterisk 1.6.0  -------------
@@ -260,6 +411,8 @@ AMI - The manager (TCP/TLS/HTTP)
   * Originate now accepts codec settings with "Codecs: alaw, ulaw, h264" 
   * New command: Atxfer. See doc/manager_1_1.txt for more details or 
     manager show command Atxfer from the CLI
+  * New command: IAXregistry. See doc/manager_1_1.txt for more details or
+    manager show command IAXregistry from the CLI
 
 Dialplan functions
 ------------------
@@ -294,6 +447,12 @@ Dialplan functions
 
 CLI Changes
 -----------
+  * Added CLI permissions, config file: cli_permissions.conf
+     default is to allow all commands for every local user/group.
+     Also this new feature added three new CLI commands:
+      - cli check permissions {<username>|@<groupname>|<username>@<groupname>} [<command>]
+      - cli reload permissions
+      - cli show permissions
   * New CLI command "core show hint" (usage: core show hint <exten>)
   * New CLI command "core show settings"
   * Added 'core show channels count' CLI command.
@@ -313,6 +472,9 @@ CLI Changes
     sorted into the different possible callbacks, with the number of entries
     currently scheduled for each. Gives you a feel for how busy the sip channel
     driver is.
+  * Added 'skinny show lines verbose' CLI command. This will show the subs for every channel.
+  * Cleanup another bunch of CLI commands. Now all modules follow the same schema.
+    (Done by lmadsen, junky and mvanbaak during the devcon 2008)
 
 SIP changes
 -----------
@@ -423,8 +585,8 @@ Agent channel changes
 ----------------------
   * The ackcall and endcall options are now supplemented with options acceptdtmf
     and enddtmf. These allow for the DTMF keypress to be configurable. The options
-	default to their old hard-coded values ('#' and '*' respectively) so this should
-	not break any existing agent installations.
+    default to their old hard-coded values ('#' and '*' respectively) so this should
+    not break any existing agent installations.
 
 DAHDI channel driver (chan_dahdi) Changes
 ----------------------------------------
@@ -567,6 +729,14 @@ Queue changes
     when a realtime queue member is removed. Since there is no calling channel associated
     with these events, the string "REALTIME" is placed where the channel's unique id
     is typically placed.
+  * The configuration method for the "joinempty" and "leavewhenempty" options has
+    changed to a comma-separated list of methods of determining member availability
+    instead of vague terms such as "yes," "loose," "no," and "strict." These old four
+    values are still accepted for backwards-compatibility, though.
+  * The average talktime is now calculated on queues. This information is reported via the
+    CLI commands "queue show" and "queues show"; through the AMI events AgentComplete, QueueSummary,
+    and QueueParams; and through the channelvariable QUEUETALKTIME if setinterfacevar=yes is set for
+    the queue.
 
 MeetMe Changes
 --------------
@@ -611,7 +781,8 @@ Other Dialplan Application Changes
      WaitForRing() now takes floating pt timeout arg.
      SpeechBackground() -- clarified in the docstrings that the timeout is an integer seconds.
   * Added 's' option to Page application.
-  * Added 'E' and 'V' commands to ExternalIVR.
+  * Added an optional timeout argument to the Page application.
+  * Added 'E', 'V', and 'P' commands to ExternalIVR.
   * Added 'o' and 'X' options to Chanspy.
   * Added a new dialplan application, Bridge, which allows you to bridge the
      calling channel to any other active channel on the system.
@@ -631,8 +802,6 @@ Other Dialplan Application Changes
      or NOCHANNEL if the given channel was not found.
   * The silencethreshold setting that was previously configurable in multiple
      applications is now settable globally via dsp.conf.
-  * Added ability to communicate over a TCP socket instead of forking a child process for the 
-    ExternalIVR application.
 
 Music On Hold Changes
 ---------------------
@@ -699,6 +868,7 @@ Call Features (res_features) Changes
      the first one available.
   * Added cli command 'features reload' to reload call features from features.conf
   * Moved into core asterisk binary.
+  * Changed the default setting for featuredigittimeout to 2000 ms from 500 ms.
 
 Language Support Changes
 ------------------------
@@ -844,7 +1014,15 @@ Miscellaneous
     allocation of additional extensions which will reach the specified user.
   * A new option for the configure script, --enable-internal-poll, has been added
     for use with systems which may have a buggy implementation of the poll system
-	call. If you notice odd behavior such as the CLI being unresponsive on remote
-	consoles, you may want to try using this option. This option is enabled by default
-	on Darwin systems since it is known that the Darwin poll() implementation has
-	odd issues.
+    call. If you notice odd behavior such as the CLI being unresponsive on remote
+    consoles, you may want to try using this option. This option is enabled by default
+    on Darwin systems since it is known that the Darwin poll() implementation has
+    odd issues.
+
+Timer Changes
+--------------------
+* In addition to timing from DAHDI, there is a new timing module called
+  res_timing_timerfd. In order to use this, you must be running Linux with
+  a kernel version 2.6.25 or newer as well as glibc 2.8 or newer. The configure
+  script will be able to tell if you have the requirements. From menuselect, select
+  res_timing_timerfd from the Resource Modules menu.

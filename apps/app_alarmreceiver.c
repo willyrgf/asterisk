@@ -63,18 +63,27 @@ struct event_node{
 typedef struct event_node event_node_t;
 
 static char *app = "AlarmReceiver";
-
-static char *synopsis = "Provide support for receiving alarm reports from a burglar or fire alarm panel";
-static char *descrip =
-"  AlarmReceiver(): Only 1 signalling format is supported at this time: Ademco\n"
-"Contact ID. This application should be called whenever there is an alarm\n"
-"panel calling in to dump its events. The application will handshake with the\n"
-"alarm panel, and receive events, validate them, handshake them, and store them\n"
-"until the panel hangs up. Once the panel hangs up, the application will run the\n"
-"system command specified by the eventcmd setting in alarmreceiver.conf and pipe\n"
-"the events to the standard input of the application. The configuration file also\n"
-"contains settings for DTMF timing, and for the loudness of the acknowledgement\n"
-"tones.\n";
+/*** DOCUMENTATION
+	<application name="AlarmReceiver" language="en_US">
+		<synopsis>
+			Provide support for receiving alarm reports from a burglar or fire alarm panel.
+		</synopsis>
+		<syntax />
+		<description>
+			<para>This application should be called whenever there is an alarm panel calling in to dump its events.
+			The application will handshake with the alarm panel, and receive events, validate them, handshake them,
+			and store them until the panel hangs up. Once the panel hangs up, the application will run the system
+			command specified by the eventcmd setting in <filename>alarmreceiver.conf</filename> and pipe the
+			events to the standard input of the application.
+			The configuration file also contains settings for DTMF timing, and for the loudness of the
+			acknowledgement tones.</para>
+			<note><para>Only 1 signalling format is supported at this time: Ademco Contact ID.</para></note>
+		</description>
+		<see-also>
+			<ref type="filename">alarmreceiver.conf</ref>
+		</see-also>
+	</application>
+ ***/
 
 /* Config Variables */
 static int fdtimeout = 2000;
@@ -639,6 +648,9 @@ static int load_config(void)
 	if (!cfg) {
 		ast_verb(4, "AlarmReceiver: No config file\n");
 		return 0;
+	} else if (cfg == CONFIG_STATUS_FILEINVALID) {
+		ast_log(LOG_ERROR, "Config file %s is in an invalid format.  Aborting.\n", ALMRCV_CONFIG);
+		return 0;
 	} else {
 		p = ast_variable_retrieve(cfg, "general", "eventcmd");
 		if (p) {
@@ -708,7 +720,7 @@ static int unload_module(void)
 static int load_module(void)
 {
 	if (load_config()) {
-		if (ast_register_application(app, alarmreceiver_exec, synopsis, descrip))
+		if (ast_register_application_xml(app, alarmreceiver_exec))
 			return AST_MODULE_LOAD_FAILURE;
 		return AST_MODULE_LOAD_SUCCESS;
 	} else

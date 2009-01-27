@@ -52,15 +52,23 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/say.h"
 #include "asterisk/options.h"
 
+/*** DOCUMENTATION
+	<application name="DAHDIScan" language="en_US">
+		<synopsis>
+			Scan DAHDI channels to monitor calls.
+		</synopsis>
+		<syntax>
+			<parameter name="group">
+				<para>Limit scanning to a channel <replaceable>group</replaceable> by setting this option.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Allows a call center manager to monitor DAHDI channels in a
+			convenient way.  Use <literal>#</literal> to select the next channel and use <literal>*</literal> to exit.</para>
+		</description>
+	</application>
+ ***/
 static char *app = "DAHDIScan";
-
-static char *synopsis = "Scan DAHDI channels to monitor calls";
-
-static char *descrip =
-"  DAHDIScan([group]) allows a call center manager to monitor DAHDI channels in\n"
-"a convenient way.  Use '#' to select the next channel and use '*' to exit\n"
-"Limit scanning to a channel GROUP by setting the option group argument.\n";
-
 
 #define CONF_SIZE 160
 
@@ -284,7 +292,7 @@ static int conf_exec(struct ast_channel *chan, void *data)
 	int res=-1;
 	int confflags = 0;
 	int confno = 0;
-	char confstr[80] = "", *tmp = NULL;
+	char confnostr[80] = "", *tmp = NULL;
 	struct ast_channel *tempchan = NULL, *lastchan = NULL, *ichan = NULL;
 	struct ast_frame *f;
 	char *desired_group;
@@ -335,12 +343,12 @@ static int conf_exec(struct ast_channel *chan, void *data)
 		}
 		if (tempchan && (!strcmp(tempchan->tech->type, "DAHDI")) && (tempchan != chan)) {
 			ast_verb(3, "DAHDI channel %s is in-use, monitoring...\n", tempchan->name);
-			ast_copy_string(confstr, tempchan->name, sizeof(confstr));
+			ast_copy_string(confnostr, tempchan->name, sizeof(confnostr));
 			ast_channel_unlock(tempchan);
-			if ((tmp = strchr(confstr, '-'))) {
+			if ((tmp = strchr(confnostr, '-'))) {
 				*tmp = '\0';
 			}
-			confno = atoi(strchr(confstr, '/') + 1);
+			confno = atoi(strchr(confnostr, '/') + 1);
 			ast_stopstream(chan);
 			ast_say_number(chan, confno, AST_DIGIT_ANY, chan->language, (char *) NULL);
 			res = conf_run(chan, confno, confflags);
@@ -363,7 +371,7 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	return ((ast_register_application(app, conf_exec, synopsis, descrip)) ? AST_MODULE_LOAD_FAILURE : AST_MODULE_LOAD_SUCCESS);
+	return ((ast_register_application_xml(app, conf_exec)) ? AST_MODULE_LOAD_FAILURE : AST_MODULE_LOAD_SUCCESS);
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Scan DAHDI channels application");

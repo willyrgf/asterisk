@@ -24,6 +24,13 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/ael_structs.h"
 #include "asterisk/extconf.h"
 
+int option_debug = 0;
+int option_verbose = 0;
+void ast_register_file_version(const char *file, const char *version) { }
+void ast_unregister_file_version(const char *file) { }
+
+struct ast_flags ast_compat = { 7 };
+
 /*** MODULEINFO
   	<depend>res_ael_share</depend>
  ***/
@@ -165,16 +172,6 @@ struct ast_custom_function *ast_custom_function_find(const char *name);
 struct ast_custom_function *ast_custom_function_find(const char *name)
 {
 	return 0; /* in "standalone" mode, functions are just not avail */
-}
-
-void ast_register_file_version(const char *file, const char *version);
-void ast_register_file_version(const char *file, const char *version)
-{
-}
-
-void ast_unregister_file_version(const char *file);
-void ast_unregister_file_version(const char *file)
-{
 }
 
 #if !defined(LOW_MEMORY)

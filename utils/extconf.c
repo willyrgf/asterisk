@@ -23,6 +23,8 @@
  * for operations outside of asterisk. A huge, awful hack.
  *
  */
+#include "asterisk.h"
+
 #undef DEBUG_THREADS
 
 #include "asterisk/compat.h"
@@ -47,11 +49,17 @@
 #include <pthread.h>
 #include <netdb.h>
 #include <sys/param.h>
+
+static void ast_log(int level, const char *file, int line, const char *function, const char *fmt, ...) __attribute__((format(printf, 5, 6)));
+void ast_verbose(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+
 #define ASINCLUDE_GLOB 1
 #ifdef AST_INCLUDE_GLOB
-#if defined(__Darwin__) || defined(__CYGWIN__)
+
+#if !defined(GLOB_ABORTED)
 #define GLOB_ABORTED GLOB_ABEND
 #endif
+
 # include <glob.h>
 #endif
 
@@ -81,27 +89,18 @@ struct ast_channel
 #define VERBOSE_PREFIX_3 "    -- "
 #define VERBOSE_PREFIX_4 "       > "
 
-/* IN CONFLICT: void ast_log(int level, const char *file, int line, const char *function, const char *fmt, ...)
-   __attribute__ ((format (printf, 5, 6))); */
-
-static void ast_log(int level, const char *file, int line, const char *function, const char *fmt, ...) __attribute__ ((format (printf,5,6)));
-
-
 void ast_backtrace(void);
 
 void ast_queue_log(const char *queuename, const char *callid, const char *agent, const char *event, const char *fmt, ...)
-	__attribute__ ((format (printf, 5, 6)));
+	__attribute__((format(printf, 5, 6)));
 
 /* IN CONFLICT: void ast_verbose(const char *fmt, ...)
-   __attribute__ ((format (printf, 1, 2))); */
+   __attribute__((format(printf, 1, 2))); */
 
 int ast_register_verbose(void (*verboser)(const char *string));
 int ast_unregister_verbose(void (*verboser)(const char *string));
 
 void ast_console_puts(const char *string);
-
-void ast_console_puts_mutable(const char *string);
-void ast_console_toggle_mute(int fd);
 
 #define _A_ __FILE__, __LINE__, __PRETTY_FUNCTION__
 
@@ -152,6 +151,8 @@ void ast_console_toggle_mute(int fd);
 #ifndef	HAVE_MTX_PROFILE
 #define	__MTX_PROF(a)	return pthread_mutex_lock((a))
 #else
+int mtx_prof = -1;
+
 #define	__MTX_PROF(a)	do {			\
 	int i;					\
 	/* profile only non-blocking events */	\
@@ -670,11 +671,11 @@ static inline int ast_cond_timedwait(ast_cond_t *cond, ast_mutex_t *t, const str
  constructors/destructors to create/destroy mutexes.  */
 #define __AST_MUTEX_DEFINE(scope, mutex) \
 	scope ast_mutex_t mutex = AST_MUTEX_INIT_VALUE; \
-static void  __attribute__ ((constructor)) init_##mutex(void) \
+static void  __attribute__((constructor)) init_##mutex(void) \
 { \
 	ast_mutex_init(&mutex); \
 } \
-static void  __attribute__ ((destructor)) fini_##mutex(void) \
+static void  __attribute__((destructor)) fini_##mutex(void) \
 { \
 	ast_mutex_destroy(&mutex); \
 }
@@ -758,11 +759,11 @@ static inline int ast_rwlock_trywrlock(ast_rwlock_t *prwlock)
 #ifndef HAVE_PTHREAD_RWLOCK_INITIALIZER
 #define __AST_RWLOCK_DEFINE(scope, rwlock) \
         scope ast_rwlock_t rwlock; \
-static void  __attribute__ ((constructor)) init_##rwlock(void) \
+static void  __attribute__((constructor)) init_##rwlock(void) \
 { \
         ast_rwlock_init(&rwlock); \
 } \
-static void  __attribute__ ((destructor)) fini_##rwlock(void) \
+static void  __attribute__((destructor)) fini_##rwlock(void) \
 { \
         ast_rwlock_destroy(&rwlock); \
 }
@@ -889,6 +890,136 @@ int ast_channel_trylock(struct ast_channel *chan);
 
 /* from utils.h */
 
+#define ast_free free
+
+#define MALLOC_FAILURE_MSG \
+	ast_log(LOG_ERROR, "Memory Allocation Failure in function %s at line %d of %s\n", func, lineno, file);
+#ifndef __AST_DEBUG_MALLOC
+
+/*!
+ * \brief A wrapper for malloc()
+ *
+ * ast_malloc() is a wrapper for malloc() that will generate an Asterisk log
+ * message in the case that the allocation fails.
+ *
+ * The argument and return value are the same as malloc()
+ */
+#define ast_malloc(len) \
+	_ast_malloc((len), __FILE__, __LINE__, __PRETTY_FUNCTION__)
+
+#define ast_calloc(num, len) \
+	_ast_calloc((num), (len), __FILE__, __LINE__, __PRETTY_FUNCTION__)
+
+#define ast_calloc_cache(num, len) \
+	_ast_calloc((num), (len), __FILE__, __LINE__, __PRETTY_FUNCTION__)
+
+#define ast_realloc(p, len) \
+	_ast_realloc((p), (len), __FILE__, __LINE__, __PRETTY_FUNCTION__)
+
+#define ast_strdup(str) \
+	_ast_strdup((str), __FILE__, __LINE__, __PRETTY_FUNCTION__)
+
+#define ast_strndup(str, len) \
+	_ast_strndup((str), (len), __FILE__, __LINE__, __PRETTY_FUNCTION__)
+
+#define ast_asprintf(ret, fmt, ...) \
+	_ast_asprintf((ret), __FILE__, __LINE__, __PRETTY_FUNCTION__, fmt, __VA_ARGS__)
+
+#define ast_vasprintf(ret, fmt, ap) \
+	_ast_vasprintf((ret), __FILE__, __LINE__, __PRETTY_FUNCTION__, (fmt), (ap))
+
+#else
+
+/* If astmm is in use, let it handle these.  Otherwise, it will report that
+   all allocations are coming from this header file */
+
+#undef __ast_calloc
+#undef calloc
+#undef ast_calloc
+
+#define ast_malloc(a)		malloc(a)
+#define ast_calloc(a,b)		calloc(a,b)
+#define ast_realloc(a,b)	realloc(a,b)
+#define ast_strdup(a)		strdup(a)
+#define ast_strndup(a,b)	strndup(a,b)
+#define ast_asprintf(a,b,...)	asprintf(a,b,__VA_ARGS__)
+#define ast_vasprintf(a,b,c)	vasprintf(a,b,c)
+
+void * attribute_malloc __ast_malloc(size_t len, const char *file, int lineno, const char *func)
+{
+	void *p;
+
+	if (!(p = malloc(len)))
+		MALLOC_FAILURE_MSG;
+
+	return p;
+}
+
+void * attribute_malloc __ast_calloc(size_t num, size_t len, const char *file, int lineno, const char *func)
+{
+	void *p;
+
+	if (!(p = calloc(num, len)))
+		MALLOC_FAILURE_MSG;
+
+	return p;
+}
+
+void * attribute_malloc _ast_calloc(size_t num, size_t len, const char *file, int lineno, const char *func);
+
+void * attribute_malloc _ast_calloc(size_t num, size_t len, const char *file, int lineno, const char *func)
+{
+	void *p;
+
+	if (!(p = calloc(num, len)))
+		MALLOC_FAILURE_MSG;
+
+	return p;
+}
+
+void * attribute_malloc __ast_realloc(void *p, size_t len, const char *file, int lineno, const char *func)
+{
+	void *newp;
+
+	if (!(newp = realloc(p, len)))
+		MALLOC_FAILURE_MSG;
+
+	return newp;
+}
+
+char * attribute_malloc __ast_strdup(const char *str, const char *file, int lineno, const char *func)
+{
+	char *newstr = NULL;
+
+	if (str) {
+		if (!(newstr = strdup(str)))
+			MALLOC_FAILURE_MSG;
+	}
+
+	return newstr;
+}
+
+char * attribute_malloc __ast_strndup(const char *str, size_t len, const char *file, int lineno, const char *func)
+{
+	char *newstr = NULL;
+
+	if (str) {
+		if (!(newstr = strndup(str, len)))
+			MALLOC_FAILURE_MSG;
+	}
+
+	return newstr;
+}
+
+void __ast_free(void *ptr, const char *file, int lineno, const char *func)
+{
+#undef free
+	free(ptr);
+}
+
+#endif /* AST_DEBUG_MALLOC */
+
+
 static unsigned int __unsigned_int_flags_dummy;
 
 struct ast_flags {  /* stolen from utils.h */
@@ -912,15 +1043,6 @@ struct ast_flags {  /* stolen from utils.h */
 					} while (0)
 
 
-#ifdef __AST_DEBUG_MALLOC
-static void ast_free(void *ptr) attribute_unused;
-static void ast_free(void *ptr)
-{
-	free(ptr);
-}
-#else
-#define ast_free free
-#endif
 
 #ifndef __AST_DEBUG_MALLOC
 
@@ -1078,7 +1200,7 @@ char * attribute_malloc _ast_strndup(const char *str, size_t len, const char *fi
 	_ast_asprintf((ret), __FILE__, __LINE__, __PRETTY_FUNCTION__, fmt, __VA_ARGS__)
 
 AST_INLINE_API(
-__attribute__((format (printf, 5, 6)))
+__attribute__((format(printf, 5, 6)))
 int _ast_asprintf(char **ret, const char *file, int lineno, const char *func, const char *fmt, ...),
 {
 	int res;
@@ -1105,7 +1227,7 @@ int _ast_asprintf(char **ret, const char *file, int lineno, const char *func, co
 	_ast_vasprintf((ret), __FILE__, __LINE__, __PRETTY_FUNCTION__, (fmt), (ap))
 
 AST_INLINE_API(
-__attribute__((format (printf, 5, 0)))
+__attribute__((format(printf, 5, 0)))
 int _ast_vasprintf(char **ret, const char *file, int lineno, const char *func, const char *fmt, va_list ap),
 {
 	int res;
@@ -1127,7 +1249,6 @@ int _ast_vasprintf(char **ret, const char *file, int lineno, const char *func, c
 #define ast_realloc(a,b)	realloc(a,b)
 #define ast_strdup(a)		strdup(a)
 #define ast_strndup(a,b)	strndup(a,b)
-#define ast_asprintf(a,b,c)	asprintf(a,b,c)
 #define ast_vasprintf(a,b,c)	vasprintf(a,b,c)
 
 #endif /* AST_DEBUG_MALLOC */
@@ -1247,7 +1368,7 @@ static unsigned int safe_system_level = 0;
 static void *safe_system_prev_handler;
 
 /*! \brief NULL handler so we can collect the child exit status */
-static void null_sig_handler(int signal)
+static void null_sig_handler(int sig)
 {
 
 }
@@ -1761,13 +1882,6 @@ static void ast_config_destroy(struct ast_config *cfg)
 	free(cfg);
 }
 
-
-/* options.h declars ast_options extern; I need it static? */
-
-#define AST_CACHE_DIR_LEN 	512
-#define AST_FILENAME_MAX	80
-
-/*! \ingroup main_options */
 enum ast_option_flags {
 	/*! Allow \#exec in config files */
 	AST_OPT_FLAG_EXEC_INCLUDES = (1 << 0),
@@ -1791,8 +1905,6 @@ enum ast_option_flags {
 	AST_OPT_FLAG_FULLY_BOOTED = (1 << 9),
 	/*! Trascode via signed linear */
 	AST_OPT_FLAG_TRANSCODE_VIA_SLIN = (1 << 10),
-	/*! Enable priority jumping in applications */
-	AST_OPT_FLAG_PRIORITY_JUMPING = (1 << 11),
 	/*! Dump core on a seg fault */
 	AST_OPT_FLAG_DUMP_CORE = (1 << 12),
 	/*! Cache sound files */
@@ -1803,7 +1915,7 @@ enum ast_option_flags {
 	AST_OPT_FLAG_OVERRIDE_CONFIG = (1 << 15),
 	/*! Reconnect */
 	AST_OPT_FLAG_RECONNECT = (1 << 16),
-	/*! Transmit Silence during Record() */
+	/*! Transmit Silence during Record() and DTMF Generation */
 	AST_OPT_FLAG_TRANSMIT_SILENCE = (1 << 17),
 	/*! Suppress some warnings */
 	AST_OPT_FLAG_DONT_WARN = (1 << 18),
@@ -1814,11 +1926,27 @@ enum ast_option_flags {
 	/*! Always fork, even if verbose or debug settings are non-zero */
 	AST_OPT_FLAG_ALWAYS_FORK = (1 << 21),
 	/*! Disable log/verbose output to remote consoles */
-	AST_OPT_FLAG_MUTE = (1 << 22)
+	AST_OPT_FLAG_MUTE = (1 << 22),
+	/*! There is a per-file debug setting */
+	AST_OPT_FLAG_DEBUG_FILE = (1 << 23),
+	/*! There is a per-file verbose setting */
+	AST_OPT_FLAG_VERBOSE_FILE = (1 << 24),
+	/*! Terminal colors should be adjusted for a light-colored background */
+	AST_OPT_FLAG_LIGHT_BACKGROUND = (1 << 25),
+	/*! Count Initiated seconds in CDR's */
+	AST_OPT_FLAG_INITIATED_SECONDS = (1 << 26),
+	/*! Force black background */
+	AST_OPT_FLAG_FORCE_BLACK_BACKGROUND = (1 << 27),
 };
+
+/* options.h declares ast_options extern; I need it static? */
+#define AST_CACHE_DIR_LEN 	512
+#define AST_FILENAME_MAX	80
 
 /*! These are the options that set by default when Asterisk starts */
 #define AST_DEFAULT_OPTIONS AST_OPT_FLAG_TRANSCODE_VIA_SLIN
+
+struct ast_flags ast_options = { AST_DEFAULT_OPTIONS };
 
 #define ast_opt_exec_includes		ast_test_flag(&ast_options, AST_OPT_FLAG_EXEC_INCLUDES)
 #define ast_opt_no_fork			ast_test_flag(&ast_options, AST_OPT_FLAG_NO_FORK)
@@ -1844,14 +1972,12 @@ enum ast_option_flags {
 #define ast_opt_always_fork		ast_test_flag(&ast_options, AST_OPT_FLAG_ALWAYS_FORK)
 #define ast_opt_mute			ast_test_flag(&ast_options, AST_OPT_FLAG_MUTE)
 
-/*  IN CONFLICT: extern int option_verbose; */
-/*  IN CONFLICT: extern int option_debug;	*/	/*!< Debugging */
+extern int option_verbose;
+extern int option_debug;		/*!< Debugging */
 extern int option_maxcalls;		/*!< Maximum number of simultaneous channels */
 extern double option_maxload;
 extern char defaultlanguage[];
 
-extern time_t ast_startuptime;
-extern time_t ast_lastreloadtime;
 extern pid_t ast_mainpid;
 
 extern char record_cache_dir[AST_CACHE_DIR_LEN];
@@ -2070,11 +2196,11 @@ struct name {								\
 	struct type *last;						\
 	ast_mutex_t lock;						\
 } name;									\
-static void  __attribute__ ((constructor)) init_##name(void)		\
+static void  __attribute__((constructor)) init_##name(void)		\
 {									\
         AST_LIST_HEAD_INIT(&name);					\
 }									\
-static void  __attribute__ ((destructor)) fini_##name(void)		\
+static void  __attribute__((destructor)) fini_##name(void)		\
 {									\
         AST_LIST_HEAD_DESTROY(&name);					\
 }									\
@@ -2112,11 +2238,11 @@ struct name {                                                           \
         struct type *last;                                              \
         ast_rwlock_t lock;                                              \
 } name;                                                                 \
-static void  __attribute__ ((constructor)) init_##name(void)            \
+static void  __attribute__((constructor)) init_##name(void)            \
 {                                                                       \
         AST_RWLIST_HEAD_INIT(&name);                                    \
 }                                                                       \
-static void  __attribute__ ((destructor)) fini_##name(void)             \
+static void  __attribute__((destructor)) fini_##name(void)             \
 {                                                                       \
         AST_RWLIST_HEAD_DESTROY(&name);                                 \
 }                                                                       \
@@ -2639,8 +2765,8 @@ struct ast_switch {
 };
 
 
-static char *config = "extensions.conf";
-static char *registrar = "conf2ael";
+static char *config_filename = "extensions.conf";
+static char *global_registrar = "conf2ael";
 static char userscontext[AST_MAX_EXTENSION] = "default";
 static int static_config = 0;
 static int write_protect_config = 1;
@@ -2706,14 +2832,6 @@ static const char *ast_var_name(const struct ast_var_t *var)
 	return name;
 }
 
-
-/* stolen from asterisk.c */
-
-static struct ast_flags ast_options = { AST_DEFAULT_OPTIONS };
-static int option_verbose = 0;                         /*!< Verbosity level */
-static int option_debug = 0;                           /*!< Debug level */
-
-
 /* experiment 1: see if it's easier just to use existing config code
  *               to read in the extensions.conf file. In this scenario, 
                  I have to rip/copy code from other modules, because they
@@ -2735,7 +2853,7 @@ static void ast_log(int level, const char *file, int line, const char *function,
 	va_end(vars);
 }
 
-static void __attribute__((format (printf, 1, 2))) ast_verbose(const char *fmt, ...)
+void __attribute__((format(printf, 1, 2))) ast_verbose(const char *fmt, ...)
 {
 	va_list vars;
 	va_start(vars,fmt);
@@ -2832,6 +2950,7 @@ struct ast_timing {
 	unsigned int daymask;			/*!< Mask for date */
 	unsigned int dowmask;			/*!< Mask for day of week (mon-sun) */
 	unsigned int minmask[24];		/*!< Mask for minute */
+	char *timezone;                 /*!< NULL, or zoneinfo style timezone */
 };
 /* end of pbx.h */
 /*! \brief ast_include: include= support in extensions.conf */
@@ -2860,7 +2979,7 @@ struct ast_sw {
 struct ast_ignorepat {
 	const char *registrar;
 	struct ast_ignorepat *next;
-	const char pattern[0];
+	char pattern[0];
 };
 
 /*! \brief ast_context: An extension context */
@@ -3125,20 +3244,24 @@ int localized_pbx_builtin_setvar(struct ast_channel *chan, void *data)
  * return the index of the matching entry, starting from 1.
  * If names is not supplied, try numeric values.
  */
-
 static int lookup_name(const char *s, char *const names[], int max)
 {
 	int i;
 
-	if (names) {
+	if (names && *s > '9') {
 		for (i = 0; names[i]; i++) {
-			if (!strcasecmp(s, names[i]))
-				return i+1;
+			if (!strcasecmp(s, names[i])) {
+				return i;
+			}
 		}
-	} else if (sscanf(s, "%d", &i) == 1 && i >= 1 && i <= max) {
-		return i;
 	}
-	return 0; /* error return */
+
+	/* Allow months and weekdays to be specified as numbers, as well */
+	if (sscanf(s, "%d", &i) == 1 && i >= 1 && i <= max) {
+		/* What the array offset would have been: "1" would be at offset 0 */
+		return i - 1;
+	}
+	return -1; /* error return */
 }
 
 /*! \brief helper function to return a range up to max (7, 12, 31 respectively).
@@ -3146,44 +3269,42 @@ static int lookup_name(const char *s, char *const names[], int max)
  */
 static unsigned get_range(char *src, int max, char *const names[], const char *msg)
 {
-	int s, e; /* start and ending position */
+	int start, end; /* start and ending position */
 	unsigned int mask = 0;
+	char *part;
 
 	/* Check for whole range */
 	if (ast_strlen_zero(src) || !strcmp(src, "*")) {
-		s = 0;
-		e = max - 1;
-	} else {
-		/* Get start and ending position */
-		char *c = strchr(src, '-');
-		if (c)
-			*c++ = '\0';
-		/* Find the start */
-		s = lookup_name(src, names, max);
-		if (!s) {
-			ast_log(LOG_WARNING, "Invalid %s '%s', assuming none\n", msg, src);
-			return 0;
-		}
-		s--;
-		if (c) { /* find end of range */
-			e = lookup_name(c, names, max);
-			if (!e) {
-				ast_log(LOG_WARNING, "Invalid end %s '%s', assuming none\n", msg, c);
-				return 0;
-			}
-			e--;
-		} else
-			e = s;
+		return (1 << max) - 1;
 	}
-	/* Fill the mask. Remember that ranges are cyclic */
-	mask = 1 << e;	/* initialize with last element */
-	while (s != e) {
-		if (s >= max) {
-			s = 0;
-			mask |= (1 << s);
+
+	while ((part = strsep(&src, "&"))) {
+		/* Get start and ending position */
+		char *endpart = strchr(part, '-');
+		if (endpart) {
+			*endpart++ = '\0';
+		}
+		/* Find the start */
+		if ((start = lookup_name(part, names, max)) < 0) {
+			ast_log(LOG_WARNING, "Invalid %s '%s', skipping element\n", msg, part);
+			continue;
+		}
+		if (endpart) { /* find end of range */
+			if ((end = lookup_name(endpart, names, max)) < 0) {
+				ast_log(LOG_WARNING, "Invalid end %s '%s', skipping element\n", msg, endpart);
+				continue;
+			}
 		} else {
-			mask |= (1 << s);
-			s++;
+			end = start;
+		}
+		/* Fill the mask. Remember that ranges are cyclic */
+		mask |= (1 << end);   /* initialize with last element */
+		while (start != end) {
+			if (start >= max) {
+				start = 0;
+			}
+			mask |= (1 << start);
+			start++;
 		}
 	}
 	return mask;
@@ -3192,85 +3313,60 @@ static unsigned get_range(char *src, int max, char *const names[], const char *m
 /*! \brief store a bitmask of valid times, one bit each 2 minute */
 static void get_timerange(struct ast_timing *i, char *times)
 {
-	char *e;
+	char *endpart, *part;
 	int x;
-	int s1, s2;
-	int e1, e2;
-	/*	int cth, ctm; */
+	int st_h, st_m;
+	int endh, endm;
+	int minute_start, minute_end;
 
 	/* start disabling all times, fill the fields with 0's, as they may contain garbage */
 	memset(i->minmask, 0, sizeof(i->minmask));
 
-	/* 2-minutes per bit, since the mask has only 32 bits :( */
+	/* 1-minute per bit */
 	/* Star is all times */
 	if (ast_strlen_zero(times) || !strcmp(times, "*")) {
-		for (x=0; x<24; x++)
+		/* 48, because each hour takes 2 integers; 30 bits each */
+		for (x = 0; x < 48; x++) {
 			i->minmask[x] = 0x3fffffff; /* 30 bits */
+		}
 		return;
 	}
 	/* Otherwise expect a range */
-	e = strchr(times, '-');
-	if (!e) {
-		ast_log(LOG_WARNING, "Time range is not valid. Assuming no restrictions based on time.\n");
-		return;
-	}
-	*e++ = '\0';
-	/* XXX why skip non digits ? */
-	while (*e && !isdigit(*e))
-		e++;
-	if (!*e) {
-		ast_log(LOG_WARNING, "Invalid time range.  Assuming no restrictions based on time.\n");
-		return;
-	}
-	if (sscanf(times, "%d:%d", &s1, &s2) != 2) {
-		ast_log(LOG_WARNING, "%s isn't a time.  Assuming no restrictions based on time.\n", times);
-		return;
-	}
-	if (sscanf(e, "%d:%d", &e1, &e2) != 2) {
-		ast_log(LOG_WARNING, "%s isn't a time.  Assuming no restrictions based on time.\n", e);
-		return;
-	}
-	/* XXX this needs to be optimized */
-#if 1
-	s1 = s1 * 30 + s2/2;
-	if ((s1 < 0) || (s1 >= 24*30)) {
-		ast_log(LOG_WARNING, "%s isn't a valid start time. Assuming no time.\n", times);
-		return;
-	}
-	e1 = e1 * 30 + e2/2;
-	if ((e1 < 0) || (e1 >= 24*30)) {
-		ast_log(LOG_WARNING, "%s isn't a valid end time. Assuming no time.\n", e);
-		return;
-	}
-	/* Go through the time and enable each appropriate bit */
-	for (x=s1;x != e1;x = (x + 1) % (24 * 30)) {
-		i->minmask[x/30] |= (1 << (x % 30));
-	}
-	/* Do the last one */
-	i->minmask[x/30] |= (1 << (x % 30));
-#else
-	for (cth=0; cth<24; cth++) {
-		/* Initialize masks to blank */
-		i->minmask[cth] = 0;
-		for (ctm=0; ctm<30; ctm++) {
-			if (
-			/* First hour with more than one hour */
-			      (((cth == s1) && (ctm >= s2)) &&
-			       ((cth < e1)))
-			/* Only one hour */
-			||    (((cth == s1) && (ctm >= s2)) &&
-			       ((cth == e1) && (ctm <= e2)))
-			/* In between first and last hours (more than 2 hours) */
-			||    ((cth > s1) &&
-			       (cth < e1))
-			/* Last hour with more than one hour */
-			||    ((cth > s1) &&
-			       ((cth == e1) && (ctm <= e2)))
-			)
-				i->minmask[cth] |= (1 << (ctm / 2));
+	while ((part = strsep(&times, "&"))) {
+		if (!(endpart = strchr(part, '-'))) {
+			if (sscanf(part, "%d:%d", &st_h, &st_m) != 2 || st_h < 0 || st_h > 23 || st_m < 0 || st_m > 59) {
+				ast_log(LOG_WARNING, "%s isn't a valid time.\n", part);
+				continue;
+			}
+			i->minmask[st_h * 2 + (st_m >= 30 ? 1 : 0)] |= (1 << (st_m % 30));
+			continue;
 		}
+		*endpart++ = '\0';
+		/* why skip non digits? Mostly to skip spaces */
+		while (*endpart && !isdigit(*endpart)) {
+			endpart++;
+		}
+		if (!*endpart) {
+			ast_log(LOG_WARNING, "Invalid time range starting with '%s-'.\n", part);
+			continue;
+		}
+		if (sscanf(part, "%d:%d", &st_h, &st_m) != 2 || st_h < 0 || st_h > 23 || st_m < 0 || st_m > 59) {
+			ast_log(LOG_WARNING, "'%s' isn't a valid start time.\n", part);
+			continue;
+		}
+		if (sscanf(endpart, "%d:%d", &endh, &endm) != 2 || endh < 0 || endh > 23 || endm < 0 || endm > 59) {
+			ast_log(LOG_WARNING, "'%s' isn't a valid end time.\n", endpart);
+			continue;
+		}
+		minute_start = st_h * 60 + st_m;
+		minute_end = endh * 60 + endm;
+		/* Go through the time and enable each appropriate bit */
+		for (x = minute_start; x != minute_end; x = (x + 1) % (24 * 60)) {
+			i->minmask[x / 30] |= (1 << (x % 30));
+		}
+		/* Do the last one */
+		i->minmask[x / 30] |= (1 << (x % 30));
 	}
-#endif
 	/* All done */
 	return;
 }
@@ -3791,9 +3887,9 @@ static struct ast_config *config_text_file_load(const char *database, const char
 				}
 				
 				if (process_buf) {
-					char *buf = ast_strip(process_buf);
-					if (!ast_strlen_zero(buf)) {
-						if (process_text_line(cfg, &cat, buf, lineno, filename, withcomments, suggested_include_file)) {
+					char *stripped_process_buf = ast_strip(process_buf);
+					if (!ast_strlen_zero(stripped_process_buf)) {
+						if (process_text_line(cfg, &cat, stripped_process_buf, lineno, filename, withcomments, suggested_include_file)) {
 							cfg = NULL;
 							break;
 						}
@@ -4377,29 +4473,48 @@ char *months[] =
 	NULL,
 };
 
-static int ast_build_timing(struct ast_timing *i, const char *info_in)
+int ast_build_timing(struct ast_timing *i, const char *info_in);
+
+int ast_build_timing(struct ast_timing *i, const char *info_in)
 {
-	char info_save[256];
-	char *info;
+	char *info_save, *info;
+	int j, num_fields, last_sep = -1;
 
 	/* Check for empty just in case */
-	if (ast_strlen_zero(info_in))
+	if (ast_strlen_zero(info_in)) {
 		return 0;
+	}
+
 	/* make a copy just in case we were passed a static string */
-	ast_copy_string(info_save, info_in, sizeof(info_save));
-	info = info_save;
+	info_save = info = ast_strdupa(info_in);
+
+	/* count the number of fields in the timespec */
+	for (j = 0, num_fields = 1; info[j] != '\0'; j++) {
+		if (info[j] == ',') {
+			last_sep = j;
+			num_fields++;
+		}
+	}
+
+	/* save the timezone, if it is specified */
+	if (num_fields == 5) {
+		i->timezone = ast_strdup(info + last_sep + 1);
+	} else {
+		i->timezone = NULL;
+	}
+
 	/* Assume everything except time */
 	i->monthmask = 0xfff;	/* 12 bits */
 	i->daymask = 0x7fffffffU; /* 31 bits */
 	i->dowmask = 0x7f; /* 7 bits */
 	/* on each call, use strsep() to move info to the next argument */
-	get_timerange(i, strsep(&info, "|"));
+	get_timerange(i, strsep(&info, "|,"));
 	if (info)
-		i->dowmask = get_range(strsep(&info, "|"), 7, days, "day of week");
+		i->dowmask = get_range(strsep(&info, "|,"), 7, days, "day of week");
 	if (info)
-		i->daymask = get_range(strsep(&info, "|"), 31, NULL, "day");
+		i->daymask = get_range(strsep(&info, "|,"), 31, NULL, "day");
 	if (info)
-		i->monthmask = get_range(strsep(&info, "|"), 12, months, "month");
+		i->monthmask = get_range(strsep(&info, "|,"), 12, months, "month");
 	return 1;
 }
 
@@ -4473,7 +4588,7 @@ static int ext_cmp1(const char **p)
 		return 0x40000;	/* XXX make this entry go last... */
 	}
 
-	bzero(chars, sizeof(chars));	/* clear all chars in the set */
+	memset(chars, '\0', sizeof(chars));	/* clear all chars in the set */
 	for (; *p < end  ; (*p)++) {
 		unsigned char c1, c2;	/* first-last char in range */
 		c1 = (unsigned char)((*p)[0]);
@@ -4552,39 +4667,13 @@ static int ext_strncpy(char *dst, const char *src, int len)
  * Wrapper around _extension_match_core() to do performance measurement
  * using the profiling code.
  */
-static int ast_check_timing(const struct ast_timing *i)
+int ast_check_timing(const struct ast_timing *i);
+
+int ast_check_timing(const struct ast_timing *i)
 {
-	struct tm tm;
-	time_t t = time(NULL);
-
-	localtime_r(&t,&tm);
-
-	/* If it's not the right month, return */
-	if (!(i->monthmask & (1 << tm.tm_mon)))
-		return 0;
-
-	/* If it's not that time of the month.... */
-	/* Warning, tm_mday has range 1..31! */
-	if (!(i->daymask & (1 << (tm.tm_mday-1))))
-		return 0;
-
-	/* If it's not the right day of the week */
-	if (!(i->dowmask & (1 << tm.tm_wday)))
-		return 0;
-
-	/* Sanity check the hour just to be safe */
-	if ((tm.tm_hour < 0) || (tm.tm_hour > 23)) {
-		ast_log(LOG_WARNING, "Insane time...\n");
-		return 0;
-	}
-
-	/* Now the tough part, we calculate if it fits
-	   in the right time based on min/hour */
-	if (!(i->minmask[tm.tm_hour] & (1 << (tm.tm_min / 2))))
-		return 0;
-
-	/* If we got this far, then we're good */
-	return 1;
+	/* sorry, but this feature will NOT be available
+	   in the standalone version */
+	return 0;
 }
 
 #ifdef NOT_ANYMORE
@@ -5069,7 +5158,7 @@ static int ast_context_add_include2(struct ast_context *con, const char *value,
 	/* Strip off timing info, and process if it is there */
 	if ( (c = strchr(p, '|')) ) {
 		*c++ = '\0';
-	        new_include->hastime = ast_build_timing(&(new_include->timing), c);
+		new_include->hastime = ast_build_timing(&(new_include->timing), c);
 	}
 	new_include->next      = NULL;
 	new_include->registrar = registrar;
@@ -5249,16 +5338,16 @@ int localized_context_add_switch2(struct ast_context *con, const char *value,
 
 static struct ast_context *__ast_context_create(struct ast_context **extcontexts, const char *name, const char *registrar, int existsokay)
 {
-	struct ast_context *tmp, **local_contexts;
+	struct ast_context *tmp, **loc_contexts;
 	int length = sizeof(struct ast_context) + strlen(name) + 1;
 
 	if (!extcontexts) {
 		ast_wrlock_contexts();
-		local_contexts = &contexts;
+		loc_contexts = &contexts;
 	} else
-		local_contexts = extcontexts;
+		loc_contexts = extcontexts;
 
-	for (tmp = *local_contexts; tmp; tmp = tmp->next) {
+	for (tmp = *loc_contexts; tmp; tmp = tmp->next) {
 		if (!strcasecmp(tmp->name, name)) {
 			if (!existsokay) {
 				ast_log(LOG_WARNING, "Tried to register context '%s', already in use\n", name);
@@ -5275,10 +5364,10 @@ static struct ast_context *__ast_context_create(struct ast_context **extcontexts
 		strcpy(tmp->name, name);
 		tmp->root = NULL;
 		tmp->registrar = registrar;
-		tmp->next = *local_contexts;
+		tmp->next = *loc_contexts;
 		tmp->includes = NULL;
 		tmp->ignorepats = NULL;
-		*local_contexts = tmp;
+		*loc_contexts = tmp;
 		if (option_debug)
 			ast_log(LOG_DEBUG, "Registered context '%s'\n", tmp->name);
 		if (option_verbose > 2)
@@ -5900,7 +5989,6 @@ static int pbx_load_config(const char *config_file)
 	if ((aft = ast_variable_retrieve(cfg, "general", "autofallthrough")))
 		autofallthrough_config = ast_true(aft);
 	clearglobalvars_config = ast_true(ast_variable_retrieve(cfg, "general", "clearglobalvars"));
-	ast_set2_flag(&ast_options, ast_true(ast_variable_retrieve(cfg, "general", "priorityjumping")), AST_OPT_FLAG_PRIORITY_JUMPING);
 
 	if ((cxt = ast_variable_retrieve(cfg, "general", "userscontext"))) 
 		ast_copy_string(userscontext, cxt, sizeof(userscontext));
@@ -5916,7 +6004,7 @@ static int pbx_load_config(const char *config_file)
 		/* All categories but "general" or "globals" are considered contexts */
 		if (!strcasecmp(cxt, "general") || !strcasecmp(cxt, "globals"))
 			continue;
-		con=ast_context_find_or_create(&local_contexts,NULL,cxt, registrar);
+		con=ast_context_find_or_create(&local_contexts,NULL,cxt, global_registrar);
 		if (con == NULL)
 			continue;
 
@@ -6004,7 +6092,7 @@ static int pbx_load_config(const char *config_file)
 						lastpri = ipri;
 						if (!ast_opt_dont_warn && !strcmp(realext, "_."))
 							ast_log(LOG_WARNING, "The use of '_.' for an extension is strongly discouraged and can have unexpected behavior.  Please use '_X.' instead at line %d\n", v->lineno);
-						if (ast_add_extension2(con, 0, realext, ipri, label, cidmatch, appl, strdup(data), ast_free, registrar)) {
+						if (ast_add_extension2(con, 0, realext, ipri, label, cidmatch, appl, strdup(data), ast_free, global_registrar)) {
 							ast_log(LOG_WARNING, "Unable to register extension at line %d\n", v->lineno);
 						}
 					}
@@ -6013,12 +6101,12 @@ static int pbx_load_config(const char *config_file)
 			} else if (!strcasecmp(v->name, "include")) {
 				memset(realvalue, 0, sizeof(realvalue));
 				pbx_substitute_variables_helper(NULL, v->value, realvalue, sizeof(realvalue) - 1);
-				if (ast_context_add_include2(con, realvalue, registrar))
+				if (ast_context_add_include2(con, realvalue, global_registrar))
 					ast_log(LOG_WARNING, "Unable to include context '%s' in context '%s'\n", v->value, cxt);
 			} else if (!strcasecmp(v->name, "ignorepat")) {
 				memset(realvalue, 0, sizeof(realvalue));
 				pbx_substitute_variables_helper(NULL, v->value, realvalue, sizeof(realvalue) - 1);
-				if (ast_context_add_ignorepat2(con, realvalue, registrar))
+				if (ast_context_add_ignorepat2(con, realvalue, global_registrar))
 					ast_log(LOG_WARNING, "Unable to include ignorepat '%s' in context '%s'\n", v->value, cxt);
 			} else if (!strcasecmp(v->name, "switch") || !strcasecmp(v->name, "lswitch") || !strcasecmp(v->name, "eswitch")) {
 				char *stringp= realvalue;
@@ -6033,7 +6121,7 @@ static int pbx_load_config(const char *config_file)
 				data = strsep(&stringp, ""); /* XXX what for ? */
 				if (!data)
 					data = "";
-				if (ast_context_add_switch2(con, appl, data, !strcasecmp(v->name, "eswitch"), registrar))
+				if (ast_context_add_switch2(con, appl, data, !strcasecmp(v->name, "eswitch"), global_registrar))
 					ast_log(LOG_WARNING, "Unable to include switch '%s' in context '%s'\n", v->value, cxt);
 			} else {
 				ast_log(LOG_WARNING, "==!!== Unknown directive: %s at line %d -- IGNORING!!!\n", v->name, v->lineno);
@@ -6193,12 +6281,12 @@ int localized_pbx_load_module(void)
 {
 	struct ast_context *con;
 
-	if(!pbx_load_config(config))
+	if(!pbx_load_config(config_filename))
 		return -1 /* AST_MODULE_LOAD_DECLINE*/;
 
 	/* pbx_load_users(); */ /* does this affect the dialplan? */
 
-	ast_merge_contexts_and_delete(&local_contexts, registrar);
+	ast_merge_contexts_and_delete(&local_contexts, global_registrar);
 
 	for (con = NULL; (con = ast_walk_contexts(con));)
 		ast_context_verify_includes(con);

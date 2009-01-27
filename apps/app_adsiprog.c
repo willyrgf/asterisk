@@ -47,13 +47,27 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 static char *app = "ADSIProg";
 
-static char *synopsis = "Load Asterisk ADSI Scripts into phone";
+/*** DOCUMENTATION
+	<application name="ADSIProg" language="en_US">
+		<synopsis>
+			Load Asterisk ADSI Scripts into phone
+		</synopsis>
+		<syntax>
+			<parameter name="script" required="false">
+				<para>adsi script to use. If not given uses the default script <filename>asterisk.adsi</filename></para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>This application programs an ADSI Phone with the given script</para>
+		</description>
+		<see-also>
+			<ref type="application">GetCPEID</ref>
+			<ref type="filename">adsi.conf</ref>
+		</see-also>
+	</application>
+ ***/
 
 /* #define DUMP_MESSAGES */
-
-static char *descrip =
-"  ADSIProg(script): This application programs an ADSI Phone with the given\n"
-"script. If nothing is specified, the default script (asterisk.adsi) is used.\n";
 
 struct adsi_event {
 	int id;
@@ -776,7 +790,7 @@ static int digitcollect(char *buf, char *name, int id, char *args, struct adsi_s
 static int subscript(char *buf, char *name, int id, char *args, struct adsi_script *state, char *script, int lineno)
 {
 	char *tok = get_token(&args, script, lineno);
-	char subscript[80];
+	char subscr[80];
 	struct adsi_subscript *sub;
 
 	if (!tok) {
@@ -784,12 +798,12 @@ static int subscript(char *buf, char *name, int id, char *args, struct adsi_scri
 		return 0;
 	}
 
-	if (process_token(subscript, tok, sizeof(subscript) - 1, ARG_STRING)) {
+	if (process_token(subscr, tok, sizeof(subscr) - 1, ARG_STRING)) {
 		ast_log(LOG_WARNING, "Invalid number of seconds '%s' at line %d of %s\n", tok, lineno, script);
 		return 0;
 	}
 
-	if (!(sub = getsubbyname(state, subscript, script, lineno)))
+	if (!(sub = getsubbyname(state, subscr, script, lineno)))
 		return 0;
 
 	buf[0] = 0x9d;
@@ -801,7 +815,7 @@ static int subscript(char *buf, char *name, int id, char *args, struct adsi_scri
 static int onevent(char *buf, char *name, int id, char *args, struct adsi_script *state, char *script, int lineno)
 {
 	char *tok = get_token(&args, script, lineno);
-	char subscript[80], sname[80];
+	char subscr[80], sname[80];
 	int sawin = 0, event, snums[8], scnt = 0, x;
 	struct adsi_subscript *sub;
 
@@ -828,7 +842,7 @@ static int onevent(char *buf, char *name, int id, char *args, struct adsi_script
 			ast_log(LOG_WARNING, "'%s' is not a valid state name at line %d of %s\n", tok, lineno, script);
 			return 0;
 		}
-		if ((snums[scnt] = getstatebyname(state, sname, script, lineno, 0) < 0)) {
+		if ((snums[scnt] = getstatebyname(state, sname, script, lineno, 0) == NULL)) {
 			ast_log(LOG_WARNING, "State '%s' not declared at line %d of %s\n", sname, lineno, script);
 			return 0;
 		}
@@ -848,11 +862,11 @@ static int onevent(char *buf, char *name, int id, char *args, struct adsi_script
 		ast_log(LOG_WARNING, "Missing subscript to call at line %d of %s\n", lineno, script);
 		return 0;
 	}
-	if (process_token(subscript, tok, sizeof(subscript) - 1, ARG_STRING)) {
+	if (process_token(subscr, tok, sizeof(subscr) - 1, ARG_STRING)) {
 		ast_log(LOG_WARNING, "Invalid subscript '%s' at line %d of %s\n", tok, lineno, script);
 		return 0;
 	}
-	if (!(sub = getsubbyname(state, subscript, script, lineno)))
+	if (!(sub = getsubbyname(state, subscr, script, lineno)))
 		return 0;
 	buf[0] = 8;
 	buf[1] = event;
@@ -1369,7 +1383,9 @@ static struct adsi_script *compile_script(char *script)
 	/* Create "main" as first subroutine */
 	getsubbyname(scr, "main", NULL, 0);
 	while (!feof(f)) {
-		fgets(buf, sizeof(buf), f);
+		if (!fgets(buf, sizeof(buf), f)) {
+			continue;
+		}
 		if (!feof(f)) {
 			lineno++;
 			/* Trim off trailing return */
@@ -1570,7 +1586,7 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	if (ast_register_application(app, adsi_exec, synopsis, descrip))
+	if (ast_register_application_xml(app, adsi_exec))
 		return AST_MODULE_LOAD_FAILURE;
 	return AST_MODULE_LOAD_SUCCESS;
 }

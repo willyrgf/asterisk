@@ -17,8 +17,8 @@
 
 SOUNDS_DIR:=$(DESTDIR)$(ASTDATADIR)/sounds
 MOH_DIR:=$(DESTDIR)$(ASTDATADIR)/moh
-CORE_SOUNDS_VERSION:=1.4.12
-EXTRA_SOUNDS_VERSION:=1.4.7
+CORE_SOUNDS_VERSION:=1.4.14
+EXTRA_SOUNDS_VERSION:=1.4.8
 SOUNDS_URL:=http://downloads.digium.com/pub/telephony/sounds/releases
 MCS:=$(subst -EN-,-en-,$(MENUSELECT_CORE_SOUNDS))
 MCS:=$(subst -FR-,-fr-,$(MCS))
@@ -50,6 +50,7 @@ MM:=$(subst -ALAW,-alaw,$(MM))
 MM:=$(subst -GSM,-gsm,$(MM))
 MM:=$(subst -G729,-g729,$(MM))
 MM:=$(subst -G722,-g722,$(MM))
+MM:=$(subst -SLN16,-sln16,$(MM))
 MOH:=$(MM:MOH-%=asterisk-moh-%.tar.gz)
 MOH_TAGS:=$(MM:MOH-%=$(MOH_DIR)/.asterisk-moh-%)
 # If "fetch" is used, --continue is not a valid option.
