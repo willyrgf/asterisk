@@ -155,7 +155,7 @@ static char *descrip =
 "This application will return to the dialplan if the queue does not exist, or\n"
 "any of the join options cause the caller to not enter the queue.\n"
 "The option string may contain zero or more of the following characters:\n"
-"      'c' -- If queue() cancels this call, always set the flag to tell the channel\n"
+"      'C' -- If queue() cancels this call, always set the flag to tell the channel\n"
 "             driver that the call is answered elsewhere to avoid the \"missed calls\" list.\n"
 "      'd' -- data-quality (modem) call (minimum delay).\n"
 "      'h' -- allow callee to hang up by hitting '*', or whatver disconnect sequence\n"
@@ -2790,7 +2790,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 		case 'i':
 			forwardsallowed = 0;
 			break;
-		case 'c':
+		case 'C':
 			cancel_answered_elsewhere = 1;
 			break;
 		}
