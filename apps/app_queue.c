@@ -155,6 +155,8 @@ static char *descrip =
 "This application will return to the dialplan if the queue does not exist, or\n"
 "any of the join options cause the caller to not enter the queue.\n"
 "The option string may contain zero or more of the following characters:\n"
+"      'c' -- If queue() cancels this call, always set the flag to tell the channel\n"
+"             driver that the call is answered elsewhere to avoid the \"missed calls\" list.\n"
 "      'd' -- data-quality (modem) call (minimum delay).\n"
 "      'h' -- allow callee to hang up by hitting '*', or whatver disconnect sequence\n"
 "             defined in the featuremap section in features.conf.\n"
@@ -1697,7 +1699,7 @@ static void leave_queue(struct queue_ent *qe)
 }
 
 /* Hang up a list of outgoing calls */
-static void hangupcalls(struct callattempt *outgoing, struct ast_channel *exception)
+static void hangupcalls(struct callattempt *outgoing, struct ast_channel *exception, int cancel_answered_elsewhere)
 {
 	struct callattempt *oo;
 
@@ -1705,7 +1707,7 @@ static void hangupcalls(struct callattempt *outgoing, struct ast_channel *except
 		/* If someone else answered the call we should indicate this in the CANCEL */
 		/* Hangup any existing lines we have open */
 		if (outgoing->chan && (outgoing->chan != exception)) {
-			if (exception)
+			if (exception || cancel_answered_elsewhere)
 				ast_set_flag(outgoing->chan, AST_FLAG_ANSWERED_ELSEWHERE);
 			ast_hangup(outgoing->chan);
 		}
@@ -2737,6 +2739,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 	int callcompletedinsl;
 	struct ao2_iterator memi;
 	struct ast_datastore *datastore, *transfer_ds;
+	int cancel_answered_elsewhere = 0;
 
 	ast_channel_lock(qe->chan);
 	datastore = ast_channel_datastore_find(qe->chan, &dialed_interface_info, NULL);
@@ -2786,6 +2789,9 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 			break;
 		case 'i':
 			forwardsallowed = 0;
+			break;
+		case 'c':
+			cancel_answered_elsewhere = 1;
 			break;
 		}
 
@@ -2952,7 +2958,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 		member = lpeer->member;
 		/* Increment the refcount for this member, since we're going to be using it for awhile in here. */
 		ao2_ref(member, 1);
-		hangupcalls(outgoing, peer);
+		hangupcalls(outgoing, peer, cancel_answered_elsewhere);
 		outgoing = NULL;
 		if (announce || qe->parent->reportholdtime || qe->parent->memberdelay) {
 			int res2;
@@ -3220,7 +3226,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 		ao2_ref(member, -1);
 	}
 out:
-	hangupcalls(outgoing, NULL);
+	hangupcalls(outgoing, NULL, cancel_answered_elsewhere);
 
 	return res;
 }
@@ -3852,6 +3858,7 @@ static int queue_exec(struct ast_channel *chan, void *data)
 {
 	int res=-1;
 	int ringing=0;
+
 	struct ast_module_user *lu;
 	const char *user_priority;
 	const char *max_penalty_str;
