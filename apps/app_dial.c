@@ -1350,6 +1350,9 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			ast_app_group_set_channel(tmp->chan, outbound_group);
 		if (ast_test_flag(&opts, OPT_CANCEL_ELSEWHERE))
 			ast_set_flag(tmp->chan, AST_FLAG_ANSWERED_ELSEWHERE);
+		/* If the calling channel has the ANSWERED_ELSEWHERE flag set, inherit it. This is to support local channels */
+		if (ast_test_flag(chan, AST_FLAG_ANSWERED_ELSEWHERE))
+			ast_set_flag(tmp->chan, AST_FLAG_ANSWERED_ELSEWHERE);
 
 		/* Inherit context and extension */
 		if (!ast_strlen_zero(chan->macrocontext))

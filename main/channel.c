@@ -1515,6 +1515,10 @@ int ast_hangup(struct ast_channel *chan)
 					(long)pthread_self(), chan->name, (long)chan->blocker, chan->blockproc);
 		ast_assert(ast_test_flag(chan, AST_FLAG_BLOCKING) == 0);
 	}
+
+	if (option_debug > 2 && ast_test_flag(chan, AST_FLAG_ANSWERED_ELSEWHERE)) {
+		ast_log(LOG_DEBUG, "This call is answered by someone else. ANSWERED_ELSEWHERE is set on '%s'\n", chan->name);
+	}
 	if (!ast_test_flag(chan, AST_FLAG_ZOMBIE)) {
 		if (option_debug)
 			ast_log(LOG_DEBUG, "Hanging up channel '%s'\n", chan->name);

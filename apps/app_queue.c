@@ -1707,8 +1707,11 @@ static void hangupcalls(struct callattempt *outgoing, struct ast_channel *except
 		/* If someone else answered the call we should indicate this in the CANCEL */
 		/* Hangup any existing lines we have open */
 		if (outgoing->chan && (outgoing->chan != exception)) {
-			if (exception || cancel_answered_elsewhere)
+			if (exception || cancel_answered_elsewhere) {
 				ast_set_flag(outgoing->chan, AST_FLAG_ANSWERED_ELSEWHERE);
+				if (option_debug > 2)
+					ast_log(LOG_DEBUG, "Setting ANSWERED_ELSEWHERE FLAG ON THIS HANGUP -- %s\n", outgoing->chan->name);
+			}
 			ast_hangup(outgoing->chan);
 		}
 		oo = outgoing;
@@ -2794,6 +2797,13 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 			cancel_answered_elsewhere = 1;
 			break;
 		}
+
+	/* if the calling channel has the ANSWERED_ELSEWHERE flag set, make sure this is inherited. 
+		(this is mainly to support chan_local)
+	*/
+	if (ast_test_flag(qe->chan, AST_FLAG_ANSWERED_ELSEWHERE)) {
+		cancel_answered_elsewhere = 1;
+	}
 
 	/* Hold the lock while we setup the outgoing calls */
 	if (use_weight)
