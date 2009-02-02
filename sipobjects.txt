@@ -1,0 +1,65 @@
+Edvina AB
+Olle E. Johansson
+2009-02-02
+
+
+Peers, users, friends? What are they? 
+Objects in Asterisk's SIP.conf
+-------------------------------------
+
+This documentation covers svn.trunk and the 1.6.1 branch and is made to try to sort up the
+issues with the premature merge of kill-the-user and the confusion about it.
+
+Notes:
+
+1. Kill-the-user was a first step to change Asterisk's SIP objects. It did change the 
+   internal structure but should not change the configuration.
+2. The sip_user object was removed from the code, since the sip_peer object can carry
+   exactly the same data
+3. For a type=friend, only one (previous two) objects is created in-memory. This is
+   not only about saving memory, but also a change to make status easier to keep.
+
+
+Type declarations in sip.conf
+============================
+A user
+- Accept incoming calls only
+- Matches on username, never on IP
+
+A peer
+- Outbound calls on name in the dialplan - dial(SIP/peername)
+- Inbound calls match on IP/port
+
+A friend
+- One user object for matching inbound calls on name
+- One peer object for outbound calling 
+This is a configuration shorthand in previous releases
+
+Matching logic
+==============
+Matching logic on outbound calls:
+- Do not match objects declared as type=user
+- Match type=friend and type=peer
+
+Matching logic on inbound calls:
+
+- First match on username for type=user and type=friend objects
+- Then match on ip/port on type=peer objects
+
+Matching logic on subscriptions and registrations:
+- Match on From username with all objects.
+
+TODO
+====
+We need to revise that this is done properly in 1.6.1 and trunk.
+
+Future enhancements
+==================
+
+- Match incoming calls on key used as registration contact, send call to extension
+  Maybe this is type=service
+- Match not only on username, but on given domain too for incoming calls, registrations and subscriptions
+  in order to separate namespaces between domains, so info@edvina.net is different from info@asterisk.org
+- Implement matching on From:domain on incoming calls, ignoring the username. This is for SIP trunks
+  with the other end sending from multiple servers (limited by ACL), but always from the same domain.
+  This is type=trunk
