@@ -1041,37 +1041,46 @@ static char mandescr_modulecheck[] =
 /* Manager function to check if module is loaded */
 static int manager_modulecheck(struct mansession *s, const struct message *m)
 {
-	int res;
-	const char *module = astman_get_header(m, "Module");
-	const char *id = astman_get_header(m,"ActionID");
-	char idText[BUFSIZ];
-	const char *version;
-	char filename[BUFSIZ/2];
-	char *cut;
+        int res;
+        const char *module = astman_get_header(m, "Module");
+        const char *id = astman_get_header(m, "ActionID");
+        char idText[256];
+#if !defined(LOW_MEMORY)
+        const char *version;
+#endif
+        char filename[PATH_MAX];
+        char *cut;
 
-	snprintf(filename, sizeof(filename), module);
-	if ((cut = strchr(filename, '.'))) {
-		*cut = '\0';
-	} else {
-		cut = filename + strlen(filename);
-	}
-	sprintf(cut, ".so");
-	ast_log(LOG_DEBUG, "**** ModuleCheck .so file %s\n", filename);
-	res = ast_module_check(filename);
-	if (!res) {
-		astman_send_error(s, m, "Module not loaded");
-		return 0;
-	}
-	sprintf(cut, ".c");
-	ast_log(LOG_DEBUG, "**** ModuleCheck .c file %s\n", filename);
-	version = ast_file_version_find(filename);
+        ast_copy_string(filename, module, sizeof(filename));
+        if ((cut = strchr(filename, '.'))) {
+                *cut = '\0';
+        } else {
+                cut = filename + strlen(filename);
+        }
+        snprintf(cut, (sizeof(filename) - strlen(filename)) - 1, ".so");
+        ast_log(LOG_DEBUG, "**** ModuleCheck .so file %s\n", filename);
+        res = ast_module_check(filename);
+        if (!res) {
+                astman_send_error(s, m, "Module not loaded");
+                return 0;
+        }
+        snprintf(cut, (sizeof(filename) - strlen(filename)) - 1, ".c");
+        ast_log(LOG_DEBUG, "**** ModuleCheck .c file %s\n", filename);
+#if !defined(LOW_MEMORY)
+        version = ast_file_version_find(filename);
+#endif
 
-	if (!ast_strlen_zero(id))
-		snprintf(idText, sizeof(idText), "ActionID: %s\r\n", id);
-	astman_append(s, "Response: Success\r\n%s", idText);
-	astman_append(s, "Version: %s\r\n\r\n", version ? version : "");
-	return 0;
+        if (!ast_strlen_zero(id))
+                snprintf(idText, sizeof(idText), "ActionID: %s\r\n", id);
+        else
+                idText[0] = '\0';
+        astman_append(s, "Response: Success\r\n%s", idText);
+#if !defined(LOW_MEMORY)
+        astman_append(s, "Version: %s\r\n\r\n", version ? version : "");
+#endif
+        return 0;
 }
+
 
 
 static char mandescr_moduleload[] = 

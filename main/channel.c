@@ -838,6 +838,8 @@ alertpipe_failed:
 			      "ChannelStateDesc: %s\r\n"
 			      "CallerIDNum: %s\r\n"
 			      "CallerIDName: %s\r\n"
+			      "Context: %s\r\n"
+			      "Exten: %s\r\n"
 			      "AccountCode: %s\r\n"
 			      "Uniqueid: %s\r\n",
 			      tmp->name, 
@@ -845,6 +847,8 @@ alertpipe_failed:
 			      ast_state2str(state),
 			      S_OR(cid_num, ""),
 			      S_OR(cid_name, ""),
+			      S_OR(context, ""),
+			      S_OR(exten, ""),
 			      tmp->accountcode,
 			      tmp->uniqueid);
 	}
