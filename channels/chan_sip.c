@@ -40,6 +40,11 @@
  * \todo Transaction support
  * \todo Asterisk should send a non-100 provisional response every minute to keep proxies
  *  from cancelling the transaction (RFC 3261 13.3.1.1). See bug #11157.
+ * 
+ * ******** Wishlist: Improvements
+ * - Support of SIP domains for devices, so that we match on username@domain in the From: header
+ * - Connect registrations with a specific device on the incoming call. It's not done
+ *   automatically in Asdterisk
  *
  * \ingroup channel_drivers
  *
@@ -484,7 +489,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 /* Arguments for find_peer */
 #define	FINDALLDEVICES	FALSE
 #define FINDONLYUSERS	TRUE
-
 
 #define	SIPBUFSIZE		512		/*!< Buffer size for many operations */
 
@@ -1038,6 +1042,8 @@ static unsigned int default_primary_transport;		/*!< Default primary Transport (
 /*@{*/ 
 /*! \brief a place to store all global settings for the sip channel driver 
 	These are settings that will be possibly to apply on a group level later on.
+	\note Do not add settings that only apply to the channel itself and can't
+	      be applied to devices (trunks, services, phones)
 */
 struct sip_settings {
 	int peer_rtupdate;		/*!< G: Update database with registration data for peer? */
@@ -1855,10 +1861,9 @@ struct sip_peer {
 
 	/* things that don't belong in flags */
 	char is_realtime;		/*!< this is a 'realtime' peer */
-	char rt_fromcontact;		/*!< P: copy fromcontact from realtime */
-	char host_dynamic;		/*!< P: Dynamic Peers register with Asterisk */
-	char selfdestruct;		/*!< P: Automatic peers need to destruct themselves */
-	char onlymatchonip;		/*!< P: Only match on IP for incoming calls (old type=peer) */
+	char rt_fromcontact;		/*!< copy fromcontact from realtime */
+	char host_dynamic;		/*!< Dynamic Peers register with Asterisk */
+	char selfdestruct;		/*!< Automatic peers need to destruct themselves */
 	char the_mark;			/*!< moved out of ASTOBJ into struct proper; That which bears the_mark should be deleted! */
 
 	int expire;			/*!<  When to expire this peer registration */
@@ -1890,7 +1895,10 @@ struct sip_peer {
 	int timer_t1;			/*!<  The maximum T1 value for the peer */
 	int timer_b;			/*!<  The maximum timer B (transaction timeouts) */
 	int deprecated_username; /*!< If it's a realtime peer, are they using the deprecated "username" instead of "defaultuser" */
+	
+	/*XXX Seems like we suddenly have two flags with the same content. Why? To be continued... */
 	enum sip_peer_type type; /*!< Distinguish between "user" and "peer" types. This is used solely for CLI and manager commands */
+	char onlymatchonip;		/*!< Only match on IP for incoming calls (old type=peer) */
 };
 
 
