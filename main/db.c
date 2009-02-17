@@ -51,6 +51,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/utils.h"
 #include "asterisk/lock.h"
 #include "asterisk/manager.h"
+#include "asterisk/config.h"	/* For realtime support */
 #include "db1-ast/include/db.h"
 
 #ifdef __CYGWIN__
@@ -58,6 +59,11 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #endif
 
 static DB *astdb;
+static int db_realtime;
+static char *db_realtime_family = "astdb";
+static char *db_realtime_value = "value";
+static char *db_realtime_name = "name";  /* family/key */
+
 AST_MUTEX_DEFINE_STATIC(dblock);
 
 static int dbinit(void) 
@@ -148,22 +154,28 @@ int ast_db_put(const char *family, const char *keys, char *value)
 	DBT key, data;
 	int res, fullkeylen;
 
-	ast_mutex_lock(&dblock);
-	if (dbinit()) {
-		ast_mutex_unlock(&dblock);
-		return -1;
+	if (!db_realtime) {
+		ast_mutex_lock(&dblock);
+		if (dbinit()) {
+			ast_mutex_unlock(&dblock);
+			return -1;
+		}
 	}
 
 	fullkeylen = snprintf(fullkey, sizeof(fullkey), "/%s/%s", family, keys);
-	memset(&key, 0, sizeof(key));
-	memset(&data, 0, sizeof(data));
-	key.data = fullkey;
-	key.size = fullkeylen + 1;
-	data.data = value;
-	data.size = strlen(value) + 1;
-	res = astdb->put(astdb, &key, &data, 0);
-	astdb->sync(astdb, 0);
-	ast_mutex_unlock(&dblock);
+	if (db_realtime) {
+		res = ast_update_realtime(db_realtime_name, fullkey, db_realtime_value, value);
+	} else {
+		memset(&key, 0, sizeof(key));
+		memset(&data, 0, sizeof(data));
+		key.data = fullkey;
+		key.size = fullkeylen + 1;
+		data.data = value;
+		data.size = strlen(value) + 1;
+		res = astdb->put(astdb, &key, &data, 0);
+		astdb->sync(astdb, 0);
+		ast_mutex_unlock(&dblock);
+	} 
 	if (res)
 		ast_log(LOG_WARNING, "Unable to put value '%s' for key '%s' in family '%s'\n", value, keys, family);
 	return res;
@@ -173,21 +185,37 @@ int ast_db_get(const char *family, const char *keys, char *value, int valuelen)
 {
 	char fullkey[256] = "";
 	DBT key, data;
-	int res, fullkeylen;
+	int res=0, fullkeylen;
+	struct ast_variable *var;
 
-	ast_mutex_lock(&dblock);
-	if (dbinit()) {
-		ast_mutex_unlock(&dblock);
-		return -1;
+	if (!db_realtime) {
+		ast_mutex_lock(&dblock);
+		if (dbinit()) {
+			ast_mutex_unlock(&dblock);
+			return -1;
+		}
 	}
-
 	fullkeylen = snprintf(fullkey, sizeof(fullkey), "/%s/%s", family, keys);
+	if (db_realtime) {
+		var = ast_load_realtime(db_realtime_family, db_realtime_name, fullkey, NULL);
+		if (!var) {
+			res = 0;
+		} else {
+			/* We should only have one value here, so let's make this simple... */
+			ast_copy_string(value, var->value, (valuelen > strlen(var->value)) ? strlen(var->value) : valuelen);
+			
+			ast_variables_destroy(var);
+			res = 1;
+		}
+		return res;
+	} 
+
 	memset(&key, 0, sizeof(key));
 	memset(&data, 0, sizeof(data));
 	memset(value, 0, valuelen);
 	key.data = fullkey;
 	key.size = fullkeylen + 1;
-	
+
 	res = astdb->get(astdb, &key, &data, 0);
 	
 	ast_mutex_unlock(&dblock);
@@ -218,7 +246,7 @@ int ast_db_del(const char *family, const char *keys)
 	int res, fullkeylen;
 
 	ast_mutex_lock(&dblock);
-	if (dbinit()) {
+	if (!db_realtime && dbinit()) {
 		ast_mutex_unlock(&dblock);
 		return -1;
 	}
@@ -320,7 +348,7 @@ static int database_show(int fd, int argc, char *argv[])
 		return RESULT_SHOWUSAGE;
 	}
 	ast_mutex_lock(&dblock);
-	if (dbinit()) {
+	if (!db_realtime && dbinit()) {
 		ast_mutex_unlock(&dblock);
 		ast_cli(fd, "Database unavailable\n");
 		return RESULT_SUCCESS;	
@@ -364,7 +392,7 @@ static int database_showkey(int fd, int argc, char *argv[])
 		return RESULT_SHOWUSAGE;
 	}
 	ast_mutex_lock(&dblock);
-	if (dbinit()) {
+	if (!db_realtime && dbinit()) {
 		ast_mutex_unlock(&dblock);
 		ast_cli(fd, "Database unavailable\n");
 		return RESULT_SUCCESS;	
@@ -416,7 +444,7 @@ struct ast_db_entry *ast_db_gettree(const char *family, const char *keytree)
 		prefix[0] = '\0';
 	}
 	ast_mutex_lock(&dblock);
-	if (dbinit()) {
+	if (!db_realtime && dbinit()) {
 		ast_mutex_unlock(&dblock);
 		ast_log(LOG_WARNING, "Database unavailable\n");
 		return NULL;	
@@ -584,7 +612,13 @@ static int manager_dbget(struct mansession *s, const struct message *m)
 
 int astdb_init(void)
 {
-	dbinit();
+	/* Check if we have realtime astdb enabled */
+	db_realtime = ast_check_realtime("astdb");
+	if (!db_realtime) {
+		dbinit();
+	} else {
+		ast_log(LOG_DEBUG, "***** Kör ASTDB i realtime mode! ******************\n");
+	}
 	ast_cli_register_multiple(cli_database, sizeof(cli_database) / sizeof(struct ast_cli_entry));
 	ast_manager_register("DBGet", EVENT_FLAG_SYSTEM, manager_dbget, "Get DB Entry");
 	ast_manager_register("DBPut", EVENT_FLAG_SYSTEM, manager_dbput, "Put DB Entry");
