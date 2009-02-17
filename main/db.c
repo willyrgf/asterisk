@@ -46,14 +46,39 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/utils.h"
 #include "asterisk/lock.h"
 #include "asterisk/manager.h"
+#include "asterisk/config.h"
 #include "db1-ast/include/db.h"
 
 static DB *astdb;
 AST_MUTEX_DEFINE_STATIC(dblock);
 
+/*! \todo Ask Russell (the locking master) if we do need to bother with the db_lock when using realtime,
+	since realtime has it's own locking. Is there a need to also protect this layer?
+	- Potential issues? 
+	- Benefits from removing a locking layer?
+*/
+static int db_rt;
+static char *db_rt_family = "astdb";
+static char *db_rt_value = "value";
+static char *db_rt_name = "name";  /* family/key */
+static const char *db_rt_sysname;  /* family/key */
+static char *db_rt_sysnamelabel = "systemname";
+
+/*! \brief Initialize either realtime support or Asterisk ast-db. 
+
+	Note: Since realtime support is loaded after astdb, we can not do this early, but has to do the
+	check on need. Now, there's a risk an internal module (not a loaded module) use astdb before 
+	realtime is checked, but that's something we propably have to live with until we solve it.
+
+	Make sure that realtime modules are loaded before dundi and the channels.
+*/
 static int dbinit(void) 
 {
-	if (!astdb && !(astdb = dbopen(ast_config_AST_DB, O_CREAT | O_RDWR, AST_FILE_MODE, DB_BTREE, NULL))) {
+	if (db_rt) {
+		return 0;
+	}
+	db_rt=ast_check_realtime(db_rt_family);
+	if (!db_rt && !astdb && !(astdb = dbopen(ast_config_AST_DB, O_CREAT | O_RDWR, AST_FILE_MODE, DB_BTREE, NULL))) {
 		ast_log(LOG_WARNING, "Unable to open Asterisk database '%s': %s\n", ast_config_AST_DB, strerror(errno));
 		return -1;
 	}
@@ -148,14 +173,25 @@ int ast_db_put(const char *family, const char *keys, const char *value)
 	}
 
 	fullkeylen = snprintf(fullkey, sizeof(fullkey), "/%s/%s", family, keys);
-	memset(&key, 0, sizeof(key));
-	memset(&data, 0, sizeof(data));
-	key.data = fullkey;
-	key.size = fullkeylen + 1;
-	data.data = (char *) value;
-	data.size = strlen(value) + 1;
-	res = astdb->put(astdb, &key, &data, 0);
-	astdb->sync(astdb, 0);
+	if (db_rt) {
+		/* Now, the question here is if we're overwriting or adding 
+			First, let's try updating it.
+		*/
+		res = ast_update_realtime(db_rt_sysnamelabel, db_rt_sysname, db_rt_name, fullkey, db_rt_value, value, NULL);
+		if (!res) {
+			/* Update failed, let's try adding a new record */
+			res = ast_store_realtime(db_rt_sysnamelabel, db_rt_sysname, db_rt_name, fullkey, db_rt_value, value, NULL);
+		}
+	} else {
+		memset(&key, 0, sizeof(key));
+		memset(&data, 0, sizeof(data));
+		key.data = fullkey;
+		key.size = fullkeylen + 1;
+		data.data = (char *) value;
+		data.size = strlen(value) + 1;
+		res = astdb->put(astdb, &key, &data, 0);
+		astdb->sync(astdb, 0);
+	}
 	ast_mutex_unlock(&dblock);
 	if (res)
 		ast_log(LOG_WARNING, "Unable to put value '%s' for key '%s' in family '%s'\n", value, keys, family);
@@ -175,6 +211,22 @@ int ast_db_get(const char *family, const char *keys, char *value, int valuelen)
 	}
 
 	fullkeylen = snprintf(fullkey, sizeof(fullkey), "/%s/%s", family, keys);
+	if (db_rt) {
+		struct ast_variable *var;
+
+		var = ast_load_realtime(db_rt_sysnamelabel, db_rt_sysname, db_rt_family, db_rt_name, fullkey, NULL);
+		if (!var) {
+			res = 0;
+		} else {
+			/* We should only have one value here, so let's make this simple... */
+			ast_copy_string(value, var->value, (valuelen > strlen(var->value) + 1) ? strlen(var->value)  + 1: valuelen);
+			
+			ast_variables_destroy(var);
+			res = 1;
+		}
+		ast_mutex_unlock(&dblock);
+		return res;
+	} 
 	memset(&key, 0, sizeof(key));
 	memset(&data, 0, sizeof(data));
 	memset(value, 0, valuelen);
@@ -216,13 +268,16 @@ int ast_db_del(const char *family, const char *keys)
 	}
 	
 	fullkeylen = snprintf(fullkey, sizeof(fullkey), "/%s/%s", family, keys);
-	memset(&key, 0, sizeof(key));
-	key.data = fullkey;
-	key.size = fullkeylen + 1;
+	if (db_rt) {
+		res = ast_destroy_realtime(db_rt_sysnamelabel, db_rt_sysname, db_rt_family, db_rt_name, fullkey, NULL);
+	} else {
+		memset(&key, 0, sizeof(key));
+		key.data = fullkey;
+		key.size = fullkeylen + 1;
 	
-	res = astdb->del(astdb, &key, 0);
-	astdb->sync(astdb, 0);
-	
+		res = astdb->del(astdb, &key, 0);
+		astdb->sync(astdb, 0);
+	}
 	ast_mutex_unlock(&dblock);
 
 	if (res) {
@@ -661,7 +716,15 @@ static int manager_dbdeltree(struct mansession *s, const struct message *m)
 
 int astdb_init(void)
 {
+	/* When this routing is run, the realtime modules are not loaded so we can't initialize realtime yet. */
+	db_rt = 0;
+
+	/* If you have multiple systems using the same database, set the systemname in asterisk.conf */
+	db_rt_sysname = S_OR(ast_config_AST_SYSTEM_NAME, "asterisk");
+	
+	/* initialize astdb or realtime */
 	dbinit();
+
 	ast_cli_register_multiple(cli_database, ARRAY_LEN(cli_database));
 	ast_manager_register("DBGet", EVENT_FLAG_SYSTEM | EVENT_FLAG_REPORTING, manager_dbget, "Get DB Entry");
 	ast_manager_register("DBPut", EVENT_FLAG_SYSTEM, manager_dbput, "Put DB Entry");
