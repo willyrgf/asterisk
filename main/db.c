@@ -428,12 +428,17 @@ static char *handle_cli_database_deltree(struct ast_cli_entry *e, int cmd, struc
 
 static void handle_cli_database_show_realtime(struct ast_cli_args *a, const char *key)
 {
-	dbinit();
-	struct ast_variable *resultset = db_realtime_getall(key);
+	struct ast_variable *resultset;
 	struct ast_variable *cur;
 	int counter = 0;
 
-	cur = resultset;
+	dbinit();
+	if (!db_rt) {
+		ast_cli(a->fd, "Error: Can't connect to astdb/realtime\n");
+		return;
+	}
+
+	cur = resultset = db_realtime_getall(key);
 	while (cur) {
 		ast_cli(a->fd, "%-50s: %-25s\n", cur->name, cur->value);
 		cur = cur->next;
