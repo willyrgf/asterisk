@@ -85,6 +85,22 @@ static int dbinit(void)
 	return 0;
 }
 
+/*! \brief Load a set of entries from astdb/realtime. This is for all operations that
+   	work on a whole "tree" or "family" 
+	\note the calling function needs to destroy the result set with ast_config_destroy(resultset) 
+*/
+static struct ast_variable *db_realtime_getall(const char *key)
+{
+	struct ast_variable *resultset;
+
+	if (ast_strlen_zero(key)) {
+		/* Load all entries in the astdb */
+		resultset = ast_load_realtime(db_rt_sysnamelabel, db_rt_sysname, SENTINEL);
+	} else {
+		resultset = ast_load_realtime(db_rt_sysnamelabel, db_rt_sysname, db_rt_name, key, SENTINEL);
+	}
+	return resultset;
+}
 
 static inline int keymatch(const char *key, const char *prefix)
 {
@@ -166,10 +182,14 @@ int ast_db_put(const char *family, const char *keys, const char *value)
 	DBT key, data;
 	int res, fullkeylen;
 
-	ast_mutex_lock(&dblock);
-	if (dbinit()) {
-		ast_mutex_unlock(&dblock);
-		return -1;
+	if (!db_rt) {
+		ast_mutex_lock(&dblock);
+		if (dbinit()) {
+			ast_mutex_unlock(&dblock);
+			return -1;
+		}
+		if (db_rt)
+			ast_mutex_unlock(&dblock);
 	}
 
 	fullkeylen = snprintf(fullkey, sizeof(fullkey), "/%s/%s", family, keys);
@@ -204,10 +224,14 @@ int ast_db_get(const char *family, const char *keys, char *value, int valuelen)
 	DBT key, data;
 	int res, fullkeylen;
 
-	ast_mutex_lock(&dblock);
-	if (dbinit()) {
-		ast_mutex_unlock(&dblock);
-		return -1;
+	if (!db_rt) {
+		ast_mutex_lock(&dblock);
+		if (dbinit()) {
+			ast_mutex_unlock(&dblock);
+			return -1;
+		}
+		if (db_rt)
+			ast_mutex_unlock(&dblock);
 	}
 
 	fullkeylen = snprintf(fullkey, sizeof(fullkey), "/%s/%s", family, keys);
@@ -224,7 +248,6 @@ int ast_db_get(const char *family, const char *keys, char *value, int valuelen)
 			ast_variables_destroy(var);
 			res = 1;
 		}
-		ast_mutex_unlock(&dblock);
 		return res;
 	} 
 	memset(&key, 0, sizeof(key));
@@ -261,10 +284,14 @@ int ast_db_del(const char *family, const char *keys)
 	DBT key;
 	int res, fullkeylen;
 
-	ast_mutex_lock(&dblock);
-	if (dbinit()) {
-		ast_mutex_unlock(&dblock);
-		return -1;
+	if (!db_rt) {
+		ast_mutex_lock(&dblock);
+		if (dbinit()) {
+			ast_mutex_unlock(&dblock);
+			return -1;
+		}
+		if (db_rt)
+			ast_mutex_unlock(&dblock);
 	}
 	
 	fullkeylen = snprintf(fullkey, sizeof(fullkey), "/%s/%s", family, keys);
@@ -277,8 +304,8 @@ int ast_db_del(const char *family, const char *keys)
 	
 		res = astdb->del(astdb, &key, 0);
 		astdb->sync(astdb, 0);
+		ast_mutex_unlock(&dblock);
 	}
-	ast_mutex_unlock(&dblock);
 
 	if (res) {
 		ast_debug(1, "Unable to find key '%s' in family '%s'\n", keys, family);
@@ -399,6 +426,24 @@ static char *handle_cli_database_deltree(struct ast_cli_entry *e, int cmd, struc
 	return CLI_SUCCESS;
 }
 
+static void handle_cli_database_show_realtime(struct ast_cli_args *a, const char *key)
+{
+	dbinit();
+	struct ast_variable *resultset = db_realtime_getall(key);
+	struct ast_variable *cur;
+	int counter = 0;
+
+	cur = resultset;
+	while (cur) {
+		ast_cli(a->fd, "%-50s: %-25s\n", cur->name, cur->value);
+		cur = cur->next;
+		counter++;
+	}
+	ast_cli(a->fd, "%d results found.\n", counter);
+	ast_variables_destroy(resultset);
+}
+
+
 static char *handle_cli_database_show(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	char prefix[256];
@@ -431,6 +476,10 @@ static char *handle_cli_database_show(struct ast_cli_entry *e, int cmd, struct a
 		prefix[0] = '\0';
 	} else {
 		return CLI_SHOWUSAGE;
+	}
+	if (db_rt) {
+		handle_cli_database_show_realtime(a, prefix);
+		return CLI_SUCCESS;	
 	}
 	ast_mutex_lock(&dblock);
 	if (dbinit()) {
