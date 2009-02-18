@@ -65,11 +65,12 @@ AST_MUTEX_DEFINE_STATIC(dblock);
 	- Benefits from removing a locking layer?
 */
 static int db_rt;
-static char *db_rt_family = "astdb";
+static char *db_rt_rtfamily = "astdb";
 static char *db_rt_value = "value";
-static char *db_rt_name = "name";  /* family/key */
-static const char *db_rt_sysname;  /* family/key */
+static char *db_rt_family = "family";  /* family/key */
+static char *db_rt_key = "key";  /* family/key */
 static char *db_rt_sysnamelabel = "systemname";
+static const char *db_rt_sysname;  /* From asterisk.conf or "asterisk" */
 
 /*! \brief Initialize either realtime support or Asterisk ast-db. 
 
@@ -84,7 +85,7 @@ static int dbinit(void)
 	if (db_rt) {
 		return 0;
 	}
-	db_rt = ast_check_realtime(db_rt_family);
+	db_rt = ast_check_realtime(db_rt_rtfamily);
 	if (!db_rt && !astdb && !(astdb = dbopen(ast_config_AST_DB, O_CREAT | O_RDWR, AST_FILE_MODE, DB_BTREE, NULL))) {
 		ast_log(LOG_WARNING, "Unable to open Asterisk database '%s': %s\n", ast_config_AST_DB, strerror(errno));
 		return -1;
@@ -96,19 +97,24 @@ static int dbinit(void)
    	work on a whole "tree" or "family" 
 	\note the calling function needs to destroy the result set with ast_config_destroy(resultset) 
 */
-static struct ast_variable *db_realtime_getall(const char *key)
+static struct ast_variable *db_realtime_getall(const char *family, const char *key)
 {
 	struct ast_variable *resultset = NULL, *cur;
 	struct ast_variable *data, *returnset = NULL;
-	const char *name = NULL, *value = NULL;
+	const char *keyname = NULL, *familyname = NULL, *value = NULL;
 	struct ast_config *variablelist = NULL;
 	const char *cat = NULL;
+	char buf[512];
 
-	if (ast_strlen_zero(key)) {
+	if (ast_strlen_zero(family)) {
 		/* Load all entries in the astdb */
-		variablelist = ast_load_realtime_multientry(db_rt_family, db_rt_sysnamelabel, db_rt_sysname, SENTINEL);
+		if (ast_strlen_zero(key)) {
+			variablelist = ast_load_realtime_multientry(db_rt_rtfamily, db_rt_sysnamelabel, db_rt_sysname, SENTINEL);
+		} else {
+			variablelist = ast_load_realtime_multientry(db_rt_rtfamily, db_rt_sysnamelabel, db_rt_sysname, db_rt_key, key, SENTINEL);
+		}
 	} else {
-		variablelist = ast_load_realtime_multientry(db_rt_family, db_rt_sysnamelabel, db_rt_sysname, db_rt_name, key, SENTINEL);
+		variablelist = ast_load_realtime_multientry(db_rt_rtfamily, db_rt_sysnamelabel, db_rt_sysname, db_rt_family, family, db_rt_key, key, SENTINEL);
 	}
 	if (!variablelist) {
 		return NULL;
@@ -119,12 +125,15 @@ static struct ast_variable *db_realtime_getall(const char *key)
 	
 		/* skip the system name */
 		while (cur) {
-			if (!strcmp(cur->name, db_rt_name)) {
-				name = cur->value;
+			if (!strcmp(cur->name, db_rt_family)) {
+				familyname = cur->value;
+			} else if (!strcmp(cur->name, db_rt_key)) {
+				keyname = cur->value;
 			} else if (!strcmp(cur->name, db_rt_value)) {
 				value = cur->value;
-				data = ast_variable_new(name, value, "");
-				ast_debug(2, "#### Found Variable %s with value %s \n", name, value);
+				snprintf(buf, sizeof(buf), "/%s/%s", familyname, keyname);
+				data = ast_variable_new(buf, value, "");
+				ast_debug(2, "#### Found Variable %s with value %s \n", buf, value);
 				/* Add this to the returnset */
 				data->next = returnset;
 				returnset = data;
@@ -221,9 +230,8 @@ int ast_db_deltree(const char *family, const char *keytree)
 
 int ast_db_put(const char *family, const char *keys, const char *value)
 {
-	char fullkey[256];
 	DBT key, data;
-	int res, fullkeylen;
+	int res;
 
 	if (!db_rt) {
 		ast_mutex_lock(&dblock);
@@ -235,7 +243,6 @@ int ast_db_put(const char *family, const char *keys, const char *value)
 			ast_mutex_unlock(&dblock);
 	}
 
-	fullkeylen = snprintf(fullkey, sizeof(fullkey), "/%s/%s", family, keys);
 	if (db_rt) {
 		int rowsaffected ;
 		/* Now, the question here is if we're overwriting or adding 
@@ -243,16 +250,19 @@ int ast_db_put(const char *family, const char *keys, const char *value)
 		*/
 		ast_debug(2, ".... Trying ast_update_realtime\n");
 		/* Update_realtime with mysql returns the number of rows affected */
-		rowsaffected = ast_update_realtime(db_rt_family, db_rt_name, fullkey, db_rt_sysnamelabel, db_rt_sysname, db_rt_value, value, SENTINEL);
+		rowsaffected = ast_update_realtime(db_rt_rtfamily, db_rt_family, family, db_rt_key, keys, db_rt_sysnamelabel, db_rt_sysname, db_rt_value, value, SENTINEL);
 		res = rowsaffected > 0 ? 0 : 1;
 		if (res) {
 			ast_debug(2, ".... Trying ast_store_realtime\n");
 			/* Update failed, let's try adding a new record */
-			res = ast_store_realtime(db_rt_family, db_rt_sysnamelabel, db_rt_sysname, db_rt_name, fullkey, db_rt_value, value, SENTINEL);
+			res = ast_store_realtime(db_rt_rtfamily, db_rt_sysnamelabel, db_rt_sysname, db_rt_family, family, db_rt_key, keys, db_rt_value, value, SENTINEL);
 			/* Ast_store_realtime with mysql returns 0 if ok, -1 if bad */
 
 		}
 	} else {
+		int fullkeylen;
+		char fullkey[256];
+		fullkeylen = snprintf(fullkey, sizeof(fullkey), "/%s/%s", family, keys);
 		memset(&key, 0, sizeof(key));
 		memset(&data, 0, sizeof(data));
 		key.data = fullkey;
@@ -284,11 +294,10 @@ int ast_db_get(const char *family, const char *keys, char *value, int valuelen)
 			ast_mutex_unlock(&dblock);
 	}
 
-	fullkeylen = snprintf(fullkey, sizeof(fullkey), "/%s/%s", family, keys);
 	if (db_rt) {
 		struct ast_variable *var;
 
-		var = ast_load_realtime(db_rt_family, db_rt_sysnamelabel, db_rt_sysname, db_rt_name, fullkey, SENTINEL);
+		var = ast_load_realtime(db_rt_rtfamily, db_rt_sysnamelabel, db_rt_sysname, db_rt_family, family, db_rt_key, keys, SENTINEL);
 		if (!var) {
 			res = 0;
 		} else {
@@ -300,6 +309,7 @@ int ast_db_get(const char *family, const char *keys, char *value, int valuelen)
 		}
 		return res;
 	} 
+	fullkeylen = snprintf(fullkey, sizeof(fullkey), "/%s/%s", family, keys);
 	memset(&key, 0, sizeof(key));
 	memset(&data, 0, sizeof(data));
 	memset(value, 0, valuelen);
@@ -344,11 +354,11 @@ int ast_db_del(const char *family, const char *keys)
 			ast_mutex_unlock(&dblock);
 	}
 	
-	fullkeylen = snprintf(fullkey, sizeof(fullkey), "/%s/%s", family, keys);
 	if (db_rt) {
-		int rowcount = ast_destroy_realtime(db_rt_family, db_rt_sysnamelabel, db_rt_sysname, db_rt_name, fullkey, SENTINEL);
+		int rowcount = ast_destroy_realtime(db_rt_rtfamily, db_rt_sysnamelabel, db_rt_sysname, db_rt_family, family, db_rt_key, keys, SENTINEL);
 		res = rowcount > 0 ? 0 : 1;
 	} else {
+		fullkeylen = snprintf(fullkey, sizeof(fullkey), "/%s/%s", family, keys);
 		memset(&key, 0, sizeof(key));
 		key.data = fullkey;
 		key.size = fullkeylen + 1;
@@ -482,7 +492,7 @@ static char *handle_cli_database_deltree(struct ast_cli_entry *e, int cmd, struc
 	return CLI_SUCCESS;
 }
 
-static void handle_cli_database_show_realtime(struct ast_cli_args *a, const char *key)
+static void handle_cli_database_show_realtime(struct ast_cli_args *a, const char *family, const char *key)
 {
 	struct ast_variable *resultset;
 	struct ast_variable *cur;
@@ -494,7 +504,7 @@ static void handle_cli_database_show_realtime(struct ast_cli_args *a, const char
 		return;
 	}
 
-	cur = resultset = db_realtime_getall(key);
+	cur = resultset = db_realtime_getall(family, key);
 	while (cur) {
 		ast_cli(a->fd, "%-50s: %-25s\n", cur->name, cur->value);
 		cur = cur->next;
@@ -539,7 +549,7 @@ static char *handle_cli_database_show(struct ast_cli_entry *e, int cmd, struct a
 		return CLI_SHOWUSAGE;
 	}
 	if (db_rt) {
-		handle_cli_database_show_realtime(a, prefix);
+		handle_cli_database_show_realtime(a, a->argv[2], a->argv[3]);
 		return CLI_SUCCESS;	
 	}
 	ast_mutex_lock(&dblock);
