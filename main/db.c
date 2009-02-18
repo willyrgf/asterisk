@@ -59,18 +59,13 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 static DB *astdb;
 AST_MUTEX_DEFINE_STATIC(dblock);
 
-/*! \todo Ask Russell (the locking master) if we do need to bother with the db_lock when using realtime,
-	since realtime has it's own locking. Is there a need to also protect this layer?
-	- Potential issues? 
-	- Benefits from removing a locking layer?
-*/
-static int db_rt;
-static char *db_rt_rtfamily = "astdb";
-static char *db_rt_value = "value";
-static char *db_rt_family = "family";  /* family/key */
-static char *db_rt_key = "key";  /* family/key */
-static char *db_rt_sysnamelabel = "systemname";
-static const char *db_rt_sysname;  /* From asterisk.conf or "asterisk" */
+static int db_rt;			/*!< Flag for realtime system */
+static char *db_rt_rtfamily = "astdb";	/*!< Realtime name tag */
+static char *db_rt_value = "value";	/*!< Database field name for values */
+static char *db_rt_family = "family";   /*!< Database field name for family */
+static char *db_rt_key = "keyname";     /*!< Database field name for key */
+static char *db_rt_sysnamelabel = "systemname"; /*!< Database field name for system name */
+static const char *db_rt_sysname;       /*!< From asterisk.conf or "asterisk" */
 
 /*! \brief Initialize either realtime support or Asterisk ast-db. 
 
@@ -99,56 +94,68 @@ static int dbinit(void)
 */
 static struct ast_variable *db_realtime_getall(const char *family, const char *key)
 {
-	struct ast_variable *resultset = NULL, *cur;
 	struct ast_variable *data, *returnset = NULL;
-	const char *keyname = NULL, *familyname = NULL, *value = NULL;
+	const char *keyname = NULL, *familyname = NULL;
 	struct ast_config *variablelist = NULL;
 	const char *cat = NULL;
 	char buf[512];
 
+	ast_debug(2, ">>>>>> getall family: %s Key %s \n", family, key);
+
 	if (ast_strlen_zero(family)) {
 		/* Load all entries in the astdb */
 		if (ast_strlen_zero(key)) {
+			/* No variables given */
 			variablelist = ast_load_realtime_multientry(db_rt_rtfamily, db_rt_sysnamelabel, db_rt_sysname, SENTINEL);
 		} else {
+			/* Only key given */
 			variablelist = ast_load_realtime_multientry(db_rt_rtfamily, db_rt_sysnamelabel, db_rt_sysname, db_rt_key, key, SENTINEL);
 		}
 	} else {
-		variablelist = ast_load_realtime_multientry(db_rt_rtfamily, db_rt_sysnamelabel, db_rt_sysname, db_rt_family, family, db_rt_key, key, SENTINEL);
+		if (ast_strlen_zero(key)) {
+			variablelist = ast_load_realtime_multientry(db_rt_rtfamily, db_rt_sysnamelabel, db_rt_sysname, db_rt_family, family, SENTINEL);
+		} else {
+			variablelist = ast_load_realtime_multientry(db_rt_rtfamily, db_rt_sysnamelabel, db_rt_sysname, db_rt_family, family, db_rt_key, key, SENTINEL);
+		}
 	}
 	if (!variablelist) {
 		return NULL;
 	}
 	/* Now we need to start converting all this stuff. We have thre ast_variable sets per record in the result set */
 	while ((cat = ast_category_browse(variablelist, cat))) {
+		struct ast_variable *resultset, *cur;
+
 		cur = resultset = ast_variable_browse(variablelist, cat);
 	
 		/* skip the system name */
 		while (cur) {
+			ast_debug(2, ">>>> Found name %s ...\n", cur->name);
 			if (!strcmp(cur->name, db_rt_family)) {
 				familyname = cur->value;
 			} else if (!strcmp(cur->name, db_rt_key)) {
 				keyname = cur->value;
 			} else if (!strcmp(cur->name, db_rt_value)) {
-				value = cur->value;
-				snprintf(buf, sizeof(buf), "/%s/%s", familyname, keyname);
-				data = ast_variable_new(buf, value, "");
-				ast_debug(2, "#### Found Variable %s with value %s \n", buf, value);
+				snprintf(buf, sizeof(buf), "/%s/%s", S_OR(familyname, ""), S_OR(keyname, ""));
+				data = ast_variable_new(buf, S_OR(cur->value, "astdb-realtime"), "");
+				familyname = keyname = NULL;
+				ast_debug(2, "#### Found Variable %s with value %s \n", buf, cur->value);
 				/* Add this to the returnset */
 				data->next = returnset;
 				returnset = data;
 			} else {
-				if (ast_strlen_zero(cur->name))
+				if (ast_strlen_zero(cur->name)) {
 					ast_debug(2, "#### Skipping  strange record \n");
-				else
+				} else {
 					ast_debug(2, "#### Skipping  %s with value %s \n", cur->name, cur->value);
+				}
 			}
 			cur = cur->next;
 		}
+		//if (resultset)
+			//ast_variables_destroy(resultset);
 	}
 
 	/* Clean up the resultset */
-	ast_variables_destroy(resultset);
 	ast_config_destroy(variablelist);
 	
 	return returnset;
@@ -202,10 +209,34 @@ int ast_db_deltree(const char *family, const char *keytree)
 		prefix[0] = '\0';
 	}
 	
-	ast_mutex_lock(&dblock);
-	if (dbinit()) {
-		ast_mutex_unlock(&dblock);
-		return -1;
+	if (!db_rt) {
+		ast_mutex_lock(&dblock);
+		if (dbinit()) {
+			ast_mutex_unlock(&dblock);
+			return -1;
+		}
+		if (db_rt) {
+			ast_mutex_unlock(&dblock);
+		}
+	}
+	if (db_rt) {
+		struct ast_variable *murderlist, *cur;
+		cur = murderlist = db_realtime_getall(family, S_OR(keytree, ""));
+		while (cur) {
+			int res;
+			char *familyname = ast_strdupa(&cur->name[1]);	/* Skip the first slash */
+			char *keyname = familyname;
+			familyname = strsep(&keyname, "/");
+
+			res = ast_destroy_realtime(db_rt_rtfamily, db_rt_sysnamelabel, db_rt_sysname, db_rt_family, familyname, db_rt_key, keyname, SENTINEL);
+			if (res >= 0)
+				counter ++;
+			cur = cur->next;
+		}
+
+		ast_variables_destroy(murderlist);
+		
+		return counter;
 	}
 	
 	memset(&key, 0, sizeof(key));
@@ -250,7 +281,7 @@ int ast_db_put(const char *family, const char *keys, const char *value)
 		*/
 		ast_debug(2, ".... Trying ast_update_realtime\n");
 		/* Update_realtime with mysql returns the number of rows affected */
-		rowsaffected = ast_update_realtime(db_rt_rtfamily, db_rt_family, family, db_rt_key, keys, db_rt_sysnamelabel, db_rt_sysname, db_rt_value, value, SENTINEL);
+		rowsaffected = ast_update2_realtime(db_rt_rtfamily, db_rt_family, family, db_rt_key, keys, db_rt_sysnamelabel, db_rt_sysname, SENTINEL, db_rt_value, value, SENTINEL);
 		res = rowsaffected > 0 ? 0 : 1;
 		if (res) {
 			ast_debug(2, ".... Trying ast_store_realtime\n");
@@ -290,24 +321,31 @@ int ast_db_get(const char *family, const char *keys, char *value, int valuelen)
 			ast_mutex_unlock(&dblock);
 			return -1;
 		}
-		if (db_rt)
+		if (db_rt) {
 			ast_mutex_unlock(&dblock);
+		}
 	}
 
 	if (db_rt) {
-		struct ast_variable *var;
+		struct ast_variable *var, *res;
+		memset(value, 0, valuelen);
 
-		var = ast_load_realtime(db_rt_rtfamily, db_rt_sysnamelabel, db_rt_sysname, db_rt_family, family, db_rt_key, keys, SENTINEL);
+		res = var = ast_load_realtime(db_rt_rtfamily, db_rt_sysnamelabel, db_rt_sysname, db_rt_family, family, db_rt_key, keys, SENTINEL);
 		if (!var) {
-			res = 0;
-		} else {
-			/* We should only have one value here, so let's make this simple... */
-			ast_copy_string(value, var->value, (valuelen > strlen(var->value) + 1) ? strlen(var->value)  + 1: valuelen);
-			
-			ast_variables_destroy(var);
-			res = 1;
+			return 1;
+		} 
+		/* We should only have one value here, so let's make this simple... */
+		while (res) {
+			if (!strcasecmp(res->name, db_rt_value)) {
+				ast_copy_string(value, res->value, (valuelen > strlen(res->value) ) ? strlen(res->value) +1: valuelen);
+				res = NULL;
+			} else {
+				res = res->next;
+			}
 		}
-		return res;
+		
+		ast_variables_destroy(var);
+		return 0;
 	} 
 	fullkeylen = snprintf(fullkey, sizeof(fullkey), "/%s/%s", family, keys);
 	memset(&key, 0, sizeof(key));
@@ -392,6 +430,7 @@ static char *handle_cli_database_put(struct ast_cli_entry *e, int cmd, struct as
 
 	if (a->argc != 5)
 		return CLI_SHOWUSAGE;
+
 	res = ast_db_put(a->argv[2], a->argv[3], a->argv[4]);
 	if (res)  {
 		ast_cli(a->fd, "Failed to update entry\n");
@@ -472,11 +511,6 @@ static char *handle_cli_database_deltree(struct ast_cli_entry *e, int cmd, struc
 		return NULL;
 	}
 
-	if (db_rt) {
-		ast_cli(a->fd, "deltree is not implemented for astdb/realtime ...yet\n");
-		return CLI_SUCCESS;
-	}
-
 	if ((a->argc < 3) || (a->argc > 4))
 		return CLI_SHOWUSAGE;
 	if (a->argc == 4) {
@@ -506,7 +540,7 @@ static void handle_cli_database_show_realtime(struct ast_cli_args *a, const char
 
 	cur = resultset = db_realtime_getall(family, key);
 	while (cur) {
-		ast_cli(a->fd, "%-50s: %-25s\n", cur->name, cur->value);
+		ast_cli(a->fd, "%-40s: %-25s\n", cur->name, S_OR(cur->value, ""));
 		cur = cur->next;
 		counter++;
 	}
@@ -549,7 +583,7 @@ static char *handle_cli_database_show(struct ast_cli_entry *e, int cmd, struct a
 		return CLI_SHOWUSAGE;
 	}
 	if (db_rt) {
-		handle_cli_database_show_realtime(a, a->argv[2], a->argv[3]);
+		handle_cli_database_show_realtime(a, a->argc >= 3 ? a->argv[2] : "", a->argc == 4 ? a->argv[3] : "");
 		return CLI_SUCCESS;	
 	}
 	ast_mutex_lock(&dblock);
@@ -822,10 +856,6 @@ static int manager_dbdeltree(struct mansession *s, const struct message *m)
 
 	if (ast_strlen_zero(family)) {
 		astman_send_error(s, m, "No family specified.");
-		return 0;
-	}
-	if (db_rt) {
-		astman_send_error(s, m, "Deltree not supported in ast/db realtime");
 		return 0;
 	}
 
