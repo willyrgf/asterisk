@@ -91,7 +91,9 @@ static int dbinit(void)
 */
 static struct ast_variable *db_realtime_getall(const char *key)
 {
-	struct ast_variable *resultset;
+	struct ast_variable *resultset, *cur;
+	struct ast_variable *data, *returnset = NULL;
+	char *name, *value;
 
 	if (ast_strlen_zero(key)) {
 		/* Load all entries in the astdb */
@@ -99,7 +101,30 @@ static struct ast_variable *db_realtime_getall(const char *key)
 	} else {
 		resultset = ast_load_realtime(db_rt_family, db_rt_sysnamelabel, db_rt_sysname, db_rt_name, key, SENTINEL);
 	}
-	return resultset;
+	if (!resultset) {
+		return NULL;
+	}
+	/* Now we need to start converting all this stuff. We have thre ast_variable sets per record in the result set */
+	
+	cur = resultset;
+
+	/* skip the system name */
+	while (cur) {
+		if (!strcmp(cur->name, db_rt_name) {
+			name = cur->value;
+		} else if (!strcmp(cur->name, db_rt_value) {
+			value = cur->value;
+			data = ast_variable_new(name, value);
+			data->next = returnset;
+			returnset = data;
+		}
+		cur = cur->next;
+	}
+
+	/* Clean up the resultset */
+	ast_variable_destroy(resultset);
+	
+	return returnset;
 }
 
 static inline int keymatch(const char *key, const char *prefix)
