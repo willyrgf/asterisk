@@ -25,6 +25,13 @@
  * \note DB3 is licensed under Sleepycat Public License and is thus incompatible
  * with GPL.  To avoid having to make another exception (and complicate 
  * licensing even further) we elect to use DB1 which is BSD licensed 
+ * 
+ * \note AstDB realtime
+ * AstDB realtime works with the basic operations - put, get, del
+ * Database show also works.
+ * 
+ * The tree/family operations doesn't currently work. Maybe tree and family needs
+ * to be separate fields in the database, instead of one single field as I've tried with.
  */
 
 #include "asterisk.h"
@@ -77,7 +84,7 @@ static int dbinit(void)
 	if (db_rt) {
 		return 0;
 	}
-	db_rt=ast_check_realtime(db_rt_family);
+	db_rt = ast_check_realtime(db_rt_family);
 	if (!db_rt && !astdb && !(astdb = dbopen(ast_config_AST_DB, O_CREAT | O_RDWR, AST_FILE_MODE, DB_BTREE, NULL))) {
 		ast_log(LOG_WARNING, "Unable to open Asterisk database '%s': %s\n", ast_config_AST_DB, strerror(errno));
 		return -1;
@@ -91,38 +98,49 @@ static int dbinit(void)
 */
 static struct ast_variable *db_realtime_getall(const char *key)
 {
-	struct ast_variable *resultset, *cur;
+	struct ast_variable *resultset = NULL, *cur;
 	struct ast_variable *data, *returnset = NULL;
-	char *name, *value;
+	const char *name = NULL, *value = NULL;
+	struct ast_config *variablelist = NULL;
+	const char *cat = NULL;
 
 	if (ast_strlen_zero(key)) {
 		/* Load all entries in the astdb */
-		resultset = ast_load_realtime(db_rt_family, db_rt_sysnamelabel, db_rt_sysname, SENTINEL);
+		variablelist = ast_load_realtime_multientry(db_rt_family, db_rt_sysnamelabel, db_rt_sysname, SENTINEL);
 	} else {
-		resultset = ast_load_realtime(db_rt_family, db_rt_sysnamelabel, db_rt_sysname, db_rt_name, key, SENTINEL);
+		variablelist = ast_load_realtime_multientry(db_rt_family, db_rt_sysnamelabel, db_rt_sysname, db_rt_name, key, SENTINEL);
 	}
-	if (!resultset) {
+	if (!variablelist) {
 		return NULL;
 	}
 	/* Now we need to start converting all this stuff. We have thre ast_variable sets per record in the result set */
+	while ((cat = ast_category_browse(variablelist, cat))) {
+		cur = resultset = ast_variable_browse(variablelist, cat);
 	
-	cur = resultset;
-
-	/* skip the system name */
-	while (cur) {
-		if (!strcmp(cur->name, db_rt_name) {
-			name = cur->value;
-		} else if (!strcmp(cur->name, db_rt_value) {
-			value = cur->value;
-			data = ast_variable_new(name, value);
-			data->next = returnset;
-			returnset = data;
+		/* skip the system name */
+		while (cur) {
+			if (!strcmp(cur->name, db_rt_name)) {
+				name = cur->value;
+			} else if (!strcmp(cur->name, db_rt_value)) {
+				value = cur->value;
+				data = ast_variable_new(name, value, "");
+				ast_debug(2, "#### Found Variable %s with value %s \n", name, value);
+				/* Add this to the returnset */
+				data->next = returnset;
+				returnset = data;
+			} else {
+				if (ast_strlen_zero(cur->name))
+					ast_debug(2, "#### Skipping  strange record \n");
+				else
+					ast_debug(2, "#### Skipping  %s with value %s \n", cur->name, cur->value);
+			}
+			cur = cur->next;
 		}
-		cur = cur->next;
 	}
 
 	/* Clean up the resultset */
-	ast_variable_destroy(resultset);
+	ast_variables_destroy(resultset);
+	ast_config_destroy(variablelist);
 	
 	return returnset;
 }
@@ -219,13 +237,20 @@ int ast_db_put(const char *family, const char *keys, const char *value)
 
 	fullkeylen = snprintf(fullkey, sizeof(fullkey), "/%s/%s", family, keys);
 	if (db_rt) {
+		int rowsaffected ;
 		/* Now, the question here is if we're overwriting or adding 
 			First, let's try updating it.
 		*/
-		res = ast_update_realtime(db_rt_family, db_rt_sysnamelabel, db_rt_sysname, db_rt_name, fullkey, db_rt_value, value, SENTINEL);
-		if (!res) {
+		ast_debug(2, ".... Trying ast_update_realtime\n");
+		/* Update_realtime with mysql returns the number of rows affected */
+		rowsaffected = ast_update_realtime(db_rt_family, db_rt_name, fullkey, db_rt_sysnamelabel, db_rt_sysname, db_rt_value, value, SENTINEL);
+		res = rowsaffected > 0 ? 0 : 1;
+		if (res) {
+			ast_debug(2, ".... Trying ast_store_realtime\n");
 			/* Update failed, let's try adding a new record */
 			res = ast_store_realtime(db_rt_family, db_rt_sysnamelabel, db_rt_sysname, db_rt_name, fullkey, db_rt_value, value, SENTINEL);
+			/* Ast_store_realtime with mysql returns 0 if ok, -1 if bad */
+
 		}
 	} else {
 		memset(&key, 0, sizeof(key));
@@ -263,7 +288,7 @@ int ast_db_get(const char *family, const char *keys, char *value, int valuelen)
 	if (db_rt) {
 		struct ast_variable *var;
 
-		var = ast_load_realtime(db_rt_family, db_rt_sysnamelabel, db_rt_sysname, db_rt_family, db_rt_name, fullkey, SENTINEL);
+		var = ast_load_realtime(db_rt_family, db_rt_sysnamelabel, db_rt_sysname, db_rt_name, fullkey, SENTINEL);
 		if (!var) {
 			res = 0;
 		} else {
@@ -321,7 +346,8 @@ int ast_db_del(const char *family, const char *keys)
 	
 	fullkeylen = snprintf(fullkey, sizeof(fullkey), "/%s/%s", family, keys);
 	if (db_rt) {
-		res = ast_destroy_realtime(db_rt_family, db_rt_sysnamelabel, db_rt_sysname, db_rt_name, fullkey, SENTINEL);
+		int rowcount = ast_destroy_realtime(db_rt_family, db_rt_sysnamelabel, db_rt_sysname, db_rt_name, fullkey, SENTINEL);
+		res = rowcount > 0 ? 0 : 1;
 	} else {
 		memset(&key, 0, sizeof(key));
 		key.data = fullkey;
@@ -434,6 +460,11 @@ static char *handle_cli_database_deltree(struct ast_cli_entry *e, int cmd, struc
 		return NULL;
 	case CLI_GENERATE:
 		return NULL;
+	}
+
+	if (db_rt) {
+		ast_cli(a->fd, "deltree is not implemented for astdb/realtime ...yet\n");
+		return CLI_SUCCESS;
 	}
 
 	if ((a->argc < 3) || (a->argc > 4))
@@ -561,6 +592,10 @@ static char *handle_cli_database_showkey(struct ast_cli_entry *e, int cmd, struc
 		return NULL;
 	case CLI_GENERATE:
 		return NULL;
+	}
+	if (db_rt) {
+		ast_cli(a->fd, "showkey is not implemented for astdb/realtime ...yet\n");
+		return CLI_SUCCESS;
 	}
 
 	if (a->argc == 3) {
@@ -777,6 +812,10 @@ static int manager_dbdeltree(struct mansession *s, const struct message *m)
 
 	if (ast_strlen_zero(family)) {
 		astman_send_error(s, m, "No family specified.");
+		return 0;
+	}
+	if (db_rt) {
+		astman_send_error(s, m, "Deltree not supported in ast/db realtime");
 		return 0;
 	}
 
