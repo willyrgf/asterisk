@@ -95,9 +95,9 @@ static struct ast_variable *db_realtime_getall(const char *key)
 
 	if (ast_strlen_zero(key)) {
 		/* Load all entries in the astdb */
-		resultset = ast_load_realtime(db_rt_sysnamelabel, db_rt_sysname, SENTINEL);
+		resultset = ast_load_realtime(db_rt_family, db_rt_sysnamelabel, db_rt_sysname, SENTINEL);
 	} else {
-		resultset = ast_load_realtime(db_rt_sysnamelabel, db_rt_sysname, db_rt_name, key, SENTINEL);
+		resultset = ast_load_realtime(db_rt_family, db_rt_sysnamelabel, db_rt_sysname, db_rt_name, key, SENTINEL);
 	}
 	return resultset;
 }
@@ -197,10 +197,10 @@ int ast_db_put(const char *family, const char *keys, const char *value)
 		/* Now, the question here is if we're overwriting or adding 
 			First, let's try updating it.
 		*/
-		res = ast_update_realtime(db_rt_sysnamelabel, db_rt_sysname, db_rt_name, fullkey, db_rt_value, value, SENTINEL);
+		res = ast_update_realtime(db_rt_family, db_rt_sysnamelabel, db_rt_sysname, db_rt_name, fullkey, db_rt_value, value, SENTINEL);
 		if (!res) {
 			/* Update failed, let's try adding a new record */
-			res = ast_store_realtime(db_rt_sysnamelabel, db_rt_sysname, db_rt_name, fullkey, db_rt_value, value, SENTINEL);
+			res = ast_store_realtime(db_rt_family, db_rt_sysnamelabel, db_rt_sysname, db_rt_name, fullkey, db_rt_value, value, SENTINEL);
 		}
 	} else {
 		memset(&key, 0, sizeof(key));
@@ -238,7 +238,7 @@ int ast_db_get(const char *family, const char *keys, char *value, int valuelen)
 	if (db_rt) {
 		struct ast_variable *var;
 
-		var = ast_load_realtime(db_rt_sysnamelabel, db_rt_sysname, db_rt_family, db_rt_name, fullkey, SENTINEL);
+		var = ast_load_realtime(db_rt_family, db_rt_sysnamelabel, db_rt_sysname, db_rt_family, db_rt_name, fullkey, SENTINEL);
 		if (!var) {
 			res = 0;
 		} else {
@@ -296,7 +296,7 @@ int ast_db_del(const char *family, const char *keys)
 	
 	fullkeylen = snprintf(fullkey, sizeof(fullkey), "/%s/%s", family, keys);
 	if (db_rt) {
-		res = ast_destroy_realtime(db_rt_sysnamelabel, db_rt_sysname, db_rt_family, db_rt_name, fullkey, SENTINEL);
+		res = ast_destroy_realtime(db_rt_family, db_rt_sysnamelabel, db_rt_sysname, db_rt_name, fullkey, SENTINEL);
 	} else {
 		memset(&key, 0, sizeof(key));
 		key.data = fullkey;
