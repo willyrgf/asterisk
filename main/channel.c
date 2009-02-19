@@ -1403,7 +1403,11 @@ void ast_channel_free(struct ast_channel *chan)
 		ast_cdr_discard(chan->cdr);
 		chan->cdr = NULL;
 	}
-	
+
+	if (chan->zone) {
+		chan->zone = ast_tone_zone_unref(chan->zone);
+	}
+
 	ast_mutex_destroy(&chan->lock_dont_use);
 
 	ast_string_field_free_memory(chan);
@@ -2495,7 +2499,7 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 	}
 
 	if (chan->timingfd > -1 && chan->fdno == AST_TIMING_FD) {
-		enum ast_timing_event res;
+		enum ast_timer_event res;
 
 		ast_clear_flag(chan, AST_FLAG_EXCEPTION);
 
@@ -2910,7 +2914,7 @@ int ast_indicate_data(struct ast_channel *chan, int _condition,
 	/* By using an enum, we'll get compiler warnings for values not handled 
 	 * in switch statements. */
 	enum ast_control_frame_type condition = _condition;
-	const struct tone_zone_sound *ts = NULL;
+	struct ast_tone_zone_sound *ts = NULL;
 	int res = -1;
 
 	ast_channel_lock(chan);
@@ -2981,10 +2985,11 @@ int ast_indicate_data(struct ast_channel *chan, int _condition,
 		break;
 	}
 
-	if (ts && ts->data[0]) {
+	if (ts) {
 		/* We have a tone to play, yay. */
 		ast_debug(1, "Driver for channel '%s' does not support indication %d, emulating it\n", chan->name, condition);
 		ast_playtones_start(chan, 0, ts->data, 1);
+		ts = ast_tone_zone_sound_unref(ts);
 		res = 0;
 		chan->visible_indication = condition;
 	}
@@ -4373,10 +4378,13 @@ static enum ast_bridge_result ast_generic_bridge(struct ast_channel *c0, struct 
 		if (bridge_end.tv_sec) {
 			to = ast_tvdiff_ms(bridge_end, ast_tvnow());
 			if (to <= 0) {
-				if (config->timelimit)
+				if (config->timelimit) {
 					res = AST_BRIDGE_RETRY;
-				else
+					/* generic bridge ending to play warning */
+					ast_set_flag(config, AST_FEATURE_WARNING_ACTIVE);
+				} else {
 					res = AST_BRIDGE_COMPLETE;
+				}
 				break;
 			}
 		} else
@@ -4455,6 +4463,7 @@ static enum ast_bridge_result ast_generic_bridge(struct ast_channel *c0, struct 
 				ast_debug(1, "Got DTMF %s on channel (%s)\n", 
 					f->frametype == AST_FRAME_DTMF_END ? "end" : "begin",
 					who->name);
+
 				break;
 			}
 			/* Write immediately frames, not passed through jb */
@@ -4526,7 +4535,6 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 	int o0nativeformats;
 	int o1nativeformats;
 	long time_left_ms=0;
-	struct timeval nexteventts = { 0, };
 	char caller_warning = 0;
 	char callee_warning = 0;
 
@@ -4573,11 +4581,11 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 	o1nativeformats = c1->nativeformats;
 
 	if (config->feature_timer) {
-		nexteventts = ast_tvadd(config->start_time, ast_samp2tv(config->feature_timer, 1000));
-	} else if (config->timelimit) {
-		nexteventts = ast_tvadd(config->start_time, ast_samp2tv(config->timelimit, 1000));
+		config->nexteventts = ast_tvadd(config->start_time, ast_samp2tv(config->feature_timer, 1000));
+	} else if (config->timelimit && firstpass) {
+		config->nexteventts = ast_tvadd(config->start_time, ast_samp2tv(config->timelimit, 1000));
 		if (caller_warning || callee_warning)
-			nexteventts = ast_tvsub(nexteventts, ast_samp2tv(config->play_warning, 1000));
+			config->nexteventts = ast_tvsub(config->nexteventts, ast_samp2tv(config->play_warning, 1000));
 	}
 
 	if (!c0->tech->send_digit_begin)
@@ -4597,9 +4605,9 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 
 		to = -1;
 
-		if (!ast_tvzero(nexteventts)) {
+		if (!ast_tvzero(config->nexteventts)) {
 			now = ast_tvnow();
-			to = ast_tvdiff_ms(nexteventts, now);
+			to = ast_tvdiff_ms(config->nexteventts, now);
 			if (to <= 0) {
 				if (!config->timelimit) {
 					res = AST_BRIDGE_COMPLETE;
@@ -4627,7 +4635,7 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 			}
 			
 			if (!to) {
-				if (time_left_ms >= 5000 && config->warning_sound && config->play_warning) {
+				if (time_left_ms >= 5000 && config->warning_sound && config->play_warning && ast_test_flag(config, AST_FEATURE_WARNING_ACTIVE)) {
 					int t = (time_left_ms + 500) / 1000; /* round to nearest second */
 					if (caller_warning)
 						bridge_playfile(c0, c1, config->warning_sound, t);
@@ -4635,10 +4643,11 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 						bridge_playfile(c1, c0, config->warning_sound, t);
 				}
 				if (config->warning_freq && (time_left_ms > (config->warning_freq + 5000)))
-					nexteventts = ast_tvadd(nexteventts, ast_samp2tv(config->warning_freq, 1000));
+					config->nexteventts = ast_tvadd(config->nexteventts, ast_samp2tv(config->warning_freq, 1000));
 				else
-					nexteventts = ast_tvadd(config->start_time, ast_samp2tv(config->timelimit, 1000));
+					config->nexteventts = ast_tvadd(config->start_time, ast_samp2tv(config->timelimit, 1000));
 			}
+			ast_clear_flag(config, AST_FEATURE_WARNING_ACTIVE);
 		}
 
 		if (c0->_softhangup == AST_SOFTHANGUP_UNBRIDGE || c1->_softhangup == AST_SOFTHANGUP_UNBRIDGE) {
@@ -4751,9 +4760,13 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 		if (!ast_strlen_zero(pbx_builtin_getvar_helper(c1, "BRIDGEPEER")))
 			pbx_builtin_setvar_helper(c1, "BRIDGEPEER", c0->name);
 
-		res = ast_generic_bridge(c0, c1, config, fo, rc, nexteventts);
-		if (res != AST_BRIDGE_RETRY)
+		res = ast_generic_bridge(c0, c1, config, fo, rc, config->nexteventts);
+		if (res != AST_BRIDGE_RETRY) {
 			break;
+		} else if (config->feature_timer) {
+			/* feature timer expired but has not been updated, sending to ast_bridge_call to do so */
+			break;
+		}
 	}
 
 	ast_clear_flag(c0, AST_FLAG_END_DTMF_ONLY);

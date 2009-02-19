@@ -4617,8 +4617,8 @@ static void change_t38_state(struct sip_pvt *p, int state)
 	if (message)
 		ast_queue_control_data(chan, AST_CONTROL_T38, &message, sizeof(message));
 
-	if (ast_test_flag(&p->flags[1], SIP_PAGE2_FAX_DETECT)) {
-		/* fax detection is enabled */
+	if (ast_test_flag(&p->flags[1], SIP_PAGE2_FAX_DETECT) && !p->outgoing_call) {
+		/* fax detection is enabled and this is an incoming call */
 		ast_channel_lock(chan);
 		if (strcmp(chan->exten, "fax") && state == T38_ENABLED) {
 			const char *target_context = S_OR(chan->macrocontext, chan->context);
@@ -4709,6 +4709,10 @@ static int create_addr_from_peer(struct sip_pvt *dialog, struct sip_peer *peer)
 	}
 	dialog->prefs = peer->prefs;
 	if (ast_test_flag(&dialog->flags[1], SIP_PAGE2_T38SUPPORT)) {
+		if (!dialog->udptl) {
+			/* t38pt_udptl was enabled in the peer and not in [general] */
+			dialog->udptl = ast_udptl_new_with_bindaddr(sched, io, 0, bindaddr.sin_addr);
+		}
 		ast_copy_flags(&dialog->t38.t38support, &peer->flags[1], SIP_PAGE2_T38SUPPORT);
 		set_t38_capabilities(dialog);
 		dialog->t38.jointcapability = dialog->t38.capability;
@@ -16652,7 +16656,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, stru
 				if (sip_cfg.callevents)
 					manager_event(EVENT_FLAG_SYSTEM, "ChannelUpdate",
 						"Channel: %s\r\nChanneltype: %s\r\nUniqueid: %s\r\nSIPcallid: %s\r\nSIPfullcontact: %s\r\nPeername: %s\r\n",
-						p->owner->name, p->owner->uniqueid, "SIP", p->callid, p->fullcontact, p->peername);
+						p->owner->name, "SIP", p->owner->uniqueid, p->callid, p->fullcontact, p->peername);
 			} else {	/* RE-invite */
 				ast_queue_frame(p->owner, &ast_null_frame);
 			}

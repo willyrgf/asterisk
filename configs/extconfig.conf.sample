@@ -60,7 +60,7 @@
 ;queues => odbc,asterisk
 ;queue_members => odbc,asterisk
 ;musiconhold => mysql,asterisk
-;queue_log => mysql,aasterisk
+;queue_log => mysql,asterisk
 ;astdb => mysql,astdb
 ;
 ;

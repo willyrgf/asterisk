@@ -424,7 +424,7 @@ struct ast_channel {
 	struct ast_trans_pvt *readtrans;		/*!< Read translation path */
 	struct ast_audiohook_list *audiohooks;
 	struct ast_cdr *cdr;				/*!< Call Detail Record */
-	struct tone_zone *zone;			/*!< Tone zone as set in indications.conf or
+	struct ast_tone_zone *zone;			/*!< Tone zone as set in indications.conf or
 							     in the CHANNEL dialplan function */
 	struct ast_channel_monitor *monitor;		/*!< Channel monitoring */
 #ifdef HAVE_EPOLL
@@ -572,6 +572,7 @@ enum {
 	AST_FEATURE_PARKCALL =     (1 << 5),
 	AST_FEATURE_AUTOMIXMON =   (1 << 6),
 	AST_FEATURE_NO_H_EXTEN =   (1 << 7),
+	AST_FEATURE_WARNING_ACTIVE = (1 << 7),
 };
 
 /*! \brief bridge configuration */
@@ -579,6 +580,7 @@ struct ast_bridge_config {
 	struct ast_flags features_caller;
 	struct ast_flags features_callee;
 	struct timeval start_time;
+	struct timeval nexteventts;
 	long feature_timer;
 	long timelimit;
 	long play_warning;
