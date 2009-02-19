@@ -49,6 +49,9 @@ typedef struct ast_config *config_load_func(const char *database, const char *ta
 typedef struct ast_variable *realtime_var_get(const char *database, const char *table, va_list ap);
 typedef struct ast_config *realtime_multi_get(const char *database, const char *table, va_list ap);
 typedef int realtime_update(const char *database, const char *table, const char *keyfield, const char *entity, va_list ap);
+typedef int realtime_update2(const char *database, const char *table, va_list ap);
+typedef int realtime_store(const char *database, const char *table, va_list ap);
+typedef int realtime_destroy(const char *database, const char *table, const char *keyfield, const char *entity, va_list ap);
 
 struct ast_config_engine {
 	char *name;
@@ -56,6 +59,10 @@ struct ast_config_engine {
 	realtime_var_get *realtime_func;
 	realtime_multi_get *realtime_multi_func;
 	realtime_update *update_func;
+	realtime_update2 *update2_func;
+	realtime_store *store_func;
+	realtime_destroy *destroy_func;
+
 	struct ast_config_engine *next;
 };
 
@@ -161,6 +168,47 @@ int ast_update_realtime(const char *family, const char *keyfield, const char *lo
  * \param family which family/config to be checked
 */
 int ast_check_realtime(const char *family);
+/*! 
+ * \brief Update realtime configuration 
+ * \param family which family/config to be updated
+ * This function is used to update a parameter in realtime configuration space.
+ * It includes the ability to lookup a row based upon multiple key criteria.
+ * As a result, this function includes two sentinel values, one to terminate
+ * lookup values and the other to terminate the listing of fields to update.
+ * \return Number of rows affected, or -1 on error.
+ *
+ * Note that you should use the constant SENTINEL to terminate arguments, in
+ * order to preserve cross-platform compatibility.
+ */
+int ast_update2_realtime(const char *family, ...) ;
+
+/*! 
+ * \brief Create realtime configuration 
+ * \param family which family/config to be created
+ * This function is used to create a parameter in realtime configuration space.
+ * \return Number of rows affected, or -1 on error.
+ * On the MySQL engine only, for reasons of backwards compatibility, the return
+ * value is the insert ID.  This value is nonportable and may be changed in a
+ * future version to match the other engines.
+ *
+ * Note that you should use the constant SENTINEL to terminate arguments, in
+ * order to preserve cross-platform compatibility.
+ */
+int ast_store_realtime(const char *family, ...) ;
+
+/*! 
+ * \brief Destroy realtime configuration 
+ * \param family which family/config to be destroyed
+ * \param keyfield which field to use as the key
+ * \param lookup which value to look for in the key field to match the entry.
+ * This function is used to destroy an entry in realtime configuration space.
+ * Additional params are used as keys.
+ * \return Number of rows affected, or -1 on error.
+ *
+ * Note that you should use the constant SENTINEL to terminate arguments, in
+ * order to preserve cross-platform compatibility.
+ */
+int ast_destroy_realtime(const char *family, const char *keyfield, const char *lookup, ...) ;
 
 /*! \brief Free variable list 
  * \param var the linked list of variables to free
