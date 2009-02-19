@@ -637,10 +637,6 @@ static char *handle_cli_database_showkey(struct ast_cli_entry *e, int cmd, struc
 	case CLI_GENERATE:
 		return NULL;
 	}
-	if (db_rt) {
-		ast_cli(a->fd, "showkey is not implemented for astdb/realtime ...yet\n");
-		return CLI_SUCCESS;
-	}
 
 	if (a->argc == 3) {
 		/* Key only */
@@ -654,6 +650,13 @@ static char *handle_cli_database_showkey(struct ast_cli_entry *e, int cmd, struc
 		ast_cli(a->fd, "Database unavailable\n");
 		return CLI_SUCCESS;	
 	}
+
+	if (db_rt) {
+		ast_mutex_unlock(&dblock);
+		handle_cli_database_show_realtime(a, "", a->argv[2]);
+		return CLI_SUCCESS;	
+	}
+
 	memset(&key, 0, sizeof(key));
 	memset(&data, 0, sizeof(data));
 	pass = 0;
