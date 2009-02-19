@@ -58,11 +58,11 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define dbopen __dbopen
 #endif
 static int db_rt;			/*!< Flag for realtime system */
-static char *db_rt_rtfamily = "astdb";	/*!< Realtime name tag */
-static char *db_rt_value = "value";	/*!< Database field name for values */
-static char *db_rt_family = "family";   /*!< Database field name for family */
-static char *db_rt_key = "keyname";     /*!< Database field name for key */
-static char *db_rt_sysnamelabel = "systemname"; /*!< Database field name for system name */
+static const char *db_rt_rtfamily = "astdb";	/*!< Realtime name tag */
+static const char *db_rt_value = "value";	/*!< Database field name for values */
+static const char *db_rt_family = "family";   /*!< Database field name for family */
+static const char *db_rt_key = "keyname";     /*!< Database field name for key */
+static const char *db_rt_sysnamelabel = "systemname"; /*!< Database field name for system name */
 static const char *db_rt_sysname;       /*!< From asterisk.conf or "asterisk" */
 
 
@@ -105,7 +105,7 @@ static struct ast_variable *db_realtime_getall(const char *family, const char *k
 	const char *cat = NULL;
 	char buf[512];
 
-	ast_log(LOG_DEBUG, ">>>>>> getall family: %s Key %s \n", family, key);
+	ast_log(LOG_DEBUG, ">>>>>> getall family: %s Key %s \n", S_OR(family,"-na-"), S_OR(key,"-na-"));
 
 	if (ast_strlen_zero(family)) {
 		/* Load all entries in the astdb */
@@ -777,13 +777,15 @@ static int manager_dbget(struct mansession *s, const struct message *m)
 
 int astdb_init(void)
 {
-	/* Check if we have realtime astdb enabled */
-	db_rt = ast_check_realtime("astdb");
-	if (!db_rt) {
-		dbinit();
-	} else {
-		ast_log(LOG_DEBUG, "***** Kör ASTDB i realtime mode! ******************\n");
-	}
+	/* When this routine is run, the realtime modules are not loaded so we can't initialize realtime yet. */
+        db_rt = 0;
+
+        /* If you have multiple systems using the same database, set the systemname in asterisk.conf */
+        db_rt_sysname = S_OR(ast_config_AST_SYSTEM_NAME, "asterisk");
+
+        /* initialize astdb or realtime */
+        dbinit();
+
 	ast_cli_register_multiple(cli_database, sizeof(cli_database) / sizeof(struct ast_cli_entry));
 	ast_manager_register("DBGet", EVENT_FLAG_SYSTEM, manager_dbget, "Get DB Entry");
 	ast_manager_register("DBPut", EVENT_FLAG_SYSTEM, manager_dbput, "Put DB Entry");
