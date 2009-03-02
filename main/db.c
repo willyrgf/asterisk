@@ -877,7 +877,7 @@ static int manager_dbdeltree(struct mansession *s, const struct message *m)
 
 int astdb_init(void)
 {
-	/* When this routing is run, the realtime modules are not loaded so we can't initialize realtime yet. */
+	/* When this routine is run, the realtime modules are not loaded so we can't initialize realtime yet. */
 	db_rt = 0;
 
 	/* If you have multiple systems using the same database, set the systemname in asterisk.conf */
