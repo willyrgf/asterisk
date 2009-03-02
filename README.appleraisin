@@ -1,0 +1,53 @@
+Edvina AB
+Olle E. Johansson					March 2009
+
+
+
+AppleRaisin - Moving Astdb to realtime
+--------------------------------------
+
+This branch, based on Asterisk 1.4, implements storage of AstDB in ARA, the realtime data object
+manipulation abstraction something in Asterisk. The name "realtime" is getting more and more
+non-descriptive for what ARA has become.
+
+Why?
+----
+
+There are a lot of applications and GUI's out there that makes heavy use of astdb. In order
+to be able to have some sort of failover solution and provide scalability, astdb needs to
+move to another engine than Berkeley DB v1 that uses one single file. The GUI I had in 
+mind when working with this code was FreePBX from freepbx.org. 
+
+Howto:
+------
+
+1. This branch requires realtime drivers with the store and delete methods implemented. 
+   The regular asterisk-addons and Asterisk 1.4 realtime drivers doesn't implement this, only trunk.
+   I have a backported mysql driver for 1.4 under testing.
+
+2. Make sure you load the realtime driver before channel drivers and modules that use AstDb
+
+3. Note that because this is handled in the core, we have a chicken-and-egg issue. The AstDB
+   interface is initialized before any modules, so by default, astdb initializes to the
+   Berkeley DB interface. For each call, astdb checks if there's a realtime family activated
+   and switches as soon as this is available. If there's any code in-core using astdb
+   in your Asterisk version this will be an issue. I haven't identified any such issues
+   in the Digium distribution of Asterisk.
+
+4. Create a database with this table or something similar for non-SQL realtime drivers.
+   Configure this in the "astdb" family in extconfig.conf
+
+	CREATE TABLE `astdb` (
+  		`systemname` varchar(40) NOT NULL,
+  		`family` varchar(256) NOT NULL,
+  		`keyname` varchar(256) NOT NULL,
+  		`value` varchar(1050) NOT NULL,
+  		PRIMARY KEY  (`family`,`keyname`)
+	) ENGINE=MyISAM DEFAULT CHARSET=latin1;
+
+
+
+Thank you to...
+----------------
+- Jared Smith, who gently forced me into the #freepbx-dev IRC channel to discuss this project
+- During the process I've gotten a lot of information from Philippe @freepbx - thank you!
