@@ -1,0 +1,35 @@
+EDVINA AB
+Olle E. Johansson                             2009-03-03
+
+
+A branch to 
+- backport some timer_b code from chan_sip in trunk
+- implement a dialplan function to limit the amount of time spent in
+  call state, i.e. we have requested a call but have *no* indication
+  from the other end that something bothers with our request.
+  In SIP lingo, we have no 100 trying or *ANYTHING* from the other end.
+
+The issue at hand is that by default it takes 64*500ms for SIP to give up,
+which is 32 seconds without any indication to the caller whatsoever,
+no ring tone, no error, no ABBA music - nada.
+
+You want to be able to limit that time and implement a failover. If you
+found a SIP address with ENUM lookup that doesn't work, you want to fail
+over to the good ol' copper cable before the user calls customer support
+and starts bothering you.
+
+The idea here is to
+- Like in trunk, be able to set a maximum timeout (timer_b) for a peer
+- Be able to set a maximum timeout in call state for a call in the dialplan
+
+The best would of course to implement a PBX-level timeout for how long
+a call can be in call state, like
+	set(TIMEOUT(callstate)=10) for 10 seconds.
+	set(TIMEOUT(callstate)=0.250) for 250 milliseconds
+
+However, this might be a task I can't complete by myself, so see that as
+a feature requests to other wizards.
+
+
+
+
