@@ -2581,7 +2581,7 @@ static int __ast_pbx_run(struct ast_channel *c)
 static int increase_call_count(const struct ast_channel *c)
 {
 	int failed = 0;
-	double curloadavg;
+	double curloadavg = 0;
 	ast_mutex_lock(&maxcalllock);
 	if (option_maxcalls) {
 		if (countcalls >= option_maxcalls) {
@@ -2596,8 +2596,21 @@ static int increase_call_count(const struct ast_channel *c)
 			failed = -1;
 		}
 	}
-	if (!failed)
+	if (!failed) {
 		countcalls++;
+	} else {
+		/* Tell manager that we've reached the limit */
+		manager_event(EVENT_FLAG_SYSTEM, "ConfigLimitReached",
+			"CoreMaxCalls: %d\r\n"
+			"CoreCurrentCalls: %d\r\n"
+			"CoreMaxLoadAvg: %f\r\n"
+			"CoreCurrentLoadAvg: %f\r\n"	
+			"\r\n", 
+			option_maxcalls, countcalls,
+			option_maxload, curloadavg);
+ 	}
+ 	ast_mutex_unlock(&maxcalllock);
+ 
 	ast_mutex_unlock(&maxcalllock);
 
 	return failed;
