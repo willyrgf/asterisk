@@ -2609,8 +2609,6 @@ static int increase_call_count(const struct ast_channel *c)
 			option_maxcalls, countcalls,
 			option_maxload, curloadavg);
  	}
- 	ast_mutex_unlock(&maxcalllock);
- 
 	ast_mutex_unlock(&maxcalllock);
 
 	return failed;
@@ -2664,8 +2662,10 @@ enum ast_pbx_result ast_pbx_start(struct ast_channel *c)
 		return AST_PBX_FAILED;
 	}
 
-	if (increase_call_count(c))
+	if (increase_call_count(c)) {
+		c->hangupcause = AST_CAUSE_CALL_LIMIT;
 		return AST_PBX_CALL_LIMIT;
+	}
 
 	/* Start a new thread, and get something handling this channel. */
 	pthread_attr_init(&attr);

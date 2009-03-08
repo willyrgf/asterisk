@@ -70,6 +70,9 @@
 #define AST_CAUSE_PROTOCOL_ERROR			111
 #define AST_CAUSE_INTERWORKING				127
 
+/* Private cause codes */
+#define AST_CAUSE_CALL_LIMIT				200
+
 /* Special Asterisk aliases */
 #define AST_CAUSE_BUSY 					AST_CAUSE_USER_BUSY
 #define AST_CAUSE_FAILURE 				AST_CAUSE_NETWORK_OUT_OF_ORDER

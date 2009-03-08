@@ -159,6 +159,7 @@ const struct ast_cause {
 	{ AST_CAUSE_MANDATORY_IE_LENGTH_ERROR, "MANDATORY_IE_LENGTH_ERROR", "Mandatory IE length error" },
 	{ AST_CAUSE_PROTOCOL_ERROR, "PROTOCOL_ERROR", "Protocol error, unspecified" },
 	{ AST_CAUSE_INTERWORKING, "INTERWORKING", "Interworking, unspecified" },
+	{ AST_CAUSE_CALL_LIMIT, "CALL_LIMIT", "Call limit reached (maxcall,loadavg, mem)" },
 };
 
 struct ast_variable *ast_channeltype_list(void)
