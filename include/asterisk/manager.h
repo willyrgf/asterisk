@@ -227,6 +227,7 @@ char *authority_to_str(int authority, char *res, int reslen);
  *
  * \retval 0 success
  * \retval non-zero failure
+ * \since 1.6.1
  */
 
 int astman_datastore_add(struct mansession *s, struct ast_datastore *datastore);
@@ -236,6 +237,7 @@ int astman_datastore_add(struct mansession *s, struct ast_datastore *datastore);
  *
  * \retval 0 success
  * \retval non-zero failure
+ * \since 1.6.1
  */
 int astman_datastore_remove(struct mansession *s, struct ast_datastore *datastore);
 
@@ -244,6 +246,7 @@ int astman_datastore_remove(struct mansession *s, struct ast_datastore *datastor
  *
  * \retval pointer to the datastore if found
  * \retval NULL if not found
+ * \since 1.6.1
  */
 struct ast_datastore *astman_datastore_find(struct mansession *s, const struct ast_datastore_info *info, const char *uid);
 
