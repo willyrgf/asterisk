@@ -4238,7 +4238,6 @@ static struct ast_channel *sip_new(struct sip_pvt *i, int state, const char *tit
 	manager_event(EVENT_FLAG_SYSTEM, "ChannelUpdate",
 		"Channel: %s\r\nUniqueid: %s\r\nChanneltype: %s\r\nSIPcallid: %s\r\nSIPfullcontact: %s\r\n",
 		tmp->name, tmp->uniqueid, "SIP", i->callid, i->fullcontact);
-
 	return tmp;
 }
 
@@ -16862,8 +16861,10 @@ static struct ast_channel *sip_request_call(const char *type, int format, void *
 	ast_mutex_lock(&p->lock);
 	tmpc = sip_new(p, AST_STATE_DOWN, host);	/* Place the call */
 	manager_event(EVENT_FLAG_SYSTEM, "ChannelUpdate",
-		"Channel: %s\r\nChanneltype: %s\r\nSIPcallid: %s\r\nSIPfullcontact: %s\r\nPeername: %s\r\n",
-		p->owner? p->owner->name : "", "SIP", p->callid, p->fullcontact, p->peername);
+		"Channel: %s\r\nChanneltype: %s\r\nUniqueid: %s\r\nSIPcallid: %s\r\nSIPfullcontact: %s\r\nPeername: %s\r\n",
+		p->owner? p->owner->name : "", "SIP",  p->owner ? p->owner->uniqueid : "", p->callid, p->fullcontact, p->peername);
+
+
 	ast_mutex_unlock(&p->lock);
 	if (!tmpc)
 		sip_destroy(p);
