@@ -12389,7 +12389,6 @@ static struct sip_pvt *get_sip_pvt_byid_locked(const char *callid, const char *t
 		/* Go ahead and lock it (and its owner) before returning */
 		sip_pvt_lock(sip_pvt_ptr);
 		if (sip_cfg.pedanticsipchecking) {
-			const char *pvt_fromtag, *pvt_totag;
 			unsigned char frommismatch = 0, tomismatch = 0;
 
 			if (ast_strlen_zero(fromtag)) {
@@ -12405,31 +12404,34 @@ static struct sip_pvt *get_sip_pvt_byid_locked(const char *callid, const char *t
 					  sip_pvt_ptr->outgoing_call == TRUE ? "OUTGOING": "INCOMING", sip_pvt_ptr->callid);
 				return NULL;
 			}
-
-			if (sip_pvt_ptr->outgoing_call == TRUE) {
-				/* Outgoing call tags : from is "our", to is "their" */
-				pvt_fromtag = sip_pvt_ptr->tag ;
-				pvt_totag = sip_pvt_ptr->theirtag ;
-			} else {
-				/* Incoming call tags : from is "their", to is "our" */
-				pvt_fromtag = sip_pvt_ptr->theirtag ;
-				pvt_totag = sip_pvt_ptr->tag ;
-			}
-
-			frommismatch = !!strcmp(fromtag, pvt_fromtag);
-			tomismatch = !!strcmp(totag, pvt_totag);
+			/* RFC 3891
+			 * > 3.  User Agent Server Behavior: Receiving a Replaces Header
+			 * > The Replaces header contains information used to match an existing
+			 * > SIP dialog (call-id, to-tag, and from-tag).  Upon receiving an INVITE
+			 * > with a Replaces header, the User Agent (UA) attempts to match this
+			 * > information with a confirmed or early dialog.  The User Agent Server
+			 * > (UAS) matches the to-tag and from-tag parameters as if they were tags
+			 * > present in an incoming request.  In other words, the to-tag parameter
+			 * > is compared to the local tag, and the from-tag parameter is compared
+			 * > to the remote tag.
+			 *
+			 * Thus, the totag is always compared to the local tag, regardless if
+			 * this our call is an incoming or outgoing call.
+			 */
+			frommismatch = !!strcmp(fromtag, sip_pvt_ptr->theirtag);
+			tomismatch = !!strcmp(totag, sip_pvt_ptr->tag);
 
 			if (frommismatch || tomismatch) {
 				sip_pvt_unlock(sip_pvt_ptr);
 				if (frommismatch) {
 					ast_debug(4, "Matched %s call for callid=%s - pedantic from tag check fails; their tag is %s our tag is %s\n",
 						  sip_pvt_ptr->outgoing_call == TRUE ? "OUTGOING": "INCOMING", sip_pvt_ptr->callid, 
-						  fromtag, pvt_fromtag);
+						  fromtag, sip_pvt_ptr->theirtag);
 				}
 				if (tomismatch) {
 					ast_debug(4, "Matched %s call for callid=%s - pedantic to tag check fails; their tag is %s our tag is %s\n",
 						  sip_pvt_ptr->outgoing_call == TRUE ? "OUTGOING": "INCOMING", sip_pvt_ptr->callid, 
-						  totag, pvt_totag);
+						  totag, sip_pvt_ptr->tag);
 				}
 				return NULL;
 			}
