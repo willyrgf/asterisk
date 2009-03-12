@@ -655,7 +655,7 @@ void close_logger(void)
 	return;
 }
 
-static void ast_log_vsyslog(int level, const char *file, int line, const char *function, const char *fmt, va_list args) 
+static void __attribute__((format(printf, 5, 0))) ast_log_vsyslog(int level, const char *file, int line, const char *function, const char *fmt, va_list args) 
 {
 	char buf[BUFSIZ];
 	char *s;
@@ -875,8 +875,12 @@ void ast_verbose(const char *fmt, ...)
 		ast_localtime(&t, &tm, NULL);
 		strftime(date, sizeof(date), dateformat, &tm);
 		datefmt = alloca(strlen(date) + 3 + strlen(fmt) + 1);
-		sprintf(datefmt, "[%s] %s", date, fmt);
+		sprintf(datefmt, "%c[%s] %s", 127, date, fmt);
 		fmt = datefmt;
+	} else {
+		char *tmp = alloca(strlen(fmt) + 2);
+		sprintf(tmp, "%c%s", 127, fmt);
+		fmt = tmp;
 	}
 
 	if (!(buf = ast_dynamic_str_thread_get(&verbose_buf, VERBOSE_BUF_INIT_SIZE)))
@@ -897,7 +901,7 @@ void ast_verbose(const char *fmt, ...)
 		v->verboser(buf->str);
 	AST_LIST_UNLOCK(&verbosers);
 
-	ast_log(LOG_VERBOSE, "%s", buf->str);
+	ast_log(LOG_VERBOSE, "%s", buf->str + 1);
 }
 
 int ast_register_verbose(void (*v)(const char *string)) 

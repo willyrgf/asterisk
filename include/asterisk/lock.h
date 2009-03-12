@@ -179,6 +179,38 @@ void ast_remove_lock_info(void *lock_addr);
 #define ast_remove_lock_info(ignore)
 #endif
 
+/*!
+ * \brief retrieve lock info for the specified mutex
+ *
+ * this gets called during deadlock avoidance, so that the information may
+ * be preserved as to what location originally acquired the lock.
+ */
+#if !defined(LOW_MEMORY)
+int ast_find_lock_info(void *lock_addr, char *filename, size_t filename_size, int *lineno, char *func, size_t func_size, char *mutex_name, size_t mutex_name_size);
+#else
+#define ast_find_lock_info(a,b,c,d,e,f,g,h) -1
+#endif
+
+/*!
+ * \brief Unlock a lock briefly
+ *
+ * used during deadlock avoidance, to preserve the original location where
+ * a lock was originally acquired.
+ */
+#define DEADLOCK_AVOIDANCE(lock) \
+	do { \
+		char __filename[80], __func[80], __mutex_name[80]; \
+		int __lineno; \
+		int __res = ast_find_lock_info(lock, __filename, sizeof(__filename), &__lineno, __func, sizeof(__func), __mutex_name, sizeof(__mutex_name)); \
+		ast_mutex_unlock(lock); \
+		usleep(1); \
+		if (__res < 0) { /* Shouldn't ever happen, but just in case... */ \
+			ast_mutex_lock(lock); \
+		} else { \
+			__ast_pthread_mutex_lock(__filename, __lineno, __func, __mutex_name, lock); \
+		} \
+	} while (0)
+
 static void __attribute__((constructor)) init_empty_mutex(void)
 {
 	memset(&empty_mutex, 0, sizeof(empty_mutex));
@@ -679,6 +711,11 @@ static inline int __ast_cond_timedwait(const char *filename, int lineno, const c
 
 #else /* !DEBUG_THREADS */
 
+#define	DEADLOCK_AVOIDANCE(lock) \
+	ast_mutex_unlock(lock); \
+	usleep(1); \
+	ast_mutex_lock(lock);
+
 
 typedef pthread_mutex_t ast_mutex_t;
 
@@ -762,14 +799,14 @@ static inline int ast_cond_timedwait(ast_cond_t *cond, ast_mutex_t *t, const str
  destructors to destroy mutexes and create it on the fly.  */
 #define __AST_MUTEX_DEFINE(scope, mutex, init_val, track) \
 	scope ast_mutex_t mutex = init_val; \
-static void  __attribute__ ((constructor)) init_##mutex(void) \
+static void  __attribute__((constructor)) init_##mutex(void) \
 { \
 	if (track) \
 		ast_mutex_init(&mutex); \
 	else \
 		ast_mutex_init_notracking(&mutex); \
 } \
-static void  __attribute__ ((destructor)) fini_##mutex(void) \
+static void  __attribute__((destructor)) fini_##mutex(void) \
 { \
 	ast_mutex_destroy(&mutex); \
 }
@@ -1076,11 +1113,11 @@ static inline int ast_rwlock_trywrlock(ast_rwlock_t *prwlock)
 #ifndef HAVE_PTHREAD_RWLOCK_INITIALIZER
 #define __AST_RWLOCK_DEFINE(scope, rwlock) \
         scope ast_rwlock_t rwlock; \
-static void  __attribute__ ((constructor)) init_##rwlock(void) \
+static void  __attribute__((constructor)) init_##rwlock(void) \
 { \
         ast_rwlock_init(&rwlock); \
 } \
-static void  __attribute__ ((destructor)) fini_##rwlock(void) \
+static void  __attribute__((destructor)) fini_##rwlock(void) \
 { \
         ast_rwlock_destroy(&rwlock); \
 }
@@ -1196,18 +1233,21 @@ AST_INLINE_API(int ast_atomic_dec_and_test(volatile int *p),
 
 struct ast_channel;
 
+#define ast_channel_lock(a) __ast_channel_lock(a, __FILE__, __LINE__, __PRETTY_FUNCTION__)
 /*! \brief Lock AST channel (and print debugging output)
 \note You need to enable DEBUG_CHANNEL_LOCKS for this function */
-int ast_channel_lock(struct ast_channel *chan);
+int __ast_channel_lock(struct ast_channel *chan, const char *file, int lineno, const char *func);
 
+#define ast_channel_unlock(a) __ast_channel_unlock(a, __FILE__, __LINE__, __PRETTY_FUNCTION__)
 /*! \brief Unlock AST channel (and print debugging output)
 \note You need to enable DEBUG_CHANNEL_LOCKS for this function
 */
-int ast_channel_unlock(struct ast_channel *chan);
+int __ast_channel_unlock(struct ast_channel *chan, const char *file, int lineno, const char *func);
 
+#define ast_channel_trylock(a) __ast_channel_trylock(a, __FILE__, __LINE__, __PRETTY_FUNCTION__)
 /*! \brief Lock AST channel (and print debugging output)
 \note   You need to enable DEBUG_CHANNEL_LOCKS for this function */
-int ast_channel_trylock(struct ast_channel *chan);
+int __ast_channel_trylock(struct ast_channel *chan, const char *file, int lineno, const char *func);
 #endif
 
 #endif /* _ASTERISK_LOCK_H */

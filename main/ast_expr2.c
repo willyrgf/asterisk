@@ -131,7 +131,7 @@
 
 #include "asterisk.h"
 
-#ifndef STANDALONE
+#if !defined(STANDALONE_AEL)
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #endif
 
@@ -179,7 +179,7 @@ enum valtype {
 } ;
 
 #ifdef STANDALONE
-void ast_log(int level, const char *file, int line, const char *function, const char *fmt, ...) __attribute__ ((format (printf,5,6)));
+void ast_log(int level, const char *file, int line, const char *function, const char *fmt, ...) __attribute__((format(printf,5,6)));
 #endif
 
 struct val {

@@ -227,8 +227,12 @@ int ast_dtmf_stream(struct ast_channel *chan, struct ast_channel *peer, const ch
 		res = ast_waitfor(chan, 100);
 
 	/* ast_waitfor will return the number of remaining ms on success */
-	if (res < 0)
+	if (res < 0) {
+		if (peer) {
+			ast_autoservice_stop(peer);
+		}
 		return res;
+	}
 
 	if (ast_opt_transmit_silence) {
 		silgen = ast_channel_start_silence_generator(chan);
@@ -911,10 +915,15 @@ int ast_app_group_update(struct ast_channel *old, struct ast_channel *new)
 	struct ast_group_info *gi = NULL;
 
 	AST_LIST_LOCK(&groups);
-	AST_LIST_TRAVERSE(&groups, gi, list) {
-		if (gi->chan == old)
+	AST_LIST_TRAVERSE_SAFE_BEGIN(&groups, gi, list) {
+		if (gi->chan == old) {
 			gi->chan = new;
+		} else if (gi->chan == new) {
+			AST_LIST_REMOVE_CURRENT(&groups, list);
+			free(gi);
+		}
 	}
+	AST_LIST_TRAVERSE_SAFE_END
 	AST_LIST_UNLOCK(&groups);
 
 	return 0;
@@ -955,7 +964,7 @@ int ast_app_group_list_unlock(void)
 unsigned int ast_app_separate_args(char *buf, char delim, char **array, int arraylen)
 {
 	int argc;
-	char *scan;
+	char *scan, *wasdelim = NULL;
 	int paren = 0, quote = 0;
 
 	if (!buf || !array || !arraylen)
@@ -982,14 +991,18 @@ unsigned int ast_app_separate_args(char *buf, char delim, char **array, int arra
 				/* Literal character, don't parse */
 				memmove(scan, scan + 1, strlen(scan));
 			} else if ((*scan == delim) && !paren && !quote) {
+				wasdelim = scan;
 				*scan++ = '\0';
 				break;
 			}
 		}
 	}
 
-	if (*scan)
+	/* If the last character in the original string was the delimiter, then
+	 * there is one additional argument. */
+	if (*scan || (scan > buf && (scan - 1) == wasdelim)) {
 		array[argc++] = scan;
+	}
 
 	return argc;
 }
@@ -1385,6 +1398,18 @@ char *ast_read_textfile(const char *filename)
 	}
 	close(fd);
 	return output;
+}
+
+void ast_app_options2str(const struct ast_app_option *options, struct ast_flags *flags, char *buf, size_t len)
+{
+	unsigned int i, found = 0;
+
+	for (i = 32; i < 128 && found < len;i++) {
+		if (ast_test_flag(flags, options[i].flag)) {
+			buf[found++] = i;
+		}
+	}
+	buf[found] = '\0';
 }
 
 int ast_app_parse_options(const struct ast_app_option *options, struct ast_flags *flags, char **args, char *optstr)

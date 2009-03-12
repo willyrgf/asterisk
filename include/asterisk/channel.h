@@ -398,7 +398,7 @@ struct ast_channel {
 	enum ast_channel_state _state;			/*!< State of line -- Don't write directly, use ast_setstate */
 	int rings;					/*!< Number of rings so far */
 	struct ast_callerid cid;			/*!< Caller ID, name, presentation etc */
-	char dtmfq[AST_MAX_EXTENSION];			/*!< Any/all queued DTMF characters */
+	char unused_old_dtmfq[AST_MAX_EXTENSION];	/*!< The DTMFQ is deprecated.  All frames should go to the readq. */
 	struct ast_frame dtmff;				/*!< DTMF frame */
 
 	char context[AST_MAX_CONTEXT];			/*!< Dialplan: Current extension context */
@@ -510,6 +510,10 @@ enum {
 	/*! This flag indicates that on a masquerade, an active stream should not
 	 *  be carried over */
 	AST_FLAG_MASQ_NOSTREAM = (1 << 15),
+	/*! This flag indicates that the hangup exten was run when the bridge terminated,
+	 *  a message aimed at preventing a subsequent hangup exten being run at the pbx_run
+	 *  level */
+	AST_FLAG_BRIDGE_HANGUP_RUN = (1 << 16),
 };
 
 /*! \brief ast_bridge_config flags */
@@ -520,6 +524,7 @@ enum {
 	AST_FEATURE_ATXFER =       (1 << 3),
 	AST_FEATURE_AUTOMON =      (1 << 4),
 	AST_FEATURE_PARKCALL =     (1 << 5),
+	AST_FEATURE_NO_H_EXTEN =   (1 << 6),
 };
 
 struct ast_bridge_config {
@@ -535,6 +540,12 @@ struct ast_bridge_config {
 	const char *start_sound;
 	int firstpass;
 	unsigned int flags;
+	void (* end_bridge_callback)(void *);   /*!< A callback that is called after a bridge attempt */
+	void *end_bridge_callback_data;         /*!< Data passed to the callback */
+	/*! If the end_bridge_callback_data refers to a channel which no longer is going to
+	 * exist when the end_bridge_callback is called, then it needs to be fixed up properly
+	 */
+	void (*end_bridge_callback_data_fixup)(struct ast_bridge_config *bconfig, struct ast_channel *originator, struct ast_channel *terminator);
 };
 
 struct chanmon;
@@ -616,10 +627,24 @@ int ast_setstate(struct ast_channel *chan, enum ast_channel_state);
 	by default set to the "default" context and
 	extension "s"
  */
-struct ast_channel *ast_channel_alloc(int needqueue, int state, const char *cid_num, const char *cid_name, const char *acctcode, const char *exten, const char *context, const int amaflag, const char *name_fmt, ...);
+struct ast_channel *ast_channel_alloc(int needqueue, int state, const char *cid_num, const char *cid_name, const char *acctcode, const char *exten, const char *context, const int amaflag, const char *name_fmt, ...) __attribute__((format(printf, 9, 10)));
 
 /*! \brief Queue an outgoing frame */
 int ast_queue_frame(struct ast_channel *chan, struct ast_frame *f);
+
+/*!
+ * \brief Queue an outgoing frame to the head of the frame queue
+ *
+ * \param chan the channel to queue the frame on
+ * \param f the frame to queue.  Note that this frame will be duplicated by
+ *        this function.  It is the responsibility of the caller to handle
+ *        freeing the memory associated with the frame being passed if
+ *        necessary.
+ *
+ * \retval 0 success
+ * \retval non-zero failure
+ */
+int ast_queue_frame_head(struct ast_channel *chan, struct ast_frame *f);
 
 /*! \brief Queue a hangup frame */
 int ast_queue_hangup(struct ast_channel *chan);
@@ -1141,8 +1166,7 @@ void ast_set_callerid(struct ast_channel *chan, const char *cidnum, const char *
 
 
 /*! return a mallocd string with the result of sprintf of the fmt and following args */
-char *ast_safe_string_alloc(const char *fmt, ...);
-
+char __attribute__((format(printf, 1, 2))) *ast_safe_string_alloc(const char *fmt, ...);
 
 
 /*! Start a tone going */
@@ -1163,12 +1187,17 @@ int ast_autoservice_start(struct ast_channel *chan);
 /*! 
  * \brief Stop servicing a channel for us...  
  *
+ * \note if chan is locked prior to calling ast_autoservice_stop, it
+ * is likely that there will be a deadlock between the thread that calls
+ * ast_autoservice_stop and the autoservice thread. It is important
+ * that chan is not locked prior to this call
+ *
  * \retval 0 success
  * \retval -1 error, or the channel has been hungup 
  */
 int ast_autoservice_stop(struct ast_channel *chan);
 
-/* If built with zaptel optimizations, force a scheduled expiration on the
+/* If built with DAHDI optimizations, force a scheduled expiration on the
    timer fd, at which point we call the callback function / data */
 int ast_settimeout(struct ast_channel *c, int samples, int (*func)(const void *data), void *data);
 
@@ -1291,7 +1320,7 @@ static inline int ast_fdisset(struct pollfd *pfds, int fd, int max, int *start)
 	return 0;
 }
 
-#ifdef SOLARIS
+#ifndef HAVE_TIMERSUB
 static inline void timersub(struct timeval *tvend, struct timeval *tvstart, struct timeval *tvdiff)
 {
 	tvdiff->tv_sec = tvend->tv_sec - tvstart->tv_sec;
@@ -1340,17 +1369,10 @@ static inline int ast_select(int nfds, fd_set *rfds, fd_set *wfds, fd_set *efds,
 #endif
 }
 
-#ifdef DO_CRASH
-#define CRASH do { fprintf(stderr, "!! Forcing immediate crash a-la abort !!\n"); *((int *)0) = 0; } while(0)
-#else
-#define CRASH do { } while(0)
-#endif
-
 #define CHECK_BLOCKING(c) do { 	 \
 	if (ast_test_flag(c, AST_FLAG_BLOCKING)) {\
 		if (option_debug) \
 			ast_log(LOG_DEBUG, "Thread %ld Blocking '%s', already blocked by thread %ld in procedure %s\n", (long) pthread_self(), (c)->name, (long) (c)->blocker, (c)->blockproc); \
-		CRASH; \
 	} else { \
 		(c)->blocker = pthread_self(); \
 		(c)->blockproc = __PRETTY_FUNCTION__; \

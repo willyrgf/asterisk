@@ -30,7 +30,7 @@
  */
 
 /*** MODULEINFO
-	<depend>zaptel</depend>
+	<depend>dahdi</depend>
  ***/
 
 #include "asterisk.h"
@@ -45,7 +45,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <zaptel/zaptel.h>
 
 #include "asterisk/lock.h"
 #include "asterisk/file.h"
@@ -65,9 +64,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/translate.h"
 #include "asterisk/ulaw.h"
 #include "asterisk/astobj.h"
+#include "asterisk/astobj2.h"
 #include "asterisk/devicestate.h"
 #include "asterisk/dial.h"
 #include "asterisk/causes.h"
+
+#include "asterisk/dahdi_compat.h"
 
 #include "enter.h"
 #include "leave.h"
@@ -163,6 +165,8 @@ enum {
 	CONFFLAG_SLA_STATION = (1 << 26),
 	/*! This is a SLA trunk. (Only for use by the SLA applications.) */
 	CONFFLAG_SLA_TRUNK = (1 << 27),
+	/*! Do not write any audio to this channel until the state is up. */
+	CONFFLAG_NO_AUDIO_UNTIL_UP = (1 << 28),
 };
 
 enum {
@@ -216,15 +220,15 @@ static const char *descrip =
 "conference.  If the conference number is omitted, the user will be prompted\n"
 "to enter one.  User can exit the conference by hangup, or if the 'p' option\n"
 "is specified, by pressing '#'.\n"
-"Please note: The Zaptel kernel modules and at least one hardware driver (or ztdummy)\n"
-"             must be present for conferencing to operate properly. In addition, the chan_zap\n"
+"Please note: The DAHDI kernel modules and at least one hardware driver (or dahdi_dummy)\n"
+"             must be present for conferencing to operate properly. In addition, the chan_dahdi\n"
 "             channel driver must be loaded for the 'i' and 'r' options to operate at all.\n\n"
 "The option string may contain zero or more of the following characters:\n"
 "      'a' -- set admin mode\n"
 "      'A' -- set marked mode\n"
 "      'b' -- run AGI script specified in ${MEETME_AGI_BACKGROUND}\n"
 "             Default: conf-background.agi  (Note: This does not work with\n"
-"             non-Zap channels in the same conference)\n"
+"             non-DAHDI channels in the same conference)\n"
 "      'c' -- announce user(s) count on joining a conference\n"
 "      'd' -- dynamically add conference\n"
 "      'D' -- dynamically add conference, prompting for a PIN\n"
@@ -264,8 +268,7 @@ static const char *descrip2 =
 "MeetMe conference. If var is specified, playback will be skipped and the value\n"
 "will be returned in the variable. Upon app completion, MeetMeCount will hangup\n"
 "the channel, unless priority n+1 exists, in which case priority progress will\n"
-"continue.\n"
-"A ZAPTEL INTERFACE MUST BE INSTALLED FOR CONFERENCING FUNCTIONALITY.\n";
+"continue.\n";
 
 static const char *descrip3 = 
 "  MeetMeAdmin(confno,command[,user]): Run admin command for conference\n"
@@ -316,6 +319,20 @@ static const char *slatrunk_desc =
 #define MAX_CONFNUM 80
 #define MAX_PIN     80
 
+enum announcetypes {
+	CONF_HASJOIN,
+	CONF_HASLEFT
+};
+
+struct announce_listitem {
+	AST_LIST_ENTRY(announce_listitem) entry;
+	char namerecloc[PATH_MAX];				/*!< Name Recorded file Location */
+	char language[MAX_LANGUAGE];
+	struct ast_channel *confchan;
+	int confusers;
+	enum announcetypes announcetype;
+};
+
 /*! \brief The MeetMe Conference object */
 struct ast_conference {
 	ast_mutex_t playlock;                   /*!< Conference specific lock (players) */
@@ -333,7 +350,7 @@ struct ast_conference {
 	unsigned int isdynamic:1;               /*!< Created on the fly? */
 	unsigned int locked:1;                  /*!< Is the conference locked? */
 	pthread_t recordthread;                 /*!< thread for recording */
-	ast_mutex_t recordthreadlock;		/*!< control threads trying to start recordthread */
+	ast_mutex_t recordthreadlock;           /*!< control threads trying to start recordthread */
 	pthread_attr_t attr;                    /*!< thread attribute */
 	const char *recordingfilename;          /*!< Filename to record the Conference into */
 	const char *recordingformat;            /*!< Format to record the Conference in */
@@ -344,6 +361,13 @@ struct ast_conference {
 	struct ast_trans_pvt *transpath[32];
 	AST_LIST_HEAD_NOLOCK(, ast_conf_user) userlist;
 	AST_LIST_ENTRY(ast_conference) list;
+	/* announce_thread related data */
+	pthread_t announcethread;
+	ast_mutex_t announcethreadlock;
+	unsigned int announcethread_stop:1;
+	ast_cond_t announcelist_addition;
+	AST_LIST_HEAD_NOLOCK(, announce_listitem) announcelist;
+	ast_mutex_t announcelistlock;
 };
 
 static AST_LIST_HEAD_STATIC(confs, ast_conference);
@@ -580,8 +604,8 @@ static int careful_write(int fd, unsigned char *data, int len, int block)
 
 	while (len) {
 		if (block) {
-			x = ZT_IOMUX_WRITE | ZT_IOMUX_SIGEVENT;
-			res = ioctl(fd, ZT_IOMUX, &x);
+			x = DAHDI_IOMUX_WRITE | DAHDI_IOMUX_SIGEVENT;
+			res = ioctl(fd, DAHDI_IOMUX, &x);
 		} else
 			res = 0;
 		if (res >= 0)
@@ -741,7 +765,7 @@ static void conf_play(struct ast_channel *chan, struct ast_conference *conf, enu
 static struct ast_conference *build_conf(char *confno, char *pin, char *pinadmin, int make, int dynamic, int refcount)
 {
 	struct ast_conference *cnf;
-	struct zt_confinfo ztc = { 0, };
+	struct dahdi_confinfo ztc = { 0, };
 	int confno_int = 0;
 
 	AST_LIST_LOCK(&confs);
@@ -762,15 +786,17 @@ static struct ast_conference *build_conf(char *confno, char *pin, char *pinadmin
 	ast_mutex_init(&cnf->listenlock);
 	cnf->recordthread = AST_PTHREADT_NULL;
 	ast_mutex_init(&cnf->recordthreadlock);
+	cnf->announcethread = AST_PTHREADT_NULL;
+	ast_mutex_init(&cnf->announcethreadlock);
 	ast_copy_string(cnf->confno, confno, sizeof(cnf->confno));
 	ast_copy_string(cnf->pin, pin, sizeof(cnf->pin));
 	ast_copy_string(cnf->pinadmin, pinadmin, sizeof(cnf->pinadmin));
 
 	/* Setup a new zap conference */
 	ztc.confno = -1;
-	ztc.confmode = ZT_CONF_CONFANN | ZT_CONF_CONFANNMON;
-	cnf->fd = open("/dev/zap/pseudo", O_RDWR);
-	if (cnf->fd < 0 || ioctl(cnf->fd, ZT_SETCONF, &ztc)) {
+	ztc.confmode = DAHDI_CONF_CONFANN | DAHDI_CONF_CONFANNMON;
+	cnf->fd = open(DAHDI_FILE_PSEUDO, O_RDWR);
+	if (cnf->fd < 0 || ioctl(cnf->fd, DAHDI_SETCONF, &ztc)) {
 		ast_log(LOG_WARNING, "Unable to open pseudo device\n");
 		if (cnf->fd >= 0)
 			close(cnf->fd);
@@ -782,14 +808,14 @@ static struct ast_conference *build_conf(char *confno, char *pin, char *pinadmin
 	cnf->zapconf = ztc.confno;
 
 	/* Setup a new channel for playback of audio files */
-	cnf->chan = ast_request("zap", AST_FORMAT_SLINEAR, "pseudo", NULL);
+	cnf->chan = ast_request(dahdi_chan_name, AST_FORMAT_SLINEAR, "pseudo", NULL);
 	if (cnf->chan) {
 		ast_set_read_format(cnf->chan, AST_FORMAT_SLINEAR);
 		ast_set_write_format(cnf->chan, AST_FORMAT_SLINEAR);
 		ztc.chan = 0;
 		ztc.confno = cnf->zapconf;
-		ztc.confmode = ZT_CONF_CONFANN | ZT_CONF_CONFANNMON;
-		if (ioctl(cnf->chan->fds[0], ZT_SETCONF, &ztc)) {
+		ztc.confmode = DAHDI_CONF_CONFANN | DAHDI_CONF_CONFANNMON;
+		if (ioctl(cnf->chan->fds[0], DAHDI_SETCONF, &ztc)) {
 			ast_log(LOG_WARNING, "Error setting conference\n");
 			if (cnf->chan)
 				ast_hangup(cnf->chan);
@@ -1218,8 +1244,8 @@ static void conf_flush(int fd, struct ast_channel *chan)
 	}
 
 	/* flush any data sitting in the pseudo channel */
-	x = ZT_FLUSH_ALL;
-	if (ioctl(fd, ZT_FLUSH, &x))
+	x = DAHDI_FLUSH_ALL;
+	if (ioctl(fd, DAHDI_FLUSH, &x))
 		ast_log(LOG_WARNING, "Error flushing channel\n");
 
 }
@@ -1229,6 +1255,7 @@ static void conf_flush(int fd, struct ast_channel *chan)
 static int conf_free(struct ast_conference *conf)
 {
 	int x;
+	struct announce_listitem *item;
 	
 	AST_LIST_REMOVE(&confs, conf, list);
 
@@ -1250,6 +1277,20 @@ static int conf_free(struct ast_conference *conf)
 		if (conf->transpath[x])
 			ast_translator_free_path(conf->transpath[x]);
 	}
+	if (conf->announcethread != AST_PTHREADT_NULL) {
+		ast_mutex_lock(&conf->announcelistlock);
+		conf->announcethread_stop = 1;
+		ast_softhangup(conf->chan, AST_SOFTHANGUP_EXPLICIT);
+		ast_cond_signal(&conf->announcelist_addition);
+		ast_mutex_unlock(&conf->announcelistlock);
+		pthread_join(conf->announcethread, NULL);
+	
+		while ((item = AST_LIST_REMOVE_HEAD(&conf->announcelist, entry))) {
+			ast_filedelete(item->namerecloc, NULL);
+			ao2_ref(item, -1);
+		}
+		ast_mutex_destroy(&conf->announcelistlock);
+	}
 	if (conf->origframe)
 		ast_frfree(conf->origframe);
 	if (conf->lchan)
@@ -1262,6 +1303,8 @@ static int conf_free(struct ast_conference *conf)
 	ast_mutex_destroy(&conf->playlock);
 	ast_mutex_destroy(&conf->listenlock);
 	ast_mutex_destroy(&conf->recordthreadlock);
+	ast_mutex_destroy(&conf->announcethreadlock);
+
 	free(conf);
 
 	return 0;
@@ -1284,6 +1327,10 @@ static void sla_queue_event_full(enum sla_event_type type,
 	struct sla_trunk_ref *trunk_ref, struct sla_station *station, int lock)
 {
 	struct sla_event *event;
+
+	if (sla.thread == AST_PTHREADT_NULL) {
+		return;
+	}
 
 	if (!(event = ast_calloc(1, sizeof(*event))))
 		return;
@@ -1366,13 +1413,88 @@ static int dispose_conf(struct ast_conference *conf)
 	return res;
 }
 
+static const char *get_announce_filename(enum announcetypes type)
+{
+	switch (type) {
+	case CONF_HASLEFT:
+		return "conf-hasleft";
+		break;
+	case CONF_HASJOIN:
+		return "conf-hasjoin";
+		break;
+	default:
+		return "";
+	}
+}
+
+static void *announce_thread(void *data)
+{
+	struct announce_listitem *current;
+	struct ast_conference *conf = data;
+	int res;
+	char filename[PATH_MAX] = "";
+	AST_LIST_HEAD_NOLOCK(, announce_listitem) local_list;
+	AST_LIST_HEAD_INIT_NOLOCK(&local_list);
+
+	while (!conf->announcethread_stop) {
+		ast_mutex_lock(&conf->announcelistlock);
+		if (conf->announcethread_stop) {
+			ast_mutex_unlock(&conf->announcelistlock);
+			break;
+		}
+		if (AST_LIST_EMPTY(&conf->announcelist))
+			ast_cond_wait(&conf->announcelist_addition, &conf->announcelistlock);
+
+		AST_LIST_APPEND_LIST(&local_list, &conf->announcelist, entry);
+		AST_LIST_HEAD_INIT_NOLOCK(&conf->announcelist);
+
+		ast_mutex_unlock(&conf->announcelistlock);
+		if (conf->announcethread_stop) {
+			break;
+		}
+
+		for (res = 1; !conf->announcethread_stop && (current = AST_LIST_REMOVE_HEAD(&local_list, entry)); ao2_ref(current, -1)) {
+			ast_log(LOG_DEBUG, "About to play %s\n", current->namerecloc);
+			if (!ast_fileexists(current->namerecloc, NULL, NULL))
+				continue;
+			if ((current->confchan) && (current->confusers > 1) && !ast_check_hangup(current->confchan)) {
+				if (!ast_streamfile(current->confchan, current->namerecloc, current->language))
+					res = ast_waitstream(current->confchan, "");
+				if (!res) {
+					ast_copy_string(filename, get_announce_filename(current->announcetype), sizeof(filename));
+					if (!ast_streamfile(current->confchan, filename, current->language))
+						ast_waitstream(current->confchan, "");
+				}
+			}
+			if (current->announcetype == CONF_HASLEFT) {
+				ast_filedelete(current->namerecloc, NULL);
+			}
+		}
+	}
+
+	/* thread marked to stop, clean up */
+	while ((current = AST_LIST_REMOVE_HEAD(&local_list, entry))) {
+		ast_filedelete(current->namerecloc, NULL);
+		ao2_ref(current, -1);
+	}
+	return NULL;
+}
+
+static int can_write(struct ast_channel *chan, int confflags)
+{
+	if (!(confflags & CONFFLAG_NO_AUDIO_UNTIL_UP)) {
+		return 1;
+	}
+
+	return (chan->_state == AST_STATE_UP);
+}
 
 static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int confflags, char *optargs[])
 {
 	struct ast_conf_user *user = NULL;
 	struct ast_conf_user *usr = NULL;
 	int fd;
-	struct zt_confinfo ztc, ztc_empty;
+	struct dahdi_confinfo ztc, ztc_empty;
 	struct ast_frame *f;
 	struct ast_channel *c;
 	struct ast_frame fr;
@@ -1405,7 +1527,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 	char members[10] = "";
 	int dtmf, opt_waitmarked_timeout = 0;
 	time_t timeout = 0;
-	ZT_BUFFERINFO bi;
+	struct dahdi_bufferinfo bi;
 	char __buf[CONF_SIZE + AST_FRIENDLY_OFFSET];
 	char *buf = __buf + AST_FRIENDLY_OFFSET;
 	int setusercount = 0;
@@ -1439,13 +1561,13 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 	}
 
 	ast_mutex_lock(&conf->recordthreadlock);
-	if ((conf->recordthread == AST_PTHREADT_NULL) && (confflags & CONFFLAG_RECORDCONF) && ((conf->lchan = ast_request("zap", AST_FORMAT_SLINEAR, "pseudo", NULL)))) {
+	if ((conf->recordthread == AST_PTHREADT_NULL) && (confflags & CONFFLAG_RECORDCONF) && ((conf->lchan = ast_request(dahdi_chan_name, AST_FORMAT_SLINEAR, "pseudo", NULL)))) {
 		ast_set_read_format(conf->lchan, AST_FORMAT_SLINEAR);
 		ast_set_write_format(conf->lchan, AST_FORMAT_SLINEAR);
 		ztc.chan = 0;
 		ztc.confno = conf->zapconf;
-		ztc.confmode = ZT_CONF_CONFANN | ZT_CONF_CONFANNMON;
-		if (ioctl(conf->lchan->fds[0], ZT_SETCONF, &ztc)) {
+		ztc.confmode = DAHDI_CONF_CONFANN | DAHDI_CONF_CONFANNMON;
+		if (ioctl(conf->lchan->fds[0], DAHDI_SETCONF, &ztc)) {
 			ast_log(LOG_WARNING, "Error starting listen channel\n");
 			ast_hangup(conf->lchan);
 			conf->lchan = NULL;
@@ -1457,6 +1579,14 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 		}
 	}
 	ast_mutex_unlock(&conf->recordthreadlock);
+
+	ast_mutex_lock(&conf->announcethreadlock);
+	if ((conf->announcethread == AST_PTHREADT_NULL) && !(confflags & CONFFLAG_QUIET) && ((confflags & CONFFLAG_INTROUSER) || (confflags & CONFFLAG_INTROUSERNOREVIEW))) {
+		ast_mutex_init(&conf->announcelistlock);
+		AST_LIST_HEAD_INIT_NOLOCK(&conf->announcelist);
+		ast_pthread_create_background(&conf->announcethread, NULL, announce_thread, conf);
+	}
+	ast_mutex_unlock(&conf->announcethreadlock);
 
 	time(&user->jointime);
 
@@ -1577,7 +1707,10 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 		}
 	}
 
-	ast_indicate(chan, -1);
+	if (!(confflags & CONFFLAG_NO_AUDIO_UNTIL_UP)) {
+		/* We're leaving this alone until the state gets changed to up */
+		ast_indicate(chan, -1);
+	}
 
 	if (ast_set_write_format(chan, AST_FORMAT_SLINEAR) < 0) {
 		ast_log(LOG_WARNING, "Unable to set '%s' to write linear mode\n", chan->name);
@@ -1589,13 +1722,13 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 		goto outrun;
 	}
 
-	retryzap = (strcasecmp(chan->tech->type, "Zap") || (chan->audiohooks || chan->monitor) ? 1 : 0);
+	retryzap = (strcasecmp(chan->tech->type, dahdi_chan_name) || (chan->audiohooks || chan->monitor) ? 1 : 0);
 	user->zapchannel = !retryzap;
 
  zapretry:
 	origfd = chan->fds[0];
 	if (retryzap) {
-		fd = open("/dev/zap/pseudo", O_RDWR);
+		fd = open(DAHDI_FILE_PSEUDO, O_RDWR);
 		if (fd < 0) {
 			ast_log(LOG_WARNING, "Unable to open pseudo channel: %s\n", strerror(errno));
 			goto outrun;
@@ -1616,16 +1749,16 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 		/* Setup buffering information */
 		memset(&bi, 0, sizeof(bi));
 		bi.bufsize = CONF_SIZE/2;
-		bi.txbufpolicy = ZT_POLICY_IMMEDIATE;
-		bi.rxbufpolicy = ZT_POLICY_IMMEDIATE;
+		bi.txbufpolicy = DAHDI_POLICY_IMMEDIATE;
+		bi.rxbufpolicy = DAHDI_POLICY_IMMEDIATE;
 		bi.numbufs = audio_buffers;
-		if (ioctl(fd, ZT_SET_BUFINFO, &bi)) {
+		if (ioctl(fd, DAHDI_SET_BUFINFO, &bi)) {
 			ast_log(LOG_WARNING, "Unable to set buffering information: %s\n", strerror(errno));
 			close(fd);
 			goto outrun;
 		}
 		x = 1;
-		if (ioctl(fd, ZT_SETLINEAR, &x)) {
+		if (ioctl(fd, DAHDI_SETLINEAR, &x)) {
 			ast_log(LOG_WARNING, "Unable to set linear mode: %s\n", strerror(errno));
 			close(fd);
 			goto outrun;
@@ -1640,7 +1773,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 	memset(&ztc_empty, 0, sizeof(ztc_empty));
 	/* Check to see if we're in a conference... */
 	ztc.chan = 0;	
-	if (ioctl(fd, ZT_GETCONF, &ztc)) {
+	if (ioctl(fd, DAHDI_GETCONF, &ztc)) {
 		ast_log(LOG_WARNING, "Error getting conference\n");
 		close(fd);
 		goto outrun;
@@ -1648,7 +1781,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 	if (ztc.confmode) {
 		/* Whoa, already in a conference...  Retry... */
 		if (!retryzap) {
-			ast_log(LOG_DEBUG, "Zap channel is in a conference already, retrying with pseudo\n");
+			ast_log(LOG_DEBUG, "%s channel is in a conference already, retrying with pseudo\n", dahdi_chan_name);
 			retryzap = 1;
 			goto zapretry;
 		}
@@ -1658,33 +1791,42 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 	ztc.chan = 0;	
 	ztc.confno = conf->zapconf;
 
-	ast_mutex_lock(&conf->playlock);
-
 	if (!(confflags & CONFFLAG_QUIET) && ((confflags & CONFFLAG_INTROUSER) || (confflags & CONFFLAG_INTROUSERNOREVIEW)) && conf->users > 1) {
-		if (conf->chan && ast_fileexists(user->namerecloc, NULL, NULL)) {
-			if (!ast_streamfile(conf->chan, user->namerecloc, chan->language))
-				ast_waitstream(conf->chan, "");
-			if (!ast_streamfile(conf->chan, "conf-hasjoin", chan->language))
-				ast_waitstream(conf->chan, "");
+		struct announce_listitem *item;
+		if (!(item = ao2_alloc(sizeof(*item), NULL)))
+			return -1;
+		ast_copy_string(item->namerecloc, user->namerecloc, sizeof(item->namerecloc));
+		ast_copy_string(item->language, chan->language, sizeof(item->language));
+		item->confchan = conf->chan;
+		item->confusers = conf->users;
+		item->announcetype = CONF_HASJOIN;
+		ast_mutex_lock(&conf->announcelistlock);
+		ao2_ref(item, +1); /* add one more so we can determine when announce_thread is done playing it */
+		AST_LIST_INSERT_TAIL(&conf->announcelist, item, entry);
+		ast_cond_signal(&conf->announcelist_addition);
+		ast_mutex_unlock(&conf->announcelistlock);
+
+		while (!ast_check_hangup(conf->chan) && ao2_ref(item, 0) == 2 && !ast_safe_sleep(chan, 1000)) {
+			;
 		}
+		ao2_ref(item, -1);
 	}
 
 	if (confflags & CONFFLAG_WAITMARKED && !conf->markedusers)
-		ztc.confmode = ZT_CONF_CONF;
+		ztc.confmode = DAHDI_CONF_CONF;
 	else if (confflags & CONFFLAG_MONITOR)
-		ztc.confmode = ZT_CONF_CONFMON | ZT_CONF_LISTENER;
+		ztc.confmode = DAHDI_CONF_CONFMON | DAHDI_CONF_LISTENER;
 	else if (confflags & CONFFLAG_TALKER)
-		ztc.confmode = ZT_CONF_CONF | ZT_CONF_TALKER;
+		ztc.confmode = DAHDI_CONF_CONF | DAHDI_CONF_TALKER;
 	else 
-		ztc.confmode = ZT_CONF_CONF | ZT_CONF_TALKER | ZT_CONF_LISTENER;
+		ztc.confmode = DAHDI_CONF_CONF | DAHDI_CONF_TALKER | DAHDI_CONF_LISTENER;
 
-	if (ioctl(fd, ZT_SETCONF, &ztc)) {
+	if (ioctl(fd, DAHDI_SETCONF, &ztc)) {
 		ast_log(LOG_WARNING, "Error setting conference\n");
 		close(fd);
-		ast_mutex_unlock(&conf->playlock);
 		goto outrun;
 	}
-	ast_log(LOG_DEBUG, "Placed channel %s in ZAP conf %d\n", chan->name, conf->zapconf);
+	ast_log(LOG_DEBUG, "Placed channel %s in %s conf %d\n", chan->name, dahdi_chan_name, conf->zapconf);
 
 	if (!sent_event) {
 		manager_event(EVENT_FLAG_CALL, "MeetmeJoin", 
@@ -1702,8 +1844,6 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 			if (!(confflags & CONFFLAG_WAITMARKED) || ((confflags & CONFFLAG_MARKEDUSER) && (conf->markedusers >= 1)))
 				conf_play(chan, conf, ENTER);
 	}
-
-	ast_mutex_unlock(&conf->playlock);
 
 	conf_flush(fd, chan);
 
@@ -1796,8 +1936,8 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 						if(confflags & CONFFLAG_MARKEDEXIT)
 							break;
 						else {
-							ztc.confmode = ZT_CONF_CONF;
-							if (ioctl(fd, ZT_SETCONF, &ztc)) {
+							ztc.confmode = DAHDI_CONF_CONF;
+							if (ioctl(fd, DAHDI_SETCONF, &ztc)) {
 								ast_log(LOG_WARNING, "Error setting conference\n");
 								close(fd);
 								goto outrun;
@@ -1812,12 +1952,12 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 					/* Marked user entered, so cancel timeout */
 					timeout = 0;
 					if (confflags & CONFFLAG_MONITOR)
-						ztc.confmode = ZT_CONF_CONFMON | ZT_CONF_LISTENER;
+						ztc.confmode = DAHDI_CONF_CONFMON | DAHDI_CONF_LISTENER;
 					else if (confflags & CONFFLAG_TALKER)
-						ztc.confmode = ZT_CONF_CONF | ZT_CONF_TALKER;
+						ztc.confmode = DAHDI_CONF_CONF | DAHDI_CONF_TALKER;
 					else
-						ztc.confmode = ZT_CONF_CONF | ZT_CONF_TALKER | ZT_CONF_LISTENER;
-					if (ioctl(fd, ZT_SETCONF, &ztc)) {
+						ztc.confmode = DAHDI_CONF_CONF | DAHDI_CONF_TALKER | DAHDI_CONF_LISTENER;
+					if (ioctl(fd, DAHDI_SETCONF, &ztc)) {
 						ast_log(LOG_WARNING, "Error setting conference\n");
 						close(fd);
 						goto outrun;
@@ -1858,9 +1998,9 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 			/* Check if my modes have changed */
 
 			/* If I should be muted but am still talker, mute me */
-			if ((user->adminflags & (ADMINFLAG_MUTED | ADMINFLAG_SELFMUTED)) && (ztc.confmode & ZT_CONF_TALKER)) {
-				ztc.confmode ^= ZT_CONF_TALKER;
-				if (ioctl(fd, ZT_SETCONF, &ztc)) {
+			if ((user->adminflags & (ADMINFLAG_MUTED | ADMINFLAG_SELFMUTED)) && (ztc.confmode & DAHDI_CONF_TALKER)) {
+				ztc.confmode ^= DAHDI_CONF_TALKER;
+				if (ioctl(fd, DAHDI_SETCONF, &ztc)) {
 					ast_log(LOG_WARNING, "Error setting conference - Un/Mute \n");
 					ret = -1;
 					break;
@@ -1876,9 +2016,9 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 			}
 
 			/* If I should be un-muted but am not talker, un-mute me */
-			if (!(user->adminflags & (ADMINFLAG_MUTED | ADMINFLAG_SELFMUTED)) && !(confflags & CONFFLAG_MONITOR) && !(ztc.confmode & ZT_CONF_TALKER)) {
-				ztc.confmode |= ZT_CONF_TALKER;
-				if (ioctl(fd, ZT_SETCONF, &ztc)) {
+			if (!(user->adminflags & (ADMINFLAG_MUTED | ADMINFLAG_SELFMUTED)) && !(confflags & CONFFLAG_MONITOR) && !(ztc.confmode & DAHDI_CONF_TALKER)) {
+				ztc.confmode |= DAHDI_CONF_TALKER;
+				if (ioctl(fd, DAHDI_SETCONF, &ztc)) {
 					ast_log(LOG_WARNING, "Error setting conference - Un/Mute \n");
 					ret = -1;
 					break;
@@ -1909,6 +2049,8 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 				break;
 
 			if (c) {
+				char dtmfstr[2] = "";
+
 				if (c->fds[0] != origfd || (user->zapchannel && (c->audiohooks || c->monitor))) {
 					if (using_pseudo) {
 						/* Kill old pseudo */
@@ -1916,7 +2058,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 						using_pseudo = 0;
 					}
 					ast_log(LOG_DEBUG, "Ooh, something swapped out under us, starting over\n");
-					retryzap = (strcasecmp(c->tech->type, "Zap") || (c->audiohooks || c->monitor) ? 1 : 0);
+					retryzap = (strcasecmp(c->tech->type, dahdi_chan_name) || (c->audiohooks || c->monitor) ? 1 : 0);
 					user->zapchannel = !retryzap;
 					goto zapretry;
 				}
@@ -1926,6 +2068,11 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 					f = ast_read(c);
 				if (!f)
 					break;
+				if (f->frametype == AST_FRAME_DTMF) {
+					dtmfstr[0] = f->subclass;
+					dtmfstr[1] = '\0';
+				}
+
 				if ((f->frametype == AST_FRAME_VOICE) && (f->subclass == AST_FORMAT_SLINEAR)) {
 					if (user->talk.actual)
 						ast_frame_adjust_volume(f, user->talk.actual);
@@ -1976,21 +2123,6 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 						if (user->talking || !(confflags & CONFFLAG_OPTIMIZETALKER))
 							careful_write(fd, f->data, f->datalen, 0);
 					}
-				} else if ((f->frametype == AST_FRAME_DTMF) && (confflags & CONFFLAG_EXIT_CONTEXT)) {
-					char tmp[2];
-
-					if (confflags & CONFFLAG_PASS_DTMF)
-						conf_queue_dtmf(conf, user, f);
-
-					tmp[0] = f->subclass;
-					tmp[1] = '\0';
-					if (!ast_goto_if_exists(chan, exitcontext, tmp, 1)) {
-						ast_log(LOG_DEBUG, "Got DTMF %c, goto context %s\n", tmp[0], exitcontext);
-						ret = 0;
-						ast_frfree(f);
-						break;
-					} else if (option_debug > 1)
-						ast_log(LOG_DEBUG, "Exit by single digit did not work in meetme. Extension %s does not exist in context %s\n", tmp, exitcontext);
 				} else if ((f->frametype == AST_FRAME_DTMF) && (f->subclass == '#') && (confflags & CONFFLAG_POUNDEXIT)) {
 					if (confflags & CONFFLAG_PASS_DTMF)
 						conf_queue_dtmf(conf, user, f);
@@ -2000,7 +2132,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 				} else if (((f->frametype == AST_FRAME_DTMF) && (f->subclass == '*') && (confflags & CONFFLAG_STARMENU)) || ((f->frametype == AST_FRAME_DTMF) && menu_active)) {
 					if (confflags & CONFFLAG_PASS_DTMF)
 						conf_queue_dtmf(conf, user, f);
-					if (ioctl(fd, ZT_SETCONF, &ztc_empty)) {
+					if (ioctl(fd, DAHDI_SETCONF, &ztc_empty)) {
 						ast_log(LOG_WARNING, "Error setting conference\n");
 						close(fd);
 						ast_frfree(f);
@@ -2146,7 +2278,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 					if (musiconhold)
 			   			ast_moh_start(chan, NULL, NULL);
 
-					if (ioctl(fd, ZT_SETCONF, &ztc)) {
+					if (ioctl(fd, DAHDI_SETCONF, &ztc)) {
 						ast_log(LOG_WARNING, "Error setting conference\n");
 						close(fd);
 						ast_frfree(f);
@@ -2154,6 +2286,18 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 					}
 
 					conf_flush(fd, chan);
+				/* Since this option could absorb dtmf for the previous, we have to check this one last */
+				} else if ((f->frametype == AST_FRAME_DTMF) && (confflags & CONFFLAG_EXIT_CONTEXT) && ast_exists_extension(chan, exitcontext, dtmfstr, 1, "")) {
+					if (confflags & CONFFLAG_PASS_DTMF)
+						conf_queue_dtmf(conf, user, f);
+
+					if (!ast_goto_if_exists(chan, exitcontext, dtmfstr, 1)) {
+						ast_log(LOG_DEBUG, "Got DTMF %c, goto context %s\n", dtmfstr[0], exitcontext);
+						ret = 0;
+						ast_frfree(f);
+						break;
+					} else if (option_debug > 1)
+						ast_log(LOG_DEBUG, "Exit by single digit did not work in meetme. Extension '%s' does not exist in context '%s'\n", dtmfstr, exitcontext);
 				} else if ((f->frametype == AST_FRAME_DTMF_BEGIN || f->frametype == AST_FRAME_DTMF_END)
 					&& confflags & CONFFLAG_PASS_DTMF) {
 					conf_queue_dtmf(conf, user, f);
@@ -2208,7 +2352,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 						}
 						if (conf->transframe[index]) {
  							if (conf->transframe[index]->frametype != AST_FRAME_NULL) {
-	 							if (ast_write(chan, conf->transframe[index]))
+	 							if (can_write(chan, confflags) && ast_write(chan, conf->transframe[index]))
 									ast_log(LOG_WARNING, "Unable to write frame to channel %s\n", chan->name);
 							}
 						} else {
@@ -2220,7 +2364,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 bailoutandtrynormal:					
 						if (user->listen.actual)
 							ast_frame_adjust_volume(&fr, user->listen.actual);
-						if (ast_write(chan, &fr) < 0) {
+						if (can_write(chan, confflags) && ast_write(chan, &fr) < 0) {
 							ast_log(LOG_WARNING, "Unable to write frame to channel %s\n", chan->name);
 						}
 					}
@@ -2241,29 +2385,33 @@ bailoutandtrynormal:
 		ztc.chan = 0;	
 		ztc.confno = 0;
 		ztc.confmode = 0;
-		if (ioctl(fd, ZT_SETCONF, &ztc)) {
+		if (ioctl(fd, DAHDI_SETCONF, &ztc)) {
 			ast_log(LOG_WARNING, "Error setting conference\n");
 		}
 	}
 
 	reset_volumes(user);
 
-	AST_LIST_LOCK(&confs);
 	if (!(confflags & CONFFLAG_QUIET) && !(confflags & CONFFLAG_MONITOR) && !(confflags & CONFFLAG_ADMIN))
 		conf_play(chan, conf, LEAVE);
 
-	if (!(confflags & CONFFLAG_QUIET) && ((confflags & CONFFLAG_INTROUSER) || (confflags & CONFFLAG_INTROUSERNOREVIEW))) {
-		if (ast_fileexists(user->namerecloc, NULL, NULL)) {
-			if ((conf->chan) && (conf->users > 1)) {
-				if (!ast_streamfile(conf->chan, user->namerecloc, chan->language))
-					ast_waitstream(conf->chan, "");
-				if (!ast_streamfile(conf->chan, "conf-hasleft", chan->language))
-					ast_waitstream(conf->chan, "");
-			}
-			ast_filedelete(user->namerecloc, NULL);
-		}
+	if (!(confflags & CONFFLAG_QUIET) && ((confflags & CONFFLAG_INTROUSER) || (confflags & CONFFLAG_INTROUSERNOREVIEW)) && conf->users > 1) {
+		struct announce_listitem *item;
+		if (!(item = ao2_alloc(sizeof(*item), NULL)))
+			return -1;
+		ast_copy_string(item->namerecloc, user->namerecloc, sizeof(item->namerecloc));
+		ast_copy_string(item->language, chan->language, sizeof(item->language));
+		item->confchan = conf->chan;
+		item->confusers = conf->users;
+		item->announcetype = CONF_HASLEFT;
+		ast_mutex_lock(&conf->announcelistlock);
+		AST_LIST_INSERT_TAIL(&conf->announcelist, item, entry);
+		ast_cond_signal(&conf->announcelist_addition);
+		ast_mutex_unlock(&conf->announcelistlock);
+	} else if (!(confflags & CONFFLAG_QUIET) && ((confflags & CONFFLAG_INTROUSER) || (confflags & CONFFLAG_INTROUSERNOREVIEW)) && conf->users == 1) {
+		/* Last person is leaving, so no reason to try and announce, but should delete the name recording */
+		ast_filedelete(user->namerecloc, NULL);
 	}
-	AST_LIST_UNLOCK(&confs);
 
  outrun:
 	AST_LIST_LOCK(&confs);
@@ -2321,7 +2469,7 @@ bailoutandtrynormal:
 static struct ast_conference *find_conf_realtime(struct ast_channel *chan, char *confno, int make, int dynamic,
 						 char *dynamic_pin, size_t pin_buf_len, int refcount, struct ast_flags *confflags)
 {
-	struct ast_variable *var;
+	struct ast_variable *var, *save;
 	struct ast_conference *cnf;
 
 	/* Check first in the conference list */
@@ -2343,6 +2491,7 @@ static struct ast_conference *find_conf_realtime(struct ast_channel *chan, char 
 		if (!var)
 			return NULL;
 
+		save = var;
 		while (var) {
 			if (!strcasecmp(var->name, "pin")) {
 				pin = ast_strdupa(var->value);
@@ -2351,7 +2500,7 @@ static struct ast_conference *find_conf_realtime(struct ast_channel *chan, char 
 			}
 			var = var->next;
 		}
-		ast_variables_destroy(var);
+		ast_variables_destroy(save);
 		
 		cnf = build_conf(confno, pin ? pin : "", pinadmin ? pinadmin : "", make, dynamic, refcount);
 	}
@@ -2359,14 +2508,14 @@ static struct ast_conference *find_conf_realtime(struct ast_channel *chan, char 
 	if (cnf) {
 		if (confflags && !cnf->chan &&
 		    !ast_test_flag(confflags, CONFFLAG_QUIET) &&
-		    ast_test_flag(confflags, CONFFLAG_INTROUSER)) {
-			ast_log(LOG_WARNING, "No Zap channel available for conference, user introduction disabled (is chan_zap loaded?)\n");
-			ast_clear_flag(confflags, CONFFLAG_INTROUSER);
+		    ast_test_flag(confflags, CONFFLAG_INTROUSER | CONFFLAG_INTROUSERNOREVIEW)) {
+			ast_log(LOG_WARNING, "No %s channel available for conference, user introduction disabled\n", dahdi_chan_name);
+			ast_clear_flag(confflags, CONFFLAG_INTROUSER | CONFFLAG_INTROUSERNOREVIEW);
 		}
 		
 		if (confflags && !cnf->chan &&
 		    ast_test_flag(confflags, CONFFLAG_RECORDCONF)) {
-			ast_log(LOG_WARNING, "No Zap channel available for conference, conference recording disabled (is chan_zap loaded?)\n");
+			ast_log(LOG_WARNING, "No %s channel available for conference, conference recording disabled\n", dahdi_chan_name);
 			ast_clear_flag(confflags, CONFFLAG_RECORDCONF);
 		}
 	}
@@ -2453,14 +2602,14 @@ static struct ast_conference *find_conf(struct ast_channel *chan, char *confno, 
 	if (cnf) {
 		if (confflags && !cnf->chan &&
 		    !ast_test_flag(confflags, CONFFLAG_QUIET) &&
-		    ast_test_flag(confflags, CONFFLAG_INTROUSER)) {
-			ast_log(LOG_WARNING, "No Zap channel available for conference, user introduction disabled (is chan_zap loaded?)\n");
-			ast_clear_flag(confflags, CONFFLAG_INTROUSER);
+		    ast_test_flag(confflags, CONFFLAG_INTROUSER | CONFFLAG_INTROUSERNOREVIEW)) {
+			ast_log(LOG_WARNING, "No %s channel available for conference, user introduction disabled\n", dahdi_chan_name);
+			ast_clear_flag(confflags, CONFFLAG_INTROUSER | CONFFLAG_INTROUSERNOREVIEW);
 		}
 		
 		if (confflags && !cnf->chan &&
 		    ast_test_flag(confflags, CONFFLAG_RECORDCONF)) {
-			ast_log(LOG_WARNING, "No Zap channel available for conference, conference recording disabled (is chan_zap loaded?)\n");
+			ast_log(LOG_WARNING, "No %s channel available for conference, conference recording disabled\n", dahdi_chan_name);
 			ast_clear_flag(confflags, CONFFLAG_RECORDCONF);
 		}
 	}
@@ -2569,7 +2718,7 @@ static int conf_exec(struct ast_channel *chan, void *data)
 	if (args.options) {
 		ast_app_parse_options(meetme_opts, &confflags, optargs, args.options);
 		dynamic = ast_test_flag(&confflags, CONFFLAG_DYNAMIC | CONFFLAG_DYNAMICPIN);
-		if (ast_test_flag(&confflags, CONFFLAG_DYNAMICPIN) && !args.pin)
+		if (ast_test_flag(&confflags, CONFFLAG_DYNAMICPIN) && ast_strlen_zero(args.pin))
 			strcpy(the_pin, "q");
 
 		empty = ast_test_flag(&confflags, CONFFLAG_EMPTY | CONFFLAG_EMPTYNOPIN);
@@ -3108,9 +3257,9 @@ static void load_config_meetme(void)
 		if ((sscanf(val, "%d", &audio_buffers) != 1)) {
 			ast_log(LOG_WARNING, "audiobuffers setting must be a number, not '%s'\n", val);
 			audio_buffers = DEFAULT_AUDIO_BUFFERS;
-		} else if ((audio_buffers < ZT_DEFAULT_NUM_BUFS) || (audio_buffers > ZT_MAX_NUM_BUFS)) {
+		} else if ((audio_buffers < DAHDI_DEFAULT_NUM_BUFS) || (audio_buffers > DAHDI_MAX_NUM_BUFS)) {
 			ast_log(LOG_WARNING, "audiobuffers setting must be between %d and %d\n",
-				ZT_DEFAULT_NUM_BUFS, ZT_MAX_NUM_BUFS);
+				DAHDI_DEFAULT_NUM_BUFS, DAHDI_MAX_NUM_BUFS);
 			audio_buffers = DEFAULT_AUDIO_BUFFERS;
 		}
 		if (audio_buffers != DEFAULT_AUDIO_BUFFERS)
@@ -3253,6 +3402,12 @@ struct run_station_args {
 	ast_cond_t *cond;
 };
 
+static void answer_trunk_chan(struct ast_channel *chan)
+{
+	ast_answer(chan);
+	ast_indicate(chan, -1);
+}
+
 static void *run_station(void *data)
 {
 	struct sla_station *station;
@@ -3275,7 +3430,7 @@ static void *run_station(void *data)
 	snprintf(conf_name, sizeof(conf_name), "SLA_%s", trunk_ref->trunk->name);
 	ast_set_flag(&conf_flags, 
 		CONFFLAG_QUIET | CONFFLAG_MARKEDEXIT | CONFFLAG_PASS_DTMF | CONFFLAG_SLA_STATION);
-	ast_answer(trunk_ref->chan);
+	answer_trunk_chan(trunk_ref->chan);
 	conf = build_conf(conf_name, "", "", 0, 0, 1);
 	if (conf) {
 		conf_run(trunk_ref->chan, conf, conf_flags.flags, NULL);
@@ -3448,7 +3603,7 @@ static void sla_handle_dial_state_event(void)
 			/* Track the channel that answered this trunk */
 			s_trunk_ref->chan = ast_dial_answered(ringing_station->station->dial);
 			/* Actually answer the trunk */
-			ast_answer(ringing_trunk->trunk->chan);
+			answer_trunk_chan(ringing_trunk->trunk->chan);
 			sla_change_trunk_state(ringing_trunk->trunk, SLA_TRUNK_STATE_UP, ALL_TRUNK_REFS, NULL);
 			/* Now, start a thread that will connect this station to the trunk.  The rest of
 			 * the code here sets up the thread and ensures that it is able to save the arguments
@@ -4206,7 +4361,7 @@ static int sla_station_exec(struct ast_channel *chan, void *data)
 		ast_mutex_unlock(&sla.lock);
 
 		if (ringing_trunk) {
-			ast_answer(ringing_trunk->trunk->chan);
+			answer_trunk_chan(ringing_trunk->trunk->chan);
 			sla_change_trunk_state(ringing_trunk->trunk, SLA_TRUNK_STATE_UP, ALL_TRUNK_REFS, NULL);
 
 			free(ringing_trunk);
@@ -4357,7 +4512,7 @@ static int sla_trunk_exec(struct ast_channel *chan, void *data)
 		return 0;
 	}
 	ast_set_flag(&conf_flags, 
-		CONFFLAG_QUIET | CONFFLAG_MARKEDEXIT | CONFFLAG_MARKEDUSER | CONFFLAG_PASS_DTMF);
+		CONFFLAG_QUIET | CONFFLAG_MARKEDEXIT | CONFFLAG_MARKEDUSER | CONFFLAG_PASS_DTMF | CONFFLAG_NO_AUDIO_UNTIL_UP);
 	ast_indicate(chan, AST_CONTROL_RINGING);
 	conf_run(chan, conf, conf_flags.flags, NULL);
 	dispose_conf(conf);

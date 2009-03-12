@@ -203,10 +203,15 @@ endif
 
 ASTCFLAGS+=-Wall -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations $(DEBUG)
 
-ASTCFLAGS+=-include $(ASTTOPDIR)/include/asterisk/autoconfig.h
-
 ifeq ($(AST_DEVMODE),yes)
-  ASTCFLAGS+=-Werror  -Wunused $(AST_DECLARATION_AFTER_STATEMENT)
+  ASTCFLAGS+=-Werror
+  ASTCFLAGS+=-Wunused
+  ASTCFLAGS+=$(AST_DECLARATION_AFTER_STATEMENT)
+  ASTCFLAGS+=$(AST_FORTIFY_SOURCE)
+# ASTCFLAGS+=-Wundef 
+  ASTCFLAGS+=-Wformat -Wformat-security
+  ASTCFLAGS+=-Wmissing-format-attribute
+# ASTCFLAGS+=-Wformat=2
 endif
 
 ifneq ($(findstring BSD,$(OSARCH)),)
@@ -245,9 +250,6 @@ ASTERISKVERSION:=$(shell GREP=$(GREP) AWK=$(AWK) build_tools/make_version .)
 
 ifneq ($(wildcard .version),)
   ASTERISKVERSIONNUM:=$(shell $(AWK) -F. '{printf "%01d%02d%02d", $$1, $$2, $$3}' .version)
-  RPMVERSION:=$(shell sed 's/[-\/:]/_/g' .version)
-else
-  RPMVERSION=unknown
 endif
 
 ifneq ($(wildcard .svn),)
@@ -274,14 +276,14 @@ ifneq ($(findstring darwin,$(OSARCH)),)
   SOLINK=-dynamic -bundle -undefined suppress -force_flat_namespace
 else
 # These are used for all but Darwin
-  SOLINK=-shared -Xlinker -x
+  SOLINK=-shared
   ifneq ($(findstring BSD,$(OSARCH)),)
     LDFLAGS+=-L/usr/local/lib
   endif
 endif
 
 ifeq ($(OSARCH),SunOS)
-  SOLINK=-shared -fpic -L/usr/local/ssl/lib
+  SOLINK=-shared -fpic -L/usr/local/ssl/lib -lrt
 endif
 
 SUBMAKE=$(MAKE) --quiet --no-print-directory
@@ -315,7 +317,7 @@ makeopts: configure
 	@exit 1
 
 menuselect.makeopts: menuselect/menuselect menuselect-tree
-	menuselect/menuselect --check-deps $(GLOBAL_MAKEOPTS) $(USER_MAKEOPTS) menuselect.makeopts
+	menuselect/menuselect --check-deps menuselect.makeopts $(GLOBAL_MAKEOPTS) $(USER_MAKEOPTS)
 
 $(MOD_SUBDIRS_EMBED_LDSCRIPT):
 	@echo "EMBED_LDSCRIPTS+="`$(SUBMAKE) -C $(@:-embed-ldscript=) SUBDIR=$(@:-embed-ldscript=) __embed_ldscript` >> makeopts.embed_rules
@@ -346,10 +348,10 @@ $(SUBDIRS): include/asterisk/version.h include/asterisk/buildopts.h defaults.h m
 main: $(filter-out main,$(MOD_SUBDIRS))
 
 $(MOD_SUBDIRS):
-	@ASTCFLAGS="$(MOD_SUBDIR_CFLAGS) $(ASTCFLAGS)" ASTLDFLAGS="$(ASTLDFLAGS)" AST_LIBS="$(AST_LIBS)" $(MAKE) --no-print-directory --no-builtin-rules -C $@ SUBDIR=$@ all
+	@ASTCFLAGS="$(MOD_SUBDIR_CFLAGS) $(ASTCFLAGS)" ASTLDFLAGS="$(ASTLDFLAGS)" AST_LIBS="$(AST_LIBS)" $(MAKE) --no-builtin-rules -C $@ SUBDIR=$@ all
 
 $(OTHER_SUBDIRS):
-	@ASTCFLAGS="$(OTHER_SUBDIR_CFLAGS) $(ASTCFLAGS)" ASTLDFLAGS="$(ASTLDFLAGS)" AUDIO_LIBS="$(AUDIO_LIBS)" $(MAKE) --no-print-directory --no-builtin-rules -C $@ SUBDIR=$@ all
+	@ASTCFLAGS="$(OTHER_SUBDIR_CFLAGS) $(ASTCFLAGS)" ASTLDFLAGS="$(ASTLDFLAGS)" AUDIO_LIBS="$(AUDIO_LIBS)" $(MAKE) --no-builtin-rules -C $@ SUBDIR=$@ all
 
 defaults.h: makeopts
 	@build_tools/make_defaults_h > $@.tmp
@@ -358,7 +360,7 @@ defaults.h: makeopts
 	fi
 	@rm -f $@.tmp
 
-include/asterisk/version.h:
+include/asterisk/version.h: FORCE
 	@build_tools/make_version_h > $@.tmp
 	@if cmp -s $@.tmp $@ ; then : ; else \
 		mv $@.tmp $@ ; \
@@ -378,7 +380,9 @@ $(SUBDIRS_CLEAN):
 $(SUBDIRS_DIST_CLEAN):
 	@$(MAKE) --no-print-directory -C $(@:-dist-clean=) dist-clean
 
-clean: $(SUBDIRS_CLEAN)
+clean: $(SUBDIRS_CLEAN) _clean
+
+_clean:
 	rm -f defaults.h
 	rm -f include/asterisk/build.h
 	rm -f include/asterisk/version.h
@@ -387,12 +391,12 @@ clean: $(SUBDIRS_CLEAN)
 
 dist-clean: distclean
 
-distclean: $(SUBDIRS_DIST_CLEAN) clean
+distclean: $(SUBDIRS_DIST_CLEAN) _clean
 	@$(MAKE) -C menuselect dist-clean
 	@$(MAKE) -C sounds dist-clean
 	rm -f menuselect.makeopts makeopts menuselect-tree menuselect.makedeps
 	rm -f makeopts.embed_rules
-	rm -f config.log config.status
+	rm -f config.log config.status config.cache
 	rm -rf autom4te.cache
 	rm -f include/asterisk/autoconfig.h
 	rm -f include/asterisk/buildopts.h
@@ -480,9 +484,11 @@ $(SUBDIRS_INSTALL):
 	@DESTDIR="$(DESTDIR)" ASTSBINDIR="$(ASTSBINDIR)" $(MAKE) -C $(@:-install=) install
 
 NEWMODS=$(notdir $(wildcard */*.so))
-OLDMODS=$(filter-out $(NEWMODS),$(notdir $(wildcard $(DESTDIR)$(MODULES_DIR)/*.so)))
+DEPMODS=chan_zap.so app_zapras.so app_zapscan.so app_zapbarge.so codec_zap.so
+OLDMODS=$(filter-out $(NEWMODS) $(DEPMODS),$(notdir $(wildcard $(DESTDIR)$(MODULES_DIR)/*.so)))
 
 oldmodcheck:
+	@for f in $(DEPMODS); do rm -f $(DESTDIR)$(MODULES_DIR)/$$f; done
 	@if [ -n "$(OLDMODS)" ]; then \
 		echo " WARNING WARNING WARNING" ;\
 		echo "" ;\
@@ -581,7 +587,8 @@ samples: adsi
 		echo "astrundir => $(ASTVARRUNDIR)" ; \
 		echo "astlogdir => $(ASTLOGDIR)" ; \
 		echo "" ; \
-		echo ";[options]" ; \
+		echo "[options]" ; \
+		echo "languageprefix = yes ; Use the new sound prefix path syntax" ; \
 		echo ";verbose = 3" ; \
 		echo ";debug = 3" ; \
 		echo ";alwaysfork = yes ; same as -F at startup" ; \
@@ -595,7 +602,6 @@ samples: adsi
 		echo ";nocolor = yes ; Disable console colors" ; \
 		echo ";dontwarn = yes ; Disable some warnings" ; \
 		echo ";dumpcore = yes ; Dump core on crash (same as -g at startup)" ; \
-		echo ";languageprefix = yes ; Use the new sound prefix path syntax" ; \
 		echo ";internal_timing = yes" ; \
 		echo ";systemname = my_system_name ; prefix uniqueid with a system name for global uniqueness issues" ; \
 		echo ";maxcalls = 10 ; Maximum amount of calls allowed" ; \
@@ -607,6 +613,7 @@ samples: adsi
 		echo ";transcode_via_sln = yes ; Build transcode paths via SLINEAR, instead of directly" ; \
 		echo ";runuser = asterisk ; The user to run as" ; \
 		echo ";rungroup = asterisk ; The group to run as" ; \
+		echo ";dahdichanname = yes ; Channels created by chan_dahdi will be called 'DAHDI', otherwise 'Zap'" ; \
 		echo "" ; \
 		echo "; Changing the following lines may compromise your security." ; \
 		echo ";[files]" ; \
@@ -646,20 +653,6 @@ webvmail:
 	@echo " + HTTP_DOCSDIR                              +"
 	@echo " +                                           +"
 	@echo " +-------------------------------------------+"  
-
-spec: 
-	sed "s/^Version:.*/Version: $(RPMVERSION)/g" redhat/asterisk.spec > asterisk.spec ; \
-
-rpm: __rpm
-
-__rpm: include/asterisk/version.h include/asterisk/buildopts.h spec
-	rm -rf /tmp/asterisk ; \
-	mkdir -p /tmp/asterisk/redhat/RPMS/i386 ; \
-	$(MAKE) DESTDIR=/tmp/asterisk install ; \
-	$(MAKE) DESTDIR=/tmp/asterisk samples ; \
-	mkdir -p /tmp/asterisk/etc/rc.d/init.d ; \
-	cp -f contrib/init.d/rc.redhat.asterisk /tmp/asterisk/etc/rc.d/init.d/asterisk ; \
-	rpmbuild --rcfile /usr/lib/rpm/rpmrc:redhat/rpmrc -bb asterisk.spec
 
 progdocs:
 	(cat contrib/asterisk-ng-doxygen; echo "HAVE_DOT=$(HAVEDOT)"; \
@@ -748,10 +741,10 @@ menuconfig: menuselect
 gmenuconfig: gmenuselect
 
 menuselect: menuselect/menuselect menuselect-tree
-	-@menuselect/menuselect $(GLOBAL_MAKEOPTS) $(USER_MAKEOPTS) menuselect.makeopts && (echo "menuselect changes saved!"; rm -f channels/h323/Makefile.ast main/asterisk) || echo "menuselect changes NOT saved!"
+	-@menuselect/menuselect menuselect.makeopts $(GLOBAL_MAKEOPTS) $(USER_MAKEOPTS) && (echo "menuselect changes saved!"; rm -f channels/h323/Makefile.ast main/asterisk) || echo "menuselect changes NOT saved!"
 
 gmenuselect: menuselect/gmenuselect menuselect-tree
-	-@menuselect/gmenuselect $(GLOBAL_MAKEOPTS) $(USER_MAKEOPTS) menuselect.makeopts && (echo "menuselect changes saved!"; rm -f channels/h323/Makefile.ast main/asterisk) || echo "menuselect changes NOT saved!"
+	-@menuselect/gmenuselect menuselect.makeopts $(GLOBAL_MAKEOPTS) $(USER_MAKEOPTS) && (echo "menuselect changes saved!"; rm -f channels/h323/Makefile.ast main/asterisk) || echo "menuselect changes NOT saved!"
 
 menuselect/menuselect: makeopts menuselect/menuselect.c menuselect/menuselect_curses.c menuselect/menuselect_stub.c menuselect/menuselect.h menuselect/linkedlists.h makeopts
 	@CC="$(HOST_CC)" LD="" AR="" RANLIB="" CFLAGS="" $(MAKE) -C menuselect CONFIGURE_SILENT="--silent"
@@ -774,4 +767,6 @@ menuselect-tree: $(foreach dir,$(filter-out main,$(MOD_SUBDIRS)),$(wildcard $(di
 	@cat sounds/sounds.xml >> $@
 	@echo "</menu>" >> $@
 
-.PHONY: menuselect main sounds clean dist-clean distclean all prereqs cleantest uninstall _uninstall uninstall-all dont-optimize $(SUBDIRS_INSTALL) $(SUBDIRS_DIST_CLEAN) $(SUBDIRS_CLEAN) $(SUBDIRS_UNINSTALL) $(SUBDIRS) $(MOD_SUBDIRS_EMBED_LDSCRIPT) $(MOD_SUBDIRS_EMBED_LDFLAGS) $(MOD_SUBDIRS_EMBED_LIBS) badshell menuselect.makeopts include/asterisk/version.h installdirs
+.PHONY: menuselect main sounds clean dist-clean distclean all prereqs cleantest uninstall _uninstall uninstall-all dont-optimize $(SUBDIRS_INSTALL) $(SUBDIRS_DIST_CLEAN) $(SUBDIRS_CLEAN) $(SUBDIRS_UNINSTALL) $(SUBDIRS) $(MOD_SUBDIRS_EMBED_LDSCRIPT) $(MOD_SUBDIRS_EMBED_LDFLAGS) $(MOD_SUBDIRS_EMBED_LIBS) badshell menuselect.makeopts installdirs _clean
+
+FORCE:

@@ -125,7 +125,11 @@ static inline struct astobj2 *INTERNAL_OBJ(void *user_data)
  */
 #define EXTERNAL_OBJ(_p)	((_p) == NULL ? NULL : (_p)->user_data)
 
+#ifndef DEBUG_THREADS
 int ao2_lock(void *user_data)
+#else
+int _ao2_lock(void *user_data, const char *file, const char *func, int line, const char *var)
+#endif
 {
 	struct astobj2 *p = INTERNAL_OBJ(user_data);
 
@@ -136,10 +140,45 @@ int ao2_lock(void *user_data)
 	ast_atomic_fetchadd_int(&ao2.total_locked, 1);
 #endif
 
+#ifndef DEBUG_THREADS
 	return ast_mutex_lock(&p->priv_data.lock);
+#else
+	return __ast_pthread_mutex_lock(file, line, func, var, &p->priv_data.lock);
+#endif
 }
 
+#ifndef DEBUG_THREADS
+int ao2_trylock(void *user_data)
+#else
+int _ao2_trylock(void *user_data, const char *file, const char *func, int line, const char *var)
+#endif
+{
+	struct astobj2 *p = INTERNAL_OBJ(user_data);
+	int res;
+
+	if (p == NULL)
+		return -1;
+
+#ifndef DEBUG_THREADS
+	res = ast_mutex_trylock(&p->priv_data.lock);
+#else
+	res = __ast_pthread_mutex_trylock(file, line, func, var, &p->priv_data.lock);
+#endif
+
+#ifdef AO2_DEBUG
+	if (!res) {
+		ast_atomic_fetchadd_int(&ao2.total_locked, 1);
+	}
+#endif
+
+	return res;
+}
+
+#ifndef DEBUG_THREADS
 int ao2_unlock(void *user_data)
+#else
+int _ao2_unlock(void *user_data, const char *file, const char *func, int line, const char *var)
+#endif
 {
 	struct astobj2 *p = INTERNAL_OBJ(user_data);
 
@@ -150,7 +189,11 @@ int ao2_unlock(void *user_data)
 	ast_atomic_fetchadd_int(&ao2.total_locked, -1);
 #endif
 
+#ifndef DEBUG_THREADS
 	return ast_mutex_unlock(&p->priv_data.lock);
+#else
+	return __ast_pthread_mutex_unlock(file, line, func, var, &p->priv_data.lock);
+#endif
 }
 
 /*
@@ -291,7 +334,7 @@ static int hash_zero(const void *user_obj, const int flags)
  * A container is just an object, after all!
  */
 struct ao2_container *
-ao2_container_alloc(const uint n_buckets, ao2_hash_fn hash_fn,
+ao2_container_alloc(const unsigned int n_buckets, ao2_hash_fn hash_fn,
 		ao2_callback_fn cmp_fn)
 {
 	/* XXX maybe consistency check on arguments ? */
@@ -599,8 +642,17 @@ static int cd_cb(void *obj, void *arg, int flag)
 static void container_destruct(void *_c)
 {
 	struct ao2_container *c = _c;
+	int i;
 
 	ao2_callback(c, OBJ_UNLINK, cd_cb, NULL);
+
+	for (i = 0; i < c->n_buckets; i++) {
+		struct bucket_list *cur;
+
+		while ((cur = AST_LIST_REMOVE_HEAD(&c->buckets[i], entry))) {
+			ast_free(cur);
+		}
+	}
 
 #ifdef AO2_DEBUG
 	ast_atomic_fetchadd_int(&ao2.total_containers, -1);

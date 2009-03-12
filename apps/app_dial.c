@@ -126,15 +126,19 @@ static char *descrip =
 "           Optionally, an extension, or extension and context may be specified. \n"
 "           Otherwise, the current extension is used. You cannot use any additional\n"
 "           action post answer options in conjunction with this option.\n" 
-"    h    - Allow the called party to hang up by sending the '*' DTMF digit.\n"
-"    H    - Allow the calling party to hang up by hitting the '*' DTMF digit.\n"
+"    h    - Allow the called party to hang up by sending the '*' DTMF digit, or\n"
+"           whatever sequence was defined in the featuremap section for\n"
+"           'disconnect' in features.conf\n"
+"    H    - Allow the calling party to hang up by hitting the '*' DTMF digit, or\n"
+"           whatever sequence was defined in the featuremap section for\n"
+"           'disconnect' in features.conf\n"
 "    i    - Asterisk will ignore any forwarding requests it may receive on this\n"
 "           dial attempt.\n"
 "    j    - Jump to priority n+101 if all of the requested channels were busy.\n"
 "    k    - Allow the called party to enable parking of the call by sending\n"
-"           the DTMF sequence defined for call parking in features.conf.\n"
+"           the DTMF sequence defined for call parking in the featuremap section of features.conf.\n"
 "    K    - Allow the calling party to enable parking of the call by sending\n"
-"           the DTMF sequence defined for call parking in features.conf.\n"
+"           the DTMF sequence defined for call parking in the featuremap section of features.conf.\n"
 "    L(x[:y][:z]) - Limit the call to 'x' ms. Play a warning when 'y' ms are\n"
 "           left. Repeat the warning every 'z' ms. The following special\n"
 "           variables can be used with this option:\n"
@@ -195,13 +199,17 @@ static char *descrip =
 "    S(x) - Hang up the call after 'x' seconds *after* the called party has\n"
 "           answered the call.\n"  	
 "    t    - Allow the called party to transfer the calling party by sending the\n"
-"           DTMF sequence defined in features.conf.\n"
+"           DTMF sequence defined in the blindxfer setting in the featuremap section\n"
+"           of features.conf.\n"
 "    T    - Allow the calling party to transfer the called party by sending the\n"
-"           DTMF sequence defined in features.conf.\n"
+"           DTMF sequence defined in the blindxfer setting in the featuremap section\n"
+"           of features.conf.\n"
 "    w    - Allow the called party to enable recording of the call by sending\n"
-"           the DTMF sequence defined for one-touch recording in features.conf.\n"
+"           the DTMF sequence defined in the automon setting in the featuremap section\n"
+"           of features.conf.\n"
 "    W    - Allow the calling party to enable recording of the call by sending\n"
-"           the DTMF sequence defined for one-touch recording in features.conf.\n";
+"           the DTMF sequence defined in the automon setting in the featuremap section\n"
+"           of features.conf.\n";
 
 /* RetryDial App by Anthony Minessale II <anthmct@yahoo.com> Jan/2005 */
 static char *rapp = "RetryDial";
@@ -210,7 +218,7 @@ static char *rdescrip =
 "  RetryDial(announce|sleep|retries|dialargs): This application will attempt to\n"
 "place a call using the normal Dial application. If no channel can be reached,\n"
 "the 'announce' file will be played. Then, it will wait 'sleep' number of\n"
-"seconds before retying the call. After 'retires' number of attempts, the\n"
+"seconds before retrying the call. After 'retries' number of attempts, the\n"
 "calling channel will continue at the next priority in the dialplan. If the\n"
 "'retries' setting is set to 0, this application will retry endlessly.\n"
 "  While waiting to retry a call, a 1 digit extension may be dialed. If that\n"
@@ -298,9 +306,10 @@ AST_APP_OPTIONS(dial_exec_options, {
 	AST_APP_OPTION('W', OPT_CALLER_MONITOR),
 });
 
-#define CAN_EARLY_BRIDGE(flags) (!ast_test_flag(flags, OPT_CALLEE_HANGUP | \
+#define CAN_EARLY_BRIDGE(flags,chan,peer) (!ast_test_flag(flags, OPT_CALLEE_HANGUP | \
 	OPT_CALLER_HANGUP | OPT_CALLEE_TRANSFER | OPT_CALLER_TRANSFER | \
-	OPT_CALLEE_MONITOR | OPT_CALLER_MONITOR | OPT_CALLEE_PARK | OPT_CALLER_PARK))
+	OPT_CALLEE_MONITOR | OPT_CALLER_MONITOR | OPT_CALLEE_PARK | OPT_CALLER_PARK) && \
+	!chan->audiohooks && !peer->audiohooks)
 
 /* We define a custom "local user" structure because we
    use it not only for keeping track of what is in use but
@@ -341,6 +350,7 @@ static void hanguptree(struct dial_localuser *outgoing, struct ast_channel *exce
 			ast_cdr_failed(chan->cdr); \
 		numcongestion++; \
 		break; \
+	case AST_CAUSE_NO_ROUTE_DESTINATION: \
 	case AST_CAUSE_UNREGISTERED: \
 		if (chan->cdr) \
 			ast_cdr_failed(chan->cdr); \
@@ -554,6 +564,9 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in, struct dial_l
 							ast_set_callerid(c, S_OR(in->macroexten, in->exten), get_cid_name(cidname, sizeof(cidname), in), NULL);
 						}
 					}
+					if (single) {
+						ast_indicate(in, -1);
+					}
 				}
 				/* Hangup the original channel now, in case we needed it */
 				ast_hangup(winner);
@@ -576,6 +589,10 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in, struct dial_l
 						if (option_verbose > 2)
 							ast_verbose( VERBOSE_PREFIX_3 "%s answered %s\n", c->name, in->name);
 						peer = c;
+						if (peer->cdr) {
+							peer->cdr->answer = ast_tvnow();
+							peer->cdr->disposition = AST_CDR_ANSWERED;
+						}
 						ast_copy_flags(peerflags, o,
 							       OPT_CALLEE_TRANSFER | OPT_CALLER_TRANSFER |
 							       OPT_CALLEE_HANGUP | OPT_CALLER_HANGUP |
@@ -585,7 +602,7 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in, struct dial_l
 						ast_copy_string(c->dialcontext, "", sizeof(c->dialcontext));
 						ast_copy_string(c->exten, "", sizeof(c->exten));
 						/* Setup RTP early bridge if appropriate */
-						if (CAN_EARLY_BRIDGE(peerflags))
+						if (CAN_EARLY_BRIDGE(peerflags, in, peer))
 							ast_rtp_early_bridge(in, peer);
 					}
 					/* If call has been answered, then the eventual hangup is likely to be normal hangup */
@@ -614,7 +631,7 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in, struct dial_l
 					if (option_verbose > 2)
 						ast_verbose(VERBOSE_PREFIX_3 "%s is ringing\n", c->name);
 					/* Setup early media if appropriate */
-					if (single && CAN_EARLY_BRIDGE(peerflags))
+					if (single && CAN_EARLY_BRIDGE(peerflags, in, c))
 						ast_rtp_early_bridge(in, c);
 					if (!(*sentringing) && !ast_test_flag(outgoing, OPT_MUSICBACK)) {
 						ast_indicate(in, AST_CONTROL_RINGING);
@@ -625,7 +642,7 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in, struct dial_l
 					if (option_verbose > 2)
 						ast_verbose (VERBOSE_PREFIX_3 "%s is making progress passing it to %s\n", c->name, in->name);
 					/* Setup early media if appropriate */
-					if (single && CAN_EARLY_BRIDGE(peerflags))
+					if (single && CAN_EARLY_BRIDGE(peerflags, in, c))
 						ast_rtp_early_bridge(in, c);
 					if (!ast_test_flag(outgoing, OPT_RINGBACK))
 						ast_indicate(in, AST_CONTROL_PROGRESS);
@@ -643,7 +660,7 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in, struct dial_l
 				case AST_CONTROL_PROCEEDING:
 					if (option_verbose > 2)
 						ast_verbose (VERBOSE_PREFIX_3 "%s is proceeding passing it to %s\n", c->name, in->name);
-					if (single && CAN_EARLY_BRIDGE(peerflags))
+					if (single && CAN_EARLY_BRIDGE(peerflags, in, c))
 						ast_rtp_early_bridge(in, c);
 					if (!ast_test_flag(outgoing, OPT_RINGBACK))
 						ast_indicate(in, AST_CONTROL_PROCEEDING);
@@ -789,6 +806,64 @@ static int valid_priv_reply(struct ast_flags *opts, int res)
 	return 0;
 }
 
+static void set_dial_features(struct ast_flags *opts, struct ast_dial_features *features)
+{
+	struct ast_flags perm_opts = {.flags = 0};
+
+	ast_copy_flags(&perm_opts, opts,
+		OPT_CALLER_TRANSFER | OPT_CALLER_PARK | OPT_CALLER_MONITOR | OPT_CALLER_HANGUP |
+		OPT_CALLEE_TRANSFER | OPT_CALLEE_PARK | OPT_CALLEE_MONITOR | OPT_CALLEE_HANGUP);
+
+	memset(features->options, 0, sizeof(features->options));
+
+	ast_app_options2str(dial_exec_options, &perm_opts, features->options, sizeof(features->options));
+	if (ast_test_flag(&perm_opts, OPT_CALLEE_TRANSFER))
+		ast_set_flag(&(features->features_callee), AST_FEATURE_REDIRECT);
+	if (ast_test_flag(&perm_opts, OPT_CALLER_TRANSFER))
+		ast_set_flag(&(features->features_caller), AST_FEATURE_REDIRECT);
+	if (ast_test_flag(&perm_opts, OPT_CALLEE_HANGUP))
+		ast_set_flag(&(features->features_callee), AST_FEATURE_DISCONNECT);
+	if (ast_test_flag(&perm_opts, OPT_CALLER_HANGUP))
+		ast_set_flag(&(features->features_caller), AST_FEATURE_DISCONNECT);
+	if (ast_test_flag(&perm_opts, OPT_CALLEE_MONITOR))
+		ast_set_flag(&(features->features_callee), AST_FEATURE_AUTOMON);
+	if (ast_test_flag(&perm_opts, OPT_CALLER_MONITOR))
+		ast_set_flag(&(features->features_caller), AST_FEATURE_AUTOMON);
+	if (ast_test_flag(&perm_opts, OPT_CALLEE_PARK))
+		ast_set_flag(&(features->features_callee), AST_FEATURE_PARKCALL);
+	if (ast_test_flag(&perm_opts, OPT_CALLER_PARK))
+		ast_set_flag(&(features->features_caller), AST_FEATURE_PARKCALL);
+}
+
+static void end_bridge_callback (void *data)
+{
+	char buf[80];
+	time_t end;
+	struct ast_channel *chan = data;
+
+	if (!chan->cdr) {
+		return;
+	}
+
+	time(&end);
+
+	ast_channel_lock(chan);
+	if (chan->cdr->answer.tv_sec) {
+		snprintf(buf, sizeof(buf), "%ld", end - chan->cdr->answer.tv_sec);
+		pbx_builtin_setvar_helper(chan, "ANSWEREDTIME", buf);
+	}
+
+	if (chan->cdr->start.tv_sec) {
+		snprintf(buf, sizeof(buf), "%ld", end - chan->cdr->start.tv_sec);
+		pbx_builtin_setvar_helper(chan, "DIALEDTIME", buf);
+	}
+	ast_channel_unlock(chan);
+}
+
+static void end_bridge_callback_data_fixup(struct ast_bridge_config *bconfig, struct ast_channel *originator, struct ast_channel *terminator) {
+	bconfig->end_bridge_callback_data = originator;
+}
+
 static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags *peerflags, int *continue_exec)
 {
 	int res = -1;
@@ -804,7 +879,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 	char numsubst[256];
 	char cidname[AST_MAX_EXTENSION] = "";
 	int privdb_val = 0;
-	unsigned int calldurationlimit = 0;
+	int calldurationlimit = -1;
 	long timelimit = 0;
 	long play_warning = 0;
 	long warning_freq = 0;
@@ -831,6 +906,9 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 	struct ast_flags opts = { 0, };
 	char *opt_args[OPT_ARG_ARRAY_SIZE];
 	struct ast_datastore *datastore = NULL;
+	struct ast_datastore *ds_caller_features = NULL;
+	struct ast_datastore *ds_callee_features = NULL;
+	struct ast_dial_features *caller_features;
 	int fulldial = 0, num_dialed = 0;
 
 	if (ast_strlen_zero(data)) {
@@ -838,6 +916,13 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		pbx_builtin_setvar_helper(chan, "DIALSTATUS", status);
 		return -1;
 	}
+
+	/* Reset all DIAL variables back to blank, to prevent confusion (in case we don't reset all of them). */
+	pbx_builtin_setvar_helper(chan, "DIALSTATUS", "");
+	pbx_builtin_setvar_helper(chan, "DIALEDPEERNUMBER", "");
+	pbx_builtin_setvar_helper(chan, "DIALEDPEERNAME", "");
+	pbx_builtin_setvar_helper(chan, "ANSWEREDTIME", "");
+	pbx_builtin_setvar_helper(chan, "DIALEDTIME", "");
 
 	u = ast_module_user_add(chan);
 
@@ -935,7 +1020,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		start_sound = S_OR(var, NULL);	/* XXX not much of a point in doing this! */
 
 		/* undo effect of S(x) in case they are both used */
-		calldurationlimit = 0;
+		calldurationlimit = -1;
 		/* more efficient to do it like S(x) does since no advanced opts */
 		if (!play_warning && !start_sound && !end_sound && timelimit) {
 			calldurationlimit = timelimit / 1000;
@@ -1086,6 +1171,26 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 	}
 	    
 	ast_copy_flags(peerflags, &opts, OPT_DTMF_EXIT | OPT_GO_ON | OPT_ORIGINAL_CLID | OPT_CALLER_HANGUP | OPT_IGNORE_FORWARDING);
+
+	/* Create datastore for channel dial features for caller */
+	if (!(ds_caller_features = ast_channel_datastore_alloc(&dial_features_info, NULL))) {
+		ast_log(LOG_WARNING, "Unable to create channel datastore for dial features. Aborting!\n");
+		goto out;
+	}
+
+	if (!(caller_features = ast_calloc(1, sizeof(*caller_features)))) {
+		ast_log(LOG_WARNING, "Unable to allocate memory for feature flags. Aborting!\n");
+		goto out;
+	}
+
+	ast_channel_lock(chan);
+	caller_features->is_caller = 1;
+	set_dial_features(&opts, caller_features);
+	ds_caller_features->inheritance = -1;
+	ds_caller_features->data = caller_features;
+	ast_channel_datastore_add(chan, ds_caller_features);
+	ast_channel_unlock(chan);
+
 	/* loop through the list of dial destinations */
 	rest = args.peers;
 	while ((cur = strsep(&rest, "&")) ) {
@@ -1096,6 +1201,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		char *tech = strsep(&number, "/");
 		/* find if we already dialed this interface */
 		struct ast_dialed_interface *di;
+		struct ast_dial_features *callee_features;
 		AST_LIST_HEAD(, ast_dialed_interface) *dialed_interfaces;
 		num_dialed++;
 		if (!number) {
@@ -1245,6 +1351,27 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		else
 			ast_copy_string(tmp->chan->exten, chan->exten, sizeof(tmp->chan->exten));
 
+		/* Save callee features */
+		if (!(ds_callee_features = ast_channel_datastore_alloc(&dial_features_info, NULL))) {
+			ast_log(LOG_WARNING, "Unable to create channel datastore for dial features. Aborting!\n");
+			ast_free(tmp);
+			goto out;
+		}
+
+		if (!(callee_features = ast_calloc(1, sizeof(*callee_features)))) {
+			ast_log(LOG_WARNING, "Unable to allocate memory for feature flags. Aborting!\n");
+			ast_free(tmp);
+			goto out;
+		}
+
+		ast_channel_lock(tmp->chan);
+		callee_features->is_caller = 0;
+		set_dial_features(&opts, callee_features);
+		ds_callee_features->inheritance = -1;
+		ds_callee_features->data = callee_features;
+		ast_channel_datastore_add(tmp->chan, ds_callee_features);
+		ast_channel_unlock(tmp->chan);
+
 		/* Place the call, but don't wait on the answer */
 		res = ast_call(tmp->chan, numsubst, 0);
 
@@ -1259,6 +1386,9 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 				ast_log(LOG_DEBUG, "ast call on peer returned %d\n", res);
 			if (option_verbose > 2)
 				ast_verbose(VERBOSE_PREFIX_3 "Couldn't call %s\n", numsubst);
+			if (tmp->chan->hangupcause) {
+				chan->hangupcause = tmp->chan->hangupcause;
+			}
 			ast_hangup(tmp->chan);
 			tmp->chan = NULL;
 			free(tmp);
@@ -1339,9 +1469,9 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		/* almost done, although the 'else' block is 400 lines */
 	} else {
 		const char *number;
-		time_t end_time, answer_time = time(NULL);
 
 		strcpy(status, "ANSWER");
+		pbx_builtin_setvar_helper(chan, "DIALSTATUS", status);
 		/* Ah ha!  Someone answered within the desired timeframe.  Of course after this
 		   we will always return with -1 so that it is hung up properly after the 
 		   conversation.  */
@@ -1624,6 +1754,9 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		if (!res) {
 			if (calldurationlimit > 0) {
 				peer->whentohangup = time(NULL) + calldurationlimit;
+			} else if (calldurationlimit != -1 && timelimit > 0) {
+				/* Not enough granularity to make it less, but we can't use the special value 0 */
+				peer->whentohangup = time(NULL) + 1;
 			}
 			if (!ast_strlen_zero(dtmfcalled)) { 
 				if (option_verbose > 2)
@@ -1636,7 +1769,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 				res = ast_dtmf_stream(chan,peer,dtmfcalling,250);
 			}
 		}
-		
+
 		if (!res) {
 			struct ast_bridge_config config;
 
@@ -1661,6 +1794,8 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 				ast_set_flag(&(config.features_callee), AST_FEATURE_PARKCALL);
 			if (ast_test_flag(peerflags, OPT_CALLER_PARK))
 				ast_set_flag(&(config.features_caller), AST_FEATURE_PARKCALL);
+			if (ast_test_flag(peerflags, OPT_GO_ON))
+				ast_set_flag(&(config.features_caller), AST_FEATURE_NO_H_EXTEN);
 
 			config.timelimit = timelimit;
 			config.play_warning = play_warning;
@@ -1668,6 +1803,9 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			config.warning_sound = warning_sound;
 			config.end_sound = end_sound;
 			config.start_sound = start_sound;
+			config.end_bridge_callback = end_bridge_callback;
+			config.end_bridge_callback_data = chan;
+			config.end_bridge_callback_data_fixup = end_bridge_callback_data_fixup;
 			if (moh) {
 				moh = 0;
 				ast_moh_stop(chan);
@@ -1685,8 +1823,9 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 				res = -1;
 				goto done;
 			}
-			if (opermode && (!strncmp(chan->name,"Zap",3)) &&
-				(!strncmp(peer->name,"Zap",3)))
+			if (opermode && 
+				(((!strncasecmp(chan->name,"Zap",3)) && (!strncasecmp(peer->name,"Zap",3))) ||
+				 ((!strncasecmp(chan->name,"Dahdi",5)) && (!strncasecmp(peer->name,"Dahdi",5)))))
 			{
 				struct oprmode oprmode;
 
@@ -1697,27 +1836,13 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 					AST_OPTION_OPRMODE,&oprmode,sizeof(struct oprmode),0);
 			}
 			res = ast_bridge_call(chan,peer,&config);
-			time(&end_time);
-			{
-				char toast[80];
-				snprintf(toast, sizeof(toast), "%ld", (long)(end_time - answer_time));
-				pbx_builtin_setvar_helper(chan, "ANSWEREDTIME", toast);
-			}
 		} else {
-			time(&end_time);
 			res = -1;
 		}
-		{
-			char toast[80];
-			snprintf(toast, sizeof(toast), "%ld", (long)(end_time - start_time));
-			pbx_builtin_setvar_helper(chan, "DIALEDTIME", toast);
-		}
-		
-		if (res != AST_PBX_NO_HANGUP_PEER) {
-			if (!chan->_softhangup)
-				chan->hangupcause = peer->hangupcause;
-			ast_hangup(peer);
-		}
+
+		if (!chan->_softhangup)
+			chan->hangupcause = peer->hangupcause;
+		ast_hangup(peer);
 	}	
 out:
 	if (moh) {
@@ -1733,12 +1858,11 @@ out:
 	if (option_debug)
 		ast_log(LOG_DEBUG, "Exiting with DIALSTATUS=%s.\n", status);
 	
-	if ((ast_test_flag(peerflags, OPT_GO_ON)) && (!chan->_softhangup) && (res != AST_PBX_KEEPALIVE)) {
+	if (ast_test_flag(peerflags, OPT_GO_ON) && !chan->_softhangup) {
 		if (calldurationlimit)
 			chan->whentohangup = 0;
 		res = 0;
 	}
-
 done:
 	ast_module_user_remove(u);    
 	return res;

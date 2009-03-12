@@ -24,12 +24,16 @@
 #ifndef _AST_FEATURES_H
 #define _AST_FEATURES_H
 
+#include "asterisk/linkedlists.h"
+
 #define FEATURE_MAX_LEN		11
 #define FEATURE_APP_LEN		64
 #define FEATURE_APP_ARGS_LEN	256
 #define FEATURE_SNAME_LEN	32
 #define FEATURE_EXTEN_LEN	32
 #define FEATURE_MOH_LEN		80  /* same as MAX_MUSICCLASS from channel.h */
+
+#define PARK_APP_NAME "Park"
 
 /*! \brief main call feature structure */
 struct ast_call_feature {

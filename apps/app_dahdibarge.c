@@ -32,7 +32,7 @@
  */
 
 /*** MODULEINFO
-	<depend>zaptel</depend>
+	<depend>dahdi</depend>
  ***/
 
 #include "asterisk.h"
@@ -45,7 +45,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <unistd.h>
 #include <errno.h>
 #include <sys/ioctl.h>
-#include <zaptel/zaptel.h>
 
 #include "asterisk/lock.h"
 #include "asterisk/file.h"
@@ -60,16 +59,25 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/say.h"
 #include "asterisk/utils.h"
 
-static char *app = "ZapBarge";
+#include "asterisk/dahdi_compat.h"
 
-static char *synopsis = "Barge in (monitor) Zap channel";
+static char *dahdi_app = "DAHDIBarge";
+static char *zap_app = "ZapBarge";
 
-static char *descrip = 
-"  ZapBarge([channel]): Barges in on a specified zap\n"
+static char *dahdi_synopsis = "Barge in (monitor) DAHDI channel";
+static char *zap_synopsis = "Barge in (monitor) Zap channel";
+
+static char *dahdi_descrip = 
+"  DAHDIBarge([channel]): Barges in on a specified DAHDI\n"
 "channel or prompts if one is not specified.  Returns\n"
 "-1 when caller user hangs up and is independent of the\n"
 "state of the channel being monitored.";
 
+static char *zap_descrip = 
+"  ZapBarge([channel]): Barges in on a specified Zaptel\n"
+"channel or prompts if one is not specified.  Returns\n"
+"-1 when caller user hangs up and is independent of the\n"
+"state of the channel being monitored.";
 
 #define CONF_SIZE 160
 
@@ -94,7 +102,7 @@ static int careful_write(int fd, unsigned char *data, int len)
 static int conf_run(struct ast_channel *chan, int confno, int confflags)
 {
 	int fd;
-	struct zt_confinfo ztc;
+	struct dahdi_confinfo ztc;
 	struct ast_frame *f;
 	struct ast_channel *c;
 	struct ast_frame fr;
@@ -106,8 +114,7 @@ static int conf_run(struct ast_channel *chan, int confno, int confflags)
 	int retryzap;
 	int origfd;
 	int ret = -1;
-
-	ZT_BUFFERINFO bi;
+	struct dahdi_bufferinfo bi;
 	char __buf[CONF_SIZE + AST_FRIENDLY_OFFSET];
 	char *buf = __buf + AST_FRIENDLY_OFFSET;
 
@@ -123,11 +130,11 @@ static int conf_run(struct ast_channel *chan, int confno, int confflags)
 		goto outrun;
 	}
 	ast_indicate(chan, -1);
-	retryzap = strcasecmp(chan->tech->type, "Zap");
+	retryzap = strcasecmp(chan->tech->type, dahdi_chan_name);
 zapretry:
 	origfd = chan->fds[0];
 	if (retryzap) {
-		fd = open("/dev/zap/pseudo", O_RDWR);
+		fd = open(DAHDI_FILE_PSEUDO, O_RDWR);
 		if (fd < 0) {
 			ast_log(LOG_WARNING, "Unable to open pseudo channel: %s\n", strerror(errno));
 			goto outrun;
@@ -147,10 +154,10 @@ zapretry:
 		/* Setup buffering information */
 		memset(&bi, 0, sizeof(bi));
 		bi.bufsize = CONF_SIZE;
-		bi.txbufpolicy = ZT_POLICY_IMMEDIATE;
-		bi.rxbufpolicy = ZT_POLICY_IMMEDIATE;
+		bi.txbufpolicy = DAHDI_POLICY_IMMEDIATE;
+		bi.rxbufpolicy = DAHDI_POLICY_IMMEDIATE;
 		bi.numbufs = 4;
-		if (ioctl(fd, ZT_SET_BUFINFO, &bi)) {
+		if (ioctl(fd, DAHDI_SET_BUFINFO, &bi)) {
 			ast_log(LOG_WARNING, "Unable to set buffering information: %s\n", strerror(errno));
 			close(fd);
 			goto outrun;
@@ -164,7 +171,7 @@ zapretry:
 	memset(&ztc, 0, sizeof(ztc));
 	/* Check to see if we're in a conference... */
 	ztc.chan = 0;	
-	if (ioctl(fd, ZT_GETCONF, &ztc)) {
+	if (ioctl(fd, DAHDI_GETCONF, &ztc)) {
 		ast_log(LOG_WARNING, "Error getting conference\n");
 		close(fd);
 		goto outrun;
@@ -172,7 +179,7 @@ zapretry:
 	if (ztc.confmode) {
 		/* Whoa, already in a conference...  Retry... */
 		if (!retryzap) {
-			ast_log(LOG_DEBUG, "Zap channel is in a conference already, retrying with pseudo\n");
+			ast_log(LOG_DEBUG, "Channel is in a conference already, retrying with pseudo\n");
 			retryzap = 1;
 			goto zapretry;
 		}
@@ -181,14 +188,14 @@ zapretry:
 	/* Add us to the conference */
 	ztc.chan = 0;	
 	ztc.confno = confno;
-	ztc.confmode = ZT_CONF_MONITORBOTH;
+	ztc.confmode = DAHDI_CONF_MONITORBOTH;
 
-	if (ioctl(fd, ZT_SETCONF, &ztc)) {
+	if (ioctl(fd, DAHDI_SETCONF, &ztc)) {
 		ast_log(LOG_WARNING, "Error setting conference\n");
 		close(fd);
 		goto outrun;
 	}
-	ast_log(LOG_DEBUG, "Placed channel %s in ZAP channel %d monitor\n", chan->name, confno);
+	ast_log(LOG_DEBUG, "Placed channel %s in channel %d monitor\n", chan->name, confno);
 
 	for(;;) {
 		outfd = -1;
@@ -247,7 +254,7 @@ zapretry:
 		ztc.chan = 0;	
 		ztc.confno = 0;
 		ztc.confmode = 0;
-		if (ioctl(fd, ZT_SETCONF, &ztc)) {
+		if (ioctl(fd, DAHDI_SETCONF, &ztc)) {
 			ast_log(LOG_WARNING, "Error setting conference\n");
 		}
 	}
@@ -257,7 +264,7 @@ outrun:
 	return ret;
 }
 
-static int conf_exec(struct ast_channel *chan, void *data)
+static int exec(struct ast_channel *chan, void *data, int dahdimode)
 {
 	int res=-1;
 	struct ast_module_user *u;
@@ -269,11 +276,20 @@ static int conf_exec(struct ast_channel *chan, void *data)
 	u = ast_module_user_add(chan);
 	
 	if (!ast_strlen_zero(data)) {
-		if ((sscanf(data, "Zap/%d", &confno) != 1) &&
-		    (sscanf(data, "%d", &confno) != 1)) {
-			ast_log(LOG_WARNING, "ZapBarge Argument (if specified) must be a channel number, not '%s'\n", (char *)data);
-			ast_module_user_remove(u);
-			return 0;
+		if (dahdimode) {
+			if ((sscanf(data, "DAHDI/%d", &confno) != 1) &&
+			    (sscanf(data, "%d", &confno) != 1)) {
+				ast_log(LOG_WARNING, "Argument (if specified) must be a channel number, not '%s'\n", (char *) data);
+				ast_module_user_remove(u);
+				return 0;
+			}
+		} else {
+			if ((sscanf(data, "Zap/%d", &confno) != 1) &&
+			    (sscanf(data, "%d", &confno) != 1)) {
+				ast_log(LOG_WARNING, "Argument (if specified) must be a channel number, not '%s'\n", (char *) data);
+				ast_module_user_remove(u);
+				return 0;
+			}
 		}
 	}
 	
@@ -299,20 +315,44 @@ out:
 	return res;
 }
 
-static int unload_module(void)
+static int exec_zap(struct ast_channel *chan, void *data)
 {
-	int res;
+	ast_log(LOG_WARNING, "Use of the command %s is deprecated, please use %s instead.\n", zap_app, dahdi_app);
 	
-	res = ast_unregister_application(app);
+	return exec(chan, data, 0);
+}
+
+static int exec_dahdi(struct ast_channel *chan, void *data)
+{
+	return exec(chan, data, 1);
+}
+
+static int unload_module(void) 
+{
+	int res = 0;
+
+	if (*dahdi_chan_mode == CHAN_DAHDI_PLUS_ZAP_MODE) {
+		res |= ast_unregister_application(dahdi_app);
+	}
+
+	res |= ast_unregister_application(zap_app);
 	
 	ast_module_user_hangup_all();
 
-	return res;	
+	return res;
 }
 
 static int load_module(void)
 {
-	return ast_register_application(app, conf_exec, synopsis, descrip);
+	int res = 0;
+
+	if (*dahdi_chan_mode == CHAN_DAHDI_PLUS_ZAP_MODE) {
+		res |= ast_register_application(dahdi_app, exec_dahdi, dahdi_synopsis, dahdi_descrip);
+	}
+
+	res |= ast_register_application(zap_app, exec_zap, zap_synopsis, zap_descrip);
+
+	return res;
 }
 
-AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Barge in on Zap channel application");
+AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Barge in on channel application");

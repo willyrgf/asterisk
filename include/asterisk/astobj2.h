@@ -17,6 +17,8 @@
 #ifndef _ASTERISK_ASTOBJ2_H
 #define _ASTERISK_ASTOBJ2_H
 
+#include "asterisk/compat.h"
+
 /*! \file 
  *
  * \brief Object Model implementing objects and containers.
@@ -183,7 +185,19 @@ int ao2_ref(void *o, int delta);
  * \param a A pointer to the object we want lock.
  * \return 0 on success, other values on error.
  */
+#ifndef DEBUG_THREADS
 int ao2_lock(void *a);
+#else
+#define ao2_lock(a) _ao2_lock(a, __FILE__, __PRETTY_FUNCTION__, __LINE__, #a)
+int _ao2_lock(void *a, const char *file, const char *func, int line, const char *var);
+#endif
+
+#ifndef DEBUG_THREADS
+int ao2_trylock(void *a);
+#else
+#define ao2_trylock(a) _ao2_trylock(a, __FILE__, __PRETTY_FUNCTION__, __LINE__, #a)
+int _ao2_trylock(void *a, const char *file, const char *func, int line, const char *var);
+#endif
 
 /*!
  * Unlock an object.
@@ -191,7 +205,12 @@ int ao2_lock(void *a);
  * \param a A pointer to the object we want unlock.
  * \return 0 on success, other values on error.
  */
+#ifndef DEBUG_THREADS
 int ao2_unlock(void *a);
+#else
+#define ao2_unlock(a) _ao2_unlock(a, __FILE__, __PRETTY_FUNCTION__, __LINE__, #a)
+int _ao2_unlock(void *a, const char *file, const char *func, int line, const char *var);
+#endif
 
 /*!
  *
@@ -330,7 +349,7 @@ struct ao2_container;
  *
  * destructor is set implicitly.
  */
-struct ao2_container *ao2_container_alloc(const uint n_buckets,
+struct ao2_container *ao2_container_alloc(const unsigned int n_buckets,
 		ao2_hash_fn hash_fn, ao2_callback_fn cmp_fn);
 
 /*!
@@ -527,11 +546,11 @@ struct ao2_iterator {
 	/*! current bucket */
 	int bucket;
 	/*! container version */
-	uint c_version;
+	unsigned int c_version;
 	/*! pointer to the current object */
 	void *obj;
 	/*! container version when the object was created */
-	uint version;
+	unsigned int version;
 };
 
 struct ao2_iterator ao2_iterator_init(struct ao2_container *c, int flags);

@@ -242,11 +242,11 @@ struct name {								\
 	struct type *last;						\
 	ast_mutex_t lock;						\
 } name;									\
-static void  __attribute__ ((constructor)) init_##name(void)		\
+static void  __attribute__((constructor)) init_##name(void)		\
 {									\
         AST_LIST_HEAD_INIT(&name);					\
 }									\
-static void  __attribute__ ((destructor)) fini_##name(void)		\
+static void  __attribute__((destructor)) fini_##name(void)		\
 {									\
         AST_LIST_HEAD_DESTROY(&name);					\
 }									\
@@ -277,18 +277,18 @@ struct name {								\
   This would define \c struct \c entry_list, intended to hold a list of
   type \c struct \c entry.
 */
-#ifndef AST_RWLOCK_INIT_VALUE
+#ifndef HAVE_PTHREAD_RWLOCK_INITIALIZER
 #define AST_RWLIST_HEAD_STATIC(name, type)                              \
 struct name {                                                           \
         struct type *first;                                             \
         struct type *last;                                              \
         ast_rwlock_t lock;                                              \
 } name;                                                                 \
-static void  __attribute__ ((constructor)) init_##name(void)            \
+static void  __attribute__((constructor)) init_##name(void)            \
 {                                                                       \
         AST_RWLIST_HEAD_INIT(&name);                                    \
 }                                                                       \
-static void  __attribute__ ((destructor)) fini_##name(void)             \
+static void  __attribute__((destructor)) fini_##name(void)             \
 {                                                                       \
         AST_RWLIST_HEAD_DESTROY(&name);                                 \
 }                                                                       \

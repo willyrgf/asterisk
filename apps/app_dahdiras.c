@@ -26,7 +26,7 @@
  */
 
 /*** MODULEINFO
-	<depend>zaptel</depend>
+	<depend>dahdi</depend>
  ***/
 
 #include "asterisk.h"
@@ -48,7 +48,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <errno.h>
 #include <stdio.h>
 #include <fcntl.h>
-#include <zaptel/zaptel.h>
 
 #include "asterisk/lock.h"
 #include "asterisk/file.h"
@@ -58,17 +57,27 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/module.h"
 #include "asterisk/options.h"
 
-static char *app = "ZapRAS";
+#include "asterisk/dahdi_compat.h"
 
-static char *synopsis = "Executes Zaptel ISDN RAS application";
+static char *dahdi_app = "DAHDIRAS";
+static char *zap_app = "ZapRAS";
 
-static char *descrip =
-"  ZapRAS(args): Executes a RAS server using pppd on the given channel.\n"
-"The channel must be a clear channel (i.e. PRI source) and a Zaptel\n"
-"channel to be able to use this function (No modem emulation is included).\n"
-"Your pppd must be patched to be zaptel aware. Arguments should be\n"
+static char *dahdi_synopsis = "Executes DAHDI ISDN RAS application";
+static char *zap_synopsis = "Executes Zaptel ISDN RAS application";
+
+static char *dahdi_descrip =
+"  DAHDIRAS(args): Executes a RAS server using pppd on the given channel.\n"
+"The channel must be a clear channel (i.e. PRI source) and a DAHDI\n"
+"channel to be able to use this function (no modem emulation is included).\n"
+"Your pppd must have the DAHDI plugin available. Arguments should be\n"
 "separated by | characters.\n";
 
+static char *zap_descrip =
+"  ZapRAS(args): Executes a RAS server using pppd on the given channel.\n"
+"The channel must be a clear channel (i.e. PRI source) and a Zaptel\n"
+"channel to be able to use this function (no modem emulation is included).\n"
+"Your pppd must have the Zaptel plugin available. Arguments should be\n"
+"separated by | characters.\n";
 
 #define PPP_MAX_ARGS	32
 #define PPP_EXEC	"/usr/sbin/pppd"
@@ -115,7 +124,7 @@ static pid_t spawn_ras(struct ast_channel *chan, char *args)
 	memset(argv, 0, sizeof(argv));
 
 	/* First argument is executable, followed by standard
-	   arguments for zaptel PPP */
+	   arguments for DAHDI PPP */
 	argv[argc++] = PPP_EXEC;
 	argv[argc++] = "nodetach";
 
@@ -128,7 +137,11 @@ static pid_t spawn_ras(struct ast_channel *chan, char *args)
 	}
 
 	argv[argc++] = "plugin";
+#ifdef HAVE_ZAPTEL
 	argv[argc++] = "zaptel.so";
+#else
+	argv[argc++] = "dahdi.so";
+#endif
 	argv[argc++] = "stdin";
 
 	/* Finally launch PPP */
@@ -143,10 +156,10 @@ static void run_ras(struct ast_channel *chan, char *args)
 	int status;
 	int res;
 	int signalled = 0;
-	struct zt_bufferinfo savebi;
+	struct dahdi_bufferinfo savebi;
 	int x;
 	
-	res = ioctl(chan->fds[0], ZT_GET_BUFINFO, &savebi);
+	res = ioctl(chan->fds[0], DAHDI_GET_BUFINFO, &savebi);
 	if(res) {
 		ast_log(LOG_WARNING, "Unable to check buffer policy on channel %s\n", chan->name);
 		return;
@@ -184,10 +197,10 @@ static void run_ras(struct ast_channel *chan, char *args)
 			}
 			/* Throw back into audio mode */
 			x = 1;
-			ioctl(chan->fds[0], ZT_AUDIOMODE, &x);
+			ioctl(chan->fds[0], DAHDI_AUDIOMODE, &x);
 
 			/* Restore saved values */
-			res = ioctl(chan->fds[0], ZT_SET_BUFINFO, &savebi);
+			res = ioctl(chan->fds[0], DAHDI_SET_BUFINFO, &savebi);
 			if (res < 0) {
 				ast_log(LOG_WARNING, "Unable to set buffer policy on channel %s\n", chan->name);
 			}
@@ -196,12 +209,12 @@ static void run_ras(struct ast_channel *chan, char *args)
 	}
 }
 
-static int zapras_exec(struct ast_channel *chan, void *data)
+static int exec(struct ast_channel *chan, void *data)
 {
 	int res=-1;
 	char *args;
 	struct ast_module_user *u;
-	ZT_PARAMS ztp;
+	struct dahdi_params ztp;
 
 	if (!data) 
 		data = "";
@@ -213,17 +226,15 @@ static int zapras_exec(struct ast_channel *chan, void *data)
 	/* Answer the channel if it's not up */
 	if (chan->_state != AST_STATE_UP)
 		ast_answer(chan);
-	if (strcasecmp(chan->tech->type, "Zap")) {
-		/* If it's not a zap channel, we're done.  Wait a couple of
-		   seconds and then hangup... */
+	if (strcasecmp(chan->tech->type, dahdi_chan_name)) {
 		if (option_verbose > 1)
-			ast_verbose(VERBOSE_PREFIX_2 "Channel %s is not a Zap channel\n", chan->name);
+			ast_verbose(VERBOSE_PREFIX_2 "Channel %s is not a %s channel\n", chan->name, dahdi_chan_name);
 		sleep(2);
 	} else {
 		memset(&ztp, 0, sizeof(ztp));
-		if (ioctl(chan->fds[0], ZT_GET_PARAMS, &ztp)) {
-			ast_log(LOG_WARNING, "Unable to get zaptel parameters\n");
-		} else if (ztp.sigtype != ZT_SIG_CLEAR) {
+		if (ioctl(chan->fds[0], DAHDI_GET_PARAMS, &ztp)) {
+			ast_log(LOG_WARNING, "Unable to get parameters\n");
+		} else if (ztp.sigtype != DAHDI_SIG_CLEAR) {
 			if (option_verbose > 1)
 				ast_verbose(VERBOSE_PREFIX_2 "Channel %s is not a clear channel\n", chan->name);
 		} else {
@@ -238,11 +249,22 @@ static int zapras_exec(struct ast_channel *chan, void *data)
 	return res;
 }
 
+static int exec_warn(struct ast_channel *chan, void *data)
+{
+	ast_log(LOG_WARNING, "Use of the command %s is deprecated, please use %s instead.\n", zap_app, dahdi_app);
+
+	return exec(chan, data);
+}
+
 static int unload_module(void) 
 {
-	int res;
+	int res = 0;
 
-	res = ast_unregister_application(app);
+	if (*dahdi_chan_mode == CHAN_DAHDI_PLUS_ZAP_MODE) {
+		res |= ast_unregister_application(dahdi_app);
+	}
+
+	res |= ast_unregister_application(zap_app);
 	
 	ast_module_user_hangup_all();
 
@@ -251,8 +273,16 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	return ast_register_application(app, zapras_exec, synopsis, descrip);
+	int res = 0;
+
+	if (*dahdi_chan_mode == CHAN_DAHDI_PLUS_ZAP_MODE) {
+		res |= ast_register_application(dahdi_app, exec, dahdi_synopsis, dahdi_descrip);
+	}
+
+	res |= ast_register_application(zap_app, exec_warn, zap_synopsis, zap_descrip);
+
+	return res;
 }
 
-AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Zap RAS Application");
+AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "DAHDI RAS Application");
 

@@ -855,8 +855,7 @@ struct ast_frame *ast_rtcp_read(struct ast_rtp *rtp)
 	rtcpheader = (unsigned int *)(rtcpdata + AST_FRIENDLY_OFFSET);
 	
 	if (res < 0) {
-		if (errno == EBADF)
-			CRASH;
+		ast_assert(errno != EBADF);
 		if (errno != EAGAIN) {
 			ast_log(LOG_WARNING, "RTCP Read error: %s.  Hanging up.\n", strerror(errno));
 			return NULL;
@@ -1063,16 +1062,17 @@ static int bridge_p2p_rtp_write(struct ast_rtp *rtp, struct ast_rtp *bridged, un
 	/* Check what the payload value should be */
 	rtpPT = ast_rtp_lookup_pt(rtp, payload);
 
-	/* If the payload coming in is not one of the negotiated ones then send it to the core, this will cause formats to change and the bridge to break */
-	if (!bridged->current_RTP_PT[payload].code)
-		return -1;
-
 	/* If the payload is DTMF, and we are listening for DTMF - then feed it into the core */
 	if (ast_test_flag(rtp, FLAG_P2P_NEED_DTMF) && !rtpPT.isAstFormat && rtpPT.code == AST_RTP_DTMF)
 		return -1;
 
 	/* Otherwise adjust bridged payload to match */
 	bridged_payload = ast_rtp_lookup_code(bridged, rtpPT.isAstFormat, rtpPT.code);
+
+	/* If the payload coming in is not one of the negotiated ones then send it to the core, this will cause formats to change and the bridge to break */
+	if (!bridged->current_RTP_PT[bridged_payload].code)
+		return -1;
+
 
 	/* If the mark bit has not been sent yet... do it now */
 	if (!ast_test_flag(rtp, FLAG_P2P_SENT_MARK)) {
@@ -1134,8 +1134,7 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 
 	rtpheader = (unsigned int *)(rtp->rawdata + AST_FRIENDLY_OFFSET);
 	if (res < 0) {
-		if (errno == EBADF)
-			CRASH;
+		ast_assert(errno != EBADF);
 		if (errno != EAGAIN) {
 			ast_log(LOG_WARNING, "RTP Read error: %s.  Hanging up.\n", strerror(errno));
 			return NULL;
@@ -1313,7 +1312,7 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 		/* Add timing data to let ast_generic_bridge() put the frame into a jitterbuf */
 		ast_set_flag(&rtp->f, AST_FRFLAG_HAS_TIMING_INFO);
 		rtp->f.ts = timestamp / 8;
-		rtp->f.len = rtp->f.samples / ( (ast_format_rate(rtp->f.subclass) == 16000) ? 16 : 8 );
+		rtp->f.len = rtp->f.samples / (ast_format_rate(rtp->f.subclass) / 1000);
 	} else {
 		/* Video -- samples is # of samples vs. 90000 */
 		if (!rtp->lastividtimestamp)
@@ -1349,6 +1348,7 @@ static struct {
 	{{1, AST_FORMAT_LPC10}, "audio", "LPC"},
 	{{1, AST_FORMAT_G729A}, "audio", "G729"},
 	{{1, AST_FORMAT_G729A}, "audio", "G729A"},
+	{{1, AST_FORMAT_G729A}, "audio", "G.729"},
 	{{1, AST_FORMAT_SPEEX}, "audio", "speex"},
 	{{1, AST_FORMAT_ILBC}, "audio", "iLBC"},
 	{{1, AST_FORMAT_G722}, "audio", "G722"},
@@ -1524,26 +1524,25 @@ int ast_rtp_early_bridge(struct ast_channel *dest, struct ast_channel *src)
 	}
 
 	/* Check if bridge is still possible (In SIP canreinvite=no stops this, like NAT) */
-	if (audio_dest_res != AST_RTP_TRY_NATIVE) {
+	if (audio_dest_res != AST_RTP_TRY_NATIVE || (video_dest_res != AST_RTP_GET_FAILED && video_dest_res != AST_RTP_TRY_NATIVE)) {
 		/* Somebody doesn't want to play... */
 		ast_channel_unlock(dest);
 		if (src)
 			ast_channel_unlock(src);
 		return 0;
 	}
-	if (audio_src_res == AST_RTP_TRY_NATIVE && srcpr->get_codec)
+	if (audio_src_res == AST_RTP_TRY_NATIVE && (video_src_res == AST_RTP_GET_FAILED || video_src_res == AST_RTP_TRY_NATIVE) && srcpr->get_codec)
 		srccodec = srcpr->get_codec(src);
 	else
 		srccodec = 0;
-	if (audio_dest_res == AST_RTP_TRY_NATIVE && destpr->get_codec)
+	if (audio_dest_res == AST_RTP_TRY_NATIVE && (video_dest_res == AST_RTP_GET_FAILED || video_dest_res == AST_RTP_TRY_NATIVE) && destpr->get_codec)
 		destcodec = destpr->get_codec(dest);
 	else
 		destcodec = 0;
 	/* Ensure we have at least one matching codec */
-	if (!(srccodec & destcodec)) {
+	if (srcp && !(srccodec & destcodec)) {
 		ast_channel_unlock(dest);
-		if (src)
-			ast_channel_unlock(src);
+		ast_channel_unlock(src);
 		return 0;
 	}
 	/* Consider empty media as non-existant */
@@ -1613,7 +1612,7 @@ int ast_rtp_make_compatible(struct ast_channel *dest, struct ast_channel *src, i
 		destcodec = 0;
 
 	/* Check if bridge is still possible (In SIP canreinvite=no stops this, like NAT) */
-	if (audio_dest_res != AST_RTP_TRY_NATIVE || audio_src_res != AST_RTP_TRY_NATIVE || !(srccodec & destcodec)) {
+	if (audio_dest_res != AST_RTP_TRY_NATIVE || (video_dest_res != AST_RTP_GET_FAILED && video_dest_res != AST_RTP_TRY_NATIVE) || audio_src_res != AST_RTP_TRY_NATIVE || (video_src_res != AST_RTP_GET_FAILED && video_src_res != AST_RTP_TRY_NATIVE) || !(srccodec & destcodec)) {
 		/* Somebody doesn't want to play... */
 		ast_channel_unlock(dest);
 		ast_channel_unlock(src);
@@ -1919,7 +1918,7 @@ struct ast_rtp *ast_rtp_new_with_bindaddr(struct sched_context *sched, struct io
 	}
 	
 	/* Select a random port number in the range of possible RTP */
-	x = (ast_random() % (rtpend-rtpstart)) + rtpstart;
+	x = (rtpend == rtpstart) ? rtpstart : (ast_random() % (rtpend - rtpstart)) + rtpstart;
 	x = x & ~1;
 	/* Save it for future references. */
 	startplace = x;
@@ -2001,7 +2000,9 @@ int ast_rtp_settos(struct ast_rtp *rtp, int tos)
 
 void ast_rtp_new_source(struct ast_rtp *rtp)
 {
-	rtp->set_marker_bit = 1;
+	if (rtp) {
+		rtp->set_marker_bit = 1;
+	}
 	return;
 }
 
@@ -2047,7 +2048,9 @@ struct ast_rtp *ast_rtp_get_bridged(struct ast_rtp *rtp)
 
 void ast_rtp_stop(struct ast_rtp *rtp)
 {
-	AST_SCHED_DEL(rtp->sched, rtp->rtcp->schedid);
+	if (rtp->rtcp) {
+		AST_SCHED_DEL(rtp->sched, rtp->rtcp->schedid);
+	}
 
 	memset(&rtp->them.sin_addr, 0, sizeof(rtp->them.sin_addr));
 	memset(&rtp->them.sin_port, 0, sizeof(rtp->them.sin_port));
@@ -2131,17 +2134,17 @@ void ast_rtp_destroy(struct ast_rtp *rtp)
 		ast_verbose("* Our Receiver:\n");
 		ast_verbose("  SSRC:		 %u\n", rtp->themssrc);
 		ast_verbose("  Received packets: %u\n", rtp->rxcount);
-		ast_verbose("  Lost packets:	 %u\n", rtp->rtcp->expected_prior - rtp->rtcp->received_prior);
+		ast_verbose("  Lost packets:	 %u\n", rtp->rtcp ? (rtp->rtcp->expected_prior - rtp->rtcp->received_prior) : 0);
 		ast_verbose("  Jitter:		 %.4f\n", rtp->rxjitter);
 		ast_verbose("  Transit:		 %.4f\n", rtp->rxtransit);
-		ast_verbose("  RR-count:	 %u\n", rtp->rtcp->rr_count);
+		ast_verbose("  RR-count:	 %u\n", rtp->rtcp ? rtp->rtcp->rr_count : 0);
 		ast_verbose("* Our Sender:\n");
 		ast_verbose("  SSRC:		 %u\n", rtp->ssrc);
 		ast_verbose("  Sent packets:	 %u\n", rtp->txcount);
-		ast_verbose("  Lost packets:	 %u\n", rtp->rtcp->reported_lost);
-		ast_verbose("  Jitter:		 %u\n", rtp->rtcp->reported_jitter / (unsigned int)65536.0);
-		ast_verbose("  SR-count:	 %u\n", rtp->rtcp->sr_count);
-		ast_verbose("  RTT:		 %f\n", rtp->rtcp->rtt);
+		ast_verbose("  Lost packets:	 %u\n", rtp->rtcp ? rtp->rtcp->reported_lost : 0);
+		ast_verbose("  Jitter:		 %u\n", rtp->rtcp ? (rtp->rtcp->reported_jitter / (unsigned int)65536.0) : 0);
+		ast_verbose("  SR-count:	 %u\n", rtp->rtcp ? rtp->rtcp->sr_count : 0);
+		ast_verbose("  RTT:		 %f\n", rtp->rtcp ? rtp->rtcp->rtt : 0);
 	}
 
 	if (rtp->smoother)
@@ -2211,6 +2214,7 @@ int ast_rtp_senddigit_begin(struct ast_rtp *rtp, char digit)
 
 	rtp->dtmfmute = ast_tvadd(ast_tvnow(), ast_tv(0, 500000));
 	rtp->send_duration = 160;
+	rtp->lastdigitts = rtp->lastts + rtp->send_duration;
 	
 	/* Get a pointer to the header */
 	rtpheader = (unsigned int *)data;
@@ -2311,16 +2315,17 @@ int ast_rtp_senddigit_end(struct ast_rtp *rtp, char digit)
 	rtp->dtmfmute = ast_tvadd(ast_tvnow(), ast_tv(0, 500000));
 
 	rtpheader = (unsigned int *)data;
-	rtpheader[0] = htonl((2 << 30) | (1 << 23) | (rtp->send_payload << 16) | (rtp->seqno));
 	rtpheader[1] = htonl(rtp->lastdigitts);
 	rtpheader[2] = htonl(rtp->ssrc);
 	rtpheader[3] = htonl((digit << 24) | (0xa << 16) | (rtp->send_duration));
 	/* Set end bit */
 	rtpheader[3] |= htonl((1 << 23));
-	rtpheader[0] = htonl((2 << 30) | (rtp->send_payload << 16) | (rtp->seqno));
+
 	/* Send 3 termination packets */
 	for (i = 0; i < 3; i++) {
+		rtpheader[0] = htonl((2 << 30) | (rtp->send_payload << 16) | (rtp->seqno));
 		res = sendto(rtp->s, (void *) rtpheader, hdrlen + 4, 0, (struct sockaddr *) &rtp->them, sizeof(rtp->them));
+		rtp->seqno++;
 		if (res < 0)
 			ast_log(LOG_ERROR, "RTP Transmission error to %s:%d: %s\n",
 				ast_inet_ntoa(rtp->them.sin_addr),
@@ -2330,11 +2335,9 @@ int ast_rtp_senddigit_end(struct ast_rtp *rtp, char digit)
 				    ast_inet_ntoa(rtp->them.sin_addr),
 				    ntohs(rtp->them.sin_port), rtp->send_payload, rtp->seqno, rtp->lastdigitts, res - hdrlen);
 	}
+	rtp->lastts += rtp->send_duration;
 	rtp->sending_digit = 0;
 	rtp->send_digit = 0;
-	/* Increment lastdigitts */
-	rtp->lastdigitts += 960;
-	rtp->seqno++;
 
 	return res;
 }
@@ -2617,6 +2620,10 @@ static int ast_rtp_raw_write(struct ast_rtp *rtp, struct ast_frame *f, int codec
 	int pred;
 	int mark = 0;
 
+	if (rtp->sending_digit) {
+		return 0;
+	}
+
 	ms = calc_txstamp(rtp, &f->delivery);
 	/* Default prediction */
 	if (f->frametype == AST_FRAME_VOICE) {
@@ -2690,8 +2697,10 @@ static int ast_rtp_raw_write(struct ast_rtp *rtp, struct ast_frame *f, int codec
 			rtp->txcount++;
 			rtp->txoctetcount +=(res - hdrlen);
 			
-			if (rtp->rtcp && rtp->rtcp->schedid < 1) 
+			/* Do not schedule RR if RTCP isn't run */
+			if (rtp->rtcp && rtp->rtcp->them.sin_addr.s_addr && rtp->rtcp->schedid < 1) {
 			    rtp->rtcp->schedid = ast_sched_add(rtp->sched, ast_rtcp_calc_interval(rtp), ast_rtcp_write, rtp);
+			}
 		}
 				
 		if (rtp_debug_test_addr(&rtp->them))
@@ -2795,17 +2804,28 @@ int ast_rtp_write(struct ast_rtp *rtp, struct ast_frame *_f)
 			ast_smoother_feed(rtp->smoother, _f);
 		}
 
-		while((f = ast_smoother_read(rtp->smoother)) && (f->data))
+		while ((f = ast_smoother_read(rtp->smoother)) && (f->data)) {
+			if (f->subclass == AST_FORMAT_G722) {
+				/* G.722 is silllllllllllllly */
+				f->samples /= 2;
+			}
+
 			ast_rtp_raw_write(rtp, f, codec);
+		}
 	} else {
-	        /* Don't buffer outgoing frames; send them one-per-packet: */
+		/* Don't buffer outgoing frames; send them one-per-packet: */
 		if (_f->offset < hdrlen) {
 			f = ast_frdup(_f);
 		} else {
 			f = _f;
 		}
-		if (f->data)
+		if (f->data) {
+			if (f->subclass == AST_FORMAT_G722) {
+				/* G.722 is silllllllllllllly */
+				f->samples /= 2;
+			}
 			ast_rtp_raw_write(rtp, f, codec);
+		}
 		if (f != _f)
 			ast_frfree(f);
 	}

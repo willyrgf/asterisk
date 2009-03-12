@@ -28,11 +28,13 @@ case "${host_os}" in
      ;;
      *)
      ac_default_prefix=/usr
-     if test ${sysconfdir} = '${prefix}/etc'; then
-        sysconfdir=/etc
-     fi
-     if test ${mandir} = '${prefix}/man'; then
-        mandir=/usr/share/man
+     if test ${prefix} = '/usr' || test ${prefix} = 'NONE'; then
+        if test ${sysconfdir} = '${prefix}/etc'; then
+           sysconfdir=/etc
+        fi
+        if test ${mandir} = '${prefix}/man'; then
+           mandir=/usr/share/man
+        fi
      fi
      ;;
 esac
@@ -176,6 +178,7 @@ AST_EXT_LIB_SETUP([ALSA], [Advanced Linux Sound Architecture], [asound])
 AST_EXT_LIB_SETUP([CURL], [cURL], [curl])
 AST_EXT_LIB_SETUP([CAP], [POSIX 1.e capabilities], [cap])
 AST_EXT_LIB_SETUP([CURSES], [curses], [curses])
+AST_EXT_LIB_SETUP([DAHDI], [DAHDI], [dahdi])
 AST_EXT_LIB_SETUP([GNUTLS], [GNU TLS support (used for iksemel only)], [gnutls])
 AST_EXT_LIB_SETUP([GSM], [GSM], [gsm], [, or 'internal'])
 AST_EXT_LIB_SETUP([IKSEMEL], [Iksemel Jabber Library], [iksemel])
@@ -220,7 +223,7 @@ AC_FUNC_ALLOCA
 AC_HEADER_DIRENT
 AC_HEADER_STDC
 AC_HEADER_SYS_WAIT
-AC_CHECK_HEADERS([arpa/inet.h fcntl.h inttypes.h libintl.h limits.h locale.h malloc.h netdb.h netinet/in.h stddef.h stdint.h stdlib.h string.h strings.h sys/file.h sys/ioctl.h sys/param.h sys/socket.h sys/time.h syslog.h termios.h unistd.h utime.h])
+AC_CHECK_HEADERS([arpa/inet.h fcntl.h inttypes.h libintl.h limits.h locale.h malloc.h netdb.h netinet/in.h stddef.h stdint.h stdlib.h string.h strings.h sys/file.h sys/ioctl.h sys/param.h sys/socket.h sys/time.h syslog.h termios.h unistd.h utime.h arpa/nameser.h sys/io.h])
 
 AC_SYS_LARGEFILE
 
@@ -262,7 +265,16 @@ AC_FUNC_STRNLEN
 AC_FUNC_STRTOD
 AC_FUNC_UTIME_NULL
 AC_FUNC_VPRINTF
-AC_CHECK_FUNCS([asprintf atexit bzero dup2 endpwent floor ftruncate getcwd gethostbyname gethostname getloadavg gettimeofday inet_ntoa isascii localtime_r memchr memmove memset mkdir munmap pow putenv re_comp regcomp rint select setenv socket sqrt strcasecmp strcasestr strchr strcspn strdup strerror strlcat strlcpy strncasecmp strndup strnlen strrchr strsep strspn strstr strtol strtoq unsetenv utime vasprintf])
+AC_CHECK_FUNCS([asprintf atexit bzero dup2 endpwent floor ftruncate getcwd gethostbyname gethostname getloadavg gettimeofday inet_ntoa isascii localtime_r memchr memmove memset mkdir munmap pow putenv re_comp regcomp rint select setenv socket sqrt strcasecmp strcasestr strchr strcspn strdup strerror strlcat strlcpy strncasecmp strndup strnlen strrchr strsep strspn strstr strtol strtoq unsetenv utime vasprintf ioperm])
+
+AC_MSG_CHECKING(for timersub in time.h)
+AC_LINK_IFELSE(
+	AC_LANG_PROGRAM([#include <sys/time.h>],
+			[struct timeval *zombies; timersub(zombies, zombies, zombies);]),
+	AC_MSG_RESULT(yes)
+	AC_DEFINE([HAVE_TIMERSUB], 1, [Define to 1 if your system has timersub in time.h]),
+	AC_MSG_RESULT(no)
+)
 
 # some systems already have gethostbyname_r so we don't need to build ours in main/utils.c
 AC_SEARCH_LIBS(gethostbyname_r, [socket nsl])
@@ -348,31 +360,63 @@ if $(${CC} -Wdeclaration-after-statement -S -o /dev/null -xc /dev/null > /dev/nu
    AC_MSG_RESULT(yes)
    AST_DECLARATION_AFTER_STATEMENT=-Wdeclaration-after-statement
 else
-	AC_MSG_RESULT(no)
-	AST_DECLARATION_AFTER_STATEMENT=
+   AC_MSG_RESULT(no)
+   AST_DECLARATION_AFTER_STATEMENT=
 fi
 AC_SUBST(AST_DECLARATION_AFTER_STATEMENT)
+
+AC_MSG_CHECKING(for _FORTIFY_SOURCE support)
+if $(${CC} -D_FORTIFY_SOURCE=2 -S -o /dev/null -xc /dev/null > /dev/null 2>&1); then
+   AC_MSG_RESULT(yes)
+   AST_FORTIFY_SOURCE=-D_FORTIFY_SOURCE=2
+else
+   AC_MSG_RESULT(no)
+   AST_FORTIFY_SOURCE=
+fi
+AC_SUBST(AST_FORTIFY_SOURCE)
 
 AC_MSG_CHECKING(for -fno-strict-overflow)
 if $(${CC} -O2 -fno-strict-overflow -S -o /dev/null -xc /dev/null > /dev/null 2>&1); then
    AC_MSG_RESULT(yes)
    AST_NO_STRICT_OVERFLOW=-fno-strict-overflow
 else
-	AC_MSG_RESULT(no)
-	AST_NO_STRICT_OVERFLOW=
+   AC_MSG_RESULT(no)
+   AST_NO_STRICT_OVERFLOW=
 fi
 AC_SUBST(AST_NO_STRICT_OVERFLOW)
 
+AC_SEARCH_LIBS(res_9_ninit, resolv)
 AC_MSG_CHECKING(for res_ninit)
 AC_LINK_IFELSE(
-	AC_LANG_PROGRAM([#include <resolv.h>],
+	AC_LANG_PROGRAM([
+			#ifdef HAVE_SYS_SOCKET_H
+			#include <sys/socket.h>
+			#endif
+			#ifdef HAVE_NETINET_IN_H
+			#include <netinet/in.h>
+			#endif
+			#ifdef HAVE_ARPA_NAMESER_H
+			#include <arpa/nameser.h>
+			#endif
+			#include <resolv.h>],
 			[int foo = res_ninit(NULL);]),
 	AC_MSG_RESULT(yes)
 	AC_DEFINE([HAVE_RES_NINIT], 1, [Define to 1 if your system has the re-entrant resolver functions.])
+	AC_SEARCH_LIBS(res_9_ndestroy, resolv)
 	AC_MSG_CHECKING(for res_ndestroy)
 	AC_LINK_IFELSE(
-		AC_LANG_PROGRAM([#include <resolv.h>],
-				[int foo = res_ndestroy(NULL);]),
+		AC_LANG_PROGRAM([
+				#ifdef HAVE_SYS_SOCKET_H
+				#include <sys/socket.h>
+				#endif
+				#ifdef HAVE_NETINET_IN_H
+				#include <netinet/in.h>
+				#endif
+				#ifdef HAVE_ARPA_NAMESER_H
+				#include <arpa/nameser.h>
+				#endif
+				#include <resolv.h>],
+				[res_ndestroy(NULL);]),
 		AC_MSG_RESULT(yes)
 		AC_DEFINE([HAVE_RES_NDESTROY], 1, [Define to 1 if your system has the ndestroy resolver function.]),
 		AC_MSG_RESULT(no)
@@ -413,7 +457,15 @@ if test "x${host_os}" = "xlinux-gnu" ; then
   AST_EXT_LIB_CHECK([CAP], [cap], [cap_from_text], [sys/capability.h])
 fi
 
-AST_C_COMPILE_CHECK([GETIFADDRS], [struct ifaddrs *p; getifaddrs(&p)], [ifaddrs.h])
+if test "${USE_DAHDI}" != "no" ; then
+	AST_C_DEFINE_CHECK([DAHDI], [DAHDI_CODE], [dahdi/user.h])
+	if test "x${PBX_DAHDI}" = "x1" ; then
+		PBX_DAHDI_TRANSCODE=1
+		AC_SUBST(PBX_DAHDI_TRANSCODE)
+	fi
+fi
+
+AST_C_COMPILE_CHECK([GETIFADDRS], [struct ifaddrs *p; getifaddrs(&p)], [ifaddrs.h], , [getifaddrs() support])
 
 GSM_INTERNAL="yes"
 AC_SUBST(GSM_INTERNAL)
@@ -1212,6 +1264,10 @@ AST_EXT_LIB_CHECK([POPT], [popt], [poptStrerror], [popt.h])
 
 AST_EXT_LIB_CHECK([PRI], [pri], [pri_keypad_facility], [libpri.h])
 
+AST_EXT_LIB_CHECK([PRI_VERSION], [pri], [pri_get_version], [libpri.h])
+
+AST_EXT_LIB_CHECK([PRI_INBANDDISCONNECT], [pri], [pri_set_inbanddisconnect], [libpri.h])
+
 if test "${USE_PWLIB}" != "no"; then
 	if test -n "${PWLIB_DIR}"; then
 		PWLIBDIR="${PWLIB_DIR}"
@@ -1220,7 +1276,7 @@ if test "${USE_PWLIB}" != "no"; then
 	AST_CHECK_PWLIB_VERSION([PWLib], [PWLIB], [ptbuildopts.h], [1], [9], [2])
 		
 	if test "${HAS_PWLIB:-unset}" != "unset"; then
-		AST_CHECK_OPENH323_PLATFORM()
+		AST_CHECK_PWLIB_PLATFORM()
 
 		PLATFORM_PWLIB="pt_${PWLIB_PLATFORM}_r"
 
@@ -1267,7 +1323,18 @@ AST_EXT_LIB_CHECK([RADIUS], [radiusclient-ng], [rc_read_config], [radiusclient-n
 
 AST_EXT_LIB_CHECK([SPEEX], [speex], [speex_encode], [speex/speex.h], [-lm])
 
+# See if the main speex library contains the preprocess functions
+AST_EXT_LIB_CHECK([SPEEX_PREPROCESS], [speex], [speex_preprocess_ctl], [speex/speex.h], [-lm])
+if test "${PBX_SPEEX_PREPROCESS}" = 1; then
+   PBX_SPEEX_PREPROCESS=1
+fi
+
 AST_EXT_LIB_CHECK([SPEEXDSP], [speexdsp], [speex_preprocess_ctl], [speex/speex.h], [-lm])
+if test "${PBX_SPEEXDSP}" = 1; then
+   PBX_SPEEX_PREPROCESS=1
+fi
+
+AC_SUBST(PBX_SPEEX_PREPROCESS)
 
 AST_EXT_LIB_CHECK([SQLITE], [sqlite], [sqlite_exec], [sqlite.h])
 
@@ -1280,9 +1347,19 @@ fi
 AST_EXT_LIB_CHECK([FREETDS], [tds], [tds_version], [tds.h])
 if test "${PBX_FREETDS}" != "0";
 then
-    case `grep TDS_VERSION_NO ${FREETDS_DIR:-/usr}/include/tdsver.h` in
-	*0.64*)
-		FREETDS_INCLUDE="${FREETDS_INCLUDE} -DFREETDS_0_64"
+    if test "${FREETDS_DIR}x" = "x";
+    then
+        for tds_dir in /usr /usr/local;
+        do
+            if test -f "${tds_dir}/include/tdsver.h";
+            then
+                FREETDS_DIR="${tds_dir}"
+            fi
+        done
+    fi
+    case `${GREP} TDS_VERSION_NO ${FREETDS_DIR:-/usr}/include/tdsver.h` in
+    *0.64*)
+        FREETDS_INCLUDE="${FREETDS_INCLUDE} -DFREETDS_0_64"
 	;;
     *0.63*)
         FREETDS_INCLUDE="${FREETDS_INCLUDE} -DFREETDS_0_63"
@@ -1301,10 +1378,22 @@ AST_EXT_LIB_CHECK([TERMCAP], [termcap], [tgetent], [])
 AST_EXT_LIB_CHECK([TINFO], [tinfo], [tgetent], [])
 
 if test "${host_os}" != "linux-gnu" ; then
-  tonezone_extra="-lm"
+  tonezone_extra_lib="-lm"
 fi
 
-AST_EXT_LIB_CHECK([TONEZONE], [tonezone], [tone_zone_find], [zaptel/tonezone.h], [${tonezone_extra}])
+if test "${PBX_DAHDI}" = "1" || test "${USE_ZAPTEL}" = "no"; then
+  tonezone_dir="dahdi"
+   if test "x${DAHDI_DIR}" != "x"; then
+      tonezone_extra_inc="${DAHDI_INCLUDE}"
+   fi
+else
+  tonezone_dir="zaptel"
+   if test "x${ZAPTEL_DIR}" != "x"; then
+      tonezone_extra_inc="${ZAPTEL_INCLUDE}"
+   fi
+fi
+
+AST_EXT_LIB_CHECK([TONEZONE], [tonezone], [tone_zone_find], [${tonezone_dir}/tonezone.h], [${tonezone_extra_lib}], [${tonezone_extra_inc}])
 
 AST_EXT_LIB_CHECK([USB], [usb], [usb_init], [usb.h], [])
 
@@ -1362,7 +1451,7 @@ AC_LANG_POP
 
 AST_EXT_LIB_CHECK([ZLIB], [z], [compress], [zlib.h])
 
-if test "${USE_ZAPTEL}" != "no"; then
+if test "${USE_ZAPTEL}" != "no" && test "x${PBX_DAHDI}" != "x1"; then
    AC_MSG_CHECKING(for ZT_DIAL_OP_CANCEL in zaptel/zaptel.h)
    saved_cppflags="${CPPFLAGS}"
    if test "x${ZAPTEL_DIR}" != "x"; then
@@ -1388,6 +1477,13 @@ if test "${USE_ZAPTEL}" != "no"; then
 	fi
 	PBX_ZAPTEL=1
 	AC_DEFINE([HAVE_ZAPTEL], 1, [Define if your system has the Zaptel headers.])
+	saved_cppflags="${CPPFLAGS}"
+	CPPFLAGS="${CPPFLAGS} ${ZAPTEL_INCLUDE}"
+	AC_CHECK_MEMBER([ZT_PARAMS.chan_alarms],,,[#include <zaptel/zaptel.h>])
+	CPPFLAGS="${saved_cppflags}"
+	if test "${ac_cv_member_ZT_PARAMS_chan_alarms}" = "yes"; then
+	     AC_DEFINE([HAVE_ZAPTEL_CHANALARMS], 1, [Define if your Zaptel drivers have chan_alarms.])
+	fi
    elif test -n "${ZAPTEL_MANDATORY}"; 
    then
       AC_MSG_NOTICE([***])
@@ -1398,7 +1494,7 @@ if test "${USE_ZAPTEL}" != "no"; then
    fi
 fi
 
-if test "${PBX_ZAPTEL}" = 1; then
+if test "${PBX_ZAPTEL}" = 1 && test "x${PBX_DAHDI}" != "x1"; then
    AC_MSG_CHECKING(for ZT_EVENT_REMOVED in zaptel/zaptel.h)
    saved_cppflags="${CPPFLAGS}"
    if test "x${ZAPTEL_DIR}" != "x"; then
@@ -1421,7 +1517,7 @@ if test "${PBX_ZAPTEL}" = 1; then
    if test "${ac_cv_zaptel_vldtmf}" = "yes"; then
 	PBX_ZAPTEL_VLDTMF=1
    fi
-   AC_MSG_CHECKING(for ZT_TCOP_ALLOCATE in zaptel/zaptel.h)
+   AC_MSG_CHECKING(for zt_transcoder_info in zaptel/zaptel.h)
    saved_cppflags="${CPPFLAGS}"
    if test "x${ZAPTEL_DIR}" != "x"; then
       CPPFLAGS="${CPPFLAGS} -I${ZAPTEL_DIR}/include"
@@ -1430,7 +1526,7 @@ if test "${PBX_ZAPTEL}" = 1; then
 	[
 	AC_LANG_PROGRAM(
 	[#include <zaptel/zaptel.h>],
-	[int foo = ZT_TCOP_ALLOCATE;])
+	[int foo = sizeof(struct zt_transcoder_info);])
 	],
 	[	AC_MSG_RESULT(yes) 
 		ac_cv_zaptel_transcode="yes" 
@@ -1441,11 +1537,20 @@ if test "${PBX_ZAPTEL}" = 1; then
 	)
    CPPFLAGS="${saved_cppflags}"
    if test "${ac_cv_zaptel_transcode}" = "yes"; then
-	PBX_ZAPTEL_TRANSCODE=1
+	PBX_DAHDI_TRANSCODE=1
    fi
 fi
 AC_SUBST(PBX_ZAPTEL_VLDTMF)
-AC_SUBST(PBX_ZAPTEL_TRANSCODE)
+AC_SUBST(PBX_DAHDI_TRANSCODE)
+
+if test "x${PBX_ZAPTEL}" = "x1" ; then
+	PBX_DAHDI=1
+	DAHDI_INCLUDE=${ZAPTEL_INCLUDE}
+	DAHDI_LIB=${ZAPTEL_LIB}
+	AC_SUBST(PBX_DAHDI)
+	AC_SUBST(DAHDI_INCLUDE)
+	AC_SUBST(DAHDI_LIB)
+fi
 
 EDITLINE_LIB=""
 if test "x$TERMCAP_LIB" != "x" ; then
