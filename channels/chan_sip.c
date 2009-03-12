@@ -1283,7 +1283,7 @@ static int send_request(struct sip_pvt *p, struct sip_request *req, enum xmittyp
 static void copy_request(struct sip_request *dst, const struct sip_request *src);
 static void receive_message(struct sip_pvt *p, struct sip_request *req);
 static void parse_moved_contact(struct sip_pvt *p, struct sip_request *req);
-static int sip_send_mwi_to_peer(struct sip_peer *peer);
+static int sip_send_mwi_to_peer(struct sip_peer *peer, int force);
 static int does_peer_need_mwi(struct sip_peer *peer);
 
 /*--- Dialog management */
@@ -1355,7 +1355,6 @@ static int reload_config(enum channelreloadreason reason);
 static int expire_register(const void *data);
 static void *do_monitor(void *data);
 static int restart_monitor(void);
-static int sip_send_mwi_to_peer(struct sip_peer *peer);
 static int sip_addrcmp(char *name, struct sockaddr_in *sin);	/* Support for peer matching */
 static int sip_refer_allocate(struct sip_pvt *p);
 static void ast_quiet_chan(struct ast_channel *chan);
@@ -1456,7 +1455,7 @@ static void destroy_association(struct sip_peer *peer);
 static int handle_common_options(struct ast_flags *flags, struct ast_flags *mask, struct ast_variable *v);
 
 /* Realtime device support */
-static void realtime_update_peer(const char *peername, struct sockaddr_in *sin, const char *username, const char *fullcontact, int expirey);
+static void realtime_update_peer(const char *peername, struct sockaddr_in *sin, const char *username, const char *fullcontact, int expirey, int lastms);
 static struct sip_user *realtime_user(const char *username);
 static void update_peer(struct sip_peer *p, int expiry);
 static struct sip_peer *realtime_peer(const char *peername, struct sockaddr_in *sin, int devstate_only);
@@ -2425,18 +2424,20 @@ static int sip_sendtext(struct ast_channel *ast, const char *text)
 	that name and store that in the "regserver" field in the sippeers
 	table to facilitate multi-server setups.
 */
-static void realtime_update_peer(const char *peername, struct sockaddr_in *sin, const char *username, const char *fullcontact, int expirey)
+static void realtime_update_peer(const char *peername, struct sockaddr_in *sin, const char *username, const char *fullcontact, int expirey, int lastms)
 {
 	char port[10];
 	char ipaddr[INET_ADDRSTRLEN];
 	char regseconds[20];
+	char str_lastms[20];
 
 	char *sysname = ast_config_AST_SYSTEM_NAME;
 	char *syslabel = NULL;
 
 	time_t nowtime = time(NULL) + expirey;
 	const char *fc = fullcontact ? "fullcontact" : NULL;
-	
+
+	snprintf(str_lastms, sizeof(str_lastms), "%d", lastms);
 	snprintf(regseconds, sizeof(regseconds), "%d", (int)nowtime);	/* Expiration time */
 	ast_copy_string(ipaddr, ast_inet_ntoa(sin->sin_addr), sizeof(ipaddr));
 	snprintf(port, sizeof(port), "%d", ntohs(sin->sin_port));
@@ -2454,6 +2455,9 @@ static void realtime_update_peer(const char *peername, struct sockaddr_in *sin, 
 		ast_update_realtime("sippeers", "name", peername, "ipaddr", ipaddr,
 			"port", port, "regseconds", regseconds,
 			"username", username, syslabel, sysname, NULL); /* note syslabel _can_ be NULL */
+	/* We cannot do this in the same statement as above, because the lack of
+	 * this field could cause the whole statement to fail. */
+	ast_update_realtime("sippeers", "name", peername, "lastms", str_lastms, NULL);
 }
 
 /*! \brief Automatically add peer extension to dial plan */
@@ -2484,7 +2488,7 @@ static void register_peer_exten(struct sip_peer *peer, int onoff)
 		if (onoff) {
 			if (!ast_exists_extension(NULL, context, ext, 1, NULL)) {
 				ast_add_extension(context, 1, ext, 1, NULL, NULL, "Noop",
-					 ast_strdup(peer->name), ast_free, "SIP");
+					 ast_strdup(peer->name), ast_free_ptr, "SIP");
 			}
 		} else {
 			ast_context_remove_extension(context, ext, 1, NULL);
@@ -2529,7 +2533,7 @@ static void update_peer(struct sip_peer *p, int expiry)
 	int rtcachefriends = ast_test_flag(&p->flags[1], SIP_PAGE2_RTCACHEFRIENDS);
 	if (ast_test_flag(&global_flags[1], SIP_PAGE2_RTUPDATE) &&
 	    (ast_test_flag(&p->flags[0], SIP_REALTIME) || rtcachefriends)) {
-		realtime_update_peer(p->name, &p->addr, p->username, rtcachefriends ? p->fullcontact : NULL, expiry);
+		realtime_update_peer(p->name, &p->addr, p->username, rtcachefriends ? p->fullcontact : NULL, expiry, p->lastms);
 	}
 }
 
@@ -4150,7 +4154,7 @@ static struct ast_channel *sip_new(struct sip_pvt *i, int state, const char *tit
 
 
 
-	if (ast_test_flag(&i->flags[0], SIP_DTMF) ==  SIP_DTMF_INBAND) {
+	if ((ast_test_flag(&i->flags[0], SIP_DTMF) == SIP_DTMF_INBAND) || (ast_test_flag(&i->flags[0], SIP_DTMF) == SIP_DTMF_AUTO)) {
 		i->vad = ast_dsp_new();
 		ast_dsp_set_features(i->vad, DSP_FEATURE_DTMF_DETECT);
 		if (global_relaxdtmf)
@@ -8117,9 +8121,10 @@ static int transmit_request_with_auth(struct sip_pvt *p, int sipmethod, int seqn
 static void destroy_association(struct sip_peer *peer)
 {
 	if (!ast_test_flag(&global_flags[1], SIP_PAGE2_IGNOREREGEXPIRE)) {
-		if (ast_test_flag(&peer->flags[1], SIP_PAGE2_RT_FROMCONTACT))
+		if (ast_test_flag(&peer->flags[1], SIP_PAGE2_RT_FROMCONTACT)) {
 			ast_update_realtime("sippeers", "name", peer->name, "fullcontact", "", "ipaddr", "", "port", "", "regseconds", "0", "username", "", "regserver", "", NULL);
-		else 
+			ast_update_realtime("sippeers", "name", peer->name, "lastms", "", NULL);
+		} else 
 			ast_db_del("SIP/Registry", peer->name);
 	}
 }
@@ -9214,34 +9219,41 @@ static struct sip_pvt *get_sip_pvt_byid_locked(const char *callid, const char *t
 
 	ast_mutex_lock(&iflock);
 
-	if (option_debug > 3 && totag)
+	if (option_debug > 3 && totag) {
 		ast_log(LOG_DEBUG, "Looking for callid %s (fromtag %s totag %s)\n", callid, fromtag ? fromtag : "<no fromtag>", totag ? totag : "<no totag>");
+	}
 
 	/* Search interfaces and find the match */
 	for (sip_pvt_ptr = iflist; sip_pvt_ptr; sip_pvt_ptr = sip_pvt_ptr->next) {
 		if (!strcmp(sip_pvt_ptr->callid, callid)) {
 			int match = 1;
 
+			if (option_debug > 3)
+				ast_log(LOG_DEBUG, "Found call with callid %s (ourtag=%s, theirtag=%s)\n", callid, sip_pvt_ptr->tag, sip_pvt_ptr->theirtag);
+
 			/* Go ahead and lock it (and its owner) before returning */
 			ast_mutex_lock(&sip_pvt_ptr->lock);
 
 			/* Check if tags match. If not, this is not the call we want
-			   (With a forking SIP proxy, several call legs share the
-			   call id, but have different tags)
-			*/
+			 * (With a forking SIP proxy, several call legs share the
+			 * call id, but have different tags)
+			 */
 			if (pedanticsipchecking) {
-				const char *pvt_fromtag, *pvt_totag;
-
-				if (ast_test_flag(&sip_pvt_ptr->flags[1], SIP_PAGE2_OUTGOING_CALL)) {
-					/* Outgoing call tags : from is "our", to is "their" */
-					pvt_fromtag = sip_pvt_ptr->tag ;
-					pvt_totag = sip_pvt_ptr->theirtag ;
-				} else {
-					/* Incoming call tags : from is "their", to is "our" */
-					pvt_fromtag = sip_pvt_ptr->theirtag ;
-					pvt_totag = sip_pvt_ptr->tag ;
-				}
-				if (ast_strlen_zero(fromtag) || strcmp(fromtag, pvt_fromtag) || (!ast_strlen_zero(totag) && strcmp(totag, pvt_totag)))
+				/* RFC 3891
+				 * > 3.  User Agent Server Behavior: Receiving a Replaces Header
+				 * > The Replaces header contains information used to match an existing
+				 * > SIP dialog (call-id, to-tag, and from-tag).  Upon receiving an INVITE
+				 * > with a Replaces header, the User Agent (UA) attempts to match this
+				 * > information with a confirmed or early dialog.  The User Agent Server
+				 * > (UAS) matches the to-tag and from-tag parameters as if they were tags
+				 * > present in an incoming request.  In other words, the to-tag parameter
+				 * > is compared to the local tag, and the from-tag parameter is compared
+				 * > to the remote tag.
+				 *
+				 * Thus, the totag is always compared to the local tag, regardless if
+				 * this our call is an incoming or outgoing call.
+				 */
+				if (ast_strlen_zero(fromtag) || strcmp(fromtag, sip_pvt_ptr->theirtag) || (!ast_strlen_zero(totag) && strcmp(totag, sip_pvt_ptr->tag)))
 					match = 0;
 			}
 
@@ -9417,7 +9429,7 @@ static int get_refer_info(struct sip_pvt *transferer, struct sip_request *outgoi
 	ast_copy_string(referdata->refer_to_context, transfer_context, sizeof(referdata->refer_to_context));
 	
 	/* Either an existing extension or the parking extension */
-	if (ast_exists_extension(NULL, transfer_context, refer_to, 1, NULL) ) {
+	if (referdata->attendedtransfer || ast_exists_extension(NULL, transfer_context, refer_to, 1, NULL) ) {
 		if (sip_debug_test_pvt(transferer)) {
 			ast_verbose("SIP transfer to extension %s@%s by %s\n", refer_to, transfer_context, referred_by_uri);
 		}
@@ -12921,10 +12933,13 @@ static void handle_response_peerpoke(struct sip_pvt *p, int resp, struct sip_req
 	peer->call = NULL;
 	if (statechanged) {
 		const char *s = is_reachable ? "Reachable" : "Lagged";
+		char str_lastms[20];
+		snprintf(str_lastms, sizeof(str_lastms), "%d", pingtime);
 
 		ast_log(LOG_NOTICE, "Peer '%s' is now %s. (%dms / %dms)\n",
 			peer->name, s, pingtime, peer->maxms);
 		ast_device_state_changed("SIP/%s", peer->name);
+		ast_update_realtime("sippeers", "name", peer->name, "lastms", str_lastms, NULL);
 		manager_event(EVENT_FLAG_SYSTEM, "PeerStatus",
 			"ChannelType: SIP\r\nPeer: SIP/%s\r\nPeerStatus: %s\r\nTime: %d\r\n",
 			peer->name, s, pingtime);
@@ -15524,7 +15539,7 @@ static int handle_request_message(struct sip_pvt *p, struct sip_request *req)
 /*! \brief  Handle incoming SUBSCRIBE request */
 static int handle_request_subscribe(struct sip_pvt *p, struct sip_request *req, struct sockaddr_in *sin, int seqno, char *e)
 {
-	int gotdest;
+	int gotdest = 0;
 	int res = 0;
 	int firststate = AST_EXTENSION_REMOVED;
 	struct sip_peer *authpeer = NULL;
@@ -15632,8 +15647,10 @@ static int handle_request_subscribe(struct sip_pvt *p, struct sip_request *req, 
 		return 0;
 	}
 
-	/* Get destination right away */
-	gotdest = get_destination(p, NULL);
+	if (strcmp(event, "message-summary")) {
+		/* Get destination right away */
+		gotdest = get_destination(p, NULL);
+	}
 
 	/* Get full contact header - this needs to be used as a request URI in NOTIFY's */
 	parse_ok_contact(p, req);
@@ -15766,7 +15783,7 @@ static int handle_request_subscribe(struct sip_pvt *p, struct sip_request *req, 
 			transmit_response(p, "200 OK", req);
 			if (p->relatedpeer) {	/* Send first notification */
 				ASTOBJ_WRLOCK(p->relatedpeer);
-				sip_send_mwi_to_peer(p->relatedpeer);
+				sip_send_mwi_to_peer(p->relatedpeer, TRUE);
 				ASTOBJ_UNLOCK(p->relatedpeer);
 			}
 		} else {
@@ -16297,7 +16314,7 @@ static int sipsock_read(int *id, int fd, short events, void *ignore)
 }
 
 /*! \brief Send message waiting indication to alert peer that they've got voicemail */
-static int sip_send_mwi_to_peer(struct sip_peer *peer)
+static int sip_send_mwi_to_peer(struct sip_peer *peer, int force)
 {
 	/* Called with peerl lock, but releases it */
 	struct sip_pvt *p;
@@ -16313,7 +16330,7 @@ static int sip_send_mwi_to_peer(struct sip_peer *peer)
 	peer->lastmsgcheck = time(NULL);
 	
 	/* Return now if it's the same thing we told them last time */
-	if (((newmsgs > 0x7fff ? 0x7fff0000 : (newmsgs << 16)) | (oldmsgs > 0xffff ? 0xffff : oldmsgs)) == peer->lastmsgssent) {
+	if (!force && ((newmsgs > 0x7fff ? 0x7fff0000 : (newmsgs << 16)) | (oldmsgs > 0xffff ? 0xffff : oldmsgs)) == peer->lastmsgssent) {
 		return 0;
 	}
 	
@@ -16525,7 +16542,7 @@ restartsearch:
 		/* Send MWI to the peer */
 		if (peer) {
 			ASTOBJ_WRLOCK(peer);
-			sip_send_mwi_to_peer(peer);
+			sip_send_mwi_to_peer(peer, FALSE);
 			ASTOBJ_UNLOCK(peer);
 			ASTOBJ_UNREF(peer,sip_destroy_peer);
 		} else {
@@ -16575,6 +16592,7 @@ static int sip_poke_noanswer(const void *data)
 	if (peer->lastms > -1) {
 		ast_log(LOG_NOTICE, "Peer '%s' is now UNREACHABLE!  Last qualify: %d\n", peer->name, peer->lastms);
 		manager_event(EVENT_FLAG_SYSTEM, "PeerStatus", "ChannelType: SIP\r\nPeer: SIP/%s\r\nPeerStatus: Unreachable\r\nTime: %d\r\n", peer->name, -1);
+		ast_update_realtime("sippeers", "name", peer->name, "lastms", "-1", NULL);
 	}
 	if (peer->call)
 		sip_destroy(peer->call);
@@ -17438,6 +17456,8 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 			continue;
 		if (realtime && !strcasecmp(v->name, "regseconds")) {
 			ast_get_time_t(v->value, &regseconds, 0, NULL);
+		} else if (realtime && !strcasecmp(v->name, "lastms")) {
+			sscanf(v->value, "%d", &peer->lastms);
 		} else if (realtime && !strcasecmp(v->name, "ipaddr") && !ast_strlen_zero(v->value) ) {
 			inet_aton(v->value, &(peer->addr.sin_addr));
 		} else if (realtime && !strcasecmp(v->name, "name"))
@@ -17645,10 +17665,18 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 		if ((nowtime - regseconds) > 0) {
 			destroy_association(peer);
 			memset(&peer->addr, 0, sizeof(peer->addr));
+			peer->lastms = -1;
 			if (option_debug)
 				ast_log(LOG_DEBUG, "Bah, we're expired (%d/%d/%d)!\n", (int)(nowtime - regseconds), (int)regseconds, (int)nowtime);
 		}
 	}
+
+	/* Startup regular pokes */
+	if (realtime && peer->lastms > 0) {
+		ASTOBJ_REF(peer);
+		sip_poke_peer(peer);
+	}
+
 	ast_copy_flags(&peer->flags[0], &peerflags[0], mask[0].flags);
 	ast_copy_flags(&peer->flags[1], &peerflags[1], mask[1].flags);
 	if (ast_test_flag(&peer->flags[1], SIP_PAGE2_ALLOWSUBSCRIBE))
