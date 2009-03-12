@@ -66,7 +66,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #define DEFAULT_PARK_TIME 45000
 #define DEFAULT_TRANSFER_DIGIT_TIMEOUT 3000
-#define DEFAULT_FEATURE_DIGIT_TIMEOUT 500
+#define DEFAULT_FEATURE_DIGIT_TIMEOUT 1000
 #define DEFAULT_NOANSWER_TIMEOUT_ATTENDED_TRANSFER 15000
 
 #define AST_MAX_WATCHERS 256
@@ -421,7 +421,8 @@ static int park_call_full(struct ast_channel *chan, struct ast_channel *peer, in
 {
 	struct ast_context *con;
 	int parkingnum_copy;
-	
+	const char *event_from;
+
 	/* Get a valid space if not already done */
 	if (pu == NULL)
 		pu = park_space_reserve(chan);
@@ -487,6 +488,12 @@ static int park_call_full(struct ast_channel *chan, struct ast_channel *peer, in
 	if (option_verbose > 1) 
 		ast_verbose(VERBOSE_PREFIX_2 "Parked %s on %d@%s. Will timeout back to extension [%s] %s, %d in %d seconds\n", pu->chan->name, pu->parkingnum, parking_con, pu->context, pu->exten, pu->priority, (pu->parkingtime/1000));
 
+	if (peer) {
+		event_from = peer->name;
+	} else {
+		event_from = pbx_builtin_getvar_helper(chan, "BLINDTRANSFER");
+	}
+
 	manager_event(EVENT_FLAG_CALL, "ParkedCall",
 		"Exten: %s\r\n"
 		"Channel: %s\r\n"
@@ -494,7 +501,7 @@ static int park_call_full(struct ast_channel *chan, struct ast_channel *peer, in
 		"Timeout: %ld\r\n"
 		"CallerID: %s\r\n"
 		"CallerIDName: %s\r\n",
-		pu->parkingexten, pu->chan->name, peer ? peer->name : "",
+		pu->parkingexten, pu->chan->name, event_from ? event_from : "",
 		(long)pu->start.tv_sec + (long)(pu->parkingtime/1000) - (long)time(NULL),
 		S_OR(pu->chan->cid.cid_num, "<unknown>"),
 		S_OR(pu->chan->cid.cid_name, "<unknown>")
@@ -511,7 +518,7 @@ static int park_call_full(struct ast_channel *chan, struct ast_channel *peer, in
 	if (!con)	/* Still no context? Bad */
 		ast_log(LOG_ERROR, "Parking context '%s' does not exist and unable to create\n", parking_con);
 	if (con) {
-		if (!ast_add_extension2(con, 1, pu->parkingexten, 1, NULL, NULL, parkedcall, strdup(pu->parkingexten), ast_free, registrar)) {
+		if (!ast_add_extension2(con, 1, pu->parkingexten, 1, NULL, NULL, parkedcall, strdup(pu->parkingexten), ast_free_ptr, registrar)) {
 			notify_metermaids(pu->parkingexten, parking_con);
 		}
 	}
@@ -555,7 +562,8 @@ static int masq_park_call(struct ast_channel *rchan, struct ast_channel *peer, i
 	int park_status;
 
 	if ((pu = park_space_reserve(rchan)) == NULL) {
-		ast_stream_and_wait(peer, "beeperr", peer->language, "");
+		if (peer)
+			ast_stream_and_wait(peer, "beeperr", peer->language, "");
 		return FEATURE_RETURN_PARKFAILED;
 	}
 
@@ -1718,11 +1726,26 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 		struct ast_channel *other;	/* used later */
 
 		res = ast_channel_bridge(chan, peer, config, &f, &who);
-
-		if (config->feature_timer) {
+		
+		/* When frame is not set, we are probably involved in a situation
+		   where we've timed out.
+		   When frame is set, we'll come thru this code twice; once for DTMF_BEGIN
+		   and also for DTMF_END. If we flow into the following 'if' for both, then 
+		   our wait times are cut in half, as both will subtract from the
+		   feature_timer. Not good!
+		*/
+		if (config->feature_timer && (!f || f->frametype == AST_FRAME_DTMF_END)) {
 			/* Update time limit for next pass */
 			diff = ast_tvdiff_ms(ast_tvnow(), config->start_time);
-			config->feature_timer -= diff;
+			if (res == AST_BRIDGE_RETRY) {
+				/* The feature fully timed out but has not been updated. Skip
+				 * the potential round error from the diff calculation and
+				 * explicitly set to expired. */
+				config->feature_timer = -1;
+			} else {
+				config->feature_timer -= diff;
+			}
+
 			if (hasfeatures) {
 				/* Running on backup config, meaning a feature might be being
 				   activated, but that's no excuse to keep things going 
@@ -1935,8 +1958,13 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 		ast_channel_lock(chan);
 		ast_copy_string(chan->exten, save_exten, sizeof(chan->exten));
 		chan->priority = save_prio;
-		if (bridge_cdr)
-			chan->cdr = swapper;
+		if (bridge_cdr) {
+			if (chan->cdr == bridge_cdr) {
+				chan->cdr = swapper;
+			} else {
+				bridge_cdr = NULL;
+			}
+		}
 		ast_set_flag(chan, AST_FLAG_BRIDGE_HANGUP_RUN);
 		ast_channel_unlock(chan);
 		/* protect the lastapp/lastdata against the effects of the hangup/dialplan code */
@@ -2167,7 +2195,7 @@ static void *do_parking_thread(void *ignore)
 							snprintf(returnexten, sizeof(returnexten), "%s|30|t", peername);
 						}
 
-						ast_add_extension2(con, 1, peername, 1, NULL, NULL, "Dial", strdup(returnexten), ast_free, registrar);
+						ast_add_extension2(con, 1, peername, 1, NULL, NULL, "Dial", strdup(returnexten), ast_free_ptr, registrar);
 					}
 					set_c_e_p(chan, parking_con_dial, peername, 1);
 				} else {

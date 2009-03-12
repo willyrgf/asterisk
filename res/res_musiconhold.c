@@ -42,6 +42,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <signal.h>
 #include <stdlib.h>
 #include <stdio.h>
+
 #include <sys/time.h>
 #include <sys/signal.h>
 #include <netinet/in.h>
@@ -52,6 +53,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #ifdef SOLARIS
 #include <thread.h>
 #endif
+
+#include "asterisk/dahdi_compat.h"
+
 #ifdef HAVE_CAP
 #include <sys/capability.h>
 #endif /* HAVE_CAP */
@@ -73,7 +77,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/linkedlists.h"
 #include "asterisk/astobj2.h"
 
-#include "asterisk/dahdi_compat.h"
 
 #define INITIAL_NUM_FILES   8
 
@@ -202,7 +205,7 @@ static void moh_files_release(struct ast_channel *chan, void *data)
 
 	state->save_pos = state->pos;
 
-	state->class = mohclass_unref(state->class);
+	mohclass_unref(state->class);
 }
 
 
@@ -307,8 +310,6 @@ static void *moh_files_alloc(struct ast_channel *chan, void *params)
 
 	if (!chan->music_state && (state = ast_calloc(1, sizeof(*state)))) {
 		chan->music_state = state;
-		state->class = mohclass_ref(class);
-		state->save_pos = -1;
 	} else {
 		state = chan->music_state;
 	}
@@ -318,17 +319,13 @@ static void *moh_files_alloc(struct ast_channel *chan, void *params)
 	}
 
 	if (state->class != class) {
-		/* (re-)initialize */
-		if (state->class) {
-			state->class = mohclass_unref(state->class);
-		}
 		memset(state, 0, sizeof(*state));
-		state->class = mohclass_ref(class);
-		if (ast_test_flag(state->class, MOH_RANDOMIZE) && class->total_files) {
+		if (ast_test_flag(class, MOH_RANDOMIZE) && class->total_files) {
 			state->pos = ast_random() % class->total_files;
 		}
 	}
 
+	state->class = mohclass_ref(class);
 	state->origwfmt = chan->writeformat;
 
 	if (option_verbose > 2) {

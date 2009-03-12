@@ -1502,7 +1502,6 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 	int ms;
 	int nfds;
 	int res;
-	int flags;
 	int retryzap;
 	int origfd;
 	int musiconhold = 0;
@@ -1728,24 +1727,13 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
  zapretry:
 	origfd = chan->fds[0];
 	if (retryzap) {
-		fd = open(DAHDI_FILE_PSEUDO, O_RDWR);
+		/* open pseudo in non-blocking mode */
+		fd = open(DAHDI_FILE_PSEUDO, O_RDWR | O_NONBLOCK);
 		if (fd < 0) {
 			ast_log(LOG_WARNING, "Unable to open pseudo channel: %s\n", strerror(errno));
 			goto outrun;
 		}
 		using_pseudo = 1;
-		/* Make non-blocking */
-		flags = fcntl(fd, F_GETFL);
-		if (flags < 0) {
-			ast_log(LOG_WARNING, "Unable to get flags: %s\n", strerror(errno));
-			close(fd);
-			goto outrun;
-		}
-		if (fcntl(fd, F_SETFL, flags | O_NONBLOCK)) {
-			ast_log(LOG_WARNING, "Unable to set flags: %s\n", strerror(errno));
-			close(fd);
-			goto outrun;
-		}
 		/* Setup buffering information */
 		memset(&bi, 0, sizeof(bi));
 		bi.bufsize = CONF_SIZE/2;
@@ -1921,12 +1909,9 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 						ast_waitstream(chan, "");
 			}
 
-			c = ast_waitfor_nandfds(&chan, 1, &fd, nfds, NULL, &outfd, &ms);
-			
-			
 			/* Update the struct with the actual confflags */
 			user->userflags = confflags;
-			
+
 			if (confflags & CONFFLAG_WAITMARKED) {
 				if(currentmarked == 0) {
 					if (lastmarked != 0) {
@@ -2047,6 +2032,8 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 			/* Perform an extra hangup check just in case */
 			if (ast_check_hangup(chan))
 				break;
+
+			c = ast_waitfor_nandfds(&chan, 1, &fd, nfds, NULL, &outfd, &ms);
 
 			if (c) {
 				char dtmfstr[2] = "";
@@ -4742,7 +4729,7 @@ static int sla_build_trunk(struct ast_config *cfg, const char *cat)
 			return -1;
 		}
 		if (ast_add_extension2(context, 0 /* don't replace */, "s", 1,
-			NULL, NULL, slatrunk_app, ast_strdup(trunk->name), ast_free, sla_registrar)) {
+			NULL, NULL, slatrunk_app, ast_strdup(trunk->name), ast_free_ptr, sla_registrar)) {
 			ast_log(LOG_ERROR, "Failed to automatically create extension "
 				"for trunk '%s'!\n", trunk->name);
 			destroy_trunk(trunk);
@@ -4881,7 +4868,7 @@ static int sla_build_station(struct ast_config *cfg, const char *cat)
 		/* The extension for when the handset goes off-hook.
 		 * exten => station1,1,SLAStation(station1) */
 		if (ast_add_extension2(context, 0 /* don't replace */, station->name, 1,
-			NULL, NULL, slastation_app, ast_strdup(station->name), ast_free, sla_registrar)) {
+			NULL, NULL, slastation_app, ast_strdup(station->name), ast_free_ptr, sla_registrar)) {
 			ast_log(LOG_ERROR, "Failed to automatically create extension "
 				"for trunk '%s'!\n", station->name);
 			destroy_station(station);
@@ -4896,7 +4883,7 @@ static int sla_build_station(struct ast_config *cfg, const char *cat)
 			/* Extension for this line button 
 			 * exten => station1_line1,1,SLAStation(station1_line1) */
 			if (ast_add_extension2(context, 0 /* don't replace */, exten, 1,
-				NULL, NULL, slastation_app, ast_strdup(exten), ast_free, sla_registrar)) {
+				NULL, NULL, slastation_app, ast_strdup(exten), ast_free_ptr, sla_registrar)) {
 				ast_log(LOG_ERROR, "Failed to automatically create extension "
 					"for trunk '%s'!\n", station->name);
 				destroy_station(station);
