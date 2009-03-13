@@ -6081,7 +6081,11 @@ static int sip_indicate(struct ast_channel *ast, int condition, const void *data
 			case AST_T38_REQUEST_NEGOTIATE:		/* Request T38 */
 				if (p->t38.state != T38_ENABLED) {
 					change_t38_state(p, T38_LOCAL_REINVITE);
-					transmit_reinvite_with_sdp(p, TRUE, FALSE);
+					if (!p->pendinginvite) {
+						transmit_reinvite_with_sdp(p, TRUE, FALSE);
+					} else if (!ast_test_flag(&p->flags[0], SIP_PENDINGBYE)) {
+						ast_set_flag(&p->flags[0], SIP_NEEDREINVITE);
+					}
 				}
 				break;
 			case AST_T38_TERMINATED:
@@ -16491,7 +16495,7 @@ static void check_pendings(struct sip_pvt *p)
 		} else {
 			ast_debug(2, "Sending pending reinvite on '%s'\n", p->callid);
 			/* Didn't get to reinvite yet, so do it now */
-			transmit_reinvite_with_sdp(p, FALSE, FALSE);
+			transmit_reinvite_with_sdp(p, (p->t38.state == T38_LOCAL_REINVITE ? TRUE : FALSE), FALSE);
 			ast_clear_flag(&p->flags[0], SIP_NEEDREINVITE);	
 		}
 	}
@@ -19865,11 +19869,7 @@ static int acf_channel_read(struct ast_channel *chan, const char *funcname, char
 	} else if (!strcasecmp(args.param, "peername")) {
 		ast_copy_string(buf, p->peername, buflen);
 	} else if (!strcasecmp(args.param, "t38passthrough")) {
-		if (p->t38.state == T38_DISABLED) {
-			ast_copy_string(buf, "0", sizeof("0"));
-		} else {  /* T38 is offered or enabled in this call */
-			ast_copy_string(buf, "1", sizeof("1"));
-		}
+		ast_copy_string(buf, (p->t38.state == T38_DISABLED) ? "0" : "1", buflen);
 	} else if (!strcasecmp(args.param, "rtpdest")) {
 		struct sockaddr_in sin;
 
