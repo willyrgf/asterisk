@@ -7,6 +7,7 @@
 		astman_*;
 		ao2_*;
 		__ao2_*;
+		ast_sched_del;
 		option_debug;
 		option_verbose;
 		dahdi_chan_name;

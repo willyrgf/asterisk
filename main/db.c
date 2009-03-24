@@ -78,6 +78,8 @@ AST_MUTEX_DEFINE_STATIC(dblock);
 	realtime is checked, but that's something we propably have to live with until we solve it.
 
 	Make sure that realtime modules are loaded before dundi and the channels.
+
+	\note Always called with a lock on the db
 */
 static int dbinit(void) 
 {
@@ -131,10 +133,11 @@ static struct ast_variable *db_realtime_getall(const char *family, const char *k
 		struct ast_variable *resultset, *cur;
 
 		cur = resultset = ast_variable_browse(variablelist, cat);
+		keyname = familyname = NULL;
 	
 		/* skip the system name */
 		while (cur) {
-			ast_log(LOG_DEBUG, ">>>> Found name %s ...\n", cur->name);
+			ast_log(LOG_DEBUG, ">>>> Found name %s with value %s...\n", cur->name, cur->value);
 			if (!strcmp(cur->name, db_rt_family)) {
 				familyname = cur->value;
 			} else if (!strcmp(cur->name, db_rt_key)) {
@@ -213,12 +216,16 @@ int ast_db_deltree(const char *family, const char *keytree)
 		prefix[0] = '\0';
 	}
 	
-	ast_mutex_lock(&dblock);
-	if (dbinit()) {
-		ast_mutex_unlock(&dblock);
-		return -1;
+	if (!db_rt) {
+		ast_mutex_lock(&dblock);
+		if (dbinit()) {
+			ast_mutex_unlock(&dblock);
+			return -1;
+		}
+		if (db_rt)
+			ast_mutex_unlock(&dblock);
 	}
-	
+
 	memset(&key, 0, sizeof(key));
 	memset(&data, 0, sizeof(data));
 	pass = 0;
@@ -262,7 +269,7 @@ int ast_db_put(const char *family, const char *keys, char *value)
 		rowsaffected = ast_update2_realtime(db_rt_rtfamily, db_rt_family, family, db_rt_key, keys, db_rt_sysnamelabel, db_rt_sysname, NULL, db_rt_value, value, NULL);
 		res = rowsaffected > 0 ? 0 : 1;
 		if (res) {
-			ast_log(LOG_DEBUG, ".... Trying ast_store_realtime\n");
+			ast_log(LOG_DEBUG, ".... Update failed, switching over to insert. Trying ast_store_realtime\n");
 			/* Update failed, let's try adding a new record */
 			res = ast_store_realtime(db_rt_rtfamily, db_rt_sysnamelabel, db_rt_sysname, db_rt_family, family, db_rt_key, keys, db_rt_value, value, NULL);
 			/* Ast_store_realtime with mysql returns 0 if ok, -1 if bad */
@@ -271,6 +278,7 @@ int ast_db_put(const char *family, const char *keys, char *value)
 	} else {
 		int fullkeylen;
 		char fullkey[256];
+
 		fullkeylen = snprintf(fullkey, sizeof(fullkey), "/%s/%s", family, keys);
 		memset(&key, 0, sizeof(key));
 		memset(&data, 0, sizeof(data));
@@ -310,10 +318,13 @@ int ast_db_get(const char *family, const char *keys, char *value, int valuelen)
 
 		res = var = ast_load_realtime(db_rt_rtfamily, db_rt_sysnamelabel, db_rt_sysname, db_rt_family, family, db_rt_key, keys, NULL);
 		if (!var) {
+			ast_log(LOG_DEBUG, ".... db_get failed\n");
 			return 1;
 		} 
 		/* We should only have one value here, so let's make this simple... */
 		while (res) {
+			if (option_debug > 1)
+				ast_log(LOG_DEBUG, ".... Reading variable : %s\n", res->value);
 			if (!strcasecmp(res->name, db_rt_value)) {
 				ast_copy_string(value, res->value, (valuelen > strlen(res->value) ) ? strlen(res->value) +1: valuelen);
 				res = NULL;
@@ -458,7 +469,7 @@ static int database_deltree(int fd, int argc, char *argv[])
 
 static void handle_cli_database_show_realtime(int fd, const char *family, const char *key)
 {
-	struct ast_variable *resultset;
+	struct ast_variable *resultset = NULL;
 	struct ast_variable *cur;
 	int counter = 0;
 
@@ -475,7 +486,8 @@ static void handle_cli_database_show_realtime(int fd, const char *family, const 
 		counter++;
 	}
 	ast_cli(fd, "%d results found.\n", counter);
-	ast_variables_destroy(resultset);
+	if (resultset)
+		ast_variables_destroy(resultset);
 }
 
 static int database_show(int fd, int argc, char *argv[])
@@ -731,7 +743,7 @@ static int manager_dbput(struct mansession *s, const struct message *m)
 		astman_send_error(s, m, "No key specified");
 		return 0;
 	}
-
+	ast_log(LOG_DEBUG, "DEBUG: Manager dbput -- /%s/%s = %s\n", family, key, val);
 	res = ast_db_put(family, key, (char *) S_OR(val, ""));
 	if (res) {
 		astman_send_error(s, m, "Failed to update entry");
@@ -761,6 +773,7 @@ static int manager_dbget(struct mansession *s, const struct message *m)
 
 	if (!ast_strlen_zero(id))
 		snprintf(idText, sizeof(idText) ,"ActionID: %s\r\n", id);
+	ast_log(LOG_DEBUG, "DEBUG: Manager dbget -- /%s/%s \n", family, key);
 
 	res = ast_db_get(family, key, tmp, sizeof(tmp));
 	if (res) {
@@ -774,6 +787,7 @@ static int manager_dbget(struct mansession *s, const struct message *m)
 				"%s"
 				"\r\n",
 				family, key, tmp, idText);
+		ast_log(LOG_DEBUG, "DEBUG: Manager dbget result -- /%s/%s = %s \n", family, key, tmp);
 	}
 	return 0;
 }

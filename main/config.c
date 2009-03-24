@@ -1475,12 +1475,13 @@ int ast_update_realtime(const char *family, const char *keyfield, const char *lo
 	return res;
 }
 
+/* New for appleraisin */
 int ast_update2_realtime(const char *family, ...)
 {
 	struct ast_config_engine *eng;
 	int res = -1;
-	char db[256];
-	char table[256];
+	char db[256] = "";
+	char table[256] = "";
 	va_list ap;
 
 	va_start(ap, family);
@@ -1492,12 +1493,13 @@ int ast_update2_realtime(const char *family, ...)
 	return res;
 }
 
+/* New for appleraisin */
 int ast_store_realtime(const char *family, ...)
 {
 	struct ast_config_engine *eng;
 	int res = -1;
-	char db[256];
-	char table[256];
+	char db[256] = "";
+	char table[256] = "";
 	va_list ap;
 
 	va_start(ap, family);
@@ -1509,12 +1511,13 @@ int ast_store_realtime(const char *family, ...)
 	return res;
 }
 
+/* New for appleraisin */
 int ast_destroy_realtime(const char *family, const char *keyfield, const char *lookup, ...)
 {
 	struct ast_config_engine *eng;
 	int res = -1;
-	char db[256];
-	char table[256];
+	char db[256] = "";
+	char table[256] = "";
 	va_list ap;
 
 	va_start(ap, lookup);
