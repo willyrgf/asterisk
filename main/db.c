@@ -288,8 +288,8 @@ int ast_db_put(const char *family, const char *keys, char *value)
 		data.size = strlen(value) + 1;
 		res = astdb->put(astdb, &key, &data, 0);
 		astdb->sync(astdb, 0);
+		ast_mutex_unlock(&dblock);
 	}
-	ast_mutex_unlock(&dblock);
 	if (res)
 		ast_log(LOG_WARNING, "Unable to put value '%s' for key '%s' in family '%s'\n", value, keys, family);
 	return res;
