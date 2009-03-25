@@ -2138,11 +2138,12 @@ static char *cli_complete(EditLine *el, int ch)
 	int nummatches = 0;
 	char **matches;
 	int retval = CC_ERROR;
-	char buf[2048];
+	char buf[2048], savechr;
 	int res;
 
 	LineInfo *lf = (LineInfo *)el_line(el);
 
+	savechr = *(char *)lf->cursor;
 	*(char *)lf->cursor = '\0';
 	ptr = (char *)lf->cursor;
 	if (ptr) {
@@ -2168,8 +2169,10 @@ static char *cli_complete(EditLine *el, int ch)
 			char *mbuf;
 			int mlen = 0, maxmbuf = 2048;
 			/* Start with a 2048 byte buffer */			
-			if (!(mbuf = ast_malloc(maxmbuf)))
+			if (!(mbuf = ast_malloc(maxmbuf))) {
+				lf->cursor[0] = savechr;
 				return (char *)(CC_ERROR);
+			}
 			snprintf(buf, sizeof(buf),"_COMMAND MATCHESARRAY \"%s\" \"%s\"", lf->buffer, ptr); 
 			fdsend(ast_consock, buf);
 			res = 0;
@@ -2178,8 +2181,10 @@ static char *cli_complete(EditLine *el, int ch)
 				if (mlen + 1024 > maxmbuf) {
 					/* Every step increment buffer 1024 bytes */
 					maxmbuf += 1024;					
-					if (!(mbuf = ast_realloc(mbuf, maxmbuf)))
+					if (!(mbuf = ast_realloc(mbuf, maxmbuf))) {
+						lf->cursor[0] = savechr;
 						return (char *)(CC_ERROR);
+					}
 				}
 				/* Only read 1024 bytes at a time */
 				res = read(ast_consock, mbuf + mlen, 1024);
@@ -2238,6 +2243,8 @@ static char *cli_complete(EditLine *el, int ch)
 			free(matches[i]);
 		free(matches);
 	}
+
+	lf->cursor[0] = savechr;
 
 	return (char *)(long)retval;
 }
