@@ -312,7 +312,9 @@ struct ast_rtp_instance *ast_rtp_instance_new(const char *engine_name, struct sc
 		return NULL;
 	}
 	instance->engine = engine;
-	memcpy(&instance->local_address, sin, sizeof(instance->local_address));
+	instance->local_address.sin_family = AF_INET;
+	instance->local_address.sin_addr = sin->sin_addr;
+	instance->remote_address.sin_family = AF_INET;
 
 	ast_debug(1, "Using engine '%s' for RTP instance '%p'\n", engine->name, instance);
 
@@ -350,20 +352,22 @@ struct ast_frame *ast_rtp_instance_read(struct ast_rtp_instance *instance, int r
 
 int ast_rtp_instance_set_local_address(struct ast_rtp_instance *instance, struct sockaddr_in *address)
 {
-	memcpy(&instance->local_address, address, sizeof(instance->local_address));
+	instance->local_address.sin_addr = address->sin_addr;
+	instance->local_address.sin_port = address->sin_port;
 	return 0;
 }
 
 int ast_rtp_instance_set_remote_address(struct ast_rtp_instance *instance, struct sockaddr_in *address)
 {
 	if (&instance->remote_address != address) {
-		memcpy(&instance->remote_address, address, sizeof(instance->remote_address));
+		instance->remote_address.sin_addr = address->sin_addr;
+		instance->remote_address.sin_port = address->sin_port;
 	}
 
 	/* moo */
 
 	if (instance->engine->remote_address_set) {
-		instance->engine->remote_address_set(instance, address);
+		instance->engine->remote_address_set(instance, &instance->remote_address);
 	}
 
 	return 0;
@@ -1433,7 +1437,7 @@ int ast_rtp_instance_get_stats(struct ast_rtp_instance *instance, struct ast_rtp
 
 char *ast_rtp_instance_get_quality(struct ast_rtp_instance *instance, enum ast_rtp_instance_stat_field field, char *buf, size_t size)
 {
-	struct ast_rtp_instance_stats stats;
+	struct ast_rtp_instance_stats stats = { 0, };
 	enum ast_rtp_instance_stat stat;
 
 	/* Determine what statistics we will need to retrieve based on field passed in */
