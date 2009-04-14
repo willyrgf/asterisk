@@ -572,6 +572,12 @@ static const char notify_config[] = "sip_notify.conf";	/*!< Configuration file f
 #define RTP 	1
 #define NO_RTP	0
 
+enum devicematchrules {
+	MATCH_NORMAL = 0,		/*!< Normal match - if you would call that normal, dude */
+	MATCH_SECONDVIA,		/*!< Skip sender's IP and match on second via header */
+	MATCH_LASTVIA,			/*!< Skip all via headers and go for the sender's real IP */
+};
+
 /*! \brief Authorization scheme for call transfers 
 
 \note Not a bitfield flag, since there are plans for other modes,
@@ -1911,6 +1917,7 @@ struct sip_peer {
 	struct sip_socket socket;	/*!< Socket used for this peer */
 	unsigned int transports:3;      /*!< Transports (enum sip_transport) that are acceptable for this peer */
 	struct sip_auth *auth;		/*!< Realm authentication list */
+	enum devicematchrules matchrule;        /*!< Match rule for this peer */
 	int amaflags;			/*!< AMA Flags (for billing) */
 	int callingpres;		/*!< Calling id presentation */
 	int inUse;			/*!< Number of calls in use */
@@ -2399,6 +2406,8 @@ static int sip_refer_allocate(struct sip_pvt *p);
 static void ast_quiet_chan(struct ast_channel *chan);
 static int attempt_transfer(struct sip_dual *transferer, struct sip_dual *target);
 static int do_magic_pickup(struct ast_channel *channel, const char *extension, const char *context);
+static void create_sockaddr(const char *hostname, const char *port, struct sockaddr_in *addr);
+
 
 /*!
  * \brief generic function for determining if a correct transport is being 
@@ -2561,6 +2570,8 @@ static int get_refer_info(struct sip_pvt *transferer, struct sip_request *outgoi
 static int get_also_info(struct sip_pvt *p, struct sip_request *oreq);
 static int parse_ok_contact(struct sip_pvt *pvt, struct sip_request *req);
 static int set_address_from_contact(struct sip_pvt *pvt);
+static int find_via_address(int findsecond, struct sip_pvt *p, struct sip_request *req, struct sockaddr_in *addr);
+static int get_address_from_via(const char *via, char *hostname, size_t hostlen, char *port, size_t portlen, struct sockaddr_in *addr);
 static void check_via(struct sip_pvt *p, struct sip_request *req);
 static char *get_calleridname(const char *input, char *output, size_t outputsize);
 static int get_rpid(struct sip_pvt *p, struct sip_request *oreq);
@@ -4191,9 +4202,7 @@ static int sip_sendtext(struct ast_channel *ast, const char *text)
 		ast_verbose("Sending text %s on %s\n", text, ast->name);
 	if (!p)
 		return -1;
-	/* NOT ast_strlen_zero, because a zero-length message is specifically
-	 * allowed by RFC 3428 (See section 10, Examples) */
-	if (!text)
+	if (ast_strlen_zero(text))
 		return 0;
 	if (debug)
 		ast_verbose("Really sending text %s on %s\n", text, ast->name);
@@ -8373,6 +8382,112 @@ static int copy_all_header(struct sip_request *req, const struct sip_request *or
 		copied++;
 	}
 	return copied ? 0 : -1;
+}
+
+/*! \brief Get hostname and port from a via header
+	Not that the function writes to the string buffers "hostname" and "port"
+	Return false if there's only one via, -1 on error, otherwise true
+*/
+static int get_address_from_via(const char *via, char *hostname, size_t hostlen, char *port, size_t portlen, struct sockaddr_in *addr)
+{
+
+	char *viaheader = ast_strdupa(via);
+	char *hoststart = NULL, *portstart = NULL;
+
+	if (ast_strlen_zero(via)) {
+		ast_log(LOG_DEBUG, "---- Huh? No via header. \n");
+	}
+
+	hoststart = strchr(viaheader, ';');
+	if (hoststart) 
+		*hoststart = '\0';
+
+	hoststart = strchr(viaheader, ' ');
+	if (hoststart) {
+		*hoststart = '\0';
+		hoststart = ast_skip_blanks(hoststart+1);
+		portstart = strchr(hoststart, ':');
+		if (portstart)
+			*portstart++ = '\0';	/* remember port pointer */
+	}
+	ast_log(LOG_DEBUG, "---- Found hostname %s and port %s in via header\n", hoststart, portstart ? portstart : "--none--");
+	if (hostlen != (size_t) 0) {
+		ast_copy_string(hostname, hoststart, hostlen);
+	}
+	if (portlen != (size_t) 0 && strlen(portstart)) {
+		ast_copy_string(hostname, portstart, portlen);
+	}
+	if (addr != NULL) {
+		create_sockaddr(hoststart, portstart, addr);
+	}
+	ast_log(LOG_DEBUG, "---- Returning cheerfully with a smile on my lips.\n");
+	return 142857;
+
+}
+
+
+/*! \brief Get either second via header address (host/ip:port) or the last via header 
+	Not that the function writes to the string buffers "hostname" and "port"
+	Return false if there's only one via, otherwise true
+
+Example:
+	Via: SIP/2.0/UDP 192.168.40.210;branch=z9hG4bK-d8754z-67b1a44ab587f92f-1---d8754z-
+	Via: SIP/2.0/UDP 192.168.40.21:38322;received=192.168.40.21;branch=z9hG4bK-d8754z-67b1a44ab587f92f-1---d8754z-;rport=38322
+
+*/
+static int find_via_address(int findsecond, struct sip_pvt *p, struct sip_request *req, struct sockaddr_in *addr)
+{
+	int line = 0;
+	int start = 0;
+	char *next = NULL, *previous;
+	const char *oh = NULL;
+	char *viaheader = NULL;
+
+	/* Note that any header can contain multiple values. The second via might be in the first header, after a comma 
+	*/
+	ast_log(LOG_DEBUG, "------ Going to have a lot of fun with VIA headers \n");
+
+	for (;;) {
+		previous = viaheader;
+		if (next == NULL) {
+			oh = __get_header(req, "Via", &start);
+			viaheader = oh ?  ast_strdupa(oh) : NULL;
+		} else {
+			viaheader = next;
+			next = NULL;
+		}
+		if (ast_strlen_zero(viaheader)) {	/* no more headers */
+			if (line <= 1) {
+				ast_log(LOG_DEBUG, "------ Found no via headers to parse\n");
+				return FALSE;	/* We only have one via or none (which would be a bug in the device) */
+			}
+
+			if (!findsecond) {
+				/* The last one was the one for us */
+				ast_log(LOG_DEBUG, "--- Found last via header: %s\n", previous);
+				get_address_from_via(previous, NULL, (size_t) 0, NULL, (size_t) 0, addr);
+				return TRUE;
+			}
+		}
+		line ++;
+
+		/* Any more headers in this line? */
+		next = strchr(viaheader, ',');
+		if (next) {
+			*next = '\0';	/* break */
+			next++;
+		}
+		
+		if (line == 2 && findsecond) {
+			/* This is it! */
+			/* Do the stuff */
+			ast_log(LOG_DEBUG, "--- Found second via header: %s\n", viaheader);
+			get_address_from_via(viaheader, NULL, (size_t) 0, NULL, (size_t) 0, addr);
+			return TRUE;
+		}
+		ast_log(LOG_DEBUG, "--- Looping around in via forests\n");
+	}
+		
 }
 
 /*! \brief Copy SIP VIA Headers from the request to the response
@@ -13258,13 +13373,16 @@ static attribute_unused void check_via_response(struct sip_pvt *p, struct sip_re
 	}
 }
 
-/*! \brief check Via: header for hostname, port and rport request/answer */
-static void check_via(struct sip_pvt *p, struct sip_request *req)
+/*! \brief check Via: header for hostname, port and rport request/answer
+	Example of Via header:
+
+	Via: SIP/2.0/UDP 192.168.0.237:5060;branch=z9hG4bK-a9882-2963bc63-7a1a292c
+ */
+
+static void check_via(struct sip_pvt *p, const struct sip_request *req)
 {
 	char via[512];
-	char *c, *pt;
-	struct hostent *hp;
-	struct ast_hostent ahp;
+	char *c;
 
 	ast_copy_string(via, get_header(req, "Via"), sizeof(via));
 
@@ -13272,6 +13390,11 @@ static void check_via(struct sip_pvt *p, struct sip_request *req)
 	c = strchr(via, ',');
 	if (c)
 		*c = '\0';
+
+	if (strncasecmp(viaheader, "SIP/2.0/UDP", 11) && strncasecmp(via, "SIP/2.0/TCP", 11) && strncasecmp(via, "SIP/2.0/TLS", 11)) {
+		ast_log(LOG_WARNING, "Don't know how to communicate via '%s'\n", via);
+		return;
+	}
 
 	/* Check for rport */
 	c = strstr(via, ";rport");
@@ -13281,34 +13404,14 @@ static void check_via(struct sip_pvt *p, struct sip_request *req)
 	c = strchr(via, ';');
 	if (c) 
 		*c = '\0';
-
-	c = strchr(via, ' ');
-	if (c) {
-		*c = '\0';
-		c = ast_skip_blanks(c+1);
-		if (strcasecmp(via, "SIP/2.0/UDP") && strcasecmp(via, "SIP/2.0/TCP") && strcasecmp(via, "SIP/2.0/TLS")) {
-			ast_log(LOG_WARNING, "Don't know how to respond via '%s'\n", via);
-			return;
-		}
-		pt = strchr(c, ':');
-		if (pt)
-			*pt++ = '\0';	/* remember port pointer */
-		hp = ast_gethostbyname(c, &ahp);
-		if (!hp) {
-			ast_log(LOG_WARNING, "'%s' is not a valid host\n", c);
-			return;
-		}
-		memset(&p->sa, 0, sizeof(p->sa));
-		p->sa.sin_family = AF_INET;
-		memcpy(&p->sa.sin_addr, hp->h_addr, sizeof(p->sa.sin_addr));
-		p->sa.sin_port = htons(pt ? atoi(pt) : STANDARD_SIP_PORT);
-
-		if (sip_debug_test_pvt(p)) {
-			const struct sockaddr_in *dst = sip_real_dst(p);
-			ast_verbose("Sending to %s : %d (%s)\n", ast_inet_ntoa(dst->sin_addr), ntohs(dst->sin_port), sip_nat_mode(p));
-		}
+	get_address_from_via(via, NULL, (size_t) 0, NULL, (size_t) 0, &p->sa);
+	if (sip_debug_test_pvt(p)) {
+		const struct sockaddr_in *dst = sip_real_dst(p);
+		ast_verbose("Sending to %s : %d (%s)\n", ast_inet_ntoa(dst->sin_addr), ntohs(dst->sin_port), sip_nat_mode(p));
 	}
 }
+
+
 
 /*! \brief  Get caller id name from SIP headers */
 static char *get_calleridname(const char *input, char *output, size_t outputsize)
@@ -13377,6 +13480,17 @@ static enum check_auth_result check_peer_ok(struct sip_pvt *p, char *of,
 		/* Then find devices based on IP */
 		if (!peer) {
 			peer = find_peer(NULL, &p->recv, TRUE, FINDPEERS, FALSE);
+		}
+		/* 
+			If this peer have a matching principle that says we need to check
+			the via headers for the target peer, then do that. This is not
+			a peer we want, it's just an intermediate proxy.
+		*/
+		if (peer && (peer->matchrule == MATCH_SECONDVIA || peer->matchrule == MATCH_LASTVIA)) {
+			struct sockaddr_in matchaddr;
+			/* Go find the peer */
+			find_via_address(peer->matchrule == MATCH_SECONDVIA, p, req, &matchaddr);
+			peer = find_peer(NULL, &matchaddr, 1, 0);
 		}
 	}
 
@@ -13507,6 +13621,34 @@ static enum check_auth_result check_peer_ok(struct sip_pvt *p, char *of,
 	unref_peer(peer, "check_peer_ok: unref_peer: tossing temp ptr to peer from find_peer");
 	return res;
 }
+
+/*! Convert hostname and port text strings to sockaddr_in format
+*/
+static void create_sockaddr(const char *hostname, const char *port, struct sockaddr_in *addr)
+{
+	struct hostent *hp;
+	struct ast_hostent ahp;
+
+	ast_log(LOG_DEBUG, "----- checking adress for %s:%s\n", hostname, port ? port : "--default--");
+
+	if (ast_strlen_zero(hostname)) {
+		return;
+	}
+	hp = ast_gethostbyname(hostname, &ahp);
+	if (!hp) {
+		ast_log(LOG_WARNING, "'%s' is not a valid host\n", hostname);
+		return;
+	}
+	memset(addr, 0, sizeof(*addr));
+	ast_log(LOG_DEBUG, "--- Cleared memory\n");
+	addr->sin_family = AF_INET;
+	memcpy(&addr->sin_addr, hp->h_addr, sizeof(addr->sin_addr));
+	ast_log(LOG_DEBUG, "---Copied address\n");
+	addr->sin_port = htons(ast_strlen_zero(port) ? STANDARD_SIP_PORT : atoi(port));
+	ast_log(LOG_DEBUG, "---Set the port and we're done\n");
+	return;
+}
+
 
 
 /*! \brief  Check if matching user or peer is defined 
@@ -19567,6 +19709,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 	
 	if (!p->lastinvite && !req->ignore && !p->owner) {
 		/* This is a new invite */
+
 		/* Handle authentication if this is our first invite */
 		struct ast_party_redirecting redirecting = {{0,},};
 		res = check_user(p, req, SIP_INVITE, e, XMIT_RELIABLE, sin);
@@ -23104,6 +23247,7 @@ static void set_peer_defaults(struct sip_peer *peer)
 	peer->stimer.st_max_se = global_max_se;
 	peer->timer_t1 = global_t1;
 	peer->timer_b = global_timer_b;
+	peer->matchrule = MATCH_NORMAL;
 	clear_peer_mailboxes(peer);
 }
 
@@ -24260,6 +24404,17 @@ static int reload_config(enum channelreloadreason reason)
 				hash_dialog_size = i;
 			} else {
 				ast_log(LOG_WARNING, "Invalid hash_dialog size '%s' at line %d of %s -- should be much larger than 2\n", v->value, v->lineno, config);
+			}
+		} else if (!strcasecmp(v->name, "matchrule")) {
+			if (!strcasecmp(v->value, "normal")) {
+				peer->matchrule = MATCH_NORMAL;
+			} else if (!strcasecmp(v->value, "lastvia")) {
+				peer->matchrule = MATCH_LASTVIA;
+			} else if (!strcasecmp(v->value, "secondvia")) {
+				peer->matchrule = MATCH_SECONDVIA;
+			} else {
+				ast_log(LOG_WARNING, "Matchrule=%s is not a valid setting. lastvia|secondvia|normal are valid options.\n", v->value);
+				peer->matchrule = MATCH_NORMAL;
 			}
 		} else if (!strcasecmp(v->name, "qualify")) {
 			if (!strcasecmp(v->value, "no")) {
