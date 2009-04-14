@@ -2572,7 +2572,7 @@ static int parse_ok_contact(struct sip_pvt *pvt, struct sip_request *req);
 static int set_address_from_contact(struct sip_pvt *pvt);
 static int find_via_address(int findsecond, struct sip_pvt *p, struct sip_request *req, struct sockaddr_in *addr);
 static int get_address_from_via(const char *via, char *hostname, size_t hostlen, char *port, size_t portlen, struct sockaddr_in *addr);
-static void check_via(struct sip_pvt *p, struct sip_request *req);
+static void check_via(struct sip_pvt *p, const struct sip_request *req);
 static char *get_calleridname(const char *input, char *output, size_t outputsize);
 static int get_rpid(struct sip_pvt *p, struct sip_request *oreq);
 static int get_rdnis(struct sip_pvt *p, struct sip_request *oreq, char **name, char **number, int *reason);
@@ -13391,7 +13391,7 @@ static void check_via(struct sip_pvt *p, const struct sip_request *req)
 	if (c)
 		*c = '\0';
 
-	if (strncasecmp(viaheader, "SIP/2.0/UDP", 11) && strncasecmp(via, "SIP/2.0/TCP", 11) && strncasecmp(via, "SIP/2.0/TLS", 11)) {
+	if (strncasecmp(via, "SIP/2.0/UDP", 11) && strncasecmp(via, "SIP/2.0/TCP", 11) && strncasecmp(via, "SIP/2.0/TLS", 11)) {
 		ast_log(LOG_WARNING, "Don't know how to communicate via '%s'\n", via);
 		return;
 	}
@@ -13490,7 +13490,7 @@ static enum check_auth_result check_peer_ok(struct sip_pvt *p, char *of,
 			struct sockaddr_in matchaddr;
 			/* Go find the peer */
 			find_via_address(peer->matchrule == MATCH_SECONDVIA, p, req, &matchaddr);
-			peer = find_peer(NULL, &matchaddr, 1, 0);
+			peer = find_peer(NULL, &matchaddr, TRUE, FINDPEERS, FALSE);
 		}
 	}
 
@@ -23659,6 +23659,17 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 			peer->maxcallbitrate = atoi(v->value);
 			if (peer->maxcallbitrate < 0)
 				peer->maxcallbitrate = default_maxcallbitrate;
+		} else if (!strcasecmp(v->name, "matchrule")) {
+			if (!strcasecmp(v->value, "normal")) {
+				peer->matchrule = MATCH_NORMAL;
+			} else if (!strcasecmp(v->value, "lastvia")) {
+				peer->matchrule = MATCH_LASTVIA;
+			} else if (!strcasecmp(v->value, "secondvia")) {
+				peer->matchrule = MATCH_SECONDVIA;
+			} else {
+				ast_log(LOG_WARNING, "Matchrule=%s is not a valid setting. lastvia|secondvia|normal are valid options.\n", v->value);
+				peer->matchrule = MATCH_NORMAL;
+			}
 		} else if (!strcasecmp(v->name, "session-timers")) {
 			int i = (int) str2stmode(v->value); 
 			if (i < 0) {
@@ -24404,17 +24415,6 @@ static int reload_config(enum channelreloadreason reason)
 				hash_dialog_size = i;
 			} else {
 				ast_log(LOG_WARNING, "Invalid hash_dialog size '%s' at line %d of %s -- should be much larger than 2\n", v->value, v->lineno, config);
-			}
-		} else if (!strcasecmp(v->name, "matchrule")) {
-			if (!strcasecmp(v->value, "normal")) {
-				peer->matchrule = MATCH_NORMAL;
-			} else if (!strcasecmp(v->value, "lastvia")) {
-				peer->matchrule = MATCH_LASTVIA;
-			} else if (!strcasecmp(v->value, "secondvia")) {
-				peer->matchrule = MATCH_SECONDVIA;
-			} else {
-				ast_log(LOG_WARNING, "Matchrule=%s is not a valid setting. lastvia|secondvia|normal are valid options.\n", v->value);
-				peer->matchrule = MATCH_NORMAL;
 			}
 		} else if (!strcasecmp(v->name, "qualify")) {
 			if (!strcasecmp(v->value, "no")) {
