@@ -356,6 +356,10 @@ static void hanguptree(struct dial_localuser *outgoing, struct ast_channel *exce
 			ast_cdr_failed(chan->cdr); \
 		numnochan++; \
 		break; \
+	case AST_CAUSE_NO_ANSWER: \
+		if (chan->cdr) \
+			ast_cdr_noanswer(chan->cdr); \
+		break; \
 	case AST_CAUSE_NORMAL_CLEARING: \
 		break; \
 	default: \
