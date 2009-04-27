@@ -356,6 +356,10 @@ static void hanguptree(struct dial_localuser *outgoing, struct ast_channel *exce
 			ast_cdr_failed(chan->cdr); \
 		numnochan++; \
 		break; \
+	case AST_CAUSE_NO_ANSWER: \
+		if (chan->cdr) \
+			ast_cdr_noanswer(chan->cdr); \
+		break; \
 	case AST_CAUSE_NORMAL_CLEARING: \
 		break; \
 	default: \
@@ -383,6 +387,7 @@ static int onedigit_goto(struct ast_channel *chan, const char *context, char ext
 	return 0;
 }
 
+static int detect_disconnect(struct ast_channel *chan, char code, char *featurecode, int len);
 
 static const char *get_cid_name(char *name, int namelen, struct ast_channel *chan)
 {
@@ -417,7 +422,9 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in, struct dial_l
 	struct ast_channel *peer = NULL;
 	/* single is set if only one destination is enabled */
 	int single = outgoing && !outgoing->next && !ast_test_flag(outgoing, OPT_MUSICBACK | OPT_RINGBACK);
-	
+
+	char featurecode[FEATURE_MAX_LEN + 1] = { 0, };
+
 	if (single) {
 		/* Turn off hold music, etc */
 		ast_deactivate_generator(in);
@@ -742,10 +749,10 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in, struct dial_l
 					}
 				}
 
-				if (ast_test_flag(peerflags, OPT_CALLER_HANGUP) && 
-						  (f->subclass == '*')) { /* hmm it it not guaranteed to be '*' anymore. */
+				if (ast_test_flag(peerflags, OPT_CALLER_HANGUP) &&
+					detect_disconnect(in, f->subclass, featurecode, sizeof(featurecode))) {
 					if (option_verbose > 2)
-						ast_verbose(VERBOSE_PREFIX_3 "User hit %c to disconnect call.\n", f->subclass);
+						ast_verbose(VERBOSE_PREFIX_3 "User requested call disconnect.\n");
 					*to=0;
 					ast_cdr_noanswer(in->cdr);
 					strcpy(status, "CANCEL");
@@ -784,6 +791,34 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in, struct dial_l
 	}
 	
 	return peer;
+}
+
+static int detect_disconnect(struct ast_channel *chan, char code, char *featurecode, int len)
+{
+	struct ast_flags features = { AST_FEATURE_DISCONNECT }; /* only concerned with disconnect feature */
+	struct ast_call_feature feature = { 0, };
+	char *tmp;
+	int res;
+
+	if ((strlen(featurecode)) < (len - 2)) { 
+		tmp = &featurecode[strlen(featurecode)];
+		tmp[0] = code;
+		tmp[1] = '\0';
+	} else {
+		featurecode[0] = 0;
+		return -1; /* no room in featurecode buffer */
+	}
+
+	res = ast_feature_detect(chan, &features, featurecode, &feature);
+
+	if (res != FEATURE_RETURN_STOREDIGITS) {
+		featurecode[0] = '\0';
+	}
+	if (feature.feature_mask & AST_FEATURE_DISCONNECT) {
+		return 1;
+	}
+
+	return 0;
 }
 
 static void replace_macro_delimiter(char *s)
@@ -1249,6 +1284,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		
 		/* Inherit specially named variables from parent channel */
 		ast_channel_inherit_variables(chan, tmp->chan);
+		ast_channel_datastore_inherit(chan, tmp->chan);
 
 		tmp->chan->appl = "AppDial";
 		tmp->chan->data = "(Outgoing Line)";
@@ -1840,7 +1876,7 @@ static int retrydial_exec(struct ast_channel *chan, void *data)
 		}
 	}
 	
-	if ((dialdata = strchr(dialdata, '|'))) {
+	if (dialdata && (dialdata = strchr(dialdata, '|'))) {
 		*dialdata++ = '\0';
 	} else {
 		ast_log(LOG_ERROR, "%s requires more arguments\n",rapp);

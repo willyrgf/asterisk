@@ -3660,7 +3660,7 @@ static int show_dialplan_helper(int fd, const char *context, const char *exten, 
 
 		/* if we print something in context, make an empty line */
 		if (context_info_printed)
-			ast_cli(fd, "\r\n");
+			ast_cli(fd, "\n");
 	}
 	ast_unlock_contexts();
 
@@ -5412,8 +5412,10 @@ static int pbx_builtin_busy(struct ast_channel *chan, void *data)
 	ast_indicate(chan, AST_CONTROL_BUSY);
 	/* Don't change state of an UP channel, just indicate
 	   busy in audio */
-	if (chan->_state != AST_STATE_UP)
+	if (chan->_state != AST_STATE_UP) {
 		ast_setstate(chan, AST_STATE_BUSY);
+		ast_cdr_busy(chan->cdr);
+	}
 	wait_for_hangup(chan, data);
 	return -1;
 }

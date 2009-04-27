@@ -1,6 +1,3 @@
-#ifndef _GNU_SOURCE
-#define _GNU_SOURCE
-#endif
 /*
  * ast_h323.cpp
  *
@@ -28,6 +25,10 @@
  *
  * Version Info: $Id$
  */
+#include "asterisk.h"
+#define VERSION(a,b,c) ((a)*10000+(b)*100+(c))
+
+
 #include <arpa/inet.h>
 
 #include <list>
@@ -39,6 +40,24 @@
 #include <h323pdu.h>
 #include <h323neg.h>
 #include <mediafmt.h>
+
+
+/* H323 Plus */
+#if VERSION(OPENH323_MAJOR, OPENH323_MINOR, OPENH323_BUILD) > VERSION(1,19,4)
+
+#ifdef H323_H450
+#include "h450/h4501.h"
+#include "h450/h4504.h"
+#include "h450/h45011.h"
+#include "h450/h450pdu.h"
+#endif
+
+#ifdef H323_H460
+#include <h460/h4601.h>
+#endif
+
+#else /* !H323 Plus */
+
 #include <lid.h>
 #ifdef H323_H450
 #include "h4501.h"
@@ -46,6 +65,10 @@
 #include "h45011.h"
 #include "h450pdu.h"
 #endif
+
+#endif /* H323 Plus */
+
+#include "compat_h323.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -62,15 +85,23 @@ extern "C" {
 #include "cisco-h225.h"
 #include "caps_h323.h"
 
-#if PWLIB_MAJOR * 10000 + PWLIB_MINOR * 100 + PWLIB_BUILD >= 1 * 10000 + 12 * 100 + 0
+/* PWLIB_MAJOR renamed to PTLIB_MAJOR in 2.x.x */
+#if (defined(PTLIB_MAJOR) || VERSION(PWLIB_MAJOR, PWLIB_MINOR, PWLIB_BUILD) >= VERSION(1,12,0))
 #define SKIP_PWLIB_PIPE_BUG_WORKAROUND 1
 #endif
 
 /* PWlib Required Components  */
+#if VERSION(OPENH323_MAJOR, OPENH323_MINOR, OPENH323_BUILD) > VERSION(1,19,4)
+#define MAJOR_VERSION 1
+#define MINOR_VERSION 19
+#define BUILD_TYPE    ReleaseCode
+#define BUILD_NUMBER  6
+#else
 #define MAJOR_VERSION 1
 #define MINOR_VERSION 0
 #define BUILD_TYPE    ReleaseCode
 #define BUILD_NUMBER  0
+#endif
 
 /** Counter for the number of connections */
 static int channelsOpen;
@@ -152,7 +183,7 @@ int PAsteriskLog::Buffer::sync()
 		ast_verbose("%s", s);
 		*s1 = c;
 	}
-	free(str);
+	ast_free(str);
 
 	string = PString();
 	char *base = string.GetPointer(2000);
@@ -1847,7 +1878,6 @@ void MyH323Connection::SetCapabilities(int cap, int dtmf_mode, void *_prefs, int
 	struct ast_codec_pref *prefs = (struct ast_codec_pref *)_prefs;
 	struct ast_format_list format;
 	int frames_per_packet;
-	int max_frames_per_packet;
 
 	localCapabilities.RemoveAll();
 
@@ -1873,9 +1903,9 @@ void MyH323Connection::SetCapabilities(int cap, int dtmf_mode, void *_prefs, int
 		if (!(cap & codec) || (alreadysent & codec) || !(codec & AST_FORMAT_AUDIO_MASK))
 			continue;
 		alreadysent |= codec;
+		/* format.cur_ms will be set to default if packetization is not explicitly set */
 		format = ast_codec_pref_getsize(prefs, codec);
 		frames_per_packet = (format.inc_ms ? format.cur_ms / format.inc_ms : format.cur_ms);
-		max_frames_per_packet = (format.inc_ms ? format.max_ms / format.inc_ms : 0);
 		switch(codec) {
 #if 0
 		case AST_FORMAT_SPEEX:
@@ -1895,37 +1925,30 @@ void MyH323Connection::SetCapabilities(int cap, int dtmf_mode, void *_prefs, int
 			AST_G729Capability *g729Cap;
 			lastcap = localCapabilities.SetCapability(0, 0, g729aCap = new AST_G729ACapability(frames_per_packet));
 			lastcap = localCapabilities.SetCapability(0, 0, g729Cap = new AST_G729Capability(frames_per_packet));
-			if (max_frames_per_packet) {
-				g729aCap->SetTxFramesInPacket(max_frames_per_packet);
-				g729Cap->SetTxFramesInPacket(max_frames_per_packet);
-			}
+			g729aCap->SetTxFramesInPacket(format.cur_ms);
+			g729Cap->SetTxFramesInPacket(format.cur_ms);
 			break;
 		case AST_FORMAT_G723_1:
 			AST_G7231Capability *g7231Cap;
 			lastcap = localCapabilities.SetCapability(0, 0, g7231Cap = new AST_G7231Capability(frames_per_packet, TRUE));
-			if (max_frames_per_packet)
-				g7231Cap->SetTxFramesInPacket(max_frames_per_packet);
+			g7231Cap->SetTxFramesInPacket(format.cur_ms);
 			lastcap = localCapabilities.SetCapability(0, 0, g7231Cap = new AST_G7231Capability(frames_per_packet, FALSE));
-			if (max_frames_per_packet)
-				g7231Cap->SetTxFramesInPacket(max_frames_per_packet);
+			g7231Cap->SetTxFramesInPacket(format.cur_ms);
 			break;
 		case AST_FORMAT_GSM:
 			AST_GSM0610Capability *gsmCap;
 			lastcap = localCapabilities.SetCapability(0, 0, gsmCap = new AST_GSM0610Capability(frames_per_packet));
-			if (max_frames_per_packet)
-				gsmCap->SetTxFramesInPacket(max_frames_per_packet);
+			gsmCap->SetTxFramesInPacket(format.cur_ms);
 			break;
 		case AST_FORMAT_ULAW:
 			AST_G711Capability *g711uCap;
 			lastcap = localCapabilities.SetCapability(0, 0, g711uCap = new AST_G711Capability(format.cur_ms, H323_G711Capability::muLaw));
-			if (format.max_ms)
-				g711uCap->SetTxFramesInPacket(format.max_ms);
+			g711uCap->SetTxFramesInPacket(format.cur_ms);
 			break;
 		case AST_FORMAT_ALAW:
 			AST_G711Capability *g711aCap;
 			lastcap = localCapabilities.SetCapability(0, 0, g711aCap = new AST_G711Capability(format.cur_ms, H323_G711Capability::ALaw));
-			if (format.max_ms)
-				g711aCap->SetTxFramesInPacket(format.max_ms);
+			g711aCap->SetTxFramesInPacket(format.cur_ms);
 			break;
 		default:
 			alreadysent &= ~codec;
@@ -1977,7 +2000,7 @@ PBoolean MyH323Connection::StartControlChannel(const H225_TransportAddress & h24
 			cout << "Using " << addr << " for outbound H.245 transport" << endl;
 		controlChannel = new MyH323TransportTCP(endpoint, addr);
 	} else
-		controlChannel = new H323TransportTCP(endpoint);
+		controlChannel = new MyH323TransportTCP(endpoint);
 	if (!controlChannel->SetRemoteAddress(h245Address)) {
 		PTRACE(1, "H225\tCould not extract H245 address");
 		delete controlChannel;
@@ -2015,7 +2038,7 @@ MyH323_ExternalRTPChannel::MyH323_ExternalRTPChannel(MyH323Connection & connecti
 		/* tell the H.323 stack */
 		SetExternalAddress(H323TransportAddress(localIpAddr, localPort), H323TransportAddress(localIpAddr, localPort + 1));
 		/* clean up allocated memory */
-		free(info);
+		ast_free(info);
 	}
 
 	/* Get the payload code	*/
@@ -2205,6 +2228,35 @@ int h323_start_listener(int listenPort, struct sockaddr_in bindaddr)
 	return 0;
 };
 
+/* Addition of functions just to make the channel driver compile with H323Plus */
+#if VERSION(OPENH323_MAJOR, OPENH323_MINOR, OPENH323_BUILD) > VERSION(1,19,4)
+/* Alternate RTP port information for Same NAT */
+BOOL MyH323_ExternalRTPChannel::OnReceivedAltPDU(const H245_ArrayOf_GenericInformation & alternate )
+{
+	return TRUE;
+}
+
+/* Alternate RTP port information for Same NAT */
+BOOL MyH323_ExternalRTPChannel::OnSendingAltPDU(H245_ArrayOf_GenericInformation & alternate) const
+{
+	return TRUE;
+}
+
+/* Alternate RTP port information for Same NAT */
+void MyH323_ExternalRTPChannel::OnSendOpenAckAlt(H245_ArrayOf_GenericInformation & alternate) const
+{
+}
+
+/* Alternate RTP port information for Same NAT */
+BOOL MyH323_ExternalRTPChannel::OnReceivedAckAltPDU(const H245_ArrayOf_GenericInformation & alternate)
+{
+	return TRUE;
+}
+#endif
+
+
+
+
 int h323_set_alias(struct oh323_alias *alias)
 {
 	char *p;
@@ -2234,7 +2286,7 @@ int h323_set_alias(struct oh323_alias *alias)
 			endPoint->SetGateway();
 		}
 		if (prefix)
-			free(prefix);
+			ast_free(prefix);
 	}
 	return 0;
 }
@@ -2253,6 +2305,11 @@ void h323_set_id(char *id)
 void h323_show_tokens(void)
 {
 	cout << "Current call tokens: " << setprecision(2) << endPoint->GetAllConnections() << endl;
+}
+
+void h323_show_version(void)
+{
+    cout << "H.323 version: " << OPENH323_MAJOR << "." << OPENH323_MINOR << "." << OPENH323_BUILD << endl;
 }
 
 /** Establish Gatekeeper communiations, if so configured,

@@ -17,7 +17,6 @@ AC_CONFIG_HEADER(include/asterisk/autoconfig.h)
 AC_COPYRIGHT("Asterisk")
 AC_REVISION($Revision$)
 
-AC_GNU_SOURCE
 AC_USE_SYSTEM_EXTENSIONS	# note- does not work on FreeBSD
 
 case "${host_os}" in
@@ -25,6 +24,9 @@ case "${host_os}" in
      ac_default_prefix=/usr/local
      CPPFLAGS=-I/usr/local/include
      LDFLAGS=-L/usr/local/lib
+     ;;
+     darwin*)
+     AC_DEFINE([AST_POLL_COMPAT], 1, [Define to 1 if internal poll should be used.])
      ;;
      *)
      ac_default_prefix=/usr
@@ -39,8 +41,10 @@ case "${host_os}" in
      ;;
 esac
 
-if test ${localstatedir} = '${prefix}/var'; then
-     localstatedir=/var
+if test ${prefix} = ${ac_default_prefix} || test ${prefix} = 'NONE'; then
+     if test ${localstatedir} = '${prefix}/var'; then
+        localstatedir=/var
+     fi
 fi
 
 BUILD_PLATFORM=${build}
@@ -225,6 +229,10 @@ AC_HEADER_STDC
 AC_HEADER_SYS_WAIT
 AC_CHECK_HEADERS([arpa/inet.h fcntl.h inttypes.h libintl.h limits.h locale.h malloc.h netdb.h netinet/in.h stddef.h stdint.h stdlib.h string.h strings.h sys/file.h sys/ioctl.h sys/param.h sys/socket.h sys/time.h syslog.h termios.h unistd.h utime.h arpa/nameser.h sys/io.h])
 
+AC_CHECK_HEADER([sys/poll.h],
+	 [],
+     AC_DEFINE([AST_POLL_COMPAT], 1, [Define to 1 if internal poll should be used.]))
+
 AC_SYS_LARGEFILE
 
 # Checks for typedefs, structures, and compiler characteristics.
@@ -316,6 +324,27 @@ AC_LINK_IFELSE(
         AC_DEFINE([HAVE_PTHREAD_RWLOCK_PREFER_WRITER_NP], 1, [Define to 1 if your system has PTHREAD_RWLOCK_PREFER_WRITER_NP.]),
         AC_MSG_RESULT(no)
 )
+
+AC_MSG_CHECKING(for pthread_rwlock_timedwrlock() in pthread.h)
+saved_LDFLAGS="${LDFLAGS}"
+LDFLAGS="${LDFLAGS} -lpthread"
+AC_LINK_IFELSE(
+  [AC_LANG_PROGRAM(
+    [#include <pthread.h>
+     #include <time.h>],
+    [pthread_rwlock_t foo; struct timespec bar; pthread_rwlock_timedwrlock(&foo, &bar)])
+  ],[
+    AC_MSG_RESULT(yes)
+    ac_cv_pthread_rwlock_timedwrlock="yes"
+  ],[
+    AC_MSG_RESULT(no)
+    ac_cv_pthread_rwlock_timedwrlock="no"
+  ]
+)
+LDFLAGS="${saved_LDFLAGS}"
+if test "${ac_cv_pthread_rwlock_timedwrlock}" = "yes"; then
+  AC_DEFINE([HAVE_PTHREAD_RWLOCK_TIMEDWRLOCK], 1, [Define if your system has pthread_rwlock_timedwrlock()])
+fi
 
 AC_MSG_CHECKING(for compiler atomic operations)
 AC_LINK_IFELSE(
@@ -424,12 +453,21 @@ AC_LINK_IFELSE(
 	AC_MSG_RESULT(no)
 )
 
-AC_MSG_CHECKING(for RTLD_NOLOAD)
+AC_MSG_CHECKING(for GLOB_NOMAGIC)
 AC_LINK_IFELSE(
-	AC_LANG_PROGRAM([#include <dlfcn.h>],
-			[int foo = RTLD_NOLOAD;]),
+	AC_LANG_PROGRAM([#include <glob.h>],
+			[int foo = GLOB_NOMAGIC;]),
 	AC_MSG_RESULT(yes)
-	AC_DEFINE([HAVE_RTLD_NOLOAD], 1, [Define to 1 if your system has a dynamic linker that supports RTLD_NOLOAD.]),
+	AC_DEFINE([HAVE_GLOB_NOMAGIC], 1, [Define to 1 if your glob function supports GLOB_NOMAGIC option.]),
+	AC_MSG_RESULT(no)
+)
+
+AC_MSG_CHECKING(for GLOB_BRACE)
+AC_LINK_IFELSE(
+	AC_LANG_PROGRAM([#include <glob.h>],
+			[int foo = GLOB_BRACE;]),
+	AC_MSG_RESULT(yes)
+	AC_DEFINE([HAVE_GLOB_BRACE], 1, [Define to 1 if your glob function supports GLOB_BRACE option.]),
 	AC_MSG_RESULT(no)
 )
 

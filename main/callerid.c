@@ -781,7 +781,7 @@ static int callerid_genmsg(char *msg, int size, const char *number, const char *
 	
 }
 
-int vmwi_generate(unsigned char *buf, int active, int mdmf, int codec)
+int ast_callerid_vmwi_generate(unsigned char *buf, int active, int mdmf, int codec)
 {
 	unsigned char msg[256];
 	int len=0;
@@ -971,7 +971,7 @@ int ast_callerid_parse(char *instr, char **name, char **location)
 	char *ns, *ne, *ls, *le;
 
 	/* Try "name" <location> format or name <location> format */
-	if ((ls = strchr(instr, '<')) && (le = strchr(ls, '>'))) {
+	if ((ls = strrchr(instr, '<')) && (le = strrchr(ls, '>'))) {
 		*ls = *le = '\0';	/* location found, trim off the brackets */
 		*location = ls + 1;	/* and this is the result */
 		if ((ns = strchr(instr, '"')) && (ne = strchr(ns + 1, '"'))) {

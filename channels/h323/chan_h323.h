@@ -64,6 +64,7 @@ typedef struct call_options {
 	int				bridge;
 	int				nat;
 	int				tunnelOptions;
+	int				autoframing; /*!< turn on to override local settings with remote framing length */
 	struct ast_codec_pref	prefs;
 } call_options_t;
 
@@ -228,6 +229,7 @@ extern "C" {
 	int h323_set_gk(int, char *, char *);
 	void h323_set_id(char *);
 	void h323_show_tokens(void);
+	void h323_show_version(void);
 
 	/* H323 listener related funcions */
 	int h323_start_listener(int, struct sockaddr_in);

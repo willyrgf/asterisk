@@ -7,6 +7,9 @@
 
 
 
+/* Define to 1 if internal poll should be used. */
+#undef AST_POLL_COMPAT
+
 /* Define to 1 if the `closedir' function returns void instead of `int'. */
 #undef CLOSEDIR_VOID
 
@@ -143,6 +146,12 @@
 
 /* Define to 1 if you have the `gettimeofday' function. */
 #undef HAVE_GETTIMEOFDAY
+
+/* Define to 1 if your glob function supports GLOB_BRACE option. */
+#undef HAVE_GLOB_BRACE
+
+/* Define to 1 if your glob function supports GLOB_NOMAGIC option. */
+#undef HAVE_GLOB_NOMAGIC
 
 /* Define to indicate the ${GNUTLS_DESCRIP} library */
 #undef HAVE_GNUTLS
@@ -304,6 +313,9 @@
 /* Define to 1 if your system has PTHREAD_RWLOCK_PREFER_WRITER_NP. */
 #undef HAVE_PTHREAD_RWLOCK_PREFER_WRITER_NP
 
+/* Define if your system has pthread_rwlock_timedwrlock() */
+#undef HAVE_PTHREAD_RWLOCK_TIMEDWRLOCK
+
 /* Define to 1 if the system has the type `ptrdiff_t'. */
 #undef HAVE_PTRDIFF_T
 
@@ -330,10 +342,6 @@
 
 /* Define to 1 if you have the `rint' function. */
 #undef HAVE_RINT
-
-/* Define to 1 if your system has a dynamic linker that supports RTLD_NOLOAD.
-   */
-#undef HAVE_RTLD_NOLOAD
 
 /* Define to 1 if your system has /sbin/launchd. */
 #undef HAVE_SBIN_LAUNCHD

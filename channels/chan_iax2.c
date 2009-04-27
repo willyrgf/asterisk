@@ -175,7 +175,7 @@ static int defaultsockfd = -1;
 int (*iax2_regfunk)(const char *username, int onoff) = NULL;
 
 /* Ethernet, etc */
-#define IAX_CAPABILITY_FULLBANDWIDTH 	0xFFFF
+#define IAX_CAPABILITY_FULLBANDWIDTH 	(0xFFFF & ~AST_FORMAT_AUDIO_UNDEFINED)
 /* T1, maybe ISDN */
 #define IAX_CAPABILITY_MEDBANDWIDTH 	(IAX_CAPABILITY_FULLBANDWIDTH & 	\
 					 ~AST_FORMAT_SLINEAR &			\
@@ -576,7 +576,9 @@ struct chan_iax2_pvt {
 	int encmethods;
 	/*! Encryption AES-128 Key */
 	aes_encrypt_ctx ecx;
-	/*! Decryption AES-128 Key */
+	/*! Decryption AES-128 Key corresponding to ecx */
+	aes_decrypt_ctx mydcx;
+	/*! Decryption AES-128 Key used to decrypt peer frames */
 	aes_decrypt_ctx dcx;
 	/*! 32 bytes of semi-random data */
 	unsigned char semirand[32];
@@ -868,6 +870,11 @@ static struct iax2_peer *build_peer(const char *name, struct ast_variable *v, st
 static struct iax2_user *build_user(const char *name, struct ast_variable *v, struct ast_variable *alt, int temponly);
 static void realtime_update_peer(const char *peername, struct sockaddr_in *sin, time_t regtime);
 static void prune_peers(void);
+static void prune_users(void);
+static int decode_frame(aes_decrypt_ctx *dcx, struct ast_iax2_full_hdr *fh, struct ast_frame *f, int *datalen);
+static int encrypt_frame(aes_encrypt_ctx *ecx, struct ast_iax2_full_hdr *fh, unsigned char *poo, int *datalen);
+static void build_ecx_key(const unsigned char *digest, struct chan_iax2_pvt *pvt);
+static void build_rand_pad(unsigned char *buf, ssize_t len);
 
 static const struct ast_channel_tech iax2_tech = {
 	.type = "IAX2",
@@ -1183,6 +1190,15 @@ static inline struct iax2_peer *peer_unref(struct iax2_peer *peer)
 {
 	ao2_ref(peer, -1);
 	return NULL;
+}
+
+static struct iax2_user *find_user(const char *name)
+{
+	struct iax2_user tmp_user = {
+		.name = name,
+	};
+
+	return ao2_find(users, &tmp_user, OBJ_POINTER);
 }
 
 static inline struct iax2_user *user_ref(struct iax2_user *user)
@@ -1951,7 +1967,7 @@ static int try_firmware(char *s)
 		return -1;
 	}
 	fwh = (struct ast_iax2_firmware_header*)mmap(NULL, stbuf.st_size, PROT_READ, MAP_PRIVATE, fd, 0); 
-	if (fwh == (void *) -1) {
+	if (fwh == MAP_FAILED) {
 		ast_log(LOG_WARNING, "mmap failed: %s\n", strerror(errno));
 		close(fd);
 		return -1;
@@ -2244,11 +2260,25 @@ static int update_packet(struct iax_frame *f)
 {
 	/* Called with iaxsl lock held, and iaxs[callno] non-NULL */
 	struct ast_iax2_full_hdr *fh = f->data;
+	struct ast_frame af;
+
+	/* if frame is encrypted. decrypt before updating it. */
+	if (f->encmethods) {
+		decode_frame(&f->mydcx, fh, &af, &f->datalen);
+	}
 	/* Mark this as a retransmission */
 	fh->dcallno = ntohs(IAX_FLAG_RETRANS | f->dcallno);
 	/* Update iseqno */
 	f->iseqno = iaxs[f->callno]->iseqno;
 	fh->iseqno = f->iseqno;
+
+	/* Now re-encrypt the frame */
+	if (f->encmethods) {
+	/* since this is a retransmit frame, create a new random padding
+	 * before re-encrypting. */
+		build_rand_pad(f->semirand, sizeof(f->semirand));
+		encrypt_frame(&f->ecx, fh, f->semirand, &f->datalen);
+	}
 	return 0;
 }
 
@@ -2345,26 +2375,44 @@ static int attempt_transmit(const void *data)
 
 static int iax2_prune_realtime(int fd, int argc, char *argv[])
 {
-	struct iax2_peer *peer;
+	struct iax2_peer *peer = NULL;
+	struct iax2_user *user = NULL;
 
 	if (argc != 4)
         return RESULT_SHOWUSAGE;
 	if (!strcmp(argv[3],"all")) {
-		reload_config();
+		prune_users();
+		prune_peers();
 		ast_cli(fd, "OK cache is flushed.\n");
-	} else if ((peer = find_peer(argv[3], 0))) {
-		if(ast_test_flag(peer, IAX_RTCACHEFRIENDS)) {
-			ast_set_flag(peer, IAX_RTAUTOCLEAR);
-			expire_registry(peer_ref(peer));
-			ast_cli(fd, "OK peer %s was removed from the cache.\n", argv[3]);
-		} else {
-			ast_cli(fd, "SORRY peer %s is not eligible for this operation.\n", argv[3]);
-		}
-		peer_unref(peer);
-	} else {
-		ast_cli(fd, "SORRY peer %s was not found in the cache.\n", argv[3]);
+		return RESULT_SUCCESS;
 	}
-	
+	peer = find_peer(argv[3], 0);
+	user = find_user(argv[3]);
+	if (peer || user) {
+		if (peer) {
+			if (ast_test_flag(peer, IAX_RTCACHEFRIENDS)) {
+				ast_set_flag(peer, IAX_RTAUTOCLEAR);
+				expire_registry(peer_ref(peer));
+				ast_cli(fd, "Peer %s was removed from the cache.\n", argv[3]);
+			} else {
+				ast_cli(fd, "Peer %s is not eligible for this operation.\n", argv[3]);
+			}
+			peer_unref(peer);
+		}
+		if (user) {
+			if (ast_test_flag(user, IAX_RTCACHEFRIENDS)) {
+				ast_set_flag(user, IAX_RTAUTOCLEAR);
+				ast_cli(fd, "User %s was removed from the cache.\n", argv[3]);
+			} else {
+				ast_cli(fd, "User %s is not eligible for this operation.\n", argv[3]);
+			}
+			ao2_unlink(users,user);
+			user_unref(user);
+		}
+	} else {
+		ast_cli(fd, "%s was not found in the cache.\n", argv[3]);
+	}
+
 	return RESULT_SUCCESS;
 }
 
@@ -4261,10 +4309,32 @@ static int iax2_trunk_queue(struct chan_iax2_pvt *pvt, struct iax_frame *fr)
 	return 0;
 }
 
-static void build_enc_keys(const unsigned char *digest, aes_encrypt_ctx *ecx, aes_decrypt_ctx *dcx)
+/* IAX2 encryption requires 16 to 32 bytes of random padding to be present
+ * before the encryption data.  This function randomizes that data. */
+static void build_rand_pad(unsigned char *buf, ssize_t len)
 {
-	aes_encrypt_key128(digest, ecx);
-	aes_decrypt_key128(digest, dcx);
+	long tmp;
+	for (tmp = ast_random(); len > 0; tmp = ast_random()) {
+		memcpy(buf, (unsigned char *) &tmp, (len > sizeof(tmp)) ? sizeof(tmp) : len);
+		buf += sizeof(tmp);
+		len -= sizeof(tmp);
+	}
+}
+
+static void build_encryption_keys(const unsigned char *digest, struct chan_iax2_pvt *pvt)
+{
+	build_ecx_key(digest, pvt);
+	aes_decrypt_key128(digest, &pvt->dcx);
+}
+  
+static void build_ecx_key(const unsigned char *digest, struct chan_iax2_pvt *pvt)
+{
+	/* it is required to hold the corresponding decrypt key to our encrypt key
+	 * in the pvt struct because queued frames occasionally need to be decrypted and
+	 * re-encrypted when updated for a retransmission */
+	build_rand_pad(pvt->semirand, sizeof(pvt->semirand));
+	aes_encrypt_key128(digest, &pvt->ecx);
+	aes_decrypt_key128(digest, &pvt->mydcx);
 }
 
 static void memcpy_decrypt(unsigned char *dst, const unsigned char *src, int len, aes_decrypt_ctx *dcx)
@@ -4329,7 +4399,7 @@ static int decode_frame(aes_decrypt_ctx *dcx, struct ast_iax2_full_hdr *fh, stru
 		/* Decrypt */
 		memcpy_decrypt(workspace, efh->encdata, *datalen - sizeof(struct ast_iax2_full_enc_hdr), dcx);
 
-		padding = 16 + (workspace[15] & 0xf);
+		padding = 16 + (workspace[15] & 0x0f);
 		if (option_debug && iaxdebug)
 			ast_log(LOG_DEBUG, "Decoding full frame with length %d (padding = %d) (15=%02x)\n", *datalen, padding, workspace[15]);
 		if (*datalen < padding + sizeof(struct ast_iax2_full_hdr))
@@ -4417,7 +4487,7 @@ static int decrypt_frame(int callno, struct ast_iax2_full_hdr *fh, struct ast_fr
 			MD5Update(&md5, (unsigned char *)iaxs[callno]->challenge, strlen(iaxs[callno]->challenge));
 			MD5Update(&md5, (unsigned char *)tmppw, strlen(tmppw));
 			MD5Final(digest, &md5);
-			build_enc_keys(digest, &iaxs[callno]->ecx, &iaxs[callno]->dcx);
+			build_encryption_keys(digest, iaxs[callno]);
 			res = decode_frame(&iaxs[callno]->dcx, fh, f, datalen);
 			if (!res) {
 				ast_set_flag(iaxs[callno], IAX_KEYPOPULATED);
@@ -4512,6 +4582,7 @@ static int iax2_send(struct chan_iax2_pvt *pvt, struct ast_frame *f, unsigned in
 	fr->callno = pvt->callno;
 	fr->transfer = transfer;
 	fr->final = final;
+	fr->encmethods = 0;
 	if (!sendmini) {
 		/* We need a full frame */
 		if (seqno > -1)
@@ -4565,6 +4636,10 @@ static int iax2_send(struct chan_iax2_pvt *pvt, struct ast_frame *f, unsigned in
 						iax_showframe(fr, NULL, 2, &pvt->addr, fr->datalen - sizeof(struct ast_iax2_full_hdr));
 				}
 				encrypt_frame(&pvt->ecx, fh, pvt->semirand, &fr->datalen);
+				fr->encmethods = pvt->encmethods;
+				fr->ecx = pvt->ecx;
+				fr->mydcx = pvt->mydcx;
+				memcpy(fr->semirand, pvt->semirand, sizeof(fr->semirand));
 			} else
 				ast_log(LOG_WARNING, "Supposed to send packet encrypted, but no key?\n");
 		}
@@ -5744,20 +5819,25 @@ static int register_verify(int callno, struct sockaddr_in *sin, struct iax_ies *
 	ast_device_state_changed("IAX2/%s", p->name); /* Activate notification */
 
 return_unref:
-	ast_string_field_set(iaxs[callno], peer, peer);
-	/* Choose lowest expiry number */
-	if (expire && (expire < iaxs[callno]->expiry)) 
-		iaxs[callno]->expiry = expire;
+	if (iaxs[callno]) {
+		ast_string_field_set(iaxs[callno], peer, peer);
+
+		/* Choose lowest expiry number */
+		if (expire && (expire < iaxs[callno]->expiry)) {
+			iaxs[callno]->expiry = expire;
+		}
+	}
 
 	res = 0;
 
-	if (p)
+	if (p) {
 		peer_unref(p);
+	}
 
 	return res;
 }
 
-static int authenticate(const char *challenge, const char *secret, const char *keyn, int authmethods, struct iax_ie_data *ied, struct sockaddr_in *sin, aes_encrypt_ctx *ecx, aes_decrypt_ctx *dcx)
+static int authenticate(const char *challenge, const char *secret, const char *keyn, int authmethods, struct iax_ie_data *ied, struct sockaddr_in *sin, struct chan_iax2_pvt *pvt)
 {
 	int res = -1;
 	int x;
@@ -5797,8 +5877,9 @@ static int authenticate(const char *challenge, const char *secret, const char *k
 			/* If they support md5, authenticate with it.  */
 			for (x=0;x<16;x++)
 				sprintf(digres + (x << 1),  "%2.2x", digest[x]); /* safe */
-			if (ecx && dcx)
-				build_enc_keys(digest, ecx, dcx);
+			if (pvt) {
+				build_encryption_keys(digest, pvt);
+			}
 			iax_ie_append_str(ied, IAX_IE_MD5_RESULT, digres);
 			res = 0;
 		} else if (authmethods & IAX_AUTH_PLAINTEXT) {
@@ -5839,7 +5920,7 @@ static int authenticate_reply(struct chan_iax2_pvt *p, struct sockaddr_in *sin, 
 	/* Check for override RSA authentication first */
 	if (!ast_strlen_zero(override) || !ast_strlen_zero(okey)) {
 		/* Normal password authentication */
-		res = authenticate(p->challenge, override, okey, authmethods, &ied, sin, &p->ecx, &p->dcx);
+		res = authenticate(p->challenge, override, okey, authmethods, &ied, sin, p);
 	} else {
 		struct ao2_iterator i = ao2_iterator_init(peers, 0);
 		while ((peer = ao2_iterator_next(&i))) {
@@ -5850,7 +5931,7 @@ static int authenticate_reply(struct chan_iax2_pvt *p, struct sockaddr_in *sin, 
 			    && (!peer->addr.sin_addr.s_addr || ((sin->sin_addr.s_addr & peer->mask.s_addr) == (peer->addr.sin_addr.s_addr & peer->mask.s_addr)))
 			    /* No specified host, or this is our host */
 				) {
-				res = authenticate(p->challenge, peer->secret, peer->outkey, authmethods, &ied, sin, &p->ecx, &p->dcx);
+				res = authenticate(p->challenge, peer->secret, peer->outkey, authmethods, &ied, sin, p);
 				if (!res) {
 					peer_unref(peer);
 					break;
@@ -5869,7 +5950,7 @@ static int authenticate_reply(struct chan_iax2_pvt *p, struct sockaddr_in *sin, 
 					peer_unref(peer);
 					return -1;
 				}
-				res = authenticate(p->challenge, peer->secret,peer->outkey, authmethods, &ied, sin, &p->ecx, &p->dcx);
+				res = authenticate(p->challenge, peer->secret,peer->outkey, authmethods, &ied, sin, p);
 				peer_unref(peer);
 			}
 			if (!peer) {
@@ -6174,7 +6255,7 @@ static void register_peer_exten(struct iax2_peer *peer, int onoff)
 			if (onoff) {
 				if (!ast_exists_extension(NULL, regcontext, ext, 1, NULL))
 					ast_add_extension(regcontext, 1, ext, 1, NULL, NULL,
-							  "Noop", ast_strdup(peer->name), ast_free, "IAX2");
+							  "Noop", ast_strdup(peer->name), ast_free_ptr, "IAX2");
 			} else
 				ast_context_remove_extension(regcontext, ext, 1, NULL);
 		}
@@ -6500,9 +6581,9 @@ static int registry_rerequest(struct iax_ies *ies, int callno, struct sockaddr_i
 				char tmpkey[256];
 				ast_copy_string(tmpkey, reg->secret + 1, sizeof(tmpkey));
 				tmpkey[strlen(tmpkey) - 1] = '\0';
-				res = authenticate(challenge, NULL, tmpkey, authmethods, &ied, sin, NULL, NULL);
+				res = authenticate(challenge, NULL, tmpkey, authmethods, &ied, sin, NULL);
 			} else
-				res = authenticate(challenge, reg->secret, NULL, authmethods, &ied, sin, NULL, NULL);
+				res = authenticate(challenge, reg->secret, NULL, authmethods, &ied, sin, NULL);
 			if (!res) {
 				reg->regstate = REG_STATE_AUTHSENT;
 				return send_command(iaxs[callno], AST_FRAME_IAX, IAX_COMMAND_REGREQ, 0, ied.buf, ied.pos, -1);
@@ -9984,8 +10065,9 @@ static void prune_users(void)
 
 	i = ao2_iterator_init(users, 0);
 	while ((user = ao2_iterator_next(&i))) {
-		if (ast_test_flag(user, IAX_DELME))
+		if (ast_test_flag(user, IAX_DELME) || ast_test_flag(user, IAX_RTCACHEFRIENDS)) {
 			ao2_unlink(users, user);
+		}
 		user_unref(user);
 	}
 }
@@ -9998,8 +10080,9 @@ static void prune_peers(void)
 
 	i = ao2_iterator_init(peers, 0);
 	while ((peer = ao2_iterator_next(&i))) {
-		if (ast_test_flag(peer, IAX_DELME))
+		if (ast_test_flag(peer, IAX_DELME) || ast_test_flag(peer, IAX_RTCACHEFRIENDS)) {
 			unlink_peer(peer);
+		}
 		peer_unref(peer);
 	}
 }

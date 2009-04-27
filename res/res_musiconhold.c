@@ -42,6 +42,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <signal.h>
 #include <stdlib.h>
 #include <stdio.h>
+
 #include <sys/time.h>
 #include <sys/signal.h>
 #include <netinet/in.h>
@@ -52,6 +53,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #ifdef SOLARIS
 #include <thread.h>
 #endif
+
+#include "asterisk/dahdi_compat.h"
+
 #ifdef HAVE_CAP
 #include <sys/capability.h>
 #endif /* HAVE_CAP */
@@ -73,7 +77,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/linkedlists.h"
 #include "asterisk/astobj2.h"
 
-#include "asterisk/dahdi_compat.h"
 
 #define INITIAL_NUM_FILES   8
 
@@ -554,11 +557,11 @@ static void *monmp3thread(void *data)
 			}
 			res = 8 * MOH_MS_INTERVAL;	/* 8 samples per millisecond */
 		}
-		if (AST_LIST_EMPTY(&class->members))
+		if ((strncasecmp(class->dir, "http://", 7) && strcasecmp(class->dir, "nodir")) && AST_LIST_EMPTY(&class->members))
 			continue;
 		/* Read mp3 audio */
 		len = ast_codec_get_len(class->format, res);
-		
+
 		if ((res2 = read(class->srcfd, sbuf, len)) != len) {
 			if (!res2) {
 				close(class->srcfd);
@@ -1216,9 +1219,9 @@ static int load_moh_classes(int reload)
 		}
 
 		/* Don't leak a class when it's already registered */
-		moh_register(class, reload);
-
-		numclasses++;
+		if (!moh_register(class, reload)) {
+			numclasses++;
+		}
 	}
 	
 
@@ -1483,7 +1486,7 @@ static int unload_module(void)
 	return res;
 }
 
-AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_GLOBAL_SYMBOLS, "Music On Hold Resource",
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "Music On Hold Resource",
 	.load = load_module,
 	.unload = unload_module,
 	.reload = reload,

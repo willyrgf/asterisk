@@ -453,12 +453,12 @@ static struct ast_audiohook *find_audiohook_by_source(struct ast_audiohook_list 
 
 void ast_audiohook_move_by_source (struct ast_channel *old_chan, struct ast_channel *new_chan, const char *source)
 {
-	struct ast_audiohook *audiohook = find_audiohook_by_source(old_chan->audiohooks, source);
+	struct ast_audiohook *audiohook;
 
-	if (!audiohook) {
+	if (!old_chan->audiohooks || !(audiohook = find_audiohook_by_source(old_chan->audiohooks, source))) {
 		return;
 	}
-	
+
 	/* By locking both channels and the audiohook, we can assure that
 	 * another thread will not have a chance to read the audiohook's status
 	 * as done, even though ast_audiohook_remove signals the trigger
@@ -588,6 +588,7 @@ static struct ast_frame *audio_audiohook_write_list(struct ast_channel *chan, st
 		}
 		if (!(middle_frame = ast_translate(in_translate->trans_pvt, frame, 0)))
 			return frame;
+		samples = middle_frame->samples;
 	}
 
 	/* Queue up signed linear frame to each spy */

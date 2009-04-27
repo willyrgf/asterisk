@@ -915,7 +915,7 @@ static int create_process(int midev, struct misdn_bchannel *bc)
 		bc->l3_id = l3_id;
 		cb_log(3, stack->port, " --> new_l3id %x\n", l3_id);
 	} else {
-		if (stack->ptp || bc->te_choose_channel) {
+		if ((stack->pri && stack->ptp) || bc->te_choose_channel) {
 			/* we know exactly which channels are in use */
 			if (find_free_chan_in_stack(stack, bc, bc->channel_preselected ? bc->channel : 0, bc->dec) < 0) {
 				return -1;
@@ -2258,7 +2258,7 @@ void misdn_tx_jitter(struct misdn_bchannel *bc, int len)
 		flip_buf_bits( data, jlen);
 		
 		if (jlen < len) {
-			cb_log(7,bc->port,"Jitterbuffer Underrun.\n");
+			cb_log(1, bc->port, "Jitterbuffer Underrun. Got %d of expected %d\n", jlen, len);
 		}
 		
 		txfrm->prim = DL_DATA|REQUEST;
@@ -2294,11 +2294,16 @@ void misdn_tx_jitter(struct misdn_bchannel *bc, int len)
 		txfrm->addr = bc->addr|FLG_MSG_DOWN; /*  | IF_DOWN; */
 
 		txfrm->len =len;
-		cb_log(9, bc->port, "Transmitting %d samples 2 misdn\n", txfrm->len);
+		cb_log(5, bc->port, "Transmitting %d samples of silence to misdn\n", len);
 
 		r=mISDN_write( glob_mgr->midev, buf, txfrm->len + mISDN_HEADER_LEN, 8000 );
+#else
+		r = 0;
 #endif
+	}
 
+	if (r < 0) {
+		cb_log(1, bc->port, "Error in mISDN_write (%s)\n", strerror(errno));
 	}
 }
 
