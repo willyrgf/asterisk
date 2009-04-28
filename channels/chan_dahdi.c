@@ -3434,6 +3434,7 @@ static int dahdi_call(struct ast_channel *ast, char *rdest, int timeout)
 		const char *call_ref_id = NULL;
 		const char *call_ref_pc = NULL;
 		const char *send_far = NULL;
+	        const char *calling_party_category = NULL;
 
 		c = strchr(dest, '/');
 		if (c) {
@@ -3542,6 +3543,10 @@ static int dahdi_call(struct ast_channel *ast, char *rdest, int timeout)
 			isup_set_callref(p->ss7call, atoi(call_ref_id),
 					 call_ref_pc ? atoi(call_ref_pc) : 0);
 		}
+
+                calling_party_category = pbx_builtin_getvar_helper(ast, "SS7_CALLING_PARTY_CATEGORY");
+                if (calling_party_category)  
+                       isup_set_calling_party_category(p->ss7call, atoi(calling_party_category)); 
 
 		send_far = pbx_builtin_getvar_helper(ast, "SS7_SEND_FAR");
 		if ((send_far) && ((strncmp("NO", send_far, strlen(send_far))) != 0 ))
@@ -11501,6 +11506,7 @@ static void *ss7_linkset(void *data)
 						ast_debug(1, "Queuing frame PROGRESS on CIC %d\n", p->cic);
 						dahdi_queue_frame(p, &f, linkset);
 						p->progress = 1;
+						p->dialing = 0;
 						if (p->dsp && p->dsp_features) {
 							ast_dsp_set_features(p->dsp, p->dsp_features);
 							p->dsp_features = 0;
@@ -11731,6 +11737,7 @@ static void *ss7_linkset(void *data)
 					ast_mutex_lock(&p->lock);
 					dahdi_queue_frame(p, &f, linkset);
 					p->proceeding = 1;
+					p->dialing = 0;
 					/* Send alerting if subscriber is free */
 					if (e->acm.called_party_status_ind == 1) {
 						p->alerting = 1;
@@ -12612,7 +12619,7 @@ static void *pri_dchannel(void *vpri)
 					ast_verb(2, "%s D-Channel on span %d up\n", pri_order(which), pri->span);
 				}
 				pri->dchanavail[which] |= DCHAN_UP;
-			} else {
+			} else if (pri->sig != SIG_BRI_PTMP) {
 				if (pri->dchanavail[which] & DCHAN_UP) {
 					ast_verb(2, "%s D-Channel on span %d down\n", pri_order(which), pri->span);
 				}
