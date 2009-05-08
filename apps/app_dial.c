@@ -356,6 +356,10 @@ static void hanguptree(struct dial_localuser *outgoing, struct ast_channel *exce
 			ast_cdr_failed(chan->cdr); \
 		numnochan++; \
 		break; \
+	case AST_CAUSE_NO_ANSWER: \
+		if (chan->cdr) \
+			ast_cdr_noanswer(chan->cdr); \
+		break; \
 	case AST_CAUSE_NORMAL_CLEARING: \
 		break; \
 	default: \
@@ -1872,7 +1876,7 @@ static int retrydial_exec(struct ast_channel *chan, void *data)
 		}
 	}
 	
-	if ((dialdata = strchr(dialdata, '|'))) {
+	if (dialdata && (dialdata = strchr(dialdata, '|'))) {
 		*dialdata++ = '\0';
 	} else {
 		ast_log(LOG_ERROR, "%s requires more arguments\n",rapp);

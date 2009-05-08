@@ -8819,6 +8819,13 @@ static char * redirectingreason2str(int redirectingreason)
 
 static void apply_plan_to_number(char *buf, size_t size, const struct dahdi_pri *pri, const char *number, const int plan)
 {
+	if (ast_strlen_zero(number)) { /* make sure a number exists so prefix isn't placed on an empty string */
+		if (size) {
+			*buf = '\0';
+		}
+		return;
+	}
+
 	switch (plan) {
 	case PRI_INTERNATIONAL_ISDN:		/* Q.931 dialplan == 0x11 international dialplan => prepend international prefix digits */
 		snprintf(buf, size, "%s%s", pri->internationalprefix, number);
@@ -9235,6 +9242,7 @@ static void *pri_dchannel(void *vpri)
 						if (pri->pvts[chanpos]->call == e->ring.call) {
 							ast_log(LOG_WARNING, "Duplicate setup requested on channel %d/%d already in use on span %d\n", 
 								PRI_SPAN(e->ring.channel), PRI_CHANNEL(e->ring.channel), pri->span);
+							ast_mutex_unlock(&pri->pvts[chanpos]->lock);
 							break;
 						} else {
 							/* This is where we handle initial glare */
@@ -11544,8 +11552,8 @@ static int process_dahdi(struct dahdi_chan_conf *confp, const char *cat, struct 
 			confp->chan.hanguponpolarityswitch = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "sendcalleridafter")) {
 			confp->chan.sendcalleridafter = atoi(v->value);
-		} else if (reload != 1){ 
-			 if (!strcasecmp(v->name, "signalling")) {
+		} else if (reload != 1) {
+			 if (!strcasecmp(v->name, "signalling") || !strcasecmp(v->name, "signaling")) {
 				confp->chan.outsigmod = -1;
 				if (!strcasecmp(v->value, "em")) {
 					confp->chan.sig = SIG_EM;

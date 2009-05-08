@@ -594,15 +594,15 @@ static int update_status(const char *interface, const int status)
 	struct member *cur;
 	struct ao2_iterator mem_iter;
 	struct call_queue *q;
+	char tmp_interface[80];
 
 	AST_LIST_LOCK(&queues);
 	AST_LIST_TRAVERSE(&queues, q, list) {
 		ast_mutex_lock(&q->lock);
 		mem_iter = ao2_iterator_init(q->members, 0);
 		while ((cur = ao2_iterator_next(&mem_iter))) {
-			char *tmp_interface;
 			char *slash_pos;
-			tmp_interface = ast_strdupa(cur->state_interface);
+			ast_copy_string(tmp_interface, cur->state_interface, sizeof(tmp_interface));
 			if ((slash_pos = strchr(tmp_interface, '/')))
 				if ((slash_pos = strchr(slash_pos + 1, '/')))
 					*slash_pos = '\0';
@@ -647,6 +647,7 @@ static void *handle_statechange(struct statechange *sc)
 	struct member_interface *curint;
 	char *loc;
 	char *technology;
+	char interface[80];
 
 	technology = ast_strdupa(sc->dev);
 	loc = strchr(technology, '/');
@@ -658,9 +659,8 @@ static void *handle_statechange(struct statechange *sc)
 
 	AST_LIST_LOCK(&interfaces);
 	AST_LIST_TRAVERSE(&interfaces, curint, list) {
-		char *interface;
 		char *slash_pos;
-		interface = ast_strdupa(curint->interface);
+		ast_copy_string(interface, curint->interface, sizeof(interface));
 		if ((slash_pos = strchr(interface, '/')))
 			if ((slash_pos = strchr(slash_pos + 1, '/')))
 				*slash_pos = '\0';

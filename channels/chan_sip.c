@@ -2424,7 +2424,9 @@ static int sip_sendtext(struct ast_channel *ast, const char *text)
 		ast_verbose("Sending text %s on %s\n", text, ast->name);
 	if (!p)
 		return -1;
-	if (ast_strlen_zero(text))
+	/* NOT ast_strlen_zero, because a zero-length message is specifically
+	 * allowed by RFC 3428 (See section 10, Examples) */
+	if (!text)
 		return 0;
 	if (debug)
 		ast_verbose("Really sending text %s on %s\n", text, ast->name);
@@ -3429,7 +3431,7 @@ static int hangup_sip2cause(int cause)
 		case 409:	/* Conflict */
 			return AST_CAUSE_NORMAL_TEMPORARY_FAILURE;
 		case 410:	/* Gone */
-			return AST_CAUSE_UNALLOCATED;
+			return AST_CAUSE_NUMBER_CHANGED;
 		case 411:	/* Length required */
 			return AST_CAUSE_INTERWORKING;
 		case 413:	/* Request entity too large */
@@ -4413,9 +4415,11 @@ static struct ast_frame *sip_rtp_read(struct ast_channel *ast, struct sip_pvt *p
 		f = &ast_null_frame;
 	}
 	/* Don't forward RFC2833 if we're not supposed to */
-	if (f && (f->frametype == AST_FRAME_DTMF) &&
-	    (ast_test_flag(&p->flags[0], SIP_DTMF) != SIP_DTMF_RFC2833))
+	if (f && (f->frametype == AST_FRAME_DTMF_BEGIN || f->frametype == AST_FRAME_DTMF_END) &&
+	    (ast_test_flag(&p->flags[0], SIP_DTMF) != SIP_DTMF_RFC2833)) {
+		ast_log(LOG_DEBUG,"Ignoring DTMF (%c) RTP frame because dtmfmode is not RFC2833\n", f->subclass);
 		return &ast_null_frame;
+	}
 
 		/* We already hold the channel lock */
 	if (!p->owner || (f && f->frametype != AST_FRAME_VOICE))
@@ -8197,7 +8201,7 @@ static int transmit_request_with_auth(struct sip_pvt *p, int sipmethod, int seqn
 static void destroy_association(struct sip_peer *peer)
 {
 	if (!ast_test_flag(&global_flags[1], SIP_PAGE2_IGNOREREGEXPIRE)) {
-		if (ast_test_flag(&peer->flags[1], SIP_PAGE2_RT_FROMCONTACT)) {
+		if (ast_test_flag(&peer->flags[1], SIP_PAGE2_RT_FROMCONTACT) && ast_test_flag(&global_flags[1], SIP_PAGE2_RTUPDATE)) {
 			ast_update_realtime("sippeers", "name", peer->name, "fullcontact", "", "ipaddr", "", "port", "", "regseconds", "0", "username", "", "regserver", "", NULL);
 			ast_update_realtime("sippeers", "name", peer->name, "lastms", "", NULL);
 		} else 
@@ -13115,7 +13119,9 @@ static void handle_response_peerpoke(struct sip_pvt *p, int resp, struct sip_req
 		ast_log(LOG_NOTICE, "Peer '%s' is now %s. (%dms / %dms)\n",
 			peer->name, s, pingtime, peer->maxms);
 		ast_device_state_changed("SIP/%s", peer->name);
-		ast_update_realtime("sippeers", "name", peer->name, "lastms", str_lastms, NULL);
+		if (ast_test_flag(&global_flags[1], SIP_PAGE2_RTUPDATE)) {
+			ast_update_realtime("sippeers", "name", peer->name, "lastms", str_lastms, NULL);
+		}
 		manager_event(EVENT_FLAG_SYSTEM, "PeerStatus",
 			"Peer: SIP/%s\r\nPeerStatus: %s\r\nTime: %d\r\n",
 			peer->name, s, pingtime);
@@ -14567,13 +14573,26 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 	}
 	
 	if (!ast_test_flag(req, SIP_PKT_IGNORE) && p->pendinginvite) {
-		/* We already have a pending invite. Sorry. You are on hold. */
-		p->glareinvite = seqno;
-		transmit_response_reliable(p, "491 Request Pending", req);
-		if (option_debug)
-			ast_log(LOG_DEBUG, "Got INVITE on call where we already have pending INVITE, deferring that - %s\n", p->callid);
-		/* Don't destroy dialog here */
-		return 0;
+		if (!ast_test_flag(&p->flags[0], SIP_OUTGOING) && ast_test_flag(&p->flags[1], SIP_PAGE2_DIALOG_ESTABLISHED)) {
+			/* We have received a reINVITE on an incoming call to which we have sent a 200 OK but not yet received
+			 * an ACK. According to RFC 5407, Section 3.1.4, the proper way to handle this race condition is to accept
+			 * the reINVITE since we have established a dialog.
+			 */
+			 
+			/* Note that this will both clear the pendinginvite flag and cancel the 
+			 * retransmission of the 200 OK. Basically, we're accepting this reINVITE as both an ACK
+			 * and a reINVITE in one request.
+			 */
+			__sip_ack(p, p->lastinvite, FLAG_RESPONSE, 0);
+		} else {
+			/* We already have a pending invite. Sorry. You are on hold. */
+			p->glareinvite = seqno;
+			transmit_response_reliable(p, "491 Request Pending", req);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Got INVITE on call where we already have pending INVITE, deferring that - %s\n", p->callid);
+			/* Don't destroy dialog here */
+			return 0;
+		}
 	}
 
 	p_replaces = get_header(req, "Replaces");
@@ -14833,7 +14852,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 
 			make_our_tag(p->tag, sizeof(p->tag));
 			/* First invitation - create the channel */
-			c = sip_new(p, AST_STATE_DOWN, S_OR(p->username, NULL));
+			c = sip_new(p, AST_STATE_DOWN, S_OR(p->peername, NULL));
 			*recount = 1;
 
 			/* Save Record-Route for any later requests we make on this dialogue */
@@ -15078,7 +15097,6 @@ static int local_attended_transfer(struct sip_pvt *transferer, struct sip_dual *
 		ast_clear_flag(&transferer->flags[0], SIP_GOTREFER);
 		transferer->refer->status = REFER_FAILED;
 		ast_mutex_unlock(&targetcall_pvt->lock);
-		ast_channel_unlock(current->chan1);
 		return -1;
 	}
 
@@ -16727,7 +16745,9 @@ static int sip_poke_noanswer(const void *data)
 	peer->pokeexpire = -1;
 	if (peer->lastms > -1) {
 		ast_log(LOG_NOTICE, "Peer '%s' is now UNREACHABLE!  Last qualify: %d\n", peer->name, peer->lastms);
-		ast_update_realtime("sippeers", "name", peer->name, "lastms", "-1", NULL);
+		if (ast_test_flag(&global_flags[1], SIP_PAGE2_RTUPDATE)) {
+			ast_update_realtime("sippeers", "name", peer->name, "lastms", "-1", NULL);
+		}
 		manager_event(EVENT_FLAG_SYSTEM, "PeerStatus", "Peer: SIP/%s\r\nPeerStatus: Unreachable\r\nTime: %d\r\n", peer->name, -1);
 	}
 	if (peer->call)
@@ -17537,6 +17557,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 	struct ast_variable *tmpvar = NULL;
 	struct ast_flags peerflags[2] = {{(0)}};
 	struct ast_flags mask[2] = {{(0)}};
+	int alt_fullcontact = alt ? 1 : 0;
 	char fullcontact[sizeof(peer->fullcontact)] = "";
 
 	if (!realtime || ast_test_flag(&global_flags[1], SIP_PAGE2_RTCACHEFRIENDS))
@@ -17595,6 +17616,15 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 		} else if (realtime && !strcasecmp(v->name, "name"))
 			ast_copy_string(peer->name, v->value, sizeof(peer->name));
 		else if (realtime && !strcasecmp(v->name, "fullcontact")) {
+			if (alt_fullcontact && !alt) {
+				/* Reset, because the alternate also has a fullcontact and we
+				 * do NOT want the field value to be doubled. It might be
+				 * tempting to skip this, but the first table might not have
+				 * fullcontact and since we're here, we know that the alternate
+				 * absolutely does. */
+				alt_fullcontact = 0;
+				fullcontact[0] = '\0';
+			}
 			/* Reconstruct field, because realtime separates our value at the ';' */
 			if (!ast_strlen_zero(fullcontact)) {
 				strncat(fullcontact, ";", sizeof(fullcontact) - strlen(fullcontact) - 1);
