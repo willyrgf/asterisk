@@ -532,10 +532,12 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ;                             outboundproxy
 ;                             rfc2833compensate
 ;                             t38pt_usertpsource
+;			      matchrule
 ;                             contactpermit         ; Limit what a host may register as (a neat trick
 ;                             contactdeny           ; is to register at the same IP as a SIP provider,
 ;                                                   ; then call oneself, and get redirected to that
 ;                                                   ; same location).
+;
 
 ;[sip_proxy]
 ; For incoming calls only. Example: FWD (Free World Dialup)
@@ -704,3 +706,19 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
                                 ; if the nat option is enabled. If a single RTP packet is received Asterisk will know the
                                 ; external IP address of the remote device. If port forwarding is done at the client side
                                 ; then UDPTL will flow to the remote device.
+
+; ---------------------------- Ignoring a proxy ------------------------------------------------------------------------
+; If you have an inbound proxy in your network and want Asterisk to identify, and possibly authenticate, the device
+; behind that proxy instead of the proxy, add a peer for the proxy and set matchrule to "secondvia".
+; Other settings are "lastvia" if you want to identify the sender, regardless of number of proxys
+; and "normal".
+;
+; This setting only works for peers and only for matching on IP and port (for the actual proxy that you want to ignore)
+; Asterisk will first match the inbound proxy, which should be in-memory, and then look for a peer that matches
+; the IP and port of the second via. This device can be in memory or in the realtime database, depending upon
+; your preference.
+;
+;[inboundproxy]
+;type=peer
+;host=proxy.edvina.net
+;matchrule=secondvia

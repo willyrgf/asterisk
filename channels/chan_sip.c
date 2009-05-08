@@ -1506,6 +1506,8 @@ static int get_refer_info(struct sip_pvt *transferer, struct sip_request *outgoi
 static int get_also_info(struct sip_pvt *p, struct sip_request *oreq);
 static int parse_ok_contact(struct sip_pvt *pvt, struct sip_request *req);
 static int set_address_from_contact(struct sip_pvt *pvt);
+static int find_via_address(int findsecond, struct sip_pvt *p, struct sip_request *req, struct sockaddr_in *addr);
+static int get_address_from_via(const char *via, char *hostname, size_t hostlen, char *port, size_t portlen, struct sockaddr_in *addr);
 static void check_via(struct sip_pvt *p, const struct sip_request *req);
 static char *get_calleridname(const char *input, char *output, size_t outputsize);
 static int get_rpid_num(const char *input, char *output, int maxlen);
@@ -1541,7 +1543,6 @@ static void add_route(struct sip_request *req, struct sip_route *route);
 static int copy_header(struct sip_request *req, const struct sip_request *orig, const char *field);
 static int copy_all_header(struct sip_request *req, const struct sip_request *orig, const char *field);
 static int copy_via_headers(struct sip_pvt *p, struct sip_request *req, const struct sip_request *orig, const char *field);
-static int find_via_address(int findsecond, struct sip_pvt *p, struct sip_request *req, struct sockaddr_in *addr);
 static void set_destination(struct sip_pvt *p, char *uri);
 static void append_date(struct sip_request *req);
 static void build_contact(struct sip_pvt *p);
@@ -2718,7 +2719,6 @@ static int sip_addrcmp(char *name, struct sockaddr_in *sin)
 static struct sip_peer *find_peer(const char *peer, struct sockaddr_in *sin, int realtime, int devstate_only)
 {
 	struct sip_peer *p = NULL;
-	ast_log(LOG_DEBUG, "--- DEBUG: Trying to find a mate\n");
 
 	if (peer)
 		p = ASTOBJ_CONTAINER_FIND(&peerl, peer);
@@ -9703,9 +9703,7 @@ static void check_via(struct sip_pvt *p, const struct sip_request *req)
 	if (sip_debug_test_pvt(p)) {
 		const struct sockaddr_in *dst = sip_real_dst(p);
 		ast_verbose("Sending to %s : %d (%s)\n", ast_inet_ntoa(dst->sin_addr), ntohs(dst->sin_port), sip_nat_mode(p));
-		ast_verbose("DEBUG: Sender is at  %s : %d \n", ast_inet_ntoa(p->sa.sin_addr), ntohs(p->sa.sin_port));
 	}
-	ast_log(LOG_DEBUG, "DEBUG: Returning from check_via()\n");
 }
 
 /*! \brief  Get caller id name from SIP headers */
@@ -10001,20 +9999,16 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 			/* If peer is registered from this IP address or have this as a default
 			   IP address, this call is from the peer 
 			*/
-			ast_log(LOG_DEBUG, "--- DEBUG: GOING TO FIND MYSELF A GOOD PEER\n");
 			peer = find_peer(NULL, &p->recv, 1, 0);
 			/* If this peer have a matching principle that says we need to check
 				the via headers for the REAL peer, then do that.
 			*/
-			ast_log(LOG_DEBUG, "--- DEBUG: NOW FOR SOMETHING COMPLETELY DIFFERENT (peer = %s)\n", peer ? "Found" : "Not found");
 			if (peer && (peer->matchrule == MATCH_SECONDVIA || peer->matchrule == MATCH_LASTVIA)) {
 				struct sockaddr_in matchaddr;
 				/* Go find the peer */
-				ast_log(LOG_DEBUG, "--- DEBUG: SEARCHING FOR PEER IN VIA HEADER\n");
 				find_via_address(peer->matchrule == MATCH_SECONDVIA, p, req, &matchaddr);
 				peer = find_peer(NULL, &matchaddr, 1, 0);
 			}
-			ast_log(LOG_DEBUG, "--- DEBUG: DONE SEARCHING FOR A PEER\n");
 		}
 
 		if (peer) {
@@ -14512,9 +14506,6 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 		if (!ast_strlen_zero(supported))
 			parse_sip_options(p, supported);
 	}
-	/* DEBUG: */
-	find_via_address(TRUE, p, req, NULL);
-
 
 	/* Find out what they require */
 	required = get_header(req, "Require");
