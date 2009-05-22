@@ -3991,7 +3991,7 @@ static int dahdi_send_keypad_facility_exec(struct ast_channel *chan, const char 
 {
 	/* Data will be our digit string */
 	struct dahdi_pvt *p;
-	const char *digits = (const char *) data;
+	const char *digits = data;
 
 	if (ast_strlen_zero(digits)) {
 		ast_debug(1, "No digit string sent to application!\n");
@@ -4198,7 +4198,7 @@ static int pri_find_dchan(struct dahdi_pri *pri)
 #if defined(HAVE_OPENR2)
 static const char * const dahdi_accept_r2_call_app = "DAHDIAcceptR2Call";
 
-static int dahdi_accept_r2_call_exec(struct ast_channel *chan, void *data)
+static int dahdi_accept_r2_call_exec(struct ast_channel *chan, const char *data)
 {
 	/* data is whether to accept with charge or no charge */
 	openr2_call_mode_t accept_mode;
