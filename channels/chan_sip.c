@@ -1064,6 +1064,7 @@ struct sip_pkt {
 	int retrans;				/*!< Retransmission number */
 	int method;				/*!< SIP method for this packet */
 	int seqno;				/*!< Sequence number */
+	int response_code;		/*!< If this is a response, the response code */
 	unsigned int flags;			/*!< non-zero if this is a response packet (e.g. 200 OK) */
 	struct sip_pvt *owner;			/*!< Owner AST call */
 	int retransid;				/*!< Retransmission ID */
@@ -2069,6 +2070,7 @@ static enum sip_result __sip_reliable_xmit(struct sip_pvt *p, int seqno, int res
 	struct sip_pkt *pkt;
 	int siptimer_a = DEFAULT_RETRANS;
 	int xmitres = 0;
+	int respid;
 
 	if (!(pkt = ast_calloc(1, sizeof(*pkt) + len + 1)))
 		return AST_FAILURE;
@@ -2078,9 +2080,14 @@ static enum sip_result __sip_reliable_xmit(struct sip_pvt *p, int seqno, int res
 	pkt->next = p->packets;
 	pkt->owner = p;
 	pkt->seqno = seqno;
-	if (resp)
-		ast_set_flag(pkt, FLAG_RESPONSE);
 	pkt->data[len] = '\0';
+	if (resp) {
+		ast_set_flag(pkt, FLAG_RESPONSE);
+		/* Parse out the response code */
+		if (sscanf(pkt->data, "SIP/2.0 %d", &respid) == 1) {
+			pkt->response_code = respid;
+		}
+	}
 	pkt->timer_t1 = p->timer_t1;	/* Set SIP timer T1 */
 	pkt->retransid = -1;
 	if (fatal)
@@ -5164,7 +5171,7 @@ static int get_ip_and_port_from_sdp(struct sip_request *req, const enum media_ty
 		/* Continue since there may be a valid host in a c= line specific to the audio stream */
 	}
 	/* We only want the m and c lines for audio */
-	while ((m = get_sdp_iterate(&miterator, req, "m"))) {
+	for (m = get_sdp_iterate(&miterator, req, "m"); !ast_strlen_zero(m); m = get_sdp_iterate(&miterator, req, "m")) {
 		if ((media == SDP_AUDIO && ((sscanf(m, "audio %d/%d RTP/AVP %n", &x, &numberofports, &len) == 2 && len > 0) ||
 		    (sscanf(m, "audio %d RTP/AVP %n", &x, &len) == 1 && len > 0))) ||
 			(media == SDP_VIDEO && ((sscanf(m, "video %d/%d RTP/AVP %n", &x, &numberofports, &len) == 2 && len > 0) ||
@@ -15589,6 +15596,30 @@ static int handle_request_cancel(struct sip_pvt *p, struct sip_request *req)
 	else
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 	if (p->initreq.len > 0) {
+		struct sip_pkt *pkt, *prev_pkt;
+		/* If the CANCEL we are receiving is a retransmission, and we already have scheduled
+		 * a reliable 487, then we don't want to schedule another one on top of the previous
+		 * one.
+		 *
+		 * As odd as this may sound, we can't rely on the previously-transmitted "reliable" 
+		 * response in this situation. What if we've sent all of our reliable responses 
+		 * already and now all of a sudden, we get this second CANCEL?
+		 *
+		 * The only way to do this correctly is to cancel our previously-scheduled reliably-
+		 * transmitted response and send a new one in its place.
+		 */
+		for (pkt = p->packets, prev_pkt = NULL; pkt; prev_pkt = pkt, pkt = pkt->next) {
+			if (pkt->seqno == p->lastinvite && pkt->response_code == 487) {
+				AST_SCHED_DEL(sched, pkt->retransid);
+				if (prev_pkt) {
+					prev_pkt->next = pkt->next;
+				} else {
+					p->packets = pkt->next;
+				}
+				ast_free(pkt);
+				break;
+			}
+		}
 		transmit_response_reliable(p, "487 Request Terminated", &p->initreq);
 		transmit_response(p, "200 OK", req);
 		return 1;
