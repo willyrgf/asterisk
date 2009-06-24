@@ -1734,6 +1734,7 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 			ast_set_flag(chan_cdr, AST_CDR_FLAG_MAIN);
 			ast_cdr_update(chan);
 			bridge_cdr = ast_cdr_dup(chan_cdr);
+
 			/* rip any forked CDR's off of the chan_cdr and attach
 			 * them to the bridge_cdr instead */
 			bridge_cdr->next = chan_cdr->next;
