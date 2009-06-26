@@ -60,6 +60,9 @@ Applications
    exit the application.
  * The Voicemail application has been improved to automatically ignore messages
    that only contain silence.
+ * The ChanSpy application now has the 's' option, which makes the application
+   automatically exit once it hits a point where no more channels are available
+   to spy on.
 
 Dialplan Functions
 ------------------
@@ -185,6 +188,8 @@ CDR
    linkedid is based on uniqueID, but spreads to other channels as transfers, dials,
    etc are performed. Thus the peices of CDR can be grouped into multilegged sets.
  * Multiple files and formats can now be specified in cdr_custom.conf.
+ * cdr_syslog has been added which allows CDRs to be written directly to syslog.
+   See configs/cdr_syslog.conf.sample for more information.
 
 Calendaring for Asterisk
 ------------------------
