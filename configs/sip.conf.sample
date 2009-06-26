@@ -463,11 +463,14 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ; This has to be enabled in the general section for all devices to work. You can then
 ; disable it on a per device basis.
 ;
-; T.38 faxing only works in SIP to SIP calls, with no local or agent channel being used.
+; T.38 faxing only works in SIP to SIP calls. It defaults to off.
 ;
-; t38pt_udptl = yes            ; Default false
+; t38pt_udptl = yes            ; Enables T.38 with FEC error correction.
+; t38pt_udptl = yes,fec        ; Enables T.38 with FEC error correction.
+; t38pt_udptl = yes,redundancy ; Enables T.38 with redundancy error correction.
+; t38pt_udptl = yes,none       ; Enables T.38 with no error correction.
 ;
-; Fax Detect will cause the SIP channel to jump to the 'fax' extension (if it exists)
+; Faxs Detect will cause the SIP channel to jump to the 'fax' extension (if it exists)
 ; after T.38 is successfully negotiated.
 ;
 ; faxdetect = yes              ; Default false
@@ -632,11 +635,10 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ; However, this is only useful if the external traffic can reach us.
 ; The following settings are allowed (both globally and in individual sections):
 ;
-;        nat = no                ; default. Use NAT mode only according to RFC3581 (;rport)
-;        nat = yes               ; Always ignore info and assume NAT
-;        nat = never             ; Never attempt NAT mode or RFC3581 support
-;        nat = route             ; route = Assume NAT, don't send rport
-;                                ; (work around more UNIDEN bugs)
+;        nat = no                ; Default. Use rport if the remote side says to use it.
+;        nat = force_rport       ; Force rport to always be on.
+;        nat = yes               ; Force rport to always be on and perform symmetric RTP.
+;        nat = comedia           ; Use rport if the remote side says to use it and perform symmetric RTP.
 
 ;----------------------------------- MEDIA HANDLING --------------------------------
 ; By default, Asterisk tries to re-invite the audio to an optimal path. If there's
