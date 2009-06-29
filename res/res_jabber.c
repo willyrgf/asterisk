@@ -2423,8 +2423,8 @@ static int manager_jabber_send(struct mansession *s, const struct message *m)
 		astman_send_error(s, m, "Could not find Sender");
 		return 0;
 	}	
-	if (strchr(screenname, '@') && message){
-		ast_aji_send(client, screenname, message);	
+	if (strchr(screenname, '@') && message) {
+		ast_aji_send(client, screenname, message);
 		astman_append(s, "Response: Success\r\n");
 	} else {
 		astman_append(s, "Response: Error\r\n");
