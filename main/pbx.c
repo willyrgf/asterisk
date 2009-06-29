@@ -1573,8 +1573,7 @@ int ast_func_write(struct ast_channel *chan, char *function, const char *value)
 
 static void pbx_substitute_variables_helper_full(struct ast_channel *c, struct varshead *headp, const char *cp1, char *cp2, int count)
 {
-	/* Substitutes variables into cp2, based on string cp1, and assuming cp2 to be
-	   zero-filled */
+	/* Substitutes variables into cp2, based on string cp1, cp2 NO LONGER NEEDS TO BE ZEROED OUT!!!!  */
 	char *cp4;
 	const char *tmp, *whereweare;
 	int length, offset, offset2, isfunction;
@@ -1584,6 +1583,7 @@ static void pbx_substitute_variables_helper_full(struct ast_channel *c, struct v
 	char *vars, *vare;
 	int pos, brackets, needsub, len;
 
+	*cp2 = 0; /* just in case nothing ends up there */
 	whereweare=tmp=cp1;
 	while (!ast_strlen_zero(whereweare) && count) {
 		/* Assume we're copying the whole remaining string */
@@ -1617,6 +1617,7 @@ static void pbx_substitute_variables_helper_full(struct ast_channel *c, struct v
 			count -= pos;
 			cp2 += pos;
 			whereweare += pos;
+			*cp2 = 0;
 		}
 
 		if (nextvar) {
@@ -1640,7 +1641,7 @@ static void pbx_substitute_variables_helper_full(struct ast_channel *c, struct v
 				vare++;
 			}
 			if (brackets)
-				ast_log(LOG_NOTICE, "Error in extension logic (missing '}')\n");
+				ast_log(LOG_WARNING, "Error in extension logic (missing '}')\n");
 			len = vare - vars - 1;
 
 			/* Skip totally over variable string */
@@ -1657,7 +1658,6 @@ static void pbx_substitute_variables_helper_full(struct ast_channel *c, struct v
 				if (!ltmp)
 					ltmp = alloca(VAR_BUF_SIZE);
 
-				memset(ltmp, 0, VAR_BUF_SIZE);
 				pbx_substitute_variables_helper_full(c, headp, var, ltmp, VAR_BUF_SIZE - 1);
 				vars = ltmp;
 			} else {
@@ -1703,6 +1703,7 @@ static void pbx_substitute_variables_helper_full(struct ast_channel *c, struct v
 				memcpy(cp2, cp4, length);
 				count -= length;
 				cp2 += length;
+				*cp2 = 0;
 			}
 		} else if (nextexp) {
 			/* We have an expression.  Find the start and end, and determine
@@ -1713,7 +1714,7 @@ static void pbx_substitute_variables_helper_full(struct ast_channel *c, struct v
 			needsub = 0;
 
 			/* Find the end of it */
-			while(brackets && *vare) {
+			while (brackets && *vare) {
 				if ((vare[0] == '$') && (vare[1] == '[')) {
 					needsub++;
 					brackets++;
@@ -1729,7 +1730,7 @@ static void pbx_substitute_variables_helper_full(struct ast_channel *c, struct v
 				vare++;
 			}
 			if (brackets)
-				ast_log(LOG_NOTICE, "Error in extension logic (missing ']')\n");
+				ast_log(LOG_WARNING, "Error in extension logic (missing ']')\n");
 			len = vare - vars - 1;
 
 			/* Skip totally over expression */
@@ -1746,7 +1747,6 @@ static void pbx_substitute_variables_helper_full(struct ast_channel *c, struct v
 				if (!ltmp)
 					ltmp = alloca(VAR_BUF_SIZE);
 
-				memset(ltmp, 0, VAR_BUF_SIZE);
 				pbx_substitute_variables_helper_full(c, headp, var, ltmp, VAR_BUF_SIZE - 1);
 				vars = ltmp;
 			} else {
@@ -1760,6 +1760,7 @@ static void pbx_substitute_variables_helper_full(struct ast_channel *c, struct v
 					ast_log(LOG_DEBUG, "Expression result is '%s'\n", cp2);
 				count -= length;
 				cp2 += length;
+				*cp2 = 0;
 			}
 		}
 	}
@@ -1919,8 +1920,8 @@ static int ast_extension_state2(struct ast_exten *e)
 {
 	char hint[AST_MAX_EXTENSION];
 	char *cur, *rest;
-	int allunavailable = 1, allbusy = 1, allfree = 1, allonhold = 1;
-	int busy = 0, inuse = 0, ring = 0;
+	int allunavailable = 1, allbusy = 1, allfree = 1;
+	int busy = 0, inuse = 0, ring = 0, onhold = 0;
 
 	if (!e)
 		return -1;
@@ -1934,67 +1935,60 @@ static int ast_extension_state2(struct ast_exten *e)
 		case AST_DEVICE_NOT_INUSE:
 			allunavailable = 0;
 			allbusy = 0;
-			allonhold = 0;
 			break;
 		case AST_DEVICE_INUSE:
 			inuse = 1;
 			allunavailable = 0;
 			allfree = 0;
-			allonhold = 0;
 			break;
 		case AST_DEVICE_RINGING:
 			ring = 1;
 			allunavailable = 0;
 			allfree = 0;
-			allonhold = 0;
 			break;
 		case AST_DEVICE_RINGINUSE:
 			inuse = 1;
 			ring = 1;
 			allunavailable = 0;
 			allfree = 0;
-			allonhold = 0;
 			break;
 		case AST_DEVICE_ONHOLD:
 			allunavailable = 0;
 			allfree = 0;
+			onhold = 1;
 			break;
 		case AST_DEVICE_BUSY:
 			allunavailable = 0;
 			allfree = 0;
-			allonhold = 0;
 			busy = 1;
+			inuse = 1;
 			break;
 		case AST_DEVICE_UNAVAILABLE:
 		case AST_DEVICE_INVALID:
 			allbusy = 0;
 			allfree = 0;
-			allonhold = 0;
 			break;
 		default:
 			allunavailable = 0;
 			allbusy = 0;
 			allfree = 0;
-			allonhold = 0;
 		}
 	}
 
-	if (!inuse && ring)
-		return AST_EXTENSION_RINGING;
-	if (inuse && ring)
-		return (AST_EXTENSION_INUSE | AST_EXTENSION_RINGING);
-	if (inuse)
-		return AST_EXTENSION_INUSE;
 	if (allfree)
 		return AST_EXTENSION_NOT_INUSE;
-	if (allonhold)
-		return AST_EXTENSION_ONHOLD;
+	if ((inuse || onhold) && ring)
+		return (AST_EXTENSION_INUSE | AST_EXTENSION_RINGING);
 	if (allbusy)
 		return AST_EXTENSION_BUSY;
+	if (inuse)
+		return AST_EXTENSION_INUSE;
+	if (ring)
+		return AST_EXTENSION_RINGING;
+	if (onhold)
+		return AST_EXTENSION_ONHOLD;
 	if (allunavailable)
 		return AST_EXTENSION_UNAVAILABLE;
-	if (busy)
-		return AST_EXTENSION_INUSE;
 
 	return AST_EXTENSION_NOT_INUSE;
 }
@@ -5425,8 +5419,10 @@ static int pbx_builtin_busy(struct ast_channel *chan, void *data)
 	ast_indicate(chan, AST_CONTROL_BUSY);
 	/* Don't change state of an UP channel, just indicate
 	   busy in audio */
-	if (chan->_state != AST_STATE_UP)
+	if (chan->_state != AST_STATE_UP) {
 		ast_setstate(chan, AST_STATE_BUSY);
+		ast_cdr_busy(chan->cdr);
+	}
 	wait_for_hangup(chan, data);
 	return -1;
 }
@@ -5685,7 +5681,7 @@ static int pbx_builtin_background(struct ast_channel *chan, void *data)
 {
 	int res = 0;
 	struct ast_flags flags = {0};
-	char *parse;
+	char *parse, exten[2] = "";
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(filename);
 		AST_APP_ARG(options);
@@ -5747,7 +5743,22 @@ static int pbx_builtin_background(struct ast_channel *chan, void *data)
 			ast_stopstream(chan);
 		}
 	}
-	if (strcmp(args.context, chan->context) && res) {
+
+	/*
+	 * If the single digit DTMF is an extension in the specified context, then
+	 * go there and signal no DTMF.  Otherwise, we should exit with that DTMF.
+	 * If we're in Macro, we'll exit and seek that DTMF as the beginning of an
+	 * extension in the Macro's calling context.  If we're not in Macro, then
+	 * we'll simply seek that extension in the calling context.  Previously,
+	 * someone complained about the behavior as it related to the interior of a
+	 * Gosub routine, and the fix (#14011) inadvertently broke FreePBX
+	 * (#14940).  This change should fix both of these situations, but with the
+	 * possible incompatibility that if a single digit extension does not exist
+	 * (but a longer extension COULD have matched), it would have previously
+	 * gone immediately to the "i" extension, but will now need to wait for a
+	 * timeout.
+	 */
+	if ((exten[0] = res) && !ast_matchmore_extension(chan, args.context, exten, 1, chan->cid.cid_num)) {
 		snprintf(chan->exten, sizeof(chan->exten), "%c", res);
 		ast_copy_string(chan->context, args.context, sizeof(chan->context));
 		chan->priority = 0;

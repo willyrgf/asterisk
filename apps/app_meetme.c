@@ -2343,9 +2343,19 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 							}
 						}
 						if (conf->transframe[index]) {
- 							if (conf->transframe[index]->frametype != AST_FRAME_NULL) {
-	 							if (can_write(chan, confflags) && ast_write(chan, conf->transframe[index]))
-									ast_log(LOG_WARNING, "Unable to write frame to channel %s\n", chan->name);
+ 							if ((conf->transframe[index]->frametype != AST_FRAME_NULL) &&
+							    can_write(chan, confflags)) {
+								struct ast_frame *cur;
+								
+								/* the translator may have returned a list of frames, so
+								   write each one onto the channel
+								*/
+								for (cur = conf->transframe[index]; cur; cur = AST_LIST_NEXT(cur, frame_list)) {
+									if (ast_write(chan, cur)) {
+										ast_log(LOG_WARNING, "Unable to write frame to channel %s\n", chan->name);
+										break;
+									}
+								}
 							}
 						} else {
 							ast_mutex_unlock(&conf->listenlock);
@@ -2715,7 +2725,7 @@ static int conf_exec(struct ast_channel *chan, void *data)
 
 		empty = ast_test_flag(&confflags, CONFFLAG_EMPTY | CONFFLAG_EMPTYNOPIN);
 		empty_no_pin = ast_test_flag(&confflags, CONFFLAG_EMPTYNOPIN);
-		always_prompt = ast_test_flag(&confflags, CONFFLAG_ALWAYSPROMPT);
+		always_prompt = ast_test_flag(&confflags, CONFFLAG_ALWAYSPROMPT | CONFFLAG_DYNAMICPIN);
 	}
 
 	do {

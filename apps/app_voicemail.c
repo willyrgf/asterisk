@@ -439,7 +439,7 @@ static char VM_SPOOL_DIR[PATH_MAX];
 
 static char ext_pass_cmd[128];
 
-int my_umask;
+static int my_umask;
 
 #if ODBC_STORAGE
 #define tdesc "Comedian Mail (Voicemail System) with ODBC Storage"
@@ -1904,6 +1904,7 @@ static struct vm_state *create_vm_state_from_user(struct ast_vm_user *vmu)
 {
 	struct vm_state *vms_p;
 
+	pthread_once(&ts_vmstate.once, ts_vmstate.key_init);
 	if ((vms_p = pthread_getspecific(ts_vmstate.key)) && !strcmp(vms_p->imapuser, vmu->imapuser) && !strcmp(vms_p->username, vmu->mailbox)) {
 		return vms_p;
 	}
@@ -1931,6 +1932,7 @@ static struct vm_state *get_vm_state_by_imapuser(char *user, int interactive)
 
 	if (interactive) {
 		struct vm_state *vms;
+		pthread_once(&ts_vmstate.once, ts_vmstate.key_init);
 		vms = pthread_getspecific(ts_vmstate.key);
 		return vms;
 	}
@@ -1972,6 +1974,7 @@ static struct vm_state *get_vm_state_by_mailbox(const char *mailbox, const char 
 
 	if (interactive) {
 		struct vm_state *vms;
+		pthread_once(&ts_vmstate.once, ts_vmstate.key_init);
 		vms = pthread_getspecific(ts_vmstate.key);
 		return vms;
 	}
@@ -3965,7 +3968,7 @@ static int leave_voicemail(struct ast_channel *chan, char *ext, struct leave_vm_
 	char txtfile[PATH_MAX], tmptxtfile[PATH_MAX];
 	char callerid[256];
 	FILE *txt;
-	char date[256];
+	char date[50];
 	int txtdes;
 	int res = 0;
 	int msgnum;
@@ -3978,15 +3981,18 @@ static int leave_voicemail(struct ast_channel *chan, char *ext, struct leave_vm_
 	char fn[PATH_MAX];
 	char prefile[PATH_MAX] = "";
 	char tempfile[PATH_MAX] = "";
-	char ext_context[256] = "";
+	char ext_context[AST_MAX_EXTENSION + AST_MAX_CONTEXT + 2] = "";
 	char fmt[80];
 	char *context;
 	char ecodes[16] = "#";
-	char tmp[1024] = "", *tmpptr;
+	char tmp[1324] = "", *tmpptr;
 	struct ast_vm_user *vmu;
 	struct ast_vm_user svm;
 	const char *category = NULL;
 
+	if (strlen(ext) > sizeof(tmp) - 1) {
+		ast_log(LOG_WARNING, "List of extensions is too long (>%ld).  Truncating.\n", (long) sizeof(tmp) - 1);
+	}
 	ast_copy_string(tmp, ext, sizeof(tmp));
 	ext = tmp;
 	context = strchr(tmp, '@');
@@ -5580,7 +5586,8 @@ static int play_message(struct ast_channel *chan, struct ast_vm_user *vmu, struc
 	vms->starting = 0; 
 	make_file(vms->fn, sizeof(vms->fn), vms->curdir, vms->curmsg);
 	adsi_message(chan, vms);
-	if (!strcasecmp(chan->language, "he")) {	/* HEBREW FORMAT */
+	
+	if (!strcasecmp(chan->language, "he")) {			/* HEBREW FORMAT */
 		/*
 		 * The syntax in hebrew for counting the number of message is up side down
 		 * in comparison to english.
@@ -5600,47 +5607,56 @@ static int play_message(struct ast_channel *chan, struct ast_vm_user *vmu, struc
 					res = ast_say_number(chan, vms->curmsg + 1, AST_DIGIT_ANY, chan->language, "f");
 				}
 			}
-		}
-	} else {
-		if (!vms->curmsg)
-			res = wait_file2(chan, vms, "vm-first");	/* "First" */
-		else if (vms->curmsg == vms->lastmsg)
-			res = wait_file2(chan, vms, "vm-last");		/* "last" */
-	}
-	if (!res) {
-		/* POLISH syntax */
-		if (!strcasecmp(chan->language, "pl")) { 
-			if (vms->curmsg && (vms->curmsg != vms->lastmsg)) {
-				int ten, one;
-				char nextmsg[256];
-				ten = (vms->curmsg + 1) / 10;
-				one = (vms->curmsg + 1) % 10;
+		}		
+
+	} else if (!strcasecmp(chan->language, "pl")) {		/* POLISH FORMAT */
+		if (vms->curmsg && (vms->curmsg != vms->lastmsg)) {
+			int ten, one;
+			char nextmsg[256];
+			ten = (vms->curmsg + 1) / 10;
+			one = (vms->curmsg + 1) % 10;
 				
-				if (vms->curmsg < 20) {
-					snprintf(nextmsg, sizeof(nextmsg), "digits/n-%d", vms->curmsg + 1);
-					res = wait_file2(chan, vms, nextmsg);
-				} else {
-					snprintf(nextmsg, sizeof(nextmsg), "digits/n-%d", ten * 10);
-					res = wait_file2(chan, vms, nextmsg);
-					if (one > 0) {
-						if (!res) {
-							snprintf(nextmsg, sizeof(nextmsg), "digits/n-%d", one);
-							res = wait_file2(chan, vms, nextmsg);
-						}
+			if (vms->curmsg < 20) {
+				snprintf(nextmsg, sizeof(nextmsg), "digits/n-%d", vms->curmsg + 1);
+				res = wait_file2(chan, vms, nextmsg);
+			} else {
+				snprintf(nextmsg, sizeof(nextmsg), "digits/n-%d", ten * 10);
+				res = wait_file2(chan, vms, nextmsg);
+				if (one > 0) {
+					if (!res) {
+						snprintf(nextmsg, sizeof(nextmsg), "digits/n-%d", one);
+						res = wait_file2(chan, vms, nextmsg);
 					}
 				}
 			}
+		}
+		if (!res)
+			res = wait_file2(chan, vms, "vm-message");			
+
+	} else if (!strcasecmp(chan->language, "se")) {		/* SWEDISH FORMAT */
+		if (!vms->curmsg)
+			res = wait_file2(chan, vms, "vm-first");	/* "First" */
+		else if (vms->curmsg == vms->lastmsg)
+			res = wait_file2(chan, vms, "vm-last");		/* "last" */		
+		res = wait_file2(chan, vms, "vm-meddelandet");  /* "message" */
+		if (vms->curmsg && (vms->curmsg != vms->lastmsg)) {
 			if (!res)
-				res = wait_file2(chan, vms, "vm-message");
-		} else {
-			if (!strcasecmp(chan->language, "se")) /* SWEDISH syntax */
-				res = wait_file2(chan, vms, "vm-meddelandet");  /* "message" */
-			else /* DEFAULT syntax */
-				res = wait_file2(chan, vms, "vm-message");
-			if (vms->curmsg && (vms->curmsg != vms->lastmsg)) {
-				if (!res)
-					res = ast_say_number(chan, vms->curmsg + 1, AST_DIGIT_ANY, chan->language, NULL);
-			}
+				res = ast_say_number(chan, vms->curmsg + 1, AST_DIGIT_ANY, chan->language, NULL);
+		}
+		/* We know that the difference between English and Swedish
+		 * is very small, however, we differ the two for standartization
+		 * purposes, and possible changes to either of these in the 
+		 * future
+		 */
+	} else {
+		if (!vms->curmsg)								/* Default syntax */
+			res = wait_file2(chan, vms, "vm-first");	/* "First" */
+		else if (vms->curmsg == vms->lastmsg)
+			res = wait_file2(chan, vms, "vm-last");		/* "last" */		
+		res = wait_file2(chan, vms, "vm-message");
+		if (vms->curmsg && (vms->curmsg != vms->lastmsg)) {
+			if (!res)
+				res = ast_say_number(chan, vms->curmsg + 1, AST_DIGIT_ANY, chan->language, NULL);
 		}
 	}
 
@@ -7428,6 +7444,10 @@ static int vm_execmain(struct ast_channel *chan, void *data)
 	/* If ADSI is supported, setup login screen */
 	adsi_begin(chan, &useadsi);
 
+	if (!valid) {
+		goto out;
+	}
+
 #ifdef IMAP_STORAGE
 	pthread_once(&ts_vmstate.once, ts_vmstate.key_init);
 	pthread_setspecific(ts_vmstate.key, &vms);
@@ -7439,9 +7459,6 @@ static int vm_execmain(struct ast_channel *chan, void *data)
 	vmstate_insert(&vms);
 	init_vm_state(&vms);
 #endif
-	if (!valid)
-		goto out;
-
 	if (!(vms.deleted = ast_calloc(vmu->maxmsg, sizeof(int)))) {
 		/* TODO: Handle memory allocation failure */
 	}
@@ -7856,7 +7873,9 @@ out:
 	}
 	/*  before we delete the state, we should copy pertinent info
 	 *  back to the persistent model */
-	vmstate_delete(&vms);
+	if (vmu) {
+		vmstate_delete(&vms);
+	}
 #endif
 	if (vmu)
 		free_user(vmu);
@@ -8846,13 +8865,26 @@ static int load_module(void)
 {
 	int res;
 	char *adsi_loaded = ast_module_helper("", "res_adsi.so", 0, 0, 0, 0);
+	char *smdi_loaded = ast_module_helper("", "res_smdi.so", 0, 0, 0, 0);
 	free(adsi_loaded);
+	free(smdi_loaded);
+
 	if (!adsi_loaded) {
 		/* If embedded, res_adsi may be known as "res_adsi" not "res_adsi.so" */
 		adsi_loaded = ast_module_helper("", "res_adsi", 0, 0, 0, 0);
 		ast_free(adsi_loaded);
 		if (!adsi_loaded) {
 			ast_log(LOG_ERROR, "app_voicemail.so depends upon res_adsi.so\n");
+			return AST_MODULE_LOAD_DECLINE;
+		}
+	}
+
+	if (!smdi_loaded) {
+		/* If embedded, res_smdi may be known as "res_smdi" not "res_smdi.so" */
+		smdi_loaded = ast_module_helper("", "res_smdi", 0, 0, 0, 0);
+		ast_free(smdi_loaded);
+		if (!smdi_loaded) {
+			ast_log(LOG_ERROR, "app_voicemail.so depends upon res_smdi.so\n");
 			return AST_MODULE_LOAD_DECLINE;
 		}
 	}

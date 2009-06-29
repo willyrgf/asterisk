@@ -73,6 +73,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/term.h"
 #include "asterisk/astobj2.h"
 
+
 struct fast_originate_helper {
 	char tech[AST_MAX_EXTENSION];
 	/*! data can contain a channel name, extension number, username, password, etc. */
@@ -1557,6 +1558,7 @@ static int action_getvar(struct mansession *s, const struct message *m)
 			if (c) {
 				ast_func_read(c, copy, workspace, sizeof(workspace));
 				ast_channel_free(c);
+				c = NULL;
 			} else
 				ast_log(LOG_ERROR, "Unable to allocate bogus channel for variable substitution.  Function results may be blank.\n");
 		} else
@@ -2489,8 +2491,7 @@ static void *session_do(void *data)
 	int res;
 	struct mansession s = { .session = session, .fd = session->fd };
 	
-	astman_append(s, "Asterisk Call Manager/%s\r\n", AMI_VERSION);
-
+	astman_append(&s, "Asterisk Call Manager/%s\r\n", AMI_VERSION);
 	for (;;) {
 		if ((res = do_message(&s)) < 0)
 			break;
@@ -2705,8 +2706,12 @@ int manager_event(int category, const char *event, const char *fmt, ...)
 int ast_manager_unregister(char *action) 
 {
 	struct manager_action *cur, *prev;
+	struct timespec tv = { 5, };
 
-	ast_rwlock_wrlock(&actionlock);
+	if (ast_rwlock_timedwrlock(&actionlock, &tv)) {
+		ast_log(LOG_ERROR, "Could not obtain lock on manager list\n");
+		return -1;
+	}
 	cur = prev = first_action;
 	while (cur) {
 		if (!strcasecmp(action, cur->action)) {
@@ -2735,8 +2740,12 @@ static int ast_manager_register_struct(struct manager_action *act)
 {
 	struct manager_action *cur, *prev = NULL;
 	int ret;
+	struct timespec tv = { 5, };
 
-	ast_rwlock_wrlock(&actionlock);
+	if (ast_rwlock_timedwrlock(&actionlock, &tv)) {
+		ast_log(LOG_ERROR, "Could not obtain lock on manager list\n");
+		return -1;
+	}
 	cur = first_action;
 	while (cur) { /* Walk the list of actions */
 		ret = strcasecmp(cur->action, act->action);
@@ -2790,7 +2799,10 @@ int ast_manager_register2(const char *action, int auth, int (*func)(struct manse
 	cur->description = description;
 	cur->next = NULL;
 
-	ast_manager_register_struct(cur);
+	if (ast_manager_register_struct(cur)) {
+		ast_free(cur);
+		return -1;
+	}
 
 	return 0;
 }
@@ -2967,30 +2979,32 @@ static char *generic_http_callback(int format, struct sockaddr_in *requestor, co
 			char *buf;
 			size_t l = lseek(ss.fd, 0, SEEK_END);
 			if (l) {
-				if ((buf = mmap(NULL, l, PROT_READ | PROT_WRITE, MAP_SHARED, ss.fd, 0))) {
-					char *tmp;
+				if (MAP_FAILED == (buf = mmap(NULL, l, PROT_READ | PROT_WRITE, MAP_PRIVATE, ss.fd, 0))) {
+					ast_log(LOG_WARNING, "mmap failed.  Manager request output was not processed\n");
+				} else {
+					char *tmpbuf;
 					if (format == FORMAT_XML)
-						tmp = xml_translate(buf, params);
+						tmpbuf = xml_translate(buf, params);
 					else if (format == FORMAT_HTML)
-						tmp = html_translate(buf);
+						tmpbuf = html_translate(buf);
 					else
-						tmp = buf;
-					if (tmp) {
+						tmpbuf = buf;
+					if (tmpbuf) {
 						size_t wlen, tlen;
-						if ((retval = malloc((wlen = strlen(workspace)) + (tlen = strlen(tmp)) + 128))) {
+						if ((retval = malloc((wlen = strlen(workspace)) + (tlen = strlen(tmpbuf)) + 128))) {
 							strcpy(retval, workspace);
-							strcpy(retval + wlen, tmp);
+							strcpy(retval + wlen, tmpbuf);
 							c = retval + wlen + tlen;
 							/* Leftover space for footer, if any */
 							len = 120;
 						}
 					}
-					if (tmp != buf)
-						free(tmp);
+					if (tmpbuf != buf)
+						free(tmpbuf);
 					free(s->outputstr);
 					s->outputstr = NULL;
+					munmap(buf, l);
 				}
-				munmap(buf, l);
 			}
 			fclose(ss.f);
 			ss.f = NULL;

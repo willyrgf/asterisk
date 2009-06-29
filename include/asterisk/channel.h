@@ -534,6 +534,7 @@ struct ast_bridge_config {
 	struct ast_flags features_callee;
 	struct timeval start_time;
 	struct timeval nexteventts;
+	struct timeval partialfeature_timer;
 	long feature_timer;
 	long timelimit;
 	long play_warning;
@@ -632,16 +633,27 @@ int ast_setstate(struct ast_channel *chan, enum ast_channel_state);
  */
 struct ast_channel *ast_channel_alloc(int needqueue, int state, const char *cid_num, const char *cid_name, const char *acctcode, const char *exten, const char *context, const int amaflag, const char *name_fmt, ...) __attribute__((format(printf, 9, 10)));
 
-/*! \brief Queue an outgoing frame */
+/*!
+ * \brief Queue one or more frames to a channel's frame queue
+ *
+ * \param chan the channel to queue the frame(s) on
+ * \param f the frame(s) to queue.  Note that the frame(s) will be duplicated
+ *        by this function.  It is the responsibility of the caller to handle
+ *        freeing the memory associated with the frame(s) being passed if
+ *        necessary.
+ *
+ * \retval 0 success
+ * \retval non-zero failure
+ */
 int ast_queue_frame(struct ast_channel *chan, struct ast_frame *f);
 
 /*!
- * \brief Queue an outgoing frame to the head of the frame queue
+ * \brief Queue one or more frames to the head of a channel's frame queue
  *
- * \param chan the channel to queue the frame on
- * \param f the frame to queue.  Note that this frame will be duplicated by
- *        this function.  It is the responsibility of the caller to handle
- *        freeing the memory associated with the frame being passed if
+ * \param chan the channel to queue the frame(s) on
+ * \param f the frame(s) to queue.  Note that the frame(s) will be duplicated
+ *        by this function.  It is the responsibility of the caller to handle
+ *        freeing the memory associated with the frame(s) being passed if
  *        necessary.
  *
  * \retval 0 success
@@ -715,6 +727,18 @@ struct ast_channel *ast_request(const char *type, int format, void *data, int *s
 struct ast_channel *ast_request_and_dial(const char *type, int format, void *data, int timeout, int *reason, const char *cidnum, const char *cidname);
 
 struct ast_channel *__ast_request_and_dial(const char *type, int format, void *data, int timeout, int *reason, const char *cidnum, const char *cidname, struct outgoing_helper *oh);
+
+/*!
+* \brief Forwards a call to a new channel specified by the original channel's call_forward str.  If possible, the new forwarded channel is created and returned while the original one is terminated.
+* \param caller in channel that requested orig
+* \param orig channel being replaced by the call forward channel
+* \param timeout maximum amount of time to wait for setup of new forward channel
+* \param format requested channel format
+* \param oh outgoing helper used with original channel
+* \param outstate reason why unsuccessful (if uncuccessful)
+* \return Returns the forwarded call's ast_channel on success or NULL on failure
+*/
+struct ast_channel *ast_call_forward(struct ast_channel *caller, struct ast_channel *orig, int *timeout, int format, struct outgoing_helper *oh, int *outstate);
 
 /*!\brief Register a channel technology (a new channel driver)
  * Called by a channel module to register the kind of channels it supports.

@@ -1447,7 +1447,13 @@ static struct ast_channel *ast_feature_request_and_dial(struct ast_channel *call
 				if (!active_channel)
 					continue;
 
-				if (chan && (chan == active_channel)){
+				if (chan && (chan == active_channel)) {
+					if (!ast_strlen_zero(chan->call_forward)) {
+						if (!(chan = ast_call_forward(caller, chan, &to, format, NULL, outstate))) {
+							return NULL;
+						}
+						continue;
+					}
 					f = ast_read(chan);
 					if (f == NULL) { /*doh! where'd he go?*/
 						state = AST_CONTROL_HANGUP;
@@ -1670,8 +1676,8 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 	struct ast_bridge_config backup_config;
 	struct ast_cdr *bridge_cdr = NULL;
 	struct ast_cdr *orig_peer_cdr = NULL;
-	struct ast_cdr *chan_cdr = pick_unlocked_cdr(chan->cdr); /* the proper chan cdr, if there are forked cdrs */
-	struct ast_cdr *peer_cdr = pick_unlocked_cdr(peer->cdr); /* the proper chan cdr, if there are forked cdrs */
+	struct ast_cdr *chan_cdr = chan->cdr; /* the proper chan cdr, if there are forked cdrs */
+	struct ast_cdr *peer_cdr = peer->cdr; /* the proper chan cdr, if there are forked cdrs */
 	struct ast_cdr *new_chan_cdr = NULL; /* the proper chan cdr, if there are forked cdrs */
 	struct ast_cdr *new_peer_cdr = NULL; /* the proper chan cdr, if there are forked cdrs */
 
@@ -1730,18 +1736,22 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 			ast_set_flag(chan_cdr, AST_CDR_FLAG_MAIN);
 			ast_cdr_update(chan);
 			bridge_cdr = ast_cdr_dup(chan_cdr);
-			ast_copy_string(bridge_cdr->lastapp, chan->appl, sizeof(bridge_cdr->lastapp));
-			ast_copy_string(bridge_cdr->lastdata, chan->data, sizeof(bridge_cdr->lastdata));
+			/* rip any forked CDR's off of the chan_cdr and attach
+			 * them to the bridge_cdr instead */
+			bridge_cdr->next = chan_cdr->next;
+			chan_cdr->next = NULL;
+			ast_copy_string(bridge_cdr->lastapp, S_OR(chan->appl, ""), sizeof(bridge_cdr->lastapp));
+			ast_copy_string(bridge_cdr->lastdata, S_OR(chan->data, ""), sizeof(bridge_cdr->lastdata));
 		} else {
 			/* better yet, in a xfer situation, find out why the chan cdr got zapped (pun unintentional) */
 			bridge_cdr = ast_cdr_alloc(); /* this should be really, really rare/impossible? */
 			ast_copy_string(bridge_cdr->channel, chan->name, sizeof(bridge_cdr->channel));
 			ast_copy_string(bridge_cdr->dstchannel, peer->name, sizeof(bridge_cdr->dstchannel));
 			ast_copy_string(bridge_cdr->uniqueid, chan->uniqueid, sizeof(bridge_cdr->uniqueid));
-			ast_copy_string(bridge_cdr->lastapp, chan->appl, sizeof(bridge_cdr->lastapp));
-			ast_copy_string(bridge_cdr->lastdata, chan->data, sizeof(bridge_cdr->lastdata));
+			ast_copy_string(bridge_cdr->lastapp, S_OR(chan->appl, ""), sizeof(bridge_cdr->lastapp));
+			ast_copy_string(bridge_cdr->lastdata, S_OR(chan->data, ""), sizeof(bridge_cdr->lastdata));
 			ast_cdr_setcid(bridge_cdr, chan);
-			bridge_cdr->disposition = (chan->_state == AST_STATE_UP) ?  AST_CDR_ANSWERED : AST_CDR_NULL;
+			bridge_cdr->disposition = (chan->_state == AST_STATE_UP) ?  AST_CDR_ANSWERED : AST_CDR_NOANSWER;
 			bridge_cdr->amaflags = chan->amaflags ? chan->amaflags :  ast_default_amaflags;
 			ast_copy_string(bridge_cdr->accountcode, chan->accountcode, sizeof(bridge_cdr->accountcode));
 			/* Destination information */
@@ -1760,17 +1770,32 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 		   before the macro started playing. To the phone system,
 		   this is billable time for the call, even tho the caller
 		   hears nothing but ringing while the macro does its thing. */
-		if (peer_cdr && !ast_tvzero(peer_cdr->answer)) {
-			bridge_cdr->answer = peer_cdr->answer;
-			chan_cdr->answer = peer_cdr->answer;
-			bridge_cdr->disposition = peer_cdr->disposition;
-			chan_cdr->disposition = peer_cdr->disposition;
+
+		/* Another case where the peer cdr's time will be set, is when
+		   A self-parks by pickup up phone and dialing 700, then B
+		   picks up A by dialing its parking slot; there may be more 
+		   practical paths that get the same result, tho... in which
+		   case you get the previous answer time from the Park... which
+		   is before the bridge's start time, so I added in the 
+		   tvcmp check to the if below */
+
+		if (peer_cdr && !ast_tvzero(peer_cdr->answer) && ast_tvcmp(peer->cdr->answer, bridge_cdr->start) >= 0) {
+			ast_cdr_setanswer(bridge_cdr, peer_cdr->answer);
+			ast_cdr_setdisposition(bridge_cdr, peer_cdr->disposition);
+			if (chan_cdr) {
+				ast_cdr_setanswer(chan_cdr, peer_cdr->answer);
+				ast_cdr_setdisposition(chan_cdr, peer_cdr->disposition);
+			}
 		} else {
 			ast_cdr_answer(bridge_cdr);
-			ast_cdr_answer(chan_cdr); /* for the sake of cli status checks */
+			if (chan_cdr) {
+				ast_cdr_answer(chan_cdr); /* for the sake of cli status checks */
+			}
 		}
-		if (ast_test_flag(chan,AST_FLAG_BRIDGE_HANGUP_DONT)) {
-			ast_set_flag(chan_cdr, AST_CDR_FLAG_BRIDGED);
+		if (ast_test_flag(chan,AST_FLAG_BRIDGE_HANGUP_DONT) && (chan_cdr || peer_cdr)) {
+			if (chan_cdr) {
+				ast_set_flag(chan_cdr, AST_CDR_FLAG_BRIDGED);
+			}
 			if (peer_cdr) {
 				ast_set_flag(peer_cdr, AST_CDR_FLAG_BRIDGED);
 			}
@@ -1977,7 +2002,7 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 		char savelastapp[AST_MAX_EXTENSION];
 		char savelastdata[AST_MAX_EXTENSION];
 		char save_exten[AST_MAX_EXTENSION];
-		int  save_prio;
+		int  save_prio, spawn_error = 0;
 		
 		autoloopflag = ast_test_flag(chan, AST_FLAG_IN_AUTOLOOP);
 		ast_set_flag(chan, AST_FLAG_IN_AUTOLOOP);
@@ -1999,7 +2024,7 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 		chan->priority = 1;
 		ast_channel_unlock(chan);
 		while(ast_exists_extension(chan, chan->context, chan->exten, chan->priority, chan->cid.cid_num)) {
-			if (ast_spawn_extension(chan, chan->context, chan->exten, chan->priority, chan->cid.cid_num)) {
+			if ((spawn_error = ast_spawn_extension(chan, chan->context, chan->exten, chan->priority, chan->cid.cid_num))) {
 				/* Something bad happened, or a hangup has been requested. */
 				if (option_debug)
 					ast_log(LOG_DEBUG, "Spawn h extension (%s,%s,%d) exited non-zero on '%s'\n", chan->context, chan->exten, chan->priority, chan->name);
@@ -2020,7 +2045,9 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 				bridge_cdr = NULL;
 			}
 		}
-		ast_set_flag(chan, AST_FLAG_BRIDGE_HANGUP_RUN);
+		if (chan->priority != 1 || !spawn_error) {
+			ast_set_flag(chan, AST_FLAG_BRIDGE_HANGUP_RUN);
+		}
 		ast_channel_unlock(chan);
 		/* protect the lastapp/lastdata against the effects of the hangup/dialplan code */
 		if (bridge_cdr) {
@@ -2577,7 +2604,7 @@ static int park_exec(struct ast_channel *chan, void *data)
 		/* Simulate the PBX hanging up */
 		ast_hangup(peer);
 		ast_module_user_remove(u);
-		return res;
+		return -1;
 	} else {
 		/*! \todo XXX Play a message XXX */
 		if (ast_stream_and_wait(chan, "pbx-invalidpark", chan->language, ""))
@@ -2589,7 +2616,7 @@ static int park_exec(struct ast_channel *chan, void *data)
 
 	ast_module_user_remove(u);
 
-	return res;
+	return -1;
 }
 
 static int handle_showfeatures(int fd, int argc, char *argv[])

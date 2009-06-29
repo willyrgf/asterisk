@@ -2426,13 +2426,13 @@ static int manager_jabber_send(struct mansession *s, const struct message *m)
 	if (strchr(screenname, '@') && message){
 		ast_aji_send(client, screenname, message);	
 		astman_append(s, "Response: Success\r\n");
-		if (!ast_strlen_zero(id))
-			astman_append(s, "ActionID: %s\r\n",id);
-		return 0;
+	} else {
+		astman_append(s, "Response: Error\r\n");
 	}
-	astman_append(s, "Response: Error\r\n");
-	if (!ast_strlen_zero(id))
-		astman_append(s, "ActionID: %s\r\n",id);
+	if (!ast_strlen_zero(id)) {
+		astman_append(s, "ActionID: %s\r\n", id);
+	}
+	astman_append(s, "\r\n");
 	return 0;
 }
 

@@ -2610,11 +2610,10 @@ static int misdn_hangup(struct ast_channel *ast)
 
 	switch (p->state) {
 	case MISDN_INCOMING_SETUP:
-	case MISDN_CALLING:
 		/* This is the only place in misdn_hangup, where we 
 		 * can call release_chan, else it might create lot's of trouble
 		 * */
-		ast_log(LOG_NOTICE, "release channel, in CALLING/INCOMING_SETUP state.. no other events happened\n");
+		ast_log(LOG_NOTICE, "release channel, in INCOMING_SETUP state.. no other events happened\n");
 		release_chan(bc);
 
 		p->state = MISDN_CLEANING;
@@ -2637,6 +2636,7 @@ static int misdn_hangup(struct ast_channel *ast)
 			misdn_lib_send_event( bc, EVENT_DISCONNECT);
 		break;
 
+	case MISDN_CALLING:
 	case MISDN_ALERTING:
 	case MISDN_PROGRESS:
 	case MISDN_PROCEEDING:
@@ -3785,9 +3785,10 @@ static void do_immediate_setup(struct misdn_bchannel *bc, struct chan_list *ch, 
 	chan_misdn_log(1, bc->port, "* Starting Ast ctx:%s dad:%s oad:%s with 's' extension\n", ast->context, ast->exten, ast->cid.cid_num);
   
 	strcpy(ast->exten, "s");
-  
-	if (pbx_start_chan(ch) < 0) {
+ 
+	if (!ast_canmatch_extension(ast, ast->context, ast->exten, 1, bc->oad) || pbx_start_chan(ch) < 0) {
 		ast = NULL;
+		bc->out_cause = AST_CAUSE_UNALLOCATED;
 		hangup_chan(ch);
 		hanguptone_indicate(ch);
 
@@ -4149,7 +4150,9 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 			
 			if (!ast_canmatch_extension(ch->ast, ch->context, bc->dad, 1, bc->oad)) {
 				if (ast_exists_extension(ch->ast, ch->context, "i", 1, bc->oad)) {
-					ast_log(LOG_WARNING, "Extension can never match, So jumping to 'i' extension. port(%d)\n", bc->port);
+					ast_log(LOG_WARNING,
+						"Extension '%s@%s' can never match. Jumping to 'i' extension. port:%d\n",
+						bc->dad, ch->context, bc->port);
 					strcpy(ch->ast->exten, "i");
 
 					ch->state = MISDN_DIALING;
@@ -4157,9 +4160,10 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 					break;
 				}
 
-				ast_log(LOG_WARNING, "Extension can never match, so disconnecting on port(%d).\n"
-						"\tMaybe you want to add an 'i' extension to catch this case.\n",
-						bc->port);
+				ast_log(LOG_WARNING,
+					"Extension '%s@%s' can never match. Disconnecting. port:%d\n"
+					"\tMaybe you want to add an 'i' extension to catch this case.\n",
+					bc->dad, ch->context, bc->port);
 
 				if (bc->nt)
 					hanguptone_indicate(ch);
@@ -4402,7 +4406,9 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 		chan_misdn_log(5, bc->port, "CONTEXT:%s\n", ch->context);
 		if(!ast_canmatch_extension(ch->ast, ch->context, bc->dad, 1, bc->oad)) {
 			if (ast_exists_extension(ch->ast, ch->context, "i", 1, bc->oad)) {
-				ast_log(LOG_WARNING, "Extension can never match, So jumping to 'i' extension. port(%d)\n", bc->port);
+				ast_log(LOG_WARNING,
+					"Extension '%s@%s' can never match. Jumping to 'i' extension. port:%d\n",
+					bc->dad, ch->context, bc->port);
 				strcpy(ch->ast->exten, "i");
 				misdn_lib_send_event(bc, EVENT_SETUP_ACKNOWLEDGE);
 				ch->state = MISDN_DIALING;
@@ -4410,9 +4416,10 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 				break;
 			}
 
-			ast_log(LOG_WARNING, "Extension can never match, so disconnecting on port(%d).\n"
-					"\tMaybe you want to add an 'i' extension to catch this case.\n",
-					bc->port);
+			ast_log(LOG_WARNING,
+				"Extension '%s@%s' can never match. Disconnecting. port:%d\n"
+				"\tMaybe you want to add an 'i' extension to catch this case.\n",
+				bc->dad, ch->context, bc->port);
 			if (bc->nt)
 				hanguptone_indicate(ch);
 
@@ -5519,7 +5526,6 @@ static int misdn_set_opt_exec(struct ast_channel *chan, void *data)
 	if (ch->ast_dsp) {
 		chan_misdn_log(1, ch->bc->port, "SETOPT: with AST_DSP we deactivate mISDN_dsp\n");
 		ch->bc->nodsp = 1;
-		ch->bc->nojitter = 1;
 	}
 	
 	return 0;
