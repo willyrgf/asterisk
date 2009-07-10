@@ -432,14 +432,28 @@ static int transmit_audio(fax_session *s)
 	ast_activate_generator(s->chan, &generator, &fax);
 
 	while (!s->finished) {
-		res = ast_waitfor(s->chan, 20);
-		if (res < 0)
-			break;
-		else if (res > 0)
-			res = 0;
+		inf = NULL;
 
-		inf = ast_read(s->chan);
-		if (inf == NULL) {
+		if ((res = ast_waitfor(s->chan, 20)) < 0) {
+			break;
+		}
+
+		/* if nothing arrived, check the watchdog timers */
+		if (res == 0) {
+			now = ast_tvnow();
+			if (ast_tvdiff_sec(now, start) > WATCHDOG_TOTAL_TIMEOUT || ast_tvdiff_sec(now, state_change) > WATCHDOG_STATE_TIMEOUT) {
+				ast_log(LOG_WARNING, "It looks like we hung. Aborting.\n");
+				res = -1;
+				break;
+			} else {
+				/* timers have not triggered, loop around to wait
+				 * again
+				 */
+				continue;
+			}
+		}
+
+		if (!(inf = ast_read(s->chan))) {
 			ast_debug(1, "Channel hangup\n");
 			res = -1;
 			break;
@@ -473,7 +487,7 @@ static int transmit_audio(fax_session *s)
 
 
 		/* Check the frame type. Format also must be checked because there is a chance
-		   that a frame in old format was already queued before we set chanel format
+		   that a frame in old format was already queued before we set channel format
 		   to slinear so it will still be received by ast_read */
 		if (inf->frametype == AST_FRAME_VOICE && inf->subclass == AST_FORMAT_SLINEAR) {
 			if (fax_rx(&fax, inf->data.ptr, inf->samples) < 0) {
@@ -482,8 +496,6 @@ static int transmit_audio(fax_session *s)
 				res = -1;
 				break;
 			}
-
-			/* Watchdog */
 			if (last_state != t30state->state) {
 				state_change = ast_tvnow();
 				last_state = t30state->state;
@@ -497,6 +509,7 @@ static int transmit_audio(fax_session *s)
 				res = 1;
 				break;
 			} else if (parameters->request_response == AST_T38_REQUEST_NEGOTIATE) {
+				ast_debug(1, "T38 request received, accepting\n");
 				if (parameters->version > 0) {
 					/* Only T.38 Version 0 is supported at this time */
 					parameters->version = 0;
@@ -508,25 +521,14 @@ static int transmit_audio(fax_session *s)
 				}
 				/* we only support bit rates up to 9.6kbps */
 				parameters->rate = AST_T38_RATE_9600;
+				/* Complete T38 switchover */
 				ast_indicate_data(s->chan, AST_CONTROL_T38_PARAMETERS, parameters, sizeof(*parameters));
-				/* T38 switchover completed */
-				s->t38parameters = *parameters;
-				ast_debug(1, "T38 negotiated, finishing audio loop\n");
-				res = 1;
-				break;
+				/* Do not break audio loop, wait until channel driver finally acks switchover
+				   with AST_T38_NEGOTIATED */
 			}
 		}
 
 		ast_frfree(inf);
-		inf = NULL;
-
-		/* Watchdog */
-		now = ast_tvnow();
-		if (ast_tvdiff_sec(now, start) > WATCHDOG_TOTAL_TIMEOUT || ast_tvdiff_sec(now, state_change) > WATCHDOG_STATE_TIMEOUT) {
-			ast_log(LOG_WARNING, "It looks like we hung. Aborting.\n");
-			res = -1;
-			break;
-		}
 	}
 
 	ast_debug(1, "Loop finished, res=%d\n", res);
@@ -598,7 +600,8 @@ static int transmit_t38(fax_session *s)
 	}
 	if (s->t38parameters.transcoding_mmr) {
 		t38_set_mmr_transcoding(t38state, TRUE);
-	} else if (s->t38parameters.transcoding_jbig) {
+	}
+	if (s->t38parameters.transcoding_jbig) {
 		t38_set_jbig_transcoding(t38state, TRUE);
 	}
 
@@ -617,19 +620,31 @@ static int transmit_t38(fax_session *s)
 	now = start = state_change = ast_tvnow();
 
 	while (!s->finished) {
-
-		res = ast_waitfor(s->chan, 20);
-		if (res < 0)
+		inf = NULL;
+		if ((res = ast_waitfor(s->chan, 20)) < 0) {
 			break;
-		else if (res > 0)
-			res = 0;
+		}
 
 		last_frame = now;
 		now = ast_tvnow();
+		/* if nothing arrived, check the watchdog timers */
+		if (res == 0) {
+			if (ast_tvdiff_sec(now, start) > WATCHDOG_TOTAL_TIMEOUT || ast_tvdiff_sec(now, state_change) > WATCHDOG_STATE_TIMEOUT) {
+				ast_log(LOG_WARNING, "It looks like we hung. Aborting.\n");
+				res = -1;
+				break;
+			} else {
+				/* timers have not triggered, loop around to wait
+				 * again
+				 */
+				t38_terminal_send_timeout(&t38, ast_tvdiff_us(now, last_frame) / (1000000 / 8000));
+				continue;
+			}
+		}
+
 		t38_terminal_send_timeout(&t38, ast_tvdiff_us(now, last_frame) / (1000000 / 8000));
 
-		inf = ast_read(s->chan);
-		if (inf == NULL) {
+		if (!(inf = ast_read(s->chan))) {
 			ast_debug(1, "Channel hangup\n");
 			res = -1;
 			break;
@@ -639,30 +654,19 @@ static int transmit_t38(fax_session *s)
 
 		if (inf->frametype == AST_FRAME_MODEM && inf->subclass == AST_MODEM_T38) {
 			t38_core_rx_ifp_packet(t38state, inf->data.ptr, inf->datalen, inf->seqno);
-
-			/* Watchdog */
 			if (last_state != t30state->state) {
 				state_change = ast_tvnow();
 				last_state = t30state->state;
 			}
 		} else if (inf->frametype == AST_FRAME_CONTROL && inf->subclass == AST_CONTROL_T38_PARAMETERS) {
 			struct ast_control_t38_parameters *parameters = inf->data.ptr;
-			if (parameters->request_response == AST_T38_TERMINATED || parameters->request_response == AST_T38_REFUSED) {
-				ast_debug(1, "T38 down, terminating\n");
-				res = -1;
+			if (parameters->request_response == AST_T38_TERMINATED) {
+				ast_debug(1, "T38 down, finishing\n");
 				break;
 			}
 		}
 
 		ast_frfree(inf);
-		inf = NULL;
-
-		/* Watchdog */
-		if (ast_tvdiff_sec(now, start) > WATCHDOG_TOTAL_TIMEOUT || ast_tvdiff_sec(now, state_change) > WATCHDOG_STATE_TIMEOUT) {
-			ast_log(LOG_WARNING, "It looks like we hung. Aborting.\n");
-			res = -1;
-			break;
-		}
 	}
 
 	ast_debug(1, "Loop finished, res=%d\n", res);
