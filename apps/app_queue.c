@@ -4389,7 +4389,7 @@ static int reload_queues(void)
 	struct ao2_iterator mem_iter;
 	int new;
 	const char *general_val = NULL;
-	char parse[80];
+	char *parse;
 	char *interface, *state_interface;
 	char *membername = NULL;
 	int penalty;
@@ -4474,7 +4474,9 @@ static int reload_queues(void)
 						}
 
 						/* Add a new member */
-						ast_copy_string(parse, var->value, sizeof(parse));
+						if (!(parse = ast_strdup(var->value))) {
+							continue;
+						}
 						
 						AST_NONSTANDARD_APP_ARGS(args, parse, ',');
 
@@ -4520,6 +4522,7 @@ static int reload_queues(void)
 						else {
 							q->membercount++;
 						}
+						ast_free(parse);
 					} else {
 						queue_set_param(q, var->name, var->value, var->lineno, 1);
 					}
