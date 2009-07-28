@@ -162,23 +162,6 @@ static struct ast_custom_function regex_function = {
 	.read = regex,
 };
 
-static int strecmp(const char *pre, const char *post)
-{
-	int res;
-	for (; *pre && *post; pre++, post++) {
-		if (*pre == '"') {
-			post--;
-			continue;
-		} else if (*pre == '\\') {
-			pre++;
-		}
-		if ((res = strncmp(pre, post, 1))) {
-			return res;
-		}
-	}
-	return strncmp(pre, post, 1);
-}
-
 static int array(struct ast_channel *chan, char *cmd, char *var,
 		 const char *value)
 {
@@ -190,15 +173,6 @@ static int array(struct ast_channel *chan, char *cmd, char *var,
 	);
 	char *value2;
 	int i;
-
-	if (chan) {
-		const char *value3;
-		ast_mutex_lock(&chan->lock);
-		if ((value3 = pbx_builtin_getvar_helper(chan, "~ODBCVALUES~")) && strecmp(value3, value) == 0) {
-			value = ast_strdupa(value3);
-		}
-		ast_mutex_unlock(&chan->lock);
-	}
 
 	value2 = ast_strdupa(value);
 	if (!var || !value2)
@@ -410,6 +384,12 @@ static struct ast_custom_function sprintf_function = {
 static int quote(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len)
 {
 	char *bufptr = buf, *dataptr = data;
+	if (ast_strlen_zero(data)) {
+		ast_log(LOG_WARNING, "No argument specified!\n");
+		ast_copy_string(buf, "\"\"", len);
+		return 0;
+	}
+
 	*bufptr++ = '"';
 	for (; bufptr < buf + len - 1; dataptr++) {
 		if (*dataptr == '\\') {

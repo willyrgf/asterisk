@@ -1358,10 +1358,20 @@ retry:
 			goto retry;
 		}
 	}
-	if (!owner && iaxs[callno]) {
-		AST_SCHED_DEL_SPINLOCK(sched, iaxs[callno]->lagid, &iaxsl[callno]);
-		AST_SCHED_DEL_SPINLOCK(sched, iaxs[callno]->pingid, &iaxsl[callno]);
-		iaxs[callno] = NULL;
+
+	/* SPINLOCK gives up the pvt lock so the scheduler and iax2_pvt don't deadlock. Since we
+	 * give up the pvt lock, the pvt could be destroyed from underneath us. To guarantee
+	 * the pvt stays around, a ref count is added to it. */
+	if (!owner && pvt) {
+		ao2_ref(pvt, +1);
+		AST_SCHED_DEL_SPINLOCK(sched, pvt->lagid, &iaxsl[pvt->callno]);
+		AST_SCHED_DEL_SPINLOCK(sched, pvt->pingid, &iaxsl[pvt->callno]);
+		ao2_ref(pvt, -1);
+		if (iaxs[callno]) {
+			iaxs[callno] = NULL;
+		} else {
+			pvt = NULL;
+		}
 	}
 
 	if (pvt) {
@@ -2758,7 +2768,7 @@ static void __get_from_jb(const void *p)
 			/* create an interpolation frame */
 			af.frametype = AST_FRAME_VOICE;
 			af.subclass = pvt->voiceformat;
-			af.samples  = frame.ms * 8;
+			af.samples  = frame.ms * (ast_format_rate(pvt->voiceformat) / 1000);
 			af.src  = "IAX2 JB interpolation";
 			af.delivery = ast_tvadd(pvt->rxcore, ast_samp2tv(next, 1000));
 			af.offset = AST_FRIENDLY_OFFSET;
@@ -2831,7 +2841,7 @@ static int schedule_delivery(struct iax_frame *fr, int updatehistory, int fromtr
 
 	if(fr->af.frametype == AST_FRAME_VOICE) {
 		type = JB_TYPE_VOICE;
-		len = ast_codec_get_samples(&fr->af) / 8;
+		len = ast_codec_get_samples(&fr->af) / (ast_format_rate(fr->af.subclass) / 1000);
 	} else if(fr->af.frametype == AST_FRAME_CNG) {
 		type = JB_TYPE_SILENCE;
 	}
@@ -3322,13 +3332,15 @@ struct parsed_dial_string {
 	char *options;
 };
 
-static int send_apathetic_reply(unsigned short callno, unsigned short dcallno, struct sockaddr_in *sin, int command, int ts, unsigned char seqno)
+static int send_apathetic_reply(unsigned short callno, unsigned short dcallno,
+		struct sockaddr_in *sin, int command, int ts, unsigned char seqno,
+		int sockfd)
 {
 	struct ast_iax2_full_hdr f = { .scallno = htons(0x8000 | callno), .dcallno = htons(dcallno),
 		.ts = htonl(ts), .iseqno = seqno, .oseqno = 0, .type = AST_FRAME_IAX,
 		.csub = compress_subclass(command) };
 
-	return sendto(defaultsockfd, &f, sizeof(f), 0, (struct sockaddr *)sin, sizeof(*sin));
+	return sendto(sockfd, &f, sizeof(f), 0, (struct sockaddr *)sin, sizeof(*sin));
 }
 
 /*!
@@ -3710,7 +3722,7 @@ static enum ast_bridge_result iax2_bridge(struct ast_channel *c0, struct ast_cha
 		return AST_BRIDGE_FAILED;
 	}
 	/* Put them in native bridge mode */
-	if (!flags & (AST_BRIDGE_DTMF_CHANNEL_0 | AST_BRIDGE_DTMF_CHANNEL_1)) {
+	if (!(flags & (AST_BRIDGE_DTMF_CHANNEL_0 | AST_BRIDGE_DTMF_CHANNEL_1))) {
 		iaxs[callno0]->bridgecallno = callno1;
 		iaxs[callno1]->bridgecallno = callno0;
 	}
@@ -4062,6 +4074,7 @@ static unsigned int calc_timestamp(struct chan_iax2_pvt *p, unsigned int ts, str
 	int voice = 0;
 	int genuine = 0;
 	int adjust;
+	int rate = ast_format_rate(f->subclass) / 1000;
 	struct timeval *delivery = NULL;
 
 
@@ -4129,7 +4142,7 @@ static unsigned int calc_timestamp(struct chan_iax2_pvt *p, unsigned int ts, str
 					p->offset = ast_tvadd(p->offset, ast_samp2tv(adjust, 10000));
 
 				if (!p->nextpred) {
-					p->nextpred = ms; /*f->samples / 8;*/
+					p->nextpred = ms; /*f->samples / rate;*/
 					if (p->nextpred <= p->lastsent)
 						p->nextpred = p->lastsent + 3;
 				}
@@ -4148,11 +4161,11 @@ static unsigned int calc_timestamp(struct chan_iax2_pvt *p, unsigned int ts, str
 					ast_log(LOG_DEBUG, "predicted timestamp skew (%u) > max (%u), using real ts instead.\n",
 						abs(ms - p->nextpred), MAX_TIMESTAMP_SKEW);
 
-				if (f->samples >= 8) /* check to make sure we dont core dump */
+				if (f->samples >= rate) /* check to make sure we dont core dump */
 				{
-					int diff = ms % (f->samples / 8);
+					int diff = ms % (f->samples / rate);
 					if (diff)
-					    ms += f->samples/8 - diff;
+					    ms += f->samples/rate - diff;
 				}
 
 				p->nextpred = ms;
@@ -4184,7 +4197,7 @@ static unsigned int calc_timestamp(struct chan_iax2_pvt *p, unsigned int ts, str
 	}
 	p->lastsent = ms;
 	if (voice)
-		p->nextpred = p->nextpred + f->samples / 8;
+		p->nextpred = p->nextpred + f->samples / rate;
 	return ms;
 }
 
@@ -7466,7 +7479,7 @@ static int socket_process(struct iax2_thread *thread)
 		/* Deal with POKE/PONG without allocating a callno */
 		if (f.frametype == AST_FRAME_IAX && f.subclass == IAX_COMMAND_POKE) {
 			/* Reply back with a PONG, but don't care about the result. */
-			send_apathetic_reply(1, ntohs(fh->scallno), &sin, IAX_COMMAND_PONG, ntohl(fh->ts), fh->iseqno + 1);
+			send_apathetic_reply(1, ntohs(fh->scallno), &sin, IAX_COMMAND_PONG, ntohl(fh->ts), fh->iseqno + 1, fd);
 			return 1;
 		} else if (f.frametype == AST_FRAME_IAX && f.subclass == IAX_COMMAND_ACK && dcallno == 1) {
 			/* Ignore */

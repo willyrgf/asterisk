@@ -196,6 +196,12 @@ static const char tdesc[] = "DAHDI Telephony Driver"
 
 #define DCHAN_AVAILABLE	(DCHAN_PROVISIONED | DCHAN_NOTINALARM | DCHAN_UP)
 
+/* Overlap dialing option types */
+#define DAHDI_OVERLAPDIAL_NONE 0
+#define DAHDI_OVERLAPDIAL_OUTGOING 1
+#define DAHDI_OVERLAPDIAL_INCOMING 2
+#define DAHDI_OVERLAPDIAL_BOTH (DAHDI_OVERLAPDIAL_INCOMING|DAHDI_OVERLAPDIAL_OUTGOING)
+
 static char defaultcic[64] = "";
 static char defaultozz[64] = "";
 
@@ -2366,7 +2372,7 @@ static int dahdi_call(struct ast_channel *ast, char *rdest, int timeout)
 				return -1;
 			}
 		} else
-			ast_log(LOG_DEBUG, "Deferring dialing...\n");
+			ast_log(LOG_DEBUG, "Deferring dialing... (res %d)\n", res);
 		p->dialing = 1;
 		if (ast_strlen_zero(c))
 			p->dialednone = 1;
@@ -2463,15 +2469,12 @@ static int dahdi_call(struct ast_channel *ast, char *rdest, int timeout)
 			pri_set_crv(p->pri->pri, p->call, p->channel, 0);
 		}
 		p->digital = IS_DIGITAL(ast->transfercapability);
-		/* Add support for exclusive override */
-		if (p->priexclusive)
+
+		/* Should the picked channel be used exclusively? */
+		if (p->priexclusive || p->pri->nodetype == PRI_NETWORK) {
 			exclusive = 1;
-		else {
-		/* otherwise, traditional behavior */
-			if (p->pri->nodetype == PRI_NETWORK)
-				exclusive = 0;
-			else
-				exclusive = 1;
+		} else {
+			exclusive = 0;
 		}
 		
 		pri_sr_set_channel(sr, p->bearer ? PVT_TO_CHANNEL(p->bearer) : PVT_TO_CHANNEL(p), exclusive, 1);
@@ -4137,7 +4140,7 @@ static struct ast_frame *dahdi_handle_event(struct ast_channel *ast)
 
 		ast_log(LOG_DEBUG, "Detected %sdigit '%c'\n", p->pulsedial ? "pulse ": "", res & 0xff);
 #ifdef HAVE_PRI
-		if (!p->proceeding && p->sig == SIG_PRI && p->pri && p->pri->overlapdial) {
+		if (!p->proceeding && p->sig == SIG_PRI && p->pri && (p->pri->overlapdial & DAHDI_OVERLAPDIAL_INCOMING)) {
 			/* absorb event */
 		} else {
 #endif
@@ -4800,7 +4803,6 @@ static struct ast_frame *dahdi_handle_event(struct ast_channel *ast)
 				break;
 			case SIG_EM:
 			case SIG_EM_E1:
-			case SIG_EMWINK:
 			case SIG_FEATD:
 			case SIG_SF:
 			case SIG_SFWINK:
@@ -4834,7 +4836,8 @@ static struct ast_frame *dahdi_handle_event(struct ast_channel *ast)
 			case SIG_FEATB:
 			case SIG_SF_FEATDMF:
 			case SIG_SF_FEATB:
-				/* FGD MF *Must* wait for wink */
+			case SIG_EMWINK:
+				/* FGD MF and EMWINK *Must* wait for wink */
 				if (!ast_strlen_zero(p->dop.dialstr)) {
 					res = ioctl(p->subs[SUB_REAL].dfd, DAHDI_DIAL, &p->dop);
 					if (res < 0) {
@@ -5324,7 +5327,9 @@ static struct ast_frame  *dahdi_read(struct ast_channel *ast)
 				}
 			} else if (f->frametype == AST_FRAME_DTMF) {
 #ifdef HAVE_PRI
-				if (!p->proceeding && p->sig==SIG_PRI && p->pri && p->pri->overlapdial) {
+				if (!p->proceeding && p->sig==SIG_PRI && p->pri && p->pri->overlapdial &&
+					((!p->outgoing && (p->pri->overlapdial & DAHDI_OVERLAPDIAL_INCOMING)) ||
+					(p->outgoing && (p->pri->overlapdial & DAHDI_OVERLAPDIAL_OUTGOING)))) {
 					/* Don't accept in-band DTMF when in overlap dial mode */
 					f->frametype = AST_FRAME_NULL;
 					f->subclass = 0;
@@ -7648,6 +7653,7 @@ static struct dahdi_pvt *mkintf(int channel, const struct dahdi_chan_conf *conf,
 		for (x = 0; x < 3; x++)
 			tmp->subs[x].dfd = -1;
 		tmp->channel = channel;
+		tmp->priindication_oob = conf->chan.priindication_oob;
 	}
 
 	if (tmp) {
@@ -7948,7 +7954,6 @@ static struct dahdi_pvt *mkintf(int channel, const struct dahdi_chan_conf *conf,
 		tmp->dahditrcallerid = conf->chan.dahditrcallerid;
 		tmp->restrictcid = conf->chan.restrictcid;
 		tmp->use_callingpres = conf->chan.use_callingpres;
-		tmp->priindication_oob = conf->chan.priindication_oob;
 		tmp->priexclusive = conf->chan.priexclusive;
 		if (tmp->usedistinctiveringdetection) {
 			if (!tmp->use_callerid) {
@@ -8386,7 +8391,7 @@ static struct ast_channel *dahdi_request(const char *type, int format, void *dat
 		if (roundrobin)
 			round_robin[x] = p;
 #if 0
-		ast_verbose("name = %s, %d, %d, %d\n",p->owner ? p->owner->name : "<none>", p->channel, channelmatch, groupmatch);
+		ast_verbose("name = %s, %d, %d, %llu\n",p->owner ? p->owner->name : "<none>", p->channel, channelmatch, groupmatch);
 #endif
 
 		if (p && available(p, channelmatch, groupmatch, &busy, &channelmatched, &groupmatched)) {
@@ -9181,7 +9186,7 @@ static void *pri_dchannel(void *vpri)
 					if (chanpos > -1) {
 						ast_mutex_lock(&pri->pvts[chanpos]->lock);
 						/* queue DTMF frame if the PBX for this call was already started (we're forwarding KEYPAD_DIGITs further on */
-						if (pri->overlapdial && pri->pvts[chanpos]->call==e->digit.call && pri->pvts[chanpos]->owner) {
+						if ((pri->overlapdial & DAHDI_OVERLAPDIAL_INCOMING) && pri->pvts[chanpos]->call==e->digit.call && pri->pvts[chanpos]->owner) {
 							/* how to do that */
 							int digitlen = strlen(e->digit.digits);
 							char digit;
@@ -9209,7 +9214,7 @@ static void *pri_dchannel(void *vpri)
 					if (chanpos > -1) {
 						ast_mutex_lock(&pri->pvts[chanpos]->lock);
 						/* queue DTMF frame if the PBX for this call was already started (we're forwarding INFORMATION further on */
-						if (pri->overlapdial && pri->pvts[chanpos]->call==e->ring.call && pri->pvts[chanpos]->owner) {
+						if ((pri->overlapdial & DAHDI_OVERLAPDIAL_INCOMING) && pri->pvts[chanpos]->call==e->ring.call && pri->pvts[chanpos]->owner) {
 							/* how to do that */
 							int digitlen = strlen(e->ring.callednum);
 							char digit;
@@ -9332,7 +9337,7 @@ static void *pri_dchannel(void *vpri)
 						pri->pvts[chanpos]->exten[1] = '\0';
 					}
 					/* Make sure extension exists (or in overlap dial mode, can exist) */
-					if ((pri->overlapdial && ast_canmatch_extension(NULL, pri->pvts[chanpos]->context, pri->pvts[chanpos]->exten, 1, pri->pvts[chanpos]->cid_num)) ||
+					if (((pri->overlapdial & DAHDI_OVERLAPDIAL_INCOMING) && ast_canmatch_extension(NULL, pri->pvts[chanpos]->context, pri->pvts[chanpos]->exten, 1, pri->pvts[chanpos]->cid_num)) ||
 						ast_exists_extension(NULL, pri->pvts[chanpos]->context, pri->pvts[chanpos]->exten, 1, pri->pvts[chanpos]->cid_num)) {
 						/* Setup law */
 						int law;
@@ -9352,7 +9357,7 @@ static void *pri_dchannel(void *vpri)
 						res = set_actual_gain(pri->pvts[chanpos]->subs[SUB_REAL].dfd, 0, pri->pvts[chanpos]->rxgain, pri->pvts[chanpos]->txgain, law);
 						if (res < 0)
 							ast_log(LOG_WARNING, "Unable to set gains on channel %d\n", pri->pvts[chanpos]->channel);
-						if (e->ring.complete || !pri->overlapdial) {
+						if (e->ring.complete || !(pri->overlapdial & DAHDI_OVERLAPDIAL_INCOMING)) {
 							/* Just announce proceeding */
 							pri->pvts[chanpos]->proceeding = 1;
 							pri_proceeding(pri->pri, e->ring.call, PVT_TO_CHANNEL(pri->pvts[chanpos]), 0);
@@ -9366,7 +9371,7 @@ static void *pri_dchannel(void *vpri)
 						pri->pvts[chanpos]->callingpres = e->ring.callingpres;
 					
 						/* Start PBX */
-						if (!e->ring.complete && pri->overlapdial && ast_matchmore_extension(NULL, pri->pvts[chanpos]->context, pri->pvts[chanpos]->exten, 1, pri->pvts[chanpos]->cid_num)) {
+						if (!e->ring.complete && (pri->overlapdial & DAHDI_OVERLAPDIAL_INCOMING) && ast_matchmore_extension(NULL, pri->pvts[chanpos]->context, pri->pvts[chanpos]->exten, 1, pri->pvts[chanpos]->cid_num)) {
 							/* Release the PRI lock while we create the channel */
 							ast_mutex_unlock(&pri->lock);
 							if (crv) {
@@ -9673,6 +9678,7 @@ static void *pri_dchannel(void *vpri)
 						} else if (pri->pvts[chanpos]->confirmanswer) {
 							ast_log(LOG_DEBUG, "Waiting on answer confirmation on channel %d!\n", pri->pvts[chanpos]->channel);
 						} else {
+							pri->pvts[chanpos]->dialing = 0;
 							pri->pvts[chanpos]->subs[SUB_REAL].needanswer =1;
 							/* Enable echo cancellation if it's not on already */
 							dahdi_enable_ec(pri->pvts[chanpos]);
@@ -10020,8 +10026,8 @@ static int start_pri(struct dahdi_pri *pri)
 		pri->dchans[i] = pri_new(pri->fds[i], pri->nodetype, pri->switchtype);
 		/* Force overlap dial if we're doing GR-303! */
 		if (pri->switchtype == PRI_SWITCH_GR303_TMC)
-			pri->overlapdial = 1;
-		pri_set_overlapdial(pri->dchans[i],pri->overlapdial);
+			pri->overlapdial |= DAHDI_OVERLAPDIAL_BOTH;
+		pri_set_overlapdial(pri->dchans[i],(pri->overlapdial & DAHDI_OVERLAPDIAL_OUTGOING)?1:0);
 #ifdef HAVE_PRI_INBANDDISCONNECT
 		pri_set_inbanddisconnect(pri->dchans[i], pri->inbanddisconnect);
 #endif
@@ -10284,7 +10290,7 @@ static int handle_pri_show_span(int fd, int argc, char *argv[])
 #else
 			pri_dump_info(pris[span-1].pri);
 #endif
-			ast_cli(fd, "\n");
+			ast_cli(fd, "Overlap Recv: %s\n\n", (pris[span-1].overlapdial & DAHDI_OVERLAPDIAL_INCOMING)?"Yes":"No");
 		}
 	}
 	return RESULT_SUCCESS;
@@ -11816,33 +11822,54 @@ static int process_dahdi(struct dahdi_chan_conf *confp, const char *cat, struct 
 			} else if (!strcasecmp(v->name, "idledial")) {
 				ast_copy_string(confp->pri.idledial, v->value, sizeof(confp->pri.idledial));
 			} else if (!strcasecmp(v->name, "overlapdial")) {
-				confp->pri.overlapdial = ast_true(v->value);
+				if (ast_true(v->value)) {
+					confp->pri.overlapdial = DAHDI_OVERLAPDIAL_BOTH;
+				} else if (!strcasecmp(v->value, "incoming")) {
+					confp->pri.overlapdial = DAHDI_OVERLAPDIAL_INCOMING;
+				} else if (!strcasecmp(v->value, "outgoing")) {
+					confp->pri.overlapdial = DAHDI_OVERLAPDIAL_OUTGOING;
+				} else if (!strcasecmp(v->value, "both") || ast_true(v->value)) {
+					confp->pri.overlapdial = DAHDI_OVERLAPDIAL_BOTH;
+				} else {
+					confp->pri.overlapdial = DAHDI_OVERLAPDIAL_NONE;
+				}
 #ifdef HAVE_PRI_INBANDDISCONNECT
 			} else if (!strcasecmp(v->name, "inbanddisconnect")) {
 				confp->pri.inbanddisconnect = ast_true(v->value);
 #endif
 			} else if (!strcasecmp(v->name, "pritimer")) {
 #ifdef PRI_GETSET_TIMERS
-				char *timerc, *c;
-				int timer, timeridx;
-				c = v->value;
-				timerc = strsep(&c, ",");
-				if (timerc) {
-					timer = atoi(c);
-					if (!timer)
-						ast_log(LOG_WARNING, "'%s' is not a valid value for an ISDN timer\n", timerc);
-					else {
-						if ((timeridx = pri_timer2idx(timerc)) >= 0)
-							pritimers[timeridx] = timer;
-						else
-							ast_log(LOG_WARNING, "'%s' is not a valid ISDN timer\n", timerc);
-					}
-				} else
-					ast_log(LOG_WARNING, "'%s' is not a valid ISDN timer configuration string\n", v->value);
+				char tmp[20];
+				char *timerc;
+				char *c;
+				int timer;
+				int timeridx;
 
+				ast_copy_string(tmp, v->value, sizeof(tmp));
+				c = tmp;
+				timerc = strsep(&c, ",");
+				if (!ast_strlen_zero(timerc) && !ast_strlen_zero(c)) {
+					timeridx = pri_timer2idx(timerc);
+					timer = atoi(c);
+					if (timeridx < 0 || PRI_MAX_TIMERS <= timeridx) {
+						ast_log(LOG_WARNING,
+							"'%s' is not a valid ISDN timer at line %d.\n", timerc,
+							v->lineno);
+					} else if (!timer) {
+						ast_log(LOG_WARNING,
+							"'%s' is not a valid value for ISDN timer '%s' at line %d.\n",
+							c, timerc, v->lineno);
+					} else {
+						pritimers[timeridx] = timer;
+					}
+				} else {
+					ast_log(LOG_WARNING,
+						"'%s' is not a valid ISDN timer configuration string at line %d.\n",
+						v->value, v->lineno);
+				}
+#endif /* PRI_GETSET_TIMERS */
 			} else if (!strcasecmp(v->name, "facilityenable")) {
 				confp->pri.facilityenable = ast_true(v->value);
-#endif /* PRI_GETSET_TIMERS */
 #endif /* HAVE_PRI */
 			} else if (!strcasecmp(v->name, "cadence")) {
 				/* setup to scan our argument */
@@ -11985,7 +12012,7 @@ static int process_dahdi(struct dahdi_chan_conf *confp, const char *cat, struct 
 	}
 	/*< \todo why check for the pseudo in the per-channel section.
 	 * Any actual use for manual setup of the pseudo channel? */
-	if (!found_pseudo && reload == 0) {
+	if (!found_pseudo && reload != 1) {
 		/* use the default configuration for a channel, so
 		   that any settings from real configured channels
 		   don't "leak" into the pseudo channel config

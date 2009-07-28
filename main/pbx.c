@@ -58,7 +58,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/causes.h"
 #include "asterisk/musiconhold.h"
 #include "asterisk/app.h"
-#include "asterisk/devicestate.h"
 #include "asterisk/stringfields.h"
 #include "asterisk/threadstorage.h"
 
@@ -1915,13 +1914,40 @@ static struct ast_exten *ast_hint_extension(struct ast_channel *c, const char *c
 	return e;
 }
 
+enum ast_extension_states ast_devstate_to_extenstate(enum ast_device_state devstate)
+{
+	switch (devstate) {
+	case AST_DEVICE_ONHOLD:
+		return AST_EXTENSION_ONHOLD;
+	case AST_DEVICE_BUSY:
+		return AST_EXTENSION_BUSY;
+	case AST_DEVICE_UNAVAILABLE:
+	case AST_DEVICE_UNKNOWN:
+	case AST_DEVICE_INVALID:
+		return AST_EXTENSION_UNAVAILABLE;
+	case AST_DEVICE_RINGINUSE:
+		return (AST_EXTENSION_INUSE | AST_EXTENSION_RINGING);
+	case AST_DEVICE_RINGING:
+		return AST_EXTENSION_RINGING;
+	case AST_DEVICE_INUSE:
+		return AST_EXTENSION_INUSE;
+	case AST_DEVICE_NOT_INUSE:
+		return AST_EXTENSION_NOT_INUSE;
+	case AST_DEVICE_TOTAL: /* not a device state, included for completeness */
+		break;
+	}
+
+	return AST_EXTENSION_NOT_INUSE;
+}
+
 /*! \brief  ast_extensions_state2: Check state of extension by using hints */
 static int ast_extension_state2(struct ast_exten *e)
 {
 	char hint[AST_MAX_EXTENSION];
 	char *cur, *rest;
-	int allunavailable = 1, allbusy = 1, allfree = 1;
-	int busy = 0, inuse = 0, ring = 0, onhold = 0;
+	struct ast_devstate_aggregate agg;
+
+	ast_devstate_aggregate_init(&agg);
 
 	if (!e)
 		return -1;
@@ -1931,66 +1957,10 @@ static int ast_extension_state2(struct ast_exten *e)
 	rest = hint;	/* One or more devices separated with a & character */
 	while ( (cur = strsep(&rest, "&")) ) {
 		int res = ast_device_state(cur);
-		switch (res) {
-		case AST_DEVICE_NOT_INUSE:
-			allunavailable = 0;
-			allbusy = 0;
-			break;
-		case AST_DEVICE_INUSE:
-			inuse = 1;
-			allunavailable = 0;
-			allfree = 0;
-			break;
-		case AST_DEVICE_RINGING:
-			ring = 1;
-			allunavailable = 0;
-			allfree = 0;
-			break;
-		case AST_DEVICE_RINGINUSE:
-			inuse = 1;
-			ring = 1;
-			allunavailable = 0;
-			allfree = 0;
-			break;
-		case AST_DEVICE_ONHOLD:
-			allunavailable = 0;
-			allfree = 0;
-			onhold = 1;
-			break;
-		case AST_DEVICE_BUSY:
-			allunavailable = 0;
-			allfree = 0;
-			busy = 1;
-			inuse = 1;
-			break;
-		case AST_DEVICE_UNAVAILABLE:
-		case AST_DEVICE_INVALID:
-			allbusy = 0;
-			allfree = 0;
-			break;
-		default:
-			allunavailable = 0;
-			allbusy = 0;
-			allfree = 0;
-		}
+		ast_devstate_aggregate_add(&agg, res);
 	}
 
-	if (allfree)
-		return AST_EXTENSION_NOT_INUSE;
-	if ((inuse || onhold) && ring)
-		return (AST_EXTENSION_INUSE | AST_EXTENSION_RINGING);
-	if (allbusy)
-		return AST_EXTENSION_BUSY;
-	if (inuse)
-		return AST_EXTENSION_INUSE;
-	if (ring)
-		return AST_EXTENSION_RINGING;
-	if (onhold)
-		return AST_EXTENSION_ONHOLD;
-	if (allunavailable)
-		return AST_EXTENSION_UNAVAILABLE;
-
-	return AST_EXTENSION_NOT_INUSE;
+	return ast_devstate_to_extenstate(ast_devstate_aggregate_result(&agg));
 }
 
 /*! \brief  ast_extension_state2str: Return extension_state as string */
@@ -3042,6 +3012,13 @@ void ast_unregister_switch(struct ast_switch *sw)
 /*
  * Help for CLI commands ...
  */
+
+#ifdef AST_DEVMODE
+static char show_device2extenstate_help[] =
+"Usage: core show device2extenstate\n"
+"       Lists device state to extension state combinations.\n";
+#endif
+
 static char show_applications_help[] =
 "Usage: core show applications [{like|describing} <text>]\n"
 "       List applications which are currently available.\n"
@@ -3573,7 +3550,10 @@ static int show_dialplan_helper(int fd, const char *context, const char *exten, 
 			dpc->total_prio++;
 
 			/* write extension name and first peer */
-			snprintf(buf, sizeof(buf), "'%s' =>", ast_get_extension_name(e));
+			if (e->matchcid)
+				snprintf(buf, sizeof(buf), "'%s' (CID match '%s') => ", ast_get_extension_name(e), e->cidmatch);
+			else
+				snprintf(buf, sizeof(buf), "'%s' =>", ast_get_extension_name(e));
 
 			print_ext(e, buf2, sizeof(buf2));
 
@@ -3756,8 +3736,26 @@ static int handle_set_global(int fd, int argc, char *argv[])
 
 	return RESULT_SUCCESS;
 }
+#ifdef AST_DEVMODE
+static int handle_show_device2extenstate(int fd, int argc, char *argv[])
+{
+	struct ast_devstate_aggregate agg;
+	int i, j, exten, combined;
 
-
+	for (i = 0; i < AST_DEVICE_TOTAL; i++) {
+		for (j = 0; j < AST_DEVICE_TOTAL; j++) {
+			ast_devstate_aggregate_init(&agg);
+			ast_devstate_aggregate_add(&agg, i);
+			ast_devstate_aggregate_add(&agg, j);
+			combined = ast_devstate_aggregate_result(&agg);
+			exten = ast_devstate_to_extenstate(combined);
+			ast_cli(fd, "\n Exten:%14s  CombinedDevice:%12s  Dev1:%12s  Dev2:%12s", ast_extension_state2str(exten), devstate2str(combined), devstate2str(j), devstate2str(i));
+		}
+	}
+	ast_cli(fd, "\n");
+	return RESULT_SUCCESS;
+}
+#endif
 
 /*
  * CLI entries for upper commands ...
@@ -3827,6 +3825,12 @@ static struct ast_cli_entry pbx_cli[] = {
 	{ { "core", "show", "globals", NULL },
 	handle_show_globals, "Show global dialplan variables",
 	show_globals_help, NULL, &cli_show_globals_deprecated },
+
+#ifdef AST_DEVMODE
+	{ { "core", "show", "device2extenstate", NULL },
+	handle_show_device2extenstate, "Show expected exten state from multiple device states",
+	show_device2extenstate_help, NULL, NULL },
+#endif
 
 	{ { "core", "show" , "function", NULL },
 	handle_show_function, "Describe a specific dialplan function",

@@ -1648,7 +1648,8 @@ posout:
 	res = play_file(qe->chan, qe->parent->sound_thanks);
 
 playout:
-	if ((res > 0 && !valid_exit(qe, res)) || res < 0)
+
+	if ((res > 0 && !valid_exit(qe, res)))
 		res = 0;
 
 	/* Set our last_pos indicators */
@@ -2123,7 +2124,7 @@ static int say_periodic_announcement(struct queue_ent *qe)
 	/* play the announcement */
 	res = play_file(qe->chan, qe->parent->sound_periodicannounce[qe->last_periodic_announce_sound]);
 
-	if ((res > 0 && !valid_exit(qe, res)) || res < 0)
+	if (res > 0 && !valid_exit(qe, res))
 		res = 0;
 
 	/* Resume Music on Hold if the caller is going to stay in the queue */
@@ -4364,7 +4365,7 @@ static int reload_queues(void)
 	struct ao2_iterator mem_iter;
 	int new;
 	const char *general_val = NULL;
-	char parse[80];
+	char *parse;
 	char *interface, *state_interface;
 	char *membername = NULL;
 	int penalty;
@@ -4449,7 +4450,9 @@ static int reload_queues(void)
 						}
 
 						/* Add a new member */
-						ast_copy_string(parse, var->value, sizeof(parse));
+						if (!(parse = ast_strdup(var->value))) {
+							continue;
+						}
 						
 						AST_NONSTANDARD_APP_ARGS(args, parse, ',');
 
@@ -4495,6 +4498,7 @@ static int reload_queues(void)
 						else {
 							q->membercount++;
 						}
+						ast_free(parse);
 					} else {
 						queue_set_param(q, var->name, var->value, var->lineno, 1);
 					}
