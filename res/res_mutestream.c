@@ -69,6 +69,7 @@ static void destroy_callback(void *data)
 	/* Destroy the audiohook, and destroy ourselves */
 	ast_audiohook_destroy(&mute->audiohook);
 	free(mute);
+	ast_module_unref(ast_module_info->self);
 
 	return;
 }
@@ -164,6 +165,7 @@ static int mute_add_audiohook(struct ast_channel *chan, struct mute_information 
 			ast_log(LOG_ERROR, "Failed to attach audiohook for muting channel %s\n", chan->name);
 			return -1;
 		} 
+		ast_module_ref(ast_module_info->self);
 		if (option_debug) {
 			ast_log(LOG_DEBUG, "*** Initialized audiohook on channel %s\n", chan->name);
 		}
@@ -312,8 +314,7 @@ static int unload_module(void)
 	/* Unregister AMI actions */
         ast_manager_unregister("MuteStream");
 
-	/* Can't unload this once we're loaded */
-	return -1;
+	return 0;
 }
 
 AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_GLOBAL_SYMBOLS, "MUTE resource",
