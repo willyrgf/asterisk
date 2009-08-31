@@ -36,7 +36,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 89545 $")
 #include <math.h>
 #include <errno.h>
 
-#include "asterisk/callerid.h"
+#include "asterisk/options.h"
 #include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/module.h"
@@ -46,6 +46,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 89545 $")
 #include "asterisk/frame.h"
 #include "asterisk/utils.h"
 #include "asterisk/audiohook.h"
+#include "asterisk/manager.h"
 
 
 
@@ -88,30 +89,28 @@ static void ast_frame_clear(struct ast_frame *frame)
 	for (next = AST_LIST_NEXT(frame, frame_list);
 		frame;
 		frame = next, next = frame ? AST_LIST_NEXT(frame, frame_list) : NULL) {
-
-		ast_log(LOG_DEBUG, "     ---- CLEANING FRAME ---- Datalen %d\n", frame->datalen);
- 		memset(frame->data, frame->datalen, 0);
+ 		memset(frame->data, 0, frame->datalen);
         }
 }
 
 
+/*! \brief The callback from the audiohook subsystem. We basically get a frame to have fun with */
 static int mute_callback(struct ast_audiohook *audiohook, struct ast_channel *chan, struct ast_frame *frame, enum ast_audiohook_direction direction)
 {
 	struct ast_datastore *datastore = NULL;
 	struct mute_information *mute = NULL;
 
-	ast_log(LOG_DEBUG, "''' Mute callback on %s \n", chan ? chan->name : "No channel");
 
 	/* If the audiohook is stopping it means the channel is shutting down.... but we let the datastore destroy take care of it */
 	if (audiohook->status == AST_AUDIOHOOK_STATUS_DONE) {
-		ast_log(LOG_DEBUG, " *** We're done here. Good bye.\n");
 		return 0;
 	}
 
 	ast_channel_lock(chan);
 	/* Grab datastore which contains our mute information */
 	if (!(datastore = ast_channel_datastore_find(chan, &mute_datastore, NULL))) {
-		ast_log(LOG_DEBUG, " *** Can't find any datastore to use. Bad. \n");
+		if (option_debug > 1)
+			ast_log(LOG_DEBUG, " *** Can't find any datastore to use. Bad. \n");
 		return 0;
 	}
 
@@ -120,27 +119,15 @@ static int mute_callback(struct ast_audiohook *audiohook, struct ast_channel *ch
 
 	/* If this is audio then allow them to increase/decrease the gains */
 	if (frame->frametype == AST_FRAME_VOICE) {
-		ast_log(LOG_DEBUG, "''' Audio frame - direction %s  mute READ %s WRITE %s\n", direction == AST_AUDIOHOOK_DIRECTION_READ ? "read" : "write", mute->mute_read ? "on" : "off", mute->mute_write ? "on" : "off");
+		if (option_debug > 3)
+			ast_log(LOG_DEBUG, "Audio frame - direction %s  mute READ %s WRITE %s\n", direction == AST_AUDIOHOOK_DIRECTION_READ ? "read" : "write", mute->mute_read ? "on" : "off", mute->mute_write ? "on" : "off");
 		
 		/* Based on direction of frame grab the gain, and confirm it is applicable */
 		if ((direction == AST_AUDIOHOOK_DIRECTION_READ && mute->mute_read) || (direction == AST_AUDIOHOOK_DIRECTION_WRITE && mute->mute_write)) {
 			/* Ok, we just want to reset all audio in this frame. Keep NOTHING, thanks. */
  			ast_frame_clear(frame);
 		}
-	/* DTMF Just for debugging - kind of stupid */
-	} else if (frame->frametype == AST_FRAME_DTMF) {
-		ast_log(LOG_DEBUG, "*** Frame is a DTMF frame\n");
-		if (frame->subclass == '1') {
-			mute->mute_read = TRUE;
-			mute->mute_write = TRUE;
-		} else if (frame->subclass == '0') {
-			mute->mute_read = FALSE;
-			mute->mute_write = FALSE;
-			ast_log(LOG_DEBUG, "*** Turning off mute \n");
-		}
-	} else {
-		ast_log(LOG_DEBUG, "*** Frame is not a  voice or DTMF frame. What is it? -- %d\n", frame->frametype);
-	}
+	} 
 	ast_channel_unlock(chan);
 
 	return 0;
@@ -151,7 +138,9 @@ static struct ast_datastore *initialize_mutehook(struct ast_channel *chan)
 	struct ast_datastore *datastore = NULL;
 	struct mute_information *mute = NULL;
 
-	ast_log(LOG_DEBUG, "**** Initializing new Mute Audiohook \n");
+	if (option_debug > 2 )
+		ast_log(LOG_DEBUG, "Initializing new Mute Audiohook \n");
+
 	/* Allocate a new datastore to hold the reference to this mute_datastore and audiohook information */
 	if (!(datastore = ast_channel_datastore_alloc(&mute_datastore, NULL))) {
 		return NULL;
@@ -163,10 +152,22 @@ static struct ast_datastore *initialize_mutehook(struct ast_channel *chan)
 	}
 	ast_audiohook_init(&mute->audiohook, AST_AUDIOHOOK_TYPE_MANIPULATE, "Mute");
 	mute->audiohook.manipulate_callback = mute_callback;
-	/* For debugging control, listen to DTMF */
-	ast_set_flag(&mute->audiohook, AST_AUDIOHOOK_WANTS_DTMF);
 	datastore->data = mute;
 	return datastore;
+}
+
+static int mute_add_audiohook(struct ast_channel *chan, struct mute_information *mute, struct ast_datastore *datastore)
+{
+		/* Activate the settings */
+		ast_channel_datastore_add(chan, datastore);
+		if(ast_audiohook_attach(chan, &mute->audiohook)) {
+			ast_log(LOG_ERROR, "Failed to attach audiohook for muting channel %s\n", chan->name);
+			return -1;
+		} 
+		if (option_debug) {
+			ast_log(LOG_DEBUG, "*** Initialized audiohook on channel %s\n", chan->name);
+		}
+		return 0;
 }
 
 static int func_mute_write(struct ast_channel *chan, char *cmd, char *data, const char *value)
@@ -174,8 +175,6 @@ static int func_mute_write(struct ast_channel *chan, char *cmd, char *data, cons
 	struct ast_datastore *datastore = NULL;
 	struct mute_information *mute = NULL;
 	int is_new = 0;
-
-	ast_log(LOG_DEBUG, "**** Mute write - data %s value %s \n", data, value);
 
 	if (!(datastore = ast_channel_datastore_find(chan, &mute_datastore, NULL))) {
 		if (!(datastore = initialize_mutehook(chan))) {
@@ -188,29 +187,20 @@ static int func_mute_write(struct ast_channel *chan, char *cmd, char *data, cons
 
 	if (!strcasecmp(data, "out")) {
 		mute->mute_write = ast_true(value);
-		if (ast_true(value))
-			ast_log(LOG_DEBUG, "*** Muting channel - outbound *** \n");
-		else
-			ast_log(LOG_DEBUG, "*** UN-Muting channel - outbound *** \n");
+		if (option_debug > 1) {
+			ast_log(LOG_DEBUG, "%s channel - outbound *** \n", ast_true(value) ? "Muting" : "Unmuting");
+		}
 	}
 
-	else if (!strcasecmp(data, "in")){
+	else if (!strcasecmp(data, "in")) {
 		mute->mute_read = ast_true(value);
-		if (ast_true(value))
-			ast_log(LOG_DEBUG, "*** Muting channel - inbound *** \n");
-		else
-			ast_log(LOG_DEBUG, "*** UN-Muting channel - inbound *** \n");
+		if (option_debug > 1) {
+			ast_log(LOG_DEBUG, "%s channel - inbound *** \n", ast_true(value) ? "Muting" : "Unmuting");
+		}
 	}
-	/* DEBUG */
-	mute->mute_read = TRUE;
-	mute->mute_write = TRUE;
 
 	if (is_new) {
-		/* Activate the settings */
-		ast_channel_datastore_add(chan, datastore);
-		if(ast_audiohook_attach(chan, &mute->audiohook))
-			ast_log(LOG_DEBUG, "*** Failed to attach audiohook for muting!\n");
-		ast_log(LOG_DEBUG, "*** Initialized audiohook on channel %s\n", chan->name);
+		mute_add_audiohook(chan, mute, datastore);
 	}
 
 	return 0;
@@ -222,8 +212,82 @@ static struct ast_custom_function mute_function = {
         .write = func_mute_write,
 	.synopsis = "Muting the channel, totally and utterly",
 	.syntax = "MUTE(in|out) = true|false",
-	.desc = "Use this function instead of shouting SHUT UP.",
+	.desc = "The mute function mutes either inbound (to the PBX) or outbound"
+		"audio.",
 };
+
+static int manager_mutestream(struct mansession *s, const struct message *m)
+{
+	const char *channel = astman_get_header(m, "Channel");
+	const char *id = astman_get_header(m,"ActionID");
+	const char *state = astman_get_header(m,"State");
+	const char *direction = astman_get_header(m,"Direction");
+	char idText[256] = "";
+	struct ast_channel *c = NULL;
+	struct ast_datastore *datastore = NULL;
+	struct mute_information *mute = NULL;
+	int is_new = 0;
+	int turnon = TRUE;
+
+	if (ast_strlen_zero(channel)) {
+		astman_send_error(s, m, "Channel not specified");
+		return 0;
+	}
+	if (ast_strlen_zero(state)) {
+		astman_send_error(s, m, "State not specified");
+		return 0;
+	}
+	if (ast_strlen_zero(direction)) {
+		astman_send_error(s, m, "Direction not specified");
+		return 0;
+	}
+	/* Ok, we have everything */
+	if (!ast_strlen_zero(id)) {
+		snprintf(idText, sizeof(idText), "ActionID: %s\r\n", id);
+	}
+
+	c = ast_get_channel_by_name_locked(channel);
+	if (!c) {
+		astman_send_error(s, m, "No such channel");
+		return 0;
+	}
+
+	if (!(datastore = ast_channel_datastore_find(c, &mute_datastore, NULL))) {
+		if (!(datastore = initialize_mutehook(c))) {
+			ast_channel_unlock(c);
+			return 0;
+		}
+		is_new = 1;
+	} 
+	mute = datastore->data;
+	turnon = ast_true(state);
+
+	if (!strcasecmp(direction, "in")) {
+		mute->mute_read = turnon;
+	} else {
+		mute->mute_write = turnon;
+	}
+	
+	if (is_new) {
+		mute_add_audiohook(c, mute, datastore);
+	}
+	ast_channel_unlock(c);
+
+	astman_append(s, "Response: Success\r\n"
+				   "%s"
+				   "\r\n\r\n", idText);
+	return 0;
+}
+
+
+static char mandescr_mutestream[] =
+"Description: Mute an incoming or outbound audio stream in a channel.\n"
+"Variables: \n"
+"  Channel: <name>        The channel you want to mute.\n"
+"  Direction: in | out    The stream you wan to mute.\n"
+"  State: on | off        Whether to turn mute on or off.\n"
+"  ActionID: <id>         Optional action ID for this AMI transaction.\n";
+
 
 
 
@@ -235,12 +299,18 @@ static int reload(void)
 static int load_module(void)
 {
 	ast_custom_function_register(&mute_function);
+
+	ast_manager_register2("MuteStream", EVENT_FLAG_SYSTEM, manager_mutestream,
+                        "Mute an audio stream", mandescr_mutestream);
 	return 0;
 }
 
 static int unload_module(void)
 {
 	ast_custom_function_unregister(&mute_function);
+	/* Unregister AMI actions */
+        ast_manager_unregister("MuteStream");
+
 	/* Can't unload this once we're loaded */
 	return -1;
 }
