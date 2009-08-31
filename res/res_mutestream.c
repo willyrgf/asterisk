@@ -65,12 +65,10 @@ struct mute_information {
 static void destroy_callback(void *data)
 {
 	struct mute_information *mute = data;
-	ast_log(LOG_DEBUG, "***** About to destroy mute audiohook for this channel\n");
 
 	/* Destroy the audiohook, and destroy ourselves */
 	ast_audiohook_destroy(&mute->audiohook);
 	free(mute);
-	ast_log(LOG_DEBUG, "***** Destroying mute audiohook for this channel\n");
 
 	return;
 }
@@ -133,6 +131,7 @@ static int mute_callback(struct ast_audiohook *audiohook, struct ast_channel *ch
 	return 0;
 }
 
+/*! \brief Initialize mute hook on channel, but don't activate it */
 static struct ast_datastore *initialize_mutehook(struct ast_channel *chan)
 {
 	struct ast_datastore *datastore = NULL;
@@ -156,6 +155,7 @@ static struct ast_datastore *initialize_mutehook(struct ast_channel *chan)
 	return datastore;
 }
 
+/*! \brief Add or activate mute audiohook on channel */
 static int mute_add_audiohook(struct ast_channel *chan, struct mute_information *mute, struct ast_datastore *datastore)
 {
 		/* Activate the settings */
@@ -170,6 +170,7 @@ static int mute_add_audiohook(struct ast_channel *chan, struct mute_information 
 		return 0;
 }
 
+/*! \brief Mute dialplan function */
 static int func_mute_write(struct ast_channel *chan, char *cmd, char *data, const char *value)
 {
 	struct ast_datastore *datastore = NULL;
@@ -190,13 +191,13 @@ static int func_mute_write(struct ast_channel *chan, char *cmd, char *data, cons
 		if (option_debug > 1) {
 			ast_log(LOG_DEBUG, "%s channel - outbound *** \n", ast_true(value) ? "Muting" : "Unmuting");
 		}
-	}
-
-	else if (!strcasecmp(data, "in")) {
+	} else if (!strcasecmp(data, "in")) {
 		mute->mute_read = ast_true(value);
 		if (option_debug > 1) {
 			ast_log(LOG_DEBUG, "%s channel - inbound *** \n", ast_true(value) ? "Muting" : "Unmuting");
 		}
+	} else if (!strcasecmp(data,"all")) {
+		mute->mute_write = mute->mute_read = ast_true(value);
 	}
 
 	if (is_new) {
@@ -208,12 +209,12 @@ static int func_mute_write(struct ast_channel *chan, char *cmd, char *data, cons
 
 /* Function for debugging - might be useful */
 static struct ast_custom_function mute_function = {
-        .name = "MUTE",
+        .name = "MUTESTREAM",
         .write = func_mute_write,
-	.synopsis = "Muting the channel, totally and utterly",
-	.syntax = "MUTE(in|out) = true|false",
+	.synopsis = "Muting streams in the channel",
+	.syntax = "MUTESTREAM(in|out|all) = true|false",
 	.desc = "The mute function mutes either inbound (to the PBX) or outbound"
-		"audio.",
+		"audio. \"all\" indicates both directions",
 };
 
 static int manager_mutestream(struct mansession *s, const struct message *m)
@@ -264,8 +265,10 @@ static int manager_mutestream(struct mansession *s, const struct message *m)
 
 	if (!strcasecmp(direction, "in")) {
 		mute->mute_read = turnon;
-	} else {
+	} else if (!strcasecmp(direction, "out")) {
 		mute->mute_write = turnon;
+	} else if (!strcasecmp(direction, "all")) {
+		mute->mute_read = mute->mute_write = turnon;
 	}
 	
 	if (is_new) {
@@ -283,12 +286,10 @@ static int manager_mutestream(struct mansession *s, const struct message *m)
 static char mandescr_mutestream[] =
 "Description: Mute an incoming or outbound audio stream in a channel.\n"
 "Variables: \n"
-"  Channel: <name>        The channel you want to mute.\n"
-"  Direction: in | out    The stream you wan to mute.\n"
-"  State: on | off        Whether to turn mute on or off.\n"
-"  ActionID: <id>         Optional action ID for this AMI transaction.\n";
-
-
+"  Channel: <name>           The channel you want to mute.\n"
+"  Direction: in | out |all  The stream you wan to mute.\n"
+"  State: on | off           Whether to turn mute on or off.\n"
+"  ActionID: <id>            Optional action ID for this AMI transaction.\n";
 
 
 static int reload(void)
