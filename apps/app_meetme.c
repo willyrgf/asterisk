@@ -167,6 +167,8 @@ enum {
 	CONFFLAG_SLA_TRUNK = (1 << 27),
 	/*! Do not write any audio to this channel until the state is up. */
 	CONFFLAG_NO_AUDIO_UNTIL_UP = (1 << 28),
+	/*! Do not *send* audio to user, a.k.a. reverse mute */
+	CONFFLAG_REVERSE_MUTE = (1 << 29),
 };
 
 enum {
@@ -281,6 +283,7 @@ static const char *descrip3 =
 "      'M' -- Mute one user\n"
 "      'n' -- Unmute all users in the conference\n"
 "      'N' -- Mute all non-admin users in the conference\n"
+"      'Q' -- Reverse mute one user\n"
 "      'r' -- Reset one user's volume settings\n"
 "      'R' -- Reset all users volume settings\n"
 "      's' -- Lower entire conference speaking volume\n"

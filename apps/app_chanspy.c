@@ -44,6 +44,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/audiohook.h"
+#include "asterisk/manager.h"
 #include "asterisk/features.h"
 #include "asterisk/options.h"
 #include "asterisk/app.h"
@@ -216,6 +217,12 @@ static int start_spying(struct ast_channel *chan, const char *spychan_name, stru
 	struct ast_channel *peer;
 
 	ast_log(LOG_NOTICE, "Attaching %s to %s\n", spychan_name, chan->name);
+	manager_event(EVENT_FLAG_CALL, "SpyHook",
+                              "Channel: %s\r\n"
+                              "SpyChannel: %s\r\n"
+                              "Action: %s\r\n",
+                              chan->name, spychan_name, "start");
+
 
 	ast_set_flag(audiohook, AST_AUDIOHOOK_TRIGGER_SYNC | AST_AUDIOHOOK_SMALL_QUEUE);
 
@@ -509,6 +516,14 @@ redo:
 	return setup_chanspy_ds(this, chanspy_ds);
 }
 
+static void manager_stop(const char *chan_name)
+{
+	manager_event(EVENT_FLAG_CALL, "SpyHook",
+                              "Channel: %s\r\n"
+                              "Action: stop\r\n",
+                              chan_name);
+}
+
 static int common_exec(struct ast_channel *chan, const struct ast_flags *flags,
 		       int volfactor, const int fd, const char *mygroup, const char *spec,
 		       const char *exten, const char *context)
@@ -551,6 +566,7 @@ static int common_exec(struct ast_channel *chan, const struct ast_flags *flags,
 		res = ast_waitfordigit(chan, waitms);
 		if (res < 0) {
 			ast_clear_flag(chan, AST_FLAG_SPYING);
+			manager_stop(chan->name);
 			break;
 		}
 				
@@ -681,6 +697,7 @@ static int common_exec(struct ast_channel *chan, const struct ast_flags *flags,
 		if (res == -1 || ast_check_hangup(chan))
 			break;
 	}
+	manager_stop(chan->name);
 	
 	ast_clear_flag(chan, AST_FLAG_SPYING);
 
