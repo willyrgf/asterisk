@@ -63,9 +63,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</see-also>
 	</application>
  ***/	
-static char *app_morsecode = "Morsecode";
+static const char app_morsecode[] = "Morsecode";
 
-static char *morsecode[] = {
+static const char * const morsecode[] = {
 	"", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", /*  0-15 */
 	"", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", /* 16-31 */
 	" ",      /* 32 - <space> */
@@ -118,10 +118,10 @@ static void playtone(struct ast_channel *chan, int tone, int len)
 	ast_playtones_stop(chan);
 }
 
-static int morsecode_exec(struct ast_channel *chan, void *data)
+static int morsecode_exec(struct ast_channel *chan, const char *data)
 {
 	int res=0, ditlen, tone;
-	char *digit;
+	const char *digit;
 	const char *ditlenc, *tonec;
 
 	if (ast_strlen_zero(data)) {
@@ -132,7 +132,7 @@ static int morsecode_exec(struct ast_channel *chan, void *data)
 	/* Use variable MORESEDITLEN, if set (else 80) */
 	ast_channel_lock(chan);
 	ditlenc = pbx_builtin_getvar_helper(chan, "MORSEDITLEN");
-	if (ast_strlen_zero(ditlenc) || (sscanf(ditlenc, "%d", &ditlen) != 1)) {
+	if (ast_strlen_zero(ditlenc) || (sscanf(ditlenc, "%30d", &ditlen) != 1)) {
 		ditlen = 80;
 	}
 	ast_channel_unlock(chan);
@@ -140,14 +140,14 @@ static int morsecode_exec(struct ast_channel *chan, void *data)
 	/* Use variable MORSETONE, if set (else 800) */
 	ast_channel_lock(chan);
 	tonec = pbx_builtin_getvar_helper(chan, "MORSETONE");
-	if (ast_strlen_zero(tonec) || (sscanf(tonec, "%d", &tone) != 1)) {
+	if (ast_strlen_zero(tonec) || (sscanf(tonec, "%30d", &tone) != 1)) {
 		tone = 800;
 	}
 	ast_channel_unlock(chan);
 
 	for (digit = data; *digit; digit++) {
 		int digit2 = *digit;
-		char *dahdit;
+		const char *dahdit;
 		if (digit2 < 0) {
 			continue;
 		}

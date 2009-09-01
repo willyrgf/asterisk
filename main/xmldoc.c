@@ -19,6 +19,8 @@
  * \brief XML Documentation API
  *
  * \author Eliel C. Sardanons (LU1ALY) <eliels@gmail.com>
+ *
+ * \extref libxml2 http://www.xmlsoft.org/
  */
 
 #include "asterisk.h"
@@ -58,6 +60,7 @@ struct documentation_tree {
 };
 
 static char *xmldoc_get_syntax_cmd(struct ast_xml_node *fixnode, const char *name, int printname);
+static int xmldoc_parse_enumlist(struct ast_xml_node *fixnode, const char *tabs, struct ast_str **buffer);
 
 /*!
  * \brief Container of documentation trees
@@ -395,7 +398,7 @@ char *ast_xmldoc_printable(const char *bwinput, int withcolors)
 	}
 
 	if (withcolors) {
-		ast_term_color_code(&colorized, COLOR_BRWHITE, 0);
+		ast_str_append(&colorized, 0, "%s", term_end());
 		if (!colorized) {
 			return NULL;
 		}
@@ -983,19 +986,77 @@ static char *xmldoc_get_syntax_cmd(struct ast_xml_node *fixnode, const char *nam
 	return ret;
 }
 
+/*! \internal
+ *  \brief Generate an AMI action syntax.
+ *  \param fixnode The manager action node pointer.
+ *  \param name The name of the manager action.
+ *  \retval The generated syntax.
+ *  \retval NULL on error.
+ */
+static char *xmldoc_get_syntax_manager(struct ast_xml_node *fixnode, const char *name)
+{
+	struct ast_str *syntax;
+	struct ast_xml_node *node = fixnode;
+	const char *paramtype, *attrname;
+	int required;
+	char *ret;
+
+	syntax = ast_str_create(128);
+	if (!syntax) {
+		return ast_strdup(name);
+	}
+
+	ast_str_append(&syntax, 0, "Action: %s", name);
+
+	for (node = ast_xml_node_get_children(node); node; node = ast_xml_node_get_next(node)) {
+		if (strcasecmp(ast_xml_node_get_name(node), "parameter")) {
+			continue;
+		}
+
+		/* Is this parameter required? */
+		required = 0;
+		paramtype = ast_xml_get_attribute(node, "required");
+		if (paramtype) {
+			required = ast_true(paramtype);
+			ast_xml_free_attr(paramtype);
+		}
+
+		attrname = ast_xml_get_attribute(node, "name");
+		if (!attrname) {
+			/* ignore this bogus parameter and continue. */
+			continue;
+		}
+
+		ast_str_append(&syntax, 0, "\n%s%s:%s <value>",
+			(required ? "" : "["),
+			attrname,
+			(required ? "" : "]"));
+
+		ast_xml_free_attr(attrname);
+	}
+
+	/* return a common string. */
+	ret = ast_strdup(ast_str_buffer(syntax));
+	ast_free(syntax);
+
+	return ret;
+}
+
 /*! \brief Types of syntax that we are able to generate. */
 enum syntaxtype {
 	FUNCTION_SYNTAX,
+	MANAGER_SYNTAX,
 	COMMAND_SYNTAX
 };
 
 /*! \brief Mapping between type of node and type of syntax to generate. */
-struct strsyntaxtype {
+static struct strsyntaxtype {
 	const char *type;
 	enum syntaxtype stxtype;
 } stxtype[] = {
 	{ "function",		FUNCTION_SYNTAX	},
 	{ "application",	FUNCTION_SYNTAX	},
+	{ "manager",		MANAGER_SYNTAX  },
 	{ "agi",		COMMAND_SYNTAX	}
 };
 
@@ -1033,10 +1094,18 @@ char *ast_xmldoc_build_syntax(const char *type, const char *name)
 	}
 
 	if (node) {
-		if (xmldoc_get_syntax_type(type) == FUNCTION_SYNTAX) {
+		switch (xmldoc_get_syntax_type(type)) {
+		case FUNCTION_SYNTAX:
 			syntax = xmldoc_get_syntax_fun(node, name, "parameter", 1, 1);
-		} else {
+			break;
+		case COMMAND_SYNTAX:
 			syntax = xmldoc_get_syntax_cmd(node, name, 1);
+			break;
+		case MANAGER_SYNTAX:
+			syntax = xmldoc_get_syntax_manager(node, name);
+			break;
+		default:
+			syntax = xmldoc_get_syntax_fun(node, name, "parameter", 1, 1);
 		}
 	}
 	return syntax;
@@ -1398,6 +1467,9 @@ static int xmldoc_parse_enum(struct ast_xml_node *fixnode, const char *tabs, str
 {
 	struct ast_xml_node *node = fixnode;
 	int ret = 0;
+	char *optiontabs;
+
+	ast_asprintf(&optiontabs, "%s    ", tabs);
 
 	for (node = ast_xml_node_get_children(node); node; node = ast_xml_node_get_next(node)) {
 		if ((xmldoc_parse_para(node, (ret ? tabs : " - "), "\n", buffer))) {
@@ -1405,7 +1477,12 @@ static int xmldoc_parse_enum(struct ast_xml_node *fixnode, const char *tabs, str
 		} else if ((xmldoc_parse_specialtags(node, (ret ? tabs : " - "), "\n", buffer))) {
 			ret = 1;
 		}
+
+		xmldoc_parse_enumlist(node, optiontabs, buffer);
 	}
+
+	ast_free(optiontabs);
+
 	return ret;
 }
 
@@ -1534,6 +1611,7 @@ static void xmldoc_parse_optionlist(struct ast_xml_node *fixnode, const char *ta
 		if (!xmldoc_parse_option(node, tabs, buffer)) {
 			ast_str_append(buffer, 0, "\n");
 		}
+		ast_str_append(buffer, 0, "\n");
 		ast_xml_free_attr(optname);
 		ast_xml_free_attr(hasparams);
 	}

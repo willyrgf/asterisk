@@ -32,6 +32,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/module.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
+#include "asterisk/indications.h"
 
 /*** DOCUMENTATION
 	<application name="Milliwatt" language="en_US">
@@ -55,9 +56,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 	</application>
  ***/
 
-static char *app = "Milliwatt";
+static const char app[] = "Milliwatt";
 
-static char digital_milliwatt[] = {0x1e,0x0b,0x0b,0x1e,0x9e,0x8b,0x8b,0x9e} ;
+static const char digital_milliwatt[] = {0x1e,0x0b,0x0b,0x1e,0x9e,0x8b,0x8b,0x9e} ;
 
 static void *milliwatt_alloc(struct ast_channel *chan, void *params)
 {
@@ -139,22 +140,16 @@ static int old_milliwatt_exec(struct ast_channel *chan)
 	return -1;
 }
 
-static int milliwatt_exec(struct ast_channel *chan, void *data)
+static int milliwatt_exec(struct ast_channel *chan, const char *data)
 {
 	const char *options = data;
-	struct ast_app *playtones_app;
 	int res = -1;
 
 	if (!ast_strlen_zero(options) && strchr(options, 'o')) {
 		return old_milliwatt_exec(chan);
 	}
 
-	if (!(playtones_app = pbx_findapp("Playtones"))) {
-		ast_log(LOG_ERROR, "The Playtones application is required to run Milliwatt()\n");
-		return -1;
-	}
-
-	res = pbx_exec(chan, playtones_app, "1004/1000");
+	res = ast_playtones_start(chan, 23255, "1004/1000", 0);
 
 	while (!res) {
 		res = ast_safe_sleep(chan, 10000);

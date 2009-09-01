@@ -89,7 +89,7 @@ static const char app_originate[] = "Originate";
 	</application>
  ***/
 
-static int originate_exec(struct ast_channel *chan, void *data)
+static int originate_exec(struct ast_channel *chan, const char *data)
 {
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(tech_data);
@@ -136,7 +136,7 @@ static int originate_exec(struct ast_channel *chan, void *data)
 
 		if (args.argc == 5) {
 			/* Context/Exten/Priority all specified */
-			if (sscanf(args.arg3, "%d", &priority) != 1) {
+			if (sscanf(args.arg3, "%30d", &priority) != 1) {
 				ast_log(LOG_ERROR, "Invalid priority: '%s'\n", args.arg3);
 				goto return_cleanup;
 			}

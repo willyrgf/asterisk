@@ -128,7 +128,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/event.h"
 
 /*! \brief Device state strings for printing */
-static const char *devstatestring[][2] = {
+static const char * const devstatestring[][2] = {
 	{ /* 0 AST_DEVICE_UNKNOWN */     "Unknown",     "UNKNOWN"     }, /*!< Valid, but unknown state */
 	{ /* 1 AST_DEVICE_NOT_INUSE */   "Not in use",  "NOT_INUSE"   }, /*!< Not used */
 	{ /* 2 AST_DEVICE IN USE */      "In use",      "INUSE"       }, /*!< In use */
@@ -137,7 +137,7 @@ static const char *devstatestring[][2] = {
 	{ /* 5 AST_DEVICE_UNAVAILABLE */ "Unavailable", "UNAVAILABLE" }, /*!< Unavailable (not registered) */
 	{ /* 6 AST_DEVICE_RINGING */     "Ringing",     "RINGING"     }, /*!< Ring, ring, ring */
 	{ /* 7 AST_DEVICE_RINGINUSE */   "Ring+Inuse",  "RINGINUSE"   }, /*!< Ring and in use */
-	{ /* 8 AST_DEVICE_ONHOLD */      "On Hold"      "ONHOLD"      }, /*!< On Hold */
+	{ /* 8 AST_DEVICE_ONHOLD */      "On Hold",      "ONHOLD"      }, /*!< On Hold */
 };
 
 /*!\brief Mapping for channel states to device states */
@@ -190,7 +190,7 @@ struct devstate_change {
 	char device[1];
 };
 
-struct {
+static struct {
 	pthread_t thread;
 	struct ast_event_sub *event_sub;
 	ast_cond_t cond;
@@ -268,19 +268,15 @@ enum ast_device_state ast_parse_device_state(const char *device)
 	char match[AST_CHANNEL_NAME];
 	enum ast_device_state res;
 
-	ast_copy_string(match, device, sizeof(match)-1);
-	strcat(match, "-");
-	chan = ast_get_channel_by_name_prefix_locked(match, strlen(match));
+	snprintf(match, sizeof(match), "%s-", device);
 
-	if (!chan)
+	if (!(chan = ast_channel_get_by_name_prefix(match, strlen(match)))) {
 		return AST_DEVICE_UNKNOWN;
+	}
 
-	if (chan->_state == AST_STATE_RINGING)
-		res = AST_DEVICE_RINGING;
-	else
-		res = AST_DEVICE_INUSE;
+	res = (chan->_state == AST_STATE_RINGING) ? AST_DEVICE_RINGING : AST_DEVICE_INUSE;
 	
-	ast_channel_unlock(chan);
+	chan = ast_channel_unref(chan);
 
 	return res;
 }
@@ -353,9 +349,6 @@ static enum ast_device_state _ast_device_state(const char *device, int check_cac
 		return res;
 
 	res = ast_parse_device_state(device);
-
-	if (res == AST_DEVICE_UNKNOWN)
-		return AST_DEVICE_NOT_INUSE;
 
 	return res;
 }
@@ -737,86 +730,89 @@ void ast_devstate_aggregate_init(struct ast_devstate_aggregate *agg)
 {
 	memset(agg, 0, sizeof(*agg));
 
+	agg->all_unknown = 1;
 	agg->all_unavail = 1;
 	agg->all_busy = 1;
 	agg->all_free = 1;
-	agg->all_on_hold = 1;
 }
 
 void ast_devstate_aggregate_add(struct ast_devstate_aggregate *agg, enum ast_device_state state)
 {
 	switch (state) {
 	case AST_DEVICE_NOT_INUSE:
+		agg->all_unknown = 0;
 		agg->all_unavail = 0;
 		agg->all_busy = 0;
-		agg->all_on_hold = 0;
 		break;
 	case AST_DEVICE_INUSE:
 		agg->in_use = 1;
-		agg->all_busy = 0;
 		agg->all_unavail = 0;
 		agg->all_free = 0;
-		agg->all_on_hold = 0;
+		agg->all_unknown = 0;
 		break;
 	case AST_DEVICE_RINGING:
 		agg->ring = 1;
-		agg->all_busy = 0;
 		agg->all_unavail = 0;
 		agg->all_free = 0;
-		agg->all_on_hold = 0;
+		agg->all_unknown = 0;
 		break;
 	case AST_DEVICE_RINGINUSE:
 		agg->in_use = 1;
 		agg->ring = 1;
-		agg->all_busy = 0;
 		agg->all_unavail = 0;
 		agg->all_free = 0;
-		agg->all_on_hold = 0;
+		agg->all_unknown = 0;
 		break;
 	case AST_DEVICE_ONHOLD:
+		agg->all_unknown = 0;
 		agg->all_unavail = 0;
 		agg->all_free = 0;
+		agg->on_hold = 1;
 		break;
 	case AST_DEVICE_BUSY:
+		agg->all_unknown = 0;
 		agg->all_unavail = 0;
 		agg->all_free = 0;
-		agg->all_on_hold = 0;
 		agg->busy = 1;
+		agg->in_use = 1;
 		break;
 	case AST_DEVICE_UNAVAILABLE:
+		agg->all_unknown = 0;
 	case AST_DEVICE_INVALID:
 		agg->all_busy = 0;
 		agg->all_free = 0;
-		agg->all_on_hold = 0;
 		break;
 	case AST_DEVICE_UNKNOWN:
+		agg->all_busy = 0;
+		agg->all_free = 0;
+		break;
+	case AST_DEVICE_TOTAL: /* not a device state, included for completeness. */
 		break;
 	}
 }
+
 
 enum ast_device_state ast_devstate_aggregate_result(struct ast_devstate_aggregate *agg)
 {
 	if (agg->all_free)
 		return AST_DEVICE_NOT_INUSE;
-	
-	if (agg->all_on_hold)
-		return AST_DEVICE_ONHOLD;
-	
-	if (agg->all_busy)
-		return AST_DEVICE_BUSY;
-
-	if (agg->all_unavail)
-		return AST_DEVICE_UNAVAILABLE;
-	
+	if ((agg->in_use || agg->on_hold) && agg->ring)
+		return AST_DEVICE_RINGINUSE;
 	if (agg->ring)
-		return agg->in_use ? AST_DEVICE_RINGINUSE : AST_DEVICE_RINGING;
-
-	if (agg->in_use)
-		return AST_DEVICE_INUSE;
-
+		return AST_DEVICE_RINGING;
 	if (agg->busy)
 		return AST_DEVICE_BUSY;
-	
+	if (agg->in_use)
+		return AST_DEVICE_INUSE;
+	if (agg->on_hold)
+		return AST_DEVICE_ONHOLD;
+	if (agg->all_busy)
+		return AST_DEVICE_BUSY;
+	if (agg->all_unknown)
+		return AST_DEVICE_UNKNOWN;
+	if (agg->all_unavail)
+		return AST_DEVICE_UNAVAILABLE;
+
 	return AST_DEVICE_NOT_INUSE;
 }
 
@@ -827,7 +823,7 @@ int ast_enable_distributed_devstate(void)
 	}
 
 	devstate_collector.event_sub = ast_event_subscribe(AST_EVENT_DEVICE_STATE_CHANGE,
-		devstate_change_collector_cb, NULL, AST_EVENT_IE_END);
+		devstate_change_collector_cb, "devicestate_engine_enable_distributed", NULL, AST_EVENT_IE_END);
 
 	if (!devstate_collector.event_sub) {
 		ast_log(LOG_ERROR, "Failed to create subscription for the device state change collector\n");

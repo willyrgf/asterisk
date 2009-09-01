@@ -40,6 +40,7 @@
 #define AST_CDR_FLAG_POST_ENABLE    (1 << 10)
 #define AST_CDR_FLAG_DIALED         (1 << 11)
 /*@} */
+#define AST_CDR_FLAG_ORIGINATED		(1 << 11)
 
 /*! \name CDR Flags - Disposition */
 /*@{ */
@@ -93,16 +94,20 @@ struct ast_cdr {
 	/*! Total time call is up, in seconds */
 	long int billsec;				
 	/*! What happened to the call */
-	long int disposition;			
+	long int disposition;
 	/*! What flags to use */
-	long int amaflags;				
+	long int amaflags;
 	/*! What account number to use */
-	char accountcode[AST_MAX_ACCOUNT_CODE];			
+	char accountcode[AST_MAX_ACCOUNT_CODE];
+	/*! Account number of the last person we talked to */
+	char peeraccount[AST_MAX_ACCOUNT_CODE];
 	/*! flags */
-	unsigned int flags;				
+	unsigned int flags;
 	/*! Unique Channel Identifier
 	 * 150 = 127 (max systemname) + "-" + 10 (epoch timestamp) + "." + 10 (monotonically incrementing integer) + NULL */
 	char uniqueid[150];
+	/* Linked group Identifier */
+	char linkedid[32];
 	/*! User field */
 	char userfield[AST_MAX_USER_FIELD];
 
@@ -284,6 +289,24 @@ void ast_cdr_setdestchan(struct ast_cdr *cdr, const char *chan);
  */
 void ast_cdr_setapp(struct ast_cdr *cdr, const char *app, const char *data);
 
+/*!
+ * \brief Set the answer time for a call
+ * \param cdr the cdr you wish to associate with the call
+ * \param t the answer time
+ * Starts all CDR stuff necessary for doing CDR when answering a call
+ * NULL argument is just fine.
+ */
+void ast_cdr_setanswer(struct ast_cdr *cdr, struct timeval t);
+
+/*!
+ * \brief Set the disposition for a call
+ * \param cdr the cdr you wish to associate with the call
+ * \param disposition the new disposition
+ * Set the disposition on a call.
+ * NULL argument is just fine.
+ */
+void ast_cdr_setdisposition(struct ast_cdr *cdr, long int disposition);
+
 /*! 
  * \brief Convert a string to a detail record AMA flag 
  * \param flag string form of flag
@@ -333,6 +356,9 @@ void ast_cdr_merge(struct ast_cdr *to, struct ast_cdr *from);
 
 /*! \brief Set account code, will generate AMI event */
 int ast_cdr_setaccount(struct ast_channel *chan, const char *account);
+
+/*! \brief Set the peer account */
+int ast_cdr_setpeeraccount(struct ast_channel *chan, const char *account);
 
 /*! \brief Set AMA flags for channel */
 int ast_cdr_setamaflags(struct ast_channel *chan, const char *amaflags);

@@ -110,12 +110,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</see-also>
 	</application>
  ***/
-static char *app = "DISA";
+static const char app[] = "DISA";
 
 enum {
 	NOANSWER_FLAG = (1 << 0),
 	POUND_TO_END_FLAG = (1 << 1),
-} option_flags;
+};
 
 AST_APP_OPTIONS(app_opts, {
 	AST_APP_OPTION('n', NOANSWER_FLAG),
@@ -140,7 +140,7 @@ static void play_dialtone(struct ast_channel *chan, char *mailbox)
 	}
 }
 
-static int disa_exec(struct ast_channel *chan, void *data)
+static int disa_exec(struct ast_channel *chan, const char *data)
 {
 	int i = 0, j, k = 0, did_ignore = 0, special_noanswer = 0;
 	int firstdigittimeout = (chan->pbx ? chan->pbx->rtimeoutms : 20000);
@@ -250,7 +250,7 @@ static int disa_exec(struct ast_channel *chan, void *data)
 			if (!(k&1)) { /* if in password state */
 				if (j == '#') { /* end of password */
 					  /* see if this is an integer */
-					if (sscanf(args.passcode,"%d",&j) < 1) { /* nope, it must be a filename */
+					if (sscanf(args.passcode,"%30d",&j) < 1) { /* nope, it must be a filename */
 						fp = fopen(args.passcode,"r");
 						if (!fp) {
 							ast_log(LOG_WARNING,"DISA password file %s not found on chan %s\n",args.passcode,chan->name);
@@ -276,7 +276,7 @@ static int disa_exec(struct ast_channel *chan, void *data)
 							ast_debug(1, "Mailbox: %s\n",args.mailbox);
 
 							/* password must be in valid format (numeric) */
-							if (sscanf(args.passcode,"%d", &j) < 1)
+							if (sscanf(args.passcode,"%30d", &j) < 1)
 								continue;
 							 /* if we got it */
 							if (!strcmp(exten,args.passcode)) {

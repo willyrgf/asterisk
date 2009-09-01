@@ -239,7 +239,7 @@ static int speex_write(struct ast_channel *chan, const char *cmd, char *data, co
 	}
 
 	if (!strcasecmp(cmd, "agc")) {
-		if (!sscanf(value, "%f", &(*sdi)->agclevel))
+		if (!sscanf(value, "%30f", &(*sdi)->agclevel))
 			(*sdi)->agclevel = ast_true(value) ? DEFAULT_AGC_LEVEL : 0.0;
 	
 		if ((*sdi)->agclevel > 32768.0) {
@@ -337,13 +337,15 @@ static int speex_read(struct ast_channel *chan, const char *cmd, char *data, cha
 static struct ast_custom_function agc_function = {
 	.name = "AGC",
 	.write = speex_write,
-	.read = speex_read
+	.read = speex_read,
+	.read_max = 22,
 };
 
 static struct ast_custom_function denoise_function = {
 	.name = "DENOISE",
 	.write = speex_write,
-	.read = speex_read
+	.read = speex_read,
+	.read_max = 22,
 };
 
 static int unload_module(void)

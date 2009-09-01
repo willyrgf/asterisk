@@ -78,6 +78,19 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<ref type="agi">hangup</ref>
 		</see-also>
 	</agi>
+	<agi name="asyncagi break" language="en_US">
+		<synopsis>
+			Interrupts Async AGI
+		</synopsis>
+		<syntax />
+		<description>
+			<para>Interrupts expected flow of Async AGI commands and returns control to previous source
+			(typically, the PBX dialplan).</para>
+		</description>
+		<see-also>
+			<ref type="agi">hangup</ref>
+		</see-also>
+	</agi>
 	<agi name="channel status" language="en_US">
 		<synopsis>
 			Returns status of the connected channel.
@@ -115,6 +128,32 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					<para>Line is busy.</para>
 				</enum>
 			</enumlist>
+		</description>
+	</agi>
+	<agi name="control stream file" language="en_US">
+		<synopsis>
+			Sends audio file on channel and allows the listner to control the stream.
+		</synopsis>
+		<syntax>
+			<parameter name="filename" required="true">
+				<para>The file extension must not be included in the filename.</para>
+			</parameter>
+			<parameter name="escape_digits" required="true" />
+			<parameter name="skipms" />
+			<parameter name="ffchar">
+				<para>Defaults to <literal>*</literal></para>
+			</parameter>
+			<parameter name="rewchr">
+				<para>Defaults to <literal>#</literal></para>
+			</parameter>
+			<parameter name="pausechr" />
+		</syntax>
+		<description>
+			<para>Send the given file, allowing playback to be controled by the given
+			digits, if any. Use double quotes for the digits if you wish none to be
+			permitted. Returns <literal>0</literal> if playback completes without a digit
+			being pressed, or the ASCII numerical value of the digit if one was pressed,
+			or <literal>-1</literal> on error or if the channel was disconnected.</para>
 		</description>
 	</agi>
 	<agi name="database del" language="en_US">
@@ -275,6 +314,265 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<para>Does nothing.</para>
 		</description>
 	</agi>
+	<agi name="receive char" language="en_US">
+		<synopsis>
+			Receives one character from channels supporting it.
+		</synopsis>
+		<syntax>
+			<parameter name="timeout" required="true">
+				<para>The maximum time to wait for input in milliseconds, or <literal>0</literal>
+				for infinite. Most channels</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Receives a character of text on a channel. Most channels do not support
+			the reception of text. Returns the decimal value of the character
+			if one is received, or <literal>0</literal> if the channel does not support
+			text reception. Returns <literal>-1</literal> only on error/hangup.</para>
+		</description>
+	</agi>
+	<agi name="receive text" language="en_US">
+		<synopsis>
+			Receives text from channels supporting it.
+		</synopsis>
+		<syntax>
+			<parameter name="timeout" required="true">
+				<para>The timeout to be the maximum time to wait for input in
+				milliseconds, or <literal>0</literal> for infinite.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Receives a string of text on a channel. Most channels 
+			do not support the reception of text. Returns <literal>-1</literal> for failure
+			or <literal>1</literal> for success, and the string in parenthesis.</para> 
+		</description>
+	</agi>
+	<agi name="record file" language="en_US">
+		<synopsis>
+			Records to a given file.
+		</synopsis>
+		<syntax>
+			<parameter name="filename" required="true" />
+			<parameter name="format" required="true" />
+			<parameter name="escape_digits" required="true" />
+			<parameter name="timeout" required="true" />
+			<parameter name="offset samples" />
+			<parameter name="BEEP" />
+			<parameter name="s=silence" />
+		</syntax>
+		<description>
+			<para>Record to a file until a given dtmf digit in the sequence is received.
+			Returns <literal>-1</literal> on hangup or error.  The format will specify what kind of file
+			will be recorded. The <replaceable>timeout</replaceable> is the maximum record time in
+			milliseconds, or <literal>-1</literal> for no <replaceable>timeout</replaceable>.
+			<replaceable>offset samples</replaceable> is optional, and, if provided, will seek
+			to the offset without exceeding the end of the file. <replaceable>silence</replaceable> is
+			the number of seconds of silence allowed before the function returns despite the
+			lack of dtmf digits or reaching <replaceable>timeout</replaceable>. <replaceable>silence</replaceable>
+			value must be preceeded by <literal>s=</literal> and is also optional.</para>
+		</description>
+	</agi>
+	<agi name="say alpha" language="en_US">
+		<synopsis>
+			Says a given character string.
+		</synopsis>
+		<syntax>
+			<parameter name="number" required="true" />
+			<parameter name="escape_digits" required="true" />
+		</syntax>
+		<description>
+			<para>Say a given character string, returning early if any of the given DTMF digits
+			are received on the channel. Returns <literal>0</literal> if playback completes
+			without a digit being pressed, or the ASCII numerical value of the digit if one
+			was pressed or <literal>-1</literal> on error/hangup.</para>
+		</description>
+	</agi>
+	<agi name="say digits" language="en_US">
+		<synopsis>
+			Says a given digit string.
+		</synopsis>
+		<syntax>
+			<parameter name="number" required="true" />
+			<parameter name="escape_digits" required="true" />
+		</syntax>
+		<description>
+			<para>Say a given digit string, returning early if any of the given DTMF digits
+			are received on the channel. Returns <literal>0</literal> if playback completes
+			without a digit being pressed, or the ASCII numerical value of the digit if one
+			was pressed or <literal>-1</literal> on error/hangup.</para>
+		</description>
+	</agi>
+	<agi name="say number" language="en_US">
+		<synopsis>
+			Says a given number.
+		</synopsis>
+		<syntax>
+			<parameter name="number" required="true" />
+			<parameter name="escape_digits" required="true" />
+			<parameter name="gender" />
+		</syntax>
+		<description>
+			<para>Say a given number, returning early if any of the given DTMF digits
+			are received on the channel.  Returns <literal>0</literal> if playback
+			completes without a digit being pressed, or the ASCII numerical value of
+			the digit if one was pressed or <literal>-1</literal> on error/hangup.</para>
+		</description>
+	</agi>
+	<agi name="say phonetic" language="en_US">
+		<synopsis>
+			Says a given character string with phonetics.
+		</synopsis>
+		<syntax>
+			<parameter name="string" required="true" />
+			<parameter name="escape_digits" required="true" />
+		</syntax>
+		<description>
+			<para>Say a given character string with phonetics, returning early if any of the
+			given DTMF digits are received on the channel. Returns <literal>0</literal> if
+			playback completes without a digit pressed, the ASCII numerical value of the digit
+			if one was pressed, or <literal>-1</literal> on error/hangup.</para>
+		</description>
+	</agi>
+	<agi name="say date" language="en_US">
+		<synopsis>
+			Says a given date.
+		</synopsis>
+		<syntax>
+			<parameter name="date" required="true">
+				<para>Is number of seconds elapsed since 00:00:00 on January 1, 1970.
+				Coordinated Universal Time (UTC).</para>
+			</parameter>
+			<parameter name="escape_digits" required="true" />
+		</syntax>
+		<description>
+			<para>Say a given date, returning early if any of the given DTMF digits are
+			received on the channel. Returns <literal>0</literal> if playback
+			completes without a digit being pressed, or the ASCII numerical value of the
+			digit if one was pressed or <literal>-1</literal> on error/hangup.</para>
+		</description>
+	</agi>
+	<agi name="say time" language="en_US">
+		<synopsis>
+			Says a given time.
+		</synopsis>
+		<syntax>
+			<parameter name="time" required="true">
+				<para>Is number of seconds elapsed since 00:00:00 on January 1, 1970.
+				Coordinated Universal Time (UTC).</para>
+			</parameter>
+			<parameter name="escape_digits" required="true" />
+		</syntax>
+		<description>
+			<para>Say a given time, returning early if any of the given DTMF digits are
+			received on the channel. Returns <literal>0</literal> if playback completes
+			without a digit being pressed, or the ASCII numerical value of the digit if
+			one was pressed or <literal>-1</literal> on error/hangup.</para>
+		</description>
+	</agi>
+	<agi name="say datetime" language="en_US">
+		<synopsis>
+			Says a given time as specfied by the format given.
+		</synopsis>
+		<syntax>
+			<parameter name="time" required="true">
+				<para>Is number of seconds elapsed since 00:00:00
+				on January 1, 1970, Coordinated Universal Time (UTC)</para>
+			</parameter>
+			<parameter name="escape_digits" required="true" />
+			<parameter name="format">
+				<para>Is the format the time should be said in. See
+				<filename>voicemail.conf</filename> (defaults to <literal>ABdY
+				'digits/at' IMp</literal>).</para>
+			</parameter>
+			<parameter name="timezone">
+				<para>Acceptable values can be found in <filename>/usr/share/zoneinfo</filename>
+				Defaults to machine default.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Say a given time, returning early if any of the given DTMF digits are
+			received on the channel. Returns <literal>0</literal> if playback
+			completes without a digit being pressed, or the ASCII numerical value of the
+			digit if one was pressed or <literal>-1</literal> on error/hangup.</para>
+		</description>
+	</agi>
+	<agi name="send image" language="en_US">
+		<synopsis>
+			Sends images to channels supporting it.
+		</synopsis>
+		<syntax>
+			<parameter name="image" required="true" />
+		</syntax>
+		<description>
+			<para>Sends the given image on a channel. Most channels do not support the
+			transmission of images. Returns <literal>0</literal> if image is sent, or if
+			the channel does not support image transmission.  Returns <literal>-1</literal>
+			only on error/hangup. Image names should not include extensions.</para>
+		</description>
+	</agi>
+	<agi name="send text" language="en_US">
+		<synopsis>
+			Sends text to channels supporting it.
+		</synopsis>
+		<syntax>
+			<parameter name="text to send" required="true">
+				<para>Text consisting of greater than one word should be placed
+				in quotes since the command only accepts a single argument.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Sends the given text on a channel. Most channels do not support the
+			transmission of text. Returns <literal>0</literal> if text is sent, or if the
+			channel does not support text transmission. Returns <literal>-1</literal> only
+			on error/hangup.</para>
+		</description>
+	</agi>
+	<agi name="set autohangup" language="en_US">
+		<synopsis>
+			Autohangup channel in some time.
+		</synopsis>
+		<syntax>
+			<parameter name="time" required="true" />
+		</syntax>
+		<description>
+			<para>Cause the channel to automatically hangup at <replaceable>time</replaceable>
+			seconds in the future. Of course it can be hungup before then as well. Setting to
+			<literal>0</literal> will cause the autohangup feature to be disabled on this channel.</para>
+		</description>
+	</agi>
+	<agi name="set callerid" language="en_US">
+		<synopsis>
+			Sets callerid for the current channel.
+		</synopsis>
+		<syntax>
+			<parameter name="number" required="true" />
+		</syntax>
+		<description>
+			<para>Changes the callerid of the current channel.</para>
+		</description>
+	</agi>
+	<agi name="set context" language="en_US">
+		<synopsis>
+			Sets channel context.
+		</synopsis>
+		<syntax>
+			<parameter name="desired context" required="true" />
+		</syntax>
+		<description>
+			<para>Sets the context for continuation upon exiting the application.</para>
+		</description>
+	</agi>
+	<agi name="set extension" language="en_US">
+		<synopsis>
+			Changes channel extension.
+		</synopsis>
+		<syntax>
+			<parameter name="new extension" required="true" />
+		</syntax>
+		<description>
+			<para>Changes the extension for continuation upon exiting the application.</para>
+		</description>
+	</agi>
 	<agi name="set music" language="en_US">
 		<synopsis>
 			Enable/Disable Music on hold generator
@@ -299,6 +597,300 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<para>Always returns <literal>0</literal>.</para>
 		</description>
 	</agi>
+	<agi name="set priority" language="en_US">
+		<synopsis>
+			Set channel dialplan priority.
+		</synopsis>
+		<syntax>
+			<parameter name="priority" required="true" />
+		</syntax>
+		<description>
+			<para>Changes the priority for continuation upon exiting the application.
+			The priority must be a valid priority or label.</para>
+		</description>
+	</agi>
+	<agi name="set variable" language="en_US">
+		<synopsis>
+			Sets a channel variable.
+		</synopsis>
+		<syntax>
+			<parameter name="variablename" required="true" />
+			<parameter name="value" required="true" />
+		</syntax>
+		<description>
+			<para>Sets a variable to the current channel.</para>
+		</description>
+	</agi>
+	<agi name="stream file" language="en_US">
+		<synopsis>
+			Sends audio file on channel.
+		</synopsis>
+		<syntax>
+			<parameter name="filename" required="true">
+				<para>File name to play. The file extension must not be
+				included in the <replaceable>filename</replaceable>.</para>
+			</parameter>
+			<parameter name="escape_digits" required="true">
+				<para>Use double quotes for the digits if you wish none to be
+				permitted.</para>
+			</parameter>
+			<parameter name="sample offset">
+				<para>If sample offset is provided then the audio will seek to sample
+				offset before play starts.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Send the given file, allowing playback to be interrupted by the given
+			digits, if any. Returns <literal>0</literal> if playback completes without a digit
+			being pressed, or the ASCII numerical value of the digit if one was pressed,
+			or <literal>-1</literal> on error or if the channel was disconnected.</para>
+		</description>
+		<see-also>
+			<ref type="agi">control stream file</ref>
+		</see-also>
+	</agi>
+	<agi name="tdd mode" language="en_US">
+		<synopsis>
+			Toggles TDD mode (for the deaf).
+		</synopsis>
+		<syntax>
+			<parameter name="boolean" required="true">
+				<enumlist>
+					<enum name="on" />
+					<enum name="off" />
+				</enumlist>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Enable/Disable TDD transmission/reception on a channel. Returns <literal>1</literal> if
+			successful, or <literal>0</literal> if channel is not TDD-capable.</para>
+		</description>
+	</agi>
+	<agi name="verbose" language="en_US">
+		<synopsis>
+			Logs a message to the asterisk verbose log.
+		</synopsis>
+		<syntax>
+			<parameter name="message" required="true" />
+			<parameter name="level" required="true" />
+		</syntax>
+		<description>
+			<para>Sends <replaceable>message</replaceable> to the console via verbose
+			message system. <replaceable>level</replaceable> is the the verbose level (1-4).
+			Always returns <literal>1</literal></para>
+		</description>
+	</agi>
+	<agi name="wait for digit" language="en_US">
+		<synopsis>
+			Waits for a digit to be pressed.
+		</synopsis>
+		<syntax>
+			<parameter name="timeout" required="true" />
+		</syntax>
+		<description>
+			<para>Waits up to <replaceable>timeout</replaceable> milliseconds for channel to
+			receive a DTMF digit. Returns <literal>-1</literal> on channel failure, <literal>0</literal>
+			if no digit is received in the timeout, or the numerical value of the ascii of the digit if
+			one is received. Use <literal>-1</literal> for the <replaceable>timeout</replaceable> value if
+			you desire the call to block indefinitely.</para>
+		</description>
+	</agi>
+	<agi name="speech create" language="en_US">
+		<synopsis>
+			Creates a speech object.
+		</synopsis>
+		<syntax>
+			<parameter name="engine" required="true" />
+		</syntax>
+		<description>
+			<para>Create a speech object to be used by the other Speech AGI commands.</para>
+		</description>
+	</agi>
+	<agi name="speech set" language="en_US">
+		<synopsis>
+			Sets a speech engine setting.
+		</synopsis>
+		<syntax>
+			<parameter name="name" required="true" />
+			<parameter name="value" required="true" />
+		</syntax>
+		<description>
+			<para>Set an engine-specific setting.</para>
+		</description>
+	</agi>
+	<agi name="speech destroy" language="en_US">
+		<synopsis>
+			Destroys a speech object.
+		</synopsis>
+		<syntax>
+		</syntax>
+		<description>
+			<para>Destroy the speech object created by <literal>SPEECH CREATE</literal>.</para>
+		</description>
+		<see-also>
+			<ref type="agi">speech create</ref>
+		</see-also>
+	</agi>
+	<agi name="speech load grammar" language="en_US">
+		<synopsis>
+			Loads a grammar.
+		</synopsis>
+		<syntax>
+			<parameter name="grammar name" required="true" />
+			<parameter name="path to grammar" required="true" />
+		</syntax>
+		<description>
+			<para>Loads the specified grammar as the specified name.</para>
+		</description>
+	</agi>
+	<agi name="speech unload grammar" language="en_US">
+		<synopsis>
+			Unloads a grammar.
+		</synopsis>
+		<syntax>
+			<parameter name="grammar name" required="true" />
+		</syntax>
+		<description>
+			<para>Unloads the specified grammar.</para>
+		</description>
+	</agi>
+	<agi name="speech activate grammar" language="en_US">
+		<synopsis>
+			Activates a grammar.
+		</synopsis>
+		<syntax>
+			<parameter name="grammar name" required="true" />
+		</syntax>
+		<description>
+			<para>Activates the specified grammar on the speech object.</para>
+		</description>
+	</agi>
+	<agi name="speech deactivate grammar" language="en_US">
+		<synopsis>
+			Deactivates a grammar.
+		</synopsis>
+		<syntax>
+			<parameter name="grammar name" required="true" />
+		</syntax>
+		<description>
+			<para>Deactivates the specified grammar on the speech object.</para>
+		</description>
+	</agi>
+	<agi name="speech recognize" language="en_US">
+		<synopsis>
+			Recognizes speech.
+		</synopsis>
+		<syntax>
+			<parameter name="prompt" required="true" />
+			<parameter name="timeout" required="true" />
+			<parameter name="offset" />
+		</syntax>
+		<description>
+			<para>Plays back given <replaceable>prompt</replaceable> while listening for
+			speech and dtmf.</para>
+		</description>
+	</agi>
+	<application name="AGI" language="en_US">
+		<synopsis>
+			Executes an AGI compliant application.
+		</synopsis>
+		<syntax>
+			<parameter name="command" required="true" />
+			<parameter name="args">
+				<argument name="arg1" required="true" />
+				<argument name="arg2" multiple="yes" />
+			</parameter>
+		</syntax>
+		<description>
+			<para>Executes an Asterisk Gateway Interface compliant
+			program on a channel. AGI allows Asterisk to launch external programs written
+			in any language to control a telephony channel, play audio, read DTMF digits,
+			etc. by communicating with the AGI protocol on <emphasis>stdin</emphasis> and
+			<emphasis>stdout</emphasis>. As of <literal>1.6.0</literal>, this channel will
+			not stop dialplan execution on hangup inside of this application. Dialplan
+			execution will continue normally, even upon hangup until the AGI application
+			signals a desire to stop (either by exiting or, in the case of a net script, by
+			closing the connection). A locally executed AGI script will receive SIGHUP on
+			hangup from the channel except when using DeadAGI. A fast AGI server will
+			correspondingly receive a HANGUP in OOB data. Both of these signals may be disabled
+			by setting the <variable>AGISIGHUP</variable> channel variable to <literal>no</literal>
+			before executing the AGI application.</para>
+			<para>Use the CLI command <literal>agi show commnands</literal> to list available agi
+			commands.</para>
+			<para>This application sets the following channel variable upon completion:</para>
+			<variablelist>
+				<variable name="AGISTATUS">
+					<para>The status of the attempt to the run the AGI script
+					text string, one of:</para>
+					<value name="SUCCESS" />
+					<value name="FAILURE" />
+					<value name="NOTFOUND" />
+					<value name="HANGUP" />
+				</variable>
+			</variablelist>
+		</description>
+		<see-also>
+			<ref type="application">EAGI</ref>
+			<ref type="application">DeadAGI</ref>
+		</see-also>
+	</application>
+	<application name="EAGI" language="en_US">
+		<synopsis>
+			Executes an EAGI compliant application.
+		</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/application[@name='AGI']/syntax/parameter[@name='command'])" />
+			<xi:include xpointer="xpointer(/docs/application[@name='AGI']/syntax/parameter[@name='args'])" />
+		</syntax>
+		<description>
+			<para>Using 'EAGI' provides enhanced AGI, with incoming audio available out of band
+			on file descriptor 3.</para>
+			<xi:include xpointer="xpointer(/docs/application[@name='AGI']/description/para)" />
+			<xi:include xpointer="xpointer(/docs/application[@name='AGI']/description/variablelist)" />
+		</description>
+		<see-also>
+			<ref type="application">AGI</ref>
+			<ref type="application">DeadAGI</ref>
+		</see-also>
+	</application>
+	<application name="DeadAGI" language="en_US">
+		<synopsis>
+			Executes AGI on a hungup channel.
+		</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/application[@name='AGI']/syntax/parameter[@name='command'])" />
+			<xi:include xpointer="xpointer(/docs/application[@name='AGI']/syntax/parameter[@name='args'])" />
+		</syntax>
+		<description>
+			<xi:include xpointer="xpointer(/docs/application[@name='AGI']/description/para)" />
+			<xi:include xpointer="xpointer(/docs/application[@name='AGI']/description/variablelist)" />
+		</description>
+		<see-also>
+			<ref type="application">AGI</ref>
+			<ref type="application">EAGI</ref>
+		</see-also>
+	</application>
+	<manager name="AGI" language="en_US">
+		<synopsis>
+			Add an AGI command to execute by Async AGI.
+		</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
+			<parameter name="Channel" required="true">
+				<para>Channel that is currently in Async AGI.</para>
+			</parameter>
+			<parameter name="Command" required="true">
+				<para>Application to execute.</para>
+			</parameter>
+			<parameter name="CommandID">
+				<para>This will be sent back in CommandID header of AsyncAGI exec
+				event notification.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Add an AGI command to the execute queue of the channel in Async AGI.</para>
+		</description>
+	</manager>
  ***/
 
 #define MAX_ARGS 128
@@ -311,30 +903,6 @@ static char *app = "AGI";
 static char *eapp = "EAGI";
 
 static char *deadapp = "DeadAGI";
-
-static char *synopsis = "Executes an AGI compliant application";
-static char *esynopsis = "Executes an EAGI compliant application";
-static char *deadsynopsis = "Executes AGI on a hungup channel";
-
-static char *descrip =
-"  [E|Dead]AGI(command,args): Executes an Asterisk Gateway Interface compliant\n"
-"program on a channel. AGI allows Asterisk to launch external programs written\n"
-"in any language to control a telephony channel, play audio, read DTMF digits,\n"
-"etc. by communicating with the AGI protocol on stdin and stdout.\n"
-"  As of 1.6.0, this channel will not stop dialplan execution on hangup inside\n"
-"of this application. Dialplan execution will continue normally, even upon\n"
-"hangup until the AGI application signals a desire to stop (either by exiting\n"
-"or, in the case of a net script, by closing the connection).\n"
-"  A locally executed AGI script will receive SIGHUP on hangup from the channel\n"
-"except when using DeadAGI. A fast AGI server will correspondingly receive a\n"
-"HANGUP in OOB data. Both of these signals may be disabled by setting the\n"
-"AGISIGHUP channel variable to \"no\" before executing the AGI application.\n"
-"  Using 'EAGI' provides enhanced AGI, with incoming audio available out of band\n"
-"on file descriptor 3.\n\n"
-"  Use the CLI command 'agi show commnands' to list available agi commands.\n"
-"  This application sets the following channel variable upon completion:\n"
-"     AGISTATUS      The status of the attempt to the run the AGI script\n"
-"                    text string, one of SUCCESS | FAILURE | NOTFOUND | HANGUP\n";
 
 static int agidebug = 0;
 
@@ -354,12 +922,12 @@ enum agi_result {
 	AGI_RESULT_HANGUP,
 };
 
-static agi_command *find_command(char *cmds[], int exact);
+static agi_command *find_command(const char * const cmds[], int exact);
 
 AST_THREADSTORAGE(agi_buf);
 #define AGI_BUF_INITSIZE 256
 
-int ast_agi_send(int fd, struct ast_channel *chan, char *fmt, ...)
+int AST_OPTIONAL_API_NAME(ast_agi_send)(int fd, struct ast_channel *chan, char *fmt, ...)
 {
 	int res = 0;
 	va_list ap;
@@ -421,14 +989,6 @@ static const struct ast_datastore_info agi_commands_datastore_info = {
 	.type = "AsyncAGI",
 	.destroy = agi_destroy_commands_cb
 };
-
-static const char mandescr_asyncagi[] =
-"Description: Add an AGI command to the execute queue of the channel in Async AGI\n"
-"Variables:\n"
-"  *Channel: Channel that is currently in Async AGI\n"
-"  *Command: Application to execute\n"
-"   CommandID: comand id. This will be sent back in CommandID header of AsyncAGI exec event notification\n"
-"\n";
 
 static struct agi_cmd *get_agi_cmd(struct ast_channel *chan)
 {
@@ -543,20 +1103,27 @@ static char *handle_cli_agi_add_cmd(struct ast_cli_entry *e, int cmd, struct ast
 		return NULL;
 	}
 
-	if (a->argc < 4)
+	if (a->argc < 4) {
 		return CLI_SHOWUSAGE;
-	chan = ast_get_channel_by_name_locked(a->argv[2]);
-	if (!chan) {
+	}
+
+	if (!(chan = ast_channel_get_by_name(a->argv[2]))) {
 		ast_log(LOG_WARNING, "Channel %s does not exists or cannot lock it\n", a->argv[2]);
 		return CLI_FAILURE;
 	}
+
 	if (add_agi_cmd(chan, a->argv[3], (a->argc > 4 ? a->argv[4] : ""))) {
 		ast_log(LOG_WARNING, "failed to add AGI command to queue of channel %s\n", chan->name);
 		ast_channel_unlock(chan);
+		chan = ast_channel_unref(chan);
 		return CLI_FAILURE;
 	}
+
 	ast_log(LOG_DEBUG, "Added AGI command to channel %s queue\n", chan->name);
+
 	ast_channel_unlock(chan);
+	chan = ast_channel_unref(chan);
+
 	return CLI_SUCCESS;
 }
 
@@ -578,24 +1145,33 @@ static int action_add_agi_cmd(struct mansession *s, const struct message *m)
 	const char *cmdid   = astman_get_header(m, "CommandID");
 	struct ast_channel *chan;
 	char buf[256];
+
 	if (ast_strlen_zero(channel) || ast_strlen_zero(cmdbuff)) {
 		astman_send_error(s, m, "Both, Channel and Command are *required*");
 		return 0;
 	}
-	chan = ast_get_channel_by_name_locked(channel);
-	if (!chan) {
+
+	if (!(chan = ast_channel_get_by_name(channel))) {
 		snprintf(buf, sizeof(buf), "Channel %s does not exists or cannot get its lock", channel);
 		astman_send_error(s, m, buf);
 		return 0;
 	}
+
+	ast_channel_lock(chan);
+
 	if (add_agi_cmd(chan, cmdbuff, cmdid)) {
 		snprintf(buf, sizeof(buf), "Failed to add AGI command to channel %s queue", chan->name);
 		astman_send_error(s, m, buf);
 		ast_channel_unlock(chan);
+		chan = ast_channel_unref(chan);
 		return 0;
 	}
-	astman_send_ack(s, m, "Added AGI command to queue");
+
 	ast_channel_unlock(chan);
+	chan = ast_channel_unref(chan);
+
+	astman_send_ack(s, m, "Added AGI command to queue");
+
 	return 0;
 }
 
@@ -1006,7 +1582,7 @@ static void setup_env(struct ast_channel *chan, char *request, int fd, int enhan
 	ast_agi_send(fd, chan, "\n");
 }
 
-static int handle_answer(struct ast_channel *chan, AGI *agi, int argc, char *argv[])
+static int handle_answer(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	int res = 0;
 
@@ -1018,20 +1594,26 @@ static int handle_answer(struct ast_channel *chan, AGI *agi, int argc, char *arg
 	return (res >= 0) ? RESULT_SUCCESS : RESULT_FAILURE;
 }
 
-static int handle_waitfordigit(struct ast_channel *chan, AGI *agi, int argc, char *argv[])
+static int handle_asyncagi_break(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
+{
+	ast_agi_send(agi->fd, chan, "200 result=0\n");
+	return RESULT_FAILURE;
+}
+
+static int handle_waitfordigit(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	int res, to;
 
 	if (argc != 4)
 		return RESULT_SHOWUSAGE;
-	if (sscanf(argv[3], "%d", &to) != 1)
+	if (sscanf(argv[3], "%30d", &to) != 1)
 		return RESULT_SHOWUSAGE;
 	res = ast_waitfordigit_full(chan, to, agi->audio, agi->ctrl);
 	ast_agi_send(agi->fd, chan, "200 result=%d\n", res);
 	return (res >= 0) ? RESULT_SUCCESS : RESULT_FAILURE;
 }
 
-static int handle_sendtext(struct ast_channel *chan, AGI *agi, int argc, char *argv[])
+static int handle_sendtext(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	int res;
 
@@ -1050,7 +1632,7 @@ static int handle_sendtext(struct ast_channel *chan, AGI *agi, int argc, char *a
 	return (res >= 0) ? RESULT_SUCCESS : RESULT_FAILURE;
 }
 
-static int handle_recvchar(struct ast_channel *chan, AGI *agi, int argc, char *argv[])
+static int handle_recvchar(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	int res;
 
@@ -1070,7 +1652,7 @@ static int handle_recvchar(struct ast_channel *chan, AGI *agi, int argc, char *a
 	return RESULT_FAILURE;
 }
 
-static int handle_recvtext(struct ast_channel *chan, AGI *agi, int argc, char *argv[])
+static int handle_recvtext(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	char *buf;
 
@@ -1087,7 +1669,7 @@ static int handle_recvtext(struct ast_channel *chan, AGI *agi, int argc, char *a
 	return RESULT_SUCCESS;
 }
 
-static int handle_tddmode(struct ast_channel *chan, AGI *agi, int argc, char *argv[])
+static int handle_tddmode(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	int res, x;
 
@@ -1114,7 +1696,7 @@ static int handle_tddmode(struct ast_channel *chan, AGI *agi, int argc, char *ar
 	return RESULT_SUCCESS;
 }
 
-static int handle_sendimage(struct ast_channel *chan, AGI *agi, int argc, char *argv[])
+static int handle_sendimage(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	int res;
 
@@ -1130,10 +1712,10 @@ static int handle_sendimage(struct ast_channel *chan, AGI *agi, int argc, char *
 	return (res >= 0) ? RESULT_SUCCESS : RESULT_FAILURE;
 }
 
-static int handle_controlstreamfile(struct ast_channel *chan, AGI *agi, int argc, char *argv[])
+static int handle_controlstreamfile(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	int res = 0, skipms = 3000;
-	char *fwd = "#", *rev = "*", *suspend = NULL, *stop = NULL;	/* Default values */
+	const char *fwd = "#", *rev = "*", *suspend = NULL, *stop = NULL;	/* Default values */
 
 	if (argc < 5 || argc > 9) {
 		return RESULT_SHOWUSAGE;
@@ -1143,7 +1725,7 @@ static int handle_controlstreamfile(struct ast_channel *chan, AGI *agi, int argc
 		stop = argv[4];
 	}
 
-	if ((argc > 5) && (sscanf(argv[5], "%d", &skipms) != 1)) {
+	if ((argc > 5) && (sscanf(argv[5], "%30d", &skipms) != 1)) {
 		return RESULT_SHOWUSAGE;
 	}
 
@@ -1166,12 +1748,12 @@ static int handle_controlstreamfile(struct ast_channel *chan, AGI *agi, int argc
 	return (res >= 0) ? RESULT_SUCCESS : RESULT_FAILURE;
 }
 
-static int handle_streamfile(struct ast_channel *chan, AGI *agi, int argc, char *argv[])
+static int handle_streamfile(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	int res, vres;
 	struct ast_filestream *fs, *vfs;
 	long sample_offset = 0, max_length;
-	char *edigits = "";
+	const char *edigits = "";
 
 	if (argc < 4 || argc > 5)
 		return RESULT_SHOWUSAGE;
@@ -1179,7 +1761,7 @@ static int handle_streamfile(struct ast_channel *chan, AGI *agi, int argc, char 
 	if (argv[3])
 		edigits = argv[3];
 
-	if ((argc > 4) && (sscanf(argv[4], "%ld", &sample_offset) != 1))
+	if ((argc > 4) && (sscanf(argv[4], "%30ld", &sample_offset) != 1))
 		return RESULT_SHOWUSAGE;
 
 	if (!(fs = ast_openstream(chan, argv[2], chan->language))) {
@@ -1216,13 +1798,13 @@ static int handle_streamfile(struct ast_channel *chan, AGI *agi, int argc, char 
 }
 
 /*! \brief get option - really similar to the handle_streamfile, but with a timeout */
-static int handle_getoption(struct ast_channel *chan, AGI *agi, int argc, char *argv[])
+static int handle_getoption(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	int res, vres;
 	struct ast_filestream *fs, *vfs;
 	long sample_offset = 0, max_length;
 	int timeout = 0;
-	char *edigits = "";
+	const char *edigits = "";
 
 	if ( argc < 4 || argc > 5 )
 		return RESULT_SHOWUSAGE;
@@ -1285,13 +1867,13 @@ static int handle_getoption(struct ast_channel *chan, AGI *agi, int argc, char *
 
 /*! \brief Say number in various language syntaxes */
 /* While waiting, we're sending a NULL.  */
-static int handle_saynumber(struct ast_channel *chan, AGI *agi, int argc, char *argv[])
+static int handle_saynumber(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	int res, num;
 
 	if (argc < 4 || argc > 5)
 		return RESULT_SHOWUSAGE;
-	if (sscanf(argv[2], "%d", &num) != 1)
+	if (sscanf(argv[2], "%30d", &num) != 1)
 		return RESULT_SHOWUSAGE;
 	res = ast_say_number_full(chan, num, argv[3], chan->language, argc > 4 ? argv[4] : NULL, agi->audio, agi->ctrl);
 	if (res == 1)
@@ -1300,13 +1882,13 @@ static int handle_saynumber(struct ast_channel *chan, AGI *agi, int argc, char *
 	return (res >= 0) ? RESULT_SUCCESS : RESULT_FAILURE;
 }
 
-static int handle_saydigits(struct ast_channel *chan, AGI *agi, int argc, char *argv[])
+static int handle_saydigits(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	int res, num;
 
 	if (argc != 4)
 		return RESULT_SHOWUSAGE;
-	if (sscanf(argv[2], "%d", &num) != 1)
+	if (sscanf(argv[2], "%30d", &num) != 1)
 		return RESULT_SHOWUSAGE;
 
 	res = ast_say_digit_str_full(chan, argv[2], argv[3], chan->language, agi->audio, agi->ctrl);
@@ -1316,7 +1898,7 @@ static int handle_saydigits(struct ast_channel *chan, AGI *agi, int argc, char *
 	return (res >= 0) ? RESULT_SUCCESS : RESULT_FAILURE;
 }
 
-static int handle_sayalpha(struct ast_channel *chan, AGI *agi, int argc, char *argv[])
+static int handle_sayalpha(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	int res;
 
@@ -1330,13 +1912,13 @@ static int handle_sayalpha(struct ast_channel *chan, AGI *agi, int argc, char *a
 	return (res >= 0) ? RESULT_SUCCESS : RESULT_FAILURE;
 }
 
-static int handle_saydate(struct ast_channel *chan, AGI *agi, int argc, char *argv[])
+static int handle_saydate(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	int res, num;
 
 	if (argc != 4)
 		return RESULT_SHOWUSAGE;
-	if (sscanf(argv[2], "%d", &num) != 1)
+	if (sscanf(argv[2], "%30d", &num) != 1)
 		return RESULT_SHOWUSAGE;
 	res = ast_say_date(chan, num, argv[3], chan->language);
 	if (res == 1)
@@ -1345,13 +1927,13 @@ static int handle_saydate(struct ast_channel *chan, AGI *agi, int argc, char *ar
 	return (res >= 0) ? RESULT_SUCCESS : RESULT_FAILURE;
 }
 
-static int handle_saytime(struct ast_channel *chan, AGI *agi, int argc, char *argv[])
+static int handle_saytime(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	int res, num;
 
 	if (argc != 4)
 		return RESULT_SHOWUSAGE;
-	if (sscanf(argv[2], "%d", &num) != 1)
+	if (sscanf(argv[2], "%30d", &num) != 1)
 		return RESULT_SHOWUSAGE;
 	res = ast_say_time(chan, num, argv[3], chan->language);
 	if (res == 1)
@@ -1360,11 +1942,11 @@ static int handle_saytime(struct ast_channel *chan, AGI *agi, int argc, char *ar
 	return (res >= 0) ? RESULT_SUCCESS : RESULT_FAILURE;
 }
 
-static int handle_saydatetime(struct ast_channel *chan, AGI *agi, int argc, char *argv[])
+static int handle_saydatetime(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	int res = 0;
 	time_t unixtime;
-	char *format, *zone = NULL;
+	const char *format, *zone = NULL;
 
 	if (argc < 4)
 		return RESULT_SHOWUSAGE;
@@ -1394,7 +1976,7 @@ static int handle_saydatetime(struct ast_channel *chan, AGI *agi, int argc, char
 	return (res >= 0) ? RESULT_SUCCESS : RESULT_FAILURE;
 }
 
-static int handle_sayphonetic(struct ast_channel *chan, AGI *agi, int argc, char *argv[])
+static int handle_sayphonetic(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	int res;
 
@@ -1408,7 +1990,7 @@ static int handle_sayphonetic(struct ast_channel *chan, AGI *agi, int argc, char
 	return (res >= 0) ? RESULT_SUCCESS : RESULT_FAILURE;
 }
 
-static int handle_getdata(struct ast_channel *chan, AGI *agi, int argc, char *argv[])
+static int handle_getdata(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	int res, max, timeout;
 	char data[1024];
@@ -1435,7 +2017,7 @@ static int handle_getdata(struct ast_channel *chan, AGI *agi, int argc, char *ar
 	return RESULT_SUCCESS;
 }
 
-static int handle_setcontext(struct ast_channel *chan, AGI *agi, int argc, char *argv[])
+static int handle_setcontext(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 
 	if (argc != 3)
@@ -1445,7 +2027,7 @@ static int handle_setcontext(struct ast_channel *chan, AGI *agi, int argc, char 
 	return RESULT_SUCCESS;
 }
 
-static int handle_setextension(struct ast_channel *chan, AGI *agi, int argc, char **argv)
+static int handle_setextension(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	if (argc != 3)
 		return RESULT_SHOWUSAGE;
@@ -1454,14 +2036,14 @@ static int handle_setextension(struct ast_channel *chan, AGI *agi, int argc, cha
 	return RESULT_SUCCESS;
 }
 
-static int handle_setpriority(struct ast_channel *chan, AGI *agi, int argc, char **argv)
+static int handle_setpriority(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	int pri;
 
 	if (argc != 3)
 		return RESULT_SHOWUSAGE;
 
-	if (sscanf(argv[2], "%d", &pri) != 1) {
+	if (sscanf(argv[2], "%30d", &pri) != 1) {
 		if ((pri = ast_findlabel_extension(chan, chan->context, chan->exten, argv[2], chan->cid.cid_num)) < 1)
 			return RESULT_SHOWUSAGE;
 	}
@@ -1471,7 +2053,7 @@ static int handle_setpriority(struct ast_channel *chan, AGI *agi, int argc, char
 	return RESULT_SUCCESS;
 }
 
-static int handle_recordfile(struct ast_channel *chan, AGI *agi, int argc, char *argv[])
+static int handle_recordfile(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	struct ast_filestream *fs;
 	struct ast_frame *f;
@@ -1492,7 +2074,7 @@ static int handle_recordfile(struct ast_channel *chan, AGI *agi, int argc, char 
 
 	if (argc < 6)
 		return RESULT_SHOWUSAGE;
-	if (sscanf(argv[5], "%d", &ms) != 1)
+	if (sscanf(argv[5], "%30d", &ms) != 1)
 		return RESULT_SHOWUSAGE;
 
 	if (argc > 6)
@@ -1533,7 +2115,7 @@ static int handle_recordfile(struct ast_channel *chan, AGI *agi, int argc, char 
 	/* backward compatibility, if no offset given, arg[6] would have been
 	 * caught below and taken to be a beep, else if it is a digit then it is a
 	 * offset */
-	if ((argc >6) && (sscanf(argv[6], "%ld", &sample_offset) != 1) && (!strchr(argv[6], '=')))
+	if ((argc >6) && (sscanf(argv[6], "%30ld", &sample_offset) != 1) && (!strchr(argv[6], '=')))
 		res = ast_streamfile(chan, "beep", chan->language);
 
 	if ((argc > 7) && (!strchr(argv[7], '=')))
@@ -1648,14 +2230,14 @@ static int handle_recordfile(struct ast_channel *chan, AGI *agi, int argc, char 
 	return RESULT_SUCCESS;
 }
 
-static int handle_autohangup(struct ast_channel *chan, AGI *agi, int argc, char *argv[])
+static int handle_autohangup(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	double timeout;
 	struct timeval whentohangup = { 0, 0 };
 
 	if (argc != 3)
 		return RESULT_SHOWUSAGE;
-	if (sscanf(argv[2], "%lf", &timeout) != 1)
+	if (sscanf(argv[2], "%30lf", &timeout) != 1)
 		return RESULT_SHOWUSAGE;
 	if (timeout < 0)
 		timeout = 0;
@@ -1668,23 +2250,24 @@ static int handle_autohangup(struct ast_channel *chan, AGI *agi, int argc, char 
 	return RESULT_SUCCESS;
 }
 
-static int handle_hangup(struct ast_channel *chan, AGI *agi, int argc, char **argv)
+static int handle_hangup(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	struct ast_channel *c;
 
 	if (argc == 1) {
 		/* no argument: hangup the current channel */
+		ast_set_hangupsource(chan, "dialplan/agi", 0);
 		ast_softhangup(chan,AST_SOFTHANGUP_EXPLICIT);
 		ast_agi_send(agi->fd, chan, "200 result=1\n");
 		return RESULT_SUCCESS;
 	} else if (argc == 2) {
 		/* one argument: look for info on the specified channel */
-		c = ast_get_channel_by_name_locked(argv[1]);
-		if (c) {
+		if ((c = ast_channel_get_by_name(argv[1]))) {
 			/* we have a matching channel */
-			ast_softhangup(c,AST_SOFTHANGUP_EXPLICIT);
+			ast_set_hangupsource(c, "dialplan/agi", 0);
+			ast_softhangup(c, AST_SOFTHANGUP_EXPLICIT);
+			c = ast_channel_unref(c);
 			ast_agi_send(agi->fd, chan, "200 result=1\n");
-			ast_channel_unlock(c);
 			return RESULT_SUCCESS;
 		}
 		/* if we get this far no channel name matched the argument given */
@@ -1695,7 +2278,7 @@ static int handle_hangup(struct ast_channel *chan, AGI *agi, int argc, char **ar
 	}
 }
 
-static int handle_exec(struct ast_channel *chan, AGI *agi, int argc, char **argv)
+static int handle_exec(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	int res;
 	struct ast_app *app_to_exec;
@@ -1710,7 +2293,8 @@ static int handle_exec(struct ast_channel *chan, AGI *agi, int argc, char **argv
 			ast_masq_park_call(chan, NULL, 0, NULL);
 		}
 		if (ast_compat_res_agi && !ast_strlen_zero(argv[2])) {
-			char *compat = alloca(strlen(argv[2]) * 2 + 1), *cptr, *vptr;
+			char *compat = alloca(strlen(argv[2]) * 2 + 1), *cptr;
+			const char *vptr;
 			for (cptr = compat, vptr = argv[2]; *vptr; vptr++) {
 				if (*vptr == ',') {
 					*cptr++ = '\\';
@@ -1736,7 +2320,7 @@ static int handle_exec(struct ast_channel *chan, AGI *agi, int argc, char **argv
 	return res;
 }
 
-static int handle_setcallerid(struct ast_channel *chan, AGI *agi, int argc, char **argv)
+static int handle_setcallerid(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	char tmp[256]="";
 	char *l = NULL, *n = NULL;
@@ -1757,7 +2341,7 @@ static int handle_setcallerid(struct ast_channel *chan, AGI *agi, int argc, char
 	return RESULT_SUCCESS;
 }
 
-static int handle_channelstatus(struct ast_channel *chan, AGI *agi, int argc, char **argv)
+static int handle_channelstatus(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	struct ast_channel *c;
 	if (argc == 2) {
@@ -1766,10 +2350,9 @@ static int handle_channelstatus(struct ast_channel *chan, AGI *agi, int argc, ch
 		return RESULT_SUCCESS;
 	} else if (argc == 3) {
 		/* one argument: look for info on the specified channel */
-		c = ast_get_channel_by_name_locked(argv[2]);
-		if (c) {
+		if ((c = ast_channel_get_by_name(argv[2]))) {
 			ast_agi_send(agi->fd, chan, "200 result=%d\n", c->_state);
-			ast_channel_unlock(c);
+			c = ast_channel_unref(c);
 			return RESULT_SUCCESS;
 		}
 		/* if we get this far no channel name matched the argument given */
@@ -1780,7 +2363,7 @@ static int handle_channelstatus(struct ast_channel *chan, AGI *agi, int argc, ch
 	}
 }
 
-static int handle_setvariable(struct ast_channel *chan, AGI *agi, int argc, char **argv)
+static int handle_setvariable(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	if (argv[3])
 		pbx_builtin_setvar_helper(chan, argv[2], argv[3]);
@@ -1789,7 +2372,7 @@ static int handle_setvariable(struct ast_channel *chan, AGI *agi, int argc, char
 	return RESULT_SUCCESS;
 }
 
-static int handle_getvariable(struct ast_channel *chan, AGI *agi, int argc, char **argv)
+static int handle_getvariable(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	char *ret;
 	char tempstr[1024];
@@ -1812,30 +2395,41 @@ static int handle_getvariable(struct ast_channel *chan, AGI *agi, int argc, char
 	return RESULT_SUCCESS;
 }
 
-static int handle_getvariablefull(struct ast_channel *chan, AGI *agi, int argc, char **argv)
+static int handle_getvariablefull(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
-	char tmp[4096];
-	struct ast_channel *chan2=NULL;
+	struct ast_channel *chan2 = NULL;
 
-	if ((argc != 4) && (argc != 5))
+	if (argc != 4 && argc != 5) {
 		return RESULT_SHOWUSAGE;
-	if (argc == 5) {
-		chan2 = ast_get_channel_by_name_locked(argv[4]);
-	} else {
-		chan2 = chan;
 	}
+
+	if (argc == 5) {
+		chan2 = ast_channel_get_by_name(argv[4]);
+	} else {
+		chan2 = ast_channel_ref(chan);
+	}
+
 	if (chan2) {
-		pbx_substitute_variables_helper(chan2, argv[3], tmp, sizeof(tmp) - 1);
-		ast_agi_send(agi->fd, chan, "200 result=1 (%s)\n", tmp);
+		struct ast_str *str = ast_str_create(16);
+		if (!str) {
+			ast_agi_send(agi->fd, chan, "200 result=0\n");
+			return RESULT_SUCCESS;
+		}
+		ast_str_substitute_variables(&str, 0, chan2, argv[3]);
+		ast_agi_send(agi->fd, chan, "200 result=1 (%s)\n", ast_str_buffer(str));
+		ast_free(str);
 	} else {
 		ast_agi_send(agi->fd, chan, "200 result=0\n");
 	}
-	if (chan2 && (chan2 != chan))
-		ast_channel_unlock(chan2);
+
+	if (chan2) {
+		chan2 = ast_channel_unref(chan2);
+	}
+
 	return RESULT_SUCCESS;
 }
 
-static int handle_verbose(struct ast_channel *chan, AGI *agi, int argc, char **argv)
+static int handle_verbose(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	int level = 0;
 
@@ -1843,7 +2437,7 @@ static int handle_verbose(struct ast_channel *chan, AGI *agi, int argc, char **a
 		return RESULT_SHOWUSAGE;
 
 	if (argv[2])
-		sscanf(argv[2], "%d", &level);
+		sscanf(argv[2], "%30d", &level);
 
 	ast_verb(level, "%s: %s\n", chan->data, argv[1]);
 
@@ -1852,7 +2446,7 @@ static int handle_verbose(struct ast_channel *chan, AGI *agi, int argc, char **a
 	return RESULT_SUCCESS;
 }
 
-static int handle_dbget(struct ast_channel *chan, AGI *agi, int argc, char **argv)
+static int handle_dbget(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	int res;
 	struct ast_str *buf;
@@ -1885,7 +2479,7 @@ static int handle_dbget(struct ast_channel *chan, AGI *agi, int argc, char **arg
 	return RESULT_SUCCESS;
 }
 
-static int handle_dbput(struct ast_channel *chan, AGI *agi, int argc, char **argv)
+static int handle_dbput(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	int res;
 
@@ -1896,7 +2490,7 @@ static int handle_dbput(struct ast_channel *chan, AGI *agi, int argc, char **arg
 	return RESULT_SUCCESS;
 }
 
-static int handle_dbdel(struct ast_channel *chan, AGI *agi, int argc, char **argv)
+static int handle_dbdel(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	int res;
 
@@ -1907,7 +2501,7 @@ static int handle_dbdel(struct ast_channel *chan, AGI *agi, int argc, char **arg
 	return RESULT_SUCCESS;
 }
 
-static int handle_dbdeltree(struct ast_channel *chan, AGI *agi, int argc, char **argv)
+static int handle_dbdeltree(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	int res;
 
@@ -1951,13 +2545,13 @@ static char *handle_cli_agi_debug(struct ast_cli_entry *e, int cmd, struct ast_c
 	return CLI_SUCCESS;
 }
 
-static int handle_noop(struct ast_channel *chan, AGI *agi, int arg, char *argv[])
+static int handle_noop(struct ast_channel *chan, AGI *agi, int arg, const char * const argv[])
 {
 	ast_agi_send(agi->fd, chan, "200 result=0\n");
 	return RESULT_SUCCESS;
 }
 
-static int handle_setmusic(struct ast_channel *chan, AGI *agi, int argc, char *argv[])
+static int handle_setmusic(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	if (!strncasecmp(argv[2], "on", 2))
 		ast_moh_start(chan, argc > 3 ? argv[3] : NULL, NULL);
@@ -1967,7 +2561,7 @@ static int handle_setmusic(struct ast_channel *chan, AGI *agi, int argc, char *a
 	return RESULT_SUCCESS;
 }
 
-static int handle_speechcreate(struct ast_channel *chan, AGI *agi, int argc, char **argv)
+static int handle_speechcreate(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	/* If a structure already exists, return an error */
         if (agi->speech) {
@@ -1983,7 +2577,7 @@ static int handle_speechcreate(struct ast_channel *chan, AGI *agi, int argc, cha
 	return RESULT_SUCCESS;
 }
 
-static int handle_speechset(struct ast_channel *chan, AGI *agi, int argc, char **argv)
+static int handle_speechset(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	/* Check for minimum arguments */
         if (argc != 3)
@@ -2001,7 +2595,7 @@ static int handle_speechset(struct ast_channel *chan, AGI *agi, int argc, char *
 	return RESULT_SUCCESS;
 }
 
-static int handle_speechdestroy(struct ast_channel *chan, AGI *agi, int argc, char **argv)
+static int handle_speechdestroy(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	if (agi->speech) {
 		ast_speech_destroy(agi->speech);
@@ -2014,7 +2608,7 @@ static int handle_speechdestroy(struct ast_channel *chan, AGI *agi, int argc, ch
 	return RESULT_SUCCESS;
 }
 
-static int handle_speechloadgrammar(struct ast_channel *chan, AGI *agi, int argc, char **argv)
+static int handle_speechloadgrammar(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	if (argc != 5)
 		return RESULT_SHOWUSAGE;
@@ -2032,7 +2626,7 @@ static int handle_speechloadgrammar(struct ast_channel *chan, AGI *agi, int argc
 	return RESULT_SUCCESS;
 }
 
-static int handle_speechunloadgrammar(struct ast_channel *chan, AGI *agi, int argc, char **argv)
+static int handle_speechunloadgrammar(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	if (argc != 4)
 		return RESULT_SHOWUSAGE;
@@ -2050,7 +2644,7 @@ static int handle_speechunloadgrammar(struct ast_channel *chan, AGI *agi, int ar
 	return RESULT_SUCCESS;
 }
 
-static int handle_speechactivategrammar(struct ast_channel *chan, AGI *agi, int argc, char **argv)
+static int handle_speechactivategrammar(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	if (argc != 4)
 		return RESULT_SHOWUSAGE;
@@ -2068,7 +2662,7 @@ static int handle_speechactivategrammar(struct ast_channel *chan, AGI *agi, int 
 	return RESULT_SUCCESS;
 }
 
-static int handle_speechdeactivategrammar(struct ast_channel *chan, AGI *agi, int argc, char **argv)
+static int handle_speechdeactivategrammar(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	if (argc != 4)
 		return RESULT_SHOWUSAGE;
@@ -2105,10 +2699,11 @@ static int speech_streamfile(struct ast_channel *chan, const char *filename, con
 	return 0;
 }
 
-static int handle_speechrecognize(struct ast_channel *chan, AGI *agi, int argc, char **argv)
+static int handle_speechrecognize(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	struct ast_speech *speech = agi->speech;
-	char *prompt, dtmf = 0, tmp[4096] = "", *buf = tmp;
+	const char *prompt;
+	char dtmf = 0, tmp[4096] = "", *buf = tmp;
 	int timeout = 0, offset = 0, old_read_format = 0, res = 0, i = 0;
 	long current_offset = 0;
 	const char *reason = NULL;
@@ -2252,203 +2847,12 @@ static int handle_speechrecognize(struct ast_channel *chan, AGI *agi, int argc, 
 	return RESULT_SUCCESS;
 }
 
-static char usage_verbose[] =
-" Usage: VERBOSE <message> <level>\n"
-"	Sends <message> to the console via verbose message system.\n"
-" <level> is the the verbose level (1-4)\n"
-" Always returns 1.\n";
-
-static char usage_setvariable[] =
-" Usage: SET VARIABLE <variablename> <value>\n";
-
-static char usage_setcallerid[] =
-" Usage: SET CALLERID <number>\n"
-"	Changes the callerid of the current channel.\n";
-
-static char usage_waitfordigit[] =
-" Usage: WAIT FOR DIGIT <timeout>\n"
-"	Waits up to 'timeout' milliseconds for channel to receive a DTMF digit.\n"
-" Returns -1 on channel failure, 0 if no digit is received in the timeout, or\n"
-" the numerical value of the ascii of the digit if one is received.  Use -1\n"
-" for the timeout value if you desire the call to block indefinitely.\n";
-
-static char usage_sendtext[] =
-" Usage: SEND TEXT \"<text to send>\"\n"
-"	Sends the given text on a channel. Most channels do not support the\n"
-" transmission of text.  Returns 0 if text is sent, or if the channel does not\n"
-" support text transmission.  Returns -1 only on error/hangup.  Text\n"
-" consisting of greater than one word should be placed in quotes since the\n"
-" command only accepts a single argument.\n";
-
-static char usage_recvchar[] =
-" Usage: RECEIVE CHAR <timeout>\n"
-"	Receives a character of text on a channel. Specify timeout to be the\n"
-" maximum time to wait for input in milliseconds, or 0 for infinite. Most channels\n"
-" do not support the reception of text. Returns the decimal value of the character\n"
-" if one is received, or 0 if the channel does not support text reception.  Returns\n"
-" -1 only on error/hangup.\n";
-
-static char usage_recvtext[] =
-" Usage: RECEIVE TEXT <timeout>\n"
-"	Receives a string of text on a channel. Specify timeout to be the\n"
-" maximum time to wait for input in milliseconds, or 0 for infinite. Most channels\n"
-" do not support the reception of text. Returns -1 for failure or 1 for success, and the string in parentheses.\n";
-
-static char usage_tddmode[] =
-" Usage: TDD MODE <on|off>\n"
-"	Enable/Disable TDD transmission/reception on a channel. Returns 1 if\n"
-" successful, or 0 if channel is not TDD-capable.\n";
-
-static char usage_sendimage[] =
-" Usage: SEND IMAGE <image>\n"
-"	Sends the given image on a channel. Most channels do not support the\n"
-" transmission of images. Returns 0 if image is sent, or if the channel does not\n"
-" support image transmission.  Returns -1 only on error/hangup. Image names\n"
-" should not include extensions.\n";
-
-static char usage_streamfile[] =
-" Usage: STREAM FILE <filename> <escape digits> [sample offset]\n"
-"	Send the given file, allowing playback to be interrupted by the given\n"
-" digits, if any. Use double quotes for the digits if you wish none to be\n"
-" permitted. If sample offset is provided then the audio will seek to sample\n"
-" offset before play starts.  Returns 0 if playback completes without a digit\n"
-" being pressed, or the ASCII numerical value of the digit if one was pressed,\n"
-" or -1 on error or if the channel was disconnected. Remember, the file\n"
-" extension must not be included in the filename.\n";
-
-static char usage_controlstreamfile[] =
-" Usage: CONTROL STREAM FILE <filename> <escape digits> [skipms] [ffchar] [rewchr] [pausechr]\n"
-"	Send the given file, allowing playback to be controled by the given\n"
-" digits, if any. Use double quotes for the digits if you wish none to be\n"
-" permitted.  Returns 0 if playback completes without a digit\n"
-" being pressed, or the ASCII numerical value of the digit if one was pressed,\n"
-" or -1 on error or if the channel was disconnected. Remember, the file\n"
-" extension must not be included in the filename.\n\n"
-" Note: ffchar and rewchar default to * and # respectively.\n";
-
-static char usage_saynumber[] =
-" Usage: SAY NUMBER <number> <escape digits> [gender]\n"
-"	Say a given number, returning early if any of the given DTMF digits\n"
-" are received on the channel.  Returns 0 if playback completes without a digit\n"
-" being pressed, or the ASCII numerical value of the digit if one was pressed or\n"
-" -1 on error/hangup.\n";
-
-static char usage_saydigits[] =
-" Usage: SAY DIGITS <number> <escape digits>\n"
-"	Say a given digit string, returning early if any of the given DTMF digits\n"
-" are received on the channel. Returns 0 if playback completes without a digit\n"
-" being pressed, or the ASCII numerical value of the digit if one was pressed or\n"
-" -1 on error/hangup.\n";
-
-static char usage_sayalpha[] =
-" Usage: SAY ALPHA <number> <escape digits>\n"
-"	Say a given character string, returning early if any of the given DTMF digits\n"
-" are received on the channel. Returns 0 if playback completes without a digit\n"
-" being pressed, or the ASCII numerical value of the digit if one was pressed or\n"
-" -1 on error/hangup.\n";
-
-static char usage_saydate[] =
-" Usage: SAY DATE <date> <escape digits>\n"
-"	Say a given date, returning early if any of the given DTMF digits are\n"
-" received on the channel.  <date> is number of seconds elapsed since 00:00:00\n"
-" on January 1, 1970, Coordinated Universal Time (UTC). Returns 0 if playback\n"
-" completes without a digit being pressed, or the ASCII numerical value of the\n"
-" digit if one was pressed or -1 on error/hangup.\n";
-
-static char usage_saytime[] =
-" Usage: SAY TIME <time> <escape digits>\n"
-"	Say a given time, returning early if any of the given DTMF digits are\n"
-" received on the channel.  <time> is number of seconds elapsed since 00:00:00\n"
-" on January 1, 1970, Coordinated Universal Time (UTC). Returns 0 if playback\n"
-" completes without a digit being pressed, or the ASCII numerical value of the\n"
-" digit if one was pressed or -1 on error/hangup.\n";
-
-static char usage_saydatetime[] =
-" Usage: SAY DATETIME <time> <escape digits> [format] [timezone]\n"
-"	Say a given time, returning early if any of the given DTMF digits are\n"
-" received on the channel.  <time> is number of seconds elapsed since 00:00:00\n"
-" on January 1, 1970, Coordinated Universal Time (UTC). [format] is the format\n"
-" the time should be said in.  See voicemail.conf (defaults to \"ABdY\n"
-" 'digits/at' IMp\").  Acceptable values for [timezone] can be found in\n"
-" /usr/share/zoneinfo.  Defaults to machine default. Returns 0 if playback\n"
-" completes without a digit being pressed, or the ASCII numerical value of the\n"
-" digit if one was pressed or -1 on error/hangup.\n";
-
-static char usage_sayphonetic[] =
-" Usage: SAY PHONETIC <string> <escape digits>\n"
-"	Say a given character string with phonetics, returning early if any of the\n"
-" given DTMF digits are received on the channel. Returns 0 if playback\n"
-" completes without a digit pressed, the ASCII numerical value of the digit\n"
-" if one was pressed, or -1 on error/hangup.\n";
-
-static char usage_setcontext[] =
-" Usage: SET CONTEXT <desired context>\n"
-"	Sets the context for continuation upon exiting the application.\n";
-
-static char usage_setextension[] =
-" Usage: SET EXTENSION <new extension>\n"
-"	Changes the extension for continuation upon exiting the application.\n";
-
-static char usage_setpriority[] =
-" Usage: SET PRIORITY <priority>\n"
-"	Changes the priority for continuation upon exiting the application.\n"
-" The priority must be a valid priority or label.\n";
-
-static char usage_recordfile[] =
-" Usage: RECORD FILE <filename> <format> <escape digits> <timeout> \\\n"
-"                                          [offset samples] [BEEP] [s=silence]\n"
-"	Record to a file until a given dtmf digit in the sequence is received\n"
-" Returns -1 on hangup or error.  The format will specify what kind of file\n"
-" will be recorded.  The timeout is the maximum record time in milliseconds, or\n"
-" -1 for no timeout. \"Offset samples\" is optional, and, if provided, will seek\n"
-" to the offset without exceeding the end of the file.  \"silence\" is the number\n"
-" of seconds of silence allowed before the function returns despite the\n"
-" lack of dtmf digits or reaching timeout.  Silence value must be\n"
-" preceeded by \"s=\" and is also optional.\n";
-
-static char usage_autohangup[] =
-" Usage: SET AUTOHANGUP <time>\n"
-"	Cause the channel to automatically hangup at <time> seconds in the\n"
-" future.  Of course it can be hungup before then as well. Setting to 0 will\n"
-" cause the autohangup feature to be disabled on this channel.\n";
-
-static char usage_speechcreate[] =
-" Usage: SPEECH CREATE <engine>\n"
-"       Create a speech object to be used by the other Speech AGI commands.\n";
-
-static char usage_speechset[] =
-" Usage: SPEECH SET <name> <value>\n"
-"       Set an engine-specific setting.\n";
-
-static char usage_speechdestroy[] =
-" Usage: SPEECH DESTROY\n"
-"       Destroy the speech object created by SPEECH CREATE.\n";
-
-static char usage_speechloadgrammar[] =
-" Usage: SPEECH LOAD GRAMMAR <grammar name> <path to grammar>\n"
-"       Loads the specified grammar as the specified name.\n";
-
-static char usage_speechunloadgrammar[] =
-" Usage: SPEECH UNLOAD GRAMMAR <grammar name>\n"
-"       Unloads the specified grammar.\n";
-
-static char usage_speechactivategrammar[] =
-" Usage: SPEECH ACTIVATE GRAMMAR <grammar name>\n"
-"       Activates the specified grammar on the speech object.\n";
-
-static char usage_speechdeactivategrammar[] =
-" Usage: SPEECH DEACTIVATE GRAMMAR <grammar name>\n"
-"       Deactivates the specified grammar on the speech object.\n";
-
-static char usage_speechrecognize[] =
-" Usage: SPEECH RECOGNIZE <prompt> <timeout> [<offset>]\n"
-"       Plays back given prompt while listening for speech and dtmf.\n";
-
 /*!
  * \brief AGI commands list
  */
 static struct agi_command commands[] = {
 	{ { "answer", NULL }, handle_answer, NULL, NULL, 0 },
+	{ { "asyncagi", "break", NULL }, handle_asyncagi_break, NULL, NULL, 1 },
 	{ { "channel", "status", NULL }, handle_channelstatus, NULL, NULL, 0 },
 	{ { "database", "del", NULL }, handle_dbdel, NULL, NULL, 1 },
 	{ { "database", "deltree", NULL }, handle_dbdeltree, NULL, NULL, 1 },
@@ -2461,43 +2865,43 @@ static struct agi_command commands[] = {
 	{ { "get", "variable", NULL }, handle_getvariable, NULL, NULL, 1 },
 	{ { "hangup", NULL }, handle_hangup, NULL, NULL, 0 },
 	{ { "noop", NULL }, handle_noop, NULL, NULL, 1 },
-	{ { "receive", "char", NULL }, handle_recvchar, "Receives one character from channels supporting it", usage_recvchar , 0 },
-	{ { "receive", "text", NULL }, handle_recvtext, "Receives text from channels supporting it", usage_recvtext , 0 },
-	{ { "record", "file", NULL }, handle_recordfile, "Records to a given file", usage_recordfile , 0 },
-	{ { "say", "alpha", NULL }, handle_sayalpha, "Says a given character string", usage_sayalpha , 0 },
-	{ { "say", "digits", NULL }, handle_saydigits, "Says a given digit string", usage_saydigits , 0 },
-	{ { "say", "number", NULL }, handle_saynumber, "Says a given number", usage_saynumber , 0 },
-	{ { "say", "phonetic", NULL }, handle_sayphonetic, "Says a given character string with phonetics", usage_sayphonetic , 0 },
-	{ { "say", "date", NULL }, handle_saydate, "Says a given date", usage_saydate , 0 },
-	{ { "say", "time", NULL }, handle_saytime, "Says a given time", usage_saytime , 0 },
-	{ { "say", "datetime", NULL }, handle_saydatetime, "Says a given time as specfied by the format given", usage_saydatetime , 0 },
-	{ { "send", "image", NULL }, handle_sendimage, "Sends images to channels supporting it", usage_sendimage , 0 },
-	{ { "send", "text", NULL }, handle_sendtext, "Sends text to channels supporting it", usage_sendtext , 0 },
-	{ { "set", "autohangup", NULL }, handle_autohangup, "Autohangup channel in some time", usage_autohangup , 0 },
-	{ { "set", "callerid", NULL }, handle_setcallerid, "Sets callerid for the current channel", usage_setcallerid , 0 },
-	{ { "set", "context", NULL }, handle_setcontext, "Sets channel context", usage_setcontext , 0 },
-	{ { "set", "extension", NULL }, handle_setextension, "Changes channel extension", usage_setextension , 0 },
+	{ { "receive", "char", NULL }, handle_recvchar, NULL, NULL, 0 },
+	{ { "receive", "text", NULL }, handle_recvtext, NULL, NULL, 0 },
+	{ { "record", "file", NULL }, handle_recordfile, NULL, NULL, 0 }, 
+	{ { "say", "alpha", NULL }, handle_sayalpha, NULL, NULL, 0},
+	{ { "say", "digits", NULL }, handle_saydigits, NULL, NULL, 0 },
+	{ { "say", "number", NULL }, handle_saynumber, NULL, NULL, 0 },
+	{ { "say", "phonetic", NULL }, handle_sayphonetic, NULL, NULL, 0}, 
+	{ { "say", "date", NULL }, handle_saydate, NULL, NULL, 0}, 
+	{ { "say", "time", NULL }, handle_saytime, NULL, NULL, 0}, 
+	{ { "say", "datetime", NULL }, handle_saydatetime, NULL, NULL, 0},
+	{ { "send", "image", NULL }, handle_sendimage, NULL, NULL, 0}, 
+	{ { "send", "text", NULL }, handle_sendtext, NULL, NULL, 0},
+	{ { "set", "autohangup", NULL }, handle_autohangup, NULL, NULL, 0},
+	{ { "set", "callerid", NULL }, handle_setcallerid, NULL, NULL, 0},
+	{ { "set", "context", NULL }, handle_setcontext, NULL, NULL, 0},
+	{ { "set", "extension", NULL }, handle_setextension, NULL, NULL, 0},
 	{ { "set", "music", NULL }, handle_setmusic, NULL, NULL, 0 },
-	{ { "set", "priority", NULL }, handle_setpriority, "Set channel dialplan priority", usage_setpriority , 0 },
-	{ { "set", "variable", NULL }, handle_setvariable, "Sets a channel variable", usage_setvariable , 1 },
-	{ { "stream", "file", NULL }, handle_streamfile, "Sends audio file on channel", usage_streamfile , 0 },
-	{ { "control", "stream", "file", NULL }, handle_controlstreamfile, "Sends audio file on channel and allows the listner to control the stream", usage_controlstreamfile , 0 },
-	{ { "tdd", "mode", NULL }, handle_tddmode, "Toggles TDD mode (for the deaf)", usage_tddmode , 0 },
-	{ { "verbose", NULL }, handle_verbose, "Logs a message to the asterisk verbose log", usage_verbose , 1 },
-	{ { "wait", "for", "digit", NULL }, handle_waitfordigit, "Waits for a digit to be pressed", usage_waitfordigit , 0 },
-	{ { "speech", "create", NULL }, handle_speechcreate, "Creates a speech object", usage_speechcreate, 0 },
-	{ { "speech", "set", NULL }, handle_speechset, "Sets a speech engine setting", usage_speechset, 0 },
-	{ { "speech", "destroy", NULL }, handle_speechdestroy, "Destroys a speech object", usage_speechdestroy, 1 },
-	{ { "speech", "load", "grammar", NULL }, handle_speechloadgrammar, "Loads a grammar", usage_speechloadgrammar, 0 },
-	{ { "speech", "unload", "grammar", NULL }, handle_speechunloadgrammar, "Unloads a grammar", usage_speechunloadgrammar, 1 },
-	{ { "speech", "activate", "grammar", NULL }, handle_speechactivategrammar, "Activates a grammar", usage_speechactivategrammar, 0 },
-	{ { "speech", "deactivate", "grammar", NULL }, handle_speechdeactivategrammar, "Deactivates a grammar", usage_speechdeactivategrammar, 0 },
-	{ { "speech", "recognize", NULL }, handle_speechrecognize, "Recognizes speech", usage_speechrecognize, 0 },
+	{ { "set", "priority", NULL }, handle_setpriority, NULL, NULL, 0 },
+	{ { "set", "variable", NULL }, handle_setvariable, NULL, NULL, 1 },
+	{ { "stream", "file", NULL }, handle_streamfile, NULL, NULL, 0 },
+	{ { "control", "stream", "file", NULL }, handle_controlstreamfile, NULL, NULL, 0 },
+	{ { "tdd", "mode", NULL }, handle_tddmode, NULL, NULL, 0 },
+	{ { "verbose", NULL }, handle_verbose, NULL, NULL, 1 },
+	{ { "wait", "for", "digit", NULL }, handle_waitfordigit, NULL, NULL, 0 },
+	{ { "speech", "create", NULL }, handle_speechcreate, NULL, NULL, 0 },
+	{ { "speech", "set", NULL }, handle_speechset, NULL, NULL, 0 },
+	{ { "speech", "destroy", NULL }, handle_speechdestroy, NULL, NULL, 1 },
+	{ { "speech", "load", "grammar", NULL }, handle_speechloadgrammar, NULL, NULL, 0 },
+	{ { "speech", "unload", "grammar", NULL }, handle_speechunloadgrammar, NULL, NULL, 1 },
+	{ { "speech", "activate", "grammar", NULL }, handle_speechactivategrammar, NULL, NULL, 0 },
+	{ { "speech", "deactivate", "grammar", NULL }, handle_speechdeactivategrammar, NULL, NULL, 0 },
+	{ { "speech", "recognize", NULL }, handle_speechrecognize, NULL, NULL, 0 },
 };
 
 static AST_RWLIST_HEAD_STATIC(agi_commands, agi_command);
 
-static char *help_workhorse(int fd, char *match[])
+static char *help_workhorse(int fd, const char * const match[])
 {
 	char fullcmd[MAX_CMD_LEN], matchstr[MAX_CMD_LEN];
 	struct agi_command *e;
@@ -2523,21 +2927,21 @@ static char *help_workhorse(int fd, char *match[])
 	return CLI_SUCCESS;
 }
 
-int ast_agi_register(struct ast_module *mod, agi_command *cmd)
+int AST_OPTIONAL_API_NAME(ast_agi_register)(struct ast_module *mod, agi_command *cmd)
 {
 	char fullcmd[MAX_CMD_LEN];
 
 	ast_join(fullcmd, sizeof(fullcmd), cmd->cmda);
 
-	if (!find_command(cmd->cmda,1)) {
-		cmd->docsrc = AST_STATIC_DOC;
+	if (!find_command(cmd->cmda, 1)) {
 #ifdef AST_XML_DOCS
+		*((enum ast_doc_src *) &cmd->docsrc) = AST_STATIC_DOC;
 		if (ast_strlen_zero(cmd->summary) && ast_strlen_zero(cmd->usage)) {
-			cmd->summary = ast_xmldoc_build_synopsis("agi", fullcmd);
-			cmd->usage = ast_xmldoc_build_description("agi", fullcmd);
-			cmd->syntax = ast_xmldoc_build_syntax("agi", fullcmd);
-			cmd->seealso = ast_xmldoc_build_seealso("agi", fullcmd);
-			cmd->docsrc = AST_XML_DOC;
+			*((char **) &cmd->summary) = ast_xmldoc_build_synopsis("agi", fullcmd);
+			*((char **) &cmd->usage) = ast_xmldoc_build_description("agi", fullcmd);
+			*((char **) &cmd->syntax) = ast_xmldoc_build_syntax("agi", fullcmd);
+			*((char **) &cmd->seealso) = ast_xmldoc_build_seealso("agi", fullcmd);
+			*((enum ast_doc_src *) &cmd->docsrc) = AST_XML_DOC;
 		}
 #endif
 		cmd->mod = mod;
@@ -2554,7 +2958,7 @@ int ast_agi_register(struct ast_module *mod, agi_command *cmd)
 	}
 }
 
-int ast_agi_unregister(struct ast_module *mod, agi_command *cmd)
+int AST_OPTIONAL_API_NAME(ast_agi_unregister)(struct ast_module *mod, agi_command *cmd)
 {
 	struct agi_command *e;
 	int unregistered = 0;
@@ -2570,12 +2974,14 @@ int ast_agi_unregister(struct ast_module *mod, agi_command *cmd)
 				ast_module_unref(ast_module_info->self);
 #ifdef AST_XML_DOCS
 			if (e->docsrc == AST_XML_DOC) {
-				ast_free(e->summary);
-				ast_free(e->usage);
-				ast_free(e->syntax);
-				ast_free(e->seealso);
-				e->summary = NULL, e->usage = NULL;
-				e->syntax = NULL, e->seealso = NULL;
+				ast_free((char *) e->summary);
+				ast_free((char *) e->usage);
+				ast_free((char *) e->syntax);
+				ast_free((char *) e->seealso);
+				*((char **) &e->summary) = NULL;
+				*((char **) &e->usage) = NULL;
+				*((char **) &e->syntax) = NULL;
+				*((char **) &e->seealso) = NULL;
 			}
 #endif
 			unregistered=1;
@@ -2591,7 +2997,7 @@ int ast_agi_unregister(struct ast_module *mod, agi_command *cmd)
 	return unregistered;
 }
 
-int ast_agi_register_multiple(struct ast_module *mod, struct agi_command *cmd, unsigned int len)
+int AST_OPTIONAL_API_NAME(ast_agi_register_multiple)(struct ast_module *mod, struct agi_command *cmd, unsigned int len)
 {
 	unsigned int i, x = 0;
 
@@ -2621,7 +3027,7 @@ int ast_agi_register_multiple(struct ast_module *mod, struct agi_command *cmd, u
 	return 0;
 }
 
-int ast_agi_unregister_multiple(struct ast_module *mod, struct agi_command *cmd, unsigned int len)
+int AST_OPTIONAL_API_NAME(ast_agi_unregister_multiple)(struct ast_module *mod, struct agi_command *cmd, unsigned int len)
 {
 	unsigned int i;
 	int res = 0;
@@ -2637,7 +3043,7 @@ int ast_agi_unregister_multiple(struct ast_module *mod, struct agi_command *cmd,
 	return res;
 }
 
-static agi_command *find_command(char *cmds[], int exact)
+static agi_command *find_command(const char * const cmds[], int exact)
 {
 	int y, match;
 	struct agi_command *e;
@@ -2675,7 +3081,7 @@ static agi_command *find_command(char *cmds[], int exact)
 	return NULL;
 }
 
-static int parse_args(char *s, int *max, char *argv[])
+static int parse_args(char *s, int *max, const char *argv[])
 {
 	int x = 0, quoted = 0, escaped = 0, whitespace = 1;
 	char *cur;
@@ -2740,7 +3146,7 @@ normal:
 
 static int agi_handle_command(struct ast_channel *chan, AGI *agi, char *buf, int dead)
 {
-	char *argv[MAX_ARGS];
+	const char *argv[MAX_ARGS];
 	int argc = MAX_ARGS, res;
 	agi_command *c;
 	const char *ami_res = "Unknown Result";
@@ -3087,7 +3493,7 @@ static void write_html_escaped(FILE *htmlfile, char *str)
 	return;
 }
 
-static int write_htmldump(char *filename)
+static int write_htmldump(const char *filename)
 {
 	struct agi_command *command;
 	char fullcmd[MAX_CMD_LEN];
@@ -3118,9 +3524,9 @@ static int write_htmldump(char *filename)
 		fprintf(htmlfile, "<TR><TH ALIGN=\"CENTER\"><B>%s - %s</B></TH></TR>\n", fullcmd, command->summary);
 #ifdef AST_XML_DOCS
 		stringptmp = ast_xmldoc_printable(command->usage, 0);
-		stringp = stringptmp;
+		stringp = ast_strdup(stringptmp);
 #else
-		stringp = command->usage;
+		stringp = ast_strdup(command->usage);
 #endif
 		tempstr = strsep(&stringp, "\n");
 
@@ -3135,6 +3541,7 @@ static int write_htmldump(char *filename)
 		}
 		fprintf(htmlfile, "</TD></TR>\n");
 		fprintf(htmlfile, "</TABLE></TD></TR>\n\n");
+		ast_free(stringp);
 #ifdef AST_XML_DOCS
 		ast_free(stringptmp);
 #endif
@@ -3169,10 +3576,10 @@ static char *handle_cli_agi_dump_html(struct ast_cli_entry *e, int cmd, struct a
 	return CLI_SUCCESS;
 }
 
-static int agi_exec_full(struct ast_channel *chan, void *data, int enhanced, int dead)
+static int agi_exec_full(struct ast_channel *chan, const char *data, int enhanced, int dead)
 {
 	enum agi_result res;
-	char buf[AGI_BUF_LEN] = "", *tmp = buf;
+	char *buf;
 	int fds[2], efd = -1, pid;
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(arg)[MAX_ARGS];
@@ -3185,9 +3592,9 @@ static int agi_exec_full(struct ast_channel *chan, void *data, int enhanced, int
 	}
 	if (dead)
 		ast_debug(3, "Hungup channel detected, running agi in dead mode.\n");
-	ast_copy_string(buf, data, sizeof(buf));
 	memset(&agi, 0, sizeof(agi));
-	AST_STANDARD_APP_ARGS(args, tmp);
+	buf = ast_strdupa(data);
+	AST_STANDARD_APP_ARGS(args, buf);
 	args.argv[args.argc] = NULL;
 #if 0
 	 /* Answer if need be */
@@ -3236,7 +3643,7 @@ static int agi_exec_full(struct ast_channel *chan, void *data, int enhanced, int
 	return 0;
 }
 
-static int agi_exec(struct ast_channel *chan, void *data)
+static int agi_exec(struct ast_channel *chan, const char *data)
 {
 	if (!ast_check_hangup(chan))
 		return agi_exec_full(chan, data, 0, 0);
@@ -3244,7 +3651,7 @@ static int agi_exec(struct ast_channel *chan, void *data)
 		return agi_exec_full(chan, data, 0, 1);
 }
 
-static int eagi_exec(struct ast_channel *chan, void *data)
+static int eagi_exec(struct ast_channel *chan, const char *data)
 {
 	int readformat, res;
 
@@ -3266,7 +3673,7 @@ static int eagi_exec(struct ast_channel *chan, void *data)
 	return res;
 }
 
-static int deadagi_exec(struct ast_channel *chan, void *data)
+static int deadagi_exec(struct ast_channel *chan, const char *data)
 {
 	ast_log(LOG_WARNING, "DeadAGI has been deprecated, please use AGI in all cases!\n");
 	return agi_exec(chan, data);
@@ -3299,10 +3706,10 @@ static int load_module(void)
 	   no other commands have been registered yet
 	*/
 	(void) ast_agi_register_multiple(ast_module_info->self, commands, ARRAY_LEN(commands));
-	ast_register_application(deadapp, deadagi_exec, deadsynopsis, descrip);
-	ast_register_application(eapp, eagi_exec, esynopsis, descrip);
-	ast_manager_register2("AGI", EVENT_FLAG_AGI, action_add_agi_cmd, "Add an AGI command to execute by Async AGI", mandescr_asyncagi);
-	return ast_register_application(app, agi_exec, synopsis, descrip);
+	ast_register_application_xml(deadapp, deadagi_exec);
+	ast_register_application_xml(eapp, eagi_exec);
+	ast_manager_register_xml("AGI", EVENT_FLAG_AGI, action_add_agi_cmd);
+	return ast_register_application_xml(app, agi_exec);
 }
 
 AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_GLOBAL_SYMBOLS, "Asterisk Gateway Interface (AGI)",

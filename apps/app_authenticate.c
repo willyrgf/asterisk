@@ -43,7 +43,7 @@ enum {
 	OPT_DATABASE = (1 << 1),
 	OPT_MULTIPLE = (1 << 3),
 	OPT_REMOVE = (1 << 4),
-} auth_option_flags;
+};
 
 AST_APP_OPTIONS(auth_app_options, {
 	AST_APP_OPTION('a', OPT_ACCOUNT),
@@ -53,7 +53,7 @@ AST_APP_OPTIONS(auth_app_options, {
 });
 
 
-static char *app = "Authenticate";
+static const char app[] = "Authenticate";
 /*** DOCUMENTATION
 	<application name="Authenticate" language="en_US">
 		<synopsis>
@@ -105,7 +105,7 @@ static char *app = "Authenticate";
 	</application>
  ***/
 
-static int auth_exec(struct ast_channel *chan, void *data)
+static int auth_exec(struct ast_channel *chan, const char *data)
 {
 	int res = 0, retries, maxdigits;
 	char passwd[256], *prompt = "agent-pass", *argcopy = NULL;

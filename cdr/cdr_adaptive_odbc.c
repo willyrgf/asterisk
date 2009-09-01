@@ -282,7 +282,6 @@ static int free_config(void)
 static SQLHSTMT generic_prepare(struct odbc_obj *obj, void *data)
 {
 	int res, i;
-	char *sql = data;
 	SQLHSTMT stmt;
 	SQLINTEGER nativeerror = 0, numfields = 0;
 	SQLSMALLINT diagbytes = 0;
@@ -294,9 +293,9 @@ static SQLHSTMT generic_prepare(struct odbc_obj *obj, void *data)
 		return NULL;
 	}
 
-	res = SQLPrepare(stmt, (unsigned char *)sql, SQL_NTS);
+	res = SQLPrepare(stmt, (unsigned char *) data, SQL_NTS);
 	if ((res != SQL_SUCCESS) && (res != SQL_SUCCESS_WITH_INFO)) {
-		ast_log(LOG_WARNING, "SQL Prepare failed![%s]\n", sql);
+		ast_log(LOG_WARNING, "SQL Prepare failed![%s]\n", (char *) data);
 		SQLGetDiagField(SQL_HANDLE_STMT, stmt, 1, SQL_DIAG_NUMBER, &numfields, SQL_IS_INTEGER, &diagbytes);
 		for (i = 0; i < numfields; i++) {
 			SQLGetDiagRec(SQL_HANDLE_STMT, stmt, i + 1, state, &nativeerror, diagnostic, sizeof(diagnostic), &diagbytes);
@@ -461,7 +460,7 @@ static int odbc_log(struct ast_cdr *cdr)
 				case SQL_TYPE_DATE:
 					{
 						int year = 0, month = 0, day = 0;
-						if (sscanf(colptr, "%d-%d-%d", &year, &month, &day) != 3 || year <= 0 ||
+						if (sscanf(colptr, "%4d-%2d-%2d", &year, &month, &day) != 3 || year <= 0 ||
 							month <= 0 || month > 12 || day < 0 || day > 31 ||
 							((month == 4 || month == 6 || month == 9 || month == 11) && day == 31) ||
 							(month == 2 && year % 400 == 0 && day > 29) ||
@@ -484,7 +483,7 @@ static int odbc_log(struct ast_cdr *cdr)
 				case SQL_TYPE_TIME:
 					{
 						int hour = 0, minute = 0, second = 0;
-						int count = sscanf(colptr, "%d:%d:%d", &hour, &minute, &second);
+						int count = sscanf(colptr, "%2d:%2d:%2d", &hour, &minute, &second);
 
 						if ((count != 2 && count != 3) || hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) {
 							ast_log(LOG_WARNING, "CDR variable %s is not a valid time ('%s').\n", entry->name, colptr);
@@ -500,7 +499,7 @@ static int odbc_log(struct ast_cdr *cdr)
 				case SQL_TIMESTAMP:
 					{
 						int year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0;
-						int count = sscanf(colptr, "%d-%d-%d %d:%d:%d", &year, &month, &day, &hour, &minute, &second);
+						int count = sscanf(colptr, "%4d-%2d-%2d %2d:%2d:%2d", &year, &month, &day, &hour, &minute, &second);
 
 						if ((count != 3 && count != 5 && count != 6) || year <= 0 ||
 							month <= 0 || month > 12 || day < 0 || day > 31 ||
@@ -526,7 +525,7 @@ static int odbc_log(struct ast_cdr *cdr)
 				case SQL_INTEGER:
 					{
 						int integer = 0;
-						if (sscanf(colptr, "%d", &integer) != 1) {
+						if (sscanf(colptr, "%30d", &integer) != 1) {
 							ast_log(LOG_WARNING, "CDR variable %s is not an integer.\n", entry->name);
 							continue;
 						}
@@ -539,7 +538,7 @@ static int odbc_log(struct ast_cdr *cdr)
 				case SQL_BIGINT:
 					{
 						long long integer = 0;
-						if (sscanf(colptr, "%lld", &integer) != 1) {
+						if (sscanf(colptr, "%30lld", &integer) != 1) {
 							ast_log(LOG_WARNING, "CDR variable %s is not an integer.\n", entry->name);
 							continue;
 						}
@@ -552,7 +551,7 @@ static int odbc_log(struct ast_cdr *cdr)
 				case SQL_SMALLINT:
 					{
 						short integer = 0;
-						if (sscanf(colptr, "%hd", &integer) != 1) {
+						if (sscanf(colptr, "%30hd", &integer) != 1) {
 							ast_log(LOG_WARNING, "CDR variable %s is not an integer.\n", entry->name);
 							continue;
 						}
@@ -565,7 +564,7 @@ static int odbc_log(struct ast_cdr *cdr)
 				case SQL_TINYINT:
 					{
 						char integer = 0;
-						if (sscanf(colptr, "%hhd", &integer) != 1) {
+						if (sscanf(colptr, "%30hhd", &integer) != 1) {
 							ast_log(LOG_WARNING, "CDR variable %s is not an integer.\n", entry->name);
 							continue;
 						}
@@ -578,7 +577,7 @@ static int odbc_log(struct ast_cdr *cdr)
 				case SQL_BIT:
 					{
 						char integer = 0;
-						if (sscanf(colptr, "%hhd", &integer) != 1) {
+						if (sscanf(colptr, "%30hhd", &integer) != 1) {
 							ast_log(LOG_WARNING, "CDR variable %s is not an integer.\n", entry->name);
 							continue;
 						}
@@ -594,7 +593,7 @@ static int odbc_log(struct ast_cdr *cdr)
 				case SQL_DECIMAL:
 					{
 						double number = 0.0;
-						if (sscanf(colptr, "%lf", &number) != 1) {
+						if (sscanf(colptr, "%30lf", &number) != 1) {
 							ast_log(LOG_WARNING, "CDR variable %s is not an numeric type.\n", entry->name);
 							continue;
 						}
@@ -609,7 +608,7 @@ static int odbc_log(struct ast_cdr *cdr)
 				case SQL_DOUBLE:
 					{
 						double number = 0.0;
-						if (sscanf(colptr, "%lf", &number) != 1) {
+						if (sscanf(colptr, "%30lf", &number) != 1) {
 							ast_log(LOG_WARNING, "CDR variable %s is not an numeric type.\n", entry->name);
 							continue;
 						}
@@ -664,7 +663,6 @@ early_release:
 static int unload_module(void)
 {
 	ast_cdr_unregister(name);
-	usleep(1);
 	if (AST_RWLIST_WRLOCK(&odbc_tables)) {
 		ast_cdr_register(name, ast_module_info->description, odbc_log);
 		ast_log(LOG_ERROR, "Unable to lock column list.  Unload failed.\n");

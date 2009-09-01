@@ -62,7 +62,7 @@ struct event_node{
 
 typedef struct event_node event_node_t;
 
-static char *app = "AlarmReceiver";
+static const char app[] = "AlarmReceiver";
 /*** DOCUMENTATION
 	<application name="AlarmReceiver" language="en_US">
 		<synopsis>
@@ -124,7 +124,7 @@ static void database_increment( char *key )
 		return;
 	}
 	
-	sscanf(value, "%u", &v);
+	sscanf(value, "%30u", &v);
 	v++;
 
 	ast_verb(4, "AlarmReceiver: New value for %s: %u\n", key, v);
@@ -416,7 +416,7 @@ static int log_events(struct ast_channel *chan,  char *signalling_type, event_no
 *
 * The function will return 0 when the caller hangs up, else a -1 if there was a problem.
 */
-static int receive_ademco_contact_id( struct ast_channel *chan, void *data, int fdto, int sdto, int tldn, event_node_t **ehead)
+static int receive_ademco_contact_id(struct ast_channel *chan, const void *data, int fdto, int sdto, int tldn, event_node_t **ehead)
 {
 	int i, j;
 	int res = 0;
@@ -564,7 +564,7 @@ static int receive_ademco_contact_id( struct ast_channel *chan, void *data, int 
 * This is the main function called by Asterisk Core whenever the App is invoked in the extension logic.
 * This function will always return 0.
 */
-static int alarmreceiver_exec(struct ast_channel *chan, void *data)
+static int alarmreceiver_exec(struct ast_channel *chan, const char *data)
 {
 	int res = 0;
 	event_node_t *elp, *efree;

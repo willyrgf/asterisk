@@ -90,6 +90,8 @@ extern "C" {
 }
 #endif
 
+#undef open
+#undef close
 #include "h323/chan_h323.h"
 
 receive_digit_cb on_receive_digit;
@@ -145,7 +147,7 @@ static unsigned int unique = 0;
 static call_options_t global_options;
 
 /*! \brief Private structure of a OpenH323 channel */
-struct oh323_pvt {
+static struct oh323_pvt {
 	ast_mutex_t lock;			/*!< Channel private lock */
 	call_options_t options;			/*!<!< Options to be used during call setup */
 	int alreadygone;			/*!< Whether or not we've already been destroyed by our peer */
@@ -228,7 +230,7 @@ static void delete_users(void);
 static void delete_aliases(void);
 static void prune_peers(void);
 
-static struct ast_channel *oh323_request(const char *type, int format, void *data, int *cause);
+static struct ast_channel *oh323_request(const char *type, int format, const struct ast_channel *requestor, void *data, int *cause);
 static int oh323_digit_begin(struct ast_channel *c, char digit);
 static int oh323_digit_end(struct ast_channel *c, char digit, unsigned int duration);
 static int oh323_call(struct ast_channel *c, char *dest, int timeout);
@@ -956,7 +958,7 @@ static int __oh323_rtp_create(struct oh323_pvt *pvt)
 		ast_log(LOG_ERROR, "Unable to locate local IP address for RTP stream\n");
 		return -1;
 	}
-	pvt->rtp = ast_rtp_instance_new(NULL, sched, &our_addr, NULL);
+	pvt->rtp = ast_rtp_instance_new("asterisk", sched, &our_addr, NULL);
 	if (!pvt->rtp) {
 		ast_mutex_unlock(&pvt->lock);
 		ast_log(LOG_WARNING, "Unable to create RTP session: %s\n", strerror(errno));
@@ -992,7 +994,7 @@ static int __oh323_rtp_create(struct oh323_pvt *pvt)
 }
 
 /*! \brief Private structure should be locked on a call */
-static struct ast_channel *__oh323_new(struct oh323_pvt *pvt, int state, const char *host)
+static struct ast_channel *__oh323_new(struct oh323_pvt *pvt, int state, const char *host, const char *linkedid)
 {
 	struct ast_channel *ch;
 	char *cid_num, *cid_name;
@@ -1010,7 +1012,7 @@ static struct ast_channel *__oh323_new(struct oh323_pvt *pvt, int state, const c
 	
 	/* Don't hold a oh323_pvt lock while we allocate a chanel */
 	ast_mutex_unlock(&pvt->lock);
-	ch = ast_channel_alloc(1, state, cid_num, cid_name, pvt->accountcode, pvt->exten, pvt->context, pvt->amaflags, "H323/%s", host);
+	ch = ast_channel_alloc(1, state, cid_num, cid_name, pvt->accountcode, pvt->exten, pvt->context, linkedid, pvt->amaflags, "H323/%s", host);
 	/* Update usage counter */
 	ast_module_ref(ast_module_info->self);
 	ast_mutex_lock(&pvt->lock);
@@ -1251,6 +1253,8 @@ static int update_common_options(struct ast_variable *v, struct call_options *op
 
 	if (!strcasecmp(v->name, "allow")) {
 		ast_parse_allow_disallow(&options->prefs, &options->capability, v->value, 1);
+	} else if (!strcasecmp(v->name, "autoframing")) {
+		options->autoframing = ast_true(v->value);
 	} else if (!strcasecmp(v->name, "disallow")) {
 		ast_parse_allow_disallow(&options->prefs, &options->capability, v->value, 0);
 	} else if (!strcasecmp(v->name, "dtmfmode")) {
@@ -1713,7 +1717,7 @@ static int create_addr(struct oh323_pvt *pvt, char *opeer)
 		return 0;
 	}
 }
-static struct ast_channel *oh323_request(const char *type, int format, void *data, int *cause)
+static struct ast_channel *oh323_request(const char *type, int format, const struct ast_channel *requestor, void *data, int *cause)
 {
 	int oldformat;
 	struct oh323_pvt *pvt;
@@ -1789,7 +1793,7 @@ static struct ast_channel *oh323_request(const char *type, int format, void *dat
 	ast_mutex_unlock(&caplock);
 
 	ast_mutex_lock(&pvt->lock);
-	tmpc = __oh323_new(pvt, AST_STATE_DOWN, tmp1);
+	tmpc = __oh323_new(pvt, AST_STATE_DOWN, tmp1, requestor ? requestor->linkedid : NULL);
 	ast_mutex_unlock(&pvt->lock);
 	if (!tmpc) {
 		oh323_destroy(pvt);
@@ -2273,7 +2277,7 @@ static int answer_call(unsigned call_reference, const char *token)
 	}
 
 	/* allocate a channel and tell asterisk about it */
-	c = __oh323_new(pvt, AST_STATE_RINGING, pvt->cd.call_token);
+	c = __oh323_new(pvt, AST_STATE_RINGING, pvt->cd.call_token, NULL);
 
 	/* And release when done */
 	ast_mutex_unlock(&pvt->lock);
@@ -2450,8 +2454,15 @@ static void set_peer_capabilities(unsigned call_reference, const char *token, in
 				ast_debug(1, "prefs[%d]=%s:%d\n", i, (prefs->order[i] ? ast_getformatname(1 << (prefs->order[i]-1)) : "<none>"), prefs->framing[i]);
 			}
 		}
-		if (pvt->rtp)
-			ast_rtp_codecs_packetization_set(ast_rtp_instance_get_codecs(pvt->rtp), pvt->rtp, &pvt->peer_prefs);
+		if (pvt->rtp) {
+			if (pvt->options.autoframing) {
+				ast_debug(2, "Autoframing option set, using peer's packetization settings\n");
+				ast_rtp_codecs_packetization_set(ast_rtp_instance_get_codecs(pvt->rtp), pvt->rtp, &pvt->peer_prefs);
+			} else {
+				ast_debug(2, "Autoframing option not set, ignoring peer's packetization settings\n");
+				ast_rtp_codecs_packetization_set(ast_rtp_instance_get_codecs(pvt->rtp), pvt->rtp, &pvt->options.prefs);
+			}
+		}
 	}
 	ast_mutex_unlock(&pvt->lock);
 }
@@ -2475,8 +2486,15 @@ static void set_local_capabilities(unsigned call_reference, const char *token)
 	ast_mutex_unlock(&pvt->lock);
 	h323_set_capabilities(token, capability, dtmfmode, &prefs, pref_codec);
 
-	if (h323debug)
+	if (h323debug) {
+		int i;
+		for (i = 0; i < 32; i++) {
+			if (!prefs.order[i])
+				break;
+			ast_debug(1, "local prefs[%d]=%s:%d\n", i, (prefs.order[i] ? ast_getformatname(1 << (prefs.order[i]-1)) : "<none>"), prefs.framing[i]);
+		}
 		ast_debug(1, "Capabilities for connection %s is set\n", token);
+	}
 }
 
 static void remote_hold(unsigned call_reference, const char *token, int is_hold)
@@ -2838,7 +2856,7 @@ static int reload_config(int is_reload)
 			return 0;
 		}
 		ast_clear_flag(&config_flags, CONFIG_FLAG_FILEUNCHANGED);
-		if ((cfg = ast_config_load(config, config_flags))) {
+		if ((cfg = ast_config_load(config, config_flags)) == CONFIG_STATUS_FILEINVALID) {
 			ast_log(LOG_ERROR, "Config file %s is in an invalid format.  Aborting.\n", config);
 			ast_config_destroy(ucfg);
 			return 0;
@@ -2878,6 +2896,7 @@ static int reload_config(int is_reload)
 	global_options.holdHandling = 0;
 	global_options.capability = GLOBAL_CAPABILITY;
 	global_options.bridge = 1;		/* Do native bridging by default */
+	global_options.autoframing = 0;
 	strcpy(default_context, "default");
 	h323_signalling_port = 1720;
 	gatekeeper_disable = 1;

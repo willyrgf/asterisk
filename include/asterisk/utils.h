@@ -27,13 +27,15 @@
 
 #include <time.h>	/* we want to override localtime_r */
 #include <unistd.h>
+#include <string.h>
 
 #include "asterisk/lock.h"
 #include "asterisk/time.h"
 #include "asterisk/logger.h"
 #include "asterisk/localtime.h"
+#include "asterisk/stringfields.h"
 
-/*! 
+/*!
 \note \verbatim
    Note:
    It is very important to use only unsigned variables to hold
@@ -214,11 +216,16 @@ struct ast_hostent {
 struct hostent *ast_gethostbyname(const char *host, struct ast_hostent *hp);
 
 /*!  \brief Produces MD5 hash based on input string */
-void ast_md5_hash(char *output, char *input);
+void ast_md5_hash(char *output, const char *input);
 /*! \brief Produces SHA1 hash based on input string */
-void ast_sha1_hash(char *output, char *input);
+void ast_sha1_hash(char *output, const char *input);
 
 int ast_base64encode_full(char *dst, const unsigned char *src, int srclen, int max, int linebreaks);
+
+#undef MIN
+#define MIN(a, b) ({ typeof(a) __a = (a); typeof(b) __b = (b); ((__a > __b) ? __b : __a);})
+#undef MAX
+#define MAX(a, b) ({ typeof(a) __a = (a); typeof(b) __b = (b); ((__a < __b) ? __b : __a);})
 
 /*!
  * \brief Encode data in base64
@@ -348,13 +355,13 @@ int ast_careful_fwrite(FILE *f, int fd, const char *s, size_t len, int timeoutms
 /*
  * Thread management support (should be moved to lock.h or a different header)
  */
- 
-#define AST_STACKSIZE 240 * 1024
+
+#define AST_STACKSIZE (((sizeof(void *) * 8 * 8) - 16) * 1024)
 
 #if defined(LOW_MEMORY)
-#define AST_BACKGROUND_STACKSIZE 48 * 1024
+#define AST_BACKGROUND_STACKSIZE (((sizeof(void *) * 8 * 2) - 16) * 1024)
 #else
-#define AST_BACKGROUND_STACKSIZE 240 * 1024
+#define AST_BACKGROUND_STACKSIZE AST_STACKSIZE
 #endif
 
 void ast_register_thread(char *name);
@@ -645,6 +652,33 @@ void ast_enable_packet_fragmentation(int sock);
 int ast_mkdir(const char *path, int mode);
 
 #define ARRAY_LEN(a) (sizeof(a) / sizeof(0[a]))
+
+
+/* Definition for Digest authorization */
+struct ast_http_digest {
+	AST_DECLARE_STRING_FIELDS(
+		AST_STRING_FIELD(username);
+		AST_STRING_FIELD(nonce);
+		AST_STRING_FIELD(uri);
+		AST_STRING_FIELD(realm);
+		AST_STRING_FIELD(domain);
+		AST_STRING_FIELD(response);
+		AST_STRING_FIELD(cnonce);
+		AST_STRING_FIELD(opaque);
+		AST_STRING_FIELD(nc);
+	);
+	int qop;		/* Flag set to 1, if we send/recv qop="quth" */
+};
+
+/*!
+ *\brief Parse digest authorization header.
+ *\return Returns -1 if we have no auth or something wrong with digest.
+ *\note This function may be used for Digest request and responce header.
+ * request arg is set to nonzero, if we parse Digest Request.
+ * pedantic arg can be set to nonzero if we need to do addition Digest check.
+ */
+int ast_parse_digest(const char *digest, struct ast_http_digest *d, int request, int pedantic);
+
 
 #ifdef AST_DEVMODE
 #define ast_assert(a) _ast_assert(a, # a, __FILE__, __LINE__, __PRETTY_FUNCTION__)

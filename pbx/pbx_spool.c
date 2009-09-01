@@ -172,7 +172,7 @@ static int apply_outgoing(struct outgoing *o, char *fn, FILE *f)
 				} else if (!strcasecmp(buf, "data")) {
 					ast_string_field_set(o, data, c);
 				} else if (!strcasecmp(buf, "maxretries")) {
-					if (sscanf(c, "%d", &o->maxretries) != 1) {
+					if (sscanf(c, "%30d", &o->maxretries) != 1) {
 						ast_log(LOG_WARNING, "Invalid max retries at line %d of %s\n", lineno, fn);
 						o->maxretries = 0;
 					}
@@ -183,24 +183,24 @@ static int apply_outgoing(struct outgoing *o, char *fn, FILE *f)
 				} else if (!strcasecmp(buf, "extension")) {
 					ast_string_field_set(o, exten, c);
 				} else if (!strcasecmp(buf, "priority")) {
-					if ((sscanf(c, "%d", &o->priority) != 1) || (o->priority < 1)) {
+					if ((sscanf(c, "%30d", &o->priority) != 1) || (o->priority < 1)) {
 						ast_log(LOG_WARNING, "Invalid priority at line %d of %s\n", lineno, fn);
 						o->priority = 1;
 					}
 				} else if (!strcasecmp(buf, "retrytime")) {
-					if ((sscanf(c, "%d", &o->retrytime) != 1) || (o->retrytime < 1)) {
+					if ((sscanf(c, "%30d", &o->retrytime) != 1) || (o->retrytime < 1)) {
 						ast_log(LOG_WARNING, "Invalid retrytime at line %d of %s\n", lineno, fn);
 						o->retrytime = 300;
 					}
 				} else if (!strcasecmp(buf, "waittime")) {
-					if ((sscanf(c, "%d", &o->waittime) != 1) || (o->waittime < 1)) {
+					if ((sscanf(c, "%30d", &o->waittime) != 1) || (o->waittime < 1)) {
 						ast_log(LOG_WARNING, "Invalid waittime at line %d of %s\n", lineno, fn);
 						o->waittime = 45;
 					}
 				} else if (!strcasecmp(buf, "retry")) {
 					o->retries++;
 				} else if (!strcasecmp(buf, "startretry")) {
-					if (sscanf(c, "%ld", &o->callingpid) != 1) {
+					if (sscanf(c, "%30ld", &o->callingpid) != 1) {
 						ast_log(LOG_WARNING, "Unable to retrieve calling PID!\n");
 						o->callingpid = 0;
 					}
@@ -339,7 +339,7 @@ static void *attempt_thread(void *data)
 		ast_log(LOG_NOTICE, "Call failed to go through, reason (%d) %s\n", reason, ast_channel_reason2str(reason));
 		if (o->retries >= o->maxretries + 1) {
 			/* Max retries exceeded */
-			ast_log(LOG_EVENT, "Queued call to %s/%s expired without completion after %d attempt%s\n", o->tech, o->dest, o->retries - 1, ((o->retries - 1) != 1) ? "s" : "");
+			ast_log(LOG_NOTICE, "Queued call to %s/%s expired without completion after %d attempt%s\n", o->tech, o->dest, o->retries - 1, ((o->retries - 1) != 1) ? "s" : "");
 			remove_from_queue(o, "Expired");
 		} else {
 			/* Notate that the call is still active */
@@ -347,7 +347,6 @@ static void *attempt_thread(void *data)
 		}
 	} else {
 		ast_log(LOG_NOTICE, "Call completed to %s/%s\n", o->tech, o->dest);
-		ast_log(LOG_EVENT, "Queued call to %s/%s completed\n", o->tech, o->dest);
 		remove_from_queue(o, "Completed");
 	}
 	free_outgoing(o);
@@ -425,7 +424,7 @@ static int scan_service(char *fn, time_t now, time_t atime)
 		}
 		res = now;
 	} else {
-		ast_log(LOG_EVENT, "Queued call to %s/%s expired without completion after %d attempt%s\n", o->tech, o->dest, o->retries - 1, ((o->retries - 1) != 1) ? "s" : "");
+		ast_log(LOG_NOTICE, "Queued call to %s/%s expired without completion after %d attempt%s\n", o->tech, o->dest, o->retries - 1, ((o->retries - 1) != 1) ? "s" : "");
 		remove_from_queue(o, "Expired");
 		free_outgoing(o);
 	}

@@ -72,7 +72,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #define RTP_MTU		1200
 
-#define DEFAULT_DTMF_TIMEOUT 3000	/*!< samples */
+#define DEFAULT_DTMF_TIMEOUT (150 * (8000 / 1000))	/*!< samples */
 
 #define ZFONE_PROFILE_ID 0x505a
 
@@ -139,7 +139,8 @@ struct ast_rtp {
 	/* DTMF Reception Variables */
 	char resp;
 	unsigned int lastevent;
-	int dtmfcount;
+	unsigned int dtmf_duration;     /*!< Total duration in samples since the digit start event */
+	unsigned int dtmf_timeout;      /*!< When this timestamp is reached we consider END frame lost and forcibly abort digit */
 	unsigned int dtmfsamples;
 	/* DTMF Transmission Variables */
 	unsigned int lastdigitts;
@@ -165,6 +166,7 @@ struct ast_rtp {
 
 	enum strict_rtp_state strict_rtp_state; /*!< Current state that strict RTP protection is in */
 	struct sockaddr_in strict_rtp_address;  /*!< Remote address information for strict RTP purposes */
+	struct sockaddr_in alt_rtp_address; /*!<Alternate remote address information */
 
 	struct rtp_red *red;
 };
@@ -256,6 +258,7 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 static void ast_rtp_prop_set(struct ast_rtp_instance *instance, enum ast_rtp_property property, int value);
 static int ast_rtp_fd(struct ast_rtp_instance *instance, int rtcp);
 static void ast_rtp_remote_address_set(struct ast_rtp_instance *instance, struct sockaddr_in *sin);
+static void ast_rtp_alt_remote_address_set(struct ast_rtp_instance *instance, struct sockaddr_in *sin);
 static int rtp_red_init(struct ast_rtp_instance *instance, int buffer_time, int *payloads, int generations);
 static int rtp_red_buffer(struct ast_rtp_instance *instance, struct ast_frame *frame);
 static int ast_rtp_local_bridge(struct ast_rtp_instance *instance0, struct ast_rtp_instance *instance1);
@@ -277,6 +280,7 @@ static struct ast_rtp_engine asterisk_rtp_engine = {
 	.prop_set = ast_rtp_prop_set,
 	.fd = ast_rtp_fd,
 	.remote_address_set = ast_rtp_remote_address_set,
+	.alt_remote_address_set = ast_rtp_alt_remote_address_set,
 	.red_init = rtp_red_init,
 	.red_buffer = rtp_red_buffer,
 	.local_bridge = ast_rtp_local_bridge,
@@ -316,6 +320,11 @@ static inline int rtcp_debug_test_addr(struct sockaddr_in *addr)
 	}
 
 	return 1;
+}
+
+static int rtp_get_rate(int subclass)
+{
+	return (subclass == AST_FORMAT_G722) ? 8000 : ast_format_rate(subclass);
 }
 
 static unsigned int ast_rtcp_calc_interval(struct ast_rtp *rtp)
@@ -937,6 +946,11 @@ static int ast_rtp_raw_write(struct ast_rtp_instance *instance, struct ast_frame
 	int pred, mark = 0;
 	unsigned int ms = calc_txstamp(rtp, &frame->delivery);
 	struct sockaddr_in remote_address = { 0, };
+	int rate = rtp_get_rate(frame->subclass) / 1000;
+
+	if (frame->subclass == AST_FORMAT_G722) {
+		frame->samples /= 2;
+	}
 
 	if (rtp->sending_digit) {
 		return 0;
@@ -946,7 +960,7 @@ static int ast_rtp_raw_write(struct ast_rtp_instance *instance, struct ast_frame
 		pred = rtp->lastts + frame->samples;
 
 		/* Re-calculate last TS */
-		rtp->lastts = rtp->lastts + ms * 8;
+		rtp->lastts = rtp->lastts + ms * rate;
 		if (ast_tvzero(frame->delivery)) {
 			/* If this isn't an absolute delivery time, Check if it is close to our prediction,
 			   and if so, go with our prediction */
@@ -975,14 +989,14 @@ static int ast_rtp_raw_write(struct ast_rtp_instance *instance, struct ast_frame
 	} else {
 		pred = rtp->lastotexttimestamp + frame->samples;
 		/* Re-calculate last TS */
-		rtp->lastts = rtp->lastts + ms * 90;
+		rtp->lastts = rtp->lastts + ms;
 		/* If it's close to our prediction, go for it */
 		if (ast_tvzero(frame->delivery)) {
 			if (abs(rtp->lastts - pred) < 7200) {
 				rtp->lastts = pred;
 				rtp->lastotexttimestamp += frame->samples;
 			} else {
-				ast_debug(3, "Difference is %d, ms is %d (%d), pred/ts/samples %d/%d/%d\n", abs(rtp->lastts - pred), ms, ms * 90, rtp->lastts, pred, frame->samples);
+				ast_debug(3, "Difference is %d, ms is %d, pred/ts/samples %d/%d/%d\n", abs(rtp->lastts - pred), ms, rtp->lastts, pred, frame->samples);
 				rtp->lastotexttimestamp = rtp->lastts;
 			}
 		}
@@ -1000,7 +1014,7 @@ static int ast_rtp_raw_write(struct ast_rtp_instance *instance, struct ast_frame
 	}
 
 	if (ast_test_flag(frame, AST_FRFLAG_HAS_TIMING_INFO)) {
-		rtp->lastts = frame->ts * 8;
+		rtp->lastts = frame->ts * rate;
 	}
 
 	ast_rtp_instance_get_remote_address(instance, &remote_address);
@@ -1171,11 +1185,7 @@ static int ast_rtp_write(struct ast_rtp_instance *instance, struct ast_frame *fr
 		}
 
 		while ((f = ast_smoother_read(rtp->smoother)) && (f->data.ptr)) {
-			if (f->subclass == AST_FORMAT_G722) {
-				f->samples /= 2;
-			}
-
-			ast_rtp_raw_write(instance, f, codec);
+				ast_rtp_raw_write(instance, f, codec);
 		}
 	} else {
 		int hdrlen = 12;
@@ -1206,6 +1216,7 @@ static void calc_rxstamp(struct timeval *tv, struct ast_rtp *rtp, unsigned int t
 	double d;
 	double dtv;
 	double prog;
+	int rate = rtp_get_rate(rtp->f.subclass);
 
 	double normdev_rxjitter_current;
 	if ((!rtp->rxcore.tv_sec && !rtp->rxcore.tv_usec) || mark) {
@@ -1213,8 +1224,8 @@ static void calc_rxstamp(struct timeval *tv, struct ast_rtp *rtp, unsigned int t
 		rtp->drxcore = (double) rtp->rxcore.tv_sec + (double) rtp->rxcore.tv_usec / 1000000;
 		/* map timestamp to a real time */
 		rtp->seedrxts = timestamp; /* Their RTP timestamp started with this */
-		rtp->rxcore.tv_sec -= timestamp / 8000;
-		rtp->rxcore.tv_usec -= (timestamp % 8000) * 125;
+		rtp->rxcore.tv_sec -= timestamp / rate;
+		rtp->rxcore.tv_usec -= (timestamp % rate) * 125;
 		/* Round to 0.1ms for nice, pretty timestamps */
 		rtp->rxcore.tv_usec -= rtp->rxcore.tv_usec % 100;
 		if (rtp->rxcore.tv_usec < 0) {
@@ -1226,13 +1237,13 @@ static void calc_rxstamp(struct timeval *tv, struct ast_rtp *rtp, unsigned int t
 
 	gettimeofday(&now,NULL);
 	/* rxcore is the mapping between the RTP timestamp and _our_ real time from gettimeofday() */
-	tv->tv_sec = rtp->rxcore.tv_sec + timestamp / 8000;
-	tv->tv_usec = rtp->rxcore.tv_usec + (timestamp % 8000) * 125;
+	tv->tv_sec = rtp->rxcore.tv_sec + timestamp / rate;
+	tv->tv_usec = rtp->rxcore.tv_usec + (timestamp % rate) * 125;
 	if (tv->tv_usec >= 1000000) {
 		tv->tv_usec -= 1000000;
 		tv->tv_sec += 1;
 	}
-	prog = (double)((timestamp-rtp->seedrxts)/8000.);
+	prog = (double)((timestamp-rtp->seedrxts)/(float)(rate));
 	dtv = (double)rtp->drxcore + (double)(prog);
 	current_time = (double)now.tv_sec + (double)now.tv_usec/1000000;
 	transit = current_time - dtv;
@@ -1335,23 +1346,59 @@ static struct ast_frame *process_dtmf_rfc2833(struct ast_rtp_instance *instance,
 	if (ast_rtp_instance_get_prop(instance, AST_RTP_PROPERTY_DTMF_COMPENSATE)) {
 		if ((rtp->lastevent != timestamp) || (rtp->resp && rtp->resp != resp)) {
 			rtp->resp = resp;
-			rtp->dtmfcount = 0;
+			rtp->dtmf_timeout = 0;
 			f = send_dtmf(instance, AST_FRAME_DTMF_END, ast_rtp_instance_get_prop(instance, AST_RTP_PROPERTY_DTMF_COMPENSATE));
 			f->len = 0;
 			rtp->lastevent = timestamp;
 		}
 	} else {
-		if ((!(rtp->resp) && (!(event_end & 0x80))) || (rtp->resp && rtp->resp != resp)) {
-			rtp->resp = resp;
-			f = send_dtmf(instance, AST_FRAME_DTMF_BEGIN, 0);
-			rtp->dtmfcount = dtmftimeout;
-		} else if ((event_end & 0x80) && (rtp->lastevent != seqno) && rtp->resp) {
-			f = send_dtmf(instance, AST_FRAME_DTMF_END, 0);
-			f->len = ast_tvdiff_ms(ast_samp2tv(samples, 8000), ast_tv(0, 0)); /* XXX hard coded 8kHz */
-			rtp->resp = 0;
-			rtp->dtmfcount = 0;
-			rtp->lastevent = seqno;
+		/*  The duration parameter measures the complete
+		    duration of the event (from the beginning) - RFC2833.
+		    Account for the fact that duration is only 16 bits long
+		    (about 8 seconds at 8000 Hz) and can wrap is digit
+		    is hold for too long. */
+		unsigned int new_duration = rtp->dtmf_duration;
+		unsigned int last_duration = new_duration & 0xFFFF;
+
+		if (last_duration > 64000 && samples < last_duration) {
+			new_duration += 0xFFFF + 1;
 		}
+		new_duration = (new_duration & ~0xFFFF) | samples;
+
+		if (event_end & 0x80) {
+			/* End event */
+			if ((rtp->lastevent != seqno) && rtp->resp) {
+				rtp->dtmf_duration = new_duration;
+				f = send_dtmf(instance, AST_FRAME_DTMF_END, 0);
+				f->len = ast_tvdiff_ms(ast_samp2tv(rtp->dtmf_duration, rtp_get_rate(f->subclass)), ast_tv(0, 0));
+				rtp->resp = 0;
+				rtp->dtmf_duration = rtp->dtmf_timeout = 0;
+			}
+		} else {
+			/* Begin/continuation */
+
+			if (rtp->resp && rtp->resp != resp) {
+				/* Another digit already began. End it */
+				f = send_dtmf(instance, AST_FRAME_DTMF_END, 0);
+				f->len = ast_tvdiff_ms(ast_samp2tv(rtp->dtmf_duration, rtp_get_rate(f->subclass)), ast_tv(0, 0));
+				rtp->resp = 0;
+				rtp->dtmf_duration = rtp->dtmf_timeout = 0;
+			}
+
+			if (rtp->resp) {
+				/* Digit continues */
+				rtp->dtmf_duration = new_duration;
+			} else {
+				/* New digit began */
+				rtp->resp = resp;
+				f = send_dtmf(instance, AST_FRAME_DTMF_BEGIN, 0);
+				rtp->dtmf_duration = samples;
+			}
+
+			rtp->dtmf_timeout = timestamp + rtp->dtmf_duration + dtmftimeout;
+		}
+
+		rtp->lastevent = seqno;
 	}
 
 	rtp->dtmfsamples = samples;
@@ -1428,11 +1475,11 @@ static struct ast_frame *process_dtmf_cisco(struct ast_rtp_instance *instance, u
 		}
 	} else if ((rtp->resp == resp) && !power) {
 		f = send_dtmf(instance, AST_FRAME_DTMF_END, ast_rtp_instance_get_prop(instance, AST_RTP_PROPERTY_DTMF_COMPENSATE));
-		f->samples = rtp->dtmfsamples * 8;
+		f->samples = rtp->dtmfsamples * (rtp_get_rate(f->subclass) / 1000);
 		rtp->resp = 0;
 	} else if (rtp->resp == resp)
-		rtp->dtmfsamples += 20 * 8;
-	rtp->dtmfcount = dtmftimeout;
+		rtp->dtmfsamples += 20 * (rtp_get_rate(f->subclass) / 1000);
+	rtp->dtmf_timeout = 0;
 
 	return f;
 }
@@ -1841,8 +1888,14 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 		rtp->strict_rtp_state = STRICT_RTP_CLOSED;
 	} else if (rtp->strict_rtp_state == STRICT_RTP_CLOSED) {
 		if ((rtp->strict_rtp_address.sin_addr.s_addr != sin.sin_addr.s_addr) || (rtp->strict_rtp_address.sin_port != sin.sin_port)) {
-			ast_debug(1, "Received RTP packet from %s:%d, dropping due to strict RTP protection. Expected it to be from %s:%d\n", ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port), ast_inet_ntoa(rtp->strict_rtp_address.sin_addr), ntohs(rtp->strict_rtp_address.sin_port));
-			return &ast_null_frame;
+			/* Hmm, not the strict addres. Perhaps we're getting audio from the alternate? */
+			if ((rtp->alt_rtp_address.sin_addr.s_addr == sin.sin_addr.s_addr) && (rtp->alt_rtp_address.sin_port == sin.sin_port)) {
+				/* ooh, we did! You're now the new expected address, son! */
+				rtp->strict_rtp_address = sin;
+			} else  {
+				ast_debug(1, "Received RTP packet from %s:%d, dropping due to strict RTP protection. Expected it to be from %s:%d\n", ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port), ast_inet_ntoa(rtp->strict_rtp_address.sin_addr), ntohs(rtp->strict_rtp_address.sin_port));
+				return &ast_null_frame;
+			}
 		}
 	}
 
@@ -1964,7 +2017,6 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 	/* If the payload is not actually an Asterisk one but a special one pass it off to the respective handler */
 	if (!payload.asterisk_format) {
 		struct ast_frame *f = NULL;
-
 		if (payload.code == AST_RTP_DTMF) {
 			f = process_dtmf_rfc2833(instance, rtp->rawdata + AST_FRIENDLY_OFFSET + hdrlen, res - hdrlen, seqno, timestamp, &sin, payloadtype, mark);
 		} else if (payload.code == AST_RTP_CISCO_DTMF) {
@@ -1982,6 +2034,20 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 	rtp->f.frametype = (rtp->f.subclass & AST_FORMAT_AUDIO_MASK) ? AST_FRAME_VOICE : (rtp->f.subclass & AST_FORMAT_VIDEO_MASK) ? AST_FRAME_VIDEO : AST_FRAME_TEXT;
 
 	rtp->rxseqno = seqno;
+
+	if (rtp->dtmf_timeout && rtp->dtmf_timeout < timestamp) {
+		rtp->dtmf_timeout = 0;
+
+		if (rtp->resp) {
+			struct ast_frame *f;
+			f = send_dtmf(instance, AST_FRAME_DTMF_END, 0);
+			f->len = ast_tvdiff_ms(ast_samp2tv(rtp->dtmf_duration, rtp_get_rate(f->subclass)), ast_tv(0, 0));
+			rtp->resp = 0;
+			rtp->dtmf_timeout = rtp->dtmf_duration = 0;
+			return f;
+		}
+	}
+
 	rtp->lastrxts = timestamp;
 
 	rtp->f.src = "RTP";
@@ -2012,6 +2078,9 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 
 		rtp->f.subclass = AST_FORMAT_T140;
 		header_end = memchr(data, ((*data) & 0x7f), rtp->f.datalen);
+		if (header_end == NULL) {
+			return &ast_null_frame;
+		}
 		header_end++;
 
 		header_length = header_end - data;
@@ -2052,7 +2121,7 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 		calc_rxstamp(&rtp->f.delivery, rtp, timestamp, mark);
 		/* Add timing data to let ast_generic_bridge() put the frame into a jitterbuf */
 		ast_set_flag(&rtp->f, AST_FRFLAG_HAS_TIMING_INFO);
-		rtp->f.ts = timestamp / 8;
+		rtp->f.ts = timestamp / (rtp_get_rate(rtp->f.subclass) / 1000);
 		rtp->f.len = rtp->f.samples / ((ast_format_rate(rtp->f.subclass) / 1000));
 	} else if (rtp->f.subclass & AST_FORMAT_VIDEO_MASK) {
 		/* Video -- samples is # of samples vs. 90000 */
@@ -2145,6 +2214,18 @@ static void ast_rtp_remote_address_set(struct ast_rtp_instance *instance, struct
 	if (strictrtp) {
 		rtp->strict_rtp_state = STRICT_RTP_LEARN;
 	}
+
+	return;
+}
+
+static void ast_rtp_alt_remote_address_set(struct ast_rtp_instance *instance, struct sockaddr_in *sin)
+{
+	struct ast_rtp *rtp = ast_rtp_instance_get_data(instance);
+
+	/* No need to futz with rtp->rtcp here because ast_rtcp_read is already able to adjust if receiving
+	 * RTCP from an "unexpected" source
+	 */
+	rtp->alt_rtp_address = *sin;
 
 	return;
 }
@@ -2319,9 +2400,8 @@ static char *rtp_do_debug_ip(struct ast_cli_args *a)
 	struct hostent *hp;
 	struct ast_hostent ahp;
 	int port = 0;
-	char *p, *arg;
+	char *p, *arg = ast_strdupa(a->argv[3]);
 
-	arg = a->argv[3];
 	p = strstr(arg, ":");
 	if (p) {
 		*p = '\0';
@@ -2349,9 +2429,8 @@ static char *rtcp_do_debug_ip(struct ast_cli_args *a)
 	struct hostent *hp;
 	struct ast_hostent ahp;
 	int port = 0;
-	char *p, *arg;
+	char *p, *arg = ast_strdupa(a->argv[3]);
 
-	arg = a->argv[3];
 	p = strstr(arg, ":");
 	if (p) {
 		*p = '\0';
@@ -2522,7 +2601,7 @@ static int rtp_reload(int reload)
 		}
 		if ((s = ast_variable_retrieve(cfg, "general", "dtmftimeout"))) {
 			dtmftimeout = atoi(s);
-			if ((dtmftimeout < 0) || (dtmftimeout > 20000)) {
+			if ((dtmftimeout < 0) || (dtmftimeout > 64000)) {
 				ast_log(LOG_WARNING, "DTMF timeout of '%d' outside range, using default of '%d' instead\n",
 					dtmftimeout, DEFAULT_DTMF_TIMEOUT);
 				dtmftimeout = DEFAULT_DTMF_TIMEOUT;

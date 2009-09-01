@@ -180,7 +180,7 @@ enum ast_getdata_result ast_app_getdata(struct ast_channel *c, const char *promp
 /* The lock type used by ast_lock_path() / ast_unlock_path() */
 static enum AST_LOCK_TYPE ast_lock_type = AST_LOCK_TYPE_LOCKFILE;
 
-int ast_app_getdata_full(struct ast_channel *c, char *prompt, char *s, int maxlen, int timeout, int audiofd, int ctrlfd)
+int ast_app_getdata_full(struct ast_channel *c, const char *prompt, char *s, int maxlen, int timeout, int audiofd, int ctrlfd)
 {
 	int res, to = 2000, fto = 6000;
 
@@ -200,6 +200,28 @@ int ast_app_getdata_full(struct ast_channel *c, char *prompt, char *s, int maxle
 
 	res = ast_readstring_full(c, s, maxlen, to, fto, "#", audiofd, ctrlfd);
 
+	return res;
+}
+
+int ast_app_run_macro(struct ast_channel *autoservice_chan, struct ast_channel *macro_chan, const char * const macro_name, const char * const macro_args)
+{
+	struct ast_app *macro_app;
+	int res;
+	char buf[1024];
+
+	macro_app = pbx_findapp("Macro");
+	if (!macro_app) {
+		ast_log(LOG_WARNING, "Cannot run macro '%s' because the 'Macro' application in not available\n", macro_name);
+		return -1;
+	}
+	snprintf(buf, sizeof(buf), "%s%s%s", macro_name, ast_strlen_zero(macro_args) ? "" : ",", S_OR(macro_args, ""));
+	if (autoservice_chan) {
+		ast_autoservice_start(autoservice_chan);
+	}
+	res = pbx_exec(macro_chan, macro_app, buf);
+	if (autoservice_chan) {
+		ast_autoservice_stop(autoservice_chan);
+	}
 	return res;
 }
 
@@ -677,6 +699,8 @@ static int __ast_play_and_record(struct ast_channel *chan, const char *playfile,
 	time_t start, end;
 	struct ast_dsp *sildet = NULL;   /* silence detector dsp */
 	int totalsilence = 0;
+	int dspsilence = 0;
+	int olddspsilence = 0;
 	int rfmt = 0;
 	struct ast_silence_generator *silgen = NULL;
 	char prependfile[80];
@@ -801,17 +825,16 @@ static int __ast_play_and_record(struct ast_channel *chan, const char *playfile,
 
 				/* Silence Detection */
 				if (maxsilence > 0) {
-					int dspsilence = 0;
+					dspsilence = 0;
 					ast_dsp_silence(sildet, f, &dspsilence);
-					if (dspsilence) {
-						totalsilence = dspsilence;
-					} else {
-						totalsilence = 0;
+					if (olddspsilence > dspsilence) {
+						totalsilence += olddspsilence;
 					}
+					olddspsilence = dspsilence;
 
-					if (totalsilence > maxsilence) {
+					if (dspsilence > maxsilence) {
 						/* Ended happily with silence */
-						ast_verb(3, "Recording automatically stopped after a silence of %d seconds\n", totalsilence/1000);
+						ast_verb(3, "Recording automatically stopped after a silence of %d seconds\n", dspsilence/1000);
 						res = 'S';
 						outmsg = 2;
 						break;
@@ -886,6 +909,16 @@ static int __ast_play_and_record(struct ast_channel *chan, const char *playfile,
 	*duration = others[0] ? ast_tellstream(others[0]) / 8000 : 0;
 
 	if (!prepend) {
+		/* Reduce duration by a total silence amount */
+		if (olddspsilence <= dspsilence) {
+			totalsilence += dspsilence;
+		}
+
+        	if (totalsilence > 0)
+			*duration -= (totalsilence - 200) / 1000;
+		if (*duration < 0) {
+			*duration = 0;
+		}
 		for (x = 0; x < fmtcnt; x++) {
 			if (!others[x]) {
 				break;
@@ -895,15 +928,9 @@ static int __ast_play_and_record(struct ast_channel *chan, const char *playfile,
 			 * off the recording.  However, if we ended with '#', we don't want
 			 * to trim ANY part of the recording.
 			 */
-			if (res > 0 && totalsilence) {
-				ast_stream_rewind(others[x], totalsilence - 200);
-				/* Reduce duration by a corresponding amount */
-				if (x == 0 && *duration) {
-					*duration -= (totalsilence - 200) / 1000;
-					if (*duration < 0) {
-						*duration = 0;
-					}
-				}
+			if (res > 0 && dspsilence) {
+                                /* rewind only the trailing silence */
+				ast_stream_rewind(others[x], dspsilence - 200);
 			}
 			ast_truncstream(others[x]);
 			ast_closestream(others[x]);
@@ -921,8 +948,8 @@ static int __ast_play_and_record(struct ast_channel *chan, const char *playfile,
 				break;
 			}
 			/*!\note Same logic as above. */
-			if (totalsilence) {
-				ast_stream_rewind(others[x], totalsilence - 200);
+			if (dspsilence) {
+				ast_stream_rewind(others[x], dspsilence - 200);
 			}
 			ast_truncstream(others[x]);
 			/* add the original file too */
@@ -949,8 +976,8 @@ static int __ast_play_and_record(struct ast_channel *chan, const char *playfile,
 	return res;
 }
 
-static char default_acceptdtmf[] = "#";
-static char default_canceldtmf[] = "";
+static const char default_acceptdtmf[] = "#";
+static const char default_canceldtmf[] = "";
 
 int ast_play_and_record_full(struct ast_channel *chan, const char *playfile, const char *recordfile, int maxtime, const char *fmt, int *duration, int silencethreshold, int maxsilence, const char *path, const char *acceptdtmf, const char *canceldtmf)
 {
@@ -1014,9 +1041,9 @@ int ast_app_group_set_channel(struct ast_channel *chan, const char *data)
 	}
 
 	AST_RWLIST_WRLOCK(&groups);
-	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&groups, gi, list) {
+	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&groups, gi, group_list) {
 		if ((gi->chan == chan) && ((ast_strlen_zero(category) && ast_strlen_zero(gi->category)) || (!ast_strlen_zero(gi->category) && !strcasecmp(gi->category, category)))) {
-			AST_RWLIST_REMOVE_CURRENT(list);
+			AST_RWLIST_REMOVE_CURRENT(group_list);
 			free(gi);
 			break;
 		}
@@ -1033,7 +1060,7 @@ int ast_app_group_set_channel(struct ast_channel *chan, const char *data)
 			gi->category = (char *) gi + sizeof(*gi) + strlen(group) + 1;
 			strcpy(gi->category, category);
 		}
-		AST_RWLIST_INSERT_TAIL(&groups, gi, list);
+		AST_RWLIST_INSERT_TAIL(&groups, gi, group_list);
 	} else {
 		res = -1;
 	}
@@ -1053,7 +1080,7 @@ int ast_app_group_get_count(const char *group, const char *category)
 	}
 
 	AST_RWLIST_RDLOCK(&groups);
-	AST_RWLIST_TRAVERSE(&groups, gi, list) {
+	AST_RWLIST_TRAVERSE(&groups, gi, group_list) {
 		if (!strcasecmp(gi->group, group) && (ast_strlen_zero(category) || (!ast_strlen_zero(gi->category) && !strcasecmp(gi->category, category)))) {
 			count++;
 		}
@@ -1079,7 +1106,7 @@ int ast_app_group_match_get_count(const char *groupmatch, const char *category)
 	}
 
 	AST_RWLIST_RDLOCK(&groups);
-	AST_RWLIST_TRAVERSE(&groups, gi, list) {
+	AST_RWLIST_TRAVERSE(&groups, gi, group_list) {
 		if (!regexec(&regexbuf, gi->group, 0, NULL, 0) && (ast_strlen_zero(category) || (!ast_strlen_zero(gi->category) && !strcasecmp(gi->category, category)))) {
 			count++;
 		}
@@ -1096,11 +1123,11 @@ int ast_app_group_update(struct ast_channel *old, struct ast_channel *new)
 	struct ast_group_info *gi = NULL;
 
 	AST_RWLIST_WRLOCK(&groups);
-	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&groups, gi, list) {
+	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&groups, gi, group_list) {
 		if (gi->chan == old) {
 			gi->chan = new;
 		} else if (gi->chan == new) {
-			AST_RWLIST_REMOVE_CURRENT(list);
+			AST_RWLIST_REMOVE_CURRENT(group_list);
 			ast_free(gi);
 		}
 	}
@@ -1115,9 +1142,9 @@ int ast_app_group_discard(struct ast_channel *chan)
 	struct ast_group_info *gi = NULL;
 
 	AST_RWLIST_WRLOCK(&groups);
-	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&groups, gi, list) {
+	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&groups, gi, group_list) {
 		if (gi->chan == chan) {
-			AST_RWLIST_REMOVE_CURRENT(list);
+			AST_RWLIST_REMOVE_CURRENT(group_list);
 			ast_free(gi);
 		}
 	}
@@ -1147,7 +1174,10 @@ int ast_app_group_list_unlock(void)
 	return AST_RWLIST_UNLOCK(&groups);
 }
 
-unsigned int ast_app_separate_args(char *buf, char delim, char **array, int arraylen)
+#undef ast_app_separate_args
+unsigned int ast_app_separate_args(char *buf, char delim, char **array, int arraylen);
+
+unsigned int __ast_app_separate_args(char *buf, char delim, int remove_chars, char **array, int arraylen)
 {
 	int argc;
 	char *scan, *wasdelim = NULL;
@@ -1172,12 +1202,18 @@ unsigned int ast_app_separate_args(char *buf, char delim, char **array, int arra
 				}
 			} else if (*scan == '"' && delim != '"') {
 				quote = quote ? 0 : 1;
-				/* Remove quote character from argument */
-				memmove(scan, scan + 1, strlen(scan));
-				scan--;
+				if (remove_chars) {
+					/* Remove quote character from argument */
+					memmove(scan, scan + 1, strlen(scan));
+					scan--;
+				}
 			} else if (*scan == '\\') {
-				/* Literal character, don't parse */
-				memmove(scan, scan + 1, strlen(scan));
+				if (remove_chars) {
+					/* Literal character, don't parse */
+					memmove(scan, scan + 1, strlen(scan));
+				} else {
+					scan++;
+				}
 			} else if ((*scan == delim) && !paren && !quote) {
 				wasdelim = scan;
 				*scan++ = '\0';
@@ -1193,6 +1229,12 @@ unsigned int ast_app_separate_args(char *buf, char delim, char **array, int arra
 	}
 
 	return argc;
+}
+
+/* ABI compatible function */
+unsigned int ast_app_separate_args(char *buf, char delim, char **array, int arraylen)
+{
+	return __ast_app_separate_args(buf, delim, 1, array, arraylen);
 }
 
 static enum AST_LOCK_RESULT ast_lock_path_lockfile(const char *path)

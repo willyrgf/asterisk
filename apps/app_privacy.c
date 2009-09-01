@@ -80,7 +80,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 static char *app = "PrivacyManager";
 
-static int privacy_exec (struct ast_channel *chan, void *data)
+static int privacy_exec(struct ast_channel *chan, const char *data)
 {
 	int res=0;
 	int retries;
@@ -111,13 +111,13 @@ static int privacy_exec (struct ast_channel *chan, void *data)
 			AST_STANDARD_APP_ARGS(args, parse);
 
 			if (args.maxretries) {
-				if (sscanf(args.maxretries, "%d", &x) == 1)
+				if (sscanf(args.maxretries, "%30d", &x) == 1)
 					maxretries = x;
 				else
 					ast_log(LOG_WARNING, "Invalid max retries argument\n");
 			}
 			if (args.minlength) {
-				if (sscanf(args.minlength, "%d", &x) == 1)
+				if (sscanf(args.minlength, "%30d", &x) == 1)
 					minlength = x;
 				else
 					ast_log(LOG_WARNING, "Invalid min length argument\n");

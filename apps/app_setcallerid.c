@@ -84,7 +84,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 static char *app2 = "SetCallerPres";
 
-static int setcallerid_pres_exec(struct ast_channel *chan, void *data)
+static int setcallerid_pres_exec(struct ast_channel *chan, const char *data)
 {
 	int pres = -1;
 	static int deprecated = 0;
@@ -95,7 +95,7 @@ static int setcallerid_pres_exec(struct ast_channel *chan, void *data)
 	}
 
 	/* For interface consistency, permit the argument to be specified as a number */
-	if (sscanf(data, "%d", &pres) != 1 || pres < 0 || pres > 255 || (pres & 0x9c)) {
+	if (sscanf(data, "%30d", &pres) != 1 || pres < 0 || pres > 255 || (pres & 0x9c)) {
 		pres = ast_parse_caller_presentation(data);
 	}
 

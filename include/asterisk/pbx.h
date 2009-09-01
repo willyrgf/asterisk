@@ -24,9 +24,11 @@
 #define _ASTERISK_PBX_H
 
 #include "asterisk/sched.h"
+#include "asterisk/devicestate.h"
 #include "asterisk/chanvars.h"
 #include "asterisk/hashtab.h"
 #include "asterisk/stringfields.h"
+#include "asterisk/xmldoc.h"
 
 #if defined(__cplusplus) || defined(c_plusplus)
 extern "C" {
@@ -73,12 +75,6 @@ struct ast_sw;
 /*! \brief Typedef for devicestate and hint callbacks */
 typedef int (*ast_state_cb_type)(char *context, char* id, enum ast_extension_states state, void *data);
 
-/*! \brief From where the documentation come from */
-enum ast_doc_src {
-	AST_XML_DOC,            /*!< From XML documentation */
-	AST_STATIC_DOC          /*!< From application/function registration */
-};
-
 /*! \brief Data structure associated with a custom dialplan function */
 struct ast_custom_function {
 	const char *name;			/*!< Name */
@@ -90,8 +86,20 @@ struct ast_custom_function {
 		AST_STRING_FIELD(seealso);      /*!< See also */
 	);
 	enum ast_doc_src docsrc;		/*!< Where the documentation come from */
-	int (*read)(struct ast_channel *, const char *, char *, char *, size_t);	/*!< Read function, if read is supported */
-	int (*write)(struct ast_channel *, const char *, char *, const char *);		/*!< Write function, if write is supported */
+	/*! Read function, if read is supported */
+	int (*read)(struct ast_channel *, const char *, char *, char *, size_t);
+	/*! Read function, if read is supported.  Note: only one of read or read2
+	 * needs to be implemented.  In new code, read2 should be implemented as
+	 * the way forward, but they should return identical results, within the
+	 * constraints of buffer size, if both are implemented.  That is, if the
+	 * read function is handed a 16-byte buffer, and the result is 17 bytes
+	 * long, then the first 15 bytes (remember NULL terminator) should be
+	 * the same for both the read and the read2 methods. */
+	int (*read2)(struct ast_channel *, const char *, char *, struct ast_str **, ssize_t);
+	/*! If no read2 function is provided, what maximum size? */
+	size_t read_max;
+	/*! Write function, if write is supported */
+	int (*write)(struct ast_channel *, const char *, char *, const char *);
 	struct ast_module *mod;         /*!< Module this custom function belongs to */
 	AST_RWLIST_ENTRY(ast_custom_function) acflist;
 };
@@ -198,7 +206,7 @@ struct ast_app *pbx_findapp(const char *app);
  * \retval 0 success
  * \retval -1 failure
  */
-int pbx_exec(struct ast_channel *c, struct ast_app *app, void *data);
+int pbx_exec(struct ast_channel *c, struct ast_app *app, const char *data);
 
 /*!
  * \brief Register a new context or find an existing one
@@ -354,6 +362,14 @@ int ast_add_extension2(struct ast_context *con, int replace, const char *extensi
 	int priority, const char *label, const char *callerid, 
 	const char *application, void *data, void (*datad)(void *), const char *registrar);
 
+/*!
+ * \brief Map devstate to an extension state.
+ *
+ * \param[in] device state
+ *
+ * \return the extension state mapping.
+ */
+enum ast_extension_states ast_devstate_to_extenstate(enum ast_device_state devstate);
 
 /*! 
  * \brief Uses hint and devicestate callback to get the state of an extension
@@ -420,6 +436,24 @@ int ast_extension_state_del(int id, ast_state_cb_type callback);
  * Otherwise, 0 is returned.
  */
 int ast_get_hint(char *hint, int hintsize, char *name, int namesize,
+	struct ast_channel *c, const char *context, const char *exten);
+
+/*! 
+ * \brief If an extension hint exists, return non-zero
+ * 
+ * \param hint buffer for hint
+ * \param hintsize Maximum size of hint buffer (<0 to prevent growth, >0 to limit growth to that number of bytes, or 0 for unlimited growth)
+ * \param name buffer for name portion of hint
+ * \param namesize Maximum size of name buffer (<0 to prevent growth, >0 to limit growth to that number of bytes, or 0 for unlimited growth)
+ * \param c Channel from which to return the hint.  This is only important when the hint or name contains an expression to be expanded.
+ * \param context which context to look in
+ * \param exten which extension to search for
+ *
+ * \return If an extension within the given context with the priority PRIORITY_HINT
+ * is found, a non zero value will be returned.
+ * Otherwise, 0 is returned.
+ */
+int ast_str_get_hint(struct ast_str **hint, ssize_t hintsize, struct ast_str **name, ssize_t namesize,
 	struct ast_channel *c, const char *context, const char *exten);
 
 /*!
@@ -946,21 +980,59 @@ void pbx_builtin_clear_globals(void);
 /*!\brief Parse and set a single channel variable, where the name and value are separated with an '=' character.
  * \note Will lock the channel.
  */
-int pbx_builtin_setvar(struct ast_channel *chan, void *data);
+int pbx_builtin_setvar(struct ast_channel *chan, const char *data);
 
 /*!\brief Parse and set multiple channel variables, where the pairs are separated by the ',' character, and name and value are separated with an '=' character.
  * \note Will lock the channel.
  */
-int pbx_builtin_setvar_multiple(struct ast_channel *chan, void *data);
+int pbx_builtin_setvar_multiple(struct ast_channel *chan, const char *data);
 
-int pbx_builtin_raise_exception(struct ast_channel *chan, void *data);
+int pbx_builtin_raise_exception(struct ast_channel *chan, const char *data);
 
 /*! @name Substitution routines, using static string buffers
  * @{ */
 void pbx_substitute_variables_helper(struct ast_channel *c, const char *cp1, char *cp2, int count);
 void pbx_substitute_variables_varshead(struct varshead *headp, const char *cp1, char *cp2, int count);
 void pbx_substitute_variables_helper_full(struct ast_channel *c, struct varshead *headp, const char *cp1, char *cp2, int cp2_size, size_t *used);
-void ast_str_substitute_variables(struct ast_str **buf, size_t maxlen, struct ast_channel *chan, const char *templ);
+/*! @} */
+/*! @} */
+
+/*! @name Substitution routines, using dynamic string buffers */
+
+/*!
+ * \param buf Result will be placed in this buffer.
+ * \param maxlen -1 if the buffer should not grow, 0 if the buffer may grow to any size, and >0 if the buffer should grow only to that number of bytes.
+ * \param chan Channel variables from which to extract values, and channel to pass to any dialplan functions.
+ * \param headp If no channel is specified, a channel list from which to extract variable values
+ * \param var Variable name to retrieve.
+ */
+const char *ast_str_retrieve_variable(struct ast_str **buf, ssize_t maxlen, struct ast_channel *chan, struct varshead *headp, const char *var);
+
+/*!
+ * \param buf Result will be placed in this buffer.
+ * \param maxlen -1 if the buffer should not grow, 0 if the buffer may grow to any size, and >0 if the buffer should grow only to that number of bytes.
+ * \param chan Channel variables from which to extract values, and channel to pass to any dialplan functions.
+ * \param templ Variable template to expand.
+ */
+void ast_str_substitute_variables(struct ast_str **buf, ssize_t maxlen, struct ast_channel *chan, const char *templ);
+
+/*!
+ * \param buf Result will be placed in this buffer.
+ * \param maxlen -1 if the buffer should not grow, 0 if the buffer may grow to any size, and >0 if the buffer should grow only to that number of bytes.
+ * \param headp If no channel is specified, a channel list from which to extract variable values
+ * \param templ Variable template to expand.
+ */
+void ast_str_substitute_variables_varshead(struct ast_str **buf, ssize_t maxlen, struct varshead *headp, const char *templ);
+
+/*!
+ * \param buf Result will be placed in this buffer.
+ * \param maxlen -1 if the buffer should not grow, 0 if the buffer may grow to any size, and >0 if the buffer should grow only to that number of bytes.
+ * \param c Channel variables from which to extract values, and channel to pass to any dialplan functions.
+ * \param headp If no channel is specified, a channel list from which to extract variable values
+ * \param templ Variable template to expand.
+ * \param used Number of bytes read from the template.
+ */
+void ast_str_substitute_variables_full(struct ast_str **buf, ssize_t maxlen, struct ast_channel *c, struct varshead *headp, const char *templ, size_t *used);
 /*! @} */
 
 int ast_extension_patmatch(const char *pattern, const char *data);
@@ -1050,6 +1122,21 @@ int ast_processed_calls(void);
 int ast_func_read(struct ast_channel *chan, const char *function, char *workspace, size_t len);
 
 /*!
+ * \brief executes a read operation on a function 
+ *
+ * \param chan Channel to execute on
+ * \param function Data containing the function call string (will be modified)
+ * \param str A dynamic string buffer into which to place the result.
+ * \param maxlen <0 if the dynamic buffer should not grow; >0 if the dynamic buffer should be limited to that number of bytes; 0 if the dynamic buffer has no upper limit
+ *
+ * This application executes a function in read mode on a given channel.
+ *
+ * \retval 0 success
+ * \retval non-zero failure
+ */
+int ast_func_read2(struct ast_channel *chan, const char *function, struct ast_str **str, ssize_t maxlen);
+
+/*!
  * \brief executes a write operation on a function
  *
  * \param chan Channel to execute on
@@ -1120,6 +1207,14 @@ int ast_wrlock_contexts_version(void);
 int ast_hashtab_compare_contexts(const void *ah_a, const void *ah_b);
 unsigned int ast_hashtab_hash_contexts(const void *obj);
 /*! @} */
+
+/*!
+ * \brief Command completion for the list of installed applications.
+ *
+ * This can be called from a CLI command completion function that wants to
+ * complete from the list of available applications.
+ */
+char *ast_complete_applications(const char *line, const char *word, int state);
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }

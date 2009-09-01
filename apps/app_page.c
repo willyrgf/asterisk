@@ -99,15 +99,15 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</see-also>
 	</application>
  ***/
-static const char *app_page= "Page";
+static const char * const app_page= "Page";
 
-enum {
+enum page_opt_flags {
 	PAGE_DUPLEX = (1 << 0),
 	PAGE_QUIET = (1 << 1),
 	PAGE_RECORD = (1 << 2),
 	PAGE_SKIP = (1 << 3),
 	PAGE_IGNORE_FORWARDS = (1 << 4),
-} page_opt_flags;
+};
 
 AST_APP_OPTIONS(page_opts, {
 	AST_APP_OPTION('d', PAGE_DUPLEX),
@@ -118,7 +118,7 @@ AST_APP_OPTIONS(page_opts, {
 });
 
 
-static int page_exec(struct ast_channel *chan, void *data)
+static int page_exec(struct ast_channel *chan, const char *data)
 {
 	char *tech, *resource, *tmp;
 	char meetmeopts[88], originator[AST_CHANNEL_NAME], *opts[0];

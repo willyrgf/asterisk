@@ -128,6 +128,7 @@ static int send_waveform_to_fd(char *waveform, int length, int fd)
 {
 	int res;
 #ifdef __PPC__ 
+	int x;
 	char c;
 #endif
 
@@ -264,7 +265,7 @@ static int send_waveform_to_channel(struct ast_channel *chan, char *waveform, in
 	return res;
 }
 
-static int festival_exec(struct ast_channel *chan, void *vdata)
+static int festival_exec(struct ast_channel *chan, const char *vdata)
 {
 	int usecache;
 	int res = 0;

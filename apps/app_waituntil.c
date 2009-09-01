@@ -67,7 +67,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 static char *app = "WaitUntil";
 
-static int waituntil_exec(struct ast_channel *chan, void *data)
+static int waituntil_exec(struct ast_channel *chan, const char *data)
 {
 	int res;
 	double fraction;
@@ -82,7 +82,7 @@ static int waituntil_exec(struct ast_channel *chan, void *data)
 		return 0;
 	}
 
-	if (sscanf(data, "%ld%lf", &seconds, &fraction) == 0) {
+	if (sscanf(data, "%30ld%30lf", &seconds, &fraction) == 0) {
 		ast_log(LOG_WARNING, "WaitUntil called with non-numeric argument\n");
 		pbx_builtin_setvar_helper(chan, "WAITUNTILSTATUS", "FAILURE");
 		return 0;

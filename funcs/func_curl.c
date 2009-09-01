@@ -148,6 +148,9 @@ static int parse_curlopt_key(const char *name, CURLoption *key, enum optiontype 
 	} else if (!strcasecmp(name, "ftptext")) {
 		*key = CURLOPT_TRANSFERTEXT;
 		*ot = OT_BOOLEAN;
+	} else if (!strcasecmp(name, "ssl_verifypeer")) {
+		*key = CURLOPT_SSL_VERIFYPEER;
+		*ot = OT_BOOLEAN;
 	} else if (!strcasecmp(name, "hashcompat")) {
 		*key = CURLOPT_SPECIAL_HASHCOMPAT;
 		*ot = OT_BOOLEAN;
@@ -276,7 +279,7 @@ yuck:
 	return 0;
 }
 
-static int acf_curlopt_read(struct ast_channel *chan, const char *cmd, char *data, char *buf, size_t len)
+static int acf_curlopt_helper(struct ast_channel *chan, const char *cmd, char *data, char *buf, struct ast_str **bufstr, ssize_t len)
 {
 	struct ast_datastore *store;
 	struct global_curl_info *list[2] = { &global_curl_info, NULL };
@@ -303,38 +306,78 @@ static int acf_curlopt_read(struct ast_channel *chan, const char *cmd, char *dat
 		AST_LIST_TRAVERSE(list[i], cur, list) {
 			if (cur->key == key) {
 				if (ot == OT_BOOLEAN || ot == OT_INTEGER) {
-					snprintf(buf, len, "%ld", (long)cur->value);
-				} else if (ot == OT_INTEGER_MS) {
-					if ((long)cur->value % 1000 == 0) {
-						snprintf(buf, len, "%ld", (long)cur->value / 1000);
+					if (buf) {
+						snprintf(buf, len, "%ld", (long) cur->value);
 					} else {
-						snprintf(buf, len, "%.3f", (double)((long)cur->value) / 1000.0);
+						ast_str_set(bufstr, len, "%ld", (long) cur->value);
+					}
+				} else if (ot == OT_INTEGER_MS) {
+					if ((long) cur->value % 1000 == 0) {
+						if (buf) {
+							snprintf(buf, len, "%ld", (long)cur->value / 1000);
+						} else {
+							ast_str_set(bufstr, len, "%ld", (long) cur->value / 1000);
+						}
+					} else {
+						if (buf) {
+							snprintf(buf, len, "%.3f", (double) ((long) cur->value) / 1000.0);
+						} else {
+							ast_str_set(bufstr, len, "%.3f", (double) ((long) cur->value) / 1000.0);
+						}
 					}
 				} else if (ot == OT_STRING) {
 					ast_debug(1, "Found entry %p, with key %d and value %p\n", cur, cur->key, cur->value);
-					ast_copy_string(buf, cur->value, len);
+					if (buf) {
+						ast_copy_string(buf, cur->value, len);
+					} else {
+						ast_str_set(bufstr, 0, "%s", (char *) cur->value);
+					}
 				} else if (key == CURLOPT_PROXYTYPE) {
 					if (0) {
 #if CURLVERSION_ATLEAST(7,15,2)
 					} else if ((long)cur->value == CURLPROXY_SOCKS4) {
-						ast_copy_string(buf, "socks4", len);
+						if (buf) {
+							ast_copy_string(buf, "socks4", len);
+						} else {
+							ast_str_set(bufstr, 0, "socks4");
+						}
 #endif
 #if CURLVERSION_ATLEAST(7,18,0)
 					} else if ((long)cur->value == CURLPROXY_SOCKS4A) {
-						ast_copy_string(buf, "socks4a", len);
+						if (buf) {
+							ast_copy_string(buf, "socks4a", len);
+						} else {
+							ast_str_set(bufstr, 0, "socks4a");
+						}
 #endif
 					} else if ((long)cur->value == CURLPROXY_SOCKS5) {
-						ast_copy_string(buf, "socks5", len);
+						if (buf) {
+							ast_copy_string(buf, "socks5", len);
+						} else {
+							ast_str_set(bufstr, 0, "socks5");
+						}
 #if CURLVERSION_ATLEAST(7,18,0)
 					} else if ((long)cur->value == CURLPROXY_SOCKS5_HOSTNAME) {
-						ast_copy_string(buf, "socks5hostname", len);
+						if (buf) {
+							ast_copy_string(buf, "socks5hostname", len);
+						} else {
+							ast_str_set(bufstr, 0, "socks5hostname");
+						}
 #endif
 #if CURLVERSION_ATLEAST(7,10,0)
 					} else if ((long)cur->value == CURLPROXY_HTTP) {
-						ast_copy_string(buf, "http", len);
+						if (buf) {
+							ast_copy_string(buf, "http", len);
+						} else {
+							ast_str_set(bufstr, 0, "http");
+						}
 #endif
 					} else {
-						ast_copy_string(buf, "unknown", len);
+						if (buf) {
+							ast_copy_string(buf, "unknown", len);
+						} else {
+							ast_str_set(bufstr, 0, "unknown");
+						}
 					}
 				}
 				break;
@@ -347,6 +390,16 @@ static int acf_curlopt_read(struct ast_channel *chan, const char *cmd, char *dat
 	}
 
 	return cur ? 0 : -1;
+}
+
+static int acf_curlopt_read(struct ast_channel *chan, const char *cmd, char *data, char *buf, size_t len)
+{
+	return acf_curlopt_helper(chan, cmd, data, buf, NULL, len);
+}
+
+static int acf_curlopt_read2(struct ast_channel *chan, const char *cmd, char *data, struct ast_str **buf, ssize_t len)
+{
+	return acf_curlopt_helper(chan, cmd, data, NULL, buf, len);
 }
 
 static size_t WriteMemoryCallback(void *ptr, size_t size, size_t nmemb, void *data)
@@ -363,7 +416,7 @@ static size_t WriteMemoryCallback(void *ptr, size_t size, size_t nmemb, void *da
 	return realsize;
 }
 
-static const char *global_useragent = "asterisk-libcurl-agent/1.0";
+static const char * const global_useragent = "asterisk-libcurl-agent/1.0";
 
 static int curl_instance_init(void *data)
 {
@@ -391,7 +444,7 @@ static void curl_instance_cleanup(void *data)
 
 AST_THREADSTORAGE_CUSTOM(curl_instance, curl_instance_init, curl_instance_cleanup);
 
-static int acf_curl_exec(struct ast_channel *chan, const char *cmd, char *info, char *buf, size_t len)
+static int acf_curl_helper(struct ast_channel *chan, const char *cmd, char *info, char *buf, struct ast_str **input_str, ssize_t len)
 {
 	struct ast_str *str = ast_str_create(16);
 	int ret = -1;
@@ -405,15 +458,17 @@ static int acf_curl_exec(struct ast_channel *chan, const char *cmd, char *info, 
 	int hashcompat = 0;
 	AST_LIST_HEAD(global_curl_info, curl_settings) *list = NULL;
 
-	*buf = '\0';
-	
+	if (buf) {
+		*buf = '\0';
+	}
+
 	if (ast_strlen_zero(info)) {
 		ast_log(LOG_WARNING, "CURL requires an argument (URL)\n");
 		ast_free(str);
 		return -1;
 	}
 
-	AST_STANDARD_APP_ARGS(args, info);	
+	AST_STANDARD_APP_ARGS(args, info);
 
 	if (chan) {
 		ast_autoservice_start(chan);
@@ -483,11 +538,19 @@ static int acf_curl_exec(struct ast_channel *chan, const char *cmd, char *info, 
 				rowcount++;
 			}
 			pbx_builtin_setvar_helper(chan, "~ODBCFIELDS~", ast_str_buffer(fields));
-			ast_copy_string(buf, ast_str_buffer(values), len);
+			if (buf) {
+				ast_copy_string(buf, ast_str_buffer(values), len);
+			} else {
+				ast_str_set(input_str, len, "%s", ast_str_buffer(values));
+			}
 			ast_free(fields);
 			ast_free(values);
 		} else {
-			ast_copy_string(buf, ast_str_buffer(str), len);
+			if (buf) {
+				ast_copy_string(buf, ast_str_buffer(str), len);
+			} else {
+				ast_str_set(input_str, len, "%s", ast_str_buffer(str));
+			}
 		}
 		ret = 0;
 	}
@@ -495,11 +558,21 @@ static int acf_curl_exec(struct ast_channel *chan, const char *cmd, char *info, 
 
 	if (chan)
 		ast_autoservice_stop(chan);
-	
+
 	return ret;
 }
 
-struct ast_custom_function acf_curl = {
+static int acf_curl_exec(struct ast_channel *chan, const char *cmd, char *info, char *buf, size_t len)
+{
+	return acf_curl_helper(chan, cmd, info, buf, NULL, len);
+}
+
+static int acf_curl2_exec(struct ast_channel *chan, const char *cmd, char *info, struct ast_str **buf, ssize_t len)
+{
+	return acf_curl_helper(chan, cmd, info, NULL, buf, len);
+}
+
+static struct ast_custom_function acf_curl = {
 	.name = "CURL",
 	.synopsis = "Retrieves the contents of a URL",
 	.syntax = "CURL(url[,post-data])",
@@ -507,31 +580,34 @@ struct ast_custom_function acf_curl = {
 	"  url       - URL to retrieve\n"
 	"  post-data - Optional data to send as a POST (GET is default action)\n",
 	.read = acf_curl_exec,
+	.read2 = acf_curl2_exec,
 };
 
-struct ast_custom_function acf_curlopt = {
+static struct ast_custom_function acf_curlopt = {
 	.name = "CURLOPT",
 	.synopsis = "Set options for use with the CURL() function",
 	.syntax = "CURLOPT(<option>)",
 	.desc =
-"  cookie       - Send cookie with request\n"
-"  conntimeout  - Number of seconds to wait for connection\n"
-"  dnstimeout   - Number of seconds to wait for DNS response\n"
-"  ftptext      - For FTP, force a text transfer (boolean)\n"
-"  ftptimeout   - For FTP, the server response timeout\n"
-"  header       - Retrieve header information (boolean)\n"
-"  httptimeout  - Number of seconds to wait for HTTP response\n"
-"  maxredirs    - Maximum number of redirects to follow\n"
-"  proxy        - Hostname or IP to use as a proxy\n"
-"  proxytype    - http, socks4, or socks5\n"
-"  proxyport    - port number of the proxy\n"
-"  proxyuserpwd - A <user>:<pass> to use for authentication\n"
-"  referer      - Referer URL to use for the request\n"
-"  useragent    - UserAgent string to use\n"
-"  userpwd      - A <user>:<pass> to use for authentication\n"
-"  hashcompat   - Result data will be compatible for use with HASH()\n"
+"  cookie         - Send cookie with request [none]\n"
+"  conntimeout    - Number of seconds to wait for connection\n"
+"  dnstimeout     - Number of seconds to wait for DNS response\n"
+"  ftptext        - For FTP, force a text transfer (boolean)\n"
+"  ftptimeout     - For FTP, the server response timeout\n"
+"  header         - Retrieve header information (boolean)\n"
+"  httptimeout    - Number of seconds to wait for HTTP response\n"
+"  maxredirs      - Maximum number of redirects to follow\n"
+"  proxy          - Hostname or IP to use as a proxy\n"
+"  proxytype      - http, socks4, or socks5\n"
+"  proxyport      - port number of the proxy\n"
+"  proxyuserpwd   - A <user>:<pass> to use for authentication\n"
+"  referer        - Referer URL to use for the request\n"
+"  useragent      - UserAgent string to use\n"
+"  userpwd        - A <user>:<pass> to use for authentication\n"
+"  ssl_verifypeer - Whether to verify the peer certificate (boolean)\n"
+"  hashcompat     - Result data will be compatible for use with HASH()\n"
 "",
 	.read = acf_curlopt_read,
+	.read2 = acf_curlopt_read2,
 	.write = acf_curlopt_write,
 };
 

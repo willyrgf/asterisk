@@ -45,6 +45,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/cli.h"
 #include "asterisk/translate.h"
 #include "asterisk/manager.h"
+#include "asterisk/cel.h"
 #include "asterisk/chanvars.h"
 #include "asterisk/linkedlists.h"
 #include "asterisk/indications.h"
@@ -61,6 +62,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/slinfactory.h"
 #include "asterisk/audiohook.h"
 #include "asterisk/timing.h"
+#include "asterisk/autochan.h"
+#include "asterisk/stringfields.h"
 
 #ifdef HAVE_EPOLL
 #include <sys/epoll.h>
@@ -121,11 +124,16 @@ struct ast_chan_trace {
 #endif
 
 /*! \brief the list of registered channel types */
-static AST_LIST_HEAD_NOLOCK_STATIC(backends, chanlist);
+static AST_RWLIST_HEAD_STATIC(backends, chanlist);
 
-/*! \brief the list of channels we have. Note that the lock for this list is used for
-	both the channels list and the backends list.  */
-static AST_RWLIST_HEAD_STATIC(channels, ast_channel);
+#ifdef LOW_MEMORY
+#define NUM_CHANNEL_BUCKETS 61
+#else
+#define NUM_CHANNEL_BUCKETS 1567
+#endif
+
+/*! \brief All active channels on the system */
+static struct ao2_container *channels;
 
 /*! \brief map AST_CAUSE's to readable string representations 
  *
@@ -185,8 +193,10 @@ static const struct {
 struct ast_variable *ast_channeltype_list(void)
 {
 	struct chanlist *cl;
-	struct ast_variable *var=NULL, *prev = NULL;
-	AST_LIST_TRAVERSE(&backends, cl, list) {
+	struct ast_variable *var = NULL, *prev = NULL;
+
+	AST_RWLIST_RDLOCK(&backends);
+	AST_RWLIST_TRAVERSE(&backends, cl, list) {
 		if (prev)  {
 			if ((prev->next = ast_variable_new(cl->tech->type, cl->tech->description, "")))
 				prev = prev->next;
@@ -195,6 +205,8 @@ struct ast_variable *ast_channeltype_list(void)
 			prev = var;
 		}
 	}
+	AST_RWLIST_UNLOCK(&backends);
+
 	return var;
 }
 
@@ -223,17 +235,15 @@ static char *handle_cli_core_show_channeltypes(struct ast_cli_entry *e, int cmd,
 	ast_cli(a->fd, FORMAT, "Type", "Description",       "Devicestate", "Indications", "Transfer");
 	ast_cli(a->fd, FORMAT, "----------", "-----------", "-----------", "-----------", "--------");
 
-	AST_RWLIST_RDLOCK(&channels);
-
-	AST_LIST_TRAVERSE(&backends, cl, list) {
+	AST_RWLIST_RDLOCK(&backends);
+	AST_RWLIST_TRAVERSE(&backends, cl, list) {
 		ast_cli(a->fd, FORMAT, cl->tech->type, cl->tech->description,
 			(cl->tech->devicestate) ? "yes" : "no",
 			(cl->tech->indicate) ? "yes" : "no",
 			(cl->tech->transfer) ? "yes" : "no");
 		count_chan++;
 	}
-
-	AST_RWLIST_UNLOCK(&channels);
+	AST_RWLIST_UNLOCK(&backends);
 
 	ast_cli(a->fd, "----------\n%d channel drivers registered.\n", count_chan);
 
@@ -254,12 +264,14 @@ static char *complete_channeltypes(struct ast_cli_args *a)
 
 	wordlen = strlen(a->word);
 
-	AST_LIST_TRAVERSE(&backends, cl, list) {
+	AST_RWLIST_RDLOCK(&backends);
+	AST_RWLIST_TRAVERSE(&backends, cl, list) {
 		if (!strncasecmp(a->word, cl->tech->type, wordlen) && ++which > a->n) {
 			ret = ast_strdup(cl->tech->type);
 			break;
 		}
 	}
+	AST_RWLIST_UNLOCK(&backends);
 	
 	return ret;
 }
@@ -283,9 +295,9 @@ static char *handle_cli_core_show_channeltype(struct ast_cli_entry *e, int cmd, 
 	if (a->argc != 4)
 		return CLI_SHOWUSAGE;
 	
-	AST_RWLIST_RDLOCK(&channels);
+	AST_RWLIST_RDLOCK(&backends);
 
-	AST_LIST_TRAVERSE(&backends, cl, list) {
+	AST_RWLIST_TRAVERSE(&backends, cl, list) {
 		if (!strncasecmp(cl->tech->type, a->argv[3], strlen(cl->tech->type)))
 			break;
 	}
@@ -293,7 +305,7 @@ static char *handle_cli_core_show_channeltype(struct ast_cli_entry *e, int cmd, 
 
 	if (!cl) {
 		ast_cli(a->fd, "\n%s is not a registered channel driver.\n", a->argv[3]);
-		AST_RWLIST_UNLOCK(&channels);
+		AST_RWLIST_UNLOCK(&backends);
 		return CLI_FAILURE;
 	}
 
@@ -321,7 +333,8 @@ static char *handle_cli_core_show_channeltype(struct ast_cli_entry *e, int cmd, 
 		
 	);
 
-	AST_RWLIST_UNLOCK(&channels);
+	AST_RWLIST_UNLOCK(&backends);
+
 	return CLI_SUCCESS;
 }
 
@@ -343,7 +356,7 @@ static void ast_chan_trace_destroy_cb(void *data)
 }
 
 /*! \brief Datastore to put the linked list of ast_chan_trace and trace status */
-const struct ast_datastore_info ast_chan_trace_datastore_info = {
+static const struct ast_datastore_info ast_chan_trace_datastore_info = {
 	.type = "ChanTrace",
 	.destroy = ast_chan_trace_destroy_cb
 };
@@ -469,7 +482,7 @@ int ast_check_hangup(struct ast_channel *chan)
 	return 1;
 }
 
-static int ast_check_hangup_locked(struct ast_channel *chan)
+int ast_check_hangup_locked(struct ast_channel *chan)
 {
 	int res;
 	ast_channel_lock(chan);
@@ -478,30 +491,28 @@ static int ast_check_hangup_locked(struct ast_channel *chan)
 	return res;
 }
 
-/*! \brief Initiate system shutdown */
+static int ast_channel_softhangup_cb(void *obj, void *arg, int flags)
+{
+	struct ast_channel *chan = obj;
+
+	ast_softhangup(chan, AST_SOFTHANGUP_SHUTDOWN);
+
+	return 0;
+}
+
 void ast_begin_shutdown(int hangup)
 {
-	struct ast_channel *c;
 	shutting_down = 1;
+
 	if (hangup) {
-		AST_RWLIST_RDLOCK(&channels);
-		AST_RWLIST_TRAVERSE(&channels, c, chan_list) {
-			ast_softhangup(c, AST_SOFTHANGUP_SHUTDOWN);
-		}
-		AST_RWLIST_UNLOCK(&channels);
+		ao2_callback(channels, OBJ_NODATA | OBJ_MULTIPLE, ast_channel_softhangup_cb, NULL);
 	}
 }
 
 /*! \brief returns number of active/allocated channels */
 int ast_active_channels(void)
 {
-	struct ast_channel *c;
-	int cnt = 0;
-	AST_RWLIST_RDLOCK(&channels);
-	AST_RWLIST_TRAVERSE(&channels, c, chan_list)
-		cnt++;
-	AST_RWLIST_UNLOCK(&channels);
-	return cnt;
+	return channels ? ao2_container_count(channels) : 0;
 }
 
 /*! \brief Cancel a shutdown in progress */
@@ -557,28 +568,29 @@ int ast_channel_register(const struct ast_channel_tech *tech)
 {
 	struct chanlist *chan;
 
-	AST_RWLIST_WRLOCK(&channels);
+	AST_RWLIST_WRLOCK(&backends);
 
-	AST_LIST_TRAVERSE(&backends, chan, list) {
+	AST_RWLIST_TRAVERSE(&backends, chan, list) {
 		if (!strcasecmp(tech->type, chan->tech->type)) {
 			ast_log(LOG_WARNING, "Already have a handler for type '%s'\n", tech->type);
-			AST_RWLIST_UNLOCK(&channels);
+			AST_RWLIST_UNLOCK(&backends);
 			return -1;
 		}
 	}
 	
 	if (!(chan = ast_calloc(1, sizeof(*chan)))) {
-		AST_RWLIST_UNLOCK(&channels);
+		AST_RWLIST_UNLOCK(&backends);
 		return -1;
 	}
 	chan->tech = tech;
-	AST_LIST_INSERT_HEAD(&backends, chan, list);
+	AST_RWLIST_INSERT_HEAD(&backends, chan, list);
 
 	ast_debug(1, "Registered handler for '%s' (%s)\n", chan->tech->type, chan->tech->description);
 
 	ast_verb(2, "Registered channel type '%s' (%s)\n", chan->tech->type, chan->tech->description);
 
-	AST_RWLIST_UNLOCK(&channels);
+	AST_RWLIST_UNLOCK(&backends);
+
 	return 0;
 }
 
@@ -589,9 +601,9 @@ void ast_channel_unregister(const struct ast_channel_tech *tech)
 
 	ast_debug(1, "Unregistering channel type '%s'\n", tech->type);
 
-	AST_RWLIST_WRLOCK(&channels);
+	AST_RWLIST_WRLOCK(&backends);
 
-	AST_LIST_TRAVERSE_SAFE_BEGIN(&backends, chan, list) {
+	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&backends, chan, list) {
 		if (chan->tech == tech) {
 			AST_LIST_REMOVE_CURRENT(list);
 			ast_free(chan);
@@ -601,7 +613,7 @@ void ast_channel_unregister(const struct ast_channel_tech *tech)
 	}
 	AST_LIST_TRAVERSE_SAFE_END;
 
-	AST_RWLIST_UNLOCK(&channels);
+	AST_RWLIST_UNLOCK(&backends);
 }
 
 /*! \brief Get handle to channel driver based on name */
@@ -610,16 +622,16 @@ const struct ast_channel_tech *ast_get_channel_tech(const char *name)
 	struct chanlist *chanls;
 	const struct ast_channel_tech *ret = NULL;
 
-	AST_RWLIST_RDLOCK(&channels);
+	AST_RWLIST_RDLOCK(&backends);
 
-	AST_LIST_TRAVERSE(&backends, chanls, list) {
+	AST_RWLIST_TRAVERSE(&backends, chanls, list) {
 		if (!strcasecmp(name, chanls->tech->type)) {
 			ret = chanls->tech;
 			break;
 		}
 	}
 
-	AST_RWLIST_UNLOCK(&channels);
+	AST_RWLIST_UNLOCK(&backends);
 	
 	return ret;
 }
@@ -766,14 +778,20 @@ static const struct ast_channel_tech null_tech = {
 	.description = "Null channel (should not see this)",
 };
 
+static void ast_channel_destructor(void *obj);
+static void ast_dummy_channel_destructor(void *obj);
+
 /*! \brief Create a new channel structure */
-struct ast_channel *ast_channel_alloc(int needqueue, int state, const char *cid_num, const char *cid_name, const char *acctcode, const char *exten, const char *context, const int amaflag, const char *name_fmt, ...)
+static struct ast_channel * attribute_malloc __attribute__((format(printf, 13, 0)))
+__ast_channel_alloc_ap(int needqueue, int state, const char *cid_num, const char *cid_name,
+		       const char *acctcode, const char *exten, const char *context,
+		       const char *linkedid, const int amaflag, const char *file, int line,
+		       const char *function, const char *name_fmt, va_list ap1, va_list ap2)
 {
 	struct ast_channel *tmp;
 	int x;
 	int flags;
 	struct varshead *headp;
-	va_list ap1, ap2;
 
 	/* If shutting down, don't allocate any new channels */
 	if (shutting_down) {
@@ -781,36 +799,37 @@ struct ast_channel *ast_channel_alloc(int needqueue, int state, const char *cid_
 		return NULL;
 	}
 
-	if (!(tmp = ast_calloc(1, sizeof(*tmp))))
+#if defined(REF_DEBUG)
+	if (!(tmp = __ao2_alloc_debug(sizeof(*tmp), ast_channel_destructor, "", file, line, function, 1))) {
 		return NULL;
+	}
+#elif defined(__AST_DEBUG_MALLOC)
+	if (!(tmp = __ao2_alloc_debug(sizeof(*tmp), ast_channel_destructor, "", file, line, function, 0))) {
+		return NULL;
+	}
+#else
+	if (!(tmp = ao2_alloc(sizeof(*tmp), ast_channel_destructor))) {
+		return NULL;
+	}
+#endif
 
 	if (!(tmp->sched = sched_context_create())) {
 		ast_log(LOG_WARNING, "Channel allocation failed: Unable to create schedule context\n");
-		ast_free(tmp);
-		return NULL;
+		return ast_channel_unref(tmp);
 	}
 	
 	if ((ast_string_field_init(tmp, 128))) {
-		sched_context_destroy(tmp->sched);
-		ast_free(tmp);
-		return NULL;
+		return ast_channel_unref(tmp);
 	}
 
 	if (cid_name) {
 		if (!(tmp->cid.cid_name = ast_strdup(cid_name))) {
-			ast_string_field_free_memory(tmp);
-			sched_context_destroy(tmp->sched);
-			ast_free(tmp);
-			return NULL;
+			return ast_channel_unref(tmp);
 		}
 	}
 	if (cid_num) {
 		if (!(tmp->cid.cid_num = ast_strdup(cid_num))) {
-			ast_string_field_free_memory(tmp);
-			sched_context_destroy(tmp->sched);
-			ast_free(tmp->cid.cid_name);
-			ast_free(tmp);
-			return NULL;
+			return ast_channel_unref(tmp);
 		}
 	}
 
@@ -842,6 +861,8 @@ alertpipe_failed:
 
 			sched_context_destroy(tmp->sched);
 			ast_string_field_free_memory(tmp);
+			ast_free(tmp->cid.cid_name);
+			ast_free(tmp->cid.cid_num);
 			ast_free(tmp);
 			return NULL;
 		} else {
@@ -884,7 +905,14 @@ alertpipe_failed:
 		ast_string_field_build(tmp, uniqueid, "%s-%li.%d", ast_config_AST_SYSTEM_NAME, 
 				       (long) time(NULL), ast_atomic_fetchadd_int(&uniqueint, 1));
 	}
-	
+
+	if (!ast_strlen_zero(linkedid)) {
+		ast_string_field_set(tmp, linkedid, linkedid);
+	}
+	else {
+		ast_string_field_set(tmp, linkedid, tmp->uniqueid);
+	}
+
 	if (!ast_strlen_zero(name_fmt)) {
 		/* Almost every channel is calling this function, and setting the name via the ast_string_field_build() call.
 		 * And they all use slightly different formats for their name string.
@@ -893,11 +921,7 @@ alertpipe_failed:
 		 * uses them to build the string, instead of forming the va_lists internally from the vararg ... list.
 		 * This new function was written so this can be accomplished.
 		 */
-		va_start(ap1, name_fmt);
-		va_start(ap2, name_fmt);
 		ast_string_field_build_va(tmp, name, name_fmt, ap1, ap2);
-		va_end(ap1);
-		va_end(ap2);
 	}
 
 	/* Reminder for the future: under what conditions do we NOT want to track cdrs on channels? */
@@ -924,25 +948,25 @@ alertpipe_failed:
 		strcpy(tmp->exten, "s");
 
 	tmp->priority = 1;
-		
+
 	tmp->cdr = ast_cdr_alloc();
 	ast_cdr_init(tmp->cdr, tmp);
 	ast_cdr_start(tmp->cdr);
-	
+
+	ast_cel_report_event(tmp, AST_CEL_CHANNEL_START, NULL, NULL, NULL);
+
 	headp = &tmp->varshead;
 	AST_LIST_HEAD_INIT_NOLOCK(headp);
 	
-	ast_mutex_init(&tmp->lock_dont_use);
-	
 	AST_LIST_HEAD_INIT_NOLOCK(&tmp->datastores);
+
+	AST_LIST_HEAD_INIT_NOLOCK(&tmp->autochans);
 	
 	ast_string_field_set(tmp, language, defaultlanguage);
 
 	tmp->tech = &null_tech;
 
-	AST_RWLIST_WRLOCK(&channels);
-	AST_RWLIST_INSERT_HEAD(&channels, tmp, chan_list);
-	AST_RWLIST_UNLOCK(&channels);
+	ao2_link(channels, tmp);
 
 	/*\!note
 	 * and now, since the channel structure is built, and has its name, let's
@@ -975,56 +999,138 @@ alertpipe_failed:
 	return tmp;
 }
 
-/*! \brief Queue an outgoing media frame */
-static int __ast_queue_frame(struct ast_channel *chan, struct ast_frame *fin, int head)
+struct ast_channel *__ast_channel_alloc(int needqueue, int state, const char *cid_num,
+					const char *cid_name, const char *acctcode,
+					const char *exten, const char *context,
+					const char *linkedid, const int amaflag,
+					const char *file, int line, const char *function,
+					const char *name_fmt, ...)
+{
+	va_list ap1, ap2;
+	struct ast_channel *result;
+
+	va_start(ap1, name_fmt);
+	va_start(ap2, name_fmt);
+	result = __ast_channel_alloc_ap(needqueue, state, cid_num, cid_name, acctcode, exten, context,
+					linkedid, amaflag, file, line, function, name_fmt, ap1, ap2);
+	va_end(ap1);
+	va_end(ap2);
+
+	return result;
+}
+
+/* only do the minimum amount of work needed here to make a channel
+ * structure that can be used to expand channel vars */
+#if defined(REF_DEBUG) || defined(__AST_DEBUG_MALLOC)
+struct ast_channel *__ast_dummy_channel_alloc(const char *file, int line, const char *function)
+#else
+struct ast_channel *ast_dummy_channel_alloc(void)
+#endif
+{
+	struct ast_channel *tmp;
+	struct varshead *headp;
+
+#if defined(REF_DEBUG)
+	if (!(tmp = __ao2_alloc_debug(sizeof(*tmp), ast_dummy_channel_destructor, "dummy channel", file, line, function, 1))) {
+		return NULL;
+	}
+#elif defined(__AST_DEBUG_MALLOC)
+	if (!(tmp = __ao2_alloc_debug(sizeof(*tmp), ast_dummy_channel_destructor, "dummy channel", file, line, function, 0))) {
+		return NULL;
+	}
+#else
+	if (!(tmp = ao2_alloc(sizeof(*tmp), ast_dummy_channel_destructor))) {
+		return NULL;
+	}
+#endif
+
+	if ((ast_string_field_init(tmp, 128))) {
+		ast_channel_unref(tmp);
+		return NULL;
+	}
+
+	headp = &tmp->varshead;
+	AST_LIST_HEAD_INIT_NOLOCK(headp);
+
+	return tmp;
+}
+
+static int __ast_queue_frame(struct ast_channel *chan, struct ast_frame *fin, int head, struct ast_frame *after)
 {
 	struct ast_frame *f;
 	struct ast_frame *cur;
 	int blah = 1;
-	int qlen = 0;
-
-	/* Build us a copy and free the original one */
-	if (!(f = ast_frdup(fin))) {
-		return -1;
-	}
+	unsigned int new_frames = 0;
+	unsigned int new_voice_frames = 0;
+	unsigned int queued_frames = 0;
+	unsigned int queued_voice_frames = 0;
+	AST_LIST_HEAD_NOLOCK(, ast_frame) frames;
 
 	ast_channel_lock(chan);
 
 	/* See if the last frame on the queue is a hangup, if so don't queue anything */
-	if ((cur = AST_LIST_LAST(&chan->readq)) && (cur->frametype == AST_FRAME_CONTROL) && (cur->subclass == AST_CONTROL_HANGUP)) {
-		ast_frfree(f);
+	if ((cur = AST_LIST_LAST(&chan->readq)) &&
+	    (cur->frametype == AST_FRAME_CONTROL) &&
+	    (cur->subclass == AST_CONTROL_HANGUP)) {
 		ast_channel_unlock(chan);
 		return 0;
 	}
 
-	/* Count how many frames exist on the queue */
-	AST_LIST_TRAVERSE(&chan->readq, cur, frame_list) {
-		qlen++;
-	}
+	/* Build copies of all the frames and count them */
+	AST_LIST_HEAD_INIT_NOLOCK(&frames);
+	for (cur = fin; cur; cur = AST_LIST_NEXT(cur, frame_list)) {
+		if (!(f = ast_frdup(cur))) {
+			ast_frfree(AST_LIST_FIRST(&frames));
+			return -1;
+		}
 
-	/* Allow up to 96 voice frames outstanding, and up to 128 total frames */
-	if (((fin->frametype == AST_FRAME_VOICE) && (qlen > 96)) || (qlen  > 128)) {
-		if (fin->frametype != AST_FRAME_VOICE) {
-			ast_log(LOG_WARNING, "Exceptionally long queue length queuing to %s\n", chan->name);
-			ast_assert(fin->frametype == AST_FRAME_VOICE);
-		} else {
-			ast_debug(1, "Dropping voice to exceptionally long queue on %s\n", chan->name);
-			ast_frfree(f);
-			ast_channel_unlock(chan);
-			return 0;
+		AST_LIST_INSERT_TAIL(&frames, f, frame_list);
+		new_frames++;
+		if (f->frametype == AST_FRAME_VOICE) {
+			new_voice_frames++;
 		}
 	}
 
-	if (head) {
-		AST_LIST_INSERT_HEAD(&chan->readq, f, frame_list);
+	/* Count how many frames exist on the queue */
+	AST_LIST_TRAVERSE(&chan->readq, cur, frame_list) {
+		queued_frames++;
+		if (cur->frametype == AST_FRAME_VOICE) {
+			queued_voice_frames++;
+		}
+	}
+
+	if ((queued_frames + new_frames) > 128) {
+		ast_log(LOG_WARNING, "Exceptionally long queue length queuing to %s\n", chan->name);
+		while ((f = AST_LIST_REMOVE_HEAD(&frames, frame_list))) {
+			ast_frfree(f);
+		}
+		ast_channel_unlock(chan);
+		return 0;
+	}
+
+	if ((queued_voice_frames + new_voice_frames) > 96) {
+		ast_log(LOG_WARNING, "Exceptionally long voice queue length queuing to %s\n", chan->name);
+		while ((f = AST_LIST_REMOVE_HEAD(&frames, frame_list))) {
+			ast_frfree(f);
+		}
+		ast_channel_unlock(chan);
+		return 0;
+	}
+
+	if (after) {
+		AST_LIST_INSERT_LIST_AFTER(&chan->readq, &frames, after, frame_list);
 	} else {
-		AST_LIST_INSERT_TAIL(&chan->readq, f, frame_list);
+		if (head) {
+			AST_LIST_APPEND_LIST(&frames, &chan->readq, frame_list);
+			AST_LIST_HEAD_INIT_NOLOCK(&chan->readq);
+		}
+		AST_LIST_APPEND_LIST(&chan->readq, &frames, frame_list);
 	}
 
 	if (chan->alertpipe[1] > -1) {
-		if (write(chan->alertpipe[1], &blah, sizeof(blah)) != sizeof(blah)) {
-			ast_log(LOG_WARNING, "Unable to write to alert pipe on %s, frametype/subclass %d/%d (qlen = %d): %s!\n",
-				chan->name, f->frametype, f->subclass, qlen, strerror(errno));
+		if (write(chan->alertpipe[1], &blah, new_frames * sizeof(blah)) != (new_frames * sizeof(blah))) {
+			ast_log(LOG_WARNING, "Unable to write to alert pipe on %s (qlen = %d): %s!\n",
+				chan->name, queued_frames, strerror(errno));
 		}
 	} else if (chan->timingfd > -1) {
 		ast_timer_enable_continuous(chan->timer);
@@ -1039,12 +1145,12 @@ static int __ast_queue_frame(struct ast_channel *chan, struct ast_frame *fin, in
 
 int ast_queue_frame(struct ast_channel *chan, struct ast_frame *fin)
 {
-	return __ast_queue_frame(chan, fin, 0);
+	return __ast_queue_frame(chan, fin, 0, NULL);
 }
 
 int ast_queue_frame_head(struct ast_channel *chan, struct ast_frame *fin)
 {
-	return __ast_queue_frame(chan, fin, 1);
+	return __ast_queue_frame(chan, fin, 1, NULL);
 }
 
 /*! \brief Queue a hangup frame for channel */
@@ -1121,167 +1227,200 @@ void ast_channel_undefer_dtmf(struct ast_channel *chan)
 		ast_clear_flag(chan, AST_FLAG_DEFER_DTMF);
 }
 
-/*!
- * \brief Helper function to find channels.
- *
- * It supports these modes:
- *
- * prev != NULL : get channel next in list after prev
- * name != NULL : get channel with matching name
- * name != NULL && namelen != 0 : get channel whose name starts with prefix
- * exten != NULL : get channel whose exten or macroexten matches
- * context != NULL && exten != NULL : get channel whose context or macrocontext
- *
- * It returns with the channel's lock held. If getting the individual lock fails,
- * unlock and retry quickly up to 10 times, then give up.
- *
- * \note XXX Note that this code has cost O(N) because of the need to verify
- * that the object is still on the global list.
- *
- * \note XXX also note that accessing fields (e.g. c->name in ast_log())
- * can only be done with the lock held or someone could delete the
- * object while we work on it. This causes some ugliness in the code.
- * Note that removing the first ast_log() may be harmful, as it would
- * shorten the retry period and possibly cause failures.
- * We should definitely go for a better scheme that is deadlock-free.
- */
-static struct ast_channel *channel_find_locked(const struct ast_channel *prev,
-					       const char *name, const int namelen,
-					       const char *context, const char *exten)
+struct ast_channel *ast_channel_callback(ao2_callback_data_fn *cb_fn, void *arg,
+		void *data, int ao2_flags)
 {
-	const char *msg = prev ? "deadlock" : "initial deadlock";
-	int retries;
-	struct ast_channel *c;
-	const struct ast_channel *_prev = prev;
+	return ao2_callback_data(channels, ao2_flags, cb_fn, arg, data);
+}
 
-	for (retries = 0; retries < 200; retries++) {
-		int done;
-		/* Reset prev on each retry.  See note below for the reason. */
-		prev = _prev;
-		AST_RWLIST_RDLOCK(&channels);
-		AST_RWLIST_TRAVERSE(&channels, c, chan_list) {
-			if (prev) {	/* look for last item, first, before any evaluation */
-				if (c != prev)	/* not this one */
-					continue;
-				/* found, prepare to return c->next */
-				if ((c = AST_RWLIST_NEXT(c, chan_list)) == NULL) break;
-				/*!\note
-				 * We're done searching through the list for the previous item.
-				 * Any item after this point, we want to evaluate for a match.
-				 * If we didn't set prev to NULL here, then we would only
-				 * return matches for the first matching item (since the above
-				 * "if (c != prev)" would not permit any other potential
-				 * matches to reach the additional matching logic, below).
-				 * Instead, it would just iterate until it once again found the
-				 * original match, then iterate down to the end of the list and
-				 * quit.
-				 */
-				prev = NULL;
-			}
-			if (name) { /* want match by name */
-				if ((!namelen && strcasecmp(c->name, name) && strcmp(c->uniqueid, name)) ||
-				    (namelen && strncasecmp(c->name, name, namelen)))
-					continue;	/* name match failed */
-			} else if (exten) {
-				if (context && strcasecmp(c->context, context) &&
-				    strcasecmp(c->macrocontext, context))
-					continue;	/* context match failed */
-				if (strcasecmp(c->exten, exten) &&
-				    strcasecmp(c->macroexten, exten))
-					continue;	/* exten match failed */
-			}
-			/* if we get here, c points to the desired record */
-			break;
-		}
-		/* exit if chan not found or mutex acquired successfully */
-		/* this is slightly unsafe, as we _should_ hold the lock to access c->name */
-		done = c == NULL || ast_channel_trylock(c) == 0;
-		if (!done) {
-			ast_debug(1, "Avoiding %s for channel '%p'\n", msg, c);
-			if (retries == 199) {
-				/* We are about to fail due to a deadlock, so report this
-				 * while we still have the list lock.
-				 */
-				ast_debug(1, "Failure, could not lock '%p' after %d retries!\n", c, retries);
-				/* As we have deadlocked, we will skip this channel and
-				 * see if there is another match.
-				 * NOTE: No point doing this for a full-name match,
-				 * as there can be no more matches.
-				 */
-				if (!(name && !namelen)) {
-					prev = c;
-					retries = -1;
-				}
-			}
-		}
-		AST_RWLIST_UNLOCK(&channels);
-		if (done)
-			return c;
-		/* If we reach this point we basically tried to lock a channel and failed. Instead of
-		 * starting from the beginning of the list we can restore our saved pointer to the previous
-		 * channel and start from there.
-		 */
-		prev = _prev;
-		usleep(1);	/* give other threads a chance before retrying */
+struct ast_channel_iterator {
+	struct ao2_iterator i;
+	const char *name;
+	size_t name_len;
+	const char *exten;
+	const char *context;
+};
+
+struct ast_channel_iterator *ast_channel_iterator_destroy(struct ast_channel_iterator *i)
+{
+	if (i->name) {
+		ast_free((void *) i->name);
+		i->name = NULL;
 	}
+
+	if (i->exten) {
+		ast_free((void *) i->exten);
+		i->exten = NULL;
+	}
+
+	if (i->context) {
+		ast_free((void *) i->context);
+		i->context = NULL;
+	}
+
+	ast_free(i);
 
 	return NULL;
 }
 
-/*! \brief Browse channels in use */
-struct ast_channel *ast_channel_walk_locked(const struct ast_channel *prev)
+static struct ast_channel_iterator *ast_channel_iterator_new(int ao2_flags, const char *name,
+	size_t name_len, const char *exten, const char *context)
 {
-	return channel_find_locked(prev, NULL, 0, NULL, NULL);
-}
+	struct ast_channel_iterator *i;
 
-/*! \brief Get channel by name and lock it */
-struct ast_channel *ast_get_channel_by_name_locked(const char *name)
-{
-	return channel_find_locked(NULL, name, 0, NULL, NULL);
-}
-
-/*! \brief Get channel by name prefix and lock it */
-struct ast_channel *ast_get_channel_by_name_prefix_locked(const char *name, const int namelen)
-{
-	return channel_find_locked(NULL, name, namelen, NULL, NULL);
-}
-
-/*! \brief Get next channel by name prefix and lock it */
-struct ast_channel *ast_walk_channel_by_name_prefix_locked(const struct ast_channel *chan, const char *name,
-							   const int namelen)
-{
-	return channel_find_locked(chan, name, namelen, NULL, NULL);
-}
-
-/*! \brief Get channel by exten (and optionally context) and lock it */
-struct ast_channel *ast_get_channel_by_exten_locked(const char *exten, const char *context)
-{
-	return channel_find_locked(NULL, NULL, 0, context, exten);
-}
-
-/*! \brief Get next channel by exten (and optionally context) and lock it */
-struct ast_channel *ast_walk_channel_by_exten_locked(const struct ast_channel *chan, const char *exten,
-						     const char *context)
-{
-	return channel_find_locked(chan, NULL, 0, context, exten);
-}
-
-/*! \brief Search for a channel based on the passed channel matching callback (first match) and return it, locked */
-struct ast_channel *ast_channel_search_locked(int (*is_match)(struct ast_channel *, void *), void *data)
-{
-	struct ast_channel *c = NULL;
-
-	AST_RWLIST_RDLOCK(&channels);
-	AST_RWLIST_TRAVERSE(&channels, c, chan_list) {
-		ast_channel_lock(c);
-		if (is_match(c, data)) {
-			break;
-		}
-		ast_channel_unlock(c);
+	if (!(i = ast_calloc(1, sizeof(*i)))) {
+		return NULL;
 	}
-	AST_RWLIST_UNLOCK(&channels);
 
-	return c;
+	if (!ast_strlen_zero(exten) && !(i->exten = ast_strdup(exten))) {
+		goto return_error;
+	}
+
+	if (!ast_strlen_zero(context) && !(i->context = ast_strdup(context))) {
+		goto return_error;
+	}
+
+	if (!ast_strlen_zero(name) && !(i->name = ast_strdup(name))) {
+		goto return_error;
+	}
+
+	i->name_len = name_len;
+
+	i->i = ao2_iterator_init(channels, ao2_flags);
+
+	return i;
+
+return_error:
+	if (i->exten) {
+		ast_free((void *) i->exten);
+		i->exten = NULL;
+	}
+
+	if (i->context) {
+		ast_free((void *) i->context);
+		i->context = NULL;
+	}
+
+	ast_free(i);
+
+	return NULL;
+}
+
+struct ast_channel_iterator *ast_channel_iterator_by_exten_new(int ao2_flags, const char *exten,
+	const char *context)
+{
+	return ast_channel_iterator_new(ao2_flags, NULL, 0, exten, context);
+}
+
+struct ast_channel_iterator *ast_channel_iterator_by_name_new(int ao2_flags, const char *name,
+	size_t name_len)
+{
+	return ast_channel_iterator_new(ao2_flags, name, name_len, NULL, NULL);
+}
+
+struct ast_channel_iterator *ast_channel_iterator_all_new(int ao2_flags)
+{
+	return ast_channel_iterator_new(ao2_flags, NULL, 0, NULL, NULL);
+}
+
+/*!
+ * \note This function will be reduced to 1 line of code once ao2 supports
+ * returning multiple objects from an ao2_callback() using OBJ_MULTIPLE.
+ */
+struct ast_channel *ast_channel_iterator_next(struct ast_channel_iterator *i)
+{
+	struct ast_channel *chan = NULL;
+
+	for (; (chan = ao2_iterator_next(&i->i));
+			ast_channel_unlock(chan), ast_channel_unref(chan)) {
+
+		ast_channel_lock(chan);
+
+		if (i->name) { /* match by name */
+			if (!i->name_len) {
+				if (strcasecmp(chan->name, i->name) && strcasecmp(chan->uniqueid, i->name)) {
+					continue; /* name match failed */
+				}
+			} else {
+				if (strncasecmp(chan->name, i->name, i->name_len) &&
+						strncasecmp(chan->uniqueid, i->name, i->name_len)) {
+					continue; /* name match failed */
+				}
+			}
+		} else if (i->exten) {
+			if (i->context && strcasecmp(chan->context, i->context) &&
+					strcasecmp(chan->macrocontext, i->context)) {
+				continue; /* context match failed */
+			}
+
+			if (strcasecmp(chan->exten, i->exten) &&
+					strcasecmp(chan->macroexten, i->exten)) {
+				continue; /* exten match failed */
+			}
+		}
+
+		ast_channel_unlock(chan);
+
+		break; /* chan points to the next chan desired. */
+	}
+
+	return chan;
+}
+
+static struct ast_channel *ast_channel_get_full(const char *name, size_t name_len,
+	const char *exten, const char *context)
+{
+	struct ast_channel tmp_chan = {
+		.name = name,
+		/* This is sort of a hack.  Basically, we're using an arbitrary field
+		 * in ast_channel to pass the name_len for a prefix match.  If this
+		 * gets changed, then the compare callback must be changed, too. */
+		.rings = name_len,
+	};
+	struct ast_channel *chan;
+
+	if (exten) {
+		ast_copy_string(tmp_chan.exten, exten, sizeof(tmp_chan.exten));
+	}
+
+	if (context) {
+		ast_copy_string(tmp_chan.context, context, sizeof(tmp_chan.context));
+	}
+
+	if ((chan = ao2_find(channels, &tmp_chan, !ast_strlen_zero(name) ? OBJ_POINTER : 0))) {
+		return chan;
+	}
+
+	if (!name) {
+		return NULL;
+	}
+
+	/* If name was specified, but the result was NULL, 
+	 * try a search on uniqueid, instead. */
+
+	{
+		struct ast_channel tmp_chan2 = {
+			.uniqueid = name,
+			.rings = name_len,
+		};
+
+		return ao2_find(channels, &tmp_chan2, 0);
+	}
+}
+
+struct ast_channel *ast_channel_get_by_name(const char *name)
+{
+	return ast_channel_get_full(name, 0, NULL, NULL);
+}
+
+struct ast_channel *ast_channel_get_by_name_prefix(const char *name, size_t name_len)
+{
+	return ast_channel_get_full(name, name_len, NULL, NULL);
+}
+
+struct ast_channel *ast_channel_get_by_exten(const char *exten, const char *context)
+{
+	return ast_channel_get_full(NULL, 0, exten, context);
 }
 
 /*! \brief Wait, look for hangups and condition arg */
@@ -1324,6 +1463,13 @@ static void free_cid(struct ast_callerid *cid)
 	if (cid->cid_rdnis)
 		ast_free(cid->cid_rdnis);
 	cid->cid_dnid = cid->cid_num = cid->cid_name = cid->cid_ani = cid->cid_rdnis = NULL;
+}
+
+struct ast_channel *ast_channel_release(struct ast_channel *chan)
+{
+	/* Safe, even if already unlinked. */
+	ao2_unlink(channels, chan);
+	return ast_channel_unref(chan);
 }
 
 /*!
@@ -1450,6 +1596,13 @@ static void ast_party_id_free(struct ast_party_id *doomed)
 		ast_free(doomed->name);
 		doomed->name = NULL;
 	}
+}
+
+void ast_party_caller_init(struct ast_party_caller *init)
+{
+	ast_party_id_init(&init->id);
+	init->ani = NULL;
+	init->ani2 = 0;
 }
 
 void ast_party_caller_copy(struct ast_callerid *dest, const struct ast_callerid *src)
@@ -1600,8 +1753,9 @@ void ast_party_redirecting_free(struct ast_party_redirecting *doomed)
 }
 
 /*! \brief Free a channel structure */
-void ast_channel_free(struct ast_channel *chan)
+static void ast_channel_destructor(void *obj)
 {
+	struct ast_channel *chan = obj;
 	int fd;
 #ifdef HAVE_EPOLL
 	int i;
@@ -1611,18 +1765,11 @@ void ast_channel_free(struct ast_channel *chan)
 	struct varshead *headp;
 	struct ast_datastore *datastore = NULL;
 	char name[AST_CHANNEL_NAME], *dashptr;
-	
-	headp=&chan->varshead;
-	
-	AST_RWLIST_WRLOCK(&channels);
-	if (!AST_RWLIST_REMOVE(&channels, chan, chan_list)) {
-		AST_RWLIST_UNLOCK(&channels);
-		ast_log(LOG_ERROR, "Unable to find channel in list to free. Assuming it has already been done.\n");
-	}
-	/* Lock and unlock the channel just to be sure nobody has it locked still
-	   due to a reference retrieved from the channel list. */
-	ast_channel_lock(chan);
-	ast_channel_unlock(chan);
+
+	headp = &chan->varshead;
+
+	ast_cel_report_event(chan, AST_CEL_CHANNEL_END, NULL, NULL, NULL);
+	ast_cel_check_retire_linkedid(chan);
 
 	/* Get rid of each of the data stores on the channel */
 	while ((datastore = AST_LIST_REMOVE_HEAD(&chan->datastores, entry)))
@@ -1705,16 +1852,36 @@ void ast_channel_free(struct ast_channel *chan)
 		chan->zone = ast_tone_zone_unref(chan->zone);
 	}
 
-	ast_mutex_destroy(&chan->lock_dont_use);
-
 	ast_string_field_free_memory(chan);
-	ast_free(chan);
-	AST_RWLIST_UNLOCK(&channels);
 
 	/* Queue an unknown state, because, while we know that this particular
 	 * instance is dead, we don't know the state of all other possible
 	 * instances. */
 	ast_devstate_changed_literal(AST_DEVICE_UNKNOWN, name);
+}
+
+/*! \brief Free a dummy channel structure */
+static void ast_dummy_channel_destructor(void *obj)
+{
+	struct ast_channel *chan = obj;
+	struct ast_var_t *vardata;
+	struct varshead *headp;
+
+	headp = &chan->varshead;
+
+	free_cid(&chan->cid);
+
+	/* loop over the variables list, freeing all data and deleting list items */
+	/* no need to lock the list, as the channel is already locked */
+	while ((vardata = AST_LIST_REMOVE_HEAD(headp, entries)))
+		ast_var_delete(vardata);
+
+	if (chan->cdr) {
+		ast_cdr_discard(chan->cdr);
+		chan->cdr = NULL;
+	}
+
+	ast_string_field_free_memory(chan);
 }
 
 struct ast_datastore *ast_channel_datastore_alloc(const struct ast_datastore_info *info, const char *uid)
@@ -1899,10 +2066,30 @@ static void free_translation(struct ast_channel *clonechan)
 	clonechan->rawreadformat = clonechan->nativeformats;
 }
 
+void ast_set_hangupsource(struct ast_channel *chan, const char *source, int force)
+{
+	struct ast_channel *bridge;
+
+	ast_channel_lock(chan);
+	if (force || ast_strlen_zero(chan->hangupsource)) {
+		ast_string_field_set(chan, hangupsource, source);
+	}
+	bridge = ast_bridged_channel(chan);
+	ast_channel_unlock(chan);
+
+	if (bridge && (force || ast_strlen_zero(bridge->hangupsource))) {
+		ast_channel_lock(bridge);
+		ast_string_field_set(chan, hangupsource, source);
+		ast_channel_unlock(bridge);
+	}
+}
+
 /*! \brief Hangup a channel */
 int ast_hangup(struct ast_channel *chan)
 {
 	int res = 0;
+	struct ast_cdr *cdr = NULL;
+	char extra_str[64]; /* used for cel logging below */
 
 	/* Don't actually hang up a channel that will masquerade as someone else, or
 	   if someone is going to masquerade as us */
@@ -1947,12 +2134,21 @@ int ast_hangup(struct ast_channel *chan)
 		sched_context_destroy(chan->sched);
 		chan->sched = NULL;
 	}
-	
+
 	if (chan->generatordata)	/* Clear any tone stuff remaining */
 		if (chan->generator && chan->generator->release)
 			chan->generator->release(chan, chan->generatordata);
 	chan->generatordata = NULL;
 	chan->generator = NULL;
+
+	snprintf(extra_str, sizeof(extra_str), "%d,%s,%s", chan->hangupcause, chan->hangupsource, S_OR(pbx_builtin_getvar_helper(chan, "DIALSTATUS"), ""));
+	ast_cel_report_event(chan, AST_CEL_HANGUP, NULL, extra_str, NULL);
+
+	if (chan->cdr) {		/* End the CDR if it hasn't already */
+		ast_cdr_end(chan->cdr);
+		cdr = chan->cdr;
+		chan->cdr = NULL;
+	}
 	if (ast_test_flag(chan, AST_FLAG_BLOCKING)) {
 		ast_log(LOG_WARNING, "Hard hangup called by thread %ld on %s, while fd "
 					"is blocked by thread %ld in procedure %s!  Expect a failure\n",
@@ -1986,13 +2182,15 @@ int ast_hangup(struct ast_channel *chan)
 	if (chan->cdr && !ast_test_flag(chan->cdr, AST_CDR_FLAG_BRIDGED) && 
 		!ast_test_flag(chan->cdr, AST_CDR_FLAG_POST_DISABLED) && 
 	    (chan->cdr->disposition != AST_CDR_NULL || ast_test_flag(chan->cdr, AST_CDR_FLAG_DIALED))) {
+		ast_channel_lock(chan);
 			
 		ast_cdr_end(chan->cdr);
 		ast_cdr_detach(chan->cdr);
 		chan->cdr = NULL;
+		ast_channel_unlock(chan);
 	}
-	
-	ast_channel_free(chan);
+
+	chan = ast_channel_release(chan);
 
 	return res;
 }
@@ -2028,9 +2226,11 @@ int ast_raw_answer(struct ast_channel *chan, int cdr_answer)
 		if (cdr_answer) {
 			ast_cdr_answer(chan->cdr);
 		}
+		ast_cel_report_event(chan, AST_CEL_ANSWER, NULL, NULL, NULL);
 		ast_channel_unlock(chan);
 		break;
 	case AST_STATE_UP:
+		ast_cel_report_event(chan, AST_CEL_ANSWER, NULL, NULL, NULL);
 		/* Calling ast_cdr_answer when it it has previously been called
 		 * is essentially a no-op, so it is safe.
 		 */
@@ -2842,22 +3042,27 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 		goto done;
 	}
 
-	if (chan->fdno == -1) {
-#ifdef AST_DEVMODE
-		ast_log(LOG_ERROR, "ast_read() called with no recorded file descriptor.\n");
-#else
-		ast_debug(2, "ast_read() called with no recorded file descriptor.\n");
-#endif
-		f = &ast_null_frame;
-		goto done;
-	}
-
 	/* Stop if we're a zombie or need a soft hangup */
 	if (ast_test_flag(chan, AST_FLAG_ZOMBIE) || ast_check_hangup(chan)) {
 		if (chan->generator)
 			ast_deactivate_generator(chan);
 		goto done;
 	}
+
+#ifdef AST_DEVMODE
+	/* 
+	 * The ast_waitfor() code records which of the channel's file descriptors reported that
+	 * data is available.  In theory, ast_read() should only be called after ast_waitfor()
+	 * reports that a channel has data available for reading.  However, there still may be
+	 * some edge cases throughout the code where ast_read() is called improperly.  This can
+	 * potentially cause problems, so if this is a developer build, make a lot of noise if
+	 * this happens so that it can be addressed. 
+	 */
+	if (chan->fdno == -1) {
+		ast_log(LOG_ERROR, "ast_read() called with no recorded file descriptor.\n");
+	}
+#endif
+
 	prestate = chan->_state;
 
 	/* Read and ignore anything on the alertpipe, but read only
@@ -2990,13 +3195,14 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 	chan->fdno = -1;
 
 	if (f) {
+		struct ast_frame *readq_tail = AST_LIST_LAST(&chan->readq);
+
 		/* if the channel driver returned more than one frame, stuff the excess
-		   into the readq for the next ast_read call (note that we can safely assume
-		   that the readq is empty, because otherwise we would not have called into
-		   the channel driver and f would be only a single frame)
+		   into the readq for the next ast_read call
 		*/
 		if (AST_LIST_NEXT(f, frame_list)) {
-			AST_LIST_HEAD_SET_NOLOCK(&chan->readq, AST_LIST_NEXT(f, frame_list));
+			ast_queue_frame(chan, AST_LIST_NEXT(f, frame_list));
+			ast_frfree(AST_LIST_NEXT(f, frame_list));
 			AST_LIST_NEXT(f, frame_list) = NULL;
 		}
 
@@ -3015,6 +3221,7 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 					/* Answer the CDR */
 					ast_setstate(chan, AST_STATE_UP);
 					/* removed a call to ast_cdr_answer(chan->cdr) from here. */
+					ast_cel_report_event(chan, AST_CEL_ANSWER, NULL, NULL, NULL);
 				}
 			}
 			break;
@@ -3216,12 +3423,30 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 					}
 				}
 
-				if (chan->readtrans && (f = ast_translate(chan->readtrans, f, 1)) == NULL)
+				if (chan->readtrans && (f = ast_translate(chan->readtrans, f, 1)) == NULL) {
 					f = &ast_null_frame;
-				else
-					/* Run generator sitting on the line if timing device not available
-					 * and synchronous generation of outgoing frames is necessary       */
-					ast_read_generator_actions(chan, f);
+				}
+
+				/* it is possible for the translation process on chan->readtrans to have
+				   produced multiple frames from the single input frame we passed it; if
+				   this happens, queue the additional frames *before* the frames we may
+				   have queued earlier. if the readq was empty, put them at the head of
+				   the queue, and if it was not, put them just after the frame that was
+				   at the end of the queue.
+				*/
+				if (AST_LIST_NEXT(f, frame_list)) {
+					if (!readq_tail) {
+						ast_queue_frame_head(chan, AST_LIST_NEXT(f, frame_list));
+					} else {
+						__ast_queue_frame(chan, AST_LIST_NEXT(f, frame_list), 0, readq_tail);
+					}
+					ast_frfree(AST_LIST_NEXT(f, frame_list));
+					AST_LIST_NEXT(f, frame_list) = NULL;
+				}
+
+				/* Run generator sitting on the line if timing device not available
+				* and synchronous generation of outgoing frames is necessary       */
+				ast_read_generator_actions(chan, f);
 			}
 		default:
 			/* Just pass it on! */
@@ -3291,10 +3516,11 @@ static int attribute_const is_visible_indication(enum ast_control_frame_type con
 	case AST_CONTROL_TAKEOFFHOOK:
 	case AST_CONTROL_ANSWER:
 	case AST_CONTROL_HANGUP:
-	case AST_CONTROL_T38:
 	case AST_CONTROL_CONNECTED_LINE:
 	case AST_CONTROL_REDIRECTING:
 	case AST_CONTROL_TRANSFER:
+	case AST_CONTROL_T38_PARAMETERS:
+	case _XXX_AST_CONTROL_T38:
 		break;
 
 	case AST_CONTROL_CONGESTION:
@@ -3355,6 +3581,7 @@ int ast_indicate_data(struct ast_channel *chan, int _condition,
 	default:
 		break;
 	}
+
 	if (chan->tech->indicate) {
 		/* See if the channel driver can handle this condition. */
 		res = chan->tech->indicate(chan, condition, data, datalen);
@@ -3364,7 +3591,7 @@ int ast_indicate_data(struct ast_channel *chan, int _condition,
 
 	ast_channel_unlock(chan);
 
-	if (chan->tech->indicate && !res) {
+	if (!res) {
 		/* The channel driver successfully handled this indication */
 		if (is_visible_indication(condition)) {
 			chan->visible_indication = condition;
@@ -3386,8 +3613,29 @@ int ast_indicate_data(struct ast_channel *chan, int _condition,
 
 	/* Handle conditions that we have tones for. */
 	switch (condition) {
+	case _XXX_AST_CONTROL_T38:
+		/* deprecated T.38 control frame */
+		return -1;
+	case AST_CONTROL_T38_PARAMETERS:
+		/* there is no way to provide 'default' behavior for these
+		 * control frames, so we need to return failure, but there
+		 * is also no value in the log message below being emitted
+		 * since failure to handle these frames is not an 'error'
+		 * so just return right now.
+		 */
+		return -1;
 	case AST_CONTROL_RINGING:
 		ts = ast_get_indication_tone(chan->zone, "ring");
+		/* It is common practice for channel drivers to return -1 if trying
+		 * to indicate ringing on a channel which is up. The idea is to let the
+		 * core generate the ringing inband. However, we don't want the
+		 * warning message about not being able to handle the specific indication
+		 * to print nor do we want ast_indicate_data to return an "error" for this
+		 * condition
+		 */
+		if (chan->_state == AST_STATE_UP) {
+			res = 0;
+		}
 		break;
 	case AST_CONTROL_BUSY:
 		ts = ast_get_indication_tone(chan->zone, "busy");
@@ -3411,7 +3659,6 @@ int ast_indicate_data(struct ast_channel *chan, int _condition,
 	case AST_CONTROL_RING:
 	case AST_CONTROL_HOLD:
 	case AST_CONTROL_UNHOLD:
-	case AST_CONTROL_T38:
 	case AST_CONTROL_TRANSFER:
 	case AST_CONTROL_CONNECTED_LINE:
 	case AST_CONTROL_REDIRECTING:
@@ -3492,7 +3739,7 @@ int ast_senddigit_begin(struct ast_channel *chan, char digit)
 {
 	/* Device does not support DTMF tones, lets fake
 	 * it by doing our own generation. */
-	static const char* dtmf_tones[] = {
+	static const char * const dtmf_tones[] = {
 		"941+1336", /* 0 */
 		"697+1209", /* 1 */
 		"697+1336", /* 2 */
@@ -3587,7 +3834,7 @@ int ast_write_video(struct ast_channel *chan, struct ast_frame *fr)
 int ast_write(struct ast_channel *chan, struct ast_frame *fr)
 {
 	int res = -1;
-	struct ast_frame *f = NULL, *f2 = NULL;
+	struct ast_frame *f = NULL;
 	int count = 0;
 
 	/*Deadlock avoidance*/
@@ -3659,10 +3906,12 @@ int ast_write(struct ast_channel *chan, struct ast_frame *fr)
 		break;
 	case AST_FRAME_DTMF_END:
 		if (chan->audiohooks) {
-			struct ast_frame *old_frame = fr;
-			fr = ast_audiohook_write_list(chan, chan->audiohooks, AST_AUDIOHOOK_DIRECTION_WRITE, fr);
-			if (old_frame != fr)
-				f = fr;
+			struct ast_frame *new_frame = fr;
+
+			new_frame = ast_audiohook_write_list(chan, chan->audiohooks, AST_AUDIOHOOK_DIRECTION_WRITE, fr);
+			if (new_frame != fr) {
+				ast_frfree(new_frame);
+			}
 		}
 		send_dtmf_event(chan, "Sent", fr->subclass, "No", "Yes");
 		ast_clear_flag(chan, AST_FLAG_BLOCKING);
@@ -3697,14 +3946,6 @@ int ast_write(struct ast_channel *chan, struct ast_frame *fr)
 		if (chan->tech->write == NULL)
 			break;	/*! \todo XXX should return 0 maybe ? */
 
-		/* If audiohooks are present, write the frame out */
-		if (chan->audiohooks) {
-			struct ast_frame *old_frame = fr;
-			fr = ast_audiohook_write_list(chan, chan->audiohooks, AST_AUDIOHOOK_DIRECTION_WRITE, fr);
-			if (old_frame != fr)
-				f2 = fr;
-		}
-
 		/* If the frame is in the raw write format, then it's easy... just use the frame - otherwise we will have to translate */
 		if (fr->subclass == chan->rawwriteformat)
 			f = fr;
@@ -3716,37 +3957,105 @@ int ast_write(struct ast_channel *chan, struct ast_frame *fr)
 			break;
 		}
 
+		if (chan->audiohooks) {
+			struct ast_frame *prev = NULL, *new_frame, *cur, *dup;
+
+			/* Since ast_audiohook_write may return a new frame, and the cur frame is
+			 * an item in a list of frames, create a new list adding each cur frame back to it
+			 * regardless if the cur frame changes or not. */
+			for (cur = f; cur; cur = AST_LIST_NEXT(cur, frame_list)) {
+				new_frame = ast_audiohook_write_list(chan, chan->audiohooks, AST_AUDIOHOOK_DIRECTION_WRITE, cur);
+
+				/* if this frame is different than cur, preserve the end of the list,
+				 * free the old frames, and set cur to be the new frame */
+				if (new_frame != cur) {
+					/* doing an ast_frisolate here seems silly, but we are not guaranteed the new_frame
+					 * isn't part of local storage, meaning if ast_audiohook_write is called multiple
+					 * times it may override the previous frame we got from it unless we dup it */
+					if ((dup = ast_frisolate(new_frame))) {
+						AST_LIST_NEXT(dup, frame_list) = AST_LIST_NEXT(cur, frame_list);
+						ast_frfree(new_frame);
+						ast_frfree(cur);
+						cur = dup;
+					}
+				}
+
+				/* now, regardless if cur is new or not, add it to the new list,
+				 * if the new list has not started, cur will become the first item. */
+				if (prev) {
+					AST_LIST_NEXT(prev, frame_list) = cur;
+				} else {
+					f = cur; /* set f to be the beginning of our new list */
+				}
+				prev = cur;
+			}
+		}
+		
 		/* If Monitor is running on this channel, then we have to write frames out there too */
+		/* the translator on chan->writetrans may have returned multiple frames
+		   from the single frame we passed in; if so, feed each one of them to the
+		   monitor */
 		if (chan->monitor && chan->monitor->write_stream) {
+			struct ast_frame *cur;
+
+			for (cur = f; cur; cur = AST_LIST_NEXT(cur, frame_list)) {
 			/* XXX must explain this code */
 #ifndef MONITOR_CONSTANT_DELAY
-			int jump = chan->insmpl - chan->outsmpl - 4 * f->samples;
-			if (jump >= 0) {
-				jump = chan->insmpl - chan->outsmpl;
-				if (ast_seekstream(chan->monitor->write_stream, jump, SEEK_FORCECUR) == -1)
-					ast_log(LOG_WARNING, "Failed to perform seek in monitoring write stream, synchronization between the files may be broken\n");
-				chan->outsmpl += jump + f->samples;
-			} else
-				chan->outsmpl += f->samples;
+				int jump = chan->insmpl - chan->outsmpl - 4 * cur->samples;
+				if (jump >= 0) {
+					jump = chan->insmpl - chan->outsmpl;
+					if (ast_seekstream(chan->monitor->write_stream, jump, SEEK_FORCECUR) == -1)
+						ast_log(LOG_WARNING, "Failed to perform seek in monitoring write stream, synchronization between the files may be broken\n");
+					chan->outsmpl += jump + cur->samples;
+				} else {
+					chan->outsmpl += cur->samples;
+				}
 #else
-			int jump = chan->insmpl - chan->outsmpl;
-			if (jump - MONITOR_DELAY >= 0) {
-				if (ast_seekstream(chan->monitor->write_stream, jump - f->samples, SEEK_FORCECUR) == -1)
-					ast_log(LOG_WARNING, "Failed to perform seek in monitoring write stream, synchronization between the files may be broken\n");
-				chan->outsmpl += jump;
-			} else
-				chan->outsmpl += f->samples;
+				int jump = chan->insmpl - chan->outsmpl;
+				if (jump - MONITOR_DELAY >= 0) {
+					if (ast_seekstream(chan->monitor->write_stream, jump - cur->samples, SEEK_FORCECUR) == -1)
+						ast_log(LOG_WARNING, "Failed to perform seek in monitoring write stream, synchronization between the files may be broken\n");
+					chan->outsmpl += jump;
+				} else {
+					chan->outsmpl += cur->samples;
+				}
 #endif
-			if (chan->monitor->state == AST_MONITOR_RUNNING) {
-				if (ast_writestream(chan->monitor->write_stream, f) < 0)
-					ast_log(LOG_WARNING, "Failed to write data to channel monitor write stream\n");
+				if (chan->monitor->state == AST_MONITOR_RUNNING) {
+					if (ast_writestream(chan->monitor->write_stream, cur) < 0)
+						ast_log(LOG_WARNING, "Failed to write data to channel monitor write stream\n");
+				}
 			}
 		}
 
-		if (f) 
-			res = chan->tech->write(chan,f);
-		else
-			res = 0;
+		/* the translator on chan->writetrans may have returned multiple frames
+		   from the single frame we passed in; if so, feed each one of them to the
+		   channel, freeing each one after it has been written */
+		if ((f != fr) && AST_LIST_NEXT(f, frame_list)) {
+			struct ast_frame *cur, *next;
+			unsigned int skip = 0;
+
+			for (cur = f, next = AST_LIST_NEXT(cur, frame_list);
+			     cur;
+			     cur = next, next = cur ? AST_LIST_NEXT(cur, frame_list) : NULL) {
+				if (!skip) {
+					if ((res = chan->tech->write(chan, cur)) < 0) {
+						chan->_softhangup |= AST_SOFTHANGUP_DEV;
+						skip = 1;
+					} else if (next) {
+						/* don't do this for the last frame in the list,
+						   as the code outside the loop will do it once
+						*/
+						chan->fout = FRAMECOUNT_INC(chan->fout);
+					}
+				}
+				ast_frfree(cur);
+			}
+
+			/* reset f so the code below doesn't attempt to free it */
+			f = NULL;
+		} else {
+			res = chan->tech->write(chan, f);
+		}
 		break;
 	case AST_FRAME_NULL:
 	case AST_FRAME_IAX:
@@ -3763,13 +4072,12 @@ int ast_write(struct ast_channel *chan, struct ast_frame *fr)
 
 	if (f && f != fr)
 		ast_frfree(f);
-	if (f2)
-		ast_frfree(f2);
 	ast_clear_flag(chan, AST_FLAG_BLOCKING);
+
 	/* Consider a write failure to force a soft hangup */
-	if (res < 0)
+	if (res < 0) {
 		chan->_softhangup |= AST_SOFTHANGUP_DEV;
-	else {
+	} else {
 		chan->fout = FRAMECOUNT_INC(chan->fout);
 	}
 done:
@@ -3882,7 +4190,96 @@ const char *ast_channel_reason2str(int reason)
 	}
 }
 
-struct ast_channel *__ast_request_and_dial(const char *type, int format, void *data, int timeout, int *outstate, const char *cid_num, const char *cid_name, struct outgoing_helper *oh)
+static void handle_cause(int cause, int *outstate)
+{
+	if (outstate) {
+		/* compute error and return */
+		if (cause == AST_CAUSE_BUSY)
+			*outstate = AST_CONTROL_BUSY;
+		else if (cause == AST_CAUSE_CONGESTION)
+			*outstate = AST_CONTROL_CONGESTION;
+		else
+			*outstate = 0;
+	}
+}
+
+struct ast_channel *ast_call_forward(struct ast_channel *caller, struct ast_channel *orig, int *timeout, int format, struct outgoing_helper *oh, int *outstate)
+{
+	char tmpchan[256];
+	struct ast_channel *new = NULL;
+	struct ast_party_redirecting *apr = &orig->redirecting;
+	char *data, *type;
+	int cause = 0;
+
+	/* gather data and request the new forward channel */
+	ast_copy_string(tmpchan, orig->call_forward, sizeof(tmpchan));
+	if ((data = strchr(tmpchan, '/'))) {
+		*data++ = '\0';
+		type = tmpchan;
+	} else {
+		const char *forward_context;
+		ast_channel_lock(orig);
+		forward_context = pbx_builtin_getvar_helper(orig, "FORWARD_CONTEXT");
+		snprintf(tmpchan, sizeof(tmpchan), "%s@%s", orig->call_forward, S_OR(forward_context, orig->context));
+		ast_channel_unlock(orig);
+		data = tmpchan;
+		type = "Local";
+	}
+	if (!(new = ast_request(type, format, orig, data, &cause))) {
+		ast_log(LOG_NOTICE, "Unable to create channel for call forward to '%s/%s' (cause = %d)\n", type, data, cause);
+		handle_cause(cause, outstate);
+		ast_hangup(orig);
+		return NULL;
+	}
+
+	ast_channel_set_redirecting(new, apr);
+
+	/* Copy/inherit important information into new channel */
+	if (oh) {
+		if (oh->vars) {
+			ast_set_variables(new, oh->vars);
+		}
+		if (!ast_strlen_zero(oh->cid_num) && !ast_strlen_zero(oh->cid_name)) {
+			ast_set_callerid(new, oh->cid_num, oh->cid_name, oh->cid_num);
+		}
+		if (oh->parent_channel) {
+			ast_channel_update_redirecting(oh->parent_channel, apr);
+			ast_channel_inherit_variables(oh->parent_channel, new);
+			ast_channel_datastore_inherit(oh->parent_channel, new);
+		}
+		if (oh->account) {
+			ast_cdr_setaccount(new, oh->account);
+		}
+	} else if (caller) { /* no outgoing helper so use caller if avaliable */
+		ast_channel_update_redirecting(caller, apr);
+		ast_channel_inherit_variables(caller, new);
+		ast_channel_datastore_inherit(caller, new);
+	}
+
+	ast_channel_lock(orig);
+	while (ast_channel_trylock(new)) {
+		CHANNEL_DEADLOCK_AVOIDANCE(orig);
+	}
+	ast_copy_flags(new->cdr, orig->cdr, AST_CDR_FLAG_ORIGINATED);
+	ast_string_field_set(new, accountcode, orig->accountcode);
+	ast_party_caller_copy(&new->cid, &orig->cid);
+	ast_party_connected_line_copy(&new->connected, &orig->connected);
+	ast_channel_unlock(new);
+	ast_channel_unlock(orig);
+
+	/* call new channel */
+	if ((*timeout = ast_call(new, data, 0))) {
+		ast_log(LOG_NOTICE, "Unable to call forward to channel %s/%s\n", type, (char *)data);
+		ast_hangup(orig);
+		ast_hangup(new);
+		return NULL;
+	}
+	ast_hangup(orig);
+
+	return new;
+}
+
+struct ast_channel *__ast_request_and_dial(const char *type, int format, const struct ast_channel *requestor, void *data, int timeout, int *outstate, const char *cid_num, const char *cid_name, struct outgoing_helper *oh)
 {
 	int dummy_outstate;
 	int cause = 0;
@@ -3896,14 +4293,10 @@ struct ast_channel *__ast_request_and_dial(const char *type, int format, void *d
 	else
 		outstate = &dummy_outstate;	/* make outstate always a valid pointer */
 
-	chan = ast_request(type, format, data, &cause);
+	chan = ast_request(type, format, requestor, data, &cause);
 	if (!chan) {
 		ast_log(LOG_NOTICE, "Unable to request channel %s/%s\n", type, (char *)data);
-		/* compute error and return */
-		if (cause == AST_CAUSE_BUSY)
-			*outstate = AST_CONTROL_BUSY;
-		else if (cause == AST_CAUSE_CONGESTION)
-			*outstate = AST_CONTROL_CONGESTION;
+		handle_cause(cause, outstate);
 		return NULL;
 	}
 
@@ -3922,6 +4315,7 @@ struct ast_channel *__ast_request_and_dial(const char *type, int format, void *d
 	}
 
 	ast_set_callerid(chan, cid_num, cid_name, cid_num);
+	ast_set_flag(chan->cdr, AST_CDR_FLAG_ORIGINATED);
 	ast_party_connected_line_set_init(&connected, &chan->connected);
 	connected.id.number = (char *) cid_num;
 	connected.id.name = (char *) cid_name;
@@ -3939,6 +4333,13 @@ struct ast_channel *__ast_request_and_dial(const char *type, int format, void *d
 				break;
 			if (timeout > -1)
 				timeout = res;
+			if (!ast_strlen_zero(chan->call_forward)) {
+				if (!(chan = ast_call_forward(NULL, chan, &timeout, format, oh, outstate))) {
+					return NULL;
+				}
+				continue;
+			}
+
 			f = ast_read(chan);
 			if (!f) {
 				*outstate = AST_CONTROL_HANGUP;
@@ -4013,12 +4414,12 @@ struct ast_channel *__ast_request_and_dial(const char *type, int format, void *d
 	return chan;
 }
 
-struct ast_channel *ast_request_and_dial(const char *type, int format, void *data, int timeout, int *outstate, const char *cidnum, const char *cidname)
+struct ast_channel *ast_request_and_dial(const char *type, int format, const struct ast_channel *requestor, void *data, int timeout, int *outstate, const char *cidnum, const char *cidname)
 {
-	return __ast_request_and_dial(type, format, data, timeout, outstate, cidnum, cidname, NULL);
+	return __ast_request_and_dial(type, format, requestor, data, timeout, outstate, cidnum, cidname, NULL);
 }
 
-struct ast_channel *ast_request(const char *type, int format, void *data, int *cause)
+struct ast_channel *ast_request(const char *type, int format, const struct ast_channel *requestor, void *data, int *cause)
 {
 	struct chanlist *chan;
 	struct ast_channel *c;
@@ -4033,12 +4434,12 @@ struct ast_channel *ast_request(const char *type, int format, void *data, int *c
 		cause = &foo;
 	*cause = AST_CAUSE_NOTDEFINED;
 
-	if (AST_RWLIST_RDLOCK(&channels)) {
-		ast_log(LOG_WARNING, "Unable to lock channel list\n");
+	if (AST_RWLIST_RDLOCK(&backends)) {
+		ast_log(LOG_WARNING, "Unable to lock technology backend list\n");
 		return NULL;
 	}
 
-	AST_LIST_TRAVERSE(&backends, chan, list) {
+	AST_RWLIST_TRAVERSE(&backends, chan, list) {
 		if (strcasecmp(type, chan->tech->type))
 			continue;
 
@@ -4052,24 +4453,24 @@ struct ast_channel *ast_request(const char *type, int format, void *data, int *c
 			if (res < 0) {
 				ast_log(LOG_WARNING, "No translator path exists for channel type %s (native 0x%x) to 0x%x\n", type, chan->tech->capabilities, format);
 				*cause = AST_CAUSE_BEARERCAPABILITY_NOTAVAIL;
-				AST_RWLIST_UNLOCK(&channels);
+				AST_RWLIST_UNLOCK(&backends);
 				return NULL;
 			}
 		}
-		AST_RWLIST_UNLOCK(&channels);
+		AST_RWLIST_UNLOCK(&backends);
 		if (!chan->tech->requester)
 			return NULL;
-		
-		if (!(c = chan->tech->requester(type, capabilities | videoformat | textformat, data, cause)))
+
+		if (!(c = chan->tech->requester(type, capabilities | videoformat | textformat, requestor, data, cause)))
 			return NULL;
-		
+
 		/* no need to generate a Newchannel event here; it is done in the channel_alloc call */
 		return c;
 	}
 
 	ast_log(LOG_WARNING, "No channel type registered for '%s'\n", type);
 	*cause = AST_CAUSE_NOSUCHDRIVER;
-	AST_RWLIST_UNLOCK(&channels);
+	AST_RWLIST_UNLOCK(&backends);
 
 	return NULL;
 }
@@ -4363,10 +4764,16 @@ retrymasq:
 	return res;
 }
 
-void ast_change_name(struct ast_channel *chan, char *newname)
+void ast_change_name(struct ast_channel *chan, const char *newname)
 {
+	/* We must re-link, as the hash value will change here. */
+	ao2_unlink(channels, chan);
+
 	manager_event(EVENT_FLAG_CALL, "Rename", "Channel: %s\r\nNewname: %s\r\nUniqueid: %s\r\n", chan->name, newname, chan->uniqueid);
+
 	ast_string_field_set(chan, name, newname);
+
+	ao2_link(channels, chan);
 }
 
 void ast_channel_inherit_variables(const struct ast_channel *parent, struct ast_channel *child)
@@ -4435,6 +4842,182 @@ static void clone_variables(struct ast_channel *original, struct ast_channel *cl
 	}
 }
 
+
+
+/* return the oldest of two linkedids.  linkedid is derived from
+   uniqueid which is formed like this: [systemname-]ctime.seq
+
+   The systemname, and the dash are optional, followed by the epoch
+   time followed by an integer sequence.  Note that this is not a
+   decimal number, since 1.2 is less than 1.11 in uniqueid land.
+
+   To compare two uniqueids, we parse out the integer values of the
+   time and the sequence numbers and compare them, with time trumping
+   sequence.
+*/
+static const char *oldest_linkedid(const char *a, const char *b)
+{
+	const char *satime, *saseq;
+	const char *sbtime, *sbseq;
+	const char *dash;
+
+	unsigned int atime, aseq, btime, bseq;
+
+	if (ast_strlen_zero(a))
+		return b;
+
+	if (ast_strlen_zero(b))
+		return a;
+
+	satime = a;
+	sbtime = b;
+
+	/* jump over the system name */
+	if ((dash = strrchr(satime, '-'))) {
+		satime = dash+1;
+	}
+	if ((dash = strrchr(sbtime, '-'))) {
+		sbtime = dash+1;
+	}
+
+	/* the sequence comes after the '.' */
+	saseq = strchr(satime, '.');
+	sbseq = strchr(sbtime, '.');
+	if (!saseq || !sbseq)
+		return NULL;
+	saseq++;
+	sbseq++;
+
+	/* convert it all to integers */
+	atime = atoi(satime); /* note that atoi is ignoring the '.' after the time string */
+	btime = atoi(sbtime); /* note that atoi is ignoring the '.' after the time string */
+	aseq = atoi(saseq);
+	bseq = atoi(sbseq);
+
+	/* and finally compare */
+	if (atime == btime) {
+		return (aseq < bseq) ? a : b;
+	}
+	else {
+		return (atime < btime) ? a : b;
+	}
+}
+
+/*! Set the channel's linkedid to the given string, and also check to
+ *  see if the channel's old linkedid is now being retired */
+static void ast_channel_change_linkedid(struct ast_channel *chan, const char *linkedid)
+{
+	/* if the linkedid for this channel is being changed from something, check... */
+	if (!ast_strlen_zero(chan->linkedid) && 0 != strcmp(chan->linkedid, linkedid)) {
+		ast_cel_check_retire_linkedid(chan);
+	}
+
+	ast_string_field_set(chan, linkedid, linkedid);
+}
+
+
+/*!
+  \brief Propagate the oldest linkedid between associated channels
+
+*/
+void ast_channel_set_linkgroup(struct ast_channel *chan, struct ast_channel *peer)
+{
+	const char* linkedid=NULL;
+	struct ast_channel *bridged;
+
+	linkedid = oldest_linkedid(chan->linkedid, peer->linkedid);
+	linkedid = oldest_linkedid(linkedid, chan->uniqueid);
+	linkedid = oldest_linkedid(linkedid, peer->uniqueid);
+	if (chan->_bridge) {
+		bridged = ast_bridged_channel(chan);
+		if (bridged != peer) {
+			linkedid = oldest_linkedid(linkedid, bridged->linkedid);
+			linkedid = oldest_linkedid(linkedid, bridged->uniqueid);
+		}
+	}
+	if (peer->_bridge) {
+		bridged = ast_bridged_channel(peer);
+		if (bridged != chan) {
+			linkedid = oldest_linkedid(linkedid, bridged->linkedid);
+			linkedid = oldest_linkedid(linkedid, bridged->uniqueid);
+		}
+	}
+
+	/* just in case setting a stringfield to itself causes problems */
+	linkedid = ast_strdupa(linkedid);
+
+	ast_channel_change_linkedid(chan, linkedid);
+	ast_channel_change_linkedid(peer, linkedid);
+	if (chan->_bridge) {
+		bridged = ast_bridged_channel(chan);
+		if (bridged != peer) {
+			ast_channel_change_linkedid(bridged, linkedid);
+		}
+	}
+	if (peer->_bridge) {
+		bridged = ast_bridged_channel(peer);
+		if (bridged != chan) {
+			ast_channel_change_linkedid(bridged, linkedid);
+		}
+	}
+}
+
+/* copy accountcode and peeraccount across during a link */
+static void ast_set_owners_and_peers(struct ast_channel *chan1,
+									 struct ast_channel *chan2)
+{
+	if (!ast_strlen_zero(chan1->accountcode) && ast_strlen_zero(chan2->peeraccount)) {
+		ast_log(LOG_DEBUG, "setting peeraccount to %s for %s from data on channel %s\n",
+				chan1->accountcode, chan2->name, chan1->name);
+		ast_string_field_set(chan2, peeraccount, chan1->accountcode);
+	}
+	if (!ast_strlen_zero(chan2->accountcode) && ast_strlen_zero(chan1->peeraccount)) {
+		ast_log(LOG_DEBUG, "setting peeraccount to %s for %s from data on channel %s\n",
+				chan2->accountcode, chan1->name, chan2->name);
+		ast_string_field_set(chan1, peeraccount, chan2->accountcode);
+	}
+	if (!ast_strlen_zero(chan1->peeraccount) && ast_strlen_zero(chan2->accountcode)) {
+		ast_log(LOG_DEBUG, "setting accountcode to %s for %s from data on channel %s\n",
+				chan1->peeraccount, chan2->name, chan1->name);
+		ast_string_field_set(chan2, accountcode, chan1->peeraccount);
+	}
+	if (!ast_strlen_zero(chan2->peeraccount) && ast_strlen_zero(chan1->accountcode)) {
+		ast_log(LOG_DEBUG, "setting accountcode to %s for %s from data on channel %s\n",
+				chan2->peeraccount, chan1->name, chan2->name);
+		ast_string_field_set(chan1, accountcode, chan2->peeraccount);
+	}
+	if (0 != strcmp(chan1->accountcode, chan2->peeraccount)) {
+		ast_log(LOG_DEBUG, "changing peeraccount from %s to %s on %s to match channel %s\n",
+				chan2->peeraccount, chan1->peeraccount, chan2->name, chan1->name);
+		ast_string_field_set(chan2, peeraccount, chan1->accountcode);
+	}
+	if (0 != strcmp(chan2->accountcode, chan1->peeraccount)) {
+		ast_log(LOG_DEBUG, "changing peeraccount from %s to %s on %s to match channel %s\n",
+				chan1->peeraccount, chan2->peeraccount, chan1->name, chan2->name);
+		ast_string_field_set(chan1, peeraccount, chan2->accountcode);
+	}
+}
+
+/*!
+ * \pre chan is locked
+ */
+static void report_new_callerid(const struct ast_channel *chan)
+{
+	manager_event(EVENT_FLAG_CALL, "NewCallerid",
+				"Channel: %s\r\n"
+				"CallerIDNum: %s\r\n"
+				"CallerIDName: %s\r\n"
+				"Uniqueid: %s\r\n"
+				"CID-CallingPres: %d (%s)\r\n",
+				chan->name,
+				S_OR(chan->cid.cid_num, ""),
+				S_OR(chan->cid.cid_name, ""),
+				chan->uniqueid,
+				chan->cid.cid_pres,
+				ast_describe_caller_presentation(chan->cid.cid_pres)
+				);
+}
+
 /*!
   \brief Masquerade a channel
 
@@ -4462,50 +5045,46 @@ int ast_do_masquerade(struct ast_channel *original)
 	char masqn[AST_CHANNEL_NAME];
 	char zombn[AST_CHANNEL_NAME];
 
+	/* XXX This operation is a bit odd.  We're essentially putting the guts of
+	 * the clone channel into the original channel.  Start by killing off the
+	 * original channel's backend.  While the features are nice, which is the
+	 * reason we're keeping it, it's still awesomely weird. XXX */
+
+	/* We need the clone's lock, too */
+	ast_channel_lock(clonechan);
+
 	ast_debug(4, "Actually Masquerading %s(%d) into the structure of %s(%d)\n",
 		clonechan->name, clonechan->_state, original->name, original->_state);
 
 	manager_event(EVENT_FLAG_CALL, "Masquerade", "Clone: %s\r\nCloneState: %s\r\nOriginal: %s\r\nOriginalState: %s\r\n",
 		      clonechan->name, ast_state2str(clonechan->_state), original->name, ast_state2str(original->_state));
 
-	/* XXX This is a seriously wacked out operation.  We're essentially putting the guts of
-	   the clone channel into the original channel.  Start by killing off the original
-	   channel's backend.   I'm not sure we're going to keep this function, because
-	   while the features are nice, the cost is very high in terms of pure nastiness. XXX */
-
-	/* We need the clone's lock, too */
-	ast_channel_lock(clonechan);
-
-	ast_debug(2, "Got clone lock for masquerade on '%s' at %p\n", clonechan->name, &clonechan->lock_dont_use);
-
 	/* Having remembered the original read/write formats, we turn off any translation on either
 	   one */
 	free_translation(clonechan);
 	free_translation(original);
 
-
 	/* Unlink the masquerade */
 	original->masq = NULL;
 	clonechan->masqr = NULL;
-	
+
 	/* Save the original name */
 	ast_copy_string(orig, original->name, sizeof(orig));
 	/* Save the new name */
 	ast_copy_string(newn, clonechan->name, sizeof(newn));
 	/* Create the masq name */
 	snprintf(masqn, sizeof(masqn), "%s<MASQ>", newn);
-		
-	/* Copy the name from the clone channel */
-	ast_string_field_set(original, name, newn);
 
 	/* Mangle the name of the clone channel */
-	ast_string_field_set(clonechan, name, masqn);
-	
-	/* Notify any managers of the change, first the masq then the other */
-	manager_event(EVENT_FLAG_CALL, "Rename", "Channel: %s\r\nNewname: %s\r\nUniqueid: %s\r\n", newn, masqn, clonechan->uniqueid);
-	manager_event(EVENT_FLAG_CALL, "Rename", "Channel: %s\r\nNewname: %s\r\nUniqueid: %s\r\n", orig, newn, original->uniqueid);
+	ast_change_name(clonechan, masqn);
 
-	/* Swap the technologies */	
+	/* Copy the name from the clone channel */
+	ast_change_name(original, newn);
+
+	/* share linked id's */
+	ast_channel_set_linkgroup(original, clonechan);
+
+	/* Swap the technologies */
 	t = original->tech;
 	original->tech = clonechan->tech;
 	clonechan->tech = t;
@@ -4589,10 +5168,9 @@ int ast_do_masquerade(struct ast_channel *original)
 		return -1;
 	}
 
-	snprintf(zombn, sizeof(zombn), "%s<ZOMBIE>", orig);
 	/* Mangle the name of the clone channel */
-	ast_string_field_set(clonechan, name, zombn);
-	manager_event(EVENT_FLAG_CALL, "Rename", "Channel: %s\r\nNewname: %s\r\nUniqueid: %s\r\n", masqn, zombn, clonechan->uniqueid);
+	snprintf(zombn, sizeof(zombn), "%s<ZOMBIE>", orig);
+	ast_change_name(clonechan, zombn);
 
 	/* Update the type. */
 	t_pvt = original->monitor;
@@ -4612,12 +5190,18 @@ int ast_do_masquerade(struct ast_channel *original)
 	/* Move data stores over */
 	if (AST_LIST_FIRST(&clonechan->datastores)) {
 		struct ast_datastore *ds;
-		AST_LIST_TRAVERSE(&clonechan->datastores, ds, entry) {
+		/* We use a safe traversal here because some fixup routines actually
+		 * remove the datastore from the list and free them.
+		 */
+		AST_LIST_TRAVERSE_SAFE_BEGIN(&clonechan->datastores, ds, entry) {
 			if (ds->info->chan_fixup)
 				ds->info->chan_fixup(ds->data, clonechan, original);
 		}
+		AST_LIST_TRAVERSE_SAFE_END;
 		AST_LIST_APPEND_LIST(&original->datastores, &clonechan->datastores, entry);
 	}
+
+	ast_autochan_new_channel(clonechan, original);
 
 	clone_variables(original, clonechan);
 	/* Presense of ADSI capable CPE follows clone */
@@ -4627,7 +5211,7 @@ int ast_do_masquerade(struct ast_channel *original)
 	/* XXX What about blocking, softhangup, blocker, and lock and blockproc? XXX */
 	/* Application and data remain the same */
 	/* Clone exception  becomes real one, as with fdno */
-	ast_set_flag(original, ast_test_flag(clonechan, AST_FLAG_OUTGOING | AST_FLAG_EXCEPTION));
+	ast_copy_flags(original, clonechan, AST_FLAG_EXCEPTION | AST_FLAG_OUTGOING);
 	original->fdno = clonechan->fdno;
 	/* Schedule context remains the same */
 	/* Stream stuff stays the same */
@@ -4640,6 +5224,8 @@ int ast_do_masquerade(struct ast_channel *original)
 	exchange.cid = original->cid;
 	original->cid = clonechan->cid;
 	clonechan->cid = exchange.cid;
+	report_new_callerid(original);
+
 	exchange.connected = original->connected;
 	original->connected = clonechan->connected;
 	clonechan->connected = exchange.connected;
@@ -4664,6 +5250,14 @@ int ast_do_masquerade(struct ast_channel *original)
 
 	/* Copy the music class */
 	ast_string_field_set(original, musicclass, clonechan->musicclass);
+
+	/* copy over accuntcode and set peeraccount across the bridge */
+	ast_string_field_set(original, accountcode, S_OR(clonechan->accountcode, ""));
+	if (original->_bridge) {
+		/* XXX - should we try to lock original->_bridge here? */
+		ast_string_field_set(original->_bridge, peeraccount, S_OR(clonechan->accountcode, ""));
+		ast_cel_report_event(original, AST_CEL_BRIDGE_UPDATE, NULL, NULL, NULL);
+	}
 
 	ast_debug(1, "Putting channel %s in %d/%d formats\n", original->name, wformat, rformat);
 
@@ -4692,7 +5286,7 @@ int ast_do_masquerade(struct ast_channel *original)
 	if (original->visible_indication) {
 		ast_indicate(original, original->visible_indication);
 	}
-	
+
 	/* Now, at this point, the "clone" channel is totally F'd up.  We mark it as
 	   a zombie so nothing tries to touch it.  If it's already been marked as a
 	   zombie, then free it now (since it already is considered invalid). */
@@ -4709,7 +5303,7 @@ int ast_do_masquerade(struct ast_channel *original)
 			clonechan->hangupcause,
 			ast_cause2str(clonechan->hangupcause)
 			);
-		ast_channel_free(clonechan);
+		clonechan = ast_channel_release(clonechan);
 	} else {
 		ast_debug(1, "Released clone lock on '%s'\n", clonechan->name);
 		ast_set_flag(clonechan, AST_FLAG_ZOMBIE);
@@ -4743,20 +5337,9 @@ void ast_set_callerid(struct ast_channel *chan, const char *cid_num, const char 
 			ast_free(chan->cid.cid_ani);
 		chan->cid.cid_ani = ast_strdup(cid_ani);
 	}
-	manager_event(EVENT_FLAG_CALL, "NewCallerid",
-				"Channel: %s\r\n"
-				"CallerIDNum: %s\r\n"
-				"CallerIDName: %s\r\n"
-				"Uniqueid: %s\r\n"
-				"CID-CallingPres: %d (%s)\r\n",
-				chan->name,
-				S_OR(chan->cid.cid_num, ""),
-				S_OR(chan->cid.cid_name, ""),
-				chan->uniqueid,
-				chan->cid.cid_pres,
-				ast_describe_caller_presentation(chan->cid.cid_pres)
-				);
-	
+
+	report_new_callerid(chan);
+
 	ast_channel_unlock(chan);
 }
 
@@ -4875,6 +5458,13 @@ static enum ast_bridge_result ast_generic_bridge(struct ast_channel *c0, struct 
 
 	ast_poll_channel_add(c0, c1);
 
+	if (config->feature_timer > 0 && ast_tvzero(config->nexteventts)) {
+		/* nexteventts is not set when the bridge is not scheduled to
+ 		 * break, so calculate when the bridge should possibly break
+ 		 * if a partial feature match timed out */
+		config->nexteventts = ast_tvadd(ast_tvnow(), ast_samp2tv(config->feature_timer, 1000));
+	}
+
 	for (;;) {
 		struct ast_channel *who, *other;
 
@@ -4901,8 +5491,20 @@ static enum ast_bridge_result ast_generic_bridge(struct ast_channel *c0, struct 
 				}
 				break;
 			}
-		} else
+		} else {
+			/* If a feature has been started and the bridge is configured to 
+ 			 * to not break, leave the channel bridge when the feature timer
+			 * time has elapsed so the DTMF will be sent to the other side. 
+ 			 */
+			if (!ast_tvzero(config->nexteventts)) {
+				int diff = ast_tvdiff_ms(config->nexteventts, ast_tvnow());
+				if (diff <= 0) {
+					res = AST_BRIDGE_RETRY;
+					break;
+				}
+			}
 			to = -1;
+		}
 		/* Calculate the appropriate max sleep interval - in general, this is the time,
 		   left to the closest jb delivery moment */
 		if (jb_in_use)
@@ -4939,13 +5541,18 @@ static enum ast_bridge_result ast_generic_bridge(struct ast_channel *c0, struct 
 			int bridge_exit = 0;
 
 			switch (f->subclass) {
+			case AST_CONTROL_REDIRECTING:
+				ast_indicate_data(other, f->subclass, f->data.ptr, f->datalen);
+				break;
+			case AST_CONTROL_CONNECTED_LINE:
+				if (ast_channel_connected_line_macro(who, other, f, other == c0, 1)) {
+					ast_indicate_data(other, f->subclass, f->data.ptr, f->datalen);
+				}
+				break;
 			case AST_CONTROL_HOLD:
 			case AST_CONTROL_UNHOLD:
 			case AST_CONTROL_VIDUPDATE:
-			case AST_CONTROL_T38:
 			case AST_CONTROL_SRCUPDATE:
-			case AST_CONTROL_CONNECTED_LINE:
-			case AST_CONTROL_REDIRECTING:
 				ast_indicate_data(other, f->subclass, f->data.ptr, f->datalen);
 				if (jb_in_use) {
 					ast_jb_empty_and_reset(c0, c1);
@@ -5152,6 +5759,7 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 	c0->_bridge = c1;
 	c1->_bridge = c0;
 
+	ast_set_owners_and_peers(c0, c1);
 
 	o0nativeformats = c0->nativeformats;
 	o1nativeformats = c1->nativeformats;
@@ -5290,6 +5898,7 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 					      "CallerID1: %s\r\n"
 					      "CallerID2: %s\r\n",
 					      c0->name, c1->name, c0->uniqueid, c1->uniqueid, S_OR(c0->cid.cid_num, "<unknown>"), S_OR(c1->cid.cid_num, "<unknown>"));
+
 				ast_debug(1, "Returning from native bridge, channels: %s, %s\n", c0->name, c1->name);
 
 				ast_clear_flag(c0, AST_FLAG_NBRIDGE);
@@ -5300,7 +5909,6 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 
 				c0->_bridge = NULL;
 				c1->_bridge = NULL;
-
 				return res;
 			} else {
 				ast_clear_flag(c0, AST_FLAG_NBRIDGE);
@@ -5559,9 +6167,9 @@ ast_group_t ast_get_group(const char *s)
 	c = ast_strdupa(s);
 	
 	while ((piece = strsep(&c, ","))) {
-		if (sscanf(piece, "%d-%d", &start, &finish) == 2) {
+		if (sscanf(piece, "%30d-%30d", &start, &finish) == 2) {
 			/* Range */
-		} else if (sscanf(piece, "%d", &start)) {
+		} else if (sscanf(piece, "%30d", &start)) {
 			/* Just one */
 			finish = start;
 		} else {
@@ -5622,8 +6230,63 @@ void ast_moh_cleanup(struct ast_channel *chan)
 		ast_moh_cleanup_ptr(chan);
 }
 
+static int ast_channel_hash_cb(const void *obj, const int flags)
+{
+	const struct ast_channel *chan = obj;
+
+	/* If the name isn't set, return 0 so that the ao2_find() search will
+	 * start in the first bucket. */
+	if (ast_strlen_zero(chan->name)) {
+		return 0;
+	}
+
+	return ast_str_case_hash(chan->name);
+}
+
+static int ast_channel_cmp_cb(void *obj, void *arg, int flags)
+{
+	struct ast_channel *chan = obj, *cmp_args = arg;
+	size_t name_len;
+	int ret = CMP_MATCH;
+
+	/* This is sort of a hack.  Basically, we're using an arbitrary field
+	 * in ast_channel to pass the name_len for a prefix match.  If this
+	 * gets changed, then the uses of ao2_find() must be changed, too. */
+	name_len = cmp_args->rings;
+
+	ast_channel_lock(chan);
+
+	if (cmp_args->name) { /* match by name */
+		if ((!name_len && strcasecmp(chan->name, cmp_args->name)) ||
+				(name_len && strncasecmp(chan->name, cmp_args->name, name_len))) {
+			ret = 0; /* name match failed */
+		}
+	} else if (cmp_args->exten) {
+		if (cmp_args->context && strcasecmp(chan->context, cmp_args->context) &&
+				strcasecmp(chan->macrocontext, cmp_args->context)) {
+			ret = 0; /* context match failed */
+		}
+		if (ret && strcasecmp(chan->exten, cmp_args->exten) &&
+				strcasecmp(chan->macroexten, cmp_args->exten)) {
+			ret = 0; /* exten match failed */
+		}
+	} else if (cmp_args->uniqueid) {
+		if ((!name_len && strcasecmp(chan->uniqueid, cmp_args->uniqueid)) ||
+				(name_len && strncasecmp(chan->uniqueid, cmp_args->uniqueid, name_len))) {
+			ret = 0; /* uniqueid match failed */
+		}
+	}
+
+	ast_channel_unlock(chan);
+
+	return ret;
+}
+
 void ast_channels_init(void)
 {
+	channels = ao2_container_alloc(NUM_CHANNEL_BUCKETS,
+			ast_channel_hash_cb, ast_channel_cmp_cb);
+
 	ast_cli_register_multiple(cli_channel, ARRAY_LEN(cli_channel));
 }
 
@@ -5757,116 +6420,6 @@ const char *channelreloadreason2txt(enum channelreloadreason reason)
 		return "MANAGERRELOAD (Channel module reload by manager)";
 	}
 };
-
-#ifdef DEBUG_CHANNEL_LOCKS
-
-/*! \brief Unlock AST channel (and print debugging output) 
-\note You need to enable DEBUG_CHANNEL_LOCKS for this function
-*/
-int __ast_channel_unlock(struct ast_channel *chan, const char *filename, int lineno, const char *func)
-{
-	int res = 0;
-	ast_debug(3, "::::==== Unlocking AST channel %s\n", chan->name);
-	
-	if (!chan) {
-		ast_debug(1, "::::==== Unlocking non-existing channel \n");
-		return 0;
-	}
-#ifdef DEBUG_THREADS
-	res = __ast_pthread_mutex_unlock(filename, lineno, func, "(channel lock)", &chan->lock_dont_use);
-#else
-	res = ast_mutex_unlock(&chan->lock_dont_use);
-#endif
-
-	if (option_debug > 2) {
-#ifdef DEBUG_THREADS
-		int count = 0;
-		if ((count = chan->lock_dont_use.track.reentrancy))
-			ast_debug(3, ":::=== Still have %d locks (recursive)\n", count);
-#endif
-		if (!res)
-			ast_debug(3, "::::==== Channel %s was unlocked\n", chan->name);
-			if (res == EINVAL) {
-				ast_debug(3, "::::==== Channel %s had no lock by this thread. Failed unlocking\n", chan->name);
-			}
-		}
-		if (res == EPERM) {
-			/* We had no lock, so okay any way*/
-			ast_debug(4, "::::==== Channel %s was not locked at all \n", chan->name);
-		res = 0;
-	}
-	return res;
-}
-
-/*! \brief Lock AST channel (and print debugging output)
-\note You need to enable DEBUG_CHANNEL_LOCKS for this function */
-int __ast_channel_lock(struct ast_channel *chan, const char *filename, int lineno, const char *func)
-{
-	int res;
-
-	ast_debug(4, "====:::: Locking AST channel %s\n", chan->name);
-
-#ifdef DEBUG_THREADS
-	res = __ast_pthread_mutex_lock(filename, lineno, func, "(channel lock)", &chan->lock_dont_use);
-#else
-	res = ast_mutex_lock(&chan->lock_dont_use);
-#endif
-
-	if (option_debug > 3) {
-#ifdef DEBUG_THREADS
-		int count = 0;
-		if ((count = chan->lock_dont_use.track.reentrancy))
-			ast_debug(4, ":::=== Now have %d locks (recursive)\n", count);
-#endif
-		if (!res)
-			ast_debug(4, "::::==== Channel %s was locked\n", chan->name);
-		if (res == EDEADLK) {
-			/* We had no lock, so okey any way */
-			ast_debug(4, "::::==== Channel %s was not locked by us. Lock would cause deadlock.\n", chan->name);
-		}
-		if (res == EINVAL) {
-			ast_debug(4, "::::==== Channel %s lock failed. No mutex.\n", chan->name);
-		}
-	}
-	return res;
-}
-
-/*! \brief Lock AST channel (and print debugging output)
-\note	You need to enable DEBUG_CHANNEL_LOCKS for this function */
-int __ast_channel_trylock(struct ast_channel *chan, const char *filename, int lineno, const char *func)
-{
-	int res;
-
-	ast_debug(3, "====:::: Trying to lock AST channel %s\n", chan->name);
-#ifdef DEBUG_THREADS
-	res = __ast_pthread_mutex_trylock(filename, lineno, func, "(channel lock)", &chan->lock_dont_use);
-#else
-	res = ast_mutex_trylock(&chan->lock_dont_use);
-#endif
-
-	if (option_debug > 2) {
-#ifdef DEBUG_THREADS
-		int count = 0;
-		if ((count = chan->lock_dont_use.track.reentrancy))
-			ast_debug(3, ":::=== Now have %d locks (recursive)\n", count);
-#endif
-		if (!res)
-			ast_debug(3, "::::==== Channel %s was locked\n", chan->name);
-		if (res == EBUSY) {
-			/* We failed to lock */
-			ast_debug(3, "::::==== Channel %s failed to lock. Not waiting around...\n", chan->name);
-		}
-		if (res == EDEADLK) {
-			/* We had no lock, so okey any way*/
-			ast_debug(3, "::::==== Channel %s was not locked. Lock would cause deadlock.\n", chan->name);
-		}
-		if (res == EINVAL)
-			ast_debug(3, "::::==== Channel %s lock failed. No mutex.\n", chan->name);
-	}
-	return res;
-}
-
-#endif
 
 /*
  * Wrappers for various ast_say_*() functions that call the full version
@@ -6494,3 +7047,76 @@ void ast_channel_queue_redirecting_update(struct ast_channel *chan, const struct
 	ast_queue_control_data(chan, AST_CONTROL_REDIRECTING, data, datalen);
 }
 
+int ast_channel_connected_line_macro(struct ast_channel *autoservice_chan, struct ast_channel *macro_chan, const void *connected_info, int caller, int frame)
+{
+	const char *macro;
+	const char *macro_args;
+	union {
+		const struct ast_frame *frame;
+		const struct ast_party_connected_line *connected;
+	} pointer;
+	int retval;
+
+	if (frame) {
+		pointer.frame = connected_info;
+	} else {
+		pointer.connected = connected_info;
+	}
+
+	ast_channel_lock(macro_chan);
+	macro = ast_strdupa(S_OR(pbx_builtin_getvar_helper(macro_chan, caller ? "CONNECTED_LINE_CALLER_SEND_MACRO" : "CONNECTED_LINE_CALLEE_SEND_MACRO"), ""));
+	macro_args = ast_strdupa(S_OR(pbx_builtin_getvar_helper(macro_chan, caller ? "CONNECTED_LINE_CALLER_SEND_MACRO_ARGS" : "CONNECTED_LINE_CALLEE_SEND_MACRO_ARGS"), ""));
+	ast_channel_unlock(macro_chan);
+
+	if (ast_strlen_zero(macro)) {
+		return -1;
+	}
+
+	if (frame) {
+		ast_connected_line_parse_data(pointer.frame->data.ptr, pointer.frame->datalen, &macro_chan->connected);
+	} else {
+		ast_party_connected_line_copy(&macro_chan->connected, pointer.connected);
+	}
+
+	if (!(retval = ast_app_run_macro(autoservice_chan, macro_chan, macro, macro_args))) {
+		ast_channel_update_connected_line(macro_chan, &macro_chan->connected);
+	}
+
+	return retval;
+}
+
+/* DO NOT PUT ADDITIONAL FUNCTIONS BELOW THIS BOUNDARY
+ *
+ * ONLY FUNCTIONS FOR PROVIDING BACKWARDS ABI COMPATIBILITY BELONG HERE
+ *
+ */
+
+/* Provide binary compatibility for modules that call ast_channel_alloc() directly;
+ * newly compiled modules will call __ast_channel_alloc() via the macros in channel.h
+ */
+#undef ast_channel_alloc
+struct ast_channel __attribute__((format(printf, 10, 11)))
+	*ast_channel_alloc(int needqueue, int state, const char *cid_num,
+			   const char *cid_name, const char *acctcode,
+			   const char *exten, const char *context,
+			   const char *linkedid, const int amaflag,
+			   const char *name_fmt, ...);
+struct ast_channel *ast_channel_alloc(int needqueue, int state, const char *cid_num,
+				      const char *cid_name, const char *acctcode,
+				      const char *exten, const char *context,
+				      const char *linkedid, const int amaflag,
+				      const char *name_fmt, ...)
+{
+	va_list ap1, ap2;
+	struct ast_channel *result;
+
+
+	va_start(ap1, name_fmt);
+	va_start(ap2, name_fmt);
+	result = __ast_channel_alloc_ap(needqueue, state, cid_num, cid_name, acctcode, exten, context,
+					linkedid, amaflag, __FILE__, __LINE__, __FUNCTION__, name_fmt, ap1, ap2);
+	va_end(ap1);
+	va_end(ap2);
+
+	return result;
+}

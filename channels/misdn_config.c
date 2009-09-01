@@ -221,6 +221,12 @@ static const struct misdn_cfg_spec port_spec[] = {
 		"\n"
 		"\tscreen=0, presentation=0 -> callerid presented\n"
 		"\tscreen=1, presentation=1 -> callerid restricted (the remote end doesn't see it!)" },
+	{ "outgoing_colp", MISDN_CFG_OUTGOING_COLP, MISDN_CTYPE_INT, "0", NONE,
+		"Select what to do with outgoing COLP information on this port.\n"
+		"\n"
+		"\t0 - Send out COLP information unaltered.\n"
+		"\t1 - Force COLP to restricted on all outgoing COLP information.\n"
+		"\t2 - Do not send COLP information." },
 	{ "display_connected", MISDN_CFG_DISPLAY_CONNECTED, MISDN_CTYPE_INT, "0", NONE,
 		"Put a display ie in the CONNECT message containing the following\n"
 		"\tinformation if it is available (nt port only):\n"
@@ -361,6 +367,8 @@ static const struct misdn_cfg_spec port_spec[] = {
 		"MSN's for TE ports, listen on those numbers on the above ports, and\n"
 		"\tindicate the incoming calls to Asterisk.\n"
 		"\tHere you can give a comma separated list, or simply an '*' for any msn." },
+	{ "cc_request_retention", MISDN_CFG_CC_REQUEST_RETENTION, MISDN_CTYPE_BOOL, "yes", NONE,
+		"Enable/Disable call-completion request retention support (ptp)." },
 };
 
 static const struct misdn_cfg_spec gen_spec[] = {
@@ -592,7 +600,7 @@ void misdn_cfg_get(int port, enum misdn_cfg_elements elem, void *buf, int bufsiz
 	misdn_cfg_unlock();
 }
 
-enum misdn_cfg_elements misdn_cfg_get_elem(char *name)
+enum misdn_cfg_elements misdn_cfg_get_elem(const char *name)
 {
 	int pos;
 
@@ -819,7 +827,9 @@ void misdn_cfg_get_config_string (int port, enum misdn_cfg_elements elem, char* 
 				for (; iter; iter = iter->next) {
 					strncat(tempbuf, iter->msn, sizeof(tempbuf) - strlen(tempbuf) - 1);
 				}
-				tempbuf[strlen(tempbuf)-2] = 0;
+				if (strlen(tempbuf) > 1) {
+					tempbuf[strlen(tempbuf)-2] = 0;
+				}
 			}
 			snprintf(buf, bufsize, " -> msns: %s", *tempbuf ? tempbuf : "none");
 			break;
@@ -912,9 +922,9 @@ static int _parse (union misdn_cfg_pt *dest, const char *value, enum misdn_cfg_t
 		int res;
 
 		if (strchr(value,'x')) {
-			res = sscanf(value, "%x", &tmp);
+			res = sscanf(value, "%30x", &tmp);
 		} else {
-			res = sscanf(value, "%d", &tmp);
+			res = sscanf(value, "%30d", &tmp);
 		}
 		if (res) {
 			dest->num = ast_malloc(sizeof(int));
@@ -929,7 +939,7 @@ static int _parse (union misdn_cfg_pt *dest, const char *value, enum misdn_cfg_t
 		break;
 	case MISDN_CTYPE_BOOLINT:
 		dest->num = ast_malloc(sizeof(int));
-		if (sscanf(value, "%d", &tmp)) {
+		if (sscanf(value, "%30d", &tmp)) {
 			memcpy(dest->num, &tmp, sizeof(int));
 		} else {
 			*(dest->num) = (ast_true(value) ? boolint_def : 0);
@@ -998,7 +1008,7 @@ static void _build_port_config (struct ast_variable *v, char *cat)
 			for (token = strsep(&tmp, ","); token; token = strsep(&tmp, ","), *ptpbuf = 0) {
 				if (!*token)
 					continue;
-				if (sscanf(token, "%d-%d%s", &start, &end, ptpbuf) >= 2) {
+				if (sscanf(token, "%30d-%30d%511s", &start, &end, ptpbuf) >= 2) {
 					for (; start <= end; start++) {
 						if (start <= max_ports && start > 0) {
 							cfg_for_ports[start] = 1;
@@ -1007,7 +1017,7 @@ static void _build_port_config (struct ast_variable *v, char *cat)
 							CLI_ERROR(v->name, v->value, cat);
 					}
 				} else {
-					if (sscanf(token, "%d%s", &start, ptpbuf)) {
+					if (sscanf(token, "%30d%511s", &start, ptpbuf)) {
 						if (start <= max_ports && start > 0) {
 							cfg_for_ports[start] = 1;
 							ptp[start] = (strstr(ptpbuf, "ptp")) ? 1 : 0;
@@ -1025,6 +1035,11 @@ static void _build_port_config (struct ast_variable *v, char *cat)
 	}
 
 	for (i = 0; i < (max_ports + 1); ++i) {
+		if (i > 0 && cfg_for_ports[0]) {
+			/* default category, will populate the port_cfg with additional port
+			categories in subsequent calls to this function */
+			memset(cfg_tmp, 0, sizeof(cfg_tmp));
+		}
 		if (cfg_for_ports[i]) {
 			memcpy(port_cfg[i], cfg_tmp, sizeof(cfg_tmp));
 		}

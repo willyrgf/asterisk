@@ -108,11 +108,11 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 	</application>
  ***/
 
-enum {
+enum read_option_flags {
 	OPT_SKIP = (1 << 0),
 	OPT_INDICATION = (1 << 1),
 	OPT_NOANSWER = (1 << 2),
-} read_option_flags;
+};
 
 AST_APP_OPTIONS(read_app_options, {
 	AST_APP_OPTION('s', OPT_SKIP),
@@ -122,9 +122,7 @@ AST_APP_OPTIONS(read_app_options, {
 
 static char *app = "Read";
 
-#define ast_next_data(instr,ptr,delim) if((ptr=strchr(instr,delim))) { *(ptr) = '\0' ; ptr++;}
-
-static int read_exec(struct ast_channel *chan, void *data)
+static int read_exec(struct ast_channel *chan, const char *data)
 {
 	int res = 0;
 	char tmp[256] = "";

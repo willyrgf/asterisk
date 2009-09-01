@@ -111,7 +111,7 @@ typedef void (*ast_event_cb_t)(const struct ast_event *event, void *userdata);
  * pointer to the peer.
  */
 struct ast_event_sub *ast_event_subscribe(enum ast_event_type event_type,
-	ast_event_cb_t cb, void *userdata, ...);
+       ast_event_cb_t cb, char *description, void *userdata, ...);
 
 /*!
  * \brief Allocate a subscription, but do not activate it
@@ -155,6 +155,20 @@ void ast_event_sub_destroy(struct ast_event_sub *sub);
  */
 int ast_event_sub_append_ie_uint(struct ast_event_sub *sub,
 	enum ast_event_ie_type ie_type, uint32_t uint);
+
+/*!
+ * \brief Append a bitflags parameter to a subscription
+ *
+ * \param sub the dynamic subscription allocated with ast_event_subscribe_new()
+ * \param ie_type the information element type for the parameter
+ * \param flags the flags that must be present in the event to match this subscription
+ *
+ * \retval 0 success
+ * \retval non-zero failure
+ * \since 1.6.3
+ */
+int ast_event_sub_append_ie_bitflags(struct ast_event_sub *sub,
+	enum ast_event_ie_type ie_type, uint32_t flags);
 
 /*!
  * \brief Append a string parameter to a subscription
@@ -226,6 +240,15 @@ int ast_event_sub_activate(struct ast_event_sub *sub);
  * \version 1.6.1 return changed to NULL
  */
 struct ast_event_sub *ast_event_unsubscribe(struct ast_event_sub *event_sub);
+
+/*!
+ * \brief Get description for a subscription
+ *
+ * \param sub subscription
+ *
+ * \return string description of the subscription
+ */
+const char *ast_event_subscriber_get_description(struct ast_event_sub *sub);
 
 /*!
  * \brief Check if subscribers exist
@@ -344,12 +367,13 @@ void ast_event_destroy(struct ast_event *event);
  * \param event the event to be queued
  *
  * \retval zero success
- * \retval non-zero failure
+ * \retval non-zero failure.  Note that the caller of this function is
+ *         responsible for destroying the event in the case of a failure.
  *
  * This function queues an event to be dispatched to all of the appropriate
  * subscribers.  This function will not block while the event is being
- * dispatched because a pool of event dispatching threads handle the event
- * queue.
+ * dispatched because the event is queued up for a dispatching thread 
+ * to handle.
  */
 int ast_event_queue(struct ast_event *event);
 
@@ -446,6 +470,24 @@ int ast_event_append_ie_uint(struct ast_event **event, enum ast_event_ie_type ie
 	uint32_t data);
 
 /*!
+ * \brief Append an information element that has a bitflags payload
+ *
+ * \param event the event that the IE will be appended to
+ * \param ie_type the type of IE to append
+ * \param flags the flags that are the payload of the IE
+ *
+ * \retval 0 success
+ * \retval -1 failure
+ * \since 1.6.3
+ *
+ * The pointer to the event will get updated with the new location for the event
+ * that now contains the appended information element.  If the re-allocation of
+ * the memory for this event fails, it will be set to NULL.
+ */
+int ast_event_append_ie_bitflags(struct ast_event **event, enum ast_event_ie_type ie_type,
+	uint32_t bitflags);
+
+/*!
  * \brief Append an information element that has a raw payload
  *
  * \param event the event that the IE will be appended to
@@ -474,6 +516,18 @@ int ast_event_append_ie_raw(struct ast_event **event, enum ast_event_ie_type ie_
  *         yield the same return value.
  */
 uint32_t ast_event_get_ie_uint(const struct ast_event *event, enum ast_event_ie_type ie_type);
+
+/*!
+ * \brief Get the value of an information element that has a bitflags payload
+ *
+ * \param event The event to get the IE from
+ * \param ie_type the type of information element to retrieve
+ *
+ * \return This returns the payload of the information element with the given type.
+ *         However, an IE with a payload of 0, and the case where no IE is found
+ *         yield the same return value.
+ */
+uint32_t ast_event_get_ie_bitflags(const struct ast_event *event, enum ast_event_ie_type ie_type);
 
 /*!
  * \brief Get the value of an information element that has a string payload
@@ -614,13 +668,22 @@ int ast_event_iterator_next(struct ast_event_iterator *iterator);
 enum ast_event_ie_type ast_event_iterator_get_ie_type(struct ast_event_iterator *iterator);
 
 /*!
- * \brief Get the value of the current IE in the ierator as an integer payload
+ * \brief Get the value of the current IE in the iterator as an integer payload
  *
  * \param iterator The iterator instance
  *
  * \return This returns the payload of the information element as a uint.
  */
 uint32_t ast_event_iterator_get_ie_uint(struct ast_event_iterator *iterator);
+
+/*!
+ * \brief Get the value of the current IE in the iterator as a bitflags payload
+ *
+ * \param iterator The iterator instance
+ *
+ * \return This returns the payload of the information element as bitflags.
+ */
+uint32_t ast_event_iterator_get_ie_bitflags(struct ast_event_iterator *iterator);
 
 /*!
  * \brief Get the value of the current IE in the iterator as a string payload

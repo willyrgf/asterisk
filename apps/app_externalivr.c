@@ -48,34 +48,58 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/tcptls.h"
 #include "asterisk/astobj2.h"
 
-static const char *app = "ExternalIVR";
+/*** DOCUMENTATION
+	<application name="ExternalIVR" language="en_US">
+		<synopsis>
+			Interfaces with an external IVR application.
+		</synopsis>
+		<syntax>
+			<parameter name="command|ivr://host" required="true" hasparams="true">
+				<argument name="arg1" />
+				<argument name="arg2" multiple="yes" />
+			</parameter>
+			<parameter name="options">
+				<optionlist>
+					<option name="n">
+						<para>Tells ExternalIVR() not to answer the channel.</para>
+					</option>
+					<option name="i">
+						<para>Tells ExternalIVR() not to send a hangup and exit when the
+						channel receives a hangup, instead it sends an <literal>I</literal>
+						informative message meaning that the external application MUST hang
+						up the call with an <literal>H</literal> command.</para>
+					</option>
+					<option name="d">
+						<para>Tells ExternalIVR() to run on a channel that has been hung up
+						and will not look for hangups. The external application must exit with
+						an <literal>E</literal> command.</para>
+					</option>
+				</optionlist>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Either forks a process to run given command or makes a socket to connect
+			to given host and starts a generator on the channel. The generator's play list
+			is controlled by the external application, which can add and clear entries via
+			simple commands issued over its stdout. The external application will receive
+			all DTMF events received on the channel, and notification if the channel is
+			hung up. The received on the channel, and notification if the channel is hung
+			up. The application will not be forcibly terminated when the channel is hung up.
+			See <filename>doc/externalivr.txt</filename> for a protocol specification.</para>
+		</description>
+	</application>
+ ***/
 
-static const char *synopsis = "Interfaces with an external IVR application";
-static const char *descrip =
-"  ExternalIVR(command|ivr://ivrhosti([,arg[,arg...]])[,options]): Either forks a process\n"
-"to run given command or makes a socket to connect to given host and starts\n"
-"a generator on the channel. The generator's play list is controlled by the\n"
-"external application, which can add and clear entries via simple commands\n"
-"issued over its stdout. The external application will receive all DTMF events\n"
-"received on the channel, and notification if the channel is hung up. The\n"
-"application will not be forcibly terminated when the channel is hung up.\n"
-"See doc/externalivr.txt for a protocol specification.\n"
-"The 'n' option tells ExternalIVR() not to answer the channel. \n"
-"The 'i' option tells ExternalIVR() not to send a hangup and exit when the\n"
-"  channel receives a hangup, instead it sends an 'I' informative message\n"
-"  meaning that the external application MUST hang up the call with an H command\n"
-"The 'd' option tells ExternalIVR() to run on a channel that has been hung up\n"
-"  and will not look for hangups.  The external application must exit with\n"
-"  an 'E' command.\n";
+static const char app[] = "ExternalIVR";
 
 /* XXX the parser in gcc 2.95 gets confused if you don't put a space between 'name' and the comma */
 #define ast_chan_log(level, channel, format, ...) ast_log(level, "%s: " format, channel->name , ## __VA_ARGS__)
 
-enum {
+enum options_flags {
 	noanswer = (1 << 0),
 	ignore_hangup = (1 << 1),
 	run_dead = (1 << 2),
-} options_flags;
+};
 
 AST_APP_OPTIONS(app_opts, {
 	AST_APP_OPTION('n', noanswer),
@@ -282,29 +306,20 @@ static void ast_eivr_getvariable(struct ast_channel *chan, char *data, char *out
 
 static void ast_eivr_setvariable(struct ast_channel *chan, char *data)
 {
-	char buf[1024];
 	char *value;
 
-	char *inbuf, *variable;
+	char *inbuf = ast_strdupa(data), *variable;
 
-	int j;
-
-	for (j = 1, inbuf = data; ; j++, inbuf = NULL) {
-		variable = strsep(&inbuf, ",");
+	for (variable = strsep(&inbuf, ","); variable; variable = strsep(&inbuf, ",")) {
 		ast_debug(1, "Setting up a variable: %s\n", variable);
-		if (variable) {
-			/* variable contains "varname=value" */
-			ast_copy_string(buf, variable, sizeof(buf));
-			value = strchr(buf, '=');
-			if (!value) {
-				value = "";
-			} else {
-				*value++ = '\0';
-			}
-			pbx_builtin_setvar_helper(chan, buf, value);
+		/* variable contains "varname=value" */
+		value = strchr(variable, '=');
+		if (!value) {
+			value = "";
 		} else {
-			break;
+			*value++ = '\0';
 		}
+		pbx_builtin_setvar_helper(chan, variable, value);
 	}
 }
 
@@ -320,7 +335,7 @@ static struct playlist_entry *make_entry(const char *filename)
 	return entry;
 }
 
-static int app_exec(struct ast_channel *chan, void *data)
+static int app_exec(struct ast_channel *chan, const char *data)
 {
 	struct ast_flags flags = { 0, };
 	char *opts[0];
@@ -809,7 +824,7 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	return ast_register_application(app, app_exec, synopsis, descrip);
+	return ast_register_application_xml(app, app_exec);
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "External IVR Interface Application");

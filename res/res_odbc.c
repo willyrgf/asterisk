@@ -771,7 +771,7 @@ static int load_odbc_config(void)
 					if (ast_false(v->value))
 						pooling = 1;
 				} else if (!strcasecmp(v->name, "limit")) {
-					sscanf(v->value, "%d", &limit);
+					sscanf(v->value, "%30d", &limit);
 					if (ast_true(v->value) && !limit) {
 						ast_log(LOG_WARNING, "Limit should be a number, not a boolean: '%s'.  Setting limit to 1023 for ODBC class '%s'.\n", v->value, cat);
 						limit = 1023;
@@ -781,7 +781,7 @@ static int load_odbc_config(void)
 						break;
 					}
 				} else if (!strcasecmp(v->name, "idlecheck")) {
-					sscanf(v->value, "%d", &idlecheck);
+					sscanf(v->value, "%30u", &idlecheck);
 				} else if (!strcasecmp(v->name, "enabled")) {
 					enabled = ast_true(v->value);
 				} else if (!strcasecmp(v->name, "pre-connect")) {
@@ -1045,7 +1045,7 @@ int ast_odbc_backslash_is_escape(struct odbc_obj *obj)
 	return obj->parent->backslash_is_escape;
 }
 
-static int commit_exec(struct ast_channel *chan, void *data)
+static int commit_exec(struct ast_channel *chan, const char *data)
 {
 	struct odbc_txn_frame *tx;
 	SQLINTEGER nativeerror=0, numfields=0;
@@ -1082,7 +1082,7 @@ static int commit_exec(struct ast_channel *chan, void *data)
 	return 0;
 }
 
-static int rollback_exec(struct ast_channel *chan, void *data)
+static int rollback_exec(struct ast_channel *chan, const char *data)
 {
 	struct odbc_txn_frame *tx;
 	SQLINTEGER nativeerror=0, numfields=0;
@@ -1594,8 +1594,8 @@ static struct ast_custom_function odbc_function = {
 	.write = acf_transaction_write,
 };
 
-static const char *app_commit = "ODBC_Commit";
-static const char *app_rollback = "ODBC_Rollback";
+static const char * const app_commit = "ODBC_Commit";
+static const char * const app_rollback = "ODBC_Rollback";
 
 static int reload(void)
 {
