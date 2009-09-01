@@ -9026,7 +9026,7 @@ static int find_via_address(int findsecond, struct sip_pvt *p, struct sip_reques
 			*next = '\0';	/* break */
 			next++;
 		}
-		
+
 		if (line == 2 && findsecond) {
 			/* This is it! */
 			/* Do the stuff */
@@ -9036,7 +9036,7 @@ static int find_via_address(int findsecond, struct sip_pvt *p, struct sip_reques
 		}
 		ast_log(LOG_DEBUG, "--- Looping around in via forests\n");
 	}
-		
+
 }
 
 /*! \brief Copy SIP VIA Headers from the request to the response
