@@ -286,12 +286,12 @@ static int manager_mutestream(struct mansession *s, const struct message *m)
 
 
 static char mandescr_mutestream[] =
-"Description: Mute an incoming or outbound audio stream in a channel.\n"
-"Variables: \n"
-"  Channel: <name>           The channel you want to mute.\n"
-"  Direction: in | out |all  The stream you wan to mute.\n"
-"  State: on | off           Whether to turn mute on or off.\n"
-"  ActionID: <id>            Optional action ID for this AMI transaction.\n";
+	"Description: Mute an incoming or outbound audio stream in a channel.\n"
+	"Variables: \n"
+	"  Channel: <name>           The channel you want to mute.\n"
+	"  Direction: in | out |all  The stream you wan to mute.\n"
+	"  State: on | off           Whether to turn mute on or off.\n"
+	"  ActionID: <id>            Optional action ID for this AMI transaction.\n";
 
 
 static int reload(void)
