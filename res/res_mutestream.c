@@ -28,14 +28,6 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision: 89545 $")
 
-#include <time.h>
-#include <string.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <math.h>
-#include <errno.h>
-
 #include "asterisk/options.h"
 #include "asterisk/logger.h"
 #include "asterisk/channel.h"
@@ -47,8 +39,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 89545 $")
 #include "asterisk/utils.h"
 #include "asterisk/audiohook.h"
 #include "asterisk/manager.h"
-
-
 
 /* Our own datastore */
 struct mute_information {
@@ -110,6 +100,7 @@ static int mute_callback(struct ast_audiohook *audiohook, struct ast_channel *ch
 	if (!(datastore = ast_channel_datastore_find(chan, &mute_datastore, NULL))) {
 		if (option_debug > 1)
 			ast_log(LOG_DEBUG, " *** Can't find any datastore to use. Bad. \n");
+		ast_channel_unlock(chan);
 		return 0;
 	}
 
@@ -132,7 +123,9 @@ static int mute_callback(struct ast_audiohook *audiohook, struct ast_channel *ch
 	return 0;
 }
 
-/*! \brief Initialize mute hook on channel, but don't activate it */
+/*! \brief Initialize mute hook on channel, but don't activate it 
+	\pre assumes that channel is locked
+*/
 static struct ast_datastore *initialize_mutehook(struct ast_channel *chan)
 {
 	struct ast_datastore *datastore = NULL;
@@ -179,8 +172,10 @@ static int func_mute_write(struct ast_channel *chan, char *cmd, char *data, cons
 	struct mute_information *mute = NULL;
 	int is_new = 0;
 
+	ast_channel_lock(chan);
 	if (!(datastore = ast_channel_datastore_find(chan, &mute_datastore, NULL))) {
 		if (!(datastore = initialize_mutehook(chan))) {
+			ast_channel_unlock(chan);
 			return 0;
 		}
 		is_new = 1;
@@ -205,16 +200,17 @@ static int func_mute_write(struct ast_channel *chan, char *cmd, char *data, cons
 	if (is_new) {
 		mute_add_audiohook(chan, mute, datastore);
 	}
+	ast_channel_unlock(chan);
 
 	return 0;
 }
 
 /* Function for debugging - might be useful */
 static struct ast_custom_function mute_function = {
-        .name = "MUTESTREAM",
+        .name = "MUTEAUDIO",
         .write = func_mute_write,
 	.synopsis = "Muting streams in the channel",
-	.syntax = "MUTESTREAM(in|out|all) = true|false",
+	.syntax = "MUTEAUDIO(in|out|all) = true|false",
 	.desc = "The mute function mutes either inbound (to the PBX) or outbound"
 		"audio. \"all\" indicates both directions",
 };
@@ -285,7 +281,7 @@ static int manager_mutestream(struct mansession *s, const struct message *m)
 }
 
 
-static char mandescr_mutestream[] =
+static const char mandescr_mutestream[] =
 	"Description: Mute an incoming or outbound audio stream in a channel.\n"
 	"Variables: \n"
 	"  Channel: <name>           The channel you want to mute.\n"
@@ -294,16 +290,11 @@ static char mandescr_mutestream[] =
 	"  ActionID: <id>            Optional action ID for this AMI transaction.\n";
 
 
-static int reload(void)
-{
-	return 0;
-}
-
 static int load_module(void)
 {
 	ast_custom_function_register(&mute_function);
 
-	ast_manager_register2("MuteStream", EVENT_FLAG_SYSTEM, manager_mutestream,
+	ast_manager_register2("MuteAudio", EVENT_FLAG_SYSTEM, manager_mutestream,
                         "Mute an audio stream", mandescr_mutestream);
 	return 0;
 }
@@ -312,7 +303,7 @@ static int unload_module(void)
 {
 	ast_custom_function_unregister(&mute_function);
 	/* Unregister AMI actions */
-        ast_manager_unregister("MuteStream");
+        ast_manager_unregister("MuteAudio");
 
 	return 0;
 }
@@ -320,5 +311,4 @@ static int unload_module(void)
 AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_GLOBAL_SYMBOLS, "MUTE resource",
 		.load = load_module,
 		.unload = unload_module,
-		.reload = reload,
 	       );
