@@ -1992,12 +1992,20 @@ static void my_unlock_private(void *pvt)
 	ast_mutex_unlock(&p->lock);
 }
 
+/* linear_mode = 0 - turn linear mode off, >0 - turn linear mode on
+* 	returns the last value of the linear setting 
+*/ 
 static int my_set_linear_mode(void *pvt, int idx, int linear_mode)
 {
 	struct dahdi_pvt *p = pvt;
-	if (!linear_mode)
-		linear_mode = p->subs[idx].linear;
-	return dahdi_setlinear(p->subs[idx].dfd, linear_mode);
+	int oldval;
+	
+    if (0 > linear_mode || !dahdi_setlinear(p->subs[idx].dfd, linear_mode)) {
+        return -1;
+    }
+	oldval = p->subs[idx].linear;
+	p->subs[idx].linear = linear_mode;
+	return oldval;
 }
 
 static int get_alarms(struct dahdi_pvt *p);
@@ -3494,11 +3502,7 @@ static void dahdi_close_ss7_fd(struct dahdi_ss7 *ss7, int fd_num)
 
 static int dahdi_setlinear(int dfd, int linear)
 {
-	int res;
-	res = ioctl(dfd, DAHDI_SETLINEAR, &linear);
-	if (res)
-		return res;
-	return 0;
+	return ioctl(dfd, DAHDI_SETLINEAR, &linear);
 }
 
 
@@ -10839,6 +10843,7 @@ static struct dahdi_pvt *mkintf(int channel, const struct dahdi_chan_conf *conf,
 						pris[span].pri.inbanddisconnect = conf->pri.pri.inbanddisconnect;
 #endif
 						pris[span].pri.facilityenable = conf->pri.pri.facilityenable;
+						ast_copy_string(pris[span].pri.msn_list, conf->pri.pri.msn_list, sizeof(pris[span].pri.msn_list));
 						ast_copy_string(pris[span].pri.idledial, conf->pri.pri.idledial, sizeof(pris[span].pri.idledial));
 						ast_copy_string(pris[span].pri.idleext, conf->pri.pri.idleext, sizeof(pris[span].pri.idleext));
 						ast_copy_string(pris[span].pri.internationalprefix, conf->pri.pri.internationalprefix, sizeof(pris[span].pri.internationalprefix));
@@ -15610,6 +15615,9 @@ static int process_dahdi(struct dahdi_chan_conf *confp, const char *cat, struct 
 					ast_log(LOG_ERROR, "Unknown switchtype '%s' at line %d.\n", v->value, v->lineno);
 					return -1;
 				}
+			} else if (!strcasecmp(v->name, "msn")) {
+				ast_copy_string(confp->pri.pri.msn_list, v->value,
+					sizeof(confp->pri.pri.msn_list));
 			} else if (!strcasecmp(v->name, "nsf")) {
 				if (!strcasecmp(v->value, "sdn"))
 					confp->pri.pri.nsf = PRI_NSF_SDN;

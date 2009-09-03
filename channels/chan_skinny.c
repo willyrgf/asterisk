@@ -3476,6 +3476,7 @@ static char *_skinny_show_line(int type, int fd, struct mansession *s, const str
 				ast_cli(fd, "NAT:              %s\n", (l->nat ? "Yes" : "No"));
 				ast_cli(fd, "immediate:        %s\n", (l->immediate ? "Yes" : "No"));
 				ast_cli(fd, "Group:            %d\n", l->group);
+				ast_cli(fd, "Parkinglot:       %s\n", S_OR(l->parkinglot, "<not set>"));
 				ast_cli(fd, "Conf Codecs:      ");
 				ast_getformatname_multiple(codec_buf, sizeof(codec_buf) - 1, l->confcapability);
 				ast_cli(fd, "%s\n", codec_buf);
@@ -3521,6 +3522,7 @@ static char *_skinny_show_line(int type, int fd, struct mansession *s, const str
 				astman_append(s, "NAT: %s\r\n", (l->nat ? "Yes" : "No"));
 				astman_append(s, "immediate: %s\r\n", (l->immediate ? "Yes" : "No"));
 				astman_append(s, "Group: %d\r\n", l->group);
+				astman_append(s, "Parkinglot: %s\r\n", S_OR(l->parkinglot, "<not set>"));
 				ast_getformatname_multiple(codec_buf, sizeof(codec_buf) - 1, l->confcapability);
 				astman_append(s, "Codecs: %s\r\n", codec_buf);
 				astman_append(s, "CodecOrder: ");
@@ -4414,6 +4416,8 @@ static struct ast_channel *skinny_new(struct skinny_line *l, int state, const ch
 			ast_string_field_set(tmp, language, l->language);
 		if (!ast_strlen_zero(l->accountcode))
 			ast_string_field_set(tmp, accountcode, l->accountcode);
+		if (!ast_strlen_zero(l->parkinglot))
+			ast_string_field_set(tmp, parkinglot, l->parkinglot);
 		if (l->amaflags)
 			tmp->amaflags = l->amaflags;
 
