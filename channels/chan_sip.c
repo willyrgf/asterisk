@@ -540,6 +540,7 @@ static struct ast_codec_pref default_prefs;		/*!< Default codec prefs */
 
 /* Global settings only apply to the channel */
 static int global_directrtpsetup;	/*!< Enable support for Direct RTP setup (no re-invites) */
+static int global_prematuremediafilter;	/*!< Enable/disable premature frames in a call (causing 183 early media) */
 static int global_limitonpeers;		/*!< Match call limit on peers only */
 static int global_rtautoclear;
 static int global_notifyringing;	/*!< Send notifications on ringing */
@@ -2149,7 +2150,7 @@ static int __sip_autodestruct(const void *data)
 	* that were created via INVITE, then thru some sequence were CANCELED,
 	* to die, rather than infinitely be rescheduled */
 	if (p->packets && !ast_test_flag(&p->flags[0], SIP_NEEDDESTROY)) {
-		char method_str[30];
+		char method_str[31];
 		if (option_debug > 2)
 			ast_log(LOG_DEBUG, "Re-scheduled destruction of SIP call %s\n", p->callid ? p->callid : "<unknown>");
 		append_history(p, "ReliableXmit", "timeout");
@@ -3908,9 +3909,11 @@ static int sip_write(struct ast_channel *ast, struct ast_frame *frame)
 				    !ast_test_flag(&p->flags[0], SIP_PROGRESS_SENT) &&
 				    !ast_test_flag(&p->flags[0], SIP_OUTGOING)) {
 					ast_rtp_new_source(p->rtp);
-					p->invitestate = INV_EARLY_MEDIA;
-					transmit_provisional_response(p, "183 Session Progress", &p->initreq, 1);
-					ast_set_flag(&p->flags[0], SIP_PROGRESS_SENT);
+					if (!global_prematuremediafilter) {
+						p->invitestate = INV_EARLY_MEDIA;
+						transmit_provisional_response(p, "183 Session Progress", &p->initreq, 1);
+						ast_set_flag(&p->flags[0], SIP_PROGRESS_SENT);
+					}
 				} else if (p->t38.state == T38_ENABLED && !p->t38.direct) {
 					p->t38.state = T38_DISABLED;
 					transmit_reinvite_with_sdp(p);
@@ -11338,6 +11341,7 @@ static int sip_show_settings(int fd, int argc, char *argv[])
 	ast_cli(fd, "\n");
 	ast_cli(fd, "  Timer T1 minimum:       %d\n", global_t1min);
 	ast_cli(fd, "  Timer B:                %d\n", global_timer_b);
+	ast_cli(fd, "  No premature media:     %s\n", global_prematuremediafilter ? "Yes" : "No");
 	ast_cli(fd, "  Relax DTMF:             %s\n", global_relaxdtmf ? "Yes" : "No");
 	ast_cli(fd, "  Compact SIP headers:    %s\n", compactheaders ? "Yes" : "No");
 	ast_cli(fd, "  RTP Keepalive:          %d %s\n", global_rtpkeepalive, global_rtpkeepalive ? "" : "(Disabled)" );
@@ -18154,6 +18158,7 @@ static int reload_config(enum channelreloadreason reason)
 	expiry = DEFAULT_EXPIRY;
 	global_notifyringing = DEFAULT_NOTIFYRINGING;
 	global_limitonpeers = FALSE;
+	global_prematuremediafilter = FALSE;
 	global_directrtpsetup = FALSE;		/* Experimental feature, disabled by default */
 	global_notifyhold = FALSE;
 	global_alwaysauthreject = 0;
@@ -18262,6 +18267,8 @@ static int reload_config(enum channelreloadreason reason)
 			ast_set2_flag(&global_flags[1], i || ast_true(v->value), SIP_PAGE2_RTAUTOCLEAR);
 		} else if (!strcasecmp(v->name, "usereqphone")) {
 			ast_set2_flag(&global_flags[0], ast_true(v->value), SIP_USEREQPHONE);	
+		} else if (!strcasecmp(v->name, "prematuremedia")) {
+			global_prematuremediafilter = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "relaxdtmf")) {
 			global_relaxdtmf = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "checkmwi")) {
