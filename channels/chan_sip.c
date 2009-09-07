@@ -1152,13 +1152,13 @@ static const char *sip_reason_code_to_str(enum AST_REDIRECTING_REASON code)
 	configuring devices
 */
 /*@{*/
-static char default_language[MAX_LANGUAGE];	/*! Default language setting for new channels */
-static char default_callerid[AST_MAX_EXTENSION];
-static char default_mwi_from[80];
-static char default_fromdomain[AST_MAX_EXTENSION];
-static char default_notifymime[AST_MAX_EXTENSION];
+static char default_language[MAX_LANGUAGE];	/*!< Default language setting for new channels */
+static char default_callerid[AST_MAX_EXTENSION];	/*!< Default caller ID for sip messages */
+static char default_mwi_from[80];			/*!< Default caller ID for MWI updates */
+static char default_fromdomain[AST_MAX_EXTENSION];	/*!< Default domain on outound messages */
+static char default_notifymime[AST_MAX_EXTENSION];	/*!< Default MIME media type for MWI notify messages */
+static char default_vmexten[AST_MAX_EXTENSION];		/*!< Default From Username on MWI updates */
 static int default_qualify;		/*!< Default Qualify= setting */
-static char default_vmexten[AST_MAX_EXTENSION];
 static char default_mohinterpret[MAX_MUSICCLASS];  /*!< Global setting for moh class to use when put on hold */
 static char default_mohsuggest[MAX_MUSICCLASS];	   /*!< Global setting for moh class to suggest when putting
                                                     *   a bridged channel on hold */
@@ -1177,6 +1177,7 @@ static unsigned int default_primary_transport;		/*!< Default primary Transport (
 */
 /*@{*/
 /*! \brief a place to store all global settings for the sip channel driver
+
 	These are settings that will be possibly to apply on a group level later on.
 	\note Do not add settings that only apply to the channel itself and can't
 	      be applied to devices (trunks, services, phones)
@@ -1342,10 +1343,8 @@ struct sip_request {
 	char debug;		/*!< print extra debugging if non zero */
 	char has_to_tag;	/*!< non-zero if packet has To: tag */
 	char ignore;		/*!< if non-zero This is a re-transmit, ignore it */
-	/* Array of offsets into the request string of each SIP header*/
-	ptrdiff_t header[SIP_MAX_HEADERS];
-	/* Array of offsets into the request string of each SDP line*/
-	ptrdiff_t line[SIP_MAX_LINES];
+	ptrdiff_t header[SIP_MAX_HEADERS]; /*!< Array of offsets into the request string of each SIP header*/
+	ptrdiff_t line[SIP_MAX_LINES]; /*!< Array of offsets into the request string of each SDP line*/
 	struct ast_str *data;	
 	/* XXX Do we need to unref socket.ser when the request goes away? */
 	struct sip_socket socket;	/*!< The socket used for this request */
@@ -1845,10 +1844,11 @@ struct sip_pvt {
 	 * By doing this, even if we don't want to answer a particular media stream with something meaningful, we can
 	 * still put an m= line in our answer with the port set to 0.
 	 *
-	 * The reason for the length being 4 is that in this branch of Asterisk, the only media types supported are
+	 * The reason for the length being 4 (OFFERED_MEDIA_COUNT) is that in this branch of Asterisk, the only media types supported are
 	 * image, audio, text, and video. Therefore we need to keep track of which types of media were offered.
+	 * Note that secure RTP defines new types of SDP media.
 	 *
-	 * Note that if we wanted to be 100% correct, we would keep a list of all media streams offered. That way we could respond
+	 * If we wanted to be 100% correct, we would keep a list of all media streams offered. That way we could respond
 	 * even to unknown media types, and we could respond to multiple streams of the same type. Such large-scale changes
 	 * are not a good idea for released branches, though, so we're compromising by just making sure that for the common cases:
 	 * audio and video, audio and T.38, and audio and text, we give the appropriate response to both media streams.
@@ -1999,6 +1999,7 @@ struct sip_peer {
 					 *   or respect the other endpoint's request for frame sizes (on)
 					 *   for incoming calls
 					 */
+	unsigned short deprecated_username:1; /*!< If it's a realtime peer, are they using the deprecated "username" instead of "defaultuser" */
 	struct sip_auth *auth;		/*!< Realm authentication list */
 	int amaflags;			/*!< AMA Flags (for billing) */
 	int callingpres;		/*!< Calling id presentation */
@@ -2016,7 +2017,7 @@ struct sip_peer {
 	/*! Mailboxes that this peer cares about */
 	AST_LIST_HEAD_NOLOCK(, sip_mailbox) mailboxes;
 
-	int maxcallbitrate;		/*!< Maximum Bitrate for a video call */
+	int maxcallbitrate;		/*!<  Maximum Bitrate for a video call */
 	int expire;			/*!<  When to expire this peer registration */
 	int capability;			/*!<  Codec capability */
 	int rtptimeout;			/*!<  RTP timeout */
@@ -2027,13 +2028,12 @@ struct sip_peer {
 	struct sip_proxy *outboundproxy;	/*!< Outbound proxy for this peer */
 	struct ast_dnsmgr_entry *dnsmgr;/*!<  DNS refresh manager for peer */
 	struct sockaddr_in addr;	/*!<  IP address of peer */
-	/* Qualification */
 	struct sip_pvt *call;		/*!<  Call pointer */
-	int pokeexpire;			/*!<  When to expire poke (qualify= checking) */
-	int lastms;			/*!<  How long last response took (in ms), or -1 for no response */
-	int maxms;			/*!<  Max ms we will accept for the host to be up, 0 to not monitor */
-	int qualifyfreq;		/*!<  Qualification: How often to check for the host to be up */
-	struct timeval ps;		/*!<  Time for sending SIP OPTION in sip_pke_peer() */
+	int pokeexpire;			/*!<  Qualification: When to expire poke (qualify= checking) */
+	int lastms;			/*!<  Qualification: How long last response took (in ms), or -1 for no response */
+	int maxms;			/*!<  Qualification: Max ms we will accept for the host to be up, 0 to not monitor */
+	int qualifyfreq;		/*!<  Qualification: Qualification: How often to check for the host to be up */
+	struct timeval ps;		/*!<  Qualification: Time for sending SIP OPTION in sip_pke_peer() */
 	struct sockaddr_in defaddr;	/*!<  Default IP address, used until registration */
 	struct ast_ha *ha;		/*!<  Access control list */
 	struct ast_ha *contactha;       /*!<  Restrict what IPs are allowed in the Contact header (for registration) */
@@ -2042,7 +2042,6 @@ struct sip_peer {
 	struct sip_st_cfg stimer;	/*!<  SIP Session-Timers */
 	int timer_t1;			/*!<  The maximum T1 value for the peer */
 	int timer_b;			/*!<  The maximum timer B (transaction timeouts) */
-	int deprecated_username; /*!< If it's a realtime peer, are they using the deprecated "username" instead of "defaultuser" */
 	
 	/*XXX Seems like we suddenly have two flags with the same content. Why? To be continued... */
 	enum sip_peer_type type; /*!< Distinguish between "user" and "peer" types. This is used solely for CLI and manager commands */
@@ -2078,7 +2077,6 @@ struct sip_registry {
 		AST_STRING_FIELD(secret);	/*!< Password in clear text */	
 		AST_STRING_FIELD(md5secret);	/*!< Password in md5 */
 		AST_STRING_FIELD(callback);	/*!< Contact extension */
-		AST_STRING_FIELD(random);
 		AST_STRING_FIELD(peername);	/*!< Peer registering to */
 	);
 	enum sip_transport transport;	/*!< Transport for this registration UDP, TCP or TLS */
@@ -2147,7 +2145,7 @@ static AST_LIST_HEAD_STATIC(threadl, sip_threadinfo);
 static struct ao2_container *peers;
 static struct ao2_container *peers_by_ip;
 
-/*! \brief  The register list: Other SIP proxies we register with and place calls to */
+/*! \brief  The register list: Other SIP proxies we register with and receive calls from */
 static struct ast_register_list {
 	ASTOBJ_CONTAINER_COMPONENTS(struct sip_registry);
 	int recheck;
@@ -2322,7 +2320,7 @@ static struct sockaddr_in externip;		/*!< External IP address if we are behind N
 
 static char externhost[MAXHOSTNAMELEN];		/*!< External host name */
 static time_t externexpire;			/*!< Expiration counter for re-resolving external host name in dynamic DNS */
-static int externrefresh = 10;
+static int externrefresh = 10;			/*!< Refresh timer for DNS-based external address (dyndns) */
 static struct sockaddr_in stunaddr;		/*!< stun server address */
 
 /*! \brief  List of local networks
@@ -2499,36 +2497,6 @@ static void ast_quiet_chan(struct ast_channel *chan);
 static int attempt_transfer(struct sip_dual *transferer, struct sip_dual *target);
 static int do_magic_pickup(struct ast_channel *channel, const char *extension, const char *context);
 
-/*!
- * \brief generic function for determining if a correct transport is being
- * used to contact a peer
- *
- * this is done as a macro so that the "tmpl" var can be passed either a
- * sip_request or a sip_peer
- */
-#define check_request_transport(peer, tmpl) ({ \
-	int ret = 0; \
-	if (peer->socket.type == tmpl->socket.type) \
-		; \
-	else if (!(peer->transports & tmpl->socket.type)) {\
-		ast_log(LOG_ERROR, \
-			"'%s' is not a valid transport for '%s'. we only use '%s'! ending call.\n", \
-			get_transport(tmpl->socket.type), peer->name, get_transport_list(peer->transports) \
-			); \
-		ret = 1; \
-	} else if (peer->socket.type & SIP_TRANSPORT_TLS) { \
-		ast_log(LOG_WARNING, \
-			"peer '%s' HAS NOT USED (OR SWITCHED TO) TLS in favor of '%s' (but this was allowed in sip.conf)!\n", \
-			peer->name, get_transport(tmpl->socket.type) \
-		); \
-	} else { \
-		ast_debug(1, \
-			"peer '%s' has contacted us over %s even though we prefer %s.\n", \
-			peer->name, get_transport(tmpl->socket.type), get_transport(peer->socket.type) \
-		); \
-	}\
-	(ret); \
-})
 
 
 /*--- Device monitoring and Device/extension state/event handling */
@@ -2594,11 +2562,6 @@ static int acf_channel_read(struct ast_channel *chan, const char *funcname, char
 static void sip_dump_history(struct sip_pvt *dialog);	/* Dump history to debuglog at end of dialog, before destroying data */
 static inline int sip_debug_test_addr(const struct sockaddr_in *addr);
 static inline int sip_debug_test_pvt(struct sip_pvt *p);
-
-
-/*! \brief Append to SIP dialog history
-	\return Always returns 0 */
-#define append_history(p, event, fmt , args... )	append_history_full(p, "%-15s " fmt, event, ## args)
 static void append_history_full(struct sip_pvt *p, const char *fmt, ...);
 static void sip_dump_history(struct sip_pvt *dialog);
 
@@ -2620,7 +2583,7 @@ static int handle_common_options(struct ast_flags *flags, struct ast_flags *mask
 static void set_socket_transport(struct sip_socket *socket, int transport);
 
 /* Realtime device support */
-static void realtime_update_peer(const char *peername, struct sockaddr_in *sin, const char *username, const char *fullcontact, const char *useragent, int expirey, int deprecated_username, int lastms);
+static void realtime_update_peer(const char *peername, struct sockaddr_in *sin, const char *username, const char *fullcontact, const char *useragent, int expirey, unsigned short deprecated_username, int lastms);
 static void update_peer(struct sip_peer *p, int expire);
 static struct ast_variable *get_insecure_variable_from_config(struct ast_config *config);
 static const char *get_name_from_variable(struct ast_variable *var, const char *newpeername);
@@ -2834,6 +2797,10 @@ static struct ast_tcptls_session_args sip_tls_desc = {
 /* wrapper macro to tell whether t points to one of the sip_tech descriptors */
 #define IS_SIP_TECH(t)  ((t) == &sip_tech || (t) == &sip_tech_info)
 
+/*! \brief Append to SIP dialog history
+	\return Always returns 0 */
+#define append_history(p, event, fmt , args... )	append_history_full(p, "%-15s " fmt, event, ## args)
+
 /*! \brief map from an integer value to a string.
  * If no match is found, return errorstring
  */
@@ -2861,6 +2828,37 @@ static int map_s_x(const struct _map_x_s *table, const char *s, int errorvalue)
 }
 
 /*!
+ * \brief generic function for determining if a correct transport is being
+ * used to contact a peer
+ *
+ * this is done as a macro so that the "tmpl" var can be passed either a
+ * sip_request or a sip_peer
+ */
+#define check_request_transport(peer, tmpl) ({ \
+	int ret = 0; \
+	if (peer->socket.type == tmpl->socket.type) \
+		; \
+	else if (!(peer->transports & tmpl->socket.type)) {\
+		ast_log(LOG_ERROR, \
+			"'%s' is not a valid transport for '%s'. we only use '%s'! ending call.\n", \
+			get_transport(tmpl->socket.type), peer->name, get_transport_list(peer->transports) \
+			); \
+		ret = 1; \
+	} else if (peer->socket.type & SIP_TRANSPORT_TLS) { \
+		ast_log(LOG_WARNING, \
+			"peer '%s' HAS NOT USED (OR SWITCHED TO) TLS in favor of '%s' (but this was allowed in sip.conf)!\n", \
+			peer->name, get_transport(tmpl->socket.type) \
+		); \
+	} else { \
+		ast_debug(1, \
+			"peer '%s' has contacted us over %s even though we prefer %s.\n", \
+			peer->name, get_transport(tmpl->socket.type), get_transport(peer->socket.type) \
+		); \
+	}\
+	(ret); \
+})
+
+/*! \brief
  * duplicate a list of channel variables, \return the copy.
  */
 static struct ast_variable *copy_vars(struct ast_variable *src)
@@ -3875,9 +3873,11 @@ static int __sip_autodestruct(const void *data)
 		}
 	}
 
-	if (p->subscribed == MWI_NOTIFICATION)
-		if (p->relatedpeer)
+	if (p->subscribed == MWI_NOTIFICATION) {
+		if (p->relatedpeer) {
 			p->relatedpeer = unref_peer(p->relatedpeer, "__sip_autodestruct: unref peer p->relatedpeer");	/* Remove link to peer. If it's realtime, make sure it's gone from memory) */
+		}
+	}
 
 	/* Reset schedule ID */
 	p->autokillid = -1;
@@ -4524,7 +4524,7 @@ static int sip_sendtext(struct ast_channel *ast, const char *text)
 	that name and store that in the "regserver" field in the sippeers
 	table to facilitate multi-server setups.
 */
-static void realtime_update_peer(const char *peername, struct sockaddr_in *sin, const char *defaultuser, const char *fullcontact, const char *useragent, int expirey, int deprecated_username, int lastms)
+static void realtime_update_peer(const char *peername, struct sockaddr_in *sin, const char *defaultuser, const char *fullcontact, const char *useragent, int expirey, unsigned short deprecated_username, int lastms)
 {
 	char port[10];
 	char ipaddr[INET_ADDRSTRLEN];
