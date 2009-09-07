@@ -1136,6 +1136,7 @@ static const char *sip_reason_code_to_str(enum AST_REDIRECTING_REASON code)
 #define DEFAULT_SDPSESSION "Asterisk PBX"	/*!< Default SDP session name, (s=) header unless re-defined in sip.conf */
 #define DEFAULT_SDPOWNER "root"			/*!< Default SDP username field in (o=) header unless re-defined in sip.conf */
 #define DEFAULT_ENGINE "asterisk"               /*!< Default RTP engine to use for sessions */
+#define DEFAULT_CAPABILITY (AST_FORMAT_ULAW | AST_FORMAT_ALAW | AST_FORMAT_GSM | AST_FORMAT_H263);
 #endif
 /*@}*/
 
@@ -1189,6 +1190,7 @@ struct sip_settings {
 	int callevents;			/*!< Whether we send manager events or not */
 	int regextenonqualify;  	/*!< Whether to add/remove regexten when qualifying peers */
 	int matchexterniplocally;	/*!< Match externip/externhost setting against localnet setting */
+	char regcontext[AST_MAX_CONTEXT];	/*!< Context for auto-extensions */
 	unsigned int disallowed_methods; /*!< methods that we should never try to use */
 	int notifyringing;		/*!< Send notifications on ringing */
 	int notifyhold;			/*!< Send notifications on hold */
@@ -1202,6 +1204,7 @@ struct sip_settings {
 	char default_context[AST_MAX_CONTEXT];
 	char default_subscribecontext[AST_MAX_CONTEXT];
 	struct ast_ha *contact_ha;  /*! \brief Global list of addresses dynamic peers are not allowed to use */
+	int capability;			/*!< Supported codecs */
 };
 
 static struct sip_settings sip_cfg;		/*!< SIP configuration data.
@@ -1229,7 +1232,6 @@ static unsigned int global_cos_video;		/*!< 802.1p class of service for video RT
 static unsigned int global_cos_text;		/*!< 802.1p class of service for text RTP packets */
 static unsigned int recordhistory;		/*!< Record SIP history. Off by default */
 static unsigned int dumphistory;		/*!< Dump history to verbose before destroying SIP dialog */
-static char global_regcontext[AST_MAX_CONTEXT];		/*!< Context for auto-extensions */
 static char global_useragent[AST_MAX_EXTENSION];	/*!< Useragent for the SIP channel */
 static char global_sdpsession[AST_MAX_EXTENSION];	/*!< SDP session name for the SIP channel */
 static char global_sdpowner[AST_MAX_EXTENSION];	/*!< SDP owner name for the SIP channel */
@@ -1243,17 +1245,14 @@ static int global_qualify_gap;              /*!< Time between our group of peer 
 static int global_qualify_peers;          /*!< Number of peers to poke at a given time */
 
 
-/*! \brief Codecs that we support by default: */
-static int global_capability = AST_FORMAT_ULAW | AST_FORMAT_ALAW | AST_FORMAT_GSM | AST_FORMAT_H263;
-
 static enum st_mode global_st_mode;           /*!< Mode of operation for Session-Timers           */
 static enum st_refresher global_st_refresher; /*!< Session-Timer refresher                        */
 static int global_min_se;                     /*!< Lowest threshold for session refresh interval  */
 static int global_max_se;                     /*!< Highest threshold for session refresh interval */
 
+static int global_dynamic_exclude_static = 0;	/*!< Exclude static peers from contact registrations */
 /*@}*/
 
-static int global_dynamic_exclude_static = 0;
 
 /*! \name Object counters @{
  * \bug These counters are not handled in a thread-safe way ast_atomic_fetchadd_int()
@@ -4570,11 +4569,11 @@ static void register_peer_exten(struct sip_peer *peer, int onoff)
 	char *stringp, *ext, *context;
 	struct pbx_find_info q = { .stacklen = 0 };
 
-	/* XXX note that global_regcontext is both a global 'enable' flag and
+	/* XXX note that sip_cfg.regcontext is both a global 'enable' flag and
 	 * the name of the global regexten context, if not specified
 	 * individually.
 	 */
-	if (ast_strlen_zero(global_regcontext))
+	if (ast_strlen_zero(sip_cfg.regcontext))
 		return;
 
 	ast_copy_string(multi, S_OR(peer->regexten, peer->name), sizeof(multi));
@@ -4587,7 +4586,7 @@ static void register_peer_exten(struct sip_peer *peer, int onoff)
 				continue;
 			}
 		} else {
-			context = global_regcontext;
+			context = sip_cfg.regcontext;
 		}
 		if (onoff) {
 			if (!ast_exists_extension(NULL, context, ext, 1, NULL)) {
@@ -6699,9 +6698,9 @@ static struct ast_channel *sip_new(struct sip_pvt *i, int state, const char *tit
 		video = i->capability & AST_FORMAT_VIDEO_MASK;
 		text = i->capability & AST_FORMAT_TEXT_MASK;
 	} else {
-		what = global_capability;	/* Global codec support */
-		video = global_capability & AST_FORMAT_VIDEO_MASK;
-		text = global_capability & AST_FORMAT_TEXT_MASK;
+		what = sip_cfg.capability;	/* Global codec support */
+		video = sip_cfg.capability & AST_FORMAT_VIDEO_MASK;
+		text = sip_cfg.capability & AST_FORMAT_TEXT_MASK;
 	}
 
 	/* Set the native formats for audio  and merge in video */
@@ -7240,7 +7239,7 @@ static struct sip_pvt *sip_alloc(ast_string_field callid, struct sockaddr_in *si
 	/* Assign default music on hold class */
 	ast_string_field_set(p, mohinterpret, default_mohinterpret);
 	ast_string_field_set(p, mohsuggest, default_mohsuggest);
-	p->capability = global_capability;
+	p->capability = sip_cfg.capability;
 	p->allowtransfer = sip_cfg.allowtransfer;
 	if ((ast_test_flag(&p->flags[0], SIP_DTMF) == SIP_DTMF_RFC2833) ||
 	    (ast_test_flag(&p->flags[0], SIP_DTMF) == SIP_DTMF_AUTO))
@@ -15790,7 +15789,7 @@ static char *_sip_show_peer(int type, int fd, struct mansession *s, const struct
 		ast_cli(fd, "  Defaddr->IP  : %s Port %d\n", ast_inet_ntoa(peer->defaddr.sin_addr), ntohs(peer->defaddr.sin_port));
 		ast_cli(fd, "  Prim.Transp. : %s\n", get_transport(peer->socket.type));
 		ast_cli(fd, "  Allowed.Trsp : %s\n", get_transport_list(peer->transports));
-		if (!ast_strlen_zero(global_regcontext))
+		if (!ast_strlen_zero(sip_cfg.regcontext))
 			ast_cli(fd, "  Reg. exten   : %s\n", peer->regexten);
 		ast_cli(fd, "  Def. Username: %s\n", peer->username);
 		ast_cli(fd, "  SIP Options  : ");
@@ -15890,7 +15889,7 @@ static char *_sip_show_peer(int type, int fd, struct mansession *s, const struct
 		astman_append(s, "Address-IP: %s\r\nAddress-Port: %d\r\n",  peer->addr.sin_addr.s_addr ? ast_inet_ntoa(peer->addr.sin_addr) : "", ntohs(peer->addr.sin_port));
 		astman_append(s, "Default-addr-IP: %s\r\nDefault-addr-port: %d\r\n", ast_inet_ntoa(peer->defaddr.sin_addr), ntohs(peer->defaddr.sin_port));
 		astman_append(s, "Default-Username: %s\r\n", peer->username);
-		if (!ast_strlen_zero(global_regcontext))
+		if (!ast_strlen_zero(sip_cfg.regcontext))
 			astman_append(s, "RegExtension: %s\r\n", peer->regexten);
 		astman_append(s, "Codecs: ");
 		ast_getformatname_multiple(codec_buf, sizeof(codec_buf) -1, peer->capability);
@@ -16318,7 +16317,7 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	ast_cli(a->fd, "  User Agent:             %s\n", global_useragent);
 	ast_cli(a->fd, "  SDP Session Name:       %s\n", ast_strlen_zero(global_sdpsession) ? "-" : global_sdpsession);
 	ast_cli(a->fd, "  SDP Owner Name:         %s\n", ast_strlen_zero(global_sdpowner) ? "-" : global_sdpowner);
-	ast_cli(a->fd, "  Reg. context:           %s\n", S_OR(global_regcontext, "(not set)"));
+	ast_cli(a->fd, "  Reg. context:           %s\n", S_OR(sip_cfg.regcontext, "(not set)"));
 	ast_cli(a->fd, "  Regexten on Qualify:    %s\n", cli_yesno(sip_cfg.regextenonqualify));
 	ast_cli(a->fd, "  Caller ID:              %s\n", default_callerid);
 	ast_cli(a->fd, "  From: Domain:           %s\n", default_fromdomain);
@@ -16383,7 +16382,7 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	ast_cli(a->fd, "\nGlobal Signalling Settings:\n");
 	ast_cli(a->fd, "---------------------------\n");
 	ast_cli(a->fd, "  Codecs:                 ");
-	ast_getformatname_multiple(codec_buf, sizeof(codec_buf) -1, global_capability);
+	ast_getformatname_multiple(codec_buf, sizeof(codec_buf) -1, sip_cfg.capability);
 	ast_cli(a->fd, "%s\n", codec_buf);
 	ast_cli(a->fd, "  Codec Order:            ");
 	print_codec_to_cli(a->fd, &default_prefs);
@@ -23677,7 +23676,7 @@ static struct ast_channel *sip_request_call(const char *type, int format, const 
 	 */
 	format &= AST_FORMAT_AUDIO_MASK;
 	if (!format) {
-		ast_log(LOG_NOTICE, "Asked to get a channel of unsupported format %s while capability is %s\n", ast_getformatname(oldformat), ast_getformatname(global_capability));
+		ast_log(LOG_NOTICE, "Asked to get a channel of unsupported format %s while capability is %s\n", ast_getformatname(oldformat), ast_getformatname(sip_cfg.capability));
 		*cause = AST_CAUSE_BEARERCAPABILITY_NOTAVAIL;	/* Can't find codec to connect to host */
 		return NULL;
 	}
@@ -24188,7 +24187,7 @@ static void set_peer_defaults(struct sip_peer *peer)
 	ast_string_field_set(peer, engine, default_engine);
 	peer->addr.sin_family = AF_INET;
 	peer->defaddr.sin_family = AF_INET;
-	peer->capability = global_capability;
+	peer->capability = sip_cfg.capability;
 	peer->maxcallbitrate = default_maxcallbitrate;
 	peer->rtptimeout = global_rtptimeout;
 	peer->rtpholdtimeout = global_rtpholdtimeout;
@@ -24923,8 +24922,8 @@ static int reload_config(enum channelreloadreason reason)
 	default_tls_cfg.cafile = ast_strdup("");
 	default_tls_cfg.capath = ast_strdup("");
 
-	/* Initialize copy of current global_regcontext for later use in removing stale contexts */
-	ast_copy_string(oldcontexts, global_regcontext, sizeof(oldcontexts));
+	/* Initialize copy of current sip_cfg.regcontext for later use in removing stale contexts */
+	ast_copy_string(oldcontexts, sip_cfg.regcontext, sizeof(oldcontexts));
 	oldregcontext = oldcontexts;
 
 	/* Clear all flags before setting default values */
@@ -24968,7 +24967,8 @@ static int reload_config(enum channelreloadreason reason)
 
 	/* Reset channel settings to default before re-configuring */
 	sip_cfg.allow_external_domains = DEFAULT_ALLOW_EXT_DOM;				/* Allow external invites */
-	global_regcontext[0] = '\0';
+	sip_cfg.regcontext[0] = '\0';
+	sip_cfg.capability = DEFAULT_CAPABILITY;
 	sip_cfg.regextenonqualify = DEFAULT_REGEXTENONQUALIFY;
 	sip_cfg.notifyringing = DEFAULT_NOTIFYRINGING;
 	sip_cfg.notifycid = DEFAULT_NOTIFYCID;
@@ -25004,6 +25004,7 @@ static int reload_config(enum channelreloadreason reason)
 	ast_set_flag(&global_flags[1], SIP_PAGE2_ALLOWSUBSCRIBE);	/* Default for all devices: TRUE */
 	ast_set_flag(&global_flags[1], SIP_PAGE2_ALLOWOVERLAP);		/* Default for all devices: TRUE */
 	sip_cfg.peer_rtupdate = TRUE;
+	global_dynamic_exclude_static = 0;	/* Exclude static peers */
 
 	/* Session-Timers */
 	global_st_mode = SESSION_TIMER_MODE_ACCEPT;
@@ -25209,7 +25210,7 @@ static int reload_config(enum channelreloadreason reason)
 				ast_copy_string(used_context, context, sizeof(used_context));
 				ast_context_find_or_create(NULL, NULL, context, "SIP");
 			}
-			ast_copy_string(global_regcontext, v->value, sizeof(global_regcontext));
+			ast_copy_string(sip_cfg.regcontext, v->value, sizeof(sip_cfg.regcontext));
 		} else if (!strcasecmp(v->name, "regextenonqualify")) {
 			sip_cfg.regextenonqualify = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "callerid")) {
@@ -25324,11 +25325,11 @@ static int reload_config(enum channelreloadreason reason)
 				externrefresh = 10;
 			}
 		} else if (!strcasecmp(v->name, "allow")) {
-			int error =  ast_parse_allow_disallow(&default_prefs, &global_capability, v->value, TRUE);
+			int error =  ast_parse_allow_disallow(&default_prefs, &sip_cfg.capability, v->value, TRUE);
 			if (error)
 				ast_log(LOG_WARNING, "Codec configuration errors found in line %d : %s = %s\n", v->lineno, v->name, v->value);
 		} else if (!strcasecmp(v->name, "disallow")) {
-			int error =  ast_parse_allow_disallow(&default_prefs, &global_capability, v->value, FALSE);
+			int error =  ast_parse_allow_disallow(&default_prefs, &sip_cfg.capability, v->value, FALSE);
 			if (error)
 				ast_log(LOG_WARNING, "Codec configuration errors found in line %d : %s = %s\n", v->lineno, v->name, v->value);
 		} else if (!strcasecmp(v->name, "preferred_codec_only")) {
