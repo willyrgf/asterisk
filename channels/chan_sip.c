@@ -1,3 +1,8 @@
+/* PEER failover branch
+ *  - each peer is given a secondary hostname, configured as "failoverhost"
+ *  - when a transmission to a given host fails, we switch automatically over to failoverhost 
+ *	
+ */
 /*
  * Asterisk -- An open source telephony toolkit.
  *
@@ -850,6 +855,30 @@ struct sip_route {
 	char hop[0];
 };
 
+/*! \brief */
+enum failover_state {
+	NOT_CONFIGURED = 0,	/*!< This is not a failover server */
+	STANDBY,		/*!< This is a failover server in standby mode */
+	ACTIVE,			/*!< The primary server fails, so this server is active */
+};
+
+/*! \brief definition of a sip proxy server
+ *
+ * For outbound proxies, this is allocated in the SIP peer dynamically or
+ * statically as the global_outboundproxy. The pointer in a SIP message is just
+ * a pointer and should *not* be de-allocated.
+ */
+struct sip_proxy {
+	char name[MAXHOSTNAMELEN];      /*!< DNS name of domain/host or IP */
+	struct sockaddr_in ip;          /*!< Currently used IP address and port */
+	time_t last_dnsupdate;          /*!< When this was resolved */
+	int force;                      /*!< If it's an outbound proxy, Force use of this outbound proxy for all outbound requests */
+	enum failover_state failoverstate;	/*!< If this is a failover proxy, what's the state ? */
+
+	/* Room for a SRV record chain based on the name */
+};
+
+
 /*! \brief Modes for SIP domain handling in the PBX */
 enum domain_mode {
 	SIP_DOMAIN_AUTO,		/*!< This domain is auto-configured */
@@ -1180,6 +1209,7 @@ struct sip_pvt {
 		AST_STRING_FIELD(fromname);	/*!< Name to show in the user field */
 		AST_STRING_FIELD(tohost);	/*!< Host we should put in the "to" field */
 		AST_STRING_FIELD(todnid);	/*!< DNID of this call (overrides host) */
+		AST_STRING_FIELD(failoverhostname);	/*!< Host name of failover host if SIP signalling dies */
 		AST_STRING_FIELD(language);	/*!< Default language for this call */
 		AST_STRING_FIELD(mohinterpret);	/*!< MOH class to use when put on hold */
 		AST_STRING_FIELD(mohsuggest);	/*!< MOH class to suggest when putting a peer on hold */
@@ -1248,6 +1278,8 @@ struct sip_pvt {
 	int sessionversion_remote;		/*!< Remote UA's SDP Session Version */
 	int session_modify;			/*!< Session modification request true/false  */
 	struct sockaddr_in sa;			/*!< Our peer */
+	struct sockaddr_in failoveraddr;	/*!< Our failover IP address */
+	enum failover_state failoverstate;	/*!< Failover state for this peer */
 	struct sockaddr_in redirip;		/*!< Where our RTP should be going if not to us */
 	struct sockaddr_in vredirip;		/*!< Where our Video RTP should be going if not to us */
 	struct sockaddr_in tredirip;		/*!< Where our Text RTP should be going if not to us */
@@ -1436,6 +1468,7 @@ struct sip_peer {
 	char accountcode[AST_MAX_ACCOUNT_CODE];	/*!< Account code */
 	int amaflags;			/*!< AMA Flags (for billing) */
 	char tohost[MAXHOSTNAMELEN];	/*!< If not dynamic, IP address */
+	char failoverhostname[MAXHOSTNAMELEN]; /*!< failover host name */
 	char regexten[AST_MAX_EXTENSION]; /*!< Extension to register (if regcontext is used) */
 	char fromuser[80];		/*!< From: user when calling this peer */
 	char fromdomain[MAXHOSTNAMELEN];	/*!< From: domain when calling this peer */
@@ -1478,6 +1511,7 @@ struct sip_peer {
 	struct sip_proxy *outboundproxy;	/*!< Outbound proxy for this peer */
 	struct ast_dnsmgr_entry *dnsmgr;/*!<  DNS refresh manager for peer */
 	struct sockaddr_in addr;	/*!<  IP address of peer */
+	struct sockaddr_in failoveraddr;	/*!<  IP address of failover peer */
 	int maxcallbitrate;		/*!< Maximum Bitrate for a video call */
 	
 	/* Qualification */
@@ -1954,7 +1988,7 @@ static int respprep(struct sip_request *resp, struct sip_pvt *p, const char *msg
 static const struct sockaddr_in *sip_real_dst(const struct sip_pvt *p);
 static void build_via(struct sip_pvt *p);
 static int create_addr_from_peer(struct sip_pvt *r, struct sip_peer *peer);
-static int create_addr(struct sip_pvt *dialog, const char *opeer);
+static int create_addr(struct sip_pvt *dialog, const char *opeer, int failover);
 static char *generate_random_string(char *buf, size_t size);
 static void build_callid_pvt(struct sip_pvt *pvt);
 static void build_callid_registry(struct sip_registry *reg, struct in_addr ourip, const char *fromdomain);
@@ -2531,6 +2565,16 @@ static int __sip_xmit(struct sip_pvt *p, char *data, int len)
 			case ENETUNREACH:	/* Network failure */
 				res = XMIT_ERROR;	/* Don't bother with trying to transmit again */
 		}
+		if (p->failoverstate == STANDBY) {	/* Time to switch to failover mode for this dialog */
+			p->failoverstate = ACTIVE;
+			if (!p->failoveraddr.sin_addr.s_addr)
+				create_addr(p, p->failoverhostname, TRUE);	/* Resolve to IP address */
+			if (option_debug > 2)
+				ast_log(LOG_DEBUG, "FAILOVER:: Switching to failover peer for this dialog :: %s\n", p->callid);
+			append_history(p, "FailOver", "Activated failover peer for non-responsive peer %s", p->tohost);
+			return __sip_xmit(p, data, len);
+		}
+		
 	}
 	if (res != len)
 		ast_log(LOG_WARNING, "sip_xmit of %p (len %d) to %s:%d returned %d: %s\n", data, len, ast_inet_ntoa(dst->sin_addr), ntohs(dst->sin_port), res, strerror(errno));
@@ -2690,10 +2734,12 @@ static int retrans_pkt(const void *data)
 
 		if (sip_debug_test_pvt(pkt->owner)) {
 			const struct sockaddr_in *dst = sip_real_dst(pkt->owner);
-			ast_verbose("Retransmitting #%d (%s) to %s:%d:\n%s\n---\n",
+			ast_verbose("Retransmitting #%d (%s) to %s%s:%d:\n%s\n---\n",
 				pkt->retrans, sip_nat_mode(pkt->owner),
-				ast_inet_ntoa(dst->sin_addr),
-				ntohs(dst->sin_port), pkt->data);
+				pkt->owner->failoverstate == ACTIVE ? "failover peer " : "",
+				pkt->owner->failoverstate == ACTIVE ? ast_inet_ntoa(pkt->owner->failoveraddr.sin_addr) : ast_inet_ntoa(dst->sin_addr),
+				pkt->owner->failoverstate == ACTIVE ? ntohs(pkt->owner->failoveraddr.sin_port) : ntohs(dst->sin_port),
+				pkt->data);
 		}
 
 		append_history(pkt->owner, "ReTx", "%d %s", reschedule, pkt->data);
@@ -2720,6 +2766,18 @@ static int retrans_pkt(const void *data)
 	} else 
 		append_history(pkt->owner, "MaxRetries", "%s", pkt->is_fatal ? "(Critical)" : "(Non-critical)");
  		
+
+	if (pkt->method != SIP_OPTIONS && pkt->owner->failoverstate == STANDBY) {
+		pkt->owner->failoverstate = ACTIVE;	/* Switching dialog to failover active mode */
+		append_history(pkt->owner, "FailOver", "Failover SIP host activated.");
+		pkt->retrans = 0;
+ 		pkt->timer_a = 2 ;
+		ast_mutex_unlock(&pkt->owner->lock);
+		if (option_debug > 2)
+			ast_log(LOG_DEBUG, "FAILOVER :: Switching to failover peer due to retransmits\n");
+		return 100;	/* Restart with failover peer after 100 ms */
+	}
+
 	pkt->retransid = -1;
 
 	if (pkt->is_fatal) {
@@ -2728,6 +2786,7 @@ static int retrans_pkt(const void *data)
 			usleep(1);
 			sip_pvt_lock(pkt->owner);
 		}
+
 
 		if (pkt->owner->owner && !pkt->owner->owner->hangupcause) 
 			pkt->owner->owner->hangupcause = AST_CAUSE_NO_USER_RESPONSE;
@@ -3033,10 +3092,13 @@ static int send_response(struct sip_pvt *p, struct sip_request *req, enum xmitty
 	if (sip_debug_test_pvt(p)) {
 		const struct sockaddr_in *dst = sip_real_dst(p);
 
-		ast_verbose("\n<--- %sTransmitting (%s) to %s:%d --->\n%s\n<------------>\n",
+		ast_verbose("\n<--- %sTransmitting (%s) to %s%s:%d --->\n%s\n<------------>\n",
 			reliable ? "Reliably " : "", sip_nat_mode(p),
-			ast_inet_ntoa(dst->sin_addr),
-			ntohs(dst->sin_port), req->data);
+			p->failoverstate == ACTIVE ? "failover peer " : "",
+			p->failoverstate == ACTIVE ? ast_inet_ntoa(p->failoveraddr.sin_addr) : ast_inet_ntoa(dst->sin_addr),
+			p->failoverstate == ACTIVE ? ntohs(p->failoveraddr.sin_port) : ntohs(dst->sin_port),
+			req->data);
+
 	}
 	if (p->do_history) {
 		struct sip_request tmp;
@@ -3066,10 +3128,16 @@ static int send_request(struct sip_pvt *p, struct sip_request *req, enum xmittyp
 
 	add_blank(req);
 	if (sip_debug_test_pvt(p)) {
+		struct sockaddr_in *toaddr = ast_test_flag(&p->flags[0], SIP_NAT_ROUTE) ? &p->recv : &p->sa;
+		char *natstate = "";
+		if (p->failoverstate == ACTIVE)
+			toaddr = &p->failoveraddr;
+
 		if (ast_test_flag(&p->flags[0], SIP_NAT_ROUTE))
-			ast_verbose("%sTransmitting (NAT) to %s:%d:\n%s\n---\n", reliable ? "Reliably " : "", ast_inet_ntoa(p->recv.sin_addr), ntohs(p->recv.sin_port), req->data);
-		else
-			ast_verbose("%sTransmitting (no NAT) to %s:%d:\n%s\n---\n", reliable ? "Reliably " : "", ast_inet_ntoa(p->sa.sin_addr), ntohs(p->sa.sin_port), req->data);
+			natstate = "(NAT)";
+		ast_verbose("\n---> %sTransmitting %s to %s%s:%d:\n%s\n---\n", reliable ? "Reliably " : "", natstate, 
+			p->failoverstate == ACTIVE ? "failover peer " : "",
+			ast_inet_ntoa(toaddr->sin_addr), ntohs(toaddr->sin_port), req->data);
 	}
 	if (p->do_history) {
 		struct sip_request tmp;
@@ -3803,8 +3871,18 @@ static int create_addr_from_peer(struct sip_pvt *dialog, struct sip_peer *peer)
 	    (!peer->maxms || ((peer->lastms >= 0)  && (peer->lastms <= peer->maxms)))) {
 		dialog->sa = (peer->addr.sin_addr.s_addr) ? peer->addr : peer->defaddr;
 		dialog->recv = dialog->sa;
-	} else 
+	} else if (peer->failoveraddr.sin_addr.s_addr || !ast_strlen_zero(peer->failoverhostname)) {
+		/* There's a problem with the primary peer (unreachable) and we do have a failver
+		   peer definition. Activate that at the start of the dialog */
+		if (!peer->failoveraddr.sin_addr.s_addr) {
+			create_addr(dialog, peer->failoverhostname, TRUE);
+		}
+		dialog->failoverstate = ACTIVE;
+	} else {
 		return -1;
+	}
+
+	dialog->failoveraddr = peer->failoveraddr;
 
 	ast_copy_flags(&dialog->flags[0], &peer->flags[0], SIP_FLAGS_TO_COPY);
 	ast_copy_flags(&dialog->flags[1], &peer->flags[1], SIP_PAGE2_FLAGS_TO_COPY);
@@ -3861,6 +3939,7 @@ static int create_addr_from_peer(struct sip_pvt *dialog, struct sip_peer *peer)
 	ast_string_field_set(dialog, mohsuggest, peer->mohsuggest);
 	ast_string_field_set(dialog, mohinterpret, peer->mohinterpret);
 	ast_string_field_set(dialog, tohost, peer->tohost);
+	ast_string_field_set(dialog, failoverhostname, peer->failoverhostname);
 	ast_string_field_set(dialog, fullcontact, peer->fullcontact);
 	ast_string_field_set(dialog, context, peer->context);
 	dialog->outboundproxy = obproxy_get(dialog, peer);
@@ -8985,7 +9064,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 		p->outboundproxy = obproxy_get(p, NULL);
 
 		/* Find address to hostname */
-		if (create_addr(p, r->hostname)) {
+		if (create_addr(p, r->hostname, FALSE)) {
 			/* we have what we hope is a temporary network error,
 			 * probably DNS.  We need to reschedule a registration try */
 			sip_destroy(p);
@@ -12454,6 +12533,8 @@ static char *_sip_show_peer(int type, int fd, struct mansession *s, const struct
 		astman_append(s, "SIP-DTMFmode: %s\r\n", dtmfmode2str(ast_test_flag(&peer->flags[0], SIP_DTMF)));
 		astman_append(s, "ToHost: %s\r\n", peer->tohost);
 		astman_append(s, "Address-IP: %s\r\nAddress-Port: %d\r\n",  peer->addr.sin_addr.s_addr ? ast_inet_ntoa(peer->addr.sin_addr) : "", ntohs(peer->addr.sin_port));
+		astman_append(s, "FailoverHostName: %s\r\n", peer->failoverhostname);
+		astman_append(s, "FailoverAddress-IP: %s\r\nAddress-Port: %d\r\n",  peer->failoveraddr.sin_addr.s_addr ? ast_inet_ntoa(peer->failoveraddr.sin_addr) : "", ntohs(peer->failoveraddr.sin_port));
 		astman_append(s, "Default-addr-IP: %s\r\nDefault-addr-port: %d\r\n", ast_inet_ntoa(peer->defaddr.sin_addr), ntohs(peer->defaddr.sin_port));
 		astman_append(s, "Default-Username: %s\r\n", peer->username);
 		if (!ast_strlen_zero(global_regcontext))
