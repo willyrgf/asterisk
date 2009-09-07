@@ -209,13 +209,9 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <ctype.h>
-#include <sys/ioctl.h>
-#include <fcntl.h>
 #include <signal.h>
 #include <sys/signal.h>
 #include <regex.h>
-#include <time.h>
 
 #include "asterisk/network.h"
 #include "asterisk/paths.h"	/* need ast_config_AST_SYSTEM_NAME */
@@ -566,8 +562,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define XMIT_ERROR		-2
 
 #define SIP_RESERVED ";/?:@&=+$,# "		/*!< Reserved characters in the username part of the URI */
-
-/* #define VOCAL_DATA_HACK */
 
 #define DEFAULT_DEFAULT_EXPIRY  120
 #define DEFAULT_MIN_EXPIRY      60
@@ -1086,7 +1080,8 @@ static const char *sip_reason_code_to_str(enum AST_REDIRECTING_REASON code)
  * in principle, use a different "default" port number, but
  * we do not support this feature at the moment.
  * You can run Asterisk with SIP on a different port with a configuration
- * option. If you change this value, the signalling will be incorrect.
+ * option. If you change this value in the source code, the signalling will be incorrect.
+ *
  */
 
 /*! \name DefaultValues Default values, set and reset in reload_config before reading configuration
@@ -1105,7 +1100,7 @@ static const char *sip_reason_code_to_str(enum AST_REDIRECTING_REASON code)
 #define DEFAULT_NOTIFYMIME 	"application/simple-message-summary"
 #define DEFAULT_ALLOWGUEST	TRUE
 #define DEFAULT_RTPKEEPALIVE	0		/*!< Default RTPkeepalive setting */
-#define DEFAULT_CALLCOUNTER	FALSE
+#define DEFAULT_CALLCOUNTER	FALSE		/*!< Do not enable call counters by default */
 #define DEFAULT_SRVLOOKUP	TRUE		/*!< Recommended setting is ON */
 #define DEFAULT_COMPACTHEADERS	FALSE		/*!< Send compact (one-character) SIP headers. Default off */
 #define DEFAULT_TOS_SIP         0               /*!< Call signalling packets should be marked as DSCP CS3, but the default is 0 to be compatible with previous versions. */
@@ -1143,7 +1138,7 @@ static const char *sip_reason_code_to_str(enum AST_REDIRECTING_REASON code)
 	configuring devices
 */
 /*@{*/
-static char default_language[MAX_LANGUAGE];
+static char default_language[MAX_LANGUAGE];	/*! Default language setting for new channels */
 static char default_callerid[AST_MAX_EXTENSION];
 static char default_mwi_from[80];
 static char default_fromdomain[AST_MAX_EXTENSION];
@@ -1200,22 +1195,23 @@ struct sip_settings {
 	struct sip_proxy outboundproxy;	/*!< Outbound proxy */
 	char default_context[AST_MAX_CONTEXT];
 	char default_subscribecontext[AST_MAX_CONTEXT];
+	struct ast_ha *contact_ha;  /*! \brief Global list of addresses dynamic peers are not allowed to use */
 };
 
-static struct sip_settings sip_cfg;
+static struct sip_settings sip_cfg;		/*!< SIP configuration data.
+					\note in the future we could have multiple of these (per domain, per device group etc) */
 
 static int global_match_auth_username;		/*!< Match auth username if available instead of From: Default off. */
 
 static int global_relaxdtmf;		/*!< Relax DTMF */
 static int global_prematuremediafilter;	/*!< Enable/disable premature frames in a call (causing 183 early media) */
-static int global_relaxdtmf;			/*!< Relax DTMF */
 static int global_rtptimeout;		/*!< Time out call if no RTP */
 static int global_rtpholdtimeout;	/*!< Time out call if no RTP during hold */
 static int global_rtpkeepalive;		/*!< Send RTP keepalives */
-static int global_reg_timeout;	
+static int global_reg_timeout;		/*!< Global time between attempts for outbound registrations */
 static int global_regattempts_max;	/*!< Registration attempts before giving up */
 static int global_callcounter;		/*!< Enable call counters for all devices. This is currently enabled by setting the peer
-						call-limit to 999. When we remove the call-limit from the code, we can make it
+						call-limit to UINT_MAX. When we remove the call-limit from the code, we can make it
 						with just a boolean flag in the device structure */
 static unsigned int global_tos_sip;		/*!< IP type of service for SIP packets */
 static unsigned int global_tos_audio;		/*!< IP type of service for audio RTP packets */
@@ -1251,8 +1247,6 @@ static int global_max_se;                     /*!< Highest threshold for session
 
 /*@}*/
 
-/*! \brief Global list of addresses dynamic peers are not allowed to use */
-static struct ast_ha *global_contact_ha = NULL;
 static int global_dynamic_exclude_static = 0;
 
 /*! \name Object counters @{
@@ -12486,7 +12480,7 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 		return PARSE_REGISTER_FAILED;
 	}
 	memcpy(&testsin.sin_addr, hp->h_addr, sizeof(testsin.sin_addr));
-	if (ast_apply_ha(global_contact_ha, &testsin) != AST_SENSE_ALLOW ||
+	if (ast_apply_ha(sip_cfg.contact_ha, &testsin) != AST_SENSE_ALLOW ||
 			ast_apply_ha(peer->contactha, &testsin) != AST_SENSE_ALLOW) {
 		ast_log(LOG_WARNING, "Host '%s' disallowed by rule\n", host);
 		ast_string_field_set(peer, fullcontact, "");
@@ -24052,7 +24046,7 @@ static void set_peer_defaults(struct sip_peer *peer)
 	peer->autoframing = global_autoframing;
 	peer->qualifyfreq = global_qualifyfreq;
 	if (global_callcounter)
-		peer->call_limit=999;
+		peer->call_limit=UINT_MAX;
 	ast_string_field_set(peer, vmexten, default_vmexten);
 	ast_string_field_set(peer, secret, "");
 	ast_string_field_set(peer, remotesecret, "");
@@ -24322,7 +24316,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 				srvlookup = v->value;
 				if (global_dynamic_exclude_static) {
 					int err = 0;
-					global_contact_ha = ast_append_ha("deny", (char *)ast_inet_ntoa(peer->addr.sin_addr), global_contact_ha, &err);
+					sip_cfg.contact_ha = ast_append_ha("deny", (char *)ast_inet_ntoa(peer->addr.sin_addr), sip_cfg.contact_ha, &err);
 					if (err) {
 						ast_log(LOG_ERROR, "Bad ACL entry in configuration line %d : %s\n", v->lineno, v->value);
 					}
@@ -24370,7 +24364,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 		} else if (!strcasecmp(v->name, "callbackextension")) {
 			ast_copy_string(callback, v->value, sizeof(callback));
 		} else if (!strcasecmp(v->name, "callcounter")) {
-			peer->call_limit = ast_true(v->value) ? 999 : 0;
+			peer->call_limit = ast_true(v->value) ? UINT_MAX : 0;
 		} else if (!strcasecmp(v->name, "call-limit")) {
 			peer->call_limit = atoi(v->value);
 			if (peer->call_limit < 0)
@@ -24711,8 +24705,8 @@ static int reload_config(enum channelreloadreason reason)
 	memset(&sip_tcp_desc.local_address, 0, sizeof(sip_tcp_desc.local_address));
 	memset(&sip_tls_desc.local_address, 0, sizeof(sip_tls_desc.local_address));
 
-	ast_free_ha(global_contact_ha);
-	global_contact_ha = NULL;
+	ast_free_ha(sip_cfg.contact_ha);
+	sip_cfg.contact_ha = NULL;
 
 	default_tls_cfg.enabled = FALSE;		/* Default: Disable TLS */
 
@@ -24820,6 +24814,7 @@ static int reload_config(enum channelreloadreason reason)
 	sip_cfg.alwaysauthreject = DEFAULT_ALWAYSAUTHREJECT;
 	sip_cfg.allowsubscribe = FALSE;
 	sip_cfg.disallowed_methods = SIP_UNKNOWN;
+	sip_cfg.contact_ha = NULL;		/* Reset the contact ACL */
 	snprintf(global_useragent, sizeof(global_useragent), "%s %s", DEFAULT_USERAGENT, ast_get_version());
 	snprintf(global_sdpsession, sizeof(global_sdpsession), "%s %s", DEFAULT_SDPSESSION, ast_get_version());
 	snprintf(global_sdpowner, sizeof(global_sdpowner), "%s", DEFAULT_SDPOWNER);
@@ -24983,7 +24978,7 @@ static int reload_config(enum channelreloadreason reason)
 			global_dynamic_exclude_static = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "contactpermit") || !strcasecmp(v->name, "contactdeny")) {
 			int ha_error = 0;
-			global_contact_ha = ast_append_ha(v->name + 7, v->value, global_contact_ha, &ha_error);
+			sip_cfg.contact_ha = ast_append_ha(v->name + 7, v->value, sip_cfg.contact_ha, &ha_error);
 			if (ha_error) {
 				ast_log(LOG_ERROR, "Bad ACL entry in configuration line %d : %s\n", v->lineno, v->value);
 			}
