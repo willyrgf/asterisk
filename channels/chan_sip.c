@@ -1332,8 +1332,8 @@ struct sip_socket {
  * \endverbatim
  */
 struct sip_request {
-	ptrdiff_t rlPart1; 	        /*!< Offset of the SIP Method Name or "SIP/2.0" protocol version */
-	ptrdiff_t rlPart2; 	        /*!< Offset of the Request URI or Response Status */
+	ptrdiff_t rlPart1;         /*!< Offset of the SIP Method Name or "SIP/2.0" protocol version */
+	ptrdiff_t rlPart2;         /*!< Offset of the Request URI or Response Status */
 	int len;                /*!< bytes used in data[], excluding trailing null terminator. Rarely used. */
 	int headers;            /*!< # of SIP Headers */
 	int method;             /*!< Method of this request */
@@ -1349,7 +1349,27 @@ struct sip_request {
 	/* XXX Do we need to unref socket.ser when the request goes away? */
 	struct sip_socket socket;	/*!< The socket used for this request */
 	AST_LIST_ENTRY(sip_request) next;
+	/* Fields copied from sip_pkt */
+	int retrans;		/*!< Retransmission number */
+	int seqno;		/*!< Sequence number */
+	unsigned int is_resp:1;			/*!< 1 if this is a response packet (e.g. 200 OK), 0 if it is a request */
+	unsigned int is_fatal:1;				/*!< non-zero if there is a fatal error */
+	unsigned int response_code;		/*!< If this is a response, the response code */
+	struct sip_pvt *owner;			/*!< Owner AST call */
+	int retransid;				/*!< Retransmission ID */
+	int timer_a;				/*!< SIP timer A, retransmission timer */
+	int timer_t1;				/*!< SIP Timer T1, estimated RTT or 500 ms */
+	int packetlen;				/*!< Length of packet */
+	struct sip_request *nextpacket;		/*!< STUPID STUPID STUPID */
 };
+
+/*! \brief sip packet - raw format for outbound packets that are sent or scheduled for transmission
+ * Packets are linked in a list, whose head is in the struct sip_pvt they belong to.
+ * Each packet holds a reference to the parent struct sip_pvt.
+ * This structure is allocated in __sip_reliable_xmit() and only for packets that
+ * require retransmissions.
+ */
+
 
 /* \brief given a sip_request and an offset, return the char * that resides there
  *
@@ -1368,7 +1388,6 @@ struct sip_dual {
 	int seqno;			/*!< Sequence number */
 };
 
-struct sip_pkt;
 
 /*! \brief Parameters to the transmit_invite function */
 struct sip_invite_param {
@@ -1816,10 +1835,10 @@ struct sip_pvt {
 	struct sip_peer *relatedpeer;		/*!< If this dialog is related to a peer, which one
 							Used in peerpoke, mwi subscriptions */
 	struct sip_registry *registry;		/*!< If this is a REGISTER dialog, to which registry */
-	struct ast_rtp_instance *rtp;			/*!< RTP Session */
-	struct ast_rtp_instance *vrtp;			/*!< Video RTP session */
-	struct ast_rtp_instance *trtp;			/*!< Text RTP session */
-	struct sip_pkt *packets;		/*!< Packets scheduled for re-transmission */
+	struct ast_rtp_instance *rtp;		/*!< RTP Session */
+	struct ast_rtp_instance *vrtp;		/*!< Video RTP session */
+	struct ast_rtp_instance *trtp;		/*!< Text RTP session */
+	struct sip_request *packets;		/*!< Packets scheduled for re-transmission */
 	struct sip_history_head *history;	/*!< History of this SIP dialog */
 	size_t history_entries;			/*!< Number of entires in the history */
 	struct ast_variable *chanvars;		/*!< Channel variables to set for inbound call */
@@ -1914,28 +1933,6 @@ static struct sip_pvt *dialog_unref(struct sip_pvt *p, char *tag)
 	return NULL;
 }
 #endif
-
-/*! \brief sip packet - raw format for outbound packets that are sent or scheduled for transmission
- * Packets are linked in a list, whose head is in the struct sip_pvt they belong to.
- * Each packet holds a reference to the parent struct sip_pvt.
- * This structure is allocated in __sip_reliable_xmit() and only for packets that
- * require retransmissions.
- */
-struct sip_pkt {
-	struct sip_pkt *next;			/*!< Next packet in linked list */
-	int retrans;				/*!< Retransmission number */
-	int method;				/*!< SIP method for this packet */
-	int seqno;				/*!< Sequence number */
-	char is_resp;				/*!< 1 if this is a response packet (e.g. 200 OK), 0 if it is a request */
-	char is_fatal;				/*!< non-zero if there is a fatal error */
-	int response_code;		/*!< If this is a response, the response code */
-	struct sip_pvt *owner;			/*!< Owner AST call */
-	int retransid;				/*!< Retransmission ID */
-	int timer_a;				/*!< SIP timer A, retransmission timer */
-	int timer_t1;				/*!< SIP Timer T1, estimated RTT or 500 ms */
-	int packetlen;				/*!< Length of packet */
-	struct ast_str *data;
-};	
 
 /*!
  * \brief A peer's mailbox
@@ -2345,6 +2342,15 @@ static struct ast_config *notify_types;		/*!< The list of manual NOTIFY types we
 	else					\
 		(head) = (element)->next;	\
 	} while (0)
+
+/* OEJ temporary hack */
+#define UNLINKPACKET(element, head, prev) do {	\
+	if (prev)				\
+		(prev)->nextpacket = (element)->nextpacket;	\
+	else					\
+		(head) = (element)->nextpacket;	\
+	} while (0)
+
 
 enum t38_action_flag {
 	SDP_T38_NONE = 0, /*!< Do not modify T38 information at all */
@@ -3062,7 +3068,7 @@ static void ref_proxy(struct sip_pvt *pvt, struct sip_proxy *proxy)
  */
 static void *dialog_unlink_all(struct sip_pvt *dialog, int lockowner, int lockdialoglist)
 {
-	struct sip_pkt *cp;
+	struct sip_request *cp;
 
 	dialog_ref(dialog, "Let's bump the count in the unlink so it doesn't accidentally become dead before we are done");
 
@@ -3095,7 +3101,7 @@ static void *dialog_unlink_all(struct sip_pvt *dialog, int lockowner, int lockdi
 
 	/* remove all current packets in this dialog */
 	while((cp = dialog->packets)) {
-		dialog->packets = dialog->packets->next;
+		dialog->packets = dialog->packets->nextpacket;
 		AST_SCHED_DEL(sched, cp->retransid);
 		dialog_unref(cp->owner, "remove all current packets in this dialog, and the pointer to the dialog too as part of __sip_destroy");
 		if (cp->data) {
@@ -3639,7 +3645,7 @@ static void append_history_full(struct sip_pvt *p, const char *fmt, ...)
 /*! \brief Retransmit SIP message if no answer (Called from scheduler) */
 static int retrans_pkt(const void *data)
 {
-	struct sip_pkt *pkt = (struct sip_pkt *)data, *prev, *cur = NULL;
+	struct sip_request *pkt = (struct sip_request *)data, *prev, *cur = NULL;
 	int reschedule = DEFAULT_RETRANS;
 	int xmitres = 0;
 	
@@ -3741,9 +3747,9 @@ static int retrans_pkt(const void *data)
 	}
 
 	/* Remove the packet */
-	for (prev = NULL, cur = pkt->owner->packets; cur; prev = cur, cur = cur->next) {
+	for (prev = NULL, cur = pkt->owner->packets; cur; prev = cur, cur = cur->nextpacket) {
 		if (cur == pkt) {
-			UNLINK(cur, pkt->owner->packets, prev);
+			UNLINKPACKET(cur, pkt->owner->packets, prev);
 			sip_pvt_unlock(pkt->owner);
 			if (pkt->owner)
 				pkt->owner = dialog_unref(pkt->owner,"pkt is being freed, its dialog ref is dead now");
@@ -3765,7 +3771,7 @@ static int retrans_pkt(const void *data)
 */
 static enum sip_result __sip_reliable_xmit(struct sip_pvt *p, int seqno, int resp, struct ast_str *data, int len, int fatal, int sipmethod)
 {
-	struct sip_pkt *pkt = NULL;
+	struct sip_request *pkt = NULL;
 	int siptimer_a = DEFAULT_RETRANS;
 	int xmitres = 0;
 	int respid;
@@ -3803,7 +3809,7 @@ static enum sip_result __sip_reliable_xmit(struct sip_pvt *p, int seqno, int res
 	pkt->is_resp = resp;
 	pkt->is_fatal = fatal;
 	pkt->owner = dialog_ref(p, "__sip_reliable_xmit: setting pkt->owner");
-	pkt->next = p->packets;
+	pkt->nextpacket = p->packets;
 	p->packets = pkt;	/* Add it to the queue */
 	if (resp) {
 		/* Parse out the response code */
@@ -3827,7 +3833,7 @@ static enum sip_result __sip_reliable_xmit(struct sip_pvt *p, int seqno, int res
 		append_history(pkt->owner, "XmitErr", "%s", pkt->is_fatal ? "(Critical)" : "(Non-critical)");
 		ast_log(LOG_ERROR, "Serious Network Trouble; __sip_xmit returns error for pkt data\n");
 		AST_SCHED_DEL(sched, pkt->retransid);
-		p->packets = pkt->next;
+		p->packets = pkt->nextpacket;
 		pkt->owner = dialog_unref(pkt->owner,"pkt is being freed, its dialog ref is dead now");
 		ast_free(pkt->data);
 		ast_free(pkt);
@@ -3948,7 +3954,7 @@ static int sip_cancel_destroy(struct sip_pvt *p)
  * called with p locked*/
 static int __sip_ack(struct sip_pvt *p, int seqno, int resp, int sipmethod)
 {
-	struct sip_pkt *cur, *prev = NULL;
+	struct sip_request *cur, *prev = NULL;
 	const char *msg = "Not Found";	/* used only for debugging */
 	int res = FALSE;
 
@@ -3961,7 +3967,7 @@ static int __sip_ack(struct sip_pvt *p, int seqno, int resp, int sipmethod)
 		ref_proxy(p, NULL);
 	}
 
-	for (cur = p->packets; cur; prev = cur, cur = cur->next) {
+	for (cur = p->packets; cur; prev = cur, cur = cur->nextpacket) {
 		if (cur->seqno != seqno || cur->is_resp != resp)
 			continue;
 		if (cur->is_resp || cur->method == sipmethod) {
@@ -3996,7 +4002,7 @@ static int __sip_ack(struct sip_pvt *p, int seqno, int resp, int sipmethod)
 				usleep(1);
 				sip_pvt_lock(p);
 			}
-			UNLINK(cur, p->packets, prev);
+			UNLINKPACKET(cur, p->packets, prev);
 			dialog_unref(cur->owner, "unref pkt cur->owner dialog from sip ack before freeing pkt");
 			if (cur->data)
 				ast_free(cur->data);
@@ -4013,7 +4019,7 @@ static int __sip_ack(struct sip_pvt *p, int seqno, int resp, int sipmethod)
  * called with p locked */
 static void __sip_pretend_ack(struct sip_pvt *p)
 {
-	struct sip_pkt *cur = NULL;
+	struct sip_request *cur = NULL;
 
 	while (p->packets) {
 		int method;
@@ -4030,10 +4036,10 @@ static void __sip_pretend_ack(struct sip_pvt *p)
 /*! \brief Acks receipt of packet, keep it around (used for provisional responses) */
 static int __sip_semi_ack(struct sip_pvt *p, int seqno, int resp, int sipmethod)
 {
-	struct sip_pkt *cur;
+	struct sip_request *cur;
 	int res = FALSE;
 
-	for (cur = p->packets; cur; cur = cur->next) {
+	for (cur = p->packets; cur; cur = cur->nextpacket) {
 		if (cur->seqno == seqno && cur->is_resp == resp &&
 			(cur->is_resp || method_match(sipmethod, cur->data->str))) {
 			/* this is our baby */
@@ -6083,8 +6089,8 @@ static int sip_hangup(struct ast_channel *ast)
 		if (needcancel) {	/* Outgoing call, not up */
 			if (ast_test_flag(&p->flags[0], SIP_OUTGOING)) {
 				/* stop retransmitting an INVITE that has not received a response */
-				struct sip_pkt *cur;
-				for (cur = p->packets; cur; cur = cur->next) {
+				struct sip_request *cur;
+				for (cur = p->packets; cur; cur = cur->nextpacket) {
 					__sip_semi_ack(p, cur->seqno, cur->is_resp, cur->method ? cur->method : find_sip_method(cur->data->str));
 				}
 
@@ -21397,7 +21403,7 @@ static int handle_request_cancel(struct sip_pvt *p, struct sip_request *req)
 	else
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 	if (p->initreq.len > 0) {
-		struct sip_pkt *pkt, *prev_pkt;
+		struct sip_request *pkt, *prev_pkt;
 		/* If the CANCEL we are receiving is a retransmission, and we already have scheduled
 		 * a reliable 487, then we don't want to schedule another one on top of the previous
 		 * one.
@@ -21409,10 +21415,10 @@ static int handle_request_cancel(struct sip_pvt *p, struct sip_request *req)
 		 * The only way to do this correctly is to cancel our previously-scheduled reliably-
 		 * transmitted response and send a new one in its place.
 		 */
-		for (pkt = p->packets, prev_pkt = NULL; pkt; prev_pkt = pkt, pkt = pkt->next) {
+		for (pkt = p->packets, prev_pkt = NULL; pkt; prev_pkt = pkt, pkt = pkt->nextpacket) {
 			if (pkt->seqno == p->lastinvite && pkt->response_code == 487) {
 				AST_SCHED_DEL(sched, pkt->retransid);
-				UNLINK(pkt, p->packets, prev_pkt);
+				UNLINKPACKET(pkt, p->packets, prev_pkt);
 				ast_free(pkt);
 				break;
 			}
