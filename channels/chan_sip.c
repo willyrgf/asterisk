@@ -1,3 +1,7 @@
+/* TESTING
+ 	- With TCP
+*/
+
 /*
  * Asterisk -- An open source telephony toolkit.
  *
@@ -147,16 +151,16 @@
  * \par Other bugs to fix ----
  * __set_address_from_contact(const char *fullcontact, struct sockaddr_in *sin, int tcp)
  *	- sets TLS port as default for all TCP connections, unless other port is given in contact.
- * parse_register_contact(struct sip_pvt *pvt, struct sip_peer *peer, struct sip_request *req)
+ * parse_register_contact(struct sip_pvt *pvt, struct sip_peer *peer, struct sip_message *req)
  *	- assumes that the contact the UA registers is using the same transport as the REGISTER request, which is
  *	  a bad guess.
  *      - Does not save any information about TCP/TLS connected devices, which is a severe BUG, as discussed on the mailing list.
- * get_destination(struct sip_pvt *p, struct sip_request *oreq)
+ * get_destination(struct sip_pvt *p, struct sip_message *oreq)
  *	- Doesn't store the information that we got an incoming SIPS request in the channel, so that
  *	  we can require a secure signalling path OUT of Asterisk (on SIP or IAX2). Possibly, the call should
  *	  fail on in-secure signalling paths if there's no override in our configuration. At least, provide a
  *	  channel variable in the dialplan.
- * get_refer_info(struct sip_pvt *transferer, struct sip_request *outgoing_req)
+ * get_refer_info(struct sip_pvt *transferer, struct sip_message *outgoing_req)
  *	- As above, if we have a SIPS: uri in the refer-to header
  * 	- Does not check transport in refer_to uri.
  */
@@ -1307,7 +1311,7 @@ struct sip_socket {
 	struct ast_tcptls_session_instance *tcptls_session;	/* If tcp or tls, a socket manager */
 };
 
-/*! \brief sip_request: The data grabbed from the UDP socket
+/*! \brief sip_message: An incoming or outbound SIP message (reply or request)
  *
  * \verbatim
  * Incoming messages: we first store the data from the socket in data[],
@@ -1330,61 +1334,68 @@ struct sip_socket {
  * The \r\n at the end of the line are still there, so the get_header()
  * and similar functions don't work on these packets.
  * \endverbatim
- */
-struct sip_request {
-	ptrdiff_t rlPart1;         /*!< Offset of the SIP Method Name or "SIP/2.0" protocol version */
-	ptrdiff_t rlPart2;         /*!< Offset of the Request URI or Response Status */
-	int len;                /*!< bytes used in data[], excluding trailing null terminator. Rarely used. */
-	int headers;            /*!< # of SIP Headers */
-	int method;             /*!< Method of this request */
-	int lines;              /*!< Body Content */
-	unsigned int sdp_start; /*!< the line number where the SDP begins */
-	unsigned int sdp_end;   /*!< the line number where the SDP ends */
-	char debug;		/*!< print extra debugging if non zero */
-	char has_to_tag;	/*!< non-zero if packet has To: tag */
-	char ignore;		/*!< if non-zero This is a re-transmit, ignore it */
-	ptrdiff_t header[SIP_MAX_HEADERS]; /*!< Array of offsets into the request string of each SIP header*/
-	ptrdiff_t line[SIP_MAX_LINES]; /*!< Array of offsets into the request string of each SDP line*/
-	struct ast_str *data;	
-	/* XXX Do we need to unref socket.ser when the request goes away? */
-	struct sip_socket socket;	/*!< The socket used for this request */
-	AST_LIST_ENTRY(sip_request) next;
-	/* Fields copied from sip_pkt */
-	int retrans;		/*!< Retransmission number */
-	int seqno;		/*!< Sequence number */
-	unsigned int is_resp:1;			/*!< 1 if this is a response packet (e.g. 200 OK), 0 if it is a request */
-	unsigned int is_fatal:1;				/*!< non-zero if there is a fatal error */
-	unsigned int response_code;		/*!< If this is a response, the response code */
-	struct sip_pvt *owner;			/*!< Owner AST call */
-	int retransid;				/*!< Retransmission ID */
-	int timer_a;				/*!< SIP timer A, retransmission timer */
-	int timer_t1;				/*!< SIP Timer T1, estimated RTT or 500 ms */
-	int packetlen;				/*!< Length of packet */
-	struct sip_request *nextpacket;		/*!< STUPID STUPID STUPID */
-};
-
-/*! \brief sip packet - raw format for outbound packets that are sent or scheduled for transmission
+ *
+ * THis structure is merged with the old sip_pk that was documented like this:
+ * sip packet - raw format for outbound packets that are sent or scheduled for transmission
  * Packets are linked in a list, whose head is in the struct sip_pvt they belong to.
  * Each packet holds a reference to the parent struct sip_pvt.
  * This structure is allocated in __sip_reliable_xmit() and only for packets that
  * require retransmissions.
  */
 
+struct sip_message {
+	/* For both incoming messages and outbound messages */
+	unsigned int outbound;		/*!< TRUE if this packet is outbound, FALSE if it's read from the wire */
+	int len;                	/*!< bytes used in data[], excluding trailing null terminator. Rarely used. */
+	int method;             /*!< Method of this request */
+	unsigned int is_resp:1;			/*!< 1 if this is a response packet (e.g. 200 OK), 0 if it is a request */
+	unsigned int is_parsed:1;			/*!< 1 if this is a response packet (e.g. 200 OK), 0 if it is a request */
+	unsigned int response_code;		/*!< If this is a response, the response code */
+	int seqno;				/*!< Our Sequence number */
 
-/* \brief given a sip_request and an offset, return the char * that resides there
+	/*------ For parsing */
+	ptrdiff_t rlPart1;         		/*!< Offset of the SIP Method Name or "SIP/2.0" protocol version */
+	ptrdiff_t rlPart2;      		/*!< Offset of the Request URI or Response Status */
+	int headers;            		/*!< # of SIP Headers */
+	int lines;              		/*!< Body Content */
+	unsigned int sdp_start;			/*!< the line number where the SDP begins */
+	unsigned int sdp_end;   		/*!< the line number where the SDP ends */
+	char debug;				/*!< print extra debugging if non zero */
+	unsigned int has_to_tag:1;		/*!< non-zero if packet has To: tag */
+	unsigned int ignore:1;			/*!< if non-zero This is a re-transmit, ignore it */
+	ptrdiff_t header[SIP_MAX_HEADERS]; 	/*!< Array of offsets into the request string of each SIP header*/
+	ptrdiff_t line[SIP_MAX_LINES]; 		/*!< Array of offsets into the request string of each SDP line*/
+	/* XXX Do we need to unref socket.ser when the request goes away? */
+	struct sip_socket socket;		/*!< The socket used for this request */
+	AST_LIST_ENTRY(sip_message) next;
+	/* ------------------------    Fields copied from sip_pkt */
+	/* Outbound messages only */
+	int retrans;				/*!< Retransmission number */
+	int retransid;				/*!< Retransmission ID (sched) */
+	unsigned int is_fatal:1;		/*!< non-zero if this message can cause a fatal error if we don't get a reply */
+	struct sip_pvt *owner;			/*!< Owner AST call */
+	int timer_a;				/*!< SIP timer A, retransmission timer */
+	int timer_t1;				/*!< SIP Timer T1, estimated RTT or 500 ms */
+	struct sip_message *nextpacket;		/*!< STUPID STUPID STUPID and well STUPID */
+	/* ----------------------- Data */
+	struct ast_str *data;			/*!< The actual raw data */
+	struct ast_str *parsedata;		/*!< The parsed data */
+};
+
+/* \brief given a sip_message and an offset, return the char * that resides there
  *
  * It used to be that rlPart1, rlPart2, and the header and line arrays were character
- * pointers. They are now offsets into the ast_str portion of the sip_request structure.
+ * pointers. They are now offsets into the ast_str portion of the sip_message structure.
  * To avoid adding a bunch of redundant pointer arithmetic to the code, this macro is
  * provided to retrieve the string at a particular offset within the request's buffer
  */
-#define REQ_OFFSET_TO_STR(req,offset) (ast_str_buffer((req)->data) + ((req)->offset))
+#define REQ_OFFSET_TO_STR(req,offset) (ast_str_buffer((req)->parsedata) + ((req)->offset))
 
 /*! \brief structure used in transfers */
 struct sip_dual {
 	struct ast_channel *chan1;	/*!< First channel involved */
 	struct ast_channel *chan2;	/*!< Second channel involved */
-	struct sip_request req;		/*!< Request that caused the transfer (REFER) */
+	struct sip_message req;		/*!< Request that caused the transfer (REFER) */
 	int seqno;			/*!< Sequence number */
 };
 
@@ -1816,7 +1827,7 @@ struct sip_pvt {
 	int glareinvite;			/*!< A invite received while a pending invite is already present is stored here.  Its seqno is the
 						value. Since this glare invite's seqno is not the same as the pending invite's, it must be
 						held in order to properly process acknowledgements for our 491 response. */
-	struct sip_request initreq;		/*!< Latest request that opened a new transaction
+	struct sip_message initreq;		/*!< Latest request that opened a new transaction
 							within this dialog.
 							NOT the request that opened the dialog */
 
@@ -1838,11 +1849,11 @@ struct sip_pvt {
 	struct ast_rtp_instance *rtp;		/*!< RTP Session */
 	struct ast_rtp_instance *vrtp;		/*!< Video RTP session */
 	struct ast_rtp_instance *trtp;		/*!< Text RTP session */
-	struct sip_request *packets;		/*!< Packets scheduled for re-transmission */
+	struct sip_message *packets;		/*!< Packets scheduled for re-transmission */
 	struct sip_history_head *history;	/*!< History of this SIP dialog */
 	size_t history_entries;			/*!< Number of entires in the history */
 	struct ast_variable *chanvars;		/*!< Channel variables to set for inbound call */
-	AST_LIST_HEAD_NOLOCK(request_queue, sip_request) request_queue; /*!< Requests that arrived but could not be processed immediately */
+	AST_LIST_HEAD_NOLOCK(request_queue, sip_message) request_queue; /*!< Requests that arrived but could not be processed immediately */
 	struct sip_invite_param *options;	/*!< Options for INVITE */
 	struct sip_st_dlg *stimer;		/*!< SIP Session-Timers */
 
@@ -2381,7 +2392,7 @@ static int sip_setoption(struct ast_channel *chan, int option, void *data, int d
 static int sip_queryoption(struct ast_channel *chan, int option, void *data, int *datalen);
 static const char *sip_get_callid(struct ast_channel *chan);
 
-static int handle_request_do(struct sip_request *req, struct sockaddr_in *sin);
+static int handle_request_do(struct sip_message *req, struct sockaddr_in *sin);
 static int sip_standard_port(enum sip_transport type, int port);
 static int sip_prepare_socket(struct sip_pvt *p);
 static int sip_parse_host(char *line, int lineno, char **hostname, int *portnum, enum sip_transport *transport);
@@ -2390,18 +2401,18 @@ static int sip_parse_host(char *line, int lineno, char **hostname, int *portnum,
 static int sipsock_read(int *id, int fd, short events, void *ignore);
 static int __sip_xmit(struct sip_pvt *p, struct ast_str *data, int len);
 static int __sip_reliable_xmit(struct sip_pvt *p, int seqno, int resp, struct ast_str *data, int len, int fatal, int sipmethod);
-static int __transmit_response(struct sip_pvt *p, const char *msg, const struct sip_request *req, enum xmittype reliable);
+static int __transmit_response(struct sip_pvt *p, const char *msg, const struct sip_message *req, enum xmittype reliable);
 static int retrans_pkt(const void *data);
-static int transmit_response_using_temp(ast_string_field callid, struct sockaddr_in *sin, int useglobal_nat, const int intended_method, const struct sip_request *req, const char *msg);
-static int transmit_response(struct sip_pvt *p, const char *msg, const struct sip_request *req);
-static int transmit_response_reliable(struct sip_pvt *p, const char *msg, const struct sip_request *req);
-static int transmit_response_with_date(struct sip_pvt *p, const char *msg, const struct sip_request *req);
-static int transmit_response_with_sdp(struct sip_pvt *p, const char *msg, const struct sip_request *req, enum xmittype reliable, int oldsdp, int rpid);
-static int transmit_response_with_unsupported(struct sip_pvt *p, const char *msg, const struct sip_request *req, const char *unsupported);
-static int transmit_response_with_auth(struct sip_pvt *p, const char *msg, const struct sip_request *req, const char *rand, enum xmittype reliable, const char *header, int stale);
-static int transmit_provisional_response(struct sip_pvt *p, const char *msg, const struct sip_request *req, int with_sdp);
-static int transmit_response_with_allow(struct sip_pvt *p, const char *msg, const struct sip_request *req, enum xmittype reliable);
-static void transmit_fake_auth_response(struct sip_pvt *p, int sipmethod, struct sip_request *req, enum xmittype reliable);
+static int transmit_response_using_temp(ast_string_field callid, struct sockaddr_in *sin, int useglobal_nat, const int intended_method, const struct sip_message *req, const char *msg);
+static int transmit_response(struct sip_pvt *p, const char *msg, const struct sip_message *req);
+static int transmit_response_reliable(struct sip_pvt *p, const char *msg, const struct sip_message *req);
+static int transmit_response_with_date(struct sip_pvt *p, const char *msg, const struct sip_message *req);
+static int transmit_response_with_sdp(struct sip_pvt *p, const char *msg, const struct sip_message *req, enum xmittype reliable, int oldsdp, int rpid);
+static int transmit_response_with_unsupported(struct sip_pvt *p, const char *msg, const struct sip_message *req, const char *unsupported);
+static int transmit_response_with_auth(struct sip_pvt *p, const char *msg, const struct sip_message *req, const char *rand, enum xmittype reliable, const char *header, int stale);
+static int transmit_provisional_response(struct sip_pvt *p, const char *msg, const struct sip_message *req, int with_sdp);
+static int transmit_response_with_allow(struct sip_pvt *p, const char *msg, const struct sip_message *req, enum xmittype reliable);
+static void transmit_fake_auth_response(struct sip_pvt *p, int sipmethod, struct sip_message *req, enum xmittype reliable);
 static int transmit_request(struct sip_pvt *p, int sipmethod, int inc, enum xmittype reliable, int newbranch);
 static int transmit_request_with_auth(struct sip_pvt *p, int sipmethod, int seqno, enum xmittype reliable, int newbranch);
 static int transmit_invite(struct sip_pvt *p, int sipmethod, int sdp, int init);
@@ -2414,16 +2425,16 @@ static int transmit_notify_with_mwi(struct sip_pvt *p, int newmsgs, int oldmsgs,
 static int transmit_notify_with_sipfrag(struct sip_pvt *p, int cseq, char *message, int terminate);
 static int transmit_notify_custom(struct sip_pvt *p, struct ast_variable *vars);
 static int transmit_register(struct sip_registry *r, int sipmethod, const char *auth, const char *authheader);
-static int send_response(struct sip_pvt *p, struct sip_request *req, enum xmittype reliable, int seqno);
-static int send_request(struct sip_pvt *p, struct sip_request *req, enum xmittype reliable, int seqno);
-static void copy_request(struct sip_request *dst, const struct sip_request *src);
-static void receive_message(struct sip_pvt *p, struct sip_request *req);
-static void parse_moved_contact(struct sip_pvt *p, struct sip_request *req, char **name, char **number, int set_call_forward);
+static int send_response(struct sip_pvt *p, struct sip_message *req, enum xmittype reliable, int seqno);
+static int send_request(struct sip_pvt *p, struct sip_message *req, enum xmittype reliable, int seqno);
+static void copy_request(struct sip_message *dst, const struct sip_message *src);
+static void receive_message(struct sip_pvt *p, struct sip_message *req);
+static void parse_moved_contact(struct sip_pvt *p, struct sip_message *req, char **name, char **number, int set_call_forward);
 static int sip_send_mwi_to_peer(struct sip_peer *peer, const struct ast_event *event, int cache_only);
 
 /*--- Dialog management */
 static struct sip_pvt *sip_alloc(ast_string_field callid, struct sockaddr_in *sin,
-				 int useglobal_nat, const int intended_method, struct sip_request *req);
+				 int useglobal_nat, const int intended_method, struct sip_message *req);
 static int __sip_autodestruct(const void *data);
 static void sip_scheddestroy(struct sip_pvt *p, int ms);
 static int sip_cancel_destroy(struct sip_pvt *p);
@@ -2438,45 +2449,45 @@ static int auto_congest(const void *arg);
 static int update_call_counter(struct sip_pvt *fup, int event);
 static int hangup_sip2cause(int cause);
 static const char *hangup_cause2sip(int cause);
-static struct sip_pvt *find_call(struct sip_request *req, struct sockaddr_in *sin, const int intended_method);
+static struct sip_pvt *find_call(struct sip_message *req, struct sockaddr_in *sin, const int intended_method);
 static void free_old_route(struct sip_route *route);
 static void list_route(struct sip_route *route);
-static void build_route(struct sip_pvt *p, struct sip_request *req, int backwards);
+static void build_route(struct sip_pvt *p, struct sip_message *req, int backwards);
 static enum check_auth_result register_verify(struct sip_pvt *p, struct sockaddr_in *sin,
-					      struct sip_request *req, const char *uri);
+					      struct sip_message *req, const char *uri);
 static struct sip_pvt *get_sip_pvt_byid_locked(const char *callid, const char *totag, const char *fromtag);
 static void check_pendings(struct sip_pvt *p);
 static void *sip_park_thread(void *stuff);
-static int sip_park(struct ast_channel *chan1, struct ast_channel *chan2, struct sip_request *req, int seqno);
+static int sip_park(struct ast_channel *chan1, struct ast_channel *chan2, struct sip_message *req, int seqno);
 static int sip_sipredirect(struct sip_pvt *p, const char *dest);
 static int is_method_allowed(unsigned int *allowed_methods, enum sipmethod method);
 
 /*--- Codec handling / SDP */
 static void try_suggested_sip_codec(struct sip_pvt *p);
-static const char* get_sdp_iterate(int* start, struct sip_request *req, const char *name);
-static const char *get_sdp(struct sip_request *req, const char *name);
-static int find_sdp(struct sip_request *req);
-static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action);
+static const char* get_sdp_iterate(int* start, struct sip_message *req, const char *name);
+static const char *get_sdp(struct sip_message *req, const char *name);
+static int find_sdp(struct sip_message *req);
+static int process_sdp(struct sip_pvt *p, struct sip_message *req, int t38action);
 static void add_codec_to_sdp(const struct sip_pvt *p, int codec,
 			     struct ast_str **m_buf, struct ast_str **a_buf,
 			     int debug, int *min_packet_size);
 static void add_noncodec_to_sdp(const struct sip_pvt *p, int format,
 				struct ast_str **m_buf, struct ast_str **a_buf,
 				int debug);
-static enum sip_result add_sdp(struct sip_request *resp, struct sip_pvt *p, int oldsdp, int add_audio, int add_t38);
+static enum sip_result add_sdp(struct sip_message *resp, struct sip_pvt *p, int oldsdp, int add_audio, int add_t38);
 static void do_setnat(struct sip_pvt *p);
 static void stop_media_flows(struct sip_pvt *p);
 
 /*--- Authentication stuff */
-static int reply_digest(struct sip_pvt *p, struct sip_request *req, char *header, int sipmethod, char *digest, int digest_len);
+static int reply_digest(struct sip_pvt *p, struct sip_message *req, char *header, int sipmethod, char *digest, int digest_len);
 static int build_reply_digest(struct sip_pvt *p, int method, char *digest, int digest_len);
-static enum check_auth_result check_auth(struct sip_pvt *p, struct sip_request *req, const char *username,
+static enum check_auth_result check_auth(struct sip_pvt *p, struct sip_message *req, const char *username,
 					 const char *secret, const char *md5secret, int sipmethod,
 					 const char *uri, enum xmittype reliable, int ignore);
-static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_request *req,
+static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_message *req,
 					      int sipmethod, const char *uri, enum xmittype reliable,
 					      struct sockaddr_in *sin, struct sip_peer **authpeer);
-static int check_user(struct sip_pvt *p, struct sip_request *req, int sipmethod, const char *uri, enum xmittype reliable, struct sockaddr_in *sin);
+static int check_user(struct sip_pvt *p, struct sip_message *req, int sipmethod, const char *uri, enum xmittype reliable, struct sockaddr_in *sin);
 
 /*--- Domain handling */
 static int check_sip_domain(const char *domain, char *context, size_t len); /* Check if domain is one of our local domains */
@@ -2581,7 +2592,7 @@ static struct sip_peer *temp_peer(const char *name);
 static void register_peer_exten(struct sip_peer *peer, int onoff);
 static struct sip_peer *find_peer(const char *peer, struct sockaddr_in *sin, int realtime, int forcenamematch, int devstate_only, int transport);
 static int sip_poke_peer_s(const void *data);
-static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, struct sip_peer *p, struct sip_request *req);
+static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, struct sip_peer *p, struct sip_message *req);
 static void reg_source_db(struct sip_peer *peer);
 static void destroy_association(struct sip_peer *peer);
 static void set_insecure_flags(struct ast_flags *flags, const char *value, int lineno);
@@ -2608,54 +2619,53 @@ static void sip_send_all_registers(void);
 static int sip_reinvite_retry(const void *data);
 
 /*--- Parsing SIP requests and responses */
-static void append_date(struct sip_request *req);	/* Append date to SIP packet */
-static int determine_firstline_parts(struct sip_request *req);
+static void append_date(struct sip_message *req);	/* Append date to SIP packet */
+static int determine_firstline_parts(struct sip_message *req);
 static const struct cfsubscription_types *find_subscription_type(enum subscriptiontype subtype);
-static const char *gettag(const struct sip_request *req, const char *header, char *tagbuf, int tagbufsize);
+static const char *gettag(const struct sip_message *req, const char *header, char *tagbuf, int tagbufsize);
 static int find_sip_method(const char *msg);
 static unsigned int parse_sip_options(struct sip_pvt *pvt, const char *supported);
-static unsigned int parse_allowed_methods(struct sip_request *req);
-static unsigned int set_pvt_allowed_methods(struct sip_pvt *pvt, struct sip_request *req);
-static int parse_request(struct sip_request *req);
-static const char *get_header(const struct sip_request *req, const char *name);
+static unsigned int parse_allowed_methods(struct sip_message *req);
+static unsigned int set_pvt_allowed_methods(struct sip_pvt *pvt, struct sip_message *req);
+static int parse_request(struct sip_message *req);
+static const char *get_header(const struct sip_message *req, const char *name);
 static const char *referstatus2str(enum referstatus rstatus) attribute_pure;
 static int method_match(enum sipmethod id, const char *name);
-static void parse_copy(struct sip_request *dst, const struct sip_request *src);
 static char *get_in_brackets(char *tmp);
 static const char *find_alias(const char *name, const char *_default);
-static const char *__get_header(const struct sip_request *req, const char *name, int *start);
+static const char *__get_header(const struct sip_message *req, const char *name, int *start);
 static int lws2sws(char *msgbuf, int len);
-static void extract_uri(struct sip_pvt *p, struct sip_request *req);
+static void extract_uri(struct sip_pvt *p, struct sip_message *req);
 static char *remove_uri_parameters(char *uri);
-static int get_refer_info(struct sip_pvt *transferer, struct sip_request *outgoing_req);
-static int get_also_info(struct sip_pvt *p, struct sip_request *oreq);
-static int parse_ok_contact(struct sip_pvt *pvt, struct sip_request *req);
+static int get_refer_info(struct sip_pvt *transferer, struct sip_message *outgoing_req);
+static int get_also_info(struct sip_pvt *p, struct sip_message *oreq);
+static int parse_ok_contact(struct sip_pvt *pvt, struct sip_message *req);
 static int set_address_from_contact(struct sip_pvt *pvt);
-static void check_via(struct sip_pvt *p, struct sip_request *req);
+static void check_via(struct sip_pvt *p, struct sip_message *req);
 static char *get_calleridname(const char *input, char *output, size_t outputsize);
-static int get_rpid(struct sip_pvt *p, struct sip_request *oreq);
-static int get_rdnis(struct sip_pvt *p, struct sip_request *oreq, char **name, char **number, int *reason);
-static int get_destination(struct sip_pvt *p, struct sip_request *oreq);
-static int get_msg_text(char *buf, int len, struct sip_request *req, int addnewline);
+static int get_rpid(struct sip_pvt *p, struct sip_message *oreq);
+static int get_rdnis(struct sip_pvt *p, struct sip_message *oreq, char **name, char **number, int *reason);
+static int get_destination(struct sip_pvt *p, struct sip_message *oreq);
+static int get_msg_text(char *buf, int len, struct sip_message *req, int addnewline);
 static int transmit_state_notify(struct sip_pvt *p, int state, int full, int timeout);
 static void update_connectedline(struct sip_pvt *p, const void *data, size_t datalen);
 static void update_redirecting(struct sip_pvt *p, const void *data, size_t datalen);
-static void change_redirecting_information(struct sip_pvt *p, struct sip_request *req, struct ast_party_redirecting *redirecting, int set_call_forward);
+static void change_redirecting_information(struct sip_pvt *p, struct sip_message *req, struct ast_party_redirecting *redirecting, int set_call_forward);
 static int get_domain(const char *str, char *domain, int len);
-static void get_realm(struct sip_pvt *p, const struct sip_request *req);
+static void get_realm(struct sip_pvt *p, const struct sip_message *req);
 
 /*-- TCP connection handling ---*/
 static void *_sip_tcp_helper_thread(struct sip_pvt *pvt, struct ast_tcptls_session_instance *tcptls_session);
 static void *sip_tcp_worker_fn(void *);
 
 /*--- Constructing requests and responses */
-static void initialize_initreq(struct sip_pvt *p, struct sip_request *req);
-static int init_req(struct sip_request *req, int sipmethod, const char *recip);
-static int reqprep(struct sip_request *req, struct sip_pvt *p, int sipmethod, int seqno, int newbranch);
-static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmethod);
-static int init_resp(struct sip_request *resp, const char *msg);
+static void initialize_initreq(struct sip_pvt *p, struct sip_message *req);
+static int init_req(struct sip_message *req, int sipmethod, const char *recip);
+static int reqprep(struct sip_message *req, struct sip_pvt *p, int sipmethod, int seqno, int newbranch);
+static void initreqprep(struct sip_message *req, struct sip_pvt *p, int sipmethod);
+static int init_resp(struct sip_message *resp, const char *msg);
 static inline int resp_needs_contact(const char *msg, enum sipmethod method);
-static int respprep(struct sip_request *resp, struct sip_pvt *p, const char *msg, const struct sip_request *req);
+static int respprep(struct sip_message *resp, struct sip_pvt *p, const char *msg, const struct sip_message *req);
 static const struct sockaddr_in *sip_real_dst(const struct sip_pvt *p);
 static void build_via(struct sip_pvt *p);
 static int create_addr_from_peer(struct sip_pvt *r, struct sip_peer *peer);
@@ -2664,53 +2674,53 @@ static char *generate_random_string(char *buf, size_t size);
 static void build_callid_pvt(struct sip_pvt *pvt);
 static void build_callid_registry(struct sip_registry *reg, struct in_addr ourip, const char *fromdomain);
 static void make_our_tag(char *tagbuf, size_t len);
-static int add_header(struct sip_request *req, const char *var, const char *value);
-static int add_header_contentLength(struct sip_request *req, int len);
-static int add_line(struct sip_request *req, const char *line);
-static int add_text(struct sip_request *req, const char *text);
-static int add_digit(struct sip_request *req, char digit, unsigned int duration, int mode);
-static int add_rpid(struct sip_request *req, struct sip_pvt *p);
-static int add_vidupdate(struct sip_request *req);
-static void add_route(struct sip_request *req, struct sip_route *route);
-static int copy_header(struct sip_request *req, const struct sip_request *orig, const char *field);
-static int copy_all_header(struct sip_request *req, const struct sip_request *orig, const char *field);
-static int copy_via_headers(struct sip_pvt *p, struct sip_request *req, const struct sip_request *orig, const char *field);
+static int add_header(struct sip_message *req, const char *var, const char *value);
+static int add_header_contentLength(struct sip_message *req, int len);
+static int add_line(struct sip_message *req, const char *line);
+static int add_text(struct sip_message *req, const char *text);
+static int add_digit(struct sip_message *req, char digit, unsigned int duration, int mode);
+static int add_rpid(struct sip_message *req, struct sip_pvt *p);
+static int add_vidupdate(struct sip_message *req);
+static void add_route(struct sip_message *req, struct sip_route *route);
+static int copy_header(struct sip_message *req, const struct sip_message *orig, const char *field);
+static int copy_all_header(struct sip_message *req, const struct sip_message *orig, const char *field);
+static int copy_via_headers(struct sip_pvt *p, struct sip_message *req, const struct sip_message *orig, const char *field);
 static void set_destination(struct sip_pvt *p, char *uri);
-static void append_date(struct sip_request *req);
+static void append_date(struct sip_message *req);
 static void build_contact(struct sip_pvt *p);
 
 /*------Request handling functions */
-static int handle_incoming(struct sip_pvt *p, struct sip_request *req, struct sockaddr_in *sin, int *recount, int *nounlock);
-static int handle_request_update(struct sip_pvt *p, struct sip_request *req);
-static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int debug, int seqno, struct sockaddr_in *sin, int *recount, const char *e, int *nounlock);
-static int handle_request_refer(struct sip_pvt *p, struct sip_request *req, int debug, int seqno, int *nounlock);
-static int handle_request_bye(struct sip_pvt *p, struct sip_request *req);
-static int handle_request_register(struct sip_pvt *p, struct sip_request *req, struct sockaddr_in *sin, const char *e);
-static int handle_request_cancel(struct sip_pvt *p, struct sip_request *req);
-static int handle_request_message(struct sip_pvt *p, struct sip_request *req);
-static int handle_request_subscribe(struct sip_pvt *p, struct sip_request *req, struct sockaddr_in *sin, int seqno, const char *e);
-static void handle_request_info(struct sip_pvt *p, struct sip_request *req);
-static int handle_request_options(struct sip_pvt *p, struct sip_request *req);
-static int handle_invite_replaces(struct sip_pvt *p, struct sip_request *req, int debug, int seqno, struct sockaddr_in *sin);
-static int handle_request_notify(struct sip_pvt *p, struct sip_request *req, struct sockaddr_in *sin, int seqno, const char *e);
-static int local_attended_transfer(struct sip_pvt *transferer, struct sip_dual *current, struct sip_request *req, int seqno);
+static int handle_incoming(struct sip_pvt *p, struct sip_message *req, struct sockaddr_in *sin, int *recount, int *nounlock);
+static int handle_request_update(struct sip_pvt *p, struct sip_message *req);
+static int handle_request_invite(struct sip_pvt *p, struct sip_message *req, int debug, int seqno, struct sockaddr_in *sin, int *recount, const char *e, int *nounlock);
+static int handle_request_refer(struct sip_pvt *p, struct sip_message *req, int debug, int seqno, int *nounlock);
+static int handle_request_bye(struct sip_pvt *p, struct sip_message *req);
+static int handle_request_register(struct sip_pvt *p, struct sip_message *req, struct sockaddr_in *sin, const char *e);
+static int handle_request_cancel(struct sip_pvt *p, struct sip_message *req);
+static int handle_request_message(struct sip_pvt *p, struct sip_message *req);
+static int handle_request_subscribe(struct sip_pvt *p, struct sip_message *req, struct sockaddr_in *sin, int seqno, const char *e);
+static void handle_request_info(struct sip_pvt *p, struct sip_message *req);
+static int handle_request_options(struct sip_pvt *p, struct sip_message *req);
+static int handle_invite_replaces(struct sip_pvt *p, struct sip_message *req, int debug, int seqno, struct sockaddr_in *sin);
+static int handle_request_notify(struct sip_pvt *p, struct sip_message *req, struct sockaddr_in *sin, int seqno, const char *e);
+static int local_attended_transfer(struct sip_pvt *transferer, struct sip_dual *current, struct sip_message *req, int seqno);
 
 /*------Response handling functions */
-static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest, struct sip_request *req, int seqno);
-static void handle_response_notify(struct sip_pvt *p, int resp, const char *rest, struct sip_request *req, int seqno);
-static void handle_response_refer(struct sip_pvt *p, int resp, const char *rest, struct sip_request *req, int seqno);
-static void handle_response_subscribe(struct sip_pvt *p, int resp, const char *rest, struct sip_request *req, int seqno);
-static int handle_response_register(struct sip_pvt *p, int resp, const char *rest, struct sip_request *req, int seqno);
-static void handle_response(struct sip_pvt *p, int resp, const char *rest, struct sip_request *req, int seqno);
+static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest, struct sip_message *req, int seqno);
+static void handle_response_notify(struct sip_pvt *p, int resp, const char *rest, struct sip_message *req, int seqno);
+static void handle_response_refer(struct sip_pvt *p, int resp, const char *rest, struct sip_message *req, int seqno);
+static void handle_response_subscribe(struct sip_pvt *p, int resp, const char *rest, struct sip_message *req, int seqno);
+static int handle_response_register(struct sip_pvt *p, int resp, const char *rest, struct sip_message *req, int seqno);
+static void handle_response(struct sip_pvt *p, int resp, const char *rest, struct sip_message *req, int seqno);
 
 /*------ T38 Support --------- */
-static int transmit_response_with_t38_sdp(struct sip_pvt *p, char *msg, struct sip_request *req, int retrans);
+static int transmit_response_with_t38_sdp(struct sip_pvt *p, char *msg, struct sip_message *req, int retrans);
 static struct ast_udptl *sip_get_udptl_peer(struct ast_channel *chan);
 static int sip_set_udptl_peer(struct ast_channel *chan, struct ast_udptl *udptl);
 static void change_t38_state(struct sip_pvt *p, int state);
 
 /*------ Session-Timers functions --------- */
-static void proc_422_rsp(struct sip_pvt *p, struct sip_request *rsp);
+static void proc_422_rsp(struct sip_pvt *p, struct sip_message *rsp);
 static int  proc_session_timer(const void *vp);
 static void stop_session_timer(struct sip_pvt *p);
 static void start_session_timer(struct sip_pvt *p);
@@ -2894,7 +2904,7 @@ static void *sip_tcp_worker_fn(void *data)
 static void *_sip_tcp_helper_thread(struct sip_pvt *pvt, struct ast_tcptls_session_instance *tcptls_session)
 {
 	int res, cl;
-	struct sip_request req = { 0, } , reqcpy = { 0, };
+	struct sip_message req = { 0, };
 	struct sip_threadinfo *me;
 	char buf[1024] = "";
 
@@ -2918,8 +2928,6 @@ static void *_sip_tcp_helper_thread(struct sip_pvt *pvt, struct ast_tcptls_sessi
 
 	if (!(req.data = ast_str_create(SIP_MIN_PACKET)))
 		goto cleanup;
-	if (!(reqcpy.data = ast_str_create(SIP_MIN_PACKET)))
-		goto cleanup;
 
 	for (;;) {
 		struct ast_str *str_save;
@@ -2928,11 +2936,6 @@ static void *_sip_tcp_helper_thread(struct sip_pvt *pvt, struct ast_tcptls_sessi
 		memset(&req, 0, sizeof(req));
 		req.data = str_save;
 		ast_str_reset(req.data);
-
-		str_save = reqcpy.data;
-		memset(&reqcpy, 0, sizeof(reqcpy));
-		reqcpy.data = str_save;
-		ast_str_reset(reqcpy.data);
 
 		memset(buf, 0, sizeof(buf));
 
@@ -2963,10 +2966,9 @@ static void *_sip_tcp_helper_thread(struct sip_pvt *pvt, struct ast_tcptls_sessi
 			ast_str_append(&req.data, 0, "%s", buf);
 			req.len = req.data->used;
 		}
-		copy_request(&reqcpy, &req);
-		parse_request(&reqcpy);
+		parse_request(&req);
 		/* In order to know how much to read, we need the content-length header */
-		if (sscanf(get_header(&reqcpy, "Content-Length"), "%30d", &cl)) {
+		if (sscanf(get_header(&req, "Content-Length"), "%30d", &cl)) {
 			while (cl > 0) {
 				ast_mutex_lock(&tcptls_session->lock);
 				if (!fread(buf, (cl < sizeof(buf)) ? cl : sizeof(buf), 1, tcptls_session->f)) {
@@ -2997,9 +2999,6 @@ cleanup2:
 	fclose(tcptls_session->f);
 	tcptls_session->f = NULL;
 	tcptls_session->fd = -1;
-	if (reqcpy.data) {
-		ast_free(reqcpy.data);
-	}
 
 	if (req.data) {
 		ast_free(req.data);
@@ -3068,7 +3067,7 @@ static void ref_proxy(struct sip_pvt *pvt, struct sip_proxy *proxy)
  */
 static void *dialog_unlink_all(struct sip_pvt *dialog, int lockowner, int lockdialoglist)
 {
-	struct sip_request *cp;
+	struct sip_message *cp;
 
 	dialog_ref(dialog, "Let's bump the count in the unlink so it doesn't accidentally become dead before we are done");
 
@@ -3171,7 +3170,7 @@ static inline void pvt_set_needdestroy(struct sip_pvt *pvt, const char *reason)
 /*! \brief Initialize the initital request packet in the pvt structure.
  	This packet is used for creating replies and future requests in
 	a dialog */
-static void initialize_initreq(struct sip_pvt *p, struct sip_request *req)
+static void initialize_initreq(struct sip_pvt *p, struct sip_message *req)
 {
 	if (p->initreq.headers)
 		ast_debug(1, "Initializing already initialized SIP dialog %s (presumably reinvite)\n", p->callid);
@@ -3645,7 +3644,7 @@ static void append_history_full(struct sip_pvt *p, const char *fmt, ...)
 /*! \brief Retransmit SIP message if no answer (Called from scheduler) */
 static int retrans_pkt(const void *data)
 {
-	struct sip_request *pkt = (struct sip_request *)data, *prev, *cur = NULL;
+	struct sip_message *pkt = (struct sip_message *)data, *prev, *cur = NULL;
 	int reschedule = DEFAULT_RETRANS;
 	int xmitres = 0;
 	
@@ -3686,7 +3685,7 @@ static int retrans_pkt(const void *data)
 		}
 
 		append_history(pkt->owner, "ReTx", "%d %s", reschedule, pkt->data->str);
-		xmitres = __sip_xmit(pkt->owner, pkt->data, pkt->packetlen);
+		xmitres = __sip_xmit(pkt->owner, pkt->data, pkt->len);
 		sip_pvt_unlock(pkt->owner);
 		if (xmitres == XMIT_ERROR)
 			ast_log(LOG_WARNING, "Network error on retransmit in dialog %s\n", pkt->owner->callid);
@@ -3771,7 +3770,7 @@ static int retrans_pkt(const void *data)
 */
 static enum sip_result __sip_reliable_xmit(struct sip_pvt *p, int seqno, int resp, struct ast_str *data, int len, int fatal, int sipmethod)
 {
-	struct sip_request *pkt = NULL;
+	struct sip_message *pkt = NULL;
 	int siptimer_a = DEFAULT_RETRANS;
 	int xmitres = 0;
 	int respid;
@@ -3802,7 +3801,7 @@ static enum sip_result __sip_reliable_xmit(struct sip_pvt *p, int seqno, int res
 		return AST_FAILURE;
 	}
 	ast_str_set(&pkt->data, 0, "%s%s", data->str, "\0");
-	pkt->packetlen = len;
+	pkt->len = len;
 	/* copy other parameters from the caller */
 	pkt->method = sipmethod;
 	pkt->seqno = seqno;
@@ -3827,7 +3826,7 @@ static enum sip_result __sip_reliable_xmit(struct sip_pvt *p, int seqno, int res
 	if (sipdebug)
 		ast_debug(4, "*** SIP TIMER: Initializing retransmit timer on packet: Id  #%d\n", pkt->retransid);
 
-	xmitres = __sip_xmit(pkt->owner, pkt->data, pkt->packetlen);	/* Send packet */
+	xmitres = __sip_xmit(pkt->owner, pkt->data, pkt->len);	/* Send packet */
 
 	if (xmitres == XMIT_ERROR) {	/* Serious network trouble, no need to try again */
 		append_history(pkt->owner, "XmitErr", "%s", pkt->is_fatal ? "(Critical)" : "(Non-critical)");
@@ -3954,7 +3953,7 @@ static int sip_cancel_destroy(struct sip_pvt *p)
  * called with p locked*/
 static int __sip_ack(struct sip_pvt *p, int seqno, int resp, int sipmethod)
 {
-	struct sip_request *cur, *prev = NULL;
+	struct sip_message *cur, *prev = NULL;
 	const char *msg = "Not Found";	/* used only for debugging */
 	int res = FALSE;
 
@@ -4019,7 +4018,7 @@ static int __sip_ack(struct sip_pvt *p, int seqno, int resp, int sipmethod)
  * called with p locked */
 static void __sip_pretend_ack(struct sip_pvt *p)
 {
-	struct sip_request *cur = NULL;
+	struct sip_message *cur = NULL;
 
 	while (p->packets) {
 		int method;
@@ -4036,7 +4035,7 @@ static void __sip_pretend_ack(struct sip_pvt *p)
 /*! \brief Acks receipt of packet, keep it around (used for provisional responses) */
 static int __sip_semi_ack(struct sip_pvt *p, int seqno, int resp, int sipmethod)
 {
-	struct sip_request *cur;
+	struct sip_message *cur;
 	int res = FALSE;
 
 	for (cur = p->packets; cur; cur = cur->nextpacket) {
@@ -4057,15 +4056,8 @@ static int __sip_semi_ack(struct sip_pvt *p, int seqno, int resp, int sipmethod)
 }
 
 
-/*! \brief Copy SIP request, parse it */
-static void parse_copy(struct sip_request *dst, const struct sip_request *src)
-{
-	copy_request(dst, src);
-	parse_request(dst);
-}
-
 /*! \brief add a blank line if no body */
-static void add_blank(struct sip_request *req)
+static void add_blank(struct sip_message *req)
 {
 	if (!req->lines) {
 		/* Add extra empty return. add_header() reserves 4 bytes so cannot be truncated */
@@ -4115,7 +4107,7 @@ static void update_provisional_keepalive(struct sip_pvt *pvt, int with_sdp)
 }
 
 /*! \brief Transmit response on SIP request*/
-static int send_response(struct sip_pvt *p, struct sip_request *req, enum xmittype reliable, int seqno)
+static int send_response(struct sip_pvt *p, struct sip_message *req, enum xmittype reliable, int seqno)
 {
 	int res;
 
@@ -4129,11 +4121,9 @@ static int send_response(struct sip_pvt *p, struct sip_request *req, enum xmitty
 			ntohs(dst->sin_port), req->data->str);
 	}
 	if (p->do_history) {
-		struct sip_request tmp = { .rlPart1 = 0, };
-		parse_copy(&tmp, req);
-		append_history(p, reliable ? "TxRespRel" : "TxResp", "%s / %s - %s", tmp.data->str, get_header(&tmp, "CSeq"),
-			(tmp.method == SIP_RESPONSE || tmp.method == SIP_UNKNOWN) ? REQ_OFFSET_TO_STR(&tmp, rlPart2) : sip_methods[tmp.method].text);
-		ast_free(tmp.data);
+		parse_request(req); 	/* We need to parse the request for history...  We whould add this to the message when creating it */
+		append_history(p, reliable ? "TxRespRel" : "TxResp", "%s / %s - %s", req->parsedata->str, get_header(req, "CSeq"),
+			(req->method == SIP_RESPONSE || req->method == SIP_UNKNOWN) ? REQ_OFFSET_TO_STR(req, rlPart2) : sip_methods[req->method].text);
 	}
 
 	/* If we are sending a final response to an INVITE, stop retransmitting provisional responses */
@@ -4154,7 +4144,7 @@ static int send_response(struct sip_pvt *p, struct sip_request *req, enum xmitty
 /*! \brief Send SIP Request to the other part of the dialogue 
 	\return see \ref __sip_xmit
 */
-static int send_request(struct sip_pvt *p, struct sip_request *req, enum xmittype reliable, int seqno)
+static int send_request(struct sip_pvt *p, struct sip_message *req, enum xmittype reliable, int seqno)
 {
 	int res;
 
@@ -4173,10 +4163,8 @@ static int send_request(struct sip_pvt *p, struct sip_request *req, enum xmittyp
 			ast_verbose("%sTransmitting (no NAT) to %s:%d:\n%s\n---\n", reliable ? "Reliably " : "", ast_inet_ntoa(p->sa.sin_addr), ntohs(p->sa.sin_port), req->data->str);
 	}
 	if (p->do_history) {
-		struct sip_request tmp = { .rlPart1 = 0, };
-		parse_copy(&tmp, req);
-		append_history(p, reliable ? "TxReqRel" : "TxReq", "%s / %s - %s", tmp.data->str, get_header(&tmp, "CSeq"), sip_methods[tmp.method].text);
-		ast_free(tmp.data);
+		parse_request(req);
+		append_history(p, reliable ? "TxReqRel" : "TxReq", "%s / %s - %s", req->data->str, get_header(req, "CSeq"), sip_methods[req->method].text);
 	}
 	res = (reliable) ?
 		__sip_reliable_xmit(p, seqno, 0, req->data, req->len, (reliable == XMIT_CRITICAL), req->method) :
@@ -5534,7 +5522,7 @@ static void sip_subscribe_mwi_destroy(struct sip_subscription_mwi *mwi)
 /*! \brief Execute destruction of SIP dialog structure, release memory */
 static void __sip_destroy(struct sip_pvt *p, int lockowner, int lockdialoglist)
 {
-	struct sip_request *req;
+	struct sip_message *req;
 
 	if (sip_debug_test_pvt(p))
 		ast_verbose("Really destroying SIP dialog '%s' Method: %s\n", p->callid, sip_methods[p->method].text);
@@ -6089,7 +6077,7 @@ static int sip_hangup(struct ast_channel *ast)
 		if (needcancel) {	/* Outgoing call, not up */
 			if (ast_test_flag(&p->flags[0], SIP_OUTGOING)) {
 				/* stop retransmitting an INVITE that has not received a response */
-				struct sip_request *cur;
+				struct sip_message *cur;
 				for (cur = p->packets; cur; cur = cur->nextpacket) {
 					__sip_semi_ack(p, cur->seqno, cur->is_resp, cur->method ? cur->method : find_sip_method(cur->data->str));
 				}
@@ -6865,7 +6853,7 @@ static char *get_body_by_line(const char *line, const char *name, int nameLen, c
  * at the 'start' line. Returns the matching line, and 'start'
  * is updated with the next line number.
  */
-static const char *get_sdp_iterate(int *start, struct sip_request *req, const char *name)
+static const char *get_sdp_iterate(int *start, struct sip_message *req, const char *name)
 {
 	int len = strlen(name);
 
@@ -6879,7 +6867,7 @@ static const char *get_sdp_iterate(int *start, struct sip_request *req, const ch
 }
 
 /*! \brief Get a line from an SDP message body */
-static const char *get_sdp(struct sip_request *req, const char *name)
+static const char *get_sdp(struct sip_message *req, const char *name)
 {
 	int dummy = 0;
 
@@ -6887,7 +6875,7 @@ static const char *get_sdp(struct sip_request *req, const char *name)
 }
 
 /*! \brief Get a specific line from the message body */
-static char *get_body(struct sip_request *req, char *name, char delimiter)
+static char *get_body(struct sip_message *req, char *name, char delimiter)
 {
 	int x;
 	int len = strlen(name);
@@ -6941,7 +6929,7 @@ static const char *find_alias(const char *name, const char *_default)
 	return _default;
 }
 
-static const char *__get_header(const struct sip_request *req, const char *name, int *start)
+static const char *__get_header(const struct sip_message *req, const char *name, int *start)
 {
 	int pass;
 
@@ -6980,7 +6968,7 @@ static const char *__get_header(const struct sip_request *req, const char *name,
 /*! \brief Get header from SIP request
 	\return Always return something, so don't check for NULL because it won't happen :-)
 */
-static const char *get_header(const struct sip_request *req, const char *name)
+static const char *get_header(const struct sip_message *req, const char *name)
 {
 	int start = 0;
 	return __get_header(req, name, &start);
@@ -7170,7 +7158,7 @@ static struct sip_st_dlg* sip_st_alloc(struct sip_pvt *const p)
  * remember to release the reference.
  */
 static struct sip_pvt *sip_alloc(ast_string_field callid, struct sockaddr_in *sin,
-				 int useglobal_nat, const int intended_method, struct sip_request *req)
+				 int useglobal_nat, const int intended_method, struct sip_message *req)
 {
 	struct sip_pvt *p;
 
@@ -7327,7 +7315,7 @@ static int find_call_cb(void *__pvt, void *__arg, int flags)
  * Returns a reference to the sip_pvt object, remember to give it back once done.
  *     Called by handle_incoming(), sipsock_read
  */
-static struct sip_pvt *find_call(struct sip_request *req, struct sockaddr_in *sin, const int intended_method)
+static struct sip_pvt *find_call(struct sip_message *req, struct sockaddr_in *sin, const int intended_method)
 {
 	struct sip_pvt *p = NULL;
 	char *tag = "";	/* note, tag is never NULL */
@@ -7774,7 +7762,7 @@ static void mark_parsed_methods(unsigned int *methods, char *methods_str)
  * \param req The SIP request we are parsing
  * \retval The methods allowed
  */
-static unsigned int parse_allowed_methods(struct sip_request *req)
+static unsigned int parse_allowed_methods(struct sip_message *req)
 {
 	char *allow = ast_strdupa(get_header(req, "Allow"));
 	unsigned int allowed_methods = SIP_UNKNOWN;
@@ -7816,7 +7804,7 @@ static unsigned int parse_allowed_methods(struct sip_request *req)
  * \param req The request which we are parsing
  * \retval The methods alloweded by the sip_pvt
  */
-static unsigned int set_pvt_allowed_methods(struct sip_pvt *pvt, struct sip_request *req)
+static unsigned int set_pvt_allowed_methods(struct sip_pvt *pvt, struct sip_message *req)
 {
 	pvt->allowed_methods = parse_allowed_methods(req);
 	
@@ -7876,25 +7864,43 @@ static int lws2sws(char *msgbuf, int len)
 
 /*! \brief Parse a SIP message
 	\note this function is used both on incoming and outgoing packets
+	
+	Copies data to parsedata, leaving original data intact
 */
-static int parse_request(struct sip_request *req)
+static int parse_request(struct sip_message *req)
 {
-	char *c = req->data->str;
+	char *c;
 	ptrdiff_t *dst = req->header;
 	int i = 0, lim = SIP_MAX_HEADERS - 1;
 	unsigned int skipping_headers = 0;
 	ptrdiff_t current_header_offset = 0;
 	char *previous_header = "";
 
+	if (req->is_parsed)
+		return 0;
+	
+	if (!req->parsedata && !(req->parsedata = ast_str_create(SIP_MIN_PACKET))) {
+		ast_log(LOG_ERROR, "Can't allocate memory for SIP parser.\n");
+                return -1;
+	}
+	/* Copy req->data and keep req->data in raw format */
+	ast_str_set(&req->parsedata, 0, "%s", req->data->str);
+	ast_debug(1, "********** PARSING REQUEST !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
+	c = req->parsedata->str;
+	if (!*c)
+		ast_debug(1,"-------------- NOTHING TO PARSE. SORRY\n");
+
 	req->header[0] = 0;
 	req->headers = -1;	/* mark that we are working on the header */
+
 	for (; *c; c++) {
 		if (*c == '\r') {		/* remove \r */
 			*c = '\0';
 		} else if (*c == '\n') { 	/* end of this line */
+			ast_debug(1, "---- newline -");		/* ---- DEBUG ---- */
 			*c = '\0';
-			current_header_offset = (c + 1) - req->data->str;
-			previous_header = req->data->str + dst[i];
+			current_header_offset = (c + 1) - req->parsedata->str;
+			previous_header = req->parsedata->str + dst[i];
 			if (skipping_headers) {
 				/* check to see if this line is blank; if so, turn off
 				   the skipping flag, so the next line will be processed
@@ -7903,13 +7909,14 @@ static int parse_request(struct sip_request *req)
 					skipping_headers = 0;
 				}
 				dst[i] = current_header_offset; /* record start of next line */
+				ast_debug(1, "---- skipping -\n");		/* ---- DEBUG ---- */
 				continue;
 			}
-			if (sipdebug) {
-				ast_debug(4, "%7s %2d [%3d]: %s\n",
+			//if (sipdebug) {
+				ast_debug(1, "%7s %2d [%3d]: %s\n",
 					  req->headers < 0 ? "Header" : "Body",
 					  i, (int) strlen(previous_header), previous_header);
-			}
+			//}
 			if (ast_strlen_zero(previous_header) && req->headers < 0) {
 				req->headers = i;	/* record number of header lines */
 				dst = req->line;	/* start working on the body */
@@ -7940,7 +7947,7 @@ static int parse_request(struct sip_request *req)
 	   if we've already reached the maximum number of lines for portion of the message
 	   we were parsing, we can't accept any more, so just ignore it.
 	*/
-	previous_header = req->data->str + dst[i];
+	previous_header = req->parsedata->str + dst[i];
 	if ((i < lim) && !ast_strlen_zero(previous_header)) {
 		if (sipdebug) {
 			ast_debug(4, "%7s %2d [%3d]: %s\n",
@@ -7956,13 +7963,16 @@ static int parse_request(struct sip_request *req)
 	} else {			/* no body */
 		req->headers = i;
 		req->lines = 0;
-		/* req->data->used will be a NULL byte */
-		req->line[0] = ast_str_strlen(req->data);
+		/* req->parsedata->used will be a NULL byte */
+		req->line[0] = ast_str_strlen(req->parsedata);
 	}
 
 	if (*c) {
 		ast_log(LOG_WARNING, "Too many lines, skipping <%s>\n", c);
 	}
+	ast_debug(1, "********** DONE PARSING REQUEST !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
+
+	req->is_parsed = TRUE;
 
 	/* Split up the first line parts */
 	return determine_firstline_parts(req);
@@ -7976,7 +7986,7 @@ static int parse_request(struct sip_request *req)
   Also updates req->sdp_start and req->sdp_end to indicate where the SDP
   lives in the message body.
 */
-static int find_sdp(struct sip_request *req)
+static int find_sdp(struct sip_message *req)
 {
 	const char *content_type;
 	const char *content_length;
@@ -8069,7 +8079,7 @@ static int find_sdp(struct sip_request *req)
 }
 
 
-static int get_ip_and_port_from_sdp(struct sip_request *req, const enum media_type media, struct sockaddr_in *sin)
+static int get_ip_and_port_from_sdp(struct sip_message *req, const enum media_type media, struct sockaddr_in *sin)
 {
 	const char *m;
 	const char *c;
@@ -8126,7 +8136,7 @@ static int get_ip_and_port_from_sdp(struct sip_request *req, const enum media_ty
  	Return 0 on success, a negative value on errors.
 	Must be called after find_sdp().
 */
-static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action)
+static int process_sdp(struct sip_pvt *p, struct sip_message *req, int t38action)
 {
 	const char *m;		/* SDP media offer */
 	const char *c;
@@ -8912,7 +8922,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 		/* Activate a re-invite */
 		ast_queue_frame(p->owner, &ast_null_frame);
 		/* Queue Manager Unhold event */
-		append_history(p, "Unhold", "%s", req->data->str);
+		append_history(p, "Unhold", "%s", req->parsedata->str);
 		if (sip_cfg.callevents)
 			manager_event(EVENT_FLAG_CALL, "Hold",
 				      "Status: Off\r\n"
@@ -8934,7 +8944,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 		/* Activate a re-invite */
 		ast_queue_frame(p->owner, &ast_null_frame);
 		/* Queue Manager Hold event */
-		append_history(p, "Hold", "%s", req->data->str);
+		append_history(p, "Hold", "%s", req->parsedata->str);
 		if (sip_cfg.callevents && !ast_test_flag(&p->flags[1], SIP_PAGE2_CALL_ONHOLD)) {
 			manager_event(EVENT_FLAG_CALL, "Hold",
 				      "Status: On\r\n"
@@ -8965,7 +8975,7 @@ static void ts_ast_rtp_destroy(void *data)
 #endif
 
 /*! \brief Add header to SIP message */
-static int add_header(struct sip_request *req, const char *var, const char *value)
+static int add_header(struct sip_message *req, const char *var, const char *value)
 {
 	if (req->headers == SIP_MAX_HEADERS) {
 		ast_log(LOG_WARNING, "Out of SIP header space\n");
@@ -8991,7 +9001,7 @@ static int add_header(struct sip_request *req, const char *var, const char *valu
 }
 
 /*! \brief Add 'Content-Length' header to SIP message */
-static int add_header_contentLength(struct sip_request *req, int len)
+static int add_header_contentLength(struct sip_message *req, int len)
 {
 	char clen[10];
 
@@ -9000,7 +9010,7 @@ static int add_header_contentLength(struct sip_request *req, int len)
 }
 
 /*! \brief Add content (not header) to SIP message */
-static int add_line(struct sip_request *req, const char *line)
+static int add_line(struct sip_message *req, const char *line)
 {
 	if (req->lines == SIP_MAX_LINES)  {
 		ast_log(LOG_WARNING, "Out of SIP line space\n");
@@ -9017,7 +9027,7 @@ static int add_line(struct sip_request *req, const char *line)
 }
 
 /*! \brief Copy one header field from one request to another */
-static int copy_header(struct sip_request *req, const struct sip_request *orig, const char *field)
+static int copy_header(struct sip_message *req, const struct sip_message *orig, const char *field)
 {
 	const char *tmp = get_header(orig, field);
 
@@ -9028,7 +9038,7 @@ static int copy_header(struct sip_request *req, const struct sip_request *orig, 
 }
 
 /*! \brief Copy all headers from one request to another */
-static int copy_all_header(struct sip_request *req, const struct sip_request *orig, const char *field)
+static int copy_all_header(struct sip_message *req, const struct sip_message *orig, const char *field)
 {
 	int start = 0;
 	int copied = 0;
@@ -9052,7 +9062,7 @@ static int copy_all_header(struct sip_request *req, const struct sip_request *or
 	We always add ;received=<ip address> to the topmost via header.
 \endverbatim
 	Received: RFC 3261, rport RFC 3581 */
-static int copy_via_headers(struct sip_pvt *p, struct sip_request *req, const struct sip_request *orig, const char *field)
+static int copy_via_headers(struct sip_pvt *p, struct sip_message *req, const struct sip_message *orig, const char *field)
 {
 	int copied = 0;
 	int start = 0;
@@ -9116,7 +9126,7 @@ static int copy_via_headers(struct sip_pvt *p, struct sip_request *req, const st
 }
 
 /*! \brief Add route header into request per learned route */
-static void add_route(struct sip_request *req, struct sip_route *route)
+static void add_route(struct sip_message *req, struct sip_route *route)
 {
 	char r[SIPBUFSIZE*2], *p;
 	int n, rem = sizeof(r);
@@ -9218,33 +9228,44 @@ static void set_destination(struct sip_pvt *p, char *uri)
 		ast_verbose("set_destination: set destination to %s, port %d\n", ast_inet_ntoa(p->sa.sin_addr), port);
 }
 
-/*! \brief Initialize SIP response, based on SIP request */
-static int init_resp(struct sip_request *resp, const char *msg)
+/*! \brief Generic initialization of SIP message structure, used for both request and response */
+static int init_message(struct sip_message *message)
 {
-	/* Initialize a response */
-	memset(resp, 0, sizeof(*resp));
-	resp->method = SIP_RESPONSE;
-	if (!(resp->data = ast_str_create(SIP_MIN_PACKET)))
+	memset(message, 0, sizeof(*message));
+	if (!(message->data = ast_str_create(SIP_MIN_PACKET)))
 		return -1;
-	resp->header[0] = 0;
+	message->header[0] = 0;
+	return 0;
+}
+
+/*! \brief Initialize SIP response, based on SIP request */
+static int init_resp(struct sip_message *resp, const char *msg)
+{
+	if (init_message(resp)) {
+		return -1;
+	}
+	/* Initialize a response */
+	resp->method = SIP_RESPONSE;
+	resp->is_resp = TRUE;
 	ast_str_set(&resp->data, 0, "SIP/2.0 %s\r\n", msg);
 	resp->len = resp->data->used;
 	resp->headers++;
 	return 0;
 }
 
-/*! \brief Initialize SIP request */
-static int init_req(struct sip_request *req, int sipmethod, const char *recip)
+/*! \brief Initialize SIP request for transmission  */
+static int init_req(struct sip_message *message, int sipmethod, const char *ruri)
 {
-	/* Initialize a request */
-	memset(req, 0, sizeof(*req));
-	if (!(req->data = ast_str_create(SIP_MIN_PACKET)))
+	if (init_message(message)) {
 		return -1;
-	req->method = sipmethod;
-	req->header[0] = 0;
-	ast_str_set(&req->data, 0, "%s %s SIP/2.0\r\n", sip_methods[sipmethod].text, recip);
-	req->len = ast_str_strlen(req->data);
-	req->headers++;
+	}
+
+	/* Initialize a request */
+	message->method = sipmethod;
+	message->is_resp = FALSE;
+	ast_str_set(&message->data, 0, "%s %s SIP/2.0\r\n", sip_methods[sipmethod].text, ruri);
+	message->len = ast_str_strlen(message->data);
+	message->headers++;
 	return 0;
 }
 
@@ -9309,7 +9330,7 @@ static inline int resp_needs_contact(const char *msg, enum sipmethod method) {
 }
 
 /*! \brief Prepare SIP response packet */
-static int respprep(struct sip_request *resp, struct sip_pvt *p, const char *msg, const struct sip_request *req)
+static int respprep(struct sip_message *resp, struct sip_pvt *p, const char *msg, const struct sip_message *req)
 {
 	char newto[256];
 	const char *ot;
@@ -9373,9 +9394,9 @@ static int respprep(struct sip_request *resp, struct sip_pvt *p, const char *msg
 }
 
 /*! \brief Initialize a SIP request message (not the initial one in a dialog) */
-static int reqprep(struct sip_request *req, struct sip_pvt *p, int sipmethod, int seqno, int newbranch)
+static int reqprep(struct sip_message *req, struct sip_pvt *p, int sipmethod, int seqno, int newbranch)
 {
-	struct sip_request *orig = &p->initreq;
+	struct sip_message *orig = &p->initreq;
 	char stripped[80];
 	char tmp[80];
 	char newto[256];
@@ -9384,7 +9405,7 @@ static int reqprep(struct sip_request *req, struct sip_pvt *p, int sipmethod, in
 	int is_strict = FALSE;		/*!< Strict routing flag */
 	int is_outbound = ast_test_flag(&p->flags[0], SIP_OUTGOING);	/* Session direction */
 
-	memset(req, 0, sizeof(struct sip_request));
+	memset(req, 0, sizeof(struct sip_message));
 	
 	snprintf(p->lastmsg, sizeof(p->lastmsg), "Tx: %s", sip_methods[sipmethod].text);
 	
@@ -9505,9 +9526,9 @@ static int reqprep(struct sip_request *req, struct sip_pvt *p, int sipmethod, in
 }
 
 /*! \brief Base transmit response function */
-static int __transmit_response(struct sip_pvt *p, const char *msg, const struct sip_request *req, enum xmittype reliable)
+static int __transmit_response(struct sip_pvt *p, const char *msg, const struct sip_message *req, enum xmittype reliable)
 {
-	struct sip_request resp;
+	struct sip_message resp;
 	int seqno = 0;
 
 	if (reliable && (sscanf(get_header(req, "CSeq"), "%30d ", &seqno) != 1)) {
@@ -9554,7 +9575,7 @@ static void temp_pvt_cleanup(void *data)
 }
 
 /*! \brief Transmit response, no retransmits, using a temporary pvt structure */
-static int transmit_response_using_temp(ast_string_field callid, struct sockaddr_in *sin, int useglobal_nat, const int intended_method, const struct sip_request *req, const char *msg)
+static int transmit_response_using_temp(ast_string_field callid, struct sockaddr_in *sin, int useglobal_nat, const int intended_method, const struct sip_message *req, const char *msg)
 {
 	struct sip_pvt *p = NULL;
 
@@ -9606,15 +9627,15 @@ static int transmit_response_using_temp(ast_string_field callid, struct sockaddr
 }
 
 /*! \brief Transmit response, no retransmits */
-static int transmit_response(struct sip_pvt *p, const char *msg, const struct sip_request *req)
+static int transmit_response(struct sip_pvt *p, const char *msg, const struct sip_message *req)
 {
 	return __transmit_response(p, msg, req, XMIT_UNRELIABLE);
 }
 
 /*! \brief Transmit response, no retransmits */
-static int transmit_response_with_unsupported(struct sip_pvt *p, const char *msg, const struct sip_request *req, const char *unsupported)
+static int transmit_response_with_unsupported(struct sip_pvt *p, const char *msg, const struct sip_message *req, const char *unsupported)
 {
-	struct sip_request resp;
+	struct sip_message resp;
 	respprep(&resp, p, msg, req);
 	append_date(&resp);
 	add_header(&resp, "Unsupported", unsupported);
@@ -9623,9 +9644,9 @@ static int transmit_response_with_unsupported(struct sip_pvt *p, const char *msg
 }
 
 /*! \brief Transmit 422 response with Min-SE header (Session-Timers)  */
-static int transmit_response_with_minse(struct sip_pvt *p, const char *msg, const struct sip_request *req, int minse_int)
+static int transmit_response_with_minse(struct sip_pvt *p, const char *msg, const struct sip_message *req, int minse_int)
 {
-	struct sip_request resp;
+	struct sip_message resp;
 	char minse_str[20];
 
 	respprep(&resp, p, msg, req);
@@ -9642,13 +9663,13 @@ static int transmit_response_with_minse(struct sip_pvt *p, const char *msg, cons
 /*! \brief Transmit response, Make sure you get an ACK
 	This is only used for responses to INVITEs, where we need to make sure we get an ACK
 */
-static int transmit_response_reliable(struct sip_pvt *p, const char *msg, const struct sip_request *req)
+static int transmit_response_reliable(struct sip_pvt *p, const char *msg, const struct sip_message *req)
 {
 	return __transmit_response(p, msg, req, req->ignore ? XMIT_UNRELIABLE : XMIT_CRITICAL);
 }
 
 /*! \brief Append date to SIP message */
-static void append_date(struct sip_request *req)
+static void append_date(struct sip_message *req)
 {
 	char tmpdat[256];
 	struct tm tm;
@@ -9660,9 +9681,9 @@ static void append_date(struct sip_request *req)
 }
 
 /*! \brief Append date and content length before transmitting response */
-static int transmit_response_with_date(struct sip_pvt *p, const char *msg, const struct sip_request *req)
+static int transmit_response_with_date(struct sip_pvt *p, const char *msg, const struct sip_message *req)
 {
-	struct sip_request resp;
+	struct sip_message resp;
 	respprep(&resp, p, msg, req);
 	append_date(&resp);
 	add_header_contentLength(&resp, 0);
@@ -9670,9 +9691,9 @@ static int transmit_response_with_date(struct sip_pvt *p, const char *msg, const
 }
 
 /*! \brief Append Accept header, content length before transmitting response */
-static int transmit_response_with_allow(struct sip_pvt *p, const char *msg, const struct sip_request *req, enum xmittype reliable)
+static int transmit_response_with_allow(struct sip_pvt *p, const char *msg, const struct sip_message *req, enum xmittype reliable)
 {
-	struct sip_request resp;
+	struct sip_message resp;
 	respprep(&resp, p, msg, req);
 	add_header(&resp, "Accept", "application/sdp");
 	add_header_contentLength(&resp, 0);
@@ -9680,9 +9701,9 @@ static int transmit_response_with_allow(struct sip_pvt *p, const char *msg, cons
 }
 
 /*! \brief Respond with authorization request */
-static int transmit_response_with_auth(struct sip_pvt *p, const char *msg, const struct sip_request *req, const char *randdata, enum xmittype reliable, const char *header, int stale)
+static int transmit_response_with_auth(struct sip_pvt *p, const char *msg, const struct sip_message *req, const char *randdata, enum xmittype reliable, const char *header, int stale)
 {
-	struct sip_request resp;
+	struct sip_message resp;
 	char tmp[512];
 	int seqno = 0;
 
@@ -9747,7 +9768,7 @@ static int get_domain(const char *str, char *domain, int len)
   \brief Choose realm based on From header and then To header or use globaly configured realm.
   Realm from From/To header should be listed among served domains in config file: domain=...
 */
-static void get_realm(struct sip_pvt *p, const struct sip_request *req)
+static void get_realm(struct sip_pvt *p, const struct sip_message *req)
 {
 	char domain[MAXHOSTNAMELEN];
 
@@ -9778,7 +9799,7 @@ static void get_realm(struct sip_pvt *p, const struct sip_request *req)
 }
 
 /* Only use a static string for the msg, here! */
-static int transmit_provisional_response(struct sip_pvt *p, const char *msg, const struct sip_request *req, int with_sdp)
+static int transmit_provisional_response(struct sip_pvt *p, const char *msg, const struct sip_message *req, int with_sdp)
 {
 	int res;
 
@@ -9791,7 +9812,7 @@ static int transmit_provisional_response(struct sip_pvt *p, const char *msg, con
 }
 
 /*! \brief Add text body to SIP message */
-static int add_text(struct sip_request *req, const char *text)
+static int add_text(struct sip_message *req, const char *text)
 {
 	/* XXX Convert \n's to \r\n's XXX */
 	add_header(req, "Content-Type", "text/plain;charset=UTF-8");
@@ -9804,7 +9825,7 @@ static int add_text(struct sip_request *req, const char *text)
 	Mode = 	0 for application/dtmf-relay (Cisco)
 		1 for application/dtmf
 */
-static int add_digit(struct sip_request *req, char digit, unsigned int duration, int mode)
+static int add_digit(struct sip_message *req, char digit, unsigned int duration, int mode)
 {
 	char tmp[256];
 	int event;
@@ -9836,7 +9857,7 @@ static int add_digit(struct sip_request *req, char digit, unsigned int duration,
  * \pre if p->owner exists, it must be locked
  * \brief Add Remote-Party-ID header to SIP message
  */
-static int add_rpid(struct sip_request *req, struct sip_pvt *p)
+static int add_rpid(struct sip_message *req, struct sip_pvt *p)
 {
 	struct ast_str *tmp = ast_str_alloca(256);
 	char *lid_num = NULL;
@@ -9917,7 +9938,7 @@ static int add_rpid(struct sip_request *req, struct sip_pvt *p)
 
 /*! \brief add XML encoded media control with update
 	\note XML: The only way to turn 0 bits of information into a few hundred. (markster) */
-static int add_vidupdate(struct sip_request *req)
+static int add_vidupdate(struct sip_message *req)
 {
 	const char *xml_is_a_huge_waste_of_space =
 		"<?xml version=\"1.0\" encoding=\"utf-8\" ?>\r\n"
@@ -10131,7 +10152,7 @@ static void get_our_media_address(struct sip_pvt *p, int needvideo,
     is used in Session-Timers where RE-INVITEs are used for refreshing SIP sessions
     without modifying the media session in any way.
 */
-static enum sip_result add_sdp(struct sip_request *resp, struct sip_pvt *p, int oldsdp, int add_audio, int add_t38)
+static enum sip_result add_sdp(struct sip_message *resp, struct sip_pvt *p, int oldsdp, int add_audio, int add_t38)
 {
 	int len = 0;
 	int alreadysent = 0;
@@ -10483,9 +10504,9 @@ static enum sip_result add_sdp(struct sip_request *resp, struct sip_pvt *p, int 
 }
 
 /*! \brief Used for 200 OK and 183 early media */
-static int transmit_response_with_t38_sdp(struct sip_pvt *p, char *msg, struct sip_request *req, int retrans)
+static int transmit_response_with_t38_sdp(struct sip_pvt *p, char *msg, struct sip_message *req, int retrans)
 {
-	struct sip_request resp;
+	struct sip_message resp;
 	int seqno;
 	
 	if (sscanf(get_header(req, "CSeq"), "%30d ", &seqno) != 1) {
@@ -10503,13 +10524,15 @@ static int transmit_response_with_t38_sdp(struct sip_pvt *p, char *msg, struct s
 }
 
 /*! \brief copy SIP request (mostly used to save request for responses) */
-static void copy_request(struct sip_request *dst, const struct sip_request *src)
+static void copy_request(struct sip_message *dst, const struct sip_message *src)
 {
 	struct ast_str *duplicate = dst->data;
+	struct ast_str *duplicate_parse = dst->parsedata;
 
 	/* First copy stuff */
 	memcpy(dst, src, sizeof(*dst));
 	dst->data = duplicate;
+	dst->parsedata = duplicate_parse;
 
 	/* All these + 1's are to account for the need to include the NULL terminator
 	 * Using typical string functions like ast_copy_string or ast_str_set will not
@@ -10517,21 +10540,32 @@ static void copy_request(struct sip_request *dst, const struct sip_request *src)
 	 * the place and so a memcpy is the only way to accurately copy the string
 	 */
 
-	if (!dst->data && !(dst->data = ast_str_create(src->data->used + 1)))
+	if (!dst->data && !(dst->data = ast_str_create(src->data->used + 1))) {
 		return;
-	else if (dst->data->len < src->data->used + 1)
+	} else if (dst->data->len < src->data->used + 1) {
 		ast_str_make_space(&dst->data, src->data->used + 1);
+	}
 		
 	memcpy(dst->data->str, src->data->str, src->data->used + 1);
 	dst->data->used = src->data->used;
+
+	if (src->parsedata) {
+		if (!dst->parsedata && !(dst->parsedata = ast_str_create(src->parsedata->used + 1))) {
+			return;
+		} else if (dst->parsedata->len < src->parsedata->used + 1) {
+			ast_str_make_space(&dst->parsedata, src->parsedata->used + 1);
+		}
+		memcpy(dst->parsedata->str, src->parsedata->str, src->parsedata->used + 1);
+		dst->parsedata->used = src->parsedata->used;
+	}
 }
 
 /*! \brief Used for 200 OK and 183 early media
 	\return Will return XMIT_ERROR for network errors.
 */
-static int transmit_response_with_sdp(struct sip_pvt *p, const char *msg, const struct sip_request *req, enum xmittype reliable, int oldsdp, int rpid)
+static int transmit_response_with_sdp(struct sip_pvt *p, const char *msg, const struct sip_message *req, enum xmittype reliable, int oldsdp, int rpid)
 {
-	struct sip_request resp;
+	struct sip_message resp;
 	int seqno;
 	if (sscanf(get_header(req, "CSeq"), "%30d ", &seqno) != 1) {
 		ast_log(LOG_WARNING, "Unable to get seqno from '%s'\n", get_header(req, "CSeq"));
@@ -10560,14 +10594,14 @@ static int transmit_response_with_sdp(struct sip_pvt *p, const char *msg, const 
 }
 
 /*! \brief Parse first line of incoming SIP request */
-static int determine_firstline_parts(struct sip_request *req)
+static int determine_firstline_parts(struct sip_message *req)
 {
-	char *e = ast_skip_blanks(req->data->str);	/* there shouldn't be any */
+	char *e = ast_skip_blanks(req->parsedata->str);	/* there shouldn't be any */
 	char *local_rlPart1;
 
 	if (!*e)
 		return -1;
-	req->rlPart1 = e - req->data->str;	/* method or protocol */
+	req->rlPart1 = e - req->parsedata->str;	/* method or protocol */
 	local_rlPart1 = e;
 	e = ast_skip_nonblanks(e);
 	if (*e)
@@ -10581,7 +10615,7 @@ static int determine_firstline_parts(struct sip_request *req)
 	if (!strcasecmp(local_rlPart1, "SIP/2.0") ) { /* We have a response */
 		if (strlen(e) < 3)	/* status code is 3 digits */
 			return -1;
-		req->rlPart2 = e - req->data->str;
+		req->rlPart2 = e - req->parsedata->str;
 	} else { /* We have a request */
 		if ( *e == '<' ) { /* XXX the spec says it must not be in <> ! */
 			ast_debug(3, "Oops. Bogus uri in <> %s\n", e);
@@ -10589,7 +10623,7 @@ static int determine_firstline_parts(struct sip_request *req)
 			if (!*e)
 				return -1;
 		}
-		req->rlPart2 = e - req->data->str;	/* URI */
+		req->rlPart2 = e - req->parsedata->str;	/* URI */
 		e = ast_skip_nonblanks(e);
 		if (*e)
 			*e++ = '\0';
@@ -10617,7 +10651,7 @@ static int determine_firstline_parts(struct sip_request *req)
 */
 static int transmit_reinvite_with_sdp(struct sip_pvt *p, int t38version, int oldsdp)
 {
-	struct sip_request req;
+	struct sip_message req;
 	
 	reqprep(&req, p, ast_test_flag(&p->flags[0], SIP_REINVITE_UPDATE) ?  SIP_UPDATE : SIP_INVITE, 0, 1);
 
@@ -10665,7 +10699,7 @@ static char *remove_uri_parameters(char *uri)
 }
 
 /*! \brief Check Contact: URI of SIP message */
-static void extract_uri(struct sip_pvt *p, struct sip_request *req)
+static void extract_uri(struct sip_pvt *p, struct sip_message *req)
 {
 	char stripped[SIPBUFSIZE];
 	char *c;
@@ -10699,7 +10733,7 @@ static void build_contact(struct sip_pvt *p)
 }
 
 /*! \brief Initiate new SIP request to peer/user */
-static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmethod)
+static void initreqprep(struct sip_message *req, struct sip_pvt *p, int sipmethod)
 {
 	struct ast_str *invite = ast_str_alloca(256);
 	char from[256];
@@ -10865,7 +10899,7 @@ static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmetho
  * \param pvt The sip_pvt which represents the call-leg
  * \param apr Redirecting data used to make the diversion header
  */
-static void add_diversion_header(struct sip_request *req, struct sip_pvt *pvt)
+static void add_diversion_header(struct sip_message *req, struct sip_pvt *pvt)
 {
 	const char *diverting_number;
 	const char *diverting_name;
@@ -10903,7 +10937,7 @@ static void add_diversion_header(struct sip_request *req, struct sip_pvt *pvt)
 */
 static int transmit_invite(struct sip_pvt *p, int sipmethod, int sdp, int init)
 {
-	struct sip_request req;
+	struct sip_message req;
 	struct ast_variable *var;
 	
 	req.method = sipmethod;
@@ -11313,7 +11347,7 @@ static int transmit_state_notify(struct sip_pvt *p, int state, int full, int tim
 	struct ast_str *tmp = ast_str_alloca(4000);
 	char from[256], to[256];
 	char *c, *mfrom, *mto;
-	struct sip_request req;
+	struct sip_message req;
 	const struct cfsubscription_types *subscriptiontype;
 
 	memset(from, 0, sizeof(from));
@@ -11400,7 +11434,7 @@ static int transmit_state_notify(struct sip_pvt *p, int state, int full, int tim
  */
 static int transmit_notify_with_mwi(struct sip_pvt *p, int newmsgs, int oldmsgs, const char *vmexten)
 {
-	struct sip_request req;
+	struct sip_message req;
 	struct ast_str *out = ast_str_alloca(500);
 	int ourport = ntohs(p->ourip.sin_port);
 	const char *exten = S_OR(vmexten, default_vmexten);
@@ -11449,7 +11483,7 @@ static int transmit_notify_with_mwi(struct sip_pvt *p, int newmsgs, int oldmsgs,
 /*! \brief Notify a transferring party of the status of transfer (RFC3515) */
 static int transmit_notify_with_sipfrag(struct sip_pvt *p, int cseq, char *message, int terminate)
 {
-	struct sip_request req;
+	struct sip_message req;
 	char tmp[SIPBUFSIZE/2];
 	
 	reqprep(&req, p, SIP_NOTIFY, 0, 1);
@@ -11472,7 +11506,7 @@ static int transmit_notify_with_sipfrag(struct sip_pvt *p, int cseq, char *messa
 
 /*! \brief Notify device with custom headers from sip_notify.conf */
 static int transmit_notify_custom(struct sip_pvt *p, struct ast_variable *vars) {
-	struct sip_request req;
+	struct sip_message req;
 	struct ast_variable *var, *newvar;
 
 	initreqprep(&req, p, SIP_NOTIFY);
@@ -11550,7 +11584,7 @@ static int manager_sipnotify(struct mansession *s, const struct message *m)
  */
 static void update_redirecting(struct sip_pvt *p, const void *data, size_t datalen)
 {
-	struct sip_request resp;
+	struct sip_message resp;
 
 	if (p->owner->_state == AST_STATE_UP || ast_test_flag(&p->flags[0], SIP_OUTGOING)) {
 		return;
@@ -11577,7 +11611,7 @@ static void update_connectedline(struct sip_pvt *p, const void *data, size_t dat
 	append_history(p, "ConnectedLine", "%s party is now %s <%s>", ast_test_flag(&p->flags[0], SIP_OUTGOING) ? "Calling" : "Called", p->owner->connected.id.name, p->owner->connected.id.number);
 
 	if (p->owner->_state == AST_STATE_UP || ast_test_flag(&p->flags[0], SIP_OUTGOING)) {
-		struct sip_request req;
+		struct sip_message req;
 
 		if (p->invitestate == INV_CONFIRMED || p->invitestate == INV_TERMINATED) {
 			reqprep(&req, p, ast_test_flag(&p->flags[0], SIP_REINVITE_UPDATE) ? SIP_UPDATE : SIP_INVITE, 0, 1);
@@ -11604,7 +11638,7 @@ static void update_connectedline(struct sip_pvt *p, const void *data, size_t dat
 		}
 	} else {
 		if (ast_test_flag(&p->flags[1], SIP_PAGE2_RPID_IMMEDIATE)) {
-			struct sip_request resp;
+			struct sip_message resp;
 
 			if ((p->owner->_state == AST_STATE_RING) && !ast_test_flag(&p->flags[0], SIP_PROGRESS_SENT)) {
 				respprep(&resp, p, "180 Ringing", &p->initreq);
@@ -11749,7 +11783,7 @@ static int sip_reg_timeout(const void *data)
  */
 static int transmit_register(struct sip_registry *r, int sipmethod, const char *auth, const char *authheader)
 {
-	struct sip_request req;
+	struct sip_message req;
 	char from[256];
 	char to[256];
 	char tmp[80];
@@ -11970,7 +12004,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 /*! \brief Transmit text with SIP MESSAGE method */
 static int transmit_message_with_text(struct sip_pvt *p, const char *text)
 {
-	struct sip_request req;
+	struct sip_message req;
 	
 	reqprep(&req, p, SIP_MESSAGE, 0, 1);
 	add_text(&req, text);
@@ -11991,7 +12025,7 @@ static int sip_refer_allocate(struct sip_pvt *p)
 */
 static int transmit_refer(struct sip_pvt *p, const char *dest)
 {
-	struct sip_request req = {
+	struct sip_message req = {
 		.headers = 0,	
 	};
 	char from[256];
@@ -12067,7 +12101,7 @@ static int transmit_refer(struct sip_pvt *p, const char *dest)
 /*! \brief Send SIP INFO dtmf message, see Cisco documentation on cisco.com */
 static int transmit_info_with_digit(struct sip_pvt *p, const char digit, unsigned int duration)
 {
-	struct sip_request req;
+	struct sip_message req;
 	
 	reqprep(&req, p, SIP_INFO, 0, 1);
 	add_digit(&req, digit, duration, (ast_test_flag(&p->flags[0], SIP_DTMF) == SIP_DTMF_SHORTINFO));
@@ -12077,7 +12111,7 @@ static int transmit_info_with_digit(struct sip_pvt *p, const char digit, unsigne
 /*! \brief Send SIP INFO with video update request */
 static int transmit_info_with_vidupdate(struct sip_pvt *p)
 {
-	struct sip_request req;
+	struct sip_message req;
 	
 	reqprep(&req, p, SIP_INFO, 0, 1);
 	add_vidupdate(&req);
@@ -12089,7 +12123,7 @@ static int transmit_info_with_vidupdate(struct sip_pvt *p)
 */
 static int transmit_request(struct sip_pvt *p, int sipmethod, int seqno, enum xmittype reliable, int newbranch)
 {
-	struct sip_request resp;
+	struct sip_message resp;
 	
 	if (sipmethod == SIP_ACK)
 		p->invitestate = INV_CONFIRMED;
@@ -12120,7 +12154,7 @@ static void auth_headers(enum sip_auth_type code, char **header, char **resphead
 /*! \brief Transmit SIP request, auth added */
 static int transmit_request_with_auth(struct sip_pvt *p, int sipmethod, int seqno, enum xmittype reliable, int newbranch)
 {
-	struct sip_request resp;
+	struct sip_message resp;
 	
 	reqprep(&resp, p, sipmethod, seqno, newbranch);
 	if (!ast_strlen_zero(p->realm)) {
@@ -12292,7 +12326,7 @@ static void reg_source_db(struct sip_peer *peer)
 }
 
 /*! \brief Save contact header for 200 OK on INVITE */
-static int parse_ok_contact(struct sip_pvt *pvt, struct sip_request *req)
+static int parse_ok_contact(struct sip_pvt *pvt, struct sip_message *req)
 {
 	char contact[SIPBUFSIZE];
 	char *c;
@@ -12377,7 +12411,7 @@ static int set_address_from_contact(struct sip_pvt *pvt)
 }
 
 /*! \brief Parse contact header and save registration (peer registration) */
-static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, struct sip_peer *peer, struct sip_request *req)
+static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, struct sip_peer *peer, struct sip_message *req)
 {
 	char contact[SIPBUFSIZE];
 	char data[SIPBUFSIZE];
@@ -12599,7 +12633,7 @@ static void list_route(struct sip_route *route)
 }
 
 /*! \brief Build route list from Record-Route header */
-static void build_route(struct sip_pvt *p, struct sip_request *req, int backwards)
+static void build_route(struct sip_pvt *p, struct sip_message *req, int backwards)
 {
 	struct sip_route *thishop, *head, *tail;
 	int start = 0;
@@ -12723,7 +12757,7 @@ AST_THREADSTORAGE(check_auth_buf);
 	authentication (if peer have secret set)
     \return 0 on success, non-zero on error
 */
-static enum check_auth_result check_auth(struct sip_pvt *p, struct sip_request *req, const char *username,
+static enum check_auth_result check_auth(struct sip_pvt *p, struct sip_message *req, const char *username,
 					 const char *secret, const char *md5secret, int sipmethod,
 					 const char *uri, enum xmittype reliable, int ignore)
 {
@@ -12972,7 +13006,7 @@ static int cb_extensionstate(char *context, char* exten, int state, void *data)
 /*! \brief Send a fake 401 Unauthorized response when the administrator
   wants to hide the names of local devices  from fishers
  */
-static void transmit_fake_auth_response(struct sip_pvt *p, int sipmethod, struct sip_request *req, enum xmittype reliable)
+static void transmit_fake_auth_response(struct sip_pvt *p, int sipmethod, struct sip_message *req, enum xmittype reliable)
 {
 	/* We have to emulate EXACTLY what we'd get with a good peer
 	 * and a bad password, or else we leak information. */
@@ -13093,7 +13127,7 @@ static char *terminate_uri(char *uri)
 	- Registration requests are only matched with peers that are marked as "dynamic"
  */
 static enum check_auth_result register_verify(struct sip_pvt *p, struct sockaddr_in *sin,
-					      struct sip_request *req, const char *uri)
+					      struct sip_message *req, const char *uri)
 {
 	enum check_auth_result res = AUTH_NOT_FOUND;
 	struct sip_peer *peer;
@@ -13336,7 +13370,7 @@ static void sip_set_redirstr(struct sip_pvt *p, char *reason) {
  * on an incoming packet. Returns 1 if a valid header is found
  * and it is different from the current caller id.
  */
-static int get_pai(struct sip_pvt *p, struct sip_request *req)
+static int get_pai(struct sip_pvt *p, struct sip_message *req)
 {
 	char pai[256];
 	char privacy[64];
@@ -13414,10 +13448,10 @@ static int get_pai(struct sip_pvt *p, struct sip_request *req)
  *  returns true if a valid header was found and it was different from the
  *  current caller id.
  */
-static int get_rpid(struct sip_pvt *p, struct sip_request *oreq)
+static int get_rpid(struct sip_pvt *p, struct sip_message *oreq)
 {
 	char tmp[256];
-	struct sip_request *req;
+	struct sip_message *req;
 	char *cid_num = "";
 	char *cid_name = "";
 	int callingpres = AST_PRES_ALLOWED_USER_NUMBER_NOT_SCREENED;
@@ -13510,11 +13544,11 @@ static int get_rpid(struct sip_pvt *p, struct sip_request *oreq)
 }
 
 /*! \brief Get referring dnis */
-static int get_rdnis(struct sip_pvt *p, struct sip_request *oreq, char **name, char **number, int *reason)
+static int get_rdnis(struct sip_pvt *p, struct sip_message *oreq, char **name, char **number, int *reason)
 {
 	char tmp[256], *exten, *rexten, *rdomain, *rname = NULL;
 	char *params, *reason_param = NULL;
-	struct sip_request *req;
+	struct sip_message *req;
 
 	req = oreq ? oreq : &p->initreq;
 
@@ -13602,11 +13636,11 @@ static int get_rdnis(struct sip_pvt *p, struct sip_request *oreq, char **name, c
 	the dialplan, so that the outbound call also is a sips: call or encrypted
 	IAX2 call. If that's not available, the call should FAIL.
 */
-static int get_destination(struct sip_pvt *p, struct sip_request *oreq)
+static int get_destination(struct sip_pvt *p, struct sip_message *oreq)
 {
 	char tmp[256] = "", *uri, *a;
 	char tmpf[256] = "", *from = NULL;
-	struct sip_request *req;
+	struct sip_message *req;
 	char *colon;
 	char *decoded_uri;
 	
@@ -13822,7 +13856,7 @@ static struct sip_pvt *get_sip_pvt_byid_locked(const char *callid, const char *t
  *	to that extension. As a minimum, this needs to be added to a channel variable, if not a channel
  *	flag.
  */
-static int get_refer_info(struct sip_pvt *transferer, struct sip_request *outgoing_req)
+static int get_refer_info(struct sip_pvt *transferer, struct sip_message *outgoing_req)
 {
 
 	const char *p_referred_by = NULL;
@@ -13832,7 +13866,7 @@ static int get_refer_info(struct sip_pvt *transferer, struct sip_request *outgoi
 	const char *p_refer_to;
 	char *referred_by_uri = NULL;
 	char *ptr;
-	struct sip_request *req = NULL;
+	struct sip_message *req = NULL;
 	const char *transfer_context = NULL;
 	struct sip_refer *referdata;
 
@@ -14000,10 +14034,10 @@ static int get_refer_info(struct sip_pvt *transferer, struct sip_request *outgoi
 /*! \brief Call transfer support (old way, deprecated by the IETF)
  *	\note does not account for SIPS: uri requirements, nor check transport
  */
-static int get_also_info(struct sip_pvt *p, struct sip_request *oreq)
+static int get_also_info(struct sip_pvt *p, struct sip_message *oreq)
 {
 	char tmp[256] = "", *c, *a;
-	struct sip_request *req = oreq ? oreq : &p->initreq;
+	struct sip_message *req = oreq ? oreq : &p->initreq;
 	struct sip_refer *referdata = NULL;
 	const char *transfer_context = NULL;
 	
@@ -14073,7 +14107,7 @@ static int get_also_info(struct sip_pvt *p, struct sip_request *oreq)
  * Note that ast_sip_ouraddrfor() still rewrites p->ourip
  * if you specify externip/seternaddr/stunaddr.
  */
-static attribute_unused void check_via_response(struct sip_pvt *p, struct sip_request *req)
+static attribute_unused void check_via_response(struct sip_pvt *p, struct sip_message *req)
 {
 	char via[256];
 	char *cur, *opts;
@@ -14103,7 +14137,7 @@ static attribute_unused void check_via_response(struct sip_pvt *p, struct sip_re
 }
 
 /*! \brief check Via: header for hostname, port and rport request/answer */
-static void check_via(struct sip_pvt *p, struct sip_request *req)
+static void check_via(struct sip_pvt *p, struct sip_message *req)
 {
 	char via[512];
 	char *c, *pt;
@@ -14192,7 +14226,7 @@ static char *get_calleridname(const char *input, char *output, size_t outputsize
 
 /*! \brief Validate device authentication */
 static enum check_auth_result check_peer_ok(struct sip_pvt *p, char *of,
-	struct sip_request *req, int sipmethod, struct sockaddr_in *sin,
+	struct sip_message *req, int sipmethod, struct sockaddr_in *sin,
 	struct sip_peer **authpeer,
 	enum xmittype reliable, char *calleridname, char *uri2)
 {
@@ -14353,7 +14387,7 @@ static enum check_auth_result check_peer_ok(struct sip_pvt *p, char *of,
 	This is used on first invite (not re-invites) and subscribe requests
     \return 0 on success, non-zero on failure
 */
-static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_request *req,
+static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_message *req,
 					      int sipmethod, const char *uri, enum xmittype reliable,
 					      struct sockaddr_in *sin, struct sip_peer **authpeer)
 {
@@ -14466,13 +14500,13 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 /*! \brief  Find user
 	If we get a match, this will add a reference pointer to the user object in ASTOBJ, that needs to be unreferenced
 */
-static int check_user(struct sip_pvt *p, struct sip_request *req, int sipmethod, const char *uri, enum xmittype reliable, struct sockaddr_in *sin)
+static int check_user(struct sip_pvt *p, struct sip_message *req, int sipmethod, const char *uri, enum xmittype reliable, struct sockaddr_in *sin)
 {
 	return check_user_full(p, req, sipmethod, uri, reliable, sin, NULL);
 }
 
 /*! \brief  Get text out of a SIP MESSAGE packet */
-static int get_msg_text(char *buf, int len, struct sip_request *req, int addnewline)
+static int get_msg_text(char *buf, int len, struct sip_message *req, int addnewline)
 {
 	int x;
 	int y;
@@ -14498,7 +14532,7 @@ static int get_msg_text(char *buf, int len, struct sip_request *req, int addnewl
 /*! \brief  Receive SIP MESSAGE method messages
 \note	We only handle messages within current calls currently
 	Reference: RFC 3428 */
-static void receive_message(struct sip_pvt *p, struct sip_request *req)
+static void receive_message(struct sip_pvt *p, struct sip_message *req)
 {
 	char buf[1400];	
 	struct ast_frame f;
@@ -16811,7 +16845,7 @@ static void sip_dump_history(struct sip_pvt *dialog)
 
 
 /*! \brief  Receive SIP INFO Message */
-static void handle_request_info(struct sip_pvt *p, struct sip_request *req)
+static void handle_request_info(struct sip_pvt *p, struct sip_message *req)
 {
 	char buf[1024];
 	unsigned int event;
@@ -17185,7 +17219,7 @@ static char *sip_set_history(struct ast_cli_entry *e, int cmd, struct ast_cli_ar
 }
 
 /*! \brief Authenticate for outbound registration */
-static int do_register_auth(struct sip_pvt *p, struct sip_request *req, enum sip_auth_type code)
+static int do_register_auth(struct sip_pvt *p, struct sip_message *req, enum sip_auth_type code)
 {
 	char *header, *respheader;
 	char digest[1024];
@@ -17209,7 +17243,7 @@ static int do_register_auth(struct sip_pvt *p, struct sip_request *req, enum sip
 }
 
 /*! \brief Add authentication on outbound SIP packet */
-static int do_proxy_auth(struct sip_pvt *p, struct sip_request *req, enum sip_auth_type code, int sipmethod, int init)
+static int do_proxy_auth(struct sip_pvt *p, struct sip_message *req, enum sip_auth_type code, int sipmethod, int init)
 {
 	char *header, *respheader;
 	char digest[1024];
@@ -17235,7 +17269,7 @@ static int do_proxy_auth(struct sip_pvt *p, struct sip_request *req, enum sip_au
 \return	Returns -1 if we have no auth
 \note	This is used for register= servers in sip.conf, SIP proxies we register
 	with  for receiving calls from.  */
-static int reply_digest(struct sip_pvt *p, struct sip_request *req, char *header, int sipmethod,  char *digest, int digest_len)
+static int reply_digest(struct sip_pvt *p, struct sip_message *req, char *header, int sipmethod,  char *digest, int digest_len)
 {
 	char tmp[512];
 	char *c;
@@ -17624,7 +17658,7 @@ static struct ast_custom_function sipchaninfo_function = {
 	.read = function_sipchaninfo_read,
 };
 
-static int read_to_parts(struct sip_pvt *p, struct sip_request *req, char **name, char **number)
+static int read_to_parts(struct sip_pvt *p, struct sip_message *req, char **name, char **number)
 {
 
 	char to_header[256];
@@ -17675,7 +17709,7 @@ static int read_to_parts(struct sip_pvt *p, struct sip_request *req, char **name
 /*! \brief update redirecting information for a channel based on headers
  *
  */
-static void change_redirecting_information(struct sip_pvt *p, struct sip_request *req, struct ast_party_redirecting *redirecting, int set_call_forward)
+static void change_redirecting_information(struct sip_pvt *p, struct sip_message *req, struct ast_party_redirecting *redirecting, int set_call_forward)
 {
 	char *redirecting_from_name = NULL;
 	char *redirecting_from_number = NULL;
@@ -17741,7 +17775,7 @@ static void change_redirecting_information(struct sip_pvt *p, struct sip_request
 		dialplan (this is a request for a secure signalling path).
 		Note that transport=tls is deprecated, but we need to support it on incoming requests.
 */
-static void parse_moved_contact(struct sip_pvt *p, struct sip_request *req, char **name, char **number, int set_call_forward)
+static void parse_moved_contact(struct sip_pvt *p, struct sip_message *req, char **name, char **number, int set_call_forward)
 {
 	char contact[SIPBUFSIZE];
 	char *contact_name = NULL;
@@ -17910,7 +17944,7 @@ static int sip_reinvite_retry(const void *data)
  *
  * This function is only called upon the receipt of a 401/407 response to an UPDATE.
  */
-static void handle_response_update(struct sip_pvt *p, int resp, const char *rest, struct sip_request *req, int seqno)
+static void handle_response_update(struct sip_pvt *p, int resp, const char *rest, struct sip_message *req, int seqno)
 {
 	if (p->options) {
 		p->options->auth_type = (resp == 401 ? WWW_AUTH : PROXY_AUTH);
@@ -17921,7 +17955,7 @@ static void handle_response_update(struct sip_pvt *p, int resp, const char *rest
 }
 
 /*! \brief Handle SIP response to INVITE dialogue */
-static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest, struct sip_request *req, int seqno)
+static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest, struct sip_message *req, int seqno)
 {
 	int outgoing = ast_test_flag(&p->flags[0], SIP_OUTGOING);
 	int res = 0;
@@ -18293,7 +18327,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 /* \brief Handle SIP response in NOTIFY transaction
        We've sent a NOTIFY, now handle responses to it
   */
-static void handle_response_notify(struct sip_pvt *p, int resp, const char *rest, struct sip_request *req, int seqno)
+static void handle_response_notify(struct sip_pvt *p, int resp, const char *rest, struct sip_message *req, int seqno)
 {
 	switch (resp) {
 	case 200:   /* Notify accepted */
@@ -18336,7 +18370,7 @@ static void handle_response_notify(struct sip_pvt *p, int resp, const char *rest
 }
 
 /* \brief Handle SIP response in SUBSCRIBE transaction */
-static void handle_response_subscribe(struct sip_pvt *p, int resp, const char *rest, struct sip_request *req, int seqno)
+static void handle_response_subscribe(struct sip_pvt *p, int resp, const char *rest, struct sip_message *req, int seqno)
 {
 	if (!p->mwi) {
 		return;
@@ -18398,7 +18432,7 @@ static void handle_response_subscribe(struct sip_pvt *p, int resp, const char *r
 /* \brief Handle SIP response in REFER transaction
 	We've sent a REFER, now handle responses to it
   */
-static void handle_response_refer(struct sip_pvt *p, int resp, const char *rest, struct sip_request *req, int seqno)
+static void handle_response_refer(struct sip_pvt *p, int resp, const char *rest, struct sip_message *req, int seqno)
 {
 	enum ast_control_transfer message = AST_TRANSFER_FAILED;
 
@@ -18481,7 +18515,7 @@ static void handle_response_refer(struct sip_pvt *p, int resp, const char *rest,
 }
 
 /*! \brief Handle responses on REGISTER to services */
-static int handle_response_register(struct sip_pvt *p, int resp, const char *rest, struct sip_request *req, int seqno)
+static int handle_response_register(struct sip_pvt *p, int resp, const char *rest, struct sip_message *req, int seqno)
 {
 	int expires, expires_ms;
 	struct sip_registry *r;
@@ -18625,7 +18659,7 @@ static int handle_response_register(struct sip_pvt *p, int resp, const char *res
 }
 
 /*! \brief Handle qualification responses (OPTIONS) */
-static void handle_response_peerpoke(struct sip_pvt *p, int resp, struct sip_request *req)
+static void handle_response_peerpoke(struct sip_pvt *p, int resp, struct sip_message *req)
 {
 	struct sip_peer *peer = /* ref_peer( */ p->relatedpeer /* , "bump refcount on p, as it is being used in this function(handle_response_peerpoke)")*/ ; /* hope this is already refcounted! */
 	int statechanged, is_reachable, was_reachable;
@@ -18695,7 +18729,7 @@ static void stop_media_flows(struct sip_pvt *p)
 
 /*! \brief Handle SIP response in dialogue
 	\note only called by handle_incoming */
-static void handle_response(struct sip_pvt *p, int resp, const char *rest, struct sip_request *req, int seqno)
+static void handle_response(struct sip_pvt *p, int resp, const char *rest, struct sip_message *req, int seqno)
 {
 	struct ast_channel *owner;
 	int sipmethod;
@@ -19150,7 +19184,7 @@ static void *sip_park_thread(void *stuff)
 {
 	struct ast_channel *transferee, *transferer;	/* Chan1: The transferee, Chan2: The transferer */
 	struct sip_dual *d;
-	struct sip_request req = {0,};
+	struct sip_message req = {0,};
 	int ext;
 	int res;
 
@@ -19218,7 +19252,7 @@ static void *sip_park_thread(void *stuff)
 /*! \brief Park a call using the subsystem in res_features.c
 	This is executed in a separate thread
 */
-static int sip_park(struct ast_channel *chan1, struct ast_channel *chan2, struct sip_request *req, int seqno)
+static int sip_park(struct ast_channel *chan1, struct ast_channel *chan2, struct sip_message *req, int seqno)
 {
 	struct sip_dual *d;
 	struct ast_channel *transferee, *transferer;
@@ -19402,7 +19436,7 @@ static int attempt_transfer(struct sip_dual *transferer, struct sip_dual *target
  * \return Returns the pointer to the provided tag buffer,
  *         or NULL if the tag was not found.
  */
-static const char *gettag(const struct sip_request *req, const char *header, char *tagbuf, int tagbufsize)
+static const char *gettag(const struct sip_message *req, const char *header, char *tagbuf, int tagbufsize)
 {
 	const char *thetag;
 
@@ -19420,7 +19454,7 @@ static const char *gettag(const struct sip_request *req, const char *header, cha
 }
 
 /*! \brief Handle incoming notifications */
-static int handle_request_notify(struct sip_pvt *p, struct sip_request *req, struct sockaddr_in *sin, int seqno, const char *e)
+static int handle_request_notify(struct sip_pvt *p, struct sip_message *req, struct sockaddr_in *sin, int seqno, const char *e)
 {
 	/* This is mostly a skeleton for future improvements */
 	/* Mostly created to return proper answers on notifications on outbound REFER's */
@@ -19579,7 +19613,7 @@ static int handle_request_notify(struct sip_pvt *p, struct sip_request *req, str
 /*! \brief Handle incoming OPTIONS request
 	An OPTIONS request should be answered like an INVITE from the same UA, including SDP
 */
-static int handle_request_options(struct sip_pvt *p, struct sip_request *req)
+static int handle_request_options(struct sip_pvt *p, struct sip_message *req)
 {
 	int res;
 
@@ -19624,7 +19658,7 @@ static int handle_request_options(struct sip_pvt *p, struct sip_request *req)
     Used only once.
 	XXX 'ignore' is unused.
  */
-static int handle_invite_replaces(struct sip_pvt *p, struct sip_request *req, int debug, int seqno, struct sockaddr_in *sin)
+static int handle_invite_replaces(struct sip_pvt *p, struct sip_message *req, int debug, int seqno, struct sockaddr_in *sin)
 {
 	struct ast_frame *f;
 	int earlyreplace = 0;
@@ -20105,7 +20139,7 @@ static int sip_t38_abort(const void *data)
  *
  * Actually updating the media session may be some future work.
  */
-static int handle_request_update(struct sip_pvt *p, struct sip_request *req)
+static int handle_request_update(struct sip_pvt *p, struct sip_message *req)
 {
 	if (ast_strlen_zero(get_header(req, "X-Asterisk-rpid-update"))) {
 		transmit_response(p, "501 Method Not Implemented", req);
@@ -20131,7 +20165,7 @@ static int handle_request_update(struct sip_pvt *p, struct sip_request *req)
  *	plan but try to find the active call and masquerade
  *	into it
  */
-static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int debug, int seqno, struct sockaddr_in *sin, int *recount, const char *e, int *nounlock)
+static int handle_request_invite(struct sip_pvt *p, struct sip_message *req, int debug, int seqno, struct sockaddr_in *sin, int *recount, const char *e, int *nounlock)
 {
 	int res = 1;
 	int gotdest;
@@ -20867,7 +20901,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 
 /*! \brief  Find all call legs and bridge transferee with target
  *	called from handle_request_refer */
-static int local_attended_transfer(struct sip_pvt *transferer, struct sip_dual *current, struct sip_request *req, int seqno)
+static int local_attended_transfer(struct sip_pvt *transferer, struct sip_dual *current, struct sip_message *req, int seqno)
 {
 	struct sip_dual target;		/* Chan 1: Call from tranferer to Asterisk */
 					/* Chan 2: Call from Asterisk to target */
@@ -21075,7 +21109,7 @@ static int local_attended_transfer(struct sip_pvt *transferer, struct sip_dual *
 	We can't destroy dialogs, since we want the call to continue.
 	
 	*/
-static int handle_request_refer(struct sip_pvt *p, struct sip_request *req, int debug, int seqno, int *nounlock)
+static int handle_request_refer(struct sip_pvt *p, struct sip_message *req, int debug, int seqno, int *nounlock)
 {
 	struct sip_dual current;	/* Chan1: Call between asterisk and transferer */
 					/* Chan2: Call between asterisk and transferee */
@@ -21369,7 +21403,7 @@ static int handle_request_refer(struct sip_pvt *p, struct sip_request *req, int 
 }
 
 /*! \brief Handle incoming CANCEL request */
-static int handle_request_cancel(struct sip_pvt *p, struct sip_request *req)
+static int handle_request_cancel(struct sip_pvt *p, struct sip_message *req)
 {
 		
 	check_via(p, req);
@@ -21403,7 +21437,7 @@ static int handle_request_cancel(struct sip_pvt *p, struct sip_request *req)
 	else
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 	if (p->initreq.len > 0) {
-		struct sip_request *pkt, *prev_pkt;
+		struct sip_message *pkt, *prev_pkt;
 		/* If the CANCEL we are receiving is a retransmission, and we already have scheduled
 		 * a reliable 487, then we don't want to schedule another one on top of the previous
 		 * one.
@@ -21549,7 +21583,7 @@ static int acf_channel_read(struct ast_channel *chan, const char *funcname, char
 }
 
 /*! \brief Handle incoming BYE request */
-static int handle_request_bye(struct sip_pvt *p, struct sip_request *req)
+static int handle_request_bye(struct sip_pvt *p, struct sip_message *req)
 {
 	struct ast_channel *c=NULL;
 	int res;
@@ -21678,7 +21712,7 @@ static int handle_request_bye(struct sip_pvt *p, struct sip_request *req)
 }
 
 /*! \brief Handle incoming MESSAGE request */
-static int handle_request_message(struct sip_pvt *p, struct sip_request *req)
+static int handle_request_message(struct sip_pvt *p, struct sip_message *req)
 {
 	if (!req->ignore) {
 		if (req->debug)
@@ -21702,7 +21736,7 @@ static void add_peer_mwi_subs(struct sip_peer *peer)
 }
 
 /*! \brief  Handle incoming SUBSCRIBE request */
-static int handle_request_subscribe(struct sip_pvt *p, struct sip_request *req, struct sockaddr_in *sin, int seqno, const char *e)
+static int handle_request_subscribe(struct sip_pvt *p, struct sip_message *req, struct sockaddr_in *sin, int seqno, const char *e)
 {
 	int gotdest = 0;
 	int res = 0;
@@ -22028,7 +22062,7 @@ static int handle_request_subscribe(struct sip_pvt *p, struct sip_request *req, 
 }
 
 /*! \brief Handle incoming REGISTER request */
-static int handle_request_register(struct sip_pvt *p, struct sip_request *req, struct sockaddr_in *sin, const char *e)
+static int handle_request_register(struct sip_pvt *p, struct sip_message *req, struct sockaddr_in *sin, const char *e)
 {
 	enum check_auth_result res;
 
@@ -22084,7 +22118,7 @@ static int handle_request_register(struct sip_pvt *p, struct sip_request *req, s
 /*! \brief Handle incoming SIP requests (methods)
 \note	This is where all incoming requests go first   */
 /* called with p and p->owner locked */
-static int handle_incoming(struct sip_pvt *p, struct sip_request *req, struct sockaddr_in *sin, int *recount, int *nounlock)
+static int handle_incoming(struct sip_pvt *p, struct sip_message *req, struct sockaddr_in *sin, int *recount, int *nounlock)
 {
 	/* Called with p->lock held, as well as p->owner->lock if appropriate, keeping things
 	   relatively static */
@@ -22304,7 +22338,7 @@ static int handle_incoming(struct sip_pvt *p, struct sip_request *req, struct so
 
 static void process_request_queue(struct sip_pvt *p, int *recount, int *nounlock)
 {
-	struct sip_request *req;
+	struct sip_message *req;
 
 	while ((req = AST_LIST_REMOVE_HEAD(&p->request_queue, next))) {
 		if (handle_incoming(p, req, &p->recv, recount, nounlock) == -1) {
@@ -22372,9 +22406,9 @@ static int scheduler_process_request_queue(const void *data)
 	return 0;
 }
 
-static int queue_request(struct sip_pvt *p, const struct sip_request *req)
+static int queue_request(struct sip_pvt *p, const struct sip_message *req)
 {
-	struct sip_request *newreq;
+	struct sip_message *newreq;
 
 	if (!(newreq = ast_calloc(1, sizeof(*newreq)))) {
 		return -1;
@@ -22398,7 +22432,7 @@ static int queue_request(struct sip_pvt *p, const struct sip_request *req)
 */
 static int sipsock_read(int *id, int fd, short events, void *ignore)
 {
-	struct sip_request req;
+	struct sip_message req;
 	struct sockaddr_in sin = { 0, };
 	int res;
 	socklen_t len = sizeof(sin);
@@ -22446,7 +22480,7 @@ static int sipsock_read(int *id, int fd, short events, void *ignore)
 
  	This is used for all transports (udp, tcp and tcp/tls)
 */
-static int handle_request_do(struct sip_request *req, struct sockaddr_in *sin)
+static int handle_request_do(struct sip_message *req, struct sockaddr_in *sin)
 {
 	struct sip_pvt *p;
 	int recount = 0;
@@ -22465,6 +22499,7 @@ static int handle_request_do(struct sip_request *req, struct sockaddr_in *sin)
 
 	if (parse_request(req) == -1) { /* Bad packet, can't parse */
 		ast_str_reset(req->data); /* nulling this out is NOT a good idea here. */
+		ast_str_reset(req->parsedata); /* nulling this out is NOT a good idea here. */
 		return 1;
 	}
 	req->method = find_sip_method(REQ_OFFSET_TO_STR(req, rlPart1));
@@ -22474,6 +22509,7 @@ static int handle_request_do(struct sip_request *req, struct sockaddr_in *sin)
 
 	if (req->headers < 2) {	/* Must have at least two headers */
 		ast_str_reset(req->data); /* nulling this out is NOT a good idea here. */
+		ast_str_reset(req->parsedata); /* nulling this out is NOT a good idea here. */
 		return 1;
 	}
 
@@ -22507,7 +22543,7 @@ static int handle_request_do(struct sip_request *req, struct sockaddr_in *sin)
 	p->recv = *sin;
 
 	if (p->do_history) /* This is a request or response, note what it was for */
-		append_history(p, "Rx", "%s / %s / %s", req->data->str, get_header(req, "CSeq"), REQ_OFFSET_TO_STR(req, rlPart2));
+		append_history(p, "Rx", "%s / %s / %s", req->parsedata->str, get_header(req, "CSeq"), REQ_OFFSET_TO_STR(req, rlPart2));
 
 	if (!lockretry) {
 		if (!queue_request(p, req)) {
@@ -23176,7 +23212,7 @@ int parse_session_expires(const char *p_hdrval, int *const p_interval, enum st_r
    server tells Asterisk that the session refresh interval offered by Asterisk is too low
    for them.  The proc_422_rsp() function handles a 422 response.  It extracts the Min-SE
    header that comes back in 422 and sends a new INVITE accordingly. */
-static void proc_422_rsp(struct sip_pvt *p, struct sip_request *rsp)
+static void proc_422_rsp(struct sip_pvt *p, struct sip_message *rsp)
 {
 	int rtn;
 	const char *p_hdrval;
