@@ -3503,6 +3503,7 @@ static int __sip_xmit(struct sip_pvt *p, struct ast_str *data, int len)
 			res = ast_tcptls_server_write(p->socket.tcptls_session, data->str, len);
 		} else {
 			ast_debug(2, "No p->socket.tcptls_session->f len=%d\n", len);
+			return XMIT_ERROR;
 		}
 	} else {
 		ast_debug(2, "Socket type is TCP but no tcptls_session is present to write to\n");
@@ -11195,6 +11196,7 @@ static int __sip_subscribe_mwi_do(struct sip_subscription_mwi *mwi)
 	return 0;
 }
 
+/*! \brief Find the channel that is causing the RINGING update */
 static int find_calling_channel(void *obj, void *arg, void *data, int flags)
 {
 	struct ast_channel *c = obj;
@@ -11212,7 +11214,7 @@ static int find_calling_channel(void *obj, void *arg, void *data, int flags)
 	return res ? CMP_MATCH | CMP_STOP : 0;
 }
 
-/*! \brief Builds XML portion of state NOTIFY messages */
+/*! \brief Builds XML portion of NOTIFY messages for presence or dialog updates */
 static void state_notify_build_xml(int state, int full, const char *exten, const char *context, struct ast_str **tmp, struct sip_pvt *p, int subscribed, const char *mfrom, const char *mto)
 {
 	enum state { NOTIFY_OPEN, NOTIFY_INUSE, NOTIFY_CLOSED } local_state = NOTIFY_OPEN;
