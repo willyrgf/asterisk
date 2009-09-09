@@ -174,7 +174,7 @@ static int history_put(jitterbuf *jb, long ts, long now, long ms)
 	/* if the new delay would go into min */
 	if (delay < jb->hist_minbuf[JB_HISTORY_MAXBUF_SZ-1])
 		goto invalidate;
-    
+
 	/* or max.. */
 	if (delay > jb->hist_maxbuf[JB_HISTORY_MAXBUF_SZ-1])
 		goto invalidate;
@@ -277,7 +277,7 @@ static void history_calc_maxbuf(jitterbuf *jb)
 static void history_get(jitterbuf *jb) 
 {
 	long max, min, jitter;
-	int index;
+	int idx;
 	int count;
 
 	if (!jb->hist_maxbuf_valid) 
@@ -286,22 +286,21 @@ static void history_get(jitterbuf *jb)
 	/* count is how many items in history we're examining */
 	count = (jb->hist_ptr < JB_HISTORY_SZ) ? jb->hist_ptr : JB_HISTORY_SZ;
 
-	/* index is the "n"ths highest/lowest that we'll look for */
-	index = count * JB_HISTORY_DROPPCT / 100;
+	/* idx is the "n"ths highest/lowest that we'll look for */
+	idx = count * JB_HISTORY_DROPPCT / 100;
 
-	/* sanity checks for index */
-	if (index > (JB_HISTORY_MAXBUF_SZ - 1)) 
-		index = JB_HISTORY_MAXBUF_SZ - 1;
+	/* sanity checks for idx */
+	if (idx > (JB_HISTORY_MAXBUF_SZ - 1)) 
+		idx = JB_HISTORY_MAXBUF_SZ - 1;
 
-
-	if (index < 0) {
+	if (idx < 0) {
 		jb->info.min = 0;
 		jb->info.jitter = 0;
 		return;
 	}
 
-	max = jb->hist_maxbuf[index];
-	min = jb->hist_minbuf[index];
+	max = jb->hist_maxbuf[idx];
+	min = jb->hist_minbuf[idx];
 
 	jitter = max - min;
 
@@ -511,27 +510,33 @@ enum jb_return_code jb_put(jitterbuf *jb, void *data, const enum jb_frame_type t
 
 	jb_dbg2("jb_put(%x,%x,%ld,%ld,%ld)\n", jb, data, ms, ts, now);
 
-	jb->info.frames_in++;
+	numts = 0;
+	if (jb->frames)
+		numts = jb->frames->prev->ts - jb->frames->ts;
 
-	if (jb->frames && jb->dropem) 
+	if (numts >= jb->info.conf.max_jitterbuf) {
+		if (!jb->dropem) {
+			ast_debug(1, "Attempting to exceed Jitterbuf max %ld timeslots\n",
+				jb->info.conf.max_jitterbuf);
+			jb->dropem = 1;
+		}
+		jb->info.frames_dropped++;
 		return JB_DROP;
-	jb->dropem = 0;
+	} else {
+		jb->dropem = 0;
+	}
 
 	if (type == JB_TYPE_VOICE) {
 		/* presently, I'm only adding VOICE frames to history and drift calculations; mostly because with the
 		 * IAX integrations, I'm sending retransmitted control frames with their awkward timestamps through */
-		if (history_put(jb,ts,now,ms))
+		if (history_put(jb,ts,now,ms)) {
+			jb->info.frames_dropped++;
 			return JB_DROP;
+		}
 	}
-	numts = 0;
-	if (jb->frames)
-		numts = jb->frames->prev->ts - jb->frames->ts;
-	if (numts >= jb->info.conf.max_jitterbuf) {
-		ast_debug(1, "Attempting to exceed Jitterbuf max %ld timeslots\n",
-			jb->info.conf.max_jitterbuf);
-		jb->dropem = 1;
-		return JB_DROP;
-	}
+
+	jb->info.frames_in++;
+
 	/* if put into head of queue, caller needs to reschedule */
 	if (queue_put(jb,data,type,ms,ts)) {
 		return JB_SCHED;
@@ -560,7 +565,7 @@ static enum jb_return_code _jb_get(jitterbuf *jb, jb_frame *frameout, long now, 
 
 	/* if a hard clamp was requested, use it */
 	if ((jb->info.conf.max_jitterbuf) && ((jb->info.target - jb->info.min) > jb->info.conf.max_jitterbuf)) {
-		jb_dbg("clamping target from %d to %d\n", (jb->info.target - jb->info.min), jb->info.conf.max_jitterbuf);
+		jb_dbg("clamping target from %ld to %ld\n", (jb->info.target - jb->info.min), jb->info.conf.max_jitterbuf);
 		jb->info.target = jb->info.min + jb->info.conf.max_jitterbuf;
 	}
 
@@ -715,7 +720,7 @@ static enum jb_return_code _jb_get(jitterbuf *jb, jb_frame *frameout, long now, 
 		/* TODO: after we get the non-silent case down, we'll make the
 		 * silent case -- basically, we'll just grow and shrink faster
 		 * here, plus handle next_voice_ts a bit differently */
-      
+
 		/* to disable silent special case altogether, just uncomment this: */
 		/* jb->info.silence_begin_ts = 0; */
 

@@ -38,7 +38,7 @@ WAV49	= -DWAV49
 ######### probably require gcc. 
 
 ifeq (, $(findstring $(OSARCH) , Darwin SunOS ))
-ifeq (, $(findstring $(PROC) , x86_64 amd64 ultrasparc sparc64 arm armv5b armeb ppc powerpc ppc64 ia64 s390 bfin mipsel ))
+ifeq (, $(findstring $(PROC) , x86_64 amd64 ultrasparc sparc64 arm armv5b armeb ppc powerpc ppc64 ia64 s390 bfin mipsel mips))
 ifeq (, $(findstring $(shell uname -m) , ppc ppc64 alpha armv4l s390 ))
 OPTIMIZE+=-march=$(PROC)
 endif
@@ -154,7 +154,7 @@ INC	= $(ROOT)/inc
 DEBUG	= -DNDEBUG
 ######### Remove -DNDEBUG to enable assertions.
 
-ASTCFLAGS += $(PG) $(CCFLAGS) $(SASR) $(DEBUG) $(MULHACK) $(FAST) \
+_ASTCFLAGS += $(PG) $(CCFLAGS) $(SASR) $(DEBUG) $(MULHACK) $(FAST) \
 	$(LTP_CUT) $(WAV49) $(K6OPT) $(CCINC) -I$(INC)
 ######### It's $(CC) $(CFLAGS)
 
@@ -209,7 +209,7 @@ GSM_SOURCES =	$(SRC)/add.c		\
 # XXX should merge with GSM_OBJECTS
 ifeq ($(OSARCH),linux-gnu)
 ifeq (,$(findstring $(shell uname -m) , x86_64 amd64 ppc ppc64 alpha armv4l sparc64 parisc s390 ))
-ifeq (,$(findstring $(PROC) , arm armv5b armeb powerpc ia64 s390 bfin mipsel ))
+ifeq (,$(findstring $(PROC) , arm armv5b armeb powerpc ia64 s390 bfin mipsel mips ))
 GSM_SOURCES+= $(SRC)/k6opt.s
 endif
 endif
@@ -261,7 +261,7 @@ GSM_OBJECTS =	$(SRC)/add.o		\
 
 ifeq ($(OSARCH),linux-gnu)
 ifeq (,$(findstring $(shell uname -m) , x86_64 amd64 ppc ppc64 alpha armv4l sparc64 parisc ))
-ifeq (,$(findstring $(PROC) , arm armv5b armeb powerpc ia64 bfin mipsel ))
+ifeq (,$(findstring $(PROC) , arm armv5b armeb powerpc ia64 bfin mipsel mips ))
 GSM_OBJECTS+= $(SRC)/k6opt.o
 endif
 endif
@@ -477,7 +477,7 @@ clean:	semi-clean
 			$(TOAST) $(TCAT) $(UNTOAST)	\
 			$(ROOT)/gsm-1.0.tar.Z
 		rm -rf lib
-		rm -f .*.d
+		rm -f .*.d *.i */*.i
 
 # Two tools that helped me generate gsm_encode.c and gsm_decode.c,
 # but aren't generally needed to port this.

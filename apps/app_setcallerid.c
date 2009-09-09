@@ -38,28 +38,53 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/image.h"
 #include "asterisk/callerid.h"
 
+/*** DOCUMENTATION
+	<application name="SetCallerPres" language="en_US">
+		<synopsis>
+			Set CallerID Presentation.
+		</synopsis>
+		<syntax>
+			<parameter name="presentation" required="true">
+				<enumlist>
+					<enum name="allowed_not_screened">
+						<para>Presentation Allowed, Not Screened.</para>
+					</enum>
+					<enum name="allowed_passed_screen">
+						<para>Presentation Allowed, Passed Screen.</para>
+					</enum>
+					<enum name="allowed_failed_screen">
+						<para>Presentation Allowed, Failed Screen.</para>
+					</enum>
+					<enum name="allowed">
+						<para>Presentation Allowed, Network Number.</para>
+					</enum>
+					<enum name="prohib_not_screened">
+						<para>Presentation Prohibited, Not Screened.</para>
+					</enum>
+					<enum name="prohib_passed_screen">
+						<para>Presentation Prohibited, Passed Screen.</para>
+					</enum>
+					<enum name="prohib_failed_screen">
+						<para>Presentation Prohibited, Failed Screen.</para>
+					</enum>
+					<enum name="prohib">
+						<para>Presentation Prohibited, Network Number.</para>
+					</enum>
+					<enum name="unavailable">
+						<para>Number Unavailable.</para>
+					</enum>
+				</enumlist>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Set Caller*ID presentation on a call.</para>
+		</description>
+	</application>
+ ***/
+
 static char *app2 = "SetCallerPres";
 
-static char *synopsis2 = "Set CallerID Presentation";
-
-
-static char *descrip2 = 
-"  SetCallerPres(presentation): Set Caller*ID presentation on a call.\n"
-"  Valid presentations are:\n"
-"\n"
-"      allowed_not_screened    : Presentation Allowed, Not Screened\n"
-"      allowed_passed_screen   : Presentation Allowed, Passed Screen\n" 
-"      allowed_failed_screen   : Presentation Allowed, Failed Screen\n" 
-"      allowed                 : Presentation Allowed, Network Number\n"
-"      prohib_not_screened     : Presentation Prohibited, Not Screened\n" 
-"      prohib_passed_screen    : Presentation Prohibited, Passed Screen\n"
-"      prohib_failed_screen    : Presentation Prohibited, Failed Screen\n"
-"      prohib                  : Presentation Prohibited, Network Number\n"
-"      unavailable             : Number Unavailable\n"
-"\n"
-;
-
-static int setcallerid_pres_exec(struct ast_channel *chan, void *data)
+static int setcallerid_pres_exec(struct ast_channel *chan, const char *data)
 {
 	int pres = -1;
 	static int deprecated = 0;
@@ -68,7 +93,11 @@ static int setcallerid_pres_exec(struct ast_channel *chan, void *data)
 		deprecated = 1;
 		ast_log(LOG_WARNING, "SetCallerPres is deprecated.  Please use Set(CALLERPRES()=%s) instead.\n", (char *)data);
 	}
-	pres = ast_parse_caller_presentation(data);
+
+	/* For interface consistency, permit the argument to be specified as a number */
+	if (sscanf(data, "%30d", &pres) != 1 || pres < 0 || pres > 255 || (pres & 0x9c)) {
+		pres = ast_parse_caller_presentation(data);
+	}
 
 	if (pres < 0) {
 		ast_log(LOG_WARNING, "'%s' is not a valid presentation (see 'show application SetCallerPres')\n",
@@ -87,7 +116,7 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	return ast_register_application(app2, setcallerid_pres_exec, synopsis2, descrip2);
+	return ast_register_application_xml(app2, setcallerid_pres_exec);
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Set CallerID Presentation Application");

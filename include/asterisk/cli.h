@@ -30,7 +30,11 @@ extern "C" {
 #include "asterisk/linkedlists.h"
 
 void ast_cli(int fd, const char *fmt, ...)
-	__attribute__ ((format (printf, 2, 3)));
+	__attribute__((format(printf, 2, 3)));
+
+/* dont check permissions while passing this option as a 'uid'
+ * to the cli_has_permissions() function. */
+#define CLI_NO_PERMS		-1
 
 #define RESULT_SUCCESS		0
 #define RESULT_SHOWUSAGE	1
@@ -93,7 +97,7 @@ void ast_cli(int fd, const char *fmt, ...)
 \code
 static char *test_new_cli(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	static char *choices = { "one", "two", "three", NULL };
+	static const char * const choices[] = { "one", "two", "three", NULL };
 
         switch (cmd) {
         case CLI_INIT:
@@ -124,7 +128,7 @@ static char *test_new_cli(struct ast_cli_entry *e, int cmd, struct ast_cli_args 
 /*! \brief calling arguments for new-style handlers. 
 * \arg \ref CLI_command_API
 */
-enum ast_cli_fn {
+enum ast_cli_command {
 	CLI_INIT = -2,		/* return the usage string */
 	CLI_GENERATE = -3,	/* behave as 'generator', remap argv to struct ast_cli_args */
 	CLI_HANDLER = -4,	/* run the normal handler */
@@ -132,43 +136,35 @@ enum ast_cli_fn {
 
 /* argument for new-style CLI handler */
 struct ast_cli_args {
-	int fd;
-	int argc;
-	char **argv;
+	const int fd;
+	const int argc;
+	const char * const *argv;
 	const char *line;	/* the current input line */
 	const char *word;	/* the word we want to complete */
-	int pos;		/* position of the word to complete */
-	int n;			/* the iteration count (n-th entry we generate) */
+	const int pos;		/* position of the word to complete */
+	const int n;		/* the iteration count (n-th entry we generate) */
 };
-
-struct ast_cli_entry;
-typedef char *(*cli_fn)(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
 
 /*! \brief descriptor for a cli entry. 
  * \arg \ref CLI_command_API
  */
 struct ast_cli_entry {
-	char * const cmda[AST_MAX_CMD_LEN];	/*!< words making up the command.
-						* set the first entry to NULL for a new-style entry. */
+	const char * const cmda[AST_MAX_CMD_LEN];	/*!< words making up the command.
+							 * set the first entry to NULL for a new-style entry.
+							 */
 
-	const char *summary; 			/*!< Summary of the command (< 60 characters) */
-	const char *usage; 			/*!< Detailed usage information */
-
-	struct ast_cli_entry *deprecate_cmd;
+	const char * const summary; 			/*!< Summary of the command (< 60 characters) */
+	const char * usage; 				/*!< Detailed usage information */
 
 	int inuse; 				/*!< For keeping track of usage */
 	struct module *module;			/*!< module this belongs to */
 	char *_full_cmd;			/*!< built at load time from cmda[] */
 	int cmdlen;				/*!< len up to the first invalid char [<{% */
 	/*! \brief This gets set in ast_cli_register()
-	  It then gets set to something different when the deprecated command
-	  is run for the first time (ie; after we warn the user that it's deprecated)
 	 */
 	int args;				/*!< number of non-null entries in cmda */
 	char *command;				/*!< command, non-null for new-style entries */
-	int deprecated;
-	cli_fn handler;
-	char *_deprecated_by;			/*!< copied from the "parent" _full_cmd, on deprecated commands */
+	char *(*handler)(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
 	/*! For linking */
 	AST_LIST_ENTRY(ast_cli_entry) list;
 };
@@ -185,7 +181,7 @@ struct ast_cli_entry {
   \code
     char *my_generate(const char *line, const char *word, int pos, int n)
     {
-        static char *choices = { "one", "two", "three", NULL };
+        static const char * const choices[] = { "one", "two", "three", NULL };
 	if (pos == 2)
         	return ast_cli_complete(word, choices, n);
 	else
@@ -193,27 +189,39 @@ struct ast_cli_entry {
     }
   \endcode
  */
-char *ast_cli_complete(const char *word, char *const choices[], int pos);
+char *ast_cli_complete(const char *word, const char * const choices[], int pos);
 
 /*! 
  * \brief Interprets a command
- * Interpret a command s, sending output to fd
+ * Interpret a command s, sending output to fd if uid:gid has permissions
+ * to run this command. uid = CLI_NO_PERMS to avoid checking user permissions
+ * gid = CLI_NO_PERMS to avoid checking group permissions.
+ * \param uid User ID that is trying to run the command.
+ * \param gid Group ID that is trying to run the command.
  * \param fd pipe
  * \param s incoming string
  * \retval 0 on success
  * \retval -1 on failure
  */
-int ast_cli_command(int fd, const char *s);
+int ast_cli_command_full(int uid, int gid, int fd, const char *s);
+
+#define ast_cli_command(fd,s) ast_cli_command_full(CLI_NO_PERMS, CLI_NO_PERMS, fd, s) 
 
 /*! 
  * \brief Executes multiple CLI commands
  * Interpret strings separated by NULL and execute each one, sending output to fd
+ * if uid has permissions, uid = CLI_NO_PERMS to avoid checking users permissions.
+ * gid = CLI_NO_PERMS to avoid checking group permissions.
+ * \param uid User ID that is trying to run the command.
+ * \param gid Group ID that is trying to run the command.
  * \param fd pipe
  * \param size is the total size of the string
  * \param s incoming string
  * \retval number of commands executed
  */
-int ast_cli_command_multiple(int fd, size_t size, const char *s);
+int ast_cli_command_multiple_full(int uid, int gid, int fd, size_t size, const char *s);
+
+#define ast_cli_command_multiple(fd,size,s) ast_cli_command_multiple_full(CLI_NO_PERMS, CLI_NO_PERMS, fd, size, s)
 
 /*! \brief Registers a command or an array of commands
  * \param e which cli entry to register.

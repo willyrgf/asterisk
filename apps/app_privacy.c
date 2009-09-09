@@ -41,26 +41,46 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/app.h"
 #include "asterisk/config.h"
 
+/*** DOCUMENTATION
+	<application name="PrivacyManager" language="en_US">
+		<synopsis>
+			Require phone number to be entered, if no CallerID sent
+		</synopsis>
+		<syntax>
+			<parameter name="maxretries">
+				<para>Total tries caller is allowed to input a callerid. Defaults to <literal>3</literal>.</para>
+			</parameter>
+			<parameter name="minlength">
+				<para>Minimum allowable digits in the input callerid number. Defaults to <literal>10</literal>.</para>
+			</parameter>
+			<parameter name="context">
+				<para>Context to check the given callerid against patterns.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>If no Caller*ID is sent, PrivacyManager answers the channel and asks
+			the caller to enter their phone number. The caller is given
+			<replaceable>maxretries</replaceable> attempts to do so. The application does
+			<emphasis>nothing</emphasis> if Caller*ID was received on the channel.</para>
+			<para>The application sets the following channel variable upon completion:</para>
+			<variablelist>
+				<variable name="PRIVACYMGRSTATUS">
+					<para>The status of the privacy manager's attempt to collect a phone number from the user.</para>
+					<value name="SUCCESS"/>
+					<value name="FAILED"/>
+				</variable>
+			</variablelist>
+		</description>
+		<see-also>
+			<ref type="application">Zapateller</ref>
+		</see-also>
+	</application>
+ ***/
+
+
 static char *app = "PrivacyManager";
 
-static char *synopsis = "Require phone number to be entered, if no CallerID sent";
-
-static char *descrip =
-  "  PrivacyManager([maxretries][,minlength]): If no Caller*ID \n"
-  "is sent, PrivacyManager answers the channel and asks the caller to\n"
-  "enter their phone number. The caller is given 'maxretries' attempts to do so.\n"
-  "The application does nothing if Caller*ID was received on the channel.\n"
-  "   maxretries  default 3  -maximum number of attempts the caller is allowed \n"
-  "               to input a callerid.\n"
-  "   minlength   default 10 -minimum allowable digits in the input callerid number.\n"
-  "The application sets the following channel variable upon completion: \n"
-  "PRIVACYMGRSTATUS  The status of the privacy manager's attempt to collect \n"
-  "                  a phone number from the user. A text string that is either:\n" 
-  "          SUCCESS | FAILED \n"
-;
-
-
-static int privacy_exec (struct ast_channel *chan, void *data)
+static int privacy_exec(struct ast_channel *chan, const char *data)
 {
 	int res=0;
 	int retries;
@@ -73,11 +93,11 @@ static int privacy_exec (struct ast_channel *chan, void *data)
 		AST_APP_ARG(maxretries);
 		AST_APP_ARG(minlength);
 		AST_APP_ARG(options);
+		AST_APP_ARG(checkcontext);
 	);
 
 	if (!ast_strlen_zero(chan->cid.cid_num)) {
-		if (option_verbose > 2)
-			ast_verbose (VERBOSE_PREFIX_3 "CallerID Present: Skipping\n");
+		ast_verb(3, "CallerID Present: Skipping\n");
 	} else {
 		/*Answer the channel if it is not already*/
 		if (chan->_state != AST_STATE_UP) {
@@ -91,18 +111,17 @@ static int privacy_exec (struct ast_channel *chan, void *data)
 			AST_STANDARD_APP_ARGS(args, parse);
 
 			if (args.maxretries) {
-				if (sscanf(args.maxretries, "%d", &x) == 1)
+				if (sscanf(args.maxretries, "%30d", &x) == 1)
 					maxretries = x;
 				else
 					ast_log(LOG_WARNING, "Invalid max retries argument\n");
 			}
 			if (args.minlength) {
-				if (sscanf(args.minlength, "%d", &x) == 1)
+				if (sscanf(args.minlength, "%30d", &x) == 1)
 					minlength = x;
 				else
 					ast_log(LOG_WARNING, "Invalid min length argument\n");
 			}
-
 		}		
 
 		/* Play unidentified call */
@@ -126,9 +145,21 @@ static int privacy_exec (struct ast_channel *chan, void *data)
 				break;
 
 			/* Make sure we get at least digits */
-			if (strlen(phone) >= minlength ) 
-				break;
-			else {
+			if (strlen(phone) >= minlength ) {
+				/* if we have a checkcontext argument, do pattern matching */
+				if (!ast_strlen_zero(args.checkcontext)) {
+					if (!ast_exists_extension(NULL, args.checkcontext, phone, 1, NULL)) {
+						res = ast_streamfile(chan, "privacy-incorrect", chan->language);
+						if (!res) {
+							res = ast_waitstream(chan, "");
+						}
+					} else {
+						break;
+					}
+				} else {
+					break;
+				}
+			} else {
 				res = ast_streamfile(chan, "privacy-incorrect", chan->language);
 				if (!res)
 					res = ast_waitstream(chan, "");
@@ -148,9 +179,8 @@ static int privacy_exec (struct ast_channel *chan, void *data)
 			 */
 			chan->cid.cid_pres &= (AST_PRES_UNAVAILABLE ^ 0xFF);
 
-			if (option_verbose > 2) {
-				ast_verbose (VERBOSE_PREFIX_3 "Changed Caller*ID to %s, callerpres to %d\n",phone,chan->cid.cid_pres);
-			}
+			ast_verb(3, "Changed Caller*ID to %s, callerpres to %d\n",phone,chan->cid.cid_pres);
+
 			pbx_builtin_setvar_helper(chan, "PRIVACYMGRSTATUS", "SUCCESS");
 		} else {
 			pbx_builtin_setvar_helper(chan, "PRIVACYMGRSTATUS", "FAILED");
@@ -167,7 +197,7 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	return ast_register_application(app, privacy_exec, synopsis, descrip);
+	return ast_register_application_xml(app, privacy_exec);
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Require phone number to be entered, if no CallerID sent");

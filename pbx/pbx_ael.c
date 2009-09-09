@@ -28,12 +28,19 @@
 
 #include "asterisk.h"
 
+#if !defined(STANDALONE)
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+#endif
 
 #include <ctype.h>
 #include <regex.h>
 #include <sys/stat.h>
 
+#ifdef STANDALONE
+#ifdef HAVE_MTX_PROFILE
+static int mtx_prof = -1; /* helps the standalone compile with the mtx_prof flag on */
+#endif
+#endif
 #include "asterisk/pbx.h"
 #include "asterisk/config.h"
 #include "asterisk/module.h"
@@ -41,6 +48,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/cli.h"
 #include "asterisk/app.h"
 #include "asterisk/callerid.h"
+#include "asterisk/hashtab.h"
 #include "asterisk/ael_structs.h"
 #include "asterisk/pval.h"
 #ifdef AAL_ARGCHECK
@@ -84,11 +92,10 @@ struct pval *find_context(char *name);
 struct pval *find_macro(char *name);
 struct ael_priority *new_prio(void);
 struct ael_extension *new_exten(void);
-void linkprio(struct ael_extension *exten, struct ael_priority *prio);
 void destroy_extensions(struct ael_extension *exten);
 void set_priorities(struct ael_extension *exten);
 void add_extensions(struct ael_extension *exten);
-void ast_compile_ael2(struct ast_context **local_contexts, struct pval *root);
+void ast_compile_ael2(struct ast_context **local_contexts, struct ast_hashtab *local_table, struct pval *root);
 void destroy_pval(pval *item);
 void destroy_pval_item(pval *item);
 int is_float(char *arg );
@@ -108,6 +115,8 @@ static int pbx_load_module(void)
 	int errs=0, sem_err=0, sem_warn=0, sem_note=0;
 	char *rfilename;
 	struct ast_context *local_contexts=NULL, *con;
+	struct ast_hashtab *local_table=NULL;
+	
 	struct pval *parse_tree;
 
 	ast_log(LOG_NOTICE, "Starting AEL load process.\n");
@@ -127,10 +136,13 @@ static int pbx_load_module(void)
 	ael2_semantic_check(parse_tree, &sem_err, &sem_warn, &sem_note);
 	if (errs == 0 && sem_err == 0) {
 		ast_log(LOG_NOTICE, "AEL load process: checked config file name '%s'.\n", rfilename);
-		ast_compile_ael2(&local_contexts, parse_tree);
+		local_table = ast_hashtab_create(11, ast_hashtab_compare_contexts, ast_hashtab_resize_java, ast_hashtab_newsize_java, ast_hashtab_hash_contexts, 0);
+		ast_compile_ael2(&local_contexts, local_table, parse_tree);
 		ast_log(LOG_NOTICE, "AEL load process: compiled config file name '%s'.\n", rfilename);
 		
-		ast_merge_contexts_and_delete(&local_contexts, registrar);
+		ast_merge_contexts_and_delete(&local_contexts, local_table, registrar);
+		local_table = NULL; /* it's the dialplan global now */
+		local_contexts = NULL;
 		ast_log(LOG_NOTICE, "AEL load process: merged config file name '%s'.\n", rfilename);
 		for (con = ast_walk_contexts(NULL); con; con = ast_walk_contexts(con))
 			ast_context_verify_includes(con);
@@ -146,13 +158,13 @@ static int pbx_load_module(void)
 }
 
 /* CLI interface */
-static char *handle_cli_ael_debug_multiple(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+static char *handle_cli_ael_set_debug(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	switch (cmd) {
 	case CLI_INIT:
-		e->command = "ael debug [read|tokens|macros|contexts|off]";
+		e->command = "ael set debug {read|tokens|macros|contexts|off}";
 		e->usage =
-			"Usage: ael debug [read|tokens|macros|contexts|off]\n"
+			"Usage: ael set debug {read|tokens|macros|contexts|off}\n"
 			"       Enable AEL read, token, macro, or context debugging,\n"
 			"       or disable all AEL debugging messages.  Note: this\n"
 			"       currently does nothing.\n";
@@ -161,18 +173,18 @@ static char *handle_cli_ael_debug_multiple(struct ast_cli_entry *e, int cmd, str
 		return NULL;
 	}
 
-	if (a->argc != 3)
+	if (a->argc != e->args)
 		return CLI_SHOWUSAGE;
 
-	if (!strcasecmp(a->argv[2], "read"))
+	if (!strcasecmp(a->argv[3], "read"))
 		aeldebug |= DEBUG_READ;
-	else if (!strcasecmp(a->argv[2], "tokens"))
+	else if (!strcasecmp(a->argv[3], "tokens"))
 		aeldebug |= DEBUG_TOKENS;
-	else if (!strcasecmp(a->argv[2], "macros"))
+	else if (!strcasecmp(a->argv[3], "macros"))
 		aeldebug |= DEBUG_MACROS;
-	else if (!strcasecmp(a->argv[2], "contexts"))
+	else if (!strcasecmp(a->argv[3], "contexts"))
 		aeldebug |= DEBUG_CONTEXTS;
-	else if (!strcasecmp(a->argv[2], "off"))
+	else if (!strcasecmp(a->argv[3], "off"))
 		aeldebug = 0;
 	else
 		return CLI_SHOWUSAGE;
@@ -200,20 +212,20 @@ static char *handle_cli_ael_reload(struct ast_cli_entry *e, int cmd, struct ast_
 }
 
 static struct ast_cli_entry cli_ael[] = {
-	AST_CLI_DEFINE(handle_cli_ael_reload,         "Reload AEL configuration"),
-	AST_CLI_DEFINE(handle_cli_ael_debug_multiple, "Enable AEL debugging flags")
+	AST_CLI_DEFINE(handle_cli_ael_reload,    "Reload AEL configuration"),
+	AST_CLI_DEFINE(handle_cli_ael_set_debug, "Enable AEL debugging flags")
 };
 
 static int unload_module(void)
 {
 	ast_context_destroy(NULL, registrar);
-	ast_cli_unregister_multiple(cli_ael, sizeof(cli_ael) / sizeof(struct ast_cli_entry));
+	ast_cli_unregister_multiple(cli_ael, ARRAY_LEN(cli_ael));
 	return 0;
 }
 
 static int load_module(void)
 {
-	ast_cli_register_multiple(cli_ael, sizeof(cli_ael) / sizeof(struct ast_cli_entry));
+	ast_cli_register_multiple(cli_ael, ARRAY_LEN(cli_ael));
 	return (pbx_load_module());
 }
 
@@ -222,7 +234,7 @@ static int reload(void)
 	return pbx_load_module();
 }
 
-#ifdef STANDALONE_AEL
+#ifdef STANDALONE
 #define AST_MODULE "ael"
 int ael_external_load_module(void);
 int ael_external_load_module(void)
@@ -239,7 +251,7 @@ AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "Asterisk Extension Langu
 	       );
 
 #ifdef AAL_ARGCHECK
-static char *ael_funclist[] =
+static const char * const ael_funclist[] =
 {
 	"AGENT",
 	"ARRAY",

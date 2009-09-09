@@ -36,6 +36,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "asterisk.h"
 #include "config.h"
 #if !defined(lint) && !defined(SCCSID)
 __RCSID("$NetBSD: readline.c,v 1.21 2002/03/18 16:20:36 christos Exp $");
@@ -1203,7 +1204,6 @@ filename_completion_function(const char *text, int state)
 	struct dirent *entry;
 	char *temp;
 	size_t len;
-	int count = 0;
 
 	temp = strrchr(text, '/');
 	if (temp) {

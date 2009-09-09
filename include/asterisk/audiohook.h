@@ -57,7 +57,14 @@ enum ast_audiohook_flags {
 	AST_AUDIOHOOK_TRIGGER_READ = (1 << 0),  /*!< Audiohook wants to be triggered when reading audio in */
 	AST_AUDIOHOOK_TRIGGER_WRITE = (2 << 0), /*!< Audiohook wants to be triggered when writing audio out */
 	AST_AUDIOHOOK_WANTS_DTMF = (1 << 1),    /*!< Audiohook also wants to receive DTMF frames */
+	AST_AUDIOHOOK_TRIGGER_SYNC = (1 << 2),  /*!< Audiohook wants to be triggered when both sides have combined audio available */
+	/*! Audiohooks with this flag set will not allow for a large amount of samples to build up on its
+	 * slinfactories. We will flush the factories if they contain too many samples.
+	 */
+	AST_AUDIOHOOK_SMALL_QUEUE = (1 << 3),
 };
+
+#define AST_AUDIOHOOK_SYNC_TOLERANCE 100 /*< Tolerance in milliseconds for audiohooks synchronization */
 
 struct ast_audiohook;
 
@@ -86,6 +93,8 @@ struct ast_audiohook {
 	unsigned int flags;                                    /*!< Flags on the audiohook */
 	struct ast_slinfactory read_factory;                   /*!< Factory where frames read from the channel, or read from the whisper source will go through */
 	struct ast_slinfactory write_factory;                  /*!< Factory where frames written to the channel will go through */
+	struct timeval read_time;                              /*!< Last time read factory was fed */
+	struct timeval write_time;                             /*!< Last time write factory was fed */
 	int format;                                            /*!< Format translation path is setup as */
 	struct ast_trans_pvt *trans_pvt;                       /*!< Translation path for reading frames */
 	ast_audiohook_manipulate_callback manipulate_callback; /*!< Manipulation callback */
@@ -145,7 +154,22 @@ int ast_audiohook_detach(struct ast_audiohook *audiohook);
  */
 int ast_audiohook_detach_list(struct ast_audiohook_list *audiohook_list);
 
-/*! 
+/*! \brief Move an audiohook from one channel to a new one
+ *
+ * \todo Currently only the first audiohook of a specific source found will be moved.
+ * We should add the capability to move multiple audiohooks from a single source as well.
+ *
+ * \note It is required that both old_chan and new_chan are locked prior to calling
+ * this function. Besides needing to protect the data within the channels, not locking
+ * these channels can lead to a potential deadlock
+ *
+ * \param old_chan The source of the audiohook to move
+ * \param new_chan The destination to which we want the audiohook to move
+ * \param source The source of the audiohook we want to move
+ */
+void ast_audiohook_move_by_source(struct ast_channel *old_chan, struct ast_channel *new_chan, const char *source);
+
+/*!
  * \brief Detach specified source audiohook from channel
  *
  * \param chan Channel to detach from
@@ -156,6 +180,18 @@ int ast_audiohook_detach_list(struct ast_audiohook_list *audiohook_list);
  * \note The channel does not need to be locked before calling this function.
  */
 int ast_audiohook_detach_source(struct ast_channel *chan, const char *source);
+
+/*!
+ * \brief Remove an audiohook from a specified channel
+ *
+ * \param chan Channel to remove from
+ * \param audiohook Audiohook to remove
+ *
+ * \return Returns 0 on success, -1 on failure
+ *
+ * \note The channel does not need to be locked before calling this function
+ */
+int ast_audiohook_remove(struct ast_channel *chan, struct ast_audiohook *audiohook);
 
 /*! \brief Pass a frame off to be handled by the audiohook core
  * \param chan Channel that the list is coming off of
@@ -173,9 +209,9 @@ void ast_audiohook_trigger_wait(struct ast_audiohook *audiohook);
 
 /*!
   \brief Find out how many audiohooks from  a certain source exist on a given channel, regardless of status.
-  \param chan The channel on which to find the spies 
+  \param chan The channel on which to find the spies
   \param source The audiohook's source
-  \param type The type of audiohook 
+  \param type The type of audiohook
   \return Return the number of audiohooks which are from the source specified
 
   Note: Function performs nlocking.
@@ -202,6 +238,35 @@ int ast_channel_audiohook_count_by_source_running(struct ast_channel *chan, cons
  * \param ah Audiohook structure
  */
 #define ast_audiohook_unlock(ah) ast_mutex_unlock(&(ah)->lock)
+
+/*!
+ * \brief Adjust the volume on frames read from or written to a channel
+ * \param chan Channel to muck with
+ * \param direction Direction to set on
+ * \param volume Value to adjust the volume by
+ * \return Returns 0 on success, -1 on failure
+ * \since 1.6.1
+ */
+int ast_audiohook_volume_set(struct ast_channel *chan, enum ast_audiohook_direction direction, int volume);
+
+/*!
+ * \brief Retrieve the volume adjustment value on frames read from or written to a channel
+ * \param chan Channel to retrieve volume adjustment from
+ * \param direction Direction to retrieve
+ * \return Returns adjustment value
+ * \since 1.6.1
+ */
+int ast_audiohook_volume_get(struct ast_channel *chan, enum ast_audiohook_direction direction);
+
+/*!
+ * \brief Adjust the volume on frames read from or written to a channel
+ * \param chan Channel to muck with
+ * \param direction Direction to increase
+ * \param volume Value to adjust the adjustment by
+ * \return Returns 0 on success, -1 on failure
+ * \since 1.6.1
+ */
+int ast_audiohook_volume_adjust(struct ast_channel *chan, enum ast_audiohook_direction direction, int volume);
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }

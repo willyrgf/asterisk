@@ -67,14 +67,14 @@
 #include <string.h>
 #endif
 
-#ifdef HAVE_SYS_POLL_H
+#ifndef AST_POLL_COMPAT
 #include <sys/poll.h>
 #else
 #include "asterisk/poll-compat.h"
 #endif
 
 #if !defined(HAVE_ASPRINTF) && !defined(__AST_DEBUG_MALLOC)
-int asprintf(char **str, const char *fmt, ...);
+int __attribute__((format(printf, 2, 3))) asprintf(char **str, const char *fmt, ...);
 #endif
 
 #ifndef HAVE_GETLOADAVG
@@ -110,16 +110,11 @@ int unsetenv(const char *name);
 #endif
 
 #if !defined(HAVE_VASPRINTF) && !defined(__AST_DEBUG_MALLOC)
-int vasprintf(char **strp, const char *fmt, va_list ap);
+int __attribute__((format(printf, 2, 0))) vasprintf(char **strp, const char *fmt, va_list ap);
 #endif
 
-#ifndef HAVE_STRLCAT
-size_t strlcat(char *dst, const char *src, size_t siz);
-#endif
-
-#ifndef HAVE_STRLCPY
-size_t strlcpy(char *dst, const char *src, size_t siz);
-#endif
+#define	strlcat	__use__ast_str__functions_not__strlcat__
+#define	strlcpy	__use__ast_copy_string__not__strlcpy__
 
 #include <errno.h>
 
@@ -163,6 +158,7 @@ size_t strlcpy(char *dst, const char *src, size_t siz);
 typedef unsigned char	u_int8_t;
 typedef unsigned short	u_int16_t;
 typedef unsigned int	u_int32_t;
+typedef unsigned int	uint;
 #endif
 
 #endif /* SOLARIS */
@@ -179,6 +175,17 @@ typedef unsigned int	u_int32_t;
 
 #ifdef __CYGWIN__
 typedef unsigned long long uint64_t;
+#endif
+
+/* glob compat stuff */ 
+#if defined(__Darwin__) || defined(__CYGWIN__)
+#define GLOB_ABORTED GLOB_ABEND
+#endif
+#include <glob.h>
+#if !defined(HAVE_GLOB_NOMAGIC) || !defined(HAVE_GLOB_BRACE)
+#define MY_GLOB_FLAGS   GLOB_NOCHECK
+#else
+#define MY_GLOB_FLAGS   (GLOB_NOMAGIC | GLOB_BRACE)
 #endif
 
 #endif

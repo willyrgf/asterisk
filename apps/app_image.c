@@ -35,20 +35,42 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 static char *app = "SendImage";
 
-static char *synopsis = "Send an image file";
+/*** DOCUMENTATION
+	<application name="SendImage" language="en_US">
+		<synopsis>
+			Sends an image file.
+		</synopsis>
+		<syntax>
+			<parameter name="filename" required="true">
+				<para>Path of the filename (image) to send.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Send an image file on a channel supporting it.</para>
+			<para>Result of transmission will be stored in <variable>SENDIMAGESTATUS</variable></para>
+			<variablelist>
+				<variable name="SENDIMAGESTATUS">
+					<value name="SUCCESS">
+						Transmission succeeded.
+					</value>
+					<value name="FAILURE">
+						Transmission failed.
+					</value>
+					<value name="UNSUPPORTED">
+						Image transmission not supported by channel.
+					</value>
+				</variable>
+			</variablelist>
+		</description>
+		<see-also>
+			<ref type="application">SendText</ref>
+			<ref type="application">SendURL</ref>
+		</see-also>
+	</application>
+ ***/
 
-static char *descrip = 
-"  SendImage(filename): Sends an image on a channel.\n"
-"If the channel supports image transport but the image send fails, the channel\n"
-"will be hung up.  Otherwise, the dialplan continues execution.  This\n"
-"application sets the following channel variable upon completion:\n"
-"   SENDIMAGESTATUS  The status is the result of the attempt, one of:\n"
-"                    OK | NOSUPPORT \n";			
-
-
-static int sendimage_exec(struct ast_channel *chan, void *data)
+static int sendimage_exec(struct ast_channel *chan, const char *data)
 {
-	int res = 0;
 
 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_WARNING, "SendImage requires an argument (filename)\n");
@@ -57,14 +79,17 @@ static int sendimage_exec(struct ast_channel *chan, void *data)
 
 	if (!ast_supports_images(chan)) {
 		/* Does not support transport */
-		pbx_builtin_setvar_helper(chan, "SENDIMAGESTATUS", "NOSUPPORT");
+		pbx_builtin_setvar_helper(chan, "SENDIMAGESTATUS", "UNSUPPORTED");
 		return 0;
 	}
 
-	if (!(res = ast_send_image(chan, data)))
-		pbx_builtin_setvar_helper(chan, "SENDIMAGESTATUS", "OK");
-		
-	return res;
+	if (!ast_send_image(chan, data)) {
+		pbx_builtin_setvar_helper(chan, "SENDIMAGESTATUS", "SUCCESS");
+	} else {
+		pbx_builtin_setvar_helper(chan, "SENDIMAGESTATUS", "FAILURE");
+	}
+	
+	return 0;
 }
 
 static int unload_module(void)
@@ -74,7 +99,7 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	return ast_register_application(app, sendimage_exec, synopsis, descrip);
+	return ast_register_application_xml(app, sendimage_exec);
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Image Transmission Application");

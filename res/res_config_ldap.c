@@ -58,15 +58,16 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/linkedlists.h"
 
 #define RES_CONFIG_LDAP_CONF "res_ldap.conf"
+#define RES_CONFIG_LDAP_DEFAULT_BASEDN "asterisk"
 
 AST_MUTEX_DEFINE_STATIC(ldap_lock);
 
 static LDAP *ldapConn;
-static char host[512];
+static char url[512];
 static char user[512];
 static char pass[50];
-static char basedn[512];
-static int port = 389;
+static char base_distinguished_name[512];
+static int version = 3;
 static time_t connect_time;
 
 static int parse_config(void);
@@ -88,6 +89,7 @@ struct ldap_table_config {
 	struct ast_variable *attributes;  /*!< attribute names conversion */
 	struct ast_variable *delimiters;  /*!< the current delimiter is semicolon, so we are not using this variable */
 	AST_LIST_ENTRY(ldap_table_config) entry;
+	/* TODO: Make proxies work */
 };
 
 /*! \brief Should be locked before using it */
@@ -281,33 +283,36 @@ static struct ast_variable *realtime_ldap_entry_to_var(struct ldap_table_config 
 
 		values = ldap_get_values_len(ldapConn, ldap_entry, ldap_attribute_name); /* these are freed at the end */
 		if (values) {
-			struct berval **v = values;
+			struct berval **v;
+			char *valptr;
 
-			while (*v) {
+			for (v = values; *v; v++) {
 				value = *v;
-				ast_debug(2, "LINE(%d) attribute_name: %s LDAP value: %s\n", __LINE__, attribute_name, value->bv_val);
+				valptr = value->bv_val;
+				ast_debug(2, "LINE(%d) attribute_name: %s LDAP value: %s\n", __LINE__, attribute_name, valptr);
 				if (is_realmed_password_attribute) {
-					if (!strncasecmp(value->bv_val, "{md5}", 5))
-						value->bv_val += 5;
-					else
-						value->bv_val = NULL;
-					ast_debug(2, "md5: %s\n", value->bv_val);
+					if (!strncasecmp(valptr, "{md5}", 5)) {
+						valptr += 5;
+					} else {
+						valptr = NULL;
+					}
+					ast_debug(2, "md5: %s\n", valptr);
 				}
-				if (value->bv_val) {
+				if (valptr) {
 					/* ok, so looping through all delimited values except the last one (not, last character is not delimited...) */
 					if (is_delimited) {
 						i = 0;
 						pos = 0;
-						while (!ast_strlen_zero(value->bv_val + i)) {
-							if (value->bv_val[i] == ';'){
-								value->bv_val[i] = '\0';
+						while (!ast_strlen_zero(valptr + i)) {
+							if (valptr[i] == ';'){
+								valptr[i] = '\0';
 								if (prev) {
-									prev->next = ast_variable_new(attribute_name, &value->bv_val[pos], table_config->table_name);
+									prev->next = ast_variable_new(attribute_name, &valptr[pos], table_config->table_name);
 									if (prev->next) {
 										prev = prev->next;
 									}
 								} else {
-									prev = var = ast_variable_new(attribute_name, &value->bv_val[pos], table_config->table_name);
+									prev = var = ast_variable_new(attribute_name, &valptr[pos], table_config->table_name);
 								}
 								pos = i + 1;
 							}
@@ -316,17 +321,16 @@ static struct ast_variable *realtime_ldap_entry_to_var(struct ldap_table_config 
 					}
 					/* for the last delimited value or if the value is not delimited: */
 					if (prev) {
-						prev->next = ast_variable_new(attribute_name, &value->bv_val[pos], table_config->table_name);
+						prev->next = ast_variable_new(attribute_name, &valptr[pos], table_config->table_name);
 						if (prev->next) {
 							prev = prev->next;
 						}
 					} else {
-						prev = var = ast_variable_new(attribute_name, &value->bv_val[pos], table_config->table_name);
+						prev = var = ast_variable_new(attribute_name, &valptr[pos], table_config->table_name);
 					}
 				}
-				v++;
 			}
-			ber_bvecfree(values);
+			ldap_value_free_len(values);
 		}
 		ldap_attribute_name = ldap_next_attribute(ldapConn, ldap_entry, ber);
 	}
@@ -342,7 +346,7 @@ static struct ast_variable *realtime_ldap_entry_to_var(struct ldap_table_config 
  * \return \a vars - an array of ast_variable variables terminated with a null.
  **/
 static struct ast_variable **realtime_ldap_result_to_vars(struct ldap_table_config *table_config,
-	LDAPMessage *ldap_result, unsigned int *entries_count_ptr)
+	LDAPMessage *ldap_result_msg, unsigned int *entries_count_ptr)
 {
 	struct ast_variable **vars;
 	int i = 0;
@@ -358,7 +362,7 @@ static struct ast_variable **realtime_ldap_result_to_vars(struct ldap_table_conf
 	int delim_count = 0;
 
 	/* First find the total count */
-	ldap_entry = ldap_first_entry(ldapConn, ldap_result);
+	ldap_entry = ldap_first_entry(ldapConn, ldap_result_msg);
 
 	for (tot_count = 0; ldap_entry; tot_count++){ 
 		tot_count += semicolon_count_var(realtime_ldap_entry_to_var(table_config, ldap_entry));
@@ -374,7 +378,7 @@ static struct ast_variable **realtime_ldap_result_to_vars(struct ldap_table_conf
 	 * This memory must be freed outside of this function. */
 	vars = ast_calloc(sizeof(struct ast_variable *), tot_count + 1);
 
-	ldap_entry = ldap_first_entry(ldapConn, ldap_result);
+	ldap_entry = ldap_first_entry(ldapConn, ldap_result_msg);
 
 	i = 0;
 
@@ -399,23 +403,26 @@ static struct ast_variable **realtime_ldap_result_to_vars(struct ldap_table_conf
 
 				values = ldap_get_values_len(ldapConn, ldap_entry, ldap_attribute_name);
 				if (values) {
-					struct berval **v = values;
+					struct berval **v;
+					char *valptr;
 
-					while (*v) {
+					for (v = values; *v; v++) {
 						value = *v;
+						valptr = value->bv_val;
 						if (is_realmed_password_attribute) {
-							if (strncasecmp(value->bv_val, "{md5}", 5) == 0)
-								value->bv_val += 5;
-							else
-								value->bv_val = NULL;
-							ast_debug(2, "md5: %s\n", value->bv_val);
+							if (strncasecmp(valptr, "{md5}", 5) == 0) {
+								valptr += 5;
+							} else {
+								valptr = NULL;
+							}
+							ast_debug(2, "md5: %s\n", valptr);
 						}
-						if (value->bv_val) {
+						if (valptr) {
 							if (delim_value == NULL 
 								&& !is_realmed_password_attribute 
 								&& (static_table_config != table_config || strcmp(attribute_name, "variable_value") == 0)) {
 
-								delim_value = ast_strdup(value->bv_val);
+								delim_value = ast_strdup(valptr);
 
 								if ((delim_tot_count = semicolon_count_str(delim_value)) > 0) {
 									ast_debug(4, "LINE(%d) is delimited %d times: %s\n", __LINE__, delim_tot_count, delim_value);
@@ -425,11 +432,10 @@ static struct ast_variable **realtime_ldap_result_to_vars(struct ldap_table_conf
 
 							if (is_delimited != 0 
 								&& !is_realmed_password_attribute 
-								&& (static_table_config != table_config || strcmp(attribute_name, "variable_value") == 0) ){
+								&& (static_table_config != table_config || strcmp(attribute_name, "variable_value") == 0) ) {
 								/* for non-Static RealTime, first */
 
-								i = pos;
-								while (!ast_strlen_zero(value->bv_val + i)) {
+								for (i = pos; !ast_strlen_zero(valptr + i); i++) {
 									ast_debug(4, "LINE(%d) DELIM pos: %d i: %d\n", __LINE__, pos, i);
 									if (delim_value[i] == ';') {
 										delim_value[i] = '\0';
@@ -450,9 +456,8 @@ static struct ast_variable **realtime_ldap_result_to_vars(struct ldap_table_conf
 											break;
 										}
 									}
-									i++;
 								}
-								if (ast_strlen_zero(value->bv_val + i)) {
+								if (ast_strlen_zero(valptr + i)) {
 									ast_debug(4, "LINE(%d) DELIM pos: %d i: %d delim_count: %d\n", __LINE__, pos, i, delim_count);
 									/* Last delimited value */
 									ast_debug(4, "LINE(%d) DELIM - attribute_name: %s value: %s pos: %d\n", __LINE__, attribute_name, &delim_value[pos], pos);
@@ -467,9 +472,9 @@ static struct ast_variable **realtime_ldap_result_to_vars(struct ldap_table_conf
 									/* Remembering to free memory */
 									is_delimited = 0;
 									pos = 0;
-									free(delim_value);
-									delim_value = NULL;
 								}
+								free(delim_value);
+								delim_value = NULL;
 								
 								ast_debug(4, "LINE(%d) DELIM pos: %d i: %d\n", __LINE__, pos, i);
 							} else {
@@ -478,21 +483,20 @@ static struct ast_variable **realtime_ldap_result_to_vars(struct ldap_table_conf
 									free(delim_value);
 									delim_value = NULL;
 								}
-								ast_debug(2, "LINE(%d) attribute_name: %s value: %s\n", __LINE__, attribute_name, value->bv_val);
+								ast_debug(2, "LINE(%d) attribute_name: %s value: %s\n", __LINE__, attribute_name, valptr);
 
 								if (prev) {
-									prev->next = ast_variable_new(attribute_name, value->bv_val, table_config->table_name);
+									prev->next = ast_variable_new(attribute_name, valptr, table_config->table_name);
 									if (prev->next) {
 										prev = prev->next;
 									}
 								} else {
-									prev = var = ast_variable_new(attribute_name, value->bv_val, table_config->table_name);
+									prev = var = ast_variable_new(attribute_name, valptr, table_config->table_name);
 								}
 							}
 						}
-						v++;
-					} /*!< while(*v) */
-					ber_bvecfree(values);
+					} /*!< for (v = values; *v; v++) */
+					ldap_value_free_len(values);
 				}/*!< if (values) */
 				ldap_attribute_name = ldap_next_attribute(ldapConn, ldap_entry, ber);
 			} /*!< while (ldap_attribute_name) */
@@ -544,15 +548,15 @@ static struct ast_variable *ldap_loadentry(struct ldap_table_config *table_confi
 		struct ast_variable **vars = NULL;
 		struct ast_variable *var = NULL;
 		int result = -1;
-		LDAPMessage *ldap_result = NULL;
+		LDAPMessage *ldap_result_msg = NULL;
 		int tries = 0;
 
 		ast_debug(2, "ldap_loadentry dn=%s\n", dn);
 
 		do {
 			result = ldap_search_ext_s(ldapConn, dn, LDAP_SCOPE_BASE,
-					   "(objectclass=*)", NULL, 0, NULL, NULL, NULL, LDAP_NO_LIMIT, &ldap_result);
-			if (result < 0 && is_ldap_connect_error(result)) {
+					   "(objectclass=*)", NULL, 0, NULL, NULL, NULL, LDAP_NO_LIMIT, &ldap_result_msg);
+			if (result != LDAP_SUCCESS && is_ldap_connect_error(result)) {
 				ast_log(LOG_WARNING,
 					"Failed to query database. Try %d/3\n",
 					tries + 1);
@@ -567,9 +571,9 @@ static struct ast_variable *ldap_loadentry(struct ldap_table_config *table_confi
 						break;
 				}
 			}
-		} while (result < 0 && tries < 3 && is_ldap_connect_error(result));
+		} while (result != LDAP_SUCCESS && tries < 3 && is_ldap_connect_error(result));
 
-		if (result < 0) {
+		if (result != LDAP_SUCCESS) {
 			ast_log(LOG_WARNING,
 					"Failed to query database. Check debug for more info.\n");
 			ast_debug(2, "dn=%s\n", dn);
@@ -580,17 +584,17 @@ static struct ast_variable *ldap_loadentry(struct ldap_table_config *table_confi
 		} else {
 			int num_entry = 0;
 			unsigned int *entries_count_ptr = NULL; /*!< not using this */
-			if ((num_entry = ldap_count_entries(ldapConn, ldap_result)) > 0) {
+			if ((num_entry = ldap_count_entries(ldapConn, ldap_result_msg)) > 0) {
 				ast_debug(3, "num_entry: %d\n", num_entry);
 
-				vars = realtime_ldap_result_to_vars(table_config, ldap_result, entries_count_ptr);
+				vars = realtime_ldap_result_to_vars(table_config, ldap_result_msg, entries_count_ptr);
 				if (num_entry > 1)
-					ast_log(LOG_WARNING, "More than one entry for dn=%s. Take only 1st one\n", dn);
+					ast_log(LOG_NOTICE, "More than one entry for dn=%s. Take only 1st one\n", dn);
 			} else {
-				ast_log(LOG_WARNING, "Could not find any entry dn=%s.\n", dn);
+				ast_debug(2, "Could not find any entry dn=%s.\n", dn);
 			}
 		}
-		ldap_msgfree(ldap_result);
+		ldap_msgfree(ldap_result_msg);
 
 		/* Chopping \a vars down to one variable */
 		if (vars != NULL) {
@@ -652,7 +656,7 @@ static char *cleaned_basedn(struct ast_channel *channel, const char *basedn)
 	return cbasedn;
 }
 
-/*! \brief Replace <search> by <by> in string. No check is done on string allocated size ! */
+/*! \brief Replace \<search\> by \<by\> in string. No check is done on string allocated size ! */
 static int replace_string_in_string(char *string, const char *search, const char *by)
 {
 	int search_len = strlen(search);
@@ -687,7 +691,9 @@ static void append_var_and_value_to_filter(struct ast_str **filter,
 	ast_debug(2, "name='%s' value='%s'\n", name, value);
 
 	if (like_pos) {
-		name = new_name = ast_strdupa(like_pos + strlen(" LIKE"));
+		int len = like_pos - name;
+		name = new_name = ast_strdupa(name);
+		new_name[len] = '\0';
 		value = new_value = ast_strdupa(value);
 		replace_string_in_string(new_value, "\\_", "_");
 		replace_string_in_string(new_value, "%", "*");
@@ -717,7 +723,7 @@ static struct ast_variable **realtime_ldap_base_ap(unsigned int *entries_count_p
 	struct ast_str *filter = NULL;
 	int tries = 0;
 	int result = 0;
-	LDAPMessage *ldap_result = NULL;
+	LDAPMessage *ldap_result_msg = NULL;
 
 	if (!table_name) {
 		ast_log(LOG_WARNING, "No table_name specified.\n");
@@ -725,9 +731,10 @@ static struct ast_variable **realtime_ldap_base_ap(unsigned int *entries_count_p
 		return NULL;
 	} 
 
-	if (!(filter = ast_str_create(80)))
+	if (!(filter = ast_str_create(80))) {
 		ast_free(clean_basedn);
 		return NULL;
+	}
 
 	/* Get the first parameter and first value in our list of passed paramater/value pairs  */
 	newparam = va_arg(ap, const char *);
@@ -763,10 +770,10 @@ static struct ast_variable **realtime_ldap_base_ap(unsigned int *entries_count_p
 	ast_str_append(&filter, 0, "(&");
 
 	if (table_config && table_config->additional_filter)
-		ast_str_append(&filter, 0, table_config->additional_filter);
+		ast_str_append(&filter, 0, "%s", table_config->additional_filter);
 	if (table_config != base_table_config && base_table_config && 
 		base_table_config->additional_filter) {
-		ast_str_append(&filter, 0, base_table_config->additional_filter);
+		ast_str_append(&filter, 0, "%s", base_table_config->additional_filter);
 	}
 
 	/* Create the first part of the query using the first parameter/value pairs we just extracted */
@@ -782,9 +789,9 @@ static struct ast_variable **realtime_ldap_base_ap(unsigned int *entries_count_p
 	do {
 		/* freeing ldap_result further down */
 		result = ldap_search_ext_s(ldapConn, clean_basedn,
-				  LDAP_SCOPE_SUBTREE, filter->str, NULL, 0, NULL, NULL, NULL, LDAP_NO_LIMIT,
-				  &ldap_result);
-		if (result < 0 && is_ldap_connect_error(result)) {
+				  LDAP_SCOPE_SUBTREE, ast_str_buffer(filter), NULL, 0, NULL, NULL, NULL, LDAP_NO_LIMIT,
+				  &ldap_result_msg);
+		if (result != LDAP_SUCCESS && is_ldap_connect_error(result)) {
 			ast_log(LOG_DEBUG, "Failed to query database. Try %d/10\n",
 				tries + 1);
 			if (++tries < 10) {
@@ -797,24 +804,24 @@ static struct ast_variable **realtime_ldap_base_ap(unsigned int *entries_count_p
 					break;
 			}
 		}
-	} while (result < 0 && tries < 10 && is_ldap_connect_error(result));
+	} while (result != LDAP_SUCCESS && tries < 10 && is_ldap_connect_error(result));
 
-	if (result < 0) {
+	if (result != LDAP_SUCCESS) {
 		ast_log(LOG_WARNING, "Failed to query database. Check debug for more info.\n");
-		ast_log(LOG_WARNING, "Query: %s\n", filter->str);
+		ast_log(LOG_WARNING, "Query: %s\n", ast_str_buffer(filter));
 		ast_log(LOG_WARNING, "Query Failed because: %s\n", ldap_err2string(result));
 	} else {
 		/* this is where we create the variables from the search result 
 		 * freeing this \a vars outside this function */
-		if (ldap_count_entries(ldapConn, ldap_result) > 0) {
+		if (ldap_count_entries(ldapConn, ldap_result_msg) > 0) {
 			/* is this a static var or some other? they are handled different for delimited values */
-			vars = realtime_ldap_result_to_vars(table_config, ldap_result, entries_count_ptr);
+			vars = realtime_ldap_result_to_vars(table_config, ldap_result_msg, entries_count_ptr);
 		} else {
-			ast_log(LOG_WARNING, "Could not find any entry matching %s in base dn %s.\n",
-				filter->str, clean_basedn);
+			ast_debug(1, "Could not find any entry matching %s in base dn %s.\n",
+				ast_str_buffer(filter), clean_basedn);
 		}
 
-		ldap_msgfree(ldap_result);
+		ldap_msgfree(ldap_result_msg);
 
 		/* TODO: get the default variables from the accountBaseDN, not implemented with delimited values */
 		if (vars) {
@@ -936,7 +943,7 @@ static struct ast_config *realtime_multi_ldap(const char *basedn,
 	if (vars) {
 		cfg = ast_config_new();
 		if (!cfg) {
-			ast_log(LOG_WARNING, "Out of memory!\n");
+			ast_log(LOG_ERROR, "Unable to create a config!\n");
 		} else {
 			struct ast_variable **p = vars;
 
@@ -944,7 +951,7 @@ static struct ast_config *realtime_multi_ldap(const char *basedn,
 				struct ast_category *cat = NULL;
 				cat = ast_category_new("", table_name, -1);
 				if (!cat) {
-					ast_log(LOG_WARNING, "Out of memory!\n");
+					ast_log(LOG_ERROR, "Unable to create a new category!\n");
 					break;
 				} else {
 					struct ast_variable *var = *p;
@@ -967,10 +974,12 @@ static struct ast_config *realtime_multi_ldap(const char *basedn,
 
 /*! 
  * \brief Sorting alogrithm for qsort to find the order of the variables \a a and \a b
- * \param \a a pointer to category_and_metric struct
- * \param \a b pointer to category_and_metric struct
+ * \param a pointer to category_and_metric struct
+ * \param b pointer to category_and_metric struct
  *
- * \return the -1,0,1 (zero for equal, -1 for if b is greater, and 1 if a is greater)
+ * \retval -1 for if b is greater
+ * \retval 0 zero for equal
+ * \retval 1 if a is greater
  */
 static int compare_categories(const void *a, const void *b)
 {
@@ -1001,7 +1010,7 @@ static int compare_categories(const void *a, const void *b)
 *	called on a reload
 */
 static struct ast_config *config_ldap(const char *basedn, const char *table_name,
-	const char *file, struct ast_config *cfg, struct ast_flags config_flags, const char *sugg_incl)
+	const char *file, struct ast_config *cfg, struct ast_flags config_flags, const char *sugg_incl, const char *who_asked)
 {
 	unsigned int vars_count = 0;
 	struct ast_variable **vars;
@@ -1014,7 +1023,7 @@ static struct ast_config *config_ldap(const char *basedn, const char *table_name
 	struct ast_variable **p;
 
 	if (ast_strlen_zero(file) || !strcasecmp(file, RES_CONFIG_LDAP_CONF)) {
-		ast_log(LOG_WARNING, "Cannot configure myself.\n");
+		ast_log(LOG_ERROR, "Cannot configure myself.\n");
 		return NULL;
 	}
 
@@ -1082,8 +1091,8 @@ static struct ast_config *config_ldap(const char *basedn, const char *table_name
 
 	for (i = 0; i < vars_count; i++) {
 		if (!strcmp(categories[i].variable_name, "#include")) {
-			struct ast_flags config_flags = { 0 };
-			if (!ast_config_internal_load(categories[i].variable_value, cfg, config_flags, ""))
+			struct ast_flags flags = { 0 };
+			if (!ast_config_internal_load(categories[i].variable_value, cfg, flags, "", who_asked))
 				break;
 			continue;
 		}
@@ -1131,7 +1140,7 @@ static int update_ldap(const char *basedn, const char *table_name, const char *a
 	struct ast_str *filter = NULL;
 	int tries = 0;
 	int result = 0;
-	LDAPMessage *ldap_result = NULL;
+	LDAPMessage *ldap_result_msg = NULL;
 
 	if (!table_name) {
 		ast_log(LOG_WARNING, "No table_name specified.\n");
@@ -1166,11 +1175,11 @@ static int update_ldap(const char *basedn, const char *table_name, const char *a
 	/* Create the filter with the table additional filter and the parameter/value pairs we were given */
 	ast_str_append(&filter, 0, "(&");
 	if (table_config && table_config->additional_filter) {
-		ast_str_append(&filter, 0, table_config->additional_filter);
+		ast_str_append(&filter, 0, "%s", table_config->additional_filter);
 	}
 	if (table_config != base_table_config && base_table_config
 		&& base_table_config->additional_filter) {
-		ast_str_append(&filter, 0, base_table_config->additional_filter);
+		ast_str_append(&filter, 0, "%s", base_table_config->additional_filter);
 	}
 	append_var_and_value_to_filter(&filter, table_config, attribute, lookup);
 	ast_str_append(&filter, 0, ")");
@@ -1183,7 +1192,199 @@ static int update_ldap(const char *basedn, const char *table_name, const char *a
 	newval = va_arg(ap, const char *);
 	if (!newparam || !newval) {
 		ast_log(LOG_WARNING,
-				"LINE(%d): need at least one paramter to modify.\n", __LINE__);
+				"LINE(%d): need at least one parameter to modify.\n", __LINE__);
+		return -1;
+	}
+
+	mods_size = 2; /* one for the first param/value pair and one for the the terminating NULL */
+	ldap_mods = ast_calloc(sizeof(LDAPMod *), mods_size);
+	ldap_mods[0] = ast_calloc(1, sizeof(LDAPMod));
+
+	ldap_mods[0]->mod_op = LDAP_MOD_REPLACE;
+	ldap_mods[0]->mod_type = ast_calloc(sizeof(char), strlen(newparam) + 1);
+	strcpy(ldap_mods[0]->mod_type, newparam);
+
+	ldap_mods[0]->mod_values = ast_calloc(sizeof(char), 2);
+	ldap_mods[0]->mod_values[0] = ast_calloc(sizeof(char), strlen(newval) + 1);
+	strcpy(ldap_mods[0]->mod_values[0], newval);
+
+	while ((newparam = va_arg(ap, const char *))) {
+		newparam = convert_attribute_name_to_ldap(table_config, newparam);
+		newval = va_arg(ap, const char *);
+		mod_exists = 0;
+
+		for (i = 0; i < mods_size - 1; i++) {
+			if (ldap_mods[i]&& !strcmp(ldap_mods[i]->mod_type, newparam)) {
+				/* We have the parameter allready, adding the value as a semicolon delimited value */
+				ldap_mods[i]->mod_values[0] = ast_realloc(ldap_mods[i]->mod_values[0], sizeof(char) * (strlen(ldap_mods[i]->mod_values[0]) + strlen(newval) + 2));
+				strcat(ldap_mods[i]->mod_values[0], ";");
+				strcat(ldap_mods[i]->mod_values[0], newval);
+				mod_exists = 1;	
+				break;
+			}
+		}
+
+		/* create new mod */
+		if (!mod_exists) {
+			mods_size++;
+			ldap_mods = ast_realloc(ldap_mods, sizeof(LDAPMod *) * mods_size);
+			ldap_mods[mods_size - 1] = NULL;
+			
+			ldap_mods[mods_size - 2] = ast_calloc(1, sizeof(LDAPMod));
+
+			ldap_mods[mods_size - 2]->mod_type = ast_calloc(sizeof(char), strlen(newparam) + 1);
+			strcpy(ldap_mods[mods_size - 2]->mod_type, newparam);
+
+			if (strlen(newval) == 0) {
+				ldap_mods[mods_size - 2]->mod_op = LDAP_MOD_DELETE;
+			} else {
+				ldap_mods[mods_size - 2]->mod_op = LDAP_MOD_REPLACE;
+
+				ldap_mods[mods_size - 2]->mod_values = ast_calloc(sizeof(char *), 2);
+				ldap_mods[mods_size - 2]->mod_values[0] = ast_calloc(sizeof(char), strlen(newval) + 1);
+				strcpy(ldap_mods[mods_size - 2]->mod_values[0], newval);
+			}
+		}
+	}
+	/* freeing ldap_mods further down */
+
+	do {
+		/* freeing ldap_result further down */
+		result = ldap_search_ext_s(ldapConn, clean_basedn,
+				  LDAP_SCOPE_SUBTREE, ast_str_buffer(filter), NULL, 0, NULL, NULL, NULL, LDAP_NO_LIMIT,
+				  &ldap_result_msg);
+		if (result != LDAP_SUCCESS && is_ldap_connect_error(result)) {
+			ast_log(LOG_WARNING, "Failed to query database. Try %d/3\n",
+				tries + 1);
+			tries++;
+			if (tries < 3) {
+				usleep(500000L * tries);
+				if (ldapConn) {
+					ldap_unbind_ext_s(ldapConn, NULL, NULL);
+					ldapConn = NULL;
+				}
+				if (!ldap_reconnect())
+					break;
+			}
+		}
+	} while (result != LDAP_SUCCESS && tries < 3 && is_ldap_connect_error(result));
+
+	if (result != LDAP_SUCCESS) {
+		ast_log(LOG_WARNING, "Failed to query directory. Check debug for more info.\n");
+		ast_log(LOG_WARNING, "Query: %s\n", ast_str_buffer(filter));
+		ast_log(LOG_WARNING, "Query Failed because: %s\n",
+			ldap_err2string(result));
+
+		ast_mutex_unlock(&ldap_lock);
+		free(filter);
+		free(clean_basedn);
+		ldap_msgfree(ldap_result_msg);
+		ldap_mods_free(ldap_mods, 0);
+		return -1;
+	}
+	/* Ready to update */
+	if ((num_entries = ldap_count_entries(ldapConn, ldap_result_msg)) > 0) {
+		ast_debug(3, "LINE(%d) Modifying %s=%s hits: %d\n", __LINE__, attribute, lookup, num_entries);
+		for (i = 0; option_debug > 2 && i < mods_size - 1; i++) {
+			if (ldap_mods[i]->mod_op != LDAP_MOD_DELETE) {
+				ast_debug(3, "LINE(%d) %s=%s \n", __LINE__, ldap_mods[i]->mod_type, ldap_mods[i]->mod_values[0]);
+			} else {
+				ast_debug(3, "LINE(%d) deleting %s \n", __LINE__, ldap_mods[i]->mod_type);
+			}
+		}
+		ldap_entry = ldap_first_entry(ldapConn, ldap_result_msg);
+
+		for (i = 0; ldap_entry; i++) { 
+			dn = ldap_get_dn(ldapConn, ldap_entry);
+			if ((error = ldap_modify_ext_s(ldapConn, dn, ldap_mods, NULL, NULL)) != LDAP_SUCCESS) 
+				ast_log(LOG_ERROR, "Couldn't modify dn:%s because %s", dn, ldap_err2string(error));
+
+			ldap_entry = ldap_next_entry(ldapConn, ldap_entry);
+		}
+	}
+
+	ast_mutex_unlock(&ldap_lock);
+	free(filter);
+	free(clean_basedn);
+	ldap_msgfree(ldap_result_msg);
+	ldap_mods_free(ldap_mods, 0);
+	return num_entries;
+}
+
+static int update2_ldap(const char *basedn, const char *table_name, va_list ap)
+{
+	int error = 0;
+	LDAPMessage *ldap_entry = NULL;
+	LDAPMod **ldap_mods;
+	const char *newparam = NULL;
+	const char *newval = NULL;
+	char *dn;
+	int num_entries = 0;
+	int i = 0;
+	int mods_size = 0;
+	int mod_exists = 0;
+	struct ldap_table_config *table_config = NULL;
+	char *clean_basedn = NULL;
+	struct ast_str *filter = NULL;
+	int tries = 0;
+	int result = 0;
+	LDAPMessage *ldap_result_msg = NULL;
+
+	if (!table_name) {
+		ast_log(LOG_WARNING, "No table_name specified.\n");
+		return -1;
+	} 
+
+	if (!(filter = ast_str_create(80)))
+		return -1;
+
+	ast_mutex_lock(&ldap_lock);
+
+	/* We now have our complete statement; Lets connect to the server and execute it.  */
+	if (!ldap_reconnect()) {
+		ast_mutex_unlock(&ldap_lock);
+		ast_free(filter);
+		return -1;
+	}
+
+	table_config = table_config_for_table_name(table_name);
+	if (!table_config) {
+		ast_log(LOG_WARNING, "No table named '%s'.\n", table_name);
+		ast_mutex_unlock(&ldap_lock);
+		ast_free(filter);
+		return -1;
+	}
+
+	clean_basedn = cleaned_basedn(NULL, basedn);
+
+	/* Create the filter with the table additional filter and the parameter/value pairs we were given */
+	ast_str_append(&filter, 0, "(&");
+	if (table_config && table_config->additional_filter) {
+		ast_str_append(&filter, 0, "%s", table_config->additional_filter);
+	}
+	if (table_config != base_table_config && base_table_config
+		&& base_table_config->additional_filter) {
+		ast_str_append(&filter, 0, "%s", base_table_config->additional_filter);
+	}
+
+	/* Get multiple lookup keyfields and values */
+	while ((newparam = va_arg(ap, const char *))) {
+		newval = va_arg(ap, const char *);
+		append_var_and_value_to_filter(&filter, table_config, newparam, newval);
+	}
+	ast_str_append(&filter, 0, ")");
+
+	/* Create the modification array with the parameter/value pairs we were given, 
+	 * if there are several parameters with the same name, we collect them into 
+	 * one parameter/value pair and delimit them with a semicolon */
+	newparam = va_arg(ap, const char *);
+	newparam = convert_attribute_name_to_ldap(table_config, newparam);
+	newval = va_arg(ap, const char *);
+	if (!newparam || !newval) {
+		ast_log(LOG_WARNING,
+				"LINE(%d): need at least one parameter to modify.\n", __LINE__);
+		ast_free(filter);
+		ast_free(clean_basedn);
 		return -1;
 	}
 
@@ -1237,9 +1438,9 @@ static int update_ldap(const char *basedn, const char *table_name, const char *a
 	do {
 		/* freeing ldap_result further down */
 		result = ldap_search_ext_s(ldapConn, clean_basedn,
-				  LDAP_SCOPE_SUBTREE, filter->str, NULL, 0, NULL, NULL, NULL, LDAP_NO_LIMIT,
-				  &ldap_result);
-		if (result < 0 && is_ldap_connect_error(result)) {
+				  LDAP_SCOPE_SUBTREE, ast_str_buffer(filter), NULL, 0, NULL, NULL, NULL, LDAP_NO_LIMIT,
+				  &ldap_result_msg);
+		if (result != LDAP_SUCCESS && is_ldap_connect_error(result)) {
 			ast_log(LOG_WARNING, "Failed to query database. Try %d/3\n",
 				tries + 1);
 			tries++;
@@ -1253,34 +1454,31 @@ static int update_ldap(const char *basedn, const char *table_name, const char *a
 					break;
 			}
 		}
-	} while (result < 0 && tries < 3 && is_ldap_connect_error(result));
+	} while (result != LDAP_SUCCESS && tries < 3 && is_ldap_connect_error(result));
 
-	if (result < 0) {
+	if (result != LDAP_SUCCESS) {
 		ast_log(LOG_WARNING, "Failed to query directory. Check debug for more info.\n");
-		ast_log(LOG_WARNING, "Query: %s\n", filter->str);
+		ast_log(LOG_WARNING, "Query: %s\n", ast_str_buffer(filter));
 		ast_log(LOG_WARNING, "Query Failed because: %s\n",
 			ldap_err2string(result));
 
 		ast_mutex_unlock(&ldap_lock);
-		if (filter)
-			free(filter);
-		if (clean_basedn)
-			free(clean_basedn);
-		ldap_msgfree(ldap_result);
+		free(filter);
+		free(clean_basedn);
+		ldap_msgfree(ldap_result_msg);
 		ldap_mods_free(ldap_mods, 0);
 		return -1;
 	}
 	/* Ready to update */
-	if ((num_entries = ldap_count_entries(ldapConn, ldap_result)) > 0) {
-		ast_debug(3, "LINE(%d) Modifying %s=%s hits: %d\n", __LINE__, attribute, lookup, num_entries);
+	if ((num_entries = ldap_count_entries(ldapConn, ldap_result_msg)) > 0) {
 		for (i = 0; option_debug > 2 && i < mods_size - 1; i++)
 			ast_debug(3, "LINE(%d) %s=%s \n", __LINE__, ldap_mods[i]->mod_type, ldap_mods[i]->mod_values[0]);
 
-		ldap_entry = ldap_first_entry(ldapConn, ldap_result);
+		ldap_entry = ldap_first_entry(ldapConn, ldap_result_msg);
 
 		for (i = 0; ldap_entry; i++) { 
 			dn = ldap_get_dn(ldapConn, ldap_entry);
-			if (!(error = ldap_modify_ext_s(ldapConn, dn, ldap_mods, NULL, NULL))) 
+			if ((error = ldap_modify_ext_s(ldapConn, dn, ldap_mods, NULL, NULL)) != LDAP_SUCCESS) 
 				ast_log(LOG_ERROR, "Couldn't modify dn:%s because %s", dn, ldap_err2string(error));
 
 			ldap_entry = ldap_next_entry(ldapConn, ldap_entry);
@@ -1292,7 +1490,7 @@ static int update_ldap(const char *basedn, const char *table_name, const char *a
 		free(filter);
 	if (clean_basedn)
 		free(clean_basedn);
-	ldap_msgfree(ldap_result);
+	ldap_msgfree(ldap_result_msg);
 	ldap_mods_free(ldap_mods, 0);
 	return num_entries;
 }
@@ -1302,7 +1500,8 @@ static struct ast_config_engine ldap_engine = {
 	.load_func = config_ldap,
 	.realtime_func = realtime_ldap,
 	.realtime_multi_func = realtime_multi_ldap,
-	.update_func = update_ldap
+	.update_func = update_ldap,
+	.update2_func = update2_ldap,
 };
 
 static int load_module(void)
@@ -1319,7 +1518,7 @@ static int load_module(void)
 
 	ast_config_engine_register(&ldap_engine);
 	ast_verb(1, "LDAP RealTime driver loaded.\n");
-	ast_cli_register_multiple(ldap_cli, sizeof(ldap_cli) / sizeof(struct ast_cli_entry));
+	ast_cli_register_multiple(ldap_cli, ARRAY_LEN(ldap_cli));
 
 	ast_mutex_unlock(&ldap_lock);
 
@@ -1337,7 +1536,7 @@ static int unload_module(void)
 		ldap_unbind_ext_s(ldapConn, NULL, NULL);
 		ldapConn = NULL;
 	}
-	ast_cli_unregister_multiple(ldap_cli, sizeof(ldap_cli) / sizeof(struct ast_cli_entry));
+	ast_cli_unregister_multiple(ldap_cli, ARRAY_LEN(ldap_cli));
 	ast_config_engine_deregister(&ldap_engine);
 	ast_verb(1, "LDAP RealTime unloaded.\n");
 
@@ -1359,6 +1558,7 @@ static int reload(void)
 
 	if (parse_config() < 0) {
 		ast_log(LOG_NOTICE, "Cannot reload LDAP RealTime driver.\n");
+		ast_mutex_unlock(&ldap_lock);
 		return 0;
 	}		
 
@@ -1377,12 +1577,12 @@ int parse_config(void)
 {
 	struct ast_config *config;
 	struct ast_flags config_flags = {0};
-	const char *s;
+	const char *s, *host;
+	int port;
 	char *category_name = NULL;
 
 	config = ast_config_load(RES_CONFIG_LDAP_CONF, config_flags);
-
-	if (!config) {
+	if (config == CONFIG_STATUS_FILEMISSING || config == CONFIG_STATUS_FILEINVALID) {
 		ast_log(LOG_WARNING, "Cannot load configuration %s\n", RES_CONFIG_LDAP_CONF);
 		return -1;
 	}
@@ -1393,34 +1593,43 @@ int parse_config(void)
 	} else 
 		ast_copy_string(user, s, sizeof(user));
 
-	if (!(s = ast_variable_retrieve(config, "_general", "pass"))) {
-		ast_log(LOG_WARNING, "No directory password found, using 'asterisk' as default.\n");
-		ast_copy_string(pass, "asterisk", sizeof(pass) - 1);
-	} else
-		ast_copy_string(pass, s, sizeof(pass));
+	if (!ast_strlen_zero(user)) {
+		if (!(s = ast_variable_retrieve(config, "_general", "pass"))) {
+			ast_log(LOG_WARNING, "No directory password found, using 'asterisk' as default.\n");
+			ast_copy_string(pass, "asterisk", sizeof(pass));
+		} else {
+			ast_copy_string(pass, s, sizeof(pass));
+		}
+	}
 
-	if (!(s = ast_variable_retrieve(config, "_general", "host"))) {
-		ast_log(LOG_ERROR, "No directory host found.\n");
-		host[0] = '\0';
+	/* URL is preferred, use host and port if not found */
+	if ((s = ast_variable_retrieve(config, "_general", "url"))) {
+		ast_copy_string(url, s, sizeof(url));
+	} else if ((host = ast_variable_retrieve(config, "_general", "host"))) {
+		if (!(s = ast_variable_retrieve(config, "_general", "port")) || sscanf(s, "%5d", &port) != 1 || port > 65535) {
+			ast_log(LOG_NOTICE, "No directory port found, using 389 as default.\n");
+			port = 389;
+		}
+
+		snprintf(url, sizeof(url), "ldap://%s:%d", host, port);
 	} else {
-		ast_copy_string(host, "ldap://", 8 );
-		ast_copy_string(host + 7, s, sizeof(host));
+		ast_log(LOG_ERROR, "No directory URL or host found.\n");
+		ast_config_destroy(config);
+		return -1;
 	}
 
 	if (!(s = ast_variable_retrieve(config, "_general", "basedn"))) {
-		ast_log(LOG_ERROR, "No LDAP base dn found, using 'asterisk' as default.\n");
-		basedn[0] = '\0';
+		ast_log(LOG_ERROR, "No LDAP base dn found, using '%s' as default.\n", RES_CONFIG_LDAP_DEFAULT_BASEDN);
+		ast_copy_string(base_distinguished_name, RES_CONFIG_LDAP_DEFAULT_BASEDN, sizeof(base_distinguished_name));
 	} else 
-		ast_copy_string(basedn, s, sizeof(basedn));
+		ast_copy_string(base_distinguished_name, s, sizeof(base_distinguished_name));
 
-	if (!(s = ast_variable_retrieve(config, "_general", "port"))) {
-		ast_log(LOG_WARNING, "No directory port found, using 389 as default.\n");
-		port = 389;
-		ast_copy_string(host + strlen(host), ":389", sizeof(host));
-	} else { 
-		ast_copy_string(host + 1, ":", sizeof(s));
-		ast_copy_string(host + strlen(host), s, sizeof(s));
-		port = atoi(s);
+	if (!(s = ast_variable_retrieve(config, "_general", "version")) && !(s = ast_variable_retrieve(config, "_general", "protocol"))) {
+		ast_log(LOG_NOTICE, "No explicit LDAP version found, using 3 as default.\n");
+		version = 3;
+	} else if (sscanf(s, "%30d", &version) != 1 || version < 1 || version > 6) {
+		ast_log(LOG_WARNING, "Invalid LDAP version '%s', using 3 as default.\n", s);
+		version = 3;
 	}
 
 	table_configs_free();
@@ -1442,10 +1651,11 @@ int parse_config(void)
 					static_table_config = table_config;
 			}
 			for (; var; var = var->next) {
-				if (!strcasecmp(var->name, "additionalFilter"))
-					table_config->additional_filter = strdup(var->value);
-				else
+				if (!strcasecmp(var->name, "additionalFilter")) {
+					table_config->additional_filter = ast_strdup(var->value);
+				} else {
 					ldap_table_config_add_attribute(table_config, var->name, var->value);
+				}
 			}
 		}
 	}
@@ -1466,24 +1676,30 @@ static int ldap_reconnect(void)
 		return 1;
 	}
 
-	if (ast_strlen_zero(host)) {
+	if (ast_strlen_zero(url)) {
 		ast_log(LOG_ERROR, "Not enough parameters to connect to ldap database\n");
 		return 0;
 	}
 
-	if (LDAP_SUCCESS != ldap_initialize(&ldapConn, host)) {
-		ast_log(LOG_ERROR, "Failed to init ldap connection to %s. Check debug for more info.\n", host);
+	if (LDAP_SUCCESS != ldap_initialize(&ldapConn, url)) {
+		ast_log(LOG_ERROR, "Failed to init ldap connection to '%s'. Check debug for more info.\n", url);
 		return 0;
-	} 
+	}
+
+	if (LDAP_OPT_SUCCESS != ldap_set_option(ldapConn, LDAP_OPT_PROTOCOL_VERSION, &version)) {
+		ast_log(LOG_WARNING, "Unable to set LDAP protocol version to %d, falling back to default.\n", version);
+	}
 
 	if (!ast_strlen_zero(user)) {
-		ast_debug(2, "bind to %s as %s\n", host, user);
+		ast_debug(2, "bind to '%s' as user '%s'\n", url, user);
 		cred.bv_val = (char *) pass;
 		cred.bv_len = strlen(pass);
 		bind_result = ldap_sasl_bind_s(ldapConn, user, LDAP_SASL_SIMPLE, &cred, NULL, NULL, NULL);
 	} else {
-		ast_debug(2, "bind anonymously %s anonymously\n", host);
-		bind_result = ldap_sasl_bind_s(ldapConn, NULL, LDAP_SASL_SIMPLE, NULL, NULL, NULL, NULL);
+		ast_debug(2, "bind %s anonymously\n", url);
+		cred.bv_val = NULL;
+		cred.bv_len = 0;
+		bind_result = ldap_sasl_bind_s(ldapConn, NULL, LDAP_SASL_SIMPLE, &cred, NULL, NULL, NULL);
 	}
 	if (bind_result == LDAP_SUCCESS) {
 		ast_debug(2, "Successfully connected to database.\n");
@@ -1499,14 +1715,14 @@ static int ldap_reconnect(void)
 
 static char *realtime_ldap_status(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	char status[256], status2[100] = "";
-	int ctime = time(NULL) - connect_time;
+	char status[256], credentials[100] = "";
+	int ctimesec = time(NULL) - connect_time;
 
 	switch (cmd) {
 	case CLI_INIT:
-		e->command = "realtime ldap status";
+		e->command = "realtime show ldap status";
 		e->usage =
-			"Usage: realtime ldap status\n"
+			"Usage: realtime show ldap status\n"
 			"               Shows connection information for the LDAP RealTime driver\n";
 		return NULL;
 	case CLI_GENERATE:
@@ -1516,36 +1732,36 @@ static char *realtime_ldap_status(struct ast_cli_entry *e, int cmd, struct ast_c
 	if (!ldapConn)
 		return CLI_FAILURE;
 
-	if (!ast_strlen_zero(host)) 
-		snprintf(status, sizeof(status), "Connected to %s, port %d baseDN %s", host, port, basedn);
+	if (!ast_strlen_zero(url)) 
+		snprintf(status, sizeof(status), "Connected to '%s', baseDN %s", url, base_distinguished_name);
 
 	if (!ast_strlen_zero(user))
-		snprintf(status2, sizeof(status2), " with username %s", user);
+		snprintf(credentials, sizeof(credentials), " with username %s", user);
 
-	if (ctime > 31536000) {
+	if (ctimesec > 31536000) {
 		ast_cli(a->fd, "%s%s for %d years, %d days, %d hours, %d minutes, %d seconds.\n",
-				status, status2, ctime / 31536000,
-				(ctime % 31536000) / 86400, (ctime % 86400) / 3600,
-				(ctime % 3600) / 60, ctime % 60);
-	} else if (ctime > 86400) {
+				status, credentials, ctimesec / 31536000,
+				(ctimesec % 31536000) / 86400, (ctimesec % 86400) / 3600,
+				(ctimesec % 3600) / 60, ctimesec % 60);
+	} else if (ctimesec > 86400) {
 		ast_cli(a->fd, "%s%s for %d days, %d hours, %d minutes, %d seconds.\n",
-				status, status2, ctime / 86400, (ctime % 86400) / 3600,
-				(ctime % 3600) / 60, ctime % 60);
-	} else if (ctime > 3600) {
+				status, credentials, ctimesec / 86400, (ctimesec % 86400) / 3600,
+				(ctimesec % 3600) / 60, ctimesec % 60);
+	} else if (ctimesec > 3600) {
 		ast_cli(a->fd, "%s%s for %d hours, %d minutes, %d seconds.\n",
-				status, status2, ctime / 3600, (ctime % 3600) / 60,
-				ctime % 60);
-	} else if (ctime > 60) {
-		ast_cli(a->fd, "%s%s for %d minutes, %d seconds.\n", status, status2,
-					ctime / 60, ctime % 60);
+				status, credentials, ctimesec / 3600, (ctimesec % 3600) / 60,
+				ctimesec % 60);
+	} else if (ctimesec > 60) {
+		ast_cli(a->fd, "%s%s for %d minutes, %d seconds.\n", status, credentials,
+					ctimesec / 60, ctimesec % 60);
 	} else {
-		ast_cli(a->fd, "%s%s for %d seconds.\n", status, status2, ctime);
+		ast_cli(a->fd, "%s%s for %d seconds.\n", status, credentials, ctimesec);
 	}
 
 	return CLI_SUCCESS;
 }
 
-AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_GLOBAL_SYMBOLS, "LDAP realtime interface",
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "LDAP realtime interface",
 	.load = load_module,
 	.unload = unload_module,
 	.reload = reload,

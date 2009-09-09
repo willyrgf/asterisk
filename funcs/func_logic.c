@@ -34,6 +34,83 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/utils.h"
 #include "asterisk/app.h"
 
+/*** DOCUMENTATION
+	<function name="ISNULL" language="en_US">
+		<synopsis>
+			Check if a value is NULL.
+		</synopsis>
+		<syntax>
+			<parameter name="data" required="true" />
+		</syntax>
+		<description>
+			<para>Returns <literal>1</literal> if NULL or <literal>0</literal> otherwise.</para>
+		</description>
+	</function>
+	<function name="SET" language="en_US">
+		<synopsis>
+			SET assigns a value to a channel variable.
+		</synopsis>
+		<syntax argsep="=">
+			<parameter name="varname" required="true" />
+			<parameter name="value" />
+		</syntax>
+		<description>
+		</description>
+	</function>
+	<function name="EXISTS" language="en_US">
+		<synopsis>
+			Test the existence of a value.
+		</synopsis>
+		<syntax>
+			<parameter name="data" required="true" />
+		</syntax>
+		<description>
+			<para>Returns <literal>1</literal> if exists, <literal>0</literal> otherwise.</para>
+		</description>
+	</function>
+	<function name="IF" language="en_US">
+		<synopsis>
+			Check for an expresion.
+		</synopsis>
+		<syntax argsep="?">
+			<parameter name="expresion" required="true" />
+			<parameter name="retvalue" argsep=":" required="true">
+				<argument name="true" />
+				<argument name="false" />
+			</parameter>
+		</syntax>
+		<description>
+			<para>Returns the data following <literal>?</literal> if true, else the data following <literal>:</literal></para>
+		</description>	
+	</function>
+	<function name="IFTIME" language="en_US">
+		<synopsis>
+			Temporal Conditional.
+		</synopsis>
+		<syntax argsep="?">
+			<parameter name="timespec" required="true" />
+			<parameter name="retvalue" required="true" argsep=":">
+				<argument name="true" />
+				<argument name="false" />
+			</parameter>
+		</syntax>
+		<description>
+			<para>Returns the data following <literal>?</literal> if true, else the data following <literal>:</literal></para>
+		</description>
+	</function>
+	<function name="IMPORT" language="en_US">
+		<synopsis>
+			Retrieve the value of a variable from another channel.
+		</synopsis>
+		<syntax>
+			<parameter name="channel" required="true" />
+			<parameter name="variable" required="true" />
+		</syntax>
+		<description>
+		</description>
+	</function>
+ ***/
+
 static int isnull(struct ast_channel *chan, const char *cmd, char *data,
 		  char *buf, size_t len)
 {
@@ -71,6 +148,7 @@ static int iftime(struct ast_channel *chan, const char *cmd, char *data, char *b
 
 	if (!ast_build_timing(&timing, expr)) {
 		ast_log(LOG_WARNING, "Invalid Time Spec.\n");
+		ast_destroy_timing(&timing);
 		return -1;
 	}
 
@@ -79,7 +157,8 @@ static int iftime(struct ast_channel *chan, const char *cmd, char *data, char *b
 	if (iffalse)
 		iffalse = ast_strip_quoted(iffalse, "\"", "\"");
 
-	ast_copy_string(buf, ast_check_timing(&timing) ? iftrue : iffalse, len);
+	ast_copy_string(buf, ast_check_timing(&timing) ? S_OR(iftrue, "") : S_OR(iffalse, ""), len);
+	ast_destroy_timing(&timing);
 
 	return 0;
 }
@@ -144,71 +223,89 @@ static int set(struct ast_channel *chan, const char *cmd, char *data, char *buf,
 	return 0;
 }
 
-static int acf_import(struct ast_channel *chan, const char *cmd, char *data, char *buf, size_t len)
+static int set2(struct ast_channel *chan, const char *cmd, char *data, struct ast_str **str, ssize_t len)
+{
+	if (len > -1) {
+		ast_str_make_space(str, len == 0 ? strlen(data) : len);
+	}
+	return set(chan, cmd, data, ast_str_buffer(*str), ast_str_size(*str));
+}
+
+static int import_helper(struct ast_channel *chan, const char *cmd, char *data, char *buf, struct ast_str **str, ssize_t len)
 {
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(channel);
 		AST_APP_ARG(varname);
 	);
 	AST_STANDARD_APP_ARGS(args, data);
-	buf[0] = 0;
+	if (buf) {
+		*buf = '\0';
+	}
+
 	if (!ast_strlen_zero(args.varname)) {
-		struct ast_channel *chan2 = ast_get_channel_by_name_locked(args.channel);
-		if (chan2) {
+		struct ast_channel *chan2;
+
+		if ((chan2 = ast_channel_get_by_name(args.channel))) {
 			char *s = alloca(strlen(args.varname) + 4);
 			if (s) {
 				sprintf(s, "${%s}", args.varname);
-				pbx_substitute_variables_helper(chan2, s, buf, len);
+				ast_channel_lock(chan2);
+				if (buf) {
+					pbx_substitute_variables_helper(chan2, s, buf, len);
+				} else {
+					ast_str_substitute_variables(str, len, chan2, s);
+				}
+				ast_channel_unlock(chan2);
 			}
-			ast_channel_unlock(chan2);
+			chan2 = ast_channel_unref(chan2);
 		}
 	}
+
 	return 0;
+}
+
+static int import_read(struct ast_channel *chan, const char *cmd, char *data, char *buf, size_t len)
+{
+	return import_helper(chan, cmd, data, buf, NULL, len);
+}
+
+static int import_read2(struct ast_channel *chan, const char *cmd, char *data, struct ast_str **str, ssize_t len)
+{
+	return import_helper(chan, cmd, data, NULL, str, len);
 }
 
 static struct ast_custom_function isnull_function = {
 	.name = "ISNULL",
-	.synopsis = "NULL Test: Returns 1 if NULL or 0 otherwise",
-	.syntax = "ISNULL(<data>)",
 	.read = isnull,
+	.read_max = 2,
 };
 
 static struct ast_custom_function set_function = {
 	.name = "SET",
-	.synopsis = "SET assigns a value to a channel variable",
-	.syntax = "SET(<varname>=[<value>])",
 	.read = set,
+	.read2 = set2,
 };
 
 static struct ast_custom_function exists_function = {
 	.name = "EXISTS",
-	.synopsis = "Existence Test: Returns 1 if exists, 0 otherwise",
-	.syntax = "EXISTS(<data>)",
 	.read = exists,
+	.read_max = 2,
 };
 
 static struct ast_custom_function if_function = {
 	.name = "IF",
-	.synopsis =
-		"Conditional: Returns the data following '?' if true, else the data following ':'",
-	.syntax = "IF(<expr>?[<true>][:<false>])",
 	.read = acf_if,
 };
 
 static struct ast_custom_function if_time_function = {
 	.name = "IFTIME",
-	.synopsis =
-		"Temporal Conditional: Returns the data following '?' if true, else the data following ':'",
-	.syntax = "IFTIME(<timespec>?[<true>][:<false>])",
 	.read = iftime,
 };
 
 static struct ast_custom_function import_function = {
 	.name = "IMPORT",
-	.synopsis =
-		"Retrieve the value of a variable from another channel\n",
-	.syntax = "IMPORT(channel,variable)",
-	.read = acf_import,
+	.read = import_read,
+	.read2 = import_read2,
 };
 
 static int unload_module(void)

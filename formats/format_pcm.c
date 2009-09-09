@@ -83,13 +83,16 @@ static struct ast_frame *pcm_read(struct ast_filestream *s, int *whennext)
 	s->fr.subclass = s->fmt->format;
 	s->fr.mallocd = 0;
 	AST_FRAME_SET_BUFFER(&s->fr, s->buf, AST_FRIENDLY_OFFSET, BUF_SIZE);
-	if ((res = fread(s->fr.data, 1, s->fr.datalen, s->f)) < 1) {
+	if ((res = fread(s->fr.data.ptr, 1, s->fr.datalen, s->f)) < 1) {
 		if (res)
 			ast_log(LOG_WARNING, "Short read (%d) (%s)!\n", res, strerror(errno));
 		return NULL;
 	}
 	s->fr.datalen = res;
-	*whennext = s->fr.samples = res;
+	if (s->fmt->format == AST_FORMAT_G722)
+		*whennext = s->fr.samples = res * 2;
+	else
+		*whennext = s->fr.samples = res;
 	return &s->fr;
 }
 
@@ -206,7 +209,7 @@ static int pcm_write(struct ast_filestream *fs, struct ast_frame *f)
 	}
 #endif	/* REALTIME_WRITE */
 	
-	if ((res = fwrite(f->data, 1, f->datalen, fs->f)) != f->datalen) {
+	if ((res = fwrite(f->data.ptr, 1, f->datalen, fs->f)) != f->datalen) {
 		ast_log(LOG_WARNING, "Bad write (%d/%d): %s\n", res, f->datalen, strerror(errno));
 		return -1;
 	}
@@ -268,9 +271,10 @@ static int check_header(FILE *f)
 	if (magic != (uint32_t) AU_MAGIC) {
 		ast_log(LOG_WARNING, "Bad magic: 0x%x\n", magic);
 	}
-/*	hdr_size = ltohl(header[AU_HDR_HDR_SIZE_OFF]);
-	if (hdr_size < AU_HEADER_SIZE)*/
-	hdr_size = AU_HEADER_SIZE;
+	hdr_size = ltohl(header[AU_HDR_HDR_SIZE_OFF]);
+	if (hdr_size < AU_HEADER_SIZE) {
+		hdr_size = AU_HEADER_SIZE;
+	}
 /*	data_size = ltohl(header[AU_HDR_DATA_SIZE_OFF]); */
 	encoding = ltohl(header[AU_HDR_ENCODING_OFF]);
 	if (encoding != AU_ENC_8BIT_ULAW) {
@@ -367,24 +371,32 @@ static int au_rewrite(struct ast_filestream *s, const char *comment)
 static int au_seek(struct ast_filestream *fs, off_t sample_offset, int whence)
 {
 	off_t min, max, cur;
-	long offset = 0, samples;
-	
-	samples = sample_offset;
+	long offset = 0, bytes;
+
+	if (fs->fmt->format == AST_FORMAT_G722)
+		bytes = sample_offset / 2;
+	else
+		bytes = sample_offset;
+
 	min = AU_HEADER_SIZE;
 	cur = ftello(fs->f);
 	fseek(fs->f, 0, SEEK_END);
 	max = ftello(fs->f);
+
 	if (whence == SEEK_SET)
-		offset = samples + min;
+		offset = bytes + min;
 	else if (whence == SEEK_CUR || whence == SEEK_FORCECUR)
-		offset = samples + cur;
+		offset = bytes + cur;
 	else if (whence == SEEK_END)
-		offset = max - samples;
-        if (whence != SEEK_FORCECUR) {
+		offset = max - bytes;
+
+	if (whence != SEEK_FORCECUR) {
 		offset = (offset > max) ? max : offset;
 	}
+
 	/* always protect the header space. */
 	offset = (offset < min) ? min : offset;
+
 	return fseeko(fs->f, offset, SEEK_SET);
 }
 
@@ -403,7 +415,7 @@ static off_t au_tell(struct ast_filestream *fs)
 
 static const struct ast_format alaw_f = {
 	.name = "alaw",
-	.exts = "alaw|al",
+	.exts = "alaw|al|alw",
 	.format = AST_FORMAT_ALAW,
 	.write = pcm_write,
 	.seek = pcm_seek,
@@ -420,7 +432,7 @@ static const struct ast_format alaw_f = {
 
 static const struct ast_format pcm_f = {
 	.name = "pcm",
-	.exts = "pcm|ulaw|ul|mu",
+	.exts = "pcm|ulaw|ul|mu|ulw",
 	.format = AST_FORMAT_ULAW,
 	.write = pcm_write,
 	.seek = pcm_seek,
@@ -458,13 +470,13 @@ static const struct ast_format au_f = {
 
 static int load_module(void)
 {
-	int index;
+	int i;
 
 	/* XXX better init ? */
-	for (index = 0; index < (sizeof(ulaw_silence) / sizeof(ulaw_silence[0])); index++)
-		ulaw_silence[index] = AST_LIN2MU(0);
-	for (index = 0; index < (sizeof(alaw_silence) / sizeof(alaw_silence[0])); index++)
-		alaw_silence[index] = AST_LIN2A(0);
+	for (i = 0; i < ARRAY_LEN(ulaw_silence); i++)
+		ulaw_silence[i] = AST_LIN2MU(0);
+	for (i = 0; i < ARRAY_LEN(alaw_silence); i++)
+		alaw_silence[i] = AST_LIN2A(0);
 
 	if ( ast_format_register(&pcm_f)
 		|| ast_format_register(&alaw_f)

@@ -38,16 +38,16 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 static unsigned char mu2a[256];
 static unsigned char a2mu[256];
 
-/* Sample frame data (Mu data is okay) */
-
-#include "ulaw_slin_ex.h"
+/* Sample frame data */
+#include "ex_ulaw.h"
+#include "ex_alaw.h"
 
 /*! \brief convert frame data and store into the buffer */
 static int alawtoulaw_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 {
 	int x = f->samples;
-	unsigned char *src = f->data;
-	unsigned char *dst = (unsigned char *)pvt->outbuf + pvt->samples;
+	unsigned char *src = f->data.ptr;
+	unsigned char *dst = pvt->outbuf.uc + pvt->samples;
 
 	pvt->samples += x;
 	pvt->datalen += x;
@@ -62,8 +62,8 @@ static int alawtoulaw_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 static int ulawtoalaw_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 {
 	int x = f->samples;
-	unsigned char *src = f->data;
-	unsigned char *dst = (unsigned char *)pvt->outbuf + pvt->samples;
+	unsigned char *src = f->data.ptr;
+	unsigned char *dst = pvt->outbuf.uc + pvt->samples;
 
 	pvt->samples += x;
 	pvt->datalen += x;
@@ -74,43 +74,12 @@ static int ulawtoalaw_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 	return 0;
 }
 
-/*
- * alawToLin_Sample. Just random data, somehow...
- */
-static struct ast_frame *alawtoulaw_sample(void)
-{
-	static struct ast_frame f;
-	f.frametype = AST_FRAME_VOICE;
-	f.subclass = AST_FORMAT_ALAW;
-	f.datalen = sizeof(ulaw_slin_ex);
-	f.samples = sizeof(ulaw_slin_ex);
-	f.mallocd = 0;
-	f.offset = 0;
-	f.src = __PRETTY_FUNCTION__;
-	f.data = ulaw_slin_ex; /* XXX what ? */
-	return &f;
-}
-
-static struct ast_frame *ulawtoalaw_sample(void)
-{
-	static struct ast_frame f;
-	f.frametype = AST_FRAME_VOICE;
-	f.subclass = AST_FORMAT_ULAW;
-	f.datalen = sizeof(ulaw_slin_ex);
-	f.samples = sizeof(ulaw_slin_ex);
-	f.mallocd = 0;
-	f.offset = 0;
-	f.src = __PRETTY_FUNCTION__;
-	f.data = ulaw_slin_ex;
-	return &f;
-}
-
 static struct ast_translator alawtoulaw = {
 	.name = "alawtoulaw",
 	.srcfmt = AST_FORMAT_ALAW,
 	.dstfmt = AST_FORMAT_ULAW,
 	.framein = alawtoulaw_framein,
-	.sample = alawtoulaw_sample,
+	.sample = alaw_sample,
 	.buffer_samples = BUFFER_SAMPLES,
 	.buf_size = BUFFER_SAMPLES,
 };
@@ -120,7 +89,7 @@ static struct ast_translator ulawtoalaw = {
 	.srcfmt = AST_FORMAT_ULAW,
 	.dstfmt = AST_FORMAT_ALAW,
 	.framein = ulawtoalaw_framein,
-	.sample = ulawtoalaw_sample,
+	.sample = ulaw_sample,
 	.buffer_samples = BUFFER_SAMPLES,
 	.buf_size = BUFFER_SAMPLES,
 };

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 # vim:textwidth=80:tabstop=4:shiftwidth=4:smartindent:autoindent
 
 CLIARGS="$*"				# Grab any args passed to safe_asterisk
@@ -12,7 +12,8 @@ MACHINE=`hostname`			# To specify which machine has crashed when getting the mai
 DUMPDROP=/tmp
 SLEEPSECS=4
 ASTSBINDIR=__ASTERISK_SBIN_DIR__
-ASTPIDFILE=__ASTERISK_VARRUN_DIR__/asterisk.pid
+ASTVARRUNDIR=__ASTERISK_VARRUN_DIR__
+ASTPIDFILE=${ASTVARRUNDIR}/asterisk.pid
 
 # comment this line out to have this script _not_ kill all mpg123 processes when
 # asterisk exits
@@ -24,11 +25,15 @@ PRIORITY=0
 # set system filemax on supported OSes if this variable is set
 # SYSMAXFILES=262144
 
+# Asterisk allows full permissions by default, so set a umask, if you want
+# restricted permissions.
+#UMASK=022
+
 # set max files open with ulimit. On linux systems, this will be automatically
 # set to the system's maximum files open devided by two, if not set here.
 # MAXFILES=32768
 
-function message() {
+message() {
 	echo "$1" >&2
 	if [ "$SYSLOG" != "" ]; then
 	    logger -p "${SYSLOG}.warn" -t safe_asterisk[$$] "$1"
@@ -37,6 +42,14 @@ function message() {
 	    echo "safe_asterisk[$$]: $1" >> "$LOGFILE"
 	fi
 }
+
+# Check if Asterisk is already running.  If it is, then bug out, because
+# starting safe_asterisk when Asterisk is running is very bad.
+VERSION=`${ASTSBINDIR}/asterisk -rx 'core show version'`
+if [ "`echo $VERSION | cut -c 1-8`" = "Asterisk" ]; then
+	message "Asterisk is already running.  $0 will exit now."
+	exit 1
+fi
 
 # since we're going to change priority and open files limits, we need to be
 # root. if running asterisk as other users, pass that to asterisk on the command
@@ -49,7 +62,7 @@ then
 	PRIORITY=0
 	message "safe_asterisk was started by `id -n` (uid `id -u`)."
 else
-	if `echo $OSTYPE | grep linux 2>&1 > /dev/null `
+	if `uname -s | grep Linux 2>&1 > /dev/null `
 	then
 		# maximum number of open files is set to the system maximum divided by two if
 		# MAXFILES is not set.
@@ -62,7 +75,7 @@ else
 			fi
 		fi
 		SYSCTL_MAXFILES="fs.file-max"
-	elif `echo $OSTYPE | grep darwin 2>&1 > /dev/null `
+	elif `uname -s | grep Darwin 2>&1 > /dev/null `
 	then
 		SYSCTL_MAXFILES="kern.maxfiles"
 	fi
@@ -79,6 +92,15 @@ else
 	# set the process's filemax to whatever set above
 	ulimit -n $MAXFILES
 
+	if [ ! -d ${ASTVARRUNDIR} ]; then
+		mkdir -p ${ASTVARRUNDIR}
+		chmod 770 ${ASTVARRUNDIR}
+	fi
+
+fi
+
+if test "x$UMASK" != "x"; then
+	umask $UMASK
 fi
 
 #
@@ -121,7 +143,7 @@ trap '' PIPE
 if [ -d /etc/asterisk/startup.d ]; then
 	for script in /etc/asterisk/startup.d/*.sh; do
 		if [ -x ${script} ]; then
-			source ${script}
+			. ${script}
 		fi
 	done
 fi
@@ -133,7 +155,7 @@ run_asterisk()
 		if [ "$TTY" != "" ]; then
 			cd /tmp
 			stty sane < /dev/${TTY}
-			nice -n $PRIORITY ${ASTSBINDIR}/asterisk -f ${CLIARGS} ${ASTARGS} >& /dev/${TTY} < /dev/${TTY}
+			nice -n $PRIORITY ${ASTSBINDIR}/asterisk -f ${CLIARGS} ${ASTARGS} > /dev/${TTY} 2>&1 < /dev/${TTY}
 		else
 			cd /tmp
 			nice -n $PRIORITY ${ASTSBINDIR}/asterisk -f ${CLIARGS} ${ASTARGS}
@@ -145,7 +167,7 @@ run_asterisk()
 			message "Asterisk shutdown normally."
 			exit 0
 		elif [ $EXITSTATUS -gt 128 ]; then
-			let EXITSIGNAL=EXITSTATUS-128
+			EXITSIGNAL=EXITSTATUS-128
 			echo "Asterisk exited on signal $EXITSIGNAL."
 			if [ "$NOTIFY" != "" ]; then
 				echo "Asterisk on $MACHINE exited on signal $EXITSIGNAL.  Might want to take a peek." | \
@@ -176,7 +198,7 @@ run_asterisk()
 		sleep $SLEEPSECS
 		if [ $KILLALLMPG123 ]
 		then
-			killall -9 mpg123
+			pkill -9 mpg123
 		fi
 	done
 }

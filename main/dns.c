@@ -156,7 +156,7 @@ struct dn_answer {
 	unsigned short class;
 	unsigned int ttl;
 	unsigned short size;
-} __attribute__ ((__packed__));
+} __attribute__((__packed__));
 
 static int skip_name(unsigned char *s, int len)
 {
@@ -189,6 +189,7 @@ static int dns_parse_answer(void *context,
 	unsigned char *fullanswer = answer;
 	struct dn_answer *ans;
 	dns_HEADER *h;
+	int ret = 0;
 	int res;
 	int x;
 
@@ -234,14 +235,13 @@ static int dns_parse_answer(void *context,
 					ast_log(LOG_WARNING, "Failed to parse result\n");
 					return -1;
 				}
-				if (res > 0)
-					return 1;
+				ret = 1;
 			}
 		}
 		answer += ntohs(ans->size);
 		len -= ntohs(ans->size);
 	}
-	return 0;
+	return ret;
 }
 
 #ifndef HAVE_RES_NINIT
@@ -263,6 +263,7 @@ int ast_search_dns(void *context,
 	int res, ret = -1;
 
 #ifdef HAVE_RES_NINIT
+	memset(&dnsstate, 0, sizeof(dnsstate));
 	res_ninit(&dnsstate);
 	res = res_nsearch(&dnsstate, dname, class, type, answer, sizeof(answer));
 #else
@@ -274,12 +275,10 @@ int ast_search_dns(void *context,
 		if ((res = dns_parse_answer(context, class, type, answer, res, callback)) < 0) {
 			ast_log(LOG_WARNING, "DNS Parse error for %s\n", dname);
 			ret = -1;
-		}
-		else if (res == 0) {
+		} else if (res == 0) {
 			ast_debug(1, "No matches found in DNS for %s\n", dname);
 			ret = 0;
-		}
-		else
+		} else
 			ret = 1;
 	}
 #ifdef HAVE_RES_NINIT
@@ -289,7 +288,7 @@ int ast_search_dns(void *context,
 	res_nclose(&dnsstate);
 #endif
 #else
-#ifndef __APPLE__
+#ifdef HAVE_RES_CLOSE
 	res_close();
 #endif
 	ast_mutex_unlock(&res_lock);

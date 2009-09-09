@@ -39,46 +39,47 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
 #include "asterisk/translate.h"
+#include "asterisk/app.h"
 
 #define LOCAL_MPG_123 "/usr/local/bin/mpg123"
 #define MPG_123 "/usr/bin/mpg123"
 
+/*** DOCUMENTATION
+	<application name="MP3Player" language="en_US">
+		<synopsis>
+			Play an MP3 file or stream.
+		</synopsis>
+		<syntax>
+			<parameter name="Location" required="true">
+				<para>Location of the file to be played.
+				(argument passed to mpg123)</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Executes mpg123 to play the given location, which typically would be a filename or a URL.
+			User can exit by pressing any key on the dialpad, or by hanging up.</para>
+		</description>
+	</application>
+
+ ***/
 static char *app = "MP3Player";
 
-static char *synopsis = "Play an MP3 file or stream";
-
-static char *descrip = 
-"  MP3Player(location): Executes mpg123 to play the given location,\n"
-"which typically would be a filename or a URL. User can exit by pressing\n"
-"any key on the dialpad, or by hanging up."; 
-
-
-static int mp3play(char *filename, int fd)
+static int mp3play(const char *filename, int fd)
 {
 	int res;
-	int x;
-	sigset_t fullset, oldset;
 
-	sigfillset(&fullset);
-	pthread_sigmask(SIG_BLOCK, &fullset, &oldset);
-
-	res = fork();
+	res = ast_safe_fork(0);
 	if (res < 0) 
 		ast_log(LOG_WARNING, "Fork failed\n");
 	if (res) {
-		pthread_sigmask(SIG_SETMASK, &oldset, NULL);
 		return res;
 	}
 	if (ast_opt_high_priority)
 		ast_set_priority(0);
-	signal(SIGPIPE, SIG_DFL);
-	pthread_sigmask(SIG_UNBLOCK, &fullset, NULL);
 
 	dup2(fd, STDOUT_FILENO);
-	for (x=STDERR_FILENO + 1;x<256;x++) {
-		if (x != STDOUT_FILENO)
-			close(x);
-	}
+	ast_close_fds_above_n(STDERR_FILENO);
+
 	/* Execute mpg123, but buffer if it's a net connection */
 	if (!strncasecmp(filename, "http://", 7)) {
 		/* Most commonly installed in /usr/local/bin */
@@ -96,7 +97,8 @@ static int mp3play(char *filename, int fd)
 		/* As a last-ditch effort, try to use PATH */
 	    execlp("mpg123", "mpg123", "-q", "-s", "-f", "8192", "--mono", "-r", "8000", filename, (char *)NULL);
 	}
-	ast_log(LOG_WARNING, "Execute of mpg123 failed\n");
+	/* Can't use ast_log since FD's are closed */
+	fprintf(stderr, "Execute of mpg123 failed\n");
 	_exit(0);
 }
 
@@ -106,7 +108,7 @@ static int timed_read(int fd, void *data, int datalen, int timeout)
 	struct pollfd fds[1];
 	fds[0].fd = fd;
 	fds[0].events = POLLIN;
-	res = poll(fds, 1, timeout);
+	res = ast_poll(fds, 1, timeout);
 	if (res < 1) {
 		ast_log(LOG_NOTICE, "Poll timed out/errored out with %d\n", res);
 		return -1;
@@ -115,7 +117,7 @@ static int timed_read(int fd, void *data, int datalen, int timeout)
 	
 }
 
-static int mp3_exec(struct ast_channel *chan, void *data)
+static int mp3_exec(struct ast_channel *chan, const char *data)
 {
 	int res=0;
 	int fds[2];
@@ -150,8 +152,8 @@ static int mp3_exec(struct ast_channel *chan, void *data)
 		return -1;
 	}
 	
-	res = mp3play((char *)data, fds[1]);
-	if (!strncasecmp((char *)data, "http://", 7)) {
+	res = mp3play(data, fds[1]);
+	if (!strncasecmp(data, "http://", 7)) {
 		timeout = 10000;
 	}
 	/* Wait 1000 ms first */
@@ -175,7 +177,7 @@ static int mp3_exec(struct ast_channel *chan, void *data)
 					myf.f.src = __PRETTY_FUNCTION__;
 					myf.f.delivery.tv_sec = 0;
 					myf.f.delivery.tv_usec = 0;
-					myf.f.data = myf.frdata;
+					myf.f.data.ptr = myf.frdata;
 					if (ast_write(chan, &myf.f) < 0) {
 						res = -1;
 						break;
@@ -229,7 +231,7 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	return ast_register_application(app, mp3_exec, synopsis, descrip);
+	return ast_register_application_xml(app, mp3_exec);
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Silly MP3 Application");

@@ -24,9 +24,11 @@ ifneq ($(findstring $(OSARCH), mingw32 cygwin ),)
 endif
 
 clean::
-	rm -f ael/*.o
+	rm -f ael/*.o ael/*.i
 
 dundi-parser.o: dundi-parser.h
-dundi-parser.o: ASTCFLAGS+=-I.
+dundi-parser.o: _ASTCFLAGS+=-I.
+
+pbx_gtkconsole.o: _ASTCFLAGS+=-Wno-strict-prototypes
 
 $(if $(filter pbx_dundi,$(EMBEDDED_MODS)),modules.link,pbx_dundi.so): dundi-parser.o

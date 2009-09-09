@@ -20,6 +20,9 @@ Paul Bagyenda, Digital Solutions - for initial Voicetronix driver development
 John Todd, TalkPlus, Inc.  and JR Richardson, Ntegrated Solutions. - for funding
     the development of SIP Session Timers support.
 
+Omnitor AB, Gunnar Hellström, for funding work with videocaps, T.140 RED,
+originate with video/text and many more contributions.
+
 === WISHLIST CONTRIBUTERS ===
 Jeremy McNamara - SpeeX support
 Nick Seraphin - RDNIS support
@@ -189,6 +192,18 @@ Sergey Tamkovich - Realtime support for MusicOnHold, store and destroy realtime 
 	- See http://voip-info.org/users/view/sergee
 	serg(AT)voipsolutions.ru
 
+Klaus Darillon - the SIPremoveHeader function in chan_sip
+
+Moises Silva (moy) - for writing LibOpenR2, and providing support for it in chan_dahdi
+     moises.silva(AT)gmail.com
+
+Eliel C. Sardanons - XML documentation implementation, and various other contributions
+     eliels(AT)gmail.com
+
+Sean Bright - Snom call pickup, newt interface for menuselect, cdr_tds rewrite,
+	countless other improvements, fixes, and good ideas.
+	sean(AT)malleable.com
+
 === OTHER CONTRIBUTIONS ===
 John Todd - Monkey sounds and associated teletorture prompt
 Michael Jerris - bug marshaling
@@ -198,7 +213,7 @@ Brian M. Clapper - poll.c emulation
 	This product includes software developed by Brian M. Clapper <bmc(AT)clapper.org>
 
 === HOLD MUSIC ===
-Music provided by www.freeplaymusic.com
+Music provided by www.opsound.org
 
 === OTHER SOURCE CODE IN ASTERISK ===
 Asterisk uses libedit, the lightweight readline replacement from NetBSD.

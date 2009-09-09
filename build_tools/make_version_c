@@ -1,9 +1,9 @@
 #!/bin/sh
-if [ ! -f ../.flavor ]; then
+if [ ! -f .flavor ]; then
     EXTRA=""
 else
-    aadkver=`cat ../.version`
-    aadkflavor=`cat ../.flavor`
+    aadkver=`cat .version`
+    aadkflavor=`cat .flavor`
     EXTRA=" (${aadkflavor} ${aadkver})"
 fi
 cat << END
@@ -14,7 +14,7 @@ cat << END
 
 #include "asterisk.h"
 
-#include "asterisk/version.h"
+#include "asterisk/ast_version.h"
 
 static const char asterisk_version[] = "${ASTERISKVERSION}${EXTRA}";
 

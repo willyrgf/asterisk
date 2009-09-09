@@ -69,6 +69,8 @@ struct grab_x11_desc {
 	struct fbuf_t	b;		/* geometry and pointer into the XImage */
 };
 
+static void *grab_x11_close(void *desc);	/* forward declaration */
+
 /*! \brief open the grabber.
  * We use the special name 'X11' to indicate this grabber.
  */
@@ -79,7 +81,8 @@ static void *grab_x11_open(const char *name, struct fbuf_t *geom, int fps)
 	struct grab_x11_desc *v;
 	struct fbuf_t *b;
 
-	if (strcasecmp(name, "X11"))
+	/* all names starting with X11 identify this grabber */
+	if (strncasecmp(name, "X11", 3))
 		return NULL;	/* not us */
 	v = ast_calloc(1, sizeof(*v));
 	if (v == NULL)
@@ -126,12 +129,7 @@ static void *grab_x11_open(const char *name, struct fbuf_t *geom, int fps)
 	return v;
 
 error:
-	/* XXX maybe XDestroy (v->image) ? */
-	if (v->dpy)
-		XCloseDisplay(v->dpy);
-	v->dpy = NULL;
-	ast_free(v);
-	return NULL;
+	return grab_x11_close(v);
 }
 
 static struct fbuf_t *grab_x11_read(void *desc)
@@ -169,7 +167,8 @@ static void *grab_x11_close(void *desc)
 {
 	struct grab_x11_desc *v = desc;
 
-	XCloseDisplay(v->dpy);
+	if (v->dpy)
+		XCloseDisplay(v->dpy);
 	v->dpy = NULL;
 	v->image = NULL;
 	ast_free(v);
@@ -205,6 +204,9 @@ static void *grab_v4l1_open(const char *dev, struct fbuf_t *geom, int fps)
 	struct grab_v4l1_desc *v;
 	struct fbuf_t *b;
 
+	/* name should be something under /dev/ */
+	if (strncmp(dev, "/dev/", 5)) 
+		return NULL;
 	fd = open(dev, O_RDONLY | O_NONBLOCK);
 	if (fd < 0) {
 		ast_log(LOG_WARNING, "error opening camera %s\n", dev);

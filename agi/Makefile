@@ -25,6 +25,8 @@ endif
 
 include $(ASTTOPDIR)/Makefile.rules
 
+_ASTCFLAGS+=-DSTANDALONE
+
 all: $(AGIS)
 
 strcompat.c: ../main/strcompat.c
@@ -43,8 +45,7 @@ uninstall:
 
 clean:
 	rm -f *.so *.o look eagi-test eagi-sphinx-test
-	rm -f .*.o.d .*.oo.d
-	rm -f *.s *.i
+	rm -f .*.d *.s *.i
 	rm -f strcompat.c
 
 ifneq ($(wildcard .*.d),)

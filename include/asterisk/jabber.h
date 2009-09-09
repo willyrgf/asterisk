@@ -49,12 +49,12 @@
 #include <openssl/err.h>
 #define TRY_SECURE 2
 #define SECURE 4
+
+#endif /* HAVE_OPENSSL */
 /* file is read by blocks with this size */
 #define NET_IO_BUF_SIZE 4096
 /* Return value for timeout connection expiration */
 #define IKS_NET_EXPIRED 12
-
-#endif /* HAVE_OPENSSL */
 
 #include <iksemel.h>
 #include "asterisk/astobj.h"
@@ -126,7 +126,7 @@ struct aji_buddy {
 	char channel[160];
 	struct aji_resource *resources;
 	enum aji_btype btype;
-	unsigned int flags;
+	struct ast_flags flags;
 };
 
 struct aji_buddy_container {
@@ -167,7 +167,7 @@ struct aji_client {
 	int timeout;
 	int message_timeout;
 	int authorized;
-	unsigned int flags;
+	struct ast_flags flags;
 	int component; /* 0 client,  1 component */
 	struct aji_buddy_container buddies;
 	AST_LIST_HEAD(messages,aji_message) messages;

@@ -36,11 +36,83 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/module.h"
 #include "asterisk/indications.h"
 
-enum {
+/*** DOCUMENTATION
+	<application name="Read" language="en_US">
+		<synopsis>
+			Read a variable.
+		</synopsis>
+		<syntax>
+			<parameter name="variable" required="true">
+				<para>The input digits will be stored in the given <replaceable>variable</replaceable>
+				name.</para>
+			</parameter>
+			<parameter name="filenames" argsep="&amp;">
+				<argument name="filename" required="true">
+					<para>file(s) to play before reading digits or tone with option i</para>
+				</argument>
+				<argument name="filename2" multiple="true" />
+			</parameter>
+			<parameter name="maxdigits">
+				<para>Maximum acceptable number of digits. Stops reading after
+				<replaceable>maxdigits</replaceable> have been entered (without
+				requiring the user to press the <literal>#</literal> key).</para>
+				<para>Defaults to <literal>0</literal> - no limit - wait for the
+				user press the <literal>#</literal> key. Any value below
+				<literal>0</literal> means the same. Max accepted value is
+				<literal>255</literal>.</para>
+			</parameter>
+			<parameter name="options">
+				<optionlist>
+					<option name="s">
+						<para>to return immediately if the line is not up.</para>
+					</option>
+					<option name="i">
+						<para>to play  filename as an indication tone from your
+						<filename>indications.conf</filename>.</para>
+					</option>
+					<option name="n">
+						<para>to read digits even if the line is not up.</para>
+					</option>
+				</optionlist>
+			</parameter>
+			<parameter name="attempts">
+				<para>If greater than <literal>1</literal>, that many
+				<replaceable>attempts</replaceable> will be made in the
+				event no data is entered.</para>
+			</parameter>
+			<parameter name="timeout">
+				<para>The number of seconds to wait for a digit response. If greater
+				than <literal>0</literal>, that value will override the default timeout.
+				Can be floating point.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Reads a #-terminated string of digits a certain number of times from the
+			user in to the given <replaceable>variable</replaceable>.</para>
+			<para>This application sets the following channel variable upon completion:</para>
+			<variablelist>
+				<variable name="READSTATUS">
+					<para>This is the status of the read operation.</para>
+					<value name="OK" />
+					<value name="ERROR" />
+					<value name="HANGUP" />
+					<value name="INTERRUPTED" />
+					<value name="SKIPPED" />
+					<value name="TIMEOUT" />
+				</variable>
+			</variablelist>
+		</description>
+		<see-also>
+			<ref type="application">SendDTMF</ref>
+		</see-also>
+	</application>
+ ***/
+
+enum read_option_flags {
 	OPT_SKIP = (1 << 0),
 	OPT_INDICATION = (1 << 1),
 	OPT_NOANSWER = (1 << 2),
-} read_option_flags;
+};
 
 AST_APP_OPTIONS(read_app_options, {
 	AST_APP_OPTION('s', OPT_SKIP),
@@ -50,35 +122,7 @@ AST_APP_OPTIONS(read_app_options, {
 
 static char *app = "Read";
 
-static char *synopsis = "Read a variable";
-
-static char *descrip = 
-"  Read(variable[,filename[&filename2...]][,maxdigits][,option][,attempts][,timeout])\n\n"
-"Reads a #-terminated string of digits a certain number of times from the\n"
-"user in to the given variable.\n"
-"  filename   -- file(s) to play before reading digits or tone with option i\n"
-"  maxdigits  -- maximum acceptable number of digits. Stops reading after\n"
-"                maxdigits have been entered (without requiring the user to\n"
-"                press the '#' key).\n"
-"                Defaults to 0 - no limit - wait for the user press the '#' key.\n"
-"                Any value below 0 means the same. Max accepted value is 255.\n"
-"  option     -- options are 's' , 'i', 'n'\n"
-"                's' to return immediately if the line is not up,\n"
-"                'i' to play  filename as an indication tone from your indications.conf\n"
-"                'n' to read digits even if the line is not up.\n"
-"  attempts   -- if greater than 1, that many attempts will be made in the \n"
-"                event no data is entered.\n"
-"  timeout    -- The number of seconds to wait for a digit response. If greater\n"
-"                than 0, that value will override the default timeout. Can be floating point.\n"
-"This application sets the following channel variable upon completion:\n"
-"    READSTATUS - This is the status of the read operation.\n"
-"                 Possible values are:\n"
-"                 OK | ERROR | HANGUP | INTERRUPTED | SKIPPED | TIMEOUT\n";
-
-
-#define ast_next_data(instr,ptr,delim) if((ptr=strchr(instr,delim))) { *(ptr) = '\0' ; ptr++;}
-
-static int read_exec(struct ast_channel *chan, void *data)
+static int read_exec(struct ast_channel *chan, const char *data)
 {
 	int res = 0;
 	char tmp[256] = "";
@@ -86,7 +130,7 @@ static int read_exec(struct ast_channel *chan, void *data)
 	int tries = 1, to = 0, x = 0;
 	double tosec;
 	char *argcopy = NULL;
-	struct ind_tone_zone_sound *ts = NULL;
+	struct ast_tone_zone_sound *ts = NULL;
 	struct ast_flags flags = {0};
 	const char *status = "ERROR";
 
@@ -142,7 +186,7 @@ static int read_exec(struct ast_channel *chan, void *data)
 		return 0;
 	}
 	if (ast_test_flag(&flags, OPT_INDICATION)) {
-		if (! ast_strlen_zero(arglist.filename)) {
+		if (!ast_strlen_zero(arglist.filename)) {
 			ts = ast_get_indication_tone(chan->zone, arglist.filename);
 		}
 	}
@@ -162,7 +206,7 @@ static int read_exec(struct ast_channel *chan, void *data)
 			ast_stopstream(chan);
 			if (ts && ts->data[0]) {
 				if (!to)
-					to = chan->pbx ? chan->pbx->rtimeout * 1000 : 6000;
+					to = chan->pbx ? chan->pbx->rtimeoutms : 6000;
 				res = ast_playtones_start(chan, 0, ts->data, 0);
 				for (x = 0; x < maxdigits; ) {
 					res = ast_waitfordigit(chan, to);
@@ -185,11 +229,11 @@ static int read_exec(struct ast_channel *chan, void *data)
 				}
 			} else {
 				res = ast_app_getdata(chan, arglist.filename, tmp, maxdigits, to);
-				if (res == 0)
+				if (res == AST_GETDATA_COMPLETE || res == AST_GETDATA_EMPTY_END_TERMINATED)
 					status = "OK";
-				else if (res == 1)
+				else if (res == AST_GETDATA_TIMEOUT)
 					status = "TIMEOUT";
-				else if (res == 2)
+				else if (res == AST_GETDATA_INTERRUPTED)
 					status = "INTERRUPTED";
 			}
 			if (res > -1) {
@@ -212,6 +256,10 @@ static int read_exec(struct ast_channel *chan, void *data)
 		}
 	}
 
+	if (ts) {
+		ts = ast_tone_zone_sound_unref(ts);
+	}
+
 	if (ast_check_hangup(chan))
 		status = "HANGUP";
 	pbx_builtin_setvar_helper(chan, "READSTATUS", status);
@@ -225,7 +273,7 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	return ast_register_application(app, read_exec, synopsis, descrip);
+	return ast_register_application_xml(app, read_exec);
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Read Variable Application");

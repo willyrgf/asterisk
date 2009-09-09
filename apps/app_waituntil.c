@@ -34,22 +34,46 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
 
-static char *app = "WaitUntil";
-static char *synopsis = "Wait (sleep) until the current time is the given epoch";
-static char *descrip =
-"  WaitUntil(<epoch>): Waits until the given time.  Sets WAITUNTILSTATUS to\n"
-"one of the following values:\n"
-"  OK       Wait succeeded\n"
-"  FAILURE  Invalid argument\n"
-"  HANGUP   Channel hung up before time elapsed\n"
-"  PAST     The time specified was already past\n";
+/*** DOCUMENTATION
+	<application name="WaitUntil" language="en_US">
+		<synopsis>
+			Wait (sleep) until the current time is the given epoch.
+		</synopsis>
+		<syntax>
+			<parameter name="epoch" required="true" />
+		</syntax>
+		<description>
+			<para>Waits until the given <replaceable>epoch</replaceable>.</para>
+			<para>Sets <variable>WAITUNTILSTATUS</variable> to one of the following values:</para>
+			<variablelist>
+				<variable name="WAITUNTILSTATUS">
+					<value name="OK">
+						Wait succeeded.
+					</value>
+					<value name="FAILURE">
+						Invalid argument.
+					</value>
+					<value name="HANGUP">
+						Channel hungup before time elapsed.
+					</value>
+					<value name="PAST">
+						Time specified had already past.
+					</value>
+				</variable>
+			</variablelist>
+		</description>
+	</application>
+ ***/
 
-static int waituntil_exec(struct ast_channel *chan, void *data)
+static char *app = "WaitUntil";
+
+static int waituntil_exec(struct ast_channel *chan, const char *data)
 {
 	int res;
 	double fraction;
+	long seconds;
 	struct timeval future = { 0, };
-	struct timeval tv = ast_tvnow();
+	struct timeval now = ast_tvnow();
 	int msec;
 
 	if (ast_strlen_zero(data)) {
@@ -58,16 +82,17 @@ static int waituntil_exec(struct ast_channel *chan, void *data)
 		return 0;
 	}
 
-	if (sscanf(data, "%ld%lf", (long *)&future.tv_sec, &fraction) == 0) {
+	if (sscanf(data, "%30ld%30lf", &seconds, &fraction) == 0) {
 		ast_log(LOG_WARNING, "WaitUntil called with non-numeric argument\n");
 		pbx_builtin_setvar_helper(chan, "WAITUNTILSTATUS", "FAILURE");
 		return 0;
 	}
 
+	future.tv_sec = seconds;
 	future.tv_usec = fraction * 1000000;
 
-	if ((msec = ast_tvdiff_ms(future, tv)) < 0) {
-		ast_log(LOG_NOTICE, "WaitUntil called in the past (now %ld, arg %ld)\n", (long)tv.tv_sec, (long)future.tv_sec);
+	if ((msec = ast_tvdiff_ms(future, now)) < 0) {
+		ast_log(LOG_NOTICE, "WaitUntil called in the past (now %ld, arg %ld)\n", (long)now.tv_sec, (long)future.tv_sec);
 		pbx_builtin_setvar_helper(chan, "WAITUNTILSTATUS", "PAST");
 		return 0;
 	}
@@ -87,7 +112,7 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	return ast_register_application(app, waituntil_exec, synopsis, descrip);
+	return ast_register_application_xml(app, waituntil_exec);
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Wait until specified time");

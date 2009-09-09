@@ -25,6 +25,10 @@
  * \ingroup codecs
  */
 
+/*** MODULEINFO
+	<defaultenabled>no</defaultenabled>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
@@ -36,10 +40,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "ilbc/iLBC_encode.h"
 #include "ilbc/iLBC_decode.h"
 
-/* Sample frame data */
-#include "slin_ilbc_ex.h"
-#include "ilbc_slin_ex.h"
-
 #define USE_ILBC_ENHANCER	0
 #define ILBC_MS 			30
 /* #define ILBC_MS			20 */
@@ -47,6 +47,10 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define	ILBC_FRAME_LEN	50	/* apparently... */
 #define	ILBC_SAMPLES	240	/* 30ms at 8000 hz */
 #define	BUFFER_SAMPLES	8000
+
+/* Sample frame data */
+#include "asterisk/slin.h"
+#include "ex_ilbc.h"
 
 struct ilbc_coder_pvt {
 	iLBC_Enc_Inst_t enc;
@@ -73,35 +77,6 @@ static int ilbctolin_new(struct ast_trans_pvt *pvt)
 	return 0;
 }
 
-static struct ast_frame *lintoilbc_sample(void)
-{
-	static struct ast_frame f;
-	f.frametype = AST_FRAME_VOICE;
-	f.subclass = AST_FORMAT_SLINEAR;
-	f.datalen = sizeof(slin_ilbc_ex);
-	f.samples = sizeof(slin_ilbc_ex)/2;
-	f.mallocd = 0;
-	f.offset = 0;
-	f.src = __PRETTY_FUNCTION__;
-	f.data = slin_ilbc_ex;
-	return &f;
-}
-
-static struct ast_frame *ilbctolin_sample(void)
-{
-	static struct ast_frame f;
-	f.frametype = AST_FRAME_VOICE;
-	f.subclass = AST_FORMAT_ILBC;
-	f.datalen = sizeof(ilbc_slin_ex);
-	/* All frames are 30 ms long */
-	f.samples = ILBC_SAMPLES;
-	f.mallocd = 0;
-	f.offset = 0;
-	f.src = __PRETTY_FUNCTION__;
-	f.data = ilbc_slin_ex;
-	return &f;
-}
-
 /*! \brief decode a frame and store in outbuf */
 static int ilbctolin_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 {
@@ -110,7 +85,7 @@ static int ilbctolin_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 	/* Assuming there's space left, decode into the current buffer at
 	   the tail location.  Read in as many frames as there are */
 	int x,i;
-	int16_t *dst = (int16_t *)pvt->outbuf;
+	int16_t *dst = pvt->outbuf.i16;
 	float tmpf[ILBC_SAMPLES];
 
 	if (f->datalen == 0) { /* native PLC, set fake f->datalen and clear plc_mode */
@@ -130,7 +105,7 @@ static int ilbctolin_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 			ast_log(LOG_WARNING, "Out of buffer space\n");
 			return -1;
 		}		
-		iLBC_decode(tmpf, plc_mode ? f->data + x : NULL, &tmp->dec, plc_mode);
+		iLBC_decode(tmpf, plc_mode ? f->data.ptr + x : NULL, &tmp->dec, plc_mode);
 		for ( i=0; i < ILBC_SAMPLES; i++)
 			dst[pvt->samples + i] = tmpf[i];
 		pvt->samples += ILBC_SAMPLES;
@@ -148,7 +123,7 @@ static int lintoilbc_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 	/* XXX We should look at how old the rest of our stream is, and if it
 	   is too old, then we should overwrite it entirely, otherwise we can
 	   get artifacts of earlier talk that do not belong */
-	memcpy(tmp->buf + pvt->samples, f->data, f->datalen);
+	memcpy(tmp->buf + pvt->samples, f->data.ptr, f->datalen);
 	pvt->samples += f->samples;
 	return 0;
 }
@@ -170,7 +145,7 @@ static struct ast_frame *lintoilbc_frameout(struct ast_trans_pvt *pvt)
 		/* Encode a frame of data */
 		for (i = 0 ; i < ILBC_SAMPLES ; i++)
 			tmpf[i] = tmp->buf[samples + i];
-		iLBC_encode((unsigned char *) pvt->outbuf + datalen, tmpf, &tmp->enc);
+		iLBC_encode( pvt->outbuf.uc + datalen, tmpf, &tmp->enc);
 
 		datalen += ILBC_FRAME_LEN;
 		samples += ILBC_SAMPLES;
@@ -190,7 +165,7 @@ static struct ast_translator ilbctolin = {
 	.dstfmt = AST_FORMAT_SLINEAR,
 	.newpvt = ilbctolin_new,
 	.framein = ilbctolin_framein,
-	.sample = ilbctolin_sample,
+	.sample = ilbc_sample,
 	.desc_size = sizeof(struct ilbc_coder_pvt),
 	.buf_size = BUFFER_SAMPLES * 2,
 	.native_plc = 1,
@@ -203,7 +178,7 @@ static struct ast_translator lintoilbc = {
 	.newpvt = lintoilbc_new,
 	.framein = lintoilbc_framein,
 	.frameout = lintoilbc_frameout,
-	.sample = lintoilbc_sample,
+	.sample = slin8_sample,
 	.desc_size = sizeof(struct ilbc_coder_pvt),
 	.buf_size = (BUFFER_SAMPLES * ILBC_FRAME_LEN + ILBC_SAMPLES - 1) / ILBC_SAMPLES,
 };

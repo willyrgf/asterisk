@@ -35,6 +35,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <math.h>
 #include <ctype.h>
 
+#include "asterisk/logger.h"
 #include "asterisk/ulaw.h"
 #include "asterisk/tdd.h"
 #include "asterisk/fskmodem.h"
@@ -99,11 +100,12 @@ struct tdd_state *tdd_new(void)
 	struct tdd_state *tdd;
 	tdd = calloc(1, sizeof(*tdd));
 	if (tdd) {
+#ifdef INTEGER_CALLERID
 		tdd->fskd.ispb = 176;        /* 45.5 baud */
 		/* Set up for 45.5 / 8000 freq *32 to allow ints */
 		tdd->fskd.pllispb  = (int)((8000 * 32 * 2) / 90);
-		tdd->fskd.pllids   = tdd->fskd.pllispb/32;
-                tdd->fskd.pllispb2 = tdd->fskd.pllispb/2;
+		tdd->fskd.pllids   = tdd->fskd.pllispb / 32;
+		tdd->fskd.pllispb2 = tdd->fskd.pllispb / 2;
 		tdd->fskd.hdlc = 0;         /* Async */
 		tdd->fskd.nbit = 5;         /* 5 bits */
 		tdd->fskd.instop = 1;       /* integer rep of 1.5 stop bits */
@@ -115,8 +117,24 @@ struct tdd_state *tdd_new(void)
 		tdd->fskd.state = 0;
 		tdd->pos = 0;
 		tdd->mode = 0;
-		tdd->charnum = 0;
 		fskmodem_init(&tdd->fskd);
+#else
+		tdd->fskd.spb = 176;        /* 45.5 baud */
+		tdd->fskd.hdlc = 0;         /* Async */
+		tdd->fskd.nbit = 5;         /* 5 bits */
+		tdd->fskd.nstop = 1.5;      /* 1.5 stop bits */
+		tdd->fskd.parity = 0;       /* No parity */
+		tdd->fskd.bw=0;             /* Filter 75 Hz */
+		tdd->fskd.f_mark_idx = 0;   /* 1400 Hz */
+		tdd->fskd.f_space_idx = 1;  /* 1800 Hz */
+		tdd->fskd.pcola = 0;        /* No clue */
+		tdd->fskd.cont = 0;         /* Digital PLL reset */
+		tdd->fskd.x0 = 0.0;
+		tdd->fskd.state = 0;
+		tdd->pos = 0;
+		tdd->mode = 2;
+#endif
+		tdd->charnum = 0;
 	} else
 		ast_log(LOG_WARNING, "Out of memory\n");
 	return tdd;
@@ -149,7 +167,7 @@ int tdd_feed(struct tdd_state *tdd, unsigned char *ubuf, int len)
 		return -1;
 	}
 	memcpy(buf, tdd->oldstuff, tdd->oldlen);
-	mylen += tdd->oldlen/2;
+	mylen += tdd->oldlen / 2;
 	for (x = 0; x < len; x++) 
 		buf[x + tdd->oldlen / 2] = AST_MULAW(ubuf[x]);
 	c = res = 0;
@@ -171,7 +189,7 @@ int tdd_feed(struct tdd_state *tdd, unsigned char *ubuf, int len)
 			/* Ignore invalid bytes */
 			if (b > 0x7f)
 				continue;
-			c = tdd_decode_baudot(tdd,b);
+			c = tdd_decode_baudot(tdd, b);
 			if ((c < 1) || (c > 126))
 				continue; /* if not valid */
 			break;
@@ -217,14 +235,14 @@ static inline float tdd_getcarrier(float *cr, float *ci, int bit)
 } while(0)
 
 #define PUT_AUDIO_SAMPLE(y) do { \
-	int index = (short)(rint(8192.0 * (y))); \
-	*(buf++) = AST_LIN2MU(index); \
+	int __pas_idx = (short)(rint(8192.0 * (y))); \
+	*(buf++) = AST_LIN2MU(__pas_idx); \
 	bytes++; \
 } while(0)
 	
 #define PUT_TDD_MARKMS do { \
 	int x; \
-	for (x=0;x<8;x++) \
+	for (x = 0; x < 8; x++) \
 		PUT_AUDIO_SAMPLE(tdd_getcarrier(&cr, &ci, 1)); \
 } while(0)
 
@@ -256,12 +274,14 @@ static inline float tdd_getcarrier(float *cr, float *ci, int bit)
 	PUT_TDD_STOP;	/* Stop bit */ \
 } while(0);	
 
-/*! Generate TDD hold tone */
+/*! Generate TDD hold tone
+ * \param buf Result buffer
+ * \todo How big should this be??? */
 int tdd_gen_holdtone(unsigned char *buf)
 {
-	int bytes=0;
-	float scont=0.0,cr=1.0,ci=0.0;
-	while(scont < tddsb*10.0) {
+	int bytes = 0;
+	float scont = 0.0, cr = 1.0, ci=0.0;
+	while (scont < tddsb * 10.0) {
 		PUT_AUDIO_SAMPLE(tdd_getcarrier(&cr, &ci, 1));
 		scont += 1.0;
 	}
@@ -270,9 +290,9 @@ int tdd_gen_holdtone(unsigned char *buf)
 
 int tdd_generate(struct tdd_state *tdd, unsigned char *buf, const char *str)
 {
-	int bytes=0;
+	int bytes = 0;
 	int i,x;
-	char	c;
+	char c;
 	/*! Baudot letters */
 	static unsigned char lstr[31] = "\000E\nA SIU\rDRJNFCKTZLWHYPQOBG\000MXV";
 	/*! Baudot figures */

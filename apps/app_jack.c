@@ -26,13 +26,17 @@
  * and output jack port so that the audio can be processed through
  * another application, or to play audio from another application.
  *
- * \arg http://www.jackaudio.org/
+ * \extref http://www.jackaudio.org/
+ *
+ * \note To install libresample, check it out of the following repository:
+ * <code>$ svn co http://svn.digium.com/svn/thirdparty/libresample/trunk</code>
  *
  * \ingroup applications
  */
 
 /*** MODULEINFO
 	<depend>jack</depend>
+	<depend>resample</depend>
  ***/
 
 #include "asterisk.h"
@@ -44,16 +48,17 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <jack/jack.h>
 #include <jack/ringbuffer.h>
 
+#include <libresample.h>
+
 #include "asterisk/module.h"
 #include "asterisk/channel.h"
 #include "asterisk/strings.h"
 #include "asterisk/lock.h"
-#include "asterisk/libresample.h"
 #include "asterisk/app.h"
 #include "asterisk/pbx.h"
 #include "asterisk/audiohook.h"
 
-#define RESAMPLE_QUALITY 0
+#define RESAMPLE_QUALITY 1
 
 #define RINGBUFFER_SIZE 16384
 
@@ -65,23 +70,55 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 "    o(<name>) - Connect the input port that gets created to the specified\n" \
 "                jack output port.\n" \
 "    n         - Do not automatically start the JACK server if it is not already\n" \
-"                running.\n"
+"                running.\n" \
+"    c(<name>) - By default, Asterisk will use the channel name for the jack client\n" \
+"                name.  Use this option to specify a custom client name.\n"
+/*** DOCUMENTATION
+	<application name="JACK" language="en_US">
+		<synopsis>
+			Jack Audio Connection Kit
+		</synopsis>
+		<syntax>
+			<parameter name="options" required="false">
+				<optionlist>
+					<option name="s">
+						<argument name="name" required="true">
+							<para>Connect to the specified jack server name</para>
+						</argument>
+					</option>
+					<option name="i">
+						<argument name="name" required="true">
+							<para>Connect the output port that gets created to the specified jack input port</para>
+						</argument>
+					</option>
+					<option name="o">
+						<argument name="name" required="true">
+							<para>Connect the input port that gets created to the specified jack output port</para>
+						</argument>
+					</option>
+					<option name="c">
+						<argument name="name" required="true">
+							<para>By default, Asterisk will use the channel name for the jack client name.</para>
+							<para>Use this option to specify a custom client name.</para>
+						</argument>
+					</option>
+				</optionlist>
+			</parameter>
+		</syntax>
+		<description>
+			<para>When executing this application, two jack ports will be created;
+			one input and one output. Other applications can be hooked up to
+			these ports to access audio coming from, or being send to the channel.</para>
+		</description>
+	</application>
+ ***/
 
-static char *jack_app = "JACK";
-static char *jack_synopsis = 
-"JACK (Jack Audio Connection Kit) Application";
-static char *jack_desc = 
-"JACK([options])\n"
-"  When this application is executed, two jack ports will be created; one input\n"
-"and one output.  Other applications can be hooked up to these ports to access\n"
-"the audio coming from, or being sent to the channel.\n"
-"  Valid options:\n"
-COMMON_OPTIONS
-"";
+static const char jack_app[] = "JACK";
 
 struct jack_data {
 	AST_DECLARE_STRING_FIELDS(
 		AST_STRING_FIELD(server_name);
+		AST_STRING_FIELD(client_name);
 		AST_STRING_FIELD(connect_input_port);
 		AST_STRING_FIELD(connect_output_port);
 	);
@@ -145,8 +182,8 @@ static void log_jack_status(const char *prefix, jack_status_t status)
 		} else
 			ast_str_append(&str, 0, ", %s", jack_status_to_str((1 << i)));
 	}
-	
-	ast_log(LOG_NOTICE, "%s: %s\n", prefix, str->str);
+
+	ast_log(LOG_NOTICE, "%s: %s\n", prefix, ast_str_buffer(str));
 }
 
 static int alloc_resampler(struct jack_data *jack_data, int input)
@@ -165,10 +202,10 @@ static int alloc_resampler(struct jack_data *jack_data, int input)
 
 	/* XXX Hard coded 8 kHz */
 
-	to_srate = input ? 8000.0 : jack_srate; 
+	to_srate = input ? 8000.0 : jack_srate;
 	from_srate = input ? jack_srate : 8000.0;
 
-	resample_factor = input ? &jack_data->input_resample_factor : 
+	resample_factor = input ? &jack_data->input_resample_factor :
 		&jack_data->output_resample_factor;
 
 	if (from_srate == to_srate) {
@@ -183,9 +220,9 @@ static int alloc_resampler(struct jack_data *jack_data, int input)
 	resampler = input ? &jack_data->input_resampler :
 		&jack_data->output_resampler;
 
-	if (!(*resampler = resample_open(RESAMPLE_QUALITY, 
+	if (!(*resampler = resample_open(RESAMPLE_QUALITY,
 		*resample_factor, *resample_factor))) {
-		ast_log(LOG_ERROR, "Failed to open %s resampler\n", 
+		ast_log(LOG_ERROR, "Failed to open %s resampler\n",
 			input ? "input" : "output");
 		return -1;
 	}
@@ -197,9 +234,9 @@ static int alloc_resampler(struct jack_data *jack_data, int input)
  * \brief Handle jack input port
  *
  * Read nframes number of samples from the input buffer, resample it
- * if necessary, and write it into the appropriate ringbuffer. 
+ * if necessary, and write it into the appropriate ringbuffer.
  */
-static void handle_input(void *buf, jack_nframes_t nframes, 
+static void handle_input(void *buf, jack_nframes_t nframes,
 	struct jack_data *jack_data)
 {
 	short s_buf[nframes];
@@ -230,7 +267,7 @@ static void handle_input(void *buf, jack_nframes_t nframes,
 
 			total_out_buf_used += out_buf_used;
 			total_in_buf_used += in_buf_used;
-	
+
 			if (total_out_buf_used == ARRAY_LEN(f_buf)) {
 				ast_log(LOG_ERROR, "Output buffer filled ... need to increase its size, "
 					"nframes '%d', total_out_buf_used '%d'\n", nframes, total_out_buf_used);
@@ -240,7 +277,7 @@ static void handle_input(void *buf, jack_nframes_t nframes,
 
 		for (i = 0; i < total_out_buf_used; i++)
 			s_buf[i] = f_buf[i] * (SHRT_MAX / 1.0);
-		
+
 		write_len = total_out_buf_used * sizeof(int16_t);
 	} else {
 		/* No resampling needed */
@@ -262,7 +299,7 @@ static void handle_input(void *buf, jack_nframes_t nframes,
  * Read nframes number of samples from the ringbuffer and write it out to the
  * output port buffer.
  */
-static void handle_output(void *buf, jack_nframes_t nframes, 
+static void handle_output(void *buf, jack_nframes_t nframes,
 	struct jack_data *jack_data)
 {
 	size_t res, len;
@@ -332,7 +369,7 @@ static struct jack_data *destroy_jack_data(struct jack_data *jack_data)
 		resample_close(jack_data->output_resampler);
 		jack_data->output_resampler = NULL;
 	}
-	
+
 	if (jack_data->input_resampler) {
 		resample_close(jack_data->input_resampler);
 		jack_data->input_resampler = NULL;
@@ -350,13 +387,17 @@ static struct jack_data *destroy_jack_data(struct jack_data *jack_data)
 
 static int init_jack_data(struct ast_channel *chan, struct jack_data *jack_data)
 {
-	const char *chan_name;
+	const char *client_name;
 	jack_status_t status = 0;
 	jack_options_t jack_options = JackNullOption;
 
-	ast_channel_lock(chan);
-	chan_name = ast_strdupa(chan->name);
-	ast_channel_unlock(chan);
+	if (!ast_strlen_zero(jack_data->client_name)) {
+		client_name = jack_data->client_name;
+	} else {
+		ast_channel_lock(chan);
+		client_name = ast_strdupa(chan->name);
+		ast_channel_unlock(chan);
+	}
 
 	if (!(jack_data->output_rb = jack_ringbuffer_create(RINGBUFFER_SIZE)))
 		return -1;
@@ -369,10 +410,10 @@ static int init_jack_data(struct ast_channel *chan, struct jack_data *jack_data)
 
 	if (!ast_strlen_zero(jack_data->server_name)) {
 		jack_options |= JackServerName;
-		jack_data->client = jack_client_open(chan_name, jack_options, &status,
+		jack_data->client = jack_client_open(client_name, jack_options, &status,
 			jack_data->server_name);
 	} else {
-		jack_data->client = jack_client_open(chan_name, jack_options, &status);
+		jack_data->client = jack_client_open(client_name, jack_options, &status);
 	}
 
 	if (status)
@@ -477,7 +518,7 @@ static int queue_voice_frame(struct jack_data *jack_data, struct ast_frame *f)
 	float f_buf[f->samples * 8];
 	size_t f_buf_used = 0;
 	int i;
-	int16_t *s_buf = f->data;
+	int16_t *s_buf = f->data.ptr;
 	size_t res;
 
 	memset(f_buf, 0, sizeof(f_buf));
@@ -499,10 +540,10 @@ static int queue_voice_frame(struct jack_data *jack_data, struct ast_frame *f)
 			int in_buf_used;
 			int out_buf_used;
 
-			out_buf_used = resample_process(jack_data->output_resampler, 
+			out_buf_used = resample_process(jack_data->output_resampler,
 				jack_data->output_resample_factor,
-				&in_buf[total_in_buf_used], ARRAY_LEN(in_buf) - total_in_buf_used, 
-				0, &in_buf_used, 
+				&in_buf[total_in_buf_used], ARRAY_LEN(in_buf) - total_in_buf_used,
+				0, &in_buf_used,
 				&f_buf[total_out_buf_used], ARRAY_LEN(f_buf) - total_out_buf_used);
 
 			if (out_buf_used < 0)
@@ -559,13 +600,13 @@ static int queue_voice_frame(struct jack_data *jack_data, struct ast_frame *f)
  */
 static void handle_jack_audio(struct ast_channel *chan, struct jack_data *jack_data,
 	struct ast_frame *out_frame)
-{	
+{
 	short buf[160];
 	struct ast_frame f = {
 		.frametype = AST_FRAME_VOICE,
 		.subclass = AST_FORMAT_SLINEAR,
 		.src = "JACK",
-		.data = buf,
+		.data.ptr = buf,
 		.datalen = sizeof(buf),
 		.samples = ARRAY_LEN(buf),
 	};
@@ -575,7 +616,7 @@ static void handle_jack_audio(struct ast_channel *chan, struct jack_data *jack_d
 		char *read_buf;
 
 		read_len = out_frame ? out_frame->datalen : sizeof(buf);
-		read_buf = out_frame ? out_frame->data : buf;
+		read_buf = out_frame ? out_frame->data.ptr : buf;
 
 		res = jack_ringbuffer_read_space(jack_data->input_rb);
 
@@ -583,7 +624,7 @@ static void handle_jack_audio(struct ast_channel *chan, struct jack_data *jack_d
 			/* Not enough data ready for another frame, move on ... */
 			if (out_frame) {
 				ast_debug(1, "Sending an empty frame for the JACK_HOOK\n");
-				memset(out_frame->data, 0, out_frame->datalen);
+				memset(out_frame->data.ptr, 0, out_frame->datalen);
 			}
 			break;
 		}
@@ -610,12 +651,15 @@ enum {
 	OPT_INPUT_PORT =     (1 << 1),
 	OPT_OUTPUT_PORT =    (1 << 2),
 	OPT_NOSTART_SERVER = (1 << 3),
+	OPT_CLIENT_NAME =    (1 << 4),
 };
 
 enum {
 	OPT_ARG_SERVER_NAME,
 	OPT_ARG_INPUT_PORT,
 	OPT_ARG_OUTPUT_PORT,
+	OPT_ARG_CLIENT_NAME,
+
 	/* Must be the last element */
 	OPT_ARG_ARRAY_SIZE,
 };
@@ -625,6 +669,7 @@ AST_APP_OPTIONS(jack_exec_options, BEGIN_OPTIONS
 	AST_APP_OPTION_ARG('i', OPT_INPUT_PORT, OPT_ARG_INPUT_PORT),
 	AST_APP_OPTION_ARG('o', OPT_OUTPUT_PORT, OPT_ARG_OUTPUT_PORT),
 	AST_APP_OPTION('n', OPT_NOSTART_SERVER),
+	AST_APP_OPTION_ARG('c', OPT_CLIENT_NAME, OPT_ARG_CLIENT_NAME),
 END_OPTIONS );
 
 static struct jack_data *jack_data_alloc(void)
@@ -633,7 +678,7 @@ static struct jack_data *jack_data_alloc(void)
 
 	if (!(jack_data = ast_calloc(1, sizeof(*jack_data))))
 		return NULL;
-	
+
 	if (ast_string_field_init(jack_data, 32)) {
 		ast_free(jack_data);
 		return NULL;
@@ -664,6 +709,15 @@ static int handle_options(struct jack_data *jack_data, const char *__options_str
 		}
 	}
 
+	if (ast_test_flag(&options, OPT_CLIENT_NAME)) {
+		if (!ast_strlen_zero(option_args[OPT_ARG_CLIENT_NAME]))
+			ast_string_field_set(jack_data, client_name, option_args[OPT_ARG_CLIENT_NAME]);
+		else {
+			ast_log(LOG_ERROR, "A client name must be provided with the c() option\n");
+			return -1;
+		}
+	}
+
 	if (ast_test_flag(&options, OPT_INPUT_PORT)) {
 		if (!ast_strlen_zero(option_args[OPT_ARG_INPUT_PORT]))
 			ast_string_field_set(jack_data, connect_input_port, option_args[OPT_ARG_INPUT_PORT]);
@@ -687,19 +741,14 @@ static int handle_options(struct jack_data *jack_data, const char *__options_str
 	return 0;
 }
 
-static int jack_exec(struct ast_channel *chan, void *data)
+static int jack_exec(struct ast_channel *chan, const char *data)
 {
 	struct jack_data *jack_data;
-	AST_DECLARE_APP_ARGS(args,
-		AST_APP_ARG(options);
-	);
 
 	if (!(jack_data = jack_data_alloc()))
 		return -1;
 
-	args.options = data;
-
-	if (!ast_strlen_zero(args.options) && handle_options(jack_data, args.options)) {
+	if (!ast_strlen_zero(data) && handle_options(jack_data, data)) {
 		destroy_jack_data(jack_data);
 		return -1;
 	}
@@ -763,7 +812,7 @@ static const struct ast_datastore_info jack_hook_ds_info = {
 	.destroy = jack_hook_ds_destroy,
 };
 
-static int jack_hook_callback(struct ast_audiohook *audiohook, struct ast_channel *chan, 
+static int jack_hook_callback(struct ast_audiohook *audiohook, struct ast_channel *chan,
 	struct ast_frame *frame, enum ast_audiohook_direction direction)
 {
 	struct ast_datastore *datastore;
@@ -822,7 +871,7 @@ static int enable_jack_hook(struct ast_channel *chan, char *data)
 	}
 
 	if (ast_strlen_zero(args.mode) || strcasecmp(args.mode, "manipulate")) {
-		ast_log(LOG_ERROR, "'%s' is not a supported mode.  Only manipulate is supported.\n", 
+		ast_log(LOG_ERROR, "'%s' is not a supported mode.  Only manipulate is supported.\n",
 			S_OR(args.mode, "<none>"));
 		goto return_error;
 	}
@@ -836,7 +885,7 @@ static int enable_jack_hook(struct ast_channel *chan, char *data)
 	if (init_jack_data(chan, jack_data))
 		goto return_error;
 
-	if (!(datastore = ast_channel_datastore_alloc(&jack_hook_ds_info, NULL)))
+	if (!(datastore = ast_datastore_alloc(&jack_hook_ds_info, NULL)))
 		goto return_error;
 
 	jack_data->has_audiohook = 1;
@@ -885,14 +934,14 @@ static int disable_jack_hook(struct ast_channel *chan)
 	/* Keep the channel locked while we destroy the datastore, so that we can
 	 * ensure that all of the jack stuff is stopped just in case another frame
 	 * tries to come through the audiohook callback. */
-	ast_channel_datastore_free(datastore);
+	ast_datastore_free(datastore);
 
 	ast_channel_unlock(chan);
 
 	return 0;
 }
 
-static int jack_hook_write(struct ast_channel *chan, const char *cmd, char *data, 
+static int jack_hook_write(struct ast_channel *chan, const char *cmd, char *data,
 	const char *value)
 {
 	int res;
@@ -902,7 +951,7 @@ static int jack_hook_write(struct ast_channel *chan, const char *cmd, char *data
 	else if (!strcasecmp(value, "off"))
 		res = disable_jack_hook(chan);
 	else {
-		ast_log(LOG_ERROR, "'%s' is not a valid value for JACK_HOOK()\n", value);	
+		ast_log(LOG_ERROR, "'%s' is not a valid value for JACK_HOOK()\n", value);
 		res = -1;
 	}
 
@@ -957,8 +1006,9 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	if (ast_register_application(jack_app, jack_exec, jack_synopsis, jack_desc))
+	if (ast_register_application_xml(jack_app, jack_exec)) {
 		return AST_MODULE_LOAD_DECLINE;
+	}
 
 	if (ast_custom_function_register(&jack_hook_function)) {
 		ast_unregister_application(jack_app);

@@ -23,13 +23,14 @@
  * \author Mark Spencer <markster@digium.com>
  */
 
-#ifdef __AST_DEBUG_MALLOC
-
 #include "asterisk.h"
+
+#ifdef __AST_DEBUG_MALLOC
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/paths.h"	/* use ast_config_AST_LOG_DIR */
+#include <stddef.h>
 #include <time.h>
 
 #include "asterisk/cli.h"
@@ -63,14 +64,26 @@ enum func_type {
 
 static FILE *mmlog;
 
+/* NOTE: Be EXTREMELY careful with modifying this structure; the total size of this structure
+   must result in 'automatic' alignment so that the 'fence' field lands exactly at the end of
+   the structure in memory (and thus immediately before the allocated region the fence is
+   supposed to be used to monitor). In other words, we cannot allow the compiler to insert
+   any padding between this structure and anything following it, so add up the sizes of all the
+   fields and compare to sizeof(struct ast_region)... if they don't match, then the compiler
+   is padding the structure and either the fields need to be rearranged to eliminate internal
+   padding, or a dummy field will need to be inserted before the 'fence' field to push it to
+   the end of the actual space it will consume. Note that this must be checked for both 32-bit
+   and 64-bit platforms, as the sizes of pointers and 'size_t' differ on these platforms.
+*/
+
 static struct ast_region {
 	struct ast_region *next;
+	size_t len;
 	char file[64];
 	char func[40];
 	unsigned int lineno;
 	enum func_type which;
 	unsigned int cache;		/* region was allocated as part of a cache pool */
-	size_t len;
 	unsigned int fence;
 	unsigned char data[0];
 } *regions[SOME_PRIME];
@@ -101,6 +114,7 @@ static inline void *__ast_alloc_region(size_t size, const enum func_type which, 
 	if (!(reg = malloc(size + sizeof(*reg) + sizeof(*fence)))) {
 		astmm_log("Memory Allocation Failure - '%d' bytes in function %s "
 			  "at line %d of %s\n", (int) size, func, lineno, file);
+		return NULL;
 	}
 
 	ast_copy_string(reg->file, file, sizeof(reg->file));
@@ -143,9 +157,14 @@ static inline size_t __ast_sizeof_region(void *ptr)
 
 static void __ast_free_region(void *ptr, const char *file, int lineno, const char *func)
 {
-	int hash = HASH(ptr);
+	int hash;
 	struct ast_region *reg, *prev = NULL;
 	unsigned int *fence;
+
+	if (!ptr)
+		return;
+
+	hash = HASH(ptr);
 
 	ast_mutex_lock(&reglock);
 	for (reg = regions[hash]; reg; reg = reg->next) {
@@ -305,7 +324,7 @@ int __ast_vasprintf(char **strp, const char *fmt, va_list ap, const char *file, 
 
 static char *handle_memory_show(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	char *fn = NULL;
+	const char *fn = NULL;
 	struct ast_region *reg;
 	unsigned int x;
 	unsigned int len = 0;
@@ -367,7 +386,7 @@ static char *handle_memory_show(struct ast_cli_entry *e, int cmd, struct ast_cli
 
 static char *handle_memory_show_summary(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	char *fn = NULL;
+	const char *fn = NULL;
 	int x;
 	struct ast_region *reg;
 	unsigned int len = 0;
@@ -462,13 +481,17 @@ static struct ast_cli_entry cli_memory[] = {
 void __ast_mm_init(void)
 {
 	char filename[PATH_MAX];
+	size_t pad = sizeof(struct ast_region) - offsetof(struct ast_region, data);
 
-	ast_cli_register_multiple(cli_memory, sizeof(cli_memory) / sizeof(struct ast_cli_entry));
+	if (pad) {
+		ast_log(LOG_ERROR, "struct ast_region has %d bytes of padding! This must be eliminated for low-fence checking to work properly!\n", (int) pad);
+	}
+
+	ast_cli_register_multiple(cli_memory, ARRAY_LEN(cli_memory));
 	
 	snprintf(filename, sizeof(filename), "%s/mmlog", ast_config_AST_LOG_DIR);
 	
-	if (option_verbose)
-		ast_verbose("Asterisk Malloc Debugger Started (see %s))\n", filename);
+	ast_verb(1, "Asterisk Malloc Debugger Started (see %s))\n", filename);
 	
 	if ((mmlog = fopen(filename, "a+"))) {
 		fprintf(mmlog, "%ld - New session\n", (long)time(NULL));

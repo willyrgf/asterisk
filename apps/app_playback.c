@@ -39,24 +39,49 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/say.h"	/* provides config-file based 'say' functions */
 #include "asterisk/cli.h"
 
+/*** DOCUMENTATION
+	<application name="Playback" language="en_US">
+		<synopsis>
+			Play a file.
+		</synopsis>
+		<syntax>
+			<parameter name="filenames" required="true" argsep="&amp;">
+				<argument name="filename" required="true" />
+				<argument name="filename2" multiple="true" />
+			</parameter>
+			<parameter name="options">
+				<para>Comma separated list of options</para>
+				<optionlist>
+					<option name="skip">
+						<para>Do not play if not answered</para>
+					</option>
+					<option name="noanswer">
+						<para>Playback without answering, otherwise the channel will
+						be answered before the sound is played.</para>
+						<note><para>Not all channel types support playing messages while still on hook.</para></note>
+					</option>
+				</optionlist>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Plays back given filenames (do not put extension of wav/alaw etc).
+			The playback command answer the channel if no options are specified.
+			If the file is non-existant it will fail</para>
+			<para>This application sets the following channel variable upon completion:</para>
+			<variablelist>
+				<variable name="PLAYBACKSTATUS">
+					<para>The status of the playback attempt as a text string.</para>
+					<value name="SUCCESS"/>
+					<value name="FAILED"/>
+				</variable>
+			</variablelist>
+			<para>See Also: Background (application) -- for playing sound files that are interruptible</para>
+			<para>WaitExten (application) -- wait for digits from caller, optionally play music on hold</para>
+		</description>
+	</application>
+ ***/
+
 static char *app = "Playback";
-
-static char *synopsis = "Play a file";
-
-static char *descrip = 
-"  Playback(filename[&filename2...][,option]):  Plays back given filenames (do not put\n"
-"extension). Options may also be included following a comma.\n"
-"The 'skip' option causes the playback of the message to be skipped if the channel\n"
-"is not in the 'up' state (i.e. it hasn't been  answered  yet). If 'skip' is \n"
-"specified, the application will return immediately should the channel not be\n"
-"off hook.  Otherwise, unless 'noanswer' is specified, the channel will\n"
-"be answered before the sound is played. Not all channels support playing\n"
-"messages while still on hook.\n"
-"This application sets the following channel variable upon completion:\n"
-" PLAYBACKSTATUS    The status of the playback attempt as a text string, one of\n"
-"               SUCCESS | FAILED\n"
-;
-
 
 static struct ast_config *say_cfg = NULL;
 /* save the say' api calls.
@@ -65,24 +90,24 @@ static struct ast_config *say_cfg = NULL;
  * 'say load [new|old]' will enable the new or old method, or report status
  */
 static const void *say_api_buf[40];
-static const char *say_old = "old";
-static const char *say_new = "new";
+static const char * const say_old = "old";
+static const char * const say_new = "new";
 
 static void save_say_mode(const void *arg)
 {
 	int i = 0;
 	say_api_buf[i++] = arg;
 
-        say_api_buf[i++] = ast_say_number_full;
-        say_api_buf[i++] = ast_say_enumeration_full;
-        say_api_buf[i++] = ast_say_digit_str_full;
-        say_api_buf[i++] = ast_say_character_str_full;
-        say_api_buf[i++] = ast_say_phonetic_str_full;
-        say_api_buf[i++] = ast_say_datetime;
-        say_api_buf[i++] = ast_say_time;
-        say_api_buf[i++] = ast_say_date;
-        say_api_buf[i++] = ast_say_datetime_from_now;
-        say_api_buf[i++] = ast_say_date_with_format;
+	say_api_buf[i++] = ast_say_number_full;
+	say_api_buf[i++] = ast_say_enumeration_full;
+	say_api_buf[i++] = ast_say_digit_str_full;
+	say_api_buf[i++] = ast_say_character_str_full;
+	say_api_buf[i++] = ast_say_phonetic_str_full;
+	say_api_buf[i++] = ast_say_datetime;
+	say_api_buf[i++] = ast_say_time;
+	say_api_buf[i++] = ast_say_date;
+	say_api_buf[i++] = ast_say_datetime_from_now;
+	say_api_buf[i++] = ast_say_date_with_format;
 }
 
 static void restore_say_mode(void *arg)
@@ -90,16 +115,16 @@ static void restore_say_mode(void *arg)
 	int i = 0;
 	say_api_buf[i++] = arg;
 
-        ast_say_number_full = say_api_buf[i++];
-        ast_say_enumeration_full = say_api_buf[i++];
-        ast_say_digit_str_full = say_api_buf[i++];
-        ast_say_character_str_full = say_api_buf[i++];
-        ast_say_phonetic_str_full = say_api_buf[i++];
-        ast_say_datetime = say_api_buf[i++];
-        ast_say_time = say_api_buf[i++];
-        ast_say_date = say_api_buf[i++];
-        ast_say_datetime_from_now = say_api_buf[i++];
-        ast_say_date_with_format = say_api_buf[i++];
+	ast_say_number_full = say_api_buf[i++];
+	ast_say_enumeration_full = say_api_buf[i++];
+	ast_say_digit_str_full = say_api_buf[i++];
+	ast_say_character_str_full = say_api_buf[i++];
+	ast_say_phonetic_str_full = say_api_buf[i++];
+	ast_say_datetime = say_api_buf[i++];
+	ast_say_time = say_api_buf[i++];
+	ast_say_date = say_api_buf[i++];
+	ast_say_datetime_from_now = say_api_buf[i++];
+	ast_say_date_with_format = say_api_buf[i++];
 }
 
 /* 
@@ -109,25 +134,25 @@ static void restore_say_mode(void *arg)
  * parameter.
  */
 typedef struct {
-        struct ast_channel *chan;
-        const char *ints;
-        const char *language;
-        int audiofd;
-        int ctrlfd;
+	struct ast_channel *chan;
+	const char *ints;
+	const char *language;
+	int audiofd;
+	int ctrlfd;
 } say_args_t;
 
 static int s_streamwait3(const say_args_t *a, const char *fn)
 {
-        int res = ast_streamfile(a->chan, fn, a->language);
-        if (res) {
-                ast_log(LOG_WARNING, "Unable to play message %s\n", fn);
-                return res;
-        }
-        res = (a->audiofd  > -1 && a->ctrlfd > -1) ?
-                ast_waitstream_full(a->chan, a->ints, a->audiofd, a->ctrlfd) :
-                ast_waitstream(a->chan, a->ints);
-        ast_stopstream(a->chan);
-        return res;  
+	int res = ast_streamfile(a->chan, fn, a->language);
+	if (res) {
+		ast_log(LOG_WARNING, "Unable to play message %s\n", fn);
+		return res;
+	}
+	res = (a->audiofd  > -1 && a->ctrlfd > -1) ?
+	ast_waitstream_full(a->chan, a->ints, a->audiofd, a->ctrlfd) :
+	ast_waitstream(a->chan, a->ints);
+	ast_stopstream(a->chan);
+	return res;  
 }
 
 /*
@@ -198,13 +223,13 @@ static int do_say(say_args_t *a, const char *s, const char *options, int depth)
 		ast_debug(2, "doing [%s]\n", fn);
 
 		/* locate prefix and data, if any */
-		fmt = index(fn, ':');
+		fmt = strchr(fn, ':');
 		if (!fmt || fmt == fn)	{	/* regular filename */
 			ret = s_streamwait3(a, fn);
 			continue;
 		}
 		fmt++;
-		data = index(fmt, ':');	/* colon before data */
+		data = strchr(fmt, ':');	/* colon before data */
 		if (!data || data == fmt) {	/* simple prefix-fmt */
 			ret = do_say(a, fn, options, depth);
 			continue;
@@ -217,14 +242,14 @@ static int do_say(say_args_t *a, const char *s, const char *options, int depth)
 			if (*p == '\'') {/* file name - we trim them */
 				char *y;
 				strcpy(fn2, ast_skip_blanks(p+1));	/* make a full copy */
-				y = index(fn2, '\'');
+				y = strchr(fn2, '\'');
 				if (!y) {
 					p = data;	/* invalid. prepare to end */
 					break;
 				}
 				*y = '\0';
 				ast_trim_blanks(fn2);
-				p = index(p+1, '\'');
+				p = strchr(p+1, '\'');
 				ret = s_streamwait3(a, fn2);
 			} else {
 				int l = fmt-fn;
@@ -245,11 +270,11 @@ static int do_say(say_args_t *a, const char *s, const char *options, int depth)
 }
 
 static int say_full(struct ast_channel *chan, const char *string,
-        const char *ints, const char *lang, const char *options,
-        int audiofd, int ctrlfd)
+	const char *ints, const char *lang, const char *options,
+	int audiofd, int ctrlfd)
 {
-        say_args_t a = { chan, ints, lang, audiofd, ctrlfd };
-        return do_say(&a, string, options, 0);
+	say_args_t a = { chan, ints, lang, audiofd, ctrlfd };
+	return do_say(&a, string, options, 0);
 }
 
 static int say_number_full(struct ast_channel *chan, int num,
@@ -257,9 +282,9 @@ static int say_number_full(struct ast_channel *chan, int num,
 	int audiofd, int ctrlfd)
 {
 	char buf[64];
-        say_args_t a = { chan, ints, lang, audiofd, ctrlfd };
+	say_args_t a = { chan, ints, lang, audiofd, ctrlfd };
 	snprintf(buf, sizeof(buf), "num:%d", num);
-        return do_say(&a, buf, options, 0);
+	return do_say(&a, buf, options, 0);
 }
 
 static int say_enumeration_full(struct ast_channel *chan, int num,
@@ -267,22 +292,22 @@ static int say_enumeration_full(struct ast_channel *chan, int num,
 	int audiofd, int ctrlfd)
 {
 	char buf[64];
-        say_args_t a = { chan, ints, lang, audiofd, ctrlfd };
+	say_args_t a = { chan, ints, lang, audiofd, ctrlfd };
 	snprintf(buf, sizeof(buf), "enum:%d", num);
-        return do_say(&a, buf, options, 0);
+	return do_say(&a, buf, options, 0);
 }
 
 static int say_date_generic(struct ast_channel *chan, time_t t,
-	const char *ints, const char *lang, const char *format, const char *timezone, const char *prefix)
+	const char *ints, const char *lang, const char *format, const char *timezonename, const char *prefix)
 {
 	char buf[128];
 	struct ast_tm tm;
-	struct timeval tv = { t, 0 };
-        say_args_t a = { chan, ints, lang, -1, -1 };
+	struct timeval when = { t, 0 };
+	say_args_t a = { chan, ints, lang, -1, -1 };
 	if (format == NULL)
 		format = "";
 
-	ast_localtime(&tv, &tm, NULL);
+	ast_localtime(&when, &tm, NULL);
 	snprintf(buf, sizeof(buf), "%s:%s:%04d%02d%02d%02d%02d.%02d-%d-%3d",
 		prefix,
 		format,
@@ -294,13 +319,13 @@ static int say_date_generic(struct ast_channel *chan, time_t t,
 		tm.tm_sec,
 		tm.tm_wday,
 		tm.tm_yday);
-        return do_say(&a, buf, NULL, 0);
+	return do_say(&a, buf, NULL, 0);
 }
 
 static int say_date_with_format(struct ast_channel *chan, time_t t,
-	const char *ints, const char *lang, const char *format, const char *timezone)
+	const char *ints, const char *lang, const char *format, const char *timezonename)
 {
-	return say_date_generic(chan, t, ints, lang, format, timezone, "datetime");
+	return say_date_generic(chan, t, ints, lang, format, timezonename, "datetime");
 }
 
 static int say_date(struct ast_channel *chan, time_t t, const char *ints, const char *lang)
@@ -355,7 +380,7 @@ static int say_init_mode(const char *mode) {
 static char *__say_cli_init(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	const char *old_mode = say_api_buf[0] ? say_new : say_old;
-	char *mode;
+	const char *mode;
 	switch (cmd) {
 	case CLI_INIT:
 		e->command = "say load [new|old]";
@@ -374,7 +399,7 @@ static char *__say_cli_init(struct ast_cli_entry *e, int cmd, struct ast_cli_arg
 	if (a->argc == 2) {
 		ast_cli(a->fd, "say mode is [%s]\n", old_mode);
 		return CLI_SUCCESS;
-	} else if (a->argc != 3)
+	} else if (a->argc != e->args)
 		return CLI_SHOWUSAGE;
 	mode = a->argv[2];
 	if (!strcmp(mode, old_mode))
@@ -390,7 +415,7 @@ static struct ast_cli_entry cli_playback[] = {
 	AST_CLI_DEFINE(__say_cli_init, "Set or show the say mode"),
 };
 
-static int playback_exec(struct ast_channel *chan, void *data)
+static int playback_exec(struct ast_channel *chan, const char *data)
 {
 	int res = 0;
 	int mres = 0;
@@ -424,9 +449,13 @@ static int playback_exec(struct ast_channel *chan, void *data)
 		if (option_skip) {
 			/* At the user's option, skip if the line is not up */
 			goto done;
-		} else if (!option_noanswer)
+		} else if (!option_noanswer) {
 			/* Otherwise answer unless we're supposed to send this while on-hook */
 			res = ast_answer(chan);
+		} else {
+			ast_indicate(chan, AST_CONTROL_PROGRESS);
+		}
+
 	}
 	if (!res) {
 		char *back = args.filenames;
@@ -459,8 +488,12 @@ static int reload(void)
 	struct ast_flags config_flags = { CONFIG_FLAG_FILEUNCHANGED };
 	struct ast_config *newcfg;
 
-	if ((newcfg = ast_config_load("say.conf", config_flags)) == CONFIG_STATUS_FILEUNCHANGED)
+	if ((newcfg = ast_config_load("say.conf", config_flags)) == CONFIG_STATUS_FILEUNCHANGED) {
 		return 0;
+	} else if (newcfg == CONFIG_STATUS_FILEINVALID) {
+		ast_log(LOG_ERROR, "Config file say.conf is in an invalid format.  Aborting.\n");
+		return 0;
+	}
 
 	if (say_cfg) {
 		ast_config_destroy(say_cfg);
@@ -490,7 +523,7 @@ static int unload_module(void)
 
 	res = ast_unregister_application(app);
 
-	ast_cli_unregister_multiple(cli_playback, sizeof(cli_playback) / sizeof(struct ast_cli_entry));
+	ast_cli_unregister_multiple(cli_playback, ARRAY_LEN(cli_playback));
 
 	if (say_cfg)
 		ast_config_destroy(say_cfg);
@@ -504,7 +537,7 @@ static int load_module(void)
 	struct ast_flags config_flags = { 0 };
 
 	say_cfg = ast_config_load("say.conf", config_flags);
-	if (say_cfg) {
+	if (say_cfg && say_cfg != CONFIG_STATUS_FILEINVALID) {
 		for (v = ast_variable_browse(say_cfg, "general"); v ; v = v->next) {
     			if (ast_extension_match(v->name, "mode")) {
 				say_init_mode(v->value);
@@ -513,8 +546,8 @@ static int load_module(void)
 		}
 	}
 
-        ast_cli_register_multiple(cli_playback, sizeof(cli_playback) / sizeof(struct ast_cli_entry));
-	return ast_register_application(app, playback_exec, synopsis, descrip);
+	ast_cli_register_multiple(cli_playback, ARRAY_LEN(cli_playback));
+	return ast_register_application_xml(app, playback_exec);
 }
 
 AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "Sound File Playback Application",

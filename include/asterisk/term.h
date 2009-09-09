@@ -62,8 +62,34 @@ extern "C" {
 #define COLOR_BRWHITE   (37 | 128)
 /*@} */
 
+/*! \brief Maximum number of characters needed for a color escape sequence,
+ *         plus a null char */
+#define AST_TERM_MAX_ESCAPE_CHARS   23
+
 char *term_color(char *outbuf, const char *inbuf, int fgcolor, int bgcolor, int maxout);
 
+/*!
+ * \brief Append a color sequence to an ast_str
+ *
+ * \param str The string to append to
+ * \param fgcolor foreground color
+ * \param bgcolor background color
+ *
+ * \retval 0 success
+ * \retval -1 failure
+ */
+int ast_term_color_code(struct ast_str **str, int fgcolor, int bgcolor);
+
+/*!
+ * \brief Write a color sequence to a string
+ *
+ * \param outbuf the location to write to
+ * \param fgcolor foreground color
+ * \param bgcolor background color
+ * \param maxout maximum number of characters to write
+ *
+ * \return outbuf
+ */
 char *term_color_code(char *outbuf, int fgcolor, int bgcolor, int maxout);
 
 char *term_strip(char *outbuf, char *inbuf, int maxout);

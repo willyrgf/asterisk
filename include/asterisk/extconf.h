@@ -1,4 +1,4 @@
-/*  
+/*
  * Asterisk -- An open source telephony toolkit.
  *
  * Copyright (C) 2007, Digium, Inc.
@@ -15,8 +15,9 @@
  * the GNU General Public License Version 2. See the LICENSE file
  * at the top of the source tree.
  */
-/*! \file External configuration handlers (realtime and static configuration)
- *  \author Steve Murphy <murf@digium.com>
+/*! \file
+ * \brief External configuration handlers (realtime and static configuration)
+ * \author Steve Murphy <murf@digium.com>
  *
  */
 
@@ -29,7 +30,7 @@ extern "C" {
 
 #ifdef NOTYET
 /* I'm going to define all the structs mentioned below, to avoid
-   possible conflicts in declarations that might be introduced, 
+   possible conflicts in declarations that might be introduced,
    if we just include the files that define them-- this may be
    unnecessary */
 
@@ -53,7 +54,7 @@ struct ast_variable {
 struct ast_category {
 	char name[80];
 	int ignored;			/*!< do not let user of the config see this category */
-	int include_level;	
+	int include_level;
 	struct ast_comment *precomments;
 	struct ast_comment *sameline;
 	struct ast_variable *root;
@@ -75,8 +76,14 @@ struct ast_config {
 /*! \brief A registered application */
 struct ast_app {
 	int (*execute)(struct ast_channel *chan, void *data);
-	const char *synopsis;			/*!< Synopsis text for 'show applications' */
-	const char *description;		/*!< Description (help text) for 'show application &lt;name&gt;' */
+	AST_DECLARE_STRING_FIELDS(
+		AST_STRING_FIELD(synopsis);     /*!< Synopsis text for 'show applications' */
+		AST_STRING_FIELD(description);  /*!< Description (help text) for 'show application &lt;name&gt;' */
+		AST_STRING_FIELD(syntax);       /*!< Syntax text for 'core show applications' */
+		AST_STRING_FIELD(arguments);    /*!< Arguments description */
+		AST_STRING_FIELD(seealso);      /*!< See also */
+	);
+	enum ast_xmldoc_src docsrc;		/*!< Where the documentation come from. */
 	AST_RWLIST_ENTRY(ast_app) list;		/*!< Next app in list */
 	void *module;			/*!< Module this app belongs to */
 	char name[0];				/*!< Name of the application */
@@ -173,8 +180,12 @@ struct ast_sw *localized_walk_context_switches(struct ast_context *con,
 void localized_context_destroy(struct ast_context *con, const char *registrar);
 int localized_pbx_load_module(void);
 
-struct ast_context *localized_context_create(struct ast_context **extcontexts, const char *name, const char *registrar);
-int localized_pbx_builtin_setvar(struct ast_channel *chan, void *data);
+/*!
+ * \version 1.6.1 added tab parameter
+ * \version 1.6.1 renamed function from localized_context_create to localized_context_find_or_create
+ */
+struct ast_context *localized_context_find_or_create(struct ast_context **extcontexts, void *tab, const char *name, const char *registrar);
+int localized_pbx_builtin_setvar(struct ast_channel *chan, const void *data);
 int localized_context_add_ignorepat2(struct ast_context *con, const char *value, const char *registrar);
 int localized_context_add_switch2(struct ast_context *con, const char *value,
 								 const char *data, int eval, const char *registrar);
@@ -184,7 +195,11 @@ int localized_add_extension2(struct ast_context *con,
 							 int replace, const char *extension, int priority, const char *label, const char *callerid,
 							 const char *application, void *data, void (*datad)(void *),
 							 const char *registrar);
-void localized_merge_contexts_and_delete(struct ast_context **extcontexts, const char *registrar);
+
+/*!
+ * \version 1.6.1 added tab parameter
+ */
+void localized_merge_contexts_and_delete(struct ast_context **extcontexts, void *tab, const char *registrar);
 int localized_context_verify_includes(struct ast_context *con);
 void localized_use_conf_dir(void);
 void localized_use_local_dir(void);
@@ -227,17 +242,17 @@ struct pbx_find_info {
 #define STATUS_NO_EXTENSION	2
 #define STATUS_NO_PRIORITY	3
 #define STATUS_NO_LABEL		4
-#define STATUS_SUCCESS		5 
+#define STATUS_SUCCESS		5
 
 #endif
 
 struct ast_exten *localized_find_extension(struct ast_context *bypass,
 										  struct pbx_find_info *q,
-										  const char *context, 
-										  const char *exten, 
+										  const char *context,
+										  const char *exten,
 										  int priority,
-										  const char *label, 
-										  const char *callerid, 
+										  const char *label,
+										  const char *callerid,
 										  enum ext_match_t action);
 
 

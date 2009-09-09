@@ -39,52 +39,55 @@ struct ast_codec_pref {
 	char framing[32];
 };
 
-/*! \page Def_Frame AST Multimedia and signalling frames
-	\section Def_AstFrame What is an ast_frame ?
- 	A frame of data read used to communicate between 
- 	between channels and applications.
-	Frames are divided into frame types and subclasses.
-
-	\par Frame types 
-	\arg \b VOICE:	Voice data, subclass is codec (AST_FORMAT_*)
-	\arg \b VIDEO:	Video data, subclass is codec (AST_FORMAT_*)
-	\arg \b DTMF:	A DTMF digit, subclass is the digit
-	\arg \b IMAGE:	Image transport, mostly used in IAX
-	\arg \b TEXT:	Text messages and character by character (real time text)
-	\arg \b HTML:	URL's and web pages
-	\arg \b MODEM:	Modulated data encodings, such as T.38 and V.150
-	\arg \b IAX:	Private frame type for the IAX protocol
-	\arg \b CNG:	Comfort noice frames
-	\arg \b CONTROL:	A control frame, subclass defined as AST_CONTROL_
-	\arg \b NULL:	Empty, useless frame
-
-	\par Files
-	\arg frame.h	Definitions
-	\arg frame.c	Function library
-	\arg \ref Def_Channel Asterisk channels
-	\section Def_ControlFrame Control Frames
-	Control frames send signalling information between channels
-	and devices. They are prefixed with AST_CONTROL_, like AST_CONTROL_FRAME_HANGUP
-	\arg \b HANGUP	The other end has hungup
-	\arg \b RING	Local ring
-	\arg \b RINGING	The other end is ringing
-	\arg \b ANSWER	The other end has answered
-	\arg \b BUSY	Remote end is busy
-	\arg \b TAKEOFFHOOK	Make it go off hook (what's "it" ? )
-	\arg \b OFFHOOK	Line is off hook
-	\arg \b CONGESTION	Congestion (circuit is busy, not available)
-	\arg \b FLASH	Other end sends flash hook
-	\arg \b WINK	Other end sends wink
-	\arg \b OPTION	Send low-level option
-	\arg \b RADIO_KEY	Key radio (see app_rpt.c)
-	\arg \b RADIO_UNKEY	Un-key radio (see app_rpt.c)
-	\arg \b PROGRESS	Other end indicates call progress
-	\arg \b PROCEEDING	Indicates proceeding
-	\arg \b HOLD	Call is placed on hold
-	\arg \b UNHOLD	Call is back from hold
-	\arg \b VIDUPDATE	Video update requested
-
-*/
+/*!
+ * \page Def_Frame AST Multimedia and signalling frames
+ * \section Def_AstFrame What is an ast_frame ?
+ * A frame of data read used to communicate between 
+ * between channels and applications.
+ * Frames are divided into frame types and subclasses.
+ *
+ * \par Frame types 
+ * \arg \b VOICE:  Voice data, subclass is codec (AST_FORMAT_*)
+ * \arg \b VIDEO:  Video data, subclass is codec (AST_FORMAT_*)
+ * \arg \b DTMF:   A DTMF digit, subclass is the digit
+ * \arg \b IMAGE:  Image transport, mostly used in IAX
+ * \arg \b TEXT:   Text messages and character by character (real time text)
+ * \arg \b HTML:   URL's and web pages
+ * \arg \b MODEM:  Modulated data encodings, such as T.38 and V.150
+ * \arg \b IAX:    Private frame type for the IAX protocol
+ * \arg \b CNG:    Comfort noice frames
+ * \arg \b CONTROL:A control frame, subclass defined as AST_CONTROL_
+ * \arg \b NULL:   Empty, useless frame
+ *
+ * \par Files
+ * \arg frame.h    Definitions
+ * \arg frame.c    Function library
+ * \arg \ref Def_Channel Asterisk channels
+ * \section Def_ControlFrame Control Frames
+ * Control frames send signalling information between channels
+ * and devices. They are prefixed with AST_CONTROL_, like AST_CONTROL_FRAME_HANGUP
+ * \arg \b HANGUP          The other end has hungup
+ * \arg \b RING            Local ring
+ * \arg \b RINGING         The other end is ringing
+ * \arg \b ANSWER          The other end has answered
+ * \arg \b BUSY            Remote end is busy
+ * \arg \b TAKEOFFHOOK     Make it go off hook (what's "it" ? )
+ * \arg \b OFFHOOK         Line is off hook
+ * \arg \b CONGESTION      Congestion (circuit is busy, not available)
+ * \arg \b FLASH           Other end sends flash hook
+ * \arg \b WINK            Other end sends wink
+ * \arg \b OPTION          Send low-level option
+ * \arg \b RADIO_KEY       Key radio (see app_rpt.c)
+ * \arg \b RADIO_UNKEY     Un-key radio (see app_rpt.c)
+ * \arg \b PROGRESS        Other end indicates call progress
+ * \arg \b PROCEEDING      Indicates proceeding
+ * \arg \b HOLD            Call is placed on hold
+ * \arg \b UNHOLD          Call is back from hold
+ * \arg \b VIDUPDATE       Video update requested
+ * \arg \b SRCUPDATE       The source of media has changed
+ * \arg \b CONNECTED_LINE  Connected line has changed
+ * \arg \b REDIRECTING     Call redirecting information has changed.
+ */
 
 /*!
  * \brief Frame types 
@@ -129,6 +132,14 @@ enum {
 	 *  The translator can not be free'd if the frame inside of it still has
 	 *  this flag set. */
 	AST_FRFLAG_FROM_TRANSLATOR = (1 << 1),
+	/*! This frame came from a dsp and is still the original frame.
+	 *  The dsp cannot be free'd if the frame inside of it still has
+	 *  this flag set. */
+	AST_FRFLAG_FROM_DSP = (1 << 2),
+	/*! This frame came from a filestream and is still the original frame.
+	 *  The filestream cannot be free'd if the frame inside of it still has
+	 *  this flag set. */
+	AST_FRFLAG_FROM_FILESTREAM = (1 << 3),
 };
 
 /*! \brief Data structure associated with a single frame of data
@@ -140,7 +151,7 @@ struct ast_frame {
 	int subclass;				
 	/*! Length of data */
 	int datalen;				
-	/*! Number of 8khz samples in this frame */
+	/*! Number of samples in this frame */
 	int samples;				
 	/*! Was the data malloc'd?  i.e. should we free it when we discard the frame? */
 	int mallocd;				
@@ -151,7 +162,7 @@ struct ast_frame {
 	/*! Optional source of frame for debugging */
 	const char *src;				
 	/*! Pointer to actual data */
-	void *data;		
+	union { void *ptr; uint32_t uint32; char pad[8]; } data;
 	/*! Global delivery time */		
 	struct timeval delivery;
 	/*! For placing in a linked list */
@@ -176,7 +187,7 @@ struct ast_frame {
  */
 #define	AST_FRAME_SET_BUFFER(fr, _base, _ofs, _datalen)	\
 	{					\
-	(fr)->data = (char *)_base + (_ofs);	\
+	(fr)->data.ptr = (char *)_base + (_ofs);	\
 	(fr)->offset = (_ofs);			\
 	(fr)->datalen = (_datalen);		\
 	}
@@ -185,9 +196,17 @@ struct ast_frame {
     for this purpose instead of having to declare one on the stack */
 extern struct ast_frame ast_null_frame;
 
-#define AST_FRIENDLY_OFFSET 	64	/*! It's polite for a a new frame to
-					  have this number of bytes for additional
-					  headers.  */
+/*! \brief Offset into a frame's data buffer.
+ *
+ * By providing some "empty" space prior to the actual data of an ast_frame,
+ * this gives any consumer of the frame ample space to prepend other necessary
+ * information without having to create a new buffer.
+ *
+ * As an example, RTP can use the data from an ast_frame and simply prepend the
+ * RTP header information into the space provided by AST_FRIENDLY_OFFSET instead
+ * of having to create a new buffer with the necessary space allocated.
+ */
+#define AST_FRIENDLY_OFFSET 	64	
 #define AST_MIN_OFFSET 		32	/*! Make sure we keep at least this much handy */
 
 /*! Need the header be free'd? */
@@ -250,6 +269,10 @@ extern struct ast_frame ast_null_frame;
 #define AST_FORMAT_G726		(1 << 11)
 /*! G.722 */
 #define AST_FORMAT_G722		(1 << 12)
+/*! G.722.1 (also known as Siren7, 32kbps assumed) */
+#define AST_FORMAT_SIREN7	(1 << 13)
+/*! G.722.1 Annex C (also known as Siren14, 48kbps assumed) */
+#define AST_FORMAT_SIREN14	(1 << 14)
 /*! Raw 16-bit Signed Linear (16000 Hz) PCM */
 #define AST_FORMAT_SLINEAR16	(1 << 15)
 /*! Maximum audio mask */
@@ -269,8 +292,12 @@ extern struct ast_frame ast_null_frame;
 /*! MPEG4 Video */
 #define AST_FORMAT_MP4_VIDEO	(1 << 22)
 #define AST_FORMAT_VIDEO_MASK   (((1 << 25)-1) & ~(AST_FORMAT_AUDIO_MASK))
-/*! T.140 Text format - ITU T.140, RFC 4351*/
-#define AST_FORMAT_T140		(1 << 25)
+/*! T.140 RED Text format RFC 4103 */
+#define AST_FORMAT_T140RED      (1 << 26)
+/*! T.140 Text format - ITU T.140, RFC 4103 */
+#define AST_FORMAT_T140		(1 << 27)
+/*! Maximum text mask */
+#define AST_FORMAT_MAX_TEXT	(1 << 28))
 #define AST_FORMAT_TEXT_MASK   (((1 << 30)-1) & ~(AST_FORMAT_AUDIO_MASK) & ~(AST_FORMAT_VIDEO_MASK))
 
 enum ast_control_frame_type {
@@ -292,6 +319,50 @@ enum ast_control_frame_type {
 	AST_CONTROL_HOLD = 16,		/*!< Indicate call is placed on hold */
 	AST_CONTROL_UNHOLD = 17,	/*!< Indicate call is left from hold */
 	AST_CONTROL_VIDUPDATE = 18,	/*!< Indicate video frame update */
+	_XXX_AST_CONTROL_T38 = 19,	/*!< T38 state change request/notification \deprecated This is no longer supported. Use AST_CONTROL_T38_PARAMETERS instead. */
+	AST_CONTROL_SRCUPDATE = 20,     /*!< Indicate source of media has changed */
+	AST_CONTROL_TRANSFER = 21,      /*!< Indicate status of a transfer request */
+	AST_CONTROL_CONNECTED_LINE = 22,/*!< Indicate connected line has changed */
+	AST_CONTROL_REDIRECTING = 23,    /*!< Indicate redirecting id has changed */
+	AST_CONTROL_T38_PARAMETERS = 24, /*! T38 state change request/notification with parameters */
+};
+
+enum ast_control_t38 {
+	AST_T38_REQUEST_NEGOTIATE = 1,	/*!< Request T38 on a channel (voice to fax) */
+	AST_T38_REQUEST_TERMINATE,	/*!< Terminate T38 on a channel (fax to voice) */
+	AST_T38_NEGOTIATED,		/*!< T38 negotiated (fax mode) */
+	AST_T38_TERMINATED,		/*!< T38 terminated (back to voice) */
+	AST_T38_REFUSED			/*!< T38 refused for some reason (usually rejected by remote end) */
+};
+
+enum ast_control_t38_rate {
+	AST_T38_RATE_2400 = 0,
+	AST_T38_RATE_4800,
+	AST_T38_RATE_7200,
+	AST_T38_RATE_9600,
+	AST_T38_RATE_12000,
+	AST_T38_RATE_14400,
+};
+
+enum ast_control_t38_rate_management {
+	AST_T38_RATE_MANAGEMENT_TRANSFERRED_TCF = 0,
+	AST_T38_RATE_MANAGEMENT_LOCAL_TCF,
+};
+
+struct ast_control_t38_parameters {
+	enum ast_control_t38 request_response;			/*!< Request or response of the T38 control frame */
+	unsigned int version;					/*!< Supported T.38 version */
+	unsigned int max_ifp; 					/*!< Maximum IFP size supported */
+	enum ast_control_t38_rate rate;				/*!< Maximum fax rate supported */
+	enum ast_control_t38_rate_management rate_management;	/*!< Rate management setting */
+	unsigned int fill_bit_removal:1;			/*!< Set if fill bit removal can be used */
+	unsigned int transcoding_mmr:1;				/*!< Set if MMR transcoding can be used */
+	unsigned int transcoding_jbig:1;			/*!< Set if JBIG transcoding can be used */
+};
+
+enum ast_control_transfer {
+	AST_TRANSFER_SUCCESS = 0, /*!< Transfer request on the channel worked */
+	AST_TRANSFER_FAILED,      /*!< Transfer request on the channel failed */
 };
 
 #define AST_SMOOTHER_FLAG_G729		(1 << 0)
@@ -339,6 +410,27 @@ enum ast_control_frame_type {
 
 /*! Explicitly enable or disable echo cancelation for the given channel */
 #define	AST_OPTION_ECHOCAN		8
+
+/* !
+ * Read-only. Allows query current status of T38 on the channel.
+ * data: ast_t38state
+ */
+#define AST_OPTION_T38_STATE		10
+
+/*! Request that the channel driver deliver frames in a specific format */
+#define AST_OPTION_FORMAT_READ          11
+
+/*! Request that the channel driver be prepared to accept frames in a specific format */
+#define AST_OPTION_FORMAT_WRITE         12
+
+/*! Request that the channel driver make two channels of the same tech type compatible if possible */
+#define AST_OPTION_MAKE_COMPATIBLE      13
+
+/*! Get or set the digit detection state of the channel */
+#define AST_OPTION_DIGIT_DETECT		14
+
+/*! Get or set the fax tone detection state of the channel */
+#define AST_OPTION_FAX_DETECT		15
 
 struct oprmode {
 	struct ast_channel *peer;
@@ -389,9 +481,9 @@ struct ast_frame *ast_fralloc(char *source, int len);
 #endif
 
 /*!  
- * \brief Frees a frame 
+ * \brief Frees a frame or list of frames
  * 
- * \param fr Frame to free
+ * \param fr Frame to free, or head of list to free
  * \param cache Whether to consider this frame for frame caching
  */
 void ast_frame_free(struct ast_frame *fr, int cache);
@@ -405,6 +497,11 @@ void ast_frame_free(struct ast_frame *fr, int cache);
  * data malloc'd.  If you need to store frames, say for queueing, then
  * you should call this function.
  * \return Returns a frame on success, NULL on error
+ * \note This function may modify the frame passed to it, so you must
+ * not assume the frame will be intact after the isolated frame has
+ * been produced. In other words, calling this function on a frame
+ * should be the last operation you do with that frame before freeing
+ * it (or exiting the block, if the frame is on the stack.)
  */
 struct ast_frame *ast_frisolate(struct ast_frame *fr);
 
@@ -421,9 +518,9 @@ void ast_swapcopy_samples(void *dst, const void *src, int samples);
    little-endian and big-endian. */
 #if __BYTE_ORDER == __LITTLE_ENDIAN
 #define ast_frame_byteswap_le(fr) do { ; } while(0)
-#define ast_frame_byteswap_be(fr) do { struct ast_frame *__f = (fr); ast_swapcopy_samples(__f->data, __f->data, __f->samples); } while(0)
+#define ast_frame_byteswap_be(fr) do { struct ast_frame *__f = (fr); ast_swapcopy_samples(__f->data.ptr, __f->data.ptr, __f->samples); } while(0)
 #else
-#define ast_frame_byteswap_le(fr) do { struct ast_frame *__f = (fr); ast_swapcopy_samples(__f->data, __f->data, __f->samples); } while(0)
+#define ast_frame_byteswap_le(fr) do { struct ast_frame *__f = (fr); ast_swapcopy_samples(__f->data.ptr, __f->data.ptr, __f->samples); } while(0)
 #define ast_frame_byteswap_be(fr) do { ; } while(0)
 #endif
 
@@ -482,6 +579,16 @@ int ast_smoother_get_flags(struct ast_smoother *smoother);
 int ast_smoother_test_flag(struct ast_smoother *s, int flag);
 void ast_smoother_free(struct ast_smoother *s);
 void ast_smoother_reset(struct ast_smoother *s, int bytes);
+
+/*!
+ * \brief Reconfigure an existing smoother to output a different number of bytes per frame
+ * \param s the smoother to reconfigure
+ * \param bytes the desired number of bytes per output frame
+ * \return nothing
+ *
+ */
+void ast_smoother_reconfigure(struct ast_smoother *s, int bytes);
+
 int __ast_smoother_feed(struct ast_smoother *s, struct ast_frame *f, int swap);
 struct ast_frame *ast_smoother_read(struct ast_smoother *s);
 #define ast_smoother_feed(s,f) __ast_smoother_feed(s, f, 0)
@@ -494,8 +601,8 @@ struct ast_frame *ast_smoother_read(struct ast_smoother *s);
 #endif
 /*@} Doxygen marker */
 
-struct ast_format_list *ast_get_format_list_index(int index);
-struct ast_format_list *ast_get_format_list(size_t *size);
+const struct ast_format_list *ast_get_format_list_index(int index);
+const struct ast_format_list *ast_get_format_list(size_t *size);
 void ast_frame_dump(const char *name, struct ast_frame *f, char *prefix);
 
 /*! \page AudioCodecPref Audio Codec Preferences
@@ -595,6 +702,23 @@ int ast_frame_adjust_volume(struct ast_frame *f, int adjustment);
   and must contain the same number of samples.
  */
 int ast_frame_slinear_sum(struct ast_frame *f1, struct ast_frame *f2);
+
+/*!
+ * \brief Get the sample rate for a given format.
+ */
+static force_inline int ast_format_rate(int format)
+{
+	switch (format) {
+	case AST_FORMAT_G722:
+	case AST_FORMAT_SLINEAR16:
+	case AST_FORMAT_SIREN7:
+		return 16000;
+	case AST_FORMAT_SIREN14:
+		return 32000;
+	default:
+		return 8000;
+	}
+}
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }

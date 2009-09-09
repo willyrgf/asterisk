@@ -20,9 +20,16 @@
  * \file
  *
  * \brief Resample slinear audio
+ * 
+ * \note To install libresample, check it out of the following repository:
+ * <code>$ svn co http://svn.digium.com/svn/thirdparty/libresample/trunk</code>
  *
  * \ingroup codecs
  */
+
+/*** MODULEINFO
+	<depend>resample</depend>
+ ***/
 
 #include "asterisk.h"
 
@@ -37,13 +44,14 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <limits.h>
 /* } */
 
+#include <libresample.h>
+
 #include "asterisk/module.h"
 #include "asterisk/translate.h"
-#include "asterisk/libresample.h"
 
-#include "slin_resample_ex.h"
+#include "asterisk/slin.h"
 
-#define RESAMPLER_QUALITY 0
+#define RESAMPLER_QUALITY 1
 
 #define OUTBUF_SIZE   8096
 
@@ -61,9 +69,9 @@ static int slin16_to_slin8_new(struct ast_trans_pvt *pvt)
 {
 	struct slin16_to_slin8_pvt *resamp_pvt = pvt->pvt;
 
-	resamp_pvt->resample_factor = 0.5;
+	resamp_pvt->resample_factor = 8000.0 / 16000.0;
 
-	if (!(resamp_pvt->resampler = resample_open(RESAMPLER_QUALITY, 0.5, 0.5)))
+	if (!(resamp_pvt->resampler = resample_open(RESAMPLER_QUALITY, resamp_pvt->resample_factor, resamp_pvt->resample_factor)))
 		return -1;
 
 	return 0;
@@ -73,9 +81,9 @@ static int slin8_to_slin16_new(struct ast_trans_pvt *pvt)
 {
 	struct slin8_to_slin16_pvt *resamp_pvt = pvt->pvt;
 
-	resamp_pvt->resample_factor = 2.0;
+	resamp_pvt->resample_factor = 16000.0 / 8000.0;
 
-	if (!(resamp_pvt->resampler = resample_open(RESAMPLER_QUALITY, 2.0, 2.0)))
+	if (!(resamp_pvt->resampler = resample_open(RESAMPLER_QUALITY, resamp_pvt->resample_factor, resamp_pvt->resample_factor)))
 		return -1;
 
 	return 0;
@@ -102,8 +110,8 @@ static int resample_frame(struct ast_trans_pvt *pvt,
 {
 	int total_in_buf_used = 0;
 	int total_out_buf_used = 0;
-	int16_t *in_buf = (int16_t *) f->data;
-	int16_t *out_buf = (int16_t *) pvt->outbuf + pvt->samples;
+	int16_t *in_buf = (int16_t *) f->data.ptr;
+	int16_t *out_buf = pvt->outbuf.i16 + pvt->samples;
 	float in_buf_f[f->samples];
 	float out_buf_f[2048];
 	int res = 0;
@@ -160,34 +168,6 @@ static int slin8_to_slin16_framein(struct ast_trans_pvt *pvt, struct ast_frame *
 	return resample_frame(pvt, resampler, resample_factor, f);
 }
 
-static struct ast_frame *slin16_to_slin8_sample(void)
-{
-	static struct ast_frame f = {
-		.frametype = AST_FRAME_VOICE,
-		.subclass = AST_FORMAT_SLINEAR16,
-		.datalen = sizeof(slin16_slin8_ex),
-		.samples = sizeof(slin16_slin8_ex) / sizeof(slin16_slin8_ex[0]),
-		.src = __PRETTY_FUNCTION__,
-		.data = slin16_slin8_ex,
-	};
-
-	return &f;
-}
-
-static struct ast_frame *slin8_to_slin16_sample(void)
-{
-	static struct ast_frame f = {
-		.frametype = AST_FRAME_VOICE,
-		.subclass = AST_FORMAT_SLINEAR,
-		.datalen = sizeof(slin8_slin16_ex),
-		.samples = sizeof(slin8_slin16_ex) / sizeof(slin8_slin16_ex[0]),
-		.src = __PRETTY_FUNCTION__,
-		.data = slin8_slin16_ex,
-	};
-
-	return &f;
-}
-
 static struct ast_translator slin16_to_slin8 = {
 	.name = "slin16_to_slin8",
 	.srcfmt = AST_FORMAT_SLINEAR16,
@@ -195,7 +175,7 @@ static struct ast_translator slin16_to_slin8 = {
 	.newpvt = slin16_to_slin8_new,
 	.destroy = slin16_to_slin8_destroy,
 	.framein = slin16_to_slin8_framein,
-	.sample = slin16_to_slin8_sample,
+	.sample = slin16_sample,
 	.desc_size = sizeof(struct slin16_to_slin8_pvt),
 	.buffer_samples = (OUTBUF_SIZE / sizeof(int16_t)),
 	.buf_size = OUTBUF_SIZE,
@@ -208,7 +188,7 @@ static struct ast_translator slin8_to_slin16 = {
 	.newpvt = slin8_to_slin16_new,
 	.destroy = slin8_to_slin16_destroy,
 	.framein = slin8_to_slin16_framein,
-	.sample = slin8_to_slin16_sample,
+	.sample = slin8_sample,
 	.desc_size = sizeof(struct slin8_to_slin16_pvt),
 	.buffer_samples = (OUTBUF_SIZE / sizeof(int16_t)),
 	.buf_size = OUTBUF_SIZE,

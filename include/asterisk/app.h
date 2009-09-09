@@ -23,16 +23,21 @@
 #ifndef _ASTERISK_APP_H
 #define _ASTERISK_APP_H
 
+#include "asterisk/strings.h"
+#include "asterisk/threadstorage.h"
+
 struct ast_flags64;
 
 #if defined(__cplusplus) || defined(c_plusplus)
 extern "C" {
 #endif
 
+AST_THREADSTORAGE_EXTERNAL(ast_str_thread_global_buf);
+
 /* IVR stuff */
 
 /*! \brief Callback function for IVR
-    \return returns 0 on completion, -1 on hangup or digit if interrupted 
+    \return returns 0 on completion, -1 on hangup or digit if interrupted
   */
 typedef int (*ast_ivr_callback)(struct ast_channel *chan, char *option, void *cbdata);
 
@@ -52,8 +57,8 @@ typedef enum {
 	AST_ACTION_BACKLIST,	/*!< adata is list of files separated by ; allows interruption */
 } ast_ivr_action;
 
-/*! 
-    Special "options" are: 
+/*!
+    Special "options" are:
    \arg "s" - "start here (one time greeting)"
    \arg "g" - "greeting/instructions"
    \arg "t" - "timeout"
@@ -64,7 +69,7 @@ typedef enum {
 struct ast_ivr_option {
 	char *option;
 	ast_ivr_action action;
-	void *adata;	
+	void *adata;
 };
 
 struct ast_ivr_menu {
@@ -78,13 +83,13 @@ struct ast_ivr_menu {
 #define AST_IVR_DECLARE_MENU(holder, title, flags, foo...) \
 	static struct ast_ivr_option __options_##holder[] = foo;\
 	static struct ast_ivr_menu holder = { title, flags, __options_##holder }
-	
 
-/*!	\brief Runs an IVR menu 
+
+/*!	\brief Runs an IVR menu
 	\return returns 0 on successful completion, -1 on hangup, or -2 on user error in menu */
 int ast_ivr_menu_run(struct ast_channel *c, struct ast_ivr_menu *menu, void *cbdata);
 
-/*! \brief Plays a stream and gets DTMF data from a channel 
+/*! \brief Plays a stream and gets DTMF data from a channel
  * \param c Which channel one is interacting with
  * \param prompt File to pass to ast_streamfile (the one that you wish to play).
  *        It is also valid for this to be multiple files concatenated by "&".
@@ -93,20 +98,50 @@ int ast_ivr_menu_run(struct ast_channel *c, struct ast_ivr_menu *menu, void *cbd
  * \param maxlen Max Length of the data
  * \param timeout Timeout length waiting for data(in milliseconds).  Set to 0 for standard timeout(six seconds), or -1 for no time out.
  *
- *  This function was designed for application programmers for situations where they need 
- *  to play a message and then get some DTMF data in response to the message.  If a digit 
+ *  This function was designed for application programmers for situations where they need
+ *  to play a message and then get some DTMF data in response to the message.  If a digit
  *  is pressed during playback, it will immediately break out of the message and continue
  *  execution of your code.
  */
 int ast_app_getdata(struct ast_channel *c, const char *prompt, char *s, int maxlen, int timeout);
 
 /*! \brief Full version with audiofd and controlfd.  NOTE: returns '2' on ctrlfd available, not '1' like other full functions */
-int ast_app_getdata_full(struct ast_channel *c, char *prompt, char *s, int maxlen, int timeout, int audiofd, int ctrlfd);
+int ast_app_getdata_full(struct ast_channel *c, const char *prompt, char *s, int maxlen, int timeout, int audiofd, int ctrlfd);
 
+/*!
+ * \since 1.6.3
+ * \brief Run a macro on a channel, placing a second channel into autoservice.
+ *
+ * This is a shorthand method that makes it very easy to run a macro on any given 
+ * channel. It is perfectly reasonable to supply a NULL autoservice_chan here in case
+ * there is no channel to place into autoservice. It is very important that the 
+ * autoservice_chan parameter is not locked prior to calling ast_app_run_macro. A 
+ * deadlock could result, otherwise.
+ *
+ * \param autoservice_chan A channel to place into autoservice while the macro is run
+ * \param macro_chan The channel to run the macro on
+ * \param macro_name The name of the macro to run
+ * \param macro_args The arguments to pass to the macro
+ * \retval 0 success
+ * \retval -1 failure
+ */
+int ast_app_run_macro(struct ast_channel *autoservice_chan, struct ast_channel 
+		*macro_chan, const char * const macro_name, const char * const macro_args);
+
+/*!
+ * \brief Set voicemail function callbacks
+ * \param[in] inboxcount2_func set function pointer
+ * \param[in] sayname_func set function pointer
+ * \param[in] inboxcount_func set function pointer
+ * \param[in] messagecount_func set function pointer
+ * \version 1.6.1 Added inboxcount2_func, sayname_func
+ */
 void ast_install_vm_functions(int (*has_voicemail_func)(const char *mailbox, const char *folder),
 			      int (*inboxcount_func)(const char *mailbox, int *newmsgs, int *oldmsgs),
-			      int (*messagecount_func)(const char *context, const char *mailbox, const char *folder));
-  
+			      int (*inboxcount2_func)(const char *mailbox, int *urgentmsgs, int *newmsgs, int *oldmsgs),
+			      int (*messagecount_func)(const char *context, const char *mailbox, const char *folder),
+			      int (*sayname_func)(struct ast_channel *chan, const char *mailbox, const char *context));
+
 void ast_uninstall_vm_functions(void);
 
 /*! \brief Determine if a given mailbox has any voicemail */
@@ -115,10 +150,31 @@ int ast_app_has_voicemail(const char *mailbox, const char *folder);
 /*! \brief Determine number of new/old messages in a mailbox */
 int ast_app_inboxcount(const char *mailbox, int *newmsgs, int *oldmsgs);
 
+/*!
+ * \brief Determine number of urgent/new/old messages in a mailbox
+ * \param[in] mailbox the mailbox context to use
+ * \param[out] urgentmsgs the urgent message count
+ * \param[out] newmsgs the new message count
+ * \param[out] oldmsgs the old message count
+ * \return Returns 0 for success, negative upon error
+ * \since 1.6.1
+ */
+int ast_app_inboxcount2(const char *mailbox, int *urgentmsgs, int *newmsgs, int *oldmsgs);
+
+/*!
+ * \brief Given a mailbox and context, play that mailbox owner's name to the channel specified
+ * \param[in] chan channel to announce name to
+ * \param[in] mailbox mailbox to retrieve name for
+ * \param[in] context context to retrieve name for
+ * \return Returns 0 for success, negative upon error
+ * \since 1.6.1
+ */
+int ast_app_sayname(struct ast_channel *chan, const char *mailbox, const char *context);
+
 /*! \brief Determine number of messages in a given mailbox and folder */
 int ast_app_messagecount(const char *context, const char *mailbox, const char *folder);
 
-/*! \brief Safely spawn an external program while closing file descriptors 
+/*! \brief Safely spawn an external program while closing file descriptors
 	\note This replaces the \b system call in all Asterisk modules
 */
 int ast_safe_system(const char *s);
@@ -166,13 +222,13 @@ int ast_dtmf_stream(struct ast_channel *chan, struct ast_channel *peer, const ch
 /*! \brief Stream a filename (or file descriptor) as a generator. */
 int ast_linear_stream(struct ast_channel *chan, const char *filename, int fd, int allowoverride);
 
-/*! 
- * \brief Stream a file with fast forward, pause, reverse, restart. 
- * \param chan 
+/*!
+ * \brief Stream a file with fast forward, pause, reverse, restart.
+ * \param chan
  * \param file filename
- * \param fwd, rev, stop, pause, restart, skipms, offsetms 
+ * \param fwd, rev, stop, pause, restart, skipms, offsetms
  *
- * Before calling this function, set this to be the number 
+ * Before calling this function, set this to be the number
  * of ms to start from the beginning of the file.  When the function
  * returns, it will be the number of ms from the beginning where the
  * playback stopped.  Pass NULL if you don't care.
@@ -184,17 +240,27 @@ int ast_play_and_wait(struct ast_channel *chan, const char *fn);
 
 int ast_play_and_record_full(struct ast_channel *chan, const char *playfile, const char *recordfile, int maxtime_sec, const char *fmt, int *duration, int silencethreshold, int maxsilence_ms, const char *path, const char *acceptdtmf, const char *canceldtmf);
 
-/*! \brief Record a file for a max amount of time (in seconds), in a given list of formats separated by '|', outputting the duration of the recording, and with a maximum 
+/*! \brief Record a file for a max amount of time (in seconds), in a given list of formats separated by '|', outputting the duration of the recording, and with a maximum
  \n
- permitted silence time in milliseconds of 'maxsilence' under 'silencethreshold' or use '-1' for either or both parameters for defaults. 
+ permitted silence time in milliseconds of 'maxsilence' under 'silencethreshold' or use '-1' for either or both parameters for defaults.
      calls ast_unlock_path() on 'path' if passed */
 int ast_play_and_record(struct ast_channel *chan, const char *playfile, const char *recordfile, int maxtime_sec, const char *fmt, int *duration, int silencethreshold, int maxsilence_ms, const char *path);
 
-/*! \brief Record a message and prepend the message to the given record file after 
-    playing the optional playfile (or a beep), storing the duration in 
-    'duration' and with a maximum permitted silence time in milliseconds of 'maxsilence' under 
+/*! \brief Record a message and prepend the message to the given record file after
+    playing the optional playfile (or a beep), storing the duration in
+    'duration' and with a maximum permitted silence time in milliseconds of 'maxsilence' under
     'silencethreshold' or use '-1' for either or both parameters for defaults. */
 int ast_play_and_prepend(struct ast_channel *chan, char *playfile, char *recordfile, int maxtime_sec, char *fmt, int *duration, int beep, int silencethreshold, int maxsilence_ms);
+
+enum ast_getdata_result {
+	AST_GETDATA_FAILED = -1,
+	AST_GETDATA_COMPLETE = 0,
+	AST_GETDATA_TIMEOUT = 1,
+	AST_GETDATA_INTERRUPTED = 2,
+	/*! indicates a user terminated empty string rather than an empty string resulting 
+	 * from a timeout or other factors */
+	AST_GETDATA_EMPTY_END_TERMINATED = 3,
+};
 
 enum AST_LOCK_RESULT {
 	AST_LOCK_SUCCESS = 0,
@@ -314,8 +380,10 @@ int ast_app_group_list_unlock(void);
   the argc argument counter field.
  */
 #define AST_STANDARD_APP_ARGS(args, parse) \
-	args.argc = ast_app_separate_args(parse, ',', args.argv, ((sizeof(args) - offsetof(typeof(args), argv)) / sizeof(args.argv[0])))
-	
+	args.argc = __ast_app_separate_args(parse, ',', 1, args.argv, ((sizeof(args) - offsetof(typeof(args), argv)) / sizeof(args.argv[0])))
+#define AST_STANDARD_RAW_ARGS(args, parse) \
+	args.argc = __ast_app_separate_args(parse, ',', 0, args.argv, ((sizeof(args) - offsetof(typeof(args), argv)) / sizeof(args.argv[0])))
+
 /*!
   \brief Performs the 'nonstandard' argument separation process for an application.
   \param args An argument structure defined using AST_DECLARE_APP_ARGS
@@ -327,12 +395,15 @@ int ast_app_group_list_unlock(void);
   the argc argument counter field.
  */
 #define AST_NONSTANDARD_APP_ARGS(args, parse, sep) \
-	args.argc = ast_app_separate_args(parse, sep, args.argv, ((sizeof(args) - offsetof(typeof(args), argv)) / sizeof(args.argv[0])))
-	
+	args.argc = __ast_app_separate_args(parse, sep, 1, args.argv, ((sizeof(args) - offsetof(typeof(args), argv)) / sizeof(args.argv[0])))
+#define AST_NONSTANDARD_RAW_ARGS(args, parse, sep) \
+	args.argc = __ast_app_separate_args(parse, sep, 0, args.argv, ((sizeof(args) - offsetof(typeof(args), argv)) / sizeof(args.argv[0])))
+
 /*!
   \brief Separate a string into arguments in an array
   \param buf The string to be parsed (this must be a writable copy, as it will be modified)
   \param delim The character to be used to delimit arguments
+  \param remove_chars Remove backslashes and quote characters, while parsing
   \param array An array of 'char *' to be filled in with pointers to the found arguments
   \param arraylen The number of elements in the array (i.e. the number of arguments you will accept)
 
@@ -343,7 +414,8 @@ int ast_app_group_list_unlock(void);
 
   \return The number of arguments found, or zero if the function arguments are not valid.
 */
-unsigned int ast_app_separate_args(char *buf, char delim, char **array, int arraylen);
+unsigned int __ast_app_separate_args(char *buf, char delim, int remove_chars, char **array, int arraylen);
+#define ast_app_separate_args(a,b,c,d)	__ast_app_separate_args(a,b,1,c,d)
 
 /*!
   \brief A structure to hold the description of an application 'option'.
@@ -381,19 +453,19 @@ struct ast_app_option {
 
   Example usage:
   \code
-  enum {
+  enum my_app_option_flags {
         OPT_JUMP = (1 << 0),
         OPT_BLAH = (1 << 1),
         OPT_BLORT = (1 << 2),
-  } my_app_option_flags;
+  };
 
-  enum {
+  enum my_app_option_args {
         OPT_ARG_BLAH = 0,
         OPT_ARG_BLORT,
         !! this entry tells how many possible arguments there are,
            and must be the last entry in the list
         OPT_ARG_ARRAY_SIZE,
-  } my_app_option_args;
+  };
 
   AST_APP_OPTIONS(my_app_options, {
         AST_APP_OPTION('j', OPT_JUMP),
@@ -461,16 +533,52 @@ int ast_app_parse_options(const struct ast_app_option *options, struct ast_flags
  */
 int ast_app_parse_options64(const struct ast_app_option *options, struct ast_flags64 *flags, char **args, char *optstr);
 
-/*! \brief Present a dialtone and collect a certain length extension. 
-    \return Returns 1 on valid extension entered, -1 on hangup, or 0 on invalid extension. 
+/*! \brief Given a list of options array, return an option string based on passed flags
+	\param options The array of possible options declared with AST_APP_OPTIONS
+	\param flags The flags of the options that you wish to populate the buffer with
+	\param buf The buffer to fill with the string of options
+	\param len The maximum length of buf
+*/
+void ast_app_options2str64(const struct ast_app_option *options, struct ast_flags64 *flags, char *buf, size_t len);
+
+/*! \brief Present a dialtone and collect a certain length extension.
+    \return Returns 1 on valid extension entered, -1 on hangup, or 0 on invalid extension.
 \note Note that if 'collect' holds digits already, new digits will be appended, so be sure it's initialized properly */
 int ast_app_dtget(struct ast_channel *chan, const char *context, char *collect, size_t size, int maxlen, int timeout);
 
 /*! \brief Allow to record message and have a review option */
 int ast_record_review(struct ast_channel *chan, const char *playfile, const char *recordfile, int maxtime, const char *fmt, int *duration, const char *path);
 
-/*! \brief Decode an encoded control or extended ASCII character */
+/*! \brief Decode an encoded control or extended ASCII character 
+    \return Returns a pointer to the result string
+*/
 int ast_get_encoded_char(const char *stream, char *result, size_t *consumed);
+
+/*! \brief Decode a stream of encoded control or extended ASCII characters */
+char *ast_get_encoded_str(const char *stream, char *result, size_t result_len);
+
+/*! \brief Decode a stream of encoded control or extended ASCII characters */
+int ast_str_get_encoded_str(struct ast_str **str, int maxlen, const char *stream);
+
+/*!
+ * \brief Common routine for child processes, to close all fds prior to exec(2)
+ * \param[in] n starting file descriptor number for closing all higher file descriptors
+ * \since 1.6.1
+ */
+void ast_close_fds_above_n(int n);
+
+/*!
+ * \brief Common routine to safely fork without a chance of a signal handler firing badly in the child
+ * \param[in] stop_reaper flag to determine if sigchld handler is replaced or not
+ * \since 1.6.1
+ */
+int ast_safe_fork(int stop_reaper);
+
+/*!
+ * \brief Common routine to cleanup after fork'ed process is complete (if reaping was stopped)
+ * \since 1.6.1
+ */
+void ast_safe_fork_cleanup(void);
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }

@@ -46,11 +46,11 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define BUFFER_SAMPLES   8096	/* size for the translation buffers */
 #define BUF_SHIFT	5
 
-/* Sample frame data */
-
 #include "g722/g722.h"
-#include "slin_g722_ex.h"
-#include "g722_slin_ex.h"
+
+/* Sample frame data */
+#include "asterisk/slin.h"
+#include "ex_g722.h"
 
 struct g722_encoder_pvt {
 	g722_encode_state_t g722;
@@ -102,9 +102,13 @@ static int g722tolin_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 {
 	struct g722_decoder_pvt *tmp = pvt->pvt;
 	int out_samples;
+	int in_samples;
 
-	out_samples = g722_decode(&tmp->g722, (int16_t *) &pvt->outbuf[pvt->samples * sizeof(int16_t)], 
-		(uint8_t *) f->data, f->samples);
+	/* g722_decode expects the samples to be in the invalid samples / 2 format */
+	in_samples = f->samples / 2;
+
+	out_samples = g722_decode(&tmp->g722, &pvt->outbuf.i16[pvt->samples * sizeof(int16_t)], 
+		(uint8_t *) f->data.ptr, in_samples);
 
 	pvt->samples += out_samples;
 
@@ -118,70 +122,14 @@ static int lintog722_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 	struct g722_encoder_pvt *tmp = pvt->pvt;
 	int outlen;
 
-	outlen = g722_encode(&tmp->g722, (uint8_t *) (&pvt->outbuf[pvt->datalen]), 
-		(int16_t *) f->data, f->samples);
+	outlen = g722_encode(&tmp->g722, (&pvt->outbuf.ui8[pvt->datalen]), 
+		(int16_t *) f->data.ptr, f->samples);
 
-	pvt->samples += outlen;
+	pvt->samples += outlen * 2;
 
 	pvt->datalen += outlen;
 
 	return 0;
-}
-
-static struct ast_frame *g722tolin_sample(void)
-{
-	static struct ast_frame f = {
-		.frametype = AST_FRAME_VOICE,
-		.subclass = AST_FORMAT_G722,
-		.datalen = sizeof(g722_slin_ex),
-		.samples = sizeof(g722_slin_ex) * 2,
-		.src = __PRETTY_FUNCTION__,
-		.data = g722_slin_ex,
-	};
-
-	return &f;
-}
-
-static struct ast_frame *g722tolin16_sample(void)
-{
-	static struct ast_frame f = {
-		.frametype = AST_FRAME_VOICE,
-		.subclass = AST_FORMAT_G722,
-		.datalen = sizeof(slin_g722_ex),
-		.samples = sizeof(slin_g722_ex) * 2,
-		.src = __PRETTY_FUNCTION__,
-		.data = slin_g722_ex,
-	};
-
-	return &f;
-}
-
-static struct ast_frame *lintog722_sample (void)
-{
-	static struct ast_frame f = {
-		.frametype = AST_FRAME_VOICE,
-		.subclass = AST_FORMAT_SLINEAR,
-		.datalen = sizeof(slin_g722_ex),
-		.samples = sizeof(slin_g722_ex) / sizeof(slin_g722_ex[0]),
-		.src = __PRETTY_FUNCTION__,
-		.data = slin_g722_ex,
-	};
-
-	return &f;
-}
-
-static struct ast_frame *lin16tog722_sample (void)
-{
-	static struct ast_frame f = {
-		.frametype = AST_FRAME_VOICE,
-		.subclass = AST_FORMAT_SLINEAR16,
-		.datalen = sizeof(slin_g722_ex),
-		.samples = sizeof(slin_g722_ex) / sizeof(slin_g722_ex[0]),
-		.src = __PRETTY_FUNCTION__,
-		.data = slin_g722_ex,
-	};
-
-	return &f;
 }
 
 static struct ast_translator g722tolin = {
@@ -190,7 +138,7 @@ static struct ast_translator g722tolin = {
 	.dstfmt = AST_FORMAT_SLINEAR,
 	.newpvt = g722tolin_new,	/* same for both directions */
 	.framein = g722tolin_framein,
-	.sample = g722tolin_sample,
+	.sample = g722_sample,
 	.desc_size = sizeof(struct g722_decoder_pvt),
 	.buffer_samples = BUFFER_SAMPLES / sizeof(int16_t),
 	.buf_size = BUFFER_SAMPLES,
@@ -203,7 +151,7 @@ static struct ast_translator lintog722 = {
 	.dstfmt = AST_FORMAT_G722,
 	.newpvt = lintog722_new,	/* same for both directions */
 	.framein = lintog722_framein,
-	.sample = lintog722_sample,
+	.sample = slin8_sample,
 	.desc_size = sizeof(struct g722_encoder_pvt),
 	.buffer_samples = BUFFER_SAMPLES * 2,
 	.buf_size = BUFFER_SAMPLES,
@@ -215,7 +163,7 @@ static struct ast_translator g722tolin16 = {
 	.dstfmt = AST_FORMAT_SLINEAR16,
 	.newpvt = g722tolin16_new,	/* same for both directions */
 	.framein = g722tolin_framein,
-	.sample = g722tolin16_sample,
+	.sample = g722_sample,
 	.desc_size = sizeof(struct g722_decoder_pvt),
 	.buffer_samples = BUFFER_SAMPLES / sizeof(int16_t),
 	.buf_size = BUFFER_SAMPLES,
@@ -228,7 +176,7 @@ static struct ast_translator lin16tog722 = {
 	.dstfmt = AST_FORMAT_G722,
 	.newpvt = lin16tog722_new,	/* same for both directions */
 	.framein = lintog722_framein,
-	.sample = lin16tog722_sample,
+	.sample = slin16_sample,
 	.desc_size = sizeof(struct g722_encoder_pvt),
 	.buffer_samples = BUFFER_SAMPLES * 2,
 	.buf_size = BUFFER_SAMPLES,
@@ -240,9 +188,7 @@ static int parse_config(int reload)
 	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
 	struct ast_config *cfg = ast_config_load("codecs.conf", config_flags);
 
-	if (cfg == NULL)
-		return 0;
-	if (cfg == CONFIG_STATUS_FILEUNCHANGED)
+	if (cfg == CONFIG_STATUS_FILEMISSING || cfg == CONFIG_STATUS_FILEUNCHANGED || cfg == CONFIG_STATUS_FILEINVALID)
 		return 0;
 	for (var = ast_variable_browse(cfg, "plc"); var; var = var->next) {
 		if (!strcasecmp(var->name, "genericplc")) {

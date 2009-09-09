@@ -34,7 +34,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 int res_snmp_agentx_subagent;
 int res_snmp_dont_stop;
-int res_snmp_enabled;
+static int res_snmp_enabled;
 
 static pthread_t thread = AST_PTHREADT_NULL;
 
@@ -52,7 +52,7 @@ static int load_config(void)
 	res_snmp_enabled = 0;
 	res_snmp_agentx_subagent = 1;
 	cfg = ast_config_load("res_snmp.conf", config_flags);
-	if (!cfg) {
+	if (cfg == CONFIG_STATUS_FILEMISSING || cfg == CONFIG_STATUS_FILEINVALID) {
 		ast_log(LOG_WARNING, "Could not load res_snmp.conf\n");
 		return 0;
 	}
@@ -115,7 +115,7 @@ static int unload_module(void)
 	return ((thread != AST_PTHREADT_NULL) ? pthread_join(thread, NULL) : 0);
 }
 
-AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_GLOBAL_SYMBOLS, "SNMP [Sub]Agent for Asterisk",
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "SNMP [Sub]Agent for Asterisk",
 		.load = load_module,
 		.unload = unload_module,
 		);

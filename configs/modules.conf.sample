@@ -18,13 +18,10 @@ autoload=yes
 ;preload => res_odbc.so
 ;preload => res_config_odbc.so
 ;
-; res_phoneprov requires func_strings.so to be loaded:
-preload => func_strings.so
-;
 ; Uncomment the following if you wish to use the Speech Recognition API
 ;preload => res_speech.so
 ;
-; If you want, load the GTK console right away.  
+; If you want, load the GTK console right away.
 ;
 noload => pbx_gtkconsole.so
 ;load => pbx_gtkconsole.so
@@ -36,4 +33,5 @@ load => res_musiconhold.so
 ;
 noload => chan_alsa.so
 ;noload => chan_oss.so
-;noload => chan_console.so
+noload => chan_console.so
+;

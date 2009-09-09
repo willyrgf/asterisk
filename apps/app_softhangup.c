@@ -36,13 +36,28 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/lock.h"
 #include "asterisk/app.h"
 
-static char *synopsis = "Soft Hangup Application";
+/*** DOCUMENTATION
+	<application name="SoftHangup" language="en_US">
+		<synopsis>
+			Hangs up the requested channel.
+		</synopsis>
+		<syntax>
+			<parameter name="Technology/Resource" required="true" />
+			<parameter name="options">
+				<optionlist>
+					<option name="a">
+						<para>Hang up all channels on a specified device instead of a single resource</para>
+					</option>
+				</optionlist>
+			</parameter>
+		</syntax>	
+		<description>
+			<para>Hangs up the requested channel.  If there are no channels to 
+			hangup, the application will report it.</para>
+		</description>
+	</application>
 
-static char *desc = "  SoftHangup(Technology/resource[,options]):\n"
-"Hangs up the requested channel.  If there are no channels to hangup,\n"
-"the application will report it.\n"
-"  Options:\n"
-"     'a'  - hang up all channels on a specified device instead of a single resource\n";
+ ***/
 
 static char *app = "SoftHangup";
 
@@ -54,7 +69,7 @@ AST_APP_OPTIONS(app_opts,{
 	AST_APP_OPTION('a', OPTION_ALL),
 });
 
-static int softhangup_exec(struct ast_channel *chan, void *data)
+static int softhangup_exec(struct ast_channel *chan, const char *data)
 {
 	struct ast_channel *c = NULL;
 	char *cut, *opts[0];
@@ -65,6 +80,7 @@ static int softhangup_exec(struct ast_channel *chan, void *data)
 		AST_APP_ARG(channel);
 		AST_APP_ARG(options);
 	);
+	struct ast_channel_iterator *iter;
 	
 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_WARNING, "SoftHangup requires an argument (Technology/resource)\n");
@@ -78,17 +94,22 @@ static int softhangup_exec(struct ast_channel *chan, void *data)
 		ast_app_parse_options(app_opts, &flags, opts, args.options);
 	lenmatch = strlen(args.channel);
 
-	for (c = ast_walk_channel_by_name_prefix_locked(NULL, args.channel, lenmatch);
-		 c;
-		 c = ast_walk_channel_by_name_prefix_locked(c, args.channel, lenmatch)) {
+	if (!(iter = ast_channel_iterator_by_name_new(0, args.channel, lenmatch))) {
+		return -1;
+	}
+
+	while ((c = ast_channel_iterator_next(iter))) {
+		ast_channel_lock(c);
 		ast_copy_string(name, c->name, sizeof(name));
 		if (ast_test_flag(&flags, OPTION_ALL)) {
 			/* CAPI is set up like CAPI[foo/bar]/clcnt */ 
-			if (!strcmp(c->tech->type, "CAPI")) 
+			if (!strcmp(c->tech->type, "CAPI")) {
 				cut = strrchr(name, '/');
 			/* Basically everything else is Foo/Bar-Z */
-			else
-				cut = strchr(name, '-');
+			} else {
+				/* use strrchr() because Foo/Bar-Z could actually be Foo/B-a-r-Z */
+				cut = strrchr(name,'-');
+			}
 			/* Get rid of what we've cut */
 			if (cut)
 				*cut = 0;
@@ -98,11 +119,15 @@ static int softhangup_exec(struct ast_channel *chan, void *data)
 			ast_softhangup(c, AST_SOFTHANGUP_EXPLICIT);
 			if (!ast_test_flag(&flags, OPTION_ALL)) {
 				ast_channel_unlock(c);
+				c = ast_channel_unref(c);
 				break;
 			}
 		}
 		ast_channel_unlock(c);
+		c = ast_channel_unref(c);
 	}
+
+	ast_channel_iterator_destroy(iter);
 
 	return 0;
 }
@@ -114,7 +139,7 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	return ast_register_application(app, softhangup_exec, synopsis, desc);
+	return ast_register_application_xml(app, softhangup_exec);
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Hangs up the requested channel");

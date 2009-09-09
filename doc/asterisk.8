@@ -122,10 +122,10 @@ Allows to specify the socket file to be used to connect to the
 Asterisk console. Used in conjunction with \fB-r\fR or \fB-R\fR.
 .TP
 \fB-I\fR
-Enable internal timing if Zaptel timer is available
+Enable internal timing if DAHDI timer is available
 The default behaviour is that outbound packets are phase locked
 to inbound packets. Enabling this switch causes them to be
-locked to the internal Zaptel timer instead.
+locked to the internal DAHDI timer instead.
 .TP
 \fB-t\fR
 When recording files, write them first into a temporary holding directory, 
@@ -157,6 +157,10 @@ of your log files.
 \fB-V\fR
 Display version information and exit immediately.
 .TP
+\fB-W\fR
+Change the terminal colors to compensate for a light background,
+rather than a dark background, as is the default.
+.TP
 \fB-x \fIcommand\fB\fR
 Connect to a running Asterisk process and execute a command on
 a command line, passing any output through to standard out and
@@ -172,7 +176,7 @@ supplied.
 \fBasterisk -rx "core show channels"\fR - Display channels on running server
 .SH "BUGS"
 .PP
-Bug reports and feature requests may be filed at http://bugs.digium.com
+Bug reports and feature requests may be filed at https://issues.asterisk.org
 .SH "SEE ALSO"
 .PP
 *CLI> \fBhelp\fR - Help on Asterisk CLI

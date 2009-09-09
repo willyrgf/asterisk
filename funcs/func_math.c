@@ -1,9 +1,10 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 2004 - 2006, Andy Powell 
+ * Copyright (C) 2004 - 2006, Andy Powell
  *
  * Updated by Mark Spencer <markster@digium.com>
+ * Updated by Nir Simionovich <nirs@greenfieldtech.net>
  *
  * See http://www.asterisk.org for more information about
  * the Asterisk project. Please do not directly contact
@@ -22,6 +23,7 @@
  *
  * \author Andy Powell
  * \author Mark Spencer <markster@digium.com>
+ * \author Nir Simionovich <nirs@greenfieldtech.net>
  *
  * \ingroup functions
  */
@@ -38,6 +40,69 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/utils.h"
 #include "asterisk/app.h"
 #include "asterisk/config.h"
+
+/*** DOCUMENTATION
+	<function name="MATH" language="en_US">
+		<synopsis>
+			Performs Mathematical Functions.
+		</synopsis>
+		<syntax>
+			<parameter name="expression" required="true">
+				<para>Is of the form:
+				<replaceable>number1</replaceable><replaceable>op</replaceable><replaceable>number2</replaceable>
+				where the possible values for <replaceable>op</replaceable>
+				are:</para>
+				<para>+,-,/,*,%,&lt;&lt;,&gt;&gt;,^,AND,OR,XOR,&lt;,%gt;,&gt;=,&lt;=,== (and behave as their C equivalents)</para>
+			</parameter>
+			<parameter name="type">
+				<para>Wanted type of result:</para>
+				<para>f, float - float(default)</para>
+				<para>i, int - integer</para>
+				<para>h, hex - hex</para>
+				<para>c, char - char</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Performs mathematical functions based on two parameters and an operator.  The returned
+			value type is <replaceable>type</replaceable></para>
+			<para>Example: Set(i=${MATH(123%16,int)}) - sets var i=11</para>
+		</description>
+	</function>
+	<function name="INC" language="en_US">
+		<synopsis>
+			Increments the value of a variable, while returning the updated value to the dialplan
+		</synopsis>
+		<syntax>
+			<parameter name="variable" required="true">
+				<para>
+				The variable name to be manipulated, without the braces.
+				</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Increments the value of a variable, while returning the updated value to the dialplan</para>
+			<para>Example: INC(MyVAR) - Increments MyVar</para>
+			<para>Note: INC(${MyVAR}) - Is wrong, as INC expects the variable name, not its value</para>
+		</description>
+	</function>
+	<function name="DEC" language="en_US">
+		<synopsis>
+			Decrements the value of a variable, while returning the updated value to the dialplan
+		</synopsis>
+		<syntax>
+			<parameter name="variable" required="true">
+				<para>
+				The variable name to be manipulated, without the braces.
+				</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Decrements the value of a variable, while returning the updated value to the dialplan</para>
+			<para>Example: DEC(MyVAR) - Increments MyVar</para>
+			<para>Note: DEC(${MyVAR}) - Is wrong, as INC expects the variable name, not its value</para>
+		</description>
+	</function>
+ ***/
 
 enum TypeOfFunctions {
 	ADDFUNCTION,
@@ -82,14 +147,14 @@ static int math(struct ast_channel *chan, const char *cmd, char *parse,
 	);
 
 	if (ast_strlen_zero(parse)) {
-		ast_log(LOG_WARNING, "Syntax: Math(<number1><op><number 2>[,<type_of_result>]) - missing argument!\n");
+		ast_log(LOG_WARNING, "Syntax: MATH(<number1><op><number 2>[,<type_of_result>]) - missing argument!\n");
 		return -1;
 	}
 
 	AST_STANDARD_APP_ARGS(args, parse);
 
 	if (args.argc < 1) {
-		ast_log(LOG_WARNING, "Syntax: Math(<number1><op><number 2>[,<type_of_result>]) - missing argument!\n");
+		ast_log(LOG_WARNING, "Syntax: MATH(<number1><op><number 2>[,<type_of_result>]) - missing argument!\n");
 		return -1;
 	}
 
@@ -190,12 +255,12 @@ static int math(struct ast_channel *chan, const char *cmd, char *parse,
 		return -1;
 	}
 
-	if (sscanf(mvalue1, "%lf", &fnum1) != 1) {
+	if (sscanf(mvalue1, "%30lf", &fnum1) != 1) {
 		ast_log(LOG_WARNING, "'%s' is not a valid number\n", mvalue1);
 		return -1;
 	}
 
-	if (sscanf(mvalue2, "%lf", &fnum2) != 1) {
+	if (sscanf(mvalue2, "%30lf", &fnum2) != 1) {
 		ast_log(LOG_WARNING, "'%s' is not a valid number\n", mvalue2);
 		return -1;
 	}
@@ -304,30 +369,107 @@ static int math(struct ast_channel *chan, const char *cmd, char *parse,
 	return 0;
 }
 
+static int crement_function_read(struct ast_channel *chan, const char *cmd,
+                     char *data, char *buf, size_t len)
+{
+	int ret = -1;
+	int int_value = 0;
+	int modify_orig = 0;
+	const char *var;
+	char endchar = 0, returnvar[12]; /* If you need a variable longer than 11 digits - something is way wrong */
+
+	if (ast_strlen_zero(data)) {
+		ast_log(LOG_WARNING, "Syntax: %s(<data>) - missing argument!\n", cmd);
+		return -1;
+	}
+
+	ast_channel_lock(chan);
+
+	if (!(var = pbx_builtin_getvar_helper(chan, data))) {
+		ast_log(LOG_NOTICE, "Failed to obtain variable %s, bailing out\n", data);
+		ast_channel_unlock(chan);
+		return -1;
+	}
+
+	if (ast_strlen_zero(var)) {
+		ast_log(LOG_NOTICE, "Variable %s doesn't exist - are you sure you wrote it correctly?\n", data);
+		ast_channel_unlock(chan);
+		return -1;
+	}
+
+	if (sscanf(var, "%30d%1c", &int_value, &endchar) == 0 || endchar != 0) {
+		ast_log(LOG_NOTICE, "The content of ${%s} is not a numeric value - bailing out!\n", data);
+		ast_channel_unlock(chan);
+		return -1;
+	}
+
+	/* now we'll actually do something useful */
+	if (!strcasecmp(cmd, "INC")) {              /* Increment variable */
+		int_value++;
+		modify_orig = 1;
+	} else if (!strcasecmp(cmd, "DEC")) {       /* Decrement variable */
+		int_value--;
+		modify_orig = 1;
+	}
+
+	ast_log(LOG_NOTICE, "The value is now: %d\n", int_value);
+
+	if (snprintf(returnvar, sizeof(returnvar), "%d", int_value) > 0) {
+		pbx_builtin_setvar_helper(chan, data, returnvar);
+		if (modify_orig) {
+			ast_copy_string(buf, returnvar, len);
+		}
+		ret = 0;
+	} else {
+		pbx_builtin_setvar_helper(chan, data, "0");
+		if (modify_orig) {
+			ast_copy_string(buf, "0", len);
+		}
+		ast_log(LOG_NOTICE, "Variable %s refused to be %sREMENTED, setting value to 0", data, cmd);
+		ret = 0;
+	}
+
+	ast_channel_unlock(chan);
+
+	return ret;
+}
+
+
 static struct ast_custom_function math_function = {
 	.name = "MATH",
-	.synopsis = "Performs Mathematical Functions",
-	.syntax = "MATH(<number1><op><number2>[,<type_of_result>])",
-	.desc = "Perform calculation on number1 to number2. Valid ops are: \n"
-		"    +,-,/,*,%,<<,>>,^,AND,OR,XOR,<,>,>=,<=,==\n"
-		"and behave as their C equivalents.\n"
-		"<type_of_result> - wanted type of result:\n"
-		"	f, float - float(default)\n"
-		"	i, int - integer,\n"
-		"	h, hex - hex,\n"
-		"	c, char - char\n"
-		"Example: Set(i=${MATH(123%16,int)}) - sets var i=11",
 	.read = math
+};
+
+static struct ast_custom_function increment_function = {
+	.name = "INC",
+	.read = crement_function_read,
+};
+
+static struct ast_custom_function decrement_function = {
+	.name = "DEC",
+	.read = crement_function_read,
 };
 
 static int unload_module(void)
 {
-	return ast_custom_function_unregister(&math_function);
+	int res = 0;
+
+	res |= ast_custom_function_unregister(&math_function);
+	res |= ast_custom_function_unregister(&increment_function);
+	res |= ast_custom_function_unregister(&decrement_function);
+
+	return res;
 }
 
 static int load_module(void)
 {
-	return ast_custom_function_register(&math_function);
+	int res = 0;
+
+	res |= ast_custom_function_register(&math_function);
+	res |= ast_custom_function_register(&increment_function);
+	res |= ast_custom_function_register(&decrement_function);
+
+	return res;
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Mathematical dialplan function");

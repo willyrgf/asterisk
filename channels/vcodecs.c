@@ -204,7 +204,7 @@ void dump_buf(struct fbuf_t *b)
 		if ( x == 0) {	/* new line */
 			if (i != 0)
 				ast_log(LOG_WARNING, "%s\n", buf);
-			bzero(buf, sizeof(buf));
+			memset(buf, '\0', sizeof(buf));
 			sprintf(buf, "%04x: ", i);
 		}
 		sprintf(buf + 6 + x*3, "%02x ", b->data[i]);
@@ -240,7 +240,7 @@ static struct ast_frame *create_video_frame(uint8_t *start, uint8_t *end,
 		return NULL;
 	}
 	memcpy(data+head, start, len);
-	f->data = data;
+	f->data.ptr = data;
 	f->mallocd = AST_MALLOCD_DATA | AST_MALLOCD_HDR;
 	//f->has_timing_info = 1;
 	//f->ts = ast_tvdiff_ms(ast_tvnow(), out->ts);
@@ -393,7 +393,7 @@ static struct ast_frame *h263p_encap(struct fbuf_t *b, int mtu,
 		if (!f)
 			break;
 
-		data = f->data;
+		data = f->data.ptr;
 		if (h == 0) {	/* we start with a psc */
 			data[0] |= 0x04;	// set P == 1, and we are done
 		} else {	/* no psc, create a header */
@@ -504,7 +504,7 @@ static int ffmpeg_decode(struct video_dec_desc *v, struct fbuf_t *b)
 		}
 	}
 	if (srclen != 0)	/* update b with leftover data */
-		bcopy(src, b->data, srclen);
+		memmove(b->data, src, srclen);
 	b->used = srclen;
 	b->ebit = 0;
 	return full_frame;
@@ -582,7 +582,7 @@ static struct ast_frame *h263_encap(struct fbuf_t *b, int mtu,
 	if (len < H263_MIN_LEN)	/* unreasonably small */
 		return NULL;
 
-	bzero(h263_hdr, sizeof(h263_hdr));
+	memset(h263_hdr, '\0', sizeof(h263_hdr));
 	/* Now set the header bytes. Only type A by now,
 	 * and h[0] = h[2] = h[3] = 0 by default.
 	 * PTYPE starts 30 bits in the picture, so the first useful
@@ -647,7 +647,7 @@ static struct ast_frame *h263_encap(struct fbuf_t *b, int mtu,
 
 		if (!f)
 			break;
-		bcopy(h, f->data, 4);	/* copy the h263 header */
+		memmove(f->data.ptr, h, 4);	/* copy the h263 header */
 		/* XXX to do: if not aligned, fix sbit and ebit,
 		 * then move i back by 1 for the next frame
 		 */
@@ -737,7 +737,7 @@ static struct ast_frame *h261_encap(struct fbuf_t *b, int mtu,
 	if (len < H261_MIN_LEN)	/* unreasonably small */
 		return NULL;
 
-	bzero(h261_hdr, sizeof(h261_hdr));
+	memset(h261_hdr, '\0', sizeof(h261_hdr));
 
 	/* Similar to the code in h263_encap, but the marker there is longer.
 	 * Start a few bytes within the bitstream to avoid hitting the marker
@@ -801,7 +801,7 @@ static struct ast_frame *h261_encap(struct fbuf_t *b, int mtu,
 			break;
 		/* recompute header with I=0, V=1 */
 		h[0] = ( (sbit & 7) << 5 ) | ( (ebit & 7) << 2 ) | 1;
-		bcopy(h, f->data, 4);	/* copy the h261 header */
+		memmove(f->data.ptr, h, 4);	/* copy the h261 header */
 		if (ebit)	/* not aligned, restart from previous byte */
 			i--;
 		sbit = (8 - ebit) & 7;
@@ -902,7 +902,7 @@ static int mpeg4_decode(struct video_dec_desc *v, struct fbuf_t *b)
 	}
 	datalen -= ret;
 	if (datalen > 0)	/* update b with leftover bytes */
-		bcopy(b->data + ret, b->data, datalen);
+		memmove(b->data, b->data + ret, datalen);
 	b->used = datalen;
 	b->ebit = 0;
 	return full_frame;
@@ -1021,7 +1021,7 @@ static struct ast_frame *h264_encap(struct fbuf_t *b, int mtu,
 		size -= frag_size;	/* skip this data block */
 		start += frag_size;
 
-		data = f->data;
+		data = f->data.ptr;
 		data[0] = hdr[0];
 		data[1] = hdr[1] | (size == 0 ? 0x40 : 0);	/* end bit if we are done */
 		hdr[1] &= ~0x80;	/* clear start bit for subsequent frames */
@@ -1113,7 +1113,7 @@ struct _cm {    /* map ffmpeg codec types to asterisk formats */
 	//struct video_codec_desc *codec_desc;
 };
 
-static struct _cm video_formats[] = {
+static const struct _cm video_formats[] = {
         { AST_FORMAT_H263_PLUS, CODEC_ID_H263,  CM_RD }, /* incoming H263P ? */
         { AST_FORMAT_H263_PLUS, CODEC_ID_H263P, CM_WR },
         { AST_FORMAT_H263,      CODEC_ID_H263,  CM_RD },
@@ -1137,7 +1137,7 @@ static enum CodecID map_video_format(uint32_t ast_format, int rw)
 }
 
 /* pointers to supported codecs. We assume the first one to be non null. */
-static struct video_codec_desc *supported_codecs[] = {
+static const struct video_codec_desc *supported_codecs[] = {
 	&h263p_codec,
 	&h264_codec,
 	&h263_codec,

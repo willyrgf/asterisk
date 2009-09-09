@@ -48,6 +48,58 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/manager.h"
 #include "db1-ast/include/db.h"
 
+/*** DOCUMENTATION
+	<manager name="DBGet" language="en_US">
+		<synopsis>
+			Get DB Entry.
+		</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
+			<parameter name="Family" required="true" />
+			<parameter name="Key" required="true" />
+		</syntax>
+		<description>
+		</description>
+	</manager>
+	<manager name="DBPut" language="en_US">
+		<synopsis>
+			Put DB entry.
+		</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
+			<parameter name="Family" required="true" />
+			<parameter name="Key" required="true" />
+			<parameter name="Val" />
+		</syntax>
+		<description>
+		</description>
+	</manager>
+	<manager name="DBDel" language="en_US">
+		<synopsis>
+			Delete DB entry.
+		</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
+			<parameter name="Family" required="true" />
+			<parameter name="Key" required="true" />
+		</syntax>
+		<description>
+		</description>
+	</manager>
+	<manager name="DBDelTree" language="en_US">
+		<synopsis>
+			Delete DB Tree.
+		</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
+			<parameter name="Family" required="true" />
+			<parameter name="Key" />
+		</syntax>
+		<description>
+		</description>
+	</manager>
+ ***/
+
 static DB *astdb;
 AST_MUTEX_DEFINE_STATIC(dblock);
 
@@ -180,10 +232,8 @@ int ast_db_get(const char *family, const char *keys, char *value, int valuelen)
 	memset(value, 0, valuelen);
 	key.data = fullkey;
 	key.size = fullkeylen + 1;
-	
+
 	res = astdb->get(astdb, &key, &data, 0);
-	
-	ast_mutex_unlock(&dblock);
 
 	/* Be sure to NULL terminate our data either way */
 	if (res) {
@@ -200,6 +250,11 @@ int ast_db_get(const char *family, const char *keys, char *value, int valuelen)
 			ast_log(LOG_NOTICE, "Strange, empty value for /%s/%s\n", family, keys);
 		}
 	}
+
+	/* Data is not fully isolated for concurrency, so the lock must be extended
+	 * to after the copy to the output buffer. */
+	ast_mutex_unlock(&dblock);
+
 	return res;
 }
 
@@ -481,7 +536,7 @@ struct ast_db_entry *ast_db_gettree(const char *family, const char *keytree)
 	if (!ast_strlen_zero(family)) {
 		if (!ast_strlen_zero(keytree)) {
 			/* Family and key tree */
-			snprintf(prefix, sizeof(prefix), "/%s/%s", family, prefix);
+			snprintf(prefix, sizeof(prefix), "/%s/%s", family, keytree);
 		} else {
 			/* Family only */
 			snprintf(prefix, sizeof(prefix), "/%s", family);
@@ -539,7 +594,7 @@ void ast_db_freetree(struct ast_db_entry *dbe)
 	}
 }
 
-struct ast_cli_entry cli_database[] = {
+static struct ast_cli_entry cli_database[] = {
 	AST_CLI_DEFINE(handle_cli_database_show,    "Shows database contents"),
 	AST_CLI_DEFINE(handle_cli_database_showkey, "Shows database contents"),
 	AST_CLI_DEFINE(handle_cli_database_get,     "Gets database value"),
@@ -662,10 +717,10 @@ static int manager_dbdeltree(struct mansession *s, const struct message *m)
 int astdb_init(void)
 {
 	dbinit();
-	ast_cli_register_multiple(cli_database, sizeof(cli_database) / sizeof(struct ast_cli_entry));
-	ast_manager_register("DBGet", EVENT_FLAG_SYSTEM | EVENT_FLAG_REPORTING, manager_dbget, "Get DB Entry");
-	ast_manager_register("DBPut", EVENT_FLAG_SYSTEM, manager_dbput, "Put DB Entry");
-	ast_manager_register("DBDel", EVENT_FLAG_SYSTEM, manager_dbdel, "Delete DB Entry");
-	ast_manager_register("DBDelTree", EVENT_FLAG_SYSTEM, manager_dbdeltree, "Delete DB Tree");
+	ast_cli_register_multiple(cli_database, ARRAY_LEN(cli_database));
+	ast_manager_register_xml("DBGet", EVENT_FLAG_SYSTEM | EVENT_FLAG_REPORTING, manager_dbget);
+	ast_manager_register_xml("DBPut", EVENT_FLAG_SYSTEM, manager_dbput);
+	ast_manager_register_xml("DBDel", EVENT_FLAG_SYSTEM, manager_dbdel);
+	ast_manager_register_xml("DBDelTree", EVENT_FLAG_SYSTEM, manager_dbdeltree);
 	return 0;
 }

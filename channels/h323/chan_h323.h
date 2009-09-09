@@ -26,6 +26,9 @@
  * Version Info: $Id$
  */
 
+#ifndef CHAN_H323_H
+#define CHAN_H323_H
+
 #include <arpa/inet.h>
 
 /*
@@ -66,6 +69,7 @@ typedef struct call_options {
 	int				nat;
 	int				tunnelOptions;
 	int				holdHandling;
+	int				autoframing; /*!< turn on to override local settings with remote framing length */
 	struct ast_codec_pref	prefs;
 } call_options_t;
 
@@ -207,10 +211,6 @@ extern int h323debug;
 #define H323_DTMF_RFC2833_PT	101
 #define H323_DTMF_CISCO_PT		121
 
-#ifndef BOOL
-#define BOOL int
-#endif
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -243,6 +243,7 @@ extern "C" {
 	int h323_set_gk(int, char *, char *);
 	void h323_set_id(char *);
 	void h323_show_tokens(void);
+	void h323_show_version(void);
 
 	/* H323 listener related funcions */
 	int h323_start_listener(int, struct sockaddr_in);
@@ -266,4 +267,6 @@ extern "C" {
 
 #ifdef __cplusplus
 }
+#endif
+
 #endif

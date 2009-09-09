@@ -12,11 +12,15 @@
  * $FreeBSD: src/bin/expr/expr.y,v 1.16 2000/07/22 10:59:36 se Exp $
  */
 
+#include "asterisk.h"
+
 #include <sys/types.h>
 #include <stdio.h>
-#include "asterisk.h"
+
+#if !defined(STANDALONE) && !defined(STANDALONE2)	\
+	
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
-#ifdef STANDALONE
+#else
 #ifndef __USE_ISOC99
 #define __USE_ISOC99 1
 #endif
@@ -209,7 +213,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/ast_expr.h"
 #include "asterisk/logger.h"
-#ifndef STANDALONE
+#if !defined(STANDALONE) && !defined(STANDALONE2)
 #include "asterisk/pbx.h"
 #endif
 
@@ -237,7 +241,7 @@ enum valtype {
 	AST_EXPR_number, AST_EXPR_numeric_string, AST_EXPR_string
 } ;
 
-#ifdef STANDALONE
+#if defined(STANDALONE) || defined(STANDALONE2)
 void ast_log(int level, const char *file, int line, const char *function, const char *fmt, ...) __attribute__ ((format (printf,5,6)));
 #endif
 
@@ -284,6 +288,7 @@ static struct val	*make_str __P((const char *));
 static struct val	*op_and __P((struct val *, struct val *));
 static struct val	*op_colon __P((struct val *, struct val *));
 static struct val	*op_eqtilde __P((struct val *, struct val *));
+static struct val	*op_tildetilde __P((struct val *, struct val *));
 static struct val	*op_div __P((struct val *, struct val *));
 static struct val	*op_eq __P((struct val *, struct val *));
 static struct val	*op_ge __P((struct val *, struct val *));
@@ -304,7 +309,6 @@ static int		to_number __P((struct val *));
 static void		to_string __P((struct val *));
 static struct expr_node *alloc_expr_node(enum node_type);
 static void destroy_arglist(struct expr_node *arglist);
-static int is_really_num(char *str);
 
 /* uh, if I want to predeclare yylex with a YYLTYPE, I have to predeclare the yyltype... sigh */
 typedef struct yyltype
@@ -354,18 +358,16 @@ extern int		ast_yylex __P((YYSTYPE *, YYLTYPE *, yyscan_t));
 %left <val> TOK_PLUS TOK_MINUS
 %left <val> TOK_MULT TOK_DIV TOK_MOD 
 %right <val> TOK_COMPL
-%left <val> TOK_COLON TOK_EQTILDE
+%left <val> TOK_COLON TOK_EQTILDE TOK_TILDETILDE
 %left <val> TOK_RP TOK_LP
-
 
 %token <val> TOKEN
 %type <arglist> arglist
 %type <val> start expr
 
-
 %destructor {  free_value($$); }  expr TOKEN TOK_COND TOK_COLONCOLON TOK_OR TOK_AND TOK_EQ 
                                  TOK_GT TOK_LT TOK_GE TOK_LE TOK_NE TOK_PLUS TOK_MINUS TOK_MULT TOK_DIV TOK_MOD TOK_COMPL TOK_COLON TOK_EQTILDE 
-                                 TOK_RP TOK_LP
+                                 TOK_RP TOK_LP TOK_TILDETILDE
 
 %%
 
@@ -385,12 +387,18 @@ start: expr { ((struct parse_io *)parseio)->val = (struct val *)calloc(sizeof(st
 	;
 
 arglist: expr { $$ = alloc_expr_node(AST_EXPR_NODE_VAL); $$->val = $1;}
-       | arglist TOK_COMMA expr %prec TOK_RP{struct expr_node *x = alloc_expr_node(AST_EXPR_NODE_VAL);
+       | arglist TOK_COMMA expr %prec TOK_RP {struct expr_node *x = alloc_expr_node(AST_EXPR_NODE_VAL);
                                  struct expr_node *t;
 								 DESTROY($2);
                                  for (t=$1;t->right;t=t->right)
 						         	  ;
                                  $$ = $1; t->right = x; x->val = $3;}
+       | arglist TOK_COMMA %prec TOK_RP {struct expr_node *x = alloc_expr_node(AST_EXPR_NODE_VAL);
+                                 struct expr_node *t;  /* NULL args should OK */
+								 DESTROY($2);
+                                 for (t=$1;t->right;t=t->right)
+						         	  ;
+                                 $$ = $1; t->right = x; x->val = make_str("");}
        ;
 
 expr: 
@@ -476,6 +484,10 @@ expr:
 	| expr TOK_COND expr TOK_COLONCOLON expr  { $$ = op_cond ($1, $3, $5); 
 						DESTROY($2);	
 						DESTROY($4);	
+	                        @$.first_column = @1.first_column; @$.last_column = @3.last_column; 
+							@$.first_line=0; @$.last_line=0;}
+	| expr TOK_TILDETILDE expr { $$ = op_tildetilde ($1, $3); 
+						DESTROY($2);	
 	                        @$.first_column = @1.first_column; @$.last_column = @3.last_column; 
 							@$.first_line=0; @$.last_line=0;}
 	;
@@ -645,7 +657,7 @@ is_zero_or_null (struct val *vp)
 	/* NOTREACHED */
 }
 
-#ifdef STANDALONE
+#ifdef STANDALONE2
 
 void ast_log(int level, const char *file, int line, const char *function, const char *fmt, ...)
 {
@@ -683,7 +695,7 @@ int main(int argc,char **argv) {
 			if( s[strlen(s)-1] == '\n' )
 				s[strlen(s)-1] = 0;
 			
-			ret = ast_expr(s, out, sizeof(out),NULL);
+			ret = ast_expr(s, out, sizeof(out), NULL);
 			printf("Expression: %s    Result: [%d] '%s'\n",
 				   s, ret, out);
 		}
@@ -696,6 +708,7 @@ int main(int argc,char **argv) {
 		else
 			printf("No result\n");
 	}
+	return 0;
 }
 
 #endif
@@ -724,6 +737,7 @@ static void destroy_arglist(struct expr_node *arglist)
 	}
 }
 
+#if !defined(STANDALONE) && !defined(STANDALONE2)
 static char *compose_func_args(struct expr_node *arglist)
 {
 	struct expr_node *t = arglist;
@@ -751,7 +765,7 @@ static char *compose_func_args(struct expr_node *arglist)
 		char numbuf[30];
 		
 		if (t != arglist)
-			strcat(argbuf,"|");
+			strcat(argbuf,",");
 		
 		if (t->val) {
 			if (t->val->type == AST_EXPR_number) {
@@ -773,7 +787,7 @@ static int is_really_num(char *str)
 	else
 		return 0;
 }
-
+#endif
 
 static struct val *op_func(struct val *funcname, struct expr_node *arglist, struct ast_channel *chan)
 {
@@ -1017,7 +1031,7 @@ static struct val *op_func(struct val *funcname, struct expr_node *arglist, stru
 #endif
 		} else {
 			/* is this a custom function we should execute and collect the results of? */
-#ifndef STANDALONE
+#if !defined(STANDALONE) && !defined(STANDALONE2)
 			struct ast_custom_function *f = ast_custom_function_find(funcname->u.s);
 			if (!chan)
 				ast_log(LOG_WARNING,"Hey! chan is NULL.\n");
@@ -1614,6 +1628,32 @@ op_eqtilde (struct val *a, struct val *b)
 	free_value (a);
 	free_value (b);
 	regfree (&rp);
+
+	return v;
+}
+
+static struct val *  /* this is a string concat operator */
+op_tildetilde (struct val *a, struct val *b)
+{
+	struct val *v;
+	char *vs;
+
+	/* coerce to both arguments to strings */
+	to_string(a);
+	to_string(b);
+	/* strip double quotes from both -- */
+	strip_quotes(a);
+	strip_quotes(b);
+	
+	vs = malloc(strlen(a->u.s)+strlen(b->u.s)+1);
+	strcpy(vs,a->u.s);
+	strcat(vs,b->u.s);
+
+	v = make_str(vs);
+
+	/* free arguments */
+	free_value(a);
+	free_value(b);
 
 	return v;
 }

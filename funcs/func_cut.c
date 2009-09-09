@@ -34,8 +34,48 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/module.h"
 #include "asterisk/app.h"
 
-/* Maximum length of any variable */
-#define MAXRESULT	1024
+/*** DOCUMENTATION
+	<function name="SORT" language="en_US">
+		<synopsis>
+			Sorts a list of key/vals into a list of keys, based upon the vals.	
+		</synopsis>
+		<syntax>
+			<parameter name="keyval" required="true" argsep=":">
+				<argument name="key1" required="true" />
+				<argument name="val1" required="true" />
+			</parameter>
+			<parameter name="keyvaln" multiple="true" argsep=":">
+				<argument name="key2" required="true" />
+				<argument name="val2" required="true" />
+			</parameter>
+		</syntax>
+		<description>
+			<para>Takes a comma-separated list of keys and values, each separated by a colon, and returns a
+			comma-separated list of the keys, sorted by their values.  Values will be evaluated as
+			floating-point numbers.</para>
+		</description>
+	</function>
+	<function name="CUT" language="en_US">
+		<synopsis>
+			Slices and dices strings, based upon a named delimiter.		
+		</synopsis>
+		<syntax>
+			<parameter name="varname" required="true">
+				<para>Variable you want cut</para>
+			</parameter>
+			<parameter name="char-delim" required="true">
+				<para>Delimiter, defaults to <literal>-</literal></para>
+			</parameter>
+			<parameter name="range-spec" required="true">
+				<para>Number of the field you want (1-based offset), may also be specified as a range (with <literal>-</literal>)
+				or group of ranges and fields (with <literal>&amp;</literal>)</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Cut out information from a string (<replaceable>varname</replaceable>), based upon a named delimiter.</para>
+		</description>	
+	</function>
+ ***/
 
 struct sortable_keys {
 	char *key;
@@ -82,14 +122,14 @@ static int sort_internal(struct ast_channel *chan, char *data, char *buffer, siz
 	/* Parse each into a struct */
 	count2 = 0;
 	while ((ptrkey = strsep(&strings, ","))) {
-		ptrvalue = index(ptrkey, ':');
+		ptrvalue = strchr(ptrkey, ':');
 		if (!ptrvalue) {
 			count--;
 			continue;
 		}
 		*ptrvalue++ = '\0';
 		sortable_keys[count2].key = ptrkey;
-		sscanf(ptrvalue, "%f", &sortable_keys[count2].value);
+		sscanf(ptrvalue, "%30f", &sortable_keys[count2].value);
 		count2++;
 	}
 
@@ -108,97 +148,86 @@ static int sort_internal(struct ast_channel *chan, char *data, char *buffer, siz
 	return 0;
 }
 
-static int cut_internal(struct ast_channel *chan, char *data, char *buffer, size_t buflen)
+static int cut_internal(struct ast_channel *chan, char *data, struct ast_str **buf, ssize_t buflen)
 {
-	char *parse;
+	char *parse, ds[2], *var_expr;
 	size_t delim_consumed;
+	struct ast_str *var_value;
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(varname);
 		AST_APP_ARG(delimiter);
 		AST_APP_ARG(field);
 	);
 
-	*buffer = '\0';
-
 	parse = ast_strdupa(data);
 
 	AST_STANDARD_APP_ARGS(args, parse);
 
-	/* Check and parse arguments */
+	/* Check arguments */
 	if (args.argc < 3) {
 		return ERROR_NOARG;
-	} else {
-		char d, ds[2] = "";
-		char *tmp = alloca(strlen(args.varname) + 4);
-		char varvalue[MAXRESULT], *tmp2=varvalue;
+	} else if (!(var_expr = alloca(strlen(args.varname) + 4))) {
+		return ERROR_NOMEM;
+	}
 
-		if (tmp) {
-			snprintf(tmp, strlen(args.varname) + 4, "${%s}", args.varname);
-		} else {
-			return ERROR_NOMEM;
-		}
+	/* Get the value of the variable named in the 1st argument */
+	snprintf(var_expr, strlen(args.varname) + 4, "${%s}", args.varname);
+	var_value = ast_str_create(16);
+	ast_str_substitute_variables(&var_value, 0, chan, var_expr);
 
-		if (ast_get_encoded_char(args.delimiter, ds, &delim_consumed))
-			ast_copy_string(ds, "-", sizeof(ds));
+	/* Copy delimiter from 2nd argument to ds[] possibly decoding backslash escapes */
+	if (ast_get_encoded_char(args.delimiter, ds, &delim_consumed)) {
+		ast_copy_string(ds, "-", sizeof(ds));
+	}
+	ds[1] = '\0';
 
-		/* String form of the delimiter, for use with strsep(3) */
-		d = *ds;
+	if (ast_str_strlen(var_value)) {
+		int curfieldnum = 1;
+		char *curfieldptr = ast_str_buffer(var_value);
+		int out_field_count = 0;
 
-		pbx_substitute_variables_helper(chan, tmp, tmp2, MAXRESULT - 1);
+		while (curfieldptr != NULL && args.field != NULL) {
+			char *next_range = strsep(&(args.field), "&");
+			int start_field, stop_field;
+			char trashchar;
 
-		if (tmp2) {
-			int curfieldnum = 1;
-			while (tmp2 != NULL && args.field != NULL) {
-				char *nextgroup = strsep(&(args.field), "&");
-				int num1 = 0, num2 = MAXRESULT;
-				char trashchar;
+			if (sscanf(next_range, "%30d-%30d", &start_field, &stop_field) == 2) {
+				/* range with both start and end */
+			} else if (sscanf(next_range, "-%30d", &stop_field) == 1) {
+				/* range with end only */
+				start_field = 1;
+			} else if ((sscanf(next_range, "%30d%1c", &start_field, &trashchar) == 2) && (trashchar == '-')) {
+				/* range with start only */
+				stop_field = INT_MAX;
+			} else if (sscanf(next_range, "%30d", &start_field) == 1) {
+				/* single number */
+				stop_field = start_field;
+			} else {
+				/* invalid field spec */
+				ast_free(var_value);
+				return ERROR_USAGE;
+			}
 
-				if (sscanf(nextgroup, "%d-%d", &num1, &num2) == 2) {
-					/* range with both start and end */
-				} else if (sscanf(nextgroup, "-%d", &num2) == 1) {
-					/* range with end */
-					num1 = 0;
-				} else if ((sscanf(nextgroup, "%d%c", &num1, &trashchar) == 2) && (trashchar == '-')) {
-					/* range with start */
-					num2 = MAXRESULT;
-				} else if (sscanf(nextgroup, "%d", &num1) == 1) {
-					/* single number */
-					num2 = num1;
-				} else {
-					return ERROR_USAGE;
-				}
+			/* Get to start, if not there already */
+			while (curfieldptr != NULL && curfieldnum < start_field) {
+				strsep(&curfieldptr, ds);
+				curfieldnum++;
+			}
 
-				/* Get to start, if any */
-				if (num1 > 0) {
-					while (tmp2 != (char *)NULL + 1 && curfieldnum < num1) {
-						tmp2 = index(tmp2, d) + 1;
-						curfieldnum++;
-					}
-				}
+			/* Most frequent problem is the expectation of reordering fields */
+			if (curfieldnum > start_field) {
+				ast_log(LOG_WARNING, "We're already past the field you wanted?\n");
+			}
 
-				/* Most frequent problem is the expectation of reordering fields */
-				if ((num1 > 0) && (curfieldnum > num1))
-					ast_log(LOG_WARNING, "We're already past the field you wanted?\n");
-
-				/* Re-null tmp2 if we added 1 to NULL */
-				if (tmp2 == (char *)NULL + 1)
-					tmp2 = NULL;
-
-				/* Output fields until we either run out of fields or num2 is reached */
-				while (tmp2 != NULL && curfieldnum <= num2) {
-					char *tmp3 = strsep(&tmp2, ds);
-					int curlen = strlen(buffer);
-
-					if (curlen)
-						snprintf(buffer + curlen, buflen - curlen, "%c%s", d, tmp3);
-					else
-						snprintf(buffer, buflen, "%s", tmp3);
-
-					curfieldnum++;
-				}
+			/* Output fields until we either run out of fields or stop_field is reached */
+			while (curfieldptr != NULL && curfieldnum <= stop_field) {
+				char *field_value = strsep(&curfieldptr, ds);
+				ast_str_append(buf, buflen, "%s%s", out_field_count++ ? ds : "", field_value);
+				curfieldnum++;
 			}
 		}
 	}
+	ast_free(var_value);
 	return 0;
 }
 
@@ -226,9 +255,32 @@ static int acf_sort_exec(struct ast_channel *chan, const char *cmd, char *data, 
 static int acf_cut_exec(struct ast_channel *chan, const char *cmd, char *data, char *buf, size_t len)
 {
 	int ret = -1;
+	struct ast_str *str = ast_str_create(16);
 
-	if (chan)
-		ast_autoservice_start(chan);
+	switch (cut_internal(chan, data, &str, len)) {
+	case ERROR_NOARG:
+		ast_log(LOG_ERROR, "Syntax: CUT(<varname>,<char-delim>,<range-spec>) - missing argument!\n");
+		break;
+	case ERROR_NOMEM:
+		ast_log(LOG_ERROR, "Out of memory\n");
+		break;
+	case ERROR_USAGE:
+		ast_log(LOG_ERROR, "Usage: CUT(<varname>,<char-delim>,<range-spec>)\n");
+		break;
+	case 0:
+		ret = 0;
+		ast_copy_string(buf, ast_str_buffer(str), len);
+		break;
+	default:
+		ast_log(LOG_ERROR, "Unknown internal error\n");
+	}
+	ast_free(str);
+	return ret;
+}
+
+static int acf_cut_exec2(struct ast_channel *chan, const char *cmd, char *data, struct ast_str **buf, ssize_t len)
+{
+	int ret = -1;
 
 	switch (cut_internal(chan, data, buf, len)) {
 	case ERROR_NOARG:
@@ -247,34 +299,18 @@ static int acf_cut_exec(struct ast_channel *chan, const char *cmd, char *data, c
 		ast_log(LOG_ERROR, "Unknown internal error\n");
 	}
 
-	if (chan)
-		ast_autoservice_stop(chan);
-
 	return ret;
 }
 
-struct ast_custom_function acf_sort = {
+static struct ast_custom_function acf_sort = {
 	.name = "SORT",
-	.synopsis = "Sorts a list of key/vals into a list of keys, based upon the vals",
-	.syntax = "SORT(key1:val1[...][,keyN:valN])",
-	.desc =
-"Takes a comma-separated list of keys and values, each separated by a colon, and returns a\n"
-"comma-separated list of the keys, sorted by their values.  Values will be evaluated as\n"
-"floating-point numbers.\n",
 	.read = acf_sort_exec,
 };
 
-struct ast_custom_function acf_cut = {
+static struct ast_custom_function acf_cut = {
 	.name = "CUT",
-	.synopsis = "Slices and dices strings, based upon a named delimiter.",
-	.syntax = "CUT(<varname>,<char-delim>,<range-spec>)",
-	.desc =
-"  varname    - variable you want cut\n"
-"  char-delim - defaults to '-'\n"
-"  range-spec - number of the field you want (1-based offset)\n"
-"             may also be specified as a range (with -)\n"
-"             or group of ranges and fields (with &)\n",
 	.read = acf_cut_exec,
+	.read2 = acf_cut_exec2,
 };
 
 static int unload_module(void)

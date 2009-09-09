@@ -25,7 +25,7 @@
 
 #define DSP_FEATURE_SILENCE_SUPPRESS	(1 << 0)
 #define DSP_FEATURE_BUSY_DETECT		(1 << 1)
-#define DSP_FEATURE_DTMF_DETECT		(1 << 3)
+#define DSP_FEATURE_DIGIT_DETECT	(1 << 3)
 #define DSP_FEATURE_FAX_DETECT		(1 << 4)
 
 #define	DSP_DIGITMODE_DTMF			0				/*!< Detect DTMF digits */
@@ -41,9 +41,14 @@
 #define DSP_PROGRESS_BUSY		(1 << 18)		/*!< Enable busy tone detection */
 #define DSP_PROGRESS_CONGESTION		(1 << 19)		/*!< Enable congestion tone detection */
 #define DSP_FEATURE_CALL_PROGRESS	(DSP_PROGRESS_TALK | DSP_PROGRESS_RINGING | DSP_PROGRESS_BUSY | DSP_PROGRESS_CONGESTION)
+#define DSP_FEATURE_WAITDIALTONE	(1 << 20)		/*!< Enable dial tone detection */
+
+#define DSP_FAXMODE_DETECT_CNG	(1 << 0)
+#define DSP_FAXMODE_DETECT_CED	(1 << 1)
+#define DSP_FAXMODE_DETECT_ALL	(DSP_FAXMODE_DETECT_CNG | DSP_FAXMODE_DETECT_CED)
 
 #define DSP_TONE_STATE_SILENCE  0
-#define DSP_TONE_STATE_RINGING  1 
+#define DSP_TONE_STATE_RINGING  1
 #define DSP_TONE_STATE_DIALTONE 2
 #define DSP_TONE_STATE_TALKING  3
 #define DSP_TONE_STATE_BUSY     4
@@ -53,6 +58,13 @@
 #define DSP_TONE_STATE_HUNGUP 	8
 
 struct ast_dsp;
+
+enum threshold {
+	/* Array offsets */
+	THRESHOLD_SILENCE = 0,
+	/* Always the last */
+	THRESHOLD_MAX = 1,
+};
 
 struct ast_dsp *ast_dsp_new(void);
 void ast_dsp_free(struct ast_dsp *dsp);
@@ -72,13 +84,20 @@ int ast_dsp_call_progress(struct ast_dsp *dsp, struct ast_frame *inf);
 /*! \brief Set zone for doing progress detection */
 int ast_dsp_set_call_progress_zone(struct ast_dsp *dsp, char *zone);
 
-/*! \brief Return AST_FRAME_NULL frames when there is silence, AST_FRAME_BUSY on 
+/*! \brief Return AST_FRAME_NULL frames when there is silence, AST_FRAME_BUSY on
    busies, and call progress, all dependent upon which features are enabled */
 struct ast_frame *ast_dsp_process(struct ast_channel *chan, struct ast_dsp *dsp, struct ast_frame *inf);
 
 /*! \brief Return non-zero if this is silence.  Updates "totalsilence" with the total
    number of seconds of silence  */
 int ast_dsp_silence(struct ast_dsp *dsp, struct ast_frame *f, int *totalsilence);
+
+/*!
+ * \brief Return non-zero if this is noise.  Updates "totalnoise" with the total
+ * number of seconds of noise
+ * \since 1.6.1
+ */
+int ast_dsp_noise(struct ast_dsp *dsp, struct ast_frame *f, int *totalnoise);
 
 /*! \brief Return non-zero if historically this should be a busy, request that
   ast_dsp_silence has already been called */
@@ -99,8 +118,20 @@ void ast_dsp_set_features(struct ast_dsp *dsp, int features);
 /*! \brief Get pending DTMF/MF digits */
 int ast_dsp_getdigits(struct ast_dsp *dsp, char *buf, int max);
 
-/*! \brief Set digit mode */
-int ast_dsp_digitmode(struct ast_dsp *dsp, int digitmode);
+/*! \brief Set digit mode
+ * \version 1.6.1 renamed from ast_dsp_digitmode to ast_dsp_set_digitmode
+ */
+int ast_dsp_set_digitmode(struct ast_dsp *dsp, int digitmode);
+
+/*! \brief Set fax mode */
+int ast_dsp_set_faxmode(struct ast_dsp *dsp, int faxmode);
+
+/*!
+ * \brief Returns true if DSP code was muting any fragment of the last processed frame.
+ * Muting (squelching) happens when DSP code removes DTMF/MF/generic tones from the audio
+ * \since 1.6.1
+ */
+int ast_dsp_was_muted(struct ast_dsp *dsp);
 
 /*! \brief Get tstate (Tone State) */
 int ast_dsp_get_tstate(struct ast_dsp *dsp);
@@ -108,4 +139,34 @@ int ast_dsp_get_tstate(struct ast_dsp *dsp);
 /*! \brief Get tcount (Threshold counter) */
 int ast_dsp_get_tcount(struct ast_dsp *dsp);
 
+/*!
+ * \brief Get silence threshold from dsp.conf
+ * \since 1.6.1
+ */
+int ast_dsp_get_threshold_from_settings(enum threshold which);
+
+/*!
+ * \brief Reloads dsp settings from dsp.conf
+ * \since 1.6.1
+ */
+int ast_dsp_reload(void);
+
+/*!
+ * \brief Load dsp settings from dsp.conf
+ * \since 1.6.1
+ */
+int ast_dsp_init(void);
+
+/*!
+ * \brief Hint that a frame from a dsp was freed
+ *
+ * This is called from ast_frame_free if AST_FRFLAG_FROM_DSP is set. This occurs
+ * because it is possible for the dsp to be freed while someone still holds a reference
+ * to the frame that is in that dsp. This has been known to happen when the dsp on a DAHDI
+ * channel detects a busy signal. The channel is hung up, and the application that read the
+ * frame to begin with still has a reference to the frame.
+ *
+ * \return nothing
+ */
+void ast_dsp_frame_freed(struct ast_frame *fr);
 #endif /* _ASTERISK_DSP_H */

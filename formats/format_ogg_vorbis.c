@@ -225,8 +225,12 @@ static int ogg_vorbis_rewrite(struct ast_filestream *s,
 	while (!tmp->eos) {
 		if (ogg_stream_flush(&tmp->os, &tmp->og) == 0)
 			break;
-		fwrite(tmp->og.header, 1, tmp->og.header_len, s->f);
-		fwrite(tmp->og.body, 1, tmp->og.body_len, s->f);
+		if (!fwrite(tmp->og.header, 1, tmp->og.header_len, s->f)) {
+			ast_log(LOG_WARNING, "fwrite() failed: %s\n", strerror(errno));
+		}
+		if (!fwrite(tmp->og.body, 1, tmp->og.body_len, s->f)) {
+			ast_log(LOG_WARNING, "fwrite() failed: %s\n", strerror(errno));
+		}
 		if (ogg_page_eos(&tmp->og))
 			tmp->eos = 1;
 	}
@@ -251,8 +255,12 @@ static void write_stream(struct vorbis_desc *s, FILE *f)
 				if (ogg_stream_pageout(&s->os, &s->og) == 0) {
 					break;
 				}
-				fwrite(s->og.header, 1, s->og.header_len, f);
-				fwrite(s->og.body, 1, s->og.body_len, f);
+				if (!fwrite(s->og.header, 1, s->og.header_len, f)) {
+				ast_log(LOG_WARNING, "fwrite() failed: %s\n", strerror(errno));
+				}
+				if (!fwrite(s->og.body, 1, s->og.body_len, f)) {
+					ast_log(LOG_WARNING, "fwrite() failed: %s\n", strerror(errno));
+				}
 				if (ogg_page_eos(&s->og)) {
 					s->eos = 1;
 				}
@@ -291,7 +299,7 @@ static int ogg_vorbis_write(struct ast_filestream *fs, struct ast_frame *f)
 	if (!f->datalen)
 		return -1;
 
-	data = (short *) f->data;
+	data = (short *) f->data.ptr;
 
 	buffer = vorbis_analysis_buffer(&s->vd, f->samples);
 
@@ -433,7 +441,7 @@ static struct ast_frame *ogg_vorbis_read(struct ast_filestream *fs,
 	fs->fr.subclass = AST_FORMAT_SLINEAR;
 	fs->fr.mallocd = 0;
 	AST_FRAME_SET_BUFFER(&fs->fr, fs->buf, AST_FRIENDLY_OFFSET, BUF_SIZE);
-	buf = (short *)(fs->fr.data);	/* SLIN data buffer */
+	buf = (short *)(fs->fr.data.ptr);	/* SLIN data buffer */
 
 	while (samples_out != SAMPLES_MAX) {
 		float **pcm;

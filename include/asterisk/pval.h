@@ -1,6 +1,7 @@
 #ifndef _ASTERISK_PVAL_H
 #define _ASTERISK_PVAL_H
 
+/* whatever includes this, better include asterisk/lock.h and asterisk/hashtab.h */
 
 typedef enum 
 {
@@ -68,7 +69,6 @@ struct pval
 		struct pval *statements; /* used in case, default, catch, while's statement, CONTEXT elements, GLOBALS */
 		char *val;  /* used in VARDEC */
 		char *for_test; /* used in FOR */
-		int label_in_case; /* a boolean for LABELs */
 		struct pval *goto_target;  /* used in GOTO */
 	} u2;
 	
@@ -137,13 +137,13 @@ struct pval *find_context(char *name);
 struct pval *find_macro(char *name);
 struct ael_priority *new_prio(void);
 struct ael_extension *new_exten(void);
-void linkprio(struct ael_extension *exten, struct ael_priority *prio);
+void linkprio(struct ael_extension *exten, struct ael_priority *prio, struct ael_extension *mother_exten);
 void destroy_extensions(struct ael_extension *exten);
 /* static void linkexten(struct ael_extension *exten, struct ael_extension *add);
    static void gen_prios(struct ael_extension *exten, char *label, pval *statement, struct ael_extension *mother_exten, struct ast_context *context ); */
 void set_priorities(struct ael_extension *exten);
 void add_extensions(struct ael_extension *exten);
-void ast_compile_ael2(struct ast_context **local_contexts, struct pval *root);
+void ast_compile_ael2(struct ast_context **local_contexts, struct ast_hashtab *local_table, struct pval *root);
 void destroy_pval(pval *item);
 void destroy_pval_item(pval *item);
 int is_float(char *arg );

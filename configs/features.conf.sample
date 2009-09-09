@@ -3,14 +3,18 @@
 ;
 
 [general]
-parkext => 700			; What extension to dial to park
-parkpos => 701-720		; What extensions to park calls on. These needs to be
-				; numeric, as Asterisk starts from the start position
+parkext => 700			; What extension to dial to park	(all parking lots)
+parkpos => 701-720		; What extensions to park calls on. (defafult parking lot)
+				; These needs to be numeric, as Asterisk starts from the start position
 				; and increments with one for the next parked call.
-context => parkedcalls		; Which context parked calls are in
-;parkingtime => 45		; Number of seconds a call can be parked for 
+context => parkedcalls		; Which context parked calls are in (default parking lot)
+;parkinghints = no		; Add hints priorities automatically for parking slots (default is no).
+;parkingtime => 45		; Number of seconds a call can be parked for
 				; (default is 45 seconds)
-;courtesytone = beep		; Sound file to play to the parked caller 
+;comebacktoorigin = yes	; Whether to return to the original calling extension upon parking
+				; timeout or to send the call to context 'parkedcallstimeout' at
+				; extension 's', priority '1' (default is yes).
+;courtesytone = beep		; Sound file to play to the parked caller
 				; when someone dials a parked call
 				; or the Touch Monitor is activated/deactivated.
 ;parkedplay = caller		; Who to play the courtesy tone to when picking up a parked call
@@ -19,8 +23,12 @@ context => parkedcalls		; Which context parked calls are in
                                 ; one of: callee, caller, both, no (default is no)
 ;parkedcallreparking = caller   ; Enables or disables DTMF based parking when picking up a parked call.
                                 ; one of: callee, caller, both, no (default is no)
+;parkedcallhangup = caller      ; Enables or disables DTMF based hangups when picking up a parked call.
+                                ; one of: callee, caller, both, no (default is no)
+;parkedcallrecording = caller   ; Enables or disables DTMF based one-touch recording when picking up a parked call.
+                                ; one of: callee, caller, both, no (default is no)
 ;adsipark = yes			; if you want ADSI parking announcements
-;findslot => next		; Continue to the 'next' free parking space. 
+;findslot => next		; Continue to the 'next' free parking space.
 				; Defaults to 'first' available
 ;parkedmusicclass=default	; This is the MOH class to use for the parked channel
 				; as long as the class is not set on the channel directly
@@ -31,8 +39,10 @@ context => parkedcalls		; Which context parked calls are in
 ;xfersound = beep		; to indicate an attended transfer is complete
 ;xferfailsound = beeperr	; to indicate a failed transfer
 ;pickupexten = *8		; Configure the pickup extension. (default is *8)
-;featuredigittimeout = 500	; Max time (ms) between digits for 
-				; feature activation  (default is 500 ms)
+;pickupsound = beep		; to indicate a successful pickup (default: no sound)
+;pickupfailsound = beeperr	; to indicate that the pickup failed (default: no sound)
+;featuredigittimeout = 1000	; Max time (ms) between digits for
+                            ; feature activation  (default is 1000 ms)
 ;atxfernoanswertimeout = 15 ; Timeout for answer on attended transfer default is 15 seconds.
 ;atxferdropcall = no        ; If someone does an attended transfer, then hangs up before the transferred
                             ; caller is connected, then by default, the system will try to call back the
@@ -46,21 +56,25 @@ context => parkedcalls		; Which context parked calls are in
 ; They can not be used while the remote party is ringing or in progress. If you require this feature you can use
 ; chan_local in combination with Answer to accomplish it.
 
+
 [featuremap]
-;blindxfer => #1		; Blind transfer  (default is #)
-;disconnect => *0		; Disconnect  (default is *)
-;automon => *1			; One Touch Record a.k.a. Touch Monitor
-;atxfer => *2			; Attended transfer
-;parkcall => #72                ; Park call (one step parking)
-;automixmon => *3		; One Touch Record a.k.a. Touch MixMonitor
+;blindxfer => #1		; Blind transfer  (default is #) -- Make sure to set the T and/or t option in the Dial() or Queue() app call!
+;disconnect => *0		; Disconnect  (default is *) -- Make sure to set the H and/or h option in the Dial() or Queue() app call!
+;automon => *1			; One Touch Record a.k.a. Touch Monitor -- Make sure to set the W and/or w option in the Dial() or Queue() app call!
+;atxfer => *2			; Attended transfer  -- Make sure to set the T and/or t option in the Dial() or Queue()  app call!
+;parkcall => #72        ; Park call (one step parking)  -- Make sure to set the K and/or k option in the Dial() app call!
+;automixmon => *3		; One Touch Record a.k.a. Touch MixMonitor -- Make sure to set the X and/or x option in the Dial() or Queue() app call!
 
 [applicationmap]
 ; Note that the DYNAMIC_FEATURES channel variable must be set to use the features
 ; defined here.  The value of DYNAMIC_FEATURES should be the names of the features
 ; to allow the channel to use separated by '#'.  For example:
 ;
-;    Set(DYNAMIC_FEATURES=myfeature1#myfeature2#myfeature3)
+;    Set(__DYNAMIC_FEATURES=myfeature1#myfeature2#myfeature3)
 ;
+; (Note: The two leading underscores allow these feature settings to be set on
+;  on the outbound channels, as well.  Otherwise, only the original channel
+;  will have access to these features.)
 ;
 ; The syntax for declaring a dynamic feature is the following:
 ;
@@ -84,6 +98,7 @@ context => parkedcalls		; Which context parked calls are in
 ;                   channel waits for the feature to complete. If left blank,
 ;                   no music will be played.
 ;
+
 ;
 ; IMPORTANT NOTE: The applicationmap is not intended to be used for all Asterisk
 ;   applications. When applications are used in extensions.conf, they are executed
@@ -105,20 +120,21 @@ context => parkedcalls		; Which context parked calls are in
 ;unpauseMonitor => #3,self/callee,UnPauseMonitor   ;Allow the callee to unpause monitoring
 ;                                                  ;on their channel
 ;
+;*** Define another parking lot
+;
+; You can set parkinglot with the CHANNEL dialplan function
+; or by setting 'parkinglot' directly in the channel configuration file.
+;
+;[parkinglot_edvina]
+;context => edvinapark
+;parkpos => 800-850
+;findslot => next
+
 ; GROUPS
 ;   Groups are groupings of features defined in [applicationmap]
 ;   that can have their own key mappings.
-;
-;   Groups are defined as a configuration section,
-;   and can be set as part of DYNAMIC_FEATURES in
-;   the same way that a normal feature can... 
-;	etc:	
-;
-;	  Set(DYNAMIC_FEATURES=myGroupName);
 ;
 ; example:
 ; [myGroupName]        ; defines the group named myGroupName
 ; testfeature => #9    ; associates testfeature with the group and the keycode #9
 ; pauseMonitor         ; associates pauseMonitor with the group and the keycode
-;                      ; defined in [applicationmap]
-

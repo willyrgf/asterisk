@@ -21,6 +21,8 @@
 
 #include "asterisk/network.h"
 #include "asterisk/lock.h"
+#include "asterisk/datastore.h"
+#include "asterisk/xmldoc.h"
 
 /*!
  \file
@@ -69,6 +71,8 @@
 #define EVENT_FLAG_REPORTING		(1 << 9) /* Reporting events such as rtcp sent */
 #define EVENT_FLAG_CDR			(1 << 10) /* CDR events */
 #define EVENT_FLAG_DIALPLAN		(1 << 11) /* Dialplan events (VarSet, NewExten) */
+#define EVENT_FLAG_ORIGINATE	(1 << 12) /* Originate a call to an extension */
+#define EVENT_FLAG_AGI			(1 << 13) /* AGI events */
 /*@} */
 
 /*! \brief Export manager structures */
@@ -113,14 +117,19 @@ struct message {
 struct manager_action {
 	/*! Name of the action */
 	const char *action;
-	/*! Short description of the action */
-	const char *synopsis;
-	/*! Detailed description of the action */
-	const char *description;
+	AST_DECLARE_STRING_FIELDS(
+		AST_STRING_FIELD(synopsis);	/*!< Synopsis text (short description). */
+		AST_STRING_FIELD(description);	/*!< Description (help text) */
+		AST_STRING_FIELD(syntax);	/*!< Syntax text */
+		AST_STRING_FIELD(arguments);	/*!< Description of each argument. */
+		AST_STRING_FIELD(seealso);	/*!< See also */
+	);
 	/*! Permission required for action.  EVENT_FLAG_* */
 	int authority;
 	/*! Function to be called */
 	int (*func)(struct mansession *s, const struct message *m);
+	/*! Where the documentation come from. */
+	enum ast_doc_src docsrc;
 	/*! For easy linking */
 	AST_RWLIST_ENTRY(manager_action) list;
 };
@@ -129,6 +138,8 @@ struct manager_action {
  * \note  Use ast_manager_register2() to register with help text for new manager commands */
 #define ast_manager_register(a, b, c, d) ast_manager_register2(a, b, c, d, NULL)
 
+/*! \brief Register a manager callback using XML documentation to describe the manager. */
+#define ast_manager_register_xml(a, b, c) ast_manager_register2(a, b, c, NULL, NULL)
 
 /*! \brief Register a manager command with the manager interface 
  	\param action Name of the requested Action:
@@ -144,8 +155,8 @@ int ast_manager_register2(
 	const char *synopsis,
 	const char *description);
 
-/*! \brief Unregister a registred manager command 
-	\param action Name of registred Action:
+/*! \brief Unregister a registered manager command 
+	\param action Name of registered Action:
 */
 int ast_manager_unregister( char *action );
 
@@ -156,7 +167,7 @@ int ast_manager_unregister( char *action );
  * \retval 1 if the session has the permission mask capabilities
  * \retval 0 otherwise
  */
-int astman_verify_session_readpermissions(unsigned long ident, int perm);
+int astman_verify_session_readpermissions(uint32_t ident, int perm);
 
 /*!
  * \brief Verify a session's write permissions against a permission mask.  
@@ -165,7 +176,7 @@ int astman_verify_session_readpermissions(unsigned long ident, int perm);
  * \retval 1 if the session has the permission mask capabilities, otherwise 0
  * \retval 0 otherwise
  */
-int astman_verify_session_writepermissions(unsigned long ident, int perm);
+int astman_verify_session_writepermissions(uint32_t ident, int perm);
 
 /*! \brief External routines may send asterisk manager events this way 
  *  	\param category	Event category, matches manager authorization
@@ -178,7 +189,7 @@ int astman_verify_session_writepermissions(unsigned long ident, int perm);
 #define manager_event(category, event, contents , ...)	\
         __manager_event(category, event, __FILE__, __LINE__, __PRETTY_FUNCTION__, contents , ## __VA_ARGS__)
 
-int __attribute__ ((format(printf, 6, 7))) __manager_event(int category, const char *event,
+int __attribute__((format(printf, 6, 7))) __manager_event(int category, const char *event,
 							   const char *file, int line, const char *func,
 							   const char *contents, ...);
 
@@ -200,12 +211,43 @@ void astman_send_ack(struct mansession *s, const struct message *m, char *msg);
 /*! \brief Send ack in manager list transaction */
 void astman_send_listack(struct mansession *s, const struct message *m, char *msg, char *listflag);
 
-void __attribute__ ((format (printf, 2, 3))) astman_append(struct mansession *s, const char *fmt, ...);
+void __attribute__((format(printf, 2, 3))) astman_append(struct mansession *s, const char *fmt, ...);
+
+/*! \brief Determinie if a manager session ident is authenticated */
+int astman_is_authed(uint32_t ident);
 
 /*! \brief Called by Asterisk initialization */
 int init_manager(void);
 
 /*! \brief Called by Asterisk module functions and the CLI command */
 int reload_manager(void);
+
+/*! 
+ * \brief Add a datastore to a session
+ *
+ * \retval 0 success
+ * \retval non-zero failure
+ * \since 1.6.1
+ */
+
+int astman_datastore_add(struct mansession *s, struct ast_datastore *datastore);
+
+/*! 
+ * \brief Remove a datastore from a session
+ *
+ * \retval 0 success
+ * \retval non-zero failure
+ * \since 1.6.1
+ */
+int astman_datastore_remove(struct mansession *s, struct ast_datastore *datastore);
+
+/*! 
+ * \brief Find a datastore on a session
+ *
+ * \retval pointer to the datastore if found
+ * \retval NULL if not found
+ * \since 1.6.1
+ */
+struct ast_datastore *astman_datastore_find(struct mansession *s, const struct ast_datastore_info *info, const char *uid);
 
 #endif /* _ASTERISK_MANAGER_H */

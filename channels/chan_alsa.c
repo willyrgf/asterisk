@@ -28,7 +28,7 @@
  */
 
 /*** MODULEINFO
-	<depend>asound</depend>
+	<depend>alsa</depend>
  ***/
 
 #include "asterisk.h"
@@ -55,6 +55,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/stringfields.h"
 #include "asterisk/abstract_jb.h"
 #include "asterisk/musiconhold.h"
+#include "asterisk/poll-compat.h"
 
 /*! Global jitterbuffer configuration - by default, jb is disabled */
 static struct ast_jb_conf default_jbconf = {
@@ -89,7 +90,6 @@ static snd_pcm_format_t format = SND_PCM_FORMAT_S16_LE;
 static snd_pcm_format_t format = SND_PCM_FORMAT_S16_BE;
 #endif
 
-/* static int block = O_NONBLOCK; */
 static char indevname[50] = ALSA_INDEV;
 static char outdevname[50] = ALSA_OUTDEV;
 
@@ -130,7 +130,7 @@ static int writedev = -1;
 
 static int autoanswer = 1;
 
-static struct ast_channel *alsa_request(const char *type, int format, void *data, int *cause);
+static struct ast_channel *alsa_request(const char *type, int format, const struct ast_channel *requestor, void *data, int *cause);
 static int alsa_digit(struct ast_channel *c, char digit, unsigned int duration);
 static int alsa_text(struct ast_channel *c, const char *text);
 static int alsa_hangup(struct ast_channel *c);
@@ -170,7 +170,7 @@ static snd_pcm_t *alsa_card_init(char *dev, snd_pcm_stream_t stream)
 	unsigned int rate = DESIRED_RATE;
 	snd_pcm_uframes_t start_threshold, stop_threshold;
 
-	err = snd_pcm_open(&handle, dev, stream, O_NONBLOCK);
+	err = snd_pcm_open(&handle, dev, stream, SND_PCM_NONBLOCK);
 	if (err < 0) {
 		ast_log(LOG_ERROR, "snd_pcm_open failed: %s\n", snd_strerror(err));
 		return NULL;
@@ -298,9 +298,7 @@ static int alsa_text(struct ast_channel *c, const char *text)
 static void grab_owner(void)
 {
 	while (alsa.owner && ast_channel_trylock(alsa.owner)) {
-		ast_mutex_unlock(&alsalock);
-		usleep(1);
-		ast_mutex_lock(&alsalock);
+		DEADLOCK_AVOIDANCE(&alsalock);
 	}
 }
 
@@ -378,19 +376,23 @@ static int alsa_write(struct ast_channel *chan, struct ast_frame *f)
 		ast_log(LOG_WARNING, "Frame too large\n");
 		res = -1;
 	} else {
-		memcpy(sizbuf + sizpos, f->data, f->datalen);
+		memcpy(sizbuf + sizpos, f->data.ptr, f->datalen);
 		len += f->datalen;
 		pos = 0;
 		state = snd_pcm_state(alsa.ocard);
 		if (state == SND_PCM_STATE_XRUN)
 			snd_pcm_prepare(alsa.ocard);
-		res = snd_pcm_writei(alsa.ocard, sizbuf, len / 2);
+		while ((res = snd_pcm_writei(alsa.ocard, sizbuf, len / 2)) == -EAGAIN) {
+			usleep(1);
+		}
 		if (res == -EPIPE) {
 #if DEBUG
 			ast_debug(1, "XRUN write\n");
 #endif
 			snd_pcm_prepare(alsa.ocard);
-			res = snd_pcm_writei(alsa.ocard, sizbuf, len / 2);
+			while ((res = snd_pcm_writei(alsa.ocard, sizbuf, len / 2)) == -EAGAIN) {
+				usleep(1);
+			}
 			if (res != len / 2) {
 				ast_log(LOG_ERROR, "Write error: %s\n", snd_strerror(res));
 				res = -1;
@@ -427,7 +429,7 @@ static struct ast_frame *alsa_read(struct ast_channel *chan)
 	f.subclass = 0;
 	f.samples = 0;
 	f.datalen = 0;
-	f.data = NULL;
+	f.data.ptr = NULL;
 	f.offset = 0;
 	f.src = "Console";
 	f.mallocd = 0;
@@ -472,7 +474,7 @@ static struct ast_frame *alsa_read(struct ast_channel *chan)
 		f.subclass = AST_FORMAT_SLINEAR;
 		f.samples = FRAME_SIZE;
 		f.datalen = FRAME_SIZE * 2;
-		f.data = buf;
+		f.data.ptr = buf;
 		f.offset = AST_FRIENDLY_OFFSET;
 		f.src = "Console";
 		f.mallocd = 0;
@@ -510,6 +512,7 @@ static int alsa_indicate(struct ast_channel *chan, int cond, const void *data, s
 	case AST_CONTROL_PROGRESS:
 	case AST_CONTROL_PROCEEDING:
 	case AST_CONTROL_VIDUPDATE:
+	case AST_CONTROL_SRCUPDATE:
 		break;
 	case AST_CONTROL_HOLD:
 		ast_verbose(" << Console Has Been Placed on Hold >> \n");
@@ -529,11 +532,11 @@ static int alsa_indicate(struct ast_channel *chan, int cond, const void *data, s
 	return res;
 }
 
-static struct ast_channel *alsa_new(struct chan_alsa_pvt *p, int state)
+static struct ast_channel *alsa_new(struct chan_alsa_pvt *p, int state, const char *linkedid)
 {
 	struct ast_channel *tmp = NULL;
 
-	if (!(tmp = ast_channel_alloc(1, state, 0, 0, "", p->exten, p->context, 0, "ALSA/%s", indevname)))
+	if (!(tmp = ast_channel_alloc(1, state, 0, 0, "", p->exten, p->context, linkedid, 0, "ALSA/%s", indevname)))
 		return NULL;
 
 	tmp->tech = &alsa_tech;
@@ -562,12 +565,12 @@ static struct ast_channel *alsa_new(struct chan_alsa_pvt *p, int state)
 	return tmp;
 }
 
-static struct ast_channel *alsa_request(const char *type, int format, void *data, int *cause)
+static struct ast_channel *alsa_request(const char *type, int fmt, const struct ast_channel *requestor, void *data, int *cause)
 {
-	int oldformat = format;
+	int oldformat = fmt;
 	struct ast_channel *tmp = NULL;
 
-	if (!(format &= AST_FORMAT_SLINEAR)) {
+	if (!(fmt &= AST_FORMAT_SLINEAR)) {
 		ast_log(LOG_NOTICE, "Asked to get a channel of format '%d'\n", oldformat);
 		return NULL;
 	}
@@ -577,7 +580,7 @@ static struct ast_channel *alsa_request(const char *type, int format, void *data
 	if (alsa.owner) {
 		ast_log(LOG_NOTICE, "Already have a call on the ALSA channel\n");
 		*cause = AST_CAUSE_BUSY;
-	} else if (!(tmp = alsa_new(&alsa, AST_STATE_DOWN))) {
+	} else if (!(tmp = alsa_new(&alsa, AST_STATE_DOWN, requestor ? requestor->linkedid : NULL))) {
 		ast_log(LOG_WARNING, "Unable to create new ALSA channel\n");
 	}
 
@@ -588,9 +591,6 @@ static struct ast_channel *alsa_request(const char *type, int format, void *data
 
 static char *autoanswer_complete(const char *line, const char *word, int pos, int state)
 {
-#ifndef MIN
-#define MIN(a,b) ((a) < (b) ? (a) : (b))
-#endif
 	switch (state) {
 		case 0:
 			if (!ast_strlen_zero(word) && !strncasecmp(word, "on", MIN(strlen(word), 2)))
@@ -718,14 +718,14 @@ static char *console_sendtext(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 		}
 
 		text2send[strlen(text2send) - 1] = '\n';
-		f.data = text2send;
+		f.data.ptr = text2send;
 		f.datalen = strlen(text2send) + 1;
 		grab_owner();
 		if (alsa.owner) {
 			ast_queue_frame(alsa.owner, &f);
 			f.frametype = AST_FRAME_CONTROL;
 			f.subclass = AST_CONTROL_ANSWER;
-			f.data = NULL;
+			f.data.ptr = NULL;
 			f.datalen = 0;
 			ast_queue_frame(alsa.owner, &f);
 			ast_channel_unlock(alsa.owner);
@@ -765,7 +765,7 @@ static char *console_hangup(struct ast_cli_entry *e, int cmd, struct ast_cli_arg
 		hookstate = 0;
 		grab_owner();
 		if (alsa.owner) {
-			ast_queue_hangup(alsa.owner);
+			ast_queue_hangup_with_cause(alsa.owner, AST_CAUSE_NORMAL_CLEARING);
 			ast_channel_unlock(alsa.owner);
 		}
 	}
@@ -779,7 +779,7 @@ static char *console_dial(struct ast_cli_entry *e, int cmd, struct ast_cli_args 
 {
 	char tmp[256], *tmp2;
 	char *mye, *myc;
-	char *d;
+	const char *d;
 	char *res = CLI_SUCCESS;
 
 	switch (cmd) {
@@ -830,7 +830,7 @@ static char *console_dial(struct ast_cli_entry *e, int cmd, struct ast_cli_args 
 			ast_copy_string(alsa.exten, mye, sizeof(alsa.exten));
 			ast_copy_string(alsa.context, myc, sizeof(alsa.context));
 			hookstate = 1;
-			alsa_new(&alsa, AST_STATE_RINGING);
+			alsa_new(&alsa, AST_STATE_RINGING, NULL);
 		} else
 			ast_cli(a->fd, "No such extension '%s' in context '%s'\n", mye, myc);
 	}
@@ -859,8 +859,13 @@ static int load_module(void)
 
 	strcpy(mohinterpret, "default");
 
-	if (!(cfg = ast_config_load(config, config_flags)))
+	if (!(cfg = ast_config_load(config, config_flags))) {
+		ast_log(LOG_ERROR, "Unable to read ALSA configuration file %s.  Aborting.\n", config);
 		return AST_MODULE_LOAD_DECLINE;
+	} else if (cfg == CONFIG_STATUS_FILEINVALID) {
+		ast_log(LOG_ERROR, "%s is in an invalid format.  Aborting.\n", config);
+		return AST_MODULE_LOAD_DECLINE;
+	}
 
 	v = ast_variable_browse(cfg, "general");
 	for (; v; v = v->next) {
@@ -900,7 +905,7 @@ static int load_module(void)
 		return AST_MODULE_LOAD_FAILURE;
 	}
 
-	ast_cli_register_multiple(cli_alsa, sizeof(cli_alsa) / sizeof(struct ast_cli_entry));
+	ast_cli_register_multiple(cli_alsa, ARRAY_LEN(cli_alsa));
 
 	return AST_MODULE_LOAD_SUCCESS;
 }
@@ -908,7 +913,7 @@ static int load_module(void)
 static int unload_module(void)
 {
 	ast_channel_unregister(&alsa_tech);
-	ast_cli_unregister_multiple(cli_alsa, sizeof(cli_alsa) / sizeof(struct ast_cli_entry));
+	ast_cli_unregister_multiple(cli_alsa, ARRAY_LEN(cli_alsa));
 
 	if (alsa.icard)
 		snd_pcm_close(alsa.icard);

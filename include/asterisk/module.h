@@ -58,10 +58,11 @@ enum ast_module_unload_mode {
 };
 
 enum ast_module_load_result {
-	AST_MODULE_LOAD_SUCCESS = 0,	/*!< Module loaded and configured */
-	AST_MODULE_LOAD_DECLINE = 1,	/*!< Module is not configured */
-	AST_MODULE_LOAD_SKIP = 2,	/*!< Module was skipped for some reason */
-	AST_MODULE_LOAD_FAILURE = -1,	/*!< Module could not be loaded properly */
+	AST_MODULE_LOAD_SUCCESS = 0,    /*!< Module loaded and configured */
+	AST_MODULE_LOAD_DECLINE = 1,    /*!< Module is not configured */
+	AST_MODULE_LOAD_SKIP = 2,       /*!< Module was skipped for some reason */
+	AST_MODULE_LOAD_PRIORITY = 3,   /*!< Module is not loaded yet, but is added to prioity heap */
+	AST_MODULE_LOAD_FAILURE = -1,   /*!< Module could not be loaded properly */
 };
 
 /*! 
@@ -69,7 +70,7 @@ enum ast_module_load_result {
  * \param resource_name The name of the module to load.
  *
  * This function is run by the PBX to load the modules.  It performs
- * all loading and initilization tasks.   Basically, to load a module, just
+ * all loading and initialization tasks.   Basically, to load a module, just
  * give it the name of the module and it will do the rest.
  *
  * \return See possible enum values for ast_module_load_result.
@@ -189,6 +190,7 @@ struct ast_module_user_list;
 enum ast_module_flags {
 	AST_MODFLAG_DEFAULT = 0,
 	AST_MODFLAG_GLOBAL_SYMBOLS = (1 << 0),
+	AST_MODFLAG_LOAD_ORDER = (1 << 1),
 };
 
 struct ast_module_info {
@@ -219,6 +221,13 @@ struct ast_module_info {
 
 	/*! The value of AST_BUILDOPT_SUM when this module was compiled */
 	const char buildopt_sum[33];
+
+	/*! This value represents the order in which a module's load() function is initialized.
+	 *  The lower this value, the higher the priority.  The value is only checked if the
+	 *  AST_MODFLAG_LOAD_ORDER flag is set.  If the AST_MODFLAG_LOAD_ORDER flag is not set,
+	 *  this value will never be read and the module will be given the lowest possible priority
+	 *  on load. */
+	unsigned char load_pri;
 };
 
 void ast_module_register(const struct ast_module_info *);
@@ -242,23 +251,23 @@ void ast_module_unref(struct ast_module *);
 		load_func,				\
 		reload_func,				\
 		unload_func,				\
+		NULL,					\
+		NULL,					\
 		AST_MODULE,				\
-		NULL,					\
-		NULL,					\
 		desc,					\
 		keystr,					\
 		flags_to_set,				\
 		AST_BUILDOPT_SUM,			\
 	};						\
-	static void  __attribute__ ((constructor)) __reg_module(void) \
+	static void  __attribute__((constructor)) __reg_module(void) \
 	{ \
 		ast_module_register(&__mod_info); \
 	} \
-	static void  __attribute__ ((destructor)) __unreg_module(void) \
+	static void  __attribute__((destructor)) __unreg_module(void) \
 	{ \
 		ast_module_unregister(&__mod_info); \
 	} \
-	const static __attribute__((unused)) struct ast_module_info *ast_module_info = &__mod_info
+	static const __attribute__((unused)) struct ast_module_info *ast_module_info = &__mod_info
 
 #define AST_MODULE_INFO_STANDARD(keystr, desc)		\
 	AST_MODULE_INFO(keystr, AST_MODFLAG_DEFAULT, desc,	\
@@ -271,7 +280,7 @@ void ast_module_unref(struct ast_module *);
 /* forward declare this pointer in modules, so that macro/function
    calls that need it can get it, since it will actually be declared
    and populated at the end of the module's source file... */
-const static __attribute__((unused)) struct ast_module_info *ast_module_info;
+static const __attribute__((unused)) struct ast_module_info *ast_module_info;
 
 #if !defined(EMBEDDED_MODULE)
 #define __MODULE_INFO_SECTION
@@ -344,15 +353,15 @@ static void __restore_globals(void)
 		.buildopt_sum = AST_BUILDOPT_SUM,		\
 		fields						\
 	};							\
-	static void  __attribute__ ((constructor)) __reg_module(void) \
+	static void  __attribute__((constructor)) __reg_module(void) \
 	{ \
 		ast_module_register(&__mod_info); \
 	} \
-	static void  __attribute__ ((destructor)) __unreg_module(void) \
+	static void  __attribute__((destructor)) __unreg_module(void) \
 	{ \
 		ast_module_unregister(&__mod_info); \
 	} \
-	const static struct ast_module_info *ast_module_info = &__mod_info
+	static const struct ast_module_info *ast_module_info = &__mod_info
 
 #define AST_MODULE_INFO_STANDARD(keystr, desc)		\
 	AST_MODULE_INFO(keystr, AST_MODFLAG_DEFAULT, desc,	\
@@ -380,6 +389,23 @@ static void __restore_globals(void)
  */
 #define ast_register_application(app, execute, synopsis, description) ast_register_application2(app, execute, synopsis, description, ast_module_info->self)
 
+/*! 
+ * \brief Register an application using XML documentation.
+ *
+ * \param app Short name of the application
+ * \param execute a function callback to execute the application. It should return
+ *                non-zero if the channel needs to be hung up.
+ * 
+ * This registers an application with Asterisk's internal application list. 
+ * \note The individual applications themselves are responsible for registering and unregistering
+ *       and unregistering their own CLI commands.
+ * 
+ * \retval 0 success 
+ * \retval -1 failure.
+ */
+#define ast_register_application_xml(app, execute) ast_register_application(app, execute, NULL, NULL)
+
+
 /*!
  * \brief Register an application.
  *
@@ -398,7 +424,7 @@ static void __restore_globals(void)
  * \retval 0 success
  * \retval -1 failure.
  */
-int ast_register_application2(const char *app, int (*execute)(struct ast_channel *, void *),
+int ast_register_application2(const char *app, int (*execute)(struct ast_channel *, const char *),
 				     const char *synopsis, const char *description, void *mod);
 
 /*! 

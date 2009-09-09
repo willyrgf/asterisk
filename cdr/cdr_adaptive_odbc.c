@@ -19,13 +19,14 @@
 /*! \file
  *
  * \brief Adaptive ODBC CDR backend
- * 
+ *
  * \author Tilghman Lesher <cdr_adaptive_odbc__v1@the-tilghman.com>
  * \ingroup cdr_drivers
  */
 
 /*** MODULEINFO
-	<depend>unixodbc</depend>
+	<depend>generic_odbc</depend>
+	<depend>ltdl</depend>
  ***/
 
 #include "asterisk.h"
@@ -57,6 +58,7 @@ struct columns {
 	char *name;
 	char *cdrname;
 	char *filtervalue;
+	char *staticvalue;
 	SQLSMALLINT type;
 	SQLINTEGER size;
 	SQLSMALLINT decimals;
@@ -69,6 +71,7 @@ struct columns {
 struct tables {
 	char *connection;
 	char *table;
+	unsigned int usegmtime:1;
 	AST_LIST_HEAD_NOLOCK(odbc_columns, columns) columns;
 	AST_RWLIST_ENTRY(tables) list;
 };
@@ -86,14 +89,14 @@ static int load_config(void)
 	char columnname[80];
 	char connection[40];
 	char table[40];
-	int lenconnection, lentable;
+	int lenconnection, lentable, usegmtime = 0;
 	SQLLEN sqlptr;
 	int res = 0;
 	SQLHSTMT stmt = NULL;
 	struct ast_flags config_flags = { 0 }; /* Part of our config comes from the database */
 
 	cfg = ast_config_load(CONFIG, config_flags);
-	if (!cfg) {
+	if (!cfg || cfg == CONFIG_STATUS_FILEINVALID) {
 		ast_log(LOG_WARNING, "Unable to load " CONFIG ".  No adaptive ODBC CDRs.\n");
 		return -1;
 	}
@@ -109,6 +112,10 @@ static int load_config(void)
 		}
 		ast_copy_string(connection, tmp, sizeof(connection));
 		lenconnection = strlen(connection);
+
+		if (!ast_strlen_zero(tmp = ast_variable_retrieve(cfg, catg, "usegmtime"))) {
+			usegmtime = ast_true(tmp);
+		}
 
 		/* When loading, we want to be sure we can connect. */
 		obj = ast_odbc_request_obj(connection, 1);
@@ -146,6 +153,7 @@ static int load_config(void)
 			break;
 		}
 
+		tableptr->usegmtime = usegmtime;
 		tableptr->connection = (char *)tableptr + sizeof(*tableptr);
 		tableptr->table = (char *)tableptr + sizeof(*tableptr) + lenconnection + 1;
 		ast_copy_string(tableptr->connection, connection, lenconnection + 1);
@@ -179,7 +187,7 @@ static int load_config(void)
 		}
 
 		while ((res = SQLFetch(stmt)) != SQL_NO_DATA && res != SQL_ERROR) {
-			char *cdrvar = "";
+			char *cdrvar = "", *staticvalue = "";
 
 			SQLGetData(stmt,  4, SQL_C_CHAR, columnname, sizeof(columnname), &sqlptr);
 
@@ -191,14 +199,23 @@ static int load_config(void)
 			 */
 			for (var = ast_variable_browse(cfg, catg); var; var = var->next) {
 				if (strncmp(var->name, "alias", 5) == 0 && strcasecmp(var->value, columnname) == 0) {
-					char *tmp = ast_strdupa(var->name + 5);
-					cdrvar = ast_strip(tmp);
+					char *alias = ast_strdupa(var->name + 5);
+					cdrvar = ast_strip(alias);
 					ast_verb(3, "Found alias %s for column %s in %s@%s\n", cdrvar, columnname, tableptr->table, tableptr->connection);
 					break;
+				} else if (strncmp(var->name, "static", 6) == 0 && strcasecmp(var->value, columnname) == 0) {
+					char *item = ast_strdupa(var->name + 6);
+					item = ast_strip(item);
+					if (item[0] == '"' && item[strlen(item) - 1] == '"') {
+						/* Remove surrounding quotes */
+						item[strlen(item) - 1] = '\0';
+						item++;
+					}
+					staticvalue = item;
 				}
 			}
 
-			entry = ast_calloc(sizeof(char), sizeof(*entry) + strlen(columnname) + 1 + strlen(cdrvar) + 1);
+			entry = ast_calloc(sizeof(char), sizeof(*entry) + strlen(columnname) + 1 + strlen(cdrvar) + 1 + strlen(staticvalue) + 1);
 			if (!entry) {
 				ast_log(LOG_ERROR, "Out of memory creating entry for column '%s' in table '%s' on connection '%s'\n", columnname, table, connection);
 				res = -1;
@@ -210,8 +227,14 @@ static int load_config(void)
 			if (!ast_strlen_zero(cdrvar)) {
 				entry->cdrname = entry->name + strlen(columnname) + 1;
 				strcpy(entry->cdrname, cdrvar);
-			} else /* Point to same place as the column name */
+			} else { /* Point to same place as the column name */
 				entry->cdrname = (char *)entry + sizeof(*entry);
+			}
+
+			if (!ast_strlen_zero(staticvalue)) {
+				entry->staticvalue = entry->cdrname + strlen(entry->cdrname) + 1;
+				strcpy(entry->staticvalue, staticvalue);
+			}
 
 			SQLGetData(stmt,  5, SQL_C_SHORT, &entry->type, sizeof(entry->type), NULL);
 			SQLGetData(stmt,  7, SQL_C_LONG, &entry->size, sizeof(entry->size), NULL);
@@ -259,7 +282,6 @@ static int free_config(void)
 static SQLHSTMT generic_prepare(struct odbc_obj *obj, void *data)
 {
 	int res, i;
-	char *sql = data;
 	SQLHSTMT stmt;
 	SQLINTEGER nativeerror = 0, numfields = 0;
 	SQLSMALLINT diagbytes = 0;
@@ -271,9 +293,9 @@ static SQLHSTMT generic_prepare(struct odbc_obj *obj, void *data)
 		return NULL;
 	}
 
-	res = SQLPrepare(stmt, (unsigned char *)sql, SQL_NTS);
+	res = SQLPrepare(stmt, (unsigned char *) data, SQL_NTS);
 	if ((res != SQL_SUCCESS) && (res != SQL_SUCCESS_WITH_INFO)) {
-		ast_log(LOG_WARNING, "SQL Prepare failed![%s]\n", sql);
+		ast_log(LOG_WARNING, "SQL Prepare failed![%s]\n", (char *) data);
 		SQLGetDiagField(SQL_HANDLE_STMT, stmt, 1, SQL_DIAG_NUMBER, &numfields, SQL_IS_INTEGER, &diagbytes);
 		for (i = 0; i < numfields; i++) {
 			SQLGetDiagRec(SQL_HANDLE_STMT, stmt, i + 1, state, &nativeerror, diagnostic, sizeof(diagnostic), &diagbytes);
@@ -293,11 +315,8 @@ static SQLHSTMT generic_prepare(struct odbc_obj *obj, void *data)
 #define LENGTHEN_BUF1(size)														\
 			do {																\
 				/* Lengthen buffer, if necessary */								\
-				if ((newsize = lensql + (size) + 3) > sizesql) {	\
-					if ((tmp = ast_realloc(sql, (newsize / 512 + 1) * 512))) {	\
-						sql = tmp;												\
-						sizesql = (newsize / 512 + 1) * 512;					\
-					} else {													\
+				if (ast_str_strlen(sql) + size + 1 > ast_str_size(sql)) {       \
+					if (ast_str_make_space(&sql, ((ast_str_size(sql) + size + 1) / 512 + 1) * 512) != 0) { \
 						ast_log(LOG_ERROR, "Unable to allocate sufficient memory.  Insert CDR '%s:%s' failed.\n", tableptr->connection, tableptr->table); \
 						ast_free(sql);											\
 						ast_free(sql2);											\
@@ -309,12 +328,9 @@ static SQLHSTMT generic_prepare(struct odbc_obj *obj, void *data)
 
 #define LENGTHEN_BUF2(size)														\
 			do {																\
-				if ((newsize = lensql2 + (size) + 3) > sizesql2) {				\
-					if ((tmp = ast_realloc(sql2, (newsize / 512 + 1) * 512))) {	\
-						sql2 = tmp;												\
-						sizesql2 = (newsize / 512 + 1) * 512;					\
-					} else {													\
-						ast_log(LOG_ERROR, "Unable to allocate sufficient memory.  Insert CDR '%s:%s' failed.\n", tableptr->connection, tableptr->table);	\
+				if (ast_str_strlen(sql2) + size + 1 > ast_str_size(sql2)) {     \
+					if (ast_str_make_space(&sql2, ((ast_str_size(sql2) + size + 3) / 512 + 1) * 512) != 0) { \
+						ast_log(LOG_ERROR, "Unable to allocate sufficient memory.  Insert CDR '%s:%s' failed.\n", tableptr->connection, tableptr->table); \
 						ast_free(sql);											\
 						ast_free(sql2);											\
 						AST_RWLIST_UNLOCK(&odbc_tables);						\
@@ -328,9 +344,8 @@ static int odbc_log(struct ast_cdr *cdr)
 	struct tables *tableptr;
 	struct columns *entry;
 	struct odbc_obj *obj;
-	int lensql, lensql2, sizesql = maxsize, sizesql2 = maxsize2, newsize;
-	/* Allocated, so we can realloc() */
-	char *sql = ast_calloc(sizeof(char), sizesql), *sql2 = ast_calloc(sizeof(char), sizesql2), *tmp;
+	struct ast_str *sql = ast_str_create(maxsize), *sql2 = ast_str_create(maxsize2);
+	char *tmp;
 	char colbuf[1024], *colptr;
 	SQLHSTMT stmt = NULL;
 	SQLLEN rows = 0;
@@ -351,21 +366,38 @@ static int odbc_log(struct ast_cdr *cdr)
 	}
 
 	AST_LIST_TRAVERSE(&odbc_tables, tableptr, list) {
-		lensql = snprintf(sql, sizesql, "INSERT INTO %s (", tableptr->table);
-		lensql2 = snprintf(sql2, sizesql2, " VALUES (");
+		int first = 1;
+		ast_str_set(&sql, 0, "INSERT INTO %s (", tableptr->table);
+		ast_str_set(&sql2, 0, " VALUES (");
 
 		/* No need to check the connection now; we'll handle any failure in prepare_and_execute */
 		if (!(obj = ast_odbc_request_obj(tableptr->connection, 0))) {
-			ast_log(LOG_WARNING, "cdr_adaptive_odbc: Unable to retrieve database handle for '%s:%s'.  CDR failed: %s\n", tableptr->connection, tableptr->table, sql);
+			ast_log(LOG_WARNING, "cdr_adaptive_odbc: Unable to retrieve database handle for '%s:%s'.  CDR failed: %s\n", tableptr->connection, tableptr->table, ast_str_buffer(sql));
 			continue;
 		}
 
 		AST_LIST_TRAVERSE(&(tableptr->columns), entry, list) {
+			int datefield = 0;
+			if (strcasecmp(entry->cdrname, "start") == 0) {
+				datefield = 1;
+			} else if (strcasecmp(entry->cdrname, "answer") == 0) {
+				datefield = 2;
+			} else if (strcasecmp(entry->cdrname, "end") == 0) {
+				datefield = 3;
+			}
+
 			/* Check if we have a similarly named variable */
-			ast_cdr_getvar(cdr, entry->cdrname, &colptr, colbuf, sizeof(colbuf), 0,
-				(strcasecmp(entry->cdrname, "start") == 0 ||
-				 strcasecmp(entry->cdrname, "answer") == 0 ||
-				 strcasecmp(entry->cdrname, "end") == 0) ? 0 : 1);
+			if (entry->staticvalue) {
+				colptr = ast_strdupa(entry->staticvalue);
+			} else if (datefield && tableptr->usegmtime) {
+				struct timeval date_tv = (datefield == 1) ? cdr->start : (datefield == 2) ? cdr->answer : cdr->end;
+				struct ast_tm tm = { 0, };
+				ast_localtime(&date_tv, &tm, "UTC");
+				ast_strftime(colbuf, sizeof(colbuf), "%Y-%m-%d %H:%M:%S", &tm);
+				colptr = colbuf;
+			} else {
+				ast_cdr_getvar(cdr, entry->cdrname, &colptr, colbuf, sizeof(colbuf), 0, datefield ? 0 : 1);
+			}
 
 			if (colptr) {
 				/* Check first if the column filters this entry.  Note that this
@@ -396,42 +428,39 @@ static int odbc_log(struct ast_cdr *cdr)
 					/* For these two field names, get the rendered form, instead of the raw
 					 * form (but only when we're dealing with a character-based field).
 					 */
-					if (strcasecmp(entry->name, "disposition") == 0)
+					if (strcasecmp(entry->name, "disposition") == 0) {
 						ast_cdr_getvar(cdr, entry->name, &colptr, colbuf, sizeof(colbuf), 0, 0);
-					else if (strcasecmp(entry->name, "amaflags") == 0)
+					} else if (strcasecmp(entry->name, "amaflags") == 0) {
 						ast_cdr_getvar(cdr, entry->name, &colptr, colbuf, sizeof(colbuf), 0, 0);
+					}
 
 					/* Truncate too-long fields */
 					if (entry->type != SQL_GUID) {
-						if (strlen(colptr) > entry->octetlen)
+						if (strlen(colptr) > entry->octetlen) {
 							colptr[entry->octetlen] = '\0';
+						}
 					}
 
-					lensql += snprintf(sql + lensql, sizesql - lensql, "%s,", entry->name);
+					ast_str_append(&sql, 0, "%s%s", first ? "" : ",", entry->name);
 					LENGTHEN_BUF2(strlen(colptr));
 
 					/* Encode value, with escaping */
-					strcpy(sql2 + lensql2, "'");
-					lensql2++;
+					ast_str_append(&sql2, 0, "%s'", first ? "" : ",");
 					for (tmp = colptr; *tmp; tmp++) {
 						if (*tmp == '\'') {
-							strcpy(sql2 + lensql2, "''");
-							lensql2 += 2;
+							ast_str_append(&sql2, 0, "''");
 						} else if (*tmp == '\\' && ast_odbc_backslash_is_escape(obj)) {
-							strcpy(sql2 + lensql2, "\\\\");
-							lensql2 += 2;
+							ast_str_append(&sql2, 0, "\\\\");
 						} else {
-							sql2[lensql2++] = *tmp;
-							sql2[lensql2] = '\0';
+							ast_str_append(&sql2, 0, "%c", *tmp);
 						}
 					}
-					strcpy(sql2 + lensql2, "',");
-					lensql2 += 2;
+					ast_str_append(&sql2, 0, "'");
 					break;
 				case SQL_TYPE_DATE:
 					{
 						int year = 0, month = 0, day = 0;
-						if (sscanf(colptr, "%d-%d-%d", &year, &month, &day) != 3 || year <= 0 ||
+						if (sscanf(colptr, "%4d-%2d-%2d", &year, &month, &day) != 3 || year <= 0 ||
 							month <= 0 || month > 12 || day < 0 || day > 31 ||
 							((month == 4 || month == 6 || month == 9 || month == 11) && day == 31) ||
 							(month == 2 && year % 400 == 0 && day > 29) ||
@@ -439,37 +468,38 @@ static int odbc_log(struct ast_cdr *cdr)
 							(month == 2 && year % 4 == 0 && day > 29) ||
 							(month == 2 && year % 4 != 0 && day > 28)) {
 							ast_log(LOG_WARNING, "CDR variable %s is not a valid date ('%s').\n", entry->name, colptr);
-							break;
+							continue;
 						}
 
-						if (year > 0 && year < 100)
+						if (year > 0 && year < 100) {
 							year += 2000;
+						}
 
-						lensql += snprintf(sql + lensql, sizesql - lensql, "%s,", entry->name);
+						ast_str_append(&sql, 0, "%s%s", first ? "" : ",", entry->name);
 						LENGTHEN_BUF2(17);
-						lensql2 += snprintf(sql2 + lensql2, sizesql2 - lensql2, "{ d '%04d-%02d-%02d' },", year, month, day);
+						ast_str_append(&sql2, 0, "%s{ d '%04d-%02d-%02d' }", first ? "" : ",", year, month, day);
 					}
 					break;
 				case SQL_TYPE_TIME:
 					{
 						int hour = 0, minute = 0, second = 0;
-						int count = sscanf(colptr, "%d:%d:%d", &hour, &minute, &second);
+						int count = sscanf(colptr, "%2d:%2d:%2d", &hour, &minute, &second);
 
 						if ((count != 2 && count != 3) || hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) {
 							ast_log(LOG_WARNING, "CDR variable %s is not a valid time ('%s').\n", entry->name, colptr);
-							break;
+							continue;
 						}
 
-						lensql += snprintf(sql + lensql, sizesql - lensql, "%s,", entry->name);
+						ast_str_append(&sql, 0, "%s%s", first ? "" : ",", entry->name);
 						LENGTHEN_BUF2(15);
-						lensql2 += snprintf(sql2 + lensql2, sizesql2 - lensql2, "{ t '%02d:%02d:%02d' },", hour, minute, second);
+						ast_str_append(&sql2, 0, "%s{ t '%02d:%02d:%02d' }", first ? "" : ",", hour, minute, second);
 					}
 					break;
 				case SQL_TYPE_TIMESTAMP:
 				case SQL_TIMESTAMP:
 					{
 						int year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0;
-						int count = sscanf(colptr, "%d-%d-%d %d:%d:%d", &year, &month, &day, &hour, &minute, &second);
+						int count = sscanf(colptr, "%4d-%2d-%2d %2d:%2d:%2d", &year, &month, &day, &hour, &minute, &second);
 
 						if ((count != 3 && count != 5 && count != 6) || year <= 0 ||
 							month <= 0 || month > 12 || day < 0 || day > 31 ||
@@ -480,96 +510,97 @@ static int odbc_log(struct ast_cdr *cdr)
 							(month == 2 && year % 4 != 0 && day > 28) ||
 							hour > 23 || minute > 59 || second > 59 || hour < 0 || minute < 0 || second < 0) {
 							ast_log(LOG_WARNING, "CDR variable %s is not a valid timestamp ('%s').\n", entry->name, colptr);
-							break;
+							continue;
 						}
 
-						if (year > 0 && year < 100)
+						if (year > 0 && year < 100) {
 							year += 2000;
+						}
 
-						lensql += snprintf(sql + lensql, sizesql - lensql, "%s,", entry->name);
+						ast_str_append(&sql, 0, "%s%s", first ? "" : ",", entry->name);
 						LENGTHEN_BUF2(26);
-						lensql2 += snprintf(sql2 + lensql2, sizesql2 - lensql2, "{ ts '%04d-%02d-%02d %02d:%02d:%02d' },", year, month, day, hour, minute, second);
+						ast_str_append(&sql2, 0, "%s{ ts '%04d-%02d-%02d %02d:%02d:%02d' }", first ? "" : ",", year, month, day, hour, minute, second);
 					}
 					break;
 				case SQL_INTEGER:
 					{
 						int integer = 0;
-						if (sscanf(colptr, "%d", &integer) != 1) {
+						if (sscanf(colptr, "%30d", &integer) != 1) {
 							ast_log(LOG_WARNING, "CDR variable %s is not an integer.\n", entry->name);
-							break;
+							continue;
 						}
 
-						lensql += snprintf(sql + lensql, sizesql - lensql, "%s,", entry->name);
+						ast_str_append(&sql, 0, "%s%s", first ? "" : ",", entry->name);
 						LENGTHEN_BUF2(12);
-						lensql2 += snprintf(sql2 + lensql2, sizesql2 - lensql2, "%d,", integer);
+						ast_str_append(&sql2, 0, "%s%d", first ? "" : ",", integer);
 					}
 					break;
 				case SQL_BIGINT:
 					{
 						long long integer = 0;
-						if (sscanf(colptr, "%lld", &integer) != 1) {
+						if (sscanf(colptr, "%30lld", &integer) != 1) {
 							ast_log(LOG_WARNING, "CDR variable %s is not an integer.\n", entry->name);
-							break;
+							continue;
 						}
 
-						lensql += snprintf(sql + lensql, sizesql - lensql, "%s,", entry->name);
+						ast_str_append(&sql, 0, "%s%s", first ? "" : ",", entry->name);
 						LENGTHEN_BUF2(24);
-						lensql2 += snprintf(sql2 + lensql2, sizesql2 - lensql2, "%lld,", integer);
+						ast_str_append(&sql2, 0, "%s%lld", first ? "" : ",", integer);
 					}
 					break;
 				case SQL_SMALLINT:
 					{
 						short integer = 0;
-						if (sscanf(colptr, "%hd", &integer) != 1) {
+						if (sscanf(colptr, "%30hd", &integer) != 1) {
 							ast_log(LOG_WARNING, "CDR variable %s is not an integer.\n", entry->name);
-							break;
+							continue;
 						}
 
-						lensql += snprintf(sql + lensql, sizesql - lensql, "%s,", entry->name);
+						ast_str_append(&sql, 0, "%s%s", first ? "" : ",", entry->name);
 						LENGTHEN_BUF2(6);
-						lensql2 += snprintf(sql2 + lensql2, sizesql2 - lensql2, "%d,", integer);
+						ast_str_append(&sql2, 0, "%s%d", first ? "" : ",", integer);
 					}
 					break;
 				case SQL_TINYINT:
 					{
 						char integer = 0;
-						if (sscanf(colptr, "%hhd", &integer) != 1) {
+						if (sscanf(colptr, "%30hhd", &integer) != 1) {
 							ast_log(LOG_WARNING, "CDR variable %s is not an integer.\n", entry->name);
-							break;
+							continue;
 						}
 
-						lensql += snprintf(sql + lensql, sizesql - lensql, "%s,", entry->name);
+						ast_str_append(&sql, 0, "%s%s", first ? "" : ",", entry->name);
 						LENGTHEN_BUF2(4);
-						lensql2 += snprintf(sql2 + lensql2, sizesql2 - lensql2, "%d,", integer);
+						ast_str_append(&sql2, 0, "%s%d", first ? "" : ",", integer);
 					}
 					break;
 				case SQL_BIT:
 					{
 						char integer = 0;
-						if (sscanf(colptr, "%hhd", &integer) != 1) {
+						if (sscanf(colptr, "%30hhd", &integer) != 1) {
 							ast_log(LOG_WARNING, "CDR variable %s is not an integer.\n", entry->name);
-							break;
+							continue;
 						}
 						if (integer != 0)
 							integer = 1;
 
-						lensql += snprintf(sql + lensql, sizesql - lensql, "%s,", entry->name);
+						ast_str_append(&sql, 0, "%s%s", first ? "" : ",", entry->name);
 						LENGTHEN_BUF2(2);
-						lensql2 += snprintf(sql2 + lensql2, sizesql2 - lensql2, "%d,", integer);
+						ast_str_append(&sql2, 0, "%s%d", first ? "" : ",", integer);
 					}
 					break;
 				case SQL_NUMERIC:
 				case SQL_DECIMAL:
 					{
 						double number = 0.0;
-						if (sscanf(colptr, "%lf", &number) != 1) {
+						if (sscanf(colptr, "%30lf", &number) != 1) {
 							ast_log(LOG_WARNING, "CDR variable %s is not an numeric type.\n", entry->name);
-							break;
+							continue;
 						}
 
-						lensql += snprintf(sql + lensql, sizesql - lensql, "%s,", entry->name);
+						ast_str_append(&sql, 0, "%s%s", first ? "" : ",", entry->name);
 						LENGTHEN_BUF2(entry->decimals);
-						lensql2 += snprintf(sql2 + lensql2, sizesql2 - lensql2, "%*.*lf,", entry->decimals, entry->radix, number);
+						ast_str_append(&sql2, 0, "%s%*.*lf", first ? "" : ",", entry->decimals, entry->radix, number);
 					}
 					break;
 				case SQL_FLOAT:
@@ -577,37 +608,39 @@ static int odbc_log(struct ast_cdr *cdr)
 				case SQL_DOUBLE:
 					{
 						double number = 0.0;
-						if (sscanf(colptr, "%lf", &number) != 1) {
+						if (sscanf(colptr, "%30lf", &number) != 1) {
 							ast_log(LOG_WARNING, "CDR variable %s is not an numeric type.\n", entry->name);
-							break;
+							continue;
 						}
 
-						lensql += snprintf(sql + lensql, sizesql - lensql, "%s,", entry->name);
+						ast_str_append(&sql, 0, "%s%s", first ? "" : ",", entry->name);
 						LENGTHEN_BUF2(entry->decimals);
-						lensql2 += snprintf(sql2 + lensql2, sizesql2 - lensql2, "%lf,", number);
+						ast_str_append(&sql2, 0, "%s%lf", first ? "" : ",", number);
 					}
 					break;
 				default:
 					ast_log(LOG_WARNING, "Column type %d (field '%s:%s:%s') is unsupported at this time.\n", entry->type, tableptr->connection, tableptr->table, entry->name);
+					continue;
 				}
+				first = 0;
 			}
 		}
 
 		/* Concatenate the two constructed buffers */
-		LENGTHEN_BUF1(lensql2);
-		sql[lensql - 1] = ')';
-		sql2[lensql2 - 1] = ')';
-		strcat(sql + lensql, sql2);
+		LENGTHEN_BUF1(ast_str_strlen(sql2));
+		ast_str_append(&sql, 0, ")");
+		ast_str_append(&sql2, 0, ")");
+		ast_str_append(&sql, 0, "%s", ast_str_buffer(sql2));
 
-		ast_verb(11, "[%s]\n", sql);
+		ast_verb(11, "[%s]\n", ast_str_buffer(sql));
 
-		stmt = ast_odbc_prepare_and_execute(obj, generic_prepare, sql);
+		stmt = ast_odbc_prepare_and_execute(obj, generic_prepare, ast_str_buffer(sql));
 		if (stmt) {
 			SQLRowCount(stmt, &rows);
 			SQLFreeHandle(SQL_HANDLE_STMT, stmt);
 		}
 		if (rows == 0) {
-			ast_log(LOG_WARNING, "cdr_adaptive_odbc: Insert failed on '%s:%s'.  CDR failed: %s\n", tableptr->connection, tableptr->table, sql);
+			ast_log(LOG_WARNING, "cdr_adaptive_odbc: Insert failed on '%s:%s'.  CDR failed: %s\n", tableptr->connection, tableptr->table, ast_str_buffer(sql));
 		}
 early_release:
 		ast_odbc_release_obj(obj);
@@ -615,10 +648,12 @@ early_release:
 	AST_RWLIST_UNLOCK(&odbc_tables);
 
 	/* Next time, just allocate buffers that are that big to start with. */
-	if (sizesql > maxsize)
-		maxsize = sizesql;
-	if (sizesql2 > maxsize2)
-		maxsize2 = sizesql2;
+	if (ast_str_strlen(sql) > maxsize) {
+		maxsize = ast_str_strlen(sql);
+	}
+	if (ast_str_strlen(sql2) > maxsize2) {
+		maxsize2 = ast_str_strlen(sql2);
+	}
 
 	ast_free(sql);
 	ast_free(sql2);
@@ -628,7 +663,6 @@ early_release:
 static int unload_module(void)
 {
 	ast_cdr_unregister(name);
-	usleep(1);
 	if (AST_RWLIST_WRLOCK(&odbc_tables)) {
 		ast_cdr_register(name, ast_module_info->description, odbc_log);
 		ast_log(LOG_ERROR, "Unable to lock column list.  Unload failed.\n");

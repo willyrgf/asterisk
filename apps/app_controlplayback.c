@@ -17,14 +17,14 @@
  */
 
 /*! \file
- * 
+ *
  * \brief Trivial application to control playback of a sound file
  *
  * \author Mark Spencer <markster@digium.com>
- * 
+ *
  * \ingroup applications
  */
- 
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
@@ -33,31 +33,66 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/app.h"
 #include "asterisk/module.h"
 
-static const char *app = "ControlPlayback";
-
-static const char *synopsis = "Play a file with fast forward and rewind";
-
-static const char *descrip = 
-"  ControlPlayback(file[,skipms[,ff[,rew[,stop[,pause[,restart,options]]]]]]]):\n"
-"This application will play back the given filename. By default, the '*' key\n"
-"can be used to rewind, and the '#' key can be used to fast-forward.\n"
-"Parameters:\n"
-"  skipms  - This is number of milliseconds to skip when rewinding or\n"
-"            fast-forwarding.\n"
-"  ff      - Fast-forward when this DTMF digit is received.\n"
-"  rew     - Rewind when this DTMF digit is received.\n"
-"  stop    - Stop playback when this DTMF digit is received.\n"
-"  pause   - Pause playback when this DTMF digit is received.\n"
-"  restart - Restart playback when this DTMF digit is received.\n"
-"Options:\n"
-"  o(#) - Start at # ms from the beginning of the file.\n"
-"This application sets the following channel variables upon completion:\n"
-"  CPLAYBACKSTATUS -  This variable contains the status of the attempt as a text\n"
-"                     string, one of: SUCCESS | USERSTOPPED | ERROR\n"
-"  CPLAYBACKOFFSET -  This contains the offset in ms into the file where\n"
-"                     playback was at when it stopped.  -1 is end of file.\n"
-"  CPLAYBACKSTOPKEY - If the playback is stopped by the user this variable contains\n"
-"                     the key that was pressed.\n";
+/*** DOCUMENTATION
+	<application name="ControlPlayback" language="en_US">
+		<synopsis>
+			Play a file with fast forward and rewind.
+		</synopsis>
+		<syntax>
+			<parameter name="filename" required="true" />
+			<parameter name="skipms">
+				<para>This is number of milliseconds to skip when rewinding or
+				fast-forwarding.</para>
+			</parameter>
+			<parameter name="ff">
+				<para>Fast-forward when this DTMF digit is received. (defaults to <literal>#</literal>)</para>
+			</parameter>
+			<parameter name="rew">
+				<para>Rewind when this DTMF digit is received. (defaults to <literal>*</literal>)</para>
+			</parameter>
+			<parameter name="stop">
+				<para>Stop playback when this DTMF digit is received.</para>
+			</parameter>
+			<parameter name="pause">
+				<para>Pause playback when this DTMF digit is received.</para>
+			</parameter>
+			<parameter name="restart">
+				<para>Restart playback when this DTMF digit is received.</para>
+			</parameter>
+			<parameter name="options">
+				<optionlist>
+					<option name="o">
+						<argument name="time" required="true">
+							<para>Start at <replaceable>time</replaceable> ms from the
+							beginning of the file.</para>
+						</argument>
+					</option>
+				</optionlist>
+			</parameter>
+		</syntax>
+		<description>
+			<para>This application will play back the given <replaceable>filename</replaceable>.</para>
+			<para>It sets the following channel variables upon completion:</para>
+			<variablelist>
+				<variable name="CPLAYBACKSTATUS">
+					<para>Contains the status of the attempt as a text string</para>
+					<value name="SUCCESS" />
+					<value name="USERSTOPPED" />
+					<value name="ERROR" />
+				</variable>
+				<variable name="CPLAYBACKOFFSET">
+					<para>Contains the offset in ms into the file where playback
+					was at when it stopped. <literal>-1</literal> is end of file.</para>
+				</variable>
+				<variable name="CPLAYBACKSTOPKEY">
+					<para>If the playback is stopped by the user this variable contains
+					the key that was pressed.</para>
+				</variable>
+			</variablelist>
+		</description>
+	</application>
+ ***/
+static const char app[] = "ControlPlayback";
 
 enum {
 	OPT_OFFSET = (1 << 1),
@@ -71,14 +106,26 @@ enum {
 
 AST_APP_OPTIONS(cpb_opts, BEGIN_OPTIONS
 	AST_APP_OPTION_ARG('o', OPT_OFFSET, OPT_ARG_OFFSET),
-END_OPTIONS );
+	END_OPTIONS
+);
 
 static int is_on_phonepad(char key)
 {
 	return key == 35 || key == 42 || (key >= 48 && key <= 57);
 }
 
-static int controlplayback_exec(struct ast_channel *chan, void *data)
+static int is_argument(const char *haystack, int needle)
+{
+	if (ast_strlen_zero(haystack))
+		return 0;
+
+	if (strchr(haystack, needle))
+		return -1;
+
+	return 0;
+}
+
+static int controlplayback_exec(struct ast_channel *chan, const char *data)
 {
 	int res = 0;
 	int skipms = 0;
@@ -114,10 +161,21 @@ static int controlplayback_exec(struct ast_channel *chan, void *data)
 
 	skipms = args.skip ? (atoi(args.skip) ? atoi(args.skip) : 3000) : 3000;
 
-	if (!args.fwd || !is_on_phonepad(*args.fwd))
-		args.fwd = "#";
-	if (!args.rev || !is_on_phonepad(*args.rev))
-		args.rev = "*";
+	if (!args.fwd || !is_on_phonepad(*args.fwd)) {
+		char *digit = "#";
+		if (!is_argument(args.rev, *digit) && !is_argument(args.stop, *digit) && !is_argument(args.pause, *digit) && !is_argument(args.restart, *digit))
+			args.fwd = digit;
+		else
+			args.fwd = NULL;
+	}
+	if (!args.rev || !is_on_phonepad(*args.rev)) {
+		char *digit = "*";
+		if (!is_argument(args.fwd, *digit) && !is_argument(args.stop, *digit) && !is_argument(args.pause, *digit) && !is_argument(args.restart, *digit))
+			args.rev = digit;
+		else
+			args.rev = NULL;
+	}
+	ast_log(LOG_WARNING, "args.fwd = %s, args.rew = %s\n", args.fwd, args.rev);
 	if (args.stop && !is_on_phonepad(*args.stop))
 		args.stop = NULL;
 	if (args.pause && !is_on_phonepad(*args.pause))
@@ -126,7 +184,7 @@ static int controlplayback_exec(struct ast_channel *chan, void *data)
 		args.restart = NULL;
 
 	if (args.options) {
-		ast_app_parse_options(cpb_opts, &opts, opt_args, args.options);		
+		ast_app_parse_options(cpb_opts, &opts, opt_args, args.options);
 		if (ast_test_flag(&opts, OPT_OFFSET))
 			offsetms = atol(opt_args[OPT_ARG_OFFSET]);
 	}
@@ -162,7 +220,7 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	return ast_register_application(app, controlplayback_exec, synopsis, descrip);
+	return ast_register_application_xml(app, controlplayback_exec);
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Control Playback Application");

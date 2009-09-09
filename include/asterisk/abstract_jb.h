@@ -84,7 +84,7 @@ struct ast_jb
 	/*! \brief Jitterbuffer configuration. */
 	struct ast_jb_conf conf;
 	/*! \brief Jitterbuffer implementation to be used. */
-	struct ast_jb_impl *impl;
+	const struct ast_jb_impl *impl;
 	/*! \brief Jitterbuffer object, passed to the implementation. */
 	void *jbobj;
 	/*! \brief The time the jitterbuffer was created. */
@@ -183,8 +183,8 @@ void ast_jb_destroy(struct ast_channel *chan);
  * \param varname property name.
  * \param value property value.
  *
- * Called from a channel driver to build a jitterbuffer configuration tipically when
- * reading a configuration file. It is not neccessary for a channel driver to know
+ * Called from a channel driver to build a jitterbuffer configuration typically when
+ * reading a configuration file. It is not necessary for a channel driver to know
  * each of the jb configuration property names. The jitterbuffer itself knows them.
  * The channel driver can pass each config var it reads through this function. It will
  * return 0 if the variable was consumed from the jb conf.
@@ -212,6 +212,12 @@ void ast_jb_configure(struct ast_channel *chan, const struct ast_jb_conf *conf);
  */
 void ast_jb_get_config(const struct ast_channel *chan, struct ast_jb_conf *conf);
 
+/*!
+ * \brief drops all frames from a jitterbuffer and resets it
+ * \param c0 one channel of a bridge
+ * \param c1 the other channel of the bridge
+ */
+void ast_jb_empty_and_reset(struct ast_channel *c0, struct ast_channel *c1);
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }

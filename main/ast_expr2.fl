@@ -22,12 +22,10 @@
  * \brief Dialplan Expression Lexical Scanner
  */
 
-#include "asterisk.h"
-
 #include <sys/types.h>
 #include <stdio.h>
 
-#ifndef STANDALONE
+#if !defined(STANDALONE)
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #else
 #ifndef __USE_ISOC99
@@ -133,6 +131,7 @@ static char *expr2_token_subst(const char *mess);
 \&\&	{ SET_COLUMNS; SET_STRING; return TOK_AND;}
 \=\=	{ SET_COLUMNS; SET_STRING; return TOK_EQ;}
 \=~	{ SET_COLUMNS; SET_STRING; return TOK_EQTILDE;}
+\~~	{ SET_COLUMNS; SET_STRING; return TOK_TILDETILDE;}
 \>	{ SET_COLUMNS; SET_STRING; return TOK_GT;}
 \<	{ SET_COLUMNS; SET_STRING; return TOK_LT;}
 \>\=	{ SET_COLUMNS; SET_STRING; return TOK_GE;}
@@ -173,12 +172,17 @@ static char *expr2_token_subst(const char *mess);
 		return TOKEN;
 	}
 
-([a-zA-Z0-9\.';\\_^$#@]|[\x80-\xff])+	{
+([a-zA-Z0-9\.';\\_^#@]|[\x80-\xff]|($[^{]))+   {
 		SET_COLUMNS;
 		SET_STRING;
 		return TOKEN;
 	}
 
+([a-zA-Z0-9\.';\\_^#@]|[\x80-\xff]|($[^{]))+\$\{	{
+		curlycount = 0;
+		BEGIN(var);
+		yymore();
+	}
 
 <var>[^{}]*\}	{
 		curlycount--;
@@ -203,6 +207,12 @@ static char *expr2_token_subst(const char *mess);
 		return TOKEN;
 	}
 	
+<trail>[^-\t\r \n$():?%/+=*<>!|&]*\$\{	{
+		curlycount = 0;
+		BEGIN(var);
+		yymore();
+	}
+	
 <trail>[-\t\r \n$():?%/+=*<>!|&]	{
 		char c = yytext[yyleng-1];
 		BEGIN(0);
@@ -210,12 +220,6 @@ static char *expr2_token_subst(const char *mess);
 		SET_COLUMNS;
 		SET_STRING;
 		return TOKEN;
-	}
-	
-<trail>\$\{	{
-		curlycount = 0;
-		BEGIN(var);
-		yymore();
 	}
 	
 <trail><<EOF>>	{
@@ -239,10 +243,10 @@ int ast_yyerror(const char *, YYLTYPE *, struct parse_io *); /* likewise */
 
 void ast_yyfree(void *ptr, yyscan_t yyscanner)
 {
-      if (ptr) /* the normal generated yyfree func just frees its first arg;
-                    this get complaints on some systems, as sometimes this
-                    arg is a nil ptr! It's usually not fatal, but is irritating! */
-              free( (char *) ptr );
+    /* the normal generated yyfree func just frees its first arg;
+     this get complaints on some systems, as sometimes this
+     arg is a nil ptr! It's usually not fatal, but is irritating! */
+	free( (char *) ptr );
 }
 
 int ast_expr(char *expr, char *buf, int length, struct ast_channel *chan)
@@ -275,7 +279,7 @@ int ast_expr(char *expr, char *buf, int length, struct ast_channel *chan)
 			return_value = (res_length <= length) ? res_length : length;
 		} else {
 			if (io.val->u.s)
-#if defined(STANDALONE) || defined(LOW_MEMORY) || defined(STANDALONE_AEL)
+#if defined(STANDALONE) || defined(LOW_MEMORY) || defined(STANDALONE)
 				strncpy(buf, io.val->u.s, length - 1);
 #else /* !STANDALONE && !LOW_MEMORY */
 				ast_copy_string(buf, io.val->u.s, length);
@@ -283,8 +287,7 @@ int ast_expr(char *expr, char *buf, int length, struct ast_channel *chan)
 			else
 				buf[0] = 0;
 			return_value = strlen(buf);
-			if (io.val->u.s)
-				free(io.val->u.s);
+			free(io.val->u.s);
 		}
 		free(io.val);
 	}
@@ -309,7 +312,7 @@ void  ast_expr_clear_extra_error_info(void)
        extra_error_message[0] = 0;
 }
 
-static char *expr2_token_equivs1[] = 
+static const char * const expr2_token_equivs1[] = 
 {
 	"TOKEN",
 	"TOK_COND",
@@ -335,7 +338,7 @@ static char *expr2_token_equivs1[] =
 	"TOK_LP"
 };
 
-static char *expr2_token_equivs2[] = 
+static const char * const expr2_token_equivs2[] = 
 {
 	"<token>",
 	"?",
@@ -437,7 +440,7 @@ int ast_yyerror (const char *s,  yyltype *loc, struct parse_io *parseio )
 			(extra_error_message_supplied?extra_error_message:""), s2, parseio->string,spacebuf2);
 #endif
 #ifndef STANDALONE
-	ast_log(LOG_WARNING,"If you have questions, please refer to doc/channelvariables.txt in the asterisk source.\n");
+	ast_log(LOG_WARNING,"If you have questions, please refer to doc/tex/channelvariables.tex in the asterisk source.\n");
 #endif
 	free(s2);
 	return(0);

@@ -28,20 +28,63 @@ extern "C" {
 #endif
 
 #include "asterisk/network.h"
+#include "asterisk/srv.h"
 
+/*!
+ * \brief A DNS manager entry
+ *
+ * This is an opaque type.
+ */
 struct ast_dnsmgr_entry;
 
-struct ast_dnsmgr_entry *ast_dnsmgr_get(const char *name, struct in_addr *result);
+/*!
+ * \brief Allocate a new DNS manager entry
+ *
+ * \param name the hostname
+ * \param result where the DNS manager should store the IP address as it refreshes it.
+ *      it.
+ *
+ * This function allocates a new DNS manager entry object, and fills it with the
+ * provided hostname and IP address.  This function does not force an initial lookup
+ * of the IP address.  So, generally, this should be used when the initial address
+ * is already known.
+ *
+ * \return a DNS manager entry
+ * \version 1.6.1 result changed from struct in_addr to struct sockaddr_in to store port number
+ */
+struct ast_dnsmgr_entry *ast_dnsmgr_get(const char *name, struct sockaddr_in *result, const char *service);
 
+/*!
+ * \brief Free a DNS manager entry
+ *
+ * \param entry the DNS manager entry to free
+ *
+ * \return nothing
+ */
 void ast_dnsmgr_release(struct ast_dnsmgr_entry *entry);
 
-int ast_dnsmgr_lookup(const char *name, struct in_addr *result, struct ast_dnsmgr_entry **dnsmgr);
+/*!
+ * \brief Allocate and initialize a DNS manager entry
+ *
+ * \param name the hostname
+ * \param result where to store the IP address as the DNS manager refreshes it
+ * \param dnsmgr Where to store the allocate DNS manager entry
+ *
+ * This function allocates a new DNS manager entry object, and fills it with
+ * the provided hostname and IP address.  This function _does_ force an initial
+ * lookup, so it may block for some period of time.
+ *
+ * \retval 0 success
+ * \retval non-zero failure
+ * \version 1.6.1 result changed from struct in_addr to struct aockaddr_in to store port number
+ */
+int ast_dnsmgr_lookup(const char *name, struct sockaddr_in *result, struct ast_dnsmgr_entry **dnsmgr, const char *service);
 
 /*!
  * \brief Force a refresh of a dnsmgr entry
  *
  * \retval non-zero if the result is different than the previous result
- * \retval zero if the result is the same as the previous result 
+ * \retval zero if the result is the same as the previous result
  */
 int ast_dnsmgr_refresh(struct ast_dnsmgr_entry *entry);
 

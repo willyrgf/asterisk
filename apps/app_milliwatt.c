@@ -31,15 +31,34 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/module.h"
 #include "asterisk/channel.h"
+#include "asterisk/pbx.h"
+#include "asterisk/indications.h"
 
-static char *app = "Milliwatt";
+/*** DOCUMENTATION
+	<application name="Milliwatt" language="en_US">
+		<synopsis>
+			Generate a Constant 1004Hz tone at 0dbm (mu-law).
+		</synopsis>
+		<syntax>
+			<parameter name="options">
+				<optionlist>
+					<option name="o">
+						<para>Generate the tone at 1000Hz like previous version.</para>
+					</option>
+				</optionlist>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Previous versions of this application generated the tone at 1000Hz.  If for
+			some reason you would prefer that behavior, supply the <literal>o</literal> option to get the
+			old behavior.</para>
+		</description>
+	</application>
+ ***/
 
-static char *synopsis = "Generate a Constant 1000Hz tone at 0dbm (mu-law)";
+static const char app[] = "Milliwatt";
 
-static char *descrip = 
-"Milliwatt(): Generate a Constant 1000Hz tone at 0dbm (mu-law)\n";
-
-static char digital_milliwatt[] = {0x1e,0x0b,0x0b,0x1e,0x9e,0x8b,0x8b,0x9e} ;
+static const char digital_milliwatt[] = {0x1e,0x0b,0x0b,0x1e,0x9e,0x8b,0x8b,0x9e} ;
 
 static void *milliwatt_alloc(struct ast_channel *chan, void *params)
 {
@@ -55,15 +74,15 @@ static void milliwatt_release(struct ast_channel *chan, void *data)
 static int milliwatt_generate(struct ast_channel *chan, void *data, int len, int samples)
 {
 	unsigned char buf[AST_FRIENDLY_OFFSET + 640];
-	const int maxsamples = sizeof (buf) / sizeof (buf[0]);
+	const int maxsamples = ARRAY_LEN(buf);
 	int i, *indexp = (int *) data;
 	struct ast_frame wf = {
 		.frametype = AST_FRAME_VOICE,
 		.subclass = AST_FORMAT_ULAW,
 		.offset = AST_FRIENDLY_OFFSET,
-		.data = buf + AST_FRIENDLY_OFFSET,
 		.src = __FUNCTION__,
 	};
+	wf.data.ptr = buf + AST_FRIENDLY_OFFSET;
 
 	/* Instead of len, use samples, because channel.c generator_force
 	* generate(chan, tmp, 0, 160) ignores len. In any case, len is
@@ -74,6 +93,7 @@ static int milliwatt_generate(struct ast_channel *chan, void *data, int len, int
 		ast_log(LOG_WARNING, "Only doing %d samples (%d requested)\n", maxsamples, samples);
 		samples = maxsamples;
 	}
+
 	len = samples * sizeof (buf[0]);
 	wf.datalen = len;
 	wf.samples = samples;
@@ -92,33 +112,50 @@ static int milliwatt_generate(struct ast_channel *chan, void *data, int len, int
 	return 0;
 }
 
-static struct ast_generator milliwattgen = 
-{
+static struct ast_generator milliwattgen = {
 	alloc: milliwatt_alloc,
 	release: milliwatt_release,
 	generate: milliwatt_generate,
 };
 
-static int milliwatt_exec(struct ast_channel *chan, void *data)
+static int old_milliwatt_exec(struct ast_channel *chan)
 {
-
 	ast_set_write_format(chan, AST_FORMAT_ULAW);
 	ast_set_read_format(chan, AST_FORMAT_ULAW);
 
-
-	if (chan->_state != AST_STATE_UP)
+	if (chan->_state != AST_STATE_UP) {
 		ast_answer(chan);
+	}
 
 	if (ast_activate_generator(chan,&milliwattgen,"milliwatt") < 0) {
 		ast_log(LOG_WARNING,"Failed to activate generator on '%s'\n",chan->name);
 		return -1;
 	}
 
-	while(!ast_safe_sleep(chan, 10000));
+	while (!ast_safe_sleep(chan, 10000))
+		;
 
 	ast_deactivate_generator(chan);
 
 	return -1;
+}
+
+static int milliwatt_exec(struct ast_channel *chan, const char *data)
+{
+	const char *options = data;
+	int res = -1;
+
+	if (!ast_strlen_zero(options) && strchr(options, 'o')) {
+		return old_milliwatt_exec(chan);
+	}
+
+	res = ast_playtones_start(chan, 23255, "1004/1000", 0);
+
+	while (!res) {
+		res = ast_safe_sleep(chan, 10000);
+	}
+
+	return res;
 }
 
 static int unload_module(void)
@@ -128,7 +165,7 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	return ast_register_application(app, milliwatt_exec, synopsis, descrip);
+	return ast_register_application_xml(app, milliwatt_exec);
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Digital Milliwatt (mu-law) Test Application");

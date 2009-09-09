@@ -26,13 +26,16 @@
 #include "asterisk/network.h"
 
 #include <time.h>	/* we want to override localtime_r */
+#include <unistd.h>
+#include <string.h>
 
 #include "asterisk/lock.h"
 #include "asterisk/time.h"
 #include "asterisk/logger.h"
 #include "asterisk/localtime.h"
+#include "asterisk/stringfields.h"
 
-/*! 
+/*!
 \note \verbatim
    Note:
    It is very important to use only unsigned variables to hold
@@ -213,11 +216,16 @@ struct ast_hostent {
 struct hostent *ast_gethostbyname(const char *host, struct ast_hostent *hp);
 
 /*!  \brief Produces MD5 hash based on input string */
-void ast_md5_hash(char *output, char *input);
+void ast_md5_hash(char *output, const char *input);
 /*! \brief Produces SHA1 hash based on input string */
-void ast_sha1_hash(char *output, char *input);
+void ast_sha1_hash(char *output, const char *input);
 
 int ast_base64encode_full(char *dst, const unsigned char *src, int srclen, int max, int linebreaks);
+
+#undef MIN
+#define MIN(a, b) ({ typeof(a) __a = (a); typeof(b) __b = (b); ((__a > __b) ? __b : __a);})
+#undef MAX
+#define MAX(a, b) ({ typeof(a) __a = (a); typeof(b) __b = (b); ((__a < __b) ? __b : __a);})
 
 /*!
  * \brief Encode data in base64
@@ -306,8 +314,6 @@ static force_inline void ast_slinear_saturated_divide(short *input, short *value
 	*input /= *value;
 }
 
-int test_for_thread_safety(void);
-
 #ifdef localtime_r
 #undef localtime_r
 #endif
@@ -327,16 +333,35 @@ int ast_wait_for_input(int fd, int ms);
 */
 int ast_carefulwrite(int fd, char *s, int len, int timeoutms);
 
+/*!
+ * \brief Write data to a file stream with a timeout
+ *
+ * \param f the file stream to write to
+ * \param fd the file description to poll on to know when the file stream can
+ *        be written to without blocking.
+ * \param s the buffer to write from
+ * \param len the number of bytes to write
+ * \param timeoutms The maximum amount of time to block in this function trying
+ *        to write, specified in milliseconds.
+ *
+ * \note This function assumes that the associated file stream has been set up
+ *       as non-blocking.
+ *
+ * \retval 0 success
+ * \retval -1 error
+ */
+int ast_careful_fwrite(FILE *f, int fd, const char *s, size_t len, int timeoutms);
+
 /*
  * Thread management support (should be moved to lock.h or a different header)
  */
- 
-#define AST_STACKSIZE 240 * 1024
+
+#define AST_STACKSIZE (((sizeof(void *) * 8 * 8) - 16) * 1024)
 
 #if defined(LOW_MEMORY)
-#define AST_BACKGROUND_STACKSIZE 48 * 1024
+#define AST_BACKGROUND_STACKSIZE (((sizeof(void *) * 8 * 2) - 16) * 1024)
 #else
-#define AST_BACKGROUND_STACKSIZE 240 * 1024
+#define AST_BACKGROUND_STACKSIZE AST_STACKSIZE
 #endif
 
 void ast_register_thread(char *name);
@@ -380,7 +405,6 @@ char *ast_process_quotes_and_slashes(char *start, char find, char replace_with);
 
 long int ast_random(void);
 
-#define ast_free free
 
 /*! 
  * \brief free() wrapper
@@ -395,6 +419,7 @@ static void ast_free_ptr(void *ptr)
 	ast_free(ptr);
 }
 #else
+#define ast_free free
 #define ast_free_ptr ast_free
 #endif
 
@@ -553,20 +578,8 @@ char * attribute_malloc _ast_strndup(const char *str, size_t len, const char *fi
 #define ast_asprintf(ret, fmt, ...) \
 	_ast_asprintf((ret), __FILE__, __LINE__, __PRETTY_FUNCTION__, fmt, __VA_ARGS__)
 
-AST_INLINE_API(
-int _ast_asprintf(char **ret, const char *file, int lineno, const char *func, const char *fmt, ...),
-{
-	int res;
-	va_list ap;
-
-	va_start(ap, fmt);
-	if ((res = vasprintf(ret, fmt, ap)) == -1)
-		MALLOC_FAILURE_MSG;
-	va_end(ap);
-
-	return res;
-}
-)
+int __attribute__((format(printf, 5, 6)))
+	_ast_asprintf(char **ret, const char *file, int lineno, const char *func, const char *fmt, ...);
 
 /*!
  * \brief A wrapper for vasprintf()
@@ -580,6 +593,7 @@ int _ast_asprintf(char **ret, const char *file, int lineno, const char *func, co
 	_ast_vasprintf((ret), __FILE__, __LINE__, __PRETTY_FUNCTION__, (fmt), (ap))
 
 AST_INLINE_API(
+__attribute__((format(printf, 5, 0)))
 int _ast_vasprintf(char **ret, const char *file, int lineno, const char *func, const char *fmt, va_list ap),
 {
 	int res;
@@ -590,19 +604,6 @@ int _ast_vasprintf(char **ret, const char *file, int lineno, const char *func, c
 	return res;
 }
 )
-
-#else
-
-/* If astmm is in use, let it handle these.  Otherwise, it will report that
-   all allocations are coming from this header file */
-
-#define ast_malloc(a)		malloc(a)
-#define ast_calloc(a,b)		calloc(a,b)
-#define ast_realloc(a,b)	realloc(a,b)
-#define ast_strdup(a)		strdup(a)
-#define ast_strndup(a,b)	strndup(a,b)
-#define ast_asprintf(a,b,c)	asprintf(a,b,c)
-#define ast_vasprintf(a,b,c)	vasprintf(a,b,c)
 
 #endif /* AST_DEBUG_MALLOC */
 
@@ -650,8 +651,108 @@ void ast_enable_packet_fragmentation(int sock);
  */
 int ast_mkdir(const char *path, int mode);
 
-#define ARRAY_LEN(a) (sizeof(a) / sizeof(a[0]))
+#define ARRAY_LEN(a) (sizeof(a) / sizeof(0[a]))
+
+
+/* Definition for Digest authorization */
+struct ast_http_digest {
+	AST_DECLARE_STRING_FIELDS(
+		AST_STRING_FIELD(username);
+		AST_STRING_FIELD(nonce);
+		AST_STRING_FIELD(uri);
+		AST_STRING_FIELD(realm);
+		AST_STRING_FIELD(domain);
+		AST_STRING_FIELD(response);
+		AST_STRING_FIELD(cnonce);
+		AST_STRING_FIELD(opaque);
+		AST_STRING_FIELD(nc);
+	);
+	int qop;		/* Flag set to 1, if we send/recv qop="quth" */
+};
+
+/*!
+ *\brief Parse digest authorization header.
+ *\return Returns -1 if we have no auth or something wrong with digest.
+ *\note This function may be used for Digest request and responce header.
+ * request arg is set to nonzero, if we parse Digest Request.
+ * pedantic arg can be set to nonzero if we need to do addition Digest check.
+ */
+int ast_parse_digest(const char *digest, struct ast_http_digest *d, int request, int pedantic);
+
+
+#ifdef AST_DEVMODE
+#define ast_assert(a) _ast_assert(a, # a, __FILE__, __LINE__, __PRETTY_FUNCTION__)
+static void force_inline _ast_assert(int condition, const char *condition_str, 
+	const char *file, int line, const char *function)
+{
+	if (__builtin_expect(!condition, 1)) {
+		/* Attempt to put it into the logger, but hope that at least someone saw the
+		 * message on stderr ... */
+		ast_log(__LOG_ERROR, file, line, function, "FRACK!, Failed assertion %s (%d)\n",
+			condition_str, condition);
+		fprintf(stderr, "FRACK!, Failed assertion %s (%d) at line %d in %s of %s\n",
+			condition_str, condition, line, function, file);
+		/* Give the logger a chance to get the message out, just in case we abort(), or
+		 * Asterisk crashes due to whatever problem just happened after we exit ast_assert(). */
+		usleep(1);
+#ifdef DO_CRASH
+		abort();
+		/* Just in case abort() doesn't work or something else super silly,
+		 * and for Qwell's amusement. */
+		*((int*)0)=0;
+#endif
+	}
+}
+#else
+#define ast_assert(a)
+#endif
 
 #include "asterisk/strings.h"
+
+/*!
+ * \brief An Entity ID is essentially a MAC address, brief and unique 
+ */
+struct ast_eid {
+	unsigned char eid[6];
+} __attribute__((__packed__));
+
+/*!
+ * \brief Global EID
+ *
+ * This is set in asterisk.conf, or determined automatically by taking the mac
+ * address of an Ethernet interface on the system.
+ */
+extern struct ast_eid ast_eid_default;
+
+/*!
+ * \brief Fill in an ast_eid with the default eid of this machine
+ * \since 1.6.1
+ */
+void ast_set_default_eid(struct ast_eid *eid);
+
+/*!
+ * /brief Convert an EID to a string
+ * \since 1.6.1
+ */
+char *ast_eid_to_str(char *s, int maxlen, struct ast_eid *eid);
+
+/*!
+ * \brief Convert a string into an EID
+ *
+ * This function expects an EID in the format:
+ *    00:11:22:33:44:55
+ *
+ * \return 0 success, non-zero failure
+ * \since 1.6.1
+ */
+int ast_str_to_eid(struct ast_eid *eid, const char *s);
+
+/*!
+ * \brief Compare two EIDs
+ *
+ * \return 0 if the two are the same, non-zero otherwise
+ * \since 1.6.1
+ */
+int ast_eid_cmp(const struct ast_eid *eid1, const struct ast_eid *eid2);
 
 #endif /* _ASTERISK_UTILS_H */

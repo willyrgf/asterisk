@@ -29,18 +29,24 @@ ifneq ($(findstring $(OSARCH), mingw32 cygwin ),)
   res_agi.so_LIBS:= -lres_speech.so
 endif
 
+res_config_ldap.o: _ASTCFLAGS+=-DLDAP_DEPRECATED
+
 ael/ael_lex.o: ael/ael_lex.c ../include/asterisk/ael_structs.h ael/ael.tab.h
-ael/ael_lex.o: ASTCFLAGS+=-I. -Iael 
+ael/ael_lex.o: _ASTCFLAGS+=-I. -Iael -Wno-unused
 
 ael/ael.tab.o: ael/ael.tab.c ael/ael.tab.h ../include/asterisk/ael_structs.h
-ael/ael.tab.o: ASTCFLAGS+=-I. -Iael -DYYENABLE_NLS=0
+ael/ael.tab.o: _ASTCFLAGS+=-I. -Iael -DYYENABLE_NLS=0
+
+ais/clm.o ais/evt.o: _ASTCFLAGS+=${AIS_INCLUDE}
+
+$(if $(filter res_ais,$(EMBEDDED_MODS)),modules.link,res_ais.so): ais/clm.o ais/evt.o
 
 $(if $(filter res_snmp,$(EMBEDDED_MODS)),modules.link,res_snmp.so): snmp/agent.o
 
 $(if $(filter res_ael_share,$(EMBEDDED_MODS)),modules.link,res_ael_share.so): ael/ael_lex.o ael/ael.tab.o ael/pval.o
 
 ael/ael_lex.c:
-	(cd ael; flex ael.flex; sed -i -e "/begin standard C headers/i#include \"asterisk.h\"" ael_lex.c)
+	(cd ael; flex ael.flex; sed -e "/begin standard C headers/i#include \"asterisk.h\"" ael_lex.c > zz; mv zz ael_lex.c)
 	(cd ael; sed 's@#if __STDC_VERSION__ >= 199901L@#if !defined __STDC_VERSION__ || __STDC_VERSION__ >= 199901L@' ael_lex.c > zz; mv zz ael_lex.c)
 
 ael/ael.tab.c ael/ael.tab.h:
@@ -49,5 +55,4 @@ ael/ael.tab.c ael/ael.tab.h:
 ael/pval.o: ael/pval.c
 
 clean::
-	rm -f snmp/*.o
-	rm -f ael/*.o
+	rm -f snmp/*.o snmp/*.i ael/*.o ael/*.i ais/*.o ais/*.i

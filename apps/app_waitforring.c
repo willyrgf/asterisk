@@ -35,30 +35,38 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/module.h"
 #include "asterisk/lock.h"
 
-static char *synopsis = "Wait for Ring Application";
-
-static char *desc = "  WaitForRing(timeout):\n"
-"Returns 0 after waiting at least timeout seconds. and\n"
-"only after the next ring has completed.  Returns 0 on\n"
-"success or -1 on hangup\n";
+/*** DOCUMENTATION
+	<application name="WaitForRing" language="en_US">
+		<synopsis>
+			Wait for Ring Application.
+		</synopsis>
+		<syntax>
+			<parameter name="timeout" required="true" />
+		</syntax>
+		<description>
+			<para>Returns <literal>0</literal> after waiting at least <replaceable>timeout</replaceable> seconds,
+			and only after the next ring has completed. Returns <literal>0</literal> on success or
+			<literal>-1</literal> on hangup.</para>
+		</description>
+	</application>
+ ***/
 
 static char *app = "WaitForRing";
 
-
-static int waitforring_exec(struct ast_channel *chan, void *data)
+static int waitforring_exec(struct ast_channel *chan, const char *data)
 {
 	struct ast_frame *f;
 	int res = 0;
 	double s;
 	int ms;
 
-	if (!data || (sscanf(data, "%lg", &s) != 1)) {
-                ast_log(LOG_WARNING, "WaitForRing requires an argument (minimum seconds)\n");
+	if (!data || (sscanf(data, "%30lg", &s) != 1)) {
+		ast_log(LOG_WARNING, "WaitForRing requires an argument (minimum seconds)\n");
 		return 0;
 	}
 
-	ms = s*1000.0;
-	while(ms > 0) {
+	ms = s * 1000.0;
+	while (ms > 0) {
 		ms = ast_waitfor(chan, ms);
 		if (ms < 0) {
 			res = ms;
@@ -111,7 +119,7 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	return ast_register_application(app, waitforring_exec, synopsis, desc);
+	return ast_register_application_xml(app, waitforring_exec);
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Waits until first ring after time");

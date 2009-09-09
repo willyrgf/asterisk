@@ -35,6 +35,23 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/channel.h"
 #include "asterisk/astdb.h"
 
+/*** DOCUMENTATION
+	<function name="BLACKLIST" language="en_US">
+		<synopsis>
+			Check if the callerid is on the blacklist.
+		</synopsis>
+		<syntax />
+		<description>
+			<para>Uses astdb to check if the Caller*ID is in family <literal>blacklist</literal>.
+			Returns <literal>1</literal> or <literal>0</literal>.</para>
+		</description>
+		<see-also>
+			<ref type="function">DB</ref>
+		</see-also>
+	</function>
+
+***/
+
 static int blacklist_read(struct ast_channel *chan, const char *cmd, char *data, char *buf, size_t len)
 {
 	char blacklist[1];
@@ -53,12 +70,26 @@ static int blacklist_read(struct ast_channel *chan, const char *cmd, char *data,
 	return 0;
 }
 
+static int blacklist_read2(struct ast_channel *chan, const char *cmd, char *data, struct ast_str **str, ssize_t len)
+{
+	/* 2 bytes is a single integer, plus terminating null */
+	if (ast_str_size(*str) - ast_str_strlen(*str) < 2) {
+		if (len > ast_str_size(*str) || len == 0) {
+			ast_str_make_space(str, len ? len : ast_str_strlen(*str) + 2);
+		}
+	}
+	if (ast_str_size(*str) - ast_str_strlen(*str) >= 2) {
+		int res = blacklist_read(chan, cmd, data, ast_str_buffer(*str) + ast_str_strlen(*str), 2);
+		ast_str_update(*str);
+		return res;
+	}
+	return -1;
+}
+
 static struct ast_custom_function blacklist_function = {
 	.name = "BLACKLIST",
-	.synopsis = "Check if the callerid is on the blacklist",
-	.desc = "Uses astdb to check if the Caller*ID is in family 'blacklist'.  Returns 1 or 0.\n",
-	.syntax = "BLACKLIST()",
 	.read = blacklist_read,
+	.read2 = blacklist_read2,
 };
 
 static int unload_module(void)

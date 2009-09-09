@@ -47,12 +47,15 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/config.h"
 #include "asterisk/options.h"
 #include "asterisk/callerid.h"
+#include "asterisk/lock.h"
+#include "asterisk/hashtab.h"
 #include "asterisk/ael_structs.h"
 #include "asterisk/devicestate.h"
 #include "asterisk/stringfields.h"
 #include "asterisk/pval.h"
 #include "asterisk/extconf.h"
 
+struct ast_flags ast_compat = { 7 };
 const char *ast_config_AST_CONFIG_DIR = "/etc/asterisk";	/* placeholder */
 
 void get_start_stop(unsigned int *word, int bitsperword, int totalbits, int *start, int *end);
@@ -75,18 +78,23 @@ char ast_config_AST_SYSTEM_NAME[20] = ""; */
 #define AST_PBX_MAX_STACK	128
 /* static AST_RWLIST_HEAD_STATIC(acf_root, ast_custom_function); */
 //extern char ast_config_AST_CONFIG_DIR[PATH_MAX];
+int option_debug = 0;
+int option_verbose = 0;
 
+void ast_register_file_version(const char *file, const char *version);
 void ast_register_file_version(const char *file, const char *version)
 {
 }
 
+void ast_unregister_file_version(const char *file);
 void ast_unregister_file_version(const char *file)
 {
 }
+#if !defined(LOW_MEMORY)
 int ast_add_profile(const char *x, uint64_t scale) { return 0;}
-
+#endif
 /* Our own version of ast_log, since the expr parser uses it. -- stolen from utils/check_expr.c */
-void ast_log(int level, const char *file, int line, const char *function, const char *fmt, ...) __attribute__ ((format (printf,5,6)));
+void ast_log(int level, const char *file, int line, const char *function, const char *fmt, ...) __attribute__((format(printf,5,6)));
 
 void ast_log(int level, const char *file, int line, const char *function, const char *fmt, ...)
 {
@@ -358,8 +366,6 @@ int main(int argc, char **argv)
 	if (!localdir)
 		printf(" (You could use -d the use the extensions.conf in the current directory!)\n");
 
-	strcpy((char *)ast_config_AST_CONFIG_DIR,"/etc/asterisk");
-	
 	printf("Loading %s/%s...\n", ast_config_AST_CONFIG_DIR, config);
 
 	if (!localdir)
@@ -465,7 +471,7 @@ int main(int argc, char **argv)
 								if (mon) {
 									*mon++ = 0;
 									/* now all 4 fields are set; what do we do? */
-									pvalIncludesAddIncludeWithTimeConstraints(incl, all, hr, dow, dom, mon);
+									pvalIncludesAddIncludeWithTimeConstraints(incl, strdup(all), strdup(hr), strdup(dow), strdup(dom), strdup(mon));
 									/* the original data is always best to keep (no 2-min rounding) */
 								} else {
 									ast_log(LOG_ERROR,"No month spec attached to include!\n");
@@ -477,6 +483,7 @@ int main(int argc, char **argv)
 							ast_log(LOG_ERROR,"No day of week spec attached to include!\n");
 						}
 					}
+					free(all);
 				}
 				tmpi = tmpi->next;
 			}
@@ -562,7 +569,7 @@ int main(int argc, char **argv)
 
 /* ==================================== for linking internal stuff to external stuff */
 
-int pbx_builtin_setvar(struct ast_channel *chan, void *data)
+int pbx_builtin_setvar(struct ast_channel *chan, const char *data)
 {
 	return localized_pbx_builtin_setvar(chan, data);
 }
@@ -606,18 +613,11 @@ int ast_context_add_include2(struct ast_context *con, const char *value,
 	return localized_context_add_include2(con, value,registrar);
 }
 
-struct ast_context *ast_context_create(struct ast_context **extcontexts, const char *name, const char *registrar)
-{
-	printf("Creating context %s, registrar=%s\n", name, registrar);
-	
-	return localized_context_create(extcontexts, name, registrar);
-}
-
-struct ast_context *ast_context_find_or_create(struct ast_context **extcontexts, const char *name, const char *registrar)
+struct ast_context *ast_context_find_or_create(struct ast_context **extcontexts, struct ast_hashtab *exttable, const char *name, const char *registrar)
 {
 	printf("find/Creating context %s, registrar=%s\n", name, registrar);
 	
-	return localized_context_create(extcontexts, name, registrar);
+	return localized_context_find_or_create(extcontexts, exttable, name, registrar);
 }
 
 void ast_cli_register_multiple(void);
@@ -660,11 +660,11 @@ int ast_context_verify_includes(struct ast_context *con)
 	return  localized_context_verify_includes(con);
 }
 
-void ast_merge_contexts_and_delete(struct ast_context **extcontexts, const char *registrar);
+void ast_merge_contexts_and_delete(struct ast_context **extcontexts, struct ast_hashtab *exttable, const char *registrar);
 
-void ast_merge_contexts_and_delete(struct ast_context **extcontexts, const char *registrar)
+void ast_merge_contexts_and_delete(struct ast_context **extcontexts, struct ast_hashtab *exttable, const char *registrar)
 {
-	localized_merge_contexts_and_delete(extcontexts, registrar);
+	localized_merge_contexts_and_delete(extcontexts, exttable, registrar);
 }
 
 struct ast_exten *pbx_find_extension(struct ast_channel *chan,
@@ -690,3 +690,49 @@ struct ast_exten *pbx_find_extension(struct ast_channel *chan,
 	return localized_find_extension(bypass, q, context, exten, priority, label, callerid, action);
 }
 
+int ast_hashtab_compare_contexts(const void *ah_a, const void *ah_b);
+
+int ast_hashtab_compare_contexts(const void *ah_a, const void *ah_b)
+{
+	return 0;
+}
+
+unsigned int ast_hashtab_hash_contexts(const void *obj);
+
+unsigned int ast_hashtab_hash_contexts(const void *obj)
+{
+	return 0;
+}
+
+#ifdef DEBUG_THREADS
+#if !defined(LOW_MEMORY)
+void ast_mark_lock_acquired(void *lock_addr)
+{
+}
+#ifdef HAVE_BKTR
+void ast_remove_lock_info(void *lock_addr, struct ast_bt *bt)
+{
+}
+
+void ast_store_lock_info(enum ast_lock_type type, const char *filename,
+	int line_num, const char *func, const char *lock_name, void *lock_addr, struct ast_bt *bt)
+{
+}
+
+int ast_bt_get_addresses(struct ast_bt *bt)
+{
+	return 0;
+}
+
+#else
+void ast_remove_lock_info(void *lock_addr)
+{
+}
+
+void ast_store_lock_info(enum ast_lock_type type, const char *filename,
+	int line_num, const char *func, const char *lock_name, void *lock_addr)
+{
+}
+#endif /* HAVE_BKTR */
+#endif /* !defined(LOW_MEMORY) */
+#endif /* DEBUG_THREADS */

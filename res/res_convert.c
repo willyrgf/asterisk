@@ -117,9 +117,11 @@ static char *handle_cli_file_convert(struct ast_cli_entry *e, int cmd, struct as
 	
 	while ((f = ast_readframe(fs_in))) {
 		if (ast_writestream(fs_out, f)) {
+			ast_frfree(f);
 			ast_cli(a->fd, "Failed to convert %s.%s to %s.%s!\n", name_in, ext_in, name_out, ext_out);
 			goto fail_out;
 		}
+		ast_frfree(f);
 	}
 
 	cost = ast_tvdiff_ms(ast_tvnow(), start);
@@ -147,13 +149,13 @@ static struct ast_cli_entry cli_convert[] = {
 
 static int unload_module(void)
 {
-	ast_cli_unregister_multiple(cli_convert, sizeof(cli_convert) / sizeof(struct ast_cli_entry));
+	ast_cli_unregister_multiple(cli_convert, ARRAY_LEN(cli_convert));
 	return 0;
 }
 
 static int load_module(void)
 {
-	ast_cli_register_multiple(cli_convert, sizeof(cli_convert) / sizeof(struct ast_cli_entry));
+	ast_cli_register_multiple(cli_convert, ARRAY_LEN(cli_convert));
 	return AST_MODULE_LOAD_SUCCESS;
 }
 

@@ -22,7 +22,7 @@ Currently there are three realtime database drivers:
   \item ODBC: Support for UnixODBC, integrated into Asterisk
         The UnixODBC subsystem supports many different databases,
         please check \url{www.unixodbc.org} for more information.
-  \item MySQL: Found in the asterisk-addons subversion repository on \url{svn.digium.com}
+  \item MySQL: Native support for MySQL, integrated into Asterisk
   \item PostgreSQL: Native support for Postgres, integrated into Asterisk
 \end{itemize}
 
@@ -38,6 +38,20 @@ The ARA static mode is used to load configuration files. For the Asterisk
 modules that read configurations, there's no difference between a static
 file in the file system, like extensions.conf, and a configuration loaded
 from a database.
+
+You just have to always make sure the var\_metric values are properly set and
+ordered as you expect in your database server if you're using the static mode
+with ARA (either sequentially or with the same var\_metric value for everybody).
+
+If you have an option that depends on another one in a given configuration
+file (i.e, 'musiconhold' depending on 'agent' from agents.conf) but their
+var\_metric are not sequential you'll probably get default values being assigned for
+those options instead of the desired ones. You can still use the same
+var\_metric for all entries in your DB, just make sure the entries
+are recorded in an order that does not break the option dependency.
+
+That doesn't happen when you use a static file in the file system. Although
+this might be interpreted as a bug or limitation, it is not.
 
 \subsubsection{Realtime SIP friends}
 
@@ -125,3 +139,12 @@ In order to use a FreeTDS-based database with realtime, you need to turn
 connection pooling on in res\_odbc.conf.  This is due to a limitation within
 the FreeTDS protocol itself.  Please note that this includes databases such
 as MS SQL Server and Sybase.  This support is new in the current release.
+
+You may notice a performance issue under high load using UnixODBC. The UnixODBC
+driver supports threading but you must specifically enable threading within the
+UnixODBC configuration file like below for each engine:
+
+	Threading = 2
+
+This will enable the driver to service many requests at a time, rather than
+serially.

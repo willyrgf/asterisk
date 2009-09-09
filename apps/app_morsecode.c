@@ -34,19 +34,38 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/module.h"
 #include "asterisk/indications.h"
 
-static char *app_morsecode = "Morsecode";
+/*** DOCUMENTATION
+	<application name="Morsecode" language="en_US">
+		<synopsis>
+			Plays morse code.
+		</synopsis>
+		<syntax>
+			<parameter name="string" required="true">
+				<para>String to playback as morse code to channel</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Plays the Morse code equivalent of the passed string.</para>
 
-static char *morsecode_synopsis = "Plays morse code";
+			<para>This application uses the following variables:</para>
+			<variablelist>
+				<variable name="MORSEDITLEN">
+					<para>Use this value in (ms) for length of dit</para>
+				</variable>
+				<variable name="MORSETONE">
+					<para>The pitch of the tone in (Hz), default is 800</para>
+				</variable>
+			</variablelist>
+		</description>
+		<see-also>
+			<ref type="application">SayAlpha</ref>
+			<ref type="application">SayPhonetic</ref>
+		</see-also>
+	</application>
+ ***/	
+static const char app_morsecode[] = "Morsecode";
 
-static char *morsecode_descrip =
-"  Morsecode(<string>):\n"
-"Plays the Morse code equivalent of the passed string.  If the variable\n"
-"MORSEDITLEN is set, it will use that value for the length (in ms) of the dit\n"
-"(defaults to 80).  Additionally, if MORSETONE is set, it will use that tone\n"
-"(in Hz).  The tone default is 800.\n";
-
-
-static char *morsecode[] = {
+static const char * const morsecode[] = {
 	"", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", /*  0-15 */
 	"", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", /* 16-31 */
 	" ",      /* 32 - <space> */
@@ -99,10 +118,10 @@ static void playtone(struct ast_channel *chan, int tone, int len)
 	ast_playtones_stop(chan);
 }
 
-static int morsecode_exec(struct ast_channel *chan, void *data)
+static int morsecode_exec(struct ast_channel *chan, const char *data)
 {
 	int res=0, ditlen, tone;
-	char *digit;
+	const char *digit;
 	const char *ditlenc, *tonec;
 
 	if (ast_strlen_zero(data)) {
@@ -111,20 +130,24 @@ static int morsecode_exec(struct ast_channel *chan, void *data)
 	}
 
 	/* Use variable MORESEDITLEN, if set (else 80) */
+	ast_channel_lock(chan);
 	ditlenc = pbx_builtin_getvar_helper(chan, "MORSEDITLEN");
-	if (ast_strlen_zero(ditlenc) || (sscanf(ditlenc, "%d", &ditlen) != 1)) {
+	if (ast_strlen_zero(ditlenc) || (sscanf(ditlenc, "%30d", &ditlen) != 1)) {
 		ditlen = 80;
 	}
+	ast_channel_unlock(chan);
 
 	/* Use variable MORSETONE, if set (else 800) */
+	ast_channel_lock(chan);
 	tonec = pbx_builtin_getvar_helper(chan, "MORSETONE");
-	if (ast_strlen_zero(tonec) || (sscanf(tonec, "%d", &tone) != 1)) {
+	if (ast_strlen_zero(tonec) || (sscanf(tonec, "%30d", &tone) != 1)) {
 		tone = 800;
 	}
+	ast_channel_unlock(chan);
 
 	for (digit = data; *digit; digit++) {
 		int digit2 = *digit;
-		char *dahdit;
+		const char *dahdit;
 		if (digit2 < 0) {
 			continue;
 		}
@@ -155,7 +178,7 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	return ast_register_application(app_morsecode, morsecode_exec, morsecode_synopsis, morsecode_descrip);
+	return ast_register_application_xml(app_morsecode, morsecode_exec);
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Morse code");

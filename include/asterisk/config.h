@@ -28,6 +28,7 @@ extern "C" {
 #endif
 
 #include "asterisk/utils.h"
+#include "asterisk/inline_api.h"
 
 struct ast_config;
 
@@ -44,9 +45,31 @@ enum {
 	CONFIG_FLAG_NOCACHE       = (1 << 2),
 };
 
+#define	CONFIG_STATUS_FILEMISSING	(void *)0
 #define	CONFIG_STATUS_FILEUNCHANGED	(void *)-1
+#define	CONFIG_STATUS_FILEINVALID	(void *)-2
 
-/*! \brief Structure for variables, used for configurations and for channel variables 
+/*!
+ * \brief Types used in ast_realtime_require_field
+ */
+typedef enum {
+	RQ_INTEGER1,
+	RQ_UINTEGER1,
+	RQ_INTEGER2,
+	RQ_UINTEGER2,
+	RQ_INTEGER3,
+	RQ_UINTEGER3,
+	RQ_INTEGER4,
+	RQ_UINTEGER4,
+	RQ_INTEGER8,
+	RQ_UINTEGER8,
+	RQ_CHAR,
+	RQ_FLOAT,
+	RQ_DATE,
+	RQ_DATETIME,
+} require_type;
+
+/*! \brief Structure for variables, used for configurations and for channel variables
 */
 struct ast_variable {
 	const char *name;
@@ -64,12 +87,25 @@ struct ast_variable {
 	char stuff[0];
 };
 
-typedef struct ast_config *config_load_func(const char *database, const char *table, const char *configfile, struct ast_config *config, struct ast_flags flags, const char *suggested_include_file);
+typedef struct ast_config *config_load_func(const char *database, const char *table, const char *configfile, struct ast_config *config, struct ast_flags flags, const char *suggested_include_file, const char *who_asked);
 typedef struct ast_variable *realtime_var_get(const char *database, const char *table, va_list ap);
 typedef struct ast_config *realtime_multi_get(const char *database, const char *table, va_list ap);
 typedef int realtime_update(const char *database, const char *table, const char *keyfield, const char *entity, va_list ap);
+typedef int realtime_update2(const char *database, const char *table, va_list ap);
 typedef int realtime_store(const char *database, const char *table, va_list ap);
 typedef int realtime_destroy(const char *database, const char *table, const char *keyfield, const char *entity, va_list ap);
+
+/*!
+ * \brief Function pointer called to ensure database schema is properly configured for realtime use
+ * \since 1.6.1
+ */
+typedef int realtime_require(const char *database, const char *table, va_list ap);
+
+/*!
+ * \brief Function pointer called to clear the database cache and free resources used for such
+ * \since 1.6.1
+ */
+typedef int realtime_unload(const char *database, const char *table);
 
 /*! \brief Configuration engine structure, used to define realtime drivers */
 struct ast_config_engine {
@@ -78,25 +114,31 @@ struct ast_config_engine {
 	realtime_var_get *realtime_func;
 	realtime_multi_get *realtime_multi_func;
 	realtime_update *update_func;
+	realtime_update2 *update2_func;
 	realtime_store *store_func;
 	realtime_destroy *destroy_func;
+	realtime_require *require_func;
+	realtime_unload *unload_func;
 	struct ast_config_engine *next;
 };
 
-/*! \brief Load a config file 
+/*! \brief Load a config file
  * \param filename path of file to open.  If no preceding '/' character, path is considered relative to AST_CONFIG_DIR
  * Create a config structure from a given configuration file.
+ * \param who_asked The module which is making this request.
  * \param flags Optional flags:
  * CONFIG_FLAG_WITHCOMMENTS - load the file with comments intact;
  * CONFIG_FLAG_FILEUNCHANGED - check the file mtime and return CONFIG_STATUS_FILEUNCHANGED if the mtime is the same; or
  * CONFIG_FLAG_NOCACHE - don't cache file mtime (main purpose of this option is to save memory on temporary files).
  *
- * \retval an ast_config data structure on success
+ * \return an ast_config data structure on success
  * \retval NULL on error
  */
-struct ast_config *ast_config_load(const char *filename, struct ast_flags flags);
+struct ast_config *ast_config_load2(const char *filename, const char *who_asked, struct ast_flags flags);
 
-/*! \brief Destroys a config 
+#define ast_config_load(filename, flags)	ast_config_load2(filename, AST_MODULE, flags)
+
+/*! \brief Destroys a config
  * \param config pointer to config data structure
  * Free memory associated with a given config
  *
@@ -111,7 +153,7 @@ void ast_config_destroy(struct ast_config *config);
  */
 struct ast_variable *ast_category_root(struct ast_config *config, char *cat);
 
-/*! \brief Goes through categories 
+/*! \brief Goes through categories
  * \param config Which config structure you wish to "browse"
  * \param prev A pointer to a previous category.
  * This function is kind of non-intuitive in it's use.  To begin, one passes NULL as the second argument.  It will return a pointer to the string of the first category in the file.  From here on after, one must then pass the previous usage's return value as the second pointer, and it will return a pointer to the category name afterwards.
@@ -121,7 +163,7 @@ struct ast_variable *ast_category_root(struct ast_config *config, char *cat);
  */
 char *ast_category_browse(struct ast_config *config, const char *prev);
 
-/*! 
+/*!
  * \brief Goes through variables
  * Somewhat similar in intent as the ast_category_browse.
  * List variables of config file category
@@ -138,19 +180,19 @@ struct ast_variable *ast_variable_browse(const struct ast_config *config, const 
  */
 struct ast_variable *ast_category_first(struct ast_category *cat);
 
-/*! 
- * \brief Gets a variable 
+/*!
+ * \brief Gets a variable
  * \param config which (opened) config to use
  * \param category category under which the variable lies
  * \param variable which variable you wish to get the data for
  * Goes through a given config file in the given category and searches for the given variable
  *
- * \retval The variable value on success 
+ * \retval The variable value on success
  * \retval NULL if unable to find it.
  */
 const char *ast_variable_retrieve(const struct ast_config *config, const char *category, const char *variable);
 
-/*! 
+/*!
  * \brief Retrieve a category if it exists
  * \param config which config to use
  * \param category_name name of the category you're looking for
@@ -161,8 +203,8 @@ const char *ast_variable_retrieve(const struct ast_config *config, const char *c
  */
 struct ast_category *ast_category_get(const struct ast_config *config, const char *category_name);
 
-/*! 
- * \brief Check for category duplicates 
+/*!
+ * \brief Check for category duplicates
  * \param config which config to use
  * \param category_name name of the category you're looking for
  * This will search through the categories within a given config file for a match.
@@ -171,59 +213,140 @@ struct ast_category *ast_category_get(const struct ast_config *config, const cha
  */
 int ast_category_exist(const struct ast_config *config, const char *category_name);
 
-/*! 
- * \brief Retrieve realtime configuration 
+/*!
+ * \brief Retrieve realtime configuration
  * \param family which family/config to lookup
- * This will use builtin configuration backends to look up a particular 
+ * This will use builtin configuration backends to look up a particular
  * entity in realtime and return a variable list of its parameters.  Note
  * that unlike the variables in ast_config, the resulting list of variables
  * MUST be freed with ast_variables_destroy() as there is no container.
+ *
+ * The difference between these two calls is that ast_load_realtime excludes
+ * fields whose values are NULL, while ast_load_realtime_all loads all columns.
+ *
+ * Note that you should use the constant SENTINEL to terminate arguments, in
+ * order to preserve cross-platform compatibility.
  */
-struct ast_variable *ast_load_realtime(const char *family, ...);
-struct ast_variable *ast_load_realtime_all(const char *family, ...);
+struct ast_variable *ast_load_realtime(const char *family, ...) attribute_sentinel;
+struct ast_variable *ast_load_realtime_all(const char *family, ...) attribute_sentinel;
 
-/*! 
- * \brief Retrieve realtime configuration 
+/*!
+ * \brief Release any resources cached for a realtime family
+ * \param family which family/config to destroy
+ * Various backends may cache attributes about a realtime data storage
+ * facility; on reload, a front end resource may request to purge that cache.
+ * \retval 0 If any cache was purged
+ * \retval -1 If no cache was found
+ * \since 1.6.1
+ */
+int ast_unload_realtime(const char *family);
+
+/*!
+ * \brief Inform realtime what fields that may be stored
+ * \param family which family/config is referenced
+ * This will inform builtin configuration backends that particular fields
+ * may be updated during the use of that configuration section.  This is
+ * mainly to be used during startup routines, to ensure that various fields
+ * exist in the backend.  The backends may take various actions, such as
+ * creating new fields in the data store or warning the administrator that
+ * new fields may need to be created, in order to ensure proper function.
+ *
+ * The arguments are specified in groups of 3:  column name, column type,
+ * and column size.  The column types are specified as integer constants,
+ * defined by the enum require_type.  Note that the size is specified as
+ * the number of equivalent character fields that a field may take up, even
+ * if a field is otherwise specified as an integer type.  This is due to
+ * the fact that some fields have historically been specified as character
+ * types, even if they contained integer values.
+ *
+ * A family should always specify its fields to the minimum necessary
+ * requirements to fulfill all possible values (within reason; for example,
+ * a timeout value may reasonably be specified as an INTEGER2, with size 5.
+ * Even though values above 32767 seconds are possible, they are unlikely
+ * to be useful, and we should not complain about that size).
+ *
+ * \retval 0 Required fields met specified standards
+ * \retval -1 One or more fields was missing or insufficient
+ *
+ * Note that you should use the constant SENTINEL to terminate arguments, in
+ * order to preserve cross-platform compatibility.
+ *
+ * \since 1.6.1
+ */
+int ast_realtime_require_field(const char *family, ...) attribute_sentinel;
+
+/*!
+ * \brief Retrieve realtime configuration
  * \param family which family/config to lookup
- * This will use builtin configuration backends to look up a particular 
+ *
+ * This will use builtin configuration backends to look up a particular
  * entity in realtime and return a variable list of its parameters. Unlike
  * the ast_load_realtime, this function can return more than one entry and
- * is thus stored inside a taditional ast_config structure rather than 
+ * is thus stored inside a traditional ast_config structure rather than
  * just returning a linked list of variables.
+ *
+ * Note that you should use the constant SENTINEL to terminate arguments, in
+ * order to preserve cross-platform compatibility.
  */
-struct ast_config *ast_load_realtime_multientry(const char *family, ...);
+struct ast_config *ast_load_realtime_multientry(const char *family, ...) attribute_sentinel;
 
-/*! 
- * \brief Update realtime configuration 
+/*!
+ * \brief Update realtime configuration
  * \param family which family/config to be updated
  * \param keyfield which field to use as the key
  * \param lookup which value to look for in the key field to match the entry.
  * This function is used to update a parameter in realtime configuration space.
+ * \return Number of rows affected, or -1 on error.
  *
+ * Note that you should use the constant SENTINEL to terminate arguments, in
+ * order to preserve cross-platform compatibility.
  */
-int ast_update_realtime(const char *family, const char *keyfield, const char *lookup, ...);
+int ast_update_realtime(const char *family, const char *keyfield, const char *lookup, ...) attribute_sentinel;
 
-/*! 
- * \brief Create realtime configuration 
+/*!
+ * \brief Update realtime configuration
+ * \param family which family/config to be updated
+ * This function is used to update a parameter in realtime configuration space.
+ * It includes the ability to lookup a row based upon multiple key criteria.
+ * As a result, this function includes two sentinel values, one to terminate
+ * lookup values and the other to terminate the listing of fields to update.
+ * \return Number of rows affected, or -1 on error.
+ *
+ * Note that you should use the constant SENTINEL to terminate arguments, in
+ * order to preserve cross-platform compatibility.
+ */
+int ast_update2_realtime(const char *family, ...) attribute_sentinel;
+
+/*!
+ * \brief Create realtime configuration
  * \param family which family/config to be created
  * This function is used to create a parameter in realtime configuration space.
+ * \return Number of rows affected, or -1 on error.
+ * On the MySQL engine only, for reasons of backwards compatibility, the return
+ * value is the insert ID.  This value is nonportable and may be changed in a
+ * future version to match the other engines.
  *
+ * Note that you should use the constant SENTINEL to terminate arguments, in
+ * order to preserve cross-platform compatibility.
  */
-int ast_store_realtime(const char *family, ...);
+int ast_store_realtime(const char *family, ...) attribute_sentinel;
 
-/*! 
- * \brief Destroy realtime configuration 
+/*!
+ * \brief Destroy realtime configuration
  * \param family which family/config to be destroyed
  * \param keyfield which field to use as the key
  * \param lookup which value to look for in the key field to match the entry.
  * This function is used to destroy an entry in realtime configuration space.
  * Additional params are used as keys.
+ * \return Number of rows affected, or -1 on error.
  *
+ * Note that you should use the constant SENTINEL to terminate arguments, in
+ * order to preserve cross-platform compatibility.
  */
-int ast_destroy_realtime(const char *family, const char *keyfield, const char *lookup, ...);
+int ast_destroy_realtime(const char *family, const char *keyfield, const char *lookup, ...) attribute_sentinel;
 
-/*! 
- * \brief Check if realtime engine is configured for family 
+/*!
+ * \brief Check if realtime engine is configured for family
  * \param family which family/config to be checked
  * \return 1 if family is configured in realtime and engine exists
 */
@@ -232,45 +355,107 @@ int ast_check_realtime(const char *family);
 /*! \brief Check if there's any realtime engines loaded */
 int ast_realtime_enabled(void);
 
-/*! \brief Free variable list 
+/*! \brief Free variable list
  * \param var the linked list of variables to free
  * This function frees a list of variables.
  */
 void ast_variables_destroy(struct ast_variable *var);
 
-/*! \brief Register config engine */
+/*! \brief Register config engine
+ * \retval 1 Always
+ */
 int ast_config_engine_register(struct ast_config_engine *newconfig);
 
-/*! \brief Deegister config engine */
+/*! \brief Deregister config engine
+ * \retval 0 Always
+ */
 int ast_config_engine_deregister(struct ast_config_engine *del);
 
+/*!\brief Exposed initialization method for core process
+ * This method is intended for use only with the core initialization and is
+ * not designed to be called from any user applications.
+ */
 int register_config_cli(void);
+
+/*!\brief Exposed re-initialization method for core process
+ * This method is intended for use only with the core re-initialization and is
+ * not designed to be called from any user applications.
+ */
 int read_config_maps(void);
 
+/*!\brief Create a new base configuration structure */
 struct ast_config *ast_config_new(void);
+
+/*!\brief Retrieve the current category name being built.
+ * API for backend configuration engines while building a configuration set.
+ */
 struct ast_category *ast_config_get_current_category(const struct ast_config *cfg);
+
+/*!\brief Set the category within the configuration as being current.
+ * API for backend configuration engines while building a configuration set.
+ */
 void ast_config_set_current_category(struct ast_config *cfg, const struct ast_category *cat);
+
+/*!\brief Retrieve a configuration variable within the configuration set.
+ * Retrieves the named variable \p var within category \p cat of configuration
+ * set \p cfg.  If not found, attempts to retrieve the named variable \p var
+ * from within category \em general.
+ * \return Value of \p var, or NULL if not found.
+ */
 const char *ast_config_option(struct ast_config *cfg, const char *cat, const char *var);
 
+/*!\brief Create a category structure */
 struct ast_category *ast_category_new(const char *name, const char *in_file, int lineno);
 void ast_category_append(struct ast_config *config, struct ast_category *cat);
+
+/*!
+ * \brief Inserts new category
+ * \param config which config to use
+ * \param cat newly created category to insert
+ * \param match which category to insert above
+ * This function is used to insert a new category above another category
+ * matching the match parameter.
+ */
+void ast_category_insert(struct ast_config *config, struct ast_category *cat, const char *match);
 int ast_category_delete(struct ast_config *cfg, const char *category);
+
+/*!\brief Removes and destroys all variables within a category
+ * \retval 0 if the category was found and emptied
+ * \retval -1 if the category was not found
+ */
+int ast_category_empty(struct ast_config *cfg, const char *category);
 void ast_category_destroy(struct ast_category *cat);
 struct ast_variable *ast_category_detach_variables(struct ast_category *cat);
 void ast_category_rename(struct ast_category *cat, const char *name);
 
+#ifdef MALLOC_DEBUG
+struct ast_variable *_ast_variable_new(const char *name, const char *value, const char *filename, const char *file, const char *function, int lineno);
+#define ast_variable_new(a, b, c) _ast_variable_new(a, b, c, __FILE__, __PRETTY_FUNCTION__, __LINE__)
+#else
 struct ast_variable *ast_variable_new(const char *name, const char *value, const char *filename);
+#endif
 struct ast_config_include *ast_include_new(struct ast_config *conf, const char *from_file, const char *included_file, int is_exec, const char *exec_file, int from_lineno, char *real_included_file_name, int real_included_file_name_size);
 struct ast_config_include *ast_include_find(struct ast_config *conf, const char *included_file);
 void ast_include_rename(struct ast_config *conf, const char *from_file, const char *to_file);
 void ast_variable_append(struct ast_category *category, struct ast_variable *variable);
-int ast_variable_delete(struct ast_category *category, const char *variable, const char *match);
-int ast_variable_update(struct ast_category *category, const char *variable, 
+void ast_variable_insert(struct ast_category *category, struct ast_variable *variable, const char *line);
+int ast_variable_delete(struct ast_category *category, const char *variable, const char *match, const char *line);
+
+/*! \brief Update variable value within a config
+ * \param category Category element within the config
+ * \param variable Name of the variable to change
+ * \param value New value of the variable
+ * \param match If set, previous value of the variable (if NULL or zero-length, no matching will be done)
+ * \param object Boolean of whether to make the new variable an object
+ * \return 0 on success or -1 on failure.
+ */
+int ast_variable_update(struct ast_category *category, const char *variable,
 						const char *value, const char *match, unsigned int object);
 
-int config_text_file_save(const char *filename, const struct ast_config *cfg, const char *generator);
+int ast_config_text_file_save(const char *filename, const struct ast_config *cfg, const char *generator);
+int config_text_file_save(const char *filename, const struct ast_config *cfg, const char *generator) __attribute__((deprecated));
 
-struct ast_config *ast_config_internal_load(const char *configfile, struct ast_config *cfg, struct ast_flags flags, const char *suggested_incl_file);
+struct ast_config *ast_config_internal_load(const char *configfile, struct ast_config *cfg, struct ast_flags flags, const char *suggested_incl_file, const char *who_asked);
 
 /*! \brief Support code to parse config file arguments
  *
@@ -344,7 +529,7 @@ enum ast_parse_flags {
  *
  * Examples of use:
  *	ast_parse_arg("223", PARSE_INT32|PARSE_IN_RANGE,
- *		&a, -1000, 1000); 
+ *		&a, -1000, 1000);
  *              returns 0, a = 223
  *	ast_parse_arg("22345", PARSE_INT32|PARSE_IN_RANGE|PARSE_DEFAULT,
  *		&a, 9999, 10, 100);
@@ -398,6 +583,28 @@ int ast_parse_arg(const char *arg, enum ast_parse_flags flags,
 #define CV_STR(__x, __dst)	CV_F(__x, ast_copy_string(__dst, __val, sizeof(__dst)))
 #define CV_DSTR(__x, __dst)	CV_F(__x, if (__dst) ast_free(__dst); __dst = ast_strdup(__val))
 #define CV_STRFIELD(__x, __obj, __field) CV_F(__x, ast_string_field_set(__obj, __field, __val))
+
+/*!\brief Check if require type is an integer type */
+AST_INLINE_API(
+int ast_rq_is_int(require_type type),
+{
+	switch (type) {
+	case RQ_INTEGER1:
+	case RQ_UINTEGER1:
+	case RQ_INTEGER2:
+	case RQ_UINTEGER2:
+	case RQ_INTEGER3:
+	case RQ_UINTEGER3:
+	case RQ_INTEGER4:
+	case RQ_UINTEGER4:
+	case RQ_INTEGER8:
+	case RQ_UINTEGER8:
+		return 1;
+	default:
+		return 0;
+	}
+}
+)
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }

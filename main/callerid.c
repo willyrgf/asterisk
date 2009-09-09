@@ -128,6 +128,7 @@ struct callerid_state *callerid_new(int cid_signalling)
 	struct callerid_state *cid;
 
 	if ((cid = ast_calloc(1, sizeof(*cid)))) {
+#ifdef INTEGER_CALLERID
 		cid->fskd.ispb = 7;          	/* 1200 baud */	
 		/* Set up for 1200 / 8000 freq *32 to allow ints */
 		cid->fskd.pllispb  = (int)(8000 * 32  / 1200);
@@ -155,6 +156,27 @@ struct callerid_state *callerid_new(int cid_signalling)
 		/* cid->pos = 0; */
 
 		fskmodem_init(&cid->fskd);
+#else
+		cid->fskd.spb = 7.0;          	/* 1200 baud */
+		/* cid->fskd.hdlc = 0; */     	/* Async */
+		cid->fskd.nbit = 8;           	/* 8 bits */
+		cid->fskd.nstop = 1.0;        	/* 1 stop bit */
+		/* cid->fskd.paridad = 0; */  	/* No parity */
+		cid->fskd.bw = 1;             	/* Filter 800 Hz */
+		if (cid_signalling == 2) {    	/* v23 signalling */
+			cid->fskd.f_mark_idx =  4;	/* 1300 Hz */
+			cid->fskd.f_space_idx = 5;	/* 2100 Hz */
+		} else {                      	/* Bell 202 signalling as default */
+			cid->fskd.f_mark_idx =  2;	/* 1200 Hz */
+			cid->fskd.f_space_idx = 3;	/* 2200 Hz */
+		}
+		/* cid->fskd.pcola = 0; */    	/* No clue */
+		/* cid->fskd.cont = 0.0; */   	/* Digital PLL reset */
+		/* cid->fskd.x0 = 0.0; */
+		/* cid->fskd.state = 0; */
+		cid->flags = CID_UNKNOWN_NAME | CID_UNKNOWN_NUMBER;
+		/* cid->pos = 0; */
+#endif
 	}
 
 	return cid;
@@ -302,7 +324,7 @@ int callerid_feed_jp(struct callerid_state *cid, unsigned char *ubuf, int len, i
 		res = fsk_serial(&cid->fskd, buf, &mylen, &b);
 
 		if (mylen < 0) {
-			ast_log(LOG_ERROR, "fsk_serial made mylen < 0 (%d)\n", mylen);
+			ast_log(LOG_ERROR, "No start bit found in fsk data.\n");
 			return -1;
 		}
 
@@ -412,7 +434,7 @@ int callerid_feed_jp(struct callerid_state *cid, unsigned char *ubuf, int len, i
 						/* length */
 						x++; 
 						/* number type */
-                       		   		switch (cid->rawdata[x]) { 
+						switch (cid->rawdata[x]) { 
 						case 0x00: /* unknown */
 						case 0x01: /* international number */
 						case 0x02: /* domestic number */
@@ -451,8 +473,8 @@ int callerid_feed_jp(struct callerid_state *cid, unsigned char *ubuf, int len, i
 						case 'O': /* service not available */
 						case 'C': /* pay phone */
 						case 'S': /* service congested */
-                   						cid->flags |= CID_UNKNOWN_NUMBER;
-							ast_debug(2, "no cid reason:%c\n",cid->rawdata[x]);
+							cid->flags |= CID_UNKNOWN_NUMBER;
+							ast_debug(2, "no cid reason:%c\n", cid->rawdata[x]);
 							break ;
 						}
 						x++; 
@@ -483,7 +505,7 @@ int callerid_feed_jp(struct callerid_state *cid, unsigned char *ubuf, int len, i
 						x++;
 						/* numbering plan octed 4 */
 						x++;
-                               			/* numbering plan octed 5 */
+						/* numbering plan octed 5 */
 						switch (cid->rawdata[x]) {
 						case 0x00: /* unknown */
 						case 0x01: /* recommendation E.164 ISDN */
@@ -537,7 +559,7 @@ int callerid_feed(struct callerid_state *cid, unsigned char *ubuf, int len, int 
 		olen = mylen;
 		res = fsk_serial(&cid->fskd, buf, &mylen, &b);
 		if (mylen < 0) {
-			ast_log(LOG_ERROR, "fsk_serial made mylen < 0 (%d)\n", mylen);
+			ast_log(LOG_ERROR, "No start bit found in fsk data.\n");
 			return -1;
 		}
 		buf += (olen - mylen);
@@ -700,14 +722,14 @@ void callerid_free(struct callerid_state *cid)
 
 static int callerid_genmsg(char *msg, int size, const char *number, const char *name, int flags)
 {
-	struct timeval tv = ast_tvnow();
+	struct timeval now = ast_tvnow();
 	struct ast_tm tm;
 	char *ptr;
 	int res;
 	int i, x;
 
 	/* Get the time */
-	ast_localtime(&tv, &tm, NULL);
+	ast_localtime(&now, &tm, NULL);
 	
 	ptr = msg;
 	
@@ -769,24 +791,49 @@ static int callerid_genmsg(char *msg, int size, const char *number, const char *
 	
 }
 
-int vmwi_generate(unsigned char *buf, int active, int mdmf, int codec)
+int ast_callerid_vmwi_generate(unsigned char *buf, int active, int type, int codec,
+			       const char* name, const char* number, int flags)
 {
-	unsigned char msg[256];
-	int len=0;
+	char msg[256];
+	int len = 0;
 	int sum;
 	int x;
 	int bytes = 0;
 	float cr = 1.0;
 	float ci = 0.0;
 	float scont = 0.0;
+	
+	if (type == CID_MWI_TYPE_MDMF_FULL) {
+		/* MDMF Message waiting with date, number, name and MWI parameter */
+		msg[0] = 0x82;
 
-	if (mdmf) {
-		/* MDMF Message waiting */
+		/* put date, number info at the right place */
+		len = callerid_genmsg(msg+2, sizeof(msg)-2, number, name, flags); 
+		
+		/* length of MDMF CLI plus Message Waiting Structure */
+		msg[1] = len+3;
+		
+		/* Go to the position to write to */
+		len = len+2;
+		
+		/* "Message Waiting Parameter" */
+		msg[len++] = 0x0b;
+		/* Length of IE is one */
+		msg[len++] = 1;
+		/* Active or not */
+		if (active)
+			msg[len++] = 0xff;
+		else
+			msg[len++] = 0x00;
+		
+	} else if (type == CID_MWI_TYPE_MDMF) {
+		/* MDMF Message waiting only */
+		/* same as above except that the we only put MWI parameter */
 		msg[len++] = 0x82;
 		/* Length is 3 */
 		msg[len++] = 3;
 		/* IE is "Message Waiting Parameter" */
-		msg[len++] = 0xb;
+		msg[len++] = 0x0b;
 		/* Length of IE is one */
 		msg[len++] = 1;
 		/* Active or not */
@@ -834,7 +881,7 @@ int vmwi_generate(unsigned char *buf, int active, int mdmf, int codec)
 
 int callerid_generate(unsigned char *buf, const char *number, const char *name, int flags, int callwaiting, int codec)
 {
-	int bytes=0;
+	int bytes = 0;
 	int x, sum;
 	int len;
 
@@ -875,13 +922,15 @@ int callerid_generate(unsigned char *buf, const char *number, const char *name, 
 	return bytes;
 }
 
-/*! \brief Clean up phone string
- * remove '(', ' ', ')', non-trailing '.', and '-' not in square brackets.
+/*!
+ * \brief Clean up phone string
+ * \details
+ * Remove '(', ' ', ')', non-trailing '.', and '-' not in square brackets.
  * Basically, remove anything that could be invalid in a pattern.
  */
 void ast_shrink_phone_number(char *n)
 {
-	int x, y=0;
+	int x, y = 0;
 	int bracketed = 0;
 
 	for (x = 0; n[x]; x++) {
@@ -911,11 +960,13 @@ void ast_shrink_phone_number(char *n)
 	n[y] = '\0';
 }
 
-/*! \brief Checks if phone number consists of valid characters 
-	\param exten	String that needs to be checked
-	\param valid	Valid characters in string
-	\return 1 if valid string, 0 if string contains invalid characters
-*/
+/*!
+ * \brief Checks if phone number consists of valid characters
+ * \param exten	String that needs to be checked
+ * \param valid	Valid characters in string
+ * \retval 1 if valid string
+ * \retval 0 if string contains invalid characters
+ */
 static int ast_is_valid_string(const char *exten, const char *valid)
 {
 	int x;
@@ -928,46 +979,36 @@ static int ast_is_valid_string(const char *exten, const char *valid)
 	return 1;
 }
 
-/*! \brief checks if string consists only of digits and * \# and + 
-	\return 1 if string is valid AST phone number
-	\return 0 if not
-*/
 int ast_isphonenumber(const char *n)
 {
 	return ast_is_valid_string(n, "0123456789*#+");
 }
 
-/*! \brief checks if string consists only of digits and ( ) - * \# and + 
-	Pre-qualifies the string for ast_shrink_phone_number()
-	\return 1 if string is valid AST shrinkable phone number
-	\return 0 if not
-*/
 int ast_is_shrinkable_phonenumber(const char *exten)
 {
 	return ast_is_valid_string(exten, "0123456789*#+()-.");
 }
 
-/*! \brief parse string for caller id information 
-	\return always returns 0, as the code always returns something.
-  XXX note that 'name' is not parsed consistently e.g. we have
-
-	input			location	name
-	" foo bar " <123>	123		' foo bar ' (with spaces around)
-	" foo bar "		NULL		'foo bar' (without spaces around)
-	" foo bar  <123>"	123		'" foo bar'
-  The parsing of leading and trailing space/quotes should be more consistent.
-*/
 int ast_callerid_parse(char *instr, char **name, char **location)
 {
 	char *ns, *ne, *ls, *le;
 
 	/* Try "name" <location> format or name <location> format */
-	if ((ls = strchr(instr, '<')) && (le = strchr(ls, '>'))) {
+	if ((ls = strrchr(instr, '<')) && (le = strrchr(ls, '>'))) {
 		*ls = *le = '\0';	/* location found, trim off the brackets */
 		*location = ls + 1;	/* and this is the result */
 		if ((ns = strchr(instr, '"')) && (ne = strchr(ns + 1, '"'))) {
 			*ns = *ne = '\0';	/* trim off the quotes */
 			*name = ns + 1;		/* and this is the name */
+		} else if (ns) {
+			/* An opening quote was found but no closing quote was. The closing
+			 * quote may actually be after the end of the bracketed number
+			 */
+			if (strchr(le + 1, '\"')) {
+				*ns = '\0';
+				*name = ns + 1;
+				ast_trim_blanks(*name);
+			}
 		} else { /* no quotes, trim off leading and trailing spaces */
 			*name = ast_skip_blanks(instr);
 			ast_trim_blanks(*name);
@@ -1048,68 +1089,194 @@ int ast_callerid_split(const char *buf, char *name, int namelen, char *num, int 
 	return 0;
 }
 
-/*! \brief Translation table for Caller ID Presentation settings */
-static struct {
-	int val;
+struct ast_value_translation {
+	int value;
 	const char *name;
 	const char *description;
-} pres_types[] = {
-	{  AST_PRES_ALLOWED_USER_NUMBER_NOT_SCREENED, "allowed_not_screened", "Presentation Allowed, Not Screened"},
-	{  AST_PRES_ALLOWED_USER_NUMBER_PASSED_SCREEN, "allowed_passed_screen", "Presentation Allowed, Passed Screen"},
-	{  AST_PRES_ALLOWED_USER_NUMBER_FAILED_SCREEN, "allowed_failed_screen", "Presentation Allowed, Failed Screen"},
-	{  AST_PRES_ALLOWED_NETWORK_NUMBER, "allowed", "Presentation Allowed, Network Number"},
-	{  AST_PRES_PROHIB_USER_NUMBER_NOT_SCREENED, "prohib_not_screened", "Presentation Prohibited, Not Screened"},
-	{  AST_PRES_PROHIB_USER_NUMBER_PASSED_SCREEN, "prohib_passed_screen", "Presentation Prohibited, Passed Screen"},
-	{  AST_PRES_PROHIB_USER_NUMBER_FAILED_SCREEN, "prohib_failed_screen", "Presentation Prohibited, Failed Screen"},
-	{  AST_PRES_PROHIB_NETWORK_NUMBER, "prohib", "Presentation Prohibited, Network Number"},
-	{  AST_PRES_NUMBER_NOT_AVAILABLE, "unavailable", "Number Unavailable"},
 };
 
-/*! \brief Convert caller ID text code to value 
-	used in config file parsing
-	\param data text string
-	\return value AST_PRES_ from callerid.h 
-*/
+/*! \brief Translation table for Caller ID Presentation settings */
+static const struct ast_value_translation pres_types[] = {
+/* *INDENT-OFF* */
+	{ AST_PRES_ALLOWED | AST_PRES_USER_NUMBER_UNSCREENED,        "allowed_not_screened",  "Presentation Allowed, Not Screened" },
+	{ AST_PRES_ALLOWED | AST_PRES_USER_NUMBER_PASSED_SCREEN,     "allowed_passed_screen", "Presentation Allowed, Passed Screen" },
+	{ AST_PRES_ALLOWED | AST_PRES_USER_NUMBER_FAILED_SCREEN,     "allowed_failed_screen", "Presentation Allowed, Failed Screen" },
+	{ AST_PRES_ALLOWED | AST_PRES_NETWORK_NUMBER,                "allowed",               "Presentation Allowed, Network Number" },
+
+	{ AST_PRES_RESTRICTED | AST_PRES_USER_NUMBER_UNSCREENED,     "prohib_not_screened",   "Presentation Prohibited, Not Screened" },
+	{ AST_PRES_RESTRICTED | AST_PRES_USER_NUMBER_PASSED_SCREEN,  "prohib_passed_screen",  "Presentation Prohibited, Passed Screen" },
+	{ AST_PRES_RESTRICTED | AST_PRES_USER_NUMBER_FAILED_SCREEN,  "prohib_failed_screen",  "Presentation Prohibited, Failed Screen" },
+	{ AST_PRES_RESTRICTED | AST_PRES_NETWORK_NUMBER,             "prohib",                "Presentation Prohibited, Network Number" },
+
+	{ AST_PRES_UNAVAILABLE | AST_PRES_NETWORK_NUMBER,            "unavailable",           "Number Unavailable" }, /* Default name to value conversion. */
+	{ AST_PRES_UNAVAILABLE | AST_PRES_USER_NUMBER_UNSCREENED,    "unavailable",           "Number Unavailable" },
+	{ AST_PRES_UNAVAILABLE | AST_PRES_USER_NUMBER_FAILED_SCREEN, "unavailable",           "Number Unavailable" },
+	{ AST_PRES_UNAVAILABLE | AST_PRES_USER_NUMBER_PASSED_SCREEN, "unavailable",           "Number Unavailable" },
+/* *INDENT-ON* */
+};
+
+/*!
+ * \brief Convert caller ID text code to value (used in config file parsing)
+ * \param data text string from config file
+ * \retval value AST_PRES_ from callerid.h
+ * \retval -1 if not in table
+ */
 int ast_parse_caller_presentation(const char *data)
 {
-	int i;
+	int index;
+	if (!data) {
+		return -1;
+	}
 
-	for (i = 0; i < ((sizeof(pres_types) / sizeof(pres_types[0]))); i++) {
-		if (!strcasecmp(pres_types[i].name, data))
-			return pres_types[i].val;
+	for (index = 0; index < ARRAY_LEN(pres_types); ++index) {
+		if (!strcasecmp(pres_types[index].name, data)) {
+			return pres_types[index].value;
+		}
 	}
 
 	return -1;
 }
 
-/*! \brief Convert caller ID pres value to explanatory string 
-	\param data value (see callerid.h AST_PRES_ ) 
-	\return string for human presentation
-*/
+/*!
+ * \brief Convert caller ID pres value to explanatory string
+ * \param data AST_PRES_ value from callerid.h
+ * \return string for human presentation
+ */
 const char *ast_describe_caller_presentation(int data)
 {
-	int i;
+	int index;
 
-	for (i = 0; i < ((sizeof(pres_types) / sizeof(pres_types[0]))); i++) {
-		if (pres_types[i].val == data)
-			return pres_types[i].description;
+	for (index = 0; index < ARRAY_LEN(pres_types); ++index) {
+		if (pres_types[index].value == data) {
+			return pres_types[index].description;
+		}
 	}
 
 	return "unknown";
 }
 
-/*! \brief Convert caller ID pres value to text code
-	\param data text string
-	\return string for config file
-*/
+/*!
+ * \brief Convert caller ID pres value to text code
+ * \param data AST_PRES_ value from callerid.h
+ * \return string for config file
+ */
 const char *ast_named_caller_presentation(int data)
 {
-	int i;
+	int index;
 
-	for (i = 0; i < ((sizeof(pres_types) / sizeof(pres_types[0]))); i++) {
-		if (pres_types[i].val == data)
-			return pres_types[i].name;
+	for (index = 0; index < ARRAY_LEN(pres_types); ++index) {
+		if (pres_types[index].value == data) {
+			return pres_types[index].name;
+		}
 	}
 
 	return "unknown";
+}
+
+/*! \brief Translation table for redirecting reason settings */
+static const struct ast_value_translation redirecting_reason_types[] = {
+/* *INDENT-OFF* */
+	{ AST_REDIRECTING_REASON_UNKNOWN,        "unknown",      "Unknown" },
+	{ AST_REDIRECTING_REASON_USER_BUSY,      "cfb",          "Call Forwarding Busy" },
+	{ AST_REDIRECTING_REASON_NO_ANSWER,      "cfnr",         "Call Forwarding No Reply" },
+	{ AST_REDIRECTING_REASON_UNAVAILABLE,    "unavailable",  "Callee is Unavailable" },
+	{ AST_REDIRECTING_REASON_UNCONDITIONAL,  "cfu",          "Call Forwarding Unconditional" },
+	{ AST_REDIRECTING_REASON_TIME_OF_DAY,    "time_of_day",  "Time of Day" },
+	{ AST_REDIRECTING_REASON_DO_NOT_DISTURB, "dnd",          "Do Not Disturb" },
+	{ AST_REDIRECTING_REASON_DEFLECTION,     "deflection",   "Call Deflection" },
+	{ AST_REDIRECTING_REASON_FOLLOW_ME,      "follow_me",    "Follow Me" },
+	{ AST_REDIRECTING_REASON_OUT_OF_ORDER,   "out_of_order", "Called DTE Out-Of-Order" },
+	{ AST_REDIRECTING_REASON_AWAY,           "away",         "Callee is Away" },
+	{ AST_REDIRECTING_REASON_CALL_FWD_DTE,   "cf_dte",       "Call Forwarding By The Called DTE" },
+/* *INDENT-ON* */
+};
+
+int ast_redirecting_reason_parse(const char *data)
+{
+	int index;
+
+	for (index = 0; index < ARRAY_LEN(redirecting_reason_types); ++index) {
+		if (!strcasecmp(redirecting_reason_types[index].name, data)) {
+			return redirecting_reason_types[index].value;
+		}
+	}
+
+	return -1;
+}
+
+const char *ast_redirecting_reason_describe(int data)
+{
+	int index;
+
+	for (index = 0; index < ARRAY_LEN(redirecting_reason_types); ++index) {
+		if (redirecting_reason_types[index].value == data) {
+			return redirecting_reason_types[index].description;
+		}
+	}
+
+	return "not-known";
+}
+
+const char *ast_redirecting_reason_name(int data)
+{
+	int index;
+
+	for (index = 0; index < ARRAY_LEN(redirecting_reason_types); ++index) {
+		if (redirecting_reason_types[index].value == data) {
+			return redirecting_reason_types[index].name;
+		}
+	}
+
+	return "not-known";
+}
+
+/*! \brief Translation table for connected line update source settings */
+static const struct ast_value_translation connected_line_source_types[] = {
+/* *INDENT-OFF* */
+	{ AST_CONNECTED_LINE_UPDATE_SOURCE_UNKNOWN,           "unknown",           "Unknown" },
+	{ AST_CONNECTED_LINE_UPDATE_SOURCE_ANSWER,            "answer",            "Normal Call Answering" },
+	{ AST_CONNECTED_LINE_UPDATE_SOURCE_DIVERSION,         "diversion",         "Call Diversion (Deprecated, use REDIRECTING)" },
+	{ AST_CONNECTED_LINE_UPDATE_SOURCE_TRANSFER,          "transfer_active",   "Call Transfer(Active)" },
+	{ AST_CONNECTED_LINE_UPDATE_SOURCE_TRANSFER,          "transfer",          "Call Transfer(Active)" },/* Old name must come after new name. */
+	{ AST_CONNECTED_LINE_UPDATE_SOURCE_TRANSFER_ALERTING, "transfer_alerting", "Call Transfer(Alerting)" }
+/* *INDENT-ON* */
+};
+
+int ast_connected_line_source_parse(const char *data)
+{
+	int index;
+
+	for (index = 0; index < ARRAY_LEN(connected_line_source_types); ++index) {
+		if (!strcasecmp(connected_line_source_types[index].name, data)) {
+			return connected_line_source_types[index].value;
+		}
+	}
+
+	return -1;
+}
+
+const char *ast_connected_line_source_describe(int data)
+{
+	int index;
+
+	for (index = 0; index < ARRAY_LEN(connected_line_source_types); ++index) {
+		if (connected_line_source_types[index].value == data) {
+			return connected_line_source_types[index].description;
+		}
+	}
+
+	return "not-known";
+}
+
+const char *ast_connected_line_source_name(int data)
+{
+	int index;
+
+	for (index = 0; index < ARRAY_LEN(connected_line_source_types); ++index) {
+		if (connected_line_source_types[index].value == data) {
+			return connected_line_source_types[index].name;
+		}
+	}
+
+	return "not-known";
 }

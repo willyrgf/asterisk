@@ -36,6 +36,25 @@ void ast_slinfactory_init(struct ast_slinfactory *sf)
 {
 	memset(sf, 0, sizeof(*sf));
 	sf->offset = sf->hold;
+	sf->output_format = AST_FORMAT_SLINEAR;
+}
+
+int ast_slinfactory_init_rate(struct ast_slinfactory *sf, unsigned int sample_rate) 
+{
+	memset(sf, 0, sizeof(*sf));
+	sf->offset = sf->hold;
+	switch (sample_rate) {
+	case 8000:
+		sf->output_format = AST_FORMAT_SLINEAR;
+		break;
+	case 16000:
+		sf->output_format = AST_FORMAT_SLINEAR16;
+		break;
+	default:
+		return -1;
+	}
+
+	return 0;
 }
 
 void ast_slinfactory_destroy(struct ast_slinfactory *sf) 
@@ -54,31 +73,44 @@ void ast_slinfactory_destroy(struct ast_slinfactory *sf)
 int ast_slinfactory_feed(struct ast_slinfactory *sf, struct ast_frame *f)
 {
 	struct ast_frame *begin_frame = f, *duped_frame = NULL, *frame_ptr;
-	unsigned int x;
+	unsigned int x = 0;
 
-	if (f->subclass != AST_FORMAT_SLINEAR) {
+	/* In some cases, we can be passed a frame which has no data in it, but
+	 * which has a positive number of samples defined. Once such situation is
+	 * when a jitter buffer is in use and the jitter buffer interpolates a frame.
+	 * The frame it produces has data set to NULL, datalen set to 0, and samples
+	 * set to either 160 or 240.
+	 */
+	if (!f->data.ptr) {
+		return 0;
+	}
+
+	if (f->subclass != sf->output_format) {
 		if (sf->trans && f->subclass != sf->format) {
 			ast_translator_free_path(sf->trans);
 			sf->trans = NULL;
 		}
 
 		if (!sf->trans) {
-			if (!(sf->trans = ast_translator_build_path(AST_FORMAT_SLINEAR, f->subclass))) {
-				ast_log(LOG_WARNING, "Cannot build a path from %s to slin\n", ast_getformatname(f->subclass));
+			if (!(sf->trans = ast_translator_build_path(sf->output_format, f->subclass))) {
+				ast_log(LOG_WARNING, "Cannot build a path from %s to %s\n", ast_getformatname(f->subclass),
+					ast_getformatname(sf->output_format));
 				return 0;
 			}
 			sf->format = f->subclass;
 		}
 
-		if (!(begin_frame = ast_translate(sf->trans, f, 0))) 
+		if (!(begin_frame = ast_translate(sf->trans, f, 0))) {
 			return 0;
+		}
 		
-		duped_frame = ast_frdup(begin_frame);
-
-		ast_frfree(begin_frame);
-
-		if (!duped_frame)
+		if (!(duped_frame = ast_frisolate(begin_frame))) {
 			return 0;
+		}
+
+		if (duped_frame != begin_frame) {
+			ast_frfree(begin_frame);
+		}
 	} else {
 		if (sf->trans) {
 			ast_translator_free_path(sf->trans);
@@ -88,13 +120,17 @@ int ast_slinfactory_feed(struct ast_slinfactory *sf, struct ast_frame *f)
 			return 0;
 	}
 
-	x = 0;
-	AST_LIST_TRAVERSE(&sf->queue, frame_ptr, frame_list)
+	AST_LIST_TRAVERSE(&sf->queue, frame_ptr, frame_list) {
 		x++;
+	}
 
-	AST_LIST_INSERT_TAIL(&sf->queue, duped_frame, frame_list);
-
-	sf->size += duped_frame->samples;
+	/* if the frame was translated, the translator may have returned multiple
+	   frames, so process each of them
+	*/
+	for (begin_frame = duped_frame; begin_frame; begin_frame = AST_LIST_NEXT(begin_frame, frame_list)) {
+		AST_LIST_INSERT_TAIL(&sf->queue, begin_frame, frame_list);
+		sf->size += begin_frame->samples;
+	}
 
 	return x;
 }
@@ -109,7 +145,7 @@ int ast_slinfactory_read(struct ast_slinfactory *sf, short *buf, size_t samples)
 		ineed = samples - sofar;
 
 		if (sf->holdlen) {
-			if ((sofar + sf->holdlen) <= ineed) {
+			if (sf->holdlen <= ineed) {
 				memcpy(offset, sf->hold, sf->holdlen * sizeof(*offset));
 				sofar += sf->holdlen;
 				offset += sf->holdlen;
@@ -126,9 +162,9 @@ int ast_slinfactory_read(struct ast_slinfactory *sf, short *buf, size_t samples)
 		}
 		
 		if ((frame_ptr = AST_LIST_REMOVE_HEAD(&sf->queue, frame_list))) {
-			frame_data = frame_ptr->data;
+			frame_data = frame_ptr->data.ptr;
 			
-			if ((sofar + frame_ptr->samples) <= ineed) {
+			if (frame_ptr->samples <= ineed) {
 				memcpy(offset, frame_data, frame_ptr->samples * sizeof(*offset));
 				sofar += frame_ptr->samples;
 				offset += frame_ptr->samples;
@@ -137,6 +173,9 @@ int ast_slinfactory_read(struct ast_slinfactory *sf, short *buf, size_t samples)
 				memcpy(offset, frame_data, ineed * sizeof(*offset));
 				sofar += ineed;
 				frame_data += ineed;
+				if (remain > (AST_SLINFACTORY_MAX_HOLD - sf->holdlen)) {
+					remain = AST_SLINFACTORY_MAX_HOLD - sf->holdlen;
+				}
 				memcpy(sf->hold, frame_data, remain * sizeof(*offset));
 				sf->holdlen = remain;
 			}

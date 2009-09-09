@@ -58,9 +58,8 @@ typedef long long sint64;
 #define BUF_SHIFT	5
 
 /* Sample frame data */
-
-#include "slin_g726_ex.h"
-#include "g726_slin_ex.h"
+#include "asterisk/slin.h"
+#include "ex_g726.h"
 
 /*
  * The following is the definition of the state structure
@@ -692,8 +691,8 @@ static int lintog726_new(struct ast_trans_pvt *pvt)
 static int g726aal2tolin_framein (struct ast_trans_pvt *pvt, struct ast_frame *f)
 {
 	struct g726_coder_pvt *tmp = pvt->pvt;
-	unsigned char *src = f->data;
-	int16_t *dst = (int16_t *) pvt->outbuf + pvt->samples;
+	unsigned char *src = f->data.ptr;
+	int16_t *dst = pvt->outbuf.i16 + pvt->samples;
 	unsigned int i;
 
 	for (i = 0; i < f->datalen; i++) {
@@ -711,14 +710,14 @@ static int g726aal2tolin_framein (struct ast_trans_pvt *pvt, struct ast_frame *f
 static int lintog726aal2_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 {
 	struct g726_coder_pvt *tmp = pvt->pvt;
-	int16_t *src = f->data;
+	int16_t *src = f->data.ptr;
 	unsigned int i;
 
 	for (i = 0; i < f->samples; i++) {
 		unsigned char d = g726_encode(src[i], &tmp->g726); /* this sample */
 
 		if (tmp->next_flag & 0x80) {	/* merge with leftover sample */
-			pvt->outbuf[pvt->datalen++] = ((tmp->next_flag & 0xf)<< 4) | d;
+			pvt->outbuf.c[pvt->datalen++] = ((tmp->next_flag & 0xf)<< 4) | d;
 			pvt->samples += 2;	/* 2 samples per byte */
 			tmp->next_flag = 0;
 		} else {
@@ -733,8 +732,8 @@ static int lintog726aal2_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 static int g726tolin_framein (struct ast_trans_pvt *pvt, struct ast_frame *f)
 {
 	struct g726_coder_pvt *tmp = pvt->pvt;
-	unsigned char *src = f->data;
-	int16_t *dst = (int16_t *) pvt->outbuf + pvt->samples;
+	unsigned char *src = f->data.ptr;
+	int16_t *dst = pvt->outbuf.i16 + pvt->samples;
 	unsigned int i;
 
 	for (i = 0; i < f->datalen; i++) {
@@ -752,14 +751,14 @@ static int g726tolin_framein (struct ast_trans_pvt *pvt, struct ast_frame *f)
 static int lintog726_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 {
 	struct g726_coder_pvt *tmp = pvt->pvt;
-	int16_t *src = f->data;
+	int16_t *src = f->data.ptr;
 	unsigned int i;
 
 	for (i = 0; i < f->samples; i++) {
 		unsigned char d = g726_encode(src[i], &tmp->g726); /* this sample */
 
 		if (tmp->next_flag & 0x80) {	/* merge with leftover sample */
-			pvt->outbuf[pvt->datalen++] = (d << 4) | (tmp->next_flag & 0xf);
+			pvt->outbuf.c[pvt->datalen++] = (d << 4) | (tmp->next_flag & 0xf);
 			pvt->samples += 2;	/* 2 samples per byte */
 			tmp->next_flag = 0;
 		} else {
@@ -773,8 +772,8 @@ static int lintog726_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 /*! \brief convert G726-32 RFC3551 packed data into AAL2 packed data (or vice-versa) */
 static int g726tog726aal2_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 {
-	unsigned char *src = f->data;
-	unsigned char *dst = (unsigned char *) pvt->outbuf + pvt->samples;
+	unsigned char *src = f->data.ptr;
+	unsigned char *dst = pvt->outbuf.uc + pvt->samples;
 	unsigned int i;
 
 	for (i = 0; i < f->datalen; i++)
@@ -786,41 +785,13 @@ static int g726tog726aal2_framein(struct ast_trans_pvt *pvt, struct ast_frame *f
 	return 0;
 }
 
-static struct ast_frame *g726tolin_sample(void)
-{
-	static struct ast_frame f = {
-		.frametype = AST_FRAME_VOICE,
-		.subclass = AST_FORMAT_G726,
-		.datalen = sizeof(g726_slin_ex),
-		.samples = sizeof(g726_slin_ex) * 2,	/* 2 samples per byte */
-		.src = __PRETTY_FUNCTION__,
-		.data = g726_slin_ex,
-	};
-
-	return &f;
-}
-
-static struct ast_frame *lintog726_sample (void)
-{
-	static struct ast_frame f = {
-		.frametype = AST_FRAME_VOICE,
-		.subclass = AST_FORMAT_SLINEAR,
-		.datalen = sizeof(slin_g726_ex),
-		.samples = sizeof(slin_g726_ex) / 2,	/* 1 sample per 2 bytes */
-		.src = __PRETTY_FUNCTION__,
-		.data = slin_g726_ex,
-	};
-
-	return &f;
-}
-
 static struct ast_translator g726tolin = {
 	.name = "g726tolin",
 	.srcfmt = AST_FORMAT_G726,
 	.dstfmt = AST_FORMAT_SLINEAR,
 	.newpvt = lintog726_new,	/* same for both directions */
 	.framein = g726tolin_framein,
-	.sample = g726tolin_sample,
+	.sample = g726_sample,
 	.desc_size = sizeof(struct g726_coder_pvt),
 	.buffer_samples = BUFFER_SAMPLES,
 	.buf_size = BUFFER_SAMPLES * 2,
@@ -833,7 +804,7 @@ static struct ast_translator lintog726 = {
 	.dstfmt = AST_FORMAT_G726,
 	.newpvt = lintog726_new,	/* same for both directions */
 	.framein = lintog726_framein,
-	.sample = lintog726_sample,
+	.sample = slin8_sample,
 	.desc_size = sizeof(struct g726_coder_pvt),
 	.buffer_samples = BUFFER_SAMPLES,
 	.buf_size = BUFFER_SAMPLES/2,
@@ -845,7 +816,7 @@ static struct ast_translator g726aal2tolin = {
 	.dstfmt = AST_FORMAT_SLINEAR,
 	.newpvt = lintog726_new,	/* same for both directions */
 	.framein = g726aal2tolin_framein,
-	.sample = g726tolin_sample,
+	.sample = g726_sample,
 	.desc_size = sizeof(struct g726_coder_pvt),
 	.buffer_samples = BUFFER_SAMPLES,
 	.buf_size = BUFFER_SAMPLES * 2,
@@ -858,7 +829,7 @@ static struct ast_translator lintog726aal2 = {
 	.dstfmt = AST_FORMAT_G726_AAL2,
 	.newpvt = lintog726_new,	/* same for both directions */
 	.framein = lintog726aal2_framein,
-	.sample = lintog726_sample,
+	.sample = slin8_sample,
 	.desc_size = sizeof(struct g726_coder_pvt),
 	.buffer_samples = BUFFER_SAMPLES,
 	.buf_size = BUFFER_SAMPLES / 2,
@@ -869,7 +840,7 @@ static struct ast_translator g726tog726aal2 = {
 	.srcfmt = AST_FORMAT_G726,
 	.dstfmt = AST_FORMAT_G726_AAL2,
 	.framein = g726tog726aal2_framein,	/* same for both directions */
-	.sample = lintog726_sample,
+	.sample = g726_sample,
 	.buffer_samples = BUFFER_SAMPLES,
 	.buf_size = BUFFER_SAMPLES,
 };
@@ -879,7 +850,7 @@ static struct ast_translator g726aal2tog726 = {
 	.srcfmt = AST_FORMAT_G726_AAL2,
 	.dstfmt = AST_FORMAT_G726,
 	.framein = g726tog726aal2_framein,	/* same for both directions */
-	.sample = lintog726_sample,
+	.sample = g726_sample,
 	.buffer_samples = BUFFER_SAMPLES,
 	.buf_size = BUFFER_SAMPLES,
 };
@@ -890,9 +861,7 @@ static int parse_config(int reload)
 	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
 	struct ast_config *cfg = ast_config_load("codecs.conf", config_flags);
 
-	if (cfg == NULL)
-		return 0;
-	if (cfg == CONFIG_STATUS_FILEUNCHANGED)
+	if (cfg == CONFIG_STATUS_FILEMISSING || cfg == CONFIG_STATUS_FILEUNCHANGED || cfg == CONFIG_STATUS_FILEINVALID)
 		return 0;
 	for (var = ast_variable_browse(cfg, "plc"); var; var = var->next) {
 		if (!strcasecmp(var->name, "genericplc")) {

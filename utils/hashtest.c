@@ -43,10 +43,16 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 int testno = 1;
 
 /* stuff we need to make this work with the hashtab stuff */
-
+#if !defined(LOW_MEMORY)
 int64_t ast_mark(int prof_id, int x)
 {
 	return 0;
+}
+#endif
+
+void pbx_substitute_variables_helper_full(struct ast_channel *c, struct varshead *headp, const char *cp1, char *cp2, int cp2_size, size_t *used);
+void pbx_substitute_variables_helper_full(struct ast_channel *c, struct varshead *headp, const char *cp1, char *cp2, int cp2_size, size_t *used)
+{
 }
 
 struct ht_element 
@@ -299,11 +305,12 @@ int main(int argc,char **argv)
 	
 	return 0;
 }
-
+#if !defined(LOW_MEMORY)
 int  ast_add_profile(const char *x, uint64_t scale)
 {
 	return 0;
 }
+#endif
 
 int ast_loader_register(int (*updater)(void))
 {
@@ -323,10 +330,12 @@ void ast_module_unregister(const struct ast_module_info *x)
 }
 
 
+void ast_register_file_version(const char *file, const char *version);
 void ast_register_file_version(const char *file, const char *version)
 {
 }
 
+void ast_unregister_file_version(const char *file);
 void ast_unregister_file_version(const char *file)
 {
 
@@ -343,7 +352,7 @@ void ast_log(int level, const char *file, int line, const char *function, const 
 	va_end(vars);
 }
 
-void ast_verbose(const char *fmt, ...)
+void __ast_verbose(const char *file, int line, const char *func, const char *fmt, ...)
 {
         va_list vars;
         va_start(vars,fmt);
@@ -362,3 +371,23 @@ void ast_register_thread(char *name)
 void ast_unregister_thread(void *id)
 {
 }
+
+#ifdef HAVE_BKTR
+struct ast_bt *ast_bt_create(void);
+struct ast_bt *ast_bt_create(void) 
+{
+	return NULL;
+}
+
+int ast_bt_get_addresses(struct ast_bt *bt);
+int ast_bt_get_addresses(struct ast_bt *bt)
+{
+	return 0;
+}
+
+void *ast_bt_destroy(struct ast_bt *bt);
+void *ast_bt_destroy(struct ast_bt *bt)
+{
+	return NULL;
+}
+#endif

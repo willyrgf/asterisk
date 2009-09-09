@@ -15,7 +15,7 @@ else
 	@echo "** located at asterisk.pdf.                ***"	
 	@echo "**********************************************"
 ifneq ($(findstring kpsewhich,$(KPATHSEA)),)
-ifeq ($(findstring fncychap.sty,$(shell find `$(KPATHSEA) --expand-braces='$$(TEXMF)'| tr -d \! | sed 's/:/ /g'` -name fncychap.sty -print)),)
+ifeq ($(findstring fncychap.sty,$(shell find `$(KPATHSEA) --expand-braces='$${TEXMF}'| tr -d \! | sed 's/:/ /g'` -name fncychap.sty -print)),)
 	@echo
 	@echo "WARNING:  The fncychap.sty document was not found"
 	@echo "On Ubuntu, install the texlive-latex-extra package."
@@ -24,8 +24,9 @@ ifeq ($(findstring fncychap.sty,$(shell find `$(KPATHSEA) --expand-braces='$$(TE
 endif
 endif
 	@cp asterisk.tex asterisk.tex.orig
-	sed -i -e 's/ASTERISKVERSION/$(shell echo $(ASTERISKVERSION) | sed -e 's/\//\\\//g')/' asterisk.tex
-	@$(RUBBER) --pdf asterisk.tex
+	@sed -e 's/ASTERISKVERSION/$(shell echo $(ASTERISKVERSION) | sed -e 's/\//\\\//g' | sed -e 's/_/\\\\_/g')/' asterisk.tex > asterisk_local.tex
+	@mv asterisk_local.tex asterisk.tex
+	-@$(RUBBER) --pdf asterisk.tex
 	@mv asterisk.tex.orig asterisk.tex
 endif
 
@@ -38,7 +39,8 @@ html:
 	@echo "** required for this to work.              ***"	
 	@echo "**********************************************"
 	@cp asterisk.tex asterisk.tex.orig
-	@sed -i -e 's/ASTERISKVERSION/$(ASTERISKVERSION)/' asterisk.tex
+	@sed -e 's/ASTERISKVERSION/$(ASTERISKVERSION)/' asterisk.tex > asterisk_local.tex
+	@mv asterisk_local.tex asterisk.tex
 	@latex2html asterisk.tex
 	@mv asterisk.tex.orig asterisk.tex
 

@@ -48,7 +48,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define	MSGSM_SAMPLES		(2*GSM_SAMPLES)	/* samples in an MSGSM block */
 
 /* begin binary data: */
-char msgsm_silence[] = /* 65 */
+static char msgsm_silence[] = /* 65 */
 {0x48,0x17,0xD6,0x84,0x02,0x80,0x24,0x49,0x92,0x24,0x89,0x02,0x80,0x24,0x49
 ,0x92,0x24,0x89,0x02,0x80,0x24,0x49,0x92,0x24,0x89,0x02,0x80,0x24,0x49,0x92
 ,0x24,0x09,0x82,0x74,0x61,0x4D,0x28,0x00,0x48,0x92,0x24,0x49,0x92,0x28,0x00
@@ -150,7 +150,7 @@ static int check_header(FILE *f)
 		return -1;
 	}
 	if (ltohl(freq) != DEFAULT_SAMPLE_RATE) {
-		ast_log(LOG_WARNING, "Unexpected freqency %d\n", ltohl(freq));
+		ast_log(LOG_WARNING, "Unexpected frequency %d\n", ltohl(freq));
 		return -1;
 	}
 	/* Ignore the byte frequency */
@@ -214,8 +214,8 @@ static int update_header(FILE *f)
 	/* in a gsm WAV, data starts 60 bytes in */
 	bytes = end - MSGSM_DATA_OFFSET;
 	samples = htoll(bytes / MSGSM_FRAME_SIZE * MSGSM_SAMPLES);
-	datalen = htoll((bytes + 1) & ~0x1);
-	filelen = htoll(MSGSM_DATA_OFFSET - 8 + ((bytes + 1) & ~0x1));
+	datalen = htoll(bytes);
+	filelen = htoll(MSGSM_DATA_OFFSET - 8 + bytes);
 	if (cur < 0) {
 		ast_log(LOG_WARNING, "Unable to find our position\n");
 		return -1;
@@ -389,15 +389,6 @@ static int wav_rewrite(struct ast_filestream *s, const char *comment)
 	return 0;
 }
 
-static void wav_close(struct ast_filestream *s)
-{
-	char zero = 0;
-	/* Pad to even length */
-	fseek(s->f, 0, SEEK_END);
-	if (ftello(s->f) & 0x1)
-		fwrite(&zero, 1, 1, s->f);
-}
-
 static struct ast_frame *wav_read(struct ast_filestream *s, int *whennext)
 {
 	/* Send a frame from the file to the appropriate channel */
@@ -411,7 +402,7 @@ static struct ast_frame *wav_read(struct ast_filestream *s, int *whennext)
 	AST_FRAME_SET_BUFFER(&s->fr, s->buf, AST_FRIENDLY_OFFSET, GSM_FRAME_SIZE);
 	if (fs->secondhalf) {
 		/* Just return a frame based on the second GSM frame */
-		s->fr.data = (char *)s->fr.data + GSM_FRAME_SIZE;
+		s->fr.data.ptr = (char *)s->fr.data.ptr + GSM_FRAME_SIZE;
 		s->fr.offset += GSM_FRAME_SIZE;
 	} else {
 		/* read and convert */
@@ -424,7 +415,7 @@ static struct ast_frame *wav_read(struct ast_filestream *s, int *whennext)
 			return NULL;
 		}
 		/* Convert from MS format to two real GSM frames */
-		conv65(msdata, s->fr.data);
+		conv65(msdata, s->fr.data.ptr);
 	}
 	fs->secondhalf = !fs->secondhalf;
 	*whennext = GSM_SAMPLES;
@@ -458,16 +449,16 @@ static int wav_write(struct ast_filestream *s, struct ast_frame *f)
 		int res;
 		unsigned char *src, msdata[MSGSM_FRAME_SIZE];
 		if (fs->secondhalf) {	/* second half of raw gsm to be converted */
-			memcpy(s->buf + GSM_FRAME_SIZE, f->data + len, GSM_FRAME_SIZE);
+			memcpy(s->buf + GSM_FRAME_SIZE, f->data.ptr + len, GSM_FRAME_SIZE);
 			conv66((unsigned char *) s->buf, msdata);
 			src = msdata;
 			fs->secondhalf = 0;
 		} else if (size == GSM_FRAME_SIZE) {	/* first half of raw gsm */
-			memcpy(s->buf, f->data + len, GSM_FRAME_SIZE);
+			memcpy(s->buf, f->data.ptr + len, GSM_FRAME_SIZE);
 			src = NULL;	/* nothing to write */
 			fs->secondhalf = 1;
 		} else {	/* raw msgsm data */
-			src = f->data + len;
+			src = f->data.ptr + len;
 		}
 		if (src && (res = fwrite(src, 1, MSGSM_FRAME_SIZE, s->f)) != MSGSM_FRAME_SIZE) {
 			ast_log(LOG_WARNING, "Bad write (%d/65): %s\n", res, strerror(errno));
@@ -505,7 +496,9 @@ static int wav_seek(struct ast_filestream *fs, off_t sample_offset, int whence)
 		int i;
 		fseek(fs->f, 0, SEEK_END);
 		for (i=0; i< (offset - max) / MSGSM_FRAME_SIZE; i++) {
-			fwrite(msgsm_silence, 1, MSGSM_FRAME_SIZE, fs->f);
+			if (!fwrite(msgsm_silence, 1, MSGSM_FRAME_SIZE, fs->f)) {
+				ast_log(LOG_WARNING, "fwrite() failed: %s\n", strerror(errno));
+			}
 		}
 	}
 	s->secondhalf = 0;
@@ -539,7 +532,6 @@ static const struct ast_format wav49_f = {
 	.trunc = wav_trunc,
 	.tell = wav_tell,
 	.read = wav_read,
-	.close = wav_close,
 	.buf_size = 2*GSM_FRAME_SIZE + AST_FRIENDLY_OFFSET,
 	.desc_size = sizeof(struct wavg_desc),
 };

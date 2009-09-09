@@ -48,23 +48,6 @@ static void internalerror(const char *str)
 static void (*outputf)(const char *str) = internaloutput;
 static void (*errorf)(const char *str) = internalerror;
 
-char *dundi_eid_to_str(char *s, int maxlen, dundi_eid *eid)
-{
-	int x;
-	char *os = s;
-	if (maxlen < 18) {
-		if (s && (maxlen > 0))
-			*s = '\0';
-	} else {
-		for (x=0;x<5;x++) {
-			sprintf(s, "%02x:", eid->eid[x]);
-			s += 3;
-		}
-		sprintf(s, "%02x", eid->eid[5]);
-	}
-	return os;
-}
-
 char *dundi_eid_to_str_short(char *s, int maxlen, dundi_eid *eid)
 {
 	int x;
@@ -81,18 +64,6 @@ char *dundi_eid_to_str_short(char *s, int maxlen, dundi_eid *eid)
 	return os;
 }
 
-int dundi_str_to_eid(dundi_eid *eid, const char *s)
-{
-	unsigned int eid_int[6];
-	int x;
-	if (sscanf(s, "%x:%x:%x:%x:%x:%x", &eid_int[0], &eid_int[1], &eid_int[2],
-		 &eid_int[3], &eid_int[4], &eid_int[5]) != 6)
-		 	return -1;
-	for (x=0;x<6;x++)
-		eid->eid[x] = eid_int[x];
-	return 0;
-}
-
 int dundi_str_short_to_eid(dundi_eid *eid, const char *s)
 {
 	unsigned int eid_int[6];
@@ -100,7 +71,7 @@ int dundi_str_short_to_eid(dundi_eid *eid, const char *s)
 	if (sscanf(s, "%2x%2x%2x%2x%2x%2x", &eid_int[0], &eid_int[1], &eid_int[2],
 		 &eid_int[3], &eid_int[4], &eid_int[5]) != 6)
 		 	return -1;
-	for (x=0;x<6;x++)
+	for (x = 0; x < 6; x++)
 		eid->eid[x] = eid_int[x];
 	return 0;
 }
@@ -108,14 +79,9 @@ int dundi_str_short_to_eid(dundi_eid *eid, const char *s)
 int dundi_eid_zero(dundi_eid *eid)
 {
 	int x;
-	for (x=0;x<sizeof(eid->eid) / sizeof(eid->eid[0]);x++)
+	for (x = 0; x < ARRAY_LEN(eid->eid); x++)
 		if (eid->eid[x]) return 0;
 	return 1;
-}
-
-int dundi_eid_cmp(dundi_eid *eid1, dundi_eid *eid2)
-{
-	return memcmp(eid1, eid2, sizeof(dundi_eid));
 }
 
 static void dump_string(char *output, int maxlen, void *value, int len)
@@ -134,7 +100,7 @@ static void dump_cbypass(char *output, int maxlen, void *value, int len)
 static void dump_eid(char *output, int maxlen, void *value, int len)
 {
 	if (len == 6)
-		dundi_eid_to_str(output, maxlen, (dundi_eid *)value);
+		ast_eid_to_str(output, maxlen, (dundi_eid *)value);
 	else
 		snprintf(output, maxlen, "Invalid EID len %d", len);
 }
@@ -189,7 +155,7 @@ static void dump_hint(char *output, int maxlen, void *value, int len)
 
 static void dump_cause(char *output, int maxlen, void *value, int len)
 {
-	static char *causes[] = {
+	static const char * const causes[] = {
 		"SUCCESS",
 		"GENERAL",
 		"DYNAMIC",
@@ -215,7 +181,7 @@ static void dump_cause(char *output, int maxlen, void *value, int len)
 	memcpy(tmp2, cause->desc, datalen);
 	tmp2[datalen] = '\0';
 
-	if (causecode < sizeof(causes) / sizeof(causes[0])) {
+	if (causecode < ARRAY_LEN(causes)) {
 		if (ast_strlen_zero(tmp2))
 			snprintf(output, maxlen, "%s", causes[causecode]);
 		else
@@ -335,7 +301,7 @@ static void dump_answer(char *output, int maxlen, void *value, int len)
 	memcpy(tmp, answer->data, datalen);
 	tmp[datalen] = '\0';
 
-	dundi_eid_to_str(eid_str, sizeof(eid_str), &answer->eid);
+	ast_eid_to_str(eid_str, sizeof(eid_str), &answer->eid);
 	snprintf(output, maxlen, "[%s] %d <%s/%s> from [%s]", 
 		dundi_flags2str(flags, sizeof(flags), ntohs(answer->flags)), 
 		ntohs(answer->weight),
@@ -373,7 +339,7 @@ static struct dundi_ie {
 	int ie;
 	char *name;
 	void (*dump)(char *output, int maxlen, void *value, int len);
-} ies[] = {
+} infoelts[] = {
 	{ DUNDI_IE_EID, "ENTITY IDENT", dump_eid },
 	{ DUNDI_IE_CALLED_CONTEXT, "CALLED CONTEXT", dump_string },
 	{ DUNDI_IE_CALLED_NUMBER, "CALLED NUMBER", dump_string },
@@ -404,9 +370,9 @@ static struct dundi_ie {
 const char *dundi_ie2str(int ie)
 {
 	int x;
-	for (x=0;x<(int)sizeof(ies) / (int)sizeof(ies[0]); x++) {
-		if (ies[x].ie == ie)
-			return ies[x].name;
+	for (x = 0; x < ARRAY_LEN(infoelts); x++) {
+		if (infoelts[x].ie == ie)
+			return infoelts[x].name;
 	}
 	return "Unknown IE";
 }
@@ -433,18 +399,18 @@ static void dump_ies(unsigned char *iedata, int spaces, int len)
 			return;
 		}
 		found = 0;
-		for (x=0;x<(int)sizeof(ies) / (int)sizeof(ies[0]); x++) {
-			if (ies[x].ie == ie) {
-				if (ies[x].dump) {
-					ies[x].dump(interp, (int)sizeof(interp), iedata + 2, ielen);
-					snprintf(tmp, (int)sizeof(tmp), "   %s%-15.15s : %s\n", (spaces ? "     " : "" ), ies[x].name, interp);
+		for (x = 0; x < ARRAY_LEN(infoelts); x++) {
+			if (infoelts[x].ie == ie) {
+				if (infoelts[x].dump) {
+					infoelts[x].dump(interp, (int)sizeof(interp), iedata + 2, ielen);
+					snprintf(tmp, (int)sizeof(tmp), "   %s%-15.15s : %s\n", (spaces ? "     " : "" ), infoelts[x].name, interp);
 					outputf(tmp);
 				} else {
 					if (ielen)
 						snprintf(interp, (int)sizeof(interp), "%d bytes", ielen);
 					else
 						strcpy(interp, "Present");
-					snprintf(tmp, (int)sizeof(tmp), "   %s%-15.15s : %s\n", (spaces ? "     " : "" ), ies[x].name, interp);
+					snprintf(tmp, (int)sizeof(tmp), "   %s%-15.15s : %s\n", (spaces ? "     " : "" ), infoelts[x].name, interp);
 					outputf(tmp);
 				}
 				found++;

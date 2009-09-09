@@ -28,8 +28,10 @@
 #endif
 
 
-ibuffer_t *astbuf;
-ibuffer_t *misdnbuf;
+#if 0
+ibuffer_t *astbuf;		/* Not used */
+ibuffer_t *misdnbuf;	/* Not used */
+#endif
 
 struct send_lock {
 	pthread_mutex_t lock;
@@ -38,76 +40,106 @@ struct send_lock {
 
 struct isdn_msg {
 	unsigned long misdn_msg;
-  
-	enum layer_e layer;
+
 	enum event_e event;
-  
+
 	void (*msg_parser)(struct isdn_msg *msgs, msg_t *msg, struct misdn_bchannel *bc, int nt);
 	msg_t *(*msg_builder)(struct isdn_msg *msgs, struct misdn_bchannel *bc, int nt);
 	char *info;
-  
-} ; 
+} ;
 
 /* for isdn_msg_parser.c */
 msg_t *create_l3msg(int prim, int mt, int dinfo , int size, int nt);
 
+#if defined(AST_MISDN_ENHANCEMENTS)
+/* Max call-completion REGISTER signaling links per stack/port */
+#define MISDN_MAX_REGISTER_LINKS	MAX_BCHANS
+#else
+/* Max call-completion REGISTER signaling links per stack/port */
+#define MISDN_MAX_REGISTER_LINKS	0
+#endif	/* defined(AST_MISDN_ENHANCEMENTS) */
 
+#define MAXPROCS 0x100
 
 struct misdn_stack {
 	/** is first element because &nst equals &mISDNlist **/
 	net_stack_t nst;
 	manager_t mgr;
-  
+	pthread_mutex_t nstlock;
+
+	/*! \brief D Channel mISDN driver stack ID (Parent stack ID) */
 	int d_stid;
-  
+
+	/*! /brief Number of B channels supported by this port */
 	int b_num;
-  
+
+	/*! \brief B Channel mISDN driver stack IDs (Child stack IDs) */
 	int b_stids[MAX_BCHANS + 1];
-  
+
+	/*! \brief TRUE if Point-To-Point(PTP) (Point-To-Multipoint(PTMP) otherwise) */
 	int ptp;
 
+	/*! \brief Number of consecutive times PTP Layer 2 declared down */
 	int l2upcnt;
 
-	int l2_id;
-	int lower_id;
-	int upper_id;
-  
+	int l2_id;	/* Not used */
 
+	/*! \brief Lower layer mISDN ID (addr) (Layer 1/3) */
+	int lower_id;
+
+	/*! \brief Upper layer mISDN ID (addr) (Layer 2/4) */
+	int upper_id;
+
+	/*! \brief TRUE if port is blocked */
   	int blocked;
 
+	/*! \brief TRUE if Layer 2 is UP */
 	int l2link;
-  
-	time_t l2establish;
-  
+
+	/*! \brief TRUE if Layer 1 is UP */
 	int l1link;
 
+	/*! \brief TRUE if restart has been sent to the other side after stack startup */
 	int restart_sent;
 
+	/*! \brief mISDN device handle returned by mISDN_open() */
 	int midev;
-  
+
+	/*! \brief TRUE if NT side of protocol (TE otherwise) */
 	int nt;
-	
+
+	/*! \brief TRUE if ISDN-PRI (ISDN-BRI otherwise) */
 	int pri;
-  
 
-	int procids[0x100+1];
+	/*! \brief CR Process ID allocation table.  TRUE if ID allocated */
+	int procids[MAXPROCS];
 
+	/*! \brief Queue of Event messages to send to mISDN */
 	msg_queue_t downqueue;
-	msg_queue_t upqueue;
-	int busy;
-  
-	int port;
-	struct misdn_bchannel bc[MAX_BCHANS + 1];
-  
-	struct misdn_bchannel* bc_list; 
-  
-	int channels[MAX_BCHANS + 1];
+	msg_queue_t upqueue;	/* No code puts anything on this queue */
+	int busy;	/* Not used */
 
-  
-	struct misdn_bchannel *holding; /* Queue which holds holded channels :) */
-  
+	/*! \brief Logical Layer 1 port associated with this stack */
+	int port;
+
+	/*!
+	 * \brief B Channel record pool array
+	 * (Must be dimensioned the same as struct misdn_stack.channels[])
+	 */
+	struct misdn_bchannel bc[MAX_BCHANS + 1 + MISDN_MAX_REGISTER_LINKS];
+
+	/*!
+	 * \brief Array of B channels in use (a[0] = B1).  TRUE if B channel in use.
+	 * (Must be dimensioned the same as struct misdn_stack.bc[])
+	 */
+	char channels[MAX_BCHANS + 1 + MISDN_MAX_REGISTER_LINKS];
+
+	/*! \brief List of holded channels */
+	struct misdn_bchannel *holding;
+
+	/*! \brief Next stack in the list of stacks */
 	struct misdn_stack *next;
-}; 
+};
 
 
 struct misdn_stack* get_stack_by_bc(struct misdn_bchannel *bc);

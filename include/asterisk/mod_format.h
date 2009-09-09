@@ -102,6 +102,7 @@ struct ast_filestream {
 	struct ast_format *fmt;	/* need to write to the lock and usecnt */
 	int flags;
 	mode_t mode;
+	char *open_filename;
 	char *filename;
 	char *realfilename;
 	/*! Video file stream */
@@ -117,6 +118,7 @@ struct ast_filestream {
 	char *buf;		/*!< buffer pointed to by ast_frame; */
 	void *_private;	/*!< pointer to private buffer */
 	const char *orig_chan_name;
+	char *write_buffer;
 };
 
 /*! 

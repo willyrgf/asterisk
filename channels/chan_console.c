@@ -101,13 +101,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
  */
 #define TEXT_SIZE	256
 
-#ifndef MIN
-#define MIN(a,b) ((a) < (b) ? (a) : (b))
-#endif
-#ifndef MAX
-#define MAX(a,b) ((a) > (b) ? (a) : (b))
-#endif
-
 /*! \brief Dance, Kirby, Dance! @{ */
 #define V_BEGIN " --- <(\"<) --- "
 #define V_END   " --- (>\")> ---\n"
@@ -141,6 +134,8 @@ static struct console_pvt {
 		AST_STRING_FIELD(mohinterpret);
 		/*! Default language */
 		AST_STRING_FIELD(language);
+		/*! Default parkinglot */
+		AST_STRING_FIELD(parkinglot);
 	);
 	/*! Current channel for this device */
 	struct ast_channel *owner;
@@ -187,8 +182,8 @@ static struct ast_jb_conf default_jbconf = {
 static struct ast_jb_conf global_jbconf;
 
 /*! Channel Technology Callbacks @{ */
-static struct ast_channel *console_request(const char *type, int format, 
-	void *data, int *cause);
+static struct ast_channel *console_request(const char *type, int format,
+	const struct ast_channel *requestor, void *data, int *cause);
 static int console_digit_begin(struct ast_channel *c, char digit);
 static int console_digit_end(struct ast_channel *c, char digit, unsigned int duration);
 static int console_text(struct ast_channel *c, const char *text);
@@ -271,7 +266,7 @@ static void *stream_monitor(void *data)
 		.frametype = AST_FRAME_VOICE,
 		.subclass = AST_FORMAT_SLINEAR16,
 		.src = "console_stream_monitor",
-		.data = buf,
+		.data.ptr = buf,
 		.datalen = sizeof(buf),
 		.samples = sizeof(buf) / sizeof(int16_t),
 	};
@@ -309,7 +304,7 @@ static int open_stream(struct console_pvt *pvt)
 			.suggestedLatency = (1.0 / 50.0), /* 20 ms */
 			.device = paNoDevice,
 		};
-		PaDeviceIndex index, num_devices, def_input, def_output;
+		PaDeviceIndex idx, num_devices, def_input, def_output;
 
 		if (!(num_devices = Pa_GetDeviceCount()))
 			return res;
@@ -317,23 +312,23 @@ static int open_stream(struct console_pvt *pvt)
 		def_input = Pa_GetDefaultInputDevice();
 		def_output = Pa_GetDefaultOutputDevice();
 
-		for (index = 0; 
-			index < num_devices && (input_params.device == paNoDevice 
+		for (idx = 0; 
+			idx < num_devices && (input_params.device == paNoDevice 
 				|| output_params.device == paNoDevice); 
-			index++) 
+			idx++) 
 		{
-			const PaDeviceInfo *dev = Pa_GetDeviceInfo(index);
+			const PaDeviceInfo *dev = Pa_GetDeviceInfo(idx);
 
 			if (dev->maxInputChannels) {
-				if ( (index == def_input && !strcasecmp(pvt->input_device, "default")) ||
+				if ( (idx == def_input && !strcasecmp(pvt->input_device, "default")) ||
 					!strcasecmp(pvt->input_device, dev->name) )
-					input_params.device = index;
+					input_params.device = idx;
 			}
 
 			if (dev->maxOutputChannels) {
-				if ( (index == def_output && !strcasecmp(pvt->output_device, "default")) ||
+				if ( (idx == def_output && !strcasecmp(pvt->output_device, "default")) ||
 					!strcasecmp(pvt->output_device, dev->name) )
-					output_params.device = index;
+					output_params.device = idx;
 			}
 		}
 
@@ -391,7 +386,7 @@ return_unlock:
 
 static int stop_stream(struct console_pvt *pvt)
 {
-	if (!pvt->streamstate)
+	if (!pvt->streamstate || pvt->thread == AST_PTHREADT_NULL)
 		return 0;
 
 	pthread_cancel(pvt->thread);
@@ -411,12 +406,12 @@ static int stop_stream(struct console_pvt *pvt)
 /*!
  * \note Called with the pvt struct locked
  */
-static struct ast_channel *console_new(struct console_pvt *pvt, const char *ext, const char *ctx, int state)
+static struct ast_channel *console_new(struct console_pvt *pvt, const char *ext, const char *ctx, int state, const char *linkedid)
 {
 	struct ast_channel *chan;
 
 	if (!(chan = ast_channel_alloc(1, state, pvt->cid_num, pvt->cid_name, NULL, 
-		ext, ctx, 0, "Console/%s", pvt->name))) {
+		ext, ctx, linkedid, 0, "Console/%s", pvt->name))) {
 		return NULL;
 	}
 
@@ -445,7 +440,7 @@ static struct ast_channel *console_new(struct console_pvt *pvt, const char *ext,
 	return chan;
 }
 
-static struct ast_channel *console_request(const char *type, int format, void *data, int *cause)
+static struct ast_channel *console_request(const char *type, int format, const struct ast_channel *requestor, void *data, int *cause)
 {
 	int oldformat = format;
 	struct ast_channel *chan = NULL;
@@ -469,7 +464,7 @@ static struct ast_channel *console_request(const char *type, int format, void *d
 	}
 
 	console_pvt_lock(pvt);
-	chan = console_new(pvt, NULL, NULL, AST_STATE_DOWN);
+	chan = console_new(pvt, NULL, NULL, AST_STATE_DOWN, requestor ? requestor->linkedid : NULL);
 	console_pvt_unlock(pvt);
 
 	if (!chan)
@@ -590,7 +585,7 @@ static int console_write(struct ast_channel *chan, struct ast_frame *f)
 {
 	struct console_pvt *pvt = chan->tech_pvt;
 
-	Pa_WriteStream(pvt->stream, f->data, f->samples);
+	Pa_WriteStream(pvt->stream, f->data.ptr, f->samples);
 
 	return 0;
 }
@@ -610,6 +605,7 @@ static int console_indicate(struct ast_channel *chan, int cond, const void *data
 	case AST_CONTROL_PROGRESS:
 	case AST_CONTROL_PROCEEDING:
 	case AST_CONTROL_VIDUPDATE:
+	case AST_CONTROL_SRCUPDATE:
 		break;
 	case AST_CONTROL_HOLD:
 		ast_verb(1, V_BEGIN "Console Has Been Placed on Hold" V_END);
@@ -691,9 +687,9 @@ static char *cli_console_autoanswer(struct ast_cli_entry *e, int cmd,
 
 	switch (cmd) {
 	case CLI_INIT:
-		e->command = "console set autoanswer [on|off]";
+		e->command = "console {set|show} autoanswer [on|off]";
 		e->usage =
-			"Usage: console set autoanswer [on|off]\n"
+			"Usage: console {set|show} autoanswer [on|off]\n"
 			"       Enables or disables autoanswer feature.  If used without\n"
 			"       argument, displays the current on/off status of autoanswer.\n"
 			"       The default value of autoanswer is in 'oss.conf'.\n";
@@ -794,6 +790,7 @@ static char *cli_console_dial(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 	if (pvt->owner) {	/* already in a call */
 		int i;
 		struct ast_frame f = { AST_FRAME_DTMF, 0 };
+		const char *s;
 
 		if (a->argc == e->args) {	/* argument is mandatory here */
 			ast_cli(a->fd, "Already in a call. You can only dial digits until you hangup.\n");
@@ -829,13 +826,12 @@ static char *cli_console_dial(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 	if (ast_exists_extension(NULL, myc, mye, 1, NULL)) {
 		console_pvt_lock(pvt);
 		pvt->hookstate = 1;
-		console_new(pvt, mye, myc, AST_STATE_RINGING);
+		console_new(pvt, mye, myc, AST_STATE_RINGING, NULL);
 		console_pvt_unlock(pvt);
 	} else
 		ast_cli(a->fd, "No such extension '%s' in context '%s'\n", mye, myc);
 
-	if (s)
-		free(s);
+	free(s);
 
 	unref_pvt(pvt);
 
@@ -880,7 +876,7 @@ static char *cli_console_hangup(struct ast_cli_entry *e, int cmd, struct ast_cli
 
 static char *cli_console_mute(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	char *s;
+	const char *s;
 	struct console_pvt *pvt = get_active_pvt();
 	char *res = CLI_SUCCESS;
 
@@ -919,7 +915,7 @@ static char *cli_console_mute(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 
 static char *cli_list_available(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	PaDeviceIndex index, num, def_input, def_output;
+	PaDeviceIndex idx, num, def_input, def_output;
 
 	if (cmd == CLI_INIT) {
 		e->command = "console list available";
@@ -947,16 +943,16 @@ static char *cli_list_available(struct ast_cli_entry *e, int cmd, struct ast_cli
 
 	def_input = Pa_GetDefaultInputDevice();
 	def_output = Pa_GetDefaultOutputDevice();
-	for (index = 0; index < num; index++) {
-		const PaDeviceInfo *dev = Pa_GetDeviceInfo(index);
+	for (idx = 0; idx < num; idx++) {
+		const PaDeviceInfo *dev = Pa_GetDeviceInfo(idx);
 		if (!dev)
 			continue;
 		ast_cli(a->fd, "=== ---------------------------------------------------------\n"
 		               "=== Device Name: %s\n", dev->name);
 		if (dev->maxInputChannels)
-			ast_cli(a->fd, "=== ---> %sInput Device\n", (index == def_input) ? "Default " : "");
+			ast_cli(a->fd, "=== ---> %sInput Device\n", (idx == def_input) ? "Default " : "");
 		if (dev->maxOutputChannels)
-			ast_cli(a->fd, "=== ---> %sOutput Device\n", (index == def_output) ? "Default " : "");
+			ast_cli(a->fd, "=== ---> %sOutput Device\n", (idx == def_output) ? "Default " : "");
 		ast_cli(a->fd, "=== ---------------------------------------------------------\n===\n");
 	}
 
@@ -1003,6 +999,7 @@ static char *cli_list_devices(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 		               "=== ---> CallerID Name:    %s\n"
 		               "=== ---> MOH Interpret:    %s\n"
 		               "=== ---> Language:         %s\n"
+		               "=== ---> Parkinglot:       %s\n"
 		               "=== ---> Muted:            %s\n"
 		               "=== ---> Auto-Answer:      %s\n"
 		               "=== ---> Override Context: %s\n"
@@ -1010,7 +1007,7 @@ static char *cli_list_devices(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 			pvt->name, (pvt == active_pvt) ? "Yes" : "No",
 			pvt->input_device, pvt->output_device, pvt->context,
 			pvt->exten, pvt->cid_num, pvt->cid_name, pvt->mohinterpret,
-			pvt->language, pvt->muted ? "Yes" : "No", pvt->autoanswer ? "Yes" : "No",
+			pvt->language, pvt->parkinglot, pvt->muted ? "Yes" : "No", pvt->autoanswer ? "Yes" : "No",
 			pvt->overridecontext ? "Yes" : "No");
 
 		console_pvt_unlock(pvt);
@@ -1080,7 +1077,7 @@ static char *cli_console_sendtext(struct ast_cli_entry *e, int cmd, struct ast_c
 	struct console_pvt *pvt = get_active_pvt();
 	struct ast_frame f = {
 		.frametype = AST_FRAME_TEXT,
-		.data = buf,
+		.data.ptr = buf,
 		.src = "console_send_text",
 	};
 	int len;
@@ -1150,12 +1147,10 @@ static char *cli_console_active(struct ast_cli_entry *e, int cmd, struct ast_cli
 
 	switch (cmd) {
 	case CLI_INIT:
-		e->command = "console active";
+		e->command = "console {set|show} active [<device>]";
 		e->usage =
-			"Usage: console active [device]\n"
-			"       If no device is specified.  The active console device will be shown.\n"
-			"Otherwise, the specified device will become the console device active for\n"
-			"the Asterisk CLI.\n";
+			"Usage: console {set|show} active [<device>]\n"
+			"       Set or show the active console device for the Asterisk CLI.\n";
 		return NULL;
 	case CLI_GENERATE:
 		if (a->pos == e->args) {
@@ -1177,7 +1172,7 @@ static char *cli_console_active(struct ast_cli_entry *e, int cmd, struct ast_cli
 	if (a->argc < e->args)
 		return CLI_SHOWUSAGE;
 
-	if (a->argc == e->args) {
+	if (a->argc == 3) {
 		pvt = get_active_pvt();
 
 		if (!pvt)
@@ -1235,6 +1230,7 @@ static void set_pvt_defaults(struct console_pvt *pvt)
 		ast_string_field_set(pvt, language, "");
 		ast_string_field_set(pvt, cid_num, "");
 		ast_string_field_set(pvt, cid_name, "");
+		ast_string_field_set(pvt, parkinglot, "");
 	
 		pvt->overridecontext = 0;
 		pvt->autoanswer = 0;
@@ -1247,6 +1243,7 @@ static void set_pvt_defaults(struct console_pvt *pvt)
 		ast_string_field_set(pvt, language, globals.language);
 		ast_string_field_set(pvt, cid_num, globals.cid_num);
 		ast_string_field_set(pvt, cid_name, globals.cid_name);
+		ast_string_field_set(pvt, parkinglot, globals.parkinglot);
 
 		pvt->overridecontext = globals.overridecontext;
 		pvt->autoanswer = globals.autoanswer;
@@ -1286,6 +1283,7 @@ static void store_config_core(struct console_pvt *pvt, const char *var, const ch
 	CV_F("callerid", store_callerid(pvt, value));
 	CV_BOOL("overridecontext", pvt->overridecontext);
 	CV_BOOL("autoanswer", pvt->autoanswer);
+	CV_STRFIELD("parkinglot", pvt, parkinglot);
 
 	if (pvt != &globals) {
 		CV_F("active", set_active(pvt, value))
@@ -1374,7 +1372,7 @@ static void destroy_pvts(void)
 /*!
  * \brief Load the configuration
  * \param reload if this was called due to a reload
- * \retval 0 succcess
+ * \retval 0 success
  * \retval -1 failure
  */
 static int load_config(int reload)
@@ -1393,9 +1391,12 @@ static int load_config(int reload)
 	if (!(cfg = ast_config_load(config_file, config_flags))) {
 		ast_log(LOG_NOTICE, "Unable to open configuration file %s!\n", config_file);
 		return -1;
+	} else if (cfg == CONFIG_STATUS_FILEINVALID) {
+		ast_log(LOG_NOTICE, "Config file %s has an invalid format\n", config_file);
+		return -1;
 	}
 	
-	ao2_callback(pvts, 0, pvt_mark_destroy_cb, NULL);
+	ao2_callback(pvts, OBJ_NODATA, pvt_mark_destroy_cb, NULL);
 
 	ast_mutex_lock(&globals_lock);
 	for (v = ast_variable_browse(cfg, "general"); v; v = v->next)
@@ -1418,14 +1419,14 @@ static int pvt_hash_cb(const void *obj, const int flags)
 {
 	const struct console_pvt *pvt = obj;
 
-	return ast_str_hash(pvt->name);
+	return ast_str_case_hash(pvt->name);
 }
 
 static int pvt_cmp_cb(void *obj, void *arg, int flags)
 {
 	struct console_pvt *pvt = obj, *pvt2 = arg;
 
-	return !strcasecmp(pvt->name, pvt2->name) ? CMP_MATCH : 0;
+	return !strcasecmp(pvt->name, pvt2->name) ? CMP_MATCH | CMP_STOP : 0;
 }
 
 static void stop_streams(void)

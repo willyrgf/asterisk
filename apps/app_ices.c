@@ -43,59 +43,68 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
 #include "asterisk/translate.h"
+#include "asterisk/app.h"
 
-#define ICES "/usr/bin/ices"
-#define LOCAL_ICES "/usr/local/bin/ices"
+/*** DOCUMENTATION
+	<application name="ICES" language="en_US">
+		<synopsis>
+			Encode and stream using 'ices'.
+		</synopsis>
+		<syntax>
+			<parameter name="config" required="true">
+				<para>ICES configuration file.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Streams to an icecast server using ices (available separately).
+			A configuration file must be supplied for ices (see contrib/asterisk-ices.xml).</para>
+			<note><para>ICES version 2 client and server required.</para></note>
+		</description>
+	</application>
+
+ ***/
+
+#define path_BIN "/usr/bin/"
+#define path_LOCAL "/usr/local/bin/"
 
 static char *app = "ICES";
-
-static char *synopsis = "Encode and stream using 'ices'";
-
-static char *descrip = 
-"  ICES(config.xml) Streams to an icecast server using ices\n"
-"(available separately).  A configuration file must be supplied\n"
-"for ices (see examples/asterisk-ices.conf). \n";
-
 
 static int icesencode(char *filename, int fd)
 {
 	int res;
-	int x;
-	sigset_t fullset, oldset;
 
-	sigfillset(&fullset);
-	pthread_sigmask(SIG_BLOCK, &fullset, &oldset);
-
-	res = fork();
+	res = ast_safe_fork(0);
 	if (res < 0) 
 		ast_log(LOG_WARNING, "Fork failed\n");
 	if (res) {
-		pthread_sigmask(SIG_SETMASK, &oldset, NULL);
 		return res;
 	}
-
-	/* Stop ignoring PIPE */
-	signal(SIGPIPE, SIG_DFL);
-	pthread_sigmask(SIG_UNBLOCK, &fullset, NULL);
 
 	if (ast_opt_high_priority)
 		ast_set_priority(0);
 	dup2(fd, STDIN_FILENO);
-	for (x=STDERR_FILENO + 1;x<1024;x++) {
-		if ((x != STDIN_FILENO) && (x != STDOUT_FILENO))
-			close(x);
-	}
-	/* Most commonly installed in /usr/local/bin */
-	execl(ICES, "ices", filename, (char *)NULL);
-	/* But many places has it in /usr/bin */
-	execl(LOCAL_ICES, "ices", filename, (char *)NULL);
-	/* As a last-ditch effort, try to use PATH */
-	execlp("ices", "ices", filename, (char *)NULL);
-	ast_log(LOG_WARNING, "Execute of ices failed\n");
+	ast_close_fds_above_n(STDERR_FILENO);
+
+	/* Most commonly installed in /usr/local/bin 
+	 * But many places has it in /usr/bin 
+	 * As a last-ditch effort, try to use PATH
+	 */
+	execl(path_LOCAL "ices2", "ices", filename, SENTINEL);
+	execl(path_BIN "ices2", "ices", filename, SENTINEL);
+	execlp("ices2", "ices", filename, SENTINEL);
+
+	ast_debug(1, "Couldn't find ices version 2, attempting to use ices version 1.");
+
+	execl(path_LOCAL "ices", "ices", filename, SENTINEL);
+	execl(path_BIN "ices", "ices", filename, SENTINEL);
+	execlp("ices", "ices", filename, SENTINEL);
+
+	ast_log(LOG_WARNING, "Execute of ices failed, could not find command.\n");
+	close(fd);
 	_exit(0);
 }
 
-static int ices_exec(struct ast_channel *chan, void *data)
+static int ices_exec(struct ast_channel *chan, const char *data)
 {
 	int res = 0;
 	int fds[2];
@@ -151,7 +160,6 @@ static int ices_exec(struct ast_channel *chan, void *data)
 	if (c)
 		*c = '\0';	
 	res = icesencode(filename, fds[0]);
-	close(fds[0]);
 	if (res >= 0) {
 		pid = res;
 		for (;;) {
@@ -169,7 +177,7 @@ static int ices_exec(struct ast_channel *chan, void *data)
 				break;
 			}
 			if (f->frametype == AST_FRAME_VOICE) {
-				res = write(fds[1], f->data, f->datalen);
+				res = write(fds[1], f->data.ptr, f->datalen);
 				if (res < 0) {
 					if (errno != EAGAIN) {
 						ast_log(LOG_WARNING, "Write failed to pipe: %s\n", strerror(errno));
@@ -182,8 +190,9 @@ static int ices_exec(struct ast_channel *chan, void *data)
 			ast_frfree(f);
 		}
 	}
+	close(fds[0]);
 	close(fds[1]);
-	
+
 	if (pid > -1)
 		kill(pid, SIGKILL);
 	if (!res && oreadformat)
@@ -199,7 +208,7 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	return ast_register_application(app, ices_exec, synopsis, descrip);
+	return ast_register_application_xml(app, ices_exec);
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Encode and Stream via icecast and ices");

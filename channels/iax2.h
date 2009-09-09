@@ -26,7 +26,12 @@
 /* Max version of IAX protocol we support */
 #define IAX_PROTO_VERSION 2
 
+/* NOTE: IT IS CRITICAL THAT IAX_MAX_CALLS BE A POWER OF 2. */
+#if defined(LOW_MEMORY)
+#define IAX_MAX_CALLS 2048
+#else
 #define IAX_MAX_CALLS 32768
+#endif
 
 #define IAX_FLAG_FULL		0x8000
 
@@ -39,7 +44,7 @@
 #define IAX_WINDOW			64
 
 /*! Subclass for AST_FRAME_IAX */
-enum {
+enum iax_frame_subclass {
 	IAX_COMMAND_NEW =       1,
 	IAX_COMMAND_PING =      2,
 	IAX_COMMAND_PONG =      3,
@@ -99,18 +104,22 @@ enum {
 	/*! Provision device */
 	IAX_COMMAND_PROVISION = 35,
 	/*! Download firmware */
-	IAX_COMMAND_FWDOWNL =   36,	
+	IAX_COMMAND_FWDOWNL =   36,
 	/*! Firmware Data */
 	IAX_COMMAND_FWDATA =    37,
 	/*! Transfer media only */
 	IAX_COMMAND_TXMEDIA =   38,
+	/*! Command to rotate key */
+	IAX_COMMAND_RTKEY =     39,
+	/*! Call number token */
+	IAX_COMMAND_CALLTOKEN = 40,
 };
 
 /*! By default require re-registration once per minute */
-#define IAX_DEFAULT_REG_EXPIRE  60	
+#define IAX_DEFAULT_REG_EXPIRE  60
 
 /*! How long to wait before closing bridged call */
-#define IAX_LINGER_TIMEOUT		10 
+#define IAX_LINGER_TIMEOUT		10
 
 #define IAX_DEFAULT_PORTNO		4569
 
@@ -169,6 +178,7 @@ enum {
 #define IAX_IE_RR_OOO				51		/*!< Frames received Out of Order u32 */
 #define IAX_IE_VARIABLE				52		/*!< Remote variables */
 #define IAX_IE_OSPTOKEN				53		/*!< OSP token */
+#define IAX_IE_CALLTOKEN			54		/*!< Call number security token */
 
 #define IAX_MAX_OSPBLOCK_SIZE		254		/*!< Max OSP token block size, 255 bytes - 1 byte OSP token block index */
 #define IAX_MAX_OSPBLOCK_NUM		4
@@ -180,6 +190,7 @@ enum {
 #define IAX_AUTH_RSA				(1 << 2)
 
 #define IAX_ENCRYPT_AES128			(1 << 0)
+#define IAX_ENCRYPT_KEYROTATE			(1 << 15)       /*!< Keyrotation support */
 
 #define IAX_META_TRUNK				1		/*!< Trunk meta-message */
 #define IAX_META_VIDEO				2		/*!< Video frame */

@@ -6,7 +6,7 @@ must be added to a context. Then, you configure the calling "line" to have
 access to this context.
 
 If you change the dialplan, you can use the Asterisk CLI command
-"extensions reload" to load the new dialplan without disrupting
+"dialplan reload" to load the new dialplan without disrupting
 service in your PBX.
 
 Extensions are routed according to priority and may be based on any set
@@ -16,9 +16,6 @@ pattern, "N", "X", and "Z" are interpreted as classes of digits.
 For each extension, several actions may be listed and must be given a unique
 priority. When each action completes, the call continues at the next priority
 (except for some modules which use explicitly GOTO's).
-
-When each action completes, it generally moves to the next priority (except for
-some modules which use explicitly GOTO's.
 
 Extensions frequently have data they pass to the executing application
 (most frequently a string).  You can see the available dialplan applications
