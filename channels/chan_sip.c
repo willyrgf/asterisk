@@ -1,5 +1,6 @@
 /* TESTING
  	- With TCP
+	- Optimize and remove get_header(from,to,cseq,callid) to use req-> pointers
 */
 
 /*
@@ -1368,6 +1369,11 @@ struct sip_message {
 	/* XXX Do we need to unref socket.ser when the request goes away? */
 	struct sip_socket socket;		/*!< The socket used for this request */
 	AST_LIST_ENTRY(sip_message) next;
+	/*------ To simplify parsing and avoid a lot of get_header()  */
+	const char *callid;
+	const char *from;
+	const char *to;
+	const char *cseq;
 	/* ------------------------    Fields Used only for inbound messages (read from a socket) */
 	/* Outbound messages only */
 	int retrans;				/*!< Retransmission number */
@@ -2931,11 +2937,15 @@ static void *_sip_tcp_helper_thread(struct sip_pvt *pvt, struct ast_tcptls_sessi
 
 	for (;;) {
 		struct ast_str *str_save;
+		struct ast_str *str_save_parsedata;
 
 		str_save = req.data;
+		str_save_parsedata = req.parsedata;
 		memset(&req, 0, sizeof(req));
 		req.data = str_save;
+		req.parsedata = str_save_parsedata;
 		ast_str_reset(req.data);
+		ast_str_reset(req.parsedata);
 
 		memset(buf, 0, sizeof(buf));
 
@@ -2967,6 +2977,7 @@ static void *_sip_tcp_helper_thread(struct sip_pvt *pvt, struct ast_tcptls_sessi
 			req.len = req.data->used;
 		}
 		parse_request(&req);
+
 		/* In order to know how much to read, we need the content-length header */
 		if (sscanf(get_header(&req, "Content-Length"), "%30d", &cl)) {
 			while (cl > 0) {
@@ -3271,7 +3282,7 @@ static void sip_message_destroy(struct sip_message *msg)
 		ast_free(msg->data);
 	}
 	if (msg->parsedata) {
-		ast_free(msg->data);
+		ast_free(msg->parsedata);
 	}
 }
 
@@ -7338,20 +7349,12 @@ static struct sip_pvt *find_call(struct sip_message *req, struct sockaddr_in *si
 	char totag[128];
 	char fromtag[128];
 	struct find_call_cb_arg arg;
-	const char *callid = get_header(req, "Call-ID");
-	const char *from = get_header(req, "From");
-	const char *to = get_header(req, "To");
-	const char *cseq = get_header(req, "Cseq");
+	const char *from = req->from;
 	struct sip_pvt *sip_pvt_ptr;
 
-	/* Call-ID, to, from and Cseq are required by RFC 3261. (Max-forwards and via too - ignored now) */
-	/* get_header always returns non-NULL so we must use ast_strlen_zero() */
-	if (ast_strlen_zero(callid) || ast_strlen_zero(to) ||
-			ast_strlen_zero(from) || ast_strlen_zero(cseq))
-		return NULL;	/* Invalid packet */
 
 	arg.method = req->method;
-	arg.callid = callid;
+	arg.callid = req->callid;
 	arg.fromtag = fromtag;
 	arg.totag = totag;
 	arg.tag = ""; /* make sure tag is never NULL */
@@ -7369,16 +7372,16 @@ static struct sip_pvt *find_call(struct sip_message *req, struct sockaddr_in *si
 
 		tag = (req->method == SIP_RESPONSE) ? totag : fromtag;
 
-		ast_debug(5, "= Looking for  Call ID: %s (Checking %s) --From tag %s --To-tag %s  \n", callid, req->method==SIP_RESPONSE ? "To" : "From", fromtag, totag);
+		ast_debug(5, "= Looking for  Call ID: %s (Checking %s) --From tag %s --To-tag %s  \n", req->callid, req->method==SIP_RESPONSE ? "To" : "From", fromtag, totag);
 
 		/* All messages must always have From: tag */
 		if (ast_strlen_zero(fromtag)) {
-			ast_debug(5, "%s request has no from tag, dropping callid: %s from: %s\n", sip_methods[req->method].text , callid, from );
+			ast_debug(5, "%s request has no from tag, dropping callid: %s from: %s\n", sip_methods[req->method].text , req->callid, from );
 			return NULL;
 		}
 		/* reject requests that must always have a To: tag */
 		if (ast_strlen_zero(totag) && (req->method == SIP_ACK || req->method == SIP_BYE || req->method == SIP_INFO )) {
-			ast_debug(5, "%s must have a to tag. dropping callid: %s from: %s\n", sip_methods[req->method].text , callid, from );
+			ast_debug(5, "%s must have a to tag. dropping callid: %s from: %s\n", sip_methods[req->method].text , req->callid, from );
 			return NULL;
 		}
 	}
@@ -7386,7 +7389,7 @@ static struct sip_pvt *find_call(struct sip_message *req, struct sockaddr_in *si
 restartsearch:
 	if (!sip_cfg.pedanticsipchecking) {
 		struct sip_pvt tmp_dialog = {
-			.callid = callid,
+			.callid = req->callid,
 		};			
 		sip_pvt_ptr = ao2_t_find(dialogs, &tmp_dialog, OBJ_POINTER, "ao2_find in dialogs");
 		if (sip_pvt_ptr) {  /* well, if we don't find it-- what IS in there? */
@@ -7413,14 +7416,14 @@ restartsearch:
 	if (sip_methods[intended_method].can_create == CAN_CREATE_DIALOG) {
 		if (intended_method == SIP_REFER) {
 			/* We do support REFER, but not outside of a dialog yet */
-			transmit_response_using_temp(callid, sin, 1, intended_method, req, "603 Declined (no dialog)", 603);
+			transmit_response_using_temp(req->callid, sin, 1, intended_method, req, "603 Declined (no dialog)", 603);
 		} else if (intended_method == SIP_NOTIFY) {
 			/* We do not support out-of-dialog NOTIFY either,
 		   	like voicemail notification, so cancel that early */
-			transmit_response_using_temp(callid, sin, 1, intended_method, req, "489 Bad event", 489);
+			transmit_response_using_temp(req->callid, sin, 1, intended_method, req, "489 Bad event", 489);
 		} else {
 			/* Ok, time to create a new SIP dialog object, a pvt */
-			if ((p = sip_alloc(callid, sin, 1, intended_method, req)))  {
+			if ((p = sip_alloc(req->callid, sin, 1, intended_method, req)))  {
 				/* Ok, we've created a dialog, let's go and process it */
 				sip_pvt_lock(p);
 			} else {
@@ -7432,24 +7435,24 @@ restartsearch:
 	
 					Sorry, we apologize for the inconvienience
 				*/
-				transmit_response_using_temp(callid, sin, 1, intended_method, req, "500 Server internal error", 500);
+				transmit_response_using_temp(req->callid, sin, 1, intended_method, req, "500 Server internal error", 500);
 				ast_debug(4, "Failed allocating SIP dialog, sending 500 Server internal error and giving up\n");
 			}
 		}
 		return p; /* can be NULL */
 	} else if( sip_methods[intended_method].can_create == CAN_CREATE_DIALOG_UNSUPPORTED_METHOD) {
 		/* A method we do not support, let's take it on the volley */
-		transmit_response_using_temp(callid, sin, 1, intended_method, req, "501 Method Not Implemented", 501);
+		transmit_response_using_temp(req->callid, sin, 1, intended_method, req, "501 Method Not Implemented", 501);
 		ast_debug(2, "Got a request with unsupported SIP method.\n");
 	} else if (intended_method != SIP_RESPONSE && intended_method != SIP_ACK) {
 		/* This is a request outside of a dialog that we don't know about */
-		transmit_response_using_temp(callid, sin, 1, intended_method, req, "481 Call leg/transaction does not exist", 481);
-		ast_debug(2, "That's odd...  Got a request in unknown dialog. Callid %s\n", callid ? callid : "<unknown>");
+		transmit_response_using_temp(req->callid, sin, 1, intended_method, req, "481 Call leg/transaction does not exist", 481);
+		ast_debug(2, "That's odd...  Got a request in unknown dialog. Callid %s\n", req->callid ? req->callid : "<unknown>");
 	}
 	/* We do not respond to responses for dialogs that we don't know about, we just drop
 	   the session quickly */
 	if (intended_method == SIP_RESPONSE)
-		ast_debug(2, "That's odd...  Got a response on a call we dont know about. Callid %s\n", callid ? callid : "<unknown>");
+		ast_debug(2, "That's odd...  Got a response on a call we dont know about. Callid %s\n", req->callid ? req->callid : "<unknown>");
 
 	return NULL;
 }
@@ -9373,6 +9376,7 @@ static int respprep(struct sip_message *resp, struct sip_pvt *p, const char *msg
 	add_header(resp, "To", ot);
 	copy_header(resp, req, "Call-ID");
 	copy_header(resp, req, "CSeq");
+	resp->seqno = req->seqno;
 	if (!ast_strlen_zero(global_useragent))
 		add_header(resp, "Server", global_useragent);
 	add_header(resp, "Allow", ALLOWED_METHODS);
@@ -9431,6 +9435,7 @@ static int reqprep(struct sip_message *req, struct sip_pvt *p, int sipmethod, in
 		p->ocseq++;
 		seqno = p->ocseq;
 	}
+	req->seqno = seqno;
 	
 	/* A CANCEL must have the same branch as the INVITE that it is canceling.
 	 * Similarly, if we need to re-send an INVITE with auth credentials, then we
@@ -22161,35 +22166,17 @@ static int handle_incoming(struct sip_pvt *p, struct sip_message *req, struct so
 	/* Called with p->lock held, as well as p->owner->lock if appropriate, keeping things
 	   relatively static */
 	const char *cmd;
-	const char *cseq;
+	int seqno = req->seqno;
 	const char *useragent;
-	int seqno;
 	int len;
 	int respid;
 	int res = 0;
 	int debug = sip_debug_test_pvt(p);
 	const char *e;
-	int error = 0;
 
 	/* Get Method and Cseq */
-	cseq = get_header(req, "Cseq");
 	cmd = REQ_OFFSET_TO_STR(req, header[0]);
 
-	/* Must have Cseq */
-	if (ast_strlen_zero(cmd) || ast_strlen_zero(cseq)) {
-		ast_log(LOG_ERROR, "Missing Cseq. Dropping this SIP message, it's incomplete.\n");
-		error = 1;
-	}
-	if (!error && sscanf(cseq, "%30d%n", &seqno, &len) != 1) {
-		ast_log(LOG_ERROR, "No seqno in '%s'. Dropping incomplete message.\n", cmd);
-		error = 1;
-	}
-	if (error) {
-		if (!p->initreq.headers) {	/* New call */
-			pvt_set_needdestroy(p, "no headers");
-		}
-		return -1;
-	}
 	/* Get the command XXX */
 
 	cmd = REQ_OFFSET_TO_STR(req, rlPart1);
@@ -22219,15 +22206,17 @@ static int handle_incoming(struct sip_pvt *p, struct sip_message *req, struct so
 			ast_log(LOG_WARNING, "Invalid SIP response code: '%d'\n", respid);
 			return 0;
 		}
-		if (p->ocseq && (p->ocseq < seqno)) {
+		req->response_code = respid;
+
+		if (p->ocseq && (p->ocseq < req->seqno)) {
 			if (option_debug)
-				ast_log(LOG_DEBUG, "Ignoring out of order response %d (expecting %d)\n", seqno, p->ocseq);
+				ast_log(LOG_DEBUG, "Ignoring out of order response %d (expecting %d)\n", req->seqno, p->ocseq);
 			return -1;
 		} else {
 			if ((respid == 200) || ((respid >= 300) && (respid <= 399))) {
 				extract_uri(p, req);
 			}
-			handle_response(p, respid, e + len, req, seqno);
+			handle_response(p, respid, e + len, req, req->seqno);
 		}
 		return 0;
 	}
@@ -22239,31 +22228,31 @@ static int handle_incoming(struct sip_pvt *p, struct sip_message *req, struct so
 	p->method = req->method;	/* Find out which SIP method they are using */
 	ast_debug(4, "**** Received %s (%d) - Command in SIP %s\n", sip_methods[p->method].text, sip_methods[p->method].id, cmd);
 
-	if (p->icseq && (p->icseq > seqno) ) {
-		if (p->pendinginvite && seqno == p->pendinginvite && (req->method == SIP_ACK || req->method == SIP_CANCEL)) {
+	if (p->icseq && (p->icseq > req->seqno) ) {
+		if (p->pendinginvite && req->seqno == p->pendinginvite && (req->method == SIP_ACK || req->method == SIP_CANCEL)) {
 			ast_debug(2, "Got CANCEL or ACK on INVITE with transactions in between.\n");
 		}  else {
-			ast_debug(1, "Ignoring too old SIP packet packet %d (expecting >= %d)\n", seqno, p->icseq);
+			ast_debug(1, "Ignoring too old SIP packet packet %d (expecting >= %d)\n", req->seqno, p->icseq);
 			if (req->method != SIP_ACK)
 				transmit_response(p, 503, "503 Server error", req);	/* We must respond according to RFC 3261 sec 12.2 */
 			return -1;
 		}
 	} else if (p->icseq &&
-		   p->icseq == seqno &&
+		   p->icseq == req->seqno &&
 		   req->method != SIP_ACK &&
 		   (p->method != SIP_CANCEL || p->alreadygone)) {
 		/* ignore means "don't do anything with it" but still have to
 		   respond appropriately.  We do this if we receive a repeat of
 		   the last sequence number  */
 		req->ignore = 1;
-		ast_debug(3, "Ignoring SIP message because of retransmit (%s Seqno %d, ours %d)\n", sip_methods[p->method].text, p->icseq, seqno);
+		ast_debug(3, "Ignoring SIP message because of retransmit (%s Seqno %d, ours %d)\n", sip_methods[p->method].text, p->icseq, req->seqno);
 	}
 		
-	if (seqno >= p->icseq)
+	if (req->seqno >= p->icseq)
 		/* Next should follow monotonically (but not necessarily
 		   incrementally -- thanks again to the genius authors of SIP --
 		   increasing */
-		p->icseq = seqno;
+		p->icseq = req->seqno;
 
 	/* Find their tag if we haven't got it */
 	if (ast_strlen_zero(p->theirtag)) {
@@ -22524,6 +22513,9 @@ static int handle_request_do(struct sip_message *req, struct sockaddr_in *sin)
 	int recount = 0;
 	int nounlock = 0;
 	int lockretry;
+	int parseerror = FALSE;
+	int len;
+	const char *cmd;
 
 	if (sip_debug_test_addr(sin))	/* Set the debug flag early on packet level */
 		req->debug = 1;
@@ -22541,15 +22533,40 @@ static int handle_request_do(struct sip_message *req, struct sockaddr_in *sin)
 		return 1;
 	}
 	req->method = find_sip_method(REQ_OFFSET_TO_STR(req, rlPart1));
+	req->callid = get_header(req, "Call-ID");
+	req->from = get_header(req, "From");
+	req->to = get_header(req, "To");
+	req->cseq = get_header(req, "Cseq");
 
-	if (req->debug)
-		ast_verbose("--- (%d headers %d lines)%s ---\n", req->headers, req->lines, (req->headers + req->lines == 0) ? " Nat keepalive" : "");
+	/* Call-ID, to, from and Cseq are required by RFC 3261. (Max-forwards and via too - ignored now) */
+	/* get_header always returns non-NULL so we must use ast_strlen_zero() */
+	if (ast_strlen_zero(req->callid) || ast_strlen_zero(req->to) ||
+			ast_strlen_zero(req->from) || ast_strlen_zero(req->cseq)) {
+		parseerror = TRUE;
+	}
+	if (!parseerror && req->headers < 2) {	/* Must have at least two headers */
+		parseerror = TRUE;
+	}
 
-	if (req->headers < 2) {	/* Must have at least two headers */
+	/* Must have Cseq and first line */
+	cmd = REQ_OFFSET_TO_STR(req, header[0]);
+	if (!parseerror && (ast_strlen_zero(cmd) || ast_strlen_zero(req->cseq))) {
+		ast_log(LOG_ERROR, "Missing Cseq. Dropping this SIP message, it's incomplete.\n");
+		parseerror = TRUE;
+	}
+	if (!parseerror && sscanf(req->cseq, "%30d%n", &req->seqno, &len) != 1) {
+		ast_log(LOG_ERROR, "No seqno in '%s'. Dropping incomplete message.\n", cmd);
+		parseerror = 1;
+	}
+
+	if (parseerror) {
 		ast_str_reset(req->data); /* nulling this out is NOT a good idea here. */
 		ast_str_reset(req->parsedata); /* nulling this out is NOT a good idea here. */
 		return 1;
 	}
+
+	if (req->debug)
+		ast_verbose("--- (%d headers %d lines)%s ---\n", req->headers, req->lines, (req->headers + req->lines == 0) ? " Nat keepalive" : "");
 
 	/* Process request, with netlock held, and with usual deadlock avoidance */
 	for (lockretry = 10; lockretry > 0; lockretry--) {
