@@ -1832,11 +1832,6 @@ static int __sip_xmit(struct sip_pvt *p, char *data, int len)
 			res = XMIT_ERROR;	/* Don't bother with trying to transmit again */
 		}
 
-		if (p->registry && p->registry->regstate < REG_STATE_REGISTERED) {
-			AST_SCHED_DEL(sched, p->registry->timeout);
-			p->registry->needdns = TRUE;
-			p->registry->timeout = ast_sched_add(sched, 1, sip_reg_timeout, p->registry);
-		}
 	}
 
 	if (res != len)
@@ -2662,7 +2657,7 @@ static struct sip_peer *realtime_peer(const char *newpeername, struct sockaddr_i
 					if (!strcasecmp(tmp->name, "host")) {
 						struct hostent *hp;
 						struct ast_hostent ahp;
-						if (!(hp = ast_gethostbyname(tmp->value, &ahp)) || (memcmp(&hp->h_addr, &sin->sin_addr, sizeof(hp->h_addr)))) {
+						if (!(hp = ast_gethostbyname(tmp->value, &ahp)) || (memcmp(hp->h_addr, &sin->sin_addr, sizeof(hp->h_addr)))) {
 							/* No match */
 							ast_variables_destroy(var);
 							var = NULL;

@@ -783,6 +783,7 @@ AST_MUTEX_DEFINE_STATIC(dpcache_lock);
 
 static void reg_source_db(struct iax2_peer *p);
 static struct iax2_peer *realtime_peer(const char *peername, struct sockaddr_in *sin);
+static struct iax2_user *realtime_user(const char *username, struct sockaddr_in *sin);
 
 static int ast_cli_netstats(struct mansession *s, int fd, int limit_fmt);
 
@@ -1783,7 +1784,11 @@ static int calltoken_required(struct sockaddr_in *sin, const char *name, int sub
 	/* ----- Case 2 ----- */
 	if ((subclass == IAX_COMMAND_NEW) && (user = find_user(find))) {
 		calltoken_required = user->calltoken_required;
-	} else if ((subclass != IAX_COMMAND_NEW) && (peer = find_peer(find, 1))) {
+	} else if ((subclass == IAX_COMMAND_NEW) && (user = realtime_user(find, sin))) {
+		calltoken_required = user->calltoken_required;
+	} else if ((subclass != IAX_COMMAND_NEW) && (peer = find_peer(find, 0))) {
+		calltoken_required = peer->calltoken_required;
+	} else if ((subclass != IAX_COMMAND_NEW) && (peer = realtime_peer(find, sin))) {
 		calltoken_required = peer->calltoken_required;
 	}
 
@@ -3686,7 +3691,7 @@ static struct iax2_peer *realtime_peer(const char *peername, struct sockaddr_in 
 				if (!strcasecmp(tmp->name, "host")) {
 					struct ast_hostent ahp;
 					struct hostent *hp;
-					if (!(hp = ast_gethostbyname(tmp->value, &ahp)) || (memcmp(&hp->h_addr, &sin->sin_addr, sizeof(hp->h_addr)))) {
+					if (!(hp = ast_gethostbyname(tmp->value, &ahp)) || (memcmp(hp->h_addr, &sin->sin_addr, sizeof(hp->h_addr)))) {
 						/* No match */
 						ast_variables_destroy(var);
 						var = NULL;
@@ -3800,7 +3805,7 @@ static struct iax2_user *realtime_user(const char *username, struct sockaddr_in 
 				if (!strcasecmp(tmp->name, "host")) {
 					struct ast_hostent ahp;
 					struct hostent *hp;
-					if (!(hp = ast_gethostbyname(tmp->value, &ahp)) || (memcmp(&hp->h_addr, &sin->sin_addr, sizeof(hp->h_addr)))) {
+					if (!(hp = ast_gethostbyname(tmp->value, &ahp)) || (memcmp(hp->h_addr, &sin->sin_addr, sizeof(hp->h_addr)))) {
 						/* No match */
 						ast_variables_destroy(var);
 						var = NULL;
@@ -8234,6 +8239,7 @@ static int socket_process(struct iax2_thread *thread)
 	int new = NEW_PREVENT;
 	void *ptr;
 	int dcallno = 0;
+	char decrypted = 0;
 	struct ast_iax2_full_hdr *fh = (struct ast_iax2_full_hdr *)thread->buf;
 	struct ast_iax2_mini_hdr *mh = (struct ast_iax2_mini_hdr *)thread->buf;
 	struct ast_iax2_meta_hdr *meta = (struct ast_iax2_meta_hdr *)thread->buf;
@@ -8410,6 +8416,25 @@ static int socket_process(struct iax2_thread *thread)
 
 		/* Get the destination call number */
 		dcallno = ntohs(fh->dcallno) & ~IAX_FLAG_RETRANS;
+
+
+		/* check to make sure this full frame isn't encrypted before we attempt
+ 		 * to look inside of it. If it is encrypted, decrypt it first. Its ok if the
+		 * callno is not found here, that just means one hasn't been allocated for
+		 * this connection yet. */
+		if ((dcallno != 1) && (fr->callno = find_callno(ntohs(mh->callno) & ~IAX_FLAG_FULL, dcallno, &sin, NEW_PREVENT, fd, 1))) {
+			ast_mutex_lock(&iaxsl[fr->callno]);
+			if (ast_test_flag(iaxs[fr->callno], IAX_ENCRYPTED)) {
+				if (decrypt_frame(fr->callno, fh, &f, &res)) {
+					ast_log(LOG_NOTICE, "Packet Decrypt Failed!\n");
+					ast_mutex_unlock(&iaxsl[fr->callno]);
+					return 1;
+				}
+				decrypted = 1;
+			}
+			ast_mutex_unlock(&iaxsl[fr->callno]);
+		}
+
 		/* Retrieve the type and subclass */
 		f.frametype = fh->type;
 		if (f.frametype == AST_FRAME_VIDEO) {
@@ -8521,17 +8546,19 @@ static int socket_process(struct iax2_thread *thread)
 			ast_mutex_unlock(&iaxsl[fr->callno]);
 		return 1;
 	}
-	if (ast_test_flag(iaxs[fr->callno], IAX_ENCRYPTED)) {
+	if (ast_test_flag(iaxs[fr->callno], IAX_ENCRYPTED) && !decrypted) {
 		if (decrypt_frame(fr->callno, fh, &f, &res)) {
 			ast_log(LOG_NOTICE, "Packet Decrypt Failed!\n");
 			ast_mutex_unlock(&iaxsl[fr->callno]);
 			return 1;
-		}
-#ifdef DEBUG_SUPPORT
-		else if (iaxdebug)
-			iax_showframe(NULL, fh, 3, &sin, res - sizeof(*fh));
-#endif
 	}
+		decrypted = 1;
+	}
+#ifdef DEBUG_SUPPORT
+	if (decrypted && iaxdebug) {
+		iax_showframe(NULL, fh, 3, &sin, res - sizeof(*fh));
+	}
+#endif
 
 	/* count this frame */
 	iaxs[fr->callno]->frames_received++;
