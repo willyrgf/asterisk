@@ -2970,12 +2970,13 @@ static void *_sip_tcp_helper_thread(struct sip_pvt *pvt, struct ast_tcptls_sessi
 		/* In order to know how much to read, we need the content-length header */
 		if (sscanf(get_header(&reqcpy, "Content-Length"), "%30d", &cl)) {
 			while (cl > 0) {
+				size_t bytes_read;
 				ast_mutex_lock(&tcptls_session->lock);
-				if (!fread(buf, MIN(sizeof(buf) - 1, cl), 1, tcptls_session->f)) {
+				if (!(bytes_read = fread(buf, MIN(sizeof(buf) - 1, cl), 1, tcptls_session->f))) {
 					ast_mutex_unlock(&tcptls_session->lock);
 					goto cleanup;
 				}
-				buf[sizeof(buf)-1] = '\0';
+				buf[bytes_read] = '\0';
 				ast_mutex_unlock(&tcptls_session->lock);
 				if (me->stop)
 					goto cleanup;
@@ -9465,7 +9466,7 @@ static int respprep(struct sip_request *resp, struct sip_pvt *p, const char *msg
 		add_header(resp, "Expires", tmp);
 		if (p->expiry) {	/* Only add contact if we have an expiry time */
 			char contact[SIPBUFSIZE];
-			snprintf(contact, sizeof(contact), "%s;expires=%d", p->our_contact, p->expiry);
+			snprintf(contact, sizeof(contact), "%s;expires=%d", (p->method == SIP_SUBSCRIBE ? p->our_contact : p->fullcontact), p->expiry);
 			add_header(resp, "Contact", contact);	/* Not when we unregister */
 		}
 	} else if (!ast_strlen_zero(p->our_contact) && resp_needs_contact(msg, p->method)) {
@@ -13291,11 +13292,13 @@ static enum check_auth_result register_verify(struct sip_pvt *p, struct sockaddr
 						res = 0;
 						break;
 					case PARSE_REGISTER_QUERY:
+						ast_string_field_set(p, fullcontact, peer->fullcontact);
 						transmit_response_with_date(p, "200 OK", req);
 						peer->lastmsgssent = -1;
 						res = 0;
 						break;
 					case PARSE_REGISTER_UPDATE:
+						ast_string_field_set(p, fullcontact, peer->fullcontact);
 						update_peer(peer, p->expiry);
 						/* Say OK and ask subsystem to retransmit msg counter */
 						transmit_response_with_date(p, "200 OK", req);
@@ -13329,11 +13332,13 @@ static enum check_auth_result register_verify(struct sip_pvt *p, struct sockaddr
 				res = 0;
 				break;
 			case PARSE_REGISTER_QUERY:
+				ast_string_field_set(p, fullcontact, peer->fullcontact);
 				transmit_response_with_date(p, "200 OK", req);
 				peer->lastmsgssent = -1;
 				res = 0;
 				break;
 			case PARSE_REGISTER_UPDATE:
+				ast_string_field_set(p, fullcontact, peer->fullcontact);
 				/* Say OK and ask subsystem to retransmit msg counter */
 				transmit_response_with_date(p, "200 OK", req);
 				manager_event(EVENT_FLAG_SYSTEM, "PeerStatus", "ChannelType: SIP\r\nPeer: SIP/%s\r\nPeerStatus: Registered\r\nAddress: %s\r\nPort: %d\r\n", peer->name, ast_inet_ntoa(sin->sin_addr), ntohs(sin->sin_port));
