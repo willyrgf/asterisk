@@ -2981,12 +2981,13 @@ static void *_sip_tcp_helper_thread(struct sip_pvt *pvt, struct ast_tcptls_sessi
 		/* In order to know how much to read, we need the content-length header */
 		if (sscanf(get_header(&req, "Content-Length"), "%30d", &cl)) {
 			while (cl > 0) {
+				size_t bytes_read;
 				ast_mutex_lock(&tcptls_session->lock);
-				if (!fread(buf, MIN(sizeof(buf) - 1, cl), 1, tcptls_session->f)) {
+				if (!(bytes_read = fread(buf, 1, MIN(sizeof(buf) - 1, cl), tcptls_session->f))) {
 					ast_mutex_unlock(&tcptls_session->lock);
 					goto cleanup;
 				}
-				buf[sizeof(buf)-1] = '\0';
+				buf[bytes_read] = '\0';
 				ast_mutex_unlock(&tcptls_session->lock);
 				if (me->stop)
 					goto cleanup;
@@ -3224,7 +3225,7 @@ static int proxy_update(struct sip_proxy *proxy)
 static int port_str2int(const char *pt, unsigned int standard)
 {
 	int port = standard;
-	if (ast_strlen_zero(pt) || (sscanf(pt, "%30d", &port) != 1) || (port < 0)) {
+	if (ast_strlen_zero(pt) || (sscanf(pt, "%30d", &port) != 1) || (port < 1) || (port > 65535)) {
 		port = standard;
 	}
 
@@ -9402,7 +9403,7 @@ static int respprep(struct sip_message *resp, struct sip_pvt *p, const char *msg
 		add_header(resp, "Expires", tmp);
 		if (p->expiry) {	/* Only add contact if we have an expiry time */
 			char contact[SIPBUFSIZE];
-			snprintf(contact, sizeof(contact), "%s;expires=%d", p->our_contact, p->expiry);
+			snprintf(contact, sizeof(contact), "%s;expires=%d", (p->method == SIP_SUBSCRIBE ? p->our_contact : p->fullcontact), p->expiry);
 			add_header(resp, "Contact", contact);	/* Not when we unregister */
 		}
 	} else if (!ast_strlen_zero(p->our_contact) && resp_needs_contact(msg, p->method)) {
@@ -13256,11 +13257,13 @@ static enum check_auth_result register_verify(struct sip_pvt *p, struct sockaddr
 						res = 0;
 						break;
 					case PARSE_REGISTER_QUERY:
+						ast_string_field_set(p, fullcontact, peer->fullcontact);
 						transmit_response_with_date(p, 200, "200 OK", req);
 						peer->lastmsgssent = -1;
 						res = 0;
 						break;
 					case PARSE_REGISTER_UPDATE:
+						ast_string_field_set(p, fullcontact, peer->fullcontact);
 						update_peer(peer, p->expiry);
 						/* Say OK and ask subsystem to retransmit msg counter */
 						transmit_response_with_date(p, 200, "200 OK", req);
@@ -13294,11 +13297,13 @@ static enum check_auth_result register_verify(struct sip_pvt *p, struct sockaddr
 				res = 0;
 				break;
 			case PARSE_REGISTER_QUERY:
+				ast_string_field_set(p, fullcontact, peer->fullcontact);
 				transmit_response_with_date(p, 200, "200 OK", req);
 				peer->lastmsgssent = -1;
 				res = 0;
 				break;
 			case PARSE_REGISTER_UPDATE:
+				ast_string_field_set(p, fullcontact, peer->fullcontact);
 				/* Say OK and ask subsystem to retransmit msg counter */
 				transmit_response_with_date(p, 200, "200 OK", req);
 				manager_event(EVENT_FLAG_SYSTEM, "PeerStatus", "ChannelType: SIP\r\nPeer: SIP/%s\r\nPeerStatus: Registered\r\nAddress: %s\r\nPort: %d\r\n", peer->name, ast_inet_ntoa(sin->sin_addr), ntohs(sin->sin_port));
@@ -18775,7 +18780,6 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 	struct ast_channel *owner;
 	int sipmethod;
 	int res = 1;
-	int ack_res;
 	const char *c = get_header(req, "Cseq");
 	/* GCC 4.2 complains if I try to cast c as a char * when passing it to ast_skip_nonblanks, so make a copy of it */
 	char *c_copy = ast_strdupa(c);
@@ -18797,16 +18801,20 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 		pbx_builtin_setvar_helper(owner, causevar, causeval);
 	}
 
-	/* Acknowledge whatever it is destined for */
-	if ((resp >= 100) && (resp <= 199)) {
-		ack_res = __sip_semi_ack(p, seqno, 0, sipmethod);
-	} else {
-		ack_res = __sip_ack(p, seqno, 0, sipmethod);
-	}
+	if (p->socket.type == SIP_TRANSPORT_UDP) {
+		int ack_res;
 
-	if (ack_res == FALSE) {
-		append_history(p, "Ignore", "Ignoring this retransmit\n");
-		return;
+		/* Acknowledge whatever it is destined for */
+		if ((resp >= 100) && (resp <= 199)) {
+			ack_res = __sip_semi_ack(p, seqno, 0, sipmethod);
+		} else {
+			ack_res = __sip_ack(p, seqno, 0, sipmethod);
+		}
+
+		if (ack_res == FALSE) {
+			append_history(p, "Ignore", "Ignoring this retransmit\n");
+			return;
+		}
 	}
 
 	/* If this is a NOTIFY for a subscription clear the flag that indicates that we have a NOTIFY pending */
