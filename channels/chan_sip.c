@@ -3883,7 +3883,7 @@ static int __sip_autodestruct(const void *data)
 	}
 
 	/* If there are packets still waiting for delivery, delay the destruction */
-	if(AST_LIST_EMPTY(&p->packets)) {
+	if(!AST_LIST_EMPTY(&p->packets)) {
 		if (!p->needdestroy) {
 			char method_str[31];
 			ast_debug(3, "Re-scheduled destruction of SIP call %s\n", p->callid ? p->callid : "<unknown>");
