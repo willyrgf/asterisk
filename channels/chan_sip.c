@@ -1503,6 +1503,7 @@ struct sip_auth {
 #define SIP_PAGE2_RTAUTOCLEAR		(1 << 2)	/*!< GP: Should we clean memory from peers after expiry? */
 #define SIP_PAGE2_RPID_UPDATE		(1 << 3)
 /* Space for addition of other realtime flags in the future */
+#define SIP_PAGE2_CONSTANT_SSRC         (1 << 7)       /*!< GDP: Don't change SSRC on reinvite */
 #define SIP_PAGE2_SYMMETRICRTP          (1 << 8)        /*!< GDP: Whether symmetric RTP is enabled or not */
 #define SIP_PAGE2_STATECHANGEQUEUE	(1 << 9)	/*!< D: Unsent state pending change exists */
 
@@ -1540,7 +1541,7 @@ struct sip_auth {
 	SIP_PAGE2_VIDEOSUPPORT | SIP_PAGE2_T38SUPPORT | SIP_PAGE2_RFC2833_COMPENSATE | \
 	SIP_PAGE2_BUGGY_MWI | SIP_PAGE2_TEXTSUPPORT | SIP_PAGE2_FAX_DETECT | \
 	SIP_PAGE2_UDPTL_DESTINATION | SIP_PAGE2_VIDEOSUPPORT_ALWAYS | SIP_PAGE2_PREFERRED_CODEC | \
-	SIP_PAGE2_RPID_IMMEDIATE | SIP_PAGE2_RPID_UPDATE | SIP_PAGE2_SYMMETRICRTP)
+	SIP_PAGE2_RPID_IMMEDIATE | SIP_PAGE2_RPID_UPDATE | SIP_PAGE2_SYMMETRICRTP | SIP_PAGE2_CONSTANT_SSRC)
 
 /*@}*/
 
@@ -5190,6 +5191,7 @@ static int create_addr_from_peer(struct sip_pvt *dialog, struct sip_peer *peer)
 	if (dialog->rtp) { /* Audio */
 		ast_rtp_instance_set_prop(dialog->rtp, AST_RTP_PROPERTY_DTMF, ast_test_flag(&dialog->flags[0], SIP_DTMF) == SIP_DTMF_RFC2833);
 		ast_rtp_instance_set_prop(dialog->rtp, AST_RTP_PROPERTY_DTMF_COMPENSATE, ast_test_flag(&dialog->flags[1], SIP_PAGE2_RFC2833_COMPENSATE));
+		ast_rtp_instance_set_prop(dialog->rtp, AST_RTP_PROPERTY_CONSTANT_SSRC, ast_test_flag(&dialog->flags[1], SIP_PAGE2_CONSTANT_SSRC));
 		ast_rtp_instance_set_timeout(dialog->rtp, peer->rtptimeout);
 		ast_rtp_instance_set_hold_timeout(dialog->rtp, peer->rtpholdtimeout);
 		/* Set Frame packetization */
@@ -5199,6 +5201,7 @@ static int create_addr_from_peer(struct sip_pvt *dialog, struct sip_peer *peer)
 	if (dialog->vrtp) { /* Video */
 		ast_rtp_instance_set_timeout(dialog->vrtp, peer->rtptimeout);
 		ast_rtp_instance_set_hold_timeout(dialog->vrtp, peer->rtpholdtimeout);
+		ast_rtp_instance_set_prop(dialog->vrtp, AST_RTP_PROPERTY_CONSTANT_SSRC, ast_test_flag(&dialog->flags[1], SIP_PAGE2_CONSTANT_SSRC));
 	}
 	if (dialog->trtp) { /* Realtime text */
 		ast_rtp_instance_set_timeout(dialog->trtp, peer->rtptimeout);
@@ -20437,6 +20440,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 						sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 					return -1;
 				}
+				ast_queue_control(p->owner, AST_CONTROL_SRCUPDATE);
 			} else {
 				p->jointcapability = p->capability;
 				ast_debug(1, "Hm....  No sdp for the moment\n");
@@ -20486,6 +20490,12 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 				sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 				ast_debug(1, "No compatible codecs for this SIP call.\n");
 				return -1;
+			}
+			if (p->rtp) {
+				ast_rtp_instance_set_prop(p->rtp, AST_RTP_PROPERTY_CONSTANT_SSRC, ast_test_flag(&p->flags[1], SIP_PAGE2_CONSTANT_SSRC));
+			}
+			if (p->vrtp) {
+				ast_rtp_instance_set_prop(p->vrtp, AST_RTP_PROPERTY_CONSTANT_SSRC, ast_test_flag(&p->flags[1], SIP_PAGE2_CONSTANT_SSRC));
 			}
 		} else {	/* No SDP in invite, call control session */
 			p->jointcapability = p->capability;
@@ -23854,6 +23864,9 @@ static int handle_common_options(struct ast_flags *flags, struct ast_flags *mask
 	} else if (!strcasecmp(v->name, "t38pt_usertpsource")) {
 		ast_set_flag(&mask[1], SIP_PAGE2_UDPTL_DESTINATION);
 		ast_set2_flag(&flags[1], ast_true(v->value), SIP_PAGE2_UDPTL_DESTINATION);
+	} else if (!strcasecmp(v->name, "constantssrc")) {
+		ast_set_flag(&mask[1], SIP_PAGE2_CONSTANT_SSRC);
+		ast_set2_flag(&flags[1], ast_true(v->value), SIP_PAGE2_CONSTANT_SSRC);
 	} else
 		res = 0;
 
@@ -25357,6 +25370,8 @@ static int reload_config(enum channelreloadreason reason)
 		} else if (!strcasecmp(v->name, "disallowed_methods")) {
 			char *disallow = ast_strdupa(v->value);
 			mark_parsed_methods(&sip_cfg.disallowed_methods, disallow);
+		} else if (!strcasecmp(v->name, "constantssrc")) {
+			ast_set2_flag(&global_flags[1], ast_true(v->value), SIP_PAGE2_CONSTANT_SSRC);
 		}
 	}
 
