@@ -660,6 +660,11 @@ static void ast_rtp_new_source(struct ast_rtp_instance *instance)
 	/* We simply set this bit so that the next packet sent will have the marker bit turned on */
 	ast_set_flag(rtp, FLAG_NEED_MARKER_BIT);
 
+	if (!ast_rtp_instance_get_prop(instance, AST_RTP_PROPERTY_CONSTANT_SSRC)) {
+		ast_log(LOG_ERROR, "Changing ssrc\n");
+		rtp->ssrc = ast_random();
+	}
+
 	return;
 }
 
