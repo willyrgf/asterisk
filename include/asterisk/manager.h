@@ -126,7 +126,25 @@ int astman_verify_session_writepermissions(uint32_t ident, int perm);
 	\param event	Event name
 	\param contents	Contents of event
 */
-int __attribute__((format(printf, 3,4))) manager_event(int category, const char *event, const char *contents, ...);
+
+#define manager_event(category, event, contents, ...) __ast_channel_manager_event(category, event, 0, NULL, contents, ## __VA_ARGS__)
+#define ast_channel_manager_event(chan1, chan2, category, event, contents, ...)  \
+	do { \
+		struct ast_channel *_chans[] = { chan1, chan2 }; \
+		__ast_channel_manager_event(category, event, 2, _chans, contents , ## __VA_ARGS__); \
+	} while (0)
+
+/*! External routines may send asterisk manager events this way
+ * \param chan1 First channel related to this event (or NULL if none are relevant)
+ * \param chan2 Second channel related to this event (or NULL if none are relevant)
+ * \param category Event category, matches manager authorization
+ * \param event Event name
+ * \param contents Format string describing event
+ * \since 1.4-edv
+*/
+int __ast_channel_manager_event(int category, const char *event, int chancount,
+		struct ast_channel **chans, const char *contents, ...);
+		//struct ast_channel **chans, const char *contents, ...) __attribute__((format(printf, 6, 7)));
 
 /*! Get header from mananger transaction */
 const char *astman_get_header(const struct message *m, char *var);

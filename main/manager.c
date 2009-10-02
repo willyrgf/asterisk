@@ -97,6 +97,17 @@ struct eventqent {
 	char eventdata[1];
 };
 
+struct manager_channel_variable {
+	AST_LIST_ENTRY(manager_channel_variable) entry;
+	unsigned int isfunc:1;
+	char name[0]; /* allocate off the end the real size. */
+};
+
+/* Forward declaration */
+static void free_channelvars(void);
+
+static AST_RWLIST_HEAD_STATIC(channelvars, manager_channel_variable);
+
 static int enabled;
 static int portno = DEFAULT_MANAGER_PORT;
 static int asock = -1;
@@ -116,6 +127,9 @@ AST_THREADSTORAGE(manager_event_buf, manager_event_buf_init);
 
 AST_THREADSTORAGE(astman_append_buf, astman_append_buf_init);
 #define ASTMAN_APPEND_BUF_INITSIZE   256
+
+	
+AST_THREADSTORAGE(manager_event_funcbuf);
 
 static struct permalias {
 	int num;
@@ -247,6 +261,27 @@ static AST_LIST_HEAD_STATIC(users, ast_manager_user);
 
 static struct manager_action *first_action;
 AST_RWLOCK_DEFINE_STATIC(actionlock);
+
+static void append_channel_vars(struct ast_str **pbuf, struct ast_channel *chan)
+{
+	struct manager_channel_variable *var;
+	AST_RWLIST_RDLOCK(&channelvars);
+	AST_LIST_TRAVERSE(&channelvars, var, entry) {
+		const char *val = "";
+		if (var->isfunc) {
+			struct ast_str *res = ast_str_thread_get(&manager_event_funcbuf, 16);
+			int ret;
+			if (res && (ret = ast_func_read2(chan, var->name, &res, 0)) == 0) {
+				val = ast_str_buffer(res);
+			}
+		} else {
+			val = pbx_builtin_getvar_helper(chan, var->name);
+		}
+		ast_str_append(pbuf, 0, "ChanVariable(%s): %s=%s\r\n", chan->name, var->name, val ? val : "");
+	}
+	AST_RWLIST_UNLOCK(&channelvars);
+}
+
 
 /*! \brief Convert authority code to string with serveral options */
 static char *authority_to_str(int authority, char *res, int reslen)
@@ -1867,7 +1902,7 @@ static void *fast_originate(void *data)
 	if (!chan)
 		snprintf(requested_channel, AST_CHANNEL_NAME, "%s/%s", in->tech, in->data);	
 	/* Tell the manager what happened with the channel */
-	manager_event(EVENT_FLAG_CALL, "OriginateResponse",
+	ast_channel_manager_event(chan ? chan : NULL, NULL, EVENT_FLAG_CALL, "OriginateResponse",
 		"%s%s"
 		"Response: %s\r\n"
 		"Channel: %s\r\n"
@@ -2555,13 +2590,14 @@ static int append_event(const char *str, int category)
 }
 
 /*! \brief  manager_event: Send AMI event to client */
-int manager_event(int category, const char *event, const char *fmt, ...)
+int __ast_channel_manager_event(int category, const char *event, int chancount, struct ast_channel **chans, const char *fmt, ...)
 {
 	struct mansession_session *s;
 	char auth[80];
 	va_list ap;
 	struct timeval now;
 	struct ast_dynamic_str *buf;
+	int i;
 
 	/* Abort if there aren't any manager sessions */
 	if (!num_sessions)
@@ -2584,6 +2620,10 @@ int manager_event(int category, const char *event, const char *fmt, ...)
 	va_start(ap, fmt);
 	ast_dynamic_str_thread_append_va(&buf, 0, &manager_event_buf, fmt, ap);
 	va_end(ap);
+
+	for (i = 0; i < chancount; i++) {
+		append_channel_vars(&buf, chans[i]);
+	}
 	
 	ast_dynamic_str_thread_append(&buf, 0, &manager_event_buf, "\r\n");	
 	
@@ -3006,6 +3046,18 @@ struct ast_http_uri managerxmluri = {
 	.callback = mxml_http_callback,
 };
 
+
+/* clear out every entry in the channelvar list */
+static void free_channelvars(void)
+{
+	struct manager_channel_variable *var;
+	AST_RWLIST_WRLOCK(&channelvars);
+	while ((var = AST_RWLIST_REMOVE_HEAD(&channelvars, entry))) {
+		ast_free(var);
+	}
+	AST_RWLIST_UNLOCK(&channelvars);
+}
+
 static int registered = 0;
 static int webregged = 0;
 
@@ -3084,6 +3136,22 @@ int init_manager(void)
 
 	if ((val = ast_variable_retrieve(cfg, "general", "httptimeout")))
 		newhttptimeout = atoi(val);
+	if ((val = ast_variable_retrieve(cfg, "general", "channelvars"))) {
+		struct manager_channel_variable *mcv;
+			char *remaining = ast_strdupa(val), *next;
+			AST_RWLIST_WRLOCK(&channelvars);
+			while ((next = strsep(&remaining, ",|"))) {
+				if (!(mcv = ast_calloc(1, sizeof(*mcv) + strlen(next) + 1))) {
+					break;
+				}
+				strcpy(mcv->name, next); /* SAFE */
+				if (strchr(next, '(')) {
+					mcv->isfunc = 1;
+				}
+				AST_RWLIST_INSERT_TAIL(&channelvars, mcv, entry);
+			}
+			AST_RWLIST_UNLOCK(&channelvars);
+	}
 
 	memset(&ba, 0, sizeof(ba));
 	ba.sin_family = AF_INET;

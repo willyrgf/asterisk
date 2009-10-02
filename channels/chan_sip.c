@@ -5209,7 +5209,7 @@ static void change_hold_state(struct sip_pvt *dialog, struct sip_request *req, i
 	if (global_notifyhold && (!holdstate || !ast_test_flag(&dialog->flags[1], SIP_PAGE2_CALL_ONHOLD)))
 		sip_peer_hold(dialog, holdstate);
 	if (global_callevents)
-		manager_event(EVENT_FLAG_CALL, holdstate ? "Hold" : "Unhold",
+		ast_channel_manager_event(dialog->owner, NULL, EVENT_FLAG_CALL, holdstate ? "Hold" : "Unhold",
 			      "Channel: %s\r\n"
 			      "Uniqueid: %s\r\n",
 			      dialog->owner->name, 

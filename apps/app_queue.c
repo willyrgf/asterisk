@@ -1487,7 +1487,7 @@ static int join_queue(char *queuename, struct queue_ent *qe, enum queue_result *
 		ast_copy_string(qe->context, q->context, sizeof(qe->context));
 		q->count++;
 		res = 0;
-		manager_event(EVENT_FLAG_CALL, "Join",
+		ast_channel_manager_event(qe->chan, NULL, EVENT_FLAG_CALL, "Join",
 			"Channel: %s\r\nCallerID: %s\r\nCallerIDName: %s\r\nQueue: %s\r\nPosition: %d\r\nCount: %d\r\nUniqueid: %s\r\n",
 			qe->chan->name,
 			S_OR(qe->chan->cid.cid_num, "unknown"), /* XXX somewhere else it is <unknown> */
@@ -1694,7 +1694,7 @@ static void leave_queue(struct queue_ent *qe)
 			q->count--;
 
 			/* Take us out of the queue */
-			manager_event(EVENT_FLAG_CALL, "Leave",
+			ast_channel_manager_event(qe->chan, NULL, EVENT_FLAG_CALL, "Leave",
 				"Channel: %s\r\nQueue: %s\r\nCount: %d\r\nUniqueid: %s\r\n",
 				qe->chan->name, q->name,  q->count, qe->chan->uniqueid);
 			if (option_debug)

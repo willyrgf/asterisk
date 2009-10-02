@@ -5147,7 +5147,7 @@ static int notify_new_message(struct ast_channel *chan, struct ast_vm_user *vmu,
 	if (ast_app_has_voicemail(ext_context, NULL)) {
 		ast_app_inboxcount(ext_context, &newmsgs, &oldmsgs);
 	}
-	manager_event(EVENT_FLAG_CALL, "MessageWaiting", "Mailbox: %s@%s\r\nWaiting: %d\r\nNew: %d\r\nOld: %d\r\n", vmu->mailbox, vmu->context, ast_app_has_voicemail(ext_context, NULL), newmsgs, oldmsgs);
+	ast_channel_manager_event(chan, NULL, EVENT_FLAG_CALL, "MessageWaiting", "Mailbox: %s@%s\r\nWaiting: %d\r\nNew: %d\r\nOld: %d\r\n", vmu->mailbox, vmu->context, ast_app_has_voicemail(ext_context, NULL), newmsgs, oldmsgs);
 	run_externnotify(vmu->context, vmu->mailbox);
 	return 0;
 }
@@ -7877,7 +7877,7 @@ out:
 		close_mailbox(&vms, vmu);
 	if (valid) {
 		snprintf(ext_context, sizeof(ext_context), "%s@%s", vms.username, vmu->context);
-		manager_event(EVENT_FLAG_CALL, "MessageWaiting", "Mailbox: %s\r\nWaiting: %d\r\n", ext_context, has_voicemail(ext_context, NULL));
+		ast_channel_manager_event(chan, NULL, EVENT_FLAG_CALL, "MessageWaiting", "Mailbox: %s\r\nWaiting: %d\r\n", ext_context, has_voicemail(ext_context, NULL));
 		run_externnotify(vmu->context, vmu->mailbox);
 	}
 #ifdef IMAP_STORAGE

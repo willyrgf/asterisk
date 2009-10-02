@@ -1818,7 +1818,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 	ast_log(LOG_DEBUG, "Placed channel %s in %s conf %d\n", chan->name, dahdi_chan_name, conf->zapconf);
 
 	if (!sent_event) {
-		manager_event(EVENT_FLAG_CALL, "MeetmeJoin", 
+		ast_channel_manager_event(chan, NULL, EVENT_FLAG_CALL, "MeetmeJoin", 
 			      "Channel: %s\r\n"
 			      "Uniqueid: %s\r\n"
 			      "Meetme: %s\r\n"
@@ -1993,7 +1993,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 					break;
 				}
 
-				manager_event(EVENT_FLAG_CALL, "MeetmeMute", 
+				ast_channel_manager_event(chan, NULL, EVENT_FLAG_CALL, "MeetmeMute", 
 						"Channel: %s\r\n"
 						"Uniqueid: %s\r\n"
 						"Meetme: %s\r\n"
@@ -2011,7 +2011,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 					break;
 				}
 
-				manager_event(EVENT_FLAG_CALL, "MeetmeMute", 
+				ast_channel_manager_event(chan, NULL, EVENT_FLAG_CALL, "MeetmeMute", 
 						"Channel: %s\r\n"
 						"Uniqueid: %s\r\n"
 						"Meetme: %s\r\n"
@@ -2074,7 +2074,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 						if (!user->talking && totalsilence < MEETME_DELAYDETECTTALK) {
 							user->talking = 1;
 							if (confflags & CONFFLAG_MONITORTALKER)
-								manager_event(EVENT_FLAG_CALL, "MeetmeTalking",
+								ast_channel_manager_event(chan, NULL, EVENT_FLAG_CALL, "MeetmeTalking",
 								      "Channel: %s\r\n"
 								      "Uniqueid: %s\r\n"
 								      "Meetme: %s\r\n"
@@ -2085,7 +2085,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 						if (user->talking && totalsilence > MEETME_DELAYDETECTENDTALK) {
 							user->talking = 0;
 							if (confflags & CONFFLAG_MONITORTALKER)
-								manager_event(EVENT_FLAG_CALL, "MeetmeTalking",
+								ast_channel_manager_event(chan, NULL, EVENT_FLAG_CALL, "MeetmeTalking",
 								      "Channel: %s\r\n"
 								      "Uniqueid: %s\r\n"
 								      "Meetme: %s\r\n"
@@ -2441,7 +2441,7 @@ bailoutandtrynormal:
 		sec = (now - user->jointime) % 60;
 
 		if (sent_event) {
-			manager_event(EVENT_FLAG_CALL, "MeetmeLeave",
+			ast_channel_manager_event(chan, NULL, EVENT_FLAG_CALL, "MeetmeLeave",
 				      "Channel: %s\r\n"
 				      "Uniqueid: %s\r\n"
 				      "Meetme: %s\r\n"

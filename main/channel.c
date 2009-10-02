@@ -881,7 +881,7 @@ alertpipe_failed:
 	 * a lot of data into this func to do it here!
 	 */
 	if (!ast_strlen_zero(name_fmt)) {
-		manager_event(EVENT_FLAG_CALL, "Newchannel",
+		ast_channel_manager_event(chan, NULL, EVENT_FLAG_CALL, "Newchannel",
 		      "Channel: %s\r\n"
 		      "State: %s\r\n"
 		      "CallerIDNum: %s\r\n"
@@ -1570,7 +1570,7 @@ int ast_hangup(struct ast_channel *chan)
 	}
 			
 	ast_channel_unlock(chan);
-	manager_event(EVENT_FLAG_CALL, "Hangup",
+	ast_channel_manager_event(chan, NULL, EVENT_FLAG_CALL, "Hangup",
 			"Channel: %s\r\n"
 			"Uniqueid: %s\r\n"
 			"Cause: %d\r\n"
@@ -3687,7 +3687,7 @@ retrymasq:
 
 void ast_change_name(struct ast_channel *chan, char *newname)
 {
-	manager_event(EVENT_FLAG_CALL, "Rename", "Oldname: %s\r\nNewname: %s\r\nUniqueid: %s\r\n", chan->name, newname, chan->uniqueid);
+	ast_channel_manager_event(chan, NULL, EVENT_FLAG_CALL, "Rename", "Oldname: %s\r\nNewname: %s\r\nUniqueid: %s\r\n", chan->name, newname, chan->uniqueid);
 	ast_string_field_set(chan, name, newname);
 }
 
@@ -3765,7 +3765,7 @@ static void clone_variables(struct ast_channel *original, struct ast_channel *cl
  */
 static void report_new_callerid(const struct ast_channel *chan)
 {
-	manager_event(EVENT_FLAG_CALL, "Newcallerid",
+	ast_channel_manager_event(chan, NULL, EVENT_FLAG_CALL, "Newcallerid",
 				"Channel: %s\r\n"
 				"CallerID: %s\r\n"
 				"CallerIDName: %s\r\n"
@@ -3842,8 +3842,8 @@ int ast_do_masquerade(struct ast_channel *original)
 	ast_string_field_set(clone, name, masqn);
 	
 	/* Notify any managers of the change, first the masq then the other */
-	manager_event(EVENT_FLAG_CALL, "Rename", "Oldname: %s\r\nNewname: %s\r\nUniqueid: %s\r\n", newn, masqn, clone->uniqueid);
-	manager_event(EVENT_FLAG_CALL, "Rename", "Oldname: %s\r\nNewname: %s\r\nUniqueid: %s\r\n", orig, newn, original->uniqueid);
+	ast_channel_manager_event(chan, NULL, EVENT_FLAG_CALL, "Rename", "Oldname: %s\r\nNewname: %s\r\nUniqueid: %s\r\n", newn, masqn, clone->uniqueid);
+	ast_channel_manager_event(chan, NULL, EVENT_FLAG_CALL, "Rename", "Oldname: %s\r\nNewname: %s\r\nUniqueid: %s\r\n", orig, newn, original->uniqueid);
 
 	/* Swap the technologies */	
 	t = original->tech;
@@ -3932,7 +3932,7 @@ int ast_do_masquerade(struct ast_channel *original)
 	snprintf(zombn, sizeof(zombn), "%s<ZOMBIE>", orig);
 	/* Mangle the name of the clone channel */
 	ast_string_field_set(clone, name, zombn);
-	manager_event(EVENT_FLAG_CALL, "Rename", "Oldname: %s\r\nNewname: %s\r\nUniqueid: %s\r\n", masqn, zombn, clone->uniqueid);
+	ast_channel_manager_event(chan, NULL, EVENT_FLAG_CALL, "Rename", "Oldname: %s\r\nNewname: %s\r\nUniqueid: %s\r\n", masqn, zombn, clone->uniqueid);
 
 	/* Update the type. */
 	t_pvt = original->monitor;
@@ -4037,7 +4037,7 @@ int ast_do_masquerade(struct ast_channel *original)
 		if (option_debug)
 			ast_log(LOG_DEBUG, "Destroying channel clone '%s'\n", clone->name);
 		ast_channel_unlock(clone);
-		manager_event(EVENT_FLAG_CALL, "Hangup",
+		ast_channel_manager_event(clone, NULL, EVENT_FLAG_CALL, "Hangup",
 			"Channel: %s\r\n"
 			"Uniqueid: %s\r\n"
 			"Cause: %d\r\n"
@@ -4105,7 +4105,7 @@ int ast_setstate(struct ast_channel *chan, enum ast_channel_state state)
 	chan->_state = state;
 	ast_device_state_changed_literal(name);
 	/* setstate used to conditionally report Newchannel; this is no more */
-	manager_event(EVENT_FLAG_CALL,
+	ast_channel_manager_event(chan, NULL, EVENT_FLAG_CALL,
 		      "Newstate",
 		      "Channel: %s\r\n"
 		      "State: %s\r\n"
@@ -4415,7 +4415,7 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 	c1->_bridge = c0;
 
 	/* \todo  XXX here should check that cid_num is not NULL */
-	manager_event(EVENT_FLAG_CALL, "Link",
+	ast_channel_manager_event(c0, c1, EVENT_FLAG_CALL, "Link",
 		      "Channel1: %s\r\n"
 		      "Channel2: %s\r\n"
 		      "Uniqueid1: %s\r\n"
@@ -4538,7 +4538,7 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 			ast_set_flag(c1, AST_FLAG_NBRIDGE);
 			if ((res = c0->tech->bridge(c0, c1, config->flags, fo, rc, to)) == AST_BRIDGE_COMPLETE) {
 				/* \todo  XXX here should check that cid_num is not NULL */
-				manager_event(EVENT_FLAG_CALL, "Unlink",
+				ast_channel_manager_event(c0, c1, EVENT_FLAG_CALL, "Unlink",
 					      "Channel1: %s\r\n"
 					      "Channel2: %s\r\n"
 					      "Uniqueid1: %s\r\n"
@@ -4586,7 +4586,7 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 			if (ast_channel_make_compatible(c0, c1)) {
 				ast_log(LOG_WARNING, "Can't make %s and %s compatible\n", c0->name, c1->name);
 				/* \todo  XXX here should check that cid_num is not NULL */
-                                manager_event(EVENT_FLAG_CALL, "Unlink",
+                                ast_channel_manager_event(c0, c1, EVENT_FLAG_CALL, "Unlink",
 					      "Channel1: %s\r\n"
 					      "Channel2: %s\r\n"
 					      "Uniqueid1: %s\r\n"
@@ -4622,7 +4622,7 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 	c1->_bridge = NULL;
 
 	/* \todo  XXX here should check that cid_num is not NULL */
-	manager_event(EVENT_FLAG_CALL, "Unlink",
+	ast_channel_manager_event(c0, c1, EVENT_FLAG_CALL, "Unlink",
 		      "Channel1: %s\r\n"
 		      "Channel2: %s\r\n"
 		      "Uniqueid1: %s\r\n"
