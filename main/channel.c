@@ -881,7 +881,7 @@ alertpipe_failed:
 	 * a lot of data into this func to do it here!
 	 */
 	if (!ast_strlen_zero(name_fmt)) {
-		ast_channel_manager_event(chan, NULL, EVENT_FLAG_CALL, "Newchannel",
+		ast_channel_manager_event(tmp, NULL, EVENT_FLAG_CALL, "Newchannel",
 		      "Channel: %s\r\n"
 		      "State: %s\r\n"
 		      "CallerIDNum: %s\r\n"
@@ -3842,8 +3842,8 @@ int ast_do_masquerade(struct ast_channel *original)
 	ast_string_field_set(clone, name, masqn);
 	
 	/* Notify any managers of the change, first the masq then the other */
-	ast_channel_manager_event(chan, NULL, EVENT_FLAG_CALL, "Rename", "Oldname: %s\r\nNewname: %s\r\nUniqueid: %s\r\n", newn, masqn, clone->uniqueid);
-	ast_channel_manager_event(chan, NULL, EVENT_FLAG_CALL, "Rename", "Oldname: %s\r\nNewname: %s\r\nUniqueid: %s\r\n", orig, newn, original->uniqueid);
+	ast_channel_manager_event(clone, NULL, EVENT_FLAG_CALL, "Rename", "Oldname: %s\r\nNewname: %s\r\nUniqueid: %s\r\n", newn, masqn, clone->uniqueid);
+	ast_channel_manager_event(original, NULL, EVENT_FLAG_CALL, "Rename", "Oldname: %s\r\nNewname: %s\r\nUniqueid: %s\r\n", orig, newn, original->uniqueid);
 
 	/* Swap the technologies */	
 	t = original->tech;
@@ -3932,7 +3932,7 @@ int ast_do_masquerade(struct ast_channel *original)
 	snprintf(zombn, sizeof(zombn), "%s<ZOMBIE>", orig);
 	/* Mangle the name of the clone channel */
 	ast_string_field_set(clone, name, zombn);
-	ast_channel_manager_event(chan, NULL, EVENT_FLAG_CALL, "Rename", "Oldname: %s\r\nNewname: %s\r\nUniqueid: %s\r\n", masqn, zombn, clone->uniqueid);
+	ast_channel_manager_event(clone, NULL, EVENT_FLAG_CALL, "Rename", "Oldname: %s\r\nNewname: %s\r\nUniqueid: %s\r\n", masqn, zombn, clone->uniqueid);
 
 	/* Update the type. */
 	t_pvt = original->monitor;
