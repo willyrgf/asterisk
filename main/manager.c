@@ -129,7 +129,7 @@ AST_THREADSTORAGE(astman_append_buf, astman_append_buf_init);
 #define ASTMAN_APPEND_BUF_INITSIZE   256
 
 	
-AST_THREADSTORAGE(manager_event_buf, manager_event_funcbuf);
+AST_THREADSTORAGE(manager_event_funcbuf, manager_event_funcbuf_init);
 
 static struct permalias {
 	int num;
@@ -272,7 +272,7 @@ static void append_channel_vars(struct ast_dynamic_str **pbuf, struct ast_channe
 			//struct ast_dynamic_str *res = ast_dynamic_str_thread_get(&manager_event_funcbuf, 16);
 			//int ret;
 			//if (res && (ret = ast_func_read2(chan, var->name, &res, 0)) == 0) {
-				//val = ast_str_buffer(res);
+				//val = ast_dynamic_str_buffer(res);
 			//}
 		//} else {
 			val = pbx_builtin_getvar_helper(chan, var->name);
@@ -3104,6 +3104,7 @@ int init_manager(void)
 	}
 	portno = DEFAULT_MANAGER_PORT;
 	displayconnects = 1;
+	free_channelvars();
 	cfg = ast_config_load("manager.conf");
 	if (!cfg) {
 		ast_log(LOG_NOTICE, "Unable to open management configuration manager.conf.  Call management disabled.\n");
