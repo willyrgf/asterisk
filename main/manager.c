@@ -268,15 +268,15 @@ static void append_channel_vars(struct ast_dynamic_str **pbuf, struct ast_channe
 	AST_RWLIST_RDLOCK(&channelvars);
 	AST_LIST_TRAVERSE(&channelvars, var, entry) {
 		const char *val = "";
-		if (var->isfunc) {
-			struct ast_dynamic_str *res = ast_dynamic_str_thread_get(&manager_event_funcbuf, 16);
-			int ret;
-			if (res && (ret = ast_func_read2(chan, var->name, &res, 0)) == 0) {
-				val = ast_str_buffer(res);
-			}
-		} else {
+		//if (var->isfunc) {
+			//struct ast_dynamic_str *res = ast_dynamic_str_thread_get(&manager_event_funcbuf, 16);
+			//int ret;
+			//if (res && (ret = ast_func_read2(chan, var->name, &res, 0)) == 0) {
+				//val = ast_str_buffer(res);
+			//}
+		//} else {
 			val = pbx_builtin_getvar_helper(chan, var->name);
-		}
+		//}
 		ast_dynamic_str_append(pbuf, 0, "ChanVariable(%s): %s=%s\r\n", chan->name, var->name, val ? val : "");
 	}
 	AST_RWLIST_UNLOCK(&channelvars);
