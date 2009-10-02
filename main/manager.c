@@ -265,9 +265,11 @@ AST_RWLOCK_DEFINE_STATIC(actionlock);
 static void append_channel_vars(struct ast_dynamic_str **pbuf, struct ast_channel *chan)
 {
 	struct manager_channel_variable *var;
+
 	AST_RWLIST_RDLOCK(&channelvars);
 	AST_LIST_TRAVERSE(&channelvars, var, entry) {
 		const char *val = "";
+		ast_log(LOG_DEBUG, "------ Looking for %s\n", var->name);
 		//if (var->isfunc) {
 			//struct ast_dynamic_str *res = ast_dynamic_str_thread_get(&manager_event_funcbuf, 16);
 			//int ret;
@@ -2599,6 +2601,8 @@ int __ast_channel_manager_event(int category, const char *event, int chancount, 
 	struct ast_dynamic_str *buf;
 	int i;
 
+	ast_log(LOG_DEBUG, "----- About to send manager event\n");
+
 	/* Abort if there aren't any manager sessions */
 	if (!num_sessions)
 		return 0;
@@ -2620,9 +2624,11 @@ int __ast_channel_manager_event(int category, const char *event, int chancount, 
 	va_start(ap, fmt);
 	ast_dynamic_str_thread_append_va(&buf, 0, &manager_event_buf, fmt, ap);
 	va_end(ap);
+	ast_log(LOG_DEBUG, "----- About to append channel variables to event -- channels = %d\n", chancount);
 
 	for (i = 0; i < chancount; i++) {
-		append_channel_vars(&buf, chans[i]);
+		if (chans[i] != NULL)
+			append_channel_vars(&buf, chans[i]);
 	}
 	
 	ast_dynamic_str_thread_append(&buf, 0, &manager_event_buf, "\r\n");	
@@ -3139,19 +3145,19 @@ int init_manager(void)
 		newhttptimeout = atoi(val);
 	if ((val = ast_variable_retrieve(cfg, "general", "channelvars"))) {
 		struct manager_channel_variable *mcv;
-			char *remaining = ast_strdupa(val), *next;
-			AST_RWLIST_WRLOCK(&channelvars);
-			while ((next = strsep(&remaining, ",|"))) {
-				if (!(mcv = ast_calloc(1, sizeof(*mcv) + strlen(next) + 1))) {
-					break;
-				}
-				strcpy(mcv->name, next); /* SAFE */
-				if (strchr(next, '(')) {
-					mcv->isfunc = 1;
-				}
-				AST_RWLIST_INSERT_TAIL(&channelvars, mcv, entry);
+		char *remaining = ast_strdupa(val), *next;
+		AST_RWLIST_WRLOCK(&channelvars);
+		while ((next = strsep(&remaining, ",|"))) {
+			if (!(mcv = ast_calloc(1, sizeof(*mcv) + strlen(next) + 1))) {
+				break;
 			}
-			AST_RWLIST_UNLOCK(&channelvars);
+			strcpy(mcv->name, next); /* SAFE */
+			if (strchr(next, '(')) {
+				mcv->isfunc = 1;
+			}
+			AST_RWLIST_INSERT_TAIL(&channelvars, mcv, entry);
+		}
+		AST_RWLIST_UNLOCK(&channelvars);
 	}
 
 	memset(&ba, 0, sizeof(ba));

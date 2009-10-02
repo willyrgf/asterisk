@@ -127,7 +127,9 @@ int astman_verify_session_writepermissions(uint32_t ident, int perm);
 	\param contents	Contents of event
 */
 
+/*! \brief Manager event handling (with no ast_chan connections */
 #define manager_event(category, event, contents, ...) __ast_channel_manager_event(category, event, 0, NULL, contents, ## __VA_ARGS__)
+
 #define ast_channel_manager_event(chan1, chan2, category, event, contents, ...)  \
 	do { \
 		struct ast_channel *_chans[] = { chan1, chan2 }; \
