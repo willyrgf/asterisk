@@ -189,6 +189,7 @@ AST_EXT_LIB_SETUP([IKSEMEL], [Iksemel Jabber Library], [iksemel])
 AST_EXT_LIB_SETUP([IMAP_TK], [UW IMAP Toolkit], [imap])
 AST_EXT_LIB_SETUP([ISDNNET], [ISDN4Linux Library], [isdnnet])
 AST_EXT_LIB_SETUP([KDE], [KDE], [kde])
+AST_EXT_LIB_SETUP([LDAP], [OpenLDAP], [ldap])
 AST_EXT_LIB_SETUP([LTDL], [libtool], [ltdl])
 AST_EXT_LIB_SETUP([MISDN], [mISDN User Library], [misdn])
 AST_EXT_LIB_SETUP([NBS], [Network Broadcast Sound], [nbs])
@@ -1167,6 +1168,8 @@ if test "${PBX_KDE}" = 1; then
 fi
 
 AC_LANG_POP
+
+AST_EXT_LIB_CHECK([LDAP], [ldap], [ldap_initialize], [ldap.h])
 
 AST_EXT_LIB_CHECK([MISDN], [mISDN], [mISDN_open], [mISDNuser/mISDNlib.h])
 
