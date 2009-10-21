@@ -554,6 +554,7 @@ static int global_rtpholdtimeout;
 static int global_rtpkeepalive;		/*!< Send RTP keepalives */
 static int global_reg_timeout;	
 static int global_regattempts_max;	/*!< Registration attempts before giving up */
+static int global_shrinkcallerid;	/*!< enable or disable shrinking of caller id  */
 static int global_allowguest;		/*!< allow unauthenticated users/peers to connect? */
 static int global_allowsubscribe;	/*!< Flag for disabling ALL subscriptions, this is FALSE only if all peers are FALSE 
 					    the global setting is in globals_flags[1] */
@@ -10023,7 +10024,7 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 			<sip:8164444422;phone-context=+1@1.2.3.4:5060;user=phone;tag=SDadkoa01-gK0c3bdb43>
 		*/
 		tmp = strsep(&tmp, ";");
-		if (ast_is_shrinkable_phonenumber(tmp))
+		if (global_shrinkcallerid && ast_is_shrinkable_phonenumber(tmp))
 			ast_shrink_phone_number(tmp);
 		ast_string_field_set(p, cid_num, tmp);
 	}
@@ -10056,7 +10057,7 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 			if (*calleridname)
 				ast_string_field_set(p, cid_name, calleridname);
 			tmp = ast_strdupa(rpid_num);
-			if (ast_is_shrinkable_phonenumber(tmp))
+			if (global_shrinkcallerid && ast_is_shrinkable_phonenumber(tmp))
 				ast_shrink_phone_number(tmp);
 			ast_string_field_set(p, cid_num, tmp);
 		}
@@ -10079,7 +10080,7 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 				ast_string_field_set(p, context, user->context);
 			if (!ast_strlen_zero(user->cid_num)) {
 				char *tmp = ast_strdupa(user->cid_num);
-				if (ast_is_shrinkable_phonenumber(tmp))
+				if (global_shrinkcallerid && ast_is_shrinkable_phonenumber(tmp))
 					ast_shrink_phone_number(tmp);
 				ast_string_field_set(p, cid_num, tmp);
 			}
@@ -10166,7 +10167,7 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 				char *tmp = ast_strdupa(rpid_num);
 				if (*calleridname)
 					ast_string_field_set(p, cid_name, calleridname);
-				if (ast_is_shrinkable_phonenumber(tmp))
+				if (global_shrinkcallerid && ast_is_shrinkable_phonenumber(tmp))
 					ast_shrink_phone_number(tmp);
 				ast_string_field_set(p, cid_num, tmp);
 			}
@@ -10216,7 +10217,7 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 				}
 				if (!ast_strlen_zero(peer->cid_num)) {
 					char *tmp = ast_strdupa(peer->cid_num);
-					if (ast_is_shrinkable_phonenumber(tmp))
+					if (global_shrinkcallerid && ast_is_shrinkable_phonenumber(tmp))
 						ast_shrink_phone_number(tmp);
 					ast_string_field_set(p, cid_num, tmp);
 				}
@@ -10266,10 +10267,10 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 				char *tmp = ast_strdupa(rpid_num);
 				if (*calleridname)
 					ast_string_field_set(p, cid_name, calleridname);
-				if (ast_is_shrinkable_phonenumber(tmp))
+				if (global_shrinkcallerid && ast_is_shrinkable_phonenumber(tmp))
 					ast_shrink_phone_number(tmp);
 				ast_string_field_set(p, cid_num, tmp);
-                        }
+			}
 		}
 
 	}
@@ -18221,7 +18222,8 @@ static int reload_config(enum channelreloadreason reason)
 	/* Misc settings for the channel */
 	global_relaxdtmf = FALSE;
 	global_callevents = FALSE;
-	global_t1min = DEFAULT_T1MIN;		
+	global_t1min = DEFAULT_T1MIN;
+	global_shrinkcallerid = 1;
 
 	global_matchexterniplocally = FALSE;
 
@@ -18476,6 +18478,14 @@ static int reload_config(enum channelreloadreason reason)
 			global_matchexterniplocally = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "constantssrc")) {
 			ast_set2_flag(&global_flags[1], ast_true(v->value), SIP_PAGE2_CONSTANT_SSRC);
+		} else if (!strcasecmp(v->name, "shrinkcallerid")) {
+			if (ast_true(v->value)) {
+				global_shrinkcallerid = 1;
+			} else if (ast_false(v->value)) {
+				global_shrinkcallerid = 0;
+			} else {
+				ast_log(LOG_WARNING, "shrinkcallerid value %s is not valid at line %d.\n", v->value, v->lineno);
+			}
 		}
 	}
 
