@@ -397,7 +397,7 @@ void *__ao2_link(struct ao2_container *c, void *user_data, int iax2_hack)
 	if (!p)
 		return NULL;
 
-	i = c->hash_fn(user_data, OBJ_POINTER);
+	i = abs(c->hash_fn(user_data, OBJ_POINTER));
 
 	ao2_lock(c);
 	i %= c->n_buckets;
@@ -580,8 +580,19 @@ struct ao2_iterator ao2_iterator_init(struct ao2_container *c, int flags)
 		.c = c,
 		.flags = flags
 	};
+
+	ao2_ref(c, +1);
 	
 	return a;
+}
+
+/*!
+ * destroy an iterator
+ */
+void ao2_iterator_destroy(struct ao2_iterator *i)
+{
+	ao2_ref(i->c, -1);
+	i->c = NULL;
 }
 
 /*
@@ -596,7 +607,7 @@ void * ao2_iterator_next(struct ao2_iterator *a)
 	if (INTERNAL_OBJ(a->c) == NULL)
 		return NULL;
 
-	if (!(a->flags & F_AO2I_DONTLOCK))
+	if (!(a->flags & AO2_ITERATOR_DONTLOCK))
 		ao2_lock(a->c);
 
 	/* optimization. If the container is unchanged and
@@ -637,7 +648,7 @@ found:
 		ao2_ref(ret, 1);
 	}
 
-	if (!(a->flags & F_AO2I_DONTLOCK))
+	if (!(a->flags & AO2_ITERATOR_DONTLOCK))
 		ao2_unlock(a->c);
 
 	return ret;

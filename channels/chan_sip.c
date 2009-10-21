@@ -3910,8 +3910,7 @@ static int sip_write(struct ast_channel *ast, struct ast_frame *frame)
 						ast_set_flag(&p->flags[0], SIP_PROGRESS_SENT);
 					}
 				} else if (p->t38.state == T38_ENABLED && !p->t38.direct) {
-					p->t38.state = T38_DISABLED;
-					transmit_reinvite_with_sdp(p);
+					/* drop frame, can't sent VOICE frames while in T.38 mode */
 				} else {
 					p->lastrtptx = time(NULL);
 					res = ast_rtp_write(p->rtp, frame);
@@ -14229,7 +14228,10 @@ static int handle_invite_replaces(struct sip_pvt *p, struct sip_request *req, in
 			can't harm */
 		transmit_response_with_sdp(p, "200 OK", req, XMIT_RELIABLE);
 		/* Do something more clever here */
-		ast_channel_unlock(c);
+		if (c) {
+			*nounlock = 1;
+			ast_channel_unlock(c);
+		}
 		ast_channel_unlock(replacecall);
 		ast_mutex_unlock(&p->refer->refer_call->lock);
 		return 1;
@@ -17472,7 +17474,6 @@ static struct sip_auth *add_realm_authentication(struct sip_auth *authlist, char
 {
 	char authcopy[256];
 	char *username=NULL, *realm=NULL, *secret=NULL, *md5secret=NULL;
-	char *stringp;
 	struct sip_auth *a, *b, *auth;
 
 	if (ast_strlen_zero(configuration))
@@ -17482,25 +17483,24 @@ static struct sip_auth *add_realm_authentication(struct sip_auth *authlist, char
 		ast_log(LOG_DEBUG, "Auth config ::  %s\n", configuration);
 
 	ast_copy_string(authcopy, configuration, sizeof(authcopy));
-	stringp = authcopy;
 
-	username = stringp;
-	realm = strrchr(stringp, '@');
+	username = authcopy;
+	/* split user[:secret] and realm */
+	realm = strrchr(username, '@');
 	if (realm)
 		*realm++ = '\0';
 	if (ast_strlen_zero(username) || ast_strlen_zero(realm)) {
 		ast_log(LOG_WARNING, "Format for authentication entry is user[:secret]@realm at line %d\n", lineno);
 		return authlist;
 	}
-	stringp = username;
-	username = strsep(&stringp, ":");
-	if (username) {
-		secret = strsep(&stringp, ":");
-		if (!secret) {
-			stringp = username;
-			md5secret = strsep(&stringp,"#");
-		}
+
+	/* parse username at ':' for secret, or '#" for md5secret */
+	if ((secret = strchr(username, ':'))) {
+		*secret++ = '\0';
+	} else if ((md5secret = strchr(username, '#'))) {
+		*md5secret++ = '\0';
 	}
+
 	if (!(auth = ast_calloc(1, sizeof(*auth))))
 		return authlist;
 
@@ -18517,6 +18517,7 @@ static int reload_config(enum channelreloadreason reason)
 					const char *username = ast_variable_retrieve(ucfg, cat, "username");
 					const char *secret = ast_variable_retrieve(ucfg, cat, "secret");
 					const char *contact = ast_variable_retrieve(ucfg, cat, "contact");
+					const char *authuser = ast_variable_retrieve(ucfg, cat, "authuser");
 					if (!host)
 						host = ast_variable_retrieve(ucfg, "general", "host");
 					if (!username)
@@ -18526,10 +18527,17 @@ static int reload_config(enum channelreloadreason reason)
 					if (!contact)
 						contact = "s";
 					if (!ast_strlen_zero(username) && !ast_strlen_zero(host)) {
-						if (!ast_strlen_zero(secret))
-							snprintf(tmp, sizeof(tmp), "%s:%s@%s/%s", username, secret, host, contact);
-						else
+						if (!ast_strlen_zero(secret)) {
+							if (!ast_strlen_zero(authuser)) {
+								snprintf(tmp, sizeof(tmp), "%s:%s:%s@%s/%s", username, secret, authuser, host, contact);
+							} else {
+								snprintf(tmp, sizeof(tmp), "%s:%s@%s/%s", username, secret, host, contact);
+							}
+						} else if (!ast_strlen_zero(authuser)) {
+							snprintf(tmp, sizeof(tmp), "%s::%s@%s/%s", username, authuser, host, contact);
+						} else {
 							snprintf(tmp, sizeof(tmp), "%s@%s/%s", username, host, contact);
+						}
 						if (sip_register(tmp, 0) == 0)
 							registry_count++;
 					}

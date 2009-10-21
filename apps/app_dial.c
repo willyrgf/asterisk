@@ -308,7 +308,8 @@ AST_APP_OPTIONS(dial_exec_options, {
 
 #define CAN_EARLY_BRIDGE(flags,chan,peer) (!ast_test_flag(flags, OPT_CALLEE_HANGUP | \
 	OPT_CALLER_HANGUP | OPT_CALLEE_TRANSFER | OPT_CALLER_TRANSFER | \
-	OPT_CALLEE_MONITOR | OPT_CALLER_MONITOR | OPT_CALLEE_PARK | OPT_CALLER_PARK) && \
+	OPT_CALLEE_MONITOR | OPT_CALLER_MONITOR | OPT_CALLEE_PARK |  \
+	OPT_CALLER_PARK | OPT_ANNOUNCE | OPT_CALLEE_MACRO) && \
 	!chan->audiohooks && !peer->audiohooks)
 
 /* We define a custom "local user" structure because we
@@ -533,7 +534,9 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in, struct dial_l
 					ast_clear_flag(o, DIAL_STILLGOING);	
 					HANDLE_CAUSE(cause, in);
 				} else {
-					ast_rtp_make_compatible(c, in, single);
+					if (CAN_EARLY_BRIDGE(peerflags, c, in)) {
+						ast_rtp_make_compatible(c, in, single);
+					}
 					if (c->cid.cid_num)
 						free(c->cid.cid_num);
 					c->cid.cid_num = NULL;
@@ -654,8 +657,13 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in, struct dial_l
 					/* Setup early media if appropriate */
 					if (single && CAN_EARLY_BRIDGE(peerflags, in, c))
 						ast_rtp_early_bridge(in, c);
-					if (!ast_test_flag(outgoing, OPT_RINGBACK))
-						ast_indicate(in, AST_CONTROL_PROGRESS);
+					if (!ast_test_flag(outgoing, OPT_RINGBACK)) {
+							if (single || (!single && !(*sentringing))) {
+							/* want progress to go through if it's a single legged call or it's a
+							 * branched call and ringing has not been sent */
+								ast_indicate(in, AST_CONTROL_PROGRESS);
+							}
+					}
 					break;
 				case AST_CONTROL_VIDUPDATE:
 					if (option_verbose > 2)
@@ -1176,7 +1184,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		outbound_group = pbx_builtin_getvar_helper(chan, "OUTBOUND_GROUP");
 	}
 	    
-	ast_copy_flags(peerflags, &opts, OPT_DTMF_EXIT | OPT_GO_ON | OPT_ORIGINAL_CLID | OPT_CALLER_HANGUP | OPT_IGNORE_FORWARDING);
+	ast_copy_flags(peerflags, &opts, OPT_DTMF_EXIT | OPT_GO_ON | OPT_ORIGINAL_CLID | OPT_CALLER_HANGUP | OPT_IGNORE_FORWARDING | OPT_ANNOUNCE | OPT_CALLEE_MACRO);
 
 	/* loop through the list of dial destinations */
 	rest = args.peers;
@@ -1224,6 +1232,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			datastore->inheritance = DATASTORE_INHERIT_FOREVER;
 
 			if (!(dialed_interfaces = ast_calloc(1, sizeof(*dialed_interfaces)))) {
+				ast_channel_datastore_free(datastore);
 				free(tmp);
 				goto out;
 			}
@@ -1280,11 +1289,13 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			continue;
 		}
 
-				pbx_builtin_setvar_helper(tmp->chan, "DIALEDPEERNUMBER", numsubst);
+		pbx_builtin_setvar_helper(tmp->chan, "DIALEDPEERNUMBER", numsubst);
 
 		/* Setup outgoing SDP to match incoming one */
-		ast_rtp_make_compatible(tmp->chan, chan, !outgoing && !rest);
-		
+		if (CAN_EARLY_BRIDGE(peerflags, chan, tmp->chan)) {
+			ast_rtp_make_compatible(tmp->chan, chan, !outgoing && !rest);
+		}
+
 		/* Inherit specially named variables from parent channel */
 		ast_channel_inherit_variables(chan, tmp->chan);
 		ast_channel_datastore_inherit(chan, tmp->chan);
