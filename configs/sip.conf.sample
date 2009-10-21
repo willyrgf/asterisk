@@ -340,6 +340,16 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
                                 ; If you have qualify on and the peer becomes unreachable
                                 ; this setting will enforce inactivation of the regexten
                                 ; extension for the peer
+
+; The shrinkcallerid function removes '(', ' ', ')', non-trailing '.', and '-' not
+; in square brackets.  For example, the caller id value 555.5555 becomes 5555555
+; when this option is enabled.  Disabling this option results in no modification
+; of the caller id value, which is necessary when the caller id represents something
+; that must be preserved.  This option can only be used in the [general] section.
+; By default this option is on.
+;
+;shrinkcallerid=yes     ; on by default
+
 ;------------------------ TLS settings ------------------------------------------------------------
 ;tlscertfile=</path/to/certificate.pem> ; Certificate file (*.pem format only) to use for TLS connections
                                         ; default is to look for "asterisk.pem" in current directory
@@ -695,12 +705,6 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ;        nat = force_rport       ; Force rport to always be on.
 ;        nat = yes               ; Force rport to always be on and perform symmetric RTP.
 ;        nat = comedia           ; Use rport if the remote side says to use it and perform symmetric RTP.
-;
-; The IP address used for media (audio and video) in the SDP can also be overridden by using
-; the media_address configuration option. This is only applicable to the general section and
-; can not be set per-user or per-peer.
-;
-; media_address = 172.16.42.1
 
 ;----------------------------------- MEDIA HANDLING --------------------------------
 ; By default, Asterisk tries to re-invite media streams to an optimal path. If there's
