@@ -1227,6 +1227,7 @@ static int global_rtpholdtimeout;	/*!< Time out call if no RTP during hold */
 static int global_rtpkeepalive;		/*!< Send RTP keepalives */
 static int global_reg_timeout;		/*!< Global time between attempts for outbound registrations */
 static int global_regattempts_max;	/*!< Registration attempts before giving up */
+static int global_shrinkcallerid;	/*!< enable or disable shrinking of caller id  */
 static int global_callcounter;		/*!< Enable call counters for all devices. This is currently enabled by setting the peer
 						call-limit to INT_MAX. When we remove the call-limit from the code, we can make it
 						with just a boolean flag in the device structure */
@@ -2329,7 +2330,6 @@ static struct sockaddr_in internip;
  * to support the above functions.
  */
 static struct sockaddr_in externip;		/*!< External IP address if we are behind NAT */
-static struct sockaddr_in media_address;	/*!< External RTP IP address if we are behind NAT */
 
 static char externhost[MAXHOSTNAMELEN];		/*!< External host name */
 static time_t externexpire;			/*!< Expiration counter for re-resolving external host name in dynamic DNS */
@@ -10155,7 +10155,7 @@ static void get_our_media_address(struct sip_pvt *p, int needvideo,
 		dest->sin_port = p->redirip.sin_port;
 		dest->sin_addr = p->redirip.sin_addr;
 	} else {
-		dest->sin_addr = media_address.sin_addr.s_addr ? media_address.sin_addr : p->ourip.sin_addr;
+		dest->sin_addr = p->ourip.sin_addr;
 		dest->sin_port = sin->sin_port;
 	}
 	if (needvideo) {
@@ -10164,7 +10164,7 @@ static void get_our_media_address(struct sip_pvt *p, int needvideo,
 			vdest->sin_addr = p->vredirip.sin_addr;
 			vdest->sin_port = p->vredirip.sin_port;
 		} else {
-			vdest->sin_addr = media_address.sin_addr.s_addr ? media_address.sin_addr : p->ourip.sin_addr;
+			vdest->sin_addr = p->ourip.sin_addr;
 			vdest->sin_port = vsin->sin_port;
 		}
 	}
@@ -13420,7 +13420,7 @@ static int get_pai(struct sip_pvt *p, struct sip_request *req)
 		cid_num = (char *)p->cid_num;
 	} else if (!strncasecmp(start, "sip:", 4)) {
 		cid_num = start + 4;
-		if (ast_is_shrinkable_phonenumber(cid_num))
+		if (global_shrinkcallerid && ast_is_shrinkable_phonenumber(cid_num))
 			ast_shrink_phone_number(cid_num);
 		start = end;
 
@@ -13499,7 +13499,7 @@ static int get_rpid(struct sip_pvt *p, struct sip_request *oreq)
 	if (strncasecmp(start, "sip:", 4))
 		return 0;
 	cid_num = start + 4;
-	if (ast_is_shrinkable_phonenumber(cid_num))
+	if (global_shrinkcallerid && ast_is_shrinkable_phonenumber(cid_num))
 		ast_shrink_phone_number(cid_num);
 	start = end;
 
@@ -14347,7 +14347,7 @@ static enum check_auth_result check_peer_ok(struct sip_pvt *p, char *of,
 		if (!get_rpid(p, req)) {
 			if (!ast_strlen_zero(peer->cid_num)) {
 				char *tmp = ast_strdupa(peer->cid_num);
-				if (ast_is_shrinkable_phonenumber(tmp))
+				if (global_shrinkcallerid && ast_is_shrinkable_phonenumber(tmp))
 					ast_shrink_phone_number(tmp);
 				ast_string_field_set(p, cid_num, tmp);
 			}
@@ -14456,7 +14456,7 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 			<sip:8164444422;phone-context=+1@1.2.3.4:5060;user=phone;tag=SDadkoa01-gK0c3bdb43>
 		*/
 		tmp = strsep(&tmp, ";");
-		if (ast_is_shrinkable_phonenumber(tmp))
+		if (global_shrinkcallerid && ast_is_shrinkable_phonenumber(tmp))
 			ast_shrink_phone_number(tmp);
 		ast_string_field_set(p, cid_num, tmp);
 	}
@@ -24952,7 +24952,6 @@ static int reload_config(enum channelreloadreason reason)
 	ast_free_ha(localaddr);
 	memset(&localaddr, 0, sizeof(localaddr));
 	memset(&externip, 0, sizeof(externip));
-	memset(&media_address, 0, sizeof(media_address));
 	memset(&default_prefs, 0 , sizeof(default_prefs));
 	memset(&sip_cfg.outboundproxy, 0, sizeof(struct sip_proxy));
 	sip_cfg.outboundproxy.ip.sin_port = htons(STANDARD_SIP_PORT);
@@ -25058,6 +25057,7 @@ static int reload_config(enum channelreloadreason reason)
 	global_t1min = DEFAULT_T1MIN;
 	global_qualifyfreq = DEFAULT_QUALIFYFREQ;
 	global_t38_maxdatagram = -1;
+	global_shrinkcallerid = 1;
 
 	sip_cfg.matchexterniplocally = DEFAULT_MATCHEXTERNIPLOCALLY;
 
@@ -25322,9 +25322,6 @@ static int reload_config(enum channelreloadreason reason)
 				localaddr = na;
 			if (ha_error)
 				ast_log(LOG_ERROR, "Bad localnet configuration value line %d : %s\n", v->lineno, v->value);
-		} else if (!strcasecmp(v->name, "media_address")) {
-			if (ast_parse_arg(v->value, PARSE_INADDR, &media_address))
-				ast_log(LOG_WARNING, "Invalid address for media_address keyword: %s\n", v->value);
 		} else if (!strcasecmp(v->name, "externip")) {
 			if (ast_parse_arg(v->value, PARSE_INADDR, &externip))
 				ast_log(LOG_WARNING, "Invalid address for externip keyword: %s\n", v->value);
@@ -25513,6 +25510,14 @@ static int reload_config(enum channelreloadreason reason)
 			mark_parsed_methods(&sip_cfg.disallowed_methods, disallow);
 		} else if (!strcasecmp(v->name, "constantssrc")) {
 			ast_set2_flag(&global_flags[1], ast_true(v->value), SIP_PAGE2_CONSTANT_SSRC);
+		} else if (!strcasecmp(v->name, "shrinkcallerid")) {
+			if (ast_true(v->value)) {
+				global_shrinkcallerid = 1;
+			} else if (ast_false(v->value)) {
+				global_shrinkcallerid = 0;
+			} else {
+				ast_log(LOG_WARNING, "shrinkcallerid value %s is not valid at line %d.\n", v->value, v->lineno);
+			}
 		}
 	}
 
