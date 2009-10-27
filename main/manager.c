@@ -3013,6 +3013,69 @@ struct ast_http_uri managerxmluri = {
 static int registered = 0;
 static int webregged = 0;
 
+/*! \brief Get number of logged in sessions for a login name */
+static int get_manager_sessions(const char *login)
+{
+	int no_sessions = 0;
+	struct mansession_session *s;
+
+	/* Append event to master list and wake up any sleeping sessions */
+	AST_LIST_LOCK(&sessions);
+	AST_LIST_TRAVERSE(&sessions, s, list) {
+		if (strcasecmp(s->username, login) == 0) {
+			no_sessions++;
+		}
+	}
+	AST_LIST_UNLOCK(&sessions);
+
+	return no_sessions;
+}
+
+
+/*! \brief  ${AMI_CLIENT()} Dialplan function - reads manager client data */
+static int function_amiclient(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len)
+{
+	struct ast_manager_user *user = NULL;
+	char *parameter;
+
+	if ((parameter = strchr(data, '|')))
+		*parameter++ = '\0';
+
+	AST_LIST_LOCK(&users);
+	if (!(user = ast_get_manager_by_name_locked(data))) {
+		AST_LIST_UNLOCK(&users);
+		ast_log(LOG_ERROR, "There's no manager user called : %s\n", data);
+		buf[0] = '\0';
+		return -1;
+	}
+	AST_LIST_UNLOCK(&users);
+
+	if (!strcasecmp(parameter, "sessions")) {
+		snprintf(buf, len, "%d", get_manager_sessions(data));
+	} else {
+		ast_log(LOG_ERROR, "Invalid arguments provided to function AMI_CLIENT: %s\n", data);
+		buf[0] = '\0';
+		return -1;
+
+	}
+
+	return 0;
+}
+
+/*! \brief description of AMI_CLIENT dialplan function */
+static struct ast_custom_function managerclient_function = {
+	.name = "AMI_CLIENT",
+	.synopsis = "Checks attributes of manager accounts",
+	.syntax = "AMI_CLIENT(<loginname>[,<parameter>])",
+	.desc = "AMI_CLIENT() is a dialplan function that delivers data about manager (AMI) accounts\n"
+	"The first argument is a login name, specified in manager.conf\n"
+	"The second argument is a parameter to fetch, on of the following:\n"
+	" - sessions	The number of logged in sessions for this account\n"
+	"\n",
+	.read = function_amiclient,
+};
+
+
 int init_manager(void)
 {
 	struct ast_config *cfg = NULL, *ucfg = NULL;
@@ -3049,6 +3112,7 @@ int init_manager(void)
 		ast_manager_register2("WaitEvent", 0, action_waitevent, "Wait for an event to occur", mandescr_waitevent);
 
 		ast_cli_register_multiple(cli_manager, sizeof(cli_manager) / sizeof(struct ast_cli_entry));
+		ast_custom_function_register(&managerclient_function);
 		ast_extension_state_add(NULL, NULL, manager_state_cb, NULL);
 		registered = 1;
 		/* Append placeholder event so master_eventq never runs dry */
