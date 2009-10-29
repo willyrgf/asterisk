@@ -302,6 +302,7 @@ enum ast_control_frame_type {
 	_XXX_AST_CONTROL_T38 = 19,	/*!< T38 state change request/notification \deprecated This is no longer supported. Use AST_CONTROL_T38_PARAMETERS instead. */
 	AST_CONTROL_SRCUPDATE = 20,     /*!< Indicate source of media has changed */
 	AST_CONTROL_T38_PARAMETERS = 24, /*!< T38 state change request/notification with parameters */
+	AST_CONTROL_BRIDGEPARAM = 25,	/*!< Bridge parameter update after masquerade */
 };
 
 enum ast_control_t38 {

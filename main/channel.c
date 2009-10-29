@@ -3065,6 +3065,7 @@ static int attribute_const is_visible_indication(enum ast_control_frame_type con
 	case AST_CONTROL_OFFHOOK:
 	case AST_CONTROL_TAKEOFFHOOK:
 	case AST_CONTROL_ANSWER:
+	case AST_CONTROL_BRIDGEPARAM:
 	case AST_CONTROL_HANGUP:
 	case AST_CONTROL_T38_PARAMETERS:
 	case _XXX_AST_CONTROL_T38:
@@ -3131,6 +3132,7 @@ int ast_indicate_data(struct ast_channel *chan, int _condition,
 	case _XXX_AST_CONTROL_T38:
 		/* deprecated T.38 control frame */
 		return -1;
+	case AST_CONTROL_BRIDGEPARAM:
 	case AST_CONTROL_T38_PARAMETERS:
 		/* there is no way to provide 'default' behavior for these
 		 * control frames, so we need to return failure, but there

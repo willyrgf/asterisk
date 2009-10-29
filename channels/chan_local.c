@@ -287,6 +287,9 @@ static void check_bridge(struct local_pvt *p, int isoutbound)
 						ast_channel_masquerade(p->owner, p->chan->_bridge);
 						ast_set_flag(p, LOCAL_ALREADY_MASQED);
 					}
+					/* Now, tell the owner's bridge that we had some interesting parameters in the bridge that
+					   will disappear soon, so that we don't drop them */
+					ast_queue_control_data(p->owner, AST_CONTROL_BRIDGEPARAM, &p->chan->bridgeflags, sizeof(p->chan->bridgeflags));
 					ast_channel_unlock(p->owner);
 				}
 				ast_channel_unlock(p->chan->_bridge);

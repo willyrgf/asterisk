@@ -534,6 +534,7 @@ struct ast_channel {
 	struct ast_epoll_data *epfd_data[AST_MAX_FDS];
 #endif
 	int visible_indication;                         /*!< Indication currently playing on the channel */
+	struct ast_flags bridgeflags;			/*!< Flags set for channel when creating bridge */
 };
 
 /*! \brief ast_channel_tech Properties */

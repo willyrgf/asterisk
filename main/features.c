@@ -2420,6 +2420,7 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 		/* many things should be sent to the 'other' channel */
 		other = (who == chan) ? peer : chan;
 		if (f->frametype == AST_FRAME_CONTROL) {
+			struct ast_flags *param;
 			switch (f->subclass) {
 			case AST_CONTROL_RINGING:
 			case AST_CONTROL_FLASH:
@@ -2429,6 +2430,25 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 			case AST_CONTROL_HOLD:
 			case AST_CONTROL_UNHOLD:
 				ast_indicate_data(other, f->subclass, f->data, f->datalen);
+				break;
+			case AST_CONTROL_BRIDGEPARAM:
+				/* We are getting an bridge update from chan_local before masquerade, update this bridge with the params */
+				/* We want to update the peer side, the outbound channel, with it */
+				param = (struct ast_flags *) f->data;
+				
+				if (ast_test_flag(param, AST_FEATURE_REDIRECT)) {
+                                	ast_set_flag(&(config->features_callee), AST_FEATURE_REDIRECT);
+					ast_debug(2, "--- Setting Transfer flag on callee in bridge! \n");
+				}
+				if (ast_test_flag(param, AST_FEATURE_DISCONNECT))
+                                	ast_set_flag(&(config->features_callee), AST_FEATURE_DISCONNECT);
+				if (ast_test_flag(param, AST_FEATURE_AUTOMON))
+                                	ast_set_flag(&(config->features_callee), AST_FEATURE_AUTOMON);
+				if (ast_test_flag(param, AST_FEATURE_AUTOMIXMON))
+                                	ast_set_flag(&(config->features_callee), AST_FEATURE_AUTOMIXMON);
+				if (ast_test_flag(param, AST_FEATURE_PARKCALL))
+                                	ast_set_flag(&(config->features_callee), AST_FEATURE_PARKCALL);
+				ast_debug(2, "--- Setting updated bridge flags from chan_local in this bridge for incoming channel %s\n", chan->name);
 				break;
 			case AST_CONTROL_OPTION:
 				aoh = f->data;

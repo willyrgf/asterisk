@@ -1946,7 +1946,11 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 
 				ast_channel_setoption(chan, AST_OPTION_OPRMODE, &oprmode, sizeof(oprmode), 0);
 			}
+			ast_copy_flags(&peer->bridgeflags, &config.features_callee,
+				AST_FEATURE_REDIRECT | AST_FEATURE_DISCONNECT |
+				AST_FEATURE_AUTOMON | AST_FEATURE_PARKCALL | AST_FEATURE_AUTOMIXMON);
 			res = ast_bridge_call(chan, peer, &config);
+			//peer->bridgeflags =  { 0 } ;	/* Reset bridgeflags */
 		}
 
 		strcpy(peer->context, chan->context);
