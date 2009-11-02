@@ -64,6 +64,7 @@ enum ast_rtp_get_result {
 };
 
 struct ast_rtp;
+struct ast_rtp_quality;
 
 struct ast_rtp_protocol {
 	/*! Get RTP struct, or NULL if unwilling to transfer */
@@ -73,6 +74,8 @@ struct ast_rtp_protocol {
 	/*! Set RTP peer */
 	int (* const set_rtp_peer)(struct ast_channel *chan, struct ast_rtp *peer, struct ast_rtp *vpeer, int codecs, int nat_active);
 	int (* const get_codec)(struct ast_channel *chan);
+	/*! RTCP callback */
+	int (* const rtcpcallback)(struct ast_rtp_quality *qualityreport);
 	const char * const type;
 	AST_LIST_ENTRY(ast_rtp_protocol) list;
 };

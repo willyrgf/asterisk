@@ -1458,6 +1458,7 @@ static int sip_addheader(struct ast_channel *chan, void *data);
 static int sip_do_reload(enum channelreloadreason reason);
 static int sip_reload(int fd, int argc, char *argv[]);
 static int acf_channel_read(struct ast_channel *chan, char *funcname, char *preparse, char *buf, size_t buflen);
+static int get_rtp_quality(struct sip_pvt *dialog, const char *chantype, const char *qostype, char *buf, size_t buf_len);
 
 /*--- Debugging 
 	Functions for enabling debug per IP or fully, or enabling history logging for
@@ -10946,6 +10947,107 @@ static int sip_show_domains(int fd, int argc, char *argv[])
 }
 #undef FORMAT
 
+/*! \brief Add manager headers for QoS to existing manager reply */
+static int manager_add_qos(struct mansession *s, char *mediatype, struct sip_pvt *dialog)
+{
+	char mybuf[SIPBUFSIZE];
+
+	get_rtp_qos(dialog, mediatype, "local_ssrc", buf, SIPBUFSIZE );
+	astman_append(s, "LocalSSRC(%s): %s\r\n", mediatype, buf);
+	get_rtp_qos(dialog, mediatype, "remote_ssrc", buf, SIPBUFSIZE );
+	astman_append(s, "RemoteSSRC(%s): %s\r\n", mediatype, buf);
+	get_rtp_qos(dialog, mediatype, "local_jitter", buf, SIPBUFSIZE );
+	astman_append(s, "LocalJitter(%s): %s\r\n", mediatype, buf);
+	get_rtp_qos(dialog, mediatype, "local_count", buf, SIPBUFSIZE );
+	astman_append(s, "LocalPacketCount(%s): %s\r\n", mediatype, buf);
+	get_rtp_qos(dialog, mediatype, "remote_count", buf, SIPBUFSIZE );
+	astman_append(s, "RemotePacketCount(%s): %s\r\n", mediatype, buf);
+	get_rtp_qos(dialog, mediatype, "local_lostpackets", buf, SIPBUFSIZE );
+	astman_append(s, "LocalLostPackets(%s): %s\r\n", mediatype, buf);
+	get_rtp_qos(dialog, mediatype, "remote_lostpackets", buf, SIPBUFSIZE );
+	astman_append(s, "RemoteLostPackets(%s): %s\r\n", mediatype, buf);
+	get_rtp_qos(dialog, mediatype, "remote_jitter", buf, SIPBUFSIZE );
+	astman_append(s, "RemoteJitter(%s): %s\r\n", mediatype, buf);
+	get_rtp_qos(dialog, mediatype, "rtt", buf, SIPBUFSIZE );
+	astman_append(s, "MediaRtt(%s): %s\r\n", mediatype, buf);
+}
+		
+static char mandescr_sip_channel[] = 
+"Description: Show one SIP channel with details on current status.\n"
+"Variables: \n"
+"  Channel: <name>        The channel name (AST) you want to check.\n"
+"  ActionID: <id>	  Optional action ID for this AMI transaction."
+"  Datatype: <name>	  Optional parameter name required. If not specified, all data will be sent"
+""
+"  Datatype 	Description"
+"	qos	Current QoS value for this channel (sender and receiver)"
+"\n";
+
+/*! \brief Show SIP channel data in the manager API  */
+static int manager_sip_channel(struct mansession *s, const struct message *m)
+{
+	const char *channel;
+	const char *datatype;
+	const char *actionid;
+	int ret;
+	int all = FALSE;
+	struct ast_channel *chan = NULL;
+	struct sip_pvt *dialog;
+
+	actionid = astman_get_header(m,"ActionID");
+	channel = astman_get_header(m,"Channel");
+
+	/* Do we have a channel name? */
+	if (ast_strlen_zero(channel)) {
+		astman_send_error(s, m, "Channel: <channelname> missing.");
+		return 0;
+	}
+	/* Can we find a channel with that name? */
+	chan = ast_get_channel_by_name_locked(name);
+	if (!chan) {
+		astman_send_error(s, m, "No such channel");
+		return 0;
+	}
+	/* Sanity check  - is this pvt a SIP channel? */
+	if (chan->tech != &sip_tech && chan->tech != &sip_tech_info) {
+		astman_send_error(s, m, "Cannot get SIPchannel-info on a non-SIP channel\n");
+		return 0;
+	}
+	/* Try to grab the channel pvt handle */
+	dialog = chan->tech_pvt;
+	if (!dialog) {
+		astman_send_error(s, m, "No active SIP channel\n");
+		return 0;
+	}
+	/* Ok, we have a channel with a SIP dialog attached,
+	   time to find out what they want
+	   ...and when my plane is about to leave from ARN */
+	datatype = astman_get_header(m,"Datatype");
+	if (ast_strlen_zero(channel) || !strcasecmp(datatype, "all")) {
+		all = TRUE;
+	}
+ 	astman_append(s, "Response: Success\r\n");
+	if (!ast_strlen_zero(id)) {
+                astman_append(s, "ActionID: %s\r\n",id);
+	}
+
+
+	if (all || !strcasecmp(datatype, "qos")) {
+		if (p->rtp) {
+			manager_add_qos(s, "audio", dialog);
+		}
+		if (p->vrtp) {
+			manager_add_qos(s, "video", dialog);
+		}
+	} else if (!all) {
+		astman_send_error(s, m, "Unknown datatype: %s\n", datatype);
+		return 0;
+	}
+	astman_append(s, "\r\n\r\n" );
+	ast_channel_unlock(c);
+	return(0);
+}
+
 static char mandescr_show_peer[] = 
 "Description: Show one SIP peer with details on current status.\n"
 "Variables: \n"
@@ -15723,9 +15825,8 @@ static int handle_request_cancel(struct sip_pvt *p, struct sip_request *req)
 
 static int acf_channel_read(struct ast_channel *chan, char *funcname, char *preparse, char *buf, size_t buflen)
 {
-	struct ast_rtp_quality qos;
 	struct sip_pvt *p = chan->tech_pvt;
-	char *all = "", *parse = ast_strdupa(preparse);
+	char *parse = ast_strdupa(preparse);
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(param);
 		AST_APP_ARG(type);
@@ -15738,6 +15839,10 @@ static int acf_channel_read(struct ast_channel *chan, char *funcname, char *prep
 		ast_log(LOG_ERROR, "Cannot call %s on a non-SIP channel\n", funcname);
 		return 0;
 	}
+	if (p == NULL) {
+		ast_log(LOG_ERROR, "Cannot call %s on a non-SIP channel\n", funcname);
+		return -1;
+	}
 
 	if (strcasecmp(args.param, "rtpqos"))
 		return 0;
@@ -15749,40 +15854,50 @@ static int acf_channel_read(struct ast_channel *chan, char *funcname, char *prep
 		args.field = "all";
 
 	memset(buf, 0, buflen);
-	memset(&qos, 0, sizeof(qos));
-
-	if (p == NULL) {
+	if (get_rtp_quality(p, args.type, args.field, buf, buflen)) {
+		ast_log(LOG_WARNING, "Unrecognized argument '%s' to %s\n", preparse, funcname);
 		return -1;
 	}
+	return 0;
+}
 
-	if (strcasecmp(args.type, "AUDIO") == 0) {
-		all = ast_rtp_get_quality(p->rtp, &qos);
-	} else if (strcasecmp(args.type, "VIDEO") == 0) {
-		all = ast_rtp_get_quality(p->vrtp, &qos);
+/*! \brief Get RTP quality string */
+static int get_rtp_quality(struct sip_pvt *dialog, const char *chantype, const char *qostype, char *buf, size_t buflen)
+{
+	struct ast_rtp_quality qos;
+	char *all = "";
+	memset(&qos, 0, sizeof(qos));
+
+	if (strcasecmp(chantype, "AUDIO") == 0) {
+		all = ast_rtp_get_quality(dialog->rtp, &qos);
+	} else if (strcasecmp(chantype, "VIDEO") == 0) {
+		all = ast_rtp_get_quality(dialog->vrtp, &qos);
+	} else {
+		return -1;	/* Unknown media */
 	}
 
-	if (strcasecmp(args.field, "local_ssrc") == 0)
+	if (strcasecmp(qostype, "local_ssrc") == 0) {
 		snprintf(buf, buflen, "%u", qos.local_ssrc);
-	else if (strcasecmp(args.field, "local_lostpackets") == 0)
+	} else if (strcasecmp(qostype, "local_lostpackets") == 0) {
 		snprintf(buf, buflen, "%u", qos.local_lostpackets);
-	else if (strcasecmp(args.field, "local_jitter") == 0)
+	} else if (strcasecmp(qostype, "local_jitter") == 0) {
 		snprintf(buf, buflen, "%.0lf", qos.local_jitter * 1000.0);
-	else if (strcasecmp(args.field, "local_count") == 0)
+	} else if (strcasecmp(qostype, "local_count") == 0) {
 		snprintf(buf, buflen, "%u", qos.local_count);
-	else if (strcasecmp(args.field, "remote_ssrc") == 0)
+	} else if (strcasecmp(qostype, "remote_ssrc") == 0) {
 		snprintf(buf, buflen, "%u", qos.remote_ssrc);
-	else if (strcasecmp(args.field, "remote_lostpackets") == 0)
+	} else if (strcasecmp(qostype, "remote_lostpackets") == 0) {
 		snprintf(buf, buflen, "%u", qos.remote_lostpackets);
-	else if (strcasecmp(args.field, "remote_jitter") == 0)
+	} else if (strcasecmp(qostype, "remote_jitter") == 0) {
 		snprintf(buf, buflen, "%.0lf", qos.remote_jitter * 1000.0);
-	else if (strcasecmp(args.field, "remote_count") == 0)
+	} else if (strcasecmp(qostype, "remote_count") == 0) {
 		snprintf(buf, buflen, "%u", qos.remote_count);
-	else if (strcasecmp(args.field, "rtt") == 0)
+	} else if (strcasecmp(qostype, "rtt") == 0) {
 		snprintf(buf, buflen, "%.0lf", qos.rtt * 1000.0);
-	else if (strcasecmp(args.field, "all") == 0)
+	} else if (strcasecmp(qostype, "all") == 0) {
 		ast_copy_string(buf, all, buflen);
-	else {
-		ast_log(LOG_WARNING, "Unrecognized argument '%s' to %s\n", preparse, funcname);
+	} else {
+		/* Unrecognized argument, error! Let the caller print error message */
 		return -1;
 	}
 	return 0;
@@ -19376,6 +19491,8 @@ static int load_module(void)
 			"List SIP peers (text format)", mandescr_show_peers);
 	ast_manager_register2("SIPshowpeer", EVENT_FLAG_SYSTEM, manager_sip_show_peer,
 			"Show SIP peer (text format)", mandescr_show_peer);
+	ast_manager_register2("SIPchannel", EVENT_FLAG_SYSTEM, manager_sip_channel,
+			"Show information about SIP channel", mandescr_sip_channel);
 
 	sip_poke_all_peers();	
 	sip_send_all_registers();
@@ -19414,6 +19531,7 @@ static int unload_module(void)
 	ast_udptl_proto_unregister(&sip_udptl);
 
 	/* Unregister AMI actions */
+	ast_manager_unregister("SIPchannel");
 	ast_manager_unregister("SIPpeers");
 	ast_manager_unregister("SIPshowpeer");
 
