@@ -5530,7 +5530,7 @@ static int __init_manager(int reload)
 		ast_manager_register_xml("ModuleCheck", EVENT_FLAG_SYSTEM, manager_modulecheck);
 
 		ast_cli_register_multiple(cli_manager, ARRAY_LEN(cli_manager));
-		ast_custom_function_register(&managerclient_function);
+		__ast_custom_function_register(&managerclient_function, NULL);
 		ast_extension_state_add(NULL, NULL, manager_state_cb, NULL);
 		registered = 1;
 		/* Append placeholder event so master_eventq never runs dry */
