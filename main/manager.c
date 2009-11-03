@@ -685,6 +685,26 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			For success returns, the module revision number is included.</para>
 		</description>
 	</manager>
+	<function name="AMI_CLIENT" language="en_US">
+		<synopsis>
+			Checks attributes of manager accounts
+		</synopsis>
+		<syntax>
+			<parameter name="loginname" required="true">
+				<para>Login name, specified in manager.conf</para>
+			</parameter>
+			<parameter name="parameter" required="true">
+				<para>Attribute to login name to return. 
+				</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>
+				Currently, the only spported  parameter is "sessions" which will return the current number of 
+				active sessions for this AMI account.
+			</para>
+		</description>
+	</function>
  ***/
 
 enum error_type {
@@ -5363,43 +5383,54 @@ static struct ast_http_uri amanagerxmluri = {
 static int get_manager_sessions(const char *login)
 {
 	int no_sessions = 0;
-	struct mansession_session *s;
+	struct mansession_session *session;
+	struct ao2_iterator i;
 
-	/* Append event to master list and wake up any sleeping sessions */
-	AST_LIST_LOCK(&sessions);
-	AST_LIST_TRAVERSE(&sessions, s, list) {
-		if (strcasecmp(s->username, login) == 0) {
+	i = ao2_iterator_init(sessions, 0);
+	while ((session = ao2_iterator_next(&i))) {
+		ao2_lock(session);
+		if (strcasecmp(session->username, login) == 0) {
 			no_sessions++;
 		}
+		ao2_unlock(session);
+		unref_mansession(session);
 	}
-	AST_LIST_UNLOCK(&sessions);
+
 
 	return no_sessions;
 }
 
 
 /*! \brief  ${AMI_CLIENT()} Dialplan function - reads manager client data */
-static int function_amiclient(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len)
+static int function_amiclient(struct ast_channel *chan, const char *cmd, char *data, char *buf, size_t len)
 {
 	struct ast_manager_user *user = NULL;
-	char *parameter;
 
-	if ((parameter = strchr(data, '|')))
-		*parameter++ = '\0';
+	AST_DECLARE_APP_ARGS(args,
+		AST_APP_ARG(name);
+		AST_APP_ARG(param);
+	);
 
-	AST_LIST_LOCK(&users);
-	if (!(user = ast_get_manager_by_name_locked(data))) {
-		AST_LIST_UNLOCK(&users);
-		ast_log(LOG_ERROR, "There's no manager user called : %s\n", data);
+
+	if (ast_strlen_zero(data) ) {
+		ast_log(LOG_WARNING, "AMI_CLIENT() requires two arguments: AMI_CLIENT(<name>[,<arg>])\n");
+		return -1;
+	}
+	AST_STANDARD_APP_ARGS(args, data);
+
+	AST_RWLIST_RDLOCK(&users);
+	if (!(user = get_manager_by_name_locked(args.name))) {
+		AST_RWLIST_UNLOCK(&users);
+		ast_log(LOG_ERROR, "There's no manager user called : %s\n", args.name);
 		buf[0] = '\0';
 		return -1;
 	}
-	AST_LIST_UNLOCK(&users);
+	AST_RWLIST_UNLOCK(&users);
 
-	if (!strcasecmp(parameter, "sessions")) {
+	if (!strcasecmp(args.param, "sessions")) {
 		snprintf(buf, len, "%d", get_manager_sessions(data));
 	} else {
-		ast_log(LOG_ERROR, "Invalid arguments provided to function AMI_CLIENT: %s\n", data);
+		ast_log(LOG_ERROR, "Invalid arguments provided to function AMI_CLIENT: %s\n", args.param);
 		buf[0] = '\0';
 		return -1;
 
@@ -5408,28 +5439,6 @@ static int function_amiclient(struct ast_channel *chan, char *cmd, char *data, c
 	return 0;
 }
 
-/*** DOCUMENTATION
-	<function name="AMI_CLIENT" language="en_US">
-		<synopsis>
-			Checks attributes of manager accounts
-		</synopsis>
-		<syntax>
-			<parameter name="loginname" required="true">
-				<para>Login name, specified in manager.conf</para>
-			</parameter>
-			<parameter name="parameter" required="true">
-				<para>Attribute to login name to return. 
-				</para>
-			</parameter>
-		</syntax>
-		<description>
-			<para>
-				Current parameter is only "sessions" which will return the current number of 
-				active sessions for this AMI account.
-			</para>
-		</description>
-	</function>
-***/
 
 /*! \brief description of AMI_CLIENT dialplan function */
 static struct ast_custom_function managerclient_function = {
