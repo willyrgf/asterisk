@@ -390,7 +390,7 @@ AC_FUNC_STRNLEN
 AC_FUNC_STRTOD
 AC_FUNC_UTIME_NULL
 AC_FUNC_VPRINTF
-AC_CHECK_FUNCS([asprintf atexit closefrom dup2 eaccess endpwent euidaccess ftruncate getcwd gethostbyname gethostname getloadavg gettimeofday glob ioperm inet_ntoa isascii localtime_r memchr memmove memset mkdir munmap putenv re_comp regcomp select setenv socket strcasecmp strcasestr strchr strcspn strdup strerror strlcat strlcpy strncasecmp strndup strnlen strrchr strsep strspn strstr strtod strtol strtold strtoq unsetenv utime vasprintf getpeereid sysctl swapctl])
+AC_CHECK_FUNCS([asprintf atexit closefrom dup2 eaccess endpwent euidaccess ftruncate getcwd gethostbyname gethostname getloadavg gettimeofday glob htonll ioperm inet_ntoa isascii localtime_r memchr memmove memset mkdir munmap ntohll putenv re_comp regcomp select setenv socket strcasecmp strcasestr strchr strcspn strdup strerror strlcat strlcpy strncasecmp strndup strnlen strrchr strsep strspn strstr strtod strtol strtold strtoq unsetenv utime vasprintf getpeereid sysctl swapctl])
 
 # NOTE: we use AC_CHECK_LIB to get -lm into the arguments for later checks,
 # so that AC_CHECK_FUNCS can detect functions in that library.
@@ -1363,6 +1363,7 @@ if test "${PBX_MISDN}" = 1; then
    AST_C_DEFINE_CHECK([MISDN_FAC_RESULT], [Fac_RESULT], [mISDNuser/suppserv.h])
    AST_C_DEFINE_CHECK([MISDN_FAC_ERROR], [Fac_ERROR], [mISDNuser/suppserv.h])
    AC_CHECK_HEADER([linux/mISDNdsp.h], [AC_DEFINE_UNQUOTED([MISDN_1_2], 1, [Build chan_misdn for mISDN 1.2 or later.])])
+   AC_CHECK_MEMBER([Q931_info_t.redirect_dn], [], [PBX_MISDN=0], [#include <mISDNuser/mISDNlib.h>])
 fi
 
 AST_EXT_TOOL_CHECK([MYSQLCLIENT], [mysql_config])
