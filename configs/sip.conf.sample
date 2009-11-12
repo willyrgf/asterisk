@@ -1,6 +1,18 @@
 ;
 ; SIP Configuration example for Asterisk
 ;
+; Note: Please read the security documentation for Asterisk in order to
+; 	understand the risks of installing Asterisk with the sample
+;	configuration. If your Asterisk is installed on a public
+;	IP address connected to the Internet, you will want to learn
+;	about the various security settings BEFORE you start
+;	Asterisk. 
+;	Specially note the following settings:
+;		- Allowguest (default enabled)
+;		- Permit/deny - IP address filters
+;		- Contactpermit/contactdeny - IP address filters for registrations
+;		- Context - Which set of services you offer various users
+;
 ; SIP dial strings
 ;-----------------------------------------------------------
 ; In the dialplan (extensions.conf) you can use several
@@ -75,18 +87,22 @@
 ;       combination with the "defaultip" setting.
 ;-----------------------------------------------------------------------------
 
-; ** Deprecated configuration options **
-; The "call-limit" configuation option is deprecated. It still works in
-; this version of Asterisk, but will disappear in the next version.
+; ** Old configuration options **
+; The "call-limit" configuation option is considered old is replaced
+; by new functionality. To enable callcounters, you use the new 
+; "callcounter" setting (for extension states in queue and subscriptions)
 ; You are encouraged to use the dialplan groupcount functionality
 ; to enforce call limits instead of using this channel-specific method.
-;
 ; You can still set limits per device in sip.conf or in a database by using
 ; "setvar" to set variables that can be used in the dialplan for various limits.
 
 [general]
 context=default                 ; Default context for incoming calls
 ;allowguest=no                  ; Allow or reject guest calls (default is yes)
+				; If your Asterisk is connected to the Internet
+				; and you have allowguest=yes
+				; you want to check which services you offer everyone
+				; out there, by enabling them in the default context (see below).
 ;match_auth_username=yes        ; if available, match user entry using the
                                 ; 'username' field from the authentication line
                                 ; instead of the From: field.
