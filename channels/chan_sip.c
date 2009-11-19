@@ -2974,10 +2974,21 @@ static int retrans_pkt(const void *data)
 	pkt->retransid = -1;
 
 	if (pkt->is_fatal) {
-		while(pkt->owner->owner && ast_channel_trylock(pkt->owner->owner)) {
+		int loopcount = 0;
+		/* Try really, really hard to get a lock. But don't try forever. */
+		while(loopcount < 200 &&pkt->owner->owner && ast_channel_trylock(pkt->owner->owner)) {
 			sip_pvt_unlock(pkt->owner);	/* SIP_PVT, not channel */
 			usleep(1);
 			sip_pvt_lock(pkt->owner);
+			loopcount++;
+		}
+		if (loopcount == 200) {
+			ast_log(LOG_WARNING, "Retransmit MaxRetried - trying to hangup, could not grab channel. Retrying later - Call ID %s\n", pkt->owner->callid);
+			/* For some reason, we can't lock the owner channel and queue a hangup. Let's do it later and hope for the best */
+			sip_scheddestroy(pkt->owner, 100);
+			pkt->owner->needdestroy = 1;	/* Don't hesitate, just kill the dialog */
+			sip_alreadygone(pkt->owner);
+			return 0;
 		}
 
 		if (pkt->owner->owner && !pkt->owner->owner->hangupcause) 
@@ -5329,7 +5340,13 @@ static int sip_write(struct ast_channel *ast, struct ast_frame *frame)
 			return 0;
 		}
 		if (p) {
-			sip_pvt_lock(p);
+			while (sip_pvt_trylock(p)) {
+				/* Failed, let someone else grab the channel for a while */
+				ast_channel_unlock(p->owner);
+				usleep(1);
+				ast_channel_lock(p->owner);
+			}
+			/* PVT is locked */
 			if (p->rtp) {
 				/* If channel is not up, activate early media session */
 				if ((ast->_state != AST_STATE_UP) &&
@@ -6102,8 +6119,17 @@ static struct ast_frame *sip_read(struct ast_channel *ast)
 	struct ast_frame *fr;
 	struct sip_pvt *p = ast->tech_pvt;
 	int faxdetected = FALSE;
+	int loopcount = 0;
 
-	sip_pvt_lock(p);
+	while (sip_pvt_trylock(p)) {
+		/* Failed, let someone else grab the channel for a while */
+		ast_channel_unlock(p->owner);
+		usleep(1);
+		ast_channel_lock(p->owner);
+		if (++loopcount == 20) {
+			return &ast_null_frame;
+		}
+	}
 	fr = sip_rtp_read(ast, p, &faxdetected);
 	p->lastrtprx = time(NULL);
 
