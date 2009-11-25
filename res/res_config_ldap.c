@@ -1546,18 +1546,19 @@ static int ldap_reconnect(void)
 
 	if (global_usesasl) {
 		if (!ast_strlen_zero(user)) {
-			ast_debug(2, "bind to '%s' as user '%s'\n", url, user);
+			ast_debug(2, "SASL bind to '%s' as user '%s'\n", url, user);
 			cred.bv_val = (char *) pass;
 			cred.bv_len = strlen(pass);
 			bind_result = ldap_sasl_bind_s(ldapConn, user, LDAP_SASL_SIMPLE, &cred, NULL, NULL, NULL);
 		} else {
-			ast_debug(2, "bind %s anonymously\n", url);
+			ast_debug(2, "SASL bind %s anonymously\n", url);
 			cred.bv_val = NULL;
 			cred.bv_len = 0;
 			bind_result = ldap_sasl_bind_s(ldapConn, NULL, LDAP_SASL_SIMPLE, &cred, NULL, NULL, NULL);
 		} 
 	} else {
 		/* Use simple binding to ldap */
+		ast_debug(2, "simple bind %s anonymously\n", url);
 		bind_result = ldap_simple_bind_s(ldapConn, user, pass);
 	}
 
