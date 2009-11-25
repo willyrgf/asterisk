@@ -73,12 +73,18 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 182848 $")
 
 AST_MUTEX_DEFINE_STATIC(ldap_lock);
 
+/* Default valuels for global variables that can be changed in config should be set to 
+   default values in parse_config(). This is to make sure that reloads always do the expected
+   thing if a previously set value is commented out.
+*/
+
 static LDAP *ldapConn;
 static char url[512];
 static char user[512];
 static char pass[50];
 static char base_distinguished_name[512];
 static int version = 3;
+static int global_usesasl;
 static time_t connect_time;
 
 static int parse_config(void);
@@ -578,7 +584,7 @@ static struct ast_variable *ldap_loadentry(struct ldap_table_config *table_confi
 					   "(objectclass=*)", NULL, 0, NULL, NULL, NULL, LDAP_NO_LIMIT, &ldap_result_msg);
 			if (result != LDAP_SUCCESS && is_ldap_connect_error(result)) {
 				ast_log(LOG_WARNING,
-					"Failed to query database. Try %d/3\n",
+					"Failed to query directory. Try %d/3\n",
 					tries + 1);
 				tries++;
 				if (tries < 3) {
@@ -595,7 +601,7 @@ static struct ast_variable *ldap_loadentry(struct ldap_table_config *table_confi
 
 		if (result != LDAP_SUCCESS) {
 			ast_log(LOG_WARNING,
-					"Failed to query database. Check debug for more info.\n");
+					"Failed to query directory. Check debug for more info.\n");
 			ast_debug(2, "dn=%s\n", dn);
 			ast_debug(2, "Query Failed because: %s\n",
 				ldap_err2string(result));
@@ -812,7 +818,7 @@ static struct ast_variable **realtime_ldap_base_ap(unsigned int *entries_count_p
 				  LDAP_SCOPE_SUBTREE, filter->str, NULL, 0, NULL, NULL, NULL, LDAP_NO_LIMIT,
 				  &ldap_result_msg);
 		if (result != LDAP_SUCCESS && is_ldap_connect_error(result)) {
-			ast_log(LOG_DEBUG, "Failed to query database. Try %d/10\n",
+			ast_log(LOG_DEBUG, "Failed to query directory. Try %d/10\n",
 				tries + 1);
 			if (++tries < 10) {
 				usleep(1);
@@ -827,7 +833,7 @@ static struct ast_variable **realtime_ldap_base_ap(unsigned int *entries_count_p
 	} while (result != LDAP_SUCCESS && tries < 10 && is_ldap_connect_error(result));
 
 	if (result != LDAP_SUCCESS) {
-		ast_log(LOG_WARNING, "Failed to query database. Check debug for more info.\n");
+		ast_log(LOG_WARNING, "Failed to query directory. Check debug for more info.\n");
 		ast_log(LOG_WARNING, "Query: %s\n", filter->str);
 		ast_log(LOG_WARNING, "Query Failed because: %s\n", ldap_err2string(result));
 	} else {
@@ -1051,7 +1057,7 @@ static struct ast_config *config_ldap(const char *basedn, const char *table_name
 				file, "commented", "FALSE", NULL);
 
 	if (!vars) {
-		ast_log(LOG_WARNING, "Could not find config '%s' in database.\n", file);
+		ast_log(LOG_WARNING, "Could not find config '%s' in directory.\n", file);
 		return NULL;
 	}
 
@@ -1271,7 +1277,7 @@ static int update_ldap(const char *basedn, const char *table_name, const char *a
 				  LDAP_SCOPE_SUBTREE, filter->str, NULL, 0, NULL, NULL, NULL, LDAP_NO_LIMIT,
 				  &ldap_result_msg);
 		if (result != LDAP_SUCCESS && is_ldap_connect_error(result)) {
-			ast_log(LOG_WARNING, "Failed to query database. Try %d/3\n",
+			ast_log(LOG_WARNING, "Failed to query directory. Try %d/3\n",
 				tries + 1);
 			tries++;
 			if (tries < 3) {
@@ -1347,7 +1353,7 @@ static int load_module(void)
 	ast_mutex_lock(&ldap_lock);
 
 	if (!ldap_reconnect()) 
-		ast_log(LOG_WARNING, "Couldn't establish connection. Check debug.\n");
+		ast_log(LOG_WARNING, "Couldn't establish connection.\n");
 
 	ast_config_engine_register(&ldap_engine);
 	ast_verbose("LDAP RealTime driver loaded.\n");
@@ -1414,6 +1420,16 @@ int parse_config(void)
 	int port;
 	char *category_name = NULL;
 
+	/* Reset configuration variables to default */
+	url[0] = '\0';
+	user[0] = '\0';
+	pass[0] = '\0';
+	base_distinguished_name[0] = '\0';
+	version=3;
+	global_usesasl=1;
+	port = 389;
+
+
  	config = ast_config_load(RES_CONFIG_LDAP_CONF);
 
         if (!config) {
@@ -1465,6 +1481,10 @@ int parse_config(void)
 		ast_log(LOG_WARNING, "Invalid LDAP version '%s', using 3 as default.\n", s);
 		version = 3;
 	}
+	/* Check if we are going to use sasl. Default is true */
+	if (!(s = ast_variable_retrieve(config, "_general", "usesasl"))) {
+		global_usesasl = ast_true(s);
+	}
 
 	table_configs_free();
 
@@ -1511,7 +1531,7 @@ static int ldap_reconnect(void)
 	}
 
 	if (ast_strlen_zero(url)) {
-		ast_log(LOG_ERROR, "Not enough parameters to connect to ldap database\n");
+		ast_log(LOG_ERROR, "Not enough parameters to connect to ldap directory: %s\n", url);
 		return 0;
 	}
 
@@ -1524,23 +1544,29 @@ static int ldap_reconnect(void)
 		ast_log(LOG_WARNING, "Unable to set LDAP protocol version to %d, falling back to default.\n", version);
 	}
 
-	if (!ast_strlen_zero(user)) {
-		ast_debug(2, "bind to '%s' as user '%s'\n", url, user);
-		cred.bv_val = (char *) pass;
-		cred.bv_len = strlen(pass);
-		bind_result = ldap_sasl_bind_s(ldapConn, user, LDAP_SASL_SIMPLE, &cred, NULL, NULL, NULL);
+	if (global_usesasl) {
+		if (!ast_strlen_zero(user)) {
+			ast_debug(2, "bind to '%s' as user '%s'\n", url, user);
+			cred.bv_val = (char *) pass;
+			cred.bv_len = strlen(pass);
+			bind_result = ldap_sasl_bind_s(ldapConn, user, LDAP_SASL_SIMPLE, &cred, NULL, NULL, NULL);
+		} else {
+			ast_debug(2, "bind %s anonymously\n", url);
+			cred.bv_val = NULL;
+			cred.bv_len = 0;
+			bind_result = ldap_sasl_bind_s(ldapConn, NULL, LDAP_SASL_SIMPLE, &cred, NULL, NULL, NULL);
+		} 
 	} else {
-		ast_debug(2, "bind %s anonymously\n", url);
-		cred.bv_val = NULL;
-		cred.bv_len = 0;
-		bind_result = ldap_sasl_bind_s(ldapConn, NULL, LDAP_SASL_SIMPLE, &cred, NULL, NULL, NULL);
+		/* Use simple binding to ldap */
+		bind_result = ldap_simple_bind_s(ldapConn, user, pass);
 	}
+
 	if (bind_result == LDAP_SUCCESS) {
-		ast_debug(2, "Successfully connected to database.\n");
+		ast_debug(2, "Successfully connected to directory.\n");
 		connect_time = time(NULL);
 		return 1;
 	} else {
-		ast_log(LOG_WARNING, "bind failed: %s\n", ldap_err2string(bind_result));
+		ast_log(LOG_WARNING, "bind to URL %s failed: %s\n", url, ldap_err2string(bind_result));
 		ldap_unbind_ext_s(ldapConn, NULL, NULL);
 		ldapConn = NULL;
 		return 0;
@@ -1594,33 +1620,3 @@ AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "LDAP realtime interface"
 	.reload = reload,
 );
 
-#ifdef SKREP
-
-res_config_ldap.c: In function 'realtime_ldap_base_ap':
-res_config_ldap.c:812: warning: implicit declaration of function 'ast_dynamic_str_buffer'
-res_config_ldap.c:813: warning: passing argument 4 of 'ldap_search_ext_s' makes pointer from integer without a cast
-res_config_ldap.c:831: warning: format '%s' expects type 'char *', but argument 6 has type 'int'
-res_config_ldap.c:840: warning: format '%s' expects type 'char *', but argument 6 has type 'int'
-res_config_ldap.c: In function 'config_ldap':
-res_config_ldap.c:1124: error: too many arguments to function 'ast_category_new'
-res_config_ldap.c: In function 'update_ldap':
-res_config_ldap.c:1272: warning: passing argument 4 of 'ldap_search_ext_s' makes pointer from integer without a cast
-res_config_ldap.c:1291: warning: format '%s' expects type 'char *', but argument 6 has type 'int'
-res_config_ldap.c: In function 'update2_ldap':
-res_config_ldap.c:1459: warning: passing argument 4 of 'ldap_search_ext_s' makes pointer from integer without a cast
-res_config_ldap.c:1478: warning: format '%s' expects type 'char *', but argument 6 has type 'int'
-res_config_ldap.c: At top level:
-res_config_ldap.c:1519: warning: initialization from incompatible pointer type
-res_config_ldap.c:1523: error: unknown field 'update2_func' specified in initializer
-res_config_ldap.c:1523: warning: initialization from incompatible pointer type
-res_config_ldap.c: In function 'load_module':
-res_config_ldap.c:1539: warning: implicit declaration of function 'ast_verb'
-res_config_ldap.c: In function 'realtime_ldap_status':
-res_config_ldap.c:1754: error: 'a' undeclared (first use in this function)
-res_config_ldap.c:1754: error: (Each undeclared identifier is reported only once
-res_config_ldap.c:1754: error: for each function it appears in.)
-make[1]: *** [res_config_ldap.o] Error 1
-
-
-
-#endif
