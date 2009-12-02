@@ -11949,10 +11949,6 @@ static void update_redirecting(struct sip_pvt *p, const void *data, size_t datal
 		return;
 	}
 
-	if (!ast_strlen_zero(p->owner->redirecting.to.number)) {
-		ast_string_field_set(p, exten, p->owner->redirecting.to.number);
-		build_contact(p);
-	}
 	respprep(&resp, p, "181 Call is being forwarded", &p->initreq);
 	add_diversion_header(&resp, p);
 	send_response(p, &resp, XMIT_UNRELIABLE, 0);
@@ -18735,6 +18731,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 			sip_alreadygone(p);
 		}
 		break;
+	case 415: /* Unsupported media type */
 	case 488: /* Not acceptable here */
 		xmitres = transmit_request(p, SIP_ACK, seqno, XMIT_UNRELIABLE, FALSE);
 		if (p->udptl && p->t38.state == T38_LOCAL_REINVITE) {
@@ -19427,6 +19424,7 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 			if (sipmethod == SIP_INVITE)
 				handle_response_invite(p, resp, rest, req, seqno);
 			break;
+		case 415: /* Unsupported media type */
 		case 488: /* Not acceptable here - codec error */
 			if (sipmethod == SIP_INVITE)
 				handle_response_invite(p, resp, rest, req, seqno);
@@ -19642,6 +19640,7 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 				if ((resp != 487))
 					ast_verb(3, "Incoming call: Got SIP response %d \"%s\" back from %s\n", resp, rest, ast_inet_ntoa(p->sa.sin_addr));
 				switch(resp) {
+				case 415: /* Unsupported media type */
 				case 488: /* Not acceptable here - codec error */
 				case 603: /* Decline */
 				case 500: /* Server error */
