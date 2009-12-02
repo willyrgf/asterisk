@@ -2689,10 +2689,10 @@ static int action_events(struct mansession *s, const struct message *m)
 	res = set_eventmask(s, mask);
 	if (res > 0)
 		astman_append(s, "Response: Success\r\n"
-				 "Events: On\r\n");
+				 "Events: On\r\n\r\n");
 	else if (res == 0)
 		astman_append(s, "Response: Success\r\n"
-				 "Events: Off\r\n");
+				 "Events: Off\r\n\r\n");
 	return 0;
 }
 
@@ -3614,6 +3614,7 @@ static int action_userevent(struct mansession *s, const struct message *m)
 		}
 	}
 
+	astman_send_ack(s, m, "Event Sent");	
 	manager_event(EVENT_FLAG_USER, "UserEvent", "UserEvent: %s\r\n%s", event, ast_str_buffer(body));
 	return 0;
 }
