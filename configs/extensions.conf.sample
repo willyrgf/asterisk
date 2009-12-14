@@ -444,6 +444,77 @@ exten => _stdexten-.,1,Goto(stdexten-NOANSWER,1)	; Treat anything else as no ans
 exten => a,1,VoicemailMain(${mbx})		; If they press *, send the user into VoicemailMain
 exten => a,n,Return()
 
+[identity-validation]
+;
+; This context displays the result of the rfc 4474 signature & validation. 
+; It will need to be tailoered for your purposes. 
+; 
+;
+
+;Validation Results  rfc4474_id_result can be:
+;IDENTITY_RES_NONE=1,               /*!< rfc4474 no result*/
+;IDENTITY_RES_SIGN_OK=2,            /*!< rfc4474 sign ok */
+;IDENTITY_RES_SIGN_DISABLED=3,      /*!< rfc4474 sign disabled */
+;IDENTITY_RES_SIGN_BROKEN_KEY=4,    /*!< rfc4474 sign broken key*/
+;IDENTITY_RES_SIGN_NO_PRIVATE_KEY=5,/*!< rfc4474 sign no private key found */
+;IDENTITY_RES_VAL_OK=6,             /*!< rfc4474 validation ok */
+;IDENTITY_RES_VAL_DISABLED=7,       /*!< rfc4474 validation disabled */
+;IDENTITY_RES_VAL_BROKEN_CERT=8,    /*!< rfc4474 validation broken cert*/
+;IDENTITY_RES_VAL_NO_CERT=9,        /*!< rfc4474 validation no public cert found */
+
+; dispatch to roper message
+exten => s,1,NoOp(***Ref_IN*** inc. fr. reference system\n C-ID: ${CALLERID(all)})
+exten => s,n,NoOp( ** IDENTITY_RESULT: ${IDENTITY_RESULT})
+exten => s,n,GotoIf($["${IDENTITY_RESULT}" = "0"]?undef)
+exten => s,n,GotoIf($["${IDENTITY_RESULT}" = "1"]?nores)
+exten => s,n,GotoIf($["${IDENTITY_RESULT}" = "2"]?sok)
+exten => s,n,GotoIf($["${IDENTITY_RESULT}" = "3"]?sdisab)
+exten => s,n,GotoIf($["${IDENTITY_RESULT}" = "4"]?sbrkey)
+exten => s,n,GotoIf($["${IDENTITY_RESULT}" = "5"]?snokey)
+exten => s,n,GotoIf($["${IDENTITY_RESULT}" = "6"]?vok)
+exten => s,n,GotoIf($["${IDENTITY_RESULT}" = "7"]?vdisab)
+exten => s,n,GotoIf($["${IDENTITY_RESULT}" = "8"]?vbrcert)
+exten => s,n,GotoIf($["${IDENTITY_RESULT}" = "9"]?vnocert)
+exten => s,n,noop( ** rfc4474_id_res: undefined!!! ${IDENTITY_RESULT})
+exten => s,n,Goto(acall)
+
+; display messages
+exten => s,n(undef),noop(*** Undefined Result "0" C-ID: ${CALLERID(all)})
+exten => s,n,Goto(acall)
+
+exten => s,n(nores),noop(*** No Result "1" C-ID: ${CALLERID(all)})
+exten => s,n,Goto(acall)
+
+exten => s,n(sok),noop(*** Signing OK "2" C-ID: ${CALLERID(all)})
+exten => s,n,Goto(acall)
+
+exten => s,n(sdisab),noop(*** Signing disabled "3" C-ID: ${CALLERID(all)})
+exten => s,n,Goto(acall)
+
+exten => s,n(sbrkey),noop(*** Signing broken key "4" C-ID: ${CALLERID(all)})
+exten => s,n,Goto(acall)
+
+exten => s,n(snokey),noop(*** Signing no key "5" C-ID: ${CALLERID(all)})
+exten => s,n,Goto(acall)
+
+exten => s,n(vok),noop(*** Validation ok "6" C-ID: ${CALLERID(all)})
+exten => s,n,Goto(acall)
+
+exten => s,n(vdisab),noop(*** Validation disabled "7" C-ID: ${CALLERID(all)})
+exten => s,n,Goto(acall)
+
+exten => s,n(vbrcert),noop(*** Validation broken cert "8" C-ID: ${CALLERID(all)})
+exten => s,n,Goto(acall)
+
+exten => s,n(vnocert),noop(*** Validation no Cert "9" C-ID: ${CALLERID(all)})
+exten => s,n,Goto(acall)
+
+; Accept call from reference system
+exten => s,n(acall),noop(\n\n*** accept call from reference system C-ID: ${CALLERID(all)})
+
+exten => s,n,hangup
+
+
 [stdPrivacyexten]
 ;
 ; Standard extension subroutine:

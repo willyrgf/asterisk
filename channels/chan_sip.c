@@ -622,6 +622,63 @@ static int mwi_expiry = DEFAULT_MWI_EXPIRY;
 
 #define SDP_MAX_RTPMAP_CODECS        32               /*!< Maximum number of codecs allowed in received SDP */
 
+/*! \brief RFC 4474 identity related defines */
+#define DEFAULT_IDENTITY_PRIV_URL_PREFIX "http:://localhost/keys/"    /*!< default url path to private keys  */
+#define DEFAULT_IDENTITY_PRIV_URL_SUFFIX ""                           /*!< default url suffix to private keys  */
+#define DEFAULT_IDENTITY_PUB_URL_PREFIX  "http:://localhost/certs/"   /*!< default url path to public keys  */
+#define DEFAULT_IDENTITY_PUB_URL_SUFFIX	 ""                           /*!< default url suffix to public keys  */
+#define DEFAULT_IDENTITY_PUB_PATH	 "/var/lib/asterisk/identity/certs/" 	/*!< default path to public keys  */
+#define DEFAULT_IDENTITY_PRIV_PATH	 "/var/lib/asterisk/identity/keys/" 	/*!< default path to private keys  */
+#define DEFAULT_IDENTITY_CACHE_PATH	 "/var/lib/asterisk/identity/cache/"	/*!< default url path to cache  */
+
+#define IDENTITY_PRIV_URL_PREFIX      255              /*!< maximum length of private url prefix to fetch private key */
+#define IDENTITY_PRIV_URL_SUFFIX      16               /*!< maximum length of private url suffix to fetch private key */
+#define IDENTITY_PUB_URL_PREFIX       255              /*!< maximum length of public url prefix to fetch public key */
+#define IDENTITY_PUB_URL_SUFFIX       16               /*!< maximum length of public url suffix to fetch public key */
+#define IDENTITY_KEYBUF_SIZE          4096             /*!< maximum length of Identity Buffer */
+#define IDENTITY_MAXPORT              65535            /*!< maximum port number */
+#define IDENTITY_SERVER_PORT          80               /*!< Identity Service port, usually 80 for http  */
+#define IDENTITY_SIGNBUF_SIZE         1024             /*!< Signature buffer size.  */
+#define IDENTITY_HEADER_SIZE          1024             /*!< Max Header Size for identity related headers.  */
+
+#define AST_CONFIG_MAX_PATH     	  255			   /*!< Maximum filesystem path length */
+
+/*! \brief RFC 4474 identity key type */
+enum  identity_key_type{
+	IDENTITY_PUBLIC, 	            /*!< public key */
+	IDENTITY_PRIVATE, 	            /*!< private key */
+};
+
+
+/*! \brief RFC 4474 identity key type */
+enum  identity_action{
+	IDENTITY_ACTION_SIGN, 	     	/*!< sign sip message */
+	IDENTITY_ACTION_VERIFY, 	        /*!< verify signature */
+};
+
+
+
+/*! \brief RFC 4474 identity mode */
+enum  identity_mode{
+	IDENTITY_DISABLED,               /*!< Disable RFC4474 functions */
+	IDENTITY_SIGN,                   /*!< Enable RFC4474 Signing only */
+	IDENTITY_VALIDATE,               /*!< Enable RFC4474 Validate only */
+	IDENTITY_SIGN_AND_VALIDATE,      /*!< Enable RFC4474 Sign and Validate */
+};
+
+/*! \brief RFC 4474 identity results */
+enum  identity_result{
+	IDENTITY_RES_NONE=1,               /*!< sip_identity_mode no result*/
+	IDENTITY_RES_SIGN_OK=2,            /*!< sip_identity_mode sign ok */
+	IDENTITY_RES_SIGN_DISABLED=3,      /*!< sip_identity_mode sign disabled */
+	IDENTITY_RES_SIGN_BROKEN_KEY=4,    /*!< sip_identity_mode sign broken key*/
+	IDENTITY_RES_SIGN_NO_PRIVATE_KEY=5,/*!< sip_identity_mode sign no private key found */
+	IDENTITY_RES_VAL_OK=6,             /*!< sip_identity_mode validation ok */
+	IDENTITY_RES_VAL_DISABLED=7,       /*!< sip_identity_mode validation disabled */
+	IDENTITY_RES_VAL_BROKEN_CERT=8,    /*!< sip_identity_mode validation broken cert*/
+	IDENTITY_RES_VAL_NO_CERT=9,   	  /*!< sip_identity_mode validation no public cert found */
+};
+
 /*! \brief Global jitterbuffer configuration - by default, jb is disabled */
 static struct ast_jb_conf default_jbconf =
 {
@@ -1258,6 +1315,21 @@ static int global_qualify_gap;              /*!< Time between our group of peer 
 static int global_qualify_peers;          /*!< Number of peers to poke at a given time */
 
 
+/*! \brief RFC 4474 Identity related static variables */
+static enum identity_mode sip_identity_mode;/*!< flag whether to sign the invite, validate or sign and validate*/
+static char identity_private_url_prefix[IDENTITY_PRIV_URL_PREFIX]; /*!< private url prefix is stored here used to fetch
+								  the user private key from http or https server*/
+static char identity_private_url_suffix[IDENTITY_PRIV_URL_SUFFIX]; /*!< private url suffix is stored here used to fetch
+								  the user private key from http or https server
+								  which can be .pem or .cer*/
+static char identity_public_url_prefix[IDENTITY_PUB_URL_PREFIX];   /*!< public url prefix is stored here used to fetch the
+								  user public key from http or https server used */
+static char identity_public_url_suffix[IDENTITY_PUB_URL_SUFFIX];   /*!< public url suffix is stored here used to fetch the
+								  user public key from http or https server used */
+static char identity_private_path[AST_CONFIG_MAX_PATH];            /*!< location where private keys are stored */
+static char identity_public_path[AST_CONFIG_MAX_PATH];		/*!< location where public keys are stored */
+static char identity_cache_path[AST_CONFIG_MAX_PATH];	        /*!< location where keys and certs are cached */
+
 static enum st_mode global_st_mode;           /*!< Mode of operation for Session-Timers           */
 static enum st_refresher global_st_refresher; /*!< Session-Timer refresher                        */
 static int global_min_se;                     /*!< Lowest threshold for session refresh interval  */
@@ -1350,6 +1422,7 @@ struct sip_request {
 	char debug;		/*!< print extra debugging if non zero */
 	char has_to_tag;	/*!< non-zero if packet has To: tag */
 	char ignore;		/*!< if non-zero This is a re-transmit, ignore it */
+	enum identity_result sip_identity_result;		/*!< rfc 4474 result signed or validated etc*/
 	ptrdiff_t header[SIP_MAX_HEADERS]; /*!< Array of offsets into the request string of each SIP header*/
 	ptrdiff_t line[SIP_MAX_LINES]; /*!< Array of offsets into the request string of each SDP line*/
 	struct ast_str *data;	
@@ -1357,6 +1430,8 @@ struct sip_request {
 	struct sip_socket socket;	/*!< The socket used for this request */
 	AST_LIST_ENTRY(sip_request) next;
 };
+
+
 
 /* \brief given a sip_request and an offset, return the char * that resides there
  *
@@ -2932,6 +3007,985 @@ static struct ast_variable *copy_vars(struct ast_variable *src)
 	}
 	return res;
 }
+
+
+/*
+ *  Begin RFC4474 Identity definitions configuration values & functions
+ *
+ */
+
+/*! \brief  helper function for rfc 4474  Return pointer to string with current SSL error
+ * \return Returns pointer to string with current SSL error
+ */
+static char* ssl_err(void)
+{
+	static char buf[1024];
+	ERR_error_string(ERR_get_error(), buf);
+	return buf;
+}
+
+/*! \brief  helper function for rfc 4474  Return pointer to string with result explanation
+ * \param  code the numeric (enum) code to be interpreted.
+ * \return Returns pointer to string with current SSL error
+ */
+static const char* ident_status(enum identity_result code)
+{
+	const char* rv;
+	switch(code) {
+		case IDENTITY_RES_NONE:
+			rv="SIP identity no result";
+			break;
+		case IDENTITY_RES_SIGN_OK:
+			rv="SIP identity sign ok";
+			break;
+		case IDENTITY_RES_SIGN_DISABLED:
+			rv="SIP identity sign disabled";
+			break;
+		case IDENTITY_RES_SIGN_BROKEN_KEY:
+			rv="SIP identity sign broken key";
+			break;
+		case IDENTITY_RES_SIGN_NO_PRIVATE_KEY:
+			rv="SIP identity sign no private key found";
+			break;
+		case IDENTITY_RES_VAL_OK:
+			rv="SIP identity validation ok";
+			break;
+		case IDENTITY_RES_VAL_DISABLED:
+			rv="SIP identity validation disabled";
+			break;
+		case IDENTITY_RES_VAL_BROKEN_CERT:
+			rv="SIP identity validation broken certifcate";
+			break;
+		case IDENTITY_RES_VAL_NO_CERT:
+			rv="SIP identity validation no public certifcate found";
+			break;
+		default:
+			rv="SIP identity unknown status";
+
+	}
+	return (rv);
+};
+
+
+/*! \brief  helper function for rfc 4474  generate cache file name
+ * \return Returns pointer to filename.  must be freed
+ */
+static char* id_cache_filename(const char*url)
+{
+	char *p, *p2;
+	size_t len;
+	char buf[AST_CONFIG_MAX_PATH];
+	strncpy(buf,identity_cache_path,sizeof(buf));
+	len = strlen(buf);
+	p2 = buf + len;
+
+	ast_uri_encode(url,p2,sizeof(buf)-len,1);
+
+	/* substitute specials */
+	while ((p=strchr(buf,'<'))) {
+		*p='_';
+	}
+	while ((p=strchr(buf,'>'))) {
+		*p='_';
+	}
+	return ast_strdup(buf);
+}
+
+
+/*! \brief  helper function for rfc 4474  Fill buffer with cached content.
+ * \param  url	url of source file
+ * \param  data output buffer
+ * \param  datasize size of output buffer
+ * \return Returns true if found. out will contain file contents
+ */
+static int id_check_cache(const char*url,char *data,size_t datasize)
+{
+	FILE* stream;
+	int rv = FALSE;
+	char *cached_file=id_cache_filename(url);
+	if (sipdebug) {
+		ast_log(LOG_NOTICE,"** Identity key searching in id_check_cache %s => %s\n",url,cached_file);
+	}
+
+	/* does file exist? */
+	if ((stream = fopen (cached_file, "r")) != (FILE *)0) {
+		ast_log(LOG_NOTICE,"id_check_cache: opened %s / %d \n",cached_file,datasize);
+		fread(data, datasize, 1, stream);
+		if ( ferror(stream) ) {
+			ast_log(LOG_ERROR,"id_check_cache: private key not loaded from %s\n",cached_file);
+		}
+		else {
+			ast_log(LOG_NOTICE,"id_check_cache: private key loaded from %s\n",cached_file);
+		}
+		fclose(stream);
+		rv = TRUE;
+	}
+	ast_log(LOG_NOTICE,"id_get_private_key: done %d\n",rv);
+	ast_free(cached_file);
+	return rv;
+}
+
+/*! \brief  helper function for rfc 4474  store buffer to cache.
+ * \param  url	url of source file
+ * \param  data output buffer
+ * \param  datasize size of output buffer
+ * \return Returns void.
+ */
+static void id_store_cache(const char*url,char *data,size_t datasize)
+{
+	FILE* stream;
+	char *cached_file=id_cache_filename(url);
+	if (sipdebug) {
+		ast_log(LOG_NOTICE,"** Identity key (datasize %d) to be stored in cache %s => %s\n",datasize,url,cached_file);
+	}
+
+	/* does file exist */
+	if ((stream = fopen (cached_file, "w")) != (FILE *)0) {
+		fwrite(data, datasize, 1, stream);
+		if (ferror(stream)) {
+			ast_log(LOG_ERROR,"id_store_cache: private key NOT written to %s\n",cached_file);
+		}
+		else {
+			ast_log(LOG_NOTICE,"id_store_cache: private key written to %s\n",cached_file);
+		}
+		fclose(stream);
+	}
+	else {
+		ast_log(LOG_ERROR,"** Identity id_store_cache cannot write to cache %s => %s\n",url,cached_file);
+	}
+	ast_free(cached_file);
+}
+
+
+/*! \brief helper function for rfc 4474  fetches public cert or private key for the user from server
+ * uses plain old socket to initiate http session to fetch keys from server
+ *
+ * \param type IDENTITY_PRIVATE for private key, IDENTITY_PUBLIC for public key
+ * \param user user name for whom the public or private key is fetched
+ * \param out  where the fetched key is placed
+ * \param port port no to connect on the server
+ * \param url  server name and path is fetched from url
+ * \return Returns integer result 1 is success, any other value means failure
+ */
+static int id_fetch_key_from_server(enum identity_key_type type,const char *user, char *out, size_t outsize,int port,const char *url)
+{
+	int sockfd, portno, n,torecv=0,rcvd=0;
+	struct sockaddr_in serv_addr;
+	struct hostent *server;
+	struct ast_hostent ae;
+	char *p,*p1,tempbuf[20],buffer[IDENTITY_KEYBUF_SIZE],serveradd[PATH_MAX];
+
+	/* ensure buffers are \0 terminated */
+	serveradd[0]='\0';
+	buffer[0]='\0';
+	out[0]='\0';
+
+	/* check local cache. */
+	if (id_check_cache(url,out,outsize)) {
+		if (sipdebug) {
+			ast_log(LOG_NOTICE,"** Identity key found in cache %s\n%s\n",url,out);
+		}
+		/* out is filled with contents */
+		return TRUE;
+	}
+
+
+	/* check port no */
+	if (port<1 || port>IDENTITY_MAXPORT) {
+		ast_log(LOG_ERROR,"Identity Error invalid port %d\n",port);
+		return -1;
+	}
+
+	/* format the http header buffer to fetch the keys from server */
+	if (type==IDENTITY_PRIVATE) {	/* for private key */
+		p=strstr(url,"://");
+		if (p!=NULL) {
+			p1=strstr(p+4,"/");
+			if (p1 != NULL) {
+				memcpy(serveradd,p+3,p1-(p+3));
+				serveradd[p1-(p+3)]='\0';
+				strcpy(buffer,"GET ");
+				strcat(buffer,p1);
+				if (sipdebug) {
+					ast_log(LOG_NOTICE,"** Identity prv srv [%s], path [%s]\n",serveradd,buffer);
+				}
+			}
+		}
+		if (p==NULL || p1==NULL) {
+			ast_log(LOG_ERROR,"** Identity error parsing private URL [%s], path [%s]\n",serveradd,buffer);
+			return -1;
+		}
+	}
+	else { /* for public key */
+		p=strstr(url,"://");	/* Note: scheme is ignored. Assumed http. */
+		if (p!=NULL) {
+			p1=strstr(p+4,"/");
+			if (p1!=NULL) {
+				memcpy(serveradd,p+3,p1-(p+3) );
+				serveradd[p1-(p+3)]='\0';
+				p=strstr(p1,">");	/* mark end of url > */
+				if (p!=NULL) {
+					strcpy(buffer, "GET ");
+					memcpy(buffer + 4, p1, p - p1);
+					buffer[p-p1+4]='\0';
+				}
+				if (sipdebug) {
+					ast_log(LOG_NOTICE,"** Identity pub srv [%s], path [%s]\n", serveradd,buffer);
+				}
+			}
+		}
+		if (p==NULL || p1==NULL) {
+			ast_log(LOG_ERROR,"** Identity error parsing public URL [%s], path [%s]\n",serveradd,buffer);
+			return -1;
+		}
+	}
+
+	/* format the buffer to send to server */
+	strcat(buffer," HTTP/1.1\r\n");
+	strcat(buffer,"Host: ");
+	strcat(buffer,serveradd);
+	strcat(buffer,"\r\n");
+	strcat(buffer,"Accept: */*\r\n");
+	strcat(buffer,"\r\n");
+
+	server = ast_gethostbyname(serveradd,&ae);
+	if (server == NULL) {
+		ast_log(LOG_ERROR, "** Identity ERROR cannot resolve hostname=%s\n",serveradd);
+		return -1;
+	}
+
+	/* populate connect to  server addr */
+	portno = port;
+	if (sipdebug) {
+		ast_log(LOG_NOTICE,"** Identity id_fetch_key_from_server(); srv: %s, buff: \n%s\nport: %d\n",serveradd, buffer, portno);
+	}
+
+	sockfd = socket(AF_INET, SOCK_STREAM, 0);
+	if (sockfd < 0) {
+		ast_log(LOG_ERROR,"** Identity Error opening socket\n");
+		return -1;
+	}
+	memset((char *) &serv_addr,'\0', sizeof(serv_addr));
+	serv_addr.sin_family = AF_INET;
+	memcpy((char *)&serv_addr.sin_addr.s_addr,	(char *)server->h_addr, server->h_length);
+	serv_addr.sin_port = htons(portno);
+	if (connect(sockfd,&serv_addr,sizeof(serv_addr)) < 0) {
+		ast_log(LOG_ERROR,"** Identity ERROR connecting \n");
+		return -1;
+	}
+	/* send to server the buffer */
+	n = write(sockfd,buffer,strlen(buffer));
+	if (n < 0) {
+		close(sockfd);
+		ast_log(LOG_ERROR,"** Identity ERROR writing to socket\n");
+		return -1;
+	}
+	/* read from server */
+	n = read(sockfd,buffer,sizeof(buffer));
+	if (n <= 0) {
+		close(sockfd);
+		ast_log(LOG_ERROR,"** Identity ERROR reading from socket\n");
+		return -1;
+	}
+	/* make sure content is null terminated */
+	buffer[(n<sizeof(buffer))?n:sizeof(buffer)-1]='\0';
+	/* write the read buffer from \r\n\r\n to out */
+	p=buffer;
+	p1=strstr(buffer,"\r\n\r\n");
+	if (p1!=NULL) {
+		memcpy(out,p1+4,strlen(buffer)-(p1+4-p));
+		out[strlen(buffer)-(p1+4-p)]='\0';
+	}
+	/* validate the response from host*/
+	p=strstr(buffer,"200 OK");
+	if (p==NULL) {
+		close(sockfd);
+		ast_log(LOG_ERROR,"** Identity ERROR key not found on server [%s] %s\n",serveradd,url);
+		ast_log(LOG_ERROR,"********************\n");
+		ast_log(LOG_ERROR,"buffer %s\n",buffer);
+		ast_log(LOG_ERROR,"********************\n");
+		return -1;
+	}
+	/* get content length*/
+	p=strstr(buffer,"Content-Length:");
+	if (p!=NULL) {
+		char* p2 = p+sizeof("Content-Length:");
+		p1=strstr(p2,"\r\n");
+		if (p1!=NULL) {
+			memcpy(tempbuf,p2,p1-p2);
+			tempbuf[p1-p2]='\0';
+			torecv=strtol(tempbuf,NULL, 10);
+		}
+	}
+	/* check the length for validity */
+	if (torecv<=0) {
+		ast_log(LOG_ERROR,"** Identity ERROR nothing to receive [%d]\n",torecv);
+		close(sockfd);
+		return -1;
+	}
+	/* find out whats received so far */
+	rcvd=strlen(out);
+	while (rcvd<torecv) {
+		buffer[0]='\0';
+		n = read(sockfd,buffer,sizeof(buffer));
+		if (n<0) {
+			ast_log(LOG_ERROR,"** Identity ERROR socket read failed [%d]\n",torecv);
+			close(sockfd);
+			return -1;
+		}
+		memcpy(out+rcvd,buffer,n);
+		rcvd+=n;
+	}
+	out[rcvd]='\0';
+	close(sockfd);
+
+	id_store_cache(url,out,rcvd);
+	return 1; /* success */
+}
+
+
+/*! \brief helper function for rfc 4474 gets private key from server and returns in EVP_PKEY format
+ *
+ * \param user  user name for whom the private key is fetched
+ * \return Returns private key in EVP_PKEY or NULL if failed
+ */
+
+static EVP_PKEY* id_get_private_key(const char *user)
+{
+	BIO *pem_bio;
+	EVP_PKEY *pkey;
+	char data[IDENTITY_KEYBUF_SIZE];
+	char url[AST_CONFIG_MAX_PATH];
+	char filename[AST_CONFIG_MAX_PATH];
+	FILE *stream;
+
+	data[0]='\0';
+
+	/* get private key from file system */
+	strcpy(filename,identity_private_path);
+	strcat(filename,user);
+
+	if (sipdebug) {
+		ast_log(LOG_NOTICE,"id_get_private_key: private key potentially to be loaded from %s\n",filename);
+	}
+	if ((stream = fopen (filename, "r")) != (FILE *)0) {
+		fread(data, sizeof(data), 1, stream);
+		if (ferror(stream)){
+			ast_log(LOG_ERROR,"id_get_private_key: private key loading error from %s\n",filename);
+		}
+		else {
+			if (sipdebug) {
+				ast_log(LOG_NOTICE,"id_get_private_key: private key was loaded from %s\n",filename);
+			}
+		}
+		fclose(stream);
+	}
+	else {
+		strcpy(url,identity_private_url_prefix);	//etg
+		strcat(url,user);
+		strcat(url,identity_private_url_suffix);
+		/* fetch the private key from server */
+		if (id_fetch_key_from_server(IDENTITY_PRIVATE,user,data,sizeof(data),IDENTITY_SERVER_PORT,url)!=1) {
+			ast_log(LOG_ERROR,"** id_get_private_key: get private key failed %s\n",user);
+			return NULL;
+		}
+	}
+	/* return private key in EVP_PKEY format */
+	if (NULL == (pem_bio = BIO_new_mem_buf(data, strlen(data)))) {
+	    ast_log(LOG_ERROR,"** id_get_private_key: unable to initialize BIO\n");
+	    return NULL;
+	}
+	if (NULL == (pkey = PEM_read_bio_PrivateKey(pem_bio, NULL, 0, NULL))) {
+	    ast_log(LOG_ERROR,"** id_get_private_key: could not decode private key from  %s\n",  ssl_err());
+	    BIO_free(pem_bio);
+	    return NULL;
+	}
+	BIO_free(pem_bio);
+	return pkey;
+}
+
+/*! \brief helper function for rfc 4474 gets public key from server and returns in X509 format
+ *
+ * \param user  user name for whom the public key is fetched
+ * \param idinfohdr  identity info header from sip request which contains the URL
+ * \return Returns private key in X509 or null
+ */
+static X509* id_get_public_cert(const char *user,const char *idinfohdr)
+{
+	BIO *pem_bio;
+	X509 *cert;
+	char data[IDENTITY_KEYBUF_SIZE];
+	char filename[AST_CONFIG_MAX_PATH];
+	FILE *stream;
+
+	data[0]='\0';
+
+	/* get  key from file system */
+	strcpy(filename,identity_public_path);
+	strcat(filename,user);
+
+	if ((stream = fopen (filename, "r")) != (FILE *)0) {
+		fread(data, sizeof(data), 1, stream);
+		if (ferror(stream)) {
+			ast_log(LOG_ERROR,"id_get_public_cert: private key loading error from %s\n",filename);
+		}
+		else {
+			if (sipdebug) {
+				ast_log(LOG_NOTICE,"id_get_public_cert: private key loaded from %s\n",filename);
+			}
+		}
+		fclose(stream);
+	}
+	else {
+		/* fetch the public key from server */
+		if (id_fetch_key_from_server(IDENTITY_PUBLIC,user,data,sizeof(data),IDENTITY_SERVER_PORT,idinfohdr)!=1) {
+			ast_log(LOG_ERROR,"** id_get_public_cert get public key failed %s\n",user);
+			return NULL;
+		}
+	}
+	if (sipdebug) {
+		ast_log(LOG_NOTICE,"** id_get_public_cert: user: %s data: %s \n", user, data);
+	}
+	/* return public key in EVP_PKEY format */
+	if (NULL == (pem_bio = BIO_new_mem_buf(data, strlen(data)))) {
+		ast_log(LOG_ERROR,"** id_get_public_cert: unable to initialize BIO\n");
+		return NULL;
+	}
+	if (NULL == (cert = PEM_read_bio_X509(pem_bio, NULL, 0, 0))) {
+		ast_log(LOG_ERROR,"** id_get_public_cert: could not decode public key from  %s\n", ssl_err());
+		BIO_free(pem_bio);
+		return NULL;
+	}
+	BIO_free(pem_bio);
+	return cert;
+}
+
+
+/*! \brief helper function for rfc 4474 gets public key from server and returns in EVP_PKEY format
+ *
+ * \param user  user name for whom the public key is fetched
+ * \param idinfohdr  identity info header from sip request which contains the URL
+ * \return Returns private key in EVP_PKEY or null
+ */
+static EVP_PKEY* id_get_public_key(X509* cert)
+{
+	EVP_PKEY *pkey;
+	if (NULL == (pkey = X509_get_pubkey(cert))) {
+		ast_log(LOG_ERROR,"** id_get_public_key: could not get public key from  %s\n", ssl_err());
+	}
+	return pkey;
+}
+
+/*! \brief helper function for rfc 4474 does based 64 encoding
+ *
+ * \param buf  pointer to data to be encoded
+ * \param buflen  length of the buffer to be encoded
+ * \return Returns pointer to encoded data or NULL if failed
+ */
+static char* id_b64_encode(const char* buf, int buflen)
+{
+	BIO *bmem, *b64;
+	BUF_MEM *bptr;
+	char *ret;
+
+	b64 = BIO_new(BIO_f_base64());
+	if (b64 == NULL) {
+		ast_log(LOG_ERROR,"** id_b64_encode: could not initialize b64 BIO: %s\n",ssl_err());
+		return NULL;
+	}
+	bmem = BIO_new(BIO_s_mem());
+	if (bmem == NULL) {
+		ast_log(LOG_ERROR,"** id_b64_encode: could not initialize bmem BIO: %s\n",ssl_err());
+		BIO_free_all(b64);
+		return NULL;
+	}
+	BIO_set_flags(b64, BIO_FLAGS_BASE64_NO_NL);
+	b64 = BIO_push(b64, bmem);
+	if (BIO_write(b64, buf, buflen) != buflen) {
+		ast_log(LOG_ERROR,"** id_b64_encode: could not write: %s\n",ssl_err() );
+		BIO_free_all(b64);
+		return NULL;
+	}
+	BIO_flush(b64);
+	BIO_get_mem_ptr(b64, &bptr);
+	ret = ast_calloc(1, bptr->length+1);
+	if (ret == NULL) {
+		ast_log(LOG_ERROR,"** id_b64_encode: out of memory\n");
+		BIO_free_all(b64);
+		return NULL;
+	}
+	memcpy(ret, bptr->data, bptr->length);
+	ret[bptr->length] = 0;
+
+	BIO_free_all(b64);
+	return ret;
+}
+
+/*! \brief helper function for rfc 4474 does based 64 decoding
+ *
+ * \param buf  pointer to data to be decoded
+ * \param buflen  length of the buffer to be decoded
+ * \param decoded_data_len contains length of the decoded data this is an output param
+ * \return Returns pointer to decoded data or NULL if failed
+ */
+static char* id_b64_decode(const char* buf, int buflen,int *decoded_data_len)
+{
+	BIO *bmem, *b64;
+	char *ret;
+	int len=0;
+
+	b64 = BIO_new(BIO_f_base64());
+	if (b64 == NULL) {
+		ast_log(LOG_ERROR,"** id_b64_decode: could not initialize b64 BIO: %s\n", ssl_err());
+		return NULL;
+	}
+	BIO_set_flags(b64, BIO_FLAGS_BASE64_NO_NL);
+	bmem = BIO_new_mem_buf((void*)buf, buflen);
+	if (bmem == NULL) {
+		ast_log(LOG_ERROR,"** id_b64_decode: could not initialize bmem BIO: %s\n", ssl_err());
+		BIO_free_all(b64);
+		return NULL;
+	}
+	bmem = BIO_push(b64, bmem);
+	ret = ast_calloc(1, buflen+1);
+	if (ret == NULL) {
+		ast_log(LOG_ERROR,"** id_b64_decode: out of memory\n");
+		BIO_free_all(bmem);
+		return NULL;
+	}
+	memcpy(ret, buf, buflen);
+	ret[buflen] = '\0';
+	len = BIO_read(bmem, ret, buflen+1);
+	if (len <= 0) {
+		ast_log(LOG_ERROR,"** id_b64_decode: could not read: %s\n", ssl_err());
+		BIO_free_all(bmem);
+		return NULL;
+	}
+	ret[len] = '\0';
+	*decoded_data_len=len;
+	if (sipdebug) {
+		ast_log(LOG_NOTICE,"** b64decode: i-buf: %s i-buflen: %d read-len: %d \n", buf, buflen, len);
+	}
+	BIO_free_all(b64);
+	return ret;
+}
+/*! \brief helper function for rfc 4474 does SHA1 hashing
+ *
+ * \param buf  pointer to data to be SHA1 hashed
+ * \param retbuf pointer to hashed data
+ * \return Returns pointer to hashed data
+ */
+static char* id_hashstr(const char *buf,char *retbuf)
+{
+	SHA_CTX sha;
+	SHA1_Init(&sha);
+	SHA1_Update(&sha, buf, strlen(buf));
+	SHA1_Final((unsigned char*)retbuf, &sha);
+	return retbuf;
+}
+/*! \brief main function for rfc 4474 does signing
+ *
+ * \param tosign  pointer to data to be signed (RSA SHA1)
+ * \param res pointer to signed data
+ * \param user pointer to user for whom the key is fetched and data is signed using the private key of user
+ * \return Returns 1 for success any other value failure
+ */
+static int id_sign(const char *tosign,char *res,const char *user)
+{
+	EVP_PKEY *pkey;
+	RSA *rsa;
+	unsigned char result[256];
+	unsigned int resultlen = sizeof(result);
+	unsigned char sha1res[20];
+	char *id;
+	/* hash the digest string */
+	if (id_hashstr(tosign,(char *) sha1res) == NULL) {
+                ast_log(LOG_ERROR,"** id_sign():  hash failed\n");
+		return FALSE;
+	}
+	/* get private key for user */
+	pkey = id_get_private_key(user);
+	if (pkey == NULL) {
+		ast_log(LOG_ERROR,"** id_sign(): get private key failed\n");
+		return FALSE;
+	}
+
+	if (NULL == (rsa = EVP_PKEY_get1_RSA(pkey))) {
+		ast_log(LOG_ERROR,"** id_sign(): Unable to get RSA Key: %s\n", ssl_err());
+		EVP_PKEY_free(pkey);
+		return FALSE;
+	}
+	EVP_PKEY_free(pkey);
+	if (resultlen < RSA_size(rsa)) {
+		ast_log(LOG_ERROR,"** id_sign(): RSA Result too big: %d !>= %d\n", resultlen, RSA_size(rsa));
+		return FALSE;
+	}
+	/* do RSA sign */
+	if (RSA_sign(NID_sha1, sha1res, sizeof(sha1res), result, &resultlen, rsa) != 1) {
+		ast_log(LOG_ERROR,"** id_sign(): Error computing RSA results: %s\n", ssl_err());
+		RSA_free(rsa);
+		return FALSE;
+	}
+	RSA_free(rsa);
+	/* do base64 encoding */
+	id = id_b64_encode((char *)result, resultlen);
+	memcpy(res,id,strlen(id)+1);
+	ast_free(id);
+	return TRUE;
+}
+
+/*! \brief callback function for rfc 4474. Interprets errors
+ *
+ * \param ok  status
+ * \param ctx pointer to x509 store cotext
+ * \return Returns 1 for success, 0 value failure
+ */
+static int verify_id_cb(int ok, X509_STORE_CTX *ctx)
+{
+	char buf[512];		/* cert subject buffer. size ok */
+
+	if (sipdebug && ctx->current_cert) {
+		X509_NAME_oneline( X509_get_subject_name(ctx->current_cert),buf, sizeof(buf));
+		ast_log(LOG_NOTICE,"** verify_id_cb(%d): %s\n",ok,buf);
+	}
+	if (!ok) {
+		ast_log(LOG_ERROR,"** verify_id_cb: error %d at %d depth lookup:%s\n",ctx->error,
+			ctx->error_depth, X509_verify_cert_error_string(ctx->error));
+		/* allow self signing as OK */
+		if (ctx->error == X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT) {
+			ok=1;
+		}
+	}
+	return(ok);
+}
+
+
+
+
+/*! \brief main function for rfc 4474 does verifying the signature
+ *
+ * \param digeststr  pointer to digest data
+ * \param identity pointer to identity header data from sip request
+ * \param user pointer to user for whom the key is fetched and data is verified using the public key of user
+ * \param identity_info pointer to identity-info header data from sip request
+ * \return Returns 1 for success any other value failure
+ */
+static int id_verify(const char *digeststr,const char *identity,const char *user,const char *identity_info)
+{
+	char *sig;
+	EVP_PKEY *pkey;
+	RSA *rsa;
+	X509 *cert;
+	int retlen;
+	unsigned char sha1res[20];
+ 	X509_NAME *nm;
+	X509_STORE *ctx;
+	X509_STORE_CTX *csc;
+	int cn_match;
+	int lastpos;
+
+	if (sipdebug) {
+		ast_log(LOG_NOTICE,"** id_verify: digeststr: %s iden: %s user: %s idinfo: %s\n", digeststr, identity, user, identity_info);
+	}
+
+	/* hash the digest string */
+	if (id_hashstr(digeststr, (char *)sha1res) == NULL) {
+		return FALSE;
+	}
+	/* base 64 decode of the identity header */
+	if ((sig=id_b64_decode(identity,strlen(identity),&retlen)) == NULL) {
+		ast_log(LOG_ERROR,"** id_verify(): Cannot decode Identity header\n");
+		return FALSE;
+	}
+	/* get public key for the user */
+	cert = id_get_public_cert(user,identity_info);
+	if (cert == NULL) {
+		return FALSE;
+	}
+	pkey  = id_get_public_key(cert);
+	if (pkey == NULL) {
+		X509_free(cert);
+		return FALSE;
+	}
+	if (NULL == (rsa = EVP_PKEY_get1_RSA(pkey))) {
+		ast_log(LOG_ERROR,"** id_verify: Unable to get RSA Key: %s\n", ssl_err());
+		X509_free(cert);
+		EVP_PKEY_free(pkey);
+		return FALSE;
+	}
+	EVP_PKEY_free(pkey);
+
+	nm = X509_get_subject_name(cert);
+	if (sipdebug) {
+		char subject[256];
+		X509_NAME_oneline(nm, subject, sizeof(subject));
+		ast_log(LOG_NOTICE, "** id_verify Certificate Subject = %s\n", subject);
+        	ast_log(LOG_NOTICE, "** id_verify: size-sha1res: %d retlen: %d \n", sizeof(sha1res), retlen);
+	}
+
+	/*  do rsa verify */
+	if (RSA_verify(NID_sha1, sha1res, sizeof(sha1res),(unsigned char *) sig, retlen, rsa) != 1) {
+		ast_log(LOG_ERROR,"** id_verify: Verify failed: %s\n", ssl_err());
+		X509_free(cert);
+		RSA_free(rsa);
+		return FALSE;
+	}
+	RSA_free(rsa);
+
+
+	/* loop through the CNs */
+	cn_match = FALSE;
+	lastpos = -1 ;
+	do {
+		int name_len;
+		ASN1_STRING *tmp;
+		char *cname2;
+
+	        lastpos = X509_NAME_get_index_by_NID(nm, NID_commonName, lastpos);
+        	if (lastpos < 0) {
+                	break;
+		}
+		tmp = X509_NAME_ENTRY_get_data(X509_NAME_get_entry(nm,lastpos));
+		if (!tmp) {
+			ast_log(LOG_ERROR, "** id_verify: Error Processing certificate CN\n");
+			break;
+		}
+		name_len = ASN1_STRING_length(tmp);
+		cname2 = (char*)ast_malloc(name_len+1);		/* remember ASN1 does not count \0 */
+		memcpy(cname2, ASN1_STRING_data(tmp), ASN1_STRING_length(tmp));
+		cname2[name_len]='\0';
+
+		cn_match = (0==strncmp(user,cname2,name_len+1));
+		if (sipdebug) {
+			ast_log(LOG_DEBUG, "** id_verify: CNAME = %s match:%s\n",cname2,cn_match?"yes":"no");
+		}
+		ast_free(cname2);
+        }
+	while ( !cn_match );
+
+	if (!cn_match) {
+		ast_log(LOG_ERROR, "** id_verify: FAIL: user %s not found in cert CN\n",user);
+		X509_free(cert);
+		return FALSE;
+	}
+
+	if (sipdebug) {
+		ast_log(LOG_NOTICE, "** id_verify: Callerid(num) matches Common Name. ok\n");
+	}
+
+	/* now verify chain */
+	ctx=X509_STORE_new();
+	X509_STORE_set_verify_cb_func(ctx,verify_id_cb);
+
+	if (X509_STORE_set_default_paths(ctx) != 1) {
+		ast_log(LOG_ERROR, " id_verify: X509_STORE_set_default_paths failed\n");
+		X509_STORE_free(ctx);
+		X509_free(cert);
+		return FALSE;
+	}
+	csc = X509_STORE_CTX_new();
+	if (!csc) {
+		ast_log(LOG_ERROR, " id_verify: X509_STORE_CTX_new failed\n");
+		X509_STORE_free(ctx);
+		X509_free(cert);
+		return FALSE;
+	}
+	if (!X509_STORE_CTX_init(csc,ctx,cert,NULL)) {
+		ast_log(LOG_ERROR, " id_verify: X509_STORE_CTX_init failed\n");
+		X509_STORE_free(ctx);
+		X509_STORE_CTX_free(csc);
+		X509_free(cert);
+		return FALSE;
+	}
+	if (!X509_verify_cert(csc)) {
+		ast_log(LOG_ERROR, " id_verify: X509_verify_cert failed.\n");
+		X509_STORE_free(ctx);
+		X509_STORE_CTX_free(csc);
+		X509_free(cert);
+		return FALSE;
+	}
+
+	if (sipdebug) {
+		ast_log(LOG_NOTICE, "** id_verify: validates ok\n");
+	}
+
+	/* verified ok. Now free everything */
+	X509_STORE_free(ctx);
+	X509_STORE_CTX_free(csc);
+	X509_free(cert);
+	ast_free(sig);
+
+	return TRUE;
+}
+/*! \brief helper function for rfc 4474 gets the specific sip header requested
+ *
+ * \param req  pointer to sip_request strucutre
+ * \param name pointer to header value being requested
+ * \param out pointer to buffer where result is stored
+ */
+static void id_get_sip_header(struct sip_request *req,const char *name,char *out,size_t size)
+{
+	const char *p1,*p;
+	p=get_header(req, name);
+
+	if (p!=NULL) {
+		p1=strstr(p,"\r\n");
+		if (p1!=NULL) {
+			size_t len = p1-p;
+			/* reduce size if too long - will likely fail signing */
+			if ( len >= size ) {
+				len=size-1;
+				ast_log(LOG_ERROR,"** id_verify(): sip header too long: %s\n", p);
+			}
+			memcpy(out,p,size);
+			out[len]='\0';
+		}
+		else {
+			strncpy(out,p,size);
+			out[size-1]='\0';
+		}
+	}
+	else { /* no \r\n found so it should be good to copy */
+		strncpy(out,p,size);
+		out[size-1]='\0';	/* ensure null terminated */
+	}
+}
+
+/*! \brief helper function for rfc 4474 gets the address of record
+ *
+ * \param req  pointer to sip_request strucutre
+ * \param name pointer to Address of record value being requested
+ * \param out pointer to buffer where result is stored
+ */
+
+static void id_get_addr_of_record(struct sip_request *req,const char *name,char *out,size_t size)
+{
+	char HeaderReq[IDENTITY_HEADER_SIZE];
+	char *p,*p1;
+
+	id_get_sip_header(req, name,HeaderReq,sizeof(HeaderReq));
+	p=strchr(HeaderReq,'<');
+	if (p!=NULL) {
+		p1=strchr(p,'>');
+		if (p1!=NULL) {
+			if (p1-p-1 > size ) {
+				ast_log(LOG_ERROR,"** id_get_addr_of_record: field too large \n");
+				out[0]='\0';
+			}
+			else {
+				memcpy(out,p+1,p1-p-1);
+				out[p1-p-1]='\0';
+			}
+		}
+	}
+}
+
+/*! \brief entry function for rfc 4474 does signing or verifying signature
+ *
+ * \param req pointer to sip_request structure
+ * \param out pointer to where signing or verifying result is placed (out)
+ * \param sdp pointer to optional sdp data which can be passed as input
+ * \param type 0 for signing 1 for verifying
+ * \param userout pointer where user name is stored in case verifying is done (out)
+ */
+static int id_main(struct sip_request *req,char *out,const char *sdp,enum identity_action type,char *userout,size_t userout_size)
+{
+	char digeststr[2*IDENTITY_HEADER_SIZE],signstr[IDENTITY_HEADER_SIZE],callid[IDENTITY_HEADER_SIZE],cseq[IDENTITY_HEADER_SIZE],date[IDENTITY_HEADER_SIZE];
+	char contactAor[IDENTITY_HEADER_SIZE],toAor[IDENTITY_HEADER_SIZE],fromAor[IDENTITY_HEADER_SIZE],user[40];
+	char idstoverify[IDENTITY_HEADER_SIZE],idinfo[IDENTITY_HEADER_SIZE];
+	char *p,*p1;
+	int rv=0; /* returned value. >1 is success */
+
+	/* ensure all buffers are null strings */
+	contactAor[0]=toAor[0]=fromAor[0]=user[0]= idstoverify[0]=idinfo[0]= digeststr[0]=signstr[0]=callid[0]=cseq[0]=date[0] ='\0';
+
+	if (type==IDENTITY_ACTION_VERIFY) { /* verify the signature*/
+		id_get_sip_header(req,"Identity-Info",idinfo,sizeof(idinfo));
+		if (strlen(idinfo)==0) {
+			return FALSE;
+		}
+		id_get_sip_header(req,"Identity",idstoverify,sizeof(idstoverify));
+		if (sipdebug) {
+			ast_log(LOG_NOTICE,"\n** id_main()\n idstoverify: %s \n idinfo: %s \n ", idstoverify, idinfo);
+		}
+	}
+
+	/* get various header fields */
+	id_get_sip_header(req, "Call-ID",callid,sizeof(callid));
+	id_get_sip_header(req, "CSeq",cseq,sizeof(cseq));
+	id_get_sip_header(req, "Date",date,sizeof(date));
+	/* get address of record */
+	id_get_addr_of_record(req,"To",toAor,sizeof(toAor));
+	id_get_addr_of_record(req,"From",fromAor,sizeof(fromAor));
+	id_get_addr_of_record(req,"Contact",contactAor,sizeof(contactAor));
+	/* get user from from header */
+	if (strlen(fromAor)>0) {
+		p1=strstr(fromAor,":"); /* find sip: */
+		if (p1!=NULL) {
+			p=strstr(p1+1,"@");
+			memcpy(user,p1+1,p-(p1+1));
+			user[p-(p1+1)]='\0';
+			strncpy(userout,user,userout_size);
+			userout[userout_size-1]='\0';	/* ensure null terminated */
+		}
+	}
+	/*build the digest string fromAOR| toAOR| Call id| cSEQ|date|Contacat AOR |SDP*/
+	strcpy(digeststr,fromAor);
+	strcat(digeststr,"|");
+	strcat(digeststr,toAor);
+	strcat(digeststr,"|");
+	strcat(digeststr,callid);
+	strcat(digeststr,"|");
+	strcat(digeststr,cseq);
+	strcat(digeststr,"|");
+	strcat(digeststr,date);
+	strcat(digeststr,"|");
+	strcat(digeststr,contactAor);
+	strcat(digeststr,"|");
+	/*if sdp is not passed then find it*/
+	if (sdp==NULL) {
+		if (find_sdp(req)) {
+			int x;
+			for (x = 0; x < (req->lines); x++) {
+				char *p,*line2;
+			 	line2=ast_strdup(REQ_OFFSET_TO_STR(req, line[x]));
+				p=strstr(line2,"\r\n");
+				if (p!=NULL) {
+					*p='\0';
+                                }
+				strcat(digeststr,line2);
+				strcat(digeststr,"\r\n");
+				ast_free(line2);
+			}
+		}
+	}
+	else {
+	    strcat(digeststr,sdp);
+	}
+
+	/* call appropriate function depending on type */
+	if (type==IDENTITY_ACTION_SIGN) { /* sign */
+		if ( (rv = id_sign(digeststr,signstr,user)) && sipdebug) {
+  			ast_log(LOG_NOTICE,"** id_main() Signing Success \n");
+		}
+
+	}
+	else if (type==IDENTITY_ACTION_VERIFY) { /* verify */
+		rv = id_verify(digeststr,idstoverify,user,idinfo);
+	}
+
+	strcpy(out,signstr);
+	if (sipdebug) {
+		ast_log(LOG_NOTICE,"** Identity id_main() size: %d digeststr: %s\n", strlen(digeststr), digeststr);
+	}
+	return rv;
+}
+
+/*
+ * End RFC4474 Identity definitions configuration values & functions
+ *
+ */
+
 
 static void tcptls_packet_destructor(void *obj)
 {
@@ -10601,6 +11655,16 @@ static enum sip_result add_sdp(struct sip_request *resp, struct sip_pvt *p, int 
 	char buf[SIPBUFSIZE];
 	char dummy_answer[256];
 
+	char signed_identity_digest[IDENTITY_SIGNBUF_SIZE];   /* signed identity digest header parameter */
+	char user[IDENTITY_SIGNBUF_SIZE];		      /* user CALLERID(NUM) */
+	char idinfo[IDENTITY_SIGNBUF_SIZE];		      /* identity-info header parameter */
+	char result_number[3];				      /* Result code */
+	struct ast_str *sdp1;				      /* working copy of sdp for identity */
+
+	signed_identity_digest[0]='\0';
+	user[0]='\0';
+	idinfo[0]='\0';
+
 	/* Set the SDP session name */
 	snprintf(subject, sizeof(subject), "s=%s\r\n", ast_strlen_zero(global_sdpsession) ? "-" : global_sdpsession);
 
@@ -10857,6 +11921,82 @@ static enum sip_result add_sdp(struct sip_request *resp, struct sip_pvt *p, int 
 		len += m_modem->used + a_modem->used;
 
 	add_header(resp, "Content-Type", "application/sdp");
+
+	/* add identity header can be done only here */
+
+	/* build a disposable SDP for signing.  cant use real SDP because once add_line is called, cant add_header */
+	sdp1 = ast_str_create(1024);
+	ast_str_set(&sdp1,0,version);
+	ast_str_append(&sdp1,0,owner);
+	ast_str_append(&sdp1,0,subject);
+	ast_str_append(&sdp1,0,connection);
+
+	if (needvideo){
+		ast_str_append(&sdp1,0,bandwidth);
+	}
+
+	ast_str_append(&sdp1,0,session_time);
+	if (needaudio) {
+		ast_str_append(&sdp1,0,m_audio->str);
+		ast_str_append(&sdp1,0,a_audio->str);
+		ast_str_append(&sdp1,0,hold);
+	}
+
+	if (needvideo) { /* only if video response is appropriate */
+		ast_str_append(&sdp1,0,m_video->str);
+		ast_str_append(&sdp1,0,a_video->str);
+		ast_str_append(&sdp1,0,hold);
+	}
+	if (needtext) { /* only if text response is appropriate */
+		ast_str_append(&sdp1,0,m_text->str);
+		ast_str_append(&sdp1,0,a_text->str);
+		ast_str_append(&sdp1,0,hold);
+	}
+	if (add_t38) { /* only if t38 FAX response is appropriate */
+		ast_str_append(&sdp1,0,m_modem->str);
+		ast_str_append(&sdp1,0,a_modem->str);
+		ast_str_append(&sdp1,0,hold);
+	}
+
+	/* get and add the identity string */
+	if (p->method==SIP_INVITE && (sip_identity_mode==IDENTITY_SIGN || sip_identity_mode==IDENTITY_SIGN_AND_VALIDATE)) {
+		char idinfo[IDENTITY_SIGNBUF_SIZE];
+		/* call get digest string to get the signing result*/
+		id_get_sip_header(&p->initreq,"Identity-Info",idinfo,sizeof(idinfo));
+		if (debug) {
+			ast_log(LOG_NOTICE,"set idinfo [%s]\n",idinfo);
+		}
+		id_main(resp,signed_identity_digest,ast_str_buffer(sdp1),IDENTITY_ACTION_SIGN,user,sizeof(user));
+		ast_free(sdp1);
+		if (strlen(signed_identity_digest)>0) {
+			strcpy(idinfo,"<");
+			strcpy(&idinfo[1],identity_public_url_prefix);
+			strcat(idinfo,user);
+			strcpy(&idinfo[strlen(idinfo)],identity_public_url_suffix);
+			strcat(idinfo,">;alg=rsa-sha1");
+			add_header(resp, "Identity", signed_identity_digest);
+			add_header(resp, "Identity-Info",idinfo);
+			if (sipdebug) {
+				ast_log(LOG_NOTICE,"id [%s]\n idinfo [%s]\n",signed_identity_digest,idinfo);
+			}
+			p->initreq.sip_identity_result=IDENTITY_RES_SIGN_OK;
+		}
+		else {
+			p->initreq.sip_identity_result=IDENTITY_RES_SIGN_BROKEN_KEY;  /* assume broken for now */
+		}
+	}
+	else {
+		p->initreq.sip_identity_result=IDENTITY_RES_SIGN_DISABLED;
+	}
+
+	/* set channel variable with result */
+	sprintf(result_number,"%2d",p->initreq.sip_identity_result);
+	pbx_builtin_setvar_helper(p->owner,"IDENTITY_RESULT",result_number);
+	if (sipdebug) {
+		ast_log(LOG_NOTICE,"** Set Chan_Var rfc4474_id_res SIGN result to test: [%d], %s\n",p->initreq.sip_identity_result,ident_status(p->initreq.sip_identity_result));
+	}
+
+	/* Add content length now */
 	add_header_contentLength(resp, len);
 	add_line(resp, version);
 	add_line(resp, owner);
@@ -16802,6 +17942,37 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
 		ast_cli(a->fd, "  Save sys. name:         %s\n", cli_yesno(sip_cfg.rtsave_sysname));
 		ast_cli(a->fd, "  Auto Clear:             %d\n", sip_cfg.rtautoclear);
 	}
+
+	ast_cli(a->fd, "\nSIP Identity Settings:\n");
+	ast_cli(a->fd,   "--------------------------\n");
+	if (sip_identity_mode==IDENTITY_DISABLED) {
+		ast_cli(a->fd, "  Mode:     			  no  (disabled)\n");
+	}
+	else {
+
+		char* mode;
+		switch(sip_identity_mode) {
+			case IDENTITY_SIGN:
+				mode="sign";
+				break;
+			case IDENTITY_VALIDATE:
+				mode="sign";
+				break;
+			default:
+				mode="sign_and_val";
+		}
+
+		ast_cli(a->fd, "  Mode:                   %s\n", mode);
+		ast_cli(a->fd, "  Private URL Prefix:     %s\n", identity_private_url_prefix);
+		ast_cli(a->fd, "  Private URL Suffix:     %s\n", identity_private_url_suffix);
+		ast_cli(a->fd, "  Private File Path:      %s\n", identity_private_path);
+		ast_cli(a->fd, "  Public URL Prefix:      %s\n", identity_public_url_prefix);
+		ast_cli(a->fd, "  Public URL Suffix:      %s\n", identity_public_url_suffix);
+		ast_cli(a->fd, "  Public File Path:       %s\n", identity_public_path);
+		ast_cli(a->fd, "  Cache Path:             %s\n", identity_cache_path);
+
+	}
+
 	ast_cli(a->fd, "\n----\n");
 	return CLI_SUCCESS;
 }
@@ -21053,6 +22224,31 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 			ast_rtp_instance_set_prop(p->rtp, AST_RTP_PROPERTY_DTMF_COMPENSATE, ast_test_flag(&p->flags[1], SIP_PAGE2_RFC2833_COMPENSATE));
 		}
 
+		/* verify identity here */
+		if (sip_identity_mode==IDENTITY_VALIDATE || sip_identity_mode==IDENTITY_SIGN_AND_VALIDATE) {	/* validate flag or signandvalid flag */
+			char buff[IDENTITY_SIGNBUF_SIZE],user[IDENTITY_SIGNBUF_SIZE],idinfo[IDENTITY_SIGNBUF_SIZE];
+			memset(buff,'\0',sizeof(buff));
+			memset(user,'\0',sizeof(user));
+			memset(idinfo,'\0',sizeof(idinfo));
+			/* run the get digest string function to get validation result*/
+			id_get_sip_header(req,"Identity-Info",idinfo,sizeof(idinfo));
+			if (idinfo[0]!='\0') {	/* only if identity info header present do validation */
+				if (id_main(req,buff,NULL,IDENTITY_ACTION_VERIFY,user,sizeof(user))) {
+					/* check the result and set the result in req structure variable sip_identity_mode*/
+					req->sip_identity_result=IDENTITY_RES_VAL_OK;
+				}
+				else {
+					req->sip_identity_result=IDENTITY_RES_VAL_BROKEN_CERT;
+				}
+				if (sipdebug) {
+					ast_log(LOG_NOTICE,"** handle_request_invite(), verify result user: %s buff: %s sip_identity_result: %d=%s\n",user, buff, req->sip_identity_result,ident_status(req->sip_identity_result));
+				}
+			}
+		}
+		else {
+		    req->sip_identity_result=IDENTITY_RES_VAL_DISABLED;
+		}
+
 		if (!replace_id && gotdest) {	/* No matching extension found */
 			if (gotdest == 1 && ast_test_flag(&p->flags[1], SIP_PAGE2_ALLOWOVERLAP))
 				transmit_response_reliable(p, "484 Address Incomplete", req);
@@ -21086,6 +22282,13 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 			build_route(p, req, 0);
 
 			if (c) {
+				char res[3];
+				sprintf(res,"%d",req->sip_identity_result);
+				if (sipdebug) {
+					ast_log(LOG_NOTICE,"** Set Chan_Var rfc4474_id_res acc to test: [%d], %s\n",p->initreq.sip_identity_result,ident_status(p->initreq.sip_identity_result));
+				}
+				/* set channel variable acc to test */
+				pbx_builtin_setvar_helper(c,"IDENTITY_RESULT",res);
 				/* Pre-lock the call */
 				ast_channel_lock(c);
 				ast_channel_set_redirecting(c, &redirecting);
@@ -25588,6 +26791,16 @@ static int reload_config(enum channelreloadreason reason)
 
 	sip_cfg.matchexterniplocally = DEFAULT_MATCHEXTERNIPLOCALLY;
 
+	/* identity settings */
+	sip_identity_mode=IDENTITY_DISABLED;
+	ast_copy_string(identity_private_url_prefix, 	DEFAULT_IDENTITY_PRIV_URL_PREFIX, sizeof(identity_private_url_prefix));
+	ast_copy_string(identity_private_url_suffix, 	DEFAULT_IDENTITY_PRIV_URL_SUFFIX, sizeof(identity_private_url_suffix));
+	ast_copy_string(identity_public_url_prefix, 	DEFAULT_IDENTITY_PUB_URL_PREFIX, sizeof(identity_public_url_prefix));
+	ast_copy_string(identity_public_url_suffix, 	DEFAULT_IDENTITY_PUB_URL_SUFFIX, sizeof(identity_public_url_suffix));
+	ast_copy_string(identity_public_path,           DEFAULT_IDENTITY_PUB_PATH, sizeof(identity_public_path));
+	ast_copy_string(identity_private_path, 			DEFAULT_IDENTITY_PRIV_PATH, sizeof(identity_private_path));
+	ast_copy_string(identity_cache_path, 			DEFAULT_IDENTITY_CACHE_PATH, sizeof(identity_cache_path));
+
 	/* Copy the default jb config over global_jbconf */
 	memcpy(&global_jbconf, &default_jbconf, sizeof(struct ast_jb_conf));
 
@@ -26052,6 +27265,43 @@ static int reload_config(enum channelreloadreason reason)
 			ast_set2_flag(&global_flags[1], ast_true(v->value), SIP_PAGE2_Q850_REASON);
 		}
 	}
+		/* Read the [identity] config section of sip.conf (or from realtime config) */
+	for (v = ast_variable_browse(cfg, "identity"); v; v = v->next) {
+		if (!strcasecmp(v->name, "identity_private_url_prefix")) {
+			ast_copy_string(identity_private_url_prefix, v->value, sizeof(identity_private_url_prefix));
+			ast_log(LOG_NOTICE, " identity_private_url_prefix=[%s]",identity_private_url_prefix );
+		}else if (!strcasecmp(v->name, "identity_private_url_suffix")) {
+			ast_copy_string(identity_private_url_suffix, v->value, sizeof(identity_private_url_suffix));
+			ast_log(LOG_NOTICE, " identity_private_url_suffix=[%s]",identity_private_url_suffix );
+		}else if (!strcasecmp(v->name, "identity_public_url_prefix")) {
+			ast_copy_string(identity_public_url_prefix, v->value, sizeof(identity_public_url_prefix));
+			ast_log(LOG_NOTICE, " identity_public_url_prefix=[%s]",identity_public_url_prefix );
+		}else if (!strcasecmp(v->name, "identity_public_url_suffix")) {
+			ast_copy_string(identity_public_url_suffix, v->value, sizeof(identity_public_url_suffix));
+			ast_log(LOG_NOTICE, " identity_public_url_suffix=[%s]",identity_public_url_suffix );
+		}else if (!strcasecmp(v->name, "identity_public_path")) {
+			ast_copy_string(identity_public_path, v->value, sizeof(identity_public_path));
+			ast_log(LOG_NOTICE, " identity_public_path=[%s]",identity_public_path );
+		}else if (!strcasecmp(v->name, "identity_private_path")) {
+			ast_copy_string(identity_private_path, v->value, sizeof(identity_private_path));
+			ast_log(LOG_NOTICE, " identity_private_path=[%s]",identity_private_path );
+		}else if (!strcasecmp(v->name, "identity_cache_path")) {
+			ast_copy_string(identity_cache_path, v->value, sizeof(identity_cache_path));
+			ast_log(LOG_NOTICE, " identity_cache_path=[%s]",identity_cache_path );
+		}
+		else if (!strcasecmp(v->name, "sip_identity_mode")) {
+			if (!strcasecmp(v->value, "no")){
+				sip_identity_mode=IDENTITY_DISABLED;
+			}else if (!strcasecmp(v->value, "sign")){
+				sip_identity_mode=IDENTITY_SIGN;
+			}else if (!strcasecmp(v->value, "val")){
+				sip_identity_mode=IDENTITY_VALIDATE;
+			}else if (!strcasecmp(v->value, "sign_and_val")){
+				sip_identity_mode=IDENTITY_SIGN_AND_VALIDATE;
+			}
+			ast_log(LOG_NOTICE, " sip_identity_mode=[%d],[%s]",sip_identity_mode,v->value );
+		}
+	}
 
 	if (!sip_cfg.allow_external_domains && AST_LIST_EMPTY(&domain_list)) {
 		ast_log(LOG_WARNING, "To disallow external domains, you need to configure local SIP domains.\n");
@@ -26145,7 +27395,7 @@ static int reload_config(enum channelreloadreason reason)
 	cat = NULL;
 	while ( (cat = ast_category_browse(cfg, cat)) ) {
 		const char *utype;
-		if (!strcasecmp(cat, "general") || !strcasecmp(cat, "authentication"))
+		if (!strcasecmp(cat, "general") || !strcasecmp(cat, "authentication")|| !strcasecmp(cat, "identity"))
 			continue;
 		utype = ast_variable_retrieve(cfg, cat, "type");
 		if (!utype) {

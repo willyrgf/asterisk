@@ -1005,6 +1005,97 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ; unsolicited_mailbox
 ; use_q850_reason
 
+;--------------------------- RFC 4474 SIP Identity handling ----------------------------
+;
+; RFC 4474 describes the introduction of SIP Identity as follows
+;
+;   The existing security mechanisms in the Session Initiation Protocol
+;   (SIP) are inadequate for cryptographically assuring the identity of
+;   the end users that originate SIP requests, especially in an
+;   interdomain context.  This document defines a mechanism for securely
+;   identifying originators of SIP messages.  It does so by defining two
+;   new SIP header fields, Identity, for conveying a signature used for
+;   validating the identity, and Identity-Info, for conveying a reference
+;   to the certificate of the signer.
+; 
+; The current implementation implements much of the RFC however, it 
+; only signs and validates INVITE messages.  The result of the signing 
+; and validation is placed in a channel variable ( IDENTITY_RESULT )
+; for dialplan interpretation. The private keys for signing are taken from 
+; a local directory, a cache, or an http server. The private key is used 
+; to sign a digest string. The certificate is retrieved from the location 
+; specified in the Identity-Info header, or from the cache, if present. 
+; SSL is not currently supported. 
+;
+; The signature found in the identity header is used along with the 
+; certificate to confirm the digest headers have not been changed. 
+; we confirm the Calling Number matches one of the Common names in the 
+; certificate and that the key chain is valid. 
+; 
+; See section 10.1 of RFC4474 for an example. 
+;
+; 
+; This section controls the Identity configuration 
+;
+[identity]
+
+; Specify Identity RFC4474 handling
+; Possible values: [no|sign|val|sign_and_val]
+;  no 		- no signing or validation is to be performed
+;  sign		- sign all sent invite message
+;  val 		- validate all invite messages
+;  sign_and_val - perform both signing and validatation.
+
+sip_identity_mode=sign_and_val
+
+
+; Allow private keys to be retreived from the local host or 
+; fetched from a secure server
+; Note: 
+; For security reasons, all private keys shall be stored locally
+; Fetching private keys from server is currently disabled
+; Default path: /var/lib/asterisk/identity/keys/
+
+; location of local key store
+identity_private_path=/etc/ssl/private/
+
+; URL for fetching keys (disabled) 
+;identity_private_url_prefix=https://reference.inchargesys.com/ca/keys/
+
+; filename suffix for private keys, e.g., ".ppk'
+identity_private_url_suffix=
+
+; Allow certificates to be retrieved from the local host or fetched from
+; publishing server.
+;
+; Default path: /var/lib/asterisk/identity/certs/
+; identity_public_path=/
+
+; default URL for certificates, ( Identity-info header overrides ) 
+identity_public_url_prefix=http://reference.inchargesys.com/ca/certs/
+
+; suffix for certificate files, e.g., ".pub"
+identity_public_url_suffix=
+
+; Caching directory for certificates
+; Default path: /var/lib/asterisk/identity/cache/
+identity_cache_path=/etc/ssl/cache/
+
+; URL port override.  port on rempte server.  (80=default)
+priv_url_port=80
+pub_url_port=80
+
+; This sip peer may be used to verify and sign Invire messages
+;[ref_out]
+;type=peer
+;host=ctww.de
+;outboundproxy=reference.inchargesys.com
+;disallow=all
+;allow=gsm
+;allow=alaw
+;allow=ulaw
+;allow=ulaw
+
 ;[sip_proxy]
 ; For incoming calls only. Example: FWD (Free World Dialup)
 ; We match on IP address of the proxy for incoming calls
