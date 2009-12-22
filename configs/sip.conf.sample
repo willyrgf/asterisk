@@ -1081,10 +1081,6 @@ identity_public_url_suffix=
 ; Default path: /var/lib/asterisk/identity/cache/
 identity_cache_path=/etc/ssl/cache/
 
-; URL port override.  port on rempte server.  (80=default)
-priv_url_port=80
-pub_url_port=80
-
 ; This sip peer may be used to verify and sign Invire messages
 ;[ref_out]
 ;type=peer

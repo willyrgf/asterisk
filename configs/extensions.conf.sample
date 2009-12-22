@@ -462,7 +462,7 @@ exten => a,n,Return()
 ;IDENTITY_RES_VAL_BROKEN_CERT=8,    /*!< rfc4474 validation broken cert*/
 ;IDENTITY_RES_VAL_NO_CERT=9,        /*!< rfc4474 validation no public cert found */
 
-; dispatch to roper message
+; dispatch to proper message
 exten => s,1,NoOp(***Ref_IN*** inc. fr. reference system\n C-ID: ${CALLERID(all)})
 exten => s,n,NoOp( ** IDENTITY_RESULT: ${IDENTITY_RESULT})
 exten => s,n,GotoIf($["${IDENTITY_RESULT}" = "0"]?undef)
