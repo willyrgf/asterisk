@@ -153,6 +153,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					<option name="r">
 						<para>Ring instead of playing MOH. Periodic Announcements are still made, if applicable.</para>
 					</option>
+					<option name="R">
+						<para>Ring instead of playing MOH when a member channel is actually ringing.</para>
+					</option>
 					<option name="t">
 						<para>Allow the <emphasis>called</emphasis> user to transfer the calling user.</para>
 					</option>
@@ -434,7 +437,10 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 						<para>Returns the number of logged-in members for the specified queue.</para>
 					</enum>
 					<enum name="free">
-						<para>Returns the number of logged-in members for the specified queue available to take a call.</para>
+						<para>Returns the number of logged-in members for the specified queue that either can take calls or are currently wrapping up after a previous call.</para>
+					</enum>
+					<enum name="ready">
+						<para>Returns the number of logged-in members for the specified queue that are immediately available to answer a call.</para>
 					</enum>
 					<enum name="count">
 						<para>Returns the total number of members for the specified queue.</para>
@@ -807,6 +813,7 @@ struct queue_ent {
 	int pos;                               /*!< Where we are in the queue */
 	int prio;                              /*!< Our priority */
 	int last_pos_said;                     /*!< Last position we told the user */
+	int ring_when_ringing;                 /*!< Should we only use ring indication when a channel is ringing? */
 	time_t last_periodic_announce_time;    /*!< The last time we played a periodic announcement */
 	int last_periodic_announce_sound;      /*!< The last periodic announcement we made */
 	time_t last_pos;                       /*!< Last time we told the user their position */
@@ -3092,6 +3099,13 @@ static void record_abandoned(struct queue_ent *qe)
 static void rna(int rnatime, struct queue_ent *qe, char *interface, char *membername, int pause)
 {
 	ast_verb(3, "Nobody picked up in %d ms\n", rnatime);
+
+	/* Stop ringing, and resume MOH if specified */
+	if (qe->ring_when_ringing) {
+		ast_indicate(qe->chan, -1);
+		ast_moh_start(qe->chan, qe->moh, NULL);
+	}
+
 	if (qe->parent->eventwhencalled) {
 		char vars[2048];
 
@@ -3392,6 +3406,12 @@ static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callatte
 							break;
 						case AST_CONTROL_RINGING:
 							ast_verb(3, "%s is ringing\n", ochan_name);
+
+							/* Start ring indication when the channel is ringing, if specified */
+							if (qe->ring_when_ringing) {
+								ast_moh_stop(qe->chan);
+								ast_indicate(qe->chan, AST_CONTROL_RINGING);
+							}
 							break;
 						case AST_CONTROL_OFFHOOK:
 							/* Ignore going off hook */
@@ -5527,6 +5547,10 @@ static int queue_exec(struct ast_channel *chan, const char *data)
 	if (args.options && (strchr(args.options, 'r')))
 		ringing = 1;
 
+	if (ringing != 1 && args.options && (strchr(args.options, 'R'))) {
+		qe.ring_when_ringing = 1;
+	}
+
 	if (args.options && (strchr(args.options, 'c')))
 		qcontinue = 1;
 
@@ -5772,8 +5796,8 @@ static int queue_function_var(struct ast_channel *chan, const char *cmd, char *d
 }
 
 /*! 
- * \brief Get number either busy / free or total members of a specific queue
- * \retval number of members (busy / free / total)
+ * \brief Get number either busy / free / ready or total members of a specific queue
+ * \retval number of members (busy / free / ready / total)
  * \retval -1 on error
 */
 static int queue_function_qac(struct ast_channel *chan, const char *cmd, char *data, char *buf, size_t len)
@@ -5810,6 +5834,19 @@ static int queue_function_qac(struct ast_channel *chan, const char *cmd, char *d
 			while ((m = ao2_iterator_next(&mem_iter))) {
 				/* Count the agents who are logged in and presently answering calls */
 				if ((m->status == AST_DEVICE_NOT_INUSE) && (!m->paused)) {
+					count++;
+				}
+				ao2_ref(m, -1);
+			}
+			ao2_iterator_destroy(&mem_iter);
+		} else if (!strcasecmp(option, "ready")) {
+			time_t now;
+			time(&now);
+			mem_iter = ao2_iterator_init(q->members, 0);
+			while ((m = ao2_iterator_next(&mem_iter))) {
+				/* Count the agents who are logged in, not paused and not wrapping up */
+				if ((m->status == AST_DEVICE_NOT_INUSE) && (!m->paused) &&
+						!(m->lastcall && q->wrapuptime && ((now - q->wrapuptime) < m->lastcall))) {
 					count++;
 				}
 				ao2_ref(m, -1);
