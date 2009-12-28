@@ -659,6 +659,9 @@
    your system. */
 #undef PTHREAD_CREATE_JOINABLE
 
+/* Define if your system needs braces around PTHREAD_ONCE_INIT */
+#undef PTHREAD_ONCE_INIT_NEEDS_BRACES
+
 /* Define as the return type of signal handlers (`int' or `void'). */
 #undef RETSIGTYPE
 
