@@ -124,6 +124,7 @@ int daemon(int, int);  /* defined in libresolv of all places */
 #include "asterisk/devicestate.h"
 #include "asterisk/module.h"
 #include "asterisk/poll-compat.h"
+#include "asterisk/nacl.h"
 
 #include "asterisk/doxyref.h"		/* Doxygen documentation */
 
@@ -3096,6 +3097,8 @@ int main(int argc, char *argv[])
 	astobj2_init();
 
 	ast_autoservice_init();
+
+	ast_nacl_load();	/* Initiate named ACLs before loading any modules */
 
 	if (load_modules(1)) {
 		printf("%s", term_quit());

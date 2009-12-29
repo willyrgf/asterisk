@@ -51,6 +51,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/rtp.h"
 #include "asterisk/http.h"
 #include "asterisk/lock.h"
+#include "asterisk/nacl.h"
 
 #include <dlfcn.h>
 
@@ -255,6 +256,7 @@ static struct reload_classes {
 	{ "extconfig",	read_config_maps },
 	{ "enum",	ast_enum_reload },
 	{ "manager",	reload_manager },
+	{ "nacl",	ast_nacl_reload },
 	{ "rtp",	ast_rtp_reload },
 	{ "http",	ast_http_reload },
 	{ "logger",	logger_reload },

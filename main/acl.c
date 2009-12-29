@@ -579,4 +579,3 @@ int ast_find_ourip(struct in_addr *ourip, struct sockaddr_in bindaddr)
 		return 0;
 	return get_local_address(ourip);
 }
-

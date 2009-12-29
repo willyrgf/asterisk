@@ -1,0 +1,13 @@
+; Configuration for named ACLs
+;
+; Named ACLs are usable in many parts of Asterisk, like the AMI, the SIP channel and in the HTTP server.
+; There are named ACls created by various modules. List the configured named ACLs with the CLI
+; command "nacl show". The ones configured here has "config" as owner.
+
+; NACL names prefixed with ast_ are reserved by the system for internal use.
+
+; Example
+[mylocalnetwork]
+deny=all
+permit=192.168.0.0/24	; CIDR notation
+permit=192.168.1.125/255.255.255.255	; Subnetmask
