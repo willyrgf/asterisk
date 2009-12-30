@@ -34,6 +34,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <unistd.h>
 
 #include "asterisk/acl.h"
+#include "asterisk/astobj.h"
 #include "asterisk/config.h"
 #include "asterisk/logger.h"
 #include "asterisk/cli.h"
@@ -56,16 +57,18 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 /*! \brief Structure for named ACL */
 struct named_acl {
-	char name[MAXHOSTNAMELEN];		/*!< Name of this ACL */
+	ASTOBJ_COMPONENTS(struct named_acl);
+	char tag[MAXHOSTNAMELEN];		/*!< Name of this ACL */
 	struct ast_ha *acl;			/*!< The actual ACL */
-	int refcount;				/*!< Number of users of this ACL */
-	int delete;				/*!< Delete this ACL when refcount is zero */
 	int rules;				/*!< Number of ACL rules */
 	char owner[20];				/*!< Owner (module) */
-	AST_LIST_ENTRY(named_acl) list;		/*!< List mechanics */
+	char desc[80];				/*!< Description */
 };
 
-static AST_LIST_HEAD_STATIC(nacl_list, named_acl);	/*!< The named acl list */
+/*! \brief  The user list: Users and friends */
+static struct nacl_list_def {
+        ASTOBJ_CONTAINER_COMPONENTS(struct named_acl);
+} nacl_list;
 
 /*! \brief Add named ACL to list (done from configuration file or module) 
 	Internal ACLs, created by Asterisk modules, should use a name that
@@ -84,12 +87,12 @@ struct named_acl *ast_nacl_add(const char *name, const char *owner)
 		return NULL;
 	}
 
+	ASTOBJ_INIT(nacl);
+
 	ast_copy_string(nacl->name, name, sizeof(nacl->name));
 	ast_copy_string(nacl->owner, owner, sizeof(nacl->owner));
 
-	AST_LIST_LOCK(&nacl_list);
-	AST_LIST_INSERT_TAIL(&nacl_list, nacl, list);
-	AST_LIST_UNLOCK(&nacl_list);
+	ASTOBJ_CONTAINER_LINK(&nacl_list,nacl);
 
  	if (option_debug > 2) {
 		ast_log(LOG_DEBUG, "Added named ACL '%s'\n", name);
@@ -101,26 +104,42 @@ struct named_acl *ast_nacl_add(const char *name, const char *owner)
 /*! \brief Find a named ACL 
 	if deleted is true, we will find deleted items too
 	if owner is NULL, we'll find all otherwise owner is used for selection too
+	We raise the refcount on the result, which the calling function need to deref.
 */
 struct named_acl *ast_nacl_find_all(const char *name, const int deleted, const char *owner)
 {
 	struct named_acl *nacl = NULL;
 
-	AST_LIST_LOCK(&nacl_list);
-	AST_LIST_TRAVERSE(&nacl_list, nacl, list) {
-		if (!strcasecmp(nacl->name, name) && (owner == NULL || !strcasecmp(nacl->owner,owner))) {
-			if (nacl->delete) {
+	ASTOBJ_CONTAINER_WRLOCK(&nacl_list);
+	ASTOBJ_CONTAINER_TRAVERSE(&nacl_list, 1, do {
+		ASTOBJ_WRLOCK(iterator);
+
+		if (!strcasecmp(iterator->name, name) && (owner == NULL || !strcasecmp(iterator->owner,owner))) {
+			if (iterator->objflags & ASTOBJ_FLAG_MARKED) {
 				if (deleted) {
+					nacl = iterator;
+					ASTOBJ_REF(iterator);
 					continue;
 				}
 			} else {
+				nacl = iterator;
+				ASTOBJ_REF(iterator);
 				continue;
 			}
 		}
-	}
-	AST_LIST_UNLOCK(&nacl_list);
+		ASTOBJ_UNLOCK(iterator);
+	} while (0) );
+	ASTOBJ_CONTAINER_UNLOCK(&nacl_list);
 
 	return nacl;
+}
+
+/*! \brief destroy a NACL */
+static void nacl_destroy(struct named_acl *nacl)
+{
+	if (option_debug > 2)
+		ast_log(LOG_DEBUG, "--- Destruction of NACL %s is NOW. Please have a safe distance.\n", nacl->name);
+	free(nacl);
 }
 
 /*! \brief Find a named ACL 
@@ -130,42 +149,24 @@ struct named_acl *ast_nacl_find(const char *name)
 	return ast_nacl_find_all(name, 0, NULL);
 }
 
-/*! \brief Clear all named ACLs that is not used
+/*! \brief MarkClear all named ACLs owned by us 
 	Mark the others as deletion ready.
 */
-void ast_nacl_clear_all_unused(const char *owner)
+int ast_nacl_mark_all_owned(const char *owner)
 {
-	struct named_acl *nacl = NULL;
+	int pruned = 0;
 
-	AST_LIST_LOCK(&nacl_list);
-	AST_LIST_TRAVERSE_SAFE_BEGIN(&nacl_list, nacl, list) {
-		if (owner == NULL || !strcasecmp(nacl->owner, owner)) {
-			if(nacl->refcount == 0) {
-				AST_LIST_REMOVE_CURRENT(&nacl_list, list);
-			} else {
-				nacl->delete = 1;
-			}
+	ASTOBJ_CONTAINER_WRLOCK(&nacl_list);
+	ASTOBJ_CONTAINER_TRAVERSE(&nacl_list, 1, do {
+		ASTOBJ_RDLOCK(iterator);
+		if (owner == NULL || !strcasecmp(iterator->owner, owner)) {
+			ASTOBJ_MARK(iterator);
+			pruned++;
 		}
-	}
-	AST_LIST_TRAVERSE_SAFE_END;
-
-	AST_LIST_UNLOCK(&nacl_list);
-}
-
-
-/*! \brief Clear the ACL list - all the time
-*/
-static void nacl_clear_all_force(void)
-{
-	struct named_acl *nacl = NULL;
-
-	AST_LIST_LOCK(&nacl_list);
-
-	while ((nacl = AST_LIST_REMOVE_HEAD(&nacl_list, list))) {
-		free(nacl);
-	}
-
-	AST_LIST_UNLOCK(&nacl_list);
+		ASTOBJ_UNLOCK(iterator);
+	} while (0) );
+	ASTOBJ_CONTAINER_UNLOCK(&nacl_list);
+	return pruned;
 }
 
 
@@ -181,7 +182,6 @@ struct named_acl *ast_nacl_attach(const char *name)
 	if (!nacl) {
 		return NULL;
 	}
-	nacl->refcount++;
 	return nacl;
 }
 
@@ -193,11 +193,7 @@ void ast_nacl_detach(struct named_acl *nacl)
 	if (!nacl) {
 		return; /* What's up, doc? */
 	}
-	nacl->refcount--;
-	if (nacl->refcount == 0 && nacl->delete) {
-		AST_LIST_REMOVE(&nacl_list, nacl, list);
-		free(nacl);
-	}
+	ASTOBJ_UNREF(nacl, nacl_destroy);
 }
 
 static char show_nacls_usage[] = 
@@ -229,28 +225,21 @@ static void ha_list(int fd, struct ast_ha *ha, const int rules)
 /*! \brief CLI command to list named ACLs */
 static int cli_show_nacls(int fd, int argc, char *argv[])
 {
-	struct named_acl *nacl;
-#define FORMAT "%-40.40s %-20.20s %5d %5d %-3.3s\n"
-#define FORMAT2 "%-40.40s %-20.20s %-5.5s %-5.5s %-3.3s\n"
+#define FORMAT "%-40.40s %-20.20s %5d %5d \n"
+#define FORMAT2 "%-40.40s %-20.20s %-5.5s %-5.5s\n"
 
-	if (AST_LIST_EMPTY(&nacl_list)) {
-		ast_cli(fd, "No named ACLs configured.\n\n");
-		return RESULT_SUCCESS;
-	} else {
-		ast_cli(fd, FORMAT2, "ACL name:", "Set by", "#rules", "Usage", "Delete");
-		AST_LIST_LOCK(&nacl_list);
-		AST_LIST_TRAVERSE(&nacl_list, nacl, list) {
-			ast_cli(fd, FORMAT, nacl->name, 
-				S_OR(nacl->owner, "-"),
-				nacl->rules,
-				nacl->refcount,
-				nacl->delete ? "Yes" : "No");
-			ha_list(fd, nacl->acl, nacl->rules);
-		}
-		AST_LIST_UNLOCK(&nacl_list);
-		ast_cli(fd, "\n");
-		return RESULT_SUCCESS;
-	}
+	ast_cli(fd, FORMAT2, "ACL name:", "Set by", "#rules", "Usage");
+	ASTOBJ_CONTAINER_TRAVERSE(&nacl_list, 1, {
+                ASTOBJ_RDLOCK(iterator);
+		ast_cli(fd, FORMAT, iterator->name, 
+			S_OR(iterator->owner, "-"),
+			iterator->rules,
+			iterator->refcount);
+		ha_list(fd, iterator->acl, iterator->rules);
+                ASTOBJ_UNLOCK(iterator);
+	} );
+	ast_cli(fd, "\n");
+	return RESULT_SUCCESS;
 }
 #undef FORMAT
 #undef FORMAT2
@@ -269,9 +258,10 @@ static int nacl_init(int reload_reason)
 	struct ast_variable *v;
 	char *cat = NULL;
 	struct named_acl *nacl = NULL;
+	int marked = 0;
 
 	/* Clear all existing NACLs - or mark them for deletion */
-	ast_nacl_clear_all_unused("config");
+	marked = ast_nacl_mark_all_owned("config");
 
 	cfg = ast_config_load("nacl.conf");
 	if (cfg) {
@@ -283,8 +273,9 @@ static int nacl_init(int reload_reason)
 		
 			nacl = ast_nacl_find_all(cat, 1, "config");	/* Find deleted items */
 			if (nacl) {
-				nacl->delete = 0;	/* Reset delete flag */
+				ASTOBJ_UNMARK(nacl);
 				ast_free_ha(nacl->acl);	/* Delete existing ACL (locking needed indeed) */
+				ASTOBJ_UNREF(nacl, nacl_destroy);
 			} else {
 				nacl = ast_nacl_add(cat, "config");
 			}
@@ -301,6 +292,12 @@ static int nacl_init(int reload_reason)
 		}
 		ast_config_destroy(cfg);
 	} 
+
+	if (marked) {
+		ASTOBJ_CONTAINER_WRLOCK(&nacl_list);
+		ASTOBJ_CONTAINER_PRUNE_MARKED(&nacl_list, nacl_destroy);
+		ASTOBJ_CONTAINER_UNLOCK(&nacl_list);
+	}
 
 	if (reload_reason == NACL_LOAD) {
 		ast_cli_register(&cli_nacl);
@@ -319,3 +316,26 @@ int ast_nacl_reload(void)
 {
 	return nacl_init(NACL_RELOAD);
 }
+
+#ifdef ERROR
+nacl.c: In function 'ast_nacl_add':
+nacl.c:95: warning: assignment from incompatible pointer type
+nacl.c: In function 'ast_nacl_find_all':
+nacl.c:114: warning: assignment from incompatible pointer type
+nacl.c:114: warning: implicit declaration of function 'ASTOBJ_RDUNLOCK'
+nacl.c: At top level:
+nacl.c:156: warning: no previous prototype for 'ast_nacl_mark_all_owned'
+nacl.c: In function 'ast_nacl_mark_all_owned':
+nacl.c:161: warning: assignment from incompatible pointer type
+nacl.c:157: warning: unused variable 'nacl'
+nacl.c:326:1: error: unterminated argument list invoking macro "ASTOBJ_CONTAINER_TRAVERSE"
+nacl.c: In function 'cli_show_nacls':
+nacl.c:239: error: 'ASTOBJ_CONTAINER_TRAVERSE' undeclared (first use in this function)
+nacl.c:239: error: (Each undeclared identifier is reported only once
+nacl.c:239: error: for each function it appears in.)
+nacl.c:239: error: expected ';' at end of input
+nacl.c:239: error: expected declaration or statement at end of input
+nacl.c:229: warning: unused variable 'nacl'
+nacl.c:239: warning: no return statement in function returning non-void
+#endif
+

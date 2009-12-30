@@ -42,15 +42,13 @@ struct named_acl *ast_nacl_find_all(const char *name, const int deleted, const c
  */
 struct named_acl *ast_nacl_find(const char *name);
 
-/*! \brief Clear all named ACLs that is not used
-	Mark the others as deletion ready.
-	If owner is NULL, clear ALL, otherwise only nacls with the same owner
+/*! \brief Mark all the owned NACLs
 */
-void ast_nacl_clear_all_unused(const char *owner);
+int ast_nacl_mark_all_owned(const char *owner);
 
 /*! \brief Attach to a named ACL. You need to detach later 
 	This is to avoid Named ACLs to disappear from runtime. Even if they are deleted from the
-	configuration, they will still be around
+	configuration, they will still be around thanks to ASTOBJs
  */
 struct named_acl *ast_nacl_attach(const char *name);
 
