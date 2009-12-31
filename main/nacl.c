@@ -362,7 +362,7 @@ static int cli_show_nacls(int fd, int argc, char *argv[])
 		ast_cli(fd, FORMAT, nacl->name, 
 			S_OR(nacl->owner, "-"),
 			nacl->rules,
-			ao2_ref(nacl, 0),
+			(ao2_ref(nacl, 0) -1),
 			nacl->manipulated ? "M" : "");
 		ha_list(fd, nacl->acl, nacl->rules);
                 ao2_ref(nacl, -1);
