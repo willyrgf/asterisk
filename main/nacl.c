@@ -36,12 +36,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/acl.h"
 #include "asterisk/astobj2.h"
 #include "asterisk/config.h"
+#include "asterisk/manager.h"
 #include "asterisk/logger.h"
 #include "asterisk/cli.h"
 #include "asterisk/options.h"
 #include "asterisk/utils.h"
 #include "asterisk/lock.h"
-#include "asterisk/srv.h"
 #include "asterisk/nacl.h"
 
 #ifndef TRUE
@@ -66,8 +66,75 @@ struct named_acl {
 	char desc[80];				/*!< Description */
 };
 
+enum nacl_ops {
+	NACL_ADD,
+	NACL_DEL,
+	NACL_UNKNOWN = 0,
+};
+
+enum rule_ops {
+	HA_PERMIT,
+	HA_DENY,
+	HA_UNKNOWN = 0,
+};
+
+static struct nacloptext_def {
+	enum nacl_ops op;
+	const char *text;
+}  nops[] = {
+	{ NACL_ADD, "add" },	
+	{ NACL_DEL, "del" },	
+};
+
+static struct naclrule_def {
+	enum rule_ops op;
+	const char *text;
+} rops[] = {
+	{ HA_PERMIT, "permit" },
+	{ HA_DENY, "deny" },
+};
+
+
+
+
 /*! \brief the list of NACLs */
 struct ao2_container *nacl_list;
+
+static enum nacl_ops find_naclop(const char *op)
+{
+	int i;
+
+	for (i = 0; (i < (sizeof(nops) / sizeof(nops[0]))); i++) {
+		if (!strcasecmp(nops[i].text, op)) {
+			return nops[i].op;
+		}
+	}
+	return NACL_UNKNOWN;
+}
+
+static enum rule_ops find_naclrule(const char *rule)
+{
+	int i;
+
+	for (i = 0; (i < (sizeof(rops) / sizeof(rops[0]))); i++) {
+		if (!strcasecmp(rops[i].text, rule)) {
+			return rops[i].op;
+		}
+	}
+	return HA_UNKNOWN;
+}
+
+static const char *find_naclruletext(enum rule_ops op)
+{
+	int i;
+
+	for (i = 0; (i < (sizeof(rops) / sizeof(rops[0]))); i++) {
+		if (op == rops[i].op) {
+			return rops[i].text;
+		}
+	}
+	return NULL;
+}
 
 /*! \brief destroy a NACL 
 */
@@ -400,6 +467,12 @@ static int nacl_update(int fd, const char *command, const char *name, int rule, 
 	ao2_lock(nacl);
 	if (insert) {
 		newha = ast_append_ha(operation, target, NULL);
+		if (!newha) {
+			ast_cli(fd, "Syntax error in new rule forNACL: %s\n", name);
+			ao2_ref(nacl, -1);
+			ao2_unlock(nacl);
+			return RESULT_SUCCESS;
+		}
 	}
 	nacl->acl = ha_update(nacl->acl, rule, insert, newha);
 	if (insert) {
@@ -482,6 +555,106 @@ static struct ast_cli_entry clidef_nacl_delete = {
 	cli_nacl_delete, "Delete a rule from an NACL.",
 	nacl_delete_usage };
 
+static char mandescr_naclupdate[] =
+"Description: A 'NaclUpdate' action will modify or create\n"
+"named ACLs for dynamic IP based filters.\n"
+"Variables:\n"
+"   NaclName:   Name of the NACL. If it doesn't exist, it's created on an add operation\n"
+"   NaclOp:     Operation - Add or Delete\n"
+"   RuleId:     Line number of rule to add or delete. If there is an existing rule on this\n"
+"               position on an add operation, the line is inserted at that position, before\n"
+"               the existing line. If the line number is higher than the number of lines,\n"
+"               the new line is added at the end.\n"
+"For 'add' operations, the RuleOp and RuleTarget variables are required:\n"
+"   RuleOp:     Permit or Deny\n"
+"   RuleTarget: IP address and netmask for filter, separated by slash.\n"
+"   ActionId:   Optional ID for this transaction\n"
+"\n";
+
+static int manager_naclupdate(struct mansession *s, const struct message *m)
+{
+        const char *naclname = astman_get_header(m, "NaclName");
+        const char *naclop = astman_get_header(m, "NaclOp");
+        const char *ruleid = astman_get_header(m, "RuleId");
+        const char *ruleop = astman_get_header(m, "RuleOp");
+        const char *ruletarget = astman_get_header(m, "RuleTarget");
+        const char *id = astman_get_header(m,"ActionID");
+	enum nacl_ops n_op;
+	enum rule_ops r_op = HA_UNKNOWN;
+	struct named_acl *nacl;
+	struct ast_ha *newha = NULL;
+
+        char idText[256] = "";
+
+	if (ast_strlen_zero(naclname)) {
+		astman_send_error(s, m, "NaclName not specified");
+		return 0;
+	}
+	if (ast_strlen_zero(naclop)) {
+		astman_send_error(s, m, "NaclOp not specified");
+		return 0;
+	}
+	if (ast_strlen_zero(ruleid)) {
+		astman_send_error(s, m, "RuleID not specified");
+		return 0;
+	}
+	if ((n_op = find_naclop(naclop)) == NACL_UNKNOWN) {
+		astman_send_error(s, m, "Unknown NaclOP - 'add' or 'del' implemented");
+		return 0;
+	}
+	if (n_op == NACL_ADD) {
+		r_op = find_naclrule(ruleop);
+		if  (r_op  == HA_UNKNOWN) {
+			astman_send_error(s, m, "Unknown RuleOp");
+			return 0;
+		}
+		if (ast_strlen_zero(ruletarget)) {
+			astman_send_error(s, m, "RuleTarget not specified");
+			return 0;
+		}
+	}
+
+        if (!ast_strlen_zero(id)) {
+                snprintf(idText, sizeof(idText), "ActionID: %s\r\n", id);
+        }
+	nacl = ast_nacl_find(naclname);
+	if (!nacl) {
+		if (n_op == NACL_DEL) {
+			astman_send_error(s, m, "Unknown NACL name");
+			return 0;
+		}
+		/* Assume ADD */
+		nacl = ast_nacl_add(naclname, "AMI");
+		/* Add a ref so that both existing and new NACLs has an extra ref after nacl_find or nacl_add */
+		ao2_ref(nacl, +1);
+	}
+	if (n_op == NACL_DEL && !nacl->acl) {
+		ao2_ref(nacl, -1);
+		astman_send_error(s, m, "No rules to delete in given NACL");
+		return 0;
+	}
+	if (n_op == NACL_ADD) {
+		newha = ast_append_ha(ruleop, ruletarget, NULL);
+		if (!newha) {
+			astman_send_error(s,m, "Syntax error in rule.");
+			ao2_ref(nacl, -1);
+			return RESULT_SUCCESS;
+		}
+	}
+	ao2_lock(nacl);
+	nacl->acl = ha_update(nacl->acl, atoi(ruleid), (n_op == NACL_ADD), newha);
+	if (n_op == NACL_ADD) {
+		nacl->rules++;
+	} else if (nacl->rules) {
+		nacl->rules--;
+	}
+	nacl->manipulated = TRUE;
+	ao2_ref(nacl, -1);
+	ao2_unlock(nacl);
+	return 0;
+}
+ 
+
 
 /* Initialize named ACLs 
 	This function is used both at load and reload time.
@@ -493,6 +666,7 @@ static int nacl_init(int reload_reason)
 	char *cat = NULL;
 	struct named_acl *nacl = NULL;
 	int marked = 0;
+
 
 	/* Clear all existing NACLs - or mark them for deletion */
 	marked = ast_nacl_mark_all_owned("config");
@@ -537,6 +711,7 @@ static int nacl_init(int reload_reason)
 		ast_cli_register(&cli_nacl);
 		ast_cli_register(&clidef_nacl_add);
 		ast_cli_register(&clidef_nacl_delete);
+		ast_manager_register2("NaclUpdate", EVENT_FLAG_CONFIG, manager_naclupdate, "Update Named ACL", mandescr_naclupdate);
 	}
 	return 0;
 }
