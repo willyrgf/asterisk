@@ -34,7 +34,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <unistd.h>
 
 #include "asterisk/acl.h"
-#include "asterisk/astobj.h"
+#include "asterisk/astobj2.h"
 #include "asterisk/config.h"
 #include "asterisk/logger.h"
 #include "asterisk/cli.h"
@@ -57,19 +57,29 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 /*! \brief Structure for named ACL */
 struct named_acl {
-	ASTOBJ_COMPONENTS(struct named_acl);
-	char tag[MAXHOSTNAMELEN];		/*!< Name of this ACL */
+	char name[MAXHOSTNAMELEN];		/*!< Name of this ACL */
 	struct ast_ha *acl;			/*!< The actual ACL */
 	int rules;				/*!< Number of ACL rules */
+	int delete;				/*!< Mark this object for deletion */
 	int manipulated;			/*!< Manipulated by CLI or manager */
 	char owner[20];				/*!< Owner (module) */
 	char desc[80];				/*!< Description */
 };
 
-/*! \brief  The user list: Users and friends */
-static struct nacl_list_def {
-        ASTOBJ_CONTAINER_COMPONENTS(struct named_acl);
-} nacl_list;
+/*! \brief the list of NACLs */
+struct ao2_container *nacl_list;
+
+/*! \brief destroy a NACL 
+*/
+static void nacl_destroy(void *obj)
+{
+	struct named_acl *nacl = obj;
+	if (option_debug > 2)
+		ast_log(LOG_DEBUG, "--- Destruction of NACL %s is NOW. Please have a safe distance.\n", nacl->name);
+	if (nacl->acl)
+		ast_free_ha(nacl->acl);
+}
+
 
 /*! \brief Add named ACL to list (done from configuration file or module) 
 	Internal ACLs, created by Asterisk modules, should use a name that
@@ -84,16 +94,12 @@ struct named_acl *ast_nacl_add(const char *name, const char *owner)
 		return NULL;
 	}
 
-	if (!(nacl = ast_calloc(1, sizeof(*nacl)))) {
-		return NULL;
-	}
-
-	ASTOBJ_INIT(nacl);
+	nacl = ao2_alloc(sizeof(struct named_acl), nacl_destroy);
 
 	ast_copy_string(nacl->name, name, sizeof(nacl->name));
 	ast_copy_string(nacl->owner, owner, sizeof(nacl->owner));
 
-	ASTOBJ_CONTAINER_LINK(&nacl_list,nacl);
+	ao2_link(nacl_list,nacl);
 
  	if (option_debug > 2) {
 		ast_log(LOG_DEBUG, "Added named ACL '%s'\n", name);
@@ -102,6 +108,36 @@ struct named_acl *ast_nacl_add(const char *name, const char *owner)
 	return nacl;
 }
 
+/* Copied from app_queue.c */
+static int compress_char(const char c)
+{
+	if (c < 32)
+		return 0;
+	else if (c > 96)
+		return c - 64;
+	else
+		return c - 32;
+}
+
+/*! \brief ao2 function to create unique hash of object */
+static int nacl_hash_fn(const void *obj, const int flags)
+{
+	const struct named_acl *nacl = obj;
+	int ret = 0, i;
+
+	for (i = 0; i < strlen(nacl->name) && nacl->name[i]; i++)
+		ret += compress_char(nacl->name[i]) << (i * 6);
+	return ret;
+}
+
+/*! \brief ao2 function to compare objects */
+static int nacl_cmp_fn(void *obj1, void *obj2, int flags)
+{
+	struct named_acl *nacl1 = obj1, *nacl2 = obj2;
+	return strcmp(nacl1->name, nacl2->name) ? 0 : CMP_MATCH | CMP_STOP;
+}
+
+
 /*! \brief Find a named ACL 
 	if deleted is true, we will find deleted items too
 	if owner is NULL, we'll find all otherwise owner is used for selection too
@@ -109,38 +145,36 @@ struct named_acl *ast_nacl_add(const char *name, const char *owner)
 */
 struct named_acl *ast_nacl_find_all(const char *name, const int deleted, const char *owner)
 {
+	struct named_acl *found = NULL;
+	struct ao2_iterator i;
 	struct named_acl *nacl = NULL;
 
-	ASTOBJ_CONTAINER_WRLOCK(&nacl_list);
-	ASTOBJ_CONTAINER_TRAVERSE(&nacl_list, 1, do {
-		ASTOBJ_WRLOCK(iterator);
+	i = ao2_iterator_init(nacl_list, 0);
 
-		if (!strcasecmp(iterator->name, name) && (owner == NULL || !strcasecmp(iterator->owner,owner))) {
-			if (iterator->objflags & ASTOBJ_FLAG_MARKED) {
+	ao2_lock(nacl_list);
+	while ((nacl = ao2_iterator_next(&i))) {
+		ao2_lock(nacl);
+
+		if (!strcasecmp(nacl->name, name) && (owner == NULL || !strcasecmp(nacl->owner,owner))) {
+			if(nacl->delete) {
 				if (deleted) {
-					nacl = iterator;
-					ASTOBJ_REF(iterator);
+					found = nacl;
+					ao2_unlock(nacl);
 					continue;
 				}
 			} else {
-				nacl = iterator;
-				ASTOBJ_REF(iterator);
+				found = nacl;
+				ao2_unlock(nacl);
 				continue;
 			}
 		}
-		ASTOBJ_UNLOCK(iterator);
-	} while (0) );
-	ASTOBJ_CONTAINER_UNLOCK(&nacl_list);
+		ao2_unlock(nacl);
+                ao2_ref(nacl, -1);
+	};
+	ao2_unlock(nacl_list);
+	ao2_iterator_destroy(&i);
 
-	return nacl;
-}
-
-/*! \brief destroy a NACL */
-static void nacl_destroy(struct named_acl *nacl)
-{
-	if (option_debug > 2)
-		ast_log(LOG_DEBUG, "--- Destruction of NACL %s is NOW. Please have a safe distance.\n", nacl->name);
-	free(nacl);
+	return found;
 }
 
 /*! \brief Find a named ACL 
@@ -156,17 +190,21 @@ struct named_acl *ast_nacl_find(const char *name)
 int ast_nacl_mark_all_owned(const char *owner)
 {
 	int pruned = 0;
+	struct ao2_iterator i;
+	struct named_acl *nacl = NULL;
 
-	ASTOBJ_CONTAINER_WRLOCK(&nacl_list);
-	ASTOBJ_CONTAINER_TRAVERSE(&nacl_list, 1, do {
-		ASTOBJ_RDLOCK(iterator);
-		if (owner == NULL || !strcasecmp(iterator->owner, owner)) {
-			ASTOBJ_MARK(iterator);
+	i = ao2_iterator_init(nacl_list, 0);
+
+	ao2_lock(nacl_list);
+	while ((nacl = ao2_iterator_next(&i))) {
+		ao2_lock(nacl);
+		if (owner == NULL || !strcasecmp(nacl->owner, owner)) {
+			nacl->delete = TRUE;
 			pruned++;
 		}
-		ASTOBJ_UNLOCK(iterator);
-	} while (0) );
-	ASTOBJ_CONTAINER_UNLOCK(&nacl_list);
+		ao2_unlock(nacl);
+	}; 
+	ao2_unlock(nacl_list);
 	return pruned;
 }
 
@@ -194,7 +232,27 @@ void ast_nacl_detach(struct named_acl *nacl)
 	if (!nacl) {
 		return; /* What's up, doc? */
 	}
-	ASTOBJ_UNREF(nacl, nacl_destroy);
+	ao2_ref(nacl, -1);
+}
+
+/*! Unref all objects with delete=1 */
+static int nacl_delete_marked(void)
+{
+	int pruned = 0;
+	struct ao2_iterator i;
+	struct named_acl *nacl = NULL;
+
+	i = ao2_iterator_init(nacl_list, 0);
+
+	ao2_lock(nacl_list);
+	while ((nacl = ao2_iterator_next(&i))) {
+		if (nacl->delete) {
+			ao2_ref(nacl, -1);
+			pruned++;
+		}
+	}; 
+	ao2_unlock(nacl_list);
+	return pruned;
 }
 
 /*! \brief Update a HA list by inserting or deleting a row at a specific position 
@@ -211,11 +269,16 @@ static struct ast_ha *ha_update(struct ast_ha *ha, int line, int insert, struct 
 		return ha;
 	}
 
-	/* If there's no existing ha we have nothing to delete */
-	if (!insert && !ha) {
-		return NULL;
-	}
 	ast_log(LOG_DEBUG, "--- Operation %s requested line %d\n", insert?"insert":"delete", line);
+
+	/* If there's no existing ha we have nothing to delete */
+	if (!ha) {
+		if (!insert) {
+			return NULL;
+		} else {
+			return new;
+		}
+	}
 
 	/* Insert or delete at top */
 	if (line <= 1) {
@@ -289,17 +352,22 @@ static int cli_show_nacls(int fd, int argc, char *argv[])
 #define FORMAT "%-40.40s %-20.20s %5d %5d %7s\n"
 #define FORMAT2 "%-40.40s %-20.20s %-5.5s %-5.5s %7s\n"
 
+	struct ao2_iterator i;
+	struct named_acl *nacl;
+
+	i = ao2_iterator_init(nacl_list, 0);
+
 	ast_cli(fd, FORMAT2, "ACL name:", "Set by", "#rules", "Usage", "Flags");
-	ASTOBJ_CONTAINER_TRAVERSE(&nacl_list, 1, {
-                ASTOBJ_RDLOCK(iterator);
-		ast_cli(fd, FORMAT, iterator->name, 
-			S_OR(iterator->owner, "-"),
-			iterator->rules,
-			iterator->refcount,
-			iterator->manipulated ? "M" : "");
-		ha_list(fd, iterator->acl, iterator->rules);
-                ASTOBJ_UNLOCK(iterator);
-	} );
+	while ((nacl = ao2_iterator_next(&i))) {
+		ast_cli(fd, FORMAT, nacl->name, 
+			S_OR(nacl->owner, "-"),
+			nacl->rules,
+			ao2_ref(nacl, 0),
+			nacl->manipulated ? "M" : "");
+		ha_list(fd, nacl->acl, nacl->rules);
+                ao2_ref(nacl, -1);
+	};
+	ao2_iterator_destroy(&i);
 	ast_cli(fd, "\nFlag M = Modified by AMI or CLI\n");
 	return RESULT_SUCCESS;
 }
@@ -315,29 +383,33 @@ static int nacl_update(int fd, const char *command, const char *name, int rule, 
 
 	nacl = ast_nacl_find(name);
 	if (!nacl) {
-		if (insert) {
-			nacl = ast_nacl_add(name, owner);
-			/* Add a ref so that both existing and new NACLs has an extra ref after nacl_find or nacl_add */
-			ast_cli(fd, "Successfully added new NACL %s\n", name);
-			ASTOBJ_REF(nacl);
-		} else {
+		if (!insert) {
 			ast_cli(fd, "No such NACL: %s\n", name);
 			return RESULT_SUCCESS;
 		}
+		nacl = ast_nacl_add(name, owner);
+		/* Add a ref so that both existing and new NACLs has an extra ref after nacl_find or nacl_add */
+		ast_cli(fd, "Successfully added new NACL %s\n", name);
+		ao2_ref(nacl, +1);
 	}
-	ASTOBJ_WRLOCK(nacl);
+	if (!insert && !nacl->acl) {
+		ast_cli(fd, "No rules to delete for NACL: %s\n", name);
+		ao2_ref(nacl, -1);
+		return RESULT_SUCCESS;
+	}
+	ao2_lock(nacl);
 	if (insert) {
 		newha = ast_append_ha(operation, target, NULL);
 	}
 	nacl->acl = ha_update(nacl->acl, rule, insert, newha);
 	if (insert) {
 		nacl->rules++;
-	} else {
+	} else if (nacl->rules) {
 		nacl->rules--;
 	}
 	nacl->manipulated = TRUE;
-	ASTOBJ_UNLOCK(nacl);
-	ASTOBJ_UNREF(nacl, nacl_destroy);
+	ao2_ref(nacl, -1);
+	ao2_unlock(nacl);
 	return RESULT_SUCCESS;
 }
 
@@ -435,9 +507,9 @@ static int nacl_init(int reload_reason)
 		
 			nacl = ast_nacl_find_all(cat, 1, "config");	/* Find deleted items */
 			if (nacl) {
-				ASTOBJ_UNMARK(nacl);
+				nacl->delete = FALSE;
 				ast_free_ha(nacl->acl);	/* Delete existing ACL (locking needed indeed) */
-				ASTOBJ_UNREF(nacl, nacl_destroy);
+				ao2_ref(nacl, -1);	/* The find operation adds a ref */
 			} else {
 				nacl = ast_nacl_add(cat, "config");
 			}
@@ -456,9 +528,9 @@ static int nacl_init(int reload_reason)
 	} 
 
 	if (marked) {
-		ASTOBJ_CONTAINER_WRLOCK(&nacl_list);
-		ASTOBJ_CONTAINER_PRUNE_MARKED(&nacl_list, nacl_destroy);
-		ASTOBJ_CONTAINER_UNLOCK(&nacl_list);
+		ao2_lock(nacl_list);
+		nacl_delete_marked();
+		ao2_unlock(nacl_list);
 	}
 
 	if (reload_reason == NACL_LOAD) {
@@ -472,6 +544,7 @@ static int nacl_init(int reload_reason)
 /*! \brief Initialize NACL subsystem */
 int ast_nacl_load(void)
 {
+	nacl_list = ao2_container_alloc(42, nacl_hash_fn, nacl_cmp_fn);
 	return nacl_init(NACL_LOAD);
 }
 
