@@ -55,16 +55,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define NACL_LOAD	1
 #define NACL_RELOAD	2
 
-/*! \brief Structure for named ACL */
-struct named_acl {
-	char name[MAXHOSTNAMELEN];		/*!< Name of this ACL */
-	struct ast_ha *acl;			/*!< The actual ACL */
-	int rules;				/*!< Number of ACL rules */
-	int delete;				/*!< Mark this object for deletion */
-	int manipulated;			/*!< Manipulated by CLI or manager */
-	char owner[20];				/*!< Owner (module) */
-	char desc[80];				/*!< Description */
-};
 
 enum nacl_ops {
 	NACL_ADD,
@@ -140,7 +130,7 @@ static const char *find_naclruletext(enum rule_ops op)
 */
 static void nacl_destroy(void *obj)
 {
-	struct named_acl *nacl = obj;
+	struct ast_nacl *nacl = obj;
 	if (option_debug > 2)
 		ast_log(LOG_DEBUG, "--- Destruction of NACL %s is NOW. Please have a safe distance.\n", nacl->name);
 	if (nacl->acl)
@@ -152,16 +142,16 @@ static void nacl_destroy(void *obj)
 	Internal ACLs, created by Asterisk modules, should use a name that
 	begins with "ast_". These are prevented from configuration in nacl.conf
  */
-struct named_acl *ast_nacl_add(const char *name, const char *owner)
+struct ast_nacl *ast_nacl_add(const char *name, const char *owner)
 {
-	struct named_acl *nacl;
+	struct ast_nacl *nacl;
 	
 	if (ast_strlen_zero(name)) {
 		ast_log(LOG_WARNING, "Zero length name.\n");
 		return NULL;
 	}
 
-	nacl = ao2_alloc(sizeof(struct named_acl), nacl_destroy);
+	nacl = ao2_alloc(sizeof(struct ast_nacl), nacl_destroy);
 
 	ast_copy_string(nacl->name, name, sizeof(nacl->name));
 	ast_copy_string(nacl->owner, owner, sizeof(nacl->owner));
@@ -189,7 +179,7 @@ static int compress_char(const char c)
 /*! \brief ao2 function to create unique hash of object */
 static int nacl_hash_fn(const void *obj, const int flags)
 {
-	const struct named_acl *nacl = obj;
+	const struct ast_nacl *nacl = obj;
 	int ret = 0, i;
 
 	for (i = 0; i < strlen(nacl->name) && nacl->name[i]; i++)
@@ -200,7 +190,7 @@ static int nacl_hash_fn(const void *obj, const int flags)
 /*! \brief ao2 function to compare objects */
 static int nacl_cmp_fn(void *obj1, void *obj2, int flags)
 {
-	struct named_acl *nacl1 = obj1, *nacl2 = obj2;
+	struct ast_nacl *nacl1 = obj1, *nacl2 = obj2;
 	return strcmp(nacl1->name, nacl2->name) ? 0 : CMP_MATCH | CMP_STOP;
 }
 
@@ -210,11 +200,11 @@ static int nacl_cmp_fn(void *obj1, void *obj2, int flags)
 	if owner is NULL, we'll find all otherwise owner is used for selection too
 	We raise the refcount on the result, which the calling function need to deref.
 */
-struct named_acl *ast_nacl_find_all(const char *name, const int deleted, const char *owner)
+struct ast_nacl *ast_nacl_find_all(const char *name, const int deleted, const char *owner)
 {
-	struct named_acl *found = NULL;
+	struct ast_nacl *found = NULL;
 	struct ao2_iterator i;
-	struct named_acl *nacl = NULL;
+	struct ast_nacl *nacl = NULL;
 
 	i = ao2_iterator_init(nacl_list, 0);
 
@@ -246,7 +236,7 @@ struct named_acl *ast_nacl_find_all(const char *name, const int deleted, const c
 
 /*! \brief Find a named ACL 
 */
-struct named_acl *ast_nacl_find(const char *name)
+struct ast_nacl *ast_nacl_find(const char *name)
 {
 	return ast_nacl_find_all(name, 0, NULL);
 }
@@ -258,7 +248,7 @@ int ast_nacl_mark_all_owned(const char *owner)
 {
 	int pruned = 0;
 	struct ao2_iterator i;
-	struct named_acl *nacl = NULL;
+	struct ast_nacl *nacl = NULL;
 
 	i = ao2_iterator_init(nacl_list, 0);
 
@@ -282,9 +272,13 @@ int ast_nacl_mark_all_owned(const char *owner)
 	\note Deleted NACLs won't be found any more with this function, to avoid adding to the use
 		of these ACLs
  */
-struct named_acl *ast_nacl_attach(const char *name)
+struct ast_nacl *ast_nacl_attach(const char *name)
 {
-	struct named_acl *nacl = ast_nacl_find(name);
+	struct ast_nacl *nacl;
+	if (!name) {
+		return NULL;
+	}
+	nacl = ast_nacl_find(name);
 	if (!nacl) {
 		return NULL;
 	}
@@ -294,7 +288,7 @@ struct named_acl *ast_nacl_attach(const char *name)
 /*! \brief Detach from a named ACL. 
 	If it's marked for deletion and refcount is zero, then it's deleted
  */
-void ast_nacl_detach(struct named_acl *nacl)
+void ast_nacl_detach(struct ast_nacl *nacl)
 {
 	if (!nacl) {
 		return; /* What's up, doc? */
@@ -307,7 +301,7 @@ static int nacl_delete_marked(void)
 {
 	int pruned = 0;
 	struct ao2_iterator i;
-	struct named_acl *nacl = NULL;
+	struct ast_nacl *nacl = NULL;
 
 	i = ao2_iterator_init(nacl_list, 0);
 
@@ -420,7 +414,7 @@ static int cli_show_nacls(int fd, int argc, char *argv[])
 #define FORMAT2 "%-40.40s %-20.20s %-5.5s %-5.5s %7s\n"
 
 	struct ao2_iterator i;
-	struct named_acl *nacl;
+	struct ast_nacl *nacl;
 
 	i = ao2_iterator_init(nacl_list, 0);
 
@@ -444,7 +438,7 @@ static int cli_show_nacls(int fd, int argc, char *argv[])
 /*! \brief Update NACL (or create it if it doesn't exist) */
 static int nacl_update(int fd, const char *command, const char *name, int rule, char *operation, const char *target, const char *owner)
 {
-	struct named_acl *nacl;
+	struct ast_nacl *nacl;
 	struct ast_ha *newha = NULL;
 	int insert = !strcasecmp(command, "add");
 
@@ -581,7 +575,7 @@ static int manager_naclupdate(struct mansession *s, const struct message *m)
         const char *id = astman_get_header(m,"ActionID");
 	enum nacl_ops n_op;
 	enum rule_ops r_op = HA_UNKNOWN;
-	struct named_acl *nacl;
+	struct ast_nacl *nacl;
 	struct ast_ha *newha = NULL;
 
         char idText[256] = "";
@@ -664,7 +658,7 @@ static int nacl_init(int reload_reason)
 	struct ast_config *cfg;
 	struct ast_variable *v;
 	char *cat = NULL;
-	struct named_acl *nacl = NULL;
+	struct ast_nacl *nacl = NULL;
 	int marked = 0;
 
 

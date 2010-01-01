@@ -27,20 +27,29 @@
  */
 
 /*! \brief Structure for named ACL */
-struct named_acl; 
+/*! \brief Structure for named ACL */
+struct ast_nacl {
+	char name[MAXHOSTNAMELEN];		/*!< Name of this ACL */
+	struct ast_ha *acl;			/*!< The actual ACL */
+	int rules;				/*!< Number of ACL rules */
+	int delete;				/*!< Mark this object for deletion */
+	int manipulated;			/*!< Manipulated by CLI or manager */
+	char owner[20];				/*!< Owner (module) */
+	char desc[80];				/*!< Description */
+};
 
 /*! \brief Add named ACL to list (done from configuration file or module) */
-struct named_acl *ast_nacl_add(const char *name, const char *owner);
+struct ast_nacl *ast_nacl_add(const char *name, const char *owner);
 
 /*! \brief Find a named ACL 
 	if deleted is true, we will find deleted items too
 	if owner is NULL, we'll find all otherwise owner is used for selection too
 */
-struct named_acl *ast_nacl_find_all(const char *name, const int deleted, const char *owner);
+struct ast_nacl *ast_nacl_find_all(const char *name, const int deleted, const char *owner);
 
 /*! \brief Find a named ACL (that is not marked with the delete flag) 
  */
-struct named_acl *ast_nacl_find(const char *name);
+struct ast_nacl *ast_nacl_find(const char *name);
 
 /*! \brief Mark all the owned NACLs
 */
@@ -50,12 +59,12 @@ int ast_nacl_mark_all_owned(const char *owner);
 	This is to avoid Named ACLs to disappear from runtime. Even if they are deleted from the
 	configuration, they will still be around thanks to ASTOBJs
  */
-struct named_acl *ast_nacl_attach(const char *name);
+struct ast_nacl *ast_nacl_attach(const char *name);
 
 /*! \brief Detach from a named ACL. 
 	If it's marked for deletion and refcount is zero, then it's deleted
  */
-void ast_nacl_detach(struct named_acl *nacl);
+void ast_nacl_detach(struct ast_nacl *nacl);
 
 /*! \brief Initialize NACL subsystem */
 int ast_nacl_load(void);

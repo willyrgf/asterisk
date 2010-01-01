@@ -127,6 +127,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/rtp.h"
 #include "asterisk/udptl.h"
 #include "asterisk/acl.h"
+#include "asterisk/nacl.h"
 #include "asterisk/manager.h"
 #include "asterisk/callerid.h"
 #include "asterisk/cli.h"
@@ -1115,6 +1116,7 @@ struct sip_user {
 	int call_limit;			/*!< Limit of concurrent calls */
 	enum transfermodes allowtransfer;	/*! SIP Refer restriction scheme */
 	struct ast_ha *ha;		/*!< ACL setting */
+	struct ast_nacl *nacl;		/*!< NACL setting */
 	struct ast_variable *chanvars;	/*!< Variables to set for channel created by user */
 	int maxcallbitrate;		/*!< Maximum Bitrate for a video call */
 	int autoframing;
@@ -1177,6 +1179,7 @@ struct sip_peer {
 	
 	struct sockaddr_in defaddr;	/*!<  Default IP address, used until registration */
 	struct ast_ha *ha;		/*!<  Access control list */
+	struct ast_nacl *nacl;		/*!<  NACL setting */
 	struct ast_ha *contactha;       /*!<  Restrict what IPs are allowed in the Contact header (for registration) */
 	struct ast_variable *chanvars;	/*!<  Variables to set for channel created by user */
 	struct sip_pvt *mwipvt;		/*!<  Subscription for MWI */
@@ -2612,6 +2615,7 @@ static void sip_destroy_peer(struct sip_peer *peer)
 
 	register_peer_exten(peer, FALSE);
 	ast_free_ha(peer->ha);
+	ast_nacl_detach(peer->nacl);
 	if (ast_test_flag(&peer->flags[1], SIP_PAGE2_SELFDESTRUCT))
 		apeerobjs--;
 	else if (ast_test_flag(&peer->flags[0], SIP_REALTIME))
@@ -2818,6 +2822,7 @@ static void sip_destroy_user(struct sip_user *user)
 	if (option_debug > 2)
 		ast_log(LOG_DEBUG, "Destroying user object from memory: %s\n", user->name);
 	ast_free_ha(user->ha);
+	ast_nacl_detach(user->nacl);
 	if (user->chanvars) {
 		ast_variables_destroy(user->chanvars);
 		user->chanvars = NULL;
@@ -9356,7 +9361,7 @@ static enum check_auth_result register_verify(struct sip_pvt *p, struct sockaddr
 	ast_string_field_set(p, exten, name);
 	build_contact(p);
 	peer = find_peer(name, NULL, 1, 0);
-	if (!(peer && ast_apply_ha(peer->ha, sin))) {
+	if (!(peer && ast_apply_ha(peer->ha, sin) && (peer->nacl ? ast_apply_ha(peer->nacl->acl, sin) : TRUE))) {
 		/* Peer fails ACL check */
 		if (peer) {
 			ASTOBJ_UNREF(peer, sip_destroy_peer);
@@ -10271,6 +10276,12 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 			*/
 			peer = find_peer(NULL, &p->recv, 1, 0);
 
+		if (!(peer && ast_apply_ha(peer->ha, sin) && (peer->nacl ? ast_apply_ha(peer->nacl->acl, sin) : TRUE))) {
+			/* Peer fails ACL checks */
+			ASTOBJ_UNREF(peer, sip_destroy_peer);
+			return AUTH_ACL_FAILED;
+		}
+
 		if (peer) {
 			/* Set Frame packetization */
 			if (p->rtp) {
@@ -10744,7 +10755,7 @@ static int _sip_show_peers(int fd, int *total, struct mansession *s, const struc
 			iterator->addr.sin_addr.s_addr ? ast_inet_ntoa(iterator->addr.sin_addr) : "(Unspecified)",
 			ast_test_flag(&iterator->flags[1], SIP_PAGE2_DYNAMIC) ? " D " : "   ", 	/* Dynamic or not? */
 			ast_test_flag(&iterator->flags[0], SIP_NAT_ROUTE) ? " N " : "   ",	/* NAT=yes? */
-			iterator->ha ? " A " : "   ", 	/* permit/deny */
+			iterator->ha ? (iterator->nacl ? " AN" : " A ") : iterator->nacl ? "  N" : "   ",
 			ntohs(iterator->addr.sin_port), status,
 			realtimepeers ? (ast_test_flag(&iterator->flags[0], SIP_REALTIME) ? "Cached RT":"") : "");
 
@@ -10753,7 +10764,7 @@ static int _sip_show_peers(int fd, int *total, struct mansession *s, const struc
 			iterator->addr.sin_addr.s_addr ? ast_inet_ntoa(iterator->addr.sin_addr) : "(Unspecified)",
 			ast_test_flag(&iterator->flags[1], SIP_PAGE2_DYNAMIC) ? " D " : "   ", 	/* Dynamic or not? */
 			ast_test_flag(&iterator->flags[0], SIP_NAT_ROUTE) ? " N " : "   ",	/* NAT=yes? */
-			iterator->ha ? " A " : "   ",       /* permit/deny */
+			iterator->ha ? (iterator->nacl ? " AN" : " A ") : iterator->nacl ? "  N" : "   ",
 			
 			ntohs(iterator->addr.sin_port), status,
 			realtimepeers ? (ast_test_flag(&iterator->flags[0], SIP_REALTIME) ? "Cached RT":"") : "");
@@ -10770,6 +10781,7 @@ static int _sip_show_peers(int fd, int *total, struct mansession *s, const struc
 			"Natsupport: %s\r\n"
 			"VideoSupport: %s\r\n"
 			"ACL: %s\r\n"
+			"NACL: %s\r\n"
 			"Status: %s\r\n"
 			"RealtimeDevice: %s\r\n\r\n", 
 			idtext,
@@ -10780,6 +10792,7 @@ static int _sip_show_peers(int fd, int *total, struct mansession *s, const struc
 			ast_test_flag(&iterator->flags[0], SIP_NAT_ROUTE) ? "yes" : "no",	/* NAT=yes? */
 			ast_test_flag(&iterator->flags[1], SIP_PAGE2_VIDEOSUPPORT) ? "yes" : "no",	/* VIDEOSUPPORT=yes? */
 			iterator->ha ? "yes" : "no",       /* permit/deny */
+			iterator->nacl ? iterator->nacl->name : "-none-",
 			status,
 			realtimepeers ? (ast_test_flag(&iterator->flags[0], SIP_REALTIME) ? "yes":"no") : "no");
 		}
@@ -11189,6 +11202,7 @@ static int _sip_show_peer(int type, int fd, struct mansession *s, const struct m
 		ast_cli(fd, "  Insecure     : %s\n", insecure2str(ast_test_flag(&peer->flags[0], SIP_INSECURE_PORT), ast_test_flag(&peer->flags[0], SIP_INSECURE_INVITE)));
 		ast_cli(fd, "  Nat          : %s\n", nat2str(ast_test_flag(&peer->flags[0], SIP_NAT)));
 		ast_cli(fd, "  ACL          : %s\n", (peer->ha?"Yes":"No"));
+		ast_cli(fd, "  NACL         : %s\n", (peer->nacl == NULL?"<none>" : peer->nacl->name));
 		ast_cli(fd, "  T38 pt UDPTL : %s\n", ast_test_flag(&peer->flags[1], SIP_PAGE2_T38SUPPORT_UDPTL)?"Yes":"No");
 #ifdef WHEN_WE_HAVE_T38_FOR_OTHER_TRANSPORTS
 		ast_cli(fd, "  T38 pt RTP   : %s\n", ast_test_flag(&peer->flags[1], SIP_PAGE2_T38SUPPORT_RTP)?"Yes":"No");
@@ -11278,6 +11292,7 @@ static int _sip_show_peer(int type, int fd, struct mansession *s, const struct m
 		astman_append(s, "SIP-AuthInsecure: %s\r\n", insecure2str(ast_test_flag(&peer->flags[0], SIP_INSECURE_PORT), ast_test_flag(&peer->flags[0], SIP_INSECURE_INVITE)));
 		astman_append(s, "SIP-NatSupport: %s\r\n", nat2str(ast_test_flag(&peer->flags[0], SIP_NAT)));
 		astman_append(s, "ACL: %s\r\n", (peer->ha?"Y":"N"));
+		astman_append(s, "NACL: %s\r\n", (peer->nacl == NULL?"" : peer->nacl->name));
 		astman_append(s, "SIP-CanReinvite: %s\r\n", (ast_test_flag(&peer->flags[0], SIP_CAN_REINVITE)?"Y":"N"));
 		astman_append(s, "SIP-PromiscRedir: %s\r\n", (ast_test_flag(&peer->flags[0], SIP_PROMISCREDIR)?"Y":"N"));
 		astman_append(s, "SIP-UserPhone: %s\r\n", (ast_test_flag(&peer->flags[0], SIP_USEREQPHONE)?"Y":"N"));
@@ -11364,6 +11379,7 @@ static int sip_show_user(int fd, int argc, char *argv[])
 		print_group(fd, user->pickupgroup, 0);
 		ast_cli(fd, "  Callerid     : %s\n", ast_callerid_merge(cbuf, sizeof(cbuf), user->cid_name, user->cid_num, "<unspecified>"));
 		ast_cli(fd, "  ACL          : %s\n", (user->ha?"Yes":"No"));
+		ast_cli(fd, "  NACL         : %s\n", (user->nacl ? user->nacl->name : ""));
 		ast_cli(fd, "  Codec Order  : (");
 		print_codec_to_cli(fd, &user->prefs);
 		ast_cli(fd, ")\n");
@@ -17716,6 +17732,7 @@ static struct sip_user *build_user(const char *name, struct ast_variable *v, str
 	ASTOBJ_INIT(user);
 	ast_copy_string(user->name, name, sizeof(user->name));
 	oldha = user->ha;
+	ast_nacl_detach(user->nacl);
 	user->ha = NULL;
 	ast_copy_flags(&user->flags[0], &global_flags[0], SIP_FLAGS_TO_COPY);
 	ast_copy_flags(&user->flags[1], &global_flags[1], SIP_PAGE2_FLAGS_TO_COPY);
@@ -17747,6 +17764,8 @@ static struct sip_user *build_user(const char *name, struct ast_variable *v, str
 					user->chanvars = tmpvar;
 				}
 			}
+		} else if (!strcasecmp(v->name, "nacl")) {
+			user->nacl = ast_nacl_attach(v->value);
 		} else if (!strcasecmp(v->name, "permit") ||
 				   !strcasecmp(v->name, "deny")) {
 			user->ha = ast_append_ha(v->name, v->value, user->ha);
@@ -17943,6 +17962,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 	/* If we have realm authentication information, remove them (reload) */
 	clear_realm_authentication(peer->auth);
 	peer->auth = NULL;
+	ast_nacl_detach(peer->nacl);
 
 	for (; v || ((v = alt) && !(alt=NULL)); v = v->next) {
 		if (!devstate_only) {
@@ -18044,6 +18064,8 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 					ASTOBJ_UNREF(peer, sip_destroy_peer);
 					return NULL;
 				}
+			} else if (!strcasecmp(v->name, "nacl")) {
+				peer->nacl = ast_nacl_attach(v->value);
 			} else if (!strcasecmp(v->name, "permit") || !strcasecmp(v->name, "deny")) {
 				peer->ha = ast_append_ha(v->name, v->value, peer->ha);
 			} else if (!strcasecmp(v->name, "contactpermit") || !strcasecmp(v->name, "contactdeny")) {
