@@ -44,6 +44,23 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 237134 $")
 #include "asterisk/lock.h"
 #include "asterisk/nacl.h"
 
+/*** DOCUMENTATION
+	<manager name="SIPshowpeer" language="en_US">
+		<synopsis>
+			show SIP peer (text format).
+		</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
+			<parameter name="Peer" required="true">
+				<para>The peer name you want to check.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Show one SIP peer with details on current status.</para>
+		</description>
+	</manager>
+ ***/
+
 #ifndef TRUE
 #define TRUE 1
 #endif
@@ -408,7 +425,7 @@ static void ha_list(int fd, struct ast_ha *ha, const int rules)
 }
 
 /*! \brief CLI command to list named ACLs */
-static int cli_show_nacls(int fd, int argc, char *argv[])
+static char *cli_show_nacls(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 #define FORMAT "%-40.40s %-20.20s %5d %5d %7s\n"
 #define FORMAT2 "%-40.40s %-20.20s %-5.5s %-5.5s %7s\n"
@@ -416,20 +433,31 @@ static int cli_show_nacls(int fd, int argc, char *argv[])
 	struct ao2_iterator i;
 	struct ast_nacl *nacl;
 
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "cli show nacls";
+		e->usage =
+			"Usage: cli show nacls\n"
+			"       Lists all configured named access control lists (NACLs).\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
 	i = ao2_iterator_init(nacl_list, 0);
 
-	ast_cli(fd, FORMAT2, "ACL name:", "Set by", "#rules", "Usage", "Flags");
+	ast_cli(a->fd, FORMAT2, "ACL name:", "Set by", "#rules", "Usage", "Flags");
 	while ((nacl = ao2_iterator_next(&i))) {
-		ast_cli(fd, FORMAT, nacl->name, 
+		ast_cli(a->fd, FORMAT, nacl->name, 
 			S_OR(nacl->owner, "-"),
 			nacl->rules,
 			(ao2_ref(nacl, 0) -1),
 			nacl->manipulated ? "M" : "");
-		ha_list(fd, nacl->acl, nacl->rules);
+		ha_list(a->fd, nacl->acl, nacl->rules);
                 ao2_ref(nacl, -1);
 	};
 	ao2_iterator_destroy(&i);
-	ast_cli(fd, "\nFlag M = Modified by AMI or CLI\n");
+	ast_cli(a->fd, "\nFlag M = Modified by AMI or CLI\n");
 	return RESULT_SUCCESS;
 }
 #undef FORMAT
@@ -481,56 +509,14 @@ static int nacl_update(int fd, const char *command, const char *name, int rule, 
 	return RESULT_SUCCESS;
 }
 
-static char show_nacls_usage[] = 
-"Usage: nacl show\n"
-"       Lists all configured named ACLs.\n"
-"       Named ACLs can be used in many configuration files as well as internally\n"
-"       by Asterisk.\n";
-
-static struct ast_cli_entry cli_nacl = { 
-	{ "nacl", "show", NULL },
-	cli_show_nacls, "List configured named ACLs.",
-	show_nacls_usage };
 
 /*! \brief CLI command to add named ACLs */
-static int cli_nacl_add(int fd, int argc, char *argv[])
+static char *cli_nacl_add(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-
-	if (argc != 6) {
-		return RESULT_SHOWUSAGE;
-	}
-	if (option_debug >= 2) {
-		ast_cli(fd, "--- Command: %s %s\n", argv[0], argv[1]);
-		ast_cli(fd, "--- NACL Name: %s Operation %s\n", argv[2], argv[4]);
-		ast_cli(fd, "--- NACL line: %s Address %s\n", argv[3], argv[5]);
-	}
-	if (strcasecmp(argv[4], "permit") && strcasecmp(argv[4], "deny")) {
-		ast_cli(fd, "Error: Illegal operand %s\n", argv[4]);
-		return RESULT_SHOWUSAGE;
-	}
-	return nacl_update(fd, argv[1], argv[2], atoi(argv[3]), argv[4], argv[5], "cli");
-}
-
-/*! \brief CLI command to delete rules in named ACLs */
-static int cli_nacl_delete(int fd, int argc, char *argv[])
-{
-	if (argc != 4) {
-		return RESULT_SHOWUSAGE;
-	}
-	ast_cli(fd, "--- Command: %s %s\n", argv[0], argv[1]);
-	ast_cli(fd, "--- NACL Name: %s Line %s\n", argv[2], argv[3]);
-	return nacl_update(fd, argv[1], argv[2], atoi(argv[3]), NULL, NULL, "cli");
-}
-
-static char nacl_delete_usage[] = 
-"Usage: nacl delete <name> <number>\n"
-"       Delete a rule from a NACL.\n"
-"	The NACL will still remain in memory, even if there are no active rules\n"
-"	Please note that changes to ACLs are not stored in configuration, thuse are not\n"
-"	persistant between Asterisk restarts.\n"
-"\n";
-
-static char nacl_add_usage[] = 
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "nacl add";
+		e->usage =
 "Usage: nacl add <name> <number> [permit|deny] <address>\n"
 "       Add a rule to a specific NACL.\n"
 "	If the NACL doesn't exist, it's created. If there is an existing rule with the given\n"
@@ -539,16 +525,62 @@ static char nacl_add_usage[] =
 "	Please note that changes to ACLs are not stored in configuration, thuse are not\n"
 "	persistant between Asterisk restarts.\n"
 "\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
 
-static struct ast_cli_entry clidef_nacl_add = { 
-	{ "nacl", "add", NULL },
-	cli_nacl_add, "Add a new rule to a NACL.",
-	nacl_add_usage };
 
-static struct ast_cli_entry clidef_nacl_delete = { 
-	{ "nacl", "delete", NULL },
-	cli_nacl_delete, "Delete a rule from an NACL.",
-	nacl_delete_usage };
+	if (a->argc != 6) {
+		return CLI_SHOWUSAGE;
+	}
+	if (option_debug >= 2) {
+		ast_cli(a->fd, "--- Command: %s %s\n", a->argv[0], a->argv[1]);
+		ast_cli(a->fd, "--- NACL Name: %s Operation %s\n", a->argv[2], a->argv[4]);
+		ast_cli(a->fd, "--- NACL line: %s Address %s\n", a->argv[3], a->argv[5]);
+	}
+	if (strcasecmp(a->argv[4], "permit") && strcasecmp(a->argv[4], "deny")) {
+		ast_cli(a->fd, "Error: Illegal operand %s\n", a->argv[4]);
+		return CLI_SHOWUSAGE;
+	}
+	nacl_update(a->fd, a->argv[1], a->argv[2], atoi(a->argv[3]), a->argv[4], a->argv[5], "cli");
+	return CLI_SUCCESS;
+}
+
+/*! \brief CLI command to delete rules in named ACLs */
+static char *cli_nacl_delete(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "nacl delete";
+		e->usage =
+"Usage: nacl delete <name> <number>\n"
+"       Delete a rule from a NACL.\n"
+"	The NACL will still remain in memory, even if there are no active rules\n"
+"	Please note that changes to ACLs are not stored in configuration, thuse are not\n"
+"	persistant between Asterisk restarts.\n"
+"\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc != 4) {
+		return CLI_SHOWUSAGE;
+	}
+	ast_cli(a->fd, "--- Command: %s %s\n", a->argv[0], a->argv[1]);
+	ast_cli(a->fd, "--- NACL Name: %s Line %s\n", a->argv[2], a->argv[3]);
+	nacl_update(a->fd, a->argv[1], a->argv[2], atoi(a->argv[3]), NULL, NULL, "cli");
+	return CLI_SUCCESS;
+}
+
+/*! \brief CLI entrys */
+static struct ast_cli_entry cli_nacl[] = {
+	AST_CLI_DEFINE(cli_nacl_add, "Add a new rule to a NACL."),
+	AST_CLI_DEFINE(cli_nacl_delete, "Delete a rule from a NACL."),
+	AST_CLI_DEFINE(cli_show_nacls, "List configured named ACLs."),
+	};
+
 
 static char mandescr_naclupdate[] =
 "Description: A 'NaclUpdate' action will modify or create\n"
@@ -662,12 +694,19 @@ static int nacl_init(int reload_reason)
 	char *cat = NULL;
 	struct ast_nacl *nacl = NULL;
 	int marked = 0;
+	struct ast_flags config_flags = { CONFIG_FLAG_WITHCOMMENTS | CONFIG_FLAG_NOCACHE };
 
 
 	/* Clear all existing NACLs - or mark them for deletion */
 	marked = ast_nacl_mark_all_owned("config");
 
-	cfg = ast_config_load("nacl.conf");
+	cfg = ast_config_load2("nacl.conf", "nacl", config_flags);
+	if (cfg == CONFIG_STATUS_FILEMISSING) {
+		return 0;
+	} else if (cfg == CONFIG_STATUS_FILEINVALID) {
+		ast_log(LOG_ERROR,"NACL configuration file has invalid format\n");
+		return 0;
+	}
 	if (cfg) {
 		while ((cat = ast_category_browse(cfg, cat))) {
 			if (!strncasecmp(cat, "ast_", 4)) {
@@ -709,9 +748,7 @@ static int nacl_init(int reload_reason)
 	}
 
 	if (reload_reason == NACL_LOAD) {
-		ast_cli_register(&cli_nacl);
-		ast_cli_register(&clidef_nacl_add);
-		ast_cli_register(&clidef_nacl_delete);
+ 		ast_cli_register_multiple(cli_nacl, ARRAY_LEN(cli_nacl));
 		ast_manager_register2("NaclUpdate", EVENT_FLAG_CONFIG, manager_naclupdate, "Update Named ACL", mandescr_naclupdate);
 	}
 	return 0;
