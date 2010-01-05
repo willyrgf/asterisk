@@ -64,12 +64,30 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define RTCP_MIN_INTERVALMS       500	/*!< Min milli-seconds between RTCP reports we send */
 #define RTCP_MAX_INTERVALMS       60000	/*!< Max milli-seconds between RTCP reports we send */
 
-#define RTCP_PT_FUR     192
-#define RTCP_PT_SR      200
-#define RTCP_PT_RR      201
-#define RTCP_PT_SDES    202
-#define RTCP_PT_BYE     203
-#define RTCP_PT_APP     204
+#define RTCP_PT_FUR     192		/*!< FIR  - Full Intra-frame request */
+#define RTCP_PT_NACK    193		/*!< NACK - Negative acknowledgement */
+#define RTCP_PT_IJ      195		/*!< IJ   - RFC 5450 Extended Inter-arrival jitter report */
+#define RTCP_PT_SR      200		/*!< SR   - RFC 3550 Sender report */
+#define RTCP_PT_RR      201		/*!< RR   - RFC 3550 Receiver report */
+#define RTCP_PT_SDES    202		/*!< SDES - Source Description */
+#define RTCP_PT_BYE     203		/*!< BYE  - Goodbye */
+#define RTCP_PT_APP     204		/*!< APP  - Application defined */
+#define RTCP_PT_RTPFB   205		/*!< RTPFB - Generic RTP feedback RFC 4585 */
+#define RTCP_PT_PSFB    206		/*!< PSFB - Payload specific data  RFC 4585 */
+#define RTCP_PT_XR      207		/*!< XR   - Extended report - RFC3611 */
+
+/*! \brief RFC 3550 RTCP SDES Item types */
+enum rtcp_sdes {
+	SDES_END	= 0,		/*!< End of SDES list */
+	SDES_CNAME	= 1,		/*!< Canonical name */
+	SDES_NAME	= 2,		/*!< User name */
+	SDES_EMAIL	= 3,		/*!< User's e-mail address */
+	SDES_PHONE	= 4,		/*!< User's phone number */
+	SDES_LOC	= 5,		/*!< Geographic user location */
+	SDES_TOOL	= 6,		/*!< Name of application or tool */
+	SDES_NOTE	= 7,		/*!< Notice about the source */
+	SDES_PRIV	= 8,		/*!< SDES Private extensions */
+};
 
 #define RTP_MTU		1200
 
@@ -872,6 +890,8 @@ struct ast_frame *ast_rtcp_read(struct ast_rtp *rtp)
 	int position, i, packetwords;
 	int res;
 	struct sockaddr_in sin;
+	char sdestext[255];
+	unsigned int sdesheader, sdeslength, sdestype;
 	unsigned int rtcpdata[8192 + AST_FRIENDLY_OFFSET];
 	unsigned int *rtcpheader;
 	int pt;
@@ -893,7 +913,8 @@ struct ast_frame *ast_rtcp_read(struct ast_rtp *rtp)
 	len = sizeof(sin);
 	
 	res = recvfrom(rtp->rtcp->s, rtcpdata + AST_FRIENDLY_OFFSET, sizeof(rtcpdata) - sizeof(unsigned int) * AST_FRIENDLY_OFFSET,
-					0, (struct sockaddr *)&sin, &len);
+			0, (struct sockaddr *)&sin, &len);
+
 	rtcpheader = (unsigned int *)(rtcpdata + AST_FRIENDLY_OFFSET);
 	
 	if (res < 0) {
@@ -905,7 +926,7 @@ struct ast_frame *ast_rtcp_read(struct ast_rtp *rtp)
 		return &ast_null_frame;
 	}
 
-	packetwords = res / 4;
+	packetwords = res / 4;	/* Each RTCP segment is 32 bits */
 
 	if (rtp->nat) {
 		/* Send to whoever sent to us */
@@ -914,41 +935,48 @@ struct ast_frame *ast_rtcp_read(struct ast_rtp *rtp)
 		    ((rtp->rtcp->altthem.sin_addr.s_addr != sin.sin_addr.s_addr) ||
 		    (rtp->rtcp->altthem.sin_port != sin.sin_port))) {
 			memcpy(&rtp->rtcp->them, &sin, sizeof(rtp->rtcp->them));
-			if (option_debug || rtpdebug)
+			if (option_debug || rtpdebug) {
 				ast_log(LOG_DEBUG, "RTCP NAT: Got RTCP from other end. Now sending to address %s:%d\n", ast_inet_ntoa(rtp->rtcp->them.sin_addr), ntohs(rtp->rtcp->them.sin_port));
+			}
 		}
 	}
 
-	if (option_debug)
-		ast_log(LOG_DEBUG, "Got RTCP report of %d bytes\n", res);
+	if (option_debug) {
+		ast_log(LOG_DEBUG, "Got RTCP report of %d bytes - %d messages\n", res, packetwords);
+	}
 
 	/* Process a compound packet */
 	position = 0;
 	while (position < packetwords) {
 		i = position;
+		ast_log(LOG_DEBUG, "***** Debug - position = %d\n", position);
+
 		length = ntohl(rtcpheader[i]);
+
+		/* Packet type */
 		pt = (length & 0xff0000) >> 16;
 		rc = (length & 0x1f000000) >> 24;
 		length &= 0xffff;
     
 		if ((i + length) > packetwords) {
-			ast_log(LOG_WARNING, "RTCP Read too short\n");
+			ast_log(LOG_WARNING, "RTCP Read too short - position %d\n", i);
 			return &ast_null_frame;
 		}
 		
 		if (rtcp_debug_test_addr(&sin)) {
-		  	ast_verbose("\n\nGot RTCP from %s:%d\n", ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port));
-		  	ast_verbose("PT: %d(%s)\n", pt, (pt == 200) ? "Sender Report" : (pt == 201) ? "Receiver Report" : (pt == 192) ? "H.261 FUR" : "Unknown");
-		  	ast_verbose("Reception reports: %d\n", rc);
-		  	ast_verbose("SSRC of sender: %u\n", rtcpheader[i + 1]);
+		  	ast_verbose("\n-- Got RTCP from %s:%d\n", ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port));
+		  	ast_verbose("   PT: %d(%s)", pt, (pt == 200) ? "Sender Report" : (pt == 201) ? "Receiver Report" : (pt == 192) ? "H.261 FUR" : "Other");
+		  	ast_verbose("   Reception reports: %d\n", rc);
+		  	ast_verbose("   SSRC of packet sender: %u", rtcpheader[i + 1]);
+		  	ast_verbose("   (Position %d of %d)\n", i, packetwords);
 		}
     
 		i += 2; /* Advance past header and ssrc */
-		
-		switch (pt) {
+
+		switch (pt) {	/* Find the RTCP Packet type */
 		case RTCP_PT_SR:
-			gettimeofday(&rtp->rtcp->rxlsr,NULL); /* To be able to populate the dlsr */
-			rtp->rtcp->spc = ntohl(rtcpheader[i+3]);
+			gettimeofday(&rtp->rtcp->rxlsr, NULL); /* To be able to populate the dlsr */
+			rtp->rtcp->spc = ntohl(rtcpheader[i + 3]);
 			rtp->rtcp->soc = ntohl(rtcpheader[i + 4]);
 			rtp->rtcp->themrxlsr = ((ntohl(rtcpheader[i]) & 0x0000ffff) << 16) | ((ntohl(rtcpheader[i + 1]) & 0xffff0000) >> 16); /* Going to LSR in RR*/
     
@@ -956,8 +984,9 @@ struct ast_frame *ast_rtcp_read(struct ast_rtp *rtp)
 				ast_verbose("NTP timestamp: %lu.%010lu\n", (unsigned long) ntohl(rtcpheader[i]), (unsigned long) ntohl(rtcpheader[i + 1]) * 4096);
 				ast_verbose("RTP timestamp: %lu\n", (unsigned long) ntohl(rtcpheader[i + 2]));
 				ast_verbose("SPC: %lu\tSOC: %lu\n", (unsigned long) ntohl(rtcpheader[i + 3]), (unsigned long) ntohl(rtcpheader[i + 4]));
+				ast_verbose("RC (number of reports) %d\n", rc);
 			}
-			i += 5;
+			i += 5;	/* Sender's report is five bytes */
 			if (rc < 1)
 				break;
 			/* Intentional fall through */
@@ -975,10 +1004,10 @@ struct ast_frame *ast_rtcp_read(struct ast_rtp *rtp)
 				/* Convert end to end delay to usec (keeping the calculation in 64bit space)
 				   sess->ee_delay = (eedelay * 1000) / 65536; */
 				if (rtt < 4294) {
-				    rtt = (rtt * 1000000) >> 16;
+					rtt = (rtt * 1000000) >> 16;
 				} else {
-				    rtt = (rtt * 1000) >> 16;
-				    rtt *= 1000;
+					rtt = (rtt * 1000) >> 16;
+					rtt *= 1000;
 				}
 				rtt = rtt / 1000.;
 				rttsec = rtt / 1000.;
@@ -1008,15 +1037,16 @@ struct ast_frame *ast_rtcp_read(struct ast_rtp *rtp)
 				ast_verbose("  Highest sequence number: %ld\n", (long) (ntohl(rtcpheader[i + 2]) & 0xffff));
 				ast_verbose("  Sequence number cycles: %ld\n", (long) (ntohl(rtcpheader[i + 2]) & 0xffff) >> 16);
 				ast_verbose("  Interarrival jitter: %u\n", rtp->rtcp->reported_jitter);
-				ast_verbose("  Last SR(our NTP): %lu.%010lu\n",(unsigned long) ntohl(rtcpheader[i + 4]) >> 16,((unsigned long) ntohl(rtcpheader[i + 4]) << 16) * 4096);
-				ast_verbose("  DLSR: %4.4f (sec)\n",ntohl(rtcpheader[i + 5])/65536.0);
+				ast_verbose("  Last SR (our NTP): %lu.%010lu\n", (unsigned long) ntohl(rtcpheader[i + 4]) >> 16,((unsigned long) ntohl(rtcpheader[i + 4]) << 16) * 4096);
+				ast_verbose("  DLSR: %4.4f (sec)\n", ntohl(rtcpheader[i + 5])/65536.0);
 				if (rtt)
 					ast_verbose("  RTT: %lu(sec)\n", (unsigned long) rtt);
 			}
 			break;
 		case RTCP_PT_FUR:
-			if (rtcp_debug_test_addr(&sin))
+			if (rtcp_debug_test_addr(&sin)) {
 				ast_verbose("Received an RTCP Fast Update Request\n");
+			}
 			rtp->f.frametype = AST_FRAME_CONTROL;
 			rtp->f.subclass = AST_CONTROL_VIDUPDATE;
 			rtp->f.datalen = 0;
@@ -1026,12 +1056,46 @@ struct ast_frame *ast_rtcp_read(struct ast_rtp *rtp)
 			f = &rtp->f;
 			break;
 		case RTCP_PT_SDES:
+			sdesheader = ntohl(rtcpheader[i]);
+			sdeslength = (sdesheader & 0xff0000) >> 16;
+			sdestype = (sdesheader & 0x800000) >> 16;
+			if (rtcp_debug_test_addr(&sin)) {
+				ast_verbose("Received an SDES from %s:%d (Type %u, Length %u)\n", ast_inet_ntoa(rtp->rtcp->them.sin_addr), ntohs(rtp->rtcp->them.sin_port), sdestype, sdeslength);
+			}
+
+//	/*! \brief RFC 3550 RTCP SDES Item types */
+//	enum rtcp_sdes {
+	//	SDES_END	= 0,		/*!< End of SDES list */
+	//	SDES_CNAME	= 1,		/*!< Canonical name */
+	//	SDES_NAME	= 2,		/*!< User name */
+	//	SDES_EMAIL	= 3,		/*!< User's e-mail address */
+	//	SDES_PHONE	= 4,		/*!< User's phone number */
+	//	SDES_LOC	= 5,		/*!< Geographic user location */
+	//	SDES_TOOL	= 6,		/*!< Name of application or tool */
+	//	SDES_NOTE	= 7,		/*!< Notice about the source */
+	//	SDES_PRIV	= 8,		/*!< SDES Private extensions */
+//	};
+
+			break;
+		case RTCP_PT_NACK:
 			if (rtcp_debug_test_addr(&sin))
-				ast_verbose("Received an SDES from %s:%d\n", ast_inet_ntoa(rtp->rtcp->them.sin_addr), ntohs(rtp->rtcp->them.sin_port));
+				ast_verbose("Received a RTCP NACK from %s:%d\n", ast_inet_ntoa(rtp->rtcp->them.sin_addr), ntohs(rtp->rtcp->them.sin_port));
 			break;
 		case RTCP_PT_BYE:
 			if (rtcp_debug_test_addr(&sin))
-				ast_verbose("Received a BYE from %s:%d\n", ast_inet_ntoa(rtp->rtcp->them.sin_addr), ntohs(rtp->rtcp->them.sin_port));
+				ast_verbose("Received a RTCP BYE from %s:%d\n", ast_inet_ntoa(rtp->rtcp->them.sin_addr), ntohs(rtp->rtcp->them.sin_port));
+			break;
+		case RTCP_PT_XR:
+			if (rtcp_debug_test_addr(&sin))
+				ast_verbose("Received a RTCP Extended Report (XR) packet from %s:%d\n", ast_inet_ntoa(rtp->rtcp->them.sin_addr), ntohs(rtp->rtcp->them.sin_port));
+			break;
+		case RTCP_PT_APP:
+			if (rtcp_debug_test_addr(&sin))
+				ast_verbose("Received a RTCP APP packet from %s:%d\n", ast_inet_ntoa(rtp->rtcp->them.sin_addr), ntohs(rtp->rtcp->them.sin_port));
+			break;
+		case RTCP_PT_IJ:
+			if (rtcp_debug_test_addr(&sin))
+				ast_verbose("Received a RTCP IJ from %s:%d\n", ast_inet_ntoa(rtp->rtcp->them.sin_addr), ntohs(rtp->rtcp->them.sin_port));
 			break;
 		default:
 			if (option_debug)
@@ -1039,10 +1103,12 @@ struct ast_frame *ast_rtcp_read(struct ast_rtp *rtp)
 			break;
 		}
 		position += (length + 1);
-	}
-			
+	} /* While */
+
 	return f;
 }
+
+			
 
 static void sanitize_tv(struct timeval *tv)
 {

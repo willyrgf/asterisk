@@ -2002,6 +2002,7 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 		config->end_bridge_callback(config->end_bridge_callback_data);
 	}
 
+
 	if (!ast_test_flag(&(config->features_caller),AST_FEATURE_NO_H_EXTEN) && 
 	    ast_exists_extension(chan, chan->context, "h", 1, chan->cid.cid_num)) {
 		struct ast_cdr *swapper = NULL;

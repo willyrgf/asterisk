@@ -1,0 +1,65 @@
+Olle E. Johansson
+oej@edvina.net
+
+
+
+
+
+
+
+
+Pinefrog - RTCP cleanup and additions
+-------------------------------------
+
+RTCP, as defined in RFC 3550, is a protocol that co-exists with RTP, the protocol used
+for realtime multimedia in VoIP. RTCP gives the endpoints a tool to exchange data about
+the media streams exchanged. As a result, both ends can get informaiton about the
+latency for data sent in both directions, packet loss and jitter for each media stream.
+
+A VoIP call is at least two media streams and they can have different properties in
+regards of quality. A router or switch in the middle could have a lot of outbound traffic,
+causing delays and possible packet loss. This might not affect inbound traffic.
+
+In Asterisk, the RTCP handler is part of the RTP module. The RTP module produces RTCP
+report that can be added to channel variables, cdr logs or sent through AMI.
+
+In 1.4, the data used is mostly based on the latest report, it's not aggregated. This
+is fixed in trunk.
+
+In both implementations (and the 1.6 releases in between) the RTCP support is not
+very complete.
+
+- It doesn't handle RTCP SDES packets
+- It doesn't send RTCP END packets at end of session
+- It doesn't handle receiving END packets
+- It doesn't handle re-invites in a good way.
+- It seems to mix sender and receiver reports, thus mixing data from two streams 
+    - when does this happen, if at all?
+
+Todo
+----
+- Add support of outbound and inbound SDES. The SDES includes a stream identifier, CNAME. 
+  When this changes, we have a different stream and need to restart the stats.
+  Should we add ability to produce multiple RTCP reports for one "call" and aggregate them?
+  The different parts might have different properties.
+- Check RTCP support for the p2p RTP bridge - today it doesn't work properly.
+
+Ideas and thoughts for the future
+---------------------------------
+- Asterisk propagates jitter and packet loss over a bridge (especially the p2p RTP bridge).
+  If the call is transfered on the OTHER side of the bridge, we have a new call with new
+  properties. Maybe events like this should generate a new SDES and reset RTCP?
+  Part A of the call can have very different properties than part B. If I have a call with
+  someone internally, that then transfers me to a call with someone on the Internet, the
+  call quality (jitter etc) will change dramatically. This will require some sort of CONTROL
+  packet over the bridge, informing about changes on the other side of the bridge (masq).
+- Can we have some sort of ring buffer for the latest RTCP reports for a device (peer) 
+  and use that to determine the status of the connection to the peer?
+- Can we use the APP packet for relaying events in joined bridges, like meetme?
+
+
+Scenarios to test
+------------------
+- normal bridged call
+- RTP p2p bridged call
+- 
