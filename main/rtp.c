@@ -193,6 +193,7 @@ struct ast_rtp {
 	struct ast_rtp *bridged;        /*!< Who we are Packet bridged to */
 	int set_marker_bit:1;           /*!< Whether to set the marker bit or not */
 	unsigned int constantssrc:1;
+	int isactive:1;                 /*!< Whether to RTP stream is active or not */
 };
 
 /* Forward declarations */
@@ -2017,6 +2018,7 @@ void ast_rtp_new_init(struct ast_rtp *rtp)
 	rtp->ssrc = ast_random();
 	rtp->seqno = ast_random() & 0xffff;
 	ast_set_flag(rtp, FLAG_HAS_DTMF);
+	rtp->isactive = 1;
 
 	return;
 }
@@ -2190,6 +2192,11 @@ struct ast_rtp *ast_rtp_get_bridged(struct ast_rtp *rtp)
 	return bridged;
 }
 
+int ast_rtp_isactive(struct ast_rtp *rtp)
+{
+	return rtp->isactive;
+}
+
 void ast_rtp_stop(struct ast_rtp *rtp)
 {
 	if (rtp->rtcp) {
@@ -2204,6 +2211,7 @@ void ast_rtp_stop(struct ast_rtp *rtp)
 	}
 	
 	ast_clear_flag(rtp, FLAG_P2P_SENT_MARK);
+	rtp->isactive = 0;
 }
 
 void ast_rtp_reset(struct ast_rtp *rtp)
@@ -2240,6 +2248,8 @@ char *ast_rtp_get_quality(struct ast_rtp *rtp, struct ast_rtp_quality *qual)
 	*/
 
 	if (qual && rtp) {
+		qual->lasttxformat = rtp->lasttxformat;
+		qual->lastrxformat = rtp->lastrxformat;
 		qual->local_ssrc = rtp->ssrc;
 		qual->local_jitter = rtp->rxjitter;
 		qual->local_count = rtp->rxcount;

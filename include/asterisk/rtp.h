@@ -87,6 +87,8 @@ struct ast_rtp_quality {
 	double       remote_jitter;       /* Their reported jitter */
 	unsigned int remote_count;        /* Number of transmitted packets */
 	double       rtt;                 /* Round trip time */
+	int lasttxformat;
+	int lastrxformat;
 };
 
 
@@ -244,6 +246,7 @@ int ast_rtp_make_compatible(struct ast_channel *dest, struct ast_channel *src, i
 int ast_rtp_early_bridge(struct ast_channel *dest, struct ast_channel *src);
 
 void ast_rtp_stop(struct ast_rtp *rtp);
+int ast_rtp_isactive(struct ast_rtp *rtp);
 
 /*! \brief Return RTCP quality string */
 char *ast_rtp_get_quality(struct ast_rtp *rtp, struct ast_rtp_quality *qual);

@@ -573,6 +573,7 @@ static char global_regcontext[AST_MAX_CONTEXT];		/*!< Context for auto-extension
 static char global_useragent[AST_MAX_EXTENSION];	/*!< Useragent for the SIP channel */
 static int allow_external_domains;	/*!< Accept calls to external SIP domains? */
 static int global_callevents;		/*!< Whether we send manager events or not */
+static int global_rtcpevents;		/*!< Whether we send manager RTCP events or not */
 static int global_t1min;		/*!< T1 roundtrip time minimum */
 static int global_autoframing;          /*!< Turn autoframing on or off. */
 static enum transfermodes global_allowtransfer;	/*!< SIP Refer restriction scheme */
@@ -3732,6 +3733,7 @@ static int sip_hangup(struct ast_channel *ast)
 			ast_log(LOG_DEBUG, "Hanging up channel in state %s (not UP)\n", ast_state2str(ast->_state));
 	}
 
+	ast_log(LOG_DEBUG, "----%%%%%%----- Stopping media flows in sip_hangup\n");
 	stop_media_flows(p); /* Immediately stop RTP, VRTP and UDPTL as applicable */
 
 	append_history(p, needcancel ? "Cancel" : "Hangup", "Cause %s", p->owner ? ast_cause2str(p->hangupcause) : "Unknown");
@@ -11451,6 +11453,7 @@ static int sip_show_settings(int fd, int argc, char *argv[])
 	ast_cli(fd, "  From: Domain:           %s\n", default_fromdomain);
 	ast_cli(fd, "  Record SIP history:     %s\n", recordhistory ? "On" : "Off");
 	ast_cli(fd, "  Call Events:            %s\n", global_callevents ? "On" : "Off");
+	ast_cli(fd, "  RTCP Events:            %s\n", global_rtcpevents ? "On" : "Off");
 	ast_cli(fd, "  IP ToS SIP:             %s\n", ast_tos2str(global_tos_sip));
 	ast_cli(fd, "  IP ToS RTP audio:       %s\n", ast_tos2str(global_tos_audio));
 	ast_cli(fd, "  IP ToS RTP video:       %s\n", ast_tos2str(global_tos_video));
@@ -13413,12 +13416,62 @@ static void handle_response_peerpoke(struct sip_pvt *p, int resp, struct sip_req
 	}
 }
 
+/*! \brief send manager report of RTCP */
+static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, const char *mediatype)
+{
+	struct ast_rtp_quality qual;
+	char *rtpqstring;
+	char localjitter[10], remotejitter[10];
+	int qosrealtime = ast_check_realtime("rtpqos");
+
+	if (global_rtcpevents) {
+		rtpqstring =  ast_rtp_get_quality(rtp, &qual);
+		manager_event(EVENT_FLAG_CALL, "RTPQuality", 
+			"Channel: %s\r\n"
+			"PVTcallid: %s\r\n"
+			"RTPmedia: %s\r\n"
+			"RTPsendformat: %s\r\n"
+			"RTPrecvformat: %s\r\n"
+			"RTPlocalssrc: %u\r\n"
+			"RTPremotessrc: %u\r\n"
+			"RTPrtt: %f\r\n"
+			"RTPLocalJitter: %f\r\n"
+			"RTPRemoteJitter: %f\r\n" 
+			"RTPLocalPacketLoss: %d\r\n" 
+			"RTPRemotePacketLoss: %d\r\n"
+			"\r\n", 
+			p->owner ? p->owner->name : "",
+			p->callid, 
+			mediatype,
+			ast_getformatname(qual.lasttxformat),
+			ast_getformatname(qual.lastrxformat),
+			qual.local_ssrc, 
+			qual.remote_ssrc,
+			qual.rtt,
+			qual.local_jitter,
+			qual.remote_jitter,
+			qual.local_lostpackets,
+			qual.remote_lostpackets
+			);
+	}
+	/* CDR records are not reliable when it comes to near-death-of-channel events, so we need to store the RTCP
+	   report in realtime when we have it */
+	if (qosrealtime) {
+		sprintf(localjitter, "%f", qual.local_jitter);
+		sprintf(remotejitter, "%f", qual.remote_jitter);
+		ast_update_realtime("rtpqos", "Channel", p->owner ? p->owner->name : "", "pvtcallid", p->callid, "rtpmedia", mediatype, "localssrc", qual.local_ssrc, "remotessrc", qual.remote_ssrc, "rtt", qual.rtt, "localjitter", localjitter, "remotejitter", remotejitter, NULL);
+	}
+}
+
 /*! \brief Immediately stop RTP, VRTP and UDPTL as applicable */
 static void stop_media_flows(struct sip_pvt *p)
 {
+
 	/* Immediately stop RTP, VRTP and UDPTL as applicable */
-	if (p->rtp)
+	if (p->rtp && ast_rtp_isactive(p->rtp)) {
 		ast_rtp_stop(p->rtp);
+		sip_rtcp_report(p, p->rtp, "audio");
+	}
 	if (p->vrtp)
 		ast_rtp_stop(p->vrtp);
 	if (p->udptl)
@@ -15961,6 +16014,7 @@ static int handle_request_bye(struct sip_pvt *p, struct sip_request *req)
 		}
 	}
 
+	ast_log(LOG_DEBUG, "----%%%%%%----- Stopping media flows in handle_request_bye\n");
 	stop_media_flows(p); /* Immediately stop RTP, VRTP and UDPTL as applicable */
 
 	if (!ast_strlen_zero(get_header(req, "Also"))) {
@@ -18361,6 +18415,7 @@ static int reload_config(enum channelreloadreason reason)
 	/* Misc settings for the channel */
 	global_relaxdtmf = FALSE;
 	global_callevents = FALSE;
+	global_rtcpevents = FALSE;
 	global_t1min = DEFAULT_T1MIN;
 	global_shrinkcallerid = 1;
 
@@ -18607,6 +18662,8 @@ static int reload_config(enum channelreloadreason reason)
 				ast_log(LOG_WARNING, "Qualification default should be 'yes', 'no', or a number of milliseconds at line %d of sip.conf\n", v->lineno);
 				default_qualify = 0;
 			}
+		} else if (!strcasecmp(v->name, "rtcpevents")) {
+			global_callevents = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "callevents")) {
 			global_callevents = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "maxcallbitrate")) {
