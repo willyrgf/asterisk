@@ -4709,8 +4709,9 @@ static struct sip_pvt *sip_alloc(ast_string_field callid, struct sockaddr_in *si
 	if (sip_methods[intended_method].need_rtp) {
 		p->rtp = ast_rtp_new_with_bindaddr(sched, io, 1, 0, bindaddr.sin_addr);
 		/* If the global videosupport flag is on, we always create a RTP interface for video */
-		if (ast_test_flag(&p->flags[1], SIP_PAGE2_VIDEOSUPPORT))
+		if (ast_test_flag(&p->flags[1], SIP_PAGE2_VIDEOSUPPORT)) {
 			p->vrtp = ast_rtp_new_with_bindaddr(sched, io, 1, 0, bindaddr.sin_addr);
+		}
 		if (ast_test_flag(&p->flags[1], SIP_PAGE2_T38SUPPORT))
 			p->udptl = ast_udptl_new_with_bindaddr(sched, io, 0, bindaddr.sin_addr);
 		if (!p->rtp || (ast_test_flag(&p->flags[1], SIP_PAGE2_VIDEOSUPPORT) && !p->vrtp)) {
@@ -4768,6 +4769,12 @@ static struct sip_pvt *sip_alloc(ast_string_field callid, struct sockaddr_in *si
 	else
 		ast_string_field_set(p, callid, callid);
 	/* Assign default music on hold class */
+	if (p->rtp) {
+		ast_rtcp_setcname(p->rtp, p->callid, strlen(p->callid));
+	}
+	if (p->vrtp) {
+		ast_rtcp_setcname(p->rtp, p->callid, strlen(p->callid));
+	}
 	ast_string_field_set(p, mohinterpret, default_mohinterpret);
 	ast_string_field_set(p, mohsuggest, default_mohsuggest);
 	p->capability = global_capability;
@@ -13472,8 +13479,10 @@ static void stop_media_flows(struct sip_pvt *p)
 		ast_rtp_stop(p->rtp);
 		sip_rtcp_report(p, p->rtp, "audio");
 	}
-	if (p->vrtp)
+	if (p->vrtp) {
 		ast_rtp_stop(p->vrtp);
+		sip_rtcp_report(p, p->rtp, "video");
+	}
 	if (p->udptl)
 		ast_udptl_stop(p->udptl);
 }

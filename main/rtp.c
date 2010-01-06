@@ -64,8 +64,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define RTCP_MIN_INTERVALMS       500	/*!< Min milli-seconds between RTCP reports we send */
 #define RTCP_MAX_INTERVALMS       60000	/*!< Max milli-seconds between RTCP reports we send */
 
-#define RTCP_PT_FUR     192		/*!< FIR  - Full Intra-frame request */
-#define RTCP_PT_NACK    193		/*!< NACK - Negative acknowledgement */
+#define RTCP_PT_FUR     192		/*!< FIR  - Full Intra-frame request (h.261) */
+#define RTCP_PT_NACK    193		/*!< NACK - Negative acknowledgement (h.261) */
 #define RTCP_PT_IJ      195		/*!< IJ   - RFC 5450 Extended Inter-arrival jitter report */
 #define RTCP_PT_SR      200		/*!< SR   - RFC 3550 Sender report */
 #define RTCP_PT_RR      201		/*!< RR   - RFC 3550 Receiver report */
@@ -87,6 +87,7 @@ enum rtcp_sdes {
 	SDES_TOOL	= 6,		/*!< Name of application or tool */
 	SDES_NOTE	= 7,		/*!< Notice about the source */
 	SDES_PRIV	= 8,		/*!< SDES Private extensions */
+	SDES_H323_CADDR	= 9,		/*!< H.323 Callable address */
 };
 
 #define RTP_MTU		1200
@@ -228,6 +229,8 @@ int ast_rtp_senddigit_end(struct ast_rtp *rtp, char digit);
  */
 struct ast_rtcp {
 	int s;				/*!< Socket */
+	char ourcname[255];		/*!< Our SDES RTP session name (CNAME) */
+	char theircname[255];		/*!< Their SDES RTP session name (CNAME) */
 	struct sockaddr_in us;		/*!< Socket representation of the local endpoint. */
 	struct sockaddr_in them;	/*!< Socket representation of the remote endpoint. */
 	struct sockaddr_in altthem;	/*!< Alternate source for RTCP */
@@ -888,11 +891,11 @@ static int rtpread(int *id, int fd, short events, void *cbdata)
 struct ast_frame *ast_rtcp_read(struct ast_rtp *rtp)
 {
 	socklen_t len;
-	int position, i, packetwords;
+	int position, i, j, packetwords;
 	int res;
 	struct sockaddr_in sin;
-	char sdestext[255];
-	unsigned int sdesheader, sdeslength, sdestype;
+	char *sdes;
+	unsigned int sdeslength, sdestype;
 	unsigned int rtcpdata[8192 + AST_FRIENDLY_OFFSET];
 	unsigned int *rtcpheader;
 	int pt;
@@ -946,7 +949,11 @@ struct ast_frame *ast_rtcp_read(struct ast_rtp *rtp)
 		ast_log(LOG_DEBUG, "Got RTCP report of %d bytes - %d messages\n", res, packetwords);
 	}
 
-	/* Process a compound packet */
+	/* Process a compound packet 
+	   - A compound packet should start with a sender or receiver report. BYE can start as well
+		(seen in implementations) 
+	   -  Packet length should be a multiple of four bytes
+	*/
 	position = 0;
 	while (position < packetwords) {
 		i = position;
@@ -967,6 +974,7 @@ struct ast_frame *ast_rtcp_read(struct ast_rtp *rtp)
 		if (rtcp_debug_test_addr(&sin)) {
 		  	ast_verbose("\n-- Got RTCP from %s:%d\n", ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port));
 		  	ast_verbose("   PT: %d(%s)", pt, (pt == 200) ? "Sender Report" : (pt == 201) ? "Receiver Report" : (pt == 192) ? "H.261 FUR" : "Other");
+		  	ast_verbose("   Length : %d\n", length);
 		  	ast_verbose("   Reception reports: %d\n", rc);
 		  	ast_verbose("   SSRC of packet sender: %u", rtcpheader[i + 1]);
 		  	ast_verbose("   (Position %d of %d)\n", i, packetwords);
@@ -1057,11 +1065,58 @@ struct ast_frame *ast_rtcp_read(struct ast_rtp *rtp)
 			f = &rtp->f;
 			break;
 		case RTCP_PT_SDES:
-			sdesheader = ntohl(rtcpheader[i]);
-			sdeslength = (sdesheader & 0xff0000) >> 16;
-			sdestype = (sdesheader & 0x800000) >> 16;
-			if (rtcp_debug_test_addr(&sin)) {
-				ast_verbose("Received an SDES from %s:%d (Type %u, Length %u)\n", ast_inet_ntoa(rtp->rtcp->them.sin_addr), ntohs(rtp->rtcp->them.sin_port), sdestype, sdeslength);
+			/* SDES messages are divided into chunks, each one containing one or
+			   several items. Each chunk is for a different CSRC, so it's not really
+			   relevant in most cases of voip calls - unless you have an advanced
+			   mixer in the network that separates the different streams with CSRC 
+
+			   A chunk starts with SSRC/CSRC (four bytes), then SDES items 
+			   In the SDES message, there can be several items, ending with SDES_END
+			   The length of the all items is length - header 
+			   Chunk starts on a 32-bit boundary and needs padding by 0's
+
+		
+			   the "rc" variable contains the number of chunks 
+			   When we start, we're beyond the SSRC and starts with SDES items in the
+			   first chunk.
+			
+				an SDES item is one byte of type, one byte of length then data 
+				(no null termination). Text is UTF-8.
+				the last item is a zero (END) type with no length indication.
+			*/
+			
+			j = i * 4;
+			sdes = (char *) &rtcpheader[i];
+			ast_verbose("Received an SDES from %s:%d - Total length %d (%d bytes)\n", ast_inet_ntoa(rtp->rtcp->them.sin_addr), ntohs(rtp->rtcp->them.sin_port), length-i, ((length-i)*4) - 6);
+			while (j < length * 4) {
+				sdestype = (int) *sdes;
+				sdes++;
+				sdeslength = (int) *sdes;
+				sdes++;
+				if (rtcp_debug_test_addr(&sin)) {
+					ast_verbose(" --- SDES Type %u, Length %u Curj %d)\n", sdestype, sdeslength, j);
+				}
+				switch (sdestype) {
+				case SDES_CNAME:
+					strncpy(rtp->rtcp->theircname, sdes, sdeslength);
+					rtp->rtcp->theircname[sdeslength] = '\0';
+					if (rtcp_debug_test_addr(&sin)) {
+						ast_verbose(" --- SDES CNAME (utf8) %s\n", rtp->rtcp->theircname);
+					}
+					break;
+				case SDES_EMAIL:
+					break;
+				case SDES_PHONE:
+					break;
+				case SDES_LOC:
+					break;
+				case SDES_NOTE:
+					break;
+				case SDES_PRIV:
+					break;
+				}
+				j += sdeslength;	/* Header (1 byte) + length */
+				sdes += sdeslength;
 			}
 
 //	/*! \brief RFC 3550 RTCP SDES Item types */
@@ -2118,6 +2173,16 @@ struct ast_rtp *ast_rtp_new(struct sched_context *sched, struct io_context *io, 
 	return ast_rtp_new_with_bindaddr(sched, io, rtcpenable, callbackmode, ia);
 }
 
+/*! \brief set RTP cname used to describe session in RTCP sdes messages */
+void ast_rtcp_setcname(struct ast_rtp *rtp, const char *cname, size_t length)
+{
+	if (!rtp || !rtp->rtcp) {
+		return;
+	}
+	ast_copy_string(rtp->rtcp->ourcname, cname, length > 255 ? 255 : length);
+	ast_log(LOG_DEBUG, "--- Copied CNAME %s to RTCP structure (length %d)\n", cname, (int) length);
+}
+
 int ast_rtp_settos(struct ast_rtp *rtp, int tos)
 {
 	int res;
@@ -2507,12 +2572,49 @@ int ast_rtcp_send_h261fur(void *data)
 	return res;
 }
 
+static int add_sdes_bodypart(struct ast_rtp *rtp, unsigned int *rtcp_packet, int len)
+{
+	unsigned int *start = rtcp_packet;
+	char *sdes;
+	int cnamelen;
+
+	rtcp_packet++;	/* Move 32 bits ahead */
+	*rtcp_packet = htonl(rtp->ssrc);               /* Our SSRC */
+	rtcp_packet ++;
+
+	len += 8;	/* Header + SSRC */
+
+	ast_log(LOG_DEBUG, "----About to copy CNAME to SDES packet --- (len %d)\n", len);
+
+	sdes = (char *) rtcp_packet;
+	cnamelen = (int) strlen(rtp->rtcp->ourcname);
+
+	*sdes = SDES_CNAME;
+	sdes++;
+	*sdes = (char) cnamelen;
+	sdes++;
+	strncpy(sdes, rtp->rtcp->ourcname, cnamelen);	/* NO terminating 0 */
+	sdes+=cnamelen;
+	*sdes = SDES_END;	/* Terminating SDES packet */
+
+	/* THere must be a multiple of four bytes in the packet */
+	len += 2 + cnamelen + ((cnamelen +2) % 4 == 0 ? 0 : 4 - ((cnamelen + 2) % 4)) ;
+	ast_log(LOG_DEBUG, "----our CNAME %s--- (cnamelen %d len %d)\n", rtp->rtcp->ourcname, cnamelen, len);
+
+	/* 2 is version, 1 is number of chunks, then RTCP packet type (SDES) and length */
+	*start = htonl((2 << 30) | (1 << 24) | (RTCP_PT_SDES << 16) | ((len/4)-1));
+
+	ast_log(LOG_DEBUG, "----Copied our CNAME to SDES packet --- (len %d)\n", len);
+
+	return len;
+}
+
 /*! \brief Send RTCP sender's report */
 static int ast_rtcp_write_sr(const void *data)
 {
 	struct ast_rtp *rtp = (struct ast_rtp *)data;
 	int res;
-	int len = 0;
+	int len = 0;	/* Measured in chunks of four bytes */
 	struct timeval now;
 	unsigned int now_lsw;
 	unsigned int now_msw;
@@ -2538,7 +2640,7 @@ static int ast_rtcp_write_sr(const void *data)
 	}
 
 	gettimeofday(&now, NULL);
-	timeval2ntp(now, &now_msw, &now_lsw); /* fill thses ones in from utils.c*/
+	timeval2ntp(now, &now_msw, &now_lsw); /* fill theses ones in from utils.c*/
 	rtcpheader = (unsigned int *)bdata;
 	rtcpheader[1] = htonl(rtp->ssrc);               /* Our SSRC */
 	rtcpheader[2] = htonl(now_msw);                 /* now, MSW. gettimeofday() + SEC_BETWEEN_1900_AND_1970*/
@@ -2579,13 +2681,10 @@ static int ast_rtcp_write_sr(const void *data)
 		len += 8;
 		rtp->rtcp->sendfur = 0;
 	}
+
+	len = add_sdes_bodypart(rtp, &rtcpheader[len/4], len);
 	
-	/* Insert SDES here. Probably should make SDES text equal to mimetypes[code].type (not subtype 'cos */ 
-	/* it can change mid call, and SDES can't) */
-	rtcpheader[len/4]     = htonl((2 << 30) | (1 << 24) | (RTCP_PT_SDES << 16) | 2);
-	rtcpheader[(len/4)+1] = htonl(rtp->ssrc);               /* Our SSRC */
-	rtcpheader[(len/4)+2] = htonl(0x01 << 24);                    /* Empty for the moment */
-	len += 12;
+	
 	
 	res = sendto(rtp->rtcp->s, (unsigned int *)rtcpheader, len, 0, (struct sockaddr *)&rtp->rtcp->them, sizeof(rtp->rtcp->them));
 	if (res < 0) {
@@ -2608,11 +2707,11 @@ static int ast_rtcp_write_sr(const void *data)
 		ast_verbose("  Sent packets: %u\n", rtp->txcount);
 		ast_verbose("  Sent octets: %u\n", rtp->txoctetcount);
 		ast_verbose("  Report block:\n");
-		ast_verbose("  Fraction lost: %u\n", fraction);
-		ast_verbose("  Cumulative loss: %u\n", lost);
-		ast_verbose("  IA jitter: %.4f\n", rtp->rxjitter);
-		ast_verbose("  Their last SR: %u\n", rtp->rtcp->themrxlsr);
-		ast_verbose("  DLSR: %4.4f (sec)\n\n", (double)(ntohl(rtcpheader[12])/65536.0));
+		ast_verbose("    Fraction lost (since last report): %u\n", fraction);
+		ast_verbose("    Cumulative loss: %u\n", lost);
+		ast_verbose("    IA jitter: %.4f\n", rtp->rxjitter);
+		ast_verbose("    Their last SR: %u\n", rtp->rtcp->themrxlsr);
+		ast_verbose("    Delay since last SR (DLSR): %4.4f (sec)\n\n", (double)(ntohl(rtcpheader[12])/65536.0));
 	}
 	return res;
 }

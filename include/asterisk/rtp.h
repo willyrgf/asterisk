@@ -181,6 +181,10 @@ int ast_rtp_sendcng(struct ast_rtp *rtp, int level);
 
 int ast_rtp_settos(struct ast_rtp *rtp, int tos);
 
+void ast_rtcp_setcname(struct ast_rtp *rtp, const char *cname, size_t length);
+
+
+
 /*! \brief When changing sources, don't generate a new SSRC */
 void ast_rtp_set_constantssrc(struct ast_rtp *rtp);
 
