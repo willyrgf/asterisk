@@ -18672,7 +18672,7 @@ static int reload_config(enum channelreloadreason reason)
 				default_qualify = 0;
 			}
 		} else if (!strcasecmp(v->name, "rtcpevents")) {
-			global_callevents = ast_true(v->value);
+			global_rtcpevents = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "callevents")) {
 			global_callevents = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "maxcallbitrate")) {
