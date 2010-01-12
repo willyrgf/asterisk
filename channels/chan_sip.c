@@ -574,6 +574,7 @@ static char global_useragent[AST_MAX_EXTENSION];	/*!< Useragent for the SIP chan
 static int allow_external_domains;	/*!< Accept calls to external SIP domains? */
 static int global_callevents;		/*!< Whether we send manager events or not */
 static int global_rtcpevents;		/*!< Whether we send manager RTCP events or not */
+static int global_rtcptimer;		/*!< How often, during a call, to report RTCP stats */
 static int global_t1min;		/*!< T1 roundtrip time minimum */
 static int global_autoframing;          /*!< Turn autoframing on or off. */
 static enum transfermodes global_allowtransfer;	/*!< SIP Refer restriction scheme */
@@ -11461,6 +11462,7 @@ static int sip_show_settings(int fd, int argc, char *argv[])
 	ast_cli(fd, "  Record SIP history:     %s\n", recordhistory ? "On" : "Off");
 	ast_cli(fd, "  Call Events:            %s\n", global_callevents ? "On" : "Off");
 	ast_cli(fd, "  RTCP Events:            %s\n", global_rtcpevents ? "On" : "Off");
+	ast_cli(fd, "  RTCP Event timer:       %d\n", global_rtcptimer);
 	ast_cli(fd, "  IP ToS SIP:             %s\n", ast_tos2str(global_tos_sip));
 	ast_cli(fd, "  IP ToS RTP audio:       %s\n", ast_tos2str(global_tos_audio));
 	ast_cli(fd, "  IP ToS RTP video:       %s\n", ast_tos2str(global_tos_video));
@@ -13423,8 +13425,10 @@ static void handle_response_peerpoke(struct sip_pvt *p, int resp, struct sip_req
 	}
 }
 
-/*! \brief send manager report of RTCP */
-static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, const char *mediatype)
+/*! \brief send manager report of RTCP 
+	endreport means endof-call report
+*/
+static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, const char *mediatype, int endreport)
 {
 	struct ast_rtp_quality qual;
 	char *rtpqstring;
@@ -13435,6 +13439,7 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, const char *
 		rtpqstring =  ast_rtp_get_quality(rtp, &qual);
 		manager_event(EVENT_FLAG_CALL, "RTPQuality", 
 			"Channel: %s\r\n"
+			"RTPreporttype: %s\r\n"
 			"PVTcallid: %s\r\n"
 			"RTPmedia: %s\r\n"
 			"RTPsendformat: %s\r\n"
@@ -13448,6 +13453,7 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, const char *
 			"RTPRemotePacketLoss: %d\r\n"
 			"\r\n", 
 			p->owner ? p->owner->name : "",
+			endreport ? "Final" : "Update",
 			p->callid, 
 			mediatype,
 			ast_getformatname(qual.lasttxformat),
@@ -13477,11 +13483,11 @@ static void stop_media_flows(struct sip_pvt *p)
 	/* Immediately stop RTP, VRTP and UDPTL as applicable */
 	if (p->rtp && ast_rtp_isactive(p->rtp)) {
 		ast_rtp_stop(p->rtp);
-		sip_rtcp_report(p, p->rtp, "audio");
+		sip_rtcp_report(p, p->rtp, "audio", TRUE);
 	}
 	if (p->vrtp) {
 		ast_rtp_stop(p->vrtp);
-		sip_rtcp_report(p, p->rtp, "video");
+		sip_rtcp_report(p, p->rtp, "video", TRUE);
 	}
 	if (p->udptl)
 		ast_udptl_stop(p->udptl);
@@ -18425,6 +18431,7 @@ static int reload_config(enum channelreloadreason reason)
 	global_relaxdtmf = FALSE;
 	global_callevents = FALSE;
 	global_rtcpevents = FALSE;
+	global_rtcptimer = 0;	/* Only report at end of call (if enabled) */
 	global_t1min = DEFAULT_T1MIN;
 	global_shrinkcallerid = 1;
 
@@ -18673,6 +18680,11 @@ static int reload_config(enum channelreloadreason reason)
 			}
 		} else if (!strcasecmp(v->name, "rtcpevents")) {
 			global_rtcpevents = ast_true(v->value);
+		} else if (!strcasecmp(v->name, "rtcpeventtimer")) {
+			if (sscanf(v->value, "%30d", &global_rtcptimer) != 1) {
+				ast_log(LOG_WARNING, "RTCP event timer needs to be value (seconds between reports) at line %d of sip.conf\n", v->lineno);
+				global_rtcptimer = 0;
+			}
 		} else if (!strcasecmp(v->name, "callevents")) {
 			global_callevents = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "maxcallbitrate")) {
