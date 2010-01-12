@@ -6,8 +6,6 @@ oej@edvina.net
 
 
 
-
-
 Pinefrog - RTCP cleanup and additions
 -------------------------------------
 
@@ -36,13 +34,36 @@ very complete.
 - It seems to mix sender and receiver reports, thus mixing data from two streams 
     - when does this happen, if at all?
 
+RTCP and NAT
+------------
+I suspect that RTCP doesn't traverse NAT very well in our implementation. For RTP,
+we start with sending media to probe NAT. I've added emtpy RTCP RR+SDES CNAME packets
+to start probing a NAT (if Asterisk is behind a NAT). I am afraid that very few devices
+do that early on.
+The idea is (like RTP)
+ - Send a few RTCP packets in the start of the session.
+ - The receiver can then apply symmetric RTCP and start sending to the NAT outside port
+   that we're sending from and we'll get their packets.
+
 Todo
 ----
-- Add support of outbound and inbound SDES. The SDES includes a stream identifier, CNAME. 
-  When this changes, we have a different stream and need to restart the stats.
+- When CNAME changes, we have a different stream and need to restart the stats.
   Should we add ability to produce multiple RTCP reports for one "call" and aggregate them?
   The different parts might have different properties.
 - Check RTCP support for the p2p RTP bridge - today it doesn't work properly.
+- Add timed manager events during a call (once a minute or so)
+- Document realtime storage format
+- Add support of RTCP goodbye
+
+Done
+----
+- Add support of outbound and inbound SDES. The SDES includes a stream identifier, CNAME. 
+- Add support of outbound SDES end
+- Add manager events at end-of call
+- Add realtime storage of RTCP reports
+- Added more information to RTCP debug
+- Added more data aggregation to ast_rtcp structure (from svn trunk really)
+
 
 Ideas and thoughts for the future
 ---------------------------------
