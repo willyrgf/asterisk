@@ -1025,6 +1025,7 @@ static struct sip_pvt {
 	int initid;				/*!< Auto-congest ID if appropriate (scheduler) */
 	int waitid;				/*!< Wait ID for scheduler after 491 or other delays */
 	int autokillid;				/*!< Auto-kill ID (scheduler) */
+	int rtcpeventid;			/*!< Scheduler ID for RTCP Events */
 	enum transfermodes allowtransfer;	/*!< REFER: restriction scheme */
 	struct sip_refer *refer;		/*!< REFER: SIP transfer data structure */
 	enum subscriptiontype subscribed;	/*!< SUBSCRIBE: Is this dialog a subscription?  */
@@ -1371,6 +1372,8 @@ static void add_noncodec_to_sdp(const struct sip_pvt *p, int format, int sample_
 				char **m_buf, size_t *m_size, char **a_buf, size_t *a_size,
 				int debug);
 static enum sip_result add_sdp(struct sip_request *resp, struct sip_pvt *p, int add_audio, int add_t38);
+static int send_rtcp_events(const void *data);
+static void start_rtcp_events(struct sip_pvt *dialog);
 static void stop_media_flows(struct sip_pvt *p);
 
 /*--- Authentication stuff */
@@ -3298,6 +3301,7 @@ static int __sip_destroy(struct sip_pvt *p, int lockowner)
 
 	if (p->stateid > -1)
 		ast_extension_state_del(p->stateid, NULL);
+	AST_SCHED_DEL(sched, p->rtcpeventid);
 	AST_SCHED_DEL(sched, p->initid);
 	AST_SCHED_DEL(sched, p->waitid);
 	AST_SCHED_DEL(sched, p->autokillid);
@@ -3876,6 +3880,7 @@ static int sip_answer(struct ast_channel *ast)
 
 		res = transmit_response_with_sdp(p, "200 OK", &p->initreq, XMIT_CRITICAL);
 		ast_set_flag(&p->flags[1], SIP_PAGE2_DIALOG_ESTABLISHED);
+		start_rtcp_events(p);
 	}
 	ast_mutex_unlock(&p->lock);
 	return res;
@@ -4678,6 +4683,7 @@ static struct sip_pvt *sip_alloc(ast_string_field callid, struct sockaddr_in *si
 	ast_mutex_init(&p->lock);
 
 	p->method = intended_method;
+	p->rtcpeventid = -1;
 	p->initid = -1;
 	p->waitid = -1;
 	p->autokillid = -1;
@@ -13036,6 +13042,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, stru
 		ast_set_flag(&p->flags[1], SIP_PAGE2_DIALOG_ESTABLISHED);
 		xmitres = transmit_request(p, SIP_ACK, seqno, XMIT_UNRELIABLE, TRUE);
 		check_pendings(p);
+		start_rtcp_events(p);
 		break;
 	case 407: /* Proxy authentication */
 	case 401: /* Www auth */
@@ -13469,12 +13476,42 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, const char *
 	}
 	/* CDR records are not reliable when it comes to near-death-of-channel events, so we need to store the RTCP
 	   report in realtime when we have it */
-	if (qosrealtime) {
+	if (endreport && qosrealtime) {
 		sprintf(localjitter, "%f", qual.local_jitter);
 		sprintf(remotejitter, "%f", qual.remote_jitter);
 		ast_update_realtime("rtpqos", "Channel", p->owner ? p->owner->name : "", "pvtcallid", p->callid, "rtpmedia", mediatype, "localssrc", qual.local_ssrc, "remotessrc", qual.remote_ssrc, "rtt", qual.rtt, "localjitter", localjitter, "remotejitter", remotejitter, NULL);
 	}
 }
+
+/*! \brief Send RTCP manager events */
+static int send_rtcp_events(const void *data)
+{
+	struct sip_pvt *dialog = (struct sip_pvt *) data;
+
+	if (dialog->rtp && ast_rtp_isactive(dialog->rtp)) {
+		sip_rtcp_report(dialog, dialog->rtp, "audio", FALSE);
+	}
+	if (dialog->vrtp && ast_rtp_isactive(dialog->vrtp)) {
+		sip_rtcp_report(dialog, dialog->rtp, "video", FALSE);
+	}
+	return global_rtcptimer;
+}
+
+/*! \brief Activate RTCP events at start of call */
+static void start_rtcp_events(struct sip_pvt *dialog)
+{
+	if (!global_rtcpevents || !global_rtcptimer) {
+		return;
+	}
+	/* Check if it's already active */
+	if (dialog->rtcpeventid != -1) {
+		return;
+	}
+
+	/*! \brief Schedule events */
+	dialog->rtcpeventid = ast_sched_add(sched, global_rtcptimer * 1000, send_rtcp_events, dialog);
+}
+
 
 /*! \brief Immediately stop RTP, VRTP and UDPTL as applicable */
 static void stop_media_flows(struct sip_pvt *p)
