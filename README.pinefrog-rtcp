@@ -77,6 +77,7 @@ Ideas and thoughts for the future
 - Can we have some sort of ring buffer for the latest RTCP reports for a device (peer) 
   and use that to determine the status of the connection to the peer?
 - Can we use the APP packet for relaying events in joined bridges, like meetme?
+- What should we use as CNAME? Currently SIP call ID.
 
 
 Scenarios to test
