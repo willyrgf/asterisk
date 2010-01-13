@@ -11642,8 +11642,10 @@ static int __sip_show_channels(int fd, int argc, char *argv[], int subscriptions
  /*Print some info on the call here */
 static int sip_show_channelstats(int fd, int argc, char *argv[])
 {
-#define FORMAT2 "%-15.15s  %-11.11s  %-8.8s %-10.10s  %-10.10s (%-2.2s) %-6.6s %-10.10s  %-10.10s ( %%) %-6.6s\n"
-#define FORMAT  "%-15.15s  %-11.11s  %-8.8s %-10.10u%-1.1s %-10.10u (%-2.2u%%) %-6.6u %-10.10u%-1.1s %-10.10u (%-2.2u%%) %-6.6u\n"
+//#define FORMAT2 "%-15.15s  %-11.11s  %-8.8s %-10.10s  %-10.10s (%-2.2s) %-6.6s %-10.10s  %-10.10s ( %%) %-6.6s\n"
+//#define FORMAT  "%-15.15s  %-11.11s  %-8.8s %-10.10u%-1.1s %-10.10u (%-2.2u%%) %-6.6u %-10.10u%-1.1s %-10.10u (%-2.2u%%) %-6.6u\n"
+#define FORMAT2 "%-15.15s  %-11.11s  %-8.8s %-10.10s  %-10.10s (     %%) %-6.6s %-10.10s  %-10.10s (     %%) %-6.6s\n"
+#define FORMAT  "%-15.15s  %-11.11s  %-8.8s %-10.10u%-1.1s %-10.10u (%5.2f%%) %-6.6u %-10.10u%-1.1s %-10.10u (%5.2f%%) %-6.6u\n"
 	struct sip_pvt *cur;
 	int numchans = 0;
 	char durbuf[10];
@@ -11654,10 +11656,10 @@ static int sip_show_channelstats(int fd, int argc, char *argv[])
 		return RESULT_SHOWUSAGE;
 	ast_mutex_lock(&iflock);
 	cur = iflist;
-	ast_cli(fd, FORMAT2, "Peer", "Call ID", "Duration", "Recv: Pack", "Lost", "%", "Jitter", "Send: Pack", "Lost", "Jitter");
+	ast_cli(fd, FORMAT2, "Peer", "Call ID", "Duration", "Recv: Pack", "Lost", "Jitter", "Send: Pack", "Lost", "Jitter");
 	for (; cur; cur = cur->next) {
-		unsigned int rxcount;
-		unsigned int txcount;
+		unsigned int rxcount, rxploss;
+		unsigned int txcount, txploss;
 		struct ast_channel *c = cur->owner;
 
 		if (cur->subscribed != NONE) /* Subscriptions */
@@ -11670,6 +11672,8 @@ static int sip_show_channelstats(int fd, int argc, char *argv[])
 		}
 		rxcount = ast_rtp_get_qosvalue(cur->rtp, AST_RTP_RXCOUNT);
 		txcount = ast_rtp_get_qosvalue(cur->rtp, AST_RTP_TXCOUNT);
+		rxploss = ast_rtp_get_qosvalue(cur->rtp, AST_RTP_RXPLOSS);
+		txploss = ast_rtp_get_qosvalue(cur->rtp, AST_RTP_TXPLOSS);
 
 		/* Find the duration of this channel */
 		if (c && c->cdr && !ast_tvzero(c->cdr->start)) {
@@ -11687,14 +11691,13 @@ static int sip_show_channelstats(int fd, int argc, char *argv[])
 			cur->callid, 
 			durbuf,
 			rxcount > (unsigned int) 100000 ? (unsigned int) (rxcount)/(unsigned int) 1000 : rxcount,
-			rxcount > (unsigned int) 100000 ? "K":" ",
-			ast_rtp_get_qosvalue(cur->rtp, AST_RTP_RXPLOSS),
-			rxcount > ast_rtp_get_qosvalue(cur->rtp, AST_RTP_RXPLOSS) ? (unsigned int) ((double) ast_rtp_get_qosvalue(cur->rtp, AST_RTP_RXPLOSS) / (ast_rtp_get_qosvalue(cur->rtp, AST_RTP_RXPLOSS) + rxcount) * 100) : 0,
+			rxcount > (unsigned int) 100000 ? "K":" ", rxploss,
+			(rxcount + rxploss) > 0 ? (double) rxploss / (rxcount + rxploss) * 100 : 0,
 			ast_rtp_get_qosvalue(cur->rtp, AST_RTP_RXJITTER),
 			txcount > (unsigned int) 100000 ? (unsigned int) (txcount)/(unsigned int) 1000 : txcount,
 			txcount > (unsigned int) 100000 ? "K":" ",
-			ast_rtp_get_qosvalue(cur->rtp, AST_RTP_TXPLOSS),
-			txcount > ast_rtp_get_qosvalue(cur->rtp, AST_RTP_TXPLOSS) ? (unsigned int) ((double) ast_rtp_get_qosvalue(cur->rtp, AST_RTP_TXPLOSS)/ txcount * 100) : 0,
+			txploss,
+			txcount > 0 ? (double) txploss / txcount * 100 : 0,
 			ast_rtp_get_qosvalue(cur->rtp, AST_RTP_TXJITTER)
 		);
 		numchans++;
