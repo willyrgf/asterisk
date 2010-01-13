@@ -77,6 +77,7 @@ struct ast_rtp_protocol {
 	AST_LIST_ENTRY(ast_rtp_protocol) list;
 };
 
+/*! \brief Data structure only used for RTCP reports */
 struct ast_rtp_quality {
 	unsigned int local_ssrc;          /*!< Our SSRC */
 	unsigned int local_lostpackets;   /*!< Our lost packets */
@@ -87,12 +88,15 @@ struct ast_rtp_quality {
 	unsigned int remote_ssrc;         /*!< Their SSRC */
 	unsigned int remote_lostpackets;  /*!< Their lost packets */
 	double       remote_jitter;       /*!< Their reported jitter */
+	double       remote_jitter_max;   /*!< Their reported jitter */
+	double       remote_jitter_min;   /*!< Their reported jitter */
 	unsigned int remote_count;        /*!< Number of transmitted packets */
 	double       rtt;                 /*!< Round trip time */
 	double       rttmax;              /*!< Max observed round trip time */
 	double       rttmin;              /*!< Max observed round trip time */
 	int lasttxformat;		  /*!< Last used codec on transmitted stream */
 	int lastrxformat;		  /*!< Last used codec on received stream */
+	struct sockaddr_in them;	  /*!< The Ip address used for media by remote end */
 };
 
 

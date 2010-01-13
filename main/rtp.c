@@ -255,23 +255,23 @@ struct ast_rtcp {
 	double accumulated_transit;	/*!< accumulated a-dlsr-lsr */
 	double rtt;			/*!< Last reported rtt */
 	unsigned int reported_jitter;	/*!< The contents of their last jitter entry in the RR */
-	double reported_maxjitter;	/*!< The contents of their last jitter entry in the RR */
-	double reported_minjitter;	/*!< The contents of their last jitter entry in the RR */
-	unsigned int reported_jitter_count;
+	double reported_maxjitter;	/*!< The contents of their max jitter entry received by us */
+	double reported_minjitter;	/*!< The contents of their min jitter entry received by us */
+	unsigned int reported_jitter_count;	/*! Number of reports received */
 	unsigned int reported_lost;	/*!< Reported lost packets in their RR */
 	double reported_maxlost;
 	double reported_minlost;
 	double rxlost;
 	double maxrxlost;
 	double minrxlost;
-	unsigned int rxlost_count;
+	unsigned int rxlost_count;	/*! Number of reports received */
 	char quality[AST_MAX_USER_FIELD];
 	double maxrxjitter;
 	double minrxjitter;
-	unsigned int rxjitter_count;
+	unsigned int rxjitter_count;	/*! Number of reports received */
 	double maxrtt;
 	double minrtt;
-	unsigned int rtt_count;
+	unsigned int rtt_count;		/*! Number of reports received */
 	int sendfur;
 };
 
@@ -2408,6 +2408,7 @@ char *ast_rtp_get_quality(struct ast_rtp *rtp, struct ast_rtp_quality *qual)
 	*txcount       transmitted packets
 	*rlp           remote lost packets
 	*rtt           round trip time
+
 	*/
 
 	if (qual && rtp) {
@@ -2418,11 +2419,18 @@ char *ast_rtp_get_quality(struct ast_rtp *rtp, struct ast_rtp_quality *qual)
 		qual->local_count = rtp->rxcount;
 		qual->remote_ssrc = rtp->themssrc;
 		qual->remote_count = rtp->txcount;
+		qual->them = rtp->them;	/* IP address and port */
 		if (rtp->rtcp) {
+			qual->local_jitter_max = rtp->rtcp->maxrxjitter;
+			qual->local_jitter_min = rtp->rtcp->minrxjitter;
 			qual->local_lostpackets = rtp->rtcp->expected_prior - rtp->rtcp->received_prior;
 			qual->remote_lostpackets = rtp->rtcp->reported_lost;
 			qual->remote_jitter = rtp->rtcp->reported_jitter / 65536.0;
+			qual->remote_jitter_max = rtp->rtcp->reported_maxjitter;
+			qual->remote_jitter_min = rtp->rtcp->reported_minjitter;
 			qual->rtt = rtp->rtcp->rtt;
+			qual->rttmax = rtp->rtcp->maxrtt;
+			qual->rttmin = rtp->rtcp->minrtt;
 		}
 	}
 	if (rtp->rtcp) {

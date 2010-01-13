@@ -78,7 +78,8 @@ Ideas and thoughts for the future
   and use that to determine the status of the connection to the peer?
 - Can we use the APP packet for relaying events in joined bridges, like meetme?
 - What should we use as CNAME? Currently SIP call ID.
-
+- Separate on the IPs of different media servers. IE we can have one SIP peer with
+  multiple media IPs with different properties
 
 Scenarios to test
 ------------------
