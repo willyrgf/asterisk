@@ -13438,45 +13438,65 @@ static void handle_response_peerpoke(struct sip_pvt *p, int resp, struct sip_req
 static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, const char *mediatype, int endreport)
 {
 	struct ast_rtp_quality qual;
-	char *rtpqstring;
+	char *rtpqstring = NULL;
 	char localjitter[10], remotejitter[10];
 	int qosrealtime = ast_check_realtime("rtpqos");
+	long int duration;	/* Duration in secs */
+
+	if (p && p->owner && p->owner->cdr && !ast_tvzero(p->owner->cdr->start)) {
+		duration = (long int)(ast_tvdiff_ms(ast_tvnow(), p->owner->cdr->start) / 1000);
+	}
 
 	if (global_rtcpevents) {
 		rtpqstring =  ast_rtp_get_quality(rtp, &qual);
 		manager_event(EVENT_FLAG_CALL, "RTPQuality", 
-			"Channel: %s\r\n"
+			"Channel: %s\r\n"			/* AST_CHANNEL for this call */
 			"RTPreporttype: %s\r\n"
+			"Duration: %ld\r\n"
 			"PVTcallid: %s\r\n"
+			"RTPipaddress: %s\r\n"
 			"RTPmedia: %s\r\n"
 			"RTPsendformat: %s\r\n"
 			"RTPrecvformat: %s\r\n"
 			"RTPlocalssrc: %u\r\n"
 			"RTPremotessrc: %u\r\n"
 			"RTPrtt: %f\r\n"
+			"RTPrttMax: %f\r\n"
+			"RTPrttMin: %f\r\n"
 			"RTPLocalJitter: %f\r\n"
 			"RTPRemoteJitter: %f\r\n" 
 			"RTPLocalPacketLoss: %d\r\n" 
+			"RTPLocalPLPercent: %5.2f\r\n"
 			"RTPRemotePacketLoss: %d\r\n"
+			"RTPRemotePLPercent: %5.2f\r\n"
 			"\r\n", 
 			p->owner ? p->owner->name : "",
 			endreport ? "Final" : "Update",
+			duration,
 			p->callid, 
+			ast_inet_ntoa(qual.them.sin_addr), 	
 			mediatype,
 			ast_getformatname(qual.lasttxformat),
 			ast_getformatname(qual.lastrxformat),
 			qual.local_ssrc, 
 			qual.remote_ssrc,
 			qual.rtt,
+			qual.rttmax,
+			qual.rttmin,
 			qual.local_jitter,
 			qual.remote_jitter,
 			qual.local_lostpackets,
-			qual.remote_lostpackets
+			(qual.remote_count + qual.remote_lostpackets) > 0 ? (double) qual.remote_lostpackets / qual.remote_count  * 100 : 0,
+			qual.remote_lostpackets,
+			(qual.local_count + qual.local_lostpackets) > 0 ? (double) qual.local_lostpackets / (qual.local_count + qual.local_lostpackets) * 100 : 0
 			);
 	}
 	/* CDR records are not reliable when it comes to near-death-of-channel events, so we need to store the RTCP
 	   report in realtime when we have it */
 	if (endreport && qosrealtime) {
+		if (rtpqstring == NULL) {
+			rtpqstring =  ast_rtp_get_quality(rtp, &qual);
+		}
 		sprintf(localjitter, "%f", qual.local_jitter);
 		sprintf(remotejitter, "%f", qual.remote_jitter);
 		ast_update_realtime("rtpqos", "Channel", p->owner ? p->owner->name : "", "pvtcallid", p->callid, "rtpmedia", mediatype, "localssrc", qual.local_ssrc, "remotessrc", qual.remote_ssrc, "rtt", qual.rtt, "localjitter", localjitter, "remotejitter", remotejitter, NULL);
