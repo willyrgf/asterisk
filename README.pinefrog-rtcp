@@ -64,6 +64,14 @@ Done
 - Added more information to RTCP debug
 - Added more data aggregation to ast_rtcp structure (from svn trunk really)
 
+Open Issues
+-----------
+The final manager report lacks (in the case of the second channel) the bridged channel. We could save that data. 
+
+Do we have a counter of consecutive lost packets? How do we measure lost packets on inbound
+stream? Gaps in seq numbers or just the sender reports from the other end compared with received 
+no of packets?
+
 
 Ideas and thoughts for the future
 ---------------------------------

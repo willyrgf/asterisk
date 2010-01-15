@@ -13442,20 +13442,29 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, const char *
 	char localjitter[10], remotejitter[10];
 	int qosrealtime = ast_check_realtime("rtpqos");
 	long int duration;	/* Duration in secs */
+	struct ast_channel *bridgepeer = NULL;
 
-	if (p && p->owner && p->owner->cdr && !ast_tvzero(p->owner->cdr->start)) {
-		duration = (long int)(ast_tvdiff_ms(ast_tvnow(), p->owner->cdr->start) / 1000);
+	if (p && p->owner) {
+		bridgepeer = ast_bridged_channel(p->owner);
+
 	}
 
 	if (global_rtcpevents) {
 		rtpqstring =  ast_rtp_get_quality(rtp, &qual);
+		/* 
+		   If numberofreports == 0 we have no incoming RTCP active, thus we can't
+		   get any reliable data to handle packet loss or any RTT timing.
+		*/
+		duration = (long int)(ast_tvdiff_ms(ast_tvnow(), qual.start) / 1000);
 		manager_event(EVENT_FLAG_CALL, "RTPQuality", 
 			"Channel: %s\r\n"			/* AST_CHANNEL for this call */
+			"BridgedChannel: %s\r\n"
 			"RTPreporttype: %s\r\n"
-			"Duration: %ld\r\n"
-			"PVTcallid: %s\r\n"
+			"RTPrtcpstatus: %s\r\n"
+			"Duration: %ld\r\n"		/* used in cdr_manager */
+			"PvtCallid: %s\r\n"		/* ??? Generic PVT identifier */
 			"RTPipaddress: %s\r\n"
-			"RTPmedia: %s\r\n"
+			"RTPmedia: %s\r\n"		/* Audio, video, text */
 			"RTPsendformat: %s\r\n"
 			"RTPrecvformat: %s\r\n"
 			"RTPlocalssrc: %u\r\n"
@@ -13465,13 +13474,15 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, const char *
 			"RTPrttMin: %f\r\n"
 			"RTPLocalJitter: %f\r\n"
 			"RTPRemoteJitter: %f\r\n" 
-			"RTPLocalPacketLoss: %d\r\n" 
-			"RTPLocalPLPercent: %5.2f\r\n"
-			"RTPRemotePacketLoss: %d\r\n"
-			"RTPRemotePLPercent: %5.2f\r\n"
+			"RTPInPacketLoss: %d\r\n" 
+			"RTPInLocalPlPercent: %5.2f\r\n"
+			"RTPOutPacketLoss: %d\r\n"
+			"RTPOutPlPercent: %5.2f\r\n"
 			"\r\n", 
 			p->owner ? p->owner->name : "",
+			bridgepeer ? bridgepeer->name : "",
 			endreport ? "Final" : "Update",
+			qual.numberofreports == 0 ? "Inactive" : "Active",
 			duration,
 			p->callid, 
 			ast_inet_ntoa(qual.them.sin_addr), 	
@@ -13486,9 +13497,13 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, const char *
 			qual.local_jitter,
 			qual.remote_jitter,
 			qual.local_lostpackets,
-			(qual.remote_count + qual.remote_lostpackets) > 0 ? (double) qual.remote_lostpackets / qual.remote_count  * 100 : 0,
+			/* The local counter of lost packets in inbound stream divided with received packets plus lost packets */
+			(qual.remote_count + qual.local_lostpackets) > 0 ? (double) qual.local_lostpackets / (qual.remote_count + qual.local_lostpackets) * 100 : 0,
 			qual.remote_lostpackets,
-			(qual.local_count + qual.local_lostpackets) > 0 ? (double) qual.local_lostpackets / (qual.local_count + qual.local_lostpackets) * 100 : 0
+			/* The remote counter of lost packets (if we got the reports)
+			   divided with our counter of sent packets
+			 */
+			(qual.local_count + qual.remote_lostpackets) > 0 ? (double) qual.remote_lostpackets / qual.local_count  * 100 : 0
 			);
 	}
 	/* CDR records are not reliable when it comes to near-death-of-channel events, so we need to store the RTCP

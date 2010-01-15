@@ -174,6 +174,7 @@ struct ast_rtp {
 	struct timeval rxcore;
 	struct timeval txcore;
 	double drxcore;                 /*!< The double representation of the first received packet */
+	struct timeval start;		/*!< When the stream started (we can't depend on CDRs) */
 	struct timeval lastrx;          /*!< timeval when we last received a packet */
 	struct timeval dtmfmute;
 	struct ast_smoother *smoother;
@@ -956,6 +957,7 @@ static struct ast_frame *ast_rtcp_read_fd(int fd, struct ast_rtp *rtp)
 	unsigned int msw;
 	unsigned int lsw;
 	unsigned int comp;
+	double reported_jitter, reported_lost;
 	struct ast_frame *f = &ast_null_frame;
 	
 	if (!rtp || !rtp->rtcp)
@@ -1084,11 +1086,13 @@ static struct ast_frame *ast_rtcp_read_fd(int fd, struct ast_rtp *rtp)
 				if (comp - dlsr >= lsr) {
 					rtp->rtcp->accumulated_transit += rttsec;
 					rtp->rtcp->rtt = rttsec;
-					if (rtp->rtcp->maxrtt < rttsec)
+					if (rtp->rtcp->maxrtt < rttsec) {
 						rtp->rtcp->maxrtt = rttsec;
+					}
 					if (rtp->rtcp->minrtt > rttsec || rtp->rtcp->minrtt == 0) {
 						rtp->rtcp->minrtt = rttsec;
 					}
+					rtp->rtcp->rtt_count++;
 				} else if (rtcp_debug_test_addr(&sin)) {
 					ast_verbose("Internal RTCP NTP clock skew detected: "
 							   "lsr=%u, now=%u, dlsr=%u (%d:%03dms), "
@@ -1100,12 +1104,21 @@ static struct ast_frame *ast_rtcp_read_fd(int fd, struct ast_rtp *rtp)
 			}
 
 			rtp->rtcp->reported_jitter = ntohl(rtcpheader[i + 3]);
+			reported_jitter = (double) rtp->rtcp->reported_jitter;
 			if (rtp->rtcp->reported_jitter > rtp->rtcp->reported_maxjitter) {
-				rtp->rtcp->reported_maxjitter = rtp->rtcp->reported_jitter;
+				rtp->rtcp->reported_maxjitter = reported_jitter;
 			} else if (rtp->rtcp->reported_jitter < rtp->rtcp->reported_minjitter || rtp->rtcp->reported_minjitter == 0) {
-				rtp->rtcp->reported_minjitter = rtp->rtcp->reported_jitter;
+				rtp->rtcp->reported_minjitter = reported_jitter;
 			}
+		
 			rtp->rtcp->reported_lost = ntohl(rtcpheader[i + 1]) & 0xffffff;
+			reported_lost = (double) rtp->rtcp->reported_lost;
+			if (rtp->rtcp->reported_lost > rtp->rtcp->reported_maxlost) {
+				rtp->rtcp->reported_maxlost = reported_lost;
+			} else if (rtp->rtcp->reported_lost < rtp->rtcp->reported_minlost || rtp->rtcp->reported_jitter_count == 0) {
+				rtp->rtcp->reported_minlost = reported_lost;
+			}
+			rtp->rtcp->reported_jitter_count++;
 			if (rtcp_debug_test_addr(&sin)) {
 				ast_verbose("  Fraction lost: %ld\n", (((long) ntohl(rtcpheader[i + 1]) & 0xff000000) >> 24));
 				ast_verbose("  Packets lost so far: %d\n", rtp->rtcp->reported_lost);
@@ -2168,6 +2181,8 @@ void ast_rtp_new_init(struct ast_rtp *rtp)
 	ast_set_flag(rtp, FLAG_HAS_DTMF);
 	rtp->isactive = 1;
 
+	gettimeofday(&rtp->start, NULL);
+
 	return;
 }
 
@@ -2412,6 +2427,7 @@ char *ast_rtp_get_quality(struct ast_rtp *rtp, struct ast_rtp_quality *qual)
 	*/
 
 	if (qual && rtp) {
+		qual->start = rtp->start;
 		qual->lasttxformat = rtp->lasttxformat;
 		qual->lastrxformat = rtp->lastrxformat;
 		qual->local_ssrc = rtp->ssrc;
@@ -2421,6 +2437,7 @@ char *ast_rtp_get_quality(struct ast_rtp *rtp, struct ast_rtp_quality *qual)
 		qual->remote_count = rtp->txcount;
 		qual->them = rtp->them;	/* IP address and port */
 		if (rtp->rtcp) {
+			qual->numberofreports = rtp->rtcp->reported_jitter_count;	/* use the jitter counter */
 			qual->local_jitter_max = rtp->rtcp->maxrxjitter;
 			qual->local_jitter_min = rtp->rtcp->minrxjitter;
 			qual->local_lostpackets = rtp->rtcp->expected_prior - rtp->rtcp->received_prior;

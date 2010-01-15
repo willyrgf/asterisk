@@ -79,6 +79,7 @@ struct ast_rtp_protocol {
 
 /*! \brief Data structure only used for RTCP reports */
 struct ast_rtp_quality {
+	unsigned int numberofreports;	  /*!< Number of reports received from remote end */
 	unsigned int local_ssrc;          /*!< Our SSRC */
 	unsigned int local_lostpackets;   /*!< Our lost packets */
 	double       local_jitter;        /*!< Our calculated jitter */
@@ -97,6 +98,7 @@ struct ast_rtp_quality {
 	int lasttxformat;		  /*!< Last used codec on transmitted stream */
 	int lastrxformat;		  /*!< Last used codec on received stream */
 	struct sockaddr_in them;	  /*!< The Ip address used for media by remote end */
+	struct timeval start;		  /*!< When the call started */
 };
 
 
