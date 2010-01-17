@@ -211,6 +211,7 @@ int ast_rtp_senddigit_end(struct ast_rtp *rtp, char digit);
 static struct ast_frame *ast_rtcp_read_fd(int fd, struct ast_rtp *rtp);
 static int ast_rtcp_write_empty(struct ast_rtp *rtp, int fd);
 static int p2p_rtcp_callback(int *id, int fd, short events, void *cbdata);
+static unsigned int calc_txstamp(struct ast_rtp *rtp, struct timeval *delivery);
 
 #define FLAG_3389_WARNING		(1 << 0)
 #define FLAG_NAT_ACTIVE			(3 << 1)
@@ -1332,8 +1333,11 @@ static int bridge_p2p_rtp_write(struct ast_rtp *rtp, struct ast_rtp *bridged, un
 	int res = 0, payload = 0, bridged_payload = 0, mark;
 	struct rtpPayloadType rtpPT;
 	int reconstruct = ntohl(rtpheader[0]);
-	int header = 12;
+	unsigned int timestamp;
+	struct timeval rxtime;
+	//int header = 12;
 	int rate;
+	unsigned int ms;
 
 	/* Get fields from packet */
 	payload = (reconstruct & 0x7f0000) >> 16;
@@ -1341,6 +1345,7 @@ static int bridge_p2p_rtp_write(struct ast_rtp *rtp, struct ast_rtp *bridged, un
 
 	/* Check what the payload value should be */
 	rtpPT = ast_rtp_lookup_pt(rtp, payload);
+
 
 	/* If the payload is DTMF, and we are listening for DTMF - then feed it into the core */
 	if (ast_test_flag(rtp, FLAG_P2P_NEED_DTMF) && !rtpPT.isAstFormat && rtpPT.code == AST_RTP_DTMF)
@@ -1359,28 +1364,29 @@ static int bridge_p2p_rtp_write(struct ast_rtp *rtp, struct ast_rtp *bridged, un
 		mark = 1;
 		ast_set_flag(rtp, FLAG_P2P_SENT_MARK);
 	}
-#ifdef SKREP
----SKREP
+
+	/* Calculate timestamp for reception of the packet */
+	timestamp = ntohl(rtpheader[1]);
+	calc_rxstamp(&rxtime, rtp, timestamp, mark);
+
  	rate = rtp_get_rate(bridged_payload) / 1000;
 
-	
-
-        ms = calc_txstamp(rtp, &f->delivery);
-        /* Default prediction */
-        if (f->frametype == AST_FRAME_VOICE) {
-                pred = rtp->lastts + f->samples;
-
-                /* Re-calculate last TS */
-                rtp->lastts = rtp->lastts + ms * rate;
-
----
-#endif
+	/* Now, calculate tx timestamp */
+        ms = calc_txstamp(rtp, &rxtime);
+        if (bridged_payload == AST_FRAME_VOICE) {
+                bridged->lastts = bridged->lastts + ms * rate;
+	} else if (bridged_payload == AST_FRAME_VIDEO) {
+		bridged->lastts = bridged->lastts + ms * 90;
+		/* This is not exact, but a best effort example that can be improved */
+	}
 
 	/* Reconstruct part of the packet */
 	reconstruct &= 0xFF80FFFF;
 	reconstruct |= (bridged_payload << 16);
 	reconstruct |= (mark << 23);
 	rtpheader[0] = htonl(reconstruct);
+
+	bridged->lasttxformat = rtp->lastrxformat = bridged_payload;
 
 	/* Send the packet back out */
 	res = sendto(bridged->s, (void *)rtpheader, len, 0, (struct sockaddr *)&bridged->them, sizeof(bridged->them));
@@ -1394,12 +1400,11 @@ static int bridge_p2p_rtp_write(struct ast_rtp *rtp, struct ast_rtp *bridged, un
 		}
 		return 0;
 	} 
-	rtp->txcount++;
-	rtp->txoctetcount +=(res - hdrlen);
+	bridged->txcount++;
+	bridged->txoctetcount +=(res - hdrlen);
 	if (rtp_debug_test_addr(&bridged->them)) {
 			ast_verbose("Sent RTP P2P packet %d to %s:%u (type %-2.2d, len %-6.6u)\n", rtp->txcount, ast_inet_ntoa(bridged->them.sin_addr), ntohs(bridged->them.sin_port), bridged_payload, len - hdrlen);
 	}
-	//SKREP rtp->lasttxformat = rtpPT;
 
 	return 0;
 }
@@ -2410,7 +2415,6 @@ void ast_rtp_stop(struct ast_rtp *rtp)
 	memset(&rtp->them.sin_port, 0, sizeof(rtp->them.sin_port));
 	if (rtp->rtcp) {
 		/* Send RTCP goodbye packet */
-		ast_log(LOG_DEBUG, "----- REQUESTING GOODBYE RTCP \n");
 		ast_rtcp_write_sr((const void *) rtp, 1);
 		memset(&rtp->rtcp->them.sin_addr, 0, sizeof(rtp->rtcp->them.sin_addr));
 		memset(&rtp->rtcp->them.sin_port, 0, sizeof(rtp->rtcp->them.sin_port));
@@ -2850,6 +2854,7 @@ static int ast_rtcp_write_sr(const void *data, int goodbye)
 	struct ast_rtp *rtp = (struct ast_rtp *)data;
 	int res;
 	int len = 0;	/* Measured in chunks of four bytes */
+	int srlen = 0;
 	struct timeval now;
 	unsigned int now_lsw;
 	unsigned int now_msw;
@@ -2918,22 +2923,20 @@ static int ast_rtcp_write_sr(const void *data, int goodbye)
 	}
 
 	start = &rtcpheader[len/4];
+	srlen = len;
 	len +=8; /* SKip header for now */
 	len = add_sdes_bodypart(rtp, &rtcpheader[len/4], len, SDES_CNAME);
 	len = add_sdes_bodypart(rtp, &rtcpheader[len/4], len, SDES_END);
 	/* Now, add header when we know the actual length */
 	ast_log(LOG_DEBUG, "----- AFTER SENDING CNAME RTCP Len: %d \n", len);
-	add_sdes_header(rtp, start, len);
+	add_sdes_header(rtp, start, len - srlen);
 
 	if (goodbye) {
-		ast_log(LOG_DEBUG, "----- SENDING GOODBYE RTCP Len: %d \n", len);
 		/* An additional RTCP block */
-		len+=4;
 		rtcpheader[len/4] = htonl((2 << 30) | (1 << 24) | (RTCP_PT_BYE << 16) | 1);
 		len += 4;
 		rtcpheader[len/4] = htonl(rtp->ssrc);               /* Our SSRC */
 		len += 4;
-		ast_log(LOG_DEBUG, "----- SENT GOODBYE RTCP Len: %d \n", len);
 	}
 	
 	res = sendto(rtp->rtcp->s, (unsigned int *)rtcpheader, len, 0, (struct sockaddr *)&rtp->rtcp->them, sizeof(rtp->rtcp->them));
