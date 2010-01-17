@@ -581,7 +581,7 @@ static void ast_rtcp_schedule(struct ast_rtp *rtp)
 		rtp->rtcp->schedid = ast_sched_add(rtp->sched, ast_rtcp_calc_interval(rtp), ast_rtcp_write, rtp);
 				ast_log(LOG_DEBUG, "-------- SCHEDULING RTCP reports!!!\n");
 	} else {
-		//ast_log(LOG_DEBUG, "----- NOT SCHEDULING RTCP - RTCP %s RTCP address %s schedid %d\n", 
+	//	ast_log(LOG_DEBUG, "----- NOT SCHEDULING RTCP - RTCP %s RTCP address %s schedid %d\n", 
 			//rtp->rtcp ? "yes" : "no",
 			//rtp->rtcp->them.sin_addr.s_addr ? "yes" : "no", rtp->rtcp->schedid);
 	}
@@ -1332,6 +1332,8 @@ static int bridge_p2p_rtp_write(struct ast_rtp *rtp, struct ast_rtp *bridged, un
 	int res = 0, payload = 0, bridged_payload = 0, mark;
 	struct rtpPayloadType rtpPT;
 	int reconstruct = ntohl(rtpheader[0]);
+	int header = 12;
+	int rate;
 
 	/* Get fields from packet */
 	payload = (reconstruct & 0x7f0000) >> 16;
@@ -1357,6 +1359,22 @@ static int bridge_p2p_rtp_write(struct ast_rtp *rtp, struct ast_rtp *bridged, un
 		mark = 1;
 		ast_set_flag(rtp, FLAG_P2P_SENT_MARK);
 	}
+#ifdef SKREP
+---SKREP
+ 	rate = rtp_get_rate(bridged_payload) / 1000;
+
+	
+
+        ms = calc_txstamp(rtp, &f->delivery);
+        /* Default prediction */
+        if (f->frametype == AST_FRAME_VOICE) {
+                pred = rtp->lastts + f->samples;
+
+                /* Re-calculate last TS */
+                rtp->lastts = rtp->lastts + ms * rate;
+
+---
+#endif
 
 	/* Reconstruct part of the packet */
 	reconstruct &= 0xFF80FFFF;
@@ -1375,9 +1393,12 @@ static int bridge_p2p_rtp_write(struct ast_rtp *rtp, struct ast_rtp *bridged, un
 			ast_set_flag(bridged, FLAG_NAT_INACTIVE_NOWARN);
 		}
 		return 0;
-	} else if (rtp_debug_test_addr(&bridged->them))
-			ast_verbose("Sent RTP P2P packet to %s:%u (type %-2.2d, len %-6.6u)\n", ast_inet_ntoa(bridged->them.sin_addr), ntohs(bridged->them.sin_port), bridged_payload, len - hdrlen);
+	} 
 	rtp->txcount++;
+	rtp->txoctetcount +=(res - hdrlen);
+	if (rtp_debug_test_addr(&bridged->them)) {
+			ast_verbose("Sent RTP P2P packet %d to %s:%u (type %-2.2d, len %-6.6u)\n", rtp->txcount, ast_inet_ntoa(bridged->them.sin_addr), ntohs(bridged->them.sin_port), bridged_payload, len - hdrlen);
+	}
 	//SKREP rtp->lasttxformat = rtpPT;
 
 	return 0;
@@ -1463,23 +1484,10 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 				ast_log(LOG_DEBUG, "RTP NAT: Got audio from other end. Now sending to address %s:%d\n", ast_inet_ntoa(rtp->them.sin_addr), ntohs(rtp->them.sin_port));
 		}
 	}
-
-	/* If we are bridged to another RTP stream, send direct */
-	if ((bridged = ast_rtp_get_bridged(rtp)) && !bridge_p2p_rtp_write(rtp, bridged, rtpheader, res, hdrlen))
-		return &ast_null_frame;
-
-	if (version != 2)
-		return &ast_null_frame;
-
-	payloadtype = (seqno & 0x7f0000) >> 16;
-	padding = seqno & (1 << 29);
+	/* Stuff that is needed for RTCP - regardless of p2p bridge or not */
 	mark = seqno & (1 << 23);
-	ext = seqno & (1 << 28);
-	cc = (seqno & 0xF000000) >> 24;
-	seqno &= 0xffff;
 	timestamp = ntohl(rtpheader[1]);
-	ssrc = ntohl(rtpheader[2]);
-	
+
 	if (!mark && rtp->rxssrc && rtp->rxssrc != ssrc) {
 		if (option_debug || rtpdebug)
 			ast_log(LOG_DEBUG, "Forcing Marker bit, because SSRC has changed\n");
@@ -1487,6 +1495,46 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 	}
 
 	rtp->rxssrc = ssrc;
+
+	if (rtp->themssrc==0)
+		rtp->themssrc = ntohl(rtpheader[2]); /* Record their SSRC to put in future RR */
+
+	if (version != 2)
+		return &ast_null_frame;
+
+	if (res < hdrlen) {
+		ast_log(LOG_WARNING, "RTP Read too short (%d, expecting %d)\n", res, hdrlen);
+		return &ast_null_frame;
+	}
+	payloadtype = (seqno & 0x7f0000) >> 16;
+	padding = seqno & (1 << 29);
+	ext = seqno & (1 << 28);
+	cc = (seqno & 0xF000000) >> 24;
+	seqno &= 0xffff;
+	ssrc = ntohl(rtpheader[2]);
+
+	rtp->rxcount++; /* Only count reasonably valid packets, this'll make the rtcp stats more accurate */
+
+	if (rtp->rxcount==1) {
+		/* This is the first RTP packet successfully received from source */
+		rtp->seedrxseqno = seqno;
+	}
+
+	if ( (int)rtp->lastrxseqno - (int)seqno  > 100) /* if so it would indicate that the sender cycled; allow for misordering */
+		rtp->cycles += RTP_SEQ_MOD;
+
+	rtp->lastrxseqno = seqno;
+
+	/* Schedule RTCP report transmissions if possible */
+	ast_rtcp_schedule(rtp);
+
+
+	/* If we are bridged to another RTP stream, send direct */
+	if ((bridged = ast_rtp_get_bridged(rtp)) && !bridge_p2p_rtp_write(rtp, bridged, rtpheader, res, hdrlen))
+		return &ast_null_frame;
+
+
+	
 	
 	if (padding) {
 		/* Remove padding bytes */
@@ -1504,28 +1552,8 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 		hdrlen += 4;
 	}
 
-	if (res < hdrlen) {
-		ast_log(LOG_WARNING, "RTP Read too short (%d, expecting %d)\n", res, hdrlen);
-		return &ast_null_frame;
-	}
 
-	rtp->rxcount++; /* Only count reasonably valid packets, this'll make the rtcp stats more accurate */
-
-	if (rtp->rxcount==1) {
-		/* This is the first RTP packet successfully received from source */
-		rtp->seedrxseqno = seqno;
-	}
-
-	/* Schedule RTCP report transmissions if possible */
-	ast_rtcp_schedule(rtp);
-
-	if ( (int)rtp->lastrxseqno - (int)seqno  > 100) /* if so it would indicate that the sender cycled; allow for misordering */
-		rtp->cycles += RTP_SEQ_MOD;
-
-	rtp->lastrxseqno = seqno;
 	
-	if (rtp->themssrc==0)
-		rtp->themssrc = ntohl(rtpheader[2]); /* Record their SSRC to put in future RR */
 	
 	if (rtp_debug_test_addr(&sin))
 		ast_verbose("Got  RTP packet from    %s:%u (type %-2.2d, seq %-6.6u, ts %-6.6u, len %-6.6u)\n",
