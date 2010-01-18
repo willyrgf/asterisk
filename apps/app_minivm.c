@@ -1616,10 +1616,10 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 			duration < global_vmminmessage ? "IGNORED" : "OK",
 			vmu->accountcode
 		); 
-		fprintf(txt, logbuf);
+		fprintf(txt, "%s", logbuf);
 		if (minivmlogfile) {
 			ast_mutex_lock(&minivmloglock);
-			fprintf(minivmlogfile, logbuf);
+			fprintf(minivmlogfile, "%s",logbuf);
 			ast_mutex_unlock(&minivmloglock);
 		}
 
@@ -2286,7 +2286,7 @@ static void timezone_destroy_list(void)
 	struct minivm_zone *this;
 	AST_LIST_LOCK(&minivm_zones);
 	while ((this = AST_LIST_REMOVE_HEAD(&minivm_zones, list))) 
-		free(this);
+		free_zone(this);
 		
 	AST_LIST_UNLOCK(&minivm_zones);
 }
@@ -2459,9 +2459,6 @@ static int apply_general_options(struct ast_variable *var)
 /*! \brief Load minivoicemail configuration */
 static int load_config(void)
 {
-	struct minivm_account *cur;
-	struct minivm_zone *zcur;
-	struct minivm_template *tcur;
 	struct ast_config *cfg;
 	struct ast_variable *var;
 	char *cat;
@@ -2470,27 +2467,6 @@ static int load_config(void)
 	struct minivm_template *template;
 
 	cfg = ast_config_load(VOICEMAIL_CONFIG);
-	ast_mutex_lock(&minivmlock);
-
-	AST_LIST_LOCK(&minivm_accounts);
-	while ((cur = AST_LIST_REMOVE_HEAD(&minivm_accounts, list))) {
-		free_user(cur);
-	}
-	AST_LIST_UNLOCK(&minivm_accounts);
-
-	/* Free all zones */
-	AST_LIST_LOCK(&minivm_zones);
-	while ((zcur = AST_LIST_REMOVE_HEAD(&minivm_zones, list))) {
-		free_zone(zcur);
-	}
-	AST_LIST_UNLOCK(&minivm_zones);
-
-	/* Free all templates */
-	AST_LIST_LOCK(&message_templates);
-	while ((tcur = AST_LIST_REMOVE_HEAD(&message_templates, list))) {
-		message_template_free(tcur);
-	}
-	AST_LIST_UNLOCK(&message_templates);
 
 	/* First, set some default settings */
 	global_externnotify[0] = '\0';
@@ -2506,6 +2482,7 @@ static int load_config(void)
 	ast_set2_flag((&globalflags), FALSE, MVM_REVIEW);	
 	ast_set2_flag((&globalflags), FALSE, MVM_OPERATOR);	
 	strcpy(global_charset, "ISO-8859-1");
+
 	/* Reset statistics */
 	memset(&global_stats, 0, sizeof(struct minivm_stats));
 	global_stats.reset = time(NULL);
