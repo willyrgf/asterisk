@@ -11083,27 +11083,27 @@ static int sip_show_domains(int fd, int argc, char *argv[])
 #undef FORMAT
 
 /*! \brief Add manager headers for QoS to existing manager reply */
-static int manager_add_qos(struct mansession *s, char *mediatype, struct sip_pvt *dialog)
+static void manager_add_qos(struct mansession *s, char *mediatype, struct sip_pvt *dialog)
 {
 	char mybuf[SIPBUFSIZE];
 
-	get_rtp_qos(dialog, mediatype, "local_ssrc", buf, SIPBUFSIZE );
+	get_rtp_quality(dialog, mediatype, "local_ssrc", buf, SIPBUFSIZE );
 	astman_append(s, "LocalSSRC(%s): %s\r\n", mediatype, buf);
-	get_rtp_qos(dialog, mediatype, "remote_ssrc", buf, SIPBUFSIZE );
+	get_rtp_quality(dialog, mediatype, "remote_ssrc", buf, SIPBUFSIZE );
 	astman_append(s, "RemoteSSRC(%s): %s\r\n", mediatype, buf);
-	get_rtp_qos(dialog, mediatype, "local_jitter", buf, SIPBUFSIZE );
+	get_rtp_quality(dialog, mediatype, "local_jitter", buf, SIPBUFSIZE );
 	astman_append(s, "LocalJitter(%s): %s\r\n", mediatype, buf);
-	get_rtp_qos(dialog, mediatype, "local_count", buf, SIPBUFSIZE );
+	get_rtp_quality(dialog, mediatype, "local_count", buf, SIPBUFSIZE );
 	astman_append(s, "LocalPacketCount(%s): %s\r\n", mediatype, buf);
-	get_rtp_qos(dialog, mediatype, "remote_count", buf, SIPBUFSIZE );
+	get_rtp_quality(dialog, mediatype, "remote_count", buf, SIPBUFSIZE );
 	astman_append(s, "RemotePacketCount(%s): %s\r\n", mediatype, buf);
-	get_rtp_qos(dialog, mediatype, "local_lostpackets", buf, SIPBUFSIZE );
+	get_rtp_quality(dialog, mediatype, "local_lostpackets", buf, SIPBUFSIZE );
 	astman_append(s, "LocalLostPackets(%s): %s\r\n", mediatype, buf);
-	get_rtp_qos(dialog, mediatype, "remote_lostpackets", buf, SIPBUFSIZE );
+	get_rtp_quality(dialog, mediatype, "remote_lostpackets", buf, SIPBUFSIZE );
 	astman_append(s, "RemoteLostPackets(%s): %s\r\n", mediatype, buf);
-	get_rtp_qos(dialog, mediatype, "remote_jitter", buf, SIPBUFSIZE );
+	get_rtp_quality(dialog, mediatype, "remote_jitter", buf, SIPBUFSIZE );
 	astman_append(s, "RemoteJitter(%s): %s\r\n", mediatype, buf);
-	get_rtp_qos(dialog, mediatype, "rtt", buf, SIPBUFSIZE );
+	get_rtp_quality(dialog, mediatype, "rtt", buf, SIPBUFSIZE );
 	astman_append(s, "MediaRtt(%s): %s\r\n", mediatype, buf);
 }
 		
@@ -11111,11 +11111,11 @@ static char mandescr_sip_channel[] =
 "Description: Show one SIP channel with details on current status.\n"
 "Variables: \n"
 "  Channel: <name>        The channel name (AST) you want to check.\n"
-"  ActionID: <id>	  Optional action ID for this AMI transaction."
-"  Datatype: <name>	  Optional parameter name required. If not specified, all data will be sent"
-""
-"  Datatype 	Description"
-"	qos	Current QoS value for this channel (sender and receiver)"
+"  ActionID: <id>	  Optional action ID for this AMI transaction.\n"
+"  Datatype: <name>	  Optional parameter name required. If not specified, all data will be sent\n"
+"\n"
+"  Datatype 	Description\n"
+"	qos	Current QoS value for this channel (sender and receiver)\n"
 "\n";
 
 /*! \brief Show SIP channel data in the manager API  */
@@ -11124,7 +11124,6 @@ static int manager_sip_channel(struct mansession *s, const struct message *m)
 	const char *channel;
 	const char *datatype;
 	const char *actionid;
-	int ret;
 	int all = FALSE;
 	struct ast_channel *chan = NULL;
 	struct sip_pvt *dialog;
@@ -11146,12 +11145,14 @@ static int manager_sip_channel(struct mansession *s, const struct message *m)
 	/* Sanity check  - is this pvt a SIP channel? */
 	if (chan->tech != &sip_tech && chan->tech != &sip_tech_info) {
 		astman_send_error(s, m, "Cannot get SIPchannel-info on a non-SIP channel\n");
+		ast_channel_unlock(chan);
 		return 0;
 	}
 	/* Try to grab the channel pvt handle */
 	dialog = chan->tech_pvt;
 	if (!dialog) {
 		astman_send_error(s, m, "No active SIP channel\n");
+		ast_channel_unlock(chan);
 		return 0;
 	}
 	/* Ok, we have a channel with a SIP dialog attached,
@@ -11168,18 +11169,21 @@ static int manager_sip_channel(struct mansession *s, const struct message *m)
 
 
 	if (all || !strcasecmp(datatype, "qos")) {
-		if (p->rtp) {
+		if (dialog->rtp) {
 			manager_add_qos(s, "audio", dialog);
 		}
-		if (p->vrtp) {
+		if (dialog->vrtp) {
 			manager_add_qos(s, "video", dialog);
 		}
 	} else if (!all) {
-		astman_send_error(s, m, "Unknown datatype: %s\n", datatype);
+		char errbuf[SIPBUFSIZE];
+		snprintf(errbuf, SIPBUFSIZE, "Unknown datatype: %s\n", datatype);
+		astman_send_error(s, m, errbuf);
+		ast_channel_unlock(chan);
 		return 0;
 	}
 	astman_append(s, "\r\n\r\n" );
-	ast_channel_unlock(c);
+	ast_channel_unlock(chan);
 	return(0);
 }
 
@@ -19639,7 +19643,7 @@ static int load_module(void)
 			"List SIP peers (text format)", mandescr_show_peers);
 	ast_manager_register2("SIPshowpeer", EVENT_FLAG_SYSTEM, manager_sip_show_peer,
 			"Show SIP peer (text format)", mandescr_show_peer);
-	ast_manager_register2("SIPchannel", EVENT_FLAG_SYSTEM, manager_sip_channel,
+	ast_manager_register2("SIPchannel", EVENT_FLAG_CALL, manager_sip_channel,
 			"Show information about SIP channel", mandescr_sip_channel);
 
 	sip_poke_all_peers();	
