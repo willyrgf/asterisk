@@ -11127,6 +11127,7 @@ static int manager_sip_channel(struct mansession *s, const struct message *m)
 	int all = FALSE;
 	struct ast_channel *chan = NULL;
 	struct sip_pvt *dialog;
+	int sentsuccess = FALSE;
 
 	actionid = astman_get_header(m,"ActionID");
 	channel = astman_get_header(m,"Channel");
@@ -11159,16 +11160,21 @@ static int manager_sip_channel(struct mansession *s, const struct message *m)
 	   time to find out what they want
 	   ...and when my plane is about to leave from ARN */
 	datatype = astman_get_header(m,"Datatype");
-	if (ast_strlen_zero(channel) || !strcasecmp(datatype, "all")) {
+	if (ast_strlen_zero(datatype) || !strcasecmp(datatype, "all")) {
 		all = TRUE;
-	}
- 	astman_append(s, "Response: Success\r\n");
-	if (!ast_strlen_zero(actionid)) {
-                astman_append(s, "ActionID: %s\r\n",actionid);
 	}
 
 
 	if (all || !strcasecmp(datatype, "qos")) {
+		/* When merged with pinefrog, we need to check if RTCP is active at all and
+		   give a status message for rtcp. Otherwise, the reports are a bit silly */
+		if (!sentsuccess) {	/* Yes, it's kind of silly, but this section will be copied to new datatypes... */
+ 			astman_append(s, "Response: Success\r\n");
+			if (!ast_strlen_zero(actionid)) {
+                		astman_append(s, "ActionID: %s\r\n",actionid);
+			}
+			sentsuccess = TRUE;
+		}
 		if (dialog->rtp) {
 			manager_add_qos(s, "audio", dialog);
 		}
