@@ -11085,7 +11085,7 @@ static int sip_show_domains(int fd, int argc, char *argv[])
 /*! \brief Add manager headers for QoS to existing manager reply */
 static void manager_add_qos(struct mansession *s, char *mediatype, struct sip_pvt *dialog)
 {
-	char mybuf[SIPBUFSIZE];
+	char buf[SIPBUFSIZE];
 
 	get_rtp_quality(dialog, mediatype, "local_ssrc", buf, SIPBUFSIZE );
 	astman_append(s, "LocalSSRC(%s): %s\r\n", mediatype, buf);
@@ -11137,7 +11137,7 @@ static int manager_sip_channel(struct mansession *s, const struct message *m)
 		return 0;
 	}
 	/* Can we find a channel with that name? */
-	chan = ast_get_channel_by_name_locked(name);
+	chan = ast_get_channel_by_name_locked(channel);
 	if (!chan) {
 		astman_send_error(s, m, "No such channel");
 		return 0;
@@ -11163,8 +11163,8 @@ static int manager_sip_channel(struct mansession *s, const struct message *m)
 		all = TRUE;
 	}
  	astman_append(s, "Response: Success\r\n");
-	if (!ast_strlen_zero(id)) {
-                astman_append(s, "ActionID: %s\r\n",id);
+	if (!ast_strlen_zero(actionid)) {
+                astman_append(s, "ActionID: %s\r\n",actionid);
 	}
 
 
