@@ -124,6 +124,9 @@ static void init_outgoing(struct outgoing *o)
 
 static void free_outgoing(struct outgoing *o)
 {
+	if (o->vars) {
+		ast_variables_destroy(o->vars);
+	}
 	free(o);
 }
 
@@ -352,6 +355,7 @@ static void *attempt_thread(void *data)
 			ast_verbose(VERBOSE_PREFIX_3 "Attempting call on %s/%s for %s@%s:%d (Retry %d)\n", o->tech, o->dest, o->exten, o->context,o->priority, o->retries);
 		res = ast_pbx_outgoing_exten(o->tech, o->format, o->dest, o->waittime * 1000, o->context, o->exten, o->priority, &reason, 2 /* wait to finish */, o->cid_num, o->cid_name, o->vars, o->account, NULL);
 	}
+	o->vars = NULL;
 	if (res) {
 		ast_log(LOG_NOTICE, "Call failed to go through, reason (%d) %s\n", reason, ast_channel_reason2str(reason));
 		if (o->retries >= o->maxretries + 1) {
