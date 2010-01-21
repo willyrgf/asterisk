@@ -23,3 +23,5 @@ interface, and the CLI. Modules can also automatically change a Named ACL
 if needed. This can have be done for matching of devices or implementing
 dynamic blacklists.
 
+Also read:
+http://www.voip-forum.com/asterisk/2010-01/manageable-access-control-lists-asterisk-nacls/
