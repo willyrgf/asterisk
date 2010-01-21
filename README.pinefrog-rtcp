@@ -50,23 +50,22 @@ Todo
 - When CNAME changes, we have a different stream and need to restart the stats.
   Should we add ability to produce multiple RTCP reports for one "call" and aggregate them?
   The different parts might have different properties.
-- Check RTCP support for the p2p RTP bridge - today it doesn't work properly.
-- Add timed manager events during a call (once a minute or so)
-- Document realtime storage format
-- Add support of RTCP goodbye
+- Document realtime storage format. Add missing fields.
 
 Done
 ----
-- Add support of outbound and inbound SDES. The SDES includes a stream identifier, CNAME. 
-- Add support of outbound SDES end
-- Add manager events at end-of call
-- Add realtime storage of RTCP reports
+- Added support of outbound and inbound SDES. The SDES includes a stream identifier, CNAME. 
+- Added support of outbound SDES end and goodbye
+- Added manager events at end-of call
+- Added realtime storage of RTCP reports
+- Added time manager events (configured in sip.conf)
 - Added more information to RTCP debug
 - Added more data aggregation to ast_rtcp structure (from svn trunk really)
+- Added RTCP for p2p RTP bridges. Needs to be tested and validated.
 
 Open Issues
 -----------
-The final manager report lacks (in the case of the second channel) the bridged channel. We could save that data. 
+The final manager report lacks (in the case of the second channel) the bridged channel. We could save that data.  This will affect realtime as well, so we need to copy the channel name to a stored variable while it exists.
 
 Do we have a counter of consecutive lost packets? How do we measure lost packets on inbound
 stream? Gaps in seq numbers or just the sender reports from the other end compared with received 
@@ -84,7 +83,7 @@ Ideas and thoughts for the future
   packet over the bridge, informing about changes on the other side of the bridge (masq).
 - Can we have some sort of ring buffer for the latest RTCP reports for a device (peer) 
   and use that to determine the status of the connection to the peer?
-- Can we use the APP packet for relaying events in joined bridges, like meetme?
+- Can we use the RTCP APP packet for relaying events in joined bridges, like meetme?
 - What should we use as CNAME? Currently SIP call ID.
 - Separate on the IPs of different media servers. IE we can have one SIP peer with
   multiple media IPs with different properties
@@ -93,4 +92,4 @@ Scenarios to test
 ------------------
 - normal bridged call
 - RTP p2p bridged call
-- 
+- Nat traversal - Asterisk outside of NAT and inside (as client to external service)
