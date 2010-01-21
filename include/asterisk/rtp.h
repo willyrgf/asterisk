@@ -63,6 +63,17 @@ enum ast_rtp_get_result {
 	AST_RTP_TRY_NATIVE,
 };
 
+/*! \brief Variables used in ast_rtcp_get function */
+enum ast_rtp_qos_vars {
+	AST_RTP_TXCOUNT,
+	AST_RTP_RXCOUNT,
+	AST_RTP_TXJITTER,
+	AST_RTP_RXJITTER,
+	AST_RTP_RXPLOSS,
+	AST_RTP_TXPLOSS,
+	AST_RTP_RTT
+};
+
 struct ast_rtp;
 
 struct ast_rtp_protocol {
@@ -77,16 +88,28 @@ struct ast_rtp_protocol {
 	AST_LIST_ENTRY(ast_rtp_protocol) list;
 };
 
+/*! \brief Data structure only used for RTCP reports */
 struct ast_rtp_quality {
-	unsigned int local_ssrc;          /* Our SSRC */
-	unsigned int local_lostpackets;   /* Our lost packets */
-	double       local_jitter;        /* Our calculated jitter */
-	unsigned int local_count;         /* Number of received packets */
-	unsigned int remote_ssrc;         /* Their SSRC */
-	unsigned int remote_lostpackets;  /* Their lost packets */
-	double       remote_jitter;       /* Their reported jitter */
-	unsigned int remote_count;        /* Number of transmitted packets */
-	double       rtt;                 /* Round trip time */
+	unsigned int numberofreports;	  /*!< Number of reports received from remote end */
+	unsigned int local_ssrc;          /*!< Our SSRC */
+	unsigned int local_lostpackets;   /*!< Our lost packets */
+	double       local_jitter;        /*!< Our calculated jitter */
+	double       local_jitter_max;    /*!< Our calculated jitter */
+	double       local_jitter_min;    /*!< Our calculated jitter */
+	unsigned int local_count;         /*!< Number of received packets */
+	unsigned int remote_ssrc;         /*!< Their SSRC */
+	unsigned int remote_lostpackets;  /*!< Their lost packets */
+	double       remote_jitter;       /*!< Their reported jitter */
+	double       remote_jitter_max;   /*!< Their reported jitter */
+	double       remote_jitter_min;   /*!< Their reported jitter */
+	unsigned int remote_count;        /*!< Number of transmitted packets */
+	double       rtt;                 /*!< Round trip time */
+	double       rttmax;              /*!< Max observed round trip time */
+	double       rttmin;              /*!< Max observed round trip time */
+	int lasttxformat;		  /*!< Last used codec on transmitted stream */
+	int lastrxformat;		  /*!< Last used codec on received stream */
+	struct sockaddr_in them;	  /*!< The Ip address used for media by remote end */
+	struct timeval start;		  /*!< When the call started */
 };
 
 
@@ -179,6 +202,10 @@ int ast_rtp_sendcng(struct ast_rtp *rtp, int level);
 
 int ast_rtp_settos(struct ast_rtp *rtp, int tos);
 
+void ast_rtcp_setcname(struct ast_rtp *rtp, const char *cname, size_t length);
+
+
+
 /*! \brief When changing sources, don't generate a new SSRC */
 void ast_rtp_set_constantssrc(struct ast_rtp *rtp);
 
@@ -244,9 +271,13 @@ int ast_rtp_make_compatible(struct ast_channel *dest, struct ast_channel *src, i
 int ast_rtp_early_bridge(struct ast_channel *dest, struct ast_channel *src);
 
 void ast_rtp_stop(struct ast_rtp *rtp);
+int ast_rtp_isactive(struct ast_rtp *rtp);
 
 /*! \brief Return RTCP quality string */
 char *ast_rtp_get_quality(struct ast_rtp *rtp, struct ast_rtp_quality *qual);
+
+/*! \brief Return RTP and RTCP QoS values */
+unsigned int ast_rtp_get_qosvalue(struct ast_rtp *rtp, enum ast_rtp_qos_vars value);
 
 /*! \brief Send an H.261 fast update request. Some devices need this rather than the XML message  in SIP */
 int ast_rtcp_send_h261fur(void *data);
