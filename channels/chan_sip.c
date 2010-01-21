@@ -11088,23 +11088,23 @@ static void manager_add_qos(struct mansession *s, char *mediatype, struct sip_pv
 	char buf[SIPBUFSIZE];
 
 	get_rtp_quality(dialog, mediatype, "local_ssrc", buf, SIPBUFSIZE );
-	astman_append(s, "LocalSSRC(%s): %s\r\n", mediatype, buf);
+	astman_append(s, "%s.LocalSSRC: %s\r\n", mediatype, buf);
 	get_rtp_quality(dialog, mediatype, "remote_ssrc", buf, SIPBUFSIZE );
-	astman_append(s, "RemoteSSRC(%s): %s\r\n", mediatype, buf);
+	astman_append(s, "%s.RemoteSSRC: %s\r\n", mediatype, buf);
 	get_rtp_quality(dialog, mediatype, "local_jitter", buf, SIPBUFSIZE );
-	astman_append(s, "LocalJitter(%s): %s\r\n", mediatype, buf);
+	astman_append(s, "%s.LocalJitter: %s\r\n", mediatype, buf);
 	get_rtp_quality(dialog, mediatype, "local_count", buf, SIPBUFSIZE );
-	astman_append(s, "LocalPacketCount(%s): %s\r\n", mediatype, buf);
+	astman_append(s, "%s.LocalPacketCount: %s\r\n", mediatype, buf);
 	get_rtp_quality(dialog, mediatype, "remote_count", buf, SIPBUFSIZE );
-	astman_append(s, "RemotePacketCount(%s): %s\r\n", mediatype, buf);
+	astman_append(s, "%s.RemotePacketCount: %s\r\n", mediatype, buf);
 	get_rtp_quality(dialog, mediatype, "local_lostpackets", buf, SIPBUFSIZE );
-	astman_append(s, "LocalLostPackets(%s): %s\r\n", mediatype, buf);
+	astman_append(s, "%s.LocalLostPackets: %s\r\n", mediatype, buf);
 	get_rtp_quality(dialog, mediatype, "remote_lostpackets", buf, SIPBUFSIZE );
-	astman_append(s, "RemoteLostPackets(%s): %s\r\n", mediatype, buf);
+	astman_append(s, "%s.RemoteLostPackets: %s\r\n", mediatype, buf);
 	get_rtp_quality(dialog, mediatype, "remote_jitter", buf, SIPBUFSIZE );
-	astman_append(s, "RemoteJitter(%s): %s\r\n", mediatype, buf);
+	astman_append(s, "%s.RemoteJitter: %s\r\n", mediatype, buf);
 	get_rtp_quality(dialog, mediatype, "rtt", buf, SIPBUFSIZE );
-	astman_append(s, "MediaRtt(%s): %s\r\n", mediatype, buf);
+	astman_append(s, "%s.MediaRtt: %s\r\n", mediatype, buf);
 }
 		
 static char mandescr_sip_channel[] = 
@@ -11112,9 +11112,9 @@ static char mandescr_sip_channel[] =
 "Variables: \n"
 "  Channel: <name>        The channel name (AST) you want to check.\n"
 "  ActionID: <id>	  Optional action ID for this AMI transaction.\n"
-"  Datatype: <name>	  Optional parameter name required. If not specified, all data will be sent\n"
+"  Elementname: <name>	  Optional parameter name required. If not specified, all data will be sent\n"
 "\n"
-"  Datatype 	Description\n"
+"  Elementname 	Description\n"
 "	qos	Current QoS value for this channel (sender and receiver)\n"
 "\n";
 
@@ -11159,7 +11159,7 @@ static int manager_sip_channel(struct mansession *s, const struct message *m)
 	/* Ok, we have a channel with a SIP dialog attached,
 	   time to find out what they want
 	   ...and when my plane is about to leave from ARN */
-	datatype = astman_get_header(m,"Datatype");
+	datatype = astman_get_header(m,"elementname");
 	if (ast_strlen_zero(datatype) || !strcasecmp(datatype, "all")) {
 		all = TRUE;
 	}
@@ -11176,10 +11176,10 @@ static int manager_sip_channel(struct mansession *s, const struct message *m)
 			sentsuccess = TRUE;
 		}
 		if (dialog->rtp) {
-			manager_add_qos(s, "audio", dialog);
+			manager_add_qos(s, "Audio", dialog);
 		}
 		if (dialog->vrtp) {
-			manager_add_qos(s, "video", dialog);
+			manager_add_qos(s, "Video", dialog);
 		}
 	} else if (!all) {
 		char errbuf[SIPBUFSIZE];
