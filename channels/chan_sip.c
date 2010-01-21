@@ -585,6 +585,7 @@ static int global_capability = AST_FORMAT_ULAW | AST_FORMAT_ALAW | AST_FORMAT_GS
 
 /*! \brief Global list of addresses dynamic peers are not allowed to use */
 static struct ast_ha *global_contact_ha = NULL;
+static struct ast_nacl *global_nacl = NULL;
 static int global_dynamic_exclude_static = 0;
 
 /* Object counters */
@@ -9361,15 +9362,12 @@ static enum check_auth_result register_verify(struct sip_pvt *p, struct sockaddr
 	ast_string_field_set(p, exten, name);
 	build_contact(p);
 	peer = find_peer(name, NULL, 1, 0);
-	if (!(peer && ast_apply_ha(peer->ha, sin) && (peer->nacl ? ast_apply_ha(peer->nacl->acl, sin) : TRUE))) {
+	if (peer) {
+		if (!(ast_apply_ha(peer->ha, sin) && (peer->nacl ? ast_apply_ha(peer->nacl->acl, sin) : TRUE))) {
 		/* Peer fails ACL check */
-		if (peer) {
 			ASTOBJ_UNREF(peer, sip_destroy_peer);
 			res = AUTH_ACL_FAILED;
-		} else
-			res = AUTH_NOT_FOUND;
-	}
-	if (peer) {
+		}
 		/* Set Frame packetization */
 		if (p->rtp) {
 			ast_rtp_codec_setpref(p->rtp, &peer->prefs);
@@ -16730,6 +16728,12 @@ static int sipsock_read(int *id, int fd, short events, void *ignore)
 		ast_set_flag(&req, SIP_PKT_DEBUG);
 	if (pedanticsipchecking)
 		req.len = lws2sws(req.data, req.len);	/* Fix multiline headers */
+	if (global_nacl && !ast_apply_ha(global_nacl->acl, &sin)) {
+		if (ast_test_flag(&req, SIP_PKT_DEBUG)) {
+			ast_verbose("\n<--- SIP read from %s:%d - dropped due to ACL %s\n", ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port), global_nacl->name);
+		}
+		return 1;
+	}
 	if (ast_test_flag(&req, SIP_PKT_DEBUG))
 		ast_verbose("\n<--- SIP read from %s:%d --->\n%s\n<------------->\n", ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port), req.data);
 
@@ -18273,6 +18277,7 @@ static int reload_config(enum channelreloadreason reason)
 
 	ast_free_ha(global_contact_ha);
 	global_contact_ha = NULL;
+	ast_nacl_detach(global_nacl);
 
 	/* First, destroy all outstanding registry calls */
 	/* This is needed, since otherwise active registry entries will not be destroyed */
@@ -18406,6 +18411,11 @@ static int reload_config(enum channelreloadreason reason)
 			ast_copy_string(default_context, v->value, sizeof(default_context));
 		} else if (!strcasecmp(v->name, "subscribecontext")) {
 			ast_copy_string(default_subscribecontext, v->value, sizeof(default_subscribecontext));
+  		} else if (!strcasecmp(v->name, "nacl")) {
+			global_nacl = ast_nacl_attach(v->value);
+			if (!global_nacl) {
+				ast_log(LOG_WARNING, "'%s' is not a valid NACL name - line %d.\n", v->value, v->lineno);
+			}
   		} else if (!strcasecmp(v->name, "allowguest")) {
 			global_allowguest = ast_true(v->value) ? 1 : 0;
 		} else if (!strcasecmp(v->name, "realm")) {
@@ -19637,6 +19647,8 @@ restartdestroy:
 	ast_free_ha(global_contact_ha);
 	close(sipsock);
 	sched_context_destroy(sched);
+	ast_nacl_detach(global_nacl);
+	ast_free_ha(global_contact_ha);
 		
 	return 0;
 }

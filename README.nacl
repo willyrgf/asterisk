@@ -1,0 +1,25 @@
+Edvina AB
+Olle E. Johansson
+
+
+
+
+Named ACLs - why?
+-----------------
+
+This branch includes an implementation of named ACLs. ACL is an acronym for
+"Access Control Lists" and is something that we have implemented in Asterisk
+for IP-based filtering of SIP messages, manager access and in various channel
+drivers.
+
+The current ACLs are implemented either module-wide or per device. With a named
+ACL we have one ACL in memory that can be referred to from other modules.
+These modules doesn't copy the ACL, just point to it. When it changes, it's
+automatically applied to all objects that use it.
+
+The implementation has a PBX-wide list of ACLs that can be used from all
+modules that implement NACLs. Each NACL can be changed from the AMI, manager
+interface, and the CLI. Modules can also automatically change a Named ACL
+if needed. This can have be done for matching of devices or implementing
+dynamic blacklists.
+

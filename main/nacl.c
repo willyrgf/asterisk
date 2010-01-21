@@ -677,6 +677,7 @@ static int nacl_init(int reload_reason)
 			if (nacl) {
 				nacl->delete = FALSE;
 				ast_free_ha(nacl->acl);	/* Delete existing ACL (locking needed indeed) */
+				nacl->acl = NULL;
 				ao2_ref(nacl, -1);	/* The find operation adds a ref */
 			} else {
 				nacl = ast_nacl_add(cat, "config");
