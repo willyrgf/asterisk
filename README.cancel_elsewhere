@@ -1,0 +1,2 @@
+This branch adds the functionality for a SIP call to a phone that is cancelled because someone else answered to give a reason to the phone,
+so that the phone don't add the call to the "missed calls" list.
