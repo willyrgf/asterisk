@@ -51,6 +51,7 @@ Todo
   Should we add ability to produce multiple RTCP reports for one "call" and aggregate them?
   The different parts might have different properties.
 - Document realtime storage format. Add missing fields.
+- BUG: RTCP is halted during hold. It should not stop.
 
 Done
 ----

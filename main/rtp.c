@@ -253,6 +253,8 @@ struct ast_rtcp {
 	int schedid;			/*!< Schedid returned from ast_sched_add() to schedule RTCP-transmissions*/
 	unsigned int rr_count;		/*!< number of RRs we've sent, not including report blocks in SR's */
 	unsigned int sr_count;		/*!< number of SRs we've sent */
+	unsigned int rec_rr_count;	/*!< Number of RRs we've received */
+	unsigned int rec_sr_count;	/*!< Number of SRs we've received */
 	unsigned int lastsrtxcount;     /*!< Transmit packet count when last SR sent */
 	double accumulated_transit;	/*!< accumulated a-dlsr-lsr */
 	double rtt;			/*!< Last reported rtt */
@@ -1023,7 +1025,7 @@ static struct ast_frame *ast_rtcp_read_fd(int fd, struct ast_rtp *rtp)
 		if (rtcp_debug_test_addr(&sin)) {
 		  	ast_verbose("\n-- Got RTCP from %s:%d\n", ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port));
 		  	ast_verbose("   Length : %d Chunks: %d\n", length, rc);
-		  	ast_verbose("   SSRC of packet sender: %u (%x)", rtcpheader[i + 1], rtcpheader[i + 1]);
+		  	ast_verbose("   SSRC of packet sender: %u (%x)", ntohl(rtcpheader[i + 1]), ntohl(rtcpheader[i + 1]));
 		  	ast_verbose("   (Position %d of %d)\n", i, packetwords);
 			if (rc == 0) {
 		  		ast_verbose("   Empty - no reports! \n");
@@ -1034,6 +1036,11 @@ static struct ast_frame *ast_rtcp_read_fd(int fd, struct ast_rtp *rtp)
 		if (rc == 0) {	/* We're receiving a report with no reports, which is ok */
 			position += (length + 1);
 			continue;
+		}
+		if (pt == RTCP_PT_SR) {
+			rtp->rtcp->rec_sr_count++;
+		} else if (pt == RTCP_PT_RR) {
+			rtp->rtcp->rec_rr_count++;
 		}
 
 		switch (pt) {	/* Find the RTCP Packet type */
@@ -1082,10 +1089,11 @@ static struct ast_frame *ast_rtcp_read_fd(int fd, struct ast_rtp *rtp)
 					rtt *= 1000;
 				}
 				rtt = rtt / 1000.;
-				rttsec = rtt / 1000.;
+				// What is this?
+				//rttsec = rtt / 1000.;
+				rttsec = rtt;		//DEBUG OEJ
 
 				if (comp - dlsr >= lsr) {
-					rtp->rtcp->accumulated_transit += rttsec;
 					rtp->rtcp->rtt = rttsec;
 					if (rtp->rtcp->maxrtt < rttsec) {
 						rtp->rtcp->maxrtt = rttsec;
@@ -1093,6 +1101,8 @@ static struct ast_frame *ast_rtcp_read_fd(int fd, struct ast_rtp *rtp)
 					if (rtp->rtcp->minrtt > rttsec || rtp->rtcp->minrtt == 0) {
 						rtp->rtcp->minrtt = rttsec;
 					}
+					/* Calculation base for average rtt */
+					rtp->rtcp->accumulated_transit += rttsec;
 					rtp->rtcp->rtt_count++;
 				} else if (rtcp_debug_test_addr(&sin)) {
 					ast_verbose("Internal RTCP NTP clock skew detected: "
@@ -1102,7 +1112,7 @@ static struct ast_frame *ast_rtcp_read_fd(int fd, struct ast_rtp *rtp)
 							   (dlsr % 65536) * 1000 / 65536,
 							   dlsr - (comp - lsr));
 				}
-			}
+			} 
 
 			rtp->rtcp->reported_jitter = ntohl(rtcpheader[i + 3]);
 			reported_jitter = (double) rtp->rtcp->reported_jitter;
@@ -1129,10 +1139,11 @@ static struct ast_frame *ast_rtcp_read_fd(int fd, struct ast_rtp *rtp)
 					rtp->rtcp->reported_maxjitter, rtp->rtcp->reported_minjitter);
 				ast_verbose("  Last SR (our NTP): %lu.%010lu\n", (unsigned long) ntohl(rtcpheader[i + 4]) >> 16,((unsigned long) ntohl(rtcpheader[i + 4]) << 16) * 4096);
 				ast_verbose("  DLSR: %4.4f (sec)\n", ntohl(rtcpheader[i + 5])/65536.0);
-				if (rtt)
-					ast_verbose("  RTT: %lu(sec) Max %lu Min %lu\n", (unsigned long) rtt, 
+				if (rtt) {
+					ast_verbose("  RTT: %lu (msec) Max %lu Min %lu\n", (unsigned long) rtt, 
 						(unsigned long) rtp->rtcp->maxrtt,
 						(unsigned long) rtp->rtcp->minrtt );
+				}
 			}
 			break;
 		case RTCP_PT_FUR:
@@ -1169,7 +1180,7 @@ static struct ast_frame *ast_rtcp_read_fd(int fd, struct ast_rtp *rtp)
 			
 			j = i * 4;
 			sdes = (char *) &rtcpheader[i];
-			ast_verbose("Received an SDES from %s:%d - Total length %d (%d bytes)\n", ast_inet_ntoa(rtp->rtcp->them.sin_addr), ntohs(rtp->rtcp->them.sin_port), length-i, ((length-i)*4) - 6);
+			ast_verbose("   Received an SDES from %s:%d - Total length %d (%d bytes)\n", ast_inet_ntoa(rtp->rtcp->them.sin_addr), ntohs(rtp->rtcp->them.sin_port), length-i, ((length-i)*4) - 6);
 			while (j < length * 4) {
 				sdestype = (int) *sdes;
 				sdes++;
@@ -1186,10 +1197,20 @@ static struct ast_frame *ast_rtcp_read_fd(int fd, struct ast_rtp *rtp)
 						}
 					}
 					strncpy(rtp->rtcp->theircname, sdes, sdeslength);
-					rtp->rtcp->theircname[sdeslength] = '\0';
+					rtp->rtcp->theircname[sdeslength + 1] = '\0';
 					rtp->rtcp->theircnamelength = sdeslength;
 					if (rtcp_debug_test_addr(&sin)) {
 						ast_verbose(" --- SDES CNAME (utf8) %s\n", rtp->rtcp->theircname);
+					}
+					break;
+				case SDES_TOOL:
+					if (rtcp_debug_test_addr(&sin)) {
+						ast_verbose(" --- SDES TOOL \n");
+					}
+					break;
+				case SDES_NAME:
+					if (rtcp_debug_test_addr(&sin)) {
+						ast_verbose(" --- SDES NAME \n");
 					}
 					break;
 				case SDES_EMAIL:
@@ -1232,24 +1253,29 @@ static struct ast_frame *ast_rtcp_read_fd(int fd, struct ast_rtp *rtp)
 
 			break;
 		case RTCP_PT_NACK:
-			if (rtcp_debug_test_addr(&sin))
-				ast_verbose("Received a RTCP NACK from %s:%d\n", ast_inet_ntoa(rtp->rtcp->them.sin_addr), ntohs(rtp->rtcp->them.sin_port));
+			if (rtcp_debug_test_addr(&sin)) {
+				ast_verbose("   Received a RTCP NACK from %s:%d\n", ast_inet_ntoa(rtp->rtcp->them.sin_addr), ntohs(rtp->rtcp->them.sin_port));
+			}
 			break;
 		case RTCP_PT_BYE:
-			if (rtcp_debug_test_addr(&sin))
-				ast_verbose("Received a RTCP BYE from %s:%d\n", ast_inet_ntoa(rtp->rtcp->them.sin_addr), ntohs(rtp->rtcp->them.sin_port));
+			if (rtcp_debug_test_addr(&sin)) {
+				ast_verbose("   Received a RTCP BYE from %s:%d\n", ast_inet_ntoa(rtp->rtcp->them.sin_addr), ntohs(rtp->rtcp->them.sin_port));
+			}
 			break;
 		case RTCP_PT_XR:
-			if (rtcp_debug_test_addr(&sin))
-				ast_verbose("Received a RTCP Extended Report (XR) packet from %s:%d\n", ast_inet_ntoa(rtp->rtcp->them.sin_addr), ntohs(rtp->rtcp->them.sin_port));
+			if (rtcp_debug_test_addr(&sin)) {
+				ast_verbose("   Received a RTCP Extended Report (XR) packet from %s:%d\n", ast_inet_ntoa(rtp->rtcp->them.sin_addr), ntohs(rtp->rtcp->them.sin_port));
+			}
 			break;
 		case RTCP_PT_APP:
-			if (rtcp_debug_test_addr(&sin))
-				ast_verbose("Received a RTCP APP packet from %s:%d\n", ast_inet_ntoa(rtp->rtcp->them.sin_addr), ntohs(rtp->rtcp->them.sin_port));
+			if (rtcp_debug_test_addr(&sin)) {
+				ast_verbose("   Received a RTCP APP packet from %s:%d\n", ast_inet_ntoa(rtp->rtcp->them.sin_addr), ntohs(rtp->rtcp->them.sin_port));
+			}
 			break;
 		case RTCP_PT_IJ:
-			if (rtcp_debug_test_addr(&sin))
-				ast_verbose("Received a RTCP IJ from %s:%d\n", ast_inet_ntoa(rtp->rtcp->them.sin_addr), ntohs(rtp->rtcp->them.sin_port));
+			if (rtcp_debug_test_addr(&sin)) {
+				ast_verbose("   Received a RTCP IJ from %s:%d\n", ast_inet_ntoa(rtp->rtcp->them.sin_addr), ntohs(rtp->rtcp->them.sin_port));
+			}
 			break;
 		default:
 			if (option_debug)
@@ -2321,7 +2347,10 @@ void ast_rtcp_setcname(struct ast_rtp *rtp, const char *cname, size_t length)
 	if (!rtp || !rtp->rtcp) {
 		return;
 	}
-	ast_copy_string(rtp->rtcp->ourcname, cname, length > 255 ? 255 : length);
+	if (length > 255) {
+		length=255;
+	}
+	ast_copy_string(rtp->rtcp->ourcname, cname, length+1);
 	rtp->rtcp->ourcnamelength = length;
 	ast_log(LOG_DEBUG, "--- Copied CNAME %s to RTCP structure (length %d)\n", cname, (int) length);
 }
@@ -2505,24 +2534,34 @@ void ast_rtp_destroy(struct ast_rtp *rtp)
 		/*Print some info on the call here */
 		ast_verbose(" RTP-stats\n");
 		ast_verbose("* Our Receiver:\n");
-		ast_verbose("   SSRC:		  %u\n", rtp->themssrc);
-		ast_verbose("   CNAME:		  %s\n", rtp->rtcp ? rtp->rtcp->theircname : "");
-		ast_verbose("   Received packets: %u\n", rtp->rxcount);
-		ast_verbose("   Lost packets:	  %u\n", rtp->rtcp ? (rtp->rtcp->expected_prior - rtp->rtcp->received_prior) : 0);
-		ast_verbose("   Jitter:		  %.4f\n", rtp->rxjitter);
-		ast_verbose("   Transit:	  %.4f\n", rtp->rxtransit);
-		ast_verbose("   RR-count:	  %u\n", rtp->rtcp ? rtp->rtcp->rr_count : 0);
+		ast_verbose("   SSRC:		     %u\n", rtp->themssrc);
+		ast_verbose("   CNAME:		     %s\n", rtp->rtcp ? rtp->rtcp->theircname : "");
+		ast_verbose("   Received packets:    %u\n", rtp->rxcount);
+		ast_verbose("   Lost packets:	     %u\n", rtp->rtcp ? (rtp->rtcp->expected_prior - rtp->rtcp->received_prior) : 0);
+		ast_verbose("   Jitter:		     %.4f Max %.4f Min %.4f\n", rtp->rxjitter, 
+				rtp->rtcp ? rtp->rtcp->maxrxjitter : 0, 
+				rtp->rtcp ? rtp->rtcp->minrxjitter : 0);
+		ast_verbose("   Transit:	     %.4f\n", rtp->rxtransit);
+		ast_verbose("   Received RTCP RR/SR: %u\n", rtp->rtcp ? rtp->rtcp->rec_rr_count + rtp->rtcp->rec_sr_count : 0);
 
 		ast_verbose("* Our Sender:\n");
-		ast_verbose("   SSRC:		  %u\n", rtp->ssrc);
-		ast_verbose("   CNAME:		  %s\n", rtp->rtcp ? rtp->rtcp->ourcname : "");
-		ast_verbose("   Sent packets:	  %u\n", rtp->txcount);
-		ast_verbose("   Lost packets:	  %u\n", rtp->rtcp ? rtp->rtcp->reported_lost : 0);
-		ast_verbose("   Jitter:		  %u\n", rtp->rtcp ? (rtp->rtcp->reported_jitter / (unsigned int)65536.0) : 0);
-		ast_verbose("   SR-count:	  %u\n", rtp->rtcp ? rtp->rtcp->sr_count : 0);
-		ast_verbose("   RTT:		  %lu\n", rtp->rtcp ? (unsigned long) rtp->rtcp->rtt : 0);
-		ast_verbose("   RTT Max:	  %lu\n", rtp->rtcp ? (unsigned long) rtp->rtcp->maxrtt : 0);
-		ast_verbose("   RTT Min:	  %lu\n", rtp->rtcp ? (unsigned long) rtp->rtcp->minrtt : 0);
+		ast_verbose("   SSRC:		     %u\n", rtp->ssrc);
+		ast_verbose("   CNAME:		     %s\n", rtp->rtcp ? rtp->rtcp->ourcname : "");
+		ast_verbose("   Sent packets:	     %u\n", rtp->txcount);
+		if (rtp->rtcp && rtp->rtcp->rec_rr_count + rtp->rtcp->rec_sr_count == 0) {
+			ast_verbose("   No RTCP reports received. No stats available for packet loss, jitter and delay\n");
+		} else if (rtp->rtcp) {
+			ast_verbose("   Lost packets:	     %u\n", rtp->rtcp->reported_lost);
+			ast_verbose("   Jitter:		     %u\n", (rtp->rtcp->reported_jitter / (unsigned int)65536.0));
+			ast_verbose("   RTT:		     %lu\n", (unsigned long) rtp->rtcp->rtt);
+			ast_verbose("   RTT Max:	     %lu\n", (unsigned long) rtp->rtcp->maxrtt);
+			ast_verbose("   RTT Min:	     %lu\n", (unsigned long) rtp->rtcp->minrtt);
+			ast_verbose("	RTT count:           %u\n", rtp->rtcp->rtt_count  );
+			ast_verbose("	RTT avg:             %lu\n", rtp->rtcp->rtt_count ? 
+				 (unsigned long) rtp->rtcp->accumulated_transit / rtp->rtcp->rtt_count : 0);
+		}
+		ast_verbose("   RR-count:	     %u\n", rtp->rtcp ? rtp->rtcp->rr_count : 0);
+		ast_verbose("   SR-count:	     %u\n", rtp->rtcp ? rtp->rtcp->sr_count : 0);
 
 		ast_verbose("* Media\n");
 		ast_verbose("   Last format sent: %s\n", ast_getformatname(rtp->lasttxformat));
@@ -2765,7 +2804,7 @@ static int add_sdes_bodypart(struct ast_rtp *rtp, unsigned int *rtcp_packet, int
 	case SDES_CNAME:
 		ast_log(LOG_DEBUG, "----About to copy CNAME to SDES packet --- (len %d)\n", len);
 
-		cnamelen = (int) strlen(rtp->rtcp->ourcname);
+		cnamelen = (int) rtp->rtcp->ourcnamelength;
 
 		*sdes = SDES_CNAME;
 		sdes++;
