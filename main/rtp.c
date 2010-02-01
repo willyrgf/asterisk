@@ -277,6 +277,7 @@ struct ast_rtcp {
 	double minrtt;
 	unsigned int rtt_count;		/*! Number of reports received */
 	int sendfur;
+	char bridgedchan[AST_MAX_EXTENSION];		/*!< Bridged channel name */
 };
 
 
@@ -1033,7 +1034,7 @@ static struct ast_frame *ast_rtcp_read_fd(int fd, struct ast_rtp *rtp)
 		}
     
 		i += 2; /* Advance past header and ssrc */
-		if (rc == 0) {	/* We're receiving a report with no reports, which is ok */
+		if (rc == 0 && pt == RTCP_PT_RR) {	/* We're receiving a receiver report with no reports, which is ok */
 			position += (length + 1);
 			continue;
 		}
@@ -2355,6 +2356,28 @@ void ast_rtcp_setcname(struct ast_rtp *rtp, const char *cname, size_t length)
 	ast_log(LOG_DEBUG, "--- Copied CNAME %s to RTCP structure (length %d)\n", cname, (int) length);
 }
 
+/*! \brief set the name of the bridged channel
+
+At the time when we write the report there might not be a bridge, so we need
+to store this so we can correlate the reports. If a channel changes bridge,
+it can be reset by first setting it to an empty string, then setting to 
+a new name 
+*/
+void ast_rtcp_set_bridged(struct ast_rtp *rtp, const char *bridged_name)
+{
+	if (!rtp) {		/* For some reason, there's no RTP */
+		return;
+	}
+	if (!rtp->rtcp) {	/* No RTCP? Strange */
+		return;
+	}
+	/* If we already have a bridged name, don't overwrite */
+	if (rtp->rtcp->bridgedchan[0]) {
+		return;
+	}
+	ast_copy_string(rtp->rtcp->bridgedchan, bridged_name, sizeof(rtp->rtcp->bridgedchan));
+}
+
 int ast_rtp_settos(struct ast_rtp *rtp, int tos)
 {
 	int res;
@@ -2509,6 +2532,9 @@ char *ast_rtp_get_quality(struct ast_rtp *rtp, struct ast_rtp_quality *qual)
 			qual->rtt = rtp->rtcp->rtt;
 			qual->rttmax = rtp->rtcp->maxrtt;
 			qual->rttmin = rtp->rtcp->minrtt;
+		}
+		if (!ast_strlen_zero(rtp->rtcp->bridgedchan)) {
+			ast_copy_string(qual->bridgedchan, rtp->rtcp->bridgedchan, sizeof(rtp->rtcp->bridgedchan));
 		}
 	}
 	if (rtp->rtcp) {

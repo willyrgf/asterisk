@@ -13447,7 +13447,9 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, const char *
 
 	if (p && p->owner) {
 		bridgepeer = ast_bridged_channel(p->owner);
-
+		if (bridgepeer) {
+			ast_rtcp_set_bridged(rtp, bridgepeer->name);
+		}
 	}
 
 	if (global_rtcpevents) {
@@ -13481,7 +13483,7 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, const char *
 			"RTPOutPlPercent: %5.2f\r\n"
 			"\r\n", 
 			p->owner ? p->owner->name : "",
-			bridgepeer ? bridgepeer->name : "",
+			qual.bridgedchan,
 			endreport ? "Final" : "Update",
 			qual.numberofreports == 0 ? "Inactive" : "Active",
 			duration,

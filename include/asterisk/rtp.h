@@ -79,6 +79,7 @@ struct ast_rtp_protocol {
 
 /*! \brief Data structure only used for RTCP reports */
 struct ast_rtp_quality {
+	char bridgedchan[AST_MAX_EXTENSION];	/*!< Name of bridged channel */
 	unsigned int numberofreports;	  /*!< Number of reports received from remote end */
 	unsigned int local_ssrc;          /*!< Our SSRC */
 	unsigned int local_lostpackets;   /*!< Our lost packets */
@@ -192,6 +193,15 @@ int ast_rtp_sendcng(struct ast_rtp *rtp, int level);
 int ast_rtp_settos(struct ast_rtp *rtp, int tos);
 
 void ast_rtcp_setcname(struct ast_rtp *rtp, const char *cname, size_t length);
+
+/*! \brief set the name of the bridged channel
+
+At the time when we write the report there might not be a bridge, so we need
+to store this so we can correlate the reports. If a channel changes bridge,
+it can be reset by first setting it to an empty string, then setting to 
+a new name 
+*/
+void ast_rtcp_set_bridged(struct ast_rtp *rtp, const char *bridged_name);
 
 
 

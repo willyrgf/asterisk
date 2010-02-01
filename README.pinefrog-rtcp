@@ -52,6 +52,7 @@ Todo
   The different parts might have different properties.
 - Document realtime storage format. Add missing fields.
 - BUG: RTCP is halted during hold. It should not stop.
+- During HOLD, send RTCP SR reports without report block, only the header and no chunks 
 
 Done
 ----
