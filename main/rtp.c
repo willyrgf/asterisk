@@ -2459,15 +2459,18 @@ int ast_rtp_isactive(struct ast_rtp *rtp)
 
 void ast_rtp_stop(struct ast_rtp *rtp)
 {
-	if (rtp->rtcp) {
+	if (rtp->rtcp && rtp->sched != -1) {
 		AST_SCHED_DEL(rtp->sched, rtp->rtcp->schedid);
+		rtp->sched = -1;
+	}
+	/* Send RTCP goodbye packet */
+	if (rtp->isactive) {
+		ast_rtcp_write_sr((const void *) rtp, 1);
 	}
 
 	memset(&rtp->them.sin_addr, 0, sizeof(rtp->them.sin_addr));
 	memset(&rtp->them.sin_port, 0, sizeof(rtp->them.sin_port));
 	if (rtp->rtcp) {
-		/* Send RTCP goodbye packet */
-		ast_rtcp_write_sr((const void *) rtp, 1);
 		memset(&rtp->rtcp->them.sin_addr, 0, sizeof(rtp->rtcp->them.sin_addr));
 		memset(&rtp->rtcp->them.sin_port, 0, sizeof(rtp->rtcp->them.sin_port));
 	}
