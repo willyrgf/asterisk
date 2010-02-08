@@ -18,7 +18,7 @@
 
 /*!
  * \file
- * \brief MD5 test
+ * \brief SHA1 test
  *
  * \author Russell Bryant <russell@digium.com>
  *
@@ -37,44 +37,47 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/module.h"
 #include "asterisk/test.h"
 
-AST_TEST_DEFINE(md5_test)
+AST_TEST_DEFINE(sha1_test)
 {
 	static const struct {
 		const char *input;
 		const char *expected_output;
 	} tests[] = {
-		{ "apples",                          "daeccf0ad3c1fc8c8015205c332f5b42" },
-		{ "bananas",                         "ec121ff80513ae58ed478d5c5787075b" },
-		{ "reallylongstringaboutgoatcheese", "0a2d9280d37e2e37545cfef6e7e4e890" },
+		{ "giraffe",
+			"fac8f1a31d2998734d6a5253e49876b8e6a08239" },
+		{ "platypus",
+			"1dfb21b7a4d35e90d943e3a16107ccbfabd064d5" },
+		{ "ParastratiosphecomyiaStratiosphecomyioides",
+			"58af4e8438676f2bd3c4d8df9e00ee7fe06945bb" },
 	};
 	enum ast_test_result_state res = AST_TEST_PASS;
 	int i;
 
 	switch (cmd) {
 	case TEST_INIT:
-		info->name = "md5_test";
+		info->name = "sha1_test";
 		info->category = "main/";
-		info->summary = "MD5 test";
+		info->summary = "SHA1 test";
 		info->description =
-			"This test exercises MD5 calculations.\n"
+			"This test exercises SHA1 calculations.\n"
 			"";
 		return AST_TEST_NOT_RUN;
 	case TEST_EXECUTE:
 		break;
 	}
 
-	ast_test_status_update(&args->status_update, "Testing MD5 ...\n");
+	ast_test_status_update(&args->status_update, "Testing SHA1 ...\n");
 
 	for (i = 0; i < ARRAY_LEN(tests); i++) {
-		char md5_hash[32];
-		ast_md5_hash(md5_hash, tests[i].input);
-		if (strcasecmp(md5_hash, tests[i].expected_output)) {
+		char sha1_hash[64];
+		ast_sha1_hash(sha1_hash, tests[i].input);
+		if (strcasecmp(sha1_hash, tests[i].expected_output)) {
 			ast_test_status_update(&args->status_update,
 					"input: '%s'  hash: '%s'  expected hash: '%s'\n",
-					tests[i].input, md5_hash, tests[i].expected_output);
+					tests[i].input, sha1_hash, tests[i].expected_output);
 			ast_str_append(&args->ast_test_error_str, 0,
 					"input: '%s'  hash: '%s'  expected hash: '%s'\n",
-					tests[i].input, md5_hash, tests[i].expected_output);
+					tests[i].input, sha1_hash, tests[i].expected_output);
 			res = AST_TEST_FAIL;
 		}
 	}
@@ -84,14 +87,14 @@ AST_TEST_DEFINE(md5_test)
 
 static int unload_module(void)
 {
-	AST_TEST_UNREGISTER(md5_test);
+	AST_TEST_UNREGISTER(sha1_test);
 	return 0;
 }
 
 static int load_module(void)
 {
-	AST_TEST_REGISTER(md5_test);
+	AST_TEST_REGISTER(sha1_test);
 	return AST_MODULE_LOAD_SUCCESS;
 }
 
-AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "MD5 Test");
+AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "SHA1 Test");
