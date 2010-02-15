@@ -182,7 +182,7 @@ struct ast_rtp {
 	int *ioidrtcp;
 	unsigned short seqno;		/*!< Sequence number, RFC 3550, page 13. */
 	unsigned short rxseqno;
-	struct sched_context *sched;
+	struct sched_context *sched;	/*!< The scheduler context */
 	struct io_context *io;		/*!< for RTP callback */
 	struct io_context *iortcp;	/*!< for RTCP callback */
 	void *data;
@@ -1519,6 +1519,7 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 	/* Stuff that is needed for RTCP - regardless of p2p bridge or not */
 	mark = seqno & (1 << 23);
 	timestamp = ntohl(rtpheader[1]);
+	ssrc = ntohl(rtpheader[2]);
 
 	if (!mark && rtp->rxssrc && rtp->rxssrc != ssrc) {
 		if (option_debug || rtpdebug)
@@ -1543,7 +1544,6 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 	ext = seqno & (1 << 28);
 	cc = (seqno & 0xF000000) >> 24;
 	seqno &= 0xffff;
-	ssrc = ntohl(rtpheader[2]);
 
 	rtp->rxcount++; /* Only count reasonably valid packets, this'll make the rtcp stats more accurate */
 
@@ -2459,9 +2459,9 @@ int ast_rtp_isactive(struct ast_rtp *rtp)
 
 void ast_rtp_stop(struct ast_rtp *rtp)
 {
-	if (rtp->rtcp && rtp->sched != -1) {
+	if (rtp->rtcp && rtp->rtcp->schedid != -1) {
 		AST_SCHED_DEL(rtp->sched, rtp->rtcp->schedid);
-		rtp->sched = -1;
+		rtp->rtcp->schedid = -1;
 	}
 	/* Send RTCP goodbye packet */
 	if (rtp->isactive) {
@@ -4457,4 +4457,3 @@ void ast_rtp_init(void)
 	ast_cli_register_multiple(cli_rtp, sizeof(cli_rtp) / sizeof(struct ast_cli_entry));
 	ast_rtp_reload();
 }
-
