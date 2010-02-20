@@ -2831,8 +2831,6 @@ static int add_sdes_bodypart(struct ast_rtp *rtp, unsigned int *rtcp_packet, int
 	sdes = (char *) rtcp_packet;
 	switch (type) {
 	case SDES_CNAME:
-		ast_log(LOG_DEBUG, "----About to copy CNAME to SDES packet --- (len %d)\n", len);
-
 		cnamelen = (int) rtp->rtcp->ourcnamelength;
 
 		*sdes = SDES_CNAME;
@@ -2843,7 +2841,6 @@ static int add_sdes_bodypart(struct ast_rtp *rtp, unsigned int *rtcp_packet, int
 
 		/* THere must be a multiple of four bytes in the packet */
 		sdeslen = cnamelen;
-		ast_log(LOG_DEBUG, "----our CNAME %s--- (cnamelen %d len %d)\n", rtp->rtcp->ourcname, cnamelen, len);
 		break;
 	case SDES_END:
 		*sdes = SDES_END;
@@ -2853,8 +2850,6 @@ static int add_sdes_bodypart(struct ast_rtp *rtp, unsigned int *rtcp_packet, int
 		sdeslen = 2;
 	}
 	len += sdeslen + (sdeslen % 4 == 0 ? 0 : 4 - (sdeslen % 4)) ;
-
-	ast_log(LOG_DEBUG, "----Copied our CNAME to SDES packet --- (len %d)\n", len);
 
 	return len;
 }
@@ -2868,7 +2863,6 @@ static int ast_rtcp_write_empty(struct ast_rtp *rtp, int fd)
 	int len, res;
 
 	if (!rtp || !rtp->rtcp) {
-		ast_log(LOG_DEBUG, "---- NOT sending empty RTCP packet\n");
 		return 0;
 	} 
 	if (fd == -1) {
@@ -2880,7 +2874,9 @@ static int ast_rtcp_write_empty(struct ast_rtp *rtp, int fd)
 		AST_SCHED_DEL(rtp->sched, rtp->rtcp->schedid);
 		return 0;
 	}
-	ast_log(LOG_DEBUG,  "---- About to send empty RTCP packet\n");
+	if (rtcp_debug_test_addr(&rtp->rtcp->them)) {
+		ast_log(LOG_DEBUG,  "---- About to send empty RTCP packet\n");
+	}
 	rtcpheader = (unsigned int *)bdata;
 	/* Add a RR header with no reports (chunks = 0) - The RFC says that it's always needed 
 		first in a compound packet.
@@ -2996,7 +2992,6 @@ static int ast_rtcp_write_sr(const void *data, int goodbye)
 	len = add_sdes_bodypart(rtp, &rtcpheader[len/4], len, SDES_CNAME);
 	len = add_sdes_bodypart(rtp, &rtcpheader[len/4], len, SDES_END);
 	/* Now, add header when we know the actual length */
-	ast_log(LOG_DEBUG, "----- AFTER SENDING CNAME RTCP Len: %d \n", len);
 	add_sdes_header(rtp, start, len - srlen);
 
 	if (goodbye) {
