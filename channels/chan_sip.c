@@ -13517,7 +13517,12 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, const char *
 		}
 		sprintf(localjitter, "%f", qual.local_jitter);
 		sprintf(remotejitter, "%f", qual.remote_jitter);
-		ast_update_realtime("rtpqos", "Channel", p->owner ? p->owner->name : "", "pvtcallid", p->callid, "rtpmedia", mediatype, "localssrc", qual.local_ssrc, "remotessrc", qual.remote_ssrc, "rtt", qual.rtt, "localjitter", localjitter, "remotejitter", remotejitter, NULL);
+#ifdef REALTIME2
+		/* This only works with updated realtime system that has the "ast_store_realtime" support that's not generally available in 
+		   Asterisk 1.4. It's part of the Appleraisin-1.4 branch though. 
+		*/
+		ast_store_realtime("rtpqos", "Channel", p->owner ? p->owner->name : "", "pvtcallid", p->callid, "rtpmedia", mediatype, "localssrc", qual.local_ssrc, "remotessrc", qual.remote_ssrc, "rtt", qual.rtt, "localjitter", localjitter, "remotejitter", remotejitter, NULL);
+#endif
 	}
 }
 
