@@ -278,6 +278,7 @@ struct ast_rtcp {
 	unsigned int rtt_count;		/*! Number of reports received */
 	int sendfur;
 	char bridgedchan[AST_MAX_EXTENSION];		/*!< Bridged channel name */
+	char bridgeduniqueid[AST_MAX_EXTENSION];		/*!< Bridged channel name */
 };
 
 
