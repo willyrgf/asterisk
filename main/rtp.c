@@ -2363,7 +2363,7 @@ to store this so we can correlate the reports. If a channel changes bridge,
 it can be reset by first setting it to an empty string, then setting to 
 a new name 
 */
-void ast_rtcp_set_bridged(struct ast_rtp *rtp, const char *bridged_name)
+void ast_rtcp_set_bridged(struct ast_rtp *rtp, const char *bridged_name, const char *bridged_uniqueid)
 {
 	if (!rtp) {		/* For some reason, there's no RTP */
 		return;
@@ -2376,6 +2376,7 @@ void ast_rtcp_set_bridged(struct ast_rtp *rtp, const char *bridged_name)
 		return;
 	}
 	ast_copy_string(rtp->rtcp->bridgedchan, bridged_name, sizeof(rtp->rtcp->bridgedchan));
+	ast_copy_string(rtp->rtcp->bridgeduniqueid, bridged_uniqueid, sizeof(rtp->rtcp->bridgeduniqueid));
 }
 
 int ast_rtp_settos(struct ast_rtp *rtp, int tos)

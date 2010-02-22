@@ -13443,12 +13443,12 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, const char *
 	char localjitter[10], remotejitter[10];
 	int qosrealtime = ast_check_realtime("rtpqos");
 	long int duration;	/* Duration in secs */
-	struct ast_channel *bridgepeer = NULL;
 
 	if (p && p->owner) {
-		bridgepeer = ast_bridged_channel(p->owner);
+		struct ast_channel *bridgepeer = ast_bridged_channel(p->owner);
 		if (bridgepeer) {
-			ast_rtcp_set_bridged(rtp, bridgepeer->name);
+			/* Store the bridged peer data while we have it */
+			ast_rtcp_set_bridged(rtp, bridgepeer->name, bridgepeer->uniqueid);
 		}
 	}
 
@@ -13461,7 +13461,9 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, const char *
 		duration = (long int)(ast_tvdiff_ms(ast_tvnow(), qual.start) / 1000);
 		manager_event(EVENT_FLAG_CALL, "RTPQuality", 
 			"Channel: %s\r\n"			/* AST_CHANNEL for this call */
+			"Uniqueid: %s\r\n"			/* AST_CHANNEL for this call */
 			"BridgedChannel: %s\r\n"
+			"BridgedUniqueid: %s\r\n"
 			"RTPreporttype: %s\r\n"
 			"RTPrtcpstatus: %s\r\n"
 			"Duration: %ld\r\n"		/* used in cdr_manager */
@@ -13483,7 +13485,9 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, const char *
 			"RTPOutPlPercent: %5.2f\r\n"
 			"\r\n", 
 			p->owner ? p->owner->name : "",
+			p->owner ? p->owner->uniqueid : "",
 			qual.bridgedchan,
+			qual.bridgeduniqueid,
 			endreport ? "Final" : "Update",
 			qual.numberofreports == 0 ? "Inactive" : "Active",
 			duration,
@@ -13509,20 +13513,37 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, const char *
 			(qual.local_count + qual.remote_lostpackets) > 0 ? (double) qual.remote_lostpackets / qual.local_count  * 100 : 0
 			);
 	}
+#ifdef REALTIME2
 	/* CDR records are not reliable when it comes to near-death-of-channel events, so we need to store the RTCP
 	   report in realtime when we have it */
 	if (endreport && qosrealtime) {
+		char buf_duration[10], buf_lssrc[30], buf_rssrc[30], buf_rtt[30];
+		duration = (long int)(ast_tvdiff_ms(ast_tvnow(), qual.start) / 1000);
+
 		if (rtpqstring == NULL) {
 			rtpqstring =  ast_rtp_get_quality(rtp, &qual);
 		}
 		sprintf(localjitter, "%f", qual.local_jitter);
 		sprintf(remotejitter, "%f", qual.remote_jitter);
-#ifdef REALTIME2
-		/* This only works with updated realtime system that has the "ast_store_realtime" support that's not generally available in 
-		   Asterisk 1.4. It's part of the Appleraisin-1.4 branch though. 
-		*/
-		ast_store_realtime("rtpqos", "Channel", p->owner ? p->owner->name : "", "pvtcallid", p->callid, "rtpmedia", mediatype, "localssrc", qual.local_ssrc, "remotessrc", qual.remote_ssrc, "rtt", qual.rtt, "localjitter", localjitter, "remotejitter", remotejitter, NULL);
-#endif
+		sprintf(buf_lssrc, "%u", qual.local_ssrc);
+		sprintf(buf_rssrc, "%u", qual.remote_ssrc);
+		sprintf(buf_rtt, "%f", qual.rtt);
+		sprintf(buf_duration, "%ld", duration);
+		ast_store_realtime("rtpqos", 
+			"channel", p->owner ? p->owner->name : "", 
+			"uniqueid", p->owner ? p->owner->uniqueid : "", 
+			"bridgedchan", qual.bridgedchan,
+			"bridgeduniqueid", qual.bridgeduniqueid,
+			"pvtcallid", p->callid, 
+			"rtpmedia", mediatype, 
+			"localssrc", buf_lssrc, "remotessrc", buf_rssrc,
+			"rtt", buf_rtt, 
+			"localjitter", localjitter, "remotejitter", remotejitter, 
+			"sendformat", ast_getformatname(qual.lasttxformat),
+			"receiveformat", ast_getformatname(qual.lastrxformat),
+			"rtcpstatus", qual.numberofreports == 0 ? "Inactive" : "Active",
+			"duration", buf_duration,
+			NULL);
 	}
 }
 
