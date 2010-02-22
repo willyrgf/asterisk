@@ -2540,6 +2540,7 @@ char *ast_rtp_get_quality(struct ast_rtp *rtp, struct ast_rtp_quality *qual)
 		}
 		if (!ast_strlen_zero(rtp->rtcp->bridgedchan)) {
 			ast_copy_string(qual->bridgedchan, rtp->rtcp->bridgedchan, sizeof(rtp->rtcp->bridgedchan));
+			ast_copy_string(qual->bridgeduniqueid, rtp->rtcp->bridgeduniqueid, sizeof(rtp->rtcp->bridgeduniqueid));
 		}
 	}
 	if (rtp->rtcp) {

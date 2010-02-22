@@ -13444,6 +13444,8 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, const char *
 	int qosrealtime = ast_check_realtime("rtpqos");
 	long int duration;	/* Duration in secs */
 
+	memset(&qual, sizeof(qual), 0);
+
 	if (p && p->owner) {
 		struct ast_channel *bridgepeer = ast_bridged_channel(p->owner);
 		if (bridgepeer) {
@@ -13532,8 +13534,8 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, const char *
 		ast_store_realtime("rtpqos", 
 			"channel", p->owner ? p->owner->name : "", 
 			"uniqueid", p->owner ? p->owner->uniqueid : "", 
-			"bridgedchan", qual.bridgedchan,
-			"bridgeduniqueid", qual.bridgeduniqueid,
+			"bridgedchan", qual.bridgedchan[0] ? qual.bridgedchan : "" ,
+			"bridgeduniqueid", qual.bridgeduniqueid[0] ? qual.bridgeduniqueid : "",
 			"pvtcallid", p->callid, 
 			"rtpmedia", mediatype, 
 			"localssrc", buf_lssrc, "remotessrc", buf_rssrc,
