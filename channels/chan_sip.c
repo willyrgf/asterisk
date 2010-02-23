@@ -13442,7 +13442,7 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, const char *
 	char *rtpqstring = NULL;
 	char localjitter[10], remotejitter[10];
 	int qosrealtime = ast_check_realtime("rtpqos");
-	long int duration;	/* Duration in secs */
+	unsigned int duration;	/* Duration in secs */
 
 	memset(&qual, sizeof(qual), 0);
 
@@ -13460,7 +13460,7 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, const char *
 		   If numberofreports == 0 we have no incoming RTCP active, thus we can't
 		   get any reliable data to handle packet loss or any RTT timing.
 		*/
-		duration = (long int)(ast_tvdiff_ms(ast_tvnow(), qual.start) / 1000);
+		duration = (unsigned int)(ast_tvdiff_ms(ast_tvnow(), qual.start) / 1000);
 		manager_event(EVENT_FLAG_CALL, "RTPQuality", 
 			"Channel: %s\r\n"			/* AST_CHANNEL for this call */
 			"Uniqueid: %s\r\n"			/* AST_CHANNEL for this call */
@@ -13488,8 +13488,8 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, const char *
 			"\r\n", 
 			p->owner ? p->owner->name : "",
 			p->owner ? p->owner->uniqueid : "",
-			qual.bridgedchan,
-			qual.bridgeduniqueid,
+			qual.bridgedchan[0] ? qual.bridgedchan : "" ,
+			qual.bridgeduniqueid[0] ? qual.bridgeduniqueid : "",
 			endreport ? "Final" : "Update",
 			qual.numberofreports == 0 ? "Inactive" : "Active",
 			duration,
@@ -13520,7 +13520,7 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, const char *
 	   report in realtime when we have it */
 	if (endreport && qosrealtime) {
 		char buf_duration[10], buf_lssrc[30], buf_rssrc[30], buf_rtt[30];
-		duration = (long int)(ast_tvdiff_ms(ast_tvnow(), qual.start) / 1000);
+		duration = (unsigned int)(ast_tvdiff_ms(ast_tvnow(), qual.start) / 1000);
 
 		if (rtpqstring == NULL) {
 			rtpqstring =  ast_rtp_get_quality(rtp, &qual);
