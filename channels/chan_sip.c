@@ -13469,7 +13469,7 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, const char *
 			"BridgedUniqueid: %s\r\n"
 			"RTPreporttype: %s\r\n"
 			"RTPrtcpstatus: %s\r\n"
-			"Duration: %ld\r\n"		/* used in cdr_manager */
+			"Duration: %u\r\n"		/* used in cdr_manager */
 			"PvtCallid: %s\r\n"		/* ??? Generic PVT identifier */
 			"RTPipaddress: %s\r\n"
 			"RTPmedia: %s\r\n"		/* Audio, video, text */
@@ -13589,7 +13589,7 @@ static void stop_media_flows(struct sip_pvt *p)
 		ast_rtp_stop(p->rtp);
 		sip_rtcp_report(p, p->rtp, "audio", TRUE);
 	}
-	if (p->vrtp) {
+	if (p->vrtp && ast_rtp_isactive(p->vrtp)) {
 		ast_rtp_stop(p->vrtp);
 		sip_rtcp_report(p, p->vrtp, "video", TRUE);
 	}
