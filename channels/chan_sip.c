@@ -13451,6 +13451,7 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, const char *
 		if (bridgepeer) {
 			/* Store the bridged peer data while we have it */
 			ast_rtcp_set_bridged(rtp, bridgepeer->name, bridgepeer->uniqueid);
+			ast_log(log_debug, "---- Setting bridged peer name to %s\n", bridgepeer->name);
 		}
 	}
 

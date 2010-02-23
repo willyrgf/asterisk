@@ -2537,10 +2537,12 @@ char *ast_rtp_get_quality(struct ast_rtp *rtp, struct ast_rtp_quality *qual)
 			qual->rtt = rtp->rtcp->rtt;
 			qual->rttmax = rtp->rtcp->maxrtt;
 			qual->rttmin = rtp->rtcp->minrtt;
-		}
-		if (!ast_strlen_zero(rtp->rtcp->bridgedchan)) {
-			ast_copy_string(qual->bridgedchan, rtp->rtcp->bridgedchan, sizeof(rtp->rtcp->bridgedchan));
-			ast_copy_string(qual->bridgeduniqueid, rtp->rtcp->bridgeduniqueid, sizeof(rtp->rtcp->bridgeduniqueid));
+			if (!ast_strlen_zero(rtp->rtcp->bridgedchan)) {
+				ast_copy_string(qual->bridgedchan, rtp->rtcp->bridgedchan, sizeof(qual->bridgedchan));
+			}
+			if (!ast_strlen_zero(rtp->rtcp->bridgeduniqueid)) {
+				ast_copy_string(qual->bridgeduniqueid, rtp->rtcp->bridgeduniqueid, sizeof(qual->bridgeduniqueid));
+			}
 		}
 	}
 	if (rtp->rtcp) {
