@@ -4780,7 +4780,7 @@ static struct sip_pvt *sip_alloc(ast_string_field callid, struct sockaddr_in *si
 		ast_rtcp_setcname(p->rtp, p->callid, strlen(p->callid));
 	}
 	if (p->vrtp) {
-		ast_rtcp_setcname(p->rtp, p->callid, strlen(p->callid));
+		ast_rtcp_setcname(p->vrtp, p->callid, strlen(p->callid));
 	}
 	ast_string_field_set(p, mohinterpret, default_mohinterpret);
 	ast_string_field_set(p, mohsuggest, default_mohsuggest);
@@ -13558,7 +13558,7 @@ static int send_rtcp_events(const void *data)
 		sip_rtcp_report(dialog, dialog->rtp, "audio", FALSE);
 	}
 	if (dialog->vrtp && ast_rtp_isactive(dialog->vrtp)) {
-		sip_rtcp_report(dialog, dialog->rtp, "video", FALSE);
+		sip_rtcp_report(dialog, dialog->vrtp, "video", FALSE);
 	}
 	return global_rtcptimer;
 }
@@ -13590,7 +13590,7 @@ static void stop_media_flows(struct sip_pvt *p)
 	}
 	if (p->vrtp) {
 		ast_rtp_stop(p->vrtp);
-		sip_rtcp_report(p, p->rtp, "video", TRUE);
+		sip_rtcp_report(p, p->vrtp, "video", TRUE);
 	}
 	if (p->udptl)
 		ast_udptl_stop(p->udptl);
