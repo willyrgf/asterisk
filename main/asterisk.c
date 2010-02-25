@@ -2869,6 +2869,12 @@ int main(int argc, char *argv[])
 	if ((!runuser) && !ast_strlen_zero(ast_config_AST_RUN_USER))
 		runuser = ast_config_AST_RUN_USER;
 
+	/* It's common on some platforms to clear /var/run at boot.  Create the
+	 * socket file directory before we drop privileges. */
+	if (mkdir(ast_config_AST_RUN_DIR, 0755) && errno != EEXIST) {
+		ast_log(LOG_WARNING, "Unable to create socket file directory.  Remote consoles will not be able to connect! (%s)\n", strerror(x));
+	}
+
 #ifndef __CYGWIN__
 
 	if (isroot) 
@@ -2880,6 +2886,9 @@ int main(int argc, char *argv[])
 		if (!gr) {
 			ast_log(LOG_WARNING, "No such group '%s'!\n", rungroup);
 			exit(1);
+		}
+		if (chown(ast_config_AST_RUN_DIR, -1, gr->gr_gid)) {
+			ast_log(LOG_WARNING, "Unable to chgrp run directory to %d (%s)\n", (int) gr->gr_gid, rungroup);
 		}
 		if (setgid(gr->gr_gid)) {
 			ast_log(LOG_WARNING, "Unable to setgid to %d (%s)\n", (int)gr->gr_gid, rungroup);
@@ -2902,6 +2911,9 @@ int main(int argc, char *argv[])
 		if (!pw) {
 			ast_log(LOG_WARNING, "No such user '%s'!\n", runuser);
 			exit(1);
+		}
+		if (chown(ast_config_AST_RUN_DIR, pw->pw_uid, -1)) {
+			ast_log(LOG_WARNING, "Unable to chown run directory to %d (%s)\n", (int) pw->pw_uid, runuser);
 		}
 #ifdef HAVE_CAP
 		if (prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0)) {
