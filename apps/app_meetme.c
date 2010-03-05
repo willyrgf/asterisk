@@ -3124,7 +3124,7 @@ static int admin_exec(struct ast_channel *chan, void *data) {
 }
 
 /*! \brief List one meetme conference */
-static int manager_meetmelist(struct mansession *s, const struct message *m, int mute)
+static int manager_meetmelist(struct mansession *s, const struct message *m)
 {
 	struct ast_conference *conf;
 	const char *confid = astman_get_header(m, "Meetme");
@@ -3170,7 +3170,7 @@ static int manager_meetmelist(struct mansession *s, const struct message *m, int
 
 
 /*! \brief List one meetme conference */
-static int manager_meetmelistconference(struct mansession *s, const struct message *m, int mute)
+static int manager_meetmelistconference(struct mansession *s, const struct message *m)
 {
 	struct ast_conference *conf;
 	struct ast_conf_user *user;
