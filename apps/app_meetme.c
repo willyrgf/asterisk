@@ -3123,6 +3123,119 @@ static int admin_exec(struct ast_channel *chan, void *data) {
 	return 0;
 }
 
+/*! \brief List one meetme conference */
+static int manager_meetmelist(struct mansession *s, const struct message *m, int mute)
+{
+	struct ast_conference *conf;
+	const char *confid = astman_get_header(m, "Meetme");
+	const char *actionid = astman_get_header(m, "Actionid");
+	time_t now = time(NULL);
+	int confcount = 0;
+	char idtext[256] = "";
+
+	if (!ast_strlen_zero(actionid)) {
+		snprintf(idtext, sizeof(idtext), "ActionID: %s\r\n", actionid);
+	}
+
+	astman_send_ack(s, m, "Meetme list will follow");
+
+	/* Look in the conference list */
+	AST_LIST_LOCK(&confs);
+	AST_LIST_TRAVERSE(&confs, conf, list) {
+		/* If there's a conference ID given, filter out the others */
+		if (!ast_strlen_zero(confid) && strcmp(confid, conf->confno))
+			break;
+		confcount++;
+
+		astman_append(s, "Event: MeetmeListItem\r\n"
+			"Meetme: %s\r\n"
+			"ConfUsers: %d\r\n"
+			"MarkedUsers: %d\r\n"
+			"Duration: %ld\r\n"
+			"%s"
+			"\r\n", conf->confno, conf->users, conf->markedusers, now - conf->start,
+			idtext);
+	}
+	AST_LIST_UNLOCK(&confs);
+
+	/* Send final confirmation */
+	astman_append(s,
+	"Event: MeetmeListComplete\r\n"
+	"ListItems: %d\r\n"
+	"%s"
+	"\r\n", confcount, idtext);
+	return 0;
+}
+
+
+
+/*! \brief List one meetme conference */
+static int manager_meetmelistconference(struct mansession *s, const struct message *m, int mute)
+{
+	struct ast_conference *conf;
+	struct ast_conf_user *user;
+	const char *confid = astman_get_header(m, "Meetme");
+	const char *actionid = astman_get_header(m, "Actionid");
+	time_t now = time(NULL);
+	int usercount = 0;
+	char idtext[256] = "";
+
+	if (ast_strlen_zero(confid)) {
+		astman_send_error(s, m, "Meetme conference not specified");
+		return 0;
+	}
+
+	if (!ast_strlen_zero(actionid))
+		snprintf(idtext, sizeof(idtext), "ActionID: %s\r\n", actionid);
+
+	/* Look in the conference list */
+	AST_LIST_LOCK(&confs);
+	AST_LIST_TRAVERSE(&confs, conf, list) {
+		if (!strcmp(confid, conf->confno))
+			break;
+	}
+
+	if (!conf) {
+		AST_LIST_UNLOCK(&confs);
+		astman_send_error(s, m, "Meetme conference does not exist");
+		return 0;
+	}
+	astman_send_ack(s, m, "Meetme participant list will follow");
+
+	AST_LIST_TRAVERSE(&conf->userlist, user, list) {
+		usercount++;
+		astman_append(s, "Event: MeetmeListMemberItem\r\n"
+			"Meetme: %s\r\n"
+			"Usernum: %d\r\n"
+			"Channel: %s\r\n"
+			"Uniqueid: %s\r\n"
+  	     		"CallerIDnum: %s\r\n"
+			"CallerIDname: %s\r\n"
+			"Duration: %ld\r\n"
+			"Admin: %s\r\n"
+			"Muted: %s\r\n"
+			"%s"
+			"\r\n", confid, user->user_no, user->chan->name, user->chan->uniqueid, 
+			S_OR(user->chan->cid.cid_num, "<unknown>"),
+			S_OR(user->chan->cid.cid_name, "<unknown>"),
+			(long) (now - user->jointime), 
+			user->userflags & CONFFLAG_ADMIN ? "Yes" : "No",
+			user->adminflags & ADMINFLAG_MUTED ? "Yes" : user->adminflags & ADMINFLAG_SELFMUTED ? "Yes" : "No",
+			idtext);
+	}
+	AST_LIST_UNLOCK(&confs);
+
+
+	/* Send final confirmation */
+	astman_append(s,
+	"Event: MeetmeListMemberComplete\r\n"
+	"ListItems: %d\r\n"
+	"%s"
+	"\r\n", usercount, idtext);
+	return 0;
+}
+
+
 static int meetmemute(struct mansession *s, const struct message *m, int mute)
 {
 	struct ast_conference *conf;
@@ -3280,6 +3393,63 @@ static int meetmestate(const char *data)
 
 	return AST_DEVICE_INUSE;
 }
+
+static int func_meetme(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len)
+{
+	struct ast_conference *conf;
+	char *colname;
+
+	if ((colname = strchr(data, '|'))) {
+		*colname++ = '\0';
+	} else {
+		colname = "users";
+	}
+
+	/* Find conference */
+	AST_LIST_LOCK(&confs);
+	AST_LIST_TRAVERSE(&confs, conf, list) {
+		if (!strcmp(data, conf->confno)) {
+			break;
+		}
+	}
+	AST_LIST_UNLOCK(&confs);
+	if (!conf) {
+		return -1;
+	}
+
+	if (!strcasecmp(colname, "users")) {
+		snprintf(buf, len, "%d", conf->users);
+	} else if (!strcasecmp(colname, "markedusers")) {
+		snprintf(buf, len, "%d", conf->markedusers);
+	} else if (!strcasecmp(colname, "duration")) {	/* Start time */
+		time_t now = time(NULL);
+		snprintf(buf, len, "%ld", (long) (now - conf->start));
+	} else if (!strcasecmp(colname, "pin")) {	/* Pin code */
+		snprintf(buf, len, "%s", conf->pin);
+	} else if (!strcasecmp(colname, "adminpin")) {	/* Pin code */
+		snprintf(buf, len, "%s", conf->pinadmin);
+	} else if (!strcasecmp(colname, "isdynamic")) {	/* dynamic? */
+		snprintf(buf, len, "%d", conf->isdynamic ? 1 : 0);
+	} else {
+		buf[0] = '\0';
+	}
+
+	return 0;
+}
+
+static struct ast_custom_function meetme_function = {
+        .name = "MEETME",
+        .synopsis = "Get Meetme status in the dialplan",
+        .desc = "Returns information about a meetme conference room\n"
+		"users          Return number of users in conference room\n"
+		"markedusers    Return number of marked users in conference room\n"
+		"duration       Return duration of conference in seconds\n"
+		"pin            Return pin code for conference\n"
+		"adminpin       Return admin pin code for conference\n"
+		"isdynamic      Return 1 if conference is dynamic, otherwise 0\n",
+        .syntax = "MEETME(<room #>, parameter)",
+        .read = func_meetme,
+};
 
 static void load_config_meetme(void)
 {
@@ -5021,11 +5191,14 @@ static int unload_module(void)
 	ast_cli_unregister_multiple(cli_meetme, ARRAY_LEN(cli_meetme));
 	res = ast_manager_unregister("MeetmeMute");
 	res |= ast_manager_unregister("MeetmeUnmute");
+	res |= ast_manager_unregister("MeetmeListMembers");
+	res |= ast_manager_unregister("MeetmeList");
 	res |= ast_unregister_application(app3);
 	res |= ast_unregister_application(app2);
 	res |= ast_unregister_application(app);
 	res |= ast_unregister_application(slastation_app);
 	res |= ast_unregister_application(slatrunk_app);
+	res |= ast_custom_function_unregister(&meetme_function);
 
 	ast_devstate_prov_del("Meetme");
 	ast_devstate_prov_del("SLA");
@@ -5048,6 +5221,10 @@ static int load_module(void)
 				    action_meetmemute, "Mute a Meetme user");
 	res |= ast_manager_register("MeetmeUnmute", EVENT_FLAG_CALL, 
 				    action_meetmeunmute, "Unmute a Meetme user");
+	res |= ast_manager_register("MeetmeListMembers", EVENT_FLAG_CALL, 
+				    manager_meetmelistconference, "List participants in a Meetme");
+	res |= ast_manager_register("MeetmeList", EVENT_FLAG_CALL, 
+				    manager_meetmelist, "List active Meetme rooms");
 	res |= ast_register_application(app3, admin_exec, synopsis3, descrip3);
 	res |= ast_register_application(app2, count_exec, synopsis2, descrip2);
 	res |= ast_register_application(app, conf_exec, synopsis, descrip);
@@ -5058,6 +5235,7 @@ static int load_module(void)
 
 	res |= ast_devstate_prov_add("Meetme", meetmestate);
 	res |= ast_devstate_prov_add("SLA", sla_state);
+	res |= ast_custom_function_register(&meetme_function);
 
 	return res;
 }
