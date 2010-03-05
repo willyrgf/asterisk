@@ -992,7 +992,9 @@ static int meetme_cmd(int fd, int argc, char **argv)
 		return RESULT_SUCCESS;
 	} else 
 		return RESULT_SHOWUSAGE;
-	ast_log(LOG_DEBUG, "Cmdline: %s\n", cmdline);
+	if (option_debug) {
+		ast_log(LOG_DEBUG, "Cmdline: %s\n", cmdline);
+	}
 	admin_exec(NULL, cmdline);
 
 	return 0;
@@ -1390,7 +1392,8 @@ static void sla_queue_event_conf(enum sla_event_type type, struct ast_channel *c
 	AST_RWLIST_UNLOCK(&sla_stations);
 
 	if (!trunk_ref) {
-		ast_log(LOG_DEBUG, "Trunk not found for event!\n");
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Trunk not found for event!\n");
 		return;
 	}
 
@@ -1457,7 +1460,9 @@ static void *announce_thread(void *data)
 		}
 
 		for (res = 1; !conf->announcethread_stop && (current = AST_LIST_REMOVE_HEAD(&local_list, entry)); ao2_ref(current, -1)) {
-			ast_log(LOG_DEBUG, "About to play %s\n", current->namerecloc);
+			if (option_debug) {
+				ast_log(LOG_DEBUG, "About to play %s\n", current->namerecloc);
+			}
 			if (!ast_fileexists(current->namerecloc, NULL, NULL))
 				continue;
 			if ((current->confchan) && (current->confusers > 1) && !ast_check_hangup(current->confchan)) {
@@ -1802,7 +1807,8 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 	if (ztc.confmode) {
 		/* Whoa, already in a conference...  Retry... */
 		if (!retryzap) {
-			ast_log(LOG_DEBUG, "%s channel is in a conference already, retrying with pseudo\n", dahdi_chan_name);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "%s channel is in a conference already, retrying with pseudo\n", dahdi_chan_name);
 			retryzap = 1;
 			goto zapretry;
 		}
@@ -1856,8 +1862,13 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 			      "Channel: %s\r\n"
 			      "Uniqueid: %s\r\n"
 			      "Meetme: %s\r\n"
-			      "Usernum: %d\r\n",
-			      chan->name, chan->uniqueid, conf->confno, user->user_no);
+			      "Usernum: %d\r\n"
+			      "CallerIDnum: %s\r\n"
+			      "CallerIDname: %s\r\n" ,
+			      chan->name, chan->uniqueid, conf->confno, 
+			      user->user_no,
+			      S_OR(user->chan->cid.cid_num, "<unknown>"),
+			      S_OR(user->chan->cid.cid_name, "<unknown>"));
 		sent_event = 1;
 	}
 
@@ -2303,7 +2314,8 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 						conf_queue_dtmf(conf, user, f);
 
 					if (!ast_goto_if_exists(chan, exitcontext, dtmfstr, 1)) {
-						ast_log(LOG_DEBUG, "Got DTMF %c, goto context %s\n", dtmfstr[0], exitcontext);
+						if (option_debug)
+							ast_log(LOG_DEBUG, "Got DTMF %c, goto context %s\n", dtmfstr[0], exitcontext);
 						ret = 0;
 						ast_frfree(f);
 						break;
@@ -2625,7 +2637,7 @@ static struct ast_conference *find_conf(struct ast_channel *chan, char *confno, 
 					break;
 				}
 			}
-			if (!var) {
+			if (!var && option_debug) {
 				ast_log(LOG_DEBUG, "%s isn't a valid conference\n", confno);
 			}
 			ast_config_destroy(cfg);
@@ -3123,6 +3135,12 @@ static int admin_exec(struct ast_channel *chan, void *data) {
 	return 0;
 }
 
+static char mandescr_meetmelist[] =
+"List active MeetMe conferences. Each MeetMe will be listed in a separate\n"
+"event called MeetmeListItem. The list ends with the event MeetmeListComplete.\n"
+"Variables:\n"
+"       ActionID: Optional Action id for message matching.\n";
+
 /*! \brief List one meetme conference */
 static int manager_meetmelist(struct mansession *s, const struct message *m)
 {
@@ -3167,6 +3185,12 @@ static int manager_meetmelist(struct mansession *s, const struct message *m)
 	return 0;
 }
 
+static char mandescr_meetmemembers[] =
+"List active users in a MeetMe conference. Each MeetMe will be listed in a separate\n"
+"event called MeetmeListMember. The list ends with the event MeetmeListMemberComplete.\n"
+"Variables:\n"
+"	Meetme:   Identifier for the Meetme conference\n"
+"       ActionID: Optional Action id for message matching.\n";
 
 
 /*! \brief List one meetme conference */
@@ -3204,7 +3228,7 @@ static int manager_meetmelistconference(struct mansession *s, const struct messa
 
 	AST_LIST_TRAVERSE(&conf->userlist, user, list) {
 		usercount++;
-		astman_append(s, "Event: MeetmeListMemberItem\r\n"
+		astman_append(s, "Event: MeetmeListMember\r\n"
 			"Meetme: %s\r\n"
 			"Usernum: %d\r\n"
 			"Channel: %s\r\n"
@@ -3804,8 +3828,10 @@ static void sla_handle_dial_state_event(void)
 			ringing_trunk = sla_choose_ringing_trunk(ringing_station->station, &s_trunk_ref, 1);
 			ast_mutex_unlock(&sla.lock);
 			if (!ringing_trunk) {
-				ast_log(LOG_DEBUG, "Found no ringing trunk for station '%s' to answer!\n",
-					ringing_station->station->name);
+				if (option_debug) {
+					ast_log(LOG_DEBUG, "Found no ringing trunk for station '%s' to answer!\n",
+						ringing_station->station->name);
+				}
 				break;
 			}
 			/* Track the channel that answered this trunk */
@@ -4611,7 +4637,9 @@ static int sla_station_exec(struct ast_channel *chan, void *data)
 		pthread_attr_destroy(&attr);
 		ast_autoservice_stop(chan);
 		if (!trunk_ref->trunk->chan) {
-			ast_log(LOG_DEBUG, "Trunk didn't get created. chan: %lx\n", (long) trunk_ref->trunk->chan);
+			if (option_debug) {
+				ast_log(LOG_DEBUG, "Trunk didn't get created. chan: %lx\n", (long) trunk_ref->trunk->chan);
+			}
 			pbx_builtin_setvar_helper(chan, "SLASTATION_STATUS", "CONGESTION");
 			sla_change_trunk_state(trunk_ref->trunk, SLA_TRUNK_STATE_IDLE, ALL_TRUNK_REFS, NULL);
 			trunk_ref->chan = NULL;
@@ -5221,10 +5249,10 @@ static int load_module(void)
 				    action_meetmemute, "Mute a Meetme user");
 	res |= ast_manager_register("MeetmeUnmute", EVENT_FLAG_CALL, 
 				    action_meetmeunmute, "Unmute a Meetme user");
-	res |= ast_manager_register("MeetmeListMembers", EVENT_FLAG_CALL, 
-				    manager_meetmelistconference, "List participants in a Meetme");
-	res |= ast_manager_register("MeetmeList", EVENT_FLAG_CALL, 
-				    manager_meetmelist, "List active Meetme rooms");
+	res |= ast_manager_register2("MeetmeListMembers", EVENT_FLAG_CALL, 
+				    manager_meetmelistconference, "List participants in a Meetme", mandescr_meetmemembers);
+	res |= ast_manager_register2("MeetmeList", EVENT_FLAG_CALL, 
+				    manager_meetmelist, "List active Meetme rooms", mandescr_meetmelist);
 	res |= ast_register_application(app3, admin_exec, synopsis3, descrip3);
 	res |= ast_register_application(app2, count_exec, synopsis2, descrip2);
 	res |= ast_register_application(app, conf_exec, synopsis, descrip);
