@@ -1195,7 +1195,10 @@ static int create_dirpath(char *dest, int len, char *domain, char *username, cha
 		}
 	}
 	if (option_debug > 1)
-		ast_log(LOG_DEBUG, "Creating directory for %s@%s folder %s : %s\n", username, domain, folder, dest);
+		ast_log(LOG_DEBUG, "Creating directory for %s@%s folder %s : %s\n", 
+			ast_strlen_zero(username) ? "-" : username, 
+			ast_strlen_zero(domain) ? "-" : domain, 
+			ast_strlen_zero(folder) ? "-" : folder, dest);
 	return 0;
 }
 
@@ -1776,12 +1779,14 @@ static int minivm_record_exec(struct ast_channel *chan, void *data)
 	if (!tmp) {
 		ast_log(LOG_ERROR, "Out of memory\n");
 		ast_module_user_remove(u);
+		pbx_builtin_setvar_helper(chan, "MINIVM_RECORD_STATUS", "FAILED");
 		return -1;
 	}
 	argc = ast_app_separate_args(tmp, '|', argv, sizeof(argv) / sizeof(argv[0]));
 	if (argc == 2) {
 		if (ast_app_parse_options(minivm_app_options, &flags, opts, argv[1])) {
 			ast_module_user_remove(u);
+			pbx_builtin_setvar_helper(chan, "MINIVM_RECORD_STATUS", "FAILED");
 			return -1;
 		}
 		ast_copy_flags(&leave_options, &flags, OPT_SILENT | OPT_BUSY_GREETING | OPT_UNAVAIL_GREETING );
@@ -1791,6 +1796,7 @@ static int minivm_record_exec(struct ast_channel *chan, void *data)
 			if (sscanf(opts[OPT_ARG_RECORDGAIN], "%d", &gain) != 1) {
 				ast_log(LOG_WARNING, "Invalid value '%s' provided for record gain option\n", opts[OPT_ARG_RECORDGAIN]);
 				ast_module_user_remove(u);
+				pbx_builtin_setvar_helper(chan, "MINIVM_RECORD_STATUS", "FAILED");
 				return -1;
 			} else 
 				leave_options.record_gain = (signed char) gain;
@@ -1805,9 +1811,9 @@ static int minivm_record_exec(struct ast_channel *chan, void *data)
 		/* Send the call to n+101 priority, where n is the current priority*/
 		pbx_builtin_setvar_helper(chan, "MINIVM_RECORD_STATUS", "FAILED");
 		res = 0;
+	} else {
+		pbx_builtin_setvar_helper(chan, "MINIVM_RECORD_STATUS", "SUCCESS");
 	}
-	pbx_builtin_setvar_helper(chan, "MINIVM_RECORD_STATUS", "SUCCESS");
-
 	
 	ast_module_user_remove(u);
 
@@ -2080,6 +2086,7 @@ static int minivm_accmess_exec(struct ast_channel *chan, void *data)
 	char *prompt = NULL;
 	int duration;
 	int cmd;
+	int userdir;
 	
 	u = ast_module_user_add(chan);
 
@@ -2156,7 +2163,15 @@ static int minivm_accmess_exec(struct ast_channel *chan, void *data)
 		message = "greet";
 		prompt = "vm-rec-name";
 	}
-	snprintf(filename,sizeof(filename), "%s%s/%s/%s", MVM_SPOOL_DIR, vmu->domain, vmu->username, message);
+	userdir = check_dirpath(tmp, sizeof(tmp), vmu->domain, vmu->username, "tmp");
+
+	/* If we have no user directory, use generic temporary directory */
+	if (!userdir) {
+		create_dirpath(tmp, sizeof(tmp), vmu->domain, vmu->username, "");
+		if (option_debug > 2)
+			ast_log(LOG_DEBUG, "Creating temporary directory %s\n", tmp);
+	}
+	snprintf(filename,sizeof(filename), "%s/%s", tmp, message);
 	/* Maybe we should check the result of play_record_review ? */
 	cmd = play_record_review(chan, prompt, filename, global_maxgreet, default_vmformat, 0, vmu, &duration, NULL, FALSE);
 
@@ -2169,6 +2184,7 @@ static int minivm_accmess_exec(struct ast_channel *chan, void *data)
 
 	/* Ok, we're ready to rock and roll. Return to dialplan */
 	ast_module_user_remove(u);
+	pbx_builtin_setvar_helper(chan, "MINIVM_ACCMESS_STATUS", "SUCCESS");
 
 	return 0;
 
