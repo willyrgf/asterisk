@@ -194,6 +194,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define MVM_PBXSKIP		(1 << 9)
 #define MVM_ALLOCED		(1 << 13)
 
+#define MVM_BUFSIZ		512
+
 /*! \brief Default mail command to mail voicemail. Change it with the
     mailcmd= command in voicemail.conf */
 #define SENDMAIL "/usr/sbin/sendmail -t"
@@ -411,7 +413,7 @@ struct b64_baseio {
 struct minivm_zone {
 	char name[80];				/*!< Name of this time zone */
 	char timezone[80];			/*!< Timezone definition */
-	char msg_format[BUFSIZ];		/*!< Not used in minivm ...yet */
+	char msg_format[MVM_BUFSIZ];		/*!< Not used in minivm ...yet */
 	AST_LIST_ENTRY(minivm_zone) list;	/*!< List mechanics */
 };
 
@@ -1216,6 +1218,8 @@ static int invent_message(struct ast_channel *chan, char *domain, char *username
 	snprintf(fn, sizeof(fn), "%s%s/%s/greet", MVM_SPOOL_DIR, domain, username);
 
 	if (ast_fileexists(fn, NULL, NULL) > 0) {
+		if (option_debug > 1)
+			ast_log(LOG_DEBUG, "-_-_- Found personal prompts in directory %s\n", fn);
 		res = ast_streamfile(chan, fn, chan->language);
 		if (res) 
 			return -1;
@@ -2300,9 +2304,13 @@ static void free_zone(struct minivm_zone *z)
 static void timezone_destroy_list(void)
 {
 	struct minivm_zone *this;
+	if (option_debug > 2) {
+		ast_log(LOG_DEBUG, "About to destroy ALL time zones\n");
+	}
 	AST_LIST_LOCK(&minivm_zones);
-	while ((this = AST_LIST_REMOVE_HEAD(&minivm_zones, list))) 
+	while ((this = AST_LIST_REMOVE_HEAD(&minivm_zones, list)))  {
 		free_zone(this);
+	}
 		
 	AST_LIST_UNLOCK(&minivm_zones);
 }
@@ -2314,7 +2322,7 @@ static int timezone_add(char *zonename, char *config)
 	struct minivm_zone *newzone;
 	char *msg_format, *timezone;
 
-	newzone = malloc(sizeof(struct minivm_zone));
+	newzone = ast_calloc(sizeof(struct minivm_zone),1);
 	if (newzone == NULL)
 		return 0;
 
