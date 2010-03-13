@@ -197,7 +197,7 @@ struct ast_rtp {
 	struct ast_rtp *bridged;        /*!< Who we are Packet bridged to */
 	int set_marker_bit:1;           /*!< Whether to set the marker bit or not */
 	unsigned int constantssrc:1;
-	int isactive:1;                 /*!< Whether to RTP stream is active or not */
+	int isactive:2;                 /*!< Whether the RTP stream is active or not */
 };
 
 /* Forward declarations */
@@ -278,7 +278,11 @@ struct ast_rtcp {
 	unsigned int rtt_count;		/*! Number of reports received */
 	int sendfur;
 	char bridgedchan[AST_MAX_EXTENSION];		/*!< Bridged channel name */
-	char bridgeduniqueid[AST_MAX_EXTENSION];		/*!< Bridged channel name */
+	char bridgeduniqueid[AST_MAX_EXTENSION];	/*!< Bridged channel uniqueid */
+	char readtranslator[80];	/* Translation done on reading audio from PBX */
+	int readcost;			/* Delay in milliseconds for translation of 1 second of audio */
+	char writetranslator[80];	/* Translation done on writing audio to PBX - bridged channel */
+	int writecost;			/* Delay in milliseconds for translation of 1 second of audio */
 };
 
 

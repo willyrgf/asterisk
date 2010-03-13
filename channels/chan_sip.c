@@ -1052,6 +1052,7 @@ static struct sip_pvt {
 	struct sip_invite_param *options;	/*!< Options for INVITE */
 	int autoframing;
 	int hangupcause;			/*!< Storage of hangupcause copied from our owner before we disconnect from the AST channel (only used at hangup) */
+	struct ast_rtp_quality *qual;		/*!< The latest quality report, for realtime storage */
 	/*! When receiving an SDP offer, it is important to take note of what media types were offered.
 	 * By doing this, even if we don't want to answer a particular media stream with something meaningful, we can
 	 * still put an m= line in our answer with the port set to 0.
@@ -2603,9 +2604,18 @@ static void sip_destroy_peer(struct sip_peer *peer)
 	if (option_debug > 2)
 		ast_log(LOG_DEBUG, "Destroying SIP peer %s\n", peer->name);
 
+	if (peer->qual) {
+		/* We have a quality report to write to realtime before we leave this world. */
+		qos_write_realtime(peer->qual);
+		free(peer->qual);
+		peer->qual = NULL;
+	}
+
 	/* Delete it, it needs to disappear */
-	if (peer->call)
+	if (peer->call) {
 		sip_destroy(peer->call);
+		peer->call = NULL;
+	}
 
 	if (peer->mwipvt) 	/* We have an active subscription, delete it */
 		sip_destroy(peer->mwipvt);
@@ -13435,25 +13445,47 @@ static void handle_response_peerpoke(struct sip_pvt *p, int resp, struct sip_req
 }
 
 /*! \brief send manager report of RTCP 
-	endreport means endof-call report
+	reporttype = 1  means endof-call report
+	reporttype = 0  means report during call (if configured)
+	reporttype = 2  means report at end of call leg (like transfer)
 */
-static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, const char *mediatype, int endreport)
+static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, const char *mediatype, int reporttype)
 {
 	struct ast_rtp_quality qual;
 	char *rtpqstring = NULL;
 	char localjitter[10], remotejitter[10];
 	int qosrealtime = ast_check_realtime("rtpqos");
 	unsigned int duration;	/* Duration in secs */
+ 	int readtrans = FALSE, writetrans = FALSE;
 
 	memset(&qual, sizeof(qual), 0);
-
+  
 	if (p && p->owner) {
 		struct ast_channel *bridgepeer = ast_bridged_channel(p->owner);
 		if (bridgepeer) {
 			/* Store the bridged peer data while we have it */
 			ast_rtcp_set_bridged(rtp, bridgepeer->name, bridgepeer->uniqueid);
-			ast_log(log_debug, "---- Setting bridged peer name to %s\n", bridgepeer->name);
+			ast_log(LOG_DEBUG, "---- Setting bridged peer name to %s\n", bridgepeer->name);
 		}
+ 		/* Try to find out if there's transcoding */
+ 		readtrans = p->owner->readtrans != NULL;
+ 		writetrans = p->owner->writetrans != NULL;
+		if (option_debug > 1) {
+			/* This is just exploring the way into translator system.
+			   if we have a translator, the bridge delay is increased, which affects the QoS 
+			   of the call. If I can get info from the translation matrix too, that would
+			   be great!
+			*/
+			if (option_debug) {
+ 				if (readtrans && p->owner->readtrans->translator) {
+ 					ast_log(LOG_DEBUG, "--- Read translator: %s Cost %d\n", p->owner->readtrans->translator->name, p->owner->readtrans->translator->cost);
+ 				}
+ 				if (writetrans && p->owner->writetrans->translator) {
+ 					ast_log(LOG_DEBUG, "--- Write translator: %s \n", p->owner->writetrans->translator->name, p->owner->writetrans->translator->cost);
+ 				}
+			}
+		}
+
 	}
 
 	if (global_rtcpevents) {
@@ -13487,12 +13519,14 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, const char *
 			"RTPInLocalPlPercent: %5.2f\r\n"
 			"RTPOutPacketLoss: %d\r\n"
 			"RTPOutPlPercent: %5.2f\r\n"
+			"ChanTranslatRead: %s\r\n"
+			"ChanTranslatWrite: %s\r\n"
 			"\r\n", 
 			p->owner ? p->owner->name : "",
 			p->owner ? p->owner->uniqueid : "",
 			qual.bridgedchan[0] ? qual.bridgedchan : "" ,
 			qual.bridgeduniqueid[0] ? qual.bridgeduniqueid : "",
-			endreport ? "Final" : "Update",
+			reporttype == 1 ? "Final" : "Update",
 			qual.numberofreports == 0 ? "Inactive" : "Active",
 			duration,
 			p->callid, 
@@ -13514,40 +13548,61 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, const char *
 			/* The remote counter of lost packets (if we got the reports)
 			   divided with our counter of sent packets
 			 */
-			(qual.local_count + qual.remote_lostpackets) > 0 ? (double) qual.remote_lostpackets / qual.local_count  * 100 : 0
+			(qual.local_count + qual.remote_lostpackets) > 0 ? (double) qual.remote_lostpackets / qual.local_count  * 100 : 0,
+			readtrans ? "yes" : "no",
+			writetrans ? "yes" : "no"
 			);
 	}
-#ifdef REALTIME2
-	/* CDR records are not reliable when it comes to near-death-of-channel events, so we need to store the RTCP
-	   report in realtime when we have it */
-	if (endreport && qosrealtime) {
-		char buf_duration[10], buf_lssrc[30], buf_rssrc[30], buf_rtt[30];
-		duration = (unsigned int)(ast_tvdiff_ms(ast_tvnow(), qual.start) / 1000);
 
-		if (rtpqstring == NULL) {
-			rtpqstring =  ast_rtp_get_quality(rtp, &qual);
-		}
-		sprintf(localjitter, "%f", qual.local_jitter);
-		sprintf(remotejitter, "%f", qual.remote_jitter);
-		sprintf(buf_lssrc, "%u", qual.local_ssrc);
-		sprintf(buf_rssrc, "%u", qual.remote_ssrc);
-		sprintf(buf_rtt, "%f", qual.rtt);
-		sprintf(buf_duration, "%ld", duration);
-		ast_store_realtime("rtpqos", 
-			"channel", p->owner ? p->owner->name : "", 
-			"uniqueid", p->owner ? p->owner->uniqueid : "", 
-			"bridgedchan", qual.bridgedchan[0] ? qual.bridgedchan : "" ,
-			"bridgeduniqueid", qual.bridgeduniqueid[0] ? qual.bridgeduniqueid : "",
-			"pvtcallid", p->callid, 
-			"rtpmedia", mediatype, 
-			"localssrc", buf_lssrc, "remotessrc", buf_rssrc,
-			"rtt", buf_rtt, 
-			"localjitter", localjitter, "remotejitter", remotejitter, 
-			"sendformat", ast_getformatname(qual.lasttxformat),
-			"receiveformat", ast_getformatname(qual.lastrxformat),
-			"rtcpstatus", qual.numberofreports == 0 ? "Inactive" : "Active",
-			"duration", buf_duration,
-			NULL);
+	/* CDR records are not reliable when it comes to near-death-of-channel events, so we need to store the RTCP
+	   report in realtime when we have it.
+	   Tests have proven that storing to realtime from the call thread is NOT a good thing. Therefore, we just save
+	   the quality report structure in the PVT and let the function that kills the pvt store the stuff in the
+	   monitor thread instead.
+	 */
+	if (reporttype == 1 && qosrealtime) {
+		p->qual = ast_calloc(sizeof(struct ast_rtp_quality), 1)
+		p->qual = qual;
+		p->qual->end = ast_tvnow();
+	}
+}
+
+/*! \brief Write quality report to realtime storage */
+void qos_write_realtime(struct ast_rtp_quality *qual)
+{
+	unsigned int duration;	/* Duration in secs */
+	char buf_duration[10], buf_lssrc[30], buf_rssrc[30], buf_rtt[30];
+	char localjitter[10], remotejitter[10];
+
+	/* Since the CDR is already gone, we need to calculate our own duration.
+	   The CDR duration is the definitive resource for billing, this is
+	   the RTP stream duration which may include early media (ringing and
+	   provider messages). Only useful for measurements.
+	 */
+	duration = (unsigned int)(ast_tvdiff_ms(qual->end, qual->start) / 1000);
+
+	/* Realtime is based on strings, so let's make strings */
+	sprintf(localjitter, "%f", qual->local_jitter);
+	sprintf(remotejitter, "%f", qual->remote_jitter);
+	sprintf(buf_lssrc, "%u", qual->local_ssrc);
+	sprintf(buf_rssrc, "%u", qual->remote_ssrc);
+	sprintf(buf_rtt, "%f", qual->rtt);
+	sprintf(buf_duration, "%ld", duration);
+	ast_store_realtime("rtpqos", 
+		"channel", p->owner ? p->owner->name : "", 
+		"uniqueid", p->owner ? p->owner->uniqueid : "", 
+		"bridgedchan", qual->bridgedchan[0] ? qual->bridgedchan : "" ,
+		"bridgeduniqueid", qual->bridgeduniqueid[0] ? qual->bridgeduniqueid : "",
+		"pvtcallid", p->callid, 
+		"rtpmedia", mediatype, 
+		"localssrc", buf_lssrc, "remotessrc", buf_rssrc,
+		"rtt", buf_rtt, 
+		"localjitter", localjitter, "remotejitter", remotejitter, 
+		"sendformat", ast_getformatname(qual->lasttxformat),
+		"receiveformat", ast_getformatname(qual->lastrxformat),
+		"rtcpstatus", qual->numberofreports == 0 ? "Inactive" : "Active",
+		"duration", buf_duration,
+		NULL);
 	}
 }
 

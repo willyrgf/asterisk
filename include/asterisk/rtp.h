@@ -101,6 +101,9 @@ struct ast_rtp_quality {
 	int lastrxformat;		  /*!< Last used codec on received stream */
 	struct sockaddr_in them;	  /*!< The Ip address used for media by remote end */
 	struct timeval start;		  /*!< When the call started */
+	struct timeval end;		  /*!< When the call ended */
+	char writetranslate[80];	
+	char readtranslate[80];	
 };
 
 
@@ -203,6 +206,16 @@ it can be reset by first setting it to an empty string, then setting to
 a new name 
 */
 void ast_rtcp_set_bridged(struct ast_rtp *rtp, const char *bridged_name, const char *bridged_uniqueid);
+
+/*! \brief Store translator information
+
+In order to measure quality of a phone call, information about transcoding is very useful. Translation
+adds processing and latency to the bridged call.
+*/
+void ast_rtcp_set_translation(struct ast_rtp *rtp, const char *writetranslator, const int writecost,
+				const char *readtranslator, cost int readcost);
+
+
 
 
 
