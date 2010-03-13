@@ -213,16 +213,17 @@ In order to measure quality of a phone call, information about transcoding is ve
 adds processing and latency to the bridged call.
 */
 void ast_rtcp_set_translation(struct ast_rtp *rtp, const char *writetranslator, const int writecost,
-				const char *readtranslator, cost int readcost);
-
-
-
-
+				const char *readtranslator, const int readcost);
 
 /*! \brief When changing sources, don't generate a new SSRC */
 void ast_rtp_set_constantssrc(struct ast_rtp *rtp);
 
-void ast_rtp_new_source(struct ast_rtp *rtp);
+/*! \brief Indicate that we need to set the marker bit */
+void ast_rtp_update_source(struct ast_rtp *rtp);
+
+
+/*! \brief Indicate that we need to set the marker bit and change the ssrc */
+void ast_rtp_change_source(struct ast_rtp *rtp);
 
 /*! \brief  Setting RTP payload types from lines in a SDP description: */
 void ast_rtp_pt_clear(struct ast_rtp* rtp);

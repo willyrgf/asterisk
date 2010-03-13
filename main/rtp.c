@@ -196,7 +196,6 @@ struct ast_rtp {
 	struct ast_codec_pref pref;
 	struct ast_rtp *bridged;        /*!< Who we are Packet bridged to */
 	int set_marker_bit:1;           /*!< Whether to set the marker bit or not */
-	unsigned int constantssrc:1;
 	int isactive:2;                 /*!< Whether the RTP stream is active or not */
 };
 
@@ -1459,6 +1458,7 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 	unsigned int *rtpheader;
 	struct rtpPayloadType rtpPT;
 	struct ast_rtp *bridged = NULL;
+	AST_LIST_HEAD_NOLOCK(, ast_frame) frames;
 	
 	/* If time is up, kill it */
 	if (rtp->sending_digit)
@@ -1481,7 +1481,7 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 	}
 	
 	if (res < hdrlen) {
-		ast_log(LOG_WARNING, "RTP Read too short\n");
+		ast_log(LOG_WARNING, "RTP Read too short (%d, expecting %d)\n", res, hdrlen);
 		return &ast_null_frame;
 	}
 
@@ -1527,9 +1527,19 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 	ssrc = ntohl(rtpheader[2]);
 
 	if (!mark && rtp->rxssrc && rtp->rxssrc != ssrc) {
-		if (option_debug || rtpdebug)
-			ast_log(LOG_DEBUG, "Forcing Marker bit, because SSRC has changed\n");
-		mark = 1;
+ 		struct ast_frame *f, srcupdate = {
+ 			AST_FRAME_CONTROL,
+ 			.subclass = AST_CONTROL_SRCCHANGE,
+ 		};
+ 
+ 		if (!mark) {
+ 			if (option_debug || rtpdebug) {
+ 				ast_log(LOG_DEBUG, "Forcing Marker bit, because SSRC has changed\n");
+ 			}
+ 			mark = 1;
+ 		}
+ 		f = ast_frisolate(&srcupdate);
+ 		AST_LIST_INSERT_TAIL(&frames, f, frame_list);
 	}
 
 	rtp->rxssrc = ssrc;
@@ -1542,7 +1552,7 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 
 	if (res < hdrlen) {
 		ast_log(LOG_WARNING, "RTP Read too short (%d, expecting %d)\n", res, hdrlen);
-		return &ast_null_frame;
+		return AST_LIST_FIRST(&frames) ? AST_LIST_FIRST(&frames) : &ast_null_frame;
 	}
 	payloadtype = (seqno & 0x7f0000) >> 16;
 	padding = seqno & (1 << 29);
@@ -1589,8 +1599,6 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 		hdrlen += 4;
 	}
 
-
-	
 	
 	if (rtp_debug_test_addr(&sin))
 		ast_verbose("Got  RTP packet from    %s:%u (type %-2.2d, seq %-6.6u, ts %-6.6u, len %-6.6u)\n",
@@ -1631,7 +1639,11 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 		} else {
 			ast_log(LOG_NOTICE, "Unknown RTP codec %d received from '%s'\n", payloadtype, ast_inet_ntoa(rtp->them.sin_addr));
 		}
-		return f ? f : &ast_null_frame;
+		if (f) {
+			AST_LIST_INSERT_TAIL(&frames, f, frame_list);
+			return AST_LIST_FIRST(&frames);
+		}
+		return &ast_null_frame;
 	}
 	rtp->lastrxformat = rtp->f.subclass = rtpPT.code;
 	rtp->f.frametype = (rtp->f.subclass < AST_FORMAT_MAX_AUDIO) ? AST_FRAME_VOICE : AST_FRAME_VIDEO;
@@ -1647,7 +1659,8 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 			f->len = ast_tvdiff_ms(ast_samp2tv(rtp->dtmf_duration, rtp_get_rate(f->subclass)), ast_tv(0, 0));
 			rtp->resp = 0;
 			rtp->dtmf_timeout = rtp->dtmf_duration = 0;
-			return f;
+			AST_LIST_INSERT_TAIL(&frames, f, frame_list);
+			return AST_LIST_FIRST(&frames);
 		}
 	}
 
@@ -1680,7 +1693,9 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 			rtp->f.subclass |= 0x1;
 	}
 	rtp->f.src = "RTP";
-	return &rtp->f;
+
+	AST_LIST_INSERT_TAIL(&frames, &rtp->f, frame_list);
+	return AST_LIST_FIRST(&frames);
 }
 
 /* The following array defines the MIME Media type (and subtype) for each
@@ -2393,18 +2408,26 @@ int ast_rtp_settos(struct ast_rtp *rtp, int tos)
 	return res;
 }
 
-void ast_rtp_set_constantssrc(struct ast_rtp *rtp)
-{
-	rtp->constantssrc = 1;
-}
-
-void ast_rtp_new_source(struct ast_rtp *rtp)
+void ast_rtp_update_source(struct ast_rtp *rtp)
 {
 	if (rtp) {
 		rtp->set_marker_bit = 1;
-		if (!rtp->constantssrc) {
-			rtp->ssrc = ast_random();
+		if (option_debug > 2) {
+			ast_log(LOG_DEBUG, "Setting the marker bit due to a source update\n");
 		}
+	}
+}
+
+void ast_rtp_change_source(struct ast_rtp *rtp)
+{
+	if (rtp) {
+		unsigned int ssrc = ast_random();
+
+		rtp->set_marker_bit = 1;
+		if (option_debug > 2) {
+			ast_log(LOG_DEBUG, "Changing ssrc from %u to %u due to a source change\n", rtp->ssrc, ssrc);
+		}
+		rtp->ssrc = ssrc;
 	}
 }
 

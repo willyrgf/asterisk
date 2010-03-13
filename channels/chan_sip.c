@@ -813,12 +813,11 @@ struct sip_auth {
 #define SIP_PAGE2_UDPTL_DESTINATION     (1 << 28)       /*!< 28: Use source IP of RTP as destination if NAT is enabled */
 #define SIP_PAGE2_DIALOG_ESTABLISHED    (1 << 29)       /*!< 29: Has a dialog been established? */
 #define SIP_PAGE2_RPORT_PRESENT         (1 << 30)       /*!< 30: Was rport received in the Via header? */
-#define SIP_PAGE2_CONSTANT_SSRC         (1 << 31)       /*!< 31: Don't change SSRC on reinvite */
 
 #define SIP_PAGE2_FLAGS_TO_COPY \
 	(SIP_PAGE2_ALLOWSUBSCRIBE | SIP_PAGE2_ALLOWOVERLAP | SIP_PAGE2_VIDEOSUPPORT | \
 	SIP_PAGE2_T38SUPPORT | SIP_PAGE2_RFC2833_COMPENSATE | SIP_PAGE2_BUGGY_MWI | \
-	SIP_PAGE2_UDPTL_DESTINATION | SIP_PAGE2_CONSTANT_SSRC)
+	SIP_PAGE2_UDPTL_DESTINATION)
 
 /* SIP packet flags */
 #define SIP_PKT_DEBUG		(1 << 0)	/*!< Debug this packet */
@@ -1052,7 +1051,8 @@ static struct sip_pvt {
 	struct sip_invite_param *options;	/*!< Options for INVITE */
 	int autoframing;
 	int hangupcause;			/*!< Storage of hangupcause copied from our owner before we disconnect from the AST channel (only used at hangup) */
-	struct ast_rtp_quality *qual;		/*!< The latest quality report, for realtime storage */
+	struct ast_rtp_quality *audioqual;		/*!< Audio: The latest quality report, for realtime storage */
+	struct ast_rtp_quality *videoqual;		/*!< Video: The latest quality report, for realtime storage */
 	/*! When receiving an SDP offer, it is important to take note of what media types were offered.
 	 * By doing this, even if we don't want to answer a particular media stream with something meaningful, we can
 	 * still put an m= line in our answer with the port set to 0.
@@ -1376,6 +1376,7 @@ static enum sip_result add_sdp(struct sip_request *resp, struct sip_pvt *p, int 
 static int send_rtcp_events(const void *data);
 static void start_rtcp_events(struct sip_pvt *dialog);
 static void stop_media_flows(struct sip_pvt *p);
+static void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_quality *qual);
 
 /*--- Authentication stuff */
 static int reply_digest(struct sip_pvt *p, struct sip_request *req, char *header, int sipmethod, char *digest, int digest_len);
@@ -2604,12 +2605,6 @@ static void sip_destroy_peer(struct sip_peer *peer)
 	if (option_debug > 2)
 		ast_log(LOG_DEBUG, "Destroying SIP peer %s\n", peer->name);
 
-	if (peer->qual) {
-		/* We have a quality report to write to realtime before we leave this world. */
-		qos_write_realtime(peer->qual);
-		free(peer->qual);
-		peer->qual = NULL;
-	}
 
 	/* Delete it, it needs to disappear */
 	if (peer->call) {
@@ -2967,9 +2962,6 @@ static int create_addr_from_peer(struct sip_pvt *dialog, struct sip_peer *peer)
 		ast_rtp_set_rtptimeout(dialog->rtp, peer->rtptimeout);
 		ast_rtp_set_rtpholdtimeout(dialog->rtp, peer->rtpholdtimeout);
 		ast_rtp_set_rtpkeepalive(dialog->rtp, peer->rtpkeepalive);
-		if (ast_test_flag(&dialog->flags[1], SIP_PAGE2_CONSTANT_SSRC)) {
-			ast_rtp_set_constantssrc(dialog->rtp);
-		}
 		/* Set Frame packetization */
 		ast_rtp_codec_setpref(dialog->rtp, &dialog->prefs);
 		dialog->autoframing = peer->autoframing;
@@ -2980,9 +2972,6 @@ static int create_addr_from_peer(struct sip_pvt *dialog, struct sip_peer *peer)
 		ast_rtp_set_rtptimeout(dialog->vrtp, peer->rtptimeout);
 		ast_rtp_set_rtpholdtimeout(dialog->vrtp, peer->rtpholdtimeout);
 		ast_rtp_set_rtpkeepalive(dialog->vrtp, peer->rtpkeepalive);
-		if (ast_test_flag(&dialog->flags[1], SIP_PAGE2_CONSTANT_SSRC)) {
-			ast_rtp_set_constantssrc(dialog->vrtp);
-		}
 	}
 
 	ast_string_field_set(dialog, peername, peer->name);
@@ -3305,6 +3294,19 @@ static int __sip_destroy(struct sip_pvt *p, int lockowner)
 
 	if (dumphistory)
 		sip_dump_history(p);
+
+	if (p->audioqual) {
+		/* We have a quality report to write to realtime before we leave this world. */
+		qos_write_realtime(p, p->audioqual);
+		free(p->audioqual);
+		p->audioqual = NULL;
+	}
+	if (p->videoqual) {
+		/* We have a quality report to write to realtime before we leave this world. */
+		qos_write_realtime(p, p->videoqual);
+		free(p->videoqual);
+		p->videoqual = NULL;
+	}
 
 	if (p->options)
 		free(p->options);
@@ -3888,6 +3890,7 @@ static int sip_answer(struct ast_channel *ast)
 		if (option_debug)
 			ast_log(LOG_DEBUG, "SIP answering channel: %s\n", ast->name);
 
+		ast_rtp_update_source(p->rtp);
 		res = transmit_response_with_sdp(p, "200 OK", &p->initreq, XMIT_CRITICAL);
 		ast_set_flag(&p->flags[1], SIP_PAGE2_DIALOG_ESTABLISHED);
 		start_rtcp_events(p);
@@ -3923,7 +3926,7 @@ static int sip_write(struct ast_channel *ast, struct ast_frame *frame)
 				if ((ast->_state != AST_STATE_UP) &&
 				    !ast_test_flag(&p->flags[0], SIP_PROGRESS_SENT) &&
 				    !ast_test_flag(&p->flags[0], SIP_OUTGOING)) {
-					ast_rtp_new_source(p->rtp);
+					ast_rtp_update_source(p->rtp);
 					if (!global_prematuremediafilter) {
 						p->invitestate = INV_EARLY_MEDIA;
 						transmit_provisional_response(p, "183 Session Progress", &p->initreq, 1);
@@ -4171,11 +4174,11 @@ static int sip_indicate(struct ast_channel *ast, int condition, const void *data
 		res = -1;
 		break;
 	case AST_CONTROL_HOLD:
-		ast_rtp_new_source(p->rtp);
+		ast_rtp_update_source(p->rtp);
 		ast_moh_start(ast, data, p->mohinterpret);
 		break;
 	case AST_CONTROL_UNHOLD:
-		ast_rtp_new_source(p->rtp);
+		ast_rtp_update_source(p->rtp);
 		ast_moh_stop(ast);
 		break;
 	case AST_CONTROL_VIDUPDATE:	/* Request a video frame update */
@@ -4186,7 +4189,10 @@ static int sip_indicate(struct ast_channel *ast, int condition, const void *data
 			res = -1;
 		break;
 	case AST_CONTROL_SRCUPDATE:
-		ast_rtp_new_source(p->rtp);
+		ast_rtp_update_source(p->rtp);
+		break;
+	case AST_CONTROL_SRCCHANGE:
+		ast_rtp_change_source(p->rtp);
 		break;
 	case -1:
 		res = -1;
@@ -13453,7 +13459,6 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, const char *
 {
 	struct ast_rtp_quality qual;
 	char *rtpqstring = NULL;
-	char localjitter[10], remotejitter[10];
 	int qosrealtime = ast_check_realtime("rtpqos");
 	unsigned int duration;	/* Duration in secs */
  	int readtrans = FALSE, writetrans = FALSE;
@@ -13477,11 +13482,11 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, const char *
 			   be great!
 			*/
 			if (option_debug) {
- 				if (readtrans && p->owner->readtrans->translator) {
- 					ast_log(LOG_DEBUG, "--- Read translator: %s Cost %d\n", p->owner->readtrans->translator->name, p->owner->readtrans->translator->cost);
+ 				if (readtrans && p->owner->readtrans->t) {
+ 					ast_log(LOG_DEBUG, "--- Read translator: %s Cost %d\n", p->owner->readtrans->t->name, p->owner->readtrans->t->cost);
  				}
- 				if (writetrans && p->owner->writetrans->translator) {
- 					ast_log(LOG_DEBUG, "--- Write translator: %s \n", p->owner->writetrans->translator->name, p->owner->writetrans->translator->cost);
+ 				if (writetrans && p->owner->writetrans->t) {
+ 					ast_log(LOG_DEBUG, "--- Write translator: %s Cost %d\n", p->owner->writetrans->t->name, p->owner->writetrans->t->cost);
  				}
 			}
 		}
@@ -13561,15 +13566,22 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, const char *
 	   monitor thread instead.
 	 */
 	if (reporttype == 1 && qosrealtime) {
-		p->qual = ast_calloc(sizeof(struct ast_rtp_quality), 1)
-		p->qual = qual;
-		p->qual->end = ast_tvnow();
+		if (mediatype[0] == 'a') {  /* Audio */
+			p->audioqual = ast_calloc(sizeof(struct ast_rtp_quality), 1);
+			(* p->audioqual) = qual;
+			p->audioqual->end = ast_tvnow();
+		} else if (mediatype[0] == 'v') {  /* Video */
+			p->videoqual = ast_calloc(sizeof(struct ast_rtp_quality), 1);
+			(* p->videoqual) = qual;
+			p->videoqual->end = ast_tvnow();
+		}
 	}
 }
 
 /*! \brief Write quality report to realtime storage */
-void qos_write_realtime(struct ast_rtp_quality *qual)
+void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_quality *qual)
 {
+#ifdef REALTIME2
 	unsigned int duration;	/* Duration in secs */
 	char buf_duration[10], buf_lssrc[30], buf_rssrc[30], buf_rtt[30];
 	char localjitter[10], remotejitter[10];
@@ -13587,13 +13599,13 @@ void qos_write_realtime(struct ast_rtp_quality *qual)
 	sprintf(buf_lssrc, "%u", qual->local_ssrc);
 	sprintf(buf_rssrc, "%u", qual->remote_ssrc);
 	sprintf(buf_rtt, "%f", qual->rtt);
-	sprintf(buf_duration, "%ld", duration);
+	sprintf(buf_duration, "%u", duration);
 	ast_store_realtime("rtpqos", 
-		"channel", p->owner ? p->owner->name : "", 
-		"uniqueid", p->owner ? p->owner->uniqueid : "", 
+		"channel", dialog->owner ? dialog->owner->name : "", 
+		"uniqueid", dialog->owner ? dialog->owner->uniqueid : "", 
 		"bridgedchan", qual->bridgedchan[0] ? qual->bridgedchan : "" ,
 		"bridgeduniqueid", qual->bridgeduniqueid[0] ? qual->bridgeduniqueid : "",
-		"pvtcallid", p->callid, 
+		"pvtcallid", dialog->callid, 
 		"rtpmedia", mediatype, 
 		"localssrc", buf_lssrc, "remotessrc", buf_rssrc,
 		"rtt", buf_rtt, 
@@ -13604,6 +13616,7 @@ void qos_write_realtime(struct ast_rtp_quality *qual)
 		"duration", buf_duration,
 		NULL);
 	}
+#endif
 }
 
 /*! \brief Send RTCP manager events */
@@ -15310,14 +15323,6 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 					ast_log(LOG_DEBUG, "No compatible codecs for this SIP call.\n");
 				res = -1;
 				goto request_invite_cleanup;
-			}
-			if (ast_test_flag(&p->flags[1], SIP_PAGE2_CONSTANT_SSRC)) {
-				if (p->rtp) {
-					ast_rtp_set_constantssrc(p->rtp);
-				}
-				if (p->vrtp) {
-					ast_rtp_set_constantssrc(p->vrtp);
-				}
 			}
 		} else {	/* No SDP in invite, call control session */
 			p->jointcapability = p->capability;
@@ -17801,9 +17806,6 @@ static int handle_common_options(struct ast_flags *flags, struct ast_flags *mask
 	} else if (!strcasecmp(v->name, "t38pt_usertpsource")) {
 		ast_set_flag(&mask[1], SIP_PAGE2_UDPTL_DESTINATION);
 		ast_set2_flag(&flags[1], ast_true(v->value), SIP_PAGE2_UDPTL_DESTINATION);
-	} else if (!strcasecmp(v->name, "constantssrc")) {
-		ast_set_flag(&mask[1], SIP_PAGE2_CONSTANT_SSRC);
-		ast_set2_flag(&flags[1], ast_true(v->value), SIP_PAGE2_CONSTANT_SSRC);
 	} else
 		res = 0;
 
@@ -18886,8 +18888,6 @@ static int reload_config(enum channelreloadreason reason)
 				default_maxcallbitrate = DEFAULT_MAX_CALL_BITRATE;
 		} else if (!strcasecmp(v->name, "matchexterniplocally")) {
 			global_matchexterniplocally = ast_true(v->value);
-		} else if (!strcasecmp(v->name, "constantssrc")) {
-			ast_set2_flag(&global_flags[1], ast_true(v->value), SIP_PAGE2_CONSTANT_SSRC);
 		} else if (!strcasecmp(v->name, "shrinkcallerid")) {
 			if (ast_true(v->value)) {
 				global_shrinkcallerid = 1;
