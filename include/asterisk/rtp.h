@@ -219,7 +219,7 @@ void ast_rtcp_set_translation(struct ast_rtp *rtp, const char *writetranslator, 
 void ast_rtp_set_constantssrc(struct ast_rtp *rtp);
 
 /*! \brief Indicate that we need to set the marker bit */
-void ast_rtp_update_source(struct ast_rtp *rtp);
+void ast_rtp_new_source(struct ast_rtp *rtp);
 
 
 /*! \brief Indicate that we need to set the marker bit and change the ssrc */
