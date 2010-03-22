@@ -1734,7 +1734,7 @@ static int feature_interpret_helper(struct ast_channel *chan, struct ast_channel
 		    !ast_strlen_zero(builtin_features[x].exten)) {
 			/* Feature is up for consideration */
 			if (!strcmp(builtin_features[x].exten, code)) {
-				ast_debug(3, "Feature detected: fname=%s sname=%s exten=%s\n", builtin_features[x].fname, builtin_features[x].sname, builtin_features[x].exten);
+				ast_debug(1, "Feature detected: fname=%s sname=%s exten=%s\n", builtin_features[x].fname, builtin_features[x].sname, builtin_features[x].exten);
 				if (operation) {
 					res = builtin_features[x].operation(chan, peer, config, code, sense, NULL);
 				}
@@ -2451,6 +2451,7 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 				if (ast_test_flag(param, AST_FEATURE_REDIRECT)) {
                                 	ast_set_flag(&(config->features_callee), AST_FEATURE_REDIRECT);
 					ast_debug(2, "--- Setting Transfer flag on callee in bridge! \n");
+					hasfeatures = 1;
 				}
 				if (ast_test_flag(param, AST_FEATURE_DISCONNECT))
                                 	ast_set_flag(&(config->features_callee), AST_FEATURE_DISCONNECT);
@@ -2460,7 +2461,7 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
                                 	ast_set_flag(&(config->features_callee), AST_FEATURE_AUTOMIXMON);
 				if (ast_test_flag(param, AST_FEATURE_PARKCALL))
                                 	ast_set_flag(&(config->features_callee), AST_FEATURE_PARKCALL);
-				ast_debug(2, "--- Setting updated bridge flags from chan_local in this bridge for incoming channel %s\n", chan->name);
+				ast_debug(2, "--- Setting updated bridge flags from chan_local in this bridge for incoming channel %s Peer %s\n", chan->name, peer->name);
 				break;
 			case AST_CONTROL_OPTION:
 				aoh = f->data;
@@ -2495,6 +2496,7 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 			ast_frfree(f);
 			f = NULL;
 			config->feature_timer = backup_config.feature_timer;
+			ast_debug(2, "------ Trying to understand DTMF character and see if we can have some fun. Chan %s Peer %s\n", chan->name, peer->name);
 			res = ast_feature_interpret(chan, peer, config, featurecode, sense);
 			switch(res) {
 			case FEATURE_RETURN_PASSDIGITS:

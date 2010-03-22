@@ -295,6 +295,8 @@ static void check_bridge(struct local_pvt *p, int isoutbound)
 					/* Now, tell the owner's bridge that we had some interesting parameters in the bridge that
 					   will disappear soon, so that we don't drop them */
 					ast_queue_control_data(p->owner, AST_CONTROL_BRIDGEPARAM, &p->chan->bridgeflags, sizeof(p->chan->bridgeflags));
+					ast_debug(1, "----- Sending bridge flags from channel %s upstream\n", p->chan->name);
+					ast_debug(1, "----- We have these channels to play with: 1: %s 2: %s \n", p->chan->name, p->owner->name);
 					ast_channel_unlock(p->owner);
 				}
 				ast_channel_unlock(p->chan->_bridge);
