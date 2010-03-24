@@ -66,6 +66,9 @@ struct ast_nacl *ast_nacl_attach(const char *name);
  */
 void ast_nacl_detach(struct ast_nacl *nacl);
 
+/*! \brief Add new IP address to ruleset */
+int ast_nacl_add_ip(struct ast_nacl *nacl, struct sockaddr_in *ip, int permit)
+
 /*! \brief Initialize NACL subsystem */
 int ast_nacl_load(void);
 

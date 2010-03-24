@@ -586,6 +586,7 @@ static int global_capability = AST_FORMAT_ULAW | AST_FORMAT_ALAW | AST_FORMAT_GS
 /*! \brief Global list of addresses dynamic peers are not allowed to use */
 static struct ast_ha *global_contact_ha = NULL;
 static struct ast_nacl *global_nacl = NULL;
+static struct ast_nacl *global_blacklist = NULL;
 static int global_dynamic_exclude_static = 0;
 
 /* Object counters */
@@ -19578,6 +19579,7 @@ static int load_module(void)
 
 	sip_poke_all_peers();	
 	sip_send_all_registers();
+	global_blacklist = ast_nacl_add("ast_sip_blacklist", "sip");
 	
 	/* And start the monitor for the first time */
 	restart_monitor();
@@ -19668,6 +19670,7 @@ restartdestroy:
 	sched_context_destroy(sched);
 	ast_nacl_detach(global_nacl);
 	ast_free_ha(global_contact_ha);
+	ao2_ref(global_blacklist,-1);
 		
 	return 0;
 }

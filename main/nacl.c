@@ -435,6 +435,23 @@ static int cli_show_nacls(int fd, int argc, char *argv[])
 #undef FORMAT
 #undef FORMAT2
 
+/*! \brief Add new IP address to ruleset */
+int ast_nacl_add_ip(struct ast_nacl *nacl, struct sockaddr_in *ip, int permit)
+{
+	char ipbuf[128];
+
+	if (!nacl || ip->sin_addr.s_addr) {
+		return FALSE;
+	}
+	ao2_ref(nacl,1);
+	ast_copy_string(ipbuf, ast_inet_ntoa(ip->sin_addr.s_addr), 128);
+	/* In trunk, we need to create a function that uses IP directly */
+	nacl->ha = ast_append_ha(permit ? "permit" : "deny", ipbuf, nacl->ha);
+	nacl->rules++;
+	ao2_ref(nacl,-1);
+	return TRUE;
+}
+
 /*! \brief Update NACL (or create it if it doesn't exist) */
 static int nacl_update(int fd, const char *command, const char *name, int rule, char *operation, const char *target, const char *owner)
 {
@@ -450,11 +467,15 @@ static int nacl_update(int fd, const char *command, const char *name, int rule, 
 		}
 		nacl = ast_nacl_add(name, owner);
 		/* Add a ref so that both existing and new NACLs has an extra ref after nacl_find or nacl_add */
-		ast_cli(fd, "Successfully added new NACL %s\n", name);
+		if (fd) {
+			ast_cli(fd, "Successfully added new NACL %s\n", name);
+		}
 		ao2_ref(nacl, +1);
 	}
 	if (!insert && !nacl->acl) {
-		ast_cli(fd, "No rules to delete for NACL: %s\n", name);
+		if (fd) {
+			ast_cli(fd, "No rules to delete for NACL: %s\n", name);
+		}
 		ao2_ref(nacl, -1);
 		return RESULT_SUCCESS;
 	}
@@ -462,7 +483,9 @@ static int nacl_update(int fd, const char *command, const char *name, int rule, 
 	if (insert) {
 		newha = ast_append_ha(operation, target, NULL);
 		if (!newha) {
-			ast_cli(fd, "Syntax error in new rule forNACL: %s\n", name);
+			if (fd) {
+				ast_cli(fd, "Syntax error in new rule forNACL: %s\n", name);
+			}
 			ao2_ref(nacl, -1);
 			ao2_unlock(nacl);
 			return RESULT_SUCCESS;

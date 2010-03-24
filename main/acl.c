@@ -265,7 +265,7 @@ static struct ast_ha *ast_duplicate_ha(struct ast_ha *original)
 {
 	struct ast_ha *new_ha;
 
-	if ((new_ha = ast_malloc(sizeof(*new_ha)))) {
+	if ((new_ha = ast_calloc(sizeof(*new_ha)))) {
 		/* Copy from original to new object */
 		ast_copy_ha(original, new_ha);
 	}
@@ -295,7 +295,7 @@ struct ast_ha *ast_duplicate_ha_list(struct ast_ha *original)
 	return ret;    			/* Return start of list */
 }
 
-struct ast_ha *ast_append_ha(char *sense, const char *stuff, struct ast_ha *path)
+struct ast_ha *ast_append_ha(const char *sense, const char *stuff, struct ast_ha *path)
 {
 	struct ast_ha *ha;
 	char *nm = "255.255.255.255";
@@ -310,7 +310,7 @@ struct ast_ha *ast_append_ha(char *sense, const char *stuff, struct ast_ha *path
 		prev = path;
 		path = path->next;
 	}
-	if ((ha = ast_malloc(sizeof(*ha)))) {
+	if ((ha = ast_calloc(sizeof(*ha)))) {
 		ast_copy_string(tmp, stuff, sizeof(tmp));
 		nm = strchr(tmp, '/');
 		if (!nm) {
