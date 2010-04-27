@@ -715,6 +715,7 @@ struct ast_channel *ast_channel_alloc(int needqueue, int state, const char *cid_
 	int flags;
 	struct varshead *headp;
 	va_list ap1, ap2;
+	char *tech = "";
 
 	/* If shutting down, don't allocate any new channels */
 	if (shutting_down) {
@@ -815,6 +816,7 @@ alertpipe_failed:
 	tmp->cid.cid_num = ast_strdup(cid_num);
 	
 	if (!ast_strlen_zero(name_fmt)) {
+		char *slash;
 		/* Almost every channel is calling this function, and setting the name via the ast_string_field_build() call.
 		 * And they all use slightly different formats for their name string.
 		 * This means, to set the name here, we have to accept variable args, and call the string_field_build from here.
@@ -827,31 +829,10 @@ alertpipe_failed:
 		ast_string_field_build_va(tmp, name, name_fmt, ap1, ap2);
 		va_end(ap1);
 		va_end(ap2);
-
-		/* and now, since the channel structure is built, and has its name, let's call the
-		 * manager event generator with this Newchannel event. This is the proper and correct
-		 * place to make this call, but you sure do have to pass a lot of data into this func
-		 * to do it here!
-		 */
-		manager_event(EVENT_FLAG_CALL, "Newchannel",
-			      "Channel: %s\r\n"
-			      "ChannelState: %d\r\n"
-			      "ChannelStateDesc: %s\r\n"
-			      "CallerIDNum: %s\r\n"
-			      "CallerIDName: %s\r\n"
-			      "Context: %s\r\n"
-			      "Exten: %s\r\n"
-			      "AccountCode: %s\r\n"
-			      "Uniqueid: %s\r\n",
-			      tmp->name, 
-				state, 
-			      ast_state2str(state),
-			      S_OR(cid_num, ""),
-			      S_OR(cid_name, ""),
-			      S_OR(context, ""),
-			      S_OR(exten, ""),
-			      tmp->accountcode,
-			      tmp->uniqueid);
+		tech = ast_strdupa(tmp->name);
+		if ((slash = strchr(tech, '/'))) {
+			*slash = '\0';
+		}
 	}
 
 	/* Reminder for the future: under what conditions do we NOT want to track cdrs on channels? */
@@ -906,17 +887,26 @@ alertpipe_failed:
 	 * proper and correct place to make this call, but you sure do have to pass
 	 * a lot of data into this func to do it here!
 	 */
-	if (!ast_strlen_zero(name_fmt)) {
+	if (ast_get_channel_tech(tech)) {
 		manager_event(EVENT_FLAG_CALL, "Newchannel",
-		      "Channel: %s\r\n"
-		      "State: %s\r\n"
-		      "CallerIDNum: %s\r\n"
-		      "CallerIDName: %s\r\n"
-		      "Uniqueid: %s\r\n",
-		      tmp->name, ast_state2str(state),
-		      S_OR(cid_num, "<unknown>"),
-		      S_OR(cid_name, "<unknown>"),
-		      tmp->uniqueid);
+			      "Channel: %s\r\n"
+			      "ChannelState: %d\r\n"
+			      "ChannelStateDesc: %s\r\n"
+			      "CallerIDNum: %s\r\n"
+			      "CallerIDName: %s\r\n"
+			      "Context: %s\r\n"
+			      "Exten: %s\r\n"
+			      "AccountCode: %s\r\n"
+			      "Uniqueid: %s\r\n",
+			      tmp->name, 
+				state, 
+			      ast_state2str(state),
+			      S_OR(cid_num, ""),
+			      S_OR(cid_name, ""),
+			      S_OR(context, ""),
+			      S_OR(exten, ""),
+			      tmp->accountcode,
+			      tmp->uniqueid);
 	}
 
 	return tmp;

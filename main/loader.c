@@ -1045,8 +1045,6 @@ int load_modules(unsigned int preload_only)
 	}
 	AST_LIST_TRAVERSE_SAFE_END;
 
-=======
->>>>>>> .merge-right.r233782
 done:
 	while ((order = AST_LIST_REMOVE_HEAD(&load_order, entry))) {
 		free(order->resource);
