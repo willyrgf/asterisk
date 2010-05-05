@@ -13737,6 +13737,7 @@ static int get_refer_info(struct sip_pvt *transferer, struct sip_request *outgoi
 		/* This is an attended transfer */
 		referdata->attendedtransfer = 1;
 		ast_copy_string(referdata->replaces_callid, ptr+9, sizeof(referdata->replaces_callid));
+		ast_uri_decode(referdata->replaces_callid);
 		if ((ptr = strchr(referdata->replaces_callid, ';'))) 	/* Find options */ {
 			*ptr++ = '\0';
 		}
@@ -13754,7 +13755,6 @@ static int get_refer_info(struct sip_pvt *transferer, struct sip_request *outgoi
 				*to = '\0';
 			if ((to = strchr(ptr, ';')))
 				*to = '\0';
-			ast_uri_decode(ptr);
 			ast_copy_string(referdata->replaces_callid_totag, ptr, sizeof(referdata->replaces_callid_totag));
 		}
 		
@@ -13764,7 +13764,6 @@ static int get_refer_info(struct sip_pvt *transferer, struct sip_request *outgoi
 				*to = '\0';
 			if ((to = strchr(ptr, ';')))
 				*to = '\0';
-			ast_uri_decode(ptr);
 			ast_copy_string(referdata->replaces_callid_fromtag, ptr, sizeof(referdata->replaces_callid_fromtag));
 		}
 		
@@ -24997,19 +24996,23 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 					}
 				}
 			} else if (!strcasecmp(v->name, "defaultip")) {
-				if (ast_get_ip(&peer->defaddr, v->value)) {
+				if (!ast_strlen_zero(v->value) && ast_get_ip(&peer->defaddr, v->value)) {
 					unref_peer(peer, "unref_peer: from build_peer defaultip");
 					return NULL;
 				}
 			} else if (!strcasecmp(v->name, "permit") || !strcasecmp(v->name, "deny")) {
 				int ha_error = 0;
-				peer->ha = ast_append_ha(v->name, v->value, peer->ha, &ha_error);
+				if (!ast_strlen_zero(v->value)) {
+					peer->ha = ast_append_ha(v->name, v->value, peer->ha, &ha_error);
+				}
 				if (ha_error) {
 					ast_log(LOG_ERROR, "Bad ACL entry in configuration line %d : %s\n", v->lineno, v->value);
 				}
 			} else if (!strcasecmp(v->name, "contactpermit") || !strcasecmp(v->name, "contactdeny")) {
 				int ha_error = 0;
-				peer->contactha = ast_append_ha(v->name + 7, v->value, peer->contactha, &ha_error);
+				if (!ast_strlen_zero(v->value)) {
+					peer->contactha = ast_append_ha(v->name + 7, v->value, peer->contactha, &ha_error);
+				}
 				if (ha_error) {
 					ast_log(LOG_ERROR, "Bad ACL entry in configuration line %d : %s\n", v->lineno, v->value);
 				}
