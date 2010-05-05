@@ -772,6 +772,7 @@ __ast_channel_alloc_ap(int needqueue, int state, const char *cid_num, const char
 	int x;
 	int flags;
 	struct varshead *headp;
+	char *tech = "";
 
 	/* If shutting down, don't allocate any new channels */
 	if (shutting_down) {
@@ -882,6 +883,7 @@ alertpipe_failed:
 	tmp->cid.cid_num = ast_strdup(cid_num);
 	
 	if (!ast_strlen_zero(name_fmt)) {
+		char *slash;
 		/* Almost every channel is calling this function, and setting the name via the ast_string_field_build() call.
 		 * And they all use slightly different formats for their name string.
 		 * This means, to set the name here, we have to accept variable args, and call the string_field_build from here.
@@ -890,6 +892,10 @@ alertpipe_failed:
 		 * This new function was written so this can be accomplished.
 		 */
 		ast_string_field_build_va(tmp, name, name_fmt, ap1, ap2);
+		tech = ast_strdupa(tmp->name);
+		if ((slash = strchr(tech, '/'))) {
+			*slash = '\0';
+		}
 	}
 
 	/* Reminder for the future: under what conditions do we NOT want to track cdrs on channels? */
@@ -944,7 +950,7 @@ alertpipe_failed:
 	 * proper and correct place to make this call, but you sure do have to pass
 	 * a lot of data into this func to do it here!
 	 */
-	if (!ast_strlen_zero(name_fmt)) {
+	if (ast_get_channel_tech(tech)) {
 		manager_event(EVENT_FLAG_CALL, "Newchannel",
 			"Channel: %s\r\n"
 			"ChannelState: %d\r\n"
@@ -1986,24 +1992,21 @@ int ast_activate_generator(struct ast_channel *chan, struct ast_generator *gen, 
 	int res = 0;
 
 	ast_channel_lock(chan);
-
 	if (chan->generatordata) {
 		if (chan->generator && chan->generator->release)
 			chan->generator->release(chan, chan->generatordata);
 		chan->generatordata = NULL;
 	}
-
-	ast_prod(chan);
 	if (gen->alloc && !(chan->generatordata = gen->alloc(chan, params))) {
 		res = -1;
 	}
-	
 	if (!res) {
 		ast_settimeout(chan, 160, generator_force, chan);
 		chan->generator = gen;
 	}
-
 	ast_channel_unlock(chan);
+
+	ast_prod(chan);
 
 	return res;
 }
@@ -2075,10 +2078,15 @@ struct ast_channel *ast_waitfor_nandfds(struct ast_channel **c, int n, int *fds,
 	}
 	/* Wait full interval */
 	rms = *ms;
-	if (whentohangup) {
+	/* INT_MAX, not LONG_MAX, because it matters on 64-bit */
+	if (whentohangup && whentohangup < INT_MAX / 1000) {
 		rms = whentohangup * 1000;              /* timeout in milliseconds */
-		if (*ms >= 0 && *ms < rms)		/* original *ms still smaller */
+		if (*ms >= 0 && *ms < rms) {            /* original *ms still smaller */
 			rms =  *ms;
+		}
+	} else if (whentohangup && rms < 0) {
+		/* Tiny corner case... call would need to last >24 days */
+		rms = INT_MAX;
 	}
 	/*
 	 * Build the pollfd array, putting the channels' fds first,
@@ -3073,9 +3081,7 @@ done:
 
 int ast_internal_timing_enabled(struct ast_channel *chan)
 {
-	int ret = ast_opt_internal_timing && chan->timingfd > -1;
-	ast_debug(5, "Internal timing is %s (option_internal_timing=%d chan->timingfd=%d)\n", ret? "enabled": "disabled", ast_opt_internal_timing, chan->timingfd);
-	return ret;
+	return (ast_opt_internal_timing && chan->timingfd > -1);
 }
 
 struct ast_frame *ast_read(struct ast_channel *chan)
@@ -3903,8 +3909,19 @@ struct ast_channel *__ast_request_and_dial(const char *type, int format, void *d
 					break;
 
 				case AST_CONTROL_BUSY:
+					ast_cdr_busy(chan->cdr);
+					*outstate = f->subclass;
+					timeout = 0;
+					break;
+
 				case AST_CONTROL_CONGESTION:
+					ast_cdr_failed(chan->cdr);
+					*outstate = f->subclass;
+					timeout = 0;
+					break;
+
 				case AST_CONTROL_ANSWER:
+					ast_cdr_answer(chan->cdr);
 					*outstate = f->subclass;
 					timeout = 0;		/* trick to force exit from the while() */
 					break;
@@ -4035,7 +4052,6 @@ int ast_call(struct ast_channel *chan, char *addr, int timeout)
 	if (!ast_test_flag(chan, AST_FLAG_ZOMBIE) && !ast_check_hangup(chan)) {
 		if (chan->cdr) {
 			ast_set_flag(chan->cdr, AST_CDR_FLAG_DIALED);
-			ast_set_flag(chan->cdr, AST_CDR_FLAG_ORIGINATED);
 		}
 		if (chan->tech->call)
 			res = chan->tech->call(chan, addr, timeout);
@@ -5160,14 +5176,17 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 		update_bridge_vars(c0, c1);
 
 		if (c0->tech->bridge &&
+			/* if < 1 ms remains use generic bridging for accurate timing */
+			(!config->timelimit || to > 1000 || to == 0) &&
 		    (c0->tech->bridge == c1->tech->bridge) &&
 		    !nativefailed && !c0->monitor && !c1->monitor &&
-		    !c0->audiohooks && !c1->audiohooks && 
+		    !c0->audiohooks && !c1->audiohooks &&
 		    !c0->masq && !c0->masqr && !c1->masq && !c1->masqr) {
+			int timeoutms = to - 1000 > 0 ? to - 1000 : to;
 			/* Looks like they share a bridge method and nothing else is in the way */
 			ast_set_flag(c0, AST_FLAG_NBRIDGE);
 			ast_set_flag(c1, AST_FLAG_NBRIDGE);
-			if ((res = c0->tech->bridge(c0, c1, config->flags, fo, rc, to)) == AST_BRIDGE_COMPLETE) {
+			if ((res = c0->tech->bridge(c0, c1, config->flags, fo, rc, timeoutms)) == AST_BRIDGE_COMPLETE) {
 				/* \todo  XXX here should check that cid_num is not NULL */
 				manager_event(EVENT_FLAG_CALL, "Unlink",
 					      "Channel1: %s\r\n"

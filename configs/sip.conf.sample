@@ -88,7 +88,8 @@ context=default                 ; Default context for incoming calls
                                 ; instead of the From: field.
 allowoverlap=no                 ; Disable overlap dialing support. (Default is yes)
 ;allowtransfer=no               ; Disable all transfers (unless enabled in peers or users)
-                                ; Default is enabled
+                                ; Default is enabled. The Dial() options 't' and 'T' are not
+                                ; related as to whether SIP transfers are allowed or not.
 ;realm=mydomain.tld             ; Realm for digest authentication
                                 ; defaults to "asterisk". If you set a system name in
                                 ; asterisk.conf, it defaults to that system name
@@ -115,6 +116,8 @@ tcpbindaddr=0.0.0.0             ; IP address for TCP server to bind to (0.0.0.0 
                                 ; Optionally add a port number, 192.168.1.1:5063 (default is port 5061)
                                 ; Remember that the IP address must match the common name (hostname) in the
                                 ; certificate, so you don't want to bind a TLS socket to multiple IP addresses.
+                                ; For details how to construct a certificate for SIP see 
+                                ; http://tools.ietf.org/html/draft-ietf-sip-domain-certs
 
 ;tlscertfile=asterisk.pem       ; Certificate file (*.pem only) to use for TLS connections 
                                 ; default is to look for "asterisk.pem" in current directory

@@ -17,6 +17,8 @@ AC_CANONICAL_HOST
 # check existence of the package
 AC_CONFIG_SRCDIR([main/asterisk.c])
 
+AC_CONFIG_AUX_DIR(`pwd`)
+
 AC_COPYRIGHT("Asterisk")
 AC_REVISION($Revision$)
 
@@ -162,8 +164,8 @@ AC_PROG_LN_S
 AC_PROG_RANLIB
 AST_CHECK_GNU_MAKE
 
-AC_PATH_TOOL([STRIP], [strip], :)
-AC_PATH_TOOL([AR], [ar], :)
+AC_CHECK_TOOLS([STRIP], [strip gstrip], :)
+AC_CHECK_TOOLS([AR], [ar gar], :)
 
 GNU_LD=0
 if test "x$with_gnu_ld" = "xyes" ; then
@@ -177,7 +179,6 @@ AC_PATH_PROG([GREP], [grep], :)
 AC_PATH_PROG([FIND], [find], :)
 AC_PATH_PROG([COMPRESS], [compress], :)
 AC_PATH_PROG([BASENAME], [basename], :)
-AC_PATH_PROG([ID], [id], :)
 AC_PATH_PROG([DIRNAME], [dirname], :)
 AC_PATH_PROG([SHELL], [sh], :)
 AC_PATH_PROG([LN], [ln], :)
@@ -543,6 +544,20 @@ if test "${ac_cv_pthread_once_needsbraces}" = "yes"; then
 fi
 
 AST_C_DEFINE_CHECK([PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP], [PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP], [pthread.h])
+
+# Can we compare a mutex to its initial value?
+# Generally yes on OpenBSD/FreeBSD and no on Mac OS X.
+AC_MSG_CHECKING(whether we can compare a mutex to its initial value)
+AC_LINK_IFELSE(
+	AC_LANG_PROGRAM([#include <pthread.h>], [pthread_mutex_t lock;
+	if ((lock) != ((pthread_mutex_t) PTHREAD_MUTEX_INITIALIZER)) {
+		return 0;
+	}
+	return 0]),
+	AC_MSG_RESULT(yes)
+	AC_DEFINE([CAN_COMPARE_MUTEX_TO_INIT_VALUE], 1, [Define to 1 if your system's implementation of mutexes supports comparison of a mutex to its initializer.]),
+	AC_MSG_RESULT(no)
+)
 
 #if test "${cross_compiling}" = "no";
 #then

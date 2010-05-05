@@ -4146,7 +4146,6 @@ static enum ast_bridge_result dahdi_bridge(struct ast_channel *c0, struct ast_ch
 
 #ifdef PRI_2BCT
 	int triedtopribridge = 0;
-	q931_call *q931c0 = NULL, *q931c1 = NULL;
 #endif
 
 	/* For now, don't attempt to native bridge if either channel needs DTMF detection.
@@ -4367,13 +4366,15 @@ static enum ast_bridge_result dahdi_bridge(struct ast_channel *c0, struct ast_ch
 		}
 
 #ifdef PRI_2BCT
-		q931c0 = p0->call;
-		q931c1 = p1->call;
-		if (p0->transfer && p1->transfer 
-		    && q931c0 && q931c1 
-		    && !triedtopribridge) {
-			pri_channel_bridge(q931c0, q931c1);
+		if (!triedtopribridge) {
 			triedtopribridge = 1;
+			if (p0->pri && p0->pri == p1->pri && p0->transfer && p1->transfer) {
+				ast_mutex_lock(&p0->pri->lock);
+				if (p0->call && p1->call) {
+					pri_channel_bridge(p0->call, p1->call);
+				}
+				ast_mutex_unlock(&p0->pri->lock);
+			}
 		}
 #endif
 
@@ -5020,6 +5021,7 @@ static struct ast_frame *dahdi_handle_event(struct ast_channel *ast)
 					p->subs[index].f.frametype = AST_FRAME_CONTROL;
 					p->subs[index].f.subclass = AST_CONTROL_ANSWER;
 					/* Make sure it stops ringing */
+					p->subs[SUB_REAL].needringing = 0;
 					dahdi_set_hook(p->subs[index].dfd, DAHDI_OFFHOOK);
 					ast_debug(1, "channel %d answered\n", p->channel);
 					if (p->cidspill) {
@@ -7238,14 +7240,25 @@ static void *ss_thread(void *data)
 			if (p->cid_signalling == CID_SIG_DTMF) {
 				int i = 0;
 				cs = NULL;
-				ast_debug(1, "Receiving DTMF cid on "
-					"channel %s\n", chan->name);
+				ast_debug(1, "Receiving DTMF cid on channel %s\n", chan->name);
 				dahdi_setlinear(p->subs[index].dfd, 0);
-				res = 2000;
+				/*
+				 * We are the only party interested in the Rx stream since
+				 * we have not answered yet.  We don't need or even want DTMF
+				 * emulation.  The DTMF digits can come so fast that emulation
+				 * can drop some of them.
+				 */
+				ast_set_flag(chan, AST_FLAG_END_DTMF_ONLY);
+				res = 4000;/* This is a typical OFF time between rings. */
 				for (;;) {
 					struct ast_frame *f;
 					res = ast_waitfor(chan, res);
 					if (res <= 0) {
+						/*
+						 * We do not need to restore the dahdi_setlinear()
+						 * or AST_FLAG_END_DTMF_ONLY flag settings since we
+						 * are hanging up the channel.
+						 */
 						ast_log(LOG_WARNING, "DTMFCID timed out waiting for ring. "
 							"Exiting simple switch\n");
 						ast_hangup(chan);
@@ -7255,22 +7268,24 @@ static void *ss_thread(void *data)
 					if (!f)
 						break;
 					if (f->frametype == AST_FRAME_DTMF) {
-						dtmfbuf[i++] = f->subclass;
+						if (i < ARRAY_LEN(dtmfbuf) - 1) {
+							dtmfbuf[i++] = f->subclass;
+						}
 						ast_debug(1, "CID got digit '%c'\n", f->subclass);
-						res = 2000;
+						res = 4000;/* This is a typical OFF time between rings. */
 					}
 					ast_frfree(f);
 					if (chan->_state == AST_STATE_RING ||
 					    chan->_state == AST_STATE_RINGING) 
 						break; /* Got ring */
 				}
+				ast_clear_flag(chan, AST_FLAG_END_DTMF_ONLY);
 				dtmfbuf[i] = '\0';
 				dahdi_setlinear(p->subs[index].dfd, p->subs[index].linear);
 				/* Got cid and ring. */
 				ast_debug(1, "CID got string '%s'\n", dtmfbuf);
 				callerid_get_dtmf(dtmfbuf, dtmfcid, &flags);
-				ast_debug(1, "CID is '%s', flags %d\n", 
-					dtmfcid, flags);
+				ast_debug(1, "CID is '%s', flags %d\n", dtmfcid, flags);
 				/* If first byte is NULL, we have no cid */
 				if (!ast_strlen_zero(dtmfcid)) 
 					number = dtmfcid;
@@ -7330,9 +7345,14 @@ static void *ss_thread(void *data)
 							} else {
 								res = callerid_feed(cs, buf, res, AST_LAW(p));
 							}
-
 							if (res < 0) {
-								ast_log(LOG_WARNING, "CallerID feed failed on channel '%s'\n", chan->name);
+								/*
+								 * The previous diagnostic message output likely
+								 * explains why it failed.
+								 */
+								ast_log(LOG_WARNING,
+									"Failed to decode CallerID on channel '%s'\n",
+									chan->name);
 								break;
 							} else if (res)
 								break;
@@ -7348,13 +7368,10 @@ static void *ss_thread(void *data)
 					if (p->cid_signalling == CID_SIG_V23_JP) {
 						res = dahdi_set_hook(p->subs[SUB_REAL].dfd, DAHDI_ONHOOK);
 						usleep(1);
-						res = 4000;
-					} else {
-
-						/* Finished with Caller*ID, now wait for a ring to make sure there really is a call coming */ 
-						res = 2000;
 					}
 
+					/* Finished with Caller*ID, now wait for a ring to make sure there really is a call coming */
+					res = 4000;/* This is a typical OFF time between rings. */
 					for (;;) {
 						struct ast_frame *f;
 						res = ast_waitfor(chan, res);
@@ -7599,7 +7616,13 @@ static void *ss_thread(void *data)
 						samples += res;
 						res = callerid_feed(cs, buf, res, AST_LAW(p));
 						if (res < 0) {
-							ast_log(LOG_WARNING, "CallerID feed failed: %s\n", strerror(errno));
+							/*
+							 * The previous diagnostic message output likely
+							 * explains why it failed.
+							 */
+							ast_log(LOG_WARNING,
+								"Failed to decode CallerID on channel '%s'\n",
+								chan->name);
 							break;
 						} else if (res)
 							break;
@@ -7859,7 +7882,11 @@ static void *mwi_thread(void *data)
 			samples += res;
 			if (!spill_done) {
 				if ((spill_result = callerid_feed(cs, mtd->buf, res, AST_LAW(mtd->pvt))) < 0) {
-					ast_log(LOG_WARNING, "CallerID feed failed: %s\n", strerror(errno));
+					/*
+					 * The previous diagnostic message output likely
+					 * explains why it failed.
+					 */
+					ast_log(LOG_WARNING, "Failed to decode CallerID\n");
 					break;
 				} else if (spill_result) {
 					spill_done = 1;
@@ -8939,6 +8966,7 @@ static struct dahdi_pvt *mkintf(int channel, const struct dahdi_chan_conf *conf,
 		tmp->adsi = conf->chan.adsi;
 		tmp->use_smdi = conf->chan.use_smdi;
 		tmp->permhidecallerid = conf->chan.hidecallerid;
+		tmp->hidecalleridname = conf->chan.hidecalleridname;
 		tmp->callreturn = conf->chan.callreturn;
 		tmp->echocancel = conf->chan.echocancel;
 		tmp->echotraining = conf->chan.echotraining;
@@ -9003,12 +9031,18 @@ static struct dahdi_pvt *mkintf(int channel, const struct dahdi_chan_conf *conf,
 		ast_copy_string(tmp->mohsuggest, conf->chan.mohsuggest, sizeof(tmp->mohsuggest));
 		ast_copy_string(tmp->context, conf->chan.context, sizeof(tmp->context));
 		tmp->cid_ton = 0;
-		if ((tmp->sig != SIG_PRI) || (tmp->sig != SIG_SS7) || (tmp->sig != SIG_BRI) || (tmp->sig != SIG_BRI_PTMP)) {
-			ast_copy_string(tmp->cid_num, conf->chan.cid_num, sizeof(tmp->cid_num));
-			ast_copy_string(tmp->cid_name, conf->chan.cid_name, sizeof(tmp->cid_name));
-		} else {
+		switch (tmp->sig) {
+		case SIG_PRI:
+		case SIG_BRI:
+		case SIG_BRI_PTMP:
+		case SIG_SS7:
 			tmp->cid_num[0] = '\0';
 			tmp->cid_name[0] = '\0';
+			break;
+		default:
+			ast_copy_string(tmp->cid_num, conf->chan.cid_num, sizeof(tmp->cid_num));
+			ast_copy_string(tmp->cid_name, conf->chan.cid_name, sizeof(tmp->cid_name));
+			break;
 		}
 		ast_copy_string(tmp->mailbox, conf->chan.mailbox, sizeof(tmp->mailbox));
 		if (channel != CHAN_PSEUDO && !ast_strlen_zero(tmp->mailbox)) {

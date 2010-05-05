@@ -981,6 +981,7 @@ struct sip_auth {
 /* realtime flags */
 #define SIP_PAGE2_RTCACHEFRIENDS	(1 << 0)	/*!< GP: Should we keep RT objects in memory for extended time? */
 #define SIP_PAGE2_RTAUTOCLEAR		(1 << 2)	/*!< GP: Should we clean memory from peers after expiry? */
+#define SIP_PAGE2_HAVEPEERCONTEXT	(1 << 3)	/*< Are we associated with a configured peer context? */
 /* Space for addition of other realtime flags in the future */
 #define SIP_PAGE2_STATECHANGEQUEUE	(1 << 9)	/*!< D: Unsent state pending change exists */
 
@@ -1013,7 +1014,7 @@ struct sip_auth {
 	(SIP_PAGE2_ALLOWSUBSCRIBE | SIP_PAGE2_ALLOWOVERLAP | SIP_PAGE2_IGNORESDPVERSION | \
 	SIP_PAGE2_VIDEOSUPPORT | SIP_PAGE2_T38SUPPORT | SIP_PAGE2_RFC2833_COMPENSATE | \
 	 SIP_PAGE2_BUGGY_MWI | SIP_PAGE2_TEXTSUPPORT | SIP_PAGE2_UDPTL_DESTINATION | \
-	 SIP_PAGE2_FAX_DETECT)
+	 SIP_PAGE2_FAX_DETECT | SIP_PAGE2_HAVEPEERCONTEXT)
 
 /*@}*/ 
 
@@ -5220,7 +5221,7 @@ static int sip_hangup(struct ast_channel *ast)
 				}
 			} else {	/* Incoming call, not up */
 				const char *res;
-				AST_SCHED_DEL(sched, p->provisional_keepalive_sched_id);
+				AST_SCHED_DEL_UNREF(sched, p->provisional_keepalive_sched_id, dialog_unref(p));
 				if (p->hangupcause && (res = hangup_cause2sip(p->hangupcause)))
 					transmit_response_reliable(p, res, &p->initreq);
 				else 
@@ -11624,6 +11625,21 @@ static enum check_auth_result register_verify(struct sip_pvt *p, struct sockaddr
 
 	ast_string_field_set(p, exten, name);
 	build_contact(p);
+	if (req->ignore) {
+		/* Expires is a special case, where we only want to load the peer if this isn't a deregistration attempt */
+		const char *expires = get_header(req, "Expires");
+		int expire = atoi(expires);
+
+		if (ast_strlen_zero(expires)) { /* No expires header; look in Contact */
+			if ((expires = strcasestr(get_header(req, "Contact"), ";expires="))) {
+				expire = atoi(expires + 9);
+			}
+		}
+		if (!ast_strlen_zero(expires) && expire == 0) {
+			transmit_response_with_date(p, "200 OK", req);
+			return 0;
+		}
+	}
 	peer = find_peer(name, NULL, 1, 0, 0);
 	if (!(peer && ast_apply_ha(peer->ha, sin))) {
 		/* Peer fails ACL check */
@@ -11958,8 +11974,9 @@ static int get_destination(struct sip_pvt *p, struct sip_request *oreq)
 				return -2;
 			}
 		}
-		/* If we have a context defined, overwrite the original context */
-		if (!ast_strlen_zero(domain_context))
+		/* If we don't have a peer (i.e. we're a guest call),
+		 * overwrite the original context */
+		if (!ast_test_flag(&p->flags[1], SIP_PAGE2_HAVEPEERCONTEXT) && !ast_strlen_zero(domain_context))
 			ast_string_field_set(p, context, domain_context);
 	}
 
@@ -19064,17 +19081,24 @@ static int acf_channel_read(struct ast_channel *chan, const char *funcname, char
 
 	if (!strcasecmp(args.param, "rtpdest")) {
 		struct sockaddr_in sin;
+		struct ast_rtp *stream = NULL;
 
 		if (ast_strlen_zero(args.type))
 			args.type = "audio";
 
-		if (!strcasecmp(args.type, "audio"))
-			ast_rtp_get_peer(p->rtp, &sin);
-		else if (!strcasecmp(args.type, "video"))
-			ast_rtp_get_peer(p->vrtp, &sin);
-		else if (!strcasecmp(args.type, "text"))
-			ast_rtp_get_peer(p->trtp, &sin);
+		if (!strcasecmp(args.type, "audio")) {
+			stream = p->rtp;
+		} else if (!strcasecmp(args.type, "video")) {
+			stream = p->vrtp;
+		} else if (!strcasecmp(args.type, "text")) {
+			stream = p->trtp;
+		}
 
+		if (!stream) {
+			return -1;
+		}
+
+		ast_rtp_get_peer(stream, &sin);
 		snprintf(buf, buflen, "%s:%d", ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port));
 	} else if (!strcasecmp(args.param, "rtpqos")) {
 		struct ast_rtp_quality qos;
@@ -21908,6 +21932,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 				ast_copy_string(peer->cid_num, v->value, sizeof(peer->cid_num));
 			} else if (!strcasecmp(v->name, "context")) {
 				ast_copy_string(peer->context, v->value, sizeof(peer->context));
+				ast_set_flag(&peer->flags[1], SIP_PAGE2_HAVEPEERCONTEXT);
 			} else if (!strcasecmp(v->name, "subscribecontext")) {
 				ast_copy_string(peer->subscribecontext, v->value, sizeof(peer->subscribecontext));
 			} else if (!strcasecmp(v->name, "fromdomain")) {
