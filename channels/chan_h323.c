@@ -922,6 +922,10 @@ static int oh323_indicate(struct ast_channel *c, int condition, const void *data
 		ast_rtp_new_source(pvt->rtp);
 		res = 0;
 		break;
+	case AST_CONTROL_SRCCHANGE:
+		ast_rtp_change_source(pvt->rtp);
+		res = 0;
+		break;
 	case AST_CONTROL_PROCEEDING:
 	case -1:
 		break;

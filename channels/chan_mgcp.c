@@ -1479,6 +1479,9 @@ static int mgcp_indicate(struct ast_channel *ast, int ind, const void *data, siz
 	case AST_CONTROL_SRCUPDATE:
 		ast_rtp_new_source(sub->rtp);
 		break;
+	case AST_CONTROL_SRCCHANGE:
+		ast_rtp_change_source(sub->rtp);
+		break;
 	case -1:
 		transmit_notify_request(sub, "");
 		break;

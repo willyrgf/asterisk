@@ -30,6 +30,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/_private.h"
 
 #include <pthread.h>
+#include <signal.h>
 #include <sys/time.h>
 #include <sys/signal.h>
 #include <netinet/in.h>
@@ -3751,7 +3752,7 @@ static char *handle_parkedcalls(struct ast_cli_entry *e, int cmd, struct ast_cli
 	AST_LIST_TRAVERSE(&parkinglot, cur, list) {
 		ast_cli(a->fd, "%-10.10s %25s (%-15s %-12s %-4d) %6lds\n"
 			,cur->parkingexten, cur->chan->name, cur->context, cur->exten
-			,cur->priority, cur->start.tv_sec + (cur->parkingtime/1000) - time(NULL));
+			,cur->priority, (long) cur->start.tv_sec + (cur->parkingtime/1000) - time(NULL));
 
 		numparked++;
 	}
