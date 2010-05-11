@@ -53,6 +53,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/options.h"
 #include "asterisk/channel.h"
 #include "asterisk/cdr.h"
+#include "asterisk/cli.h"
 #include "asterisk/module.h"
 #include "asterisk/logger.h"
 #include "asterisk.h"
@@ -63,10 +64,61 @@ static char *name = "pgsql";
 static char *config = "cdr_pgsql.conf";
 static char *pghostname = NULL, *pgdbname = NULL, *pgdbuser = NULL, *pgpassword = NULL, *pgdbport = NULL, *table = NULL;
 static int connected = 0;
+static time_t connect_time = 0;
+static int totalrecords = 0;
+static int records = 0;
+
+static char cdr_pgsql_status_help[] =
+"Usage: cdr pgsql status\n"
+"       Shows current connection status for cdr_pgsql\n";
 
 AST_MUTEX_DEFINE_STATIC(pgsql_lock);
 
 static PGconn	*conn = NULL;
+
+static int handle_cdr_pgsql_status(int fd, int argc, char *argv[])
+{
+	if (connected) {
+		char status[256], status2[100] = "";
+		int ctime = time(NULL) - connect_time;
+
+		if (pgdbport)
+			snprintf(status, 255, "Connected to %s@%s, port %s", pgdbname, pghostname, pgdbport);
+		//else if (dbsock)
+			//snprintf(status, 255, "Connected to %s on socket file %s", dbname, dbsock);
+		else
+			snprintf(status, 255, "Connected to %s@%s", pgdbname, pghostname);
+
+		if (pgdbuser && *pgdbuser)
+			snprintf(status2, 99, " with username %s", pgdbuser);
+		if (table && *table)
+			snprintf(status2, 99, " using table %s", table);
+		if (ctime > 31536000) {
+			ast_cli(fd, "%s%s for %d years, %d days, %d hours, %d minutes, %d seconds.\n", status, status2, ctime / 31536000, (ctime % 31536000) / 86400, (ctime % 86400) / 3600, (ctime % 3600) / 60, ctime % 60);
+		} else if (ctime > 86400) {
+			ast_cli(fd, "%s%s for %d days, %d hours, %d minutes, %d seconds.\n", status, status2, ctime / 86400, (ctime % 86400) / 3600, (ctime % 3600) / 60, ctime % 60);
+		} else if (ctime > 3600) {
+			ast_cli(fd, "%s%s for %d hours, %d minutes, %d seconds.\n", status, status2, ctime / 3600, (ctime % 3600) / 60, ctime % 60);
+		} else if (ctime > 60) {
+			ast_cli(fd, "%s%s for %d minutes, %d seconds.\n", status, status2, ctime / 60, ctime % 60);
+		} else {
+			ast_cli(fd, "%s%s for %d seconds.\n", status, status2, ctime);
+		}
+		if (records == totalrecords)
+			ast_cli(fd, "  Wrote %d records since last restart.\n", totalrecords);
+		else
+			ast_cli(fd, "  Wrote %d records since last restart and %d records since last reconnect.\n", totalrecords, records);
+		return RESULT_SUCCESS;
+	} else {
+		ast_cli(fd, "Not currently connected to a PgSQL server.\n");
+		return RESULT_FAILURE;
+	}
+}
+
+static struct ast_cli_entry cdr_pgsql_status_cli =
+	{ { "cdr", "pgsql", "status", NULL },
+	handle_cdr_pgsql_status, "Show connection status of the PostgreSQL CDR driver (cdr_pgsql)",
+	cdr_pgsql_status_help, NULL };
 
 static int pgsql_log(struct ast_cdr *cdr)
 {
@@ -85,6 +137,8 @@ static int pgsql_log(struct ast_cdr *cdr)
 		conn = PQsetdbLogin(pghostname, pgdbport, NULL, NULL, pgdbname, pgdbuser, pgpassword);
 		if (PQstatus(conn) != CONNECTION_BAD) {
 			connected = 1;
+			connect_time = time(NULL);
+                        records = 0;
 		} else {
 			pgerror = PQerrorMessage(conn);
 			ast_log(LOG_ERROR, "cdr_pgsql: Unable to connect to database server %s.  Calls will not be logged!\n", pghostname);
@@ -151,6 +205,8 @@ static int pgsql_log(struct ast_cdr *cdr)
 			if (PQstatus(conn) == CONNECTION_OK) {
 				ast_log(LOG_ERROR, "cdr_pgsql: Connection reestablished.\n");
 				connected = 1;
+				connect_time = time(NULL);
+                        	records = 0;
 			} else {
 				pgerror = PQerrorMessage(conn);
 				ast_log(LOG_ERROR, "cdr_pgsql: Unable to reconnect to database server %s. Calls will not be logged!\n", pghostname);
@@ -165,8 +221,7 @@ static int pgsql_log(struct ast_cdr *cdr)
 		result = PQexec(conn, sqlcmd);
 		if (PQresultStatus(result) != PGRES_COMMAND_OK) {
 			pgerror = PQresultErrorMessage(result);
-			ast_log(LOG_ERROR,"cdr_pgsql: Failed to insert call detail record into database!\n");
-			ast_log(LOG_ERROR,"cdr_pgsql: Reason: %s\n", pgerror);
+			ast_log(LOG_ERROR,"Failed to insert call detail record into database! Reason: %s\n", pgerror);
 			ast_log(LOG_ERROR,"cdr_pgsql: Connection may have been lost... attempting to reconnect.\n");
 			PQreset(conn);
 			if (PQstatus(conn) == CONNECTION_OK) {
@@ -178,11 +233,21 @@ static int pgsql_log(struct ast_cdr *cdr)
 					pgerror = PQresultErrorMessage(result);
 					ast_log(LOG_ERROR,"cdr_pgsql: HARD ERROR!  Attempted reconnection failed.  DROPPING CALL RECORD!\n");
 					ast_log(LOG_ERROR,"cdr_pgsql: Reason: %s\n", pgerror);
+				}  else {
+					/* Second try worked out ok */
+					totalrecords++;
+					records++;
+					ast_mutex_unlock(&pgsql_lock);
+					PQclear(result);
+					return 0;
 				}
 			}
 			ast_mutex_unlock(&pgsql_lock);
 			PQclear(result);
 			return -1;
+		} else {
+			totalrecords++;
+			records++;
 		}
 		PQclear(result);
 	}
@@ -311,11 +376,13 @@ static int my_load_module(void)
 
 static int load_module(void)
 {
+	ast_cli_register(&cdr_pgsql_status_cli);
 	return my_load_module();
 }
 
 static int unload_module(void)
 {
+	ast_cli_unregister(&cdr_pgsql_status_cli);
 	return my_unload_module();
 }
 
