@@ -1915,11 +1915,11 @@ static int minivm_greet_exec(struct ast_channel *chan, void *data)
 	snprintf(tempfile, sizeof(tempfile), "%s%s/%s/temp", MVM_SPOOL_DIR, vmu->domain, username);
 	if (!(res = check_dirpath(dest, sizeof(dest), vmu->domain, username, "temp"))) {
 		if (option_debug > 1)
-			ast_log(LOG_DEBUG, "Temporary message directory does not exist, using default (%s)\n", tempfile);
+			ast_log(LOG_DEBUG, "-_-_- Using temporary message - %s\n", tempfile);
 		ast_copy_string(prefile, tempfile, sizeof(prefile));
 	}
 	if (option_debug > 1)
-		ast_log(LOG_DEBUG, "-_-_- Preparing to play message ...\n");
+		ast_log(LOG_DEBUG, "-_-_- Preparing to play message: %s...\n", prefile);
 
 	/* Check current or macro-calling context for special extensions */
 	if (ast_test_flag(vmu, MVM_OPERATOR)) {
@@ -2033,13 +2033,20 @@ static int minivm_delete_exec(struct ast_channel *chan, void *data)
 	int res = 0;
 	struct ast_module_user *u;
 	char filename[BUFSIZ];
+	char *chanvar;
 	
 	u = ast_module_user_add(chan);
 	
 	if (!ast_strlen_zero(data))
 		ast_copy_string(filename, (char *) data, sizeof(filename));
-	else
-		ast_copy_string(filename, pbx_builtin_getvar_helper(chan, "MVM_FILENAME"), sizeof(filename));
+	else {
+		chanvar = pbx_builtin_getvar_helper(chan, "MVM_FILENAME");
+		if (!ast_strlen_zero(chanvar)) {
+			ast_copy_string(filename, pbx_builtin_getvar_helper(chan, "MVM_FILENAME"), sizeof(filename));
+		} else {
+			filename[0] = '\0';
+		}
+	}
 
 	if (ast_strlen_zero(filename)) {
 		ast_module_user_remove(u);
