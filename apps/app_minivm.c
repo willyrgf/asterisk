@@ -2042,7 +2042,7 @@ static int minivm_delete_exec(struct ast_channel *chan, void *data)
 	else {
 		chanvar = pbx_builtin_getvar_helper(chan, "MVM_FILENAME");
 		if (!ast_strlen_zero(chanvar)) {
-			ast_copy_string(filename, pbx_builtin_getvar_helper(chan, "MVM_FILENAME"), sizeof(filename));
+			ast_copy_string(filename, chanvar, sizeof(filename));
 		} else {
 			filename[0] = '\0';
 		}
