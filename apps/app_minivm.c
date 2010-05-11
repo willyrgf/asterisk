@@ -2033,7 +2033,7 @@ static int minivm_delete_exec(struct ast_channel *chan, void *data)
 	int res = 0;
 	struct ast_module_user *u;
 	char filename[BUFSIZ];
-	char *chanvar;
+	const char *chanvar;
 	
 	u = ast_module_user_add(chan);
 	
