@@ -3345,10 +3345,13 @@ static int send_provisional_keepalive_with_sdp(const void *data) {
 
 static void update_provisional_keepalive(struct sip_pvt *pvt, int with_sdp)
 {
-	AST_SCHED_DEL(sched, pvt->provisional_keepalive_sched_id);
+	AST_SCHED_DEL_UNREF(sched, pvt->provisional_keepalive_sched_id, dialog_unref(pvt));
 
 	pvt->provisional_keepalive_sched_id = ast_sched_add(sched, PROVIS_KEEPALIVE_TIMEOUT,
 		with_sdp ? send_provisional_keepalive_with_sdp : send_provisional_keepalive, pvt);
+	if (pvt->provisional_keepalive_sched_id > 0) {
+		dialog_ref(pvt);
+	}
 }
 
 /*! \brief Transmit response on SIP request*/
@@ -3374,7 +3377,7 @@ static int send_response(struct sip_pvt *p, struct sip_request *req, enum xmitty
 
 	/* If we are sending a final response to an INVITE, stop retransmitting provisional responses */
 	if (p->initreq.method == SIP_INVITE && reliable == XMIT_CRITICAL) {
-		AST_SCHED_DEL(sched, p->provisional_keepalive_sched_id);
+		AST_SCHED_DEL_UNREF(sched, p->provisional_keepalive_sched_id, dialog_unref(p));
 	}
 
 	res = (reliable) ?
@@ -4690,7 +4693,7 @@ static int __sip_destroy(struct sip_pvt *p, int lockowner)
 	AST_SCHED_DEL(sched, p->waitid);
 	AST_SCHED_DEL(sched, p->autokillid);
 	AST_SCHED_DEL(sched, p->request_queue_sched_id);
-	AST_SCHED_DEL(sched, p->provisional_keepalive_sched_id);
+	AST_SCHED_DEL_UNREF(sched, p->provisional_keepalive_sched_id, dialog_unref(p));
 	AST_SCHED_DEL(sched, p->t38id);
 
 	if (p->rtp) {
@@ -18228,8 +18231,8 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 				transmit_response_reliable(p, "404 Not Found", req);
 				ast_uri_decode(decoded_exten);
 				ast_log(LOG_NOTICE, "Call from '%s' to extension"
-					" '%s' rejected because extension not found.\n",
-					S_OR(p->username, p->peername), decoded_exten);
+					" '%s' rejected because extension not found in context '%s'.\n",
+					S_OR(p->username, p->peername), decoded_exten, p->context);
 			}
 			p->invitestate = INV_COMPLETED;	
 			update_call_counter(p, DEC_CALL_LIMIT);
