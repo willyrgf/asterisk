@@ -2506,7 +2506,6 @@ void check_pval_item(pval *item, struct argapp *apps, int in_globals)
 			|| strcasecmp(item->u1.str,"endwhile") == 0
 			|| strcasecmp(item->u1.str,"random") == 0
 			|| strcasecmp(item->u1.str,"gosub") == 0
-			|| strcasecmp(item->u1.str,"return") == 0
 			|| strcasecmp(item->u1.str,"gosubif") == 0
 			|| strcasecmp(item->u1.str,"continuewhile") == 0
 			|| strcasecmp(item->u1.str,"endwhile") == 0
