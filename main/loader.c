@@ -263,6 +263,7 @@ static struct reload_classes {
 	{ "rtp",	ast_rtp_reload },
 	{ "http",	ast_http_reload },
 	{ "logger",	logger_reload },
+	{ "plc",        ast_plc_reload },
 	{ NULL, 	NULL }
 };
 
