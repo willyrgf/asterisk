@@ -4235,6 +4235,23 @@ stop:
 	return res;
 }
 
+static int queue_function_exists(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len)
+{
+	struct call_queue *q = NULL;
+	struct ast_module_user *lu;
+	buf[0] = '\0';
+
+	if (ast_strlen_zero(data)) {
+		ast_log(LOG_ERROR, "%s requires an argument: queuename\n", cmd);
+		return -1;
+	}
+	lu = ast_module_user_add(chan);
+	snprintf(buf, len, "%d", load_realtime_queue(data) != NULL? 1 : 0);
+	ast_module_user_remove(lu);
+
+	return 0;
+}
+
 static int queue_function_qac(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len)
 {
 	int count = 0;
@@ -4372,6 +4389,15 @@ static int queue_function_queuememberlist(struct ast_channel *chan, char *cmd, c
 
 	return 0;
 }
+
+static struct ast_custom_function queueexists_function = {
+	.name = "QUEUE_EXISTS",
+	.synopsis = "Check if a named queue exists on this server",
+	.syntax = "QUEUE_EXISTS(<queuename>)",
+	.desc =
+"Returns 1 if the queue exists, 0 if it does not\n",
+	.read = queue_function_exists,
+};
 
 static struct ast_custom_function queueagentcount_function = {
 	.name = "QUEUEAGENTCOUNT",
@@ -5242,6 +5268,7 @@ static int unload_module(void)
 	res |= ast_unregister_application(app_upqm);
 	res |= ast_unregister_application(app_ql);
 	res |= ast_unregister_application(app);
+	res |= ast_custom_function_unregister(&queueexists_function);
 	res |= ast_custom_function_unregister(&queueagentcount_function);
 	res |= ast_custom_function_unregister(&queuemembercount_function);
 	res |= ast_custom_function_unregister(&queuememberlist_function);
@@ -5281,6 +5308,7 @@ static int load_module(void)
 	res |= ast_manager_register("QueueAdd", EVENT_FLAG_AGENT, manager_add_queue_member, "Add interface to queue.");
 	res |= ast_manager_register("QueueRemove", EVENT_FLAG_AGENT, manager_remove_queue_member, "Remove interface from queue.");
 	res |= ast_manager_register("QueuePause", EVENT_FLAG_AGENT, manager_pause_queue_member, "Makes a queue member temporarily unavailable");
+	res |= ast_custom_function_register(&queueexists_function);
 	res |= ast_custom_function_register(&queueagentcount_function);
 	res |= ast_custom_function_register(&queuemembercount_function);
 	res |= ast_custom_function_register(&queuememberlist_function);
