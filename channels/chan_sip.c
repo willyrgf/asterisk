@@ -173,7 +173,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define DEFAULT_MIN_EXPIRY      60
 #define DEFAULT_MAX_EXPIRY      3600
 #define DEFAULT_REGISTRATION_TIMEOUT 20
-#define DEFAULT_MAX_FORWARDS    "70"
+#define DEFAULT_MAX_FORWARDS    70
 
 /* guard limit must be larger than guard secs */
 /* guard min must be < 1000, and should be >= 250 */
@@ -559,6 +559,7 @@ static int global_reg_timeout;
 static int global_regattempts_max;	/*!< Registration attempts before giving up */
 static int global_shrinkcallerid;	/*!< enable or disable shrinking of caller id  */
 static int global_allowguest;		/*!< allow unauthenticated users/peers to connect? */
+static int global_max_forwards;		/*!< Initial value of the Max-forwards loop protection */
 static int global_allowsubscribe;	/*!< Flag for disabling ALL subscriptions, this is FALSE only if all peers are FALSE 
 					    the global setting is in globals_flags[1] */
 static int global_mwitime;		/*!< Time between MWI checks for peers */
@@ -1562,6 +1563,7 @@ static void build_callid_registry(struct sip_registry *reg, struct in_addr ourip
 static void make_our_tag(char *tagbuf, size_t len);
 static int add_header(struct sip_request *req, const char *var, const char *value);
 static int add_header_contentLength(struct sip_request *req, int len);
+static int add_header_max_forwards(struct sip_pvt *dialog, struct sip_request *req, int value);
 static int add_line(struct sip_request *req, const char *line);
 static int add_text(struct sip_request *req, const char *text);
 static int add_digit(struct sip_request *req, char digit, unsigned int duration);
@@ -6063,6 +6065,23 @@ static int add_header(struct sip_request *req, const char *var, const char *valu
 	return 0;	
 }
 
+/*! \brief Add 'Max-Forwards' header to SIP message */
+static int add_header_max_forwards(struct sip_pvt *dialog, struct sip_request *req, int value)
+{
+	char clen[10];
+	const char *max = NULL;
+
+	if (dialog->owner) {
+ 		max = pbx_builtin_getvar_helper(dialog->owner, "SIP_MAX_FORWARDS");
+	}
+
+	/* The channel variable overrides the peer value */
+	if (max == NULL) {
+		snprintf(clen, sizeof(clen), "%d", value);
+	}
+	return add_header(req, "Max-Forwards", max != NULL ? max : clen);
+}
+
 /*! \brief Add 'Content-Length' header to SIP message */
 static int add_header_contentLength(struct sip_request *req, int len)
 {
@@ -6526,7 +6545,7 @@ static int reqprep(struct sip_request *req, struct sip_pvt *p, int sipmethod, in
 
 	if (!ast_strlen_zero(global_useragent))
 		add_header(req, "User-Agent", global_useragent);
-	add_header(req, "Max-Forwards", DEFAULT_MAX_FORWARDS);
+	add_header_max_forwards(p, req, global_max_forwards);
 
 	if (!ast_strlen_zero(p->rpid))
 		add_header(req, "Remote-Party-ID", p->rpid);
@@ -7580,7 +7599,7 @@ static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmetho
 	add_header(req, "CSeq", tmp);
 	if (!ast_strlen_zero(global_useragent))
 		add_header(req, "User-Agent", global_useragent);
-	add_header(req, "Max-Forwards", DEFAULT_MAX_FORWARDS);
+	add_header_max_forwards(p, req, global_max_forwards);
 	if (!ast_strlen_zero(p->rpid))
 		add_header(req, "Remote-Party-ID", p->rpid);
 }
@@ -8218,8 +8237,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 	add_header(&req, "CSeq", tmp);
 	if (!ast_strlen_zero(global_useragent))
 		add_header(&req, "User-Agent", global_useragent);
-	add_header(&req, "Max-Forwards", DEFAULT_MAX_FORWARDS);
-
+	add_header_max_forwards(p, &req, global_max_forwards);
 	
 	if (auth) 	/* Add auth header */
 		add_header(&req, authheader, auth);
@@ -11486,6 +11504,7 @@ static int sip_show_settings(int fd, int argc, char *argv[])
 	print_codec_to_cli(fd, &default_prefs);
 	ast_cli(fd, "\n");
 	ast_cli(fd, "  T1 minimum:             %d\n", global_t1min);
+	ast_cli(fd, "  Max forwards:           %d\n", global_max_forwards);
 	ast_cli(fd, "  No premature media:     %s\n", global_prematuremediafilter ? "Yes" : "No");
 	ast_cli(fd, "  Relax DTMF:             %s\n", global_relaxdtmf ? "Yes" : "No");
 	ast_cli(fd, "  Compact SIP headers:    %s\n", compactheaders ? "Yes" : "No");
@@ -18368,6 +18387,7 @@ static int reload_config(enum channelreloadreason reason)
 	autocreatepeer = DEFAULT_AUTOCREATEPEER;
 	global_autoframing = 0;
 	global_allowguest = DEFAULT_ALLOWGUEST;
+	global_max_forwards = DEFAULT_MAX_FORWARDS;
 	global_rtptimeout = 0;
 	global_rtpholdtimeout = 0;
 	global_rtpkeepalive = 0;
@@ -18442,6 +18462,8 @@ static int reload_config(enum channelreloadreason reason)
 			ast_set2_flag(&global_flags[1], ast_true(v->value), SIP_PAGE2_IGNOREREGEXPIRE);	
 		} else if (!strcasecmp(v->name, "t1min")) {
 			global_t1min = atoi(v->value);
+		} else if (!strcasecmp(v->name, "maxforwards")) {
+			global_max_forwards = atoi(v->value);
 		} else if (!strcasecmp(v->name, "dynamic_exclude_static") || !strcasecmp(v->name, "dynamic_excludes_static")) {
 			global_dynamic_exclude_static = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "contactpermit") || !strcasecmp(v->name, "contactdeny")) {

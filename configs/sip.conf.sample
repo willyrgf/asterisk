@@ -83,6 +83,7 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ;defaultexpiry=120              ; Default length of incoming/outgoing registration
 ;t1min=100                      ; Minimum roundtrip time for messages to monitored hosts
                                 ; Defaults to 100 ms
+;maxforwards=60			; Default anti-loop header in SIP requests (defaults to 70)
 ;notifymimetype=text/plain      ; Allow overriding of mime type in MWI NOTIFY
 ;checkmwi=10                    ; Default time between mailbox checks for peers
 ;buggymwi=no                    ; Cisco SIP firmware doesn't support the MWI RFC
