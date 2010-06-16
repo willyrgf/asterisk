@@ -2289,14 +2289,18 @@ static int function_agent(struct ast_channel *chan, const char *cmd, char *data,
 		ast_copy_string(buf, agent->moh, len);
 	else if (!strcasecmp(args.item, "channel")) {
 		if (agent->chan) {
+			ast_channel_lock(agent->chan);
 			ast_copy_string(buf, agent->chan->name, len);
+			ast_channel_unlock(agent->chan);
 			tmp = strrchr(buf, '-');
 			if (tmp)
 				*tmp = '\0';
 		} 
 	} else if (!strcasecmp(args.item, "fullchannel")) {
 		if (agent->chan) {
+			ast_channel_lock(agent->chan);
 			ast_copy_string(buf, agent->chan->name, len);
+			ast_channel_unlock(agent->chan);
 		} 
 	} else if (!strcasecmp(args.item, "exten")) {
 		buf[0] = '\0';
