@@ -147,7 +147,10 @@ static int make_components(char *s, int lineno)
 	char *stringp = s;
 
 	while ((w = strsep(&stringp, ","))) {
-		w = ast_skip_blanks(w);
+		w = ast_strip(w);
+		if (ast_strlen_zero(w)) {
+			continue;
+		}
 		if (!strcasecmp(w, "error")) 
 			res |= (1 << __LOG_ERROR);
 		else if (!strcasecmp(w, "warning"))
@@ -581,6 +584,7 @@ static void _handle_SIGXFSZ(int sig)
 
 static struct sigaction handle_SIGXFSZ = {
 	.sa_handler = _handle_SIGXFSZ,
+	.sa_flags = SA_RESTART,
 };
 
 int init_logger(void)

@@ -28,7 +28,6 @@
 /*** MODULEINFO
 	<conflict>win32</conflict>
 	<use>dahdi</use>
-	<depend>working_fork</depend>
  ***/
 
 #include "asterisk.h"
@@ -226,16 +225,20 @@ static int ast_moh_files_next(struct ast_channel *chan)
 		return -1;
 	}
 
-	/* If a specific file has been saved confirm it still exists and that it is still valid */
-	if (state->save_pos >= 0 && state->save_pos < state->class->total_files && state->class->filearray[state->save_pos] == state->save_pos_filename) {
+	if (state->pos == 0 && state->save_pos_filename == NULL) {
+		/* First time so lets play the file. */
+		state->save_pos = -1;
+	} else if (state->save_pos >= 0 && state->save_pos < state->class->total_files && state->class->filearray[state->save_pos] == state->save_pos_filename) {
+		/* If a specific file has been saved confirm it still exists and that it is still valid */
 		state->pos = state->save_pos;
 		state->save_pos = -1;
 	} else if (ast_test_flag(state->class, MOH_RANDOMIZE)) {
 		/* Get a random file and ensure we can open it */
 		for (tries = 0; tries < 20; tries++) {
 			state->pos = ast_random() % state->class->total_files;
-			if (ast_fileexists(state->class->filearray[state->pos], NULL, NULL) > 0)
+			if (ast_fileexists(state->class->filearray[state->pos], NULL, NULL) > 0) {
 				break;
+			}
 		}
 		state->save_pos = -1;
 		state->samples = 0;
@@ -260,8 +263,9 @@ static int ast_moh_files_next(struct ast_channel *chan)
 	if (option_debug)
 		ast_log(LOG_DEBUG, "%s Opened file %d '%s'\n", chan->name, state->pos, state->class->filearray[state->pos]);
 
-	if (state->samples)
+	if (state->samples) {
 		ast_seekstream(chan->stream, state->samples, SEEK_SET);
+	}
 
 	return 0;
 }
@@ -353,6 +357,7 @@ static struct ast_generator moh_file_stream = {
 	.generate = moh_files_generator,
 };
 
+#ifdef HAVE_WORKING_FORK
 static int spawn_mp3(struct mohclass *class)
 {
 	int fds[2];
@@ -605,6 +610,7 @@ static void *monmp3thread(void *data)
 	}
 	return NULL;
 }
+#endif
 
 static int moh0_exec(struct ast_channel *chan, void *data)
 {
@@ -917,6 +923,7 @@ static int init_files_class(struct mohclass *class)
 	return 0;
 }
 
+#ifdef HAVE_WORKING_FORK
 static int init_app_class(struct mohclass *class)
 {
 #ifdef HAVE_DAHDI
@@ -959,6 +966,7 @@ static int init_app_class(struct mohclass *class)
 
 	return 0;
 }
+#endif
 
 /*!
  * \note This function owns the reference it gets to moh
@@ -988,10 +996,16 @@ static int moh_register(struct mohclass *moh, int reload)
 	} else if (!strcasecmp(moh->mode, "mp3") || !strcasecmp(moh->mode, "mp3nb") || 
 			!strcasecmp(moh->mode, "quietmp3") || !strcasecmp(moh->mode, "quietmp3nb") ||
 			!strcasecmp(moh->mode, "httpmp3") || !strcasecmp(moh->mode, "custom")) {
+#ifdef HAVE_WORKING_FORK
 		if (init_app_class(moh)) {
 			moh = mohclass_unref(moh);
 			return -1;
 		}
+#else
+		ast_log(LOG_WARNING, "Cannot use mode '%s' music on hold, as there is no working fork().\n", moh->mode);
+		moh = mohclass_unref(moh);
+		return -1;
+#endif
 	} else {
 		ast_log(LOG_WARNING, "Don't know how to do a mode '%s' music on hold\n", moh->mode);
 		moh = mohclass_unref(moh);

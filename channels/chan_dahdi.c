@@ -3938,10 +3938,10 @@ static int dahdi_fixup(struct ast_channel *oldchan, struct ast_channel *newchan)
 				dahdi_unlink(NULL, p, 0);
 			p->subs[x].owner = newchan;
 		}
-	if (newchan->_state == AST_STATE_RINGING) 
-		dahdi_indicate(newchan, AST_CONTROL_RINGING, NULL, 0);
 	update_conf(p);
 	ast_mutex_unlock(&p->lock);
+	if (newchan->_state == AST_STATE_RINGING) 
+		dahdi_indicate(newchan, AST_CONTROL_RINGING, NULL, 0);
 	return 0;
 }
 
@@ -4532,6 +4532,7 @@ static struct ast_frame *dahdi_handle_event(struct ast_channel *ast)
 					p->subs[index].f.frametype = AST_FRAME_CONTROL;
 					p->subs[index].f.subclass = AST_CONTROL_ANSWER;
 					/* Make sure it stops ringing */
+					dahdi_set_hook(p->subs[index].dfd, DAHDI_OFFHOOK);
 					p->subs[SUB_REAL].needringing = 0;
 					ast_log(LOG_DEBUG, "channel %d answered\n", p->channel);
 					if (p->cidspill) {
@@ -6047,6 +6048,7 @@ static void *ss_thread(void *data)
 				ast_dsp_digitreset(p->dsp);
 			}
 			if (p->pri->overlapdial & DAHDI_OVERLAPDIAL_INCOMING) {
+				ast_mutex_lock(&p->lock);
 				if (p->pri->pri) {		
 					if (!pri_grab(p, p->pri)) {
 						pri_proceeding(p->pri->pri, p->call, PVT_TO_CHANNEL(p), 0);
@@ -6056,6 +6058,7 @@ static void *ss_thread(void *data)
 						ast_log(LOG_WARNING, "Unable to grab PRI on span %d\n", p->span);
 					}
 				}
+				ast_mutex_unlock(&p->lock);
 			}
 			dahdi_enable_ec(p);
 			ast_setstate(chan, AST_STATE_RING);
