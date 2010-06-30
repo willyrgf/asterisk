@@ -559,6 +559,7 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ;                             outboundproxy
 ;                             rfc2833compensate
 ;                             t38pt_usertpsource
+;                             maxforwards           ; Sets the SIP anti-loop counter
 ;                             contactpermit         ; Limit what a host may register as (a neat trick
 ;                             contactdeny           ; is to register at the same IP as a SIP provider,
 ;                                                   ; then call oneself, and get redirected to that

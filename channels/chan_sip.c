@@ -559,7 +559,7 @@ static int global_reg_timeout;
 static int global_regattempts_max;	/*!< Registration attempts before giving up */
 static int global_shrinkcallerid;	/*!< enable or disable shrinking of caller id  */
 static int global_allowguest;		/*!< allow unauthenticated users/peers to connect? */
-static int global_max_forwards;		/*!< Initial value of the Max-forwards loop protection */
+static int default_max_forwards;		/*!< Initial value of the Max-forwards loop protection */
 static int global_allowsubscribe;	/*!< Flag for disabling ALL subscriptions, this is FALSE only if all peers are FALSE 
 					    the global setting is in globals_flags[1] */
 static int global_mwitime;		/*!< Time between MWI checks for peers */
@@ -975,6 +975,7 @@ static struct sip_pvt {
 	int lastinvite;				/*!< Last Cseq of invite */
 	struct ast_flags flags[2];		/*!< SIP_ flags */
 	int timer_t1;				/*!< SIP timer T1, ms rtt */
+	int maxforwards;			/*!< SIP Loop prevention */
 	unsigned int sipoptions;		/*!< Supported SIP options on the other end */
 	struct ast_codec_pref prefs;		/*!< codec prefs */
 	int capability;				/*!< Special capability (codec) */
@@ -1146,6 +1147,7 @@ struct sip_peer {
 	int inRinging;			/*!< Number of calls ringing */
 	int onHold;                     /*!< Peer has someone on hold */
 	int call_limit;			/*!< Limit of concurrent calls */
+	int maxforwards;		/*!< Max-Forwards default. 0 means use global default */
 	enum transfermodes allowtransfer;	/*! SIP Refer restriction scheme */
 	char vmexten[AST_MAX_EXTENSION]; /*!< Dialplan extension for MWI notify message*/
 	char mailbox[AST_MAX_EXTENSION]; /*!< Mailbox setting for MWI checks */
@@ -1563,8 +1565,7 @@ static void build_callid_pvt(struct sip_pvt *pvt);
 static void build_callid_registry(struct sip_registry *reg, struct in_addr ourip, const char *fromdomain);
 static void make_our_tag(char *tagbuf, size_t len);
 static int add_header(struct sip_request *req, const char *var, const char *value);
-static int add_header_contentLength(struct sip_request *req, int len);
-static int add_header_max_forwards(struct sip_pvt *dialog, struct sip_request *req, int value);
+static int add_header_max_forwards(struct sip_pvt *dialog, struct sip_request *req);
 static int add_content(struct sip_request *req, const char *line);
 static int finalize_content(struct sip_request *req);
 static int add_text(struct sip_request *req, const char *text);
@@ -4687,6 +4688,7 @@ static struct sip_pvt *sip_alloc(ast_string_field callid, struct sockaddr_in *si
 	p->subscribed = NONE;
 	p->stateid = -1;
 	p->prefs = default_prefs;		/* Set default codecs for this call */
+	p->maxforwards = default_max_forwards;
 
 	if (intended_method != SIP_OPTIONS)	/* Peerpoke has it's own system */
 		p->timer_t1 = 500;	/* Default SIP retransmission timer T1 (RFC 3261) */
@@ -6071,7 +6073,7 @@ static int add_header(struct sip_request *req, const char *var, const char *valu
 }
 
 /*! \brief Add 'Max-Forwards' header to SIP message */
-static int add_header_max_forwards(struct sip_pvt *dialog, struct sip_request *req, int value)
+static int add_header_max_forwards(struct sip_pvt *dialog, struct sip_request *req)
 {
 	char clen[10];
 	const char *max = NULL;
@@ -6080,9 +6082,9 @@ static int add_header_max_forwards(struct sip_pvt *dialog, struct sip_request *r
  		max = pbx_builtin_getvar_helper(dialog->owner, "SIP_MAX_FORWARDS");
 	}
 
-	/* The channel variable overrides the peer value */
+	/* The channel variable overrides the peer/channel value */
 	if (max == NULL) {
-		snprintf(clen, sizeof(clen), "%d", value);
+		snprintf(clen, sizeof(clen), "%d", dialog->maxforwards);
 	}
 	return add_header(req, "Max-Forwards", max != NULL ? max : clen);
 }
@@ -6557,7 +6559,7 @@ static int reqprep(struct sip_request *req, struct sip_pvt *p, int sipmethod, in
 
 	if (!ast_strlen_zero(global_useragent))
 		add_header(req, "User-Agent", global_useragent);
-	add_header_max_forwards(p, req, global_max_forwards);
+	add_header_max_forwards(p, req);
 
 	if (!ast_strlen_zero(p->rpid))
 		add_header(req, "Remote-Party-ID", p->rpid);
@@ -7592,7 +7594,7 @@ static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmetho
 	add_header(req, "CSeq", tmp);
 	if (!ast_strlen_zero(global_useragent))
 		add_header(req, "User-Agent", global_useragent);
-	add_header_max_forwards(p, req, global_max_forwards);
+	add_header_max_forwards(p, req);
 	if (!ast_strlen_zero(p->rpid))
 		add_header(req, "Remote-Party-ID", p->rpid);
 }
@@ -8225,7 +8227,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 	add_header(&req, "CSeq", tmp);
 	if (!ast_strlen_zero(global_useragent))
 		add_header(&req, "User-Agent", global_useragent);
-	add_header_max_forwards(p, &req, global_max_forwards);
+	add_header_max_forwards(p, &req);
 	
 	if (auth) 	/* Add auth header */
 		add_header(&req, authheader, auth);
@@ -10374,6 +10376,9 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 				ast_string_field_set(p, language, peer->language);
 				ast_string_field_set(p, accountcode, peer->accountcode);
 				p->amaflags = peer->amaflags;
+				if (peer->maxforwards > 0) {
+					p->maxforwards = peer->maxforwards;
+				}
 				p->callgroup = peer->callgroup;
 				p->pickupgroup = peer->pickupgroup;
 				p->capability = peer->capability;
@@ -11199,6 +11204,7 @@ static int _sip_show_peer(int type, int fd, struct mansession *s, const struct m
 		ast_cli(fd, "  VM Extension : %s\n", peer->vmexten);
 		ast_cli(fd, "  LastMsgsSent : %d/%d\n", (peer->lastmsgssent & 0x7fff0000) >> 16, peer->lastmsgssent & 0xffff);
 		ast_cli(fd, "  Call limit   : %d\n", peer->call_limit);
+		ast_cli(fd, "  Max forwards : %d\n", peer->maxforwards);
 		ast_cli(fd, "  Dynamic      : %s\n", (ast_test_flag(&peer->flags[1], SIP_PAGE2_DYNAMIC)?"Yes":"No"));
 		ast_cli(fd, "  Callerid     : %s\n", ast_callerid_merge(cbuf, sizeof(cbuf), peer->cid_name, peer->cid_num, "<unspecified>"));
 		ast_cli(fd, "  MaxCallBR    : %d kbps\n", peer->maxcallbitrate);
@@ -11286,6 +11292,7 @@ static int _sip_show_peer(int type, int fd, struct mansession *s, const struct m
 		astman_append(s, "%s\r\n", ast_print_group(buf, sizeof(buf), peer->pickupgroup));
 		astman_append(s, "VoiceMailbox: %s\r\n", peer->mailbox);
 		astman_append(s, "TransferMode: %s\r\n", transfermode2str(peer->allowtransfer));
+		astman_append(s, "Maxforwards: %d\r\n", peer->maxforwards);
 		astman_append(s, "LastMsgsSent: %d\r\n", peer->lastmsgssent);
 		astman_append(s, "Call-limit: %d\r\n", peer->call_limit);
 		astman_append(s, "MaxCallBR: %d kbps\r\n", peer->maxcallbitrate);
@@ -11491,7 +11498,7 @@ static int sip_show_settings(int fd, int argc, char *argv[])
 	print_codec_to_cli(fd, &default_prefs);
 	ast_cli(fd, "\n");
 	ast_cli(fd, "  T1 minimum:             %d\n", global_t1min);
-	ast_cli(fd, "  Max forwards:           %d\n", global_max_forwards);
+	ast_cli(fd, "  Max forwards:           %d\n", default_max_forwards);
 	ast_cli(fd, "  No premature media:     %s\n", global_prematuremediafilter ? "Yes" : "No");
 	ast_cli(fd, "  Relax DTMF:             %s\n", global_relaxdtmf ? "Yes" : "No");
 	ast_cli(fd, "  Compact SIP headers:    %s\n", compactheaders ? "Yes" : "No");
@@ -18125,6 +18132,8 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 				} else {
 					peer->amaflags = format;
 				}
+			} else if (!strcasecmp(v->name, "maxforwards")) {
+				peer->maxforwards = abs(atoi(v->value));
 			} else if (!strcasecmp(v->name, "accountcode")) {
 				ast_copy_string(peer->accountcode, v->value, sizeof(peer->accountcode));
 			} else if (!strcasecmp(v->name, "mohinterpret")
@@ -18384,7 +18393,7 @@ static int reload_config(enum channelreloadreason reason)
 	autocreatepeer = DEFAULT_AUTOCREATEPEER;
 	global_autoframing = 0;
 	global_allowguest = DEFAULT_ALLOWGUEST;
-	global_max_forwards = DEFAULT_MAX_FORWARDS;
+	default_max_forwards = DEFAULT_MAX_FORWARDS;
 	global_rtptimeout = 0;
 	global_rtpholdtimeout = 0;
 	global_rtpkeepalive = 0;
@@ -18460,7 +18469,7 @@ static int reload_config(enum channelreloadreason reason)
 		} else if (!strcasecmp(v->name, "t1min")) {
 			global_t1min = atoi(v->value);
 		} else if (!strcasecmp(v->name, "maxforwards")) {
-			global_max_forwards = atoi(v->value);
+			default_max_forwards = atoi(v->value);
 		} else if (!strcasecmp(v->name, "dynamic_exclude_static") || !strcasecmp(v->name, "dynamic_excludes_static")) {
 			global_dynamic_exclude_static = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "contactpermit") || !strcasecmp(v->name, "contactdeny")) {
