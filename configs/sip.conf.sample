@@ -517,6 +517,7 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ; callingpres                 callingpres
 ; permit                      permit
 ; deny                        deny
+; nacl                        nacl
 ; secret                      secret
 ; md5secret                   md5secret
 ; dtmfmode                    dtmfmode
@@ -632,6 +633,7 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ;allow=g729                     ; Pass-thru only unless g729 license obtained
 ;callingpres=allowed_passed_screen        ; Set caller ID presentation
                                 ; See doc/callingpres.txt for more information
+;nacl=goldpeers                 ; Set a Named ACL for this peer. Works for users too.
 
 
 ;[xlite1]

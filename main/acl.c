@@ -265,7 +265,7 @@ static struct ast_ha *ast_duplicate_ha(struct ast_ha *original)
 {
 	struct ast_ha *new_ha;
 
-	if ((new_ha = ast_calloc(sizeof(*new_ha)))) {
+	if ((new_ha = ast_calloc(1, sizeof(*new_ha)))) {
 		/* Copy from original to new object */
 		ast_copy_ha(original, new_ha);
 	}
@@ -310,7 +310,7 @@ struct ast_ha *ast_append_ha(const char *sense, const char *stuff, struct ast_ha
 		prev = path;
 		path = path->next;
 	}
-	if ((ha = ast_calloc(sizeof(*ha)))) {
+	if ((ha = ast_calloc(1, sizeof(*ha)))) {
 		ast_copy_string(tmp, stuff, sizeof(tmp));
 		nm = strchr(tmp, '/');
 		if (!nm) {

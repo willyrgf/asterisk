@@ -23,3 +23,43 @@ interface, and the CLI. Modules can also automatically change a Named ACL
 if needed. This can have be done for matching of devices or implementing
 dynamic blacklists.
 
+Core implemenation
+------------------
+Check configs/nacl.conf.sample for details
+
+; Example
+[officelan]	; This is the name of this ACL
+deny=all
+permit=192.168.0.0/24   ; CIDR notation
+permit=192.168.1.125/255.255.255.255    ; Subnetmask
+
+
+SIP implementation
+------------------
+In the SIP channel, you can configure a named ACL for each device. Using configuration
+templates make it simple. There are multiple benefits:
+
+- The NACL is only stored once. Permit/deny configurations in sip.conf is stored once
+  per device
+- The NACL can be manipulated during runtime with manager and CLI commands
+
+Syntax for the [general] section as well as per device:
+
+nacl=<name>
+
+The name is a NACL that is defined in nacl.conf or created dynamically.
+
+example:
+
+[officephones](!)
+type=friend
+nacl=officelan
+contactnacl=officelan
+
+[lisa12:12:23:23:af](officephones)
+secret=superhemligt
+
+
+TODO List
+---------
+- Add automatic expiry for blacklists, set time in nacl.conf

@@ -17799,6 +17799,9 @@ static struct sip_user *build_user(const char *name, struct ast_variable *v, str
 			}
 		} else if (!strcasecmp(v->name, "nacl")) {
 			user->nacl = ast_nacl_attach(v->value);
+			if (!user->nacl) {
+				ast_log(LOG_WARNING, "Lineno: %d: NACL %s not found for user %s\n", v->lineno, v->value, name);
+			}
 		} else if (!strcasecmp(v->name, "permit") ||
 				   !strcasecmp(v->name, "deny")) {
 			user->ha = ast_append_ha(v->name, v->value, user->ha);
@@ -18099,6 +18102,9 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 				}
 			} else if (!strcasecmp(v->name, "nacl")) {
 				peer->nacl = ast_nacl_attach(v->value);
+				if (!user->nacl) {
+					ast_log(LOG_WARNING, "Lineno: %d: NACL %s not found for peer %s\n", v->lineno, v->value, name);
+				}
 			} else if (!strcasecmp(v->name, "permit") || !strcasecmp(v->name, "deny")) {
 				if (!ast_strlen_zero(v->value)) {
 					peer->ha = ast_append_ha(v->name, v->value, peer->ha);
@@ -18447,7 +18453,7 @@ static int reload_config(enum channelreloadreason reason)
   		} else if (!strcasecmp(v->name, "nacl")) {
 			global_nacl = ast_nacl_attach(v->value);
 			if (!global_nacl) {
-				ast_log(LOG_WARNING, "'%s' is not a valid NACL name - line %d.\n", v->value, v->lineno);
+				ast_log(LOG_WARNING, "Line %d: '%s' is not a valid NACL name.\n", v->value, v->lineno);
 			}
   		} else if (!strcasecmp(v->name, "allowguest")) {
 			global_allowguest = ast_true(v->value) ? 1 : 0;

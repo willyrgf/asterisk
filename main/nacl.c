@@ -199,6 +199,7 @@ static int nacl_cmp_fn(void *obj1, void *obj2, int flags)
 	if deleted is true, we will find deleted items too
 	if owner is NULL, we'll find all otherwise owner is used for selection too
 	We raise the refcount on the result, which the calling function need to deref.
+	\return NULL if the NACL is not found
 */
 struct ast_nacl *ast_nacl_find_all(const char *name, const int deleted, const char *owner)
 {
@@ -241,7 +242,7 @@ struct ast_nacl *ast_nacl_find(const char *name)
 	return ast_nacl_find_all(name, 0, NULL);
 }
 
-/*! \brief MarkClear all named ACLs owned by us 
+/*! \brief Mark all named ACLs owned by us 
 	Mark the others as deletion ready.
 */
 int ast_nacl_mark_all_owned(const char *owner)
@@ -444,9 +445,9 @@ int ast_nacl_add_ip(struct ast_nacl *nacl, struct sockaddr_in *ip, int permit)
 		return FALSE;
 	}
 	ao2_ref(nacl,1);
-	ast_copy_string(ipbuf, ast_inet_ntoa(ip->sin_addr.s_addr), 128);
+	ast_copy_string(ipbuf, ast_inet_ntoa(ip->sin_addr), 128);
 	/* In trunk, we need to create a function that uses IP directly */
-	nacl->ha = ast_append_ha(permit ? "permit" : "deny", ipbuf, nacl->ha);
+	nacl->acl = ast_append_ha(permit ? "permit" : "deny", ipbuf, nacl->acl);
 	nacl->rules++;
 	ao2_ref(nacl,-1);
 	return TRUE;

@@ -44,6 +44,7 @@ struct ast_nacl *ast_nacl_add(const char *name, const char *owner);
 /*! \brief Find a named ACL 
 	if deleted is true, we will find deleted items too
 	if owner is NULL, we'll find all otherwise owner is used for selection too
+	\return NULL if NACL is not found
 */
 struct ast_nacl *ast_nacl_find_all(const char *name, const int deleted, const char *owner);
 
@@ -58,6 +59,7 @@ int ast_nacl_mark_all_owned(const char *owner);
 /*! \brief Attach to a named ACL. You need to detach later 
 	This is to avoid Named ACLs to disappear from runtime. Even if they are deleted from the
 	configuration, they will still be around thanks to ASTOBJs
+	\return NULL if NACL is not found
  */
 struct ast_nacl *ast_nacl_attach(const char *name);
 
@@ -67,7 +69,7 @@ struct ast_nacl *ast_nacl_attach(const char *name);
 void ast_nacl_detach(struct ast_nacl *nacl);
 
 /*! \brief Add new IP address to ruleset */
-int ast_nacl_add_ip(struct ast_nacl *nacl, struct sockaddr_in *ip, int permit)
+int ast_nacl_add_ip(struct ast_nacl *nacl, struct sockaddr_in *ip, int permit);
 
 /*! \brief Initialize NACL subsystem */
 int ast_nacl_load(void);
