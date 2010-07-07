@@ -23,6 +23,8 @@
 #ifndef _ASTERISK_OPTIONS_H
 #define _ASTERISK_OPTIONS_H
 
+#include "asterisk/autoconfig.h"
+
 #if defined(__cplusplus) || defined(c_plusplus)
 extern "C" {
 #endif
@@ -73,16 +75,24 @@ enum ast_option_flags {
 	AST_OPT_FLAG_DONT_WARN = (1 << 18),
 	/*! End CDRs before the 'h' extension */
 	AST_OPT_FLAG_END_CDR_BEFORE_H_EXTEN = (1 << 19),
-	/*! Use Zaptel Timing for generators if available */
+	/*! Use DAHDI Timing for generators if available */
 	AST_OPT_FLAG_INTERNAL_TIMING = (1 << 20),
 	/*! Always fork, even if verbose or debug settings are non-zero */
 	AST_OPT_FLAG_ALWAYS_FORK = (1 << 21),
 	/*! Disable log/verbose output to remote consoles */
-	AST_OPT_FLAG_MUTE = (1 << 22)
+	AST_OPT_FLAG_MUTE = (1 << 22),
+	/*! Generic PLC */
+	AST_OPT_FLAG_GENERIC_PLC = (1 << 23),
+	/*! Send the FullyBooted AMI event when all modules are loaded */
+	AST_OPT_FLAG_SEND_FULLYBOOTED = (1 << 24),
 };
 
 /*! These are the options that set by default when Asterisk starts */
+#if (defined(HAVE_DAHDI_VERSION) && HAVE_DAHDI_VERSION >= 230)
+#define AST_DEFAULT_OPTIONS AST_OPT_FLAG_TRANSCODE_VIA_SLIN | AST_OPT_FLAG_INTERNAL_TIMING
+#else
 #define AST_DEFAULT_OPTIONS AST_OPT_FLAG_TRANSCODE_VIA_SLIN
+#endif
 
 #define ast_opt_exec_includes		ast_test_flag(&ast_options, AST_OPT_FLAG_EXEC_INCLUDES)
 #define ast_opt_no_fork			ast_test_flag(&ast_options, AST_OPT_FLAG_NO_FORK)
@@ -107,6 +117,8 @@ enum ast_option_flags {
 #define ast_opt_internal_timing		ast_test_flag(&ast_options, AST_OPT_FLAG_INTERNAL_TIMING)
 #define ast_opt_always_fork		ast_test_flag(&ast_options, AST_OPT_FLAG_ALWAYS_FORK)
 #define ast_opt_mute			ast_test_flag(&ast_options, AST_OPT_FLAG_MUTE)
+#define ast_opt_generic_plc         ast_test_flag(&ast_options, AST_OPT_FLAG_GENERIC_PLC)
+#define ast_opt_send_fullybooted	ast_test_flag(&ast_options, AST_OPT_FLAG_SEND_FULLYBOOTED)
 
 extern struct ast_flags ast_options;
 

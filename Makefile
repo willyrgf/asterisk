@@ -57,6 +57,7 @@ export CXX
 export AR
 export RANLIB
 export HOST_CC
+export BUILD_CC
 export STATIC_BUILD
 export INSTALL
 export DESTDIR
@@ -66,7 +67,6 @@ export STRIP
 export DOWNLOAD
 export AWK
 export GREP
-export ID
 export OSARCH
 export CURSES_DIR
 export NCURSES_DIR
@@ -265,7 +265,7 @@ endif
 
 _ASTCFLAGS+=$(BUSYDETECT)$(OPTIONS)
 
-MOD_SUBDIRS:=res channels pbx apps codecs formats cdr funcs main
+MOD_SUBDIRS:=res channels pbx apps codecs formats cdr funcs tests main
 OTHER_SUBDIRS:=utils agi
 SUBDIRS:=$(OTHER_SUBDIRS) $(MOD_SUBDIRS)
 SUBDIRS_INSTALL:=$(SUBDIRS:%=%-install)
@@ -293,7 +293,12 @@ ifeq ($(OSARCH),SunOS)
   SOLINK=-shared -fpic -L/usr/local/ssl/lib -lrt
 endif
 
-SUBMAKE=$(MAKE) --quiet --no-print-directory
+SILENTMAKE:=$(MAKE) --quiet --no-print-directory
+ifneq ($(PRINT_DIR)$(NOISY_BUILD),)
+SUBMAKE:=$(MAKE)
+else
+SUBMAKE:=$(MAKE) --quiet --no-print-directory
+endif
 
 # This is used when generating the doxygen documentation
 ifneq ($(DOT),:)
@@ -330,13 +335,13 @@ ifeq ($(filter %menuselect,$(MAKECMDGOALS)),)
 endif
 
 $(MOD_SUBDIRS_EMBED_LDSCRIPT):
-	+@echo "EMBED_LDSCRIPTS+="`$(SUBMAKE) -C $(@:-embed-ldscript=) SUBDIR=$(@:-embed-ldscript=) __embed_ldscript` >> makeopts.embed_rules
+	+@echo "EMBED_LDSCRIPTS+="`$(SILENTMAKE) -C $(@:-embed-ldscript=) SUBDIR=$(@:-embed-ldscript=) __embed_ldscript` >> makeopts.embed_rules
 
 $(MOD_SUBDIRS_EMBED_LDFLAGS):
-	+@echo "EMBED_LDFLAGS+="`$(SUBMAKE) -C $(@:-embed-ldflags=) SUBDIR=$(@:-embed-ldflags=) __embed_ldflags` >> makeopts.embed_rules
+	+@echo "EMBED_LDFLAGS+="`$(SILENTMAKE) -C $(@:-embed-ldflags=) SUBDIR=$(@:-embed-ldflags=) __embed_ldflags` >> makeopts.embed_rules
 
 $(MOD_SUBDIRS_EMBED_LIBS):
-	+@echo "EMBED_LIBS+="`$(SUBMAKE) -C $(@:-embed-libs=) SUBDIR=$(@:-embed-libs=) __embed_libs` >> makeopts.embed_rules
+	+@echo "EMBED_LIBS+="`$(SILENTMAKE) -C $(@:-embed-libs=) SUBDIR=$(@:-embed-libs=) __embed_libs` >> makeopts.embed_rules
 
 $(MOD_SUBDIRS_MENUSELECT_TREE):
 	+@$(SUBMAKE) -C $(@:-menuselect-tree=) SUBDIR=$(@:-menuselect-tree=) moduleinfo
@@ -414,9 +419,7 @@ distclean: $(SUBDIRS_DIST_CLEAN) _clean
 	rm -f build_tools/menuselect-deps
 
 datafiles: _all
-	if [ `$(ID) -u` = 0 ]; then \
-		CFLAGS="$(_ASTCFLAGS) $(ASTCFLAGS)" build_tools/mkpkgconfig $(DESTDIR)/usr/lib/pkgconfig; \
-	fi
+	CFLAGS="$(_ASTCFLAGS) $(ASTCFLAGS)" build_tools/mkpkgconfig $(DESTDIR)$(libdir)/pkgconfig;
 # Should static HTTP be installed during make samples or even with its own target ala
 # webvoicemail?  There are portions here that *could* be customized but might also be
 # improved a lot.  I'll put it here for now.
@@ -627,6 +630,7 @@ samples: adsi
 		echo "                        ; to the device.  It is for this reason that this is optional, as it may result in requiring a" ; \
 		echo "                        ; temporary codec translation path for a channel that may not otherwise require one." ; \
 		echo ";transcode_via_sln = yes ; Build transcode paths via SLINEAR, instead of directly" ; \
+		echo ";sendfullybooted = yes  ; Send the FullyBooted AMI event on AMI login and when all modules are finished loading" ; \
 		echo ";runuser = asterisk ; The user to run as" ; \
 		echo ";rungroup = asterisk ; The group to run as" ; \
 		echo ";dahdichanname = yes ; Channels created by chan_dahdi will be called 'DAHDI', otherwise 'Zap'" ; \
@@ -785,7 +789,7 @@ nmenuselect: menuselect/nmenuselect menuselect-tree menuselect.makeopts
 	-@menuselect/nmenuselect menuselect.makeopts && (echo "menuselect changes saved!"; rm -f channels/h323/Makefile.ast main/asterisk) || echo "menuselect changes NOT saved!"
 
 # options for make in menuselect/
-MAKE_MENUSELECT=CC="$(HOST_CC)" CXX="$(CXX)" LD="" AR="" RANLIB="" CFLAGS="" $(MAKE) -C menuselect CONFIGURE_SILENT="--silent"
+MAKE_MENUSELECT=CC="$(BUILD_CC)" CXX="" LD="" AR="" RANLIB="" CFLAGS="" $(MAKE) -C menuselect CONFIGURE_SILENT="--silent"
 
 menuselect/menuselect: menuselect/makeopts
 	+$(MAKE_MENUSELECT) menuselect
@@ -807,8 +811,8 @@ menuselect-tree: $(foreach dir,$(filter-out main,$(MOD_SUBDIRS)),$(wildcard $(di
 	@echo "<?xml version=\"1.0\"?>" > $@
 	@echo >> $@
 	@echo "<menu name=\"Asterisk Module and Build Option Selection\">" >> $@
-	+@for dir in $(sort $(filter-out main,$(MOD_SUBDIRS))); do $(SUBMAKE) -C $${dir} SUBDIR=$${dir} moduleinfo >> $@; done
-	+@for dir in $(sort $(filter-out main,$(MOD_SUBDIRS))); do $(SUBMAKE) -C $${dir} SUBDIR=$${dir} makeopts >> $@; done
+	+@for dir in $(sort $(filter-out main,$(MOD_SUBDIRS))); do $(SILENTMAKE) -C $${dir} SUBDIR=$${dir} moduleinfo >> $@; done
+	+@for dir in $(sort $(filter-out main,$(MOD_SUBDIRS))); do $(SILENTMAKE) -C $${dir} SUBDIR=$${dir} makeopts >> $@; done
 	@cat build_tools/cflags.xml >> $@
 	@if [ "${AST_DEVMODE}" = "yes" ]; then \
 		cat build_tools/cflags-devmode.xml >> $@; \

@@ -37,7 +37,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <unistd.h>
 #include <math.h>
 
-#if defined(HAVE_DAHDI)
+#if defined(HAVE_DAHDI) || defined(HAVE_ZAPTEL)
 #include <sys/ioctl.h>
 #include "asterisk/dahdi_compat.h"
 #endif
@@ -714,6 +714,7 @@ struct ast_channel *ast_channel_alloc(int needqueue, int state, const char *cid_
 	int flags;
 	struct varshead *headp;
 	va_list ap1, ap2;
+	char *tech = "";
 
 	/* If shutting down, don't allocate any new channels */
 	if (shutting_down) {
@@ -814,6 +815,7 @@ alertpipe_failed:
 	tmp->cid.cid_num = ast_strdup(cid_num);
 	
 	if (!ast_strlen_zero(name_fmt)) {
+		char *slash;
 		/* Almost every channel is calling this function, and setting the name via the ast_string_field_build() call.
 		 * And they all use slightly different formats for their name string.
 		 * This means, to set the name here, we have to accept variable args, and call the string_field_build from here.
@@ -826,6 +828,10 @@ alertpipe_failed:
 		ast_string_field_build_va(tmp, name, name_fmt, ap1, ap2);
 		va_end(ap1);
 		va_end(ap2);
+		tech = ast_strdupa(tmp->name);
+		if ((slash = strchr(tech, '/'))) {
+			*slash = '\0';
+		}
 	}
 
 	/* Reminder for the future: under what conditions do we NOT want to track cdrs on channels? */
@@ -880,7 +886,7 @@ alertpipe_failed:
 	 * proper and correct place to make this call, but you sure do have to pass
 	 * a lot of data into this func to do it here!
 	 */
-	if (!ast_strlen_zero(name_fmt)) {
+	if (ast_get_channel_tech(tech)) {
 		ast_channel_manager_event(tmp, NULL, EVENT_FLAG_CALL, "Newchannel",
 		      "Channel: %s\r\n"
 		      "State: %s\r\n"
@@ -1143,7 +1149,7 @@ static struct ast_channel *channel_find_locked(const struct ast_channel *prev,
 				 * as there can be no more matches.
 				 */
 				if (!(name && !namelen)) {
-					prev = c;
+					_prev = c;
 					retries = -1;
 				}
 			}
@@ -1200,12 +1206,41 @@ struct ast_channel *ast_walk_channel_by_exten_locked(const struct ast_channel *c
 	return channel_find_locked(chan, NULL, 0, context, exten);
 }
 
+int ast_is_deferrable_frame(const struct ast_frame *frame)
+{
+	/* Do not add a default entry in this switch statement.  Each new
+	 * frame type should be addressed directly as to whether it should
+	 * be queued up or not.
+	 */
+	switch (frame->frametype) {
+	case AST_FRAME_DTMF_END:
+	case AST_FRAME_CONTROL:
+	case AST_FRAME_TEXT:
+	case AST_FRAME_IMAGE:
+	case AST_FRAME_HTML:
+		return 1;
+
+	case AST_FRAME_DTMF_BEGIN:
+	case AST_FRAME_VOICE:
+	case AST_FRAME_VIDEO:
+	case AST_FRAME_NULL:
+	case AST_FRAME_IAX:
+	case AST_FRAME_CNG:
+	case AST_FRAME_MODEM:
+		return 0;
+	}
+	return 0;
+}
+
 /*! \brief Wait, look for hangups and condition arg */
 int ast_safe_sleep_conditional(struct ast_channel *chan, int ms, int (*cond)(void*), void *data)
 {
 	struct ast_frame *f;
 	struct ast_silence_generator *silgen = NULL;
 	int res = 0;
+	AST_LIST_HEAD_NOLOCK(, ast_frame) deferred_frames;
+
+	AST_LIST_HEAD_INIT_NOLOCK(&deferred_frames);
 
 	/* If no other generator is present, start silencegen while waiting */
 	if (ast_opt_transmit_silence && !chan->generatordata) {
@@ -1213,6 +1248,7 @@ int ast_safe_sleep_conditional(struct ast_channel *chan, int ms, int (*cond)(voi
 	}
 
 	while (ms > 0) {
+		struct ast_frame *dup_f = NULL;
 		if (cond && ((*cond)(data) == 0)) {
 			break;
 		}
@@ -1227,7 +1263,18 @@ int ast_safe_sleep_conditional(struct ast_channel *chan, int ms, int (*cond)(voi
 				res = -1;
 				break;
 			}
-			ast_frfree(f);
+
+			if (!ast_is_deferrable_frame(f)) {
+				ast_frfree(f);
+				continue;
+			}
+			
+			if ((dup_f = ast_frisolate(f))) {
+				if (dup_f != f) {
+					ast_frfree(f);
+				}
+				AST_LIST_INSERT_HEAD(&deferred_frames, dup_f, frame_list);
+			}
 		}
 	}
 
@@ -1235,6 +1282,19 @@ int ast_safe_sleep_conditional(struct ast_channel *chan, int ms, int (*cond)(voi
 	if (silgen) {
 		ast_channel_stop_silence_generator(chan, silgen);
 	}
+
+	/* We need to free all the deferred frames, but we only need to
+	 * queue the deferred frames if there was no error and no
+	 * hangup was received
+	 */
+	ast_channel_lock(chan);
+	while ((f = AST_LIST_REMOVE_HEAD(&deferred_frames, frame_list))) {
+		if (!res) {
+			ast_queue_frame_head(chan, f);
+		}
+		ast_frfree(f);
+	}
+	ast_channel_unlock(chan);
 
 	return res;
 }
@@ -1379,7 +1439,10 @@ struct ast_datastore *ast_channel_datastore_alloc(const struct ast_datastore_inf
 
 	datastore->info = info;
 
-	datastore->uid = ast_strdup(uid);
+	if (!ast_strlen_zero(uid) && !(datastore->uid = ast_strdup(uid))) {
+		ast_free(datastore);
+		datastore = NULL;
+	}
 
 	return datastore;
 }
@@ -1702,24 +1765,21 @@ int ast_activate_generator(struct ast_channel *chan, struct ast_generator *gen, 
 	int res = 0;
 
 	ast_channel_lock(chan);
-
 	if (chan->generatordata) {
 		if (chan->generator && chan->generator->release)
 			chan->generator->release(chan, chan->generatordata);
 		chan->generatordata = NULL;
 	}
-
-	ast_prod(chan);
 	if (gen->alloc && !(chan->generatordata = gen->alloc(chan, params))) {
 		res = -1;
 	}
-	
 	if (!res) {
 		ast_settimeout(chan, 160, generator_force, chan);
 		chan->generator = gen;
 	}
-
 	ast_channel_unlock(chan);
+
+	ast_prod(chan);
 
 	return res;
 }
@@ -1788,10 +1848,14 @@ struct ast_channel *ast_waitfor_nandfds(struct ast_channel **c, int n, int *fds,
 	}
 	/* Wait full interval */
 	rms = *ms;
-	if (whentohangup) {
+	/* INT_MAX, not LONG_MAX, because it matters on 64-bit */
+	if (whentohangup && whentohangup < INT_MAX / 1000) { /* Protect against overflow */
 		rms = whentohangup * 1000;              /* timeout in milliseconds */
 		if (*ms >= 0 && *ms < rms)		/* original *ms still smaller */
 			rms =  *ms;
+	} else if (whentohangup && rms < 0) {
+		/* Tiny corner case... call would need to last >24 days */
+		rms = INT_MAX;
 	}
 	/*
 	 * Build the pollfd array, putting the channels' fds first,
@@ -2847,6 +2911,110 @@ int ast_write_video(struct ast_channel *chan, struct ast_frame *fr)
 	return res;
 }
 
+struct plc_ds {
+	/* A buffer in which to store SLIN PLC
+	 * samples generated by the generic PLC
+	 * functionality in plc.c
+	 */
+	int16_t *samples_buf;
+	/* The current number of samples in the
+	 * samples_buf
+	 */
+	size_t num_samples;
+	plc_state_t plc_state;
+};
+
+static void plc_ds_destroy(void *data)
+{
+	struct plc_ds *plc = data;
+	ast_free(plc->samples_buf);
+	ast_free(plc);
+}
+
+static struct ast_datastore_info plc_ds_info = {
+	.type = "plc",
+	.destroy = plc_ds_destroy,
+};
+
+static void adjust_frame_for_plc(struct ast_channel *chan, struct ast_frame *frame, struct ast_datastore *datastore)
+{
+	int num_new_samples = frame->samples;
+	struct plc_ds *plc = datastore->data;
+
+	/* As a general note, let me explain the somewhat odd calculations used when taking
+	 * the frame offset into account here. According to documentation in frame.h, the frame's
+	 * offset field indicates the number of bytes that the audio is offset. The plc->samples_buf
+	 * is not an array of bytes, but rather an array of 16-bit integers since it holds SLIN
+	 * samples. So I had two choices to make here with the offset.
+	 * 
+	 * 1. Make the offset AST_FRIENDLY_OFFSET bytes. The main downside for this is that
+	 *    I can't just add AST_FRIENDLY_OFFSET to the plc->samples_buf and have the pointer
+	 *    arithmetic come out right. I would have to do some odd casting or division for this to
+	 *    work as I wanted.
+	 * 2. Make the offset AST_FRIENDLY_OFFSET * 2 bytes. This allows the pointer arithmetic
+	 *    to work out better with the plc->samples_buf. The downside here is that the buffer's
+	 *    allocation contains an extra 64 bytes of unused space.
+	 * 
+	 * I decided to go with option 2. This is why in the calloc statement and the statement that
+	 * sets the frame's offset, AST_FRIENDLY_OFFSET is multiplied by 2.
+	 */
+
+	/* If this audio frame has no samples to fill in, ignore it */
+	if (!num_new_samples) {
+		return;
+	}
+
+	/* First, we need to be sure that our buffer is large enough to accomodate
+	 * the samples we need to fill in. This will likely only occur on the first
+	 * frame we write.
+	 */
+	if (plc->num_samples < num_new_samples) {
+		ast_free(plc->samples_buf);
+		plc->samples_buf = ast_calloc(1, (num_new_samples * sizeof(*plc->samples_buf)) + (AST_FRIENDLY_OFFSET * 2));
+		if (!plc->samples_buf) {
+			ast_channel_datastore_remove(chan, datastore);
+			ast_channel_datastore_free(datastore);
+			return;
+		}
+		plc->num_samples = num_new_samples;
+	}
+
+	if (frame->datalen == 0) {
+		plc_fillin(&plc->plc_state, plc->samples_buf + AST_FRIENDLY_OFFSET, frame->samples);
+		frame->data = plc->samples_buf + AST_FRIENDLY_OFFSET;
+		frame->datalen = num_new_samples * 2;
+		frame->offset = AST_FRIENDLY_OFFSET * 2;
+	} else {
+		plc_rx(&plc->plc_state, frame->data, frame->samples);
+	}
+}
+
+static void apply_plc(struct ast_channel *chan, struct ast_frame *frame)
+{
+	struct ast_datastore *datastore;
+	struct plc_ds *plc;
+
+	datastore = ast_channel_datastore_find(chan, &plc_ds_info, NULL);
+	if (datastore) {
+		plc = datastore->data;
+		adjust_frame_for_plc(chan, frame, datastore);
+		return;
+	}
+
+	datastore = ast_channel_datastore_alloc(&plc_ds_info, NULL);
+	if (!datastore) {
+		return;
+	}
+	plc = ast_calloc(1, sizeof(*plc));
+	if (!plc) {
+		ast_channel_datastore_free(datastore);
+		return;
+	}
+	datastore->data = plc;
+	ast_channel_datastore_add(chan, datastore);
+	adjust_frame_for_plc(chan, frame, datastore);
+}
+
 int ast_write(struct ast_channel *chan, struct ast_frame *fr)
 {
 	int res = -1;
@@ -2955,6 +3123,10 @@ int ast_write(struct ast_channel *chan, struct ast_frame *fr)
 	case AST_FRAME_VOICE:
 		if (chan->tech->write == NULL)
 			break;	/*! \todo XXX should return 0 maybe ? */
+
+		if (ast_opt_generic_plc && fr->subclass == AST_FORMAT_SLINEAR) {
+			apply_plc(chan, fr);
+		}
 
 		/* If the frame is in the raw write format, then it's easy... just use the frame - otherwise we will have to translate */
 		if (fr->subclass == chan->rawwriteformat)
@@ -3480,7 +3652,6 @@ int ast_call(struct ast_channel *chan, char *addr, int timeout)
 	if (!ast_test_flag(chan, AST_FLAG_ZOMBIE) && !ast_check_hangup(chan)) {
 		if (chan->cdr) {
 			ast_set_flag(chan->cdr, AST_CDR_FLAG_DIALED);
-			ast_set_flag(chan->cdr, AST_CDR_FLAG_ORIGINATED);
 		}
 		if (chan->tech->call)
 			res = chan->tech->call(chan, addr, timeout);
@@ -3623,10 +3794,12 @@ int ast_channel_make_compatible(struct ast_channel *chan, struct ast_channel *pe
 	}
 
 	/* if the best path is not 'pass through', then
-	   transcoding is needed; if desired, force transcode path
-	   to use SLINEAR between channels, but only if there is
-	   no direct conversion available */
-	if ((src != dst) && ast_opt_transcode_via_slin &&
+	 * transcoding is needed; if desired, force transcode path
+	 * to use SLINEAR between channels, but only if there is
+	 * no direct conversion available. If generic PLC is
+	 * desired, then transcoding via SLINEAR is a requirement
+	 */
+	if ((src != dst) && (ast_opt_generic_plc || ast_opt_transcode_via_slin) &&
 	    (ast_translate_path_steps(dst, src) != 1))
 		dst = AST_FORMAT_SLINEAR;
 	if (ast_set_read_format(peer, dst) < 0) {
@@ -4926,9 +5099,26 @@ void ast_moh_cleanup(struct ast_channel *chan)
 		ast_moh_cleanup_ptr(chan);
 }
 
+int ast_plc_reload(void)
+{
+	struct ast_variable *var;
+	struct ast_config *cfg = ast_config_load("codecs.conf");
+	if (!cfg)
+		return 0;
+	for (var = ast_variable_browse(cfg, "plc"); var; var = var->next) {
+		if (!strcasecmp(var->name, "genericplc")) {
+			ast_set2_flag(&ast_options, ast_true(var->value), AST_OPT_FLAG_GENERIC_PLC);
+		}
+	}
+	ast_config_destroy(cfg);
+	return 0;
+}
+
 void ast_channels_init(void)
 {
 	ast_cli_register_multiple(cli_channel, sizeof(cli_channel) / sizeof(struct ast_cli_entry));
+
+	ast_plc_reload();
 }
 
 /*! \brief Print call group and pickup group ---*/

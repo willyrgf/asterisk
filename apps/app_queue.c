@@ -574,10 +574,13 @@ static enum queue_member_status get_member_status(struct call_queue *q, int max_
 	struct member *member;
 	struct ao2_iterator mem_iter;
 	enum queue_member_status result = QUEUE_NO_MEMBERS;
+	int allpaused = 1, empty = 1;
 
 	ao2_lock(q);
 	mem_iter = ao2_iterator_init(q->members, 0);
 	while ((member = ao2_iterator_next(&mem_iter))) {
+		empty = 0;
+
 		if (max_penalty && (member->penalty > max_penalty)) {
 			ao2_ref(member, -1);
 			continue;
@@ -586,6 +589,8 @@ static enum queue_member_status get_member_status(struct call_queue *q, int max_
 		if (member->paused) {
 			ao2_ref(member, -1);
 			continue;
+		} else {
+			allpaused = 0;
 		}
 
 		switch (member->status) {
@@ -605,6 +610,10 @@ static enum queue_member_status get_member_status(struct call_queue *q, int max_
 	}
 	ao2_iterator_destroy(&mem_iter);
 	ao2_unlock(q);
+
+	if (!empty && allpaused) {
+		result = QUEUE_NO_REACHABLE_MEMBERS;
+	}
 	return result;
 }
 
@@ -1529,6 +1538,10 @@ static int play_file(struct ast_channel *chan, char *filename)
 	int res;
 
 	if (ast_strlen_zero(filename)) {
+		return 0;
+	}
+
+	if (!ast_fileexists(filename, NULL, chan->language)) {
 		return 0;
 	}
 
@@ -3112,7 +3125,6 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 				ast_log(LOG_NOTICE, "Caller was about to talk to agent on %s but the caller hungup.\n", peer->name);
 				ast_queue_log(queuename, qe->chan->uniqueid, member->membername, "ABANDON", "%d|%d|%ld", qe->pos, qe->opos, (long)time(NULL) - qe->start);
 				record_abandoned(qe);
-				ast_cdr_noanswer(qe->chan->cdr);
 				ast_hangup(peer);
 				ao2_ref(member, -1);
 				return -1;
@@ -3283,6 +3295,20 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 				ast_queue_log(queuename, qe->chan->uniqueid, member->membername, "TRANSFER", "%s|%s|%ld|%ld",
 					qe->chan->exten, qe->chan->context, (long) (callstart - qe->start),
 					(long) (time(NULL) - callstart));
+				if (qe->parent->eventwhencalled)
+					manager_event(EVENT_FLAG_AGENT, "AgentComplete",
+							"Queue: %s\r\n"
+							"Uniqueid: %s\r\n"
+							"Channel: %s\r\n"
+							"Member: %s\r\n"
+							"MemberName: %s\r\n"
+							"HoldTime: %ld\r\n"
+							"TalkTime: %ld\r\n"
+							"Reason: transfer\r\n"
+							"%s",
+							queuename, qe->chan->uniqueid, peer->name, member->interface, member->membername,
+							(long)(callstart - qe->start), (long)(time(NULL) - callstart),
+							qe->parent->eventwhencalled == QUEUE_EVENT_VARIABLES ? vars2manager(qe->chan, vars, sizeof(vars)) : "");
 			} else if (qe->chan->_softhangup) {
 				ast_queue_log(queuename, qe->chan->uniqueid, member->membername, "COMPLETECALLER", "%ld|%ld|%d",
 					(long) (callstart - qe->start), (long) (time(NULL) - callstart), qe->opos);
@@ -3308,12 +3334,13 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 							"Queue: %s\r\n"
 							"Uniqueid: %s\r\n"
 							"Channel: %s\r\n"
+							"Member: %s\r\n"
 							"MemberName: %s\r\n"
 							"HoldTime: %ld\r\n"
 							"TalkTime: %ld\r\n"
 							"Reason: agent\r\n"
 							"%s",
-							queuename, qe->chan->uniqueid, peer->name, member->membername, (long)(callstart - qe->start),
+							queuename, qe->chan->uniqueid, peer->name, member->interface, member->membername, (long)(callstart - qe->start),
 							(long)(time(NULL) - callstart),
 							qe->parent->eventwhencalled == QUEUE_EVENT_VARIABLES ? vars2manager(qe->chan, vars, sizeof(vars)) : "");
 			}
@@ -3321,6 +3348,21 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 				ast_channel_datastore_remove(qe->chan, tds);
 			}
 			update_queue(qe->parent, member, callcompletedinsl);
+		} else {
+			if (qe->parent->eventwhencalled)
+				manager_event(EVENT_FLAG_AGENT, "AgentComplete",
+						"Queue: %s\r\n"
+						"Uniqueid: %s\r\n"
+						"Channel: %s\r\n"
+						"Member: %s\r\n"
+						"MemberName: %s\r\n"
+						"HoldTime: %ld\r\n"
+						"TalkTime: %ld\r\n"
+						"Reason: transfer\r\n"
+						"%s",
+						queuename, qe->chan->uniqueid, peer->name, member->interface, member->membername, (long)(callstart - qe->start),
+						(long)(time(NULL) - callstart),
+						qe->parent->eventwhencalled == QUEUE_EVENT_VARIABLES ? vars2manager(qe->chan, vars, sizeof(vars)) : "");
 		}
 
 		if (transfer_ds) {
@@ -4085,7 +4127,6 @@ check_turns:
 			/* Leave if we have exceeded our queuetimeout */
 			if (qe.expire && (time(NULL) >= qe.expire)) {
 				record_abandoned(&qe);
-				ast_cdr_noanswer(qe.chan->cdr);
 				reason = QUEUE_TIMEOUT;
 				res = 0;
 				ast_queue_log(args.queuename, chan->uniqueid, "NONE", "EXITWITHTIMEOUT", "%d", qe.pos);
@@ -4104,7 +4145,6 @@ check_turns:
 			/* Leave if we have exceeded our queuetimeout */
 			if (qe.expire && (time(NULL) >= qe.expire)) {
 				record_abandoned(&qe);
-				ast_cdr_noanswer(qe.chan->cdr);
 				reason = QUEUE_TIMEOUT;
 				res = 0;
 				ast_queue_log(args.queuename, chan->uniqueid, "NONE", "EXITWITHTIMEOUT", "%d", qe.pos);
@@ -4118,7 +4158,6 @@ check_turns:
 			/* Leave if we have exceeded our queuetimeout */
 			if (qe.expire && (time(NULL) >= qe.expire)) {
 				record_abandoned(&qe);
-				ast_cdr_noanswer(qe.chan->cdr);
 				reason = QUEUE_TIMEOUT;
 				res = 0;
 				ast_queue_log(args.queuename, chan->uniqueid, "NONE", "EXITWITHTIMEOUT", "%d", qe.pos);
@@ -4137,7 +4176,6 @@ check_turns:
 					ast_verbose(VERBOSE_PREFIX_3 "Exiting on time-out cycle\n");
 				ast_queue_log(args.queuename, chan->uniqueid, "NONE", "EXITWITHTIMEOUT", "%d", qe.pos);
 				record_abandoned(&qe);
-				ast_cdr_noanswer(qe.chan->cdr);
 				reason = QUEUE_TIMEOUT;
 				res = 0;
 				break;
@@ -4146,7 +4184,6 @@ check_turns:
 			/* leave the queue if no agents, if enabled */
 			if (qe.parent->leavewhenempty && (stat == QUEUE_NO_MEMBERS)) {
 				record_abandoned(&qe);
-				ast_cdr_noanswer(qe.chan->cdr);
 				reason = QUEUE_LEAVEEMPTY;
 				ast_queue_log(args.queuename, chan->uniqueid, "NONE", "EXITEMPTY", "%d|%d|%ld", qe.pos, qe.opos, (long)(time(NULL) - qe.start));
 				res = 0;
@@ -4156,7 +4193,6 @@ check_turns:
 			/* leave the queue if no reachable agents, if enabled */
 			if ((qe.parent->leavewhenempty == QUEUE_EMPTY_STRICT) && (stat == QUEUE_NO_REACHABLE_MEMBERS)) {
 				record_abandoned(&qe);
-				ast_cdr_noanswer(qe.chan->cdr);
 				reason = QUEUE_LEAVEUNAVAIL;
 				ast_queue_log(args.queuename, chan->uniqueid, "NONE", "EXITEMPTY", "%d|%d|%ld", qe.pos, qe.opos, (long)(time(NULL) - qe.start));
 				res = 0;
@@ -4166,7 +4202,6 @@ check_turns:
 			/* Leave if we have exceeded our queuetimeout */
 			if (qe.expire && (time(NULL) >= qe.expire)) {
 				record_abandoned(&qe);
-				ast_cdr_noanswer(qe.chan->cdr);
 				reason = QUEUE_TIMEOUT;
 				res = 0;
 				ast_queue_log(args.queuename, chan->uniqueid, "NONE", "EXITWITHTIMEOUT", "%d", qe.pos);
@@ -4198,7 +4233,6 @@ stop:
 			if (res < 0) {
 				if (!qe.handled) {
 					record_abandoned(&qe);
-					ast_cdr_noanswer(qe.chan->cdr);
 					ast_queue_log(args.queuename, chan->uniqueid, "NONE", "ABANDON",
 						"%d|%d|%ld", qe.pos, qe.opos,
 						(long) time(NULL) - qe.start);

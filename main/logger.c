@@ -147,7 +147,10 @@ static int make_components(char *s, int lineno)
 	char *stringp = s;
 
 	while ((w = strsep(&stringp, ","))) {
-		w = ast_skip_blanks(w);
+		w = ast_strip(w);
+		if (ast_strlen_zero(w)) {
+			continue;
+		}
 		if (!strcasecmp(w, "error")) 
 			res |= (1 << __LOG_ERROR);
 		else if (!strcasecmp(w, "warning"))
@@ -573,12 +576,16 @@ static struct ast_cli_entry cli_logger[] = {
 	logger_rotate_help },
 };
 
-static int handle_SIGXFSZ(int sig) 
+static void _handle_SIGXFSZ(int sig)
 {
 	/* Indicate need to reload */
 	filesize_reload_needed = 1;
-	return 0;
 }
+
+static struct sigaction handle_SIGXFSZ = {
+	.sa_handler = _handle_SIGXFSZ,
+	.sa_flags = SA_RESTART,
+};
 
 int init_logger(void)
 {
@@ -586,13 +593,13 @@ int init_logger(void)
 	int res = 0;
 
 	/* auto rotate if sig SIGXFSZ comes a-knockin */
-	(void) signal(SIGXFSZ,(void *) handle_SIGXFSZ);
+	sigaction(SIGXFSZ, &handle_SIGXFSZ, NULL);
 
 	/* register the logger cli commands */
 	ast_cli_register_multiple(cli_logger, sizeof(cli_logger) / sizeof(struct ast_cli_entry));
 
 	mkdir((char *)ast_config_AST_LOG_DIR, 0755);
-  
+
 	/* create log channels */
 	init_logger_chain();
 

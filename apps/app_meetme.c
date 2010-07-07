@@ -2322,6 +2322,20 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 					}
 				} else if (f->frametype == AST_FRAME_NULL) {
 					/* Ignore NULL frames. It is perfectly normal to get these if the person is muted. */
+				} else if (f->frametype == AST_FRAME_CONTROL) {
+					switch (f->subclass) {
+					case AST_CONTROL_BUSY:
+					case AST_CONTROL_CONGESTION:
+						ast_frfree(f);
+						goto outrun;
+						break;
+					default:
+						if (option_debug) {
+							ast_log(LOG_DEBUG, 
+								"Got ignored control frame on channel %s, f->frametype=%d,f->subclass=%d\n",
+								chan->name, f->frametype, f->subclass);
+						}
+					}
 				} else if (option_debug) {
 					ast_log(LOG_DEBUG,
 						"Got unrecognized frame on channel %s, f->frametype=%d,f->subclass=%d\n",
@@ -2352,6 +2366,10 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 						ast_mutex_lock(&conf->listenlock);
 						if (!conf->transframe[index]) {
 							if (conf->origframe) {
+								if (musiconhold && !ast_dsp_silence(dsp, conf->origframe, &confsilence) && confsilence < MEETME_DELAYDETECTTALK) {
+									ast_moh_stop(chan);
+									mohtempstopped = 1;
+								}
 								if (!conf->transpath[index])
 									conf->transpath[index] = ast_translator_build_path((1 << index), AST_FORMAT_SLINEAR);
 								if (conf->transpath[index]) {
@@ -2365,11 +2383,6 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 							if ((conf->transframe[index]->frametype != AST_FRAME_NULL) &&
 							    can_write(chan, confflags)) {
 								struct ast_frame *cur;
-								if (musiconhold && !ast_dsp_silence(dsp, conf->transframe[index], &confsilence) && confsilence < MEETME_DELAYDETECTTALK) {
-									ast_moh_stop(chan);
-									mohtempstopped = 1;
-								}
-
 								/* the translator may have returned a list of frames, so
 								   write each one onto the channel
 								*/
@@ -2874,10 +2887,10 @@ static int conf_exec(struct ast_channel *chan, void *data)
 				if (allowretry)
 					confno[0] = '\0';
 			} else {
-				if ((!ast_strlen_zero(cnf->pin) &&
-				     !ast_test_flag(&confflags, CONFFLAG_ADMIN)) ||
-				    (!ast_strlen_zero(cnf->pinadmin) &&
-				     ast_test_flag(&confflags, CONFFLAG_ADMIN))) {
+				if (((!ast_strlen_zero(cnf->pin) &&
+				    !ast_test_flag(&confflags, CONFFLAG_ADMIN)) ||
+				    !ast_strlen_zero(cnf->pinadmin)) &&
+				    (!(cnf->users == 0 && cnf->isdynamic))) {
 					char pin[MAX_PIN] = "";
 					int j;
 
