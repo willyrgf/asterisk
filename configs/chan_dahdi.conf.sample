@@ -182,6 +182,12 @@
 ;
 ;inbanddisconnect=yes
 ;
+; Allow a held call to be transferred to the active call on disconnect.
+; This is useful on BRI PTMP NT lines where an ISDN phone can simulate the
+; transfer feature of an analog phone.
+; The default is no.
+;hold_disconnect_transfer=yes
+;
 ; PRI Out of band indications.
 ; Enable this to report Busy and Congestion on a PRI using out-of-band
 ; notification. Inband indication, as used by Asterisk doesn't seem to work
@@ -373,8 +379,19 @@ usecallerid=yes
 ;     polarity_IN = polarity reversal signals the start, for India,
 ;                   for dtmf dialtone detection; using DTMF.
 ;                   (see doc/India-CID.txt)
+;     dtmf        = causes monitor loop to look for dtmf energy on the
+;                   incoming channel to initate cid acquisition
 ;
 ;cidstart=polarity
+;
+; When cidstart=dtmf, the energy level on the line used to trigger dtmf cid
+; acquisition. This number is compared to the average over a packet of audio
+; of the absolute values of 16 bit signed linear samples. The default is set
+; to 256. The choice of 256 is arbitrary. The value you should select should
+; be high enough to prevent false detections while low enough to insure that
+; no dtmf spills are missed.
+;
+;dtmfcidlevel=256
 ;
 ; Whether or not to hide outgoing caller ID (Override with *67 or *82)
 ; (If your dialplan doesn't catch it)
@@ -566,15 +583,27 @@ echocancelwhenbridged=yes
 ;                increases the volume level on a channel, and a
 ;                negavive value decreases volume level.
 ;
+; Dynamic Range Compression: you can also enable dynamic range compression
+;                on a channel. This will amplify quiet sounds while leaving
+;                louder sounds untouched. This is useful in situations where
+;                a linear gain setting would cause clipping. Acceptable values
+;                are in the range of 0.0 to around 6.0 with higher values
+;                causing more compression to be done.
+;
 ;                There are several independent gain settings:
 ;   rxgain: gain for the rx (receive - into Asterisk) channel. Default: 0.0
 ;   txgain: gain for the tx (transmit - out of Asterisk Asterisk) channel.
 ;           Default: 0.0
 ;   cid_rxgain: set the gain just for the caller ID sounds Asterisk
 ;               emits. Default: 5.0 .
+;   rxdrc: dynamic range compression for the rx channel. Default: 0.0
+;   txdrc: dynamic range compression for the tx channel. Default: 0.0
 
 ;rxgain=2.0
 ;txgain=3.0
+;
+;rxdrc=1.0
+;txdrc=4.0
 ;
 ; Logical groups can be assigned to allow outgoing roll-over.  Groups range
 ; from 0 to 63, and multiple groups can be specified. By default the

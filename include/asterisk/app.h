@@ -84,6 +84,12 @@ struct ast_ivr_menu {
 	static struct ast_ivr_option __options_##holder[] = foo;\
 	static struct ast_ivr_menu holder = { title, flags, __options_##holder }
 
+enum ast_timelen {
+	TIMELEN_HOURS,
+	TIMELEN_MINUTES,
+	TIMELEN_SECONDS,
+	TIMELEN_MILLISECONDS,
+};
 
 /*!	\brief Runs an IVR menu
 	\return returns 0 on successful completion, -1 on hangup, or -2 on user error in menu */
@@ -109,7 +115,7 @@ int ast_app_getdata(struct ast_channel *c, const char *prompt, char *s, int maxl
 int ast_app_getdata_full(struct ast_channel *c, const char *prompt, char *s, int maxlen, int timeout, int audiofd, int ctrlfd);
 
 /*!
- * \since 1.6.3
+ * \since 1.8
  * \brief Run a macro on a channel, placing a second channel into autoservice.
  *
  * This is a shorthand method that makes it very easy to run a macro on any given 
@@ -549,12 +555,21 @@ int ast_app_dtget(struct ast_channel *chan, const char *context, char *collect, 
 /*! \brief Allow to record message and have a review option */
 int ast_record_review(struct ast_channel *chan, const char *playfile, const char *recordfile, int maxtime, const char *fmt, int *duration, const char *path);
 
-/*! \brief Decode an encoded control or extended ASCII character 
-    \return Returns a pointer to the result string
-*/
+/*!\brief Decode an encoded control or extended ASCII character 
+ * \param[in] stream String to decode
+ * \param[out] result Decoded character
+ * \param[out] consumed Number of characters used in stream to encode the character
+ * \retval -1 Stream is of zero length
+ * \retval 0 Success
+ */
 int ast_get_encoded_char(const char *stream, char *result, size_t *consumed);
 
-/*! \brief Decode a stream of encoded control or extended ASCII characters */
+/*!\brief Decode a stream of encoded control or extended ASCII characters
+ * \param[in] stream Encoded string
+ * \param[out] result Decoded string
+ * \param[in] result_len Maximum size of the result buffer
+ * \return A pointer to the result string
+ */
 char *ast_get_encoded_str(const char *stream, char *result, size_t result_len);
 
 /*! \brief Decode a stream of encoded control or extended ASCII characters */
@@ -579,6 +594,17 @@ int ast_safe_fork(int stop_reaper);
  * \since 1.6.1
  */
 void ast_safe_fork_cleanup(void);
+
+/*!
+ * \brief Common routine to parse time lengths, with optional time unit specifier
+ * \param[in] timestr String to parse
+ * \param[in] defunit Default unit type
+ * \param[out] result Resulting value, specified in milliseconds
+ * \retval 0 Success
+ * \retval -1 Failure
+ * \since 1.8
+ */
+int ast_app_parse_timelen(const char *timestr, int *result, enum ast_timelen defunit);
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }

@@ -204,9 +204,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 				</enumlist>
 				<para><emphasis>chan_iax2</emphasis> provides the following additional options:</para>
 				<enumlist>
-					<enum name="osptoken">
-						<para>R/W Get or set the OSP token information for a call.</para>
-					</enum>
 					<enum name="peerip">
 						<para>R/O Get the peer's ip address.</para>
 					</enum>
@@ -465,7 +462,7 @@ static int func_channels_read(struct ast_channel *chan, const char *function, ch
 		}
 	}
 
-	if (!(iter = ast_channel_iterator_all_new(0))) {
+	if (!(iter = ast_channel_iterator_all_new())) {
 		if (!ast_strlen_zero(data)) {
 			regfree(&re);
 		}

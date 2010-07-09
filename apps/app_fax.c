@@ -180,7 +180,7 @@ static int t38_tx_packet_handler(t38_core_state_t *s, void *user_data, const uin
 
 	struct ast_frame outf = {
 		.frametype = AST_FRAME_MODEM,
-		.subclass = AST_MODEM_T38,
+		.subclass.integer = AST_MODEM_T38,
 		.src = __FUNCTION__,
 	};
 
@@ -248,7 +248,7 @@ static void phase_e_handler(t30_state_t *f, void *user_data, int result)
 	ast_debug(1, "  Image resolution:  %d x %d\n", stat.x_resolution, stat.y_resolution);
 	ast_debug(1, "  Transfer Rate:     %d\n", stat.bit_rate);
 	
-	manager_event(EVENT_FLAG_CALL,
+	ast_manager_event(s->chan, EVENT_FLAG_CALL,
 		      s->direction ? "FaxSent" : "FaxReceived", 
 		      "Channel: %s\r\n"
 		      "Exten: %s\r\n"
@@ -327,7 +327,7 @@ static int fax_generator_generate(struct ast_channel *chan, void *data, int len,
     
 	struct ast_frame outf = {
 		.frametype = AST_FRAME_VOICE,
-		.subclass = AST_FORMAT_SLINEAR,
+		.subclass.codec = AST_FORMAT_SLINEAR,
 		.src = __FUNCTION__,
 	};
 
@@ -370,15 +370,15 @@ static int transmit_audio(fax_session *s)
 	enum ast_t38_state t38_state;
 	struct ast_control_t38_parameters t38_parameters = { .version = 0,
 							     .max_ifp = 800,
-							     .rate = AST_T38_RATE_9600,
+							     .rate = AST_T38_RATE_14400,
 							     .rate_management = AST_T38_RATE_MANAGEMENT_TRANSFERRED_TCF,
 							     .fill_bit_removal = 1,
 							     .transcoding_mmr = 1,
 							     .transcoding_jbig = 1,
 	};
 
-	/* if in receive mode, try to use T.38 */
-	if (!s->direction) {
+	/* if in called party mode, try to use T.38 */
+	if (s->caller_mode == FALSE) {
 		/* check if we are already in T.38 mode (unlikely), or if we can request
 		 * a switch... if so, request it now and wait for the result, rather
 		 * than starting an audio FAX session that will have to be cancelled
@@ -413,7 +413,7 @@ static int transmit_audio(fax_session *s)
 					return -1;
 				}
 				if ((inf->frametype == AST_FRAME_CONTROL) &&
-				    (inf->subclass == AST_CONTROL_T38_PARAMETERS) &&
+				    (inf->subclass.integer == AST_CONTROL_T38_PARAMETERS) &&
 				    (inf->datalen == sizeof(t38_parameters))) {
 					struct ast_control_t38_parameters *parameters = inf->data.ptr;
 					
@@ -517,12 +517,12 @@ static int transmit_audio(fax_session *s)
 			break;
 		}
 
-		ast_debug(10, "frame %d/%d, len=%d\n", inf->frametype, inf->subclass, inf->datalen);
+		ast_debug(10, "frame %d/%llu, len=%d\n", inf->frametype, (unsigned long long) inf->subclass.codec, inf->datalen);
 
 		/* Check the frame type. Format also must be checked because there is a chance
 		   that a frame in old format was already queued before we set channel format
 		   to slinear so it will still be received by ast_read */
-		if (inf->frametype == AST_FRAME_VOICE && inf->subclass == AST_FORMAT_SLINEAR) {
+		if (inf->frametype == AST_FRAME_VOICE && inf->subclass.codec == AST_FORMAT_SLINEAR) {
 			if (fax_rx(&fax, inf->data.ptr, inf->samples) < 0) {
 				/* I know fax_rx never returns errors. The check here is for good style only */
 				ast_log(LOG_WARNING, "fax_rx returned error\n");
@@ -534,7 +534,7 @@ static int transmit_audio(fax_session *s)
 				last_state = t30state->state;
 			}
 		} else if ((inf->frametype == AST_FRAME_CONTROL) &&
-			   (inf->subclass == AST_CONTROL_T38_PARAMETERS)) {
+			   (inf->subclass.integer == AST_CONTROL_T38_PARAMETERS)) {
 			struct ast_control_t38_parameters *parameters = inf->data.ptr;
 
 			if (parameters->request_response == AST_T38_NEGOTIATED) {
@@ -613,7 +613,8 @@ static int transmit_t38(fax_session *s)
 	memset(&t38, 0, sizeof(t38));
 	if (t38_terminal_init(&t38, s->caller_mode, t38_tx_packet_handler, s->chan) == NULL) {
 		ast_log(LOG_WARNING, "Unable to start T.38 termination.\n");
-		return -1;
+		res = -1;
+		goto disable_t38;
 	}
 
 	t38_set_max_datagram_size(t38state, s->t38parameters.max_ifp);
@@ -676,15 +677,15 @@ static int transmit_t38(fax_session *s)
 			break;
 		}
 
-		ast_debug(10, "frame %d/%d, len=%d\n", inf->frametype, inf->subclass, inf->datalen);
+		ast_debug(10, "frame %d/%d, len=%d\n", inf->frametype, inf->subclass.integer, inf->datalen);
 
-		if (inf->frametype == AST_FRAME_MODEM && inf->subclass == AST_MODEM_T38) {
+		if (inf->frametype == AST_FRAME_MODEM && inf->subclass.integer == AST_MODEM_T38) {
 			t38_core_rx_ifp_packet(t38state, inf->data.ptr, inf->datalen, inf->seqno);
 			if (last_state != t30state->state) {
 				state_change = ast_tvnow();
 				last_state = t30state->state;
 			}
-		} else if (inf->frametype == AST_FRAME_CONTROL && inf->subclass == AST_CONTROL_T38_PARAMETERS) {
+		} else if (inf->frametype == AST_FRAME_CONTROL && inf->subclass.integer == AST_CONTROL_T38_PARAMETERS) {
 			struct ast_control_t38_parameters *parameters = inf->data.ptr;
 			if (parameters->request_response == AST_T38_TERMINATED) {
 				ast_debug(1, "T38 down, finishing\n");
@@ -702,6 +703,63 @@ static int transmit_t38(fax_session *s)
 
 	t30_terminate(t30state);
 	t38_terminal_release(&t38);
+
+disable_t38:
+	/* if we are not the caller, it's our job to shut down the T.38
+	 * session when the FAX transmisson is complete.
+	 */
+	if ((s->caller_mode == FALSE) &&
+	    (ast_channel_get_t38_state(s->chan) == T38_STATE_NEGOTIATED)) {
+		struct ast_control_t38_parameters t38_parameters = { .request_response = AST_T38_REQUEST_TERMINATE, };
+
+		if (ast_indicate_data(s->chan, AST_CONTROL_T38_PARAMETERS, &t38_parameters, sizeof(t38_parameters)) == 0) {
+			/* wait up to five seconds for negotiation to complete */
+			unsigned int timeout = 5000;
+			int ms;
+			
+			ast_debug(1, "Shutting down T.38 on %s\n", s->chan->name);
+			while (timeout > 0) {
+				ms = ast_waitfor(s->chan, 1000);
+				if (ms < 0) {
+					ast_log(LOG_WARNING, "something bad happened while channel '%s' was polling.\n", s->chan->name);
+					return -1;
+				}
+				if (!ms) {
+					/* nothing happened */
+					if (timeout > 0) {
+						timeout -= 1000;
+						continue;
+					} else {
+						ast_log(LOG_WARNING, "channel '%s' timed-out during the T.38 shutdown.\n", s->chan->name);
+						break;
+					}
+				}
+				if (!(inf = ast_read(s->chan))) {
+					return -1;
+				}
+				if ((inf->frametype == AST_FRAME_CONTROL) &&
+				    (inf->subclass.integer == AST_CONTROL_T38_PARAMETERS) &&
+				    (inf->datalen == sizeof(t38_parameters))) {
+					struct ast_control_t38_parameters *parameters = inf->data.ptr;
+					
+					switch (parameters->request_response) {
+					case AST_T38_TERMINATED:
+						ast_debug(1, "Shut down T.38 on %s\n", s->chan->name);
+						break;
+					case AST_T38_REFUSED:
+						ast_log(LOG_WARNING, "channel '%s' refused to disable T.38\n", s->chan->name);
+						break;
+					default:
+						ast_log(LOG_ERROR, "channel '%s' failed to disable T.38\n", s->chan->name);
+						break;
+					}
+					ast_frfree(inf);
+					break;
+				}
+				ast_frfree(inf);
+			}
+		}
+	}
 
 	return res;
 }

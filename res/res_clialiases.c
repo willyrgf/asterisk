@@ -154,10 +154,10 @@ static char *alias_show(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a
 	ast_cli(a->fd, FORMAT, "Alias Command", "Real Command");
 
 	i = ao2_iterator_init(cli_aliases, 0);
-
 	for (; (alias = ao2_iterator_next(&i)); ao2_ref(alias, -1)) {
 		ast_cli(a->fd, FORMAT, alias->alias, alias->real_cmd);
 	}
+	ao2_iterator_destroy(&i);
 
 	return CLI_SUCCESS;
 #undef FORMAT
@@ -167,12 +167,6 @@ static char *alias_show(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a
 static struct ast_cli_entry cli_alias[] = {
 	AST_CLI_DEFINE(alias_show, "Show CLI command aliases"),
 };
-
-/*! \brief Function called to to see if an alias is marked for destruction, they always are! */
-static int alias_marked(void *obj, void *arg, int flags)
-{
-	return CMP_MATCH;
-}
 
 /*! \brief Function called to load or reload the configuration file */
 static void load_config(int reload)
@@ -191,7 +185,7 @@ static void load_config(int reload)
 
 	/* Destroy any existing CLI aliases */
 	if (reload) {
-		ao2_callback(cli_aliases, OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE , alias_marked, NULL);
+		ao2_callback(cli_aliases, OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE, NULL, NULL);
 	}
 
 	for (v = ast_variable_browse(cfg, "general"); v; v = v->next) {

@@ -18,6 +18,7 @@
 #define _ASTERISK_ASTOBJ2_H
 
 #include "asterisk/compat.h"
+#include "asterisk/linkedlists.h"
 
 /*! \file
  * \ref AstObj2
@@ -206,7 +207,7 @@ were called to appear in /tmp/refs, you can do this sort of thing:
 #ifdef REF_DEBUG
 #define dialog_ref(arg1,arg2) dialog_ref_debug((arg1),(arg2), __FILE__, __LINE__, __PRETTY_FUNCTION__)
 #define dialog_unref(arg1,arg2) dialog_unref_debug((arg1),(arg2), __FILE__, __LINE__, __PRETTY_FUNCTION__)
-static struct sip_pvt *dialog_ref_debug(struct sip_pvt *p, char *tag, char *file, int line, const char *func)
+static struct sip_pvt *dialog_ref_debug(struct sip_pvt *p, char *tag, const char *file, int line, const char *func)
 {
 	if (p)
 		ao2_ref_debug(p, 1, tag, file, line, func);
@@ -215,7 +216,7 @@ static struct sip_pvt *dialog_ref_debug(struct sip_pvt *p, char *tag, char *file
 	return p;
 }
 
-static struct sip_pvt *dialog_unref_debug(struct sip_pvt *p, char *tag, char *file, int line, const char *func)
+static struct sip_pvt *dialog_unref_debug(struct sip_pvt *p, char *tag, const char *file, int line, const char *func)
 {
 	if (p)
 		ao2_ref_debug(p, -1, tag, file, line, func);
@@ -547,7 +548,7 @@ Operations on container include:
     can be:
 	OBJ_UNLINK - to remove the object, once found, from the container.
 	OBJ_NODATA - don't return the object if found (no ref count change)
-	OBJ_MULTIPLE - don't stop at first match (not fully implemented)
+	OBJ_MULTIPLE - don't stop at first match
 	OBJ_POINTER	- if set, 'arg' is an object pointer, and a hashtable
                   search will be done. If not, a traversal is done.
 
@@ -559,7 +560,7 @@ Operations on container include:
       - flags can be
 	     OBJ_UNLINK   - to remove the object, once found, from the container.
 	     OBJ_NODATA   - don't return the object if found (no ref count change)
-	     OBJ_MULTIPLE - don't stop at first match (not fully implemented)
+	     OBJ_MULTIPLE - don't stop at first match
 	     OBJ_POINTER  - if set, 'arg' is an object pointer, and a hashtable
                         search will be done. If not, a traversal is done through
                         all the hashtable 'buckets'..
@@ -597,6 +598,8 @@ Operations on container include:
 		... do something on o ...
 		ao2_ref(o, -1);
 	    }
+
+	    ao2_iterator_destroy(&i);
 \endcode
 
 	The difference with the callback is that the control
@@ -656,22 +659,21 @@ enum _cb_results {
  */
 enum search_flags {
 	/*! Unlink the object for which the callback function
-	 *  returned CMP_MATCH . This is the only way to extract
-	 *  objects from a container. */
+	 *  returned CMP_MATCH.
+	 */
 	OBJ_UNLINK	 = (1 << 0),
 	/*! On match, don't return the object hence do not increase
-	 *  its refcount. */
+	 *  its refcount.
+	 */
 	OBJ_NODATA	 = (1 << 1),
-	/*! Don't stop at the first match in ao2_callback()
-	 *  \note This is not fully implemented.   Using OBJ_MULTIME with OBJ_NODATA
-	 *  is perfectly fine.  The part that is not implemented is the case where
-	 *  multiple objects should be returned by ao2_callback().
+	/*! Don't stop at the first match in ao2_callback().
 	 */
 	OBJ_MULTIPLE = (1 << 2),
 	/*! obj is an object of the same type as the one being searched for,
 	 *  so use the object's hash function for optimized searching.
 	 *  The search function is unaffected (i.e. use the one passed as
-	 *  argument, or match_by_addr if none specified). */
+	 *  argument, or match_by_addr if none specified).
+	 */
 	OBJ_POINTER	 = (1 << 3),
 	/*! 
 	 * \brief Continue if a match is not found in the hashed out bucket
@@ -815,12 +817,6 @@ void *__ao2_unlink_debug(struct ao2_container *c, void *obj, char *tag, char *fi
 void *__ao2_unlink(struct ao2_container *c, void *obj);
 
 
-/*! \brief Used as return value if the flag OBJ_MULTIPLE is set */
-struct ao2_list {
-	struct ao2_list *next;
-	void *obj;	/* pointer to the user portion of the object */
-};
-
 /*@} */
 
 /*! \brief
@@ -845,21 +841,22 @@ struct ao2_list {
     should immediately stop, or both (via bitwise ORing), if you find a
     match and want to end the traversal, and 0 if the object is not a match,
     but the traversal should continue. This is the function that is applied
-    to each object traversed. It's arguments are:
+    to each object traversed. Its arguments are:
         (void *obj, void *arg, int flags), where:
           obj is an object
           arg is the same as arg passed into ao2_callback
           flags is the same as flags passed into ao2_callback (flags are
            also used by ao2_callback).
  * \param arg passed to the callback.
- * \return 	A pointer to the object found/marked,
- * 		a pointer to a list of objects matching comparison function,
- * 		NULL if not found.
+ * \return when OBJ_MULTIPLE is not included in the flags parameter,
+ *         the return value will be either the object found or NULL if no
+ *         no matching object was found. if OBJ_MULTIPLE is included,
+ *         the return value will be a pointer to an ao2_iterator object,
+ *         which must be destroyed with ao2_iterator_destroy() when the
+ *         caller no longer needs it.
  *
  * If the function returns any objects, their refcount is incremented,
  * and the caller is in charge of decrementing them once done.
- * Also, in case of multiple values returned, the list used
- * to store the objects must be freed by the caller.
  *
  * Typically, ao2_callback() is used for two purposes:
  * - to perform some action (including removal from the container) on one
@@ -879,9 +876,7 @@ struct ao2_list {
  * we can say this looking at flags value.
  * If p points to an object we will search for the object pointed
  * by this value, otherwise we serch for a key value.
- * If the key is not uniq we only find the first matching valued.
- * If we use the OBJ_MARK flags, we mark all the objects matching
- * the condition.
+ * If the key is not unique we only find the first matching valued.
  *
  * The use of flags argument is the follow:
  *
@@ -890,12 +885,8 @@ struct ao2_list {
  *				Callbacks use OBJ_NODATA as a default
  *				functions such as find() do
  *	OBJ_MULTIPLE		return multiple matches
- *				Default for _find() is no.
- *				to a key (not yet supported)
+ *				Default is no.
  *	OBJ_POINTER 		the pointer is an object pointer
- *
- * In case we return a list, the callee must take care to destroy
- * that list when no longer used.
  *
  * \note When the returned object is no longer in use, ao2_ref() should
  * be used to free the additional reference possibly created by this function.
@@ -975,15 +966,15 @@ void *__ao2_find(struct ao2_container *c, void *arg, enum search_flags flags);
 /*! \brief
  *
  *
- * When we need to walk through a container, we use
+ * When we need to walk through a container, we use an
  * ao2_iterator to keep track of the current position.
  *
  * Because the navigation is typically done without holding the
- * lock on the container across the loop,
- * objects can be inserted or deleted or moved
- * while we work. As a consequence, there is no guarantee that
- * the we manage to touch all the elements on the list, or it
- * is possible that we touch the same object multiple times.
+ * lock on the container across the loop, objects can be inserted or deleted
+ * or moved while we work. As a consequence, there is no guarantee that
+ * we manage to touch all the elements in the container, and it is possible
+ * that we touch the same object multiple times.
+ *
  * However, within the current hash table container, the following is true:
  *  - It is not possible to miss an object in the container while iterating
  *    unless it gets added after the iteration begins and is added to a bucket
@@ -1002,6 +993,10 @@ void *__ao2_find(struct ao2_container *c, void *arg, enum search_flags flags);
  * ao2_iterator_next() has its refcount incremented,
  * and the reference must be explicitly released when done with it.
  *
+ * In addition, ao2_iterator_init() will hold a reference to the container
+ * being iterated, which will be freed when ao2_iterator_destroy() is called
+ * to free up the resources used by the iterator (if any).
+ *
  * Example:
  *
  *  \code
@@ -1017,12 +1012,14 @@ void *__ao2_find(struct ao2_container *c, void *arg, enum search_flags flags);
  *     ao2_ref(o, -1);
  *  }
  *
+ *  ao2_iterator_destroy(&i);
+ *
  *  \endcode
  *
  */
 
 /*! \brief
- * The Astobj2 iterator
+ * The astobj2 iterator
  *
  * \note You are not supposed to know the internals of an iterator!
  * We would like the iterator to be opaque, unfortunately
@@ -1038,21 +1035,20 @@ void *__ao2_find(struct ao2_container *c, void *arg, enum search_flags flags);
  * - a bucket number;
  * - the object_id, which is also the container version number
  *   when the object was inserted. This identifies the object
- *   univoquely, however reaching the desired object requires
+ *   uniquely, however reaching the desired object requires
  *   scanning a list.
  * - a pointer, and a container version when we saved the pointer.
  *   If the container has not changed its version number, then we
  *   can safely follow the pointer to reach the object in constant time.
  *
  * Details are in the implementation of ao2_iterator_next()
- * A freshly-initialized iterator has bucket=0, version = 0.
+ * A freshly-initialized iterator has bucket=0, version=0.
  */
 struct ao2_iterator {
 	/*! the container */
 	struct ao2_container *c;
 	/*! operation flags */
 	int flags;
-#define	F_AO2I_DONTLOCK	1	/*!< don't lock when iterating */
 	/*! current bucket */
 	int bucket;
 	/*! container version */
@@ -1063,11 +1059,55 @@ struct ao2_iterator {
 	unsigned int version;
 };
 
-/* the flags field can contain F_AO2I_DONTLOCK, which will prevent
-   ao2_iterator_next calls from locking the container while it
-   searches for the next pointer */
+/*! Flags that can be passed to ao2_iterator_init() to modify the behavior
+ * of the iterator.
+ */
+enum ao2_iterator_flags {
+	/*! Prevents ao2_iterator_next() from locking the container
+	 * while retrieving the next object from it.
+	 */
+	AO2_ITERATOR_DONTLOCK = (1 << 0),
+	/*! Indicates that the iterator was dynamically allocated by
+	 * astobj2 API and should be freed by ao2_iterator_destroy().
+	 */
+	AO2_ITERATOR_MALLOCD = (1 << 1),
+	/*! Indicates that before the iterator returns an object from
+	 * the container being iterated, the object should be unlinked
+	 * from the container.
+	 */
+	AO2_ITERATOR_UNLINK = (1 << 2),
+};
 
+/*!
+ * \brief Create an iterator for a container
+ *
+ * \param c the container
+ * \param flags one or more flags from ao2_iterator_flags
+ *
+ * \retval the constructed iterator
+ *
+ * \note This function does \b not take a pointer to an iterator;
+ *       rather, it returns an iterator structure that should be
+ *       assigned to (overwriting) an existing iterator structure
+ *       allocated on the stack or on the heap.
+ *
+ * This function will take a reference on the container being iterated.
+ *
+ */
 struct ao2_iterator ao2_iterator_init(struct ao2_container *c, int flags);
+
+/*!
+ * \brief Destroy a container iterator
+ *
+ * \param i the iterator to destroy
+ *
+ * \retval none
+ *
+ * This function will release the container reference held by the iterator
+ * and any other resources it may be holding.
+ *
+ */
+void ao2_iterator_destroy(struct ao2_iterator *i);
 
 #ifdef REF_DEBUG
 

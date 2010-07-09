@@ -292,7 +292,7 @@ static int internal_ao2_ref(void *user_data, const int delta)
 		 * first word of the user-data, which we make sure is always
 		 * allocated. */
 		memset(obj, '\0', sizeof(struct astobj2 *) + sizeof(void *) );
-		free(obj);
+		ast_free(obj);
 	}
 
 	return ret;
@@ -509,7 +509,7 @@ static struct bucket_list *internal_ao2_link(struct ao2_container *c, void *user
 	if (!p)
 		return NULL;
 
-	i = c->hash_fn(user_data, OBJ_POINTER);
+	i = abs(c->hash_fn(user_data, OBJ_POINTER));
 
 	ao2_lock(c);
 	i %= c->n_buckets;
@@ -593,6 +593,8 @@ static int cb_true_data(void *user_data, void *arg, void *data, int flags)
 	return CMP_MATCH;
 }
 
+#define USE_CONTAINER(x) (((x) & (OBJ_MULTIPLE | OBJ_NODATA)) == OBJ_MULTIPLE)
+
 /*!
  * Browse the container using different stategies accoding the flags.
  * \return Is a pointer to an object or to a list of object if OBJ_MULTIPLE is 
@@ -609,13 +611,27 @@ static void *internal_ao2_callback(struct ao2_container *c,
 	void *ret = NULL;
 	ao2_callback_fn *cb_default = NULL;
 	ao2_callback_data_fn *cb_withdata = NULL;
+	struct ao2_container *multi_container = NULL;
+	struct ao2_iterator *multi_iterator = NULL;
 
 	if (INTERNAL_OBJ(c) == NULL)	/* safety check on the argument */
 		return NULL;
 
-	if ((flags & (OBJ_MULTIPLE | OBJ_NODATA)) == OBJ_MULTIPLE) {
-		ast_log(LOG_WARNING, "multiple data return not implemented yet (flags %x)\n", flags);
-		return NULL;
+	if (USE_CONTAINER(flags)) {
+		/* we need to return an ao2_iterator with the results,
+		 * as there could be more than one. the iterator will
+		 * hold the only reference to a container that has all the
+		 * matching objects linked into it, so when the iterator
+		 * is destroyed, the container will be automatically
+		 * destroyed as well.
+		 */
+		if (!(multi_container = __ao2_container_alloc(1, NULL, NULL))) {
+			return NULL;
+		}
+		if (!(multi_iterator = ast_calloc(1, sizeof(*multi_iterator)))) {
+			ao2_ref(multi_container, -1);
+			return NULL;
+		}
 	}
 
 	/* override the match function if necessary */
@@ -627,7 +643,7 @@ static void *internal_ao2_callback(struct ao2_container *c,
 		}
 	} else {
 		/* We do this here to avoid the per object casting penalty (even though
-		   that is probably optimized away anyway. */
+		   that is probably optimized away anyway). */
 		if (type == WITH_DATA) {
 			cb_withdata = cb_fn;
 		} else {
@@ -678,49 +694,55 @@ static void *internal_ao2_callback(struct ao2_container *c,
 				i = last;
 				break;
 			}
+
 			/* we have a match (CMP_MATCH) here */
 			if (!(flags & OBJ_NODATA)) {	/* if must return the object, record the value */
 				/* it is important to handle this case before the unlink */
 				ret = EXTERNAL_OBJ(cur->astobj);
-				if (tag)
-					__ao2_ref_debug(ret, 1, tag, file, line, funcname);
-				else
-					__ao2_ref(ret, 1);
+				if (!(flags & (OBJ_UNLINK | OBJ_MULTIPLE))) {
+					if (tag)
+						__ao2_ref_debug(ret, 1, tag, file, line, funcname);
+					else
+						__ao2_ref(ret, 1);
+				}
+			}
+
+			/* if we are in OBJ_MULTIPLE mode, link the object into the
+			 * container that will hold the results
+			 */
+			if (ret && USE_CONTAINER(flags)) {
+				__ao2_link(multi_container, ret);
+				ret = NULL;
 			}
 
 			if (flags & OBJ_UNLINK) {	/* must unlink */
-				struct bucket_list *x = cur;
-
 				/* we are going to modify the container, so update version */
 				ast_atomic_fetchadd_int(&c->version, 1);
 				AST_LIST_REMOVE_CURRENT(entry);
-				/* update number of elements and version */
+				/* update number of elements */
 				ast_atomic_fetchadd_int(&c->elements, -1);
-				if (tag)
-					__ao2_ref_debug(EXTERNAL_OBJ(x->astobj), -1, tag, file, line, funcname);
-				else
-					__ao2_ref(EXTERNAL_OBJ(x->astobj), -1);
-				free(x);	/* free the link record */
+				/* if the object is not going to be returned, we must decrement the reference count
+				 * to account for the reference the container was holding
+				 */
+				if (flags & OBJ_NODATA) {
+					if (tag)
+						__ao2_ref_debug(EXTERNAL_OBJ(cur->astobj), -1, tag, file, line, funcname);
+					else
+						__ao2_ref(EXTERNAL_OBJ(cur->astobj), -1);
+				}
+				ast_free(cur);	/* free the link record */
 			}
 
-			if ((match & CMP_STOP) || (flags & OBJ_MULTIPLE) == 0) {
-				/* We found the only match we need */
-				i = last;	/* force exit from outer loop */
+			if ((match & CMP_STOP) || USE_CONTAINER(flags)) {
+				/* We found our only (or last) match, so force an exit from
+				   the outside loop. */
+				i = last;
 				break;
-			}
-			if (!(flags & OBJ_NODATA)) {
-#if 0	/* XXX to be completed */
-				/*
-				 * This is the multiple-return case. We need to link
-				 * the object in a list. The refcount is already increased.
-				 */
-#endif
 			}
 		}
 		AST_LIST_TRAVERSE_SAFE_END;
 
 		if (ret) {
-			/* This assumes OBJ_MULTIPLE with !OBJ_NODATA is still not implemented */
 			break;
 		}
 
@@ -731,7 +753,14 @@ static void *internal_ao2_callback(struct ao2_container *c,
 		}
 	}
 	ao2_unlock(c);
-	return ret;
+	if (USE_CONTAINER(flags)) {
+		*multi_iterator = ao2_iterator_init(multi_container,
+						    AO2_ITERATOR_DONTLOCK | AO2_ITERATOR_UNLINK | AO2_ITERATOR_MALLOCD);
+		ao2_ref(multi_container, -1);
+		return multi_iterator;
+	} else {
+		return ret;
+	}
 }
 
 void *__ao2_callback_debug(struct ao2_container *c,
@@ -784,8 +813,23 @@ struct ao2_iterator ao2_iterator_init(struct ao2_container *c, int flags)
 		.c = c,
 		.flags = flags
 	};
+
+	ao2_ref(c, +1);
 	
 	return a;
+}
+
+/*!
+ * destroy an iterator
+ */
+void ao2_iterator_destroy(struct ao2_iterator *i)
+{
+	ao2_ref(i->c, -1);
+	if (i->flags & AO2_ITERATOR_MALLOCD) {
+		ast_free(i);
+	} else {
+		i->c = NULL;
+	}
 }
 
 /*
@@ -802,14 +846,14 @@ static void *internal_ao2_iterator_next(struct ao2_iterator *a, struct bucket_li
 	if (INTERNAL_OBJ(a->c) == NULL)
 		return NULL;
 
-	if (!(a->flags & F_AO2I_DONTLOCK))
+	if (!(a->flags & AO2_ITERATOR_DONTLOCK))
 		ao2_lock(a->c);
 
 	/* optimization. If the container is unchanged and
 	 * we have a pointer, try follow it
 	 */
-	if (a->c->version == a->c_version && (p = a->obj) ) {
-		if ( (p = AST_LIST_NEXT(p, entry)) )
+	if (a->c->version == a->c_version && (p = a->obj)) {
+		if ((p = AST_LIST_NEXT(p, entry)))
 			goto found;
 		/* nope, start from the next bucket */
 		a->bucket++;
@@ -835,12 +879,24 @@ static void *internal_ao2_iterator_next(struct ao2_iterator *a, struct bucket_li
 
 found:
 	if (p) {
-		a->version = p->version;
-		a->obj = p;
-		a->c_version = a->c->version;
 		ret = EXTERNAL_OBJ(p->astobj);
-		/* inc refcount of returned object */
-		*q = p;
+		if (a->flags & AO2_ITERATOR_UNLINK) {
+			/* we are going to modify the container, so update version */
+			ast_atomic_fetchadd_int(&a->c->version, 1);
+			AST_LIST_REMOVE(&a->c->buckets[a->bucket], p, entry);
+			/* update number of elements */
+			ast_atomic_fetchadd_int(&a->c->elements, -1);
+			a->version = 0;
+			a->obj = NULL;
+			a->c_version = a->c->version;
+			ast_free(p);
+		} else {
+			a->version = p->version;
+			a->obj = p;
+			a->c_version = a->c->version;
+			/* inc refcount of returned object */
+			*q = p;
+		}
 	}
 
 	return ret;
@@ -858,7 +914,7 @@ void *__ao2_iterator_next_debug(struct ao2_iterator *a, char *tag, char *file, i
 		__ao2_ref_debug(ret, 1, tag, file, line, funcname);
 	}
 
-	if (!(a->flags & F_AO2I_DONTLOCK))
+	if (!(a->flags & AO2_ITERATOR_DONTLOCK))
 		ao2_unlock(a->c);
 
 	return ret;
@@ -876,7 +932,7 @@ void *__ao2_iterator_next(struct ao2_iterator *a)
 		__ao2_ref(ret, 1);
 	}
 
-	if (!(a->flags & F_AO2I_DONTLOCK))
+	if (!(a->flags & AO2_ITERATOR_DONTLOCK))
 		ao2_unlock(a->c);
 
 	return ret;
