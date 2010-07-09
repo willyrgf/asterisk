@@ -9392,8 +9392,6 @@ static int get_address_from_via(const char *via, char *hostname, size_t hostlen,
 
 	char *viaheader = ast_strdupa(via);
 	char *hoststart = NULL, *portstart = NULL;
-	struct hostent *hp;
-	struct ast_hostent ahp;
 
 	if (ast_strlen_zero(via)) {
 		ast_debug(1, "---- Huh? No via header. \n");
