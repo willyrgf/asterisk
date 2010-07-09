@@ -2881,7 +2881,24 @@ static int find_sip_method(const char *msg)
 /*! \brief See if we pass debug IP filter */
 static inline int sip_debug_test_addr(const struct ast_sockaddr *addr)
 {
-	return sipdebug && !ast_sockaddr_isnull(addr) && !ast_sockaddr_cmp_addr(&debugaddr, addr);
+	/* Can't debug if sipdebug is not enabled */
+	if (!sipdebug) {
+		return 0;
+	}
+
+	/* A null debug_addr means we'll debug any address */
+	if (ast_sockaddr_isnull(&debugaddr)) {
+		return 1;
+	}
+
+	/* If no port was specified for a debug address, just compare the
+	 * addresses, otherwise compare the address and port
+	 */
+	if (ast_sockaddr_port(&debugaddr)) {
+		return !ast_sockaddr_cmp(&debugaddr, addr);
+	} else {
+		return !ast_sockaddr_cmp_addr(&debugaddr, addr);
+	}
 }
 
 /*! \brief The real destination address for a write */
@@ -27656,7 +27673,7 @@ AST_TEST_DEFINE(test_sip_peers_get)
 	switch (cmd) {
 		case TEST_INIT:
 			info->name = "sip_peers_get_data_test";
-			info->category = "main/data/sip/peers";
+			info->category = "/main/data/sip/peers/";
 			info->summary = "SIP peers data providers unit test";
 			info->description =
 				"Tests whether the SIP peers data provider implementation works as expected.";
