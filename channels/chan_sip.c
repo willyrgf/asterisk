@@ -14593,7 +14593,7 @@ static attribute_unused void check_via_response(struct sip_pvt *p, struct sip_re
 static void check_via(struct sip_pvt *p, const struct sip_request *req)
 {
 	char via[512];
-	char *c, *pt, *maddr;
+	char *c, *maddr;
 
 	ast_copy_string(via, get_header(req, "Via"), sizeof(via));
 
