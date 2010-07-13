@@ -5933,8 +5933,9 @@ static int queue_function_var(struct ast_channel *chan, const char *cmd, char *d
  */
 static int queue_function_exists(struct ast_channel *chan, const char *cmd, char *data, char *buf, size_t len)
 {
-	buf[0] = '\0';
 	struct call_queue *q;
+
+	buf[0] = '\0';
 
 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_ERROR, "%s requires an argument: queuename\n", cmd);
