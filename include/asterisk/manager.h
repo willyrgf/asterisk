@@ -57,6 +57,14 @@
 #define AMI_VERSION                     "1.1"
 #define DEFAULT_MANAGER_PORT 5038	/* Default port for Asterisk management via TCP */
 
+/*! \name Constant return values
+ *\note Currently, returning anything other than zero causes the session to terminate.
+ */
+/*@{ */
+#define	AMI_SUCCESS	(0)
+#define	AMI_DESTROY	(-1)
+/*@} */
+
 /*! \name Manager event classes */
 /*@{ */
 #define EVENT_FLAG_SYSTEM 		(1 << 0) /* System events such as module load/unload */
@@ -74,14 +82,15 @@
 #define EVENT_FLAG_ORIGINATE	(1 << 12) /* Originate a call to an extension */
 #define EVENT_FLAG_AGI			(1 << 13) /* AGI events */
 #define EVENT_FLAG_HOOKRESPONSE		(1 << 14) /* Hook Response */
+#define EVENT_FLAG_CC			(1 << 15) /* Call Completion events */
+#define EVENT_FLAG_AOC			(1 << 16) /* Advice Of Charge events */
 /*@} */
 
 /*! \brief Export manager structures */
 #define AST_MAX_MANHEADERS 128
 
 /*! \brief Manager Helper Function */
-typedef int (*manager_hook_t)(int, const char *, char *); 
-
+typedef int (*manager_hook_t)(int, const char *, char *);
 
 struct manager_custom_hook {
 	/*! Identifier */
@@ -109,7 +118,7 @@ void ast_manager_register_hook(struct manager_custom_hook *hook);
 void ast_manager_unregister_hook(struct manager_custom_hook *hook);
 
 /*! \brief Registered hooks can call this function to invoke actions and they will receive responses through registered callback
- * \param hookid the file identifier specified in manager_custom_hook struct when registering a hook
+ * \param hook the file identifier specified in manager_custom_hook struct when registering a hook
  * \param msg ami action mesage string e.g. "Action: SipPeers\r\n"
 
  * \retval 0 on Success

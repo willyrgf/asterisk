@@ -295,16 +295,20 @@ static int ast_moh_files_next(struct ast_channel *chan)
 		return -1;
 	}
 
-	/* If a specific file has been saved confirm it still exists and that it is still valid */
-	if (state->save_pos >= 0 && state->save_pos < state->class->total_files && state->class->filearray[state->save_pos] == state->save_pos_filename) {
+	if (state->pos == 0 && state->save_pos_filename == NULL) {
+		/* First time so lets play the file. */
+		state->save_pos = -1;
+	} else if (state->save_pos >= 0 && state->save_pos < state->class->total_files && state->class->filearray[state->save_pos] == state->save_pos_filename) {
+		/* If a specific file has been saved confirm it still exists and that it is still valid */
 		state->pos = state->save_pos;
 		state->save_pos = -1;
 	} else if (ast_test_flag(state->class, MOH_RANDOMIZE)) {
 		/* Get a random file and ensure we can open it */
 		for (tries = 0; tries < 20; tries++) {
 			state->pos = ast_random() % state->class->total_files;
-			if (ast_fileexists(state->class->filearray[state->pos], NULL, NULL) > 0)
+			if (ast_fileexists(state->class->filearray[state->pos], NULL, NULL) > 0) {
 				break;
+			}
 		}
 		state->save_pos = -1;
 		state->samples = 0;
@@ -328,8 +332,9 @@ static int ast_moh_files_next(struct ast_channel *chan)
 
 	ast_debug(1, "%s Opened file %d '%s'\n", chan->name, state->pos, state->class->filearray[state->pos]);
 
-	if (state->samples)
+	if (state->samples) {
 		ast_seekstream(chan->stream, state->samples, SEEK_SET);
+	}
 
 	return 0;
 }
@@ -355,7 +360,15 @@ static int moh_files_generator(struct ast_channel *chan, void *data, int len, in
 	state->sample_queue += samples;
 
 	while (state->sample_queue > 0) {
+		ast_channel_lock(chan);
 		if ((f = moh_files_readframe(chan))) {
+			/* We need to be sure that we unlock
+			 * the channel prior to calling
+			 * ast_write. Otherwise, the recursive locking
+			 * that occurs can cause deadlocks when using
+			 * indirect channels, like local channels
+			 */
+			ast_channel_unlock(chan);
 			state->samples += f->samples;
 			state->sample_queue -= f->samples;
 			res = ast_write(chan, f);
@@ -364,8 +377,10 @@ static int moh_files_generator(struct ast_channel *chan, void *data, int len, in
 				ast_log(LOG_WARNING, "Failed to write frame to '%s': %s\n", chan->name, strerror(errno));
 				return -1;
 			}
-		} else
+		} else {
+			ast_channel_unlock(chan);
 			return -1;	
+		}
 	}
 	return res;
 }
@@ -560,7 +575,7 @@ static int spawn_mp3(struct mohclass *class)
 		ast_close_fds_above_n(STDERR_FILENO);
 
 		/* Child */
-		if (strcasecmp(class->dir, "nodir") && chdir(class->dir) < 0) {
+		if (strncasecmp(class->dir, "http://", 7) && strcasecmp(class->dir, "nodir") && chdir(class->dir) < 0) {
 			ast_log(LOG_WARNING, "chdir() failed: %s\n", strerror(errno));
 			_exit(1);
 		}
@@ -1363,7 +1378,10 @@ static int local_ast_moh_start(struct ast_channel *chan, const char *mclass, con
 				 * has a pointer to a freed mohclass, so any operations involving the mohclass container would result in reading
 				 * invalid memory.
 				 */
-				moh_register(mohclass, 0, DONT_UNREF);
+				if (moh_register(mohclass, 0, DONT_UNREF) == -1) {
+					mohclass = mohclass_unref(mohclass, "unreffing mohclass failed to register");
+					return -1;
+				}
 			} else {
 				/* We don't register RT moh class, so let's init it manualy */
 
@@ -1460,11 +1478,11 @@ static int local_ast_moh_start(struct ast_channel *chan, const char *mclass, con
 
 static void local_ast_moh_stop(struct ast_channel *chan)
 {
-	struct moh_files_state *state = chan->music_state;
 	ast_clear_flag(chan, AST_FLAG_MOH);
 	ast_deactivate_generator(chan);
 
-	if (state) {
+	ast_channel_lock(chan);
+	if (chan->music_state) {
 		if (chan->stream) {
 			ast_closestream(chan->stream);
 			chan->stream = NULL;
@@ -1476,6 +1494,7 @@ static void local_ast_moh_stop(struct ast_channel *chan)
 		"Channel: %s\r\n"
 		"UniqueID: %s\r\n",
 		chan->name, chan->uniqueid);
+	ast_channel_unlock(chan);
 }
 
 static void moh_class_destructor(void *obj)
@@ -1586,6 +1605,10 @@ static int load_moh_classes(int reload)
 	cfg = ast_config_load("musiconhold.conf", config_flags);
 
 	if (cfg == CONFIG_STATUS_FILEMISSING || cfg == CONFIG_STATUS_FILEUNCHANGED || cfg == CONFIG_STATUS_FILEINVALID) {
+		if (ast_check_realtime("musiconhold") && reload) {
+			ao2_t_callback(mohclasses, OBJ_NODATA, moh_class_mark, NULL, "Mark deleted classes");
+			ao2_t_callback(mohclasses, OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE, moh_classes_delete_marked, NULL, "Purge marked classes");
+		}
 		return 0;
 	}
 
@@ -1808,7 +1831,7 @@ static int load_module(void)
 		return AST_MODULE_LOAD_DECLINE;
 	}
 
-	if (!load_moh_classes(0)) { 	/* No music classes configured, so skip it */
+	if (!load_moh_classes(0) && ast_check_realtime("musiconhold") == 0) { 	/* No music classes configured, so skip it */
 		ast_log(LOG_WARNING, "No music on hold classes configured, "
 				"disabling music on hold.\n");
 	} else {

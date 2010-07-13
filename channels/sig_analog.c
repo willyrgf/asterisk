@@ -169,6 +169,14 @@ static int analog_get_callerid(struct analog_pvt *p, char *name, char *number, e
 	return -1;
 }
 
+static const char *analog_get_orig_dialstring(struct analog_pvt *p)
+{
+	if (p->calls->get_orig_dialstring) {
+		return p->calls->get_orig_dialstring(p->chan_pvt);
+	}
+	return "";
+}
+
 static int analog_get_event(struct analog_pvt *p)
 {
 	if (p->calls->get_event) {
@@ -402,7 +410,9 @@ static struct ast_channel * analog_new_ast_channel(struct analog_pvt *p, int sta
 	}
 
 	c = p->calls->new_ast_channel(p->chan_pvt, state, startpbx, sub, requestor);
-	ast_string_field_set(c, call_forward, p->call_forward);
+	if (c) {
+		ast_string_field_set(c, call_forward, p->call_forward);
+	}
 	p->subs[sub].owner = c;
 	if (!p->owner) {
 		p->owner = c;
@@ -509,6 +519,13 @@ static int analog_off_hook(struct analog_pvt *p)
 		return p->calls->off_hook(p->chan_pvt);
 	}
 	return -1;
+}
+
+static void analog_set_needringing(struct analog_pvt *p, int value)
+{
+	if (p->calls->set_needringing) {
+		return p->calls->set_needringing(p->chan_pvt, value);
+	}
 }
 
 static int analog_dsp_set_digitmode(struct analog_pvt *p, enum analog_dsp_digitmode mode)
@@ -649,17 +666,11 @@ struct ast_channel * analog_request(struct analog_pvt *p, int *callwait, const s
 	return analog_new_ast_channel(p, AST_STATE_RESERVED, 0, p->owner ? ANALOG_SUB_CALLWAIT : ANALOG_SUB_REAL, requestor);
 }
 
-int analog_available(struct analog_pvt *p, int *busy)
+int analog_available(struct analog_pvt *p)
 {
 	int offhook;
 
 	ast_log(LOG_DEBUG, "%s %d\n", __FUNCTION__, p->channel);
-	/* We're at least busy at this point */
-	if (busy) {
-		if ((p->sig == ANALOG_SIG_FXOKS) || (p->sig == ANALOG_SIG_FXOLS) || (p->sig == ANALOG_SIG_FXOGS)) {
-			*busy = 1;
-		}
-	}
 	/* If do not disturb, definitely not */
 	if (p->dnd) {
 		return 0;
@@ -751,11 +762,19 @@ static void analog_set_cadence(struct analog_pvt *p, struct ast_channel *chan)
 	}
 }
 
-static void analog_set_dialing(struct analog_pvt *p, int flag)
+static void analog_set_dialing(struct analog_pvt *p, int is_dialing)
 {
-	p->dialing = flag;
+	p->dialing = is_dialing;
 	if (p->calls->set_dialing) {
-		return p->calls->set_dialing(p->chan_pvt, flag);
+		return p->calls->set_dialing(p->chan_pvt, is_dialing);
+	}
+}
+
+static void analog_set_alarm(struct analog_pvt *p, int in_alarm)
+{
+	p->inalarm = in_alarm;
+	if (p->calls->set_alarm) {
+		return p->calls->set_alarm(p->chan_pvt, in_alarm);
 	}
 }
 
@@ -932,7 +951,6 @@ int analog_call(struct analog_pvt *p, struct ast_channel *ast, char *rdest, int 
 		}
 
 		if (p->use_callerid) {
-			p->callwaitcas = 0;
 			p->cid.cid_name = p->lastcid_name;
 			p->cid.cid_num = p->lastcid_num;
 		}
@@ -940,6 +958,24 @@ int analog_call(struct analog_pvt *p, struct ast_channel *ast, char *rdest, int 
 		ast_setstate(ast, AST_STATE_RINGING);
 		index = analog_get_index(ast, p, 0);
 		if (index > -1) {
+			struct ast_cc_config_params *cc_params;
+
+			/* This is where the initial ringing frame is queued for an analog call.
+			 * As such, this is a great time to offer CCNR to the caller if it's available.
+			 */
+			cc_params = ast_channel_get_cc_config_params(p->subs[index].owner);
+			if (cc_params) {
+				switch (ast_get_cc_monitor_policy(cc_params)) {
+				case AST_CC_MONITOR_NEVER:
+					break;
+				case AST_CC_MONITOR_NATIVE:
+				case AST_CC_MONITOR_ALWAYS:
+				case AST_CC_MONITOR_GENERIC:
+					ast_queue_cc_frame(p->subs[index].owner, AST_CC_GENERIC_MONITOR_TYPE,
+						analog_get_orig_dialstring(p), AST_CC_CCNR, NULL);
+					break;
+				}
+			}
 			ast_queue_control(p->subs[index].owner, AST_CONTROL_RINGING);
 		}
 		break;
@@ -1371,7 +1407,7 @@ void analog_handle_dtmfup(struct analog_pvt *p, struct ast_channel *ast, enum an
 	}
 	if (p->callwaitcas) {
 		if ((f->subclass.integer == 'A') || (f->subclass.integer == 'D')) {
-			ast_log(LOG_ERROR, "Got some DTMF, but it's for the CAS\n");
+			ast_debug(1, "Got some DTMF, but it's for the CAS\n");
 			p->cid.cid_name = p->callwait_name;
 			p->cid.cid_num = p->callwait_num;
 			analog_send_callerid(p, 1, &p->cid);
@@ -2099,16 +2135,27 @@ static void *__analog_ss_thread(void *data)
 				int i = 0;
 				int oldlinearity; 
 				cs = NULL;
-				ast_debug(1, "Receiving DTMF cid on "
-					"channel %s\n", chan->name);
+				ast_debug(1, "Receiving DTMF cid on channel %s\n", chan->name);
 
 				oldlinearity = analog_set_linear_mode(p, index, 0);
 
-				res = 2000;
+				/*
+				 * We are the only party interested in the Rx stream since
+				 * we have not answered yet.  We don't need or even want DTMF
+				 * emulation.  The DTMF digits can come so fast that emulation
+				 * can drop some of them.
+				 */
+				ast_set_flag(chan, AST_FLAG_END_DTMF_ONLY);
+				res = 4000;/* This is a typical OFF time between rings. */
 				for (;;) {
 					struct ast_frame *f;
 					res = ast_waitfor(chan, res);
 					if (res <= 0) {
+						/*
+						 * We do not need to restore the analog_set_linear_mode()
+						 * or AST_FLAG_END_DTMF_ONLY flag settings since we
+						 * are hanging up the channel.
+						 */
 						ast_log(LOG_WARNING, "DTMFCID timed out waiting for ring. "
 							"Exiting simple switch\n");
 						ast_hangup(chan);
@@ -2118,15 +2165,18 @@ static void *__analog_ss_thread(void *data)
 						break;
 					}
 					if (f->frametype == AST_FRAME_DTMF) {
-						dtmfbuf[i++] = f->subclass.integer;
+						if (i < ARRAY_LEN(dtmfbuf) - 1) {
+							dtmfbuf[i++] = f->subclass.integer;
+						}
 						ast_debug(1, "CID got digit '%c'\n", f->subclass.integer);
-						res = 2000;
+						res = 4000;/* This is a typical OFF time between rings. */
 					}
 					ast_frfree(f);
 					if (chan->_state == AST_STATE_RING || chan->_state == AST_STATE_RINGING) {
 						break; /* Got ring */
 					}
 				}
+				ast_clear_flag(chan, AST_FLAG_END_DTMF_ONLY);
 				dtmfbuf[i] = '\0';
 
 				analog_set_linear_mode(p, index, oldlinearity);
@@ -2134,8 +2184,7 @@ static void *__analog_ss_thread(void *data)
 				/* Got cid and ring. */
 				ast_debug(1, "CID got string '%s'\n", dtmfbuf);
 				callerid_get_dtmf(dtmfbuf, dtmfcid, &flags);
-				ast_debug(1, "CID is '%s', flags %d\n",
-					dtmfcid, flags);
+				ast_debug(1, "CID is '%s', flags %d\n", dtmfcid, flags);
 				/* If first byte is NULL, we have no cid */
 				if (!ast_strlen_zero(dtmfcid)) {
 					number = dtmfcid;
@@ -2161,6 +2210,9 @@ static void *__analog_ss_thread(void *data)
 						}
 
 						if (res == 1) {
+							if (ev == ANALOG_EVENT_NOALARM) {
+								analog_set_alarm(p, 0);
+							}
 							if (p->cid_signalling == CID_SIG_V23_JP) {
 								if (ev == ANALOG_EVENT_RINGBEGIN) {
 									analog_off_hook(p);
@@ -2184,12 +2236,10 @@ static void *__analog_ss_thread(void *data)
 					if (p->cid_signalling == CID_SIG_V23_JP) {
 						res = analog_on_hook(p);
 						usleep(1);
-						res = 4000;
-					} else {
-						/* Finished with Caller*ID, now wait for a ring to make sure there really is a call coming */
-						res = 2000;
 					}
 
+					/* Finished with Caller*ID, now wait for a ring to make sure there really is a call coming */
+					res = 4000;/* This is a typical OFF time between rings. */
 					for (;;) {
 						struct ast_frame *f;
 						res = ast_waitfor(chan, res);
@@ -2249,7 +2299,9 @@ static void *__analog_ss_thread(void *data)
 					}
 
 					if (res == 1 || res == 2) {
-						if (ev == ANALOG_EVENT_POLARITY && p->hanguponpolarityswitch && p->polarity == POLARITY_REV) {
+						if (ev == ANALOG_EVENT_NOALARM) {
+							analog_set_alarm(p, 0);
+						} else if (ev == ANALOG_EVENT_POLARITY && p->hanguponpolarityswitch && p->polarity == POLARITY_REV) {
 							ast_debug(1, "Hanging up due to polarity reversal on channel %d while detecting callerid\n", p->channel);
 							p->polarity = POLARITY_IDLE;
 							ast_hangup(chan);
@@ -2464,7 +2516,7 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 		}
 		break;
 	case ANALOG_EVENT_ALARM:
-		p->inalarm = 1;
+		analog_set_alarm(p, 1);
 		analog_get_and_handle_alarms(p);
 
 	case ANALOG_EVENT_ONHOOK:
@@ -2626,6 +2678,7 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 				p->subs[index].f.frametype = AST_FRAME_CONTROL;
 				p->subs[index].f.subclass.integer = AST_CONTROL_ANSWER;
 				/* Make sure it stops ringing */
+				analog_set_needringing(p, 0);
 				analog_off_hook(p);
 				ast_debug(1, "channel %d answered\n", p->channel);
 				analog_cancel_cidspill(p);
@@ -2759,7 +2812,7 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 	case ANALOG_EVENT_RINGERON:
 		break;
 	case ANALOG_EVENT_NOALARM:
-		p->inalarm = 0;
+		analog_set_alarm(p, 0);
 		if (!p->unknown_alarm) {
 			ast_log(LOG_NOTICE, "Alarm cleared on channel %d\n", p->channel);
 			manager_event(EVENT_FLAG_SYSTEM, "AlarmClear",
@@ -3359,7 +3412,7 @@ void *analog_handle_init_event(struct analog_pvt *i, int event)
 		}
 		break;
 	case ANALOG_EVENT_NOALARM:
-		i->inalarm = 0;
+		analog_set_alarm(i, 0);
 		if (!i->unknown_alarm) {
 			ast_log(LOG_NOTICE, "Alarm cleared on channel %d\n", i->channel);
 			manager_event(EVENT_FLAG_SYSTEM, "AlarmClear",
@@ -3369,7 +3422,7 @@ void *analog_handle_init_event(struct analog_pvt *i, int event)
 		}
 		break;
 	case ANALOG_EVENT_ALARM:
-		i->inalarm = 1;
+		analog_set_alarm(i, 1);
 		analog_get_and_handle_alarms(i);
 
 		/* fall thru intentionally */

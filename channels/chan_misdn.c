@@ -477,13 +477,6 @@ struct chan_list {
 	struct ast_dsp *dsp;
 
 	/*!
-	 * \brief Allocated audio frame sample translator
-	 * \note ast_translator_build_path() creates the translator path.
-	 * \note Must use ast_translator_free_path() to clean up.
-	 */
-	struct ast_trans_pvt *trans;
-
-	/*!
 	 * \brief Associated Asterisk channel structure.
 	 */
 	struct ast_channel * ast;
@@ -2370,7 +2363,7 @@ static void misdn_PartyNumber_fill(struct FacPartyNumber *party, const struct mi
 		party->TypeOfNumber = misdn_to_PartyNumber_ton_private(id->number_type);
 		break;
 	default:
-		party->TypeOfNumber = 0;/* Dont't care */
+		party->TypeOfNumber = 0;/* Don't care */
 		break;
 	}
 }
@@ -5135,6 +5128,9 @@ static char *handle_cli_misdn_send_facility(struct ast_cli_entry *e, int cmd, st
 		e->usage = "Usage: misdn send facility <type> <channel|port> \"<args>\" \n"
 		"\t type is one of:\n"
 		"\t - calldeflect\n"
+#if defined(AST_MISDN_ENHANCEMENTS)
+		"\t - callrerouting\n"
+#endif	/* defined(AST_MISDN_ENHANCEMENTS) */
 		"\t - CFActivate\n"
 		"\t - CFDeactivate\n";
 
@@ -5196,9 +5192,61 @@ static char *handle_cli_misdn_send_facility(struct ast_cli_entry *e, int cmd, st
 		/* Send message */
 		print_facility(&tmp->bc->fac_out, tmp->bc);
 		misdn_lib_send_event(tmp->bc, EVENT_FACILITY);
-	} else if (strstr(a->argv[3], "CFActivate")) {
-		if (a->argc < 7) {
-			ast_verbose("CFActivate requires 2 args: 1.FromNumber, 2.ToNumber\n\n");
+#if defined(AST_MISDN_ENHANCEMENTS)
+	} else if (strstr(a->argv[3], "callrerouteing") || strstr(a->argv[3], "callrerouting")) {
+		if (a->argc < 6) {
+			ast_verbose("callrerouting requires 1 arg: ToNumber\n\n");
+			return 0;
+		}
+		channame = a->argv[4];
+		nr = a->argv[5];
+
+		ast_verbose("Sending Callrerouting (%s) to %s\n", nr, channame);
+		tmp = get_chan_by_ast_name(channame);
+		if (!tmp) {
+			ast_verbose("Sending Call Rerouting with nr %s to %s failed: Channel does not exist.\n", nr, channame);
+			return 0;
+		}
+
+		max_len = sizeof(tmp->bc->fac_out.u.CallRerouteing.Component.Invoke.CalledAddress.Party.Number) - 1;
+		if (max_len < strlen(nr)) {
+			ast_verbose("Sending Call Rerouting with nr %s to %s failed: Number too long (up to %u digits are allowed).\n",
+				nr, channame, max_len);
+			return 0;
+		}
+		tmp->bc->fac_out.Function = Fac_CallRerouteing;
+		tmp->bc->fac_out.u.CallRerouteing.InvokeID = ++misdn_invoke_id;
+		tmp->bc->fac_out.u.CallRerouteing.ComponentType = FacComponent_Invoke;
+
+		tmp->bc->fac_out.u.CallRerouteing.Component.Invoke.ReroutingReason = 0;/* unknown */
+		tmp->bc->fac_out.u.CallRerouteing.Component.Invoke.ReroutingCounter = 1;
+
+		tmp->bc->fac_out.u.CallRerouteing.Component.Invoke.CalledAddress.Party.Type = 0;/* unknown */
+		tmp->bc->fac_out.u.CallRerouteing.Component.Invoke.CalledAddress.Party.LengthOfNumber = strlen(nr);
+		strcpy((char *) tmp->bc->fac_out.u.CallRerouteing.Component.Invoke.CalledAddress.Party.Number, nr);
+		tmp->bc->fac_out.u.CallRerouteing.Component.Invoke.CalledAddress.Subaddress.Length = 0;
+
+		tmp->bc->fac_out.u.CallRerouteing.Component.Invoke.CallingPartySubaddress.Length = 0;
+
+		/* 0x90 0x90 0xa3 3.1 kHz audio, circuit mode, 64kbit/sec, level1/a-Law */
+		tmp->bc->fac_out.u.CallRerouteing.Component.Invoke.Q931ie.Bc.Length = 3;
+		tmp->bc->fac_out.u.CallRerouteing.Component.Invoke.Q931ie.Bc.Contents[0] = 0x90;
+		tmp->bc->fac_out.u.CallRerouteing.Component.Invoke.Q931ie.Bc.Contents[1] = 0x90;
+		tmp->bc->fac_out.u.CallRerouteing.Component.Invoke.Q931ie.Bc.Contents[2] = 0xa3;
+		tmp->bc->fac_out.u.CallRerouteing.Component.Invoke.Q931ie.Hlc.Length = 0;
+		tmp->bc->fac_out.u.CallRerouteing.Component.Invoke.Q931ie.Llc.Length = 0;
+		tmp->bc->fac_out.u.CallRerouteing.Component.Invoke.Q931ie.UserInfo.Length = 0;
+
+		tmp->bc->fac_out.u.CallRerouteing.Component.Invoke.LastRerouting.Type = 1;/* presentationRestricted */
+		tmp->bc->fac_out.u.CallRerouteing.Component.Invoke.SubscriptionOption = 0;/* no notification to caller */
+
+		/* Send message */
+		print_facility(&tmp->bc->fac_out, tmp->bc);
+		misdn_lib_send_event(tmp->bc, EVENT_FACILITY);
+#endif	/* defined(AST_MISDN_ENHANCEMENTS) */
+		} else if (strstr(a->argv[3], "CFActivate")) {
+			if (a->argc < 7) {
+				ast_verbose("CFActivate requires 2 args: 1.FromNumber, 2.ToNumber\n\n");
 			return 0;
 		}
 		port = atoi(a->argv[4]);
@@ -5930,6 +5978,10 @@ static int read_config(struct chan_list *ch)
 		ast_mutex_init(&ch->overlap_tv_lock);
 	} /* ORIG MISDN END */
 
+	misdn_cfg_get(port, MISDN_CFG_INCOMING_CALLERID_TAG, bc->incoming_cid_tag, sizeof(bc->incoming_cid_tag));
+	if (!ast_strlen_zero(bc->incoming_cid_tag)) {
+		chan_misdn_log(1, port, " --> * Setting incoming caller id tag to \"%s\"\n", bc->incoming_cid_tag);
+	}
 	ch->overlap_dial_task = -1;
 
 	if (ch->faxdetect  || ch->ast_dsp) {
@@ -5939,9 +5991,6 @@ static int read_config(struct chan_list *ch)
 		}
 		if (ch->dsp) {
 			ast_dsp_set_features(ch->dsp, DSP_FEATURE_DIGIT_DETECT | (ch->faxdetect ? DSP_FEATURE_FAX_DETECT : 0));
-		}
-		if (!ch->trans) {
-			ch->trans = ast_translator_build_path(AST_FORMAT_SLINEAR, AST_FORMAT_ALAW);
 		}
 	}
 
@@ -5958,10 +6007,11 @@ static int read_config(struct chan_list *ch)
  * \param ast Current Asterisk channel
  * \param id Party id information to send to the other side
  * \param source Why are we sending this update
+ * \param cid_tag Caller ID tag to set in the connected line
  *
  * \return Nothing
  */
-static void misdn_queue_connected_line_update(struct ast_channel *ast, const struct misdn_party_id *id, enum AST_CONNECTED_LINE_UPDATE_SOURCE source)
+static void misdn_queue_connected_line_update(struct ast_channel *ast, const struct misdn_party_id *id, enum AST_CONNECTED_LINE_UPDATE_SOURCE source, char *cid_tag)
 {
 	struct ast_party_connected_line connected;
 
@@ -5971,6 +6021,7 @@ static void misdn_queue_connected_line_update(struct ast_channel *ast, const str
 		| misdn_to_ast_plan(id->number_plan);
 	connected.id.number_presentation = misdn_to_ast_pres(id->presentation)
 		| misdn_to_ast_screen(id->screening);
+	connected.id.tag = cid_tag;
 	connected.source = source;
 	ast_channel_queue_connected_line_update(ast, &connected);
 }
@@ -6100,7 +6151,7 @@ static void misdn_update_connected_line(struct ast_channel *ast, struct misdn_bc
 static void misdn_copy_redirecting_from_ast(struct misdn_bchannel *bc, struct ast_channel *ast)
 {
 	ast_copy_string(bc->redirecting.from.name, S_OR(ast->redirecting.from.name, ""), sizeof(bc->redirecting.from.name));
-	ast_copy_string(bc->redirecting.from.number, S_OR(ast->cid.cid_rdnis, ""), sizeof(bc->redirecting.from.number));
+	ast_copy_string(bc->redirecting.from.number, S_OR(ast->redirecting.from.number, ""), sizeof(bc->redirecting.from.number));
 	bc->redirecting.from.presentation = ast_to_misdn_pres(ast->redirecting.from.number_presentation);
 	bc->redirecting.from.screening = ast_to_misdn_screen(ast->redirecting.from.number_presentation);
 	bc->redirecting.from.number_type = ast_to_misdn_ton(ast->redirecting.from.number_type);
@@ -6123,10 +6174,11 @@ static void misdn_copy_redirecting_from_ast(struct misdn_bchannel *bc, struct as
  *
  * \param ast Current Asterisk channel
  * \param redirect Associated B channel redirecting info
+ * \param tag Caller ID tag to set in the redirecting party fields
  *
  * \return Nothing
  */
-static void misdn_copy_redirecting_to_ast(struct ast_channel *ast, const struct misdn_party_redirecting *redirect)
+static void misdn_copy_redirecting_to_ast(struct ast_channel *ast, const struct misdn_party_redirecting *redirect, char *tag)
 {
 	struct ast_party_redirecting redirecting;
 
@@ -6139,6 +6191,7 @@ static void misdn_copy_redirecting_to_ast(struct ast_channel *ast, const struct 
 	redirecting.from.number_presentation =
 		misdn_to_ast_pres(redirect->from.presentation)
 		| misdn_to_ast_screen(redirect->from.screening);
+	redirecting.from.tag = tag;
 
 	redirecting.to.number = (char *) redirect->to.number;
 	redirecting.to.number_type =
@@ -6147,6 +6200,7 @@ static void misdn_copy_redirecting_to_ast(struct ast_channel *ast, const struct 
 	redirecting.to.number_presentation =
 		misdn_to_ast_pres(redirect->to.presentation)
 		| misdn_to_ast_screen(redirect->to.screening);
+	redirecting.to.tag = tag;
 
 	redirecting.reason = misdn_to_ast_reason(redirect->reason);
 	redirecting.count = redirect->count;
@@ -6236,6 +6290,7 @@ static int misdn_call(struct ast_channel *ast, char *dest, int timeout)
 	struct chan_list *ch;
 	struct misdn_bchannel *newbc;
 	char *dest_cp;
+	int append_msn = 0;
 
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(intf);	/* The interface token is discarded. */
@@ -6346,6 +6401,14 @@ static int misdn_call(struct ast_channel *ast, char *dest, int timeout)
 			ast_copy_string(newbc->caller.number, ast->connected.id.number, sizeof(newbc->caller.number));
 			chan_misdn_log(3, port, " --> * set caller:\"%s\" <%s>\n", newbc->caller.name, newbc->caller.number);
 		}
+
+		misdn_cfg_get(port, MISDN_CFG_APPEND_MSN_TO_CALLERID_TAG, &append_msn, sizeof(append_msn));
+		if (append_msn) {
+			strncat(newbc->incoming_cid_tag, "_", sizeof(newbc->incoming_cid_tag) - strlen(newbc->incoming_cid_tag) - 1);
+			strncat(newbc->incoming_cid_tag, newbc->caller.number, sizeof(newbc->incoming_cid_tag) - strlen(newbc->incoming_cid_tag) - 1);
+		}
+
+		ast->cid.cid_tag = ast_strdup(newbc->incoming_cid_tag);
 
 		misdn_cfg_get(port, MISDN_CFG_LOCALDIALPLAN, &number_type, sizeof(number_type));
 		if (number_type < 0) {
@@ -6615,12 +6678,6 @@ static int misdn_digit_end(struct ast_channel *ast, char digit, unsigned int dur
 		misdn_lib_send_event(bc, EVENT_INFORMATION);
 		break;
 	default:
-		/* Do not send Digits in CONNECTED State, when
-		 * the other side is also mISDN. */
-		if (p->other_ch) {
-			return 0;
-		}
-
 		if (bc->send_dtmf) {
 			send_digit_to_chan(p, digit);
 		}
@@ -6960,21 +7017,17 @@ static int misdn_hangup(struct ast_channel *ast)
 
 static struct ast_frame *process_ast_dsp(struct chan_list *tmp, struct ast_frame *frame)
 {
-	struct ast_frame *f,*f2;
+	struct ast_frame *f;
 
- 	if (tmp->trans) {
- 		f2 = ast_translate(tmp->trans, frame, 0);
- 		f = ast_dsp_process(tmp->ast, tmp->dsp, f2);
+ 	if (tmp->dsp) {
+ 		f = ast_dsp_process(tmp->ast, tmp->dsp, frame);
  	} else {
-		chan_misdn_log(0, tmp->bc->port, "No T-Path found\n");
+		chan_misdn_log(0, tmp->bc->port, "No DSP-Path found\n");
 		return NULL;
 	}
 
 	if (!f || (f->frametype != AST_FRAME_DTMF)) {
-		if (f) {
-			ast_frfree(f);
-		}
-		return frame;
+		return f;
 	}
 
 	ast_debug(1, "Detected inband DTMF digit: %c\n", f->subclass.integer);
@@ -7971,9 +8024,6 @@ static void cl_dequeue_chan(struct chan_list **list, struct chan_list *chan)
 	if (chan->dsp) {
 		ast_dsp_free(chan->dsp);
 	}
-	if (chan->trans) {
-		ast_translator_free_path(chan->trans);
-	}
 
 	ast_mutex_lock(&cl_te_lock);
 	if (!*list) {
@@ -8759,7 +8809,7 @@ static void misdn_facility_ie_handler(enum event_e event, struct misdn_bchannel 
 				++bc->redirecting.count;
 				bc->redirecting.reason = mISDN_REDIRECTING_REASON_DEFLECTION;
 
-				misdn_copy_redirecting_to_ast(ch->ast, &bc->redirecting);
+				misdn_copy_redirecting_to_ast(ch->ast, &bc->redirecting, bc->incoming_cid_tag);
 				ast_string_field_set(ch->ast, call_forward, bc->redirecting.to.number);
 
 				/* Send back positive ACK */
@@ -8823,7 +8873,7 @@ static void misdn_facility_ie_handler(enum event_e event, struct misdn_bchannel 
 				bc->redirecting.to.presentation = 1;/* restricted */
 				bc->redirecting.to.screening = 0;/* unscreened */
 			}
-			misdn_copy_redirecting_to_ast(ch->ast, &bc->redirecting);
+			misdn_copy_redirecting_to_ast(ch->ast, &bc->redirecting, bc->incoming_cid_tag);
 			bc->div_leg_3_rx_wanted = 1;
 		}
 		break;
@@ -8868,7 +8918,7 @@ static void misdn_facility_ie_handler(enum event_e event, struct misdn_bchannel 
 					/* We have no place to put the OriginalCalled number */
 				}
 #endif
-				misdn_copy_redirecting_to_ast(ch->ast, &bc->redirecting);
+				misdn_copy_redirecting_to_ast(ch->ast, &bc->redirecting, bc->incoming_cid_tag);
 			}
 			break;
 		default:
@@ -8918,7 +8968,7 @@ static void misdn_facility_ie_handler(enum event_e event, struct misdn_bchannel 
 			++bc->redirecting.count;
 			bc->redirecting.reason = mISDN_REDIRECTING_REASON_DEFLECTION;
 
-			misdn_copy_redirecting_to_ast(ch->ast, &bc->redirecting);
+			misdn_copy_redirecting_to_ast(ch->ast, &bc->redirecting, bc->incoming_cid_tag);
 			ast_string_field_set(ch->ast, call_forward, bc->redirecting.to.number);
 
 			misdn_lib_send_event(bc, EVENT_DISCONNECT);
@@ -9040,7 +9090,8 @@ static void misdn_facility_ie_handler(enum event_e event, struct misdn_bchannel 
 			misdn_queue_connected_line_update(ch->ast, &party_id,
 				(bc->fac_in.u.EctInform.Status == 0 /* alerting */)
 					? AST_CONNECTED_LINE_UPDATE_SOURCE_TRANSFER_ALERTING
-					: AST_CONNECTED_LINE_UPDATE_SOURCE_TRANSFER);
+					: AST_CONNECTED_LINE_UPDATE_SOURCE_TRANSFER,
+					bc->incoming_cid_tag);
 		}
 		break;
 #if 0	/* We don't handle this yet */
@@ -9675,6 +9726,7 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 		int exceed;
 		int ai;
 		int im;
+		int append_msn = 0;
 
 		if (ch) {
 			switch (ch->state) {
@@ -9748,12 +9800,22 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 
 		ast_set_callerid(chan, bc->caller.number, NULL, bc->caller.number);
 
+		misdn_cfg_get(bc->port, MISDN_CFG_APPEND_MSN_TO_CALLERID_TAG, &append_msn, sizeof(append_msn));
+		if (append_msn) {
+			strncat(bc->incoming_cid_tag, "_", sizeof(bc->incoming_cid_tag) - strlen(bc->incoming_cid_tag) - 1);
+			strncat(bc->incoming_cid_tag, bc->dialed.number, sizeof(bc->incoming_cid_tag) - strlen(bc->incoming_cid_tag) - 1);
+		}
+
+		ast_channel_lock(chan);
+		chan->cid.cid_tag = ast_strdup(bc->incoming_cid_tag);
+		ast_channel_unlock(chan);
+
 		if (!ast_strlen_zero(bc->redirecting.from.number)) {
 			/* Add configured prefix to redirecting.from.number */
 			misdn_add_number_prefix(bc->port, bc->redirecting.from.number_type, bc->redirecting.from.number, sizeof(bc->redirecting.from.number));
 
 			/* Update asterisk channel redirecting information */
-			misdn_copy_redirecting_to_ast(chan, &bc->redirecting);
+			misdn_copy_redirecting_to_ast(chan, &bc->redirecting, bc->incoming_cid_tag);
 		}
 
 		pbx_builtin_setvar_helper(chan, "TRANSFERCAPABILITY", ast_transfercapability2str(bc->capability));
@@ -10092,11 +10154,13 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 		}
 #endif	/* defined(AST_MISDN_ENHANCEMENTS) */
 
-		/* Add configured prefix to connected.number */
-		misdn_add_number_prefix(bc->port, bc->connected.number_type, bc->connected.number, sizeof(bc->connected.number));
+		if (!ast_strlen_zero(bc->connected.number)) {
+			/* Add configured prefix to connected.number */
+			misdn_add_number_prefix(bc->port, bc->connected.number_type, bc->connected.number, sizeof(bc->connected.number));
 
-		/* Update the connected line information on the other channel */
-		misdn_queue_connected_line_update(ch->ast, &bc->connected, AST_CONNECTED_LINE_UPDATE_SOURCE_ANSWER);
+			/* Update the connected line information on the other channel */
+			misdn_queue_connected_line_update(ch->ast, &bc->connected, AST_CONNECTED_LINE_UPDATE_SOURCE_ANSWER, bc->incoming_cid_tag);
+		}
 
 		ch->l3id = bc->l3_id;
 		ch->addr = bc->addr;
@@ -10479,7 +10543,7 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 						bc->redirecting.reason = mISDN_REDIRECTING_REASON_UNKNOWN;
 						break;
 					}
-					misdn_copy_redirecting_to_ast(ch->ast, &bc->redirecting);
+					misdn_copy_redirecting_to_ast(ch->ast, &bc->redirecting, bc->incoming_cid_tag);
 					ast_channel_queue_redirecting_update(ch->ast, &ch->ast->redirecting);
 				}
 			}
@@ -10498,7 +10562,7 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 				bc->redirecting.to_changed = 0;
 				if (ch && ch->ast) {
 					misdn_queue_connected_line_update(ch->ast, &bc->redirecting.to,
-						AST_CONNECTED_LINE_UPDATE_SOURCE_TRANSFER_ALERTING);
+						AST_CONNECTED_LINE_UPDATE_SOURCE_TRANSFER_ALERTING, bc->incoming_cid_tag);
 				}
 			}
 			break;
@@ -10507,7 +10571,7 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 				bc->redirecting.to_changed = 0;
 				if (ch && ch->ast) {
 					misdn_queue_connected_line_update(ch->ast, &bc->redirecting.to,
-						AST_CONNECTED_LINE_UPDATE_SOURCE_TRANSFER);
+						AST_CONNECTED_LINE_UPDATE_SOURCE_TRANSFER, bc->incoming_cid_tag);
 				}
 			}
 			break;
@@ -10839,9 +10903,9 @@ static int load_module(void)
 		"    a - Have Asterisk detect DTMF tones on called channel\n"
 		"    c - Make crypted outgoing call, optarg is keyindex\n"
 		"    d - Send display text to called phone, text is the optarg\n"
-		"    e - Perform echo cancelation on this channel,\n"
+		"    e - Perform echo cancellation on this channel,\n"
 		"        takes taps as optarg (32,64,128,256)\n"
-		"   e! - Disable echo cancelation on this channel\n"
+		"   e! - Disable echo cancellation on this channel\n"
 		"    f - Enable fax detection\n"
 		"    h - Make digital outgoing call\n"
 		"   h1 - Make HDLC mode digital outgoing call\n"
@@ -10867,6 +10931,9 @@ static int load_module(void)
 		"Supported Facilities are:\n"
 		"\n"
 		"type=calldeflect args=Nr where to deflect\n"
+#if defined(AST_MISDN_ENHANCEMENTS)
+		"type=callrerouting args=Nr where to deflect\n"
+#endif	/* defined(AST_MISDN_ENHANCEMENTS) */
 		);
 
 
@@ -11636,6 +11703,50 @@ static int misdn_facility_exec(struct ast_channel *chan, const char *data)
 		/* Send message */
 		print_facility(&ch->bc->fac_out, ch->bc);
 		misdn_lib_send_event(ch->bc, EVENT_FACILITY);
+#if defined(AST_MISDN_ENHANCEMENTS)
+	} else if (!strcasecmp(args.facility_type, "callrerouteing")
+		|| !strcasecmp(args.facility_type, "callrerouting")) {
+		if (ast_strlen_zero(args.arg[0])) {
+			ast_log(LOG_WARNING, "Facility: Call rerouting requires an argument: Number\n");
+		}
+
+		max_len = sizeof(ch->bc->fac_out.u.CallRerouteing.Component.Invoke.CalledAddress.Party.Number) - 1;
+		if (max_len < strlen(args.arg[0])) {
+			ast_log(LOG_WARNING,
+				"Facility: Number argument too long (up to %u digits are allowed). Ignoring.\n",
+				max_len);
+			return 0;
+		}
+		ch->bc->fac_out.Function = Fac_CallRerouteing;
+		ch->bc->fac_out.u.CallRerouteing.InvokeID = ++misdn_invoke_id;
+		ch->bc->fac_out.u.CallRerouteing.ComponentType = FacComponent_Invoke;
+
+		ch->bc->fac_out.u.CallRerouteing.Component.Invoke.ReroutingReason = 0;/* unknown */
+		ch->bc->fac_out.u.CallRerouteing.Component.Invoke.ReroutingCounter = 1;
+
+		ch->bc->fac_out.u.CallRerouteing.Component.Invoke.CalledAddress.Party.Type = 0;/* unknown */
+		ch->bc->fac_out.u.CallRerouteing.Component.Invoke.CalledAddress.Party.LengthOfNumber = strlen(args.arg[0]);
+		strcpy((char *) ch->bc->fac_out.u.CallRerouteing.Component.Invoke.CalledAddress.Party.Number, args.arg[0]);
+		ch->bc->fac_out.u.CallRerouteing.Component.Invoke.CalledAddress.Subaddress.Length = 0;
+
+		ch->bc->fac_out.u.CallRerouteing.Component.Invoke.CallingPartySubaddress.Length = 0;
+
+		/* 0x90 0x90 0xa3 3.1 kHz audio, circuit mode, 64kbit/sec, level1/a-Law */
+		ch->bc->fac_out.u.CallRerouteing.Component.Invoke.Q931ie.Bc.Length = 3;
+		ch->bc->fac_out.u.CallRerouteing.Component.Invoke.Q931ie.Bc.Contents[0] = 0x90;
+		ch->bc->fac_out.u.CallRerouteing.Component.Invoke.Q931ie.Bc.Contents[1] = 0x90;
+		ch->bc->fac_out.u.CallRerouteing.Component.Invoke.Q931ie.Bc.Contents[2] = 0xa3;
+		ch->bc->fac_out.u.CallRerouteing.Component.Invoke.Q931ie.Hlc.Length = 0;
+		ch->bc->fac_out.u.CallRerouteing.Component.Invoke.Q931ie.Llc.Length = 0;
+		ch->bc->fac_out.u.CallRerouteing.Component.Invoke.Q931ie.UserInfo.Length = 0;
+
+		ch->bc->fac_out.u.CallRerouteing.Component.Invoke.LastRerouting.Type = 1;/* presentationRestricted */
+		ch->bc->fac_out.u.CallRerouteing.Component.Invoke.SubscriptionOption = 0;/* no notification to caller */
+
+		/* Send message */
+		print_facility(&ch->bc->fac_out, ch->bc);
+		misdn_lib_send_event(ch->bc, EVENT_FACILITY);
+#endif	/* defined(AST_MISDN_ENHANCEMENTS) */
 	} else {
 		chan_misdn_log(1, ch->bc->port, "Unknown Facility: %s\n", args.facility_type);
 	}
@@ -11914,9 +12025,6 @@ static int misdn_set_opt_exec(struct ast_channel *chan, const char *data)
 		}
 		if (ch->dsp) {
 			ast_dsp_set_features(ch->dsp, DSP_FEATURE_DIGIT_DETECT | DSP_FEATURE_FAX_DETECT);
-		}
-		if (!ch->trans) {
-			ch->trans = ast_translator_build_path(AST_FORMAT_SLINEAR, AST_FORMAT_ALAW);
 		}
 	}
 

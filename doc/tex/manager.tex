@@ -28,8 +28,6 @@ If you develop applications, please try to reuse existing manager
 headers and their interpretation. If you are unsure, discuss on
 the asterisk-dev mailing list.
 
-\section{Device status reports}
-
 Manager subscribes to extension status reports from all channels,
 to be able to generate events when an extension or device changes
 state. The level of details in these events may depend on the channel
@@ -111,6 +109,21 @@ There are a number of GUI tools that use the manager interface, please search
 the mailing list archives and the documentation page on the
 \url{http://www.asterisk.org} web site for more information.
 
+\section{Ensuring all modules are loaded}
+It is possible to connect to the manager interface before all Asterisk modules
+are loaded. To ensure that an application does not send AMI actions that might
+require a module that has not yet loaded, the application can listen for the
+FullyBooted manager event. It will be sent upon connection if all modules have
+been loaded, or as soon as loading is complete. The event:
+
+\begin{verbatim}
+   Event: FullyBooted
+   Privilege: system,all
+   Status: Fully Booted
+\end{verbatim}
+
+\section{Device status reports}
+
 
 \section{Some standard AMI headers}
 \begin{verbatim}
@@ -163,6 +176,7 @@ the mailing list archives and the documentation page on the
  DestinationContext:      -- Destination context (cdr_manager)
  DestinationChannel:      -- Destination channel (cdr_manager)
  DestUniqueID:            -- UniqueID of destination (dial event)
+ Direction: <type>        -- Audio to mute (read | write | both) 
  Disposition:             -- Call disposition (CDR manager)
  Domain: <domain>         -- DNS domain
  Duration: <secs>         -- Duration of call (cdr_manager)
@@ -231,6 +245,7 @@ the mailing list archives and the documentation page on the
  SrcUniqueID:             -- UniqueID of source (dial event)
  StartTime:               -- Start time of call (cdr_manager)
  State:                   -- Channel state
+ State: <1 | 0>           -- Mute flag
  Status:                  -- Registration status (Registry events SIP)
  Status:                  -- Extension status (Extensionstate)
  Status:                  -- Peer status (if monitored)  ** Will change name **

@@ -14,8 +14,9 @@
  *
  *****************************************************************************/
 
-#include <asterisk.h>
-#include <asterisk/lock.h>
+#include "asterisk.h"
+#include "asterisk/lock.h"
+#include "asterisk/time.h"
 #include <time.h>
 
 #include "ootypes.h"
@@ -38,6 +39,23 @@ int ooOnReceivedReleaseComplete(OOH323CallData *call, Q931Message *q931Msg);
 int ooOnReceivedCallProceeding(OOH323CallData *call, Q931Message *q931Msg);
 int ooOnReceivedAlerting(OOH323CallData *call, Q931Message *q931Msg);
 int ooOnReceivedProgress(OOH323CallData *call, Q931Message *q931Msg);
+int ooHandleDisplayIE(OOH323CallData *call, Q931Message *q931Msg);
+
+int ooHandleDisplayIE(OOH323CallData *call, Q931Message *q931Msg) {
+   Q931InformationElement* pDisplayIE;
+
+   /* check for display ie */
+   pDisplayIE = ooQ931GetIE(q931Msg, Q931DisplayIE);
+   if(pDisplayIE) {
+      if (call->remoteDisplayName)
+	memFreePtr(call->pctxt, call->remoteDisplayName);
+      call->remoteDisplayName = (char *) memAllocZ(call->pctxt, 
+                                 pDisplayIE->length*sizeof(ASN1OCTET)+1);
+      strncpy(call->remoteDisplayName, (char *)pDisplayIE->data, pDisplayIE->length*sizeof(ASN1OCTET));
+   }
+
+   return OO_OK;
+}
 
 int ooHandleFastStart(OOH323CallData *call, H225Facility_UUIE *facility)
 {
@@ -796,6 +814,7 @@ int ooOnReceivedAlerting(OOH323CallData *call, Q931Message *q931Msg)
    H245H2250LogicalChannelParameters * h2250lcp = NULL;  
    int i=0, ret=0;
 
+   ooHandleDisplayIE(call, q931Msg);
 
    if(!q931Msg->userInfo)
    {
@@ -1019,6 +1038,7 @@ int ooOnReceivedProgress(OOH323CallData *call, Q931Message *q931Msg)
    H245H2250LogicalChannelParameters * h2250lcp = NULL;  
    int i=0, ret=0;
 
+   ooHandleDisplayIE(call, q931Msg);
 
    if(!q931Msg->userInfo)
    {
@@ -1241,6 +1261,8 @@ int ooOnReceivedSignalConnect(OOH323CallData* call, Q931Message *q931Msg)
    ASN1OCTET msgbuf[MAXMSGLEN];
    ooLogicalChannel * pChannel = NULL;
    H245H2250LogicalChannelParameters * h2250lcp = NULL;  
+
+   ooHandleDisplayIE(call, q931Msg);
 
    if(!q931Msg->userInfo)
    {
@@ -1522,6 +1544,10 @@ int ooOnReceivedSignalConnect(OOH323CallData* call, Q931Message *q931Msg)
       }
 
    }
+   call->callState = OO_CALL_CONNECTED;
+   if (call->rtdrCount > 0 && call->rtdrInterval > 0) {
+        return ooSendRoundTripDelayRequest(call);
+   }
    return OO_OK;  
 }
 
@@ -1532,6 +1558,7 @@ int ooHandleH2250Message(OOH323CallData *call, Q931Message *q931Msg)
    DListNode *pNode = NULL;
    OOTimer *pTimer=NULL;
    int type = q931Msg->messageType;
+   struct timeval tv;
    struct timespec ts;
 
 /* checking of message validity for first/next messages of calls */
@@ -1575,8 +1602,9 @@ int ooHandleH2250Message(OOH323CallData *call, Q931Message *q931Msg)
 	       ast_mutex_lock(&call->Lock);
                ret = ooGkClientSendAdmissionRequest(gH323ep.gkClient, call, 
                                                     FALSE);
-                clock_gettime(CLOCK_REALTIME, &ts);
-                ts.tv_sec += 24;
+				tv = ast_tvnow();
+                ts.tv_sec = tv.tv_sec + 24;
+				ts.tv_nsec = tv.tv_usec * 1000;
                 ast_cond_timedwait(&call->gkWait, &call->Lock, &ts);
                 if (call->callState == OO_CALL_WAITING_ADMISSION)
 			call->callState = OO_CALL_CLEAR;
@@ -2192,7 +2220,7 @@ int ooPopulatePrefixList(OOCTXT *pctxt, OOAliases *pAliases,
    return OO_OK;
 }
 int ooPopulateAliasList(OOCTXT *pctxt, OOAliases *pAliases,
-                           H225_SeqOfH225AliasAddress *pAliasList )
+                           H225_SeqOfH225AliasAddress *pAliasList, int pAliasType)
 {
    H225AliasAddress *pAliasEntry=NULL;
    OOAliases * pAlias=NULL;
@@ -2216,21 +2244,26 @@ int ooPopulateAliasList(OOCTXT *pctxt, OOAliases *pAliases,
             OOTRACEERR1("ERROR:Memory - ooPopulateAliasList - pAliasEntry\n");
             return OO_FAILED;
          }
+
+	 if (pAliasType && pAlias->type != pAliasType) {
+		pAlias = pAlias->next;
+		continue;
+	 }
          switch(pAlias->type)
          {
-         case T_H225AliasAddress_dialedDigits:
-            pAliasEntry->t = T_H225AliasAddress_dialedDigits;
-            pAliasEntry->u.dialedDigits = (ASN1IA5String)memAlloc(pctxt,
+            case T_H225AliasAddress_dialedDigits:
+             pAliasEntry->t = T_H225AliasAddress_dialedDigits;
+             pAliasEntry->u.dialedDigits = (ASN1IA5String)memAlloc(pctxt,
                                                      strlen(pAlias->value)+1);
-            if(!pAliasEntry->u.dialedDigits)
-            {
+             if(!pAliasEntry->u.dialedDigits)
+             {
                OOTRACEERR1("ERROR:Memory - ooPopulateAliasList - "
                            "dialedDigits\n");
                memFreePtr(pctxt, pAliasEntry);
                return OO_FAILED;
-            }
-            strcpy(*(char**)&pAliasEntry->u.dialedDigits, pAlias->value);
-            bValid = TRUE;
+             }
+             strcpy(*(char**)&pAliasEntry->u.dialedDigits, pAlias->value);
+             bValid = TRUE;
             break;
          case T_H225AliasAddress_h323_ID:
             pAliasEntry->t = T_H225AliasAddress_h323_ID;

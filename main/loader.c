@@ -260,6 +260,7 @@ static struct reload_classes {
 	{ "udptl",	ast_udptl_reload },
 	{ "indications", ast_indications_reload },
 	{ "cel",        ast_cel_engine_reload },
+	{ "plc",        ast_plc_reload },
 	{ NULL, 	NULL }
 };
 
@@ -466,7 +467,7 @@ void ast_module_shutdown(void)
 				continue;
 			}
 			AST_LIST_REMOVE_CURRENT(entry);
-			if (mod->info->unload) {
+			if (mod->flags.running && !mod->flags.declined && mod->info->unload) {
 				mod->info->unload();
 			}
 			AST_LIST_HEAD_DESTROY(&mod->users);
@@ -490,11 +491,13 @@ int ast_unload_resource(const char *resource_name, enum ast_module_unload_mode f
 	if (!(mod = find_resource(resource_name, 0))) {
 		AST_LIST_UNLOCK(&module_list);
 		ast_log(LOG_WARNING, "Unload failed, '%s' could not be found\n", resource_name);
-		return 0;
+		return -1;
 	}
 
-	if (!(mod->flags.running || mod->flags.declined))
+	if (!mod->flags.running || mod->flags.declined) {
+		ast_log(LOG_WARNING, "Unload failed, '%s' is not loaded.\n", resource_name);
 		error = 1;
+	}
 
 	if (!error && (mod->usecount > 0)) {
 		if (force)
@@ -1200,6 +1203,10 @@ int ast_loader_unregister(int (*v)(void))
 
 struct ast_module *ast_module_ref(struct ast_module *mod)
 {
+	if (!mod) {
+		return NULL;
+	}
+
 	ast_atomic_fetchadd_int(&mod->usecount, +1);
 	ast_update_use_count();
 
@@ -1208,6 +1215,10 @@ struct ast_module *ast_module_ref(struct ast_module *mod)
 
 void ast_module_unref(struct ast_module *mod)
 {
+	if (!mod) {
+		return;
+	}
+
 	ast_atomic_fetchadd_int(&mod->usecount, -1);
 	ast_update_use_count();
 }

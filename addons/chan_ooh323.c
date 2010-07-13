@@ -187,6 +187,7 @@ static struct ooh323_pvt {
 	struct ast_dsp *vad;
 	struct OOH323Regex *rtpmask;	/* rtp ip regexp */
 	char rtpmaskstr[120];
+	int rtdrcount, rtdrinterval;	/* roundtripdelayreq */
 	struct ooh323_pvt *next;	/* Next entity */
 } *iflist = NULL;
 
@@ -212,6 +213,7 @@ struct ooh323_user{
 	char        mIP[20];
 	struct OOH323Regex	    *rtpmask;
 	char	    rtpmaskstr[120];
+	int	    rtdrcount, rtdrinterval;
 	struct ooh323_user *next;
 };
 
@@ -238,6 +240,7 @@ struct ooh323_peer{
 	int         rtptimeout;
 	struct OOH323Regex	    *rtpmask;
 	char	    rtpmaskstr[120];
+	int	    rtdrcount,rtdrinterval;
 	struct ooh323_peer *next;
 };
 
@@ -302,6 +305,7 @@ static int  gIncomingLimit = 1024;
 static int  gOutgoingLimit = 1024;
 OOBOOL gH323Debug = FALSE;
 static int gTRCLVL = OOTRCLVLERR;
+static int gRTDRCount = 0, gRTDRInterval = 0;
 
 static int t35countrycode = 0;
 static int t35extensions = 0;
@@ -456,6 +460,7 @@ static struct ooh323_pvt *ooh323_alloc(int callref, char *callToken)
 {
 	struct ooh323_pvt *pvt = NULL;
 	struct sockaddr_in ouraddr;
+	struct ast_sockaddr tmp;
 	struct in_addr ipAddr;
 	if (gH323Debug)
 		ast_verbose("---   ooh323_alloc\n");
@@ -477,8 +482,10 @@ static struct ooh323_pvt *ooh323_alloc(int callref, char *callToken)
 		return NULL;
 	}
 
+	ouraddr.sin_family = AF_INET;
 	ouraddr.sin_addr = ipAddr;
-	if (!(pvt->rtp = ast_rtp_instance_new("asterisk", sched, &ouraddr, NULL))) {
+	ast_sockaddr_from_sin(&tmp, &ouraddr);
+	if (!(pvt->rtp = ast_rtp_instance_new("asterisk", sched, &tmp, NULL))) {
 		ast_log(LOG_WARNING, "Unable to create RTP session: %s\n", 
 				  strerror(errno));
 		ast_mutex_unlock(&pvt->lock);
@@ -502,6 +509,8 @@ static struct ooh323_pvt *ooh323_alloc(int callref, char *callToken)
 	pvt->faxmode = 0;
 	pvt->t38support = gT38Support;
 	pvt->rtptimeout = gRTPTimeout;
+	pvt->rtdrinterval = gRTDRInterval;
+	pvt->rtdrcount = gRTDRCount;
 
 	pvt->call_reference = callref;
 	if (callToken)
@@ -603,6 +612,10 @@ static struct ast_channel *ooh323_request(const char *type, format_t format,
 	if (dest) {
 		peer = find_peer(dest, port);
 	} else{
+		ast_mutex_lock(&iflock);
+		ast_mutex_unlock(&p->lock);
+		ooh323_destroy(p);
+		ast_mutex_unlock(&iflock);
 		ast_log(LOG_ERROR, "Destination format is not supported\n");
 		return NULL;
 	}
@@ -627,14 +640,31 @@ static struct ast_channel *ooh323_request(const char *type, format_t format,
 			p->rtpmask = peer->rtpmask;
 			ast_copy_string(p->rtpmaskstr, peer->rtpmaskstr, sizeof(p->rtpmaskstr));
 		}
+
+		if (peer->rtdrinterval) {
+			p->rtdrinterval = peer->rtdrinterval;
+			p->rtdrcount = peer->rtdrcount;
+		}
+
 		ast_copy_string(p->accountcode, peer->accountcode, sizeof(p->accountcode));
 		p->amaflags = peer->amaflags;
 	} else {
+		if (gRasGkMode ==  RasNoGatekeeper) {
+			/* no gk and no peer */
+			ast_log(LOG_ERROR, "Call to undefined peer %s", dest);
+			ast_mutex_lock(&iflock);
+			ast_mutex_unlock(&p->lock);
+			ooh323_destroy(p);
+			ast_mutex_unlock(&iflock);
+			return NULL;
+		}
 		p->dtmfmode = gDTMFMode;
 		p->dtmfcodec = gDTMFCodec;
 		p->t38support = gT38Support;
 		p->rtptimeout = gRTPTimeout;
 		p->capability = gCapability;
+		p->rtdrinterval = gRTDRInterval;
+		p->rtdrcount = gRTDRCount;
 
 		memcpy(&p->prefs, &gPrefs, sizeof(struct ast_codec_pref));
 		p->username = strdup(dest);
@@ -658,23 +688,22 @@ static struct ast_channel *ooh323_request(const char *type, format_t format,
 		ast_mutex_lock(&iflock);
 		ooh323_destroy(p);
 		ast_mutex_unlock(&iflock);
-   } else {
-      ast_mutex_lock(&p->lock);
-      p->callToken = (char*)ast_malloc(AST_MAX_EXTENSION);
-      if(!p->callToken)
-      {
-       ast_mutex_unlock(&p->lock);
-       ast_mutex_lock(&iflock);
-       ooh323_destroy(p);
-       ast_mutex_unlock(&iflock);
-       ast_log(LOG_ERROR, "Failed to allocate memory for callToken\n");
-       return NULL;
-      }
+   	} else {
+      		ast_mutex_lock(&p->lock);
+      		p->callToken = (char*)ast_malloc(AST_MAX_EXTENSION);
+      		if(!p->callToken) {
+       			ast_mutex_unlock(&p->lock);
+       			ast_mutex_lock(&iflock);
+       			ooh323_destroy(p);
+       			ast_mutex_unlock(&iflock);
+       			ast_log(LOG_ERROR, "Failed to allocate memory for callToken\n");
+       			return NULL;
+      		}
 
-      ast_mutex_unlock(&p->lock);
-      ast_mutex_lock(&ooh323c_cmd_lock);
-      ooMakeCall(data, p->callToken, AST_MAX_EXTENSION, NULL);
-      ast_mutex_unlock(&ooh323c_cmd_lock);
+      		ast_mutex_unlock(&p->lock);
+      		ast_mutex_lock(&ooh323c_cmd_lock);
+      		ooMakeCall(data, p->callToken, AST_MAX_EXTENSION, NULL);
+      		ast_mutex_unlock(&ooh323c_cmd_lock);
 	}
 
 	restart_monitor();
@@ -941,17 +970,17 @@ static int ooh323_call(struct ast_channel *ast, char *dest, int timeout)
 	else
 		ast_copy_string(destination, dest, sizeof(destination));
 
-   destination[sizeof(destination)-1]='\0';
+	destination[sizeof(destination)-1]='\0';
 
-   opts.transfercap = ast->transfercapability;
+	opts.transfercap = ast->transfercapability;
 
-   for (i=0;i<480 && !isRunning(p->callToken);i++) usleep(12000);
+	for (i=0;i<480 && !isRunning(p->callToken);i++) usleep(12000);
 
-   if(OO_TESTFLAG(p->flags, H323_DISABLEGK)) {
-      res = ooRunCall(destination, p->callToken, AST_MAX_EXTENSION, &opts);
-   } else {
-      res = ooRunCall(destination, p->callToken, AST_MAX_EXTENSION, NULL);
-   }
+	if(OO_TESTFLAG(p->flags, H323_DISABLEGK)) {
+		res = ooRunCall(destination, p->callToken, AST_MAX_EXTENSION, &opts);
+	} else {
+		res = ooRunCall(destination, p->callToken, AST_MAX_EXTENSION, NULL);
+ 	}
 
 	ast_mutex_unlock(&p->lock);
 	if (res != OO_OK) {
@@ -1206,15 +1235,19 @@ static int ooh323_indicate(struct ast_channel *ast, int condition, const void *d
 	    		ooManualRingback(callToken);
 	    }
 	 break;
-      case AST_CONTROL_SRCUPDATE:
-		ast_rtp_instance_new_source(p->rtp);
+	case AST_CONTROL_SRCUPDATE:
+		ast_rtp_instance_update_source(p->rtp);
 		break;
-
-      case AST_CONTROL_CONNECTED_LINE:
-		if (gH323Debug)
-			ast_log(LOG_DEBUG, "Sending connected line info for %s (%s)\n",
+	case AST_CONTROL_SRCCHANGE:
+		ast_rtp_instance_change_source(p->rtp);
+		break;
+       	case AST_CONTROL_CONNECTED_LINE:
+		if (!ast_strlen_zero(ast->connected.id.name)) {
+			if (gH323Debug)
+				ast_log(LOG_DEBUG, "Sending connected line info for %s (%s)\n",
 				callToken, ast->connected.id.name);
-		ooSetANI(callToken, ast->connected.id.name);
+			ooSetANI(callToken, ast->connected.id.name);
+		}
 		break;
 
       case AST_CONTROL_T38_PARAMETERS:
@@ -1503,6 +1536,14 @@ int onAlerting(ooCallData *call)
 		return 0;
 	}
 	c = p->owner;
+
+	if (call->remoteDisplayName) {
+		struct ast_party_connected_line connected;
+		ast_party_connected_line_init(&connected);
+		connected.id.name = (char *) call->remoteDisplayName;
+		connected.source = AST_CONNECTED_LINE_UPDATE_SOURCE_ANSWER;
+		ast_channel_queue_connected_line_update(c, &connected);
+	}
 	if (c->_state != AST_STATE_UP)
 		ast_setstate(c, AST_STATE_RINGING);
 
@@ -1546,6 +1587,14 @@ int onProgress(ooCallData *call)
 		return 0;
 	}
 	c = p->owner;
+
+	if (call->remoteDisplayName) {
+		struct ast_party_connected_line connected;
+		ast_party_connected_line_init(&connected);
+		connected.id.name = (char *) call->remoteDisplayName;
+		connected.source = AST_CONNECTED_LINE_UPDATE_SOURCE_ANSWER;
+		ast_channel_queue_connected_line_update(c, &connected);
+	}
 	if (c->_state != AST_STATE_UP)
 		ast_setstate(c, AST_STATE_RINGING);
 
@@ -1703,6 +1752,10 @@ int ooh323_onReceivedSetup(ooCallData *call, Q931Message *pmsg)
 			ast_copy_string(p->rtpmaskstr, user->rtpmaskstr, 
 							 sizeof(p->rtpmaskstr));
 		}
+		if (user->rtdrcount > 0 && user->rtdrinterval > 0) {
+			p->rtdrcount = user->rtdrcount;
+			p->rtdrinterval = user->rtdrinterval;
+		}
 	 	if (user->incominglimit) user->inUse++;
 		ast_mutex_unlock(&user->lock);
 	} else {
@@ -1834,10 +1887,10 @@ int onNewCallCreated(ooCallData *call)
 		}
 		ast_mutex_lock(&p->lock);
 
-		if (p->callerid_name) {
+		if (!ast_strlen_zero(p->callerid_name)) {
 			ooCallSetCallerId(call, p->callerid_name);
 		}
-		if (p->callerid_num) {
+		if (!ast_strlen_zero(p->callerid_num)) {
 			i = 0;
 			while (*(p->callerid_num + i) != '\0') {
             			if(!isdigit(*(p->callerid_num+i))) { break; }
@@ -1846,7 +1899,7 @@ int onNewCallCreated(ooCallData *call)
          		if(*(p->callerid_num+i) == '\0')
 				ooCallSetCallingPartyNumber(call, p->callerid_num);
          		else {
-            			if(!p->callerid_name)
+            			if(ast_strlen_zero(p->callerid_name))
 					ooCallSetCallerId(call, p->callerid_num);
 			}
 		}
@@ -1859,7 +1912,7 @@ int onNewCallCreated(ooCallData *call)
 				ast_verbose("Setting dialed digits %s\n", p->caller_dialedDigits);
 			}
 			ooCallAddAliasDialedDigits(call, p->caller_dialedDigits);
-		} else if (p->callerid_num) {
+		} else if (!ast_strlen_zero(p->callerid_num)) {
 			if (ooIsDailedDigit(p->callerid_num)) {
 				if (gH323Debug) {
 					ast_verbose("setting callid number %s\n", p->callerid_num);
@@ -1927,6 +1980,15 @@ int onCallEstablished(ooCallData *call)
 		}
 		if (p->owner) {
 			struct ast_channel* c = p->owner;
+
+			if (call->remoteDisplayName) {
+				struct ast_party_connected_line connected;
+				ast_party_connected_line_init(&connected);
+				connected.id.name = (char *) call->remoteDisplayName;
+				connected.source = AST_CONNECTED_LINE_UPDATE_SOURCE_ANSWER;
+				ast_channel_queue_connected_line_update(c, &connected);
+			}
+
 			ast_queue_control(c, AST_CONTROL_ANSWER);
    			ast_channel_unlock(p->owner);
 			manager_event(EVENT_FLAG_SYSTEM,"ChannelUpdate","Channel: %s\r\nChanneltype: %s\r\n"
@@ -2102,6 +2164,8 @@ static struct ooh323_user *build_user(const char *name, struct ast_variable *v)
 			} else if (!strcasecmp(v->name, "accountcode")) {
             			strncpy(user->accountcode, v->value, 
 						sizeof(user->accountcode)-1);
+			} else if (!strcasecmp(v->name, "roundtrip")) {
+				sscanf(v->value, "%d,%d", &user->rtdrcount, &user->rtdrinterval);
 			} else if (!strcasecmp(v->name, "rtptimeout")) {
 				user->rtptimeout = atoi(v->value);
 				if (user->rtptimeout < 0)
@@ -2261,6 +2325,8 @@ static struct ooh323_peer *build_peer(const char *name, struct ast_variable *v, 
 												 tcodecs, 1);				 
 			} else if (!strcasecmp(v->name,  "amaflags")) {
 				peer->amaflags = ast_cdr_amaflags2int(v->value);
+			} else if (!strcasecmp(v->name, "roundtrip")) {
+				sscanf(v->value, "%d,%d", &peer->rtdrcount, &peer->rtdrinterval);
 			} else if (!strcasecmp(v->name, "dtmfmode")) {
 				if (!strcasecmp(v->value, "rfc2833"))
 					peer->dtmfmode = H323_DTMF_RFC2833;
@@ -2404,6 +2470,8 @@ int reload_config(int reload)
 	gRasGkMode = RasNoGatekeeper;
 	gGatekeeper[0] = '\0';
 	gRTPTimeout = 60;
+	gRTDRInterval = 0;
+	gRTDRCount = 0;
 	strcpy(gAccountcode, DEFAULT_H323ACCNT);
 	gFastStart = 1;
 	gTunneling = 1;
@@ -2461,6 +2529,8 @@ int reload_config(int reload)
 				ooH323EpEnableH245Tunneling();
 			else
 				ooH323EpDisableH245Tunneling();
+		} else if (!strcasecmp(v->name, "roundtrip")) {
+			sscanf(v->value, "%d,%d", &gRTDRCount, &gRTDRInterval);
       		} else if (!strcasecmp(v->name, "trybemaster")) {
 			gBeMaster = ast_true(v->value);
 			if (gBeMaster)
@@ -2730,6 +2800,8 @@ static char *handle_cli_ooh323_show_peer(struct ast_cli_entry *e, int cmd, struc
 	ast_cli(a->fd, "%-15.15s%d\n", "rtptimeout: ", peer->rtptimeout);
 	if (peer->rtpmaskstr[0])
 		ast_cli(a->fd, "%-15.15s%s\n", "rtpmask: ", peer->rtpmaskstr);
+	if (peer->rtdrcount && peer->rtdrinterval) 
+		ast_cli(a->fd, "%-15.15s%d,%d\n", "RoundTrip: ", peer->rtdrcount, peer->rtdrinterval);
 	ast_mutex_unlock(&peer->lock);
 	} else {
 	ast_cli(a->fd, "Peer %s not found\n", a->argv[3]);
@@ -2873,6 +2945,8 @@ static char *handle_cli_ooh323_show_user(struct ast_cli_entry *e, int cmd, struc
 	if (user->rtpmaskstr[0])
 		ast_cli(a->fd, "%-15.15s%s\n", "rtpmask: ", user->rtpmaskstr);
 		ast_mutex_unlock(&user->lock);
+	if (user->rtdrcount && user->rtdrinterval) 
+		ast_cli(a->fd, "%-15.15s%d,%d\n", "RoundTrip: ", user->rtdrcount, user->rtdrinterval);
 	} else {
      ast_cli(a->fd, "User %s not found\n", a->argv[3]);
      ast_cli(a->fd, "\n");
@@ -3038,6 +3112,9 @@ static char *handle_cli_ooh323_show_config(struct ast_cli_entry *e, int cmd, str
 		ast_cli(a->fd, "%s\n", "disabled");
 	else if (gT38Support == T38_FAXGW)
 		ast_cli(a->fd, "%s\n", "faxgw/chan_sip compatible");
+
+	if (gRTDRCount && gRTDRInterval)
+		ast_cli(a->fd, "%-15.15s%d,%d\n", "RoundTrip: ", gRTDRCount, gRTDRInterval);
 
    ast_cli(a->fd, "%-20s%ld\n", "Call counter: ", callnumber);
    ast_cli(a->fd, "%-20s%s\n", "AccountCode: ", gAccountcode);
@@ -3729,6 +3806,7 @@ static int ooh323_set_rtp_peer(struct ast_channel *chan, struct ast_rtp_instance
 	struct ooh323_pvt *p;
 	struct sockaddr_in them;
 	struct sockaddr_in us;
+	struct ast_sockaddr tmp;
 	int mode;
 
 	if (gH323Debug)
@@ -3744,8 +3822,10 @@ static int ooh323_set_rtp_peer(struct ast_channel *chan, struct ast_rtp_instance
 		ast_log(LOG_ERROR, "No Private Structure, this is bad\n");
 		return -1;
 	}
-	ast_rtp_instance_get_remote_address(rtp, &them);
-	ast_rtp_instance_get_local_address(rtp, &us);
+	ast_rtp_instance_get_remote_address(rtp, &tmp);
+	ast_sockaddr_to_sin(&tmp, &them);
+	ast_rtp_instance_get_local_address(rtp, &tmp);
+	ast_sockaddr_to_sin(&tmp, &us);
 	return 0;
 }
 
@@ -3755,6 +3835,7 @@ static int ooh323_set_rtp_peer(struct ast_channel *chan, struct ast_rtp_instance
 int configure_local_rtp(struct ooh323_pvt *p, ooCallData *call)
 {
 	struct sockaddr_in us;
+	struct ast_sockaddr tmp;
 	ooMediaInfo mediaInfo;
 	int x;
 	format_t format = 0;
@@ -3775,13 +3856,21 @@ int configure_local_rtp(struct ooh323_pvt *p, ooCallData *call)
 				 p->rtp, p->dtmfcodec, "audio", "cisco-telephone-event", 0);
 		}
 		/* figure out our local RTP port and tell the H.323 stack about it*/
-		ast_rtp_instance_get_local_address(p->rtp, &us);
+		ast_rtp_instance_get_local_address(p->rtp, &tmp);
+		ast_sockaddr_to_sin(&tmp, &us);
 
 		if (p->rtptimeout) {
 			ast_rtp_instance_set_timeout(p->rtp, p->rtptimeout);
 		}
 		ast_rtp_instance_set_prop(p->rtp, AST_RTP_PROPERTY_RTCP, 1);
 		
+	}
+
+	if (p->rtdrcount) {
+		if (gH323Debug)
+			ast_verbose("Setup RTDR info: %d, %d\n", p->rtdrinterval, p->rtdrcount);
+		call->rtdrInterval = p->rtdrinterval;
+		call->rtdrCount = p->rtdrcount;
 	}
 
 
@@ -3832,6 +3921,7 @@ void setup_rtp_connection(ooCallData *call, const char *remoteIp,
 {
 	struct ooh323_pvt *p = NULL;
 	struct sockaddr_in them;
+	struct ast_sockaddr tmp;
 
 	if (gH323Debug)
 		ast_verbose("---   setup_rtp_connection %s:%d\n", remoteIp, remotePort);
@@ -3847,7 +3937,8 @@ void setup_rtp_connection(ooCallData *call, const char *remoteIp,
 	them.sin_family = AF_INET;
 	them.sin_addr.s_addr = inet_addr(remoteIp); /* only works for IPv4 */
 	them.sin_port = htons(remotePort);
-	ast_rtp_instance_set_remote_address(p->rtp, &them);
+	ast_sockaddr_from_sin(&tmp, &them);
+	ast_rtp_instance_set_remote_address(p->rtp, &tmp);
 
 	if (p->writeformat & AST_FORMAT_G726_AAL2) 
                 ast_rtp_codecs_payloads_set_rtpmap_type(ast_rtp_instance_get_codecs(p->rtp), p->rtp, 2,

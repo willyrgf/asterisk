@@ -35,17 +35,18 @@
 
 /*** MODULEINFO
 	<depend>oss</depend>
+	<depend>alsa</depend>
 	<depend>usb</depend>
 	<defaultenabled>no</defaultenabled>
  ***/
 
 /*** MAKEOPTS
-<category name="MENUSELECT_CFLAGS" displayname="Compiler Flags" positive_output="yes" remove_on_change=".lastclean">
-	<member name="RADIO_RTX" displayname="Build RTX/DTX Radio Programming">
+<category name="MENUSELECT_CFLAGS" displayname="Compiler Flags" positive_output="yes">
+	<member name="RADIO_RTX" displayname="Build RTX/DTX Radio Programming" touch_on_change="channels/chan_usbradio.c channels/xpmr/xpmr.h">
 		<defaultenabled>no</defaultenabled>
 		<depend>chan_usbradio</depend>
 	</member>
-	<member name="RADIO_XPMRX" displayname="Build Experimental Radio Protocols">
+	<member name="RADIO_XPMRX" displayname="Build Experimental Radio Protocols" touch_on_change="channels/chan_usbradio.c">
 		<defaultenabled>no</defaultenabled>
 		<depend>chan_usbradio</depend>
 	</member>
@@ -193,6 +194,7 @@ static struct ast_jb_conf default_jbconf =
 	.max_size = -1,
 	.resync_threshold = -1,
 	.impl = "",
+	.target_extra = -1,
 };
 static struct ast_jb_conf global_jbconf;
 
@@ -659,9 +661,9 @@ static char *usbradio_active;	 /* the active device */
 
 static int setformat(struct chan_usbradio_pvt *o, int mode);
 
-static struct ast_channel *usbradio_request(const char *type, int format,
-											const struct ast_channel *requestor,
-											void *data, int *cause);
+static struct ast_channel *usbradio_request(const char *type, format_t format,
+		const struct ast_channel *requestor,
+		void *data, int *cause);
 static int usbradio_digit_begin(struct ast_channel *c, char digit);
 static int usbradio_digit_end(struct ast_channel *c, char digit, unsigned int duration);
 static int usbradio_text(struct ast_channel *c, const char *text);
@@ -1267,7 +1269,6 @@ static struct chan_usbradio_pvt *find_desc(char *dev)
 	if (!o)
 	{
 		ast_log(LOG_WARNING, "could not find <%s>\n", dev ? dev : "--no-device--");
-		pthread_exit(0);
 	}
 
 	return o;
@@ -2052,14 +2053,14 @@ static struct ast_frame *usbradio_read(struct ast_channel *c)
 	{
 		o->lastrx = 0;
 		//printf("AST_CONTROL_RADIO_UNKEY\n");
-		wf.subclass = AST_CONTROL_RADIO_UNKEY;
+		wf.subclass.integer = AST_CONTROL_RADIO_UNKEY;
 		ast_queue_frame(o->owner, &wf);
 	}
 	else if ((!o->lastrx) && (o->rxkeyed))
 	{
 		o->lastrx = 1;
 		//printf("AST_CONTROL_RADIO_KEY\n");
-		wf.subclass = AST_CONTROL_RADIO_KEY;
+		wf.subclass.integer = AST_CONTROL_RADIO_KEY;
 		if(o->rxctcssdecode)  	
         {
 	        wf.data.ptr = o->rxctcssfreq;
@@ -2074,7 +2075,7 @@ static struct ast_frame *usbradio_read(struct ast_channel *c)
 		return f;
 	/* ok we can build and deliver the frame to the caller */
 	f->frametype = AST_FRAME_VOICE;
-	f->subclass = AST_FORMAT_SLINEAR;
+	f->subclass.codec = AST_FORMAT_SLINEAR;
 	f->samples = FRAME_SIZE;
 	f->datalen = FRAME_SIZE * 2;
 	f->data.ptr = o->usbradio_read_buf_8k + AST_FRIENDLY_OFFSET;
@@ -2098,14 +2099,14 @@ static struct ast_frame *usbradio_read(struct ast_channel *c)
 	    if ((f1->frametype == AST_FRAME_DTMF_END) ||
 	      (f1->frametype == AST_FRAME_DTMF_BEGIN))
 	    {
-		if ((f1->subclass == 'm') || (f1->subclass == 'u'))
+		if ((f1->subclass.integer == 'm') || (f1->subclass.integer == 'u'))
 		{
 			f1->frametype = AST_FRAME_NULL;
-			f1->subclass = 0;
+			f1->subclass.integer = 0;
 			return(f1);
 		}
 		if (f1->frametype == AST_FRAME_DTMF_END)
-			ast_log(LOG_NOTICE,"Got DTMF char %c\n",f1->subclass);
+			ast_log(LOG_NOTICE, "Got DTMF char %c\n", f1->subclass.integer);
 		return(f1);
 	    }
 	}
@@ -2223,7 +2224,7 @@ static struct ast_channel *usbradio_new(struct chan_usbradio_pvt *o, char *ext, 
 }
 /*
 */
-static struct ast_channel *usbradio_request(const char *type, int format, const struct ast_channel *requestor, void *data, int *cause)
+static struct ast_channel *usbradio_request(const char *type, format_t format, const struct ast_channel *requestor, void *data, int *cause)
 {
 	struct ast_channel *c;
 	struct chan_usbradio_pvt *o = find_desc(data);
@@ -2240,7 +2241,7 @@ static struct ast_channel *usbradio_request(const char *type, int format, const 
 		return NULL;
 	}
 	if ((format & AST_FORMAT_SLINEAR) == 0) {
-		ast_log(LOG_NOTICE, "Format 0x%x unsupported\n", format);
+		ast_log(LOG_NOTICE, "Format 0x%lx unsupported\n", format);
 		return NULL;
 	}
 	if (o->owner) {
@@ -3976,12 +3977,12 @@ static int load_module(void)
 		ast_log(LOG_NOTICE, "radio active device %s not found\n", usbradio_active);
 		/* XXX we could default to 'dsp' perhaps ? */
 		/* XXX should cleanup allocated memory etc. */
-		return AST_MODULE_LOAD_FAILURE;
+		return AST_MODULE_LOAD_DECLINE;
 	}
 
 	if (ast_channel_register(&usbradio_tech)) {
 		ast_log(LOG_ERROR, "Unable to register channel type 'usb'\n");
-		return AST_MODULE_LOAD_FAILURE;
+		return AST_MODULE_LOAD_DECLINE;
 	}
 
 	ast_cli_register_multiple(cli_usbradio, ARRAY_LEN(cli_usbradio));

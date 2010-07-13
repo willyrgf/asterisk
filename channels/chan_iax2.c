@@ -19,6 +19,7 @@
 /*! \file
  *
  * \brief Implementation of Inter-Asterisk eXchange Version 2
+ *        as specified in RFC 5456
  *
  * \author Mark Spencer <markster@digium.com>
  *
@@ -89,6 +90,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/astobj2.h"
 #include "asterisk/timing.h"
 #include "asterisk/taskprocessor.h"
+#include "asterisk/test.h"
+#include "asterisk/data.h"
 
 #include "iax2.h"
 #include "iax2-parser.h"
@@ -315,6 +318,7 @@ static int (*iax2_regfunk)(const char *username, int onoff) = NULL;
                      ~AST_FORMAT_SLINEAR16 &    \
                      ~AST_FORMAT_SIREN7 &       \
                      ~AST_FORMAT_SIREN14 &      \
+                     ~AST_FORMAT_G719 &         \
                      ~AST_FORMAT_ULAW &         \
                      ~AST_FORMAT_ALAW &         \
                      ~AST_FORMAT_G722)
@@ -848,7 +852,7 @@ static const unsigned int CALLNO_POOL_BUCKETS = 2699;
  *
  * \note Contents protected by the iaxsl[] locks
  */
-static AST_LIST_HEAD_NOLOCK(, iax_frame) frame_queue[IAX_MAX_CALLS];
+static AST_LIST_HEAD_NOLOCK(, iax_frame) frame_queue[IAX_MAX_CALLS + 1];
 
 static struct ast_taskprocessor *transmit_processor;
 
@@ -1024,6 +1028,7 @@ struct iax2_thread {
 	 *  a call which this thread is already processing a full frame for, they
 	 *  are queued up here. */
 	AST_LIST_HEAD_NOLOCK(, iax2_pkt_buf) full_frames;
+	unsigned char stop;
 };
 
 /* Thread lists */
@@ -1049,7 +1054,7 @@ static void signal_condition(ast_mutex_t *lock, ast_cond_t *cond)
  * based on the local call number.  The local call number is used as the
  * index into the array where the associated pvt structure is stored.
  */
-static struct chan_iax2_pvt *iaxs[IAX_MAX_CALLS];
+static struct chan_iax2_pvt *iaxs[IAX_MAX_CALLS + 1];
 
 /*!
  * \brief Another container of iax2_pvt structures
@@ -1080,7 +1085,7 @@ static struct ao2_container *iax_transfercallno_pvts;
 
 /* Flag to use with trunk calls, keeping these calls high up.  It halves our effective use
    but keeps the division between trunked and non-trunked better. */
-#define TRUNK_CALL_START	ARRAY_LEN(iaxs) / 2
+#define TRUNK_CALL_START	IAX_MAX_CALLS / 2
 
 /* Debug routines... */
 static struct sockaddr_in debugaddr;
@@ -1170,6 +1175,7 @@ static int iax2_sendhtml(struct ast_channel *c, int subclass, const char *data, 
 static int iax2_sendimage(struct ast_channel *c, struct ast_frame *img);
 static int iax2_sendtext(struct ast_channel *c, const char *text);
 static int iax2_setoption(struct ast_channel *c, int option, void *data, int datalen);
+static int iax2_queryoption(struct ast_channel *c, int option, void *data, int *datalen);
 static int iax2_transfer(struct ast_channel *c, const char *dest);
 static int iax2_write(struct ast_channel *c, struct ast_frame *f);
 static int send_trunk(struct iax2_trunk_peer *tpeer, struct timeval *now);
@@ -1217,6 +1223,7 @@ static const struct ast_channel_tech iax2_tech = {
 	.write_video = iax2_write,
 	.indicate = iax2_indicate,
 	.setoption = iax2_setoption,
+	.queryoption = iax2_queryoption,
 	.bridge = iax2_bridge,
 	.transfer = iax2_transfer,
 	.fixup = iax2_fixup,
@@ -1347,7 +1354,7 @@ static struct iax2_thread *find_idle_thread(void)
 	ast_mutex_lock(&thread->init_lock);
 
 	/* Create thread and send it on it's way */
-	if (ast_pthread_create_detached_background(&thread->threadid, NULL, iax2_process_thread, thread)) {
+	if (ast_pthread_create_background(&thread->threadid, NULL, iax2_process_thread, thread)) {
 		ast_cond_destroy(&thread->cond);
 		ast_mutex_destroy(&thread->lock);
 		ast_free(thread);
@@ -1952,6 +1959,7 @@ static int make_trunk(unsigned short callno, int locked)
 	 */
 	ast_sched_thread_del(sched, iaxs[callno]->pingid);
 	ast_sched_thread_del(sched, iaxs[callno]->lagid);
+	iaxs[callno]->lagid = iaxs[callno]->pingid = -1;
 	iaxs[x] = iaxs[callno];
 	iaxs[x]->callno = x;
 
@@ -2449,10 +2457,21 @@ static char *handle_cli_iax2_show_callno_limits(struct ast_cli_entry *e, int cmd
 		ao2_iterator_destroy(&i);
 
 		if (a->argc == 4) {
-			ast_cli(a->fd, "\nNon-CallToken Validation Limit: %d\nNon-CallToken Validated: %d\n", global_maxcallno_nonval, total_nonval_callno_used);
+			ast_cli(a->fd, "\nNon-CallToken Validation Callno Limit: %d\n"
+			                 "Non-CallToken Validated Callno Used:   %d\n",
+				global_maxcallno_nonval,
+				total_nonval_callno_used);
+
+			ast_cli(a->fd,   "Total Available Callno:                %d\n"
+			                 "Regular Callno Available:              %d\n"
+			                 "Trunk Callno Available:                %d\n",
+				ao2_container_count(callno_pool) + ao2_container_count(callno_pool_trunk),
+				ao2_container_count(callno_pool),
+				ao2_container_count(callno_pool_trunk));
 		} else if (a->argc == 5 && !found) {
 			ast_cli(a->fd, "No callnumber table entries for %s found\n", a->argv[4] );
 		}
+
 
 		return CLI_SUCCESS;
 	default:
@@ -3269,7 +3288,16 @@ static void iax2_destroy(int callno)
 
 retry:
 	if ((pvt = iaxs[callno])) {
+#if 0
+		/* iax2_destroy_helper gets called from this function later on.  When
+		 * called twice, we get the (previously) familiar FRACK! errors in
+		 * devmode, from the scheduler.  An alternative to this approach is to
+		 * reset the scheduler entries to -1 when they're deleted in
+		 * iax2_destroy_helper().  That approach was previously decided to be
+		 * "wrong" because "the memory is going to be deallocated anyway.  Why
+		 * should we be resetting those values?" */
 		iax2_destroy_helper(pvt);
+#endif
 	}
 
 	owner = pvt ? pvt->owner : NULL;
@@ -4113,9 +4141,9 @@ static int transmit_frame(void *data)
 	} else {
 		/* We need reliable delivery.  Schedule a retransmission */
 		AST_LIST_INSERT_TAIL(&frame_queue[fr->callno], fr, list);
-		ast_mutex_unlock(&iaxsl[fr->callno]);
 		fr->retries++;
 		fr->retrans = iax2_sched_add(sched, fr->retrytime, attempt_transmit, fr);
+		ast_mutex_unlock(&iaxsl[fr->callno]);
 	}
 
 	return 0;
@@ -4414,11 +4442,15 @@ static int create_addr(const char *peername, struct ast_channel *c, struct socka
 	sin->sin_family = AF_INET;
 
 	if (!(peer = find_peer(peername, 1))) {
+		struct ast_sockaddr sin_tmp;
+
 		cai->found = 0;
-		if (ast_get_ip_or_srv(sin, peername, srvlookup ? "_iax._udp" : NULL)) {
+		sin_tmp.ss.ss_family = AF_INET;
+		if (ast_get_ip_or_srv(&sin_tmp, peername, srvlookup ? "_iax._udp" : NULL)) {
 			ast_log(LOG_WARNING, "No such host: %s\n", peername);
 			return -1;
 		}
+		ast_sockaddr_to_sin(&sin_tmp, sin);
 		sin->sin_port = htons(IAX_DEFAULT_PORTNO);
 		/* use global iax prefs for unknown peer/user */
 		/* But move the calling channel's native codec to the top of the preference list */
@@ -4882,6 +4914,11 @@ static int iax2_call(struct ast_channel *c, char *dest, int timeout)
 		ast_log(LOG_WARNING, "No address associated with '%s'\n", pds.peer);
 		return -1;
 	}
+	if (ast_test_flag64(iaxs[callno], IAX_FORCE_ENCRYPT) && !cai.encmethods) {
+		ast_log(LOG_WARNING, "Encryption forced for call, but not enabled\n");
+		c->hangupcause = AST_CAUSE_BEARERCAPABILITY_NOTAVAIL;
+		return -1;
+	}
 	if (ast_strlen_zero(cai.secret) && ast_test_flag64(iaxs[callno], IAX_FORCE_ENCRYPT)) {
 		ast_log(LOG_WARNING, "Call terminated. No secret given and force encrypt enabled\n");
 		return -1;
@@ -4940,8 +4977,8 @@ static int iax2_call(struct ast_channel *c, char *dest, int timeout)
 		iax_ie_append_str(&ied, IAX_IE_LANGUAGE, c->language);
 	if (!ast_strlen_zero(c->cid.cid_dnid))
 		iax_ie_append_str(&ied, IAX_IE_DNID, c->cid.cid_dnid);
-	if (!ast_strlen_zero(c->cid.cid_rdnis))
-		iax_ie_append_str(&ied, IAX_IE_RDNIS, c->cid.cid_rdnis);
+	if (!ast_strlen_zero(c->redirecting.from.number))
+		iax_ie_append_str(&ied, IAX_IE_RDNIS, c->redirecting.from.number);
 
 	if (pds.context)
 		iax_ie_append_str(&ied, IAX_IE_CALLED_CONTEXT, pds.context);
@@ -5123,6 +5160,19 @@ static int iax2_setoption(struct ast_channel *c, int option, void *data, int dat
 	case AST_OPTION_OPRMODE:
 		errno = EINVAL;
 		return -1;
+	case AST_OPTION_SECURE_SIGNALING:
+	case AST_OPTION_SECURE_MEDIA:
+	{
+		unsigned short callno = PTR_TO_CALLNO(c->tech_pvt);
+		ast_mutex_lock(&iaxsl[callno]);
+		if ((*(int *) data)) {
+			ast_set_flag64(iaxs[callno], IAX_FORCE_ENCRYPT);
+		} else {
+			ast_clear_flag64(iaxs[callno], IAX_FORCE_ENCRYPT);
+		}
+		ast_mutex_unlock(&iaxsl[callno]);
+		return 0;
+	}
 	default:
 	{
 		unsigned short callno = PTR_TO_CALLNO(c->tech_pvt);
@@ -5151,6 +5201,23 @@ static int iax2_setoption(struct ast_channel *c, int option, void *data, int dat
 		ast_free(h);
 		return res;
 	}
+	}
+}
+
+static int iax2_queryoption(struct ast_channel *c, int option, void *data, int *datalen)
+{
+	switch (option) {
+	case AST_OPTION_SECURE_SIGNALING:
+	case AST_OPTION_SECURE_MEDIA:
+	{
+		unsigned short callno = PTR_TO_CALLNO(c->tech_pvt);
+		ast_mutex_lock(&iaxsl[callno]);
+		*((int *) data) = ast_test_flag64(iaxs[callno], IAX_FORCE_ENCRYPT) ? 1 : 0;
+		ast_mutex_unlock(&iaxsl[callno]);
+		return 0;
+	}
+	default:
+		return -1;
 	}
 }
 
@@ -5537,7 +5604,7 @@ static struct ast_channel *ast_iax2_new(int callno, int state, format_t capabili
 	else
 		tmp->cid.cid_ani = ast_strdup(i->cid_num);
 	tmp->cid.cid_dnid = ast_strdup(i->dnid);
-	tmp->cid.cid_rdnis = ast_strdup(i->rdnis);
+	tmp->redirecting.from.number = ast_strdup(i->rdnis);
 	tmp->cid.cid_pres = i->calling_pres;
 	tmp->cid.cid_ton = i->calling_ton;
 	tmp->cid.cid_tns = i->calling_tns;
@@ -5748,7 +5815,7 @@ static unsigned int calc_timestamp(struct chan_iax2_pvt *p, unsigned int ts, str
 					ast_debug(1, "predicted timestamp skew (%u) > max (%u), using real ts instead.\n",
 						abs(ms - p->nextpred), MAX_TIMESTAMP_SKEW);
 
-				if (f->samples >= rate) /* check to make sure we dont core dump */
+				if (f->samples >= rate) /* check to make sure we don't core dump */
 				{
 					int diff = ms % (f->samples / rate);
 					if (diff)
@@ -6410,7 +6477,7 @@ static char *handle_cli_iax2_show_users(struct ast_cli_entry *e, int cmd, struct
 #undef FORMAT2
 }
 
-static int __iax2_show_peers(int manager, int fd, struct mansession *s, const int argc, const char * const argv[])
+static int __iax2_show_peers(int fd, int *total, struct mansession *s, const int argc, const char * const argv[])
 {
 	regex_t regexbuf;
 	int havepattern = 0;
@@ -6420,18 +6487,17 @@ static int __iax2_show_peers(int manager, int fd, struct mansession *s, const in
 	int unmonitored_peers = 0;
 	struct ao2_iterator i;
 
-#define FORMAT2 "%-15.15s  %-15.15s %s  %-15.15s  %-8s  %s %-10s%s"
-#define FORMAT "%-15.15s  %-15.15s %s  %-15.15s  %-5d%s  %s %-10s%s"
+#define FORMAT2 "%-15.15s  %-15.15s %s  %-15.15s  %-8s  %s %-10s\n"
+#define FORMAT "%-15.15s  %-15.15s %s  %-15.15s  %-5d%s  %s %-10s\n"
 
 	struct iax2_peer *peer = NULL;
 	char name[256];
 	struct ast_str *encmethods = ast_str_alloca(256);
 	int registeredonly=0;
-	char *term = manager ? "\r\n" : "\n";
 	char idtext[256] = "";
 	switch (argc) {
 	case 6:
- 		if (!strcasecmp(argv[3], "registered"))
+		if (!strcasecmp(argv[3], "registered"))
 			registeredonly = 1;
 		else
 			return RESULT_SHOWUSAGE;
@@ -6464,10 +6530,10 @@ static int __iax2_show_peers(int manager, int fd, struct mansession *s, const in
 
 
 	if (!s)
-		ast_cli(fd, FORMAT2, "Name/Username", "Host", "   ", "Mask", "Port", "   ", "Status", term);
+		ast_cli(fd, FORMAT2, "Name/Username", "Host", "   ", "Mask", "Port", "   ", "Status");
 
 	i = ao2_iterator_init(peers, 0);
-	for (peer = ao2_iterator_next(&i); peer; 
+	for (peer = ao2_iterator_next(&i); peer;
 		peer_unref(peer), peer = ao2_iterator_next(&i)) {
 		char nm[20];
 		char status[20];
@@ -6522,18 +6588,21 @@ static int __iax2_show_peers(int manager, int fd, struct mansession *s, const in
 				ntohs(peer->addr.sin_port),
 				ast_test_flag64(peer, IAX_TRUNK) ? "(T)" : "   ",
 				peer->encmethods ? "(E)" : "   ",
-				status,
-				term);
+				status);
 		}
 		total_peers++;
 	}
 	ao2_iterator_destroy(&i);
 
 	if (!s)
-		ast_cli(fd,"%d iax2 peers [%d online, %d offline, %d unmonitored]%s", total_peers, online_peers, offline_peers, unmonitored_peers, term);
+		ast_cli(fd,"%d iax2 peers [%d online, %d offline, %d unmonitored]\n",
+			total_peers, online_peers, offline_peers, unmonitored_peers);
 
 	if (havepattern)
 		regfree(&regexbuf);
+
+	if (total)
+		*total = total_peers;
 
 	return RESULT_SUCCESS;
 #undef FORMAT
@@ -6692,7 +6761,7 @@ static char *handle_cli_iax2_show_peers(struct ast_cli_entry *e, int cmd, struct
 		return NULL;
 	}
 
-	switch (__iax2_show_peers(0, a->fd, NULL, a->argc, a->argv)) {
+	switch (__iax2_show_peers(a->fd, NULL, NULL, a->argc, a->argv)) {
 	case RESULT_SHOWUSAGE:
 		return CLI_SHOWUSAGE;
 	case RESULT_FAILURE:
@@ -6746,12 +6815,23 @@ static int manager_iax2_show_peers(struct mansession *s, const struct message *m
 	static const char * const a[] = { "iax2", "show", "peers" };
 	const char *id = astman_get_header(m,"ActionID");
 	char idtext[256] = "";
+	int total = 0;
 
 	if (!ast_strlen_zero(id))
 		snprintf(idtext, sizeof(idtext), "ActionID: %s\r\n", id);
-	astman_send_ack(s, m, "Peer status list will follow");
-	return __iax2_show_peers(1, -1, s, 3, a);
-} 
+
+	astman_send_listack(s, m, "Peer status list will follow", "start");
+        /* List the peers in separate manager events */
+	__iax2_show_peers(-1, &total, s, 3, a);
+        /* Send final confirmation */
+        astman_append(s,
+        "Event: PeerlistComplete\r\n"
+        "EventList: Complete\r\n"
+        "ListItems: %d\r\n"
+        "%s"
+        "\r\n", total, idtext);
+        return 0;
+}
 
 /*! \brief callback to display iax peers in manager format */
 static int manager_iax2_show_peer_list(struct mansession *s, const struct message *m)
@@ -7626,7 +7706,7 @@ static int authenticate_verify(struct chan_iax2_pvt *p, struct iax_ies *ies)
 		user = user_unref(user);
 	}
 	if (ast_test_flag64(p, IAX_FORCE_ENCRYPT) && !p->encmethods) { 
-		ast_log(LOG_NOTICE, "Call Terminated, Incomming call is unencrypted while force encrypt is enabled.");
+		ast_log(LOG_NOTICE, "Call Terminated, Incoming call is unencrypted while force encrypt is enabled.");
 		return res;
 	}
 	if (!ast_test_flag(&p->state, IAX_STATE_AUTHENTICATED))
@@ -8051,9 +8131,14 @@ static int try_transfer(struct chan_iax2_pvt *pvt, struct iax_ies *ies)
 	memcpy(&pvt->transfer, &new, sizeof(pvt->transfer));
 	inet_aton(newip, &pvt->transfer.sin_addr);
 	pvt->transfer.sin_family = AF_INET;
-	pvt->transferring = TRANSFER_BEGIN;
 	pvt->transferid = ies->transferid;
-	store_by_transfercallno(pvt);
+	/* only store by transfercallno if this is a new transfer,
+	 * just in case we get a duplicate TXREQ */
+	if (pvt->transferring == TRANSFER_NONE) {
+		store_by_transfercallno(pvt);
+	}
+	pvt->transferring = TRANSFER_BEGIN;
+
 	if (ies->transferid)
 		iax_ie_append_int(&ied, IAX_IE_TRANSFERID, ies->transferid);
 	send_command_transfer(pvt, AST_FRAME_IAX, IAX_COMMAND_TXCNT, 0, ied.buf, ied.pos);
@@ -8147,7 +8232,7 @@ static int complete_transfer(int callno, struct iax_ies *ies)
 	pvt->voiceformat = 0;
 	pvt->svideoformat = -1;
 	pvt->videoformat = 0;
-	pvt->transfercallno = -1;
+	pvt->transfercallno = 0;
 	memset(&pvt->rxcore, 0, sizeof(pvt->rxcore));
 	memset(&pvt->offset, 0, sizeof(pvt->offset));
 	/* reset jitterbuffer */
@@ -8232,14 +8317,18 @@ static int iax2_append_register(const char *hostname, const char *username,
 	const char *secret, const char *porta)
 {
 	struct iax2_registry *reg;
+	struct ast_sockaddr reg_addr_tmp;
 
 	if (!(reg = ast_calloc(1, sizeof(*reg))))
 		return -1;
 
-	if (ast_dnsmgr_lookup(hostname, &reg->addr, &reg->dnsmgr, srvlookup ? "_iax._udp" : NULL) < 0) {
+	reg->addr.sin_family = AF_INET;
+	ast_sockaddr_from_sin(&reg_addr_tmp, &reg->addr);
+	if (ast_dnsmgr_lookup(hostname, &reg_addr_tmp, &reg->dnsmgr, srvlookup ? "_iax._udp" : NULL) < 0) {
 		ast_free(reg);
 		return -1;
 	}
+	ast_sockaddr_to_sin(&reg_addr_tmp, &reg->addr);
 
 	ast_copy_string(reg->username, username, sizeof(reg->username));
 
@@ -9318,6 +9407,7 @@ static int socket_read(int *id, int fd, short events, void *cbdata)
 			memcpy(&thread->ffinfo.sin, &thread->iosin, sizeof(thread->ffinfo.sin));
 			thread->ffinfo.type = fh->type;
 			thread->ffinfo.csub = fh->csub;
+			AST_LIST_INSERT_HEAD(&active_list, thread, list);
 		}
 		AST_LIST_UNLOCK(&active_list);
 	}
@@ -11305,12 +11395,21 @@ static void *iax2_process_thread(void *data)
 	struct timespec ts;
 	int put_into_idle = 0;
 	int first_time = 1;
+	int old_state;
 
-	ast_atomic_fetchadd_int(&iaxactivethreadcount,1);
+	ast_atomic_fetchadd_int(&iaxactivethreadcount, 1);
+
+	pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &old_state);
 	pthread_cleanup_push(iax2_process_thread_cleanup, data);
-	for(;;) {
+
+	for (;;) {
 		/* Wait for something to signal us to be awake */
 		ast_mutex_lock(&thread->lock);
+
+		if (thread->stop) {
+			ast_mutex_unlock(&thread->lock);
+			break;
+		}
 
 		/* Flag that we're ready to accept signals */
 		if (first_time) {
@@ -11319,8 +11418,9 @@ static void *iax2_process_thread(void *data)
 		}
 
 		/* Put into idle list if applicable */
-		if (put_into_idle)
+		if (put_into_idle) {
 			insert_idle_thread(thread);
+		}
 
 		if (thread->type == IAX_THREAD_TYPE_DYNAMIC) {
 			struct iax2_thread *t = NULL;
@@ -11331,7 +11431,7 @@ static void *iax2_process_thread(void *data)
 			if (ast_cond_timedwait(&thread->cond, &thread->lock, &ts) == ETIMEDOUT) {
 				/* This thread was never put back into the available dynamic
 				 * thread list, so just go away. */
-				if (!put_into_idle) {
+				if (!put_into_idle || thread->stop) {
 					ast_mutex_unlock(&thread->lock);
 					break;
 				}
@@ -11353,8 +11453,7 @@ static void *iax2_process_thread(void *data)
 				wait = ast_tvadd(ast_tvnow(), ast_samp2tv(30000, 1000));
 				ts.tv_sec = wait.tv_sec;
 				ts.tv_nsec = wait.tv_usec * 1000;
-				if (ast_cond_timedwait(&thread->cond, &thread->lock, &ts) == ETIMEDOUT)
-				{
+				if (ast_cond_timedwait(&thread->cond, &thread->lock, &ts) == ETIMEDOUT) {
 					ast_mutex_unlock(&thread->lock);
 					break;
 				}
@@ -11368,16 +11467,15 @@ static void *iax2_process_thread(void *data)
 
 		ast_mutex_unlock(&thread->lock);
 
+		if (thread->stop) {
+			break;
+		}
+
 		if (thread->iostate == IAX_IOSTATE_IDLE)
 			continue;
 
-		/* Add ourselves to the active list now */
-		AST_LIST_LOCK(&active_list);
-		AST_LIST_INSERT_HEAD(&active_list, thread, list);
-		AST_LIST_UNLOCK(&active_list);
-
 		/* See what we need to do */
-		switch(thread->iostate) {
+		switch (thread->iostate) {
 		case IAX_IOSTATE_READY:
 			thread->actions++;
 			thread->iostate = IAX_IOSTATE_PROCESSING;
@@ -11399,7 +11497,9 @@ static void *iax2_process_thread(void *data)
 		thread->curfunc[0]='\0';
 #endif		
 
-		/* Now... remove ourselves from the active list, and return to the idle list */
+		/* The network thread added us to the active_thread list when we were given
+		 * frames to process, Now that we are done, we must remove ourselves from
+		 * the active list, and return to the idle list */
 		AST_LIST_LOCK(&active_list);
 		AST_LIST_REMOVE(&active_list, thread, list);
 		AST_LIST_UNLOCK(&active_list);
@@ -11831,7 +11931,7 @@ static int start_network_thread(void)
 			thread->threadnum = ++threadcount;
 			ast_mutex_init(&thread->lock);
 			ast_cond_init(&thread->cond, NULL);
-			if (ast_pthread_create_detached(&thread->threadid, NULL, iax2_process_thread, thread)) {
+			if (ast_pthread_create_background(&thread->threadid, NULL, iax2_process_thread, thread)) {
 				ast_log(LOG_WARNING, "Failed to create new thread!\n");
 				ast_free(thread);
 				thread = NULL;
@@ -11900,6 +12000,7 @@ static int check_srcaddr(struct sockaddr *sa, socklen_t salen)
 static int peer_set_srcaddr(struct iax2_peer *peer, const char *srcaddr)
 {
 	struct sockaddr_in sin;
+	struct ast_sockaddr sin_tmp;
 	int nonlocal = 1;
 	int port = IAX_DEFAULT_PORTNO;
 	int sockfd = defaultsockfd;
@@ -11919,10 +12020,11 @@ static int peer_set_srcaddr(struct iax2_peer *peer, const char *srcaddr)
 			port = IAX_DEFAULT_PORTNO;
 	}
 	
-	if (!ast_get_ip(&sin, addr)) {
+	if (!ast_get_ip(&sin_tmp, addr)) {
 		struct ast_netsock *sock;
 		int res;
 
+		ast_sockaddr_to_sin(&sin_tmp, &sin);
 		sin.sin_port = 0;
 		sin.sin_family = AF_INET;
 		res = check_srcaddr((struct sockaddr *) &sin, sizeof(sin));
@@ -12121,19 +12223,29 @@ static struct iax2_peer *build_peer(const char *name, struct ast_variable *v, st
 						}
 					}
 				} else {
+					struct ast_sockaddr peer_addr_tmp;
+
 					/* Non-dynamic.  Make sure we become that way if we're not */
 					ast_sched_thread_del(sched, peer->expire);
 					ast_clear_flag64(peer, IAX_DYNAMIC);
-					if (ast_dnsmgr_lookup(v->value, &peer->addr, &peer->dnsmgr, srvlookup ? "_iax._udp" : NULL))
+					peer_addr_tmp.ss.ss_family = AF_INET;
+					if (ast_dnsmgr_lookup(v->value, &peer_addr_tmp, &peer->dnsmgr, srvlookup ? "_iax._udp" : NULL))
 						return peer_unref(peer);
+					ast_sockaddr_to_sin(&peer_addr_tmp,
+							    &peer->addr);
 					if (!peer->addr.sin_port)
 						peer->addr.sin_port = htons(IAX_DEFAULT_PORTNO);
 				}
 				if (!maskfound)
 					inet_aton("255.255.255.255", &peer->mask);
 			} else if (!strcasecmp(v->name, "defaultip")) {
-				if (ast_get_ip(&peer->defaddr, v->value))
+				struct ast_sockaddr peer_defaddr_tmp;
+
+				if (ast_get_ip(&peer_defaddr_tmp, v->value)) {
 					return peer_unref(peer);
+				}
+				ast_sockaddr_to_sin(&peer_defaddr_tmp,
+						    &peer->defaddr);
 			} else if (!strcasecmp(v->name, "sourceaddress")) {
 				peer_set_srcaddr(peer, v->value);
 			} else if (!strcasecmp(v->name, "permit") ||
@@ -13570,6 +13682,8 @@ static int acf_channel_read(struct ast_channel *chan, const char *funcname, char
 		ast_copy_string(buf, pvt->addr.sin_addr.s_addr ? ast_inet_ntoa(pvt->addr.sin_addr) : "", buflen);
 	} else if (!strcasecmp(args, "peername")) {
 		ast_copy_string(buf, pvt->username, buflen);
+	} else if (!strcasecmp(args, "secure_signaling") || !strcasecmp(args, "secure_media")) {
+		snprintf(buf, buflen, "%s", IAX_CALLENCRYPTED(pvt) ? "1" : "");
 	} else {
 		res = -1;
 	}
@@ -13761,11 +13875,163 @@ static struct ast_cli_entry cli_iax2[] = {
 #endif /* IAXTESTS */
 };
 
+#ifdef TEST_FRAMEWORK
+AST_TEST_DEFINE(test_iax2_peers_get)
+{
+	struct ast_data_query query = {
+		.path = "/asterisk/channel/iax2/peers",
+		.search = "peers/peer/name=test_peer_data_provider"
+	};
+	struct ast_data *node;
+	struct iax2_peer *peer;
+
+	switch (cmd) {
+		case TEST_INIT:
+			info->name = "iax2_peers_get_data_test";
+			info->category = "/main/data/iax2/peers/";
+			info->summary = "IAX2 peers data providers unit test";
+			info->description =
+				"Tests whether the IAX2 peers data provider implementation works as expected.";
+			return AST_TEST_NOT_RUN;
+		case TEST_EXECUTE:
+			break;
+	}
+
+	/* build a test peer */
+	peer = build_peer("test_peer_data_provider", NULL, NULL, 0);
+	if (!peer) {
+		return AST_TEST_FAIL;
+	}
+	peer->expiry= 1010;
+	ao2_link(peers, peer);
+
+	node = ast_data_get(&query);
+	if (!node) {
+		ao2_unlink(peers, peer);
+		peer_unref(peer);
+		return AST_TEST_FAIL;
+	}
+
+	/* check returned data node. */
+	if (strcmp(ast_data_retrieve_string(node, "peer/name"), "test_peer_data_provider")) {
+		ao2_unlink(peers, peer);
+		peer_unref(peer);
+		ast_data_free(node);
+		return AST_TEST_FAIL;
+	}
+
+	if (ast_data_retrieve_int(node, "peer/expiry") != 1010) {
+		ao2_unlink(peers, peer);
+		peer_unref(peer);
+		ast_data_free(node);
+		return AST_TEST_FAIL;
+	}
+
+	/* release resources */
+	ast_data_free(node);
+
+	ao2_unlink(peers, peer);
+	peer_unref(peer);
+
+	return AST_TEST_PASS;
+}
+
+AST_TEST_DEFINE(test_iax2_users_get)
+{
+	struct ast_data_query query = {
+		.path = "/asterisk/channel/iax2/users",
+		.search = "users/user/name=test_user_data_provider"
+	};
+	struct ast_data *node;
+	struct iax2_user *user;
+
+	switch (cmd) {
+		case TEST_INIT:
+			info->name = "iax2_users_get_data_test";
+			info->category = "/main/data/iax2/users/";
+			info->summary = "IAX2 users data providers unit test";
+			info->description =
+				"Tests whether the IAX2 users data provider implementation works as expected.";
+			return AST_TEST_NOT_RUN;
+		case TEST_EXECUTE:
+			break;
+	}
+
+	user = build_user("test_user_data_provider", NULL, NULL, 0);
+	if (!user) {
+		ast_test_status_update(test, "Failed to build a test user\n");
+		return AST_TEST_FAIL;
+	}
+	user->amaflags = 1010;
+	ao2_link(users, user);
+
+	node = ast_data_get(&query);
+	if (!node) {
+		ast_test_status_update(test, "The data query to find our test user failed\n");
+		ao2_unlink(users, user);
+		user_unref(user);
+		return AST_TEST_FAIL;
+	}
+
+	if (strcmp(ast_data_retrieve_string(node, "user/name"), "test_user_data_provider")) {
+		ast_test_status_update(test, "Our data results did not return the test user created in the previous step.\n");
+		ao2_unlink(users, user);
+		user_unref(user);
+		ast_data_free(node);
+		return AST_TEST_FAIL;
+	}
+
+	if (ast_data_retrieve_int(node, "user/amaflags") != 1010) {
+		ast_test_status_update(test, "The amaflags field in our test user was not the expected value\n");
+		ao2_unlink(users, user);
+		user_unref(user);
+		ast_data_free(node);
+		return AST_TEST_FAIL;
+	}
+
+	ast_data_free(node);
+
+	ao2_unlink(users, user);
+	user_unref(user);
+
+	ast_test_status_update(test, "If this message prints and a failure is still recorded, then something is really wrong with the test framework\n");
+	return AST_TEST_PASS;
+}
+#endif
+
+static void cleanup_thread_list(void *head)
+{
+	AST_LIST_HEAD(iax2_thread_list, iax2_thread);
+	struct iax2_thread_list *list_head = head;
+	struct iax2_thread *thread;
+
+	AST_LIST_LOCK(list_head);
+	while ((thread = AST_LIST_REMOVE_HEAD(&idle_list, list))) {
+		pthread_t thread_id = thread->threadid;
+
+		thread->stop = 1;
+		signal_condition(&thread->lock, &thread->cond);
+
+		AST_LIST_UNLOCK(list_head);
+		pthread_join(thread_id, NULL);
+		AST_LIST_LOCK(list_head);
+	}
+	AST_LIST_UNLOCK(list_head);
+}
+
 static int __unload_module(void)
 {
-	struct iax2_thread *thread = NULL;
 	struct ast_context *con;
 	int x;
+
+	ast_manager_unregister("IAXpeers");
+	ast_manager_unregister("IAXpeerlist");
+	ast_manager_unregister("IAXnetstats");
+	ast_manager_unregister("IAXregistry");
+	ast_unregister_application(papp);
+	ast_cli_unregister_multiple(cli_iax2, ARRAY_LEN(cli_iax2));
+	ast_unregister_switch(&iax2_switch);
+	ast_channel_unregister(&iax2_tech);
 
 	if (netthreadid != AST_PTHREADT_NULL) {
 		pthread_cancel(netthreadid);
@@ -13773,28 +14039,19 @@ static int __unload_module(void)
 		pthread_join(netthreadid, NULL);
 	}
 
-	sched = ast_sched_thread_destroy(sched);
+	for (x = 0; x < ARRAY_LEN(iaxs); x++) {
+		if (iaxs[x]) {
+			iax2_destroy(x);
+		}
+	}
 
 	/* Call for all threads to halt */
-	AST_LIST_LOCK(&idle_list);
-	while ((thread = AST_LIST_REMOVE_HEAD(&idle_list, list)))
-		pthread_cancel(thread->threadid);
-	AST_LIST_UNLOCK(&idle_list);
+	cleanup_thread_list(&idle_list);
+	cleanup_thread_list(&active_list);
+	cleanup_thread_list(&dynamic_list);
 
-	AST_LIST_LOCK(&active_list);
-	while ((thread = AST_LIST_REMOVE_HEAD(&active_list, list)))
-		pthread_cancel(thread->threadid);
-	AST_LIST_UNLOCK(&active_list);
+	sched = ast_sched_thread_destroy(sched);
 
-	AST_LIST_LOCK(&dynamic_list);
-	while ((thread = AST_LIST_REMOVE_HEAD(&dynamic_list, list)))
-		pthread_cancel(thread->threadid);
-	AST_LIST_UNLOCK(&dynamic_list);
-	
-	/* Wait for threads to exit */
-	while(0 < iaxactivethreadcount)
-		usleep(10000);
-	
 	ast_netsock_release(netsock);
 	ast_netsock_release(outsock);
 	for (x = 0; x < ARRAY_LEN(iaxs); x++) {
@@ -13807,6 +14064,11 @@ static int __unload_module(void)
 	ast_manager_unregister( "IAXnetstats" );
 	ast_manager_unregister( "IAXregistry" );
 	ast_unregister_application(papp);
+#ifdef TEST_FRAMEWORK
+	AST_TEST_UNREGISTER(test_iax2_peers_get);
+	AST_TEST_UNREGISTER(test_iax2_users_get);
+#endif
+	ast_data_unregister(NULL);
 	ast_cli_unregister_multiple(cli_iax2, ARRAY_LEN(cli_iax2));
 	ast_unregister_switch(&iax2_switch);
 	ast_channel_unregister(&iax2_tech);
@@ -13950,6 +14212,188 @@ container_fail:
 	return AST_MODULE_LOAD_FAILURE;
 }
 
+
+#define DATA_EXPORT_IAX2_PEER(MEMBER)				\
+	MEMBER(iax2_peer, name, AST_DATA_STRING)		\
+	MEMBER(iax2_peer, username, AST_DATA_STRING)		\
+	MEMBER(iax2_peer, secret, AST_DATA_PASSWORD)		\
+	MEMBER(iax2_peer, dbsecret, AST_DATA_PASSWORD)		\
+	MEMBER(iax2_peer, outkey, AST_DATA_STRING)		\
+	MEMBER(iax2_peer, regexten, AST_DATA_STRING)		\
+	MEMBER(iax2_peer, context, AST_DATA_STRING)		\
+	MEMBER(iax2_peer, peercontext, AST_DATA_STRING)		\
+	MEMBER(iax2_peer, mailbox, AST_DATA_STRING)		\
+	MEMBER(iax2_peer, mohinterpret, AST_DATA_STRING)	\
+	MEMBER(iax2_peer, mohsuggest, AST_DATA_STRING)		\
+	MEMBER(iax2_peer, inkeys, AST_DATA_STRING)		\
+	MEMBER(iax2_peer, cid_num, AST_DATA_STRING)		\
+	MEMBER(iax2_peer, cid_name, AST_DATA_STRING)		\
+	MEMBER(iax2_peer, zonetag, AST_DATA_STRING)		\
+	MEMBER(iax2_peer, parkinglot, AST_DATA_STRING)		\
+	MEMBER(iax2_peer, expiry, AST_DATA_SECONDS)		\
+	MEMBER(iax2_peer, callno, AST_DATA_INTEGER)		\
+	MEMBER(iax2_peer, lastms, AST_DATA_MILLISECONDS)	\
+	MEMBER(iax2_peer, maxms, AST_DATA_MILLISECONDS)		\
+	MEMBER(iax2_peer, pokefreqok, AST_DATA_MILLISECONDS)	\
+	MEMBER(iax2_peer, pokefreqnotok, AST_DATA_MILLISECONDS)	\
+	MEMBER(iax2_peer, historicms, AST_DATA_INTEGER)		\
+	MEMBER(iax2_peer, smoothing, AST_DATA_BOOLEAN)		\
+        MEMBER(iax2_peer, maxcallno, AST_DATA_INTEGER)
+
+AST_DATA_STRUCTURE(iax2_peer, DATA_EXPORT_IAX2_PEER);
+
+static int peers_data_provider_get(const struct ast_data_search *search,
+	struct ast_data *data_root)
+{
+	struct ast_data *data_peer;
+	struct iax2_peer *peer;
+	struct ao2_iterator i;
+	char status[20];
+	struct ast_str *encmethods = ast_str_alloca(256);
+
+	i = ao2_iterator_init(peers, 0);
+	while ((peer = ao2_iterator_next(&i))) {
+		data_peer = ast_data_add_node(data_root, "peer");
+		if (!data_peer) {
+			peer_unref(peer);
+			continue;
+		}
+
+		ast_data_add_structure(iax2_peer, data_peer, peer);
+
+		ast_data_add_codecs(data_peer, "codecs", peer->capability);
+
+		peer_status(peer, status, sizeof(status));
+		ast_data_add_str(data_peer, "status", status);
+
+		ast_data_add_str(data_peer, "host", peer->addr.sin_addr.s_addr ? ast_inet_ntoa(peer->addr.sin_addr) : "");
+
+		ast_data_add_str(data_peer, "mask", ast_inet_ntoa(peer->mask));
+
+		ast_data_add_int(data_peer, "port", ntohs(peer->addr.sin_port));
+
+		ast_data_add_bool(data_peer, "trunk", ast_test_flag64(peer, IAX_TRUNK));
+
+		ast_data_add_bool(data_peer, "dynamic", ast_test_flag64(peer, IAX_DYNAMIC));
+
+		encmethods_to_str(peer->encmethods, encmethods);
+		ast_data_add_str(data_peer, "encryption", peer->encmethods ? ast_str_buffer(encmethods) : "no");
+
+		peer_unref(peer);
+
+		if (!ast_data_search_match(search, data_peer)) {
+			ast_data_remove_node(data_root, data_peer);
+		}
+	}
+	ao2_iterator_destroy(&i);
+
+	return 0;
+}
+
+#define DATA_EXPORT_IAX2_USER(MEMBER)					\
+        MEMBER(iax2_user, name, AST_DATA_STRING)			\
+        MEMBER(iax2_user, dbsecret, AST_DATA_PASSWORD)			\
+        MEMBER(iax2_user, accountcode, AST_DATA_STRING)			\
+        MEMBER(iax2_user, mohinterpret, AST_DATA_STRING)		\
+        MEMBER(iax2_user, mohsuggest, AST_DATA_STRING)			\
+        MEMBER(iax2_user, inkeys, AST_DATA_STRING)			\
+        MEMBER(iax2_user, language, AST_DATA_STRING)			\
+        MEMBER(iax2_user, cid_num, AST_DATA_STRING)			\
+        MEMBER(iax2_user, cid_name, AST_DATA_STRING)			\
+        MEMBER(iax2_user, parkinglot, AST_DATA_STRING)			\
+        MEMBER(iax2_user, maxauthreq, AST_DATA_INTEGER)			\
+        MEMBER(iax2_user, curauthreq, AST_DATA_INTEGER)
+
+AST_DATA_STRUCTURE(iax2_user, DATA_EXPORT_IAX2_USER);
+
+static int users_data_provider_get(const struct ast_data_search *search,
+	struct ast_data *data_root)
+{
+	struct ast_data *data_user, *data_authmethods, *data_enum_node;
+	struct iax2_user *user;
+	struct ao2_iterator i;
+	char auth[90];
+	char *pstr = "";
+
+	i = ao2_iterator_init(users, 0);
+	while ((user = ao2_iterator_next(&i))) {
+		data_user = ast_data_add_node(data_root, "user");
+		if (!data_user) {
+			user_unref(user);
+			continue;
+		}
+
+		ast_data_add_structure(iax2_user, data_user, user);
+
+		ast_data_add_codecs(data_user, "codecs", user->capability);
+
+		if (!ast_strlen_zero(user->secret)) {
+			ast_copy_string(auth, user->secret, sizeof(auth));
+		} else if (!ast_strlen_zero(user->inkeys)) {
+			snprintf(auth, sizeof(auth), "Key: %s", user->inkeys);
+		} else {
+			ast_copy_string(auth, "no secret", sizeof(auth));
+		}
+		ast_data_add_password(data_user, "secret", auth);
+
+		ast_data_add_str(data_user, "context", user->contexts ? user->contexts->context : DEFAULT_CONTEXT);
+
+		/* authmethods */
+		data_authmethods = ast_data_add_node(data_user, "authmethods");
+		if (!data_authmethods) {
+			ast_data_remove_node(data_root, data_user);
+			continue;
+		}
+		ast_data_add_bool(data_authmethods, "rsa", user->authmethods & IAX_AUTH_RSA);
+		ast_data_add_bool(data_authmethods, "md5", user->authmethods & IAX_AUTH_MD5);
+		ast_data_add_bool(data_authmethods, "plaintext", user->authmethods & IAX_AUTH_PLAINTEXT);
+
+		/* amaflags */
+		data_enum_node = ast_data_add_node(data_user, "amaflags");
+		if (!data_enum_node) {
+			ast_data_remove_node(data_root, data_user);
+			continue;
+		}
+		ast_data_add_int(data_enum_node, "value", user->amaflags);
+		ast_data_add_str(data_enum_node, "text", ast_cdr_flags2str(user->amaflags));
+
+		ast_data_add_bool(data_user, "access-control", user->ha ? 1 : 0);
+
+		if (ast_test_flag64(user, IAX_CODEC_NOCAP)) {
+			pstr = "REQ only";
+		} else if (ast_test_flag64(user, IAX_CODEC_NOPREFS)) {
+			pstr = "disabled";
+		} else {
+			pstr = ast_test_flag64(user, IAX_CODEC_USER_FIRST) ? "caller" : "host";
+		}
+		ast_data_add_str(data_user, "codec-preferences", pstr);
+
+		user_unref(user);
+
+		if (!ast_data_search_match(search, data_user)) {
+			ast_data_remove_node(data_root, data_user);
+		}
+	}
+	ao2_iterator_destroy(&i);
+
+	return 0;
+}
+
+static const struct ast_data_handler peers_data_provider = {
+	.version = AST_DATA_HANDLER_VERSION,
+	.get = peers_data_provider_get
+};
+
+static const struct ast_data_handler users_data_provider = {
+	.version = AST_DATA_HANDLER_VERSION,
+	.get = users_data_provider_get
+};
+
+static const struct ast_data_entry iax2_data_providers[] = {
+	AST_DATA_ENTRY("asterisk/channel/iax2/peers", &peers_data_provider),
+	AST_DATA_ENTRY("asterisk/channel/iax2/users", &users_data_provider),
+};
+
 /*! \brief Load IAX2 module, load configuraiton ---*/
 static int load_module(void)
 {
@@ -14002,6 +14446,13 @@ static int load_module(void)
 		return AST_MODULE_LOAD_FAILURE;
 	}
 	ast_netsock_init(outsock);
+
+#ifdef TEST_FRAMEWORK
+	AST_TEST_REGISTER(test_iax2_peers_get);
+	AST_TEST_REGISTER(test_iax2_users_get);
+#endif
+	/* Register AstData providers */
+	ast_data_register_multiple(iax2_data_providers, ARRAY_LEN(iax2_data_providers));
 
 	ast_cli_register_multiple(cli_iax2, ARRAY_LEN(cli_iax2));
 

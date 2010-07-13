@@ -68,11 +68,13 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					<enum name = "from-all" />
 					<enum name = "from-num" />
 					<enum name = "from-name" />
+					<enum name = "from-tag" />
 					<enum name = "from-ton" />
 					<enum name = "from-pres" />
 					<enum name = "to-all" />
 					<enum name = "to-num" />
 					<enum name = "to-name" />
+					<enum name = "to-tag" />
 					<enum name = "to-ton" />
 					<enum name = "to-pres" />
 					<enum name = "reason" />
@@ -144,6 +146,10 @@ static enum ID_FIELD_STATUS redirecting_id_read(char *buf, size_t len, char *dat
 		if (id->number) {
 			ast_copy_string(buf, id->number, len);
 		}
+	} else if (!strncasecmp("tag", data, 3)) {
+		if (id->tag) {
+			ast_copy_string(buf, id->tag, len);
+		}
 	} else if (!strncasecmp("ton", data, 3)) {
 		snprintf(buf, len, "%d", id->number_type);
 	} else if (!strncasecmp("pres", data, 4)) {
@@ -183,11 +189,7 @@ static int redirecting_read(struct ast_channel *chan, const char *cmd, char *dat
 	ast_channel_lock(chan);
 
 	if (!strncasecmp("from-", data, 5)) {
-		struct ast_party_id from_id;
-
-		from_id = chan->redirecting.from;
-		from_id.number = chan->cid.cid_rdnis;
-		switch (redirecting_id_read(buf, len, data + 5, &from_id)) {
+		switch (redirecting_id_read(buf, len, data + 5, &chan->redirecting.from)) {
 		case ID_FIELD_VALID:
 		case ID_FIELD_INVALID:
 			break;
@@ -261,6 +263,9 @@ static enum ID_FIELD_STATUS redirecting_id_write(struct ast_party_id *id, char *
 	} else if (!strncasecmp("num", data, 3)) {
 		id->number = ast_strdup(value);
 		ast_trim_blanks(id->number);
+	} else if (!strncasecmp("tag", data, 3)) {
+		id->tag = ast_strdup(value);
+		ast_trim_blanks(id->tag);
 	} else if (!strncasecmp("ton", data, 3)) {
 		val = ast_strdupa(value);
 		ast_trim_blanks(val);
@@ -351,7 +356,6 @@ static int redirecting_write(struct ast_channel *chan, const char *cmd, char *da
 		switch (redirecting_id_write(&redirecting.from, data + 5, value)) {
 		case ID_FIELD_VALID:
 			set_it(chan, &redirecting);
-			ast_party_redirecting_free(&redirecting);
 			break;
 
 		case ID_FIELD_INVALID:
@@ -361,11 +365,11 @@ static int redirecting_write(struct ast_channel *chan, const char *cmd, char *da
 			ast_log(LOG_ERROR, "Unknown redirecting data type '%s'.\n", data);
 			break;
 		}
+		ast_party_redirecting_free(&redirecting);
 	} else if (!strncasecmp("to-", data, 3)) {
 		switch (redirecting_id_write(&redirecting.to, data + 3, value)) {
 		case ID_FIELD_VALID:
 			set_it(chan, &redirecting);
-			ast_party_redirecting_free(&redirecting);
 			break;
 
 		case ID_FIELD_INVALID:
@@ -375,6 +379,7 @@ static int redirecting_write(struct ast_channel *chan, const char *cmd, char *da
 			ast_log(LOG_ERROR, "Unknown redirecting data type '%s'.\n", data);
 			break;
 		}
+		ast_party_redirecting_free(&redirecting);
 	} else if (!strncasecmp("pres", data, 4)) {
 		int pres;
 

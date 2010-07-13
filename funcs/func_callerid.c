@@ -44,6 +44,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					<enum name="all" />
 					<enum name="num" />
 					<enum name="name" />
+					<enum name="tag" />
 					<enum name="ANI" />
 					<enum name="DNID" />
 					<enum name="RDNIS" />
@@ -161,6 +162,10 @@ static int callerid_read(struct ast_channel *chan, const char *cmd, char *data,
 			if (chan->cid.cid_name) {
 				ast_copy_string(buf, chan->cid.cid_name, len);
 			}
+		} else if (!strncasecmp("tag", data, 3)) {
+			if (chan->cid.cid_tag) {
+				ast_copy_string(buf, chan->cid.cid_tag, len);
+			}
 		} else if (!strncasecmp("num", data, 3)) {
 			/* also matches "number" */
 			if (chan->cid.cid_num) {
@@ -209,8 +214,8 @@ static int callerid_read(struct ast_channel *chan, const char *cmd, char *data,
 				}
 			}
 		} else if (!strncasecmp("rdnis", data, 5)) {
-			if (chan->cid.cid_rdnis) {
-				ast_copy_string(buf, chan->cid.cid_rdnis, len);
+			if (chan->redirecting.from.number) {
+				ast_copy_string(buf, chan->redirecting.from.number, len);
 			}
 		} else if (!strncasecmp("pres", data, 4)) {
 			ast_copy_string(buf, ast_named_caller_presentation(chan->cid.cid_pres), len);
@@ -254,6 +259,13 @@ static int callerid_write(struct ast_channel *chan, const char *cmd, char *data,
 		if (chan->cdr) {
 			ast_cdr_setcid(chan->cdr, chan);
 		}
+	} else if (!strncasecmp("tag", data, 3)) {
+		ast_channel_lock(chan);
+		if (chan->cid.cid_tag) {
+			ast_free(chan->cid.cid_tag);
+		}
+		chan->cid.cid_tag = ast_strdup(value);
+		ast_channel_unlock(chan);
 	} else if (!strncasecmp("ani", data, 3)) {
 		if (!strncasecmp(data + 3, "2", 1)) {
 			chan->cid.cid_ani2 = atoi(value);
@@ -311,10 +323,8 @@ static int callerid_write(struct ast_channel *chan, const char *cmd, char *data,
 		ast_channel_unlock(chan);
 	} else if (!strncasecmp("rdnis", data, 5)) {
 		ast_channel_lock(chan);
-		if (chan->cid.cid_rdnis) {
-			ast_free(chan->cid.cid_rdnis);
-		}
-		chan->cid.cid_rdnis = ast_strdup(value);
+		ast_free(chan->redirecting.from.number);
+		chan->redirecting.from.number = ast_strdup(value);
 		if (chan->cdr) {
 			ast_cdr_setcid(chan->cdr, chan);
 		}

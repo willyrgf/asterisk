@@ -144,6 +144,7 @@ struct analog_callback {
 	int (* const on_hook)(void *pvt);
 	/*! \brief Set channel off hook */
 	int (* const off_hook)(void *pvt);
+	void (* const set_needringing)(void *pvt, int value);
 	/* We're assuming that we're going to only wink on ANALOG_SUB_REAL - even though in the code there's an argument to the index
 	 * function */
 	int (* const wink)(void *pvt, enum analog_sub sub);
@@ -204,7 +205,8 @@ struct analog_callback {
 	void * (* const get_sigpvt_bridged_channel)(struct ast_channel *chan);
 	int (* const get_sub_fd)(void *pvt, enum analog_sub sub);
 	void (* const set_cadence)(void *pvt, int *cidrings, struct ast_channel *chan);
-	void (* const set_dialing)(void *pvt, int flag);
+	void (* const set_alarm)(void *pvt, int in_alarm);
+	void (* const set_dialing)(void *pvt, int is_dialing);
 	void (* const set_ringtimeout)(void *pvt, int ringt);
 	void (* const set_waitingfordt)(void *pvt, struct ast_channel *ast);
 	int (* const check_waitingfordt)(void *pvt);
@@ -213,6 +215,8 @@ struct analog_callback {
 	void (* const cancel_cidspill)(void *pvt);
 	int (* const confmute)(void *pvt, int mute);	
 	void (* const set_pulsedial)(void *pvt, int flag);
+
+	const char *(* const get_orig_dialstring)(void *pvt);
 };
 
 
@@ -336,7 +340,7 @@ struct ast_frame *analog_exception(struct analog_pvt *p, struct ast_channel *ast
 
 struct ast_channel * analog_request(struct analog_pvt *p, int *callwait, const struct ast_channel *requestor);
 
-int analog_available(struct analog_pvt *p, int *busy);
+int analog_available(struct analog_pvt *p);
 
 void *analog_handle_init_event(struct analog_pvt *i, int event);
 

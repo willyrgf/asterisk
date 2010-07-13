@@ -431,6 +431,7 @@ void *__ao2_alloc(const size_t data_size, ao2_destructor_fn destructor_fn);
  *
  * \param o A pointer to the object
  * \param delta Value to add to the reference counter.
+ * \param tag used for debugging
  * \return The value of the reference counter before the operation.
  *
  * Increase/decrease the reference counter according
@@ -472,12 +473,8 @@ int __ao2_ref(void *o, int delta);
  * \param a A pointer to the object we want to lock.
  * \return 0 on success, other values on error.
  */
-#ifndef DEBUG_THREADS
-int ao2_lock(void *a);
-#else
-#define ao2_lock(a) __ao2_lock(a, __FILE__, __PRETTY_FUNCTION__, __LINE__, #a)
 int __ao2_lock(void *a, const char *file, const char *func, int line, const char *var);
-#endif
+#define ao2_lock(a) __ao2_lock(a, __FILE__, __PRETTY_FUNCTION__, __LINE__, #a)
 
 /*! \brief
  * Unlock an object.
@@ -485,12 +482,8 @@ int __ao2_lock(void *a, const char *file, const char *func, int line, const char
  * \param a A pointer to the object we want unlock.
  * \return 0 on success, other values on error.
  */
-#ifndef DEBUG_THREADS
-int ao2_unlock(void *a);
-#else
-#define ao2_unlock(a) __ao2_unlock(a, __FILE__, __PRETTY_FUNCTION__, __LINE__, #a)
 int __ao2_unlock(void *a, const char *file, const char *func, int line, const char *var);
-#endif
+#define ao2_unlock(a) __ao2_unlock(a, __FILE__, __PRETTY_FUNCTION__, __LINE__, #a)
 
 /*! \brief
  * Try locking-- (don't block if fail)
@@ -498,12 +491,8 @@ int __ao2_unlock(void *a, const char *file, const char *func, int line, const ch
  * \param a A pointer to the object we want to lock.
  * \return 0 on success, other values on error.
  */
-#ifndef DEBUG_THREADS
-int ao2_trylock(void *a);
-#else
-#define ao2_trylock(a) __ao2_trylock(a, __FILE__, __PRETTY_FUNCTION__, __LINE__, #a)
 int __ao2_trylock(void *a, const char *file, const char *func, int line, const char *var);
-#endif
+#define ao2_trylock(a) __ao2_trylock(a, __FILE__, __PRETTY_FUNCTION__, __LINE__, #a)
 
 /*!
  * \brief Return the lock address of an object
@@ -666,7 +655,8 @@ enum search_flags {
 	 *  its refcount.
 	 */
 	OBJ_NODATA	 = (1 << 1),
-	/*! Don't stop at the first match in ao2_callback().
+	/*! Don't stop at the first match in ao2_callback() unless the result of
+	 *  of the callback function == (CMP_STOP | CMP_MATCH).
 	 */
 	OBJ_MULTIPLE = (1 << 2),
 	/*! obj is an object of the same type as the one being searched for,
@@ -706,13 +696,15 @@ struct ao2_container;
  * We allocate space for a struct astobj_container, struct container
  * and the buckets[] array.
  *
- * \param n_buckets Number of buckets for hash
- * \param hash_fn Pointer to a function computing a hash value.
- * \param cmp_fn Pointer to a function comparating key-value
+ * \param arg1 Number of buckets for hash
+ * \param arg2 Pointer to a function computing a hash value.
+ * \param arg3 Pointer to a function comparating key-value
  * 			with a string. (can be NULL)
+ * \param arg4
+ *
  * \return A pointer to a struct container.
  *
- * destructor is set implicitly.
+ * \note Destructor is set implicitly.
  */
 
 #if defined(REF_DEBUG)
@@ -757,10 +749,11 @@ int ao2_container_count(struct ao2_container *c);
 /*!
  * \brief Add an object to a container.
  *
- * \param c the container to operate on.
- * \param newobj the object to be added.
+ * \param arg1 the container to operate on.
+ * \param arg2 the object to be added.
+ * \param arg3 used for debuging.
  *
- * \retval NULL on errors
+ * \retval NULL on errors.
  * \retval newobj on success.
  *
  * This function inserts an object in a container according its key.
@@ -788,8 +781,9 @@ void *__ao2_link(struct ao2_container *c, void *newobj);
 /*!
  * \brief Remove an object from a container
  *
- * \param c the container
- * \param obj the object to unlink
+ * \param arg1 the container
+ * \param arg2 the object to unlink
+ * \param arg3 tag for debugging
  *
  * \retval NULL, always
  *
@@ -848,6 +842,7 @@ void *__ao2_unlink(struct ao2_container *c, void *obj);
           flags is the same as flags passed into ao2_callback (flags are
            also used by ao2_callback).
  * \param arg passed to the callback.
+ * \param tag used for debuging.
  * \return when OBJ_MULTIPLE is not included in the flags parameter,
  *         the return value will be either the object found or NULL if no
  *         no matching object was found. if OBJ_MULTIPLE is included,

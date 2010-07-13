@@ -49,8 +49,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</synopsis>
 		<syntax>
 			<parameter name="vm-context">
-				<para>This is the context within voicemail.conf to use for the Directory. If not specified and
-				<literal>searchcontexts=no</literal> in <filename>voicemail.conf</filename>, then <literal>default</literal>
+				<para>This is the context within voicemail.conf to use for the Directory. If not 
+				specified and <literal>searchcontexts=no</literal> in 
+				<filename>voicemail.conf</filename>, then <literal>default</literal> 
 				will be assumed.</para>
 			</parameter>
 			<parameter name="dial-context" required="false">
@@ -243,6 +244,19 @@ static int compare(const char *text, const char *template)
 	return 0;
 }
 
+static int goto_exten(struct ast_channel *chan, const char *dialcontext, char *ext)
+{
+	if (!ast_goto_if_exists(chan, dialcontext, ext, 1) ||
+		(!ast_strlen_zero(chan->macrocontext) &&
+		!ast_goto_if_exists(chan, chan->macrocontext, ext, 1))) {
+		return 0;
+	} else {
+		ast_log(LOG_WARNING, "Can't find extension '%s' in current context.  "
+			"Not Exiting the Directory!\n", ext);
+		return -1;
+	}
+}
+
 /* play name of mailbox owner.
  * returns:  -1 for bad or missing extension
  *           '1' for selected entry from directory
@@ -288,28 +302,52 @@ static int select_entry(struct ast_channel *chan, const char *dialcontext, const
 	return 0;
 }
 
-static int select_item_seq(struct ast_channel *chan, struct directory_item **items, int count, const char *dialcontext, struct ast_flags *flags)
+static int select_item_pause(struct ast_channel *chan, struct ast_flags *flags, char *opts[])
+{
+	int res = 0, opt_pause = 0;
+
+	if (ast_test_flag(flags, OPT_PAUSE) && !ast_strlen_zero(opts[OPT_ARG_PAUSE])) {
+		opt_pause = atoi(opts[OPT_ARG_PAUSE]);
+		if (opt_pause > 3000) {
+			opt_pause = 3000;
+		}
+		res = ast_waitfordigit(chan, opt_pause);
+	}
+	return res;
+}
+
+static int select_item_seq(struct ast_channel *chan, struct directory_item **items, int count, const char *dialcontext, struct ast_flags *flags, char *opts[])
 {
 	struct directory_item *item, **ptr;
 	int i, res, loop;
+
+	/* option p(n): cellphone pause option */
+	/* allow early press of selection key */
+	res = select_item_pause(chan, flags, opts);
 
 	for (ptr = items, i = 0; i < count; i++, ptr++) {
 		item = *ptr;
 
 		for (loop = 3 ; loop > 0; loop--) {
-			res = play_mailbox_owner(chan, item->context, item->exten, item->name, flags);
-
+			if (!res)
+				res = play_mailbox_owner(chan, item->context, item->exten, item->name, flags);
 			if (!res)
 				res = ast_stream_and_wait(chan, "dir-instr", AST_DIGIT_ANY);
 			if (!res)
 				res = ast_waitfordigit(chan, 3000);
 			ast_stopstream(chan);
 	
-			if (res == '1') { /* Name selected */
+			if (res == '0') { /* operator selected */
+				goto_exten(chan, dialcontext, "o");
+				return '0';
+			} else if (res == '1') { /* Name selected */
 				return select_entry(chan, dialcontext, item, flags) ? -1 : 1;
 			} else if (res == '*') {
 				/* Skip to next match in list */
 				break;
+			} else if (res == '#') {
+				/* Exit reading, continue in dialplan */
+				return res;
 			}
 
 			if (res < 0)
@@ -317,17 +355,21 @@ static int select_item_seq(struct ast_channel *chan, struct directory_item **ite
 
 			res = 0;
 		}
+		res = 0;
 	}
 
 	/* Nothing was selected */
 	return 0;
 }
 
-static int select_item_menu(struct ast_channel *chan, struct directory_item **items, int count, const char *dialcontext, struct ast_flags *flags)
+static int select_item_menu(struct ast_channel *chan, struct directory_item **items, int count, const char *dialcontext, struct ast_flags *flags, char *opts[])
 {
 	struct directory_item **block, *item;
 	int i, limit, res = 0;
 	char buf[9];
+
+	/* option p(n): cellphone pause option */
+	select_item_pause(chan, flags, opts);
 
 	for (block = items; count; block += limit, count -= limit) {
 		limit = count;
@@ -634,20 +676,7 @@ static void sort_items(struct directory_item **sorted, int count)
 	} while (reordered);
 }
 
-static int goto_exten(struct ast_channel *chan, const char *dialcontext, char *ext)
-{
-	if (!ast_goto_if_exists(chan, dialcontext, ext, 1) ||
-		(!ast_strlen_zero(chan->macrocontext) &&
-		!ast_goto_if_exists(chan, chan->macrocontext, ext, 1))) {
-		return 0;
-	} else {
-		ast_log(LOG_WARNING, "Can't find extension '%s' in current context.  "
-			"Not Exiting the Directory!\n", ext);
-		return -1;
-	}
-}
-
-static int do_directory(struct ast_channel *chan, struct ast_config *vmcfg, struct ast_config *ucfg, char *context, char *dialcontext, char digit, int digits, struct ast_flags *flags)
+static int do_directory(struct ast_channel *chan, struct ast_config *vmcfg, struct ast_config *ucfg, char *context, char *dialcontext, char digit, int digits, struct ast_flags *flags, char *opts[])
 {
 	/* Read in the first three digits..  "digit" is the first digit, already read */
 	int res = 0;
@@ -704,10 +733,10 @@ static int do_directory(struct ast_channel *chan, struct ast_config *vmcfg, stru
 
 	if (ast_test_flag(flags, OPT_SELECTFROMMENU)) {
 		/* Offer multiple entries at the same time */
-		res = select_item_menu(chan, sorted, count, dialcontext, flags);
+		res = select_item_menu(chan, sorted, count, dialcontext, flags, opts);
 	} else {
 		/* Offer entries one by one */
-		res = select_item_seq(chan, sorted, count, dialcontext, flags);
+		res = select_item_seq(chan, sorted, count, dialcontext, flags, opts);
 	}
 
 	if (!res) {
@@ -760,6 +789,8 @@ static int directory_exec(struct ast_channel *chan, const char *data)
 	dirintro = ast_variable_retrieve(cfg, args.vmcontext, "directoryintro");
 	if (ast_strlen_zero(dirintro))
 		dirintro = ast_variable_retrieve(cfg, "general", "directoryintro");
+	/* the above prompts probably should be modified to include 0 for dialing operator
+	   and # for exiting (continues in dialplan) */
 
 	if (ast_test_flag(&flags, OPT_LISTBYFIRSTNAME) && ast_test_flag(&flags, OPT_LISTBYLASTNAME)) {
 		if (!ast_strlen_zero(opts[OPT_ARG_EITHER])) {
@@ -826,7 +857,7 @@ static int directory_exec(struct ast_channel *chan, const char *data)
 		if (res <= 0)
 			break;
 
-		res = do_directory(chan, cfg, ucfg, args.vmcontext, args.dialcontext, res, digit, &flags);
+		res = do_directory(chan, cfg, ucfg, args.vmcontext, args.dialcontext, res, digit, &flags, opts);
 		if (res)
 			break;
 

@@ -99,7 +99,8 @@ static struct ast_jb_conf default_jbconf =
 	.flags = 0,
 	.max_size = -1,
 	.resync_threshold = -1,
-	.impl = ""
+	.impl = "",
+	.target_extra = -1,
 };
 static struct ast_jb_conf global_jbconf;
 
@@ -1455,7 +1456,10 @@ static int mgcp_indicate(struct ast_channel *ast, int ind, const void *data, siz
 		ast_moh_stop(ast);
 		break;
 	case AST_CONTROL_SRCUPDATE:
-		ast_rtp_instance_new_source(sub->rtp);
+		ast_rtp_instance_update_source(sub->rtp);
+		break;
+	case AST_CONTROL_SRCCHANGE:
+		ast_rtp_instance_change_source(sub->rtp);
 		break;
 	case AST_CONTROL_PROGRESS:
 	case AST_CONTROL_PROCEEDING:
@@ -1645,12 +1649,9 @@ static struct mgcp_gateway *find_realtime_gw(char *name, char *at, struct sockad
 {
 	struct mgcp_gateway *g = NULL;
 	struct ast_variable *mgcpgwconfig = NULL;
-	struct ast_variable *mgcpepconfig = NULL;
 	struct ast_variable *gwv, *epname = NULL;
 	struct mgcp_endpoint *e;
-	char *c = NULL, *line;
 	char lines[256];
-	char tmp[4096];
 	int i, j;
 
 	ast_debug(1, "*** find Realtime MGCPGW\n");
@@ -1668,6 +1669,19 @@ static struct mgcp_gateway *find_realtime_gw(char *name, char *at, struct sockad
 		return NULL;
 	}
 
+	/*!
+	 * \note This is a fairly odd way of instantiating lines.  Instead of each
+	 * line created by virtue of being in the database (and loaded via
+	 * ast_load_realtime_multientry), this code forces a specific order with a
+	 * "lines" entry in the "mgcpgw" record.  This has benefits, because as with
+	 * chan_dahdi, values are inherited across definitions.  The downside is
+	 * that it's not as clear what the values will be simply by looking at a
+	 * single row in the database, and it's probable that the sanest configuration
+	 * should have the first column in the "mgcpep" table be "clearvars", with a
+	 * static value of "all", if any variables are set at all.  It may be worth
+	 * making this assumption explicit in the code in the future, and then just
+	 * using ast_load_realtime_multientry for the "mgcpep" records.
+	 */
 	lines[0] = '\0';
 	for (gwv = mgcpgwconfig; gwv; gwv = gwv->next) {
 		if (!strcasecmp(gwv->name, "lines")) {
@@ -1675,33 +1689,30 @@ static struct mgcp_gateway *find_realtime_gw(char *name, char *at, struct sockad
 			break;
 		}
 	}
+	/* Position gwv at the end of the list */
 	for (gwv = gwv && gwv->next ? gwv : mgcpgwconfig; gwv->next; gwv = gwv->next);
-	if (!ast_strlen_zero(lines)) {
-		for (c = lines, line = tmp; *c; c++) {
-			*line = *c;
-			if (*c == ',') {
-					*(line) = 0;
-					mgcpepconfig = ast_load_realtime("mgcpep", "name", at, "line", tmp, NULL);
-					gwv->next = mgcpepconfig;
 
-					while (gwv->next) {
-						if (!strcasecmp(gwv->next->name, "line")) {
-							epname = gwv->next;
-							gwv->next = gwv->next->next;
-						} else {
-							gwv = gwv->next;
-						}
-					}
-						/* moving the line var to the end */
-					if (epname) {
-						gwv->next = epname;
-						epname->next = NULL;
-						gwv = gwv->next;
-					}
-					mgcpepconfig = NULL;
-					line = tmp;
-			} else {
-				line++;
+	if (!ast_strlen_zero(lines)) {
+		AST_DECLARE_APP_ARGS(args,
+			AST_APP_ARG(line)[100];
+		);
+		AST_STANDARD_APP_ARGS(args, lines);
+		for (i = 0; i < args.argc; i++) {
+			gwv->next = ast_load_realtime("mgcpep", "name", at, "line", args.line[i], NULL);
+
+			/* Remove "line" AND position gwv at the end of the list. */
+			for (epname = NULL; gwv->next; gwv = gwv->next) {
+				if (!strcasecmp(gwv->next->name, "line")) {
+					/* Remove it from the list */
+					epname = gwv->next;
+					gwv->next = gwv->next->next;
+				}
+			}
+			/* Since "line" instantiates the configuration, we have to move it to the end. */
+			if (epname) {
+				gwv->next = epname;
+				epname->next = NULL;
+				gwv = gwv->next;
 			}
 		}
 	}
@@ -1758,8 +1769,19 @@ static struct mgcp_subchannel *find_subchannel_and_lock(char *name, int msgid, s
 				if ((g->addr.sin_addr.s_addr != sin->sin_addr.s_addr) ||
 					(g->addr.sin_port != sin->sin_port)) {
 					memcpy(&g->addr, sin, sizeof(g->addr));
-					if (ast_ouraddrfor(&g->addr.sin_addr, &g->ourip))
-						memcpy(&g->ourip, &__ourip, sizeof(g->ourip));
+					{
+						struct ast_sockaddr tmp1, tmp2;
+						struct sockaddr_in tmp3 = {0,};
+
+						tmp3.sin_addr = g->ourip;
+						ast_sockaddr_from_sin(&tmp1, &g->addr);
+						ast_sockaddr_from_sin(&tmp2, &tmp3);
+						if (ast_ouraddrfor(&tmp1, &tmp2)) {
+							memcpy(&g->ourip, &__ourip, sizeof(g->ourip));
+						}
+						ast_sockaddr_to_sin(&tmp2, &tmp3);
+						g->ourip = tmp3.sin_addr;
+					}
 					ast_verb(3, "Registered MGCP gateway '%s' at %s port %d\n", g->name, ast_inet_ntoa(g->addr.sin_addr), ntohs(g->addr.sin_port));
 				}
 			/* not dynamic, check if the name matches */
@@ -1923,6 +1945,7 @@ static int process_sdp(struct mgcp_subchannel *sub, struct mgcp_request *req)
 	format_t peercapability;
 	int peerNonCodecCapability;
 	struct sockaddr_in sin;
+	struct ast_sockaddr sin_tmp;
 	char *codecs;
 	struct ast_hostent ahp; struct hostent *hp;
 	int codec, codec_count=0;
@@ -1954,7 +1977,8 @@ static int process_sdp(struct mgcp_subchannel *sub, struct mgcp_request *req)
 	sin.sin_family = AF_INET;
 	memcpy(&sin.sin_addr, hp->h_addr, sizeof(sin.sin_addr));
 	sin.sin_port = htons(portno);
-	ast_rtp_instance_set_remote_address(sub->rtp, &sin);
+	ast_sockaddr_from_sin(&sin_tmp, &sin);
+	ast_rtp_instance_set_remote_address(sub->rtp, &sin_tmp);
 	ast_debug(3, "Peer RTP is at port %s:%d\n", ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port));
 	/* Scan through the RTP payload types specified in a "m=" line: */
 	ast_rtp_codecs_payloads_clear(ast_rtp_instance_get_codecs(sub->rtp), sub->rtp);
@@ -2137,6 +2161,7 @@ static int add_sdp(struct mgcp_request *resp, struct mgcp_subchannel *sub, struc
 	int codec;
 	char costr[80];
 	struct sockaddr_in sin;
+	struct ast_sockaddr sin_tmp;
 	char v[256];
 	char s[256];
 	char o[256];
@@ -2146,6 +2171,7 @@ static int add_sdp(struct mgcp_request *resp, struct mgcp_subchannel *sub, struc
 	char a[1024] = "";
 	format_t x;
 	struct sockaddr_in dest = { 0, };
+	struct ast_sockaddr dest_tmp;
 	struct mgcp_endpoint *p = sub->parent;
 	/* XXX We break with the "recommendation" and send our IP, in order that our
 	       peer doesn't have to ast_gethostbyname() us XXX */
@@ -2154,9 +2180,11 @@ static int add_sdp(struct mgcp_request *resp, struct mgcp_subchannel *sub, struc
 		ast_log(LOG_WARNING, "No way to add SDP without an RTP structure\n");
 		return -1;
 	}
-	ast_rtp_instance_get_local_address(sub->rtp, &sin);
+	ast_rtp_instance_get_local_address(sub->rtp, &sin_tmp);
+	ast_sockaddr_to_sin(&sin_tmp, &sin);
 	if (rtp) {
-		ast_rtp_instance_get_remote_address(sub->rtp, &dest);
+		ast_rtp_instance_get_remote_address(sub->rtp, &dest_tmp);
+		ast_sockaddr_to_sin(&dest_tmp, &dest);
 	} else {
 		if (sub->tmpdest.sin_addr.s_addr) {
 			dest.sin_addr = sub->tmpdest.sin_addr;
@@ -2229,11 +2257,13 @@ static int transmit_modify_with_sdp(struct mgcp_subchannel *sub, struct ast_rtp_
 	char tmp[80];
 	struct mgcp_endpoint *p = sub->parent;
 	format_t x;
+	struct ast_sockaddr sub_tmpdest_tmp;
 
 	if (ast_strlen_zero(sub->cxident) && rtp) {
 		/* We don't have a CXident yet, store the destination and
 		   wait a bit */
-		ast_rtp_instance_get_remote_address(rtp, &sub->tmpdest);
+		ast_rtp_instance_get_remote_address(rtp, &sub_tmpdest_tmp);
+		ast_sockaddr_to_sin(&sub_tmpdest_tmp, &sub->tmpdest);
 		return 0;
 	}
 	ast_copy_string(local, "e:on, s:off, p:20", sizeof(local));
@@ -2513,7 +2543,7 @@ static int transmit_modify_request(struct mgcp_subchannel *sub)
 				snprintf(tmp, sizeof(tmp), ", dq-gi:%x", sub->gate->gateid);
 				strncat(local, tmp, sizeof(local) - strlen(local) - 1);
 			} else {
-					/* we still dont have gateid wait */
+					/* we still don't have gateid wait */
 				return 0;
 			}
 		}
@@ -2865,6 +2895,8 @@ static void handle_response(struct mgcp_endpoint *p, struct mgcp_subchannel *sub
 
 static void start_rtp(struct mgcp_subchannel *sub)
 {
+	struct ast_sockaddr bindaddr_tmp;
+
 	ast_mutex_lock(&sub->lock);
 	/* check again to be on the safe side */
 	if (sub->rtp) {
@@ -2872,7 +2904,8 @@ static void start_rtp(struct mgcp_subchannel *sub)
 		sub->rtp = NULL;
 	}
 	/* Allocate the RTP now */
-	sub->rtp = ast_rtp_instance_new("asterisk", sched, &bindaddr, NULL);
+	ast_sockaddr_from_sin(&bindaddr_tmp, &bindaddr);
+	sub->rtp = ast_rtp_instance_new("asterisk", sched, &bindaddr_tmp, NULL);
 	if (sub->rtp && sub->owner)
 		ast_channel_set_fd(sub->owner, 0, ast_rtp_instance_fd(sub->rtp, 0));
 	if (sub->rtp) {
@@ -3326,7 +3359,7 @@ static int handle_request(struct mgcp_subchannel *sub, struct mgcp_request *req,
 				mgcp_queue_hangup(sub);
 			}
 			transmit_response(sub, "200", req, "OK");
-			/* We dont send NTFY or AUEP to wildcard ep */
+			/* We don't send NTFY or AUEP to wildcard ep */
 			if (strcmp(p->name, p->parent->wcardep) != 0) {
 				transmit_notify_request(sub, "");
 				/* Audit endpoint.
@@ -3956,22 +3989,32 @@ static struct mgcp_gateway *build_gateway(char *cat, struct ast_variable *v)
 				/* Non-dynamic.  Make sure we become that way if we're not */
 				AST_SCHED_DEL(sched, gw->expire);
 				gw->dynamic = 0;
-				if (ast_get_ip(&gw->addr, v->value)) {
-					if (!gw_reload) {
-						ast_mutex_destroy(&gw->msgs_lock);
-						ast_free(gw);
+				{
+					struct ast_sockaddr tmp;
+
+					ast_sockaddr_from_sin(&tmp, &gw->addr);
+					if (ast_get_ip(&tmp, v->value)) {
+						if (!gw_reload) {
+							ast_mutex_destroy(&gw->msgs_lock);
+							ast_free(gw);
+						}
+						return NULL;
 					}
-					return NULL;
+					ast_sockaddr_to_sin(&tmp, &gw->addr);
 				}
 			}
 		} else if (!strcasecmp(v->name, "defaultip")) {
-			if (ast_get_ip(&gw->defaddr, v->value)) {
+			struct ast_sockaddr tmp;
+
+			ast_sockaddr_from_sin(&tmp, &gw->defaddr);
+			if (ast_get_ip(&tmp, v->value)) {
 				if (!gw_reload) {
 					ast_mutex_destroy(&gw->msgs_lock);
 					ast_free(gw);
 				}
 				return NULL;
 			}
+			ast_sockaddr_to_sin(&tmp, &gw->defaddr);
 		} else if (!strcasecmp(v->name, "permit") ||
 			!strcasecmp(v->name, "deny")) {
 			gw->ha = ast_append_ha(v->name, v->value, gw->ha, NULL);
@@ -4314,8 +4357,19 @@ static struct mgcp_gateway *build_gateway(char *cat, struct ast_variable *v)
 		if (gw->addr.sin_addr.s_addr && !ntohs(gw->addr.sin_port)) {
 			gw->addr.sin_port = htons(DEFAULT_MGCP_GW_PORT);
 		}
-		if (gw->addr.sin_addr.s_addr && ast_ouraddrfor(&gw->addr.sin_addr, &gw->ourip)) {
-			memcpy(&gw->ourip, &__ourip, sizeof(gw->ourip));
+		{
+			struct ast_sockaddr tmp1, tmp2;
+			struct sockaddr_in tmp3 = {0,};
+
+			tmp3.sin_addr = gw->ourip;
+			ast_sockaddr_from_sin(&tmp1, &gw->addr);
+			ast_sockaddr_from_sin(&tmp2, &tmp3);
+			if (gw->addr.sin_addr.s_addr && ast_ouraddrfor(&tmp1, &tmp2)) {
+				memcpy(&gw->ourip, &__ourip, sizeof(gw->ourip));
+			} else {
+				ast_sockaddr_to_sin(&tmp2, &tmp3);
+				gw->ourip = tmp3.sin_addr;
+			}
 		}
 	}
 

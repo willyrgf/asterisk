@@ -13,7 +13,9 @@
  */
 
 /*** MODULEINFO
-	 <depend>spandsp</depend>
+	<defaultenabled>no</defaultenabled>
+	<depend>spandsp</depend>
+	<conflict>res_fax</conflict>
 ***/
  
 #include "asterisk.h"
@@ -225,8 +227,8 @@ static void phase_e_handler(t30_state_t *f, void *user_data, int result)
 	
 	s->finished = 1; 
 	
-	local_ident = t30_get_tx_ident(f);
-	far_ident = t30_get_rx_ident(f);
+	local_ident = S_OR(t30_get_tx_ident(f), "");
+	far_ident = S_OR(t30_get_rx_ident(f), "");
 	pbx_builtin_setvar_helper(s->chan, "FAXSTATUS", "SUCCESS"); 
 	pbx_builtin_setvar_helper(s->chan, "FAXERROR", NULL); 
 	pbx_builtin_setvar_helper(s->chan, "REMOTESTATIONID", far_ident);
@@ -373,8 +375,12 @@ static int transmit_audio(fax_session *s)
 							     .rate = AST_T38_RATE_14400,
 							     .rate_management = AST_T38_RATE_MANAGEMENT_TRANSFERRED_TCF,
 							     .fill_bit_removal = 1,
-							     .transcoding_mmr = 1,
-							     .transcoding_jbig = 1,
+/*
+ * spandsp has API calls to support MMR and JBIG transcoding, but they aren't
+ * implemented quite yet... so don't offer them to the remote endpoint
+ *							     .transcoding_mmr = 1,
+ *							     .transcoding_jbig = 1,
+*/
 	};
 
 	/* if in called party mode, try to use T.38 */
@@ -555,6 +561,7 @@ static int transmit_audio(fax_session *s)
 		}
 
 		ast_frfree(inf);
+		inf = NULL;
 	}
 
 	ast_debug(1, "Loop finished, res=%d\n", res);
@@ -694,6 +701,7 @@ static int transmit_t38(fax_session *s)
 		}
 
 		ast_frfree(inf);
+		inf = NULL;
 	}
 
 	ast_debug(1, "Loop finished, res=%d\n", res);

@@ -72,6 +72,7 @@ static struct ast_jb_conf default_jbconf =
 	.max_size = -1,
 	.resync_threshold = -1,
 	.impl = "",
+	.target_extra = -1,
 };
 static struct ast_jb_conf global_jbconf;
 
@@ -600,7 +601,8 @@ static int oss_call(struct ast_channel *c, char *dest, int timeout)
 
 	AST_NONSTANDARD_APP_ARGS(args, parse, '/');
 
-	ast_verbose(" << Call to device '%s' dnid '%s' rdnis '%s' on console from '%s' <%s> >>\n", dest, c->cid.cid_dnid, c->cid.cid_rdnis, c->cid.cid_name, c->cid.cid_num);
+	ast_verbose(" << Call to device '%s' dnid '%s' rdnis '%s' on console from '%s' <%s> >>\n",
+		dest, c->cid.cid_dnid, c->redirecting.from.number, c->cid.cid_name, c->cid.cid_num);
 	if (!ast_strlen_zero(args.flags) && strcasecmp(args.flags, "answer") == 0) {
 		f.subclass.integer = AST_CONTROL_ANSWER;
 		ast_queue_frame(c, &f);
@@ -1456,7 +1458,7 @@ static int load_module(void)
 
 	if (ast_channel_register(&oss_tech)) {
 		ast_log(LOG_ERROR, "Unable to register channel type 'OSS'\n");
-		return AST_MODULE_LOAD_FAILURE;
+		return AST_MODULE_LOAD_DECLINE;
 	}
 
 	ast_cli_register_multiple(cli_oss, ARRAY_LEN(cli_oss));

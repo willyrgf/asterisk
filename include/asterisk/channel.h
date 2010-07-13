@@ -148,6 +148,9 @@ extern "C" {
 #include "asterisk/linkedlists.h"
 #include "asterisk/stringfields.h"
 #include "asterisk/datastore.h"
+#include "asterisk/data.h"
+#include "asterisk/channelstate.h"
+#include "asterisk/ccss.h"
 
 #define DATASTORE_INHERIT_FOREVER	INT_MAX
 
@@ -257,12 +260,6 @@ struct ast_callerid {
 	char *cid_ani;
 
 	/*!
-	 * \brief Malloc'd Redirecting Directory Number Information Service (RDNIS)
-	 * (Field will eventually move to struct ast_channel.redirecting.from.number)
-	 */
-	char *cid_rdnis;
-
-	/*!
 	 * \brief Callerid Q.931 encoded number presentation/screening fields
 	 * (Field will eventually move to struct ast_channel.caller.id.number_presentation)
 	 */
@@ -291,6 +288,17 @@ struct ast_callerid {
 	 * (Field will eventually move to struct ast_channel.dialed.transit_network_select)
 	 */
 	int cid_tns;
+
+	/*!
+	 * \brief Callerid "Tag"
+	 * A user-settable field used to help associate some extrinsic information
+	 * about the channel or user of the channel to the caller ID. This information
+	 * is not transmitted over the wire and so is only useful within an Asterisk
+	 * environment.
+	 * (Field will eventually move to struct ast_channel.caller.id.tag)
+	 */
+	char *cid_tag;
+
 	/*!
 	 * \brief Caller id subaddress.
 	 * (Field will eventually move to struct ast_channel.caller.id.subaddress)
@@ -316,6 +324,9 @@ struct ast_party_id {
 
 	/*! \brief Subscriber name (Malloced) */
 	char *name;
+
+	/*! \brief User-set "tag" */
+	char *tag;
 
 	/*! \brief Subscriber subaddress. */
 	struct ast_party_subaddress subaddress;
@@ -513,6 +524,29 @@ struct ast_channel_tech {
 
 	/*! \brief Get the unique identifier for the PVT, i.e. SIP call-ID for SIP */
 	const char * (* get_pvt_uniqueid)(struct ast_channel *chan);
+
+	/*! \brief Call a function with cc parameters as a function parameter
+	 *
+	 * \details
+	 * This is a highly specialized callback that is not likely to be needed in many
+	 * channel drivers. When dealing with a busy channel, for instance, most channel
+	 * drivers will successfully return a channel to the requester. Once called, the channel
+	 * can then queue a busy frame when it receives an appropriate message from the far end.
+	 * In such a case, the channel driver has the opportunity to also queue a CC frame.
+	 * The parameters for the CC channel can be retrieved from the channel structure.
+	 *
+	 * For other channel drivers, notably those that deal with "dumb" phones, the channel
+	 * driver will not return a channel when one is requested. In such a scenario, there is never
+	 * an opportunity for the channel driver to queue a CC frame since the channel is never
+	 * called. Furthermore, it is not possible to retrieve the CC configuration parameters
+	 * for the desired channel because no channel is ever allocated or returned to the
+	 * requester. In such a case, call completion may still be a viable option. What we do is
+	 * pass the same string that the requester used originally to request the channel to the
+	 * channel driver. The channel driver can then find any potential channels/devices that
+	 * match the input and return call the designated callback with the device's call completion
+	 * parameters as a parameter.
+	 */
+	int (* cc_callback)(struct ast_channel *inbound, const char *dest, ast_cc_callback_fn callback);
 };
 
 struct ast_epoll_data;
@@ -538,27 +572,6 @@ enum ast_channel_adsicpe {
 	AST_ADSI_AVAILABLE,
 	AST_ADSI_UNAVAILABLE,
 	AST_ADSI_OFFHOOKONLY,
-};
-
-/*!
- * \brief ast_channel states
- *
- * \note Bits 0-15 of state are reserved for the state (up/down) of the line
- *       Bits 16-32 of state are reserved for flags
- */
-enum ast_channel_state {
-	AST_STATE_DOWN,			/*!< Channel is down and available */
-	AST_STATE_RESERVED,		/*!< Channel is down, but reserved */
-	AST_STATE_OFFHOOK,		/*!< Channel is off hook */
-	AST_STATE_DIALING,		/*!< Digits (or equivalent) have been dialed */
-	AST_STATE_RING,			/*!< Line is ringing */
-	AST_STATE_RINGING,		/*!< Remote end is ringing */
-	AST_STATE_UP,			/*!< Line is up */
-	AST_STATE_BUSY,			/*!< Line is busy */
-	AST_STATE_DIALING_OFFHOOK,	/*!< Digits (or equivalent) have been dialed while offhook */
-	AST_STATE_PRERING,		/*!< Channel has detected an incoming call and is waiting for ring */
-
-	AST_STATE_MUTE = (1 << 16),	/*!< Do not transmit voice data */
 };
 
 /*!
@@ -700,12 +713,7 @@ struct ast_channel {
 	 */
 	struct ast_party_connected_line connected;
 
-	/*!
-	 * \brief Redirecting/Diversion information
-	 * \note Until struct ast_channel.cid.cid_rdnis is replaced
-	 * with ast_channel.redirecting.from.number, the
-	 * ast_channel.redirecting.from.number field is not used.
-	 */
+	/*! \brief Redirecting/Diversion information */
 	struct ast_party_redirecting redirecting;
 
 	struct ast_frame dtmff;				/*!< DTMF frame */
@@ -713,7 +721,6 @@ struct ast_channel {
 	ast_group_t callgroup;				/*!< Call group for call pickups */
 	ast_group_t pickupgroup;			/*!< Pickup group - which calls groups can be picked up? */
 	AST_LIST_HEAD_NOLOCK(, ast_frame) readq;
-	AST_LIST_ENTRY(ast_channel) chan_list;		/*!< For easy linking */
 	struct ast_jb jb;				/*!< The jitterbuffer state */
 	struct timeval dtmf_tv;				/*!< The time that an in process digit began, or the last digit ended */
 	AST_LIST_HEAD_NOLOCK(datastores, ast_datastore) datastores; /*!< Data stores on the channel */
@@ -725,7 +732,6 @@ struct ast_channel {
 	int fds[AST_MAX_FDS];				/*!< File descriptors for channel -- Drivers will poll on
 							 *   these file descriptors, so at least one must be non -1.
 							 *   See \arg \ref AstFileDesc */
-	int cdrflags;					/*!< Call Detail Record Flags */
 	int _softhangup;				/*!< Whether or not we have been hung up...  Do not set this value
 							 *   directly, use ast_softhangup() */
 	int fdno;					/*!< Which fd had an event detected on */
@@ -747,10 +753,10 @@ struct ast_channel {
 	unsigned int flags;				/*!< channel flags of AST_FLAG_ type */
 	int alertpipe[2];
 	format_t nativeformats;         /*!< Kinds of data this channel can natively handle */
-	format_t readformat;            /*!< Requested read format */
-	format_t writeformat;           /*!< Requested write format */
-	format_t rawreadformat;         /*!< Raw read format */
-	format_t rawwriteformat;        /*!< Raw write format */
+	format_t readformat;            /*!< Requested read format (after translation) */
+	format_t writeformat;           /*!< Requested write format (after translation) */
+	format_t rawreadformat;         /*!< Raw read format (before translation) */
+	format_t rawwriteformat;        /*!< Raw write format (before translation) */
 	unsigned int emulate_dtmf_duration;		/*!< Number of ms left to emulate DTMF for */
 #ifdef HAVE_EPOLL
 	int epfd;
@@ -885,13 +891,6 @@ struct outgoing_helper {
 };
 
 enum {
-	AST_CDR_TRANSFER =   (1 << 0),
-	AST_CDR_FORWARD =    (1 << 1),
-	AST_CDR_CALLWAIT =   (1 << 2),
-	AST_CDR_CONFERENCE = (1 << 3),
-};
-
-enum {
 	/*! Soft hangup by device */
 	AST_SOFTHANGUP_DEV =       (1 << 0),
 	/*! Soft hangup for async goto */
@@ -969,9 +968,6 @@ int ast_channel_datastore_remove(struct ast_channel *chan, struct ast_datastore 
  * \retval NULL if not found
  */
 struct ast_datastore *ast_channel_datastore_find(struct ast_channel *chan, const struct ast_datastore_info *info, const char *uid);
-
-/*! \brief Change the state of a channel */
-int ast_setstate(struct ast_channel *chan, enum ast_channel_state);
 
 /*!
  * \brief Create a channel structure
@@ -1133,6 +1129,7 @@ struct ast_channel *ast_channel_release(struct ast_channel *chan);
  *
  * \param type type of channel to request
  * \param format requested channel format (codec)
+ * \param requestor channel asking for data
  * \param data data to pass to the channel requester
  * \param status status
  *
@@ -1151,6 +1148,7 @@ struct ast_channel *ast_request(const char *type, format_t format, const struct 
  *
  * \param type type of channel to request
  * \param format requested channel format
+ * \param requestor channel asking for data
  * \param data data to pass to the channel requester
  * \param timeout maximum amount of time to wait for an answer
  * \param reason why unsuccessful (if unsuccessful)
@@ -1168,6 +1166,7 @@ struct ast_channel *ast_request_and_dial(const char *type, format_t format, cons
  * by the low level module and attempt to place a call on it
  * \param type type of channel to request
  * \param format requested channel format
+ * \param requestor channel requesting data
  * \param data data to pass to the channel requester
  * \param timeout maximum amount of time to wait for an answer
  * \param reason why unsuccessful (if unsuccessful)
@@ -1286,6 +1285,7 @@ int ast_softhangup_nolock(struct ast_channel *chan, int reason);
  *
  * \param chan channel to set the field on
  * \param source a string describing the source of the hangup for this channel
+ * \param force
  *
  * \since 1.8
  *
@@ -1478,6 +1478,22 @@ int ast_indicate_data(struct ast_channel *chan, int condition, const void *data,
  * \retval the # of ms remaining otherwise
  */
 int ast_waitfor(struct ast_channel *chan, int ms);
+
+/*!
+ * \brief Should we keep this frame for later?
+ *
+ * There are functions such as ast_safe_sleep which will
+ * service a channel to ensure that it does not have a
+ * large backlog of queued frames. When this happens,
+ * we want to hold on to specific frame types and just drop
+ * others. This function will tell if the frame we just
+ * read should be held onto.
+ *
+ * \param frame The frame we just read
+ * \retval 1 frame should be kept
+ * \retval 0 frame should be dropped
+ */
+int ast_is_deferrable_frame(const struct ast_frame *frame);
 
 /*!
  * \brief Wait for a specified amount of time, looking for hangups
@@ -1925,6 +1941,7 @@ int ast_autoservice_start(struct ast_channel *chan);
  * ast_autoservice_stop and the autoservice thread. It is important
  * that chan is not locked prior to this call
  *
+ * \param chan
  * \retval 0 success
  * \retval -1 error, or the channel has been hungup
  */
@@ -1933,7 +1950,10 @@ int ast_autoservice_stop(struct ast_channel *chan);
 /*!
  * \brief Enable or disable timer ticks for a channel
  *
+ * \param c channel
  * \param rate number of timer ticks per second
+ * \param func callback function
+ * \param data
  *
  * \details
  * If timers are supported, force a scheduled expiration on the
@@ -2450,6 +2470,26 @@ void ast_party_subaddress_set(struct ast_party_subaddress *dest, const struct as
 void ast_party_subaddress_free(struct ast_party_subaddress *doomed);
 
 /*!
+ * \brief Initialize the given party id structure.
+ * \since 1.8
+ *
+ * \param init Party id structure to initialize.
+ *
+ * \return Nothing
+ */
+void ast_party_id_init(struct ast_party_id *init);
+
+/*!
+ * \brief Destroy the party id contents
+ * \since 1.8
+ *
+ * \param doomed The party id to destroy.
+ *
+ * \return Nothing
+ */
+void ast_party_id_free(struct ast_party_id *doomed);
+
+/*!
  * \since 1.8
  * \brief Initialize the given caller structure.
  *
@@ -2776,6 +2816,146 @@ void ast_channel_queue_redirecting_update(struct ast_channel *chan, const struct
  * 	'0'
  */
 int ast_channel_connected_line_macro(struct ast_channel *autoservice_chan, struct ast_channel *macro_chan, const void *connected_info, int caller, int frame);
+
+/*!
+ * \brief Insert into an astdata tree, the channel structure.
+ * \param[in] tree The ast data tree.
+ * \param[in] chan The channel structure to add to tree.
+ * \param[in] add_bridged Add the bridged channel to the structure.
+ * \retval <0 on error.
+ * \retval 0 on success.
+ */
+int ast_channel_data_add_structure(struct ast_data *tree, struct ast_channel *chan, int add_bridged);
+
+/*!
+ * \brief Compare to channel structures using the data api.
+ * \param[in] tree The search tree generated by the data api.
+ * \param[in] chan The channel to compare.
+ * \param[in] structure_name The name of the node of the channel structure.
+ * \retval 0 The structure matches.
+ * \retval 1 The structure doesn't matches.
+ */
+int ast_channel_data_cmp_structure(const struct ast_data_search *tree, struct ast_channel *chan,
+	const char *structure_name);
+
+/*!
+ * \since 1.8
+ * \brief Run a redirecting interception macro and update a channel's redirecting information
+ *
+ * \details
+ * Whenever we want to update a channel's redirecting information, we may need to run
+ * a macro so that an administrator can manipulate the information before sending it
+ * out. This function both runs the macro and sends the update to the channel.
+ *
+ * \param autoservice_chan Channel to place into autoservice while the macro is running.
+ * It is perfectly safe for this to be NULL
+ * \param macro_chan The channel to run the macro on. Also the channel from which we
+ * determine which macro we need to run.
+ * \param redirecting_info Either an ast_party_redirecting or ast_frame pointer of type
+ * AST_CONTROL_REDIRECTING
+ * \param is_caller If true, then run REDIRECTING_CALLER_SEND_MACRO, otherwise run
+ * REDIRECTING_CALLEE_SEND_MACRO
+ * \param is_frame If true, then redirecting_info is an ast_frame pointer, otherwise it is an
+ * ast_party_redirecting pointer.
+ *
+ * \retval 0 Success
+ * \retval -1 Either the macro does not exist, or there was an error while attempting to
+ * run the macro
+ *
+ * \todo Have multiple return codes based on the MACRO_RESULT
+ * \todo Make constants so that caller and frame can be more expressive than just '1' and
+ * '0'
+ */
+int ast_channel_redirecting_macro(struct ast_channel *autoservice_chan, struct ast_channel *macro_chan, const void *redirecting_info, int is_caller, int is_frame);
+
+#include "asterisk/ccss.h"
+
+/*!
+ * \since 1.8
+ * \brief Set up datastore with CCSS parameters for a channel
+ *
+ * \note
+ * If base_params is NULL, the channel will get the default
+ * values for all CCSS parameters.
+ *
+ * \details
+ * This function makes use of datastore operations on the channel, so
+ * it is important to lock the channel before calling this function.
+ *
+ * \param chan The channel to create the datastore on
+ * \param base_params CCSS parameters we wish to copy into the channel
+ * \retval 0 Success
+ * \retval -1 Failure
+ */
+int ast_channel_cc_params_init(struct ast_channel *chan,
+		const struct ast_cc_config_params *base_params);
+
+/*!
+ * \since 1.8
+ * \brief Get the CCSS parameters from a channel
+ *
+ * \details
+ * This function makes use of datastore operations on the channel, so
+ * it is important to lock the channel before calling this function.
+ *
+ * \param chan Channel to retrieve parameters from
+ * \retval NULL Failure
+ * \retval non-NULL The parameters desired
+ */
+struct ast_cc_config_params *ast_channel_get_cc_config_params(struct ast_channel *chan);
+
+
+/*!
+ * \since 1.8
+ * \brief Get a device name given its channel structure
+ *
+ * \details
+ * A common practice in Asterisk is to determine the device being talked
+ * to by dissecting the channel name. For certain channel types, this is not
+ * accurate. For instance, an ISDN channel is named based on what B channel is
+ * used, not the device being communicated with.
+ *
+ * This function interfaces with a channel tech's queryoption callback to
+ * retrieve the name of the device being communicated with. If the channel does not
+ * implement this specific option, then the traditional method of using the channel
+ * name is used instead.
+ *
+ * \param chan The channel to retrieve the information from
+ * \param[out] device_name The buffer to place the device's name into
+ * \param name_buffer_length The allocated space for the device_name
+ * \return 0 always
+ */
+int ast_channel_get_device_name(struct ast_channel *chan, char *device_name, size_t name_buffer_length);
+
+/*!
+ * \since 1.8
+ * \brief Find the appropriate CC agent type to use given a channel
+ *
+ * \details
+ * During call completion, we will need to create a call completion agent structure. To
+ * figure out the type of agent to construct, we need to ask the channel driver for the
+ * appropriate type.
+ *
+ * Prior to adding this function, the call completion core attempted to figure this
+ * out for itself by stripping the technology off the channel's name. However, in the
+ * case of chan_dahdi, there are multiple agent types registered, and so simply searching
+ * for an agent type called "DAHDI" is not possible. In a case where multiple agent types
+ * are defined, the channel driver must have a queryoption callback defined in its
+ * channel_tech, and the queryoption callback must handle AST_OPTION_CC_AGENT_TYPE
+ *
+ * If a channel driver does not have a queryoption callback or if the queryoption callback
+ * does not handle AST_OPTION_CC_AGENT_TYPE, then the old behavior of using the technology
+ * portion of the channel name is used instead. This is perfectly suitable for channel drivers
+ * whose channel technologies are a one-to-one match with the agent types defined within.
+ *
+ * Note that this function is only called when the agent policy on a given channel is set
+ * to "native." Generic agents' type can be determined automatically by the core.
+ *
+ * \param chan The channel for which we wish to retrieve the agent type
+ * \param[out] agent_type The type of agent the channel driver wants us to use
+ * \param size The size of the buffer to write to
+ */
+int ast_channel_get_cc_agent_type(struct ast_channel *chan, char *agent_type, size_t size);
 #if defined(__cplusplus) || defined(c_plusplus)
 }
 #endif

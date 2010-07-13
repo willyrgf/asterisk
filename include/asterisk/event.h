@@ -192,7 +192,8 @@ int ast_event_sub_append_ie_str(struct ast_event_sub *sub,
  *
  * \param sub the dynamic subscription allocated with ast_event_subscribe_new()
  * \param ie_type the information element type for the parameter
- * \param raw the data that must be present in the event to match this subscription
+ * \param data the data that must be present in the event to match this subscription
+ * \param raw_datalen length of data
  *
  * \retval 0 success
  * \retval non-zero failure
@@ -330,6 +331,9 @@ void ast_event_dump_cache(const struct ast_event_sub *event_sub);
  * by a valid IE payload type.  The payload type, EXISTS, should not be used here
  * because it makes no sense to do so.  So, a payload must also be specified
  * after the IE payload type.
+ *
+ * \note The EID IE will be appended automatically when this function is used
+ *       with at least one IE specified.
  *
  * \return This returns the event that has been created.  If there is an error
  *         creating the event, NULL will be returned.
@@ -477,7 +481,7 @@ int ast_event_append_ie_uint(struct ast_event **event, enum ast_event_ie_type ie
  *
  * \param event the event that the IE will be appended to
  * \param ie_type the type of IE to append
- * \param flags the flags that are the payload of the IE
+ * \param bitflags the flags that are the payload of the IE
  *
  * \retval 0 success
  * \retval -1 failure
@@ -507,6 +511,19 @@ int ast_event_append_ie_bitflags(struct ast_event **event, enum ast_event_ie_typ
  */
 int ast_event_append_ie_raw(struct ast_event **event, enum ast_event_ie_type ie_type,
 	const void *data, size_t data_len);
+
+/*!
+ * \brief Append the global EID IE
+ *
+ * \param event the event to append IE to
+ *
+ * \note For ast_event_new() that includes IEs, this is done automatically
+ *       for you.
+ *
+ * \retval 0 success
+ * \retval -1 failure
+ */
+int ast_event_append_eid(struct ast_event **event);
 
 /*!
  * \brief Get the value of an information element that has an integer payload
@@ -646,9 +663,10 @@ size_t ast_event_get_size(const struct ast_event *event);
  * \param iterator The iterator instance to initialize
  * \param event The event that will be iterated through
  *
- * \return Nothing
+ * \retval 0 Success, there are IEs available to iterate
+ * \retval -1 Failure, there are no IEs in the event to iterate
  */
-void ast_event_iterator_init(struct ast_event_iterator *iterator, const struct ast_event *event);
+int ast_event_iterator_init(struct ast_event_iterator *iterator, const struct ast_event *event);
 
 /*!
  * \brief Move iterator instance to next IE

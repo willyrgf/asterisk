@@ -49,6 +49,25 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/stringfields.h"
 #include "asterisk/devicestate.h"
 
+/*** DOCUMENTATION
+	<manager name="LocalOptimizeAway" language="en_US">
+		<synopsis>
+			Optimize away a local channel when possible.
+		</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
+			<parameter name="Channel" required="true">
+				<para>The channel name to optimize away.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>A local channel created with "/n" will not automatically optimize away.
+			Calling this command on the local channel will clear that flag and allow
+			it to optimize away if it's bridged or when it becomes bridged.</para>
+		</description>
+	</manager>
+ ***/
+
 static const char tdesc[] = "Local Proxy Channel Driver";
 
 #define IS_OUTBOUND(a,b) (a == b->chan ? 1 : 0)
@@ -58,6 +77,7 @@ static struct ast_jb_conf g_jb_conf = {
 	.max_size = -1,
 	.resync_threshold = -1,
 	.impl = "",
+	.target_extra = -1,
 };
 
 static struct ast_channel *local_request(const char *type, format_t format, const struct ast_channel *requestor, void *data, int *cause);
@@ -230,7 +250,11 @@ static int local_queue_frame(struct local_pvt *p, int isoutbound, struct ast_fra
 
 	/* Ensure that we have both channels locked */
 	while (other && ast_channel_trylock(other)) {
-		ast_mutex_unlock(&p->lock);
+		int res;
+		if ((res = ast_mutex_unlock(&p->lock))) {
+			ast_log(LOG_ERROR, "chan_local bug! '&p->lock' was not locked when entering local_queue_frame! (%s)\n", strerror(res));
+			return -1;
+		}
 		if (us && us_locked) {
 			do {
 				CHANNEL_DEADLOCK_AVOIDANCE(us);
@@ -257,9 +281,10 @@ static int local_queue_frame(struct local_pvt *p, int isoutbound, struct ast_fra
 	}
 
 	if (other) {
-		if (other->pbx || other->_bridge || !ast_strlen_zero(other->appl)) {
-			ast_queue_frame(other, f);
-		} /* else the frame won't go anywhere */
+		if (f->frametype == AST_FRAME_CONTROL && f->subclass.integer == AST_CONTROL_RINGING) {
+			ast_setstate(other, AST_STATE_RINGING);
+		}
+		ast_queue_frame(other, f);
 		ast_channel_unlock(other);
 	}
 
@@ -290,7 +315,11 @@ static int local_answer(struct ast_channel *ast)
 	return res;
 }
 
-static void check_bridge(struct local_pvt *p, int isoutbound)
+/*!
+ * \internal
+ * \note This function assumes that we're only called from the "outbound" local channel side
+ */
+static void check_bridge(struct local_pvt *p)
 {
 	struct ast_channel_monitor *tmp;
 	if (ast_test_flag(p, LOCAL_ALREADY_MASQED) || ast_test_flag(p, LOCAL_NO_OPTIMIZATION) || !p->chan || !p->owner || (p->chan->_bridge != ast_bridged_channel(p->chan)))
@@ -301,7 +330,7 @@ static void check_bridge(struct local_pvt *p, int isoutbound)
 	   frames on the owner channel (because they would be transferred to the
 	   outbound channel during the masquerade)
 	*/
-	if (isoutbound && p->chan->_bridge /* Not ast_bridged_channel!  Only go one step! */ && AST_LIST_EMPTY(&p->owner->readq)) {
+	if (p->chan->_bridge /* Not ast_bridged_channel!  Only go one step! */ && AST_LIST_EMPTY(&p->owner->readq)) {
 		/* Masquerade bridged channel into owner */
 		/* Lock everything we need, one by one, and give up if
 		   we can't get everything.  Remember, we'll get another
@@ -335,26 +364,6 @@ static void check_bridge(struct local_pvt *p, int isoutbound)
 				ast_channel_unlock(p->chan->_bridge);
 			}
 		}
-	/* We only allow masquerading in one 'direction'... it's important to preserve the state
-	   (group variables, etc.) that live on p->chan->_bridge (and were put there by the dialplan)
-	   when the local channels go away.
-	*/
-#if 0
-	} else if (!isoutbound && p->owner && p->owner->_bridge && p->chan && AST_LIST_EMPTY(&p->chan->readq)) {
-		/* Masquerade bridged channel into chan */
-		if (!ast_mutex_trylock(&(p->owner->_bridge)->lock)) {
-			if (!ast_check_hangup(p->owner->_bridge)) {
-				if (!ast_mutex_trylock(&p->chan->lock)) {
-					if (!ast_check_hangup(p->chan)) {
-						ast_channel_masquerade(p->chan, p->owner->_bridge);
-						ast_set_flag(p, LOCAL_ALREADY_MASQED);
-					}
-					ast_mutex_unlock(&p->chan->lock);
-				}
-			}
-			ast_mutex_unlock(&(p->owner->_bridge)->lock);
-		}
-#endif
 	}
 }
 
@@ -375,8 +384,8 @@ static int local_write(struct ast_channel *ast, struct ast_frame *f)
 	/* Just queue for delivery to the other side */
 	ast_mutex_lock(&p->lock);
 	isoutbound = IS_OUTBOUND(ast, p);
-	if (f && (f->frametype == AST_FRAME_VOICE || f->frametype == AST_FRAME_VIDEO))
-		check_bridge(p, isoutbound);
+	if (isoutbound && f && (f->frametype == AST_FRAME_VOICE || f->frametype == AST_FRAME_VIDEO))
+		check_bridge(p);
 	if (!ast_test_flag(p, LOCAL_ALREADY_MASQED))
 		res = local_queue_frame(p, isoutbound, f, ast, 1);
 	else {
@@ -447,6 +456,9 @@ static int local_indicate(struct ast_channel *ast, int condition, const void *da
 		if (the_other_channel) {
 			unsigned char frame_data[1024];
 			if (condition == AST_CONTROL_CONNECTED_LINE) {
+				if (isoutbound) {
+					ast_connected_line_copy_to_caller(&the_other_channel->cid, &this_channel->connected);
+				}
 				f.datalen = ast_connected_line_build_data(frame_data, sizeof(frame_data), &this_channel->connected);
 			} else {
 				f.datalen = ast_redirecting_build_data(frame_data, sizeof(frame_data), &this_channel->redirecting);
@@ -559,6 +571,8 @@ static int local_call(struct ast_channel *ast, char *dest, int timeout)
 	int res;
 	struct ast_var_t *varptr = NULL, *new;
 	size_t len, namelen;
+	char *reduced_dest = ast_strdupa(dest);
+	char *slash;
 
 	if (!p)
 		return -1;
@@ -588,21 +602,15 @@ start_over:
 	 * All these failure points just return -1. The individual strings will
 	 * be cleared when we destroy the channel.
 	 */
-	if (p->owner->cid.cid_rdnis) {
-		if (!(p->chan->cid.cid_rdnis = ast_strdup(p->owner->cid.cid_rdnis))) {
-			ast_mutex_unlock(&p->lock);
-			ast_channel_unlock(p->chan);
-			return -1;
-		}
-	}
 	ast_party_redirecting_copy(&p->chan->redirecting, &p->owner->redirecting);
 
-	if (p->owner->cid.cid_dnid) {
-		if (!(p->chan->cid.cid_dnid = ast_strdup(p->owner->cid.cid_dnid))) {
-			ast_mutex_unlock(&p->lock);
-			ast_channel_unlock(p->chan);
-			return -1;
-		}
+	ast_free(p->chan->cid.cid_dnid);
+	p->chan->cid.cid_dnid = ast_strdup(p->owner->cid.cid_dnid);
+	if (!p->chan->cid.cid_dnid && p->owner->cid.cid_dnid) {
+		/* Allocation failure */
+		ast_mutex_unlock(&p->lock);
+		ast_channel_unlock(p->chan);
+		return -1;
 	}
 	p->chan->cid.cid_tns = p->owner->cid.cid_tns;
 
@@ -613,7 +621,8 @@ start_over:
 	ast_string_field_set(p->chan, accountcode, p->owner->accountcode);
 	ast_string_field_set(p->chan, musicclass, p->owner->musicclass);
 	ast_cdr_update(p->chan);
-	p->chan->cdrflags = p->owner->cdrflags;
+
+	ast_channel_cc_params_init(p->chan, ast_channel_get_cc_config_params(p->owner));
 
 	if (!ast_exists_extension(NULL, p->chan->context, p->chan->exten, 1, p->owner->cid.cid_num)) {
 		ast_log(LOG_NOTICE, "No such extension/context %s@%s while calling Local channel\n", p->chan->exten, p->chan->context);
@@ -639,6 +648,14 @@ start_over:
 		}
 	}
 	ast_channel_datastore_inherit(p->owner, p->chan);
+	/* If the local channel has /n or /b on the end of it,
+	 * we need to lop that off for our argument to setting
+	 * up the CC_INTERFACES variable
+	 */
+	if ((slash = strrchr(reduced_dest, '/'))) {
+		*slash = '\0';
+	}
+	ast_set_cc_interfaces_chanvar(p->chan, reduced_dest);
 
 	/* Start switch on sub channel */
 	if (!(res = ast_pbx_start(p->chan)))
@@ -676,12 +693,12 @@ static int local_hangup(struct ast_channel *ast)
 			/* Deadlock avoidance */
 			while (p->owner && ast_channel_trylock(p->owner)) {
 				ast_mutex_unlock(&p->lock);
-				if (ast) {
-					ast_channel_unlock(ast);
+				if (p->chan) {
+					ast_channel_unlock(p->chan);
 				}
 				usleep(1);
-				if (ast) {
-					ast_channel_lock(ast);
+				if (p->chan) {
+					ast_channel_lock(p->chan);
 				}
 				ast_mutex_lock(&p->lock);
 			}
@@ -696,8 +713,17 @@ static int local_hangup(struct ast_channel *ast)
 	} else {
 		ast_module_user_remove(p->u_owner);
 		while (p->chan && ast_channel_trylock(p->chan)) {
-			DEADLOCK_AVOIDANCE(&p->lock);
+				ast_mutex_unlock(&p->lock);
+				if (p->owner) {
+					ast_channel_unlock(p->owner);
+				}
+				usleep(1);
+				if (p->owner) {
+					ast_channel_lock(p->owner);
+				}
+				ast_mutex_lock(&p->lock);
 		}
+
 		p->owner = NULL;
 		if (p->chan) {
 			ast_queue_hangup(p->chan);
@@ -878,6 +904,10 @@ static struct ast_channel *local_request(const char *type, format_t format, cons
 			AST_LIST_UNLOCK(&locals);
 			p = local_pvt_destroy(p);
 		}
+		if (ast_channel_cc_params_init(chan, requestor ? ast_channel_get_cc_config_params((struct ast_channel *)requestor) : NULL)) {
+			chan = ast_channel_release(chan);
+			p = local_pvt_destroy(p);
+		}
 	}
 
 	return chan;
@@ -920,6 +950,57 @@ static struct ast_cli_entry cli_local[] = {
 	AST_CLI_DEFINE(locals_show, "List status of local channels"),
 };
 
+static int manager_optimize_away(struct mansession *s, const struct message *m)
+{
+	const char *channel;
+	struct local_pvt *p, *tmp = NULL;
+	struct ast_channel *c;
+	int found = 0;
+
+	channel = astman_get_header(m, "Channel");
+
+	if (ast_strlen_zero(channel)) {
+		astman_send_error(s, m, "'Channel' not specified.");
+		return 0;
+	}
+
+	c = ast_channel_get_by_name(channel);
+	if (!c) {
+		astman_send_error(s, m, "Channel does not exist.");
+		return 0;
+	}
+
+	p = c->tech_pvt;
+	ast_channel_unref(c);
+	c = NULL;
+
+	if (AST_LIST_LOCK(&locals)) {
+		astman_send_error(s, m, "Unable to lock the monitor");
+		return 0;
+	}
+
+
+	AST_LIST_TRAVERSE(&locals, tmp, list) {
+		if (tmp == p) {
+			ast_mutex_lock(&tmp->lock);
+			found = 1;
+			ast_clear_flag(tmp, LOCAL_NO_OPTIMIZATION);
+			ast_mutex_unlock(&tmp->lock);
+			break;
+		}
+	}
+	AST_LIST_UNLOCK(&locals);
+
+	if (found) {
+		astman_send_ack(s, m, "Queued channel to be optimized away");
+	} else {
+		astman_send_error(s, m, "Unable to find channel");
+	}
+
+	return 0;
+}
+
+
 /*! \brief Load module into PBX, register channel */
 static int load_module(void)
 {
@@ -929,6 +1010,8 @@ static int load_module(void)
 		return AST_MODULE_LOAD_FAILURE;
 	}
 	ast_cli_register_multiple(cli_local, sizeof(cli_local) / sizeof(struct ast_cli_entry));
+	ast_manager_register_xml("LocalOptimizeAway", EVENT_FLAG_SYSTEM|EVENT_FLAG_CALL, manager_optimize_away);
+
 	return AST_MODULE_LOAD_SUCCESS;
 }
 
@@ -939,6 +1022,7 @@ static int unload_module(void)
 
 	/* First, take us out of the channel loop */
 	ast_cli_unregister_multiple(cli_local, sizeof(cli_local) / sizeof(struct ast_cli_entry));
+	ast_manager_unregister("LocalOptimizeAway");
 	ast_channel_unregister(&local_tech);
 	if (!AST_LIST_LOCK(&locals)) {
 		/* Hangup all interfaces if they have an owner */
