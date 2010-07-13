@@ -57,7 +57,7 @@
 #define DEFAULT_MAX_EXPIRY           3600
 #define DEFAULT_MWI_EXPIRY           3600
 #define DEFAULT_REGISTRATION_TIMEOUT 20
-#define DEFAULT_MAX_FORWARDS        "70"
+#define DEFAULT_MAX_FORWARDS         70
 
 /* guard limit must be larger than guard secs */
 /* guard min must be < 1000, and should be >= 250 */
@@ -704,6 +704,7 @@ struct sip_settings {
 	struct ast_ha *contact_ha;  /*! \brief Global list of addresses dynamic peers are not allowed to use */
 	format_t capability;        /*!< Supported codecs */
 	int tcp_enabled;
+	int default_max_forwards;    /*!< Default max forwards (SIP Anti-loop) */
 };
 
 /*! \brief The SIP socket definition */
@@ -954,6 +955,7 @@ struct sip_pvt {
 		AST_STRING_FIELD(dialstring);   /*!< The dialstring used to call this SIP endpoint */
 	);
 	char via[128];                          /*!< Via: header */
+	int maxforwards;                        /*!< SIP Loop prevention */
 	struct sip_socket socket;               /*!< The socket used for this dialog */
 	unsigned int ocseq;                     /*!< Current outgoing seqno */
 	unsigned int icseq;                     /*!< Current incoming seqno */
@@ -1192,6 +1194,7 @@ struct sip_peer {
 	int call_limit;                 /*!< Limit of concurrent calls */
 	int t38_maxdatagram;            /*!< T.38 FaxMaxDatagram override */
 	int busy_level;                 /*!< Level of active channels where we signal busy */
+	int maxforwards;                /*!< SIP Loop prevention */
 	enum transfermodes allowtransfer;   /*! SIP Refer restriction scheme */
 	struct ast_codec_pref prefs;    /*!<  codec prefs */
 	int lastmsgssent;
