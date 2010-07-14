@@ -3241,13 +3241,20 @@ static int retrans_pkt(const void *data)
 		pkt->retrans++;
 		if (!pkt->timer_t1) {	/* Re-schedule using timer_a and timer_t1 */
 			if (sipdebug) {
-				ast_debug(4, "SIP TIMER: Not rescheduling id #%d:%s (Method %d) (No timer T1)\n", pkt->retransid, sip_methods[pkt->method].text, pkt->method);
+				ast_debug(4, "SIP TIMER: Not rescheduling id #%d:%s (Method %d) (No timer T1)\n",
+					pkt->retransid,
+					sip_methods[pkt->method].text,
+					pkt->method);
 			}
 		} else {
 			int siptimer_a;
 
 			if (sipdebug) {
-				ast_debug(4, "SIP TIMER: Rescheduling retransmission #%d (%d) %s - %d\n", pkt->retransid, pkt->retrans, sip_methods[pkt->method].text, pkt->method);
+				ast_debug(4, "SIP TIMER: Rescheduling retransmission #%d (%d) %s - %d\n",
+					pkt->retransid,
+					pkt->retrans,
+					sip_methods[pkt->method].text,
+					pkt->method);
 			}
 			if (!pkt->timer_a) {
 				pkt->timer_a = 2 ;
@@ -3263,7 +3270,11 @@ static int retrans_pkt(const void *data)
 
 			/* Reschedule re-transmit */
 			reschedule = siptimer_a;
-			ast_debug(4, "** SIP timers: Rescheduling retransmission %d to %d ms (t1 %d ms (Retrans id #%d)) \n", pkt->retrans +1, siptimer_a, pkt->timer_t1, pkt->retransid);
+			ast_debug(4, "** SIP timers: Rescheduling retransmission %d to %d ms (t1 %d ms (Retrans id #%d)) \n",
+				pkt->retrans + 1,
+				siptimer_a,
+				pkt->timer_t1,
+				pkt->retransid);
 		}
 
 		if (sip_debug_test_pvt(pkt->owner)) {
@@ -6513,7 +6524,10 @@ static struct ast_channel *sip_new(struct sip_pvt *i, int state, const char *tit
 
 	/* Don't use ast_set_callerid() here because it will
 	 * generate an unnecessary NewCallerID event  */
-	tmp->caller.ani = ast_strdup(i->cid_num);
+	if (!ast_strlen_zero(i->cid_num)) {
+		tmp->caller.ani.number.valid = 1;
+		tmp->caller.ani.number.str = ast_strdup(i->cid_num);
+	}
 	if (!ast_strlen_zero(i->rdnis)) {
 		tmp->redirecting.from.number.valid = 1;
 		tmp->redirecting.from.number.str = ast_strdup(i->rdnis);
@@ -23835,7 +23849,7 @@ static int sip_send_mwi_to_peer(struct sip_peer *peer, const struct ast_event *e
 		return 0;
 
 	/* Do we have an IP address? If not, skip this peer */
-	if (ast_sockaddr_isnull(&peer->addr) || ast_sockaddr_isnull(&peer->defaddr))
+	if (ast_sockaddr_isnull(&peer->addr) && ast_sockaddr_isnull(&peer->defaddr))
 		return 0;
 
 	if (event) {
