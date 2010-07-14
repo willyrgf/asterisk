@@ -443,8 +443,8 @@ static u_char *ast_var_channels_table(struct variable *vp, oid *name, size_t *le
 		}
 		break;
 	case ASTCHANCIDANI:
-		if (chan->caller.ani) {
-			strncpy(string_ret, chan->caller.ani, sizeof(string_ret));
+		if (chan->caller.ani.number.valid && chan->caller.ani.number.str) {
+			strncpy(string_ret, chan->caller.ani.number.str, sizeof(string_ret));
 			string_ret[sizeof(string_ret) - 1] = '\0';
 			*var_len = strlen(string_ret);
 			ret = (u_char *)string_ret;
@@ -459,7 +459,7 @@ static u_char *ast_var_channels_table(struct variable *vp, oid *name, size_t *le
 		}
 		break;
 	case ASTCHANCIDPRES:
-		long_ret = ast_party_id_presentation(chan->caller.id);
+		long_ret = ast_party_id_presentation(&chan->caller.id);
 		ret = (u_char *)&long_ret;
 		break;
 	case ASTCHANCIDANI2:
