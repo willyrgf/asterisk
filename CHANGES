@@ -72,6 +72,13 @@ MGCP Changes
 
 Applications
 ------------
+ * Added "ready" option to QUEUE_MEMBER counting to count free agents who's wrap-up
+   timeout has expired.
+ * Added 'R' option to app_queue.  This option stops moh and indicates ringing
+   to the caller when an Agent's phone is ringing.  This can be used to indicate
+   to the caller that their call is about to be picked up, which is nice when
+   one has been on hold for an extened period of time.
+ * Added .m3u support for Mp3Player application.
  * Added progress option to the app_dial D() option.  When progress DTMF is
    present, those values are sent immediately upon receiving a PROGRESS message
    regardless if the call has been answered or not.
@@ -81,12 +88,16 @@ Applications
    announcements or macros are executed.
  * Modified app_dial to set answertime when the called channel answers even if
    the called channel hangs up during playback of an announcement.
+ * Modified app_dial 'r' option to support an additional parameter to play an
+   indication tone from indications.conf
  * Added c() option to app_chanspy. This option allows custom DTMF to be set
    to cycle through the next available channel.  By default this is still '*'.
  * Added x() option to app_chanspy.  This option allows DTMF to be set to
    exit the application.
  * The Voicemail application has been improved to automatically ignore messages
    that only contain silence.
+ * If you set maxmsg to 0 in voicemail.conf, Voicemail will consider the
+   associated mailbox(es) to be greetings-only.
  * The ChanSpy application now has the 'S' option, which makes the application
    automatically exit once it hits a point where no more channels are available
    to spy on.
@@ -101,6 +112,25 @@ Applications
    configuration for more information.
  * The ChanIsAvail application now exposes the returned cause code using a separate
    variable, AVAILCAUSECODE, instead of overwriting the device state in AVAILSTATUS.
+ * Added 'd' option to app_followme.  This option disables the "Please hold"
+   announcement.
+ * Added 'y' option to app_record. This option enables a mode where any DTMF digit
+   received will terminate recording.
+ * Voicemail now supports per mailbox settings for folders when using IMAP storage.
+   Previously the folder could only be set per context, but has now been extended 
+   using the imapfolder option.
+ * Voicemail now allows the pager date format to be specified separately from the
+   email date format.
+ * New applications JabberJoin, JabberLeave, and JabberSendGroup have been added
+   to allow joining, leaving, and sending text to group chats.
+ * MeetMe has a new option 'G' to play an announcement before joining a conference.
+ * Page has a new option 'A(x)' which will playback an announcement simultaneously
+   to all paged phones (and optionally excluding the caller's one using the new
+   option 'n') before the call is bridged.
+ * The 'f' option to Dial has been augmented to take an optional argument. If no
+   argument is provided, the 'f' option works as it always has. If an argument is
+   provided, then the connected party information of all outgoing channels created
+   during the Dial will be set to the argument passed to the 'f' option.
 
 Dialplan Functions
 ------------------
@@ -146,8 +176,16 @@ Dialplan Functions
    mode=multirow.  If rowlimit is set, then additional rows may be retrieved
    from the same query by using the name of the function which retrieved the
    first row as an argument to ODBC_FETCH().
-  * Added JABBER_RECEIVE, which permits receiving XMPP messages from the
-    dialplan. This function returns the content of the received message.
+ * Added JABBER_RECEIVE, which permits receiving XMPP messages from the
+   dialplan. This function returns the content of the received message.
+ * Added REPLACE, which searches a given variable name for a set of characters,
+   then either replaces them with a single character or deletes them.
+ * Added PASSTHRU, which literally passes the same argument back as its return
+   value.  The intent is to be able to use a literal string argument to
+   functions that currently require a variable name as an argument.
+ * HASH-associated variables now can be inherited across channel creation, by
+   prefixing the name of the hash at assignment with the appropriate number of
+   underscores, just like variables.
 
 Dialplan Variables
 ------------------
@@ -157,6 +195,9 @@ Dialplan Variables
 
 Queue changes
 -------------
+  * A new config option, penaltymemberslimit, has been added to queues.conf.
+    When set this option will disregard penalty settings when a queue has too
+    few members.
   * A new option, 'I' has been added to both app_queue and app_dial.
     By setting this option, Asterisk will not update the caller with
     connected line changes or redirecting party changes when they occur.
@@ -277,6 +318,12 @@ Asterisk Manager Interface
    but options with the 'tls' prefix are preferred.
  * Added a MuteAudio AMI action for muting inbound and/or outbound audio
    in a channel. (res_mutestream.so)
+ * The configuration file manager.conf now supports a channelvars option, which
+   specifies a list of channel variables to include in each channel-oriented
+   event.
+ * The redirect command now has new parameters ExtraContext, ExtraExtension, 
+   and ExtraPriority to allow redirecting the second channel to a different
+   location than the first.
 
 Channel Event Logging
 ---------------------
@@ -290,7 +337,7 @@ Channel Event Logging
 
 CDR
 ---
- * 'linkedid' and 'peeraccount' are new CDR fields available to CDR officianados.
+ * 'linkedid' and 'peeraccount' are new CDR fields available to CDR aficionados.
    linkedid is based on uniqueID, but spreads to other channels as transfers, dials,
    etc are performed. Thus the peices of CDR can be grouped into multilegged sets.
  * Multiple files and formats can now be specified in cdr_custom.conf.
@@ -327,12 +374,21 @@ Security Events Framework
 
 Miscellaneous
 -------------
+ * The transmit_silence_during_record option in asterisk.conf.sample has been removed.
+   Now, in order to enable transmitting silence during record the transmit_silence
+   option should be used.  transmit_silence_during_record remains a valid option, but
+   defaults to the behavior of the transmit_silence option.
+ * Addition of the Unit Test Framework API for managing registration and execution
+   of unit tests with the purpose of verifying the operation of C functions.
  * SendText is now implemented in chan_gtalk and chan_jingle. It will simply send
    XMPP text messages to the remote JID.
  * Modules.conf has a new option - "require" - that marks a module as critical for 
    the execution of Asterisk.
    If one of the required modules fail to load, Asterisk will exit with a return
-   code set to 2. 
+   code set to 2.
+ * An 'X' option has been added to the asterisk application which enables #exec support.
+   This allows #exec to be used in asterisk.conf.
+ * jabber.conf supports a new option auth_policy that toggles auto user registration.
 
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 1.6.1 to Asterisk 1.6.2  -------------
@@ -343,17 +399,12 @@ SIP Changes
  * Added support for SUBSCRIBE/NOTIFY with dialog-info based call pickups.
    Snom phones use this for call pickup of extensions that the phone is
    subscribed to.
- * Added support for subscribing to a voice mailbox on a remote server and
-   making the new/old message count available to local devices.
  * Added support for setting the domain in the URI for caller of an
    outbound call by using the SIPFROMDOMAIN channel variable.
  * Added a new configuration option "remotesecret" for authentication to
    remote services. For backwards compatibility, "secret" still has the
    same function as before, but now you can configure both a remote secret and a
    local secret for mutual authentication.
- * Added a new 'faxdetect=yes|no' configuration option to sip.conf.  When this
-   option is enabled, a SIP channel will go to the fax extension (if it exists)
-   after T38 is negotiated.  This option is disabled by default.
  * If the channel variable  ATTENDED_TRANSFER_COMPLETE_SOUND is set, 
    the sound will be played to the target of an attended transfer
  * Added two new configuration options, "qualifygap" and "qualifypeers", which allow
@@ -420,9 +471,8 @@ Dialplan Functions
    and FIELDQTY dialplan functions, which also manage lists.
  * Added REALTIME_FIELD and REALTIME_HASH, which should aid users in better
    obtaining realtime data from the dialplan.
- * Added LOCAL_PEEK, which I have no idea how to use, but Leif Madsen wanted it.
-   Russell says it's, like, a scope resolution function for LOCAL variables.
-   Totally.  Hopefully, that means more to you than it does to me.
+ * Added LOCAL_PEEK, which allows access to variables in any stack frame within
+   a subroutine when using the GoSub() and Return() applications.
  * Added AUDIOHOOK_INHERIT. For information on its use, please see the output
    of "core show function AUDIOHOOK_INHERIT" from the CLI
  * Added AES_ENCRYPT. For information on its use, please see the output
@@ -433,8 +483,6 @@ Dialplan Functions
 
 Applications
 ------------
- * DAHDISendCallreroutingFacility parameters are now comma-separated,
-   instead of the old pipe.
  * Scheduled meetme conferences may now have their end times extended by
    using MeetMeAdmin.
  * app_authenticate now gives the ability to select a prompt other than
@@ -454,9 +502,6 @@ Miscellaneous
 -------------
  * The Asterisk CLI has a new command, "channel redirect", which is similar in
    operation to the AMI Redirect action.
- * res_jabber: autoprune has been disabled by default, to avoid misconfiguration 
-   that would end up being interpreted as a bug once Asterisk started removing 
-   the contacts from a user list.
  * extensions.conf now allows you to use keyword "same" to define an extension
    without actually specifying an extension.  It uses exactly the same pattern
    as previously used on the last "exten" line.  For example:
@@ -862,6 +907,10 @@ CLI Changes
 
 SIP changes
 -----------
+ * Added a new 'faxdetect=yes|no' configuration option to sip.conf.  When this
+    option is enabled, Asterisk will watch for a CNG tone in the incoming audio
+    for a received call.  If it is detected, the channel will jump to the 
+    'fax' extension in the dialplan.
   * Improved NAT and STUN support.
      chan_sip now can use port numbers in bindaddr, externip and externhost
      options, as well as contact a STUN server to detect its external address
@@ -1276,6 +1325,11 @@ AGI Changes
   * If app_stack is loaded, GOSUB is a native AGI command that may be used to
     invoke subroutines in the dialplan.  Note that calling EXEC with Gosub
     does not behave as expected; the native command needs to be used, instead.
+  * Added the ability to perform SRV lookups on fast AGI calls. To use this
+    feature, simply use hagi: instead of agi: as the protocol portion
+    of the URI parameter to the AGI function call in your dial plan. Also note
+    that specifying a port number in the AGI URI will disable SRV lookups,
+    even if you use the hagi: protocol.
 
 Logger changes
 --------------

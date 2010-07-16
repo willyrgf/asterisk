@@ -479,6 +479,7 @@ int ast_check_hangup(struct ast_channel *chan)
 		return 0;
 	if (ast_tvdiff_ms(chan->whentohangup, ast_tvnow()) > 0) 	/* no if hangup time has not come yet. */
 		return 0;
+	ast_debug(4, "Hangup time has come: %" PRIi64 "\n", ast_tvdiff_ms(chan->whentohangup, ast_tvnow()));
 	chan->_softhangup |= AST_SOFTHANGUP_TIMEOUT;	/* record event */
 	return 1;
 }
@@ -978,7 +979,7 @@ alertpipe_failed:
 	 * a lot of data into this func to do it here!
 	 */
 	if (!ast_strlen_zero(name_fmt)) {
-		manager_event(EVENT_FLAG_CALL, "Newchannel",
+		ast_manager_event(tmp, EVENT_FLAG_CALL, "Newchannel",
 			"Channel: %s\r\n"
 			"ChannelState: %d\r\n"
 			"ChannelStateDesc: %s\r\n"
@@ -1084,6 +1085,7 @@ static int __ast_queue_frame(struct ast_channel *chan, struct ast_frame *fin, in
 	for (cur = fin; cur; cur = AST_LIST_NEXT(cur, frame_list)) {
 		if (!(f = ast_frdup(cur))) {
 			ast_frfree(AST_LIST_FIRST(&frames));
+			ast_channel_unlock(chan);
 			return -1;
 		}
 
@@ -1321,12 +1323,12 @@ static int ast_channel_cmp_cb(void *obj, void *arg, int flags)
 
 	ast_channel_lock(chan);
 
-	if (cmp_args->name) { /* match by name */
+	if (!ast_strlen_zero(cmp_args->name)) { /* match by name */
 		if ((!name_len && strcasecmp(chan->name, cmp_args->name)) ||
 				(name_len && strncasecmp(chan->name, cmp_args->name, name_len))) {
 			ret = 0; /* name match failed */
 		}
-	} else if (cmp_args->exten) {
+	} else if (!ast_strlen_zero(cmp_args->exten)) {
 		if (cmp_args->context && strcasecmp(chan->context, cmp_args->context) &&
 				strcasecmp(chan->macrocontext, cmp_args->context)) {
 			ret = 0; /* context match failed */
@@ -1335,11 +1337,13 @@ static int ast_channel_cmp_cb(void *obj, void *arg, int flags)
 				strcasecmp(chan->macroexten, cmp_args->exten)) {
 			ret = 0; /* exten match failed */
 		}
-	} else if (cmp_args->uniqueid) {
+	} else if (!ast_strlen_zero(cmp_args->uniqueid)) {
 		if ((!name_len && strcasecmp(chan->uniqueid, cmp_args->uniqueid)) ||
 				(name_len && strncasecmp(chan->uniqueid, cmp_args->uniqueid, name_len))) {
 			ret = 0; /* uniqueid match failed */
 		}
+	} else {
+		ret = 0;
 	}
 
 	ast_channel_unlock(chan);
@@ -1408,21 +1412,39 @@ struct ast_channel *ast_channel_get_by_exten(const char *exten, const char *cont
 int ast_safe_sleep_conditional(struct ast_channel *chan, int ms, int (*cond)(void*), void *data)
 {
 	struct ast_frame *f;
+	struct ast_silence_generator *silgen = NULL;
+	int res = 0;
+
+	/* If no other generator is present, start silencegen while waiting */
+	if (ast_opt_transmit_silence && !chan->generatordata) {
+		silgen = ast_channel_start_silence_generator(chan);
+	}
 
 	while (ms > 0) {
-		if (cond && ((*cond)(data) == 0))
-			return 0;
+		if (cond && ((*cond)(data) == 0)) {
+			break;
+		}
 		ms = ast_waitfor(chan, ms);
-		if (ms < 0)
-			return -1;
+		if (ms < 0) {
+			res = -1;
+			break;
+		}
 		if (ms > 0) {
 			f = ast_read(chan);
-			if (!f)
-				return -1;
+			if (!f) {
+				res = -1;
+				break;
+			}
 			ast_frfree(f);
 		}
 	}
-	return 0;
+
+	/* stop silgen if present */
+	if (silgen) {
+		ast_channel_stop_silence_generator(chan, silgen);
+	}
+
+	return res;
 }
 
 /*! \brief Wait, look for hangups */
@@ -2138,7 +2160,6 @@ void ast_set_hangupsource(struct ast_channel *chan, const char *source, int forc
 int ast_hangup(struct ast_channel *chan)
 {
 	int res = 0;
-	struct ast_cdr *cdr = NULL;
 	char extra_str[64]; /* used for cel logging below */
 
 	/* Don't actually hang up a channel that will masquerade as someone else, or
@@ -2202,11 +2223,6 @@ int ast_hangup(struct ast_channel *chan)
 	snprintf(extra_str, sizeof(extra_str), "%d,%s,%s", chan->hangupcause, chan->hangupsource, S_OR(pbx_builtin_getvar_helper(chan, "DIALSTATUS"), ""));
 	ast_cel_report_event(chan, AST_CEL_HANGUP, NULL, extra_str, NULL);
 
-	if (chan->cdr) {		/* End the CDR if it hasn't already */
-		ast_cdr_end(chan->cdr);
-		cdr = chan->cdr;
-		chan->cdr = NULL;
-	}
 	if (ast_test_flag(chan, AST_FLAG_BLOCKING)) {
 		ast_log(LOG_WARNING, "Hard hangup called by thread %ld on %s, while fd "
 					"is blocked by thread %ld in procedure %s!  Expect a failure\n",
@@ -2222,7 +2238,7 @@ int ast_hangup(struct ast_channel *chan)
 	}
 			
 	ast_channel_unlock(chan);
-	manager_event(EVENT_FLAG_CALL, "Hangup",
+	ast_manager_event(chan, EVENT_FLAG_CALL, "Hangup",
 			"Channel: %s\r\n"
 			"Uniqueid: %s\r\n"
 			"CallerIDNum: %s\r\n"
@@ -2974,9 +2990,9 @@ int ast_waitfordigit_full(struct ast_channel *c, int ms, int audiofd, int cmdfd)
 	return 0; /* Time is up */
 }
 
-static void send_dtmf_event(const struct ast_channel *chan, const char *direction, const char digit, const char *begin, const char *end)
+static void send_dtmf_event(struct ast_channel *chan, const char *direction, const char digit, const char *begin, const char *end)
 {
-	manager_event(EVENT_FLAG_DTMF,
+	ast_manager_event(chan, EVENT_FLAG_DTMF,
 			"DTMF",
 			"Channel: %s\r\n"
 			"Uniqueid: %s\r\n"
@@ -3517,6 +3533,17 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 	if (chan->fin & DEBUGCHAN_FLAG)
 		ast_frame_dump(chan->name, f, "<<");
 	chan->fin = FRAMECOUNT_INC(chan->fin);
+
+	if (f && f->frametype == AST_FRAME_CONTROL && f->subclass.integer == AST_CONTROL_HOLD && f->datalen == 0 && f->data.ptr) {
+		/* fix invalid pointer */
+		f->data.ptr = NULL;
+#ifdef AST_DEVMODE
+		ast_log(LOG_ERROR, "Found HOLD frame with src '%s' on channel '%s' with datalen zero, but non-null data pointer!\n", f->src, chan->name);
+		ast_frame_dump(chan->name, f, "<<");
+#else
+		ast_debug(3, "Found HOLD frame with src '%s' on channel '%s' with datalen zero, but non-null data pointer!\n", f->src, chan->name);
+#endif
+	}
 
 done:
 	if (chan->music_state && chan->generator && chan->generator->digit && f && f->frametype == AST_FRAME_DTMF_END)
@@ -4554,8 +4581,10 @@ int ast_call(struct ast_channel *chan, char *addr, int timeout)
 	/* Stop if we're a zombie or need a soft hangup */
 	ast_channel_lock(chan);
 	if (!ast_test_flag(chan, AST_FLAG_ZOMBIE) && !ast_check_hangup(chan)) {
-		if (chan->cdr)
+		if (chan->cdr) {
 			ast_set_flag(chan->cdr, AST_CDR_FLAG_DIALED);
+			ast_set_flag(chan->cdr, AST_CDR_FLAG_ORIGINATED);
+		}
 		if (chan->tech->call)
 			res = chan->tech->call(chan, addr, timeout);
 		ast_set_flag(chan, AST_FLAG_OUTGOING);
@@ -4587,7 +4616,7 @@ int ast_transfer(struct ast_channel *chan, char *dest)
 	}
 	ast_channel_unlock(chan);
 
-	if (res < 0) {
+	if (res <= 0) {
 		return res;
 	}
 
@@ -4839,7 +4868,7 @@ retrymasq:
  */
 static void __ast_change_name_nolink(struct ast_channel *chan, const char *newname)
 {
-	manager_event(EVENT_FLAG_CALL, "Rename", "Channel: %s\r\nNewname: %s\r\nUniqueid: %s\r\n", chan->name, newname, chan->uniqueid);
+	ast_manager_event(chan, EVENT_FLAG_CALL, "Rename", "Channel: %s\r\nNewname: %s\r\nUniqueid: %s\r\n", chan->name, newname, chan->uniqueid);
 	ast_string_field_set(chan, name, newname);
 }
 
@@ -5078,9 +5107,9 @@ static void ast_set_owners_and_peers(struct ast_channel *chan1,
 /*!
  * \pre chan is locked
  */
-static void report_new_callerid(const struct ast_channel *chan)
+static void report_new_callerid(struct ast_channel *chan)
 {
-	manager_event(EVENT_FLAG_CALL, "NewCallerid",
+	ast_manager_event(chan, EVENT_FLAG_CALL, "NewCallerid",
 				"Channel: %s\r\n"
 				"CallerIDNum: %s\r\n"
 				"CallerIDName: %s\r\n"
@@ -5116,7 +5145,7 @@ int ast_do_masquerade(struct ast_channel *original)
 		struct ast_party_connected_line connected;
 		struct ast_party_redirecting redirecting;
 	} exchange;
-	struct ast_channel *clonechan;
+	struct ast_channel *clonechan, *chans[2];
 	struct ast_cdr *cdr;
 	format_t rformat = original->readformat;
 	format_t wformat = original->writeformat;
@@ -5180,7 +5209,9 @@ int ast_do_masquerade(struct ast_channel *original)
 	ast_debug(4, "Actually Masquerading %s(%d) into the structure of %s(%d)\n",
 		clonechan->name, clonechan->_state, original->name, original->_state);
 
-	manager_event(EVENT_FLAG_CALL, "Masquerade", "Clone: %s\r\nCloneState: %s\r\nOriginal: %s\r\nOriginalState: %s\r\n",
+	chans[0] = clonechan;
+	chans[1] = original;
+	ast_manager_event_multichan(EVENT_FLAG_CALL, "Masquerade", 2, chans, "Clone: %s\r\nCloneState: %s\r\nOriginal: %s\r\nOriginalState: %s\r\n",
 		      clonechan->name, ast_state2str(clonechan->_state), original->name, ast_state2str(original->_state));
 
 	/* Having remembered the original read/write formats, we turn off any translation on either
@@ -5327,7 +5358,7 @@ int ast_do_masquerade(struct ast_channel *original)
 	/* XXX What about blocking, softhangup, blocker, and lock and blockproc? XXX */
 	/* Application and data remain the same */
 	/* Clone exception  becomes real one, as with fdno */
-	ast_copy_flags(original, clonechan, AST_FLAG_EXCEPTION | AST_FLAG_OUTGOING);
+	ast_set_flag(original, ast_test_flag(clonechan, AST_FLAG_EXCEPTION | AST_FLAG_OUTGOING));
 	original->fdno = clonechan->fdno;
 	/* Schedule context remains the same */
 	/* Stream stuff stays the same */
@@ -5409,7 +5440,7 @@ int ast_do_masquerade(struct ast_channel *original)
 	if (ast_test_flag(clonechan, AST_FLAG_ZOMBIE)) {
 		ast_debug(1, "Destroying channel clone '%s'\n", clonechan->name);
 		ast_channel_unlock(clonechan);
-		manager_event(EVENT_FLAG_CALL, "Hangup",
+		ast_manager_event(clonechan, EVENT_FLAG_CALL, "Hangup",
 			"Channel: %s\r\n"
 			"Uniqueid: %s\r\n"
 			"Cause: %d\r\n"
@@ -5491,8 +5522,7 @@ int ast_setstate(struct ast_channel *chan, enum ast_channel_state state)
 	ast_devstate_changed_literal(AST_DEVICE_UNKNOWN, name);
 
 	/* setstate used to conditionally report Newchannel; this is no more */
-	manager_event(EVENT_FLAG_CALL,
-		      "Newstate",
+	ast_manager_event(chan, EVENT_FLAG_CALL, "Newstate",
 		      "Channel: %s\r\n"
 		      "ChannelState: %d\r\n"
 		      "ChannelStateDesc: %s\r\n"
@@ -5759,7 +5789,8 @@ int ast_channel_early_bridge(struct ast_channel *c0, struct ast_channel *c1)
 */
 static void manager_bridge_event(int onoff, int type, struct ast_channel *c0, struct ast_channel *c1)
 {
-	manager_event(EVENT_FLAG_CALL, "Bridge",
+	struct ast_channel *chans[2] = { c0, c1 };
+	ast_manager_event_multichan(EVENT_FLAG_CALL, "Bridge", 2, chans,
 			"Bridgestate: %s\r\n"
 			"Bridgetype: %s\r\n"
 			"Channel1: %s\r\n"
@@ -5843,7 +5874,7 @@ static void bridge_play_sounds(struct ast_channel *c0, struct ast_channel *c1)
 enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_channel *c1,
 					  struct ast_bridge_config *config, struct ast_frame **fo, struct ast_channel **rc)
 {
-	struct ast_channel *who = NULL;
+	struct ast_channel *who = NULL, *chans[2] = { c0, c1 };
 	enum ast_bridge_result res = AST_BRIDGE_COMPLETE;
 	int nativefailed=0;
 	format_t o0nativeformats;
@@ -6017,7 +6048,7 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 			ast_set_flag(c0, AST_FLAG_NBRIDGE);
 			ast_set_flag(c1, AST_FLAG_NBRIDGE);
 			if ((res = c0->tech->bridge(c0, c1, config->flags, fo, rc, to)) == AST_BRIDGE_COMPLETE) {
-				manager_event(EVENT_FLAG_CALL, "Unlink",
+				ast_manager_event_multichan(EVENT_FLAG_CALL, "Unlink", 2, chans,
 					      "Channel1: %s\r\n"
 					      "Channel2: %s\r\n"
 					      "Uniqueid1: %s\r\n"
@@ -6089,7 +6120,7 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 	c0->_bridge = NULL;
 	c1->_bridge = NULL;
 
-	manager_event(EVENT_FLAG_CALL, "Unlink",
+	ast_manager_event_multichan(EVENT_FLAG_CALL, "Unlink", 2, chans,
 		      "Channel1: %s\r\n"
 		      "Channel2: %s\r\n"
 		      "Uniqueid1: %s\r\n"

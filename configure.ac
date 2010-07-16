@@ -390,7 +390,7 @@ AC_FUNC_STRNLEN
 AC_FUNC_STRTOD
 AC_FUNC_UTIME_NULL
 AC_FUNC_VPRINTF
-AC_CHECK_FUNCS([asprintf atexit closefrom dup2 eaccess endpwent euidaccess ftruncate getcwd gethostbyname gethostname getloadavg gettimeofday glob htonll ioperm inet_ntoa isascii localtime_r memchr memmove memset mkdir munmap ntohll putenv re_comp regcomp select setenv socket strcasecmp strcasestr strchr strcspn strdup strerror strlcat strlcpy strncasecmp strndup strnlen strrchr strsep strspn strstr strtod strtol strtold strtoq unsetenv utime vasprintf getpeereid sysctl swapctl])
+AC_CHECK_FUNCS([asprintf atexit closefrom dup2 eaccess endpwent euidaccess ffsll ftruncate getcwd gethostbyname gethostname getloadavg gettimeofday glob htonll ioperm inet_ntoa isascii localtime_r memchr memmove memset mkdir munmap ntohll putenv re_comp regcomp select setenv socket strcasecmp strcasestr strchr strcspn strdup strerror strlcat strlcpy strncasecmp strndup strnlen strrchr strsep strspn strstr strtod strtol strtold strtoq unsetenv utime vasprintf getpeereid sysctl swapctl])
 
 # NOTE: we use AC_CHECK_LIB to get -lm into the arguments for later checks,
 # so that AC_CHECK_FUNCS can detect functions in that library.
@@ -526,6 +526,27 @@ AC_LINK_IFELSE(
 )
 if test "${ac_cv_pthread_rwlock_timedwrlock}" = "yes"; then
   AC_DEFINE([HAVE_PTHREAD_RWLOCK_TIMEDWRLOCK], 1, [Define if your system has pthread_rwlock_timedwrlock()])
+fi
+
+AC_MSG_CHECKING(if PTHREAD_ONCE_INIT needs braces)
+saved_CFLAGS="${CFLAGS}"
+CFLAGS="${CFLAGS} -Werror -Wmissing-braces"
+AC_COMPILE_IFELSE(
+  [AC_LANG_PROGRAM(
+    [#include <pthread.h>
+     void empty(){}],
+	[pthread_once_t once = PTHREAD_ONCE_INIT; pthread_once(&once, empty);])
+  ],[
+    AC_MSG_RESULT(no)
+    ac_cv_pthread_once_needsbraces="no"
+  ],[
+    AC_MSG_RESULT(yes)
+    ac_cv_pthread_once_needsbraces="yes"
+  ]
+)
+CFLAGS="${saved_CFLAGS}"
+if test "${ac_cv_pthread_once_needsbraces}" = "yes"; then
+  AC_DEFINE([PTHREAD_ONCE_INIT_NEEDS_BRACES], 1, [Define if your system needs braces around PTHREAD_ONCE_INIT])
 fi
 
 AST_C_DEFINE_CHECK([PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP], [PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP], [pthread.h])
@@ -1588,7 +1609,7 @@ fi
 
 if test "$PBX_OPENSSL" = "1";
 then
-    AST_CHECK_OSPTK([3], [5], [0])
+    AST_CHECK_OSPTK([3], [6], [0])
 fi
 
 AST_EXT_TOOL_CHECK([GMIME], [gmime-config], [], [], [#include <gmime/gmime.h>], [gboolean q = g_mime_check_version(0,0,0);])
@@ -1674,7 +1695,7 @@ elif test "x$CURSES_LIB" != "x" ; then
 elif test "x$NCURSES_LIB" != "x" ; then
   EDITLINE_LIB="$NCURSES_LIB"
 else
-  AC_MSG_ERROR(*** termcap support not found)
+  AC_MSG_ERROR([*** termcap support not found (on modern systems, this typically means the ncurses development package is missing)])
 fi
 AC_SUBST(EDITLINE_LIB)
 
@@ -1705,6 +1726,10 @@ AC_CHECK_HEADER([linux/ixjuser.h], [PBX_IXJUSER=1], [PBX_IXJUSER=0], [
 				   #endif
 				   ])
 AC_SUBST(PBX_IXJUSER)
+
+# Used in res/res_pktccops
+AST_C_DEFINE_CHECK([MSG_NOSIGNAL], [MSG_NOSIGNAL], [sys/socket.h])
+AST_C_DEFINE_CHECK([SO_NOSIGPIPE], [SO_NOSIGPIPE], [sys/socket.h])
 
 AST_EXT_TOOL_CHECK([SDL], [sdl-config])
 AST_EXT_LIB_CHECK([SDL_IMAGE], [SDL_image], [IMG_Load], [SDL_image.h], [${SDL_LIB}], [${SDL_INCLUDE}])

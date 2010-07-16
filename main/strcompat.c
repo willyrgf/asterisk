@@ -22,6 +22,10 @@
 #include "asterisk.h"
 
 #include <ctype.h>
+#include <sys/time.h>       /* for getrlimit(2) */
+#include <sys/resource.h>   /* for getrlimit(2) */
+#include <sys/types.h>      /* for opendir(3) */
+#include <dirent.h>         /* for opendir(3) */
 
 #ifndef HAVE_STRSEP
 char *strsep(char **str, const char *delims)
@@ -383,6 +387,49 @@ uint64_t htonll(uint64_t host64)
 #else
 	#error "Unknown byte order"
 #endif
+}
+#endif
+
+#ifndef HAVE_FFSLL
+int ffsll(long long n)
+{
+	int i;
+	for (i = 0; i < 64; i++) {
+		if ((1LL << i) & n) {
+			return i + 1;
+		}
+	}
+	return 0;
+}
+#endif
+
+#ifndef HAVE_CLOSEFROM
+void closefrom(int n)
+{
+	long x;
+	struct rlimit rl;
+	DIR *dir;
+	char path[16], *result;
+	struct dirent *entry;
+
+	snprintf(path, sizeof(path), "/proc/%d/fd", (int) getpid());
+	if ((dir = opendir(path))) {
+		while ((entry = readdir(dir))) {
+			/* Skip . and .. */
+			if (entry->d_name[0] == '.') {
+				continue;
+			}
+			if ((x = strtol(entry->d_name, &result, 10)) && x >= n) {
+				close(x);
+			}
+		}
+		closedir(dir);
+	} else {
+		getrlimit(RLIMIT_NOFILE, &rl);
+		for (x = n; x < rl.rlim_cur; x++) {
+			close(x);
+		}
+	}
 }
 #endif
 

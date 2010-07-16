@@ -323,6 +323,7 @@ struct ast_rtp_instance *ast_rtp_instance_new(const char *engine_name, struct sc
 	instance->local_address.sin_family = AF_INET;
 	instance->local_address.sin_addr = sin->sin_addr;
 	instance->remote_address.sin_family = AF_INET;
+	address.sin_family = AF_INET;
 	address.sin_addr = sin->sin_addr;
 
 	ast_debug(1, "Using engine '%s' for RTP instance '%p'\n", engine->name, instance);
@@ -1585,7 +1586,7 @@ int ast_rtp_instance_make_compatible(struct ast_channel *chan, struct ast_rtp_in
 	return res;
 }
 
-format_t ast_rtp_instance_available_formats(struct ast_rtp_instance *instance, int to_endpoint, int to_asterisk)
+format_t ast_rtp_instance_available_formats(struct ast_rtp_instance *instance, format_t to_endpoint, format_t to_asterisk)
 {
 	format_t formats;
 

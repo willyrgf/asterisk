@@ -248,7 +248,7 @@ static void phase_e_handler(t30_state_t *f, void *user_data, int result)
 	ast_debug(1, "  Image resolution:  %d x %d\n", stat.x_resolution, stat.y_resolution);
 	ast_debug(1, "  Transfer Rate:     %d\n", stat.bit_rate);
 	
-	manager_event(EVENT_FLAG_CALL,
+	ast_manager_event(s->chan, EVENT_FLAG_CALL,
 		      s->direction ? "FaxSent" : "FaxReceived", 
 		      "Channel: %s\r\n"
 		      "Exten: %s\r\n"
@@ -370,7 +370,7 @@ static int transmit_audio(fax_session *s)
 	enum ast_t38_state t38_state;
 	struct ast_control_t38_parameters t38_parameters = { .version = 0,
 							     .max_ifp = 800,
-							     .rate = AST_T38_RATE_9600,
+							     .rate = AST_T38_RATE_14400,
 							     .rate_management = AST_T38_RATE_MANAGEMENT_TRANSFERRED_TCF,
 							     .fill_bit_removal = 1,
 							     .transcoding_mmr = 1,
@@ -598,7 +598,6 @@ static int transmit_t38(fax_session *s)
 	struct timeval now, start, state_change, last_frame;
 	t30_state_t *t30state;
 	t38_core_state_t *t38state;
-	struct ast_control_t38_parameters t38_parameters = { .request_response = AST_T38_REQUEST_TERMINATE, };
 
 #if SPANDSP_RELEASE_DATE >= 20080725
 	/* for spandsp shaphots 0.0.6 and higher */
@@ -706,7 +705,13 @@ static int transmit_t38(fax_session *s)
 	t38_terminal_release(&t38);
 
 disable_t38:
-	if (ast_channel_get_t38_state(s->chan) == T38_STATE_NEGOTIATED) {
+	/* if we are not the caller, it's our job to shut down the T.38
+	 * session when the FAX transmisson is complete.
+	 */
+	if ((s->caller_mode == FALSE) &&
+	    (ast_channel_get_t38_state(s->chan) == T38_STATE_NEGOTIATED)) {
+		struct ast_control_t38_parameters t38_parameters = { .request_response = AST_T38_REQUEST_TERMINATE, };
+
 		if (ast_indicate_data(s->chan, AST_CONTROL_T38_PARAMETERS, &t38_parameters, sizeof(t38_parameters)) == 0) {
 			/* wait up to five seconds for negotiation to complete */
 			unsigned int timeout = 5000;
@@ -738,7 +743,7 @@ disable_t38:
 					struct ast_control_t38_parameters *parameters = inf->data.ptr;
 					
 					switch (parameters->request_response) {
-					case AST_T38_NEGOTIATED:
+					case AST_T38_TERMINATED:
 						ast_debug(1, "Shut down T.38 on %s\n", s->chan->name);
 						break;
 					case AST_T38_REFUSED:

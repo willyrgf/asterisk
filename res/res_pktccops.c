@@ -21,7 +21,18 @@
  * \brief PacketCable COPS
  * 
  * \author Attila Domjan <attila.domjan.hu@gmail.com>
+ *
+ * \note 
+ * This module is an add-on to chan_mgcp. It adds support for the
+ * PacketCable MGCP variation called NCS. Res_pktccops implements COPS
+ * (RFC 2748), a protocol used to manage dynamic bandwith allocation in
+ * CMTS's (HFC gateways). When you use NCS, you need to talk COPS with
+ * the CMTS to complete the calls.
  */
+
+/*** MODULEINFO
+        <defaultenabled>no</defaultenabled>
+ ***/
 
 #include "asterisk.h"
 
@@ -425,11 +436,17 @@ static int cops_sendmsg (int sfd, struct copsmsg * sendmsg)
 	}
 	
 	errno = 0;
-	if (send(sfd, buf, sendmsg->length, MSG_NOSIGNAL | MSG_DONTWAIT ) == -1) {
+#ifdef HAVE_MSG_NOSIGNAL
+#define	SENDFLAGS	MSG_NOSIGNAL | MSG_DONTWAIT
+#else
+#define	SENDFLAGS	MSG_DONTWAIT
+#endif
+	if (send(sfd, buf, sendmsg->length, SENDFLAGS) == -1) {
 		ast_log(LOG_WARNING, "COPS: Send failed errno=%i\n", errno);
 		free(buf);
 		return -2;
 	}
+#undef SENDFLAGS
 	free(buf);
 	return 0;
 }
@@ -636,6 +653,9 @@ static int cops_connect(char *host, char *port)
 	struct addrinfo hints;
 	struct addrinfo *rp;
 	struct addrinfo *result;
+#ifdef HAVE_SO_NOSIGPIPE
+	int trueval = 1;
+#endif
 
 	memset(&hints, 0, sizeof(struct addrinfo));
 
@@ -657,6 +677,9 @@ static int cops_connect(char *host, char *port)
 		}
 		flags = fcntl(sfd, F_GETFL);
 		fcntl(sfd, F_SETFL, flags | O_NONBLOCK);
+#ifdef HAVE_SO_NOSIGPIPE
+		setsockopt(sfd, SOL_SOCKET, SO_NOSIGPIPE, &trueval, sizeof(trueval));
+#endif
 		connect(sfd, rp->ai_addr, rp->ai_addrlen);
 		if (sfd == -1) {
 			ast_log(LOG_WARNING, "Failed connect\n");
@@ -1356,7 +1379,7 @@ static char *pktccops_debug(struct ast_cli_entry *e, int cmd, struct ast_cli_arg
 		e->command = "pktccops set debug {on|off}";
 		e->usage = 
 			"Usage: pktccops set debug {on|off}\n"
-			"				Turn on/off debuging\n";
+			"	Turn on/off debuging\n";
 		return NULL;
 	case CLI_GENERATE:
 		return NULL;
@@ -1454,7 +1477,7 @@ static int unload_module(void)
 		pktccops_thread = AST_PTHREADT_STOP;
 		ast_mutex_unlock(&pktccops_lock);
 	} else {
-		ast_log(LOG_WARNING, "Unable to lock the pktccops_thread\n");
+		ast_log(LOG_ERROR, "Unable to lock the pktccops_thread\n");
 		return -1;
 	}
 
@@ -1476,7 +1499,7 @@ static int reload_module(void)
 	return 0;
 }
 
-AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_GLOBAL_SYMBOLS, "PktcCOPS manager",
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_GLOBAL_SYMBOLS, "PktcCOPS manager for MGCP",
 		.load = load_module,
 		.unload = unload_module,
 		.reload = reload_module,

@@ -131,8 +131,8 @@ struct ast_rtp {
 	unsigned int cycles;            /*!< Shifted count of sequence number cycles */
 	double rxjitter;                /*!< Interarrival jitter at the moment */
 	double rxtransit;               /*!< Relative transit time for previous packet */
-	int lasttxformat;
-	int lastrxformat;
+	format_t lasttxformat;
+	format_t lastrxformat;
 
 	int rtptimeout;			/*!< RTP timeout time (negative or zero means disabled, negative value means temporarily disabled) */
 	int rtpholdtimeout;		/*!< RTP timeout when on hold (negative or zero means disabled, negative value means temporarily disabled). */
@@ -1137,7 +1137,7 @@ static int ast_rtp_write(struct ast_rtp_instance *instance, struct ast_frame *fr
 	/* Grab the subclass and look up the payload we are going to use */
 	subclass = frame->subclass.codec;
 	if (frame->frametype == AST_FRAME_VIDEO) {
-		subclass &= ~0x1;
+		subclass &= ~0x1LL;
 	}
 	if ((codec = ast_rtp_codecs_payload_code(ast_rtp_instance_get_codecs(instance), 1, subclass)) < 0) {
 		ast_log(LOG_WARNING, "Don't know how to send format %s packets with RTP\n", ast_getformatname(frame->subclass.codec));
@@ -1214,21 +1214,10 @@ static int ast_rtp_write(struct ast_rtp_instance *instance, struct ast_frame *fr
 	return 0;
 }
 
-static void sanitize_tv(struct timeval *tv)
-{
-	while (tv->tv_usec < 0) {
-		tv->tv_usec += 1000000;
-		tv->tv_sec -= 1;
-	}
-	while (tv->tv_usec >= 1000000) {
-		tv->tv_usec -= 1000000;
-		tv->tv_sec += 1;
-	}
-}
-
 static void calc_rxstamp(struct timeval *tv, struct ast_rtp *rtp, unsigned int timestamp, int mark)
 {
 	struct timeval now;
+	struct timeval tmp;
 	double transit;
 	double current_time;
 	double d;
@@ -1242,18 +1231,17 @@ static void calc_rxstamp(struct timeval *tv, struct ast_rtp *rtp, unsigned int t
 		rtp->drxcore = (double) rtp->rxcore.tv_sec + (double) rtp->rxcore.tv_usec / 1000000;
 		/* map timestamp to a real time */
 		rtp->seedrxts = timestamp; /* Their RTP timestamp started with this */
-		rtp->rxcore.tv_sec -= timestamp / rate;
-		rtp->rxcore.tv_usec -= (timestamp % rate) * 125;
+		tmp = ast_samp2tv(timestamp, rate);
+		rtp->rxcore = ast_tvsub(rtp->rxcore, tmp);
 		/* Round to 0.1ms for nice, pretty timestamps */
 		rtp->rxcore.tv_usec -= rtp->rxcore.tv_usec % 100;
-		sanitize_tv(&rtp->rxcore);
 	}
 
 	gettimeofday(&now,NULL);
 	/* rxcore is the mapping between the RTP timestamp and _our_ real time from gettimeofday() */
-	tv->tv_sec = rtp->rxcore.tv_sec + timestamp / rate;
-	tv->tv_usec = rtp->rxcore.tv_usec + (timestamp % rate) * 125;
-	sanitize_tv(tv);
+	tmp = ast_samp2tv(timestamp, rate);
+	*tv = ast_tvadd(rtp->rxcore, tmp);
+
 	prog = (double)((timestamp-rtp->seedrxts)/(float)(rate));
 	dtv = (double)rtp->drxcore + (double)(prog);
 	current_time = (double)now.tv_sec + (double)now.tv_usec/1000000;
@@ -1503,7 +1491,7 @@ static struct ast_frame *process_cn_rfc3389(struct ast_rtp_instance *instance, u
 	   totally help us out becuase we don't have an engine to keep it going and we are not
 	   guaranteed to have it every 20ms or anything */
 	if (rtpdebug)
-		ast_debug(0, "- RTP 3389 Comfort noise event: Level %d (len = %d)\n", rtp->lastrxformat, len);
+		ast_debug(0, "- RTP 3389 Comfort noise event: Level %" PRId64 " (len = %d)\n", rtp->lastrxformat, len);
 
 	if (ast_test_flag(rtp, FLAG_3389_WARNING)) {
 		struct sockaddr_in remote_address = { 0, };
@@ -1530,7 +1518,6 @@ static struct ast_frame *process_cn_rfc3389(struct ast_rtp_instance *instance, u
 	}
 	rtp->f.frametype = AST_FRAME_CNG;
 	rtp->f.subclass.integer = data[0] & 0x7f;
-	rtp->f.datalen = len - 1;
 	rtp->f.samples = 0;
 	rtp->f.delivery.tv_usec = rtp->f.delivery.tv_sec = 0;
 

@@ -385,6 +385,7 @@ struct ast_dsp {
 	int digitmode;
 	int faxmode;
 	int dtmf_began;
+	int display_inband_dtmf_warning;
 	float genergy;
 	int mute_fragments;
 	fragment_t mute_data[5];
@@ -1334,7 +1335,10 @@ struct ast_frame *ast_dsp_process(struct ast_channel *chan, struct ast_dsp *dsp,
 		}
 		break;
 	default:
-		ast_log(LOG_WARNING, "Inband DTMF is not supported on codec %s. Use RFC2833\n", ast_getformatname(af->subclass.codec));
+		/*Display warning only once. Otherwise you would get hundreds of warnings every second */
+		if (dsp->display_inband_dtmf_warning)
+			ast_log(LOG_WARNING, "Inband DTMF is not supported on codec %s. Use RFC2833\n", ast_getformatname(af->subclass.codec));
+		dsp->display_inband_dtmf_warning = 0;
 		return af;
 	}
 
@@ -1372,8 +1376,8 @@ struct ast_frame *ast_dsp_process(struct ast_channel *chan, struct ast_dsp *dsp,
 		}
 	}
 
-	if ((dsp->features & DSP_FEATURE_DIGIT_DETECT)) {
-		if ((dsp->digitmode & DSP_DIGITMODE_MF))
+	if (dsp->features & (DSP_FEATURE_DIGIT_DETECT | DSP_FEATURE_BUSY_DETECT)) {
+		if (dsp->digitmode & DSP_DIGITMODE_MF)
 			digit = mf_detect(dsp, &dsp->digit_state, shortdata, len, (dsp->digitmode & DSP_DIGITMODE_NOQUELCH) == 0, (dsp->digitmode & DSP_DIGITMODE_RELAXDTMF));
 		else
 			digit = dtmf_detect(dsp, &dsp->digit_state, shortdata, len, (dsp->digitmode & DSP_DIGITMODE_NOQUELCH) == 0, (dsp->digitmode & DSP_DIGITMODE_RELAXDTMF));
@@ -1385,18 +1389,28 @@ struct ast_frame *ast_dsp_process(struct ast_channel *chan, struct ast_dsp *dsp,
 			if (!dsp->dtmf_began) {
 				/* We have not reported DTMF_BEGIN for anything yet */
 
-				event = AST_FRAME_DTMF_BEGIN;
-				event_digit = dsp->digit_state.digits[0];
+				if (dsp->features & DSP_FEATURE_DIGIT_DETECT) {
+					event = AST_FRAME_DTMF_BEGIN;
+					event_digit = dsp->digit_state.digits[0];
+				}
 				dsp->dtmf_began = 1;
 
 			} else if (dsp->digit_state.current_digits > 1 || digit != dsp->digit_state.digits[0]) {
 				/* Digit changed. This means digit we have reported with DTMF_BEGIN ended */
-	
-				event = AST_FRAME_DTMF_END;
-				event_digit = dsp->digit_state.digits[0];
+				if (dsp->features & DSP_FEATURE_DIGIT_DETECT) {
+					event = AST_FRAME_DTMF_END;
+					event_digit = dsp->digit_state.digits[0];
+				}
 				memmove(dsp->digit_state.digits, dsp->digit_state.digits + 1, dsp->digit_state.current_digits);
 				dsp->digit_state.current_digits--;
 				dsp->dtmf_began = 0;
+
+				if (dsp->features & DSP_FEATURE_BUSY_DETECT) {
+					/* Reset Busy Detector as we have some confirmed activity */ 
+					memset(dsp->historicsilence, 0, sizeof(dsp->historicsilence));
+					memset(dsp->historicnoise, 0, sizeof(dsp->historicnoise));
+					ast_debug(1, "DTMF Detected - Reset busydetector\n");
+				}
 			}
 
 			if (event) {
@@ -1504,6 +1518,7 @@ struct ast_dsp *ast_dsp_new(void)
 		dsp->faxmode = DSP_FAXMODE_DETECT_CNG;
 		/* Initialize digit detector */
 		ast_digit_detect_init(&dsp->digit_state, dsp->digitmode & DSP_DIGITMODE_MF);
+		dsp->display_inband_dtmf_warning = 1;
 		/* Initialize initial DSP progress detect parameters */
 		ast_dsp_prog_reset(dsp);
 		/* Initialize fax detector */

@@ -332,6 +332,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		<see-also>
 			<ref type="application">GotoIf</ref>
 			<ref type="function">IFTIME</ref>
+			<ref type="function">TESTTIME</ref>
 		</see-also>
 	</application>
 	<application name="ImportVar" language="en_US">
@@ -715,6 +716,31 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</description>
 		<see-also>
 			<ref type="application">RaiseException</ref>
+		</see-also>
+	</function>
+	<function name="TESTTIME" language="en_US">
+		<synopsis>
+			Sets a time to be used with the channel to test logical conditions.
+		</synopsis>
+		<syntax>
+			<parameter name="date" required="true" argsep=" ">
+				<para>Date in ISO 8601 format</para>
+			</parameter>
+			<parameter name="time" required="true" argsep=" ">
+				<para>Time in HH:MM:SS format (24-hour time)</para>
+			</parameter>
+			<parameter name="zone" required="false">
+				<para>Timezone name</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>To test dialplan timing conditions at times other than the current time, use
+			this function to set an alternate date and time.  For example, you may wish to evaluate
+			whether a location will correctly identify to callers that the area is closed on Christmas
+			Day, when Christmas would otherwise fall on a day when the office is normally open.</para>
+		</description>
+		<see-also>
+			<ref type="application">GotoIfTime</ref>
 		</see-also>
 	</function>
 	<manager name="ShowDialPlan" language="en_US">
@@ -2138,31 +2164,28 @@ static int ext_cmp1(const char **p, unsigned char *bitwise)
 	int c, cmin = 0xff, count = 0;
 	const char *end;
 
-	/* load, sign extend and advance pointer until we find
-	 * a valid character.
-	 */
+	/* load value and advance pointer */
 	c = *(*p)++;
-	memset(bitwise, 0xff, 32);
 
 	/* always return unless we have a set of chars */
 	switch (toupper(c)) {
 	default:	/* ordinary character */
-		return 0x0000 | (c & 0xff);
+		bitwise[c / 8] = 1 << (c % 8);
+		return 0x0100 | (c & 0xff);
 
 	case 'N':	/* 2..9 */
-		bitwise[6] = 0x01;
-		bitwise[7] = 0xfe;
+		bitwise[6] = 0xfc;
+		bitwise[7] = 0x03;
 		return 0x0800 | '2';
 
 	case 'X':	/* 0..9 */
-		bitwise[5] = 0x7f;
-		bitwise[6] = 0x00;
-		bitwise[7] = 0xfe;
+		bitwise[6] = 0xff;
+		bitwise[7] = 0x03;
 		return 0x0A00 | '0';
 
 	case 'Z':	/* 1..9 */
-		bitwise[6] = 0x00;
-		bitwise[7] = 0xfe;
+		bitwise[6] = 0xfe;
+		bitwise[7] = 0x03;
 		return 0x0900 | '1';
 
 	case '.':	/* wildcard */
@@ -2200,14 +2223,13 @@ static int ext_cmp1(const char **p, unsigned char *bitwise)
 		}
 		for (; c1 <= c2; c1++) {
 			unsigned char mask = 1 << (c1 % 8);
-			/* Count the number of characters in the class, discarding duplicates. */
-			if ( (bitwise[ c1 / 8 ] & mask) == 1) {
+			/*!\note If two patterns score the same, the one with the lowest
+			 * ascii values will compare as coming first. */
+			/* Flag the character as included (used) and count it. */
+			if (!(bitwise[ c1 / 8 ] & mask)) {
+				bitwise[ c1 / 8 ] |= mask;
 				count += 0x100;
 			}
-			/*!\note If two patterns score the same, but one includes '0' (as
-			 * the lowest ASCII value in the given class) and the other does
-			 * not, then the one including '0' will compare as coming first. */
-			bitwise[ c1 / 8 ] &= ~mask;
 		}
 	}
 	(*p)++;
@@ -2223,7 +2245,6 @@ static int ext_cmp(const char *a, const char *b)
 	 * If a is not a pattern, it either comes first or
 	 * we do a more complex pattern comparison.
 	 */
-	unsigned char bitwise[2][32];
 	int ret = 0;
 
 	if (a[0] != '_')
@@ -2233,14 +2254,17 @@ static int ext_cmp(const char *a, const char *b)
 	if (b[0] != '_')
 		return 1;
 
-	/* ok we need full pattern sorting routine */
-	while (!ret && a && b) {
+	/* ok we need full pattern sorting routine.
+	 * skip past the underscores */
+	++a; ++b;
+	do {
+		unsigned char bitwise[2][32] = { { 0, } };
 		ret = ext_cmp1(&a, bitwise[0]) - ext_cmp1(&b, bitwise[1]);
 		if (ret == 0) {
 			/* Are the classes different, even though they score the same? */
 			ret = memcmp(bitwise[0], bitwise[1], 32);
 		}
-	}
+	} while (!ret && a && b);
 	if (ret == 0) {
 		return 0;
 	} else {
@@ -3090,13 +3114,7 @@ int pbx_builtin_raise_exception(struct ast_channel *chan, const char *reason)
 		ds = ast_datastore_alloc(&exception_store_info, NULL);
 		if (!ds)
 			return -1;
-		exception = ast_calloc(1, sizeof(struct pbx_exception));
-		if (!exception) {
-			ast_datastore_free(ds);
-			return -1;
-		}
-		if (ast_string_field_init(exception, 128)) {
-			ast_free(exception);
+		if (!(exception = ast_calloc_with_stringfields(1, struct pbx_exception, 128))) {
 			ast_datastore_free(ds);
 			return -1;
 		}
@@ -3167,7 +3185,10 @@ static char *handle_show_functions(struct ast_cli_entry *e, int cmd, struct ast_
 	AST_RWLIST_TRAVERSE(&acf_root, acf, acflist) {
 		if (!like || strstr(acf->name, a->argv[4])) {
 			count_acf++;
-			ast_cli(a->fd, "%-20.20s  %-35.35s  %s\n", acf->name, acf->syntax, acf->synopsis);
+			ast_cli(a->fd, "%-20.20s  %-35.35s  %s\n",
+				S_OR(acf->name, ""),
+				S_OR(acf->syntax, ""),
+				S_OR(acf->synopsis, ""));
 		}
 	}
 	AST_RWLIST_UNLOCK(&acf_root);
@@ -3949,8 +3970,10 @@ static void pbx_substitute_variables(char *passdata, int datalen, struct ast_cha
 	const char *tmp;
 
 	/* Nothing more to do */
-	if (!e->data)
+	if (!e->data) {
+		*passdata = '\0';
 		return;
+	}
 
 	/* No variables or expressions in e->data, so why scan it? */
 	if ((!(tmp = strchr(e->data, '$'))) || (!strstr(tmp, "${") && !strstr(tmp, "$["))) {
@@ -4278,7 +4301,7 @@ int ast_extension_state_add(const char *context, const char *exten,
 	 */
 	if (e->exten[0] == '_') {
 		ast_add_extension(e->parent->name, 0, exten, e->priority, e->label,
-			e->cidmatch, e->app, ast_strdup(e->data), ast_free_ptr,
+			e->matchcid ? e->cidmatch : NULL, e->app, ast_strdup(e->data), ast_free_ptr,
 			e->registrar);
 		e = ast_hint_extension(NULL, context, exten);
 		if (!e || e->exten[0] == '_') {
@@ -4604,6 +4627,10 @@ static enum ast_pbx_result __ast_pbx_run(struct ast_channel *c,
 			ast_verb(2, "Starting %s at %s,%s,%d still failed so falling back to context 'default'\n", c->name, c->context, c->exten, c->priority);
 			ast_copy_string(c->context, "default", sizeof(c->context));
 		}
+	}
+	if (c->cdr) {
+		/* allow CDR variables that have been collected after channel was created to be visible during call */
+		ast_cdr_update(c);
 	}
 	for (;;) {
 		char dst_exten[256];	/* buffer to accumulate digits */
@@ -6897,7 +6924,7 @@ static void context_merge(struct ast_context **extcontexts, struct ast_hashtab *
 				dupdstr = ast_strdup(prio_item->data);
 
 				res1 = ast_add_extension2(new, 0, prio_item->exten, prio_item->priority, prio_item->label, 
-										  prio_item->cidmatch, prio_item->app, dupdstr, prio_item->datad, prio_item->registrar);
+										  prio_item->matchcid ? prio_item->cidmatch : NULL, prio_item->app, dupdstr, prio_item->datad, prio_item->registrar);
 				if (!res1 && new_exten_item && new_prio_item){
 					ast_verb(3,"Dropping old dialplan item %s/%s/%d [%s(%s)] (registrar=%s) due to conflict with new dialplan\n",
 							context->name, prio_item->exten, prio_item->priority, prio_item->app, (char*)prio_item->data, prio_item->registrar);
@@ -6970,12 +6997,13 @@ void ast_merge_contexts_and_delete(struct ast_context **extcontexts, struct ast_
 	AST_RWLIST_WRLOCK(&hints);
 	writelocktime = ast_tvnow();
 
-	/* preserve all watchers for hints associated with this registrar */
+	/* preserve all watchers for hints */
 	AST_RWLIST_TRAVERSE(&hints, hint, list) {
-		if (!AST_LIST_EMPTY(&hint->callbacks) && !strcmp(registrar, hint->exten->parent->registrar)) {
+		if (!AST_LIST_EMPTY(&hint->callbacks)) {
 			length = strlen(hint->exten->exten) + strlen(hint->exten->parent->name) + 2 + sizeof(*this);
 			if (!(this = ast_calloc(1, length)))
 				continue;
+			/* this removes all the callbacks from the hint into this. */
 			AST_LIST_APPEND_LIST(&this->callbacks, &hint->callbacks, entry);
 			this->laststate = hint->laststate;
 			this->context = this->data;
@@ -7006,7 +7034,7 @@ void ast_merge_contexts_and_delete(struct ast_context **extcontexts, struct ast_
 		 */
 		if (exten && exten->exten[0] == '_') {
 			ast_add_extension_nolock(exten->parent->name, 0, this->exten, PRIORITY_HINT, NULL,
-				0, exten->app, ast_strdup(exten->data), ast_free_ptr, registrar);
+				0, exten->app, ast_strdup(exten->data), ast_free_ptr, exten->registrar);
 			/* rwlocks are not recursive locks */
 			exten = ast_hint_extension_nolock(NULL, this->context, this->exten);
 		}
@@ -7285,10 +7313,14 @@ int ast_build_timing(struct ast_timing *i, const char *info_in)
 
 int ast_check_timing(const struct ast_timing *i)
 {
-	struct ast_tm tm;
-	struct timeval now = ast_tvnow();
+	return ast_check_timing2(i, ast_tvnow());
+}
 
-	ast_localtime(&now, &tm, i->timezone);
+int ast_check_timing2(const struct ast_timing *i, const struct timeval tv)
+{
+	struct ast_tm tm;
+
+	ast_localtime(&tv, &tm, i->timezone);
 
 	/* If it's not the right month, return */
 	if (!(i->monthmask & (1 << tm.tm_mon)))
@@ -8004,7 +8036,9 @@ static int ast_add_extension2_lockopt(struct ast_context *con,
 	p += ext_strncpy(p, extension, strlen(extension) + 1) + 1;
 	tmp->priority = priority;
 	tmp->cidmatch = p;	/* but use p for assignments below */
-	if (!ast_strlen_zero(callerid)) {
+
+	/* Blank callerid and NULL callerid are two SEPARATE things.  Do NOT confuse the two!!! */
+	if (callerid) {
 		p += ext_strncpy(p, callerid, strlen(callerid) + 1) + 1;
 		tmp->matchcid = 1;
 	} else {
@@ -8927,12 +8961,47 @@ static int pbx_builtin_hangup(struct ast_channel *chan, const char *data)
 }
 
 /*!
+ * \ingroup functions
+ */
+static int testtime_write(struct ast_channel *chan, const char *cmd, char *var, const char *value)
+{
+	struct ast_tm tm;
+	struct timeval tv;
+	char *remainder, result[30], timezone[80];
+
+	/* Turn off testing? */
+	if (!pbx_checkcondition(value)) {
+		pbx_builtin_setvar_helper(chan, "TESTTIME", NULL);
+		return 0;
+	}
+
+	/* Parse specified time */
+	if (!(remainder = ast_strptime(value, "%Y/%m/%d %H:%M:%S", &tm))) {
+		return -1;
+	}
+	sscanf(remainder, "%79s", timezone);
+	tv = ast_mktime(&tm, S_OR(timezone, NULL));
+
+	snprintf(result, sizeof(result), "%ld", (long) tv.tv_sec);
+	pbx_builtin_setvar_helper(chan, "__TESTTIME", result);
+	return 0;
+}
+
+static struct ast_custom_function testtime_function = {
+	.name = "TESTTIME",
+	.write = testtime_write,
+};
+
+/*!
  * \ingroup applications
  */
 static int pbx_builtin_gotoiftime(struct ast_channel *chan, const char *data)
 {
 	char *s, *ts, *branch1, *branch2, *branch;
 	struct ast_timing timing;
+	const char *ctime;
+	struct timeval tv = ast_tvnow();
+	long timesecs;
 
 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_WARNING, "GotoIfTime requires an argument:\n  <time range>,<days of week>,<days of month>,<months>[,<timezone>]?'labeliftrue':'labeliffalse'\n");
@@ -8941,16 +9010,28 @@ static int pbx_builtin_gotoiftime(struct ast_channel *chan, const char *data)
 
 	ts = s = ast_strdupa(data);
 
+	if (chan) {
+		ast_channel_lock(chan);
+		if ((ctime = pbx_builtin_getvar_helper(chan, "TESTTIME")) && sscanf(ctime, "%ld", &timesecs) == 1) {
+			tv.tv_sec = timesecs;
+		} else if (ctime) {
+			ast_log(LOG_WARNING, "Using current time to evaluate\n");
+			/* Reset when unparseable */
+			pbx_builtin_setvar_helper(chan, "TESTTIME", NULL);
+		}
+		ast_channel_unlock(chan);
+	}
 	/* Separate the Goto path */
 	strsep(&ts, "?");
 	branch1 = strsep(&ts,":");
 	branch2 = strsep(&ts,"");
 
 	/* struct ast_include include contained garbage here, fixed by zeroing it on get_timerange */
-	if (ast_build_timing(&timing, s) && ast_check_timing(&timing))
+	if (ast_build_timing(&timing, s) && ast_check_timing2(&timing, tv)) {
 		branch = branch1;
-	else
+	} else {
 		branch = branch2;
+	}
 	ast_destroy_timing(&timing);
 
 	if (ast_strlen_zero(branch)) {
@@ -9055,7 +9136,7 @@ static int pbx_builtin_waitexten(struct ast_channel *chan, const char *data)
 	if (ast_test_flag(&flags, WAITEXTEN_MOH) && !opts[0] ) {
 		ast_log(LOG_WARNING, "The 'm' option has been specified for WaitExten without a class.\n"); 
 	} else if (ast_test_flag(&flags, WAITEXTEN_MOH)) {
-		ast_indicate_data(chan, AST_CONTROL_HOLD, opts[0], strlen(opts[0]));
+		ast_indicate_data(chan, AST_CONTROL_HOLD, S_OR(opts[0], NULL), strlen(opts[0]));
 	} else if (ast_test_flag(&flags, WAITEXTEN_DIALTONE)) {
 		struct ast_tone_zone_sound *ts = ast_get_indication_tone(chan->zone, "dial");
 		if (ts) {
@@ -9126,8 +9207,16 @@ static int pbx_builtin_background(struct ast_channel *chan, const char *data)
 	if (ast_strlen_zero(args.lang))
 		args.lang = (char *)chan->language;	/* XXX this is const */
 
-	if (ast_strlen_zero(args.context))
-		args.context = chan->context;
+	if (ast_strlen_zero(args.context)) {
+		const char *context;
+		ast_channel_lock(chan);
+		if ((context = pbx_builtin_getvar_helper(chan, "MACRO_CONTEXT"))) {
+			args.context = ast_strdupa(context);
+		} else {
+			args.context = chan->context;
+		}
+		ast_channel_unlock(chan);
+	}
 
 	if (args.options) {
 		if (!strcasecmp(args.options, "skip"))
@@ -9148,7 +9237,7 @@ static int pbx_builtin_background(struct ast_channel *chan, const char *data)
 	}
 
 	if (!res) {
-		char *back = args.filename;
+		char *back = ast_strip(args.filename);
 		char *front;
 
 		ast_stopstream(chan);		/* Stop anything playing */
@@ -9184,8 +9273,15 @@ static int pbx_builtin_background(struct ast_channel *chan, const char *data)
 	 * (but a longer extension COULD have matched), it would have previously
 	 * gone immediately to the "i" extension, but will now need to wait for a
 	 * timeout.
+	 *
+	 * Later, we had to add a flag to disable this workaround, because AGI
+	 * users can EXEC Background and reasonably expect that the DTMF code will
+	 * be returned (see #16434).
 	 */
-	if ((exten[0] = res) && !ast_matchmore_extension(chan, args.context, exten, 1, chan->cid.cid_num)) {
+	if (!ast_test_flag(chan, AST_FLAG_DISABLE_WORKAROUNDS) &&
+			(exten[0] = res) &&
+			ast_canmatch_extension(chan, args.context, exten, 1, chan->cid.cid_num) &&
+			!ast_matchmore_extension(chan, args.context, exten, 1, chan->cid.cid_num)) {
 		snprintf(chan->exten, sizeof(chan->exten), "%c", res);
 		ast_copy_string(chan->context, args.context, sizeof(chan->context));
 		chan->priority = 0;
@@ -9602,6 +9698,7 @@ int load_pbx(void)
 	ast_verb(1, "Registering builtin applications:\n");
 	ast_cli_register_multiple(pbx_cli, ARRAY_LEN(pbx_cli));
 	__ast_custom_function_register(&exception_function, NULL);
+	__ast_custom_function_register(&testtime_function, NULL);
 
 	/* Register builtin applications */
 	for (x = 0; x < ARRAY_LEN(builtins); x++) {

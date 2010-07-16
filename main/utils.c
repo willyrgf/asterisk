@@ -392,7 +392,7 @@ char *ast_uri_encode(const char *string, char *outbuf, int buflen, int doreserve
 
 	/* If there's no characters to convert, just go through and don't do anything */
 	while (*ptr) {
-		if ((*ptr < 32 || (unsigned char) *ptr) > 127 || (doreserved && strchr(reserved, *ptr)) ) {
+		if ((*ptr < 32) || (doreserved && strchr(reserved, *ptr))) {
 			/* Oops, we need to start working here */
 			if (!buf) {
 				buf = outbuf;
@@ -1071,7 +1071,9 @@ static int ast_wait_for_output(int fd, int timeoutms)
 	while ((res = ast_poll(&pfd, 1, timeoutms - elapsed)) <= 0) {
 		if (res == 0) {
 			/* timed out. */
-			ast_log(LOG_NOTICE, "Timed out trying to write\n");
+#ifndef STANDALONE
+			ast_debug(1, "Timed out trying to write\n");
+#endif
 			return -1;
 		} else if (res == -1) {
 			/* poll() returned an error, check to see if it was fatal */
@@ -1790,6 +1792,11 @@ void *__ast_calloc_with_stringfields(unsigned int num_structs, size_t struct_siz
 		mgr->embedded_pool = pool;
 		*pool_head = pool;
 		pool->size = size_to_alloc - struct_size - sizeof(*pool);
+#if defined(__AST_DEBUG_MALLOC)
+		mgr->owner_file = file;
+		mgr->owner_func = func;
+		mgr->owner_line = lineno;
+#endif
 	}
 
 	return allocation;

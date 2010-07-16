@@ -14,6 +14,8 @@
  *
  *****************************************************************************/
 
+/* Reworked version I, Nov-2009, by Alexandr Anikin, may@telecom-service.ru */
+
 
 /*** MODULEINFO
 	<defaultenabled>no</defaultenabled>
@@ -94,6 +96,7 @@ static const struct ast_channel_tech ooh323_tech = {
 	.type = type,
 	.description = tdesc,
 	.capabilities = -1,
+	.properties = AST_CHAN_TP_WANTSJITTER | AST_CHAN_TP_CREATESJITTER,
 	.requester = ooh323_request,
 	.send_digit_begin = ooh323_digit_begin,
 	.send_digit_end = ooh323_digit_end,
@@ -169,9 +172,9 @@ static struct ooh323_pvt {
 	char callee_url[AST_MAX_EXTENSION];
  
 	int port;
-	int readformat;   /* negotiated read format */
-	int writeformat;  /* negotiated write format */
-	int capability;
+	format_t readformat;   /* negotiated read format */
+	format_t writeformat;  /* negotiated write format */
+	format_t capability;
 	struct ast_codec_pref prefs;
 	int dtmfmode;
 	int dtmfcodec;
@@ -555,7 +558,7 @@ static struct ast_channel *ooh323_request(const char *type, format_t format,
 	oldformat = format;
 	format &= AST_FORMAT_AUDIO_MASK;
 	if (!format) {
-		ast_log(LOG_NOTICE, "Asked to get a channel of unsupported format '%Ld'\n", (long long) format);
+		ast_log(LOG_NOTICE, "Asked to get a channel of unsupported format '%lld'\n", (long long) format);
 		return NULL;
 	}
 
@@ -1015,7 +1018,7 @@ static int ooh323_hangup(struct ast_channel *ast)
 		ast_update_use_count();
 	  
 	} else {
-		ast_log(LOG_DEBUG, "No call to hangup\n" );
+		ast_debug(1, "No call to hangup\n" );
 	}
 	
 	if (gH323Debug)
@@ -1325,6 +1328,8 @@ static int ooh323_queryoption(struct ast_channel *ast, int option, void *data, i
 static int ooh323_fixup(struct ast_channel *oldchan, struct ast_channel *newchan)
 {
 	struct ooh323_pvt *p = newchan->tech_pvt;
+
+	if (!p) return -1;
 
 	if (gH323Debug)
 		ast_verbose("--- ooh323c ooh323_fixup\n");
@@ -3077,14 +3082,6 @@ static int load_module(void)
 		.onModeChanged = onModeChanged
 	};
 
-	ast_log(LOG_NOTICE, 
-		"---------------------------------------------------------------------------------\n"
-		"---  ******* IMPORTANT NOTE ***********\n"
-		"---\n"
-		"---  This module is currently unsupported.  Use it at your own risk.\n"
-		"---\n"
-		"---------------------------------------------------------------------------------\n");
-
 	myself = ast_module_info->self;
 
 	h225Callbacks.onReceivedSetup = &ooh323_onReceivedSetup;
@@ -3625,7 +3622,7 @@ static enum ast_rtp_glue_result ooh323_get_rtp_peer(struct ast_channel *chan, st
 	enum ast_rtp_glue_result res = AST_RTP_GLUE_RESULT_LOCAL;
 
 	if (!(p = (struct ooh323_pvt *) chan->tech_pvt))
-	return AST_RTP_GLUE_RESULT_FORBID;
+		return AST_RTP_GLUE_RESULT_FORBID;
 
 	if (!(p->rtp)) {
 		return AST_RTP_GLUE_RESULT_FORBID;
@@ -3634,6 +3631,10 @@ static enum ast_rtp_glue_result ooh323_get_rtp_peer(struct ast_channel *chan, st
 	*rtp = p->rtp ? ao2_ref(p->rtp, +1), p->rtp : NULL;
 
 	res = AST_RTP_GLUE_RESULT_LOCAL;
+
+	if (ast_test_flag(&global_jbconf, AST_JB_FORCED)) {
+		res = AST_RTP_GLUE_RESULT_FORBID;
+	}
 
 	return res;
 }
@@ -3673,7 +3674,7 @@ int ooh323_update_capPrefsOrderForCall
 }
 
 
-int ooh323_convertAsteriskCapToH323Cap(int cap)
+int ooh323_convertAsteriskCapToH323Cap(format_t cap)
 {
 	char formats[FORMAT_STRING_SIZE];
 	switch (cap) {
@@ -3744,7 +3745,8 @@ int configure_local_rtp(struct ooh323_pvt *p, ooCallData *call)
 {
 	struct sockaddr_in us;
 	ooMediaInfo mediaInfo;
-	int x, format = 0;	  
+	int x;
+	format_t format = 0;
 
 	if (gH323Debug)
 		ast_verbose("---   configure_local_rtp\n");

@@ -1517,7 +1517,7 @@ static unsigned char compress_subclass(format_t subclass)
 	for (x = 0; x < IAX_MAX_SHIFT; x++) {
 		if (subclass & (1LL << x)) {
 			if (power > -1) {
-				ast_log(LOG_WARNING, "Can't compress subclass %Ld\n", (long long) subclass);
+				ast_log(LOG_WARNING, "Can't compress subclass %lld\n", (long long) subclass);
 				return 0;
 			} else
 				power = x;
@@ -1700,7 +1700,7 @@ static void iax2_frame_free(struct iax_frame *fr)
 
 static int scheduled_destroy(const void *vid)
 {
-	short callno = PTR_TO_CALLNO(vid);
+	unsigned short callno = PTR_TO_CALLNO(vid);
 	ast_mutex_lock(&iaxsl[callno]);
 	if (iaxs[callno]) {
 		if (option_debug) {
@@ -3862,7 +3862,7 @@ static char *handle_cli_iax2_show_cache(struct ast_cli_entry *e, int cmd, struct
 		}
 	}
 
-	AST_LIST_LOCK(&dpcache);
+	AST_LIST_UNLOCK(&dpcache);
 
 	return CLI_SUCCESS;
 }
@@ -4769,7 +4769,7 @@ static int handle_call_token(struct ast_iax2_full_hdr *fh, struct iax_ies *ies,
 	/* ----- Case 3 ----- */
 	} else { /* calltokens are not supported for this client, how do we respond? */
 		if (calltoken_required(sin, ies->username, subclass)) {
-			ast_log(LOG_ERROR, "Call rejected, CallToken Support required. If unexpected, resolve by placing address %s in the calltokenignore list or setting user %s requirecalltoken=no\n", ast_inet_ntoa(sin->sin_addr), S_OR(ies->username, "guest"));
+			ast_log(LOG_ERROR, "Call rejected, CallToken Support required. If unexpected, resolve by placing address %s in the calltokenoptional list or setting user %s requirecalltoken=no\n", ast_inet_ntoa(sin->sin_addr), S_OR(ies->username, "guest"));
 			goto reject;
 		}
 		return 0; /* calltoken is not required for this addr, so permit it. */
@@ -6248,10 +6248,15 @@ static int iax2_send(struct chan_iax2_pvt *pvt, struct ast_frame *f, unsigned in
 		if (!transfer)
 			pvt->aseqno = fr->iseqno;
 		fh->type = fr->af.frametype & 0xFF;
-		if (fr->af.frametype == AST_FRAME_VIDEO)
+
+		if (fr->af.frametype == AST_FRAME_VIDEO) {
 			fh->csub = compress_subclass(fr->af.subclass.codec & ~0x1LL) | ((fr->af.subclass.codec & 0x1LL) << 6);
-		else
+		} else if (fr->af.frametype == AST_FRAME_VOICE) {
 			fh->csub = compress_subclass(fr->af.subclass.codec);
+		} else {
+			fh->csub = compress_subclass(fr->af.subclass.integer);
+		}
+
 		if (transfer) {
 			fr->dcallno = pvt->transfercallno;
 		} else
@@ -10072,11 +10077,11 @@ retryowner:
 				if (ast_test_flag(&iaxs[fr->callno]->state, IAX_STATE_STARTED)) {
 				        /* Generate Manager Hold event, if necessary*/
 					if (iaxs[fr->callno]->owner) {
-						manager_event(EVENT_FLAG_CALL, "Hold",
+						ast_manager_event(iaxs[fr->callno]->owner, EVENT_FLAG_CALL, "Hold",
 							"Status: On\r\n"
 							"Channel: %s\r\n"
 							"Uniqueid: %s\r\n",
-							iaxs[fr->callno]->owner->name, 
+							iaxs[fr->callno]->owner->name,
 							iaxs[fr->callno]->owner->uniqueid);
 					}
 
@@ -10099,11 +10104,11 @@ retryowner:
 				if (ast_test_flag(&iaxs[fr->callno]->state, IAX_STATE_STARTED)) {
 				        /* Generate Manager Unhold event, if necessary*/
 					if (iaxs[fr->callno]->owner && ast_test_flag64(iaxs[fr->callno], IAX_QUELCH)) {
-						manager_event(EVENT_FLAG_CALL, "Hold",
+						ast_manager_event(iaxs[fr->callno]->owner, EVENT_FLAG_CALL, "Hold",
 							"Status: Off\r\n"
 							"Channel: %s\r\n"
 							"Uniqueid: %s\r\n",
-							iaxs[fr->callno]->owner->name, 
+							iaxs[fr->callno]->owner->name,
 							iaxs[fr->callno]->owner->uniqueid);
 					}
 

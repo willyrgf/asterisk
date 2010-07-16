@@ -1461,7 +1461,7 @@ static const struct ast_channel_tech dahdi_tech = {
 /*!
  * \internal
  * \brief Determine if sig_pri handles the signaling.
- * \since 1.6.3
+ * \since 1.8
  *
  * \param signaling Signaling to determine if is for sig_pri.
  *
@@ -2068,6 +2068,14 @@ static void my_set_dialing(void *pvt, int flag)
 	struct dahdi_pvt *p = pvt;
 	p->dialing = flag;
 }
+
+#if defined(HAVE_PRI)
+static void my_set_digital(void *pvt, int flag)
+{
+	struct dahdi_pvt *p = pvt;
+	p->digital = flag;
+}
+#endif
 
 static void my_set_ringtimeout(void *pvt, int ringt)
 {
@@ -2708,7 +2716,7 @@ static int my_pri_play_tone(void *pvt, enum sig_pri_tone tone)
 /*!
  * \internal
  * \brief Set the caller id information.
- * \since 1.6.3
+ * \since 1.8
  *
  * \param pvt DAHDI private structure
  * \param caller Caller-id information to set.
@@ -2736,7 +2744,7 @@ static void my_pri_set_callerid(void *pvt, const struct ast_party_caller *caller
 /*!
  * \internal
  * \brief Set the Dialed Number Identifier.
- * \since 1.6.3
+ * \since 1.8
  *
  * \param pvt DAHDI private structure
  * \param dnid Dialed Number Identifier string.
@@ -2753,7 +2761,7 @@ static void my_pri_set_dnid(void *pvt, const char *dnid)
 /*!
  * \internal
  * \brief Set the Redirecting Directory Number Information Service (RDNIS).
- * \since 1.6.3
+ * \since 1.8
  *
  * \param pvt DAHDI private structure
  * \param rdnis Redirecting Directory Number Information Service (RDNIS) string.
@@ -2780,6 +2788,7 @@ static struct sig_pri_callback dahdi_pri_callbacks =
 	.new_ast_channel = my_new_pri_ast_channel,
 	.fixup_chans = my_pri_fixup_chans,
 	.set_dialing = my_set_dialing,
+	.set_digital = my_set_digital,
 	.set_callerid = my_pri_set_callerid,
 	.set_dnid = my_pri_set_dnid,
 	.set_rdnis = my_pri_set_rdnis,
@@ -4593,7 +4602,11 @@ static int dahdi_call(struct ast_channel *ast, char *rdest, int timeout)
 		ast_log(LOG_WARNING, "Unable to flush input on channel %d: %s\n", p->channel, strerror(errno));
 	p->outgoing = 1;
 
-	set_actual_gain(p->subs[SUB_REAL].dfd, 0, p->rxgain, p->txgain, p->rxdrc, p->txdrc, p->law);
+	if (IS_DIGITAL(ast->transfercapability)){
+		set_actual_gain(p->subs[SUB_REAL].dfd, 0, 0, 0, p->rxdrc, p->txdrc, p->law);
+	} else {
+		set_actual_gain(p->subs[SUB_REAL].dfd, 0, p->rxgain, p->txgain, p->rxdrc, p->txdrc, p->law);
+	}	
 
 #ifdef HAVE_PRI
 	if (dahdi_sig_pri_lib_handles(p->sig)) {
@@ -4816,7 +4829,7 @@ static int dahdi_call(struct ast_channel *ast, char *rdest, int timeout)
 /*!
  * \internal
  * \brief Insert the given chan_dahdi interface structure into the interface list.
- * \since 1.6.3
+ * \since 1.8
  *
  * \param pvt chan_dahdi private interface structure to insert.
  *
@@ -4868,7 +4881,7 @@ static void dahdi_iflist_insert(struct dahdi_pvt *pvt)
 /*!
  * \internal
  * \brief Extract the given chan_dahdi interface structure from the interface list.
- * \since 1.6.3
+ * \since 1.8
  *
  * \param pvt chan_dahdi private interface structure to extract.
  *
@@ -4906,7 +4919,7 @@ static void dahdi_iflist_extract(struct dahdi_pvt *pvt)
 /*!
  * \internal
  * \brief Insert the given chan_dahdi interface structure into the no B channel list.
- * \since 1.6.3
+ * \since 1.8
  *
  * \param pri sig_pri span control structure holding no B channel list.
  * \param pvt chan_dahdi private interface structure to insert.
@@ -4961,7 +4974,7 @@ static void dahdi_nobch_insert(struct sig_pri_pri *pri, struct dahdi_pvt *pvt)
 /*!
  * \internal
  * \brief Extract the given chan_dahdi interface structure from the no B channel list.
- * \since 1.6.3
+ * \since 1.8
  *
  * \param pri sig_pri span control structure holding no B channel list.
  * \param pvt chan_dahdi private interface structure to extract.
@@ -5001,7 +5014,7 @@ static void dahdi_nobch_extract(struct sig_pri_pri *pri, struct dahdi_pvt *pvt)
 /*!
  * \internal
  * \brief Unlink the channel interface from the PRI private pointer array.
- * \since 1.6.3
+ * \since 1.8
  *
  * \param pvt chan_dahdi private interface structure to unlink.
  *
@@ -7778,7 +7791,7 @@ winkflashdone:
 			(p->polarity == POLARITY_REV) &&
 			((ast->_state == AST_STATE_UP) || (ast->_state == AST_STATE_RING)) ) {
 			/* Added log_debug information below to provide a better indication of what is going on */
-			ast_debug(1, "Polarity Reversal event occured - DEBUG 1: channel %d, state %d, pol= %d, aonp= %d, honp= %d, pdelay= %d, tv= %d\n", p->channel, ast->_state, p->polarity, p->answeronpolarityswitch, p->hanguponpolarityswitch, p->polarityonanswerdelay, ast_tvdiff_ms(ast_tvnow(), p->polaritydelaytv) );
+			ast_debug(1, "Polarity Reversal event occured - DEBUG 1: channel %d, state %d, pol= %d, aonp= %d, honp= %d, pdelay= %d, tv= %" PRIi64 "\n", p->channel, ast->_state, p->polarity, p->answeronpolarityswitch, p->hanguponpolarityswitch, p->polarityonanswerdelay, ast_tvdiff_ms(ast_tvnow(), p->polaritydelaytv) );
 
 			if (ast_tvdiff_ms(ast_tvnow(), p->polaritydelaytv) > p->polarityonanswerdelay) {
 				ast_debug(1, "Polarity Reversal detected and now Hanging up on channel %d\n", p->channel);
@@ -7792,7 +7805,7 @@ winkflashdone:
 			ast_debug(1, "Ignoring Polarity switch to IDLE on channel %d, state %d\n", p->channel, ast->_state);
 		}
 		/* Added more log_debug information below to provide a better indication of what is going on */
-		ast_debug(1, "Polarity Reversal event occured - DEBUG 2: channel %d, state %d, pol= %d, aonp= %d, honp= %d, pdelay= %d, tv= %d\n", p->channel, ast->_state, p->polarity, p->answeronpolarityswitch, p->hanguponpolarityswitch, p->polarityonanswerdelay, ast_tvdiff_ms(ast_tvnow(), p->polaritydelaytv) );
+		ast_debug(1, "Polarity Reversal event occured - DEBUG 2: channel %d, state %d, pol= %d, aonp= %d, honp= %d, pdelay= %d, tv= %" PRIi64 "\n", p->channel, ast->_state, p->polarity, p->answeronpolarityswitch, p->hanguponpolarityswitch, p->polarityonanswerdelay, ast_tvdiff_ms(ast_tvnow(), p->polaritydelaytv) );
 		break;
 	default:
 		ast_debug(1, "Dunno what to do with event %d on channel %d\n", res, p->channel);
@@ -8518,7 +8531,7 @@ static int dahdi_indicate(struct ast_channel *chan, int condition, const void *d
 static struct ast_channel *dahdi_new(struct dahdi_pvt *i, int state, int startpbx, int idx, int law, int transfercapability, const char *linkedid)
 {
 	struct ast_channel *tmp;
-	int deflaw;
+	format_t deflaw;
 	int res;
 	int x,y;
 	int features;
@@ -8672,7 +8685,9 @@ static struct ast_channel *dahdi_new(struct dahdi_pvt *i, int state, int startpb
 		tmp->amaflags = i->amaflags;
 	i->subs[idx].owner = tmp;
 	ast_copy_string(tmp->context, i->context, sizeof(tmp->context));
-	ast_string_field_set(tmp, call_forward, i->call_forward);
+	if (!analog_lib_handles(i->sig, i->radio, i->oprmode)) {
+		ast_string_field_set(tmp, call_forward, i->call_forward);
+	}
 	/* If we've been told "no ADSI" then enforce it */
 	if (!i->adsi)
 		tmp->adsicpe = AST_ADSI_UNAVAILABLE;
@@ -8696,7 +8711,7 @@ static struct ast_channel *dahdi_new(struct dahdi_pvt *i, int state, int startpb
 	tmp->cid.cid_pres = i->callingpres;
 	tmp->cid.cid_ton = i->cid_ton;
 	tmp->cid.cid_ani2 = i->cid_ani2;
-#if defined(HAVE_PRI) || defined(HAVE_SS7)
+#if defined(HAVE_SS7)
 	tmp->transfercapability = transfercapability;
 	pbx_builtin_setvar_helper(tmp, "TRANSFERCAPABILITY", ast_transfercapability2str(transfercapability));
 	if (transfercapability & AST_TRANS_CAP_DIGITAL)
@@ -9900,7 +9915,7 @@ struct mwi_thread_data {
 	size_t len;
 };
 
-static int calc_energy(const unsigned char *buf, int len, int law)
+static int calc_energy(const unsigned char *buf, int len, format_t law)
 {
 	int x;
 	int sum = 0;
@@ -11802,12 +11817,12 @@ static inline int available(struct dahdi_pvt *p, int channelmatch, ast_group_t g
 		return 0;
 
 	if (analog_lib_handles(p->sig, p->radio, p->oprmode))
-		return analog_available(p->sig_pvt, channelmatch, groupmatch, reason, channelmatched, groupmatched);
+		return analog_available(p->sig_pvt, reason);
 
 #ifdef HAVE_PRI
 	switch (p->sig) {
 	case SIG_PRI_LIB_HANDLE_CASES:
-		return sig_pri_available(p->sig_pvt, channelmatch, groupmatch, reason, channelmatched, groupmatched);
+		return sig_pri_available(p->sig_pvt, reason);
 	default:
 		break;
 	}
@@ -11849,7 +11864,7 @@ static inline int available(struct dahdi_pvt *p, int channelmatch, ast_group_t g
 /*!
  * \internal
  * \brief Create a no B channel interface.
- * \since 1.6.3
+ * \since 1.8
  *
  * \param pri sig_pri span controller to add interface.
  *
@@ -12009,6 +12024,7 @@ static struct ast_channel *dahdi_request(const char *type, format_t format, cons
 	struct dahdi_pvt *exitpvt;
 	int channelmatched = 0;
 	int groupmatched = 0;
+	int transcapdigital = 0;
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(group);	/* channel/group token */
 		//AST_APP_ARG(ext);	/* extension token */
@@ -12124,21 +12140,6 @@ static struct ast_channel *dahdi_request(const char *type, format_t format, cons
 					break;
 				}
 			}
-			p->outgoing = 1;
-			if (analog_lib_handles(p->sig, p->radio, p->oprmode)) {
-				tmp = analog_request(p->sig_pvt, &callwait, requestor);
-#ifdef HAVE_PRI
-			} else if (dahdi_sig_pri_lib_handles(p->sig)) {
-				sig_pri_extract_called_num_subaddr(p->sig_pvt, data, p->dnid,
-					sizeof(p->dnid));
-				tmp = sig_pri_request(p->sig_pvt, SIG_PRI_DEFLAW, requestor);
-#endif
-			} else {
-				tmp = dahdi_new(p, AST_STATE_RESERVED, 0, p->owner ? SUB_CALLWAIT : SUB_REAL, 0, 0, requestor ? requestor->linkedid : "");
-			}
-			if (!tmp) {
-				p->outgoing = 0;
-			}
 
 			/* Make special notes */
 			if (res > 1) {
@@ -12153,12 +12154,26 @@ static struct ast_channel *dahdi_request(const char *type, format_t format, cons
 						p->distinctivering = y;
 				} else if (opt == 'd') {
 					/* If this is an ISDN call, make it digital */
-					p->digital = 1;
-					if (tmp)
-						tmp->transfercapability = AST_TRANS_CAP_DIGITAL;
+					transcapdigital = AST_TRANS_CAP_DIGITAL;
 				} else {
 					ast_log(LOG_WARNING, "Unknown option '%c' in '%s'\n", opt, (char *)data);
 				}
+			}
+
+			p->outgoing = 1;
+			if (analog_lib_handles(p->sig, p->radio, p->oprmode)) {
+				tmp = analog_request(p->sig_pvt, &callwait, requestor);
+#ifdef HAVE_PRI
+			} else if (dahdi_sig_pri_lib_handles(p->sig)) {
+				sig_pri_extract_called_num_subaddr(p->sig_pvt, data, p->dnid,
+					sizeof(p->dnid));
+				tmp = sig_pri_request(p->sig_pvt, SIG_PRI_DEFLAW, requestor, transcapdigital);
+#endif
+			} else {
+				tmp = dahdi_new(p, AST_STATE_RESERVED, 0, p->owner ? SUB_CALLWAIT : SUB_REAL, 0, transcapdigital, requestor ? requestor->linkedid : "");
+			}
+			if (!tmp) {
+				p->outgoing = 0;
 			}
 			/* Note if the call is a call waiting call */
 			if (tmp && callwait)

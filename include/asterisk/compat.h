@@ -73,8 +73,16 @@
 #include "asterisk/poll-compat.h"
 #endif
 
+#ifndef HAVE_CLOSEFROM
+void closefrom(int lowfd);
+#endif
+
 #if !defined(HAVE_ASPRINTF) && !defined(__AST_DEBUG_MALLOC)
 int __attribute__((format(printf, 2, 3))) asprintf(char **str, const char *fmt, ...);
+#endif
+
+#ifndef HAVE_FFSLL
+int ffsll(long long n);
 #endif
 
 #ifndef HAVE_GETLOADAVG

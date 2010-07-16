@@ -402,6 +402,7 @@ static struct ast_channel * analog_new_ast_channel(struct analog_pvt *p, int sta
 	}
 
 	c = p->calls->new_ast_channel(p->chan_pvt, state, startpbx, sub, requestor);
+	ast_string_field_set(c, call_forward, p->call_forward);
 	p->subs[sub].owner = c;
 	if (!p->owner) {
 		p->owner = c;
@@ -648,7 +649,7 @@ struct ast_channel * analog_request(struct analog_pvt *p, int *callwait, const s
 	return analog_new_ast_channel(p, AST_STATE_RESERVED, 0, p->owner ? ANALOG_SUB_CALLWAIT : ANALOG_SUB_REAL, requestor);
 }
 
-int analog_available(struct analog_pvt *p, int channelmatch, ast_group_t groupmatch, int *busy, int *channelmatched, int *groupmatched)
+int analog_available(struct analog_pvt *p, int *busy)
 {
 	int offhook;
 
@@ -3136,7 +3137,7 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 		}
 
 		/* Added more log_debug information below to provide a better indication of what is going on */
-		ast_debug(1, "Polarity Reversal event occured - DEBUG 2: channel %d, state %d, pol= %d, aonp= %d, honp= %d, pdelay= %d, tv= %d\n", p->channel, ast->_state, p->polarity, p->answeronpolarityswitch, p->hanguponpolarityswitch, p->polarityonanswerdelay, ast_tvdiff_ms(ast_tvnow(), p->polaritydelaytv) );
+		ast_debug(1, "Polarity Reversal event occured - DEBUG 2: channel %d, state %d, pol= %d, aonp= %d, honp= %d, pdelay= %d, tv= %" PRIi64 "\n", p->channel, ast->_state, p->polarity, p->answeronpolarityswitch, p->hanguponpolarityswitch, p->polarityonanswerdelay, ast_tvdiff_ms(ast_tvnow(), p->polaritydelaytv) );
 		break;
 	default:
 		ast_debug(1, "Dunno what to do with event %d on channel %d\n", res, p->channel);
@@ -3511,7 +3512,7 @@ struct analog_pvt *analog_new(enum analog_sigtype signallingtype, struct analog_
 
 /*!
  * \brief Delete the analog private structure.
- * \since 1.6.3
+ * \since 1.8
  *
  * \param doomed Analog private structure to delete.
  *
