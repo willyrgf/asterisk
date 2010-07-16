@@ -71,6 +71,8 @@ SIP Changes
  * Added support for 16khz signed linear media streams.
  * SIP is now able to bind to and communicate with IPv6 addresses. In addition,
    RTP has been outfitted with the same abilities.
+ * Added support for setting the Max-Forwards: header in SIP requests. Setting is
+   available in device configurations as well as in the dial plan.
 
 IAX2 Changes
 -----------
@@ -267,6 +269,7 @@ Queue changes
    result is that if a member becomes auto-paused, he will be paused in all
    queues for which he is a member, not just the queue that failed to reach
    the member.
+ * Added dialplan function QUEUE_EXISTS to check if a queue exists
 
 mISDN channel driver (chan_misdn) changes
 ----------------------------------------
