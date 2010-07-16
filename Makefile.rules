@@ -3,7 +3,7 @@
 # 
 # Makefile rules
 #
-# Copyright (C) 2006-2008, Digium, Inc.
+# Copyright (C) 2006-2010, Digium, Inc.
 #
 # Kevin P. Fleming <kpfleming@digium.com>
 #
@@ -36,11 +36,21 @@ else
 endif
 
 OPTIMIZE?=-O6
+ifneq ($(findstring darwin,$(OSARCH)),)
+  ifeq ($(shell /usr/bin/sw_vers -productVersion | cut -c1-4),10.6)
+    # Snow Leopard has an issue with this optimization flag on large files (like chan_sip)
+    OPTIMIZE+=-fno-inline-functions
+  endif
+endif
 
 ifeq ($(findstring DONT_OPTIMIZE,$(MENUSELECT_CFLAGS)),)
     _ASTCFLAGS+=$(OPTIMIZE)
 else
     _ASTCFLAGS+=-O0
+endif
+
+ifeq ($(findstring $(CONFIG_CFLAGS),$(_ASTCFLAGS)),)
+    _ASTCFLAGS+=$(CONFIG_CFLAGS)
 endif
 
 # shortcuts for common combinations of flags; these must be recursively expanded so that
@@ -49,7 +59,7 @@ CC_CFLAGS=$(PTHREAD_CFLAGS) $(_ASTCFLAGS) $(ASTCFLAGS)
 CXX_CFLAGS=$(PTHREAD_CFLAGS) $(filter-out -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations $(AST_DECLARATION_AFTER_STATEMENT),$(_ASTCFLAGS) $(ASTCFLAGS))
 
 ifeq ($(GNU_LD),1)
-SO_SUPPRESS_SYMBOLS=-Wl,--version-script,$(if $(wildcard $(subst .so,.exports,$@)),$(subst .so,.exports,$@),$(ASTTOPDIR)/default.exports),--warn-common
+SO_SUPPRESS_SYMBOLS=-Wl,--version-script,$(subst .so,.exports,$@),--warn-common
 ifneq ($(wildcard $(subst .so,.dynamics,$@)),)
 SO_SUPPRESS_SYMBOLS+=-Wl,--dynamic-list,$(subst .so,.dynamics,$@)
 endif
@@ -111,10 +121,16 @@ endif
 	$(CMD_PREFIX) $(CXX) -o $@ -E $< $(MAKE_DEPS) $(CXX_CFLAGS)
 
 %.so: %.o
+ifeq ($(GNU_LD),1)
+	$(CMD_PREFIX) $(ASTTOPDIR)/build_tools/make_linker_version_script $* "$(LINKER_SYMBOL_PREFIX)" "$(ASTTOPDIR)"
+endif
 	$(ECHO_PREFIX) echo "   [LD] $^ -> $@"
 	$(CMD_PREFIX) $(CC) $(STATIC_BUILD) -o $@ $(CC_LDFLAGS_SO) $^ $(CC_LIBS)
 
 %.so: %.oo
+ifeq ($(GNU_LD),1)
+	$(CMD_PREFIX) $(ASTTOPDIR)/build_tools/make_linker_version_script $* "$(LINKER_SYMBOL_PREFIX)" "$(ASTTOPDIR)"
+endif
 	$(ECHO_PREFIX) echo "   [LDXX] $^ -> $@"
 	$(CMD_PREFIX) $(CXX) $(STATIC_BUILD) -o $@ $(CXX_LDFLAGS_SO) $^ $(CXX_LIBS)
 

@@ -144,6 +144,7 @@ struct analog_callback {
 	int (* const on_hook)(void *pvt);
 	/*! \brief Set channel off hook */
 	int (* const off_hook)(void *pvt);
+	void (* const set_needringing)(void *pvt, int value);
 	/* We're assuming that we're going to only wink on ANALOG_SUB_REAL - even though in the code there's an argument to the index
 	 * function */
 	int (* const wink)(void *pvt, enum analog_sub sub);
@@ -155,7 +156,7 @@ struct analog_callback {
 	int (* const train_echocanceller)(void *pvt);
 	int (* const dsp_set_digitmode)(void *pvt, enum analog_dsp_digitmode mode);
 	int (* const dsp_reset_and_flush_digits)(void *pvt);
-	int (* const send_callerid)(void *pvt, int cwcid, struct ast_callerid *cid);
+	int (* const send_callerid)(void *pvt, int cwcid, struct ast_party_caller *caller);
 	/* Returns 0 if CID received.  Returns 1 if event received, and -1 if error.  name and num are size ANALOG_MAX_CID */
 	int (* const get_callerid)(void *pvt, char *name, char *num, enum analog_event *ev, size_t timeout);
 	/* Start CID detection */
@@ -204,7 +205,8 @@ struct analog_callback {
 	void * (* const get_sigpvt_bridged_channel)(struct ast_channel *chan);
 	int (* const get_sub_fd)(void *pvt, enum analog_sub sub);
 	void (* const set_cadence)(void *pvt, int *cidrings, struct ast_channel *chan);
-	void (* const set_dialing)(void *pvt, int flag);
+	void (* const set_alarm)(void *pvt, int in_alarm);
+	void (* const set_dialing)(void *pvt, int is_dialing);
 	void (* const set_ringtimeout)(void *pvt, int ringt);
 	void (* const set_waitingfordt)(void *pvt, struct ast_channel *ast);
 	int (* const check_waitingfordt)(void *pvt);
@@ -213,6 +215,8 @@ struct analog_callback {
 	void (* const cancel_cidspill)(void *pvt);
 	int (* const confmute)(void *pvt, int mute);	
 	void (* const set_pulsedial)(void *pvt, int flag);
+
+	const char *(* const get_orig_dialstring)(void *pvt);
 };
 
 
@@ -294,7 +298,7 @@ struct analog_pvt {
 	char callwait_name[AST_MAX_EXTENSION];
 	char lastcid_num[AST_MAX_EXTENSION];
 	char lastcid_name[AST_MAX_EXTENSION];
-	struct ast_callerid cid;
+	struct ast_party_caller caller;
 	int cidrings;					/*!< Which ring to deliver CID on */
 	char echorest[20];
 	int polarity;
@@ -336,7 +340,7 @@ struct ast_frame *analog_exception(struct analog_pvt *p, struct ast_channel *ast
 
 struct ast_channel * analog_request(struct analog_pvt *p, int *callwait, const struct ast_channel *requestor);
 
-int analog_available(struct analog_pvt *p, int *busy);
+int analog_available(struct analog_pvt *p);
 
 void *analog_handle_init_event(struct analog_pvt *i, int event);
 

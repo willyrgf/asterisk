@@ -16,8 +16,8 @@
  * at the top of the source tree.
  */
 
-/*! \file
- *
+/*!
+ * \file
  * \brief Custom SQLite3 CDR records.
  *
  * \author Adapted by Alejandro Rios <alejandro.rios@avatar.com.co> and
@@ -40,7 +40,6 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <time.h>
 #include <sqlite3.h>
 
 #include "asterisk/paths.h"	/* use ast_config_AST_LOG_DIR */
@@ -51,6 +50,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/pbx.h"
 #include "asterisk/utils.h"
 #include "asterisk/cli.h"
+#include "asterisk/app.h"
 
 AST_MUTEX_DEFINE_STATIC(lock);
 
@@ -64,8 +64,8 @@ static char table[80];
 static char *columns;
 
 struct values {
-	char *expression;
 	AST_LIST_ENTRY(values) list;
+	char expression[1];
 };
 
 static AST_LIST_HEAD_STATIC(sql_values, values);
@@ -118,9 +118,12 @@ static int load_column_config(const char *tmp)
 
 static int load_values_config(const char *tmp)
 {
-	char *val = NULL;
 	char *vals = NULL, *save = NULL;
 	struct values *value = NULL;
+	int i;
+	AST_DECLARE_APP_ARGS(val,
+		AST_APP_ARG(ues)[200]; /* More than 200 columns in this CDR?  Yeah, right... */
+	);
 
 	if (ast_strlen_zero(tmp)) {
 		ast_log(LOG_WARNING, "Values not specified. Module not loaded.\n");
@@ -130,17 +133,17 @@ static int load_values_config(const char *tmp)
 		ast_log(LOG_ERROR, "Out of memory creating temporary buffer for value '%s'\n", tmp);
 		return -1;
 	}
-	while ((val = strsep(&vals, ","))) {
+	AST_STANDARD_RAW_ARGS(val, vals);
+	for (i = 0; i < val.argc; i++) {
 		/* Strip the single quotes off if they are there */
-		val = ast_strip_quoted(val, "'", "'");
-		value = ast_calloc(sizeof(char), sizeof(*value) + strlen(val) + 1);
+		char *v = ast_strip_quoted(val.ues[i], "'", "'");
+		value = ast_calloc(sizeof(char), sizeof(*value) + strlen(v));
 		if (!value) {
-			ast_log(LOG_ERROR, "Out of memory creating entry for value '%s'\n", val);
+			ast_log(LOG_ERROR, "Out of memory creating entry for value '%s'\n", v);
 			ast_free(save);
 			return -1;
 		}
-		value->expression = (char *) value + sizeof(*value);
-		ast_copy_string(value->expression, val, strlen(val) + 1);
+		strcpy(value->expression, v); /* SAFE */
 		AST_LIST_INSERT_TAIL(&sql_values, value, list);
 	}
 	ast_free(save);
@@ -220,7 +223,7 @@ static void free_config(int reload)
 	}
 }
 
-static int sqlite3_log(struct ast_cdr *cdr)
+static int write_cdr(struct ast_cdr *cdr)
 {
 	int res = 0;
 	char *error = NULL;
@@ -330,7 +333,7 @@ static int load_module(void)
 		}
 	}
 
-	res = ast_cdr_register(name, desc, sqlite3_log);
+	res = ast_cdr_register(name, desc, write_cdr);
 	if (res) {
 		ast_log(LOG_ERROR, "Unable to register custom SQLite3 CDR handling\n");
 		free_config(0);

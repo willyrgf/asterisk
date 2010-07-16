@@ -563,8 +563,7 @@ static struct ast_config *realtime_multi_pgsql(const char *database, const char 
 		}
 		ast_free(fieldnames);
 	} else {
-		ast_log(LOG_WARNING,
-				"PostgreSQL RealTime: Could not find any rows in table %s.\n", table);
+		ast_debug(1, "PostgreSQL RealTime: Could not find any rows in table %s.\n", table);
 	}
 
 	ast_mutex_unlock(&pgsql_lock);
@@ -637,7 +636,7 @@ static int update_pgsql(const char *database, const char *tablename, const char 
 		newval = va_arg(ap, const char *);
 
 		if (!find_column(table, newparam)) {
-			ast_log(LOG_WARNING, "Attempted to update column '%s' in table '%s', but column does not exist!\n", newparam, tablename);
+			ast_log(LOG_NOTICE, "Attempted to update column '%s' in table '%s', but column does not exist!\n", newparam, tablename);
 			continue;
 		}
 
@@ -1391,8 +1390,8 @@ static int parse_config(int is_reload)
 		/* No socket needed */
 	} else if (!(s = ast_variable_retrieve(config, "general", "dbsock"))) {
 		ast_log(LOG_WARNING,
-				"PostgreSQL RealTime: No database socket found, using '/tmp/pgsql.sock' as default.\n");
-		strcpy(dbsock, "/tmp/pgsql.sock");
+				"PostgreSQL RealTime: No database socket found, using '/tmp/.s.PGSQL.%d' as default.\n", dbport);
+		strcpy(dbsock, "/tmp");
 	} else {
 		ast_copy_string(dbsock, s, sizeof(dbsock));
 	}
@@ -1453,7 +1452,7 @@ static int pgsql_reconnect(const char *database)
 		struct ast_str *connInfo = ast_str_create(32);
 
 		ast_str_set(&connInfo, 0, "host=%s port=%d dbname=%s user=%s",
-			dbhost, dbport, my_database, dbuser);
+			S_OR(dbhost, dbsock), dbport, my_database, dbuser);
 		if (!ast_strlen_zero(dbpass))
 			ast_str_append(&connInfo, 0, " password=%s", dbpass);
 

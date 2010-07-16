@@ -49,6 +49,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/dsp.h"
 #include "asterisk/udptl.h"
 #include "asterisk/heap.h"
+#include "asterisk/app.h"
 
 #include <dlfcn.h>
 
@@ -259,6 +260,7 @@ static struct reload_classes {
 	{ "udptl",	ast_udptl_reload },
 	{ "indications", ast_indications_reload },
 	{ "cel",        ast_cel_engine_reload },
+	{ "plc",        ast_plc_reload },
 	{ NULL, 	NULL }
 };
 
@@ -465,7 +467,7 @@ void ast_module_shutdown(void)
 				continue;
 			}
 			AST_LIST_REMOVE_CURRENT(entry);
-			if (mod->info->unload) {
+			if (mod->flags.running && !mod->flags.declined && mod->info->unload) {
 				mod->info->unload();
 			}
 			AST_LIST_HEAD_DESTROY(&mod->users);
@@ -489,11 +491,13 @@ int ast_unload_resource(const char *resource_name, enum ast_module_unload_mode f
 	if (!(mod = find_resource(resource_name, 0))) {
 		AST_LIST_UNLOCK(&module_list);
 		ast_log(LOG_WARNING, "Unload failed, '%s' could not be found\n", resource_name);
-		return 0;
+		return -1;
 	}
 
-	if (!(mod->flags.running || mod->flags.declined))
+	if (!mod->flags.running || mod->flags.declined) {
+		ast_log(LOG_WARNING, "Unload failed, '%s' is not loaded.\n", resource_name);
 		error = 1;
+	}
 
 	if (!error && (mod->usecount > 0)) {
 		if (force)
@@ -652,6 +656,22 @@ int ast_module_reload(const char *name)
 	}
 	ast_lastreloadtime = ast_tvnow();
 
+	if (ast_opt_lock_confdir) {
+		int try;
+		int res;
+		for (try = 1, res = AST_LOCK_TIMEOUT; try < 6 && (res == AST_LOCK_TIMEOUT); try++) {
+			res = ast_lock_path(ast_config_AST_CONFIG_DIR);
+			if (res == AST_LOCK_TIMEOUT) {
+				ast_log(LOG_WARNING, "Failed to grab lock on %s, try %d\n", ast_config_AST_CONFIG_DIR, try);
+			}
+		}
+		if (res != AST_LOCK_SUCCESS) {
+			ast_verbose("Cannot grab lock on %s\n", ast_config_AST_CONFIG_DIR);
+			ast_mutex_unlock(&reloadlock);
+			return -1;
+		}
+	}
+
 	/* Call "predefined" reload here first */
 	for (i = 0; reload_classes[i].name; i++) {
 		if (!name || !strcasecmp(name, reload_classes[i].name)) {
@@ -661,6 +681,9 @@ int ast_module_reload(const char *name)
 	}
 
 	if (name && res) {
+		if (ast_opt_lock_confdir) {
+			ast_unlock_path(ast_config_AST_CONFIG_DIR);
+		}
 		ast_mutex_unlock(&reloadlock);
 		return res;
 	}
@@ -695,6 +718,9 @@ int ast_module_reload(const char *name)
 	}
 	AST_LIST_UNLOCK(&module_list);
 
+	if (ast_opt_lock_confdir) {
+		ast_unlock_path(ast_config_AST_CONFIG_DIR);
+	}
 	ast_mutex_unlock(&reloadlock);
 
 	return res;
@@ -810,7 +836,7 @@ static enum ast_module_load_result load_resource(const char *resource_name, unsi
 		return required ? AST_MODULE_LOAD_FAILURE : AST_MODULE_LOAD_DECLINE;
 	}
 
-	if (!mod->lib && mod->info->backup_globals()) {
+	if (!mod->lib && mod->info->backup_globals && mod->info->backup_globals()) {
 		ast_log(LOG_WARNING, "Module '%s' was unable to backup its global data.\n", resource_name);
 		return required ? AST_MODULE_LOAD_FAILURE : AST_MODULE_LOAD_DECLINE;
 	}
@@ -1177,6 +1203,10 @@ int ast_loader_unregister(int (*v)(void))
 
 struct ast_module *ast_module_ref(struct ast_module *mod)
 {
+	if (!mod) {
+		return NULL;
+	}
+
 	ast_atomic_fetchadd_int(&mod->usecount, +1);
 	ast_update_use_count();
 
@@ -1185,6 +1215,10 @@ struct ast_module *ast_module_ref(struct ast_module *mod)
 
 void ast_module_unref(struct ast_module *mod)
 {
+	if (!mod) {
+		return;
+	}
+
 	ast_atomic_fetchadd_int(&mod->usecount, -1);
 	ast_update_use_count();
 }

@@ -70,6 +70,10 @@ extern "C" {
 #endif
 
 #include "asterisk/astobj2.h"
+#include "asterisk/frame.h"
+#include "asterisk/netsock2.h"
+#include "asterisk/sched.h"
+#include "asterisk/res_srtp.h"
 
 /* Maximum number of payloads supported */
 #define AST_RTP_MAX_PT 256
@@ -92,10 +96,13 @@ enum ast_rtp_property {
 	AST_RTP_PROPERTY_STUN,
 	/*! Enable RTCP support */
 	AST_RTP_PROPERTY_RTCP,
-	/*! Maximum number of RTP properties supported */
+
+	/*!
+	 * \brief Maximum number of RTP properties supported
+	 *
+	 * \note THIS MUST BE THE LAST ENTRY IN THIS ENUM.
+	 */
 	AST_RTP_PROPERTY_MAX,
-	/*! Don't force a new SSRC on new source */
-	AST_RTP_PROPERTY_CONSTANT_SSRC,
 };
 
 /*! Additional RTP options */
@@ -231,9 +238,9 @@ struct ast_rtp_instance_stats {
 	/*! Number of packets received */
 	unsigned int rxcount;
 	/*! Jitter on transmitted packets */
-	unsigned int txjitter;
+	double txjitter;
 	/*! Jitter on received packets */
-	unsigned int rxjitter;
+	double rxjitter;
 	/*! Maximum jitter on remote side */
 	double remote_maxjitter;
 	/*! Minimum jitter on remote side */
@@ -271,7 +278,7 @@ struct ast_rtp_instance_stats {
 	/*! Standard deviation packets lost on local side */
 	double local_stdevrxploss;
 	/*! Total round trip time */
-	unsigned int rtt;
+	double rtt;
 	/*! Maximum round trip time */
 	double maxrtt;
 	/*! Minimum round trip time */
@@ -306,7 +313,7 @@ struct ast_rtp_engine {
 	/*! Module this RTP engine came from, used for reference counting */
 	struct ast_module *mod;
 	/*! Callback for setting up a new RTP instance */
-	int (*new)(struct ast_rtp_instance *instance, struct sched_context *sched, struct sockaddr_in *sin, void *data);
+	int (*new)(struct ast_rtp_instance *instance, struct sched_context *sched, struct ast_sockaddr *sa, void *data);
 	/*! Callback for destroying an RTP instance */
 	int (*destroy)(struct ast_rtp_instance *instance);
 	/*! Callback for writing out a frame */
@@ -317,10 +324,10 @@ struct ast_rtp_engine {
 	int (*dtmf_begin)(struct ast_rtp_instance *instance, char digit);
 	/*! Callback for stopping RFC2833 DTMF transmission */
 	int (*dtmf_end)(struct ast_rtp_instance *instance, char digit);
-	/*! Callback to indicate that a new source of media has come in */
-	void (*new_source)(struct ast_rtp_instance *instance);
-	/*! Callback to tell new_source not to change SSRC */
-	void (*constant_ssrc_set)(struct ast_rtp_instance *instance);
+	/*! Callback to indicate that we should update the marker bit */
+	void (*update_source)(struct ast_rtp_instance *instance);
+	/*! Callback to indicate that we should update the marker bit and ssrc */
+	void (*change_source)(struct ast_rtp_instance *instance);
 	/*! Callback for setting an extended RTP property */
 	int (*extended_prop_set)(struct ast_rtp_instance *instance, int property, void *value);
 	/*! Callback for getting an extended RTP property */
@@ -332,9 +339,9 @@ struct ast_rtp_engine {
 	/*! Callback for setting packetization preferences */
 	void (*packetization_set)(struct ast_rtp_instance *instance, struct ast_codec_pref *pref);
 	/*! Callback for setting the remote address that RTP is to be sent to */
-	void (*remote_address_set)(struct ast_rtp_instance *instance, struct sockaddr_in *sin);
+	void (*remote_address_set)(struct ast_rtp_instance *instance, struct ast_sockaddr *sa);
 	/*! Callback for setting an alternate remote address */
-	void (*alt_remote_address_set)(struct ast_rtp_instance *instance, struct sockaddr_in *sin);
+	void (*alt_remote_address_set)(struct ast_rtp_instance *instance, struct ast_sockaddr *sa);
 	/*! Callback for changing DTMF mode */
 	int (*dtmf_mode_set)(struct ast_rtp_instance *instance, enum ast_rtp_dtmf_mode dtmf_mode);
 	/*! Callback for retrieving statistics */
@@ -362,7 +369,7 @@ struct ast_rtp_engine {
 	/*! Callback to indicate that packets will now flow */
 	int (*activate)(struct ast_rtp_instance *instance);
 	/*! Callback to request that the RTP engine send a STUN BIND request */
-	void (*stun_request)(struct ast_rtp_instance *instance, struct sockaddr_in *suggestion, const char *username);
+	void (*stun_request)(struct ast_rtp_instance *instance, struct ast_sockaddr *suggestion, const char *username);
 	/*! Callback to get the transcodeable formats supported */
 	int (*available_formats)(struct ast_rtp_instance *instance, format_t to_endpoint, format_t to_asterisk);
 	/*! Linked list information */
@@ -454,6 +461,11 @@ int ast_rtp_engine_register2(struct ast_rtp_engine *engine, struct ast_module *m
  */
 int ast_rtp_engine_unregister(struct ast_rtp_engine *engine);
 
+int ast_rtp_engine_register_srtp(struct ast_srtp_res *srtp_res, struct ast_srtp_policy_res *policy_res);
+
+void ast_rtp_engine_unregister_srtp(void);
+int ast_rtp_engine_srtp_is_registered(void);
+
 #define ast_rtp_glue_register(glue) ast_rtp_glue_register2(glue, ast_module_info->self)
 
 /*!
@@ -507,7 +519,7 @@ int ast_rtp_glue_unregister(struct ast_rtp_glue *glue);
  *
  * \param engine_name Name of the engine to use for the RTP instance
  * \param sched Scheduler context that the RTP engine may want to use
- * \param sin Address we want to bind to
+ * \param sa Address we want to bind to
  * \param data Unique data for the engine
  *
  * \retval non-NULL success
@@ -521,14 +533,16 @@ int ast_rtp_glue_unregister(struct ast_rtp_glue *glue);
  * \endcode
  *
  * This creates a new RTP instance using the default engine and asks the RTP engine to bind to the address given
- * in the sin structure.
+ * in the address structure.
  *
  * \note The RTP engine does not have to use the address provided when creating an RTP instance. It may choose to use
  *       another depending on it's own configuration.
  *
  * \since 1.8
  */
-struct ast_rtp_instance *ast_rtp_instance_new(const char *engine_name, struct sched_context *sched, struct sockaddr_in *sin, void *data);
+struct ast_rtp_instance *ast_rtp_instance_new(const char *engine_name,
+                struct sched_context *sched, const struct ast_sockaddr *sa,
+                void *data);
 
 /*!
  * \brief Destroy an RTP instance
@@ -591,6 +605,7 @@ void *ast_rtp_instance_get_data(struct ast_rtp_instance *instance);
  * \brief Send a frame out over RTP
  *
  * \param instance The RTP instance to send frame out on
+ * \param frame the frame to send out
  *
  * \retval 0 success
  * \retval -1 failure
@@ -650,7 +665,8 @@ struct ast_frame *ast_rtp_instance_read(struct ast_rtp_instance *instance, int r
  *
  * \since 1.8
  */
-int ast_rtp_instance_set_remote_address(struct ast_rtp_instance *instance, struct sockaddr_in *address);
+int ast_rtp_instance_set_remote_address(struct ast_rtp_instance *instance, const struct ast_sockaddr *address);
+
 
 /*!
  * \brief Set the address of an an alternate RTP address to receive from
@@ -664,7 +680,7 @@ int ast_rtp_instance_set_remote_address(struct ast_rtp_instance *instance, struc
  * Example usage:
  *
  * \code
- * ast_rtp_instance_set_alt_remote_address(instance, &sin);
+ * ast_rtp_instance_set_alt_remote_address(instance, &address);
  * \endcode
  *
  * This changes the alternate remote address that RTP will be sent to on instance to the address given in the sin
@@ -672,7 +688,7 @@ int ast_rtp_instance_set_remote_address(struct ast_rtp_instance *instance, struc
  *
  * \since 1.8
  */
-int ast_rtp_instance_set_alt_remote_address(struct ast_rtp_instance *instance, struct sockaddr_in *address);
+int ast_rtp_instance_set_alt_remote_address(struct ast_rtp_instance *instance, const struct ast_sockaddr *address);
 
 /*!
  * \brief Set the address that we are expecting to receive RTP on
@@ -694,7 +710,8 @@ int ast_rtp_instance_set_alt_remote_address(struct ast_rtp_instance *instance, s
  *
  * \since 1.8
  */
-int ast_rtp_instance_set_local_address(struct ast_rtp_instance *instance, struct sockaddr_in *address);
+int ast_rtp_instance_set_local_address(struct ast_rtp_instance *instance,
+                const struct ast_sockaddr *address);
 
 /*!
  * \brief Get the local address that we are expecting RTP on
@@ -708,15 +725,15 @@ int ast_rtp_instance_set_local_address(struct ast_rtp_instance *instance, struct
  * Example usage:
  *
  * \code
- * struct sockaddr_in sin;
- * ast_rtp_instance_get_local_address(instance, &sin);
+ * struct ast_sockaddr address;
+ * ast_rtp_instance_get_local_address(instance, &address);
  * \endcode
  *
- * This gets the local address that we are expecting RTP on and stores it in the 'sin' structure.
+ * This gets the local address that we are expecting RTP on and stores it in the 'address' structure.
  *
  * \since 1.8
  */
-int ast_rtp_instance_get_local_address(struct ast_rtp_instance *instance, struct sockaddr_in *address);
+int ast_rtp_instance_get_local_address(struct ast_rtp_instance *instance, struct ast_sockaddr *address);
 
 /*!
  * \brief Get the address of the remote endpoint that we are sending RTP to
@@ -730,16 +747,16 @@ int ast_rtp_instance_get_local_address(struct ast_rtp_instance *instance, struct
  * Example usage:
  *
  * \code
- * struct sockaddr_in sin;
- * ast_rtp_instance_get_remote_address(instance, &sin);
+ * struct ast_sockaddr address;
+ * ast_rtp_instance_get_remote_address(instance, &address);
  * \endcode
  *
  * This retrieves the current remote address set on the instance pointed to by instance and puts the value
- * into the sin structure.
+ * into the address structure.
  *
  * \since 1.8
  */
-int ast_rtp_instance_get_remote_address(struct ast_rtp_instance *instance, struct sockaddr_in *address);
+int ast_rtp_instance_get_remote_address(struct ast_rtp_instance *instance, struct ast_sockaddr *address);
 
 /*!
  * \brief Set the value of an RTP instance extended property
@@ -860,7 +877,7 @@ void ast_rtp_codecs_payloads_default(struct ast_rtp_codecs *codecs, struct ast_r
  * \brief Copy payload information from one RTP instance to another
  *
  * \param src The source codecs structure
- * \param dst The destination codecs structure that the values from src will be copied to
+ * \param dest The destination codecs structure that the values from src will be copied to
  * \param instance Optionally the instance that the dst codecs structure belongs to
  *
  * Example usage:
@@ -922,7 +939,7 @@ int ast_rtp_codecs_payloads_set_rtpmap_type(struct ast_rtp_codecs *codecs, struc
 /*!
  * \brief Set payload type to a known MIME media type for a codec with a specific sample rate
  *
- * \param rtp RTP structure to modify
+ * \param codecs RTP structure to modify
  * \param instance Optionally the instance that the codecs structure belongs to
  * \param pt Payload type entry to modify
  * \param mimetype top-level MIME type of media stream (typically "audio", "video", "text", etc.)
@@ -1000,7 +1017,7 @@ unsigned int ast_rtp_lookup_sample_rate2(int asterisk_format, format_t code);
  * \brief Retrieve all formats that were found
  *
  * \param codecs Codecs structure to look in
- * \param astFormats An integer to put the Asterisk formats in
+ * \param astformats An integer to put the Asterisk formats in
  * \param nonastformats An integer to put the non-Asterisk formats in
  *
  * Example usage:
@@ -1187,22 +1204,40 @@ int ast_rtp_instance_dtmf_mode_set(struct ast_rtp_instance *instance, enum ast_r
 enum ast_rtp_dtmf_mode ast_rtp_instance_dtmf_mode_get(struct ast_rtp_instance *instance);
 
 /*!
- * \brief Indicate a new source of audio has dropped in
+ * \brief Indicate that the RTP marker bit should be set on an RTP stream
  *
  * \param instance Instance that the new media source is feeding into
  *
  * Example usage:
  *
  * \code
- * ast_rtp_instance_new_source(instance);
+ * ast_rtp_instance_update_source(instance);
  * \endcode
  *
- * This indicates that a new source of media is feeding the instance pointed to by
- * instance.
+ * This indicates that the source of media that is feeding the instance pointed to by
+ * instance has been updated and that the marker bit should be set.
  *
  * \since 1.8
  */
-void ast_rtp_instance_new_source(struct ast_rtp_instance *instance);
+void ast_rtp_instance_update_source(struct ast_rtp_instance *instance);
+
+/*!
+ * \brief Indicate a new source of audio has dropped in and the ssrc should change
+ *
+ * \param instance Instance that the new media source is feeding into
+ *
+ * Example usage:
+ *
+ * \code
+ * ast_rtp_instance_change_source(instance);
+ * \endcode
+ *
+ * This indicates that the source of media that is feeding the instance pointed to by
+ * instance has changed and that the marker bit should be set and the SSRC updated.
+ *
+ * \since 1.8
+ */
+void ast_rtp_instance_change_source(struct ast_rtp_instance *instance);
 
 /*!
  * \brief Set QoS parameters on an RTP session
@@ -1567,7 +1602,7 @@ int ast_rtp_instance_activate(struct ast_rtp_instance *instance);
  *
  * \since 1.8
  */
-void ast_rtp_instance_stun_request(struct ast_rtp_instance *instance, struct sockaddr_in *suggestion, const char *username);
+void ast_rtp_instance_stun_request(struct ast_rtp_instance *instance, struct ast_sockaddr *suggestion, const char *username);
 
 /*!
  * \brief Set the RTP timeout value
@@ -1701,6 +1736,9 @@ struct ast_rtp_glue *ast_rtp_instance_get_active_glue(struct ast_rtp_instance *i
  * \since 1.8
  */
 struct ast_channel *ast_rtp_instance_get_chan(struct ast_rtp_instance *instance);
+
+int ast_rtp_instance_add_srtp_policy(struct ast_rtp_instance *instance, struct ast_srtp_policy *policy);
+struct ast_srtp *ast_rtp_instance_get_srtp(struct ast_rtp_instance *instance);
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }

@@ -350,14 +350,69 @@ static void ast_event_ie_val_destroy(struct ast_event_ie_val *ie_val)
 	ast_free(ie_val);
 }
 
+/*!
+ * \internal
+ * \brief Check if an ie_val matches a subscription
+ *
+ * \param sub subscription to check against
+ * \param ie_val IE value to check
+ *
+ * \retval 0 not matched
+ * \retval non-zero matched
+ */
+static int match_ie_val_to_sub(const struct ast_event_sub *sub, const struct ast_event_ie_val *ie_val)
+{
+	const struct ast_event_ie_val *sub_ie_val;
+	int res = 1;
+
+	AST_LIST_TRAVERSE(&sub->ie_vals, sub_ie_val, entry) {
+		if (sub_ie_val->ie_type == ie_val->ie_type) {
+			break;
+		}
+	}
+
+	if (!sub_ie_val) {
+		/* This subscriber doesn't care about this IE, so consider
+		 * it matched. */
+		return 1;
+	}
+
+	switch (ie_val->ie_pltype) {
+	case AST_EVENT_IE_PLTYPE_UINT:
+		res = (ie_val->payload.uint != sub_ie_val->payload.uint);
+		break;
+	case AST_EVENT_IE_PLTYPE_BITFLAGS:
+		/*
+		 * If the subscriber has requested *any* of the bitflags we are providing,
+		 * then it's a match.
+		 */
+		res = !(ie_val->payload.uint & sub_ie_val->payload.uint);
+		break;
+	case AST_EVENT_IE_PLTYPE_STR:
+		res = strcmp(ie_val->payload.str, sub_ie_val->payload.str);
+		break;
+	case AST_EVENT_IE_PLTYPE_RAW:
+		res = memcmp(ie_val->payload.raw,
+				sub_ie_val->payload.raw, ie_val->raw_datalen);
+		break;
+	case AST_EVENT_IE_PLTYPE_EXISTS:
+	case AST_EVENT_IE_PLTYPE_UNKNOWN:
+		break;
+	}
+
+	return res;
+}
+
 enum ast_event_subscriber_res ast_event_check_subscriber(enum ast_event_type type, ...)
 {
 	va_list ap;
 	enum ast_event_ie_type ie_type;
 	enum ast_event_subscriber_res res = AST_EVENT_SUB_NONE;
-	struct ast_event_ie_val *ie_val, *sub_ie_val;
+	struct ast_event_ie_val *ie_val;
 	struct ast_event_sub *sub;
 	AST_LIST_HEAD_NOLOCK_STATIC(ie_vals, ast_event_ie_val);
+	const enum ast_event_type event_types[] = { type, AST_EVENT_ALL };
+	int i;
 
 	if (type >= AST_EVENT_TOTAL) {
 		ast_log(LOG_ERROR, "%u is an invalid type!\n", type);
@@ -405,74 +460,42 @@ enum ast_event_subscriber_res ast_event_check_subscriber(enum ast_event_type typ
 	}
 	va_end(ap);
 
-	AST_RWDLLIST_RDLOCK(&ast_event_subs[type]);
-	AST_RWDLLIST_TRAVERSE(&ast_event_subs[type], sub, entry) {
-		AST_LIST_TRAVERSE(&ie_vals, ie_val, entry) {
-			int break_out = 0;
-
-			AST_LIST_TRAVERSE(&sub->ie_vals, sub_ie_val, entry) {
-				if (sub_ie_val->ie_type == ie_val->ie_type) {
+	for (i = 0; i < ARRAY_LEN(event_types); i++) {
+		AST_RWDLLIST_RDLOCK(&ast_event_subs[event_types[i]]);
+		AST_RWDLLIST_TRAVERSE(&ast_event_subs[event_types[i]], sub, entry) {
+			AST_LIST_TRAVERSE(&ie_vals, ie_val, entry) {
+				if (match_ie_val_to_sub(sub, ie_val)) {
 					break;
 				}
 			}
 
-			if (!sub_ie_val) {
-				/* This subscriber doesn't care about this IE, so consider
-				 * it matched. */
-				continue;
-			}
-
-			switch (ie_val->ie_pltype) {
-			case AST_EVENT_IE_PLTYPE_UINT:
-				break_out = (ie_val->payload.uint != sub_ie_val->payload.uint);
-				break;
-			case AST_EVENT_IE_PLTYPE_BITFLAGS:
-				/* if the subscriber has requested *any* of the bitflags we are providing,
-				 * then it's a match
-				 */
-				break_out = (ie_val->payload.uint & sub_ie_val->payload.uint);
-				break;
-			case AST_EVENT_IE_PLTYPE_STR:
-				break_out = strcmp(ie_val->payload.str, sub_ie_val->payload.str);
-				break;
-			case AST_EVENT_IE_PLTYPE_RAW:
-				break_out = memcmp(ie_val->payload.raw,
-						sub_ie_val->payload.raw, ie_val->raw_datalen);
-				break;
-			case AST_EVENT_IE_PLTYPE_EXISTS:
-				/* The subscriber doesn't actually care what the value is */
-				break_out = 1;
-				break;
-			case AST_EVENT_IE_PLTYPE_UNKNOWN:
-				break;
-			}
-
-			if (break_out) {
+			if (!ie_val) {
+				/* Everything matched. */
 				break;
 			}
 		}
-
-		if (!ie_val) {
-			/* Everything matched */
+		AST_RWDLLIST_UNLOCK(&ast_event_subs[event_types[i]]);
+		if (sub) {
 			break;
 		}
 	}
-	AST_RWDLLIST_UNLOCK(&ast_event_subs[type]);
 
-	if (sub) {
-		/* All parameters were matched */
-		return AST_EVENT_SUB_EXISTS;
-	}
-
-	AST_RWDLLIST_RDLOCK(&ast_event_subs[AST_EVENT_ALL]);
-	if (!AST_DLLIST_EMPTY(&ast_event_subs[AST_EVENT_ALL])) {
-		res = AST_EVENT_SUB_EXISTS;
-	}
-	AST_RWDLLIST_UNLOCK(&ast_event_subs[AST_EVENT_ALL]);
-
-	return res;
+	return sub ? AST_EVENT_SUB_EXISTS : AST_EVENT_SUB_NONE;
 }
 
+/*!
+ * \internal
+ * \brief Check if an ie_val matches an event
+ *
+ * \param event event to check against
+ * \param ie_val IE value to check
+ * \param event2 optional event, if specified, the value to compare against will be pulled
+ *        from this event instead of from the ie_val structure.  In this case, only the IE
+ *        type and payload type will be pulled from ie_val.
+ *
+ * \retval 0 not matched
+ * \retval non-zero matched
+ */
 static int match_ie_val(const struct ast_event *event,
 		const struct ast_event_ie_val *ie_val, const struct ast_event *event2)
 {
@@ -488,8 +511,9 @@ static int match_ie_val(const struct ast_event *event,
 	{
 		uint32_t flags = event2 ? ast_event_get_ie_uint(event2, ie_val->ie_type) : ie_val->payload.uint;
 
-		/* if the subscriber has requested *any* of the bitflags that this event provides,
-		 * then it's a match
+		/*
+		 * If the subscriber has requested *any* of the bitflags that this event provides,
+		 * then it's a match.
 		 */
 		return (flags & ast_event_get_ie_bitflags(event, ie_val->ie_type)) ? 1 : 0;
 	}
@@ -911,11 +935,20 @@ struct ast_event_sub *ast_event_unsubscribe(struct ast_event_sub *sub)
 	return NULL;
 }
 
-void ast_event_iterator_init(struct ast_event_iterator *iterator, const struct ast_event *event)
+int ast_event_iterator_init(struct ast_event_iterator *iterator, const struct ast_event *event)
 {
-	iterator->event_len = ntohs(event->event_len);
+	int res = 0;
+
+	iterator->event_len = ast_event_get_size(event);
 	iterator->event = event;
-	iterator->ie = (struct ast_event_ie *) ( ((char *) event) + sizeof(*event) );
+	if (iterator->event_len >= sizeof(*event) + sizeof(struct ast_event_ie)) {
+		iterator->ie = (struct ast_event_ie *) ( ((char *) event) + sizeof(*event) );
+	} else {
+		iterator->ie = NULL;
+		res = -1;
+	}
+
+	return res;
 }
 
 int ast_event_iterator_next(struct ast_event_iterator *iterator)
@@ -945,7 +978,7 @@ const char *ast_event_iterator_get_ie_str(struct ast_event_iterator *iterator)
 
 	str_payload = (struct ast_event_ie_str_payload *) iterator->ie->ie_payload;
 
-	return str_payload->str;
+	return str_payload ? str_payload->str : NULL;
 }
 
 void *ast_event_iterator_get_ie_raw(struct ast_event_iterator *iterator)
@@ -982,7 +1015,7 @@ uint32_t ast_event_get_ie_str_hash(const struct ast_event *event, enum ast_event
 
 	str_payload = ast_event_get_ie_raw(event, ie_type);
 
-	return str_payload->hash;
+	return str_payload ? str_payload->hash : 0;
 }
 
 const char *ast_event_get_ie_str(const struct ast_event *event, enum ast_event_ie_type ie_type)
@@ -991,15 +1024,15 @@ const char *ast_event_get_ie_str(const struct ast_event *event, enum ast_event_i
 
 	str_payload = ast_event_get_ie_raw(event, ie_type);
 
-	return str_payload->str;
+	return str_payload ? str_payload->str : NULL;
 }
 
 const void *ast_event_get_ie_raw(const struct ast_event *event, enum ast_event_ie_type ie_type)
 {
 	struct ast_event_iterator iterator;
-	int res = 0;
+	int res;
 
-	for (ast_event_iterator_init(&iterator, event); !res; res = ast_event_iterator_next(&iterator)) {
+	for (res = ast_event_iterator_init(&iterator, event); !res; res = ast_event_iterator_next(&iterator)) {
 		if (ast_event_iterator_get_ie_type(&iterator) == ie_type) {
 			return ast_event_iterator_get_ie_raw(&iterator);
 		}
@@ -1159,10 +1192,16 @@ struct ast_event *ast_event_new(enum ast_event_type type, ...)
 	if (has_ie && !ast_event_get_ie_raw(event, AST_EVENT_IE_EID)) {
 		/* If the event is originating on this server, add the server's
 		 * entity ID to the event. */
-		ast_event_append_ie_raw(&event, AST_EVENT_IE_EID, &ast_eid_default, sizeof(ast_eid_default));
+		ast_event_append_eid(&event);
 	}
 
 	return event;
+}
+
+int ast_event_append_eid(struct ast_event **event)
+{
+	return ast_event_append_ie_raw(event, AST_EVENT_IE_EID,
+			&ast_eid_default, sizeof(ast_eid_default));
 }
 
 void ast_event_destroy(struct ast_event *event)
@@ -1326,32 +1365,28 @@ static int handle_event(void *data)
 {
 	struct ast_event_ref *event_ref = data;
 	struct ast_event_sub *sub;
-	uint16_t host_event_type;
+	const enum ast_event_type event_types[] = {
+		ntohs(event_ref->event->type),
+		AST_EVENT_ALL
+	};
+	int i;
 
-	host_event_type = ntohs(event_ref->event->type);
-
-	/* Subscribers to this specific event first */
-	AST_RWDLLIST_RDLOCK(&ast_event_subs[host_event_type]);
-	AST_RWDLLIST_TRAVERSE(&ast_event_subs[host_event_type], sub, entry) {
-		struct ast_event_ie_val *ie_val;
-		AST_LIST_TRAVERSE(&sub->ie_vals, ie_val, entry) {
-			if (!match_ie_val(event_ref->event, ie_val, NULL)) {
-				break;
+	for (i = 0; i < ARRAY_LEN(event_types); i++) {
+		AST_RWDLLIST_RDLOCK(&ast_event_subs[event_types[i]]);
+		AST_RWDLLIST_TRAVERSE(&ast_event_subs[event_types[i]], sub, entry) {
+			struct ast_event_ie_val *ie_val;
+			AST_LIST_TRAVERSE(&sub->ie_vals, ie_val, entry) {
+				if (!match_ie_val(event_ref->event, ie_val, NULL)) {
+					break;
+				}
 			}
+			if (ie_val) {
+				continue;
+			}
+			sub->cb(event_ref->event, sub->userdata);
 		}
-		if (ie_val) {
-			continue;
-		}
-		sub->cb(event_ref->event, sub->userdata);
+		AST_RWDLLIST_UNLOCK(&ast_event_subs[event_types[i]]);
 	}
-	AST_RWDLLIST_UNLOCK(&ast_event_subs[host_event_type]);
-
-	/* Now to subscribers to all event types */
-	AST_RWDLLIST_RDLOCK(&ast_event_subs[AST_EVENT_ALL]);
-	AST_RWDLLIST_TRAVERSE(&ast_event_subs[AST_EVENT_ALL], sub, entry) {
-		sub->cb(event_ref->event, sub->userdata);
-	}
-	AST_RWDLLIST_UNLOCK(&ast_event_subs[AST_EVENT_ALL]);
 
 	ao2_ref(event_ref, -1);
 
@@ -1376,7 +1411,6 @@ int ast_event_queue(struct ast_event *event)
 	if (ast_event_check_subscriber(host_event_type, AST_EVENT_IE_END)
 			== AST_EVENT_SUB_NONE) {
 		ast_event_destroy(event);
-		ast_log(LOG_NOTICE, "Event destroyed, no subscriber\n");
 		return 0;
 	}
 

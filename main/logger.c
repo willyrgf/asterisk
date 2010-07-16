@@ -214,14 +214,14 @@ static unsigned int make_components(const char *s, int lineno)
 	unsigned int x;
 
 	while ((w = strsep(&stringp, ","))) {
-		int found = 0;
-
 		w = ast_skip_blanks(w);
 
-		for (x = 0; x < ARRAY_LEN(levels); x++) {
+		if (!strcmp(w, "*")) {
+			res = 0xFFFFFFFF;
+			break;
+		} else for (x = 0; x < ARRAY_LEN(levels); x++) {
 			if (levels[x] && !strcasecmp(w, levels[x])) {
 				res |= (1 << x);
-				found = 1;
 				break;
 			}
 		}
@@ -669,9 +669,9 @@ static char *handle_logger_set_level(struct ast_cli_entry *e, int cmd, struct as
 
 	switch (cmd) {
 	case CLI_INIT:
-		e->command = "logger set level";
+		e->command = "logger set level {DEBUG|NOTICE|WARNING|ERROR|VERBOSE|DTMF} {on|off}";
 		e->usage = 
-			"Usage: logger set level\n"
+			"Usage: logger set level {DEBUG|NOTICE|WARNING|ERROR|VERBOSE|DTMF} {on|off}\n"
 			"       Set a specific log level to enabled/disabled for this console.\n";
 		return NULL;
 	case CLI_GENERATE:
@@ -730,7 +730,7 @@ static char *handle_logger_show_channels(struct ast_cli_entry *e, int cmd, struc
 			chan->disabled ? "Disabled" : "Enabled");
 		ast_cli(a->fd, " - ");
 		for (level = 0; level < ARRAY_LEN(levels); level++) {
-			if (chan->logmask & (1 << level)) {
+			if ((chan->logmask & (1 << level)) && levels[level]) {
 				ast_cli(a->fd, "%s ", levels[level]);
 			}
 		}
@@ -738,7 +738,7 @@ static char *handle_logger_show_channels(struct ast_cli_entry *e, int cmd, struc
 	}
 	AST_RWLIST_UNLOCK(&logchannels);
 	ast_cli(a->fd, "\n");
- 		
+
 	return CLI_SUCCESS;
 }
 
@@ -756,12 +756,16 @@ static struct ast_cli_entry cli_logger[] = {
 	AST_CLI_DEFINE(handle_logger_set_level, "Enables/Disables a specific logging level for this console")
 };
 
-static int handle_SIGXFSZ(int sig) 
+static void _handle_SIGXFSZ(int sig)
 {
 	/* Indicate need to reload */
 	filesize_reload_needed = 1;
-	return 0;
 }
+
+static struct sigaction handle_SIGXFSZ = {
+	.sa_handler = _handle_SIGXFSZ,
+	.sa_flags = SA_RESTART,
+};
 
 static void ast_log_vsyslog(struct logmsg *msg)
 {
@@ -832,12 +836,13 @@ static void logger_print_normal(struct logmsg *logmsg)
 				int res = 0;
 
 				/* If no file pointer exists, skip it */
-				if (!chan->fileptr)
+				if (!chan->fileptr) {
 					continue;
-				
+				}
+
 				/* Print out to the file */
 				res = fprintf(chan->fileptr, "[%s] %s[%ld] %s: %s",
-					      logmsg->date, logmsg->level_name, logmsg->process_id, logmsg->file, logmsg->message);
+					      logmsg->date, logmsg->level_name, logmsg->process_id, logmsg->file, term_strip(buf, logmsg->message, BUFSIZ));
 				if (res <= 0 && !ast_strlen_zero(logmsg->message)) {
 					fprintf(stderr, "**** Asterisk Logging Error: ***********\n");
 					if (errno == ENOMEM || errno == ENOSPC)
@@ -928,7 +933,7 @@ int init_logger(void)
 	int res = 0;
 
 	/* auto rotate if sig SIGXFSZ comes a-knockin */
-	(void) signal(SIGXFSZ, (void *) handle_SIGXFSZ);
+	sigaction(SIGXFSZ, &handle_SIGXFSZ, NULL);
 
 	/* start logger thread */
 	ast_cond_init(&logcond, NULL);
@@ -1129,8 +1134,8 @@ void ast_backtrace(void)
 
 	if ((strings = backtrace_symbols(bt->addresses, bt->num_frames))) {
 		ast_debug(1, "Got %d backtrace record%c\n", bt->num_frames, bt->num_frames != 1 ? 's' : ' ');
-		for (i = 0; i < bt->num_frames; i++) {
-			ast_log(LOG_DEBUG, "#%d: [%p] %s\n", i, bt->addresses[i], strings[i]);
+		for (i = 3; i < bt->num_frames - 2; i++) {
+			ast_log(LOG_DEBUG, "#%d: [%p] %s\n", i - 3, bt->addresses[i], strings[i]);
 		}
 
 		/* MALLOC_DEBUG will erroneously report an error here, unless we undef the macro. */

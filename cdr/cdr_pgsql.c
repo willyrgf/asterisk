@@ -20,8 +20,8 @@
  * at the top of the source tree.
  */
 
-/*! \file
- *
+/*!
+ * \file
  * \brief PostgreSQL CDR logger
  *
  * \author Matthew D. Hardeman <mhardemn@papersoft.com>
@@ -41,8 +41,6 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <time.h>
-
 #include <libpq-fe.h>
 
 #include "asterisk/config.h"
@@ -52,8 +50,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #define DATE_FORMAT "'%Y-%m-%d %T'"
 
-static char *name = "pgsql";
-static char *config = "cdr_pgsql.conf";
+static const char name[] = "pgsql";
+static const char config[] = "cdr_pgsql.conf";
 static char *pghostname = NULL, *pgdbname = NULL, *pgdbuser = NULL, *pgpassword = NULL, *pgdbport = NULL, *table = NULL;
 static int connected = 0;
 static int maxsize = 512, maxsize2 = 512;
@@ -165,7 +163,7 @@ static int pgsql_log(struct ast_cdr *cdr)
 			if (strcmp(cur->name, "start") == 0 || strcmp(cur->name, "calldate") == 0) {
 				if (strncmp(cur->type, "int", 3) == 0) {
 					LENGTHEN_BUF2(13);
-					ast_str_append(&sql2, 0, "%s%ld", first ? "" : ",", cdr->start.tv_sec);
+					ast_str_append(&sql2, 0, "%s%ld", first ? "" : ",", (long) cdr->start.tv_sec);
 				} else if (strncmp(cur->type, "float", 5) == 0) {
 					LENGTHEN_BUF2(31);
 					ast_str_append(&sql2, 0, "%s%f", first ? "" : ",", (double)cdr->start.tv_sec + (double)cdr->start.tv_usec / 1000000.0);
@@ -179,7 +177,7 @@ static int pgsql_log(struct ast_cdr *cdr)
 			} else if (strcmp(cur->name, "answer") == 0) {
 				if (strncmp(cur->type, "int", 3) == 0) {
 					LENGTHEN_BUF2(13);
-					ast_str_append(&sql2, 0, "%s%ld", first ? "" : ",", cdr->answer.tv_sec);
+					ast_str_append(&sql2, 0, "%s%ld", first ? "" : ",", (long) cdr->answer.tv_sec);
 				} else if (strncmp(cur->type, "float", 5) == 0) {
 					LENGTHEN_BUF2(31);
 					ast_str_append(&sql2, 0, "%s%f", first ? "" : ",", (double)cdr->answer.tv_sec + (double)cdr->answer.tv_usec / 1000000.0);
@@ -193,7 +191,7 @@ static int pgsql_log(struct ast_cdr *cdr)
 			} else if (strcmp(cur->name, "end") == 0) {
 				if (strncmp(cur->type, "int", 3) == 0) {
 					LENGTHEN_BUF2(13);
-					ast_str_append(&sql2, 0, "%s%ld", first ? "" : ",", cdr->end.tv_sec);
+					ast_str_append(&sql2, 0, "%s%ld", first ? "" : ",", (long) cdr->end.tv_sec);
 				} else if (strncmp(cur->type, "float", 5) == 0) {
 					LENGTHEN_BUF2(31);
 					ast_str_append(&sql2, 0, "%s%f", first ? "" : ",", (double)cdr->end.tv_sec + (double)cdr->end.tv_usec / 1000000.0);
@@ -213,12 +211,12 @@ static int pgsql_log(struct ast_cdr *cdr)
 				} else if (strncmp(cur->type, "float", 5) == 0) {
 					struct timeval *when = cur->name[0] == 'd' ? &cdr->start : &cdr->answer;
 					LENGTHEN_BUF2(31);
-					ast_str_append(&sql2, 0, "%s%f", first ? "" : ",", (double)cdr->end.tv_sec - when->tv_sec + cdr->end.tv_usec / 1000000.0 - when->tv_usec / 1000000.0);
+					ast_str_append(&sql2, 0, "%s%f", first ? "" : ",", (double) (ast_tvdiff_us(cdr->end, *when) / 1000000.0));
 				} else {
 					/* Char field, probably */
 					struct timeval *when = cur->name[0] == 'd' ? &cdr->start : &cdr->answer;
 					LENGTHEN_BUF2(31);
-					ast_str_append(&sql2, 0, "%s'%f'", first ? "" : ",", (double)cdr->end.tv_sec - when->tv_sec + cdr->end.tv_usec / 1000000.0 - when->tv_usec / 1000000.0);
+					ast_str_append(&sql2, 0, "%s'%f'", first ? "" : ",", (double) (ast_tvdiff_us(cdr->end, *when) / 1000000.0));
 				}
 			} else if (strcmp(cur->name, "disposition") == 0 || strcmp(cur->name, "amaflags") == 0) {
 				if (strncmp(cur->type, "int", 3) == 0) {
@@ -528,6 +526,13 @@ static int config_module(int reload)
 		}
 
 		rows = PQntuples(result);
+		if (rows == 0) {
+			ast_log(LOG_ERROR, "cdr_pgsql: Failed to query database columns. No columns found, does the table exist?\n");
+			PQclear(result);
+			unload_module();
+			return AST_MODULE_LOAD_DECLINE;
+		}
+
 		for (i = 0; i < rows; i++) {
 			fname = PQgetvalue(result, i, 0);
 			ftype = PQgetvalue(result, i, 1);

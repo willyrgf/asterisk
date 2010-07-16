@@ -14,8 +14,8 @@
  *
  *****************************************************************************/
 
-#include <asterisk.h>
-#include <asterisk/lock.h>
+#include "asterisk.h"
+#include "asterisk/lock.h"
 #include "ooStackCmds.h"
 #include "ootrace.h"
 #include "ooq931.h"
@@ -401,6 +401,15 @@ int ooReadAndProcessCallStackCommand(OOH323CallData* call)
 				(char *)cmd.param1, *(int *)cmd.param2);
 	       ooSendRequestMode(call, *(int *)cmd.param2);
 	       break;
+
+	    case OO_CMD_SETANI:
+		OOTRACEINFO3("Processing SetANI command %s, ani is %s\n",
+				(char *)cmd.param1, (char *)cmd.param2);
+   		if(cmd.param2) {
+     			strncpy(call->ourCallerId, cmd.param2, sizeof(call->ourCallerId)-1);
+     			call->ourCallerId[sizeof(call->ourCallerId)-1] = '\0';
+   		}
+		break;
 
             default: OOTRACEERR1("ERROR:Unknown command\n");
          }

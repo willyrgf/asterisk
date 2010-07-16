@@ -47,6 +47,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/app.h"
 #include "asterisk/astobj2.h"
 #include "asterisk/strings.h"	/* for the ast_str_*() API */
+#include "asterisk/netsock2.h"
 
 #define MAX_NESTED_COMMENTS 128
 #define COMMENT_START ";--"
@@ -1031,12 +1032,13 @@ static int process_text_line(struct ast_config *cfg, struct ast_category **cat,
 		if (*c) {
 			*c = '\0';
 			/* Find real argument */
-			c = ast_skip_blanks(c + 1);
+			c = ast_strip(c + 1);
 			if (!(*c)) {
 				c = NULL;
 			}
-		} else 
+		} else {
 			c = NULL;
+		}
 		if (!strcasecmp(cur, "include")) {
 			do_include = 1;
 		} else if (!strcasecmp(cur, "exec")) {
@@ -1060,20 +1062,14 @@ static int process_text_line(struct ast_config *cfg, struct ast_category **cat,
 
 		cur = c;
 		/* Strip off leading and trailing "'s and <>'s */
-		if (*c == '"') {
-			/* Dequote */
-			while (*c) {
-				if (*c == '"') {
-					strcpy(c, c + 1); /* SAFE */
-					c--;
-				} else if (*c == '\\') {
-					strcpy(c, c + 1); /* SAFE */
-				}
-				c++;
+		/* Dequote */
+		if ((*c == '"') || (*c == '<')) {
+			char quote_char = *c;
+			if (quote_char == '<') {
+				quote_char = '>';
 			}
-		} else if (*c == '<') {
-			/* C-style include */
-			if (*(c + strlen(c) - 1) == '>') {
+
+			if (*(c + strlen(c) - 1) == quote_char) {
 				cur++;
 				*(c + strlen(c) - 1) = '\0';
 			}
@@ -1907,7 +1903,9 @@ int read_config_maps(void)
 	configtmp = ast_config_new();
 	configtmp->max_include_level = 1;
 	config = ast_config_internal_load(extconfig_conf, configtmp, flags, "", "extconfig");
-	if (!config) {
+	if (config == CONFIG_STATUS_FILEINVALID) {
+		return -1;
+	} else if (!config) {
 		ast_config_destroy(configtmp);
 		return 0;
 	}
@@ -2389,7 +2387,20 @@ int ast_parse_arg(const char *arg, enum ast_parse_flags flags,
 			result ? *result : x, error);
 		break;
 	    }
-	case PARSE_INADDR:
+	case PARSE_ADDR:
+	    {
+		struct ast_sockaddr *addr = (struct ast_sockaddr *)p_result;
+
+		if (!ast_sockaddr_parse(addr, arg, flags & PARSE_PORT_MASK)) {
+			error = 1;
+		}
+
+		ast_debug(3, "extract addr from %s gives %s(%d)\n",
+			  arg, ast_sockaddr_stringify(addr), error);
+
+		break;
+	    }
+	case PARSE_INADDR:	/* TODO Remove this (use PARSE_ADDR instead). */
 	    {
 		char *port, *buf;
 		struct sockaddr_in _sa_buf;	/* buffer for the result */
@@ -2464,9 +2475,8 @@ static char *handle_cli_core_show_config_mappings(struct ast_cli_entry *e, int c
 	if (!config_engine_list) {
 		ast_cli(a->fd, "No config mappings found.\n");
 	} else {
-		ast_cli(a->fd, "\n\n");
 		for (eng = config_engine_list; eng; eng = eng->next) {
-			ast_cli(a->fd, "\nConfig Engine: %s\n", eng->name);
+			ast_cli(a->fd, "Config Engine: %s\n", eng->name);
 			for (map = config_maps; map; map = map->next) {
 				if (!strcasecmp(map->driver, eng->name)) {
 					ast_cli(a->fd, "===> %s (db=%s, table=%s)\n", map->name, map->database,
@@ -2474,7 +2484,6 @@ static char *handle_cli_core_show_config_mappings(struct ast_cli_entry *e, int c
 				}
 			}
 		}
-		ast_cli(a->fd,"\n\n");
 	}
 	
 	ast_mutex_unlock(&config_lock);

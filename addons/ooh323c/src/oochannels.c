@@ -13,8 +13,8 @@
  * maintain this copyright notice.
  *
  *****************************************************************************/
-#include <asterisk.h>
-#include <asterisk/lock.h>
+#include "asterisk.h"
+#include "asterisk/lock.h"
 
 #include "ooports.h" 
 #include "oochannels.h"
@@ -134,7 +134,7 @@ int ooCreateH245Connection(OOH323CallData *call)
          call->pH245Channel->sock = channelSocket;
          call->h245SessionState = OO_H245SESSION_ACTIVE;
 
-         OOTRACEINFO3("H245 connection creation succesful (%s, %s)\n",
+         OOTRACEINFO3("H245 connection creation successful (%s, %s)\n",
                       call->callType, call->callToken);
 
          /*Start terminal capability exchange and master slave determination */
@@ -300,7 +300,7 @@ int ooCreateH225Connection(OOH323CallData *call)
       {
          call->pH225Channel->sock = channelSocket;
 
-         OOTRACEINFO3("H2250 transmiter channel creation - succesful "
+         OOTRACEINFO3("H2250 transmiter channel creation - successful "
                       "(%s, %s)\n", call->callType, call->callToken);
 
          /* If multihomed, get ip from socket */
@@ -748,8 +748,9 @@ int ooProcessCallFDSETsAndTimers
 	    ast_mutex_lock(&call->Lock);
             ooEndCall(call);
 	    ast_mutex_unlock(&call->Lock);
-	    ooStopMonitorCallChannels(call);
      }
+     if(call->callState >= OO_CALL_CLEARED)
+		ooStopMonitorCallChannels(call);
    }
 
    return OO_OK;
@@ -1124,7 +1125,7 @@ int ooH2250Receive(OOH323CallData *call)
    finishPrint();
    removeEventHandler(pctxt);
    if(ret == OO_OK) {
-      ooHandleH2250Message(call, pmsg);
+      ret = ooHandleH2250Message(call, pmsg);
    }
    return ret;
 }

@@ -17,7 +17,7 @@
  */
 
 /*! \file
- * \brief Resource for handling iCalnedar calendars
+ * \brief Resource for handling MS Exchange calendars
  */
 
 /*** MODULEINFO
@@ -30,10 +30,10 @@
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <libical/ical.h>
-#include <neon/ne_session.h>
-#include <neon/ne_uri.h>
-#include <neon/ne_request.h>
-#include <neon/ne_auth.h>
+#include <ne_session.h>
+#include <ne_uri.h>
+#include <ne_request.h>
+#include <ne_auth.h>
 #include <iksemel.h>
 
 #include "asterisk/module.h"
@@ -694,7 +694,7 @@ static void *exchangecal_load_calendar(void *void_data)
 
 	pvt->session = ne_session_create(pvt->uri.scheme, pvt->uri.host, pvt->uri.port);
 	ne_set_server_auth(pvt->session, auth_credentials, pvt);
-	if (!strncasecmp(pvt->uri.scheme, "https", sizeof(pvt->uri.scheme))) {
+	if (!strcasecmp(pvt->uri.scheme, "https")) {
 		ne_ssl_trust_default_ca(pvt->session);
 	}
 

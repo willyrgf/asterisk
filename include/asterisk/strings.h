@@ -342,11 +342,16 @@ int ast_get_timeval(const char *src, struct timeval *tv, struct timeval _default
  *	ast_str_set_va(&buf, max_len, ap)
  *	ast_str_append_va(&buf, max_len, ap)
  *
- * \param max_len The maximum allowed length, reallocating if needed.
+ * \param max_len The maximum allowed capacity of the ast_str. Note that
+ *  if the value of max_len is less than the current capacity of the
+ *  ast_str (as returned by ast_str_size), then the parameter is effectively
+ *  ignored.
  * 	0 means unlimited, -1 means "at most the available space"
  *
  * \return All the functions return <0 in case of error, or the
- *	length of the string added to the buffer otherwise.
+ *	length of the string added to the buffer otherwise. Note that
+ *	in most cases where an error is returned, characters ARE written
+ *	to the ast_str.
  */
 
 /*! \brief The descriptor of a dynamic string
@@ -577,6 +582,23 @@ int ast_str_make_space(struct ast_str **buf, size_t new_len),
 )
 #endif
 
+AST_INLINE_API(
+int ast_str_copy_string(struct ast_str **dst, struct ast_str *src),
+{
+
+	/* make sure our destination is large enough */
+	if (src->__AST_STR_USED + 1 > (*dst)->__AST_STR_LEN) {
+		if (ast_str_make_space(dst, src->__AST_STR_USED + 1)) {
+			return -1;
+		}
+	}
+
+	memcpy((*dst)->__AST_STR_STR, src->__AST_STR_STR, src->__AST_STR_USED + 1);
+	(*dst)->__AST_STR_USED = src->__AST_STR_USED;
+	return 0;
+}
+)
+
 #define ast_str_alloca(init_len)			\
 	({						\
 		struct ast_str *__ast_str_buf;			\
@@ -703,14 +725,14 @@ enum {
  *       file.
  */
 #if (defined(MALLOC_DEBUG) && !defined(STANDALONE))
-int __attribute__((format(printf, 4, 0))) __ast_debug_str_helper(struct ast_str **buf, size_t max_len,
+int __attribute__((format(printf, 4, 0))) __ast_debug_str_helper(struct ast_str **buf, ssize_t max_len,
 							   int append, const char *fmt, va_list ap, const char *file, int lineno, const char *func);
 #define __ast_str_helper(a,b,c,d,e)	__ast_debug_str_helper(a,b,c,d,e,__FILE__,__LINE__,__PRETTY_FUNCTION__)
 #else
-int __attribute__((format(printf, 4, 0))) __ast_str_helper(struct ast_str **buf, size_t max_len,
+int __attribute__((format(printf, 4, 0))) __ast_str_helper(struct ast_str **buf, ssize_t max_len,
 							   int append, const char *fmt, va_list ap);
 #endif
-char *__ast_str_helper2(struct ast_str **buf, size_t max_len,
+char *__ast_str_helper2(struct ast_str **buf, ssize_t max_len,
 	const char *src, size_t maxsrc, int append, int escapecommas);
 
 /*!
@@ -751,7 +773,7 @@ char *__ast_str_helper2(struct ast_str **buf, size_t max_len,
  * }
  * \endcode
  */
-AST_INLINE_API(int __attribute__((format(printf, 3, 0))) ast_str_set_va(struct ast_str **buf, size_t max_len, const char *fmt, va_list ap),
+AST_INLINE_API(int __attribute__((format(printf, 3, 0))) ast_str_set_va(struct ast_str **buf, ssize_t max_len, const char *fmt, va_list ap),
 {
 	return __ast_str_helper(buf, max_len, 0, fmt, ap);
 }
@@ -762,35 +784,35 @@ AST_INLINE_API(int __attribute__((format(printf, 3, 0))) ast_str_set_va(struct a
  *
  * Same as ast_str_set_va(), but append to the current content.
  */
-AST_INLINE_API(int __attribute__((format(printf, 3, 0))) ast_str_append_va(struct ast_str **buf, size_t max_len, const char *fmt, va_list ap),
+AST_INLINE_API(int __attribute__((format(printf, 3, 0))) ast_str_append_va(struct ast_str **buf, ssize_t max_len, const char *fmt, va_list ap),
 {
 	return __ast_str_helper(buf, max_len, 1, fmt, ap);
 }
 )
 
 /*!\brief Set a dynamic string to a non-NULL terminated substring. */
-AST_INLINE_API(char *ast_str_set_substr(struct ast_str **buf, size_t maxlen, const char *src, size_t maxsrc),
+AST_INLINE_API(char *ast_str_set_substr(struct ast_str **buf, ssize_t maxlen, const char *src, size_t maxsrc),
 {
 	return __ast_str_helper2(buf, maxlen, src, maxsrc, 0, 0);
 }
 )
 
 /*!\brief Append a non-NULL terminated substring to the end of a dynamic string. */
-AST_INLINE_API(char *ast_str_append_substr(struct ast_str **buf, size_t maxlen, const char *src, size_t maxsrc),
+AST_INLINE_API(char *ast_str_append_substr(struct ast_str **buf, ssize_t maxlen, const char *src, size_t maxsrc),
 {
 	return __ast_str_helper2(buf, maxlen, src, maxsrc, 1, 0);
 }
 )
 
 /*!\brief Set a dynamic string to a non-NULL terminated substring, with escaping of commas. */
-AST_INLINE_API(char *ast_str_set_escapecommas(struct ast_str **buf, size_t maxlen, const char *src, size_t maxsrc),
+AST_INLINE_API(char *ast_str_set_escapecommas(struct ast_str **buf, ssize_t maxlen, const char *src, size_t maxsrc),
 {
 	return __ast_str_helper2(buf, maxlen, src, maxsrc, 0, 1);
 }
 )
 
 /*!\brief Append a non-NULL terminated substring to the end of a dynamic string, with escaping of commas. */
-AST_INLINE_API(char *ast_str_append_escapecommas(struct ast_str **buf, size_t maxlen, const char *src, size_t maxsrc),
+AST_INLINE_API(char *ast_str_append_escapecommas(struct ast_str **buf, ssize_t maxlen, const char *src, size_t maxsrc),
 {
 	return __ast_str_helper2(buf, maxlen, src, maxsrc, 1, 1);
 }
@@ -815,7 +837,7 @@ AST_INLINE_API(char *ast_str_append_escapecommas(struct ast_str **buf, size_t ma
  */
 AST_INLINE_API(
 int __attribute__((format(printf, 3, 4))) ast_str_set(
-	struct ast_str **buf, size_t max_len, const char *fmt, ...),
+	struct ast_str **buf, ssize_t max_len, const char *fmt, ...),
 {
 	int res;
 	va_list ap;
@@ -836,7 +858,7 @@ int __attribute__((format(printf, 3, 4))) ast_str_set(
  */
 AST_INLINE_API(
 int __attribute__((format(printf, 3, 4))) ast_str_append(
-	struct ast_str **buf, size_t max_len, const char *fmt, ...),
+	struct ast_str **buf, ssize_t max_len, const char *fmt, ...),
 {
 	int res;
 	va_list ap;

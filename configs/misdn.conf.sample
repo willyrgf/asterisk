@@ -132,6 +132,13 @@ crypt_keys=test,muh
                               ; (with size always equals to jbmaxsize) and "adaptive" (with
                               ; variable size, actually the new jb of IAX2). Defaults to fixed.
 
+; jbtargetextra = 40          ; This option only affects the jb when 'jbimpl = adaptive' is set.
+                              ; The option represents the number of milliseconds by which the new
+                              ; jitter buffer will pad its size. the default is 40, so without
+                              ; modification, the new jitter buffer will set its size to the jitter
+                              ; value plus 40 milliseconds. increasing this value may help if your
+                              ; network normally has low jitter, but occasionally has spikes.
+
 ; jblog = no                  ; Enables jitterbuffer frame logging. Defaults to "no".
 ;-----------------------------------------------------------------------------------
 
@@ -396,6 +403,19 @@ nodialtone=no
 ; default values s=-1, p=-1
 presentation=-1
 screen=-1
+
+; Incoming calls will have a caller ID tag set to this value
+;
+;incoming_cid_tag = "asterisk"
+
+; With this set, you can automatically append the MSN of a party
+; to the cid_tag. Incoming calls have the dialed number appended
+; to the tag, and outgoing calls have the caller number appended
+; to the tag. An '_' is used to separate the tag from the
+; MSN.
+; Default is no.
+;
+;append_msn_to_cid_tag = no
 
 ; Select what to do with outgoing COLP information on this port.
 ;

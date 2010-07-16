@@ -42,7 +42,7 @@
  ***/
 
 /*** MAKEOPTS
-<category name="MENUSELECT_OPTS_app_voicemail" displayname="Voicemail Build Options" positive_output="yes" remove_on_change="apps/app_voicemail.o apps/app_voicemail.so apps/app_directory.o apps/app_directory.so">
+<category name="MENUSELECT_OPTS_app_voicemail" displayname="Voicemail Build Options" positive_output="yes" touch_on_change="apps/app_voicemail.c apps/app_directory.c">
 	<member name="FILE_STORAGE" displayname="Storage of Voicemail using filesystem">
 		<conflict>ODBC_STORAGE</conflict>
 		<conflict>IMAP_STORAGE</conflict>
@@ -94,6 +94,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <sys/mman.h>
 #include <time.h>
 #include <dirent.h>
+#if defined(__FreeBSD__) || defined(__OpenBSD__)
+#include <sys/wait.h>
+#endif
 
 #include "asterisk/logger.h"
 #include "asterisk/lock.h"
@@ -115,6 +118,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/astobj2.h"
 #include "asterisk/event.h"
 #include "asterisk/taskprocessor.h"
+#include "asterisk/test.h"
 
 #ifdef ODBC_STORAGE
 #include "asterisk/res_odbc.h"
@@ -246,6 +250,13 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			may be specified. If a <replaceable>mailbox</replaceable> is not provided, the calling party will
 			be prompted to enter one. If a <replaceable>context</replaceable> is not specified, the
 			<literal>default</literal> context will be used.</para>
+			<para>The VoiceMailMain application will exit if the following DTMF digit is entered as Mailbox
+			or Password, and the extension exists:</para>
+			<enumlist>
+				<enum name="*">
+					<para>Jump to the <literal>a</literal> extension in the current dialplan context.</para>
+				</enum>
+			</enumlist>
 		</description>
 	</application>
 	<application name="MailboxExists" language="en_US">
@@ -299,6 +310,28 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			specified, only that mailbox's password will be considered valid. If the <replaceable>mailbox</replaceable>
 			is not specified, the channel variable <variable>AUTH_MAILBOX</variable> will be set with the authenticated
 			mailbox.</para>
+			<para>The VMAuthenticate application will exit if the following DTMF digit is entered as Mailbox
+			or Password, and the extension exists:</para>
+			<enumlist>
+				<enum name="*">
+					<para>Jump to the <literal>a</literal> extension in the current dialplan context.</para>
+				</enum>
+			</enumlist>
+		</description>
+	</application>
+	<application name="VMSayName" language="en_US">
+		<synopsis>
+			Play the name of a voicemail user
+		</synopsis>
+		<syntax>
+			<parameter name="mailbox" required="true" argsep="@">
+				<argument name="mailbox" />
+				<argument name="context" />
+			</parameter>
+		</syntax>
+		<description>
+			<para>This application will say the recorded name of the voicemail user specified as the
+			argument to this application. If no context is provided, <literal>default</literal> is assumed.</para>
 		</description>
 	</application>
 	<function name="MAILBOX_EXISTS" language="en_US">
@@ -364,7 +397,7 @@ static int save_body(BODY *body, struct vm_state *vms, char *section, char *form
 static void get_mailbox_delimiter(MAILSTREAM *stream);
 static void mm_parsequota (MAILSTREAM *stream, unsigned char *msg, QUOTALIST *pquota);
 static void imap_mailbox_name(char *spec, size_t len, struct vm_state *vms, int box, int target);
-static int imap_store_file(char *dir, char *mailboxuser, char *mailboxcontext, int msgnum, struct ast_channel *chan, struct ast_vm_user *vmu, char *fmt, int duration, struct vm_state *vms, const char *flag);
+static int imap_store_file(const char *dir, const char *mailboxuser, const char *mailboxcontext, int msgnum, struct ast_channel *chan, struct ast_vm_user *vmu, char *fmt, int duration, struct vm_state *vms, const char *flag);
 static void update_messages_by_imapuser(const char *user, unsigned long number);
 static int vm_delete(char *file);
 
@@ -416,7 +449,11 @@ static AST_LIST_HEAD_STATIC(vmstates, vmstate);
 
 #define BASELINELEN 72
 #define BASEMAXINLINE 256
-#define eol "\r\n"
+#ifdef IMAP_STORAGE
+#define ENDL "\r\n"
+#else
+#define ENDL "\n"
+#endif
 
 #define MAX_DATETIME_FORMAT	512
 #define MAX_NUM_CID_CONTEXTS 10
@@ -441,6 +478,7 @@ static AST_LIST_HEAD_STATIC(vmstates, vmstate);
 #define VM_MESSAGEWRAP   (1 << 17)  /*!< Wrap around from the last message to the first, and vice-versa */
 #define VM_FWDURGAUTO    (1 << 18)  /*!< Autoset of Urgent flag on forwarded Urgent messages set globally */
 #define ERROR_LOCK_PATH  -100
+#define OPERATOR_EXIT     300
 
 
 enum vm_box {
@@ -598,6 +636,7 @@ struct ast_vm_user {
 	char mailcmd[160];               /*!< Configurable mail command */
 	char language[MAX_LANGUAGE];     /*!< Config: Language setting */
 	char zonetag[80];                /*!< Time zone */
+	char locale[20];                 /*!< The locale (for presentation of date/time) */
 	char callback[80];
 	char dialout[80];
 	char uniqueid[80];               /*!< Unique integer identifier */
@@ -605,6 +644,7 @@ struct ast_vm_user {
 	char attachfmt[20];              /*!< Attachment format */
 	unsigned int flags;              /*!< VM_ flags */	
 	int saydurationm;
+	int minsecs;                     /*!< Minimum number of seconds per message for this mailbox */
 	int maxmsg;                      /*!< Maximum number of msgs per folder for this mailbox */
 	int maxdeletedmsg;               /*!< Maximum number of deleted msgs saved for this mailbox */
 	int maxsecs;                     /*!< Maximum number of seconds per message for this mailbox */
@@ -729,9 +769,12 @@ static char *app2 = "VoiceMailMain";
 static char *app3 = "MailboxExists";
 static char *app4 = "VMAuthenticate";
 
+static char *sayname_app = "VMSayName";
+
 static AST_LIST_HEAD_STATIC(users, ast_vm_user);
 static AST_LIST_HEAD_STATIC(zones, vm_zone);
 static char zonetag[80];
+static char locale[20];
 static int maxsilence;
 static int maxmsg;
 static int maxdeletedmsg;
@@ -883,7 +926,7 @@ static int inprocess_count(const char *context, const char *mailbox, int delta)
 	strcpy(arg->mailbox, mailbox); /* SAFE */
 	strcpy(arg->context, context); /* SAFE */
 	ao2_lock(inprocess_container);
-	if ((i = ao2_find(inprocess_container, &arg, 0))) {
+	if ((i = ao2_find(inprocess_container, arg, 0))) {
 		int ret = ast_atomic_fetchadd_int(&i->count, delta);
 		ao2_unlock(inprocess_container);
 		ao2_ref(i, -1);
@@ -946,18 +989,26 @@ static void populate_defaults(struct ast_vm_user *vmu)
 {
 	ast_copy_flags(vmu, (&globalflags), AST_FLAGS_ALL);	
 	vmu->passwordlocation = passwordlocation;
-	if (saydurationminfo)
+	if (saydurationminfo) {
 		vmu->saydurationm = saydurationminfo;
+	}
 	ast_copy_string(vmu->callback, callcontext, sizeof(vmu->callback));
 	ast_copy_string(vmu->dialout, dialcontext, sizeof(vmu->dialout));
 	ast_copy_string(vmu->exit, exitcontext, sizeof(vmu->exit));
 	ast_copy_string(vmu->zonetag, zonetag, sizeof(vmu->zonetag));
-	if (vmmaxsecs)
+	ast_copy_string(vmu->locale, locale, sizeof(vmu->locale));
+	if (vmminsecs) {
+		vmu->minsecs = vmminsecs;
+	}
+	if (vmmaxsecs) {
 		vmu->maxsecs = vmmaxsecs;
-	if (maxmsg)
+	}
+	if (maxmsg) {
 		vmu->maxmsg = maxmsg;
-	if (maxdeletedmsg)
+	}
+	if (maxdeletedmsg) {
 		vmu->maxdeletedmsg = maxdeletedmsg;
+	}
 	vmu->volgain = volgain;
 	vmu->emailsubject = NULL;
 	vmu->emailbody = NULL;
@@ -987,6 +1038,8 @@ static void apply_option(struct ast_vm_user *vmu, const char *var, const char *v
 		ast_copy_string(vmu->language, value, sizeof(vmu->language));
 	} else if (!strcasecmp(var, "tz")) {
 		ast_copy_string(vmu->zonetag, value, sizeof(vmu->zonetag));
+	} else if (!strcasecmp(var, "locale")) {
+		ast_copy_string(vmu->locale, value, sizeof(vmu->locale));
 #ifdef IMAP_STORAGE
 	} else if (!strcasecmp(var, "imapuser")) {
 		ast_copy_string(vmu->imapuser, value, sizeof(vmu->imapuser));
@@ -1036,6 +1089,13 @@ static void apply_option(struct ast_vm_user *vmu, const char *var, const char *v
 		ast_copy_string(vmu->dialout, value, sizeof(vmu->dialout));
 	} else if (!strcasecmp(var, "exitcontext")) {
 		ast_copy_string(vmu->exit, value, sizeof(vmu->exit));
+	} else if (!strcasecmp(var, "minsecs")) {
+		if (sscanf(value, "%30d", &x) == 1 && x >= 0) {
+			vmu->minsecs = x;
+		} else {
+			ast_log(LOG_WARNING, "Invalid min message length of %s. Using global value %d\n", value, vmminsecs);
+			vmu->minsecs = vmminsecs;
+		}
 	} else if (!strcasecmp(var, "maxmessage") || !strcasecmp(var, "maxsecs")) {
 		vmu->maxsecs = atoi(value);
 		if (vmu->maxsecs <= 0) {
@@ -1056,6 +1116,8 @@ static void apply_option(struct ast_vm_user *vmu, const char *var, const char *v
 			ast_log(AST_LOG_WARNING, "Maximum number of messages per folder is %d. Cannot accept value maxmsg=%s\n", MAXMSGLIMIT, value);
 			vmu->maxmsg = MAXMSGLIMIT;
 		}
+	} else if (!strcasecmp(var, "nextaftercmd")) {
+		ast_set2_flag(vmu, ast_true(value), VM_SKIPAFTERCMD);
 	} else if (!strcasecmp(var, "backupdeleted")) {
 		if (sscanf(value, "%30d", &x) == 1)
 			vmu->maxdeletedmsg = x;
@@ -1507,6 +1569,9 @@ static void vm_change_password_shell(struct ast_vm_user *vmu, char *newpassword)
  * \brief Creates a file system path expression for a folder within the voicemail data folder and the appropriate context.
  * \param dest The variable to hold the output generated path expression. This buffer should be of size PATH_MAX.
  * \param len The length of the path string that was written out.
+ * \param context
+ * \param ext 
+ * \param folder 
  * 
  * The path is constructed as 
  * 	VM_SPOOL_DIRcontext/ext/folder
@@ -1522,6 +1587,8 @@ static int make_dir(char *dest, int len, const char *context, const char *ext, c
  * \brief Creates a file system path expression for a folder within the voicemail data folder and the appropriate context.
  * \param dest The variable to hold the output generated path expression. This buffer should be of size PATH_MAX.
  * \param len The length of the path string that was written out.
+ * \param dir 
+ * \param num 
  * 
  * The path is constructed as 
  * 	VM_SPOOL_DIRcontext/ext/folder
@@ -1867,42 +1934,37 @@ exit:
 static int folder_int(const char *folder)
 {
 	/*assume a NULL folder means INBOX*/
-	if (!folder)
+	if (!folder) {
 		return 0;
-	if (!strcasecmp(folder, imapfolder))
+	}
+	if (!strcasecmp(folder, imapfolder)) {
 		return 0;
-	else if (!strcasecmp(folder, "Old"))
+	} else if (!strcasecmp(folder, "Old")) {
 		return 1;
-	else if (!strcasecmp(folder, "Work"))
+	} else if (!strcasecmp(folder, "Work")) {
 		return 2;
-	else if (!strcasecmp(folder, "Family"))
+	} else if (!strcasecmp(folder, "Family")) {
 		return 3;
-	else if (!strcasecmp(folder, "Friends"))
+	} else if (!strcasecmp(folder, "Friends")) {
 		return 4;
-	else if (!strcasecmp(folder, "Cust1"))
+	} else if (!strcasecmp(folder, "Cust1")) {
 		return 5;
-	else if (!strcasecmp(folder, "Cust2"))
+	} else if (!strcasecmp(folder, "Cust2")) {
 		return 6;
-	else if (!strcasecmp(folder, "Cust3"))
+	} else if (!strcasecmp(folder, "Cust3")) {
 		return 7;
-	else if (!strcasecmp(folder, "Cust4"))
+	} else if (!strcasecmp(folder, "Cust4")) {
 		return 8;
-	else if (!strcasecmp(folder, "Cust5"))
+	} else if (!strcasecmp(folder, "Cust5")) {
 		return 9;
-	else /*assume they meant INBOX if folder is not found otherwise*/
+	} else if (!strcasecmp(folder, "Urgent")) {
+		return 11;
+	} else { /*assume they meant INBOX if folder is not found otherwise*/
 		return 0;
+	}
 }
 
-/*!
- * \brief Gets the number of messages that exist in a mailbox folder.
- * \param context
- * \param mailbox
- * \param folder
- * 
- * This method is used when IMAP backend is used.
- * \return The number of messages in this mailbox folder (zero or more).
- */
-static int messagecount(const char *context, const char *mailbox, const char *folder)
+static int __messagecount(const char *context, const char *mailbox, const char *folder)
 {
 	SEARCHPGM *pgm;
 	SEARCHHEADER *hdr;
@@ -1950,13 +2012,10 @@ static int messagecount(const char *context, const char *mailbox, const char *fo
 	if (vms_p) {
 		ast_debug(3, "Returning before search - user is logged in\n");
 		if (fold == 0) { /* INBOX */
-			return vms_p->newmessages;
+			return urgent ? vms_p->urgentmessages : vms_p->newmessages;
 		}
 		if (fold == 1) { /* Old messages */
 			return vms_p->oldmessages;
-		}
-		if (fold == 11) {/*Urgent messages*/
-		 	return vms_p->urgentmessages;
 		}
 	}
 
@@ -1980,7 +2039,7 @@ static int messagecount(const char *context, const char *mailbox, const char *fo
 		hdr = mail_newsearchheader ("X-Asterisk-VM-Extension", (char *)(!ast_strlen_zero(vmu->imapvmshareid) ? vmu->imapvmshareid : mailbox));
 		hdr->next = mail_newsearchheader("X-Asterisk-VM-Context", (char *) S_OR(context, "default"));
 		pgm->header = hdr;
-		if (fold != 1) {
+		if (fold != OLD_FOLDER) {
 			pgm->unseen = 1;
 			pgm->seen = 0;
 		}
@@ -1992,9 +2051,14 @@ static int messagecount(const char *context, const char *mailbox, const char *fo
 			pgm->seen = 1;
 		}
 		/* look for urgent messages */
-		if (urgent) {
-			pgm->flagged = 1;
-			pgm->unflagged = 0;
+		if (fold == NEW_FOLDER) {
+			if (urgent) {
+				pgm->flagged = 1;
+				pgm->unflagged = 0;
+			} else {
+				pgm->flagged = 0;
+				pgm->unflagged = 1;
+			}
 		}
 		pgm->undeleted = 1;
 		pgm->deleted = 0;
@@ -2020,7 +2084,45 @@ static int messagecount(const char *context, const char *mailbox, const char *fo
 	return 0;
 }
 
-static int imap_store_file(char *dir, char *mailboxuser, char *mailboxcontext, int msgnum, struct ast_channel *chan, struct ast_vm_user *vmu, char *fmt, int duration, struct vm_state *vms, const char *flag)
+static int imap_check_limits(struct ast_channel *chan, struct vm_state *vms, struct ast_vm_user *vmu, int msgnum)
+{
+	/* Check if mailbox is full */
+	check_quota(vms, vmu->imapfolder);
+	if (vms->quota_limit && vms->quota_usage >= vms->quota_limit) {
+		ast_debug(1, "*** QUOTA EXCEEDED!! %u >= %u\n", vms->quota_usage, vms->quota_limit);
+		ast_play_and_wait(chan, "vm-mailboxfull");
+		return -1;
+	}
+	
+	/* Check if we have exceeded maxmsg */
+	if (msgnum >= vmu->maxmsg  - inprocess_count(vmu->mailbox, vmu->context, 0)) {
+		ast_log(AST_LOG_WARNING, "Unable to leave message since we will exceed the maximum number of messages allowed (%u > %u)\n", msgnum, vmu->maxmsg);
+		ast_play_and_wait(chan, "vm-mailboxfull");
+		return -1;
+	}
+
+	return 0;
+}
+
+/*!
+ * \brief Gets the number of messages that exist in a mailbox folder.
+ * \param context
+ * \param mailbox
+ * \param folder
+ * 
+ * This method is used when IMAP backend is used.
+ * \return The number of messages in this mailbox folder (zero or more).
+ */
+static int messagecount(const char *context, const char *mailbox, const char *folder)
+{
+	if (ast_strlen_zero(folder) || !strcmp(folder, "INBOX")) {
+		return __messagecount(context, mailbox, "INBOX") + __messagecount(context, mailbox, "Urgent");
+	} else {
+		return __messagecount(context, mailbox, folder);
+	}
+}
+
+static int imap_store_file(const char *dir, const char *mailboxuser, const char *mailboxcontext, int msgnum, struct ast_channel *chan, struct ast_vm_user *vmu, char *fmt, int duration, struct vm_state *vms, const char *flag)
 {
 	char *myserveremail = serveremail;
 	char fn[PATH_MAX];
@@ -2035,11 +2137,16 @@ static int imap_store_file(char *dir, char *mailboxuser, char *mailboxcontext, i
 	STRING str;
 	int ret; /* for better error checking */
 	char *imap_flags = NIL;
+	int msgcount = (messagecount(vmu->context, vmu->mailbox, "INBOX") + messagecount(vmu->context, vmu->mailbox, "Old"));
 
     /* Back out early if this is a greeting and we don't want to store greetings in IMAP */
     if (msgnum < 0 && !imapgreetings) {
         return 0;
     }
+	
+	if (imap_check_limits(chan, vms, vmu, msgcount)) {
+		return -1;
+	}
 
 	/* Set urgent flag for IMAP message */
 	if (!ast_strlen_zero(flag) && !strcmp(flag, "Urgent")) {
@@ -2096,7 +2203,10 @@ static int imap_store_file(char *dir, char *mailboxuser, char *mailboxcontext, i
 		imap_delete_old_greeting(fn, vms);
 	}
 
-	make_email_file(p, myserveremail, vmu, msgnum, vmu->context, vmu->mailbox, "INBOX", S_OR(chan->cid.cid_num, NULL), S_OR(chan->cid.cid_name, NULL), fn, introfn, fmt, duration, 1, chan, NULL, 1, flag);
+	make_email_file(p, myserveremail, vmu, msgnum, vmu->context, vmu->mailbox, "INBOX",
+		S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL),
+		S_COR(chan->caller.id.name.valid, chan->caller.id.name.str, NULL),
+		fn, introfn, fmt, duration, 1, chan, NULL, 1, flag);
 	/* read mail file to memory */
 	len = ftell(p);
 	rewind(p);
@@ -2210,23 +2320,21 @@ static int inboxcount2(const char *mailbox_context, int *urgentmsgs, int *newmsg
 			ast_log(AST_LOG_ERROR, "Couldn't find mailbox %s in context %s\n", mailboxnc, context);
 			return -1;
 		}
-		if ((*newmsgs = messagecount(context, mailboxnc, vmu->imapfolder)) < 0)
+		if ((*newmsgs = __messagecount(context, mailboxnc, vmu->imapfolder)) < 0) {
 			return -1;
+		}
 	}
 	if (oldmsgs) {
-		if ((*oldmsgs = messagecount(context, mailboxnc, "Old")) < 0)
+		if ((*oldmsgs = __messagecount(context, mailboxnc, "Old")) < 0) {
 			return -1;
+		}
 	}
 	if (urgentmsgs) {
-		if((*urgentmsgs = messagecount(context, mailboxnc, "Urgent")) < 0)
+		if ((*urgentmsgs = __messagecount(context, mailboxnc, "Urgent")) < 0) {
 			return -1;
+		}
 	}
 	return 0;
-}
-
-static int inboxcount(const char *mailbox_context, int *newmsgs, int *oldmsgs)
-{
-	return inboxcount2(mailbox_context, NULL, newmsgs, oldmsgs);
 }
 
 /** 
@@ -2244,19 +2352,21 @@ static int has_voicemail(const char *mailbox, const char *folder)
 	char tmp[256], *tmp2, *box, *context;
 	ast_copy_string(tmp, mailbox, sizeof(tmp));
 	tmp2 = tmp;
-	if (strchr(tmp2, ',')) {
-		while ((box = strsep(&tmp2, ","))) {
+	if (strchr(tmp2, ',') || strchr(tmp2, '&')) {
+		while ((box = strsep(&tmp2, ",&"))) {
 			if (!ast_strlen_zero(box)) {
-				if (has_voicemail(box, folder))
+				if (has_voicemail(box, folder)) {
 					return 1;
+				}
 			}
 		}
 	}
-	if ((context = strchr(tmp, '@')))
+	if ((context = strchr(tmp, '@'))) {
 		*context++ = '\0';
-	else
+	} else {
 		context = "default";
-	return messagecount(context, tmp, folder) ? 1 : 0;
+	}
+	return __messagecount(context, tmp, folder) ? 1 : 0;
 }
 
 /*!
@@ -3391,15 +3501,17 @@ static int count_messages(struct ast_vm_user *vmu, char *dir)
  * 
  * \return the value greater than zero on success to indicate the number of messages, less than zero on error.
  */
-static void delete_file(char *sdir, int smsg)
+static void delete_file(const char *sdir, int smsg)
 {
 	SQLHSTMT stmt;
 	char sql[PATH_MAX];
 	char msgnums[20];
-	char *argv[] = { sdir, msgnums };
+	char *argv[] = { NULL, msgnums };
 	struct generic_prepare_struct gps = { .sql = sql, .argc = 2, .argv = argv };
-
 	struct odbc_obj *obj;
+
+	argv[0] = ast_strdupa(sdir);
+
 	obj = ast_odbc_request_obj(odbc_database, 0);
 	if (obj) {
 		snprintf(msgnums, sizeof(msgnums), "%d", smsg);
@@ -3455,8 +3567,8 @@ static void copy_file(char *sdir, int smsg, char *ddir, int dmsg, char *dmailbox
 
 struct insert_data {
 	char *sql;
-	char *dir;
-	char *msgnums;
+	const char *dir;
+	const char *msgnums;
 	void *data;
 	SQLLEN datalen;
 	SQLLEN indlen;
@@ -3465,8 +3577,8 @@ struct insert_data {
 	const char *callerid;
 	const char *origtime;
 	const char *duration;
-	char *mailboxuser;
-	char *mailboxcontext;
+	const char *mailboxuser;
+	const char *mailboxcontext;
 	const char *category;
 	const char *flag;
 };
@@ -3521,7 +3633,7 @@ static SQLHSTMT insert_data_cb(struct odbc_obj *obj, void *vdata)
  *
  * \return the zero on success -1 on error.
  */
-static int store_file(char *dir, char *mailboxuser, char *mailboxcontext, int msgnum)
+static int store_file(const char *dir, const char *mailboxuser, const char *mailboxcontext, int msgnum)
 {
 	int res = 0;
 	int fd = -1;
@@ -3972,14 +4084,16 @@ static int inchar(struct baseio *bio, FILE *fi)
 static int ochar(struct baseio *bio, int c, FILE *so)
 {
 	if (bio->linelength >= BASELINELEN) {
-		if (fputs(eol, so) == EOF)
+		if (fputs(ENDL, so) == EOF) {
 			return -1;
+		}
 
 		bio->linelength = 0;
 	}
 
-	if (putc(((unsigned char) c), so) == EOF)
+	if (putc(((unsigned char) c), so) == EOF) {
 		return -1;
+	}
 
 	bio->linelength++;
 
@@ -4048,8 +4162,9 @@ static int base_encode(char *filename, FILE *so)
 
 	fclose(fi);
 	
-	if (fputs(eol, so) == EOF)
+	if (fputs(ENDL, so) == EOF) {
 		return 0;
+	}
 
 	return 1;
 }
@@ -4104,7 +4219,7 @@ static void prep_email_sub_vars(struct ast_channel *ast, struct ast_vm_user *vmu
 		struct timeval tv = { inttime, };
 		struct ast_tm tm;
 		ast_localtime(&tv, &tm, NULL);
-		ast_strftime(origdate, sizeof(origdate), emaildateformat, &tm);
+		ast_strftime_locale(origdate, sizeof(origdate), emaildateformat, &tm, S_OR(vmu->locale, NULL));
 		pbx_builtin_setvar_helper(ast, "ORIG_VM_DATE", origdate);
 	}
 	ast_config_destroy(msg_cfg);
@@ -4231,15 +4346,18 @@ static const char *ast_str_encode_mime(struct ast_str **end, ssize_t maxlen, con
  * \param msgnum The message index in the mailbox folder.
  * \param context 
  * \param mailbox The voicemail box to read the voicemail to be notified in this email.
+ * \param fromfolder
  * \param cidnum The caller ID number.
  * \param cidname The caller ID name.
  * \param attach the name of the sound file to be attached to the email, if attach_user_voicemail == 1.
+ * \param attach2 
  * \param format The message sound file format. i.e. .wav
  * \param duration The time of the message content, in seconds.
  * \param attach_user_voicemail if 1, the sound file is attached to the email.
  * \param chan
  * \param category
  * \param imap if == 1, indicates the target folder for the email notification to be sent to will be an IMAP mailstore. This causes additional mailbox headers to be set, which would facilitate searching for the email in the destination IMAP folder.
+ * \param flag
  *
  * The email body, and base 64 encoded attachement (if any) are stored to the file identified by *p. This method does not actually send the email.  That is done by invoking the configure 'mailcmd' and piping this generated file into it, or with the sendemail() function.
  */
@@ -4261,11 +4379,6 @@ static void make_email_file(FILE *p, char *srcemail, struct ast_vm_user *vmu, in
 		ast_free(str2);
 		return;
 	}
-#ifdef IMAP_STORAGE
-#define ENDL "\r\n"
-#else
-#define ENDL "\n"
-#endif
 
 	if (cidnum) {
 		strip_control_and_high(cidnum, enc_cidnum, sizeof(enc_cidnum));
@@ -4280,18 +4393,18 @@ static void make_email_file(FILE *p, char *srcemail, struct ast_vm_user *vmu, in
 	} else {
 		snprintf(who, sizeof(who), "%s@%s", srcemail, host);
 	}
-	
+
 	greeting_attachment = strrchr(ast_strdupa(attach), '/');
 	if (greeting_attachment) {
 		*greeting_attachment++ = '\0';
 	}
 
 	snprintf(dur, sizeof(dur), "%d:%02d", duration / 60, duration % 60);
-	ast_strftime(date, sizeof(date), "%a, %d %b %Y %H:%M:%S %z", vmu_tm(vmu, &tm));
+	ast_strftime_locale(date, sizeof(date), "%a, %d %b %Y %H:%M:%S %z", vmu_tm(vmu, &tm), S_OR(vmu->locale, NULL));
 	fprintf(p, "Date: %s" ENDL, date);
 
 	/* Set date format for voicemail mail */
-	ast_strftime(date, sizeof(date), emaildateformat, &tm);
+	ast_strftime_locale(date, sizeof(date), emaildateformat, &tm, S_OR(vmu->locale, NULL));
 
 	if (!ast_strlen_zero(fromstring)) {
 		struct ast_channel *ast;
@@ -4429,7 +4542,22 @@ static void make_email_file(FILE *p, char *srcemail, struct ast_vm_user *vmu, in
 		if ((ast = ast_dummy_channel_alloc())) {
 			prep_email_sub_vars(ast, vmu, msgnum + 1, context, mailbox, fromfolder, cidnum, cidname, dur, date, category, flag);
 			ast_str_substitute_variables(&str1, 0, ast, e_body);
+#ifdef IMAP_STORAGE
+				{
+					/* Convert body to native line terminators for IMAP backend */
+					char *line = ast_str_buffer(str1), *next;
+					do {
+						/* Terminate line before outputting it to the file */
+						if ((next = strchr(line, '\n'))) {
+							*next++ = '\0';
+						}
+						fprintf(p, "%s" ENDL, line);
+						line = next;
+					} while (!ast_strlen_zero(line));
+				}
+#else
 			fprintf(p, "%s" ENDL, ast_str_buffer(str1));
+#endif
 			ast = ast_channel_release(ast);
 		} else {
 			ast_log(AST_LOG_WARNING, "Cannot allocate the channel for variables substitution\n");
@@ -4459,7 +4587,7 @@ static void make_email_file(FILE *p, char *srcemail, struct ast_vm_user *vmu, in
 					struct timeval tv = { inttime, };
 					struct ast_tm tm;
 					ast_localtime(&tv, &tm, NULL);
-					ast_strftime(origdate, sizeof(origdate), emaildateformat, &tm);
+					ast_strftime_locale(origdate, sizeof(origdate), emaildateformat, &tm, S_OR(vmu->locale, NULL));
 				}
 				fprintf(p, "Dear %s:" ENDL ENDL "\tJust wanted to let you know you were just forwarded"
 					" a %s long message (number %d)" ENDL "in mailbox %s from %s, on %s" ENDL
@@ -4525,7 +4653,7 @@ static int add_email_attachment(FILE *p, struct ast_vm_user *vmu, char *format, 
 				attach = newtmp;
 				ast_debug(3, "VOLGAIN: Stored at: %s.%s - Level: %.4f - Mailbox: %s\n", attach, format, vmu->volgain, mailbox);
 			} else {
-				ast_log(LOG_WARNING, "Sox failed to reencode %s.%s: %s (have you installed support for all sox file formats?)\n", attach, format,
+				ast_log(LOG_WARNING, "Sox failed to re-encode %s.%s: %s (have you installed support for all sox file formats?)\n", attach, format,
 					soxstatus == 1 ? "Problem with command line options" : "An error occurred during file processing");
 				ast_log(LOG_WARNING, "Voicemail attachment will have no volume gain.\n");
 			}
@@ -4621,11 +4749,11 @@ static int sendpage(char *srcemail, char *pager, int msgnum, char *context, char
 		snprintf(who, sizeof(who), "%s@%s", srcemail, host);
 	}
 	snprintf(dur, sizeof(dur), "%d:%02d", duration / 60, duration % 60);
-	ast_strftime(date, sizeof(date), "%a, %d %b %Y %H:%M:%S %z", vmu_tm(vmu, &tm));
+	ast_strftime_locale(date, sizeof(date), "%a, %d %b %Y %H:%M:%S %z", vmu_tm(vmu, &tm), S_OR(vmu->locale, NULL));
 	fprintf(p, "Date: %s\n", date);
 
 	/* Reformat for custom pager format */
-	ast_strftime(date, sizeof(date), pagerdateformat, vmu_tm(vmu, &tm));
+	ast_strftime_locale(date, sizeof(date), pagerdateformat, vmu_tm(vmu, &tm), S_OR(vmu->locale, NULL));
 
 	if (!ast_strlen_zero(pagerfromstring)) {
 		struct ast_channel *ast;
@@ -4727,7 +4855,6 @@ static int sendpage(char *srcemail, char *pager, int msgnum, char *context, char
 	ast_free(str2);
 	return 0;
 }
-#undef ENDL
 
 /*!
  * \brief Gets the current date and time, as formatted string.
@@ -4917,11 +5044,6 @@ static int inboxcount2(const char *mailbox, int *urgentmsgs, int *newmsgs, int *
 	return x;
 }
 
-static int inboxcount(const char *mailbox, int *newmsgs, int *oldmsgs)
-{
-	return inboxcount2(mailbox, NULL, newmsgs, oldmsgs);
-}
-
 /*!
  * \brief Gets the number of messages that exist in a mailbox folder.
  * \param context
@@ -4948,7 +5070,11 @@ static int messagecount(const char *context, const char *mailbox, const char *fo
 
 	obj = ast_odbc_request_obj(odbc_database, 0);
 	if (obj) {
-		snprintf(sql, sizeof(sql), "SELECT COUNT(*) FROM %s WHERE dir = '%s%s/%s/%s'", odbc_table, VM_SPOOL_DIR, context, mailbox, folder);
+		if (!strcmp(folder, "INBOX")) {
+			snprintf(sql, sizeof(sql), "SELECT COUNT(*) FROM %s WHERE dir = '%s%s/%s/INBOX' OR dir = '%s%s/%s/Urgent'", odbc_table, VM_SPOOL_DIR, context, mailbox, VM_SPOOL_DIR, context, mailbox);
+		} else {
+			snprintf(sql, sizeof(sql), "SELECT COUNT(*) FROM %s WHERE dir = '%s%s/%s/%s'", odbc_table, VM_SPOOL_DIR, context, mailbox, folder);
+		}
 		stmt = ast_odbc_prepare_and_execute(obj, generic_prepare, &gps);
 		if (!stmt) {
 			ast_log(AST_LOG_WARNING, "SQL Execute error!\n[%s]\n\n", sql);
@@ -4989,7 +5115,7 @@ static int has_voicemail(const char *mailbox, const char *folder)
 {
 	char tmp[256], *tmp2 = tmp, *box, *context;
 	ast_copy_string(tmp, mailbox, sizeof(tmp));
-	while ((context = box = strsep(&tmp2, ","))) {
+	while ((context = box = strsep(&tmp2, ",&"))) {
 		strsep(&context, "@");
 		if (ast_strlen_zero(context))
 			context = "default";
@@ -5010,6 +5136,7 @@ static int has_voicemail(const char *mailbox, const char *folder)
  * \param recip
  * \param fmt
  * \param dir
+ * \param flag
  *
  * This is only used by file storage based mailboxes.
  *
@@ -5020,6 +5147,7 @@ static int copy_message(struct ast_channel *chan, struct ast_vm_user *vmu, int i
 	char fromdir[PATH_MAX], todir[PATH_MAX], frompath[PATH_MAX], topath[PATH_MAX];
 	const char *frombox = mbox(vmu, imbox);
 	int recipmsgnum;
+	int res = 0;
 
 	ast_log(AST_LOG_NOTICE, "Copying message from %s@%s to %s@%s\n", vmu->mailbox, vmu->context, recip->mailbox, recip->context);
 
@@ -5057,18 +5185,22 @@ static int copy_message(struct ast_channel *chan, struct ast_vm_user *vmu, int i
 		}
 	} else {
 		ast_log(AST_LOG_ERROR, "Recipient mailbox %s@%s is full\n", recip->mailbox, recip->context);
+		res = -1;
 	}
 	ast_unlock_path(todir);
-	notify_new_message(chan, recip, NULL, recipmsgnum, duration, fmt, S_OR(chan->cid.cid_num, NULL), S_OR(chan->cid.cid_name, NULL), flag);
+	notify_new_message(chan, recip, NULL, recipmsgnum, duration, fmt,
+		S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL),
+		S_COR(chan->caller.id.name.valid, chan->caller.id.name.str, NULL),
+		flag);
 	
-	return 0;
+	return res;
 }
 #endif
 #if !(defined(IMAP_STORAGE) || defined(ODBC_STORAGE))
 
 static int messagecount(const char *context, const char *mailbox, const char *folder)
 {
-	return __has_voicemail(context, mailbox, folder, 0);
+	return __has_voicemail(context, mailbox, folder, 0) + (folder && strcmp(folder, "INBOX") ? 0 : __has_voicemail(context, mailbox, "Urgent", 0));
 }
 
 static int __has_voicemail(const char *context, const char *mailbox, const char *folder, int shortcircuit)
@@ -5098,7 +5230,6 @@ static int __has_voicemail(const char *context, const char *mailbox, const char 
 				ret = 1;
 				break;
 			} else if (!strncasecmp(de->d_name + 8, "txt", 3)) {
-				if (shortcircuit) return 1;
 				ret++;
 			}
 		}
@@ -5106,12 +5237,7 @@ static int __has_voicemail(const char *context, const char *mailbox, const char 
 
 	closedir(dir);
 
-	/* If we are checking INBOX, we should check Urgent as well */
-	if (strcmp(folder, "INBOX") == 0) {
-		return (ret + __has_voicemail(context, mailbox, "Urgent", shortcircuit));
-	} else {
-		return ret;
-	}
+	return ret;
 }
 
 /** 
@@ -5120,20 +5246,27 @@ static int __has_voicemail(const char *context, const char *mailbox, const char 
  * \param folder the folder to look in
  *
  * This function is used when the mailbox is stored in a filesystem back end.
- * This invokes the messagecount(). Here we are interested in the presence of messages (> 0) only, not the actual count.
+ * This invokes the __has_voicemail(). Here we are interested in the presence of messages (> 0) only, not the actual count.
  * \return 1 if the folder has one or more messages. zero otherwise.
  */
 static int has_voicemail(const char *mailbox, const char *folder)
 {
 	char tmp[256], *tmp2 = tmp, *box, *context;
 	ast_copy_string(tmp, mailbox, sizeof(tmp));
-	while ((box = strsep(&tmp2, ","))) {
+	if (ast_strlen_zero(folder)) {
+		folder = "INBOX";
+	}
+	while ((box = strsep(&tmp2, ",&"))) {
 		if ((context = strchr(box, '@')))
 			*context++ = '\0';
 		else
 			context = "default";
 		if (__has_voicemail(context, box, folder, 1))
 			return 1;
+		/* If we are checking INBOX, we should check Urgent as well */
+		if (!strcmp(folder, "INBOX") && __has_voicemail(context, box, "Urgent", 1)) {
+			return 1;
+		}
 	}
 	return 0;
 }
@@ -5195,12 +5328,18 @@ static int inboxcount2(const char *mailbox, int *urgentmsgs, int *newmsgs, int *
 	return 0;
 }
 
+#endif
+
+/* Exactly the same function for file-based, ODBC-based, and IMAP-based, so why create 3 different copies? */
 static int inboxcount(const char *mailbox, int *newmsgs, int *oldmsgs)
 {
-	return inboxcount2(mailbox, NULL, newmsgs, oldmsgs);
+	int urgentmsgs = 0;
+	int res = inboxcount2(mailbox, &urgentmsgs, newmsgs, oldmsgs);
+	if (newmsgs) {
+		*newmsgs += urgentmsgs;
+	}
+	return res;
 }
-
-#endif
 
 static void run_externnotify(char *context, char *extension, const char *flag)
 {
@@ -5380,25 +5519,34 @@ static int leave_voicemail(struct ast_channel *chan, char *ext, struct leave_vm_
 	/* Check current or macro-calling context for special extensions */
 	if (ast_test_flag(vmu, VM_OPERATOR)) {
 		if (!ast_strlen_zero(vmu->exit)) {
-			if (ast_exists_extension(chan, vmu->exit, "o", 1, chan->cid.cid_num)) {
+			if (ast_exists_extension(chan, vmu->exit, "o", 1,
+				S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL))) {
 				strncat(ecodes, "0", sizeof(ecodes) - strlen(ecodes) - 1);
 				ouseexten = 1;
 			}
-		} else if (ast_exists_extension(chan, chan->context, "o", 1, chan->cid.cid_num)) {
+		} else if (ast_exists_extension(chan, chan->context, "o", 1,
+			S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL))) {
 			strncat(ecodes, "0", sizeof(ecodes) - strlen(ecodes) - 1);
 			ouseexten = 1;
-		} else if (!ast_strlen_zero(chan->macrocontext) && ast_exists_extension(chan, chan->macrocontext, "o", 1, chan->cid.cid_num)) {
+		} else if (!ast_strlen_zero(chan->macrocontext)
+			&& ast_exists_extension(chan, chan->macrocontext, "o", 1,
+				S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL))) {
 			strncat(ecodes, "0", sizeof(ecodes) - strlen(ecodes) - 1);
 			ousemacro = 1;
 		}
 	}
 
 	if (!ast_strlen_zero(vmu->exit)) {
-		if (ast_exists_extension(chan, vmu->exit, "a", 1, chan->cid.cid_num))
+		if (ast_exists_extension(chan, vmu->exit, "a", 1,
+			S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL))) {
 			strncat(ecodes, "*", sizeof(ecodes) - strlen(ecodes) - 1);
-	} else if (ast_exists_extension(chan, chan->context, "a", 1, chan->cid.cid_num))
+		}
+	} else if (ast_exists_extension(chan, chan->context, "a", 1,
+		S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL))) {
 		strncat(ecodes, "*", sizeof(ecodes) - strlen(ecodes) - 1);
-	else if (!ast_strlen_zero(chan->macrocontext) && ast_exists_extension(chan, chan->macrocontext, "a", 1, chan->cid.cid_num)) {
+	} else if (!ast_strlen_zero(chan->macrocontext)
+		&& ast_exists_extension(chan, chan->macrocontext, "a", 1,
+			S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL))) {
 		strncat(ecodes, "*", sizeof(ecodes) - strlen(ecodes) - 1);
 		ausemacro = 1;
 	}
@@ -5407,8 +5555,11 @@ static int leave_voicemail(struct ast_channel *chan, char *ext, struct leave_vm_
 		for (code = alldtmf; *code; code++) {
 			char e[2] = "";
 			e[0] = *code;
-			if (strchr(ecodes, e[0]) == NULL && ast_canmatch_extension(chan, chan->context, e, 1, chan->cid.cid_num))
+			if (strchr(ecodes, e[0]) == NULL
+				&& ast_canmatch_extension(chan, chan->context, e, 1,
+					S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL))) {
 				strncat(ecodes, e, sizeof(ecodes) - strlen(ecodes) - 1);
+			}
 		}
 	}
 
@@ -5496,7 +5647,7 @@ static int leave_voicemail(struct ast_channel *chan, char *ext, struct leave_vm_
 			pbx_builtin_setvar_helper(chan, "VMSTATUS", "USEREXIT");
 		}
 		ast_free(tmp);
-		return 0;
+		return OPERATOR_EXIT;
 	}
 
 	/* Allow all other digits to exit Voicemail and return to the dialplan */
@@ -5549,21 +5700,8 @@ static int leave_voicemail(struct ast_channel *chan, char *ext, struct leave_vm_
 		/* set variable for compatibility */
 		pbx_builtin_setvar_helper(chan, "VM_MESSAGEFILE", "IMAP_STORAGE");
 
-		/* Check if mailbox is full */
-		check_quota(vms, vmu->imapfolder);
-		if (vms->quota_limit && vms->quota_usage >= vms->quota_limit) {
-			ast_debug(1, "*** QUOTA EXCEEDED!! %u >= %u\n", vms->quota_usage, vms->quota_limit);
-			ast_play_and_wait(chan, "vm-mailboxfull");
-			ast_free(tmp);
-			return -1;
-		}
-		
-		/* Check if we have exceeded maxmsg */
-		if (msgnum >= vmu->maxmsg  - inprocess_count(vmu->mailbox, vmu->context, 0)) {
-			ast_log(AST_LOG_WARNING, "Unable to leave message since we will exceed the maximum number of messages allowed (%u > %u)\n", msgnum, vmu->maxmsg);
-			ast_play_and_wait(chan, "vm-mailboxfull");
-			ast_free(tmp);
-			return -1;
+		if ((res = imap_check_limits(chan, vms, vmu, msgnum))) {
+			goto leave_vm_out;
 		}
 #else
 		if (count_messages(vmu, dir) >= vmu->maxmsg - inprocess_count(vmu->mailbox, vmu->context, +1)) {
@@ -5601,13 +5739,33 @@ static int leave_voicemail(struct ast_channel *chan, char *ext, struct leave_vm_
 			snprintf(priority, sizeof(priority), "%d", chan->priority);
 			snprintf(origtime, sizeof(origtime), "%ld", (long) time(NULL));
 			get_date(date, sizeof(date));
-			ast_store_realtime("voicemail_data", "origmailbox", ext, "context", chan->context, "macrocontext", chan->macrocontext, "exten", chan->exten, "priority", priority, "callerchan", chan->name, "callerid", ast_callerid_merge(callerid, sizeof(callerid), chan->cid.cid_name, chan->cid.cid_num, "Unknown"), "origdate", date, "origtime", origtime, "category", S_OR(category, ""), "filename", tmptxtfile, SENTINEL);
+			ast_callerid_merge(callerid, sizeof(callerid),
+				S_COR(chan->caller.id.name.valid, chan->caller.id.name.str, NULL),
+				S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL),
+				"Unknown");
+			ast_store_realtime("voicemail_data",
+				"origmailbox", ext,
+				"context", chan->context,
+				"macrocontext", chan->macrocontext,
+				"exten", chan->exten,
+				"priority", priority,
+				"callerchan", chan->name,
+				"callerid", callerid,
+				"origdate", date,
+				"origtime", origtime,
+				"category", S_OR(category, ""),
+				"filename", tmptxtfile,
+				SENTINEL);
 		}
 
 		/* Store information */
 		txt = fdopen(txtdes, "w+");
 		if (txt) {
 			get_date(date, sizeof(date));
+			ast_callerid_merge(callerid, sizeof(callerid),
+				S_COR(chan->caller.id.name.valid, chan->caller.id.name.str, NULL),
+				S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL),
+				"Unknown");
 			fprintf(txt, 
 				";\n"
 				"; Message Information file\n"
@@ -5617,6 +5775,7 @@ static int leave_voicemail(struct ast_channel *chan, char *ext, struct leave_vm_
 				"context=%s\n"
 				"macrocontext=%s\n"
 				"exten=%s\n"
+				"rdnis=%s\n"
 				"priority=%d\n"
 				"callerchan=%s\n"
 				"callerid=%s\n"
@@ -5627,9 +5786,11 @@ static int leave_voicemail(struct ast_channel *chan, char *ext, struct leave_vm_
 				chan->context,
 				chan->macrocontext, 
 				chan->exten,
+				S_COR(chan->redirecting.from.number.valid,
+					chan->redirecting.from.number.str, "unknown"),
 				chan->priority,
 				chan->name,
-				ast_callerid_merge(callerid, sizeof(callerid), S_OR(chan->cid.cid_name, NULL), S_OR(chan->cid.cid_num, NULL), "Unknown"),
+				callerid,
 				date, (long) time(NULL),
 				category ? category : "");
 		} else {
@@ -5645,10 +5806,9 @@ static int leave_voicemail(struct ast_channel *chan, char *ext, struct leave_vm_
 
 		if (txt) {
 			fprintf(txt, "flag=%s\n", flag);
-			if (duration < vmminsecs) {
+			if (duration < vmu->minsecs) {
 				fclose(txt);
-				if (option_verbose > 2) 
-					ast_verbose( VERBOSE_PREFIX_3 "Recording was %d seconds long but needs to be at least %d - abandoning\n", duration, vmminsecs);
+				ast_verb(3, "Recording was %d seconds long but needs to be at least %d - abandoning\n", duration, vmu->minsecs);
 				ast_filedelete(tmptxtfile, NULL);
 				unlink(tmptxtfile);
 				if (ast_check_realtime("voicemail_data")) {
@@ -5731,19 +5891,28 @@ static int leave_voicemail(struct ast_channel *chan, char *ext, struct leave_vm_
 						int x;
 						/* It's easier just to try to make it than to check for its existence */
 						create_dirpath(urgdir, sizeof(urgdir), vmu->context, ext, "Urgent");
-						ast_debug(5, "Created an Urgent message, moving file from %s to %s.\n", sfn, dfn);
 						x = last_message_index(vmu, urgdir) + 1;
 						make_file(sfn, sizeof(sfn), dir, msgnum);
 						make_file(dfn, sizeof(dfn), urgdir, x);
+						ast_debug(5, "Created an Urgent message, moving file from %s to %s.\n", sfn, dfn);
 						RENAME(dir, msgnum, vmu->mailbox, vmu->context, urgdir, x, sfn, dfn);
+						/* Notification must happen for this new message in Urgent folder, not INBOX */
+						ast_copy_string(fn, dfn, sizeof(fn));
+						msgnum = x;
 					}
 #endif
 					/* Notification needs to happen after the copy, though. */
 					if (ast_fileexists(fn, NULL, NULL)) {
 #ifdef IMAP_STORAGE
-						notify_new_message(chan, vmu, vms, msgnum, duration, fmt, S_OR(chan->cid.cid_num, NULL), S_OR(chan->cid.cid_name, NULL), flag);
+						notify_new_message(chan, vmu, vms, msgnum, duration, fmt,
+							S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL),
+							S_COR(chan->caller.id.name.valid, chan->caller.id.name.str, NULL),
+							flag);
 #else
-						notify_new_message(chan, vmu, NULL, msgnum, duration, fmt, S_OR(chan->cid.cid_num, NULL), S_OR(chan->cid.cid_name, NULL), flag);
+						notify_new_message(chan, vmu, NULL, msgnum, duration, fmt,
+							S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL),
+							S_COR(chan->caller.id.name.valid, chan->caller.id.name.str, NULL),
+							flag);
 #endif
 					}
 
@@ -5761,7 +5930,7 @@ static int leave_voicemail(struct ast_channel *chan, char *ext, struct leave_vm_
 		} else if (res > 0)
 			res = 0;
 
-		if (duration < vmminsecs)
+		if (duration < vmu->minsecs)
 			/* XXX We should really give a prompt too short/option start again, with leave_vm_out called only after a timeout XXX */
 			pbx_builtin_setvar_helper(chan, "VMSTATUS", "FAILED");
 		else
@@ -6414,10 +6583,16 @@ static int get_folder(struct ast_channel *chan, int start)
 static int get_folder2(struct ast_channel *chan, char *fn, int start)
 {
 	int res = 0;
+	int loops = 0;
 	res = ast_play_and_wait(chan, fn);	/* Folder name */
 	while (((res < '0') || (res > '9')) &&
-			(res != '#') && (res >= 0)) {
+			(res != '#') && (res >= 0) &&
+			loops < 4) {
 		res = get_folder(chan, 0);
+		loops++;
+	}
+	if (loops == 4) { /* give up */
+		return '#';
 	}
 	return res;
 }
@@ -6428,11 +6603,12 @@ static int get_folder2(struct ast_channel *chan, char *fn, int start)
  * \param vmu
  * \param curdir
  * \param curmsg
- * \param vmfmts
+ * \param vm_fmts
  * \param context
  * \param record_gain
  * \param duration
  * \param vms
+ * \param flag 
  *
  * Presents a prompt for 1 to prepend the current message, 2 to forward the message without prepending, or * to return to the main menu.
  *
@@ -6447,7 +6623,7 @@ static int vm_forwardoptions(struct ast_channel *chan, struct ast_vm_user *vmu, 
 #endif
 	int cmd = 0;
 	int retries = 0, prepend_duration = 0, already_recorded = 0;
-	char msgfile[PATH_MAX], backup[PATH_MAX];
+	char msgfile[PATH_MAX], backup[PATH_MAX], backup_textfile[PATH_MAX];
 	char textfile[PATH_MAX];
 	struct ast_config *msg_cfg;
 	struct ast_flags config_flags = { CONFIG_FLAG_NOCACHE };
@@ -6460,8 +6636,10 @@ static int vm_forwardoptions(struct ast_channel *chan, struct ast_vm_user *vmu, 
 	make_file(msgfile, sizeof(msgfile), curdir, curmsg);
 	strcpy(textfile, msgfile);
 	strcpy(backup, msgfile);
+	strcpy(backup_textfile, msgfile);
 	strncat(textfile, ".txt", sizeof(textfile) - strlen(textfile) - 1);
 	strncat(backup, "-bak", sizeof(backup) - strlen(backup) - 1);
+	strncat(backup_textfile, "-bak.txt", sizeof(backup_textfile) - strlen(backup_textfile) - 1);
 
 	if ((msg_cfg = ast_config_load(textfile, config_flags)) && msg_cfg != CONFIG_STATUS_FILEINVALID && (duration_str = ast_variable_retrieve(msg_cfg, "message", "duration"))) {
 		*duration = atoi(duration_str);
@@ -6498,11 +6676,15 @@ static int vm_forwardoptions(struct ast_channel *chan, struct ast_vm_user *vmu, 
 				break;
 			}
 			
-			/* Back up the original file, so we can retry the prepend */
-			if (already_recorded)
+			/* Back up the original file, so we can retry the prepend and restore it after forward. */
+			if (already_recorded) {
 				ast_filecopy(backup, msgfile, NULL);
-			else
+				copy(backup_textfile, textfile);
+			}
+			else {
 				ast_filecopy(msgfile, backup, NULL);
+				copy(textfile,backup_textfile);
+			}
 			already_recorded = 1;
 
 			if (record_gain)
@@ -6558,10 +6740,14 @@ static int vm_forwardoptions(struct ast_channel *chan, struct ast_vm_user *vmu, 
 
 	if (msg_cfg)
 		ast_config_destroy(msg_cfg);
-	if (already_recorded)
-		ast_filedelete(backup, NULL);
 	if (prepend_duration)
 		*duration = prepend_duration;
+
+	if (already_recorded && cmd == -1) {
+		/* restore original message if prepention cancelled */
+		ast_filerename(backup, msgfile, NULL);
+		rename(backup_textfile, textfile);
+	}
 
 	if (cmd == 't' || cmd == 'S')
 		cmd = 0;
@@ -6601,6 +6787,7 @@ static void queue_mwi_event(const char *box, int urgent, int new, int old)
  * \param fmt
  * \param cidnum The Caller ID phone number value.
  * \param cidname The Caller ID name value.
+ * \param flag
  *
  * \return zero on success, -1 on error.
  */
@@ -6617,7 +6804,7 @@ static int notify_new_message(struct ast_channel *chan, struct ast_vm_user *vmu,
 	}
 	ast_channel_unlock(chan);
 
-	make_dir(todir, sizeof(todir), vmu->context, vmu->mailbox, "INBOX");
+	make_dir(todir, sizeof(todir), vmu->context, vmu->mailbox, !ast_strlen_zero(flag) && !strcmp(flag, "Urgent") ? "Urgent" : "INBOX");
 	make_file(fn, sizeof(fn), todir, msgnum);
 	snprintf(ext_context, sizeof(ext_context), "%s@%s", vmu->mailbox, vmu->context);
 
@@ -6638,8 +6825,6 @@ static int notify_new_message(struct ast_channel *chan, struct ast_vm_user *vmu,
 
 	if (!ast_strlen_zero(vmu->email)) {
 		int attach_user_voicemail = ast_test_flag(vmu, VM_ATTACH);
-		if (!attach_user_voicemail)
-			attach_user_voicemail = ast_test_flag((&globalflags), VM_ATTACH);
 
 		if (attach_user_voicemail)
 			RETRIEVE(todir, msgnum, vmu->mailbox, vmu->context);
@@ -6680,7 +6865,7 @@ static int notify_new_message(struct ast_channel *chan, struct ast_vm_user *vmu,
 
 /*!
  * \brief Sends a voicemail message to a mailbox recipient.
- * \param ast_channel
+ * \param chan
  * \param context
  * \param vms
  * \param sender
@@ -6689,6 +6874,7 @@ static int notify_new_message(struct ast_channel *chan, struct ast_vm_user *vmu,
  *             Will be 0 when called to forward an existing message (option 8)
  *             Will be 1 when called to leave a message (option 3->5)
  * \param record_gain 
+ * \param urgent
  *
  * Reads the destination mailbox(es) from keypad input for CID, or if use_directory feature is enabled, the Directory.
  * 
@@ -6724,7 +6910,10 @@ static int forward_message(struct ast_channel *chan, char *context, struct vm_st
 	int curmsg;
 	char urgent_str[7] = "";
 	char tmptxtfile[PATH_MAX];
-
+	int prompt_played = 0;
+#ifndef IMAP_STORAGE
+	char msgfile[PATH_MAX], textfile[PATH_MAX], backup[PATH_MAX], backup_textfile[PATH_MAX];
+#endif
 	if (ast_test_flag((&globalflags), VM_FWDURGAUTO)) {
 		ast_copy_string(urgent_str, urgent ? "Urgent" : "", sizeof(urgent_str));
 	}
@@ -6807,7 +6996,8 @@ static int forward_message(struct ast_channel *chan, char *context, struct vm_st
 		} else {
 			/* Ask for an extension */
 			res = ast_streamfile(chan, "vm-extension", chan->language);	/* "extension" */
-			if (res)
+			prompt_played++;
+			if (res || prompt_played > 4)
 				break;
 			if ((res = ast_readstring(chan, username, sizeof(username) - 1, 2000, 10000, "#") < 0))
 				break;
@@ -6876,6 +7066,7 @@ static int forward_message(struct ast_channel *chan, char *context, struct vm_st
 		/* Forward VoiceMail */
 		long duration = 0;
 		struct vm_state vmstmp;
+		int copy_msg_result = 0;
 		memcpy(&vmstmp, vms, sizeof(vmstmp));
 
  		RETRIEVE(dir, curmsg, sender->mailbox, sender->context);
@@ -6897,7 +7088,7 @@ static int forward_message(struct ast_channel *chan, char *context, struct vm_st
 					if (!dstvms->mailstream) {
 						ast_log(AST_LOG_ERROR, "IMAP mailstream for %s is NULL\n", vmtmp->mailbox);
 					} else {
-						STORE(vmstmp.curdir, vmtmp->mailbox, vmtmp->context, dstvms->curmsg, chan, vmtmp, fmt, duration, dstvms, urgent_str);
+						copy_msg_result = STORE(vmstmp.curdir, vmtmp->mailbox, vmtmp->context, dstvms->curmsg, chan, vmtmp, fmt, duration, dstvms, urgent_str);
 						run_externnotify(vmtmp->context, vmtmp->mailbox, urgent_str); 
 					}
 				} else {
@@ -6907,9 +7098,14 @@ static int forward_message(struct ast_channel *chan, char *context, struct vm_st
 					myserveremail = vmtmp->serveremail;
 				attach_user_voicemail = ast_test_flag(vmtmp, VM_ATTACH);
 				/* NULL category for IMAP storage */
-				sendmail(myserveremail, vmtmp, todircount, vmtmp->context, vmtmp->mailbox, dstvms->curbox, S_OR(chan->cid.cid_num, NULL), S_OR(chan->cid.cid_name, NULL), vmstmp.fn, vmstmp.introfn, fmt, duration, attach_user_voicemail, chan, NULL, urgent_str);
+				sendmail(myserveremail, vmtmp, todircount, vmtmp->context, vmtmp->mailbox,
+					dstvms->curbox,
+					S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL),
+					S_COR(chan->caller.id.name.valid, chan->caller.id.name.str, NULL),
+					vmstmp.fn, vmstmp.introfn, fmt, duration, attach_user_voicemail, chan,
+					NULL, urgent_str);
 #else
-				copy_message(chan, sender, 0, curmsg, duration, vmtmp, fmt, dir, urgent_str);
+				copy_msg_result = copy_message(chan, sender, 0, curmsg, duration, vmtmp, fmt, dir, urgent_str);
 #endif
 				saved_messages++;
 				AST_LIST_REMOVE_CURRENT(list);
@@ -6918,7 +7114,7 @@ static int forward_message(struct ast_channel *chan, char *context, struct vm_st
 					break;
 			}
 			AST_LIST_TRAVERSE_SAFE_END;
-			if (saved_messages > 0) {
+			if (saved_messages > 0 && !copy_msg_result) {
 				/* give confirmation that the message was saved */
 				/* commented out since we can't forward batches yet
 				if (saved_messages == 1)
@@ -6932,7 +7128,25 @@ static int forward_message(struct ast_channel *chan, char *context, struct vm_st
 				if (ast_strlen_zero(vmstmp.introfn))
 #endif
 				res = ast_play_and_wait(chan, "vm-msgsaved");
-			}	
+			}
+#ifndef IMAP_STORAGE
+			else {
+				/* with IMAP, mailbox full warning played by imap_check_limits */
+				res = ast_play_and_wait(chan, "vm-mailboxfull");
+			}
+			/* Restore original message without prepended message if backup exists */
+			make_file(msgfile, sizeof(msgfile), dir, curmsg);
+			strcpy(textfile, msgfile);
+			strcpy(backup, msgfile);
+			strcpy(backup_textfile, msgfile);
+			strncat(textfile, ".txt", sizeof(textfile) - strlen(textfile) - 1);
+			strncat(backup, "-bak", sizeof(backup) - strlen(backup) - 1);
+			strncat(backup_textfile, "-bak.txt", sizeof(backup_textfile) - strlen(backup_textfile) - 1);
+			if (ast_fileexists(backup, NULL, NULL) > 0) {
+				ast_filerename(backup, msgfile, NULL);
+				rename(backup_textfile, textfile);
+			}
+#endif
 		}
 		DISPOSE(dir, curmsg);
 	}
@@ -8496,6 +8710,7 @@ static int vm_intro(struct ast_channel *chan, struct ast_vm_user *vmu, struct vm
 
 	/* Play voicemail intro - syntax is different for different languages */
 	if (0) {
+		return 0;
 	} else if (!strncasecmp(chan->language, "cs", 2)) {  /* CZECH syntax */
 		return vm_intro_cs(chan, vms);
 	} else if (!strncasecmp(chan->language, "cz", 2)) {  /* deprecated CZECH syntax */
@@ -9211,13 +9426,21 @@ static int vm_authenticate(struct ast_channel *chan, char *mailbox, int mailbox_
 			return -1;
 		}
 		if (ast_strlen_zero(mailbox)) {
-			if (chan->cid.cid_num) {
-				ast_copy_string(mailbox, chan->cid.cid_num, mailbox_size);
+			if (chan->caller.id.number.valid && chan->caller.id.number.str) {
+				ast_copy_string(mailbox, chan->caller.id.number.str, mailbox_size);
 			} else {
 				ast_verb(3, "Username not entered\n");	
 				return -1;
 			}
+		} else if (mailbox[0] == '*') {
+			/* user entered '*' */
+			if (ast_exists_extension(chan, chan->context, "a", 1,
+				S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL))) {
+				return -1;
+			}
+			mailbox[0] = '\0';
 		}
+
 		if (useadsi)
 			adsi_password(chan);
 
@@ -9241,6 +9464,14 @@ static int vm_authenticate(struct ast_channel *chan, char *mailbox, int mailbox_
 			if (ast_readstring(chan, password, sizeof(password) - 1, 2000, 10000, "#") < 0) {
 				ast_log(AST_LOG_WARNING, "Unable to read password\n");
 				return -1;
+			} else if (password[0] == '*') {
+				/* user entered '*' */
+				if (ast_exists_extension(chan, chan->context, "a", 1,
+					S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL))) {
+					mailbox[0] = '*';
+					return -1;
+				}
+				mailbox[0] = '\0';
 			}
 		}
 
@@ -9406,6 +9637,17 @@ static int vm_execmain(struct ast_channel *chan, const char *data)
 		res = vm_authenticate(chan, vms.username, sizeof(vms.username), &vmus, context, prefixstr, skipuser, maxlogins, 0);
 
 	ast_debug(1, "After vm_authenticate\n");
+
+	if (vms.username[0] == '*') {
+		ast_debug(1, "user pressed * in context '%s'\n", chan->context);
+
+		/* user entered '*' */
+		if (!ast_goto_if_exists(chan, chan->context, "a", 1)) {
+			res = 0;	/* prevent hangup */
+			goto out;
+		}
+	}
+
 	if (!res) {
 		valid = 1;
 		if (!skipuser)
@@ -9589,7 +9831,7 @@ static int vm_execmain(struct ast_channel *chan, const char *data)
 				case '1': /* Reply */
 					if (vms.lastmsg > -1 && !vms.starting) {
 						cmd = advanced_options(chan, vmu, &vms, vms.curmsg, 1, record_gain);
-						if (cmd == ERROR_LOCK_PATH) {
+						if (cmd == ERROR_LOCK_PATH || cmd == OPERATOR_EXIT) {
 							res = cmd;
 							goto out;
 						}
@@ -9639,9 +9881,8 @@ static int vm_execmain(struct ast_channel *chan, const char *data)
 				case '5': /* Leave VoiceMail */
 					if (ast_test_flag(vmu, VM_SVMAIL)) {
 						cmd = forward_message(chan, context, &vms, vmu, vmfmts, 1, record_gain, 0);
-						if (cmd == ERROR_LOCK_PATH) {
+						if (cmd == ERROR_LOCK_PATH || cmd == OPERATOR_EXIT) {
 							res = cmd;
-							ast_log(AST_LOG_WARNING, "forward_message failed to lock path.\n");
 							goto out;
 						}
 					} else
@@ -9772,7 +10013,7 @@ static int vm_execmain(struct ast_channel *chan, const char *data)
 						vms.oldmessages++;
 					cmd = ast_play_and_wait(chan, "vm-undeleted");
 				}
-				if (ast_test_flag((&globalflags), VM_SKIPAFTERCMD)) {
+				if (ast_test_flag(vmu, VM_SKIPAFTERCMD)) {
 					if (vms.curmsg < vms.lastmsg) {
 						vms.curmsg++;
 						cmd = play_message(chan, vmu, &vms);
@@ -9950,13 +10191,14 @@ out:
 	if (res > -1) {
 		ast_stopstream(chan);
 		adsi_goodbye(chan);
-		if (valid) {
+		if (valid && res != OPERATOR_EXIT) {
 			if (silentexit)
 				res = ast_play_and_wait(chan, "vm-dialout");
 			else 
 				res = ast_play_and_wait(chan, "vm-goodbye");
-			if (res > 0)
-				res = 0;
+		}
+		if ((valid && res > 0) || res == OPERATOR_EXIT) {
+			res = 0;
 		}
 		if (useadsi)
 			ast_adsi_unload_session(chan);
@@ -10054,6 +10296,9 @@ static int vm_exec(struct ast_channel *chan, const char *data)
 	}
 
 	res = leave_voicemail(chan, args.argv0, &leave_options);
+	if (res == OPERATOR_EXIT) {
+		res = 0;
+	}
 
 	if (res == ERROR_LOCK_PATH) {
 		ast_log(AST_LOG_ERROR, "Could not leave voicemail. The path is already locked.\n");
@@ -10146,6 +10391,171 @@ static int append_mailbox(const char *context, const char *box, const char *data
 	queue_mwi_event(mailbox_full, urgent, new, old);
 
 	return 0;
+}
+
+AST_TEST_DEFINE(test_voicemail_vmuser)
+{
+	int res = 0;
+	struct ast_vm_user *vmu;
+	/* language parameter seems to only be used for display in manager action */
+	static const char options_string[] = "attach=yes|attachfmt=wav49|"
+		"serveremail=someguy@digium.com|tz=central|delete=yes|saycid=yes|"
+		"sendvoicemail=yes|review=yes|tempgreetwarn=yes|messagewrap=yes|operator=yes|"
+		"envelope=yes|moveheard=yes|sayduration=yes|saydurationm=5|forcename=yes|"
+		"forcegreetings=yes|callback=somecontext|dialout=somecontext2|"
+		"exitcontext=somecontext3|minsecs=10|maxsecs=100|nextaftercmd=yes|"
+		"backupdeleted=50|volgain=1.3|passwordlocation=spooldir";
+#ifdef IMAP_STORAGE
+	static const char option_string2[] = "imapuser=imapuser|imappassword=imappasswd|"
+		"imapfolder=INBOX|imapvmshareid=6000";
+#endif
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "vmuser";
+		info->category = "/apps/app_voicemail/";
+		info->summary = "Vmuser unit test";
+		info->description =
+			"This tests passing all supported parameters to apply_options, the voicemail user config parser";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	if (!(vmu = ast_calloc(1, sizeof(*vmu)))) {
+		return AST_TEST_NOT_RUN;
+	}
+	ast_set_flag(vmu, VM_ALLOCED);
+
+	apply_options(vmu, options_string);
+
+	if (!ast_test_flag(vmu, VM_ATTACH)) {
+		ast_test_status_update(test, "Parse failure for attach option\n");
+		res = 1;
+	}
+	if (strcasecmp(vmu->attachfmt, "wav49")) {
+		ast_test_status_update(test, "Parse failure for attachftm option\n");
+		res = 1;
+	}
+	if (strcasecmp(vmu->serveremail, "someguy@digium.com")) {
+		ast_test_status_update(test, "Parse failure for serveremail option\n");
+		res = 1;
+	}
+	if (strcasecmp(vmu->zonetag, "central")) {
+		ast_test_status_update(test, "Parse failure for tz option\n");
+		res = 1;
+	}
+	if (!ast_test_flag(vmu, VM_DELETE)) {
+		ast_test_status_update(test, "Parse failure for delete option\n");
+		res = 1;
+	}
+	if (!ast_test_flag(vmu, VM_SAYCID)) {
+		ast_test_status_update(test, "Parse failure for saycid option\n");
+		res = 1;
+	}
+	if (!ast_test_flag(vmu, VM_SVMAIL)) {
+		ast_test_status_update(test, "Parse failure for sendvoicemail option\n");
+		res = 1;
+	}
+	if (!ast_test_flag(vmu, VM_REVIEW)) {
+		ast_test_status_update(test, "Parse failure for review option\n");
+		res = 1;
+	}
+	if (!ast_test_flag(vmu, VM_TEMPGREETWARN)) {
+		ast_test_status_update(test, "Parse failure for tempgreetwarm option\n");
+		res = 1;
+	}
+	if (!ast_test_flag(vmu, VM_MESSAGEWRAP)) {
+		ast_test_status_update(test, "Parse failure for messagewrap option\n");
+		res = 1;
+	}
+	if (!ast_test_flag(vmu, VM_OPERATOR)) {
+		ast_test_status_update(test, "Parse failure for operator option\n");
+		res = 1;
+	}
+	if (!ast_test_flag(vmu, VM_ENVELOPE)) {
+		ast_test_status_update(test, "Parse failure for envelope option\n");
+		res = 1;
+	}
+	if (!ast_test_flag(vmu, VM_MOVEHEARD)) {
+		ast_test_status_update(test, "Parse failure for moveheard option\n");
+		res = 1;
+	}
+	if (!ast_test_flag(vmu, VM_SAYDURATION)) {
+		ast_test_status_update(test, "Parse failure for sayduration option\n");
+		res = 1;
+	}
+	if (vmu->saydurationm != 5) {
+		ast_test_status_update(test, "Parse failure for saydurationm option\n");
+		res = 1;
+	}
+	if (!ast_test_flag(vmu, VM_FORCENAME)) {
+		ast_test_status_update(test, "Parse failure for forcename option\n");
+		res = 1;
+	}
+	if (!ast_test_flag(vmu, VM_FORCEGREET)) {
+		ast_test_status_update(test, "Parse failure for forcegreetings option\n");
+		res = 1;
+	}
+	if (strcasecmp(vmu->callback, "somecontext")) {
+		ast_test_status_update(test, "Parse failure for callbacks option\n");
+		res = 1;
+	}
+	if (strcasecmp(vmu->dialout, "somecontext2")) {
+		ast_test_status_update(test, "Parse failure for dialout option\n");
+		res = 1;
+	}
+	if (strcasecmp(vmu->exit, "somecontext3")) {
+		ast_test_status_update(test, "Parse failure for exitcontext option\n");
+		res = 1;
+	}
+	if (vmu->minsecs != 10) {
+		ast_test_status_update(test, "Parse failure for minsecs option\n");
+		res = 1;
+	}
+	if (vmu->maxsecs != 100) {
+		ast_test_status_update(test, "Parse failure for maxsecs option\n");
+		res = 1;
+	}
+	if (!ast_test_flag(vmu, VM_SKIPAFTERCMD)) {
+		ast_test_status_update(test, "Parse failure for nextaftercmd option\n");
+		res = 1;
+	}
+	if (vmu->maxdeletedmsg != 50) {
+		ast_test_status_update(test, "Parse failure for backupdeleted option\n");
+		res = 1;
+	}
+	if (vmu->volgain != 1.3) {
+		ast_test_status_update(test, "Parse failure for volgain option\n");
+		res = 1;
+	}
+	if (vmu->passwordlocation != OPT_PWLOC_SPOOLDIR) {
+		ast_test_status_update(test, "Parse failure for passwordlocation option\n");
+		res = 1;
+	}
+#ifdef IMAP_STORAGE
+	apply_options(vmu, option_string2);
+
+	if (strcasecmp(vmu->imapuser, "imapuser")) {
+		ast_test_status_update(test, "Parse failure for imapuser option\n");
+		res = 1;
+	}
+	if (strcasecmp(vmu->imappassword, "imappasswd")) {
+		ast_test_status_update(test, "Parse failure for imappasswd option\n");
+		res = 1;
+	}
+	if (strcasecmp(vmu->imapfolder, "INBOX")) {
+		ast_test_status_update(test, "Parse failure for imappasswd option\n");
+		res = 1;
+	}
+	if (strcasecmp(vmu->imapvmshareid, "6000")) {
+		ast_test_status_update(test, "Parse failure for imapvmshareid option\n");
+		res = 1;
+	}
+#endif
+
+	free_user(vmu);
+	return res ? AST_TEST_FAIL : AST_TEST_PASS;
 }
 
 static int vm_box_exists(struct ast_channel *chan, const char *data) 
@@ -10243,6 +10653,11 @@ static int vmauthenticate(struct ast_channel *chan, const char *data)
 		pbx_builtin_setvar_helper(chan, "AUTH_CONTEXT", vmus.context);
 		ast_play_and_wait(chan, "auth-thankyou");
 		res = 0;
+	} else if (mailbox[0] == '*') {
+		/* user entered '*' */
+		if (!ast_goto_if_exists(chan, chan->context, "a", 1)) {
+			res = 0;	/* prevent hangup */
+		}
 	}
 
 	return res;
@@ -10450,6 +10865,147 @@ static struct ast_cli_entry cli_voicemail[] = {
 	AST_CLI_DEFINE(handle_voicemail_reload, "Reload voicemail configuration"),
 };
 
+#ifdef IMAP_STORAGE
+	#define DATA_EXPORT_VM_USERS(USER)					\
+		USER(ast_vm_user, context, AST_DATA_STRING)			\
+		USER(ast_vm_user, mailbox, AST_DATA_STRING)			\
+		USER(ast_vm_user, password, AST_DATA_PASSWORD)			\
+		USER(ast_vm_user, fullname, AST_DATA_STRING)			\
+		USER(ast_vm_user, email, AST_DATA_STRING)			\
+		USER(ast_vm_user, emailsubject, AST_DATA_STRING)		\
+		USER(ast_vm_user, emailbody, AST_DATA_STRING)			\
+		USER(ast_vm_user, pager, AST_DATA_STRING)			\
+		USER(ast_vm_user, serveremail, AST_DATA_STRING)			\
+		USER(ast_vm_user, mailcmd, AST_DATA_STRING)			\
+		USER(ast_vm_user, language, AST_DATA_STRING)			\
+		USER(ast_vm_user, zonetag, AST_DATA_STRING)			\
+		USER(ast_vm_user, callback, AST_DATA_STRING)			\
+		USER(ast_vm_user, dialout, AST_DATA_STRING)			\
+		USER(ast_vm_user, uniqueid, AST_DATA_STRING)			\
+		USER(ast_vm_user, exit, AST_DATA_STRING)			\
+		USER(ast_vm_user, attachfmt, AST_DATA_STRING)			\
+		USER(ast_vm_user, flags, AST_DATA_UNSIGNED_INTEGER)		\
+		USER(ast_vm_user, saydurationm, AST_DATA_INTEGER)		\
+		USER(ast_vm_user, maxmsg, AST_DATA_INTEGER)			\
+		USER(ast_vm_user, maxdeletedmsg, AST_DATA_INTEGER)		\
+		USER(ast_vm_user, maxsecs, AST_DATA_INTEGER)			\
+		USER(ast_vm_user, imapuser, AST_DATA_STRING)			\
+		USER(ast_vm_user, imappassword, AST_DATA_STRING)		\
+		USER(ast_vm_user, imapvmshareid, AST_DATA_STRING)		\
+		USER(ast_vm_user, volgain, AST_DATA_DOUBLE)
+#else
+	#define DATA_EXPORT_VM_USERS(USER)					\
+		USER(ast_vm_user, context, AST_DATA_STRING)			\
+		USER(ast_vm_user, mailbox, AST_DATA_STRING)			\
+		USER(ast_vm_user, password, AST_DATA_PASSWORD)			\
+		USER(ast_vm_user, fullname, AST_DATA_STRING)			\
+		USER(ast_vm_user, email, AST_DATA_STRING)			\
+		USER(ast_vm_user, emailsubject, AST_DATA_STRING)		\
+		USER(ast_vm_user, emailbody, AST_DATA_STRING)			\
+		USER(ast_vm_user, pager, AST_DATA_STRING)			\
+		USER(ast_vm_user, serveremail, AST_DATA_STRING)			\
+		USER(ast_vm_user, mailcmd, AST_DATA_STRING)			\
+		USER(ast_vm_user, language, AST_DATA_STRING)			\
+		USER(ast_vm_user, zonetag, AST_DATA_STRING)			\
+		USER(ast_vm_user, callback, AST_DATA_STRING)			\
+		USER(ast_vm_user, dialout, AST_DATA_STRING)			\
+		USER(ast_vm_user, uniqueid, AST_DATA_STRING)			\
+		USER(ast_vm_user, exit, AST_DATA_STRING)			\
+		USER(ast_vm_user, attachfmt, AST_DATA_STRING)			\
+		USER(ast_vm_user, flags, AST_DATA_UNSIGNED_INTEGER)		\
+		USER(ast_vm_user, saydurationm, AST_DATA_INTEGER)		\
+		USER(ast_vm_user, maxmsg, AST_DATA_INTEGER)			\
+		USER(ast_vm_user, maxdeletedmsg, AST_DATA_INTEGER)		\
+		USER(ast_vm_user, maxsecs, AST_DATA_INTEGER)			\
+		USER(ast_vm_user, volgain, AST_DATA_DOUBLE)
+#endif
+
+AST_DATA_STRUCTURE(ast_vm_user, DATA_EXPORT_VM_USERS);
+
+#define DATA_EXPORT_VM_ZONES(ZONE)			\
+	ZONE(vm_zone, name, AST_DATA_STRING)		\
+	ZONE(vm_zone, timezone, AST_DATA_STRING)	\
+	ZONE(vm_zone, msg_format, AST_DATA_STRING)
+
+AST_DATA_STRUCTURE(vm_zone, DATA_EXPORT_VM_ZONES);
+
+/*!
+ * \internal
+ * \brief Add voicemail user to the data_root.
+ * \param[in] search The search tree.
+ * \param[in] data_root The main result node.
+ * \param[in] user The voicemail user.
+ */
+static int vm_users_data_provider_get_helper(const struct ast_data_search *search,
+    struct ast_data *data_root, struct ast_vm_user *user)
+{
+	struct ast_data *data_user, *data_zone;
+	struct ast_data *data_state;
+	struct vm_zone *zone = NULL;
+	int urgentmsg = 0, newmsg = 0, oldmsg = 0;
+	char ext_context[256] = "";
+
+	data_user = ast_data_add_node(data_root, "user");
+	if (!data_user) {
+		return -1;
+	}
+
+	ast_data_add_structure(ast_vm_user, data_user, user);
+
+	AST_LIST_LOCK(&zones);
+	AST_LIST_TRAVERSE(&zones, zone, list) {
+		if (!strcmp(zone->name, user->zonetag)) {
+			break;
+		}
+	}
+	AST_LIST_UNLOCK(&zones);
+
+	/* state */
+	data_state = ast_data_add_node(data_user, "state");
+	if (!data_state) {
+		return -1;
+	}
+	snprintf(ext_context, sizeof(ext_context), "%s@%s", user->mailbox, user->context);
+	inboxcount2(ext_context, &urgentmsg, &newmsg, &oldmsg);
+	ast_data_add_int(data_state, "urgentmsg", urgentmsg);
+	ast_data_add_int(data_state, "newmsg", newmsg);
+	ast_data_add_int(data_state, "oldmsg", oldmsg);
+
+	if (zone) {
+		data_zone = ast_data_add_node(data_user, "zone");
+		ast_data_add_structure(vm_zone, data_zone, zone);
+	}
+
+	if (!ast_data_search_match(search, data_user)) {
+		ast_data_remove_node(data_root, data_user);
+	}
+
+	return 0;
+}
+
+static int vm_users_data_provider_get(const struct ast_data_search *search,
+	struct ast_data *data_root)
+{
+	struct ast_vm_user *user;
+
+	AST_LIST_LOCK(&users);
+	AST_LIST_TRAVERSE(&users, user, list) {
+		vm_users_data_provider_get_helper(search, data_root, user);
+	}
+	AST_LIST_UNLOCK(&users);
+
+	return 0;
+}
+
+static const struct ast_data_handler vm_users_data_provider = {
+	.version = AST_DATA_HANDLER_VERSION,
+	.get = vm_users_data_provider_get
+};
+
+static const struct ast_data_entry vm_data_providers[] = {
+	AST_DATA_ENTRY("asterisk/application/voicemail/list", &vm_users_data_provider)
+};
+
 static void poll_subscribed_mailbox(struct mwi_sub *mwi_sub)
 {
 	int new = 0, old = 0, urgent = 0;
@@ -10461,6 +11017,7 @@ static void poll_subscribed_mailbox(struct mwi_sub *mwi_sub)
 		mwi_sub->old_new = new;
 		mwi_sub->old_old = old;
 		queue_mwi_event(mwi_sub->mailbox, urgent, new, old);
+		run_externnotify(NULL, mwi_sub->mailbox, NULL);
 	}
 }
 
@@ -11461,6 +12018,9 @@ static int load_config(int reload)
 		if ((val = ast_variable_retrieve(cfg, "general", "tz"))) {
 			ast_copy_string(zonetag, val, sizeof(zonetag));
 		}
+		if ((val = ast_variable_retrieve(cfg, "general", "locale"))) {
+			ast_copy_string(locale, val, sizeof(locale));
+		}
 		if ((val = ast_variable_retrieve(cfg, "general", "emailsubject"))) {
 			emailsubject = ast_strdup(val);
 		}
@@ -11546,6 +12106,399 @@ static int write_password_to_file(const char *secretfn, const char *password) {
 	return 0;
 }
 
+static int vmsayname_exec(struct ast_channel *chan, const char *data)
+{
+	char *context;
+	char *args_copy;
+	int res;
+
+	if (ast_strlen_zero(data)) {
+		ast_log(LOG_WARNING, "VMSayName requires argument mailbox@context");
+		return -1;
+	}
+
+	args_copy = ast_strdupa(data);
+	if ((context = strchr(args_copy, '@'))) {
+		*context++ = '\0';
+	} else {
+		context = "default";
+	}
+
+	if ((res = sayname(chan, args_copy, context) < 0)) {
+		ast_debug(3, "Greeting not found for '%s@%s', falling back to mailbox number.\n", args_copy, context);
+		res = ast_stream_and_wait(chan, "vm-extension", AST_DIGIT_ANY);
+		if (!res) {
+			res = ast_say_character_str(chan, args_copy, AST_DIGIT_ANY, chan->language);
+		}
+	}
+
+	return res;
+}
+
+#ifdef TEST_FRAMEWORK
+static int fake_write(struct ast_channel *ast, struct ast_frame *frame)
+{
+	return 0;
+}
+
+static struct ast_frame *fake_read(struct ast_channel *ast)
+{
+	return &ast_null_frame;
+}
+
+AST_TEST_DEFINE(test_voicemail_vmsayname)
+{
+	char dir[PATH_MAX];
+	char dir2[PATH_MAX];
+	static const char TEST_CONTEXT[] = "very_long_unique_context_so_that_nobody_will_ever_have_the_same_one_configured_3141592653";
+	static const char TEST_EXTENSION[] = "1234";
+
+	struct ast_channel *test_channel1 = NULL;
+	int res = -1;
+
+	static const struct ast_channel_tech fake_tech = {
+		.write = fake_write,
+		.read = fake_read,
+	};
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "vmsayname_exec";
+		info->category = "/apps/app_voicemail/";
+		info->summary = "Vmsayname unit test";
+		info->description =
+			"This tests passing various parameters to vmsayname";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	if (!(test_channel1 = ast_channel_alloc(0, AST_STATE_DOWN, NULL, NULL, NULL,
+        NULL, NULL, 0, 0, "TestChannel1"))) {
+		goto exit_vmsayname_test;
+	}
+
+	/* normally this is done in the channel driver */
+	test_channel1->nativeformats = AST_FORMAT_GSM;
+	test_channel1->writeformat = AST_FORMAT_GSM;
+	test_channel1->rawwriteformat = AST_FORMAT_GSM;
+	test_channel1->readformat = AST_FORMAT_GSM;
+	test_channel1->rawreadformat = AST_FORMAT_GSM;
+	test_channel1->tech = &fake_tech;
+
+	ast_test_status_update(test, "Test playing of extension when greeting is not available...\n");
+	snprintf(dir, sizeof(dir), "%s@%s", TEST_EXTENSION, TEST_CONTEXT); /* not a dir, don't get confused */
+	if (!(res = vmsayname_exec(test_channel1, dir))) {
+		snprintf(dir, sizeof(dir), "%s%s/%s/greet", VM_SPOOL_DIR, TEST_CONTEXT, TEST_EXTENSION);
+		if (ast_fileexists(dir, NULL, NULL)) {
+			ast_test_status_update(test, "This should not happen, most likely means clean up from previous test failed\n");
+			res = -1;
+			goto exit_vmsayname_test;
+		} else {
+			/* no greeting already exists as expected, let's create one to fully test sayname */
+			if ((res = create_dirpath(dir, sizeof(dir), TEST_CONTEXT, TEST_EXTENSION, ""))) {
+				ast_log(AST_LOG_WARNING, "Failed to make test directory\n");
+				goto exit_vmsayname_test;
+			}
+			snprintf(dir, sizeof(dir), "%s/sounds/beep.gsm", ast_config_AST_VAR_DIR);
+			snprintf(dir2, sizeof(dir2), "%s%s/%s/greet.gsm", VM_SPOOL_DIR, TEST_CONTEXT, TEST_EXTENSION);
+			/* we're not going to hear the sound anyway, just use a valid gsm audio file */
+			if ((res = symlink(dir, dir2))) {
+				ast_log(LOG_WARNING, "Symlink reported %s\n", strerror(errno));
+				goto exit_vmsayname_test;
+			}
+			ast_test_status_update(test, "Test playing created mailbox greeting...\n");
+			snprintf(dir, sizeof(dir), "%s@%s", TEST_EXTENSION, TEST_CONTEXT); /* not a dir, don't get confused */
+			res = vmsayname_exec(test_channel1, dir);
+
+			/* TODO: there may be a better way to do this */
+			unlink(dir2);
+			snprintf(dir2, sizeof(dir2), "%s%s/%s", VM_SPOOL_DIR, TEST_CONTEXT, TEST_EXTENSION);
+			rmdir(dir2);
+			snprintf(dir2, sizeof(dir2), "%s%s", VM_SPOOL_DIR, TEST_CONTEXT);
+			rmdir(dir2);
+		}
+	}
+
+exit_vmsayname_test:
+
+	if (test_channel1) {
+		ast_hangup(test_channel1);
+	}
+
+	return res ? AST_TEST_FAIL : AST_TEST_PASS;
+}
+
+AST_TEST_DEFINE(test_voicemail_msgcount)
+{
+	int i, j, res = AST_TEST_PASS, syserr;
+	struct ast_vm_user *vmu;
+	struct vm_state vms;
+#ifdef IMAP_STORAGE
+	struct ast_channel *chan = NULL;
+#endif
+	struct {
+		char dir[256];
+		char file[256];
+		char txtfile[256];
+	} tmp[3];
+	char syscmd[256];
+	const char origweasels[] = "tt-weasels";
+	const char testcontext[] = "test";
+	const char testmailbox[] = "00000000";
+	const char testspec[] = "00000000@test";
+	FILE *txt;
+	int new, old, urgent;
+	const char *folders[3] = { "Old", "Urgent", "INBOX" };
+	const int folder2mbox[3] = { 1, 11, 0 };
+	const int expected_results[3][12] = {
+		/* hasvm-old, hasvm-urgent, hasvm-new, ic-old, ic-urgent, ic-new, ic2-old, ic2-urgent, ic2-new, mc-old, mc-urgent, mc-new */
+		{          1,            0,         0,      1,         0,      0,       1,          0,       0,      1,         0,      0 },
+		{          1,            1,         1,      1,         0,      1,       1,          1,       0,      1,         1,      1 },
+		{          1,            1,         1,      1,         0,      2,       1,          1,       1,      1,         1,      2 },
+	};
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "test_voicemail_msgcount";
+		info->category = "/apps/app_voicemail/";
+		info->summary = "Test Voicemail status checks";
+		info->description =
+			"Verify that message counts are correct when retrieved through the public API";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	/* Make sure the original path was completely empty */
+	snprintf(syscmd, sizeof(syscmd), "rm -rf %s%s/%s", VM_SPOOL_DIR, testcontext, testmailbox);
+	if ((syserr = ast_safe_system(syscmd))) {
+		ast_test_status_update(test, "Unable to clear test directory: %s\n",
+			syserr > 0 ? strerror(syserr) : "unable to fork()");
+		return AST_TEST_FAIL;
+	}
+
+#ifdef IMAP_STORAGE
+	if (!(chan = ast_dummy_channel_alloc())) {
+		ast_test_status_update(test, "Unable to create dummy channel\n");
+		return AST_TEST_FAIL;
+	}
+#endif
+
+	if (!(vmu = find_user(NULL, testcontext, testmailbox)) &&
+		!(vmu = find_or_create(testcontext, testmailbox))) {
+		ast_test_status_update(test, "Cannot create vmu structure\n");
+		ast_unreplace_sigchld();
+		return AST_TEST_FAIL;
+	}
+
+	populate_defaults(vmu);
+	memset(&vms, 0, sizeof(vms));
+
+	/* Create temporary voicemail */
+	for (i = 0; i < 3; i++) {
+		create_dirpath(tmp[i].dir, sizeof(tmp[i].dir), testcontext, testmailbox, folders[i]);
+		make_file(tmp[i].file, sizeof(tmp[i].file), tmp[i].dir, 0);
+		snprintf(tmp[i].txtfile, sizeof(tmp[i].txtfile), "%s.txt", tmp[i].file);
+
+		if (ast_fileexists(origweasels, "gsm", "en") > 0) {
+			snprintf(syscmd, sizeof(syscmd), "cp %s/sounds/en/%s.gsm %s/%s/%s/%s/msg0000.gsm", ast_config_AST_DATA_DIR, origweasels,
+				VM_SPOOL_DIR, testcontext, testmailbox, folders[i]);
+			if ((syserr = ast_safe_system(syscmd))) {
+				ast_test_status_update(test, "Unable to create test voicemail: %s\n",
+					syserr > 0 ? strerror(syserr) : "unable to fork()");
+				ast_unreplace_sigchld();
+				return AST_TEST_FAIL;
+			}
+		}
+
+		if ((txt = fopen(tmp[i].txtfile, "w+"))) {
+			fprintf(txt, "; just a stub\n[message]\nflag=%s\n", strcmp(folders[i], "Urgent") ? "" : "Urgent");
+			fclose(txt);
+		} else {
+			ast_test_status_update(test, "Unable to write message file '%s'\n", tmp[i].txtfile);
+			res = AST_TEST_FAIL;
+			break;
+		}
+		open_mailbox(&vms, vmu, folder2mbox[i]);
+		STORE(tmp[i].dir, testmailbox, testcontext, 0, chan, vmu, "gsm", 600, &vms, strcmp(folders[i], "Urgent") ? "" : "Urgent");
+
+		/* hasvm-old, hasvm-urgent, hasvm-new, ic-old, ic-urgent, ic-new, ic2-old, ic2-urgent, ic2-new, mc-old, mc-urgent, mc-new */
+		for (j = 0; j < 3; j++) {
+			/* folder[2] is INBOX, __has_voicemail will default back to INBOX */ 
+			if (ast_app_has_voicemail(testspec, (j==2 ? NULL : folders[j])) != expected_results[i][0 + j]) {
+				ast_test_status_update(test, "has_voicemail(%s, %s) returned %d and we expected %d\n",
+					testspec, folders[j], ast_app_has_voicemail(testspec, folders[j]), expected_results[i][0 + j]);
+				res = AST_TEST_FAIL;
+			}
+		}
+
+		new = old = urgent = 0;
+		if (ast_app_inboxcount(testspec, &new, &old)) {
+			ast_test_status_update(test, "inboxcount returned failure\n");
+			res = AST_TEST_FAIL;
+		} else if (old != expected_results[i][3 + 0] || new != expected_results[i][3 + 2]) {
+			ast_test_status_update(test, "inboxcount(%s) returned old=%d (expected %d) and new=%d (expected %d)\n",
+				testspec, old, expected_results[i][3 + 0], new, expected_results[i][3 + 2]);
+			res = AST_TEST_FAIL;
+		}
+
+		new = old = urgent = 0;
+		if (ast_app_inboxcount2(testspec, &urgent, &new, &old)) {
+			ast_test_status_update(test, "inboxcount2 returned failure\n");
+			res = AST_TEST_FAIL;
+		} else if (old != expected_results[i][6 + 0] ||
+				urgent != expected_results[i][6 + 1] ||
+				   new != expected_results[i][6 + 2]    ) {
+			ast_test_status_update(test, "inboxcount2(%s) returned old=%d (expected %d), urgent=%d (expected %d), and new=%d (expected %d)\n",
+				testspec, old, expected_results[i][6 + 0], urgent, expected_results[i][6 + 1], new, expected_results[i][6 + 2]);
+			res = AST_TEST_FAIL;
+		}
+
+		new = old = urgent = 0;
+		for (j = 0; j < 3; j++) {
+			if (ast_app_messagecount(testcontext, testmailbox, folders[j]) != expected_results[i][9 + j]) {
+				ast_test_status_update(test, "messagecount(%s, %s) returned %d and we expected %d\n",
+					testspec, folders[j], ast_app_messagecount(testcontext, testmailbox, folders[j]), expected_results[i][9 + j]);
+				res = AST_TEST_FAIL;
+			}
+		}
+	}
+
+	for (i = 0; i < 3; i++) {
+		/* This is necessary if the voicemails are stored on an ODBC/IMAP
+		 * server, in which case, the rm below will not affect the
+		 * voicemails. */
+		DELETE(tmp[i].dir, 0, tmp[i].file, vmu);
+		DISPOSE(tmp[i].dir, 0);
+	}
+
+	if (vms.deleted) {
+		ast_free(vms.deleted);
+	}
+	if (vms.heard) {
+		ast_free(vms.heard);
+	}
+
+#ifdef IMAP_STORAGE
+	chan = ast_channel_release(chan);
+#endif
+
+	/* And remove test directory */
+	snprintf(syscmd, sizeof(syscmd), "rm -rf %s%s/%s", VM_SPOOL_DIR, testcontext, testmailbox);
+	if ((syserr = ast_safe_system(syscmd))) {
+		ast_test_status_update(test, "Unable to clear test directory: %s\n",
+			syserr > 0 ? strerror(syserr) : "unable to fork()");
+	}
+
+	return res;
+}
+
+AST_TEST_DEFINE(test_voicemail_notify_endl)
+{
+	int res = AST_TEST_PASS;
+	char testcontext[] = "test";
+	char testmailbox[] = "00000000";
+	char from[] = "test@example.net", cidnum[] = "1234", cidname[] = "Mark Spencer", format[] = "gsm";
+	char attach[] = "/var/lib/asterisk/sounds/en/tt-weasels", attach2[] = "/var/lib/asterisk/sounds/en/tt-somethingwrong";
+	char buf[256] = ""; /* No line should actually be longer than 80 */
+	struct ast_channel *chan = NULL;
+	struct ast_vm_user *vmu, vmus = {
+		.flags = 0,
+	};
+	FILE *file;
+	struct {
+		char *name;
+		enum { INT, FLAGVAL, STATIC, STRPTR } type;
+		void *location;
+		union {
+			int intval;
+			char *strval;
+		} u;
+	} test_items[] = {
+		{ "plain jane config", STATIC, vmus.password, .u.strval = "1234" }, /* No, this doesn't change this test any. */
+		{ "emailsubject", STRPTR, vmus.emailsubject, .u.strval = "Oogly boogly\xf8koogly with what appears to be UTF-8" },
+		{ "emailbody", STRPTR, vmus.emailbody, .u.strval = "This is a test\n\twith multiple\nlines\nwithin\n" },
+		{ "serveremail", STATIC, vmus.serveremail, .u.strval = "\"\xf8Something\xe8that\xd8seems to have UTF-8 chars\" <test@example.net>" },
+		{ "attachment flag", FLAGVAL, &vmus.flags, .u.intval = VM_ATTACH },
+		{ "attach2", STRPTR, attach2, .u.strval = "" },
+		{ "attach", STRPTR, attach, .u.strval = "" },
+	};
+	int which;
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "test_voicemail_notify_endl";
+		info->category = "/apps/app_voicemail/";
+		info->summary = "Test Voicemail notification end-of-line";
+		info->description =
+			"Verify that notification emails use a consistent end-of-line character";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	if (!(vmu = find_user(&vmus, testcontext, testmailbox)) &&
+		!(vmu = find_or_create(testcontext, testmailbox))) {
+		ast_test_status_update(test, "Cannot create vmu structure\n");
+		return AST_TEST_NOT_RUN;
+	}
+
+	if (vmu != &vmus && !(vmu = find_user(&vmus, testcontext, testmailbox))) {
+		ast_test_status_update(test, "Cannot find vmu structure?!!\n");
+		return AST_TEST_NOT_RUN;
+	}
+
+	populate_defaults(vmu);
+	ast_copy_string(vmu->email, "test2@example.net", sizeof(vmu->email));
+#ifdef IMAP_STORAGE
+	/* TODO When we set up the IMAP server test, we'll need to have credentials for the VMU structure added here */
+#endif
+
+	file = tmpfile();
+	for (which = 0; which < ARRAY_LEN(test_items); which++) {
+		/* Kill previous test, if any */
+		rewind(file);
+		if (ftruncate(fileno(file), 0)) {
+			ast_test_status_update(test, "Cannot truncate test output file: %s\n", strerror(errno));
+			res = AST_TEST_FAIL;
+			break;
+		}
+
+		/* Make each change, in order, to the test mailbox */
+		if (test_items[which].type == INT) {
+			*((int *) test_items[which].location) = test_items[which].u.intval;
+		} else if (test_items[which].type == FLAGVAL) {
+			if (ast_test_flag(vmu, test_items[which].u.intval)) {
+				ast_clear_flag(vmu, test_items[which].u.intval);
+			} else {
+				ast_set_flag(vmu, test_items[which].u.intval);
+			}
+		} else if (test_items[which].type == STATIC) {
+			strcpy(test_items[which].location, test_items[which].u.strval);
+		} else if (test_items[which].type == STRPTR) {
+			test_items[which].location = test_items[which].u.strval;
+		}
+
+		make_email_file(file, from, vmu, 0, testcontext, testmailbox, "INBOX", cidnum, cidname, attach, attach2, format, 999, 1, chan, NULL, 0, NULL);
+		rewind(file);
+		while (fgets(buf, sizeof(buf), file)) {
+			if (
+#ifdef IMAP_STORAGE
+			buf[strlen(buf) - 2] != '\r'
+#else
+			buf[strlen(buf) - 2] == '\r'
+#endif
+			|| buf[strlen(buf) - 1] != '\n') {
+				res = AST_TEST_FAIL;
+			}
+		}
+	}
+	fclose(file);
+	return res;
+}
+#endif /* defined(TEST_FRAMEWORK) */
+
 static int reload(void)
 {
 	return load_config(1);
@@ -11561,6 +12514,13 @@ static int unload_module(void)
 	res |= ast_unregister_application(app4);
 	res |= ast_custom_function_unregister(&mailbox_exists_acf);
 	res |= ast_manager_unregister("VoicemailUsersList");
+	res |= ast_data_unregister(NULL);
+#ifdef TEST_FRAMEWORK
+	res |= AST_TEST_UNREGISTER(test_voicemail_vmsayname);
+	res |= AST_TEST_UNREGISTER(test_voicemail_msgcount);
+	res |= AST_TEST_UNREGISTER(test_voicemail_vmuser);
+	res |= AST_TEST_UNREGISTER(test_voicemail_notify_endl);
+#endif
 	ast_cli_unregister_multiple(cli_voicemail, ARRAY_LEN(cli_voicemail));
 	ast_uninstall_vm_functions();
 	ao2_ref(inprocess_container, -1);
@@ -11601,12 +12561,21 @@ static int load_module(void)
 	res |= ast_register_application_xml(app2, vm_execmain);
 	res |= ast_register_application_xml(app3, vm_box_exists);
 	res |= ast_register_application_xml(app4, vmauthenticate);
+	res |= ast_register_application_xml(sayname_app, vmsayname_exec);
 	res |= ast_custom_function_register(&mailbox_exists_acf);
 	res |= ast_manager_register_xml("VoicemailUsersList", EVENT_FLAG_CALL | EVENT_FLAG_REPORTING, manager_list_voicemail_users);
+#ifdef TEST_FRAMEWORK
+	res |= AST_TEST_REGISTER(test_voicemail_vmsayname);
+	res |= AST_TEST_REGISTER(test_voicemail_msgcount);
+	res |= AST_TEST_REGISTER(test_voicemail_vmuser);
+	res |= AST_TEST_REGISTER(test_voicemail_notify_endl);
+#endif
+
 	if (res)
 		return res;
 
 	ast_cli_register_multiple(cli_voicemail, ARRAY_LEN(cli_voicemail));
+	ast_data_register_multiple(vm_data_providers, ARRAY_LEN(vm_data_providers));
 
 	ast_install_vm_functions(has_voicemail, inboxcount, inboxcount2, messagecount, sayname);
 	ast_realtime_require_field("voicemail", "uniqueid", RQ_UINTEGER3, 11, "password", RQ_CHAR, 10, SENTINEL);
@@ -11992,7 +12961,6 @@ static int play_record_review(struct ast_channel *chan, char *playfile, char *re
 				/* Mark Urgent */
 				if ((flag && ast_strlen_zero(flag)) || (!ast_strlen_zero(flag) && strcmp(flag, "Urgent"))) {
 					ast_verbose(VERBOSE_PREFIX_3 "marking message as Urgent\n");
-					ast_debug(1000, "This message is too urgent!\n");
 					res = ast_play_and_wait(chan, "vm-marked-urgent");
 					strcpy(flag, "Urgent");
 				} else if (flag) {
@@ -12031,7 +12999,7 @@ static int play_record_review(struct ast_channel *chan, char *playfile, char *re
 				return 1;
 #endif
 		case '0':
-			if (!ast_test_flag(vmu, VM_OPERATOR)) {
+			if (!ast_test_flag(vmu, VM_OPERATOR) || !outsidecaller) {
 				cmd = ast_play_and_wait(chan, "vm-sorry");
 				break;
 			}
@@ -12096,10 +13064,10 @@ static int play_record_review(struct ast_channel *chan, char *playfile, char *re
 			}
 		}
 	}
-	if (outsidecaller)
-		ast_play_and_wait(chan, "vm-goodbye");
 	if (cmd == 't')
 		cmd = 0;
+	else if (outsidecaller) /* won't play if time out occurs */
+		ast_play_and_wait(chan, "vm-goodbye");
 	return cmd;
 }
 

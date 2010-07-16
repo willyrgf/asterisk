@@ -1534,7 +1534,7 @@ struct        rpt_link *l;
                        l = l->next;
                        continue;
                }
-               /* dont send to self */
+               /* don't send to self */
                if (mylink && (l == mylink))
                {
                        l = l->next;
@@ -1735,7 +1735,7 @@ char	str[200];
 	sprintf(str,"I %s %04X",myrpt->name,unit);
 
 	wf.frametype = AST_FRAME_TEXT;
-	wf.subclass = 0;
+	wf.subclass.integer = 0;
 	wf.offset = 0;
 	wf.mallocd = 0;
 	wf.datalen = strlen(str) + 1;
@@ -1872,7 +1872,7 @@ static int send_usb_txt(struct rpt *myrpt, char *txt)
  
 	if (debug)ast_log(LOG_NOTICE, "send_usb_txt %s\n",txt);
 	wf.frametype = AST_FRAME_TEXT;
-	wf.subclass = 0;
+	wf.subclass.integer = 0;
 	wf.offset = 0;
 	wf.mallocd = 0;
 	wf.datalen = strlen(txt) + 1;
@@ -1895,7 +1895,7 @@ int	i,spos;
 	{
 		/* if is not a real link, ignore it */
 		if (l->name[0] == '0') continue;
-		/* dont count our stuff */
+		/* don't count our stuff */
 		if (l == mylink) continue;
 		if (mylink && (!strcmp(l->name,mylink->name))) continue;
 		/* figure out mode to report */
@@ -4375,7 +4375,7 @@ struct dahdi_params par;
 		wait_interval(myrpt, DLY_TELEM, mychannel);
 		l = myrpt->links.next;
 		haslink = 0;
-		/* dont report if a link for this one still on system */
+		/* don't report if a link for this one still on system */
 		if (l != &myrpt->links)
 		{
 			rpt_mutex_lock(&myrpt->lock);
@@ -5223,7 +5223,7 @@ char *v1, *v2;
 	{
 	    case UNKEY:
 		/* if any of the following are defined, go ahead and do it,
-		   otherwise, dont bother */
+		   otherwise, don't bother */
 		v1 = (char *) ast_variable_retrieve(myrpt->cfg, myrpt->name, 
 			"unlinkedct");
 		v2 = (char *) ast_variable_retrieve(myrpt->cfg, myrpt->name, 
@@ -5454,14 +5454,14 @@ struct ast_channel *mychannel,*genchannel;
 		if(instr){
 			ast_callerid_parse(instr, &name, &loc);
 			if(loc){
-				if(mychannel->cid.cid_num)
-					ast_free(mychannel->cid.cid_num);
-				mychannel->cid.cid_num = ast_strdup(loc);
+				mychannel->caller.id.number.valid = 1;
+				ast_free(mychannel->caller.id.number.str);
+				mychannel->caller.id.number.str = ast_strdup(loc);
 			}
 			if(name){
-				if(mychannel->cid.cid_name)
-					ast_free(mychannel->cid.cid_name);
-				mychannel->cid.cid_name = ast_strdup(name);
+				mychannel->caller.id.name.valid = 1;
+				ast_free(mychannel->caller.id.name.str);
+				mychannel->caller.id.name.str = ast_strdup(name);
 			}
 			ast_free(instr);
 		}
@@ -5547,7 +5547,7 @@ struct ast_channel *mychannel,*genchannel;
 		if (myrpt->mydtmf)
 		{
 			struct ast_frame wf = {AST_FRAME_DTMF, } ;
-			wf.subclass = myrpt->mydtmf;
+			wf.subclass.integer = myrpt->mydtmf;
 			rpt_mutex_unlock(&myrpt->lock);
 			ast_queue_frame(mychannel,&wf);
 #ifdef	NEW_ASTERISK
@@ -5594,7 +5594,7 @@ struct	rpt_link *l;
 
 	snprintf(str, sizeof(str), "D %s %s %d %c", myrpt->cmdnode, myrpt->name, ++(myrpt->dtmfidx), c);
 	wf.frametype = AST_FRAME_TEXT;
-	wf.subclass = 0;
+	wf.subclass.integer = 0;
 	wf.offset = 0;
 	wf.mallocd = 0;
 	wf.datalen = strlen(str) + 1;
@@ -5641,7 +5641,7 @@ struct	rpt_link *l;
 	rpt_mutex_unlock(&myrpt->lock);
 	snprintf(str, sizeof(str), "K? * %s 0 0", myrpt->name);
 	wf.frametype = AST_FRAME_TEXT;
-	wf.subclass = 0;
+	wf.subclass.integer = 0;
 	wf.offset = 0;
 	wf.mallocd = 0;
 	wf.datalen = strlen(str) + 1;
@@ -5808,9 +5808,9 @@ static int connect_link(struct rpt *myrpt, char* node, int mode, int perma)
 		if (debug > 3)
 			ast_log(LOG_NOTICE, "rpt (remote) initiating call to %s/%s on %s\n",
 		deststr, tele, l->chan->name);
-		if(l->chan->cid.cid_num)
-			ast_free(l->chan->cid.cid_num);
-		l->chan->cid.cid_num = ast_strdup(myrpt->name);
+		l->chan->caller.id.number.valid = 1;
+		ast_free(l->chan->caller.id.number.str);
+		l->chan->caller.id.number.str = ast_strdup(myrpt->name);
 		ast_call(l->chan,tele,999);
 	}
 	else {
@@ -5947,7 +5947,7 @@ static int function_ilink(struct rpt *myrpt, char *param, char *digits, int comm
 				l->disced = 1;
 				rpt_mutex_unlock(&myrpt->lock);
 				wf.frametype = AST_FRAME_TEXT;
-				wf.subclass = 0;
+				wf.subclass.integer = 0;
 				wf.offset = 0;
 				wf.mallocd = 0;
 				wf.datalen = strlen(discstr) + 1;
@@ -6062,7 +6062,7 @@ static int function_ilink(struct rpt *myrpt, char *param, char *digits, int comm
 				/* ast_log(LOG_NOTICE,"dumping link %s\n",l->name); */
                                 
                                 wf.frametype = AST_FRAME_TEXT;
-                                wf.subclass = 0;
+                                wf.subclass.integer = 0;
                                 wf.offset = 0;
                                 wf.mallocd = 0;
                                 wf.datalen = strlen(discstr) + 1;
@@ -6688,7 +6688,7 @@ struct rpt_link *l;
 struct	ast_frame wf;
 
 	wf.frametype = AST_FRAME_TEXT;
-	wf.subclass = 0;
+	wf.subclass.integer = 0;
 	wf.offset = 0;
 	wf.mallocd = 0;
 	wf.datalen = strlen(str) + 1;
@@ -6741,7 +6741,7 @@ struct	ast_frame wf;
 					l = l->next;
 					continue;
 				}
-				/* dont send back from where it came */
+				/* don't send back from where it came */
 				if ((l == mylink) || (!strcmp(l->name,mylink->name)))
 				{
 					l = l->next;
@@ -6772,7 +6772,7 @@ struct	ast_frame wf;
 					l = l->next;
 					continue;
 				}
-				/* dont send back from where it came */
+				/* don't send back from where it came */
 				if ((l == mylink) || (!strcmp(l->name,mylink->name)))
 				{
 					l = l->next;
@@ -6870,7 +6870,7 @@ struct	ast_frame wf;
 				l = l->next;
 				continue;
 			}
-			/* dont send back from where it came */
+			/* don't send back from where it came */
 			if ((l == mylink) || (!strcmp(l->name,mylink->name)))
 			{
 				l = l->next;
@@ -6897,7 +6897,7 @@ struct	ast_frame wf;
 				l = l->next;
 				continue;
 			}
-			/* dont send back from where it came */
+			/* don't send back from where it came */
 			if ((l == mylink) || (!strcmp(l->name,mylink->name)))
 			{
 				l = l->next;
@@ -10147,7 +10147,7 @@ int	ret,res = 0,src;
 	/* if decode not active */
 	if (myrpt->dtmfidx == -1)
 	{
-		/* if not lead-in digit, dont worry */
+		/* if not lead-in digit, don't worry */
 		if (c != myrpt->p.funcchar)
 		{
 			if (!myrpt->p.propagate_dtmf)
@@ -10388,9 +10388,9 @@ static int attempt_reconnect(struct rpt *myrpt, struct rpt_link *l)
 		if (option_verbose > 2)
 			ast_verbose(VERBOSE_PREFIX_3 "rpt (attempt_reconnect) initiating call to %s/%s on %s\n",
 				deststr, tele, l->chan->name);
-		if(l->chan->cid.cid_num)
-			ast_free(l->chan->cid.cid_num);
-		l->chan->cid.cid_num = ast_strdup(myrpt->name);
+		l->chan->caller.id.number.valid = 1;
+		ast_free(l->chan->caller.id.number.str);
+		l->chan->caller.id.number.str = ast_strdup(myrpt->name);
                 ast_call(l->chan,tele,999); 
 
 	}
@@ -11697,7 +11697,7 @@ char tmpstr[300],lstr[MAXLINKLIST];
 
 				memset(&lf,0,sizeof(lf));
 				lf.frametype = AST_FRAME_TEXT;
-				lf.subclass = 0;
+				lf.subclass.integer = 0;
 				lf.offset = 0;
 				lf.mallocd = 0;
 				lf.samples = 0;
@@ -12146,7 +12146,7 @@ char tmpstr[300],lstr[MAXLINKLIST];
 #endif
 			else if (f->frametype == AST_FRAME_DTMF)
 			{
-				c = (char) f->subclass; /* get DTMF char */
+				c = (char) f->subclass.integer; /* get DTMF char */
 				ast_frfree(f);
 				if (myrpt->lastf1)
 					memset(myrpt->lastf1->data.ptr,0,myrpt->lastf1->datalen);
@@ -12160,14 +12160,14 @@ char tmpstr[300],lstr[MAXLINKLIST];
 			}						
 			else if (f->frametype == AST_FRAME_CONTROL)
 			{
-				if (f->subclass == AST_CONTROL_HANGUP)
+				if (f->subclass.integer == AST_CONTROL_HANGUP)
 				{
 					if (debug) printf("@@@@ rpt:Hung Up\n");
 					ast_frfree(f);
 					break;
 				}
 				/* if RX key */
-				if (f->subclass == AST_CONTROL_RADIO_KEY)
+				if (f->subclass.integer == AST_CONTROL_RADIO_KEY)
 				{
 					if ((!lasttx) || (myrpt->p.duplex > 1) || (myrpt->p.linktolink)) 
 					{
@@ -12225,7 +12225,7 @@ char tmpstr[300],lstr[MAXLINKLIST];
 					} else myrpt->lasttone[0] = 0;
 				}
 				/* if RX un-key */
-				if (f->subclass == AST_CONTROL_RADIO_UNKEY)
+				if (f->subclass.integer == AST_CONTROL_RADIO_UNKEY)
 				{
 					if ((!lasttx) || (myrpt->p.duplex > 1) || (myrpt->p.linktolink))
 					{
@@ -12260,7 +12260,7 @@ char tmpstr[300],lstr[MAXLINKLIST];
 			}
 			if (f->frametype == AST_FRAME_CONTROL)
 			{
-				if (f->subclass == AST_CONTROL_HANGUP)
+				if (f->subclass.integer == AST_CONTROL_HANGUP)
 				{
 					if (debug) printf("@@@@ rpt:Hung Up\n");
 					ast_frfree(f);
@@ -12280,7 +12280,7 @@ char tmpstr[300],lstr[MAXLINKLIST];
 			}
 			if (f->frametype == AST_FRAME_CONTROL)
 			{
-				if (f->subclass == AST_CONTROL_HANGUP)
+				if (f->subclass.integer == AST_CONTROL_HANGUP)
 				{
 					if (debug) printf("@@@@ rpt:Hung Up\n");
 					ast_frfree(f);
@@ -12346,7 +12346,7 @@ char tmpstr[300],lstr[MAXLINKLIST];
 			}
 			if (f->frametype == AST_FRAME_CONTROL)
 			{
-				if (f->subclass == AST_CONTROL_HANGUP)
+				if (f->subclass.integer == AST_CONTROL_HANGUP)
 				{
 					if (debug) printf("@@@@ rpt:Hung Up\n");
 					ast_frfree(f);
@@ -12593,11 +12593,11 @@ char tmpstr[300],lstr[MAXLINKLIST];
 					if (l->lastf2)
 						memset(l->lastf2->data.ptr,0,l->lastf2->datalen);
 					l->dtmfed = 1;
-					handle_link_phone_dtmf(myrpt,l,f->subclass);
+					handle_link_phone_dtmf(myrpt,l,f->subclass.integer);
 				}
 				if (f->frametype == AST_FRAME_CONTROL)
 				{
-					if (f->subclass == AST_CONTROL_ANSWER)
+					if (f->subclass.integer == AST_CONTROL_ANSWER)
 					{
 						char lconnected = l->connected;
 
@@ -12626,7 +12626,7 @@ char tmpstr[300],lstr[MAXLINKLIST];
 							l->reconnects++;
 					}
 					/* if RX key */
-					if (f->subclass == AST_CONTROL_RADIO_KEY)
+					if (f->subclass.integer == AST_CONTROL_RADIO_KEY)
 					{
 						if (debug == 7 ) printf("@@@@ rx key\n");
 						l->lastrealrx = 1;
@@ -12644,7 +12644,7 @@ char tmpstr[300],lstr[MAXLINKLIST];
 						}
 					}
 					/* if RX un-key */
-					if (f->subclass == AST_CONTROL_RADIO_UNKEY)
+					if (f->subclass.integer == AST_CONTROL_RADIO_UNKEY)
 					{
 						if (debug == 7) printf("@@@@ rx un-key\n");
 						l->lastrealrx = 0;
@@ -12663,7 +12663,7 @@ char tmpstr[300],lstr[MAXLINKLIST];
 								rpt_telemetry(myrpt,LINKUNKEY,l);
 						}
 					}
-					if (f->subclass == AST_CONTROL_HANGUP)
+					if (f->subclass.integer == AST_CONTROL_HANGUP)
 					{
 						ast_frfree(f);
 						rpt_mutex_lock(&myrpt->lock);
@@ -12752,7 +12752,7 @@ char tmpstr[300],lstr[MAXLINKLIST];
 				}
 				if (f->frametype == AST_FRAME_CONTROL)
 				{
-					if (f->subclass == AST_CONTROL_HANGUP)
+					if (f->subclass.integer == AST_CONTROL_HANGUP)
 					{
 						if (debug) printf("@@@@ rpt:Hung Up\n");
 						ast_frfree(f);
@@ -12784,7 +12784,7 @@ char tmpstr[300],lstr[MAXLINKLIST];
 			}
 			if (f->frametype == AST_FRAME_CONTROL)
 			{
-				if (f->subclass == AST_CONTROL_HANGUP)
+				if (f->subclass.integer == AST_CONTROL_HANGUP)
 				{
 					if (debug) printf("@@@@ rpt:Hung Up\n");
 					ast_frfree(f);
@@ -12821,7 +12821,7 @@ char tmpstr[300],lstr[MAXLINKLIST];
 			}
 			if (f->frametype == AST_FRAME_CONTROL)
 			{
-				if (f->subclass == AST_CONTROL_HANGUP)
+				if (f->subclass.integer == AST_CONTROL_HANGUP)
 				{
 					if (debug) printf("@@@@ rpt:Hung Up\n");
 					ast_frfree(f);
@@ -12853,7 +12853,7 @@ char tmpstr[300],lstr[MAXLINKLIST];
 			}
 			if (f->frametype == AST_FRAME_CONTROL)
 			{
-				if (f->subclass == AST_CONTROL_HANGUP)
+				if (f->subclass.integer == AST_CONTROL_HANGUP)
 				{
 					if (debug) printf("@@@@ rpt:Hung Up\n");
 					ast_frfree(f);
@@ -12873,7 +12873,7 @@ char tmpstr[300],lstr[MAXLINKLIST];
 			}
 			if (f->frametype == AST_FRAME_CONTROL)
 			{
-				if (f->subclass == AST_CONTROL_HANGUP)
+				if (f->subclass.integer == AST_CONTROL_HANGUP)
 				{
 					if (debug) printf("@@@@ rpt:Hung Up\n");
 					ast_frfree(f);
@@ -12990,7 +12990,7 @@ char *this,*val;
 	{
 		load_rpt_vars(i,1);
 
-		/* if is a remote, dont start one for it */
+		/* if is a remote, don't start one for it */
 		if (rpt_vars[i].remote)
 		{
 			if(retreive_memory(&rpt_vars[i],"init")){ /* Try to retreive initial memory channel */
@@ -13412,8 +13412,11 @@ static int rpt_exec(struct ast_channel *chan, const char *data)
 		}
 
 		if(option_verbose > 2) {
-			ast_verbose( VERBOSE_PREFIX_3 "Return Context: (%s,%s,%d) ID: %s\n", chan->context,chan->exten, chan->priority, chan->cid.cid_num);
-			if(!ast_exists_extension(chan, chan->context, chan->exten, chan->priority, chan->cid.cid_num)) {
+			ast_verbose(VERBOSE_PREFIX_3 "Return Context: (%s,%s,%d) ID: %s\n",
+				chan->context, chan->exten, chan->priority,
+				S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, ""));
+			if(!ast_exists_extension(chan, chan->context, chan->exten, chan->priority,
+				S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL))) {
 				ast_verbose( VERBOSE_PREFIX_3 "Warning: Return Context Invalid, call will return to default|s\n");
 			}
 		}
@@ -13443,7 +13446,8 @@ static int rpt_exec(struct ast_channel *chan, const char *data)
         char hisip[100],nodeip[100],*val, *s, *s1, *s2, *s3, *b,*b1;
 
 		/* look at callerid to see what node this comes from */
-		if (!chan->cid.cid_num) /* if doesn't have caller id */
+		b = S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL);
+		if (!b) /* if doesn't have caller id */
 		{
 			ast_log(LOG_WARNING, "Does not have callerid on %s\n",tmp);
 			return -1;
@@ -13467,7 +13471,7 @@ static int rpt_exec(struct ast_channel *chan, const char *data)
 			return -1;
 		}
 		
-		ast_callerid_parse(chan->cid.cid_num,&b,&b1);
+		b1 = ast_strdupa(b);
 		ast_shrink_phone_number(b1);
 		if (!strcmp(myrpt->name,b1))
 		{
@@ -13564,13 +13568,14 @@ static int rpt_exec(struct ast_channel *chan, const char *data)
 			return -1;
 		}
 		/* look at callerid to see what node this comes from */
-		if (!chan->cid.cid_num) /* if doesn't have caller id */
+		b = S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL);
+		if (!b) /* if doesn't have caller id */
 		{
 			ast_log(LOG_WARNING, "Doesnt have callerid on %s\n",tmp);
 			return -1;
 		}
 
-		ast_callerid_parse(chan->cid.cid_num,&b,&b1);
+		b1 = ast_strdupa(b);
 		ast_shrink_phone_number(b1);
 		if (!strcmp(myrpt->name,b1))
 		{
@@ -14036,11 +14041,12 @@ static int rpt_exec(struct ast_channel *chan, const char *data)
 				ast_cli_command(nullfd,mycmd);
 		} else ast_cli_command(nullfd,mycmd);
 		/* look at callerid to see what node this comes from */
-		if (!chan->cid.cid_num) /* if doesn't have caller id */
+		b = S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL);
+		if (!b) /* if doesn't have caller id */
 		{
 			b1 = "0";
 		} else {
-			ast_callerid_parse(chan->cid.cid_num,&b,&b1);
+			b1 = ast_strdupa(b);
 			ast_shrink_phone_number(b1);
 		}
 		sprintf(mycmd,"CONNECT,%s",b1);
@@ -14337,7 +14343,7 @@ static int rpt_exec(struct ast_channel *chan, const char *data)
 			if (handle_remote_dtmf_digit(myrpt,c,&keyed,0) == -1) break;
 			continue;
 		} else rpt_mutex_unlock(&myrpt->lock);
-		if (who == chan) /* if it was a read from incomming */
+		if (who == chan) /* if it was a read from incoming */
 		{
 			f = ast_read(chan);
 			if (!f)
@@ -14401,7 +14407,7 @@ static int rpt_exec(struct ast_channel *chan, const char *data)
 				if (myrpt->lastf2)
 					memset(myrpt->lastf2->data.ptr,0,myrpt->lastf2->datalen);
 				dtmfed = 1;
-				if (handle_remote_phone_dtmf(myrpt,f->subclass,&keyed,phone_mode) == -1)
+				if (handle_remote_phone_dtmf(myrpt,f->subclass.integer,&keyed,phone_mode) == -1)
 				{
 					if (debug) printf("@@@@ rpt:Hung Up\n");
 					ast_frfree(f);
@@ -14419,21 +14425,21 @@ static int rpt_exec(struct ast_channel *chan, const char *data)
 			}
 			if (f->frametype == AST_FRAME_CONTROL)
 			{
-				if (f->subclass == AST_CONTROL_HANGUP)
+				if (f->subclass.integer == AST_CONTROL_HANGUP)
 				{
 					if (debug) printf("@@@@ rpt:Hung Up\n");
 					ast_frfree(f);
 					break;
 				}
 				/* if RX key */
-				if (f->subclass == AST_CONTROL_RADIO_KEY)
+				if (f->subclass.integer == AST_CONTROL_RADIO_KEY)
 				{
 					if (debug == 7) printf("@@@@ rx key\n");
 					keyed = 1;
 					myrpt->rerxtimer = 0;
 				}
 				/* if RX un-key */
-				if (f->subclass == AST_CONTROL_RADIO_UNKEY)
+				if (f->subclass.integer == AST_CONTROL_RADIO_UNKEY)
 				{
 					myrpt->rerxtimer = 0;
 					if (debug == 7) printf("@@@@ rx un-key\n");
@@ -14467,14 +14473,14 @@ static int rpt_exec(struct ast_channel *chan, const char *data)
 			}
 			else if (f->frametype == AST_FRAME_CONTROL)
 			{
-				if (f->subclass == AST_CONTROL_HANGUP)
+				if (f->subclass.integer == AST_CONTROL_HANGUP)
 				{
 					if (debug) printf("@@@@ rpt:Hung Up\n");
 					ast_frfree(f);
 					break;
 				}
 				/* if RX key */
-				if (f->subclass == AST_CONTROL_RADIO_KEY)
+				if (f->subclass.integer == AST_CONTROL_RADIO_KEY)
 				{
 					if (debug == 7) printf("@@@@ remote rx key\n");
 					if (!myrpt->remotetx)
@@ -14483,7 +14489,7 @@ static int rpt_exec(struct ast_channel *chan, const char *data)
 					}
 				}
 				/* if RX un-key */
-				if (f->subclass == AST_CONTROL_RADIO_UNKEY)
+				if (f->subclass.integer == AST_CONTROL_RADIO_UNKEY)
 				{
 					if (debug == 7) printf("@@@@ remote rx un-key\n");
 					if (!myrpt->remotetx) 
@@ -14509,7 +14515,7 @@ static int rpt_exec(struct ast_channel *chan, const char *data)
 			}
 			if (f->frametype == AST_FRAME_CONTROL)
 			{
-				if (f->subclass == AST_CONTROL_HANGUP)
+				if (f->subclass.integer == AST_CONTROL_HANGUP)
 				{
 					if (debug) printf("@@@@ rpt:Hung Up\n");
 					ast_frfree(f);
@@ -14530,7 +14536,7 @@ static int rpt_exec(struct ast_channel *chan, const char *data)
 			}
 			if (f->frametype == AST_FRAME_CONTROL)
 			{
-				if (f->subclass == AST_CONTROL_HANGUP)
+				if (f->subclass.integer == AST_CONTROL_HANGUP)
 				{
 					if (debug) printf("@@@@ rpt:Hung Up\n");
 					ast_frfree(f);
@@ -14546,11 +14552,12 @@ static int rpt_exec(struct ast_channel *chan, const char *data)
 		char mycmd[100],*b,*b1;
 
 		/* look at callerid to see what node this comes from */
-		if (!chan->cid.cid_num) /* if doesn't have caller id */
+		b = S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL);
+		if (!b) /* if doesn't have caller id */
 		{
 			b1 = "0";
 		} else {
-			ast_callerid_parse(chan->cid.cid_num,&b,&b1);
+			b1 = ast_strdupa(b);
 			ast_shrink_phone_number(b1);
 		}
 		sprintf(mycmd,"DISCONNECT,%s",b1);

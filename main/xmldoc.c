@@ -449,7 +449,7 @@ static void xmldoc_string_cleanup(const char *text, struct ast_str **output, int
 		}
 	}
 
-	/* remove last spaces (we dont want always to remove the trailing spaces). */
+	/* remove last spaces (we don't want always to remove the trailing spaces). */
 	if (lastspaces) {
 		ast_str_trim_blanks(*output);
 	}
@@ -1786,7 +1786,7 @@ static char *xmldoc_build_field(const char *type, const char *name, const char *
 	node = xmldoc_get_node(type, name, documentation_language);
 
 	if (!node) {
-		ast_log(LOG_WARNING, "Counldn't find %s %s in XML documentation\n", type, name);
+		ast_log(LOG_WARNING, "Couldn't find %s %s in XML documentation\n", type, name);
 		return ret;
 	}
 
