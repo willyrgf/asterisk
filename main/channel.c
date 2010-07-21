@@ -1149,7 +1149,7 @@ static struct ast_channel *channel_find_locked(const struct ast_channel *prev,
 				 * as there can be no more matches.
 				 */
 				if (!(name && !namelen)) {
-					prev = c;
+					_prev = c;
 					retries = -1;
 				}
 			}
@@ -1439,7 +1439,10 @@ struct ast_datastore *ast_channel_datastore_alloc(const struct ast_datastore_inf
 
 	datastore->info = info;
 
-	datastore->uid = ast_strdup(uid);
+	if (!ast_strlen_zero(uid) && !(datastore->uid = ast_strdup(uid))) {
+		ast_free(datastore);
+		datastore = NULL;
+	}
 
 	return datastore;
 }
@@ -2403,6 +2406,19 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 					ast_clear_flag(chan, AST_FLAG_IN_DTMF);
 					if (!f->len)
 						f->len = ast_tvdiff_ms(now, chan->dtmf_tv);
+
+					/* detect tones that were received on
+					 * the wire with durations shorter than
+					 * AST_MIN_DTMF_DURATION and set f->len
+					 * to the actual duration of the DTMF
+					 * frames on the wire.  This will cause
+					 * dtmf emulation to be triggered later
+					 * on.
+					 */
+					if (ast_tvdiff_ms(now, chan->dtmf_tv) < AST_MIN_DTMF_DURATION) {
+						f->len = ast_tvdiff_ms(now, chan->dtmf_tv);
+						ast_log(LOG_DTMF, "DTMF end '%c' detected to have actual duration %ld on the wire, emulation will be triggered on %s\n", f->subclass, f->len, chan->name);
+					}
 				} else if (!f->len) {
 					ast_log(LOG_DTMF, "DTMF end accepted without begin '%c' on %s\n", f->subclass, chan->name);
 					f->len = AST_MIN_DTMF_DURATION;
@@ -2890,7 +2906,7 @@ int ast_prod(struct ast_channel *chan)
 			ast_log(LOG_DEBUG, "Prodding channel '%s'\n", chan->name);
 		a.subclass = chan->rawwriteformat;
 		a.data = nothing + AST_FRIENDLY_OFFSET;
-		a.src = "ast_prod";
+		a.src = "ast_prod"; /* this better match check in ast_write */
 		if (ast_write(chan, &a))
 			ast_log(LOG_WARNING, "Prodding channel '%s' failed\n", chan->name);
 	}
@@ -3041,10 +3057,10 @@ int ast_write(struct ast_channel *chan, struct ast_frame *fr)
 		res = 0;	/* XXX explain, why 0 ? */
 		goto done;
 	}
-	if (chan->generatordata) {
-		if (ast_test_flag(chan, AST_FLAG_WRITE_INT))
-			ast_deactivate_generator(chan);
-		else {
+	if (chan->generatordata && (!fr->src || strcasecmp(fr->src, "ast_prod"))) {
+		if (ast_test_flag(chan, AST_FLAG_WRITE_INT)) {
+				ast_deactivate_generator(chan);
+		} else {
 			if (fr->frametype == AST_FRAME_DTMF_END) {
 				/* There is a generator running while we're in the middle of a digit.
 				 * It's probably inband DTMF, so go ahead and pass it so it can

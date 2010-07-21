@@ -3416,10 +3416,10 @@ static int dahdi_setoption(struct ast_channel *chan, int option, void *data, int
 	case AST_OPTION_ECHOCAN:
 		cp = (char *) data;
 		if (*cp) {
-			ast_log(LOG_DEBUG, "Enabling echo cancelation on %s\n", chan->name);
+			ast_log(LOG_DEBUG, "Enabling echo cancellation on %s\n", chan->name);
 			dahdi_enable_ec(p);
 		} else {
-			ast_log(LOG_DEBUG, "Disabling echo cancelation on %s\n", chan->name);
+			ast_log(LOG_DEBUG, "Disabling echo cancellation on %s\n", chan->name);
 			dahdi_disable_ec(p);
 		}
 		break;
@@ -4399,8 +4399,12 @@ static struct ast_frame *dahdi_handle_event(struct ast_channel *ast)
 						/* Here we have to retain the lock on both the main channel, the 3-way channel, and
 						   the private structure -- not especially easy or clean */
 						while (p->subs[SUB_THREEWAY].owner && ast_mutex_trylock(&p->subs[SUB_THREEWAY].owner->lock)) {
+							int res;
 							/* Yuck, didn't get the lock on the 3-way, gotta release everything and re-grab! */
-							ast_mutex_unlock(&p->lock);
+							if ((res = ast_mutex_unlock(&p->lock))) {
+								ast_log(LOG_ERROR, "chan_dahdi bug! '&p->lock' was not locked upon entry to 'dahdi_handle_dtmfup': %s\n", strerror(res));
+								return NULL;
+							}
 							DEADLOCK_AVOIDANCE(&ast->lock);
 							/* We can grab ast and p in that order, without worry.  We should make sure
 							   nothing seriously bad has happened though like some sort of bizarre double
@@ -5167,7 +5171,7 @@ static struct ast_frame  *dahdi_read(struct ast_channel *ast)
 	
 	/* Hang up if we don't really exist */
 	if (index < 0)	{
-		ast_log(LOG_WARNING, "We dont exist?\n");
+		ast_log(LOG_WARNING, "We don't exist?\n");
 		ast_mutex_unlock(&p->lock);
 		return NULL;
 	}
@@ -7852,6 +7856,8 @@ static struct dahdi_pvt *mkintf(int channel, const struct dahdi_chan_conf *conf,
 					return NULL;
 				}
 			}
+			tmp->outsigmod = conf->chan.outsigmod;
+
 #ifdef HAVE_PRI
 			if ((chan_sig == SIG_PRI) || (chan_sig == SIG_GR303FXOKS) || (chan_sig == SIG_GR303FXSKS)) {
 				int offset;
@@ -7966,6 +7972,8 @@ static struct dahdi_pvt *mkintf(int channel, const struct dahdi_chan_conf *conf,
 						tmp->pri = &pris[span];
 						tmp->prioffset = offset;
 						tmp->call = NULL;
+
+						tmp->priexclusive = conf->chan.priexclusive;
 					} else {
 						ast_log(LOG_ERROR, "Channel %d is reserved for D-channel.\n", offset);
 						destroy_dahdi_pvt(&tmp);
@@ -8072,7 +8080,6 @@ static struct dahdi_pvt *mkintf(int channel, const struct dahdi_chan_conf *conf,
 		tmp->immediate = conf->chan.immediate;
 		tmp->transfertobusy = conf->chan.transfertobusy;
 		tmp->sig = chan_sig;
-		tmp->outsigmod = conf->chan.outsigmod;
 		tmp->ringt_base = ringt_base;
 		tmp->firstradio = 0;
 		if ((chan_sig == SIG_FXOKS) || (chan_sig == SIG_FXOLS) || (chan_sig == SIG_FXOGS))
@@ -8117,7 +8124,6 @@ static struct dahdi_pvt *mkintf(int channel, const struct dahdi_chan_conf *conf,
 		tmp->dahditrcallerid = conf->chan.dahditrcallerid;
 		tmp->restrictcid = conf->chan.restrictcid;
 		tmp->use_callingpres = conf->chan.use_callingpres;
-		tmp->priexclusive = conf->chan.priexclusive;
 		if (tmp->usedistinctiveringdetection) {
 			if (!tmp->use_callerid) {
 				ast_log(LOG_NOTICE, "Distinctive Ring detect requires 'usecallerid' be on\n");
@@ -12171,6 +12177,7 @@ static int process_dahdi(struct dahdi_chan_conf *confp, const char *cat, struct 
 					res = ioctl(ctlfd, DAHDI_SET_DIALPARAMS, &dps);
 					if (res < 0) {
 						ast_log(LOG_ERROR, "Invalid tone duration: %d ms: %s\n", toneduration, strerror(errno));
+						close(ctlfd);
 						return -1;
 					}
 				}

@@ -574,10 +574,13 @@ static enum queue_member_status get_member_status(struct call_queue *q, int max_
 	struct member *member;
 	struct ao2_iterator mem_iter;
 	enum queue_member_status result = QUEUE_NO_MEMBERS;
+	int allpaused = 1, empty = 1;
 
 	ao2_lock(q);
 	mem_iter = ao2_iterator_init(q->members, 0);
 	while ((member = ao2_iterator_next(&mem_iter))) {
+		empty = 0;
+
 		if (max_penalty && (member->penalty > max_penalty)) {
 			ao2_ref(member, -1);
 			continue;
@@ -586,6 +589,8 @@ static enum queue_member_status get_member_status(struct call_queue *q, int max_
 		if (member->paused) {
 			ao2_ref(member, -1);
 			continue;
+		} else {
+			allpaused = 0;
 		}
 
 		switch (member->status) {
@@ -605,6 +610,10 @@ static enum queue_member_status get_member_status(struct call_queue *q, int max_
 	}
 	ao2_iterator_destroy(&mem_iter);
 	ao2_unlock(q);
+
+	if (!empty && allpaused) {
+		result = QUEUE_NO_REACHABLE_MEMBERS;
+	}
 	return result;
 }
 

@@ -695,6 +695,7 @@ static int builtin_automonitor(struct ast_channel *chan, struct ast_channel *pee
 	if (!ast_strlen_zero(courtesytone)) {
 		if (ast_autoservice_start(callee_chan))
 			return -1;
+		ast_autoservice_ignore(callee_chan, AST_FRAME_DTMF_END);
 		if (ast_stream_and_wait(caller_chan, courtesytone, caller_chan->language, "")) {
 			ast_log(LOG_WARNING, "Failed to play courtesy tone!\n");
 			ast_autoservice_stop(callee_chan);
@@ -798,6 +799,7 @@ static int builtin_blindtransfer(struct ast_channel *chan, struct ast_channel *p
 	transferer_real_context = real_ctx(transferer, transferee);
 	/* Start autoservice on chan while we talk to the originator */
 	ast_autoservice_start(transferee);
+	ast_autoservice_ignore(transferee, AST_FRAME_DTMF_END);
 	ast_indicate(transferee, AST_CONTROL_HOLD);
 
 	memset(xferto, 0, sizeof(xferto));
@@ -914,6 +916,7 @@ static int builtin_atxfer(struct ast_channel *chan, struct ast_channel *peer, st
 	transferer_real_context = real_ctx(transferer, transferee);
 	/* Start autoservice on chan while we talk to the originator */
 	ast_autoservice_start(transferee);
+	ast_autoservice_ignore(transferee, AST_FRAME_DTMF_END);
 	ast_indicate(transferee, AST_CONTROL_HOLD);
 
 	/* Transfer */
@@ -970,6 +973,8 @@ static int builtin_atxfer(struct ast_channel *chan, struct ast_channel *peer, st
 	}
 
 	if (!ast_check_hangup(transferer)) {
+		int hangup_dont = 0;
+
 		if (check_compat(transferer, newchan)) {
 			/* we do mean transferee here, NOT transferer */
 			finishup(transferee);
@@ -978,7 +983,18 @@ static int builtin_atxfer(struct ast_channel *chan, struct ast_channel *peer, st
 		memset(&bconfig,0,sizeof(struct ast_bridge_config));
 		ast_set_flag(&(bconfig.features_caller), AST_FEATURE_DISCONNECT);
 		ast_set_flag(&(bconfig.features_callee), AST_FEATURE_DISCONNECT);
+
+		/* ast_bridge_call clears AST_FLAG_BRIDGE_HANGUP_DONT, but we don't
+		   want that to happen here because we're also in another bridge already
+		 */
+		if (ast_test_flag(chan, AST_FLAG_BRIDGE_HANGUP_DONT)) {
+			hangup_dont = 1;
+		}
 		res = ast_bridge_call(transferer, newchan, &bconfig);
+		if (hangup_dont) {
+			ast_set_flag(chan, AST_FLAG_BRIDGE_HANGUP_DONT);
+		}
+
 		if (newchan->_softhangup || !transferer->_softhangup) {
 			ast_hangup(newchan);
 			if (ast_stream_and_wait(transferer, xfersound, transferer->language, ""))
@@ -1216,6 +1232,7 @@ static int feature_exec_app(struct ast_channel *chan, struct ast_channel *peer, 
 	}
 
 	ast_autoservice_start(idle);
+	ast_autoservice_ignore(idle, AST_FRAME_DTMF_END);
 	
 	if (!ast_strlen_zero(feature->moh_class))
 		ast_moh_start(idle, feature->moh_class, NULL);
@@ -2167,7 +2184,7 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 			/* new channel */
 			ast_cdr_specialized_reset(new_chan_cdr,0);
 		} else {
-			ast_cdr_specialized_reset(chan_cdr,0); /* nothing changed, reset the chan_cdr  */
+			ast_cdr_specialized_reset(chan->cdr, 0); /* nothing changed, reset the chan cdr  */
 		}
 	}
 
@@ -2193,9 +2210,11 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 				ast_channel_unlock(chan_ptr);
 			}
 			/* new channel */
-			ast_cdr_specialized_reset(new_peer_cdr,0);
+			if (new_peer_cdr) {
+				ast_cdr_specialized_reset(new_peer_cdr, 0);
+			}
 		} else {
-			ast_cdr_specialized_reset(peer_cdr,0); /* nothing changed, reset the peer_cdr  */
+			ast_cdr_specialized_reset(peer->cdr, 0); /* nothing changed, reset the peer cdr  */
 		}
 	}
 	
@@ -2520,7 +2539,7 @@ static int park_exec(struct ast_channel *chan, void *data)
 	ast_mutex_lock(&parking_lock);
 	pu = parkinglot;
 	while(pu) {
-		if (pu->parkingnum == park) {
+		if (pu->parkingnum == park && !pu->notquiteyet) {
 			if (pu->chan->pbx) { /* do not allow call to be picked up until the PBX thread is finished */
 				ast_mutex_unlock(&parking_lock);
 				ast_module_user_remove(u);
