@@ -220,6 +220,9 @@ static const char *descrip =
 "conference.  If the conference number is omitted, the user will be prompted\n"
 "to enter one.  User can exit the conference by hangup, or if the 'p' option\n"
 "is specified, by pressing '#'.\n"
+"When using realtime Asterisk will save the system name (from asterisk.conf) of this system\n"
+"in realtime. If a conference with the same already exists but on another server, \n"
+"MEETME_SYSTEMNAME is set to the system name that hosts the meetme and meetme() exits.\n"
 "Please note: The DAHDI kernel modules and at least one hardware driver (or dahdi_dummy)\n"
 "             must be present for conferencing to operate properly. In addition, the chan_dahdi\n"
 "             channel driver must be loaded for the 'i' and 'r' options to operate at all.\n\n"
@@ -1720,7 +1723,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 	conf->users++;
 	/* Update table */
 	snprintf(members, sizeof(members), "%d", conf->users);
-	ast_update_realtime("meetme", "confno", conf->confno, "members", members , NULL);
+	ast_update_realtime("meetme", "confno", conf->confno, "members", members, "systemname", ast_config_AST_SYSTEM_NAME, NULL);
 	setusercount = 1;
 
 	/* This device changed state now - if this is the first user */
@@ -2551,7 +2554,7 @@ bailoutandtrynormal:
 			conf->users--;
 			/* Update table */
 			snprintf(members, sizeof(members), "%d", conf->users);
-			ast_update_realtime("meetme", "confno", conf->confno, "members", members, NULL);
+			ast_update_realtime("meetme", "confno", conf->confno, "members", members, "systemname", ast_config_AST_SYSTEM_NAME, NULL);
 			if (confflags & CONFFLAG_MARKEDUSER) 
 				conf->markedusers--;
 		}
