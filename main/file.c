@@ -42,6 +42,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/app.h"
 #include "asterisk/pbx.h"
 #include "asterisk/linkedlists.h"
+#include "asterisk/channel.h"
 #include "asterisk/module.h"
 #include "asterisk/astobj2.h"
 
@@ -686,6 +687,12 @@ struct ast_filestream *ast_openvstream(struct ast_channel *chan, const char *fil
 	return NULL;
 }
 
+const struct ast_datastore_info queue_ds_sound_ending = { /* this is here because it is referenced here
+							     and the only other place it is used is in app_queue,
+							     which is not always loaded. */
+        .type = "queue_sound_ending"
+};
+
 static struct ast_frame *read_frame(struct ast_filestream *s, int *whennext)
 {
 	struct ast_frame *fr, *new_fr;
@@ -695,6 +702,16 @@ static struct ast_frame *read_frame(struct ast_filestream *s, int *whennext)
 	}
 
 	if (!(fr = s->fmt->read(s, whennext))) {
+		struct ast_datastore *datastore;
+		/* here is the ideal spot to put code to take an action
+		when we have reached the end of the file */
+		/* look up the datastore and the play_finished struct, and set appropriate values */
+		if ((datastore = ast_channel_datastore_find(s->owner, &queue_ds_sound_ending, NULL))) {
+			struct ast_queue_streamfile_info *aqsi = datastore->data; /* what a waste! I have to dive into the data to know where to pass it.*/
+			if (aqsi) {
+				(*aqsi->endHandler)(aqsi->chan, aqsi->ringing, aqsi->moh, aqsi->now_playing, datastore->data);
+			}
+		}
 		return NULL;
 	}
 

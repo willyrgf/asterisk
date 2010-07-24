@@ -1797,23 +1797,47 @@ static int join_queue(char *queuename, struct queue_ent *qe, enum queue_result *
 	return res;
 }
 
-static int play_file(struct ast_channel *chan, const char *filename)
+int add_playfile(struct ast_channel *chan, const char *name);
+void ast_queue_sound_finished_handler(struct ast_channel *chan, int ringing, char *moh, int now_playing, void *data);
+extern const struct ast_datastore_info queue_ds_sound_ending;
+void destroy_streamfile_info(struct ast_queue_streamfile_info *playdata);
+
+static int play_file(struct ast_channel *chan, const char *filename, int ringing, char *moh)
 {
 	int res;
+	struct ast_datastore *datastore;
+	struct ast_queue_streamfile_info *aqsi = NULL;
+	/* No need to lock the channels because they are already locked in ast_do_masquerade */
+	
+	/* look up the datastore and the play_finished struct, and set appropriate values */
+	if ((datastore = ast_channel_datastore_find(chan, &queue_ds_sound_ending, NULL))) {
+		aqsi = datastore->data;
+		if (aqsi) {
+			aqsi->now_playing = 1;
+			aqsi->ringing = ringing;
+			if (moh)
+				strcpy(aqsi->moh, moh);
+		}
+	} else {
+		ast_log(LOG_WARNING, "Can't find the queue_ds_sound_ending datastore!\n");
+	}
 
 	if (ast_strlen_zero(filename)) {
 		return 0;
 	}
 
-	ast_stopstream(chan);
-
-	res = ast_streamfile(chan, filename, chan->language);
-	if (!res)
-		res = ast_waitstream(chan, AST_DIGIT_ANY);
+	/*
+	Rule: the code that calls this routine should set the datastore vars chan, ringing, and moh before calling this! */
 
 	ast_stopstream(chan);
 
-	return res;
+
+	res = ast_streamfile(chan, filename, chan->language); /* begin the streaming */
+
+	if (res && aqsi)
+		aqsi->now_playing = 0; /* well, if a file was playing, we killed it. */
+
+	return res; /* non-zero most likely means the file doesn't exist */
 }
 
 /*!
@@ -1877,19 +1901,19 @@ static int say_position(struct queue_ent *qe, int ringing)
 	if (qe->parent->announceposition) {
 		/* Say we're next, if we are */
 		if (qe->pos == 1) {
-			res = play_file(qe->chan, qe->parent->sound_next);
+			res = play_file(qe->chan, qe->parent->sound_next, ringing, NULL);
 			if (res)
 				goto playout;
 			else
 				goto posout;
 		} else {
-			res = play_file(qe->chan, qe->parent->sound_thereare);
+			res = add_playfile(qe->chan, qe->parent->sound_thereare);
 			if (res)
 				goto playout;
 			res = ast_say_number(qe->chan, qe->pos, AST_DIGIT_ANY, qe->chan->language, NULL); /* Needs gender */
 			if (res)
 				goto playout;
-			res = play_file(qe->chan, qe->parent->sound_calls);
+			res = add_playfile(qe->chan, qe->parent->sound_calls);
 			if (res)
 				goto playout;
 		}
@@ -1912,7 +1936,7 @@ static int say_position(struct queue_ent *qe, int ringing)
     if ((avgholdmins+avgholdsecs) > 0 && qe->parent->announceholdtime &&
         ((qe->parent->announceholdtime == ANNOUNCEHOLDTIME_ONCE && !qe->last_pos) ||
         !(qe->parent->announceholdtime == ANNOUNCEHOLDTIME_ONCE))) {
-		res = play_file(qe->chan, qe->parent->sound_holdtime);
+		res = play_file(qe->chan, qe->parent->sound_holdtime,ringing,NULL);
 		if (res)
 			goto playout;
 
@@ -1922,11 +1946,11 @@ static int say_position(struct queue_ent *qe, int ringing)
 				goto playout;
 
 			if (avgholdmins == 1) {
-				res = play_file(qe->chan, qe->parent->sound_minute);
+				res = add_playfile(qe->chan, qe->parent->sound_minute);
 				if (res)
 					goto playout;
 			} else {
-				res = play_file(qe->chan, qe->parent->sound_minutes);
+				res = add_playfile(qe->chan, qe->parent->sound_minutes);
 				if (res)
 					goto playout;
 			}
@@ -1936,7 +1960,7 @@ static int say_position(struct queue_ent *qe, int ringing)
 			if (res)
 				goto playout;
 
-			res = play_file(qe->chan, qe->parent->sound_seconds);
+			res = add_playfile(qe->chan, qe->parent->sound_seconds);
 			if (res)
 				goto playout;
 		}
@@ -1950,7 +1974,7 @@ posout:
 			qe->chan->name, qe->parent->name, qe->pos);
 	}
 	if (say_thanks) {
-		res = play_file(qe->chan, qe->parent->sound_thanks);
+		res = add_playfile(qe->chan, qe->parent->sound_thanks);
 	}
 
 playout:
@@ -2498,7 +2522,7 @@ static int say_periodic_announcement(struct queue_ent *qe, int ringing)
 	}
 	
 	/* play the announcement */
-	res = play_file(qe->chan, qe->parent->sound_periodicannounce[qe->last_periodic_announce_sound]->str);
+	res = play_file(qe->chan, qe->parent->sound_periodicannounce[qe->last_periodic_announce_sound]->str, ringing, qe->moh);
 
 	if (res > 0 && !valid_exit(qe, res))
 		res = 0;
@@ -3183,6 +3207,7 @@ static const struct ast_datastore_info queue_transfer_info = {
 	.destroy = queue_transfer_destroy,
 };
 
+
 /*! \brief Log an attended transfer when a queue caller channel is masqueraded
  *
  * When a caller is masqueraded, we want to log a transfer. Fixup time is the closest we can come to when
@@ -3621,10 +3646,15 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 					res2 |= ast_safe_sleep(peer, qe->parent->memberdelay * 1000);
 				}
 				if (!res2 && announce) {
-					play_file(peer, announce);
+					play_file(peer, announce, ringing, qe->moh);;
 				}
 				if (!res2 && qe->parent->reportholdtime) {
-					if (!play_file(peer, qe->parent->sound_reporthold)) {
+					int res3;
+					if (announce)
+						res3 = add_playfile(peer, qe->parent->sound_reporthold);
+					else
+						res3 = play_file(peer, qe->parent->sound_reporthold, ringing, qe->moh);
+					if (!res3) {
 						int holdtime, holdtimesecs;
 
 						time(&now);
@@ -3632,11 +3662,11 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 						holdtimesecs = abs((now - qe->start) % 60);
 						if (holdtime > 0) {
 							ast_say_number(peer, holdtime, AST_DIGIT_ANY, peer->language, NULL);
-							play_file(peer, qe->parent->sound_minutes);
+							add_playfile(peer, qe->parent->sound_minutes);
 						}
 						if (holdtimesecs > 1) {
 							ast_say_number(peer, holdtimesecs, AST_DIGIT_ANY, peer->language, NULL);
-							play_file(peer, qe->parent->sound_seconds);
+							add_playfile(peer, qe->parent->sound_seconds);
 						}
 					}
 				}
@@ -3692,7 +3722,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 
 		/* Play announcement to the caller telling it's his turn if defined */
 		if (!ast_strlen_zero(qe->parent->sound_callerannounce)) {
-			if (play_file(qe->chan, qe->parent->sound_callerannounce))
+			if (play_file(qe->chan, qe->parent->sound_callerannounce,ringing,qe->moh))
 				ast_log(LOG_WARNING, "Announcement file '%s' is unavailable, continuing anyway...\n", qe->parent->sound_callerannounce);
 		}
 
@@ -4731,6 +4761,129 @@ static void copy_rules(struct queue_ent *qe, const char *rulename)
 	AST_LIST_UNLOCK(&rule_lists);
 }
 
+#ifdef NOT_NEEDED_ANY_MORE
+/* declared in channel.h now -- keeping for ref until done here */
+
+struct ast_queue_streamfile_name {
+	char *filename;
+	AST_LIST_ENTRY(ast_queue_streamfile_name) list;
+};
+
+struct ast_queue_streamfile_info {
+	void (*endHandler)(struct ast_channel *chan, int ringing, char *moh, int now_playing, void *data ); /* a func ptr to the handler that will do what needs doing when the streaming of a soundfile is finished */
+	AST_LIST_HEAD(,ast_queue_streamfile_name) flist;   /* a list of other sound files that need to be played in sequence */
+	struct ast_channel *chan;
+	int ringing;
+	char moh[80];
+	int now_playing;
+};
+/* moved to file.c -- a more global position, and that's were it is used besides here. */
+const struct ast_datastore_info queue_ds_sound_ending = { /* this belongs in a place where it is globally available */
+	.type = "queue_sound_ending"
+};
+
+#endif
+
+
+void ast_queue_sound_finished_handler(struct ast_channel *chan, int ringing, char *moh, int now_playing, void *data)
+{
+	struct ast_queue_streamfile_info *playdata = (struct ast_queue_streamfile_info *)data;
+	struct ast_queue_streamfile_name *fn;
+
+	/* we've been streaming a file out to the channel, and it just turned up a null,
+	which we are assuming will be EOF. Well, at this point, normally, the
+	a wait on the stream would return, and we'd do the normal thing: stopstream,
+	maybe an autoservice_stop, and go back to MOH or signalling */
+	
+	/* Why are we doing this? Because we don't want to stop processing the queue
+	while we wait for a sound file to finish playing. No Wait() is allowed here.
+	So, instead of calling ast_stream_and_wait(), we just call ast_streamfile,
+	and handle the EOF asynchronously via ast_autoservice_*().
+
+	*/
+	ast_stopstream(chan);
+	ast_autoservice_stop(chan);
+	/* if there are any files in flist, now is the time to start playing them! */
+	AST_LIST_LOCK(&playdata->flist);
+	if (!AST_LIST_EMPTY(&playdata->flist)) {
+		fn = AST_LIST_REMOVE_HEAD(&playdata->flist, list);
+
+		playdata->now_playing = 1;
+		ast_streamfile(chan, fn->filename, chan->language);
+		ast_autoservice_start(chan);
+		
+		ast_free(fn->filename);
+		ast_free(fn);
+		AST_LIST_UNLOCK(&playdata->flist);
+		return;
+	} else {
+		playdata->now_playing = 0;
+	}
+	AST_LIST_UNLOCK(&playdata->flist);
+	
+        /* Resume Music on Hold if the caller is going to stay in the queue */
+        if (ringing)
+                ast_indicate(chan, AST_CONTROL_RINGING);
+        else
+                ast_moh_start(chan, moh, NULL);
+}
+
+
+/* to enable playing of a string of files, one after the other, and not have to wait
+   around for each one to finish before playing the next, instead we put them into
+   a list, which we insert at the tail.
+
+   The file-finished handler will, upon a file completion, check to see if annything
+   is in that list, and remove from the head and begin the playback.
+
+   Make sure to get things rolling with a plain play_file(), then use this
+   to queue up the others in sequence 
+*/
+
+int add_playfile(struct ast_channel *chan, const char *name)
+{
+	struct ast_datastore *datastore;
+
+	/* No need to lock the channels because they are already locked in ast_do_masquerade */
+	
+	/* look up the datastore and the play_finished struct, and set appropriate values */
+	if ((datastore = ast_channel_datastore_find(chan, &queue_ds_sound_ending, NULL))) {
+		struct ast_queue_streamfile_info *aqsi = datastore->data;
+		if (aqsi) {
+			struct ast_queue_streamfile_name *fn = ast_calloc(1, sizeof(*fn));
+			aqsi->now_playing = 1;
+			fn->filename = ast_strdup(name);
+
+			/* link the struct into the current ast_queue_streamfile_info struct */
+			AST_LIST_LOCK(&aqsi->flist);
+			AST_LIST_INSERT_TAIL(&aqsi->flist, fn, list);
+			AST_LIST_UNLOCK(&aqsi->flist);
+		} else {
+			ast_log(LOG_ERROR, "Can't find the datastore data ptr to aqsi!\n");
+			return -1;
+		}
+	} else {
+		ast_log(LOG_ERROR, "Can't find the queue_ds_sound_ending datastore!\n");
+		return -1;
+	}
+	return 0;
+}
+
+/* This routine proabably will only need to be called at module unload time */
+void destroy_streamfile_info(struct ast_queue_streamfile_info *playdata)
+{
+	struct ast_queue_streamfile_name *fn;
+	AST_LIST_LOCK(&playdata->flist);
+	while (!AST_LIST_EMPTY(&playdata->flist)) {
+		fn = AST_LIST_REMOVE_HEAD(&playdata->flist, list);
+		ast_free(fn->filename);
+		ast_free(fn);
+	}
+	AST_LIST_UNLOCK(&playdata->flist);
+	AST_LIST_HEAD_DESTROY(&playdata->flist);
+	ast_free(playdata);
+}
+
 /*!\brief The starting point for all queue calls
  *
  * The process involved here is to 
@@ -4754,6 +4907,9 @@ static int queue_exec(struct ast_channel *chan, void *data)
 	int qcontinue = 0;
 	int max_penalty, min_penalty;
 	enum queue_result reason = QUEUE_UNKNOWN;
+	struct ast_datastore *datastore = NULL;
+	struct ast_queue_streamfile_info *aqsi = calloc(1,sizeof(struct ast_queue_streamfile_info));
+
 	/* whether to exit Queue application after the timeout hits */
 	int tries = 0;
 	int noption = 0;
@@ -4856,6 +5012,19 @@ static int queue_exec(struct ast_channel *chan, void *data)
 	}
 	ast_queue_log(args.queuename, chan->uniqueid, "NONE", "ENTERQUEUE", "%s|%s", S_OR(args.url, ""),
 		S_OR(chan->cid.cid_num, ""));
+
+	datastore = ast_channel_datastore_alloc(&queue_ds_sound_ending, NULL);
+
+	aqsi->endHandler = ast_queue_sound_finished_handler;
+	aqsi->chan = chan;
+	aqsi->ringing = ringing;
+	aqsi->now_playing = 0;
+	strcpy(aqsi->moh, qe.moh);
+	AST_LIST_HEAD_INIT(&aqsi->flist);
+	datastore->data = aqsi;
+	
+	ast_channel_datastore_add(chan, datastore);
+
 check_turns:
 	if (ringing) {
 		ast_indicate(chan, AST_CONTROL_RINGING);

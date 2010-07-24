@@ -1749,6 +1749,23 @@ struct ast_group_info {
         AST_LIST_ENTRY(ast_group_info) group_list;   
 };
 
+/* for the sake of asynchronous filestream playing, used (at least at first) in app_queue,
+we include this definition here so both app_queue and file.c can see it. it will be contained
+in a channel datastore */
+
+struct ast_queue_streamfile_name {
+	char *filename;
+	AST_LIST_ENTRY(ast_queue_streamfile_name) list;
+};
+
+struct ast_queue_streamfile_info {
+	void (*endHandler)(struct ast_channel *chan, int ringing, char *moh, int now_playing, void *data ); /* a func ptr to the handler that will do what needs doing when the streaming of a soundfile is finished */
+	AST_LIST_HEAD(,ast_queue_streamfile_name) flist;   /* a list of other sound files that need to be played in sequence */
+	struct ast_channel *chan;
+	int ringing;
+	char moh[80];
+	int now_playing;
+};
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }
