@@ -6096,12 +6096,13 @@ static int function_amiclient(struct ast_channel *chan, const char *cmd, char *d
 		return -1;
 	}
 	AST_STANDARD_APP_ARGS(args, data);
+	ast_strip(args.name);
+	ast_strip(args.param);
 
 	AST_RWLIST_RDLOCK(&users);
 	if (!(user = get_manager_by_name_locked(args.name))) {
 		AST_RWLIST_UNLOCK(&users);
-		ast_log(LOG_ERROR, "There's no manager user called : %s\n", args.name);
-		buf[0] = '\0';
+		ast_log(LOG_ERROR, "There's no manager user called : \"%s\"\n", args.name);
 		return -1;
 	}
 	AST_RWLIST_UNLOCK(&users);
@@ -6110,7 +6111,6 @@ static int function_amiclient(struct ast_channel *chan, const char *cmd, char *d
 		snprintf(buf, len, "%d", get_manager_sessions(data));
 	} else {
 		ast_log(LOG_ERROR, "Invalid arguments provided to function AMI_CLIENT: %s\n", args.param);
-		buf[0] = '\0';
 		return -1;
 
 	}
@@ -6123,6 +6123,7 @@ static int function_amiclient(struct ast_channel *chan, const char *cmd, char *d
 static struct ast_custom_function managerclient_function = {
 	.name = "AMI_CLIENT",
 	.read = function_amiclient,
+	.read_max = 2;
 };
 
 static int registered = 0;
