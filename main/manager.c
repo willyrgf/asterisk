@@ -6123,7 +6123,7 @@ static int function_amiclient(struct ast_channel *chan, const char *cmd, char *d
 static struct ast_custom_function managerclient_function = {
 	.name = "AMI_CLIENT",
 	.read = function_amiclient,
-	.read_max = 2;
+	.read_max = 2,
 };
 
 static int registered = 0;
