@@ -1798,7 +1798,7 @@ static int join_queue(char *queuename, struct queue_ent *qe, enum queue_result *
 }
 
 int add_playfile(struct ast_channel *chan, const char *name);
-void ast_queue_sound_finished_handler(struct ast_channel *chan, int ringing, char *moh, int now_playing, void *data);
+void ast_queue_sound_finished_handler(void *data);
 extern const struct ast_datastore_info queue_ds_sound_ending;
 void destroy_streamfile_info(struct ast_queue_streamfile_info *playdata);
 
@@ -1826,12 +1826,19 @@ static int play_file(struct ast_channel *chan, const char *filename, int ringing
 		return 0;
 	}
 
-	/*
-	Rule: the code that calls this routine should set the datastore vars chan, ringing, and moh before calling this! */
+	/* Stop the music on hold so we can play our own file */
+	if (ringing) {
+		ast_log(LOG_ERROR, "Stopping Indicate\n");
+		ast_indicate(aqsi->qe->chan,-1);
+	} else {
+		ast_log(LOG_ERROR, "Stopping MOH\n");
+		ast_moh_stop(aqsi->qe->chan);
+	}
 
+	ast_log(LOG_ERROR, "Stopping Streaming\n");
 	ast_stopstream(chan);
-
-
+	
+	ast_log(LOG_ERROR, "Starting to stream %s\n", filename);
 	res = ast_streamfile(chan, filename, chan->language); /* begin the streaming */
 
 	if (res && aqsi)
@@ -1870,7 +1877,7 @@ static int valid_exit(struct queue_ent *qe, char digit)
 
 	/* We have an exact match */
 	if (!ast_goto_if_exists(qe->chan, qe->context, qe->digits, 1)) {
-		qe->valid_digits = 1;
+		qe->valid_digits = 1; /* there it is, the only indication */
 		/* Return 1 on a successful goto */
 		return 1;
 	}
@@ -1893,11 +1900,6 @@ static int say_position(struct queue_ent *qe, int ringing)
 	if ((qe->last_pos_said == qe->pos) && ((now - qe->last_pos) < qe->parent->announcefrequency))
 		return 0;
 
-	if (ringing) {
-		ast_indicate(qe->chan,-1);
-	} else {
-		ast_moh_stop(qe->chan);
-	}
 	if (qe->parent->announceposition) {
 		/* Say we're next, if we are */
 		if (qe->pos == 1) {
@@ -1988,10 +1990,13 @@ playout:
 
 	/* Don't restart music on hold if we're about to exit the caller from the queue */
 	if (!res) {
-                if (ringing)
+                if (ringing) {
+			ast_log(LOG_ERROR,"Starting indicate CONTROL_RINGING\n");
                         ast_indicate(qe->chan, AST_CONTROL_RINGING);
-                else
+                } else {
+			ast_log(LOG_ERROR,"Starting MOH\n");
                         ast_moh_start(qe->chan, qe->moh, NULL);
+		}
 	}
 	return res;
 }
@@ -2506,12 +2511,6 @@ static int say_periodic_announcement(struct queue_ent *qe, int ringing)
 	if ((now - qe->last_periodic_announce_time) < qe->parent->periodicannouncefrequency)
 		return 0;
 
-	/* Stop the music on hold so we can play our own file */
-	if (ringing)
-		ast_indicate(qe->chan,-1);
-	else
-		ast_moh_stop(qe->chan);
-
 	ast_verb(3, "Playing periodic announcement\n");
 
 	/* Check to make sure we have a sound file. If not, reset to the first sound file */
@@ -2529,10 +2528,13 @@ static int say_periodic_announcement(struct queue_ent *qe, int ringing)
 
 	/* Resume Music on Hold if the caller is going to stay in the queue */
 	if (!res) {
-		if (ringing)
+		if (ringing) {
+			ast_log(LOG_ERROR,"Starting indicate CONTROL_RINGING\n");
 			ast_indicate(qe->chan, AST_CONTROL_RINGING);
-		else
+		} else {
+			ast_log(LOG_ERROR,"Starting MOH\n");
 			ast_moh_start(qe->chan, qe->moh, NULL);
+		}
 	}
 
 	/* update last_periodic_announce_time */
@@ -3640,6 +3642,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 			int res2;
 
 			res2 = ast_autoservice_start(qe->chan);
+			ast_log(LOG_ERROR,"Autoservice started\n");
 			if (!res2) {
 				if (qe->parent->memberdelay) {
 					ast_log(LOG_NOTICE, "Delaying member connect for %d seconds\n", qe->parent->memberdelay);
@@ -3671,6 +3674,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 					}
 				}
 			}
+			ast_log(LOG_ERROR,"Autoservice stopped\n");
 			res2 |= ast_autoservice_stop(qe->chan);
 			if (ast_check_hangup(peer)) {
 				/* Agent must have hung up */
@@ -3701,10 +3705,13 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 			}
 		}
 		/* Stop music on hold */
-		if (ringing)
+		if (ringing) {
+			ast_log(LOG_ERROR,"Stopping indicate\n");
 			ast_indicate(qe->chan,-1);
-		else
+		} else {
+			ast_log(LOG_ERROR,"Stopping MOH\n");
 			ast_moh_stop(qe->chan);
+		}
 		/* If appropriate, log that we have a destination channel */
 		if (qe->chan->cdr)
 			ast_cdr_setdestchan(qe->chan->cdr, peer->name);
@@ -3883,6 +3890,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 		if (!ast_strlen_zero(macroexec)) {
 			ast_debug(1, "app_queue: macro=%s.\n", macroexec);
 			
+			ast_log(LOG_ERROR,"Autoservice started\n");
 			res = ast_autoservice_start(qe->chan);
 			if (res) {
 				ast_log(LOG_ERROR, "Unable to start autoservice on calling channel\n");
@@ -3900,6 +3908,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 				res = -1;
 			}
 
+			ast_log(LOG_ERROR,"Autoservice stopped\n");
 			if (ast_autoservice_stop(qe->chan) < 0) {
 				ast_log(LOG_ERROR, "Could not stop autoservice on calling channel\n");
 				res = -1;
@@ -3918,7 +3927,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 		if (!ast_strlen_zero(gosubexec)) {
 			if (option_debug)
 				ast_log(LOG_DEBUG, "app_queue: gosub=%s.\n", gosubexec);
-			
+			ast_log(LOG_ERROR,"Autoservice started\n");
 			res = ast_autoservice_start(qe->chan);
 			if (res) {
 				ast_log(LOG_ERROR, "Unable to start autoservice on calling channel\n");
@@ -3968,6 +3977,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 				res = -1;
 			}
 		
+			ast_log(LOG_ERROR,"Autoservice stopped\n");
 			if (ast_autoservice_stop(qe->chan) < 0) {
 				ast_log(LOG_ERROR, "Could not stop autoservice on calling channel\n");
 				res = -1;
@@ -4770,14 +4780,15 @@ struct ast_queue_streamfile_name {
 };
 
 struct ast_queue_streamfile_info {
-	void (*endHandler)(struct ast_channel *chan, int ringing, char *moh, int now_playing, void *data ); /* a func ptr to the handler that will do what needs doing when the streaming of a soundfile is finished */
+	void (*endHandler)(void *data); /* a func ptr to the handler that will do what needs doing when the streaming of a soundfile is finished */
 	AST_LIST_HEAD(,ast_queue_streamfile_name) flist;   /* a list of other sound files that need to be played in sequence */
 	struct ast_channel *chan;
+	struct queue_ent *qe;
 	int ringing;
 	char moh[80];
-	int now_playing;
+	int now_playing; /* just in case */
 };
-/* moved to file.c -- a more global position, and that's were it is used besides here. */
+/* moved to file.c -- a more global position, and that's were it is used besides here. (and in say.c) */
 const struct ast_datastore_info queue_ds_sound_ending = { /* this belongs in a place where it is globally available */
 	.type = "queue_sound_ending"
 };
@@ -4785,10 +4796,15 @@ const struct ast_datastore_info queue_ds_sound_ending = { /* this belongs in a p
 #endif
 
 
-void ast_queue_sound_finished_handler(struct ast_channel *chan, int ringing, char *moh, int now_playing, void *data)
+void ast_queue_sound_finished_handler(void *data)
 {
 	struct ast_queue_streamfile_info *playdata = (struct ast_queue_streamfile_info *)data;
 	struct ast_queue_streamfile_name *fn;
+	struct ast_channel *chan = playdata->chan;
+	int ringing = playdata->ringing;
+	char *moh = playdata->moh;
+	/* int now_playing = playdata->now_playing; */
+	
 
 	/* we've been streaming a file out to the channel, and it just turned up a null,
 	which we are assuming will be EOF. Well, at this point, normally, the
@@ -4801,7 +4817,10 @@ void ast_queue_sound_finished_handler(struct ast_channel *chan, int ringing, cha
 	and handle the EOF asynchronously via ast_autoservice_*().
 
 	*/
+	ast_log(LOG_WARNING,"SOUND_FINISHED_HANDLER CALLED! chan=%p\n", chan);
+	ast_log(LOG_ERROR,"StopStream\n");
 	ast_stopstream(chan);
+	ast_log(LOG_ERROR,"AutoServiceStop\n");
 	ast_autoservice_stop(chan);
 	/* if there are any files in flist, now is the time to start playing them! */
 	AST_LIST_LOCK(&playdata->flist);
@@ -4809,8 +4828,10 @@ void ast_queue_sound_finished_handler(struct ast_channel *chan, int ringing, cha
 		fn = AST_LIST_REMOVE_HEAD(&playdata->flist, list);
 
 		playdata->now_playing = 1;
+		ast_log(LOG_ERROR,"Start streaming file %s\n", fn->filename);
 		ast_streamfile(chan, fn->filename, chan->language);
 		ast_autoservice_start(chan);
+		ast_log(LOG_ERROR,"AutoServiceStart\n");
 		
 		ast_free(fn->filename);
 		ast_free(fn);
@@ -4822,10 +4843,15 @@ void ast_queue_sound_finished_handler(struct ast_channel *chan, int ringing, cha
 	AST_LIST_UNLOCK(&playdata->flist);
 	
         /* Resume Music on Hold if the caller is going to stay in the queue */
-        if (ringing)
-                ast_indicate(chan, AST_CONTROL_RINGING);
-        else
-                ast_moh_start(chan, moh, NULL);
+	if (!playdata->valid_exit) { /* don't start up moh if we are on our way out */
+		if (ringing) {
+			ast_log(LOG_ERROR,"Starting indicate CONTROL_RINGING\n");
+			ast_indicate(chan, AST_CONTROL_RINGING);
+		} else {
+			ast_log(LOG_ERROR,"Starting MOH\n");
+			ast_moh_start(chan, moh, NULL);
+		}
+	}
 }
 
 
@@ -5016,6 +5042,7 @@ static int queue_exec(struct ast_channel *chan, void *data)
 	datastore = ast_channel_datastore_alloc(&queue_ds_sound_ending, NULL);
 
 	aqsi->endHandler = ast_queue_sound_finished_handler;
+	aqsi->qe = &qe;
 	aqsi->chan = chan;
 	aqsi->ringing = ringing;
 	aqsi->now_playing = 0;
@@ -5027,8 +5054,10 @@ static int queue_exec(struct ast_channel *chan, void *data)
 
 check_turns:
 	if (ringing) {
+		ast_log(LOG_ERROR,"Starting indicate CONTROL_RINGING\n");
 		ast_indicate(chan, AST_CONTROL_RINGING);
 	} else {
+		ast_log(LOG_ERROR,"Starting MOH\n");
 		ast_moh_start(chan, qe.moh, NULL);
 	}
 
@@ -5190,17 +5219,6 @@ stop:
 			ast_queue_log(args.queuename, chan->uniqueid, "NONE", "EXITWITHKEY",
 				"%s|%d", qe.digits, qe.pos);
 		}
-	}
-
-	/* Don't allow return code > 0 */
-	if (res >= 0) {
-		res = 0;	
-		if (ringing) {
-			ast_indicate(chan, -1);
-		} else {
-			ast_moh_stop(chan);
-		}			
-		ast_stopstream(chan);
 	}
 
 	set_queue_variables(qe.parent, qe.chan);

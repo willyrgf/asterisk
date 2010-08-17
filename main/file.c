@@ -709,7 +709,7 @@ static struct ast_frame *read_frame(struct ast_filestream *s, int *whennext)
 		if ((datastore = ast_channel_datastore_find(s->owner, &queue_ds_sound_ending, NULL))) {
 			struct ast_queue_streamfile_info *aqsi = datastore->data; /* what a waste! I have to dive into the data to know where to pass it.*/
 			if (aqsi) {
-				(*aqsi->endHandler)(aqsi->chan, aqsi->ringing, aqsi->moh, aqsi->now_playing, datastore->data);
+				(*aqsi->endHandler)(datastore->data);
 			}
 		}
 		return NULL;
