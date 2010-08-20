@@ -195,6 +195,10 @@ int ast_variable_delete(struct ast_category *category, char *variable, char *mat
 int ast_variable_update(struct ast_category *category, const char *variable, 
 	const char *value, const char *match, unsigned int object);
 
+/*! \brief copy variables, preserving order */
+struct ast_variable *ast_variable_copy(struct ast_variable *in);
+
+
 int config_text_file_save(const char *filename, const struct ast_config *cfg, const char *generator);
 
 struct ast_config *ast_config_internal_load(const char *configfile, struct ast_config *cfg, int withcomments);
