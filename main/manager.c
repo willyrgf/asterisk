@@ -143,6 +143,14 @@ static struct {
 	{{ "restart", "gracefully", NULL }},
 };
 
+/*! \brief Structure for simple linked list of available contexts for a manager
+ 	session */
+struct man_context {
+	char context[AST_MAX_CONTEXT];
+	struct man_context *next;
+};
+
+
 /* In order to understand what the heck is going on with the
  * mansession_session and mansession structs, we need to have a bit of a history
  * lesson.
@@ -210,6 +218,7 @@ struct mansession_session {
 	char inbuf[1024];
 	int inlen;
 	int send_events;
+	struct man_context *contexts;
 	int displaysystemname;		/*!< Add system name to manager responses and events */
 	/* Queued events that we've not had the ability to send yet */
 	struct eventqent *eventq;
@@ -248,6 +257,12 @@ static AST_LIST_HEAD_STATIC(users, ast_manager_user);
 
 static struct manager_action *first_action;
 AST_RWLOCK_DEFINE_STATIC(actionlock);
+
+/* Forward declarations */
+static struct man_context *append_context(struct man_context *con, const char *context);
+static int apply_context(struct man_context *con, const char *context);
+static void free_contexts(struct man_context *con);
+static struct man_context *build_context(const char *context);
 
 /*! \brief Convert authority code to string with serveral options */
 static char *authority_to_str(int authority, char *res, int reslen)
@@ -794,6 +809,9 @@ static void free_session(struct mansession_session *s)
 		s->eventq = s->eventq->next;
 		unuse_eventqent(eqe);
 	}
+	if (s->contexts) {
+		free_contexts(s->contexts);
+	}
 	free(s);
 }
 
@@ -1005,6 +1023,7 @@ static int authenticate(struct mansession *s, const struct message *m)
 	const char *authtype = astman_get_header(m, "AuthType");
 	const char *key = astman_get_header(m, "Key");
 	const char *events = astman_get_header(m, "Events");
+	struct man_context *contexts = NULL;
 	
 	cfg = ast_config_load("manager.conf");
 	if (!cfg)
@@ -1021,6 +1040,8 @@ static int authenticate(struct mansession *s, const struct message *m)
 				for (v = ast_variable_browse(cfg, cat); v; v = v->next) {
 					if (!strcasecmp(v->name, "secret")) {
 						password = v->value;
+					} else if (!strcasecmp(v->name, "context")) {
+						contexts = append_context(contexts, v->value);
 					} else if (!strcasecmp(v->name, "displaysystemname")) {
 						if (ast_true(v->value)) {
 							if (ast_strlen_zero(ast_config_AST_SYSTEM_NAME)) {
@@ -1088,6 +1109,7 @@ static int authenticate(struct mansession *s, const struct message *m)
 	}
 	if (cat) {
 		ast_copy_string(s->session->username, cat, sizeof(s->session->username));
+		s->session->contexts = contexts;
 		s->session->readperm = get_perm(ast_variable_retrieve(cfg, cat, "read"));
 		s->session->writeperm = get_perm(ast_variable_retrieve(cfg, cat, "write"));
 		ast_config_destroy(cfg);
@@ -1922,6 +1944,48 @@ static void *fast_originate(void *data)
 	return NULL;
 }
 
+/* Search list of context. Stolen from chan_iax2 */
+static int apply_context(struct man_context *con, const char *context)
+{
+	while(con) {
+		if (!strcmp(con->context, context) || !strcmp(con->context, "*"))
+			return 1;
+		con = con->next;
+	}
+	return 0;
+}
+
+static void free_contexts(struct man_context *con)
+{
+	struct man_context *conl;
+	while(con) {
+		conl = con;
+		con = con->next;
+		free(conl);
+	}
+}
+
+static struct man_context *build_context(const char *context)
+{
+        struct man_context *con;
+
+        if ((con = ast_calloc(1, sizeof(*con))))
+                ast_copy_string(con->context, context, sizeof(con->context));
+
+        return con;
+}
+
+static struct man_context *append_context(struct man_context *con, const char *context)
+{
+	struct man_context *top;
+	if (!con) {
+		return build_context(context);
+	}
+	top = build_context(context);
+	top->next = con;
+	return top;
+}
+
 static char mandescr_originate[] = 
 "Description: Generates an outgoing call to a Extension/Context/Priority or\n"
 "  Application/Data\n"
@@ -1986,6 +2050,11 @@ static int action_originate(struct mansession *s, const struct message *m)
 		astman_send_error(s, m, "Invalid channel");
 		return 0;
 	}
+	if (s->session->contexts && ! apply_context(s->session->contexts, context) ) {
+		astman_send_error(s, m, "Illegal context");
+		return 0;
+	}
+
 	*data++ = '\0';
 	ast_copy_string(tmp2, callerid, sizeof(tmp2));
 	ast_callerid_parse(tmp2, &n, &l);
