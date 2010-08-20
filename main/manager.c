@@ -215,6 +215,7 @@ struct mansession_session {
 	struct eventqent *eventq;
 	/* Timeout for ast_carefulwrite() */
 	int writetimeout;
+	struct ast_variable *chanvars;	/*!< Channel variables to set for originate */
 	int pending_event;         /*!< Pending events indicator in case when waiting_thread is NULL */
 	AST_LIST_ENTRY(mansession_session) list;
 };
@@ -248,6 +249,27 @@ static AST_LIST_HEAD_STATIC(users, ast_manager_user);
 
 static struct manager_action *first_action;
 AST_RWLOCK_DEFINE_STATIC(actionlock);
+
+/*! \brief copy variables, preserving order */
+static struct ast_variable *ast_variable_copy(struct ast_variable *in)
+{
+	/* This really belongs in config.c, and will move there in non-releases */
+
+	struct ast_variable *out = NULL, *tmp, *v, *prev = NULL;
+
+	for (v = in ; v ; v = v->next) {
+		if ((tmp = ast_variable_new(v->name, v->value))) {
+			if (!out) {
+				out = tmp;	/* The first record */
+			}
+			if (prev) {
+				prev->next = tmp; 
+			}
+			prev = tmp;
+		}
+	}
+	return out;
+}
 
 /*! \brief Convert authority code to string with serveral options */
 static char *authority_to_str(int authority, char *res, int reslen)
@@ -788,6 +810,7 @@ static void free_session(struct mansession_session *s)
 		close(s->fd);
 	if (s->outputstr)
 		free(s->outputstr);
+	ast_variables_destroy(s->chanvars);
 	ast_mutex_destroy(&s->__lock);
 	while (s->eventq) {
 		eqe = s->eventq;
@@ -1032,6 +1055,18 @@ static int authenticate(struct mansession *s, const struct message *m)
 					} else if (!strcasecmp(v->name, "permit") ||
 						   !strcasecmp(v->name, "deny")) {
 						ha = ast_append_ha(v->name, v->value, ha);
+					} else if (!strcasecmp(v->name, "setvar")) {
+						struct ast_variable *tmpvar;
+						char *varval;
+						char *varname = ast_strdupa(v->value);
+
+						if ((varval = strchr(varname,'='))) {
+							*varval++ = '\0';
+							if ((tmpvar = ast_variable_new(varname, varval))) {
+								tmpvar->next = s->session->chanvars;
+								s->session->chanvars = tmpvar;
+							}
+						}
 					} else if (!strcasecmp(v->name, "writetimeout")) {
 						int val = atoi(v->value);
 
@@ -1918,6 +1953,7 @@ static void *fast_originate(void *data)
 	/* Locked by ast_pbx_outgoing_exten or ast_pbx_outgoing_app */
 	if (chan)
 		ast_channel_unlock(chan);
+	ast_variables_destroy(in->vars);
 	free(in);
 	return NULL;
 }
@@ -1952,7 +1988,7 @@ static int action_originate(struct mansession *s, const struct message *m)
 	const char *async = astman_get_header(m, "Async");
 	const char *id = astman_get_header(m, "ActionID");
 	const char *codecs = astman_get_header(m, "Codecs");
-	struct ast_variable *vars = astman_get_variables(m);
+	struct ast_variable *vars = NULL;
 	char *tech, *data;
 	char *l = NULL, *n = NULL;
 	int pi = 0;
@@ -2002,6 +2038,30 @@ static int action_originate(struct mansession *s, const struct message *m)
 		format = 0;
 		ast_parse_allow_disallow(NULL, &format, codecs, 1);
 	}
+
+	/* read variables from manager command and allocate memory now */
+	vars = astman_get_variables(m);
+	if (s->session->chanvars) {
+		struct ast_variable *v, *old;
+		old = vars;
+		vars = NULL;
+
+		/* The variables in the originate command is appended at the
+			end of the list, to override */
+
+		vars = ast_variable_copy(s->session->chanvars);
+		/* copy channel vars */
+		if (old ) {
+			for (v = vars ; v ; ) {
+				if (!v->next) {
+					v->next = old;	/* Append originate variables at end of list */
+					v = NULL;
+				} else {
+					v = v->next;	/* Loop */
+				}
+			}
+		}
+	}
 	if (ast_true(async)) {
 		struct fast_originate_helper *fast = ast_calloc(1, sizeof(*fast));
 		if (!fast) {
@@ -2017,7 +2077,7 @@ static int action_originate(struct mansession *s, const struct message *m)
 				ast_copy_string(fast->cid_num, l, sizeof(fast->cid_num));
 			if (n)
 				ast_copy_string(fast->cid_name, n, sizeof(fast->cid_name));
-			fast->vars = vars;	
+			fast->vars = ast_variable_copy(vars);	
 			ast_copy_string(fast->context, context, sizeof(fast->context));
 			ast_copy_string(fast->exten, exten, sizeof(fast->exten));
 			ast_copy_string(fast->account, account, sizeof(fast->account));
@@ -2027,6 +2087,7 @@ static int action_originate(struct mansession *s, const struct message *m)
 			pthread_attr_init(&attr);
 			pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
 			if (ast_pthread_create(&th, &attr, fast_originate, fast)) {
+				ast_variables_destroy(fast->vars);
 				ast_free(fast);
 				res = -1;
 			} else {
@@ -2041,6 +2102,7 @@ static int action_originate(struct mansession *s, const struct message *m)
 	        	res = ast_pbx_outgoing_exten(tech, format, data, to, context, exten, pi, &reason, 1, l, n, vars, account, NULL);
 		else {
 			astman_send_error(s, m, "Originate with 'Exten' requires 'Context' and 'Priority'");
+			ast_variables_destroy(vars);
 			return 0;
 		}
 	}   
@@ -2048,6 +2110,7 @@ static int action_originate(struct mansession *s, const struct message *m)
 		astman_send_ack(s, m, "Originate successfully queued");
 	else
 		astman_send_error(s, m, "Originate failed");
+	ast_variables_destroy(vars);
 	return 0;
 }
 
