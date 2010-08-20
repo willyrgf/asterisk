@@ -810,7 +810,9 @@ static void free_session(struct mansession_session *s)
 		close(s->fd);
 	if (s->outputstr)
 		free(s->outputstr);
-	ast_variables_destroy(s->chanvars);
+	if (s->chanvars) {
+		ast_variables_destroy(s->chanvars);
+	}
 	ast_mutex_destroy(&s->__lock);
 	while (s->eventq) {
 		eqe = s->eventq;
