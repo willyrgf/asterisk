@@ -1747,6 +1747,12 @@ static int action_redirect(struct mansession *s, const struct message *m)
 			return 0;
 		}
 	}
+
+	/* Check if redirect is to allowed context */
+	if (s->session->contexts && ! apply_context(s->session->contexts, context) ) {
+		astman_send_error(s, m, "Illegal context");
+		return 0;
+	}
 	/* XXX watch out, possible deadlock!!! */
 	chan = ast_get_channel_by_name_locked(name);
 	if (!chan) {
@@ -2215,6 +2221,11 @@ static int action_extensionstate(struct mansession *s, const struct message *m)
 	}
 	if (ast_strlen_zero(context))
 		context = "default";
+	/* Check if redirect is to allowed context */
+	if (s->session->contexts && ! apply_context(s->session->contexts, context) ) {
+		astman_send_error(s, m, "Illegal context");
+		return 0;
+	}
 	status = ast_extension_state(NULL, context, exten);
 	ast_get_hint(hint, sizeof(hint) - 1, NULL, 0, NULL, context, exten);
         if (!ast_strlen_zero(id)) {
