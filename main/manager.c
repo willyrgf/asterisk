@@ -1954,8 +1954,9 @@ static void *fast_originate(void *data)
 static int apply_context(struct man_context *con, const char *context)
 {
 	while(con) {
-		if (!strcmp(con->context, context) || !strcmp(con->context, "*"))
+		if (!strcmp(con->context, context) || !strcmp(con->context, "*")) {
 			return 1;
+		}
 		con = con->next;
 	}
 	return 0;
@@ -1967,7 +1968,7 @@ static void free_contexts(struct man_context *con)
 	while(con) {
 		conl = con;
 		con = con->next;
-		free(conl);
+		ast_free(conl);
 	}
 }
 
@@ -1975,8 +1976,9 @@ static struct man_context *build_context(const char *context)
 {
         struct man_context *con;
 
-        if ((con = ast_calloc(1, sizeof(*con))))
+        if ((con = ast_calloc(1, sizeof(*con)))) {
                 ast_copy_string(con->context, context, sizeof(con->context));
+	}
 
         return con;
 }
