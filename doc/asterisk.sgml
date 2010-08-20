@@ -1,14 +1,13 @@
-<!DOCTYPE refentry PUBLIC "-//OASIS//DTD DocBook V4.1//EN">
 <refentry>
 <refentryinfo>
-	<date>2005-10-18</date>
+	<date>2010-08-03</date>
 </refentryinfo>
 <refmeta>
 	<refentrytitle>
 		<application>asterisk</application>
 	</refentrytitle>
 	<manvolnum>8</manvolnum>
-	<refmiscinfo>asterisk 1.2</refmiscinfo>
+	<refmiscinfo>asterisk 1.6</refmiscinfo>
 </refmeta>
 <refnamediv>
 	<refname>
@@ -21,13 +20,15 @@
 <refsynopsisdiv>
 	<cmdsynopsis>
 	<command>asterisk</command>
-<arg><option>-tThfdvVqpRgciIn</option></arg>
+<arg><option>-BcdfFghiImnpqRtTvVW</option></arg>
 <arg><option>-C </option><replaceable class="parameter">file</replaceable></arg>
-<arg><option>-U </option><replaceable class="parameter">user</replaceable></arg>
+<arg><option>-e </option><replaceable class="parameter">memory</replaceable></arg>
 <arg><option>-G </option><replaceable class="parameter">group</replaceable></arg>
-<arg><option>-x </option><replaceable class="parameter">command</replaceable></arg>
-<arg><option>-M </option><replaceable class="parameter">value</replaceable></arg>
 <arg><option>-L </option><replaceable class="parameter">loadaverage</replaceable></arg>
+<arg><option>-M </option><replaceable class="parameter">value</replaceable></arg>
+<arg><option>-U </option><replaceable class="parameter">user</replaceable></arg>
+<arg><option>-s </option><replaceable class="parameter">socket-file</replaceable></arg>
+<arg><option>-x </option><replaceable class="parameter">command</replaceable></arg>
 	</cmdsynopsis>
 	<cmdsynopsis>
 
@@ -38,7 +39,7 @@
 </refsynopsisdiv>
 <refsect1>
 	<refsect1info>
-		<date>2006-03-29</date>
+		<date>2010-08-03</date>
 	</refsect1info>
 	<title>DESCRIPTION</title>
 	<para>
@@ -47,9 +48,9 @@
 	Automated Call Distribution (ACD), Voice over IP (VoIP) gatewaying, 
 	Conferencing, and a plethora of other telephony applications to a broad
 	range of telephony devices including packet voice (SIP, IAX2, MGCP, Skinny,
-	H.323) devices (both endpoints and proxies), as well as traditional TDM
+	H.323, Unistim) devices (both endpoints and proxies), as well as traditional TDM
 	hardware including T1, E1, ISDN PRI, GR-303, RBS, Loopstart, Groundstart,
-	ISDN BRI, and many more.
+	ISDN BRI and many more.
 	</para>
 	<para>
 	At start, Asterisk reads the /etc/asterisk/asterisk.conf main configuration
@@ -73,6 +74,15 @@
 <refsect1>
 	<title>OPTIONS</title>
 	<variablelist>
+	<varlistentry>
+		<term>-B</term>
+		<listitem>
+			<para>
+			Force the background of the terminal to be black, in order for
+			terminal colors to show up properly.
+			</para>
+		</listitem>
+	</varlistentry>
 	<varlistentry>
 		<term>-C <replaceable class="parameter">file</replaceable></term>
 		<listitem>
@@ -100,8 +110,16 @@
 			</para>
 			<para>
 			Note: This always sets the debug level in the asterisk process,
-			even if it is running in the background. This will affect the size
-			of your log files.
+			even if it is running in the background. This may affect the size
+			of your log files, if the debug level is specified in logger.conf.
+			</para>
+		</listitem>
+	</varlistentry>
+	<varlistentry>
+		<term>-e <replaceable class="parameter">memory</replaceable></term>
+		<listitem>
+			<para>
+			Limit the generation of new channels when the amount of free memory has decreased to under <replaceable>memory</replaceable> megabytes.
 			</para>
 		</listitem>
 	</varlistentry>
@@ -109,7 +127,15 @@
 		<term>-f</term>
 		<listitem>
 			<para>
-			Do not fork or detach from controlling terminal.
+			Do not fork or detach from controlling terminal.  Overrides any preceding specification of <command>-F</command> on the command line.
+			</para>
+		</listitem>
+	</varlistentry>
+	<varlistentry>
+		<term>-F</term>
+		<listitem>
+			<para>
+			Always fork and detach from controlling terminal.  Overrides any preceding specification of <command>-f</command> on the command line.
 			</para>
 		</listitem>
 	</varlistentry>
@@ -157,10 +183,10 @@
 		<term>-I</term>
 		<listitem>
 			<para>
-			Enable internal timing if Zaptel timing is available.
+			Enable internal timing if DAHDI timing is available.
 			The default behaviour is that outbound packets are phase locked
 			to inbound packets. Enabling this switch causes them to be
-			locked to the internal Zaptel timer instead.
+			locked to the internal DAHDI timer instead.
 			</para>
 		</listitem>
 	</varlistentry>
@@ -171,6 +197,15 @@
 			Limits the maximum load average before rejecting new calls.  This can
 			be useful to prevent a system from being brought down by terminating
 			too many simultaneous calls.
+			</para>
+		</listitem>
+	</varlistentry>
+	<varlistentry>
+		<term>-m</term>
+		<listitem>
+			<para>
+			Temporarily mutes output to the console and logs.  To return to normal,
+			use <command>logger mute</command>.
 			</para>
 		</listitem>
 	</varlistentry>
@@ -201,6 +236,12 @@
 			responsiveness within the Asterisk process, at the expense of other
 			programs running on the same machine.
 			</para>
+			<para>
+			Note: <command>astcanary</command> will run concurrently with
+			<command>asterisk</command>. If <command>astcanary</command> stops
+			running or is killed, <command>asterisk</command> will slow down to
+			normal process priority, to avoid locking up the machine.
+			</para>
 		</listitem>
 	</varlistentry>
 	<varlistentry>
@@ -230,6 +271,15 @@
 			to a running Asterisk process and provide a console interface
 			for controlling it. Additionally, if connection to the Asterisk 
 			process is lost, attempt to reconnect for as long as 30 seconds.
+			</para>
+		</listitem>
+	</varlistentry>
+	<varlistentry>
+		<term>-s <replaceable class="parameter">socket file name</replaceable></term>
+		<listitem>
+			<para>
+			In combination with <command>-r</command>, connect directly to a specified
+			Asterisk server socket.
 			</para>
 		</listitem>
 	</varlistentry>
@@ -290,6 +340,16 @@
 		</listitem>
 	</varlistentry>
 	<varlistentry>
+		<term>-W</term>
+		<listitem>
+			<para>
+			Display colored terminal text as if the background were white
+			or otherwise light in color.  Normally, terminal text is displayed
+			as if the background were black or otherwise dark in color.
+			</para>
+		</listitem>
+	</varlistentry>
+	<varlistentry>
 		<term>-x <replaceable class="parameter">command</replaceable></term>
 		<listitem>
 			<para>
@@ -298,6 +358,16 @@
 			then terminating when the command execution completes.  Implies
 			<command>-r</command> when <command>-R</command> is not explicitly
 			supplied.
+			</para>
+		</listitem>
+	</varlistentry>
+	<varlistentry>
+		<term>-X</term>
+		<listitem>
+			<para>
+			Enables executing of includes via <command>#exec</command> directive.
+			This can be useful if You want to do <command>#exec</command> inside
+			<filename>asterisk.conf</filename>
 			</para>
 		</listitem>
 	</varlistentry>
@@ -312,13 +382,13 @@
 	<command>asterisk -vvvgc</command> - Run on controlling terminal
 	</para>
 	<para>
-	<command>asterisk -rx "show channels"</command> - Display channels on running server
+	<command>asterisk -rx "core show channels"</command> - Display channels on running server
 	</para>
 </refsect1>
 <refsect1>
 	<title>BUGS</title>
 	<para>
-	Bug reports and feature requests may be filed at http://bugs.digium.com
+	Bug reports and feature requests may be filed at https://issues.asterisk.org
 	</para>
 </refsect1>
 <refsect1>
@@ -327,10 +397,13 @@
 	*CLI&gt; <command>help</command> - Help on Asterisk CLI
 	</para>
 	<para>
-	*CLI&gt; <command>show applications</command> - Show loaded dialplan applications
+	*CLI&gt; <command>core show applications</command> - Show loaded dialplan applications
 	</para>
 	<para>
-	*CLI&gt; <command>show functions</command> - Show loaded dialplan functions
+	*CLI&gt; <command>core show functions</command> - Show loaded dialplan functions
+	</para>
+	<para>
+	*CLI&gt; <command>dialplan show</command> - Show current dialplan
 	</para>
 	<para>
 	http://www.asterisk.org - The Asterisk Home Page
@@ -344,9 +417,6 @@
 	<para>
 	http://www.digium.com/ - Asterisk sponsor and hardware supplier
 	</para>
-	<para>
-	http://www.markocam.com/ - Asterisk author's web cam
-	</para>
 </refsect1>
 <refsect1>
 	<title>AUTHOR</title>
@@ -357,7 +427,7 @@
 	</para>
 	<para>
 	<author>
-		<firstname>Countless other contributers, see CREDITS with distribution for more information</firstname> 
+		<firstname>Countless other contributors, see CREDITS with distribution for more information.</firstname> 
 	</author>
 	</para>
 </refsect1>

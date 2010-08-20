@@ -17,4 +17,5 @@ $(LIB): $(OBJS)
 	$(CMD_PREFIX) $(RANLIB) $@
 
 clean:
-	rm -f $(LIB) *.o .*.d *.s *.i
+	rm -f $(LIB) *.o .*.d
+	rm -f *.s *.i

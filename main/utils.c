@@ -28,24 +28,19 @@
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <ctype.h>
-#include <string.h>
-#include <unistd.h>
-#include <stdlib.h>
-#include <errno.h>
-#include <stdarg.h>
-#include <stdio.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
+#include <sys/stat.h>
+
+#ifdef HAVE_DEV_URANDOM
+#include <fcntl.h>
+#endif
+
+#include "asterisk/network.h"
 
 #define AST_API_MODULE		/* ensure that inlinable API functions will be built in lock.h if required */
 #include "asterisk/lock.h"
 #include "asterisk/io.h"
-#include "asterisk/logger.h"
 #include "asterisk/md5.h"
 #include "asterisk/sha1.h"
-#include "asterisk/options.h"
 #include "asterisk/cli.h"
 #include "asterisk/linkedlists.h"
 
@@ -64,10 +59,13 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define AST_API_MODULE
 #include "asterisk/threadstorage.h"
 
+#define AST_API_MODULE
+#include "asterisk/config.h"
+
 static char base64[64];
 static char b2a[256];
 
-AST_THREADSTORAGE(inet_ntoa_buf, inet_ntoa_buf_init);
+AST_THREADSTORAGE(inet_ntoa_buf);
 
 #if !defined(HAVE_GETHOSTBYNAME_R_5) && !defined(HAVE_GETHOSTBYNAME_R_6)
 
@@ -97,8 +95,8 @@ static int gethostbyname_r (const char *name, struct hostent *ret, char *buf,
 	} else {
 		char **p, **q;
 		char *pbuf;
-		int nbytes=0;
-		int naddr=0, naliases=0;
+		int nbytes = 0;
+		int naddr = 0, naliases = 0;
 		/* determine if we have enough space in buf */
 
 		/* count how many addresses */
@@ -185,7 +183,7 @@ struct hostent *ast_gethostbyname(const char *host, struct ast_hostent *hp)
 {
 	int res;
 	int herrno;
-	int dots=0;
+	int dots = 0;
 	const char *s;
 	struct hostent *result = NULL;
 	/* Although it is perfectly legitimate to lookup a pure integer, for
@@ -194,7 +192,7 @@ struct hostent *ast_gethostbyname(const char *host, struct ast_hostent *hp)
 	   pure integer */
 	s = host;
 	res = 0;
-	while(s && *s) {
+	while (s && *s) {
 		if (*s == '.')
 			dots++;
 		else if (!isdigit(*s))
@@ -229,7 +227,7 @@ struct hostent *ast_gethostbyname(const char *host, struct ast_hostent *hp)
 }
 
 /*! \brief Produce 32 char MD5 hash of value. */
-void ast_md5_hash(char *output, char *input)
+void ast_md5_hash(char *output, const char *input)
 {
 	struct MD5Context md5;
 	unsigned char digest[16];
@@ -237,7 +235,7 @@ void ast_md5_hash(char *output, char *input)
 	int x;
 
 	MD5Init(&md5);
-	MD5Update(&md5, (unsigned char *)input, strlen(input));
+	MD5Update(&md5, (const unsigned char *) input, strlen(input));
 	MD5Final(digest, &md5);
 	ptr = output;
 	for (x = 0; x < 16; x++)
@@ -245,7 +243,7 @@ void ast_md5_hash(char *output, char *input)
 }
 
 /*! \brief Produce 40 char SHA1 hash of value. */
-void ast_sha1_hash(char *output, char *input)
+void ast_sha1_hash(char *output, const char *input)
 {
 	struct SHA1Context sha;
 	char *ptr;
@@ -285,7 +283,7 @@ int ast_base64decode(unsigned char *dst, const char *src, int max)
 			cnt++;
 		}
 	}
-	/* Dont worry about left over bits, they're extra anyway */
+	/* Don't worry about left over bits, they're extra anyway */
 	return cnt;
 }
 
@@ -370,41 +368,44 @@ static void base64_init(void)
 	b2a[(int)'/'] = 63;
 }
 
-/*! \brief  ast_uri_encode: Turn text string to URI-encoded %XX version
-\note 	At this point, we're converting from ISO-8859-x (8-bit), not UTF8
-	as in the SIP protocol spec 
-	If doreserved == 1 we will convert reserved characters also.
-	RFC 2396, section 2.4
-	outbuf needs to have more memory allocated than the instring
-	to have room for the expansion. Every char that is converted
-	is replaced by three ASCII characters.
-
-	Note: The doreserved option is needed for replaces header in
-	SIP transfers.
-*/
-char *ast_uri_encode(const char *string, char *outbuf, int buflen, int doreserved) 
+/*! \brief Turn text string to URI-encoded %XX version 
+ *
+ * \note 
+ *  At this point, this function is encoding agnostic; it does not
+ *  check whether it is fed legal UTF-8. We escape control
+ *  characters (\x00-\x1F\x7F), '%', and all characters above 0x7F.
+ *  If do_special_char == 1 we will convert all characters except alnum
+ *  and mark.
+ *  Outbuf needs to have more memory allocated than the instring
+ *  to have room for the expansion. Every char that is converted
+ *  is replaced by three ASCII characters.
+ */
+char *ast_uri_encode(const char *string, char *outbuf, int buflen, int do_special_char)
 {
-	char *reserved = ";/?:@&=+$,# ";	/* Reserved chars */
-
- 	const char *ptr  = string;	/* Start with the string */
+	const char *ptr  = string;	/* Start with the string */
 	char *out = NULL;
 	char *buf = NULL;
-
+	const char *mark = "-_.!~*'()"; /* no encode set, RFC 2396 section 2.3, RFC 3261 sec 25 */
 	ast_copy_string(outbuf, string, buflen);
 
-	/* If there's no characters to convert, just go through and don't do anything */
 	while (*ptr) {
-		if ((*ptr < 32) || (doreserved && strchr(reserved, *ptr))) {
+		if ((const signed char) *ptr < 32 || *ptr == 0x7f || *ptr == '%' ||
+				(do_special_char &&
+				!(*ptr >= '0' && *ptr <= '9') &&      /* num */
+				!(*ptr >= 'A' && *ptr <= 'Z') &&      /* ALPHA */
+				!(*ptr >= 'a' && *ptr <= 'z') &&      /* alpha */
+				!strchr(mark, *ptr))) {               /* mark set */
+
 			/* Oops, we need to start working here */
 			if (!buf) {
 				buf = outbuf;
 				out = buf + (ptr - string) ;	/* Set output ptr */
 			}
-			out += sprintf(out, "%%%02x", (unsigned char) *ptr);
+			out += sprintf(out, "%%%02X", (unsigned char) *ptr);
 		} else if (buf) {
 			*out = *ptr;	/* Continue copying the string */
 			out++;
-		} 
+		}
 		ptr++;
 	}
 	if (buf)
@@ -439,6 +440,10 @@ const char *ast_inet_ntoa(struct in_addr ia)
 
 	return inet_ntop(AF_INET, &ia, buf, INET_ADDRSTRLEN);
 }
+
+#ifdef HAVE_DEV_URANDOM
+static int dev_urandom_fd;
+#endif
 
 #ifndef __linux__
 #undef pthread_create /* For ast_pthread_create function only */
@@ -479,6 +484,9 @@ struct thr_lock_info {
 		enum ast_lock_type type;
 		/*! This thread is waiting on this lock */
 		int pending:2;
+#ifdef HAVE_BKTR
+		struct ast_bt *backtrace;
+#endif
 	} locks[AST_MAX_LOCKS];
 	/*! This is the number of locks currently held by this thread.
 	 *  The index (num_locks - 1) has the info on the last one in the
@@ -533,17 +541,22 @@ static void lock_info_destroy(void *data)
 	}
 
 	pthread_mutex_destroy(&lock_info->lock);
-	free((void *) lock_info->thread_name);
+	if (lock_info->thread_name)
+		free((void *) lock_info->thread_name);
 	free(lock_info);
 }
 
 /*!
  * \brief The thread storage key for per-thread lock info
  */
-AST_THREADSTORAGE_CUSTOM(thread_lock_info, thread_lock_info_init, lock_info_destroy);
-
+AST_THREADSTORAGE_CUSTOM(thread_lock_info, NULL, lock_info_destroy);
+#ifdef HAVE_BKTR
+void ast_store_lock_info(enum ast_lock_type type, const char *filename,
+	int line_num, const char *func, const char *lock_name, void *lock_addr, struct ast_bt *bt)
+#else
 void ast_store_lock_info(enum ast_lock_type type, const char *filename,
 	int line_num, const char *func, const char *lock_name, void *lock_addr)
+#endif
 {
 	struct thr_lock_info *lock_info;
 	int i;
@@ -556,6 +569,9 @@ void ast_store_lock_info(enum ast_lock_type type, const char *filename,
 	for (i = 0; i < lock_info->num_locks; i++) {
 		if (lock_info->locks[i].lock_addr == lock_addr) {
 			lock_info->locks[i].times_locked++;
+#ifdef HAVE_BKTR
+			lock_info->locks[i].backtrace = bt;
+#endif
 			pthread_mutex_unlock(&lock_info->lock);
 			return;
 		}
@@ -586,6 +602,9 @@ void ast_store_lock_info(enum ast_lock_type type, const char *filename,
 	lock_info->locks[i].times_locked = 1;
 	lock_info->locks[i].type = type;
 	lock_info->locks[i].pending = 1;
+#ifdef HAVE_BKTR
+	lock_info->locks[i].backtrace = bt;
+#endif
 	lock_info->num_locks++;
 
 	pthread_mutex_unlock(&lock_info->lock);
@@ -651,7 +670,11 @@ int ast_find_lock_info(void *lock_addr, char *filename, size_t filename_size, in
 	return 0;
 }
 
+#ifdef HAVE_BKTR
+void ast_remove_lock_info(void *lock_addr, struct ast_bt *bt)
+#else
 void ast_remove_lock_info(void *lock_addr)
+#endif
 {
 	struct thr_lock_info *lock_info;
 	int i = 0;
@@ -674,6 +697,9 @@ void ast_remove_lock_info(void *lock_addr)
 
 	if (lock_info->locks[i].times_locked > 1) {
 		lock_info->locks[i].times_locked--;
+#ifdef HAVE_BKTR
+		lock_info->locks[i].backtrace = bt;
+#endif
 		pthread_mutex_unlock(&lock_info->lock);
 		return;
 	}
@@ -703,67 +729,164 @@ static const char *locktype2str(enum ast_lock_type type)
 	return "UNKNOWN";
 }
 
-static int handle_show_locks(int fd, int argc, char *argv[])
+#ifdef HAVE_BKTR
+static void append_backtrace_information(struct ast_str **str, struct ast_bt *bt)
+{
+	char **symbols;
+
+	if (!bt) {
+		ast_str_append(str, 0, "\tNo backtrace to print\n");
+		return;
+	}
+
+	if ((symbols = backtrace_symbols(bt->addresses, bt->num_frames))) {
+		int frame_iterator;
+		
+		for (frame_iterator = 0; frame_iterator < bt->num_frames; ++frame_iterator) {
+			ast_str_append(str, 0, "\t%s\n", symbols[frame_iterator]);
+		}
+
+		free(symbols);
+	} else {
+		ast_str_append(str, 0, "\tCouldn't retrieve backtrace symbols\n");
+	}
+}
+#endif
+
+static void append_lock_information(struct ast_str **str, struct thr_lock_info *lock_info, int i)
+{
+	int j;
+	ast_mutex_t *lock;
+	struct ast_lock_track *lt;
+	
+	ast_str_append(str, 0, "=== ---> %sLock #%d (%s): %s %d %s %s %p (%d)\n", 
+				   lock_info->locks[i].pending > 0 ? "Waiting for " : 
+				   lock_info->locks[i].pending < 0 ? "Tried and failed to get " : "", i,
+				   lock_info->locks[i].file, 
+				   locktype2str(lock_info->locks[i].type),
+				   lock_info->locks[i].line_num,
+				   lock_info->locks[i].func, lock_info->locks[i].lock_name,
+				   lock_info->locks[i].lock_addr, 
+				   lock_info->locks[i].times_locked);
+#ifdef HAVE_BKTR
+	append_backtrace_information(str, lock_info->locks[i].backtrace);
+#endif
+	
+	if (!lock_info->locks[i].pending || lock_info->locks[i].pending == -1)
+		return;
+	
+	/* We only have further details for mutexes right now */
+	if (lock_info->locks[i].type != AST_MUTEX)
+		return;
+	
+	lock = lock_info->locks[i].lock_addr;
+	lt = &lock->track;
+	ast_reentrancy_lock(lt);
+	for (j = 0; *str && j < lt->reentrancy; j++) {
+		ast_str_append(str, 0, "=== --- ---> Locked Here: %s line %d (%s)\n",
+					   lt->file[j], lt->lineno[j], lt->func[j]);
+	}
+	ast_reentrancy_unlock(lt);	
+}
+
+
+/*! This function can help you find highly temporal locks; locks that happen for a 
+    short time, but at unexpected times, usually at times that create a deadlock,
+	Why is this thing locked right then? Who is locking it? Who am I fighting
+    with for this lock? 
+
+	To answer such questions, just call this routine before you would normally try
+	to aquire a lock. It doesn't do anything if the lock is not acquired. If the
+	lock is taken, it will publish a line or two to the console via ast_log().
+
+	Sometimes, the lock message is pretty uninformative. For instance, you might
+	find that the lock is being aquired deep within the astobj2 code; this tells
+	you little about higher level routines that call the astobj2 routines.
+	But, using gdb, you can set a break at the ast_log below, and for that
+	breakpoint, you can set the commands:
+	  where
+	  cont
+	which will give a stack trace and continue. -- that aught to do the job!
+
+*/
+void log_show_lock(void *this_lock_addr)
 {
 	struct thr_lock_info *lock_info;
-	struct ast_dynamic_str *str;
+	struct ast_str *str;
 
-	if (!(str = ast_dynamic_str_create(4096)))
-		return RESULT_FAILURE;
+	if (!(str = ast_str_create(4096))) {
+		ast_log(LOG_NOTICE,"Could not create str\n");
+		return;
+	}
+	
 
-	ast_dynamic_str_append(&str, 0, "\n" 
-	            "=======================================================================\n"
-	            "=== Currently Held Locks ==============================================\n"
-	            "=======================================================================\n"
-	            "===\n"
-				"=== <file> <line num> <function> <lock name> <lock addr> (times locked)\n"
-				"===\n");
+	pthread_mutex_lock(&lock_infos_lock.mutex);
+	AST_LIST_TRAVERSE(&lock_infos, lock_info, entry) {
+		int i;
+		pthread_mutex_lock(&lock_info->lock);
+		for (i = 0; str && i < lock_info->num_locks; i++) {
+			/* ONLY show info about this particular lock, if
+			   it's acquired... */
+			if (lock_info->locks[i].lock_addr == this_lock_addr) {
+				append_lock_information(&str, lock_info, i);
+				ast_log(LOG_NOTICE, "%s", ast_str_buffer(str));
+				break;
+			}
+		}
+		pthread_mutex_unlock(&lock_info->lock);
+	}
+	pthread_mutex_unlock(&lock_infos_lock.mutex);
+	ast_free(str);
+}
+
+
+static char *handle_show_locks(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	struct thr_lock_info *lock_info;
+	struct ast_str *str;
+
+	if (!(str = ast_str_create(4096)))
+		return CLI_FAILURE;
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "core show locks";
+		e->usage =
+			"Usage: core show locks\n"
+			"       This command is for lock debugging.  It prints out which locks\n"
+			"are owned by each active thread.\n";
+		return NULL;
+
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	ast_str_append(&str, 0, "\n" 
+	               "=======================================================================\n"
+	               "=== Currently Held Locks ==============================================\n"
+	               "=======================================================================\n"
+	               "===\n"
+	               "=== <pending> <lock#> (<file>): <lock type> <line num> <function> <lock name> <lock addr> (times locked)\n"
+	               "===\n");
 
 	if (!str)
-		return RESULT_FAILURE;
+		return CLI_FAILURE;
 
 	pthread_mutex_lock(&lock_infos_lock.mutex);
 	AST_LIST_TRAVERSE(&lock_infos, lock_info, entry) {
 		int i;
 		if (lock_info->num_locks) {
-			ast_dynamic_str_append(&str, 0, "=== Thread ID: %ld (%s)\n", (long) lock_info->thread_id,
+			ast_str_append(&str, 0, "=== Thread ID: %ld (%s)\n", (long) lock_info->thread_id,
 				lock_info->thread_name);
 			pthread_mutex_lock(&lock_info->lock);
 			for (i = 0; str && i < lock_info->num_locks; i++) {
-				int j;
-				ast_mutex_t *lock;
-
-				ast_dynamic_str_append(&str, 0, "=== ---> %sLock #%d (%s): %s %d %s %s %p (%d)\n", 
-					lock_info->locks[i].pending > 0 ? "Waiting for " : 
-						lock_info->locks[i].pending < 0 ? "Tried and failed to get " : "", i,
-					lock_info->locks[i].file, 
-					locktype2str(lock_info->locks[i].type),
-					lock_info->locks[i].line_num,
-					lock_info->locks[i].func, lock_info->locks[i].lock_name,
-					lock_info->locks[i].lock_addr, 
-					lock_info->locks[i].times_locked);
-
-				if (!lock_info->locks[i].pending || lock_info->locks[i].pending == -1)
-					continue;
-
-				/* We only have further details for mutexes right now */
-				if (lock_info->locks[i].type != AST_MUTEX)
-					continue;
-
-				lock = lock_info->locks[i].lock_addr;
-
-				ast_reentrancy_lock(lock);
-				for (j = 0; str && j < lock->reentrancy; j++) {
-					ast_dynamic_str_append(&str, 0, "=== --- ---> Locked Here: %s line %d (%s)\n",
-						lock->file[j], lock->lineno[j], lock->func[j]);
-				}
-				ast_reentrancy_unlock(lock);	
+				append_lock_information(&str, lock_info, i);
 			}
 			pthread_mutex_unlock(&lock_info->lock);
 			if (!str)
 				break;
-			ast_dynamic_str_append(&str, 0, "=== -------------------------------------------------------------------\n"
-			            "===\n");
+			ast_str_append(&str, 0, "=== -------------------------------------------------------------------\n"
+			               "===\n");
 			if (!str)
 				break;
 		}
@@ -771,34 +894,26 @@ static int handle_show_locks(int fd, int argc, char *argv[])
 	pthread_mutex_unlock(&lock_infos_lock.mutex);
 
 	if (!str)
-		return RESULT_FAILURE;
+		return CLI_FAILURE;
 
-	ast_dynamic_str_append(&str, 0, "=======================================================================\n"
-	            "\n");
+	ast_str_append(&str, 0, "=======================================================================\n"
+	               "\n");
 
 	if (!str)
-		return RESULT_FAILURE;
+		return CLI_FAILURE;
 
-	ast_cli(fd, "%s", str->str);
+	ast_cli(a->fd, "%s", ast_str_buffer(str));
 
-	free(str);
+	ast_free(str);
 
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 
-static char show_locks_help[] =
-"Usage: core show locks\n"
-"       This command is for lock debugging.  It prints out which locks\n"
-"are owned by each active thread.\n";
-
 static struct ast_cli_entry utils_cli[] = {
-	{ { "core", "show", "locks", NULL }, handle_show_locks,
-	  "Show which locks are locked by which thread", show_locks_help },
+	AST_CLI_DEFINE(handle_show_locks, "Show which locks are held by which thread"),
 };
 
 #endif /* DEBUG_THREADS */
-
-
 
 /*
  * support for 'show threads'. The start routine is wrapped by
@@ -832,7 +947,7 @@ static void *dummy_start(void *data)
 	   keep a copy of the pointer and then ast_unregister_thread will
 	   free the memory
 	*/
-	free(data);
+	ast_free(data);
 	ast_register_thread(a.name);
 	pthread_cleanup_push(ast_unregister_thread, (void *) pthread_self());
 
@@ -910,6 +1025,32 @@ int ast_pthread_create_stack(pthread_t *thread, pthread_attr_t *attr, void *(*st
 	return pthread_create(thread, attr, start_routine, data); /* We're in ast_pthread_create, so it's okay */
 }
 
+
+int ast_pthread_create_detached_stack(pthread_t *thread, pthread_attr_t *attr, void *(*start_routine)(void *),
+			     void *data, size_t stacksize, const char *file, const char *caller,
+			     int line, const char *start_fn)
+{
+	unsigned char attr_destroy = 0;
+	int res;
+
+	if (!attr) {
+		attr = alloca(sizeof(*attr));
+		pthread_attr_init(attr);
+		attr_destroy = 1;
+	}
+
+	if ((errno = pthread_attr_setdetachstate(attr, PTHREAD_CREATE_DETACHED)))
+		ast_log(LOG_WARNING, "pthread_attr_setdetachstate: %s\n", strerror(errno));
+
+	res = ast_pthread_create_stack(thread, attr, start_routine, data, 
+	                               stacksize, file, caller, line, start_fn);
+
+	if (attr_destroy)
+		pthread_attr_destroy(attr);
+
+	return res;
+}
+
 int ast_wait_for_input(int fd, int ms)
 {
 	struct pollfd pfd[1];
@@ -919,6 +1060,59 @@ int ast_wait_for_input(int fd, int ms)
 	return ast_poll(pfd, 1, ms);
 }
 
+static int ast_wait_for_output(int fd, int timeoutms)
+{
+	struct pollfd pfd = {
+		.fd = fd,
+		.events = POLLOUT,
+	};
+	int res;
+	struct timeval start = ast_tvnow();
+	int elapsed = 0;
+
+	/* poll() until the fd is writable without blocking */
+	while ((res = ast_poll(&pfd, 1, timeoutms - elapsed)) <= 0) {
+		if (res == 0) {
+			/* timed out. */
+#ifndef STANDALONE
+			ast_debug(1, "Timed out trying to write\n");
+#endif
+			return -1;
+		} else if (res == -1) {
+			/* poll() returned an error, check to see if it was fatal */
+
+			if (errno == EINTR || errno == EAGAIN) {
+				elapsed = ast_tvdiff_ms(ast_tvnow(), start);
+				if (elapsed >= timeoutms) {
+					return -1;
+				}
+				/* This was an acceptable error, go back into poll() */
+				continue;
+			}
+
+			/* Fatal error, bail. */
+			ast_log(LOG_ERROR, "poll returned error: %s\n", strerror(errno));
+
+			return -1;
+		}
+		elapsed = ast_tvdiff_ms(ast_tvnow(), start);
+		if (elapsed >= timeoutms) {
+			return -1;
+		}
+	}
+
+	return 0;
+}
+
+/*!
+ * Try to write string, but wait no more than ms milliseconds before timing out.
+ *
+ * \note The code assumes that the file descriptor has NONBLOCK set,
+ * so there is only one system call made to do a write, unless we actually
+ * have a need to wait.  This way, we get better performance.
+ * If the descriptor is blocking, all assumptions on the guaranteed
+ * detail do not apply anymore.
+ */
 int ast_carefulwrite(int fd, char *s, int len, int timeoutms) 
 {
 	struct timeval start = ast_tvnow();
@@ -926,39 +1120,8 @@ int ast_carefulwrite(int fd, char *s, int len, int timeoutms)
 	int elapsed = 0;
 
 	while (len) {
-		struct pollfd pfd = {
-			.fd = fd,
-			.events = POLLOUT,
-		};
-
-		/* poll() until the fd is writable without blocking */
-		while ((res = ast_poll(&pfd, 1, timeoutms - elapsed)) <= 0) {
-			if (res == 0) {
-				/* timed out. */
-				if (option_debug) {
-					ast_log(LOG_DEBUG, "Timed out trying to write\n");
-				}
-				return -1;
-			} else if (res == -1) {
-				/* poll() returned an error, check to see if it was fatal */
-
-				if (errno == EINTR || errno == EAGAIN) {
-					elapsed = ast_tvdiff_ms(ast_tvnow(), start);
-					if (elapsed > timeoutms) {
-						/* We've taken too long to write 
-						 * This is only an error condition if we haven't finished writing. */
-						res = len ? -1 : 0;
-						break;
-					}
-					/* This was an acceptable error, go back into poll() */
-					continue;
-				}
-
-				/* Fatal error, bail. */
-				ast_log(LOG_ERROR, "poll returned error: %s\n", strerror(errno));
-
-				return -1;
-			}
+		if (ast_wait_for_output(fd, timeoutms - elapsed)) {
+			return -1;
 		}
 
 		res = write(fd, s, len);
@@ -980,7 +1143,7 @@ int ast_carefulwrite(int fd, char *s, int len, int timeoutms)
 		res = 0;
 
 		elapsed = ast_tvdiff_ms(ast_tvnow(), start);
-		if (elapsed > timeoutms) {
+		if (elapsed >= timeoutms) {
 			/* We've taken too long to write 
 			 * This is only an error condition if we haven't finished writing. */
 			res = len ? -1 : 0;
@@ -989,6 +1152,61 @@ int ast_carefulwrite(int fd, char *s, int len, int timeoutms)
 	}
 
 	return res;
+}
+
+int ast_careful_fwrite(FILE *f, int fd, const char *src, size_t len, int timeoutms)
+{
+	struct timeval start = ast_tvnow();
+	int n = 0;
+	int elapsed = 0;
+
+	while (len) {
+		if (ast_wait_for_output(fd, timeoutms - elapsed)) {
+			/* poll returned a fatal error, so bail out immediately. */
+			return -1;
+		}
+
+		/* Clear any errors from a previous write */
+		clearerr(f);
+
+		n = fwrite(src, 1, len, f);
+
+		if (ferror(f) && errno != EINTR && errno != EAGAIN) {
+			/* fatal error from fwrite() */
+			if (!feof(f)) {
+				/* Don't spam the logs if it was just that the connection is closed. */
+				ast_log(LOG_ERROR, "fwrite() returned error: %s\n", strerror(errno));
+			}
+			n = -1;
+			break;
+		}
+
+		/* Update for data already written to the socket */
+		len -= n;
+		src += n;
+
+		elapsed = ast_tvdiff_ms(ast_tvnow(), start);
+		if (elapsed >= timeoutms) {
+			/* We've taken too long to write 
+			 * This is only an error condition if we haven't finished writing. */
+			n = len ? -1 : 0;
+			break;
+		}
+	}
+
+	while (fflush(f)) {
+		if (errno == EAGAIN || errno == EINTR) {
+			continue;
+		}
+		if (!feof(f)) {
+			/* Don't spam the logs if it was just that the connection is closed. */
+			ast_log(LOG_ERROR, "fflush() returned error: %s\n", strerror(errno));
+		}
+		n = -1;
+		break;
+	}
+
+	return n < 0 ? -1 : 0;
 }
 
 char *ast_strip_quoted(char *s, const char *beg_quotes, const char *end_quotes)
@@ -1023,6 +1241,43 @@ char *ast_unescape_semicolon(char *s)
 	}
 
 	return s;
+}
+
+/* !\brief unescape some C sequences in place, return pointer to the original string.
+ */
+char *ast_unescape_c(char *src)
+{
+	char c, *ret, *dst;
+
+	if (src == NULL)
+		return NULL;
+	for (ret = dst = src; (c = *src++); *dst++ = c ) {
+		if (c != '\\')
+			continue;	/* copy char at the end of the loop */
+		switch ((c = *src++)) {
+		case '\0':	/* special, trailing '\' */
+			c = '\\';
+			break;
+		case 'b':	/* backspace */
+			c = '\b';
+			break;
+		case 'f':	/* form feed */
+			c = '\f';
+			break;
+		case 'n':
+			c = '\n';
+			break;
+		case 'r':
+			c = '\r';
+			break;
+		case 't':
+			c = '\t';
+			break;
+		}
+		/* default, use the char literally */
+	}
+	*dst = '\0';
+	return ret;
 }
 
 int ast_build_string_va(char **buffer, size_t *space, const char *fmt, va_list ap)
@@ -1099,12 +1354,12 @@ static struct timeval tvfix(struct timeval a)
 {
 	if (a.tv_usec >= ONE_MILLION) {
 		ast_log(LOG_WARNING, "warning too large timestamp %ld.%ld\n",
-			(long) a.tv_sec, (long int) a.tv_usec);
+			(long)a.tv_sec, (long int) a.tv_usec);
 		a.tv_sec += a.tv_usec / ONE_MILLION;
 		a.tv_usec %= ONE_MILLION;
 	} else if (a.tv_usec < 0) {
 		ast_log(LOG_WARNING, "warning negative timestamp %ld.%ld\n",
-			(long) a.tv_sec, (long int) a.tv_usec);
+			(long)a.tv_sec, (long int) a.tv_usec);
 		a.tv_usec = 0;
 	}
 	return a;
@@ -1141,19 +1396,34 @@ struct timeval ast_tvsub(struct timeval a, struct timeval b)
 
 /*! \brief glibc puts a lock inside random(3), so that the results are thread-safe.
  * BSD libc (and others) do not. */
-#ifndef linux
 
+#ifndef linux
 AST_MUTEX_DEFINE_STATIC(randomlock);
+#endif
 
 long int ast_random(void)
 {
 	long int res;
+#ifdef HAVE_DEV_URANDOM
+	if (dev_urandom_fd >= 0) {
+		int read_res = read(dev_urandom_fd, &res, sizeof(res));
+		if (read_res > 0) {
+			long int rm = RAND_MAX;
+			res = res < 0 ? ~res : res;
+			rm++;
+			return res % rm;
+		}
+	}
+#endif
+#ifdef linux
+	res = random();
+#else
 	ast_mutex_lock(&randomlock);
 	res = random();
 	ast_mutex_unlock(&randomlock);
+#endif
 	return res;
 }
-#endif
 
 char *ast_process_quotes_and_slashes(char *start, char find, char replace_with)
 {
@@ -1181,7 +1451,7 @@ char *ast_process_quotes_and_slashes(char *start, char find, char replace_with)
 	return dataPut;
 }
 
-void ast_join(char *s, size_t len, char * const w[])
+void ast_join(char *s, size_t len, const char * const w[])
 {
 	int x, ofs = 0;
 	const char *src;
@@ -1200,77 +1470,257 @@ void ast_join(char *s, size_t len, char * const w[])
 	s[ofs] = '\0';
 }
 
-const char __ast_string_field_empty[] = "";
+/*
+ * stringfields support routines.
+ */
 
-static int add_string_pool(struct ast_string_field_mgr *mgr, size_t size)
+/* this is a little complex... string fields are stored with their
+   allocated size in the bytes preceding the string; even the
+   constant 'empty' string has to be this way, so the code that
+   checks to see if there is enough room for a new string doesn't
+   have to have any special case checks
+*/
+
+static const struct {
+	ast_string_field_allocation allocation;
+	char string[1];
+} __ast_string_field_empty_buffer;
+
+ast_string_field __ast_string_field_empty = __ast_string_field_empty_buffer.string;
+
+#define ALLOCATOR_OVERHEAD 48
+
+static size_t optimal_alloc_size(size_t size)
+{
+	unsigned int count;
+
+	size += ALLOCATOR_OVERHEAD;
+
+	for (count = 1; size; size >>= 1, count++);
+
+	return (1 << count) - ALLOCATOR_OVERHEAD;
+}
+
+/*! \brief add a new block to the pool.
+ * We can only allocate from the topmost pool, so the
+ * fields in *mgr reflect the size of that only.
+ */
+static int add_string_pool(struct ast_string_field_mgr *mgr, struct ast_string_field_pool **pool_head,
+			   size_t size, const char *file, int lineno, const char *func)
 {
 	struct ast_string_field_pool *pool;
+	size_t alloc_size = optimal_alloc_size(sizeof(*pool) + size);
 
-	if (!(pool = ast_calloc(1, sizeof(*pool) + size)))
+#if defined(__AST_DEBUG_MALLOC)
+	if (!(pool = __ast_calloc(1, alloc_size, file, lineno, func))) {
 		return -1;
-	
-	pool->prev = mgr->pool;
-	mgr->pool = pool;
-	mgr->size = size;
-	mgr->space = size;
-	mgr->used = 0;
+	}
+#else
+	if (!(pool = ast_calloc(1, alloc_size))) {
+		return -1;
+	}
+#endif
+
+	pool->prev = *pool_head;
+	pool->size = alloc_size - sizeof(*pool);
+	*pool_head = pool;
+	mgr->last_alloc = NULL;
 
 	return 0;
 }
 
-int __ast_string_field_init(struct ast_string_field_mgr *mgr, size_t size,
-			    ast_string_field *fields, int num_fields)
+/*
+ * This is an internal API, code should not use it directly.
+ * It initializes all fields as empty, then uses 'size' for 3 functions:
+ * size > 0 means initialize the pool list with a pool of given size.
+ *	This must be called right after allocating the object.
+ * size = 0 means release all pools except the most recent one.
+ *      If the first pool was allocated via embedding in another
+ *      object, that pool will be preserved instead.
+ *	This is useful to e.g. reset an object to the initial value.
+ * size < 0 means release all pools.
+ *	This must be done before destroying the object.
+ */
+int __ast_string_field_init(struct ast_string_field_mgr *mgr, struct ast_string_field_pool **pool_head,
+			    int needed, const char *file, int lineno, const char *func)
 {
-	int index;
+	const char **p = (const char **) pool_head + 1;
+	struct ast_string_field_pool *cur = NULL;
+	struct ast_string_field_pool *preserve = NULL;
 
-	if (add_string_pool(mgr, size))
-		return -1;
-
-	for (index = 0; index < num_fields; index++)
-		fields[index] = __ast_string_field_empty;
-
-	return 0;
-}
-
-ast_string_field __ast_string_field_alloc_space(struct ast_string_field_mgr *mgr, size_t needed,
-						ast_string_field *fields, int num_fields)
-{
-	char *result = NULL;
-
-	if (__builtin_expect(needed > mgr->space, 0)) {
-		size_t new_size = mgr->size * 2;
-
-		while (new_size < needed)
-			new_size *= 2;
-
-		if (add_string_pool(mgr, new_size))
-			return NULL;
+	/* clear fields - this is always necessary */
+	while ((struct ast_string_field_mgr *) p != mgr) {
+		*p++ = __ast_string_field_empty;
 	}
 
-	result = mgr->pool->base + mgr->used;
-	mgr->used += needed;
-	mgr->space -= needed;
+	mgr->last_alloc = NULL;
+#if defined(__AST_DEBUG_MALLOC)
+	mgr->owner_file = file;
+	mgr->owner_func = func;
+	mgr->owner_line = lineno;
+#endif
+	if (needed > 0) {		/* allocate the initial pool */
+		*pool_head = NULL;
+		mgr->embedded_pool = NULL;
+		return add_string_pool(mgr, pool_head, needed, file, lineno, func);
+	}
+
+	/* if there is an embedded pool, we can't actually release *all*
+	 * pools, we must keep the embedded one. if the caller is about
+	 * to free the structure that contains the stringfield manager
+	 * and embedded pool anyway, it will be freed as part of that
+	 * operation.
+	 */
+	if ((needed < 0) && mgr->embedded_pool) {
+		needed = 0;
+	}
+
+	if (needed < 0) {		/* reset all pools */
+		cur = *pool_head;
+	} else if (mgr->embedded_pool) { /* preserve the embedded pool */
+		preserve = mgr->embedded_pool;
+		cur = *pool_head;
+	} else {			/* preserve the last pool */
+		if (*pool_head == NULL) {
+			ast_log(LOG_WARNING, "trying to reset empty pool\n");
+			return -1;
+		}
+		preserve = *pool_head;
+		cur = preserve->prev;
+	}
+
+	if (preserve) {
+		preserve->prev = NULL;
+		preserve->used = preserve->active = 0;
+	}
+
+	while (cur) {
+		struct ast_string_field_pool *prev = cur->prev;
+
+		if (cur != preserve) {
+			ast_free(cur);
+		}
+		cur = prev;
+	}
+
+	*pool_head = preserve;
+
+	return 0;
+}
+
+ast_string_field __ast_string_field_alloc_space(struct ast_string_field_mgr *mgr,
+						struct ast_string_field_pool **pool_head, size_t needed)
+{
+	char *result = NULL;
+	size_t space = (*pool_head)->size - (*pool_head)->used;
+	size_t to_alloc = needed + sizeof(ast_string_field_allocation);
+
+	/* This +1 accounts for alignment on SPARC */
+	if (__builtin_expect(to_alloc + 1 > space, 0)) {
+		size_t new_size = (*pool_head)->size;
+
+		while (new_size < to_alloc) {
+			new_size *= 2;
+		}
+
+#if defined(__AST_DEBUG_MALLOC)
+		if (add_string_pool(mgr, pool_head, new_size, mgr->owner_file, mgr->owner_line, mgr->owner_func))
+			return NULL;
+#else
+		if (add_string_pool(mgr, pool_head, new_size, __FILE__, __LINE__, __FUNCTION__))
+			return NULL;
+#endif
+	}
+
+	result = (*pool_head)->base + (*pool_head)->used;
+#ifdef __sparc__
+	/* SPARC requires that the allocation field be aligned. */
+	if ((long) result % sizeof(ast_string_field_allocation)) {
+		result++;
+		(*pool_head)->used++;
+	}
+#endif
+	(*pool_head)->used += to_alloc;
+	(*pool_head)->active += needed;
+	result += sizeof(ast_string_field_allocation);
+	AST_STRING_FIELD_ALLOCATION(result) = needed;
+	mgr->last_alloc = result;
+
 	return result;
 }
 
-void __ast_string_field_index_build_va(struct ast_string_field_mgr *mgr,
-				       ast_string_field *fields, int num_fields,
-				       int index, const char *format, va_list ap1, va_list ap2)
+int __ast_string_field_ptr_grow(struct ast_string_field_mgr *mgr,
+				struct ast_string_field_pool **pool_head, size_t needed,
+				const ast_string_field *ptr)
+{
+	ssize_t grow = needed - AST_STRING_FIELD_ALLOCATION(*ptr);
+	size_t space = (*pool_head)->size - (*pool_head)->used;
+
+	if (*ptr != mgr->last_alloc) {
+		return 1;
+	}
+
+	if (space < grow) {
+		return 1;
+	}
+
+	(*pool_head)->used += grow;
+	(*pool_head)->active += grow;
+	AST_STRING_FIELD_ALLOCATION(*ptr) += grow;
+
+	return 0;
+}
+
+void __ast_string_field_release_active(struct ast_string_field_pool *pool_head,
+				       const ast_string_field ptr)
+{
+	struct ast_string_field_pool *pool, *prev;
+
+	if (ptr == __ast_string_field_empty) {
+		return;
+	}
+
+	for (pool = pool_head, prev = NULL; pool; prev = pool, pool = pool->prev) {
+		if ((ptr >= pool->base) && (ptr <= (pool->base + pool->size))) {
+			pool->active -= AST_STRING_FIELD_ALLOCATION(ptr);
+			if ((pool->active == 0) && prev) {
+				prev->prev = pool->prev;
+				ast_free(pool);
+			}
+			break;
+		}
+	}
+}
+
+void __ast_string_field_ptr_build_va(struct ast_string_field_mgr *mgr,
+				     struct ast_string_field_pool **pool_head,
+				     ast_string_field *ptr, const char *format, va_list ap1, va_list ap2)
 {
 	size_t needed;
 	size_t available;
+	size_t space = (*pool_head)->size - (*pool_head)->used;
+	ssize_t grow;
 	char *target;
 
 	/* if the field already has space allocated, try to reuse it;
-	   otherwise, use the empty space at the end of the current
+	   otherwise, try to use the empty space at the end of the current
 	   pool
 	*/
-	if (fields[index][0] != '\0') {
-		target = (char *) fields[index];
-		available = strlen(fields[index]) + 1;
+	if (*ptr != __ast_string_field_empty) {
+		target = (char *) *ptr;
+		available = AST_STRING_FIELD_ALLOCATION(*ptr);
+		if (*ptr == mgr->last_alloc) {
+			available += space;
+		}
 	} else {
-		target = mgr->pool->base + mgr->used;
-		available = mgr->space;
+		target = (*pool_head)->base + (*pool_head)->used + sizeof(ast_string_field_allocation);
+#ifdef __sparc__
+		if ((long) target % sizeof(ast_string_field_allocation)) {
+			target++;
+			space--;
+		}
+#endif
+		available = space - sizeof(ast_string_field_allocation);
 	}
 
 	needed = vsnprintf(target, available, format, ap1) + 1;
@@ -1278,60 +1728,137 @@ void __ast_string_field_index_build_va(struct ast_string_field_mgr *mgr,
 	va_end(ap1);
 
 	if (needed > available) {
-		/* if the space needed can be satisfied by using the current
-		   pool (which could only occur if we tried to use the field's
-		   allocated space and failed), then use that space; otherwise
-		   allocate a new pool
+		/* the allocation could not be satisfied using the field's current allocation
+		   (if it has one), or the space available in the pool (if it does not). allocate
+		   space for it, adding a new string pool if necessary.
 		*/
-		if (needed <= mgr->space) {
-			target = mgr->pool->base + mgr->used;
-		} else {
-			size_t new_size = mgr->size * 2;
-
-			while (new_size < needed)
-				new_size *= 2;
-			
-			if (add_string_pool(mgr, new_size))
-				return;
-			
-			target = mgr->pool->base + mgr->used;
+		if (!(target = (char *) __ast_string_field_alloc_space(mgr, pool_head, needed))) {
+			return;
 		}
-
 		vsprintf(target, format, ap2);
-	}
-
-	if (fields[index] != target) {
-		fields[index] = target;
-		mgr->used += needed;
-		mgr->space -= needed;
+		__ast_string_field_release_active(*pool_head, *ptr);
+		*ptr = target;
+	} else if (*ptr != target) {
+		/* the allocation was satisfied using available space in the pool, but not
+		   using the space already allocated to the field
+		*/
+		__ast_string_field_release_active(*pool_head, *ptr);
+		mgr->last_alloc = *ptr = target;
+		AST_STRING_FIELD_ALLOCATION(target) = needed;
+		(*pool_head)->used += needed + sizeof(ast_string_field_allocation);
+		(*pool_head)->active += needed;
+	} else if ((grow = (needed - AST_STRING_FIELD_ALLOCATION(*ptr))) > 0) {
+		/* the allocation was satisfied by using available space in the pool *and*
+		   the field was the last allocated field from the pool, so it grew
+		*/
+		(*pool_head)->used += grow;
+		(*pool_head)->active += grow;
+		AST_STRING_FIELD_ALLOCATION(*ptr) += grow;
 	}
 }
 
-void __ast_string_field_index_build(struct ast_string_field_mgr *mgr,
-				    ast_string_field *fields, int num_fields,
-				    int index, const char *format, ...)
+void __ast_string_field_ptr_build(struct ast_string_field_mgr *mgr,
+				  struct ast_string_field_pool **pool_head,
+				  ast_string_field *ptr, const char *format, ...)
 {
 	va_list ap1, ap2;
 
 	va_start(ap1, format);
 	va_start(ap2, format);		/* va_copy does not exist on FreeBSD */
 
-	__ast_string_field_index_build_va(mgr, fields, num_fields, index, format, ap1, ap2);
+	__ast_string_field_ptr_build_va(mgr, pool_head, ptr, format, ap1, ap2);
 
 	va_end(ap1);
 	va_end(ap2);
 }
 
+void *__ast_calloc_with_stringfields(unsigned int num_structs, size_t struct_size, size_t field_mgr_offset,
+				     size_t field_mgr_pool_offset, size_t pool_size, const char *file,
+				     int lineno, const char *func)
+{
+	struct ast_string_field_mgr *mgr;
+	struct ast_string_field_pool *pool;
+	struct ast_string_field_pool **pool_head;
+	size_t pool_size_needed = sizeof(*pool) + pool_size;
+	size_t size_to_alloc = optimal_alloc_size(struct_size + pool_size_needed);
+	void *allocation;
+	unsigned int x;
+
+#if defined(__AST_DEBUG_MALLOC)	
+	if (!(allocation = __ast_calloc(num_structs, size_to_alloc, file, lineno, func))) {
+		return NULL;
+	}
+#else
+	if (!(allocation = ast_calloc(num_structs, size_to_alloc))) {
+		return NULL;
+	}
+#endif
+
+	for (x = 0; x < num_structs; x++) {
+		void *base = allocation + (size_to_alloc * x);
+		const char **p;
+
+		mgr = base + field_mgr_offset;
+		pool_head = base + field_mgr_pool_offset;
+		pool = base + struct_size;
+
+		p = (const char **) pool_head + 1;
+		while ((struct ast_string_field_mgr *) p != mgr) {
+			*p++ = __ast_string_field_empty;
+		}
+
+		mgr->embedded_pool = pool;
+		*pool_head = pool;
+		pool->size = size_to_alloc - struct_size - sizeof(*pool);
+#if defined(__AST_DEBUG_MALLOC)
+		mgr->owner_file = file;
+		mgr->owner_func = func;
+		mgr->owner_line = lineno;
+#endif
+	}
+
+	return allocation;
+}
+
+/* end of stringfields support */
+
 AST_MUTEX_DEFINE_STATIC(fetchadd_m); /* used for all fetc&add ops */
 
 int ast_atomic_fetchadd_int_slow(volatile int *p, int v)
 {
-        int ret;
-        ast_mutex_lock(&fetchadd_m);
-        ret = *p;
-        *p += v;
-        ast_mutex_unlock(&fetchadd_m);
-        return ret;
+	int ret;
+	ast_mutex_lock(&fetchadd_m);
+	ret = *p;
+	*p += v;
+	ast_mutex_unlock(&fetchadd_m);
+	return ret;
+}
+
+/*! \brief
+ * get values from config variables.
+ */
+int ast_get_timeval(const char *src, struct timeval *dst, struct timeval _default, int *consumed)
+{
+	long double dtv = 0.0;
+	int scanned;
+
+	if (dst == NULL)
+		return -1;
+
+	*dst = _default;
+
+	if (ast_strlen_zero(src))
+		return -1;
+
+	/* only integer at the moment, but one day we could accept more formats */
+	if (sscanf(src, "%30Lf%n", &dtv, &scanned) > 0) {
+		dst->tv_sec = dtv;
+		dst->tv_usec = (dtv - dst->tv_sec) * 1000000.0;
+		if (consumed)
+			*consumed = scanned;
+		return 0;
+	} else
+		return -1;
 }
 
 /*! \brief
@@ -1360,51 +1887,6 @@ int ast_get_time_t(const char *src, time_t *dst, time_t _default, int *consumed)
 		return -1;
 }
 
-int ast_dynamic_str_thread_build_va(struct ast_dynamic_str **buf, size_t max_len,
-	struct ast_threadstorage *ts, int append, const char *fmt, va_list ap)
-{
-	int res;
-	int offset = (append && (*buf)->len) ? strlen((*buf)->str) : 0;
-#if defined(DEBUG_THREADLOCALS)
-	struct ast_dynamic_str *old_buf = *buf;
-#endif /* defined(DEBUG_THREADLOCALS) */
-
-	res = vsnprintf((*buf)->str + offset, (*buf)->len - offset, fmt, ap);
-
-	/* Check to see if there was not enough space in the string buffer to prepare
-	 * the string.  Also, if a maximum length is present, make sure the current
-	 * length is less than the maximum before increasing the size. */
-	if ((res + offset + 1) > (*buf)->len && (max_len ? ((*buf)->len < max_len) : 1)) {
-		/* Set the new size of the string buffer to be the size needed
-		 * to hold the resulting string (res) plus one byte for the
-		 * terminating '\0'.  If this size is greater than the max, set
-		 * the new length to be the maximum allowed. */
-		if (max_len)
-			(*buf)->len = ((res + offset + 1) < max_len) ? (res + offset + 1) : max_len;
-		else
-			(*buf)->len = res + offset + 1;
-
-		if (!(*buf = ast_realloc(*buf, (*buf)->len + sizeof(*(*buf)))))
-			return AST_DYNSTR_BUILD_FAILED;
-
-		if (append)
-			(*buf)->str[offset] = '\0';
-
-		if (ts) {
-			pthread_setspecific(ts->key, *buf);
-#if defined(DEBUG_THREADLOCALS)
-			__ast_threadstorage_object_replace(old_buf, *buf, (*buf)->len + sizeof(*(*buf)));
-#endif /* defined(DEBUG_THREADLOCALS) */
-		}
-
-		/* va_end() and va_start() must be done before calling
-		 * vsnprintf() again. */
-		return AST_DYNSTR_BUILD_RETRY;
-	}
-
-	return res;
-}
-
 void ast_enable_packet_fragmentation(int sock)
 {
 #if defined(HAVE_IP_MTU_DISCOVER)
@@ -1415,14 +1897,172 @@ void ast_enable_packet_fragmentation(int sock)
 #endif /* HAVE_IP_MTU_DISCOVER */
 }
 
+int ast_mkdir(const char *path, int mode)
+{
+	char *ptr;
+	int len = strlen(path), count = 0, x, piececount = 0;
+	char *tmp = ast_strdupa(path);
+	char **pieces;
+	char *fullpath = alloca(len + 1);
+	int res = 0;
+
+	for (ptr = tmp; *ptr; ptr++) {
+		if (*ptr == '/')
+			count++;
+	}
+
+	/* Count the components to the directory path */
+	pieces = alloca(count * sizeof(*pieces));
+	for (ptr = tmp; *ptr; ptr++) {
+		if (*ptr == '/') {
+			*ptr = '\0';
+			pieces[piececount++] = ptr + 1;
+		}
+	}
+
+	*fullpath = '\0';
+	for (x = 0; x < piececount; x++) {
+		/* This looks funky, but the buffer is always ideally-sized, so it's fine. */
+		strcat(fullpath, "/");
+		strcat(fullpath, pieces[x]);
+		res = mkdir(fullpath, mode);
+		if (res && errno != EEXIST)
+			return errno;
+	}
+	return 0;
+}
+
 int ast_utils_init(void)
 {
+#ifdef HAVE_DEV_URANDOM
+	dev_urandom_fd = open("/dev/urandom", O_RDONLY);
+#endif
 	base64_init();
 #ifdef DEBUG_THREADS
 #if !defined(LOW_MEMORY)
-	ast_cli_register_multiple(utils_cli, sizeof(utils_cli) / sizeof(utils_cli[0]));
+	ast_cli_register_multiple(utils_cli, ARRAY_LEN(utils_cli));
 #endif
 #endif
+	return 0;
+}
+
+
+/*!
+ *\brief Parse digest authorization header.
+ *\return Returns -1 if we have no auth or something wrong with digest.
+ *\note	This function may be used for Digest request and responce header.
+ * request arg is set to nonzero, if we parse Digest Request.
+ * pedantic arg can be set to nonzero if we need to do addition Digest check.
+ */
+int ast_parse_digest(const char *digest, struct ast_http_digest *d, int request, int pedantic) {
+	int i;
+	char *c, key[512], val[512], tmp[512];
+	struct ast_str *str = ast_str_create(16);
+
+	if (ast_strlen_zero(digest) || !d || !str) {
+		ast_free(str);
+		return -1;
+	}
+
+	ast_str_set(&str, 0, "%s", digest);
+
+	c = ast_skip_blanks(ast_str_buffer(str));
+
+	if (strncasecmp(tmp, "Digest ", strlen("Digest "))) {
+		ast_log(LOG_WARNING, "Missing Digest.\n");
+		ast_free(str);
+		return -1;
+	}
+	c += strlen("Digest ");
+
+	/* lookup for keys/value pair */
+	while (*c && *(c = ast_skip_blanks(c))) {
+		/* find key */
+		i = 0;
+		while (*c && *c != '=' && *c != ',' && !isspace(*c)) {
+			key[i++] = *c++;
+		}
+		key[i] = '\0';
+		c = ast_skip_blanks(c);
+		if (*c == '=') {
+			c = ast_skip_blanks(++c);
+			i = 0;
+			if (*c == '\"') {
+				/* in quotes. Skip first and look for last */
+				c++;
+				while (*c && *c != '\"') {
+					if (*c == '\\' && c[1] != '\0') { /* unescape chars */
+						c++;
+					}
+					val[i++] = *c++;
+				}
+			} else {
+				/* token */
+				while (*c && *c != ',' && !isspace(*c)) {
+					val[i++] = *c++;
+				}
+			}
+			val[i] = '\0';
+		}
+
+		while (*c && *c != ',') {
+			c++;
+		}
+		if (*c) {
+			c++;
+		}
+
+		if (!strcasecmp(key, "username")) {
+			ast_string_field_set(d, username, val);
+		} else if (!strcasecmp(key, "realm")) {
+			ast_string_field_set(d, realm, val);
+		} else if (!strcasecmp(key, "nonce")) {
+			ast_string_field_set(d, nonce, val);
+		} else if (!strcasecmp(key, "uri")) {
+			ast_string_field_set(d, uri, val);
+		} else if (!strcasecmp(key, "domain")) {
+			ast_string_field_set(d, domain, val);
+		} else if (!strcasecmp(key, "response")) {
+			ast_string_field_set(d, response, val);
+		} else if (!strcasecmp(key, "algorithm")) {
+			if (strcasecmp(val, "MD5")) {
+				ast_log(LOG_WARNING, "Digest algorithm: \"%s\" not supported.\n", val);
+				return -1;
+			}
+		} else if (!strcasecmp(key, "cnonce")) {
+			ast_string_field_set(d, cnonce, val);
+		} else if (!strcasecmp(key, "opaque")) {
+			ast_string_field_set(d, opaque, val);
+		} else if (!strcasecmp(key, "qop") && !strcasecmp(val, "auth")) {
+			d->qop = 1;
+		} else if (!strcasecmp(key, "nc")) {
+			unsigned long u;
+			if (sscanf(val, "%30lx", &u) != 1) {
+				ast_log(LOG_WARNING, "Incorrect Digest nc value: \"%s\".\n", val);
+				return -1;
+			}
+			ast_string_field_set(d, nc, val);
+		}
+	}
+	ast_free(str);
+
+	/* Digest checkout */
+	if (ast_strlen_zero(d->realm) || ast_strlen_zero(d->nonce)) {
+		/* "realm" and "nonce" MUST be always exist */
+		return -1;
+	}
+
+	if (!request) {
+		/* Additional check for Digest response */
+		if (ast_strlen_zero(d->username) || ast_strlen_zero(d->uri) || ast_strlen_zero(d->response)) {
+			return -1;
+		}
+
+		if (pedantic && d->qop && (ast_strlen_zero(d->cnonce) || ast_strlen_zero(d->nc))) {
+			return -1;
+		}
+	}
+
 	return 0;
 }
 

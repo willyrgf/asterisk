@@ -1,6 +1,6 @@
 #!/bin/sh -e
 
-for lang in / /fr/ /es/
+for lang in /en/ /fr/ /es/
   do
   for format in ulaw alaw wav gsm g729 g722
     do

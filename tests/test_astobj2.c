@@ -63,6 +63,14 @@ static int all_but_one_cb(void *obj, void *arg, int flag)
 	return (test_obj->i > 1) ? CMP_MATCH : 0;
 }
 
+static int multiple_cb(void *obj, void *arg, int flag)
+{
+	int *i = (int *) arg;
+	struct test_obj *test_obj = (struct test_obj *) obj;
+
+	return (test_obj->i <= *i) ? CMP_MATCH : 0;
+}
+
 static int test_cmp_cb(void *obj, void *arg, int flags)
 {
 	struct test_obj *cmp_obj = (struct test_obj *) obj;
@@ -87,6 +95,7 @@ static int astobj2_test_helper(int use_hash, int use_cmp, unsigned int lim, stru
 	struct ao2_container *c1;
 	struct ao2_container *c2;
 	struct ao2_iterator it;
+	struct ao2_iterator *mult_it;
 	struct test_obj *obj;
 	struct test_obj tmp_obj;
 	int bucket_size;
@@ -101,8 +110,8 @@ static int astobj2_test_helper(int use_hash, int use_cmp, unsigned int lim, stru
 	}
 
 	bucket_size = (ast_random() % ((lim / 4) + 1)) + 1;
-	c1 = ao2_container_alloc(bucket_size, use_hash ? test_hash_cb : NULL, use_cmp ? test_cmp_cb : NULL);
-	c2 = ao2_container_alloc(bucket_size, test_hash_cb, test_cmp_cb);
+	c1 = ao2_t_container_alloc(bucket_size, use_hash ? test_hash_cb : NULL, use_cmp ? test_cmp_cb : NULL, "test");
+	c2 = ao2_t_container_alloc(bucket_size, test_hash_cb, test_cmp_cb, "test");
 
 	if (!c1 || !c2) {
 		ast_test_status_update(test, "ao2_container_alloc failed.\n");
@@ -113,7 +122,7 @@ static int astobj2_test_helper(int use_hash, int use_cmp, unsigned int lim, stru
 	/* Create objects and link into container */
 	destructor_count = lim;
 	for (num = 1; num <= lim; num++) {
-		if (!(obj = ao2_alloc(sizeof(struct test_obj), test_obj_destructor))) {
+		if (!(obj = ao2_t_alloc(sizeof(struct test_obj), test_obj_destructor, "making zombies"))) {
 			ast_test_status_update(test, "ao2_alloc failed.\n");
 			res = AST_TEST_FAIL;
 			goto cleanup;
@@ -122,7 +131,7 @@ static int astobj2_test_helper(int use_hash, int use_cmp, unsigned int lim, stru
 		obj->destructor_count = &destructor_count;
 		obj->i = num;
 		ao2_link(c1, obj);
-		ao2_ref(obj, -1);
+		ao2_t_ref(obj, -1, "test");
 		if (ao2_container_count(c1) != num) {
 			ast_test_status_update(test, "container did not link correctly\n");
 			res = AST_TEST_FAIL;
@@ -145,7 +154,7 @@ static int astobj2_test_helper(int use_hash, int use_cmp, unsigned int lim, stru
 				ast_test_status_update(test, "object %d does not match object %d\n", obj->i, tmp_obj.i);
 				res = AST_TEST_FAIL;
 			}
-			ao2_ref(obj, -1);
+			ao2_t_ref(obj, -1, "test");
 		}
 	}
 
@@ -164,7 +173,7 @@ static int astobj2_test_helper(int use_hash, int use_cmp, unsigned int lim, stru
 				ast_test_status_update(test, "object %d does not match object %d\n", obj->i, tmp_obj.i);
 				res = AST_TEST_FAIL;
 			}
-			ao2_ref(obj, -1);
+			ao2_t_ref(obj, -1, "test");
 		}
 	}
 
@@ -188,20 +197,20 @@ static int astobj2_test_helper(int use_hash, int use_cmp, unsigned int lim, stru
 				res = AST_TEST_FAIL;
 			}
 			ao2_link(c2, obj);
-			ao2_ref(obj, -1);
+			ao2_t_ref(obj, -1, "test");
 		}
 	}
 	it = ao2_iterator_init(c2, 0);
-	while ((obj = ao2_iterator_next(&it))) {
-		ao2_unlink(c2, obj);
-		ao2_link(c1, obj);
-		ao2_ref(obj, -1);
+	while ((obj = ao2_t_iterator_next(&it, "test"))) {
+		ao2_t_unlink(c2, obj, "test");
+		ao2_t_link(c1, obj, "test");
+		ao2_t_ref(obj, -1, "test");
 	}
 	ao2_iterator_destroy(&it);
 
 	/* Test Callback with no flags. */
 	increment = 0;
-	ao2_callback(c1, 0, increment_cb, &increment);
+	ao2_t_callback(c1, 0, increment_cb, &increment, "test callback");
 	if (increment != lim) {
 		ast_test_status_update(test, "callback with no flags failed. Increment is %d\n", increment);
 		res = AST_TEST_FAIL;
@@ -209,10 +218,51 @@ static int astobj2_test_helper(int use_hash, int use_cmp, unsigned int lim, stru
 
 	/* Test Callback with OBJ_NODATA. This should do nothing different than with no flags here. */
 	increment = 0;
-	ao2_callback(c1, OBJ_NODATA, increment_cb, &increment);
+	ao2_t_callback(c1, OBJ_NODATA, increment_cb, &increment, "test callback");
 	if (increment != lim) {
 		ast_test_status_update(test, "callback with OBJ_NODATA failed. Increment is %d\n", increment);
 		res = AST_TEST_FAIL;
+	}
+
+	/* Test OBJ_MULTIPLE with OBJ_UNLINK*/
+	num = lim < 25 ? lim : 25;
+	if (!(mult_it = ao2_t_callback(c1, OBJ_MULTIPLE | OBJ_UNLINK, multiple_cb, &num, "test multiple"))) {
+		ast_test_status_update(test, "OBJ_MULTIPLE iwth OBJ_UNLINK test failed.\n");
+		res = AST_TEST_FAIL;
+	} else {
+		/* make sure num items unlinked is as expected */
+		if ((lim - ao2_container_count(c1)) != num) {
+			ast_test_status_update(test, "OBJ_MULTIPLE | OBJ_UNLINK test failed, did not unlink correct number of objects.\n");
+			res = AST_TEST_FAIL;
+		}
+
+		/* link what was unlinked back into c1 */
+		while ((obj = ao2_t_iterator_next(mult_it, "test"))) {
+			ao2_t_link(c1, obj, "test");
+			ao2_t_ref(obj, -1, "test"); /* remove ref from iterator */
+		}
+		ao2_iterator_destroy(mult_it);
+	}
+
+	/* Test OBJ_MULTIPLE without unlink, add items back afterwards */
+	num = lim < 25 ? lim : 25;
+	if (!(mult_it = ao2_t_callback(c1, OBJ_MULTIPLE, multiple_cb, &num, "test multiple"))) {
+		ast_test_status_update(test, "OBJ_MULTIPLE without OBJ_UNLINK test failed.\n");
+		res = AST_TEST_FAIL;
+	} else {
+		while ((obj = ao2_t_iterator_next(mult_it, "test"))) {
+			ao2_t_ref(obj, -1, "test"); /* remove ref from iterator */
+		}
+		ao2_iterator_destroy(mult_it);
+	}
+
+	/* Test OBJ_MULTIPLE without unlink and no iterating */
+	num = lim < 5 ? lim : 5;
+	if (!(mult_it = ao2_t_callback(c1, OBJ_MULTIPLE, multiple_cb, &num, "test multiple"))) {
+		ast_test_status_update(test, "OBJ_MULTIPLE with no OBJ_UNLINK and no iterating failed.\n");
+		res = AST_TEST_FAIL;
+	} else {
+		ao2_iterator_destroy(mult_it);
 	}
 
 	/* Is the container count what we expect after all the finds and unlinks?*/
@@ -224,13 +274,13 @@ static int astobj2_test_helper(int use_hash, int use_cmp, unsigned int lim, stru
 	/* Testing iterator.  Unlink a single object and break. do not add item back */
 	it = ao2_iterator_init(c1, 0);
 	num = (lim / 4) + 1;
-	while ((obj = ao2_iterator_next(&it))) {
+	while ((obj = ao2_t_iterator_next(&it, "test"))) {
 		if (obj->i == num) {
-			ao2_ref(obj, -1);
-			ao2_unlink(c1, obj);
+			ao2_t_ref(obj, -1, "test");
+			ao2_t_unlink(c1, obj, "test");
 			break;
 		}
-		ao2_ref(obj, -1);
+		ao2_t_ref(obj, -1, "test");
 	}
 	ao2_iterator_destroy(&it);
 
@@ -241,7 +291,7 @@ static int astobj2_test_helper(int use_hash, int use_cmp, unsigned int lim, stru
 	}
 
 	/* Test unlink all with OBJ_MULTIPLE, leave a single object for the container to destroy */
-	ao2_callback(c1, OBJ_MULTIPLE | OBJ_UNLINK | OBJ_NODATA, all_but_one_cb, NULL);
+	ao2_t_callback(c1, OBJ_MULTIPLE | OBJ_UNLINK | OBJ_NODATA, all_but_one_cb, NULL, "test multiple");
 	/* check to make sure all test_obj destructors were called except for 1 */
 	if (destructor_count != 1) {
 		ast_test_status_update(test, "OBJ_MULTIPLE | OBJ_UNLINK | OBJ_NODATA failed. destructor count %d\n", destructor_count);
@@ -251,10 +301,10 @@ static int astobj2_test_helper(int use_hash, int use_cmp, unsigned int lim, stru
 cleanup:
 	/* destroy containers */
 	if (c1) {
-		ao2_ref(c1, -1);
+		ao2_t_ref(c1, -1, "bye c1");
 	}
 	if (c2) {
-		ao2_ref(c2, -1);
+		ao2_t_ref(c2, -1, "bye c2");
 	}
 
 	if (destructor_count > 0) {
@@ -275,7 +325,7 @@ AST_TEST_DEFINE(astobj2_test_1)
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "astobj2_test1";
-		info->category = "main/astobj2/";
+		info->category = "/main/astobj2/";
 		info->summary = "astobj2 test using ao2 objects, containers, callbacks, and iterators";
 		info->description =
 			"Builds ao2_containers with various item numbers, bucket sizes, cmp and hash "

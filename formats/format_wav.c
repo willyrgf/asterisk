@@ -28,20 +28,7 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <unistd.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <stdlib.h>
-#include <sys/time.h>
-#include <stdio.h>
-#include <errno.h>
-#include <string.h>
-
-#include "asterisk/lock.h"
-#include "asterisk/channel.h"
-#include "asterisk/file.h"
-#include "asterisk/logger.h"
-#include "asterisk/sched.h"
+#include "asterisk/mod_format.h"
 #include "asterisk/module.h"
 #include "asterisk/endian.h"
 
@@ -53,16 +40,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 struct wav_desc {	/* format-specific parameters */
 	int bytes;
-	int needsgain;
 	int lasttimeout;
 	int maxlen;
 	struct timeval last;
 };
 
 #define BLOCKSIZE 160
-
-#define GAIN 0		/* 2^GAIN is the multiple to increase the volume by.  The original value of GAIN was 2, or 4x (12 dB),
-			 * but there were many reports of the clipping of loud signal peaks (issue 5823 for example). */
 
 #if __BYTE_ORDER == __LITTLE_ENDIAN
 #define htoll(b) (b)
@@ -345,6 +328,11 @@ static void wav_close(struct ast_filestream *s)
 {
 	char zero = 0;
 	struct wav_desc *fs = (struct wav_desc *)s->_private;
+
+	if (s->filename) {
+		update_header(s->f);
+	}
+
 	/* Pad to even length */
 	if (fs->bytes & 0x1) {
 		if (!fwrite(&zero, 1, 1, s->f)) {
@@ -357,7 +345,9 @@ static struct ast_frame *wav_read(struct ast_filestream *s, int *whennext)
 {
 	int res;
 	int samples;	/* actual samples read */
+#if __BYTE_ORDER == __BIG_ENDIAN
 	int x;
+#endif
 	short *tmp;
 	int bytes = WAV_BUF_SIZE;	/* in bytes */
 	off_t here;
@@ -369,13 +359,13 @@ static struct ast_frame *wav_read(struct ast_filestream *s, int *whennext)
 		bytes = fs->maxlen - here;
 	if (bytes < 0)
 		bytes = 0;
-/* 	ast_log(LOG_DEBUG, "here: %d, maxlen: %d, bytes: %d\n", here, s->maxlen, bytes); */
+/* 	ast_debug(1, "here: %d, maxlen: %d, bytes: %d\n", here, s->maxlen, bytes); */
 	s->fr.frametype = AST_FRAME_VOICE;
-	s->fr.subclass = AST_FORMAT_SLINEAR;
+	s->fr.subclass.codec = AST_FORMAT_SLINEAR;
 	s->fr.mallocd = 0;
 	AST_FRAME_SET_BUFFER(&s->fr, s->buf, AST_FRIENDLY_OFFSET, bytes);
 	
-	if ( (res = fread(s->fr.data, 1, s->fr.datalen, s->f)) <= 0 ) {
+	if ( (res = fread(s->fr.data.ptr, 1, s->fr.datalen, s->f)) <= 0 ) {
 		if (res)
 			ast_log(LOG_WARNING, "Short read (%d) (%s)!\n", res, strerror(errno));
 		return NULL;
@@ -383,37 +373,23 @@ static struct ast_frame *wav_read(struct ast_filestream *s, int *whennext)
 	s->fr.datalen = res;
 	s->fr.samples = samples = res / 2;
 
-	tmp = (short *)(s->fr.data);
+	tmp = (short *)(s->fr.data.ptr);
 #if __BYTE_ORDER == __BIG_ENDIAN
 	/* file format is little endian so we need to swap */
 	for( x = 0; x < samples; x++)
 		tmp[x] = (tmp[x] << 8) | ((tmp[x] & 0xff00) >> 8);
 #endif
 
-	if (fs->needsgain) {
-		for (x=0; x < samples; x++) {
-			if (tmp[x] & ((1 << GAIN) - 1)) {
-				/* If it has data down low, then it's not something we've artificially increased gain
-				   on, so we don't need to gain adjust it */
-				fs->needsgain = 0;
-				break;
-			}
-		}
-		if (fs->needsgain) {
-			for (x=0; x < samples; x++)
-				tmp[x] = tmp[x] >> GAIN;
-		}
-	}
-			
 	*whennext = samples;
 	return &s->fr;
 }
 
 static int wav_write(struct ast_filestream *fs, struct ast_frame *f)
 {
+#if __BYTE_ORDER == __BIG_ENDIAN
 	int x;
 	short tmp[8000], *tmpi;
-	float tmpf;
+#endif
 	struct wav_desc *s = (struct wav_desc *)fs->_private;
 	int res;
 
@@ -421,44 +397,33 @@ static int wav_write(struct ast_filestream *fs, struct ast_frame *f)
 		ast_log(LOG_WARNING, "Asked to write non-voice frame!\n");
 		return -1;
 	}
-	if (f->subclass != AST_FORMAT_SLINEAR) {
-		ast_log(LOG_WARNING, "Asked to write non-SLINEAR frame (%d)!\n", f->subclass);
-		return -1;
-	}
-	if (f->datalen > sizeof(tmp)) {
-		ast_log(LOG_WARNING, "Data length is too long\n");
+	if (f->subclass.codec != AST_FORMAT_SLINEAR) {
+		ast_log(LOG_WARNING, "Asked to write non-SLINEAR frame (%s)!\n", ast_getformatname(f->subclass.codec));
 		return -1;
 	}
 	if (!f->datalen)
 		return -1;
 
-#if 0
-	printf("Data Length: %d\n", f->datalen);
-#endif	
-
-	tmpi = f->data;
-	/* Volume adjust here to accomodate */
-	for (x=0;x<f->datalen/2;x++) {
-		tmpf = ((float)tmpi[x]) * ((float)(1 << GAIN));
-		if (tmpf > 32767.0)
-			tmpf = 32767.0;
-		if (tmpf < -32768.0)
-			tmpf = -32768.0;
-		tmp[x] = tmpf;
-		tmp[x] &= ~((1 << GAIN) - 1);
-
 #if __BYTE_ORDER == __BIG_ENDIAN
-		tmp[x] = (tmp[x] << 8) | ((tmp[x] & 0xff00) >> 8);
-#endif
-
+	/* swap and write */
+	if (f->datalen > sizeof(tmp)) {
+		ast_log(LOG_WARNING, "Data length is too long\n");
+		return -1;
 	}
+	tmpi = f->data.ptr;
+	for (x=0; x < f->datalen/2; x++) 
+		tmp[x] = (tmpi[x] << 8) | ((tmpi[x] & 0xff00) >> 8);
+
 	if ((res = fwrite(tmp, 1, f->datalen, fs->f)) != f->datalen ) {
+#else
+	/* just write */
+	if ((res = fwrite(f->data.ptr, 1, f->datalen, fs->f)) != f->datalen ) {
+#endif
 		ast_log(LOG_WARNING, "Bad write (%d): %s\n", res, strerror(errno));
 		return -1;
 	}
 
 	s->bytes += f->datalen;
-	update_header(fs->f);
 		
 	return 0;
 
@@ -520,15 +485,18 @@ static const struct ast_format wav_f = {
 
 static int load_module(void)
 {
-	return ast_format_register(&wav_f);
+	if (ast_format_register(&wav_f))
+		return AST_MODULE_LOAD_FAILURE;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 static int unload_module(void)
 {
 	return ast_format_unregister(wav_f.name);
-}	
+}
 
-AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_FIRST, "Microsoft WAV format (8000Hz Signed Linear)",
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "Microsoft WAV format (8000Hz Signed Linear)",
 	.load = load_module,
 	.unload = unload_module,
+	.load_pri = AST_MODPRI_APP_DEPEND
 );

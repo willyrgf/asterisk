@@ -23,27 +23,20 @@
 #ifndef _ASTERISK_UTILS_H
 #define _ASTERISK_UTILS_H
 
-#include "asterisk/compat.h"
+#include "asterisk/network.h"
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <stdarg.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>	/* we want to override inet_ntoa */
-#include <netdb.h>
-#include <limits.h>
 #include <time.h>	/* we want to override localtime_r */
 #include <unistd.h>
+#include <string.h>
 
 #include "asterisk/lock.h"
 #include "asterisk/time.h"
-#include "asterisk/strings.h"
 #include "asterisk/logger.h"
-#include "asterisk/compiler.h"
 #include "asterisk/localtime.h"
+#include "asterisk/stringfields.h"
 
-/*! \note
- \verbatim
+/*!
+\note \verbatim
    Note:
    It is very important to use only unsigned variables to hold
    bit flags, as otherwise you can fall prey to the compiler's
@@ -116,6 +109,64 @@ extern unsigned int __unsigned_int_flags_dummy;
 					(p)->flags |= (value); \
 					} while (0)
 
+
+/* The following 64-bit flag code can most likely be erased after app_dial
+   is reorganized to either reduce the large number of options, or handle
+   them in some other way. At the time of this writing, app_dial would be
+   the only user of 64-bit option flags */
+
+extern uint64_t __unsigned_int_flags_dummy64;
+
+#define ast_test_flag64(p,flag) 		({ \
+					typeof ((p)->flags) __p = (p)->flags; \
+					typeof (__unsigned_int_flags_dummy64) __x = 0; \
+					(void) (&__p == &__x); \
+					((p)->flags & (flag)); \
+					})
+
+#define ast_set_flag64(p,flag) 		do { \
+					typeof ((p)->flags) __p = (p)->flags; \
+					typeof (__unsigned_int_flags_dummy64) __x = 0; \
+					(void) (&__p == &__x); \
+					((p)->flags |= (flag)); \
+					} while(0)
+
+#define ast_clear_flag64(p,flag) 		do { \
+					typeof ((p)->flags) __p = (p)->flags; \
+					typeof (__unsigned_int_flags_dummy64) __x = 0; \
+					(void) (&__p == &__x); \
+					((p)->flags &= ~(flag)); \
+					} while(0)
+
+#define ast_copy_flags64(dest,src,flagz)	do { \
+					typeof ((dest)->flags) __d = (dest)->flags; \
+					typeof ((src)->flags) __s = (src)->flags; \
+					typeof (__unsigned_int_flags_dummy64) __x = 0; \
+					(void) (&__d == &__x); \
+					(void) (&__s == &__x); \
+					(dest)->flags &= ~(flagz); \
+					(dest)->flags |= ((src)->flags & (flagz)); \
+					} while (0)
+
+#define ast_set2_flag64(p,value,flag)	do { \
+					typeof ((p)->flags) __p = (p)->flags; \
+					typeof (__unsigned_int_flags_dummy64) __x = 0; \
+					(void) (&__p == &__x); \
+					if (value) \
+						(p)->flags |= (flag); \
+					else \
+						(p)->flags &= ~(flag); \
+					} while (0)
+
+#define ast_set_flags_to64(p,flag,value)	do { \
+					typeof ((p)->flags) __p = (p)->flags; \
+					typeof (__unsigned_int_flags_dummy64) __x = 0; \
+					(void) (&__p == &__x); \
+					(p)->flags &= ~(flag); \
+					(p)->flags |= (value); \
+					} while (0)
+
+
 /* Non-type checking variations for non-unsigned int flags.  You
    should only use non-unsigned int flags where required by 
    protocol etc and if you know what you're doing :)  */
@@ -144,8 +195,16 @@ extern unsigned int __unsigned_int_flags_dummy;
 
 #define AST_FLAGS_ALL UINT_MAX
 
+/*! \brief Structure used to handle boolean flags 
+*/
 struct ast_flags {
 	unsigned int flags;
+};
+
+/*! \brief Structure used to handle a large number of boolean flags == used only in app_dial?
+*/
+struct ast_flags64 {
+	uint64_t flags;
 };
 
 struct ast_hostent {
@@ -153,35 +212,61 @@ struct ast_hostent {
 	char buf[1024];
 };
 
+/*! \brief Thread-safe gethostbyname function to use in Asterisk */
 struct hostent *ast_gethostbyname(const char *host, struct ast_hostent *hp);
 
-/* ast_md5_hash 
-	\brief Produces MD5 hash based on input string */
-void ast_md5_hash(char *output, char *input);
-/* ast_sha1_hash
-	\brief Produces SHA1 hash based on input string */
-void ast_sha1_hash(char *output, char *input);
+/*!  \brief Produces MD5 hash based on input string */
+void ast_md5_hash(char *output, const char *input);
+/*! \brief Produces SHA1 hash based on input string */
+void ast_sha1_hash(char *output, const char *input);
 
 int ast_base64encode_full(char *dst, const unsigned char *src, int srclen, int max, int linebreaks);
+
+#undef MIN
+#define MIN(a, b) ({ typeof(a) __a = (a); typeof(b) __b = (b); ((__a > __b) ? __b : __a);})
+#undef MAX
+#define MAX(a, b) ({ typeof(a) __a = (a); typeof(b) __b = (b); ((__a < __b) ? __b : __a);})
+
+/*!
+ * \brief Encode data in base64
+ * \param dst the destination buffer
+ * \param src the source data to be encoded
+ * \param srclen the number of bytes present in the source buffer
+ * \param max the maximum number of bytes to write into the destination
+ *        buffer, *including* the terminating NULL character.
+ */
 int ast_base64encode(char *dst, const unsigned char *src, int srclen, int max);
+
+/*!
+ * \brief Decode data from base64
+ * \param dst the destination buffer
+ * \param src the source buffer
+ * \param max The maximum number of bytes to write into the destination
+ *            buffer.  Note that this function will not ensure that the
+ *            destination buffer is NULL terminated.  So, in general,
+ *            this parameter should be sizeof(dst) - 1.
+ */
 int ast_base64decode(unsigned char *dst, const char *src, int max);
 
-/*! ast_uri_encode
-	\brief Turn text string to URI-encoded %XX version 
- 	At this point, we're converting from ISO-8859-x (8-bit), not UTF8
-	as in the SIP protocol spec 
-	If doreserved == 1 we will convert reserved characters also.
-	RFC 2396, section 2.4
-	outbuf needs to have more memory allocated than the instring
-	to have room for the expansion. Every char that is converted
-	is replaced by three ASCII characters.
-	\param string	String to be converted
-	\param outbuf	Resulting encoded string
-	\param buflen	Size of output buffer
-	\param doreserved	Convert reserved characters
-*/
-
-char *ast_uri_encode(const char *string, char *outbuf, int buflen, int doreserved);
+/*! \brief Turn text string to URI-encoded %XX version 
+ *
+ * \note 
+ *  At this point, this function is encoding agnostic; it does not
+ *  check whether it is fed legal UTF-8. We escape control
+ *  characters (\x00-\x1F\x7F), '%', and all characters above 0x7F.
+ *  If do_special_char == 1 we will convert all characters except alnum
+ *  and the mark set.
+ *  Outbuf needs to have more memory allocated than the instring
+ *  to have room for the expansion. Every char that is converted
+ *  is replaced by three ASCII characters.
+ *
+ *  \param string	String to be converted
+ *  \param outbuf	Resulting encoded string
+ *  \param buflen	Size of output buffer
+ *  \param do_special_char	Convert all non alphanum characters execept
+ *         those in the mark set as defined by rfc 3261 section 25.1
+ */
+char *ast_uri_encode(const char *string, char *outbuf, int buflen, int do_special_char);
 
 /*!	\brief Decode URI, URN, URL (overwrite string)
 	\param s	String to be decoded 
@@ -193,6 +278,19 @@ static force_inline void ast_slinear_saturated_add(short *input, short *value)
 	int res;
 
 	res = (int) *input + *value;
+	if (res > 32767)
+		*input = 32767;
+	else if (res < -32767)
+		*input = -32767;
+	else
+		*input = (short) res;
+}
+
+static force_inline void ast_slinear_saturated_subtract(short *input, short *value)
+{
+	int res;
+
+	res = (int) *input - *value;
 	if (res > 32767)
 		*input = 32767;
 	else if (res < -32767)
@@ -219,23 +317,6 @@ static force_inline void ast_slinear_saturated_divide(short *input, short *value
 	*input /= *value;
 }
 
-/*!
- * \brief thread-safe replacement for inet_ntoa().
- *
- * \note It is very important to note that even though this is a thread-safe
- *       replacement for inet_ntoa(), it is *not* reentrant.  In a single
- *       thread, the result from a previous call to this function is no longer
- *       valid once it is called again.  If the result from multiple calls to
- *       this function need to be kept or used at once, then the result must be
- *       copied to a local buffer before calling this function again.
- */
-const char *ast_inet_ntoa(struct in_addr ia);
-
-#ifdef inet_ntoa
-#undef inet_ntoa
-#endif
-#define inet_ntoa __dont__use__inet_ntoa__use__ast_inet_ntoa__instead__
-
 #ifdef localtime_r
 #undef localtime_r
 #endif
@@ -244,7 +325,7 @@ const char *ast_inet_ntoa(struct in_addr ia);
 int ast_utils_init(void);
 int ast_wait_for_input(int fd, int ms);
 
-/*! ast_carefulwrite
+/*!
 	\brief Try to write string, but wait no more than ms milliseconds
 	before timing out.
 
@@ -255,12 +336,28 @@ int ast_wait_for_input(int fd, int ms);
 */
 int ast_carefulwrite(int fd, char *s, int len, int timeoutms);
 
-/*! Compares the source address and port of two sockaddr_in */
-static force_inline int inaddrcmp(const struct sockaddr_in *sin1, const struct sockaddr_in *sin2)
-{
-	return ((sin1->sin_addr.s_addr != sin2->sin_addr.s_addr) 
-		|| (sin1->sin_port != sin2->sin_port));
-}
+/*!
+ * \brief Write data to a file stream with a timeout
+ *
+ * \param f the file stream to write to
+ * \param fd the file description to poll on to know when the file stream can
+ *        be written to without blocking.
+ * \param s the buffer to write from
+ * \param len the number of bytes to write
+ * \param timeoutms The maximum amount of time to block in this function trying
+ *        to write, specified in milliseconds.
+ *
+ * \note This function assumes that the associated file stream has been set up
+ *       as non-blocking.
+ *
+ * \retval 0 success
+ * \retval -1 error
+ */
+int ast_careful_fwrite(FILE *f, int fd, const char *s, size_t len, int timeoutms);
+
+/*
+ * Thread management support (should be moved to lock.h or a different header)
+ */
 
 #define AST_STACKSIZE (((sizeof(void *) * 8 * 8) - 16) * 1024)
 
@@ -277,15 +374,29 @@ int ast_pthread_create_stack(pthread_t *thread, pthread_attr_t *attr, void *(*st
 			     void *data, size_t stacksize, const char *file, const char *caller,
 			     int line, const char *start_fn);
 
-#define ast_pthread_create(a, b, c, d) ast_pthread_create_stack(a, b, c, d,			\
-							        0,				\
-	 						        __FILE__, __FUNCTION__,		\
- 							        __LINE__, #c)
+int ast_pthread_create_detached_stack(pthread_t *thread, pthread_attr_t *attr, void*(*start_routine)(void *),
+				 void *data, size_t stacksize, const char *file, const char *caller,
+				 int line, const char *start_fn);
 
-#define ast_pthread_create_background(a, b, c, d) ast_pthread_create_stack(a, b, c, d,			\
-									   AST_BACKGROUND_STACKSIZE,	\
-									   __FILE__, __FUNCTION__,	\
-									   __LINE__, #c)
+#define ast_pthread_create(a, b, c, d) 				\
+	ast_pthread_create_stack(a, b, c, d,			\
+		0, __FILE__, __FUNCTION__, __LINE__, #c)
+
+#define ast_pthread_create_detached(a, b, c, d)			\
+	ast_pthread_create_detached_stack(a, b, c, d,		\
+		0, __FILE__, __FUNCTION__, __LINE__, #c)
+
+#define ast_pthread_create_background(a, b, c, d)		\
+	ast_pthread_create_stack(a, b, c, d,			\
+		AST_BACKGROUND_STACKSIZE,			\
+		__FILE__, __FUNCTION__, __LINE__, #c)
+
+#define ast_pthread_create_detached_background(a, b, c, d)	\
+	ast_pthread_create_detached_stack(a, b, c, d,		\
+		AST_BACKGROUND_STACKSIZE,			\
+		__FILE__, __FUNCTION__, __LINE__, #c)
+
+/* End of thread management support */
 
 /*!
 	\brief Process a string to find and replace characters
@@ -295,11 +406,8 @@ int ast_pthread_create_stack(pthread_t *thread, pthread_attr_t *attr, void *(*st
 */
 char *ast_process_quotes_and_slashes(char *start, char find, char replace_with);
 
-#ifdef linux
-#define ast_random random
-#else
 long int ast_random(void);
-#endif
+
 
 /*! 
  * \brief free() wrapper
@@ -311,7 +419,7 @@ long int ast_random(void);
 static void ast_free_ptr(void *ptr) attribute_unused;
 static void ast_free_ptr(void *ptr)
 {
-	free(ptr);
+	ast_free(ptr);
 }
 #else
 #define ast_free free
@@ -473,7 +581,8 @@ char * attribute_malloc _ast_strndup(const char *str, size_t len, const char *fi
 #define ast_asprintf(ret, fmt, ...) \
 	_ast_asprintf((ret), __FILE__, __LINE__, __PRETTY_FUNCTION__, fmt, __VA_ARGS__)
 
-int _ast_asprintf(char **ret, const char *file, int lineno, const char *func, const char *fmt, ...) __attribute__((format(printf, 5, 6)));
+int __attribute__((format(printf, 5, 6)))
+	_ast_asprintf(char **ret, const char *file, int lineno, const char *func, const char *fmt, ...);
 
 /*!
  * \brief A wrapper for vasprintf()
@@ -487,7 +596,8 @@ int _ast_asprintf(char **ret, const char *file, int lineno, const char *func, co
 	_ast_vasprintf((ret), __FILE__, __LINE__, __PRETTY_FUNCTION__, (fmt), (ap))
 
 AST_INLINE_API(
-int __attribute__((format(printf, 5, 0))) _ast_vasprintf(char **ret, const char *file, int lineno, const char *func, const char *fmt, va_list ap),
+__attribute__((format(printf, 5, 0)))
+int _ast_vasprintf(char **ret, const char *file, int lineno, const char *func, const char *fmt, va_list ap),
 {
 	int res;
 
@@ -534,7 +644,44 @@ int __attribute__((format(printf, 5, 0))) _ast_vasprintf(char **ret, const char 
  */
 void ast_enable_packet_fragmentation(int sock);
 
-#define ARRAY_LEN(a) (sizeof(a) / sizeof(a[0]))
+/*!
+  \brief Recursively create directory path
+  \param path The directory path to create
+  \param mode The permissions with which to try to create the directory
+  \return 0 on success or an error code otherwise
+
+  Creates a directory path, creating parent directories as needed.
+ */
+int ast_mkdir(const char *path, int mode);
+
+#define ARRAY_LEN(a) (sizeof(a) / sizeof(0[a]))
+
+
+/* Definition for Digest authorization */
+struct ast_http_digest {
+	AST_DECLARE_STRING_FIELDS(
+		AST_STRING_FIELD(username);
+		AST_STRING_FIELD(nonce);
+		AST_STRING_FIELD(uri);
+		AST_STRING_FIELD(realm);
+		AST_STRING_FIELD(domain);
+		AST_STRING_FIELD(response);
+		AST_STRING_FIELD(cnonce);
+		AST_STRING_FIELD(opaque);
+		AST_STRING_FIELD(nc);
+	);
+	int qop;		/* Flag set to 1, if we send/recv qop="quth" */
+};
+
+/*!
+ *\brief Parse digest authorization header.
+ *\return Returns -1 if we have no auth or something wrong with digest.
+ *\note This function may be used for Digest request and responce header.
+ * request arg is set to nonzero, if we parse Digest Request.
+ * pedantic arg can be set to nonzero if we need to do addition Digest check.
+ */
+int ast_parse_digest(const char *digest, struct ast_http_digest *d, int request, int pedantic);
+
 
 #ifdef AST_DEVMODE
 #define ast_assert(a) _ast_assert(a, # a, __FILE__, __LINE__, __PRETTY_FUNCTION__)
@@ -544,8 +691,8 @@ static void force_inline _ast_assert(int condition, const char *condition_str,
 	if (__builtin_expect(!condition, 1)) {
 		/* Attempt to put it into the logger, but hope that at least someone saw the
 		 * message on stderr ... */
-		ast_log(LOG_ERROR, "FRACK!, Failed assertion %s (%d) at line %d in %s of %s\n",
-			condition_str, condition, line, function, file);
+		ast_log(__LOG_ERROR, file, line, function, "FRACK!, Failed assertion %s (%d)\n",
+			condition_str, condition);
 		fprintf(stderr, "FRACK!, Failed assertion %s (%d) at line %d in %s of %s\n",
 			condition_str, condition, line, function, file);
 		/* Give the logger a chance to get the message out, just in case we abort(), or
@@ -562,5 +709,53 @@ static void force_inline _ast_assert(int condition, const char *condition_str,
 #else
 #define ast_assert(a)
 #endif
+
+#include "asterisk/strings.h"
+
+/*!
+ * \brief An Entity ID is essentially a MAC address, brief and unique 
+ */
+struct ast_eid {
+	unsigned char eid[6];
+} __attribute__((__packed__));
+
+/*!
+ * \brief Global EID
+ *
+ * This is set in asterisk.conf, or determined automatically by taking the mac
+ * address of an Ethernet interface on the system.
+ */
+extern struct ast_eid ast_eid_default;
+
+/*!
+ * \brief Fill in an ast_eid with the default eid of this machine
+ * \since 1.6.1
+ */
+void ast_set_default_eid(struct ast_eid *eid);
+
+/*!
+ * /brief Convert an EID to a string
+ * \since 1.6.1
+ */
+char *ast_eid_to_str(char *s, int maxlen, struct ast_eid *eid);
+
+/*!
+ * \brief Convert a string into an EID
+ *
+ * This function expects an EID in the format:
+ *    00:11:22:33:44:55
+ *
+ * \return 0 success, non-zero failure
+ * \since 1.6.1
+ */
+int ast_str_to_eid(struct ast_eid *eid, const char *s);
+
+/*!
+ * \brief Compare two EIDs
+ *
+ * \return 0 if the two are the same, non-zero otherwise
+ * \since 1.6.1
+ */
+int ast_eid_cmp(const struct ast_eid *eid1, const struct ast_eid *eid2);
 
 #endif /* _ASTERISK_UTILS_H */

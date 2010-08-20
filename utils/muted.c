@@ -35,9 +35,11 @@
  *
  */
 
+#include "asterisk/autoconfig.h"
+
 #ifdef __Darwin__
 #include <CoreAudio/AudioHardware.h> 
-#elif defined(__linux__) || defined(__FreeBSD__)
+#elif defined(__linux__) || defined(__FreeBSD__) || defined(__GLIBC__)
 #include <sys/soundcard.h>
 #endif
 #include <stdio.h>
@@ -52,9 +54,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-#include "asterisk/autoconfig.h"
-
-static char *config = "/etc/asterisk/muted.conf";
+static char *config = "/etc/muted.conf";
 
 static char host[256] = "";
 static char user[256] = "";
@@ -414,19 +414,19 @@ static float mutevol = 0;
 #endif
 
 #ifndef __Darwin__
-static int mutedlevel(int orig, int mutelevel)
+static int mutedlevel(int orig, int level)
 {
 	int l = orig >> 8;
 	int r = orig & 0xff;
-	l = (float)(mutelevel) * (float)(l) / 100.0;
-	r = (float)(mutelevel) * (float)(r) / 100.0;
+	l = (float)(level) * (float)(l) / 100.0;
+	r = (float)(level) * (float)(r) / 100.0;
 
 	return (l << 8) | r;
 #else
-static float mutedlevel(float orig, float mutelevel)
+static float mutedlevel(float orig, float level)
 {
 	float master = orig;
-	master = mutelevel * master / 100.0;
+	master = level * master / 100.0;
 	return master;
 #endif
 	
@@ -684,7 +684,7 @@ int main(int argc, char *argv[])
 		fclose(astf);
 		exit(1);
 	}
-#if HAVE_WORKING_FORK
+#ifdef HAVE_WORKING_FORK
 	if (needfork) {
 #ifndef HAVE_SBIN_LAUNCHD
 		if (daemon(0,0) < 0) {

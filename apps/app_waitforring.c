@@ -29,51 +29,49 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
-#include <sys/types.h>
-
 #include "asterisk/file.h"
-#include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
-#include "asterisk/options.h"
 #include "asterisk/lock.h"
 
-static char *synopsis = "Wait for Ring Application";
-
-static char *desc = "  WaitForRing(timeout)\n"
-"Returns 0 after waiting at least timeout seconds. and\n"
-"only after the next ring has completed.  Returns 0 on\n"
-"success or -1 on hangup\n";
+/*** DOCUMENTATION
+	<application name="WaitForRing" language="en_US">
+		<synopsis>
+			Wait for Ring Application.
+		</synopsis>
+		<syntax>
+			<parameter name="timeout" required="true" />
+		</syntax>
+		<description>
+			<para>Returns <literal>0</literal> after waiting at least <replaceable>timeout</replaceable> seconds,
+			and only after the next ring has completed. Returns <literal>0</literal> on success or
+			<literal>-1</literal> on hangup.</para>
+		</description>
+	</application>
+ ***/
 
 static char *app = "WaitForRing";
 
-
-static int waitforring_exec(struct ast_channel *chan, void *data)
+static int waitforring_exec(struct ast_channel *chan, const char *data)
 {
-	struct ast_module_user *u;
 	struct ast_frame *f;
 	struct ast_silence_generator *silgen = NULL;
 	int res = 0;
+	double s;
 	int ms;
 
-	if (!data || (sscanf(data, "%30d", &ms) != 1)) {
-                ast_log(LOG_WARNING, "WaitForRing requires an argument (minimum seconds)\n");
+	if (!data || (sscanf(data, "%30lg", &s) != 1)) {
+		ast_log(LOG_WARNING, "WaitForRing requires an argument (minimum seconds)\n");
 		return 0;
 	}
-
-	u = ast_module_user_add(chan);
 
 	if (ast_opt_transmit_silence) {
 		silgen = ast_channel_start_silence_generator(chan);
 	}
 
-	ms *= 1000;
-	while(ms > 0) {
+	ms = s * 1000.0;
+	while (ms > 0) {
 		ms = ast_waitfor(chan, ms);
 		if (ms < 0) {
 			res = ms;
@@ -85,9 +83,8 @@ static int waitforring_exec(struct ast_channel *chan, void *data)
 				res = -1;
 				break;
 			}
-			if ((f->frametype == AST_FRAME_CONTROL) && (f->subclass == AST_CONTROL_RING)) {
-				if (option_verbose > 2)
-					ast_verbose(VERBOSE_PREFIX_3 "Got a ring but still waiting for timeout\n");
+			if ((f->frametype == AST_FRAME_CONTROL) && (f->subclass.integer == AST_CONTROL_RING)) {
+				ast_verb(3, "Got a ring but still waiting for timeout\n");
 			}
 			ast_frfree(f);
 		}
@@ -107,9 +104,8 @@ static int waitforring_exec(struct ast_channel *chan, void *data)
 					res = -1;
 					break;
 				}
-				if ((f->frametype == AST_FRAME_CONTROL) && (f->subclass == AST_CONTROL_RING)) {
-					if (option_verbose > 2)
-						ast_verbose(VERBOSE_PREFIX_3 "Got a ring after the timeout\n");
+				if ((f->frametype == AST_FRAME_CONTROL) && (f->subclass.integer == AST_CONTROL_RING)) {
+					ast_verb(3, "Got a ring after the timeout\n");
 					ast_frfree(f);
 					break;
 				}
@@ -117,7 +113,6 @@ static int waitforring_exec(struct ast_channel *chan, void *data)
 			}
 		}
 	}
-	ast_module_user_remove(u);
 
 	if (silgen) {
 		ast_channel_stop_silence_generator(chan, silgen);
@@ -128,18 +123,12 @@ static int waitforring_exec(struct ast_channel *chan, void *data)
 
 static int unload_module(void)
 {
-	int res;
-
-	res = ast_unregister_application(app);
-
-	ast_module_user_hangup_all();
-
-	return res;	
+	return ast_unregister_application(app);
 }
 
 static int load_module(void)
 {
-	return ast_register_application(app, waitforring_exec, synopsis, desc);
+	return ast_register_application_xml(app, waitforring_exec);
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Waits until first ring after time");

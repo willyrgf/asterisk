@@ -12,7 +12,7 @@ IMPORTS
 		FROM DIGIUM-MIB;
 
 asterisk MODULE-IDENTITY
- 	LAST-UPDATED	"200806202025Z"
+	LAST-UPDATED	"200806202025Z"
 	ORGANIZATION	"Digium, Inc."
 	CONTACT-INFO
 		"Mark A. Spencer
@@ -33,14 +33,17 @@ asterisk MODULE-IDENTITY
 	DESCRIPTION
 		"Asterisk is an Open Source PBX.  This MIB defined
 		objects for managing Asterisk instances."
- 	REVISION	"200806202025Z"
- 	DESCRIPTION
- 		"smilint police --
- 		 Add missing imports; fix initial capitalization
- 		 of enumeration elements; add missing range
- 		 restrictions for Integer32 indices, correct
- 		 spelling of astChanCidANI in its definition.
- 		 Addresses bug 12905. - jeffg@opennms.org"
+	REVISION	"200806202025Z"
+	DESCRIPTION
+		"smilint police --
+		 Add missing imports; fix initial capitalization
+		 of enumeration elements; add missing range
+		 restrictions for Integer32 indices, correct
+		 spelling of astChanCidANI in its definition.
+		 Addresses bug 12905. - jeffg@opennms.org"
+	REVISION	"200708211450Z"
+	DESCRIPTION
+		"Add total and current call counter statistics."
 	REVISION	"200603061840Z"
 	DESCRIPTION
 		"Change audio codec identification from 3kAudio to
@@ -112,6 +115,23 @@ astConfigSocket OBJECT-TYPE
 	DESCRIPTION
 		"The control socket for giving Asterisk commands."
 	::= { asteriskConfiguration 4 }
+
+astConfigCallsActive OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION
+		"The number of calls currently active on the Asterisk PBX."
+	::= { asteriskConfiguration 5 }
+
+astConfigCallsProcessed OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION
+		"The total number of calls processed through the Asterisk PBX since last
+		restart."
+	::= { asteriskConfiguration 6 }
 
 -- asteriskModules
 
@@ -203,7 +223,7 @@ astIndDescription OBJECT-TYPE
 -- asteriskChannels
 
 astNumChannels OBJECT-TYPE
-	SYNTAX		Integer32
+	SYNTAX		Gauge32
 	MAX-ACCESS	read-only
 	STATUS		current
 	DESCRIPTION
@@ -744,5 +764,15 @@ astChanTypeChannels OBJECT-TYPE
 	DESCRIPTION
 		"Number of active channels using the current technology."
 	::= { astChanTypeEntry 7 }
+
+astChanScalars OBJECT IDENTIFIER ::= { asteriskChannels 5 }
+
+astNumChanBridge OBJECT-TYPE
+       SYNTAX          Gauge32
+       MAX-ACCESS      read-only
+       STATUS          current
+       DESCRIPTION
+               "Number of channels currently in a bridged state."
+       ::= { astChanScalars 1 }
 
 END

@@ -11,23 +11,11 @@
 # the GNU General Public License
 #
 
--include ../menuselect.makeopts ../menuselect.makedeps
+-include $(ASTTOPDIR)/menuselect.makeopts $(ASTTOPDIR)/menuselect.makedeps
 
+MODULE_PREFIX=codec
 MENUSELECT_CATEGORY=CODECS
 MENUSELECT_DESCRIPTION=Codec Translators
-
-ALL_C_MODS:=$(patsubst %.c,%,$(wildcard codec_*.c))
-ALL_CC_MODS:=$(patsubst %.cc,%,$(wildcard codec_*.cc))
-
-C_MODS:=$(filter-out $(MENUSELECT_CODECS),$(ALL_C_MODS))
-CC_MODS:=$(filter-out $(MENUSELECT_CODECS),$(ALL_CC_MODS))
-
-LOADABLE_MODS:=$(C_MODS) $(CC_MODS)
-
-ifneq ($(findstring codecs,$(MENUSELECT_EMBED)),)
-  EMBEDDED_MODS:=$(LOADABLE_MODS)
-  LOADABLE_MODS:=
-endif
 
 LIBILBC:=ilbc/libilbc.a
 LIBLPC10:=lpc10/liblpc10.a
@@ -45,6 +33,7 @@ clean::
 	$(MAKE) -C gsm clean
 	$(MAKE) -C lpc10 clean
 	$(MAKE) -C ilbc clean
+	rm -f g722/*.[oa]
 
 gsm/lib/libgsm.a:
 	@mkdir -p gsm/lib
@@ -56,6 +45,9 @@ $(LIBLPC10):
 $(if $(filter codec_lpc10,$(EMBEDDED_MODS)),modules.link,codec_lpc10.so): $(LIBLPC10)
 
 $(LIBILBC):
-	@$(MAKE) -C ilbc all _ASTCFLAGS="$(filter-out -Wmissing-prototypes -Wmissing-declarations,$(_ASTCFLAGS)) $(AST_NO_STRICT_OVERFLOW)"
+	@$(MAKE) -C ilbc all _ASTCFLAGS="$(filter-out -Wmissing-prototypes -Wmissing-declarations -Wshadow,$(_ASTCFLAGS)) $(AST_NO_STRICT_OVERFLOW)"
 
 $(if $(filter codec_ilbc,$(EMBEDDED_MODS)),modules.link,codec_ilbc.so): $(LIBILBC)
+
+$(if $(filter codec_g722,$(EMBEDDED_MODS)),modules.link,codec_g722.so): g722/g722_encode.o g722/g722_decode.o
+g722/g722_encode.o g722/g722_decode.o: _ASTCFLAGS+=$(call MOD_ASTCFLAGS,codec_g722)

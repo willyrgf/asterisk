@@ -74,51 +74,55 @@
    /* Put the tokens into the symbol table, so that GDB and other debuggers
       know about them.  */
    enum yytokentype {
-     TOK_COLONCOLON = 258,
-     TOK_COND = 259,
-     TOK_OR = 260,
-     TOK_AND = 261,
-     TOK_NE = 262,
-     TOK_LE = 263,
-     TOK_GE = 264,
-     TOK_LT = 265,
-     TOK_GT = 266,
-     TOK_EQ = 267,
-     TOK_MINUS = 268,
-     TOK_PLUS = 269,
-     TOK_MOD = 270,
-     TOK_DIV = 271,
-     TOK_MULT = 272,
-     TOK_COMPL = 273,
-     TOK_EQTILDE = 274,
-     TOK_COLON = 275,
-     TOK_LP = 276,
-     TOK_RP = 277,
-     TOKEN = 278
+     TOK_COMMA = 258,
+     TOK_COLONCOLON = 259,
+     TOK_COND = 260,
+     TOK_OR = 261,
+     TOK_AND = 262,
+     TOK_NE = 263,
+     TOK_LE = 264,
+     TOK_GE = 265,
+     TOK_LT = 266,
+     TOK_GT = 267,
+     TOK_EQ = 268,
+     TOK_MINUS = 269,
+     TOK_PLUS = 270,
+     TOK_MOD = 271,
+     TOK_DIV = 272,
+     TOK_MULT = 273,
+     TOK_COMPL = 274,
+     TOK_TILDETILDE = 275,
+     TOK_EQTILDE = 276,
+     TOK_COLON = 277,
+     TOK_LP = 278,
+     TOK_RP = 279,
+     TOKEN = 280
    };
 #endif
 /* Tokens.  */
-#define TOK_COLONCOLON 258
-#define TOK_COND 259
-#define TOK_OR 260
-#define TOK_AND 261
-#define TOK_NE 262
-#define TOK_LE 263
-#define TOK_GE 264
-#define TOK_LT 265
-#define TOK_GT 266
-#define TOK_EQ 267
-#define TOK_MINUS 268
-#define TOK_PLUS 269
-#define TOK_MOD 270
-#define TOK_DIV 271
-#define TOK_MULT 272
-#define TOK_COMPL 273
-#define TOK_EQTILDE 274
-#define TOK_COLON 275
-#define TOK_LP 276
-#define TOK_RP 277
-#define TOKEN 278
+#define TOK_COMMA 258
+#define TOK_COLONCOLON 259
+#define TOK_COND 260
+#define TOK_OR 261
+#define TOK_AND 262
+#define TOK_NE 263
+#define TOK_LE 264
+#define TOK_GE 265
+#define TOK_LT 266
+#define TOK_GT 267
+#define TOK_EQ 268
+#define TOK_MINUS 269
+#define TOK_PLUS 270
+#define TOK_MOD 271
+#define TOK_DIV 272
+#define TOK_MULT 273
+#define TOK_COMPL 274
+#define TOK_TILDETILDE 275
+#define TOK_EQTILDE 276
+#define TOK_COLON 277
+#define TOK_LP 278
+#define TOK_RP 279
+#define TOKEN 280
 
 
 
@@ -141,19 +145,196 @@
 
 #include "asterisk.h"
 
-#if !defined(STANDALONE_AEL)
-ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
-#endif
-
 #include <sys/types.h>
 #include <stdio.h>
+
+#if !defined(STANDALONE) && !defined(STANDALONE2)	\
+	
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+#else
+#ifndef __USE_ISOC99
+#define __USE_ISOC99 1
+#endif
+#endif
+
+#ifdef __USE_ISOC99
+#define FP___PRINTF "%.18Lg"
+#define FP___TYPE    long double
+#else
+#define FP___PRINTF "%.16g"
+#define FP___TYPE    double
+#endif
+
+#ifdef HAVE_COSL
+#define FUNC_COS   cosl
+#elif defined(HAVE_COS)
+#define FUNC_COS	(long double)cos
+#endif
+
+#ifdef HAVE_SINL
+#define FUNC_SIN   sinl
+#elif defined(HAVE_SIN)
+#define FUNC_SIN	(long double)sin
+#endif
+
+#ifdef HAVE_TANL
+#define FUNC_TAN   tanl
+#elif defined(HAVE_TAN)
+#define FUNC_TAN	(long double)tan
+#endif
+
+#ifdef HAVE_ACOSL
+#define FUNC_ACOS   acosl
+#elif defined(HAVE_ACOS)
+#define FUNC_ACOS	(long double)acos
+#endif
+
+#ifdef HAVE_ASINL
+#define FUNC_ASIN   asinl
+#elif defined(HAVE_ASIN)
+#define FUNC_ASIN	(long double)asin
+#endif
+
+#ifdef HAVE_ATANL
+#define FUNC_ATAN   atanl
+#elif defined(HAVE_ATAN)
+#define FUNC_ATAN	(long double)atan
+#endif
+
+#ifdef HAVE_ATAN2L
+#define FUNC_ATAN2   atan2l
+#elif defined(HAVE_ATAN2)
+#define FUNC_ATAN2	(long double)atan2
+#endif
+
+#ifdef HAVE_POWL
+#define FUNC_POW   powl
+#elif defined(HAVE_POW)
+#define FUNC_POW	(long double)pow
+#endif
+
+#ifdef HAVE_SQRTL
+#define FUNC_SQRT   sqrtl
+#elif defined(HAVE_SQRT)
+#define FUNC_SQRT	(long double)sqrt
+#endif
+
+#ifdef HAVE_RINTL
+#define FUNC_RINT   rintl
+#elif defined(HAVE_RINT)
+#define FUNC_RINT	(long double)rint
+#endif
+
+#ifdef HAVE_EXPL
+#define FUNC_EXP   expl
+#elif defined(HAVE_EXP)
+#define FUNC_EXP	(long double)exp
+#endif
+
+#ifdef HAVE_LOGL
+#define FUNC_LOG   logl
+#elif defined(HAVE_LOG)
+#define FUNC_LOG	(long double)log
+#endif
+
+#ifdef HAVE_REMAINDERL
+#define FUNC_REMAINDER   remainderl
+#elif defined(HAVE_REMAINDER)
+#define FUNC_REMAINDER	(long double)remainder
+#endif
+
+#ifdef HAVE_FMODL
+#define FUNC_FMOD   fmodl
+#elif defined(HAVE_FMOD)
+#define FUNC_FMOD	(long double)fmod
+#endif
+
+#ifdef HAVE_STRTOLD
+#define FUNC_STRTOD  strtold
+#elif defined(HAVE_STRTOD)
+#define FUNC_STRTOD  (long double)strtod
+#endif
+
+#ifdef HAVE_FLOORL
+#define FUNC_FLOOR      floorl
+#elif defined(HAVE_FLOOR)
+#define FUNC_FLOOR	(long double)floor
+#endif
+
+#ifdef HAVE_CEILL
+#define FUNC_CEIL      ceill
+#elif defined(HAVE_CEIL)
+#define FUNC_CEIL	(long double)ceil
+#endif
+
+#ifdef HAVE_ROUNDL
+#define FUNC_ROUND     roundl
+#elif defined(HAVE_ROUND)
+#define FUNC_ROUND     (long double)round
+#endif
+
+#ifdef HAVE_TRUNCL
+#define FUNC_TRUNC     truncl
+#elif defined(HAVE_TRUNC)
+#define FUNC_TRUNC     (long double)trunc
+#endif
+
+/*! \note
+ * Oddly enough, some platforms have some ISO C99 functions, but not others, so
+ * we define the missing functions in terms of their mathematical identities.
+ */
+#ifdef HAVE_EXP2L
+#define FUNC_EXP2       exp2l
+#elif (defined(HAVE_EXPL) && defined(HAVE_LOGL))
+#define	FUNC_EXP2(x)	expl((x) * logl(2.0))
+#elif (defined(HAVE_EXP) && defined(HAVE_LOG))
+#define	FUNC_EXP2(x)	(long double)exp((x) * log(2.0))
+#endif
+
+#ifdef HAVE_EXP10L
+#define FUNC_EXP10       exp10l
+#elif (defined(HAVE_EXPL) && defined(HAVE_LOGL))
+#define	FUNC_EXP10(x)	expl((x) * logl(10.0))
+#elif (defined(HAVE_EXP) && defined(HAVE_LOG))
+#define	FUNC_EXP10(x)	(long double)exp((x) * log(10.0))
+#endif
+
+#ifdef HAVE_LOG2L
+#define FUNC_LOG2       log2l
+#elif defined(HAVE_LOGL)
+#define	FUNC_LOG2(x)	(logl(x) / logl(2.0))
+#elif defined(HAVE_LOG10L)
+#define	FUNC_LOG2(x)	(log10l(x) / log10l(2.0))
+#elif defined(HAVE_LOG2)
+#define FUNC_LOG2       (long double)log2
+#elif defined(HAVE_LOG)
+#define	FUNC_LOG2(x)	((long double)log(x) / log(2.0))
+#endif
+
+#ifdef HAVE_LOG10L
+#define FUNC_LOG10       log10l
+#elif defined(HAVE_LOGL)
+#define	FUNC_LOG10(x)	(logl(x) / logl(10.0))
+#elif defined(HAVE_LOG2L)
+#define	FUNC_LOG10(x)	(log2l(x) / log2l(10.0))
+#elif defined(HAVE_LOG10)
+#define	FUNC_LOG10(x)	(long double)log10(x)
+#elif defined(HAVE_LOG)
+#define	FUNC_LOG10(x)	((long double)log(x) / log(10.0))
+#endif
+
+
 #include <stdlib.h>
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 #include <string.h>
+#include <math.h>
 #include <locale.h>
 #include <unistd.h>
 #include <ctype.h>
 #if !defined(SOLARIS) && !defined(__CYGWIN__)
-/* #include <err.h> */
+	/* #include <err.h> */
 #else
 #define quad_t int64_t
 #endif
@@ -163,6 +344,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/ast_expr.h"
 #include "asterisk/logger.h"
+#if !defined(STANDALONE) && !defined(STANDALONE2)
+#include "asterisk/pbx.h"
+#endif
 
 #if defined(LONG_LONG_MIN) && !defined(QUAD_MIN)
 #define QUAD_MIN LONG_LONG_MIN
@@ -177,7 +361,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #  if ! defined(QUAD_MAX)
 #   define QUAD_MAX     (0x7fffffffffffffffLL)
 #  endif
-
+#define YYENABLE_NLS 0
 #define YYPARSE_PARAM parseio
 #define YYLEX_PARAM ((struct parse_io *)parseio)->scanner
 #define YYERROR_VERBOSE 1
@@ -185,10 +369,10 @@ extern char extra_error_message[4095];
 extern int extra_error_message_supplied;
 
 enum valtype {
-	AST_EXPR_integer, AST_EXPR_numeric_string, AST_EXPR_string
+	AST_EXPR_number, AST_EXPR_numeric_string, AST_EXPR_string
 } ;
 
-#ifdef STANDALONE
+#if defined(STANDALONE) || defined(STANDALONE2)
 void ast_log(int level, const char *file, int line, const char *function, const char *fmt, ...) __attribute__ ((format (printf,5,6)));
 #endif
 
@@ -196,9 +380,22 @@ struct val {
 	enum valtype type;
 	union {
 		char *s;
-		quad_t i;
+		FP___TYPE i; /* either long double, or just double, on a bad day */
 	} u;
 } ;
+
+enum node_type {
+	AST_EXPR_NODE_COMMA, AST_EXPR_NODE_STRING, AST_EXPR_NODE_VAL
+} ;
+
+struct expr_node 
+{
+	enum node_type type;
+	struct val *val;
+	struct expr_node *left;
+	struct expr_node *right;
+};
+
 
 typedef void *yyscan_t;
 
@@ -207,20 +404,22 @@ struct parse_io
 	char *string;
 	struct val *val;
 	yyscan_t scanner;
+	struct ast_channel *chan;
 };
  
-static int		chk_div __P((quad_t, quad_t));
-static int		chk_minus __P((quad_t, quad_t, quad_t));
-static int		chk_plus __P((quad_t, quad_t, quad_t));
-static int		chk_times __P((quad_t, quad_t, quad_t));
+static int		chk_div __P((FP___TYPE, FP___TYPE));
+static int		chk_minus __P((FP___TYPE, FP___TYPE, FP___TYPE));
+static int		chk_plus __P((FP___TYPE, FP___TYPE, FP___TYPE));
+static int		chk_times __P((FP___TYPE, FP___TYPE, FP___TYPE));
 static void		free_value __P((struct val *));
 static int		is_zero_or_null __P((struct val *));
 static int		isstring __P((struct val *));
-static struct val	*make_integer __P((quad_t));
+static struct val	*make_number __P((FP___TYPE));
 static struct val	*make_str __P((const char *));
 static struct val	*op_and __P((struct val *, struct val *));
 static struct val	*op_colon __P((struct val *, struct val *));
 static struct val	*op_eqtilde __P((struct val *, struct val *));
+static struct val	*op_tildetilde __P((struct val *, struct val *));
 static struct val	*op_div __P((struct val *, struct val *));
 static struct val	*op_eq __P((struct val *, struct val *));
 static struct val	*op_ge __P((struct val *, struct val *));
@@ -236,8 +435,11 @@ static struct val	*op_or __P((struct val *, struct val *));
 static struct val	*op_plus __P((struct val *, struct val *));
 static struct val	*op_rem __P((struct val *, struct val *));
 static struct val	*op_times __P((struct val *, struct val *));
-static quad_t		to_integer __P((struct val *));
+static struct val   *op_func(struct val *funcname, struct expr_node *arglist, struct ast_channel *chan);
+static int		to_number __P((struct val *));
 static void		to_string __P((struct val *));
+static struct expr_node *alloc_expr_node(enum node_type);
+static void destroy_arglist(struct expr_node *arglist);
 
 /* uh, if I want to predeclare yylex with a YYLTYPE, I have to predeclare the yyltype... sigh */
 typedef struct yyltype
@@ -284,12 +486,13 @@ int		ast_yyerror(const char *,YYLTYPE *, struct parse_io *);
 
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
 typedef union YYSTYPE
-#line 147 "ast_expr2.y"
+#line 345 "ast_expr2.y"
 {
 	struct val *val;
+	struct expr_node *arglist;
 }
 /* Line 187 of yacc.c.  */
-#line 293 "ast_expr2.c"
+#line 496 "ast_expr2.c"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1
@@ -311,13 +514,13 @@ typedef struct YYLTYPE
 
 
 /* Copy the second part of user declarations.  */
-#line 151 "ast_expr2.y"
+#line 350 "ast_expr2.y"
 
 extern int		ast_yylex __P((YYSTYPE *, YYLTYPE *, yyscan_t));
 
 
 /* Line 216 of yacc.c.  */
-#line 321 "ast_expr2.c"
+#line 524 "ast_expr2.c"
 
 #ifdef short
 # undef short
@@ -532,22 +735,22 @@ union yyalloc
 #endif
 
 /* YYFINAL -- State number of the termination state.  */
-#define YYFINAL  10
+#define YYFINAL  11
 /* YYLAST -- Last index in YYTABLE.  */
-#define YYLAST   140
+#define YYLAST   159
 
 /* YYNTOKENS -- Number of terminals.  */
-#define YYNTOKENS  24
+#define YYNTOKENS  26
 /* YYNNTS -- Number of nonterminals.  */
-#define YYNNTS  3
+#define YYNNTS  4
 /* YYNRULES -- Number of rules.  */
-#define YYNRULES  23
+#define YYNRULES  28
 /* YYNRULES -- Number of states.  */
-#define YYNSTATES  46
+#define YYNSTATES  54
 
 /* YYTRANSLATE(YYLEX) -- Bison symbol number corresponding to YYLEX.  */
 #define YYUNDEFTOK  2
-#define YYMAXUTOK   278
+#define YYMAXUTOK   280
 
 #define YYTRANSLATE(YYX)						\
   ((unsigned int) (YYX) <= YYMAXUTOK ? yytranslate[YYX] : YYUNDEFTOK)
@@ -582,7 +785,8 @@ static const yytype_uint8 yytranslate[] =
        2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
        2,     2,     2,     2,     2,     2,     1,     2,     3,     4,
        5,     6,     7,     8,     9,    10,    11,    12,    13,    14,
-      15,    16,    17,    18,    19,    20,    21,    22,    23
+      15,    16,    17,    18,    19,    20,    21,    22,    23,    24,
+      25
 };
 
 #if YYDEBUG
@@ -590,31 +794,33 @@ static const yytype_uint8 yytranslate[] =
    YYRHS.  */
 static const yytype_uint8 yyprhs[] =
 {
-       0,     0,     3,     5,     6,     8,    12,    16,    20,    24,
-      28,    32,    36,    40,    44,    48,    52,    55,    58,    62,
-      66,    70,    74,    78
+       0,     0,     3,     5,     6,     8,    12,    15,    20,    22,
+      26,    30,    34,    38,    42,    46,    50,    54,    58,    62,
+      66,    69,    72,    76,    80,    84,    88,    92,    98
 };
 
 /* YYRHS -- A `-1'-separated list of the rules' RHS.  */
 static const yytype_int8 yyrhs[] =
 {
-      25,     0,    -1,    26,    -1,    -1,    23,    -1,    21,    26,
-      22,    -1,    26,     5,    26,    -1,    26,     6,    26,    -1,
-      26,    12,    26,    -1,    26,    11,    26,    -1,    26,    10,
-      26,    -1,    26,     9,    26,    -1,    26,     8,    26,    -1,
-      26,     7,    26,    -1,    26,    14,    26,    -1,    26,    13,
-      26,    -1,    13,    26,    -1,    18,    26,    -1,    26,    17,
-      26,    -1,    26,    16,    26,    -1,    26,    15,    26,    -1,
-      26,    20,    26,    -1,    26,    19,    26,    -1,    26,     4,
-      26,     3,    26,    -1
+      27,     0,    -1,    29,    -1,    -1,    29,    -1,    28,     3,
+      29,    -1,    28,     3,    -1,    25,    23,    28,    24,    -1,
+      25,    -1,    23,    29,    24,    -1,    29,     6,    29,    -1,
+      29,     7,    29,    -1,    29,    13,    29,    -1,    29,    12,
+      29,    -1,    29,    11,    29,    -1,    29,    10,    29,    -1,
+      29,     9,    29,    -1,    29,     8,    29,    -1,    29,    15,
+      29,    -1,    29,    14,    29,    -1,    14,    29,    -1,    19,
+      29,    -1,    29,    18,    29,    -1,    29,    17,    29,    -1,
+      29,    16,    29,    -1,    29,    22,    29,    -1,    29,    21,
+      29,    -1,    29,     5,    29,     4,    29,    -1,    29,    20,
+      29,    -1
 };
 
 /* YYRLINE[YYN] -- source line where rule number YYN was defined.  */
 static const yytype_uint16 yyrline[] =
 {
-       0,   175,   175,   183,   190,   191,   195,   199,   203,   207,
-     211,   215,   219,   223,   227,   231,   235,   239,   243,   247,
-     251,   255,   259,   263
+       0,   374,   374,   382,   389,   390,   396,   405,   411,   412,
+     416,   420,   424,   428,   432,   436,   440,   444,   448,   452,
+     456,   460,   464,   468,   472,   476,   480,   484,   489
 };
 #endif
 
@@ -623,11 +829,11 @@ static const yytype_uint16 yyrline[] =
    First, the terminals, then, starting at YYNTOKENS, nonterminals.  */
 static const char *const yytname[] =
 {
-  "$end", "error", "$undefined", "TOK_COLONCOLON", "TOK_COND", "TOK_OR",
-  "TOK_AND", "TOK_NE", "TOK_LE", "TOK_GE", "TOK_LT", "TOK_GT", "TOK_EQ",
-  "TOK_MINUS", "TOK_PLUS", "TOK_MOD", "TOK_DIV", "TOK_MULT", "TOK_COMPL",
-  "TOK_EQTILDE", "TOK_COLON", "TOK_LP", "TOK_RP", "TOKEN", "$accept",
-  "start", "expr", 0
+  "$end", "error", "$undefined", "TOK_COMMA", "TOK_COLONCOLON",
+  "TOK_COND", "TOK_OR", "TOK_AND", "TOK_NE", "TOK_LE", "TOK_GE", "TOK_LT",
+  "TOK_GT", "TOK_EQ", "TOK_MINUS", "TOK_PLUS", "TOK_MOD", "TOK_DIV",
+  "TOK_MULT", "TOK_COMPL", "TOK_TILDETILDE", "TOK_EQTILDE", "TOK_COLON",
+  "TOK_LP", "TOK_RP", "TOKEN", "$accept", "start", "arglist", "expr", 0
 };
 #endif
 
@@ -638,24 +844,24 @@ static const yytype_uint16 yytoknum[] =
 {
        0,   256,   257,   258,   259,   260,   261,   262,   263,   264,
      265,   266,   267,   268,   269,   270,   271,   272,   273,   274,
-     275,   276,   277,   278
+     275,   276,   277,   278,   279,   280
 };
 # endif
 
 /* YYR1[YYN] -- Symbol number of symbol that rule YYN derives.  */
 static const yytype_uint8 yyr1[] =
 {
-       0,    24,    25,    25,    26,    26,    26,    26,    26,    26,
-      26,    26,    26,    26,    26,    26,    26,    26,    26,    26,
-      26,    26,    26,    26
+       0,    26,    27,    27,    28,    28,    28,    29,    29,    29,
+      29,    29,    29,    29,    29,    29,    29,    29,    29,    29,
+      29,    29,    29,    29,    29,    29,    29,    29,    29
 };
 
 /* YYR2[YYN] -- Number of symbols composing right hand side of rule YYN.  */
 static const yytype_uint8 yyr2[] =
 {
-       0,     2,     1,     0,     1,     3,     3,     3,     3,     3,
-       3,     3,     3,     3,     3,     3,     2,     2,     3,     3,
-       3,     3,     3,     5
+       0,     2,     1,     0,     1,     3,     2,     4,     1,     3,
+       3,     3,     3,     3,     3,     3,     3,     3,     3,     3,
+       2,     2,     3,     3,     3,     3,     3,     5,     3
 };
 
 /* YYDEFACT[STATE-NAME] -- Default rule to reduce with in state
@@ -663,35 +869,37 @@ static const yytype_uint8 yyr2[] =
    means the default is an error.  */
 static const yytype_uint8 yydefact[] =
 {
-       3,     0,     0,     0,     4,     0,     2,    16,    17,     0,
-       1,     0,     0,     0,     0,     0,     0,     0,     0,     0,
-       0,     0,     0,     0,     0,     0,     0,     5,     0,     6,
-       7,    13,    12,    11,    10,     9,     8,    15,    14,    20,
-      19,    18,    22,    21,     0,    23
+       3,     0,     0,     0,     8,     0,     2,    20,    21,     0,
+       0,     1,     0,     0,     0,     0,     0,     0,     0,     0,
+       0,     0,     0,     0,     0,     0,     0,     0,     0,     9,
+       0,     4,     0,    10,    11,    17,    16,    15,    14,    13,
+      12,    19,    18,    24,    23,    22,    28,    26,    25,     6,
+       7,     0,     5,    27
 };
 
 /* YYDEFGOTO[NTERM-NUM].  */
 static const yytype_int8 yydefgoto[] =
 {
-      -1,     5,     6
+      -1,     5,    30,     6
 };
 
 /* YYPACT[STATE-NUM] -- Index in YYTABLE of the portion describing
    STATE-NUM.  */
-#define YYPACT_NINF -13
-static const yytype_int8 yypact[] =
+#define YYPACT_NINF -18
+static const yytype_int16 yypact[] =
 {
-     109,   109,   109,   109,   -13,     6,    59,   106,   106,    22,
-     -13,   109,   109,   109,   109,   109,   109,   109,   109,   109,
-     109,   109,   109,   109,   109,   109,   109,   -13,    42,    90,
-     104,   120,   120,   120,   120,   120,   120,   -12,   -12,   106,
-     106,   106,   -13,   -13,   109,    75
+     118,   118,   118,   118,   -15,     6,    65,   -17,   -17,    25,
+     118,   -18,   118,   118,   118,   118,   118,   118,   118,   118,
+     118,   118,   118,   118,   118,   118,   118,   118,   118,   -18,
+       4,    65,    47,    98,   113,   130,   130,   130,   130,   130,
+     130,   137,   137,   -17,   -17,   -17,   -18,   -18,   -18,   118,
+     -18,   118,    65,    82
 };
 
 /* YYPGOTO[NTERM-NUM].  */
 static const yytype_int8 yypgoto[] =
 {
-     -13,   -13,    -1
+     -18,   -18,   -18,    -1
 };
 
 /* YYTABLE[YYPACT[STATE-NUM]].  What to do in state STATE-NUM.  If
@@ -701,51 +909,54 @@ static const yytype_int8 yypgoto[] =
 #define YYTABLE_NINF -1
 static const yytype_uint8 yytable[] =
 {
-       7,     8,     9,    22,    23,    24,    10,    25,    26,     0,
-      28,    29,    30,    31,    32,    33,    34,    35,    36,    37,
-      38,    39,    40,    41,    42,    43,    11,    12,    13,    14,
-      15,    16,    17,    18,    19,    20,    21,    22,    23,    24,
-       0,    25,    26,    45,    27,    44,    11,    12,    13,    14,
-      15,    16,    17,    18,    19,    20,    21,    22,    23,    24,
-       0,    25,    26,    11,    12,    13,    14,    15,    16,    17,
-      18,    19,    20,    21,    22,    23,    24,     0,    25,    26,
+       7,     8,     9,    26,    27,    28,    11,    49,    10,    31,
+       0,    32,    33,    34,    35,    36,    37,    38,    39,    40,
+      41,    42,    43,    44,    45,    46,    47,    48,    50,     0,
       12,    13,    14,    15,    16,    17,    18,    19,    20,    21,
-      22,    23,    24,     0,    25,    26,    13,    14,    15,    16,
-      17,    18,    19,    20,    21,    22,    23,    24,     0,    25,
-      26,    14,    15,    16,    17,    18,    19,    20,    21,    22,
-      23,    24,     1,    25,    26,    25,    26,     2,     0,     0,
-       3,     0,     4,    20,    21,    22,    23,    24,     0,    25,
-      26
+      22,    23,    24,    25,     0,    26,    27,    28,    52,    29,
+      53,    51,    12,    13,    14,    15,    16,    17,    18,    19,
+      20,    21,    22,    23,    24,    25,     0,    26,    27,    28,
+      12,    13,    14,    15,    16,    17,    18,    19,    20,    21,
+      22,    23,    24,    25,     0,    26,    27,    28,    13,    14,
+      15,    16,    17,    18,    19,    20,    21,    22,    23,    24,
+      25,     0,    26,    27,    28,    14,    15,    16,    17,    18,
+      19,    20,    21,    22,    23,    24,    25,     0,    26,    27,
+      28,    15,    16,    17,    18,    19,    20,    21,    22,    23,
+      24,    25,     1,    26,    27,    28,     0,     2,     0,     0,
+       0,     3,     0,     4,    21,    22,    23,    24,    25,     0,
+      26,    27,    28,    23,    24,    25,     0,    26,    27,    28
 };
 
 static const yytype_int8 yycheck[] =
 {
-       1,     2,     3,    15,    16,    17,     0,    19,    20,    -1,
-      11,    12,    13,    14,    15,    16,    17,    18,    19,    20,
-      21,    22,    23,    24,    25,    26,     4,     5,     6,     7,
-       8,     9,    10,    11,    12,    13,    14,    15,    16,    17,
-      -1,    19,    20,    44,    22,     3,     4,     5,     6,     7,
-       8,     9,    10,    11,    12,    13,    14,    15,    16,    17,
-      -1,    19,    20,     4,     5,     6,     7,     8,     9,    10,
-      11,    12,    13,    14,    15,    16,    17,    -1,    19,    20,
+       1,     2,     3,    20,    21,    22,     0,     3,    23,    10,
+      -1,    12,    13,    14,    15,    16,    17,    18,    19,    20,
+      21,    22,    23,    24,    25,    26,    27,    28,    24,    -1,
        5,     6,     7,     8,     9,    10,    11,    12,    13,    14,
-      15,    16,    17,    -1,    19,    20,     6,     7,     8,     9,
-      10,    11,    12,    13,    14,    15,    16,    17,    -1,    19,
-      20,     7,     8,     9,    10,    11,    12,    13,    14,    15,
-      16,    17,    13,    19,    20,    19,    20,    18,    -1,    -1,
-      21,    -1,    23,    13,    14,    15,    16,    17,    -1,    19,
-      20
+      15,    16,    17,    18,    -1,    20,    21,    22,    49,    24,
+      51,     4,     5,     6,     7,     8,     9,    10,    11,    12,
+      13,    14,    15,    16,    17,    18,    -1,    20,    21,    22,
+       5,     6,     7,     8,     9,    10,    11,    12,    13,    14,
+      15,    16,    17,    18,    -1,    20,    21,    22,     6,     7,
+       8,     9,    10,    11,    12,    13,    14,    15,    16,    17,
+      18,    -1,    20,    21,    22,     7,     8,     9,    10,    11,
+      12,    13,    14,    15,    16,    17,    18,    -1,    20,    21,
+      22,     8,     9,    10,    11,    12,    13,    14,    15,    16,
+      17,    18,    14,    20,    21,    22,    -1,    19,    -1,    -1,
+      -1,    23,    -1,    25,    14,    15,    16,    17,    18,    -1,
+      20,    21,    22,    16,    17,    18,    -1,    20,    21,    22
 };
 
 /* YYSTOS[STATE-NUM] -- The (internal number of the) accessing
    symbol of state STATE-NUM.  */
 static const yytype_uint8 yystos[] =
 {
-       0,    13,    18,    21,    23,    25,    26,    26,    26,    26,
-       0,     4,     5,     6,     7,     8,     9,    10,    11,    12,
-      13,    14,    15,    16,    17,    19,    20,    22,    26,    26,
-      26,    26,    26,    26,    26,    26,    26,    26,    26,    26,
-      26,    26,    26,    26,     3,    26
+       0,    14,    19,    23,    25,    27,    29,    29,    29,    29,
+      23,     0,     5,     6,     7,     8,     9,    10,    11,    12,
+      13,    14,    15,    16,    17,    18,    20,    21,    22,    24,
+      28,    29,    29,    29,    29,    29,    29,    29,    29,    29,
+      29,    29,    29,    29,    29,    29,    29,    29,    29,     3,
+      24,     4,    29,    29
 };
 
 #define yyerrok		(yyerrstatus = 0)
@@ -1261,115 +1472,120 @@ yydestruct (yymsg, yytype, yyvaluep, yylocationp)
 
   switch (yytype)
     {
-      case 3: /* "TOK_COLONCOLON" */
-#line 169 "ast_expr2.y"
+      case 4: /* "TOK_COLONCOLON" */
+#line 368 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1268 "ast_expr2.c"
+#line 1479 "ast_expr2.c"
 	break;
-      case 4: /* "TOK_COND" */
-#line 169 "ast_expr2.y"
+      case 5: /* "TOK_COND" */
+#line 368 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1273 "ast_expr2.c"
+#line 1484 "ast_expr2.c"
 	break;
-      case 5: /* "TOK_OR" */
-#line 169 "ast_expr2.y"
+      case 6: /* "TOK_OR" */
+#line 368 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1278 "ast_expr2.c"
+#line 1489 "ast_expr2.c"
 	break;
-      case 6: /* "TOK_AND" */
-#line 169 "ast_expr2.y"
+      case 7: /* "TOK_AND" */
+#line 368 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1283 "ast_expr2.c"
+#line 1494 "ast_expr2.c"
 	break;
-      case 7: /* "TOK_NE" */
-#line 169 "ast_expr2.y"
+      case 8: /* "TOK_NE" */
+#line 368 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1288 "ast_expr2.c"
+#line 1499 "ast_expr2.c"
 	break;
-      case 8: /* "TOK_LE" */
-#line 169 "ast_expr2.y"
+      case 9: /* "TOK_LE" */
+#line 368 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1293 "ast_expr2.c"
+#line 1504 "ast_expr2.c"
 	break;
-      case 9: /* "TOK_GE" */
-#line 169 "ast_expr2.y"
+      case 10: /* "TOK_GE" */
+#line 368 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1298 "ast_expr2.c"
+#line 1509 "ast_expr2.c"
 	break;
-      case 10: /* "TOK_LT" */
-#line 169 "ast_expr2.y"
+      case 11: /* "TOK_LT" */
+#line 368 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1303 "ast_expr2.c"
+#line 1514 "ast_expr2.c"
 	break;
-      case 11: /* "TOK_GT" */
-#line 169 "ast_expr2.y"
+      case 12: /* "TOK_GT" */
+#line 368 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1308 "ast_expr2.c"
+#line 1519 "ast_expr2.c"
 	break;
-      case 12: /* "TOK_EQ" */
-#line 169 "ast_expr2.y"
+      case 13: /* "TOK_EQ" */
+#line 368 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1313 "ast_expr2.c"
+#line 1524 "ast_expr2.c"
 	break;
-      case 13: /* "TOK_MINUS" */
-#line 169 "ast_expr2.y"
+      case 14: /* "TOK_MINUS" */
+#line 368 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1318 "ast_expr2.c"
+#line 1529 "ast_expr2.c"
 	break;
-      case 14: /* "TOK_PLUS" */
-#line 169 "ast_expr2.y"
+      case 15: /* "TOK_PLUS" */
+#line 368 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1323 "ast_expr2.c"
+#line 1534 "ast_expr2.c"
 	break;
-      case 15: /* "TOK_MOD" */
-#line 169 "ast_expr2.y"
+      case 16: /* "TOK_MOD" */
+#line 368 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1328 "ast_expr2.c"
+#line 1539 "ast_expr2.c"
 	break;
-      case 16: /* "TOK_DIV" */
-#line 169 "ast_expr2.y"
+      case 17: /* "TOK_DIV" */
+#line 368 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1333 "ast_expr2.c"
+#line 1544 "ast_expr2.c"
 	break;
-      case 17: /* "TOK_MULT" */
-#line 169 "ast_expr2.y"
+      case 18: /* "TOK_MULT" */
+#line 368 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1338 "ast_expr2.c"
+#line 1549 "ast_expr2.c"
 	break;
-      case 18: /* "TOK_COMPL" */
-#line 169 "ast_expr2.y"
+      case 19: /* "TOK_COMPL" */
+#line 368 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1343 "ast_expr2.c"
+#line 1554 "ast_expr2.c"
 	break;
-      case 19: /* "TOK_EQTILDE" */
-#line 169 "ast_expr2.y"
+      case 20: /* "TOK_TILDETILDE" */
+#line 368 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1348 "ast_expr2.c"
+#line 1559 "ast_expr2.c"
 	break;
-      case 20: /* "TOK_COLON" */
-#line 169 "ast_expr2.y"
+      case 21: /* "TOK_EQTILDE" */
+#line 368 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1353 "ast_expr2.c"
+#line 1564 "ast_expr2.c"
 	break;
-      case 21: /* "TOK_LP" */
-#line 169 "ast_expr2.y"
+      case 22: /* "TOK_COLON" */
+#line 368 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1358 "ast_expr2.c"
+#line 1569 "ast_expr2.c"
 	break;
-      case 22: /* "TOK_RP" */
-#line 169 "ast_expr2.y"
+      case 23: /* "TOK_LP" */
+#line 368 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1363 "ast_expr2.c"
+#line 1574 "ast_expr2.c"
 	break;
-      case 23: /* "TOKEN" */
-#line 169 "ast_expr2.y"
+      case 24: /* "TOK_RP" */
+#line 368 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1368 "ast_expr2.c"
+#line 1579 "ast_expr2.c"
 	break;
-      case 26: /* "expr" */
-#line 169 "ast_expr2.y"
+      case 25: /* "TOKEN" */
+#line 368 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1373 "ast_expr2.c"
+#line 1584 "ast_expr2.c"
+	break;
+      case 29: /* "expr" */
+#line 368 "ast_expr2.y"
+	{  free_value((yyvaluep->val)); };
+#line 1589 "ast_expr2.c"
 	break;
 
       default:
@@ -1692,10 +1908,10 @@ yyreduce:
   switch (yyn)
     {
         case 2:
-#line 175 "ast_expr2.y"
+#line 374 "ast_expr2.y"
     { ((struct parse_io *)parseio)->val = (struct val *)calloc(sizeof(struct val),1);
               ((struct parse_io *)parseio)->val->type = (yyvsp[(1) - (1)].val)->type;
-              if( (yyvsp[(1) - (1)].val)->type == AST_EXPR_integer )
+              if( (yyvsp[(1) - (1)].val)->type == AST_EXPR_number )
 				  ((struct parse_io *)parseio)->val->u.i = (yyvsp[(1) - (1)].val)->u.i;
               else
 				  ((struct parse_io *)parseio)->val->u.s = (yyvsp[(1) - (1)].val)->u.s; 
@@ -1704,7 +1920,7 @@ yyreduce:
     break;
 
   case 3:
-#line 183 "ast_expr2.y"
+#line 382 "ast_expr2.y"
     {/* nothing */ ((struct parse_io *)parseio)->val = (struct val *)calloc(sizeof(struct val),1);
               ((struct parse_io *)parseio)->val->type = AST_EXPR_string;
 			  ((struct parse_io *)parseio)->val->u.s = strdup(""); 
@@ -1712,156 +1928,191 @@ yyreduce:
     break;
 
   case 4:
-#line 190 "ast_expr2.y"
-    { (yyval.val)= (yyvsp[(1) - (1)].val);;}
+#line 389 "ast_expr2.y"
+    { (yyval.arglist) = alloc_expr_node(AST_EXPR_NODE_VAL); (yyval.arglist)->val = (yyvsp[(1) - (1)].val);;}
     break;
 
   case 5:
-#line 191 "ast_expr2.y"
-    { (yyval.val) = (yyvsp[(2) - (3)].val); 
+#line 390 "ast_expr2.y"
+    {struct expr_node *x = alloc_expr_node(AST_EXPR_NODE_VAL);
+                                 struct expr_node *t;
+								 DESTROY((yyvsp[(2) - (3)].val));
+                                 for (t=(yyvsp[(1) - (3)].arglist);t->right;t=t->right)
+						         	  ;
+                                 (yyval.arglist) = (yyvsp[(1) - (3)].arglist); t->right = x; x->val = (yyvsp[(3) - (3)].val);;}
+    break;
+
+  case 6:
+#line 396 "ast_expr2.y"
+    {struct expr_node *x = alloc_expr_node(AST_EXPR_NODE_VAL);
+                                 struct expr_node *t;  /* NULL args should OK */
+								 DESTROY((yyvsp[(2) - (2)].val));
+                                 for (t=(yyvsp[(1) - (2)].arglist);t->right;t=t->right)
+						         	  ;
+                                 (yyval.arglist) = (yyvsp[(1) - (2)].arglist); t->right = x; x->val = make_str("");;}
+    break;
+
+  case 7:
+#line 405 "ast_expr2.y"
+    { (yyval.val) = op_func((yyvsp[(1) - (4)].val),(yyvsp[(3) - (4)].arglist), ((struct parse_io *)parseio)->chan);
+		                            DESTROY((yyvsp[(2) - (4)].val));
+									DESTROY((yyvsp[(4) - (4)].val));
+									DESTROY((yyvsp[(1) - (4)].val));
+									destroy_arglist((yyvsp[(3) - (4)].arglist));
+                                  ;}
+    break;
+
+  case 8:
+#line 411 "ast_expr2.y"
+    {(yyval.val) = (yyvsp[(1) - (1)].val);;}
+    break;
+
+  case 9:
+#line 412 "ast_expr2.y"
+    { (yyval.val) = (yyvsp[(2) - (3)].val);
 	                       (yyloc).first_column = (yylsp[(1) - (3)]).first_column; (yyloc).last_column = (yylsp[(3) - (3)]).last_column; 
 						   (yyloc).first_line=0; (yyloc).last_line=0;
 							DESTROY((yyvsp[(1) - (3)].val)); DESTROY((yyvsp[(3) - (3)].val)); ;}
     break;
 
-  case 6:
-#line 195 "ast_expr2.y"
+  case 10:
+#line 416 "ast_expr2.y"
     { (yyval.val) = op_or ((yyvsp[(1) - (3)].val), (yyvsp[(3) - (3)].val));
 						DESTROY((yyvsp[(2) - (3)].val));	
                          (yyloc).first_column = (yylsp[(1) - (3)]).first_column; (yyloc).last_column = (yylsp[(3) - (3)]).last_column; 
 						 (yyloc).first_line=0; (yyloc).last_line=0;;}
     break;
 
-  case 7:
-#line 199 "ast_expr2.y"
+  case 11:
+#line 420 "ast_expr2.y"
     { (yyval.val) = op_and ((yyvsp[(1) - (3)].val), (yyvsp[(3) - (3)].val)); 
 						DESTROY((yyvsp[(2) - (3)].val));	
 	                      (yyloc).first_column = (yylsp[(1) - (3)]).first_column; (yyloc).last_column = (yylsp[(3) - (3)]).last_column; 
                           (yyloc).first_line=0; (yyloc).last_line=0;;}
     break;
 
-  case 8:
-#line 203 "ast_expr2.y"
+  case 12:
+#line 424 "ast_expr2.y"
     { (yyval.val) = op_eq ((yyvsp[(1) - (3)].val), (yyvsp[(3) - (3)].val));
 						DESTROY((yyvsp[(2) - (3)].val));	
 	                     (yyloc).first_column = (yylsp[(1) - (3)]).first_column; (yyloc).last_column = (yylsp[(3) - (3)]).last_column;
 						 (yyloc).first_line=0; (yyloc).last_line=0;;}
     break;
 
-  case 9:
-#line 207 "ast_expr2.y"
+  case 13:
+#line 428 "ast_expr2.y"
     { (yyval.val) = op_gt ((yyvsp[(1) - (3)].val), (yyvsp[(3) - (3)].val));
 						DESTROY((yyvsp[(2) - (3)].val));	
                          (yyloc).first_column = (yylsp[(1) - (3)]).first_column; (yyloc).last_column = (yylsp[(3) - (3)]).last_column;
 						 (yyloc).first_line=0; (yyloc).last_line=0;;}
     break;
 
-  case 10:
-#line 211 "ast_expr2.y"
+  case 14:
+#line 432 "ast_expr2.y"
     { (yyval.val) = op_lt ((yyvsp[(1) - (3)].val), (yyvsp[(3) - (3)].val)); 
 						DESTROY((yyvsp[(2) - (3)].val));	
 	                     (yyloc).first_column = (yylsp[(1) - (3)]).first_column; (yyloc).last_column = (yylsp[(3) - (3)]).last_column; 
 						 (yyloc).first_line=0; (yyloc).last_line=0;;}
     break;
 
-  case 11:
-#line 215 "ast_expr2.y"
+  case 15:
+#line 436 "ast_expr2.y"
     { (yyval.val) = op_ge ((yyvsp[(1) - (3)].val), (yyvsp[(3) - (3)].val)); 
 						DESTROY((yyvsp[(2) - (3)].val));	
 	                      (yyloc).first_column = (yylsp[(1) - (3)]).first_column; (yyloc).last_column = (yylsp[(3) - (3)]).last_column; 
 						  (yyloc).first_line=0; (yyloc).last_line=0;;}
     break;
 
-  case 12:
-#line 219 "ast_expr2.y"
+  case 16:
+#line 440 "ast_expr2.y"
     { (yyval.val) = op_le ((yyvsp[(1) - (3)].val), (yyvsp[(3) - (3)].val)); 
 						DESTROY((yyvsp[(2) - (3)].val));	
 	                      (yyloc).first_column = (yylsp[(1) - (3)]).first_column; (yyloc).last_column = (yylsp[(3) - (3)]).last_column; 
 						  (yyloc).first_line=0; (yyloc).last_line=0;;}
     break;
 
-  case 13:
-#line 223 "ast_expr2.y"
+  case 17:
+#line 444 "ast_expr2.y"
     { (yyval.val) = op_ne ((yyvsp[(1) - (3)].val), (yyvsp[(3) - (3)].val)); 
 						DESTROY((yyvsp[(2) - (3)].val));	
 	                      (yyloc).first_column = (yylsp[(1) - (3)]).first_column; (yyloc).last_column = (yylsp[(3) - (3)]).last_column; 
 						  (yyloc).first_line=0; (yyloc).last_line=0;;}
     break;
 
-  case 14:
-#line 227 "ast_expr2.y"
+  case 18:
+#line 448 "ast_expr2.y"
     { (yyval.val) = op_plus ((yyvsp[(1) - (3)].val), (yyvsp[(3) - (3)].val)); 
 						DESTROY((yyvsp[(2) - (3)].val));	
 	                       (yyloc).first_column = (yylsp[(1) - (3)]).first_column; (yyloc).last_column = (yylsp[(3) - (3)]).last_column; 
 						   (yyloc).first_line=0; (yyloc).last_line=0;;}
     break;
 
-  case 15:
-#line 231 "ast_expr2.y"
+  case 19:
+#line 452 "ast_expr2.y"
     { (yyval.val) = op_minus ((yyvsp[(1) - (3)].val), (yyvsp[(3) - (3)].val)); 
 						DESTROY((yyvsp[(2) - (3)].val));	
 	                        (yyloc).first_column = (yylsp[(1) - (3)]).first_column; (yyloc).last_column = (yylsp[(3) - (3)]).last_column; 
 							(yyloc).first_line=0; (yyloc).last_line=0;;}
     break;
 
-  case 16:
-#line 235 "ast_expr2.y"
+  case 20:
+#line 456 "ast_expr2.y"
     { (yyval.val) = op_negate ((yyvsp[(2) - (2)].val)); 
 						DESTROY((yyvsp[(1) - (2)].val));	
 	                        (yyloc).first_column = (yylsp[(1) - (2)]).first_column; (yyloc).last_column = (yylsp[(2) - (2)]).last_column; 
 							(yyloc).first_line=0; (yyloc).last_line=0;;}
     break;
 
-  case 17:
-#line 239 "ast_expr2.y"
+  case 21:
+#line 460 "ast_expr2.y"
     { (yyval.val) = op_compl ((yyvsp[(2) - (2)].val)); 
 						DESTROY((yyvsp[(1) - (2)].val));	
 	                        (yyloc).first_column = (yylsp[(1) - (2)]).first_column; (yyloc).last_column = (yylsp[(2) - (2)]).last_column; 
 							(yyloc).first_line=0; (yyloc).last_line=0;;}
     break;
 
-  case 18:
-#line 243 "ast_expr2.y"
+  case 22:
+#line 464 "ast_expr2.y"
     { (yyval.val) = op_times ((yyvsp[(1) - (3)].val), (yyvsp[(3) - (3)].val)); 
 						DESTROY((yyvsp[(2) - (3)].val));	
 	                       (yyloc).first_column = (yylsp[(1) - (3)]).first_column; (yyloc).last_column = (yylsp[(3) - (3)]).last_column; 
 						   (yyloc).first_line=0; (yyloc).last_line=0;;}
     break;
 
-  case 19:
-#line 247 "ast_expr2.y"
+  case 23:
+#line 468 "ast_expr2.y"
     { (yyval.val) = op_div ((yyvsp[(1) - (3)].val), (yyvsp[(3) - (3)].val)); 
 						DESTROY((yyvsp[(2) - (3)].val));	
 	                      (yyloc).first_column = (yylsp[(1) - (3)]).first_column; (yyloc).last_column = (yylsp[(3) - (3)]).last_column; 
 						  (yyloc).first_line=0; (yyloc).last_line=0;;}
     break;
 
-  case 20:
-#line 251 "ast_expr2.y"
+  case 24:
+#line 472 "ast_expr2.y"
     { (yyval.val) = op_rem ((yyvsp[(1) - (3)].val), (yyvsp[(3) - (3)].val)); 
 						DESTROY((yyvsp[(2) - (3)].val));	
 	                      (yyloc).first_column = (yylsp[(1) - (3)]).first_column; (yyloc).last_column = (yylsp[(3) - (3)]).last_column; 
 						  (yyloc).first_line=0; (yyloc).last_line=0;;}
     break;
 
-  case 21:
-#line 255 "ast_expr2.y"
+  case 25:
+#line 476 "ast_expr2.y"
     { (yyval.val) = op_colon ((yyvsp[(1) - (3)].val), (yyvsp[(3) - (3)].val)); 
 						DESTROY((yyvsp[(2) - (3)].val));	
 	                        (yyloc).first_column = (yylsp[(1) - (3)]).first_column; (yyloc).last_column = (yylsp[(3) - (3)]).last_column; 
 							(yyloc).first_line=0; (yyloc).last_line=0;;}
     break;
 
-  case 22:
-#line 259 "ast_expr2.y"
+  case 26:
+#line 480 "ast_expr2.y"
     { (yyval.val) = op_eqtilde ((yyvsp[(1) - (3)].val), (yyvsp[(3) - (3)].val)); 
 						DESTROY((yyvsp[(2) - (3)].val));	
 	                        (yyloc).first_column = (yylsp[(1) - (3)]).first_column; (yyloc).last_column = (yylsp[(3) - (3)]).last_column; 
 							(yyloc).first_line=0; (yyloc).last_line=0;;}
     break;
 
-  case 23:
-#line 263 "ast_expr2.y"
+  case 27:
+#line 484 "ast_expr2.y"
     { (yyval.val) = op_cond ((yyvsp[(1) - (5)].val), (yyvsp[(3) - (5)].val), (yyvsp[(5) - (5)].val)); 
 						DESTROY((yyvsp[(2) - (5)].val));	
 						DESTROY((yyvsp[(4) - (5)].val));	
@@ -1869,9 +2120,17 @@ yyreduce:
 							(yyloc).first_line=0; (yyloc).last_line=0;;}
     break;
 
+  case 28:
+#line 489 "ast_expr2.y"
+    { (yyval.val) = op_tildetilde ((yyvsp[(1) - (3)].val), (yyvsp[(3) - (3)].val)); 
+						DESTROY((yyvsp[(2) - (3)].val));	
+	                        (yyloc).first_column = (yylsp[(1) - (3)]).first_column; (yyloc).last_column = (yylsp[(3) - (3)]).last_column; 
+							(yyloc).first_line=0; (yyloc).last_line=0;;}
+    break;
+
 
 /* Line 1267 of yacc.c.  */
-#line 1875 "ast_expr2.c"
+#line 2134 "ast_expr2.c"
       default: break;
     }
   YY_SYMBOL_PRINT ("-> $$ =", yyr1[yyn], &yyval, &yyloc);
@@ -2091,11 +2350,24 @@ yyreturn:
 }
 
 
-#line 270 "ast_expr2.y"
+#line 495 "ast_expr2.y"
+
+
+static struct expr_node *alloc_expr_node(enum node_type nt)
+{
+	struct expr_node *x = calloc(1,sizeof(struct expr_node));
+	if (!x) {
+		ast_log(LOG_ERROR, "Allocation for expr_node FAILED!!\n");
+		return 0;
+	}
+	x->type = nt;
+	return x;
+}
+
 
 
 static struct val *
-make_integer (quad_t i)
+make_number (FP___TYPE i)
 {
 	struct val *vp;
 
@@ -2105,7 +2377,7 @@ make_integer (quad_t i)
 		return(NULL);
 	}
 
-	vp->type = AST_EXPR_integer;
+	vp->type = AST_EXPR_number;
 	vp->u.i  = i;
 	return vp; 
 }
@@ -2115,7 +2387,7 @@ make_str (const char *s)
 {
 	struct val *vp;
 	size_t i;
-	int isint;
+	int isint; /* this started out being a test for an integer, but then ended up being a test for a float */
 
 	vp = (struct val *) malloc (sizeof (*vp));
 	if (vp == NULL || ((vp->u.s = strdup (s)) == NULL)) {
@@ -2123,14 +2395,13 @@ make_str (const char *s)
 		return(NULL);
 	}
 
-	for(i = 1, isint = isdigit(s[0]) || s[0] == '-';
-	    isint && i < strlen(s);
-	    i++)
+	for (i = 0, isint = (isdigit(s[0]) || s[0] == '-' || s[0]=='.'); isint && i < strlen(s); i++)
 	{
-		if(!isdigit(s[i]))
-			 isint = 0;
+		if (!isdigit(s[i]) && s[i] != '.') {
+			isint = 0;
+			break;
+		}
 	}
-
 	if (isint)
 		vp->type = AST_EXPR_numeric_string;
 	else	
@@ -2152,17 +2423,17 @@ free_value (struct val *vp)
 }
 
 
-static quad_t
-to_integer (struct val *vp)
+static int
+to_number (struct val *vp)
 {
-	quad_t i;
+	FP___TYPE i;
 	
 	if (vp == NULL) {
-		ast_log(LOG_WARNING,"vp==NULL in to_integer()\n");
+		ast_log(LOG_WARNING,"vp==NULL in to_number()\n");
 		return(0);
 	}
 
-	if (vp->type == AST_EXPR_integer)
+	if (vp->type == AST_EXPR_number)
 		return 1;
 
 	if (vp->type == AST_EXPR_string)
@@ -2170,16 +2441,16 @@ to_integer (struct val *vp)
 
 	/* vp->type == AST_EXPR_numeric_string, make it numeric */
 	errno = 0;
-	i  = strtoll(vp->u.s, (char**)NULL, 10);
+	i  = FUNC_STRTOD(vp->u.s, (char**)0); /* either strtod, or strtold on a good day */
 	if (errno != 0) {
-		ast_log(LOG_WARNING,"Conversion of %s to integer under/overflowed!\n", vp->u.s);
+		ast_log(LOG_WARNING,"Conversion of %s to number under/overflowed!\n", vp->u.s);
 		free(vp->u.s);
 		vp->u.s = 0;
 		return(0);
 	}
 	free (vp->u.s);
 	vp->u.i = i;
-	vp->type = AST_EXPR_integer;
+	vp->type = AST_EXPR_number;
 	return 1;
 }
 
@@ -2220,7 +2491,7 @@ to_string (struct val *vp)
 		return;
 	}
 
-	sprintf(tmp, "%ld", (long int) vp->u.i);
+	sprintf(tmp, FP___PRINTF, vp->u.i);
 	vp->type = AST_EXPR_string;
 	vp->u.s  = tmp;
 }
@@ -2229,7 +2500,7 @@ to_string (struct val *vp)
 static int
 isstring (struct val *vp)
 {
-	/* only TRUE if this string is not a valid integer */
+	/* only TRUE if this string is not a valid number */
 	return (vp->type == AST_EXPR_string);
 }
 
@@ -2237,23 +2508,15 @@ isstring (struct val *vp)
 static int
 is_zero_or_null (struct val *vp)
 {
-	if (vp->type == AST_EXPR_integer) {
+	if (vp->type == AST_EXPR_number) {
 		return (vp->u.i == 0);
 	} else {
-		return (*vp->u.s == 0 || (to_integer (vp) && vp->u.i == 0));
+		return (*vp->u.s == 0 || (to_number(vp) && vp->u.i == 0));
 	}
 	/* NOTREACHED */
 }
 
-#ifdef STANDALONE
-
-void ast_register_file_version(const char *file, const char *version)
-{
-}
-
-void ast_unregister_file_version(const char *file)
-{
-}
+#ifdef STANDALONE2
 
 void ast_log(int level, const char *file, int line, const char *function, const char *fmt, ...)
 {
@@ -2291,7 +2554,7 @@ int main(int argc,char **argv) {
 			if( s[strlen(s)-1] == '\n' )
 				s[strlen(s)-1] = 0;
 			
-			ret = ast_expr(s, out, sizeof(out));
+			ret = ast_expr(s, out, sizeof(out), NULL);
 			printf("Expression: %s    Result: [%d] '%s'\n",
 				   s, ret, out);
 		}
@@ -2299,11 +2562,12 @@ int main(int argc,char **argv) {
 	}
 	else
 	{
-		if (ast_expr(argv[1], s, sizeof(s)))
+		if (ast_expr(argv[1], s, sizeof(s), NULL))
 			printf("=====%s======\n",s);
 		else
 			printf("No result\n");
 	}
+	return 0;
 }
 
 #endif
@@ -2315,6 +2579,356 @@ int main(int argc,char **argv) {
    because it refers to the buffer state. Best to
    let it access the BUFFER stuff there and not trying
    define all the structs, macros etc. in this file! */
+
+static void destroy_arglist(struct expr_node *arglist)
+{
+	struct expr_node *arglist_next;
+	
+	while (arglist)
+	{
+		arglist_next = arglist->right;
+		if (arglist->val)
+			free_value(arglist->val);
+		arglist->val = 0;
+		arglist->right = 0;
+		free(arglist);
+		arglist = arglist_next;
+	}
+}
+
+#if !defined(STANDALONE) && !defined(STANDALONE2)
+static char *compose_func_args(struct expr_node *arglist)
+{
+	struct expr_node *t = arglist;
+	char *argbuf;
+	int total_len = 0;
+	
+	while (t) {
+		if (t != arglist)
+			total_len += 1; /* for the sep */
+		if (t->val) {
+			if (t->val->type == AST_EXPR_number)
+				total_len += 25; /* worst case */
+			else
+				total_len += strlen(t->val->u.s);
+		}
+		
+		t = t->right;
+	}
+	total_len++; /* for the null */
+	ast_log(LOG_NOTICE,"argbuf allocated %d bytes;\n", total_len);
+	argbuf = malloc(total_len);
+	argbuf[0] = 0;
+	t = arglist;
+	while (t) {
+		char numbuf[30];
+		
+		if (t != arglist)
+			strcat(argbuf,",");
+		
+		if (t->val) {
+			if (t->val->type == AST_EXPR_number) {
+				sprintf(numbuf,FP___PRINTF,t->val->u.i);
+				strcat(argbuf,numbuf);
+			} else
+				strcat(argbuf,t->val->u.s);
+		}
+		t = t->right;
+	}
+	ast_log(LOG_NOTICE,"argbuf uses %d bytes;\n", (int) strlen(argbuf));
+	return argbuf;
+}
+
+static int is_really_num(char *str)
+{
+	if ( strspn(str,"-0123456789. 	") == strlen(str))
+		return 1;
+	else
+		return 0;
+}
+#endif
+
+static struct val *op_func(struct val *funcname, struct expr_node *arglist, struct ast_channel *chan)
+{
+	if (strspn(funcname->u.s,"ABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789") == strlen(funcname->u.s))
+	{
+		struct val *result;
+		if (0) {
+#ifdef FUNC_COS
+		} else if (strcmp(funcname->u.s,"COS") == 0) {
+			if (arglist && !arglist->right && arglist->val){
+				to_number(arglist->val);
+				result = make_number(FUNC_COS(arglist->val->u.i));
+				return result;
+			} else {
+				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
+				return make_number(0.0);
+			}
+#endif
+#ifdef FUNC_SIN
+		} else if (strcmp(funcname->u.s,"SIN") == 0) {
+			if (arglist && !arglist->right && arglist->val){
+				to_number(arglist->val);
+				result = make_number(FUNC_SIN(arglist->val->u.i));
+				return result;
+			} else {
+				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
+				return make_number(0.0);
+			}
+#endif
+#ifdef FUNC_TAN
+		} else if (strcmp(funcname->u.s,"TAN") == 0) {
+			if (arglist && !arglist->right && arglist->val){
+				to_number(arglist->val);
+				result = make_number(FUNC_TAN(arglist->val->u.i));
+				return result;
+			} else {
+				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
+				return make_number(0.0);
+			}
+#endif
+#ifdef FUNC_ACOS
+		} else if (strcmp(funcname->u.s,"ACOS") == 0) {
+			if (arglist && !arglist->right && arglist->val){
+				to_number(arglist->val);
+				result = make_number(FUNC_ACOS(arglist->val->u.i));
+				return result;
+			} else {
+				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
+				return make_number(0.0);
+			}
+#endif
+#ifdef FUNC_ASIN
+		} else if (strcmp(funcname->u.s,"ASIN") == 0) {
+			if (arglist && !arglist->right && arglist->val){
+				to_number(arglist->val);
+				result = make_number(FUNC_ASIN(arglist->val->u.i));
+				return result;
+			} else {
+				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
+				return make_number(0.0);
+			}
+#endif
+#ifdef FUNC_ATAN
+		} else if (strcmp(funcname->u.s,"ATAN") == 0) {
+			if (arglist && !arglist->right && arglist->val){
+				to_number(arglist->val);
+				result = make_number(FUNC_ATAN(arglist->val->u.i));
+				return result;
+			} else {
+				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
+				return make_number(0.0);
+			}
+#endif
+#ifdef FUNC_ATAN2
+		} else if (strcmp(funcname->u.s,"ATAN2") == 0) {
+			if (arglist && arglist->right && !arglist->right->right && arglist->val && arglist->right->val){
+				to_number(arglist->val);
+				to_number(arglist->right->val);
+				result = make_number(FUNC_ATAN2(arglist->val->u.i, arglist->right->val->u.i));
+				return result;
+			} else {
+				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
+				return make_number(0.0);
+			}
+#endif
+#ifdef FUNC_POW
+		} else if (strcmp(funcname->u.s,"POW") == 0) {
+			if (arglist && arglist->right && !arglist->right->right && arglist->val && arglist->right->val){
+				to_number(arglist->val);
+				to_number(arglist->right->val);
+				result = make_number(FUNC_POW(arglist->val->u.i, arglist->right->val->u.i));
+				return result;
+			} else {
+				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
+				return make_number(0.0);
+			}
+#endif
+#ifdef FUNC_SQRT
+		} else if (strcmp(funcname->u.s,"SQRT") == 0) {
+			if (arglist && !arglist->right && arglist->val){
+				to_number(arglist->val);
+				result = make_number(FUNC_SQRT(arglist->val->u.i));
+				return result;
+			} else {
+				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
+				return make_number(0.0);
+			}
+#endif
+#ifdef FUNC_FLOOR
+		} else if (strcmp(funcname->u.s,"FLOOR") == 0) {
+			if (arglist && !arglist->right && arglist->val){
+				to_number(arglist->val);
+				result = make_number(FUNC_FLOOR(arglist->val->u.i));
+				return result;
+			} else {
+				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
+				return make_number(0.0);
+			}
+#endif
+#ifdef FUNC_CEIL
+		} else if (strcmp(funcname->u.s,"CEIL") == 0) {
+			if (arglist && !arglist->right && arglist->val){
+				to_number(arglist->val);
+				result = make_number(FUNC_CEIL(arglist->val->u.i));
+				return result;
+			} else {
+				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
+				return make_number(0.0);
+			}
+#endif
+#ifdef FUNC_ROUND
+		} else if (strcmp(funcname->u.s,"ROUND") == 0) {
+			if (arglist && !arglist->right && arglist->val){
+				to_number(arglist->val);
+				result = make_number(FUNC_ROUND(arglist->val->u.i));
+				return result;
+			} else {
+				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
+				return make_number(0.0);
+			}
+#endif /* defined(FUNC_ROUND) */
+#ifdef FUNC_RINT
+		} else if (strcmp(funcname->u.s,"RINT") == 0) {
+			if (arglist && !arglist->right && arglist->val){
+				to_number(arglist->val);
+				result = make_number(FUNC_RINT(arglist->val->u.i));
+				return result;
+			} else {
+				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
+				return make_number(0.0);
+			}
+#endif
+#ifdef FUNC_TRUNC
+		} else if (strcmp(funcname->u.s,"TRUNC") == 0) {
+			if (arglist && !arglist->right && arglist->val){
+				to_number(arglist->val);
+				result = make_number(FUNC_TRUNC(arglist->val->u.i));
+				return result;
+			} else {
+				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
+				return make_number(0.0);
+			}
+#endif /* defined(FUNC_TRUNC) */
+#ifdef FUNC_EXP
+		} else if (strcmp(funcname->u.s,"EXP") == 0) {
+			if (arglist && !arglist->right && arglist->val){
+				to_number(arglist->val);
+				result = make_number(FUNC_EXP(arglist->val->u.i));
+				return result;
+			} else {
+				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
+				return make_number(0.0);
+			}
+#endif
+#ifdef FUNC_EXP2
+		} else if (strcmp(funcname->u.s,"EXP2") == 0) {
+			if (arglist && !arglist->right && arglist->val){
+				to_number(arglist->val);
+				result = make_number(FUNC_EXP2(arglist->val->u.i));
+				return result;
+			} else {
+				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
+				return make_number(0.0);
+			}
+#endif
+#ifdef FUNC_EXP10
+		} else if (strcmp(funcname->u.s,"EXP10") == 0) {
+			if (arglist && !arglist->right && arglist->val){
+				to_number(arglist->val);
+				result = make_number(FUNC_EXP10(arglist->val->u.i));
+				return result;
+			} else {
+				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
+				return make_number(0.0);
+			}
+#endif
+#ifdef FUNC_LOG
+		} else if (strcmp(funcname->u.s,"LOG") == 0) {
+			if (arglist && !arglist->right && arglist->val){
+				to_number(arglist->val);
+				result = make_number(FUNC_LOG(arglist->val->u.i));
+				return result;
+			} else {
+				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
+				return make_number(0.0);
+			}
+#endif
+#ifdef FUNC_LOG2
+		} else if (strcmp(funcname->u.s,"LOG2") == 0) {
+			if (arglist && !arglist->right && arglist->val){
+				to_number(arglist->val);
+				result = make_number(FUNC_LOG2(arglist->val->u.i));
+				return result;
+			} else {
+				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
+				return make_number(0.0);
+			}
+#endif
+#ifdef FUNC_LOG10
+		} else if (strcmp(funcname->u.s,"LOG10") == 0) {
+			if (arglist && !arglist->right && arglist->val){
+				to_number(arglist->val);
+				result = make_number(FUNC_LOG10(arglist->val->u.i));
+				return result;
+			} else {
+				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
+				return make_number(0.0);
+			}
+#endif
+#ifdef FUNC_REMAINDER
+		} else if (strcmp(funcname->u.s,"REMAINDER") == 0) {
+			if (arglist && arglist->right && !arglist->right->right && arglist->val && arglist->right->val){
+				to_number(arglist->val);
+				to_number(arglist->right->val);
+				result = make_number(FUNC_REMAINDER(arglist->val->u.i, arglist->right->val->u.i));
+				return result;
+			} else {
+				ast_log(LOG_WARNING,"Wrong args to %s() function\n",funcname->u.s);
+				return make_number(0.0);
+			}
+#endif
+		} else {
+			/* is this a custom function we should execute and collect the results of? */
+#if !defined(STANDALONE) && !defined(STANDALONE2)
+			struct ast_custom_function *f = ast_custom_function_find(funcname->u.s);
+			if (!chan)
+				ast_log(LOG_WARNING,"Hey! chan is NULL.\n");
+			if (!f)
+				ast_log(LOG_WARNING,"Hey! could not find func %s.\n", funcname->u.s);
+			
+			if (f && chan) {
+				if (f->read) {
+					char workspace[512];
+					char *argbuf = compose_func_args(arglist);
+					f->read(chan, funcname->u.s, argbuf, workspace, sizeof(workspace));
+					free(argbuf);
+					if (is_really_num(workspace))
+						return make_number(FUNC_STRTOD(workspace,(char **)NULL));
+					else
+						return make_str(workspace);
+				} else {
+					ast_log(LOG_ERROR,"Error! Function '%s' cannot be read!\n", funcname->u.s);
+					return (make_number ((FP___TYPE)0.0));
+				}
+				
+			} else {
+				ast_log(LOG_ERROR,"Error! '%s' doesn't appear to be an available function!", funcname->u.s);
+				return (make_number ((FP___TYPE)0.0));
+			}
+#else
+			ast_log(LOG_ERROR,"Error! '%s' is not available in the standalone version!", funcname->u.s);
+			return (make_number ((FP___TYPE)0.0));
+#endif
+		}
+	}
+	else
+	{
+		ast_log(LOG_ERROR,"Error! '%s' is not possibly a function name!", funcname->u.s);
+		return (make_number ((FP___TYPE)0.0));
+	}
+	return (make_number ((FP___TYPE)0.0));
+}
 
 
 static struct val *
@@ -2335,7 +2949,7 @@ op_and (struct val *a, struct val *b)
 	if (is_zero_or_null (a) || is_zero_or_null (b)) {
 		free_value (a);
 		free_value (b);
-		return (make_integer ((quad_t)0));
+		return (make_number ((FP___TYPE)0.0));
 	} else {
 		free_value (b);
 		return (a);
@@ -2350,18 +2964,18 @@ op_eq (struct val *a, struct val *b)
 	if (isstring (a) || isstring (b)) {
 		to_string (a);
 		to_string (b);	
-		r = make_integer ((quad_t)(strcoll (a->u.s, b->u.s) == 0));
+		r = make_number ((FP___TYPE)(strcoll (a->u.s, b->u.s) == 0));
 	} else {
 #ifdef DEBUG_FOR_CONVERSIONS
 		char buffer[2000];
 		sprintf(buffer,"Converting '%s' and '%s' ", a->u.s, b->u.s);
 #endif
-		(void)to_integer(a);
-		(void)to_integer(b);
+		(void)to_number(a);
+		(void)to_number(b);
 #ifdef DEBUG_FOR_CONVERSIONS
 		ast_log(LOG_WARNING,"%s to '%lld' and '%lld'\n", buffer, a->u.i, b->u.i);
 #endif
-		r = make_integer ((quad_t)(a->u.i == b->u.i));
+		r = make_number ((FP___TYPE)(a->u.i == b->u.i));
 	}
 
 	free_value (a);
@@ -2377,11 +2991,11 @@ op_gt (struct val *a, struct val *b)
 	if (isstring (a) || isstring (b)) {
 		to_string (a);
 		to_string (b);
-		r = make_integer ((quad_t)(strcoll (a->u.s, b->u.s) > 0));
+		r = make_number ((FP___TYPE)(strcoll (a->u.s, b->u.s) > 0));
 	} else {
-		(void)to_integer(a);
-		(void)to_integer(b);
-		r = make_integer ((quad_t)(a->u.i > b->u.i));
+		(void)to_number(a);
+		(void)to_number(b);
+		r = make_number ((FP___TYPE)(a->u.i > b->u.i));
 	}
 
 	free_value (a);
@@ -2397,11 +3011,11 @@ op_lt (struct val *a, struct val *b)
 	if (isstring (a) || isstring (b)) {
 		to_string (a);
 		to_string (b);
-		r = make_integer ((quad_t)(strcoll (a->u.s, b->u.s) < 0));
+		r = make_number ((FP___TYPE)(strcoll (a->u.s, b->u.s) < 0));
 	} else {
-		(void)to_integer(a);
-		(void)to_integer(b);
-		r = make_integer ((quad_t)(a->u.i < b->u.i));
+		(void)to_number(a);
+		(void)to_number(b);
+		r = make_number ((FP___TYPE)(a->u.i < b->u.i));
 	}
 
 	free_value (a);
@@ -2417,11 +3031,11 @@ op_ge (struct val *a, struct val *b)
 	if (isstring (a) || isstring (b)) {
 		to_string (a);
 		to_string (b);
-		r = make_integer ((quad_t)(strcoll (a->u.s, b->u.s) >= 0));
+		r = make_number ((FP___TYPE)(strcoll (a->u.s, b->u.s) >= 0));
 	} else {
-		(void)to_integer(a);
-		(void)to_integer(b);
-		r = make_integer ((quad_t)(a->u.i >= b->u.i));
+		(void)to_number(a);
+		(void)to_number(b);
+		r = make_number ((FP___TYPE)(a->u.i >= b->u.i));
 	}
 
 	free_value (a);
@@ -2437,11 +3051,11 @@ op_le (struct val *a, struct val *b)
 	if (isstring (a) || isstring (b)) {
 		to_string (a);
 		to_string (b);
-		r = make_integer ((quad_t)(strcoll (a->u.s, b->u.s) <= 0));
+		r = make_number ((FP___TYPE)(strcoll (a->u.s, b->u.s) <= 0));
 	} else {
-		(void)to_integer(a);
-		(void)to_integer(b);
-		r = make_integer ((quad_t)(a->u.i <= b->u.i));
+		(void)to_number(a);
+		(void)to_number(b);
+		r = make_number ((FP___TYPE)(a->u.i <= b->u.i));
 	}
 
 	free_value (a);
@@ -2471,7 +3085,7 @@ op_cond (struct val *a, struct val *b, struct val *c)
 	}
 	else
 	{
-		(void)to_integer(a);
+		(void)to_number(a);
 		if( a->u.i )
 		{
 			free_value(a);
@@ -2496,11 +3110,11 @@ op_ne (struct val *a, struct val *b)
 	if (isstring (a) || isstring (b)) {
 		to_string (a);
 		to_string (b);
-		r = make_integer ((quad_t)(strcoll (a->u.s, b->u.s) != 0));
+		r = make_number ((FP___TYPE)(strcoll (a->u.s, b->u.s) != 0));
 	} else {
-		(void)to_integer(a);
-		(void)to_integer(b);
-		r = make_integer ((quad_t)(a->u.i != b->u.i));
+		(void)to_number(a);
+		(void)to_number(b);
+		r = make_number ((FP___TYPE)(a->u.i != b->u.i));
 	}
 
 	free_value (a);
@@ -2509,7 +3123,7 @@ op_ne (struct val *a, struct val *b)
 }
 
 static int
-chk_plus (quad_t a, quad_t b, quad_t r)
+chk_plus (FP___TYPE a, FP___TYPE b, FP___TYPE r)
 {
 	/* sum of two positive numbers must be positive */
 	if (a > 0 && b > 0 && r <= 0)
@@ -2526,23 +3140,23 @@ op_plus (struct val *a, struct val *b)
 {
 	struct val *r;
 
-	if (!to_integer (a)) {
+	if (!to_number (a)) {
 		if( !extra_error_message_supplied )
 			ast_log(LOG_WARNING,"non-numeric argument\n");
-		if (!to_integer (b)) {
+		if (!to_number (b)) {
 			free_value(a);
 			free_value(b);
-			return make_integer(0);
+			return make_number(0);
 		} else {
 			free_value(a);
 			return (b);
 		}
-	} else if (!to_integer(b)) {
+	} else if (!to_number(b)) {
 		free_value(b);
 		return (a);
 	}
 
-	r = make_integer (/*(quad_t)*/(a->u.i + b->u.i));
+	r = make_number (a->u.i + b->u.i);
 	if (chk_plus (a->u.i, b->u.i, r->u.i)) {
 		ast_log(LOG_WARNING,"overflow\n");
 	}
@@ -2552,7 +3166,7 @@ op_plus (struct val *a, struct val *b)
 }
 
 static int
-chk_minus (quad_t a, quad_t b, quad_t r)
+chk_minus (FP___TYPE a, FP___TYPE b, FP___TYPE r)
 {
 	/* special case subtraction of QUAD_MIN */
 	if (b == QUAD_MIN) {
@@ -2570,27 +3184,27 @@ op_minus (struct val *a, struct val *b)
 {
 	struct val *r;
 
-	if (!to_integer (a)) {
+	if (!to_number (a)) {
 		if( !extra_error_message_supplied )
 			ast_log(LOG_WARNING, "non-numeric argument\n");
-		if (!to_integer (b)) {
+		if (!to_number (b)) {
 			free_value(a);
 			free_value(b);
-			return make_integer(0);
+			return make_number(0);
 		} else {
-			r = make_integer(0 - b->u.i);
+			r = make_number(0 - b->u.i);
 			free_value(a);
 			free_value(b);
 			return (r);
 		}
-	} else if (!to_integer(b)) {
+	} else if (!to_number(b)) {
 		if( !extra_error_message_supplied )
 			ast_log(LOG_WARNING, "non-numeric argument\n");
 		free_value(b);
 		return (a);
 	}
 
-	r = make_integer (/*(quad_t)*/(a->u.i - b->u.i));
+	r = make_number (a->u.i - b->u.i);
 	if (chk_minus (a->u.i, b->u.i, r->u.i)) {
 		ast_log(LOG_WARNING, "overflow\n");
 	}
@@ -2604,14 +3218,14 @@ op_negate (struct val *a)
 {
 	struct val *r;
 
-	if (!to_integer (a) ) {
+	if (!to_number (a) ) {
 		free_value(a);
 		if( !extra_error_message_supplied )
 			ast_log(LOG_WARNING, "non-numeric argument\n");
-		return make_integer(0);
+		return make_number(0);
 	}
 
-	r = make_integer (/*(quad_t)*/(- a->u.i));
+	r = make_number (- a->u.i);
 	if (chk_minus (0, a->u.i, r->u.i)) {
 		ast_log(LOG_WARNING, "overflow\n");
 	}
@@ -2633,7 +3247,7 @@ op_compl (struct val *a)
 	{
 		switch( a->type )
 		{
-		case AST_EXPR_integer:
+		case AST_EXPR_number:
 			if( a->u.i == 0 )
 				v1 = 0;
 			break;
@@ -2664,13 +3278,13 @@ op_compl (struct val *a)
 		}
 	}
 	
-	r = make_integer (!v1);
+	r = make_number (!v1);
 	free_value (a);
 	return r;
 }
 
 static int
-chk_times (quad_t a, quad_t b, quad_t r)
+chk_times (FP___TYPE a, FP___TYPE b, FP___TYPE r)
 {
 	/* special case: first operand is 0, no overflow possible */
 	if (a == 0)
@@ -2686,15 +3300,15 @@ op_times (struct val *a, struct val *b)
 {
 	struct val *r;
 
-	if (!to_integer (a) || !to_integer (b)) {
+	if (!to_number (a) || !to_number (b)) {
 		free_value(a);
 		free_value(b);
 		if( !extra_error_message_supplied )
 			ast_log(LOG_WARNING, "non-numeric argument\n");
-		return(make_integer(0));
+		return(make_number(0));
 	}
 
-	r = make_integer (/*(quad_t)*/(a->u.i * b->u.i));
+	r = make_number (a->u.i * b->u.i);
 	if (chk_times (a->u.i, b->u.i, r->u.i)) {
 		ast_log(LOG_WARNING, "overflow\n");
 	}
@@ -2704,7 +3318,7 @@ op_times (struct val *a, struct val *b)
 }
 
 static int
-chk_div (quad_t a, quad_t b)
+chk_div (FP___TYPE a, FP___TYPE b)
 {
 	/* div by zero has been taken care of before */
 	/* only QUAD_MIN / -1 causes overflow */
@@ -2719,28 +3333,28 @@ op_div (struct val *a, struct val *b)
 {
 	struct val *r;
 
-	if (!to_integer (a)) {
+	if (!to_number (a)) {
 		free_value(a);
 		free_value(b);
 		if( !extra_error_message_supplied )
 			ast_log(LOG_WARNING, "non-numeric argument\n");
-		return make_integer(0);
-	} else if (!to_integer (b)) {
+		return make_number(0);
+	} else if (!to_number (b)) {
 		free_value(a);
 		free_value(b);
 		if( !extra_error_message_supplied )
 			ast_log(LOG_WARNING, "non-numeric argument\n");
-		return make_integer(INT_MAX);
+		return make_number(INT_MAX);
 	}
 
 	if (b->u.i == 0) {
 		ast_log(LOG_WARNING, "division by zero\n");		
 		free_value(a);
 		free_value(b);
-		return make_integer(INT_MAX);
+		return make_number(INT_MAX);
 	}
 
-	r = make_integer (/*(quad_t)*/(a->u.i / b->u.i));
+	r = make_number (a->u.i / b->u.i);
 	if (chk_div (a->u.i, b->u.i)) {
 		ast_log(LOG_WARNING, "overflow\n");
 	}
@@ -2754,12 +3368,12 @@ op_rem (struct val *a, struct val *b)
 {
 	struct val *r;
 
-	if (!to_integer (a) || !to_integer (b)) {
+	if (!to_number (a) || !to_number (b)) {
 		if( !extra_error_message_supplied )
 			ast_log(LOG_WARNING, "non-numeric argument\n");
 		free_value(a);
 		free_value(b);
-		return make_integer(0);
+		return make_number(0);
 	}
 
 	if (b->u.i == 0) {
@@ -2768,7 +3382,7 @@ op_rem (struct val *a, struct val *b)
 		return(b);
 	}
 
-	r = make_integer (/*(quad_t)*/(a->u.i % b->u.i));
+	r = make_number (FUNC_FMOD(a->u.i, b->u.i)); /* either fmod or fmodl if FP___TYPE is available */
 	/* chk_rem necessary ??? */
 	free_value (a);
 	free_value (b);
@@ -2808,11 +3422,11 @@ op_colon (struct val *a, struct val *b)
 			v = make_str (a->u.s + rm[1].rm_so);
 
 		} else {
-			v = make_integer ((quad_t)(rm[0].rm_eo - rm[0].rm_so));
+			v = make_number ((FP___TYPE)(rm[0].rm_eo - rm[0].rm_so));
 		}
 	} else {
 		if (rp.re_nsub == 0) {
-			v = make_integer ((quad_t)0);
+			v = make_number ((FP___TYPE)0);
 		} else {
 			v = make_str ("");
 		}
@@ -2859,11 +3473,11 @@ op_eqtilde (struct val *a, struct val *b)
 			v = make_str (a->u.s + rm[1].rm_so);
 
 		} else {
-			v = make_integer ((quad_t)(rm[0].rm_eo - rm[0].rm_so));
+			v = make_number ((FP___TYPE)(rm[0].rm_eo - rm[0].rm_so));
 		}
 	} else {
 		if (rp.re_nsub == 0) {
-			v = make_integer ((quad_t)0);
+			v = make_number ((FP___TYPE)0.0);
 		} else {
 			v = make_str ("");
 		}
@@ -2873,6 +3487,32 @@ op_eqtilde (struct val *a, struct val *b)
 	free_value (a);
 	free_value (b);
 	regfree (&rp);
+
+	return v;
+}
+
+static struct val *  /* this is a string concat operator */
+op_tildetilde (struct val *a, struct val *b)
+{
+	struct val *v;
+	char *vs;
+
+	/* coerce to both arguments to strings */
+	to_string(a);
+	to_string(b);
+	/* strip double quotes from both -- */
+	strip_quotes(a);
+	strip_quotes(b);
+	
+	vs = malloc(strlen(a->u.s)+strlen(b->u.s)+1);
+	strcpy(vs,a->u.s);
+	strcat(vs,b->u.s);
+
+	v = make_str(vs);
+
+	/* free arguments */
+	free_value(a);
+	free_value(b);
 
 	return v;
 }

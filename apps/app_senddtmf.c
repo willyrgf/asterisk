@@ -29,92 +29,126 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-
-#include "asterisk/lock.h"
-#include "asterisk/file.h"
-#include "asterisk/logger.h"
-#include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
-#include "asterisk/translate.h"
-#include "asterisk/options.h"
-#include "asterisk/utils.h"
 #include "asterisk/app.h"
 #include "asterisk/manager.h"
+#include "asterisk/channel.h"
 
+/*** DOCUMENTATION
+	<application name="SendDTMF" language="en_US">
+		<synopsis>
+			Sends arbitrary DTMF digits
+		</synopsis>
+		<syntax>
+			<parameter name="digits" required="true">
+				<para>List of digits 0-9,*#,abcd</para>
+			</parameter>
+			<parameter name="timeout_ms" required="false">
+				<para>Amount of time to wait in ms between tones. (defaults to .25s)</para>
+			</parameter>
+			<parameter name="duration_ms" required="false">
+				<para>Duration of each digit</para>
+			</parameter>
+                        <parameter name="channel" required="false">
+                                <para>Channel where digits will be played</para>
+                        </parameter>
+		</syntax>
+		<description>
+			<para>DTMF digits sent to a channel with half second pause</para>
+			<para>It will pass all digits or terminate if it encounters an error.</para>
+		</description>
+		<see-also>
+			<ref type="application">Read</ref>
+		</see-also>
+	</application>
+	<manager name="PlayDTMF" language="en_US">
+		<synopsis>
+			Play DTMF signal on a specific channel.
+		</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
+			<parameter name="Channel" required="true">
+				<para>Channel name to send digit to.</para>
+			</parameter>
+			<parameter name="Digit" required="true">
+				<para>The DTMF digit to play.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Plays a dtmf digit on the specified channel.</para>
+		</description>
+	</manager>
+ ***/
 static char *app = "SendDTMF";
 
-static char *synopsis = "Sends arbitrary DTMF digits";
-
-static char *descrip = 
-" SendDTMF(digits[|timeout_ms]): Sends DTMF digits on a channel. \n"
-" Accepted digits: 0-9, *#abcd, w (.5s pause)\n"
-" The application will either pass the assigned digits or terminate if it\n"
-" encounters an error.\n";
-
-
-static int senddtmf_exec(struct ast_channel *chan, void *data)
+static int senddtmf_exec(struct ast_channel *chan, const char *vdata)
 {
 	int res = 0;
-	struct ast_module_user *u;
-	char *digits = NULL, *to = NULL;
-	int timeout = 250;
+	char *data;
+	int dinterval = 0, duration = 0;
+	struct ast_channel *dchan;
+	AST_DECLARE_APP_ARGS(args,
+		AST_APP_ARG(digits);
+		AST_APP_ARG(dinterval);
+		AST_APP_ARG(duration);
+		AST_APP_ARG(channel);
+	);
 
-	if (ast_strlen_zero(data)) {
+	if (ast_strlen_zero(vdata)) {
 		ast_log(LOG_WARNING, "SendDTMF requires an argument (digits or *#aAbBcCdD)\n");
 		return 0;
 	}
 
-	u = ast_module_user_add(chan);
+	dchan = chan;
 
-	digits = ast_strdupa(data);
+	data = ast_strdupa(vdata);
+	AST_STANDARD_APP_ARGS(args, data);
 
-	if ((to = strchr(digits,'|'))) {
-		*to = '\0';
-		to++;
-		timeout = atoi(to);
+	if (!ast_strlen_zero(args.dinterval)) {
+		ast_app_parse_timelen(args.dinterval, &dinterval, TIMELEN_MILLISECONDS);
 	}
-		
-	if (timeout <= 0)
-		timeout = 250;
-
-	res = ast_dtmf_stream(chan,NULL,digits,timeout);
-		
-	ast_module_user_remove(u);
+	if (!ast_strlen_zero(args.duration)) {
+		ast_app_parse_timelen(args.duration, &duration, TIMELEN_MILLISECONDS);
+	}
+	if (!ast_strlen_zero(args.channel)) {
+		dchan = ast_channel_get_by_name(args.channel);
+	}
+	if (dchan != chan) {
+		ast_autoservice_start(chan);
+	}
+	res = ast_dtmf_stream(dchan, NULL, args.digits, dinterval <= 0 ? 250 : dinterval, duration);
+	if (dchan != chan) {
+		ast_autoservice_stop(chan);
+		ast_channel_unref(dchan);
+	}
 
 	return res;
 }
-
-static char mandescr_playdtmf[] =
-"Description: Plays a dtmf digit on the specified channel.\n"
-"Variables: (all are required)\n"
-"	Channel: Channel name to send digit to\n"
-"	Digit: The dtmf digit to play\n";
 
 static int manager_play_dtmf(struct mansession *s, const struct message *m)
 {
 	const char *channel = astman_get_header(m, "Channel");
 	const char *digit = astman_get_header(m, "Digit");
-	struct ast_channel *chan = ast_get_channel_by_name_locked(channel);
-	
-	if (!chan) {
-		astman_send_error(s, m, "Channel not specified");
+	struct ast_channel *chan;
+
+	if (!(chan = ast_channel_get_by_name(channel))) {
+		astman_send_error(s, m, "Channel not found");
 		return 0;
 	}
+
 	if (ast_strlen_zero(digit)) {
 		astman_send_error(s, m, "No digit specified");
-		ast_mutex_unlock(&chan->lock);
+		chan = ast_channel_unref(chan);
 		return 0;
 	}
 
-	ast_senddigit(chan, *digit);
+	ast_senddigit(chan, *digit, 0);
 
-	ast_mutex_unlock(&chan->lock);
+	chan = ast_channel_unref(chan);
+
 	astman_send_ack(s, m, "DTMF successfully queued");
-	
+
 	return 0;
 }
 
@@ -125,8 +159,6 @@ static int unload_module(void)
 	res = ast_unregister_application(app);
 	res |= ast_manager_unregister("PlayDTMF");
 
-	ast_module_user_hangup_all();
-
 	return res;	
 }
 
@@ -134,8 +166,8 @@ static int load_module(void)
 {
 	int res;
 
-	res = ast_manager_register2( "PlayDTMF", EVENT_FLAG_CALL, manager_play_dtmf, "Play DTMF signal on a specific channel.", mandescr_playdtmf );
-	res |= ast_register_application(app, senddtmf_exec, synopsis, descrip);
+	res = ast_manager_register_xml("PlayDTMF", EVENT_FLAG_CALL, manager_play_dtmf);
+	res |= ast_register_application_xml(app, senddtmf_exec);
 
 	return res;
 }

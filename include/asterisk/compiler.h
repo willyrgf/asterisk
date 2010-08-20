@@ -53,10 +53,10 @@
 #define attribute_malloc
 #endif
 
-#ifdef HAVE_ATTRIBUTE_deprecated
-#define attribute_deprecated __attribute__((deprecated))
+#ifdef HAVE_ATTRIBUTE_sentinel
+#define attribute_sentinel __attribute__((sentinel))
 #else
-#define attribute_deprecated
+#define attribute_sentinel
 #endif
 
 #ifdef HAVE_ATTRIBUTE_warn_unused_result
@@ -64,5 +64,8 @@
 #else
 #define attribute_warn_unused_result
 #endif
+
+/* Some older version of GNU gcc (3.3.5 on OpenBSD 4.3 for example) dont like 'NULL' as sentinel */
+#define SENTINEL ((char *)NULL)
 
 #endif /* _ASTERISK_COMPILER_H */

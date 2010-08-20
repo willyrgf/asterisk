@@ -10,7 +10,7 @@
 # License
 #
 
-OUTPUT=$HOME/digiuminfo
+OUTPUT=$HOME/digiuminfo.txt
 
 MYUID=$(id -u);
 
@@ -101,13 +101,6 @@ if [ "$ans" = "y" ]; then
   echo >> $OUTPUT;
 
   echo "------------------" >> $OUTPUT;
-  echo "ZAPTEL MODULE INFO" >> $OUTPUT;
-  echo "------------------" >> $OUTPUT;
-  modinfo /lib/modules/$(uname -r)/misc/*.ko >> $OUTPUT;
-  echo >> $OUTPUT;
-  echo >> $OUTPUT;
-
-  echo "------------------" >> $OUTPUT;
   echo "DAHDI MODULE INFO" >> $OUTPUT;
   echo "------------------" >> $OUTPUT;
   modinfo /lib/modules/$(uname -r)/dahdi/*.ko >> $OUTPUT;
@@ -136,13 +129,6 @@ if [ "$ans" = "y" ]; then
   echo >> $OUTPUT;
 
   echo "------------------" >> $OUTPUT;
-  echo "ZTTEST" >> $OUTPUT;
-  echo "------------------" >> $OUTPUT;
-  zttest -c 20 >> $OUTPUT;
-  echo >> $OUTPUT;
-  echo >> $OUTPUT;
-
-  echo "------------------" >> $OUTPUT;
   echo "DAHDI_TEST" >> $OUTPUT;
   echo "------------------" >> $OUTPUT;
   dahdi_test -c 20 >> $OUTPUT;
@@ -164,23 +150,9 @@ if [ "$ans" = "y" ]; then
   echo >> $OUTPUT;
 
   echo "------------------" >> $OUTPUT;
-  echo "ZAPTEL CONFIG" >> $OUTPUT;
-  echo "------------------" >> $OUTPUT;
-  grep -v '^#' /etc/zaptel.conf >> $OUTPUT;
-  echo >> $OUTPUT;
-  echo >> $OUTPUT;
-
-  echo "------------------" >> $OUTPUT;
   echo "DAHDI CONFIG" >> $OUTPUT;
   echo "------------------" >> $OUTPUT;
   grep -v '^#' /etc/dahdi/system.conf >> $OUTPUT;
-  echo >> $OUTPUT;
-  echo >> $OUTPUT;
-
-  echo "------------------" >> $OUTPUT;
-  echo "ZAPATA CONFIG" >> $OUTPUT;
-  echo "------------------" >> $OUTPUT;
-  grep -v '^;' /etc/asterisk/zapata.conf >> $OUTPUT;
   echo >> $OUTPUT;
   echo >> $OUTPUT;
 

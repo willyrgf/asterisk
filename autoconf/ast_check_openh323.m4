@@ -70,17 +70,19 @@ if test "${HAS_OPENH323:-unset}" != "unset" ; then
 fi
   AC_LANG_POP([C++])
 ])
+
 AC_DEFUN([AST_CHECK_OPENH323_BUILD], [
 	if test "${HAS_OPENH323:-unset}" != "unset"; then
 		AC_MSG_CHECKING(OpenH323 build option)
 		OPENH323_SUFFIX=
 		prefixes="h323_${PWLIB_PLATFORM}_ h323_ openh323"
 		for pfx in $prefixes; do
+			#files=`ls -l /usr/local/lib/lib${pfx}*.so* 2>/dev/null`
 			files=`ls -l ${OPENH323_LIBDIR}/lib${pfx}*.so* 2>/dev/null`
 			if test -z "$files"; then
 				# check the default location
 				files=`ls -l /usr/local/lib/lib${pfx}*.so* 2>/dev/null`
-			fi	
+			fi
 			libfile=
 			if test -n "$files"; then
 				for f in $files; do
