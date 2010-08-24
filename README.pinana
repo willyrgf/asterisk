@@ -1,0 +1,27 @@
+Edvina AB				2010-08-24
+Olle E. Johansson
+oej@edvina.net
+
+
+
+
+
+Project Pinana
+==============
+Project Pinana aims to add SUBSCRIBE and PUBLISH support for dialog-info SIP events. 
+
+This means that 
+ - extension states can be published to a SIP presense server.
+ - hints can be based on states on URIs in a SIP presense server.
+
+
+We divide development in multiple branches
+
+ - pinana-publish-1.4 for PUBLISH support in Asterisk 1.4
+ - pinana-publish-trunk for PUBLISH support in Asterisk trunk
+ - pinana-subscribe-1.4 for SUBSCRIBE support in Asterisk 1.4
+ - pinana-subscribe-trunk for SUBSCRIBE support in Asterisk trunk
+
+Developers are oej and marquis42
+This project is funded by Tele-Kompetanse in Oslo, Norway
+
