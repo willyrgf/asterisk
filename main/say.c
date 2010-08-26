@@ -50,6 +50,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/lock.h"
 #include "asterisk/localtime.h"
 #include "asterisk/utils.h"
+#include "asterisk/musiconhold.h"
 #include "asterisk/app.h"
 
 /* Forward declaration */
@@ -399,36 +400,89 @@ static int wait_file(struct ast_channel *chan, const char *ints, const char *fil
 	return wait_file_full(chan, ints, file, lang, -1, -1);
 }
 
+/* this routine to provide wait_file capability for those with audiofd, ctrlfd  */
+   
 static int wait_file_full(struct ast_channel *chan, const char *ints, const char *file, const char *lang, int audiofd, int ctrlfd) 
 {
 	int res;
 	struct ast_datastore *datastore;
-	if ((res = ast_streamfile(chan, file, lang)))
-		ast_log(LOG_WARNING, "Unable to play message %s\n", file);
-	if (!res) {
-		extern const struct ast_datastore_info queue_ds_sound_ending;  /* defined in file.c */
-		if ((datastore = ast_channel_datastore_find(chan, &queue_ds_sound_ending, NULL))) { /* app_queue wants to schedule this instead of play & wait */
-			struct ast_queue_streamfile_info *aqsi = datastore->data;
-			if (aqsi && aqsi->now_playing) {
+	extern const struct ast_datastore_info queue_ds_sound_ending;  /* defined in file.c */
+
+	/* if a datastore is present, we are in the queue app (perhaps others in time)
+	   and don't want to wait around for the sounds to finish playing */
+
+	if ((datastore = ast_channel_datastore_find(chan, &queue_ds_sound_ending, NULL))) { /* app_queue wants to schedule this instead of play & wait */
+		struct ast_queue_streamfile_info *aqsi = datastore->data;
+		if (aqsi) {
+			AST_LIST_LOCK(&aqsi->flist);
+			if (aqsi->now_playing) {
 				struct ast_queue_streamfile_name *fn = ast_calloc(1, sizeof(*fn));
-				aqsi->now_playing = 1;
+				
 				fn->filename = ast_strdup(file);
 				
 				/* link the struct into the current ast_queue_streamfile_info struct */
-				AST_LIST_LOCK(&aqsi->flist);
 				AST_LIST_INSERT_TAIL(&aqsi->flist, fn, list);
-				AST_LIST_UNLOCK(&aqsi->flist);
-				return 0;
+			} else {
+				/* if not playing, then start playing this file */
+				if (aqsi->ringing) {
+					ast_log(LOG_ERROR, "Stopping Indicate\n");
+					ast_indicate(aqsi->chan,-1);
+				} else {
+					ast_log(LOG_ERROR, "Stopping MOH\n");
+					ast_moh_stop(aqsi->chan);
+				}
+				
+				ast_log(LOG_ERROR, "Stopping Streaming\n");
+				ast_stopstream(aqsi->chan);
+				
+				ast_autoservice_stop(aqsi->chan);
+				
+				ast_log(LOG_ERROR, "Starting to stream %s\n", file);
+				res = ast_streamfile(aqsi->chan, file, aqsi->chan->language); /* begin the streaming */
+				
+				while (res && !AST_LIST_EMPTY(&aqsi->flist)) {
+					/* really, how could this even be possible?
+					   just in case.... */
+					struct ast_queue_streamfile_name *fn;
+					
+					fn = AST_LIST_REMOVE_HEAD(&aqsi->flist, list);
+					
+					ast_log(LOG_ERROR,"Start streaming file %s\n", fn->filename);
+					res = ast_streamfile(aqsi->chan, fn->filename, aqsi->chan->language);
+				}
+				
+				
+				if (res) {
+					/* oops, the current file has problems */
+					/* restore the moh */
+					if (aqsi->ringing) {
+						ast_log(LOG_ERROR, "Starting Indicate\n");
+						ast_indicate(aqsi->chan, AST_CONTROL_RINGING);
+					} else {
+						ast_log(LOG_ERROR, "Starting MOH\n");
+						ast_moh_start(aqsi->chan, aqsi->moh, NULL);
+					}
+					AST_LIST_UNLOCK(&aqsi->flist);
+					return 1;
+				}
+				aqsi->now_playing = 1; /* We have begun playback */
+				ast_autoservice_start(aqsi->chan); /* this will let the sound file play in a different thread */
 			}
+			AST_LIST_UNLOCK(&aqsi->flist);
+			return 0;
 		}
+		
+	} else {
+		/* otherwise, exactly business as usual */
+		if ((res = ast_streamfile(chan, file, lang)))
+			ast_log(LOG_WARNING, "Unable to play message %s\n", file);
 		if ((audiofd  > -1) && (ctrlfd > -1))
 			res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
 		else
 			res = ast_waitstream(chan, ints);
+		return res;
 	}
-	if (!res)
-		ast_stopstream(chan);
-	return res;
+	return 0;
 }
 
 /*! \brief  ast_say_number_full: call language-specific functions */
