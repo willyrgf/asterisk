@@ -299,6 +299,57 @@ enum subscriptiontype {
 	MWI_NOTIFICATION
 };
 
+/*!
+ * \brief The types of PUBLISH messages defined in RFC 3903
+ */
+enum sip_publish_type {
+	/*!
+	 * \brief Unknown
+	 *
+	 * \details
+	 * This actually is not defined in RFC 3903. We use this as a constant
+	 * to indicate that an incoming PUBLISH does not fit into any of the
+	 * other categories and is thus invalid.
+	 */
+	SIP_PUBLISH_UNKNOWN,
+	/*!
+	 * \brief Initial
+	 *
+	 * \details
+	 * The first PUBLISH sent. This will contain a non-zero Expires header
+	 * as well as a body that indicates the current state of the endpoint
+	 * that has sent the message. The initial PUBLISH is the only type
+	 * of PUBLISH to not contain a Sip-If-Match header in it.
+	 */
+	SIP_PUBLISH_INITIAL,
+	/*!
+	 * \brief Refresh
+	 *
+	 * \details
+	 * Used to keep a published state from expiring. This will contain a
+	 * non-zero Expires header but no body since its purpose is not to
+	 * update state.
+	 */
+	SIP_PUBLISH_REFRESH,
+	/*!
+	 * \brief Modify
+	 *
+	 * \details
+	 * Used to change state from its previous value. This will contain
+	 * a body updating the published state. May or may not contain an
+	 * Expires header.
+	 */
+	SIP_PUBLISH_MODIFY,
+	/*!
+	 * \brief Remove
+	 * 
+	 * \details
+	 * Used to remove published state from an ESC. This will contain
+	 * an Expires header set to 0 and likely no body.
+	 */
+	SIP_PUBLISH_REMOVE,
+};
+
 static const struct cfsubscription_types {
 	enum subscriptiontype type;
 	const char * const event;
@@ -480,7 +531,7 @@ static const struct cfsip_options {
 
 
 /*! \brief SIP Methods we support */
-#define ALLOWED_METHODS "INVITE, ACK, CANCEL, OPTIONS, BYE, REFER, SUBSCRIBE, NOTIFY, INFO"
+#define ALLOWED_METHODS "INVITE, ACK, CANCEL, OPTIONS, BYE, REFER, SUBSCRIBE, NOTIFY, INFO, PUBLISH"
 
 /*! \brief SIP Extensions we support */
 #define SUPPORTED_EXTENSIONS "replaces" 
@@ -1079,6 +1130,79 @@ static struct sip_pvt {
 
 #define FLAG_RESPONSE (1 << 0)
 #define FLAG_FATAL (1 << 1)
+
+struct sip_epa_entry {
+	/*!
+	 * When we are going to send a publish, we need to
+	 * know the type of PUBLISH to send.
+	 */
+	enum sip_publish_type publish_type;
+	/*!
+	 * When we send a PUBLISH, we have to be
+	 * sure to include the entity tag that we
+	 * received in the previous response.
+	 */
+	char entity_tag[SIPBUFSIZE];
+	/*!
+	 * The destination to which this EPA should send
+	 * PUBLISHes. This may be the name of a SIP peer
+	 * or a hostname.
+	 */
+	char destination[SIPBUFSIZE];
+	/*!
+	 * The body of the most recently-sent PUBLISH message.
+	 * This is useful for situations such as authentication,
+	 * in which we must send a message identical to the
+	 * one previously sent
+	 */
+	char body[SIPBUFSIZE];
+	/*!
+	 * Every event package has some constant data and
+	 * callbacks that all instances will share. This
+	 * data resides in this field.
+	 */
+	const struct epa_static_data *static_data;
+	/*!
+	 * In addition to the static data that all instances
+	 * of sip_epa_entry will have, each instance will
+	 * require its own instance-specific data.
+	 */
+	void *instance_data;
+};
+
+/*!
+ * Data which is the same for all instances of an EPA for a
+ * particular event package
+ */
+struct epa_static_data {
+	/*! The event type */
+	enum subscriptiontype event;
+	/*!
+	 * The name of the event as it would
+	 * appear in a SIP message
+	 */
+	const char *name;
+	/*!
+	 * The callback called when a 200 OK is received on an outbound PUBLISH
+	 */
+	void (*handle_ok)(struct sip_pvt *, struct sip_request *, struct sip_epa_entry *);
+	/*!
+	 * The callback called when an error response is received on an outbound PUBLISH
+	 */
+	void (*handle_error)(struct sip_pvt *, const int resp, struct sip_request *, struct sip_epa_entry *);
+	/*!
+	 * Destructor to call to clean up instance data
+	 */
+	void (*destructor)(void *instance_data);
+};
+
+/*!
+ * \brief backend for an event publication agent
+ */
+struct epa_backend {
+	const struct epa_static_data *static_data;
+	AST_LIST_ENTRY(epa_backend) next;
+};
 
 /*! \brief sip packet - raw format for outbound packets that are sent or scheduled for transmission */
 struct sip_pkt {
@@ -1692,6 +1816,56 @@ static struct ast_udptl_protocol sip_udptl = {
 	get_udptl_info: sip_get_udptl_peer,
 	set_udptl_peer: sip_set_udptl_peer,
 };
+
+AST_LIST_HEAD_STATIC(epa_static_data_list, epa_backend);
+
+static int sip_epa_register(const struct epa_static_data *static_data)
+{
+	struct epa_backend *backend = ast_calloc(1, sizeof(*backend));
+
+	if (!backend) {
+		return -1;
+	}
+
+	backend->static_data = static_data;
+
+	AST_LIST_LOCK(&epa_static_data_list);
+	AST_LIST_INSERT_TAIL(&epa_static_data_list, backend, next);
+	AST_LIST_UNLOCK(&epa_static_data_list);
+	return 0;
+}
+
+static const struct epa_static_data *find_static_data(const char * const event_package)
+{
+	const struct epa_backend *backend = NULL;
+
+	AST_LIST_LOCK(&epa_static_data_list);
+	AST_LIST_TRAVERSE(&epa_static_data_list, backend, next) {
+		if (!strcmp(backend->static_data->name, event_package)) {
+			break;
+		}
+	}
+	AST_LIST_UNLOCK(&epa_static_data_list);
+	return backend ? backend->static_data : NULL;
+}
+
+static struct sip_epa_entry *create_epa_entry (const char * const event_package, const char * const destination)
+{
+	struct sip_epa_entry *epa_entry;
+	const struct epa_static_data *static_data;
+
+	if (!(static_data = find_static_data(event_package))) {
+		return NULL;
+	}
+
+	if (!(epa_entry = ao2_alloc(sizeof(*epa_entry), static_data->destructor))) {
+		return NULL;
+	}
+
+	epa_entry->static_data = static_data;
+	ast_copy_string(epa_entry->destination, destination, sizeof(epa_entry->destination));
+	return epa_entry;
+}
 
 /*! \brief Convert transfer status to string */
 static char *referstatus2str(enum referstatus rstatus)
