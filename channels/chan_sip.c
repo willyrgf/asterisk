@@ -236,6 +236,8 @@ static struct ast_jb_conf global_jbconf;
 static const char config[] = "sip.conf";
 static const char notify_config[] = "sip_notify.conf";
 
+static const int DEFAULT_PUBLISH_EXPIRES = 3600;
+
 #define RTP 	1
 #define NO_RTP	0
 
@@ -1123,6 +1125,7 @@ static struct sip_pvt {
 	 * The large-scale changes would be a good idea for implementing during an SDP rewrite.
 	 */
 	struct offered_media offered_media[3];
+	struct sip_epa_entry *epa_entry;
 } *iflist = NULL;
 
 /*! Max entires in the history list for a sip_pvt */
@@ -1439,7 +1442,8 @@ static int transmit_response_with_allow(struct sip_pvt *p, const char *msg, cons
 static void transmit_fake_auth_response(struct sip_pvt *p, int sipmethod, struct sip_request *req, enum xmittype reliable);
 static int transmit_request(struct sip_pvt *p, int sipmethod, int inc, enum xmittype reliable, int newbranch);
 static int transmit_request_with_auth(struct sip_pvt *p, int sipmethod, int seqno, enum xmittype reliable, int newbranch);
-static int transmit_invite(struct sip_pvt *p, int sipmethod, int sdp, int init);
+static int transmit_publish(struct sip_epa_entry *epa_entry, enum sip_publish_type publish_type, const char * const explicit_uri);
+static int transmit_invite(struct sip_pvt *p, int sipmethod, int sdp, int init, const char * const explicit_uri);
 static int transmit_reinvite_with_sdp(struct sip_pvt *p);
 static int transmit_info_with_digit(struct sip_pvt *p, const char digit, unsigned int duration);
 static int transmit_info_with_vidupdate(struct sip_pvt *p);
@@ -1681,7 +1685,7 @@ static int transmit_state_notify(struct sip_pvt *p, int state, int full, int tim
 static void initialize_initreq(struct sip_pvt *p, struct sip_request *req);
 static int init_req(struct sip_request *req, int sipmethod, const char *recip);
 static int reqprep(struct sip_request *req, struct sip_pvt *p, int sipmethod, int seqno, int newbranch);
-static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmethod);
+static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmethod, const char * const explicit_uri);
 static int init_resp(struct sip_request *resp, const char *msg);
 static inline int resp_needs_contact(const char *msg, enum sipmethod method);
 static int respprep(struct sip_request *resp, struct sip_pvt *p, const char *msg, const struct sip_request *req);
@@ -3456,7 +3460,7 @@ static int sip_call(struct ast_channel *ast, char *dest, int timeout)
 			p->t38.jointcapability = p->t38.capability;
 			if (option_debug > 1)
 				ast_log(LOG_DEBUG,"Our T38 capability (%d), joint T38 capability (%d)\n", p->t38.capability, p->t38.jointcapability);
-			xmitres = transmit_invite(p, SIP_INVITE, 1, 2);
+			xmitres = transmit_invite(p, SIP_INVITE, 1, 2, NULL);
 			if (xmitres == XMIT_ERROR)
 				return -1;	/* Transmission error */
 
@@ -7710,7 +7714,7 @@ static void build_rpid(struct sip_pvt *p)
 }
 
 /*! \brief Initiate new SIP request to peer/user */
-static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmethod)
+static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmethod, const char * const explicit_uri)
 {
 	char invite_buf[256] = "";
 	char *invite = invite_buf;
@@ -7784,27 +7788,30 @@ static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmetho
 	else
 		snprintf(from, sizeof(from), "\"%s\" <sip:%s@%s>;tag=%s", n, l, d, p->tag);
 
-	/* If we're calling a registered SIP peer, use the fullcontact to dial to the peer */
-	if (!ast_strlen_zero(p->fullcontact)) {
-		/* If we have full contact, trust it */
-		ast_build_string(&invite, &invite_max, "%s", p->fullcontact);
+	if (!ast_strlen_zero(explicit_uri)) {
+		ast_build_string(&invite, &invite_max, "%s", explicit_uri);
 	} else {
-		/* Otherwise, use the username while waiting for registration */
-		ast_build_string(&invite, &invite_max, "sip:");
-		if (!ast_strlen_zero(p->username)) {
-			n = p->username;
-			if (pedanticsipchecking) {
-				ast_uri_encode(n, tmp, sizeof(tmp), 0);
-				n = tmp;
+		/* If we're calling a registered SIP peer, use the fullcontact to dial to the peer */
+		if (!ast_strlen_zero(p->fullcontact)) {
+			/* If we have full contact, trust it */
+			ast_build_string(&invite, &invite_max, "%s", p->fullcontact);
+		} else {
+			/* Otherwise, use the username while waiting for registration */
+			ast_build_string(&invite, &invite_max, "sip:");
+			if (!ast_strlen_zero(p->username)) {
+				n = p->username;
+				if (pedanticsipchecking) {
+					ast_uri_encode(n, tmp, sizeof(tmp), 0);
+					n = tmp;
+				}
+				ast_build_string(&invite, &invite_max, "%s@", n);
 			}
-			ast_build_string(&invite, &invite_max, "%s@", n);
+			ast_build_string(&invite, &invite_max, "%s", p->tohost);
+			if (p->portinuri)
+				ast_build_string(&invite, &invite_max, ":%d", ntohs(p->sa.sin_port));
+			ast_build_string(&invite, &invite_max, "%s", urioptions);
 		}
-		ast_build_string(&invite, &invite_max, "%s", p->tohost);
-		if (p->portinuri)
-			ast_build_string(&invite, &invite_max, ":%d", ntohs(p->sa.sin_port));
-		ast_build_string(&invite, &invite_max, "%s", urioptions);
 	}
-
 	/* If custom URI options have been provided, append them */
 	if (p->options && !ast_strlen_zero(p->options->uri_options))
 		ast_build_string(&invite, &invite_max, ";%s", p->options->uri_options);
@@ -7848,8 +7855,41 @@ static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmetho
 		add_header(req, "Remote-Party-ID", p->rpid);
 }
 
+static int transmit_publish(struct sip_epa_entry *epa_entry, enum sip_publish_type publish_type, const char * const explicit_uri)
+{
+	struct sip_pvt *pvt;
+	int expires;
+
+	epa_entry->publish_type = publish_type;
+
+	if (!(pvt = sip_alloc(NULL, NULL, 0, SIP_PUBLISH))) {
+		return -1;
+	}
+
+	ast_mutex_lock(&pvt->lock);;
+
+	if (create_addr(pvt, epa_entry->destination, NULL)) {
+		dialog_unlink_all(pvt, TRUE, TRUE);
+		dialog_unref(pvt, "create_addr failed in transmit_publish. Unref dialog");
+	}
+	ast_sip_ouraddrfor(&pvt->sa.sin_addr, &pvt->ourip);
+	ast_set_flag(&pvt->flags[0], SIP_OUTGOING);
+	expires = (publish_type == SIP_PUBLISH_REMOVE) ? 0 : DEFAULT_PUBLISH_EXPIRES;
+	pvt->expiry = expires;
+
+	/* Bump refcount for sip_pvt's reference */
+	ao2_ref(epa_entry, +1);
+	pvt->epa_entry = epa_entry;
+
+	transmit_invite(pvt, SIP_PUBLISH, FALSE, 2, explicit_uri);
+	ast_mutex_unlock(&pvt->lock);
+	sip_scheddestroy(pvt, DEFAULT_TRANS_TIMEOUT);
+	dialog_unref(pvt, "Done with the sip_pvt allocated for transmitting PUBLISH");
+	return 0;
+}
+
 /*! \brief Build REFER/INVITE/OPTIONS message and transmit it */
-static int transmit_invite(struct sip_pvt *p, int sipmethod, int sdp, int init)
+static int transmit_invite(struct sip_pvt *p, int sipmethod, int sdp, int init, const char * const explicit_uri)
 {
 	struct sip_request req;
 	
@@ -7860,7 +7900,7 @@ static int transmit_invite(struct sip_pvt *p, int sipmethod, int sdp, int init)
 		p->invite_branch = p->branch;
 		build_via(p);
 		if (init > 1)
-			initreqprep(&req, p, sipmethod);
+			initreqprep(&req, p, sipmethod, NULL);
 		else
 			reqprep(&req, p, sipmethod, 0, 0);	
 	} else
@@ -8141,7 +8181,7 @@ static int transmit_notify_with_mwi(struct sip_pvt *p, int newmsgs, int oldmsgs,
 	char *t = tmp;
 	size_t maxbytes = sizeof(tmp);
 
-	initreqprep(&req, p, SIP_NOTIFY);
+	initreqprep(&req, p, SIP_NOTIFY, NULL);
 	add_header(&req, "Event", "message-summary");
 	add_header(&req, "Content-Type", default_notifymime);
 
@@ -12401,7 +12441,7 @@ static int sip_notify(int fd, int argc, char *argv[])
 			continue;
 		}
 
-		initreqprep(&req, p, SIP_NOTIFY);
+		initreqprep(&req, p, SIP_NOTIFY, NULL);
 
 		for (var = varlist; var; var = var->next) {
 			if (!strcasecmp(var->name, "Content-Length")) {
@@ -12507,7 +12547,7 @@ static int do_proxy_auth(struct sip_pvt *p, struct sip_request *req, char *heade
 	/* Now we have a reply digest */
 	p->options->auth = digest;
 	p->options->authheader = respheader;
-	return transmit_invite(p, sipmethod, sipmethod == SIP_INVITE, init); 
+	return transmit_invite(p, sipmethod, sipmethod == SIP_INVITE, init, NULL); 
 }
 
 /*! \brief  reply to authentication for outbound registrations
@@ -17510,9 +17550,9 @@ static int sip_poke_peer(struct sip_peer *peer)
 	ast_set_flag(&p->flags[0], SIP_OUTGOING);
 #ifdef VOCAL_DATA_HACK
 	ast_copy_string(p->username, "__VOCAL_DATA_SHOULD_READ_THE_SIP_SPEC__", sizeof(p->username));
-	xmitres = transmit_invite(p, SIP_INVITE, 0, 2);
+	xmitres = transmit_invite(p, SIP_INVITE, 0, 2, NULL);
 #else
-	xmitres = transmit_invite(p, SIP_OPTIONS, 0, 2);
+	xmitres = transmit_invite(p, SIP_OPTIONS, 0, 2, NULL);
 #endif
 	gettimeofday(&peer->ps, NULL);
 	if (xmitres == XMIT_ERROR) {
