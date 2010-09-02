@@ -3582,6 +3582,26 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 			int res2;
 
 			res2 = ast_autoservice_start(qe->chan);
+			ast_log(LOG_ERROR,"Autoservice started on chan\n");
+			/* instead of starting autoservice and jacking this thread to push sound to the
+			   peer channel, let's set up a background player to the peer channel and 
+			   get on with life in this thread. */
+
+/*
+	datastore = ast_channel_datastore_alloc(&queue_ds_sound_ending, NULL);
+
+	aqsi->endHandler = ast_queue_peer_sound_finished_handler;
+	aqsi->qe = &qe;
+	aqsi->chan = chan;
+	aqsi->ringing = ringing;
+	aqsi->now_playing = 0;
+	strcpy(aqsi->moh, qe.moh);
+	AST_LIST_HEAD_INIT(&aqsi->flist);
+	datastore->data = aqsi;
+	
+	ast_channel_datastore_add(chan, datastore);
+*/
+			
 			ast_log(LOG_ERROR,"Autoservice started\n");
 				if (qe->parent->memberdelay) {
 					ast_log(LOG_NOTICE, "Delaying member connect for %d seconds\n", qe->parent->memberdelay);
@@ -4753,7 +4773,7 @@ void ast_queue_sound_finished_handler(void *data)
 	and handle the EOF asynchronously via ast_autoservice_*().
 
 	*/
-	ast_log(LOG_WARNING,"SOUND_FINISHED_HANDLER CALLED! chan=%p\n", chan);
+	ast_log(LOG_WARNING,"----SOUND_FINISHED_HANDLER CALLED! chan=%p\n", chan);
 	ast_log(LOG_ERROR,"StopStream\n");
 	ast_stopstream(chan);
 	ast_log(LOG_ERROR,"AutoServiceStop\n");
@@ -4839,6 +4859,7 @@ static int play_file(struct ast_channel *chan, const char *filename, int ringing
 	if (aqsi->now_playing) {
 		struct ast_queue_streamfile_name *fn = ast_calloc(1, sizeof(*fn));
 		fn->filename = ast_strdup(filename);
+		ast_log(LOG_ERROR,"queued sound file %s for playing\n", filename);
 		
 		/* link the struct into the current ast_queue_streamfile_info struct */
 		AST_LIST_INSERT_TAIL(&aqsi->flist, fn, list); /* in this case, nothing else to do, 
@@ -4856,6 +4877,7 @@ static int play_file(struct ast_channel *chan, const char *filename, int ringing
 		ast_log(LOG_ERROR, "Stopping Streaming\n");
 		ast_stopstream(aqsi->chan);
 		
+		ast_log(LOG_ERROR, "Autoservice stop\n");
 		ast_autoservice_stop(aqsi->chan);
 		
 		ast_log(LOG_ERROR, "Starting to stream %s\n", filename);
@@ -4887,6 +4909,7 @@ static int play_file(struct ast_channel *chan, const char *filename, int ringing
 			return 1;
 		}
 		aqsi->now_playing = 1; /* We have begun playback */
+		ast_log(LOG_ERROR,"Autoservice start");
 		ast_autoservice_start(aqsi->qe->chan); /* this will let the sound file play in a different thread */
 	}
 	
