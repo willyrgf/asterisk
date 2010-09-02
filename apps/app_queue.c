@@ -57,7 +57,7 @@
  */
 
 /*** MODULEINFO
-	<depend>res_monitor</depend>
+	<use>res_monitor</use>
  ***/
 
 #include "asterisk.h"
@@ -8186,7 +8186,7 @@ static int load_module(void)
 
 static int reload(void)
 {
-	struct ast_flags mask = {AST_FLAGS_ALL,};
+	struct ast_flags mask = {AST_FLAGS_ALL & ~QUEUE_RESET_STATS,};
 	ast_unload_realtime("queue_members");
 	reload_handler(1, &mask, NULL);
 	return 0;
@@ -8197,5 +8197,6 @@ AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "True Call Queueing",
 		.unload = unload_module,
 		.reload = reload,
 		.load_pri = AST_MODPRI_DEVSTATE_CONSUMER,
+		.nonoptreq = "res_monitor",
 	       );
 
