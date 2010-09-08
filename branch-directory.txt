@@ -1,7 +1,6 @@
 02-labarea				Unknown experiments
 04-labs					Unknown experiments
 08-labaera				Unknown experiments
-adb-codename-appleraisin	1.4	Asterisk DB over realtime
 altest				1.4	Needs further investigation			CHECK
 astum				Trunk	Asterisk User Manager (Experimental code)
 bp-res_conf_ldap-1.4		1.4	Backport of realtime LDAP
@@ -19,13 +18,14 @@ callpickup			Trunk	Invite/replaces support (Experimental)
 cancel_answer_elsewhere		Trunk	Code that's merged into trunk				DELETE
 cancel_elsewhere_1.4		1.4	Backport of cancel_elsewhere
 cdr_radius				No idea. Experimental or merged.			DELETE
-codename-appleraisin-trunk	Trunk	Asterisk DB over realtime - need help, candidate for 1.8
 codename-pineapple			chan_sip3. Lots of cool stuff. never merged
 deluxepine-1.4			1.4	Named access control lists
 deluxepine-trunk		Trunk	Named access control lists. Candidate for 1.8
 dialplan-ami-amievents		?	Needs investigation
 dns-srv-1.4.diff		1.4	Backport of SRV record support. Buggy.
 earlyrtpfix			1.4	Early media fixes. Merged.
+edv-appleraisin-1.4		1.4	Asterisk DB over realtime (in group directory)
+edv-appleraisin-trunk		trunk	Asterisk DB over realtime (in group directory)
 fixtoheader-1.4			1.4	Backport: Adds ability to set the SIP to: header in dialstring
 iaxtrunkfix-1.4			1.4	Backport of IAX trunk fix. Merged.
 invitestate				Propably merged. Investigate.
