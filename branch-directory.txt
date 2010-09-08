@@ -71,6 +71,7 @@ registrationfixes			????
 res_auth				Old stuff from Philippe Sultan
 ringstatelimit-1.4			????						CHECK
 set-tonezone-1.4		1.4	Ability to set tone zone in sip peer configuration
+set-tonezone-trunk		trunk	Ability to set tone zone in sip peer configuration
 sip-fork-support			More tests in forking
 sip-identity-1.4			Ed Guys SIP identity code
 sip-identity-trunk			Ed Guys SIP identity code
