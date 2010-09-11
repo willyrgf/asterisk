@@ -1134,6 +1134,24 @@ static struct sip_pvt {
 #define FLAG_RESPONSE (1 << 0)
 #define FLAG_FATAL (1 << 1)
 
+/*!
+ * \brief Data used by the device state thread
+ */
+static struct {
+	/*! Set to 1 to stop the thread */
+	unsigned int stop:1;
+	/*! The device state monitoring thread */
+	pthread_t thread;
+	/*! Lock for the state change queue */
+	ast_mutex_t lock;
+	/*! Condition for the state change queue */
+	ast_cond_t cond;
+	/*! Queue of state changes */
+	AST_LIST_HEAD_NOLOCK(, statechange) state_change_q;
+} device_state = {
+	.thread = AST_PTHREADT_NULL,
+};
+
 struct sip_epa_entry {
 	/*!
 	 * When we are going to send a publish, we need to
@@ -1580,6 +1598,7 @@ static int sip_poke_noanswer(const void *data);
 static int sip_poke_peer(struct sip_peer *peer);
 static void sip_poke_all_peers(void);
 static void sip_peer_hold(struct sip_pvt *p, int hold);
+static int sip_devicestate_cb(const char *dev, int state, void *ign);
 
 /*--- Applications, functions, CLI and manager command helpers */
 static const char *sip_nat_mode(const struct sip_pvt *p);
@@ -9691,6 +9710,112 @@ static int notify_extenstate_update(char *context, char* exten, int state, void 
 
 	
 	ast_mutex_unlock(&p->lock);
+
+	return 0;
+}
+
+/*! \brief set a member's status based on device state of that member's interface*/
+static void *handle_statechange(struct statechange *sc)
+{
+
+	/* Below is the body of the handle_statechange function from app_queue.  While some of it may
+	 * turn out to be useful, most of the logic will be totally different.
+	 * struct member_interface *curint;
+	char *loc;
+	char *technology;
+	char interface[80];
+
+	technology = ast_strdupa(sc->dev);
+	loc = strchr(technology, '/');
+	if (loc) {
+		*loc++ = '\0';
+	} else {
+		return NULL;
+	}
+
+	AST_LIST_LOCK(&interfaces);
+	AST_LIST_TRAVERSE(&interfaces, curint, list) {
+		char *slash_pos;
+		ast_copy_string(interface, curint->interface, sizeof(interface));
+		if ((slash_pos = strchr(interface, '/')))
+			if ((slash_pos = strchr(slash_pos + 1, '/')))
+				*slash_pos = '\0';
+
+		if (!strcasecmp(interface, sc->dev))
+			break;
+	}
+	AST_LIST_UNLOCK(&interfaces);
+
+	if (!curint) {
+		if (option_debug > 2)
+			ast_log(LOG_DEBUG, "Device '%s/%s' changed to state '%d' (%s) but we don't care because they're not a member of any queue.\n", technology, loc, sc->state, devstate2str(sc->state));
+		return NULL;
+	}
+
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Device '%s/%s' changed to state '%d' (%s)\n", technology, loc, sc->state, devstate2str(sc->state));
+
+	update_status(sc->dev, sc->state);
+
+	*/return NULL;
+}
+
+/*! \brief Consumer of the statechange queue */
+static void *device_state_thread(void *data)
+{
+	struct statechange *sc = NULL;
+
+	while (!device_state.stop) {
+		ast_mutex_lock(&device_state.lock);
+		if (!(sc = AST_LIST_REMOVE_HEAD(&device_state.state_change_q, entry))) {
+			ast_cond_wait(&device_state.cond, &device_state.lock);
+			sc = AST_LIST_REMOVE_HEAD(&device_state.state_change_q, entry);
+		}
+		ast_mutex_unlock(&device_state.lock);
+
+		/* Check to see if we were woken up to see the request to stop */
+		if (device_state.stop) {
+			break;
+		}
+
+		if (!sc) {
+			continue;
+		}
+
+		handle_statechange(sc);
+
+		free(sc);
+		sc = NULL;
+	}
+
+	if (sc) {
+		free(sc);
+	}
+
+	while ((sc = AST_LIST_REMOVE_HEAD(&device_state.state_change_q, entry))) {
+		free(sc);
+	}
+
+	return NULL;
+}
+
+/*! \brief Callback function to receive device state notifications
+ * and producer of the statechange queue
+ */
+static int sip_devicestate_cb(const char *dev, int state, void *ign)
+{
+	struct statechange *sc;
+
+	if (!(sc = ast_calloc(1, sizeof(*sc) + strlen(dev) + 1)))
+		return 0;
+
+	sc->state = state;
+	strcpy(sc->dev, dev);
+
+	ast_mutex_lock(&device_state.lock);
+	AST_LIST_INSERT_TAIL(&device_state.state_change_q, sc, entry);
+	ast_cond_signal(&device_state.cond);
+	ast_mutex_unlock(&device_state.lock);
 
 	return 0;
 }
