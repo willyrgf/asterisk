@@ -1544,6 +1544,7 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 	timestamp = ntohl(rtpheader[1]);
 	ssrc = ntohl(rtpheader[2]);
 
+	AST_LIST_HEAD_INIT_NOLOCK(&frames);
 	if (!mark && rtp->rxssrc && rtp->rxssrc != ssrc) {
  		struct ast_frame *f, srcupdate = {
  			AST_FRAME_CONTROL,
