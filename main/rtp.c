@@ -281,8 +281,8 @@ struct ast_rtcp {
 	char bridgedchan[AST_MAX_EXTENSION];		/*!< Bridged channel name */
 	char bridgeduniqueid[AST_MAX_EXTENSION];	/*!< Bridged channel uniqueid */
 	char readtranslator[80];	/* Translation done on reading audio from PBX */
-	int readcost;			/* Delay in milliseconds for translation of 1 second of audio */
 	char writetranslator[80];	/* Translation done on writing audio to PBX - bridged channel */
+	int readcost;			/* Delay in milliseconds for translation of 1 second of audio */
 	int writecost;			/* Delay in milliseconds for translation of 1 second of audio */
 };
 
@@ -2403,6 +2403,19 @@ void ast_rtcp_setcname(struct ast_rtp *rtp, const char *cname, size_t length)
 	ast_log(LOG_DEBUG, "--- Copied CNAME %s to RTCP structure (length %d)\n", cname, (int) length);
 }
 
+/*! \brief Set the transcoding variables for the QoS reports */
+void ast_rtcp_settranslator(struct ast_rtp *rtp, const char *readtranslator, const int readcost, const char *writetranslator, const int writecost)
+{
+	if (!rtp || !rtp->rtcp) {
+		return;
+	}
+	ast_copy_string(rtp->rtcp->readtranslator, readtranslator, sizeof(rtp->rtcp->readtranslator));
+	ast_copy_string(rtp->rtcp->writetranslator, writetranslator, sizeof(rtp->rtcp->writetranslator));
+	rtp->rtcp->readcost = readcost;
+	rtp->rtcp->writecost = writecost;
+	
+}
+
 /*! \brief set the name of the bridged channel
 
 At the time when we write the report there might not be a bridge, so we need
@@ -2566,7 +2579,6 @@ char *ast_rtp_get_quality(struct ast_rtp *rtp, struct ast_rtp_quality *qual)
 	*txcount       transmitted packets
 	*rlp           remote lost packets
 	*rtt           round trip time
-
 	*/
 
 	if (qual && rtp) {
@@ -2596,6 +2608,14 @@ char *ast_rtp_get_quality(struct ast_rtp *rtp, struct ast_rtp_quality *qual)
 			}
 			if (!ast_strlen_zero(rtp->rtcp->bridgeduniqueid)) {
 				ast_copy_string(qual->bridgeduniqueid, rtp->rtcp->bridgeduniqueid, sizeof(qual->bridgeduniqueid));
+			}
+			qual->readcost = rtp->rtcp->readcost;
+			qual->writecost = rtp->rtcp->writecost;
+			if (!ast_strlen_zero(rtp->rtcp->readtranslator)) {
+				ast_copy_string(qual->readtranslator, rtp->rtcp->readtranslator, sizeof(qual->readtranslator));
+			}
+			if (!ast_strlen_zero(rtp->rtcp->writetranslator)) {
+				ast_copy_string(qual->writetranslator, rtp->rtcp->writetranslator, sizeof(qual->writetranslator));
 			}
 		}
 	}

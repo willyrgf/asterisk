@@ -102,8 +102,10 @@ struct ast_rtp_quality {
 	struct sockaddr_in them;	  /*!< The Ip address used for media by remote end */
 	struct timeval start;		  /*!< When the call started */
 	struct timeval end;		  /*!< When the call ended */
-	char writetranslate[80];	
-	char readtranslate[80];	
+	char writetranslator[80];	  /*!< Translator used when writing */
+	char readtranslator[80];		  /*!< Translator providing frames when reading */
+	int writecost;		  /*!< Cost in milliseconds for encoding/decoding 1 second of outbound media */
+	int readcost;		  /*!< Cost in milliseconds for encoding/decoding 1 second of inbound media */
 };
 
 
@@ -197,6 +199,9 @@ int ast_rtp_sendcng(struct ast_rtp *rtp, int level);
 int ast_rtp_settos(struct ast_rtp *rtp, int tos);
 
 void ast_rtcp_setcname(struct ast_rtp *rtp, const char *cname, size_t length);
+
+/*! \brief Set the transcoding variables for the QoS reports */
+void ast_rtcp_settranslator(struct ast_rtp *rtp, const char *readtranslator, const int readcost, const char *writetranslator, const int writecost);
 
 /*! \brief set the name of the bridged channel
 
