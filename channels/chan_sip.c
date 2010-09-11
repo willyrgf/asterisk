@@ -1152,6 +1152,12 @@ static struct {
 	.thread = AST_PTHREADT_NULL,
 };
 
+struct statechange {
+	AST_LIST_ENTRY(statechange) entry;
+	int state;
+	char dev[0];
+};
+
 struct sip_epa_entry {
 	/*!
 	 * When we are going to send a publish, we need to
@@ -7924,8 +7930,8 @@ static int transmit_publish(struct sip_epa_entry *epa_entry, enum sip_publish_ty
 	ast_mutex_lock(&pvt->lock);;
 
 	if (create_addr(pvt, epa_entry->destination, NULL)) {
-		dialog_unlink_all(pvt, TRUE, TRUE);
-		dialog_unref(pvt, "create_addr failed in transmit_publish. Unref dialog");
+		sip_destroy(pvt);
+		return -1;
 	}
 	ast_sip_ouraddrfor(&pvt->sa.sin_addr, &pvt->ourip);
 	ast_set_flag(&pvt->flags[0], SIP_OUTGOING);
@@ -7939,7 +7945,6 @@ static int transmit_publish(struct sip_epa_entry *epa_entry, enum sip_publish_ty
 	transmit_invite(pvt, SIP_PUBLISH, FALSE, 2, explicit_uri);
 	ast_mutex_unlock(&pvt->lock);
 	sip_scheddestroy(pvt, DEFAULT_TRANS_TIMEOUT);
-	dialog_unref(pvt, "Done with the sip_pvt allocated for transmitting PUBLISH");
 	return 0;
 }
 
@@ -20280,6 +20285,11 @@ static int load_module(void)
 	/* And start the monitor for the first time */
 	restart_monitor();
 
+	ast_mutex_init(&device_state.lock);
+	ast_cond_init(&device_state.cond, NULL);
+	ast_pthread_create(&device_state.thread, NULL, device_state_thread, NULL);
+	ast_devstate_add(sip_devicestate_cb, NULL);
+
 	return AST_MODULE_LOAD_SUCCESS;
 }
 
@@ -20331,6 +20341,14 @@ static int unload_module(void)
 	}
 	monitor_thread = AST_PTHREADT_STOP;
 	ast_mutex_unlock(&monlock);
+
+	if (device_state.thread != AST_PTHREADT_NULL) {
+		device_state.stop = 1;
+		ast_mutex_lock(&device_state.lock);
+		ast_cond_signal(&device_state.cond);
+		ast_mutex_unlock(&device_state.lock);
+		pthread_join(device_state.thread, NULL);
+	}
 
 restartdestroy:
 	ast_mutex_lock(&iflock);
