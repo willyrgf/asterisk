@@ -9742,27 +9742,32 @@ static void *handle_statechange(struct statechange *sc)
 	AST_LIST_TRAVERSE(&interfaces, curint, list) {
 		char *slash_pos;
 		ast_copy_string(interface, curint->interface, sizeof(interface));
-		if ((slash_pos = strchr(interface, '/')))
-			if ((slash_pos = strchr(slash_pos + 1, '/')))
+		if ((slash_pos = strchr(interface, '/'))) {
+			if ((slash_pos = strchr(slash_pos + 1, '/'))) {
 				*slash_pos = '\0';
+			}
+		}
 
-		if (!strcasecmp(interface, sc->dev))
+		if (!strcasecmp(interface, sc->dev)) {
 			break;
+		}
 	}
 	AST_LIST_UNLOCK(&interfaces);
 
 	if (!curint) {
-		if (option_debug > 2)
+		if (option_debug > 2) {
 			ast_log(LOG_DEBUG, "Device '%s/%s' changed to state '%d' (%s) but we don't care because they're not a member of any queue.\n", technology, loc, sc->state, devstate2str(sc->state));
+		}
 		return NULL;
 	}
 
-	if (option_debug)
+	if (option_debug) {
 		ast_log(LOG_DEBUG, "Device '%s/%s' changed to state '%d' (%s)\n", technology, loc, sc->state, devstate2str(sc->state));
+	}
 
 	update_status(sc->dev, sc->state);
-
-	*/return NULL;
+	*/
+	return NULL;
 }
 
 /*! \brief Consumer of the statechange queue */
@@ -9811,8 +9816,9 @@ static int sip_devicestate_cb(const char *dev, int state, void *ign)
 {
 	struct statechange *sc;
 
-	if (!(sc = ast_calloc(1, sizeof(*sc) + strlen(dev) + 1)))
+	if (!(sc = ast_calloc(1, sizeof(*sc) + strlen(dev) + 1))) {
 		return 0;
+	}
 
 	sc->state = state;
 	strcpy(sc->dev, dev);
