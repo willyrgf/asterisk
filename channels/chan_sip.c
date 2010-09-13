@@ -18956,6 +18956,19 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 	return peer;
 }
 
+/*! \brief Load presence configuration
+	
+	This is the file where we configure
+	- which devices to publish to a presence server
+	- which extensions to publish to a presence server
+	- presence servers to use
+ */
+static int presence_load_config(struct ast_config *pcfg)
+{
+	struct ast_variable *v;
+	return TRUE;
+}
+
 /*! \brief Re-read SIP.conf config file
 \note	This function reloads all config data, except for
 	active peers (with registrations). They will only
@@ -18964,7 +18977,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
  */
 static int reload_config(enum channelreloadreason reason)
 {
-	struct ast_config *cfg, *ucfg;
+	struct ast_config *cfg, *ucfg, *pcfg;
 	struct ast_variable *v;
 	struct sip_peer *peer;
 	struct sip_user *user;
@@ -19492,6 +19505,15 @@ static int reload_config(enum channelreloadreason reason)
 			}
 		}
 	}
+
+	/* Now load the presence configuration */
+	pcfg = ast_config_load("sip-presence.conf");
+	if (pcfg) {
+		int presence_result = presence_load_config(pcfg);
+		ast_config_destroy(ucfg);
+		/* XXX Let's determine later what to do with the result here */
+	}
+
 	if (ast_find_ourip(&__ourip, bindaddr)) {
 		ast_log(LOG_WARNING, "Unable to get own IP address, SIP disabled\n");
 		ast_config_destroy(cfg);
