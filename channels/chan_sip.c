@@ -640,6 +640,15 @@ static int global_capability = AST_FORMAT_ULAW | AST_FORMAT_ALAW | AST_FORMAT_GS
 static struct ast_ha *global_contact_ha = NULL;
 static int global_dynamic_exclude_static = 0;
 
+/*!
+ * We use libxml2 in order to parse XML that may appear in the body of a SIP message. Currently,
+ * the only usage is for parsing dialog-info bodies of incoming NOTIFY messages in the dialog-info
+ * event package. This variable is set at module load time and may be checked at runtime to determine
+ * if XML parsing support was found.
+ */
+static int can_parse_xml;
+
+
 /* Object counters */
 static int suserobjs = 0;                /*!< Static users */
 static int ruserobjs = 0;                /*!< Realtime users */
@@ -1881,6 +1890,16 @@ static struct ast_udptl_protocol sip_udptl = {
 };
 
 AST_LIST_HEAD_STATIC(epa_static_data_list, epa_backend);
+
+static int sip_is_xml_parsable(void)
+{
+#ifdef HAVE_LIBXML2
+	return TRUE;
+#else
+	return FALSE;
+#endif
+}
+
 
 static int sip_epa_register(const struct epa_static_data *static_data)
 {
@@ -19506,6 +19525,8 @@ static int reload_config(enum channelreloadreason reason)
 		}
 	}
 
+	/* Check if we have the xml parsers we need */
+	can_parse_xml = sip_is_xml_parsable();
 	/* Now load the presence configuration */
 	pcfg = ast_config_load("sip-presence.conf");
 	if (pcfg) {
