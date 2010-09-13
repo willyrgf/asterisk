@@ -11,8 +11,11 @@ Project Pinana
 Project Pinana aims to add SUBSCRIBE and PUBLISH support for dialog-info SIP events. 
 
 This means that 
- - extension states can be published to a SIP presense server.
- - hints can be based on states on URIs in a SIP presense server.
+ - device states can be published to a SIP presence server
+ - extension states can be published to a SIP presence server.
+
+ - hints can be based on states on URIs in a SIP presence server.
+   Which means that asterisk will subscribe to the device states from the server
 
 
 We divide development in multiple branches
