@@ -172,6 +172,7 @@ static int timingfd = -1;				/* Timing file descriptor */
 static struct ast_netsock_list *netsock;
 static struct ast_netsock_list *outsock;		/*!< used if sourceaddress specified and bindaddr == INADDR_ANY */
 static int defaultsockfd = -1;
+static int unloading;
 
 int (*iax2_regfunk)(const char *username, int onoff) = NULL;
 
@@ -2324,6 +2325,12 @@ static void sched_delay_remove(struct sockaddr_in *sin, struct callno_entry *cal
 	};
 
 	if ((peercnt = ao2_find(peercnts, &tmp, OBJ_POINTER))) {
+		if (unloading) {
+			peercnt_remove_cb(peercnt);
+			replace_callno(callno_entry);
+			return;
+		}
+
 		/* refcount is incremented with ao2_find.  keep that ref for the scheduler */
 		if (option_debug) {
 			ast_log(LOG_DEBUG, "schedule decrement of callno used for %s in %d seconds\n", ast_inet_ntoa(sin->sin_addr), MIN_REUSE_TIME);
@@ -9976,12 +9983,14 @@ static void *iax2_process_thread(void *data)
 	ast_atomic_fetchadd_int(&iaxactivethreadcount,1);
 	pthread_cleanup_push(iax2_process_thread_cleanup, data);
 	for(;;) {
+		pthread_testcancel();
+
 		/* Wait for something to signal us to be awake */
 		ast_mutex_lock(&thread->lock);
 
 		/* Flag that we're ready to accept signals */
 		thread->ready_for_signal = 1;
-		
+
 		/* Put into idle list if applicable */
 		if (put_into_idle)
 			insert_idle_thread(thread);
@@ -12491,8 +12500,10 @@ static int __unload_module(void)
 	struct iax2_thread *thread = NULL;
 	int x;
 
+	unloading = 1;
+
 	/* Make sure threads do not hold shared resources when they are canceled */
-	
+
 	/* Grab the sched lock resource to keep it away from threads about to die */
 	/* Cancel the network thread, close the net socket */
 	if (netthreadid != AST_PTHREADT_NULL) {
@@ -12505,13 +12516,13 @@ static int __unload_module(void)
 		pthread_join(netthreadid, NULL);
 	}
 	if (schedthreadid != AST_PTHREADT_NULL) {
-		ast_mutex_lock(&sched_lock);	
+		ast_mutex_lock(&sched_lock);
 		pthread_cancel(schedthreadid);
 		ast_cond_signal(&sched_cond);
-		ast_mutex_unlock(&sched_lock);	
+		ast_mutex_unlock(&sched_lock);
 		pthread_join(schedthreadid, NULL);
 	}
-	
+
 	/* Call for all threads to halt */
 	AST_LIST_LOCK(&idle_list);
 	AST_LIST_TRAVERSE_SAFE_BEGIN(&idle_list, thread, list) {
@@ -12530,19 +12541,20 @@ static int __unload_module(void)
 	AST_LIST_UNLOCK(&active_list);
 
 	AST_LIST_LOCK(&dynamic_list);
-        AST_LIST_TRAVERSE_SAFE_BEGIN(&dynamic_list, thread, list) {
+	AST_LIST_TRAVERSE_SAFE_BEGIN(&dynamic_list, thread, list) {
 		AST_LIST_REMOVE_CURRENT(&dynamic_list, list);
 		pthread_cancel(thread->threadid);
-        }
+	}
 	AST_LIST_TRAVERSE_SAFE_END
-        AST_LIST_UNLOCK(&dynamic_list);
+	AST_LIST_UNLOCK(&dynamic_list);
 
 	AST_LIST_HEAD_DESTROY(&iaxq.queue);
 
 	/* Wait for threads to exit */
-	while(0 < iaxactivethreadcount)
+	while (0 < iaxactivethreadcount) {
 		usleep(10000);
-	
+	}
+
 	ast_netsock_release(netsock);
 	ast_netsock_release(outsock);
 	for (x = 0; x < ARRAY_LEN(iaxs); x++) {
@@ -12701,13 +12713,6 @@ static int load_module(void)
 		return AST_MODULE_LOAD_FAILURE;
 	}
 
-	randomcalltokendata = ast_random();
-	ast_custom_function_register(&iaxpeer_function);
-
-	iax_set_output(iax_debug_output);
-	iax_set_error(iax_error_output);
-	jb_setoutput(jb_error_output, jb_warning_output, NULL);
-	
 #ifdef HAVE_DAHDI
 #ifdef DAHDI_TIMERACK
 	timingfd = open(DAHDI_FILE_TIMER, O_RDWR);
@@ -12723,12 +12728,12 @@ static int load_module(void)
 	for (x = 0; x < ARRAY_LEN(iaxsl); x++) {
 		ast_mutex_init(&iaxsl[x]);
 	}
-	
+
 	ast_cond_init(&sched_cond, NULL);
 
 	io = io_context_create();
 	sched = sched_context_create();
-	
+
 	if (!io || !sched) {
 		ast_log(LOG_ERROR, "Out of memory\n");
 		return -1;
@@ -12748,33 +12753,44 @@ static int load_module(void)
 	}
 	ast_netsock_init(outsock);
 
+	randomcalltokendata = ast_random();
+
+	iax_set_output(iax_debug_output);
+	iax_set_error(iax_error_output);
+	jb_setoutput(jb_error_output, jb_warning_output, NULL);
+
 	ast_mutex_init(&waresl.lock);
 
 	AST_LIST_HEAD_INIT(&iaxq.queue);
-	
+
+	if (set_config(config, 0) == -1) {
+		return AST_MODULE_LOAD_DECLINE;
+	}
+
 	ast_cli_register_multiple(cli_iax2, sizeof(cli_iax2) / sizeof(struct ast_cli_entry));
 
 	ast_register_application(papp, iax2_prov_app, psyn, pdescrip);
-	
+
+	ast_custom_function_register(&iaxpeer_function);
+
 	ast_manager_register( "IAXpeers", 0, manager_iax2_show_peers, "List IAX Peers" );
 	ast_manager_register( "IAXnetstats", 0, manager_iax2_show_netstats, "Show IAX Netstats" );
 
-	if(set_config(config, 0) == -1)
-		return AST_MODULE_LOAD_DECLINE;
-
- 	if (ast_channel_register(&iax2_tech)) {
+	if (ast_channel_register(&iax2_tech)) {
 		ast_log(LOG_ERROR, "Unable to register channel class %s\n", "IAX2");
 		__unload_module();
 		return -1;
 	}
 
-	if (ast_register_switch(&iax2_switch)) 
+	if (ast_register_switch(&iax2_switch)) {
 		ast_log(LOG_ERROR, "Unable to register IAX switch\n");
+	}
 
 	res = start_network_thread();
 	if (!res) {
-		if (option_verbose > 1) 
+		if (option_verbose > 1) {
 			ast_verbose(VERBOSE_PREFIX_2 "IAX Ready and Listening\n");
+		}
 	} else {
 		ast_log(LOG_ERROR, "Unable to start network thread\n");
 		ast_netsock_release(netsock);

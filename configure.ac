@@ -30,6 +30,7 @@ case "${host_os}" in
      darwin*)
      AC_PREFIX_DEFAULT([/usr/local])
      AC_DEFINE([AST_POLL_COMPAT], 1, [Define to 1 if internal poll should be used.])
+     AC_DEFINE([_DARWIN_UNLIMITED_SELECT], 1, [Define to 1 if running on Darwin.])
      ;;
      *)
      AC_PREFIX_DEFAULT([/usr])
@@ -328,7 +329,7 @@ AC_FUNC_STRNLEN
 AC_FUNC_STRTOD
 AC_FUNC_UTIME_NULL
 AC_FUNC_VPRINTF
-AC_CHECK_FUNCS([asprintf atexit bzero dup2 endpwent floor ftruncate getcwd gethostbyname gethostname getloadavg gettimeofday inet_ntoa isascii localtime_r memchr memmove memset mkdir munmap pow putenv re_comp regcomp rint select setenv socket sqrt strcasecmp strcasestr strchr strcspn strdup strerror strlcat strlcpy strncasecmp strndup strnlen strrchr strsep strspn strstr strtol strtoq unsetenv utime vasprintf ioperm])
+AC_CHECK_FUNCS([asprintf atexit bzero dup2 endpwent floor ftruncate getcwd gethostbyname gethostname getloadavg gettimeofday inet_ntoa isascii localtime_r memchr memmove memset mkdir munmap pow ppoll putenv re_comp regcomp rint select setenv socket sqrt strcasecmp strcasestr strchr strcspn strdup strerror strlcat strlcpy strncasecmp strndup strnlen strrchr strsep strspn strstr strtol strtoq unsetenv utime vasprintf ioperm])
 
 AC_MSG_CHECKING(for timersub in time.h)
 AC_LINK_IFELSE(
@@ -444,12 +445,89 @@ AC_DEFINE([HAVE_GCC_ATOMICS], 1, [Define to 1 if your GCC C compiler provides at
 AC_MSG_RESULT(no)
 )
 
+AC_MSG_CHECKING(if we can increase the maximum select-able file descriptor)
+AC_RUN_IFELSE(
+AC_LANG_PROGRAM([
+#include <stdio.h>
+#include <sys/select.h>
+#include <sys/time.h>
+#include <sys/resource.h>
+#include <string.h>
+#include <errno.h>
+#include <stdlib.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+], [[
+	struct rlimit rlim = { FD_SETSIZE * 2, FD_SETSIZE * 2 };
+	int fd0, fd1;
+	struct timeval tv = { 0, };
+	struct ast_fdset { long fds_bits[[1024]]; } fds = { { 0, } };
+	if (setrlimit(RLIMIT_NOFILE, &rlim)) { exit(1); }
+	if ((fd0 = open("/dev/null", O_RDONLY)) < 0) { exit(1); }
+	if (dup2(fd0, (fd1 = FD_SETSIZE + 1)) < 0) { exit(1); }
+	FD_SET(fd0, (fd_set *) &fds);
+	FD_SET(fd1, (fd_set *) &fds);
+	if (select(FD_SETSIZE + 2, (fd_set *) &fds, NULL, NULL, &tv) < 0) { exit(1); }
+	exit(0)]]),
+	AC_MSG_RESULT(yes)
+	AC_DEFINE([HAVE_VARIABLE_FDSET], 1, [Define to 1 if your system can support larger than default select bitmasks.]),
+	AC_MSG_RESULT(no),
+	AC_MSG_RESULT(cross-compile)
+)
+
+ac_cv_have_variable_fdset=0
+AC_MSG_CHECKING(if we can increase the maximum select-able file descriptor)
+AC_RUN_IFELSE(
+AC_LANG_PROGRAM([
+#include <stdio.h>
+#include <sys/select.h>
+#include <sys/time.h>
+#include <sys/resource.h>
+#include <string.h>
+#include <errno.h>
+#include <stdlib.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+], [[
+	struct rlimit rlim = { FD_SETSIZE + 2, FD_SETSIZE + 2 };
+	int fd[[2]];
+	struct timeval tv = { 0, };
+	struct ast_fdset { long fds_bits[[1024]]; } fds = { { 0, } };
+	if (setrlimit(RLIMIT_NOFILE, &rlim)) { exit(1); }
+	if ((fd0 = open("/dev/null", O_RDONLY)) < 0) { exit(1); }
+	if (dup2(fd0, (fd1 = FD_SETSIZE + 1)) < 0) { exit(1); }
+	FD_SET(fd[[0]], (fd_set *) &fds);
+	FD_SET(fd[[1]], (fd_set *) &fds);
+	if (select(FD_SETSIZE + 2, (fd_set *) &fds, NULL, NULL, &tv) < 0) { exit(1); }
+	exit(0)]]),
+	AC_MSG_RESULT(yes)
+	ac_cv_have_variable_fdset=1
+	AC_DEFINE([HAVE_VARIABLE_FDSET], 1, [Define to 1 if your system can support larger than default select bitmasks.]),
+	AC_MSG_RESULT(no),
+	AC_MSG_RESULT(cross-compile)
+)
+
+if test "${ac_cv_have_variable_fdset}x" = "0x"; then
+	AC_RUN_IFELSE(
+		AC_LANG_PROGRAM([
+#include <unistd.h>
+#include <sys/types.h>
+#include <stdlib.h>
+], [if (getuid() != 0) { exit(1); }]),
+		AC_DEFINE([CONFIGURE_RAN_AS_ROOT], 1, [Some configure tests will unexpectedly fail if configure is run by a non-root user.  These may be able to be tested at runtime.]))
+fi
+
 AST_GCC_ATTRIBUTE(pure)
 AST_GCC_ATTRIBUTE(malloc)
 AST_GCC_ATTRIBUTE(const)
 AST_GCC_ATTRIBUTE(unused)
 AST_GCC_ATTRIBUTE(always_inline)
 AST_GCC_ATTRIBUTE(deprecated)
+AST_GCC_ATTRIBUTE(warn_unused_result)
 
 AC_MSG_CHECKING(for -ffunction-sections support)
 saved_CFLAGS="${CFLAGS}"
@@ -574,6 +652,25 @@ AC_CHECK_HEADER([libkern/OSAtomic.h],
                 [AC_DEFINE_UNQUOTED([HAVE_OSX_ATOMICS], 1, [Define to 1 if OSX atomic operations are supported.])])
 
 AC_CHECK_SIZEOF(int)
+AC_CHECK_SIZEOF(long)
+AC_CHECK_SIZEOF(long long)
+AC_COMPUTE_INT([ac_cv_sizeof_fd_set_fds_bits], [sizeof(foo.fds_bits[[0]])], [$ac_includes_default
+fd_set foo;])
+# This doesn't actually work; what it does is to use the variable set in the
+# previous test as a cached value to set the right output variables.
+AC_CHECK_SIZEOF(fd_set.fds_bits)
+
+# Set a type compatible with the previous.  We cannot just use a generic type
+# for these bits, because on big-endian systems, the bits won't match up
+# correctly if the size is wrong.
+if test $ac_cv_sizeof_int = $ac_cv_sizeof_fd_set_fds_bits; then
+  AC_DEFINE([TYPEOF_FD_SET_FDS_BITS], [int], [Define to a type of the same size as fd_set.fds_bits[[0]]])
+else if test $ac_cv_sizeof_long = $ac_cv_sizeof_fd_set_fds_bits; then
+  AC_DEFINE([TYPEOF_FD_SET_FDS_BITS], [long], [Define to a type of the same size as fd_set.fds_bits[[0]]])
+else if test $ac_cv_sizeof_long_long = $ac_cv_sizeof_fd_set_fds_bits; then
+  AC_DEFINE([TYPEOF_FD_SET_FDS_BITS], [long long], [Define to a type of the same size as fd_set.fds_bits[[0]]])
+fi ; fi ; fi
+
 
 # do the package library checks now
 
@@ -585,6 +682,7 @@ if test "x${OSARCH}" = "xlinux-gnu" ; then
   AST_EXT_LIB_CHECK([CAP], [cap], [cap_from_text], [sys/capability.h])
 fi
 
+PBX_DAHDI_TRANSCODE=0
 if test "${USE_DAHDI}" != "no" ; then
 	AST_C_DEFINE_CHECK([DAHDI], [DAHDI_RESET_COUNTERS], [dahdi/user.h], [230])
 	AST_C_DEFINE_CHECK([DAHDI], [DAHDI_DEFAULT_MTU_MRU], [dahdi/user.h], [220])
@@ -1430,7 +1528,7 @@ if test "${PBX_PWLIB}" = "1" -a "${USE_OPENH323}" != "no" ; then
 		OPENH323DIR="${OPENH323_DIR}"
 	fi
 	AST_CHECK_OPENH323()
-	AST_CHECK_PWLIB_VERSION([OpenH323], [OPENH323], [openh323buildopts.h], [1], [17], [3])
+	AST_CHECK_PWLIB_VERSION([OpenH323], [OPENH323], [openh323buildopts.h], [1], [17], [3], [], [1], [19], [0])
 	AST_CHECK_OPENH323_BUILD()
 	PLATFORM_OPENH323="h323_${PWLIB_PLATFORM}_${OPENH323_SUFFIX}"
 	AST_CHECK_PWLIB_BUILD([OpenH323], [OPENH323],

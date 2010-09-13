@@ -1149,7 +1149,7 @@ static struct ast_channel *channel_find_locked(const struct ast_channel *prev,
 				 * as there can be no more matches.
 				 */
 				if (!(name && !namelen)) {
-					prev = c;
+					_prev = c;
 					retries = -1;
 				}
 			}
@@ -1439,7 +1439,10 @@ struct ast_datastore *ast_channel_datastore_alloc(const struct ast_datastore_inf
 
 	datastore->info = info;
 
-	datastore->uid = ast_strdup(uid);
+	if (!ast_strlen_zero(uid) && !(datastore->uid = ast_strdup(uid))) {
+		ast_free(datastore);
+		datastore = NULL;
+	}
 
 	return datastore;
 }
@@ -2407,6 +2410,19 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 					ast_clear_flag(chan, AST_FLAG_IN_DTMF);
 					if (!f->len)
 						f->len = ast_tvdiff_ms(now, chan->dtmf_tv);
+
+					/* detect tones that were received on
+					 * the wire with durations shorter than
+					 * AST_MIN_DTMF_DURATION and set f->len
+					 * to the actual duration of the DTMF
+					 * frames on the wire.  This will cause
+					 * dtmf emulation to be triggered later
+					 * on.
+					 */
+					if (ast_tvdiff_ms(now, chan->dtmf_tv) < AST_MIN_DTMF_DURATION) {
+						f->len = ast_tvdiff_ms(now, chan->dtmf_tv);
+						ast_log(LOG_DTMF, "DTMF end '%c' detected to have actual duration %ld on the wire, emulation will be triggered on %s\n", f->subclass, f->len, chan->name);
+					}
 				} else if (!f->len) {
 					ast_log(LOG_DTMF, "DTMF end accepted without begin '%c' on %s\n", f->subclass, chan->name);
 					f->len = AST_MIN_DTMF_DURATION;
@@ -2600,6 +2616,11 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 	chan->fin = FRAMECOUNT_INC(chan->fin);
 
 done:
+	if (chan->audiohooks && ast_audiohook_write_list_empty(chan->audiohooks)) {
+		/* The list gets recreated if audiohooks are added again later */
+		ast_audiohook_detach_list(chan->audiohooks);
+		chan->audiohooks = NULL;
+	}
 	ast_channel_unlock(chan);
 	return f;
 }
@@ -2894,7 +2915,7 @@ int ast_prod(struct ast_channel *chan)
 			ast_log(LOG_DEBUG, "Prodding channel '%s'\n", chan->name);
 		a.subclass = chan->rawwriteformat;
 		a.data = nothing + AST_FRIENDLY_OFFSET;
-		a.src = "ast_prod";
+		a.src = "ast_prod"; /* this better match check in ast_write */
 		if (ast_write(chan, &a))
 			ast_log(LOG_WARNING, "Prodding channel '%s' failed\n", chan->name);
 	}
@@ -3045,10 +3066,10 @@ int ast_write(struct ast_channel *chan, struct ast_frame *fr)
 		res = 0;	/* XXX explain, why 0 ? */
 		goto done;
 	}
-	if (chan->generatordata) {
-		if (ast_test_flag(chan, AST_FLAG_WRITE_INT))
-			ast_deactivate_generator(chan);
-		else {
+	if (chan->generatordata && (!fr->src || strcasecmp(fr->src, "ast_prod"))) {
+		if (ast_test_flag(chan, AST_FLAG_WRITE_INT)) {
+				ast_deactivate_generator(chan);
+		} else {
 			if (fr->frametype == AST_FRAME_DTMF_END) {
 				/* There is a generator running while we're in the middle of a digit.
 				 * It's probably inband DTMF, so go ahead and pass it so it can
@@ -3168,6 +3189,9 @@ int ast_write(struct ast_channel *chan, struct ast_frame *fr)
 							AST_LIST_NEXT(cur, frame_list) = NULL;
 							ast_frfree(cur);
 						}
+						if (new_frame != dup) {
+							ast_frfree(new_frame);
+						}
 						cur = dup;
 					}
 				}
@@ -3273,6 +3297,11 @@ int ast_write(struct ast_channel *chan, struct ast_frame *fr)
 		chan->fout = FRAMECOUNT_INC(chan->fout);
 	}
 done:
+	if (chan->audiohooks && ast_audiohook_write_list_empty(chan->audiohooks)) {
+		/* The list gets recreated if audiohooks are added again later */
+		ast_audiohook_detach_list(chan->audiohooks);
+		chan->audiohooks = NULL;
+	}
 	ast_channel_unlock(chan);
 	return res;
 }
@@ -3697,6 +3726,8 @@ int ast_readstring_full(struct ast_channel *c, char *s, int len, int timeout, in
 	int pos = 0;	/* index in the buffer where we accumulate digits */
 	int to = ftimeout;
 
+	struct ast_silence_generator *silgen = NULL;
+
 	/* Stop if we're a zombie or need a soft hangup */
 	if (ast_test_flag(c, AST_FLAG_ZOMBIE) || ast_check_hangup(c))
 		return -1;
@@ -3707,26 +3738,35 @@ int ast_readstring_full(struct ast_channel *c, char *s, int len, int timeout, in
 		if (c->stream) {
 			d = ast_waitstream_full(c, AST_DIGIT_ANY, audiofd, ctrlfd);
 			ast_stopstream(c);
+			if (!silgen && ast_opt_transmit_silence)
+				silgen = ast_channel_start_silence_generator(c);
 			usleep(1000);
 			if (!d)
 				d = ast_waitfordigit_full(c, to, audiofd, ctrlfd);
 		} else {
+			if (!silgen && ast_opt_transmit_silence)
+				silgen = ast_channel_start_silence_generator(c);
 			d = ast_waitfordigit_full(c, to, audiofd, ctrlfd);
 		}
-		if (d < 0)
+		if (d < 0) {
+			ast_channel_stop_silence_generator(c, silgen);
 			return -1;
+		}
 		if (d == 0) {
 			s[pos]='\0';
+			ast_channel_stop_silence_generator(c, silgen);
 			return 1;
 		}
 		if (d == 1) {
 			s[pos]='\0';
+			ast_channel_stop_silence_generator(c, silgen);
 			return 2;
 		}
 		if (!strchr(enders, d))
 			s[pos++] = d;
 		if (strchr(enders, d) || (pos >= len)) {
 			s[pos]='\0';
+			ast_channel_stop_silence_generator(c, silgen);
 			return 0;
 		}
 		to = timeout;
@@ -3756,6 +3796,7 @@ int ast_channel_make_compatible(struct ast_channel *chan, struct ast_channel *pe
 {
 	int src;
 	int dst;
+	int use_slin;
 
 	if (chan->readformat == peer->writeformat && chan->writeformat == peer->readformat) {
 		/* Already compatible!  Moving on ... */
@@ -3800,8 +3841,9 @@ int ast_channel_make_compatible(struct ast_channel *chan, struct ast_channel *pe
 	 * no direct conversion available. If generic PLC is
 	 * desired, then transcoding via SLINEAR is a requirement
 	 */
+	use_slin = (src == AST_FORMAT_SLINEAR || dst == AST_FORMAT_SLINEAR);
 	if ((src != dst) && (ast_opt_generic_plc || ast_opt_transcode_via_slin) &&
-	    (ast_translate_path_steps(dst, src) != 1))
+	    (ast_translate_path_steps(dst, src) != 1 || use_slin))
 		dst = AST_FORMAT_SLINEAR;
 	if (ast_set_read_format(peer, dst) < 0) {
 		ast_log(LOG_WARNING, "Unable to set read format on channel %s to %d\n", peer->name, dst);
@@ -4005,6 +4047,7 @@ int ast_do_masquerade(struct ast_channel *original)
 	void *t_pvt;
 	struct ast_callerid tmpcid;
 	struct ast_channel *clone = original->masq;
+	struct ast_channel *bridged;
 	struct ast_cdr *cdr;
 	int rformat = original->readformat;
 	int wformat = original->writeformat;
@@ -4271,6 +4314,15 @@ int ast_do_masquerade(struct ast_channel *original)
 		pthread_kill(original->blocker, SIGURG);
 	if (option_debug)
 		ast_log(LOG_DEBUG, "Done Masquerading %s (%d)\n", original->name, original->_state);
+
+	if ((bridged = ast_bridged_channel(original))) {
+		ast_channel_lock(bridged);
+		ast_indicate(bridged, AST_CONTROL_SRCCHANGE);
+		ast_channel_unlock(bridged);
+	}
+
+	ast_indicate(original, AST_CONTROL_SRCCHANGE);
+
 	return 0;
 }
 
@@ -4652,8 +4704,8 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 		ast_set_flag(c0, AST_FLAG_END_DTMF_ONLY);
 
 	/* Before we enter in and bridge these two together tell them both the source of audio has changed */
-	ast_indicate(c0, AST_CONTROL_SRCUPDATE);
-	ast_indicate(c1, AST_CONTROL_SRCUPDATE);
+	ast_indicate(c0, AST_CONTROL_SRCCHANGE);
+	ast_indicate(c1, AST_CONTROL_SRCCHANGE);
 
 	for (/* ever */;;) {
 		struct timeval now = { 0, };

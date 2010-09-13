@@ -79,6 +79,7 @@ static int local_fixup(struct ast_channel *oldchan, struct ast_channel *newchan)
 static int local_sendhtml(struct ast_channel *ast, int subclass, const char *data, int datalen);
 static int local_sendtext(struct ast_channel *ast, const char *text);
 static int local_devicestate(void *data);
+static int local_setoption(struct ast_channel *chan, int option, void *data, int datalen);
 
 /* PBX interface structure for channel registration */
 static const struct ast_channel_tech local_tech = {
@@ -100,6 +101,7 @@ static const struct ast_channel_tech local_tech = {
 	.send_html = local_sendhtml,
 	.send_text = local_sendtext,
 	.devicestate = local_devicestate,
+	.setoption = local_setoption,
 };
 
 struct local_pvt {
@@ -123,6 +125,71 @@ struct local_pvt {
 #define LOCAL_MOH_PASSTHRU    (1 << 5) /*!< Pass through music on hold start/stop frames */
 
 static AST_LIST_HEAD_STATIC(locals, local_pvt);
+
+static int local_setoption(struct ast_channel *chan, int option, void * data, int datalen)
+{
+	int res;
+	struct local_pvt *p;
+	struct ast_channel *otherchan;
+	ast_chan_write_info_t *write_info;
+
+	if (option != AST_OPTION_CHANNEL_WRITE) {
+		return -1;
+	}
+
+	write_info = data;
+
+	if (write_info->version != AST_CHAN_WRITE_INFO_T_VERSION) {
+		ast_log(LOG_ERROR, "The chan_write_info_t type has changed, and this channel hasn't been updated!\n");
+		return -1;
+	}
+
+
+startover:
+	ast_channel_lock(chan);
+
+	p = chan->tech_pvt;
+	if (!p) {
+		ast_channel_unlock(chan);
+		ast_log(LOG_WARNING, "Could not update other side of %s, local_pvt went away.\n", chan->name);
+		return -1;
+	}
+
+	while (ast_mutex_trylock(&p->lock)) {
+		ast_channel_unlock(chan);
+		sched_yield();
+		ast_channel_lock(chan);
+		p = chan->tech_pvt;
+		if (!p) {
+			ast_channel_unlock(chan);
+			ast_log(LOG_WARNING, "Could not update other side of %s, local_pvt went away.\n", chan->name);
+			return -1;
+		}
+	}
+
+	otherchan = (write_info->chan == p->owner) ? p->chan : p->owner;
+
+	if (!otherchan || otherchan == write_info->chan) {
+		ast_mutex_unlock(&p->lock);
+		ast_channel_unlock(chan);
+		ast_log(LOG_WARNING, "Could not update other side of %s, other side went away.\n", chan->name);
+		return 0;
+	}
+
+	if (ast_channel_trylock(otherchan)) {
+		ast_mutex_unlock(&p->lock);
+		ast_channel_unlock(chan);
+		goto startover;
+	}
+
+	res = write_info->write_fn(otherchan, write_info->function, write_info->data, write_info->value);
+
+	ast_channel_unlock(otherchan);
+	ast_mutex_unlock(&p->lock);
+	ast_channel_unlock(chan);
+
+	return res;
+}
 
 /*! \brief Adds devicestate to local channels */
 static int local_devicestate(void *data)
@@ -183,10 +250,18 @@ static int local_queue_frame(struct local_pvt *p, int isoutbound, struct ast_fra
 
 	/* Ensure that we have both channels locked */
 	while (other && ast_channel_trylock(other)) {
-		ast_mutex_unlock(&p->lock);
+		int res;
+		if ((res = ast_mutex_unlock(&p->lock))) {
+			ast_log(LOG_ERROR, "chan_local bug! '&p->lock' was not locked when entering local_queue_frame! (%s)\n", strerror(res));
+			return -1;
+		}
 		if (us && us_locked) {
 			do {
-				ast_channel_unlock(us);
+				if (ast_channel_unlock(us)) {
+					ast_log(LOG_ERROR, "chan_local bug! Our channel was not locked, yet arguments indicated that it was!!\n");
+					ast_mutex_lock(&p->lock);
+					return -1;
+				}
 				usleep(1);
 				ast_channel_lock(us);
 			} while (ast_mutex_trylock(&p->lock));
@@ -286,6 +361,26 @@ static void check_bridge(struct local_pvt *p)
 							p->chan->audiohooks = p->owner->audiohooks;
 							p->owner->audiohooks = audiohooks_swapper;
 						}
+
+						/* If any Caller ID was set, preserve it after masquerade like above. We must check
+						 * to see if Caller ID was set because otherwise we'll mistakingly copy info not
+						 * set from the dialplan and will overwrite the real channel Caller ID. The reason
+						 * for this whole preswapping action is because the Caller ID is set on the channel
+						 * thread (which is the to be masqueraded away local channel) before both local
+						 * channels are optimized away.
+						 */
+						if (p->owner->cid.cid_dnid || p->owner->cid.cid_num ||
+							p->owner->cid.cid_name || p->owner->cid.cid_ani ||
+							p->owner->cid.cid_rdnis || p->owner->cid.cid_pres ||  
+							p->owner->cid.cid_ani2 || p->owner->cid.cid_ton ||  
+							p->owner->cid.cid_tns) {
+
+							struct ast_callerid tmpcid;
+							tmpcid = p->owner->cid;
+							p->owner->cid = p->chan->_bridge->cid;
+							p->chan->_bridge->cid = tmpcid;
+						}
+
 						ast_app_group_update(p->chan, p->owner);
 						ast_channel_masquerade(p->owner, p->chan->_bridge);
 						ast_set_flag(p, LOCAL_ALREADY_MASQED);

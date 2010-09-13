@@ -1,7 +1,7 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 1999 - 2009, Digium, Inc.
+ * Copyright (C) 1999 - 2010, Digium, Inc.
  *
  * Mark Spencer <markster@digium.com>
  *
@@ -161,7 +161,6 @@ int option_debug;				/*!< Debug level */
 
 double option_maxload;				/*!< Max load avg on system */
 int option_maxcalls;				/*!< Max number of active calls */
-
 /*! @} */
 
 char record_cache_dir[AST_CACHE_DIR_LEN] = AST_TMP_DIR;
@@ -239,6 +238,8 @@ extern const char *ast_build_machine;
 extern const char *ast_build_os;
 extern const char *ast_build_date;
 extern const char *ast_build_user;
+
+unsigned int ast_FD_SETSIZE = FD_SETSIZE;
 
 static char *_argv[256];
 static int shuttingdown;
@@ -1320,14 +1321,21 @@ static void quit_handler(int num, int nice, int safeshutdown, int restart)
 			ast_module_shutdown();
 	}
 	if (ast_opt_console || ast_opt_remote) {
-		if (getenv("HOME")) 
+		if (getenv("HOME")) {
 			snprintf(filename, sizeof(filename), "%s/.asterisk_history", getenv("HOME"));
-		if (!ast_strlen_zero(filename))
+		}
+		if (!ast_strlen_zero(filename)) {
 			ast_el_write_history(filename);
-		if (el != NULL)
-			el_end(el);
-		if (el_hist != NULL)
-			history_end(el_hist);
+		}
+		if (consolethread == AST_PTHREADT_NULL || consolethread == pthread_self()) {
+			/* Only end if we are the consolethread, otherwise there's a race with that thread. */
+			if (el != NULL) {
+				el_end(el);
+			}
+			if (el_hist != NULL) {
+				history_end(el_hist);
+			}
+		}
 	}
 	if (option_verbose)
 		ast_verbose("Executing last minute cleanups\n");
@@ -2724,9 +2732,10 @@ int main(int argc, char *argv[])
 	FILE *f;
 	sigset_t sigs;
 	int num;
-	int isroot = 1;
+	int isroot = 1, rundir_exists = 0;
 	char *buf;
 	char *runuser = NULL, *rungroup = NULL;
+	struct rlimit l;
 
 	/* Remember original args for restart */
 	if (argc > sizeof(_argv) / sizeof(_argv[0]) - 1) {
@@ -2875,7 +2884,6 @@ int main(int argc, char *argv[])
 	}
 
 	if (ast_opt_dump_core) {
-		struct rlimit l;
 		memset(&l, 0, sizeof(l));
 		l.rlim_cur = RLIM_INFINITY;
 		l.rlim_max = RLIM_INFINITY;
@@ -2884,6 +2892,44 @@ int main(int argc, char *argv[])
 		}
 	}
 
+	if (getrlimit(RLIMIT_NOFILE, &l)) {
+		ast_log(LOG_WARNING, "Unable to check file descriptor limit: %s\n", strerror(errno));
+	}
+
+#if !defined(CONFIGURE_RAN_AS_ROOT)
+	/* Check if select(2) will run with more file descriptors */
+	do {
+		int fd, fd2;
+		ast_fdset readers;
+		struct timeval tv = { 0, };
+
+		if (l.rlim_cur <= FD_SETSIZE) {
+			/* The limit of select()able FDs is irrelevant, because we'll never
+			 * open one that high. */
+			break;
+		}
+
+		if (!(fd = open("/dev/null", O_RDONLY))) {
+			ast_log(LOG_ERROR, "Cannot open a file descriptor at boot? %s\n", strerror(errno));
+			break; /* XXX Should we exit() here? XXX */
+		}
+
+		fd2 = (l.rlim_cur > sizeof(readers) * 8 ? sizeof(readers) * 8 : l.rlim_cur) - 1;
+		if (dup2(fd, fd2)) {
+			ast_log(LOG_WARNING, "Cannot open maximum file descriptor %d at boot? %s\n", fd2, strerror(errno));
+			break;
+		}
+
+		FD_ZERO(&readers);
+		FD_SET(fd2, &readers);
+		if (ast_select(fd2 + 1, &readers, NULL, NULL, &tv) < 0) {
+			ast_log(LOG_WARNING, "Maximum select()able file descriptor is %d\n", FD_SETSIZE);
+		}
+	} while (0);
+#elif defined(HAVE_VARIABLE_FDSET)
+	ast_FD_SETSIZE = l.rlim_cur;
+#endif /* !defined(CONFIGURE_RAN_AS_ROOT) */
+
 	if ((!rungroup) && !ast_strlen_zero(ast_config_AST_RUN_GROUP))
 		rungroup = ast_config_AST_RUN_GROUP;
 	if ((!runuser) && !ast_strlen_zero(ast_config_AST_RUN_USER))
@@ -2891,8 +2937,12 @@ int main(int argc, char *argv[])
 
 	/* It's common on some platforms to clear /var/run at boot.  Create the
 	 * socket file directory before we drop privileges. */
-	if (mkdir(ast_config_AST_RUN_DIR, 0755) && errno != EEXIST) {
-		ast_log(LOG_WARNING, "Unable to create socket file directory.  Remote consoles will not be able to connect! (%s)\n", strerror(x));
+	if (mkdir(ast_config_AST_RUN_DIR, 0755)) {
+		if (errno == EEXIST) {
+			rundir_exists = 1;
+		} else {
+			ast_log(LOG_WARNING, "Unable to create socket file directory.  Remote consoles will not be able to connect! (%s)\n", strerror(x));
+		}
 	}
 
 #ifndef __CYGWIN__
@@ -2907,7 +2957,7 @@ int main(int argc, char *argv[])
 			ast_log(LOG_WARNING, "No such group '%s'!\n", rungroup);
 			exit(1);
 		}
-		if (chown(ast_config_AST_RUN_DIR, -1, gr->gr_gid)) {
+		if (!rundir_exists && chown(ast_config_AST_RUN_DIR, -1, gr->gr_gid)) {
 			ast_log(LOG_WARNING, "Unable to chgrp run directory to %d (%s)\n", (int) gr->gr_gid, rungroup);
 		}
 		if (setgid(gr->gr_gid)) {
@@ -3053,6 +3103,13 @@ int main(int argc, char *argv[])
 #else
 		ast_log(LOG_WARNING, "Mac OS X detected.  Use 'launchctl load /Library/LaunchDaemon/org.asterisk.asterisk.plist'.\n");
 #endif
+	}
+#endif
+
+#ifdef TEST_FRAMEWORK
+	if (ast_test_init()) {
+		printf("%s", term_quit());
+		exit(1);
 	}
 #endif
 
