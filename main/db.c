@@ -110,6 +110,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 static DB *astdb;
 AST_MUTEX_DEFINE_STATIC(dblock);
+static ast_cond_t dbcond;
+static void db_sync(void);
 
 static int db_rt;			/*!< Flag for realtime system */
 static char *db_rt_rtfamily = "astdb";	/*!< Realtime name tag */
@@ -306,7 +308,7 @@ int ast_db_deltree(const char *family, const char *keytree)
 			counter++;
 		}
 	}
-	astdb->sync(astdb, 0);
+	db_sync();
 	ast_mutex_unlock(&dblock);
 	return counter;
 }
@@ -328,6 +330,7 @@ int ast_db_put(const char *family, const char *keys, const char *value)
 
 	if (db_rt) {
 		int rowsaffected ;
+
 		/* Now, the question here is if we're overwriting or adding 
 			First, let's try updating it.
 		*/
@@ -345,6 +348,7 @@ int ast_db_put(const char *family, const char *keys, const char *value)
 	} else {
 		int fullkeylen;
 		char fullkey[256];
+
 		fullkeylen = snprintf(fullkey, sizeof(fullkey), "/%s/%s", family, keys);
 		memset(&key, 0, sizeof(key));
 		memset(&data, 0, sizeof(data));
@@ -353,7 +357,7 @@ int ast_db_put(const char *family, const char *keys, const char *value)
 		data.data = (char *) value;
 		data.size = strlen(value) + 1;
 		res = astdb->put(astdb, &key, &data, 0);
-		astdb->sync(astdb, 0);
+		db_sync();
 	}
 	ast_mutex_unlock(&dblock);
 	if (res)
@@ -457,7 +461,7 @@ int ast_db_del(const char *family, const char *keys)
 		key.size = fullkeylen + 1;
 	
 		res = astdb->del(astdb, &key, 0);
-		astdb->sync(astdb, 0);
+		db_sync();
 		ast_mutex_unlock(&dblock);
 	}
 
@@ -934,6 +938,41 @@ static int manager_dbdeltree(struct mansession *s, const struct message *m)
 	return 0;
 }
 
+/*!
+ * \internal
+ * \brief Signal the astdb sync thread to do its thing.
+ *
+ * \note dblock is assumed to be held when calling this function.
+ */
+static void db_sync(void)
+{
+	ast_cond_signal(&dbcond);
+}
+
+/*!
+ * \internal
+ * \brief astdb sync thread
+ *
+ * This thread is in charge of syncing astdb to disk after a change.
+ * By pushing it off to this thread to take care of, this I/O bound operation
+ * will not block other threads from performing other critical processing.
+ * If changes happen rapidly, this thread will also ensure that the sync
+ * operations are rate limited.
+ */
+static void *db_sync_thread(void *data)
+{
+	ast_mutex_lock(&dblock);
+	for (;;) {
+		ast_cond_wait(&dbcond, &dblock);
+		ast_mutex_unlock(&dblock);
+		sleep(1);
+		ast_mutex_lock(&dblock);
+		astdb->sync(astdb, 0);
+	}
+
+	return NULL;
+}
+
 int astdb_init(void)
 {
 	/* When this routine is run, the realtime modules are not loaded so we can't initialize realtime yet. */
@@ -942,6 +981,13 @@ int astdb_init(void)
 	/* If you have multiple systems using the same database, set the systemname in asterisk.conf */
 	db_rt_sysname = S_OR(ast_config_AST_SYSTEM_NAME, "asterisk");
 	
+	pthread_t dont_care;
+
+	ast_cond_init(&dbcond, NULL);
+	if (ast_pthread_create_background(&dont_care, NULL, db_sync_thread, NULL)) {
+		return -1;
+	}
+
 	/* initialize astdb or realtime */
 	dbinit();
 
