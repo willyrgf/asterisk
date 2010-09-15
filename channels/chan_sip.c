@@ -6211,8 +6211,16 @@ static int add_header_max_forwards(struct sip_pvt *dialog, struct sip_request *r
 	char clen[10];
 	const char *max = NULL;
 
+	/* deadlock avoidance */
+	while (dialog->owner && ast_channel_trylock(dialog->owner)) {
+		ast_mutex_lock(&dialog->lock);
+		usleep(1);
+		ast_mutex_unlock(&dialog->lock);
+	}
+
 	if (dialog->owner) {
  		max = pbx_builtin_getvar_helper(dialog->owner, "SIP_MAX_FORWARDS");
+		ast_channel_unlock(dialog->owner);
 	}
 
 	/* The channel variable overrides the peer/channel value */
