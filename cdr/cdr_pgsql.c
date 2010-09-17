@@ -60,6 +60,7 @@ static time_t connect_time = 0;
 static int totalrecords = 0;
 static int records = 0;
 
+static char *handle_cdr_pgsql_status(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
 static struct ast_cli_entry cdr_pgsql_status_cli[] = {
         AST_CLI_DEFINE(handle_cdr_pgsql_status, "Show connection status of the PostgreSQL CDR driver (cdr_pgsql)"),
 };
@@ -140,26 +141,25 @@ static char *handle_cdr_pgsql_status(struct ast_cli_entry *e, int cmd, struct as
 			snprintf(status2, 99, " using table %s", table);
 		}
 		if (ctime > 31536000) {
-			ast_cli(fd, "%s%s for %d years, %d days, %d hours, %d minutes, %d seconds.\n", status, status2, ctime / 31536000, (ctime % 31536000) / 86400, (ctime % 86400) / 3600, (ctime % 3600) / 60, ctime % 60);
+			ast_cli(a->fd, "%s%s for %d years, %d days, %d hours, %d minutes, %d seconds.\n", status, status2, ctime / 31536000, (ctime % 31536000) / 86400, (ctime % 86400) / 3600, (ctime % 3600) / 60, ctime % 60);
 		} else if (ctime > 86400) {
-			ast_cli(fd, "%s%s for %d days, %d hours, %d minutes, %d seconds.\n", status, status2, ctime / 86400, (ctime % 86400) / 3600, (ctime % 3600) / 60, ctime % 60);
+			ast_cli(a->fd, "%s%s for %d days, %d hours, %d minutes, %d seconds.\n", status, status2, ctime / 86400, (ctime % 86400) / 3600, (ctime % 3600) / 60, ctime % 60);
 		} else if (ctime > 3600) {
-			ast_cli(fd, "%s%s for %d hours, %d minutes, %d seconds.\n", status, status2, ctime / 3600, (ctime % 3600) / 60, ctime % 60);
+			ast_cli(a->fd, "%s%s for %d hours, %d minutes, %d seconds.\n", status, status2, ctime / 3600, (ctime % 3600) / 60, ctime % 60);
 		} else if (ctime > 60) {
-			ast_cli(fd, "%s%s for %d minutes, %d seconds.\n", status, status2, ctime / 60, ctime % 60);
+			ast_cli(a->fd, "%s%s for %d minutes, %d seconds.\n", status, status2, ctime / 60, ctime % 60);
 		} else {
-			ast_cli(fd, "%s%s for %d seconds.\n", status, status2, ctime);
+			ast_cli(a->fd, "%s%s for %d seconds.\n", status, status2, ctime);
 		}
 		if (records == totalrecords) {
-			ast_cli(fd, "  Wrote %d records since last restart.\n", totalrecords);
+			ast_cli(a->fd, "  Wrote %d records since last restart.\n", totalrecords);
 		} else {
-			ast_cli(fd, "  Wrote %d records since last restart and %d records since last reconnect.\n", totalrecords, records);
+			ast_cli(a->fd, "  Wrote %d records since last restart and %d records since last reconnect.\n", totalrecords, records);
 		}
-		return RESULT_SUCCESS;
 	} else {
-		ast_cli(fd, "Not currently connected to a PgSQL server.\n");
-		return RESULT_FAILURE;
+		ast_cli(a->fd, "Not currently connected to a PgSQL server.\n");
 	}
+	return CLI_SUCCESS;
 }
 
 static int pgsql_log(struct ast_cdr *cdr)
@@ -409,7 +409,7 @@ static int unload_module(void)
 	struct columns *current;
 
 	ast_cdr_unregister(name);
-	ast_cli_unregister(&cdr_pgsql_status_cli);
+	ast_cli_unregister_multiple(cdr_pgsql_status_cli, sizeof(cdr_pgsql_status_cli) / sizeof(struct ast_cli_entry));
 
 	PQfinish(conn);
 
@@ -658,7 +658,7 @@ static int config_module(int reload)
 
 static int load_module(void)
 {
-	ast_cli_register(&cdr_pgsql_status_cli);
+	ast_cli_register_multiple(cdr_pgsql_status_cli, sizeof(cdr_pgsql_status_cli) / sizeof(struct ast_cli_entry));
 	return config_module(0) ? AST_MODULE_LOAD_DECLINE : 0;
 }
 
