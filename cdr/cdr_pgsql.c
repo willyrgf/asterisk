@@ -175,7 +175,7 @@ static int pgsql_log(struct ast_cdr *cdr)
 		if (PQstatus(conn) != CONNECTION_BAD) {
 			connected = 1;
 			connect_time = time(NULL);
-                        records = 0;
+			records = 0;
 		} else {
 			pgerror = PQerrorMessage(conn);
 			ast_log(LOG_ERROR, "Unable to connect to database server %s.  Calls will not be logged!\n", pghostname);
