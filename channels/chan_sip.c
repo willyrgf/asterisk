@@ -235,6 +235,7 @@ static struct ast_jb_conf global_jbconf;
 
 static const char config[] = "sip.conf";
 static const char notify_config[] = "sip_notify.conf";
+static const char presence_config[] = "sip-presence.conf";
 
 static const int DEFAULT_PUBLISH_EXPIRES = 3600;
 
@@ -19531,7 +19532,7 @@ static int reload_config(enum channelreloadreason reason)
 	pcfg = ast_config_load("sip-presence.conf");
 	if (pcfg) {
 		int presence_result = presence_load_config(pcfg);
-		ast_config_destroy(ucfg);
+		ast_config_destroy(pcfg);
 		/* XXX Let's determine later what to do with the result here */
 	}
 
