@@ -1162,6 +1162,22 @@ static struct {
 	.thread = AST_PTHREADT_NULL,
 };
 
+struct sip_publisher {
+	AST_DECLARE_STRING_FIELDS(
+		AST_STRING_FIELD(host);
+		AST_STRING_FIELD(domain);
+		AST_STRING_FIELD(filter);
+	);
+};
+
+struct sip_subscriber {
+	AST_DECLARE_STRING_FIELDS(
+		AST_STRING_FIELD(host);
+		AST_STRING_FIELD(domain);
+		AST_STRING_FIELD(filter);
+	);
+};
+
 struct statechange {
 	AST_LIST_ENTRY(statechange) entry;
 	int state;
@@ -18986,6 +19002,45 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 static int presence_load_config(struct ast_config *pcfg)
 {
 	struct ast_variable *v;
+	char *cat = NULL;
+	struct sip_publisher *publish_to;
+	while ( (cat = ast_category_browse(pcfg, cat)) ) {
+		int publish = 0, subscribe = 0;
+		const char* utype = NULL;
+		if (!strcasecmp(cat, "general")) {
+					continue;
+		}
+
+		utype = ast_variable_retrieve(pcfg, cat, "type");
+		if (!utype) {
+			ast_log(LOG_WARNING, "Section '%s' lacks type\n", cat);
+			continue;
+		}
+		if (!strcasecmp(utype, "publish") || !strcasecmp(utype, "bidirectional")) {
+			publish = 1;
+		//	*publish_to = ast_calloc(1, sizeof(*publish_to));
+		}
+		if (!strcasecmp(utype, "subscribe") || !strcasecmp(utype, "bidirectional")) {
+			subscribe = 1;
+			struct sip_subscriber *subscribe_to = ast_calloc(1, sizeof(*subscribe_to));
+		}
+		for (v = ast_variable_browse(pcfg, cat); v; v = v->next) {
+			if (!strcasecmp(v->name, "host")) {
+
+			} else if (!strcasecmp(v->name, "filter")) {
+
+			} else if (!strcasecmp(v->name, "domain")) {
+
+			}
+		}
+		if (publish) {
+			ast_devstate_add(sip_devicestate_cb, publish_to);
+		}
+		if (subscribe) {
+
+		}
+	}
+
 	return TRUE;
 }
 
