@@ -1164,6 +1164,7 @@ static struct {
 
 struct sip_publisher {
 	AST_DECLARE_STRING_FIELDS(
+		AST_STRING_FIELD(name);
 		AST_STRING_FIELD(host);
 		AST_STRING_FIELD(domain);
 		AST_STRING_FIELD(filter);
@@ -1172,6 +1173,7 @@ struct sip_publisher {
 
 struct sip_subscriber {
 	AST_DECLARE_STRING_FIELDS(
+		AST_STRING_FIELD(name);
 		AST_STRING_FIELD(host);
 		AST_STRING_FIELD(domain);
 		AST_STRING_FIELD(filter);
@@ -1631,6 +1633,10 @@ static int sip_poke_peer(struct sip_peer *peer);
 static void sip_poke_all_peers(void);
 static void sip_peer_hold(struct sip_pvt *p, int hold);
 static int sip_devicestate_cb(const char *dev, int state, void *ign);
+static int publisher_hash_cb(const void *obj, const int flags);
+static int publisher_cmp_cb(void *obj, void *arg, int flags);
+static int subscriber_hash_cb(const void *obj, const int flags);
+static int subscriber_cmp_cb(void *obj, void *arg, int flags);
 
 /*--- Applications, functions, CLI and manager command helpers */
 static const char *sip_nat_mode(const struct sip_pvt *p);
@@ -1898,6 +1904,9 @@ static struct ast_rtp_protocol sip_rtp = {
 	set_rtp_peer: sip_set_rtp_peer,
 	get_codec: sip_get_codec,
 };
+
+/*! \brief ao2 container for device state publishers */
+static struct ao2_container *devstate_publishers;
 
 /*! \brief Interface structure with callbacks used to connect to UDPTL module*/
 static struct ast_udptl_protocol sip_udptl = {
@@ -18992,6 +19001,67 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 	return peer;
 }
 
+static void publisher_destructor_cb(void *data)
+{
+	struct sip_publisher *publisher = data;
+	ast_string_field_free_memory(publisher);
+}
+
+static struct sip_publisher *sip_publisher_init(const char *name, const char *host,
+		const char *domain, const char* filter)
+{
+	struct sip_publisher *publisher = ao2_alloc(sizeof(*publisher), publisher_destructor_cb);
+	if (!publisher) {
+		return NULL;
+	}
+
+	if (ast_string_field_init(publisher, 256)) {
+		ao2_ref(publisher, -1);
+		return NULL;
+	}
+	ast_string_field_set(publisher, name, name);
+	ast_string_field_set(publisher, host, host);
+	ast_string_field_set(publisher, domain, domain);
+	ast_string_field_set(publisher, filter, filter);
+
+	return publisher;
+}
+static int publisher_hash_cb(const void *obj, const int flags)
+{
+	const struct sip_publisher *publisher = obj;
+	return ast_str_case_hash(publisher->name);
+}
+
+static int publisher_cmp_cb(void *obj, void *arg, int flags)
+{
+	const struct sip_publisher *publisher = obj, *publisher2 = arg;
+	return !strcasecmp(publisher->name, publisher2->name) ? CMP_MATCH | CMP_STOP : 0;
+}
+
+static void subscriber_destructor_cb(void *data)
+{
+	struct sip_subscriber *subscriber = data;
+	ast_string_field_free_memory(subscriber);
+}
+
+static struct sip_subscriber *sip_subscriber_init(const char *name, const char *host,
+		const char *domain, const char* filter)
+{
+	struct sip_subscriber *subscriber = ao2_alloc(sizeof(*subscriber), subscriber_destructor_cb);
+	return subscriber;
+}
+static int subscriber_hash_cb(const void *obj, const int flags)
+{
+	const struct sip_subscriber *subscriber = obj;
+	return ast_str_case_hash(subscriber->name);
+}
+
+static int subscriber_cmp_cb(void *obj, void *arg, int flags)
+{
+	const struct sip_subscriber *subscriber = obj, *subscriber2 = arg;
+	return !strcasecmp(subscriber->name, subscriber2->name) ? CMP_MATCH | CMP_STOP : 0;
+}
+
 /*! \brief Load presence configuration
 	
 	This is the file where we configure
@@ -19003,41 +19073,38 @@ static int presence_load_config(struct ast_config *pcfg)
 {
 	struct ast_variable *v;
 	char *cat = NULL;
-	struct sip_publisher *publish_to;
+	struct sip_publisher *publisher;
+	struct sip_subscriber *subscriber;
 	while ( (cat = ast_category_browse(pcfg, cat)) ) {
-		int publish = 0, subscribe = 0;
-		const char* utype = NULL;
+		const char* type = NULL;
+		const char* name = NULL;
+		const char* host = NULL;
+		const char* domain = NULL;
+		const char* filter = NULL;
 		if (!strcasecmp(cat, "general")) {
 					continue;
 		}
 
-		utype = ast_variable_retrieve(pcfg, cat, "type");
-		if (!utype) {
+		for (v = ast_variable_browse(pcfg, cat); v; v = v->next) {
+			if (!strcasecmp(v->name, "type")) {
+				type = ast_strdupa(v->name);
+			} else if (!strcasecmp(v->name, "host")) {
+				host = ast_strdupa(v->name);
+			} else if (!strcasecmp(v->name, "filter")) {
+				filter = ast_strdupa(v->name);
+			} else if (!strcasecmp(v->name, "domain")) {
+				domain = ast_strdupa(v->name);
+			}
+		}
+		if (!type) {
 			ast_log(LOG_WARNING, "Section '%s' lacks type\n", cat);
 			continue;
 		}
-		if (!strcasecmp(utype, "publish") || !strcasecmp(utype, "bidirectional")) {
-			publish = 1;
-		//	*publish_to = ast_calloc(1, sizeof(*publish_to));
+		if (!strcasecmp(type, "publish") || !strcasecmp(type, "bidirectional")) {
+			sip_publisher_init(name, host, domain, filter);
 		}
-		if (!strcasecmp(utype, "subscribe") || !strcasecmp(utype, "bidirectional")) {
-			subscribe = 1;
-			struct sip_subscriber *subscribe_to = ast_calloc(1, sizeof(*subscribe_to));
-		}
-		for (v = ast_variable_browse(pcfg, cat); v; v = v->next) {
-			if (!strcasecmp(v->name, "host")) {
-
-			} else if (!strcasecmp(v->name, "filter")) {
-
-			} else if (!strcasecmp(v->name, "domain")) {
-
-			}
-		}
-		if (publish) {
-			ast_devstate_add(sip_devicestate_cb, publish_to);
-		}
-		if (subscribe) {
-
+		if (!strcasecmp(type, "subscribe") || !strcasecmp(type, "bidirectional")) {
+			sip_subscriber_init(name, host, domain, filter);
 		}
 	}
 
@@ -20335,6 +20402,8 @@ static int load_module(void)
 	ASTOBJ_CONTAINER_INIT(&peerl);	/* Peer object list */
 	ASTOBJ_CONTAINER_INIT(&regl);	/* Registry object list */
 
+	devstate_publishers= ao2_container_alloc(11, publisher_hash_cb, publisher_cmp_cb);
+
 	if (!(sched = sched_context_create())) {
 		ast_log(LOG_ERROR, "Unable to create scheduler context\n");
 		return AST_MODULE_LOAD_FAILURE;
@@ -20393,7 +20462,7 @@ static int load_module(void)
 	ast_mutex_init(&device_state.lock);
 	ast_cond_init(&device_state.cond, NULL);
 	ast_pthread_create(&device_state.thread, NULL, device_state_thread, NULL);
-	ast_devstate_add(sip_devicestate_cb, NULL);
+	ast_devstate_add(sip_devicestate_cb, devstate_publishers);
 
 	return AST_MODULE_LOAD_SUCCESS;
 }
