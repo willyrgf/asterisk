@@ -1964,7 +1964,9 @@ static void *fast_originate(void *data)
 	/* Locked by ast_pbx_outgoing_exten or ast_pbx_outgoing_app */
 	if (chan)
 		ast_channel_unlock(chan);
-	ast_variables_destroy(in->vars);
+	if (in->vars) {
+		ast_variables_destroy(in->vars);
+	}
 	free(in);
 	return NULL;
 }
@@ -2098,7 +2100,9 @@ static int action_originate(struct mansession *s, const struct message *m)
 			pthread_attr_init(&attr);
 			pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
 			if (ast_pthread_create(&th, &attr, fast_originate, fast)) {
-				ast_variables_destroy(fast->vars);
+				if (fast->vars) {
+					ast_variables_destroy(fast->vars);
+				}
 				ast_free(fast);
 				res = -1;
 			} else {
@@ -2113,7 +2117,9 @@ static int action_originate(struct mansession *s, const struct message *m)
 	        	res = ast_pbx_outgoing_exten(tech, format, data, to, context, exten, pi, &reason, 1, l, n, vars, account, NULL);
 		else {
 			astman_send_error(s, m, "Originate with 'Exten' requires 'Context' and 'Priority'");
-			ast_variables_destroy(vars);
+			if (vars) {
+				ast_variables_destroy(vars);
+			}
 			return 0;
 		}
 	}   
@@ -2121,7 +2127,9 @@ static int action_originate(struct mansession *s, const struct message *m)
 		astman_send_ack(s, m, "Originate successfully queued");
 	else
 		astman_send_error(s, m, "Originate failed");
-	ast_variables_destroy(vars);
+	if (vars) {
+		ast_variables_destroy(vars);
+	}
 	return 0;
 }
 
