@@ -396,6 +396,27 @@ static void ast_comment_destroy(struct ast_comment **comment)
 	*comment = NULL;
 }
 
+/*! \brief copy variables, preserving order */
+struct ast_variable *ast_variable_copy(struct ast_variable *in)
+{
+	/* This really belongs in config.c, and will move there in non-releases */
+
+	struct ast_variable *out = NULL, *tmp, *v, *prev = NULL;
+
+	for (v = in ; v ; v = v->next) {
+		if ((tmp = ast_variable_new(v->name, v->value, ""))) {
+			if (!out) {
+				out = tmp;	/* The first record */
+			}
+			if (prev) {
+				prev->next = tmp; 
+			}
+			prev = tmp;
+		}
+	}
+	return out;
+}
+
 void ast_variables_destroy(struct ast_variable *v)
 {
 	struct ast_variable *vn;

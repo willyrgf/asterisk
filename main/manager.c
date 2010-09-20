@@ -939,6 +939,7 @@ struct mansession_session {
 	int inlen;		/*!< number of buffered bytes */
 	struct ao2_container *whitefilters;	/*!< Manager event filters - white list */
 	struct ao2_container *blackfilters;	/*!< Manager event filters - black list */
+	struct ast_variable *chanvars;  /*!< Channel variables to set for originate */
 	int send_events;	/*!<  XXX what ? */
 	struct eventqent *last_ev;	/*!< last event processed. */
 	int writetimeout;	/*!< Timeout for ast_carefulwrite() */
@@ -992,6 +993,7 @@ struct ast_manager_user {
 	struct ao2_container *whitefilters; /*!< Manager event filters - white list */
 	struct ao2_container *blackfilters; /*!< Manager event filters - black list */
 	char *a1_hash;			/*!< precalculated A1 for Digest auth */
+	struct ast_variable *chanvars;  /*!< Channel variables to set for originate */
 	AST_RWLIST_ENTRY(ast_manager_user) list;
 };
 
@@ -1240,6 +1242,9 @@ static void session_destructor(void *obj)
 	}
 	if (eqe) {
 		ast_atomic_fetchadd_int(&eqe->usecount, -1);
+	}
+	if (session->chanvars) {
+		ast_variables_destroy(session->chanvars);
 	}
 
 	if (session->whitefilters) {
@@ -1500,6 +1505,7 @@ static char *handle_showmanager(struct ast_cli_entry *e, int cmd, struct ast_cli
 		"      read perm: %s\n"
 		"     write perm: %s\n"
 		"displayconnects: %s\n",
+/* XXX Add setvar channel variables */
 		(user->username ? user->username : "(N/A)"),
 		(user->secret ? "<Set>" : "(N/A)"),
 		(user->ha ? "yes" : "no"),
@@ -2293,6 +2299,7 @@ static int authenticate(struct mansession *s, const struct message *m)
 	s->session->readperm = user->readperm;
 	s->session->writeperm = user->writeperm;
 	s->session->writetimeout = user->writetimeout;
+	s->session->chanvars = ast_variable_copy(user->chanvars);
 
 	filter_iter = ao2_iterator_init(user->whitefilters, 0);
 	while ((regex_filter = ao2_iterator_next(&filter_iter))) {
@@ -3814,7 +3821,7 @@ static int action_originate(struct mansession *s, const struct message *m)
 	const char *async = astman_get_header(m, "Async");
 	const char *id = astman_get_header(m, "ActionID");
 	const char *codecs = astman_get_header(m, "Codecs");
-	struct ast_variable *vars;
+	struct ast_variable *vars = NULL;
 	char *tech, *data;
 	char *l = NULL, *n = NULL;
 	int pi = 0;
@@ -3865,8 +3872,30 @@ static int action_originate(struct mansession *s, const struct message *m)
 		format = 0;
 		ast_parse_allow_disallow(NULL, &format, codecs, 1);
 	}
-	/* Allocate requested channel variables */
+
+	/* read variables from manager command and allocate memory now */
 	vars = astman_get_variables(m);
+	if (s->session->chanvars) {
+		struct ast_variable *v, *old;
+		old = vars;
+		vars = NULL;
+
+		/* The variables in the originate command is appended at the
+			end of the list, to override */
+
+		vars = ast_variable_copy(s->session->chanvars);
+		/* copy channel vars */
+		if (old ) {
+			for (v = vars ; v ; ) {
+				if (!v->next) {
+					v->next = old;	/* Append originate variables at end of list */
+					v = NULL;
+				} else {
+					v = v->next;	/* Loop */
+				}
+			}
+		}
+	}
 
 	if (ast_true(async)) {
 		struct fast_originate_helper *fast = ast_calloc(1, sizeof(*fast));
@@ -6439,6 +6468,18 @@ static int __init_manager(int reload)
 					ast_log(LOG_WARNING, "Invalid writetimeout value '%s' at line %d\n", var->value, var->lineno);
 				} else {
 					user->writetimeout = value;
+				}
+			} else if (!strcasecmp(var->name, "setvar")) {
+				struct ast_variable *tmpvar;
+				char *varval;
+				char *varname = ast_strdupa(var->value);
+
+				if ((varval = strchr(varname,'='))) {
+					*varval++ = '\0';
+					if ((tmpvar = ast_variable_new(varname, varval, ""))) {
+						tmpvar->next = user->chanvars;
+						user->chanvars = tmpvar;
+					}
 				}
 			} else if (!strcasecmp(var->name, "eventfilter")) {
 				const char *value = var->value;

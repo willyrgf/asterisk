@@ -437,6 +437,11 @@ int ast_check_realtime(const char *family);
 /*! \brief Check if there's any realtime engines loaded */
 int ast_realtime_enabled(void);
 
+/*! \brief copy variables, preserving order 
+ *  \param in the linked list of variables to copy
+ */
+struct ast_variable *ast_variable_copy(struct ast_variable *in);
+
 /*!
  * \brief Free variable list
  * \param var the linked list of variables to free
