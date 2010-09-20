@@ -3921,13 +3921,8 @@ retrymasq:
 	if (option_debug)
 		ast_log(LOG_DEBUG, "Planning to masquerade channel %s into the structure of %s\n",
 			clone->name, original->name);
-	if (original->masq) {
-		ast_log(LOG_WARNING, "%s is already going to masquerade as %s\n",
-			original->masq->name, original->name);
-	} else if (clone->masqr) {
-		ast_log(LOG_WARNING, "%s is already going to masquerade as %s\n",
-			clone->name, clone->masqr->name);
-	} else {
+
+	if (!original->masqr && !original->masq && !clone->masq && !clone->masqr) {
 		original->masq = clone;
 		clone->masqr = original;
 		ast_queue_frame(original, &ast_null_frame);
@@ -3935,6 +3930,20 @@ retrymasq:
 		if (option_debug)
 			ast_log(LOG_DEBUG, "Done planning to masquerade channel %s into the structure of %s\n", clone->name, original->name);
 		res = 0;
+
+	} else if (original->masq) {
+		ast_log(LOG_WARNING, "%s is already going to masquerade as %s\n",
+			original->masq->name, original->name);
+	} else if (original->masqr) {
+		/* not yet as a previously planned masq hasn't yet happened */
+		ast_log(LOG_WARNING, "%s is already going to masquerade as %s\n",
+			original->name, original->masqr->name);
+	} else if (clone->masq) {
+		ast_log(LOG_WARNING, "%s is already going to masquerade as %s\n",
+			clone->masq->name, clone->name);
+	} else { /* (clone->masqr) */
+		ast_log(LOG_WARNING, "%s is already going to masquerade as %s\n",
+			clone->name, clone->masqr->name);
 	}
 
 	ast_channel_unlock(clone);
