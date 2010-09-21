@@ -6213,9 +6213,9 @@ static int add_header_max_forwards(struct sip_pvt *dialog, struct sip_request *r
 
 	/* deadlock avoidance */
 	while (dialog->owner && ast_channel_trylock(dialog->owner)) {
-		ast_mutex_lock(&dialog->lock);
-		usleep(1);
 		ast_mutex_unlock(&dialog->lock);
+		usleep(1);
+		ast_mutex_lock(&dialog->lock);
 	}
 
 	if (dialog->owner) {
