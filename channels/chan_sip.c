@@ -5711,9 +5711,11 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 	/* Host information */
 	struct ast_hostent audiohp;
 	struct ast_hostent videohp;
+	struct ast_hostent imagehp;
 	struct ast_hostent sessionhp;
 	struct hostent *hp = NULL;	/*!< RTP Audio host IP */
 	struct hostent *vhp = NULL;	/*!< RTP video host IP */
+	struct hostent *ihp = NULL;	/*!< UDPTL host IP */
 	int portno = -1;		/*!< RTP Audio port number */
 	int vportno = -1;		/*!< RTP Video port number */
 	int udptlportno = -1;		/*!< UDPTL Image port number */
@@ -5789,6 +5791,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 				processed = TRUE;
 				hp = &sessionhp.hp;
 				vhp = hp;
+				ihp = hp;
 			}
 			break;
 		case 'a':
@@ -5923,6 +5926,11 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 						processed = TRUE;
 						vhp = &videohp.hp;
 					}
+				} else if (image) {
+					if (process_sdp_c(value, &imagehp)) {
+						processed = TRUE;
+						ihp = &imagehp.hp;
+					}
 				}
 				break;
 			case 'a':
@@ -5957,7 +5965,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 	}
 
 	/* Sanity checks */
-	if (!hp && !vhp) {
+	if (!hp && !vhp && !ihp) {
 		ast_log(LOG_WARNING, "Insufficient information in SDP (c=)...\n");
 		return -1;
 	}
@@ -6092,7 +6100,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 						ast_log(LOG_DEBUG, "Peer T.38 UDPTL is set behind NAT and with destination, destination address now %s\n", ast_inet_ntoa(isin.sin_addr));
 				}
 			} else
-				memcpy(&isin.sin_addr, hp->h_addr, sizeof(isin.sin_addr));
+				memcpy(&isin.sin_addr, ihp->h_addr, sizeof(isin.sin_addr));
 			ast_udptl_set_peer(p->udptl, &isin);
 			if (debug)
 				ast_log(LOG_DEBUG,"Peer T.38 UDPTL is at port %s:%d\n",ast_inet_ntoa(isin.sin_addr), ntohs(isin.sin_port));
@@ -17240,7 +17248,7 @@ static int handle_request(struct sip_pvt *p, struct sip_request *req, struct soc
 			if (option_debug)
 				ast_log(LOG_DEBUG, "Ignoring too old SIP packet packet %d (expecting >= %d)\n", seqno, p->icseq);
 			if (req->method != SIP_ACK)
-				transmit_response(p, "503 Server error", req);	/* We must respond according to RFC 3261 sec 12.2 */
+				transmit_response(p, "500 Server error", req);	/* We must respond according to RFC 3261 sec 12.2 */
 			return -1;
 		}
 	} else if (p->icseq &&
