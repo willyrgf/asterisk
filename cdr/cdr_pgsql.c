@@ -62,7 +62,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 static char *name = "pgsql";
 static char *config = "cdr_pgsql.conf";
-static char *pghostname = NULL, *pgdbname = NULL, *pgdbuser = NULL, *pgpassword = NULL, *pgdbport = NULL, *table = NULL;
+static char *pghostname = NULL, *pgdbname = NULL, *pgdbuser = NULL, *pgpassword = NULL, *pgdbport = NULL, *table = NULL, *encoding = NULL;
 static int connected = 0;
 static time_t connect_time = 0;
 static int totalrecords = 0;
@@ -139,6 +139,9 @@ static int pgsql_log(struct ast_cdr *cdr)
 			connected = 1;
 			connect_time = time(NULL);
                         records = 0;
+			if (PQsetClientEncoding(conn, encoding)) {
+				ast_log(LOG_WARNING, "Failed to set encoding to '%s'.  Encoding set to default '%s'\n", encoding, pg_encoding_to_char(PQclientEncoding(conn)));
+			}
 		} else {
 			pgerror = PQerrorMessage(conn);
 			ast_log(LOG_ERROR, "cdr_pgsql: Unable to connect to database server %s.  Calls will not be logged!\n", pghostname);
@@ -270,6 +273,9 @@ static int my_unload_module(void)
 		free(pgdbport);
 	if (table)
 		free(table);
+	if (encoding) {
+		free(encoding);
+	}
 	ast_cdr_unregister(name);
 	return 0;
 }
@@ -331,8 +337,16 @@ static int process_my_load_module(struct ast_config *cfg)
 	if (!(table = ast_strdup(tmp)))
 		return -1;
 
+	if (!(tmp = ast_variable_retrieve(cfg, "global", "encoding"))) {
+		tmp = "LATIN9";
+	}
+
+	if (!(encoding = ast_strdup(tmp))) {
+		return -1;
+	}
+
 	if (option_debug) {
-	    	if (ast_strlen_zero(pghostname))
+		if (ast_strlen_zero(pghostname))
 			ast_log(LOG_DEBUG, "cdr_pgsql: using default unix socket\n");
 		else
 			ast_log(LOG_DEBUG, "cdr_pgsql: got hostname of %s\n", pghostname);
@@ -342,14 +356,17 @@ static int process_my_load_module(struct ast_config *cfg)
 		ast_log(LOG_DEBUG, "cdr_pgsql: got password of %s\n", pgpassword);
 		ast_log(LOG_DEBUG, "cdr_pgsql: got sql table name of %s\n", table);
 	}
-	
+
 	conn = PQsetdbLogin(pghostname, pgdbport, NULL, NULL, pgdbname, pgdbuser, pgpassword);
 	if (PQstatus(conn) != CONNECTION_BAD) {
 		if (option_debug)
 			ast_log(LOG_DEBUG, "Successfully connected to PostgreSQL database.\n");
 		connected = 1;
+		if (PQsetClientEncoding(conn, encoding)) {
+			ast_log(LOG_WARNING, "Failed to set encoding to '%s'.  Encoding set to default '%s'\n", encoding, pg_encoding_to_char(PQclientEncoding(conn)));
+		}
 	} else {
-                pgerror = PQerrorMessage(conn);
+		pgerror = PQerrorMessage(conn);
 		ast_log(LOG_ERROR, "cdr_pgsql: Unable to connect to database server %s.  CALLS WILL NOT BE LOGGED!!\n", pghostname);
                 ast_log(LOG_ERROR, "cdr_pgsql: Reason: %s\n", pgerror);
 		connected = 0;
