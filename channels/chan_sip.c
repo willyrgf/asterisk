@@ -1007,6 +1007,7 @@ static struct sip_pvt {
 	struct sockaddr_in sa;			/*!< Our peer */
 	struct sockaddr_in redirip;		/*!< Where our RTP should be going if not to us */
 	struct sockaddr_in vredirip;		/*!< Where our Video RTP should be going if not to us */
+	struct sockaddr_in externip;		/*!<  External IP to use for this connection */
 	time_t lastrtprx;			/*!< Last RTP received */
 	time_t lastrtptx;			/*!< Last RTP sent */
 	int rtptimeout;				/*!< RTP timeout time */
@@ -1184,6 +1185,7 @@ struct sip_peer {
 	struct timeval ps;		/*!<  Ping send time */
 	
 	struct sockaddr_in defaddr;	/*!<  Default IP address, used until registration */
+	struct sockaddr_in externip;	/*!<  External IP to use for this connection */
 	struct ast_ha *ha;		/*!<  Access control list */
 	struct ast_ha *contactha;       /*!<  Restrict what IPs are allowed in the Contact header (for registration) */
 	struct ast_variable *chanvars;	/*!<  Variables to set for channel created by user */
@@ -1547,7 +1549,7 @@ static struct sip_peer *realtime_peer(const char *peername, struct sockaddr_in *
 static int sip_prune_realtime(int fd, int argc, char *argv[]);
 
 /*--- Internal UA client handling (outbound registrations) */
-static int ast_sip_ouraddrfor(struct in_addr *them, struct in_addr *us);
+static int ast_sip_ouraddrfor(struct sip_pvt *dialog, struct in_addr *them, struct in_addr *us);
 static void sip_registry_destroy(struct sip_registry *reg);
 static int sip_register(char *value, int lineno);
 static char *regstate2str(enum sipregistrystate regstate) attribute_const;
@@ -1912,35 +1914,40 @@ static void build_via(struct sip_pvt *p)
  * apply it to their address to see if we need to substitute our
  * externip or can get away with our internal bindaddr
  */
-static enum sip_result ast_sip_ouraddrfor(struct in_addr *them, struct in_addr *us)
+static enum sip_result ast_sip_ouraddrfor(struct sip_pvt *dialog, struct in_addr *them, struct in_addr *us)
 {
 	struct sockaddr_in theirs, ours;
+	struct sockaddr_in *useexternip = dialog->externip.sin_addr.s_addr ? &dialog->externip : &externip;
 
 	/* Get our local information */
 	ast_ouraddrfor(them, us);
 	theirs.sin_addr = *them;
 	ours.sin_addr = *us;
 
-	if (localaddr && externip.sin_addr.s_addr &&
+
+	if (localaddr && useexternip->sin_addr.s_addr &&
 	    (ast_apply_ha(localaddr, &theirs)) &&
 	    (!global_matchexterniplocally || !ast_apply_ha(localaddr, &ours))) {
-		if (externexpire && time(NULL) >= externexpire) {
+		if (!dialog->externip.sin_addr.s_addr && externexpire && time(NULL) >= externexpire) {
 			struct ast_hostent ahp;
 			struct hostent *hp;
 
 			externexpire = time(NULL) + externrefresh;
 			if ((hp = ast_gethostbyname(externhost, &ahp))) {
 				memcpy(&externip.sin_addr, hp->h_addr, sizeof(externip.sin_addr));
-			} else
+			} else {
 				ast_log(LOG_NOTICE, "Warning: Re-lookup of '%s' failed!\n", externhost);
+			}
 		}
-		*us = externip.sin_addr;
+		*us = useexternip->sin_addr;
 		if (option_debug) {
-			ast_log(LOG_DEBUG, "Target address %s is not local, substituting externip\n", 
-				ast_inet_ntoa(*(struct in_addr *)&them->s_addr));
+			ast_log(LOG_DEBUG, "Target address %s is not local, substituting externip %s\n", 
+				ast_inet_ntoa(*(struct in_addr *)&them->s_addr),
+				ast_inet_ntoa(*(struct in_addr *)&us->s_addr) );
 		}
-	} else if (bindaddr.sin_addr.s_addr)
+	} else if (bindaddr.sin_addr.s_addr) {
 		*us = bindaddr.sin_addr;
+	}
 	return AST_SUCCESS;
 }
 
@@ -3134,6 +3141,11 @@ static int create_addr_from_peer(struct sip_pvt *dialog, struct sip_peer *peer)
 	dialog->maxcallbitrate = peer->maxcallbitrate;
 	if (!dialog->portinuri)
 		dialog->portinuri = peer->portinuri;
+	if (peer->externip.sin_addr.s_addr) {
+		memcpy(&dialog->externip.sin_addr, &peer->externip.sin_addr, sizeof(dialog->sa.sin_addr));
+	} else {
+		memcpy(&dialog->externip.sin_addr, &externip.sin_addr, sizeof(dialog->sa.sin_addr));
+	}
 	
 	return 0;
 }
@@ -4818,7 +4830,7 @@ static struct sip_pvt *sip_alloc(ast_string_field callid, struct sockaddr_in *si
 
 	if (sin) {
 		p->sa = *sin;
-		if (ast_sip_ouraddrfor(&p->sa.sin_addr, &p->ourip))
+		if (ast_sip_ouraddrfor(p, &p->sa.sin_addr, &p->ourip))
 			p->ourip = __ourip;
 	} else
 		p->ourip = __ourip;
@@ -5463,11 +5475,9 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 	/* Host information */
 	struct ast_hostent audiohp;
 	struct ast_hostent videohp;
-	struct ast_hostent imagehp;
 	struct ast_hostent sessionhp;
 	struct hostent *hp = NULL;	/*!< RTP Audio host IP */
 	struct hostent *vhp = NULL;	/*!< RTP video host IP */
-	struct hostent *ihp = NULL;	/*!< UDPTL host IP */
 	int portno = -1;		/*!< RTP Audio port number */
 	int vportno = -1;		/*!< RTP Video port number */
 	int udptlportno = -1;		/*!< UDPTL Image port number */
@@ -5543,7 +5553,6 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 				processed = TRUE;
 				hp = &sessionhp.hp;
 				vhp = hp;
-				ihp = hp;
 			}
 			break;
 		case 'a':
@@ -5678,11 +5687,6 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 						processed = TRUE;
 						vhp = &videohp.hp;
 					}
-				} else if (image) {
-					if (process_sdp_c(value, &imagehp)) {
-						processed = TRUE;
-						ihp = &imagehp.hp;
-					}
 				}
 				break;
 			case 'a':
@@ -5717,7 +5721,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 	}
 
 	/* Sanity checks */
-	if (!hp && !vhp && !ihp) {
+	if (!hp && !vhp) {
 		ast_log(LOG_WARNING, "Insufficient information in SDP (c=)...\n");
 		return -1;
 	}
@@ -5852,7 +5856,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 						ast_log(LOG_DEBUG, "Peer T.38 UDPTL is set behind NAT and with destination, destination address now %s\n", ast_inet_ntoa(isin.sin_addr));
 				}
 			} else
-				memcpy(&isin.sin_addr, ihp->h_addr, sizeof(isin.sin_addr));
+				memcpy(&isin.sin_addr, hp->h_addr, sizeof(isin.sin_addr));
 			ast_udptl_set_peer(p->udptl, &isin);
 			if (debug)
 				ast_log(LOG_DEBUG,"Peer T.38 UDPTL is at port %s:%d\n",ast_inet_ntoa(isin.sin_addr), ntohs(isin.sin_port));
@@ -6740,7 +6744,7 @@ static int transmit_response_using_temp(ast_string_field callid, struct sockaddr
 
 	if (sin) {
 		p->sa = *sin;
-		if (ast_sip_ouraddrfor(&p->sa.sin_addr, &p->ourip))
+		if (ast_sip_ouraddrfor(p, &p->sa.sin_addr, &p->ourip))
 			p->ourip = __ourip;
 	} else
 		p->ourip = __ourip;
@@ -8277,7 +8281,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 		  based on whether the remote host is on the external or
 		  internal network so we can register through nat
 		 */
-		if (ast_sip_ouraddrfor(&p->sa.sin_addr, &p->ourip))
+		if (ast_sip_ouraddrfor(p, &p->sa.sin_addr, &p->ourip))
 			p->ourip = bindaddr.sin_addr;
 		build_contact(p);
 	}
@@ -9913,37 +9917,24 @@ static int get_destination(struct sip_pvt *p, struct sip_request *oreq)
 	if (sip_debug_test_pvt(p))
 		ast_verbose("Looking for %s in %s (domain %s)\n", uri, p->context, p->domain);
 
-	/* Since extensions.conf can have unescaped characters, try matching a
-	 * decoded uri in addition to the non-decoded uri. */
-	decoded_uri = ast_strdupa(uri);
-	ast_uri_decode(decoded_uri);
-
 	/* If this is a subscription we actually just need to see if a hint exists for the extension */
 	if (req->method == SIP_SUBSCRIBE) {
 		char hint[AST_MAX_EXTENSION];
-		int which = 0;
-		if (ast_get_hint(hint, sizeof(hint), NULL, 0, NULL, p->context, uri) ||
-		    (ast_get_hint(hint, sizeof(hint), NULL, 0, NULL, p->context, decoded_uri) && (which = 1))) {
-			if (!oreq) {
-				ast_string_field_set(p, exten, which ? decoded_uri : uri);
-			}
-			return 0;
-		} else {
-			return -1;
-		}
+		return (ast_get_hint(hint, sizeof(hint), NULL, 0, NULL, p->context, p->exten) ? 0 : -1);
 	} else {
-		int which = 0;
+		decoded_uri = ast_strdupa(uri);
+		ast_uri_decode(decoded_uri);
 		/* Check the dialplan for the username part of the request URI,
 		   the domain will be stored in the SIPDOMAIN variable
+		   Since extensions.conf can have unescaped characters, try matching a decoded
+		   uri in addition to the non-decoded uri
 		   Return 0 if we have a matching extension */
-		if (ast_exists_extension(NULL, p->context, uri, 1, S_OR(p->cid_num, from)) ||
-		    (ast_exists_extension(NULL, p->context, decoded_uri, 1, S_OR(p->cid_num, from)) && (which = 1)) ||
+		if (ast_exists_extension(NULL, p->context, uri, 1, S_OR(p->cid_num, from)) || ast_exists_extension(NULL, p->context, decoded_uri, 1, S_OR(p->cid_num, from)) ||
 		    !strcmp(decoded_uri, ast_pickup_ext())) {
-			if (!oreq) {
-				ast_string_field_set(p, exten, which ? decoded_uri : uri);
-			}
+			if (!oreq)
+				ast_string_field_set(p, exten, decoded_uri);
 			return 0;
-		}
+		} 
 	}
 
 	/* Return 1 for pickup extension or overlap dialling support (if we support it) */
@@ -12453,7 +12444,7 @@ static int sip_notify(int fd, int argc, char *argv[])
 		}
 
 		/* Recalculate our side, and recalculate Call ID */
-		if (ast_sip_ouraddrfor(&p->sa.sin_addr, &p->ourip))
+		if (ast_sip_ouraddrfor(p, &p->sa.sin_addr, &p->ourip))
 			p->ourip = __ourip;
 		build_via(p);
 		build_callid_pvt(p);
@@ -13112,12 +13103,11 @@ static void check_pendings(struct sip_pvt *p)
 {
 	if (ast_test_flag(&p->flags[0], SIP_PENDINGBYE)) {
 		/* if we can't BYE, then this is really a pending CANCEL */
-		if (p->invitestate == INV_PROCEEDING || p->invitestate == INV_EARLY_MEDIA) {
-			p->invitestate = INV_CANCELLED;
+		if (p->invitestate == INV_PROCEEDING || p->invitestate == INV_EARLY_MEDIA)
 			transmit_request(p, SIP_CANCEL, p->lastinvite, XMIT_RELIABLE, FALSE);
 			/* Actually don't destroy us yet, wait for the 487 on our original 
 			   INVITE, but do set an autodestruct just in case we never get it. */
-		} else {
+		else {
 			/* We have a pending outbound invite, don't send someting
 				new in-transaction */
 			if (p->pendinginvite)
@@ -16853,7 +16843,7 @@ static int handle_request(struct sip_pvt *p, struct sip_request *req, struct soc
 			if (option_debug)
 				ast_log(LOG_DEBUG, "Ignoring too old SIP packet packet %d (expecting >= %d)\n", seqno, p->icseq);
 			if (req->method != SIP_ACK)
-				transmit_response(p, "500 Server error", req);	/* We must respond according to RFC 3261 sec 12.2 */
+				transmit_response(p, "503 Server error", req);	/* We must respond according to RFC 3261 sec 12.2 */
 			return -1;
 		}
 	} else if (p->icseq &&
@@ -17226,7 +17216,7 @@ static int sip_send_mwi_to_peer(struct sip_peer *peer, int force)
 			return 0;
 		}
 		/* Recalculate our side, and recalculate Call ID */
-		if (ast_sip_ouraddrfor(&p->sa.sin_addr, &p->ourip))
+		if (ast_sip_ouraddrfor(p, &p->sa.sin_addr, &p->ourip))
 			p->ourip = __ourip;
 		build_via(p);
 		build_callid_pvt(p);
@@ -17560,7 +17550,7 @@ static int sip_poke_peer(struct sip_peer *peer)
 		ast_string_field_set(p, tohost, ast_inet_ntoa(peer->addr.sin_addr));
 
 	/* Recalculate our side, and recalculate Call ID */
-	if (ast_sip_ouraddrfor(&p->sa.sin_addr, &p->ourip))
+	if (ast_sip_ouraddrfor(p, &p->sa.sin_addr, &p->ourip))
 		p->ourip = __ourip;
 	build_via(p);
 	build_callid_pvt(p);
@@ -17761,7 +17751,7 @@ static struct ast_channel *sip_request_call(const char *type, int format, void *
 	if (ast_strlen_zero(p->peername) && ext)
 		ast_string_field_set(p, peername, ext);
 	/* Recalculate our side, and recalculate Call ID */
-	if (ast_sip_ouraddrfor(&p->sa.sin_addr, &p->ourip))
+	if (ast_sip_ouraddrfor(p, &p->sa.sin_addr, &p->ourip))
 		p->ourip = __ourip;
 	build_via(p);
 	build_callid_pvt(p);
@@ -18496,6 +18486,14 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 				ast_copy_string(peer->mohinterpret, v->value, sizeof(peer->mohinterpret));
 			} else if (!strcasecmp(v->name, "mohsuggest")) {
 				ast_copy_string(peer->mohsuggest, v->value, sizeof(peer->mohsuggest));
+			} else if (!strcasecmp(v->name, "externip")) {
+				struct hostent *hp;
+				struct ast_hostent ahp;
+				if (!(hp = ast_gethostbyname(v->value, &ahp)))  {
+					ast_log(LOG_WARNING, "Invalid address for externip keyword: %s at line %d\n", v->value, v->lineno);
+				} else {
+					memcpy(&peer->externip.sin_addr, hp->h_addr, sizeof(externip.sin_addr));
+				}
 			} else if (!strcasecmp(v->name, "mailbox")) {
 				ast_copy_string(peer->mailbox, v->value, sizeof(peer->mailbox));
 			} else if (!strcasecmp(v->name, "hasvoicemail")) {
