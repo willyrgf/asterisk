@@ -39,6 +39,7 @@
 		asprintf;
 		strtoq;
 		getloadavg;
+		timersub;
 		strlcat;
 		strlcpy;
 	local:
