@@ -1923,6 +1923,12 @@ static enum sip_result ast_sip_ouraddrfor(struct sip_pvt *dialog, struct in_addr
 	ast_ouraddrfor(them, us);
 	theirs.sin_addr = *them;
 	ours.sin_addr = *us;
+	if (option_debug > 3) {
+		ast_log(LOG_DEBUG, "Checking ouraddr - externip = %s target address %s , our address %s\n", 
+			ast_inet_ntoa(*(struct in_addr *) &useexternip->sin_addr.s_addr),
+			ast_inet_ntoa(*(struct in_addr *)&them->s_addr),
+			ast_inet_ntoa(*(struct in_addr *)&us->s_addr) );
+	}
 
 
 	if (localaddr && useexternip->sin_addr.s_addr &&
@@ -17549,6 +17555,12 @@ static int sip_poke_peer(struct sip_peer *peer)
 	else
 		ast_string_field_set(p, tohost, ast_inet_ntoa(peer->addr.sin_addr));
 
+	/* Set extern IP properly for the contact and via headers */
+	if (peer->externip.sin_addr.s_addr) {
+		memcpy(&p->externip.sin_addr, &peer->externip.sin_addr, sizeof(p->sa.sin_addr));
+	} else {
+		memcpy(&p->externip.sin_addr, &externip.sin_addr, sizeof(p->sa.sin_addr));
+	}
 	/* Recalculate our side, and recalculate Call ID */
 	if (ast_sip_ouraddrfor(p, &p->sa.sin_addr, &p->ourip))
 		p->ourip = __ourip;
