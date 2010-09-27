@@ -1013,6 +1013,7 @@ struct sip_pvt {
 	struct ast_sockaddr redirip;         /*!< Where our RTP should be going if not to us */
 	struct ast_sockaddr vredirip;        /*!< Where our Video RTP should be going if not to us */
 	struct ast_sockaddr tredirip;        /*!< Where our Text RTP should be going if not to us */
+	struct ast_sockaddr externaddr;        /*!<  External IP to use for this dialog */
 	time_t lastrtprx;                   /*!< Last RTP received */
 	time_t lastrtptx;                   /*!< Last RTP sent */
 	int rtptimeout;                     /*!< RTP timeout time */
@@ -1236,6 +1237,7 @@ struct sip_peer {
 	/*XXX Seems like we suddenly have two flags with the same content. Why? To be continued... */
 	enum sip_peer_type type; /*!< Distinguish between "user" and "peer" types. This is used solely for CLI and manager commands */
 	unsigned int disallowed_methods;
+	struct ast_sockaddr externaddr;        /*!<  External IP to use for peer's connections */
 	struct ast_cc_config_params *cc_params;
 };
 
