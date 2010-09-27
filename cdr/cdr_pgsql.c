@@ -420,18 +420,24 @@ static int unload_module(void)
 
 	PQfinish(conn);
 
-	if (pghostname)
+	if (pghostname) {
 		ast_free(pghostname);
-	if (pgdbname)
+	}
+	if (pgdbname) {
 		ast_free(pgdbname);
-	if (pgdbuser)
+	}
+	if (pgdbuser) {
 		ast_free(pgdbuser);
-	if (pgpassword)
+	}
+	if (pgpassword) {
 		ast_free(pgpassword);
-	if (pgdbport)
+	}
+	if (pgdbport) {
 		ast_free(pgdbport);
-	if (table)
+	}
+	if (table) {
 		ast_free(table);
+	}
 
 	AST_RWLIST_WRLOCK(&psql_columns);
 	while ((current = AST_RWLIST_REMOVE_HEAD(&psql_columns, list))) {
@@ -455,8 +461,9 @@ static int config_module(int reload)
 	if ((cfg = ast_config_load(config, config_flags)) == NULL || cfg == CONFIG_STATUS_FILEINVALID) {
 		ast_log(LOG_WARNING, "Unable to load config for PostgreSQL CDR's: %s\n", config);
 		return -1;
-	} else if (cfg == CONFIG_STATUS_FILEUNCHANGED)
+	} else if (cfg == CONFIG_STATUS_FILEUNCHANGED) {
 		return 0;
+	}
 
 	if (!(var = ast_variable_browse(cfg, "global"))) {
 		ast_config_destroy(cfg);
@@ -468,8 +475,9 @@ static int config_module(int reload)
 		tmp = "";	/* connect via UNIX-socket by default */
 	}
 
-	if (pghostname)
+	if (pghostname) {
 		ast_free(pghostname);
+	}
 	if (!(pghostname = ast_strdup(tmp))) {
 		ast_config_destroy(cfg);
 		return -1;
@@ -480,8 +488,9 @@ static int config_module(int reload)
 		tmp = "asteriskcdrdb";
 	}
 
-	if (pgdbname)
+	if (pgdbname) {
 		ast_free(pgdbname);
+	}
 	if (!(pgdbname = ast_strdup(tmp))) {
 		ast_config_destroy(cfg);
 		return -1;
@@ -492,8 +501,9 @@ static int config_module(int reload)
 		tmp = "asterisk";
 	}
 
-	if (pgdbuser)
+	if (pgdbuser) {
 		ast_free(pgdbuser);
+	}
 	if (!(pgdbuser = ast_strdup(tmp))) {
 		ast_config_destroy(cfg);
 		return -1;
@@ -504,8 +514,9 @@ static int config_module(int reload)
 		tmp = "";
 	}
 
-	if (pgpassword)
+	if (pgpassword) {
 		ast_free(pgpassword);
+	}
 	if (!(pgpassword = ast_strdup(tmp))) {
 		ast_config_destroy(cfg);
 		return -1;
@@ -516,8 +527,9 @@ static int config_module(int reload)
 		tmp = "5432";
 	}
 
-	if (pgdbport)
+	if (pgdbport) {
 		ast_free(pgdbport);
+	}
 	if (!(pgdbport = ast_strdup(tmp))) {
 		ast_config_destroy(cfg);
 		return -1;
@@ -528,8 +540,9 @@ static int config_module(int reload)
 		tmp = "cdr";
 	}
 
-	if (table)
+	if (table) {
 		ast_free(table);
+	}
 	if (!(table = ast_strdup(tmp))) {
 		ast_config_destroy(cfg);
 		return -1;
