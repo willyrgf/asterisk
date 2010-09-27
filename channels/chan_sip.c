@@ -18498,13 +18498,17 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 				ast_copy_string(peer->mohinterpret, v->value, sizeof(peer->mohinterpret));
 			} else if (!strcasecmp(v->name, "mohsuggest")) {
 				ast_copy_string(peer->mohsuggest, v->value, sizeof(peer->mohsuggest));
-			} else if (!strcasecmp(v->name, "externip")) {
+			} else if (!strcasecmp(v->name, "externip") || !strcasecmp(v->name, "externaddr")) {
 				struct hostent *hp;
 				struct ast_hostent ahp;
-				if (!(hp = ast_gethostbyname(v->value, &ahp)))  {
-					ast_log(LOG_WARNING, "Invalid address for externip keyword: %s at line %d\n", v->value, v->lineno);
+				if (localaddr == NULL) {
+					ast_log(LOG_ERROR, "Setting externip in peer section [%s] without any localnet configuration in the [general] section will not work at line %d.\n", peer->name, v->lineno);
 				} else {
-					memcpy(&peer->externip.sin_addr, hp->h_addr, sizeof(externip.sin_addr));
+					if (!(hp = ast_gethostbyname(v->value, &ahp)))  {
+						ast_log(LOG_WARNING, "Invalid externip address for peer %s : %s at line %d\n", peer->name, v->value, v->lineno);
+					} else {
+						memcpy(&peer->externip.sin_addr, hp->h_addr, sizeof(externip.sin_addr));
+					}
 				}
 			} else if (!strcasecmp(v->name, "mailbox")) {
 				ast_copy_string(peer->mailbox, v->value, sizeof(peer->mailbox));
@@ -18653,7 +18657,7 @@ static int reload_config(enum channelreloadreason reason)
 	struct ast_hostent ahp;
 	char *cat, *stringp, *context, *oldregcontext;
 	char newcontexts[AST_MAX_CONTEXT], oldcontexts[AST_MAX_CONTEXT];
-	struct hostent *hp;
+	struct hostent *hp = NULL;
 	int format;
 	struct ast_flags dummy[2];
 	int auto_sip_domains = FALSE;
@@ -18948,28 +18952,29 @@ static int reload_config(enum channelreloadreason reason)
 			global_regattempts_max = atoi(v->value);
 		} else if (!strcasecmp(v->name, "bindaddr")) {
 			if (!(hp = ast_gethostbyname(v->value, &ahp))) {
-				ast_log(LOG_WARNING, "Invalid address: %s\n", v->value);
+				ast_log(LOG_WARNING, "Invalid bindaddr: %s at line %d\n", v->value, v->lineno);
 			} else {
 				memcpy(&bindaddr.sin_addr, hp->h_addr, sizeof(bindaddr.sin_addr));
 			}
 		} else if (!strcasecmp(v->name, "localnet")) {
 			struct ast_ha *na;
-			if (!(na = ast_append_ha("d", v->value, localaddr)))
-				ast_log(LOG_WARNING, "Invalid localnet value: %s\n", v->value);
-			else
+			if (!(na = ast_append_ha("d", v->value, localaddr))) {
+				ast_log(LOG_WARNING, "Invalid localnet value: %s at line %d\n", v->value, v->lineno);
+			} else {
 				localaddr = na;
+			}
 		} else if (!strcasecmp(v->name, "localmask")) {
-			ast_log(LOG_WARNING, "Use of localmask is no long supported -- use localnet with mask syntax\n");
-		} else if (!strcasecmp(v->name, "externip")) {
-			if (!(hp = ast_gethostbyname(v->value, &ahp))) 
-				ast_log(LOG_WARNING, "Invalid address for externip keyword: %s\n", v->value);
-			else
+			ast_log(LOG_WARNING, "Use of localmask is no longer supported -- use localnet with mask syntax\n");
+		} else if (!strcasecmp(v->name, "externip") || !strcasecmp(v->name, "externaddr")) {
+			if (!ast_strlen_zero(v->value) && !(hp = ast_gethostbyname(v->value, &ahp))) {
+				ast_log(LOG_WARNING, "Invalid address for externip keyword: %s at line %d\n", v->value, v->lineno);
+			} else {
 				memcpy(&externip.sin_addr, hp->h_addr, sizeof(externip.sin_addr));
-			externexpire = 0;
+			}
 		} else if (!strcasecmp(v->name, "externhost")) {
 			ast_copy_string(externhost, v->value, sizeof(externhost));
 			if (!(hp = ast_gethostbyname(externhost, &ahp))) 
-				ast_log(LOG_WARNING, "Invalid address for externhost keyword: %s\n", externhost);
+				ast_log(LOG_WARNING, "Invalid address for externhost keyword: %s at line %d\n", externhost, v->lineno);
 			else
 				memcpy(&externip.sin_addr, hp->h_addr, sizeof(externip.sin_addr));
 			externexpire = time(NULL);
@@ -19010,8 +19015,9 @@ static int reload_config(enum channelreloadreason reason)
 				global_tos_audio = temp_tos;
 				global_tos_video = temp_tos;
 				ast_log(LOG_WARNING, "tos value at line %d is deprecated.  See doc/ip-tos.txt for more information.\n", v->lineno);
-			} else
+			} else {
 				ast_log(LOG_WARNING, "Invalid tos value at line %d, See doc/ip-tos.txt for more information.\n", v->lineno);
+			}
 		} else if (!strcasecmp(v->name, "tos_sip")) {
 			if (ast_str2tos(v->value, &global_tos_sip))
 				ast_log(LOG_WARNING, "Invalid tos_sip value at line %d, recommended value is 'cs3'. See doc/ip-tos.txt.\n", v->lineno);
