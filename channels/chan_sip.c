@@ -15011,6 +15011,12 @@ static enum check_auth_result check_peer_ok(struct sip_pvt *p, char *of,
 			ao2_t_ref(peer, 1, "copy pointer into (*authpeer)");
 			(*authpeer) = peer;	/* Add a ref to the object here, to keep it in memory a bit longer if it is realtime */
 		}
+		/* Check if we have externip setting for this peer. If so, reset our address */
+		if (!ast_sockaddr_isnull(&peer->externaddr)) {
+			ast_sockaddr_copy(&p->externaddr, &peer->externaddr);
+			/* Recalculate our side, and recalculate Call ID */
+			ast_sip_ouraddrfor(&p->sa, &p->ourip, p);
+		} 
 
 		if (!ast_strlen_zero(peer->username)) {
 			ast_string_field_set(p, username, peer->username);
