@@ -10682,6 +10682,16 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 				p->jointnoncodeccapability = p->noncodeccapability;
 				if (p->t38.peercapability)
 					p->t38.jointcapability &= p->t38.peercapability;
+				/* Set extern IP properly for the contact and via headers */
+				if (peer->externip.sin_addr.s_addr) {
+					memcpy(&p->externip.sin_addr, &peer->externip.sin_addr, sizeof(p->sa.sin_addr));
+					/* If the peer had an externip setting, recalculate our side, and recalculate Call ID */
+					if (ast_sip_ouraddrfor(p, &p->sa.sin_addr, &p->ourip)) {
+						p->ourip = __ourip;
+					}
+				} else {
+					memcpy(&p->externip.sin_addr, &externip.sin_addr, sizeof(p->sa.sin_addr));
+				}
 			}
 			ASTOBJ_UNREF(peer, sip_destroy_peer);
 		} else { 
