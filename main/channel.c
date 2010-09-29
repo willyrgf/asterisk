@@ -3624,7 +3624,9 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 	 * this happens so that it can be addressed. 
 	 */
 	if (chan->fdno == -1) {
-		ast_log(LOG_ERROR, "ast_read() called with no recorded file descriptor.\n");
+		ast_log(LOG_ERROR,
+			"ast_read() on chan '%s' called with no recorded file descriptor.\n",
+			chan->name);
 	}
 #endif
 
@@ -6343,6 +6345,9 @@ void ast_channel_set_caller_event(struct ast_channel *chan, const struct ast_par
 			!= S_COR(chan->caller.id.name.valid, chan->caller.id.name.str, NULL)) {
 		/* The caller id name or number changed. */
 		report_new_callerid(chan);
+	}
+	if (chan->cdr) {
+		ast_cdr_setcid(chan->cdr, chan);
 	}
 	ast_channel_unlock(chan);
 }
