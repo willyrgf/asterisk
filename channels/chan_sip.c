@@ -19011,6 +19011,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 static void publisher_destructor_cb(void *data)
 {
 	struct sip_publisher *publisher = data;
+	ao2_unlink(devstate_publishers, publisher);
 	ast_string_field_free_memory(publisher);
 }
 
@@ -19108,10 +19109,16 @@ static int presence_load_config(struct ast_config *pcfg)
 			continue;
 		}
 		if (!strcasecmp(type, "publish") || !strcasecmp(type, "bidirectional")) {
-			sip_publisher_init(name, host, domain, filter);
+			publisher = sip_publisher_init(name, host, domain, filter);
+			if (publisher) {
+				ao2_link(devstate_publishers, publisher);
+			}
 		}
 		if (!strcasecmp(type, "subscribe") || !strcasecmp(type, "bidirectional")) {
-			sip_subscriber_init(name, host, domain, filter);
+			subscriber = sip_subscriber_init(name, host, domain, filter);
+			if (subscriber) {
+				/* Link subscriber once container exists */
+			}
 		}
 	}
 
