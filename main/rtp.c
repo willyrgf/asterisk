@@ -213,6 +213,7 @@ static struct ast_frame *ast_rtcp_read_fd(int fd, struct ast_rtp *rtp);
 static int ast_rtcp_write_empty(struct ast_rtp *rtp, int fd);
 static int p2p_rtcp_callback(int *id, int fd, short events, void *cbdata);
 static unsigned int calc_txstamp(struct ast_rtp *rtp, struct timeval *delivery);
+int ast_rtp_senddigit_end_with_duration(struct ast_rtp *rtp, char digit, unsigned int duration);
 
 #define FLAG_3389_WARNING		(1 << 0)
 #define FLAG_NAT_ACTIVE			(3 << 1)
@@ -2820,12 +2821,18 @@ static int ast_rtp_senddigit_continuation(struct ast_rtp *rtp)
 	return 0;
 }
 
-/*! \brief Send end packets for DTMF */
 int ast_rtp_senddigit_end(struct ast_rtp *rtp, char digit)
+{
+	return ast_rtp_senddigit_end_with_duration(rtp, digit, 0);
+}
+
+/*! \brief Send end packets for DTMF */
+int ast_rtp_senddigit_end_with_duration(struct ast_rtp *rtp, char digit, unsigned int duration)
 {
 	unsigned int *rtpheader;
 	int hdrlen = 12, res = 0, i = 0;
 	char data[256];
+	unsigned int measured_samples;
 	
 	/* If no address, then bail out */
 	if (!rtp->them.sin_addr.s_addr || !rtp->them.sin_port)
@@ -2847,6 +2854,13 @@ int ast_rtp_senddigit_end(struct ast_rtp *rtp, char digit)
 	}
 
 	rtp->dtmfmute = ast_tvadd(ast_tvnow(), ast_tv(0, 500000));
+
+	if (duration > 0 && (measured_samples = duration * rtp_get_rate(rtp->f.subclass) / 1000) > rtp->send_duration) {
+		if (option_debug > 1) {
+			ast_log(LOG_DEBUG, "Adjusting final end duration from %u to %u\n", rtp->send_duration, measured_samples);
+		}
+		rtp->send_duration = measured_samples;
+	}
 
 	rtpheader = (unsigned int *)data;
 	rtpheader[1] = htonl(rtp->lastdigitts);
