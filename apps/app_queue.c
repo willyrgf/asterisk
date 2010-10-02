@@ -2599,7 +2599,9 @@ static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callatte
 		}
 
 		/* Poll for events from both the incoming channel as well as any outgoing channels */
+		ast_log(LOG_ERROR,"About to do ast_waitfor_n()\n");
 		winner = ast_waitfor_n(watchers, pos, to);
+		ast_log(LOG_ERROR,"Returned from ast_waitfor_n() winner=%p\n",winner);
 
 		/* Service all of the outgoing channels */
 		for (o = start; o; o = o->call_next) {
@@ -2964,12 +2966,15 @@ static int wait_our_turn(struct queue_ent *qe, int ringing, enum queue_result *r
 		}
 		
 		/* Wait a second before checking again */
+		ast_log(LOG_ERROR,"About to Wait for digit(%d ms)\n", RECHECK * 1000);
 		if ((res = ast_waitfordigit(qe->chan, RECHECK * 1000))) {
+			ast_log(LOG_ERROR,"Returned (%d) from waitfordigit\n", res);
 			if (res > 0 && !valid_exit(qe, res))
 				res = 0;
 			else
 				break;
 		}
+		ast_log(LOG_ERROR,"Returned (%d) from waitfordigit\n", res);
 		
 		/* If we have timed out, break out */
 		if (qe->expire && (time(NULL) >= qe->expire)) {
@@ -3582,7 +3587,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 			int res2;
 
 			res2 = ast_autoservice_start(qe->chan);
-			ast_log(LOG_ERROR,"Autoservice started on chan\n");
+			ast_log(LOG_ERROR,"Autoservice started on chan %s\n",qe->chan->name);
 			/* instead of starting autoservice and jacking this thread to push sound to the
 			   peer channel, let's set up a background player to the peer channel and 
 			   get on with life in this thread. */
@@ -3602,7 +3607,6 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 	ast_channel_datastore_add(chan, datastore);
 */
 			
-			ast_log(LOG_ERROR,"Autoservice started\n");
 				if (qe->parent->memberdelay) {
 					ast_log(LOG_NOTICE, "Delaying member connect for %d seconds\n", qe->parent->memberdelay);
 					res2 |= ast_safe_sleep(peer, qe->parent->memberdelay * 1000);
@@ -3629,7 +3633,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 						}
 					}
 				}
-			ast_log(LOG_ERROR,"Autoservice stopped\n");
+			ast_log(LOG_ERROR,"Autoservice stopped on chan %s\n", qe->chan->name);
 			res2 |= ast_autoservice_stop(qe->chan);
 			if (ast_check_hangup(peer)) {
 				/* Agent must have hung up */
@@ -3664,7 +3668,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 			ast_log(LOG_ERROR,"Stopping indicate\n");
 			ast_indicate(qe->chan,-1);
 		} else {
-			ast_log(LOG_ERROR,"Stopping MOH\n");
+			ast_log(LOG_ERROR,"Stopping MOH on chan %s\n", qe->chan->name);
 			ast_moh_stop(qe->chan);
 		}
 		/* If appropriate, log that we have a destination channel */
@@ -3845,10 +3849,10 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 		if (!ast_strlen_zero(macroexec)) {
 			ast_debug(1, "app_queue: macro=%s.\n", macroexec);
 			
-			ast_log(LOG_ERROR,"Autoservice started\n");
+			ast_log(LOG_ERROR,"Autoservice started on chan %s\n", qe->chan->name);
 			res = ast_autoservice_start(qe->chan);
 			if (res) {
-				ast_log(LOG_ERROR, "Unable to start autoservice on calling channel\n");
+				ast_log(LOG_ERROR, "Unable to start autoservice on calling channel %s\n", qe->chan->name);
 				res = -1;
 			}
 			
@@ -3863,7 +3867,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 				res = -1;
 			}
 
-			ast_log(LOG_ERROR,"Autoservice stopped\n");
+			ast_log(LOG_ERROR,"Autoservice stopped on chan %s\n", qe->chan->name);
 			if (ast_autoservice_stop(qe->chan) < 0) {
 				ast_log(LOG_ERROR, "Could not stop autoservice on calling channel\n");
 				res = -1;
@@ -3882,7 +3886,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 		if (!ast_strlen_zero(gosubexec)) {
 			if (option_debug)
 				ast_log(LOG_DEBUG, "app_queue: gosub=%s.\n", gosubexec);
-			ast_log(LOG_ERROR,"Autoservice started\n");
+			ast_log(LOG_ERROR,"Autoservice started on chan %s\n", qe->chan->name);
 			res = ast_autoservice_start(qe->chan);
 			if (res) {
 				ast_log(LOG_ERROR, "Unable to start autoservice on calling channel\n");
@@ -3932,7 +3936,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 				res = -1;
 			}
 		
-			ast_log(LOG_ERROR,"Autoservice stopped\n");
+			ast_log(LOG_ERROR,"Autoservice stopped on chan %s\n", qe->chan->name);
 			if (ast_autoservice_stop(qe->chan) < 0) {
 				ast_log(LOG_ERROR, "Could not stop autoservice on calling channel\n");
 				res = -1;
@@ -4033,8 +4037,11 @@ static int wait_a_bit(struct queue_ent *qe)
 {
 	/* Don't need to hold the lock while we setup the outgoing calls */
 	int retrywait = qe->parent->retry * 1000;
+	int res;
 
-	int res = ast_waitfordigit(qe->chan, retrywait);
+	ast_log(LOG_ERROR,"About to call ast_waitfordigit(%d)\n", retrywait);
+	res = ast_waitfordigit(qe->chan, retrywait);
+	ast_log(LOG_ERROR,"ast_waitfordigit returns %d\n", res);
 	if (res > 0 && !valid_exit(qe, res))
 		res = 0;
 
@@ -4773,10 +4780,10 @@ void ast_queue_sound_finished_handler(void *data)
 	and handle the EOF asynchronously via ast_autoservice_*().
 
 	*/
-	ast_log(LOG_WARNING,"----SOUND_FINISHED_HANDLER CALLED! chan=%p\n", chan);
-	ast_log(LOG_ERROR,"StopStream\n");
+	ast_log(LOG_WARNING,"----SOUND_FINISHED_HANDLER CALLED! chan=%s\n", chan->name);
+	ast_log(LOG_ERROR,"StopStream on chan %s\n", chan->name);
 	ast_stopstream(chan);
-	ast_log(LOG_ERROR,"AutoServiceStop\n");
+	ast_log(LOG_ERROR,"AutoServiceStop %s\n", chan->name);
 	ast_autoservice_stop(chan);
 	/* if there are any files in flist, now is the time to start playing them! */
 	AST_LIST_LOCK(&playdata->flist);
@@ -4784,7 +4791,7 @@ void ast_queue_sound_finished_handler(void *data)
 		
 		fn = AST_LIST_REMOVE_HEAD(&playdata->flist, list);
 
-		ast_log(LOG_ERROR,"Start streaming file %s\n", fn->filename);
+		ast_log(LOG_ERROR,"Start streaming file %s on chan %s\n", fn->filename, chan->name);
 		res = ast_streamfile(chan, fn->filename, chan->language);
 		if (res) {
 			/* perhaps this file was not found, whatever...
@@ -4795,7 +4802,7 @@ void ast_queue_sound_finished_handler(void *data)
 		}
 		
 		ast_autoservice_start(chan);
-		ast_log(LOG_ERROR,"AutoServiceStart\n");
+		ast_log(LOG_ERROR,"AutoServiceStart on chan %s\n", chan->name);
 		
 		ast_free(fn->filename);
 		ast_free(fn);
@@ -4809,11 +4816,12 @@ void ast_queue_sound_finished_handler(void *data)
         /* Resume Music on Hold if the caller is going to stay in the queue */
 	if (!playdata->valid_exit) { /* don't start up moh if we are on our way out */
 		if (ringing) {
-			ast_log(LOG_ERROR,"Starting indicate CONTROL_RINGING\n");
+			ast_log(LOG_ERROR,"Starting indicate CONTROL_RINGING on chan %s\n", chan->name);
 			ast_indicate(chan, AST_CONTROL_RINGING);
 		} else {
-			ast_log(LOG_ERROR,"Starting MOH\n");
+			ast_log(LOG_ERROR,"Starting MOH on chan %s\n", chan->name);
 			ast_moh_start(chan, moh, NULL);
+			/* ast_waitfor(chan, 1); */
 		}
 	}
 }
@@ -4823,7 +4831,7 @@ void ast_queue_sound_finished_handler(void *data)
    around for each one to finish before playing the next, instead we put them into
    a list, which we insert at the tail.
 
-   The file-finished handler will, upon a file completion, check to see if annything
+   The file-finished handler will, upon a file compltion, check to see if annything
    is in that list, and remove from the head and begin the playback.
 
    Make sure to get things rolling with a plain play_file(), then use this
@@ -4846,7 +4854,7 @@ static int play_file(struct ast_channel *chan, const char *filename, int ringing
 				strcpy(aqsi->moh, moh);
 		}
 	} else {
-		ast_log(LOG_ERROR, "Can't find the queue_ds_sound_ending datastore!\n");
+		ast_log(LOG_ERROR, "Can't find the queue_ds_sound_ending datastore! on chan %s\n", chan->name);
 		return 1; /* Why continue, if I can't access the datastore & list? */
 	}
 	
@@ -4859,7 +4867,7 @@ static int play_file(struct ast_channel *chan, const char *filename, int ringing
 	if (aqsi->now_playing) {
 		struct ast_queue_streamfile_name *fn = ast_calloc(1, sizeof(*fn));
 		fn->filename = ast_strdup(filename);
-		ast_log(LOG_ERROR,"queued sound file %s for playing\n", filename);
+		ast_log(LOG_ERROR,"queued sound file %s for playing on chan %s\n", filename, chan->name);
 		
 		/* link the struct into the current ast_queue_streamfile_info struct */
 		AST_LIST_INSERT_TAIL(&aqsi->flist, fn, list); /* in this case, nothing else to do, 
@@ -4868,20 +4876,20 @@ static int play_file(struct ast_channel *chan, const char *filename, int ringing
 		/* Stop the music on hold so we can play our own file */
 		if (ringing) {
 			ast_log(LOG_ERROR, "Stopping Indicate\n");
-			ast_indicate(aqsi->chan,-1);
+			ast_indicate(chan,-1);
 		} else {
-			ast_log(LOG_ERROR, "Stopping MOH\n");
-			ast_moh_stop(aqsi->chan);
+			ast_log(LOG_ERROR, "Stopping MOH on chan %s\n", chan->name);
+			ast_moh_stop(chan);
 		}
 			
-		ast_log(LOG_ERROR, "Stopping Streaming\n");
-		ast_stopstream(aqsi->chan);
+		ast_log(LOG_ERROR, "Stopping Streaming on chan %s\n", chan->name);
+		ast_stopstream(chan);
 		
-		ast_log(LOG_ERROR, "Autoservice stop\n");
-		ast_autoservice_stop(aqsi->chan);
+		ast_log(LOG_ERROR, "Autoservice stop on chan %s\n", chan->name);
+		ast_autoservice_stop(chan);
 		
-		ast_log(LOG_ERROR, "Starting to stream %s\n", filename);
-		res = ast_streamfile(aqsi->chan, filename, aqsi->chan->language); /* begin the streaming */
+		ast_log(LOG_ERROR, "Starting to stream %s on chan %s\n", filename, chan->name);
+		res = ast_streamfile(chan, filename, aqsi->chan->language); /* begin the streaming */
 		
 		while (res && !AST_LIST_EMPTY(&aqsi->flist)) {
 			/* really, how could this even be possible?
@@ -4890,8 +4898,8 @@ static int play_file(struct ast_channel *chan, const char *filename, int ringing
 			
 			fn = AST_LIST_REMOVE_HEAD(&aqsi->flist, list);
 			
-			ast_log(LOG_ERROR,"Start streaming file %s\n", fn->filename);
-			res = ast_streamfile(aqsi->chan, fn->filename, aqsi->chan->language);
+			ast_log(LOG_ERROR,"Start streaming file %s on chan %s\n", fn->filename, chan->name);
+			res = ast_streamfile(chan, fn->filename, chan->language);
 		}
 		
 		
@@ -4900,20 +4908,23 @@ static int play_file(struct ast_channel *chan, const char *filename, int ringing
 			/* restore the moh */
 			if (ringing) {
 				ast_log(LOG_ERROR, "Starting Indicate\n");
-				ast_indicate(aqsi->qe->chan, AST_CONTROL_RINGING);
+				ast_indicate(chan, AST_CONTROL_RINGING);
 			} else {
-				ast_log(LOG_ERROR, "Starting MOH\n");
-				ast_moh_start(aqsi->qe->chan, aqsi->qe->moh, NULL);
+				ast_log(LOG_ERROR, "Starting MOH %s on chan %s\n", aqsi->qe->moh, chan->name);
+				ast_moh_start(chan, aqsi->qe->moh, NULL);
 			}
 			AST_LIST_UNLOCK(&aqsi->flist);
 			return 1;
 		}
 		aqsi->now_playing = 1; /* We have begun playback */
-		ast_log(LOG_ERROR,"Autoservice start");
-		ast_autoservice_start(aqsi->qe->chan); /* this will let the sound file play in a different thread */
+		ast_log(LOG_ERROR,"Autoservice start\n");
+		ast_autoservice_start(chan); /* this will let the sound file play in a different thread */
+
 	}
 	
 	AST_LIST_UNLOCK(&aqsi->flist);
+	ast_log(LOG_ERROR,"ast_waitfor(1) called\n");
+	ast_waitfor(chan, 1);
 	
 	return 0; /* non-zero most likely means the file doesn't exist */
 }
@@ -5081,8 +5092,9 @@ check_turns:
 		ast_log(LOG_ERROR,"Starting indicate CONTROL_RINGING\n");
 		ast_indicate(chan, AST_CONTROL_RINGING);
 	} else {
-		ast_log(LOG_ERROR,"Starting MOH\n");
+		ast_log(LOG_ERROR,"Starting MOH on chan %s\n", chan->name);
 		ast_moh_start(chan, qe.moh, NULL);
+		/* ast_waitfor(chan,1); */
 	}
 
 	/* This is the wait loop for callers 2 through maxlen */

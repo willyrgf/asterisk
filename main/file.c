@@ -755,6 +755,7 @@ static enum fsread_res ast_readaudio_callback(struct ast_filestream *s)
 		}
 
 		fr = read_frame(s, &whennext);
+		ast_log(LOG_ERROR, "Read a frame on channel %s\n", s->owner->name);
 
 		if (!fr /* stream complete */ || ast_write(s->owner, fr) /* error writing */) {
 			if (fr) {
@@ -763,6 +764,7 @@ static enum fsread_res ast_readaudio_callback(struct ast_filestream *s)
 			}
 			goto return_failure;
 		} 
+		ast_log(LOG_ERROR, "and wrote it, too!\n");
 
 		if (fr) {
 			ast_frfree(fr);
@@ -780,11 +782,14 @@ static enum fsread_res ast_readaudio_callback(struct ast_filestream *s)
 				factor = ((float) rate) / ((float) 8000.0); 
 				dahdi_timer_samples = (int) ( ((float) dahdi_timer_samples) / factor );
 			}
+			ast_log(LOG_ERROR,"About to call ast_settimeout with %d for ast_fsread_audio\n", dahdi_timer_samples);
 			ast_settimeout(s->owner, dahdi_timer_samples, ast_fsread_audio, s);
-		} else
+		} else {
 #endif		
+			ast_log(LOG_ERROR,"About to call ast_sched_add  with %d for ast_fsread_audio\n", whennext / (ast_format_rate(s->fmt->format) / 1000));
 			s->owner->streamid = ast_sched_add(s->owner->sched, 
 				whennext / (ast_format_rate(s->fmt->format) / 1000), ast_fsread_audio, s);
+		}
 		s->lasttimeout = whennext;
 		return FSREAD_SUCCESS_NOSCHED;
 	}
@@ -793,6 +798,7 @@ static enum fsread_res ast_readaudio_callback(struct ast_filestream *s)
 return_failure:
 	s->owner->streamid = -1;
 #ifdef HAVE_DAHDI
+	ast_log(LOG_ERROR, "Calling ast_settimeout(%s, 0, NULL, NULL);\n", s->owner->name);
 	ast_settimeout(s->owner, 0, NULL, NULL);
 #endif			
 	return FSREAD_FAILURE;
