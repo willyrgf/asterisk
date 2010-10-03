@@ -1162,13 +1162,17 @@ static struct {
 	.thread = AST_PTHREADT_NULL,
 };
 
+struct pubsub_filter {
+	const char *criteria;
+};
+
 struct sip_publisher {
 	AST_DECLARE_STRING_FIELDS(
 		AST_STRING_FIELD(name);
 		AST_STRING_FIELD(host);
 		AST_STRING_FIELD(domain);
-		AST_STRING_FIELD(filter);
 	);
+	struct ao2_container *filters;
 };
 
 struct sip_subscriber {
@@ -1637,6 +1641,8 @@ static int publisher_hash_cb(const void *obj, const int flags);
 static int publisher_cmp_cb(void *obj, void *arg, int flags);
 static int subscriber_hash_cb(const void *obj, const int flags);
 static int subscriber_cmp_cb(void *obj, void *arg, int flags);
+static int filter_hash_cb(const void *obj, const int flags);
+static int filter_cmp_cb(void *obj, void *arg, int flags);
 
 /*--- Applications, functions, CLI and manager command helpers */
 static const char *sip_nat_mode(const struct sip_pvt *p);
@@ -19013,6 +19019,7 @@ static void publisher_destructor_cb(void *data)
 	struct sip_publisher *publisher = data;
 	ao2_unlink(devstate_publishers, publisher);
 	ast_string_field_free_memory(publisher);
+	/* TODO: Destroy filters ao2 container */
 }
 
 static struct sip_publisher *sip_publisher_init(const char *name, const char *host,
@@ -19030,14 +19037,28 @@ static struct sip_publisher *sip_publisher_init(const char *name, const char *ho
 	ast_string_field_set(publisher, name, name);
 	ast_string_field_set(publisher, host, host);
 	ast_string_field_set(publisher, domain, domain);
-	ast_string_field_set(publisher, filter, filter);
-
+	publisher->filters = ao2_container_alloc(11, filter_hash_cb, filter_cmp_cb);
+	/* TODO: Parse filter string and build ao2 objects and link them */
 	return publisher;
 }
+
+
+static int filter_hash_cb(const void *obj, const int flags)
+{
+	const struct pubsub_filter *filter = obj;
+	return ast_str_case_hash(filter->criteria);
+}
+
+static int filter_cmp_cb(void *obj, void *arg, int flags)
+{
+	const struct pubsub_filter *filter = obj, *filter2 = arg;
+	return !strcasecmp(filter->criteria, filter2->criteria) ? CMP_MATCH | CMP_STOP : 0;
+}
+
 static int publisher_hash_cb(const void *obj, const int flags)
 {
-	const struct sip_publisher *publisher = obj;
-	return ast_str_case_hash(publisher->name);
+	const struct pubsub_filter *filter = obj;
+	return ast_str_case_hash(filter->criteria);
 }
 
 static int publisher_cmp_cb(void *obj, void *arg, int flags)
