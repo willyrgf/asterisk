@@ -1164,6 +1164,7 @@ static struct {
 
 struct pubsub_filter {
 	const char *criteria;
+	AST_LIST_ENTRY(pubsub_filter) next;
 };
 
 struct sip_publisher {
@@ -1172,7 +1173,7 @@ struct sip_publisher {
 		AST_STRING_FIELD(host);
 		AST_STRING_FIELD(domain);
 	);
-	struct ao2_container *filters;
+	AST_LIST_HEAD_NOLOCK(filter_list, pubsub_filter) filters;
 };
 
 struct sip_subscriber {
@@ -1641,8 +1642,6 @@ static int publisher_hash_cb(const void *obj, const int flags);
 static int publisher_cmp_cb(void *obj, void *arg, int flags);
 static int subscriber_hash_cb(const void *obj, const int flags);
 static int subscriber_cmp_cb(void *obj, void *arg, int flags);
-static int filter_hash_cb(const void *obj, const int flags);
-static int filter_cmp_cb(void *obj, void *arg, int flags);
 
 /*--- Applications, functions, CLI and manager command helpers */
 static const char *sip_nat_mode(const struct sip_pvt *p);
@@ -19019,13 +19018,14 @@ static void publisher_destructor_cb(void *data)
 	struct sip_publisher *publisher = data;
 	ao2_unlink(devstate_publishers, publisher);
 	ast_string_field_free_memory(publisher);
-	/* TODO: Destroy filters ao2 container */
 }
 
 static struct sip_publisher *sip_publisher_init(const char *name, const char *host,
-		const char *domain, const char* filter)
+		const char *domain, char* filter)
 {
+	struct pubsub_filter *filter_head;
 	struct sip_publisher *publisher = ao2_alloc(sizeof(*publisher), publisher_destructor_cb);
+
 	if (!publisher) {
 		return NULL;
 	}
@@ -19037,22 +19037,23 @@ static struct sip_publisher *sip_publisher_init(const char *name, const char *ho
 	ast_string_field_set(publisher, name, name);
 	ast_string_field_set(publisher, host, host);
 	ast_string_field_set(publisher, domain, domain);
-	publisher->filters = ao2_container_alloc(11, filter_hash_cb, filter_cmp_cb);
-	/* TODO: Parse filter string and build ao2 objects and link them */
+
+	if (!(filter_head = ast_calloc(1, sizeof(*filter_head)))) {
+		return NULL;
+	}
+	filter_head->criteria = filter;
+	AST_LIST_HEAD_SET_NOLOCK(&publisher->filters, filter_head);
+	while(strchr(filter, ',')) {
+		*filter++ = '\0';
+		struct pubsub_filter *next_filter;
+		if (!(next_filter = ast_calloc(1, sizeof(*filter_head)))) {
+			return NULL;
+		}
+		next_filter->criteria = filter;
+		AST_LIST_INSERT_TAIL(&publisher->filters, next_filter, next);
+	}
+
 	return publisher;
-}
-
-
-static int filter_hash_cb(const void *obj, const int flags)
-{
-	const struct pubsub_filter *filter = obj;
-	return ast_str_case_hash(filter->criteria);
-}
-
-static int filter_cmp_cb(void *obj, void *arg, int flags)
-{
-	const struct pubsub_filter *filter = obj, *filter2 = arg;
-	return !strcasecmp(filter->criteria, filter2->criteria) ? CMP_MATCH | CMP_STOP : 0;
 }
 
 static int publisher_hash_cb(const void *obj, const int flags)
@@ -19109,7 +19110,7 @@ static int presence_load_config(struct ast_config *pcfg)
 		const char* name = NULL;
 		const char* host = NULL;
 		const char* domain = NULL;
-		const char* filter = NULL;
+		char* filter = NULL;
 		if (!strcasecmp(cat, "general")) {
 					continue;
 		}
