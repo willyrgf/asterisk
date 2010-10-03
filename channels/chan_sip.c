@@ -9782,54 +9782,23 @@ static int notify_extenstate_update(char *context, char* exten, int state, void 
 	return 0;
 }
 
-/*! \brief set a member's status based on device state of that member's interface*/
+/*! \Publish the state of a device if it matches a publisher and one of its filters */
 static void *handle_statechange(struct statechange *sc)
 {
-
-	/* Below is the body of the handle_statechange function from app_queue.  While some of it may
-	 * turn out to be useful, most of the logic will be totally different.
-	 * struct member_interface *curint;
-	char *loc;
-	char *technology;
-	char interface[80];
-
-	technology = ast_strdupa(sc->dev);
-	loc = strchr(technology, '/');
-	if (loc) {
-		*loc++ = '\0';
-	} else {
-		return NULL;
-	}
-
-	AST_LIST_LOCK(&interfaces);
-	AST_LIST_TRAVERSE(&interfaces, curint, list) {
-		char *slash_pos;
-		ast_copy_string(interface, curint->interface, sizeof(interface));
-		if ((slash_pos = strchr(interface, '/'))) {
-			if ((slash_pos = strchr(slash_pos + 1, '/'))) {
-				*slash_pos = '\0';
+	struct ao2_iterator i;
+	struct sip_publisher *p;
+	struct pubsub_filter *curfilter;
+	i = ao2_iterator_init(devstate_publishers, 0);
+	while ((p = ao2_iterator_next(&i))) {
+		AST_LIST_TRAVERSE(&p->filters, curfilter, next) {
+			if (strncmp(curfilter->criteria, sc->dev, strlen(curfilter->criteria))) {
+				sip_devicestate_publish(p, sc);
 			}
 		}
-
-		if (!strcasecmp(interface, sc->dev)) {
-			break;
-		}
-	}
-	AST_LIST_UNLOCK(&interfaces);
-
-	if (!curint) {
-		if (option_debug > 2) {
-			ast_log(LOG_DEBUG, "Device '%s/%s' changed to state '%d' (%s) but we don't care because they're not a member of any queue.\n", technology, loc, sc->state, devstate2str(sc->state));
-		}
-		return NULL;
+		ao2_ref(p, -1);
 	}
 
-	if (option_debug) {
-		ast_log(LOG_DEBUG, "Device '%s/%s' changed to state '%d' (%s)\n", technology, loc, sc->state, devstate2str(sc->state));
-	}
-
-	update_status(sc->dev, sc->state);
-	*/
+	ao2_iterator_destroy(&i);
 	return NULL;
 }
 
@@ -19049,7 +19018,7 @@ static struct sip_publisher *sip_publisher_init(const char *name, const char *ho
 		if (!(next_filter = ast_calloc(1, sizeof(*filter_head)))) {
 			return NULL;
 		}
-		next_filter->criteria = filter;
+		next_filter->criteria = ast_skip_blanks(filter);
 		AST_LIST_INSERT_TAIL(&publisher->filters, next_filter, next);
 	}
 
