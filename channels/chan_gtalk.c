@@ -4,6 +4,7 @@
  * Copyright (C) 1999 - 2005, Digium, Inc.
  *
  * Matt O'Gorman <mogorman@digium.com>
+ * Philippe Sultan <philippe.sultan@gmail.com>
  *
  * See http://www.asterisk.org for more information about
  * the Asterisk project. Please do not directly contact
@@ -19,6 +20,7 @@
 /*! \file
  *
  * \author Matt O'Gorman <mogorman@digium.com>
+ * \author Philippe Sultan <philippe.sultan@gmail.com>
  *
  * \brief Gtalk Channel Driver, until google/libjingle works with jingle spec
  *
@@ -819,7 +821,7 @@ static int gtalk_create_candidates(struct gtalk *client, struct gtalk_pvt *p, ch
 		iks_insert_node(gtalk,candidate);
 	} else {
 		iks_insert_node(gtalk,transport);
-		iks_insert_node(transport, candidate);
+		iks_insert_node(gtalk,candidate);
 	}
 	for (; p; p = p->next) {
 		if (!strcasecmp(p->sid, sid))
