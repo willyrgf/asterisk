@@ -379,6 +379,8 @@ static int pgsql_log(struct ast_cdr *cdr)
 			if (PQstatus(conn) == CONNECTION_OK) {
 				ast_log(LOG_ERROR, "Connection reestablished.\n");
 				connected = 1;
+				connect_time = time(NULL);
+				records = 0;
 				PQclear(result);
 				result = PQexec(conn, ast_str_buffer(sql));
 				if (PQresultStatus(result) != PGRES_COMMAND_OK) {
@@ -602,6 +604,8 @@ static int config_module(int reload)
 		int i, rows, version;
 		ast_debug(1, "Successfully connected to PostgreSQL database.\n");
 		connected = 1;
+		connect_time = time(NULL);
+		records = 0;
 		if (PQsetClientEncoding(conn, encoding)) {
 #ifdef HAVE_PGSQL_pg_encoding_to_char
 			ast_log(LOG_WARNING, "Failed to set encoding to '%s'.  Encoding set to default '%s'\n", encoding, pg_encoding_to_char(PQclientEncoding(conn)));
