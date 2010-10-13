@@ -58,7 +58,7 @@ static int connected = 0;
 static int maxsize = 512, maxsize2 = 512;
 static time_t connect_time = 0;
 static int totalrecords = 0;
-static int records = 0;
+static int records;
 
 static char *handle_cdr_pgsql_status(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
 static struct ast_cli_entry cdr_pgsql_status_cli[] = {
@@ -418,7 +418,7 @@ static int unload_module(void)
 	struct columns *current;
 
 	ast_cdr_unregister(name);
-	ast_cli_unregister_multiple(cdr_pgsql_status_cli, sizeof(cdr_pgsql_status_cli) / sizeof(struct ast_cli_entry));
+	ast_cli_unregister_multiple(cdr_pgsql_status_cli, ARRAY_LEN(cdr_pgsql_status_cli));
 
 	PQfinish(conn);
 
