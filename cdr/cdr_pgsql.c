@@ -355,7 +355,7 @@ static int pgsql_log(struct ast_cdr *cdr)
 				ast_log(LOG_ERROR, "Connection reestablished.\n");
 				connected = 1;
 				connect_time = time(NULL);
-                        	records = 0;
+				records = 0;
 			} else {
 				pgerror = PQerrorMessage(conn);
 				ast_log(LOG_ERROR, "Unable to reconnect to database server %s. Calls will not be logged!\n", pghostname);
