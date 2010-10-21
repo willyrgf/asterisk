@@ -2835,7 +2835,6 @@ static int action_waitevent(struct mansession *s, const struct message *m)
 	if (s->session->waiting_thread == pthread_self()) {
 		struct eventqent *eqe = s->session->last_ev;
 		astman_send_response(s, m, "Success", "Waiting for Event completed.");
-		AST_RWLIST_RDLOCK(&all_events);
 		while ((eqe = advance_event(eqe))) {
 			if (((s->session->readperm & eqe->category) == eqe->category) &&
 			    ((s->session->send_events & eqe->category) == eqe->category)) {
@@ -2843,7 +2842,6 @@ static int action_waitevent(struct mansession *s, const struct message *m)
 			}
 			s->session->last_ev = eqe;
 		}
-		AST_RWLIST_UNLOCK(&all_events);
 		astman_append(s,
 			"Event: WaitEventComplete\r\n"
 			"%s"
@@ -4130,7 +4128,7 @@ static int process_events(struct mansession *s)
 	ao2_lock(s->session);
 	if (s->session->f != NULL) {
 		struct eventqent *eqe = s->session->last_ev;
-		AST_RWLIST_RDLOCK(&all_events);
+
 		while ((eqe = advance_event(eqe))) {
 			if (!ret && s->session->authenticated &&
 			    (s->session->readperm & eqe->category) == eqe->category &&
@@ -4142,7 +4140,6 @@ static int process_events(struct mansession *s)
 			}
 			s->session->last_ev = eqe;
 		}
-		AST_RWLIST_UNLOCK(&all_events);
 	}
 	ao2_unlock(s->session);
 	return ret;
