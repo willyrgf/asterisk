@@ -150,6 +150,8 @@ else
 	mkdir -p "${OUTPUT_DIR}"
 fi
 
+umask 177
+
 case "${CERT_MODE}" in
 	server)
 		COMMON_NAME=${COMMON_NAME:-"${DEFAULT_SERVER_CN}"}
