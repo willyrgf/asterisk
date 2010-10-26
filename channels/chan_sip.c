@@ -1256,6 +1256,23 @@ struct epa_static_data {
 	void (*destructor)(void *instance_data);
 };
 
+static void dlginfo_handle_publish_error(struct sip_pvt *pvt, const int resp, struct sip_request *req, struct sip_epa_entry *epa_entry);
+
+static void dlginfo_epa_destructor(void *data)
+{
+        struct sip_epa_entry *epa_entry = data;
+        //struct dlginfo_epa_entry *dlginfo_entry = epa_entry->instance_data;
+        //ast_free(dlginfo_entry);
+}
+
+
+static const struct epa_static_data dlginfo_epa_static_data  = {
+		.event = DIALOG_INFO_XML,
+		.name = "dialog-info",
+		.handle_error = dlginfo_handle_publish_error,
+		.destructor = dlginfo_epa_destructor,
+};
+
 /*!
  * \brief backend for an event publication agent
  */
@@ -20488,6 +20505,9 @@ static int load_module(void)
 	ast_cond_init(&device_state.cond, NULL);
 	ast_pthread_create(&device_state.thread, NULL, device_state_thread, NULL);
 	ast_devstate_add(sip_devicestate_cb, devstate_publishers);
+	if (sip_epa_register(&dlginfo_epa_static_data)) {
+		return AST_MODULE_LOAD_DECLINE;
+	}
 
 	return AST_MODULE_LOAD_SUCCESS;
 }
