@@ -329,7 +329,6 @@ struct analog_pvt {
 
 	/* All variables after this are definitely going to be audited */
 	unsigned int inalarm:1;
-	unsigned int unknown_alarm:1;
 
 	int callwaitcas;
 
