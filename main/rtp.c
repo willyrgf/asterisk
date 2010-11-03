@@ -2411,8 +2411,8 @@ void ast_rtcp_settranslator(struct ast_rtp *rtp, const char *readtranslator, con
 	if (!rtp || !rtp->rtcp) {
 		return;
 	}
-	ast_copy_string(rtp->rtcp->readtranslator, readtranslator, sizeof(rtp->rtcp->readtranslator));
-	ast_copy_string(rtp->rtcp->writetranslator, writetranslator, sizeof(rtp->rtcp->writetranslator));
+	ast_copy_string(rtp->rtcp->readtranslator, S_OR(readtranslator,""), sizeof(rtp->rtcp->readtranslator));
+	ast_copy_string(rtp->rtcp->writetranslator, S_OR(writetranslator,""), sizeof(rtp->rtcp->writetranslator));
 	rtp->rtcp->readcost = readcost;
 	rtp->rtcp->writecost = writecost;
 	
