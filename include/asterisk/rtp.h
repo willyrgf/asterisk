@@ -106,6 +106,7 @@ struct ast_rtp_quality {
 	char readtranslator[80];		  /*!< Translator providing frames when reading */
 	int writecost;		  /*!< Cost in milliseconds for encoding/decoding 1 second of outbound media */
 	int readcost;		  /*!< Cost in milliseconds for encoding/decoding 1 second of inbound media */
+	int mediatype;			/*! Type of media */
 };
 
 

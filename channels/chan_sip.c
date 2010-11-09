@@ -3899,7 +3899,6 @@ static int sip_hangup(struct ast_channel *ast)
 			ast_log(LOG_DEBUG, "Hanging up channel in state %s (not UP)\n", ast_state2str(ast->_state));
 	}
 
-	ast_log(LOG_DEBUG, "----%%%%%%----- Stopping media flows in sip_hangup\n");
 	stop_media_flows(p); /* Immediately stop RTP, VRTP and UDPTL as applicable */
 
 	append_history(p, needcancel ? "Cancel" : "Hangup", "Cause %s", p->owner ? ast_cause2str(p->hangupcause) : "Unknown");
@@ -5439,7 +5438,7 @@ static void change_hold_state(struct sip_pvt *dialog, struct sip_request *req, i
 }
 
 enum media_type {
-	SDP_AUDIO,
+	SDP_AUDIO,	/* AUDIO class */
 	SDP_VIDEO,
 	SDP_IMAGE,
 };
@@ -11784,6 +11783,10 @@ static int sip_show_settings(int fd, int argc, char *argv[])
 	int realtimepeers;
 	int realtimeusers;
 	char codec_buf[SIPBUFSIZE];
+	int realtimertpqos = FALSE;
+#ifdef REALTIME2
+	realtimertpqos = ast_check_realtime("rtpqos");
+#endif
 
 	realtimepeers = ast_check_realtime("sippeers");
 	realtimeusers = ast_check_realtime("sipusers");
@@ -11830,6 +11833,7 @@ static int sip_show_settings(int fd, int argc, char *argv[])
 		ast_cli(fd, "  SIP realtime:           Disabled\n" );
 	else
 		ast_cli(fd, "  SIP realtime:           Enabled\n" );
+	ast_cli(fd, "  QOS realtime reports:   %s\n", realtimertpqos ? "Enabled" : "Disabled" );
 
 	ast_cli(fd, "\nGlobal Signalling Settings:\n");
 	ast_cli(fd, "---------------------------\n");
@@ -13939,11 +13943,14 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, enum media_t
 		if (type == SDP_AUDIO) {  /* Audio */
 			p->audioqual = ast_calloc(sizeof(struct ast_rtp_quality), 1);
 			(* p->audioqual) = qual;
+			p->audioqual->end = ast_tvnow();
+ 			p->audioqual->mediatype = type;
 		} else if (type == SDP_VIDEO) {  /* Video */
 			p->videoqual = ast_calloc(sizeof(struct ast_rtp_quality), 1);
 			(* p->videoqual) = qual;
+ 			p->videoqual->mediatype = type;
+			p->videoqual->end = ast_tvnow();
 		}
-		p->audioqual->end = ast_tvnow();
 	}
 }
 
@@ -13955,10 +13962,11 @@ void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_quality *qual)
 	char buf_duration[10], buf_lssrc[30], buf_rssrc[30], buf_rtt[30];
 	char localjitter[10], remotejitter[10];
 	char buf_readcost[5], buf_writecost[5];
+	char buf_mediatype[10];
 
 	/* Update the reports before writing */
-	sip_rtcp_report(p, p->rtp, SDP_AUDIO, 2);
-	sip_rtcp_report(p, p->vrtp, SDP_VIDEO, 2);
+	sip_rtcp_report(dialog, dialog->rtp, SDP_AUDIO, 2);
+	sip_rtcp_report(dialog, dialog->vrtp, SDP_VIDEO, 2);
 
 	/* Since the CDR is already gone, we need to calculate our own duration.
 	   The CDR duration is the definitive resource for billing, this is
@@ -13980,16 +13988,20 @@ void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_quality *qual)
 	sprintf(buf_duration, "%u", duration);
 	sprintf(buf_readcost, "%d", qual->readcost);
 	sprintf(buf_writecost, "%d", qual->writecost);
+	sprintf(buf_mediatype,"%s", qual->mediatype == SDP_AUDIO ? "audio" : (qual->mediatype == SDP_VIDEO ? "video" : "fax") );
+
 	ast_store_realtime("rtpqos", 
 		"channel", dialog->owner ? dialog->owner->name : "", 
 		"uniqueid", dialog->owner ? dialog->owner->uniqueid : "", 
 		"bridgedchan", qual->bridgedchan[0] ? qual->bridgedchan : "" ,
 		"bridgeduniqueid", qual->bridgeduniqueid[0] ? qual->bridgeduniqueid : "",
 		"pvtcallid", dialog->callid, 
-		"rtpmedia", mediatype, 
-		"localssrc", buf_lssrc, "remotessrc", buf_rssrc,
+		"rtpmedia", buf_mediatype, 
+		"localssrc", buf_lssrc, 
+		"remotessrc", buf_rssrc,
 		"rtt", buf_rtt, 
-		"localjitter", localjitter, "remotejitter", remotejitter, 
+		"localjitter", localjitter, 
+		"remotejitter", remotejitter, 
 		"sendformat", ast_getformatname(qual->lasttxformat),
 		"receiveformat", ast_getformatname(qual->lastrxformat),
 		"rtcpstatus", qual->numberofreports == 0 ? "Inactive" : "Active",
@@ -13999,7 +14011,6 @@ void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_quality *qual)
 		"readtranslator", qual->readtranslator,
 		"readcost", buf_readcost,
 		NULL);
-	}
 #endif
 }
 
@@ -16606,7 +16617,6 @@ static int handle_request_bye(struct sip_pvt *p, struct sip_request *req)
 		}
 	}
 
-	ast_log(LOG_DEBUG, "----%%%%%%----- Stopping media flows in handle_request_bye\n");
 	stop_media_flows(p); /* Immediately stop RTP, VRTP and UDPTL as applicable */
 
 	if (!ast_strlen_zero(get_header(req, "Also"))) {

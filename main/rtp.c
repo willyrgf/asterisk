@@ -590,11 +590,6 @@ static void ast_rtcp_schedule(struct ast_rtp *rtp)
 		/* Schedule transmission of Receiver Report */
 		ast_rtcp_write_empty(rtp, rtp->rtcp->s);
 		rtp->rtcp->schedid = ast_sched_add(rtp->sched, ast_rtcp_calc_interval(rtp), ast_rtcp_write, rtp);
-				ast_log(LOG_DEBUG, "-------- SCHEDULING RTCP reports!!!\n");
-	} else {
-	//	ast_log(LOG_DEBUG, "----- NOT SCHEDULING RTCP - RTCP %s RTCP address %s schedid %d\n", 
-			//rtp->rtcp ? "yes" : "no",
-			//rtp->rtcp->them.sin_addr.s_addr ? "yes" : "no", rtp->rtcp->schedid);
 	}
 }
 
@@ -1021,7 +1016,7 @@ static struct ast_frame *ast_rtcp_read_fd(int fd, struct ast_rtp *rtp)
 		}
 	}
 
-	if (option_debug) {
+	if (option_debug && rtcp_debug_test_addr(&sin)) {
 		ast_log(LOG_DEBUG, "Got RTCP report of %d bytes - %d messages\n", res, packetwords);
 	}
 
@@ -1033,7 +1028,9 @@ static struct ast_frame *ast_rtcp_read_fd(int fd, struct ast_rtp *rtp)
 	position = 0;
 	while (position < packetwords) {
 		i = position;
-		ast_log(LOG_DEBUG, "***** Debug - position = %d\n", position);
+		if (option_debug>3 && rtcp_debug_test_addr(&sin)) {
+			ast_log(LOG_DEBUG, "***** Debug - position = %d\n", position);
+		}
 
 		length = ntohl(rtcpheader[i]);
 
@@ -2404,7 +2401,9 @@ void ast_rtcp_setcname(struct ast_rtp *rtp, const char *cname, size_t length)
 	}
 	ast_copy_string(rtp->rtcp->ourcname, cname, length+1);
 	rtp->rtcp->ourcnamelength = length;
-	ast_log(LOG_DEBUG, "--- Copied CNAME %s to RTCP structure (length %d)\n", cname, (int) length);
+	if (option_debug > 3) {
+		ast_log(LOG_DEBUG, "--- Copied CNAME %s to RTCP structure (length %d)\n", cname, (int) length);
+	}
 }
 
 /*! \brief Set the transcoding variables for the QoS reports */
