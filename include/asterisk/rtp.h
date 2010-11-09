@@ -79,6 +79,8 @@ struct ast_rtp_protocol {
 
 /*! \brief Data structure only used for RTCP reports */
 struct ast_rtp_quality {
+	char channel[AST_MAX_EXTENSION];	/*!< Name of channel */
+	char uniqueid[AST_MAX_EXTENSION];	/*!< uniqueid of channel */
 	char bridgedchan[AST_MAX_EXTENSION];	/*!< Name of bridged channel */
 	char bridgeduniqueid[AST_MAX_EXTENSION];	/*!< uniqueid of bridged channel */
 	unsigned int numberofreports;	  /*!< Number of reports received from remote end */
@@ -205,14 +207,14 @@ void ast_rtcp_setcname(struct ast_rtp *rtp, const char *cname, size_t length);
 /*! \brief Set the transcoding variables for the QoS reports */
 void ast_rtcp_settranslator(struct ast_rtp *rtp, const char *readtranslator, const int readcost, const char *writetranslator, const int writecost);
 
-/*! \brief set the name of the bridged channel
+/*! \brief set the name of the channel and the bridged channel (if any)
 
 At the time when we write the report there might not be a bridge, so we need
 to store this so we can correlate the reports. If a channel changes bridge,
 it can be reset by first setting it to an empty string, then setting to 
 a new name 
 */
-void ast_rtcp_set_bridged(struct ast_rtp *rtp, const char *bridged_name, const char *bridged_uniqueid);
+void ast_rtcp_set_bridged(struct ast_rtp *rtp, const char *channel, const char *uniqueid, const char *bridged_name, const char *bridged_uniqueid);
 
 /*! \brief Store translator information
 

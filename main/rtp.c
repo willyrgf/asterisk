@@ -281,6 +281,8 @@ struct ast_rtcp {
 	int sendfur;
 	char bridgedchan[AST_MAX_EXTENSION];		/*!< Bridged channel name */
 	char bridgeduniqueid[AST_MAX_EXTENSION];	/*!< Bridged channel uniqueid */
+	char channel[AST_MAX_EXTENSION];		/*!< Our channel name */
+	char uniqueid[AST_MAX_EXTENSION];	/*!< Our channel uniqueid */
 	char readtranslator[80];	/* Translation done on reading audio from PBX */
 	char writetranslator[80];	/* Translation done on writing audio to PBX - bridged channel */
 	int readcost;			/* Delay in milliseconds for translation of 1 second of audio */
@@ -2426,7 +2428,7 @@ to store this so we can correlate the reports. If a channel changes bridge,
 it can be reset by first setting it to an empty string, then setting to 
 a new name 
 */
-void ast_rtcp_set_bridged(struct ast_rtp *rtp, const char *bridged_name, const char *bridged_uniqueid)
+void ast_rtcp_set_bridged(struct ast_rtp *rtp, const char *channel, const char *uniqueid, const char *bridgedchan, const char *bridgeduniqueid)
 {
 	if (!rtp) {		/* For some reason, there's no RTP */
 		return;
@@ -2434,12 +2436,25 @@ void ast_rtcp_set_bridged(struct ast_rtp *rtp, const char *bridged_name, const c
 	if (!rtp->rtcp) {	/* No RTCP? Strange */
 		return;
 	}
-	/* If we already have a bridged name, don't overwrite */
-	if (rtp->rtcp->bridgedchan[0]) {
-		return;
+	/* If we already have data, don't replace it. 
+		NOTE: Should we replace it at a masquerade or something? Hmm.
+	*/
+	if (channel && !rtp->rtcp->channel[0]) {
+		ast_copy_string(rtp->rtcp->channel, channel, sizeof(rtp->rtcp->channel));
 	}
-	ast_copy_string(rtp->rtcp->bridgedchan, bridged_name, sizeof(rtp->rtcp->bridgedchan));
-	ast_copy_string(rtp->rtcp->bridgeduniqueid, bridged_uniqueid, sizeof(rtp->rtcp->bridgeduniqueid));
+	if (uniqueid && !rtp->rtcp->uniqueid[0]) {
+		ast_copy_string(rtp->rtcp->uniqueid, uniqueid, sizeof(rtp->rtcp->uniqueid));
+	}
+	if (bridgedchan) {
+		ast_copy_string(rtp->rtcp->bridgedchan, bridgedchan, sizeof(rtp->rtcp->bridgedchan));
+	} else {
+		rtp->rtcp->bridgedchan[0] = '\0';
+	}
+	if (bridgeduniqueid) {
+		ast_copy_string(rtp->rtcp->bridgeduniqueid, bridgeduniqueid, sizeof(rtp->rtcp->bridgeduniqueid));
+	} else {
+		rtp->rtcp->bridgeduniqueid[0] = '\0';
+	}
 }
 
 int ast_rtp_settos(struct ast_rtp *rtp, int tos)
@@ -2593,8 +2608,9 @@ char *ast_rtp_get_quality(struct ast_rtp *rtp, struct ast_rtp_quality *qual)
 		qual->local_count = rtp->rxcount;
 		qual->remote_ssrc = rtp->themssrc;
 		qual->remote_count = rtp->txcount;
-		qual->them = rtp->them;	/* IP address and port */
+		ast_log(LOG_DEBUG, "OEJ ---Setting remote RTP IP to %s\n", ast_inet_ntoa(rtp->them.sin_addr));
 		if (rtp->rtcp) {
+			qual->them = rtp->rtcp->them;	/* IP address and port */
 			qual->numberofreports = rtp->rtcp->reported_jitter_count;	/* use the jitter counter */
 			qual->local_jitter_max = rtp->rtcp->maxrxjitter;
 			qual->local_jitter_min = rtp->rtcp->minrxjitter;
@@ -2606,11 +2622,23 @@ char *ast_rtp_get_quality(struct ast_rtp *rtp, struct ast_rtp_quality *qual)
 			qual->rtt = rtp->rtcp->rtt;
 			qual->rttmax = rtp->rtcp->maxrtt;
 			qual->rttmin = rtp->rtcp->minrtt;
+			qual->channel[0] = '\0';
+			qual->uniqueid[0] = '\0';
+			qual->bridgedchan[0] = '\0';
+			qual->bridgeduniqueid[0] = '\0';
+			qual->readtranslator[0] = '\0';
+			qual->writetranslator[0] = '\0';
 			if (!ast_strlen_zero(rtp->rtcp->bridgedchan)) {
 				ast_copy_string(qual->bridgedchan, rtp->rtcp->bridgedchan, sizeof(qual->bridgedchan));
 			}
 			if (!ast_strlen_zero(rtp->rtcp->bridgeduniqueid)) {
 				ast_copy_string(qual->bridgeduniqueid, rtp->rtcp->bridgeduniqueid, sizeof(qual->bridgeduniqueid));
+			}
+			if (!ast_strlen_zero(rtp->rtcp->channel)) {
+				ast_copy_string(qual->channel, rtp->rtcp->channel, sizeof(qual->channel));
+			}
+			if (!ast_strlen_zero(rtp->rtcp->uniqueid)) {
+				ast_copy_string(qual->uniqueid, rtp->rtcp->uniqueid, sizeof(qual->uniqueid));
 			}
 			qual->readcost = rtp->rtcp->readcost;
 			qual->writecost = rtp->rtcp->writecost;

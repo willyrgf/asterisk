@@ -478,6 +478,12 @@ static const struct cfsip_options {
 	{ SIP_OPT_RESPRIORITY,	NOT_SUPPORTED,	"resource-priority" },
 };
 
+/*! Media types for declaration of RTP streams */
+enum media_type {
+	SDP_AUDIO,	/* AUDIO class */
+	SDP_VIDEO,
+	SDP_IMAGE,
+};
 
 /*! \brief SIP Methods we support */
 #define ALLOWED_METHODS "INVITE, ACK, CANCEL, OPTIONS, BYE, REFER, SUBSCRIBE, NOTIFY, INFO"
@@ -1417,6 +1423,7 @@ static void add_noncodec_to_sdp(const struct sip_pvt *p, int format, int sample_
 static enum sip_result add_sdp(struct sip_request *resp, struct sip_pvt *p, int add_audio, int add_t38);
 static int send_rtcp_events(const void *data);
 static void start_rtcp_events(struct sip_pvt *dialog);
+static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, enum media_type type, int reporttype);
 static void stop_media_flows(struct sip_pvt *p);
 static void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_quality *qual);
 
@@ -5437,11 +5444,6 @@ static void change_hold_state(struct sip_pvt *dialog, struct sip_request *req, i
 	return;
 }
 
-enum media_type {
-	SDP_AUDIO,	/* AUDIO class */
-	SDP_VIDEO,
-	SDP_IMAGE,
-};
 
 static int get_ip_and_port_from_sdp(struct sip_request *req, const enum media_type media, struct sockaddr_in *sin)
 {
@@ -13821,8 +13823,6 @@ static void handle_response_peerpoke(struct sip_pvt *p, int resp, struct sip_req
 /*! \brief send manager report of RTCP 
 	reporttype = 0  means report during call (if configured)
 	reporttype = 1  means endof-call (hangup) report
-	reporttype = 2  means report at closure of SIP pvt (used only for realtime reports. We might get 
-			an incoming final RTCP after we send BYE 
 	reporttype = 10  means report at end of call leg (like transfer)
 */
 static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, enum media_type type, int reporttype)
@@ -13839,8 +13839,10 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, enum media_t
 		struct ast_channel *bridgepeer = ast_bridged_channel(p->owner);
 		if (bridgepeer) {
 			/* Store the bridged peer data while we have it */
-			ast_rtcp_set_bridged(rtp, bridgepeer->name, bridgepeer->uniqueid);
+			ast_rtcp_set_bridged(rtp, p->owner->name, p->owner->uniqueid, S_OR(bridgepeer->name,""), S_OR(bridgepeer->uniqueid,""));
 			ast_log(LOG_DEBUG, "---- Setting bridged peer name to %s\n", bridgepeer->name);
+		} else {
+			ast_rtcp_set_bridged(rtp, p->owner->name, p->owner->uniqueid, NULL, NULL);
 		}
 
  		/* Try to find out if there's active transcoding */
@@ -13865,8 +13867,8 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, enum media_t
 
 	}
 
-	if (global_rtcpevents && reporttype != 2) {
-		rtpqstring =  ast_rtp_get_quality(rtp, &qual);
+	rtpqstring =  ast_rtp_get_quality(rtp, &qual);
+	if (global_rtcpevents) {
 		/* 
 		   If numberofreports == 0 we have no incoming RTCP active, thus we can't
 		   get any reliable data to handle packet loss or any RTT timing.
@@ -13939,7 +13941,7 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, enum media_t
 	   the quality report structure in the PVT and let the function that kills the pvt store the stuff in the
 	   monitor thread instead.
 	 */
-	if (reporttype == 2 && qosrealtime) {
+	if (reporttype == 1 && qosrealtime) {
 		if (type == SDP_AUDIO) {  /* Audio */
 			p->audioqual = ast_calloc(sizeof(struct ast_rtp_quality), 1);
 			(* p->audioqual) = qual;
@@ -13963,10 +13965,9 @@ void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_quality *qual)
 	char localjitter[10], remotejitter[10];
 	char buf_readcost[5], buf_writecost[5];
 	char buf_mediatype[10];
-
-	/* Update the reports before writing */
-	sip_rtcp_report(dialog, dialog->rtp, SDP_AUDIO, 2);
-	sip_rtcp_report(dialog, dialog->vrtp, SDP_VIDEO, 2);
+	char buf_remoteip[25];
+	char buf_inpacketloss[25], buf_outpacketloss[25];
+	char buf_outpackets[25], buf_inpackets[25];
 
 	/* Since the CDR is already gone, we need to calculate our own duration.
 	   The CDR duration is the definitive resource for billing, this is
@@ -13989,16 +13990,22 @@ void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_quality *qual)
 	sprintf(buf_readcost, "%d", qual->readcost);
 	sprintf(buf_writecost, "%d", qual->writecost);
 	sprintf(buf_mediatype,"%s", qual->mediatype == SDP_AUDIO ? "audio" : (qual->mediatype == SDP_VIDEO ? "video" : "fax") );
+	sprintf(buf_remoteip,"%s", ast_inet_ntoa(qual->them.sin_addr));
+	sprintf(buf_inpacketloss, "%d", qual->local_lostpackets);
+	sprintf(buf_outpacketloss, "%d", qual->remote_lostpackets);
+	sprintf(buf_inpackets, "%d", qual->remote_count);	/* Do check again */
+	sprintf(buf_outpackets, "%d", qual->local_count);
 
 	ast_store_realtime("rtpqos", 
-		"channel", dialog->owner ? dialog->owner->name : "", 
-		"uniqueid", dialog->owner ? dialog->owner->uniqueid : "", 
+		"channel", qual->channel[0] ? qual->channel : "--no channel--",
+		"uniqueid", qual->uniqueid[0] ? qual->uniqueid : "--no uniqueid --",
 		"bridgedchan", qual->bridgedchan[0] ? qual->bridgedchan : "" ,
 		"bridgeduniqueid", qual->bridgeduniqueid[0] ? qual->bridgeduniqueid : "",
 		"pvtcallid", dialog->callid, 
 		"rtpmedia", buf_mediatype, 
 		"localssrc", buf_lssrc, 
 		"remotessrc", buf_rssrc,
+		"remoteip", buf_remoteip,
 		"rtt", buf_rtt, 
 		"localjitter", localjitter, 
 		"remotejitter", remotejitter, 
@@ -14006,10 +14013,14 @@ void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_quality *qual)
 		"receiveformat", ast_getformatname(qual->lastrxformat),
 		"rtcpstatus", qual->numberofreports == 0 ? "Inactive" : "Active",
 		"duration", buf_duration,
-		"writetranslator", qual->writetranslator,
+		"writetranslator", qual->writetranslator[0] ? qual->writetranslator : "",
 		"writecost", buf_writecost,
-		"readtranslator", qual->readtranslator,
+		"readtranslator", qual->readtranslator[0] ? qual->readtranslator : "",
 		"readcost", buf_readcost,
+		"packetlossin", buf_inpacketloss,
+		"packetlossout", buf_outpacketloss,
+		"packetsent", buf_outpackets,
+		"packetreceived", buf_inpackets,
 		NULL);
 #endif
 }
