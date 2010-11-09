@@ -1204,7 +1204,9 @@ static struct ast_frame *ast_rtcp_read_fd(int fd, struct ast_rtp *rtp)
 			
 			j = i * 4;
 			sdes = (char *) &rtcpheader[i];
-			ast_verbose("   Received an SDES from %s:%d - Total length %d (%d bytes)\n", ast_inet_ntoa(rtp->rtcp->them.sin_addr), ntohs(rtp->rtcp->them.sin_port), length-i, ((length-i)*4) - 6);
+			if (rtcp_debug_test_addr(&sin)) {
+				ast_verbose("   Received an SDES from %s:%d - Total length %d (%d bytes)\n", ast_inet_ntoa(rtp->rtcp->them.sin_addr), ntohs(rtp->rtcp->them.sin_port), length-i, ((length-i)*4) - 6);
+			}
 			while (j < length * 4) {
 				sdestype = (int) *sdes;
 				sdes++;

@@ -13939,12 +13939,11 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, enum media_t
 		if (type == SDP_AUDIO) {  /* Audio */
 			p->audioqual = ast_calloc(sizeof(struct ast_rtp_quality), 1);
 			(* p->audioqual) = qual;
-			p->audioqual->end = ast_tvnow();
 		} else if (type == SDP_VIDEO) {  /* Video */
 			p->videoqual = ast_calloc(sizeof(struct ast_rtp_quality), 1);
 			(* p->videoqual) = qual;
-			p->videoqual->end = ast_tvnow();
 		}
+		p->audioqual->end = ast_tvnow();
 	}
 }
 
@@ -13966,7 +13965,11 @@ void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_quality *qual)
 	   the RTP stream duration which may include early media (ringing and
 	   provider messages). Only useful for measurements.
 	 */
-	duration = (unsigned int)(ast_tvdiff_ms(qual->end, qual->start) / 1000);
+	if (qual->end) {
+		duration = (unsigned int)(ast_tvdiff_ms(qual->end, qual->start) / 1000);
+	} else {
+		duration = 0;
+	}
 
 	/* Realtime is based on strings, so let's make strings */
 	sprintf(localjitter, "%f", qual->local_jitter);
