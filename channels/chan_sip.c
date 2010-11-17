@@ -3298,7 +3298,7 @@ static int sip_call(struct ast_channel *ast, char *dest, int timeout)
 		} else if (!strcasecmp(ast_var_name(current), "SIPTRANSFER_REPLACES")) {
 			/* We're replacing a call. */
 			p->options->replaces = ast_var_value(current);
-		} else if (!strcasecmp(ast_var_name(current), "SIP_MAX_FORWards")) {
+		} else if (!strcasecmp(ast_var_name(current), "SIP_MAX_FORWARDS")) {
 			/* The anti-loop variable setting */
 			p->maxforwards = atoi(ast_var_value(current));
 		}
