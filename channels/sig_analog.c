@@ -1566,21 +1566,22 @@ static int analog_handles_digit(struct ast_frame *f)
 	}
 }
 
-void analog_handle_dtmfup(struct analog_pvt *p, struct ast_channel *ast, enum analog_sub index, struct ast_frame **dest)
+void analog_handle_dtmfup(struct analog_pvt *p, struct ast_channel *ast, enum analog_sub idx, struct ast_frame **dest)
 {
 	struct ast_frame *f = *dest;
+
+	ast_debug(1, "DTMF digit: %c on %s\n", f->subclass.integer, ast->name);
 
 	if (analog_check_confirmanswer(p)) {
 		ast_debug(1, "Confirm answer on %s!\n", ast->name);
 		/* Upon receiving a DTMF digit, consider this an answer confirmation instead
 		of a DTMF digit */
-		p->subs[index].f.frametype = AST_FRAME_CONTROL;
-		p->subs[index].f.subclass.integer = AST_CONTROL_ANSWER;
-		*dest = &p->subs[index].f;
+		p->subs[idx].f.frametype = AST_FRAME_CONTROL;
+		p->subs[idx].f.subclass.integer = AST_CONTROL_ANSWER;
+		*dest = &p->subs[idx].f;
 		/* Reset confirmanswer so DTMF's will behave properly for the duration of the call */
 		analog_set_confirmanswer(p, 0);
-	}
-	if (p->callwaitcas) {
+	} else if (p->callwaitcas) {
 		if ((f->subclass.integer == 'A') || (f->subclass.integer == 'D')) {
 			ast_debug(1, "Got some DTMF, but it's for the CAS\n");
 			p->caller.id.name.str = p->callwait_name;
@@ -1589,11 +1590,11 @@ void analog_handle_dtmfup(struct analog_pvt *p, struct ast_channel *ast, enum an
 		}
 		if (analog_handles_digit(f))
 			p->callwaitcas = 0;
-		p->subs[index].f.frametype = AST_FRAME_NULL;
-		p->subs[index].f.subclass.integer = 0;
-		*dest = &p->subs[index].f;
+		p->subs[idx].f.frametype = AST_FRAME_NULL;
+		p->subs[idx].f.subclass.integer = 0;
+		*dest = &p->subs[idx].f;
 	} else {
-		analog_cb_handle_dtmfup(p, ast, index, dest);
+		analog_cb_handle_dtmfup(p, ast, idx, dest);
 	}
 }
 
@@ -1691,6 +1692,7 @@ static void *__analog_ss_thread(void *data)
 	struct callerid_state *cs = NULL;
 	char *name = NULL, *number = NULL;
 	int flags = 0;
+	struct ast_smdi_md_message *smdi_msg = NULL;
 	int timeout;
 	int getforward = 0;
 	char *s1, *s2;
@@ -1745,6 +1747,7 @@ static void *__analog_ss_thread(void *data)
 
 		analog_dsp_reset_and_flush_digits(p);
 
+		/* set digit mode appropriately */
 		if (ANALOG_NEED_MFDETECT(p)) {
 			analog_dsp_set_digitmode(p, ANALOG_DIGITMODE_MF);
 		} else {
@@ -2047,6 +2050,7 @@ static void *__analog_ss_thread(void *data)
 				ast_hangup(chan);
 				goto quit;
 			} else if (res) {
+				ast_debug(1,"waitfordigit returned '%c' (%d), timeout = %d\n", res, res, timeout);
 				exten[len++]=res;
 				exten[len] = '\0';
 			}
@@ -2285,12 +2289,29 @@ static void *__analog_ss_thread(void *data)
 	case ANALOG_SIG_FXSGS:
 	case ANALOG_SIG_FXSKS:
 		/* check for SMDI messages */
-		/* BUGBUG where did SMDI code go? */
+		if (p->use_smdi && p->smdi_iface) {
+			smdi_msg = ast_smdi_md_message_wait(p->smdi_iface, ANALOG_SMDI_MD_WAIT_TIMEOUT);
+			if (smdi_msg != NULL) {
+				ast_copy_string(chan->exten, smdi_msg->fwd_st, sizeof(chan->exten));
+
+				if (smdi_msg->type == 'B')
+					pbx_builtin_setvar_helper(chan, "_SMDI_VM_TYPE", "b");
+				else if (smdi_msg->type == 'N')
+					pbx_builtin_setvar_helper(chan, "_SMDI_VM_TYPE", "u");
+
+				ast_debug(1, "Received SMDI message on %s\n", chan->name);
+			} else {
+				ast_log(LOG_WARNING, "SMDI enabled but no SMDI message present\n");
+			}
+		}
+
+		if (p->use_callerid && (p->cid_signalling == CID_SIG_SMDI && smdi_msg)) {
+			number = smdi_msg->calling_st;
 
 		/* If we want caller id, we're in a prering state due to a polarity reversal
 		 * and we're set to use a polarity reversal to trigger the start of caller id,
 		 * grab the caller id and wait for ringing to start... */
-		if (p->use_callerid && (chan->_state == AST_STATE_PRERING
+		} else if (p->use_callerid && (chan->_state == AST_STATE_PRERING
 			&& (p->cid_start == ANALOG_CID_START_POLARITY
 				|| p->cid_start == ANALOG_CID_START_POLARITY_IN
 				|| p->cid_start == ANALOG_CID_START_DTMF_NOALERT))) {
@@ -2543,6 +2564,9 @@ static void *__analog_ss_thread(void *data)
 	}
 	ast_hangup(chan);
 quit:
+	if (smdi_msg) {
+		ASTOBJ_UNREF(smdi_msg, ast_smdi_md_message_destroy);
+	}
 	analog_decrease_ss_count(p);
 	return NULL;
 }
