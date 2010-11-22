@@ -789,7 +789,9 @@ static enum fsread_res ast_readaudio_callback(struct ast_filestream *s)
 			ast_log(LOG_ERROR,"About to call ast_sched_add  with %d for ast_fsread_audio\n", whennext / (ast_format_rate(s->fmt->format) / 1000));
 			s->owner->streamid = ast_sched_add(s->owner->sched, 
 				whennext / (ast_format_rate(s->fmt->format) / 1000), ast_fsread_audio, s);
+#ifdef HAVE_DAHDI
 		}
+#endif		
 		s->lasttimeout = whennext;
 		return FSREAD_SUCCESS_NOSCHED;
 	}
