@@ -8835,19 +8835,15 @@ static struct ast_frame *dahdi_read(struct ast_channel *ast)
 	if (idx == SUB_REAL) {
 		/* Ensure the CW timers decrement only on a single subchannel */
 		if (p->cidcwexpire) {
-			--p->cidcwexpire;
-
-			/* Expire CID/CW */
-			if (p->cidcwexpire == 1) {
+			if (!--p->cidcwexpire) {
+				/* Expired CID/CW */
 				ast_verb(3, "CPE does not support Call Waiting Caller*ID.\n");
 				restore_conference(p);
 			}
 		}
 		if (p->callwaitingrepeat) {
-			--p->callwaitingrepeat;
-
-			/* Repeat callwaiting tone */
-			if (p->callwaitingrepeat == 1) {
+			if (!--p->callwaitingrepeat) {
+				/* Expired, Repeat callwaiting tone */
 				++p->callwaitrings;
 				dahdi_callwait(ast);
 			}
