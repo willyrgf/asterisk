@@ -134,10 +134,10 @@ struct analog_callback {
 	/* Do deadlock avoidance for the private signaling structure lock.  */
 	void (* const deadlock_avoidance_private)(void *pvt);
 
-	/* Function which is called back to handle any other DTMF up events that are received.  Called by analog_handle_event.  Why is this
+	/* Function which is called back to handle any other DTMF events that are received.  Called by analog_handle_event.  Why is this
 	 * important to use, instead of just directly using events received before they are passed into the library?  Because sometimes,
 	 * (CWCID) the library absorbs DTMF events received. */
-	void (* const handle_dtmfup)(void *pvt, struct ast_channel *ast, enum analog_sub analog_index, struct ast_frame **dest);
+	void (* const handle_dtmf)(void *pvt, struct ast_channel *ast, enum analog_sub analog_index, struct ast_frame **dest);
 
 	int (* const get_event)(void *pvt);
 	int (* const wait_event)(void *pvt);
@@ -360,7 +360,7 @@ void *analog_handle_init_event(struct analog_pvt *i, int event);
 
 int analog_config_complete(struct analog_pvt *p);
 
-void analog_handle_dtmfup(struct analog_pvt *p, struct ast_channel *ast, enum analog_sub index, struct ast_frame **dest);
+void analog_handle_dtmf(struct analog_pvt *p, struct ast_channel *ast, enum analog_sub index, struct ast_frame **dest);
 
 enum analog_cid_start analog_str_to_cidstart(const char *value);
 
