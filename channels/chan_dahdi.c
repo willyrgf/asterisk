@@ -492,11 +492,12 @@ static inline int dahdi_wait_event(int fd)
 #define MASK_AVAIL		(1 << 0)	/*!< Channel available for PRI use */
 #define MASK_INUSE		(1 << 1)	/*!< Channel currently in use */
 
-#define CALLWAITING_SILENT_SAMPLES	( (300 * 8) / READ_SIZE) /*!< 300 ms */
-#define CALLWAITING_REPEAT_SAMPLES	( (10000 * 8) / READ_SIZE) /*!< 10,000 ms */
-#define CIDCW_EXPIRE_SAMPLES		( (500 * 8) / READ_SIZE) /*!< 500 ms */
-#define MIN_MS_SINCE_FLASH			( (2000) )	/*!< 2000 ms */
-#define DEFAULT_RINGT 				( (8000 * 8) / READ_SIZE) /*!< 8,000 ms */
+#define CALLWAITING_SILENT_SAMPLES		((300 * 8) / READ_SIZE) /*!< 300 ms */
+#define CALLWAITING_REPEAT_SAMPLES		((10000 * 8) / READ_SIZE) /*!< 10,000 ms */
+#define CALLWAITING_SUPPRESS_SAMPLES	((100 * 8) / READ_SIZE) /*!< 100 ms */
+#define CIDCW_EXPIRE_SAMPLES			((500 * 8) / READ_SIZE) /*!< 500 ms */
+#define MIN_MS_SINCE_FLASH				((2000) )	/*!< 2000 ms */
+#define DEFAULT_RINGT 					((8000 * 8) / READ_SIZE) /*!< 8,000 ms */
 
 struct dahdi_pvt;
 
@@ -1054,6 +1055,7 @@ struct dahdi_pvt {
 	int callingpres;				/*!< The value of calling presentation that we're going to use when placing a PRI call */
 	int callwaitingrepeat;				/*!< How many samples to wait before repeating call waiting */
 	int cidcwexpire;				/*!< When to stop waiting for CID/CW CAS response (In samples) */
+	int cid_suppress_expire;		/*!< How many samples to suppress after a CID spill. */
 	/*! \brief Analog caller ID waveform sample buffer */
 	unsigned char *cidspill;
 	/*! \brief Position in the cidspill buffer to send out next. */
@@ -1849,6 +1851,7 @@ static int my_stop_callwait(void *pvt)
 	struct dahdi_pvt *p = pvt;
 	p->callwaitingrepeat = 0;
 	p->cidcwexpire = 0;
+	p->cid_suppress_expire = 0;
 
 	return 0;
 }
@@ -1919,6 +1922,7 @@ static int my_send_callerid(void *pvt, int cwcid, struct ast_party_caller *calle
 			p->cidlen += READ_SIZE * 4;
 		}
 		p->cidpos = 0;
+		p->cid_suppress_expire = 0;
 		send_callerid(p);
 	}
 	return 0;
@@ -5082,6 +5086,7 @@ static int send_cwcidspill(struct dahdi_pvt *p)
 {
 	p->callwaitcas = 0;
 	p->cidcwexpire = 0;
+	p->cid_suppress_expire = 0;
 	if (!(p->cidspill = ast_malloc(MAX_CALLERID_SIZE)))
 		return -1;
 	p->cidlen = ast_callerid_callwaiting_generate(p->cidspill, p->callwait_name, p->callwait_num, AST_LAW(p));
@@ -5144,11 +5149,13 @@ static int send_callerid(struct dahdi_pvt *p)
 			return 0;
 		p->cidpos += res;
 	}
+	p->cid_suppress_expire = CALLWAITING_SUPPRESS_SAMPLES;
 	ast_free(p->cidspill);
 	p->cidspill = NULL;
 	if (p->callwaitcas) {
 		/* Wait for CID/CW to expire */
 		p->cidcwexpire = CIDCW_EXPIRE_SAMPLES;
+		p->cid_suppress_expire = p->cidcwexpire;
 	} else
 		restore_conference(p);
 	return 0;
@@ -6364,6 +6371,7 @@ static int dahdi_hangup(struct ast_channel *ast)
 
 	p->callwaitingrepeat = 0;
 	p->cidcwexpire = 0;
+	p->cid_suppress_expire = 0;
 	p->oprmode = 0;
 	ast->tech_pvt = NULL;
 hangup_out:
@@ -7867,6 +7875,7 @@ static struct ast_frame *dahdi_handle_event(struct ast_channel *ast)
 #endif
 					p->callwaitingrepeat = 0;
 					p->cidcwexpire = 0;
+					p->cid_suppress_expire = 0;
 					p->owner = NULL;
 					/* Don't start streaming audio yet if the incoming call isn't up yet */
 					if (p->subs[SUB_REAL].owner->_state != AST_STATE_UP)
@@ -8207,6 +8216,7 @@ static struct ast_frame *dahdi_handle_event(struct ast_channel *ast)
 				}
 				p->callwaitingrepeat = 0;
 				p->cidcwexpire = 0;
+				p->cid_suppress_expire = 0;
 				/* Start music on hold if appropriate */
 				if (!p->subs[SUB_CALLWAIT].inthreeway && ast_bridged_channel(p->subs[SUB_CALLWAIT].owner)) {
 					ast_queue_control_data(p->subs[SUB_CALLWAIT].owner, AST_CONTROL_HOLD,
@@ -8539,6 +8549,7 @@ static struct ast_frame *__dahdi_exception(struct ast_channel *ast)
 				dahdi_ring_phone(p);
 				p->callwaitingrepeat = 0;
 				p->cidcwexpire = 0;
+				p->cid_suppress_expire = 0;
 			} else
 				ast_log(LOG_WARNING, "Absorbed on hook, but nobody is left!?!?\n");
 			update_conf(p);
@@ -8570,6 +8581,7 @@ static struct ast_frame *__dahdi_exception(struct ast_channel *ast)
 				}
 				p->callwaitingrepeat = 0;
 				p->cidcwexpire = 0;
+				p->cid_suppress_expire = 0;
 				if (ast_bridged_channel(p->owner))
 					ast_queue_control(p->owner, AST_CONTROL_UNHOLD);
 				p->subs[SUB_REAL].needunhold = 1;
@@ -8850,6 +8862,9 @@ static struct ast_frame *dahdi_read(struct ast_channel *ast)
 				restore_conference(p);
 			}
 		}
+		if (p->cid_suppress_expire) {
+			--p->cid_suppress_expire;
+		}
 		if (p->callwaitingrepeat) {
 			if (!--p->callwaitingrepeat) {
 				/* Expired, Repeat callwaiting tone */
@@ -8968,6 +8983,18 @@ static struct ast_frame *dahdi_read(struct ast_channel *ast)
 				analog_handle_dtmf(p->sig_pvt, ast, idx, &f);
 			} else {
 				dahdi_handle_dtmf(ast, idx, &f);
+			}
+			break;
+		case AST_FRAME_VOICE:
+			if (p->cidspill || p->cid_suppress_expire) {
+				/* We are/were sending a caller id spill.  Suppress any echo. */
+				p->subs[idx].f.frametype = AST_FRAME_NULL;
+				p->subs[idx].f.subclass.integer = 0;
+				p->subs[idx].f.samples = 0;
+				p->subs[idx].f.mallocd = 0;
+				p->subs[idx].f.offset = 0;
+				p->subs[idx].f.data.ptr = NULL;
+				p->subs[idx].f.datalen= 0;
 			}
 			break;
 		default:
