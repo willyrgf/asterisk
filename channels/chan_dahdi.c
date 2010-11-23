@@ -2241,6 +2241,13 @@ static int my_check_confirmanswer(void *pvt)
 	return 0;
 }
 
+static void my_set_callwaiting(void *pvt, int callwaiting_enable)
+{
+	struct dahdi_pvt *p = pvt;
+
+	p->callwaiting = callwaiting_enable;
+}
+
 static void my_cancel_cidspill(void *pvt)
 {
 	struct dahdi_pvt *p = pvt;
@@ -3548,6 +3555,7 @@ static struct analog_callback dahdi_analog_callbacks =
 	.check_waitingfordt = my_check_waitingfordt,
 	.set_confirmanswer = my_set_confirmanswer,
 	.check_confirmanswer = my_check_confirmanswer,
+	.set_callwaiting = my_set_callwaiting,
 	.cancel_cidspill = my_cancel_cidspill,
 	.confmute = my_confmute,
 	.set_pulsedial = my_set_pulsedial,
@@ -7053,7 +7061,8 @@ static enum ast_bridge_result dahdi_bridge(struct ast_channel *c0, struct ast_ch
 		return AST_BRIDGE_RETRY;
 	}
 
-	if (p0->callwaitingcallerid || p1->callwaitingcallerid) {
+	if ((p0->callwaiting && p0->callwaitingcallerid)
+		|| (p1->callwaiting && p1->callwaitingcallerid)) {
 		/*
 		 * Call Waiting Caller ID requires DTMF detection to know if it
 		 * can send the CID spill.

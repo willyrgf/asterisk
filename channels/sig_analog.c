@@ -859,10 +859,7 @@ int analog_available(struct analog_pvt *p)
 
 static int analog_stop_callwait(struct analog_pvt *p)
 {
-	if (p->callwaitingcallerid) {
-		p->callwaitcas = 0;
-	}
-
+	p->callwaitcas = 0;
 	if (p->calls->stop_callwait) {
 		return p->calls->stop_callwait(p->chan_pvt);
 	}
@@ -871,13 +868,19 @@ static int analog_stop_callwait(struct analog_pvt *p)
 
 static int analog_callwait(struct analog_pvt *p)
 {
-	if (p->callwaitingcallerid) {
-		p->callwaitcas = 1;
-	}
+	p->callwaitcas = p->callwaitingcallerid;
 	if (p->calls->callwait) {
 		return p->calls->callwait(p->chan_pvt);
 	}
 	return 0;
+}
+
+static void analog_set_callwaiting(struct analog_pvt *p, int callwaiting_enable)
+{
+	p->callwaiting = callwaiting_enable;
+	if (p->calls->set_callwaiting) {
+		p->calls->set_callwaiting(p->chan_pvt, callwaiting_enable);
+	}
 }
 
 static void analog_set_cadence(struct analog_pvt *p, struct ast_channel *chan)
@@ -1456,7 +1459,7 @@ int analog_hangup(struct analog_pvt *p, struct ast_channel *ast)
 		ast_channel_setoption(ast,AST_OPTION_TONE_VERIFY,&x,sizeof(char),0);
 		ast_channel_setoption(ast,AST_OPTION_TDD,&x,sizeof(char),0);
 		p->callwaitcas = 0;
-		p->callwaiting = p->permcallwaiting;
+		analog_set_callwaiting(p, p->permcallwaiting);
 		p->hidecallerid = p->permhidecallerid;
 		analog_set_dialing(p, 0);
 		analog_update_conf(p);
@@ -2132,7 +2135,7 @@ static void *__analog_ss_thread(void *data)
 			} else if (p->callwaiting && !strcmp(exten, "*70")) {
 				ast_verb(3, "Disabling call waiting on %s\n", chan->name);
 				/* Disable call waiting if enabled */
-				p->callwaiting = 0;
+				analog_set_callwaiting(p, 0);
 				res = analog_play_tone(p, idx, ANALOG_TONE_DIALRECALL);
 				if (res) {
 					ast_log(LOG_WARNING, "Unable to do dial recall on channel %s: %s\n",
@@ -3845,7 +3848,7 @@ int analog_config_complete(struct analog_pvt *p)
 		p->permcallwaiting = 0;
 	}
 
-	p->callwaiting = p->permcallwaiting;
+	analog_set_callwaiting(p, p->permcallwaiting);
 
 	return 0;
 }
