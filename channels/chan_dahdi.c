@@ -7689,21 +7689,32 @@ static struct ast_frame *dahdi_handle_event(struct ast_channel *ast)
 		} else
 #endif	/* defined(HAVE_PRI) */
 		{
+			/* Unmute conference */
 			dahdi_confmute(p, 0);
 			p->subs[idx].f.frametype = AST_FRAME_DTMF_END;
 			p->subs[idx].f.subclass.integer = res & 0xff;
+			dahdi_handle_dtmf(ast, idx, &f);
 		}
-		dahdi_handle_dtmf(ast, idx, &f);
 		return f;
 	}
 
 	if (res & DAHDI_EVENT_DTMFDOWN) {
 		ast_debug(1, "DTMF Down '%c'\n", res & 0xff);
-		/* Mute conference */
-		dahdi_confmute(p, 1);
-		p->subs[idx].f.frametype = AST_FRAME_DTMF_BEGIN;
-		p->subs[idx].f.subclass.integer = res & 0xff;
-		dahdi_handle_dtmf(ast, idx, &f);
+#if defined(HAVE_PRI)
+		if (dahdi_sig_pri_lib_handles(p->sig)
+			&& !((struct sig_pri_chan *) p->sig_pvt)->proceeding
+			&& p->pri
+			&& (p->pri->overlapdial & DAHDI_OVERLAPDIAL_INCOMING)) {
+			/* absorb event */
+		} else
+#endif	/* defined(HAVE_PRI) */
+		{
+			/* Mute conference */
+			dahdi_confmute(p, 1);
+			p->subs[idx].f.frametype = AST_FRAME_DTMF_BEGIN;
+			p->subs[idx].f.subclass.integer = res & 0xff;
+			dahdi_handle_dtmf(ast, idx, &f);
+		}
 		return &p->subs[idx].f;
 	}
 
