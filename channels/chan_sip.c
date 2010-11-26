@@ -235,7 +235,7 @@ static struct ast_jb_conf global_jbconf;
 
 static const char config[] = "sip.conf";
 static const char notify_config[] = "sip_notify.conf";
-static const char presence_config[] = "sip-presence.conf";
+static const char presence_config[] = "sip_presence.conf";
 
 static const int DEFAULT_PUBLISH_EXPIRES = 3600;
 
