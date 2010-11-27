@@ -1106,6 +1106,7 @@ static struct sip_pvt {
 	struct sip_peer *relatedpeer;		/*!< If this dialog is related to a peer, which one 
 							Used in peerpoke, mwi subscriptions */
 	struct sip_registry *registry;		/*!< If this is a REGISTER dialog, to which registry */
+	struct sip_subscription_pres *pres;	/*!< If this is a SUBSCRIBE dialog, to which subscription */
 	struct ast_rtp *rtp;			/*!< RTP Session */
 	struct ast_rtp *vrtp;			/*!< Video RTP session */
 	struct sip_pkt *packets;		/*!< Packets scheduled for re-transmission */
@@ -1859,6 +1860,9 @@ static int transmit_response_with_t38_sdp(struct sip_pvt *p, char *msg, struct s
 static int transmit_reinvite_with_t38_sdp(struct sip_pvt *p);
 static struct ast_udptl *sip_get_udptl_peer(struct ast_channel *chan);
 static int sip_set_udptl_peer(struct ast_channel *chan, struct ast_udptl *udptl);
+
+/*------ Remote publish/subscribe support */
+static int sip_pres_notify_update(struct sip_pvt *dialog, struct sip_request *req);
 
 /*! \brief Definition of this channel for PBX channel registration */
 static const struct ast_channel_tech sip_tech = {
@@ -9825,6 +9829,12 @@ static int notify_extenstate_update(char *context, char* exten, int state, void 
 	return 0;
 }
 
+static int sip_devicestate_publish(struct sip_pvt *dialog, struct statechange *sc)
+{
+	/* XXX MARQUIS Just a template for now */
+	return 0;
+}
+
 /*! \Publish the state of a device if it matches a publisher and one of its filters */
 static void *handle_statechange(struct statechange *sc)
 {
@@ -9844,6 +9854,7 @@ static void *handle_statechange(struct statechange *sc)
 	ao2_iterator_destroy(&i);
 	return NULL;
 }
+
 
 /*! \brief Consumer of the statechange queue */
 static void *device_state_thread(void *data)
@@ -14579,10 +14590,8 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 			else if (sipmethod == SIP_INVITE) 
 				handle_response_invite(p, resp, rest, req, seqno);
 			else if (sipmethod == SIP_BYE) {
-				char *auth, *auth2;
-
-				auth = (resp == 407 ? "Proxy-Authenticate" : "WWW-Authenticate");
-				auth2 = (resp == 407 ? "Proxy-Authorization" : "Authorization");
+				char *auth = (resp == 407 ? "Proxy-Authenticate" : "WWW-Authenticate");
+				char *auth2 = (resp == 407 ? "Proxy-Authorization" : "Authorization");
 				if ((p->authtries == MAX_AUTHTRIES) || do_proxy_auth(p, req, auth, auth2, sipmethod, 0)) {
 					ast_log(LOG_NOTICE, "Failed to authenticate on %s to '%s'\n", msg, get_header(&p->initreq, "From"));
 					ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
@@ -14941,12 +14950,7 @@ static int handle_request_notify(struct sip_pvt *p, struct sip_request *req, str
 	if (option_debug > 1 && sipdebug)
 		ast_log(LOG_DEBUG, "Got NOTIFY Event: %s\n", event);
 
-	if (strcmp(event, "refer")) {
-		/* We don't understand this event. */
-		/* Here's room to implement incoming voicemail notifications :-) */
-		transmit_response(p, "489 Bad event", req);
-		res = -1;
-	} else {
+	if (!strcmp(event, "refer")) {
 		/* Save nesting depth for now, since there might be other events we will
 			support in the future */
 
@@ -15047,6 +15051,14 @@ static int handle_request_notify(struct sip_pvt *p, struct sip_request *req, str
 		
 		/* Confirm that we received this packet */
 		transmit_response(p, "200 OK", req);
+	} else if (!strcmp(event, "dialog-info")) {
+		res = sip_pres_notify_update(p, req);
+
+	} else {
+		/* We don't understand this event. */
+		/* Here's room to implement incoming voicemail notifications :-) */
+		transmit_response(p, "489 Bad event", req);
+		res = -1;
 	};
 
 	if (!p->lastinvite)
@@ -19053,6 +19065,293 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 	return peer;
 }
 
+/*! \brief Different types of outbound subscriptions.
+	the Message-waiting subscriptions in Asterisk 1.8 is not very generic in the architecture
+	at this moment and needs to be aligned at some point with the generic code
+*/
+enum sip_subscription_pres_type {
+	SUB_DIALOG_INFO,	/* Dialog info */
+	SUB_PIDF,		/* SIMPLE presence */
+	SUB_MWI,		/* The MWI subscriptions need to move into a more generic subscription format */
+};
+
+#define DEFAULT_PRES_EXPIRY 3600;	/* One hour default */
+
+static int pres_expiry = DEFAULT_PRES_EXPIRY;
+
+/*!
+ * \brief Definition of an MWI subscription to another server
+ * 
+ * \todo Convert this to astobj2.
+ */
+struct sip_subscription_pres {
+	ASTOBJ_COMPONENTS_FULL(struct sip_subscription_pres,1,1);
+	AST_DECLARE_STRING_FIELDS(
+		AST_STRING_FIELD(uri);     /*!< Who we are sending the subscription as */
+		AST_STRING_FIELD(domain);  /*!< Domain or host we subscribe to */
+		);
+	//enum sip_transport transport;    /*!< Transport to use */
+	struct sip_peer *peer;		 /*!< Peer to use for this subscription */
+	int resub;                       /*!< Sched ID of resubscription */
+	unsigned int subscribed:1;       /*!< Whether we are currently subscribed or not */
+	unsigned int destruction:1;      /*!< Whether we are currently being unsubscribed */
+	unsigned int fatalerror:1;       /*!< We got a fatal error and can't do anything without a reload */
+	unsigned int shutdown:1;         /*!< Are we being destroyed because of a shutdown or not ? */
+	struct sip_pvt *call;            /*!< Outbound subscription dialog */
+	struct ast_dnsmgr_entry *dnsmgr; /*!< DNS refresh manager for subscription */
+	//Trunk: struct ast_sockaddr us;           /*!< Who the server thinks we are */
+	struct sockaddr_in us;           /*!< Who the server thinks we are */
+};
+
+/*! \brief  The MWI subscription list */
+static struct ast_subscription_pres_list {
+	ASTOBJ_CONTAINER_COMPONENTS(struct sip_subscription_pres);
+} sip_pres_sublist;
+
+/*! \brief Unsubscribe from presence server 
+
+Basically, send resub with Expiry: 0 
+*/
+static void sip_pres_unsubscribe(struct sip_subscription_pres *pres)
+{
+	/* XXX OEJ Void nothing nada */
+	return;
+}
+
+/*! \brief Destroy presence subscription object */
+static void sip_subscribe_pres_destroy(struct sip_subscription_pres *pres)
+{
+	if (pres->call) {
+		sip_pres_unsubscribe(pres);
+		/* We need to know if we're doing this because of unload/shutdown of chan_sip or if the hint is just not
+		   needed any more. If it's not needed, we can wait for confirmation of unsubscribe for a while. If not,
+		   we just forget all about it and ignore the response */
+		if (pres->shutdown) {
+			sip_destroy(pres->call);
+		}
+	}
+	
+	AST_SCHED_DEL(sched, pres->resub);
+	ast_string_field_free_memory(pres);
+	//XXX ast_dnsmgr_release(pres->dnsmgr);
+	ast_free(pres);
+}
+
+/*! \brief subscribe to SIP uri */
+static int sip_subscribe_pres(const char *uri, enum sip_subscription_pres_type type) 
+{
+	struct sip_subscription_pres *pres;
+	char *domain;
+	char buf[256] = "";
+
+	/* We have a URI, much like in a dialstring. Just try to find where it leads us like a normal call.
+	   the URI can point to a peer, a domain or a host. We can basically use the same logic as
+	   we do in a dial string.
+	*/
+	
+	if (ast_strlen_zero(uri)) {
+		return -1;
+	}
+	
+	ast_copy_string(buf, uri, sizeof(buf));
+
+	if ((domain = strrchr(uri, '@'))) {
+		*domain++ = '\0';
+	}
+	
+	if (ast_strlen_zero(domain) || ast_strlen_zero(uri)) {
+		ast_log(LOG_ERROR, "Format for SIP remote subscription in a hint is sipds:<username>@<domain/peer> \n");
+		return -1;
+	}
+	
+	if (!(pres = ast_calloc(1, sizeof(struct sip_subscription_pres)))) {
+		return -1;
+	}
+	if (ast_string_field_init(pres, 256)) {
+		ASTOBJ_UNREF(pres, sip_subscribe_pres_destroy);
+		return 0;
+	}
+	
+	ASTOBJ_INIT(pres);
+	ast_string_field_set(pres, uri, uri);
+	ast_string_field_set(pres, domain, domain);
+	pres->resub = -1;
+	
+	ASTOBJ_CONTAINER_LINK(&sip_pres_sublist, pres);
+	ASTOBJ_UNREF(pres, sip_subscribe_pres_destroy);
+	
+	return 0;
+}
+
+/* Forward decl (no doxygen here) */
+static int __sip_subscribe_pres_do(struct sip_subscription_pres *pres);
+
+/*! \brief Send a subscription or resubscription for presence */
+static int sip_subscribe_pres_do(const void *data)
+{
+	struct sip_subscription_pres *pres = (struct sip_subscription_pres*)data;
+	
+	if (!pres) {
+		return -1;
+	}
+	
+	pres->resub = -1;
+	__sip_subscribe_pres_do(pres);
+	ASTOBJ_UNREF(pres, sip_subscribe_pres_destroy);
+	
+	return 0;
+}
+
+/*! \brief Actually setup an MWI subscription or resubscribe */
+static int __sip_subscribe_pres_do(struct sip_subscription_pres *pres)
+{
+	/* If we have no DNS manager let's do a lookup */
+	if (!pres->dnsmgr) {
+		// Is this needed. If we base this on peers, we don't need it.
+		//ast_dnsmgr_lookup(mwi->hostname, &mwi->us, &mwi->dnsmgr, sip_cfg.srvlookup ? transport : NULL);
+	}
+
+	/* If we already have a subscription up simply send a resubscription */
+	if (pres->call) {
+		transmit_invite(pres->call, SIP_SUBSCRIBE, 0, 0, NULL);
+		return 0;
+	}
+	
+	/* Create a dialog that we will use for the subscription */
+	if (!(pres->call = sip_alloc(NULL, NULL, 0, SIP_SUBSCRIBE))) {
+		return -1;
+	}
+
+	//OEJ ???? ref_proxy(pres->call, obproxy_get(pres->call, NULL));
+
+	//if (!ast_sockaddr_port(&pres->us) && pres->portno) {
+		//ast_sockaddr_set_port(&pres->us, pres->portno);
+	//}
+	
+	/* Setup the destination of our subscription */
+	if (create_addr(pres->call, pres->domain, &pres->us)) {
+		// XXX ??? dialog_unlink_all(pres->call, TRUE, TRUE);
+		// XXX ??? pres->call = dialog_unref(pres->call, "unref dialog after unlink_all");
+		sip_destroy(pres->call);
+		return 0;
+	}
+
+	pres->call->expiry = pres_expiry;	// OEJ is this a global variable???
+	
+	//set_socket_transport(&mwi->call->socket, mwi->transport);
+	ast_sip_ouraddrfor(&pres->call->sa.sin_addr, &pres->call->ourip);
+	build_contact(pres->call);
+	build_via(pres->call);
+	build_callid_pvt(pres->call);
+	ast_set_flag(&pres->call->flags[0], SIP_OUTGOING);
+	
+	/* Associate the call with us */
+	pres->call->pres = ASTOBJ_REF(pres);
+
+	//??? pres->call->subscribed = MWI_NOTIFICATION;
+
+	/* Actually send the packet */
+	transmit_invite(pres->call, SIP_SUBSCRIBE, 0, 2, NULL);
+
+	return 0;
+}
+
+/* \brief Handle SIP response in SUBSCRIBE transaction */
+static void handle_response_subscribe(struct sip_pvt *p, int resp, const char *rest, struct sip_request *req, int seqno)
+{
+	//Trunk: if (!p->mwi && !p->pres) {
+	if (!p->pres) {
+		return;
+	}
+
+	switch (resp) {
+	case 200: /* Subscription accepted */
+		if (option_debug > 2) {
+			ast_log(LOG_DEBUG, "Got 200 OK on subscription for presence\n");
+		}
+		//XXX set_pvt_allowed_methods(p, req);
+		if (p->options) {
+			ast_free(p->options);
+			p->options = NULL;
+		}
+		p->pres->subscribed = 1;
+		if ((p->pres->resub = ast_sched_add(sched, pres_expiry * 1000, sip_subscribe_pres_do, ASTOBJ_REF(p->pres))) < 0) {
+			ASTOBJ_UNREF(p->pres, sip_subscribe_pres_destroy);
+		}
+		break;
+	case 401:
+	case 407:
+		ast_string_field_set(p, theirtag, NULL);
+		if (p->authtries > 1 || do_proxy_auth(p, req, (resp == 401 ? "WWW-Authenticate" : "Proxy-Authenticate"),
+			(resp == 401 ? "Authorization" : "Proxy-Authorization"), SIP_SUBSCRIBE, 0)) {
+
+			ast_log(LOG_NOTICE, "Failed to authenticate on SUBSCRIBE to '%s'\n", get_header(&p->initreq, "From"));
+			p->pres->call = NULL;
+			ASTOBJ_UNREF(p->pres, sip_subscribe_pres_destroy);
+			pvt_set_needdestroy(p, "failed to authenticate SUBSCRIBE");
+		}
+		break;
+	case 403:
+		transmit_response_with_date(p, "200 OK", req);
+		ast_log(LOG_WARNING, "Authentication failed while trying to subscribe for presence (URI: %s)\n", p->pres->uri);
+		p->pres->call = NULL;
+		ASTOBJ_UNREF(p->pres, sip_subscribe_pres_destroy);
+		pvt_set_needdestroy(p, "received 403 response");
+		sip_alreadygone(p);
+		break;
+	case 404:
+		ast_log(LOG_ERROR, "Subscription failed for presence. URI doesn't exist. (URI: %s) \n", p->pres->uri);
+		p->pres->call = NULL;
+		p->pres->fatalerror = TRUE;
+		ASTOBJ_UNREF(p->pres, sip_subscribe_pres_destroy);
+		pvt_set_needdestroy(p, "received 404 response");
+		break;
+	case 481:
+		ast_log(LOG_WARNING, "Re-Subscription failed. The remote side said that our dialog did not exist.(URI: %s)\n", p->pres->uri);
+		p->pres->call = NULL;
+		ASTOBJ_UNREF(p->pres, sip_subscribe_pres_destroy);
+		/* In this case we need to start a new subscription, not give up */
+		pvt_set_needdestroy(p, "received 481 response");
+		break;
+	case 500:
+	case 501:
+		ast_log(LOG_ERROR, "Subscription failed. Got error %d on URI %s.\n", resp, p->pres->uri);
+		p->pres->fatalerror = TRUE;
+		p->pres->call = NULL;
+		ASTOBJ_UNREF(p->pres, sip_subscribe_pres_destroy);
+		pvt_set_needdestroy(p, "received 500/501 response");
+		break;
+	}
+}
+
+/*! \brief Parse the incoming NOTIFY update and update the device state provider system for this device */
+static int sip_pres_notify_update(struct sip_pvt *dialog, struct sip_request *req)
+{
+	/* Get the XML message body */
+	/* Find the good stuff in it */
+	/* Notify the device state system if there's a change */
+	/* Live long and prosper */
+	return 0;
+}
+
+/*! \brief Callback for devicestate providers */
+static int sip_remote_devicestate(const char *data)
+{
+	/* Data is the device to get state for, actually the SIP uri */
+	/* 1. Try to find the device in the list of subscriptions */
+	/* 2. If the device exists - get the last known state and return it */
+	/* 3. If the device does not exist in the list - set up a subscription */
+
+	/* When a dialplan is loaded, we get a first call to check state. In that call,
+	   we just answer back with a dummy answer. When we get the first notify later on,
+	   we'll update automatically with the initial state.
+	*/
+	
+
+	/* This is just a dummy */
+	return AST_DEVICE_INUSE;
+}
+
 static void publisher_destructor_cb(void *data)
 {
 	struct sip_publisher *publisher = data;
@@ -19482,6 +19781,11 @@ static int reload_config(enum channelreloadreason reason)
 			default_expiry = atoi(v->value);
 			if (default_expiry < 1)
 				default_expiry = DEFAULT_DEFAULT_EXPIRY;
+		} else if (!strcasecmp(v->name, "presexpiry")) {
+                        pres_expiry = atoi(v->value);
+                        if (pres_expiry < 1) {
+                                pres_expiry = DEFAULT_PRES_EXPIRY;
+                        }
 		} else if (!strcasecmp(v->name, "sipdebug")) {	/* XXX maybe ast_set2_flags ? */
 			if (ast_true(v->value))
 				ast_set_flag(&global_flags[1], SIP_PAGE2_DEBUG_CONFIG);
@@ -20542,6 +20846,9 @@ static int load_module(void)
 	ast_manager_register2("SIPshowpeer", EVENT_FLAG_SYSTEM, manager_sip_show_peer,
 			"Show SIP peer (text format)", mandescr_show_peer);
 
+	/* Register our remote device state provider */
+	ast_devstate_prov_add("sipds", sip_remote_devicestate);
+
 	sip_poke_all_peers();	
 	sip_send_all_registers();
 	
@@ -20580,6 +20887,9 @@ static int unload_module(void)
 
 	/* Unregister CLI commands */
 	ast_cli_unregister_multiple(cli_sip, sizeof(cli_sip) / sizeof(struct ast_cli_entry));
+
+	/* Unregister our remote device state provider */
+	ast_devstate_prov_del("sipds");
 
 	/* Disconnect from the RTP subsystem */
 	ast_rtp_proto_unregister(&sip_rtp);
