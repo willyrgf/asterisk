@@ -15083,9 +15083,8 @@ static int handle_request_notify(struct sip_pvt *p, struct sip_request *req, str
 		
 		/* Confirm that we received this packet */
 		transmit_response(p, "200 OK", req);
-	} else if (!strcmp(event, "dialog-info")) {
+	} else if (!strcmp(event, "dialog")) {
 		res = sip_pres_notify_update(p, req);
-
 	} else {
 		/* We don't understand this event. */
 		/* Here's room to implement incoming voicemail notifications :-) */
@@ -19397,10 +19396,67 @@ static void handle_response_subscribe(struct sip_pvt *p, int resp, const char *r
 /*! \brief Parse the incoming NOTIFY update and update the device state provider system for this device */
 static int sip_pres_notify_update(struct sip_pvt *dialog, struct sip_request *req)
 {
+	char buf[SIPBUFSIZE * 8];
+	char *state;
+/* Example:
+		NOTIFY sip:olle@192.168.40.12 SIP/2.0
+		Via: SIP/2.0/UDP 192.168.20.200:5060;branch=z9hG4bK4d19eadc;rport
+		From: <sip:3000@jarl.webway.se>;tag=as714765a1
+		To: "asterisk" <sip:olle@192.168.40.12>;tag=as0ffc65b2
+		Contact: <sip:rutger@192.168.20.200>
+		Call-ID: 0ef08767032f0f1f37eeb8c770309de7@192.168.40.12
+		CSeq: 102 NOTIFY
+		User-Agent: Asterisk Grouch Edition
+		Max-Forwards: 70
+		Event: dialog
+		Content-Type: application/dialog-info+xml
+		Subscription-State: active
+		Content-Length: 207
+
+		<?xml version="1.0"?>
+		<dialog-info xmlns="urn:ietf:params:xml:ns:dialog-info" version="0" state="full" entity="sip:3000@jarl.webway.se">
+		<dialog id="3000">
+		<state>terminated</state>
+		</dialog>
+		</dialog-info>
+*/
+	/* Check the content type */
+	if (strncasecmp(get_header(req, "Content-Type"), "application/dialog-info+xml", strlen("application/dialog-info+xml"))) {
+		/* We need a dialog-info at this point */
+		transmit_response(dialog, "400 Bad request", req);
+		sip_scheddestroy(dialog, DEFAULT_TRANS_TIMEOUT);
+		return -1;
+	}
 	/* Get the XML message body */
-	/* Find the good stuff in it */
+	if (get_msg_text(buf, sizeof(buf), req)) {
+		ast_log(LOG_WARNING, "Unable to retrieve attachment from NOTIFY %s\n", dialog->callid);
+		transmit_response(dialog, "400 Bad request", req);
+		sip_scheddestroy(dialog, DEFAULT_TRANS_TIMEOUT);
+		return -1;
+	}
+	
+	/* Find the good stuff in it - we need the state */
+	state = strcasestr(buf, "</state>");
+	if (!state) {
+		/* Houston, we've got a problem - bad XML */
+		transmit_response(dialog, "400 Bad request", req);
+		sip_scheddestroy(dialog, DEFAULT_TRANS_TIMEOUT);
+		return -1;
+	}
+	*state = '\0';
+	state = strcasestr(buf, "<state>");
+	if (!state) {
+		/* Houston, we've got a problem - bad XML */
+		transmit_response(dialog, "400 Bad request", req);
+		sip_scheddestroy(dialog, DEFAULT_TRANS_TIMEOUT);
+		return -1;
+	}
+	state += strlen("<state>");
+	ast_log(LOG_DEBUG, "---------- State: ->%s<- \n", state);
+
 	/* Notify the device state system if there's a change */
 	/* Live long and prosper */
+	transmit_response(dialog, "200 OK", req);
 	return 0;
 }
 
