@@ -1848,6 +1848,7 @@ static int local_attended_transfer(struct sip_pvt *transferer, struct sip_dual *
 static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, struct sip_request *req, int seqno);
 static void handle_response_refer(struct sip_pvt *p, int resp, char *rest, struct sip_request *req, int seqno);
 static int handle_response_register(struct sip_pvt *p, int resp, char *rest, struct sip_request *req, int seqno);
+static void handle_response_subscribe(struct sip_pvt *p, int resp, const char *rest, struct sip_request *req, int seqno);
 static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_request *req, int seqno);
 
 /*----- RTP interface functions */
@@ -2458,7 +2459,7 @@ static int __sip_autodestruct(const void *data)
 	struct sip_pvt *p = (struct sip_pvt *)data;
 
 	/* If this is a subscription, tell the phone that we got a timeout */
-	if (p->subscribed) {
+	if (p->subscribed && !p->pres) {
 		transmit_state_notify(p, AST_EXTENSION_DEACTIVATED, 1, TRUE);	/* Send last notification */
 		p->subscribed = NONE;
 		append_history(p, "Subscribestatus", "timeout");
@@ -8081,6 +8082,14 @@ static int transmit_invite(struct sip_pvt *p, int sipmethod, int sdp, int init, 
 				add_header(&req, "Referred-By", buf);
 			}
 		}
+	} else if (sipmethod == SIP_SUBSCRIBE) {
+		char buf[SIPBUFSIZE];
+		if (p->pres && p->subscribed == DIALOG_INFO_XML) {
+			add_header(&req, "Event", "dialog");
+			add_header(&req, "Accept", "application/dialog-info+xml");
+		}
+		snprintf(buf, sizeof(buf), "%d", p->expiry);
+		add_header(&req, "Expires", buf);
 	}
 	/* This new INVITE is part of an attended transfer. Make sure that the
 	other end knows and replace the current call with this new call */
@@ -12963,6 +12972,8 @@ static int do_proxy_auth(struct sip_pvt *p, struct sip_request *req, char *heade
 {
 	char digest[1024];
 
+		ast_log(LOG_DEBUG, "------ OEJ: Going to authenticate\n");
+
 	if (!p->options && !(p->options = ast_calloc(1, sizeof(*p->options))))
 		return -2;
 
@@ -14289,6 +14300,8 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 				/* We successfully transmitted a message 
 					or a video update request in INFO */
 				/* Nothing happens here - the message is inside a dialog */
+			} else if (sipmethod == SIP_SUBSCRIBE)  {
+				handle_response_subscribe(p, resp, rest, req, seqno);
 			} else if (sipmethod == SIP_INVITE) {
 				handle_response_invite(p, resp, rest, req, seqno);
 			} else if (sipmethod == SIP_NOTIFY) {
@@ -14323,6 +14336,8 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 		case 401: /* Not www-authorized on SIP method */
 			if (sipmethod == SIP_INVITE)
 				handle_response_invite(p, resp, rest, req, seqno);
+			else if (sipmethod == SIP_SUBSCRIBE)
+				handle_response_subscribe(p, resp, rest, req, seqno);
 			else if (sipmethod == SIP_REFER)
 				handle_response_refer(p, resp, rest, req, seqno);
 			else if (p->registry && sipmethod == SIP_REGISTER)
@@ -14346,6 +14361,8 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 		case 403: /* Forbidden - we failed authentication */
 			if (sipmethod == SIP_INVITE)
 				handle_response_invite(p, resp, rest, req, seqno);
+			else if (sipmethod == SIP_SUBSCRIBE)
+				handle_response_subscribe(p, resp, rest, req, seqno);
 			else if (p->registry && sipmethod == SIP_REGISTER) 
 				res = handle_response_register(p, resp, rest, req, seqno);
 			else {
@@ -14356,6 +14373,8 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 		case 404: /* Not found */
 			if (p->registry && sipmethod == SIP_REGISTER)
 				res = handle_response_register(p, resp, rest, req, seqno);
+			else if (sipmethod == SIP_SUBSCRIBE)
+				handle_response_subscribe(p, resp, rest, req, seqno);
 			else if (sipmethod == SIP_INVITE)
 				handle_response_invite(p, resp, rest, req, seqno);
 			else if (owner)
@@ -14364,6 +14383,8 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 		case 407: /* Proxy auth required */
 			if (sipmethod == SIP_INVITE)
 				handle_response_invite(p, resp, rest, req, seqno);
+			else if (sipmethod == SIP_SUBSCRIBE)
+				handle_response_subscribe(p, resp, rest, req, seqno);
 			else if (sipmethod == SIP_REFER)
 				handle_response_refer(p, resp, rest, req, seqno);
 			else if (p->registry && sipmethod == SIP_REGISTER)
@@ -14384,6 +14405,8 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 		case 408: /* Request timeout - terminate dialog */
 			if (sipmethod == SIP_INVITE)
 				handle_response_invite(p, resp, rest, req, seqno);
+			else if (sipmethod == SIP_SUBSCRIBE) 
+				handle_response_subscribe(p, resp, rest, req, seqno);
 			else if (sipmethod == SIP_REGISTER) 
 				res = handle_response_register(p, resp, rest, req, seqno);
 			else if (sipmethod == SIP_BYE) {
@@ -14399,6 +14422,8 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 		case 481: /* Call leg does not exist */
 			if (sipmethod == SIP_INVITE) {
 				handle_response_invite(p, resp, rest, req, seqno);
+			} else if (sipmethod == SIP_SUBSCRIBE) {
+				handle_response_subscribe(p, resp, rest, req, seqno);
 			} else if (sipmethod == SIP_REFER) {
 				handle_response_refer(p, resp, rest, req, seqno);
 			} else if (sipmethod == SIP_BYE) {
@@ -14439,6 +14464,8 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 		case 501: /* Not Implemented */
 			if (sipmethod == SIP_INVITE)
 				handle_response_invite(p, resp, rest, req, seqno);
+			else if (sipmethod == SIP_SUBSCRIBE) 
+				handle_response_subscribe(p, resp, rest, req, seqno);
 			else if (sipmethod == SIP_REFER)
 				handle_response_refer(p, resp, rest, req, seqno);
 			else
@@ -14448,6 +14475,8 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 			if (sipmethod == SIP_REFER) {
 				handle_response_refer(p, resp, rest, req, seqno);
 				break;
+			} else if (sipmethod == SIP_SUBSCRIBE)  {
+				handle_response_subscribe(p, resp, rest, req, seqno);
 			}
 			/* Fallthrough */
 		default:
@@ -19106,6 +19135,10 @@ struct sip_subscription_pres {
 	struct sockaddr_in us;           /*!< Who the server thinks we are */
 };
 
+/* Forward decl (no doxygen here) */
+static int __sip_subscribe_pres_do(struct sip_subscription_pres *pres);
+static int sip_subscribe_pres_do(const void *data);
+
 /*! \brief  The MWI subscription list */
 static struct ast_subscription_pres_list {
 	ASTOBJ_CONTAINER_COMPONENTS(struct sip_subscription_pres);
@@ -19156,7 +19189,9 @@ static int sip_subscribe_pres(const char *uri, enum sip_subscription_pres_type t
 		return -1;
 	}
 
-	ast_log(LOG_DEBUG, "--- Adding URI %s\n", uri);
+	if (option_debug > 2) {
+		ast_log(LOG_DEBUG, "--- Adding subscription URI %s\n", uri);
+	}
 	
 	ast_copy_string(buf, uri, sizeof(buf));
 
@@ -19170,9 +19205,11 @@ static int sip_subscribe_pres(const char *uri, enum sip_subscription_pres_type t
 	}
 	
 	if (!(pres = ast_calloc(1, sizeof(struct sip_subscription_pres)))) {
+		ast_log(LOG_DEBUG, "--- Can't allocate pre structure\n");
 		return -1;
 	}
 	if (ast_string_field_init(pres, 256)) {
+		ast_log(LOG_DEBUG, "--- Can't initialize string field in pres structure\n");
 		ASTOBJ_UNREF(pres, sip_subscribe_pres_destroy);
 		return 0;
 	}
@@ -19183,13 +19220,16 @@ static int sip_subscribe_pres(const char *uri, enum sip_subscription_pres_type t
 	pres->resub = -1;
 	
 	ASTOBJ_CONTAINER_LINK(&sip_pres_sublist, pres);
+
+	ast_log(LOG_DEBUG, "--- Starting subscription for %s@%s\n", pres->uri, pres->domain);
+	sip_subscribe_pres_do(pres);
+
 	ASTOBJ_UNREF(pres, sip_subscribe_pres_destroy);
+
 	
 	return 0;
 }
 
-/* Forward decl (no doxygen here) */
-static int __sip_subscribe_pres_do(struct sip_subscription_pres *pres);
 
 /*! \brief Send a subscription or resubscription for presence */
 static int sip_subscribe_pres_do(const void *data)
@@ -19197,8 +19237,10 @@ static int sip_subscribe_pres_do(const void *data)
 	struct sip_subscription_pres *pres = (struct sip_subscription_pres*)data;
 	
 	if (!pres) {
+		ast_log(LOG_DEBUG, "--- No subscription to start\n");
 		return -1;
 	}
+	ast_log(LOG_DEBUG, "--- subscription %s about to start\n", pres->uri);
 	
 	pres->resub = -1;
 	__sip_subscribe_pres_do(pres);
@@ -19210,17 +19252,24 @@ static int sip_subscribe_pres_do(const void *data)
 /*! \brief Actually setup an MWI subscription or resubscribe */
 static int __sip_subscribe_pres_do(struct sip_subscription_pres *pres)
 {
+	if (!pres) {
+		ast_log(LOG_DEBUG, "--- No subscription to start\n");
+		return -1;
+	}
+
 	/* If we have no DNS manager let's do a lookup */
 	if (!pres->dnsmgr) {
 		// Is this needed. If we base this on peers, we don't need it.
 		//ast_dnsmgr_lookup(mwi->hostname, &mwi->us, &mwi->dnsmgr, sip_cfg.srvlookup ? transport : NULL);
 	}
 
+
 	/* If we already have a subscription up simply send a resubscription */
 	if (pres->call) {
 		transmit_invite(pres->call, SIP_SUBSCRIBE, 0, 0, NULL);
 		return 0;
 	}
+	ast_log(LOG_DEBUG, "--- Allocating SIP dialog for %s about to start\n", pres->uri);
 	
 	/* Create a dialog that we will use for the subscription */
 	if (!(pres->call = sip_alloc(NULL, NULL, 0, SIP_SUBSCRIBE))) {
@@ -19245,6 +19294,7 @@ static int __sip_subscribe_pres_do(struct sip_subscription_pres *pres)
 	
 	//set_socket_transport(&mwi->call->socket, mwi->transport);
 	ast_sip_ouraddrfor(&pres->call->sa.sin_addr, &pres->call->ourip);
+	ast_string_field_set(pres->call, username, pres->uri);
 	build_contact(pres->call);
 	build_via(pres->call);
 	build_callid_pvt(pres->call);
@@ -19253,7 +19303,7 @@ static int __sip_subscribe_pres_do(struct sip_subscription_pres *pres)
 	/* Associate the call with us */
 	pres->call->pres = ASTOBJ_REF(pres);
 
-	//??? pres->call->subscribed = MWI_NOTIFICATION;
+	pres->call->subscribed = DIALOG_INFO_XML;
 
 	/* Actually send the packet */
 	transmit_invite(pres->call, SIP_SUBSCRIBE, 0, 2, NULL);
@@ -19265,11 +19315,14 @@ static int __sip_subscribe_pres_do(struct sip_subscription_pres *pres)
 static void handle_response_subscribe(struct sip_pvt *p, int resp, const char *rest, struct sip_request *req, int seqno)
 {
 	int needdestroy = FALSE;
+	ast_log(LOG_DEBUG, "------ Getting response %d\n", resp);
 
 	//Trunk: if (!p->mwi && !p->pres) {
 	if (!p->pres) {
+		ast_log(LOG_DEBUG, "------ Getting response %d on no sub\n", resp);
 		return;
 	}
+	ast_log(LOG_DEBUG, "------ Going to check results\n");
 
 	switch (resp) {
 	case 200: /* Subscription accepted */
@@ -19288,7 +19341,9 @@ static void handle_response_subscribe(struct sip_pvt *p, int resp, const char *r
 		break;
 	case 401:
 	case 407:
-		ast_string_field_set(p, theirtag, NULL);
+		ast_log(LOG_DEBUG, "------ Going to authenticate\n");
+		ast_string_field_set(p, theirtag, "");
+		ast_log(LOG_DEBUG, "------ 2 Going to authenticate\n");
 		if (p->authtries > 1 || do_proxy_auth(p, req, (resp == 401 ? "WWW-Authenticate" : "Proxy-Authenticate"),
 			(resp == 401 ? "Authorization" : "Proxy-Authorization"), SIP_SUBSCRIBE, 0)) {
 
