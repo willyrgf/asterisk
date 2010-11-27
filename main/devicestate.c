@@ -45,6 +45,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 /*! \brief Device state strings for printing */
 static const char *devstatestring[] = {
+	/* 0 AST_DEVICE_PROV_NOT_FOUND */    "Provider not found",    /*!< Provider not found */
 	/* 0 AST_DEVICE_UNKNOWN */    "Unknown",    /*!< Valid, but unknown state */
 	/* 1 AST_DEVICE_NOT_INUSE */  "Not in use", /*!< Not used */
 	/* 2 AST_DEVICE IN USE */     "In use",     /*!< In use */
@@ -145,8 +146,10 @@ int ast_device_state(const char *device)
 	number = buf;
 	if (!number) {
 		provider = strsep(&tech, ":");
-		if (!tech)
+		if (!tech) {
+			ast_log(LOG_ERROR, "Invalid device identifier: %s\n", provider);
 			return AST_DEVICE_INVALID;
+		}
 		/* We have a provider */
 		number = tech;
 		tech = NULL;
@@ -197,6 +200,9 @@ int ast_devstate_prov_add(const char *label, ast_devstate_prov_cb_type callback)
 	AST_LIST_INSERT_HEAD(&devstate_provs, devprov, list);
 	AST_LIST_UNLOCK(&devstate_provs);
 
+	/* Check if we have devices in the hint list that need initialization */
+	ast_hint_reinit_provider(label);
+
 	return 0;
 }
 
@@ -221,7 +227,7 @@ void ast_devstate_prov_del(const char *label)
 static int getproviderstate(const char *provider, const char *address)
 {
 	struct devstate_prov *devprov;
-	int res = AST_DEVICE_INVALID;
+	int res = AST_DEVICE_PROV_NOT_FOUND;
 
 
 	AST_LIST_LOCK(&devstate_provs);
@@ -230,12 +236,19 @@ static int getproviderstate(const char *provider, const char *address)
 			ast_log(LOG_DEBUG, "Checking provider %s with %s\n", devprov->label, provider);
 
 		if (!strcasecmp(devprov->label, provider)) {
+			if(option_debug > 1)
+				ast_log(LOG_DEBUG, "Found provider %s with %s:%s\n", devprov->label, provider, address);
 			res = devprov->callback(address);
 			break;
 		}
 	}
 	AST_LIST_TRAVERSE_SAFE_END;
 	AST_LIST_UNLOCK(&devstate_provs);
+	if (res == AST_DEVICE_PROV_NOT_FOUND) {
+		if(option_debug > 1)
+			ast_log(LOG_DEBUG, "Found no valid device state for %s:%s\n", provider, address);
+		
+	}
 	return res;
 }
 
@@ -380,6 +393,7 @@ void ast_devstate_aggregate_init(struct ast_devstate_aggregate *agg)
 void ast_devstate_aggregate_add(struct ast_devstate_aggregate *agg, enum ast_device_state state)
 {
 	switch (state) {
+	case AST_DEVICE_PROV_NOT_FOUND:
 	case AST_DEVICE_NOT_INUSE:
 		agg->all_unknown = 0;
 		agg->all_unavail = 0;

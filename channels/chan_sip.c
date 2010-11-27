@@ -1257,7 +1257,10 @@ struct epa_static_data {
 	void (*destructor)(void *instance_data);
 };
 
-static void dlginfo_handle_publish_error(struct sip_pvt *pvt, const int resp, struct sip_request *req, struct sip_epa_entry *epa_entry);
+static void dlginfo_handle_publish_error(struct sip_pvt *pvt, const int resp, struct sip_request *req, struct sip_epa_entry *epa_entry)
+{
+	return;
+}
 
 static void dlginfo_epa_destructor(void *data)
 {
@@ -19152,6 +19155,8 @@ static int sip_subscribe_pres(const char *uri, enum sip_subscription_pres_type t
 	if (ast_strlen_zero(uri)) {
 		return -1;
 	}
+
+	ast_log(LOG_DEBUG, "--- Adding URI %s\n", uri);
 	
 	ast_copy_string(buf, uri, sizeof(buf));
 
@@ -19259,6 +19264,8 @@ static int __sip_subscribe_pres_do(struct sip_subscription_pres *pres)
 /* \brief Handle SIP response in SUBSCRIBE transaction */
 static void handle_response_subscribe(struct sip_pvt *p, int resp, const char *rest, struct sip_request *req, int seqno)
 {
+	int needdestroy = FALSE;
+
 	//Trunk: if (!p->mwi && !p->pres) {
 	if (!p->pres) {
 		return;
@@ -19288,7 +19295,8 @@ static void handle_response_subscribe(struct sip_pvt *p, int resp, const char *r
 			ast_log(LOG_NOTICE, "Failed to authenticate on SUBSCRIBE to '%s'\n", get_header(&p->initreq, "From"));
 			p->pres->call = NULL;
 			ASTOBJ_UNREF(p->pres, sip_subscribe_pres_destroy);
-			pvt_set_needdestroy(p, "failed to authenticate SUBSCRIBE");
+			needdestroy = TRUE;
+			//pvt_set_needdestroy(p, "failed to authenticate SUBSCRIBE");
 		}
 		break;
 	case 403:
@@ -19296,7 +19304,8 @@ static void handle_response_subscribe(struct sip_pvt *p, int resp, const char *r
 		ast_log(LOG_WARNING, "Authentication failed while trying to subscribe for presence (URI: %s)\n", p->pres->uri);
 		p->pres->call = NULL;
 		ASTOBJ_UNREF(p->pres, sip_subscribe_pres_destroy);
-		pvt_set_needdestroy(p, "received 403 response");
+		needdestroy = TRUE;
+		//pvt_set_needdestroy(p, "received 403 response");
 		sip_alreadygone(p);
 		break;
 	case 404:
@@ -19304,14 +19313,16 @@ static void handle_response_subscribe(struct sip_pvt *p, int resp, const char *r
 		p->pres->call = NULL;
 		p->pres->fatalerror = TRUE;
 		ASTOBJ_UNREF(p->pres, sip_subscribe_pres_destroy);
-		pvt_set_needdestroy(p, "received 404 response");
+		needdestroy = TRUE;
+		//pvt_set_needdestroy(p, "received 404 response");
 		break;
 	case 481:
 		ast_log(LOG_WARNING, "Re-Subscription failed. The remote side said that our dialog did not exist.(URI: %s)\n", p->pres->uri);
 		p->pres->call = NULL;
 		ASTOBJ_UNREF(p->pres, sip_subscribe_pres_destroy);
 		/* In this case we need to start a new subscription, not give up */
-		pvt_set_needdestroy(p, "received 481 response");
+		needdestroy = TRUE;
+		//pvt_set_needdestroy(p, "received 481 response");
 		break;
 	case 500:
 	case 501:
@@ -19319,8 +19330,12 @@ static void handle_response_subscribe(struct sip_pvt *p, int resp, const char *r
 		p->pres->fatalerror = TRUE;
 		p->pres->call = NULL;
 		ASTOBJ_UNREF(p->pres, sip_subscribe_pres_destroy);
-		pvt_set_needdestroy(p, "received 500/501 response");
+		needdestroy = TRUE;
+		//pvt_set_needdestroy(p, "received 500/501 response");
 		break;
+	}
+	if (needdestroy) {
+		ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);
 	}
 }
 
@@ -19346,10 +19361,9 @@ static int sip_remote_devicestate(const char *data)
 	   we just answer back with a dummy answer. When we get the first notify later on,
 	   we'll update automatically with the initial state.
 	*/
-	
+	sip_subscribe_pres(data, SUB_DIALOG_INFO);
 
-	/* This is just a dummy */
-	return AST_DEVICE_INUSE;
+	return AST_DEVICE_UNKNOWN;
 }
 
 static void publisher_destructor_cb(void *data)

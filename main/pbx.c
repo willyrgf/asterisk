@@ -237,6 +237,7 @@ static int pbx_builtin_saycharacters(struct ast_channel *, void *);
 static int pbx_builtin_sayphonetic(struct ast_channel *, void *);
 int pbx_builtin_setvar(struct ast_channel *, void *);
 static int pbx_builtin_importvar(struct ast_channel *, void *);
+static int ast_extension_state2(struct ast_exten *e);
 
 AST_MUTEX_DEFINE_STATIC(globalslock);
 static struct varshead globals = AST_LIST_HEAD_NOLOCK_INIT_VALUE;
@@ -1925,6 +1926,32 @@ static int pbx_extension_helper(struct ast_channel *c, struct ast_context *con,
 	}
 }
 
+
+/*! \brief  ast_hint_reinit_provider: Reinitialize hints for a provider after provider
+	was added
+ */
+void ast_hint_reinit_provider(const char *provider)
+{
+	struct ast_hint *hint;
+	struct ao2_iterator i;
+	const char *hinttext;
+
+	if (ao2_container_count(hints) == 0) {
+		return;
+	}
+
+	i = ao2_iterator_init(hints, 0);
+
+	for (hint = ao2_iterator_next(&i); hint; ao2_ref(hint, -1), hint = ao2_iterator_next(&i)) {
+		hinttext = ast_get_extension_app(hint->exten);
+		/* If we find the provider label in the hint, we need to reinitialize the hint */
+		if (strcasestr(hinttext, provider)) {
+			ast_extension_state2(hint->exten);
+		}
+	}
+	ao2_iterator_destroy(&i);
+}
+
 /*! \brief  ast_hint_extension: Find hint for given extension in context */
 static struct ast_exten *ast_hint_extension(struct ast_channel *c, const char *context, const char *exten)
 {
@@ -1958,6 +1985,7 @@ enum ast_extension_states ast_devstate_to_extenstate(enum ast_device_state devst
 		return AST_EXTENSION_INUSE;
 	case AST_DEVICE_NOT_INUSE:
 		return AST_EXTENSION_NOT_INUSE;
+	case AST_DEVICE_PROV_NOT_FOUND: /* not a device state, included for completeness */
 	case AST_DEVICE_TOTAL: /* not a device state, included for completeness */
 		break;
 	}

@@ -28,6 +28,7 @@ extern "C" {
 #endif
 
 enum ast_device_state {
+	AST_DEVICE_PROV_NOT_FOUND,  /*!< Device state provider not found (to be able to initialize in step 2 */
 	AST_DEVICE_UNKNOWN,      /*!< Device is valid but channel didn't know state */
 	AST_DEVICE_NOT_INUSE,    /*!< Device is not used */
 	AST_DEVICE_INUSE,        /*!< Device is in use */

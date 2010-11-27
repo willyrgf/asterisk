@@ -917,6 +917,11 @@ int ast_func_write(struct ast_channel *chan, char *function, const char *value);
 
 void ast_hint_state_changed(const char *device);
 
+/*! \brief  ast_hint_reinit_provider: Reinitialize hints for a provider after provider
+	was added
+ */
+void ast_hint_reinit_provider(const char *provider);
+
 #if defined(__cplusplus) || defined(c_plusplus)
 }
 #endif
