@@ -9847,7 +9847,7 @@ static void *handle_statechange(struct statechange *sc)
 	i = ao2_iterator_init(devstate_publishers, 0);
 	while ((p = ao2_iterator_next(&i))) {
 		AST_LIST_TRAVERSE(&p->filters, curfilter, next) {
-			if (strncmp(curfilter->criteria, sc->dev, strlen(curfilter->criteria))) {
+			if (!strncmp(curfilter->criteria, sc->dev, strlen(curfilter->criteria))) {
 				sip_devicestate_publish(p, sc);
 			}
 		}
@@ -19470,13 +19470,13 @@ static int presence_load_config(struct ast_config *pcfg)
 
 		for (v = ast_variable_browse(pcfg, cat); v; v = v->next) {
 			if (!strcasecmp(v->name, "type")) {
-				type = ast_strdupa(v->name);
+				type = ast_strdupa(v->value);
 			} else if (!strcasecmp(v->name, "host")) {
-				host = ast_strdupa(v->name);
+				host = ast_strdupa(v->value);
 			} else if (!strcasecmp(v->name, "filter")) {
-				filter = ast_strdupa(v->name);
+				filter = ast_strdupa(v->value);
 			} else if (!strcasecmp(v->name, "domain")) {
-				domain = ast_strdupa(v->name);
+				domain = ast_strdupa(v->value);
 			}
 		}
 		if (!type) {
@@ -19487,12 +19487,6 @@ static int presence_load_config(struct ast_config *pcfg)
 			publisher = sip_publisher_init(name, host, domain, filter);
 			if (publisher) {
 				ao2_link(devstate_publishers, publisher);
-			}
-		}
-		if (!strcasecmp(type, "subscribe") || !strcasecmp(type, "bidirectional")) {
-			subscriber = sip_subscriber_init(name, host, domain, filter);
-			if (subscriber) {
-				/* Link subscriber once container exists */
 			}
 		}
 	}
