@@ -1238,7 +1238,7 @@ struct sip_published_device {
 	struct sip_epa_entry *epa;		/* EPA Entry for this entry */
 };
 
-static struct ao2_container *pub_dev;
+static struct ao2_container *pub_dev = NULL;
 
 
 /*!
@@ -1878,6 +1878,9 @@ static int sip_set_udptl_peer(struct ast_channel *chan, struct ast_udptl *udptl)
 
 /*------ Remote publish/subscribe support */
 static int sip_pres_notify_update(struct sip_pvt *dialog, struct sip_request *req, int terminated, const char *termreason);
+static struct ao2_container *delete_devstate_publishers(void);
+static struct ao2_container *delete_published_devices(void);
+
 
 /*! \brief Definition of this channel for PBX channel registration */
 static const struct ast_channel_tech sip_tech = {
@@ -1947,7 +1950,7 @@ static struct ast_rtp_protocol sip_rtp = {
 };
 
 /*! \brief ao2 container for device state publishers */
-static struct ao2_container *devstate_publishers;
+static struct ao2_container *devstate_publishers = NULL;
 
 /*! \brief Interface structure with callbacks used to connect to UDPTL module*/
 static struct ast_udptl_protocol sip_udptl = {
@@ -19701,13 +19704,11 @@ static int sip_remote_devicestate(const char *data)
 	int foundit = FALSE;
 	int state = AST_DEVICE_UNKNOWN;
 
-	ast_log(LOG_DEBUG, "--- Looking for %s in subscriber list \n", data);
 	ASTOBJ_CONTAINER_TRAVERSE(&sip_pres_sublist, 1, do {
 		if (foundit) {
 			continue;
 		}
 		ASTOBJ_WRLOCK(iterator);
-		ast_log(LOG_DEBUG, "--- Comparing iterator->devicename %s with %s\n", iterator->devicename, data);
 		if (!strcasecmp(iterator->devicename, data)) {
 			foundit = TRUE;
 			state = iterator->state;
@@ -19840,6 +19841,24 @@ static int presence_load_config(struct ast_config *pcfg)
 	struct ast_variable *v;
 	char *cat = NULL;
 	struct sip_publisher *publisher;
+
+	if (devstate_publishers != NULL) {
+		if (option_debug > 2) {
+			ast_log(LOG_DEBUG, "--- Deleting existing devstate publishers\n");
+		}
+		devstate_publishers = delete_devstate_publishers();
+	}
+	/* Initialise structure for state publishers */
+	devstate_publishers = ao2_container_alloc(11, publisher_hash_cb, publisher_cmp_cb);
+
+	if (pub_dev != NULL) {
+		if (option_debug > 2) {
+			ast_log(LOG_DEBUG, "--- Deleting existing published devices\n");
+		}
+		pub_dev = delete_published_devices();
+	}
+	pub_dev = ao2_container_alloc(11, pubdev_hash_cb, pubdev_cmp_cb);
+
 
 	while ( (cat = ast_category_browse(pcfg, cat)) ) {
 		char* type = NULL;
@@ -21181,16 +21200,42 @@ static struct ast_cli_entry cli_sip[] = {
 	sip_reload_usage },
 };
 
+/*! \brief Delete list of published devices */
+static struct ao2_container *delete_published_devices(void)
+{
+	struct ao2_iterator i;
+	struct sip_published_device *p;
+
+	/* Destroy all the dialogs and free their memory */
+	i = ao2_iterator_init(pub_dev, 0);
+	while ((p = ao2_iterator_next(&i))) {
+		ao2_ref(p, -1);
+	}
+	ao2_iterator_destroy(&i);
+	return NULL;
+}
+
+/*! \brief Delete devicestate publishers */
+static struct ao2_container *delete_devstate_publishers(void)
+{
+	struct ao2_iterator i;
+	struct sip_publisher *p;
+
+	/* Destroy all the dialogs and free their memory */
+	i = ao2_iterator_init(devstate_publishers, 0);
+	while ((p = ao2_iterator_next(&i))) {
+		ao2_ref(p, -1);
+	}
+	ao2_iterator_destroy(&i);
+	return NULL;
+}
+
 /*! \brief PBX load module - initialization */
 static int load_module(void)
 {
 	ASTOBJ_CONTAINER_INIT(&userl);	/* User object list */
 	ASTOBJ_CONTAINER_INIT(&peerl);	/* Peer object list */
 	ASTOBJ_CONTAINER_INIT(&regl);	/* Registry object list */
-
-	/* Initialise structure for state publishers */
-	devstate_publishers= ao2_container_alloc(11, publisher_hash_cb, publisher_cmp_cb);
-	pub_dev = ao2_container_alloc(11, pubdev_hash_cb, pubdev_cmp_cb);
 
 	if (!(sched = sched_context_create())) {
 		ast_log(LOG_ERROR, "Unable to create scheduler context\n");
