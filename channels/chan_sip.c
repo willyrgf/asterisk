@@ -1163,11 +1163,13 @@ static struct {
 	.thread = AST_PTHREADT_NULL,
 };
 
+/*! Publish filters */
 struct pubsub_filter {
 	const char *criteria;
 	AST_LIST_ENTRY(pubsub_filter) next;
 };
 
+/*! Presence server ??? */
 struct sip_publisher {
 	AST_DECLARE_STRING_FIELDS(
 		AST_STRING_FIELD(name);
@@ -1177,12 +1179,14 @@ struct sip_publisher {
 	AST_LIST_HEAD_NOLOCK(filter_list, pubsub_filter) filters;
 };
 
+/*! State change queued up for publishing */
 struct statechange {
 	AST_LIST_ENTRY(statechange) entry;
 	int state;
 	char dev[0];
 };
 
+/*! Structure for publish bodies */
 struct sip_epa_entry {
 	/*!
 	 * When we are going to send a publish, we need to
@@ -1250,11 +1254,13 @@ struct epa_static_data {
 
 static void dlginfo_handle_publish_error(struct sip_pvt *pvt, const int resp, struct sip_request *req, struct sip_epa_entry *epa_entry)
 {
+	/* ???? */
 	return;
 }
 
 static void dlginfo_epa_destructor(void *data)
 {
+	/* ???? */
         struct sip_epa_entry *epa_entry = data;
         //struct dlginfo_epa_entry *dlginfo_entry = epa_entry->instance_data;
         //ast_free(dlginfo_entry);
@@ -1262,10 +1268,10 @@ static void dlginfo_epa_destructor(void *data)
 
 
 static const struct epa_static_data dlginfo_epa_static_data  = {
-		.event = DIALOG_INFO_XML,
-		.name = "dialog-info",
-		.handle_error = dlginfo_handle_publish_error,
-		.destructor = dlginfo_epa_destructor,
+	.event = DIALOG_INFO_XML,
+	.name = "dialog-info",
+	.handle_error = dlginfo_handle_publish_error,
+	.destructor = dlginfo_epa_destructor,
 };
 
 /*!
@@ -1652,8 +1658,6 @@ static void sip_peer_hold(struct sip_pvt *p, int hold);
 static int sip_devicestate_cb(const char *dev, int state, void *ign);
 static int publisher_hash_cb(const void *obj, const int flags);
 static int publisher_cmp_cb(void *obj, void *arg, int flags);
-static int subscriber_hash_cb(const void *obj, const int flags);
-static int subscriber_cmp_cb(void *obj, void *arg, int flags);
 
 /*--- Applications, functions, CLI and manager command helpers */
 static const char *sip_nat_mode(const struct sip_pvt *p);
@@ -1948,6 +1952,7 @@ static int sip_is_xml_parsable(void)
 }
 
 
+/*! Register PUBLISH function */
 static int sip_epa_register(const struct epa_static_data *static_data)
 {
 	struct epa_backend *backend = ast_calloc(1, sizeof(*backend));
@@ -9835,6 +9840,7 @@ static int notify_extenstate_update(char *context, char* exten, int state, void 
 static int sip_devicestate_publish(struct sip_publisher *p, struct statechange *sc)
 {
 	/* XXX MARQUIS Just a template for now */
+	ast_log(LOG_DEBUG, "---PUBLISH: publishing device state changes for %s\n", sc->dev);
 	return 0;
 }
 
@@ -9844,6 +9850,8 @@ static void *handle_statechange(struct statechange *sc)
 	struct ao2_iterator i;
 	struct sip_publisher *p;
 	struct pubsub_filter *curfilter;
+
+	ast_log(LOG_DEBUG, "---PUBLISH: Handling device state changes \n");
 	i = ao2_iterator_init(devstate_publishers, 0);
 	while ((p = ao2_iterator_next(&i))) {
 		AST_LIST_TRAVERSE(&p->filters, curfilter, next) {
@@ -9904,6 +9912,7 @@ static void *device_state_thread(void *data)
 static int sip_devicestate_cb(const char *dev, int state, void *ign)
 {
 	struct statechange *sc;
+	ast_log(LOG_DEBUG, "---PUBLISH: Got state change for %s - do we care? Really? Oh, I did not know. \n", dev);
 
 	if (!(sc = ast_calloc(1, sizeof(*sc) + strlen(dev) + 1))) {
 		return 0;
@@ -19400,7 +19409,6 @@ static void handle_response_subscribe(struct sip_pvt *p, int resp, const char *r
 static int sip_pres_notify_update(struct sip_pvt *dialog, struct sip_request *req)
 {
 	char buf[SIPBUFSIZE * 8];
-	char uri[SIPBUFSIZE];
 	char *state;
 	int newstate=AST_EXTENSION_NOT_INUSE;
 
@@ -19499,7 +19507,6 @@ static int sip_remote_devicestate(const char *data)
 	/* Data is the device to get state for, actually the SIP uri */
 	/* 1. Try to find the device in the list of subscriptions */
 	/* XXX Do we need to keep track of how many watchers we have? */
-	char buf[SIPBUFSIZE];
 	int foundit = FALSE;
 	int state = AST_DEVICE_UNKNOWN;
 
@@ -19557,7 +19564,7 @@ static struct sip_publisher *sip_publisher_init(const char *name, const char *ho
 		return NULL;
 	}
 	if (name) {
-		ast_log(LOG_WARNING, "Setting name\n");
+		ast_log(LOG_DEBUG, "Setting name to %s\n", name);
 		ast_string_field_set(publisher, name, name);
 	}
 	if (host) {
@@ -19568,7 +19575,6 @@ static struct sip_publisher *sip_publisher_init(const char *name, const char *ho
 		ast_string_field_set(publisher, domain, domain);
 		ast_log(LOG_WARNING, "Setting domain\n");
 	}
-
 
 	if (!(filter_head = ast_calloc(1, sizeof(*filter_head)))) {
 		return NULL;
@@ -19612,6 +19618,7 @@ static int presence_load_config(struct ast_config *pcfg)
 	struct ast_variable *v;
 	char *cat = NULL;
 	struct sip_publisher *publisher;
+
 	while ( (cat = ast_category_browse(pcfg, cat)) ) {
 		char* type = NULL;
 		char* host = NULL;
@@ -20192,8 +20199,9 @@ static int reload_config(enum channelreloadreason reason)
 
 	/* Check if we have the xml parsers we need */
 	can_parse_xml = sip_is_xml_parsable();
+
 	/* Now load the presence configuration */
-	pcfg = ast_config_load("sip-presence.conf");
+	pcfg = ast_config_load(presence_config);
 	if (pcfg) {
 		int presence_result = presence_load_config(pcfg);
 		ast_config_destroy(pcfg);
@@ -20957,6 +20965,7 @@ static int load_module(void)
 	ASTOBJ_CONTAINER_INIT(&peerl);	/* Peer object list */
 	ASTOBJ_CONTAINER_INIT(&regl);	/* Registry object list */
 
+	/* Initialise structure for state publishers */
 	devstate_publishers= ao2_container_alloc(11, publisher_hash_cb, publisher_cmp_cb);
 
 	if (!(sched = sched_context_create())) {
@@ -21011,19 +21020,22 @@ static int load_module(void)
 	/* Register our remote device state provider */
 	ast_devstate_prov_add("sipds", sip_remote_devicestate);
 
+	/* Initialize the device state publisher system */
+	ast_mutex_init(&device_state.lock);
+	ast_cond_init(&device_state.cond, NULL);
+	ast_pthread_create(&device_state.thread, NULL, device_state_thread, NULL);
+	/* Register to receive device state updates on all devices */
+	ast_devstate_add(sip_devicestate_cb, devstate_publishers);
+	if (sip_epa_register(&dlginfo_epa_static_data)) {
+		return AST_MODULE_LOAD_DECLINE;
+	}
+
 	sip_poke_all_peers();	
 	sip_send_all_registers();
 	
 	/* And start the monitor for the first time */
 	restart_monitor();
 
-	ast_mutex_init(&device_state.lock);
-	ast_cond_init(&device_state.cond, NULL);
-	ast_pthread_create(&device_state.thread, NULL, device_state_thread, NULL);
-	ast_devstate_add(sip_devicestate_cb, devstate_publishers);
-	if (sip_epa_register(&dlginfo_epa_static_data)) {
-		return AST_MODULE_LOAD_DECLINE;
-	}
 
 	return AST_MODULE_LOAD_SUCCESS;
 }
