@@ -9923,7 +9923,7 @@ static int sip_devicestate_publish(struct sip_publisher *pres_server, struct sta
 
 		ast_log(LOG_DEBUG, "*** Creating new publish device for %s\n", sc->dev);
 		snprintf(uri, sizeof(uri), "sip:%s@%s", sc->dev, pres_server->domain);
-		if (!device = ao2_alloc(sizeof(struct sip_published_device), pubdev_destructor)) {
+		if (!(device = ao2_alloc(sizeof(struct sip_published_device), pubdev_destructor))) {
 			ast_log(LOG_ERROR, "Cannot allocate sip_published_device!\n");
 			return -1;
 		}
