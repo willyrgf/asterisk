@@ -9880,10 +9880,11 @@ static int sip_devicestate_publish(struct sip_publisher *pres_server, struct sta
 	}
 
 	ao2_iterator_destroy(&i);
+	ast_log(LOG_DEBUG, "   PUBLISH: We may have found something or not... \n");
 
 	/* At this point we have a device state change to publish to one presence server. */
 	if (!found) {
-		ast_log(LOG_DEBUG, "*** Creating new publish device for %s\n", device->name);
+		ast_log(LOG_DEBUG, "*** Creating new publish device for %s\n", sc->dev);
 		device = ast_calloc(1, sizeof(*device));
 		ast_copy_string(device->name, sc->dev, sizeof(device->name));
 		ast_copy_string(device->pubname, pres_server->name, sizeof(device->pubname));
