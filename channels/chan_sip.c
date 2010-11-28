@@ -9841,7 +9841,7 @@ static int notify_extenstate_update(char *context, char* exten, int state, void 
 	return 0;
 }
 
-static int sip_devicestate_publish(struct sip_pvt *dialog, struct statechange *sc)
+static int sip_devicestate_publish(struct sip_publisher *p, struct statechange *sc)
 {
 	/* XXX MARQUIS Just a template for now */
 	return 0;
@@ -19498,9 +19498,19 @@ static struct sip_publisher *sip_publisher_init(const char *name, const char *ho
 		ao2_ref(publisher, -1);
 		return NULL;
 	}
-	ast_string_field_set(publisher, name, name);
-	ast_string_field_set(publisher, host, host);
-	ast_string_field_set(publisher, domain, domain);
+	if (name) {
+		ast_log(LOG_WARNING, "Setting name\n");
+		ast_string_field_set(publisher, name, name);
+	}
+	if (host) {
+		ast_string_field_set(publisher, host, host);
+		ast_log(LOG_WARNING, "Setting host\n");
+	}
+	if (domain) {
+		ast_string_field_set(publisher, domain, domain);
+		ast_log(LOG_WARNING, "Setting domain\n");
+	}
+
 
 	if (!(filter_head = ast_calloc(1, sizeof(*filter_head)))) {
 		return NULL;
@@ -19568,12 +19578,10 @@ static int presence_load_config(struct ast_config *pcfg)
 	struct ast_variable *v;
 	char *cat = NULL;
 	struct sip_publisher *publisher;
-	struct sip_subscriber *subscriber;
 	while ( (cat = ast_category_browse(pcfg, cat)) ) {
-		const char* type = NULL;
-		const char* name = NULL;
-		const char* host = NULL;
-		const char* domain = NULL;
+		char* type = NULL;
+		char* host = NULL;
+		char* domain = NULL;
 		char* filter = NULL;
 		if (!strcasecmp(cat, "general")) {
 					continue;
@@ -19590,12 +19598,13 @@ static int presence_load_config(struct ast_config *pcfg)
 				domain = ast_strdupa(v->value);
 			}
 		}
+
 		if (!type) {
 			ast_log(LOG_WARNING, "Section '%s' lacks type\n", cat);
 			continue;
 		}
-		if (!strcasecmp(type, "publish") || !strcasecmp(type, "bidirectional")) {
-			publisher = sip_publisher_init(name, host, domain, filter);
+		if (!strcasecmp(type, "presence")) {
+			publisher = sip_publisher_init(cat, host, domain, filter);
 			if (publisher) {
 				ao2_link(devstate_publishers, publisher);
 			}
