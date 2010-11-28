@@ -15083,15 +15083,17 @@ static int handle_request_notify(struct sip_pvt *p, struct sip_request *req, str
 		
 		/* Confirm that we received this packet */
 		transmit_response(p, "200 OK", req);
-	} else if (!strcmp(event, "dialog")) {
+	} else if (!strcasecmp(event, "dialog")) {
 		res = sip_pres_notify_update(p, req);
 	} else {
 		/* We don't understand this event. */
+		if (option_debug > 1) {
+			ast_log(LOG_DEBUG, "Event ->%s<- \n", event);
+		}
 		/* Here's room to implement incoming voicemail notifications :-) */
 		transmit_response(p, "489 Bad event", req);
 		res = -1;
 	};
-
 	if (!p->lastinvite)
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 
@@ -19118,12 +19120,14 @@ static int pres_expiry = DEFAULT_PRES_EXPIRY;
 struct sip_subscription_pres {
 	ASTOBJ_COMPONENTS_FULL(struct sip_subscription_pres,1,1);
 	AST_DECLARE_STRING_FIELDS(
+		AST_STRING_FIELD(devicename);     /*!< the full requested devicename in the hint */
 		AST_STRING_FIELD(uri);     /*!< Who we are sending the subscription as */
 		AST_STRING_FIELD(domain);  /*!< Domain or host we subscribe to */
 		);
 	//enum sip_transport transport;    /*!< Transport to use */
 	struct sip_peer *peer;		 /*!< Peer to use for this subscription */
 	int resub;                       /*!< Sched ID of resubscription */
+	int state;			 /*!< Last known device state */
 	unsigned int subscribed:1;       /*!< Whether we are currently subscribed or not */
 	unsigned int destruction:1;      /*!< Whether we are currently being unsubscribed */
 	unsigned int fatalerror:1;       /*!< We got a fatal error and can't do anything without a reload */
@@ -19136,7 +19140,7 @@ struct sip_subscription_pres {
 
 /* Forward decl (no doxygen here) */
 static int __sip_subscribe_pres_do(struct sip_subscription_pres *pres);
-static int sip_subscribe_pres_do(const void *data);
+static int sip_subscribe_pres_do(void *data);
 
 /*! \brief  The MWI subscription list */
 static struct ast_subscription_pres_list {
@@ -19169,6 +19173,7 @@ static void sip_subscribe_pres_destroy(struct sip_subscription_pres *pres)
 	AST_SCHED_DEL(sched, pres->resub);
 	ast_string_field_free_memory(pres);
 	//XXX ast_dnsmgr_release(pres->dnsmgr);
+	/* XXX remove from sip_pres_sublist */
 	ast_free(pres);
 }
 
@@ -19177,7 +19182,7 @@ static int sip_subscribe_pres(const char *uri, enum sip_subscription_pres_type t
 {
 	struct sip_subscription_pres *pres;
 	char *domain;
-	char buf[256] = "";
+	char buf[256];
 
 	/* We have a URI, much like in a dialstring. Just try to find where it leads us like a normal call.
 	   the URI can point to a peer, a domain or a host. We can basically use the same logic as
@@ -19193,13 +19198,18 @@ static int sip_subscribe_pres(const char *uri, enum sip_subscription_pres_type t
 	}
 	
 	ast_copy_string(buf, uri, sizeof(buf));
+	if (strncasecmp(buf, "sip:", 4)) {
+		ast_log(LOG_ERROR, "Currently, we only support sip: uri's - %s\n", buf);
+		return -1;
+	}
+	uri += 4; /* Skip sip: */
 
 	if ((domain = strrchr(uri, '@'))) {
-		*domain++ = '\0';
+		domain++;
 	}
 	
 	if (ast_strlen_zero(domain) || ast_strlen_zero(uri)) {
-		ast_log(LOG_ERROR, "Format for SIP remote subscription in a hint is sipds:<username>@<domain/peer> \n");
+		ast_log(LOG_ERROR, "Format for SIP remote subscription in a hint is sipds:sip:<username>@<domain/peer> \n");
 		return -1;
 	}
 	
@@ -19214,9 +19224,11 @@ static int sip_subscribe_pres(const char *uri, enum sip_subscription_pres_type t
 	}
 	
 	ASTOBJ_INIT(pres);
-	ast_string_field_set(pres, uri, uri);
+	ast_string_field_set(pres, uri, uri);	/* Username part of URI */
 	ast_string_field_set(pres, domain, domain);
+	ast_string_field_set(pres, devicename, buf);
 	pres->resub = -1;
+
 	
 	ASTOBJ_CONTAINER_LINK(&sip_pres_sublist, pres);
 
@@ -19231,10 +19243,10 @@ static int sip_subscribe_pres(const char *uri, enum sip_subscription_pres_type t
 
 
 /*! \brief Send a subscription or resubscription for presence */
-static int sip_subscribe_pres_do(const void *data)
+static int sip_subscribe_pres_do(void *data)
 {
-	struct sip_subscription_pres *pres = (struct sip_subscription_pres*)data;
-	
+	struct sip_subscription_pres *pres = (struct sip_subscription_pres *) data;
+
 	if (!pres) {
 		ast_log(LOG_DEBUG, "--- No subscription to start\n");
 		return -1;
@@ -19397,8 +19409,18 @@ static void handle_response_subscribe(struct sip_pvt *p, int resp, const char *r
 static int sip_pres_notify_update(struct sip_pvt *dialog, struct sip_request *req)
 {
 	char buf[SIPBUFSIZE * 8];
+	char uri[SIPBUFSIZE];
 	char *state;
+	int newstate=AST_EXTENSION_NOT_INUSE;
+
 /* Example:
+	At this point we limit the code to support
+	Asterisk to Asterisk distribution of device states.
+	To support more complicated XML constructs we need
+	proper XML parsing. One Notify can have two or more
+	dialog represenations, in which case we currently
+	only read the state of the first.
+
 		NOTIFY sip:olle@192.168.40.12 SIP/2.0
 		Via: SIP/2.0/UDP 192.168.20.200:5060;branch=z9hG4bK4d19eadc;rport
 		From: <sip:3000@jarl.webway.se>;tag=as714765a1
@@ -19419,6 +19441,10 @@ static int sip_pres_notify_update(struct sip_pvt *dialog, struct sip_request *re
 		<state>terminated</state>
 		</dialog>
 		</dialog-info>
+
+	<state> can have attributes
+	      <state event="rejected" code="486">terminated</state>
+
 */
 	/* Check the content type */
 	if (strncasecmp(get_header(req, "Content-Type"), "application/dialog-info+xml", strlen("application/dialog-info+xml"))) {
@@ -19452,20 +19478,62 @@ static int sip_pres_notify_update(struct sip_pvt *dialog, struct sip_request *re
 		return -1;
 	}
 	state += strlen("<state>");
-	ast_log(LOG_DEBUG, "---------- State: ->%s<- \n", state);
+	state=ast_strip(state);
+	/* Translate dialog-info states to AST states */
+	if (!strcasecmp(state, "early")) {
+		newstate = AST_DEVICE_RINGING;
+	} else if (!strcasecmp(state, "confirmed")) {
+		newstate = AST_DEVICE_INUSE;
+	} else if (!strcasecmp(state, "terminated")) {
+		newstate = AST_DEVICE_NOT_INUSE;
+	}
 
 	/* Notify the device state system if there's a change */
 	/* Live long and prosper */
 	transmit_response(dialog, "200 OK", req);
+	if (!dialog->pres) {
+		ast_log(LOG_ERROR, "No presence subscription found for NOTIFY on subscription Call-ID %s\n", dialog->callid);
+		return 0;
+	}
+	dialog->pres->state = newstate;
+	ast_device_state_changed("sipds:%s", dialog->pres->devicename);
 	return 0;
 }
 
-/*! \brief Callback for devicestate providers */
+/*! \brief Callback for devicestate providers 
+	This is called everytime state changes.
+*/
 static int sip_remote_devicestate(const char *data)
 {
 	/* Data is the device to get state for, actually the SIP uri */
 	/* 1. Try to find the device in the list of subscriptions */
+	/* XXX Do we need to keep track of how many watchers we have? */
+	char buf[SIPBUFSIZE];
+	int foundit = FALSE;
+	int state = AST_DEVICE_UNKNOWN;
+
+	ast_log(LOG_DEBUG, "--- Looking for %s in subscriber list \n", data);
+	ASTOBJ_CONTAINER_TRAVERSE(&sip_pres_sublist, 1, do {
+		if (foundit) {
+			continue;
+		}
+		ASTOBJ_WRLOCK(iterator);
+		ast_log(LOG_DEBUG, "--- Comparing iterator->devicename %s with %s\n", iterator->devicename, data);
+		if (!strcasecmp(iterator->devicename, data)) {
+			foundit = TRUE;
+			state = iterator->state;
+		}
+		ASTOBJ_UNLOCK(iterator);
+	} while (0)
+	);
 	/* 2. If the device exists - get the last known state and return it */
+	if (foundit) {
+		if (option_debug > 2) {
+			ast_log(LOG_DEBUG, "Found device sipds:%s in subscription list\n", data);
+		}
+		return state;
+	}
+
 	/* 3. If the device does not exist in the list - set up a subscription */
 
 	/* When a dialplan is loaded, we get a first call to check state. In that call,
@@ -19473,7 +19541,6 @@ static int sip_remote_devicestate(const char *data)
 	   we'll update automatically with the initial state.
 	*/
 	sip_subscribe_pres(data, SUB_DIALOG_INFO);
-
 	return AST_DEVICE_UNKNOWN;
 }
 
