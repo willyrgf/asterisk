@@ -19867,10 +19867,11 @@ static int presence_load_config(struct ast_config *pcfg)
 
 
 	while ( (cat = ast_category_browse(pcfg, cat)) ) {
-		char* type = NULL;
-		char* host = NULL;
-		char* domain = NULL;
-		char* filter = NULL;
+		char *type = NULL;
+		char *host = NULL;
+		char *domain = NULL;
+		char *filter = NULL;
+		char *name = ast_strdupa(cat);
 		if (!strcasecmp(cat, "general")) {
 			continue;
 		}
@@ -19893,7 +19894,7 @@ static int presence_load_config(struct ast_config *pcfg)
 			continue;
 		}
 		if (!strcasecmp(type, "presence")) {
-			publisher = sip_publisher_init(cat, host, domain, filter);
+			publisher = sip_publisher_init(name, host, domain, filter);
 			if (publisher) {
 				ao2_link(devstate_publishers, publisher);
 			}
