@@ -1267,28 +1267,6 @@ struct epa_static_data {
 	void (*destructor)(void *instance_data);
 };
 
-static void dlginfo_handle_publish_error(struct sip_pvt *pvt, const int resp, struct sip_request *req, struct sip_epa_entry *epa_entry)
-{
-	/* Do we really care of errors here? */
-	return;
-}
-
-static void dlginfo_epa_destructor(void *data)
-{
-	/* XXX needs fixing???? */
-        struct sip_epa_entry *epa_entry = data;
-        //struct dlginfo_epa_entry *dlginfo_entry = epa_entry->instance_data;
-        //ast_free(dlginfo_entry);
-}
-
-
-static const struct epa_static_data dlginfo_epa_static_data  = {
-	.event = DIALOG_INFO_XML,
-	.name = "dialog-info",
-	.handle_error = dlginfo_handle_publish_error,
-	.destructor = dlginfo_epa_destructor,
-};
-
 /*!
  * \brief backend for an event publication agent
  */
@@ -1880,6 +1858,8 @@ static int sip_set_udptl_peer(struct ast_channel *chan, struct ast_udptl *udptl)
 static int sip_pres_notify_update(struct sip_pvt *dialog, struct sip_request *req, int terminated, const char *termreason);
 static struct ao2_container *delete_devstate_publishers(void);
 static struct ao2_container *delete_published_devices(void);
+static void dlginfo_handle_publish_error(struct sip_pvt *pvt, const int resp, struct sip_request *req, struct sip_epa_entry *epa_entry);
+static void dlginfo_epa_destructor(void *data);
 
 
 /*! \brief Definition of this channel for PBX channel registration */
@@ -1930,6 +1910,15 @@ static const struct ast_channel_tech sip_tech_info = {
 	.send_text = sip_sendtext,
 	.func_channel_read = acf_channel_read,
 };
+
+/*! \brief EPA declaration of dialog-info publish notifications */
+static const struct epa_static_data dlginfo_epa_static_data  = {
+	.event = DIALOG_INFO_XML,
+	.name = "dialog-info",
+	.handle_error = dlginfo_handle_publish_error,
+	.destructor = dlginfo_epa_destructor,
+};
+
 
 /**--- some list management macros. **/
  
@@ -9874,6 +9863,23 @@ static int notify_extenstate_update(char *context, char* exten, int state, void 
 
 	return 0;
 }
+
+/*! \brief Handle errors when publishing dialog-info stuff */
+static void dlginfo_handle_publish_error(struct sip_pvt *pvt, const int resp, struct sip_request *req, struct sip_epa_entry *epa_entry)
+{
+	/* Do we really care of errors here? */
+	ast_log(LOG_DEBUG, "-- %s : PUBLISH error response code %d\n", pvt->callid, resp);
+	return;
+}
+
+static void dlginfo_epa_destructor(void *data)
+{
+	/* XXX needs fixing???? */
+        struct sip_epa_entry *epa_entry = data;
+        //struct dlginfo_epa_entry *dlginfo_entry = epa_entry->instance_data;
+        //ast_free(dlginfo_entry);
+}
+
 
 /*! \brief Published_device destructor */
 static void pubdev_destructor(void *data)
