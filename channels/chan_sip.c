@@ -1233,10 +1233,9 @@ struct sip_epa_entry {
 
 /*! Structure that we have one per device for keeping control of PUBLISH states */
 struct sip_published_device {
-	struct sip_epa_entry *status;
 	char name[AST_MAX_EXTENSION];		/* Device name for entry */
 	char pubname[AST_MAX_EXTENSION];	/* Publisher name */
-	struct sip_epa_entry *epa_entry;	/* EPA Entry for this entry */
+	struct sip_epa_entry *epa;		/* EPA Entry for this entry */
 };
 
 static struct ao2_container *pub_dev;
@@ -2001,7 +2000,7 @@ static const struct epa_static_data *find_static_data(const char * const event_p
 }
 
 /*! \brief create new unique etag */
-static char *create_new_etag()
+static char *create_new_etag(void)
 {
         int new_etag = ast_atomic_fetchadd_int(&esc_etag_counter, +1);
 	static char etagtext[AST_MAX_EXTENSION];
@@ -8043,6 +8042,7 @@ static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmetho
 		add_header(req, "Remote-Party-ID", p->rpid);
 }
 
+/*! \brief Publish an event state  message */
 static int transmit_publish(struct sip_epa_entry *epa_entry, enum sip_publish_type publish_type, const char * const explicit_uri)
 {
 	struct sip_pvt *pvt;
@@ -9876,6 +9876,7 @@ static int notify_extenstate_update(char *context, char* exten, int state, void 
 static void pubdev_destructor(void *data)
 {
 	struct sip_published_device *device = data;
+	ast_free(device->epa);
 	ao2_unlink(pub_dev, device);
 }
 
@@ -9915,7 +9916,10 @@ static int sip_devicestate_publish(struct sip_publisher *pres_server, struct sta
 
 	/* At this point we have a device state change to publish to one presence server. */
 	if (!found) {
+		char uri[SIPBUFSIZE];
+
 		ast_log(LOG_DEBUG, "*** Creating new publish device for %s\n", sc->dev);
+		snprintf(uri, sizeof(uri), "sip:%s@edvina.net", sc->dev);
 		device = ao2_alloc(sizeof(struct sip_published_device), pubdev_destructor);
 		ast_copy_string(device->name, sc->dev, sizeof(device->name));
 		ast_copy_string(device->pubname, pres_server->name, sizeof(device->pubname));
@@ -9923,7 +9927,14 @@ static int sip_devicestate_publish(struct sip_publisher *pres_server, struct sta
 		ao2_link(pub_dev, device);
 		/* Do stuff here */
 		publish_type = SIP_PUBLISH_INITIAL;
+		device->epa = ast_calloc(1, sizeof(struct sip_epa_entry));
+		ast_copy_string(device->epa->body, "FNULHAKE\nGNURP", sizeof(device->epa->body));
+		ast_copy_string(device->epa->destination, "jarl.webway.se", sizeof(device->epa->body));
+		device->epa->publish_type = publish_type;
+		ast_copy_string(device->epa->entity_tag, create_new_etag(), sizeof(device->epa->entity_tag));
 		ast_log(LOG_DEBUG, "*** Created new publish device for %s\n", sc->dev);
+		transmit_publish(device->epa, publish_type, uri);
+		ast_log(LOG_DEBUG, "*** Published update for device %s\n", sc->dev);
 	}
 	return 0;
 }
