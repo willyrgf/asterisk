@@ -8174,14 +8174,14 @@ static int transmit_invite(struct sip_pvt *p, int sipmethod, int sdp, int init, 
 }
 
 /*! \brief Build XML body in dialog-info format for notify and publish */
-static void presence_build_dialoginfo_xml(char *t, size_t *maxbytes, int state, const char *statestring, struct sip_pvt *p, int full, char *mto)
+static void presence_build_dialoginfo_xml(char *t, size_t *maxbytes, int state, const char *statestring, const char *dlg_id, int full, char *mto, int version)
 {
 	ast_build_string(&t, maxbytes, "<?xml version=\"1.0\"?>\n");
-	ast_build_string(&t, maxbytes, "<dialog-info xmlns=\"urn:ietf:params:xml:ns:dialog-info\" version=\"%d\" state=\"%s\" entity=\"%s\">\n", p->dialogver++, full ? "full":"partial", mto);
+	ast_build_string(&t, maxbytes, "<dialog-info xmlns=\"urn:ietf:params:xml:ns:dialog-info\" version=\"%d\" state=\"%s\" entity=\"%s\">\n", version, full ? "full":"partial", mto);
 	if ((state & AST_EXTENSION_RINGING) && global_notifyringing) {
-		ast_build_string(&t, maxbytes, "<dialog id=\"%s\" direction=\"recipient\">\n", p->exten);
+		ast_build_string(&t, maxbytes, "<dialog id=\"%s\" direction=\"recipient\">\n", dlg_id);
 	} else {
-		ast_build_string(&t, maxbytes, "<dialog id=\"%s\">\n", p->exten);
+		ast_build_string(&t, maxbytes, "<dialog id=\"%s\">\n", dlg_id);
 	}
 	ast_build_string(&t, maxbytes, "<state>%s</state>\n", statestring);
 	if (state == AST_EXTENSION_ONHOLD) {
@@ -8346,7 +8346,7 @@ static int transmit_state_notify(struct sip_pvt *p, int state, int full, int tim
 		ast_build_string(&t, &maxbytes, "</tuple>\n</presence>\n");
 		break;
 	case DIALOG_INFO_XML: /* SNOM subscribes in this format */
-		presence_build_dialoginfo_xml(t, &maxbytes, state, statestring, p, full, mto);
+		presence_build_dialoginfo_xml(t, &maxbytes, state, statestring, p->exten, full, mto, p->dialogver++);
 		break;
 	case NONE:
 	default:
