@@ -9854,6 +9854,13 @@ static int notify_extenstate_update(char *context, char* exten, int state, void 
 	return 0;
 }
 
+/*! \brief Published_device destructor */
+static void pubdev_destructor(void *data)
+{
+	struct sip_published_device *device = data;
+	ao2_unlink(pub_dev, device);
+}
+
 /*! \brief Generate a PUBLISH request for one server */
 static int sip_devicestate_publish(struct sip_publisher *pres_server, struct statechange *sc)
 {
@@ -9885,12 +9892,13 @@ static int sip_devicestate_publish(struct sip_publisher *pres_server, struct sta
 	/* At this point we have a device state change to publish to one presence server. */
 	if (!found) {
 		ast_log(LOG_DEBUG, "*** Creating new publish device for %s\n", sc->dev);
-		device = ast_calloc(1, sizeof(*device));
+		device = ao2_alloc(sizeof(struct sip_published_device), pubdev_destructor);
 		ast_copy_string(device->name, sc->dev, sizeof(device->name));
 		ast_copy_string(device->pubname, pres_server->name, sizeof(device->pubname));
 		/* Initiate stuff */
 		ao2_link(pub_dev, device);
 		/* Do stuff here */
+		ast_log(LOG_DEBUG, "*** Created new publish device for %s\n", sc->dev);
 	}
 	return 0;
 }
@@ -19662,11 +19670,19 @@ static struct sip_publisher *sip_publisher_init(const char *name, const char *ho
 	return publisher;
 }
 
+/*! \brief Compute unique hash for object
+
+As the device name can have one entry per presence server, we need to hash on 
+both device name and presence server name to get a unique hash
+*/
 static int pubdev_hash_cb(const void *obj, const int flags)
 {
 	const struct sip_published_device *device = obj;
+	char buf[SIPBUFSIZE];
+	snprintf(buf, sizeof(buf), "%s:%s", device->name, device->pubname);
+
 	ast_log(LOG_DEBUG, "--- XXX Here I am \n");
-	return ast_str_case_hash(device->name);
+	return ast_str_case_hash(buf);
 }
 
 static int pubdev_cmp_cb(void *obj, void *arg, int flags)
