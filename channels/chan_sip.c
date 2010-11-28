@@ -1169,7 +1169,7 @@ struct pubsub_filter {
 	AST_LIST_ENTRY(pubsub_filter) next;
 };
 
-/*! Presence server ??? */
+/*! Presence server definition */
 struct sip_publisher {
 	AST_DECLARE_STRING_FIELDS(
 		AST_STRING_FIELD(name);
@@ -8153,6 +8153,25 @@ static int transmit_invite(struct sip_pvt *p, int sipmethod, int sdp, int init, 
 	return send_request(p, &req, init ? XMIT_CRITICAL : XMIT_RELIABLE, p->ocseq);
 }
 
+/*! \brief Build XML body in dialog-info format for notify and publish */
+static void presence_build_dialoginfo_xml(char *t, size_t *maxbytes, int state, const char *statestring, struct sip_pvt *p, int full, char *mto)
+{
+	ast_build_string(&t, maxbytes, "<?xml version=\"1.0\"?>\n");
+	ast_build_string(&t, maxbytes, "<dialog-info xmlns=\"urn:ietf:params:xml:ns:dialog-info\" version=\"%d\" state=\"%s\" entity=\"%s\">\n", p->dialogver++, full ? "full":"partial", mto);
+	if ((state & AST_EXTENSION_RINGING) && global_notifyringing) {
+		ast_build_string(&t, maxbytes, "<dialog id=\"%s\" direction=\"recipient\">\n", p->exten);
+	} else {
+		ast_build_string(&t, maxbytes, "<dialog id=\"%s\">\n", p->exten);
+	}
+	ast_build_string(&t, &maxbytes, "<state>%s</state>\n", statestring);
+	if (state == AST_EXTENSION_ONHOLD) {
+		ast_build_string(&t, maxbytes, "<local>\n<target uri=\"%s\">\n"
+	                         "<param pname=\"+sip.rendering\" pvalue=\"no\"/>\n"
+	                         "</target>\n</local>\n", mto);
+	}
+	ast_build_string(&t, maxbytes, "</dialog>\n</dialog-info>\n");
+}
+
 /*! \brief Used in the SUBSCRIBE notification subsystem */
 static int transmit_state_notify(struct sip_pvt *p, int state, int full, int timeout)
 {
@@ -8307,19 +8326,7 @@ static int transmit_state_notify(struct sip_pvt *p, int state, int full, int tim
 		ast_build_string(&t, &maxbytes, "</tuple>\n</presence>\n");
 		break;
 	case DIALOG_INFO_XML: /* SNOM subscribes in this format */
-		ast_build_string(&t, &maxbytes, "<?xml version=\"1.0\"?>\n");
-		ast_build_string(&t, &maxbytes, "<dialog-info xmlns=\"urn:ietf:params:xml:ns:dialog-info\" version=\"%d\" state=\"%s\" entity=\"%s\">\n", p->dialogver++, full ? "full":"partial", mto);
-		if ((state & AST_EXTENSION_RINGING) && global_notifyringing)
-			ast_build_string(&t, &maxbytes, "<dialog id=\"%s\" direction=\"recipient\">\n", p->exten);
-		else
-			ast_build_string(&t, &maxbytes, "<dialog id=\"%s\">\n", p->exten);
-		ast_build_string(&t, &maxbytes, "<state>%s</state>\n", statestring);
-		if (state == AST_EXTENSION_ONHOLD) {
-			ast_build_string(&t, &maxbytes, "<local>\n<target uri=\"%s\">\n"
-			                                "<param pname=\"+sip.rendering\" pvalue=\"no\"/>\n"
-			                                "</target>\n</local>\n", mto);
-		}
-		ast_build_string(&t, &maxbytes, "</dialog>\n</dialog-info>\n");
+		presence_build_dialoginfo_xml(t, &maxbytes, state, statestring, p, full, mto);
 		break;
 	case NONE:
 	default:
@@ -9837,10 +9844,11 @@ static int notify_extenstate_update(char *context, char* exten, int state, void 
 	return 0;
 }
 
-static int sip_devicestate_publish(struct sip_publisher *p, struct statechange *sc)
+static int sip_devicestate_publish(struct sip_publisher *pres_server, struct statechange *sc)
 {
 	/* XXX MARQUIS Just a template for now */
-	ast_log(LOG_DEBUG, "---PUBLISH: publishing device state changes for %s\n", sc->dev);
+	ast_log(LOG_DEBUG, "---PUBLISH: publishing device state changes to %s for %s\n", pres_server->name, sc->dev);
+	/* At this point we have a device state change to publish to one presence server. */
 	return 0;
 }
 
