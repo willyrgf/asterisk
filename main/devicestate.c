@@ -44,19 +44,17 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/options.h"
 
 /*! \brief Device state strings for printing */
-static const char *devstatestring[] = {
-	/* 0 AST_DEVICE_PROV_NOT_FOUND */    "Provider not found",    /*!< Provider not found */
-	/* 0 AST_DEVICE_UNKNOWN */    "Unknown",    /*!< Valid, but unknown state */
-	/* 1 AST_DEVICE_NOT_INUSE */  "Not in use", /*!< Not used */
-	/* 2 AST_DEVICE IN USE */     "In use",     /*!< In use */
-	/* 3 AST_DEVICE_BUSY */	      "Busy",       /*!< Busy */
-	/* 4 AST_DEVICE_INVALID */    "Invalid",    /*!< Invalid - not known to Asterisk */
-	/* 5 AST_DEVICE_UNAVAILABLE */"Unavailable",/*!< Unavailable (not registered) */
-	/* 6 AST_DEVICE_RINGING */    "Ringing",    /*!< Ring, ring, ring */
-	/* 7 AST_DEVICE_RINGINUSE */  "Ring+Inuse", /*!< Ring and in use */
-	/* 8 AST_DEVICE_ONHOLD */     "On Hold"     /*!< On Hold */
+static const char * const devstatestring[][2] = {
+	{ /* 0 AST_DEVICE_UNKNOWN */     "Unknown",     "UNKNOWN"     }, /*!< Valid, but unknown state */
+	{ /* 1 AST_DEVICE_NOT_INUSE */   "Not in use",  "NOT_INUSE"   }, /*!< Not used */
+	{ /* 2 AST_DEVICE IN USE */      "In use",      "INUSE"       }, /*!< In use */
+	{ /* 3 AST_DEVICE_BUSY */        "Busy",        "BUSY"        }, /*!< Busy */
+	{ /* 4 AST_DEVICE_INVALID */     "Invalid",     "INVALID"     }, /*!< Invalid - not known to Asterisk */
+	{ /* 5 AST_DEVICE_UNAVAILABLE */ "Unavailable", "UNAVAILABLE" }, /*!< Unavailable (not registered) */
+	{ /* 6 AST_DEVICE_RINGING */     "Ringing",     "RINGING"     }, /*!< Ring, ring, ring */
+	{ /* 7 AST_DEVICE_RINGINUSE */   "Ring+Inuse",  "RINGINUSE"   }, /*!< Ring and in use */
+	{ /* 8 AST_DEVICE_ONHOLD */      "On Hold",      "ONHOLD"      }, /*!< On Hold */
 };
-
 /*! \brief  A device state provider (not a channel) */
 struct devstate_prov {
 	char label[40];
@@ -98,9 +96,14 @@ static int getproviderstate(const char *provider, const char *address);
 /*! \brief Find devicestate as text message for output */
 const char *devstate2str(enum ast_device_state devstate) 
 {
-	return devstatestring[devstate];
+	return devstatestring[devstate][0];
 }
 
+/* Parseable */
+const char *ast_devstate_str(enum ast_device_state state)
+{
+        return devstatestring[state][1];
+}
 /*! \brief Find out if device is active in a call or not 
 	\note find channels with the device's name in it
 	This function is only used for channels that does not implement 

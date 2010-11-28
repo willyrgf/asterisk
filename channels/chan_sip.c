@@ -9926,6 +9926,9 @@ static int sip_devicestate_publish(struct sip_publisher *pres_server, struct sta
 	/* At this point we have a device state change to publish to one presence server. */
 	if (!found) {
 		char uri[SIPBUFSIZE];
+		char body[SIPBUFSIZE * 2];
+		char dlg_id[20];
+		size_t maxbytes = sizeof(body);
 
 		ast_log(LOG_DEBUG, "*** Creating new publish device for %s\n", sc->dev);
 		snprintf(uri, sizeof(uri), "sip:%s@%s", sc->dev, pres_server->domain);
@@ -9937,10 +9940,15 @@ static int sip_devicestate_publish(struct sip_publisher *pres_server, struct sta
 		ast_copy_string(device->pubname, pres_server->name, sizeof(device->pubname));
 		/* Initiate stuff */
 		ao2_link(pub_dev, device);
-		/* Do stuff here */
 		publish_type = SIP_PUBLISH_INITIAL;
-		device->epa = ast_calloc(1, sizeof(struct sip_epa_entry));
-		ast_copy_string(device->epa->body, "FNULHAKE\nGNURP", sizeof(device->epa->body));
+		if (!(device->epa = ast_calloc(1, sizeof(struct sip_epa_entry)))) {
+			ast_log(LOG_ERROR, "Cannot allocate sip_epa_entry!\n");
+			return -1;
+		}
+		generate_random_string(dlg_id, sizeof(dlg_id));
+		/*Assuming for now that we're sending a full update when we initially create the epa_entry and send the PUBLISH*/
+		presence_build_dialoginfo_xml(body, &maxbytes, 1, ast_devstate_str(sc->state), dlg_id, 1, uri, 0);
+		ast_copy_string(device->epa->body, body, sizeof(device->epa->body));
 		ast_copy_string(device->epa->destination, pres_server->host, sizeof(device->epa->destination));
 		device->epa->publish_type = publish_type;
 		ast_copy_string(device->epa->entity_tag, create_new_etag(), sizeof(device->epa->entity_tag));

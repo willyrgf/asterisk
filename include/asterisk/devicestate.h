@@ -47,6 +47,13 @@ typedef int (*ast_devstate_cb_type)(const char *dev, int state, void *data);
 /*!  \brief Devicestate provider call back */
 typedef int (*ast_devstate_prov_cb_type)(const char *data);
 
+/*!
+ * \brief Convert device state to text string that is easier to parse
+ *
+ * \param devstate Current device state
+ */
+const char *ast_devstate_str(enum ast_device_state devstate);
+
 /*! \brief Convert device state to text string for output 
  * \param devstate Current device state 
  */
