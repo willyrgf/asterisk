@@ -9919,8 +9919,11 @@ static int sip_devicestate_publish(struct sip_publisher *pres_server, struct sta
 		char uri[SIPBUFSIZE];
 
 		ast_log(LOG_DEBUG, "*** Creating new publish device for %s\n", sc->dev);
-		snprintf(uri, sizeof(uri), "sip:%s@edvina.net", sc->dev);
-		device = ao2_alloc(sizeof(struct sip_published_device), pubdev_destructor);
+		snprintf(uri, sizeof(uri), "sip:%s@%s", sc->dev, pres_server->domain);
+		if (!device = ao2_alloc(sizeof(struct sip_published_device), pubdev_destructor)) {
+			ast_log(LOG_ERROR, "Cannot allocate sip_published_device!\n");
+			return 0;
+		}
 		ast_copy_string(device->name, sc->dev, sizeof(device->name));
 		ast_copy_string(device->pubname, pres_server->name, sizeof(device->pubname));
 		/* Initiate stuff */
@@ -9929,7 +9932,7 @@ static int sip_devicestate_publish(struct sip_publisher *pres_server, struct sta
 		publish_type = SIP_PUBLISH_INITIAL;
 		device->epa = ast_calloc(1, sizeof(struct sip_epa_entry));
 		ast_copy_string(device->epa->body, "FNULHAKE\nGNURP", sizeof(device->epa->body));
-		ast_copy_string(device->epa->destination, "jarl.webway.se", sizeof(device->epa->body));
+		ast_copy_string(device->epa->destination, pres_server->host, sizeof(device->epa->destination));
 		device->epa->publish_type = publish_type;
 		ast_copy_string(device->epa->entity_tag, create_new_etag(), sizeof(device->epa->entity_tag));
 		ast_log(LOG_DEBUG, "*** Created new publish device for %s\n", sc->dev);
