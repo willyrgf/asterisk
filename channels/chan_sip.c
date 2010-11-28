@@ -1177,15 +1177,6 @@ struct sip_publisher {
 	AST_LIST_HEAD_NOLOCK(filter_list, pubsub_filter) filters;
 };
 
-struct sip_subscriber {
-	AST_DECLARE_STRING_FIELDS(
-		AST_STRING_FIELD(name);
-		AST_STRING_FIELD(host);
-		AST_STRING_FIELD(domain);
-		AST_STRING_FIELD(filter);
-	);
-};
-
 struct statechange {
 	AST_LIST_ENTRY(statechange) entry;
 	int state;
@@ -19607,30 +19598,6 @@ static int publisher_cmp_cb(void *obj, void *arg, int flags)
 {
 	const struct sip_publisher *publisher = obj, *publisher2 = arg;
 	return !strcasecmp(publisher->name, publisher2->name) ? CMP_MATCH | CMP_STOP : 0;
-}
-
-static void subscriber_destructor_cb(void *data)
-{
-	struct sip_subscriber *subscriber = data;
-	ast_string_field_free_memory(subscriber);
-}
-
-static struct sip_subscriber *sip_subscriber_init(const char *name, const char *host,
-		const char *domain, const char* filter)
-{
-	struct sip_subscriber *subscriber = ao2_alloc(sizeof(*subscriber), subscriber_destructor_cb);
-	return subscriber;
-}
-static int subscriber_hash_cb(const void *obj, const int flags)
-{
-	const struct sip_subscriber *subscriber = obj;
-	return ast_str_case_hash(subscriber->name);
-}
-
-static int subscriber_cmp_cb(void *obj, void *arg, int flags)
-{
-	const struct sip_subscriber *subscriber = obj, *subscriber2 = arg;
-	return !strcasecmp(subscriber->name, subscriber2->name) ? CMP_MATCH | CMP_STOP : 0;
 }
 
 /*! \brief Load presence configuration
