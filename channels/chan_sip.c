@@ -1275,7 +1275,7 @@ static void dlginfo_handle_publish_error(struct sip_pvt *pvt, const int resp, st
 
 static void dlginfo_epa_destructor(void *data)
 {
-	/* ???? */
+	/* XXX needs fixing???? */
         struct sip_epa_entry *epa_entry = data;
         //struct dlginfo_epa_entry *dlginfo_entry = epa_entry->instance_data;
         //ast_free(dlginfo_entry);
@@ -19271,7 +19271,7 @@ struct sip_subscription_pres {
 
 /* Forward decl (no doxygen here) */
 static int __sip_subscribe_pres_do(struct sip_subscription_pres *pres);
-static int sip_subscribe_pres_do(void *data);
+static int sip_subscribe_pres_do(const void *data);
 
 /*! \brief  The MWI subscription list */
 static struct ast_subscription_pres_list {
@@ -19375,7 +19375,7 @@ static int sip_subscribe_pres(const char *uri, enum sip_subscription_pres_type t
 
 
 /*! \brief Send a subscription or resubscription for presence */
-static int sip_subscribe_pres_do(void *data)
+static int sip_subscribe_pres_do(const void *data)
 {
 	struct sip_subscription_pres *pres = (struct sip_subscription_pres *) data;
 
@@ -20445,7 +20445,7 @@ static int reload_config(enum channelreloadreason reason)
 	/* Now load the presence configuration */
 	pcfg = ast_config_load(presence_config);
 	if (pcfg) {
-		int presence_result = presence_load_config(pcfg);
+		presence_load_config(pcfg);
 		ast_config_destroy(pcfg);
 		/* XXX Let's determine later what to do with the result here */
 	}
