@@ -17,6 +17,9 @@ nic.at - ENUM support in Asterisk
 
 Paul Bagyenda, Digital Solutions - for initial Voicetronix driver development
 
+Telekompetense AS, Oslo, Norway - distributed device states in SIP (pinana)
+	Developed by Edvina - oej and marquis
+
 === WISHLIST CONTRIBUTERS ===
 Jeremy McNamara - SpeeX support
 Nick Seraphin - RDNIS support
