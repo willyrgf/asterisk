@@ -9922,7 +9922,7 @@ static int sip_devicestate_publish(struct sip_publisher *pres_server, struct sta
 		snprintf(uri, sizeof(uri), "sip:%s@%s", sc->dev, pres_server->domain);
 		if (!device = ao2_alloc(sizeof(struct sip_published_device), pubdev_destructor)) {
 			ast_log(LOG_ERROR, "Cannot allocate sip_published_device!\n");
-			return 0;
+			return -1;
 		}
 		ast_copy_string(device->name, sc->dev, sizeof(device->name));
 		ast_copy_string(device->pubname, pres_server->name, sizeof(device->pubname));
