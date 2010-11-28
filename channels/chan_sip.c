@@ -1877,7 +1877,7 @@ static struct ast_udptl *sip_get_udptl_peer(struct ast_channel *chan);
 static int sip_set_udptl_peer(struct ast_channel *chan, struct ast_udptl *udptl);
 
 /*------ Remote publish/subscribe support */
-static int sip_pres_notify_update(struct sip_pvt *dialog, struct sip_request *req);
+static int sip_pres_notify_update(struct sip_pvt *dialog, struct sip_request *req, int terminated, const char *termreason);
 
 /*! \brief Definition of this channel for PBX channel registration */
 static const struct ast_channel_tech sip_tech = {
@@ -15077,17 +15077,34 @@ static int handle_request_notify(struct sip_pvt *p, struct sip_request *req, str
 	/* This is mostly a skeleton for future improvements */
 	/* Mostly created to return proper answers on notifications on outbound REFER's */
 	int res = 0;
+	int terminated = FALSE;
 	const char *event = get_header(req, "Event");
+	const char *substate = get_header(req, "Subscription-State");
+	const char *termreason = NULL;
 	char *eventid = NULL;
 	char *sep;
 
-	if( (sep = strchr(event, ';')) ) {	/* XXX bug here - overwriting string ? */
+			//	add_header(&req, "Subscription-State", "terminated;reason=timeout");
+			//	add_header(&req, "Subscription-State", "terminated;reason=probation");
+			//	add_header(&req, "Subscription-State", "terminated;reason=noresource");
+			//	Subscription-State: active
+
+	if( (sep = strchr(substate, ';')) ) {	/* XXX bug here - overwriting const string ? */
+		*sep++ = '\0';
+		termreason = sep;
+	}
+	if (strcasecmp(substate, "terminated")) {
+		terminated = TRUE;
+		ast_log(LOG_NOTICE, "%s : Subscription terminated. Event %s Reason %s\n", p->callid, event, termreason);
+	}
+	if( (sep = strchr(event, ';')) ) {	/* XXX bug here - overwriting const string ? */
 		*sep++ = '\0';
 		eventid = sep;
 	}
 	
-	if (option_debug > 1 && sipdebug)
+	if (option_debug > 1 && sipdebug) {
 		ast_log(LOG_DEBUG, "Got NOTIFY Event: %s\n", event);
+	}
 
 	if (!strcmp(event, "refer")) {
 		/* Save nesting depth for now, since there might be other events we will
@@ -15191,7 +15208,7 @@ static int handle_request_notify(struct sip_pvt *p, struct sip_request *req, str
 		/* Confirm that we received this packet */
 		transmit_response(p, "200 OK", req);
 	} else if (!strcasecmp(event, "dialog")) {
-		res = sip_pres_notify_update(p, req);
+		res = sip_pres_notify_update(p, req, terminated, termreason);
 	} else {
 		/* We don't understand this event. */
 		if (option_debug > 1) {
@@ -15201,8 +15218,9 @@ static int handle_request_notify(struct sip_pvt *p, struct sip_request *req, str
 		transmit_response(p, "489 Bad event", req);
 		res = -1;
 	};
-	if (!p->lastinvite)
+	if (!p->lastinvite || terminated) {
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
+	}
 
 	return res;
 }
@@ -19576,7 +19594,7 @@ static void handle_response_subscribe(struct sip_pvt *p, int resp, const char *r
 }
 
 /*! \brief Parse the incoming NOTIFY update and update the device state provider system for this device */
-static int sip_pres_notify_update(struct sip_pvt *dialog, struct sip_request *req)
+static int sip_pres_notify_update(struct sip_pvt *dialog, struct sip_request *req, int terminated, const char *termreason)
 {
 	char buf[SIPBUFSIZE * 8];
 	char *state;
