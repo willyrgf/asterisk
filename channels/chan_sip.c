@@ -1165,7 +1165,7 @@ static struct {
 
 /*! Publish filters */
 struct pubsub_filter {
-	const char *criteria;
+	char criteria[AST_MAX_EXTENSION];
 	AST_LIST_ENTRY(pubsub_filter) next;
 };
 
@@ -1211,7 +1211,7 @@ struct sip_epa_entry {
 	 * in which we must send a message identical to the
 	 * one previously sent
 	 */
-	char body[SIPBUFSIZE];
+	char body[SIPBUFSIZE * 2];
 	/*!
 	 * Every event package has some constant data and
 	 * callbacks that all instances will share. This
@@ -1225,6 +1225,16 @@ struct sip_epa_entry {
 	 */
 	void *instance_data;
 };
+
+/*! Structure that we have one per device for keeping control of PUBLISH states */
+struct sip_published_device {
+	struct sip_epa_entry *status;
+	char name[AST_MAX_EXTENSION];		/* Device name for entry */
+	char pubname[AST_MAX_EXTENSION];	/* Publisher name */
+};
+
+static struct ao2_container *pub_dev;
+
 
 /*!
  * Data which is the same for all instances of an EPA for a
@@ -1254,7 +1264,7 @@ struct epa_static_data {
 
 static void dlginfo_handle_publish_error(struct sip_pvt *pvt, const int resp, struct sip_request *req, struct sip_epa_entry *epa_entry)
 {
-	/* ???? */
+	/* Do we really care of errors here? */
 	return;
 }
 
@@ -8163,7 +8173,7 @@ static void presence_build_dialoginfo_xml(char *t, size_t *maxbytes, int state, 
 	} else {
 		ast_build_string(&t, maxbytes, "<dialog id=\"%s\">\n", p->exten);
 	}
-	ast_build_string(&t, &maxbytes, "<state>%s</state>\n", statestring);
+	ast_build_string(&t, maxbytes, "<state>%s</state>\n", statestring);
 	if (state == AST_EXTENSION_ONHOLD) {
 		ast_build_string(&t, maxbytes, "<local>\n<target uri=\"%s\">\n"
 	                         "<param pname=\"+sip.rendering\" pvalue=\"no\"/>\n"
@@ -9844,15 +9854,47 @@ static int notify_extenstate_update(char *context, char* exten, int state, void 
 	return 0;
 }
 
+/*! \brief Generate a PUBLISH request for one server */
 static int sip_devicestate_publish(struct sip_publisher *pres_server, struct statechange *sc)
 {
-	/* XXX MARQUIS Just a template for now */
+	struct sip_published_device *device = NULL;
+	struct ao2_iterator i;
+	int found = FALSE;
+
+	if (!pres_server) {
+		ast_log(LOG_ERROR, "??? No presence server. What's up? \n");
+		return -1;
+	}
+
 	ast_log(LOG_DEBUG, "---PUBLISH: publishing device state changes to %s for %s\n", pres_server->name, sc->dev);
+
+	i = ao2_iterator_init(pub_dev, 0);
+	while ((device = ao2_iterator_next(&i))) {
+		ast_log(LOG_DEBUG, "   PUBLISH: Comparing %s and device %s\n", device->name, sc->dev);
+		if (!strcasecmp(device->pubname, pres_server->name) && !strcasecmp(device->name, sc->dev)) {
+			found = TRUE;
+			ast_log(LOG_DEBUG, "*** Found our friend %s in the existing list \n", device->name);
+			/* Do stuff here */
+		}
+		ao2_ref(device, -1);
+	}
+
+	ao2_iterator_destroy(&i);
+
 	/* At this point we have a device state change to publish to one presence server. */
+	if (!found) {
+		ast_log(LOG_DEBUG, "*** Creating new publish device for %s\n", device->name);
+		device = ast_calloc(1, sizeof(*device));
+		ast_copy_string(device->name, sc->dev, sizeof(device->name));
+		ast_copy_string(device->pubname, pres_server->name, sizeof(device->pubname));
+		/* Initiate stuff */
+		ao2_link(pub_dev, device);
+		/* Do stuff here */
+	}
 	return 0;
 }
 
-/*! \Publish the state of a device if it matches a publisher and one of its filters */
+/*! \brief Publish the state of a device if it matches a publisher and one of its filters */
 static void *handle_statechange(struct statechange *sc)
 {
 	struct ao2_iterator i;
@@ -9862,9 +9904,16 @@ static void *handle_statechange(struct statechange *sc)
 	ast_log(LOG_DEBUG, "---PUBLISH: Handling device state changes \n");
 	i = ao2_iterator_init(devstate_publishers, 0);
 	while ((p = ao2_iterator_next(&i))) {
-		AST_LIST_TRAVERSE(&p->filters, curfilter, next) {
-			if (!strncmp(curfilter->criteria, sc->dev, strlen(curfilter->criteria))) {
-				sip_devicestate_publish(p, sc);
+		ast_log(LOG_DEBUG, "*** Checking publisher %s\n", p->name);
+		if (&p->filters == NULL) {
+			ast_log(LOG_DEBUG, "   *** No filters for %s\n", p->name);
+			sip_devicestate_publish(p, sc);
+		} else {
+			AST_LIST_TRAVERSE(&p->filters, curfilter, next) {
+				ast_log(LOG_DEBUG, "   *** Comparing -%s- with device -%s-\n", curfilter->criteria, sc->dev);
+				if (!strncasecmp(curfilter->criteria, sc->dev, strlen(curfilter->criteria))) {
+					sip_devicestate_publish(p, sc);
+				}
 			}
 		}
 		ao2_ref(p, -1);
@@ -19168,6 +19217,7 @@ static void sip_pres_unsubscribe(struct sip_subscription_pres *pres)
 /*! \brief Destroy presence subscription object */
 static void sip_subscribe_pres_destroy(struct sip_subscription_pres *pres)
 {
+	/* The question here is if this ever really happens */
 	if (pres->call) {
 		sip_pres_unsubscribe(pres);
 		/* We need to know if we're doing this because of unload/shutdown of chan_sip or if the hint is just not
@@ -19558,9 +19608,8 @@ static void publisher_destructor_cb(void *data)
 }
 
 static struct sip_publisher *sip_publisher_init(const char *name, const char *host,
-		const char *domain, char* filter)
+		const char *domain, char *filter)
 {
-	struct pubsub_filter *filter_head;
 	struct sip_publisher *publisher = ao2_alloc(sizeof(*publisher), publisher_destructor_cb);
 
 	if (!publisher) {
@@ -19572,34 +19621,58 @@ static struct sip_publisher *sip_publisher_init(const char *name, const char *ho
 		return NULL;
 	}
 	if (name) {
-		ast_log(LOG_DEBUG, "Setting name to %s\n", name);
+		ast_log(LOG_DEBUG, " Publisher: name %s\n", name);
 		ast_string_field_set(publisher, name, name);
 	}
 	if (host) {
 		ast_string_field_set(publisher, host, host);
-		ast_log(LOG_WARNING, "Setting host\n");
+		ast_log(LOG_DEBUG, " Publisher: %s host %s\n", name, host);
 	}
 	if (domain) {
 		ast_string_field_set(publisher, domain, domain);
-		ast_log(LOG_WARNING, "Setting domain\n");
+		ast_log(LOG_DEBUG, " Publisher: %s domain %s\n", name, domain);
 	}
 
-	if (!(filter_head = ast_calloc(1, sizeof(*filter_head)))) {
-		return NULL;
-	}
-	filter_head->criteria = filter;
-	AST_LIST_HEAD_SET_NOLOCK(&publisher->filters, filter_head);
-	while(strchr(filter, ',')) {
-		*filter++ = '\0';
-		struct pubsub_filter *next_filter;
-		if (!(next_filter = ast_calloc(1, sizeof(*filter_head)))) {
-			return NULL;
+	if (!ast_strlen_zero(filter)) {
+		char *nextfilter = filter;
+
+		while(nextfilter) {
+			struct pubsub_filter *newfilter;
+			/* First, cut off string if needed */
+			nextfilter = strchr(nextfilter, ',');
+			if (nextfilter) {
+				*nextfilter++ = '\0';
+			}
+			if (!(newfilter = ast_calloc(1, sizeof(*newfilter)))) {
+				ast_log(LOG_ERROR, "Failed to allocate data for filter %s\n", filter);
+				return NULL;
+			}
+			ast_log(LOG_DEBUG, " Publisher: %s - Adding filter %s\n", publisher->name, filter);
+			ast_copy_string(newfilter->criteria, ast_skip_blanks(filter), sizeof(newfilter->criteria));
+
+			if (&publisher->filters == NULL) {
+				AST_LIST_HEAD_SET_NOLOCK(&publisher->filters, newfilter);
+			} else {
+				AST_LIST_INSERT_TAIL(&publisher->filters, newfilter, next);
+			}
 		}
-		next_filter->criteria = ast_skip_blanks(filter);
-		AST_LIST_INSERT_TAIL(&publisher->filters, next_filter, next);
 	}
 
 	return publisher;
+}
+
+static int pubdev_hash_cb(const void *obj, const int flags)
+{
+	const struct sip_published_device *device = obj;
+	ast_log(LOG_DEBUG, "--- XXX Here I am \n");
+	return ast_str_case_hash(device->name);
+}
+
+static int pubdev_cmp_cb(void *obj, void *arg, int flags)
+{
+	const struct sip_published_device *device = obj, *device2 = arg;
+	ast_log(LOG_DEBUG, "--- XXX Here I am \n");
+	return !strcasecmp(device->name, device2->name) ? CMP_MATCH | CMP_STOP : 0;
 }
 
 static int publisher_hash_cb(const void *obj, const int flags)
@@ -19633,9 +19706,10 @@ static int presence_load_config(struct ast_config *pcfg)
 		char* domain = NULL;
 		char* filter = NULL;
 		if (!strcasecmp(cat, "general")) {
-					continue;
+			continue;
 		}
 
+		ast_log(LOG_DEBUG, "Presence: Found category %s \n", cat);
 		for (v = ast_variable_browse(pcfg, cat); v; v = v->next) {
 			if (!strcasecmp(v->name, "type")) {
 				type = ast_strdupa(v->value);
@@ -20975,6 +21049,7 @@ static int load_module(void)
 
 	/* Initialise structure for state publishers */
 	devstate_publishers= ao2_container_alloc(11, publisher_hash_cb, publisher_cmp_cb);
+	pub_dev = ao2_container_alloc(11, pubdev_hash_cb, pubdev_cmp_cb);
 
 	if (!(sched = sched_context_create())) {
 		ast_log(LOG_ERROR, "Unable to create scheduler context\n");
