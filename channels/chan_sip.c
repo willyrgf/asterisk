@@ -19894,6 +19894,10 @@ static int presence_load_config(struct ast_config *pcfg)
 			continue;
 		}
 		if (!strcasecmp(type, "presence")) {
+			if (!can_parse_xml) {
+				ast_log(LOG_ERROR, "Trying to publish device state to %s, but cannot parse XML!\n", name);
+				continue;
+			}
 			publisher = sip_publisher_init(name, host, domain, filter);
 			if (publisher) {
 				ao2_link(devstate_publishers, publisher);
