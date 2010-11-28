@@ -237,8 +237,6 @@ static const char config[] = "sip.conf";
 static const char notify_config[] = "sip_notify.conf";
 static const char presence_config[] = "sip_presence.conf";
 
-static const int DEFAULT_PUBLISH_EXPIRES = 3600;
-
 #define RTP 	1
 #define NO_RTP	0
 
@@ -640,6 +638,13 @@ static int global_capability = AST_FORMAT_ULAW | AST_FORMAT_ALAW | AST_FORMAT_GS
 /*! \brief Global list of addresses dynamic peers are not allowed to use */
 static struct ast_ha *global_contact_ha = NULL;
 static int global_dynamic_exclude_static = 0;
+
+/*!
+ * Used to create new entity IDs by ESCs.
+ */
+static int esc_etag_counter = 142857;
+static const int DEFAULT_PUBLISH_EXPIRES = 3600;
+
 
 /*!
  * We use libxml2 in order to parse XML that may appear in the body of a SIP message. Currently,
@@ -1231,6 +1236,7 @@ struct sip_published_device {
 	struct sip_epa_entry *status;
 	char name[AST_MAX_EXTENSION];		/* Device name for entry */
 	char pubname[AST_MAX_EXTENSION];	/* Publisher name */
+	struct sip_epa_entry *epa_entry;	/* EPA Entry for this entry */
 };
 
 static struct ao2_container *pub_dev;
@@ -1854,6 +1860,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, stru
 static void handle_response_refer(struct sip_pvt *p, int resp, char *rest, struct sip_request *req, int seqno);
 static int handle_response_register(struct sip_pvt *p, int resp, char *rest, struct sip_request *req, int seqno);
 static void handle_response_subscribe(struct sip_pvt *p, int resp, const char *rest, struct sip_request *req, int seqno);
+static void handle_response_publish(struct sip_pvt *p, int resp, const char *rest, struct sip_request *req, int seqno);
 static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_request *req, int seqno);
 
 /*----- RTP interface functions */
@@ -1993,6 +2000,16 @@ static const struct epa_static_data *find_static_data(const char * const event_p
 	return backend ? backend->static_data : NULL;
 }
 
+/*! \brief create new unique etag */
+static char *create_new_etag()
+{
+        int new_etag = ast_atomic_fetchadd_int(&esc_etag_counter, +1);
+	static char etagtext[AST_MAX_EXTENSION];
+
+        snprintf(etagtext, sizeof(etagtext), "%d", new_etag);
+	return(etagtext);
+}
+
 static struct sip_epa_entry *create_epa_entry (const char * const event_package, const char * const destination)
 {
 	struct sip_epa_entry *epa_entry;
@@ -2009,6 +2026,7 @@ static struct sip_epa_entry *create_epa_entry (const char * const event_package,
 	epa_entry->static_data = static_data;
 	ast_copy_string(epa_entry->destination, destination, sizeof(epa_entry->destination));
 	return epa_entry;
+
 }
 
 /*! \brief Convert transfer status to string */
@@ -9861,12 +9879,17 @@ static void pubdev_destructor(void *data)
 	ao2_unlink(pub_dev, device);
 }
 
-/*! \brief Generate a PUBLISH request for one server */
+/*! \brief Generate a PUBLISH request for one server 
+
+Manage the list of unique URI's. One for each combination of device and server. Each one
+needs their own publish state.
+*/
 static int sip_devicestate_publish(struct sip_publisher *pres_server, struct statechange *sc)
 {
 	struct sip_published_device *device = NULL;
 	struct ao2_iterator i;
 	int found = FALSE;
+	enum sip_publish_type publish_type;
 
 	if (!pres_server) {
 		ast_log(LOG_ERROR, "??? No presence server. What's up? \n");
@@ -9882,6 +9905,7 @@ static int sip_devicestate_publish(struct sip_publisher *pres_server, struct sta
 			found = TRUE;
 			ast_log(LOG_DEBUG, "*** Found our friend %s in the existing list \n", device->name);
 			/* Do stuff here */
+			publish_type = SIP_PUBLISH_MODIFY;
 		}
 		ao2_ref(device, -1);
 	}
@@ -9898,6 +9922,7 @@ static int sip_devicestate_publish(struct sip_publisher *pres_server, struct sta
 		/* Initiate stuff */
 		ao2_link(pub_dev, device);
 		/* Do stuff here */
+		publish_type = SIP_PUBLISH_INITIAL;
 		ast_log(LOG_DEBUG, "*** Created new publish device for %s\n", sc->dev);
 	}
 	return 0;
@@ -14341,6 +14366,11 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 		   need to hang around for something more "definitive" */
 		if (resp != 100)
 			handle_response_peerpoke(p, resp, req);
+	} else if (sipmethod == SIP_PUBLISH) {
+		/* SIP PUBLISH transcends this morass of doodoo and instead
+ 		we just always call the response handler. Good gravy!
+		*/
+		handle_response_publish(p, resp, rest, req, seqno);
 	} else if (ast_test_flag(&p->flags[0], SIP_OUTGOING)) {
 		switch(resp) {
 		case 100:	/* 100 Trying */
@@ -19387,6 +19417,68 @@ static int __sip_subscribe_pres_do(struct sip_subscription_pres *pres)
 	transmit_invite(pres->call, SIP_SUBSCRIBE, 0, 2, NULL);
 
 	return 0;
+}
+
+/*! \brief Handle responses from PUBLISH request */
+static void handle_response_publish(struct sip_pvt *p, int resp, const char *rest, struct sip_request *req, int seqno)
+{
+	struct sip_epa_entry *epa_entry = p->epa_entry;
+	const char *etag = get_header(req, "Sip-ETag");
+	int needdestroy = FALSE;
+
+	//XXX ast_assert(epa_entry != NULL);
+	if (resp < 200 ) { /* Provisional responses */
+		return;
+	}
+
+	if (resp == 401 || resp == 407) {
+		ast_string_field_set(p, theirtag, NULL);
+		if (p->options) {
+			p->options->auth_type = (resp == 401 ? WWW_AUTH : PROXY_AUTH);
+		}
+		if (p->authtries > 1 || do_proxy_auth(p, req, (resp == 401 ? "WWW-Authenticate" : "Proxy-Authenticate"),
+			(resp == 401 ? "Authorization" : "Proxy-Authorization"), SIP_PUBLISH, 0)) {
+			ast_log(LOG_NOTICE, "Failed to authenticate on PUBLISH to '%s'\n", get_header(&p->initreq, "From"));
+			needdestroy = TRUE;
+			sip_alreadygone(p);
+		}
+		return;
+	}
+
+	if (resp == 501 || resp == 405) {
+		ast_log(LOG_NOTICE, "Server doesn't accept PUBLISH to '%s'\n", get_header(&p->initreq, "From"));
+		needdestroy = TRUE;
+		sip_alreadygone(p);
+		//mark_method_unallowed(&p->allowed_methods, SIP_PUBLISH);
+	}
+
+	if (resp == 200) {
+		p->authtries = 0;
+		/* If I've read section 6, item 6 of RFC 3903 correctly,
+		 * an ESC will only generate a new etag when it sends a 200 OK
+		 */
+		if (!ast_strlen_zero(etag)) {
+			ast_copy_string(epa_entry->entity_tag, etag, sizeof(epa_entry->entity_tag));
+		}
+		/* The nominal case. Everything went well. Everybody is happy.
+		 * Each EPA will have a specific action to take as a result of this
+		 * development, so ... callbacks!
+		 */
+		if (epa_entry->static_data->handle_ok) {
+			epa_entry->static_data->handle_ok(p, req, epa_entry);
+		}
+	} else {
+		/* Rather than try to make individual callbacks for each error
+		 * type, there is just a single error callback. The callback
+		 * can distinguish between error messages and do what it needs to
+		 */
+		if (epa_entry->static_data->handle_error) {
+			epa_entry->static_data->handle_error(p, resp, req, epa_entry);
+		}
+	}
+	if (needdestroy) {
+		ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);
+	}
 }
 
 /* \brief Handle SIP response in SUBSCRIBE transaction */
