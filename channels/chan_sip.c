@@ -7047,6 +7047,8 @@ static int transmit_response_using_temp(ast_string_field callid, struct sockaddr
 		if (ast_string_field_init(p, 512))
 			return -1;
 	}
+	/* Always return to whoever sent it (according to RFC 3261) - makes sure these messages always reach the sender */
+	ast_set_flag(&p->flags[0], SIP_NAT_ALWAYS);
 
 	/* Initialize the bare minimum */
 	p->method = intended_method;
@@ -9874,7 +9876,7 @@ static void dlginfo_handle_publish_error(struct sip_pvt *pvt, const int resp, st
 
 static void dlginfo_epa_destructor(void *data)
 {
-	/* XXX needs fixing???? */
+	/* PINANA XXX needs fixing???? */
         struct sip_epa_entry *epa_entry = data;
         //struct dlginfo_epa_entry *dlginfo_entry = epa_entry->instance_data;
         //ast_free(dlginfo_entry);
@@ -13093,8 +13095,6 @@ static int do_register_auth(struct sip_pvt *p, struct sip_request *req, char *he
 static int do_proxy_auth(struct sip_pvt *p, struct sip_request *req, char *header, char *respheader, int sipmethod, int init)
 {
 	char digest[1024];
-
-		ast_log(LOG_DEBUG, "------ OEJ: Going to authenticate\n");
 
 	if (!p->options && !(p->options = ast_calloc(1, sizeof(*p->options))))
 		return -2;
@@ -19298,7 +19298,9 @@ Basically, send resub with Expiry: 0
 */
 static void sip_pres_unsubscribe(struct sip_subscription_pres *pres)
 {
-	/* XXX OEJ Void nothing nada */
+	/* XXX PINANA Void nothing nada */
+	/* The question here is when we should unsubscribe to anything? 
+		if a hint is removed from the dialplan - will we get a notice???? */
 	return;
 }
 
