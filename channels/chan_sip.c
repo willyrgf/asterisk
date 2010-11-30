@@ -8169,6 +8169,36 @@ static int transmit_invite(struct sip_pvt *p, int sipmethod, int sdp, int init, 
 			add_sdp(&req, p, 1, 0);
 	}
 
+	if (sipmethod == SIP_PUBLISH) {
+		char expires[SIPBUFSIZE];
+
+		if (p->epa_entry && p->epa_entry->static_data) {
+			snprintf(expires, sizeof(expires), "%d", p->expiry);
+			add_header(&req, "Expires", expires);
+			add_header(&req, "Event",p->epa_entry->static_data->name );
+			if (p->epa_entry->publish_type != SIP_PUBLISH_INITIAL) {
+				add_header(&req, "SIP-If-Match", p->epa_entry->entity_tag);
+			}
+			switch (p->epa_entry->static_data->event) {
+			case DIALOG_INFO_XML:
+				snprintf(expires, sizeof(expires), "%d", p->expiry);
+				if (!ast_strlen_zero(p->epa_entry->body)) {
+					add_header(&req, "Content-Type", "application/dialog-info+xml");
+					add_content(&req, p->epa_entry->body);
+				}
+				break;
+				break;
+			/* Trunk: case CALL_COMPLETION: */
+				/* I have moved generic stuff outside of the switch statement */
+			default:
+				break;
+			}
+		} else {
+			ast_log(LOG_ERROR, "PUBLISH request but no data about what to publish??\n");
+			ast_log(LOG_ERROR, "PUBLISH Epa-entry %s\n", p->epa_entry ? "exists" : "is missing from this universe");
+		}
+	}
+
 	if (!p->initreq.headers || init > 2)
 		initialize_initreq(p, &req);
 	p->lastinvite = p->ocseq;
@@ -9943,7 +9973,9 @@ static int sip_devicestate_publish(struct sip_publisher *pres_server, struct sta
 		/* Initiate stuff */
 		ao2_link(pub_dev, device);
 		publish_type = SIP_PUBLISH_INITIAL;
-		if (!(device->epa = ast_calloc(1, sizeof(struct sip_epa_entry)))) {
+		device->epa = create_epa_entry("dialog-info", pres_server->host);
+
+		if (!(device->epa) ) {
 			ast_log(LOG_ERROR, "Cannot allocate sip_epa_entry!\n");
 			return -1;
 		}
@@ -9951,12 +9983,37 @@ static int sip_devicestate_publish(struct sip_publisher *pres_server, struct sta
 		/*Assuming for now that we're sending a full update when we initially create the epa_entry and send the PUBLISH*/
 		presence_build_dialoginfo_xml(body, &maxbytes, 1, ast_devstate_str(sc->state), dlg_id, 1, uri, 0);
 		ast_copy_string(device->epa->body, body, sizeof(device->epa->body));
-		ast_copy_string(device->epa->destination, pres_server->host, sizeof(device->epa->destination));
 		device->epa->publish_type = publish_type;
 		ast_copy_string(device->epa->entity_tag, create_new_etag(), sizeof(device->epa->entity_tag));
 		ast_log(LOG_DEBUG, "*** Created new publish device for %s\n", sc->dev);
 		transmit_publish(device->epa, publish_type, uri);
 		ast_log(LOG_DEBUG, "*** Published update for device %s\n", sc->dev);
+		/* -----------------------------    Current state:
+			PUBLISH sip:huntsville.example.com SIP/2.0
+			Via: SIP/2.0/UDP 192.168.40.12:5060;branch=z9hG4bK2dff39f8;rport
+			From: "asterisk" <sip:olle@192.168.40.12>;tag=as1865d2d6
+			To: <sip:huntsville.example.com>
+			Contact: <sip:olle@192.168.40.12>
+			Call-ID: 16d6841f1105970802a2a5b550da64ad@10.211.55.2
+			CSeq: 102 PUBLISH
+			User-Agent: Asterisk PBX
+			Max-Forwards: 70
+			Date: Tue, 30 Nov 2010 19:17:59 GMT
+			Allow: INVITE, ACK, CANCEL, OPTIONS, BYE, REFER, SUBSCRIBE, NOTIFY, INFO, PUBLISH
+			Supported: replaces
+			Expires: 3600
+			Event: dialog-info
+			Content-Type: application/pidf+xml
+			Content-Length: 229
+
+			<?xml version="1.0"?>
+			<dialog-info xmlns="urn:ietf:params:xml:ns:dialog-info" version="0" state="full" entity="sip:SIP/sippan.bbtele.se@edvina.net">
+			<dialog id="7989a8871aa3b69e081">
+			<state>INUSE</state>
+			</dialog>
+			</dialog-info>
+
+		--------------------------------------- */
 	}
 	return 0;
 }
@@ -19632,7 +19689,7 @@ static int sip_pres_notify_update(struct sip_pvt *dialog, struct sip_request *re
 
 		NOTIFY sip:olle@192.168.40.12 SIP/2.0
 		Via: SIP/2.0/UDP 192.168.20.200:5060;branch=z9hG4bK4d19eadc;rport
-		From: <sip:3000@jarl.webway.se>;tag=as714765a1
+		From: <sip:3000@huntsville.example.com>;tag=as714765a1
 		To: "asterisk" <sip:olle@192.168.40.12>;tag=as0ffc65b2
 		Contact: <sip:rutger@192.168.20.200>
 		Call-ID: 0ef08767032f0f1f37eeb8c770309de7@192.168.40.12
@@ -19645,7 +19702,7 @@ static int sip_pres_notify_update(struct sip_pvt *dialog, struct sip_request *re
 		Content-Length: 207
 
 		<?xml version="1.0"?>
-		<dialog-info xmlns="urn:ietf:params:xml:ns:dialog-info" version="0" state="full" entity="sip:3000@jarl.webway.se">
+		<dialog-info xmlns="urn:ietf:params:xml:ns:dialog-info" version="0" state="full" entity="sip:3000@huntsville.example.com">
 		<dialog id="3000">
 		<state>terminated</state>
 		</dialog>
@@ -19904,10 +19961,14 @@ static int presence_load_config(struct ast_config *pcfg)
 			continue;
 		}
 		if (!strcasecmp(type, "presence")) {
-			if (!can_parse_xml) {
-				ast_log(LOG_ERROR, "Trying to publish device state to %s, but cannot parse XML!\n", name);
-				continue;
-			}
+			/* OEJ: Do we need to parse XML to produce the same stuff as we do in the NOTIFY?
+				We need to parse XML to properly handle incoming notifys instead of
+				the stupid parsing I'm doing now...
+			*/
+			//if (!can_parse_xml) {
+				//ast_log(LOG_ERROR, "Trying to publish device state to %s, but cannot parse XML!\n", name);
+				//continue;
+			//}
 			publisher = sip_publisher_init(name, host, domain, filter);
 			if (publisher) {
 				ao2_link(devstate_publishers, publisher);
