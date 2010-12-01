@@ -1859,6 +1859,7 @@ static int sip_pres_notify_update(struct sip_pvt *dialog, struct sip_request *re
 static struct ao2_container *delete_devstate_publishers(void);
 static struct ao2_container *delete_published_devices(void);
 static void dlginfo_handle_publish_error(struct sip_pvt *pvt, const int resp, struct sip_request *req, struct sip_epa_entry *epa_entry);
+static void dlginfo_handle_publish_ok(struct sip_pvt *pvt, struct sip_request *req, struct sip_epa_entry *epa_entry);
 static void dlginfo_epa_destructor(void *data);
 
 
@@ -1915,6 +1916,7 @@ static const struct ast_channel_tech sip_tech_info = {
 static const struct epa_static_data dlginfo_epa_static_data  = {
 	.event = DIALOG_INFO_XML,
 	.name = "dialog",
+	.handle_ok = dlginfo_handle_publish_ok,
 	.handle_error = dlginfo_handle_publish_error,
 	.destructor = dlginfo_epa_destructor,
 };
@@ -9901,6 +9903,12 @@ static void dlginfo_handle_publish_error(struct sip_pvt *pvt, const int resp, st
 {
 	/* Do we really care of errors here? */
 	ast_log(LOG_DEBUG, "-- %s : PUBLISH error response code %d\n", pvt->callid, resp);
+	return;
+}
+
+/*! \brief Handle a 200 OK to a published dialog-info */
+static void dlginfo_handle_publish_ok(struct sip_pvt *pvt, struct sip_request *req, struct sip_epa_entry *epa_entry)
+{
 	return;
 }
 
