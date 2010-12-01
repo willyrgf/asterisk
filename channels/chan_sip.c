@@ -1914,7 +1914,7 @@ static const struct ast_channel_tech sip_tech_info = {
 /*! \brief EPA declaration of dialog-info publish notifications */
 static const struct epa_static_data dlginfo_epa_static_data  = {
 	.event = DIALOG_INFO_XML,
-	.name = "dialog-info",
+	.name = "dialog",
 	.handle_error = dlginfo_handle_publish_error,
 	.destructor = dlginfo_epa_destructor,
 };
@@ -6983,7 +6983,7 @@ static int reqprep(struct sip_request *req, struct sip_pvt *p, int sipmethod, in
 		add_header(req, "To", of);
 	}
 	/* Do not add Contact for MESSAGE, BYE and Cancel requests */
-	if (sipmethod != SIP_BYE && sipmethod != SIP_CANCEL && sipmethod != SIP_MESSAGE)
+	if (sipmethod != SIP_BYE && sipmethod != SIP_CANCEL && sipmethod != SIP_MESSAGE && sipmethod != SIP_PUBLISH)
 		add_header(req, "Contact", p->our_contact);
 
 	copy_header(req, orig, "Call-ID");
@@ -8118,7 +8118,7 @@ static int transmit_invite(struct sip_pvt *p, int sipmethod, int sdp, int init, 
 
 	add_header(&req, "Allow", ALLOWED_METHODS);
 	add_header(&req, "Supported", SUPPORTED_EXTENSIONS);
-	if (p->options && p->options->addsipheaders && p->owner) {
+	if (sipmethod != SIP_PUBLISH && p->options && p->options->addsipheaders && p->owner) {
 		struct ast_channel *chan = p->owner; /* The owner channel */
 		struct varshead *headp;
 	
