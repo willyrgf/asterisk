@@ -8081,7 +8081,7 @@ static int transmit_invite(struct sip_pvt *p, int sipmethod, int sdp, int init, 
 		p->invite_branch = p->branch;
 		build_via(p);
 		if (init > 1)
-			initreqprep(&req, p, sipmethod, NULL);
+			initreqprep(&req, p, sipmethod, explicit_uri);
 		else
 			reqprep(&req, p, sipmethod, 0, 0);	
 	} else
@@ -9979,24 +9979,23 @@ static int sip_devicestate_publish(struct sip_publisher *pres_server, struct sta
 			ast_log(LOG_ERROR, "Cannot allocate sip_published_device!\n");
 			return -1;
 		}
+		device->epa = create_epa_entry("dialog", pres_server->host);
+		if (!(device->epa) ) {
+			ast_log(LOG_ERROR, "Cannot allocate sip_epa_entry!\n");
+			return -1;
+		}
 		ast_copy_string(device->name, sc->dev, sizeof(device->name));
 		ast_copy_string(device->pubname, pres_server->name, sizeof(device->pubname));
 		/* Initiate stuff */
 		ao2_link(pub_dev, device);
 		publish_type = SIP_PUBLISH_INITIAL;
-		device->epa = create_epa_entry("dialog", pres_server->host);
-
-		if (!(device->epa) ) {
-			ast_log(LOG_ERROR, "Cannot allocate sip_epa_entry!\n");
-			return -1;
-		}
 		generate_random_string(dlg_id, sizeof(dlg_id));
 		/*Assuming for now that we're sending a full update when we initially create the epa_entry and send the PUBLISH*/
 		presence_build_dialoginfo_xml(body, &maxbytes, 1, ast_devstate_str(sc->state), dlg_id, 1, uri, 0);
 		ast_copy_string(device->epa->body, body, sizeof(device->epa->body));
 		device->epa->publish_type = publish_type;
 		ast_copy_string(device->epa->entity_tag, create_new_etag(), sizeof(device->epa->entity_tag));
-		ast_log(LOG_DEBUG, "*** Created new publish device for %s\n", sc->dev);
+		ast_log(LOG_DEBUG, "*** Created new publish device for %s with URI %s\n", sc->dev, uri);
 		transmit_publish(device->epa, publish_type, uri);
 		ast_log(LOG_DEBUG, "*** Published update for device %s\n", sc->dev);
 		/* -----------------------------    Current state:
