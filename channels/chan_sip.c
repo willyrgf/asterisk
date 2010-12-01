@@ -1191,6 +1191,14 @@ struct statechange {
 	char dev[0];
 };
 
+/*! \brief PUBLISH transaction states */
+enum publish_state {
+	INITIATED,	/*!< New state initiated */
+	REQUEST_SENT,	/*!< Packet composed, request to transmit done */
+	TERMINATED,	/*!< Transaction completed */
+};
+	
+
 /*! Structure for publish bodies */
 struct sip_epa_entry {
 	/*!
@@ -1229,6 +1237,12 @@ struct sip_epa_entry {
 	 * require its own instance-specific data.
 	 */
 	void *instance_data;
+	/*!
+	 * According to the RFC, we can only have ONE outstanding
+	 * request at a time. We need to know if we have an outstanding
+	 * PVT that's waiting for 200 OK. 
+	 */
+	enum publish_state epa_state;
 };
 
 /*! Structure that we have one per device for keeping control of PUBLISH states */
@@ -1236,6 +1250,7 @@ struct sip_published_device {
 	char name[AST_MAX_EXTENSION];		/*!< Device name for entry */
 	char pubname[AST_MAX_EXTENSION];	/*!< Publisher name */
 	int laststate;				/*!< Last known state */
+	int nextstate;				/*!< Next known state */
 	struct sip_epa_entry *epa;		/*!< EPA Entry for this entry */
 };
 
@@ -8205,6 +8220,9 @@ static int transmit_invite(struct sip_pvt *p, int sipmethod, int sdp, int init, 
 	if (!p->initreq.headers || init > 2)
 		initialize_initreq(p, &req);
 	p->lastinvite = p->ocseq;
+	if (sipmethod == SIP_PUBLISH && p->epa_entry) {
+		p->epa_entry->epa_state = REQUEST_SENT;
+	}
 	return send_request(p, &req, init ? XMIT_CRITICAL : XMIT_RELIABLE, p->ocseq);
 }
 
@@ -9899,26 +9917,49 @@ static int notify_extenstate_update(char *context, char* exten, int state, void 
 	return 0;
 }
 
+
+/*! \brief If there's a state change DURING a PUBLISH transaction, we need to send a new PUBLISH as 
+	soon as the previous one is completed. The RFC states only one PUBLISh transaction at a time
+	from one EPA to the same URI.
+*/
+static void dlginfo_check_nextstatus(struct sip_epa_entry *epa_entry)
+{
+	struct sip_published_device *device = (struct sip_published_device *) epa_entry->instance_data;
+	if (device->nextstate != -1) {
+		/* Add to the device change thread queue */
+		if (option_debug > 2) {
+			ast_log(LOG_DEBUG, "Device %s have nextstate, adding to queue\n", device->name);
+		}
+		//XXX OEJ PINANA _ This is disabled as it generates strange segfaults
+		//sip_devicestate_cb(device->name, device->nextstate, NULL);
+		device->nextstate = -1;	/* Reset next state change */
+	}
+}
+
+
 /*! \brief Handle errors when publishing dialog-info stuff */
 static void dlginfo_handle_publish_error(struct sip_pvt *pvt, const int resp, struct sip_request *req, struct sip_epa_entry *epa_entry)
 {
 	/* Do we really care of errors here? */
 	ast_log(LOG_DEBUG, "-- %s : PUBLISH error response code %d\n", pvt->callid, resp);
+	dlginfo_check_nextstatus(epa_entry);
 	return;
 }
 
 /*! \brief Handle a 200 OK to a published dialog-info */
 static void dlginfo_handle_publish_ok(struct sip_pvt *pvt, struct sip_request *req, struct sip_epa_entry *epa_entry)
 {
-	char *etag = get_header(req, "SIP-ETag");
+	const char *etag = get_header(req, "SIP-ETag");
 	ast_copy_string(epa_entry->entity_tag, etag, sizeof(epa_entry->entity_tag));
+	dlginfo_check_nextstatus(epa_entry);
 	return;
 }
 
 static void dlginfo_epa_destructor(void *data)
 {
 	/* PINANA XXX needs fixing???? */
-        //struct sip_epa_entry *epa_entry = data;
+        struct sip_epa_entry *epa_entry = data;
+	ast_log(LOG_DEBUG, "*** Destroying EPA entry \n");
         //struct dlginfo_epa_entry *dlginfo_entry = epa_entry->instance_data;
         //ast_free(dlginfo_entry);
 }
@@ -9955,7 +9996,7 @@ static int sip_devicestate_publish(struct sip_publisher *pres_server, struct sta
 	i = ao2_iterator_init(pub_dev, 0);
 	while ((device = ao2_iterator_next(&i))) {
 		ast_log(LOG_DEBUG, "   PUBLISH: Comparing %s and device %s\n", device->name, sc->dev);
-		if (!strcasecmp(device->pubname, pres_server->name) && !strcasecmp(device->name, sc->dev)) {
+		if (!found && !strcasecmp(device->pubname, pres_server->name) && !strcasecmp(device->name, sc->dev)) {
 			//Most or all of this code duplication will go away when we start using libxml2
 			char uri[SIPBUFSIZE];
 			char body[SIPBUFSIZE * 2];
@@ -9965,15 +10006,26 @@ static int sip_devicestate_publish(struct sip_publisher *pres_server, struct sta
 			found = TRUE;
 
 			ast_log(LOG_DEBUG, "*** Found our friend %s in the existing list \n", device->name);
-			if (device->laststate == sc->state) {
+			if (device->epa && device->epa->epa_state != TERMINATED) {
+				/* We already have a PUBLISH transaction. Let's skip this or put it on the queue */
+				if (device->laststate != sc->state) {
+					ast_log(LOG_DEBUG, "--- We have an outstanding request for %s. Setting nextstate and kipping.\n", device->name);
+					device->nextstate = sc->state;
+				}
+			} else if (device->laststate == sc->state) {
 				ast_log(LOG_DEBUG, "--- No change, skipping PUBLISH for %s\n", device->name);
 			} else {
+				device->laststate = sc->state;
+				device->nextstate = -1;
 				generate_random_string(dlg_id, sizeof(dlg_id));
-				ast_log(LOG_WARNING, "Device state is %d, %s\n", sc->state, ast_devstate_str(sc->state));
+				if (option_debug > 2) {
+					ast_log(LOG_DEBUG, "New device state for %s is %d, %s\n", device->name, sc->state, ast_devstate_str(sc->state));
+				}
 				snprintf(uri, sizeof(uri), "sip:%s@%s", sc->dev, pres_server->domain);
 				presence_build_dialoginfo_xml(body, &maxbytes, 1, ast_devstate_str(sc->state), dlg_id, 1, uri, 0);
 				ast_copy_string(device->epa->body, body, sizeof(device->epa->body));
 				publish_type = SIP_PUBLISH_MODIFY;
+				device->epa->epa_state = INITIATED;
 				transmit_publish(device->epa, publish_type, uri);
 				/* Do stuff here */
 			}
@@ -10003,6 +10055,7 @@ static int sip_devicestate_publish(struct sip_publisher *pres_server, struct sta
 			ast_log(LOG_ERROR, "Cannot allocate sip_epa_entry!\n");
 			return -1;
 		}
+		device->epa->instance_data = (void *) device;
 		ast_copy_string(device->name, sc->dev, sizeof(device->name));
 		ast_copy_string(device->pubname, pres_server->name, sizeof(device->pubname));
 		/* Initiate stuff */
@@ -10015,6 +10068,7 @@ static int sip_devicestate_publish(struct sip_publisher *pres_server, struct sta
 		device->epa->publish_type = publish_type;
 		ast_copy_string(device->epa->entity_tag, create_new_etag(), sizeof(device->epa->entity_tag));
 		ast_log(LOG_DEBUG, "*** Created new publish device for %s with URI %s\n", sc->dev, uri);
+		device->epa->epa_state = INITIATED;
 		transmit_publish(device->epa, publish_type, uri);
 		ast_log(LOG_DEBUG, "*** Published update for device %s\n", sc->dev);
 		/* -----------------------------    Current state:
@@ -10122,7 +10176,9 @@ static void *device_state_thread(void *data)
 static int sip_devicestate_cb(const char *dev, int state, void *ign)
 {
 	struct statechange *sc;
-	ast_log(LOG_DEBUG, "---PUBLISH: Got state change for %s - do we care? Really? Oh, I did not know. \n", dev);
+	if (option_debug > 2) {
+		ast_log(LOG_DEBUG, "---PUBLISH: Got state change for %s - Queing up\n", dev);
+	}
 
 	if (!(sc = ast_calloc(1, sizeof(*sc) + strlen(dev) + 1))) {
 		return 0;
@@ -19559,7 +19615,9 @@ static int __sip_subscribe_pres_do(struct sip_subscription_pres *pres)
 	return 0;
 }
 
-/*! \brief Handle responses from PUBLISH request */
+/*! \brief Handle responses from PUBLISH request 
+	Todo: We should handle 503 and 491 gracefully and retry after a while unless we have a nextstate (dialoginfo)
+*/
 static void handle_response_publish(struct sip_pvt *p, int resp, const char *rest, struct sip_request *req, int seqno)
 {
 	struct sip_epa_entry *epa_entry = p->epa_entry;
@@ -19570,6 +19628,11 @@ static void handle_response_publish(struct sip_pvt *p, int resp, const char *res
 	if (resp < 200 ) { /* Provisional responses */
 		return;
 	}
+
+	if (!epa_entry) {
+		ast_log(LOG_ERROR, "No epa_entry on a PUBLISH? Something's broken...\n");
+	}
+	epa_entry->epa_state = TERMINATED;	/* Transaction is over and gone */
 
 	if (resp == 401 || resp == 407) {
 		ast_string_field_set(p, theirtag, NULL);
@@ -19607,6 +19670,8 @@ static void handle_response_publish(struct sip_pvt *p, int resp, const char *res
 		if (epa_entry->static_data->handle_ok) {
 			epa_entry->static_data->handle_ok(p, req, epa_entry);
 		}
+		/*XXX maybe Check if we have another state change waiting */
+		needdestroy = TRUE;
 	} else {
 		/* Rather than try to make individual callbacks for each error
 		 * type, there is just a single error callback. The callback
@@ -19615,10 +19680,12 @@ static void handle_response_publish(struct sip_pvt *p, int resp, const char *res
 		if (epa_entry->static_data->handle_error) {
 			epa_entry->static_data->handle_error(p, resp, req, epa_entry);
 		}
+		needdestroy = TRUE;
 	}
 	if (needdestroy) {
 		ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);
 	}
+	
 }
 
 /* \brief Handle SIP response in SUBSCRIBE transaction */
