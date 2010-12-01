@@ -102,7 +102,7 @@ const char *devstate2str(enum ast_device_state devstate)
 /* Parseable */
 const char *ast_devstate_str(enum ast_device_state state)
 {
-        return devstatestring[state][1];
+        return devstatestring[state - 1][1];
 }
 /*! \brief Find out if device is active in a call or not 
 	\note find channels with the device's name in it
