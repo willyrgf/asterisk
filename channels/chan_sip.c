@@ -9953,9 +9953,9 @@ static int sip_devicestate_publish(struct sip_publisher *pres_server, struct sta
 			ast_log(LOG_DEBUG, "*** Found our friend %s in the existing list \n", device->name);
 			generate_random_string(dlg_id, sizeof(dlg_id));
 			ast_log(LOG_WARNING, "Device state is %d, %s\n", sc->state, ast_devstate_str(sc->state));
+			snprintf(uri, sizeof(uri), "sip:%s@%s", sc->dev, pres_server->domain);
 			presence_build_dialoginfo_xml(body, &maxbytes, 1, ast_devstate_str(sc->state), dlg_id, 1, uri, 0);
 			ast_copy_string(device->epa->body, body, sizeof(device->epa->body));
-			snprintf(uri, sizeof(uri), "sip:%s@%s", sc->dev, pres_server->domain);
 			transmit_publish(device->epa, publish_type, uri);
 			/* Do stuff here */
 			publish_type = SIP_PUBLISH_MODIFY;
