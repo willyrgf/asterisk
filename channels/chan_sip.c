@@ -9944,8 +9944,12 @@ static int sip_devicestate_publish(struct sip_publisher *pres_server, struct sta
 	while ((device = ao2_iterator_next(&i))) {
 		ast_log(LOG_DEBUG, "   PUBLISH: Comparing %s and device %s\n", device->name, sc->dev);
 		if (!strcasecmp(device->pubname, pres_server->name) && !strcasecmp(device->name, sc->dev)) {
+			char uri[SIPBUFSIZE];
 			found = TRUE;
 			ast_log(LOG_DEBUG, "*** Found our friend %s in the existing list \n", device->name);
+			//This is the wrong thing to do here because the dialog id hasn't changed...
+			snprintf(uri, sizeof(uri), "sip:%s@%s", sc->dev, pres_server->domain);
+			transmit_publish(device->epa, publish_type, uri);
 			/* Do stuff here */
 			publish_type = SIP_PUBLISH_MODIFY;
 		}
