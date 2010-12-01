@@ -9909,6 +9909,8 @@ static void dlginfo_handle_publish_error(struct sip_pvt *pvt, const int resp, st
 /*! \brief Handle a 200 OK to a published dialog-info */
 static void dlginfo_handle_publish_ok(struct sip_pvt *pvt, struct sip_request *req, struct sip_epa_entry *epa_entry)
 {
+	char *etag = get_header(req, "SIP-ETag");
+	ast_copy_string(epa_entry->entity_tag, etag, sizeof(epa_entry->entity_tag));
 	return;
 }
 
