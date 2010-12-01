@@ -9984,7 +9984,7 @@ static int sip_devicestate_publish(struct sip_publisher *pres_server, struct sta
 		/* Initiate stuff */
 		ao2_link(pub_dev, device);
 		publish_type = SIP_PUBLISH_INITIAL;
-		device->epa = create_epa_entry("dialog-info", pres_server->host);
+		device->epa = create_epa_entry("dialog", pres_server->host);
 
 		if (!(device->epa) ) {
 			ast_log(LOG_ERROR, "Cannot allocate sip_epa_entry!\n");
