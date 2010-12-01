@@ -9930,8 +9930,8 @@ static void dlginfo_check_nextstatus(struct sip_epa_entry *epa_entry)
 		if (option_debug > 2) {
 			ast_log(LOG_DEBUG, "Device %s have nextstate, adding to queue\n", device->name);
 		}
-		//XXX OEJ PINANA _ This is disabled as it generates strange segfaults
-		//sip_devicestate_cb(device->name, device->nextstate, NULL);
+		
+		sip_devicestate_cb(device->name, device->nextstate, NULL);
 		device->nextstate = -1;	/* Reset next state change */
 	}
 }
@@ -10010,7 +10010,7 @@ static int sip_devicestate_publish(struct sip_publisher *pres_server, struct sta
 				/* We already have a PUBLISH transaction. Let's skip this or put it on the queue */
 				if (device->laststate != sc->state) {
 					ast_log(LOG_DEBUG, "--- We have an outstanding request for %s. Setting nextstate and kipping.\n", device->name);
-					device->nextstate = sc->state;
+					device->nextstate = sc->state;	
 				}
 			} else if (device->laststate == sc->state) {
 				ast_log(LOG_DEBUG, "--- No change, skipping PUBLISH for %s\n", device->name);
@@ -10050,6 +10050,7 @@ static int sip_devicestate_publish(struct sip_publisher *pres_server, struct sta
 			return -1;
 		}
 		device->laststate = sc->state;
+		device->nextstate = -1;
 		device->epa = create_epa_entry("dialog", pres_server->host);
 		if (!(device->epa) ) {
 			ast_log(LOG_ERROR, "Cannot allocate sip_epa_entry!\n");
