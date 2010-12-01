@@ -1233,9 +1233,10 @@ struct sip_epa_entry {
 
 /*! Structure that we have one per device for keeping control of PUBLISH states */
 struct sip_published_device {
-	char name[AST_MAX_EXTENSION];		/* Device name for entry */
-	char pubname[AST_MAX_EXTENSION];	/* Publisher name */
-	struct sip_epa_entry *epa;		/* EPA Entry for this entry */
+	char name[AST_MAX_EXTENSION];		/*!< Device name for entry */
+	char pubname[AST_MAX_EXTENSION];	/*!< Publisher name */
+	int laststate;				/*!< Last known state */
+	struct sip_epa_entry *epa;		/*!< EPA Entry for this entry */
 };
 
 static struct ao2_container *pub_dev = NULL;
@@ -9917,7 +9918,7 @@ static void dlginfo_handle_publish_ok(struct sip_pvt *pvt, struct sip_request *r
 static void dlginfo_epa_destructor(void *data)
 {
 	/* PINANA XXX needs fixing???? */
-        struct sip_epa_entry *epa_entry = data;
+        //struct sip_epa_entry *epa_entry = data;
         //struct dlginfo_epa_entry *dlginfo_entry = epa_entry->instance_data;
         //ast_free(dlginfo_entry);
 }
@@ -9927,6 +9928,7 @@ static void dlginfo_epa_destructor(void *data)
 static void pubdev_destructor(void *data)
 {
 	struct sip_published_device *device = data;
+	ast_log(LOG_DEBUG, "----- Destroying device %s\n", device->name);
 	ast_free(device->epa);
 	ao2_unlink(pub_dev, device);
 }
@@ -9959,16 +9961,22 @@ static int sip_devicestate_publish(struct sip_publisher *pres_server, struct sta
 			char body[SIPBUFSIZE * 2];
 			char dlg_id[20];
 			size_t maxbytes = sizeof(body);
+
 			found = TRUE;
+
 			ast_log(LOG_DEBUG, "*** Found our friend %s in the existing list \n", device->name);
-			generate_random_string(dlg_id, sizeof(dlg_id));
-			ast_log(LOG_WARNING, "Device state is %d, %s\n", sc->state, ast_devstate_str(sc->state));
-			snprintf(uri, sizeof(uri), "sip:%s@%s", sc->dev, pres_server->domain);
-			presence_build_dialoginfo_xml(body, &maxbytes, 1, ast_devstate_str(sc->state), dlg_id, 1, uri, 0);
-			ast_copy_string(device->epa->body, body, sizeof(device->epa->body));
-			transmit_publish(device->epa, publish_type, uri);
-			/* Do stuff here */
-			publish_type = SIP_PUBLISH_MODIFY;
+			if (device->laststate == sc->state) {
+				ast_log(LOG_DEBUG, "--- No change, skipping PUBLISH for %s\n", device->name);
+			} else {
+				generate_random_string(dlg_id, sizeof(dlg_id));
+				ast_log(LOG_WARNING, "Device state is %d, %s\n", sc->state, ast_devstate_str(sc->state));
+				snprintf(uri, sizeof(uri), "sip:%s@%s", sc->dev, pres_server->domain);
+				presence_build_dialoginfo_xml(body, &maxbytes, 1, ast_devstate_str(sc->state), dlg_id, 1, uri, 0);
+				ast_copy_string(device->epa->body, body, sizeof(device->epa->body));
+				publish_type = SIP_PUBLISH_MODIFY;
+				transmit_publish(device->epa, publish_type, uri);
+				/* Do stuff here */
+			}
 		}
 		ao2_ref(device, -1);
 	}
@@ -9989,6 +9997,7 @@ static int sip_devicestate_publish(struct sip_publisher *pres_server, struct sta
 			ast_log(LOG_ERROR, "Cannot allocate sip_published_device!\n");
 			return -1;
 		}
+		device->laststate = sc->state;
 		device->epa = create_epa_entry("dialog", pres_server->host);
 		if (!(device->epa) ) {
 			ast_log(LOG_ERROR, "Cannot allocate sip_epa_entry!\n");
