@@ -1749,17 +1749,17 @@ struct ast_group_info {
         AST_LIST_ENTRY(ast_group_info) group_list;   
 };
 
-/* for the sake of asynchronous filestream playing, used (at least at first) in app_queue,
-we include this definition here so both app_queue and file.c can see it. it will be contained
-in a channel datastore */
+/*! \brief Asynchronous filestream playing playlist
 
+Used (at least at first) in app_queue - in the ast_queue_streamfile_info channel datastore 
+*/
 struct ast_queue_streamfile_name {
 	char *filename;
 	AST_LIST_ENTRY(ast_queue_streamfile_name) list;
 };
 
+/*! \brief Information data about background playing of prompts */
 struct ast_queue_streamfile_info {
-	void (*endHandler)(void *data); /* a func ptr to the handler that will do what needs doing when the streaming of a soundfile is finished */
 	void (*digitHandler)(void *data, char digit); /* a func ptr to the handler that will do what needs doing when the streaming of a soundfile is finished */
 	struct queue_ent *qe;
 	AST_LIST_HEAD(,ast_queue_streamfile_name) flist;   /* a list of other sound files that need to be played in sequence */

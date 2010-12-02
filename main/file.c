@@ -702,16 +702,6 @@ static struct ast_frame *read_frame(struct ast_filestream *s, int *whennext)
 	}
 
 	if (!(fr = s->fmt->read(s, whennext))) {
-		struct ast_datastore *datastore;
-		/* here is the ideal spot to put code to take an action
-		when we have reached the end of the file */
-		/* look up the datastore and the play_finished struct, and set appropriate values */
-		if ((datastore = ast_channel_datastore_find(s->owner, &queue_ds_sound_ending, NULL))) {
-			struct ast_queue_streamfile_info *aqsi = datastore->data; /* what a waste! I have to dive into the data to know where to pass it.*/
-			if (aqsi) {
-				(*aqsi->endHandler)(datastore->data);
-			}
-		}
 		return NULL;
 	}
 
@@ -755,7 +745,6 @@ static enum fsread_res ast_readaudio_callback(struct ast_filestream *s)
 		}
 
 		fr = read_frame(s, &whennext);
-		ast_log(LOG_ERROR, "Read a frame on channel %s\n", s->owner->name);
 
 		if (!fr /* stream complete */ || ast_write(s->owner, fr) /* error writing */) {
 			if (fr) {
@@ -764,7 +753,6 @@ static enum fsread_res ast_readaudio_callback(struct ast_filestream *s)
 			}
 			goto return_failure;
 		} 
-		ast_log(LOG_ERROR, "and wrote it, too!\n");
 
 		if (fr) {
 			ast_frfree(fr);
@@ -782,11 +770,9 @@ static enum fsread_res ast_readaudio_callback(struct ast_filestream *s)
 				factor = ((float) rate) / ((float) 8000.0); 
 				dahdi_timer_samples = (int) ( ((float) dahdi_timer_samples) / factor );
 			}
-			ast_log(LOG_ERROR,"About to call ast_settimeout with %d for ast_fsread_audio\n", dahdi_timer_samples);
 			ast_settimeout(s->owner, dahdi_timer_samples, ast_fsread_audio, s);
 		} else {
 #endif		
-			ast_log(LOG_ERROR,"About to call ast_sched_add  with %d for ast_fsread_audio\n", whennext / (ast_format_rate(s->fmt->format) / 1000));
 			s->owner->streamid = ast_sched_add(s->owner->sched, 
 				whennext / (ast_format_rate(s->fmt->format) / 1000), ast_fsread_audio, s);
 #ifdef HAVE_DAHDI
@@ -798,9 +784,12 @@ static enum fsread_res ast_readaudio_callback(struct ast_filestream *s)
 	return FSREAD_SUCCESS_SCHED;
 
 return_failure:
+	if (option_debug > 1) {
+		ast_log(LOG_DEBUG, "DEBUG: return_failure called. Giving up. !\n");
+	}
+
 	s->owner->streamid = -1;
 #ifdef HAVE_DAHDI
-	ast_log(LOG_ERROR, "Calling ast_settimeout(%s, 0, NULL, NULL);\n", s->owner->name);
 	ast_settimeout(s->owner, 0, NULL, NULL);
 #endif			
 	return FSREAD_FAILURE;
