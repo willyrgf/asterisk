@@ -381,6 +381,13 @@ int ast_extension_state_del(int id, ast_state_cb_type callback);
 int ast_get_hint(char *hint, int maxlen, char *name, int maxnamelen, 
 	struct ast_channel *c, const char *context, const char *exten);
 
+/*! \brief  ast_hint_reinit_provider: Reinitialize hints for a provider after provider
+ *	was added
+ *
+ * \param provider the provider identifier
+ */
+void ast_hint_reinit_provider(const char *provider);
+
 /*!
  * \brief Determine whether an extension exists
  *
