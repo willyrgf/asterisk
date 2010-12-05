@@ -19681,7 +19681,7 @@ static int __sip_subscribe_pres_do(struct sip_subscription_pres *pres)
 	pres->call->subscribed = DIALOG_INFO_XML;
 
 	/* Actually send the packet */
-	transmit_invite(pres->call, SIP_SUBSCRIBE, 0, 2, NULL);
+	transmit_invite(pres->call, SIP_SUBSCRIBE, 0, 2, pres_uri);
 
 	return 0;
 }
