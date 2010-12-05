@@ -9999,11 +9999,11 @@ struct sched_context *dlginfo_get_scheduler(void)
 
 static void dlginfo_epa_destructor(void *data)
 {
-	/* PINANA XXX needs fixing???? */
-        struct sip_epa_entry *epa_entry = data;
-	ast_log(LOG_DEBUG, "*** Destroying EPA entry \n");
-        //struct dlginfo_epa_entry *dlginfo_entry = epa_entry->instance_data;
-        //ast_free(dlginfo_entry);
+	/*
+	 * Do nothing here.  Only the instance_data needs to be taken care of, but it's already an ao2 object
+	 * and will freed elsewhere.
+	 */
+	return;
 }
 
 
