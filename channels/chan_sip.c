@@ -21458,6 +21458,7 @@ static int load_module(void)
 	ASTOBJ_CONTAINER_INIT(&userl);	/* User object list */
 	ASTOBJ_CONTAINER_INIT(&peerl);	/* Peer object list */
 	ASTOBJ_CONTAINER_INIT(&regl);	/* Registry object list */
+	ASTOBJ_CONTAINER_INIT(&sip_pres_sublist);	/* Registry object list */
 
 	if (!(sched = sched_context_create())) {
 		ast_log(LOG_ERROR, "Unable to create scheduler context\n");
