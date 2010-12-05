@@ -10045,7 +10045,6 @@ static int sip_devicestate_publish(struct sip_publisher *pres_server, struct sta
 	ast_copy_string(device->pubname, pres_server->name, sizeof(device->pubname));
 
 	if ((existing_device = ao2_find(pub_dev, device, OBJ_POINTER))) {
-		ast_log(LOG_DEBUG, "   PUBLISH: Comparing %s and device %s\n", device->name, sc->dev);
 
 		//Most or all of this code duplication will go away when we start using libxml2
 		char uri[SIPBUFSIZE];
