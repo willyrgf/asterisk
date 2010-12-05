@@ -10059,7 +10059,7 @@ static int sip_devicestate_publish(struct sip_publisher *pres_server, struct sta
 		if (existing_device->epa && existing_device->epa->epa_state != TERMINATED) {
 			/* We already have a PUBLISH transaction. Let's skip this or put it on the queue */
 			if (existing_device->laststate != sc->state) {
-				ast_log(LOG_DEBUG, "--- We have an outstanding request for %s. Setting nextstate and kipping.\n", existing_device->name);
+				ast_log(LOG_DEBUG, "--- We have an outstanding request for %s. Setting nextstate and skipping.\n", existing_device->name);
 				existing_device->nextstate = sc->state;
 			}
 		} else if (existing_device->laststate == sc->state) {
