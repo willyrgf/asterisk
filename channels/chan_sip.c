@@ -19566,7 +19566,6 @@ static int sip_subscribe_pres(const char *uri, enum sip_subscription_pres_type t
 		ast_log(LOG_ERROR, "Currently, we only support sip: uri's - %s\n", buf);
 		return -1;
 	}
-	uri += 4; /* Skip sip: */
 
 	if ((domain = strrchr(uri, '@'))) {
 		domain++;
