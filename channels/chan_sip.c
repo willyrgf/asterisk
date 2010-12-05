@@ -696,6 +696,7 @@ static int sip_reloading = FALSE;                       /*!< Flag for avoiding m
 static enum channelreloadreason sip_reloadreason;       /*!< Reason for last reload/load of configuration */
 
 static struct sched_context *sched;     /*!< The scheduling context */
+static struct sched_context *pres_sched;     /*!< The scheduling context for presence */
 static struct io_context *io;           /*!< The IO context */
 static int *sipsock_read_id;            /*!< ID of IO entry for sipsock FD */
 
@@ -10149,6 +10150,14 @@ static void *device_state_thread(void *data)
 {
 	struct statechange *sc = NULL;
 
+	/* Initializing this thread */
+	if (!(pres_sched = sched_context_create())) {
+		ast_log(LOG_ERROR, "Unable to create scheduler context\n");
+		return AST_MODULE_LOAD_FAILURE;
+	}
+
+
+	/* Running this thread */
 	while (!device_state.stop) {
 		ast_mutex_lock(&device_state.lock);
 		if (!(sc = AST_LIST_REMOVE_HEAD(&device_state.state_change_q, entry))) {
@@ -10172,6 +10181,7 @@ static void *device_state_thread(void *data)
 		sc = NULL;
 	}
 
+	/* Stopping this thread */
 	if (sc) {
 		free(sc);
 	}
@@ -10179,6 +10189,7 @@ static void *device_state_thread(void *data)
 	while ((sc = AST_LIST_REMOVE_HEAD(&device_state.state_change_q, entry))) {
 		free(sc);
 	}
+	sched_context_destroy(pres_sched);
 
 	return NULL;
 }
@@ -19534,7 +19545,6 @@ static int sip_subscribe_pres(const char *uri, enum sip_subscription_pres_type t
 	}
 	if (ast_string_field_init(pres, 256)) {
 		ast_log(LOG_DEBUG, "--- Can't initialize string field in pres structure\n");
-		ASTOBJ_UNREF(pres, sip_subscribe_pres_destroy);
 		return 0;
 	}
 	
@@ -19568,6 +19578,7 @@ static int sip_subscribe_pres_do(const void *data)
 	}
 	ast_log(LOG_DEBUG, "--- subscription %s about to start\n", pres->uri);
 	
+	ASTOBJ_REF(pres);
 	pres->resub = -1;
 	__sip_subscribe_pres_do(pres);
 	ASTOBJ_UNREF(pres, sip_subscribe_pres_destroy);
