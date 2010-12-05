@@ -10024,7 +10024,7 @@ needs their own publish state.
 static int sip_devicestate_publish(struct sip_publisher *pres_server, struct statechange *sc)
 {
 	struct sip_published_device *device = NULL;
-	struct ao2_iterator i;
+	struct sip_published_device *existing_device = NULL;
 	int found = FALSE;
 	enum sip_publish_type publish_type;
 
@@ -10035,47 +10035,54 @@ static int sip_devicestate_publish(struct sip_publisher *pres_server, struct sta
 
 	ast_log(LOG_DEBUG, "---PUBLISH: publishing device state changes to %s for %s\n", pres_server->name, sc->dev);
 
-	i = ao2_iterator_init(pub_dev, 0);
-	while ((device = ao2_iterator_next(&i))) {
-		ast_log(LOG_DEBUG, "   PUBLISH: Comparing %s and device %s\n", device->name, sc->dev);
-		if (!found && !strcasecmp(device->pubname, pres_server->name) && !strcasecmp(device->name, sc->dev)) {
-			//Most or all of this code duplication will go away when we start using libxml2
-			char uri[SIPBUFSIZE];
-			char body[SIPBUFSIZE * 2];
-			char dlg_id[20];
-			size_t maxbytes = sizeof(body);
-
-			found = TRUE;
-
-			ast_log(LOG_DEBUG, "*** Found our friend %s in the existing list \n", device->name);
-			if (device->epa && device->epa->epa_state != TERMINATED) {
-				/* We already have a PUBLISH transaction. Let's skip this or put it on the queue */
-				if (device->laststate != sc->state) {
-					ast_log(LOG_DEBUG, "--- We have an outstanding request for %s. Setting nextstate and kipping.\n", device->name);
-					device->nextstate = sc->state;	
-				}
-			} else if (device->laststate == sc->state) {
-				ast_log(LOG_DEBUG, "--- No change, skipping PUBLISH for %s\n", device->name);
-			} else {
-				device->laststate = sc->state;
-				device->nextstate = -1;
-				generate_random_string(dlg_id, sizeof(dlg_id));
-				if (option_debug > 2) {
-					ast_log(LOG_DEBUG, "New device state for %s is %d, %s\n", device->name, sc->state, ast_devstate_str(sc->state));
-				}
-				snprintf(uri, sizeof(uri), "sip:%s@%s", sc->dev, pres_server->domain);
-				presence_build_dialoginfo_xml(body, &maxbytes, 1, ast_devstate_str(sc->state), dlg_id, 1, uri, 0);
-				ast_copy_string(device->epa->body, body, sizeof(device->epa->body));
-				publish_type = SIP_PUBLISH_MODIFY;
-				device->epa->epa_state = INITIATED;
-				transmit_publish(device->epa, publish_type, uri);
-				/* Do stuff here */
-			}
-		}
-		ao2_ref(device, -1);
+	if (!(device = ao2_alloc(sizeof(struct sip_published_device), pubdev_destructor))) {
+		ast_log(LOG_ERROR, "Cannot allocate sip_published_device!\n");
+		return -1;
 	}
 
-	ao2_iterator_destroy(&i);
+	ao2_ref(device, 1);
+	ast_copy_string(device->name, sc->dev, sizeof(device->name));
+	ast_copy_string(device->pubname, pres_server->name, sizeof(device->pubname));
+
+	if ((existing_device = ao2_find(pub_dev, device, OBJ_POINTER))) {
+		ast_log(LOG_DEBUG, "   PUBLISH: Comparing %s and device %s\n", device->name, sc->dev);
+
+		//Most or all of this code duplication will go away when we start using libxml2
+		char uri[SIPBUFSIZE];
+		char body[SIPBUFSIZE * 2];
+		char dlg_id[20];
+		size_t maxbytes = sizeof(body);
+
+		found = TRUE;
+
+		ast_log(LOG_DEBUG, "*** Found our friend %s in the existing list \n", device->name);
+		if (existing_device->epa && existing_device->epa->epa_state != TERMINATED) {
+			/* We already have a PUBLISH transaction. Let's skip this or put it on the queue */
+			if (existing_device->laststate != sc->state) {
+				ast_log(LOG_DEBUG, "--- We have an outstanding request for %s. Setting nextstate and kipping.\n", existing_device->name);
+				existing_device->nextstate = sc->state;
+			}
+		} else if (existing_device->laststate == sc->state) {
+			ast_log(LOG_DEBUG, "--- No change, skipping PUBLISH for %s\n", existing_device->name);
+		} else {
+			existing_device->laststate = sc->state;
+			existing_device->nextstate = -1;
+			generate_random_string(dlg_id, sizeof(dlg_id));
+			if (option_debug > 2) {
+				ast_log(LOG_DEBUG, "New device state for %s is %d, %s\n", existing_device->name, sc->state, ast_devstate_str(sc->state));
+			}
+			snprintf(uri, sizeof(uri), "sip:%s@%s", sc->dev, pres_server->domain);
+			presence_build_dialoginfo_xml(body, &maxbytes, 1, ast_devstate_str(sc->state), dlg_id, 1, uri, 0);
+			ast_copy_string(existing_device->epa->body, body, sizeof(existing_device->epa->body));
+			publish_type = SIP_PUBLISH_MODIFY;
+			existing_device->epa->epa_state = INITIATED;
+			transmit_publish(existing_device->epa, publish_type, uri);
+			/* Do stuff here */
+		}
+	}
+
+	ao2_ref(device, -1);
+
 	ast_log(LOG_DEBUG, "   PUBLISH: We may have found something or not... \n");
 
 	/* At this point we have a device state change to publish to one presence server. */
@@ -10087,10 +10094,7 @@ static int sip_devicestate_publish(struct sip_publisher *pres_server, struct sta
 
 		ast_log(LOG_DEBUG, "*** Creating new publish device for %s\n", sc->dev);
 		snprintf(uri, sizeof(uri), "sip:%s@%s", sc->dev, pres_server->domain);
-		if (!(device = ao2_alloc(sizeof(struct sip_published_device), pubdev_destructor))) {
-			ast_log(LOG_ERROR, "Cannot allocate sip_published_device!\n");
-			return -1;
-		}
+
 		device->laststate = sc->state;
 		device->nextstate = -1;
 		device->epa = create_epa_entry("dialog", pres_server->host);
@@ -10099,8 +10103,6 @@ static int sip_devicestate_publish(struct sip_publisher *pres_server, struct sta
 			return -1;
 		}
 		device->epa->instance_data = (void *) device;
-		ast_copy_string(device->name, sc->dev, sizeof(device->name));
-		ast_copy_string(device->pubname, pres_server->name, sizeof(device->pubname));
 		/* Initiate stuff */
 		ao2_link(pub_dev, device);
 		publish_type = SIP_PUBLISH_INITIAL;
