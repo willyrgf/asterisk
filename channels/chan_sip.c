@@ -10149,11 +10149,12 @@ static void *handle_statechange(struct statechange *sc)
 static void *device_state_thread(void *data)
 {
 	struct statechange *sc = NULL;
+	int waiting;
 
 	/* Initializing this thread */
 	if (!(pres_sched = sched_context_create())) {
-		ast_log(LOG_ERROR, "Unable to create scheduler context\n");
-		return AST_MODULE_LOAD_FAILURE;
+		ast_log(LOG_ERROR, "Unable to create presence scheduler context. SIP Subscribe/Publish thread FAILED.\n");
+		return NULL;
 	}
 
 
@@ -10176,6 +10177,14 @@ static void *device_state_thread(void *data)
 		}
 
 		handle_statechange(sc);
+
+		waiting = ast_sched_wait(pres_sched);
+		if (waiting > 0) {
+			int res = ast_sched_runq(pres_sched);
+			if (option_debug > 2) {
+				ast_log(LOG_DEBUG, "Presence scheduler ran %d items\n", res);
+			}
+		}
 
 		free(sc);
 		sc = NULL;
