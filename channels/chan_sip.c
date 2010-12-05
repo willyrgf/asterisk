@@ -9,6 +9,11 @@
 
 	- Another bug: If we get NOTIFY on a subscription we don't know about we should
 		send 481. Now we're sending "Bad event".
+
+	- SUBSCRIBE sip:1004@testserver1@192.168.40.231:5060 SIP/2.0
+	  This URI is formed when hint is 1004@testserver1 and there's a peer entry with an IP in testserver1 section of sip.conf
+	- Subscribes should move retransmits to the new thread and new scheduler
+
 */
 /*
  * Asterisk -- An open source telephony toolkit.
