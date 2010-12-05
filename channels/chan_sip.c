@@ -1294,6 +1294,11 @@ struct epa_static_data {
 	 * Destructor to call to clean up instance data
 	 */
 	void (*destructor)(void *instance_data);
+	/*!
+	 * If this epa is running in another thread with it's own scheduler
+	 * add pointer to that scheduler here.
+	 */
+	struct sched_context *(*sched)(void);
 };
 
 /*!
@@ -1890,6 +1895,7 @@ static struct ao2_container *delete_published_devices(void);
 static void dlginfo_handle_publish_error(struct sip_pvt *pvt, const int resp, struct sip_request *req, struct sip_epa_entry *epa_entry);
 static void dlginfo_handle_publish_ok(struct sip_pvt *pvt, struct sip_request *req, struct sip_epa_entry *epa_entry);
 static void dlginfo_epa_destructor(void *data);
+struct sched_context *dlginfo_get_scheduler(void);
 
 
 /*! \brief Definition of this channel for PBX channel registration */
@@ -1948,6 +1954,7 @@ static const struct epa_static_data dlginfo_epa_static_data  = {
 	.handle_ok = dlginfo_handle_publish_ok,
 	.handle_error = dlginfo_handle_publish_error,
 	.destructor = dlginfo_epa_destructor,
+	.sched = dlginfo_get_scheduler,
 };
 
 
@@ -2493,8 +2500,16 @@ static enum sip_result __sip_reliable_xmit(struct sip_pvt *p, int seqno, int res
 		append_history(pkt->owner, "XmitErr", "%s", (ast_test_flag(pkt, FLAG_FATAL)) ? "(Critical)" : "(Non-critical)");
 		return AST_FAILURE;
 	} else {
+		struct sched_context *resched = sched;	/* Use the default scheduler */
+
+		/* Get the scheduler entry if we have a special one for this packet
+		   in the publish event system */
+		if (pkt->owner->epa_entry && pkt->owner->epa_entry->static_data->sched) {
+			resched = pkt->owner->epa_entry->static_data->sched();
+			ast_log(LOG_DEBUG, "DEBUG PINANA --- Scheduling for presence in pres_sched\n");
+		}
 		/* Schedule retransmission */
-		pkt->retransid = ast_sched_add_variable(sched, siptimer_a, retrans_pkt, pkt, 1);
+		pkt->retransid = ast_sched_add_variable(resched, siptimer_a, retrans_pkt, pkt, 1);
 		return AST_SUCCESS;
 	}
 }
@@ -9966,6 +9981,15 @@ static void dlginfo_handle_publish_ok(struct sip_pvt *pvt, struct sip_request *r
 	ast_copy_string(epa_entry->entity_tag, etag, sizeof(epa_entry->entity_tag));
 	dlginfo_check_nextstatus(epa_entry);
 	return;
+}
+
+/*! \brief Get scheduler context */
+struct sched_context *dlginfo_get_scheduler(void)
+{
+	if (pres_sched) {
+		return pres_sched;
+	}
+	return sched;
 }
 
 static void dlginfo_epa_destructor(void *data)
