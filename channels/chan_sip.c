@@ -1,3 +1,15 @@
+/* Pinana todo:
+	- Our PUBLISH request expires at 3600 seconds. We need to make sure we refresh them.
+		Maybe we should set EXPIRE to a lower value during "IN-USE" to make sure that
+		state expires faster.
+		- We get an Expires: header back in the 200OK that may be different.
+
+	- Max forwards might need to be different for PUBLISH stuff. For 1.8 and trunk.
+	- Why does asterisk send PUBLISH in ALLOW?????
+
+	- Another bug: If we get NOTIFY on a subscription we don't know about we should
+		send 481. Now we're sending "Bad event".
+*/
 /*
  * Asterisk -- An open source telephony toolkit.
  *
@@ -8193,7 +8205,7 @@ static int transmit_invite(struct sip_pvt *p, int sipmethod, int sdp, int init, 
 		if (p->epa_entry && p->epa_entry->static_data) {
 			snprintf(expires, sizeof(expires), "%d", p->expiry);
 			add_header(&req, "Expires", expires);
-			add_header(&req, "Event",p->epa_entry->static_data->name );
+			add_header(&req, "Event", p->epa_entry->static_data->name );
 			if (p->epa_entry->publish_type != SIP_PUBLISH_INITIAL) {
 				add_header(&req, "SIP-If-Match", p->epa_entry->entity_tag);
 			}
@@ -14602,6 +14614,9 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 		case 202:   /* Transfer accepted */
 			if (sipmethod == SIP_REFER) 
 				handle_response_refer(p, resp, rest, req, seqno);
+			else if (sipmethod == SIP_SUBSCRIBE) {
+				handle_response_subscribe(p, resp, rest, req, seqno);
+			}
 			break;
 		case 401: /* Not www-authorized on SIP method */
 			if (sipmethod == SIP_INVITE)
@@ -14751,6 +14766,10 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 			/* Fallthrough */
 		default:
 			if ((resp >= 300) && (resp < 700)) {
+				if (sipmethod == SIP_SUBSCRIBE) {
+					handle_response_SUBSCRIBE(p, resp, rest, req, seqno);
+					break;
+				}
 				/* Fatal response */
 				if ((option_verbose > 2) && (resp != 487))
 					ast_verbose(VERBOSE_PREFIX_3 "Got SIP response %d \"%s\" back from %s\n", resp, rest, ast_inet_ntoa(p->sa.sin_addr));
@@ -19471,7 +19490,9 @@ static void sip_subscribe_pres_destroy(struct sip_subscription_pres *pres)
 	ast_free(pres);
 }
 
-/*! \brief subscribe to SIP uri */
+/*! \brief subscribe to SIP uri 
+	Returns -1 on error
+*/
 static int sip_subscribe_pres(const char *uri, enum sip_subscription_pres_type type) 
 {
 	struct sip_subscription_pres *pres;
@@ -19554,7 +19575,7 @@ static int sip_subscribe_pres_do(const void *data)
 	return 0;
 }
 
-/*! \brief Actually setup an MWI subscription or resubscribe */
+/*! \brief Actually setup a new subscription or resubscribe */
 static int __sip_subscribe_pres_do(struct sip_subscription_pres *pres)
 {
 	if (!pres) {
@@ -19592,7 +19613,7 @@ static int __sip_subscribe_pres_do(struct sip_subscription_pres *pres)
 		// XXX ??? dialog_unlink_all(pres->call, TRUE, TRUE);
 		// XXX ??? pres->call = dialog_unref(pres->call, "unref dialog after unlink_all");
 		sip_destroy(pres->call);
-		return 0;
+		return -1;
 	}
 
 	pres->call->expiry = pres_expiry;	// OEJ is this a global variable???
@@ -19703,7 +19724,7 @@ static void handle_response_subscribe(struct sip_pvt *p, int resp, const char *r
 	ast_log(LOG_DEBUG, "------ Going to check results\n");
 
 	switch (resp) {
-	case 200: /* Subscription accepted */
+	case 200: /* Subscription accepted and authorized */
 		if (option_debug > 2) {
 			ast_log(LOG_DEBUG, "Got 200 OK on subscription for presence\n");
 		}
@@ -19717,11 +19738,16 @@ static void handle_response_subscribe(struct sip_pvt *p, int resp, const char *r
 			ASTOBJ_UNREF(p->pres, sip_subscribe_pres_destroy);
 		}
 		break;
+	case 202: /* Subscription request accepted -but not really authorized */
+		/* We will get the authorization in a NOTIFY later */
+		ast_log(LOG_WARNING, "Got 202 Accepted on subscription for presence. Asterisk can't handle that yet. Call-ID %s\n", p->callid);
+		p->pres->call = NULL;
+		ASTOBJ_UNREF(p->pres, sip_subscribe_pres_destroy);
+		needdestroy = TRUE;
+		break;
 	case 401:
 	case 407:
-		ast_log(LOG_DEBUG, "------ Going to authenticate\n");
 		ast_string_field_set(p, theirtag, "");
-		ast_log(LOG_DEBUG, "------ 2 Going to authenticate\n");
 		if (p->authtries > 1 || do_proxy_auth(p, req, (resp == 401 ? "WWW-Authenticate" : "Proxy-Authenticate"),
 			(resp == 401 ? "Authorization" : "Proxy-Authorization"), SIP_SUBSCRIBE, 0)) {
 
@@ -19759,6 +19785,8 @@ static void handle_response_subscribe(struct sip_pvt *p, int resp, const char *r
 		break;
 	case 500:
 	case 501:
+	case 503:
+		/* We should handle retry-after */
 		ast_log(LOG_ERROR, "Subscription failed. Got error %d on URI %s.\n", resp, p->pres->uri);
 		p->pres->fatalerror = TRUE;
 		p->pres->call = NULL;
@@ -19877,14 +19905,26 @@ static int sip_remote_devicestate(const char *data)
 	int foundit = FALSE;
 	int state = AST_DEVICE_UNKNOWN;
 
+	if (ast_strlen_zero(data)) {
+		ast_log(LOG_ERROR, "Empty device state name? \n");
+		return AST_DEVICE_UNKNOWN;
+	}
+
 	ASTOBJ_CONTAINER_TRAVERSE(&sip_pres_sublist, 1, do {
 		if (foundit) {
 			continue;
 		}
 		ASTOBJ_WRLOCK(iterator);
-		if (!strcasecmp(iterator->devicename, data)) {
-			foundit = TRUE;
-			state = iterator->state;
+		if (ast_strlen_zero(iterator->devicename)) {
+			ast_log(LOG_ERROR, "Empty device in sip presence subscription list?\n");
+		} else {
+			if (option_debug > 2) {
+				ast_log(LOG_DEBUG, "Comparing %s with device in list %s\n", data, iterator->devicename);
+			}
+			if (!strcasecmp(iterator->devicename, data)) {
+				foundit = TRUE;
+				state = iterator->state;
+			}
 		}
 		ASTOBJ_UNLOCK(iterator);
 	} while (0)
