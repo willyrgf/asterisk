@@ -14767,7 +14767,7 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 		default:
 			if ((resp >= 300) && (resp < 700)) {
 				if (sipmethod == SIP_SUBSCRIBE) {
-					handle_response_SUBSCRIBE(p, resp, rest, req, seqno);
+					handle_response_subscribe(p, resp, rest, req, seqno);
 					break;
 				}
 				/* Fatal response */
