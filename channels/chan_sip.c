@@ -1900,7 +1900,8 @@ static struct ao2_container *delete_published_devices(void);
 static void dlginfo_handle_publish_error(struct sip_pvt *pvt, const int resp, struct sip_request *req, struct sip_epa_entry *epa_entry);
 static void dlginfo_handle_publish_ok(struct sip_pvt *pvt, struct sip_request *req, struct sip_epa_entry *epa_entry);
 static void dlginfo_epa_destructor(void *data);
-struct sched_context *dlginfo_get_scheduler(void);
+static struct sched_context *dlginfo_get_scheduler(void);
+static struct sched_context *get_scheduler(struct sip_pvt *dialog);
 
 
 /*! \brief Definition of this channel for PBX channel registration */
@@ -2334,6 +2335,20 @@ static void append_history_full(struct sip_pvt *p, const char *fmt, ...)
 	return;
 }
 
+/*! \brief Get scheduler for a specific dialog */
+static struct sched_context *get_scheduler(struct sip_pvt *dialog)
+{
+	struct sched_context *mysched = sched;	/* Use the default scheduler */
+
+	/* Get the scheduler entry if we have a special one for this packet
+	   in the publish event system */
+	if (dialog->epa_entry && dialog->epa_entry->static_data->sched) {
+		mysched = dialog->epa_entry->static_data->sched();
+		ast_log(LOG_DEBUG, "DEBUG PINANA --- Scheduling for presence in pres_sched for %s\n", dialog->callid);
+	}
+	return mysched;
+}
+
 /*! \brief Retransmit SIP message if no answer (Called from scheduler) */
 static int retrans_pkt(const void *data)
 {
@@ -2489,8 +2504,6 @@ static enum sip_result __sip_reliable_xmit(struct sip_pvt *p, int seqno, int res
 	if (pkt->timer_t1)
 		siptimer_a = pkt->timer_t1 * 2;
 
-	if (option_debug > 3 && sipdebug)
-		ast_log(LOG_DEBUG, "*** SIP TIMER: Initializing retransmit timer on packet: Id  #%d\n", pkt->retransid);
 	pkt->retransid = -1;
 	pkt->next = p->packets;
 	p->packets = pkt;
@@ -2505,16 +2518,12 @@ static enum sip_result __sip_reliable_xmit(struct sip_pvt *p, int seqno, int res
 		append_history(pkt->owner, "XmitErr", "%s", (ast_test_flag(pkt, FLAG_FATAL)) ? "(Critical)" : "(Non-critical)");
 		return AST_FAILURE;
 	} else {
-		struct sched_context *resched = sched;	/* Use the default scheduler */
+		struct sched_context *resched = get_scheduler(pkt->owner);	/* Use the default scheduler */
 
-		/* Get the scheduler entry if we have a special one for this packet
-		   in the publish event system */
-		if (pkt->owner->epa_entry && pkt->owner->epa_entry->static_data->sched) {
-			resched = pkt->owner->epa_entry->static_data->sched();
-			ast_log(LOG_DEBUG, "DEBUG PINANA --- Scheduling for presence in pres_sched\n");
-		}
 		/* Schedule retransmission */
 		pkt->retransid = ast_sched_add_variable(resched, siptimer_a, retrans_pkt, pkt, 1);
+		if (option_debug > 3 && sipdebug)
+			ast_log(LOG_DEBUG, "*** SIP TIMER: Initializing retransmit timer on packet: Id  #%d\n", pkt->retransid);
 		return AST_SUCCESS;
 	}
 }
@@ -2589,6 +2598,8 @@ static int __sip_autodestruct(const void *data)
 /*! \brief Schedule destruction of SIP dialog */
 static void sip_scheddestroy(struct sip_pvt *p, int ms)
 {
+	struct sched_context *mysched = get_scheduler(p);
+
 	if (ms < 0) {
 		if (p->timer_t1 == 0)
 			p->timer_t1 = 500;	/* Set timer T1 if not set (RFC 3261) */
@@ -2600,7 +2611,7 @@ static void sip_scheddestroy(struct sip_pvt *p, int ms)
 		append_history(p, "SchedDestroy", "%d ms", ms);
 
 	AST_SCHED_DEL(sched, p->autokillid);
-	p->autokillid = ast_sched_add(sched, ms, __sip_autodestruct, p);
+	p->autokillid = ast_sched_add(mysched, ms, __sip_autodestruct, p);
 }
 
 /*! \brief Cancel destruction of SIP dialog */
@@ -2627,6 +2638,8 @@ static int __sip_ack(struct sip_pvt *p, int seqno, int resp, int sipmethod)
 	int res = FALSE;
 
 	msg = sip_methods[sipmethod].text;
+
+	struct sched_context *mysched = get_scheduler(p);	/* Use the default scheduler */
 
 	for (cur = p->packets; cur; prev = cur, cur = cur->next) {
 		if ((cur->seqno == seqno) && ((ast_test_flag(cur, FLAG_RESPONSE)) == resp) &&
@@ -2660,7 +2673,7 @@ static int __sip_ack(struct sip_pvt *p, int seqno, int resp, int sipmethod)
 			 * the packet's retransid will be set to -1. The atomicity of the setting and checking
 			 * of the retransid to -1 is ensured since in both cases p's lock is held.
 			 */
-			AST_SCHED_DEL_SPINLOCK(sched, cur->retransid, &p->lock);
+			AST_SCHED_DEL_SPINLOCK(mysched, cur->retransid, &p->lock);
 			free(cur);
 			break;
 		}
@@ -2813,10 +2826,11 @@ static void *unref_provisional_keepalive(struct provisional_keepalive_data *data
 static void remove_provisional_keepalive_sched(struct sip_pvt *pvt)
 {
 	int res;
+
 	if (!pvt->provisional_keepalive_data) {
 		return;
 	}
-	res = AST_SCHED_DEL(sched, pvt->provisional_keepalive_data->sched_id);
+	res = AST_SCHED_DEL(get_scheduler(pvt), pvt->provisional_keepalive_data->sched_id);
 	/* If we could not remove this item. remove pvt's reference this data and mark it for removal
 	 * for the next time the scheduler uses it. The scheduler has it's own ref to this data
 	 * and will detect it should not reschedule the event since the sched_id is -1 and pvt == NULL */
@@ -2841,7 +2855,7 @@ static void update_provisional_keepalive(struct sip_pvt *pvt, int with_sdp)
 	ao2_ref(pvt->provisional_keepalive_data, +1);
 
 	/* schedule the provisional keepalive */
-	pvt->provisional_keepalive_data->sched_id = ast_sched_add(sched,
+	pvt->provisional_keepalive_data->sched_id = ast_sched_add(get_scheduler(pvt),
 		PROVIS_KEEPALIVE_TIMEOUT,
 		with_sdp ? send_provisional_keepalive_with_sdp : send_provisional_keepalive,
 		pvt->provisional_keepalive_data);
@@ -3718,6 +3732,7 @@ static int __sip_destroy(struct sip_pvt *p, int lockowner)
 	struct sip_pvt *cur, *prev = NULL;
 	struct sip_pkt *cp;
 	struct sip_request *req;
+	struct sched_context *mysched = get_scheduler(p);
 
 	/* We absolutely cannot destroy the rtp struct while a bridge is active or we WILL crash */
 	if (p->rtp && ast_rtp_get_bridged(p->rtp)) {
@@ -3775,10 +3790,10 @@ static int __sip_destroy(struct sip_pvt *p, int lockowner)
 	 * the extension update queue relating to this dialog. */
 	clear_extenstate_updates(p);
 
-	AST_SCHED_DEL(sched, p->initid);
-	AST_SCHED_DEL(sched, p->waitid);
-	AST_SCHED_DEL(sched, p->autokillid);
-	AST_SCHED_DEL(sched, p->request_queue_sched_id);
+	AST_SCHED_DEL(mysched, p->initid);
+	AST_SCHED_DEL(mysched, p->waitid);
+	AST_SCHED_DEL(mysched, p->autokillid);
+	AST_SCHED_DEL(mysched, p->request_queue_sched_id);
 
 	remove_provisional_keepalive_sched(p);
 	if (p->provisional_keepalive_data) {
@@ -3836,7 +3851,7 @@ static int __sip_destroy(struct sip_pvt *p, int lockowner)
 	/* remove all current packets in this dialog */
 	while((cp = p->packets)) {
 		p->packets = p->packets->next;
-		AST_SCHED_DEL(sched, cp->retransid);
+		AST_SCHED_DEL(mysched, cp->retransid);
 		free(cp);
 	}
 	if (p->chanvars) {
@@ -9989,7 +10004,7 @@ static void dlginfo_handle_publish_ok(struct sip_pvt *pvt, struct sip_request *r
 }
 
 /*! \brief Get scheduler context */
-struct sched_context *dlginfo_get_scheduler(void)
+static struct sched_context *dlginfo_get_scheduler(void)
 {
 	if (pres_sched) {
 		return pres_sched;
@@ -10190,11 +10205,15 @@ static void *device_state_thread(void *data)
 
 	/* Running this thread */
 	while (!device_state.stop) {
+		int somethinghappened = FALSE;
 		ast_mutex_lock(&device_state.lock);
-		if (!(sc = AST_LIST_REMOVE_HEAD(&device_state.state_change_q, entry))) {
-			ast_cond_wait(&device_state.cond, &device_state.lock);
+		/* For now I've disabled this cond wait. In order for retransmits
+		   to happen, I need this loop to run. Maybe we should put in a sleep()
+		   to wait if we have no sc or scheduled items */
+		//if (!(sc = AST_LIST_REMOVE_HEAD(&device_state.state_change_q, entry))) {
+			////ast_cond_wait(&device_state.cond, &device_state.lock);
 			sc = AST_LIST_REMOVE_HEAD(&device_state.state_change_q, entry);
-		}
+		//}
 		ast_mutex_unlock(&device_state.lock);
 
 		/* Check to see if we were woken up to see the request to stop */
@@ -10202,22 +10221,26 @@ static void *device_state_thread(void *data)
 			break;
 		}
 
-		if (!sc) {
-			continue;
+		if (sc) {
+			somethinghappened = TRUE;
+			handle_statechange(sc);
+			free(sc);
+			sc = NULL;
 		}
-
-		handle_statechange(sc);
 
 		waiting = ast_sched_wait(pres_sched);
 		if (waiting > 0) {
 			int res = ast_sched_runq(pres_sched);
-			if (option_debug > 2) {
+
+			somethinghappened = TRUE;
+			if (res && option_debug > 2) {
 				ast_log(LOG_DEBUG, "Presence scheduler ran %d items\n", res);
 			}
+		} 
+		if (!somethinghappened) {
+			/* We did nothing in this run. Wait a while until next run */
+			usleep(50);
 		}
-
-		free(sc);
-		sc = NULL;
 	}
 
 	/* Stopping this thread */
@@ -20035,7 +20058,8 @@ static struct sip_publisher *sip_publisher_init(const char *name, const char *ho
 		while(nextfilter) {
 			struct pubsub_filter *newfilter;
 			/* First, cut off string if needed */
-			nextfilter = strchr(nextfilter, ',');
+			filter = nextfilter;
+			nextfilter = strchr(filter, ',');
 			if (nextfilter) {
 				*nextfilter++ = '\0';
 			}
