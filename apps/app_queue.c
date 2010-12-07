@@ -4843,7 +4843,7 @@ static struct ast_generator play_file_gen =
 */
 static int play_file(struct ast_channel *chan, const char *filename, int ringing, char *moh)
 {
-	int res;
+	int res = 0;
 	struct ast_datastore *datastore;
 	struct ast_queue_streamfile_info *aqsi = NULL;
 	struct gen_state *generatordata;
@@ -4851,6 +4851,9 @@ static int play_file(struct ast_channel *chan, const char *filename, int ringing
 	char playfilename[512];
 
 	if (!background_prompts) {
+		if (ast_strlen_zero(filename)) {
+			return 0;
+		}
 		/* Play prompts like before, with no interruption */
 		ast_stopstream(chan);
 		res = ast_streamfile(chan, filename, chan->language);
