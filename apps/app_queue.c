@@ -4741,6 +4741,8 @@ static void gen_closestream(struct gen_state *state)
 		return;
 
 	ast_closestream(state->stream);
+	ast_log(LOG_DEBUG, " --- Closing stream -- Filename %s\n", state->filename); 
+	state->filename[0] = '\0';
 	state->chan->stream = NULL;
 	state->stream = NULL;
 	state->aqsi->now_playing = 0;	/* Important flag to indicate we are no longer playing on this channel */
@@ -4751,7 +4753,7 @@ static void gen_release(struct ast_channel *chan, void *data)
 {
 	struct gen_state *state = data;
 	gen_closestream(state);
-	ast_free(data);
+	ast_free(state);
 }
 
 
@@ -4880,27 +4882,33 @@ static int play_file(struct ast_channel *chan, const char *filename, int ringing
 	
 	/* If we are not playing - see if we can play the next file in the playlist */
 	if (aqsi->now_playing == 0) {
+		playfilename[0] = '\0';
 		if (ast_strlen_zero(filename)) {
-			if (option_debug > 2) {
-				ast_log(LOG_DEBUG, "No filename and not playing - selecting next file in playlist\n");
-			}
 			/* take the first one if we have a playlist */
-			while (res && !AST_LIST_EMPTY(&aqsi->flist)) {
+			if (!AST_LIST_EMPTY(&aqsi->flist)) {
 				sfn = AST_LIST_REMOVE_HEAD(&aqsi->flist, list);
 				ast_copy_string(playfilename, sfn->filename, sizeof(playfilename));
+				ringing = aqsi->ringing;
+				moh = aqsi->moh;
 				free(sfn);
+				if (option_debug > 2) {
+					ast_log(LOG_DEBUG, "--- No filename and not playing - selecting next file in playlist - %s\n", playfilename);
+				}
 			}
-			if (!sfn) {
+			if (ast_strlen_zero(playfilename)) {
+				if (option_debug > 2 ) {
+					ast_log(LOG_DEBUG, "--- empty queue... No filename and not currently playing\n");
+				}
 				return -1;
 			}
 		} else {
 			ast_copy_string(playfilename, filename, sizeof(playfilename));
 		}
 	} else {
-		if (option_debug > 2 ) {
-			ast_log(LOG_DEBUG, "No filename and currently playing\n");
-		}
 		if (ast_strlen_zero(filename)) {
+			if (option_debug > 2 ) {
+				ast_log(LOG_DEBUG, "--- just checking... No filename and currently playing\n");
+			}
 			return -1;
 		}
 	}
@@ -4953,17 +4961,19 @@ static int play_file(struct ast_channel *chan, const char *filename, int ringing
 		generatordata->chan = chan;
 		generatordata->aqsi = aqsi;
 
+		ast_log(LOG_DEBUG, "--- Starting to play file %s \n", playfilename);
+
 
 		/* Starting new generator on channel. */
 		if (ast_activate_generator(chan, &play_file_gen, generatordata)) {
-			ast_log(LOG_ERROR, "Not playing requested prompt %s. Generator failed on %s.\n", playfilename, chan->name);
+			ast_log(LOG_DEBUG, "Not playing requested prompt %s. Generator failed on %s.\n", playfilename, chan->name);
 			/* oops, the current file has problems */
 			/* restore the moh */
 			if (ringing) {
-				ast_log(LOG_ERROR, "Starting Indicate\n");
+				ast_log(LOG_DEBUG, "Starting Indicate\n");
 				ast_indicate(chan, AST_CONTROL_RINGING);
 			} else {
-				ast_log(LOG_ERROR, "Starting MOH %s on chan %s\n", aqsi->qe->moh, chan->name);
+				ast_log(LOG_DEBUG, "Starting MOH %s on chan %s\n", aqsi->qe->moh, chan->name);
 				ast_moh_start(chan, aqsi->qe->moh, NULL);
 			}
 			AST_LIST_UNLOCK(&aqsi->flist);
