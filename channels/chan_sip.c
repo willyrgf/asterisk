@@ -14301,6 +14301,7 @@ static void *sip_park_thread(void *stuff)
 
 	if (!transferee || !transferer) {
 		ast_log(LOG_ERROR, "Missing channels for parking! Transferer %s Transferee %s\n", transferer ? "<available>" : "<missing>", transferee ? "<available>" : "<missing>" );
+		ast_free(d);
 		return NULL;
 	}
 	if (option_debug > 3) 
@@ -14311,6 +14312,7 @@ static void *sip_park_thread(void *stuff)
 		ast_log(LOG_WARNING, "Masquerade failed.\n");
 		transmit_response(transferer->tech_pvt, "503 Internal error", &req);
 		ast_channel_unlock(transferee);
+		ast_free(d);
 		return NULL;
 	} 
 	ast_channel_unlock(transferee);
@@ -14330,7 +14332,6 @@ static void *sip_park_thread(void *stuff)
 
 	/* Any way back to the current call??? */
 	/* Transmit response to the REFER request */
-	transmit_response(transferer->tech_pvt, "202 Accepted", &req);
 	if (!res)	{
 		/* Transfer succeeded */
 		append_history(transferer->tech_pvt, "SIPpark","Parked call on %d", ext);
@@ -14346,7 +14347,7 @@ static void *sip_park_thread(void *stuff)
 			ast_log(LOG_DEBUG, "SIP Call parked failed \n");
 		/* Do not hangup call */
 	}
-	free(d);
+	ast_free(d);
 	return NULL;
 }
 
@@ -14359,6 +14360,7 @@ static int sip_park(struct ast_channel *chan1, struct ast_channel *chan2, struct
 	struct ast_channel *transferee, *transferer;
 		/* Chan2m: The transferer, chan1m: The transferee */
 	pthread_t th;
+	pthread_attr_t attr;
 
 	transferee = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, chan1->accountcode, chan1->exten, chan1->context, chan1->amaflags, "Parking/%s", chan1->name);
 	transferer = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, chan2->accountcode, chan2->exten, chan2->context, chan2->amaflags, "SIPPeer/%s", chan2->name);
@@ -14428,27 +14430,28 @@ static int sip_park(struct ast_channel *chan1, struct ast_channel *chan2, struct
 		}
 		return -1;
 	}
-	if ((d = ast_calloc(1, sizeof(*d)))) {
-		pthread_attr_t attr;
+	if (!(d = ast_calloc(1, sizeof(*d)))) {
+		return -1;
+	}
 
-		pthread_attr_init(&attr);
-		pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);	
+	pthread_attr_init(&attr);
+	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
 
-		/* Save original request for followup */
-		copy_request(&d->req, req);
-		d->chan1 = transferee;	/* Transferee */
-		d->chan2 = transferer;	/* Transferer */
-		d->seqno = seqno;
-		if (ast_pthread_create_background(&th, &attr, sip_park_thread, d) < 0) {
-			/* Could not start thread */
-			free(d);	/* We don't need it anymore. If thread is created, d will be free'd
-					   by sip_park_thread() */
-			pthread_attr_destroy(&attr);
-			return 0;
-		}
+	/* Save original request for followup */
+	copy_request(&d->req, req);
+	d->chan1 = transferee;	/* Transferee */
+	d->chan2 = transferer;	/* Transferer */
+	d->seqno = seqno;
+	if (ast_pthread_create_background(&th, &attr, sip_park_thread, d) < 0) {
+		/* Could not start thread */
+		ast_free(d);	/* We don't need it anymore. If thread is created, d will be free'd
+				   by sip_park_thread() */
 		pthread_attr_destroy(&attr);
-	} 
-	return -1;
+		return -1;
+	}
+	pthread_attr_destroy(&attr);
+
+	return 0;
 }
 
 /*! \brief Turn off generator data 
@@ -15790,7 +15793,6 @@ static int local_attended_transfer(struct sip_pvt *transferer, struct sip_dual *
 		transferer->refer->replaces_callid_fromtag))) {
 		if (transferer->refer->localtransfer) {
 			/* We did not find the refered call. Sorry, can't accept then */
-			transmit_response(transferer, "202 Accepted", req);
 			/* Let's fake a response from someone else in order
 		   	to follow the standard */
 			transmit_notify_with_sipfrag(transferer, seqno, "481 Call leg/transaction does not exist", TRUE);
@@ -15806,7 +15808,6 @@ static int local_attended_transfer(struct sip_pvt *transferer, struct sip_dual *
 	}
 
 	/* Ok, we can accept this transfer */
-	transmit_response(transferer, "202 Accepted", req);
 	append_history(transferer, "Xfer", "Refer accepted");
 	if (!targetcall_pvt->owner) {	/* No active channel */
 		if (option_debug > 3)
@@ -16093,6 +16094,9 @@ static int handle_request_refer(struct sip_pvt *p, struct sip_request *req, int 
 
 	ast_set_flag(&p->flags[0], SIP_GOTREFER);	
 
+	/* From here on failures will be indicated with NOTIFY requests */
+	transmit_response(p, "202 Accepted", req);
+
 	/* Attended transfer: Find all call legs and bridge transferee with target*/
 	if (p->refer->attendedtransfer) {
 		if ((res = local_attended_transfer(p, &current, req, seqno)))
@@ -16115,13 +16119,13 @@ static int handle_request_refer(struct sip_pvt *p, struct sip_request *req, int 
 		append_history(p, "Xfer", "REFER to call parking.");
 		if (sipdebug && option_debug > 3)
 			ast_log(LOG_DEBUG, "SIP transfer to parking: trying to park %s. Parked by %s\n", current.chan2->name, current.chan1->name);
-		sip_park(current.chan2, current.chan1, req, seqno);
+		if ((res = sip_park(current.chan2, current.chan1, req, seqno))) {
+			transmit_notify_with_sipfrag(p, seqno, "500 Internal Server Error", TRUE);
+		}
 		return res;
 	} 
 
 	/* Blind transfers and remote attended xfers */
-	transmit_response(p, "202 Accepted", req);
-
 	if (current.chan1 && current.chan2) {
 		if (option_debug > 2)
 			ast_log(LOG_DEBUG, "chan1->name: %s\n", current.chan1->name);
