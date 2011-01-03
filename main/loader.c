@@ -1096,6 +1096,14 @@ int ast_loader_unregister(int (*v)(void))
 	return cur ? 0 : -1;
 }
 
+const char *ast_module_name(struct ast_module *mod)
+{
+	if (!mod) {
+		return NULL;
+	}
+	return mod->resource;
+}
+
 struct ast_module *ast_module_ref(struct ast_module *mod)
 {
 	ast_atomic_fetchadd_int(&mod->usecount, +1);

@@ -1702,6 +1702,24 @@ static const struct ast_channel_tech sip_tech_info = {
 	.func_channel_read = acf_channel_read,
 };
 
+/*! \brief SIP tech for dynamic channel loading. */
+static struct ast_channel_tech *dynamic_sip_tech;
+
+struct sip_chan_types {
+	const char const *type;
+} dynamic_channel_types[10] = {
+	{ "SIP00", },
+	{ "SIP01", },
+	{ "SIP02", },
+	{ "SIP03", },
+	{ "SIP04", },
+	{ "SIP05", },
+	{ "SIP06", },
+	{ "SIP07", },
+	{ "SIP08", },
+	{ "SIP09", },
+};
+
 /**--- some list management macros. **/
  
 #define UNLINK(element, head, prev) do {	\
@@ -1726,6 +1744,15 @@ static struct ast_udptl_protocol sip_udptl = {
 	get_udptl_info: sip_get_udptl_peer,
 	set_udptl_peer: sip_set_udptl_peer,
 };
+
+/*! \brief return TRUE if the tech is our own tech */
+static int check_if_sip_tech(const struct ast_channel_tech *tech)
+{
+	if (tech != &sip_tech && tech != &sip_tech_info) {
+		return FALSE;
+	}
+	return TRUE;
+}
 
 /*! \brief Convert transfer status to string */
 static char *referstatus2str(enum referstatus rstatus)
@@ -12871,7 +12898,7 @@ static int func_header_read(struct ast_channel *chan, char *function, char *data
 	}
 
 	ast_channel_lock(chan);
-	if (chan->tech != &sip_tech && chan->tech != &sip_tech_info) {
+	if (!check_if_sip_tech(chan->tech)) {
 		ast_log(LOG_WARNING, "This function can only be used on SIP channels.\n");
 		ast_channel_unlock(chan);
 		return -1;
@@ -13050,7 +13077,7 @@ static int function_sipchaninfo_read(struct ast_channel *chan, char *cmd, char *
 	}
 
 	ast_channel_lock(chan);
-	if (chan->tech != &sip_tech && chan->tech != &sip_tech_info) {
+	if (!check_if_sip_tech(chan->tech)) {
 		ast_log(LOG_WARNING, "This function can only be used on SIP channels.\n");
 		ast_channel_unlock(chan);
 		return -1;
@@ -13360,7 +13387,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, stru
 				ast_log(LOG_WARNING, "Ooooh.. no tech!  That's REALLY bad\n");
 				break;
 			}
-			if (bridgepeer->tech == &sip_tech || bridgepeer->tech == &sip_tech_info) {
+			if (check_if_sip_tech(bridgepeer->tech)) {
 				bridgepvt = (struct sip_pvt*)(bridgepeer->tech_pvt);
 				if (bridgepvt->udptl) {
 					if (p->t38.state == T38_PEER_REINVITE) {
@@ -13493,7 +13520,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, stru
 
 			if (p->owner && (p->owner->_state == AST_STATE_UP) && (bridgepeer = ast_bridged_channel(p->owner))) { /* if this is a re-invite */
 				struct sip_pvt *bridgepvt = NULL;
-				if (bridgepeer->tech == &sip_tech || bridgepeer->tech == &sip_tech_info) {
+				if (check_if_sip_tech(bridgepeer->tech)) {
 					bridgepvt = (struct sip_pvt*)(bridgepeer->tech_pvt);
 					if (bridgepvt->udptl) {
 						sip_handle_t38_reinvite(bridgepeer, p, 0);
@@ -15687,7 +15714,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 				if ((bridgepeer = ast_bridged_channel(p->owner))) {
 					/* We have a bridge, and this is re-invite to switchover to T38 so we send re-invite with T38 SDP, to other side of bridge*/
 					/*! XXX: we should also check here does the other side supports t38 at all !!! XXX */
-					if (bridgepeer->tech == &sip_tech || bridgepeer->tech == &sip_tech_info) {
+					if (check_if_sip_tech(bridgepeer->tech)) {
 						bridgepvt = (struct sip_pvt*)bridgepeer->tech_pvt;
 						if (bridgepvt->t38.state == T38_DISABLED) {
 							if (bridgepvt->udptl) { /* If everything is OK with other side's udptl struct */
@@ -16294,7 +16321,7 @@ static int acf_channel_read(struct ast_channel *chan, char *funcname, char *prep
 	AST_STANDARD_APP_ARGS(args, parse);
 
 	/* Sanity check */
-	if (chan->tech != &sip_tech && chan->tech != &sip_tech_info) {
+	if (!check_if_sip_tech(chan->tech)) {
 		ast_log(LOG_ERROR, "Cannot call %s on a non-SIP channel\n", funcname);
 		return 0;
 	}
@@ -18729,7 +18756,13 @@ static int reload_config(enum channelreloadreason reason)
 	unsigned int temp_tos = 0;
 	struct ast_flags debugflag = {0};
 
-	cfg = ast_config_load(config);
+	if (dynamic_sip_tech) {
+		char configfile[SIPBUFSIZE];
+		snprintf(configfile, sizeof(configfile), "%s.%s", config, dynamic_sip_tech->type);
+		cfg = ast_config_load(configfile);
+	} else {
+		cfg = ast_config_load(config);
+	}
 
 	/* We *must* have a config file otherwise stop immediately */
 	if (!cfg) {
@@ -19635,7 +19668,7 @@ static int sip_dtmfmode(struct ast_channel *chan, void *data)
 		return 0;
 	}
 	ast_channel_lock(chan);
-	if (chan->tech != &sip_tech && chan->tech != &sip_tech_info) {
+	if (!check_if_sip_tech(chan->tech)) {
 		ast_log(LOG_WARNING, "Call this application only on SIP incoming calls\n");
 		ast_channel_unlock(chan);
 		return 0;
@@ -19994,6 +20027,15 @@ static struct ast_cli_entry cli_sip[] = {
 /*! \brief PBX load module - initialization */
 static int load_module(void)
 {
+	ast_log(LOG_DEBUG, "***** HEY YOU DEBUGGER: %s \n", ast_module_name(ast_module_info->self));
+	if (strcasecmp(ast_module_name(ast_module_info->self), "chan_sip.so")) {
+		ast_log(LOG_DEBUG, "*** We're not who we are supposed to be.\n");
+		dynamic_sip_tech = ast_calloc(1, sizeof(struct ast_channel_tech));
+		memcpy(dynamic_sip_tech, &sip_tech, sizeof(struct ast_channel_tech));
+		dynamic_sip_tech->type = "SIP00";
+	} else {
+		dynamic_sip_tech = NULL;
+	}
 	ASTOBJ_CONTAINER_INIT(&userl);	/* User object list */
 	ASTOBJ_CONTAINER_INIT(&peerl);	/* Peer object list */
 	ASTOBJ_CONTAINER_INIT(&regl);	/* Registry object list */
@@ -20015,7 +20057,7 @@ static int load_module(void)
 		return AST_MODULE_LOAD_DECLINE;
 
 	/* Make sure we can register our sip channel type */
-	if (ast_channel_register(&sip_tech)) {
+	if (ast_channel_register(dynamic_sip_tech ? dynamic_sip_tech : &sip_tech)) {
 		ast_log(LOG_ERROR, "Unable to register channel type 'SIP'\n");
 		io_context_destroy(io);
 		sched_context_destroy(sched);

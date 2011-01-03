@@ -225,7 +225,8 @@ typedef struct {
 	implemented.
 */
 struct ast_channel_tech {
-	const char * const type;
+	//const char * const type;
+	const char * type;
 	const char * const description;
 
 	int capabilities;		/*!< Bitmap of formats this channel can handle */

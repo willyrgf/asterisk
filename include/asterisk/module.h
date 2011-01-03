@@ -231,6 +231,7 @@ void __ast_module_user_hangup_all(struct ast_module *);
 
 struct ast_module *ast_module_ref(struct ast_module *);
 void ast_module_unref(struct ast_module *);
+const char *ast_module_name(struct ast_module *mod);
 
 #if defined(__cplusplus) || defined(c_plusplus)
 #define AST_MODULE_INFO(keystr, flags_to_set, desc, load_func, unload_func, reload_func)	\
