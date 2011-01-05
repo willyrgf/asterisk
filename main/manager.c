@@ -104,12 +104,14 @@ static const int DEFAULT_DISPLAYCONNECTS	= 1;	/*!< Default setting for displayin
 static const int DEFAULT_TIMESTAMPEVENTS	= 0;	/*!< Default setting for timestampevents */	
 static const int DEFAULT_HTTPTIMEOUT 		= 60;	/*!< Default manager http timeout */
 static const int DEFAULT_BROKENEVENTSACTION	= 0;	/*!< Default setting for brokeneventsaction */
+static const int DEFAULT_DEBUG_ACTIONS	        = 0;	/*!< Default setting for action debugging in the CLI */
 
 
 static int enabled;
 static int portno = DEFAULT_MANAGER_PORT;
 static int asock = -1;
 static int displayconnects;
+static int debug_actions;
 static int timestampevents;
 static int httptimeout;
 static int broken_events_action;
@@ -2265,6 +2267,21 @@ static int action_userevent(struct mansession *s, const struct message *m)
 	return 0;
 }
 
+/*! \brief Output manager actions to the CLI */
+static void manager_debug_action(struct mansession *s, const struct message *m)
+{
+	int x;
+
+	/* Find out who */
+	ast_verbose(VERBOSE_PREFIX_2 "%sManager '%s': Received action from IP(%s)\n", 
+			(s->session->sessiontimeout ? "HTTP " : ""), s->session->username, ast_inet_ntoa(s->session->sin.sin_addr));
+	/* Find out what */
+	for (x = 0; x < m->hdrcount; x++) {
+		ast_verbose("        %s\n", m->headers[x]);
+	}
+	ast_verbose("\n");
+}
+
 static int process_message(struct mansession *s, const struct message *m)
 {
 	char action[80] = "";
@@ -2334,6 +2351,9 @@ static int process_message(struct mansession *s, const struct message *m)
 				if (strcasecmp(action, tmp->action))
 					continue;
 				if ((s->session->writeperm & tmp->authority) == tmp->authority) {
+					if (debug_actions) {
+						manager_debug_action(s, m);
+					}
 					if (tmp->func(s, m))
 						ret = -1;
 				} else
@@ -3104,6 +3124,7 @@ int init_manager(void)
 
 	portno = DEFAULT_MANAGER_PORT;
 	displayconnects = DEFAULT_DISPLAYCONNECTS;
+	debug_actions = DEFAULT_DEBUG_ACTIONS;
 	broken_events_action = DEFAULT_BROKENEVENTSACTION;
 	block_sockets = DEFAULT_BLOCKSOCKETS;
 	timestampevents = DEFAULT_TIMESTAMPEVENTS;
@@ -3144,6 +3165,10 @@ int init_manager(void)
 
 	if ((val = ast_variable_retrieve(cfg, "general", "httptimeout")))
 		newhttptimeout = atoi(val);
+
+	val = ast_variable_retrieve(cfg, "general", "debugactions");
+	if (val)
+		debug_actions = ast_true(val);
 
 	memset(&ba, 0, sizeof(ba));
 	ba.sin_family = AF_INET;
