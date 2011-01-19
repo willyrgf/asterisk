@@ -4787,7 +4787,7 @@ int __ast_manager_event_multichan(int category, const char *event, int chancount
 	struct ast_str *buf;
 	int i;
 
-	if (!sessions && AST_RWLIST_EMPTY(&manager_hooks)) {
+	if (!ao2_container_count(sessions) && AST_RWLIST_EMPTY(&manager_hooks)) {
 		return 0;
 	}
 	
@@ -5465,7 +5465,7 @@ static int generic_http_callback(struct ast_tcptls_session_instance *ser,
 		hdrlen = strlen(v->name) + strlen(v->value) + 3;
 		m.headers[m.hdrcount] = alloca(hdrlen);
 		snprintf((char *) m.headers[m.hdrcount], hdrlen, "%s: %s", v->name, v->value);
-		ast_verb(4, "HTTP Manager add header %s\n", m.headers[m.hdrcount]);
+		ast_debug(1, "HTTP Manager add header %s\n", m.headers[m.hdrcount]);
 		m.hdrcount = x + 1;
 	}
 
