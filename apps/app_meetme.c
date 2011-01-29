@@ -2632,7 +2632,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, struc
 		ast_test_flag64(confflags, CONFFLAG_INTROUSERNOREVIEW)) && conf->users > 1) {
 		struct announce_listitem *item;
 		if (!(item = ao2_alloc(sizeof(*item), NULL)))
-			return -1;
+			goto outrun;
 		ast_copy_string(item->namerecloc, user->namerecloc, sizeof(item->namerecloc));
 		ast_copy_string(item->language, chan->language, sizeof(item->language));
 		item->confchan = conf->chan;
@@ -2809,6 +2809,11 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, struc
 			}
 
  			if (user->kicktime && (user->kicktime <= now.tv_sec)) {
+				if (ast_test_flag64(confflags, CONFFLAG_KICK_CONTINUE)) {
+					ret = 0;
+				} else {
+					ret = -1;
+				}
 				break;
 			}
   
@@ -2879,6 +2884,11 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, struc
 
 			now = ast_tvnow();
 			if (timeout && now.tv_sec >= timeout) {
+				if (ast_test_flag64(confflags, CONFFLAG_KICK_CONTINUE)) {
+					ret = 0;
+				} else {
+					ret = -1;
+				}
 				break;
 			}
 
@@ -3678,7 +3688,7 @@ bailoutandtrynormal:
 	if (!ast_test_flag64(confflags, CONFFLAG_QUIET) && (ast_test_flag64(confflags, CONFFLAG_INTROUSER) || ast_test_flag64(confflags, CONFFLAG_INTROUSERNOREVIEW)) && conf->users > 1) {
 		struct announce_listitem *item;
 		if (!(item = ao2_alloc(sizeof(*item), NULL)))
-			return -1;
+			goto outrun;
 		ast_copy_string(item->namerecloc, user->namerecloc, sizeof(item->namerecloc));
 		ast_copy_string(item->language, chan->language, sizeof(item->language));
 		item->confchan = conf->chan;
