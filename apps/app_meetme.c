@@ -2206,7 +2206,6 @@ static int user_set_muted_cb(void *obj, void *check_admin_arg, int flags)
 static int conf_run(struct ast_channel *chan, struct ast_conference *conf, struct ast_flags64 *confflags, char *optargs[])
 {
 	struct ast_conf_user *user = NULL;
-	struct ast_conf_user *usr = NULL;
 	int fd;
 	struct dahdi_confinfo dahdic, dahdic_empty;
 	struct ast_frame *f;
@@ -2680,7 +2679,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, struc
 			ast_test_flag64(confflags, CONFFLAG_INTROUSERNOREVIEW) || ast_test_flag64(confflags, CONFFLAG_INTROUSER_VMREC)) && conf->users > 1) {
 		struct announce_listitem *item;
 		if (!(item = ao2_alloc(sizeof(*item), NULL)))
-			return -1;
+			goto outrun;
 		ast_copy_string(item->namerecloc, user->namerecloc, sizeof(item->namerecloc));
 		ast_copy_string(item->language, chan->language, sizeof(item->language));
 		item->confchan = conf->chan;
@@ -2860,6 +2859,11 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, struc
 			}
 
  			if (user->kicktime && (user->kicktime <= now.tv_sec)) {
+				if (ast_test_flag64(confflags, CONFFLAG_KICK_CONTINUE)) {
+					ret = 0;
+				} else {
+					ret = -1;
+				}
 				break;
 			}
   
@@ -2930,6 +2934,11 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, struc
 
 			now = ast_tvnow();
 			if (timeout && now.tv_sec >= timeout) {
+				if (ast_test_flag64(confflags, CONFFLAG_KICK_CONTINUE)) {
+					ret = 0;
+				} else {
+					ret = -1;
+				}
 				break;
 			}
 
@@ -3222,6 +3231,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, struc
 							int keepplaying;
 							int playednamerec;
 							struct ao2_iterator user_iter;
+							struct ast_conf_user *usr = NULL;
 							switch(dtmf) {
 							case '1': /* *81 Roll call */
 								keepplaying = 1;
@@ -3260,7 +3270,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, struc
 									}
 								}
 								user_iter = ao2_iterator_init(conf->usercontainer, 0);
-								while((user = ao2_iterator_next(&user_iter))) {
+								while((usr = ao2_iterator_next(&user_iter))) {
 									if (ast_fileexists(usr->namerecloc, NULL, NULL)) {
 										if (keepplaying && !ast_streamfile(chan, usr->namerecloc, chan->language)) {
 											res = ast_waitstream(chan, AST_DIGIT_ANY);
@@ -3270,7 +3280,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, struc
 										}
 										playednamerec = 1;
 									}
-									ao2_ref(user, -1);
+									ao2_ref(usr, -1);
 								}
 								ao2_iterator_destroy(&user_iter);
 								if (keepplaying && playednamerec && !ast_streamfile(chan, "conf-roll-callcomplete", chan->language)) {
@@ -3414,6 +3424,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, struc
 								break;
 							case '3': /* Eject last user */
 							{
+								struct ast_conf_user *usr = NULL;
 								int max_no = 0;
 								ao2_callback(conf->usercontainer, OBJ_NODATA, user_max_cmp, &max_no);
 								menu_active = 0;
@@ -3425,7 +3436,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, struc
 								} else {
 									usr->adminflags |= ADMINFLAG_KICKME;
 								}
-								ao2_ref(user, -1);
+								ao2_ref(usr, -1);
 								ast_stopstream(chan);
 								break;	
 							}
@@ -3727,7 +3738,7 @@ bailoutandtrynormal:
 	if (!ast_test_flag64(confflags, CONFFLAG_QUIET) && ast_test_flag64(confflags, CONFFLAG_INTROUSER |CONFFLAG_INTROUSERNOREVIEW | CONFFLAG_INTROUSER_VMREC) && conf->users > 1) {
 		struct announce_listitem *item;
 		if (!(item = ao2_alloc(sizeof(*item), NULL)))
-			return -1;
+			goto outrun;
 		ast_copy_string(item->namerecloc, user->namerecloc, sizeof(item->namerecloc));
 		ast_copy_string(item->language, chan->language, sizeof(item->language));
 		item->confchan = conf->chan;
