@@ -1277,6 +1277,7 @@ static struct mohclass *_moh_class_malloc(const char *file, int line, const char
 #endif
 		)) {
 		class->format = AST_FORMAT_SLINEAR;
+		class->srcfd = -1;
 	}
 
 	return class;
