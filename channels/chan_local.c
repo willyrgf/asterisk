@@ -221,6 +221,10 @@ static int local_queue_frame(struct local_pvt *p, int isoutbound, struct ast_fra
 		if (f->frametype == AST_FRAME_CONTROL && f->subclass == AST_CONTROL_RINGING) {
 			ast_setstate(other, AST_STATE_RINGING);
 		}
+		if (f->frametype == AST_FRAME_CONTROL && f->subclass == AST_CONTROL_BRIDGEPARAM) {
+			if (option_debug > 1)
+				ast_log(LOG_DEBUG, "---> BRIDGE CONTROL packet aimed for %s\n", other->name);
+		}
 		ast_queue_frame(other, f);
 		ast_channel_unlock(other);
 	}
@@ -327,7 +331,8 @@ static int local_write(struct ast_channel *ast, struct ast_frame *f)
 	ast_mutex_lock(&p->lock);
 	isoutbound = IS_OUTBOUND(ast, p);
 	if (f && f->frametype == AST_FRAME_CONTROL && f->subclass == AST_CONTROL_BRIDGEPARAM) {
-		ast_log(LOG_DEBUG, "--- Bridge parameters shipped along ... \n");
+		if (option_debug > 1)
+			ast_log(LOG_DEBUG, "--- Bridge parameters shipped along ... \n");
 	}
 	if (isoutbound && f && (f->frametype == AST_FRAME_VOICE || f->frametype == AST_FRAME_VIDEO))
 		check_bridge(p);

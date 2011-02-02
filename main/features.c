@@ -2458,17 +2458,26 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 				
 				if (ast_test_flag(param, AST_FEATURE_REDIRECT)) {
                                 	ast_set_flag(&(config->features_callee), AST_FEATURE_REDIRECT);
-					ast_debug(2, "--- Setting Transfer flag on callee in bridge! \n");
+					ast_debug(2, "--- Setting Transfer flag on callee in bridge! Chan %s Peer %s \n", chan->name, peer->name);
 					hasfeatures = 1;
+					ast_set_flag(config, AST_BRIDGE_DTMF_CHANNEL_1);
 				}
-				if (ast_test_flag(param, AST_FEATURE_DISCONNECT))
+				if (ast_test_flag(param, AST_FEATURE_DISCONNECT)) {
                                 	ast_set_flag(&(config->features_callee), AST_FEATURE_DISCONNECT);
-				if (ast_test_flag(param, AST_FEATURE_AUTOMON))
+					ast_set_flag(config, AST_BRIDGE_DTMF_CHANNEL_1);
+				}
+				if (ast_test_flag(param, AST_FEATURE_AUTOMON)) {
                                 	ast_set_flag(&(config->features_callee), AST_FEATURE_AUTOMON);
-				if (ast_test_flag(param, AST_FEATURE_AUTOMIXMON))
+					ast_set_flag(config, AST_BRIDGE_DTMF_CHANNEL_1);
+				}
+				if (ast_test_flag(param, AST_FEATURE_AUTOMIXMON)) {
                                 	ast_set_flag(&(config->features_callee), AST_FEATURE_AUTOMIXMON);
-				if (ast_test_flag(param, AST_FEATURE_PARKCALL))
+					ast_set_flag(config, AST_BRIDGE_DTMF_CHANNEL_1);
+				}
+				if (ast_test_flag(param, AST_FEATURE_PARKCALL)) {
                                 	ast_set_flag(&(config->features_callee), AST_FEATURE_PARKCALL);
+					ast_set_flag(config, AST_BRIDGE_DTMF_CHANNEL_1);
+				}
 				ast_debug(2, "--- Setting updated bridge flags from chan_local in this bridge for outgoing channel %s Peer %s\n", chan->name, peer->name);
 				break;
 			case AST_CONTROL_OPTION:
