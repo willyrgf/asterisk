@@ -1348,7 +1348,7 @@ static int mgcp_senddigit_end(struct ast_channel *ast, char digit, unsigned int 
 		tmp[2] = digit;
 		tmp[3] = '\0';
 		transmit_notify_request(sub, tmp);
-                ast_rtp_senddigit_end(sub->rtp, digit);
+                ast_rtp_senddigit_end(sub->rtp, digit, duration);
 	} else {
 		ast_log(LOG_ERROR, "Don't know about DTMF_MODE %d\n", p->dtmfmode);
 	}

@@ -146,6 +146,7 @@ static void *autoservice_run(void *ign)
 
 			/* Throw these frames away */
 			case AST_FRAME_DTMF_BEGIN:
+			case AST_FRAME_DTMF_CONTINUE:
 			case AST_FRAME_VOICE:
 			case AST_FRAME_VIDEO:
 			case AST_FRAME_NULL:

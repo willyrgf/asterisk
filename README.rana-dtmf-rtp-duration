@@ -1,0 +1,22 @@
+EDVINA AB
+Olle E. Johansson
+
+
+This branch is trying to focus on DTMF in the RTP channel. Asterisk 1.4 and later
+doesn't send the proper DTMF duration on the outbound call leg. If we receive
+a DTMF with a duration of 480 samples, we might end up sending 1440 samples out.
+
+In order to handle this a lot of bugs was fixed. We also added a new control
+frame to update the outbound channel with the latest duration from the inbound,
+in order to try to prevent the outbound channel to run ahead of the inbound.
+
+The outbound channel sends a packet for every incoming RTP packet. As usual,
+the inbound and outbond channels are not synchronized at all. So the outbound
+always clocks dtmf in 160 samples /20 ms, something which will break wideband
+codecs. (another fix required for that).
+
+With this code, the outbound channel sends outbound DTMF for the duration of
+the inbound dtmf tone, a bit adjusted to match 160 samples per outbound
+transmission. We do not break outbound DTMF when we receive inbound
+DTMF end, we continue until we have reached the duration of the DTMF that
+we received on the inbound channel.

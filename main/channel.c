@@ -1902,6 +1902,7 @@ int __ast_answer(struct ast_channel *chan, unsigned int delay, int cdr_answer)
 				case AST_FRAME_VIDEO:
 				case AST_FRAME_TEXT:
 				case AST_FRAME_DTMF_BEGIN:
+				case AST_FRAME_DTMF_CONTINUE:
 				case AST_FRAME_DTMF_END:
 				case AST_FRAME_IMAGE:
 				case AST_FRAME_HTML:
@@ -2454,6 +2455,7 @@ int ast_waitfordigit_full(struct ast_channel *c, int ms, int audiofd, int cmdfd)
 
 			switch (f->frametype) {
 			case AST_FRAME_DTMF_BEGIN:
+			case AST_FRAME_DTMF_CONTINUE:
 				break;
 			case AST_FRAME_DTMF_END:
 				res = f->subclass;
@@ -2750,7 +2752,7 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 			 * there are cases where we want to leave DTMF frames on the queue until
 			 * some later time. */
 
-			if ( (f->frametype == AST_FRAME_DTMF_BEGIN || f->frametype == AST_FRAME_DTMF_END) && skip_dtmf) {
+			if ( (f->frametype == AST_FRAME_DTMF_BEGIN || f->frametype == AST_FRAME_DTMF_CONTINUE || f->frametype == AST_FRAME_DTMF_END) && skip_dtmf) {
 				continue;
 			}
 
@@ -2902,6 +2904,13 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 						ast_frfree(old_frame);
 				}
 			}
+			break;
+		case AST_FRAME_DTMF_CONTINUE:
+			/* No manager event at this point
+				send_dtmf_event(chan, "Received", f->subclass, "Yes", "No");
+			*/
+			ast_log(LOG_DTMF, "DTMF continue '%c' received on %s\n", f->subclass, chan->name);
+			ast_log(LOG_DEBUG, "---DEBUG--- DTMF continue '%c' received on %s\n", f->subclass, chan->name);
 			break;
 		case AST_FRAME_DTMF_BEGIN:
 			send_dtmf_event(chan, "Received", f->subclass, "Yes", "No");
@@ -3345,6 +3354,17 @@ int ast_senddigit_begin(struct ast_channel *chan, char digit)
 	return 0;
 }
 
+int ast_senddigit_continue(struct ast_channel *chan, char digit, unsigned int duration)
+{
+	int res = -1;
+
+	ast_log(LOG_DEBUG, "DEBUG --- COntinue frame passed on to tech for %s\n", chan->name);
+	if (chan->tech->send_digit_continue)
+		res = chan->tech->send_digit_continue(chan, digit, duration);
+
+	return 0;
+}
+
 int ast_senddigit_end(struct ast_channel *chan, char digit, unsigned int duration)
 {
 	int res = -1;
@@ -3466,6 +3486,22 @@ int ast_write(struct ast_channel *chan, struct ast_frame *fr)
 		ast_clear_flag(chan, AST_FLAG_BLOCKING);
 		ast_channel_unlock(chan);
 		res = ast_senddigit_begin(chan, fr->subclass);
+		ast_channel_lock(chan);
+		CHECK_BLOCKING(chan);
+		break;
+	case AST_FRAME_DTMF_CONTINUE:
+		if (chan->audiohooks) {
+			struct ast_frame *old_frame = fr;
+			fr = ast_audiohook_write_list(chan, chan->audiohooks, AST_AUDIOHOOK_DIRECTION_WRITE, fr);
+			if (old_frame != fr)
+				f = fr;
+		}
+		ast_log(LOG_DEBUG, "---Continue FRAME received, forwarding to channel %s", chan->name);
+		// Skip manager for continue events (at least for now)
+		//send_dtmf_event(chan, "Sent", fr->subclass, "Yes", "No");
+		ast_clear_flag(chan, AST_FLAG_BLOCKING);
+		ast_channel_unlock(chan);
+		res = ast_senddigit_continue(chan, fr->subclass, fr->len);
 		ast_channel_lock(chan);
 		CHECK_BLOCKING(chan);
 		break;
@@ -4904,6 +4940,7 @@ static enum ast_bridge_result ast_generic_bridge(struct ast_channel *c0, struct 
 		}
 		if ((f->frametype == AST_FRAME_VOICE) ||
 		    (f->frametype == AST_FRAME_DTMF_BEGIN) ||
+		    (f->frametype == AST_FRAME_DTMF_CONTINUE) ||
 		    (f->frametype == AST_FRAME_DTMF) ||
 		    (f->frametype == AST_FRAME_VIDEO) ||
 		    (f->frametype == AST_FRAME_IMAGE) ||
@@ -4919,7 +4956,7 @@ static enum ast_bridge_result ast_generic_bridge(struct ast_channel *c0, struct 
 				*fo = f;
 				*rc = who;
 				ast_debug(1, "Got DTMF %s on channel (%s)\n", 
-					f->frametype == AST_FRAME_DTMF_END ? "end" : "begin",
+					f->frametype == AST_FRAME_DTMF_END ? "end" : "begin",	/* BUG for continue. Ignored now. OEJ */
 					who->name);
 
 				break;

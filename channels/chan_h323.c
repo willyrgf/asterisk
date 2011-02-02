@@ -557,7 +557,7 @@ static int oh323_digit_end(struct ast_channel *c, char digit, unsigned int durat
 		if (h323debug) {
 			ast_log(LOG_DTMF, "End sending out-of-band digit %c on %s, duration %d\n", digit, c->name, duration);
 		}
-		ast_rtp_senddigit_end(pvt->rtp, digit);
+		ast_rtp_senddigit_end(pvt->rtp, digit, duration);
 		ast_mutex_unlock(&pvt->lock);
 	} else {
 		/* in-band DTMF */
