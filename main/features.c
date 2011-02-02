@@ -1794,7 +1794,9 @@ static int feature_interpret_helper(struct ast_channel *chan, struct ast_channel
 			if (operation) {
 				res = tmpfeature->operation(chan, peer, config, code, sense, tmpfeature);
 			}
-			memcpy(feature, tmpfeature, sizeof(feature));
+			if (feature) {
+				memcpy(feature, tmpfeature, sizeof(feature));
+			}
 			if (res != AST_FEATURE_RETURN_KEEPTRYING) {
 				AST_RWLIST_UNLOCK(&feature_list);
 				break;
@@ -2205,6 +2207,7 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 	int hasfeatures=0;
 	int hadfeatures=0;
 	int autoloopflag;
+	int sendingdtmfdigit = 0;
 	struct ast_option_header *aoh;
 	struct ast_bridge_config backup_config;
 	struct ast_cdr *bridge_cdr = NULL;
@@ -2389,12 +2392,10 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 					   digits to come in for features. */
 					ast_debug(1, "Timed out for feature!\n");
 					if (!ast_strlen_zero(peer_featurecode)) {
-						ast_log(LOG_DEBUG, "--- Sending DTMF here\n");
 						ast_dtmf_stream(chan, peer, peer_featurecode, 0, f->len);
 						memset(peer_featurecode, 0, sizeof(peer_featurecode));
 					}
 					if (!ast_strlen_zero(chan_featurecode)) {
-						ast_log(LOG_DEBUG, "--- Sending DTMF here - 2\n");
 						ast_dtmf_stream(peer, chan, chan_featurecode, 0, f->len);
 						memset(chan_featurecode, 0, sizeof(chan_featurecode));
 					}
@@ -2461,9 +2462,7 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 				}
 				break;
 			}
-		} else if (f->frametype == AST_FRAME_DTMF_BEGIN) {
-			/* eat it */
-		} else if (f->frametype == AST_FRAME_DTMF) {
+		} else if (f->frametype == AST_FRAME_DTMF || f->frametype == AST_FRAME_DTMF_BEGIN) {
 			char *featurecode;
 			int sense;
 			unsigned int dtmfduration = f->len;
@@ -2482,10 +2481,19 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 			 * \todo XXX how do we guarantee the latter ?
 			 */
 			featurecode[strlen(featurecode)] = f->subclass;
+			config->feature_timer = backup_config.feature_timer;
+
+			if (f->frametype == AST_FRAME_DTMF_BEGIN) {
+				/* Take a peek if this is the beginning of a feature. If not, just pass this DTMF along untouched. */
+				res = ast_feature_detect(chan, sense == FEATURE_SENSE_CHAN ? &(config->features_caller) : &(config->features_callee),featurecode, NULL);
+				if (res == FEATURE_RETURN_PASSDIGITS) {
+					ast_log(LOG_DEBUG, "We are doing nothing here, but this DTMF is not a feature code\n");
+				}
+				break;
+			}
 			/* Get rid of the frame before we start doing "stuff" with the channels */
 			ast_frfree(f);
 			f = NULL;
-			config->feature_timer = backup_config.feature_timer;
 			res = ast_feature_interpret(chan, peer, config, featurecode, sense);
 			switch(res) {
 			case FEATURE_RETURN_PASSDIGITS:
