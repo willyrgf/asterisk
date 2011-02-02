@@ -20246,12 +20246,29 @@ static struct ast_cli_entry cli_sip[] = {
 /*! \brief PBX load module - initialization */
 static int load_module(void)
 {
+	struct ast_cli_entry *clidef;
+	int i = 0;
+	char *dyn_app_dtmfmode = app_dtmfmode;
+	char *dyn_app_sipaddheader = app_sipaddheader;
+	char *dyn_ami_sippeers = "SIPpeers";
+	char *dyn_ami_sipshowpeer = "SIPshowpeer";
+
 	ast_log(LOG_DEBUG, "***** HEY YOU DEBUGGER: %s \n", ast_module_name(ast_module_info->self));
 	if (strcasecmp(ast_module_name(ast_module_info->self), "chan_sip.so")) {
 		ast_log(LOG_DEBUG, "*** We're not who we are supposed to be.\n");
 		dynamic_sip_tech = ast_calloc(1, sizeof(struct ast_channel_tech));
 		memcpy(dynamic_sip_tech, &sip_tech, sizeof(struct ast_channel_tech));
 		dynamic_sip_tech->type = "SIP00";
+
+		for (i = 0; i < sizeof(cli_sip)/sizeof(struct ast_cli_entry); i++) {
+			cli_sip[i].cmda[0] = "SIP00";
+			ast_log(LOG_DEBUG, "--Changed %s %s\n", cli_sip[i].cmda[0], cli_sip[i].cmda[1]);
+		}
+		dyn_app_dtmfmode = "SIP00.SIPDtmfMode";
+		dyn_app_sipaddheader = "SIP00.SIPAddHeader";
+		dyn_ami_sippeers = "SIP00.SIPpeers";
+		dyn_ami_sipshowpeer = "SIP00.SIPshowpeer";
+		sip_rtp.type = "SIP00";
 	} else {
 		dynamic_sip_tech = NULL;
 	}
@@ -20282,6 +20299,7 @@ static int load_module(void)
 		sched_context_destroy(sched);
 		return AST_MODULE_LOAD_FAILURE;
 	}
+	
 
 	/* Register all CLI functions for SIP */
 	ast_cli_register_multiple(cli_sip, sizeof(cli_sip)/ sizeof(struct ast_cli_entry));
@@ -20293,8 +20311,10 @@ static int load_module(void)
 	ast_udptl_proto_register(&sip_udptl);
 
 	/* Register dialplan applications */
-	ast_register_application(app_dtmfmode, sip_dtmfmode, synopsis_dtmfmode, descrip_dtmfmode);
-	ast_register_application(app_sipaddheader, sip_addheader, synopsis_sipaddheader, descrip_sipaddheader);
+	ast_log(LOG_DEBUG, "--Registrerar %s\n", dyn_app_dtmfmode);
+	ast_register_application(dyn_app_dtmfmode, sip_dtmfmode, synopsis_dtmfmode, descrip_dtmfmode);
+	ast_log(LOG_DEBUG, "--Registrerar %s\n", dyn_app_sipaddheader);
+	ast_register_application(dyn_app_sipaddheader, sip_addheader, synopsis_sipaddheader, descrip_sipaddheader);
 
 	/* Register dialplan functions */
 	ast_custom_function_register(&sip_header_function);
@@ -20303,9 +20323,9 @@ static int load_module(void)
 	ast_custom_function_register(&checksipdomain_function);
 
 	/* Register manager commands */
-	ast_manager_register2("SIPpeers", EVENT_FLAG_SYSTEM, manager_sip_show_peers,
+	ast_manager_register2(dyn_ami_sippeers, EVENT_FLAG_SYSTEM, manager_sip_show_peers,
 			"List SIP peers (text format)", mandescr_show_peers);
-	ast_manager_register2("SIPshowpeer", EVENT_FLAG_SYSTEM, manager_sip_show_peer,
+	ast_manager_register2(dyn_ami_sipshowpeer, EVENT_FLAG_SYSTEM, manager_sip_show_peer,
 			"Show SIP peer (text format)", mandescr_show_peer);
 
 	sip_poke_all_peers();	

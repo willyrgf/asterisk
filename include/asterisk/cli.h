@@ -46,7 +46,7 @@ void ast_cli(int fd, char *fmt, ...)
 
 /*! \brief A command line entry */
 struct ast_cli_entry {
-	char * const cmda[AST_MAX_CMD_LEN];
+	char * cmda[AST_MAX_CMD_LEN];
 	/*! Handler for the command (fd for output, # of args, argument list).
 	  Returns RESULT_SHOWUSAGE for improper arguments.
 	  argv[] has argc 'useful' entries, and an additional NULL entry

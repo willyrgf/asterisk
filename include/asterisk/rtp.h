@@ -73,7 +73,7 @@ struct ast_rtp_protocol {
 	/*! Set RTP peer */
 	int (* const set_rtp_peer)(struct ast_channel *chan, struct ast_rtp *peer, struct ast_rtp *vpeer, int codecs, int nat_active);
 	int (* const get_codec)(struct ast_channel *chan);
-	const char * const type;
+	const char * type;
 	AST_LIST_ENTRY(ast_rtp_protocol) list;
 };
 
