@@ -2468,6 +2468,7 @@ int ast_waitfordigit_full(struct ast_channel *c, int ms, int audiofd, int cmdfd)
 					return -1;
 				case AST_CONTROL_RINGING:
 				case AST_CONTROL_ANSWER:
+				case AST_CONTROL_BRIDGEPARAM:
 				case AST_CONTROL_SRCUPDATE:
 				case AST_CONTROL_SRCCHANGE:
 					/* Unimportant */
@@ -3185,7 +3186,6 @@ int ast_indicate_data(struct ast_channel *chan, int _condition,
 	case _XXX_AST_CONTROL_T38:
 		/* deprecated T.38 control frame */
 		return -1;
-	case AST_CONTROL_BRIDGEPARAM:
 	case AST_CONTROL_T38_PARAMETERS:
 		/* there is no way to provide 'default' behavior for these
 		 * control frames, so we need to return failure, but there
@@ -3216,6 +3216,7 @@ int ast_indicate_data(struct ast_channel *chan, int _condition,
 	case AST_CONTROL_PROGRESS:
 	case AST_CONTROL_PROCEEDING:
 	case AST_CONTROL_VIDUPDATE:
+	case AST_CONTROL_BRIDGEPARAM:
 	case AST_CONTROL_SRCUPDATE:
 	case AST_CONTROL_SRCCHANGE:
 	case AST_CONTROL_RADIO_KEY:

@@ -2469,7 +2469,7 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
                                 	ast_set_flag(&(config->features_callee), AST_FEATURE_AUTOMIXMON);
 				if (ast_test_flag(param, AST_FEATURE_PARKCALL))
                                 	ast_set_flag(&(config->features_callee), AST_FEATURE_PARKCALL);
-				ast_debug(2, "--- Setting updated bridge flags from chan_local in this bridge for incoming channel %s Peer %s\n", chan->name, peer->name);
+				ast_debug(2, "--- Setting updated bridge flags from chan_local in this bridge for outgoing channel %s Peer %s\n", chan->name, peer->name);
 				break;
 			case AST_CONTROL_OPTION:
 				aoh = f->data;

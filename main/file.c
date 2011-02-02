@@ -1261,6 +1261,7 @@ static int waitstream_core(struct ast_channel *c, const char *breakon,
 				case AST_CONTROL_VIDUPDATE:
 				case AST_CONTROL_SRCUPDATE:
 				case AST_CONTROL_SRCCHANGE:
+				case AST_CONTROL_BRIDGEPARAM:
 				case AST_CONTROL_HOLD:
 				case AST_CONTROL_UNHOLD:
 				case -1:

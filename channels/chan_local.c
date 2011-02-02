@@ -299,7 +299,7 @@ static void check_bridge(struct local_pvt *p)
 					/* Now, tell the owner's bridge that we had some interesting parameters in the bridge that
 					   will disappear soon, so that we don't drop them */
 					ast_queue_control_data(p->owner, AST_CONTROL_BRIDGEPARAM, &p->chan->bridgeflags, sizeof(p->chan->bridgeflags));
-					ast_debug(1, "----- Sending bridge flags from channel %s upstream\n", p->chan->name);
+					ast_debug(1, "----- Sending bridge flags from channel %s upstream to %s\n", p->chan->name, p->owner->name);
 					ast_debug(1, "----- We have these channels to play with: 1: %s 2: %s \n", p->chan->name, p->owner->name);
 					ast_channel_unlock(p->owner);
 				}
@@ -326,6 +326,9 @@ static int local_write(struct ast_channel *ast, struct ast_frame *f)
 	/* Just queue for delivery to the other side */
 	ast_mutex_lock(&p->lock);
 	isoutbound = IS_OUTBOUND(ast, p);
+	if (f && f->frametype == AST_FRAME_CONTROL && f->subclass == AST_CONTROL_BRIDGEPARAM) {
+		ast_log(LOG_DEBUG, "--- Bridge parameters shipped along ... \n");
+	}
 	if (isoutbound && f && (f->frametype == AST_FRAME_VOICE || f->frametype == AST_FRAME_VIDEO))
 		check_bridge(p);
 	if (!ast_test_flag(p, LOCAL_ALREADY_MASQED))

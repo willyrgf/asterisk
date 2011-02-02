@@ -822,6 +822,9 @@ void ast_frame_dump(const char *name, struct ast_frame *f, char *prefix)
 		case AST_CONTROL_UNHOLD:
 			strcpy(subclass, "Unhold");
 			break;
+		case AST_CONTROL_BRIDGEPARAM:
+			strcpy(subclass, "Bridge parameters");
+			break;
 		case AST_CONTROL_T38_PARAMETERS:
 			if (f->datalen != sizeof(struct ast_control_t38_parameters)) {
 				message = "Invalid";

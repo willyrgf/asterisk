@@ -2014,8 +2014,11 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			ast_copy_flags(&chan->bridgeflags, &config.features_callee,
 				AST_FEATURE_REDIRECT | AST_FEATURE_DISCONNECT |
 				AST_FEATURE_AUTOMON | AST_FEATURE_PARKCALL | AST_FEATURE_AUTOMIXMON);
+			ast_debug(1, "--- Settings bridgeflags on %s\n", peer->name);
+			ast_copy_flags(&peer->bridgeflags, &config.features_caller,
+				AST_FEATURE_REDIRECT | AST_FEATURE_DISCONNECT |
+				AST_FEATURE_AUTOMON | AST_FEATURE_PARKCALL | AST_FEATURE_AUTOMIXMON);
 			res = ast_bridge_call(chan, peer, &config);
-			//peer->bridgeflags =  { 0 } ;	/* Reset bridgeflags */
 		}
 
 		strcpy(peer->context, chan->context);
