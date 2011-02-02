@@ -1,0 +1,17 @@
+Edvina AB
+Olle E. Johansson
+
+
+
+
+Pinedanish - copybridgeflags
+============================
+
+If you dialout through the local channel with a "t" option on the last dial to a phone,
+after the local channel disappears, the transfer option is gone and the callee can not
+transfer any calls.
+
+With this code, the bridge feature flags on the last call leg is saved to the channel.
+At local masquerade, they're sent as a control frame "upwards" and applied to the
+remaining bridge. This way, the callee will keep the rights to transfer even after
+the local channels are gone.
