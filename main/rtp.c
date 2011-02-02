@@ -144,6 +144,7 @@ struct ast_rtp {
 	unsigned int lastdigitts;
 	char sending_digit;	/*!< boolean - are we sending digits */
 	char send_digit;	/*!< digit we are sending */
+	char send_dtmf_frame;	/*!< Number of samples in a frame with the current packetization */
 	int send_payload;
 	int send_duration;
 	int send_endflag:1;	/*!< We have received END marker but are in waiting mode */
@@ -1015,7 +1016,7 @@ static void process_rfc2833(struct ast_rtp *rtp, unsigned char *data, int len, u
 				f = ast_frdup(create_dtmf_frame(rtp, AST_FRAME_DTMF_END));
 				f->len = ast_tvdiff_ms(ast_samp2tv(rtp->dtmf_duration, rtp_get_rate(f->subclass)), ast_tv(0, 0));
 				rtp->resp = 0;
-				ast_log(LOG_DEBUG, "--GOT DTMF END message. Duration samples %d\n", rtp->dtmf_duration);
+				ast_log(LOG_DEBUG, "--GOT DTMF END message. Duration samples %d (%ld ms)\n", rtp->dtmf_duration, f->len);
 				rtp->dtmf_duration = rtp->dtmf_timeout = 0;
 				AST_LIST_INSERT_TAIL(frames, f, frame_list);
 			}
@@ -2725,11 +2726,9 @@ int ast_rtp_senddigit_begin(struct ast_rtp *rtp, char digit)
 				    ntohs(rtp->them.sin_port), payload, rtp->seqno, rtp->lastdigitts, res - hdrlen);
 		/* Increment sequence number */
 		rtp->seqno++;
-		/* Clear marker bit and set seqno */
-		rtpheader[0] = htonl((2 << 30) | (payload << 16) | (rtp->seqno));
+		/* Raise the seqno */
+		rtpheader[0] = htonl((2 << 30) | (1 << 23) | (payload << 16) | (rtp->seqno));
 	}
-	/* Increment duration */
-	rtp->send_duration += 160;
 
 	/* Since we received a begin, we can safely store the digit and disable any compensation */
 	rtp->sending_digit = 1;
@@ -2754,8 +2753,7 @@ int ast_rtp_senddigit_continue(struct ast_rtp *rtp, char digit, unsigned int dur
 		   so we can't assume 20 ms (160 units in 8000 hz audio).
 		*/
 		// int dursamples =  duration * (rtp_get_rate(f->subclass) / 1000)
-		int dursamples =  duration * (8000 / 1000);	/* How do we get the sample rate for the primary media in this call? */
-		// f->len = ast_tvdiff_ms(ast_samp2tv(rtp->dtmf_duration, rtp_get_rate(f->subclass)), ast_tv(0, 0));
+		int dursamples =  duration * (rtp_get_rate(rtp->f.subclass) / 1000);	/* How do we get the sample rate for the primary media in this call? */
 
 		ast_log(LOG_DEBUG, "DTMF CONTINUE : %d ms %d samples\n", duration, dursamples);
 		rtp->received_duration = dursamples;
@@ -2777,11 +2775,11 @@ static int ast_rtp_senddigit_continuation(struct ast_rtp *rtp)
 		return 0;
 
 	ast_log(LOG_DEBUG, "---- Send duration %d Received duration %d Endflag %d Send-digit %d\n", rtp->send_duration, rtp->received_duration, rtp->send_endflag, rtp->send_digit);
-	if (rtp->send_duration + 160 < rtp->received_duration) {
+
+	if (rtp->received_duration == 0 || rtp->send_duration + 160 <= rtp->received_duration) {
 		rtp->send_duration += 160;
 	} else if (rtp->send_endflag) {
 		ast_log(LOG_DEBUG, "---- Send duration %d Received duration %d - sending END packet\n", rtp->send_duration, rtp->received_duration);
-		rtp->send_duration += 160;
 		/* We are done, ready to send end flag */
 		rtp->send_endflag = 0;
 		return ast_rtp_senddigit_end(rtp, 0, rtp->received_duration);
@@ -2819,6 +2817,7 @@ int ast_rtp_senddigit_end(struct ast_rtp *rtp, char digit, unsigned int duration
 	unsigned int *rtpheader;
 	int hdrlen = 12, res = 0, i = 0;
 	char data[256];
+
 	int dursamples =  duration * (8000 / 1000);	/* How do we get the sample rate for the primary media in this call? */
 	
 	/* If no address, then bail out */
@@ -2826,7 +2825,11 @@ int ast_rtp_senddigit_end(struct ast_rtp *rtp, char digit, unsigned int duration
 		return 0;
 
 
-	ast_log(LOG_DEBUG, "---- Send duration %d Received duration %d Endflag %d Digit %d Send-digit %d\n", rtp->send_duration, rtp->received_duration, rtp->send_endflag, digit, rtp->send_digit);
+	ast_log(LOG_DEBUG, "---- Send duration %d Received duration %d Duration %d Endflag %d Digit %d Send-digit %d\n", rtp->send_duration, rtp->received_duration, duration, rtp->send_endflag, digit, rtp->send_digit);
+
+	//if (dursamples > rtp->received_duration) {
+		//rtp->received_duration = dursamples;
+	//}
 
 	if (!rtp->send_endflag && rtp->send_duration + 160 < rtp->received_duration) {
 		/* We still have to send DTMF continuation, because otherwise we will end prematurely. Set end flag to indicate
@@ -2861,8 +2864,11 @@ int ast_rtp_senddigit_end(struct ast_rtp *rtp, char digit, unsigned int duration
 
 	rtp->dtmfmute = ast_tvadd(ast_tvnow(), ast_tv(0, 500000));
 
-	//rtp->send_duration = rtp->received_duration;	/* Compensate for the last CONT packet */
-	rtp->send_duration = dursamples;	/* Compensate for the last CONT packet */
+	rtp->send_duration += 160;
+
+	if (rtp->received_duration > rtp->send_duration) {
+		rtp->send_duration = rtp->received_duration;
+	}
 
 	rtpheader = (unsigned int *)data;
 	rtpheader[1] = htonl(rtp->lastdigitts);
@@ -2885,7 +2891,7 @@ int ast_rtp_senddigit_end(struct ast_rtp *rtp, char digit, unsigned int duration
 				    ast_inet_ntoa(rtp->them.sin_addr),
 				    ntohs(rtp->them.sin_port), rtp->send_payload, rtp->seqno, rtp->lastdigitts, res - hdrlen);
 	}
-	ast_log(LOG_DEBUG, "-- DTMF END: Duration samples %d ms %d\n", rtp->send_duration, duration);
+	ast_log(LOG_DEBUG, "-- DTMF END: Duration samples sent %d got %d ms (%d samples)\n", rtp->send_duration, duration, dursamples);
 	rtp->lastts += rtp->send_duration;
 	rtp->sending_digit = 0;
 	rtp->send_digit = 0;

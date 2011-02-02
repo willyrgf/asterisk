@@ -2389,11 +2389,13 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 					   digits to come in for features. */
 					ast_debug(1, "Timed out for feature!\n");
 					if (!ast_strlen_zero(peer_featurecode)) {
-						ast_dtmf_stream(chan, peer, peer_featurecode, 0, 0);
+						ast_log(LOG_DEBUG, "--- Sending DTMF here\n");
+						ast_dtmf_stream(chan, peer, peer_featurecode, 0, f->len);
 						memset(peer_featurecode, 0, sizeof(peer_featurecode));
 					}
 					if (!ast_strlen_zero(chan_featurecode)) {
-						ast_dtmf_stream(peer, chan, chan_featurecode, 0, 0);
+						ast_log(LOG_DEBUG, "--- Sending DTMF here - 2\n");
+						ast_dtmf_stream(peer, chan, chan_featurecode, 0, f->len);
 						memset(chan_featurecode, 0, sizeof(chan_featurecode));
 					}
 					if (f)
@@ -2464,6 +2466,7 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 		} else if (f->frametype == AST_FRAME_DTMF) {
 			char *featurecode;
 			int sense;
+			unsigned int dtmfduration = f->len;
 
 			hadfeatures = hasfeatures;
 			/* This cannot overrun because the longest feature is one shorter than our buffer */
@@ -2486,7 +2489,8 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 			res = ast_feature_interpret(chan, peer, config, featurecode, sense);
 			switch(res) {
 			case FEATURE_RETURN_PASSDIGITS:
-				ast_dtmf_stream(other, who, featurecode, 0, 0);
+				ast_log(LOG_DEBUG, "--- Sending DTMF here - 3 Duration %d\n", dtmfduration);
+				ast_dtmf_stream(other, who, featurecode, 0, dtmfduration);
 				/* Fall through */
 			case FEATURE_RETURN_SUCCESS:
 				memset(featurecode, 0, sizeof(chan_featurecode));
