@@ -4746,6 +4746,14 @@ static void gen_closestream(struct gen_state *state)
 	state->chan->stream = NULL;
 	state->stream = NULL;
 	state->aqsi->now_playing = 0;	/* Important flag to indicate we are no longer playing on this channel */
+	if (state->chan->moh) {
+		ast_log(LOG_DEBUG, "--- Restarting MOH --\n");
+		if (state->aqsi->ringing) {
+			ast_indicate(qe->chan, AST_CONTROL_RINGING);
+		} else {
+			ast_moh_start(state->chan, state->aqsi->moh, NULL);
+		}
+	}
 }
 
 /*! \brief Release generator on channel */
@@ -4863,6 +4871,8 @@ static int play_file(struct ast_channel *chan, const char *filename, int ringing
 			res = ast_waitstream(chan, AST_DIGIT_ANY);
 		}
 		ast_stopstream(chan);
+		/* Maybe ringing, but let's play moh games here */
+		ast_moh_start(qe->chan, qe->moh, NULL);
 		return res;
 	}
 
