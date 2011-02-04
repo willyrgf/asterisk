@@ -419,25 +419,23 @@ static int wait_file_full(struct ast_channel *chan, const char *ints, const char
 				struct ast_queue_streamfile_name *fn = ast_calloc(1, sizeof(*fn));
 				
 				fn->filename = ast_strdup(file);
+				ast_debug(3, "----> Adding file %s to playlist for %s\n", file, chan->name);
 				
 				/* link the struct into the current ast_queue_streamfile_info struct */
 				AST_LIST_INSERT_TAIL(&aqsi->flist, fn, list);
 			} else {
 				/* if not playing, then start playing this file */
 				if (aqsi->ringing) {
-					ast_log(LOG_ERROR, "Stopping Indicate\n");
 					ast_indicate(aqsi->chan,-1);
 				} else {
-					ast_log(LOG_ERROR, "Stopping MOH\n");
 					ast_moh_stop(aqsi->chan);
 				}
 				
-				ast_log(LOG_ERROR, "Stopping Streaming\n");
 				ast_stopstream(aqsi->chan);
 				
 				ast_autoservice_stop(aqsi->chan);
 				
-				ast_log(LOG_ERROR, "Starting to stream %s\n", file);
+				ast_debug(3, "Starting to stream %s\n", file);
 				res = ast_streamfile(aqsi->chan, file, aqsi->chan->language); /* begin the streaming */
 				
 				while (res && !AST_LIST_EMPTY(&aqsi->flist)) {
@@ -447,7 +445,7 @@ static int wait_file_full(struct ast_channel *chan, const char *ints, const char
 					
 					fn = AST_LIST_REMOVE_HEAD(&aqsi->flist, list);
 					
-					ast_log(LOG_ERROR,"Start streaming file %s\n", fn->filename);
+					ast_debug(3,"Start streaming file %s\n", fn->filename);
 					res = ast_streamfile(aqsi->chan, fn->filename, aqsi->chan->language);
 				}
 				
@@ -456,10 +454,8 @@ static int wait_file_full(struct ast_channel *chan, const char *ints, const char
 					/* oops, the current file has problems */
 					/* restore the moh */
 					if (aqsi->ringing) {
-						ast_log(LOG_ERROR, "Starting Indicate\n");
 						ast_indicate(aqsi->chan, AST_CONTROL_RINGING);
 					} else {
-						ast_log(LOG_ERROR, "Starting MOH\n");
 						ast_moh_start(aqsi->chan, aqsi->moh, NULL);
 					}
 					AST_LIST_UNLOCK(&aqsi->flist);

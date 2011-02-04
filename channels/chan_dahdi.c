@@ -3347,8 +3347,8 @@ static int pri_find_dchan(struct dahdi_pri *pri)
 	}
 	if (newslot < 0) {
 		newslot = 0;
-		/* ast_log(LOG_WARNING, "No D-channels available!  Using Primary channel %d as D-channel anyway!\n",
-			pri->dchannels[newslot]); */
+		ast_log(LOG_WARNING, "No D-channels available!  Using Primary channel %d as D-channel anyway!\n",
+			pri->dchannels[newslot]);
 	}
 	if (old && (oldslot != newslot))
 		ast_log(LOG_NOTICE, "Switching from from d-channel %d to channel %d!\n",
