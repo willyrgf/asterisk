@@ -306,7 +306,6 @@ static int moh_files_generator(struct ast_channel *chan, void *data, int len, in
 	state->sample_queue += samples;
 
 	while (state->sample_queue > 0) {
-		ast_log(LOG_ERROR,"about to lock chan & read & write data\n");
 		ast_channel_lock(chan);
 		if ((f = moh_files_readframe(chan))) {
 			/* We need to be sure that we unlock
@@ -316,11 +315,9 @@ static int moh_files_generator(struct ast_channel *chan, void *data, int len, in
 			 * indirect channels, like local channels
 			 */
 			ast_channel_unlock(chan);
-			ast_log(LOG_ERROR,"read frame, about to write it\n");
 			state->samples += f->samples;
 			state->sample_queue -= f->samples;
 			res = ast_write(chan, f);
-			ast_log(LOG_ERROR,"wrote frame, res=%d\n", res);
 			ast_frfree(f);
 			if (res < 0) {
 				ast_log(LOG_WARNING, "Failed to write frame to '%s': %s\n", chan->name, strerror(errno));
@@ -1407,13 +1404,9 @@ static int local_ast_moh_start(struct ast_channel *chan, const char *mclass, con
 	ast_set_flag(chan, AST_FLAG_MOH);
 
 	if (mohclass->total_files) {
-		ast_log(LOG_ERROR,"MOH about to activate_generator: total_files=%d; class=%s;\n", mohclass->total_files, mohclass->mode);
 		res = ast_activate_generator(chan, &moh_file_stream, mohclass);
-		ast_log(LOG_ERROR,"MOH started, total_files=%d; class=%s;\n", mohclass->total_files, mohclass->mode);
 	} else {
-		ast_log(LOG_ERROR,"MOH about to activate_generator: total_files=%d; class=%s;\n", mohclass->total_files, mohclass->mode);
 		res = ast_activate_generator(chan, &mohgen, mohclass);
-		ast_log(LOG_ERROR,"MOH started, total_files=%d; class=%s;\n", mohclass->total_files, mohclass->mode);
 	}
 
 	mohclass = mohclass_unref(mohclass);

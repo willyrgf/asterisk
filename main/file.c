@@ -741,6 +741,7 @@ static enum fsread_res ast_readaudio_callback(struct ast_filestream *s)
 		struct ast_frame *fr;
 
 		if (s->orig_chan_name && strcasecmp(s->owner->name, s->orig_chan_name)) {
+			ast_log(LOG_DEBUG, "--- Giving up here\n");
 			goto return_failure;
 		}
 
@@ -751,6 +752,7 @@ static enum fsread_res ast_readaudio_callback(struct ast_filestream *s)
 				ast_log(LOG_WARNING, "Failed to write frame\n");
 				ast_frfree(fr);
 			}
+			ast_log(LOG_DEBUG, "--- Giving up here now\n");
 			goto return_failure;
 		} 
 

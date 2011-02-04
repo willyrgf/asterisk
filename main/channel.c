@@ -1944,12 +1944,12 @@ int ast_answer(struct ast_channel *chan)
 
 void ast_deactivate_generator(struct ast_channel *chan)
 {
-	ast_log(LOG_ERROR,"ast_deactivate_generator() called on chan %s\n", chan->name);
+	ast_debug(3, "ast_deactivate_generator() called on chan %s\n", chan->name);
 	ast_channel_lock(chan);
 	if (chan->generatordata) {
 		if (chan->generator && chan->generator->release)
 			chan->generator->release(chan, chan->generatordata);
-		ast_log(LOG_ERROR,"removing the generator stuff on chan %s\n", chan->name);
+		ast_debug(3,"removing the generator stuff on chan %s\n", chan->name);
 		chan->generatordata = NULL;
 		chan->generator = NULL;
 		ast_channel_set_fd(chan, AST_GENERATOR_FD, -1);
@@ -1957,6 +1957,7 @@ void ast_deactivate_generator(struct ast_channel *chan)
 		ast_settimeout(chan, 0, NULL, NULL);
 	}
 	ast_channel_unlock(chan);
+	ast_log(LOG_DEBUG, "ast_deactivate_generator() done on chan %s\n", chan->name);
 }
 
 static int generator_force(const void *data)
@@ -1966,7 +1967,7 @@ static int generator_force(const void *data)
 	int res;
 	int (*generate)(struct ast_channel *chan, void *tmp, int datalen, int samples) = NULL;
 	struct ast_channel *chan = (struct ast_channel *)data;
-	ast_log(LOG_ERROR, "GENERATOR_FORCE CALLED on chan %s\n", chan->name);
+
 	ast_channel_lock(chan);
 	tmp = chan->generatordata;
 	chan->generatordata = NULL;
@@ -1974,14 +1975,16 @@ static int generator_force(const void *data)
 		generate = chan->generator->generate;
 	ast_channel_unlock(chan);
 
-	if (!tmp || !generate)
+	ast_debug(3, "GENERATOR_FORCE: generate() CALLED res=%d on chan %s\n", res, chan->name);
+	if (!tmp || !generate) {
+		ast_log(LOG_ERROR, "--- Can't find generator data or generator function \n");
 		return 0;
+	}
 
 	res = generate(chan, tmp, 0, ast_format_rate(chan->writeformat & AST_FORMAT_AUDIO_MASK) / 50);
 
 	chan->generatordata = tmp;
 
-	ast_log(LOG_ERROR, "GENERATOR_FORCE: generate() CALLED res=%d on chan %s\n", res, chan->name);
 	if (res) {
 		ast_debug(1, "Auto-deactivating generator on chan %s\n", chan->name);
 		ast_deactivate_generator(chan);
@@ -1994,7 +1997,7 @@ int ast_activate_generator(struct ast_channel *chan, struct ast_generator *gen, 
 {
 	int res = 0;
 
-	ast_log(LOG_ERROR,"In the activate_generator func. gen->alloc = %p on chan %s\n", gen->alloc, chan->name);
+	ast_log(LOG_DEBUG,"In the activate_generator func. gen->alloc = %p on chan %s\n", gen->alloc, chan->name);
 	ast_channel_lock(chan);
 	if (chan->generatordata) {
 		if (chan->generator && chan->generator->release)
@@ -2002,11 +2005,11 @@ int ast_activate_generator(struct ast_channel *chan, struct ast_generator *gen, 
 		chan->generatordata = NULL;
 	}
 	if (gen->alloc && !(chan->generatordata = gen->alloc(chan, params))) {
-		ast_log(LOG_ERROR,"Generator Data is -1\n");
+		ast_debug(3,"Generator Data is -1\n");
 		res = -1;
 	}
 	if (!res) {
-		ast_log(LOG_ERROR,"About to settimeout for generator_force on chan %s\n", chan->name);
+		ast_debug(3,"About to settimeout for generator_force on chan %s\n", chan->name);
 		ast_settimeout(chan, 160, generator_force, chan);
 		chan->generator = gen;
 	}
@@ -2407,10 +2410,10 @@ int ast_waitfordigit(struct ast_channel *c, int ms)
 int ast_settimeout(struct ast_channel *c, int samples, int (*func)(const void *data), void *data)
 {
 	int res = -1;
-	ast_log(LOG_ERROR,"in settimeout\n");
+	ast_debug(3,"in settimeout\n");
 #ifdef HAVE_DAHDI
 	ast_channel_lock(c);
-	ast_log(LOG_ERROR,"in settimeout (HAVE DAHDI) timingfd=%d; timingfunc=%p; timingdata=%p\n", c->timingfd, c->timingfunc, c->timingdata);
+	ast_debug(3,"in settimeout (HAVE DAHDI) timingfd=%d; timingfunc=%p; timingdata=%p\n", c->timingfd, c->timingfunc, c->timingdata);
 	if (c->timingfd > -1) {
 		if (!func) {
 			samples = 0;
@@ -2422,6 +2425,8 @@ int ast_settimeout(struct ast_channel *c, int samples, int (*func)(const void *d
 		c->timingdata = data;
 	}
 	ast_channel_unlock(c);
+#else
+	ast_debug(3, "-- Set timeout have no timer to work with\n");
 #endif
 	return res;
 }
@@ -2521,6 +2526,7 @@ static void send_dtmf_event(const struct ast_channel *chan, const char *directio
 
 static void ast_read_generator_actions(struct ast_channel *chan, struct ast_frame *f)
 {
+	ast_debug(3, "----- Jost poking around. Have a happy life. \n");
 	if (chan->generator && chan->generator->generate && chan->generatordata &&  !ast_internal_timing_enabled(chan)) {
 		void *tmp = chan->generatordata;
 		int (*generate)(struct ast_channel *chan, void *tmp, int datalen, int samples) = chan->generator->generate;
@@ -2533,6 +2539,7 @@ static void ast_read_generator_actions(struct ast_channel *chan, struct ast_fram
 			ast_settimeout(chan, 0, NULL, NULL);
 		}
 
+		ast_debug(3, "--- Deactivating generator \n");
 		chan->generatordata = NULL;     /* reset, to let writes go through */
 
 		if (f->subclass != chan->writeformat) {
@@ -2555,6 +2562,7 @@ static void ast_read_generator_actions(struct ast_channel *chan, struct ast_fram
 		res = generate(chan, tmp, f->datalen, samples);
 		ast_channel_lock(chan);
 		chan->generatordata = tmp;
+		ast_debug(3, "--- Reactivating generator \n");
 		if (res) {
 			if (option_debug > 1)
 				ast_log(LOG_DEBUG, "Auto-deactivating generator\n");
@@ -3061,6 +3069,7 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 
 				/* Run generator sitting on the line if timing device not available
 				* and synchronous generation of outgoing frames is necessary       */
+				ast_debug(3, ">>>>>>>>> just another silly message. We are generating, man! \n");
 				ast_read_generator_actions(chan, f);
 			}
 		default:
