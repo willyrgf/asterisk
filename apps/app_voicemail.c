@@ -2937,7 +2937,7 @@ static int last_message_index(struct ast_vm_user *vmu, char *dir)
 	}
 
 	while ((msgdirent = readdir(msgdir))) {
-		if (!strcmp(extension, "txt") && msgdirint < MAXMSGLIMIT && sscanf(msgdirent->d_name, "msg%10d.%3s", &msgdirint, extension) == 2) {
+		if (sscanf(msgdirent->d_name, "msg%30d.%3s", &msgdirint, extension) == 2 && !strcmp(extension, "txt") && msgdirint < MAXMSGLIMIT) {
 			map[msgdirint] = 1;
 			stopcount++;
 			if (option_debug > 3) {
@@ -5234,6 +5234,7 @@ static int vm_forwardoptions(struct ast_channel *chan, struct ast_vm_user *vmu, 
 			prepend_duration = 0;
 
 			/* Back up the original file, so we can retry the prepend */
+#ifndef IMAP_STORAGE
 			if (already_recorded) {
 				ast_filecopy(backup, msgfile, NULL);
 				copy(textfile, backup_textfile);
@@ -5241,6 +5242,7 @@ static int vm_forwardoptions(struct ast_channel *chan, struct ast_vm_user *vmu, 
 				ast_filecopy(msgfile, backup, NULL);
 				copy(textfile, backup_textfile);
 			}
+#endif
 			already_recorded = 1;
 
 			if (record_gain)
