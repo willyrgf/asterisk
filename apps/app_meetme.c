@@ -167,6 +167,8 @@ enum {
 	CONFFLAG_SLA_TRUNK = (1 << 27),
 	/*! Do not write any audio to this channel until the state is up. */
 	CONFFLAG_NO_AUDIO_UNTIL_UP = (1 << 28),
+	/*! The last remaining user needs a hangup - emulate a bridge */
+	CONFFLAG_KILL_LAST_MAN_STANDING = (1 << 29),
 };
 
 enum {
@@ -186,6 +188,7 @@ AST_APP_OPTIONS(meetme_opts, BEGIN_OPTIONS
 	AST_APP_OPTION('F', CONFFLAG_PASS_DTMF ),
 	AST_APP_OPTION('i', CONFFLAG_INTROUSER ),
 	AST_APP_OPTION('I', CONFFLAG_INTROUSERNOREVIEW ),
+	AST_APP_OPTION('k', CONFFLAG_KILL_LAST_MAN_STANDING ),
 	AST_APP_OPTION('M', CONFFLAG_MOH ),
 	AST_APP_OPTION('m', CONFFLAG_STARTMUTED ),
 	AST_APP_OPTION('o', CONFFLAG_OPTIMIZETALKER ),
@@ -237,6 +240,7 @@ static const char *descrip =
 "      'F' -- Pass DTMF through the conference.\n"
 "      'i' -- announce user join/leave with review\n"
 "      'I' -- announce user join/leave without review\n"
+"      'k' -- if there's only one remaining user, cancel the conference\n"
 "      'l' -- set listen only mode (Listen only, no talking)\n"
 "      'm' -- set initially muted\n"
 "      'M' -- enable music on hold when the conference has a single caller\n"
@@ -2566,6 +2570,13 @@ bailoutandtrynormal:
 		/* Change any states */
 		if (!conf->users)
 			ast_device_state_changed("meetme:%s", conf->confno);
+
+		/* If we're supposed to clean up the conference at this point, let's do it 
+			This flag is meant to kill a conference with only one person remaining.
+		 */
+		if (conf->users == 1 && (confflags & CONFFLAG_KILL_LAST_MAN_STANDING)) {
+			ao2_callback(cnf->usercontainer, 0, user_set_kickme_cb, NULL);
+		}
 		
 		/* Return the number of seconds the user was in the conf */
 		snprintf(meetmesecs, sizeof(meetmesecs), "%d", (int) (time(NULL) - user->jointime));
