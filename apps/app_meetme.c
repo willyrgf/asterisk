@@ -591,6 +591,7 @@ static char const gain_map[] = {
 };
 
 
+static int user_set_kickme_cb(void *obj, void *unused, int flags);
 static int admin_exec(struct ast_channel *chan, void *data);
 static void *recordthread(void *args);
 
@@ -2575,7 +2576,7 @@ bailoutandtrynormal:
 			This flag is meant to kill a conference with only one person remaining.
 		 */
 		if (conf->users == 1 && (confflags & CONFFLAG_KILL_LAST_MAN_STANDING)) {
-			ao2_callback(cnf->usercontainer, 0, user_set_kickme_cb, NULL);
+			ao2_callback(conf->usercontainer, 0, user_set_kickme_cb, NULL);
 		}
 		
 		/* Return the number of seconds the user was in the conf */
