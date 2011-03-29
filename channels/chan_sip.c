@@ -18677,6 +18677,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 	/* If we have realm authentication information, remove them (reload) */
 	clear_realm_authentication(peer->auth);
 	peer->auth = NULL;
+	memset(&peer->externip, 0, sizeof(peer->externip));
 
 	for (; v || ((v = alt) && !(alt=NULL)); v = v->next) {
 		if (!devstate_only) {
@@ -18821,6 +18822,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 			} else if (!strcasecmp(v->name, "externip") || !strcasecmp(v->name, "externaddr")) {
 				struct hostent *hp;
 				struct ast_hostent ahp;
+
 				if (localaddr == NULL) {
 					ast_log(LOG_ERROR, "Setting externip in peer section [%s] without any localnet configuration in the [general] section will not work at line %d.\n", peer->name, v->lineno);
 				} else {
