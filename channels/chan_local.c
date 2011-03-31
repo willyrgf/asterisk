@@ -222,8 +222,7 @@ static int local_queue_frame(struct local_pvt *p, int isoutbound, struct ast_fra
 			ast_setstate(other, AST_STATE_RINGING);
 		}
 		if (f->frametype == AST_FRAME_CONTROL && f->subclass == AST_CONTROL_BRIDGEPARAM) {
-			if (option_debug > 1)
-				ast_log(LOG_DEBUG, "---> BRIDGE CONTROL packet aimed for %s\n", other->name);
+			ast_debug(2, "Forwarding BRIDGE CONTROL packet aimed for %s\n", other->name);
 		}
 		ast_queue_frame(other, f);
 		ast_channel_unlock(other);
