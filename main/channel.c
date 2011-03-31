@@ -1957,7 +1957,7 @@ void ast_deactivate_generator(struct ast_channel *chan)
 		ast_settimeout(chan, 0, NULL, NULL);
 	}
 	ast_channel_unlock(chan);
-	ast_log(LOG_DEBUG, "ast_deactivate_generator() done on chan %s\n", chan->name);
+	ast_debug(3, "ast_deactivate_generator() done on chan %s\n", chan->name);
 }
 
 static int generator_force(const void *data)
@@ -1977,7 +1977,7 @@ static int generator_force(const void *data)
 
 	ast_debug(3, "GENERATOR_FORCE: generate() CALLED res=%d on chan %s\n", res, chan->name);
 	if (!tmp || !generate) {
-		ast_log(LOG_ERROR, "--- Can't find generator data or generator function \n");
+		ast_log(LOG_ERROR, "Can't find generator data or generator function \n");
 		return 0;
 	}
 
@@ -1997,7 +1997,6 @@ int ast_activate_generator(struct ast_channel *chan, struct ast_generator *gen, 
 {
 	int res = 0;
 
-	ast_log(LOG_DEBUG,"In the activate_generator func. gen->alloc = %p on chan %s\n", gen->alloc, chan->name);
 	ast_channel_lock(chan);
 	if (chan->generatordata) {
 		if (chan->generator && chan->generator->release)
@@ -2009,11 +2008,9 @@ int ast_activate_generator(struct ast_channel *chan, struct ast_generator *gen, 
 		res = -1;
 	}
 	if (!res) {
-		ast_debug(3,"About to settimeout for generator_force on chan %s\n", chan->name);
 		ast_settimeout(chan, 160, generator_force, chan);
 		chan->generator = gen;
 	}
-	ast_log(LOG_ERROR,"Leaving the activate_generator, res=%d on chan %s\n", res, chan->name);
 	ast_channel_unlock(chan);
 
 	ast_prod(chan);
@@ -2534,8 +2531,7 @@ static void ast_read_generator_actions(struct ast_channel *chan, struct ast_fram
 		int samples;
 
 		if (chan->timingfunc) {
-			if (option_debug > 1)
-				ast_log(LOG_DEBUG, "Generator got voice, switching to phase locked mode\n");
+			ast_debug(2, "Generator got voice, switching to phase locked mode\n");
 			ast_settimeout(chan, 0, NULL, NULL);
 		}
 
@@ -2564,15 +2560,13 @@ static void ast_read_generator_actions(struct ast_channel *chan, struct ast_fram
 		chan->generatordata = tmp;
 		ast_debug(3, "--- Reactivating generator \n");
 		if (res) {
-			if (option_debug > 1)
-				ast_log(LOG_DEBUG, "Auto-deactivating generator\n");
+			ast_debug(2, "Auto-deactivating generator\n");
 			ast_deactivate_generator(chan);
 		}
 
 	} else if (f->frametype == AST_FRAME_CNG) {
 		if (chan->generator && !chan->timingfunc && (chan->timingfd > -1)) {
-			if (option_debug > 1)
-				ast_log(LOG_DEBUG, "Generator got CNG, switching to timed mode\n");
+			ast_debug(2, "Generator got CNG, switching to timed mode\n");
 			ast_settimeout(chan, 160, generator_force, chan);
 		}
 	}
