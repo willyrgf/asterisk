@@ -71,6 +71,7 @@ static struct ast_jb_conf g_jb_conf = {
 
 static struct ast_channel *local_request(const char *type, int format, void *data, int *cause);
 static int local_digit_begin(struct ast_channel *ast, char digit);
+static int local_digit_continue(struct ast_channel *ast, char digit, unsigned int duration);
 static int local_digit_end(struct ast_channel *ast, char digit, unsigned int duration);
 static int local_call(struct ast_channel *ast, char *dest, int timeout);
 static int local_hangup(struct ast_channel *ast);
@@ -95,6 +96,7 @@ static const struct ast_channel_tech local_tech = {
 	.capabilities = -1,
 	.requester = local_request,
 	.send_digit_begin = local_digit_begin,
+	.send_digit_continue = local_digit_continue,
 	.send_digit_end = local_digit_end,
 	.call = local_call,
 	.hangup = local_hangup,
@@ -592,6 +594,26 @@ static int local_digit_begin(struct ast_channel *ast, char digit)
 	res = local_queue_frame(p, isoutbound, &f, ast, 0);
 	ao2_unlock(p);
 	ao2_ref(p, -1);
+
+	return res;
+}
+
+static int local_digit_continue(struct ast_channel *ast, char digit, unsigned int duration)
+{
+	struct local_pvt *p = ast->tech_pvt;
+	int res = -1;
+	struct ast_frame f = { AST_FRAME_DTMF_CONTINUE, };
+	int isoutbound;
+
+	if (!p)
+		return -1;
+
+	ast_mutex_lock(&p->lock);
+	isoutbound = IS_OUTBOUND(ast, p);
+	f.subclass = digit;
+	f.len = duration;
+	if (!(res = local_queue_frame(p, isoutbound, &f, ast, 0)))
+		ast_mutex_unlock(&p->lock);
 
 	return res;
 }

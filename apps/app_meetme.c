@@ -2668,7 +2668,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 					ret = 0;
 					ast_frfree(f);
 					break;
-				} else if ((f->frametype == AST_FRAME_DTMF_BEGIN || f->frametype == AST_FRAME_DTMF_END)
+				} else if ((f->frametype == AST_FRAME_DTMF_BEGIN || f->frametype == AST_FRAME_DTMF_CONTINUE || f->frametype == AST_FRAME_DTMF_END)
 					&& confflags & CONFFLAG_PASS_DTMF) {
 					conf_queue_dtmf(conf, user, f);
 				} else if ((confflags & CONFFLAG_SLA_STATION) && f->frametype == AST_FRAME_CONTROL) {
