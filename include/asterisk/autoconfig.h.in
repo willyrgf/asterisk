@@ -332,6 +332,9 @@
 /* Define to 1 if you have the ISDN PRI library. */
 #undef HAVE_PRI
 
+/* Define to 1 if you have the NOTIFY with call ptr library. */
+#undef HAVE_PRI_CALL_HOLD
+
 /* Define to 1 if you have the ISDN PRI set_inbanddisconnect library. */
 #undef HAVE_PRI_INBANDDISCONNECT
 
