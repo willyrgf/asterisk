@@ -12383,6 +12383,7 @@ static int sip_show_channel(int fd, int argc, char *argv[])
 			ast_cli(fd, "  SIP Transfer mode:      %s\n", transfermode2str(cur->allowtransfer));
 			ast_cli(fd, "  NAT Support:            %s\n", nat2str(ast_test_flag(&cur->flags[0], SIP_NAT)));
 			ast_cli(fd, "  Audio IP:               %s %s\n", ast_inet_ntoa(cur->redirip.sin_addr.s_addr ? cur->redirip.sin_addr : cur->ourip), cur->redirip.sin_addr.s_addr ? "(Outside bridge)" : "(local)" );
+			ast_cli(fd, "  ExternIP:               %s\n",  cur->externip.sin_addr.s_addr ? ast_inet_ntoa(cur->externip.sin_addr) : "(Unspecified)");
 			ast_cli(fd, "  Our Tag:                %s\n", cur->tag);
 			ast_cli(fd, "  Their Tag:              %s\n", cur->theirtag);
 			ast_cli(fd, "  SIP User agent:         %s\n", cur->useragent);
