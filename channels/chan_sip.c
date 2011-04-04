@@ -11800,6 +11800,7 @@ static int _sip_show_peer(int type, int fd, struct mansession *s, const struct m
 		ast_cli(fd, "  DTMFmode     : %s\n", dtmfmode2str(ast_test_flag(&peer->flags[0], SIP_DTMF)));
 		ast_cli(fd, "  LastMsg      : %d\n", peer->lastmsg);
 		ast_cli(fd, "  ToHost       : %s\n", peer->tohost);
+		ast_cli(fd, "  ExternIP     : %s\n",  peer->externip.sin_addr.s_addr ? ast_inet_ntoa(peer->externip.sin_addr) : "(Unspecified)");
 		ast_cli(fd, "  Addr->IP     : %s Port %d\n",  peer->addr.sin_addr.s_addr ? ast_inet_ntoa(peer->addr.sin_addr) : "(Unspecified)", ntohs(peer->addr.sin_port));
 		ast_cli(fd, "  Defaddr->IP  : %s Port %d\n", ast_inet_ntoa(peer->defaddr.sin_addr), ntohs(peer->defaddr.sin_port));
 		if (!ast_strlen_zero(global_regcontext))
@@ -11880,6 +11881,7 @@ static int _sip_show_peer(int type, int fd, struct mansession *s, const struct m
 		astman_append(s, "SIP-DTMFmode: %s\r\n", dtmfmode2str(ast_test_flag(&peer->flags[0], SIP_DTMF)));
 		astman_append(s, "SIPLastMsg: %d\r\n", peer->lastmsg);
 		astman_append(s, "ToHost: %s\r\n", peer->tohost);
+		astman_append(s, "Extern-IP: %s\r\n",  peer->externip.sin_addr.s_addr ? ast_inet_ntoa(peer->externip.sin_addr) : "");
 		astman_append(s, "Address-IP: %s\r\nAddress-Port: %d\r\n",  peer->addr.sin_addr.s_addr ? ast_inet_ntoa(peer->addr.sin_addr) : "", ntohs(peer->addr.sin_port));
 		astman_append(s, "Default-addr-IP: %s\r\nDefault-addr-port: %d\r\n", ast_inet_ntoa(peer->defaddr.sin_addr), ntohs(peer->defaddr.sin_port));
 		astman_append(s, "Default-Username: %s\r\n", peer->username);
