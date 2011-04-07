@@ -2478,6 +2478,16 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
                                 	ast_set_flag(&(config->features_callee), AST_FEATURE_PARKCALL);
 					ast_set_flag(config, AST_BRIDGE_DTMF_CHANNEL_1);
 				}
+
+				ast_debug(1, "--- Setting bridgeflags on %s\n", chan->name);
+				ast_copy_flags(&chan->bridgeflags, &(config->features_callee),
+					AST_FEATURE_REDIRECT | AST_FEATURE_DISCONNECT |
+					AST_FEATURE_AUTOMON | AST_FEATURE_PARKCALL | AST_FEATURE_AUTOMIXMON);
+				ast_debug(1, "--- Setting bridgeflags on %s\n", peer->name);
+				ast_copy_flags(&peer->bridgeflags, &(config->features_caller),
+					AST_FEATURE_REDIRECT | AST_FEATURE_DISCONNECT |
+					AST_FEATURE_AUTOMON | AST_FEATURE_PARKCALL | AST_FEATURE_AUTOMIXMON);
+	
 				ast_debug(2, "--- Setting updated bridge flags from chan_local in this bridge for outgoing channel %s Peer %s\n", chan->name, peer->name);
 				break;
 			case AST_CONTROL_OPTION:

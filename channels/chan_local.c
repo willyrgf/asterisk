@@ -304,6 +304,9 @@ static void check_bridge(struct local_pvt *p)
 					ast_queue_control_data(p->owner, AST_CONTROL_BRIDGEPARAM, &p->chan->bridgeflags, sizeof(p->chan->bridgeflags));
 					ast_debug(1, "----- Sending bridge flags from channel %s upstream to %s\n", p->chan->name, p->owner->name);
 					ast_debug(1, "----- We have these channels to play with: 1: %s 2: %s \n", p->chan->name, p->owner->name);
+					if (ast_test_flag(&p->chan->bridgeflags, AST_FEATURE_REDIRECT)) {
+						ast_debug(2, "--- Package includes transfer flag\n");
+					}
 					ast_channel_unlock(p->owner);
 				}
 				ast_channel_unlock(p->chan->_bridge);
