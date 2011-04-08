@@ -221,9 +221,6 @@ static int local_queue_frame(struct local_pvt *p, int isoutbound, struct ast_fra
 		if (f->frametype == AST_FRAME_CONTROL && f->subclass == AST_CONTROL_RINGING) {
 			ast_setstate(other, AST_STATE_RINGING);
 		}
-		if (f->frametype == AST_FRAME_CONTROL && f->subclass == AST_CONTROL_BRIDGEPARAM) {
-			ast_debug(2, "Forwarding BRIDGE CONTROL packet aimed for %s\n", other->name);
-		}
 		ast_queue_frame(other, f);
 		ast_channel_unlock(other);
 	}
@@ -269,6 +266,15 @@ static void check_bridge(struct local_pvt *p)
 	   if it has been bridged to another channel and if there are no pending
 	   frames on the owner channel (because they would be transferred to the
 	   outbound channel during the masquerade)
+
+	   The call currently looks this way:
+
+	   Inbound channel - <bridge one> - local channel;1 - <local bridge> - local channel;2 - <bridge two> - Outbound channel
+
+	   During the masquerade the "local channel;1" takes over the pvt of the Outbound channel and replaces it by masquerading.
+
+	   Inbound channel - <bridge one> Outbound channel
+
 	*/
 	if (p->chan->_bridge /* Not ast_bridged_channel!  Only go one step! */ && AST_LIST_EMPTY(&p->owner->readq)) {
 		/* Masquerade bridged channel into owner */
@@ -278,6 +284,8 @@ static void check_bridge(struct local_pvt *p)
 		if (!ast_channel_trylock(p->chan->_bridge)) {
 			if (!ast_check_hangup(p->chan->_bridge)) {
 				if (!ast_channel_trylock(p->owner)) {
+					struct ast_bridgeflags_envelope *message_upstream;
+
 					if (!ast_check_hangup(p->owner)) {
 						if (p->owner->monitor && !p->chan->_bridge->monitor) {
 							/* If a local channel is being monitored, we don't want a masquerade
@@ -301,12 +309,23 @@ static void check_bridge(struct local_pvt *p)
 					}
 					/* Now, tell the owner's bridge that we had some interesting parameters in the bridge that
 					   will disappear soon, so that we don't drop them */
-					ast_queue_control_data(p->owner, AST_CONTROL_BRIDGEPARAM, &p->chan->bridgeflags, sizeof(p->chan->bridgeflags));
-					ast_debug(1, "----- Sending bridge flags from channel %s upstream to %s\n", p->chan->name, p->owner->name);
-					ast_debug(1, "----- We have these channels to play with: 1: %s 2: %s \n", p->chan->name, p->owner->name);
-					if (ast_test_flag(&p->chan->bridgeflags, AST_FEATURE_REDIRECT)) {
-						ast_debug(2, "--- Package includes transfer flag\n");
-					}
+ 					message_upstream = alloca(sizeof(*message_upstream));
+ 					if (message_upstream) {
+ 						message_upstream->chan_bridgeflags = p->chan->_bridge->bridgeflags;
+ 						message_upstream->peer_bridgeflags = p->chan->bridgeflags;
+ 						ast_copy_string(message_upstream->secretmessage, p->chan->name, sizeof(message_upstream->secretmessage));
+ 
+ 						ast_queue_control_data(p->owner, AST_CONTROL_BRIDGEPARAM, message_upstream, sizeof(*message_upstream));
+ 						ast_debug(2, "Sending bridge flags from channel %s upstream to %s\n", p->chan->name, p->owner->name);
+ 						if (ast_test_flag(&p->chan->_bridge->bridgeflags, AST_FEATURE_REDIRECT)) {
+ 							ast_debug(2, "--- Package includes callee transfer flag\n");
+ 						}
+ 						if (ast_test_flag(&p->chan->bridgeflags, AST_FEATURE_REDIRECT)) {
+ 							ast_debug(2, "--- Package includes caller transfer flag\n");
+ 						}
+ 					} else {
+ 						ast_log(LOG_ERROR, "Can't allocate memory for bridge flag update\n");
+ 					}
 					ast_channel_unlock(p->owner);
 				}
 				ast_channel_unlock(p->chan->_bridge);

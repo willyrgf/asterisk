@@ -2181,6 +2181,27 @@ static void add_features_datastores(struct ast_channel *caller, struct ast_chann
 	return;
 }
 
+static void bridge_set_feature_flags(struct ast_flags *features, struct ast_flags *param) 
+{
+	if (ast_test_flag(param, AST_FEATURE_REDIRECT)) {
+		ast_debug(1, "      --- Got redirect flag!\n");
+		ast_set_flag(features, AST_FEATURE_REDIRECT);
+	}
+	if (ast_test_flag(param, AST_FEATURE_DISCONNECT)) {
+		ast_debug(1, "      --- Got disconnect flag!\n");
+		ast_set_flag(features, AST_FEATURE_DISCONNECT);
+	}
+	if (ast_test_flag(param, AST_FEATURE_AUTOMON)) {
+		ast_set_flag(features, AST_FEATURE_AUTOMON);
+	}
+	if (ast_test_flag(param, AST_FEATURE_AUTOMIXMON)) {
+		ast_set_flag(features, AST_FEATURE_AUTOMIXMON);
+	}
+	if (ast_test_flag(param, AST_FEATURE_PARKCALL)) {
+              	ast_set_flag(features, AST_FEATURE_PARKCALL);
+	}
+}
+
 /*!
  * \brief bridge the call and set CDR
  * \param chan,peer,config
@@ -2350,6 +2371,7 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 	}
 	for (;;) {
 		struct ast_channel *other;	/* used later */
+		ast_debug(2, "---> Entering bridge loop for channel %s with peer %s\n", chan->name, peer->name);
 	
 		res = ast_channel_bridge(chan, peer, config, &f, &who);
 		
@@ -2373,6 +2395,8 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 			}
 
 			if (hasfeatures) {
+				ast_debug(2, "---> Entering feature check for channel %s with peer %s\n", chan->name, peer->name);
+
 				/* Running on backup config, meaning a feature might be being
 				   activated, but that's no excuse to keep things going 
 				   indefinitely! */
@@ -2435,12 +2459,14 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 				(f->subclass == AST_CONTROL_HANGUP || f->subclass == AST_CONTROL_BUSY || 
 					f->subclass == AST_CONTROL_CONGESTION))) {
 			res = -1;
+			ast_debug(2, "---> Hangup/Busy/congestion: Exiting bridge for channel %s with peer %s\n", chan->name, peer->name);
 			break;
 		}
 		/* many things should be sent to the 'other' channel */
 		other = (who == chan) ? peer : chan;
 		if (f->frametype == AST_FRAME_CONTROL) {
-			struct ast_flags *param;
+			struct ast_bridgeflags_envelope *message_upstream;
+
 			switch (f->subclass) {
 			case AST_CONTROL_RINGING:
 			case AST_CONTROL_FLASH:
@@ -2454,41 +2480,41 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 			case AST_CONTROL_BRIDGEPARAM:
 				/* We are getting an bridge update from chan_local before masquerade, update this bridge with the params */
 				/* We want to update the peer side, the outbound channel, with it */
-				param = (struct ast_flags *) f->data;
+				message_upstream = (struct ast_bridgeflags_envelope *) f->data;
+				ast_debug(1, "--- Received bridge parameters sent from %s\n", message_upstream->secretmessage);
 				
-				if (ast_test_flag(param, AST_FEATURE_REDIRECT)) {
-                                	ast_set_flag(&(config->features_callee), AST_FEATURE_REDIRECT);
-					ast_debug(2, "--- Setting Transfer flag on callee in bridge! Chan %s Peer %s \n", chan->name, peer->name);
-					hasfeatures = 1;
+				/* First set the calle side of things */
+				ast_debug(2, "--- Checking callee bridgeflags on %s\n", chan->name);
+				bridge_set_feature_flags(&config->features_callee, &message_upstream->chan_bridgeflags);
+				if (ast_test_flag(&(message_upstream->chan_bridgeflags), AST_FEATURE_PARKCALL | AST_FEATURE_DISCONNECT | AST_FEATURE_AUTOMON | AST_FEATURE_AUTOMIXMON | AST_FEATURE_PARKCALL)) {
+					ast_debug(2, "--- Got flags for callee! (%s) \n", chan->name);
 					ast_set_flag(config, AST_BRIDGE_DTMF_CHANNEL_1);
 				}
-				if (ast_test_flag(param, AST_FEATURE_DISCONNECT)) {
-                                	ast_set_flag(&(config->features_callee), AST_FEATURE_DISCONNECT);
-					ast_set_flag(config, AST_BRIDGE_DTMF_CHANNEL_1);
-				}
-				if (ast_test_flag(param, AST_FEATURE_AUTOMON)) {
-                                	ast_set_flag(&(config->features_callee), AST_FEATURE_AUTOMON);
-					ast_set_flag(config, AST_BRIDGE_DTMF_CHANNEL_1);
-				}
-				if (ast_test_flag(param, AST_FEATURE_AUTOMIXMON)) {
-                                	ast_set_flag(&(config->features_callee), AST_FEATURE_AUTOMIXMON);
-					ast_set_flag(config, AST_BRIDGE_DTMF_CHANNEL_1);
-				}
-				if (ast_test_flag(param, AST_FEATURE_PARKCALL)) {
-                                	ast_set_flag(&(config->features_callee), AST_FEATURE_PARKCALL);
-					ast_set_flag(config, AST_BRIDGE_DTMF_CHANNEL_1);
+				ast_debug(2, "--- Checking caller bridgeflags on %s\n", peer->name);
+				bridge_set_feature_flags(&config->features_caller, &message_upstream->peer_bridgeflags);
+				if (ast_test_flag(&(message_upstream->peer_bridgeflags), AST_FEATURE_PARKCALL | AST_FEATURE_DISCONNECT | AST_FEATURE_AUTOMON | AST_FEATURE_AUTOMIXMON | AST_FEATURE_PARKCALL)) {
+					ast_debug(2, "--- Got flags for caller! (%s)\n", peer->name);
+					ast_set_flag(config, AST_BRIDGE_DTMF_CHANNEL_0);
 				}
 
-				ast_debug(1, "--- Setting bridgeflags on %s\n", chan->name);
+				ast_debug(2, "--- Setting bridgeflags on %s\n", chan->name);
 				ast_copy_flags(&chan->bridgeflags, &(config->features_callee),
 					AST_FEATURE_REDIRECT | AST_FEATURE_DISCONNECT |
 					AST_FEATURE_AUTOMON | AST_FEATURE_PARKCALL | AST_FEATURE_AUTOMIXMON);
-				ast_debug(1, "--- Setting bridgeflags on %s\n", peer->name);
+				ast_debug(2, "--- Setting bridgeflags on %s\n", peer->name);
 				ast_copy_flags(&peer->bridgeflags, &(config->features_caller),
 					AST_FEATURE_REDIRECT | AST_FEATURE_DISCONNECT |
 					AST_FEATURE_AUTOMON | AST_FEATURE_PARKCALL | AST_FEATURE_AUTOMIXMON);
+				ast_copy_flags(&(backup_config.features_caller), &(config->features_caller),
+					AST_FEATURE_REDIRECT | AST_FEATURE_DISCONNECT |
+					AST_FEATURE_AUTOMON | AST_FEATURE_PARKCALL | AST_FEATURE_AUTOMIXMON);
+				ast_copy_flags(&(backup_config.features_callee), &(config->features_callee),
+					AST_FEATURE_REDIRECT | AST_FEATURE_DISCONNECT |
+					AST_FEATURE_AUTOMON | AST_FEATURE_PARKCALL | AST_FEATURE_AUTOMIXMON);
+				set_config_flags(chan, peer, config);
 	
-				ast_debug(2, "--- Setting updated bridge flags from chan_local in this bridge for outgoing channel %s Peer %s\n", chan->name, peer->name);
+				ast_debug(1, "--- Setting updated bridge flags from chan_local in this bridge for outgoing channel %s Peer %s\n", chan->name, peer->name);
+		
 				break;
 			case AST_CONTROL_OPTION:
 				aoh = f->data;

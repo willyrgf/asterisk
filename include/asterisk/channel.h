@@ -168,6 +168,13 @@ enum ast_bridge_result {
 
 typedef unsigned long long ast_group_t;
 
+/*! \brief Envelope for sending bridge flags between bridges in a call with multiple bridges, like a local channel call */
+struct ast_bridgeflags_envelope {
+	struct ast_flags chan_bridgeflags;			/*!< Flags set for channel when creating bridge */
+	struct ast_flags peer_bridgeflags;			/*!< Flags set for peer channel when creating bridge */
+	char secretmessage[50];
+};
+
 /*! \todo Add an explanation of an Asterisk generator 
 */
 struct ast_generator {
