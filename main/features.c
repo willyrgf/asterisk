@@ -2485,13 +2485,13 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 				
 				/* First set the calle side of things */
 				ast_debug(2, "--- Checking callee bridgeflags on %s\n", chan->name);
-				bridge_set_feature_flags(&config->features_callee, &message_upstream->chan_bridgeflags);
+				bridge_set_feature_flags(&config->features_callee, &message_upstream->peer_bridgeflags);
 				if (ast_test_flag(&(message_upstream->chan_bridgeflags), AST_FEATURE_PARKCALL | AST_FEATURE_DISCONNECT | AST_FEATURE_AUTOMON | AST_FEATURE_AUTOMIXMON | AST_FEATURE_PARKCALL)) {
 					ast_debug(2, "--- Got flags for callee! (%s) \n", chan->name);
 					ast_set_flag(config, AST_BRIDGE_DTMF_CHANNEL_1);
 				}
 				ast_debug(2, "--- Checking caller bridgeflags on %s\n", peer->name);
-				bridge_set_feature_flags(&config->features_caller, &message_upstream->peer_bridgeflags);
+				bridge_set_feature_flags(&config->features_caller, &message_upstream->chan_bridgeflags);
 				if (ast_test_flag(&(message_upstream->peer_bridgeflags), AST_FEATURE_PARKCALL | AST_FEATURE_DISCONNECT | AST_FEATURE_AUTOMON | AST_FEATURE_AUTOMIXMON | AST_FEATURE_PARKCALL)) {
 					ast_debug(2, "--- Got flags for caller! (%s)\n", peer->name);
 					ast_set_flag(config, AST_BRIDGE_DTMF_CHANNEL_0);
