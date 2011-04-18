@@ -8912,6 +8912,20 @@ static int pbx_builtin_proceeding(struct ast_channel *chan, const char *data)
  */
 static int pbx_builtin_progress(struct ast_channel *chan, const char *data)
 {
+	if (chan->_state != AST_STATE_UP) {
+		manager_event(EVENT_FLAG_CALL,
+			"Newstate",
+			"Channel: %s\r\n"
+			"State: Progress\r\n"
+			"CallerID: %s\r\n"
+			"CallerIDName: %s\r\n"
+		      	"Uniqueid: %s\r\n",
+		      	chan->name, 
+			S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, "<unknown>"),
+			S_COR(chan->caller.id.name.valid, chan->caller.id.name.str, "<unknown>"),
+		      	chan->uniqueid);
+	}
+
 	ast_indicate(chan, AST_CONTROL_PROGRESS);
 	return 0;
 }

@@ -788,6 +788,26 @@ static void senddialendevent(struct ast_channel *src, const char *dialstatus)
 		src->name, src->uniqueid, dialstatus);
 }
 
+/*! \brief Send manager progress event */
+static void dial_manager_progress_event(struct ast_channel *chan)
+{
+	if (chan->_state == AST_STATE_UP) {
+		return;
+	}
+
+	manager_event(EVENT_FLAG_CALL,
+      		"Newstate",
+     		"Channel: %s\r\n"
+      		"State: progress\r\n"
+      		"CallerID: %s\r\n"
+      		"CallerIDName: %s\r\n"
+      		"Uniqueid: %s\r\n",
+      		chan->name, 
+		S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, "<unknown>"),
+		S_COR(chan->caller.id.name.valid, chan->caller.id.name.str, "<unknown>"),
+      		chan->uniqueid);
+}
+
 /*!
  * helper function for wait_for_answer()
  *
@@ -1241,6 +1261,8 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 					break;
 				case AST_CONTROL_PROGRESS:
 					ast_verb(3, "%s is making progress passing it to %s\n", c->name, in->name);
+					dial_manager_progress_event(c);
+					dial_manager_progress_event(in);
 					/* Setup early media if appropriate */
 					if (single && CAN_EARLY_BRIDGE(peerflags, in, c))
 						ast_channel_early_bridge(in, c);
