@@ -419,6 +419,26 @@ static void senddialevent(struct ast_channel *src, struct ast_channel *dst)
 			   dst->uniqueid);
 }
 
+/*! \brief Send manager progress event */
+static void dial_manager_progress_event(struct ast_channel *chan)
+{
+	if (chan->_state == AST_STATE_UP) {
+		return;
+	}
+
+	manager_event(EVENT_FLAG_CALL,
+      		"Newstate",
+     		"Channel: %s\r\n"
+      		"State: progress\r\n"
+      		"CallerID: %s\r\n"
+      		"CallerIDName: %s\r\n"
+      		"Uniqueid: %s\r\n",
+      		chan->name, 
+      		S_OR(chan->cid.cid_num, "<unknown>"),
+      		S_OR(chan->cid.cid_name, "<unknown>"),
+      		chan->uniqueid);
+}
+
 static struct ast_channel *wait_for_answer(struct ast_channel *in, struct dial_localuser *outgoing, int *to, struct ast_flags *peerflags, int *sentringing, char *status, size_t statussize, int busystart, int nochanstart, int congestionstart, int priority_jump, int *result)
 {
 	int numbusy = busystart;
@@ -672,6 +692,9 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in, struct dial_l
 				case AST_CONTROL_PROGRESS:
 					if (option_verbose > 2)
 						ast_verbose (VERBOSE_PREFIX_3 "%s is making progress passing it to %s\n", c->name, in->name);
+					dial_manager_progress_event(c);
+					dial_manager_progress_event(in);
+
 					/* Setup early media if appropriate */
 					if (single && CAN_EARLY_BRIDGE(peerflags, in, c))
 						ast_rtp_early_bridge(in, c);

@@ -5504,6 +5504,20 @@ static int pbx_builtin_proceeding(struct ast_channel *chan, void *data)
  */
 static int pbx_builtin_progress(struct ast_channel *chan, void *data)
 {
+	if (chan->_state != AST_STATE_UP) {
+		manager_event(EVENT_FLAG_CALL,
+			"Newstate",
+			"Channel: %s\r\n"
+			"State: Progress\r\n"
+			"CallerID: %s\r\n"
+			"CallerIDName: %s\r\n"
+		      	"Uniqueid: %s\r\n",
+		      	chan->name, 
+		      	S_OR(chan->cid.cid_num, "<unknown>"),
+		      	S_OR(chan->cid.cid_name, "<unknown>"),
+		      	chan->uniqueid);
+	}
+
 	ast_indicate(chan, AST_CONTROL_PROGRESS);
 	return 0;
 }
