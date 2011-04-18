@@ -83,7 +83,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 enum {
 	ADMINFLAG_MUTED =     (1 << 1), /*!< User is muted */
 	ADMINFLAG_SELFMUTED = (1 << 2), /*!< User muted self */
-	ADMINFLAG_KICKME =    (1 << 3)  /*!< User has been kicked */
+	ADMINFLAG_KICKME =    (1 << 3),  /*!< User has been kicked */
+	ADMINFLAG_HANGUP =    (1 << 4)  /*!< User has been silently kicked */
 };
 
 #define MEETME_DELAYDETECTTALK     300
@@ -2121,6 +2122,12 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 						chan->name, chan->uniqueid, conf->confno, user->user_no);
 			}
 
+			/* If I have been hung up, exit the conference */
+			if (user->adminflags & ADMINFLAG_HANGUP) {
+				ret = 0;
+				break;
+			}
+
 			/* If I have been kicked, exit the conference */
 			if (user->adminflags & ADMINFLAG_KICKME) {
 				//You have been kicked.
@@ -2577,7 +2584,7 @@ bailoutandtrynormal:
 			This flag is meant to kill a conference with only one person remaining.
 		 */
 		if (conf->users == 1 && (confflags & CONFFLAG_KILL_LAST_MAN_STANDING)) {
-			ao2_callback(conf->usercontainer, 0, user_set_kickme_cb, NULL);
+			ao2_callback(conf->usercontainer, 0, user_set_hangup_cb, NULL);
 		}
 		
 		/* Return the number of seconds the user was in the conf */
@@ -3063,6 +3070,13 @@ static int user_set_kickme_cb(void *obj, void *unused, int flags)
 {
 	struct ast_conf_user *user = obj;
 	user->adminflags |= ADMINFLAG_KICKME;
+	return 0;
+}
+
+static int user_set_hangup_cb(void *obj, void *unused, int flags)
+{
+	struct ast_conf_user *user = obj;
+	user->adminflags |= ADMINFLAG_HANGUP;
 	return 0;
 }
 
