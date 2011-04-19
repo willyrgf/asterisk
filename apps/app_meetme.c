@@ -613,7 +613,7 @@ enum {
 /* !If set play an intro announcement at start of conference */
 #define CONFFLAG_INTROMSG ((uint64_t)1 << 32)
 /*! If there's only one person left in a conference when someone leaves, kill the conference */
-#define CONFFLAG_KILL_LAST_MAN_STANDING ((uint64_t)1 << 32)
+#define CONFFLAG_KILL_LAST_MAN_STANDING ((uint64_t)1 << 33)
 
 enum {
 	OPT_ARG_WAITMARKED = 0,
@@ -3790,7 +3790,7 @@ bailoutandtrynormal:
 		}
  
  		/* This flag is meant to kill a conference with only one participant remaining.  */
- 		if (conf->users == 1 && (confflags & CONFFLAG_KILL_LAST_MAN_STANDING)) {
+		if (conf->users == 1 && ast_test_flag64(confflags, CONFFLAG_KILL_LAST_MAN_STANDING)) {
  			ao2_callback(conf->usercontainer, 0, user_set_hangup_cb, NULL);
  		}
 
