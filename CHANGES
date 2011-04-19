@@ -97,6 +97,11 @@ FollowMe
    compatability for a FollowMe call with certain dialplan apps, options, and
    functions.
 
+Meetme
+--------------------------
+ * Added option "k" that will automatically close the conference when there's
+   only one person left when a user exits the conference.
+
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 1.6.2 to Asterisk 1.8 ----------------
 ------------------------------------------------------------------------------
