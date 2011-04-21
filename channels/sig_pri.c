@@ -7040,6 +7040,52 @@ static void *pri_dchannel(void *vpri)
 	return NULL;
 }
 
+/*!
+ * \brief Output AMI show spans response events for the given PRI span.
+ * \since 1.10
+ *
+ * \param show_cmd AMI command name
+ * \param s AMI session to output span information.
+ * \param pri PRI span control structure.
+ * \param dchannels Array of D channel channel numbers.
+ * \param action_id Action ID line to use.
+ *
+ * \return Number of D channels on this span.
+ */
+int sig_pri_ami_show_spans(struct mansession *s, const char *show_cmd, struct sig_pri_span *pri, const int *dchannels, const char *action_id)
+{
+	int count;
+	int x;
+
+	count = 0;
+	for (x = 0; x < ARRAY_LEN(pri->dchans); ++x) {
+		if (pri->dchans[x]) {
+			++count;
+
+			astman_append(s,
+				"Event: %s\r\n"
+				"Span: %d\r\n"
+				"DChannel: %d\r\n"
+				"Order: %s\r\n"
+				"Active: %s\r\n"
+				"Alarm: %s\r\n"
+				"Up: %s\r\n"
+				"%s"
+				"\r\n",
+				show_cmd,
+				pri->span,
+				dchannels[x],
+				pri_order(x),
+				(pri->dchans[x] == pri->pri) ? "Yes" : "No",
+				(pri->dchanavail[x] & DCHAN_NOTINALARM) ? "No" : "Yes",
+				(pri->dchanavail[x] & DCHAN_UP) ? "Yes" : "No",
+				action_id
+				);
+		}
+	}
+	return count;
+}
+
 void sig_pri_init_pri(struct sig_pri_span *pri)
 {
 	int i;
@@ -8668,18 +8714,10 @@ static void build_status(char *s, size_t len, int status, int active)
 	if (!s || len < 1) {
 		return;
 	}
-	s[0] = '\0';
-	if (!(status & DCHAN_NOTINALARM))
-		strncat(s, "In Alarm, ", len - strlen(s) - 1);
-	if (status & DCHAN_UP)
-		strncat(s, "Up", len - strlen(s) - 1);
-	else
-		strncat(s, "Down", len - strlen(s) - 1);
-	if (active)
-		strncat(s, ", Active", len - strlen(s) - 1);
-	else
-		strncat(s, ", Standby", len - strlen(s) - 1);
-	s[len - 1] = '\0';
+	snprintf(s, len, "%s%s, %s",
+		(status & DCHAN_NOTINALARM) ? "" : "In Alarm, ",
+		(status & DCHAN_UP) ? "Up" : "Down",
+		(active) ? "Active" : "Standby");
 }
 
 void sig_pri_cli_show_spans(int fd, int span, struct sig_pri_span *pri)
