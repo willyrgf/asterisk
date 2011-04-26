@@ -2265,6 +2265,7 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 				 * No hint name available.  We have a connected name supplied by
 				 * the dialplan we can use instead.
 				 */
+				caller.id.name.valid = 1;
 				caller.id.name = chan->connected.id.name;
 			}
 			ast_channel_set_caller_event(tc, &caller, NULL);
@@ -2278,6 +2279,7 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 				 * We have a connected name supplied by the dialplan we can
 				 * use instead.
 				 */
+				caller.id.name.valid = 1;
 				caller.id.name = chan->connected.id.name;
 				ast_channel_set_caller_event(tc, &caller, NULL);
 			}
