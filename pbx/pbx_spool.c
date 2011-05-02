@@ -353,7 +353,7 @@ static void *attempt_thread(void *data)
 	} else {
 		if (option_verbose > 2)
 			ast_verbose(VERBOSE_PREFIX_3 "Attempting call on %s/%s for %s@%s:%d (Retry %d)\n", o->tech, o->dest, o->exten, o->context,o->priority, o->retries);
-		res = ast_pbx_outgoing_exten(o->tech, o->format, o->dest, o->waittime * 1000, o->context, o->exten, o->priority, &reason, 2 /* wait to finish */, o->cid_num, o->cid_name, o->vars, o->account, NULL);
+		res = ast_pbx_outgoing_exten(o->tech, o->format, o->dest, o->waittime * 1000, o->context, o->exten, o->priority, &reason, 2 /* wait to finish */, o->cid_num, o->cid_name, o->vars, o->account, NULL, 0);
 	}
 	o->vars = NULL;
 	if (res) {

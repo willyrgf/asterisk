@@ -5018,6 +5018,7 @@ struct async_stat {
 	int timeout;
 	char app[AST_MAX_EXTENSION];
 	char appdata[1024];
+	int earlymedia;			/* Connect the bridge if early media arrives, don't wait for answer */
 };
 
 static void *async_wait(void *data)
@@ -5028,6 +5029,12 @@ static void *async_wait(void *data)
 	int res;
 	struct ast_frame *f;
 	struct ast_app *app;
+	int haveearlymedia = 0;
+	int checkearlymedia = as->earlymedia;
+
+	if (option_debug) {
+		ast_log(LOG_DEBUG, "----> Checkearlymedia %s\n", checkearlymedia ? "on" : "Off");
+	}
 
 	while (timeout && (chan->_state != AST_STATE_UP)) {
 		res = ast_waitfor(chan, timeout);
@@ -5044,10 +5051,17 @@ static void *async_wait(void *data)
 				ast_frfree(f);
 				break;
 			}
+			if (as->earlymedia && f->subclass == AST_CONTROL_PROGRESS && checkearlymedia) {
+				haveearlymedia = 1;
+				break;
+			}
 		}
 		ast_frfree(f);
 	}
-	if (chan->_state == AST_STATE_UP) {
+	if (chan->_state == AST_STATE_UP || haveearlymedia) {
+		if (haveearlymedia && option_debug) {
+			ast_log(LOG_DEBUG, "----> Launching second call leg, since we have early media \n");
+		}
 		if (!ast_strlen_zero(as->app)) {
 			app = pbx_findapp(as->app);
 			if (app) {
@@ -5109,7 +5123,7 @@ static int ast_pbx_outgoing_cdr_failed(void)
 	return 0;  /* success */
 }
 
-int ast_pbx_outgoing_exten(const char *type, int format, void *data, int timeout, const char *context, const char *exten, int priority, int *reason, int sync, const char *cid_num, const char *cid_name, struct ast_variable *vars, const char *account, struct ast_channel **channel)
+int ast_pbx_outgoing_exten(const char *type, int format, void *data, int timeout, const char *context, const char *exten, int priority, int *reason, int sync, const char *cid_num, const char *cid_name, struct ast_variable *vars, const char *account, struct ast_channel **channel, const int earlymedia)
 {
 	struct ast_channel *chan;
 	struct async_stat *as;
@@ -5117,7 +5131,12 @@ int ast_pbx_outgoing_exten(const char *type, int format, void *data, int timeout
 	struct outgoing_helper oh;
 	pthread_attr_t attr;
 
+
+	ast_log(LOG_DEBUG, "-----> Earlymedia: %s\n", earlymedia ? "On" : "off");
+	oh.connect_on_earlymedia = earlymedia;
+
 	if (sync) {
+		ast_log(LOG_DEBUG, "-----> Sync originate \n");
 		LOAD_OH(oh);
 		chan = __ast_request_and_dial(type, format, data, timeout, reason, cid_num, cid_name, &oh);
 		if (channel) {
@@ -5126,10 +5145,13 @@ int ast_pbx_outgoing_exten(const char *type, int format, void *data, int timeout
 				ast_channel_lock(chan);
 		}
 		if (chan) {
-			if (chan->_state == AST_STATE_UP) {
-					res = 0;
+			if (earlymedia && *reason == AST_CONTROL_PROGRESS) {
+				ast_log(LOG_DEBUG, "-----> Sync originate: Yes, we have early media \n");
+			}
+			if (chan->_state == AST_STATE_UP || (earlymedia && *reason == AST_CONTROL_PROGRESS)) {
+				res = 0;
 				if (option_verbose > 3)
-					ast_verbose(VERBOSE_PREFIX_4 "Channel %s was answered.\n", chan->name);
+					ast_verbose(VERBOSE_PREFIX_4 "Channel %s was answered or got early media.\n", chan->name);
 
 				if (sync > 1) {
 					if (channel)
@@ -5156,7 +5178,7 @@ int ast_pbx_outgoing_exten(const char *type, int format, void *data, int timeout
 				}
 			} else {
 				if (option_verbose > 3)
-					ast_verbose(VERBOSE_PREFIX_4 "Channel %s was never answered.\n", chan->name);
+					ast_verbose(VERBOSE_PREFIX_4 "Oh no. Channel %s was never answered.\n", chan->name);
 
 				if (chan->cdr) { /* update the cdr */
 					/* here we update the status of the call, which sould be busy.
@@ -5207,10 +5229,12 @@ int ast_pbx_outgoing_exten(const char *type, int format, void *data, int timeout
 			}
 		}
 	} else {
+		ast_log(LOG_DEBUG, "-----> Async originate \n");
 		if (!(as = ast_calloc(1, sizeof(*as)))) {
 			res = -1;
 			goto outgoing_exten_cleanup;
 		}
+
 		chan = ast_request_and_dial(type, format, data, timeout, reason, cid_num, cid_name);
 		if (channel) {
 			*channel = chan;
@@ -5218,6 +5242,7 @@ int ast_pbx_outgoing_exten(const char *type, int format, void *data, int timeout
 				ast_channel_lock(chan);
 		}
 		if (!chan) {
+			ast_log(LOG_DEBUG, "-----> Failure: Async originate \n");
 			free(as);
 			res = -1;
 			goto outgoing_exten_cleanup;

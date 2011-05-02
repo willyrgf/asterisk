@@ -78,6 +78,7 @@ struct fast_originate_helper {
 	char data[512];
 	int timeout;
 	int format;
+	int earlymedia;
 	char app[AST_MAX_APP];
 	char appdata[AST_MAX_EXTENSION];
 	char cid_name[AST_MAX_EXTENSION];
@@ -1894,6 +1895,7 @@ static void *fast_originate(void *data)
 	int reason = 0;
 	struct ast_channel *chan = NULL;
 	char requested_channel[AST_CHANNEL_NAME];
+	ast_log(LOG_DEBUG, "-----> Earlymedia: %s\n", in->earlymedia ? "On" : "off");
 
 	if (!ast_strlen_zero(in->app)) {
 		res = ast_pbx_outgoing_app(in->tech, in->format, in->data, in->timeout, in->app, in->appdata, &reason, 1, 
@@ -1904,7 +1906,7 @@ static void *fast_originate(void *data)
 		res = ast_pbx_outgoing_exten(in->tech, in->format, in->data, in->timeout, in->context, in->exten, in->priority, &reason, 1, 
 			S_OR(in->cid_num, NULL), 
 			S_OR(in->cid_name, NULL),
-			in->vars, in->account, &chan);
+			in->vars, in->account, &chan, in->earlymedia);
 	}
 
 	if (!chan)
@@ -1951,6 +1953,7 @@ static char mandescr_originate[] =
 "	Variable: Channel variable to set, multiple Variable: headers are allowed\n"
 "	Codecs: Comma-separated list of codecs to use for the new channels\n"
 "	Account: Account code\n"
+"	Earlymedia: Set to 'true' to force bridge on early media (only works in async mode)\n"
 "	Async: Set to 'true' for fast origination\n";
 
 static int action_originate(struct mansession *s, const struct message *m)
@@ -1967,6 +1970,7 @@ static int action_originate(struct mansession *s, const struct message *m)
 	const char *async = astman_get_header(m, "Async");
 	const char *id = astman_get_header(m, "ActionID");
 	const char *codecs = astman_get_header(m, "Codecs");
+	const char *earlymedia = astman_get_header(m, "Earlymedia");
 	struct ast_variable *vars;
 	char *tech, *data;
 	char *l = NULL, *n = NULL;
@@ -1977,6 +1981,7 @@ static int action_originate(struct mansession *s, const struct message *m)
 	char tmp[256];
 	char tmp2[256];
 	int format = AST_FORMAT_SLINEAR;
+	int bridgeearly = 0;
 	
 	pthread_t th;
 	pthread_attr_t attr;
@@ -2020,11 +2025,20 @@ static int action_originate(struct mansession *s, const struct message *m)
 	/* Allocate requested channel variables */
 	vars = astman_get_variables(m);
 
+	/* For originate async - we can bridge in early media stage */
+	bridgeearly = ast_true(earlymedia);
+	
+
 	if (ast_true(async)) {
 		struct fast_originate_helper *fast = ast_calloc(1, sizeof(*fast));
+
 		if (!fast) {
 			res = -1;
 		} else {
+			if (option_debug) {
+				ast_log(LOG_DEBUG, "-----> Early media: %s\n", bridgeearly ? "on" : "off");
+			}
+
 			if (!ast_strlen_zero(id))
 				snprintf(fast->idtext, sizeof(fast->idtext), "ActionID: %s", id);
 			ast_copy_string(fast->tech, tech, sizeof(fast->tech));
@@ -2041,6 +2055,7 @@ static int action_originate(struct mansession *s, const struct message *m)
 			ast_copy_string(fast->account, account, sizeof(fast->account));
 			fast->format = format;
 			fast->timeout = to;
+			fast->earlymedia = bridgeearly;
 			fast->priority = pi;
 			pthread_attr_init(&attr);
 			pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
@@ -2056,7 +2071,7 @@ static int action_originate(struct mansession *s, const struct message *m)
         	res = ast_pbx_outgoing_app(tech, format, data, to, app, appdata, &reason, 1, l, n, vars, account, NULL);
     	} else {
 		if (exten && context && pi)
-	        	res = ast_pbx_outgoing_exten(tech, format, data, to, context, exten, pi, &reason, 1, l, n, vars, account, NULL);
+	        	res = ast_pbx_outgoing_exten(tech, format, data, to, context, exten, pi, &reason, 1, l, n, vars, account, NULL, bridgeearly);
 		else {
 			astman_send_error(s, m, "Originate with 'Exten' requires 'Context' and 'Priority'");
 			if (vars) {

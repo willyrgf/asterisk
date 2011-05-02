@@ -117,7 +117,7 @@ static int orig_exten(int fd, const char *chan, const char *data)
 	if (ast_strlen_zero(context))
 		context = "default";
 	
-	ast_pbx_outgoing_exten(chantech, AST_FORMAT_SLINEAR, chandata, TIMEOUT * 1000, context, exten, 1, &reason, 0, NULL, NULL, NULL, NULL, NULL);
+	ast_pbx_outgoing_exten(chantech, AST_FORMAT_SLINEAR, chandata, TIMEOUT * 1000, context, exten, 1, &reason, 0, NULL, NULL, NULL, NULL, NULL, 0);
 
 	return RESULT_SUCCESS;
 }
