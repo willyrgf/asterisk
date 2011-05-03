@@ -1952,7 +1952,7 @@ static char mandescr_originate[] =
 "	Variable: Channel variable to set, multiple Variable: headers are allowed\n"
 "	Codecs: Comma-separated list of codecs to use for the new channels\n"
 "	Account: Account code\n"
-"	Earlymedia: Set to 'true' to force bridge on early media (only works in async mode)\n"
+"	Earlymedia: Set to 'true' to force bridge on early media\n"
 "	Async: Set to 'true' for fast origination\n";
 
 static int action_originate(struct mansession *s, const struct message *m)

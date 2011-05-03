@@ -3674,7 +3674,6 @@ struct ast_channel *__ast_request_and_dial(const char *type, int format, void *d
 				/* Ignore these */
 				case AST_CONTROL_PROGRESS:
 					if (oh->connect_on_earlymedia) {
-						ast_log(LOG_DEBUG, " --->>> AST_CONTROL_PROGRESS here!\n");
 						*outstate = f->subclass;
 						timeout = 0;		/* trick to force exit from the while() */
 						break;

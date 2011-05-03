@@ -5030,7 +5030,6 @@ static void *async_wait(void *data)
 	struct ast_frame *f;
 	struct ast_app *app;
 	int haveearlymedia = 0;
-	int checkearlymedia = as->earlymedia;
 
 	while (timeout && (chan->_state != AST_STATE_UP)) {
 		res = ast_waitfor(chan, timeout);
@@ -5047,7 +5046,7 @@ static void *async_wait(void *data)
 				ast_frfree(f);
 				break;
 			}
-			if (as->earlymedia && f->subclass == AST_CONTROL_PROGRESS && checkearlymedia) {
+			if (as->earlymedia && f->subclass == AST_CONTROL_PROGRESS) {
 				haveearlymedia = 1;
 				break;
 			}
