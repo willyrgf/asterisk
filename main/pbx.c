@@ -5032,10 +5032,6 @@ static void *async_wait(void *data)
 	int haveearlymedia = 0;
 	int checkearlymedia = as->earlymedia;
 
-	if (option_debug) {
-		ast_log(LOG_DEBUG, "----> Checkearlymedia %s\n", checkearlymedia ? "on" : "Off");
-	}
-
 	while (timeout && (chan->_state != AST_STATE_UP)) {
 		res = ast_waitfor(chan, timeout);
 		if (res < 1)
@@ -5059,8 +5055,8 @@ static void *async_wait(void *data)
 		ast_frfree(f);
 	}
 	if (chan->_state == AST_STATE_UP || haveearlymedia) {
-		if (haveearlymedia && option_debug) {
-			ast_log(LOG_DEBUG, "----> Launching second call leg, since we have early media \n");
+		if (haveearlymedia && option_debug > 1) {
+			ast_log(LOG_DEBUG, "Activating pbx since we have early media \n");
 		}
 		if (!ast_strlen_zero(as->app)) {
 			app = pbx_findapp(as->app);
@@ -5132,11 +5128,9 @@ int ast_pbx_outgoing_exten(const char *type, int format, void *data, int timeout
 	pthread_attr_t attr;
 
 
-	ast_log(LOG_DEBUG, "-----> Earlymedia: %s\n", earlymedia ? "On" : "off");
 	oh.connect_on_earlymedia = earlymedia;
 
 	if (sync) {
-		ast_log(LOG_DEBUG, "-----> Sync originate \n");
 		LOAD_OH(oh);
 		chan = __ast_request_and_dial(type, format, data, timeout, reason, cid_num, cid_name, &oh);
 		if (channel) {
@@ -5145,9 +5139,6 @@ int ast_pbx_outgoing_exten(const char *type, int format, void *data, int timeout
 				ast_channel_lock(chan);
 		}
 		if (chan) {
-			if (earlymedia && *reason == AST_CONTROL_PROGRESS) {
-				ast_log(LOG_DEBUG, "-----> Sync originate: Yes, we have early media \n");
-			}
 			if (chan->_state == AST_STATE_UP || (earlymedia && *reason == AST_CONTROL_PROGRESS)) {
 				res = 0;
 				if (option_verbose > 3)
@@ -5229,7 +5220,6 @@ int ast_pbx_outgoing_exten(const char *type, int format, void *data, int timeout
 			}
 		}
 	} else {
-		ast_log(LOG_DEBUG, "-----> Async originate \n");
 		if (!(as = ast_calloc(1, sizeof(*as)))) {
 			res = -1;
 			goto outgoing_exten_cleanup;
@@ -5242,7 +5232,6 @@ int ast_pbx_outgoing_exten(const char *type, int format, void *data, int timeout
 				ast_channel_lock(chan);
 		}
 		if (!chan) {
-			ast_log(LOG_DEBUG, "-----> Failure: Async originate \n");
 			free(as);
 			res = -1;
 			goto outgoing_exten_cleanup;
