@@ -4480,7 +4480,7 @@ static void sip_destroy_peer(struct sip_peer *peer)
 	ast_free_ha(peer->directmediaha);
 	if (peer->selfdestruct)
 		ast_atomic_fetchadd_int(&apeerobjs, -1);
-	else if (peer->is_realtime) {
+	else if (!ast_test_flag(&global_flags[1], SIP_PAGE2_RTCACHEFRIENDS) && peer->is_realtime) {
 		ast_atomic_fetchadd_int(&rpeerobjs, -1);
 		ast_debug(3, "-REALTIME- peer Destroyed. Name: %s. Realtime Peer objects: %d\n", peer->name, rpeerobjs);
 	} else
@@ -6681,7 +6681,6 @@ static struct ast_channel *sip_new(struct sip_pvt *i, int state, const char *tit
 	sip_pvt_lock(i);
 	ast_channel_cc_params_init(tmp, i->cc_params);
 	tmp->caller.id.tag = ast_strdup(i->cid_tag);
-	ast_channel_unlock(tmp);
 
 	tmp->tech = ( ast_test_flag(&i->flags[0], SIP_DTMF) == SIP_DTMF_INFO || ast_test_flag(&i->flags[0], SIP_DTMF) == SIP_DTMF_SHORTINFO) ?  &sip_tech_info : &sip_tech;
 
@@ -6837,6 +6836,8 @@ static struct ast_channel *sip_new(struct sip_pvt *i, int state, const char *tit
 		char valuebuf[1024];
 		pbx_builtin_setvar_helper(tmp, v->name, ast_get_encoded_str(v->value, valuebuf, sizeof(valuebuf)));
 	}
+
+	ast_channel_unlock(tmp); /* ast_hangup requires the channel to be unlocked */
 
 	if (state != AST_STATE_DOWN && ast_pbx_start(tmp)) {
 		ast_log(LOG_WARNING, "Unable to start PBX on %s\n", tmp->name);
@@ -16285,6 +16286,7 @@ static char *sip_prune_realtime(struct ast_cli_entry *e, int cmd, struct ast_cli
 	int multi = FALSE;
 	const char *name = NULL;
 	regex_t regexbuf;
+	int havepattern = 0;
 	struct ao2_iterator i;
 	static const char * const choices[] = { "all", "like", NULL };
 	char *cmplt;
@@ -16353,8 +16355,10 @@ static char *sip_prune_realtime(struct ast_cli_entry *e, int cmd, struct ast_cli
 	}
 
 	if (multi && name) {
-		if (regcomp(&regexbuf, name, REG_EXTENDED | REG_NOSUB))
+		if (regcomp(&regexbuf, name, REG_EXTENDED | REG_NOSUB)) {
 			return CLI_SHOWUSAGE;
+		}
+		havepattern = 1;
 	}
 
 	if (multi) {
@@ -16404,6 +16408,10 @@ static char *sip_prune_realtime(struct ast_cli_entry *e, int cmd, struct ast_cli
 			} else
 				ast_cli(a->fd, "Peer '%s' not found.\n", name);
 		}
+	}
+
+	if (havepattern) {
+		regfree(&regexbuf);
 	}
 
 	return CLI_SUCCESS;
