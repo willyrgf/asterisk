@@ -37,6 +37,7 @@ CREATE TABLE `sipfriends` (
   `outboundproxy` varchar(40),
   `ipaddr` varchar(40) NOT NULL default '',
   `defaultip` varchar(20),
+  `dtmfmode` varchar(7) default NULL,
   `port` int(6) NOT NULL default '0',
   `fullcontact` varchar(40),
   `insecure` varchar(20),
@@ -51,5 +52,5 @@ CREATE TABLE `sipfriends` (
   `setvar` varchar(200),
   PRIMARY KEY  (`name`),
   INDEX host (host, port),
-  INDEX ipaddr (ipaddr, port),
-) TYPE=MyISAM;
+  INDEX ipaddr (ipaddr, port)
+) ENGINE=MyISAM;
