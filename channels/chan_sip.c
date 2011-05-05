@@ -2787,7 +2787,7 @@ static void sip_destroy_peer(struct sip_peer *peer)
 	ast_free_ha(peer->ha);
 	if (ast_test_flag(&peer->flags[1], SIP_PAGE2_SELFDESTRUCT))
 		apeerobjs--;
-	else if (ast_test_flag(&peer->flags[0], SIP_REALTIME))
+	else if (!ast_test_flag(&global_flags[1], SIP_PAGE2_RTCACHEFRIENDS) && ast_test_flag(&peer->flags[0], SIP_REALTIME))
 		rpeerobjs--;
 	else
 		speerobjs--;
@@ -2995,7 +2995,7 @@ static void sip_destroy_user(struct sip_user *user)
 		ast_variables_destroy(user->chanvars);
 		user->chanvars = NULL;
 	}
-	if (ast_test_flag(&user->flags[0], SIP_REALTIME))
+	if (!ast_test_flag(&global_flags[1], SIP_PAGE2_RTCACHEFRIENDS) && ast_test_flag(&user->flags[0], SIP_REALTIME))
 		ruserobjs--;
 	else
 		suserobjs--;
@@ -11494,6 +11494,7 @@ static int sip_prune_realtime(int fd, int argc, char *argv[])
 	int multi = FALSE;
 	char *name = NULL;
 	regex_t regexbuf;
+	int havepattern = 0;
 
 	switch (argc) {
 	case 4:
@@ -11552,8 +11553,10 @@ static int sip_prune_realtime(int fd, int argc, char *argv[])
 	}
 
 	if (multi && name) {
-		if (regcomp(&regexbuf, name, REG_EXTENDED | REG_NOSUB))
+		if (regcomp(&regexbuf, name, REG_EXTENDED | REG_NOSUB)) {
 			return RESULT_SHOWUSAGE;
+		}
+		havepattern = 1;
 	}
 
 	if (multi) {
@@ -11626,6 +11629,10 @@ static int sip_prune_realtime(int fd, int argc, char *argv[])
 			} else
 				ast_cli(fd, "User '%s' not found.\n", name);
 		}
+	}
+
+	if (havepattern) {
+		regfree(&regexbuf);
 	}
 
 	return RESULT_SUCCESS;
