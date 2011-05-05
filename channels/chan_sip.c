@@ -563,14 +563,15 @@ static int unauth_sessions = 0;
 static int authlimit = DEFAULT_AUTHLIMIT;
 static int authtimeout = DEFAULT_AUTHTIMEOUT;
 
-/*! \brief Global jitterbuffer configuration - by default, jb is disabled */
+/*! \brief Global jitterbuffer configuration - by default, jb is disabled
+ *  \note Values shown here match the defaults shown in sip.conf.sample */
 static struct ast_jb_conf default_jbconf =
 {
 	.flags = 0,
-	.max_size = -1,
-	.resync_threshold = -1,
-	.impl = "",
-	.target_extra = -1,
+	.max_size = 200,
+	.resync_threshold = 1000,
+	.impl = "fixed",
+	.target_extra = 40,
 };
 static struct ast_jb_conf global_jbconf;                /*!< Global jitterbuffer configuration */
 
@@ -4553,7 +4554,6 @@ static struct sip_peer *realtime_peer(const char *newpeername, struct ast_sockad
 	struct ast_config *peerlist = NULL;
 	char ipaddr[INET6_ADDRSTRLEN];
 	char portstring[6]; /*up to 5 digits plus null terminator*/
-	char *cat = NULL;
 	int realtimeregs = ast_check_realtime("sipregs");
 
 	/* First check on peer name */
@@ -4625,7 +4625,6 @@ static struct sip_peer *realtime_peer(const char *newpeername, struct ast_sockad
 					}
 				} else { /*var wasn't found in the list of "hosts", so try "ipaddr"*/
 					peerlist = NULL;
-					cat = NULL;
 					peerlist = ast_load_realtime_multientry("sippeers", "ipaddr", ipaddr, SENTINEL);
 					if(peerlist) {
 						var = get_insecure_variable_from_config(peerlist);
@@ -12476,7 +12475,6 @@ static int sip_reg_timeout(const void *data)
 	/* if we are here, our registration timed out, so we'll just do it over */
 	struct sip_registry *r = (struct sip_registry *)data; /* the ref count should have been bumped when the sched item was added */
 	struct sip_pvt *p;
-	int res;
 
 	/* if we couldn't get a reference to the registry object, punt */
 	if (!r) {
@@ -12519,7 +12517,7 @@ static int sip_reg_timeout(const void *data)
 		r->regstate = REG_STATE_FAILED;
 	} else {
 		r->regstate = REG_STATE_UNREGISTERED;
-		res = transmit_register(r, SIP_REGISTER, NULL, NULL);
+		transmit_register(r, SIP_REGISTER, NULL, NULL);
 		ast_log(LOG_NOTICE, "   -- Registration for '%s@%s' timed out, trying again (Attempt #%d)\n", r->username, r->hostname, r->regattempts);
 	}
 	manager_event(EVENT_FLAG_SYSTEM, "Registry", "ChannelType: SIP\r\nUsername: %s\r\nDomain: %s\r\nStatus: %s\r\n", r->username, r->hostname, regstate2str(r->regstate));
@@ -12800,8 +12798,6 @@ static int transmit_refer(struct sip_pvt *p, const char *dest)
 	const char *of;
 	char *c;
 	char referto[256];
-	char *ttag, *ftag;
-	char *theirtag = ast_strdupa(p->theirtag);
 	int	use_tls=FALSE;
 
 	if (sipdebug) {
@@ -12811,12 +12807,8 @@ static int transmit_refer(struct sip_pvt *p, const char *dest)
 	/* Are we transfering an inbound or outbound call ? */
 	if (ast_test_flag(&p->flags[0], SIP_OUTGOING))  {
 		of = get_header(&p->initreq, "To");
-		ttag = theirtag;
-		ftag = p->tag;
 	} else {
 		of = get_header(&p->initreq, "From");
-		ftag = theirtag;
-		ttag = p->tag;
 	}
 
 	ast_copy_string(from, of, sizeof(from));
@@ -17295,11 +17287,16 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	ast_cli(a->fd, "  802.1p CoS RTP video:   %d\n", global_cos_video);
 	ast_cli(a->fd, "  802.1p CoS RTP text:    %d\n", global_cos_text);
 	ast_cli(a->fd, "  Jitterbuffer enabled:   %s\n", AST_CLI_YESNO(ast_test_flag(&global_jbconf, AST_JB_ENABLED)));
-	ast_cli(a->fd, "  Jitterbuffer forced:    %s\n", AST_CLI_YESNO(ast_test_flag(&global_jbconf, AST_JB_FORCED)));
-	ast_cli(a->fd, "  Jitterbuffer max size:  %ld\n", global_jbconf.max_size);
-	ast_cli(a->fd, "  Jitterbuffer resync:    %ld\n", global_jbconf.resync_threshold);
-	ast_cli(a->fd, "  Jitterbuffer impl:      %s\n", global_jbconf.impl);
-	ast_cli(a->fd, "  Jitterbuffer log:       %s\n", AST_CLI_YESNO(ast_test_flag(&global_jbconf, AST_JB_LOG)));
+	if (ast_test_flag(&global_jbconf, AST_JB_ENABLED)) {
+		ast_cli(a->fd, "  Jitterbuffer forced:    %s\n", AST_CLI_YESNO(ast_test_flag(&global_jbconf, AST_JB_FORCED)));
+		ast_cli(a->fd, "  Jitterbuffer max size:  %ld\n", global_jbconf.max_size);
+		ast_cli(a->fd, "  Jitterbuffer resync:    %ld\n", global_jbconf.resync_threshold);
+		ast_cli(a->fd, "  Jitterbuffer impl:      %s\n", global_jbconf.impl);
+		if (!strcasecmp(global_jbconf.impl, "adaptive")) {
+			ast_cli(a->fd, "  Jitterbuffer tgt extra: %ld\n", global_jbconf.target_extra);
+		}
+		ast_cli(a->fd, "  Jitterbuffer log:       %s\n", AST_CLI_YESNO(ast_test_flag(&global_jbconf, AST_JB_LOG)));
+	}
 
 	ast_cli(a->fd, "\nNetwork Settings:\n");
 	ast_cli(a->fd, "---------------------------\n");
@@ -19936,7 +19933,6 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 {
 	struct ast_channel *owner;
 	int sipmethod;
-	int res = 1;
 	const char *c = get_header(req, "Cseq");
 	/* GCC 4.2 complains if I try to cast c as a char * when passing it to ast_skip_nonblanks, so make a copy of it */
 	char *c_copy = ast_strdupa(c);
@@ -20059,7 +20055,7 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 			} else if (sipmethod == SIP_NOTIFY) {
 				handle_response_notify(p, resp, rest, req, seqno);
 			} else if (sipmethod == SIP_REGISTER) {
-				res = handle_response_register(p, resp, rest, req, seqno);
+				handle_response_register(p, resp, rest, req, seqno);
 			} else if (sipmethod == SIP_SUBSCRIBE) {
 				ast_set_flag(&p->flags[1], SIP_PAGE2_DIALOG_ESTABLISHED);
 				handle_response_subscribe(p, resp, rest, req, seqno);
@@ -20077,7 +20073,7 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 			else if (sipmethod == SIP_SUBSCRIBE)
 				handle_response_subscribe(p, resp, rest, req, seqno);
 			else if (p->registry && sipmethod == SIP_REGISTER)
-				res = handle_response_register(p, resp, rest, req, seqno);
+				handle_response_register(p, resp, rest, req, seqno);
 			else if (sipmethod == SIP_UPDATE) {
 				handle_response_update(p, resp, rest, req, seqno);
 			} else if (sipmethod == SIP_BYE) {
@@ -20102,7 +20098,7 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 			else if (sipmethod == SIP_SUBSCRIBE)
 				handle_response_subscribe(p, resp, rest, req, seqno);
 			else if (p->registry && sipmethod == SIP_REGISTER)
-				res = handle_response_register(p, resp, rest, req, seqno);
+				handle_response_register(p, resp, rest, req, seqno);
 			else {
 				ast_log(LOG_WARNING, "Forbidden - maybe wrong password on authentication for %s\n", msg);
 				pvt_set_needdestroy(p, "received 403 response");
@@ -20110,7 +20106,7 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 			break;
 		case 404: /* Not found */
 			if (p->registry && sipmethod == SIP_REGISTER)
-				res = handle_response_register(p, resp, rest, req, seqno);
+				handle_response_register(p, resp, rest, req, seqno);
 			else if (sipmethod == SIP_INVITE)
 				handle_response_invite(p, resp, rest, req, seqno);
 			else if (sipmethod == SIP_SUBSCRIBE)
@@ -20120,13 +20116,13 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 			break;
 		case 423: /* Interval too brief */
 			if (sipmethod == SIP_REGISTER)
-				res = handle_response_register(p, resp, rest, req, seqno);
+				handle_response_register(p, resp, rest, req, seqno);
 			break;
 		case 408: /* Request timeout - terminate dialog */
 			if (sipmethod == SIP_INVITE)
 				handle_response_invite(p, resp, rest, req, seqno);
 			else if (sipmethod == SIP_REGISTER)
-				res = handle_response_register(p, resp, rest, req, seqno);
+				handle_response_register(p, resp, rest, req, seqno);
 			else if (sipmethod == SIP_BYE) {
 				pvt_set_needdestroy(p, "received 408 response");
 				ast_debug(4, "Got timeout on bye. Thanks for the answer. Now, kill this call\n");
@@ -20726,12 +20722,10 @@ static int handle_request_notify(struct sip_pvt *p, struct sip_request *req, str
 	/* Mostly created to return proper answers on notifications on outbound REFER's */
 	int res = 0;
 	const char *event = get_header(req, "Event");
-	char *eventid = NULL;
 	char *sep;
 
 	if( (sep = strchr(event, ';')) ) {	/* XXX bug here - overwriting string ? */
 		*sep++ = '\0';
-		eventid = sep;
 	}
 	
 	if (sipdebug)
