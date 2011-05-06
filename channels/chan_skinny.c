@@ -1185,6 +1185,7 @@ static int gendigittimeout = 8000;
 /* How long to wait for an extra digit, if there is an ambiguous match */
 static int matchdigittimeout = 3000;
 
+#define SUBSTATE_UNSET 0
 #define SUBSTATE_OFFHOOK 1
 #define SUBSTATE_ONHOOK 2
 #define SUBSTATE_RINGOUT 3
@@ -1217,7 +1218,7 @@ struct skinny_subchannel {
 
 	AST_LIST_ENTRY(skinny_subchannel) list;
 	struct skinny_subchannel *related;
-	struct skinny_line *parent;
+	struct skinny_line *line;
 };
 
 #define SKINNY_LINE_OPTIONS				\
@@ -1268,7 +1269,6 @@ struct skinny_subchannel {
 	int onhooktime;					\
 	int msgstate;					\
 	int immediate;					\
-	int hookstate;					\
 	int nat;					\
 	int directmedia;				\
 	int prune;
@@ -1301,7 +1301,6 @@ static struct skinny_line_options{
 	.getforward = 0,
  	.needdestroy = 0,
 	.prune = 0,
-	.hookstate = SKINNY_ONHOOK,
 };
 static struct skinny_line_options *default_line = &default_line_struct;
 
@@ -1336,6 +1335,7 @@ struct skinny_addon {
 	char vmexten[AST_MAX_EXTENSION];			\
 	int type;						\
 	int registered;						\
+	int hookstate;					\
 	int lastlineinstance;					\
 	int lastcallreference;					\
 	struct ast_format_cap *confcap;					\
@@ -1373,6 +1373,7 @@ static struct skinny_device_options {
  	.mwiblink = 0,
  	.dnd = 0,
 	.prune = 0,
+	.hookstate = SKINNY_ONHOOK,
 };
 static struct skinny_device_options *default_device = &default_device_struct;
 	
@@ -2270,7 +2271,7 @@ static void transmit_callinfo(struct skinny_subchannel *sub)
 	char *toname;
 	char *tonum;
 
-	if (!sub || !(l=sub->parent) || !(d=sub->parent->device) || !(ast=sub->owner)) {
+	if (!sub || !(l=sub->line) || !(d=l->device) || !(ast=sub->owner)) {
 		return;
 	}
 
@@ -2309,7 +2310,7 @@ static void transmit_callinfo(struct skinny_subchannel *sub)
 static void transmit_connect(struct skinny_device *d, struct skinny_subchannel *sub)
 {
 	struct skinny_req *req;
-	struct skinny_line *l = sub->parent;
+	struct skinny_line *l = sub->line;
 	struct ast_format_list fmt;
 	struct ast_format tmpfmt;
 
@@ -2839,7 +2840,7 @@ static int skinny_extensionstate_cb(char *context, char *exten, int state, void 
 static void update_connectedline(struct skinny_subchannel *sub, const void *data, size_t datalen)
 {
 	struct ast_channel *c = sub->owner;
-	struct skinny_line *l = sub->parent;
+	struct skinny_line *l = sub->line;
 	struct skinny_device *d = l->device;
 
 	if (!c->caller.id.number.valid
@@ -2947,7 +2948,7 @@ static enum ast_rtp_glue_result skinny_get_rtp_peer(struct ast_channel *c, struc
 	ao2_ref(sub->rtp, +1);
 	*instance = sub->rtp;
 
-	l = sub->parent;
+	l = sub->line;
 
 	if (!l->directmedia || l->nat){
 		res = AST_RTP_GLUE_RESULT_LOCAL;
@@ -2981,7 +2982,7 @@ static int skinny_set_rtp_peer(struct ast_channel *c, struct ast_rtp_instance *r
 		return -1;
 	}
 
-	l = sub->parent;
+	l = sub->line;
 	d = l->device;
 
 	if (rtp){
@@ -3863,7 +3864,7 @@ static struct ast_cli_entry cli_skinny[] = {
 
 static void start_rtp(struct skinny_subchannel *sub)
 {
-	struct skinny_line *l = sub->parent;
+	struct skinny_line *l = sub->line;
 	struct skinny_device *d = l->device;
 	int hasvideo = 0;
 	struct ast_sockaddr bindaddr_tmp;
@@ -3911,7 +3912,7 @@ static void *skinny_newcall(void *data)
 {
 	struct ast_channel *c = data;
 	struct skinny_subchannel *sub = c->tech_pvt;
-	struct skinny_line *l = sub->parent;
+	struct skinny_line *l = sub->line;
 	struct skinny_device *d = l->device;
 	int res = 0;
 
@@ -3944,7 +3945,7 @@ static void *skinny_ss(void *data)
 {
 	struct ast_channel *c = data;
 	struct skinny_subchannel *sub = c->tech_pvt;
-	struct skinny_line *l = sub->parent;
+	struct skinny_line *l = sub->line;
 	struct skinny_device *d = l->device;
 	int len = 0;
 	int timeout = firstdigittimeout;
@@ -4007,7 +4008,7 @@ static void *skinny_ss(void *data)
 		} else if (res == 0) {
 			ast_debug(1, "Not enough digits (%s) (and no ambiguous match)...\n", d->exten);
 			memset(d->exten, 0, sizeof(d->exten));
-			if (l->hookstate == SKINNY_OFFHOOK) {
+			if (d->hookstate == SKINNY_OFFHOOK) {
 				transmit_start_tone(d, SKINNY_REORDER, l->instance, sub->callid);
 			}
 			if (sub->owner && sub->owner->_state != AST_STATE_UP) {
@@ -4022,7 +4023,7 @@ static void *skinny_ss(void *data)
 				S_COR(c->caller.id.number.valid, c->caller.id.number.str, "<Unknown Caller>"),
 				c->context);
 			memset(d->exten, 0, sizeof(d->exten));
-			if (l->hookstate == SKINNY_OFFHOOK) {
+			if (d->hookstate == SKINNY_OFFHOOK) {
 				transmit_start_tone(d, SKINNY_REORDER, l->instance, sub->callid);
 				/* hang out for 3 seconds to let congestion play */
 				ast_safe_sleep(c, 3000);
@@ -4048,7 +4049,7 @@ static int skinny_call(struct ast_channel *ast, char *dest, int timeout)
 {
 	int res = 0;
 	struct skinny_subchannel *sub = ast->tech_pvt;
-	struct skinny_line *l = sub->parent;
+	struct skinny_line *l = sub->line;
 	struct skinny_device *d = l->device;
 
 	if (!d->registered) {
@@ -4089,7 +4090,7 @@ static int skinny_hangup(struct ast_channel *ast)
 		return 0;
 	}
 
-	l = sub->parent;
+	l = sub->line;
 	d = l->device;
 
 	if (skinnydebug)
@@ -4137,7 +4138,7 @@ static int skinny_hangup(struct ast_channel *ast)
 			}
 		} else {                                                /* no more subs on line so make idle */
 			ast_verb(4,"Killing only sub %d\n", sub->callid);
-			l->hookstate = SKINNY_ONHOOK;
+			d->hookstate = SKINNY_ONHOOK;
 			transmit_closereceivechannel(d, sub);
 			transmit_stopmediatransmission(d, sub);
 			transmit_speaker_mode(d, SKINNY_SPEAKEROFF);
@@ -4147,7 +4148,7 @@ static int skinny_hangup(struct ast_channel *ast)
 			transmit_activatecallplane(d, l);
 			l->activesub = NULL;
 			transmit_lamp_indication(d, STIMULUS_LINE, l->instance, SKINNY_LAMP_OFF);
-			if (sub->parent == d->activeline) {
+			if (sub->line == d->activeline) {
 				transmit_activatecallplane(d, l);
 				transmit_closereceivechannel(d, sub);
 				transmit_stopmediatransmission(d, sub);
@@ -4177,7 +4178,7 @@ static int skinny_answer(struct ast_channel *ast)
 {
 	int res = 0;
 	struct skinny_subchannel *sub = ast->tech_pvt;
-	struct skinny_line *l = sub->parent;
+	struct skinny_line *l = sub->line;
 	struct skinny_device *d = l->device;
 
 	if (sub->blindxfer) {
@@ -4310,7 +4311,7 @@ static int skinny_senddigit_end(struct ast_channel *ast, char digit, unsigned in
 {
 #if 0
 	struct skinny_subchannel *sub = ast->tech_pvt;
-	struct skinny_line *l = sub->parent;
+	struct skinny_line *l = sub->line;
 	struct skinny_device *d = l->device;
 	int tmp;
 	/* not right */
@@ -4332,7 +4333,7 @@ static int get_devicestate(struct skinny_line *l)
 	else if (l->dnd)
 		res = AST_DEVICE_BUSY;
 	else {
-		if (l->hookstate == SKINNY_ONHOOK) {
+		if (l->device->hookstate == SKINNY_ONHOOK) {
 			res = AST_DEVICE_NOT_INUSE;
 		} else {
 			res = AST_DEVICE_INUSE;
@@ -4482,7 +4483,7 @@ static int skinny_transfer(struct skinny_subchannel *sub)
 static int skinny_indicate(struct ast_channel *ast, int ind, const void *data, size_t datalen)
 {
 	struct skinny_subchannel *sub = ast->tech_pvt;
-	struct skinny_line *l = sub->parent;
+	struct skinny_line *l = sub->line;
 	struct skinny_device *d = l->device;
 	struct skinnysession *s = d->session;
 
@@ -4570,7 +4571,7 @@ static struct ast_channel *skinny_new(struct skinny_line *l, int state, const ch
 			d->lastcallreference = sub->callid;
 			sub->cxmode = SKINNY_CX_INACTIVE;
 			sub->nat = l->nat;
-			sub->parent = l;
+			sub->line = l;
 			sub->blindxfer = 0;
 			sub->xferor = 0;
 			sub->related = NULL;
@@ -4690,14 +4691,14 @@ static char *substate2str(int ind) {
 
 static void setsubstate_offhook(struct skinny_subchannel *sub)
 {
-	struct skinny_line *l = sub->parent;
+	struct skinny_line *l = sub->line;
 	struct skinny_device *d = l->device;
 	pthread_t t;
 
 	ast_verb(1, "Call-id: %d\n", sub->callid);
 	l->activesub = sub;
-	if (l->hookstate == SKINNY_ONHOOK) {
-		l->hookstate = SKINNY_OFFHOOK;
+	if (d->hookstate == SKINNY_ONHOOK) {
+		d->hookstate = SKINNY_OFFHOOK;
 		transmit_speaker_mode(d, SKINNY_SPEAKERON);
 	}
 	transmit_callstate(d, l->instance, sub->callid, SKINNY_OFFHOOK);
@@ -4706,6 +4707,8 @@ static void setsubstate_offhook(struct skinny_subchannel *sub)
 	transmit_start_tone(d, SKINNY_DIALTONE, l->instance, sub->callid);
 	transmit_selectsoftkeys(d, l->instance, sub->callid, KEYDEF_OFFHOOK);
 
+	sub->substate = SUBSTATE_OFFHOOK;
+	
 	/* start the switch thread */
 	if (ast_pthread_create(&t, NULL, skinny_ss, sub->owner)) {
 		ast_log(LOG_WARNING, "Unable to create switch thread: %s\n", strerror(errno));
@@ -4715,7 +4718,7 @@ static void setsubstate_offhook(struct skinny_subchannel *sub)
 
 static void setsubstate_dialing(struct skinny_subchannel *sub, char exten[AST_MAX_EXTENSION])
 {
-	struct skinny_line *l = sub->parent;
+	struct skinny_line *l = sub->line;
 	struct skinny_device *d = l->device;
 	struct ast_channel *c = sub->owner;
 	pthread_t t;
@@ -4725,8 +4728,8 @@ static void setsubstate_dialing(struct skinny_subchannel *sub, char exten[AST_MA
 		return;
 	}
 
-	if (l->hookstate == SKINNY_ONHOOK) {
-		l->hookstate = SKINNY_OFFHOOK;
+	if (d->hookstate == SKINNY_ONHOOK) {
+		d->hookstate = SKINNY_OFFHOOK;
 		transmit_speaker_mode(d, SKINNY_SPEAKERON);
 		transmit_callstate(d, l->instance, sub->callid, SKINNY_OFFHOOK);
 		transmit_activatecallplane(d, l);
@@ -4749,7 +4752,7 @@ static void setsubstate_dialing(struct skinny_subchannel *sub, char exten[AST_MA
 
 static void setsubstate_ringout(struct skinny_subchannel *sub)
 {
-	struct skinny_line *l = sub->parent;
+	struct skinny_line *l = sub->line;
 	struct skinny_device *d = l->device;
 
 	if (!(sub->substate == SUBSTATE_DIALING || sub->substate == SUBSTATE_PROGRESS)) {
@@ -4760,7 +4763,7 @@ static void setsubstate_ringout(struct skinny_subchannel *sub)
 	if (!d->earlyrtp) {
 		transmit_start_tone(d, SKINNY_ALERT, l->instance, sub->callid);
 	}
-	transmit_callstate(d, sub->parent->instance, sub->callid, SKINNY_RINGOUT);
+	transmit_callstate(d, l->instance, sub->callid, SKINNY_RINGOUT);
 	transmit_dialednumber(d, l->lastnumberdialed, l->instance, sub->callid);
 	transmit_displaypromptstatus(d, "Ring Out", 0, l->instance, sub->callid);
 	transmit_callinfo(sub);
@@ -4769,18 +4772,18 @@ static void setsubstate_ringout(struct skinny_subchannel *sub)
 
 static void setsubstate_ringin(struct skinny_subchannel *sub)
 {
-	struct skinny_line *l = sub->parent;
+	struct skinny_line *l = sub->line;
 	struct skinny_device *d = l->device;
 	struct ast_channel *c = sub->owner;
 
-	transmit_callstate(d, sub->parent->instance, sub->callid, SKINNY_RINGIN);
+	transmit_callstate(d, l->instance, sub->callid, SKINNY_RINGIN);
 	transmit_selectsoftkeys(d, l->instance, sub->callid, KEYDEF_RINGIN);
 	transmit_displaypromptstatus(d, "Ring-In", 0, l->instance, sub->callid);
 	transmit_callinfo(sub);
 	transmit_lamp_indication(d, STIMULUS_LINE, l->instance, SKINNY_LAMP_BLINK);
 	transmit_ringer_mode(d, SKINNY_RING_INSIDE);
 
-	if (l->hookstate == SKINNY_ONHOOK) {
+	if (d->hookstate == SKINNY_ONHOOK) {
 		l->activesub = sub;
 	}
 	
@@ -4791,7 +4794,7 @@ static void setsubstate_ringin(struct skinny_subchannel *sub)
 
 static void setsubstate_connected(struct skinny_subchannel *sub)
 {
-	struct skinny_line *l = sub->parent;
+	struct skinny_line *l = sub->line;
 	struct skinny_device *d = l->device;
 	
 	if (sub->substate == SUBSTATE_HOLD) {
@@ -4801,7 +4804,7 @@ static void setsubstate_connected(struct skinny_subchannel *sub)
 	transmit_activatecallplane(d, l);
 	transmit_stop_tone(d, l->instance, sub->callid);
 	transmit_callinfo(sub);
-	transmit_callstate(d, sub->parent->instance, sub->callid, SKINNY_CONNECTED);
+	transmit_callstate(d, l->instance, sub->callid, SKINNY_CONNECTED);
 	transmit_displaypromptstatus(d, "Connected", 0, l->instance, sub->callid);
 	transmit_selectsoftkeys(d, l->instance, sub->callid, KEYDEF_CONNECTED);
 	if (!sub->rtp) {
@@ -4822,7 +4825,7 @@ static void setsubstate_connected(struct skinny_subchannel *sub)
 
 static void setsubstate_busy(struct skinny_subchannel *sub)
 {
-	struct skinny_line *l = sub->parent;
+	struct skinny_line *l = sub->line;
 	struct skinny_device *d = l->device;
 
 	if (!(sub->substate == SUBSTATE_DIALING || sub->substate == SUBSTATE_PROGRESS || sub->substate == SUBSTATE_RINGOUT)) {
@@ -4834,14 +4837,14 @@ static void setsubstate_busy(struct skinny_subchannel *sub)
 		transmit_start_tone(d, SKINNY_BUSYTONE, l->instance, sub->callid);
 	}
 	transmit_callinfo(sub);
-	transmit_callstate(d, sub->parent->instance, sub->callid, SKINNY_BUSY);
+	transmit_callstate(d, l->instance, sub->callid, SKINNY_BUSY);
 	transmit_displaypromptstatus(d, "Busy", 0, l->instance, sub->callid);
 	sub->substate = SUBSTATE_BUSY;
 }
 
 static void setsubstate_congestion(struct skinny_subchannel *sub)
 {
-	struct skinny_line *l = sub->parent;
+	struct skinny_line *l = sub->line;
 	struct skinny_device *d = l->device;
 
 	if (!(sub->substate == SUBSTATE_DIALING || sub->substate == SUBSTATE_PROGRESS || sub->substate == SUBSTATE_RINGOUT)) {
@@ -4853,14 +4856,14 @@ static void setsubstate_congestion(struct skinny_subchannel *sub)
 		transmit_start_tone(d, SKINNY_REORDER, l->instance, sub->callid);
 	}
 	transmit_callinfo(sub);
-	transmit_callstate(d, sub->parent->instance, sub->callid, SKINNY_CONGESTION);
+	transmit_callstate(d, l->instance, sub->callid, SKINNY_CONGESTION);
 	transmit_displaypromptstatus(d, "Congestion", 0, l->instance, sub->callid);
 	sub->substate = SUBSTATE_CONGESTION;
 }
 
 static void setsubstate_progress(struct skinny_subchannel *sub)
 {
-	struct skinny_line *l = sub->parent;
+	struct skinny_line *l = sub->line;
 	struct skinny_device *d = l->device;
 
 	if (sub->substate != SUBSTATE_DIALING) {
@@ -4872,14 +4875,14 @@ static void setsubstate_progress(struct skinny_subchannel *sub)
 		transmit_start_tone(d, SKINNY_ALERT, l->instance, sub->callid);
 	}
 	transmit_callinfo(sub);
-	transmit_callstate(d, sub->parent->instance, sub->callid, SKINNY_PROGRESS);
+	transmit_callstate(d, l->instance, sub->callid, SKINNY_PROGRESS);
 	transmit_displaypromptstatus(d, "Call Progress", 0, l->instance, sub->callid);
 	sub->substate = SUBSTATE_PROGRESS;
 }
 
 static void setsubstate_hold(struct skinny_subchannel *sub)
 {
-	struct skinny_line *l = sub->parent;
+	struct skinny_line *l = sub->line;
 	struct skinny_device *d = l->device;
 
 	if (sub->substate != SUBSTATE_CONNECTED) {
@@ -4895,9 +4898,9 @@ static void setsubstate_hold(struct skinny_subchannel *sub)
 	transmit_closereceivechannel(d, sub);
 	transmit_stopmediatransmission(d, sub);
 
-	transmit_callstate(d, sub->parent->instance, sub->callid, SKINNY_HOLD);
+	transmit_callstate(d, l->instance, sub->callid, SKINNY_HOLD);
 	transmit_lamp_indication(d, STIMULUS_LINE, l->instance, SKINNY_LAMP_WINK);
-	transmit_selectsoftkeys(sub->parent->device, sub->parent->instance, sub->callid, KEYDEF_ONHOLD);
+	transmit_selectsoftkeys(d, l->instance, sub->callid, KEYDEF_ONHOLD);
 	sub->substate = SUBSTATE_HOLD;
 }
 
@@ -4930,7 +4933,7 @@ static int handle_transfer_button(struct skinny_subchannel *sub)
 		return -1;
 	}
 
-	l = sub->parent;
+	l = sub->line;
 	d = l->device;
 
 	if (!sub->related) {
@@ -4973,12 +4976,12 @@ static int handle_transfer_button(struct skinny_subchannel *sub)
 
 static int handle_callforward_button(struct skinny_subchannel *sub, int cfwdtype)
 {
-	struct skinny_line *l = sub->parent;
+	struct skinny_line *l = sub->line;
 	struct skinny_device *d = l->device;
 	struct ast_channel *c = sub->owner;
 
-	if (l->hookstate == SKINNY_ONHOOK) {
-		l->hookstate = SKINNY_OFFHOOK;
+	if (d->hookstate == SKINNY_ONHOOK) {
+		d->hookstate = SKINNY_OFFHOOK;
 		transmit_speaker_mode(d, SKINNY_SPEAKERON);
 		transmit_callstate(d, l->instance, sub->callid, SKINNY_OFFHOOK);
 		transmit_activatecallplane(d, l);
@@ -5060,7 +5063,7 @@ static int handle_keypad_button_message(struct skinny_req *req, struct skinnyses
 	if (!sub)
 		return 0;
 
-	l = sub->parent;
+	l = sub->line;
 	if (sub->owner) {
 		if (sub->owner->_state == 0) {
 			f.frametype = AST_FRAME_DTMF_BEGIN;
@@ -5113,7 +5116,7 @@ static int handle_stimulus_message(struct skinny_req *req, struct skinnysession 
 		}
 		sub = l->activesub;
 	} else {
-		l = sub->parent;
+		l = sub->line;
 	}
 
 	switch(event) {
@@ -5131,7 +5134,7 @@ static int handle_stimulus_message(struct skinny_req *req, struct skinnysession 
 			ast_log(LOG_WARNING, "Unable to create channel for %s@%s\n", l->name, d->name);
 		} else {
 			sub = c->tech_pvt;
-			l = sub->parent;
+			l = sub->line;
 			l->activesub = sub;
 			setsubstate_dialing(sub, l->lastnumberdialed);
 		}
@@ -5155,7 +5158,7 @@ static int handle_stimulus_message(struct skinny_req *req, struct skinnysession 
 			ast_log(LOG_WARNING, "Unable to create channel for %s@%s\n", l->name, d->name);
 		} else {
 			sub = c->tech_pvt;
-			l = sub->parent;
+			l = sub->line;
 			l->activesub = sub;
 			
 			setsubstate_dialing(sub, sd->exten);
@@ -5181,23 +5184,26 @@ static int handle_stimulus_message(struct skinny_req *req, struct skinnysession 
 		/* XXX determine the best way to pull off a conference.  Meetme? */
 		break;
 	case STIMULUS_VOICEMAIL:
-		if (skinnydebug)
+		if (skinnydebug) {
 			ast_verb(1, "Received Stimulus: Voicemail(%d/%d)\n", instance, callreference);
+		}
 
 		if (!sub || !sub->owner) {
 			c = skinny_new(l, AST_STATE_DOWN, NULL, SKINNY_OUTGOING);
 		} else {
 			c = sub->owner;
 		}
+		
 		if (!c) {
 			ast_log(LOG_WARNING, "Unable to create channel for %s@%s\n", l->name, d->name);
-		} else {
-			sub = c->tech_pvt;
-			l = sub->parent;
+			break;
+		}
+		
+		sub = c->tech_pvt;
+		if (sub->substate == SUBSTATE_UNSET || sub->substate == SUBSTATE_OFFHOOK){
+			l = sub->line;
 			l->activesub = sub;
-			
 			setsubstate_dialing(sub,l->vmexten);
-
 		}
 		break;
 	case STIMULUS_CALLPARK:
@@ -5317,7 +5323,7 @@ static int handle_stimulus_message(struct skinny_req *req, struct skinnysession 
 		transmit_ringer_mode(d, SKINNY_RING_OFF);
 		transmit_lamp_indication(d, STIMULUS_LINE, l->instance, SKINNY_LAMP_ON);
 
-		l->hookstate = SKINNY_OFFHOOK;
+		d->hookstate = SKINNY_OFFHOOK;
 
 		if (sub && sub->calldirection == SKINNY_INCOMING) {
 			setsubstate_connected(sub);
@@ -5350,7 +5356,6 @@ static int handle_offhook_message(struct skinny_req *req, struct skinnysession *
 	struct skinny_line *l;
 	struct skinny_subchannel *sub;
 	struct ast_channel *c;
-	struct skinny_line *tmp;
 	int instance;
 
 	/* if any line on a device is offhook, than the device must be offhook, 
@@ -5359,11 +5364,9 @@ static int handle_offhook_message(struct skinny_req *req, struct skinnysession *
 	   probably move hookstate from line to device, afterall, it's actually
 	    a device that changes hookstates */
 
-	AST_LIST_TRAVERSE(&d->lines, tmp, list) {
-		if (tmp->hookstate == SKINNY_OFFHOOK) {
-			ast_verbose(VERBOSE_PREFIX_3 "Got offhook message when device (%s@%s) already offhook\n", tmp->name, d->name);
-			return 0;
-		}
+	if (d->hookstate == SKINNY_OFFHOOK) {
+		ast_verbose(VERBOSE_PREFIX_3 "Got offhook message when device (%s) already offhook\n", d->name);
+		return 0;
 	}
 
 	instance = letohl(req->data.offhook.instance);
@@ -5376,7 +5379,7 @@ static int handle_offhook_message(struct skinny_req *req, struct skinnysession *
 				return 0;
 			}
 		} else {
-			l = sub->parent;
+			l = sub->line;
 		}
 	} else {
 		l = d->activeline;
@@ -5384,7 +5387,7 @@ static int handle_offhook_message(struct skinny_req *req, struct skinnysession *
 	}
 
 	transmit_ringer_mode(d, SKINNY_RING_OFF);
-	l->hookstate = SKINNY_OFFHOOK;
+	d->hookstate = SKINNY_OFFHOOK;
 
 	ast_devstate_changed(AST_DEVICE_INUSE, "Skinny/%s@%s", l->name, d->name);
 
@@ -5431,7 +5434,7 @@ static int handle_onhook_message(struct skinny_req *req, struct skinnysession *s
 		if (!sub) {
 			return 0;
 		}
-		l = sub->parent;
+		l = sub->line;
 	} else {
 		l = d->activeline;
 		sub = l->activesub;
@@ -5440,7 +5443,7 @@ static int handle_onhook_message(struct skinny_req *req, struct skinnysession *s
 		}
 	}
 
-	if (l->hookstate == SKINNY_ONHOOK) {
+	if (d->hookstate == SKINNY_ONHOOK) {
 		/* Something else already put us back on hook */
 		/* Not ideal, but let's send updated time anyway, as it clears the display */
 		transmit_definetimedate(d);
@@ -5461,12 +5464,12 @@ static int handle_onhook_message(struct skinny_req *req, struct skinnysession *s
 
 	sub->cxmode = SKINNY_CX_RECVONLY;
 	if (onlysub || sub->xferor){  /* is this the only call to this device? */
-		l->hookstate = SKINNY_ONHOOK;
+		d->hookstate = SKINNY_ONHOOK;
 		if (skinnydebug)
 			ast_debug(1, "Skinny %s@%s-%d went on hook\n", l->name, d->name, reference);
 	}
 
-	if (l->hookstate == SKINNY_ONHOOK) {
+	if (d->hookstate == SKINNY_ONHOOK) {
 		transmit_closereceivechannel(d, sub);
 		transmit_stopmediatransmission(d, sub);
 		transmit_speaker_mode(d, SKINNY_SPEAKEROFF);
@@ -5474,11 +5477,11 @@ static int handle_onhook_message(struct skinny_req *req, struct skinnysession *s
 		transmit_callstate(d, l->instance, sub->callid, SKINNY_ONHOOK);
 		transmit_selectsoftkeys(d, 0, 0, KEYDEF_ONHOOK);
 		transmit_activatecallplane(d, l);
-	} else if (l->hookstate == SKINNY_OFFHOOK) {
+	} else if (d->hookstate == SKINNY_OFFHOOK) {
 		transmit_callstate(d, l->instance, sub->callid, SKINNY_OFFHOOK);
 		transmit_activatecallplane(d, l);
 	} else {
-		transmit_callstate(d, l->instance, sub->callid, l->hookstate);
+		transmit_callstate(d, l->instance, sub->callid, d->hookstate); /* wedhorn: this seems wrong!!! */
 	}
 
 	if (l->transfer && sub->xferor && sub->owner->_state >= AST_STATE_RING) {
@@ -5729,7 +5732,7 @@ static int handle_open_receive_channel_ack_message(struct skinny_req *req, struc
 	if (!sub)
 		return 0;
 
-	l = sub->parent;
+	l = sub->line;
 
 	if (sub->rtp) {
 		ast_sockaddr_from_sin(&sin_tmp, &sin);
@@ -5775,7 +5778,7 @@ static int handle_enbloc_call_message(struct skinny_req *req, struct skinnysessi
 			return 0;
 		}
 	} else {
-		l = sub->parent;
+		l = sub->line;
 	}
 
 	c = skinny_new(l, AST_STATE_DOWN, NULL, SKINNY_OUTGOING);
@@ -5783,7 +5786,7 @@ static int handle_enbloc_call_message(struct skinny_req *req, struct skinnysessi
 	if(!c) {
 		ast_log(LOG_WARNING, "Unable to create channel for %s@%s\n", l->name, d->name);
 	} else {
-		l->hookstate = SKINNY_OFFHOOK;
+		d->hookstate = SKINNY_OFFHOOK;
 
 		sub = c->tech_pvt;
 		l->activesub = sub;
@@ -5964,7 +5967,7 @@ static int handle_soft_key_event_message(struct skinny_req *req, struct skinnyse
 		if (skinnydebug)
 			ast_verb(1, "Received Softkey Event: End Call(%d/%d)\n", instance, callreference);
 
-		if (l->hookstate == SKINNY_ONHOOK) {
+		if (d->hookstate == SKINNY_ONHOOK) {
 			/* Something else already put us back on hook */
 			break;
 		}
@@ -5979,12 +5982,12 @@ static int handle_soft_key_event_message(struct skinny_req *req, struct skinnyse
 
 			sub->cxmode = SKINNY_CX_RECVONLY;
 			if (onlysub || sub->xferor){    /*Are there other calls to this device */
-				l->hookstate = SKINNY_ONHOOK;
+				d->hookstate = SKINNY_ONHOOK;
 				if (skinnydebug)
 					ast_debug(1, "Skinny %s@%s-%d went on hook\n", l->name, d->name, callreference);
 			}
 
-			if (l->hookstate == SKINNY_ONHOOK) {
+			if (d->hookstate == SKINNY_ONHOOK) {
 				transmit_closereceivechannel(d, sub);
 				transmit_stopmediatransmission(d, sub);
 				transmit_speaker_mode(d, SKINNY_SPEAKEROFF);
@@ -5992,11 +5995,11 @@ static int handle_soft_key_event_message(struct skinny_req *req, struct skinnyse
 				transmit_callstate(d, l->instance, sub->callid, SKINNY_ONHOOK);
 				transmit_selectsoftkeys(d, 0, 0, KEYDEF_ONHOOK);
 				transmit_activatecallplane(d, l);
-			} else if (l->hookstate == SKINNY_OFFHOOK) {
+			} else if (d->hookstate == SKINNY_OFFHOOK) {
 				transmit_callstate(d, l->instance, sub->callid, SKINNY_OFFHOOK);
 				transmit_activatecallplane(d, l);
 			} else {
-				transmit_callstate(d, l->instance, sub->callid, l->hookstate);
+				transmit_callstate(d, l->instance, sub->callid, d->hookstate); /* wedhorn - this seems wrong */
 			}
 
 			ast_devstate_changed(AST_DEVICE_NOT_INUSE, "Skinny/%s@%s", l->name, d->name);
@@ -6022,7 +6025,7 @@ static int handle_soft_key_event_message(struct skinny_req *req, struct skinnyse
 						l->name, d->name, sub->callid);
 				}
 			}
-			if ((l->hookstate == SKINNY_ONHOOK) && (AST_LIST_NEXT(sub, list) && !AST_LIST_NEXT(sub, list)->rtp)) {
+			if ((d->hookstate == SKINNY_ONHOOK) && (AST_LIST_NEXT(sub, list) && !AST_LIST_NEXT(sub, list)->rtp)) {
 				ast_devstate_changed(AST_DEVICE_NOT_INUSE, "Skinny/%s@%s", l->name, d->name);
 			}
 		}
@@ -6039,9 +6042,9 @@ static int handle_soft_key_event_message(struct skinny_req *req, struct skinnyse
 
 		transmit_ringer_mode(d, SKINNY_RING_OFF);
 		transmit_lamp_indication(d, STIMULUS_LINE, l->instance, SKINNY_LAMP_ON);
-		if (l->hookstate == SKINNY_ONHOOK) {
+		if (d->hookstate == SKINNY_ONHOOK) {
 			transmit_speaker_mode(d, SKINNY_SPEAKERON);
-			l->hookstate = SKINNY_OFFHOOK;
+			d->hookstate = SKINNY_OFFHOOK;
 		}
 
 		if (sub && sub->calldirection == SKINNY_INCOMING) {
@@ -7139,6 +7142,7 @@ static struct ast_channel *skinny_request(const char *type, struct ast_format_ca
 			ast_mutex_lock(&d->lock);
 			d->session = temp->session;
 			d->session->device = d;
+			d->hookstate = temp->hookstate;
 
 			AST_LIST_LOCK(&d->lines);
 			AST_LIST_TRAVERSE(&d->lines, l, list){
@@ -7151,12 +7155,11 @@ static struct ast_channel *skinny_request(const char *type, struct ast_format_ca
 					}
 					ast_mutex_lock(&ltemp->lock);
 					l->instance = ltemp->instance;
-					l->hookstate = ltemp->hookstate;
 					if (!AST_LIST_EMPTY(&ltemp->sub)) {
 						ast_mutex_lock(&l->lock);
 						l->sub = ltemp->sub;
 						AST_LIST_TRAVERSE(&l->sub, sub, list) {
-							sub->parent = l;
+							sub->line = l;
 						}
 						ast_mutex_unlock(&l->lock);
 					}
