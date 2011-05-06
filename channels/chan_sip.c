@@ -10408,7 +10408,7 @@ static int add_rpid(struct sip_request *req, struct sip_pvt *p)
 		lid_name = lid_num;
 	fromdomain = S_OR(p->fromdomain, ast_sockaddr_stringify_host(&p->ourip));
 
-	lid_num = ast_uri_encode(lid_num, tmp2, sizeof(tmp2), 1);
+	lid_num = ast_uri_encode(lid_num, tmp2, sizeof(tmp2), 0);
 
 	if (ast_test_flag(&p->flags[0], SIP_SENDRPID_PAI)) {
 		if ((lid_pres & AST_PRES_RESTRICTION) != AST_PRES_ALLOWED) {
@@ -11379,7 +11379,7 @@ static void extract_uri(struct sip_pvt *p, struct sip_request *req)
 static void build_contact(struct sip_pvt *p)
 {
 	char tmp[SIPBUFSIZE];
-	char *user = ast_uri_encode(p->exten, tmp, sizeof(tmp), 1);
+	char *user = ast_uri_encode(p->exten, tmp, sizeof(tmp), 0);
 
 	if (p->socket.type == SIP_TRANSPORT_UDP) {
 		ast_string_field_build(p, our_contact, "<sip:%s%s%s>", user,
@@ -15324,7 +15324,8 @@ static enum check_auth_result check_peer_ok(struct sip_pvt *p, char *of,
 		ast_string_field_set(p, authname, peer->name);
 
 		if (sipmethod == SIP_INVITE) {
-			/* copy channel vars */
+			/* destroy old channel vars and copy in new ones. */
+			ast_variables_destroy(p->chanvars);
 			p->chanvars = copy_vars(peer->chanvars);
 		}
 
@@ -24603,13 +24604,12 @@ static void check_rtp_timeout(struct sip_pvt *dialog, time_t t)
 		if (!ast_test_flag(&dialog->flags[1], SIP_PAGE2_CALL_ONHOLD) || (ast_rtp_instance_get_hold_timeout(dialog->rtp) && (t > dialog->lastrtprx + ast_rtp_instance_get_hold_timeout(dialog->rtp)))) {
 			/* Needs a hangup */
 			if (ast_rtp_instance_get_timeout(dialog->rtp)) {
-				while (dialog->owner && ast_channel_trylock(dialog->owner)) {
-					sip_pvt_unlock(dialog);
-					usleep(1);
-					sip_pvt_lock(dialog);
-				}
-				if (!dialog->owner) {
-					return; /* channel hangup can occur during deadlock avoidance. */
+				if (!dialog->owner || ast_channel_trylock(dialog->owner)) {
+					/*
+					 * Don't block, just try again later.
+					 * If there was no owner, the call is dead already.
+					 */
+					return;
 				}
 				ast_log(LOG_NOTICE, "Disconnecting call '%s' for lack of RTP activity in %ld seconds\n",
 					dialog->owner->name, (long) (t - dialog->lastrtprx));
