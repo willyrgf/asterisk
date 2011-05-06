@@ -918,7 +918,7 @@ struct ast_park_call_args {
 static struct parkeduser *park_space_reserve(struct ast_channel *chan, struct ast_channel *peer, struct ast_park_call_args *args)
 {
 	struct parkeduser *pu;
-	int i, parking_space = -1, parking_range;
+	int i, parking_space = -1;
 	const char *parkinglotname = NULL;
 	const char *parkingexten;
 	struct ast_parkinglot *parkinglot = NULL;
@@ -1031,9 +1031,6 @@ static struct parkeduser *park_space_reserve(struct ast_channel *chan, struct as
 		int start;
 		struct parkeduser *cur = NULL;
 
-		/* Select parking space within range */
-		parking_range = parkinglot->parking_stop - parkinglot->parking_start + 1;
-
 		if (ast_test_flag(args, AST_PARK_OPT_RANDOMIZE)) {
 			start = ast_random() % (parkinglot->parking_stop - parkinglot->parking_start + 1);
 		} else {
@@ -1082,7 +1079,6 @@ static struct parkeduser *park_space_reserve(struct ast_channel *chan, struct as
 static int park_call_full(struct ast_channel *chan, struct ast_channel *peer, struct ast_park_call_args *args)
 {
 	struct ast_context *con;
-	int parkingnum_copy;
 	struct parkeduser *pu = args->pu;
 	const char *event_from;
 
@@ -1111,7 +1107,6 @@ static int park_call_full(struct ast_channel *chan, struct ast_channel *peer, st
 	
 	pu->start = ast_tvnow();
 	pu->parkingtime = (args->timeout > 0) ? args->timeout : pu->parkinglot->parkingtime;
-	parkingnum_copy = pu->parkingnum;
 	if (args->extout)
 		*(args->extout) = pu->parkingnum;
 
@@ -3416,6 +3411,22 @@ static void add_features_datastores(struct ast_channel *caller, struct ast_chann
 	return;
 }
 
+static void clear_dialed_interfaces(struct ast_channel *chan)
+{
+	struct ast_datastore *di_datastore;
+
+	ast_channel_lock(chan);
+	if ((di_datastore = ast_channel_datastore_find(chan, &dialed_interface_info, NULL))) {
+		if (option_debug) {
+			ast_log(LOG_DEBUG, "Removing dialed interfaces datastore on %s since we're bridging\n", chan->name);
+		}
+		if (!ast_channel_datastore_remove(chan, di_datastore)) {
+			ast_datastore_free(di_datastore);
+		}
+	}
+	ast_channel_unlock(chan);
+}
+
 /*!
  * \brief bridge the call and set CDR
  * \param chan,peer,config
@@ -3444,7 +3455,6 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 	int we_disabled_peer_cdr = 0;
 	struct ast_option_header *aoh;
 	struct ast_cdr *bridge_cdr = NULL;
-	struct ast_cdr *orig_peer_cdr = NULL;
 	struct ast_cdr *chan_cdr = chan->cdr; /* the proper chan cdr, if there are forked cdrs */
 	struct ast_cdr *peer_cdr = peer->cdr; /* the proper chan cdr, if there are forked cdrs */
 	struct ast_cdr *new_chan_cdr = NULL; /* the proper chan cdr, if there are forked cdrs */
@@ -3516,8 +3526,7 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 	}
 	ast_copy_string(orig_channame,chan->name,sizeof(orig_channame));
 	ast_copy_string(orig_peername,peer->name,sizeof(orig_peername));
-	orig_peer_cdr = peer_cdr;
-	
+
 	if (!chan_cdr || (chan_cdr && !ast_test_flag(chan_cdr, AST_CDR_FLAG_POST_DISABLED))) {
 		
 		if (chan_cdr) {
@@ -3601,6 +3610,13 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 		ast_clear_flag(bridge_cdr, AST_CDR_FLAG_DIALED);
 	}
 	ast_cel_report_event(chan, AST_CEL_BRIDGE_START, NULL, NULL, NULL);
+
+	/* If we are bridging a call, stop worrying about forwarding loops. We presume that if
+	 * a call is being bridged, that the humans in charge know what they're doing. If they
+	 * don't, well, what can we do about that? */
+	clear_dialed_interfaces(chan);
+	clear_dialed_interfaces(peer);
+
 	for (;;) {
 		struct ast_channel *other;	/* used later */
 	

@@ -780,13 +780,13 @@ struct ast_conf_user {
 	char usrvalue[50];                      /*!< Custom User Value */
 	char namerecloc[PATH_MAX];		/*!< Name Recorded file Location */
 	time_t jointime;                        /*!< Time the user joined the conference */
- 	time_t kicktime;                        /*!< Time the user will be kicked from the conference */
- 	struct timeval start_time;              /*!< Time the user entered into the conference */
- 	long timelimit;                         /*!< Time limit for the user to be in the conference L(x:y:z) */
- 	long play_warning;                      /*!< Play a warning when 'y' ms are left */
- 	long warning_freq;                      /*!< Repeat the warning every 'z' ms */
- 	const char *warning_sound;              /*!< File to play as warning if 'y' is defined */
- 	const char *end_sound;                  /*!< File to play when time is up. */
+	time_t kicktime;                        /*!< Time the user will be kicked from the conference */
+	struct timeval start_time;              /*!< Time the user entered into the conference */
+	long timelimit;                         /*!< Time limit for the user to be in the conference L(x:y:z) */
+	long play_warning;                      /*!< Play a warning when 'y' ms are left */
+	long warning_freq;                      /*!< Repeat the warning every 'z' ms */
+	const char *warning_sound;              /*!< File to play as warning if 'y' is defined */
+	const char *end_sound;                  /*!< File to play when time is up. */
 	struct volume talk;
 	struct volume listen;
 	AST_LIST_ENTRY(ast_conf_user) list;
@@ -2733,7 +2733,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, struc
 		ao2_ref(item, -1);
 	}
 
-	if (ast_test_flag64(confflags, CONFFLAG_WAITMARKED && !conf->markedusers))
+	if (ast_test_flag64(confflags, CONFFLAG_WAITMARKED) && !conf->markedusers)
 		dahdic.confmode = DAHDI_CONF_CONF;
 	else if (ast_test_flag64(confflags, CONFFLAG_MONITOR))
 		dahdic.confmode = DAHDI_CONF_CONFMON | DAHDI_CONF_LISTENER;
@@ -2918,6 +2918,11 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, struc
  						res = ast_streamfile(chan, user->end_sound, chan->language);
  						res = ast_waitstream(chan, "");
  					}
+					if (ast_test_flag64(confflags, CONFFLAG_KICK_CONTINUE)) {
+						ret = 0;
+					} else {
+						ret = -1;
+					}
  					break;
  				}
  				

@@ -57,11 +57,15 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define MAX_PREFIX 80
 #define DEFAULT_PORT 8088
 #define DEFAULT_TLS_PORT 8089
+#define DEFAULT_SESSION_LIMIT 100
 
 /* See http.h for more information about the SSL implementation */
 #if defined(HAVE_OPENSSL) && (defined(HAVE_FUNOPEN) || defined(HAVE_FOPENCOOKIE))
 #define	DO_SSL	/* comment in/out if you want to support ssl */
 #endif
+
+static int session_limit = DEFAULT_SESSION_LIMIT;
+static int session_count = 0;
 
 static struct ast_tls_config http_tls_cfg;
 
@@ -130,7 +134,7 @@ static AST_RWLIST_HEAD_STATIC(uri_redirects, http_uri_redirect);
 
 static const struct ast_cfhttp_methods_text {
 	enum ast_http_method method;
-	const char text[];
+	const char *text;
 } ast_http_methods_text[] = {
 	{ AST_HTTP_UNKNOWN,     "UNKNOWN" },
 	{ AST_HTTP_GET,         "GET" },
@@ -141,7 +145,15 @@ static const struct ast_cfhttp_methods_text {
 
 const char *ast_get_http_method(enum ast_http_method method)
 {
-	return ast_http_methods_text[method].text;
+	int x;
+
+	for (x = 0; x < ARRAY_LEN(ast_http_methods_text); x++) {
+		if (ast_http_methods_text[x].method == method) {
+			return ast_http_methods_text[x].text;
+		}
+	}
+
+	return NULL;
 }
 
 const char *ast_http_ftype2mtype(const char *ftype)
@@ -829,6 +841,10 @@ static void *httpd_helper_thread(void *data)
 	char *uri, *method;
 	enum ast_http_method http_method = AST_HTTP_UNKNOWN;
 
+	if (ast_atomic_fetchadd_int(&session_count, +1) >= session_limit) {
+		goto done;
+	}
+
 	if (!fgets(buf, sizeof(buf), ser->f)) {
 		goto done;
 	}
@@ -894,17 +910,19 @@ static void *httpd_helper_thread(void *data)
 
 	if (!*uri) {
 		ast_http_error(ser, 400, "Bad Request", "Invalid Request");
-		return NULL;
+		goto done;
 	}
 
 	handle_uri(ser, uri, http_method, headers);
 
-	/* Clean up all the header information pulled as well */
+done:
+	ast_atomic_fetchadd_int(&session_count, -1);
+
+	/* clean up all the header information */
 	if (headers) {
 		ast_variables_destroy(headers);
 	}
 
-done:
 	if (ser->f) {
 		fclose(ser->f);
 	}
@@ -1044,6 +1062,12 @@ static int __ast_http_load(int reload)
 				}
 			} else if (!strcasecmp(v->name, "redirect")) {
 				add_redirect(v->value);
+			} else if (!strcasecmp(v->name, "sessionlimit")) {
+				if (ast_parse_arg(v->value, PARSE_INT32|PARSE_DEFAULT|PARSE_IN_RANGE,
+							&session_limit, DEFAULT_SESSION_LIMIT, 1, INT_MAX)) {
+					ast_log(LOG_WARNING, "Invalid %s '%s' at line %d of http.conf\n",
+							v->name, v->value, v->lineno);
+				}
 			} else {
 				ast_log(LOG_WARNING, "Ignoring unknown option '%s' in http.conf\n", v->name);
 			}

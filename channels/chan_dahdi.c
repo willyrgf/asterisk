@@ -235,7 +235,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</synopsis>
 		<syntax>
 			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
-			<parameter name="DAHDIChannel" required="true" />
+			<parameter name="DAHDIChannel">
+				<para>Specify the specific channel to show.  Show all channels if zero or not present.</para>
+			</parameter>
 		</syntax>
 		<description>
 		</description>
@@ -246,6 +248,19 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</synopsis>
 		<syntax>
 			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
+		</syntax>
+		<description>
+		</description>
+	</manager>
+	<manager name="PRIShowSpans" language="en_US">
+		<synopsis>
+			Show status of PRI spans.
+		</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
+			<parameter name="Span">
+				<para>Specify the specific span to show.  Show all spans if zero or not present.</para>
+			</parameter>
 		</syntax>
 		<description>
 		</description>
@@ -265,14 +280,15 @@ static const char * const lbostr[] = {
 "-22.5db (CSU)"
 };
 
-/*! Global jitterbuffer configuration - by default, jb is disabled */
+/*! Global jitterbuffer configuration - by default, jb is disabled
+ *  \note Values shown here match the defaults shown in chan_dahdi.conf.sample */
 static struct ast_jb_conf default_jbconf =
 {
 	.flags = 0,
-	.max_size = -1,
-	.resync_threshold = -1,
-	.impl = "",
-	.target_extra = -1,
+	.max_size = 200,
+	.resync_threshold = 1000,
+	.impl = "fixed",
+	.target_extra = 40,
 };
 static struct ast_jb_conf global_jbconf;
 
@@ -6120,46 +6136,10 @@ static int dahdi_hangup(struct ast_channel *ast)
 		p->cid_subaddr[0] = '\0';
 	}
 
-#ifdef HAVE_PRI
+#if defined(HAVE_PRI)
 	if (dahdi_sig_pri_lib_handles(p->sig)) {
 		x = 1;
-		ast_channel_setoption(ast,AST_OPTION_AUDIO_MODE,&x,sizeof(char),0);
-		dahdi_confmute(p, 0);
-		p->muting = 0;
-		restore_gains(p);
-		if (p->dsp) {
-			ast_dsp_free(p->dsp);
-			p->dsp = NULL;
-		}
-		p->ignoredtmf = 0;
-		revert_fax_buffers(p, ast);
-		dahdi_setlinear(p->subs[SUB_REAL].dfd, 0);
-		p->law = p->law_default;
-		law = p->law_default;
-		res = ioctl(p->subs[SUB_REAL].dfd, DAHDI_SETLAW, &law);
-		dahdi_disable_ec(p);
-		update_conf(p);
-		reset_conf(p);
-		sig_pri_hangup(p->sig_pvt, ast);
-		p->subs[SUB_REAL].owner = NULL;
-		p->subs[SUB_REAL].needbusy = 0;
-		p->owner = NULL;
-		p->cid_tag[0] = '\0';
-		p->ringt = 0;/* Probably not used in this mode.  Reset anyway. */
-		p->distinctivering = 0;/* Probably not used in this mode. Reset anyway. */
-		p->confirmanswer = 0;/* Probably not used in this mode. Reset anyway. */
-		p->outgoing = 0;
-		p->digital = 0;
-		p->faxhandled = 0;
-		p->pulsedial = 0;/* Probably not used in this mode. Reset anyway. */
-		goto hangup_out;
-	}
-#endif
-
-#if defined(HAVE_SS7)
-	if (p->sig == SIG_SS7) {
-		x = 1;
-		ast_channel_setoption(ast,AST_OPTION_AUDIO_MODE,&x,sizeof(char),0);
+		ast_channel_setoption(ast, AST_OPTION_AUDIO_MODE, &x, sizeof(char), 0);
 
 		dahdi_confmute(p, 0);
 		p->muting = 0;
@@ -6173,7 +6153,69 @@ static int dahdi_hangup(struct ast_channel *ast)
 		/* Real channel, do some fixup */
 		p->subs[SUB_REAL].owner = NULL;
 		p->subs[SUB_REAL].needbusy = 0;
-		p->polarity = POLARITY_IDLE;
+		dahdi_setlinear(p->subs[SUB_REAL].dfd, 0);
+
+		p->owner = NULL;
+		p->cid_tag[0] = '\0';
+		p->ringt = 0;/* Probably not used in this mode.  Reset anyway. */
+		p->distinctivering = 0;/* Probably not used in this mode. Reset anyway. */
+		p->confirmanswer = 0;/* Probably not used in this mode. Reset anyway. */
+		p->outgoing = 0;
+		p->digital = 0;
+		p->faxhandled = 0;
+		p->pulsedial = 0;/* Probably not used in this mode. Reset anyway. */
+
+		revert_fax_buffers(p, ast);
+
+		p->law = p->law_default;
+		law = p->law_default;
+		res = ioctl(p->subs[SUB_REAL].dfd, DAHDI_SETLAW, &law);
+		if (res < 0) {
+			ast_log(LOG_WARNING, "Unable to set law on channel %d to default: %s\n",
+				p->channel, strerror(errno));
+		}
+
+		sig_pri_hangup(p->sig_pvt, ast);
+
+		tone_zone_play_tone(p->subs[SUB_REAL].dfd, -1);
+		dahdi_disable_ec(p);
+
+		x = 0;
+		ast_channel_setoption(ast, AST_OPTION_TDD, &x, sizeof(char), 0);
+		p->didtdd = 0;/* Probably not used in this mode. Reset anyway. */
+
+		p->rdnis[0] = '\0';
+		update_conf(p);
+		reset_conf(p);
+
+		/* Restore data mode */
+		x = 0;
+		ast_channel_setoption(ast, AST_OPTION_AUDIO_MODE, &x, sizeof(char), 0);
+
+		if (num_restart_pending == 0) {
+			restart_monitor();
+		}
+		goto hangup_out;
+	}
+#endif	/* defined(HAVE_PRI) */
+
+#if defined(HAVE_SS7)
+	if (p->sig == SIG_SS7) {
+		x = 1;
+		ast_channel_setoption(ast, AST_OPTION_AUDIO_MODE, &x, sizeof(char), 0);
+
+		dahdi_confmute(p, 0);
+		p->muting = 0;
+		restore_gains(p);
+		if (p->dsp) {
+			ast_dsp_free(p->dsp);
+			p->dsp = NULL;
+		}
+		p->ignoredtmf = 0;
+
+		/* Real channel, do some fixup */
+		p->subs[SUB_REAL].owner = NULL;
+		p->subs[SUB_REAL].needbusy = 0;
 		dahdi_setlinear(p->subs[SUB_REAL].dfd, 0);
 
 		p->owner = NULL;
@@ -6190,28 +6232,30 @@ static int dahdi_hangup(struct ast_channel *ast)
 		p->law = p->law_default;
 		law = p->law_default;
 		res = ioctl(p->subs[SUB_REAL].dfd, DAHDI_SETLAW, &law);
-		if (res < 0)
-			ast_log(LOG_WARNING, "Unable to set law on channel %d to default: %s\n", p->channel, strerror(errno));
+		if (res < 0) {
+			ast_log(LOG_WARNING, "Unable to set law on channel %d to default: %s\n",
+				p->channel, strerror(errno));
+		}
 
 		sig_ss7_hangup(p->sig_pvt, ast);
 
 		tone_zone_play_tone(p->subs[SUB_REAL].dfd, -1);
 		dahdi_disable_ec(p);
+
 		x = 0;
-		ast_channel_setoption(ast,AST_OPTION_TONE_VERIFY,&x,sizeof(char),0);
-		ast_channel_setoption(ast,AST_OPTION_TDD,&x,sizeof(char),0);
+		ast_channel_setoption(ast, AST_OPTION_TDD, &x, sizeof(char), 0);
 		p->didtdd = 0;/* Probably not used in this mode. Reset anyway. */
+
 		update_conf(p);
 		reset_conf(p);
 
 		/* Restore data mode */
 		x = 0;
-		ast_channel_setoption(ast,AST_OPTION_AUDIO_MODE,&x,sizeof(char),0);
+		ast_channel_setoption(ast, AST_OPTION_AUDIO_MODE, &x, sizeof(char), 0);
 
-		if (num_restart_pending == 0)
+		if (num_restart_pending == 0) {
 			restart_monitor();
-
-		ast->tech_pvt = NULL;
+		}
 		goto hangup_out;
 	}
 #endif	/* defined(HAVE_SS7) */
@@ -6425,6 +6469,7 @@ static int dahdi_hangup(struct ast_channel *ast)
 			break;
 		default:
 			tone_zone_play_tone(p->subs[SUB_REAL].dfd, -1);
+			break;
 		}
 		if (p->sig)
 			dahdi_disable_ec(p);
@@ -6458,8 +6503,8 @@ static int dahdi_hangup(struct ast_channel *ast)
 	p->cidcwexpire = 0;
 	p->cid_suppress_expire = 0;
 	p->oprmode = 0;
-	ast->tech_pvt = NULL;
 hangup_out:
+	ast->tech_pvt = NULL;
 	ast_free(p->cidspill);
 	p->cidspill = NULL;
 
@@ -13498,6 +13543,7 @@ static struct ast_channel *dahdi_request(const char *type, struct ast_format_cap
 				}
 			}
 
+			p->distinctivering = 0;
 			/* Make special notes */
 			switch (start.opt) {
 			case '\0':
@@ -15872,6 +15918,60 @@ static int action_dahdishowchannels(struct mansession *s, const struct message *
 	return 0;
 }
 
+#if defined(HAVE_PRI)
+static int action_prishowspans(struct mansession *s, const struct message *m)
+{
+	int count;
+	int idx;
+	int span_query;
+	struct dahdi_pri *dspan;
+	const char *id = astman_get_header(m, "ActionID");
+	const char *span_str = astman_get_header(m, "Span");
+	char action_id[256];
+	const char *show_cmd = "PRIShowSpans";
+
+	/* NOTE: Asking for span 0 gets all spans. */
+	if (!ast_strlen_zero(span_str)) {
+		span_query = atoi(span_str);
+	} else {
+		span_query = 0;
+	}
+
+	if (!ast_strlen_zero(id)) {
+		snprintf(action_id, sizeof(action_id), "ActionID: %s\r\n", id);
+	} else {
+		action_id[0] = '\0';
+	}
+
+	astman_send_ack(s, m, "Span status will follow");
+
+	count = 0;
+	for (idx = 0; idx < ARRAY_LEN(pris); ++idx) {
+		dspan = &pris[idx];
+
+		/* If a specific span is asked for, only deliver status for that span. */
+		if (0 < span_query && dspan->pri.span != span_query) {
+			continue;
+		}
+
+		if (dspan->pri.pri) {
+			count += sig_pri_ami_show_spans(s, show_cmd, &dspan->pri, dspan->dchannels,
+				action_id);
+		}
+	}
+
+	astman_append(s,
+		"Event: %sComplete\r\n"
+		"Items: %d\r\n"
+		"%s"
+		"\r\n",
+		show_cmd,
+		count,
+		action_id);
+	return 0;
+}
+#endif	/* defined(HAVE_PRI) */
+
 #if defined(HAVE_SS7)
 static int linkset_addsigchan(int sigchan)
 {
@@ -16447,6 +16547,9 @@ static int __unload_module(void)
 	ast_manager_unregister("DAHDIDNDon");
 	ast_manager_unregister("DAHDIShowChannels");
 	ast_manager_unregister("DAHDIRestart");
+#if defined(HAVE_PRI)
+	ast_manager_unregister("PRIShowSpans");
+#endif	/* defined(HAVE_PRI) */
 	ast_data_unregister(NULL);
 	ast_channel_unregister(&dahdi_tech);
 
@@ -18429,6 +18532,9 @@ static int load_module(void)
 	ast_manager_register_xml("DAHDIDNDoff", 0, action_dahdidndoff);
 	ast_manager_register_xml("DAHDIShowChannels", 0, action_dahdishowchannels);
 	ast_manager_register_xml("DAHDIRestart", 0, action_dahdirestart);
+#if defined(HAVE_PRI)
+	ast_manager_register_xml("PRIShowSpans", 0, action_prishowspans);
+#endif	/* defined(HAVE_PRI) */
 
 	ast_cond_init(&ss_thread_complete, NULL);
 

@@ -2531,7 +2531,7 @@ struct ast_datastore *ast_channel_datastore_find(struct ast_channel *chan, const
 	if (info == NULL)
 		return NULL;
 
-	AST_LIST_TRAVERSE_SAFE_BEGIN(&chan->datastores, datastore, entry) {
+	AST_LIST_TRAVERSE(&chan->datastores, datastore, entry) {
 		if (datastore->info != info) {
 			continue;
 		}
@@ -2546,7 +2546,6 @@ struct ast_datastore *ast_channel_datastore_find(struct ast_channel *chan, const
 			break;
 		}
 	}
-	AST_LIST_TRAVERSE_SAFE_END;
 
 	return datastore;
 }
@@ -3821,6 +3820,8 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 		f = &ast_null_frame;
 		chan->fdno = -1;
 		goto done;
+	} else if (chan->fds[AST_JITTERBUFFER_FD] > -1 && chan->fdno == AST_JITTERBUFFER_FD) {
+		ast_clear_flag(chan, AST_FLAG_EXCEPTION);
 	}
 
 	/* Check for pending read queue */
@@ -4322,7 +4323,7 @@ int ast_indicate_data(struct ast_channel *chan, int _condition,
 		awesome_frame = ast_frdup(&frame);
 
 		/* who knows what we will get back! the anticipation is killing me. */
-		if (!(awesome_frame = ast_framehook_list_read_event(chan->framehooks, &frame))) {
+		if (!(awesome_frame = ast_framehook_list_read_event(chan->framehooks, awesome_frame))) {
 			res = 0;
 			goto indicate_cleanup;
 		}

@@ -187,14 +187,15 @@ static void dummy(char *unused, ...)
 	return;
 }
 
-/*! \brief Global jitterbuffer configuration - by default, jb is disabled */
+/*! \brief Global jitterbuffer configuration - by default, jb is disabled
+ *  \note Values shown here match the defaults shown in unistim.conf.sample */
 static struct ast_jb_conf default_jbconf =
 {
 	.flags = 0,
-	.max_size = -1,
-	.resync_threshold = -1,
-	.impl = "",
-	.target_extra = -1,
+	.max_size = 200,
+	.resync_threshold = 1000,
+	.impl = "fixed",
+	.target_extra = 40,
 };
 static struct ast_jb_conf global_jbconf;
 				
@@ -1324,7 +1325,7 @@ send_select_output(struct unistimsession *pte, unsigned char output, unsigned ch
 				change_favorite_icon(pte, FAV_ICON_SPEAKER_OFFHOOK_BLACK);
 		}
 	} else
-		ast_log(LOG_WARNING, "Invalid ouput (%d)\n", output);
+		ast_log(LOG_WARNING, "Invalid output (%d)\n", output);
 	if (output != pte->device->output)
 		pte->device->previous_output = pte->device->output;
 	pte->device->output = output;
@@ -1924,7 +1925,7 @@ static int attempt_transfer(struct unistim_subchannel *p1, struct unistim_subcha
 	int res = 0;
 	struct ast_channel
 	 *chana = NULL, *chanb = NULL, *bridgea = NULL, *bridgeb = NULL, *peera =
-		NULL, *peerb = NULL, *peerc = NULL, *peerd = NULL;
+		NULL, *peerb = NULL, *peerc = NULL;
 
 	if (!p1->owner || !p2->owner) {
 		ast_log(LOG_WARNING, "Transfer attempted without dual ownership?\n");
@@ -1939,12 +1940,10 @@ static int attempt_transfer(struct unistim_subchannel *p1, struct unistim_subcha
 		peera = chana;
 		peerb = chanb;
 		peerc = bridgea;
-		peerd = bridgeb;
 	} else if (bridgeb) {
 		peera = chanb;
 		peerb = chana;
 		peerc = bridgeb;
-		peerd = bridgea;
 	}
 
 	if (peera && peerb && peerc && (peerb != peerc)) {
