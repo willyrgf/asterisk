@@ -563,14 +563,15 @@ static int unauth_sessions = 0;
 static int authlimit = DEFAULT_AUTHLIMIT;
 static int authtimeout = DEFAULT_AUTHTIMEOUT;
 
-/*! \brief Global jitterbuffer configuration - by default, jb is disabled */
+/*! \brief Global jitterbuffer configuration - by default, jb is disabled
+ *  \note Values shown here match the defaults shown in sip.conf.sample */
 static struct ast_jb_conf default_jbconf =
 {
 	.flags = 0,
-	.max_size = -1,
-	.resync_threshold = -1,
-	.impl = "",
-	.target_extra = -1,
+	.max_size = 200,
+	.resync_threshold = 1000,
+	.impl = "fixed",
+	.target_extra = 40,
 };
 static struct ast_jb_conf global_jbconf;                /*!< Global jitterbuffer configuration */
 
@@ -1565,7 +1566,7 @@ static int parse_session_expires(const char *p_hdrval, int *const p_interval, en
 static int parse_minse(const char *p_hdrval, int *const p_interval);
 static int st_get_se(struct sip_pvt *, int max);
 static enum st_refresher st_get_refresher(struct sip_pvt *);
-static enum st_mode st_get_mode(struct sip_pvt *);
+static enum st_mode st_get_mode(struct sip_pvt *, int no_cached);
 static struct sip_st_dlg* sip_st_alloc(struct sip_pvt *const p);
 
 /*------- RTP Glue functions -------- */
@@ -2540,6 +2541,12 @@ static void *_sip_tcp_helper_thread(struct sip_pvt *pvt, struct ast_tcptls_sessi
 			(!(tcptls_session = ast_tcptls_client_start(tcptls_session)))) {
 			goto cleanup;
 		}
+	}
+
+	flags = 1;
+	if (setsockopt(tcptls_session->fd, SOL_SOCKET, SO_KEEPALIVE, &flags, sizeof(flags))) {
+		ast_log(LOG_ERROR, "error enabling TCP keep-alives on sip socket: %s\n", strerror(errno));
+		goto cleanup;
 	}
 
 	me->threadid = pthread_self();
@@ -4512,7 +4519,7 @@ static void sip_destroy_peer(struct sip_peer *peer)
 	ast_free_ha(peer->directmediaha);
 	if (peer->selfdestruct)
 		ast_atomic_fetchadd_int(&apeerobjs, -1);
-	else if (peer->is_realtime) {
+	else if (!ast_test_flag(&global_flags[1], SIP_PAGE2_RTCACHEFRIENDS) && peer->is_realtime) {
 		ast_atomic_fetchadd_int(&rpeerobjs, -1);
 		ast_debug(3, "-REALTIME- peer Destroyed. Name: %s. Realtime Peer objects: %d\n", peer->name, rpeerobjs);
 	} else
@@ -4587,7 +4594,6 @@ static struct sip_peer *realtime_peer(const char *newpeername, struct ast_sockad
 	struct ast_config *peerlist = NULL;
 	char ipaddr[INET6_ADDRSTRLEN];
 	char portstring[6]; /*up to 5 digits plus null terminator*/
-	char *cat = NULL;
 	int realtimeregs = ast_check_realtime("sipregs");
 
 	/* First check on peer name */
@@ -4659,7 +4665,6 @@ static struct sip_peer *realtime_peer(const char *newpeername, struct ast_sockad
 					}
 				} else { /*var wasn't found in the list of "hosts", so try "ipaddr"*/
 					peerlist = NULL;
-					cat = NULL;
 					peerlist = ast_load_realtime_multientry("sippeers", "ipaddr", ipaddr, SENTINEL);
 					if(peerlist) {
 						var = get_insecure_variable_from_config(peerlist);
@@ -5415,8 +5420,34 @@ static int sip_call(struct ast_channel *ast, char *dest, int timeout)
 		res = -1;
 	} else {
 		int xmitres;
+		struct ast_party_connected_line connected;
+		struct ast_set_party_connected_line update_connected;
 
 		sip_pvt_lock(p);
+
+		/* Supply initial connected line information if available. */
+		memset(&update_connected, 0, sizeof(update_connected));
+		ast_party_connected_line_init(&connected);
+		if (!ast_strlen_zero(p->cid_num)
+			|| (p->callingpres & AST_PRES_RESTRICTION) != AST_PRES_ALLOWED) {
+			update_connected.id.number = 1;
+			connected.id.number.valid = 1;
+			connected.id.number.str = (char *) p->cid_num;
+			connected.id.number.presentation = p->callingpres;
+		}
+		if (!ast_strlen_zero(p->cid_name)
+			|| (p->callingpres & AST_PRES_RESTRICTION) != AST_PRES_ALLOWED) {
+			update_connected.id.name = 1;
+			connected.id.name.valid = 1;
+			connected.id.name.str = (char *) p->cid_name;
+			connected.id.name.presentation = p->callingpres;
+		}
+		if (update_connected.id.number || update_connected.id.name) {
+			connected.id.tag = (char *) p->cid_tag;
+			connected.source = AST_CONNECTED_LINE_UPDATE_SOURCE_ANSWER;
+			ast_channel_queue_connected_line_update(ast, &connected, &update_connected);
+		}
+
 		xmitres = transmit_invite(p, SIP_INVITE, 1, 2, uri);
 		sip_pvt_unlock(p);
 		if (xmitres == XMIT_ERROR)
@@ -6727,7 +6758,6 @@ static struct ast_channel *sip_new(struct sip_pvt *i, int state, const char *tit
 	sip_pvt_lock(i);
 	ast_channel_cc_params_init(tmp, i->cc_params);
 	tmp->caller.id.tag = ast_strdup(i->cid_tag);
-	ast_channel_unlock(tmp);
 
 	tmp->tech = ( ast_test_flag(&i->flags[0], SIP_DTMF) == SIP_DTMF_INFO || ast_test_flag(&i->flags[0], SIP_DTMF) == SIP_DTMF_SHORTINFO) ?  &sip_tech_info : &sip_tech;
 
@@ -6892,6 +6922,8 @@ static struct ast_channel *sip_new(struct sip_pvt *i, int state, const char *tit
 		char valuebuf[1024];
 		pbx_builtin_setvar_helper(tmp, v->name, ast_get_encoded_str(v->value, valuebuf, sizeof(valuebuf)));
 	}
+
+	ast_channel_unlock(tmp); /* ast_hangup requires the channel to be unlocked */
 
 	if (state != AST_STATE_DOWN && ast_pbx_start(tmp)) {
 		ast_log(LOG_WARNING, "Unable to start PBX on %s\n", tmp->name);
@@ -9562,7 +9594,7 @@ static int process_sdp_a_image(const char *a, struct sip_pvt *p)
 static int add_supported_header(struct sip_pvt *pvt, struct sip_request *req)
 {
 	int res;
-	if (st_get_mode(pvt) != SESSION_TIMER_MODE_REFUSE) {
+	if (st_get_mode(pvt, 0) != SESSION_TIMER_MODE_REFUSE) {
 		res = add_header(req, "Supported", "replaces, timer");
 	} else {
 		res = add_header(req, "Supported", "replaces");
@@ -11936,7 +11968,7 @@ static int transmit_invite(struct sip_pvt *p, int sipmethod, int sdp, int init, 
 	}
 
 	/* Add Session-Timers related headers */
-	if (st_get_mode(p) == SESSION_TIMER_MODE_ORIGINATE) {
+	if (st_get_mode(p, 0) == SESSION_TIMER_MODE_ORIGINATE) {
 		char i2astr[10];
 
 		if (!p->stimer->st_interval) {
@@ -12643,15 +12675,18 @@ static void update_connectedline(struct sip_pvt *p, const void *data, size_t dat
 			ast_set_flag(&p->flags[0], SIP_NEEDREINVITE);
 		}
 	} else {
+		ast_set_flag(&p->flags[1], SIP_PAGE2_CONNECTLINEUPDATE_PEND);
 		if (ast_test_flag(&p->flags[1], SIP_PAGE2_RPID_IMMEDIATE)) {
 			struct sip_request resp;
 
 			if ((p->owner->_state == AST_STATE_RING) && !ast_test_flag(&p->flags[0], SIP_PROGRESS_SENT)) {
+				ast_clear_flag(&p->flags[1], SIP_PAGE2_CONNECTLINEUPDATE_PEND);
 				respprep(&resp, p, "180 Ringing", &p->initreq);
 				add_rpid(&resp, p);
 				send_response(p, &resp, XMIT_UNRELIABLE, 0);
 				ast_set_flag(&p->flags[0], SIP_RINGING);
 			} else if (p->owner->_state == AST_STATE_RINGING) {
+				ast_clear_flag(&p->flags[1], SIP_PAGE2_CONNECTLINEUPDATE_PEND);
 				respprep(&resp, p, "183 Session Progress", &p->initreq);
 				add_rpid(&resp, p);
 				send_response(p, &resp, XMIT_UNRELIABLE, 0);
@@ -12659,8 +12694,6 @@ static void update_connectedline(struct sip_pvt *p, const void *data, size_t dat
 			} else {
 				ast_debug(1, "Unable able to send update to '%s' in state '%s'\n", p->owner->name, ast_state2str(p->owner->_state));
 			}
-		} else {
-			ast_set_flag(&p->flags[1], SIP_PAGE2_CONNECTLINEUPDATE_PEND);
 		}
 	}
 }
@@ -12738,7 +12771,6 @@ static int sip_reg_timeout(const void *data)
 	/* if we are here, our registration timed out, so we'll just do it over */
 	struct sip_registry *r = (struct sip_registry *)data; /* the ref count should have been bumped when the sched item was added */
 	struct sip_pvt *p;
-	int res;
 
 	/* if we couldn't get a reference to the registry object, punt */
 	if (!r) {
@@ -12781,7 +12813,7 @@ static int sip_reg_timeout(const void *data)
 		r->regstate = REG_STATE_FAILED;
 	} else {
 		r->regstate = REG_STATE_UNREGISTERED;
-		res = transmit_register(r, SIP_REGISTER, NULL, NULL);
+		transmit_register(r, SIP_REGISTER, NULL, NULL);
 		ast_log(LOG_NOTICE, "   -- Registration for '%s@%s' timed out, trying again (Attempt #%d)\n", r->username, r->hostname, r->regattempts);
 	}
 	manager_event(EVENT_FLAG_SYSTEM, "Registry", "ChannelType: SIP\r\nUsername: %s\r\nDomain: %s\r\nStatus: %s\r\n", r->username, r->hostname, regstate2str(r->regstate));
@@ -13062,8 +13094,6 @@ static int transmit_refer(struct sip_pvt *p, const char *dest)
 	const char *of;
 	char *c;
 	char referto[256];
-	char *ttag, *ftag;
-	char *theirtag = ast_strdupa(p->theirtag);
 	int	use_tls=FALSE;
 
 	if (sipdebug) {
@@ -13073,12 +13103,8 @@ static int transmit_refer(struct sip_pvt *p, const char *dest)
 	/* Are we transfering an inbound or outbound call ? */
 	if (ast_test_flag(&p->flags[0], SIP_OUTGOING))  {
 		of = get_header(&p->initreq, "To");
-		ttag = theirtag;
-		ftag = p->tag;
 	} else {
 		of = get_header(&p->initreq, "From");
-		ftag = theirtag;
-		ttag = p->tag;
 	}
 
 	ast_copy_string(from, of, sizeof(from));
@@ -15567,7 +15593,8 @@ static enum check_auth_result check_peer_ok(struct sip_pvt *p, char *of,
 		ast_string_field_set(p, authname, peer->name);
 
 		if (sipmethod == SIP_INVITE) {
-			/* copy channel vars */
+			/* destroy old channel vars and copy in new ones. */
+			ast_variables_destroy(p->chanvars);
 			p->chanvars = copy_vars(peer->chanvars);
 		}
 
@@ -16573,6 +16600,7 @@ static char *sip_prune_realtime(struct ast_cli_entry *e, int cmd, struct ast_cli
 	int multi = FALSE;
 	const char *name = NULL;
 	regex_t regexbuf;
+	int havepattern = 0;
 	struct ao2_iterator i;
 	static const char * const choices[] = { "all", "like", NULL };
 	char *cmplt;
@@ -16641,8 +16669,10 @@ static char *sip_prune_realtime(struct ast_cli_entry *e, int cmd, struct ast_cli
 	}
 
 	if (multi && name) {
-		if (regcomp(&regexbuf, name, REG_EXTENDED | REG_NOSUB))
+		if (regcomp(&regexbuf, name, REG_EXTENDED | REG_NOSUB)) {
 			return CLI_SHOWUSAGE;
+		}
+		havepattern = 1;
 	}
 
 	if (multi) {
@@ -16692,6 +16722,10 @@ static char *sip_prune_realtime(struct ast_cli_entry *e, int cmd, struct ast_cli
 			} else
 				ast_cli(a->fd, "Peer '%s' not found.\n", name);
 		}
+	}
+
+	if (havepattern) {
+		regfree(&regexbuf);
 	}
 
 	return CLI_SUCCESS;
@@ -17579,11 +17613,16 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	ast_cli(a->fd, "  802.1p CoS RTP video:   %d\n", global_cos_video);
 	ast_cli(a->fd, "  802.1p CoS RTP text:    %d\n", global_cos_text);
 	ast_cli(a->fd, "  Jitterbuffer enabled:   %s\n", AST_CLI_YESNO(ast_test_flag(&global_jbconf, AST_JB_ENABLED)));
-	ast_cli(a->fd, "  Jitterbuffer forced:    %s\n", AST_CLI_YESNO(ast_test_flag(&global_jbconf, AST_JB_FORCED)));
-	ast_cli(a->fd, "  Jitterbuffer max size:  %ld\n", global_jbconf.max_size);
-	ast_cli(a->fd, "  Jitterbuffer resync:    %ld\n", global_jbconf.resync_threshold);
-	ast_cli(a->fd, "  Jitterbuffer impl:      %s\n", global_jbconf.impl);
-	ast_cli(a->fd, "  Jitterbuffer log:       %s\n", AST_CLI_YESNO(ast_test_flag(&global_jbconf, AST_JB_LOG)));
+	if (ast_test_flag(&global_jbconf, AST_JB_ENABLED)) {
+		ast_cli(a->fd, "  Jitterbuffer forced:    %s\n", AST_CLI_YESNO(ast_test_flag(&global_jbconf, AST_JB_FORCED)));
+		ast_cli(a->fd, "  Jitterbuffer max size:  %ld\n", global_jbconf.max_size);
+		ast_cli(a->fd, "  Jitterbuffer resync:    %ld\n", global_jbconf.resync_threshold);
+		ast_cli(a->fd, "  Jitterbuffer impl:      %s\n", global_jbconf.impl);
+		if (!strcasecmp(global_jbconf.impl, "adaptive")) {
+			ast_cli(a->fd, "  Jitterbuffer tgt extra: %ld\n", global_jbconf.target_extra);
+		}
+		ast_cli(a->fd, "  Jitterbuffer log:       %s\n", AST_CLI_YESNO(ast_test_flag(&global_jbconf, AST_JB_LOG)));
+	}
 
 	ast_cli(a->fd, "\nNetwork Settings:\n");
 	ast_cli(a->fd, "---------------------------\n");
@@ -19471,20 +19510,20 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 			ast_log(LOG_WARNING, "Unable to cancel SIP destruction.  Expect bad things.\n");
 		if (!req->ignore && p->owner) {
 			if (get_rpid(p, req)) {
+				/* Queue a connected line update */
 				ast_party_connected_line_init(&connected);
 				memset(&update_connected, 0, sizeof(update_connected));
-				if (p->cid_num) {
-					update_connected.id.number = 1;
-					connected.id.number.valid = 1;
-					connected.id.number.str = (char *) p->cid_num;
-					connected.id.number.presentation = p->callingpres;
-				}
-				if (p->cid_name) {
-					update_connected.id.name = 1;
-					connected.id.name.valid = 1;
-					connected.id.name.str = (char *) p->cid_name;
-					connected.id.name.presentation = p->callingpres;
-				}
+
+				update_connected.id.number = 1;
+				connected.id.number.valid = 1;
+				connected.id.number.str = (char *) p->cid_num;
+				connected.id.number.presentation = p->callingpres;
+
+				update_connected.id.name = 1;
+				connected.id.name.valid = 1;
+				connected.id.name.str = (char *) p->cid_name;
+				connected.id.name.presentation = p->callingpres;
+
 				connected.id.tag = (char *) p->cid_tag;
 				connected.source = AST_CONNECTED_LINE_UPDATE_SOURCE_ANSWER;
 				ast_channel_queue_connected_line_update(p->owner, &connected,
@@ -19536,18 +19575,17 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 				/* Queue a connected line update */
 				ast_party_connected_line_init(&connected);
 				memset(&update_connected, 0, sizeof(update_connected));
-				if (p->cid_num) {
-					update_connected.id.number = 1;
-					connected.id.number.valid = 1;
-					connected.id.number.str = (char *) p->cid_num;
-					connected.id.number.presentation = p->callingpres;
-				}
-				if (p->cid_name) {
-					update_connected.id.name = 1;
-					connected.id.name.valid = 1;
-					connected.id.name.str = (char *) p->cid_name;
-					connected.id.name.presentation = p->callingpres;
-				}
+
+				update_connected.id.number = 1;
+				connected.id.number.valid = 1;
+				connected.id.number.str = (char *) p->cid_num;
+				connected.id.number.presentation = p->callingpres;
+
+				update_connected.id.name = 1;
+				connected.id.name.valid = 1;
+				connected.id.name.str = (char *) p->cid_name;
+				connected.id.name.presentation = p->callingpres;
+
 				connected.id.tag = (char *) p->cid_tag;
 				connected.source = AST_CONNECTED_LINE_UPDATE_SOURCE_ANSWER;
 				ast_channel_queue_connected_line_update(p->owner, &connected,
@@ -19589,26 +19627,37 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 			ast_rtp_instance_activate(p->rtp);
 		}
 
-		if (!req->ignore && p->owner && (get_rpid(p, req) || !reinvite)) {
-			/* Queue a connected line update */
-			ast_party_connected_line_init(&connected);
-			memset(&update_connected, 0, sizeof(update_connected));
-			if (p->cid_num) {
-				update_connected.id.number = 1;
-				connected.id.number.valid = 1;
-				connected.id.number.str = (char *) p->cid_num;
-				connected.id.number.presentation = p->callingpres;
+		if (!req->ignore && p->owner) {
+			int rpid_changed;
+
+			rpid_changed = get_rpid(p, req);
+			if (rpid_changed || !reinvite) {
+				/* Queue a connected line update */
+				ast_party_connected_line_init(&connected);
+				memset(&update_connected, 0, sizeof(update_connected));
+				if (rpid_changed
+					|| !ast_strlen_zero(p->cid_num)
+					|| (p->callingpres & AST_PRES_RESTRICTION) != AST_PRES_ALLOWED) {
+					update_connected.id.number = 1;
+					connected.id.number.valid = 1;
+					connected.id.number.str = (char *) p->cid_num;
+					connected.id.number.presentation = p->callingpres;
+				}
+				if (rpid_changed
+					|| !ast_strlen_zero(p->cid_name)
+					|| (p->callingpres & AST_PRES_RESTRICTION) != AST_PRES_ALLOWED) {
+					update_connected.id.name = 1;
+					connected.id.name.valid = 1;
+					connected.id.name.str = (char *) p->cid_name;
+					connected.id.name.presentation = p->callingpres;
+				}
+				if (update_connected.id.number || update_connected.id.name) {
+					connected.id.tag = (char *) p->cid_tag;
+					connected.source = AST_CONNECTED_LINE_UPDATE_SOURCE_ANSWER;
+					ast_channel_queue_connected_line_update(p->owner, &connected,
+						&update_connected);
+				}
 			}
-			if (p->cid_name) {
-				update_connected.id.name = 1;
-				connected.id.name.valid = 1;
-				connected.id.name.str = (char *) p->cid_name;
-				connected.id.name.presentation = p->callingpres;
-			}
-			connected.id.tag = (char *) p->cid_tag;
-			connected.source = AST_CONNECTED_LINE_UPDATE_SOURCE_ANSWER;
-			ast_channel_queue_connected_line_update(p->owner, &connected,
-				&update_connected);
 		}
 
 		/* Parse contact header for continued conversation */
@@ -19649,7 +19698,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 		}
 
 		/* Check for Session-Timers related headers */
-		if (st_get_mode(p) != SESSION_TIMER_MODE_REFUSE && p->outgoing_call == TRUE && !reinvite) {
+		if (st_get_mode(p, 0) != SESSION_TIMER_MODE_REFUSE && p->outgoing_call == TRUE && !reinvite) {
 			p_hdrval = (char*)get_header(req, "Session-Expires");
 			if (!ast_strlen_zero(p_hdrval)) {
 				/* UAS supports Session-Timers */
@@ -19671,7 +19720,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 				start_session_timer(p);
 			} else {
 				/* UAS doesn't support Session-Timers */
-				if (st_get_mode(p) == SESSION_TIMER_MODE_ORIGINATE) {
+				if (st_get_mode(p, 0) == SESSION_TIMER_MODE_ORIGINATE) {
 					p->stimer->st_ref = SESSION_TIMER_REFRESHER_UAC;
 					p->stimer->st_active_peer_ua = FALSE;
 					start_session_timer(p);
@@ -20254,7 +20303,6 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 {
 	struct ast_channel *owner;
 	int sipmethod;
-	int res = 1;
 	const char *c = get_header(req, "Cseq");
 	/* GCC 4.2 complains if I try to cast c as a char * when passing it to ast_skip_nonblanks, so make a copy of it */
 	char *c_copy = ast_strdupa(c);
@@ -20377,7 +20425,7 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 			} else if (sipmethod == SIP_NOTIFY) {
 				handle_response_notify(p, resp, rest, req, seqno);
 			} else if (sipmethod == SIP_REGISTER) {
-				res = handle_response_register(p, resp, rest, req, seqno);
+				handle_response_register(p, resp, rest, req, seqno);
 			} else if (sipmethod == SIP_SUBSCRIBE) {
 				ast_set_flag(&p->flags[1], SIP_PAGE2_DIALOG_ESTABLISHED);
 				handle_response_subscribe(p, resp, rest, req, seqno);
@@ -20395,7 +20443,7 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 			else if (sipmethod == SIP_SUBSCRIBE)
 				handle_response_subscribe(p, resp, rest, req, seqno);
 			else if (p->registry && sipmethod == SIP_REGISTER)
-				res = handle_response_register(p, resp, rest, req, seqno);
+				handle_response_register(p, resp, rest, req, seqno);
 			else if (sipmethod == SIP_UPDATE) {
 				handle_response_update(p, resp, rest, req, seqno);
 			} else if (sipmethod == SIP_BYE) {
@@ -20420,7 +20468,7 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 			else if (sipmethod == SIP_SUBSCRIBE)
 				handle_response_subscribe(p, resp, rest, req, seqno);
 			else if (p->registry && sipmethod == SIP_REGISTER)
-				res = handle_response_register(p, resp, rest, req, seqno);
+				handle_response_register(p, resp, rest, req, seqno);
 			else {
 				ast_log(LOG_WARNING, "Forbidden - maybe wrong password on authentication for %s\n", msg);
 				pvt_set_needdestroy(p, "received 403 response");
@@ -20428,7 +20476,7 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 			break;
 		case 404: /* Not found */
 			if (p->registry && sipmethod == SIP_REGISTER)
-				res = handle_response_register(p, resp, rest, req, seqno);
+				handle_response_register(p, resp, rest, req, seqno);
 			else if (sipmethod == SIP_INVITE)
 				handle_response_invite(p, resp, rest, req, seqno);
 			else if (sipmethod == SIP_SUBSCRIBE)
@@ -20438,13 +20486,13 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 			break;
 		case 423: /* Interval too brief */
 			if (sipmethod == SIP_REGISTER)
-				res = handle_response_register(p, resp, rest, req, seqno);
+				handle_response_register(p, resp, rest, req, seqno);
 			break;
 		case 408: /* Request timeout - terminate dialog */
 			if (sipmethod == SIP_INVITE)
 				handle_response_invite(p, resp, rest, req, seqno);
 			else if (sipmethod == SIP_REGISTER)
-				res = handle_response_register(p, resp, rest, req, seqno);
+				handle_response_register(p, resp, rest, req, seqno);
 			else if (sipmethod == SIP_BYE) {
 				pvt_set_needdestroy(p, "received 408 response");
 				ast_debug(4, "Got timeout on bye. Thanks for the answer. Now, kill this call\n");
@@ -21050,12 +21098,10 @@ static int handle_request_notify(struct sip_pvt *p, struct sip_request *req, str
 	/* Mostly created to return proper answers on notifications on outbound REFER's */
 	int res = 0;
 	const char *event = get_header(req, "Event");
-	char *eventid = NULL;
 	char *sep;
 
 	if( (sep = strchr(event, ';')) ) {	/* XXX bug here - overwriting string ? */
 		*sep++ = '\0';
-		eventid = sep;
 	}
 
 	if (sipdebug)
@@ -21490,20 +21536,20 @@ static int handle_request_update(struct sip_pvt *p, struct sip_request *req)
 	if (get_rpid(p, req)) {
 		struct ast_party_connected_line connected;
 		struct ast_set_party_connected_line update_connected;
+
 		ast_party_connected_line_init(&connected);
 		memset(&update_connected, 0, sizeof(update_connected));
-		if (p->cid_num) {
-			update_connected.id.number = 1;
-			connected.id.number.valid = 1;
-			connected.id.number.str = (char *) p->cid_num;
-			connected.id.number.presentation = p->callingpres;
-		}
-		if (p->cid_name) {
-			update_connected.id.name = 1;
-			connected.id.name.valid = 1;
-			connected.id.name.str = (char *) p->cid_name;
-			connected.id.name.presentation = p->callingpres;
-		}
+
+		update_connected.id.number = 1;
+		connected.id.number.valid = 1;
+		connected.id.number.str = (char *) p->cid_num;
+		connected.id.number.presentation = p->callingpres;
+
+		update_connected.id.name = 1;
+		connected.id.name.valid = 1;
+		connected.id.name.str = (char *) p->cid_name;
+		connected.id.name.presentation = p->callingpres;
+
 		connected.id.tag = (char *) p->cid_tag;
 		connected.source = AST_CONNECTED_LINE_UPDATE_SOURCE_TRANSFER;
 		ast_channel_queue_connected_line_update(p->owner, &connected, &update_connected);
@@ -21835,18 +21881,17 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 
 				ast_party_connected_line_init(&connected);
 				memset(&update_connected, 0, sizeof(update_connected));
-				if (p->cid_num) {
-					update_connected.id.number = 1;
-					connected.id.number.valid = 1;
-					connected.id.number.str = (char *) p->cid_num;
-					connected.id.number.presentation = p->callingpres;
-				}
-				if (p->cid_name) {
-					update_connected.id.name = 1;
-					connected.id.name.valid = 1;
-					connected.id.name.str = (char *) p->cid_name;
-					connected.id.name.presentation = p->callingpres;
-				}
+
+				update_connected.id.number = 1;
+				connected.id.number.valid = 1;
+				connected.id.number.str = (char *) p->cid_num;
+				connected.id.number.presentation = p->callingpres;
+
+				update_connected.id.name = 1;
+				connected.id.name.valid = 1;
+				connected.id.name.str = (char *) p->cid_name;
+				connected.id.name.presentation = p->callingpres;
+
 				connected.id.tag = (char *) p->cid_tag;
 				connected.source = AST_CONNECTED_LINE_UPDATE_SOURCE_TRANSFER;
 				ast_channel_queue_connected_line_update(p->owner, &connected,
@@ -22109,7 +22154,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 		}
 
 		dlg_min_se = st_get_se(p, FALSE);
-		switch (st_get_mode(p)) {
+		switch (st_get_mode(p, 1)) {
 		case SESSION_TIMER_MODE_ACCEPT:
 		case SESSION_TIMER_MODE_ORIGINATE:
 			if (uac_max_se > 0 && uac_max_se < dlg_min_se) {
@@ -22155,14 +22200,14 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 			break;
 
 		default:
-			ast_log(LOG_ERROR, "Internal Error %d at %s:%d\n", st_get_mode(p), __FILE__, __LINE__);
+			ast_log(LOG_ERROR, "Internal Error %d at %s:%d\n", st_get_mode(p, 1), __FILE__, __LINE__);
 			break;
 		}
 	} else {
 		/* The UAC did not request session-timers.  Asterisk (UAS), will now decide
 		(based on session-timer-mode in sip.conf) whether to run session-timers for
 		this session or not. */
-		switch (st_get_mode(p)) {
+		switch (st_get_mode(p, 1)) {
 		case SESSION_TIMER_MODE_ORIGINATE:
 			st_active = TRUE;
 			st_interval = st_get_se(p, TRUE);
@@ -24906,10 +24951,11 @@ static void check_rtp_timeout(struct sip_pvt *dialog, time_t t)
 		if (!ast_test_flag(&dialog->flags[1], SIP_PAGE2_CALL_ONHOLD) || (ast_rtp_instance_get_hold_timeout(dialog->rtp) && (t > dialog->lastrtprx + ast_rtp_instance_get_hold_timeout(dialog->rtp)))) {
 			/* Needs a hangup */
 			if (ast_rtp_instance_get_timeout(dialog->rtp)) {
-				if(ast_channel_trylock(dialog->owner)) {
-				/* Dont do a infinite deadlock avoidance loop.
-				 * Lets try this on next round (1 ms to 1000 ms later)
-				 * call is allready dead */
+				if (!dialog->owner || ast_channel_trylock(dialog->owner)) {
+					/*
+					 * Don't block, just try again later.
+					 * If there was no owner, the call is dead already.
+					 */
 					return;
 				}
 				ast_log(LOG_NOTICE, "Disconnecting call '%s' for lack of RTP activity in %ld seconds\n",
@@ -25317,15 +25363,18 @@ enum st_refresher st_get_refresher(struct sip_pvt *p)
 }
 
 
-/*! \brief Get the session-timer mode
- * \param p pointer to the SIP dialog
+/*!
+ * \brief Get the session-timer mode 
+ * \param p pointer to the SIP dialog 
+ * \param no_cached, set this to true in order to force a peername lookup on
+ *        the session timer mode.
 */
-enum st_mode st_get_mode(struct sip_pvt *p)
+enum st_mode st_get_mode(struct sip_pvt *p, int no_cached)
 {
 	if (!p->stimer)
 		sip_st_alloc(p);
 
-	if (p->stimer->st_cached_mode != SESSION_TIMER_MODE_INVALID)
+	if (!no_cached && p->stimer->st_cached_mode != SESSION_TIMER_MODE_INVALID)
 		return p->stimer->st_cached_mode;
 
 	if (p->relatedpeer) {

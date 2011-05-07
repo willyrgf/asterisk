@@ -2880,6 +2880,14 @@ static int action_events(struct mansession *s, const struct message *m)
 {
 	const char *mask = astman_get_header(m, "EventMask");
 	int res, x;
+	const char *id = astman_get_header(m, "ActionID");
+	char id_text[256];
+
+	if (!ast_strlen_zero(id)) {
+		snprintf(id_text, sizeof(id_text), "ActionID: %s\r\n", id);
+	} else {
+		id_text[0] = '\0';
+	}
 
 	res = set_eventmask(s, mask);
 	if (broken_events_action) {
@@ -2892,20 +2900,20 @@ static int action_events(struct mansession *s, const struct message *m)
 					return 0;
 				}
 			}
-			astman_append(s, "Response: Success\r\n"
-					 "Events: On\r\n\r\n");
+			astman_append(s, "Response: Success\r\n%s"
+					 "Events: On\r\n\r\n", id_text);
 		} else if (res == 0)
-			astman_append(s, "Response: Success\r\n"
-					 "Events: Off\r\n\r\n");
+			astman_append(s, "Response: Success\r\n%s"
+					 "Events: Off\r\n\r\n", id_text);
 		return 0;
 	}
 
 	if (res > 0)
-		astman_append(s, "Response: Success\r\n"
-				 "Events: On\r\n\r\n");
+		astman_append(s, "Response: Success\r\n%s"
+				 "Events: On\r\n\r\n", id_text);
 	else if (res == 0)
-		astman_append(s, "Response: Success\r\n"
-				 "Events: Off\r\n\r\n");
+		astman_append(s, "Response: Success\r\n%s"
+				 "Events: Off\r\n\r\n", id_text);
 	else
 		astman_send_error(s, m, "Invalid event mask");
 
@@ -4497,18 +4505,25 @@ static int process_message(struct mansession *s, const struct message *m)
 		}
 		if (s->session->writeperm & tmp->authority || tmp->authority == 0) {
 			call_func = tmp->func;
-		} else {
-			astman_send_error(s, m, "Permission denied");
-			report_req_not_allowed(s, action);
 		}
 		break;
 	}
 	AST_RWLIST_UNLOCK(&actions);
 
-	if (tmp && call_func) {
-		/* call AMI function after actions list are unlocked */
-		ast_debug(1, "Running action '%s'\n", tmp->action);
-		ret = call_func(s, m);
+	if (tmp) {
+		if (call_func) {
+			/* Call our AMI function after we unlock our actions lists */
+			ast_debug(1, "Running action '%s'\n", tmp->action);
+			ret = call_func(s, m);
+		} else {
+			/* If we found our action but don't have a function pointer, access
+			 * was denied, so bail out.
+			 */
+			report_req_not_allowed(s, action);
+			mansession_lock(s);
+			astman_send_error(s, m, "Permission denied");
+			mansession_unlock(s);
+		}
 	} else {
 		char buf[512];
 		if (!tmp) {
@@ -5686,7 +5701,7 @@ static int auth_http_callback(struct ast_tcptls_session_instance *ser,
 					     struct ast_variable *headers)
 {
 	struct mansession_session *session = NULL;
-	struct mansession s = { NULL, };
+	struct mansession s = { .session = NULL, .tcptls_session = ser };
 	struct ast_variable *v, *params = get_params;
 	char template[] = "/tmp/ast-http-XXXXXX";	/* template for temporary file */
 	struct ast_str *http_header = NULL, *out = NULL;

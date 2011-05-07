@@ -999,7 +999,7 @@ struct callattempt {
 struct queue_ent {
 	struct call_queue *parent;             /*!< What queue is our parent */
 	char moh[80];                          /*!< Name of musiconhold to be used */
-	char announce[80];                     /*!< Announcement to play for member when call is answered */
+	char announce[PATH_MAX];               /*!< Announcement to play for member when call is answered */
 	char context[AST_MAX_CONTEXT];         /*!< Context when user exits queue */
 	char digits[AST_MAX_EXTENSION];        /*!< Digits entered while in queue */
 	int valid_digits;                      /*!< Digits entered correspond to valid extension. Exited */
@@ -4566,6 +4566,17 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 	if (need_weight)
 		ao2_unlock(queues);
 	lpeer = wait_for_answer(qe, outgoing, &to, &digit, numbusies, ast_test_flag(&(bridge_config.features_caller), AST_FEATURE_DISCONNECT), forwardsallowed, update_connectedline);
+	/* The ast_channel_datastore_remove() function could fail here if the
+	 * datastore was moved to another channel during a masquerade. If this is
+	 * the case, don't free the datastore here because later, when the channel
+	 * to which the datastore was moved hangs up, it will attempt to free this
+	 * datastore again, causing a crash
+	 */
+	ast_channel_lock(qe->chan);
+	if (datastore && !ast_channel_datastore_remove(qe->chan, datastore)) {
+		ast_datastore_free(datastore);
+	}
+	ast_channel_unlock(qe->chan);
 	ao2_lock(qe->parent);
 	if (qe->parent->strategy == QUEUE_STRATEGY_RRMEMORY || qe->parent->strategy == QUEUE_STRATEGY_RRORDERED) {
 		store_next_rr(qe, outgoing);
