@@ -2770,7 +2770,7 @@ static void sip_destroy_peer(struct sip_peer *peer)
 	ast_free_ha(peer->ha);
 	if (ast_test_flag(&peer->flags[1], SIP_PAGE2_SELFDESTRUCT))
 		apeerobjs--;
-	else if (ast_test_flag(&peer->flags[0], SIP_REALTIME))
+	else if (!ast_test_flag(&global_flags[1], SIP_PAGE2_RTCACHEFRIENDS) && ast_test_flag(&peer->flags[0], SIP_REALTIME))
 		rpeerobjs--;
 	else
 		speerobjs--;
@@ -2978,7 +2978,7 @@ static void sip_destroy_user(struct sip_user *user)
 		ast_variables_destroy(user->chanvars);
 		user->chanvars = NULL;
 	}
-	if (ast_test_flag(&user->flags[0], SIP_REALTIME))
+	if (!ast_test_flag(&global_flags[1], SIP_PAGE2_RTCACHEFRIENDS) && ast_test_flag(&user->flags[0], SIP_REALTIME))
 		ruserobjs--;
 	else
 		suserobjs--;
@@ -4973,10 +4973,7 @@ static void free_via(struct sip_via *v)
 		return;
 	}
 
-	if (v->via) {
-		ast_free(v->via);
-	}
-
+	ast_free(v->via);
 	ast_free(v);
 }
 
@@ -5099,6 +5096,21 @@ static int addr_is_multicast(struct in_addr *addr)
 	return ((ntohl(addr->s_addr) & 0xf0000000) == 0xe0000000);
 }
 
+/*!
+ * \brief Process the Via header according to RFC 3261 section 18.2.2.
+ * \param p a sip_pvt structure that will be modified according to the received
+ * header
+ * \param req a sip request with a Via header to process
+ *
+ * This function will update the destination of the response according to the
+ * Via header in the request and RFC 3261 section 18.2.2. We do not have a
+ * transport layer so we ignore certain values like the 'received' param (we
+ * set the destination address to the addres the request came from in the
+ * respprep() function).
+ *
+ * \retval -1 error
+ * \retval 0 success
+ */
 static int process_via(struct sip_pvt *p, const struct sip_request *req)
 {
 	struct sip_via *via = parse_via(get_header(req, "Via"));
@@ -5123,16 +5135,12 @@ static int process_via(struct sip_pvt *p, const struct sip_request *req)
 		p->sa.sin_family = AF_INET;
 		memcpy(&p->sa.sin_addr, hp->h_addr, sizeof(p->sa.sin_addr));
 
-		if (via->port) {
-			p->sa.sin_port = via->port;
-		} else {
-			p->sa.sin_port = STANDARD_SIP_PORT;
-		}
-
 		if (addr_is_multicast(&p->sa.sin_addr)) {
 			setsockopt(sipsock, IPPROTO_IP, IP_MULTICAST_TTL, &via->ttl, sizeof(via->ttl));
 		}
 	}
+
+	p->sa.sin_port = htons(via->port ? via->port : STANDARD_SIP_PORT);
 
 	free_via(via);
 	return 0;
@@ -6785,6 +6793,9 @@ static int respprep(struct sip_request *resp, struct sip_pvt *p, const char *msg
 
 	/* default to routing the response to the address where the request
 	 * came from.  Since we don't have a transport layer, we do this here.
+	 * The process_via() function will update the port to either the port
+	 * specified in the via header or the default port later on (per RFC
+	 * 3261 section 18.2.2).
 	 */
 	p->sa = p->recv;
 
@@ -9029,7 +9040,7 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 	char *firstcuri = NULL;
 	int start = 0;
 	int wildcard_found = 0;
-	int single_binding_found;
+	int single_binding_found = 0;
 
 	ast_copy_string(contact, __get_header(req, "Contact", &start), sizeof(contact));
 
@@ -9083,26 +9094,16 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 		return PARSE_REGISTER_QUERY;
 	} else if (!strcasecmp(curi, "*") || !expiry) {	/* Unregister this peer */
 		/* This means remove all registrations and return OK */
-		memset(&peer->addr, 0, sizeof(peer->addr));
 		if (!AST_SCHED_DEL(sched, peer->expire)) {
 			struct sip_peer *peer_ptr = peer;
 			ASTOBJ_UNREF(peer_ptr, sip_destroy_peer);
 		}
 
-		destroy_association(peer);
-		
-		register_peer_exten(peer, 0);	/* Add extension from regexten= setting in sip.conf */
-		peer->fullcontact[0] = '\0';
-		peer->useragent[0] = '\0';
-		peer->sipoptions = 0;
-		peer->lastms = 0;
-		peer->portinuri = 0;
-		pvt->expiry = 0;
+		expire_register(ASTOBJ_REF(peer));
 
 		if (option_verbose > 2)
 			ast_verbose(VERBOSE_PREFIX_3 "Unregistered SIP '%s'\n", peer->name);
 
-		manager_event(EVENT_FLAG_SYSTEM, "PeerStatus", "Peer: SIP/%s\r\nPeerStatus: Unregistered\r\n", peer->name);
 		return PARSE_REGISTER_UPDATE;
 	}
 
@@ -11476,6 +11477,7 @@ static int sip_prune_realtime(int fd, int argc, char *argv[])
 	int multi = FALSE;
 	char *name = NULL;
 	regex_t regexbuf;
+	int havepattern = 0;
 
 	switch (argc) {
 	case 4:
@@ -11534,8 +11536,10 @@ static int sip_prune_realtime(int fd, int argc, char *argv[])
 	}
 
 	if (multi && name) {
-		if (regcomp(&regexbuf, name, REG_EXTENDED | REG_NOSUB))
+		if (regcomp(&regexbuf, name, REG_EXTENDED | REG_NOSUB)) {
 			return RESULT_SHOWUSAGE;
+		}
+		havepattern = 1;
 	}
 
 	if (multi) {
@@ -11608,6 +11612,10 @@ static int sip_prune_realtime(int fd, int argc, char *argv[])
 			} else
 				ast_cli(fd, "User '%s' not found.\n", name);
 		}
+	}
+
+	if (havepattern) {
+		regfree(&regexbuf);
 	}
 
 	return RESULT_SUCCESS;
