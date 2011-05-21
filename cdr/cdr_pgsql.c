@@ -140,7 +140,11 @@ static int pgsql_log(struct ast_cdr *cdr)
 			connect_time = time(NULL);
                         records = 0;
 			if (PQsetClientEncoding(conn, encoding)) {
+#ifdef HAVE_PGSQL_pg_encoding_to_char
 				ast_log(LOG_WARNING, "Failed to set encoding to '%s'.  Encoding set to default '%s'\n", encoding, pg_encoding_to_char(PQclientEncoding(conn)));
+#else
+				ast_log(LOG_WARNING, "Failed to set encoding to '%s'.  Encoding set to default.\n", encoding);
+#endif
 			}
 		} else {
 			pgerror = PQerrorMessage(conn);
@@ -367,7 +371,11 @@ static int process_my_load_module(struct ast_config *cfg)
 		connect_time = time(NULL);
 		records = 0;
 		if (PQsetClientEncoding(conn, encoding)) {
+#ifdef HAVE_PGSQL_pg_encoding_to_char
 			ast_log(LOG_WARNING, "Failed to set encoding to '%s'.  Encoding set to default '%s'\n", encoding, pg_encoding_to_char(PQclientEncoding(conn)));
+#else
+			ast_log(LOG_WARNING, "Failed to set encoding to '%s'.  Encoding set to default.\n", encoding);
+#endif
 		}
 	} else {
 		pgerror = PQerrorMessage(conn);
