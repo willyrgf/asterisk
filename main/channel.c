@@ -612,6 +612,55 @@ static struct ast_cli_entry cli_channel[] = {
 	AST_CLI_DEFINE(handle_cli_core_show_channeltype,  "Give more details on that channel type")
 };
 
+static struct ast_frame *kill_read(struct ast_channel *chan)
+{
+	/* Hangup channel. */
+	return NULL;
+}
+
+static struct ast_frame *kill_exception(struct ast_channel *chan)
+{
+	/* Hangup channel. */
+	return NULL;
+}
+
+static int kill_write(struct ast_channel *chan, struct ast_frame *frame)
+{
+	/* Hangup channel. */
+	return -1;
+}
+
+static int kill_fixup(struct ast_channel *oldchan, struct ast_channel *newchan)
+{
+	/* No problem fixing up the channel. */
+	return 0;
+}
+
+static int kill_hangup(struct ast_channel *chan)
+{
+	chan->tech_pvt = NULL;
+	return 0;
+}
+
+/*!
+ * \brief Kill the channel channel driver technology descriptor.
+ *
+ * \details
+ * The purpose of this channel technology is to encourage the
+ * channel to hangup as quickly as possible.
+ *
+ * \note Used by DTMF atxfer and zombie channels.
+ */
+const struct ast_channel_tech ast_kill_tech = {
+	.type = "Kill",
+	.description = "Kill channel (should not see this)",
+	.read = kill_read,
+	.exception = kill_exception,
+	.write = kill_write,
+	.fixup = kill_fixup,
+	.hangup = kill_hangup,
+};
+
 #ifdef CHANNEL_TRACE
 /*! \brief Destructor for the channel trace datastore */
 static void ast_chan_trace_destroy_cb(void *data)
@@ -2811,12 +2860,16 @@ int ast_hangup(struct ast_channel *chan)
 		"Uniqueid: %s\r\n"
 		"CallerIDNum: %s\r\n"
 		"CallerIDName: %s\r\n"
+		"ConnectedLineNum: %s\r\n"
+		"ConnectedLineName: %s\r\n"
 		"Cause: %d\r\n"
 		"Cause-txt: %s\r\n",
 		chan->name,
 		chan->uniqueid,
 		S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, "<unknown>"),
 		S_COR(chan->caller.id.name.valid, chan->caller.id.name.str, "<unknown>"),
+		S_COR(chan->connected.id.number.valid, chan->connected.id.number.str, "<unknown>"),
+		S_COR(chan->connected.id.name.valid, chan->connected.id.name.str, "<unknown>"),
 		chan->hangupcause,
 		ast_cause2str(chan->hangupcause)
 		);
@@ -6613,6 +6666,12 @@ int ast_do_masquerade(struct ast_channel *original)
 		goto done;
 	}
 
+	/*
+	 * We just hung up the physical side of the channel.  Set the
+	 * new zombie to use the kill channel driver for safety.
+	 */
+	clonechan->tech = &ast_kill_tech;
+
 	/* Mangle the name of the clone channel */
 	snprintf(zombn, sizeof(zombn), "%s<ZOMBIE>", orig); /* quick, hide the brains! */
 	__ast_change_name_nolink(clonechan, zombn);
@@ -6897,10 +6956,14 @@ int ast_setstate(struct ast_channel *chan, enum ast_channel_state state)
 		"ChannelStateDesc: %s\r\n"
 		"CallerIDNum: %s\r\n"
 		"CallerIDName: %s\r\n"
+		"ConnectedLineNum: %s\r\n"
+		"ConnectedLineName: %s\r\n"
 		"Uniqueid: %s\r\n",
 		chan->name, chan->_state, ast_state2str(chan->_state),
 		S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, ""),
 		S_COR(chan->caller.id.name.valid, chan->caller.id.name.str, ""),
+		S_COR(chan->connected.id.number.valid, chan->connected.id.number.str, ""),
+		S_COR(chan->connected.id.name.valid, chan->connected.id.name.str, ""),
 		chan->uniqueid);
 
 	return 0;
