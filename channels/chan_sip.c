@@ -16112,6 +16112,7 @@ static void receive_message(struct sip_pvt *p, struct sip_request *req, struct a
 			if (!ast_strlen_zero(peer->messagecontext)) {
 				ast_string_field_set(p, messagecontext, peer->messagecontext);
 			}
+			ast_string_field_set(p, peername, peer->name);
 			peer = unref_peer(peer, "from find_peer() in receive_message");
 		}
 	}
@@ -16139,6 +16140,10 @@ static void receive_message(struct sip_pvt *p, struct sip_request *req, struct a
 		res |= ast_msg_set_context(msg, "%s", sip_cfg.messagecontext);
 	} else {
 		res |= ast_msg_set_context(msg, "%s", p->context);
+	}
+
+	if (!ast_strlen_zero(p->peername)) {
+		res |= ast_msg_set_var(msg, "SIP_PEERNAME", p->peername);
 	}
 
 	res |= ast_msg_set_exten(msg, "%s", p->exten);
