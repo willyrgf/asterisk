@@ -635,7 +635,7 @@ enum {
 #define CONFFLAG_INTROMSG ((uint64_t)1 << 32)	 /*!< If set play an intro announcement at start of conference */
 #define CONFFLAG_INTROUSER_VMREC ((uint64_t)1 << 33)
 /*! If there's only one person left in a conference when someone leaves, kill the conference */
-#define CONFFLAG_KILL_LAST_MAN_STANDING ((uint64_t)1 << 33)
+#define CONFFLAG_KILL_LAST_MAN_STANDING ((uint64_t)1 << 34)
 
 enum {
 	OPT_ARG_WAITMARKED = 0,
