@@ -42,6 +42,27 @@ int parse_uri_full(char *uri, const char *scheme, char **user, char **pass,
 	char *c = NULL;
 	int error = 0;
 
+	/*
+	 * Initialize requested strings - some functions don't care if parse_uri fails
+	 * and will attempt to use string pointers passed into parse_uri even after a
+	 * parse_uri failure
+	 */
+	if (user) {
+		*user = "";
+	}
+	if (pass) {
+		*pass = "";
+	}
+	if (domain) {
+		*domain = "";
+	}
+	if (headers) {
+		*headers = "";
+	}
+	if (residue) {
+		*residue = "";
+	}
+
 	/* check for valid input */
 	if (ast_strlen_zero(uri)) {
 		return -1;
@@ -1008,14 +1029,14 @@ int get_in_brackets_full(char *tmp,char **out,char **residue)
 	only affects token based display-names there is no danger of brackets being in quotes */
 	if (first_bracket) {
 		parse = first_bracket;
-		} else {
+	} else {
 		parse = tmp;
 	}
 
 	if ((second_bracket = strchr(parse, '>'))) {
 		*second_bracket++ = '\0';
 		if (out) {
-			*out = first_bracket;
+			*out = (char *) parse;
 		}
 		if (residue) {
 			*residue = second_bracket;
@@ -1024,9 +1045,9 @@ int get_in_brackets_full(char *tmp,char **out,char **residue)
 	}
 
 	if ((first_bracket)) {
-			ast_log(LOG_WARNING, "No closing bracket found in '%s'\n", tmp);
+		ast_log(LOG_WARNING, "No closing bracket found in '%s'\n", tmp);
 		return -1;
-		}
+	}
 
 	if (out) {
 		*out = tmp;
@@ -1055,6 +1076,7 @@ AST_TEST_DEFINE(get_in_brackets_test)
 	char name_no_quotes[] = "name not in quotes <sip:name:secret@host:port;transport=tcp?headers=testblah&headers2=blahblah>";
 	char no_end_bracket[] = "name not in quotes <sip:name:secret@host:port;transport=tcp?headers=testblah&headers2=blahblah";
 	char no_name_no_brackets[] = "sip:name@host";
+	char missing_start_bracket[] = "name not in quotes sip:name:secret@host:port;transport=tcp?headers=testblah&headers2=blahblah>";
 	char *uri = NULL;
 
 	switch (cmd) {
@@ -1116,6 +1138,13 @@ AST_TEST_DEFINE(get_in_brackets_test)
 	if (!(uri = get_in_brackets(no_name_no_brackets)) || (strcmp(uri, "sip:name@host"))) {
 
 		ast_test_status_update(test, "Test 7 failed. %s\n", uri);
+		res = AST_TEST_FAIL;
+	}
+
+	/* Test 8, no start bracket, but with ending bracket. */
+	if (!(uri = get_in_brackets(missing_start_bracket)) || !(strcmp(uri, in_brackets))) {
+
+		ast_test_status_update(test, "Test 8 failed. %s\n", uri);
 		res = AST_TEST_FAIL;
 	}
 
@@ -2302,8 +2331,9 @@ struct sip_via *parse_via(const char *header)
 	}
 	v->sent_by = ast_skip_blanks(v->sent_by);
 
-	/* store the port */
-	if ((parm = strchr(v->sent_by, ':'))) {
+	/* store the port, we have to handle ipv6 addresses containing ':'
+	 * characters gracefully */
+	if (((parm = strchr(v->sent_by, ']')) && *(++parm) == ':') || (parm = strchr(v->sent_by, ':'))) {
 		char *endptr;
 
 		v->port = strtol(++parm, &endptr, 10);
@@ -2389,6 +2419,13 @@ AST_TEST_DEFINE(parse_via_test)
 		.expected_maddr = "224.0.0.1",
 		.expected_ttl = 1,
 	};
+	struct testdata t7 = {
+		.in = "SIP/2.0/UDP [::1]:5060",
+		.expected_protocol = "SIP/2.0/UDP",
+		.expected_sent_by = "[::1]:5060",
+		.expected_port = 5060,
+		.expected_branch = "",
+	};
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "parse_via_test";
@@ -2408,6 +2445,7 @@ AST_TEST_DEFINE(parse_via_test)
 	AST_LIST_INSERT_TAIL(&testdatalist, &t4, list);
 	AST_LIST_INSERT_TAIL(&testdatalist, &t5, list);
 	AST_LIST_INSERT_TAIL(&testdatalist, &t6, list);
+	AST_LIST_INSERT_TAIL(&testdatalist, &t7, list);
 
 
 	AST_LIST_TRAVERSE(&testdatalist, testdataptr, list) {

@@ -65,6 +65,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/aoc.h"
 #include "asterisk/ccss.h"
 #include "asterisk/indications.h"
+#include "asterisk/framehook.h"
 
 /*** DOCUMENTATION
 	<application name="Dial" language="en_US">
@@ -631,7 +632,8 @@ END_OPTIONS );
 	OPT_CALLER_HANGUP | OPT_CALLEE_TRANSFER | OPT_CALLER_TRANSFER | \
 	OPT_CALLEE_MONITOR | OPT_CALLER_MONITOR | OPT_CALLEE_PARK |  \
 	OPT_CALLER_PARK | OPT_ANNOUNCE | OPT_CALLEE_MACRO | OPT_CALLEE_GOSUB) && \
-	!chan->audiohooks && !peer->audiohooks)
+	!chan->audiohooks && !peer->audiohooks && \
+	ast_framehook_list_is_empty(chan->framehooks) && ast_framehook_list_is_empty(peer->framehooks))
 
 /*
  * The list of active channels
@@ -768,12 +770,16 @@ static void senddialevent(struct ast_channel *src, struct ast_channel *dst, cons
 		"Destination: %s\r\n"
 		"CallerIDNum: %s\r\n"
 		"CallerIDName: %s\r\n"
+		"ConnectedLineNum: %s\r\n"
+		"ConnectedLineName: %s\r\n"
 		"UniqueID: %s\r\n"
 		"DestUniqueID: %s\r\n"
 		"Dialstring: %s\r\n",
 		src->name, dst->name,
 		S_COR(src->caller.id.number.valid, src->caller.id.number.str, "<unknown>"),
 		S_COR(src->caller.id.name.valid, src->caller.id.name.str, "<unknown>"),
+		S_COR(src->connected.id.number.valid, src->connected.id.number.str, "<unknown>"),
+		S_COR(src->connected.id.name.valid, src->connected.id.name.str, "<unknown>"),
 		src->uniqueid, dst->uniqueid,
 		dialstring ? dialstring : "");
 }
@@ -2395,6 +2401,17 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 	peer = wait_for_answer(chan, outgoing, &to, peerflags, opt_args, &pa, &num, &result,
 		dtmf_progress, ignore_cc, &forced_clid, &stored_clid);
 
+	/* The ast_channel_datastore_remove() function could fail here if the
+	 * datastore was moved to another channel during a masquerade. If this is
+	 * the case, don't free the datastore here because later, when the channel
+	 * to which the datastore was moved hangs up, it will attempt to free this
+	 * datastore again, causing a crash
+	 */
+	ast_channel_lock(chan);
+	if (!ast_channel_datastore_remove(chan, datastore)) {
+		ast_datastore_free(datastore);
+	}
+	ast_channel_unlock(chan);
 	if (!peer) {
 		if (result) {
 			res = result;

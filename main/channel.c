@@ -612,6 +612,55 @@ static struct ast_cli_entry cli_channel[] = {
 	AST_CLI_DEFINE(handle_cli_core_show_channeltype,  "Give more details on that channel type")
 };
 
+static struct ast_frame *kill_read(struct ast_channel *chan)
+{
+	/* Hangup channel. */
+	return NULL;
+}
+
+static struct ast_frame *kill_exception(struct ast_channel *chan)
+{
+	/* Hangup channel. */
+	return NULL;
+}
+
+static int kill_write(struct ast_channel *chan, struct ast_frame *frame)
+{
+	/* Hangup channel. */
+	return -1;
+}
+
+static int kill_fixup(struct ast_channel *oldchan, struct ast_channel *newchan)
+{
+	/* No problem fixing up the channel. */
+	return 0;
+}
+
+static int kill_hangup(struct ast_channel *chan)
+{
+	chan->tech_pvt = NULL;
+	return 0;
+}
+
+/*!
+ * \brief Kill the channel channel driver technology descriptor.
+ *
+ * \details
+ * The purpose of this channel technology is to encourage the
+ * channel to hangup as quickly as possible.
+ *
+ * \note Used by DTMF atxfer and zombie channels.
+ */
+const struct ast_channel_tech ast_kill_tech = {
+	.type = "Kill",
+	.description = "Kill channel (should not see this)",
+	.read = kill_read,
+	.exception = kill_exception,
+	.write = kill_write,
+	.fixup = kill_fixup,
+	.hangup = kill_hangup,
+};
+
 #ifdef CHANNEL_TRACE
 /*! \brief Destructor for the channel trace datastore */
 static void ast_chan_trace_destroy_cb(void *data)
@@ -1069,7 +1118,7 @@ static struct ast_channel * attribute_malloc __attribute__((format(printf, 13, 0
 __ast_channel_alloc_ap(int needqueue, int state, const char *cid_num, const char *cid_name,
 		       const char *acctcode, const char *exten, const char *context,
 		       const char *linkedid, const int amaflag, const char *file, int line,
-		       const char *function, const char *name_fmt, va_list ap1, va_list ap2)
+		       const char *function, const char *name_fmt, va_list ap)
 {
 	struct ast_channel *tmp;
 	int x;
@@ -1214,7 +1263,7 @@ __ast_channel_alloc_ap(int needqueue, int state, const char *cid_num, const char
 		 * uses them to build the string, instead of forming the va_lists internally from the vararg ... list.
 		 * This new function was written so this can be accomplished.
 		 */
-		ast_string_field_build_va(tmp, name, name_fmt, ap1, ap2);
+		ast_string_field_build_va(tmp, name, name_fmt, ap);
 		tech = ast_strdupa(tmp->name);
 		if ((slash = strchr(tech, '/'))) {
 			if ((slash2 = strchr(slash + 1, '/'))) {
@@ -1313,15 +1362,13 @@ struct ast_channel *__ast_channel_alloc(int needqueue, int state, const char *ci
 					const char *file, int line, const char *function,
 					const char *name_fmt, ...)
 {
-	va_list ap1, ap2;
+	va_list ap;
 	struct ast_channel *result;
 
-	va_start(ap1, name_fmt);
-	va_start(ap2, name_fmt);
+	va_start(ap, name_fmt);
 	result = __ast_channel_alloc_ap(needqueue, state, cid_num, cid_name, acctcode, exten, context,
-					linkedid, amaflag, file, line, function, name_fmt, ap1, ap2);
-	va_end(ap1);
-	va_end(ap2);
+					linkedid, amaflag, file, line, function, name_fmt, ap);
+	va_end(ap);
 
 	return result;
 }
@@ -2811,12 +2858,16 @@ int ast_hangup(struct ast_channel *chan)
 		"Uniqueid: %s\r\n"
 		"CallerIDNum: %s\r\n"
 		"CallerIDName: %s\r\n"
+		"ConnectedLineNum: %s\r\n"
+		"ConnectedLineName: %s\r\n"
 		"Cause: %d\r\n"
 		"Cause-txt: %s\r\n",
 		chan->name,
 		chan->uniqueid,
 		S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, "<unknown>"),
 		S_COR(chan->caller.id.name.valid, chan->caller.id.name.str, "<unknown>"),
+		S_COR(chan->connected.id.number.valid, chan->connected.id.number.str, "<unknown>"),
+		S_COR(chan->connected.id.name.valid, chan->connected.id.name.str, "<unknown>"),
 		chan->hangupcause,
 		ast_cause2str(chan->hangupcause)
 		);
@@ -3882,7 +3933,7 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 			}
 			/* Clear the exception flag */
 			ast_clear_flag(chan, AST_FLAG_EXCEPTION);
-		} else if (chan->tech->read)
+		} else if (chan->tech && chan->tech->read)
 			f = chan->tech->read(chan);
 		else
 			ast_log(LOG_WARNING, "No read routine on channel %s\n", chan->name);
@@ -4323,7 +4374,9 @@ int ast_indicate_data(struct ast_channel *chan, int _condition,
 		awesome_frame = ast_frdup(&frame);
 
 		/* who knows what we will get back! the anticipation is killing me. */
-		if (!(awesome_frame = ast_framehook_list_read_event(chan->framehooks, awesome_frame))) {
+		if (!(awesome_frame = ast_framehook_list_write_event(chan->framehooks, awesome_frame))
+			|| awesome_frame->frametype != AST_FRAME_CONTROL) {
+
 			res = 0;
 			goto indicate_cleanup;
 		}
@@ -6611,6 +6664,12 @@ int ast_do_masquerade(struct ast_channel *original)
 		goto done;
 	}
 
+	/*
+	 * We just hung up the physical side of the channel.  Set the
+	 * new zombie to use the kill channel driver for safety.
+	 */
+	clonechan->tech = &ast_kill_tech;
+
 	/* Mangle the name of the clone channel */
 	snprintf(zombn, sizeof(zombn), "%s<ZOMBIE>", orig); /* quick, hide the brains! */
 	__ast_change_name_nolink(clonechan, zombn);
@@ -6895,10 +6954,14 @@ int ast_setstate(struct ast_channel *chan, enum ast_channel_state state)
 		"ChannelStateDesc: %s\r\n"
 		"CallerIDNum: %s\r\n"
 		"CallerIDName: %s\r\n"
+		"ConnectedLineNum: %s\r\n"
+		"ConnectedLineName: %s\r\n"
 		"Uniqueid: %s\r\n",
 		chan->name, chan->_state, ast_state2str(chan->_state),
 		S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, ""),
 		S_COR(chan->caller.id.name.valid, chan->caller.id.name.str, ""),
+		S_COR(chan->connected.id.number.valid, chan->connected.id.number.str, ""),
+		S_COR(chan->connected.id.name.valid, chan->connected.id.name.str, ""),
 		chan->uniqueid);
 
 	return 0;
@@ -7270,6 +7333,8 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 	char caller_warning = 0;
 	char callee_warning = 0;
 
+	*fo = NULL;
+
 	if (c0->_bridge) {
 		ast_log(LOG_WARNING, "%s is already in a bridge with %s\n",
 			c0->name, c0->_bridge->name);
@@ -7294,9 +7359,6 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 		ast_log(LOG_WARNING, "failed to copy native formats\n");
 		return -1;
 	}
-
-
-	*fo = NULL;
 
 	if (ast_tvzero(config->start_time)) {
 		config->start_time = ast_tvnow();
@@ -7325,7 +7387,7 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 		config->nexteventts = ast_tvadd(config->start_time, ast_samp2tv(config->timelimit, 1000));
 		if ((caller_warning || callee_warning) && config->play_warning) {
 			long next_warn = config->play_warning;
-			if (time_left_ms < config->play_warning) {
+			if (time_left_ms < config->play_warning && config->warning_freq > 0) {
 				/* At least one warning was played, which means we are returning after feature */
 				long warns_passed = (config->play_warning - time_left_ms) / config->warning_freq;
 				/* It is 'warns_passed * warning_freq' NOT '(warns_passed + 1) * warning_freq',
@@ -7437,6 +7499,7 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 		    (c0->tech->bridge == c1->tech->bridge) &&
 		    !c0->monitor && !c1->monitor &&
 		    !c0->audiohooks && !c1->audiohooks &&
+		    ast_framehook_list_is_empty(c0->framehooks) && ast_framehook_list_is_empty(c1->framehooks) &&
 		    !c0->masq && !c0->masqr && !c1->masq && !c1->masqr) {
 			int timeoutms = to - 1000 > 0 ? to - 1000 : to;
 			/* Looks like they share a bridge method and nothing else is in the way */
@@ -7546,28 +7609,42 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 /*! \brief Sets an option on a channel */
 int ast_channel_setoption(struct ast_channel *chan, int option, void *data, int datalen, int block)
 {
+	int res;
+
+	ast_channel_lock(chan);
 	if (!chan->tech->setoption) {
 		errno = ENOSYS;
+		ast_channel_unlock(chan);
 		return -1;
 	}
 
 	if (block)
 		ast_log(LOG_ERROR, "XXX Blocking not implemented yet XXX\n");
 
-	return chan->tech->setoption(chan, option, data, datalen);
+	res = chan->tech->setoption(chan, option, data, datalen);
+	ast_channel_unlock(chan);
+
+	return res;
 }
 
 int ast_channel_queryoption(struct ast_channel *chan, int option, void *data, int *datalen, int block)
 {
+	int res;
+
+	ast_channel_lock(chan);
 	if (!chan->tech->queryoption) {
 		errno = ENOSYS;
+		ast_channel_unlock(chan);
 		return -1;
 	}
 
 	if (block)
 		ast_log(LOG_ERROR, "XXX Blocking not implemented yet XXX\n");
 
-	return chan->tech->queryoption(chan, option, data, datalen);
+	res = chan->tech->queryoption(chan, option, data, datalen);
+	ast_channel_unlock(chan);
+
+	return res;
 }
 
 struct tonepair_def {
@@ -9520,16 +9597,19 @@ struct ast_channel *ast_channel_alloc(int needqueue, int state, const char *cid_
 				      const char *linkedid, const int amaflag,
 				      const char *name_fmt, ...)
 {
-	va_list ap1, ap2;
+	va_list ap;
 	struct ast_channel *result;
 
 
-	va_start(ap1, name_fmt);
-	va_start(ap2, name_fmt);
+	va_start(ap, name_fmt);
 	result = __ast_channel_alloc_ap(needqueue, state, cid_num, cid_name, acctcode, exten, context,
-					linkedid, amaflag, __FILE__, __LINE__, __FUNCTION__, name_fmt, ap1, ap2);
-	va_end(ap1);
-	va_end(ap2);
+					linkedid, amaflag, __FILE__, __LINE__, __FUNCTION__, name_fmt, ap);
+	va_end(ap);
 
 	return result;
+}
+
+void ast_channel_unlink(struct ast_channel *chan)
+{
+	ao2_unlink(channels, chan);
 }

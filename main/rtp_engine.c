@@ -40,6 +40,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/translate.h"
 #include "asterisk/netsock2.h"
 #include "asterisk/_private.h"
+#include "asterisk/framehook.h"
 
 struct ast_srtp_res *res_srtp = NULL;
 struct ast_srtp_policy_res *res_srtp_policy = NULL;
@@ -66,6 +67,8 @@ struct ast_rtp_instance {
 	int timeout;
 	/*! RTP timeout when on hold (negative or zero means disabled, negative value means temporarily disabled). */
 	int holdtimeout;
+	/*! RTP keepalive interval */
+	int keepalive;
 	/*! DTMF mode in use */
 	enum ast_rtp_dtmf_mode dtmf_mode;
 	/*! Glue currently in use */
@@ -851,7 +854,8 @@ static enum ast_bridge_result local_bridge_loop(struct ast_channel *c0, struct a
 		if ((c0->tech_pvt != pvt0) ||
 		    (c1->tech_pvt != pvt1) ||
 		    (c0->masq || c0->masqr || c1->masq || c1->masqr) ||
-		    (c0->monitor || c0->audiohooks || c1->monitor || c1->audiohooks)) {
+		    (c0->monitor || c0->audiohooks || c1->monitor || c1->audiohooks) ||
+		    (!ast_framehook_list_is_empty(c0->framehooks) || !ast_framehook_list_is_empty(c1->framehooks))) {
 			ast_debug(1, "rtp-engine-local-bridge: Oooh, something is weird, backing out\n");
 			/* If a masquerade needs to happen we have to try to read in a frame so that it actually happens. Without this we risk being called again and going into a loop */
 			if ((c0->masq || c0->masqr) && (fr = ast_read(c0))) {
@@ -1044,7 +1048,8 @@ static enum ast_bridge_result remote_bridge_loop(struct ast_channel *c0,
 		if ((c0->tech_pvt != pvt0) ||
 		    (c1->tech_pvt != pvt1) ||
 		    (c0->masq || c0->masqr || c1->masq || c1->masqr) ||
-		    (c0->monitor || c0->audiohooks || c1->monitor || c1->audiohooks)) {
+		    (c0->monitor || c0->audiohooks || c1->monitor || c1->audiohooks) ||
+		    (!ast_framehook_list_is_empty(c0->framehooks) || !ast_framehook_list_is_empty(c1->framehooks))) {
 			ast_debug(1, "Oooh, something is weird, backing out\n");
 			res = AST_BRIDGE_RETRY;
 			break;
@@ -1282,7 +1287,7 @@ enum ast_bridge_result ast_rtp_instance_bridge(struct ast_channel *c0, struct as
 			*vinstance0 = NULL, *vinstance1 = NULL,
 			*tinstance0 = NULL, *tinstance1 = NULL;
 	struct ast_rtp_glue *glue0, *glue1;
-	struct ast_sockaddr addr1, addr2;
+	struct ast_sockaddr addr1 = { {0, }, }, addr2 = { {0, }, };
 	enum ast_rtp_glue_result audio_glue0_res = AST_RTP_GLUE_RESULT_FORBID, video_glue0_res = AST_RTP_GLUE_RESULT_FORBID;
 	enum ast_rtp_glue_result audio_glue1_res = AST_RTP_GLUE_RESULT_FORBID, video_glue1_res = AST_RTP_GLUE_RESULT_FORBID;
 	enum ast_bridge_result res = AST_BRIDGE_FAILED;
@@ -1781,6 +1786,11 @@ void ast_rtp_instance_set_hold_timeout(struct ast_rtp_instance *instance, int ti
 	instance->holdtimeout = timeout;
 }
 
+void ast_rtp_instance_set_keepalive(struct ast_rtp_instance *instance, int interval)
+{
+	instance->keepalive = interval;
+}
+
 int ast_rtp_instance_get_timeout(struct ast_rtp_instance *instance)
 {
 	return instance->timeout;
@@ -1789,6 +1799,11 @@ int ast_rtp_instance_get_timeout(struct ast_rtp_instance *instance)
 int ast_rtp_instance_get_hold_timeout(struct ast_rtp_instance *instance)
 {
 	return instance->holdtimeout;
+}
+
+int ast_rtp_instance_get_keepalive(struct ast_rtp_instance *instance)
+{
+	return instance->keepalive;
 }
 
 struct ast_rtp_engine *ast_rtp_instance_get_engine(struct ast_rtp_instance *instance)
@@ -1848,6 +1863,15 @@ int ast_rtp_instance_add_srtp_policy(struct ast_rtp_instance *instance, struct a
 struct ast_srtp *ast_rtp_instance_get_srtp(struct ast_rtp_instance *instance)
 {
 	return instance->srtp;
+}
+
+int ast_rtp_instance_sendcng(struct ast_rtp_instance *instance, int level)
+{
+	if (instance->engine->sendcng) {
+		return instance->engine->sendcng(instance, level);
+	}
+
+	return -1;
 }
 
 static void set_next_mime_type(const struct ast_format *format, int rtp_code, char *type, char *subtype, unsigned int sample_rate)

@@ -38,12 +38,12 @@
  */
 
 /*** MODULEINFO
-	<use>res_smdi</use>
+	<use type="module">res_smdi</use>
 	<depend>dahdi</depend>
 	<depend>tonezone</depend>
-	<use>pri</use>
-	<use>ss7</use>
-	<use>openr2</use>
+	<use type="external">pri</use>
+	<use type="external">ss7</use>
+	<use type="external">openr2</use>
  ***/
 
 #include "asterisk.h"
@@ -280,14 +280,15 @@ static const char * const lbostr[] = {
 "-22.5db (CSU)"
 };
 
-/*! Global jitterbuffer configuration - by default, jb is disabled */
+/*! Global jitterbuffer configuration - by default, jb is disabled
+ *  \note Values shown here match the defaults shown in chan_dahdi.conf.sample */
 static struct ast_jb_conf default_jbconf =
 {
 	.flags = 0,
-	.max_size = -1,
-	.resync_threshold = -1,
-	.impl = "",
-	.target_extra = -1,
+	.max_size = 200,
+	.resync_threshold = 1000,
+	.impl = "fixed",
+	.target_extra = 40,
 };
 static struct ast_jb_conf global_jbconf;
 
@@ -9490,6 +9491,8 @@ static struct ast_channel *dahdi_new(struct dahdi_pvt *i, int state, int startpb
 	int features;
 	struct ast_str *chan_name;
 	struct ast_variable *v;
+	char *dashptr;
+	char device_name[AST_CHANNEL_NAME];
 
 	if (i->subs[idx].owner) {
 		ast_log(LOG_WARNING, "Channel %d already has a %s call\n", i->channel,subnames[idx]);
@@ -9671,7 +9674,13 @@ static struct ast_channel *dahdi_new(struct dahdi_pvt *i, int state, int startpb
 	/* Configure the new channel jb */
 	ast_jb_configure(tmp, &global_jbconf);
 
-	ast_devstate_changed_literal(ast_state_chan2dev(state), tmp->name);
+	/* Set initial device state */
+	ast_copy_string(device_name, tmp->name, sizeof(device_name));
+	dashptr = strrchr(device_name, '-');
+	if (dashptr) {
+		*dashptr = '\0';
+	}
+	ast_devstate_changed_literal(AST_DEVICE_UNKNOWN, device_name);
 
 	for (v = i->vars ; v ; v = v->next)
 		pbx_builtin_setvar_helper(tmp, v->name, v->value);
@@ -12521,6 +12530,9 @@ static struct dahdi_pvt *mkintf(int channel, const struct dahdi_chan_conf *conf,
 #if defined(HAVE_PRI_MCID)
 						pris[span].pri.mcid_send = conf->pri.pri.mcid_send;
 #endif	/* defined(HAVE_PRI_MCID) */
+#if defined(HAVE_PRI_DATETIME_SEND)
+						pris[span].pri.datetime_send = conf->pri.pri.datetime_send;
+#endif	/* defined(HAVE_PRI_DATETIME_SEND) */
 
 						for (x = 0; x < PRI_MAX_TIMERS; x++) {
 							pris[span].pri.pritimers[x] = conf->pri.pri.pritimers[x];
@@ -13929,17 +13941,22 @@ static void *mfcr2_monitor(void *data)
 #endif
 static void dahdi_pri_message(struct pri *pri, char *s)
 {
-	int x, y;
-	int dchan = -1, span = -1, dchancount = 0;
+	int x;
+	int y;
+	int dchan = -1;
+	int span = -1;
+	int dchancount = 0;
 
 	if (pri) {
 		for (x = 0; x < NUM_SPANS; x++) {
 			for (y = 0; y < SIG_PRI_NUM_DCHANS; y++) {
-				if (pris[x].pri.dchans[y])
+				if (pris[x].pri.dchans[y]) {
 					dchancount++;
+				}
 
-				if (pris[x].pri.dchans[y] == pri)
+				if (pris[x].pri.dchans[y] == pri) {
 					dchan = y;
+				}
 			}
 			if (dchan >= 0) {
 				span = x;
@@ -13947,14 +13964,18 @@ static void dahdi_pri_message(struct pri *pri, char *s)
 			}
 			dchancount = 0;
 		}
-		if (dchancount > 1 && (span > -1))
-			ast_verbose("[Span %d D-Channel %d]%s", span, dchan, s);
-		else if (span > -1)
-			ast_verbose("%d %s", span+1, s);
-		else
-			ast_verbose("%s", s);
-	} else
-		ast_verbose("%s", s);
+		if (-1 < span) {
+			if (1 < dchancount) {
+				ast_verbose("[PRI Span: %d D-Channel: %d] %s", span + 1, dchan, s);
+			} else {
+				ast_verbose("PRI Span: %d %s", span + 1, s);
+			}
+		} else {
+			ast_verbose("PRI Span: ? %s", s);
+		}
+	} else {
+		ast_verbose("PRI Span: ? %s", s);
+	}
 
 	ast_mutex_lock(&pridebugfdlock);
 
@@ -13971,18 +13992,22 @@ static void dahdi_pri_message(struct pri *pri, char *s)
 #if defined(HAVE_PRI)
 static void dahdi_pri_error(struct pri *pri, char *s)
 {
-	int x, y;
-	int dchan = -1, span = -1;
+	int x;
+	int y;
+	int dchan = -1;
+	int span = -1;
 	int dchancount = 0;
 
 	if (pri) {
 		for (x = 0; x < NUM_SPANS; x++) {
 			for (y = 0; y < SIG_PRI_NUM_DCHANS; y++) {
-				if (pris[x].pri.dchans[y])
+				if (pris[x].pri.dchans[y]) {
 					dchancount++;
+				}
 
-				if (pris[x].pri.dchans[y] == pri)
+				if (pris[x].pri.dchans[y] == pri) {
 					dchan = y;
+				}
 			}
 			if (dchan >= 0) {
 				span = x;
@@ -13990,14 +14015,18 @@ static void dahdi_pri_error(struct pri *pri, char *s)
 			}
 			dchancount = 0;
 		}
-		if ((dchancount > 1) && (span > -1))
-			ast_log(LOG_ERROR, "[Span %d D-Channel %d] PRI: %s", span, dchan, s);
-		else if (span > -1)
-			ast_log(LOG_ERROR, "%d %s", span+1, s);
-		else
-			ast_log(LOG_ERROR, "%s", s);
-	} else
-		ast_log(LOG_ERROR, "%s", s);
+		if (-1 < span) {
+			if (1 < dchancount) {
+				ast_log(LOG_ERROR, "[PRI Span: %d D-Channel: %d] %s", span + 1, dchan, s);
+			} else {
+				ast_log(LOG_ERROR, "PRI Span: %d %s", span + 1, s);
+			}
+		} else {
+			ast_log(LOG_ERROR, "PRI Span: ? %s", s);
+		}
+	} else {
+		ast_log(LOG_ERROR, "PRI Span: ? %s", s);
+	}
 
 	ast_mutex_lock(&pridebugfdlock);
 
@@ -16812,6 +16841,40 @@ static unsigned long dahdi_display_text_option(const char *value)
 #endif	/* defined(HAVE_PRI_DISPLAY_TEXT) */
 #endif	/* defined(HAVE_PRI) */
 
+#if defined(HAVE_PRI)
+#if defined(HAVE_PRI_DATETIME_SEND)
+/*!
+ * \internal
+ * \brief Determine the configured date/time send policy option.
+ * \since 1.10
+ *
+ * \param value Configuration value string.
+ *
+ * \return Configured date/time send policy option.
+ */
+static int dahdi_datetime_send_option(const char *value)
+{
+	int option;
+
+	option = PRI_DATE_TIME_SEND_DEFAULT;
+
+	if (ast_false(value)) {
+		option = PRI_DATE_TIME_SEND_NO;
+	} else if (!strcasecmp(value, "date")) {
+		option = PRI_DATE_TIME_SEND_DATE;
+	} else if (!strcasecmp(value, "date_hh")) {
+		option = PRI_DATE_TIME_SEND_DATE_HH;
+	} else if (!strcasecmp(value, "date_hhmm")) {
+		option = PRI_DATE_TIME_SEND_DATE_HHMM;
+	} else if (!strcasecmp(value, "date_hhmmss")) {
+		option = PRI_DATE_TIME_SEND_DATE_HHMMSS;
+	}
+
+	return option;
+}
+#endif	/* defined(HAVE_PRI_DATETIME_SEND) */
+#endif	/* defined(HAVE_PRI) */
+
 /*! process_dahdi() - ignore keyword 'channel' and similar */
 #define PROC_DAHDI_OPT_NOCHAN  (1 << 0)
 /*! process_dahdi() - No warnings on non-existing cofiguration keywords */
@@ -17632,6 +17695,10 @@ static int process_dahdi(struct dahdi_chan_conf *confp, const char *cat, struct 
 			} else if (!strcasecmp(v->name, "mcid_send")) {
 				confp->pri.pri.mcid_send = ast_true(v->value);
 #endif	/* defined(HAVE_PRI_MCID) */
+#if defined(HAVE_PRI_DATETIME_SEND)
+			} else if (!strcasecmp(v->name, "datetime_send")) {
+				confp->pri.pri.datetime_send = dahdi_datetime_send_option(v->value);
+#endif	/* defined(HAVE_PRI_DATETIME_SEND) */
 #endif /* HAVE_PRI */
 #if defined(HAVE_SS7)
 			} else if (!strcasecmp(v->name, "ss7type")) {

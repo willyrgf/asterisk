@@ -38,8 +38,8 @@
  */
 
 /*** MODULEINFO
-	<use>res_adsi</use>
-	<use>res_smdi</use>
+	<use type="module">res_adsi</use>
+	<use type="module">res_smdi</use>
  ***/
 
 /*** MAKEOPTS
@@ -60,7 +60,7 @@
 		<depend>imap_tk</depend>
 		<conflict>ODBC_STORAGE</conflict>
 		<conflict>FILE_STORAGE</conflict>
-		<use>openssl</use>
+		<use type="external">openssl</use>
 		<defaultenabled>no</defaultenabled>
 	</member>
 </category>
@@ -2177,11 +2177,16 @@ static int imap_store_file(const char *dir, const char *mailboxuser, const char 
 	int ret; /* for better error checking */
 	char *imap_flags = NIL;
 	int msgcount = (messagecount(vmu->context, vmu->mailbox, "INBOX") + messagecount(vmu->context, vmu->mailbox, "Old"));
+	int box = NEW_FOLDER;
 
-    /* Back out early if this is a greeting and we don't want to store greetings in IMAP */
-    if (msgnum < 0 && !imapgreetings) {
-        return 0;
-    }
+	/* Back out early if this is a greeting and we don't want to store greetings in IMAP */
+	if (msgnum < 0) {
+		if(!imapgreetings) {
+			return 0;
+		} else {
+			box = GREETINGS_FOLDER;
+		}
+	}
 
 	if (imap_check_limits(chan, vms, vmu, msgcount)) {
 		return -1;
@@ -2264,9 +2269,9 @@ static int imap_store_file(const char *dir, const char *mailboxuser, const char 
 	}
 	((char *) buf)[len] = '\0';
 	INIT(&str, mail_string, buf, len);
-	ret = init_mailstream(vms, NEW_FOLDER);
+	ret = init_mailstream(vms, box);
 	if (ret == 0) {
-		imap_mailbox_name(mailbox, sizeof(mailbox), vms, NEW_FOLDER, 1);
+		imap_mailbox_name(mailbox, sizeof(mailbox), vms, box, 1);
 		ast_mutex_lock(&vms->lock);
 		if(!mail_append_full(vms->mailstream, mailbox, imap_flags, NIL, &str))
 			ast_log(LOG_ERROR, "Error while sending the message to %s\n", mailbox);
@@ -4734,6 +4739,7 @@ static int add_email_attachment(FILE *p, struct ast_vm_user *vmu, char *format, 
 	char fname[256];
 	char tmpcmd[256];
 	int tmpfd = -1;
+	int soxstatus = 0;
 
 	/* Eww. We want formats to tell us their own MIME type */
 	char *ctype = (!strcasecmp(format, "ogg")) ? "application/" : "audio/x-";
@@ -4745,7 +4751,6 @@ static int add_email_attachment(FILE *p, struct ast_vm_user *vmu, char *format, 
 		chmod(newtmp, VOICEMAIL_FILE_MODE & ~my_umask);
 		ast_debug(3, "newtmp: %s\n", newtmp);
 		if (tmpfd > -1) {
-			int soxstatus;
 			snprintf(tmpcmd, sizeof(tmpcmd), "sox -v %.4f %s.%s %s.%s", vmu->volgain, attach, format, newtmp, format);
 			if ((soxstatus = ast_safe_system(tmpcmd)) == 0) {
 				attach = newtmp;
@@ -4773,7 +4778,9 @@ static int add_email_attachment(FILE *p, struct ast_vm_user *vmu, char *format, 
 	if (last)
 		fprintf(p, ENDL ENDL "--%s--" ENDL "." ENDL, bound);
 	if (tmpfd > -1) {
-		unlink(fname);
+		if (soxstatus == 0) {
+			unlink(fname);
+		}
 		close(tmpfd);
 		unlink(newtmp);
 	}
@@ -6696,7 +6703,21 @@ static int get_folder(struct ast_channel *chan, int start)
 		if (d)
 			return d;
 		snprintf(fn, sizeof(fn), "vm-%s", mbox(NULL, x));	/* Folder name */
-		d = vm_play_folder_name(chan, fn);
+
+		/* The inbox folder can have its name changed under certain conditions
+		 * so this checks if the sound file exists for the inbox folder name and
+		 * if it doesn't, plays the default name instead. */
+		if (x == 0) {
+			if (ast_fileexists(fn, NULL, NULL)) {
+				d = vm_play_folder_name(chan, fn);
+			} else {
+				ast_verb(1, "failed to find %s\n", fn);
+				d = vm_play_folder_name(chan, "vm-INBOX");
+			}
+		} else {
+			d = vm_play_folder_name(chan, fn);
+		}
+
 		if (d)
 			return d;
 		d = ast_waitfordigit(chan, 500);
@@ -12127,6 +12148,9 @@ static int load_config(int reload)
 
 		if (ucfg) {	
 			for (cat = ast_category_browse(ucfg, NULL); cat ; cat = ast_category_browse(ucfg, cat)) {
+				if (!strcasecmp(cat, "general")) {
+					continue;
+				}
 				if (!ast_true(ast_config_option(ucfg, cat, "hasvoicemail")))
 					continue;
 				if ((current = find_or_create(userscontext, cat))) {

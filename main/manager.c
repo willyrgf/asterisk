@@ -134,6 +134,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<parameter name="ActionID">
 				<para>ActionID for this transaction. Will be returned.</para>
 			</parameter>
+			<parameter name="Username" required="true">
+				<para>Username to login with as specified in manager.conf.</para>
+			</parameter>
+			<parameter name="Secret">
+				<para>Secret to login with as specified in manager.conf.</para>
+			</parameter>
 		</syntax>
 		<description>
 			<para>Login Manager.</para>
@@ -806,6 +812,52 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<para>Generates an AOC-D or AOC-E message on a channel.</para>
 		</description>
 	</manager>
+	<manager name="Filter" language="en_US">
+		<synopsis>
+			Dynamically add filters for the current manager session.
+		</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
+			<parameter name="Operation">
+				<enumlist>
+					<enum name="Add">
+						<para>Add a filter.</para>
+					</enum>
+				</enumlist>
+			</parameter>
+			<parameter name="Filter">
+				<para>Filters can be whitelist or blacklist</para>
+				<para>Example whitelist filter: "Event: Newchannel"</para>
+				<para>Example blacklist filter: "!Channel: DAHDI.*"</para>
+				<para>This filter option is used to whitelist or blacklist events per user to be
+				reported with regular expressions and are allowed if both the regex matches
+				and the user has read access as defined in manager.conf. Filters are assumed to be for whitelisting
+				unless preceeded by an exclamation point, which marks it as being black.
+				Evaluation of the filters is as follows:</para>
+				<para>- If no filters are configured all events are reported as normal.</para>
+				<para>- If there are white filters only: implied black all filter processed first, then white filters.</para>
+				<para>- If there are black filters only: implied white all filter processed first, then black filters.</para>
+				<para>- If there are both white and black filters: implied black all filter processed first, then white
+				filters, and lastly black filters.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>The filters added are only used for the current session.
+			Once the connection is closed the filters are removed.</para>
+			<para>This comand requires the system permission because
+			this command can be used to create filters that may bypass
+			filters defined in manager.conf</para>
+		</description>
+	</manager>
+	<manager name="FilterList" language="en_US">
+		<synopsis>
+			Show current event filters for this session
+		</synopsis>
+		<description>
+			<para>The filters displayed are for the current session.  Only those filters defined in
+                        manager.conf will be present upon starting a new session.</para>
+		</description>
+	</manager>
  ***/
 
 enum error_type {
@@ -822,6 +874,11 @@ enum error_type {
 	FAILURE_APPEND
 };
 
+enum add_filter_result {
+	FILTER_SUCCESS,
+        FILTER_ALLOC_FAILED,
+        FILTER_COMPILE_FAIL,
+};
 
 /*!
  * Linked list of events.
@@ -1012,6 +1069,8 @@ static AST_RWLIST_HEAD_STATIC(actions, manager_action);
 static AST_RWLIST_HEAD_STATIC(manager_hooks, manager_custom_hook);
 
 static void free_channelvars(void);
+
+static enum add_filter_result manager_add_filter(const char *filter_pattern, struct ao2_container *whitefilters, struct ao2_container *blackfilters);
 
 /*! \brief Add a custom hook to be called when an event is fired */
 void ast_manager_register_hook(struct manager_custom_hook *hook)
@@ -2880,6 +2939,14 @@ static int action_events(struct mansession *s, const struct message *m)
 {
 	const char *mask = astman_get_header(m, "EventMask");
 	int res, x;
+	const char *id = astman_get_header(m, "ActionID");
+	char id_text[256];
+
+	if (!ast_strlen_zero(id)) {
+		snprintf(id_text, sizeof(id_text), "ActionID: %s\r\n", id);
+	} else {
+		id_text[0] = '\0';
+	}
 
 	res = set_eventmask(s, mask);
 	if (broken_events_action) {
@@ -2892,20 +2959,20 @@ static int action_events(struct mansession *s, const struct message *m)
 					return 0;
 				}
 			}
-			astman_append(s, "Response: Success\r\n"
-					 "Events: On\r\n\r\n");
+			astman_append(s, "Response: Success\r\n%s"
+					 "Events: On\r\n\r\n", id_text);
 		} else if (res == 0)
-			astman_append(s, "Response: Success\r\n"
-					 "Events: Off\r\n\r\n");
+			astman_append(s, "Response: Success\r\n%s"
+					 "Events: Off\r\n\r\n", id_text);
 		return 0;
 	}
 
 	if (res > 0)
-		astman_append(s, "Response: Success\r\n"
-				 "Events: On\r\n\r\n");
+		astman_append(s, "Response: Success\r\n%s"
+				 "Events: On\r\n\r\n", id_text);
 	else if (res == 0)
-		astman_append(s, "Response: Success\r\n"
-				 "Events: Off\r\n\r\n");
+		astman_append(s, "Response: Success\r\n%s"
+				 "Events: Off\r\n\r\n", id_text);
 	else
 		astman_send_error(s, m, "Invalid event mask");
 
@@ -3176,6 +3243,8 @@ static int action_status(struct mansession *s, const struct message *m)
 			"Channel: %s\r\n"
 			"CallerIDNum: %s\r\n"
 			"CallerIDName: %s\r\n"
+			"ConnectedLineNum: %s\r\n"
+			"ConnectedLineName: %s\r\n"
 			"Accountcode: %s\r\n"
 			"ChannelState: %d\r\n"
 			"ChannelStateDesc: %s\r\n"
@@ -3189,8 +3258,10 @@ static int action_status(struct mansession *s, const struct message *m)
 			"%s"
 			"\r\n",
 			c->name,
-			S_COR(c->caller.id.number.valid, c->caller.id.number.str, ""),
-			S_COR(c->caller.id.name.valid, c->caller.id.name.str, ""),
+			S_COR(c->caller.id.number.valid, c->caller.id.number.str, "<unknown>"),
+			S_COR(c->caller.id.name.valid, c->caller.id.name.str, "<unknown>"),
+			S_COR(c->connected.id.number.valid, c->connected.id.number.str, "<unknown>"),
+			S_COR(c->connected.id.name.valid, c->connected.id.name.str, "<unknown>"),
 			c->accountcode,
 			c->_state,
 			ast_state2str(c->_state), c->context,
@@ -3202,6 +3273,8 @@ static int action_status(struct mansession *s, const struct message *m)
 				"Channel: %s\r\n"
 				"CallerIDNum: %s\r\n"
 				"CallerIDName: %s\r\n"
+				"ConnectedLineNum: %s\r\n"
+				"ConnectedLineName: %s\r\n"
 				"Account: %s\r\n"
 				"State: %s\r\n"
 				"%s"
@@ -3212,6 +3285,8 @@ static int action_status(struct mansession *s, const struct message *m)
 				c->name,
 				S_COR(c->caller.id.number.valid, c->caller.id.number.str, "<unknown>"),
 				S_COR(c->caller.id.name.valid, c->caller.id.name.str, "<unknown>"),
+				S_COR(c->connected.id.number.valid, c->connected.id.number.str, "<unknown>"),
+				S_COR(c->connected.id.name.valid, c->connected.id.name.str, "<unknown>"),
 				c->accountcode,
 				ast_state2str(c->_state), bridge, c->uniqueid,
 				ast_str_buffer(str), idText);
@@ -4100,6 +4175,88 @@ static int blackfilter_cmp_fn(void *obj, void *arg, void *data, int flags)
 	return 0;
 }
 
+/*
+ * \brief Manager command to add an event filter to a manager session
+ * \see For more details look at manager_add_filter
+ */
+static int action_filter(struct mansession *s, const struct message *m)
+{
+	const char *filter = astman_get_header(m, "Filter");
+        const char *operation = astman_get_header(m, "Operation");
+        int res;
+
+        if (!strcasecmp(operation, "Add")) {
+		res = manager_add_filter(filter, s->session->whitefilters, s->session->blackfilters);
+
+	        if (res != FILTER_SUCCESS) {
+		        if (res == FILTER_ALLOC_FAILED) {
+				astman_send_error(s, m, "Internal Error. Failed to allocate regex for filter");
+		                return 0;
+		        } else if (res == FILTER_COMPILE_FAIL) {
+				astman_send_error(s, m, "Filter did not compile.  Check the syntax of the filter given.");
+		                return 0;
+		        } else {
+				astman_send_error(s, m, "Internal Error. Failed adding filter.");
+		                return 0;
+	                }
+		}
+
+		astman_send_ack(s, m, "Success");
+                return 0;
+        }
+
+	astman_send_error(s, m, "Unknown operation");
+	return 0;
+}
+
+/*
+ * \brief Add an event filter to a manager session
+ *
+ * \param s               manager session to modify filters on
+ * \param filter_pattern  Filter syntax to add, see below for syntax
+ *
+ * \return FILTER_ALLOC_FAILED   Memory allocation failure
+ * \return FILTER_COMPILE_FAIL   If the filter did not compile
+ * \return FILTER_SUCCESS        Success
+ *
+ * Filter will be used to match against each line of a manager event
+ * Filter can be any valid regular expression
+ * Filter can be a valid regular expression prefixed with !, which will add the filter as a black filter
+ *
+ * \example filter_pattern = "Event: Newchannel"
+ * \example filter_pattern = "Event: New.*"
+ * \example filter_pattern = "!Channel: DAHDI.*"
+ *
+ */
+static enum add_filter_result manager_add_filter(const char *filter_pattern, struct ao2_container *whitefilters, struct ao2_container *blackfilters) {
+	regex_t *new_filter = ao2_t_alloc(sizeof(*new_filter), event_filter_destructor, "event_filter allocation");
+	int is_blackfilter;
+
+	if (!new_filter) {
+		return FILTER_ALLOC_FAILED;
+	}
+
+	if (filter_pattern[0] == '!') {
+		is_blackfilter = 1;
+		filter_pattern++;
+	} else {
+		is_blackfilter = 0;
+	}
+
+	if (regcomp(new_filter, filter_pattern, 0)) {
+		ao2_t_ref(new_filter, -1, "failed to make regx");
+		return FILTER_COMPILE_FAIL;
+	}
+
+	if (is_blackfilter) {
+		ao2_t_link(blackfilters, new_filter, "link new filter into black user container");
+	} else {
+		ao2_t_link(whitefilters, new_filter, "link new filter into white user container");
+	}
+
+        return FILTER_SUCCESS;
+}
+
 static int match_filter(struct mansession *s, char *eventdata)
 {
 	int result = 0;
@@ -4321,6 +4478,9 @@ static int action_coreshowchannels(struct mansession *s, const struct message *m
 			"Application: %s\r\n"
 			"ApplicationData: %s\r\n"
 			"CallerIDnum: %s\r\n"
+			"CallerIDname: %s\r\n"
+			"ConnectedLineNum: %s\r\n"
+			"ConnectedLineName: %s\r\n"
 			"Duration: %s\r\n"
 			"AccountCode: %s\r\n"
 			"BridgedChannel: %s\r\n"
@@ -4328,6 +4488,9 @@ static int action_coreshowchannels(struct mansession *s, const struct message *m
 			"\r\n", idText, c->name, c->uniqueid, c->context, c->exten, c->priority, c->_state,
 			ast_state2str(c->_state), c->appl ? c->appl : "", c->data ? S_OR(c->data, "") : "",
 			S_COR(c->caller.id.number.valid, c->caller.id.number.str, ""),
+			S_COR(c->caller.id.name.valid, c->caller.id.name.str, ""),
+			S_COR(c->connected.id.number.valid, c->connected.id.number.str, ""),
+			S_COR(c->connected.id.name.valid, c->connected.id.name.str, ""),
 			durbuf, S_OR(c->accountcode, ""), bc ? bc->name : "", bc ? bc->uniqueid : "");
 
 		ast_channel_unlock(c);
@@ -4497,18 +4660,25 @@ static int process_message(struct mansession *s, const struct message *m)
 		}
 		if (s->session->writeperm & tmp->authority || tmp->authority == 0) {
 			call_func = tmp->func;
-		} else {
-			astman_send_error(s, m, "Permission denied");
-			report_req_not_allowed(s, action);
 		}
 		break;
 	}
 	AST_RWLIST_UNLOCK(&actions);
 
-	if (tmp && call_func) {
-		/* call AMI function after actions list are unlocked */
-		ast_debug(1, "Running action '%s'\n", tmp->action);
-		ret = call_func(s, m);
+	if (tmp) {
+		if (call_func) {
+			/* Call our AMI function after we unlock our actions lists */
+			ast_debug(1, "Running action '%s'\n", tmp->action);
+			ret = call_func(s, m);
+		} else {
+			/* If we found our action but don't have a function pointer, access
+			 * was denied, so bail out.
+			 */
+			report_req_not_allowed(s, action);
+			mansession_lock(s);
+			astman_send_error(s, m, "Permission denied");
+			mansession_unlock(s);
+		}
 	} else {
 		char buf[512];
 		if (!tmp) {
@@ -5451,6 +5621,39 @@ static void xml_translate(struct ast_str **out, char *in, struct ast_variable *g
 	}
 }
 
+static void process_output(struct mansession *s, struct ast_str *out, struct ast_variable *params, enum output_format format)
+{
+	char *buf;
+	size_t l;
+
+	if (!s->f)
+		return;
+
+	/* Ensure buffer is NULL-terminated */
+	fprintf(s->f, "%c", 0);
+	fflush(s->f);
+
+	if ((l = ftell(s->f))) {
+		if (MAP_FAILED == (buf = mmap(NULL, l, PROT_READ | PROT_WRITE, MAP_PRIVATE, s->fd, 0))) {
+			ast_log(LOG_WARNING, "mmap failed.  Manager output was not processed\n");
+		} else {
+			if (format == FORMAT_XML || format == FORMAT_HTML) {
+				xml_translate(&out, buf, params, format);
+			} else {
+				ast_str_append(&out, 0, "%s", buf);
+			}
+			munmap(buf, l);
+		}
+	} else if (format == FORMAT_XML || format == FORMAT_HTML) {
+		xml_translate(&out, "", params, format);
+	}
+
+	fclose(s->f);
+	s->f = NULL;
+	close(s->fd);
+	s->fd = -1;
+}
+
 static int generic_http_callback(struct ast_tcptls_session_instance *ser,
 					     enum ast_http_method method,
 					     enum output_format format,
@@ -5600,29 +5803,7 @@ static int generic_http_callback(struct ast_tcptls_session_instance *ser,
 		ast_str_append(&out, 0, ROW_FMT, TEST_STRING);
 	}
 
-	if (s.f != NULL) {	/* have temporary output */
-		char *buf;
-		size_t l;
-
-		if ((l = ftell(s.f))) {
-			if (MAP_FAILED == (buf = mmap(NULL, l + 1, PROT_READ | PROT_WRITE, MAP_PRIVATE, s.fd, 0))) {
-				ast_log(LOG_WARNING, "mmap failed.  Manager output was not processed\n");
-			} else {
-				buf[l] = '\0';
-				if (format == FORMAT_XML || format == FORMAT_HTML) {
-					xml_translate(&out, buf, params, format);
-				} else {
-					ast_str_append(&out, 0, "%s", buf);
-				}
-				munmap(buf, l + 1);
-			}
-		} else if (format == FORMAT_XML || format == FORMAT_HTML) {
-			xml_translate(&out, "", params, format);
-		}
-		fclose(s.f);
-		s.f = NULL;
-		s.fd = -1;
-	}
+	process_output(&s, out, params, format);
 
 	if (format == FORMAT_XML) {
 		ast_str_append(&out, 0, "</ajax-response>\n");
@@ -5686,7 +5867,7 @@ static int auth_http_callback(struct ast_tcptls_session_instance *ser,
 					     struct ast_variable *headers)
 {
 	struct mansession_session *session = NULL;
-	struct mansession s = { NULL, };
+	struct mansession s = { .session = NULL, .tcptls_session = ser };
 	struct ast_variable *v, *params = get_params;
 	char template[] = "/tmp/ast-http-XXXXXX";	/* template for temporary file */
 	struct ast_str *http_header = NULL, *out = NULL;
@@ -5934,26 +6115,7 @@ static int auth_http_callback(struct ast_tcptls_session_instance *ser,
 		"<input type=\"submit\" value=\"Send request\" /></th></tr>\r\n");
 	}
 
-	if (s.f != NULL) {	/* have temporary output */
-		char *buf;
-		size_t l = ftell(s.f);
-
-		if (l) {
-			if ((buf = mmap(NULL, l, PROT_READ | PROT_WRITE, MAP_SHARED, s.fd, 0))) {
-				if (format == FORMAT_XML || format == FORMAT_HTML) {
-					xml_translate(&out, buf, params, format);
-				} else {
-					ast_str_append(&out, 0, "%s", buf);
-				}
-				munmap(buf, l);
-			}
-		} else if (format == FORMAT_XML || format == FORMAT_HTML) {
-			xml_translate(&out, "", params, format);
-		}
-		fclose(s.f);
-		s.f = NULL;
-		s.fd = -1;
-	}
+	process_output(&s, out, params, format);
 
 	if (format == FORMAT_XML) {
 		ast_str_append(&out, 0, "</ajax-response>\n");
@@ -6257,6 +6419,7 @@ static int __init_manager(int reload)
 		ast_manager_register_xml("ModuleLoad", EVENT_FLAG_SYSTEM, manager_moduleload);
 		ast_manager_register_xml("ModuleCheck", EVENT_FLAG_SYSTEM, manager_modulecheck);
 		ast_manager_register_xml("AOCMessage", EVENT_FLAG_AOC, action_aocmessage);
+		ast_manager_register_xml("Filter", EVENT_FLAG_SYSTEM, action_filter);
 
 		ast_cli_register_multiple(cli_manager, ARRAY_LEN(cli_manager));
 		ast_extension_state_add(NULL, NULL, manager_state_cb, NULL);
@@ -6536,25 +6699,7 @@ static int __init_manager(int reload)
 				}
 			} else if (!strcasecmp(var->name, "eventfilter")) {
 				const char *value = var->value;
-				regex_t *new_filter = ao2_t_alloc(sizeof(*new_filter), event_filter_destructor, "event_filter allocation");
-				if (new_filter) {
-					int is_blackfilter;
-					if (value[0] == '!') {
-						is_blackfilter = 1;
-						value++;
-					} else {
-						is_blackfilter = 0;
-					}
-					if (regcomp(new_filter, value, 0)) {
-						ao2_t_ref(new_filter, -1, "failed to make regx");
-					} else {
-						if (is_blackfilter) {
-							ao2_t_link(user->blackfilters, new_filter, "link new filter into black user container");
-						} else {
-							ao2_t_link(user->whitefilters, new_filter, "link new filter into white user container");
-						}
-					}
-				}
+                                manager_add_filter(value, user->whitefilters, user->blackfilters);
 			} else {
 				ast_debug(1, "%s is an unknown option.\n", var->name);
 			}

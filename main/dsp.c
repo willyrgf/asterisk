@@ -1103,7 +1103,7 @@ int ast_dsp_call_progress(struct ast_dsp *dsp, struct ast_frame *inf)
 	return __ast_dsp_call_progress(dsp, inf->data.ptr, inf->datalen / 2);
 }
 
-static int __ast_dsp_silence_noise(struct ast_dsp *dsp, short *s, int len, int *totalsilence, int *totalnoise)
+static int __ast_dsp_silence_noise(struct ast_dsp *dsp, short *s, int len, int *totalsilence, int *totalnoise, int *frames_energy)
 {
 	int accum;
 	int x;
@@ -1162,6 +1162,9 @@ static int __ast_dsp_silence_noise(struct ast_dsp *dsp, short *s, int len, int *
 	}
 	if (totalnoise) {
 		*totalnoise = dsp->totalnoise;
+	}
+	if (frames_energy) {
+		*frames_energy = accum;
 	}
 	return res;
 }
@@ -1273,7 +1276,7 @@ int ast_dsp_busydetect(struct ast_dsp *dsp)
 
 	/* If we know the expected busy tone length, check we are in the range */
 	if (res && (dsp->busy_cadence.pattern[0] > 0)) {
-		if (abs(avgtone - dsp->busy_cadence.pattern[0]) > (dsp->busy_cadence.pattern[0]*BUSY_PAT_PERCENT/100)) {
+		if (abs(avgtone - dsp->busy_cadence.pattern[0]) > MAX(dsp->busy_cadence.pattern[0]*BUSY_PAT_PERCENT/100, 20)) {
 #ifdef BUSYDETECT_DEBUG
 			ast_debug(5, "busy detector: avgtone of %d not close enough to desired %d\n",
 				avgtone, dsp->busy_cadence.pattern[0]);
@@ -1284,7 +1287,7 @@ int ast_dsp_busydetect(struct ast_dsp *dsp)
 #ifndef BUSYDETECT_TONEONLY
 	/* If we know the expected busy tone silent-period length, check we are in the range */
 	if (res && (dsp->busy_cadence.pattern[1] > 0)) {
-		if (abs(avgsilence - dsp->busy_cadence.pattern[1]) > (dsp->busy_cadence.pattern[1] * BUSY_PAT_PERCENT / 100)) {
+		if (abs(avgsilence - dsp->busy_cadence.pattern[1]) > MAX(dsp->busy_cadence.pattern[1]*BUSY_PAT_PERCENT/100, 20)) {
 #ifdef BUSYDETECT_DEBUG
 		ast_debug(5, "busy detector: avgsilence of %d not close enough to desired %d\n",
 			avgsilence, dsp->busy_cadence.pattern[1]);
@@ -1318,7 +1321,25 @@ int ast_dsp_silence(struct ast_dsp *dsp, struct ast_frame *f, int *totalsilence)
 	}
 	s = f->data.ptr;
 	len = f->datalen/2;
-	return __ast_dsp_silence_noise(dsp, s, len, totalsilence, NULL);
+	return __ast_dsp_silence_noise(dsp, s, len, totalsilence, NULL, NULL);
+}
+
+int ast_dsp_silence_with_energy(struct ast_dsp *dsp, struct ast_frame *f, int *totalsilence, int *frames_energy)
+{
+	short *s;
+	int len;
+
+	if (f->frametype != AST_FRAME_VOICE) {
+		ast_log(LOG_WARNING, "Can't calculate silence on a non-voice frame\n");
+		return 0;
+	}
+	if (!ast_format_is_slinear(&f->subclass.format)) {
+		ast_log(LOG_WARNING, "Can only calculate silence on signed-linear frames :(\n");
+		return 0;
+	}
+	s = f->data.ptr;
+	len = f->datalen/2;
+	return __ast_dsp_silence_noise(dsp, s, len, totalsilence, NULL, frames_energy);
 }
 
 int ast_dsp_noise(struct ast_dsp *dsp, struct ast_frame *f, int *totalnoise)
@@ -1336,7 +1357,7 @@ int ast_dsp_noise(struct ast_dsp *dsp, struct ast_frame *f, int *totalnoise)
        }
        s = f->data.ptr;
        len = f->datalen/2;
-       return __ast_dsp_silence_noise(dsp, s, len, NULL, totalnoise);
+       return __ast_dsp_silence_noise(dsp, s, len, NULL, totalnoise, NULL);
 }
 
 
@@ -1393,7 +1414,7 @@ struct ast_frame *ast_dsp_process(struct ast_channel *chan, struct ast_dsp *dsp,
 
 	/* Need to run the silence detection stuff for silence suppression and busy detection */
 	if ((dsp->features & DSP_FEATURE_SILENCE_SUPPRESS) || (dsp->features & DSP_FEATURE_BUSY_DETECT)) {
-		res = __ast_dsp_silence_noise(dsp, shortdata, len, &silence, NULL);
+		res = __ast_dsp_silence_noise(dsp, shortdata, len, &silence, NULL, NULL);
 	}
 
 	if ((dsp->features & DSP_FEATURE_SILENCE_SUPPRESS) && silence) {
@@ -1595,6 +1616,9 @@ struct ast_dsp *ast_dsp_new_with_rate(unsigned int sample_rate)
 void ast_dsp_set_features(struct ast_dsp *dsp, int features)
 {
 	dsp->features = features;
+	if (!(features & DSP_FEATURE_DIGIT_DETECT)) {
+		dsp->display_inband_dtmf_warning = 0;
+	}
 }
 
 void ast_dsp_free(struct ast_dsp *dsp)

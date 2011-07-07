@@ -414,6 +414,7 @@ AST_EXT_LIB_SETUP([PGSQL], [PostgreSQL], [postgres])
 AST_EXT_LIB_SETUP([POPT], [popt], [popt])
 AST_EXT_LIB_SETUP([PORTAUDIO], [PortAudio], [portaudio])
 AST_EXT_LIB_SETUP([PRI], [ISDN PRI], [pri])
+AST_EXT_LIB_SETUP_DEPENDENT([PRI_DATETIME_SEND], [ISDN PRI Date/time ie send policy], [PRI], [pri])
 AST_EXT_LIB_SETUP_DEPENDENT([PRI_MWI_V2], [ISDN PRI Message Waiting Indication (Fixed)], [PRI], [pri])
 AST_EXT_LIB_SETUP_DEPENDENT([PRI_DISPLAY_TEXT], [ISDN PRI user display text IE contents during call], [PRI], [pri])
 AST_EXT_LIB_SETUP_DEPENDENT([PRI_MWI], [ISDN PRI Message Waiting Indication], [PRI], [pri])
@@ -1141,6 +1142,8 @@ if test "${USE_GSM}" != "no"; then
 fi
 
 AST_EXT_LIB_CHECK([ICONV], [iconv], [iconv_open], [iconv.h])
+# GNU libiconv #define's iconv_open to libiconv_open, so we need to search for that symbol
+AST_EXT_LIB_CHECK([ICONV], [iconv], [libiconv_open], [iconv.h])
 # Some versions of Linux package iconv in glibc
 AST_EXT_LIB_CHECK([ICONV], [c], [iconv_close], [iconv.h])
 
@@ -1823,6 +1826,7 @@ AST_EXT_LIB_CHECK([POPT], [popt], [poptStrerror], [popt.h])
 AST_EXT_LIB_CHECK([PORTAUDIO], [portaudio], [Pa_GetDeviceCount], [portaudio.h])
 
 AST_EXT_LIB_CHECK([PRI], [pri], [pri_connected_line_update], [libpri.h])
+AST_EXT_LIB_CHECK([PRI_DATETIME_SEND], [pri], [pri_date_time_send_option], [libpri.h])
 AST_EXT_LIB_CHECK([PRI_MWI_V2], [pri], [pri_mwi_indicate_v2], [libpri.h])
 AST_EXT_LIB_CHECK([PRI_DISPLAY_TEXT], [pri], [pri_display_text], [libpri.h])
 AST_EXT_LIB_CHECK([PRI_MWI], [pri], [pri_mwi_indicate], [libpri.h])
@@ -2016,20 +2020,19 @@ then
 fi
 
 AST_EXT_TOOL_CHECK([GMIME], [gmime-config], [], [], [#include <gmime/gmime.h>], [gboolean q = g_mime_check_version(0,0,0);])
-if test "x${PBX_GMIME}" = "x0"; then
+if test "x${PBX_GMIME}" = "x0" -a "${PKGCONFIG}" != "No"; then
 	# Later versions of GMime use pkg-config
-	if test "x${PKGCONFIG}" = xNo; then :; else
-		GMIME_INCLUDE=$(${PKGCONFIG} gmime-2.0 --cflags 2>/dev/null)
-		GMIME_LIB=$(${PKGCONFIG} gmime-2.0 --libs)
-		if test "x${GMIME_INCLUDE}${GMIME_LIB}" = "x"; then 
-			GMIME_INCLUDE=$(${PKGCONFIG} gmime-2.2 --cflags 2>/dev/null)
-			GMIME_LIB=$(${PKGCONFIG} gmime-2.2 --libs)
+	for ver in 2.0 2.2 2.4; do
+		if ! ${PKGCONFIG} --exists gmime-$ver; then
+			continue
 		fi
-		if test "x${GMIME_INCLUDE}${GMIME_LIB}" != "x"; then
-			PBX_GMIME=1
-			AC_DEFINE([HAVE_GMIME], 1, [Define if your system has the GMIME libraries.])
-		fi
-	fi
+		# If we got here, we have this version:
+		GMIME_INCLUDE=$(${PKGCONFIG} gmime-$ver --cflags 2>/dev/null)
+		GMIME_LIB=$(${PKGCONFIG} gmime-$ver --libs)
+		PBX_GMIME=1
+		AC_DEFINE([HAVE_GMIME], 1, [Define if your system has the GMIME libraries.])
+		break;
+	done
 fi
 
 AST_EXT_LIB_CHECK([HOARD], [hoard], [malloc], [])
@@ -2171,7 +2174,7 @@ fi
 AC_SUBST(PBX_LAUNCHD)
 
 PBX_GTK2=0
-if test ! "x${PKGCONFIG}" = xNo; then
+if test "${PKGCONFIG}" != "No"; then
    GTK2_INCLUDE=$(${PKGCONFIG} gtk+-2.0 --cflags 2>/dev/null)
    GTK2_LIB=$(${PKGCONFIG} gtk+-2.0 --libs)
    PBX_GTK2=1

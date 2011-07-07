@@ -1087,12 +1087,19 @@ int ast_safe_system(const char *s)
 	return res;
 }
 
+/*!
+ * \brief enable or disable a logging level to a specified console
+ */
 void ast_console_toggle_loglevel(int fd, int level, int state)
 {
 	int x;
 	for (x = 0;x < AST_MAX_CONNECTS; x++) {
 		if (fd == consoles[x].fd) {
-			consoles[x].levels[level] = state;
+			/*
+			 * Since the logging occurs when levels are false, set to
+			 * flipped iinput because this function accepts 0 as off and 1 as on
+			 */
+			consoles[x].levels[level] = state ? 0 : 1;
 			return;
 		}
 	}
@@ -1477,7 +1484,7 @@ static struct sigaction urg_handler = {
 
 static void _hup_handler(int num)
 {
-	int a = 0;
+	int a = 0, save_errno = errno;
 	if (option_verbose > 1) 
 		printf("Received HUP signal -- Reloading configs\n");
 	if (restartnow)
@@ -1488,6 +1495,7 @@ static void _hup_handler(int num)
 			fprintf(stderr, "hup_handler: write() failed: %s\n", strerror(errno));
 		}
 	}
+	errno = save_errno;
 }
 
 static struct sigaction hup_handler = {
@@ -1498,7 +1506,7 @@ static struct sigaction hup_handler = {
 static void _child_handler(int sig)
 {
 	/* Must not ever ast_log or ast_verbose within signal handler */
-	int n, status;
+	int n, status, save_errno = errno;
 
 	/*
 	 * Reap all dead children -- not just one
@@ -1507,6 +1515,7 @@ static void _child_handler(int sig)
 		;
 	if (n == 0 && option_debug)	
 		printf("Huh?  Child handler, but nobody there?\n");
+	errno = save_errno;
 }
 
 static struct sigaction child_handler = {
@@ -2569,7 +2578,13 @@ static char *cli_complete(EditLine *editline, int ch)
 static int ast_el_initialize(void)
 {
 	HistEvent ev;
-	char *editor = getenv("AST_EDITOR");
+	char *editor, *editrc = getenv("EDITRC");
+
+	if (!(editor = getenv("AST_EDITMODE"))) {
+		if (!(editor = getenv("AST_EDITOR"))) {
+			editor = "emacs";
+		}
+	}
 
 	if (el != NULL)
 		el_end(el);
@@ -2580,7 +2595,7 @@ static int ast_el_initialize(void)
 	el_set(el, EL_PROMPT, cli_prompt);
 
 	el_set(el, EL_EDITMODE, 1);		
-	el_set(el, EL_EDITOR, editor ? editor : "emacs");		
+	el_set(el, EL_EDITOR, editor);
 	el_hist = history_init();
 	if (!el || !el_hist)
 		return -1;
@@ -2597,6 +2612,18 @@ static int ast_el_initialize(void)
 	el_set(el, EL_BIND, "?", "ed-complete", NULL);
 	/* Bind ^D to redisplay */
 	el_set(el, EL_BIND, "^D", "ed-redisplay", NULL);
+	/* Bind Delete to delete char left */
+	el_set(el, EL_BIND, "\\e[3~", "ed-delete-next-char", NULL);
+	/* Bind Home and End to move to line start and end */
+	el_set(el, EL_BIND, "\\e[1~", "ed-move-to-beg", NULL);
+	el_set(el, EL_BIND, "\\e[4~", "ed-move-to-end", NULL);
+	/* Bind C-left and C-right to move by word (not all terminals) */
+	el_set(el, EL_BIND, "\\eOC", "vi-next-word", NULL);
+	el_set(el, EL_BIND, "\\eOD", "vi-prev-word", NULL);
+
+	if (editrc) {
+		el_source(el, editrc);
+	}
 
 	return 0;
 }
@@ -3731,6 +3758,11 @@ int main(int argc, char *argv[])
 	/* Load XML documentation. */
 	ast_xmldoc_load_documentation();
 #endif
+
+	if (ast_msg_init()) {
+		printf("%s", term_quit());
+		exit(1);
+	}
 
 	/* initialize the data retrieval API */
 	if (ast_data_init()) {

@@ -98,7 +98,10 @@ void ast_console_puts_mutable(const char *string, int level);
 void ast_console_toggle_mute(int fd, int silent);
 
 /*!
- * \since 1.6.1
+ * \brief enables or disables logging of a specified level to the console
+ * fd specifies the index of the console receiving the level change
+ * level specifies the index of the logging level being toggled
+ * state indicates whether logging will be on or off (0 for off, 1 for on)
  */
 void ast_console_toggle_loglevel(int fd, int level, int state);
 
@@ -178,7 +181,7 @@ void ast_console_toggle_loglevel(int fd, int level, int state);
 #endif
 #define AST_LOG_DTMF    __LOG_DTMF, _A_
 
-#define NUMLOGLEVELS 6
+#define NUMLOGLEVELS 7
 
 /*!
  * \brief Get the debug level for a module

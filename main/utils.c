@@ -1733,13 +1733,14 @@ void __ast_string_field_release_active(struct ast_string_field_pool *pool_head,
 
 void __ast_string_field_ptr_build_va(struct ast_string_field_mgr *mgr,
 				     struct ast_string_field_pool **pool_head,
-				     ast_string_field *ptr, const char *format, va_list ap1, va_list ap2)
+				     ast_string_field *ptr, const char *format, va_list ap)
 {
 	size_t needed;
 	size_t available;
 	size_t space = (*pool_head)->size - (*pool_head)->used;
 	ssize_t grow;
 	char *target;
+	va_list ap2;
 
 	/* if the field already has space allocated, try to reuse it;
 	   otherwise, try to use the empty space at the end of the current
@@ -1762,9 +1763,9 @@ void __ast_string_field_ptr_build_va(struct ast_string_field_mgr *mgr,
 		available = space - sizeof(ast_string_field_allocation);
 	}
 
-	needed = vsnprintf(target, available, format, ap1) + 1;
-
-	va_end(ap1);
+	va_copy(ap2, ap);
+	needed = vsnprintf(target, available, format, ap2) + 1;
+	va_end(ap2);
 
 	if (needed > available) {
 		/* the allocation could not be satisfied using the field's current allocation
@@ -1774,7 +1775,8 @@ void __ast_string_field_ptr_build_va(struct ast_string_field_mgr *mgr,
 		if (!(target = (char *) __ast_string_field_alloc_space(mgr, pool_head, needed))) {
 			return;
 		}
-		vsprintf(target, format, ap2);
+		vsprintf(target, format, ap);
+		va_end(ap);
 		__ast_string_field_release_active(*pool_head, *ptr);
 		*ptr = target;
 	} else if (*ptr != target) {
@@ -1800,15 +1802,11 @@ void __ast_string_field_ptr_build(struct ast_string_field_mgr *mgr,
 				  struct ast_string_field_pool **pool_head,
 				  ast_string_field *ptr, const char *format, ...)
 {
-	va_list ap1, ap2;
+	va_list ap;
 
-	va_start(ap1, format);
-	va_start(ap2, format);		/* va_copy does not exist on FreeBSD */
-
-	__ast_string_field_ptr_build_va(mgr, pool_head, ptr, format, ap1, ap2);
-
-	va_end(ap1);
-	va_end(ap2);
+	va_start(ap, format);
+	__ast_string_field_ptr_build_va(mgr, pool_head, ptr, format, ap);
+	va_end(ap);
 }
 
 void *__ast_calloc_with_stringfields(unsigned int num_structs, size_t struct_size, size_t field_mgr_offset,
@@ -1995,7 +1993,7 @@ int ast_utils_init(void)
  */
 int ast_parse_digest(const char *digest, struct ast_http_digest *d, int request, int pedantic) {
 	int i;
-	char *c, key[512], val[512], tmp[512];
+	char *c, key[512], val[512];
 	struct ast_str *str = ast_str_create(16);
 
 	if (ast_strlen_zero(digest) || !d || !str) {
@@ -2007,7 +2005,7 @@ int ast_parse_digest(const char *digest, struct ast_http_digest *d, int request,
 
 	c = ast_skip_blanks(ast_str_buffer(str));
 
-	if (strncasecmp(tmp, "Digest ", strlen("Digest "))) {
+	if (strncasecmp(c, "Digest ", strlen("Digest "))) {
 		ast_log(LOG_WARNING, "Missing Digest.\n");
 		ast_free(str);
 		return -1;

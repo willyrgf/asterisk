@@ -576,10 +576,10 @@ struct ast_channel_tech {
 	/*! \brief Fix up a channel:  If a channel is consumed, this is called.  Basically update any ->owner links */
 	int (* const fixup)(struct ast_channel *oldchan, struct ast_channel *newchan);
 
-	/*! \brief Set a given option */
+	/*! \brief Set a given option. Called with chan locked */
 	int (* const setoption)(struct ast_channel *chan, int option, void *data, int datalen);
 
-	/*! \brief Query a given option */
+	/*! \brief Query a given option. Called with chan locked */
 	int (* const queryoption)(struct ast_channel *chan, int option, void *data, int *datalen);
 
 	/*! \brief Blind transfer other side (see app_transfer.c and ast_transfer() */
@@ -632,6 +632,9 @@ struct ast_channel_tech {
 	 */
 	int (* cc_callback)(struct ast_channel *inbound, const char *dest, ast_cc_callback_fn callback);
 };
+
+/*! Kill the channel channel driver technology descriptor. */
+extern const struct ast_channel_tech ast_kill_tech;
 
 struct ast_epoll_data;
 
@@ -3492,5 +3495,15 @@ int ast_channel_get_cc_agent_type(struct ast_channel *chan, char *agent_type, si
 #if defined(__cplusplus) || defined(c_plusplus)
 }
 #endif
+
+/*!
+ * \brief Remove a channel from the global channels container
+ *
+ * \param chan channel to remove
+ *
+ * In a case where it is desired that a channel not be available in any lookups
+ * in the global channels conatiner, use this function.
+ */
+void ast_channel_unlink(struct ast_channel *chan);
 
 #endif /* _ASTERISK_CHANNEL_H */

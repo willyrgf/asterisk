@@ -1150,7 +1150,9 @@ static void moh_rescan_files(void) {
 	i = ao2_iterator_init(mohclasses, 0);
 
 	while ((c = ao2_iterator_next(&i))) {
-		moh_scan_files(c);
+		if (!strcasecmp(c->mode, "files")) {
+			moh_scan_files(c);
+		}
 		ao2_ref(c, -1);
 	}
 
@@ -1650,14 +1652,15 @@ static int load_moh_classes(int reload)
 
 	cfg = ast_config_load("musiconhold.conf", config_flags);
 
-	if (cfg == CONFIG_STATUS_FILEMISSING || cfg == CONFIG_STATUS_FILEUNCHANGED || cfg == CONFIG_STATUS_FILEINVALID) {
+	if (cfg == CONFIG_STATUS_FILEMISSING || cfg == CONFIG_STATUS_FILEINVALID) {
 		if (ast_check_realtime("musiconhold") && reload) {
 			ao2_t_callback(mohclasses, OBJ_NODATA, moh_class_mark, NULL, "Mark deleted classes");
 			ao2_t_callback(mohclasses, OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE, moh_classes_delete_marked, NULL, "Purge marked classes");
 		}
-		if (cfg == CONFIG_STATUS_FILEUNCHANGED) {
-			moh_rescan_files();
-		}
+		return 0;
+	}
+	if (cfg == CONFIG_STATUS_FILEUNCHANGED) {
+		moh_rescan_files();
 		return 0;
 	}
 

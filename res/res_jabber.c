@@ -32,7 +32,7 @@
 
 /*** MODULEINFO
 	<depend>iksemel</depend>
-	<use>openssl</use>
+	<use type="external">openssl</use>
  ***/
 
 #include "asterisk.h"
@@ -60,6 +60,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/manager.h"
 #include "asterisk/event.h"
 #include "asterisk/devicestate.h"
+#include "asterisk/message.h"
 
 /*** DOCUMENTATION
 	<application name="JabberSend" language="en_US">
@@ -372,6 +373,13 @@ static int aji_create_transport(char *label, struct aji_client *client);
 static int aji_register_transport(void *data, ikspak *pak);
 static int aji_register_transport2(void *data, ikspak *pak);
 */
+
+static int msg_send_cb(const struct ast_msg *msg, const char *to, const char *from);
+
+static const struct ast_msg_tech msg_tech = {
+	.name = "xmpp",
+	.msg_send = msg_send_cb,
+};
 
 static struct ast_cli_entry aji_cli[] = {
 	AST_CLI_DEFINE(aji_do_set_debug, "Enable/Disable Jabber debug"),
@@ -1134,6 +1142,44 @@ static int aji_send_exec(struct ast_channel *chan, const char *data)
 		ast_aji_send_chat(client, args.recipient, args.message);
 	}
 	return 0;
+}
+
+static int msg_send_cb(const struct ast_msg *msg, const char *to, const char *from)
+{
+	struct aji_client *client;
+	char *sender;
+	char *dest;
+	int res;
+
+	sender = ast_strdupa(from);
+	strsep(&sender, ":");
+	dest = ast_strdupa(to);
+	strsep(&dest, ":");
+
+	if (ast_strlen_zero(sender)) {
+		ast_log(LOG_ERROR, "MESSAGE(from) of '%s' invalid for xmpp\n", from);
+		return -1;
+	}
+
+	if (!(client = ast_aji_get_client(sender))) {
+		ast_log(LOG_WARNING, "Could not finder account to send from as '%s'\n", sender);
+		return -1;
+	}
+
+
+	ast_debug(1, "Sending message to '%s' from '%s'\n", dest, client->name);
+
+	res = ast_aji_send_chat(client, dest, ast_msg_get_body(msg));
+	if (res != IKS_OK) {
+		ast_log(LOG_WARNING, "Failed to send xmpp message (%d).\n", res);
+	}
+
+	/* 
+	 * XXX Reference leak here.  See note with ast_aji_get_client() about the problems
+	 * with that function.
+	 */
+
+	return res == IKS_OK ? 0 : -1;
 }
 
 /*!
@@ -2218,6 +2264,7 @@ static void aji_handle_message(struct aji_client *client, ikspak *pak)
 {
 	struct aji_message *insert;
 	int deleted = 0;
+	struct ast_msg *msg;
 
 	ast_debug(3, "client %s received a message\n", client->name);
 
@@ -2246,6 +2293,25 @@ static void aji_handle_message(struct aji_client *client, ikspak *pak)
 			return;
 		}
 		ast_debug(3, "message comes from %s\n", insert->from);
+	}
+
+	if (client->send_to_dialplan) {
+		if ((msg = ast_msg_alloc())) {
+			int res;
+
+			res = ast_msg_set_to(msg, "xmpp:%s", client->user);
+			res |= ast_msg_set_from(msg, "xmpp:%s", insert->from);
+			res |= ast_msg_set_body(msg, "%s", insert->message);
+			res |= ast_msg_set_context(msg, "%s", client->context);
+
+			if (res) {
+				ast_msg_destroy(msg);
+			} else {
+				ast_msg_queue(msg);
+			}
+
+			msg = NULL;
+		}
 	}
 
 	/* remove old messages received from this JID
@@ -2873,7 +2939,6 @@ static int aji_register_transport2(void *data, ikspak *pak)
  */
 static void aji_pruneregister(struct aji_client *client)
 {
-	int res = 0;
 	iks *removeiq = iks_new("iq");
 	iks *removequery = iks_new("query");
 	iks *removeitem = iks_new("item");
@@ -2890,10 +2955,10 @@ static void aji_pruneregister(struct aji_client *client)
 		/* For an aji_buddy, both AUTOPRUNE and AUTOREGISTER will never
 		 * be called at the same time */
 		if (ast_test_flag(&iterator->flags, AJI_AUTOPRUNE)) { /* If autoprune is set on jabber.conf */
-			res = ast_aji_send(client, iks_make_s10n(IKS_TYPE_UNSUBSCRIBE, iterator->name,
+			ast_aji_send(client, iks_make_s10n(IKS_TYPE_UNSUBSCRIBE, iterator->name,
 								 "GoodBye. Your status is no longer needed by Asterisk the Open Source PBX"
 								 " so I am no longer subscribing to your presence.\n"));
-			res = ast_aji_send(client, iks_make_s10n(IKS_TYPE_UNSUBSCRIBED, iterator->name,
+			ast_aji_send(client, iks_make_s10n(IKS_TYPE_UNSUBSCRIBED, iterator->name,
 								 "GoodBye.  You are no longer in the Asterisk config file so I am removing"
 								 " your access to my presence.\n"));
 			iks_insert_attrib(removeiq, "from", client->jid->full);
@@ -2901,9 +2966,9 @@ static void aji_pruneregister(struct aji_client *client)
 			iks_insert_attrib(removequery, "xmlns", "jabber:iq:roster");
 			iks_insert_attrib(removeitem, "jid", iterator->name);
 			iks_insert_attrib(removeitem, "subscription", "remove");
-			res = ast_aji_send(client, removeiq);
+			ast_aji_send(client, removeiq);
 		} else if (ast_test_flag(&iterator->flags, AJI_AUTOREGISTER)) {
-			res = ast_aji_send(client, iks_make_s10n(IKS_TYPE_SUBSCRIBE, iterator->name,
+			ast_aji_send(client, iks_make_s10n(IKS_TYPE_SUBSCRIBE, iterator->name,
 								 "Greetings! I am the Asterisk Open Source PBX and I want to subscribe to your presence\n"));
 			ast_clear_flag(&iterator->flags, AJI_AUTOREGISTER);
 		}
@@ -3287,7 +3352,6 @@ static int aji_handle_pubsub_event(void *data, ikspak *pak)
  */
 static void aji_create_affiliations(struct aji_client *client, const char *node)
 {
-	int res = 0;
 	iks *modify_affiliates = aji_pubsub_iq_create(client, "set");
 	iks *pubsub, *affiliations, *affiliate;
 	pubsub = iks_insert(modify_affiliates, "pubsub");
@@ -3301,7 +3365,7 @@ static void aji_create_affiliations(struct aji_client *client, const char *node)
 		iks_insert_attrib(affiliate, "affiliation", "owner");
 		ASTOBJ_UNLOCK(iterator);
 	});
-	res = ast_aji_send(client, modify_affiliates);
+	ast_aji_send(client, modify_affiliates);
 	iks_delete(modify_affiliates);
 }
 
@@ -3503,13 +3567,12 @@ static int aji_handle_pubsub_error(void *data, ikspak *pak)
  */
 static void aji_request_pubsub_nodes(struct aji_client *client, const char *collection)
 {
-	int res = 0;
 	iks *request = aji_build_node_request(client, collection);
 
 	iks_filter_add_rule(client->f, aji_receive_node_list, client, IKS_RULE_TYPE,
 		IKS_PAK_IQ, IKS_RULE_SUBTYPE, IKS_TYPE_RESULT, IKS_RULE_ID, client->mid,
 		IKS_RULE_DONE);
-	res = ast_aji_send(client, request);
+	ast_aji_send(client, request);
 	iks_delete(request);
 
 }
@@ -3646,13 +3709,12 @@ static char *aji_cli_purge_pubsub_nodes(struct ast_cli_entry *e, int cmd, struct
 
 static void aji_pubsub_purge_nodes(struct aji_client *client, const char* collection_name)
 {
-	int res = 0;
 	iks *request = aji_build_node_request(client, collection_name);
 	ast_aji_send(client, request);
 	iks_filter_add_rule(client->f, aji_delete_node_list, client, IKS_RULE_TYPE,
 		IKS_PAK_IQ, IKS_RULE_SUBTYPE, IKS_TYPE_RESULT, IKS_RULE_ID, client->mid,
 		IKS_RULE_DONE);
-	res = ast_aji_send(client, request);
+	ast_aji_send(client, request);
 	iks_delete(request);
 }
 
@@ -3772,15 +3834,14 @@ const char *leaf_name)
 static iks* aji_create_pubsub_node(struct aji_client *client, const char *node_type, const
 		char *name, const char *collection_name)
 {
-	int res = 0;
 	iks *node = aji_pubsub_iq_create(client, "set");
-	iks *pubsub, *create, *configure;
+	iks *pubsub, *create;
 	pubsub = iks_insert(node, "pubsub");
 	iks_insert_attrib(pubsub, "xmlns", "http://jabber.org/protocol/pubsub");
 	create = iks_insert(pubsub, "create");
 	iks_insert_attrib(create, "node", name);
-	configure = aji_build_node_config(pubsub, node_type, collection_name);
-	res = ast_aji_send(client, node);
+	aji_build_node_config(pubsub, node_type, collection_name);
+	ast_aji_send(client, node);
 	aji_create_affiliations(client, name);
 	iks_delete(node);
 	return 0;
@@ -3924,7 +3985,6 @@ static char *aji_cli_create_leafnode(struct ast_cli_entry *e, int cmd, struct as
  */
 static void aji_set_presence(struct aji_client *client, char *to, char *from, int level, char *desc)
 {
-	int res = 0;
 	iks *presence = iks_make_pres(level, desc);
 	iks *cnode = iks_new("c");
 	iks *priority = iks_new("priority");
@@ -3945,7 +4005,7 @@ static void aji_set_presence(struct aji_client *client, char *to, char *from, in
 		iks_insert_attrib(cnode, "ext", "voice-v1");
 		iks_insert_attrib(cnode, "xmlns", "http://jabber.org/protocol/caps");
 		iks_insert_node(presence, cnode);
-		res = ast_aji_send(client, presence);
+		ast_aji_send(client, presence);
 	} else {
 		ast_log(LOG_ERROR, "Out of memory.\n");
 	}
@@ -4254,6 +4314,7 @@ static int aji_create_client(char *label, struct ast_variable *var, int debug)
 	ASTOBJ_CONTAINER_MARKALL(&client->buddies);
 	ast_copy_string(client->name, label, sizeof(client->name));
 	ast_copy_string(client->mid, "aaaaa", sizeof(client->mid));
+	ast_copy_string(client->context, "default", sizeof(client->context));
 
 	/* Set default values for the client object */
 	client->debug = debug;
@@ -4271,6 +4332,7 @@ static int aji_create_client(char *label, struct ast_variable *var, int debug)
 	ast_copy_string(client->statusmessage, "Online and Available", sizeof(client->statusmessage));
 	client->priority = 0;
 	client->status = IKS_SHOW_AVAILABLE;
+	client->send_to_dialplan = 0;
 
 	if (flag) {
 		client->authorized = 0;
@@ -4362,6 +4424,10 @@ static int aji_create_client(char *label, struct ast_variable *var, int debug)
 			} else {
 				ast_log(LOG_WARNING, "Unknown presence status: %s\n", var->value);
 			}
+		} else if (!strcasecmp(var->name, "context")) {
+			ast_copy_string(client->context, var->value, sizeof(client->context));
+		} else if (!strcasecmp(var->name, "sendtodialplan")) {
+			client->send_to_dialplan = ast_true(var->value) ? 1 : 0;
 		}
 	/* no transport support in this version */
 	/*	else if (!strcasecmp(var->name, "transport"))
@@ -4559,6 +4625,13 @@ static int aji_load_config(int reload)
  * (without the resource string)
  * \param name label or JID
  * \return aji_client.
+ *
+ * XXX \bug This function leads to reference leaks all over the place.
+ *          ASTOBJ_CONTAINER_FIND() returns a reference, but if the
+ *          client is found via the traversal, no reference is returned.
+ *          None of the calling code releases references.  This code needs
+ *          to be changed to always return a reference, and all of the users
+ *          need to be fixed to release them.
  */
 struct aji_client *ast_aji_get_client(const char *name)
 {
@@ -4674,7 +4747,7 @@ static int aji_reload(int reload)
  */
 static int unload_module(void)
 {
-
+	ast_msg_tech_unregister(&msg_tech);
 	ast_cli_unregister_multiple(aji_cli, ARRAY_LEN(aji_cli));
 	ast_unregister_application(app_ajisend);
 	ast_unregister_application(app_ajisendgroup);
@@ -4727,6 +4800,7 @@ static int load_module(void)
 	ast_cli_register_multiple(aji_cli, ARRAY_LEN(aji_cli));
 	ast_custom_function_register(&jabberstatus_function);
 	ast_custom_function_register(&jabberreceive_function);
+	ast_msg_tech_register(&msg_tech);
 
 	ast_mutex_init(&messagelock);
 	ast_cond_init(&message_received_condition, NULL);

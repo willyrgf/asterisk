@@ -12,9 +12,23 @@
 --- Functionality changes from Asterisk 1.8 to Asterisk 1.10 -----------------
 ------------------------------------------------------------------------------
 
+Text Messaging
+--------------
+ * Asterisk now has protocol independent support for processing text messages
+   outside of a call.  Messages are routed through the Asterisk dialplan.
+   SIP MESSAGE and XMPP are currently supported.  There are options in
+   jabber.conf and sip.conf to allow enabling these features.
+     -> jabber.conf: see the "sendtodialplan" and "context" options.
+     -> sip.conf: see the "accept_outofcall_message", "auth_message_requests"
+        and "outofcall_message_context" options.
+   The MESSAGE() dialplan function and MessageSend() application have been
+   added to go along with this functionality.  More detailed usage information
+   can be found on the Asterisk wiki (http://wiki.asterisk.org/).
+
 Parking
 -------
  * parkedmusicclass can now be set for non-default parking lots.
+ * ParkedCall application can now specify a specific parkinglot.
 
 Asterisk Manager Interface
 --------------------------
@@ -26,6 +40,10 @@ Asterisk Manager Interface
  * DAHDIShowChannels, SIPshowpeer, SIPpeers, and IAXpeers now contains a
    Description field that is set by 'description' in the channel configuration
    file.
+ * Added Uniqueid header to UserEvent.
+ * Added new action FilterAdd to control event filters for the current session.
+   This requires the system permission and uses the same filter syntax as
+   filters that can be defined in manager.conf
 
 Asterisk HTTP Server
 --------------------------
@@ -64,6 +82,11 @@ ConfBridge
    mixing audio at sample rates ranging from 8khz-96khz.
  * CONFBRIDGE dialplan function capable of creating dynamic ConfBridge user
    and bridge profiles on a channel.
+ * CONFBRIDGE_INFO dialplan function capable of retreiving information 
+   about a conference such as locked status and number of parties, admins,
+   and marked users.
+ * Addition of video_mode option in confbridge.conf for adding video support
+   into a bridge profile.
 
 Dialplan Variables
 ------------------
@@ -79,6 +102,10 @@ Dialplan Functions
    have the rx streams jitterbuffered before conference mixing occurs.
  * Added DB_KEYS, which lists the next set of keys in the Asterisk database
    hierarchy.
+ * Added STRREPLACE function.  This function let's the user search a variable
+   for a given string to replace with another string as many times as the
+   user specifies or just throughout the whole string.
+ * Added option to CHANNEL(pickupgroup) allow reading and setting the pickupgroup of channel.
 
 libpri channel driver (chan_dahdi) DAHDI changes
 --------------------------
@@ -93,6 +120,8 @@ Calendaring
 --------------------------
  * Added setvar option to calendar.conf to allow setting channel variables on
    notification channels.
+ * Added "calendar show types" CLI command to list registered calendar
+   connectors.
 
 MixMonitor
 --------------------------
@@ -113,6 +142,58 @@ Meetme
  * Added option "k" that will automatically close the conference when there's
    only one person left when a user exits the conference.
 
+CEL
+--------------------------
+ * cel_pgsql now supports the 'extra' column for data added using the
+   CELGenUserEvent() application.
+
+pbx_lua
+--------------------------
+ * Support for defining hints has been added to pbx_lua.  See the 'hints' table
+   in the sample extensions.lua file for syntax details.
+ * Applications that perform jumps in the dialplan such as Goto will now
+   execute properly.  When pbx_lua detects that the context, extension, or
+   priority we are executing on has changed it will immediatly return control
+   to the asterisk PBX engine.  Currently the engine cannot detect a Goto to
+   the priority after the currently executing priority.
+ * An autoservice is now started by default for pbx_lua channels.  It can be
+   stopped and restarted using the autoservice_stop() and autoservice_start()
+   functions.
+
+res_fax
+--------------------------
+ * The ReceiveFAXStatus and SendFAXStatus manager events have been consolidated
+   into a FAXStatus event with an 'Operation' header that will be either
+   'send', 'receive', and 'gateway'.
+ * T.38 gateway functionality has been added to res_fax (and res_fax_spandsp).
+   Set FAXOPT(gateway)=yes to enable this functionality on a channel. This
+   feature will handle converting a fax call between an audio T.30 fax terminal
+   and an IFP T.38 fax terminal.
+
+SIP Changes
+-----------
+ * Add T38 support for REJECTED state where T.38 Negotiation is explicitly rejected.
+
+Queue changes
+-------------
+ * Added general option negative_penalty_invalid default off. when set
+   members are seen as invalid/logged out when there penalty is negative.
+   for realtime members when set remove from queue will set penalty to -1.
+ * Added queue option autopausedelay when autopause is enabled it will be
+   delayed for this number of seconds since last successful call if there
+   was no prior call the agent will be autopaused immediately.
+ * Added member option ignorebusy this when set and ringinuse is not
+   will allow per member control of multiple calls as ringinuse does for
+   the Queue.
+
+Applications
+------------
+ * Added 'v' option to MeetMe to play voicemail greetings when a user joins/leaves
+   a MeetMe conference
+ * Added ability to include '@parkinglot' to ParkedCall extension in order to specify
+   a specific parkinglot on which to search the extension.
+
+>>>>>>> .merge-right.r326544
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 1.6.2 to Asterisk 1.8 ----------------
 ------------------------------------------------------------------------------
@@ -286,8 +367,6 @@ Applications
    notices a change.
  * Voicemail now includes rdnis within msgXXXX.txt file.
  * Added 'D' command to ExternalIVR full details in doc/externalivr.txt
- * Added 'v' option to MeetMe to play voicemail greetings when a user joins/leaves
-   a MeetMe conference
 
 Dialplan Functions
 ------------------
@@ -543,6 +622,8 @@ Asterisk Manager Interface
  * Added a new eventfilter option per user to allow whitelisting and blacklisting
    of events.
  * Added optional parkinglot variable for park command.
+ * Added ConnectedLineNum and ConnectedLineName headers to AMI events/responses
+   if CallerIDNum and CallerIDName headers are also present.
 
 Channel Event Logging
 ---------------------
