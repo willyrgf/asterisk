@@ -19137,11 +19137,11 @@ static int build_reply_digest(struct sip_pvt *p, int method, char* digest, int d
 	struct sip_auth_container *credentials;
 
 	if (!ast_strlen_zero(p->domain))
-		ast_copy_string(uri, p->domain, sizeof(uri));
+		snprintf(uri, sizeof(uri), "%s:%s", p->socket.type == SIP_TRANSPORT_TLS ? "sips" : "sip", p->domain);
 	else if (!ast_strlen_zero(p->uri))
 		ast_copy_string(uri, p->uri, sizeof(uri));
 	else
-		snprintf(uri, sizeof(uri), "sip:%s@%s", p->username, ast_sockaddr_stringify_host_remote(&p->sa));
+		snprintf(uri, sizeof(uri), "%s:%s@%s", p->socket.type == SIP_TRANSPORT_TLS ? "sips" : "sip", p->username, ast_sockaddr_stringify_host_remote(&p->sa));
 
 	snprintf(cnonce, sizeof(cnonce), "%08lx", ast_random());
 
