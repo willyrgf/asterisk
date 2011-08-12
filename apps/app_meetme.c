@@ -634,9 +634,9 @@ enum {
 /* These flags are defined separately because we ran out of bits that an enum can be used to represent. 
    If you add new flags, be sure to do it in the same way that these are. */
 /*! Do not write any audio to this channel until the state is up. */
-#define CONFFLAG_NO_AUDIO_UNTIL_UP  (1UL << 31)
-#define CONFFLAG_INTROMSG           (1UL << 32) /*!< If set play an intro announcement at start of conference */
-#define CONFFLAG_INTROUSER_VMREC    (1UL << 33)
+#define CONFFLAG_NO_AUDIO_UNTIL_UP  (1ULL << 31)
+#define CONFFLAG_INTROMSG           (1ULL << 32) /*!< If set play an intro announcement at start of conference */
+#define CONFFLAG_INTROUSER_VMREC    (1ULL << 33)
 /*! If there's only one person left in a conference when someone leaves, kill the conference */
 #define CONFFLAG_KILL_LAST_MAN_STANDING ((uint64_t)1 << 34)
 
