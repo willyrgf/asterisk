@@ -3496,7 +3496,7 @@ int ast_write(struct ast_channel *chan, struct ast_frame *fr)
 			if (old_frame != fr)
 				f = fr;
 		}
-		ast_log(LOG_DEBUG, "---Continue FRAME received, forwarding to channel %s", chan->name);
+		ast_log(LOG_DEBUG, "---Continue FRAME received, forwarding to channel %s\n", chan->name);
 		// Skip manager for continue events (at least for now)
 		//send_dtmf_event(chan, "Sent", fr->subclass, "Yes", "No");
 		ast_clear_flag(chan, AST_FLAG_BLOCKING);

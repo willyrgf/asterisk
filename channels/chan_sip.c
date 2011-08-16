@@ -5511,8 +5511,9 @@ static int sip_senddigit_continue(struct ast_channel *ast, char digit, unsigned 
 	sip_pvt_lock(p);
 	switch (ast_test_flag(&p->flags[0], SIP_DTMF)) {
 	case SIP_DTMF_RFC2833:
-		if (p->rtp)
+		if (p->rtp) {
 			ast_rtp_senddigit_continue(p->rtp, digit, duration);
+		}
 		break;
 	}
 	sip_pvt_unlock(p);

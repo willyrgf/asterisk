@@ -413,15 +413,17 @@ static int local_digit_continue(struct ast_channel *ast, char digit, unsigned in
 	struct ast_frame f = { AST_FRAME_DTMF_CONTINUE, };
 	int isoutbound;
 
-	if (!p)
+	if (!p) {
 		return -1;
+	}
 
 	ast_mutex_lock(&p->lock);
 	isoutbound = IS_OUTBOUND(ast, p);
 	f.subclass = digit;
 	f.len = duration;
-	if (!(res = local_queue_frame(p, isoutbound, &f, ast, 0)))
+	if (!(res = local_queue_frame(p, isoutbound, &f, ast, 0))) {
 		ast_mutex_unlock(&p->lock);
+	}
 
 	return res;
 }
