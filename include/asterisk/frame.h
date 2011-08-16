@@ -89,6 +89,7 @@ struct ast_codec_pref {
  * \arg \b SRCCHANGE       Media source has changed (RTP marker bit and SSRC must change)
  * \arg \b CONNECTED_LINE  Connected line has changed
  * \arg \b REDIRECTING     Call redirecting information has changed.
+ * \arg \b BRIDGEPARAM     Bridge parameters to preserve from the outbound bridge when chan_local masquerades away
  */
 
 /*!
@@ -334,6 +335,7 @@ enum ast_control_frame_type {
 	AST_CONTROL_READ_ACTION = 27,	/*!< Tell ast_read to take a specific action */
 	AST_CONTROL_AOC = 28,			/*!< Advice of Charge with encoded generic AOC payload */
 	AST_CONTROL_END_OF_Q = 29,		/*!< Indicate that this position was the end of the channel queue for a softhangup. */
+	AST_CONTROL_BRIDGEPARAM = 26,   /*!< Bridge parameter update after masquerade */
 };
 
 enum ast_frame_read_action {

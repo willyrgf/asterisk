@@ -172,6 +172,13 @@ enum ast_bridge_result {
 	AST_BRIDGE_RETRY = -3,
 };
 
+/*! \brief Envelope for sending bridge flags between bridges in a call with multiple bridges, like a local channel call */
+struct ast_bridgeflags_envelope {
+ 	struct ast_flags chan_bridgeflags;			/*!< Flags set for channel when creating bridge */
+ 	struct ast_flags peer_bridgeflags;			/*!< Flags set for peer channel when creating bridge */
+ 	char secretmessage[AST_CHANNEL_NAME];			/*!< For debugging, sending the old channel name across */
+ };
+ 
 typedef unsigned long long ast_group_t;
 
 /*! \todo Add an explanation of an Asterisk generator
@@ -864,6 +871,7 @@ struct ast_channel {
 	char macrocontext[AST_MAX_CONTEXT];		/*!< Macro: Current non-macro context. See app_macro.c */
 	char macroexten[AST_MAX_EXTENSION];		/*!< Macro: Current non-macro extension. See app_macro.c */
 	char emulate_dtmf_digit;			/*!< Digit being emulated */
+	struct ast_flags bridgeflags;                   /*!< Flags set for channel when creating bridge */
 };
 
 /*! \brief ast_channel_tech Properties */

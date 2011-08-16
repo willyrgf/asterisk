@@ -1,0 +1,33 @@
+Edvina AB
+Olle E. Johansson
+
+
+
+
+Pinedanish - copybridgeflags
+============================
+
+If you dialout through the local channel with a "t" option on the last dial to a phone,
+after the local channel disappears, the transfer option is gone and the callee can not
+transfer any calls.
+
+With this code, the bridge feature flags on the last call leg is saved to the channel.
+At local masquerade, they're sent as a control frame "upwards" and applied to the
+remaining bridge. This way, the callee will keep the rights to transfer even after
+the local channels are gone.
+
+Technichal details
+-------------------
+
+Before the optimization
+
+caller --------> B1 -------->LB----------> B2 -----------> callee
+       SIP/in	    local;1     local;2        SIP/out
+
+The flags to dial() is set on the B2 bridge. This bridge disappears when the local
+channels are optimized away, so that the flags will be gone.
+
+With this code, the bridge flags are copied to the channels. When the local;2 channel
+is about to disappear, it sends a new AST_CONTROL_BRIDGEFLAGS message upstream, which
+is caught by B1 and applied to the outbound side of the B1 bridge. 
+

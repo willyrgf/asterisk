@@ -3540,6 +3540,7 @@ int ast_waitfordigit_full(struct ast_channel *c, int ms, int audiofd, int cmdfd)
 					return -1;
 				case AST_CONTROL_RINGING:
 				case AST_CONTROL_ANSWER:
+				case AST_CONTROL_BRIDGEPARAM:
 				case AST_CONTROL_SRCUPDATE:
 				case AST_CONTROL_SRCCHANGE:
 				case AST_CONTROL_CONNECTED_LINE:
@@ -4262,6 +4263,7 @@ static int attribute_const is_visible_indication(enum ast_control_frame_type con
 	case AST_CONTROL_OFFHOOK:
 	case AST_CONTROL_TAKEOFFHOOK:
 	case AST_CONTROL_ANSWER:
+	case AST_CONTROL_BRIDGEPARAM:
 	case AST_CONTROL_HANGUP:
 	case AST_CONTROL_CONNECTED_LINE:
 	case AST_CONTROL_REDIRECTING:
@@ -4436,6 +4438,7 @@ int ast_indicate_data(struct ast_channel *chan, int _condition,
 	case AST_CONTROL_PROGRESS:
 	case AST_CONTROL_PROCEEDING:
 	case AST_CONTROL_VIDUPDATE:
+	case AST_CONTROL_BRIDGEPARAM:
 	case AST_CONTROL_SRCUPDATE:
 	case AST_CONTROL_SRCCHANGE:
 	case AST_CONTROL_RADIO_KEY:
