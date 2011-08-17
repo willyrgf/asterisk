@@ -1466,6 +1466,7 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 		if (rtp->sending_digit == 1)  {
 			rtp->sending_digit = 2;
 		}
+		ast_debug(2, "---Skipping sending continue frame Sending_digit = %d\n", rtp->sending_digit);
 	}
 
 	len = sizeof(sin);
@@ -2732,6 +2733,7 @@ int ast_rtp_senddigit_begin(struct ast_rtp *rtp, char digit)
 
 	/* Since we received a begin, we can safely store the digit and disable any compensation */
 	rtp->sending_digit = 1;
+	ast_debug(3, "OEJ --->>> Sending digit = 1!!!! \n");
 	rtp->send_digit = digit;
 	rtp->send_payload = payload;
 
@@ -2744,6 +2746,9 @@ int ast_rtp_senddigit_begin(struct ast_rtp *rtp, char digit)
 int ast_rtp_senddigit_continue(struct ast_rtp *rtp, char digit, unsigned int duration)
 {
 	ast_log(LOG_DEBUG, "DEBUG DTMF CONTINUE - Duration %d Digit %d Send-digit %d\n", duration, digit, rtp->send_digit);
+
+	/* If we missed the BEGIN, we will have to turn on the flag */
+	rtp->sending_digit = 2;
 
 	/* Duration is in ms. Calculate the duration in timestamps */
 	if (duration > 0) {
@@ -2894,6 +2899,7 @@ int ast_rtp_senddigit_end(struct ast_rtp *rtp, char digit, unsigned int duration
 	ast_log(LOG_DEBUG, "-- DTMF END: Duration samples sent %d got %d ms (%d samples)\n", rtp->send_duration, duration, dursamples);
 	rtp->lastts += rtp->send_duration;
 	rtp->sending_digit = 0;
+	ast_debug(2, "OEJ ---->>>> Turning off sending_digit\n");
 	rtp->send_digit = 0;
 	rtp->received_duration = 0;
 

@@ -4956,7 +4956,7 @@ static enum ast_bridge_result ast_generic_bridge(struct ast_channel *c0, struct 
 				*fo = f;
 				*rc = who;
 				ast_debug(1, "Got DTMF %s on channel (%s)\n", 
-					f->frametype == AST_FRAME_DTMF_END ? "end" : "begin",	/* BUG for continue. Ignored now. OEJ */
+					f->frametype == AST_FRAME_DTMF_END ? "end" : (AST_FRAME_DTMF_CONTINUE ? "cont" : "begin"),	
 					who->name);
 
 				break;
