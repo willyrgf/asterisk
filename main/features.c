@@ -2216,6 +2216,7 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 	struct ast_cdr *peer_cdr = peer->cdr; /* the proper chan cdr, if there are forked cdrs */
 	struct ast_cdr *new_chan_cdr = NULL; /* the proper chan cdr, if there are forked cdrs */
 	struct ast_cdr *new_peer_cdr = NULL; /* the proper chan cdr, if there are forked cdrs */
+	struct ast_silence_generator *silgen = NULL;
 
 	memset(&backup_config, 0, sizeof(backup_config));
 
@@ -2462,7 +2463,41 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 				}
 				break;
 			}
-		} else if (f->frametype == AST_FRAME_DTMF || f->frametype == AST_FRAME_DTMF_BEGIN) {
+		} else if (f->frametype == AST_FRAME_DTMF_BEGIN) {
+			char *featurecode;
+			int sense;
+			size_t featurelen;
+
+			if (who == chan) {
+				sense = FEATURE_SENSE_CHAN;
+				featurecode = chan_featurecode;
+			} else  {
+				sense = FEATURE_SENSE_PEER;
+				featurecode = peer_featurecode;
+			}
+			featurelen = strlen(featurecode);
+			
+			/* Take a peek if this (possibly) matches a feature. If not, just pass this
+			 * DTMF along untouched. If this is not the first digit of a multi-digit code
+			 * then we need to fall through and stream the characters if it matches */
+			if (featurelen) {
+				res = ast_feature_detect(chan, sense == FEATURE_SENSE_CHAN ? &(config->features_caller) : &(config->features_callee), featurecode, NULL);
+			}
+
+			if (featurelen == 0 || res == AST_FEATURE_RETURN_PASSDIGITS) {
+				ast_debug(3, "Passing DTMF through, since it is not a feature code\n");
+				ast_write(other, f);
+				sendingdtmfdigit = 1;
+			} else {
+				/* If ast_opt_transmit_silence is set, then we need to make sure we are
+				 * transmitting something while we hold on to the DTMF waiting for a
+				 * feature. */
+				if (!silgen && ast_opt_transmit_silence) {
+					silgen = ast_channel_start_silence_generator(other);
+				}
+				ast_debug(3, "Not passing DTMF through, since it may be a feature code\n");
+			}
+		} else if (f->frametype == AST_FRAME_DTMF) {
 			char *featurecode;
 			int sense;
 			unsigned int dtmfduration = f->len;
@@ -2476,60 +2511,64 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 				sense = FEATURE_SENSE_PEER;
 				featurecode = peer_featurecode;
 			}
-			/*! append the event to featurecode. we rely on the string being zero-filled, and
-			 * not overflowing it. 
-			 * \todo XXX how do we guarantee the latter ?
-			 */
-			featurecode[strlen(featurecode)] = f->subclass;
-			config->feature_timer = backup_config.feature_timer;
 
-			if (f->frametype == AST_FRAME_DTMF_BEGIN) {
-				/* Take a peek if this is the beginning of a feature. If not, just pass this DTMF along untouched. */
-				res = ast_feature_detect(chan, sense == FEATURE_SENSE_CHAN ? &(config->features_caller) : &(config->features_callee),featurecode, NULL);
-				if (res == FEATURE_RETURN_PASSDIGITS) {
-					ast_log(LOG_DEBUG, "We are doing nothing here, but this DTMF is not a feature code\n");
+			if (sendingdtmfdigit == 1) {
+				/* We let the BEGIN go through happily, so let's not bother with the END,
+				 * since we already know it's not something we bother with */
+				ast_write(other, f);
+				sendingdtmfdigit = 0;
+			} else {
+				/*! append the event to featurecode. we rely on the string being zero-filled, and
+			 	* not overflowing it. 
+			 	* \todo XXX how do we guarantee the latter ?
+			 	*/
+				featurecode[strlen(featurecode)] = f->subclass;
+				config->feature_timer = backup_config.feature_timer;
+
+				/* Get rid of the frame before we start doing "stuff" with the channels */
+				ast_frfree(f);
+				f = NULL;
+				if (silgen) {
+					ast_channel_stop_silence_generator(other, silgen);
+					silgen = NULL;
 				}
-				break;
-			}
-			/* Get rid of the frame before we start doing "stuff" with the channels */
-			ast_frfree(f);
-			f = NULL;
-			res = ast_feature_interpret(chan, peer, config, featurecode, sense);
-			switch(res) {
-			case FEATURE_RETURN_PASSDIGITS:
-				ast_log(LOG_DEBUG, "--- Sending DTMF here - 3 Duration %d\n", dtmfduration);
-				ast_dtmf_stream(other, who, featurecode, 0, dtmfduration);
-				/* Fall through */
-			case FEATURE_RETURN_SUCCESS:
-				memset(featurecode, 0, sizeof(chan_featurecode));
-				break;
-			}
-			if (res >= FEATURE_RETURN_PASSDIGITS) {
-				res = 0;
-			} else 
-				break;
-			hasfeatures = !ast_strlen_zero(chan_featurecode) || !ast_strlen_zero(peer_featurecode);
-			if (hadfeatures && !hasfeatures) {
-				/* Restore backup */
-				memcpy(config, &backup_config, sizeof(struct ast_bridge_config));
-				memset(&backup_config, 0, sizeof(struct ast_bridge_config));
-			} else if (hasfeatures) {
-				if (!hadfeatures) {
-					/* Backup configuration */
-					memcpy(&backup_config, config, sizeof(struct ast_bridge_config));
-					/* Setup temporary config options */
-					config->play_warning = 0;
-					ast_clear_flag(&(config->features_caller), AST_FEATURE_PLAY_WARNING);
-					ast_clear_flag(&(config->features_callee), AST_FEATURE_PLAY_WARNING);
-					config->warning_freq = 0;
-					config->warning_sound = NULL;
-					config->end_sound = NULL;
-					config->start_sound = NULL;
-					config->firstpass = 0;
+				res = ast_feature_interpret(chan, peer, config, featurecode, sense);
+				switch(res) {
+				case FEATURE_RETURN_PASSDIGITS:
+					ast_log(LOG_DEBUG, "--- Sending DTMF here - 3 Duration %d\n", dtmfduration);
+					ast_dtmf_stream(other, who, featurecode, 0, dtmfduration);
+					/* Fall through */
+				case FEATURE_RETURN_SUCCESS:
+					memset(featurecode, 0, sizeof(chan_featurecode));
+					break;
 				}
-				config->start_time = ast_tvnow();
-				config->feature_timer = featuredigittimeout;
-				ast_debug(1, "Set time limit to %ld\n", config->feature_timer);
+				if (res >= FEATURE_RETURN_PASSDIGITS) {
+					res = 0;
+				} else 
+					break;
+				hasfeatures = !ast_strlen_zero(chan_featurecode) || !ast_strlen_zero(peer_featurecode);
+				if (hadfeatures && !hasfeatures) {
+					/* Restore backup */
+					memcpy(config, &backup_config, sizeof(struct ast_bridge_config));
+					memset(&backup_config, 0, sizeof(struct ast_bridge_config));
+				} else if (hasfeatures) {
+					if (!hadfeatures) {
+						/* Backup configuration */
+						memcpy(&backup_config, config, sizeof(struct ast_bridge_config));
+						/* Setup temporary config options */
+						config->play_warning = 0;
+						ast_clear_flag(&(config->features_caller), AST_FEATURE_PLAY_WARNING);
+						ast_clear_flag(&(config->features_callee), AST_FEATURE_PLAY_WARNING);
+						config->warning_freq = 0;
+						config->warning_sound = NULL;
+						config->end_sound = NULL;
+						config->start_sound = NULL;
+						config->firstpass = 0;
+					}
+					config->start_time = ast_tvnow();
+					config->feature_timer = featuredigittimeout;
+					ast_debug(1, "Set time limit to %ld\n", config->feature_timer);
+				}
 			}
 		}
 		if (f)
@@ -2537,6 +2576,11 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 
 	}
    before_you_go:
+	/* Just in case something weird happened and we didn't clean up the silence generator... */
+	if (silgen) {
+		ast_channel_stop_silence_generator(who == chan ? peer : chan, silgen);
+		silgen = NULL;
+	}
 
 	if (ast_test_flag(chan,AST_FLAG_BRIDGE_HANGUP_DONT)) {
 		ast_clear_flag(chan,AST_FLAG_BRIDGE_HANGUP_DONT); /* its job is done */
