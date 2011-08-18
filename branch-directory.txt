@@ -13,7 +13,6 @@ bufo-manager-setvar-trunk	trunk	Setting channel variable per manager account for
 bufo-manager-varfix		1.4	Bugfix for memory leak in manager.c
 bufo-manager-varfix-trunk	trunk	Bugfix for memory leak in manager.c
 calleridupdate				Deprecated Connected Line ID stuff			DELETE
-calleridutf8			Trunk	UTF8 caller IDs (Experimental code)
 callpickup			Trunk	Invite/replaces support (Experimental)
 cancel_answer_elsewhere		Trunk	Code that's merged into trunk				DELETE
 cancel_elsewhere_1.4		1.4	Backport of cancel_elsewhere
@@ -27,6 +26,7 @@ earlyrtpfix			1.4	Early media fixes. Merged.
 edv-appleraisin-1.4		1.4	Asterisk DB over realtime (in group directory)
 edv-appleraisin-trunk		trunk	Asterisk DB over realtime (in group directory)
 fixtoheader-1.4			1.4	Backport: Adds ability to set the SIP to: header in dialstring
+func-queue-exists-1.4		1.4	QUEUE_EXISTS function
 iaxtrunkfix-1.4			1.4	Backport of IAX trunk fix. Merged.
 invitestate				Propably merged. Investigate.
 invitestate-1.4			1.4	Backport
@@ -67,6 +67,8 @@ pinequality-manager-qos-reports-1.4	?????						CHECK
 pinetree-1.4			1.4	Improved SIP Peer matching behind proxy
 pinetree-trunk			Trunk	Improved SIP peer matching behind proxy
 publish-1.4			1.4	Experiments
+rana-dtmf-duration-*			Fixes for DTMF duration
+rana-manager-debug-*			Make sure manager actions are printed in the CLI
 registrationfixes			????
 res_auth				Old stuff from Philippe Sultan
 ringstatelimit-1.4			????						CHECK
