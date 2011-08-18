@@ -25658,11 +25658,16 @@ static int sip_send_mwi_to_peer(struct sip_peer *peer, int cache_only)
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 	}
 
+	/* We have multiple threads (mwi events and monitor retransmits) working with this PVT and as we modify the sip history if that's turned on,
+	   we really need to have a lock on it */
+	sip_pvt_lock(p);
+
 	/* Send MWI */
 	ast_set_flag(&p->flags[0], SIP_OUTGOING);
 	/* the following will decrement the refcount on p as it finishes */
 	transmit_notify_with_mwi(p, newmsgs, oldmsgs, peer->vmexten);
 	dialog_unref(p, "unref dialog ptr p just before it goes out of scope at the end of sip_send_mwi_to_peer.");
+	sip_pvt_unlock(p);
 	return 0;
 }
 
