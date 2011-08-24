@@ -19,6 +19,11 @@ SIP Changes
    compatibility with certain device features such as Avaya IP500's directory
    lookup service.
 
+Chan_local changes
+------------------
+ * Added a manager event "LocalBridge" for local channel call bridges between
+   the two pseudo-channels created.
+
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 1.8 to Asterisk 10 -------------------
 ------------------------------------------------------------------------------
