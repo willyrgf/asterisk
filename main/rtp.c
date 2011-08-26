@@ -86,6 +86,14 @@ enum strict_rtp_state {
 	STRICT_RTP_CLOSED,   /*! Drop all RTP packets not coming from source that was learned */
 };
 
+/*! \brief States for an outbound RTP stream that handles DTMF in RFC 2833 mode */
+enum dtmf_send_states {
+	DTMF_NOT_SENDING = 0,	/*! Not sending DTMF this very moment */
+	DTMF_SEND_INIT,		/*! Initializing */
+	DTMF_SEND_INPROGRESS,	/*! Playing DTMF */
+	DTMF_SEND_INPROGRESS_WITH_QUEUE	/*! Playing and having a queue to continue with */
+};
+
 /* Uncomment this to enable more intense native bridging, but note: this is currently buggy */
 /* #define P2P_INTENSE */
 
@@ -142,9 +150,11 @@ struct ast_rtp {
 	unsigned int dtmfsamples;
 	/* DTMF Transmission Variables */
 	unsigned int lastdigitts;
-	char sending_digit;	/*!< boolean - are we sending digits */
+	enum dtmf_send_states sending_dtmf;	/*!< - are we sending dtmf */
 	char send_digit;	/*!< digit we are sending */
 	char send_dtmf_frame;	/*!< Number of samples in a frame with the current packetization */
+	AST_LIST_HEAD_NOLOCK(, ast_frame) dtmfqueue;	/*!< Queue for DTMF that we receive while occupied with transmitting
+				   an outbound DTMF */
 	int send_payload;
 	int send_duration;
 	int send_endflag:1;	/*!< We have received END marker but are in waiting mode */
@@ -1455,18 +1465,18 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 	struct ast_rtp *bridged = NULL;
 	struct frame_list frames;
 	
-	if (rtp->sending_digit > 1) {
+	if (rtp->sending_dtmf == DTMF_SEND_INPROGRESS || rtp->sending_dtmf == DTMF_SEND_INPROGRESS_WITH_QUEUE) {
 		ast_rtp_senddigit_continuation(rtp);
 	} else {
 		/* Skip the first one due to possible BEGIN retransmits 
-	   	Yes, this is a poor coding solution, more of a bad hack.
-	   	Tests have shown that there's always one CONT packet sent without an incoming CONT
-	   	right after we've sent the BEGIN. Un-needed.
+	   	   Yes, this is a poor coding solution, more of a bad hack.
+	   	   Tests have shown that there's always one CONT packet sent without an incoming CONT
+	   	   right after we've sent the BEGIN. Un-needed.
 		*/
-		if (rtp->sending_digit == 1)  {
-			rtp->sending_digit = 2;
+		if (rtp->sending_dtmf == DTMF_SEND_INIT)  {
+			rtp->sending_dtmf = DTMF_SEND_INPROGRESS;
 		}
-		ast_debug(2, "---Skipping sending continue frame Sending_digit = %d\n", rtp->sending_digit);
+		ast_debug(2, "---Skipping sending continue frame Sending_digit = %d\n", rtp->sending_dtmf);
 	}
 
 	len = sizeof(sin);
@@ -2596,6 +2606,8 @@ char *ast_rtp_get_quality(struct ast_rtp *rtp, struct ast_rtp_quality *qual)
 
 void ast_rtp_destroy(struct ast_rtp *rtp)
 {
+	struct ast_frame *f;
+
 	if (rtcp_debug_test_addr(&rtp->them) || rtcpstats) {
 		/*Print some info on the call here */
 		ast_verbose("  RTP-stats\n");
@@ -2651,6 +2663,11 @@ void ast_rtp_destroy(struct ast_rtp *rtp)
 		ast_free(rtp->rtcp);
 		rtp->rtcp=NULL;
 	}
+
+	/* Empty the DTMF queue */
+	while ((f = AST_LIST_REMOVE_HEAD(&rtp->dtmfqueue, frame_list))) {
+                ast_frfree(f);
+	}
 #ifdef P2P_INTENSE
 	ast_mutex_destroy(&rtp->bridge_lock);
 #endif
@@ -2676,12 +2693,22 @@ static unsigned int calc_txstamp(struct ast_rtp *rtp, struct timeval *delivery)
 	return (unsigned int) ms;
 }
 
-/*! \brief Send begin frames for DTMF */
+
+/*! \brief Outbound DTMF: Send begin frames for DTMF */
 int ast_rtp_senddigit_begin(struct ast_rtp *rtp, char digit)
 {
 	unsigned int *rtpheader;
 	int hdrlen = 12, res = 0, i = 0, payload = 0;
 	char data[256];
+
+	/* If we're sending DTMF already, we will ignore this but raise sending_dtmf with one
+	   to mark that we're busy and can't be disturbed. When we receive an END packet, we will
+	   act on that - either start playing with some delay or stack it up in a dtmfqueue.
+	*/
+	if (rtp->sending_dtmf) {
+		ast_debug(3, "Received DTMF begin while we're playing out DTMF. Ignoring \n");
+		rtp->sending_dtmf = DTMF_SEND_INPROGRESS_WITH_QUEUE;	/* Tell the world that there's an ignored DTMF */
+	}
 
 	if ((digit <= '9') && (digit >= '0'))
 		digit -= '0';
@@ -2732,8 +2759,8 @@ int ast_rtp_senddigit_begin(struct ast_rtp *rtp, char digit)
 	}
 
 	/* Since we received a begin, we can safely store the digit and disable any compensation */
-	rtp->sending_digit = 1;
-	ast_debug(3, "OEJ --->>> Sending digit = 1!!!! \n");
+	rtp->sending_dtmf = DTMF_SEND_INIT;
+	ast_debug(3, "OEJ --->>> Sending digit = DTMF_SEND_INIT1!!!! \n");
 	rtp->send_digit = digit;
 	rtp->send_payload = payload;
 
@@ -2748,7 +2775,9 @@ int ast_rtp_senddigit_continue(struct ast_rtp *rtp, char digit, unsigned int dur
 	ast_log(LOG_DEBUG, "DEBUG DTMF CONTINUE - Duration %d Digit %d Send-digit %d\n", duration, digit, rtp->send_digit);
 
 	/* If we missed the BEGIN, we will have to turn on the flag */
-	rtp->sending_digit = 2;
+	if (!rtp->sending_dtmf) {
+		rtp->sending_dtmf = DTMF_SEND_INPROGRESS;
+	}
 
 	/* Duration is in ms. Calculate the duration in timestamps */
 	if (duration > 0) {
@@ -2769,18 +2798,35 @@ int ast_rtp_senddigit_continue(struct ast_rtp *rtp, char digit, unsigned int dur
 	return 0;
 }
 
-/*! \brief Send continuation frame for DTMF */
+/*! \brief Send continuation frame for DTMF 
+
+This is called when we get a frame in ast_rtp_read. To keep the timing, because there may be delays through Asterisk
+feature handling and other code, we need to clock the outbound DTMF with the frame size we have on the stream.
+We should not cut short and send a begin then in the next packet an END with a duration that exceeds the
+framesize (in most cases for audio 20 ms) and number of frames. That will seriously cause issues in gateways
+or phones down the path.
+
+An effect of this is that we may get a new DTMF frame while we're transmitting the previous one. For this case,
+we have implemented an DTMF queue that will queue up the dtmf and play out. The alternative would be to skip
+these, which is no good, or cut them short and cause issues with timing for other devices, while we solve our
+own situation. That's generally considered bad behaviour amongst SIP devices.
+*/
 static int ast_rtp_senddigit_continuation(struct ast_rtp *rtp)
 {
 	unsigned int *rtpheader;
 	int hdrlen = 12, res = 0;
 	char data[256];
 
-	if (!rtp->them.sin_addr.s_addr || !rtp->them.sin_port)
+	if (!rtp->them.sin_addr.s_addr || !rtp->them.sin_port) {
 		return 0;
+	}
 
 	ast_log(LOG_DEBUG, "---- Send duration %d Received duration %d Endflag %d Send-digit %d\n", rtp->send_duration, rtp->received_duration, rtp->send_endflag, rtp->send_digit);
 
+	/*! \todo XXX This code assumes 160 samples, which is for 20 ms of 8000 samples
+		we need to calculate this based on the current sample rate and the rtp 
+		stream packetization
+	 */
 	if (rtp->received_duration == 0 || rtp->send_duration + 160 <= rtp->received_duration) {
 		rtp->send_duration += 160;
 	} else if (rtp->send_endflag) {
@@ -2858,7 +2904,8 @@ int ast_rtp_senddigit_end(struct ast_rtp *rtp, char digit, unsigned int duration
 			digit = digit - 'a' + 12;
 		else {
 			ast_log(LOG_WARNING, "Don't know how to represent '%c'\n", digit);
-			rtp->sending_digit = 0;
+			rtp->sending_dtmf = DTMF_NOT_SENDING;
+/* SKREP - what are we going to do here? */
 			rtp->send_digit = 0;
 			rtp->received_duration = 0;
 			return 0;
@@ -2898,8 +2945,9 @@ int ast_rtp_senddigit_end(struct ast_rtp *rtp, char digit, unsigned int duration
 	}
 	ast_log(LOG_DEBUG, "-- DTMF END: Duration samples sent %d got %d ms (%d samples)\n", rtp->send_duration, duration, dursamples);
 	rtp->lastts += rtp->send_duration;
-	rtp->sending_digit = 0;
-	ast_debug(2, "OEJ ---->>>> Turning off sending_digit\n");
+	rtp->sending_dtmf = DTMF_NOT_SENDING;
+/* SKREP and here */
+	ast_debug(2, "OEJ ---->>>> Turning off sending_dtmf\n");
 	rtp->send_digit = 0;
 	rtp->received_duration = 0;
 
@@ -3213,7 +3261,8 @@ static int ast_rtp_raw_write(struct ast_rtp *rtp, struct ast_frame *f, int codec
 		f->samples /= 2;
 	}
 
-	if (rtp->sending_digit) {
+	/* If we're sending DTMF, just skip this */
+	if (rtp->sending_dtmf) {
 		return 0;
 	}
 

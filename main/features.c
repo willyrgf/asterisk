@@ -2463,6 +2463,12 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 				}
 				break;
 			}
+		} else if (f->frametype == AST_FRAME_DTMF_CONTINUE) {
+			if (sendingdtmfdigit == 1) {
+				ast_debug(3, "Passing DTMF Continue through, since it is known not to be a feature code\n");
+				ast_write(other, f);
+			}
+			/* Otherwise, just swallow it. DTMF end will be enough */
 		} else if (f->frametype == AST_FRAME_DTMF_BEGIN) {
 			char *featurecode;
 			int sense;
@@ -2484,7 +2490,7 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 				res = ast_feature_detect(chan, sense == FEATURE_SENSE_CHAN ? &(config->features_caller) : &(config->features_callee), featurecode, NULL);
 			}
 
-			if (featurelen == 0 || res == AST_FEATURE_RETURN_PASSDIGITS) {
+			if (featurelen == 0 && res == AST_FEATURE_RETURN_PASSDIGITS) {
 				ast_debug(3, "Passing DTMF through, since it is not a feature code\n");
 				ast_write(other, f);
 				sendingdtmfdigit = 1;
