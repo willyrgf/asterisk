@@ -584,10 +584,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			If the variable name is prefixed with <literal>__</literal>, the variable will be
 			inherited into channels created from the current channel and all children channels.</para>
 			<note><para>If (and only if), in <filename>/etc/asterisk/asterisk.conf</filename>, you have
-			a <literal>[compat]</literal> category, and you have <literal>app_set = 1.6</literal> under that,then
-			the behavior of this app changes, and does not strip surrounding quotes from the right hand side as
-			it did previously in 1.4. The <literal>app_set = 1.6</literal> is only inserted if <literal>make samples</literal>
-			is executed, or if users insert this by hand into the <filename>asterisk.conf</filename> file.
+			a <literal>[compat]</literal> category, and you have <literal>app_set = 1.4</literal> under that, then
+			the behavior of this app changes, and strips surrounding quotes from the right hand side as
+			it did previously in 1.4.
 			The advantages of not stripping out quoting, and not caring about the separator characters (comma and vertical bar)
 			were sufficient to make these changes in 1.6. Confusion about how many backslashes would be needed to properly
 			protect separators and quotes in various database access strings has been greatly
@@ -9323,11 +9322,16 @@ static int pbx_builtin_busy(struct ast_channel *chan, const char *data)
  */
 static int pbx_builtin_congestion(struct ast_channel *chan, const char *data)
 {
+	ast_verb(1, "pbx_builtin_congestion HITINTHEFACE!\n");
+	ast_verb(1, "AST_STATE = %d INTHEFACE\n", chan->_state);
 	ast_indicate(chan, AST_CONTROL_CONGESTION);
 	/* Don't change state of an UP channel, just indicate
 	   congestion in audio */
-	if (chan->_state != AST_STATE_UP)
+	if (chan->_state != AST_STATE_UP) {
 		ast_setstate(chan, AST_STATE_BUSY);
+		ast_verb(1, "ast_cdr_congestion INTHEFACE\n");
+		ast_cdr_congestion(chan->cdr);
+	}
 	wait_for_hangup(chan, data);
 	return -1;
 }

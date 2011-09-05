@@ -419,7 +419,7 @@ static struct ast_config *realtime_multi_odbc(const char *database, const char *
 			if ((res != SQL_SUCCESS) && (res != SQL_SUCCESS_WITH_INFO)) {
 				ast_log(LOG_WARNING, "SQL Describe Column error!\n[%s]\n\n", sql);
 				ast_category_destroy(cat);
-				continue;
+				goto next_sql_fetch;
 			}
 
 			indicator = 0;
@@ -430,7 +430,7 @@ static struct ast_config *realtime_multi_odbc(const char *database, const char *
 			if ((res != SQL_SUCCESS) && (res != SQL_SUCCESS_WITH_INFO)) {
 				ast_log(LOG_WARNING, "SQL Get Data error!\n[%s]\n\n", sql);
 				ast_category_destroy(cat);
-				continue;
+				goto next_sql_fetch;
 			}
 			stringp = rowdata;
 			while (stringp) {
@@ -448,6 +448,7 @@ static struct ast_config *realtime_multi_odbc(const char *database, const char *
 			}
 		}
 		ast_category_append(cfg, cat);
+next_sql_fetch:;
 	}
 
 	SQLFreeHandle(SQL_HANDLE_STMT, stmt);
@@ -1130,6 +1131,11 @@ static int require_odbc(const char *database, const char *table, va_list ap)
 #undef warn_length
 #undef warn_type
 
+static int unload_odbc(const char *a, const char *b)
+{
+	return ast_odbc_clear_cache(a, b);
+}
+
 static struct ast_config_engine odbc_engine = {
 	.name = "odbc",
 	.load_func = config_odbc,
@@ -1140,7 +1146,7 @@ static struct ast_config_engine odbc_engine = {
 	.update_func = update_odbc,
 	.update2_func = update2_odbc,
 	.require_func = require_odbc,
-	.unload_func = ast_odbc_clear_cache,
+	.unload_func = unload_odbc,
 };
 
 static int unload_module (void)

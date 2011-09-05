@@ -1511,7 +1511,15 @@ static int aji_send_raw(struct aji_client *client, const char *xmlstr)
 #endif
 	/* If needed, data will be sent unencrypted, and logHook will
 	   be called inside iks_send_raw */
-	ret = iks_send_raw(client->p, xmlstr);
+	if((client->timeout != 0 && client->state == AJI_CONNECTED) || (client->state == AJI_CONNECTING))
+	{
+	    ret = iks_send_raw(client->p, xmlstr);
+	}
+	else {
+		ast_log(LOG_WARNING, "JABBER: Unable to send message to %s, we are not connected", client->name);
+		return -1;
+	}
+
 	if (ret != IKS_OK) {
 		return ret;
 	}
@@ -3050,10 +3058,12 @@ static int aji_filter_roster(void *data, ikspak *pak)
 			if (ast_test_flag(&client->flags, AJI_AUTOPRUNE)) {
 				ast_set_flag(&buddy->flags, AJI_AUTOPRUNE);
 				ASTOBJ_MARK(buddy);
-			} else if (!iks_strcmp(iks_find_attrib(x, "subscription"), "none") || !iks_strcmp(iks_find_attrib(x, "subscription"), "from")) {
-				/* subscribe to buddy's presence only
-				   if we really need to */
-				ast_set_flag(&buddy->flags, AJI_AUTOREGISTER);
+			} else if (ast_test_flag(&client->flags, AJI_AUTOREGISTER)) {
+				if (!iks_strcmp(iks_find_attrib(x, "subscription"), "none") || !iks_strcmp(iks_find_attrib(x, "subscription"), "from")) {
+					/* subscribe to buddy's presence only
+					   if we really need to */
+					ast_set_flag(&buddy->flags, AJI_AUTOREGISTER);
+				}
 			}
 			ASTOBJ_UNLOCK(buddy);
 			if (buddy) {
