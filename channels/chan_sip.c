@@ -1136,6 +1136,7 @@ struct sip_user {
 	enum transfermodes allowtransfer;	/*! SIP Refer restriction scheme */
 	struct ast_ha *ha;		/*!< ACL setting */
 	struct ast_variable *chanvars;	/*!< Variables to set for channel created by user */
+	struct sockaddr_in externip;	/*!<  External IP to use for this connection */
 	int maxcallbitrate;		/*!< Maximum Bitrate for a video call */
 	int autoframing;
 };
@@ -10833,6 +10834,19 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 				ast_rtp_destroy(p->vrtp);
 				p->vrtp = NULL;
 			}
+			/* Set extern IP properly for the contact and via headers */
+			if (user->externip.sin_addr.s_addr) {
+				memcpy(&p->externip.sin_addr, &user->externip.sin_addr, sizeof(p->sa.sin_addr));
+				/* If the peer had an externip setting, recalculate our side, and recalculate Call ID */
+				if (ast_sip_ouraddrfor(p, &p->sa.sin_addr, &p->ourip)) {
+					p->ourip = __ourip;
+				}
+			} else {
+				memcpy(&p->externip.sin_addr, &externip.sin_addr, sizeof(p->sa.sin_addr));
+				if (option_debug > 2) {
+					ast_log(LOG_DEBUG, "user %s has no externip defined\n", user->name);
+				}
+			}
 		}
 		if (user && debug)
 			ast_verbose("Found user '%s'\n", user->name);
@@ -10974,6 +10988,9 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 					}
 				} else {
 					memcpy(&p->externip.sin_addr, &externip.sin_addr, sizeof(p->sa.sin_addr));
+					if (option_debug > 2) {
+						ast_log(LOG_DEBUG, "peer %s has no externip defined\n", peer->name);
+					}
 				}
 			}
 			ASTOBJ_UNREF(peer, sip_destroy_peer);
@@ -10994,6 +11011,22 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 				if (global_shrinkcallerid && ast_is_shrinkable_phonenumber(tmp))
 					ast_shrink_phone_number(tmp);
 				ast_string_field_set(p, cid_num, tmp);
+			}
+			/* Set extern IP properly for the contact and via headers */
+			if (user->externip.sin_addr.s_addr) {
+				memcpy(&p->externip.sin_addr, &user->externip.sin_addr, sizeof(p->sa.sin_addr));
+				/* If the user had an externip setting, recalculate our side, and recalculate Call ID */
+				if (ast_sip_ouraddrfor(p, &p->sa.sin_addr, &p->ourip)) {
+					p->ourip = __ourip;
+				}
+				if (option_debug > 2) {
+					ast_log(LOG_DEBUG, "user %s has externip defined. Recalulating our IP. Now %s \n", user->name, ast_inet_ntoa(p->ourip));
+				}
+			} else {
+				memcpy(&p->externip.sin_addr, &externip.sin_addr, sizeof(p->sa.sin_addr));
+				if (option_debug > 2) {
+					ast_log(LOG_DEBUG, "user %s has no externip defined\n", user->name);
+				}
 			}
 		}
 
@@ -18537,6 +18570,19 @@ static struct sip_user *build_user(const char *name, struct ast_variable *v, str
 			user->call_limit = atoi(v->value);
 			if (user->call_limit < 0)
 				user->call_limit = 0;
+		} else if (!strcasecmp(v->name, "externip") || !strcasecmp(v->name, "externaddr")) {
+			struct hostent *hp;
+			struct ast_hostent ahp;
+
+			if (localaddr == NULL) {
+				ast_log(LOG_ERROR, "Setting externip in user section [%s] without any localnet configuration in the [general] section will not work at line %d.\n", user->name, v->lineno);
+			} else {
+				if (!(hp = ast_gethostbyname(v->value, &ahp)))  {
+					ast_log(LOG_WARNING, "Invalid externip address for user %s : %s at line %d\n", user->name, v->value, v->lineno);
+				} else {
+					memcpy(&user->externip.sin_addr, hp->h_addr, sizeof(externip.sin_addr));
+				}
+			}
 		} else if (!strcasecmp(v->name, "amaflags")) {
 			format = ast_cdr_amaflags2int(v->value);
 			if (format < 0) {
