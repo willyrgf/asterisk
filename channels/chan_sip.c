@@ -4066,7 +4066,11 @@ static int sip_write(struct ast_channel *ast, struct ast_frame *frame)
 				break;
 			}
 			ast_mutex_lock(&p->lock);
-			if (p->rtp) {
+			if (p->t38.state == T38_ENABLED && !p->t38.direct) {
+				/* drop frame, can't sent VOICE frames while in T.38 mode */
+				ast_mutex_unlock(&p->lock);
+				break;
+			} else if (p->rtp) {
 				/* If channel is not up, activate early media session */
 				if ((ast->_state != AST_STATE_UP) &&
 				    !ast_test_flag(&p->flags[0], SIP_PROGRESS_SENT) &&
@@ -4077,7 +4081,7 @@ static int sip_write(struct ast_channel *ast, struct ast_frame *frame)
 						transmit_provisional_response(p, "183 Session Progress", &p->initreq, 1);
 						ast_set_flag(&p->flags[0], SIP_PROGRESS_SENT);
 					}
-				} 
+				}
 				p->lastrtptx = time(NULL);
 				res = ast_rtp_write(p->rtp, frame);
 			}
@@ -9793,14 +9797,14 @@ static void transmit_fake_auth_response(struct sip_pvt *p, int sipmethod, struct
 	if (ast_test_flag(req, SIP_PKT_IGNORE) && !ast_strlen_zero(p->randdata) && ast_strlen_zero(authtoken)) {
 		/* This is a retransmitted invite/register/etc, don't reconstruct authentication
 		 * information */
-		transmit_response_with_auth(p, response, req, p->randdata, 0, respheader, 0);
+		transmit_response_with_auth(p, response, req, p->randdata, reliable, respheader, 0);
 		/* Schedule auto destroy in 32 seconds (according to RFC 3261) */
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 		return;
 	} else if (ast_strlen_zero(p->randdata) || ast_strlen_zero(authtoken)) {
 		/* We have no auth, so issue challenge and request authentication */
 		set_nonce_randdata(p, 1);
-		transmit_response_with_auth(p, response, req, p->randdata, 0, respheader, 0);
+		transmit_response_with_auth(p, response, req, p->randdata, reliable, respheader, 0);
 		/* Schedule auto destroy in 32 seconds */
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 		return;

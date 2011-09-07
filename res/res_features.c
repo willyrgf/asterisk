@@ -1653,8 +1653,12 @@ int ast_feature_detect(struct ast_channel *chan, struct ast_flags *features, cha
 
 /*! \brief Check if a feature exists */
 static int feature_check(struct ast_channel *chan, struct ast_flags *features, char *code) {
+	char *chan_dynamic_features;
+	ast_channel_lock(chan);
+	chan_dynamic_features = ast_strdupa(S_OR(pbx_builtin_getvar_helper(chan, "DYNAMIC_FEATURES"),""));
+	ast_channel_unlock(chan);
 
-	return feature_interpret_helper(chan, NULL, NULL, code, 0, NULL, features, FEATURE_INTERPRET_CHECK, NULL);
+	return feature_interpret_helper(chan, NULL, NULL, code, 0, chan_dynamic_features, features, FEATURE_INTERPRET_CHECK, NULL);
 }
 
 static void set_config_flags(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config)
@@ -2377,10 +2381,19 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 				break;
 			case AST_CONTROL_OPTION:
 				aoh = f->data;
-				/* Forward option Requests */
+ 				/* Forward option Requests, but only ones we know are safe
+ 				 * These are ONLY sent by chan_iax2 and I'm not convinced that
+ 				 * they are useful. I haven't deleted them entirely because I
+ 				 * just am not sure of the ramifications of removing them. */
 				if (aoh && aoh->flag == AST_OPTION_FLAG_REQUEST) {
-					ast_channel_setoption(other, ntohs(aoh->option), aoh->data, 
-						f->datalen - sizeof(struct ast_option_header), 0);
+ 				   	switch (ntohs(aoh->option)) {
+ 					case AST_OPTION_TONE_VERIFY:
+ 					case AST_OPTION_TDD:
+ 					case AST_OPTION_RELAXDTMF:
+ 					case AST_OPTION_AUDIO_MODE:
+						ast_channel_setoption(other, ntohs(aoh->option), aoh->data, 
+							f->datalen - sizeof(struct ast_option_header), 0);
+					}
 				}
 				break;
 			}
