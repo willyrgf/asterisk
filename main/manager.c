@@ -924,6 +924,7 @@ static int webmanager_enabled = 0;
 static int authtimeout;
 static int authlimit;
 static char *manager_channelvars;
+static int debug_actions = 0;
 
 #define DEFAULT_REALM		"asterisk"
 static char global_realm[MAXHOSTNAMELEN];	/*!< Default realm */
@@ -4605,6 +4606,20 @@ static int manager_moduleload(struct mansession *s, const struct message *m)
 	return 0;
 }
 
+/*! \brief Output manager actions to the CLI */
+static void manager_debug_action(struct mansession *s, const struct message *m)
+{
+	int x;
+
+	ast_verbose(VERBOSE_PREFIX_2 "%sManager '%s': Received action from IP(%s)\n", 
+			(s->session->sessiontimeout ? "HTTP " : ""), s->session->username, ast_inet_ntoa(s->session->sin.sin_addr));
+	for (x = 0; x < m->hdrcount; x++) {
+		ast_verbose("        %s\n", m->headers[x]);
+	}
+	ast_verbose("\n");
+}
+
+
 /*
  * Done with the action handlers here, we start with the code in charge
  * of accepting connections and serving them.
@@ -4671,6 +4686,9 @@ static int process_message(struct mansession *s, const struct message *m)
 	AST_RWLIST_UNLOCK(&actions);
 
 	if (tmp) {
+		if (debug_actions) {
+			manager_debug_action(s, m);
+		}
 		if (call_func) {
 			/* Call our AMI function after we unlock our actions lists */
 			ast_debug(1, "Running action '%s'\n", tmp->action);
@@ -6388,6 +6406,7 @@ static int __init_manager(int reload)
 	struct sockaddr_in amis_desc_local_address_tmp = { 0, };
 
 	manager_enabled = 0;
+	debug_actions = 0;
 
 	if (!registered) {
 		/* Register default actions */
@@ -6495,6 +6514,8 @@ static int __init_manager(int reload)
 			allowmultiplelogin = ast_true(val);
 		} else if (!strcasecmp(var->name, "displayconnects")) {
 			displayconnects = ast_true(val);
+		} else if (!strcasecmp(var->name, "debugactions")) {
+			debug_actions = ast_true(val);
 		} else if (!strcasecmp(var->name, "timestampevents")) {
 			timestampevents = ast_true(val);
 		} else if (!strcasecmp(var->name, "debug")) {
