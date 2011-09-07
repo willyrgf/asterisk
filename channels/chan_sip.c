@@ -11028,6 +11028,22 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 					ast_log(LOG_DEBUG, "user %s has no externip defined\n", user->name);
 				}
 			}
+			/* Set extern IP properly for the contact and via headers */
+			if (user->externip.sin_addr.s_addr) {
+				memcpy(&p->externip.sin_addr, &user->externip.sin_addr, sizeof(p->sa.sin_addr));
+				/* If the user had an externip setting, recalculate our side, and recalculate Call ID */
+				if (ast_sip_ouraddrfor(p, &p->sa.sin_addr, &p->ourip)) {
+					p->ourip = __ourip;
+				}
+				if (option_debug > 2) {
+					ast_log(LOG_DEBUG, "user %s has externip defined. Recalulating our IP. Now %s \n", user->name, ast_inet_ntoa(p->ourip));
+				}
+			} else {
+				memcpy(&p->externip.sin_addr, &externip.sin_addr, sizeof(p->sa.sin_addr));
+				if (option_debug > 2) {
+					ast_log(LOG_DEBUG, "user %s has no externip defined\n", user->name);
+				}
+			}
 		}
 
 	}
