@@ -870,6 +870,7 @@ static const int DEFAULT_DISPLAYCONNECTS	= 1;	/*!< Default setting for displayin
 static const int DEFAULT_TIMESTAMPEVENTS	= 0;	/*!< Default setting for timestampevents */	
 static const int DEFAULT_HTTPTIMEOUT 		= 60;	/*!< Default manager http timeout */
 static const int DEFAULT_BROKENEVENTSACTION	= 0;	/*!< Default setting for brokeneventsaction */
+static const int DEFAULT_DEBUG_ACTIONS          = 0;    /*!< Default setting for action debugging in the CLI */
 static const int DEFAULT_AUTHTIMEOUT		= 30;	/*!< Default setting for authtimeout */
 static const int DEFAULT_AUTHLIMIT		= 50;	/*!< Default setting for authlimit */
 
@@ -883,6 +884,7 @@ static int webmanager_enabled = 0;
 static int authtimeout;
 static int authlimit;
 static char *manager_channelvars;
+static int debug_actions;
 
 #define DEFAULT_REALM		"asterisk"
 static char global_realm[MAXHOSTNAMELEN];	/*!< Default realm */
@@ -4467,6 +4469,20 @@ static int manager_moduleload(struct mansession *s, const struct message *m)
  * the appropriate handler.
  */
 
+/*! \brief Output manager actions to the CLI */
+static void manager_debug_action(struct mansession *s, const struct message *m)
+{
+	int x;
+
+	ast_verbose(VERBOSE_PREFIX_2 "%sManager '%s': Received action from IP(%s)\n", 
+			(s->session->sessiontimeout ? "HTTP " : ""), s->session->username, ast_inet_ntoa(s->session->sin.sin_addr));
+	for (x = 0; x < m->hdrcount; x++) {
+		ast_verbose("        %s\n", m->headers[x]);
+	}
+	ast_verbose("\n");
+}
+
+
 /*
  * Process an AMI message, performing desired action.
  * Return 0 on success, -1 on error that require the session to be destroyed.
@@ -4524,6 +4540,9 @@ static int process_message(struct mansession *s, const struct message *m)
 	AST_RWLIST_UNLOCK(&actions);
 
 	if (tmp) {
+		if (debug_actions) {
+			manager_debug_action(s, m);
+		}
 		if (call_func) {
 			/* Call our AMI function after we unlock our actions lists */
 			ast_debug(1, "Running action '%s'\n", tmp->action);
@@ -6289,6 +6308,7 @@ static int __init_manager(int reload)
 	manager_enabled = DEFAULT_ENABLED;
 	webmanager_enabled = DEFAULT_WEBENABLED;
 	displayconnects = DEFAULT_DISPLAYCONNECTS;
+	debug_actions = DEFAULT_DEBUG_ACTIONS;
 	broken_events_action = DEFAULT_BROKENEVENTSACTION;
 	block_sockets = DEFAULT_BLOCKSOCKETS;
 	timestampevents = DEFAULT_TIMESTAMPEVENTS;
@@ -6351,6 +6371,8 @@ static int __init_manager(int reload)
 			allowmultiplelogin = ast_true(val);
 		} else if (!strcasecmp(var->name, "displayconnects")) {
 			displayconnects = ast_true(val);
+		} else if (!strcasecmp(var->name, "debugactions")) {
+			debug_actions = ast_true(val);
 		} else if (!strcasecmp(var->name, "timestampevents")) {
 			timestampevents = ast_true(val);
 		} else if (!strcasecmp(var->name, "debug")) {
