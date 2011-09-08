@@ -483,6 +483,7 @@ enum media_type {
 	SDP_AUDIO,	/* AUDIO class */
 	SDP_VIDEO,
 	SDP_IMAGE,
+/* For later versions that 1.4 we need to add SDP_TEXT for T.140 */
 };
 
 /*! \brief SIP Methods we support */
