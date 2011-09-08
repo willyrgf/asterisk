@@ -3990,9 +3990,9 @@ static int sip_hangup(struct ast_channel *ast)
 				char *audioqos = "";
 				char *videoqos = "";
 				if (p->rtp)
-					audioqos = ast_rtp_get_quality(p->rtp, NULL);
+					audioqos = ast_rtp_get_quality(p->rtp);
 				if (p->vrtp)
-					videoqos = ast_rtp_get_quality(p->vrtp, NULL);
+					videoqos = ast_rtp_get_quality(p->vrtp);
 				/* Send a hangup */
 				if (oldowner->_state == AST_STATE_UP) {
 					transmit_request_with_auth(p, SIP_BYE, 0, XMIT_RELIABLE, 1);
@@ -14097,7 +14097,7 @@ static void handle_response_peerpoke(struct sip_pvt *p, int resp, struct sip_req
 */
 static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, enum media_type type, int reporttype)
 {
-	struct ast_rtp_quality qual;
+	struct ast_rtp_quality *qual;
 	char *rtpqstring = NULL;
 	int qosrealtime = ast_check_realtime("rtpqos");
 	unsigned int duration;	/* Duration in secs */
@@ -14137,13 +14137,20 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, enum media_t
 
 	}
 
-	rtpqstring =  ast_rtp_get_quality(rtp, &qual);
+	rtpqstring =  ast_rtp_get_quality(rtp);
+	qual = ast_rtp_get_qualdata(rtp);
+	if (!qual) {
+		/* Houston, we got a problem */
+		return;
+	}
+	
 	if (global_rtcpevents) {
 		/* 
 		   If numberofreports == 0 we have no incoming RTCP active, thus we can't
 		   get any reliable data to handle packet loss or any RTT timing.
 		*/
-		duration = (unsigned int)(ast_tvdiff_ms(ast_tvnow(), qual.start) / 1000);
+
+		duration = (unsigned int)(ast_tvdiff_ms(ast_tvnow(), qual->start) / 1000);
 		manager_event(EVENT_FLAG_CALL, "RTPQuality", 
 			"Channel: %s\r\n"			/* AST_CHANNEL for this call */
 			"Uniqueid: %s\r\n"			/* AST_CHANNEL for this call */
@@ -14175,33 +14182,33 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, enum media_t
 			"\r\n", 
 			p->owner ? p->owner->name : "",
 			p->owner ? p->owner->uniqueid : "",
-			qual.bridgedchan[0] ? qual.bridgedchan : "" ,
-			qual.bridgeduniqueid[0] ? qual.bridgeduniqueid : "",
+			qual->bridgedchan[0] ? qual->bridgedchan : "" ,
+			qual->bridgeduniqueid[0] ? qual->bridgeduniqueid : "",
 			reporttype == 1 ? "Final" : "Update",
-			qual.numberofreports == 0 ? "Inactive" : "Active",
+			qual->numberofreports == 0 ? "Inactive" : "Active",
 			duration,
 			p->callid, 
-			ast_inet_ntoa(qual.them.sin_addr), 	
+			ast_inet_ntoa(qual->them.sin_addr), 	
 			type == SDP_AUDIO ? "audio" : (type == SDP_VIDEO ? "video" : "fax") ,
-			ast_getformatname(qual.lasttxformat),
-			ast_getformatname(qual.lastrxformat),
-			qual.local_ssrc, 
-			qual.remote_ssrc,
-			qual.rtt,
-			qual.rttmax,
-			qual.rttmin,
-			qual.local_jitter,
-			qual.remote_jitter,
-			qual.local_lostpackets,
+			ast_getformatname(qual->lasttxformat),
+			ast_getformatname(qual->lastrxformat),
+			qual->local_ssrc, 
+			qual->remote_ssrc,
+			qual->rtt,
+			qual->rttmax,
+			qual->rttmin,
+			qual->local_jitter,
+			qual->remote_jitter,
+			qual->local_lostpackets,
 			/* The local counter of lost packets in inbound stream divided with received packets plus lost packets */
-			(qual.remote_count + qual.local_lostpackets) > 0 ? (double) qual.local_lostpackets / (qual.remote_count + qual.local_lostpackets) * 100 : 0,
-			qual.remote_lostpackets,
+			(qual->remote_count + qual->local_lostpackets) > 0 ? (double) qual->local_lostpackets / (qual->remote_count + qual->local_lostpackets) * 100 : 0,
+			qual->remote_lostpackets,
 			/* The remote counter of lost packets (if we got the reports)
 			   divided with our counter of sent packets
 			 */
-			(qual.local_count + qual.remote_lostpackets) > 0 ? (double) qual.remote_lostpackets / qual.local_count  * 100 : 0,
-			qual.readtranslator, qual.readcost,
-			qual.writetranslator, qual.writecost
+			(qual->local_count + qual->remote_lostpackets) > 0 ? (double) qual->remote_lostpackets / qual->local_count  * 100 : 0,
+			qual->readtranslator, qual->readcost,
+			qual->writetranslator, qual->writecost
 		);
 	}
 
@@ -14229,9 +14236,9 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, enum media_t
 /*! \brief Write quality report to realtime storage */
 void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_quality *qual)
 {
-#ifdef REALTIME2
 	unsigned int duration;	/* Duration in secs */
-	char buf_duration[10], buf_lssrc[30], buf_rssrc[30], buf_rtt[30];
+	char buf_duration[10], buf_lssrc[30], buf_rssrc[30];
+	char buf_rtt[10], buf_rttmin[10], buf_rttmax[10];
 	char localjitter[10], remotejitter[10];
 	char buf_readcost[5], buf_writecost[5];
 	char buf_mediatype[10];
@@ -14255,7 +14262,9 @@ void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_quality *qual)
 	sprintf(remotejitter, "%f", qual->remote_jitter);
 	sprintf(buf_lssrc, "%u", qual->local_ssrc);
 	sprintf(buf_rssrc, "%u", qual->remote_ssrc);
-	sprintf(buf_rtt, "%f", qual->rtt);
+	sprintf(buf_rtt, "%.0f", qual->rtt);
+	sprintf(buf_rttmax, "%.0f", qual->rttmax);
+	sprintf(buf_rttmin, "%.0f", qual->rttmin);
 	sprintf(buf_duration, "%u", duration);
 	sprintf(buf_readcost, "%d", qual->readcost);
 	sprintf(buf_writecost, "%d", qual->writecost);
@@ -14266,6 +14275,27 @@ void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_quality *qual)
 	sprintf(buf_inpackets, "%d", qual->remote_count);	/* Do check again */
 	sprintf(buf_outpackets, "%d", qual->local_count);
 
+	ast_log(LOG_NOTICE,"RTPQOS Channel: %s Uid %s Bch %s Buid %s Pvt %s Media %s Lssrc %s Rssrc %s Rip %s Rtt %s:%s:%s Ljitter %s Rjitter %s Rtcpstatus %s Dur %s Pout %s Plossout %s Pin %s Plossin %s\n",
+		qual->channel[0] ? qual->channel : "",
+		qual->uniqueid[0] ? qual->uniqueid : "",
+		qual->bridgedchan[0] ? qual->bridgedchan : "" ,
+		qual->bridgeduniqueid[0] ? qual->bridgeduniqueid : "",
+		dialog->callid,
+		buf_mediatype,
+		buf_lssrc,
+		buf_rssrc,
+		buf_remoteip,
+		buf_rtt, buf_rttmax, buf_rttmin,
+		localjitter,
+		remotejitter,
+		qual->numberofreports == 0 ? "Inactive" : "Active",
+		buf_duration,
+		buf_outpackets,
+		buf_outpacketloss,
+		buf_inpackets,
+		buf_inpacketloss);
+
+#ifdef REALTIME2
 	ast_store_realtime("rtpqos", 
 		"channel", qual->channel[0] ? qual->channel : "--no channel--",
 		"uniqueid", qual->uniqueid[0] ? qual->uniqueid : "--no uniqueid --",
@@ -14277,6 +14307,8 @@ void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_quality *qual)
 		"remotessrc", buf_rssrc,
 		"remoteip", buf_remoteip,
 		"rtt", buf_rtt, 
+		"rttmax", buf_rttmax, 
+		"rttmin", buf_rttmin, 
 		"localjitter", localjitter, 
 		"remotejitter", remotejitter, 
 		"sendformat", ast_getformatname(qual->lasttxformat),
@@ -16895,14 +16927,14 @@ static int handle_request_bye(struct sip_pvt *p, struct sip_request *req)
 	if (!ast_test_flag(&p->flags[0], SIP_NO_HISTORY) || p->owner) {
 		char *audioqos, *videoqos;
 		if (p->rtp) {
-			audioqos = ast_rtp_get_quality(p->rtp, NULL);
+			audioqos = ast_rtp_get_quality(p->rtp);
 			if (!ast_test_flag(&p->flags[0], SIP_NO_HISTORY))
 				append_history(p, "RTCPaudio", "Quality:%s", audioqos);
 			if (p->owner)
 				pbx_builtin_setvar_helper(p->owner, "RTPAUDIOQOS", audioqos);
 		}
 		if (p->vrtp) {
-			videoqos = ast_rtp_get_quality(p->vrtp, NULL);
+			videoqos = ast_rtp_get_quality(p->vrtp);
 			if (!ast_test_flag(&p->flags[0], SIP_NO_HISTORY))
 				append_history(p, "RTCPvideo", "Quality:%s", videoqos);
 			if (p->owner)

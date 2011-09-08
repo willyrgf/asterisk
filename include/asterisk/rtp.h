@@ -101,7 +101,7 @@ struct ast_rtp_quality {
 	double       rttmin;              /*!< Max observed round trip time */
 	int lasttxformat;		  /*!< Last used codec on transmitted stream */
 	int lastrxformat;		  /*!< Last used codec on received stream */
-	struct sockaddr_in them;	  /*!< The Ip address used for media by remote end */
+	struct sockaddr_in them;	  /*!< The IP address used for media by remote end */
 	struct timeval start;		  /*!< When the call started */
 	struct timeval end;		  /*!< When the call ended */
 	char writetranslator[80];	  /*!< Translator used when writing */
@@ -297,7 +297,10 @@ void ast_rtp_stop(struct ast_rtp *rtp);
 int ast_rtp_isactive(struct ast_rtp *rtp);
 
 /*! \brief Return RTCP quality string */
-char *ast_rtp_get_quality(struct ast_rtp *rtp, struct ast_rtp_quality *qual);
+char *ast_rtp_get_quality(struct ast_rtp *rtp);
+  
+/*! \brief Return RTCP quality data structure */
+struct ast_rtp_quality *ast_rtp_get_qualdata(struct ast_rtp *rtp);
 
 /*! \brief Send an H.261 fast update request. Some devices need this rather than the XML message  in SIP */
 int ast_rtcp_send_h261fur(void *data);

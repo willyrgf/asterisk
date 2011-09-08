@@ -195,6 +195,7 @@ struct ast_rtp {
 	struct ast_rtcp *rtcp;
 	struct ast_codec_pref pref;
 	struct ast_rtp *bridged;        /*!< Who we are Packet bridged to */
+	struct ast_rtp_quality *qual;	/*!< Optional QoS data storage for this stream */
 	int set_marker_bit:1;           /*!< Whether to set the marker bit or not */
 	int isactive:2;                 /*!< Whether the RTP stream is active or not */
 };
@@ -2585,7 +2586,12 @@ void ast_rtp_reset(struct ast_rtp *rtp)
 	rtp->rxseqno = 0;
 }
 
-char *ast_rtp_get_quality(struct ast_rtp *rtp, struct ast_rtp_quality *qual)
+struct ast_rtp_quality *ast_rtp_get_qualdata(struct ast_rtp *rtp)
+{
+	return(rtp->qual);
+}
+
+char *ast_rtp_get_quality(struct ast_rtp *rtp)
 {
 	/*
 	*ssrc          our ssrc
@@ -2599,57 +2605,65 @@ char *ast_rtp_get_quality(struct ast_rtp *rtp, struct ast_rtp_quality *qual)
 	*rtt           round trip time
 	*/
 
-	if (qual && rtp) {
-		qual->start = rtp->start;
-		qual->lasttxformat = rtp->lasttxformat;
-		qual->lastrxformat = rtp->lastrxformat;
-		qual->local_ssrc = rtp->ssrc;
-		qual->local_jitter = rtp->rxjitter;
-		qual->local_count = rtp->rxcount;
-		qual->remote_ssrc = rtp->themssrc;
-		qual->remote_count = rtp->txcount;
-		ast_log(LOG_DEBUG, "OEJ ---Setting remote RTP IP to %s\n", ast_inet_ntoa(rtp->them.sin_addr));
+	if (!rtp->qual) {
+		if (!(rtp->qual = ast_calloc(1, sizeof(*rtp->qual)))) {
+			ast_log(LOG_ERROR, "Memory allocation error.\n");
+		}
+	}
+	if (rtp->qual && rtp) {
+		rtp->qual->start = rtp->start;
+		rtp->qual->lasttxformat = rtp->lasttxformat;
+		rtp->qual->lastrxformat = rtp->lastrxformat;
+		rtp->qual->local_ssrc = rtp->ssrc;
+		rtp->qual->local_jitter = rtp->rxjitter;
+		rtp->qual->local_count = rtp->rxcount;
+		rtp->qual->remote_ssrc = rtp->themssrc;
+		rtp->qual->remote_count = rtp->txcount;
 		if (rtp->rtcp) {
-			qual->them = rtp->rtcp->them;	/* IP address and port */
-			qual->numberofreports = rtp->rtcp->reported_jitter_count;	/* use the jitter counter */
-			qual->local_jitter_max = rtp->rtcp->maxrxjitter;
-			qual->local_jitter_min = rtp->rtcp->minrxjitter;
-			qual->local_lostpackets = rtp->rtcp->expected_prior - rtp->rtcp->received_prior;
-			qual->remote_lostpackets = rtp->rtcp->reported_lost;
-			qual->remote_jitter = rtp->rtcp->reported_jitter / 65536.0;
-			qual->remote_jitter_max = rtp->rtcp->reported_maxjitter;
-			qual->remote_jitter_min = rtp->rtcp->reported_minjitter;
-			qual->rtt = rtp->rtcp->rtt;
-			qual->rttmax = rtp->rtcp->maxrtt;
-			qual->rttmin = rtp->rtcp->minrtt;
-			qual->channel[0] = '\0';
-			qual->uniqueid[0] = '\0';
-			qual->bridgedchan[0] = '\0';
-			qual->bridgeduniqueid[0] = '\0';
-			qual->readtranslator[0] = '\0';
-			qual->writetranslator[0] = '\0';
+			if (rtp->rtcp->them.sin_addr.s_addr) {
+				/* Do not change to empty address */
+				memcpy(&rtp->qual->them, &rtp->rtcp->them, sizeof(rtp->qual->them));
+			}
+			rtp->qual->numberofreports = rtp->rtcp->reported_jitter_count;	/* use the jitter counter */
+			rtp->qual->local_jitter_max = rtp->rtcp->maxrxjitter;
+			rtp->qual->local_jitter_min = rtp->rtcp->minrxjitter;
+			rtp->qual->local_lostpackets = rtp->rtcp->expected_prior - rtp->rtcp->received_prior;
+			rtp->qual->remote_lostpackets = rtp->rtcp->reported_lost;
+			rtp->qual->remote_jitter = rtp->rtcp->reported_jitter / 65536.0;
+			rtp->qual->remote_jitter_max = rtp->rtcp->reported_maxjitter;
+			rtp->qual->remote_jitter_min = rtp->rtcp->reported_minjitter;
+			rtp->qual->rtt = rtp->rtcp->rtt;
+			rtp->qual->rttmax = rtp->rtcp->maxrtt;
+			rtp->qual->rttmin = rtp->rtcp->minrtt;
+			rtp->qual->channel[0] = '\0';
+			rtp->qual->uniqueid[0] = '\0';
+			rtp->qual->bridgedchan[0] = '\0';
+			rtp->qual->bridgeduniqueid[0] = '\0';
+			rtp->qual->readtranslator[0] = '\0';
+			rtp->qual->writetranslator[0] = '\0';
 			if (!ast_strlen_zero(rtp->rtcp->bridgedchan)) {
-				ast_copy_string(qual->bridgedchan, rtp->rtcp->bridgedchan, sizeof(qual->bridgedchan));
+				ast_copy_string(rtp->qual->bridgedchan, rtp->rtcp->bridgedchan, sizeof(rtp->qual->bridgedchan));
 			}
 			if (!ast_strlen_zero(rtp->rtcp->bridgeduniqueid)) {
-				ast_copy_string(qual->bridgeduniqueid, rtp->rtcp->bridgeduniqueid, sizeof(qual->bridgeduniqueid));
+				ast_copy_string(rtp->qual->bridgeduniqueid, rtp->rtcp->bridgeduniqueid, sizeof(rtp->qual->bridgeduniqueid));
 			}
 			if (!ast_strlen_zero(rtp->rtcp->channel)) {
-				ast_copy_string(qual->channel, rtp->rtcp->channel, sizeof(qual->channel));
+				ast_copy_string(rtp->qual->channel, rtp->rtcp->channel, sizeof(rtp->qual->channel));
 			}
 			if (!ast_strlen_zero(rtp->rtcp->uniqueid)) {
-				ast_copy_string(qual->uniqueid, rtp->rtcp->uniqueid, sizeof(qual->uniqueid));
+				ast_copy_string(rtp->qual->uniqueid, rtp->rtcp->uniqueid, sizeof(rtp->qual->uniqueid));
 			}
-			qual->readcost = rtp->rtcp->readcost;
-			qual->writecost = rtp->rtcp->writecost;
+			rtp->qual->readcost = rtp->rtcp->readcost;
+			rtp->qual->writecost = rtp->rtcp->writecost;
 			if (!ast_strlen_zero(rtp->rtcp->readtranslator)) {
-				ast_copy_string(qual->readtranslator, rtp->rtcp->readtranslator, sizeof(qual->readtranslator));
+				ast_copy_string(rtp->qual->readtranslator, rtp->rtcp->readtranslator, sizeof(rtp->qual->readtranslator));
 			}
 			if (!ast_strlen_zero(rtp->rtcp->writetranslator)) {
-				ast_copy_string(qual->writetranslator, rtp->rtcp->writetranslator, sizeof(qual->writetranslator));
+				ast_copy_string(rtp->qual->writetranslator, rtp->rtcp->writetranslator, sizeof(rtp->qual->writetranslator));
 			}
 		}
 	}
+	/* The old way */
 	if (rtp->rtcp) {
 		snprintf(rtp->rtcp->quality, sizeof(rtp->rtcp->quality),
 			"ssrc=%u;themssrc=%u;lp=%u;rxjitter=%f;rxcount=%u;txjitter=%f;txcount=%u;rlp=%u;rtt=%f",
@@ -2663,8 +2677,9 @@ char *ast_rtp_get_quality(struct ast_rtp *rtp, struct ast_rtp_quality *qual)
 			rtp->rtcp->reported_lost,
 			rtp->rtcp->rtt);
 		return rtp->rtcp->quality;
-	} else
+	} else {
 		return "<Unknown> - RTP/RTCP has already been destroyed";
+	}
 }
 
 void ast_rtp_destroy(struct ast_rtp *rtp)
@@ -2722,6 +2737,10 @@ void ast_rtp_destroy(struct ast_rtp *rtp)
 		close(rtp->rtcp->s);
 		free(rtp->rtcp);
 		rtp->rtcp=NULL;
+	}
+	if (rtp->qual) {
+		free(rtp->qual);
+		rtp->qual=NULL;
 	}
 
 	ast_mutex_destroy(&rtp->bridge_lock);
