@@ -14221,7 +14221,7 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, enum media_t
 	   the quality report structure in the PVT and let the function that kills the pvt store the stuff in the
 	   monitor thread instead.
 	 */
-	if (reporttype == 1 && qosrealtime) {
+	if (reporttype == 1 {
 		if (type == SDP_AUDIO) {  /* Audio */
 			p->audioqual = ast_calloc(sizeof(struct ast_rtp_quality), 1);
 			(* p->audioqual) = *qual;
@@ -16880,6 +16880,10 @@ static int acf_channel_read(struct ast_channel *chan, char *funcname, char *prep
 	} else if (strcasecmp(args.type, "VIDEO") == 0) {
 		all = ast_rtp_get_quality(p->vrtp);
 		qos = ast_rtp_get_qualdata(p->vrtp);
+	} else {
+		ast_log(LOG_WARNING, "Unrecognized stream '%s in call to %s'\n", args.typecname, funcname);
+		return -1;
+		
 	}
 
 	if (strcasecmp(args.field, "local_ssrc") == 0)
