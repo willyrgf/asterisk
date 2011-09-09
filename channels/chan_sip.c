@@ -3990,10 +3990,12 @@ static int sip_hangup(struct ast_channel *ast)
 			if (!p->pendinginvite) {
 				char *audioqos = "";
 				char *videoqos = "";
-				if (p->rtp)
+				if (p->rtp) {
 					audioqos = ast_rtp_get_quality(p->rtp);
-				if (p->vrtp)
+				}
+				if (p->vrtp) {
 					videoqos = ast_rtp_get_quality(p->vrtp);
+				}
 				/* Send a hangup */
 				if (oldowner->_state == AST_STATE_UP) {
 					transmit_request_with_auth(p, SIP_BYE, 0, XMIT_RELIABLE, 1);
@@ -14222,12 +14224,12 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, enum media_t
 	if (reporttype == 1 && qosrealtime) {
 		if (type == SDP_AUDIO) {  /* Audio */
 			p->audioqual = ast_calloc(sizeof(struct ast_rtp_quality), 1);
-			(* p->audioqual) = qual;
+			(* p->audioqual) = *qual;
 			p->audioqual->end = ast_tvnow();
  			p->audioqual->mediatype = type;
 		} else if (type == SDP_VIDEO) {  /* Video */
 			p->videoqual = ast_calloc(sizeof(struct ast_rtp_quality), 1);
-			(* p->videoqual) = qual;
+			(* p->videoqual) = *qual;
  			p->videoqual->mediatype = type;
 			p->videoqual->end = ast_tvnow();
 		}
@@ -14252,7 +14254,7 @@ void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_quality *qual)
 	   the RTP stream duration which may include early media (ringing and
 	   provider messages). Only useful for measurements.
 	 */
-	if (qual->end) {
+	if (!ast_tvzero(qual->end)) {
 		duration = (unsigned int)(ast_tvdiff_ms(qual->end, qual->start) / 1000);
 	} else {
 		duration = 0;
@@ -16840,9 +16842,10 @@ static int handle_request_cancel(struct sip_pvt *p, struct sip_request *req)
 
 static int acf_channel_read(struct ast_channel *chan, char *funcname, char *preparse, char *buf, size_t buflen)
 {
-	struct ast_rtp_quality qos;
 	struct sip_pvt *p = chan->tech_pvt;
 	char *all = "", *parse = ast_strdupa(preparse);
+	struct ast_rtp_quality *qos;
+
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(param);
 		AST_APP_ARG(type);
@@ -16866,36 +16869,37 @@ static int acf_channel_read(struct ast_channel *chan, char *funcname, char *prep
 		args.field = "all";
 
 	memset(buf, 0, buflen);
-	memset(&qos, 0, sizeof(qos));
 
 	if (p == NULL) {
 		return -1;
 	}
 
 	if (strcasecmp(args.type, "AUDIO") == 0) {
-		all = ast_rtp_get_quality(p->rtp, &qos);
+		all = ast_rtp_get_quality(p->rtp);
+		qos = ast_rtp_get_qualdata(p->rtp);
 	} else if (strcasecmp(args.type, "VIDEO") == 0) {
-		all = ast_rtp_get_quality(p->vrtp, &qos);
+		all = ast_rtp_get_quality(p->vrtp);
+		qos = ast_rtp_get_qualdata(p->vrtp);
 	}
 
 	if (strcasecmp(args.field, "local_ssrc") == 0)
-		snprintf(buf, buflen, "%u", qos.local_ssrc);
+		snprintf(buf, buflen, "%u", qos->local_ssrc);
 	else if (strcasecmp(args.field, "local_lostpackets") == 0)
-		snprintf(buf, buflen, "%u", qos.local_lostpackets);
+		snprintf(buf, buflen, "%u", qos->local_lostpackets);
 	else if (strcasecmp(args.field, "local_jitter") == 0)
-		snprintf(buf, buflen, "%.0lf", qos.local_jitter * 1000.0);
+		snprintf(buf, buflen, "%.0lf", qos->local_jitter * 1000.0);
 	else if (strcasecmp(args.field, "local_count") == 0)
-		snprintf(buf, buflen, "%u", qos.local_count);
+		snprintf(buf, buflen, "%u", qos->local_count);
 	else if (strcasecmp(args.field, "remote_ssrc") == 0)
-		snprintf(buf, buflen, "%u", qos.remote_ssrc);
+		snprintf(buf, buflen, "%u", qos->remote_ssrc);
 	else if (strcasecmp(args.field, "remote_lostpackets") == 0)
-		snprintf(buf, buflen, "%u", qos.remote_lostpackets);
+		snprintf(buf, buflen, "%u", qos->remote_lostpackets);
 	else if (strcasecmp(args.field, "remote_jitter") == 0)
-		snprintf(buf, buflen, "%.0lf", qos.remote_jitter * 1000.0);
+		snprintf(buf, buflen, "%.0lf", qos->remote_jitter * 1000.0);
 	else if (strcasecmp(args.field, "remote_count") == 0)
-		snprintf(buf, buflen, "%u", qos.remote_count);
+		snprintf(buf, buflen, "%u", qos->remote_count);
 	else if (strcasecmp(args.field, "rtt") == 0)
-		snprintf(buf, buflen, "%.0lf", qos.rtt * 1000.0);
+		snprintf(buf, buflen, "%.0lf", qos->rtt * 1000.0);
 	else if (strcasecmp(args.field, "all") == 0)
 		ast_copy_string(buf, all, buflen);
 	else {
