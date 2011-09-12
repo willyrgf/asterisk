@@ -340,7 +340,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 	</application>
 	<function name="SIP_HEADER" language="en_US">
 		<synopsis>
-			Gets the specified SIP header.
+			Gets the specified SIP header from an incoming INVITE message.
 		</synopsis>
 		<syntax>
 			<parameter name="name" required="true" />
@@ -352,6 +352,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<para>Since there are several headers (such as Via) which can occur multiple
 			times, SIP_HEADER takes an optional second argument to specify which header with
 			that name to retrieve. Headers start at offset <literal>1</literal>.</para>
+			<para>Please observe that contents of the SDP (an attachment to the 
+			SIP request) can't be accessed with this function.</para>
 		</description>
 	</function>
 	<function name="SIPPEER" language="en_US">
@@ -363,7 +365,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<parameter name="item">
 				<enumlist>
 					<enum name="ip">
-						<para>(default) The ip address.</para>
+						<para>(default) The IP address.</para>
 					</enum>
 					<enum name="port">
 						<para>The port number.</para>
@@ -399,7 +401,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 						<para>Status (if qualify=yes).</para>
 					</enum>
 					<enum name="regexten">
-						<para>Registration extension.</para>
+						<para>Extension activated at registration.</para>
 					</enum>
 					<enum name="limit">
 						<para>Call limit (call-limit).</para>
@@ -417,7 +419,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 						<para>Account code for this peer.</para>
 					</enum>
 					<enum name="useragent">
-						<para>Current user agent id for peer.</para>
+						<para>Current user agent header used by peer.</para>
 					</enum>
 					<enum name="maxforwards">
 						<para>The value used for SIP loop prevention in outbound requests</para>
@@ -447,13 +449,13 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 						<para>The source IP address of the peer.</para>
 					</enum>
 					<enum name="from">
-						<para>The URI from the <literal>From:</literal> header.</para>
+						<para>The SIP URI from the <literal>From:</literal> header.</para>
 					</enum>
 					<enum name="uri">
-						<para>The URI from the <literal>Contact:</literal> header.</para>
+						<para>The SIP URI from the <literal>Contact:</literal> header.</para>
 					</enum>
 					<enum name="useragent">
-						<para>The useragent.</para>
+						<para>The Useragent header used by the peer.</para>
 					</enum>
 					<enum name="peername">
 						<para>The name of the peer.</para>
@@ -490,8 +492,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</syntax>
 		<description>
 			<para>Lists SIP peers in text format with details on current status.
-			Peerlist will follow as separate events, followed by a final event called
-			PeerlistComplete.</para>
+			<literal>Peerlist</literal> will follow as separate events, followed by a final event called
+			<literal>PeerlistComplete</literal>.</para>
 		</description>
 	</manager>
 	<manager name="SIPshowpeer" language="en_US">
@@ -531,7 +533,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</syntax>
 		<description>
 			<para>Lists all registration requests and status. Registrations will follow as separate
-			events. followed by a final event called RegistrationsComplete.</para>
+			events followed by a final event called <literal>RegistrationsComplete</literal>.</para>
 		</description>
 	</manager>
 	<manager name="SIPnotify" language="en_US">
@@ -551,7 +553,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		<description>
 			<para>Sends a SIP Notify event.</para>
 			<para>All parameters for this event must be specified in the body of this request
-			via multiple Variable: name=value sequences.</para>
+			via multiple <literal>Variable: name=value</literal> sequences.</para>
 		</description>
 	</manager>
  ***/
