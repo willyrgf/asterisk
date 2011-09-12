@@ -571,6 +571,30 @@ void astman_append(struct mansession *s, const char *fmt, ...)
 	ast_mutex_unlock(&s->session->__lock);
 }
 
+static int handle_debug_on(int fd, int argc, char *argv[])
+{
+
+	if (argc != 3)
+		return RESULT_SHOWUSAGE;
+	
+	ast_cli(fd, "AMI Action Debugging %senabled\n", debug_actions ? "re-" : "");
+
+	debug_actions = 1;
+
+	return RESULT_SUCCESS;
+}
+
+static int handle_debug_off(int fd, int argc, char *argv[])
+{
+	if (argc != 3)
+		return RESULT_SHOWUSAGE;
+	
+	debug_actions = 0;
+	ast_cli(fd, "AMI Action Debugging disabled\n");
+
+	return RESULT_SUCCESS;
+}
+
 static int handle_showmancmd(int fd, int argc, char *argv[])
 {
 	struct manager_action *cur;
@@ -725,6 +749,10 @@ static char showmancmds_help[] =
 "Usage: manager show commands\n"
 "	Prints a listing of all the available Asterisk manager interface commands.\n";
 
+static char man_debug_help[] = 
+"Usage: manager debug on|off\n"
+"	Turns on or off manager action output in the Asterisk CLI.\n";
+
 static char showmanconn_help[] = 
 "Usage: manager show connected\n"
 "	Prints a listing of the users that are currently connected to the\n"
@@ -765,9 +793,13 @@ static struct ast_cli_entry cli_show_manager_eventq_deprecated = {
 	NULL };
 
 static struct ast_cli_entry cli_manager[] = {
-	{ { "manager", "show", "command", NULL },
-	handle_showmancmd, "Show a manager interface command",
-	showmancmd_help, complete_show_mancmd, &cli_show_manager_command_deprecated },
+	{ { "manager", "debug", "on", NULL },
+	handle_debug_on, "Turn manager debug output in the CLI on",
+	man_debug_help, NULL, NULL },
+
+	{ { "manager", "debug", "off", NULL },
+	handle_debug_off, "Turn manager debug output in the CLI off",
+	man_debug_help, NULL, NULL },
 
 	{ { "manager", "show", "commands", NULL },
 	handle_showmancmds, "List manager interface commands",
