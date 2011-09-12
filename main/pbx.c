@@ -584,10 +584,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			If the variable name is prefixed with <literal>__</literal>, the variable will be
 			inherited into channels created from the current channel and all children channels.</para>
 			<note><para>If (and only if), in <filename>/etc/asterisk/asterisk.conf</filename>, you have
-			a <literal>[compat]</literal> category, and you have <literal>app_set = 1.6</literal> under that,then
-			the behavior of this app changes, and does not strip surrounding quotes from the right hand side as
-			it did previously in 1.4. The <literal>app_set = 1.6</literal> is only inserted if <literal>make samples</literal>
-			is executed, or if users insert this by hand into the <filename>asterisk.conf</filename> file.
+			a <literal>[compat]</literal> category, and you have <literal>app_set = 1.4</literal> under that, then
+			the behavior of this app changes, and strips surrounding quotes from the right hand side as
+			it did previously in 1.4.
 			The advantages of not stripping out quoting, and not caring about the separator characters (comma and vertical bar)
 			were sufficient to make these changes in 1.6. Confusion about how many backslashes would be needed to properly
 			protect separators and quotes in various database access strings has been greatly
@@ -5359,6 +5358,11 @@ enum ast_pbx_result ast_pbx_start(struct ast_channel *c)
 		return AST_PBX_FAILED;
 	}
 
+	if (!ast_test_flag(&ast_options, AST_OPT_FLAG_FULLY_BOOTED)) {
+		ast_log(LOG_WARNING, "PBX requires Asterisk to be fully booted\n");
+		return AST_PBX_FAILED;
+	}
+
 	if (increase_call_count(c))
 		return AST_PBX_CALL_LIMIT;
 
@@ -5375,6 +5379,11 @@ enum ast_pbx_result ast_pbx_start(struct ast_channel *c)
 enum ast_pbx_result ast_pbx_run_args(struct ast_channel *c, struct ast_pbx_args *args)
 {
 	enum ast_pbx_result res = AST_PBX_SUCCESS;
+
+	if (!ast_test_flag(&ast_options, AST_OPT_FLAG_FULLY_BOOTED)) {
+		ast_log(LOG_WARNING, "PBX requires Asterisk to be fully booted\n");
+		return AST_PBX_FAILED;
+	}
 
 	if (increase_call_count(c)) {
 		return AST_PBX_CALL_LIMIT;
@@ -9326,8 +9335,10 @@ static int pbx_builtin_congestion(struct ast_channel *chan, const char *data)
 	ast_indicate(chan, AST_CONTROL_CONGESTION);
 	/* Don't change state of an UP channel, just indicate
 	   congestion in audio */
-	if (chan->_state != AST_STATE_UP)
+	if (chan->_state != AST_STATE_UP) {
 		ast_setstate(chan, AST_STATE_BUSY);
+		ast_cdr_congestion(chan->cdr);
+	}
 	wait_for_hangup(chan, data);
 	return -1;
 }
@@ -9383,6 +9394,8 @@ static int pbx_builtin_incomplete(struct ast_channel *chan, const char *data)
 	} else if (chan->_state != AST_STATE_UP && answer) {
 		__ast_answer(chan, 0, 1);
 	}
+
+	ast_indicate(chan, AST_CONTROL_INCOMPLETE);
 
 	return AST_PBX_INCOMPLETE;
 }

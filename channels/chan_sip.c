@@ -6727,6 +6727,20 @@ static int sip_indicate(struct ast_channel *ast, int condition, const void *data
 		}
 		res = -1;
 		break;
+	case AST_CONTROL_INCOMPLETE:
+		if (ast->_state != AST_STATE_UP) {
+			if (ast_test_flag(&p->flags[1], SIP_PAGE2_ALLOWOVERLAP)) {
+				transmit_response_reliable(p, "484 Address Incomplete", &p->initreq);
+			} else {
+				transmit_response_reliable(p, "404 Not Found", &p->initreq);
+			}
+			p->invitestate = INV_COMPLETED;
+			sip_alreadygone(p);
+			ast_softhangup_nolock(ast, AST_SOFTHANGUP_DEV);
+			break;
+		}
+		res = 0;
+		break;
 	case AST_CONTROL_PROCEEDING:
 		if ((ast->_state != AST_STATE_UP) &&
 		    !ast_test_flag(&p->flags[0], SIP_PROGRESS_SENT) &&
@@ -9221,6 +9235,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 				}
 			}
 		} else {
+			change_t38_state(p, T38_DISABLED);
 			ast_udptl_stop(p->udptl);
 			if (debug)
 				ast_debug(1, "Peer doesn't provide T.38 UDPTL\n");
@@ -12916,8 +12931,17 @@ static int sip_reg_timeout(const void *data)
 	}
 
 	if (r->dnsmgr) {
+		struct sip_peer *peer;
 		/* If the registration has timed out, maybe the IP changed.  Force a refresh. */
 		ast_dnsmgr_refresh(r->dnsmgr);
+		/* If we are resolving a peer, we have to make sure the refreshed address gets copied */
+		if ((peer = find_peer(r->hostname, NULL, TRUE, FINDPEERS, FALSE, 0))) {
+			ast_sockaddr_copy(&peer->addr, &r->us);
+			if (r->portno) {
+				ast_sockaddr_set_port(&peer->addr, r->portno);
+			}
+			peer = unref_peer(peer, "unref after find_peer");
+		}
 	}
 
 	/* If the initial tranmission failed, we may not have an existing dialog,
@@ -13034,6 +13058,16 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 		/* Use port number specified if no SRV record was found */
 		if (!ast_sockaddr_port(&r->us) && r->portno) {
 			ast_sockaddr_set_port(&r->us, r->portno);
+		}
+
+		/* It is possible that DNS is unavailable at the time the peer is created. Here, if
+		 * we've updated the address in the registry, we copy it to the peer so that
+		 * create_addr() can copy it to the dialog via create_addr_from_peer */
+		if ((peer = find_peer(r->hostname, NULL, TRUE, FINDPEERS, FALSE, 0))) {
+			if (ast_sockaddr_isnull(&peer->addr) && !(ast_sockaddr_isnull(&r->us))) {
+				ast_sockaddr_copy(&peer->addr, &r->us);
+			}
+			peer = unref_peer(peer, "unref after find_peer");
 		}
 
 		/* Find address to hostname */
@@ -17152,7 +17186,7 @@ static int manager_sip_show_peer(struct mansession *s, const struct message *m)
 	a[3] = peer;
 
 	_sip_show_peer(1, -1, s, m, 4, a);
-	astman_append(s, "\r\n\r\n" );
+	astman_append(s, "\r\n" );
 	return 0;
 }
 
@@ -21166,6 +21200,15 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 				case 504: /* Server Timeout */
 					if (owner)
 						ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
+					break;
+				case 484: /* Address Incomplete */
+					if (owner && sipmethod != SIP_BYE) {
+						if (ast_test_flag(&p->flags[1], SIP_PAGE2_ALLOWOVERLAP)) {
+							ast_queue_hangup_with_cause(p->owner, hangup_sip2cause(resp));
+						} else {
+							ast_queue_hangup_with_cause(p->owner, hangup_sip2cause(404));
+						}
+					}
 					break;
 				default:
 					/* Send hangup */	
@@ -25678,6 +25721,10 @@ static int sip_send_mwi_to_peer(struct sip_peer *peer, int cache_only)
 /*! \brief helper function for the monitoring thread -- seems to be called with the assumption that the dialog is locked */
 static void check_rtp_timeout(struct sip_pvt *dialog, time_t t)
 {
+	int timeout;
+	int hold_timeout;
+	int keepalive;
+
 	/* If we have no active owner, no need to check timers */
 	if (!dialog->owner) {
 		dialog_unlink_rtpcheck(dialog);
@@ -25700,15 +25747,19 @@ static void check_rtp_timeout(struct sip_pvt *dialog, time_t t)
 		return;
 	}
 
+	/* Store these values locally to avoid multiple function calls */
+	timeout = ast_rtp_instance_get_timeout(dialog->rtp);
+	hold_timeout = ast_rtp_instance_get_hold_timeout(dialog->rtp);
+	keepalive = ast_rtp_instance_get_keepalive(dialog->rtp);
+
 	/* If we have no timers set, return now */
-	if (!ast_rtp_instance_get_keepalive(dialog->rtp) && !ast_rtp_instance_get_timeout(dialog->rtp) && !ast_rtp_instance_get_hold_timeout(dialog->rtp)) {
+	if (!keepalive && !timeout && !hold_timeout) {
 		dialog_unlink_rtpcheck(dialog);
 		return;
 	}
 
 	/* Check AUDIO RTP keepalives */
-	if (dialog->lastrtptx && ast_rtp_instance_get_keepalive(dialog->rtp) &&
-		    (t > dialog->lastrtptx + ast_rtp_instance_get_keepalive(dialog->rtp))) {
+	if (dialog->lastrtptx && keepalive && (t > dialog->lastrtptx + keepalive)) {
 		/* Need to send an empty RTP packet */
 		dialog->lastrtptx = time(NULL);
 		ast_rtp_instance_sendcng(dialog->rtp, 0);
@@ -25721,10 +25772,10 @@ static void check_rtp_timeout(struct sip_pvt *dialog, time_t t)
 	*/
 
 	/* Check AUDIO RTP timers */
-	if (dialog->lastrtprx && (ast_rtp_instance_get_timeout(dialog->rtp) || ast_rtp_instance_get_hold_timeout(dialog->rtp)) && (t > dialog->lastrtprx + ast_rtp_instance_get_timeout(dialog->rtp))) {
-		if (!ast_test_flag(&dialog->flags[1], SIP_PAGE2_CALL_ONHOLD) || (ast_rtp_instance_get_hold_timeout(dialog->rtp) && (t > dialog->lastrtprx + ast_rtp_instance_get_hold_timeout(dialog->rtp)))) {
+	if (dialog->lastrtprx && (timeout || hold_timeout) && (t > dialog->lastrtprx + timeout)) {
+		if (!ast_test_flag(&dialog->flags[1], SIP_PAGE2_CALL_ONHOLD) || (hold_timeout && (t > dialog->lastrtprx + hold_timeout))) {
 			/* Needs a hangup */
-			if (ast_rtp_instance_get_timeout(dialog->rtp)) {
+			if (timeout) {
 				if (!dialog->owner || ast_channel_trylock(dialog->owner)) {
 					/*
 					 * Don't block, just try again later.

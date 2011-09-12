@@ -9398,13 +9398,18 @@ static int dahdi_indicate(struct ast_channel *chan, int condition, const void *d
 				ast_setstate(chan, AST_STATE_RINGING);
 			}
 			break;
+		case AST_CONTROL_INCOMPLETE:
+			ast_debug(1, "Received AST_CONTROL_INCOMPLETE on %s\n", chan->name);
+			/* act as a progress or proceeding, allowing the caller to enter additional numbers */
+			res = 0;
+			break;
 		case AST_CONTROL_PROCEEDING:
-			ast_debug(1,"Received AST_CONTROL_PROCEEDING on %s\n",chan->name);
+			ast_debug(1, "Received AST_CONTROL_PROCEEDING on %s\n", chan->name);
 			/* don't continue in ast_indicate */
 			res = 0;
 			break;
 		case AST_CONTROL_PROGRESS:
-			ast_debug(1,"Received AST_CONTROL_PROGRESS on %s\n",chan->name);
+			ast_debug(1, "Received AST_CONTROL_PROGRESS on %s\n", chan->name);
 			/* don't continue in ast_indicate */
 			res = 0;
 			break;
@@ -15477,7 +15482,7 @@ static char *dahdi_show_status(struct ast_cli_entry *e, int cmd, struct ast_cli_
 		ast_cli(a->fd, "No DAHDI found. Unable to open /dev/dahdi/ctl: %s\n", strerror(errno));
 		return CLI_FAILURE;
 	}
-	ast_cli(a->fd, FORMAT2, "Description", "Alarms", "IRQ", "bpviol", "CRC4", "Framing", "Coding", "Options", "LBO");
+	ast_cli(a->fd, FORMAT2, "Description", "Alarms", "IRQ", "bpviol", "CRC", "Framing", "Coding", "Options", "LBO");
 
 	for (span = 1; span < DAHDI_MAX_SPANS; ++span) {
 		s.spanno = span;
@@ -18216,23 +18221,56 @@ static int setup_dahdi_int(int reload, struct dahdi_chan_conf *default_conf, str
 	int trunkgroup;
 	int dchannels[SIG_PRI_NUM_DCHANS];
 #endif
+	int have_cfg_now;
+	static int had_cfg_before = 1;/* So initial load will complain if we don't have cfg. */
 
 	cfg = ast_config_load(config, config_flags);
-
-	/* Error if we have no config file */
+	have_cfg_now = !!cfg;
 	if (!cfg) {
-		ast_log(LOG_ERROR, "Unable to load config %s\n", config);
-		return 0;
+		/* Error if we have no config file */
+		if (had_cfg_before) {
+			ast_log(LOG_ERROR, "Unable to load config %s\n", config);
+			ast_clear_flag(&config_flags, CONFIG_FLAG_FILEUNCHANGED);
+		}
+		cfg = ast_config_new();/* Dummy config */
+		if (!cfg) {
+			return 0;
+		}
+		ucfg = ast_config_load("users.conf", config_flags);
+		if (ucfg == CONFIG_STATUS_FILEUNCHANGED) {
+			ast_config_destroy(cfg);
+			return 0;
+		}
+		if (ucfg == CONFIG_STATUS_FILEINVALID) {
+			ast_log(LOG_ERROR, "File users.conf cannot be parsed.  Aborting.\n");
+			ast_config_destroy(cfg);
+			return 0;
+		}
 	} else if (cfg == CONFIG_STATUS_FILEUNCHANGED) {
 		ucfg = ast_config_load("users.conf", config_flags);
 		if (ucfg == CONFIG_STATUS_FILEUNCHANGED) {
 			return 0;
-		} else if (ucfg == CONFIG_STATUS_FILEINVALID) {
+		}
+		if (ucfg == CONFIG_STATUS_FILEINVALID) {
 			ast_log(LOG_ERROR, "File users.conf cannot be parsed.  Aborting.\n");
 			return 0;
 		}
 		ast_clear_flag(&config_flags, CONFIG_FLAG_FILEUNCHANGED);
-		if ((cfg = ast_config_load(config, config_flags)) == CONFIG_STATUS_FILEINVALID) {
+		cfg = ast_config_load(config, config_flags);
+		have_cfg_now = !!cfg;
+		if (!cfg) {
+			if (had_cfg_before) {
+				/* We should have been able to load the config. */
+				ast_log(LOG_ERROR, "Bad. Unable to load config %s\n", config);
+				ast_config_destroy(ucfg);
+				return 0;
+			}
+			cfg = ast_config_new();/* Dummy config */
+			if (!cfg) {
+				ast_config_destroy(ucfg);
+				return 0;
+			}
+		} else if (cfg == CONFIG_STATUS_FILEINVALID) {
 			ast_log(LOG_ERROR, "File %s cannot be parsed.  Aborting.\n", config);
 			ast_config_destroy(ucfg);
 			return 0;
@@ -18242,12 +18280,14 @@ static int setup_dahdi_int(int reload, struct dahdi_chan_conf *default_conf, str
 		return 0;
 	} else {
 		ast_clear_flag(&config_flags, CONFIG_FLAG_FILEUNCHANGED);
-		if ((ucfg = ast_config_load("users.conf", config_flags)) == CONFIG_STATUS_FILEINVALID) {
+		ucfg = ast_config_load("users.conf", config_flags);
+		if (ucfg == CONFIG_STATUS_FILEINVALID) {
 			ast_log(LOG_ERROR, "File users.conf cannot be parsed.  Aborting.\n");
 			ast_config_destroy(cfg);
 			return 0;
 		}
 	}
+	had_cfg_before = have_cfg_now;
 
 	/* It's a little silly to lock it, but we might as well just to be sure */
 	ast_mutex_lock(&iflock);

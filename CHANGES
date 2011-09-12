@@ -19,6 +19,18 @@ SIP Changes
    compatibility with certain device features such as Avaya IP500's directory
    lookup service.
 
+Chan_local changes
+------------------
+ * Added a manager event "LocalBridge" for local channel call bridges between
+   the two pseudo-channels created.
+
+Codec changes
+-------------
+ * Codec lists may now be modified by the '!' character, to allow succinct
+   specification of a list of codecs allowed and disallowed, without the
+   requirement to use two different keywords.  For example, to specify all
+   codecs except g729 and g723, one need only specify allow=all,!g729,!g723.
+
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 1.8 to Asterisk 10 -------------------
 ------------------------------------------------------------------------------
@@ -35,6 +47,10 @@ Text Messaging
    The MESSAGE() dialplan function and MessageSend() application have been
    added to go along with this functionality.  More detailed usage information
    can be found on the Asterisk wiki (http://wiki.asterisk.org/).
+ * If real-time text support (T.140) is negotiated, it will be preferred for
+   sending text via the SendText application. For example, via SIP, messages
+   that were once sent via the SIP MESSAGE request would be sent via RTP if
+   T.140 text is negotiated for a call.
 
 Parking
 -------
@@ -84,6 +100,7 @@ CDR
 --------------------------
  * The filter option in cdr_adaptive_odbc now supports negating the argument,
    thus allowing records which do NOT match the specified filter.
+ * Added ability to log CONGESTION calls to CDR
 
 CODECS
 --------------------------
@@ -128,6 +145,7 @@ Dialplan Functions
    for a given string to replace with another string as many times as the
    user specifies or just throughout the whole string.
  * Added option to CHANNEL(pickupgroup) allow reading and setting the pickupgroup of channel.
+ * Mark VALID_EXTEN() deprecated in favor of DIALPLAN_EXISTS()
 
 libpri channel driver (chan_dahdi) DAHDI changes
 --------------------------
@@ -158,6 +176,11 @@ FollowMe
    channels involved with the FollowMe thread.  Use this option to improve
    compatability for a FollowMe call with certain dialplan apps, options, and
    functions.
+
+Meetme
+--------------------------
+ * Added option "k" that will automatically close the conference when there's
+   only one person left when a user exits the conference.
 
 CEL
 --------------------------
@@ -220,6 +243,11 @@ Asterisk Modules
 ----------------
  * Modules marked as deprecated are no longer marked as building by default. Enabling
    these modules is still available via menuselect.
+
+IAX2 Changes
+------------
+* authdebug is now disabled by default. To enable this functionaility again
+   set authdebug = yes in iax.conf.
 
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 1.6.2 to Asterisk 1.8 ----------------
@@ -497,7 +525,7 @@ Queue changes
  * A new option, 'I' has been added to both app_queue and app_dial.
    By setting this option, Asterisk will not update the caller with
    connected line changes or redirecting party changes when they occur.
- * A 'relative-peroidic-announce' option has been added to queues.conf.  When
+ * A 'relative-periodic-announce' option has been added to queues.conf.  When
    enabled, this option will cause periodic announce times to be calculated
    from the end of announcements rather than from the beginning.
  * The autopause option in queues.conf can be passed a new value, "all." The
