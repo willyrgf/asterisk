@@ -3992,7 +3992,7 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 			case AST_CONTROL_BRIDGEPARAM:
 				/* We are getting an bridge update from chan_local before masquerade, update this bridge with the params */
 				/* We want to update the peer side, the outbound channel, with it */
-				message_upstream = (struct ast_bridgeflags_envelope *) f->data;
+				message_upstream = (struct ast_bridgeflags_envelope *) f->data.ptr;
 				ast_debug(1, "--- Received bridge parameters sent from %s\n", message_upstream->secretmessage);
 				
 				/* First set the calle side of things */
@@ -4015,12 +4015,6 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 					AST_FEATURE_AUTOMON | AST_FEATURE_PARKCALL | AST_FEATURE_AUTOMIXMON);
 				ast_debug(2, "--- Setting bridgeflags on %s\n", peer->name);
 				ast_copy_flags(&peer->bridgeflags, &(config->features_caller),
-					AST_FEATURE_REDIRECT | AST_FEATURE_DISCONNECT |
-					AST_FEATURE_AUTOMON | AST_FEATURE_PARKCALL | AST_FEATURE_AUTOMIXMON);
-				ast_copy_flags(&(backup_config.features_caller), &(config->features_caller),
-					AST_FEATURE_REDIRECT | AST_FEATURE_DISCONNECT |
-					AST_FEATURE_AUTOMON | AST_FEATURE_PARKCALL | AST_FEATURE_AUTOMIXMON);
-				ast_copy_flags(&(backup_config.features_callee), &(config->features_callee),
 					AST_FEATURE_REDIRECT | AST_FEATURE_DISCONNECT |
 					AST_FEATURE_AUTOMON | AST_FEATURE_PARKCALL | AST_FEATURE_AUTOMIXMON);
 				set_config_flags(chan, peer, config);
