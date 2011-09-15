@@ -3189,7 +3189,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, struc
 							      "Status: off\r\n",
 							     chan->name, chan->uniqueid, conf->confno, user->user_no);
 			}
-			
+
 			/* If user have been hung up, exit the conference */
 			if (user->adminflags & ADMINFLAG_HANGUP) {
 				ret = 0;
@@ -3882,7 +3882,7 @@ bailoutandtrynormal:
 		if (!conf->users) {
 			ast_devstate_changed(AST_DEVICE_NOT_INUSE, "meetme:%s", conf->confno);
 		}
- 
+
  		/* This flag is meant to kill a conference with only one participant remaining.  */
 		if (conf->users == 1 && ast_test_flag64(confflags, CONFFLAG_KILL_LAST_MAN_STANDING)) {
  			ao2_callback(conf->usercontainer, 0, user_set_hangup_cb, NULL);
