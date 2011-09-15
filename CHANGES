@@ -31,6 +31,10 @@ Codec changes
    requirement to use two different keywords.  For example, to specify all
    codecs except g729 and g723, one need only specify allow=all,!g729,!g723.
 
+AMI - Manager
+-------------
+ * Added setvar= option to manager accounts (much like sip.conf) 
+
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 1.8 to Asterisk 10 -------------------
 ------------------------------------------------------------------------------

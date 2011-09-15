@@ -517,20 +517,23 @@ static void ast_comment_destroy(struct ast_comment **comment)
 	*comment = NULL;
 }
 
-/*! \brief copy variables, preserving order */
-struct ast_variable *ast_variable_copy(struct ast_variable *in)
+/*! \brief copy variables, preserving order 
+    \note This function is not copying the comment pointers
+*/
+struct ast_variable *ast_variable_copy(const struct ast_variable *in)
 {
-	/* This really belongs in config.c, and will move there in non-releases */
-
 	struct ast_variable *out = NULL, *tmp, *v, *prev = NULL;
 
-	for (v = in ; v ; v = v->next) {
-		if ((tmp = ast_variable_new(v->name, v->value, ""))) {
+	for (v = in; v; v = v->next) {
+		if ((tmp = ast_variable_new(v->name, v->value, v->filename))) {
+			tmp->lineno = v->lineno;
+			tmp->object = v->object;
+			tmp->blanklines = v->blanklines;
 			if (!out) {
 				out = tmp;	/* The first record */
 			}
 			if (prev) {
-				prev->next = tmp; 
+				prev->next = tmp;
 			}
 			prev = tmp;
 		}

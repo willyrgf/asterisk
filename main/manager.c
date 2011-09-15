@@ -1577,13 +1577,16 @@ static char *handle_showmanager(struct ast_cli_entry *e, int cmd, struct ast_cli
 		"      read perm: %s\n"
 		"     write perm: %s\n"
 		"displayconnects: %s\n",
-/* XXX Add setvar channel variables */
 		(user->username ? user->username : "(N/A)"),
 		(user->secret ? "<Set>" : "(N/A)"),
 		(user->ha ? "yes" : "no"),
 		authority_to_str(user->readperm, &rauthority),
 		authority_to_str(user->writeperm, &wauthority),
 		(user->displayconnects ? "yes" : "no"));
+	ast_cli(a->fd, "      Variables: \n");
+		for (v = user->chanvars ; v ; v = v->next) {
+			ast_cli(fd, "                 %s = %s\n", v->name, v->value);
+		}
 
 	AST_RWLIST_UNLOCK(&users);
 
@@ -4005,26 +4008,19 @@ static int action_originate(struct mansession *s, const struct message *m)
 	}
 
 	/* Allocate requested channel variables */
-	/* read variables from manager command and allocate memory now */
 	vars = astman_get_variables(m);
 	if (s->session->chanvars) {
 		struct ast_variable *v, *old;
 		old = vars;
 		vars = NULL;
 
-		/* The variables in the originate command is appended at the
-			end of the list, to override */
+		/* The variables in the AMI originate action are appended at the end of the list, to override any user variables that apply*/
 
 		vars = ast_variable_copy(s->session->chanvars);
-		/* copy channel vars */
 		if (old ) {
-			for (v = vars ; v ; ) {
-				if (!v->next) {
-					v->next = old;	/* Append originate variables at end of list */
-					v = NULL;
-				} else {
-					v = v->next;	/* Loop */
-				}
+			for (v = vars; v->next; v = v->next );
+			if (v->next) {
+				v->next = old;	/* Append originate variables at end of list */
 			}
 		}
 	}
