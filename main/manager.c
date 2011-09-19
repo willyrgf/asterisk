@@ -6349,8 +6349,8 @@ static int function_amiclient(struct ast_channel *chan, const char *cmd, char *d
 		return -1;
 	}
 	AST_STANDARD_APP_ARGS(args, data);
-	ast_strip(args.name);
-	ast_strip(args.param);
+	args.name = ast_strip(args.name);
+	args.param = ast_strip(args.param);
 
 	AST_RWLIST_RDLOCK(&users);
 	if (!(user = get_manager_by_name_locked(args.name))) {
@@ -6376,7 +6376,7 @@ static int function_amiclient(struct ast_channel *chan, const char *cmd, char *d
 static struct ast_custom_function managerclient_function = {
 	.name = "AMI_CLIENT",
 	.read = function_amiclient,
-	.read_max = 2,
+	.read_max = 12,
 };
 
 static int registered = 0;
