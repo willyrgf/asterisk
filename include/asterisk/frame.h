@@ -85,6 +85,7 @@ extern "C" {
  * \arg \b SRCCHANGE       Media source has changed (RTP marker bit and SSRC must change)
  * \arg \b CONNECTED_LINE  Connected line has changed
  * \arg \b REDIRECTING     Call redirecting information has changed.
+ * \arg \b BRIDGEPARAM     Bridge parameters to preserve from the outbound bridge when chan_local masquerades away
  */
 
 /*!
@@ -266,6 +267,7 @@ enum ast_control_frame_type {
 	AST_CONTROL_INCOMPLETE = 30,	/*!< Indication that the extension dialed is incomplete */
 	AST_CONTROL_MCID = 31,			/*!< Indicate that the caller is being malicious. */
 	AST_CONTROL_UPDATE_RTP_PEER = 32, /*!< Interrupt the bridge and have it update the peer */
+ 	AST_CONTROL_BRIDGEPARAM = 33,           /*!< Bridge parameter update after masquerade */
 };
 
 enum ast_frame_read_action {
