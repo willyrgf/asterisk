@@ -108,14 +108,14 @@ static AST_RWLIST_HEAD_STATIC(psql_columns, columns);
 				}                                         \
 			} while (0)
 
-/*! \brief Handle the CLI command cdr pgsql status */
+/*! \brief Handle the CLI command cdr show pgsql status */
 static char *handle_cdr_pgsql_status(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	switch (cmd) {
 	case CLI_INIT:
-		e->command = "cdr pgsql status";
+		e->command = "cdr show pgsql status";
 		e->usage =
-			"Usage: cdr pgsql status\n"
+			"Usage: cdr show pgsql status\n"
 			"       Shows current connection status for cdr_pgsql\n";
 		return NULL;
 	case CLI_GENERATE:
