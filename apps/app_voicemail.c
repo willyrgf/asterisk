@@ -435,8 +435,8 @@ static AST_LIST_HEAD_STATIC(vmstates, vmstate);
 #define ASTERISK_USERNAME "asterisk"
 
 /* Define fast-forward, pause, restart, and reverse keys
-   while listening to a voicemail message - these are
-   strings, not characters */
+ * while listening to a voicemail message - these are
+ * strings, not characters */
 #define DEFAULT_LISTEN_CONTROL_FORWARD_KEY "#"
 #define DEFAULT_LISTEN_CONTROL_REVERSE_KEY "*"
 #define DEFAULT_LISTEN_CONTROL_PAUSE_KEY "0"
@@ -445,7 +445,7 @@ static AST_LIST_HEAD_STATIC(vmstates, vmstate);
 #define VALID_DTMF "1234567890*#" /* Yes ABCD are valid dtmf but what phones have those? */
 
 /* Default mail command to mail voicemail. Change it with the
-    mailcmd= command in voicemail.conf */
+ * mailcmd= command in voicemail.conf */
 #define SENDMAIL "/usr/sbin/sendmail -t"
 
 #define INTRO "vm-intro"
@@ -905,7 +905,7 @@ static int open_mailbox(struct vm_state *vms, struct ast_vm_user *vmu, int box);
 static int advanced_options(struct ast_channel *chan, struct ast_vm_user *vmu, struct vm_state *vms, int msg, int option, signed char record_gain);
 static int dialout(struct ast_channel *chan, struct ast_vm_user *vmu, char *num, char *outgoing_context);
 static int play_record_review(struct ast_channel *chan, char *playfile, char *recordfile, int maxtime,
-			char *fmt, int outsidecaller, struct ast_vm_user *vmu, int *duration, const char *unlockdir,
+			char *fmt, int outsidecaller, struct ast_vm_user *vmu, int *duration, int *sound_duration, const char *unlockdir,
 			signed char record_gain, struct vm_state *vms, char *flag);
 static int vm_tempgreeting(struct ast_channel *chan, struct ast_vm_user *vmu, struct vm_state *vms, char *fmtc, signed char record_gain);
 static int vm_play_folder_name(struct ast_channel *chan, char *mbox);
@@ -3245,9 +3245,9 @@ static void check_quota(struct vm_state *vms, char *mailbox) {
 #endif /* IMAP_STORAGE */
 
 /*! \brief Lock file path
-    only return failure if ast_lock_path returns 'timeout',
-   not if the path does not exist or any other reason
-*/
+ * only return failure if ast_lock_path returns 'timeout',
+ * not if the path does not exist or any other reason
+ */
 static int vm_lock_path(const char *path)
 {
 	switch (ast_lock_path(path)) {
@@ -4573,7 +4573,7 @@ static void make_email_file(FILE *p, char *srcemail, struct ast_vm_user *vmu, in
 			} else {
 				fprintf(p, "From: %s <%s>" ENDL, ast_str_quote(&str2, 0, ast_str_buffer(str1)), who);
 			}
-			ast = ast_channel_release(ast);
+			ast = ast_channel_unref(ast);
 		} else {
 			ast_log(AST_LOG_WARNING, "Cannot allocate the channel for variables substitution\n");
 		}
@@ -4618,7 +4618,7 @@ static void make_email_file(FILE *p, char *srcemail, struct ast_vm_user *vmu, in
 			} else {
 				fprintf(p, "Subject: %s" ENDL, ast_str_buffer(str1));
 			}
-			ast = ast_channel_release(ast);
+			ast = ast_channel_unref(ast);
 		} else {
 			ast_log(AST_LOG_WARNING, "Cannot allocate the channel for variables substitution\n");
 		}
@@ -4704,7 +4704,7 @@ static void make_email_file(FILE *p, char *srcemail, struct ast_vm_user *vmu, in
 #else
 			fprintf(p, "%s" ENDL, ast_str_buffer(str1));
 #endif
-			ast = ast_channel_release(ast);
+			ast = ast_channel_unref(ast);
 		} else {
 			ast_log(AST_LOG_WARNING, "Cannot allocate the channel for variables substitution\n");
 		}
@@ -4931,7 +4931,7 @@ static int sendpage(char *srcemail, char *pager, int msgnum, char *context, char
 			} else {
 				fprintf(p, "From: %s <%s>" ENDL, ast_str_quote(&str2, 0, ast_str_buffer(str1)), who);
 			}
-			ast = ast_channel_release(ast);
+			ast = ast_channel_unref(ast);
 		} else {
 			ast_log(AST_LOG_WARNING, "Cannot allocate the channel for variables substitution\n");
 		}
@@ -4975,7 +4975,7 @@ static int sendpage(char *srcemail, char *pager, int msgnum, char *context, char
 			} else {
 				fprintf(p, "Subject: %s" ENDL, ast_str_buffer(str1));
 			}
-			ast = ast_channel_release(ast);
+			ast = ast_channel_unref(ast);
 		} else {
 			ast_log(AST_LOG_WARNING, "Cannot allocate the channel for variables substitution\n");
 		}
@@ -4993,7 +4993,7 @@ static int sendpage(char *srcemail, char *pager, int msgnum, char *context, char
 			prep_email_sub_vars(ast, vmu, msgnum + 1, context, mailbox, fromfolder, cidnum, cidname, dur, date, category, flag);
 			ast_str_substitute_variables(&str1, 0, ast, pagerbody);
 			fprintf(p, "%s" ENDL, ast_str_buffer(str1));
-			ast = ast_channel_release(ast);
+			ast = ast_channel_unref(ast);
 		} else {
 			ast_log(AST_LOG_WARNING, "Cannot allocate the channel for variables substitution\n");
 		}
@@ -5577,6 +5577,7 @@ static int leave_voicemail(struct ast_channel *chan, char *ext, struct leave_vm_
 	int res = 0;
 	int msgnum;
 	int duration = 0;
+	int sound_duration = 0;
 	int ausemacro = 0;
 	int ousemacro = 0;
 	int ouseexten = 0;
@@ -5964,13 +5965,13 @@ static int leave_voicemail(struct ast_channel *chan, char *ext, struct leave_vm_
 			res = ast_streamfile(chan, "vm-mailboxfull", chan->language);
 			goto leave_vm_out;
 		}
-		res = play_record_review(chan, NULL, tmptxtfile, vmu->maxsecs, fmt, 1, vmu, &duration, NULL, options->record_gain, vms, flag);
+		res = play_record_review(chan, NULL, tmptxtfile, vmu->maxsecs, fmt, 1, vmu, &duration, &sound_duration, NULL, options->record_gain, vms, flag);
 
 		if (txt) {
 			fprintf(txt, "flag=%s\n", flag);
-			if (duration < vmu->minsecs) {
+			if (sound_duration < vmu->minsecs) {
 				fclose(txt);
-				ast_verb(3, "Recording was %d seconds long but needs to be at least %d - abandoning\n", duration, vmu->minsecs);
+				ast_verb(3, "Recording was %d seconds long but needs to be at least %d - abandoning\n", sound_duration, vmu->minsecs);
 				ast_filedelete(tmptxtfile, NULL);
 				unlink(tmptxtfile);
 				if (ast_check_realtime("voicemail_data")) {
@@ -6092,7 +6093,7 @@ static int leave_voicemail(struct ast_channel *chan, char *ext, struct leave_vm_
 		} else if (res > 0 && res != 't')
 			res = 0;
 
-		if (duration < vmu->minsecs)
+		if (sound_duration < vmu->minsecs)
 			/* XXX We should really give a prompt too short/option start again, with leave_vm_out called only after a timeout XXX */
 			pbx_builtin_setvar_helper(chan, "VMSTATUS", "FAILED");
 		else
@@ -6124,30 +6125,31 @@ leave_vm_out:
 #if !defined(IMAP_STORAGE)
 static int resequence_mailbox(struct ast_vm_user *vmu, char *dir, int stopcount)
 {
-    /* we know the actual number of messages, so stop process when number is hit */
+	/* we know the actual number of messages, so stop process when number is hit */
 
-    int x, dest;
-    char sfn[PATH_MAX];
-    char dfn[PATH_MAX];
+	int x, dest;
+	char sfn[PATH_MAX];
+	char dfn[PATH_MAX];
 
-    if (vm_lock_path(dir))
-        return ERROR_LOCK_PATH;
+	if (vm_lock_path(dir)) {
+		return ERROR_LOCK_PATH;
+	}
 
-    for (x = 0, dest = 0; dest != stopcount && x < vmu->maxmsg + 10; x++) {
-        make_file(sfn, sizeof(sfn), dir, x);
-        if (EXISTS(dir, x, sfn, NULL)) {
+	for (x = 0, dest = 0; dest != stopcount && x < vmu->maxmsg + 10; x++) {
+		make_file(sfn, sizeof(sfn), dir, x);
+		if (EXISTS(dir, x, sfn, NULL)) {
 
-            if (x != dest) {
-                make_file(dfn, sizeof(dfn), dir, dest);
-                RENAME(dir, x, vmu->mailbox, vmu->context, dir, dest, sfn, dfn);
-            }
+			if (x != dest) {
+				make_file(dfn, sizeof(dfn), dir, dest);
+				RENAME(dir, x, vmu->mailbox, vmu->context, dir, dest, sfn, dfn);
+			}
 
-            dest++;
-        }
-    }
-    ast_unlock_path(dir);
+			dest++;
+		}
+	}
+	ast_unlock_path(dir);
 
-    return dest;
+	return dest;
 }
 #endif
 
@@ -6870,7 +6872,7 @@ static int vm_forwardoptions(struct ast_channel *chan, struct ast_vm_user *vmu, 
 			strncat(vms->introfn, "intro", sizeof(vms->introfn));
 			res = ast_play_and_wait(chan, INTRO);
 			res = ast_play_and_wait(chan, "beep");
-			res = play_record_review(chan, NULL, vms->introfn, vmu->maxsecs, vm_fmts, 1, vmu, (int *) duration, NULL, record_gain, vms, flag);
+			res = play_record_review(chan, NULL, vms->introfn, vmu->maxsecs, vm_fmts, 1, vmu, (int *) duration, NULL, NULL, record_gain, vms, flag);
 			cmd = 't';
 #else
 
@@ -6903,7 +6905,7 @@ static int vm_forwardoptions(struct ast_channel *chan, struct ast_vm_user *vmu, 
 			if (record_gain)
 				ast_channel_setoption(chan, AST_OPTION_RXGAIN, &record_gain, sizeof(record_gain), 0);
 
-			cmd = ast_play_and_prepend(chan, NULL, msgfile, 0, vm_fmts, &prepend_duration, 1, silencethreshold, maxsilence);
+			cmd = ast_play_and_prepend(chan, NULL, msgfile, 0, vm_fmts, &prepend_duration, NULL, 1, silencethreshold, maxsilence);
 
 			if (cmd == 'S') { /* If we timed out, tell the user it didn't work properly and clean up the files */
 				ast_stream_and_wait(chan, vm_pls_try_again, ""); /* this might be removed if a proper vm_prepend_timeout is ever recorded */
@@ -9237,7 +9239,7 @@ static int vm_newuser(struct ast_channel *chan, struct ast_vm_user *vmu, struct 
 	if (ast_test_flag(vmu, VM_FORCENAME)) {
 		snprintf(prefile, sizeof(prefile), "%s%s/%s/greet", VM_SPOOL_DIR, vmu->context, vms->username);
 		if (ast_fileexists(prefile, NULL, NULL) < 1) {
-			cmd = play_record_review(chan, "vm-rec-name", prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, record_gain, vms, NULL);
+			cmd = play_record_review(chan, "vm-rec-name", prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, NULL, record_gain, vms, NULL);
 			if (cmd < 0 || cmd == 't' || cmd == '#')
 				return cmd;
 		}
@@ -9247,14 +9249,14 @@ static int vm_newuser(struct ast_channel *chan, struct ast_vm_user *vmu, struct 
 	if (ast_test_flag(vmu, VM_FORCEGREET)) {
 		snprintf(prefile, sizeof(prefile), "%s%s/%s/unavail", VM_SPOOL_DIR, vmu->context, vms->username);
 		if (ast_fileexists(prefile, NULL, NULL) < 1) {
-			cmd = play_record_review(chan, "vm-rec-unv", prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, record_gain, vms, NULL);
+			cmd = play_record_review(chan, "vm-rec-unv", prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, NULL, record_gain, vms, NULL);
 			if (cmd < 0 || cmd == 't' || cmd == '#')
 				return cmd;
 		}
 
 		snprintf(prefile, sizeof(prefile), "%s%s/%s/busy", VM_SPOOL_DIR, vmu->context, vms->username);
 		if (ast_fileexists(prefile, NULL, NULL) < 1) {
-			cmd = play_record_review(chan, "vm-rec-busy", prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, record_gain, vms, NULL);
+			cmd = play_record_review(chan, "vm-rec-busy", prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, NULL, record_gain, vms, NULL);
 			if (cmd < 0 || cmd == 't' || cmd == '#')
 				return cmd;
 		}
@@ -9289,15 +9291,15 @@ static int vm_options(struct ast_channel *chan, struct ast_vm_user *vmu, struct 
 		switch (cmd) {
 		case '1': /* Record your unavailable message */
 			snprintf(prefile, sizeof(prefile), "%s%s/%s/unavail", VM_SPOOL_DIR, vmu->context, vms->username);
-			cmd = play_record_review(chan, "vm-rec-unv", prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, record_gain, vms, NULL);
+			cmd = play_record_review(chan, "vm-rec-unv", prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, NULL, record_gain, vms, NULL);
 			break;
 		case '2':  /* Record your busy message */
 			snprintf(prefile, sizeof(prefile), "%s%s/%s/busy", VM_SPOOL_DIR, vmu->context, vms->username);
-			cmd = play_record_review(chan, "vm-rec-busy", prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, record_gain, vms, NULL);
+			cmd = play_record_review(chan, "vm-rec-busy", prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, NULL, record_gain, vms, NULL);
 			break;
 		case '3': /* Record greeting */
 			snprintf(prefile, sizeof(prefile), "%s%s/%s/greet", VM_SPOOL_DIR, vmu->context, vms->username);
-			cmd = play_record_review(chan, "vm-rec-name", prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, record_gain, vms, NULL);
+			cmd = play_record_review(chan, "vm-rec-name", prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, NULL, record_gain, vms, NULL);
 			break;
 		case '4':  /* manage the temporary greeting */
 			cmd = vm_tempgreeting(chan, vmu, vms, fmtc, record_gain);
@@ -9431,12 +9433,12 @@ static int vm_tempgreeting(struct ast_channel *chan, struct ast_vm_user *vmu, st
 			retries = 0;
 		RETRIEVE(prefile, -1, vmu->mailbox, vmu->context);
 		if (ast_fileexists(prefile, NULL, NULL) <= 0) {
-			play_record_review(chan, "vm-rec-temp", prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, record_gain, vms, NULL);
+			play_record_review(chan, "vm-rec-temp", prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, NULL, record_gain, vms, NULL);
 			cmd = 't';	
 		} else {
 			switch (cmd) {
 			case '1':
-				cmd = play_record_review(chan, "vm-rec-temp", prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, record_gain, vms, NULL);
+				cmd = play_record_review(chan, "vm-rec-temp", prefile, maxgreet, fmtc, 0, vmu, &duration, NULL, NULL, record_gain, vms, NULL);
 				break;
 			case '2':
 				DELETE(prefile, -1, prefile, vmu);
@@ -12687,6 +12689,9 @@ AST_TEST_DEFINE(test_voicemail_msgcount)
 		!(vmu = find_or_create(testcontext, testmailbox))) {
 		ast_test_status_update(test, "Cannot create vmu structure\n");
 		ast_unreplace_sigchld();
+#ifdef IMAP_STORAGE
+		chan = ast_channel_unref(chan);
+#endif
 		return AST_TEST_FAIL;
 	}
 
@@ -12706,6 +12711,9 @@ AST_TEST_DEFINE(test_voicemail_msgcount)
 				ast_test_status_update(test, "Unable to create test voicemail: %s\n",
 					syserr > 0 ? strerror(syserr) : "unable to fork()");
 				ast_unreplace_sigchld();
+#ifdef IMAP_STORAGE
+				chan = ast_channel_unref(chan);
+#endif
 				return AST_TEST_FAIL;
 			}
 		}
@@ -12779,7 +12787,7 @@ AST_TEST_DEFINE(test_voicemail_msgcount)
 	}
 
 #ifdef IMAP_STORAGE
-	chan = ast_channel_release(chan);
+	chan = ast_channel_unref(chan);
 #endif
 
 	/* And remove test directory */
@@ -13252,7 +13260,7 @@ static int advanced_options(struct ast_channel *chan, struct ast_vm_user *vmu, s
 }
 
 static int play_record_review(struct ast_channel *chan, char *playfile, char *recordfile, int maxtime, char *fmt,
-			int outsidecaller, struct ast_vm_user *vmu, int *duration, const char *unlockdir,
+			int outsidecaller, struct ast_vm_user *vmu, int *duration, int *sound_duration, const char *unlockdir,
 			signed char record_gain, struct vm_state *vms, char *flag)
 {
 	/* Record message & let caller review or re-record it, or set options if applicable */
@@ -13327,7 +13335,7 @@ static int play_record_review(struct ast_channel *chan, char *playfile, char *re
 				ast_channel_setoption(chan, AST_OPTION_RXGAIN, &record_gain, sizeof(record_gain), 0);
 			if (ast_test_flag(vmu, VM_OPERATOR))
 				canceldtmf = "0";
-			cmd = ast_play_and_record_full(chan, playfile, tempfile, maxtime, fmt, duration, silencethreshold, maxsilence, unlockdir, acceptdtmf, canceldtmf);
+			cmd = ast_play_and_record_full(chan, playfile, tempfile, maxtime, fmt, duration, sound_duration, silencethreshold, maxsilence, unlockdir, acceptdtmf, canceldtmf);
 			if (strchr(canceldtmf, cmd)) {
 			/* need this flag here to distinguish between pressing '0' during message recording or after */
 				canceleddtmf = 1;
@@ -13347,13 +13355,13 @@ static int play_record_review(struct ast_channel *chan, char *playfile, char *re
 			} else if (cmd == '*') {
 				break;
 #if 0
-			} else if (vmu->review && (*duration < 5)) {
+			} else if (vmu->review && sound_duration && (*sound_duration < 5)) {
 				/* Message is too short */
 				ast_verb(3, "Message too short\n");
 				cmd = ast_play_and_wait(chan, "vm-tooshort");
 				cmd = ast_filedelete(tempfile, NULL);
 				break;
-			} else if (vmu->review && (cmd == 2 && *duration < (maxsilence + 3))) {
+			} else if (vmu->review && (cmd == 2 && sound_duration && *sound_duration < (maxsilence + 3))) {
 				/* Message is all silence */
 				ast_verb(3, "Nothing recorded\n");
 				cmd = ast_filedelete(tempfile, NULL);

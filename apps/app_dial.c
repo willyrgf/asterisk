@@ -1772,7 +1772,7 @@ static int setup_privacy_args(struct privacy_args *pa,
 			*/
 			silencethreshold = ast_dsp_get_threshold_from_settings(THRESHOLD_SILENCE);
 			ast_answer(chan);
-			res = ast_play_and_record(chan, "priv-recordintro", pa->privintro, 4, "sln", &duration, silencethreshold, 2000, 0);  /* NOTE: I've reduced the total time to 4 sec */
+			res = ast_play_and_record(chan, "priv-recordintro", pa->privintro, 4, "sln", &duration, NULL, silencethreshold, 2000, 0);  /* NOTE: I've reduced the total time to 4 sec */
 									/* don't think we'll need a lock removed, we took care of
 									   conflicts by naming the pa.privintro file */
 			if (res == -1) {
@@ -2325,7 +2325,9 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 			ast_copy_string(tc->exten, chan->exten, sizeof(tc->exten));
 
 		ast_channel_unlock(tc);
+		ast_channel_unlock(chan);
 		res = ast_call(tc, numsubst, 0); /* Place the call, but don't wait on the answer */
+		ast_channel_lock(chan);
 
 		/* Save the info in cdr's that we called them */
 		if (chan->cdr)
