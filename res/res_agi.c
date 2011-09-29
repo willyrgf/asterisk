@@ -1934,6 +1934,7 @@ static int handle_streamfile(struct ast_channel *chan, AGI *agi, int argc, const
 	struct ast_filestream *fs, *vfs;
 	long sample_offset = 0, max_length;
 	const char *edigits = "";
+	int moh = ast_test_flag(chan, AST_FLAG_MOH);
 
 	if (argc < 4 || argc > 5)
 		return RESULT_SHOWUSAGE;
@@ -1969,6 +1970,10 @@ static int handle_streamfile(struct ast_channel *chan, AGI *agi, int argc, const
 	 * the end of the stream, return that amount, else check for the amount */
 	sample_offset = (chan->stream) ? ast_tellstream(fs) : max_length;
 	ast_stopstream(chan);
+	if (moh) {
+		/* restart music on hold if it was on */
+		ast_moh_start(chan, NULL, NULL);
+	}
 	if (res == 1) {
 		/* Stop this command, don't print a result line, as there is a new command */
 		return RESULT_SUCCESS;
