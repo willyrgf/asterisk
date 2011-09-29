@@ -5383,8 +5383,14 @@ struct ast_channel *__ast_request_and_dial(const char *type, format_t format, co
 					timeout = 0;		/* trick to force exit from the while() */
 					break;
 
-				/* Ignore these */
 				case AST_CONTROL_PROGRESS:
+					if (oh->connect_on_earlymedia) {
+						*outstate = f->subclass.integer;
+						timeout = 0;		/* trick to force exit from the while() */
+						break;
+					}
+					/* Fallthrough */
+				/* Ignore these */
 				case AST_CONTROL_PROCEEDING:
 				case AST_CONTROL_HOLD:
 				case AST_CONTROL_UNHOLD:
