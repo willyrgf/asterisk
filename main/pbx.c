@@ -8668,6 +8668,7 @@ struct async_stat {
 	int timeout;
 	char app[AST_MAX_EXTENSION];
 	char appdata[1024];
+	int earlymedia;			/* Connect the bridge if early media arrives, don't wait for answer */
 };
 
 static void *async_wait(void *data)
@@ -8678,6 +8679,7 @@ static void *async_wait(void *data)
 	int res;
 	struct ast_frame *f;
 	struct ast_app *app;
+	int haveearlymedia = 0;
 
 	while (timeout && (chan->_state != AST_STATE_UP)) {
 		res = ast_waitfor(chan, timeout);
@@ -8694,10 +8696,17 @@ static void *async_wait(void *data)
 				ast_frfree(f);
 				break;
 			}
+			if (as->earlymedia && f->subclass.integer == AST_CONTROL_PROGRESS) {
+				haveearlymedia = 1;
+				break;
+			}
 		}
 		ast_frfree(f);
 	}
-	if (chan->_state == AST_STATE_UP) {
+	if (chan->_state == AST_STATE_UP || haveearlymedia) {
+		if (haveearlymedia && option_debug > 1) {
+			ast_log(LOG_DEBUG, "Activating pbx since we have early media \n");
+		}
 		if (!ast_strlen_zero(as->app)) {
 			app = pbx_findapp(as->app);
 			if (app) {
@@ -8758,12 +8767,14 @@ static int ast_pbx_outgoing_cdr_failed(void)
 	return 0;  /* success */
 }
 
-int ast_pbx_outgoing_exten(const char *type, struct ast_format_cap *cap, void *data, int timeout, const char *context, const char *exten, int priority, int *reason, int synchronous, const char *cid_num, const char *cid_name, struct ast_variable *vars, const char *account, struct ast_channel **channel)
+int ast_pbx_outgoing_exten(const char *type, struct ast_format_cap *cap, void *data, int timeout, const char *context, const char *exten, int priority, int *reason, int synchronous, const char *cid_num, const char *cid_name, struct ast_variable *vars, const char *account, struct ast_channel **channel, const int earlymedia)
 {
 	struct ast_channel *chan;
 	struct async_stat *as;
 	int res = -1, cdr_res = -1;
 	struct outgoing_helper oh;
+
+	oh.connect_on_earlymedia = earlymedia;
 
 	if (synchronous) {
 		oh.context = context;
@@ -8782,9 +8793,9 @@ int ast_pbx_outgoing_exten(const char *type, struct ast_format_cap *cap, void *d
 				ast_channel_lock(chan);
 		}
 		if (chan) {
-			if (chan->_state == AST_STATE_UP) {
-					res = 0;
-				ast_verb(4, "Channel %s was answered.\n", chan->name);
+			if (chan->_state == AST_STATE_UP || (earlymedia && *reason == AST_CONTROL_PROGRESS) ) {
+				res = 0;
+				ast_verb(4, "Channel %s was answered (or got early media).\n", chan->name);
 
 				if (synchronous > 1) {
 					if (channel)
