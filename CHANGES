@@ -40,6 +40,11 @@ CDR postgresql driver changes
 -----------------------------
  * Added command "cdr show pgsql status" to check connection status
 
+AMI - the manager interface
+---------------------------
+ * The originate action now has an option "Earlymedia" that enables the
+   call to bridge when we get early media in the call. Previously,
+   early media was disregarded always when originating calls using AMI.
 
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 1.8 to Asterisk 10 -------------------
