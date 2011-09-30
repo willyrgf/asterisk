@@ -86,6 +86,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			Set(CHANNEL(musicclass)=...). If duration is given, hold music will be played
 			specified number of seconds. If duration is ommited, music plays indefinitely.
 			Returns <literal>0</literal> when done, <literal>-1</literal> on hangup.</para>
+			<para>This application does not automatically answer and should be preceeded by
+			an application such as Answer() or Progress().</para>
 		</description>
 	</application>
 	<application name="WaitMusicOnHold" language="en_US">
@@ -151,6 +153,7 @@ static const char stop_moh[] = "StopMusicOnHold";
 static int respawn_time = 20;
 
 struct moh_files_state {
+	/*! Holds a reference to the MOH class. */
 	struct mohclass *class;
 	char name[MAX_MUSICCLASS];
 	format_t origwfmt;
@@ -231,7 +234,7 @@ static struct mohclass *_mohclass_unref(struct mohclass *class, const char *tag,
 {
 	struct mohclass *dup;
 	if ((dup = ao2_find(mohclasses, class, OBJ_POINTER))) {
-		if (_ao2_ref_debug(dup, -1, (char *) tag, (char *) file, line, funcname) == 2) {
+		if (__ao2_ref_debug(dup, -1, (char *) tag, (char *) file, line, funcname) == 2) {
 			FILE *ref = fopen("/tmp/refs", "a");
 			if (ref) {
 				fprintf(ref, "%p =1   %s:%d:%s (%s) BAD ATTEMPT!\n", class, file, line, funcname, tag);
@@ -409,10 +412,13 @@ static void *moh_files_alloc(struct ast_channel *chan, void *params)
 		ast_module_ref(ast_module_info->self);
 	} else {
 		state = chan->music_state;
-	}
-
-	if (!state) {
-		return NULL;
+		if (!state) {
+			return NULL;
+		}
+		if (state->class) {
+			mohclass_unref(state->class, "Uh Oh. Restarting MOH with an active class");
+			ast_log(LOG_WARNING, "Uh Oh. Restarting MOH with an active class\n");
+		}
 	}
 
 	/* LOGIC: Comparing an unrefcounted pointer is a really bad idea, because
@@ -909,6 +915,12 @@ static void moh_release(struct ast_channel *chan, void *data)
 	ast_free(moh);
 
 	if (chan) {
+		struct moh_files_state *state;
+
+		state = chan->music_state;
+		if (state && state->class) {
+			state->class = mohclass_unref(state->class, "Unreffing channel's music class upon deactivation of generator");
+		}
 		if (oldwfmt && ast_set_write_format(chan, oldwfmt)) {
 			ast_log(LOG_WARNING, "Unable to restore channel '%s' to format %s\n",
 					chan->name, ast_getformatname(oldwfmt));
@@ -927,13 +939,17 @@ static void *moh_alloc(struct ast_channel *chan, void *params)
 	/* Initiating music_state for current channel. Channel should know name of moh class */
 	if (!chan->music_state && (state = ast_calloc(1, sizeof(*state)))) {
 		chan->music_state = state;
-		state->class = mohclass_ref(class, "Copying reference into state container");
 		ast_module_ref(ast_module_info->self);
-	} else
+	} else {
 		state = chan->music_state;
-	if (state && state->class != class) {
+		if (!state) {
+			return NULL;
+		}
+		if (state->class) {
+			mohclass_unref(state->class, "Uh Oh. Restarting MOH with an active class");
+			ast_log(LOG_WARNING, "Uh Oh. Restarting MOH with an active class\n");
+		}
 		memset(state, 0, sizeof(*state));
-		state->class = class;
 	}
 
 	if ((res = mohalloc(class))) {
@@ -942,6 +958,8 @@ static void *moh_alloc(struct ast_channel *chan, void *params)
 			ast_log(LOG_WARNING, "Unable to set channel '%s' to format '%s'\n", chan->name, ast_codec2str(class->format));
 			moh_release(NULL, res);
 			res = NULL;
+		} else {
+			state->class = mohclass_ref(class, "Placing reference into state container");
 		}
 		ast_verb(3, "Started music on hold, class '%s', on channel '%s'\n", class->name, chan->name);
 	}
@@ -1258,7 +1276,10 @@ static void local_ast_moh_cleanup(struct ast_channel *chan)
 
 	if (state) {
 		if (state->class) {
-			state->class = mohclass_unref(state->class, "Channel MOH state destruction");
+			/* This should never happen.  We likely just leaked some resource. */
+			state->class =
+				mohclass_unref(state->class, "Uh Oh. Cleaning up MOH with an active class");
+			ast_log(LOG_WARNING, "Uh Oh. Cleaning up MOH with an active class\n");
 		}
 		ast_free(chan->music_state);
 		chan->music_state = NULL;

@@ -129,78 +129,6 @@ if test ${prefix} = ${ac_default_prefix} || test ${prefix} = 'NONE'; then
      fi
 fi
 
-# $HOME is preferred as our substitute path, unless $HOME contains a space
-for i in ${HOME} /tmp; do
-	if test "${i}" = ""; then continue; fi
-	if test "${i}" = "/"; then continue; fi
-	__ac_path_has_spaces=`echo $HOME | grep ' '`
-	if test "$ac_path_has_spaces" = ""; then :; else continue; fi
-	__ac_substitute_path=${i}
-	break
-done
-
-AC_PROG_LN_S
-__sub_ordinal=1
-MAKE_PREINSTALL=""
-MAKE_POSTINSTALL=""
-
-# It may initially seem a trifle bit excessive to evaluate all of these paths.
-# However, consider that many of these may invoke another variable, such as
-# ${prefix}, by default, which is not resolved until compile time.  If that
-# variable contains a space, then each of the dependent variables will also
-# contain a space and thus will need the special treatment.
-for stdpath in prefix exec_prefix datarootdir datadir includedir infodir libdir libexecdir localstatedir mandir sbindir sharedstatedir sysconfdir astetcdir astsbindir astlibdir astheaderdir astmandir astvarlibdir astspooldir astlogdir astvarrundir astdatadir astdbdir astkeydir; do
-	eval "__ac_path_sub=\${$stdpath}"
-	#echo "__ac_path_sub=$__ac_path_sub"
-	__ac_path_has_var=`sh -c "echo '$__ac_path_sub' | grep '{'"`
-	if test "$__ac_path_has_var" = ""; then :; else
-		__ac_path_sub=`echo $__ac_path_sub | sed 's/{/{MAKE_/'`
-	fi
-
-	__ac_path_has_spaces=`sh -c "echo '$__ac_path_sub' | grep ' '"`
-	if test "$__ac_path_has_spaces" = ""; then
-		eval "MAKE_$stdpath=\$__ac_path_sub"
-	else
-		# Substitute path for a path without a space
-		eval "MAKE_$stdpath=\"$__ac_substitute_path/.asterisk_install_path_${__sub_ordinal}\""
-		MAKE_POSTINSTALL="${MAKE_POSTINSTALL} rm -f \"$__ac_substitute_path/.asterisk_install_path_${__sub_ordinal}\";"
-		MAKE_PREINSTALL="${MAKE_PREINSTALL} rm -f \"$__ac_substitute_path/.asterisk_install_path_${__sub_ordinal}\";"
-		MAKE_PREINSTALL="${MAKE_PREINSTALL} ${LN_S} -f \"\$(DESTDIR)$__ac_path_sub\" \"$__ac_substitute_path/.asterisk_install_path_${__sub_ordinal}\";"
-		__sub_ordinal=$((${__sub_ordinal}+1))
-	fi
-done
-AC_SUBST(MAKE_PREINSTALL)
-AC_SUBST(MAKE_POSTINSTALL)
-AC_SUBST(MAKE_prefix)
-AC_SUBST(MAKE_exec_prefix)
-AC_SUBST(MAKE_datarootdir)
-AC_SUBST(MAKE_datadir)
-AC_SUBST(MAKE_includedir)
-AC_SUBST(MAKE_infodir)
-AC_SUBST(MAKE_libdir)
-AC_SUBST(MAKE_libexecdir)
-AC_SUBST(MAKE_localstatedir)
-AC_SUBST(MAKE_mandir)
-AC_SUBST(MAKE_sbindir)
-AC_SUBST(MAKE_sharedstatedir)
-AC_SUBST(MAKE_sysconfdir)
-AC_SUBST(MAKE_astetcdir)
-AC_SUBST(MAKE_astsbindir)
-AC_SUBST(MAKE_astlibdir)
-AC_SUBST(MAKE_astheaderdir)
-AC_SUBST(MAKE_astmandir)
-AC_SUBST(MAKE_astvarlibdir)
-AC_SUBST(MAKE_astspooldir)
-AC_SUBST(MAKE_astlogdir)
-AC_SUBST(MAKE_astvarrundir)
-AC_SUBST(MAKE_astdatadir)
-AC_SUBST(MAKE_astdbdir)
-AC_SUBST(MAKE_astkeydir)
-
-test "x$MAKE_prefix" = xNONE && MAKE_prefix=$ac_default_prefix
-# Let make expand exec_prefix.
-test "x$MAKE_exec_prefix" = xNONE && MAKE_exec_prefix='${prefix}'
-
 BUILD_PLATFORM=${build}
 BUILD_CPU=${build_cpu}
 BUILD_VENDOR=${build_vendor}
@@ -293,6 +221,7 @@ AC_PROG_CXXCPP
 AST_PROG_LD	# note, does not work on FreeBSD
 AC_PROG_AWK
 AC_PROG_INSTALL
+AC_PROG_LN_S
 AC_PROG_RANLIB
 AST_CHECK_GNU_MAKE
 AC_PROG_EGREP
@@ -479,26 +408,6 @@ AST_EXT_LIB_SETUP([PGSQL], [PostgreSQL], [postgres])
 AST_EXT_LIB_SETUP([POPT], [popt], [popt])
 AST_EXT_LIB_SETUP([PORTAUDIO], [PortAudio], [portaudio])
 AST_EXT_LIB_SETUP([PRI], [ISDN PRI], [pri])
-AST_EXT_LIB_SETUP_DEPENDENT([PRI_L2_PERSISTENCE], [ISDN Layer 2 persistence option], [PRI], [pri])
-AST_EXT_LIB_SETUP_DEPENDENT([PRI_MWI], [ISDN PRI Message Waiting Indication], [PRI], [pri])
-AST_EXT_LIB_SETUP_DEPENDENT([PRI_MCID], [ISDN PRI Malicious Call ID], [PRI], [pri])
-AST_EXT_LIB_SETUP_DEPENDENT([PRI_CALL_WAITING], [ISDN PRI call waiting supplementary service], [PRI], [pri])
-AST_EXT_LIB_SETUP_DEPENDENT([PRI_AOC_EVENTS], [ISDN PRI advice of charge supplementary service events], [PRI], [pri])
-AST_EXT_LIB_SETUP_DEPENDENT([PRI_TRANSFER], [ISDN PRI call transfer supplementary service], [PRI], [pri])
-AST_EXT_LIB_SETUP_DEPENDENT([PRI_CCSS], [ISDN PRI call completion supplementary service], [PRI], [pri])
-AST_EXT_LIB_SETUP_DEPENDENT([PRI_HANGUP_FIX], [ISDN PRI hangup fix], [PRI], [pri])
-AST_EXT_LIB_SETUP_DEPENDENT([PRI_SUBADDR], [ISDN PRI subaddressing], [PRI], [pri])
-AST_EXT_LIB_SETUP_DEPENDENT([PRI_CALL_HOLD], [ISDN PRI call hold], [PRI], [pri])
-AST_EXT_LIB_SETUP_DEPENDENT([PRI_CALL_REROUTING], [ISDN PRI call rerouting and call deflection], [PRI], [pri])
-AST_EXT_LIB_SETUP_DEPENDENT([PRI_SETUP_KEYPAD], [ISDN PRI keypad facility in SETUP], [PRI], [pri])
-# ------------------------------------v
-# TODO: The code can be changed to always include these features now.
-# These features will always be present if pri_connected_line_update is available.
-AST_EXT_LIB_SETUP_DEPENDENT([PRI_INBANDDISCONNECT], [ISDN PRI set_inbanddisconnect], [PRI], [pri])
-AST_EXT_LIB_SETUP_DEPENDENT([PRI_PROG_W_CAUSE], [ISDN progress with cause], [PRI], [pri])
-AST_EXT_LIB_SETUP_DEPENDENT([PRI_SERVICE_MESSAGES], [ISDN service messages], [PRI], [pri])
-AST_EXT_LIB_SETUP_DEPENDENT([PRI_REVERSE_CHARGE], [ISDN reverse charge], [PRI], [pri])
-# ------------------------------------^
 AST_EXT_LIB_SETUP([PWLIB], [PWlib], [pwlib])
 AST_EXT_LIB_SETUP([RADIUS], [Radius Client], [radius])
 AST_EXT_LIB_SETUP([RESAMPLE], [LIBRESAMPLE], [resample])
@@ -536,6 +445,49 @@ AC_HEADER_DIRENT
 AC_HEADER_STDC
 AC_HEADER_SYS_WAIT
 AC_CHECK_HEADERS([arpa/inet.h fcntl.h inttypes.h libintl.h limits.h locale.h malloc.h netdb.h netinet/in.h stddef.h stdint.h stdlib.h string.h strings.h sys/event.h sys/file.h sys/ioctl.h sys/param.h sys/socket.h sys/time.h syslog.h termios.h unistd.h utime.h arpa/nameser.h sys/io.h])
+
+# Any one of these 4 packages support a mandatory requirement, so we want to check on them as early as possible.
+AST_EXT_LIB_CHECK([TERMCAP], [termcap], [tgetent], [])
+AST_EXT_LIB_CHECK([TINFO], [tinfo], [tgetent], [])
+AST_EXT_LIB_CHECK([CURSES], [curses], [initscr], [curses.h])
+AST_EXT_LIB_CHECK([NCURSES], [ncurses], [initscr], [curses.h])
+
+EDITLINE_LIB=""
+if test "x$TERMCAP_LIB" != "x" ; then
+  EDITLINE_LIB="$TERMCAP_LIB"
+elif test "x$TINFO_LIB" != "x" ; then
+  EDITLINE_LIB="$TINFO_LIB"
+elif test "x$CURSES_LIB" != "x" ; then
+  EDITLINE_LIB="$CURSES_LIB"
+elif test "x$NCURSES_LIB" != "x" ; then
+  EDITLINE_LIB="$NCURSES_LIB"
+else
+  AC_MSG_ERROR([*** termcap support not found (on modern systems, this typically means the ncurses development package is missing)])
+fi
+AC_SUBST(EDITLINE_LIB)
+
+# Another mandatory item (unless it's explicitly disabled)
+AC_ARG_ENABLE([xmldoc],
+	[AS_HELP_STRING([--disable-xmldoc],
+		[Explicity disable XML documentation])],
+	[case "${enableval}" in
+		y|ye|yes) disable_xmldoc=no ;;
+		n|no)  disable_xmldoc=yes ;;
+		*) AC_MSG_ERROR(bad value ${enableval} for --disable-xmldoc)  ;;
+	esac], [disable_xmldoc=no])
+
+if test "${disable_xmldoc}" != "yes"; then
+	AST_EXT_TOOL_CHECK([LIBXML2], [xml2-config], , ,
+	[#include <libxml/tree.h>
+	#include <libxml/parser.h>],
+	[LIBXML_TEST_VERSION])
+	if test "${PBX_LIBXML2}" != 1; then
+		AC_MSG_NOTICE(*** XML documentation will not be available because the 'libxml2' development package is missing.)
+		AC_MSG_NOTICE(*** Please run the 'configure' script with the '--disable-xmldoc' parameter option)
+		AC_MSG_NOTICE(*** or install the 'libxml2' development package.)
+		exit 1
+	fi
+fi
 
 # some embedded systems omit internationalization (locale) support
 AC_CHECK_HEADERS([xlocale.h])
@@ -915,6 +867,7 @@ AST_GCC_ATTRIBUTE(deprecated)
 AST_GCC_ATTRIBUTE(sentinel)
 AST_GCC_ATTRIBUTE(warn_unused_result)
 AST_GCC_ATTRIBUTE(weak_import, [], [], PBX_WEAKREF)
+AST_GCC_ATTRIBUTE(weak, [], [], PBX_WEAKREF)
 AST_GCC_ATTRIBUTE(weakref, [weakref("foo")], static, PBX_WEAKREF)
 
 AC_MSG_CHECKING(for -ffunction-sections support)
@@ -1105,8 +1058,6 @@ AC_CHECK_TOOL(PKGCONFIG, pkg-config, No)
 AST_EXT_LIB_CHECK([ALSA], [asound], [snd_spcm_init], [alsa/asoundlib.h], [-lm -ldl])
 
 AST_EXT_LIB_CHECK([BFD], [bfd], [bfd_openr], [bfd.h])
-
-AST_EXT_LIB_CHECK([CURSES], [curses], [initscr], [curses.h])
 
 if test "x${OSARCH}" = "xlinux-gnu" ; then
   AST_EXT_LIB_CHECK([CAP], [cap], [cap_from_text], [sys/capability.h])
@@ -1741,28 +1692,6 @@ AST_EXT_LIB_CHECK([LTDL], [ltdl], [lt_dlinit], [ltdl.h], [])
 
 AST_EXT_LIB_CHECK([LDAP], [ldap], [ldap_initialize], [ldap.h])
 
-AC_ARG_ENABLE([xmldoc],
-	[AS_HELP_STRING([--disable-xmldoc],
-		[Explicity disable XML documentation])],
-	[case "${enableval}" in
-		y|ye|yes) disable_xmldoc=no ;;
-		n|no)  disable_xmldoc=yes ;;
-		*) AC_MSG_ERROR(bad value ${enableval} for --disable-xmldoc)  ;;
-	esac], [disable_xmldoc=no])
-
-if test "${disable_xmldoc}" != "yes"; then
-	AST_EXT_TOOL_CHECK([LIBXML2], [xml2-config], , ,
-	[#include <libxml/tree.h>
-	#include <libxml/parser.h>],
-	[LIBXML_TEST_VERSION])
-	if test "${PBX_LIBXML2}" != 1; then
-		AC_MSG_NOTICE(*** XML documentation will not be available because the 'libxml2' development package is missing.)
-		AC_MSG_NOTICE(*** Please run the 'configure' script with the '--disable-xmldoc' parameter option)
-		AC_MSG_NOTICE(*** or install the 'libxml2' development package.)
-		exit 1
-	fi
-fi
-
 AST_EXT_LIB_CHECK([MISDN], [mISDN], [mISDN_open], [mISDNuser/mISDNlib.h])
 
 if test "${PBX_MISDN}" = 1; then
@@ -1777,8 +1706,6 @@ fi
 AST_EXT_TOOL_CHECK([MYSQLCLIENT], [mysql_config])
 
 AST_EXT_LIB_CHECK([NBS], [nbs], [nbs_connect], [nbs.h])
-
-AST_EXT_LIB_CHECK([NCURSES], [ncurses], [initscr], [curses.h])
 
 AST_EXT_TOOL_CHECK([NEON], [neon-config])
 
@@ -2089,10 +2016,6 @@ AST_EXT_LIB_CHECK([HOARD], [hoard], [malloc], [])
 
 AST_EXT_LIB_CHECK([FREETDS], [sybdb], [dbinit], [sybdb.h])
 
-AST_EXT_LIB_CHECK([TERMCAP], [termcap], [tgetent], [])
-
-AST_EXT_LIB_CHECK([TINFO], [tinfo], [tgetent], [])
-
 AC_CHECK_LIB([tonezone], [tone_zone_find_by_num], tonezone_does_not_need_lm=yes, tonezone_does_not_need_lm=no)
 
 if test "${tonezone_does_not_need_lm}" = "no" ; then
@@ -2156,20 +2079,6 @@ fi
 AC_LANG_POP
 
 AST_EXT_LIB_CHECK([ZLIB], [z], [compress], [zlib.h])
-
-EDITLINE_LIB=""
-if test "x$TERMCAP_LIB" != "x" ; then
-  EDITLINE_LIB="$TERMCAP_LIB"
-elif test "x$TINFO_LIB" != "x" ; then
-  EDITLINE_LIB="$TINFO_LIB"
-elif test "x$CURSES_LIB" != "x" ; then
-  EDITLINE_LIB="$CURSES_LIB"
-elif test "x$NCURSES_LIB" != "x" ; then
-  EDITLINE_LIB="$NCURSES_LIB"
-else
-  AC_MSG_ERROR([*** termcap support not found (on modern systems, this typically means the ncurses development package is missing)])
-fi
-AC_SUBST(EDITLINE_LIB)
 
 if test "x${PBX_UNIXODBC}" = "x1" -o "x${PBX_IODBC}" = "x1"; then
 	# Does ODBC support wide characters?

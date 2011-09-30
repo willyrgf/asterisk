@@ -81,6 +81,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/features.h"
 #include "asterisk/security_events.h"
 #include "asterisk/aoc.h"
+#include "asterisk/stringfields.h"
 
 /*** DOCUMENTATION
 	<manager name="Ping" language="en_US">
@@ -872,6 +873,7 @@ static const int DEFAULT_HTTPTIMEOUT 		= 60;	/*!< Default manager http timeout *
 static const int DEFAULT_BROKENEVENTSACTION	= 0;	/*!< Default setting for brokeneventsaction */
 static const int DEFAULT_AUTHTIMEOUT		= 30;	/*!< Default setting for authtimeout */
 static const int DEFAULT_AUTHLIMIT		= 50;	/*!< Default setting for authlimit */
+static const int DEFAULT_MANAGERDEBUG		= 0;	/*!< Default setting for manager debug */
 
 static int displayconnects;
 static int allowmultiplelogin = 1;
@@ -880,6 +882,7 @@ static int httptimeout;
 static int broken_events_action;
 static int manager_enabled = 0;
 static int webmanager_enabled = 0;
+static int manager_debug = 0;	/*!< enable some debugging code in the manager */
 static int authtimeout;
 static int authlimit;
 static char *manager_channelvars;
@@ -890,7 +893,6 @@ static char global_realm[MAXHOSTNAMELEN];	/*!< Default realm */
 static int block_sockets;
 static int unauth_sessions = 0;
 
-static int manager_debug;	/*!< enable some debugging code in the manager */
 
 /*! \brief
  * Descriptor for a manager session, either on the AMI socket or over HTTP.
@@ -1136,6 +1138,7 @@ static const struct permalias {
 	{ EVENT_FLAG_AGI, "agi" },
 	{ EVENT_FLAG_CC, "cc" },
 	{ EVENT_FLAG_AOC, "aoc" },
+	{ EVENT_FLAG_TEST, "test" },
 	{ INT_MAX, "all" },
 	{ 0, "none" },
 };
@@ -3075,7 +3078,7 @@ static int action_getvar(struct mansession *s, const struct message *m)
 	const char *name = astman_get_header(m, "Channel");
 	const char *varname = astman_get_header(m, "Variable");
 	char *varval;
-	char workspace[1024] = "";
+	char workspace[1024];
 
 	if (ast_strlen_zero(varname)) {
 		astman_send_error(s, m, "No variable specified");
@@ -3089,12 +3092,12 @@ static int action_getvar(struct mansession *s, const struct message *m)
 		}
 	}
 
+	workspace[0] = '\0';
 	if (varname[strlen(varname) - 1] == ')') {
 		if (!c) {
 			c = ast_dummy_channel_alloc();
 			if (c) {
 				ast_func_read(c, (char *) varname, workspace, sizeof(workspace));
-				c = ast_channel_release(c);
 			} else
 				ast_log(LOG_ERROR, "Unable to allocate bogus channel for variable substitution.  Function results may be blank.\n");
 		} else {
@@ -3558,14 +3561,16 @@ struct fast_originate_helper {
 	char data[512];
 	int timeout;
 	format_t format;				/*!< Codecs used for a call */
-	char app[AST_MAX_APP];
-	char appdata[AST_MAX_EXTENSION];
-	char cid_name[AST_MAX_EXTENSION];
-	char cid_num[AST_MAX_EXTENSION];
-	char context[AST_MAX_CONTEXT];
-	char exten[AST_MAX_EXTENSION];
-	char idtext[AST_MAX_EXTENSION];
-	char account[AST_MAX_ACCOUNT_CODE];
+	AST_DECLARE_STRING_FIELDS (
+		AST_STRING_FIELD(app);
+		AST_STRING_FIELD(appdata);
+		AST_STRING_FIELD(cid_name);
+		AST_STRING_FIELD(cid_num);
+		AST_STRING_FIELD(context);
+		AST_STRING_FIELD(exten);
+		AST_STRING_FIELD(idtext);
+		AST_STRING_FIELD(account);
+	);
 	int priority;
 	struct ast_variable *vars;
 };
@@ -3616,6 +3621,7 @@ static void *fast_originate(void *data)
 	if (chan) {
 		ast_channel_unlock(chan);
 	}
+	ast_string_field_free_memory(in);
 	ast_free(in);
 	return NULL;
 }
@@ -3938,29 +3944,30 @@ static int action_originate(struct mansession *s, const struct message *m)
 
 	if (ast_true(async)) {
 		struct fast_originate_helper *fast = ast_calloc(1, sizeof(*fast));
-		if (!fast) {
+		if (!fast || ast_string_field_init(fast, 252)) {
+			if (fast) {
+				ast_free(fast);
+			}
 			res = -1;
 		} else {
-			if (!ast_strlen_zero(id))
-				snprintf(fast->idtext, sizeof(fast->idtext), "ActionID: %s", id);
+			if (!ast_strlen_zero(id)) {
+				ast_string_field_build(fast, idtext, "ActionID: %s", id);
+			}
 			ast_copy_string(fast->tech, tech, sizeof(fast->tech));
 			ast_copy_string(fast->data, data, sizeof(fast->data));
-			ast_copy_string(fast->app, app, sizeof(fast->app));
-			ast_copy_string(fast->appdata, appdata, sizeof(fast->appdata));
-			if (l) {
-				ast_copy_string(fast->cid_num, l, sizeof(fast->cid_num));
-			}
-			if (n) {
-				ast_copy_string(fast->cid_name, n, sizeof(fast->cid_name));
-			}
+			ast_string_field_set(fast, app, app);
+			ast_string_field_set(fast, appdata, appdata);
+			ast_string_field_set(fast, cid_num, l);
+			ast_string_field_set(fast, cid_name, n);
+			ast_string_field_set(fast, context, context);
+			ast_string_field_set(fast, exten, exten);
+			ast_string_field_set(fast, account, account);
 			fast->vars = vars;
-			ast_copy_string(fast->context, context, sizeof(fast->context));
-			ast_copy_string(fast->exten, exten, sizeof(fast->exten));
-			ast_copy_string(fast->account, account, sizeof(fast->account));
 			fast->format = format;
 			fast->timeout = to;
 			fast->priority = pi;
 			if (ast_pthread_create_detached(&th, NULL, fast_originate, fast)) {
+				ast_string_field_free_memory(fast);
 				ast_free(fast);
 				res = -1;
 			} else {
@@ -6287,6 +6294,7 @@ static int __init_manager(int reload)
 
 	manager_enabled = DEFAULT_ENABLED;
 	webmanager_enabled = DEFAULT_WEBENABLED;
+	manager_debug = DEFAULT_MANAGERDEBUG;
 	displayconnects = DEFAULT_DISPLAYCONNECTS;
 	broken_events_action = DEFAULT_BROKENEVENTSACTION;
 	block_sockets = DEFAULT_BLOCKSOCKETS;

@@ -339,7 +339,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 	</application>
 	<function name="SIP_HEADER" language="en_US">
 		<synopsis>
-			Gets the specified SIP header.
+			Gets the specified SIP header from an incoming INVITE message.
 		</synopsis>
 		<syntax>
 			<parameter name="name" required="true" />
@@ -1323,6 +1323,7 @@ static struct sip_auth *find_realm_authentication(struct sip_auth_container *cre
 /*--- Misc functions */
 static void check_rtp_timeout(struct sip_pvt *dialog, time_t t);
 static int reload_config(enum channelreloadreason reason);
+static void add_diversion_header(struct sip_request *req, struct sip_pvt *pvt);
 static int expire_register(const void *data);
 static void *do_monitor(void *data);
 static int restart_monitor(void);
@@ -5046,9 +5047,9 @@ static int dialog_initialize_rtp(struct sip_pvt *dialog)
 		if (!(dialog->vrtp = ast_rtp_instance_new(dialog->engine, sched, &bindaddr_tmp, NULL))) {
 			return -1;
 		}
-		ast_rtp_instance_set_timeout(dialog->vrtp, global_rtptimeout);
-		ast_rtp_instance_set_hold_timeout(dialog->vrtp, global_rtpholdtimeout);
-		ast_rtp_instance_set_keepalive(dialog->vrtp, global_rtpholdtimeout);
+		ast_rtp_instance_set_timeout(dialog->vrtp, dialog->rtptimeout);
+		ast_rtp_instance_set_hold_timeout(dialog->vrtp, dialog->rtpholdtimeout);
+		ast_rtp_instance_set_keepalive(dialog->vrtp, dialog->rtpkeepalive);
 
 		ast_rtp_instance_set_prop(dialog->vrtp, AST_RTP_PROPERTY_RTCP, 1);
 	}
@@ -5057,16 +5058,15 @@ static int dialog_initialize_rtp(struct sip_pvt *dialog)
 		if (!(dialog->trtp = ast_rtp_instance_new(dialog->engine, sched, &bindaddr_tmp, NULL))) {
 			return -1;
 		}
-		ast_rtp_instance_set_timeout(dialog->trtp, global_rtptimeout);
-		ast_rtp_instance_set_hold_timeout(dialog->trtp, global_rtpholdtimeout);
-		ast_rtp_instance_set_keepalive(dialog->trtp, global_rtpholdtimeout);
+		/* Do not timeout text as its not constant*/
+		ast_rtp_instance_set_keepalive(dialog->trtp, dialog->rtpkeepalive);
 
 		ast_rtp_instance_set_prop(dialog->trtp, AST_RTP_PROPERTY_RTCP, 1);
 	}
 
-	ast_rtp_instance_set_timeout(dialog->rtp, global_rtptimeout);
-	ast_rtp_instance_set_hold_timeout(dialog->rtp, global_rtpholdtimeout);
-	ast_rtp_instance_set_keepalive(dialog->rtp, global_rtpkeepalive);
+	ast_rtp_instance_set_timeout(dialog->rtp, dialog->rtptimeout);
+	ast_rtp_instance_set_hold_timeout(dialog->rtp, dialog->rtpholdtimeout);
+	ast_rtp_instance_set_keepalive(dialog->rtp, dialog->rtpkeepalive);
 
 	ast_rtp_instance_set_prop(dialog->rtp, AST_RTP_PROPERTY_RTCP, 1);
 	ast_rtp_instance_set_prop(dialog->rtp, AST_RTP_PROPERTY_DTMF, ast_test_flag(&dialog->flags[0], SIP_DTMF) == SIP_DTMF_RFC2833);
@@ -5127,6 +5127,9 @@ static int create_addr_from_peer(struct sip_pvt *dialog, struct sip_peer *peer)
 
 	ast_string_field_set(dialog, engine, peer->engine);
 
+	dialog->rtptimeout = peer->rtptimeout;
+	dialog->rtpholdtimeout = peer->rtpholdtimeout;
+	dialog->rtpkeepalive = peer->rtpkeepalive;
 	if (dialog_initialize_rtp(dialog)) {
 		return -1;
 	}
@@ -5134,22 +5137,9 @@ static int create_addr_from_peer(struct sip_pvt *dialog, struct sip_peer *peer)
 	if (dialog->rtp) { /* Audio */
 		ast_rtp_instance_set_prop(dialog->rtp, AST_RTP_PROPERTY_DTMF, ast_test_flag(&dialog->flags[0], SIP_DTMF) == SIP_DTMF_RFC2833);
 		ast_rtp_instance_set_prop(dialog->rtp, AST_RTP_PROPERTY_DTMF_COMPENSATE, ast_test_flag(&dialog->flags[1], SIP_PAGE2_RFC2833_COMPENSATE));
-		ast_rtp_instance_set_timeout(dialog->rtp, peer->rtptimeout);
-		ast_rtp_instance_set_hold_timeout(dialog->rtp, peer->rtpholdtimeout);
-		ast_rtp_instance_set_keepalive(dialog->rtp, peer->rtpkeepalive);
 		/* Set Frame packetization */
 		ast_rtp_codecs_packetization_set(ast_rtp_instance_get_codecs(dialog->rtp), dialog->rtp, &dialog->prefs);
 		dialog->autoframing = peer->autoframing;
-	}
-	if (dialog->vrtp) { /* Video */
-		ast_rtp_instance_set_timeout(dialog->vrtp, peer->rtptimeout);
-		ast_rtp_instance_set_hold_timeout(dialog->vrtp, peer->rtpholdtimeout);
-		ast_rtp_instance_set_keepalive(dialog->vrtp, peer->rtpkeepalive);
-	}
-	if (dialog->trtp) { /* Realtime text */
-		ast_rtp_instance_set_timeout(dialog->trtp, peer->rtptimeout);
-		ast_rtp_instance_set_hold_timeout(dialog->trtp, peer->rtpholdtimeout);
-		ast_rtp_instance_set_keepalive(dialog->trtp, peer->rtpkeepalive);
 	}
 
 	/* XXX TODO: get fields directly from peer only as they are needed using dialog->relatedpeer */
@@ -5177,7 +5167,6 @@ static int create_addr_from_peer(struct sip_pvt *dialog, struct sip_peer *peer)
 	dialog->pickupgroup = peer->pickupgroup;
 	dialog->allowtransfer = peer->allowtransfer;
 	dialog->jointnoncodeccapability = dialog->noncodeccapability;
-	dialog->rtptimeout = peer->rtptimeout;
 
 	/* Update dialog authorization credentials */
 	ao2_lock(peer);
@@ -5290,10 +5279,13 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer, struct ast_soc
 		dialog->relatedpeer = ref_peer(peer, "create_addr: setting dialog's relatedpeer pointer");
 		unref_peer(peer, "create_addr: unref peer from find_peer hashtab lookup");
 		return res;
-	}
-
-	if (dialog_initialize_rtp(dialog)) {
-		return -1;
+	} else {
+		dialog->rtptimeout = global_rtptimeout;
+		dialog->rtpholdtimeout = global_rtpholdtimeout;
+		dialog->rtpkeepalive = global_rtpkeepalive;
+		if (dialog_initialize_rtp(dialog)) {
+			return -1;
+		}
 	}
 
 	ast_string_field_set(dialog, tohost, hostport.host);
@@ -6676,6 +6668,20 @@ static int sip_indicate(struct ast_channel *ast, int condition, const void *data
 			break;
 		}
 		res = -1;
+		break;
+	case AST_CONTROL_INCOMPLETE:
+		if (ast->_state != AST_STATE_UP) {
+			if (ast_test_flag(&p->flags[1], SIP_PAGE2_ALLOWOVERLAP)) {
+				transmit_response_reliable(p, "484 Address Incomplete", &p->initreq);
+			} else {
+				transmit_response_reliable(p, "404 Not Found", &p->initreq);
+			}
+			p->invitestate = INV_COMPLETED;
+			sip_alreadygone(p);
+			ast_softhangup_nolock(ast, AST_SOFTHANGUP_DEV);
+			break;
+		}
+		res = 0;
 		break;
 	case AST_CONTROL_PROCEEDING:
 		if ((ast->_state != AST_STATE_UP) &&
@@ -9030,6 +9036,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 				}
 			}
 		} else {
+			change_t38_state(p, T38_DISABLED);
 			ast_udptl_stop(p->udptl);
 			if (debug)
 				ast_debug(1, "Peer doesn't provide T.38 UDPTL\n");
@@ -10125,6 +10132,11 @@ static int __transmit_response(struct sip_pvt *p, const char *msg, const struct 
 	}
 	if (ast_test_flag(&p->flags[0], SIP_OFFER_CC)) {
 		add_cc_call_info_to_response(p, &resp);
+	}
+
+	/* If we are sending a 302 Redirect we can add a diversion header if the redirect information is set */
+	if (!strncmp(msg, "302", 3)) {
+		add_diversion_header(&resp, p);
 	}
 
 	/* If we are cancelling an incoming invite for some reason, add information
@@ -12632,8 +12644,17 @@ static int sip_reg_timeout(const void *data)
 	}
 
 	if (r->dnsmgr) {
+		struct sip_peer *peer;
 		/* If the registration has timed out, maybe the IP changed.  Force a refresh. */
 		ast_dnsmgr_refresh(r->dnsmgr);
+		/* If we are resolving a peer, we have to make sure the refreshed address gets copied */
+		if ((peer = find_peer(r->hostname, NULL, TRUE, FINDPEERS, FALSE, 0))) {
+			ast_sockaddr_copy(&peer->addr, &r->us);
+			if (r->portno) {
+				ast_sockaddr_set_port(&peer->addr, r->portno);
+			}
+			peer = unref_peer(peer, "unref after find_peer");
+		}
 	}
 
 	/* If the initial tranmission failed, we may not have an existing dialog,
@@ -12750,6 +12771,16 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 		/* Use port number specified if no SRV record was found */
 		if (!ast_sockaddr_port(&r->us) && r->portno) {
 			ast_sockaddr_set_port(&r->us, r->portno);
+		}
+
+		/* It is possible that DNS is unavailable at the time the peer is created. Here, if
+		 * we've updated the address in the registry, we copy it to the peer so that
+		 * create_addr() can copy it to the dialog via create_addr_from_peer */
+		if ((peer = find_peer(r->hostname, NULL, TRUE, FINDPEERS, FALSE, 0))) {
+			if (ast_sockaddr_isnull(&peer->addr) && !(ast_sockaddr_isnull(&r->us))) {
+				ast_sockaddr_copy(&peer->addr, &r->us);
+			}
+			peer = unref_peer(peer, "unref after find_peer");
 		}
 
 		/* Find address to hostname */
@@ -14002,9 +14033,7 @@ static void mwi_event_cb(const struct ast_event *event, void *userdata)
 {
 	struct sip_peer *peer = userdata;
 
-	ao2_lock(peer);
 	sip_send_mwi_to_peer(peer, 0);
-	ao2_unlock(peer);
 }
 
 static void network_change_event_subscribe(void)
@@ -15531,6 +15560,9 @@ static enum check_auth_result check_peer_ok(struct sip_pvt *p, char *of,
 		else
 			p->noncodeccapability &= ~AST_RTP_DTMF;
 		p->jointnoncodeccapability = p->noncodeccapability;
+		p->rtptimeout = peer->rtptimeout;
+		p->rtpholdtimeout = peer->rtpholdtimeout;
+		p->rtpkeepalive = peer->rtpkeepalive;
 		if (!dialog_initialize_rtp(p)) {
 			if (p->rtp) {
 				ast_rtp_codecs_packetization_set(ast_rtp_instance_get_codecs(p->rtp), p->rtp, &peer->prefs);
@@ -15652,6 +15684,9 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 	/* Finally, apply the guest policy */
 	if (sip_cfg.allowguest) {
 		get_rpid(p, req);
+		p->rtptimeout = global_rtptimeout;
+		p->rtpholdtimeout = global_rtpholdtimeout;
+		p->rtpkeepalive = global_rtpkeepalive;
 		if (!dialog_initialize_rtp(p)) {
 			res = AUTH_SUCCESSFUL;
 		} else {
@@ -16672,7 +16707,7 @@ static int manager_sip_show_peer(struct mansession *s, const struct message *m)
 	a[3] = peer;
 
 	_sip_show_peer(1, -1, s, m, 4, a);
-	astman_append(s, "\r\n\r\n" );
+	astman_append(s, "\r\n" );
 	return 0;
 }
 
@@ -19576,7 +19611,11 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 						"Channel: %s\r\nChanneltype: %s\r\nUniqueid: %s\r\nSIPcallid: %s\r\nSIPfullcontact: %s\r\nPeername: %s\r\n",
 						p->owner->name, "SIP", p->owner->uniqueid, p->callid, p->fullcontact, p->peername);
 			} else {	/* RE-invite */
-				ast_queue_frame(p->owner, &ast_null_frame);
+				if (p->t38.state == T38_DISABLED) {
+					ast_queue_control(p->owner, AST_CONTROL_UPDATE_RTP_PEER);
+				} else {
+					ast_queue_frame(p->owner, &ast_null_frame);
+				}
 			}
 		} else {
 			 /* It's possible we're getting an 200 OK after we've tried to disconnect
@@ -20598,6 +20637,15 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 				case 504: /* Server Timeout */
 					if (owner)
 						ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
+					break;
+				case 484: /* Address Incomplete */
+					if (owner && sipmethod != SIP_BYE) {
+						if (ast_test_flag(&p->flags[1], SIP_PAGE2_ALLOWOVERLAP)) {
+							ast_queue_hangup_with_cause(p->owner, hangup_sip2cause(resp));
+						} else {
+							ast_queue_hangup_with_cause(p->owner, hangup_sip2cause(404));
+						}
+					}
 					break;
 				default:
 					/* Send hangup */	
@@ -22396,6 +22444,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 				} else {
 					ast_set_flag(&p->flags[1], SIP_PAGE2_DIALOG_ESTABLISHED);
 					transmit_response_with_sdp(p, "200 OK", req, (reinvite ? XMIT_RELIABLE : (req->ignore ?  XMIT_UNRELIABLE : XMIT_CRITICAL)), p->session_modify == TRUE ? FALSE : TRUE, FALSE);
+					ast_queue_control(p->owner, AST_CONTROL_UPDATE_RTP_PEER);
 				}
 			}
 
@@ -24234,9 +24283,7 @@ static int handle_request_subscribe(struct sip_pvt *p, struct sip_request *req, 
 			ast_set_flag(&p->flags[1], SIP_PAGE2_DIALOG_ESTABLISHED);
 			transmit_response(p, "200 OK", req);
 			if (p->relatedpeer) {	/* Send first notification */
-				ao2_lock(p->relatedpeer); /* was WRLOCK */
 				sip_send_mwi_to_peer(p->relatedpeer, 0);
-				ao2_unlock(p->relatedpeer);
 			}
 		} else if (p->subscribed != CALL_COMPLETION) {
 			if ((firststate = ast_extension_state(NULL, p->context, p->exten)) < 0) {
@@ -24968,14 +25015,18 @@ static int sip_send_mwi_to_peer(struct sip_peer *peer, int cache_only)
 		peer_mailboxes_to_str(&mailbox_str, peer);
 		ast_app_inboxcount(mailbox_str->str, &newmsgs, &oldmsgs);
 	}
+	ao2_lock(peer);
 
 	if (peer->mwipvt) {
 		/* Base message on subscription */
 		p = dialog_ref(peer->mwipvt, "sip_send_mwi_to_peer: Setting dialog ptr p from peer->mwipvt-- should this be done?");
 	} else {
 		/* Build temporary dialog for this message */
-		if (!(p = sip_alloc(NULL, NULL, 0, SIP_NOTIFY, NULL)))
+		if (!(p = sip_alloc(NULL, NULL, 0, SIP_NOTIFY, NULL))) {
+			ao2_unlock(peer);
 			return -1;
+		}
+
 		/* If we don't set the socket type to 0, then create_addr_from_peer will fail immediately if the peer
 		 * uses any transport other than UDP. We set the type to 0 here and then let create_addr_from_peer copy
 		 * the peer's socket information to the sip_pvt we just allocated
@@ -24986,6 +25037,7 @@ static int sip_send_mwi_to_peer(struct sip_peer *peer, int cache_only)
 			dialog_unlink_all(p, TRUE, TRUE);
 			dialog_unref(p, "unref dialog p just created via sip_alloc");
 			/* sip_destroy(p); */
+			ao2_unlock(peer);
 			return 0;
 		}
 		/* Recalculate our side, and recalculate Call ID */
@@ -25003,11 +25055,17 @@ static int sip_send_mwi_to_peer(struct sip_peer *peer, int cache_only)
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 	}
 
+	/* We have multiple threads (mwi events and monitor retransmits) working with this PVT and as we modify the sip history if that's turned on,
+	   we really need to have a lock on it */
+	sip_pvt_lock(p);
+
 	/* Send MWI */
 	ast_set_flag(&p->flags[0], SIP_OUTGOING);
 	/* the following will decrement the refcount on p as it finishes */
 	transmit_notify_with_mwi(p, newmsgs, oldmsgs, peer->vmexten);
+	sip_pvt_unlock(p);
 	dialog_unref(p, "unref dialog ptr p just before it goes out of scope at the end of sip_send_mwi_to_peer.");
+	ao2_unlock(peer);
 	return 0;
 }
 
@@ -26519,6 +26577,9 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 	if (peer) {
 		/* Already in the list, remove it and it will be added back (or FREE'd)  */
 		found++;
+		/* we've unlinked the peer from the peers container but not unlinked from the peers_by_ip container yet
+		  this leads to a wrong refcounter and the peer object is never destroyed */
+		ao2_t_unlink(peers_by_ip, peer, "ao2_unlink peer from peers_by_ip table");
 		if (!(peer->the_mark))
 			firstpass = 0;
 	} else {

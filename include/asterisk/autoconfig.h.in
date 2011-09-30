@@ -101,6 +101,9 @@
    attribute. */
 #undef HAVE_ATTRIBUTE_warn_unused_result
 
+/* Define to 1 if your GCC C compiler supports the 'weak' attribute. */
+#undef HAVE_ATTRIBUTE_weak
+
 /* Define to 1 if your GCC C compiler supports the 'weak_import' attribute. */
 #undef HAVE_ATTRIBUTE_weak_import
 
@@ -556,59 +559,6 @@
 
 /* Define to 1 if you have the ISDN PRI library. */
 #undef HAVE_PRI
-
-/* Define to 1 if you have the ISDN PRI advice of charge supplementary service
-   events library. */
-#undef HAVE_PRI_AOC_EVENTS
-
-/* Define to 1 if you have the ISDN PRI call hold library. */
-#undef HAVE_PRI_CALL_HOLD
-
-/* Define to 1 if you have the ISDN PRI call rerouting and call deflection
-   library. */
-#undef HAVE_PRI_CALL_REROUTING
-
-/* Define to 1 if you have the ISDN PRI call waiting supplementary service
-   library. */
-#undef HAVE_PRI_CALL_WAITING
-
-/* Define to 1 if you have the ISDN PRI call completion supplementary service
-   library. */
-#undef HAVE_PRI_CCSS
-
-/* Define to 1 if you have the ISDN PRI hangup fix library. */
-#undef HAVE_PRI_HANGUP_FIX
-
-/* Define to 1 if you have the ISDN PRI set_inbanddisconnect library. */
-#undef HAVE_PRI_INBANDDISCONNECT
-
-/* Define to 1 if you have the ISDN Layer 2 persistence option library. */
-#undef HAVE_PRI_L2_PERSISTENCE
-
-/* Define to 1 if you have the ISDN PRI Malicious Call ID library. */
-#undef HAVE_PRI_MCID
-
-/* Define to 1 if you have the ISDN PRI Message Waiting Indication library. */
-#undef HAVE_PRI_MWI
-
-/* Define to 1 if you have the ISDN progress with cause library. */
-#undef HAVE_PRI_PROG_W_CAUSE
-
-/* Define to 1 if you have the ISDN reverse charge library. */
-#undef HAVE_PRI_REVERSE_CHARGE
-
-/* Define to 1 if you have the ISDN service messages library. */
-#undef HAVE_PRI_SERVICE_MESSAGES
-
-/* Define to 1 if you have the ISDN PRI keypad facility in SETUP library. */
-#undef HAVE_PRI_SETUP_KEYPAD
-
-/* Define to 1 if you have the ISDN PRI subaddressing library. */
-#undef HAVE_PRI_SUBADDR
-
-/* Define to 1 if you have the ISDN PRI call transfer supplementary service
-   library. */
-#undef HAVE_PRI_TRANSFER
 
 /* Define if you have POSIX threads libraries and header files. */
 #undef HAVE_PTHREAD

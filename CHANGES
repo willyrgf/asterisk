@@ -44,7 +44,7 @@ SIP Changes
  * Slave SIP channels now set HASH(SIP_CAUSE,<slave-channel-name>) on each
    response.  This permits the master channel to know how each channel dialled
    in a multi-channel setup resolved in an individual way. This carries a
-   performance penalty and can be disabled in sip.conf using the
+   performance penalty and must be enabled in sip.conf using the
    'storesipcause' option.
  * Added 'externtcpport' and 'externtlsport' options to allow custom port
    configuration for the externip and externhost options when tcp or tls is used.
@@ -284,7 +284,7 @@ Queue changes
  * A new option, 'I' has been added to both app_queue and app_dial.
    By setting this option, Asterisk will not update the caller with
    connected line changes or redirecting party changes when they occur.
- * A 'relative-peroidic-announce' option has been added to queues.conf.  When
+ * A 'relative-periodic-announce' option has been added to queues.conf.  When
    enabled, this option will cause periodic announce times to be calculated
    from the end of announcements rather than from the beginning.
  * The autopause option in queues.conf can be passed a new value, "all." The

@@ -1104,6 +1104,7 @@ struct ast_datastore *ast_channel_datastore_find(struct ast_channel *chan, const
  * \retval NULL failure
  * \retval non-NULL successfully allocated channel
  *
+ * \note Absolutely _NO_ channel locks should be held before calling this function.
  * \note By default, new channels are set to the "s" extension
  *       and "default" context.
  */
@@ -1115,10 +1116,21 @@ struct ast_channel * attribute_malloc __attribute__((format(printf, 13, 14)))
 			    const char *file, int line, const char *function,
 			    const char *name_fmt, ...);
 
+/*!
+ * \brief Create a channel structure
+ *
+ * \retval NULL failure
+ * \retval non-NULL successfully allocated channel
+ *
+ * \note Absolutely _NO_ channel locks should be held before calling this function.
+ * \note By default, new channels are set to the "s" extension
+ *       and "default" context.
+ */
 #define ast_channel_alloc(needqueue, state, cid_num, cid_name, acctcode, exten, context, linkedid, amaflag, ...) \
 	__ast_channel_alloc(needqueue, state, cid_num, cid_name, acctcode, exten, context, linkedid, amaflag, \
 			    __FILE__, __LINE__, __FUNCTION__, __VA_ARGS__)
 
+#if defined(REF_DEBUG) || defined(__AST_DEBUG_MALLOC)
 /*!
  * \brief Create a fake channel structure
  *
@@ -1128,11 +1140,32 @@ struct ast_channel * attribute_malloc __attribute__((format(printf, 13, 14)))
  * \note This function should ONLY be used to create a fake channel
  *       that can then be populated with data for use in variable
  *       substitution when a real channel does not exist.
+ *
+ * \note The created dummy channel should be destroyed by
+ * ast_channel_unref().  Using ast_channel_release() needlessly
+ * grabs the channel container lock and can cause a deadlock as
+ * a result.  Also grabbing the channel container lock reduces
+ * system performance.
  */
-#if defined(REF_DEBUG) || defined(__AST_DEBUG_MALLOC)
 #define ast_dummy_channel_alloc()	__ast_dummy_channel_alloc(__FILE__, __LINE__, __PRETTY_FUNCTION__)
 struct ast_channel *__ast_dummy_channel_alloc(const char *file, int line, const char *function);
 #else
+/*!
+ * \brief Create a fake channel structure
+ *
+ * \retval NULL failure
+ * \retval non-NULL successfully allocated channel
+ *
+ * \note This function should ONLY be used to create a fake channel
+ *       that can then be populated with data for use in variable
+ *       substitution when a real channel does not exist.
+ *
+ * \note The created dummy channel should be destroyed by
+ * ast_channel_unref().  Using ast_channel_release() needlessly
+ * grabs the channel container lock and can cause a deadlock as
+ * a result.  Also grabbing the channel container lock reduces
+ * system performance.
+ */
 struct ast_channel *ast_dummy_channel_alloc(void);
 #endif
 
@@ -1247,6 +1280,7 @@ void ast_change_name(struct ast_channel *chan, const char *newname);
  * if it is still there and also release the current reference to the channel.
  *
  * \return NULL, convenient for clearing invalid pointers
+ * \note Absolutely _NO_ channel locks should be held before calling this function.
  *
  * \since 1.8
  */
@@ -1376,6 +1410,7 @@ int ast_channel_trace_serialize(struct ast_channel *chan, struct ast_str **out);
 
 /*!
  * \brief Hang up a channel
+ * \note Absolutely _NO_ channel locks should be held before calling this function.
  * \note This function performs a hard hangup on a channel.  Unlike the soft-hangup, this function
  * performs all stream stopping, etc, on the channel that needs to end.
  * chan is no longer valid after this call.
@@ -1576,6 +1611,7 @@ int __ast_answer(struct ast_channel *chan, unsigned int delay, int cdr_answer);
 
 /*!
  * \brief Make a call
+ * \note Absolutely _NO_ channel locks should be held before calling this function.
  * \param chan which channel to make the call on
  * \param addr destination of the call
  * \param timeout time to wait on for connect
@@ -1924,7 +1960,9 @@ int ast_channel_bridge(struct ast_channel *c0,struct ast_channel *c1,
  * p->owner pointer) that is affected by the change.  The physical layer of the original
  * channel is hung up.
  *
- * \note Neither channel passed here needs to be locked before calling this function.
+ * \note Neither channel passed here should be locked before
+ * calling this function.  This function performs deadlock
+ * avoidance involving these two channels.
  */
 int ast_channel_masquerade(struct ast_channel *original, struct ast_channel *clone);
 
@@ -2528,6 +2566,7 @@ struct ast_channel *ast_channel_iterator_next(struct ast_channel_iterator *i);
  * This function executes a callback one time for each active channel on the
  * system.  The channel is provided as an argument to the function.
  *
+ * \note Absolutely _NO_ channel locks should be held before calling this function.
  * \since 1.8
  */
 struct ast_channel *ast_channel_callback(ao2_callback_data_fn *cb_fn, void *arg,

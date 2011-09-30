@@ -46,10 +46,12 @@
 	<member name="RADIO_RTX" displayname="Build RTX/DTX Radio Programming" touch_on_change="channels/chan_usbradio.c channels/xpmr/xpmr.h">
 		<defaultenabled>no</defaultenabled>
 		<depend>chan_usbradio</depend>
+		<support_level>extended</support_level>
 	</member>
 	<member name="RADIO_XPMRX" displayname="Build Experimental Radio Protocols" touch_on_change="channels/chan_usbradio.c">
 		<defaultenabled>no</defaultenabled>
 		<depend>chan_usbradio</depend>
+		<support_level>extended</support_level>
 	</member>
 </category>
  ***/
@@ -2119,7 +2121,9 @@ static int usbradio_indicate(struct ast_channel *c, int cond, const void *data, 
 		case AST_CONTROL_RINGING:
 			res = cond;
 			break;
-
+		case AST_CONTROL_INCOMPLETE:
+			res = AST_CONTROL_CONGESTION;
+			break;
 		case -1:
 #ifndef	NEW_ASTERISK
 			o->cursound = -1;

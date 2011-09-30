@@ -120,6 +120,11 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					a call to be answered. Exit to that extension if it exists in the
 					current context, or the context defined in the <variable>EXITCONTEXT</variable> variable,
 					if it exists.</para>
+					<note>
+						<para>Many SIP and ISDN phones cannot send DTMF digits until the call is
+						connected.  If you wish to use this option with these phones, you
+						can use the <literal>Answer</literal> application before dialing.</para>
+					</note>
 				</option>
 				<option name="D" argsep=":">
 					<argument name="called" />
@@ -170,10 +175,18 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					</note>
 				</option>
 				<option name="h">
-					<para>Allow the called party to hang up by sending the <literal>*</literal> DTMF digit.</para>
+					<para>Allow the called party to hang up by sending the DTMF sequence
+					defined for disconnect in <filename>features.conf</filename>.</para>
 				</option>
 				<option name="H">
-					<para>Allow the calling party to hang up by hitting the <literal>*</literal> DTMF digit.</para>
+					<para>Allow the calling party to hang up by sending the DTMF sequence
+					defined for disconnect in <filename>features.conf</filename>.</para>
+					<note>
+						<para>Many SIP and ISDN phones cannot send DTMF digits until the call is
+						connected.  If you wish to allow DTMF disconnect before the dialed
+						party answers with these phones, you can use the <literal>Answer</literal>
+						application before dialing.</para>
+					</note>
 				</option>
 				<option name="i">
 					<para>Asterisk will ignore any forwarding requests it may receive on this dial attempt.</para>
@@ -1351,7 +1364,7 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 				case AST_FRAME_VOICE:
 				case AST_FRAME_IMAGE:
 				case AST_FRAME_TEXT:
-					if (ast_write(in, f)) {
+					if (!ast_test_flag64(outgoing, OPT_RINGBACK | OPT_MUSICBACK) && ast_write(in, f)) {
 						ast_log(LOG_WARNING, "Unable to write frametype: %d\n",
 							f->frametype);
 					}
@@ -1759,7 +1772,7 @@ static int setup_privacy_args(struct privacy_args *pa,
 			*/
 			silencethreshold = ast_dsp_get_threshold_from_settings(THRESHOLD_SILENCE);
 			ast_answer(chan);
-			res = ast_play_and_record(chan, "priv-recordintro", pa->privintro, 4, "sln", &duration, silencethreshold, 2000, 0);  /* NOTE: I've reduced the total time to 4 sec */
+			res = ast_play_and_record(chan, "priv-recordintro", pa->privintro, 4, "sln", &duration, NULL, silencethreshold, 2000, 0);  /* NOTE: I've reduced the total time to 4 sec */
 									/* don't think we'll need a lock removed, we took care of
 									   conflicts by naming the pa.privintro file */
 			if (res == -1) {
@@ -2070,10 +2083,6 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 		res = -1; /* reset default */
 	}
 
-	if (ast_test_flag64(&opts, OPT_DTMF_EXIT) || ast_test_flag64(&opts, OPT_CALLER_HANGUP)) {
-		__ast_answer(chan, 0, 0);
-	}
-
 	if (continue_exec)
 		*continue_exec = 0;
 
@@ -2316,7 +2325,9 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 			ast_copy_string(tc->exten, chan->exten, sizeof(tc->exten));
 
 		ast_channel_unlock(tc);
+		ast_channel_unlock(chan);
 		res = ast_call(tc, numsubst, 0); /* Place the call, but don't wait on the answer */
+		ast_channel_lock(chan);
 
 		/* Save the info in cdr's that we called them */
 		if (chan->cdr)
@@ -2423,14 +2434,6 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 		} else { /* Nobody answered, next please? */
 			res = 0;
 		}
-
-		/* SIP, in particular, sends back this error code to indicate an
-		 * overlap dialled number needs more digits. */
-		if (chan->hangupcause == AST_CAUSE_INVALID_NUMBER_FORMAT) {
-			res = AST_PBX_INCOMPLETE;
-		}
-
-		/* almost done, although the 'else' block is 400 lines */
 	} else {
 		const char *number;
 

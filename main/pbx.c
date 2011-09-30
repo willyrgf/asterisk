@@ -584,10 +584,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			If the variable name is prefixed with <literal>__</literal>, the variable will be
 			inherited into channels created from the current channel and all children channels.</para>
 			<note><para>If (and only if), in <filename>/etc/asterisk/asterisk.conf</filename>, you have
-			a <literal>[compat]</literal> category, and you have <literal>app_set = 1.6</literal> under that,then
-			the behavior of this app changes, and does not strip surrounding quotes from the right hand side as
-			it did previously in 1.4. The <literal>app_set = 1.6</literal> is only inserted if <literal>make samples</literal>
-			is executed, or if users insert this by hand into the <filename>asterisk.conf</filename> file.
+			a <literal>[compat]</literal> category, and you have <literal>app_set = 1.4</literal> under that, then
+			the behavior of this app changes, and strips surrounding quotes from the right hand side as
+			it did previously in 1.4.
 			The advantages of not stripping out quoting, and not caring about the separator characters (comma and vertical bar)
 			were sufficient to make these changes in 1.6. Confusion about how many backslashes would be needed to properly
 			protect separators and quotes in various database access strings has been greatly
@@ -1753,7 +1752,7 @@ static void new_find_extension(const char *str, struct scoreboard *score, struct
 								return; /* the first match is all we need */                                                 \
 							}												                                                 \
 						}                                                                                                    \
-					} else if (p->next_char && !*(str + 1)) {                                                                  \
+					} else if ((p->next_char || action == E_CANMATCH) && !*(str + 1)) {                                                                  \
 						score->canmatch = 1;                                                                                 \
 						score->canmatch_exten = get_canmatch_exten(p);                                                       \
 						if (action == E_CANMATCH || action == E_MATCHMORE) {                                                 \
@@ -3722,7 +3721,7 @@ void ast_str_substitute_variables_full(struct ast_str **buf, ssize_t maxlen, str
 						cp4 = ast_func_read2(c, finalvars, &substr3, 0) ? NULL : ast_str_buffer(substr3);
 						/* Don't deallocate the varshead that was passed in */
 						memcpy(&bogus->varshead, &old, sizeof(bogus->varshead));
-						ast_channel_release(bogus);
+						ast_channel_unref(bogus);
 					} else {
 						ast_log(LOG_ERROR, "Unable to allocate bogus channel for variable substitution.  Function results may be blank.\n");
 					}
@@ -3921,7 +3920,7 @@ void pbx_substitute_variables_helper_full(struct ast_channel *c, struct varshead
 						cp4 = ast_func_read(c, vars, workspace, VAR_BUF_SIZE) ? NULL : workspace;
 						/* Don't deallocate the varshead that was passed in */
 						memcpy(&c->varshead, &old, sizeof(c->varshead));
-						c = ast_channel_release(c);
+						c = ast_channel_unref(c);
 					} else {
 						ast_log(LOG_ERROR, "Unable to allocate bogus channel for variable substitution.  Function results may be blank.\n");
 					}
@@ -5192,6 +5191,11 @@ enum ast_pbx_result ast_pbx_start(struct ast_channel *c)
 		return AST_PBX_FAILED;
 	}
 
+	if (!ast_test_flag(&ast_options, AST_OPT_FLAG_FULLY_BOOTED)) {
+		ast_log(LOG_WARNING, "PBX requires Asterisk to be fully booted\n");
+		return AST_PBX_FAILED;
+	}
+
 	if (increase_call_count(c))
 		return AST_PBX_CALL_LIMIT;
 
@@ -5208,6 +5212,11 @@ enum ast_pbx_result ast_pbx_start(struct ast_channel *c)
 enum ast_pbx_result ast_pbx_run_args(struct ast_channel *c, struct ast_pbx_args *args)
 {
 	enum ast_pbx_result res = AST_PBX_SUCCESS;
+
+	if (!ast_test_flag(&ast_options, AST_OPT_FLAG_FULLY_BOOTED)) {
+		ast_log(LOG_WARNING, "PBX requires Asterisk to be fully booted\n");
+		return AST_PBX_FAILED;
+	}
 
 	if (increase_call_count(c)) {
 		return AST_PBX_CALL_LIMIT;
@@ -8312,12 +8321,16 @@ static int ast_add_extension2_lockopt(struct ast_context *con,
 	/* If we are adding a hint evalulate in variables and global variables */
 	if (priority == PRIORITY_HINT && strstr(application, "${") && !strstr(extension, "_")) {
 		struct ast_channel *c = ast_dummy_channel_alloc();
-		ast_copy_string(c->exten, extension, sizeof(c->exten));
-		ast_copy_string(c->context, con->name, sizeof(c->context));
 
+		if (c) {
+			ast_copy_string(c->exten, extension, sizeof(c->exten));
+			ast_copy_string(c->context, con->name, sizeof(c->context));
+		}
 		pbx_substitute_variables_helper(c, application, expand_buf, sizeof(expand_buf));
 		application = expand_buf;
-		ast_channel_release(c);
+		if (c) {
+			ast_channel_unref(c);
+		}
 	}
 
 	length = sizeof(struct ast_exten);
@@ -8569,7 +8582,7 @@ static int ast_pbx_outgoing_cdr_failed(void)
 	chan->cdr = ast_cdr_alloc();
 	if (!chan->cdr) {
 		/* allocation of the cdr failed */
-		chan = ast_channel_release(chan);   /* free the channel */
+		chan = ast_channel_unref(chan);   /* free the channel */
 		return -1;                /* return failure */
 	}
 
@@ -8580,7 +8593,7 @@ static int ast_pbx_outgoing_cdr_failed(void)
 	ast_cdr_failed(chan->cdr);      /* set the status to failed */
 	ast_cdr_detach(chan->cdr);      /* post and free the record */
 	chan->cdr = NULL;
-	chan = ast_channel_release(chan);         /* free the channel */
+	chan = ast_channel_unref(chan);         /* free the channel */
 
 	return 0;  /* success */
 }
@@ -8729,10 +8742,12 @@ outgoing_exten_cleanup:
 }
 
 struct app_tmp {
-	char app[256];
-	char data[256];
 	struct ast_channel *chan;
 	pthread_t t;
+	AST_DECLARE_STRING_FIELDS (
+		AST_STRING_FIELD(app);
+		AST_STRING_FIELD(data);
+	);
 };
 
 /*! \brief run the application and free the descriptor once done */
@@ -8747,6 +8762,7 @@ static void *ast_pbx_run_app(void *data)
 	} else
 		ast_log(LOG_WARNING, "No such application '%s'\n", tmp->app);
 	ast_hangup(tmp->chan);
+	ast_string_field_free_memory(tmp);
 	ast_free(tmp);
 	return NULL;
 }
@@ -8778,12 +8794,14 @@ int ast_pbx_outgoing_app(const char *type, format_t format, void *data, int time
 				res = 0;
 				ast_verb(4, "Channel %s was answered.\n", chan->name);
 				tmp = ast_calloc(1, sizeof(*tmp));
-				if (!tmp)
+				if (!tmp || ast_string_field_init(tmp, 252)) {
+					if (tmp) {
+						ast_free(tmp);
+					}
 					res = -1;
-				else {
-					ast_copy_string(tmp->app, app, sizeof(tmp->app));
-					if (appdata)
-						ast_copy_string(tmp->data, appdata, sizeof(tmp->data));
+				} else {
+					ast_string_field_set(tmp, app, app);
+					ast_string_field_set(tmp, data, appdata);
 					tmp->chan = chan;
 					if (synchronous > 1) {
 						if (locked_channel)
@@ -8794,6 +8812,7 @@ int ast_pbx_outgoing_app(const char *type, format_t format, void *data, int time
 							ast_channel_lock(chan);
 						if (ast_pthread_create_detached(&tmp->t, NULL, ast_pbx_run_app, tmp)) {
 							ast_log(LOG_WARNING, "Unable to spawn execute thread on %s: %s\n", chan->name, strerror(errno));
+							ast_string_field_free_memory(tmp);
 							ast_free(tmp);
 							if (locked_channel)
 								ast_channel_unlock(chan);
@@ -9216,6 +9235,8 @@ static int pbx_builtin_incomplete(struct ast_channel *chan, const char *data)
 	} else if (chan->_state != AST_STATE_UP && answer) {
 		__ast_answer(chan, 0, 1);
 	}
+
+	ast_indicate(chan, AST_CONTROL_INCOMPLETE);
 
 	return AST_PBX_INCOMPLETE;
 }

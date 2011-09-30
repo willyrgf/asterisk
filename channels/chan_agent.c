@@ -1300,10 +1300,8 @@ static int check_availability(struct agent_pvt *newlyavailable, int needlock)
 				ast_setstate(parent, AST_STATE_UP);
 				ast_setstate(chan, AST_STATE_UP);
 				ast_copy_string(parent->context, chan->context, sizeof(parent->context));
-				/* Go ahead and mark the channel as a zombie so that masquerade will
-				   destroy it for us, and we need not call ast_hangup */
-				ast_set_flag(chan, AST_FLAG_ZOMBIE);
 				ast_channel_masquerade(parent, chan);
+				ast_hangup(chan);
 				p->abouttograb = 0;
 			} else {
 				ast_debug(1, "Sneaky, parent disappeared in the mean time...\n");
@@ -1508,6 +1506,7 @@ static int action_agents(struct mansession *s, const struct message *m)
 	char *talkingto = NULL;
 	char *talkingtoChan = NULL;
 	char *status = NULL;
+	struct ast_channel *bridge;
 
 	if (!ast_strlen_zero(id))
 		snprintf(idText, sizeof(idText) ,"ActionID: %s\r\n", id);
@@ -1532,10 +1531,13 @@ static int action_agents(struct mansession *s, const struct message *m)
 			if (p->owner && p->owner->_bridge) {
 				talkingto = S_COR(p->chan->caller.id.number.valid,
 					p->chan->caller.id.number.str, "n/a");
-				if (ast_bridged_channel(p->owner))
-					talkingtoChan = ast_strdupa(ast_bridged_channel(p->owner)->name);
-				else
+				ast_channel_lock(p->owner);
+				if ((bridge = ast_bridged_channel(p->owner))) {
+					talkingtoChan = ast_strdupa(bridge->name);
+				} else {
 					talkingtoChan = "n/a";
+				}
+				ast_channel_unlock(p->owner);
 				status = "AGENT_ONCALL";
 			} else {
 				talkingto = "n/a";
