@@ -204,6 +204,9 @@ static int db_open(void)
 			ast_log(LOG_ERROR, "*** old astdb, please delete '%s'\n", dbname);
 			ast_log(LOG_ERROR, "*** and re-run 'make menuselect' and select astdb2sqlite3\n");
 			ast_log(LOG_ERROR, "*** in the Utilities section, then 'make && make install'.\n");
+			ast_log(LOG_ERROR, "*** It is also imperative that the user under which\n");
+			ast_log(LOG_ERROR, "*** Asterisk runs have write permission to the directory\n");
+			ast_log(LOG_ERROR, "*** where the database resides.\n");
 			sleep(5);
 		} else {
 			ast_log(LOG_NOTICE, "Database conversion succeeded!\n");
@@ -837,7 +840,7 @@ static int manager_dbdeltree(struct mansession *s, const struct message *m)
 	else
 		res = ast_db_deltree(family, NULL);
 
-	if (res < 0)
+	if (res <= 0)
 		astman_send_error(s, m, "Database entry not found");
 	else
 		astman_send_ack(s, m, "Key tree deleted successfully");
