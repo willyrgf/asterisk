@@ -782,6 +782,8 @@ struct ao2_container;
 	__ao2_container_alloc_debug((options), (n_buckets), (hash_fn), (cmp_fn), (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__, 1)
 #define ao2_t_container_alloc(n_buckets, hash_fn, cmp_fn, tag) \
 	__ao2_container_alloc_debug(AO2_ALLOC_OPT_LOCK_MUTEX, (n_buckets), (hash_fn), (cmp_fn), (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__, 1)
+#define ao2_container_alloc_options(options, n_buckets, hash_fn, cmp_fn) \
+	__ao2_container_alloc_debug((options), (n_buckets), (hash_fn), (cmp_fn), "",  __FILE__, __LINE__, __PRETTY_FUNCTION__, 1)
 #define ao2_container_alloc(n_buckets, hash_fn, cmp_fn) \
 	__ao2_container_alloc_debug(AO2_ALLOC_OPT_LOCK_MUTEX, (n_buckets), (hash_fn), (cmp_fn), "",  __FILE__, __LINE__, __PRETTY_FUNCTION__, 1)
 
@@ -791,6 +793,8 @@ struct ao2_container;
 	__ao2_container_alloc_debug((options), (n_buckets), (hash_fn), (cmp_fn), (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__, 0)
 #define ao2_t_container_alloc(n_buckets, hash_fn, cmp_fn, tag) \
 	__ao2_container_alloc_debug(AO2_ALLOC_OPT_LOCK_MUTEX, (n_buckets), (hash_fn), (cmp_fn), (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__, 0)
+#define ao2_container_alloc_options(options, n_buckets, hash_fn, cmp_fn) \
+	__ao2_container_alloc_debug((options), (n_buckets), (hash_fn), (cmp_fn), "",  __FILE__, __LINE__, __PRETTY_FUNCTION__, 0)
 #define ao2_container_alloc(n_buckets, hash_fn, cmp_fn) \
 	__ao2_container_alloc_debug(AO2_ALLOC_OPT_LOCK_MUTEX, (n_buckets), (hash_fn), (cmp_fn), "",  __FILE__, __LINE__, __PRETTY_FUNCTION__, 0)
 
@@ -800,6 +804,8 @@ struct ao2_container;
 	__ao2_container_alloc((options), (n_buckets), (hash_fn), (cmp_fn))
 #define ao2_t_container_alloc(n_buckets, hash_fn, cmp_fn, tag) \
 	__ao2_container_alloc(AO2_ALLOC_OPT_LOCK_MUTEX, (n_buckets), (hash_fn), (cmp_fn))
+#define ao2_container_alloc_options(options, n_buckets, hash_fn, cmp_fn) \
+	__ao2_container_alloc((options), (n_buckets), (hash_fn), (cmp_fn))
 #define ao2_container_alloc(n_buckets, hash_fn, cmp_fn) \
 	__ao2_container_alloc(AO2_ALLOC_OPT_LOCK_MUTEX, (n_buckets), (hash_fn), (cmp_fn))
 
