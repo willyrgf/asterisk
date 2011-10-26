@@ -42,24 +42,24 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$");
 
 #define FORMAT_CONFIG "codecs.conf"
 
-/*! This is the container for all the format attribute interfaces.
- *  An ao2 container was chosen for fast lookup. */
+/*!
+ * \brief Container for all the format attribute interfaces.
+ * \note This container uses RWLOCKs instead of MUTEX locks.                                                             .
+ * \note An ao2 container was chosen for fast lookup.
+ */
 static struct ao2_container *interfaces;
-
-/*! This is the lock used to protect the interfaces container.  Yes, ao2_containers
- * do have their own locking, but we need the capability of performing read/write
- * locks on this specific container. */
-static ast_rwlock_t ilock;
 
 /*! a wrapper is used put interfaces into the ao2 container. */
 struct interface_ao2_wrapper {
 	enum ast_format_id id;
 	const struct ast_format_attr_interface *interface;
+/* BUGBUG wrapper can be created with RWLOCKs now */
 	/*! a read write lock must be used to protect the wrapper instead
 	 * of the ao2 lock. */
 	ast_rwlock_t wraplock;
 };
 
+/* BUGBUG v--- This may benefit from the global ao2 object enhancements. */
 /*! \brief Format List container, This container is never directly accessed outside
  * of this file, and It only exists for building the format_list_array. */
 static struct ao2_container *format_list;
@@ -70,6 +70,7 @@ static struct ast_format_list *format_list_array;
 static size_t format_list_array_len = 0;
 /*! \brief Locks the format list array so a reference can be taken safely. */
 static ast_rwlock_t format_list_array_lock;
+/* BUGBUG ^--- This may benefit from the global ao2 object enhancements. */
 
 static int interface_cmp_cb(void *obj, void *arg, int flags)
 {
@@ -106,38 +107,25 @@ int ast_format_get_video_mark(const struct ast_format *format)
 	return format->fattr.rtp_marker_bit;
 }
 
+static struct interface_ao2_wrapper *find_interface(const struct ast_format *format)
+{
+	struct interface_ao2_wrapper tmp_wrapper = {
+		.id = format->id,
+	};
+
+	return ao2_find(interfaces, &tmp_wrapper, OBJ_POINTER);
+}
+
 static int has_interface(const struct ast_format *format)
 {
 	struct interface_ao2_wrapper *wrapper;
-	struct interface_ao2_wrapper tmp_wrapper = {
-		.id = format->id,
-	};
 
-	ast_rwlock_rdlock(&ilock);
-	if (!(wrapper = ao2_find(interfaces, &tmp_wrapper, (OBJ_POINTER | OBJ_NOLOCK)))) {
-		ast_rwlock_unlock(&ilock);
+	wrapper = find_interface(format);
+	if (!wrapper) {
 		return 0;
 	}
-	ast_rwlock_unlock(&ilock);
 	ao2_ref(wrapper, -1);
 	return 1;
-}
-
-static struct interface_ao2_wrapper *find_interface(const struct ast_format *format)
-{
-	struct interface_ao2_wrapper *wrapper;
-	struct interface_ao2_wrapper tmp_wrapper = {
-		.id = format->id,
-	};
-
-	ast_rwlock_rdlock(&ilock);
-	if (!(wrapper = ao2_find(interfaces, &tmp_wrapper, (OBJ_POINTER | OBJ_NOLOCK)))) {
-		ast_rwlock_unlock(&ilock);
-		return NULL;
-	}
-	ast_rwlock_unlock(&ilock);
-
-	return wrapper;
 }
 
 /*! \internal
@@ -1050,7 +1038,7 @@ static int format_list_init(void)
 	return 0;
 }
 
-int ast_format_list_init()
+int ast_format_list_init(void)
 {
 	if (ast_rwlock_init(&format_list_array_lock)) {
 		return -1;
@@ -1073,25 +1061,16 @@ init_list_cleanup:
 	return -1;
 }
 
-int ast_format_attr_init()
+int ast_format_attr_init(void)
 {
 	ast_cli_register_multiple(my_clis, ARRAY_LEN(my_clis));
-	if (ast_rwlock_init(&ilock)) {
+
+	interfaces = ao2_container_alloc_options(AO2_ALLOC_OPT_LOCK_RWLOCK,
+		283, interface_hash_cb, interface_cmp_cb);
+	if (!interfaces) {
 		return -1;
 	}
-
-	if (!(interfaces = ao2_container_alloc(283, interface_hash_cb, interface_cmp_cb))) {
-		ast_rwlock_destroy(&ilock);
-		goto init_cleanup;
-	}
 	return 0;
-
-init_cleanup:
-	ast_rwlock_destroy(&ilock);
-	if (interfaces) {
-		ao2_ref(interfaces, -1);
-	}
-	return -1;
 }
 
 static int custom_celt_format(struct ast_format_list *entry, unsigned int maxbitrate, unsigned int framesize)
@@ -1316,17 +1295,24 @@ int ast_format_attr_reg_interface(const struct ast_format_attr_interface *interf
 		.id = interface->id,
 	};
 
+	/*
+	 * Grab the write lock before checking for duplicates in
+	 * anticipation of adding a new interface and to prevent a
+	 * duplicate from sneaking in between the check and add.
+	 */
+	ao2_wrlock(interfaces);
+
 	/* check for duplicates first*/
-	ast_rwlock_wrlock(&ilock);
 	if ((wrapper = ao2_find(interfaces, &tmp_wrapper, (OBJ_POINTER | OBJ_NOLOCK)))) {
-		ast_rwlock_unlock(&ilock);
+		ao2_unlock(interfaces);
 		ast_log(LOG_WARNING, "Can not register attribute interface for format id %d, interface already exists.\n", interface->id);
 		ao2_ref(wrapper, -1);
 		return -1;
 	}
-	ast_rwlock_unlock(&ilock);
 
+/* BUGBUG wrapper can be created with RWLOCKs now */
 	if (!(wrapper = ao2_alloc(sizeof(*wrapper), interface_destroy_cb))) {
+		ao2_unlock(interfaces);
 		return -1;
 	}
 
@@ -1334,10 +1320,9 @@ int ast_format_attr_reg_interface(const struct ast_format_attr_interface *interf
 	wrapper->id = interface->id;
 	ast_rwlock_init(&wrapper->wraplock);
 
-	/* use the write lock whenever the interface container is modified */
-	ast_rwlock_wrlock(&ilock);
-	ao2_link(interfaces, wrapper);
-	ast_rwlock_unlock(&ilock);
+	/* The write lock is already held. */
+	ao2_link_nolock(interfaces, wrapper);
+	ao2_unlock(interfaces);
 
 	ao2_ref(wrapper, -1);
 
@@ -1365,13 +1350,9 @@ int ast_format_attr_unreg_interface(const struct ast_format_attr_interface *inte
 		.id = interface->id,
 	};
 
-	/* use the write lock whenever the interface container is modified */
-	ast_rwlock_wrlock(&ilock);
-	if (!(wrapper = ao2_find(interfaces, &tmp_wrapper, (OBJ_POINTER | OBJ_UNLINK | OBJ_NOLOCK)))) {
-		ast_rwlock_unlock(&ilock);
+	if (!(wrapper = ao2_find(interfaces, &tmp_wrapper, (OBJ_POINTER | OBJ_UNLINK)))) {
 		return -1;
 	}
-	ast_rwlock_unlock(&ilock);
 
 	ast_rwlock_wrlock(&wrapper->wraplock);
 	wrapper->interface = NULL;
