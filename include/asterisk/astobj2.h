@@ -420,6 +420,9 @@ enum ao2_alloc_opts {
 
 #define ao2_t_alloc_options(data_size, destructor_fn, options, debug_msg) \
 	__ao2_alloc_debug((data_size), (destructor_fn), (options), (debug_msg),  __FILE__, __LINE__, __PRETTY_FUNCTION__, 1)
+#define ao2_alloc_options(data_size, destructor_fn, options) \
+	__ao2_alloc_debug((data_size), (destructor_fn), (options), "",  __FILE__, __LINE__, __PRETTY_FUNCTION__, 1)
+
 #define ao2_t_alloc(data_size, destructor_fn, debug_msg) \
 	__ao2_alloc_debug((data_size), (destructor_fn), AO2_ALLOC_OPT_LOCK_MUTEX, (debug_msg),  __FILE__, __LINE__, __PRETTY_FUNCTION__, 1)
 #define ao2_alloc(data_size, destructor_fn) \
@@ -429,6 +432,9 @@ enum ao2_alloc_opts {
 
 #define ao2_t_alloc_options(data_size, destructor_fn, options, debug_msg) \
 	__ao2_alloc_debug((data_size), (destructor_fn), (options), (debug_msg),  __FILE__, __LINE__, __PRETTY_FUNCTION__, 0)
+#define ao2_alloc_options(data_size, destructor_fn, options) \
+	__ao2_alloc_debug((data_size), (destructor_fn), (options), "",  __FILE__, __LINE__, __PRETTY_FUNCTION__, 0)
+
 #define ao2_t_alloc(data_size, destructor_fn, debug_msg) \
 	__ao2_alloc_debug((data_size), (destructor_fn), AO2_ALLOC_OPT_LOCK_MUTEX, (debug_msg),  __FILE__, __LINE__, __PRETTY_FUNCTION__, 0)
 #define ao2_alloc(data_size, destructor_fn) \
@@ -438,6 +444,9 @@ enum ao2_alloc_opts {
 
 #define ao2_t_alloc_options(data_size, destructor_fn, options, debug_msg) \
 	__ao2_alloc((data_size), (destructor_fn), (options))
+#define ao2_alloc_options(data_size, destructor_fn, options) \
+	__ao2_alloc((data_size), (destructor_fn), (options))
+
 #define ao2_t_alloc(data_size, destructor_fn, debug_msg) \
 	__ao2_alloc((data_size), (destructor_fn), AO2_ALLOC_OPT_LOCK_MUTEX)
 #define ao2_alloc(data_size, destructor_fn) \
@@ -780,10 +789,11 @@ struct ao2_container;
 
 #define ao2_t_container_alloc_options(options, n_buckets, hash_fn, cmp_fn, tag) \
 	__ao2_container_alloc_debug((options), (n_buckets), (hash_fn), (cmp_fn), (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__, 1)
-#define ao2_t_container_alloc(n_buckets, hash_fn, cmp_fn, tag) \
-	__ao2_container_alloc_debug(AO2_ALLOC_OPT_LOCK_MUTEX, (n_buckets), (hash_fn), (cmp_fn), (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__, 1)
 #define ao2_container_alloc_options(options, n_buckets, hash_fn, cmp_fn) \
 	__ao2_container_alloc_debug((options), (n_buckets), (hash_fn), (cmp_fn), "",  __FILE__, __LINE__, __PRETTY_FUNCTION__, 1)
+
+#define ao2_t_container_alloc(n_buckets, hash_fn, cmp_fn, tag) \
+	__ao2_container_alloc_debug(AO2_ALLOC_OPT_LOCK_MUTEX, (n_buckets), (hash_fn), (cmp_fn), (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__, 1)
 #define ao2_container_alloc(n_buckets, hash_fn, cmp_fn) \
 	__ao2_container_alloc_debug(AO2_ALLOC_OPT_LOCK_MUTEX, (n_buckets), (hash_fn), (cmp_fn), "",  __FILE__, __LINE__, __PRETTY_FUNCTION__, 1)
 
@@ -791,10 +801,11 @@ struct ao2_container;
 
 #define ao2_t_container_alloc_options(options, n_buckets, hash_fn, cmp_fn, tag) \
 	__ao2_container_alloc_debug((options), (n_buckets), (hash_fn), (cmp_fn), (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__, 0)
-#define ao2_t_container_alloc(n_buckets, hash_fn, cmp_fn, tag) \
-	__ao2_container_alloc_debug(AO2_ALLOC_OPT_LOCK_MUTEX, (n_buckets), (hash_fn), (cmp_fn), (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__, 0)
 #define ao2_container_alloc_options(options, n_buckets, hash_fn, cmp_fn) \
 	__ao2_container_alloc_debug((options), (n_buckets), (hash_fn), (cmp_fn), "",  __FILE__, __LINE__, __PRETTY_FUNCTION__, 0)
+
+#define ao2_t_container_alloc(n_buckets, hash_fn, cmp_fn, tag) \
+	__ao2_container_alloc_debug(AO2_ALLOC_OPT_LOCK_MUTEX, (n_buckets), (hash_fn), (cmp_fn), (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__, 0)
 #define ao2_container_alloc(n_buckets, hash_fn, cmp_fn) \
 	__ao2_container_alloc_debug(AO2_ALLOC_OPT_LOCK_MUTEX, (n_buckets), (hash_fn), (cmp_fn), "",  __FILE__, __LINE__, __PRETTY_FUNCTION__, 0)
 
@@ -802,10 +813,11 @@ struct ao2_container;
 
 #define ao2_t_container_alloc_options(options, n_buckets, hash_fn, cmp_fn, tag) \
 	__ao2_container_alloc((options), (n_buckets), (hash_fn), (cmp_fn))
-#define ao2_t_container_alloc(n_buckets, hash_fn, cmp_fn, tag) \
-	__ao2_container_alloc(AO2_ALLOC_OPT_LOCK_MUTEX, (n_buckets), (hash_fn), (cmp_fn))
 #define ao2_container_alloc_options(options, n_buckets, hash_fn, cmp_fn) \
 	__ao2_container_alloc((options), (n_buckets), (hash_fn), (cmp_fn))
+
+#define ao2_t_container_alloc(n_buckets, hash_fn, cmp_fn, tag) \
+	__ao2_container_alloc(AO2_ALLOC_OPT_LOCK_MUTEX, (n_buckets), (hash_fn), (cmp_fn))
 #define ao2_container_alloc(n_buckets, hash_fn, cmp_fn) \
 	__ao2_container_alloc(AO2_ALLOC_OPT_LOCK_MUTEX, (n_buckets), (hash_fn), (cmp_fn))
 
@@ -853,6 +865,7 @@ int ao2_container_count(struct ao2_container *c);
 
 #define ao2_t_link(container, obj, tag)        __ao2_link_debug((container), (obj), 0, (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__)
 #define ao2_link(container, obj)               __ao2_link_debug((container), (obj), 0, "",  __FILE__, __LINE__, __PRETTY_FUNCTION__)
+
 #define ao2_t_link_nolock(container, obj, tag) __ao2_link_debug((container), (obj), OBJ_NOLOCK, (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__)
 #define ao2_link_nolock(container, obj)        __ao2_link_debug((container), (obj), OBJ_NOLOCK, "",  __FILE__, __LINE__, __PRETTY_FUNCTION__)
 
@@ -860,6 +873,7 @@ int ao2_container_count(struct ao2_container *c);
 
 #define ao2_t_link(container, obj, tag)        __ao2_link((container), (obj), 0)
 #define ao2_link(container, obj)               __ao2_link((container), (obj), 0)
+
 #define ao2_t_link_nolock(container, obj, tag) __ao2_link((container), (obj), OBJ_NOLOCK)
 #define ao2_link_nolock(container, obj)        __ao2_link((container), (obj), OBJ_NOLOCK)
 
@@ -889,6 +903,7 @@ void *__ao2_link(struct ao2_container *c, void *newobj, int flags);
 
 #define ao2_t_unlink(container, obj, tag)        __ao2_unlink_debug((container), (obj), 0, (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__)
 #define ao2_unlink(container, obj)               __ao2_unlink_debug((container), (obj), 0, "",  __FILE__, __LINE__, __PRETTY_FUNCTION__)
+
 #define ao2_t_unlink_nolock(container, obj, tag) __ao2_unlink_debug((container), (obj), OBJ_NOLOCK, (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__)
 #define ao2_unlink_nolock(container, obj)        __ao2_unlink_debug((container), (obj), OBJ_NOLOCK, "",  __FILE__, __LINE__, __PRETTY_FUNCTION__)
 
@@ -896,6 +911,7 @@ void *__ao2_link(struct ao2_container *c, void *newobj, int flags);
 
 #define ao2_t_unlink(container, obj, tag)        __ao2_unlink((container), (obj), 0)
 #define ao2_unlink(container, obj)               __ao2_unlink((container), (obj), 0)
+
 #define ao2_t_unlink_nolock(container, obj, tag) __ao2_unlink((container), (obj), OBJ_NOLOCK)
 #define ao2_unlink_nolock(container, obj)        __ao2_unlink((container), (obj), OBJ_NOLOCK)
 

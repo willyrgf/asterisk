@@ -53,10 +53,6 @@ static struct ao2_container *interfaces;
 struct interface_ao2_wrapper {
 	enum ast_format_id id;
 	const struct ast_format_attr_interface *interface;
-/* BUGBUG wrapper can be created with RWLOCKs now */
-	/*! a read write lock must be used to protect the wrapper instead
-	 * of the ao2 lock. */
-	ast_rwlock_t wraplock;
 };
 
 /* BUGBUG v--- This may benefit from the global ao2 object enhancements. */
@@ -84,12 +80,6 @@ static int interface_hash_cb(const void *obj, const int flags)
 {
 	const struct interface_ao2_wrapper *wrapper = obj;
 	return wrapper->id;
-}
-
-static void interface_destroy_cb(void *obj)
-{
-	struct interface_ao2_wrapper *wrapper = obj;
-	ast_rwlock_destroy(&wrapper->wraplock);
 }
 
 void ast_format_copy(struct ast_format *dst, const struct ast_format *src)
@@ -140,16 +130,16 @@ static int format_set_helper(struct ast_format *format, va_list ap)
 		return -1;
 	}
 
-	ast_rwlock_rdlock(&wrapper->wraplock);
+	ao2_rdlock(wrapper);
 	if (!wrapper->interface || !wrapper->interface->format_attr_set) {
-		ast_rwlock_unlock(&wrapper->wraplock);
+		ao2_unlock(wrapper);
 		ao2_ref(wrapper, -1);
 		return -1;
 	}
 
 	wrapper->interface->format_attr_set(&format->fattr, ap);
 
-	ast_rwlock_unlock(&wrapper->wraplock);
+	ao2_unlock(wrapper);
 	ao2_ref(wrapper, -1);
 
 	return 0;
@@ -204,12 +194,12 @@ static int format_isset_helper(const struct ast_format *format, va_list ap)
 		return -1;
 	}
 
-	ast_rwlock_rdlock(&wrapper->wraplock);
+	ao2_rdlock(wrapper);
 	if (!wrapper->interface ||
 		!wrapper->interface->format_attr_set ||
 		!wrapper->interface->format_attr_cmp) {
 
-		ast_rwlock_unlock(&wrapper->wraplock);
+		ao2_unlock(wrapper);
 		ao2_ref(wrapper, -1);
 		return -1;
 	}
@@ -225,7 +215,7 @@ static int format_isset_helper(const struct ast_format *format, va_list ap)
 		res = (res == AST_FORMAT_CMP_NOT_EQUAL) ? -1 : 0;
 	}
 
-	ast_rwlock_unlock(&wrapper->wraplock);
+	ao2_unlock(wrapper);
 	ao2_ref(wrapper, -1);
 
 	return res;
@@ -246,21 +236,22 @@ int ast_format_get_value(const struct ast_format *format, int key, void *value)
 {
 	int res = 0;
 	struct interface_ao2_wrapper *wrapper;
+
 	if (!(wrapper = find_interface(format))) {
 		return -1;
 	}
-	ast_rwlock_rdlock(&wrapper->wraplock);
+	ao2_rdlock(wrapper);
 	if (!wrapper->interface ||
 		!wrapper->interface->format_attr_get_val) {
 
-		ast_rwlock_unlock(&wrapper->wraplock);
+		ao2_unlock(wrapper);
 		ao2_ref(wrapper, -1);
 		return -1;
 	}
 
 	res = wrapper->interface->format_attr_get_val(&format->fattr, key, value);
 
-	ast_rwlock_unlock(&wrapper->wraplock);
+	ao2_unlock(wrapper);
 	ao2_ref(wrapper, -1);
 
 	return res;
@@ -278,16 +269,16 @@ static enum ast_format_cmp_res format_cmp_helper(const struct ast_format *format
 		return res;
 	}
 
-	ast_rwlock_rdlock(&wrapper->wraplock);
+	ao2_rdlock(wrapper);
 	if (!wrapper->interface || !wrapper->interface->format_attr_cmp) {
-		ast_rwlock_unlock(&wrapper->wraplock);
+		ao2_unlock(wrapper);
 		ao2_ref(wrapper, -1);
 		return res;
 	}
 
 	res = wrapper->interface->format_attr_cmp(&format1->fattr, &format2->fattr);
 
-	ast_rwlock_unlock(&wrapper->wraplock);
+	ao2_unlock(wrapper);
 	ao2_ref(wrapper, -1);
 
 	return res;
@@ -315,11 +306,11 @@ static int format_joint_helper(const struct ast_format *format1, const struct as
 		return res;
 	}
 
-	ast_rwlock_rdlock(&wrapper->wraplock);
+	ao2_rdlock(wrapper);
 	if (wrapper->interface && wrapper->interface->format_attr_get_joint) {
 		res = wrapper->interface->format_attr_get_joint(&format1->fattr, &format2->fattr, &result->fattr);
 	}
-	ast_rwlock_unlock(&wrapper->wraplock);
+	ao2_unlock(wrapper);
 
 	ao2_ref(wrapper, -1);
 
@@ -1310,15 +1301,14 @@ int ast_format_attr_reg_interface(const struct ast_format_attr_interface *interf
 		return -1;
 	}
 
-/* BUGBUG wrapper can be created with RWLOCKs now */
-	if (!(wrapper = ao2_alloc(sizeof(*wrapper), interface_destroy_cb))) {
+	wrapper = ao2_alloc_options(sizeof(*wrapper), NULL, AO2_ALLOC_OPT_LOCK_RWLOCK);
+	if (!wrapper) {
 		ao2_unlock(interfaces);
 		return -1;
 	}
 
 	wrapper->interface = interface;
 	wrapper->id = interface->id;
-	ast_rwlock_init(&wrapper->wraplock);
 
 	/* The write lock is already held. */
 	ao2_link_nolock(interfaces, wrapper);
@@ -1354,9 +1344,9 @@ int ast_format_attr_unreg_interface(const struct ast_format_attr_interface *inte
 		return -1;
 	}
 
-	ast_rwlock_wrlock(&wrapper->wraplock);
+	ao2_wrlock(wrapper);
 	wrapper->interface = NULL;
-	ast_rwlock_unlock(&wrapper->wraplock);
+	ao2_unlock(wrapper);
 
 	ao2_ref(wrapper, -1);
 
