@@ -1002,7 +1002,7 @@ int pri_is_up(struct sig_pri_span *pri)
 	return 0;
 }
 
-static char *pri_order(int level)
+static const char *pri_order(int level)
 {
 	switch (level) {
 	case 0:
@@ -1032,37 +1032,74 @@ static int pri_active_dchan_index(struct sig_pri_span *pri)
 	return -1;
 }
 
-static int pri_find_dchan(struct sig_pri_span *pri)
+static void pri_find_dchan(struct sig_pri_span *pri)
 {
-	int oldslot = -1;
 	struct pri *old;
+	int oldslot = -1;
 	int newslot = -1;
-	int x;
+	int idx;
+
 	old = pri->pri;
-	for (x = 0; x < SIG_PRI_NUM_DCHANS; x++) {
-		if ((pri->dchanavail[x] == DCHAN_AVAILABLE) && (newslot < 0))
-			newslot = x;
-		if (pri->dchans[x] == old) {
-			oldslot = x;
+	for (idx = 0; idx < SIG_PRI_NUM_DCHANS; ++idx) {
+		if (!pri->dchans[idx]) {
+			/* No more D channels defined on the span. */
+			break;
+		}
+		if (pri->dchans[idx] == old) {
+			oldslot = idx;
+		}
+		if (newslot < 0 && pri->dchanavail[idx] == DCHAN_AVAILABLE) {
+			newslot = idx;
 		}
 	}
-	if (newslot < 0) {
-		newslot = 0;
-		/* This is annoying to see on non persistent layer 2 connections.  Let's not complain in that case */
-		if (pri->sig != SIG_BRI_PTMP && !pri->no_d_channels) {
-			pri->no_d_channels = 1;
-			ast_log(LOG_WARNING,
-				"Span %d: No D-channels available!  Using Primary channel as D-channel anyway!\n",
-				pri->span);
+	/* At this point, idx is a count of how many D-channels are defined on the span. */
+
+	if (1 < idx) {
+		/* We have several D-channels defined on the span.  (NFAS PRI setup) */
+		if (newslot < 0) {
+			/* No D-channels available.  Default to the primary D-channel. */
+			newslot = 0;
+
+			if (!pri->no_d_channels) {
+				pri->no_d_channels = 1;
+				if (old && oldslot != newslot) {
+					ast_log(LOG_WARNING,
+						"Span %d: No D-channels up!  Switching selected D-channel from %s to %s.\n",
+						pri->span, pri_order(oldslot), pri_order(newslot));
+				} else {
+					ast_log(LOG_WARNING, "Span %d: No D-channels up!\n", pri->span);
+				}
+			}
+		} else {
+			pri->no_d_channels = 0;
+		}
+		if (old && oldslot != newslot) {
+			ast_log(LOG_NOTICE,
+				"Switching selected D-channel from %s (fd %d) to %s (fd %d)!\n",
+				pri_order(oldslot), pri->fds[oldslot],
+				pri_order(newslot), pri->fds[newslot]);
 		}
 	} else {
-		pri->no_d_channels = 0;
+		if (newslot < 0) {
+			/* The only D-channel is not up. */
+			newslot = 0;
+
+			if (!pri->no_d_channels) {
+				pri->no_d_channels = 1;
+
+				/*
+				 * This is annoying to see on non-persistent layer 2
+				 * connections.  Let's not complain in that case.
+				 */
+				if (pri->sig != SIG_BRI_PTMP) {
+					ast_log(LOG_WARNING, "Span %d: D-channel is down!\n", pri->span);
+				}
+			}
+		} else {
+			pri->no_d_channels = 0;
+		}
 	}
-	if (old && (oldslot != newslot))
-		ast_log(LOG_NOTICE, "Switching from d-channel fd %d to fd %d!\n",
-			pri->fds[oldslot], pri->fds[newslot]);
 	pri->pri = pri->dchans[newslot];
-	return 0;
 }
 
 /*!
@@ -1541,7 +1578,19 @@ static char *dialplan2str(int dialplan)
 	return (pri_plan2str(dialplan));
 }
 
-static void apply_plan_to_number(char *buf, size_t size, const struct sig_pri_span *pri, const char *number, const int plan)
+/*!
+ * \internal
+ * \brief Apply numbering plan prefix to the given number.
+ *
+ * \param buf Buffer to put number into.
+ * \param size Size of given buffer.
+ * \param pri PRI span control structure.
+ * \param number Number to apply numbering plan.
+ * \param plan Numbering plan to apply.
+ *
+ * \return Nothing
+ */
+static void apply_plan_to_number(char *buf, size_t size, const struct sig_pri_span *pri, const char *number, int plan)
 {
 	switch (plan) {
 	case PRI_INTERNATIONAL_ISDN:		/* Q.931 dialplan == 0x11 international dialplan => prepend international prefix digits */
@@ -1563,6 +1612,30 @@ static void apply_plan_to_number(char *buf, size_t size, const struct sig_pri_sp
 		snprintf(buf, size, "%s", number);
 		break;
 	}
+}
+
+/*!
+ * \internal
+ * \brief Apply numbering plan prefix to the given number if the number exists.
+ *
+ * \param buf Buffer to put number into.
+ * \param size Size of given buffer.
+ * \param pri PRI span control structure.
+ * \param number Number to apply numbering plan.
+ * \param plan Numbering plan to apply.
+ *
+ * \return Nothing
+ */
+static void apply_plan_to_existing_number(char *buf, size_t size, const struct sig_pri_span *pri, const char *number, int plan)
+{
+	/* Make sure a number exists so the prefix isn't placed on an empty string. */
+	if (ast_strlen_zero(number)) {
+		if (size) {
+			*buf = '\0';
+		}
+		return;
+	}
+	apply_plan_to_number(buf, size, pri, number, plan);
 }
 
 /*!
@@ -1897,8 +1970,9 @@ static void *pri_ss_thread(void *data)
 void pri_event_alarm(struct sig_pri_span *pri, int index, int before_start_pri)
 {
 	pri->dchanavail[index] &= ~(DCHAN_NOTINALARM | DCHAN_UP);
-	if (!before_start_pri)
+	if (!before_start_pri) {
 		pri_find_dchan(pri);
+	}
 }
 
 void pri_event_noalarm(struct sig_pri_span *pri, int index, int before_start_pri)
@@ -1947,7 +2021,8 @@ static void sig_pri_party_number_convert(struct ast_party_number *ast_number, co
 {
 	char number[AST_MAX_EXTENSION];
 
-	apply_plan_to_number(number, sizeof(number), pri, pri_number->str, pri_number->plan);
+	apply_plan_to_existing_number(number, sizeof(number), pri, pri_number->str,
+		pri_number->plan);
 	ast_number->str = ast_strdup(number);
 	ast_number->plan = pri_number->plan;
 	ast_number->presentation = pri_to_ast_presentation(pri_number->presentation);
@@ -4690,7 +4765,7 @@ static void *pri_dchannel(void *vpri)
 
 		if (e) {
 			if (pri->debug) {
-				ast_verbose("Span: %d Processing event: %s\n",
+				ast_verbose("Span %d: Processing event %s\n",
 					pri->span, pri_event2str(e->e));
 			}
 
@@ -4713,7 +4788,9 @@ static void *pri_dchannel(void *vpri)
 			switch (e->e) {
 			case PRI_EVENT_DCHAN_UP:
 				pri->no_d_channels = 0;
-				if (!pri->pri) pri_find_dchan(pri);
+				if (!pri->pri) {
+					pri_find_dchan(pri);
+				}
 
 				/* Note presense of D-channel */
 				time(&pri->lastreset);
@@ -4736,8 +4813,10 @@ static void *pri_dchannel(void *vpri)
 				pri_find_dchan(pri);
 				if (!pri_is_up(pri)) {
 					if (pri->sig == SIG_BRI_PTMP) {
-						/* For PTMP connections with non persistent layer 2 we want
-						 * to *not* declare inalarm unless there actually is an alarm */
+						/*
+						 * For PTMP connections with non-persistent layer 2 we want to
+						 * *not* declare inalarm unless there actually is an alarm.
+						 */
 						break;
 					}
 					/* Hangup active channels and put them in alarm mode */
@@ -4951,8 +5030,8 @@ static void *pri_dchannel(void *vpri)
 				if (-1 < chanpos) {
 					/* Libpri has already filtered out duplicate SETUPs. */
 					ast_log(LOG_WARNING,
-						"Span %d: Got SETUP with duplicate call ptr.  Dropping call.\n",
-						pri->span);
+						"Span %d: Got SETUP with duplicate call ptr (%p).  Dropping call.\n",
+						pri->span, e->ring.call);
 					pri_hangup(pri->pri, e->ring.call, PRI_CAUSE_NORMAL_TEMPORARY_FAILURE);
 					break;
 				}
@@ -5020,24 +5099,23 @@ static void *pri_dchannel(void *vpri)
 				pri->pvts[chanpos]->call = e->ring.call;
 
 				/* Use plancallingnum as a scratch buffer since it is initialized next. */
-				apply_plan_to_number(plancallingnum, sizeof(plancallingnum), pri,
+				apply_plan_to_existing_number(plancallingnum, sizeof(plancallingnum), pri,
 					e->ring.redirectingnum, e->ring.callingplanrdnis);
 				sig_pri_set_rdnis(pri->pvts[chanpos], plancallingnum);
 
 				/* Setup caller-id info */
-				apply_plan_to_number(plancallingnum, sizeof(plancallingnum), pri, e->ring.callingnum, e->ring.callingplan);
+				apply_plan_to_existing_number(plancallingnum, sizeof(plancallingnum), pri,
+					e->ring.callingnum, e->ring.callingplan);
 				pri->pvts[chanpos]->cid_ani2 = 0;
 				if (pri->pvts[chanpos]->use_callerid) {
 					ast_shrink_phone_number(plancallingnum);
 					ast_copy_string(pri->pvts[chanpos]->cid_num, plancallingnum, sizeof(pri->pvts[chanpos]->cid_num));
 #ifdef PRI_ANI
-					if (!ast_strlen_zero(e->ring.callingani)) {
-						apply_plan_to_number(plancallingani, sizeof(plancallingani), pri, e->ring.callingani, e->ring.callingplanani);
-						ast_shrink_phone_number(plancallingani);
-						ast_copy_string(pri->pvts[chanpos]->cid_ani, plancallingani, sizeof(pri->pvts[chanpos]->cid_ani));
-					} else {
-						pri->pvts[chanpos]->cid_ani[0] = '\0';
-					}
+					apply_plan_to_existing_number(plancallingani, sizeof(plancallingani),
+						pri, e->ring.callingani, e->ring.callingplanani);
+					ast_shrink_phone_number(plancallingani);
+					ast_copy_string(pri->pvts[chanpos]->cid_ani, plancallingani,
+						sizeof(pri->pvts[chanpos]->cid_ani));
 #endif
 					pri->pvts[chanpos]->cid_subaddr[0] = '\0';
 #if defined(HAVE_PRI_SUBADDR)
@@ -6225,11 +6303,7 @@ void sig_pri_init_pri(struct sig_pri_span *pri)
 
 int sig_pri_hangup(struct sig_pri_chan *p, struct ast_channel *ast)
 {
-#ifdef SUPPORT_USERUSER
-	const char *useruser = pbx_builtin_getvar_helper(ast, "USERUSERINFO");
-#endif
-
-	ast_log(LOG_DEBUG, "%s %d\n", __FUNCTION__, p->channel);
+	ast_debug(1, "%s %d\n", __FUNCTION__, p->channel);
 	if (!ast->tech_pvt) {
 		ast_log(LOG_WARNING, "Asked to hangup channel not connected\n");
 		return 0;
@@ -6252,42 +6326,42 @@ int sig_pri_hangup(struct sig_pri_chan *p, struct ast_channel *ast)
 	p->exten[0] = '\0';
 	sig_pri_set_dialing(p, 0);
 
-	/* Make sure we have a call (or REALLY have a call in the case of a PRI) */
+	/* Make sure we really have a call */
 	pri_grab(p, p->pri);
 	if (p->call) {
-		if (p->alreadyhungup) {
-			ast_log(LOG_DEBUG, "Already hungup...  Calling hangup once, and clearing call\n");
+#if defined(SUPPORT_USERUSER)
+		const char *useruser = pbx_builtin_getvar_helper(ast, "USERUSERINFO");
 
-#ifdef SUPPORT_USERUSER
+		if (!ast_strlen_zero(useruser)) {
 			pri_call_set_useruser(p->call, useruser);
-#endif
+		}
+#endif	/* defined(SUPPORT_USERUSER) */
 
 #if defined(HAVE_PRI_AOC_EVENTS)
-			if (p->holding_aoce) {
-				pri_aoc_e_send(p->pri->pri, p->call, &p->aoc_e);
-			}
+		if (p->holding_aoce) {
+			pri_aoc_e_send(p->pri->pri, p->call, &p->aoc_e);
+		}
 #endif	/* defined(HAVE_PRI_AOC_EVENTS) */
+
+		if (p->alreadyhungup) {
+			ast_debug(1, "Already hungup...  Calling hangup once, and clearing call\n");
+
 			pri_hangup(p->pri->pri, p->call, -1);
 			p->call = NULL;
 		} else {
 			const char *cause = pbx_builtin_getvar_helper(ast,"PRI_CAUSE");
 			int icause = ast->hangupcause ? ast->hangupcause : -1;
-			ast_log(LOG_DEBUG, "Not yet hungup...  Calling hangup once with icause, and clearing call\n");
-
-#ifdef SUPPORT_USERUSER
-			pri_call_set_useruser(p->call, useruser);
-#endif
 
 			p->alreadyhungup = 1;
-			if (cause) {
-				if (atoi(cause))
+			if (!ast_strlen_zero(cause)) {
+				if (atoi(cause)) {
 					icause = atoi(cause);
+				}
 			}
-#if defined(HAVE_PRI_AOC_EVENTS)
-			if (p->holding_aoce) {
-				pri_aoc_e_send(p->pri->pri, p->call, &p->aoc_e);
-			}
-#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
+			ast_debug(1,
+				"Not yet hungup...  Calling hangup with cause %d, and clearing call\n",
+				icause);
+
 			pri_hangup(p->pri->pri, p->call, icause);
 		}
 	}

@@ -416,7 +416,7 @@ typedef enum {
 	FEATURE_INTERPRET_CHECK,  /* Used by feature_check */
 } feature_interpret_op;
 
-static char *parkedcall = "ParkedCall";
+static const char *parkedcall = "ParkedCall";
 
 static char pickup_ext[AST_MAX_EXTENSION];                 /*!< Call pickup extension */
 
@@ -480,7 +480,7 @@ struct parkeduser {
 	enum ast_control_frame_type hold_method;
 	unsigned int notquiteyet:1;
 	unsigned int options_specified:1;
-	char peername[1024];
+	char peername[AST_CHANNEL_NAME];
 	unsigned char moh_trys;
 	/*! Parking lot this entry belongs to.  Holds a parking lot reference. */
 	struct ast_parkinglot *parkinglot;
@@ -630,7 +630,7 @@ AST_DEFINE_APP_ARGS_TYPE(park_app_args,
 	);
 
 /* module and CLI command definitions */
-static char *parkcall = PARK_APP_NAME;
+static const char *parkcall = "Park";
 
 static struct ast_app *monitor_app = NULL;
 static int monitor_ok = 1;
@@ -783,7 +783,7 @@ static struct ast_exten *get_parking_exten(const char *exten_str, struct ast_cha
 	}
 
 	app_at_exten = ast_get_extension_app(exten);
-	if (!app_at_exten || strcasecmp(PARK_APP_NAME, app_at_exten)) {
+	if (!app_at_exten || strcasecmp(parkcall, app_at_exten)) {
 		return NULL;
 	}
 
@@ -845,35 +845,49 @@ static void set_c_e_p(struct ast_channel *chan, const char *context, const char 
 static void check_goto_on_transfer(struct ast_channel *chan) 
 {
 	struct ast_channel *xferchan;
-	const char *val = pbx_builtin_getvar_helper(chan, "GOTO_ON_BLINDXFR");
-	char *x, *goto_on_transfer;
-	struct ast_frame *f;
+	const char *val;
+	char *goto_on_transfer;
+	char *x;
 
-	if (ast_strlen_zero(val))
+	ast_channel_lock(chan);
+	val = pbx_builtin_getvar_helper(chan, "GOTO_ON_BLINDXFR");
+	if (ast_strlen_zero(val)) {
+		ast_channel_unlock(chan);
 		return;
-
-	goto_on_transfer = ast_strdupa(val);
-
-	if (!(xferchan = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", chan->linkedid, 0, "%s", chan->name)))
-		return;
-
-	for (x = goto_on_transfer; x && *x; x++) {
-		if (*x == '^')
-			*x = ',';
 	}
+	goto_on_transfer = ast_strdupa(val);
+	ast_channel_unlock(chan);
+
+	ast_debug(1, "Attempting GOTO_ON_BLINDXFR=%s for %s.\n", val, chan->name);
+
+	xferchan = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", chan->linkedid, 0,
+		"%s", chan->name);
+	if (!xferchan) {
+		return;
+	}
+
 	/* Make formats okay */
 	xferchan->readformat = chan->readformat;
 	xferchan->writeformat = chan->writeformat;
-	ast_channel_masquerade(xferchan, chan);
+
+	if (ast_channel_masquerade(xferchan, chan)) {
+		/* Failed to setup masquerade. */
+		ast_hangup(xferchan);
+		return;
+	}
+
+	for (x = goto_on_transfer; *x; ++x) {
+		if (*x == '^') {
+			*x = ',';
+		}
+	}
 	ast_parseable_goto(xferchan, goto_on_transfer);
 	xferchan->_state = AST_STATE_UP;
 	ast_clear_flag(xferchan, AST_FLAGS_ALL);	
 	ast_channel_clear_softhangup(xferchan, AST_SOFTHANGUP_ALL);
-	if ((f = ast_read(xferchan))) {
-		ast_frfree(f);
-		f = NULL;
-		ast_pbx_start(xferchan);
-	} else {
+
+	if (ast_do_masquerade(xferchan) || ast_pbx_start(xferchan)) {
+		/* Failed to do masquerade or could not start PBX. */
 		ast_hangup(xferchan);
 	}
 }
@@ -1153,6 +1167,32 @@ static struct ast_parkinglot *create_dynamic_parkinglot(const char *name, struct
 	parkinglot_unref(template_parkinglot);
 
 	return parkinglot;
+}
+
+/*!
+ * \internal
+ * \brief Abort parking a call that has not completed parking yet.
+ *
+ * \param pu Parked user item to clean up.
+ *
+ * \note The parking lot parkings list is locked on entry.
+ *
+ * \return Nothing
+ */
+static void park_space_abort(struct parkeduser *pu)
+{
+	struct ast_parkinglot *parkinglot;
+
+	parkinglot = pu->parkinglot;
+
+	/* Put back the parking space just allocated. */
+	--parkinglot->next_parking_space;
+
+	AST_LIST_REMOVE(&parkinglot->parkings, pu, list);
+
+	AST_LIST_UNLOCK(&parkinglot->parkings);
+	parkinglot_unref(parkinglot);
+	ast_free(pu);
 }
 
 /*!
@@ -1511,38 +1551,80 @@ static int park_call_full(struct ast_channel *chan, struct ast_channel *peer, st
 	return 0;
 }
 
-/*! \brief Park a call */
-int ast_park_call(struct ast_channel *chan, struct ast_channel *peer, int timeout, const char *parkexten, int *extout)
+int ast_park_call_exten(struct ast_channel *park_me, struct ast_channel *parker, const char *park_exten, const char *park_context, int timeout, int *extout)
+{
+	int res;
+	char *parse;
+	const char *app_data;
+	struct ast_exten *exten;
+	struct park_app_args app_args;
+	struct ast_park_call_args args = {
+		.timeout = timeout,
+		.extout = extout,
+	};
+
+	if (!park_exten || !park_context) {
+		return park_call_full(park_me, parker, &args);
+	}
+
+	/*
+	 * Determiine if the specified park extension has an exclusive
+	 * parking lot to use.
+	 */
+	if (parker && parker != park_me) {
+		ast_autoservice_start(park_me);
+	}
+	exten = get_parking_exten(park_exten, parker, park_context);
+	if (exten) {
+		app_data = ast_get_extension_app_data(exten);
+		if (!app_data) {
+			app_data = "";
+		}
+		parse = ast_strdupa(app_data);
+		AST_STANDARD_APP_ARGS(app_args, parse);
+	
+		if (!ast_strlen_zero(app_args.pl_name)) {
+			/* Find the specified exclusive parking lot */
+			args.parkinglot = find_parkinglot(app_args.pl_name);
+			if (!args.parkinglot && parkeddynamic) {
+				args.parkinglot = create_dynamic_parkinglot(app_args.pl_name, park_me);
+			}
+		}
+	}
+	if (parker && parker != park_me) {
+		ast_autoservice_stop(park_me);
+	}
+
+	res = park_call_full(park_me, parker, &args);
+	if (args.parkinglot) {
+		parkinglot_unref(args.parkinglot);
+	}
+	return res;
+}
+
+int ast_park_call(struct ast_channel *park_me, struct ast_channel *parker, int timeout, const char *park_exten, int *extout)
 {
 	struct ast_park_call_args args = {
 		.timeout = timeout,
 		.extout = extout,
 	};
 
-	return park_call_full(chan, peer, &args);
+	return park_call_full(park_me, parker, &args);
 }
 
 /*!
+ * \brief Park call via masqueraded channel and announce parking spot on peer channel.
+ *
  * \param rchan the real channel to be parked
  * \param peer the channel to have the parking read to.
- * \param timeout is a timeout in milliseconds
- * \param extout is a parameter to an int that will hold the parked location, or NULL if you want.
- * \param play_announcement TRUE if to play which parking space call parked in to peer.
- * \param args Optional additional parking options when parking a call.
+ * \param args Additional parking options when parking a call.
  *
  * \retval 0 on success.
  * \retval -1 on failure.
  */
-static int masq_park_call(struct ast_channel *rchan, struct ast_channel *peer, int timeout, int *extout, int play_announcement, struct ast_park_call_args *args)
+static int masq_park_call(struct ast_channel *rchan, struct ast_channel *peer, struct ast_park_call_args *args)
 {
 	struct ast_channel *chan;
-	struct ast_park_call_args park_args = {0,};
-
-	if (!args) {
-		args = &park_args;
-		args->timeout = timeout;
-		args->extout = extout;
-	}
 
 	/* Make a new, channel that we'll use to masquerade in the real one */
 	chan = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, rchan->accountcode, rchan->exten,
@@ -1563,7 +1645,6 @@ static int masq_park_call(struct ast_channel *rchan, struct ast_channel *peer, i
 
 	args->pu = park_space_reserve(rchan, peer, args);
 	if (!args->pu) {
-		chan->hangupcause = AST_CAUSE_SWITCH_CONGESTION;
 		ast_hangup(chan);
 		if (!ast_test_flag(args, AST_PARK_OPT_SILENCE)) {
 			if (peer == rchan) {
@@ -1580,7 +1661,22 @@ static int masq_park_call(struct ast_channel *rchan, struct ast_channel *peer, i
 	/* Make formats okay */
 	chan->readformat = rchan->readformat;
 	chan->writeformat = rchan->writeformat;
-	ast_channel_masquerade(chan, rchan);
+
+	if (ast_channel_masquerade(chan, rchan)) {
+		park_space_abort(args->pu);
+		args->pu = NULL;
+		ast_hangup(chan);
+		if (!ast_test_flag(args, AST_PARK_OPT_SILENCE)) {
+			if (peer == rchan) {
+				/* Only have one channel to worry about. */
+				ast_stream_and_wait(peer, "pbx-parkingfailed", "");
+			} else if (peer) {
+				/* Have two different channels to worry about. */
+				play_message_on_chan(peer, rchan, "failure message", "pbx-parkingfailed");
+			}
+		}
+		return -1;
+	}
 
 	/* Setup the extensions and such */
 	set_c_e_p(chan, rchan->context, rchan->exten, rchan->priority);
@@ -1597,34 +1693,77 @@ static int masq_park_call(struct ast_channel *rchan, struct ast_channel *peer, i
 		peer = chan;
 	}
 
-	if (peer && (!play_announcement && args == &park_args)) {
-		args->orig_chan_name = ast_strdupa(peer->name);
-	}
-
 	/* parking space reserved, return code check unnecessary */
 	park_call_full(chan, peer, args);
 
 	return 0;
 }
 
-int ast_masq_park_call(struct ast_channel *rchan, struct ast_channel *peer, int timeout, int *extout)
+int ast_masq_park_call_exten(struct ast_channel *park_me, struct ast_channel *parker, const char *park_exten, const char *park_context, int timeout, int *extout)
 {
-	return masq_park_call(rchan, peer, timeout, extout, 0, NULL);
+	int res;
+	char *parse;
+	const char *app_data;
+	struct ast_exten *exten;
+	struct park_app_args app_args;
+	struct ast_park_call_args args = {
+		.timeout = timeout,
+		.extout = extout,
+	};
+
+	if (parker) {
+		args.orig_chan_name = ast_strdupa(parker->name);
+	}
+	if (!park_exten || !park_context) {
+		return masq_park_call(park_me, parker, &args);
+	}
+
+	/*
+	 * Determiine if the specified park extension has an exclusive
+	 * parking lot to use.
+	 */
+	if (parker && parker != park_me) {
+		ast_autoservice_start(park_me);
+	}
+	exten = get_parking_exten(park_exten, parker, park_context);
+	if (exten) {
+		app_data = ast_get_extension_app_data(exten);
+		if (!app_data) {
+			app_data = "";
+		}
+		parse = ast_strdupa(app_data);
+		AST_STANDARD_APP_ARGS(app_args, parse);
+	
+		if (!ast_strlen_zero(app_args.pl_name)) {
+			/* Find the specified exclusive parking lot */
+			args.parkinglot = find_parkinglot(app_args.pl_name);
+			if (!args.parkinglot && parkeddynamic) {
+				args.parkinglot = create_dynamic_parkinglot(app_args.pl_name, park_me);
+			}
+		}
+	}
+	if (parker && parker != park_me) {
+		ast_autoservice_stop(park_me);
+	}
+
+	res = masq_park_call(park_me, parker, &args);
+	if (args.parkinglot) {
+		parkinglot_unref(args.parkinglot);
+	}
+	return res;
 }
 
-/*!
- * \brief Park call via masqueraded channel and announce parking spot on peer channel.
- *
- * \param rchan the real channel to be parked
- * \param peer the channel to have the parking read to.
- * \param args Optional additional parking options when parking a call.
- *
- * \retval 0 on success.
- * \retval -1 on failure.
- */
-static int masq_park_call_announce(struct ast_channel *rchan, struct ast_channel *peer, struct ast_park_call_args *args)
+int ast_masq_park_call(struct ast_channel *rchan, struct ast_channel *peer, int timeout, int *extout)
 {
-	return masq_park_call(rchan, peer, 0, NULL, 1, args);
+	struct ast_park_call_args args = {
+		.timeout = timeout,
+		.extout = extout,
+	};
+
+	if (peer) {
+		args.orig_chan_name = ast_strdupa(peer->name);
+	}
+	return masq_park_call(rchan, peer, &args);
 }
 
 static int finishup(struct ast_channel *chan)
@@ -1688,7 +1827,7 @@ static int xfer_park_call_helper(struct ast_channel *park_me, struct ast_channel
 			parkinglot_unref(args.parkinglot);
 			return -1;
 		}
-		res = masq_park_call_announce(park_me, parker, &args);
+		res = masq_park_call(park_me, parker, &args);
 		parkinglot_unref(args.parkinglot);
 	} else {
 		/* Parking failed because parking lot does not exist. */
@@ -1737,6 +1876,7 @@ static int builtin_parkcall(struct ast_channel *chan, struct ast_channel *peer, 
 {
 	struct ast_channel *parker;
 	struct ast_channel *parkee;
+	struct ast_park_call_args args = { 0, };
 
 	/*
 	 * We used to set chan's exten and priority to "s" and 1 here,
@@ -1765,8 +1905,7 @@ static int builtin_parkcall(struct ast_channel *chan, struct ast_channel *peer, 
 
 	/* one direction used to call park_call.... */
 	set_peers(&parker, &parkee, peer, chan, sense);
-	return masq_park_call_announce(parkee, parker, NULL)
-		? AST_FEATURE_RETURN_SUCCESS : -1;
+	return masq_park_call(parkee, parker, &args) ? AST_FEATURE_RETURN_SUCCESS : -1;
 }
 
 /*!
@@ -2115,6 +2254,7 @@ static int builtin_blindtransfer(struct ast_channel *chan, struct ast_channel *p
 	char xferto[256] = "";
 	int res;
 
+	ast_debug(1, "Executing Blind Transfer %s, %s (sense=%d) \n", chan->name, peer->name, sense);
 	set_peers(&transferer, &transferee, peer, chan, sense);
 	transferer_real_context = real_ctx(transferer, transferee);
 
@@ -2157,10 +2297,12 @@ static int builtin_blindtransfer(struct ast_channel *chan, struct ast_channel *p
 	}
 
 	/* Do blind transfer. */
+	ast_verb(3, "Blind transferring %s to '%s' (context %s) priority 1\n",
+		transferee->name, xferto, transferer_real_context);
 	ast_cel_report_event(transferer, AST_CEL_BLINDTRANSFER, NULL, xferto, transferee);
 	pbx_builtin_setvar_helper(transferer, "BLINDTRANSFER", transferee->name);
 	pbx_builtin_setvar_helper(transferee, "BLINDTRANSFER", transferer->name);
-	res = finishup(transferee);
+	finishup(transferee);
 	if (!transferer->cdr) { /* this code should never get called (in a perfect world) */
 		transferer->cdr = ast_cdr_alloc();
 		if (transferer->cdr) {
@@ -2171,15 +2313,15 @@ static int builtin_blindtransfer(struct ast_channel *chan, struct ast_channel *p
 	if (transferer->cdr) {
 		struct ast_cdr *swap = transferer->cdr;
 
-		ast_log(LOG_DEBUG,
+		ast_debug(1,
 			"transferer=%s; transferee=%s; lastapp=%s; lastdata=%s; chan=%s; dstchan=%s\n",
 			transferer->name, transferee->name, transferer->cdr->lastapp,
 			transferer->cdr->lastdata, transferer->cdr->channel,
 			transferer->cdr->dstchannel);
-		ast_log(LOG_DEBUG, "TRANSFEREE; lastapp=%s; lastdata=%s, chan=%s; dstchan=%s\n",
+		ast_debug(1, "TRANSFEREE; lastapp=%s; lastdata=%s, chan=%s; dstchan=%s\n",
 			transferee->cdr->lastapp, transferee->cdr->lastdata, transferee->cdr->channel,
 			transferee->cdr->dstchannel);
-		ast_log(LOG_DEBUG, "transferer_real_context=%s; xferto=%s\n",
+		ast_debug(1, "transferer_real_context=%s; xferto=%s\n",
 			transferer_real_context, xferto);
 		/* swap cdrs-- it will save us some time & work */
 		transferer->cdr = transferee->cdr;
@@ -2187,21 +2329,24 @@ static int builtin_blindtransfer(struct ast_channel *chan, struct ast_channel *p
 	}
 	if (!transferee->pbx) {
 		/* Doh!  Use our handy async_goto functions */
-		ast_verb(3, "Transferring %s to '%s' (context %s) priority 1\n",
-			transferee->name, xferto, transferer_real_context);
+		ast_debug(1, "About to ast_async_goto %s.\n", transferee->name);
 		if (ast_async_goto(transferee, transferer_real_context, xferto, 1)) {
 			ast_log(LOG_WARNING, "Async goto failed :-(\n");
 		}
+
+		/* The transferee is masqueraded and the original bridged channels can be hungup. */
+		res = -1;
 	} else {
-		/* Set the channel's new extension, since it exists, using transferer context */
+		/* Set the transferee's new extension, since it exists, using transferer context */
+		ast_debug(1, "About to explicit goto %s, it has a PBX.\n", transferee->name);
 		ast_set_flag(transferee, AST_FLAG_BRIDGE_HANGUP_DONT); /* don't let the after-bridge code run the h-exten */
-		ast_log(LOG_DEBUG,
-			"ABOUT TO AST_ASYNC_GOTO, have a pbx... set HANGUP_DONT on chan=%s\n",
-			transferee->name);
-		if (ast_channel_connected_line_macro(transferee, transferer, &transferer->connected, 1, 0)) {
-			ast_channel_update_connected_line(transferer, &transferer->connected, NULL);
-		}
 		set_c_e_p(transferee, transferer_real_context, xferto, 0);
+
+		/*
+		 * Break the bridge.  The transferee needs to resume executing
+		 * dialplan at the xferto location.
+		 */
+		res = AST_FEATURE_RETURN_SUCCESSBREAK;
 	}
 	check_goto_on_transfer(transferer);
 	return res;
@@ -4847,7 +4992,7 @@ static int park_call_exec(struct ast_channel *chan, const char *data)
 		}
 	}
 	if (args.parkinglot) {
-		res = masq_park_call_announce(chan, chan, &args);
+		res = masq_park_call(chan, chan, &args);
 		parkinglot_unref(args.parkinglot);
 	} else {
 		/* Parking failed because the parking lot does not exist. */
@@ -4863,7 +5008,7 @@ static int park_call_exec(struct ast_channel *chan, const char *data)
 		res = 0;
 	} else {
 		/* Park succeeded. */
-		res = 1;
+		res = -1;
 	}
 
 	return res;
@@ -6986,7 +7131,7 @@ static int manager_park(struct mansession *s, const struct message *m)
 		args.parkinglot = find_parkinglot(parkinglotname);
 	}
 
-	res = masq_park_call(ch1, ch2, 0, NULL, 0, &args);
+	res = masq_park_call(ch1, ch2, &args);
 	if (!res) {
 		ast_softhangup(ch2, AST_SOFTHANGUP_EXPLICIT);
 		astman_send_ack(s, m, "Park successful");
@@ -7906,7 +8051,7 @@ AST_TEST_DEFINE(features_test)
 	pbx_builtin_setvar_helper(test_channel1, "PARKINGDYNCONTEXT", unique_context_2);
 	pbx_builtin_setvar_helper(test_channel1, "PARKINGDYNEXTEN", parkinglot_parkext);
 	pbx_builtin_setvar_helper(test_channel1, "PARKINGDYNPOS", parkinglot_range);
-	if (masq_park_call(test_channel1, NULL, 0, NULL, 0, &args)) {
+	if (masq_park_call(test_channel1, NULL, &args)) {
 		res = -1;
 		goto exit_features_test;
 	}

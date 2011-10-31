@@ -58,7 +58,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/app.h"
 #include "asterisk/transcap.h"
 #include "asterisk/devicestate.h"
-#include "asterisk/sha1.h"
 #include "asterisk/threadstorage.h"
 #include "asterisk/slinfactory.h"
 #include "asterisk/audiohook.h"
@@ -3564,6 +3563,7 @@ int ast_waitfordigit_full(struct ast_channel *c, int ms, int audiofd, int cmdfd)
 				case AST_CONTROL_SRCCHANGE:
 				case AST_CONTROL_CONNECTED_LINE:
 				case AST_CONTROL_REDIRECTING:
+				case AST_CONTROL_UPDATE_RTP_PEER:
 				case -1:
 					/* Unimportant */
 					break;
@@ -4293,6 +4293,7 @@ static int attribute_const is_visible_indication(enum ast_control_frame_type con
 	case AST_CONTROL_READ_ACTION:
 	case AST_CONTROL_AOC:
 	case AST_CONTROL_END_OF_Q:
+	case AST_CONTROL_UPDATE_RTP_PEER:
 		break;
 
 	case AST_CONTROL_INCOMPLETE:
@@ -4481,6 +4482,7 @@ int ast_indicate_data(struct ast_channel *chan, int _condition,
 	case AST_CONTROL_READ_ACTION:
 	case AST_CONTROL_AOC:
 	case AST_CONTROL_END_OF_Q:
+	case AST_CONTROL_UPDATE_RTP_PEER:
 		/* Nothing left to do for these. */
 		res = 0;
 		break;
@@ -4895,10 +4897,25 @@ int ast_write(struct ast_channel *chan, struct ast_frame *fr)
 		}
 
 		/* If the frame is in the raw write format, then it's easy... just use the frame - otherwise we will have to translate */
-		if (fr->subclass.codec == chan->rawwriteformat)
+		if (fr->subclass.codec == chan->rawwriteformat) {
 			f = fr;
-		else
+		} else {
+			/* XXX Something is not right we are not compatible with this frame bad things can happen
+			 * problems range from no/one-way audio to unexplained line hangups as a last resort try adjust the format
+			 * ideally we do not want to do this and this indicates a deeper problem for now we log these events to
+			 * eliminate user impact and help identify the problem areas
+			 * JIRA issues related to this :-
+			 * ASTERISK-14384, ASTERISK-17502, ASTERISK-17541, ASTERISK-18063, ASTERISK-18325, ASTERISK-18422*/
+			if ((!(fr->subclass.codec & chan->nativeformats)) && (chan->writeformat != fr->subclass.codec)) {
+				char nf[512];
+				ast_log(LOG_WARNING, "Codec mismatch on channel %s setting write format to %s from %s native formats %s\n",
+					chan->name, ast_getformatname(fr->subclass.codec), ast_getformatname(chan->writeformat),
+					ast_getformatname_multiple(nf, sizeof(nf), chan->nativeformats & AST_FORMAT_AUDIO_MASK));
+				ast_set_write_format(chan, fr->subclass.codec);
+			}
+
 			f = (chan->writetrans) ? ast_translate(chan->writetrans, fr, 0) : fr;
+		}
 
 		if (!f) {
 			res = 0;
@@ -7219,6 +7236,9 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 	    ast_test_flag(c1, AST_FLAG_ZOMBIE) || ast_check_hangup_locked(c1))
 		return -1;
 
+	caller_warning = ast_test_flag(&config->features_caller, AST_FEATURE_PLAY_WARNING);
+	callee_warning = ast_test_flag(&config->features_callee, AST_FEATURE_PLAY_WARNING);
+
 	if (ast_tvzero(config->start_time)) {
 		config->start_time = ast_tvnow();
 		if (config->start_sound) {
@@ -7244,8 +7264,6 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 		config->nexteventts = ast_tvadd(config->feature_start_time, ast_samp2tv(config->feature_timer, 1000));
 	} else if (config->timelimit) {
 		time_left_ms = config->timelimit - ast_tvdiff_ms(ast_tvnow(), config->start_time);
-		caller_warning = ast_test_flag(&config->features_caller, AST_FEATURE_PLAY_WARNING);
-		callee_warning = ast_test_flag(&config->features_callee, AST_FEATURE_PLAY_WARNING);
 		config->nexteventts = ast_tvadd(config->start_time, ast_samp2tv(config->timelimit, 1000));
 		if ((caller_warning || callee_warning) && config->play_warning) {
 			long next_warn = config->play_warning;

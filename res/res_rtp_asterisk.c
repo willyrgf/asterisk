@@ -522,7 +522,11 @@ static int ast_rtp_destroy(struct ast_rtp_instance *instance)
 
 	/* Destroy RTCP if it was being used */
 	if (rtp->rtcp) {
-		AST_SCHED_DEL(rtp->sched, rtp->rtcp->schedid);
+		/*
+		 * It is not possible for there to be an active RTCP scheduler
+		 * entry at this point since it holds a reference to the
+		 * RTP instance while it's active.
+		 */
 		close(rtp->rtcp->s);
 		ast_free(rtp->rtcp);
 	}
@@ -830,8 +834,9 @@ static int ast_rtcp_write_rr(struct ast_rtp_instance *instance)
 		return 0;
 
 	if (ast_sockaddr_isnull(&rtp->rtcp->them)) {
-		ast_log(LOG_ERROR, "RTCP RR transmission error, rtcp halted\n");
-		AST_SCHED_DEL(rtp->sched, rtp->rtcp->schedid);
+		/*
+		 * RTCP was stopped.
+		 */
 		return 0;
 	}
 
@@ -886,8 +891,6 @@ static int ast_rtcp_write_rr(struct ast_rtp_instance *instance)
 
 	if (res < 0) {
 		ast_log(LOG_ERROR, "RTCP RR transmission error, rtcp halted: %s\n",strerror(errno));
-		/* Remove the scheduler */
-		AST_SCHED_DEL(rtp->sched, rtp->rtcp->schedid);
 		return 0;
 	}
 
@@ -932,8 +935,9 @@ static int ast_rtcp_write_sr(struct ast_rtp_instance *instance)
 		return 0;
 
 	if (ast_sockaddr_isnull(&rtp->rtcp->them)) {  /* This'll stop rtcp for this rtp session */
-		ast_verbose("RTCP SR transmission error, rtcp halted\n");
-		AST_SCHED_DEL(rtp->sched, rtp->rtcp->schedid);
+		/*
+		 * RTCP was stopped.
+		 */
 		return 0;
 	}
 
@@ -985,7 +989,6 @@ static int ast_rtcp_write_sr(struct ast_rtp_instance *instance)
 		ast_log(LOG_ERROR, "RTCP SR transmission error to %s, rtcp halted %s\n",
 			ast_sockaddr_stringify(&rtp->rtcp->them),
 			strerror(errno));
-		AST_SCHED_DEL(rtp->sched, rtp->rtcp->schedid);
 		return 0;
 	}
 
@@ -1044,13 +1047,24 @@ static int ast_rtcp_write(const void *data)
 	struct ast_rtp *rtp = ast_rtp_instance_get_data(instance);
 	int res;
 
-	if (!rtp || !rtp->rtcp)
+	if (!rtp || !rtp->rtcp || rtp->rtcp->schedid == -1) {
+		ao2_ref(instance, -1);
 		return 0;
+	}
 
-	if (rtp->txcount > rtp->rtcp->lastsrtxcount)
+	if (rtp->txcount > rtp->rtcp->lastsrtxcount) {
 		res = ast_rtcp_write_sr(instance);
-	else
+	} else {
 		res = ast_rtcp_write_rr(instance);
+	}
+
+	if (!res) {
+		/* 
+		 * Not being rescheduled.
+		 */
+		ao2_ref(instance, -1);
+		rtp->rtcp->schedid = -1;
+	}
 
 	return res;
 }
@@ -1162,7 +1176,12 @@ static int ast_rtp_raw_write(struct ast_rtp_instance *instance, struct ast_frame
 
 			if (rtp->rtcp && rtp->rtcp->schedid < 1) {
 				ast_debug(1, "Starting RTCP transmission on RTP instance '%p'\n", instance);
+				ao2_ref(instance, +1);
 				rtp->rtcp->schedid = ast_sched_add(rtp->sched, ast_rtcp_calc_interval(rtp), ast_rtcp_write, instance);
+				if (rtp->rtcp->schedid < 0) {
+					ao2_ref(instance, -1);
+					ast_log(LOG_WARNING, "scheduling RTCP transmission failed.\n");
+				}
 			}
 		}
 
@@ -2177,7 +2196,12 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 	/* Do not schedule RR if RTCP isn't run */
 	if (rtp->rtcp && !ast_sockaddr_isnull(&rtp->rtcp->them) && rtp->rtcp->schedid < 1) {
 		/* Schedule transmission of Receiver Report */
+		ao2_ref(instance, +1);
 		rtp->rtcp->schedid = ast_sched_add(rtp->sched, ast_rtcp_calc_interval(rtp), ast_rtcp_write, instance);
+		if (rtp->rtcp->schedid < 0) {
+			ao2_ref(instance, -1);
+			ast_log(LOG_WARNING, "scheduling RTCP transmission failed.\n");
+		}
 	}
 	if ((int)rtp->lastrxseqno - (int)seqno  > 100) /* if so it would indicate that the sender cycled; allow for misordering */
 		rtp->cycles += RTP_SEQ_MOD;
@@ -2357,44 +2381,65 @@ static void ast_rtp_prop_set(struct ast_rtp_instance *instance, enum ast_rtp_pro
 	struct ast_rtp *rtp = ast_rtp_instance_get_data(instance);
 
 	if (property == AST_RTP_PROPERTY_RTCP) {
-		if (rtp->rtcp) {
-			ast_debug(1, "Ignoring duplicate RTCP property on RTP instance '%p'\n", instance);
+		if (value) {
+			if (rtp->rtcp) {
+				ast_debug(1, "Ignoring duplicate RTCP property on RTP instance '%p'\n", instance);
+				return;
+			}
+			/* Setup RTCP to be activated on the next RTP write */
+			if (!(rtp->rtcp = ast_calloc(1, sizeof(*rtp->rtcp)))) {
+				return;
+			}
+
+			/* Grab the IP address and port we are going to use */
+			ast_rtp_instance_get_local_address(instance, &rtp->rtcp->us);
+			ast_sockaddr_set_port(&rtp->rtcp->us,
+					      ast_sockaddr_port(&rtp->rtcp->us) + 1);
+
+			if ((rtp->rtcp->s =
+			     create_new_socket("RTCP",
+					       ast_sockaddr_is_ipv4(&rtp->rtcp->us) ?
+					       AF_INET :
+					       ast_sockaddr_is_ipv6(&rtp->rtcp->us) ?
+					       AF_INET6 : -1)) < 0) {
+				ast_debug(1, "Failed to create a new socket for RTCP on instance '%p'\n", instance);
+				ast_free(rtp->rtcp);
+				rtp->rtcp = NULL;
+				return;
+			}
+
+			/* Try to actually bind to the IP address and port we are going to use for RTCP, if this fails we have to bail out */
+			if (ast_bind(rtp->rtcp->s, &rtp->rtcp->us)) {
+				ast_debug(1, "Failed to setup RTCP on RTP instance '%p'\n", instance);
+				close(rtp->rtcp->s);
+				ast_free(rtp->rtcp);
+				rtp->rtcp = NULL;
+				return;
+			}
+
+			ast_debug(1, "Setup RTCP on RTP instance '%p'\n", instance);
+			rtp->rtcp->schedid = -1;
+
+			return;
+		} else {
+			if (rtp->rtcp) {
+				if (rtp->rtcp->schedid > 0) {
+					if (!ast_sched_del(rtp->sched, rtp->rtcp->schedid)) {
+						/* Successfully cancelled scheduler entry. */
+						ao2_ref(instance, -1);
+					} else {
+						/* Unable to cancel scheduler entry */
+						ast_debug(1, "Failed to tear down RTCP on RTP instance '%p'\n", instance);
+						return;
+					}
+					rtp->rtcp->schedid = -1;
+				}
+				close(rtp->rtcp->s);
+				ast_free(rtp->rtcp);
+				rtp->rtcp = NULL;
+			}
 			return;
 		}
-		if (!(rtp->rtcp = ast_calloc(1, sizeof(*rtp->rtcp)))) {
-			return;
-		}
-
-		/* Grab the IP address and port we are going to use */
-		ast_rtp_instance_get_local_address(instance, &rtp->rtcp->us);
-		ast_sockaddr_set_port(&rtp->rtcp->us,
-				      ast_sockaddr_port(&rtp->rtcp->us) + 1);
-
-		if ((rtp->rtcp->s =
-		     create_new_socket("RTCP",
-				       ast_sockaddr_is_ipv4(&rtp->rtcp->us) ?
-				       AF_INET :
-				       ast_sockaddr_is_ipv6(&rtp->rtcp->us) ?
-				       AF_INET6 : -1)) < 0) {
-			ast_debug(1, "Failed to create a new socket for RTCP on instance '%p'\n", instance);
-			ast_free(rtp->rtcp);
-			rtp->rtcp = NULL;
-			return;
-		}
-
-		/* Try to actually bind to the IP address and port we are going to use for RTCP, if this fails we have to bail out */
-		if (ast_bind(rtp->rtcp->s, &rtp->rtcp->us)) {
-			ast_debug(1, "Failed to setup RTCP on RTP instance '%p'\n", instance);
-			close(rtp->rtcp->s);
-			ast_free(rtp->rtcp);
-			rtp->rtcp = NULL;
-			return;
-		}
-
-		ast_debug(1, "Setup RTCP on RTP instance '%p'\n", instance);
-		rtp->rtcp->schedid = -1;
-
-		return;
 	}
 
 	return;
@@ -2591,9 +2636,14 @@ static void ast_rtp_stop(struct ast_rtp_instance *instance)
 	struct ast_rtp *rtp = ast_rtp_instance_get_data(instance);
 	struct ast_sockaddr addr = { {0,} };
 
-	if (rtp->rtcp) {
-		AST_SCHED_DEL(rtp->sched, rtp->rtcp->schedid);
+	if (rtp->rtcp && rtp->rtcp->schedid > 0) {
+		if (!ast_sched_del(rtp->sched, rtp->rtcp->schedid)) {
+			/* successfully cancelled scheduler entry. */
+			ao2_ref(instance, -1);
+		}
+		rtp->rtcp->schedid = -1;
 	}
+
 	if (rtp->red) {
 		AST_SCHED_DEL(rtp->sched, rtp->red->schedid);
 		free(rtp->red);

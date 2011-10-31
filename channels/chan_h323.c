@@ -978,6 +978,7 @@ static int __oh323_rtp_create(struct oh323_pvt *pvt)
 			return -1;
 		}
 	}
+	our_addr.ss.ss_family = AF_INET;
 	pvt->rtp = ast_rtp_instance_new("asterisk", sched, &our_addr, NULL);
 	if (!pvt->rtp) {
 		ast_mutex_unlock(&pvt->lock);
@@ -1549,6 +1550,7 @@ static struct oh323_peer *build_peer(const char *name, struct ast_variable *v, s
 			{
 				struct ast_sockaddr tmp;
 
+				tmp.ss.ss_family = AF_INET;
 				if (ast_get_ip(&tmp, v->value)) {
 					ast_log(LOG_ERROR, "Could not determine IP for %s\n", v->value);
 					ASTOBJ_UNREF(peer, oh323_destroy_peer);
