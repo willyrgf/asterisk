@@ -28,7 +28,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define REF_FILE "/tmp/refs"
 
 #if defined(TEST_FRAMEWORK)
-/* We are building with the test framework enabled so enagle AO2 debug tests as well. */
+/* We are building with the test framework enabled so enable AO2 debug tests as well. */
 #define AO2_DEBUG 1
 #endif	/* defined(TEST_FRAMEWORK) */
 
