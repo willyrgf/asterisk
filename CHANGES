@@ -40,11 +40,18 @@ CDR postgresql driver changes
 -----------------------------
  * Added command "cdr show pgsql status" to check connection status
 
-AMI - the manager interface
----------------------------
+AMI (Asterisk Manager Interface) changes
+----------------------------------------
+ * Originate now generates an error response if the extension given
+   is not found in the dialplan
  * The originate action now has an option "Earlymedia" that enables the
    call to bridge when we get early media in the call. Previously,
    early media was disregarded always when originating calls using AMI.
+
+FAX changes
+-----------
+ * FAXOPT(faxdetect) will enable a generic fax detect framehook for dialplan
+   control of faxdetect.
 
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 1.8 to Asterisk 10 -------------------
@@ -126,6 +133,13 @@ CODECS
  * Ability to read raw signed linear files with sample rates
    ranging from 8khz - 192khz.  The new file extensions introduced
    are .sln12, .sln24, .sln32, .sln44, .sln48, .sln96, .sln192.
+ * Due to protocol limitations, channel drivers other than SIP (eg. IAX2, MGCP,
+   Skinny, H.323, etc) can still only support the following codecs:
+   Audio: ulaw, alaw, slin, slin16, g719, g722, g723, g726, g726aal2, g729, gsm,
+          siren7, siren14, speex, speex16, ilbc, lpc10, adpcm
+   Video: h261, h263, h263p, h264, mpeg4
+   Image: jpeg, png
+   Text:  red, t140
 
 ConfBridge
 --------------------------
@@ -243,6 +257,8 @@ Queue changes
  * Added member option ignorebusy this when set and ringinuse is not
    will allow per member control of multiple calls as ringinuse does for
    the Queue.
+ * Added global option check_state_unknown to enforce checking of device state
+   when the device state is unknown app_queue will see unknown as available.
 
 Applications
 ------------
