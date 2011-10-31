@@ -4099,7 +4099,7 @@ static int action_originate(struct mansession *s, const struct message *m)
 
 	/* For originate async - we can bridge in early media stage */
 	bridgeearly = ast_true(earlymedia);
-	
+
 
 	if (ast_true(async)) {
 		struct fast_originate_helper *fast = ast_calloc(1, sizeof(*fast));

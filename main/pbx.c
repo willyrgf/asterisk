@@ -8795,7 +8795,7 @@ int ast_pbx_outgoing_exten(const char *type, struct ast_format_cap *cap, void *d
 		if (chan) {
 			if (chan->_state == AST_STATE_UP || (earlymedia && *reason == AST_CONTROL_PROGRESS) ) {
 				res = 0;
-				ast_verb(4, "Channel %s was answered (or got early media).\n", chan->name);
+				ast_verb(4, "Channel %s %s\n", chan->name, chan->_state == AST_STATE_UP ? "was answered" : "got early media");
 
 				if (synchronous > 1) {
 					if (channel)
