@@ -27234,6 +27234,7 @@ static void set_peer_defaults(struct sip_peer *peer)
 	ast_string_field_set(peer, engine, default_engine);
 	ast_sockaddr_setnull(&peer->addr);
 	ast_sockaddr_setnull(&peer->defaddr);
+	ast_sockaddr_setnull(&peer->externaddr);
 	ast_format_cap_copy(peer->caps, sip_cfg.caps);
 	peer->maxcallbitrate = default_maxcallbitrate;
 	peer->rtptimeout = global_rtptimeout;
