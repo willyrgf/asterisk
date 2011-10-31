@@ -805,7 +805,8 @@ struct sip_dual {
 	struct ast_channel *chan2;   /*!< Second channel involved */
 	struct sip_request req;      /*!< Request that caused the transfer (REFER) */
 	int seqno;                   /*!< Sequence number */
-	const char *parkexten;
+	char *park_exten;
+	char *park_context;
 };
 
 /*! \brief Parameters to the transmit_invite function */
@@ -1072,6 +1073,8 @@ struct sip_pvt {
 	time_t lastrtprx;                   /*!< Last RTP received */
 	time_t lastrtptx;                   /*!< Last RTP sent */
 	int rtptimeout;                     /*!< RTP timeout time */
+	int rtpholdtimeout;                 /*!< RTP timeout time on hold*/
+	int rtpkeepalive;                   /*!< RTP send packets for keepalive */
 	struct ast_ha *directmediaha;		/*!< Which IPs are allowed to interchange direct media with this peer - copied from sip_peer */
 	struct ast_sockaddr recv;            /*!< Received as */
 	struct ast_sockaddr ourip;           /*!< Our IP (as seen from the outside) */
