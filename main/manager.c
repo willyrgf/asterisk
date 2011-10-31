@@ -6504,24 +6504,17 @@ static struct ast_http_uri amanagerxmluri = {
 };
 
 /*! \brief Get number of logged in sessions for a login name */
-static int get_manager_sessions(const char *login)
+static int get_manager_sessions_cb(void *obj, void *arg, void *data, int flags)
 {
-	int no_sessions = 0;
-	struct mansession_session *session;
-	struct ao2_iterator i;
+	struct mansession_session *session = obj;
+	const char *login = arg;
+	int *no_sessions = data;
 
-	i = ao2_iterator_init(sessions, 0);
-	while ((session = ao2_iterator_next(&i))) {
-		ao2_lock(session);
-		if (strcasecmp(session->username, login) == 0) {
-			no_sessions++;
-		}
-		ao2_unlock(session);
-		unref_mansession(session);
+	if (strcasecmp(session->username, login) == 0) {
+		*no_sessions++;
 	}
-	ao2_iterator_destroy(&i);
 
-	return no_sessions;
+	return 0;
 }
 
 
@@ -6553,7 +6546,9 @@ static int function_amiclient(struct ast_channel *chan, const char *cmd, char *d
 	AST_RWLIST_UNLOCK(&users);
 
 	if (!strcasecmp(args.param, "sessions")) {
-		snprintf(buf, len, "%d", get_manager_sessions(data));
+		int no_sessions = 0;
+		ao2_callback_data(sessions, 0, get_manager_sessions_cb, /*login name*/ data, &no_sessions);
+		snprintf(buf, len, "%d", no_sessions);
 	} else {
 		ast_log(LOG_ERROR, "Invalid arguments provided to function AMI_CLIENT: %s\n", args.param);
 		return -1;
