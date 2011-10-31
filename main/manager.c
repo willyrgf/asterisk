@@ -6507,11 +6507,13 @@ static struct ast_http_uri amanagerxmluri = {
 static int get_manager_sessions_cb(void *obj, void *arg, void *data, int flags)
 {
 	struct mansession_session *session = obj;
-	const char *login = arg;
+	const char *login = (char *)arg;
 	int *no_sessions = data;
 
+	ast_debug(1,"**** Comparing %s with login name %s \n", session->username, login);
 	if (strcasecmp(session->username, login) == 0) {
 		*no_sessions++;
+		ast_debug(1,"**** Found a positive match: %d\n", *no_sessions);
 	}
 
 	return 0;
