@@ -4740,10 +4740,21 @@ done:
 
 static const char *get_name_from_variable(const struct ast_variable *var)
 {
+	/* Don't expect this to return non-NULL. Both NULL and empty
+	 * values can cause the option to get removed from the variable
+	 * list. This is called on ast_variables gotten from both
+	 * ast_load_realtime and ast_load_realtime_multientry.
+	 * - ast_load_realtime removes options with empty values
+	 * - ast_load_realtime_multientry does not!
+	 * For consistent behaviour, we check for the empty name and
+	 * return NULL instead. */
 	const struct ast_variable *tmp;
 	for (tmp = var; tmp; tmp = tmp->next) {
 		if (!strcasecmp(tmp->name, "name")) {
-			return tmp->value;
+			if (!ast_strlen_zero(tmp->value)) {
+				return tmp->value;
+			}
+			break;
 		}
 	}
 	return NULL;
@@ -4806,10 +4817,13 @@ static int realtime_peer_by_name(const char *const *name, struct ast_sockaddr *a
  * the sippeer also had it continue look for another match, so we do
  * the same. */
 static struct ast_variable *realtime_peer_get_sippeer_helper(const char **name, struct ast_variable **varregs) {
-	struct ast_variable *var;
+	struct ast_variable *var = NULL;
 	const char *old_name = *name;
 	*name = get_name_from_variable(*varregs);
-	if (!(var = ast_load_realtime("sippeers", "name", *name, SENTINEL))) {
+	if (!*name || !(var = ast_load_realtime("sippeers", "name", *name, SENTINEL))) {
+		if (!*name) {
+			ast_log(LOG_WARNING, "Found sipreg but it has no name\n");
+		}
 		ast_variables_destroy(*varregs);
 		*varregs = NULL;
 		*name = old_name;
@@ -4852,21 +4866,32 @@ static int realtime_peer_by_addr(const char **name, struct ast_sockaddr *addr, c
 		;
 	}
 
-	/* Did we find anything? */
-	if (*var) {
-		/* Make sure name is populated. */
-		if (!*name) {
-			*name = get_name_from_variable(*var);
-		}
-		/* Make sure varregs is populated if var is. Ensuring
-		 * that var is set when varregs is, is taken care of by
-		 * realtime_peer_get_sippeer_helper(). */
-		if (varregs && !*varregs) {
-			*varregs = ast_load_realtime("sipregs", "name", *name, SENTINEL);
-		}
-		return 1;
+	/* Nothing found? */
+	if (!*var) {
+		return 0;
 	}
-	return 0;
+
+	/* Check peer name. It must not be empty. There may exist a
+	 * different match that does have a name, but it's too late for
+	 * that now. */
+	if (!*name && !(*name = get_name_from_variable(*var))) {
+		ast_log(LOG_WARNING, "Found peer for IP %s but it has no name\n", ipaddr);
+		ast_variables_destroy(*var);
+		*var = NULL;
+		if (varregs && *varregs) {
+			ast_variables_destroy(*varregs);
+			*varregs = NULL;
+		}
+		return 0;
+	}
+
+	/* Make sure varregs is populated if var is. The inverse,
+	 * ensuring that var is set when varregs is, is taken
+	 * care of by realtime_peer_get_sippeer_helper(). */
+	if (varregs && !*varregs) {
+		*varregs = ast_load_realtime("sipregs", "name", *name, SENTINEL);
+	}
+	return 1;
 }
 
 /*! \brief  realtime_peer: Get peer from realtime storage
@@ -4897,7 +4922,6 @@ static struct sip_peer *realtime_peer(const char *newpeername, struct ast_sockad
 	} else if (addr && realtime_peer_by_addr(&newpeername, addr, ipaddr, &var, realtimeregs ? &varregs : NULL)) {
 		;
 	} else {
-		ast_log(LOG_WARNING, "Cannot Determine peer name ip=%s\n", ipaddr);
 		return NULL;
 	}
 
@@ -14735,8 +14759,6 @@ static enum check_auth_result register_verify(struct sip_pvt *p, struct ast_sock
 			res = AUTH_PEER_NOT_DYNAMIC;
 		} else {
 			ast_copy_flags(&p->flags[0], &peer->flags[0], SIP_NAT_FORCE_RPORT);
-			if (ast_test_flag(&p->flags[1], SIP_PAGE2_REGISTERTRYING))
-				transmit_response(p, "100 Trying", req);
 			if (!(res = check_auth(p, req, peer->name, peer->secret, peer->md5secret, SIP_REGISTER, uri2, XMIT_UNRELIABLE, req->ignore))) {
 				if (sip_cancel_destroy(p))
 					ast_log(LOG_WARNING, "Unable to cancel SIP destruction.  Expect bad things.\n");
@@ -14816,14 +14838,6 @@ static enum check_auth_result register_verify(struct sip_pvt *p, struct ast_sock
 			}
 			ao2_unlock(peer);
 		}
-	}
-	if (!peer && sip_cfg.alwaysauthreject) {
-		/* If we found a peer, we transmit a 100 Trying.  Therefore, if we're
-		 * trying to avoid leaking information, we MUST also transmit the same
-		 * response when we DON'T find a peer. */
-		transmit_response(p, "100 Trying", req);
-		/* Insert a fake delay between the 100 and the subsequent failure. */
-		sched_yield();
 	}
 	if (!res) {
 		sip_send_mwi_to_peer(peer, 0);
@@ -17560,7 +17574,6 @@ static char *_sip_show_peer(int type, int fd, struct mansession *s, const struct
 		ast_cli(fd, ")\n");
 
 		ast_cli(fd, "  Auto-Framing :  %s \n", AST_CLI_YESNO(peer->autoframing));
-		ast_cli(fd, "  100 on REG   : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[1], SIP_PAGE2_REGISTERTRYING)));
 		ast_cli(fd, "  Status       : ");
 		peer_status(peer, status, sizeof(status));
 		ast_cli(fd, "%s\n", status);
@@ -27771,8 +27784,6 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 				}
 			} else if (!strcasecmp(v->name, "preferred_codec_only")) {
 				ast_set2_flag(&peer->flags[1], ast_true(v->value), SIP_PAGE2_PREFERRED_CODEC);
-			} else if (!strcasecmp(v->name, "registertrying")) {
-				ast_set2_flag(&peer->flags[1], ast_true(v->value), SIP_PAGE2_REGISTERTRYING);
 			} else if (!strcasecmp(v->name, "autoframing")) {
 				peer->autoframing = ast_true(v->value);
 			} else if (!strcasecmp(v->name, "rtptimeout")) {
