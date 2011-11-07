@@ -1502,6 +1502,7 @@ static int create_addr_from_peer(struct sip_pvt *r, struct sip_peer *peer);
 static int create_addr(struct sip_pvt *dialog, const char *opeer, struct ast_sockaddr *addr, int newdialog, struct ast_sockaddr *remote_address);
 static char *generate_random_string(char *buf, size_t size);
 static void build_callid_pvt(struct sip_pvt *pvt);
+static void change_callid_pvt(struct sip_pvt *pvt, const char *callid);
 static void build_callid_registry(struct sip_registry *reg, const struct ast_sockaddr *ourip, const char *fromdomain);
 static void make_our_tag(char *tagbuf, size_t len);
 static int add_header(struct sip_request *req, const char *var, const char *value);
@@ -5303,15 +5304,20 @@ static int create_addr_from_peer(struct sip_pvt *dialog, struct sip_peer *peer)
 	if (!ast_strlen_zero(peer->fromdomain)) {
 		ast_string_field_set(dialog, fromdomain, peer->fromdomain);
 		if (!dialog->initreq.headers) {
-			char *c;
+			char *new_callid;
 			char *tmpcall = ast_strdupa(dialog->callid);
 			/* this sure looks to me like we are going to change the callid on this dialog!! */
-			c = strchr(tmpcall, '@');
-			if (c) {
-				*c = '\0';
-				ao2_t_unlink(dialogs, dialog, "About to change the callid -- remove the old name");
-				ast_string_field_build(dialog, callid, "%s@%s", tmpcall, peer->fromdomain);
-				ao2_t_link(dialogs, dialog, "New dialog callid -- inserted back into table");
+			new_callid = strchr(tmpcall, '@');
+			if (new_callid) {
+				int callid_size;
+
+				*new_callid = '\0';
+
+				/* Change the dialog callid. */
+				callid_size = strlen(tmpcall) + strlen(peer->fromdomain) + 2;
+				new_callid = alloca(callid_size);
+				snprintf(new_callid, callid_size, "%s@%s", tmpcall, peer->fromdomain);
+				change_callid_pvt(dialog, new_callid);
 			}
 		}
 	}
@@ -7444,15 +7450,60 @@ static char *generate_uri(struct sip_pvt *pvt, char *buf, size_t size)
 	return buf;
 }
 
-/*! \brief Build SIP Call-ID value for a non-REGISTER transaction */
+/*!
+ * \brief Build SIP Call-ID value for a non-REGISTER transaction
+ *
+ * \note The passed in pvt must not be in a dialogs container
+ * since this function changes the hash key used by the
+ * container.
+ */
 static void build_callid_pvt(struct sip_pvt *pvt)
 {
 	char buf[33];
-
 	const char *host = S_OR(pvt->fromdomain, ast_sockaddr_stringify_remote(&pvt->ourip));
-	
-	ast_string_field_build(pvt, callid, "%s@%s", generate_random_string(buf, sizeof(buf)), host);
 
+	ast_string_field_build(pvt, callid, "%s@%s", generate_random_string(buf, sizeof(buf)), host);
+}
+
+/*! \brief Unlink the given object from the container and return TRUE if it was in the container. */
+#define CONTAINER_UNLINK(container, obj, tag)								\
+	({																		\
+		int found = 0;														\
+		typeof((obj)) __removed_obj;										\
+		__removed_obj = ao2_t_callback((container),							\
+			OBJ_UNLINK | OBJ_POINTER, ao2_match_by_addr, (obj), (tag));		\
+		if (__removed_obj) {												\
+			ao2_ref(__removed_obj, -1);										\
+			found = 1;														\
+		}																	\
+		found;																\
+	})
+
+/*!
+ * \internal
+ * \brief Safely change the callid of the given SIP dialog.
+ *
+ * \param pvt SIP private structure to change callid
+ * \param callid Specified new callid to use.  NULL if generate new callid.
+ *
+ * \return Nothing
+ */
+static void change_callid_pvt(struct sip_pvt *pvt, const char *callid)
+{
+	int in_dialog_container;
+
+	ao2_lock(dialogs);
+	in_dialog_container = CONTAINER_UNLINK(dialogs, pvt,
+		"About to change the callid -- remove the old name");
+	if (callid) {
+		ast_string_field_set(pvt, callid, callid);
+	} else {
+		build_callid_pvt(pvt);
+	}
+	if (in_dialog_container) {
+		ao2_t_link(dialogs, pvt, "New dialog callid -- inserted back into table");
+	}
+	ao2_unlock(dialogs);
 }
 
 /*! \brief Build SIP Call-ID value for a REGISTER transaction */
@@ -12161,7 +12212,10 @@ static int __sip_subscribe_mwi_do(struct sip_subscription_mwi *mwi)
 	ast_sip_ouraddrfor(&mwi->call->sa, &mwi->call->ourip, mwi->call);
 	build_contact(mwi->call);
 	build_via(mwi->call);
-	build_callid_pvt(mwi->call);
+
+	/* Change the dialog callid. */
+	change_callid_pvt(mwi->call, NULL);
+
 	ast_set_flag(&mwi->call->flags[0], SIP_OUTGOING);
 	
 	/* Associate the call with us */
@@ -24345,7 +24399,9 @@ static int handle_request_subscribe(struct sip_pvt *p, struct sip_request *req, 
 
 		p->subscribed = MWI_NOTIFICATION;
 		if (ast_test_flag(&authpeer->flags[1], SIP_PAGE2_SUBSCRIBEMWIONLY)) {
+			ao2_unlock(p);
 			add_peer_mwi_subs(authpeer);
+			ao2_lock(p);
 		}
 		if (authpeer->mwipvt && authpeer->mwipvt != p) {	/* Destroy old PVT if this is a new one */
 			/* We only allow one subscription per peer */
@@ -24421,7 +24477,12 @@ static int handle_request_subscribe(struct sip_pvt *p, struct sip_request *req, 
 			ast_set_flag(&p->flags[1], SIP_PAGE2_DIALOG_ESTABLISHED);
 			transmit_response(p, "200 OK", req);
 			if (p->relatedpeer) {	/* Send first notification */
-				sip_send_mwi_to_peer(p->relatedpeer, 0);
+				struct sip_peer *peer = p->relatedpeer;
+				ref_peer(peer, "ensure a peer ref is held during MWI sending");
+				ao2_unlock(p);
+				sip_send_mwi_to_peer(peer, 0);
+				ao2_lock(p);
+				unref_peer(peer, "release a peer ref now that MWI is sent");
 			}
 		} else if (p->subscribed != CALL_COMPLETION) {
 			if ((firststate = ast_extension_state(NULL, p->context, p->exten)) < 0) {
@@ -25132,36 +25193,49 @@ static int get_cached_mwi(struct sip_peer *peer, int *new, int *old)
 	return in_cache;
 }
 
-/*! \brief Send message waiting indication to alert peer that they've got voicemail */
+/*! \brief Send message waiting indication to alert peer that they've got voicemail
+ *  \note Both peer and associated sip_pvt must be unlocked prior to calling this function
+*/
 static int sip_send_mwi_to_peer(struct sip_peer *peer, int cache_only)
 {
 	/* Called with peerl lock, but releases it */
 	struct sip_pvt *p;
 	int newmsgs = 0, oldmsgs = 0;
+	const char *vmexten;
 
-	if (ast_test_flag((&peer->flags[1]), SIP_PAGE2_SUBSCRIBEMWIONLY) && !peer->mwipvt)
+	ao2_lock(peer);
+
+	vmexten = ast_strdupa(peer->vmexten);
+
+	if (ast_test_flag((&peer->flags[1]), SIP_PAGE2_SUBSCRIBEMWIONLY) && !peer->mwipvt) {
+		ao2_unlock(peer);
 		return 0;
+	}
 
 	/* Do we have an IP address? If not, skip this peer */
-	if (ast_sockaddr_isnull(&peer->addr) && ast_sockaddr_isnull(&peer->defaddr))
+	if (ast_sockaddr_isnull(&peer->addr) && ast_sockaddr_isnull(&peer->defaddr)) {
+		ao2_unlock(peer);
 		return 0;
+	}
 
 	/* Attempt to use cached mwi to get message counts. */
 	if (!get_cached_mwi(peer, &newmsgs, &oldmsgs) && !cache_only) {
 		/* Fall back to manually checking the mailbox if not cache_only and get_cached_mwi failed */
 		struct ast_str *mailbox_str = ast_str_alloca(512);
 		peer_mailboxes_to_str(&mailbox_str, peer);
+		ao2_unlock(peer);
 		ast_app_inboxcount(mailbox_str->str, &newmsgs, &oldmsgs);
+		ao2_lock(peer);
 	}
-	ao2_lock(peer);
 
 	if (peer->mwipvt) {
 		/* Base message on subscription */
-		p = dialog_ref(peer->mwipvt, "sip_send_mwi_to_peer: Setting dialog ptr p from peer->mwipvt-- should this be done?");
+		p = dialog_ref(peer->mwipvt, "sip_send_mwi_to_peer: Setting dialog ptr p from peer->mwipvt");
+		ao2_unlock(peer);
 	} else {
+		ao2_unlock(peer);
 		/* Build temporary dialog for this message */
 		if (!(p = sip_alloc(NULL, NULL, 0, SIP_NOTIFY, NULL))) {
-			ao2_unlock(peer);
 			return -1;
 		}
 
@@ -25175,20 +25249,23 @@ static int sip_send_mwi_to_peer(struct sip_peer *peer, int cache_only)
 			dialog_unlink_all(p);
 			dialog_unref(p, "unref dialog p just created via sip_alloc");
 			/* sip_destroy(p); */
-			ao2_unlock(peer);
 			return 0;
 		}
 		/* Recalculate our side, and recalculate Call ID */
 		ast_sip_ouraddrfor(&p->sa, &p->ourip, p);
 		build_via(p);
-		ao2_t_unlink(dialogs, p, "About to change the callid -- remove the old name");
-		build_callid_pvt(p);
+
+		ao2_lock(peer);
 		if (!ast_strlen_zero(peer->mwi_from)) {
 			ast_string_field_set(p, mwi_from, peer->mwi_from);
 		} else if (!ast_strlen_zero(default_mwi_from)) {
 			ast_string_field_set(p, mwi_from, default_mwi_from);
 		}
-		ao2_t_link(dialogs, p, "Linking in under new name");
+		ao2_unlock(peer);
+
+		/* Change the dialog callid. */
+		change_callid_pvt(p, NULL);
+
 		/* Destroy this session after 32 secs */
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 	}
@@ -25200,10 +25277,10 @@ static int sip_send_mwi_to_peer(struct sip_peer *peer, int cache_only)
 	/* Send MWI */
 	ast_set_flag(&p->flags[0], SIP_OUTGOING);
 	/* the following will decrement the refcount on p as it finishes */
-	transmit_notify_with_mwi(p, newmsgs, oldmsgs, peer->vmexten);
+	transmit_notify_with_mwi(p, newmsgs, oldmsgs, vmexten);
 	sip_pvt_unlock(p);
 	dialog_unref(p, "unref dialog ptr p just before it goes out of scope at the end of sip_send_mwi_to_peer.");
-	ao2_unlock(peer);
+
 	return 0;
 }
 
@@ -25804,9 +25881,9 @@ static int sip_poke_peer(struct sip_peer *peer, int force)
 	/* Recalculate our side, and recalculate Call ID */
 	ast_sip_ouraddrfor(&p->sa, &p->ourip, p);
 	build_via(p);
-	ao2_t_unlink(dialogs, p, "About to change the callid -- remove the old name");
-	build_callid_pvt(p);
-	ao2_t_link(dialogs, p, "Linking in under new name");
+
+	/* Change the dialog callid. */
+	change_callid_pvt(p, NULL);
 
 	AST_SCHED_DEL_UNREF(sched, peer->pokeexpire,
 			unref_peer(peer, "removing poke peer ref"));
@@ -26102,10 +26179,10 @@ static struct ast_channel *sip_request_call(const char *type, format_t format, c
 	/* Recalculate our side, and recalculate Call ID */
 	ast_sip_ouraddrfor(&p->sa, &p->ourip, p);
 	build_via(p);
-	ao2_t_unlink(dialogs, p, "About to change the callid -- remove the old name");
-	build_callid_pvt(p);
-	ao2_t_link(dialogs, p, "Linking in under new name");
-	
+
+	/* Change the dialog callid. */
+	change_callid_pvt(p, NULL);
+
 	/* We have an extension to call, don't use the full contact here */
 	/* This to enable dialing registered peers with extension dialling,
 	   like SIP/peername/extension 	
