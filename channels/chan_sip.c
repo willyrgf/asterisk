@@ -1073,6 +1073,12 @@ static void destroy_escs(void)
 	}
 }
 
+/*!
+ * \details
+ * This container holds the dialogs that will be destroyed immediately.
+ */
+struct ao2_container *dialogs_to_destroy;
+
 /*! \brief
  * Here we implement the container for dialogs (sip_pvt), defining
  * generic wrapper functions to ease the transition from the current
@@ -2924,6 +2930,13 @@ static void ref_proxy(struct sip_pvt *pvt, struct sip_proxy *proxy)
 	}
 }
 
+/*!
+ * \brief Unlink a dialog from the dialogs container, as well as any other places
+ * that it may be currently stored.
+ *
+ * \note A reference to the dialog must be held before calling this function, and this
+ * function does not release that reference.
+ */
 void dialog_unlink_all(struct sip_pvt *dialog)
 {
 	struct sip_pkt *cp;
@@ -4550,16 +4563,24 @@ static void sip_destroy_peer_fn(void *peer)
 static void sip_destroy_peer(struct sip_peer *peer)
 {
 	ast_debug(3, "Destroying SIP peer %s\n", peer->name);
-	if (peer->outboundproxy)
+
+	/*
+	 * Remove any mailbox event subscriptions for this peer before
+	 * we destroy anything.  An event subscription callback may be
+	 * happening right now.
+	 */
+	clear_peer_mailboxes(peer);
+
+	if (peer->outboundproxy) {
 		ao2_ref(peer->outboundproxy, -1);
-	peer->outboundproxy = NULL;
+		peer->outboundproxy = NULL;
+	}
 
 	/* Delete it, it needs to disappear */
 	if (peer->call) {
 		dialog_unlink_all(peer->call);
 		peer->call = dialog_unref(peer->call, "peer->call is being unset");
 	}
-	
 
 	if (peer->mwipvt) {	/* We have an active subscription, delete it */
 		dialog_unlink_all(peer->mwipvt);
@@ -4587,7 +4608,6 @@ static void sip_destroy_peer(struct sip_peer *peer)
 	}
 	if (peer->dnsmgr)
 		ast_dnsmgr_release(peer->dnsmgr);
-	clear_peer_mailboxes(peer);
 
 	if (peer->socket.tcptls_session) {
 		ao2_ref(peer->socket.tcptls_session, -1);
@@ -16525,14 +16545,12 @@ static void cleanup_stale_contexts(char *new, char *old)
  * \brief Match dialogs that need to be destroyed
  *
  * \details This is used with ao2_callback to unlink/delete all dialogs that
- * are marked needdestroy. It will return CMP_MATCH for candidates, and they
- * will be unlinked.
+ * are marked needdestroy.
  *
  * \todo Re-work this to improve efficiency.  Currently, this function is called
  * on _every_ dialog after processing _every_ incoming SIP/UDP packet, or
  * potentially even more often when the scheduler has entries to run.
  */
-
 static int dialog_needdestroy(void *dialogobj, void *arg, int flags)
 {
 	struct sip_pvt *dialog = dialogobj;
@@ -16578,15 +16596,34 @@ static int dialog_needdestroy(void *dialogobj, void *arg, int flags)
 		}
 
 		sip_pvt_unlock(dialog);
-		/* no, the unlink should handle this: dialog_unref(dialog, "needdestroy: one more refcount decrement to allow dialog to be destroyed"); */
-		/* the CMP_MATCH will unlink this dialog from the dialog hash table */
-		dialog_unlink_all(dialog);
-		return 0; /* the unlink_all should unlink this from the table, so.... no need to return a match */
+
+		/* This dialog needs to be destroyed. */
+		ao2_t_link(dialogs_to_destroy, dialog, "Link dialog for destruction");
+		return 0;
 	}
 
 	sip_pvt_unlock(dialog);
 
 	return 0;
+}
+
+/*!
+ * \internal
+ * \brief ao2_callback to unlink the specified dialog object.
+ *
+ * \param obj Ptr to dialog to unlink.
+ * \param arg Don't care.
+ * \param flags Don't care.
+ *
+ * \retval CMP_MATCH
+ */
+static int dialog_unlink_callback(void *obj, void *arg, int flags)
+{
+	struct sip_pvt *dialog = obj;
+
+	dialog_unlink_all(dialog);
+
+	return CMP_MATCH;
 }
 
 /*! \brief Remove temporary realtime objects from memory (CLI) */
@@ -24308,7 +24345,9 @@ static int handle_request_subscribe(struct sip_pvt *p, struct sip_request *req, 
 
 		p->subscribed = MWI_NOTIFICATION;
 		if (ast_test_flag(&authpeer->flags[1], SIP_PAGE2_SUBSCRIBEMWIONLY)) {
+			ao2_unlock(p);
 			add_peer_mwi_subs(authpeer);
+			ao2_lock(p);
 		}
 		if (authpeer->mwipvt && authpeer->mwipvt != p) {	/* Destroy old PVT if this is a new one */
 			/* We only allow one subscription per peer */
@@ -24384,7 +24423,12 @@ static int handle_request_subscribe(struct sip_pvt *p, struct sip_request *req, 
 			ast_set_flag(&p->flags[1], SIP_PAGE2_DIALOG_ESTABLISHED);
 			transmit_response(p, "200 OK", req);
 			if (p->relatedpeer) {	/* Send first notification */
-				sip_send_mwi_to_peer(p->relatedpeer, 0);
+				struct sip_peer *peer = p->relatedpeer;
+				ref_peer(peer, "ensure a peer ref is held during MWI sending");
+				ao2_unlock(p);
+				sip_send_mwi_to_peer(peer, 0);
+				ao2_lock(p);
+				unref_peer(peer, "release a peer ref now that MWI is sent");
 			}
 		} else if (p->subscribed != CALL_COMPLETION) {
 			if ((firststate = ast_extension_state(NULL, p->context, p->exten)) < 0) {
@@ -25095,36 +25139,49 @@ static int get_cached_mwi(struct sip_peer *peer, int *new, int *old)
 	return in_cache;
 }
 
-/*! \brief Send message waiting indication to alert peer that they've got voicemail */
+/*! \brief Send message waiting indication to alert peer that they've got voicemail
+ *  \note Both peer and associated sip_pvt must be unlocked prior to calling this function
+*/
 static int sip_send_mwi_to_peer(struct sip_peer *peer, int cache_only)
 {
 	/* Called with peerl lock, but releases it */
 	struct sip_pvt *p;
 	int newmsgs = 0, oldmsgs = 0;
+	const char *vmexten;
 
-	if (ast_test_flag((&peer->flags[1]), SIP_PAGE2_SUBSCRIBEMWIONLY) && !peer->mwipvt)
+	ao2_lock(peer);
+
+	vmexten = ast_strdupa(peer->vmexten);
+
+	if (ast_test_flag((&peer->flags[1]), SIP_PAGE2_SUBSCRIBEMWIONLY) && !peer->mwipvt) {
+		ao2_unlock(peer);
 		return 0;
+	}
 
 	/* Do we have an IP address? If not, skip this peer */
-	if (ast_sockaddr_isnull(&peer->addr) && ast_sockaddr_isnull(&peer->defaddr))
+	if (ast_sockaddr_isnull(&peer->addr) && ast_sockaddr_isnull(&peer->defaddr)) {
+		ao2_unlock(peer);
 		return 0;
+	}
 
 	/* Attempt to use cached mwi to get message counts. */
 	if (!get_cached_mwi(peer, &newmsgs, &oldmsgs) && !cache_only) {
 		/* Fall back to manually checking the mailbox if not cache_only and get_cached_mwi failed */
 		struct ast_str *mailbox_str = ast_str_alloca(512);
 		peer_mailboxes_to_str(&mailbox_str, peer);
+		ao2_unlock(peer);
 		ast_app_inboxcount(mailbox_str->str, &newmsgs, &oldmsgs);
+		ao2_lock(peer);
 	}
-	ao2_lock(peer);
 
 	if (peer->mwipvt) {
 		/* Base message on subscription */
-		p = dialog_ref(peer->mwipvt, "sip_send_mwi_to_peer: Setting dialog ptr p from peer->mwipvt-- should this be done?");
+		p = dialog_ref(peer->mwipvt, "sip_send_mwi_to_peer: Setting dialog ptr p from peer->mwipvt");
+		ao2_unlock(peer);
 	} else {
+		ao2_unlock(peer);
 		/* Build temporary dialog for this message */
 		if (!(p = sip_alloc(NULL, NULL, 0, SIP_NOTIFY, NULL))) {
-			ao2_unlock(peer);
 			return -1;
 		}
 
@@ -25138,7 +25195,6 @@ static int sip_send_mwi_to_peer(struct sip_peer *peer, int cache_only)
 			dialog_unlink_all(p);
 			dialog_unref(p, "unref dialog p just created via sip_alloc");
 			/* sip_destroy(p); */
-			ao2_unlock(peer);
 			return 0;
 		}
 		/* Recalculate our side, and recalculate Call ID */
@@ -25146,11 +25202,15 @@ static int sip_send_mwi_to_peer(struct sip_peer *peer, int cache_only)
 		build_via(p);
 		ao2_t_unlink(dialogs, p, "About to change the callid -- remove the old name");
 		build_callid_pvt(p);
+
+		ao2_lock(peer);
 		if (!ast_strlen_zero(peer->mwi_from)) {
 			ast_string_field_set(p, mwi_from, peer->mwi_from);
 		} else if (!ast_strlen_zero(default_mwi_from)) {
 			ast_string_field_set(p, mwi_from, default_mwi_from);
 		}
+		ao2_unlock(peer);
+
 		ao2_t_link(dialogs, p, "Linking in under new name");
 		/* Destroy this session after 32 secs */
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
@@ -25163,10 +25223,10 @@ static int sip_send_mwi_to_peer(struct sip_peer *peer, int cache_only)
 	/* Send MWI */
 	ast_set_flag(&p->flags[0], SIP_OUTGOING);
 	/* the following will decrement the refcount on p as it finishes */
-	transmit_notify_with_mwi(p, newmsgs, oldmsgs, peer->vmexten);
+	transmit_notify_with_mwi(p, newmsgs, oldmsgs, vmexten);
 	sip_pvt_unlock(p);
 	dialog_unref(p, "unref dialog ptr p just before it goes out of scope at the end of sip_send_mwi_to_peer.");
-	ao2_unlock(peer);
+
 	return 0;
 }
 
@@ -25279,12 +25339,19 @@ static void *do_monitor(void *data)
 		   of time since the last time we did it (when MWI is being sent, we can
 		   get back to this point every millisecond or less)
 		*/
-		ao2_t_callback(dialogs, OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE, dialog_needdestroy, &t,
-				"callback to remove dialogs w/needdestroy");
-
-		/* the old methodology would be to restart the search for dialogs to delete with every
-		   dialog that was found and destroyed, probably because the list contents would change,
-		   so we'd need to restart. This isn't the best thing to do with callbacks. */
+		/*
+		 * We cannot hold the dialogs container lock when we destroy a
+		 * dialog because of potential deadlocks.  Instead we link the
+		 * doomed dialog into dialogs_to_destroy and then iterate over
+		 * that container destroying the dialogs.
+		 */
+		ao2_t_callback(dialogs, OBJ_NODATA | OBJ_MULTIPLE, dialog_needdestroy, &t,
+			"callback to monitor dialog status");
+		if (ao2_container_count(dialogs_to_destroy)) {
+			/* Now destroy the found dialogs that need to be destroyed. */
+			ao2_t_callback(dialogs_to_destroy, OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE,
+				dialog_unlink_callback, NULL, "callback to dialog_unlink_all");
+		}
 
 		/* XXX TODO The scheduler usage in this module does not have sufficient
 		 * synchronization being done between running the scheduler and places
@@ -29670,8 +29737,9 @@ static int load_module(void)
 	peers = ao2_t_container_alloc(HASH_PEER_SIZE, peer_hash_cb, peer_cmp_cb, "allocate peers");
 	peers_by_ip = ao2_t_container_alloc(HASH_PEER_SIZE, peer_iphash_cb, peer_ipcmp_cb, "allocate peers_by_ip");
 	dialogs = ao2_t_container_alloc(HASH_DIALOG_SIZE, dialog_hash_cb, dialog_cmp_cb, "allocate dialogs");
+	dialogs_to_destroy = ao2_t_container_alloc(1, NULL, NULL, "allocate dialogs_to_destroy");
 	threadt = ao2_t_container_alloc(HASH_DIALOG_SIZE, threadt_hash_cb, threadt_cmp_cb, "allocate threadt table");
-	if (!peers || !peers_by_ip || !dialogs || !threadt) {
+	if (!peers || !peers_by_ip || !dialogs || !dialogs_to_destroy || !threadt) {
 		ast_log(LOG_ERROR, "Unable to create primary SIP container(s)\n");
 		return AST_MODULE_LOAD_FAILURE;
 	}
@@ -29929,6 +29997,7 @@ static int unload_module(void)
 	ao2_t_ref(peers, -1, "unref the peers table");
 	ao2_t_ref(peers_by_ip, -1, "unref the peers_by_ip table");
 	ao2_t_ref(dialogs, -1, "unref the dialogs table");
+	ao2_t_ref(dialogs_to_destroy, -1, "unref dialogs_to_destroy");
 	ao2_t_ref(threadt, -1, "unref the thread table");
 	ao2_t_ref(sip_monitor_instances, -1, "unref the sip_monitor_instances table");
 
