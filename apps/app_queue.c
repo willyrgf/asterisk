@@ -3159,10 +3159,7 @@ static int ring_entry(struct queue_ent *qe, struct callattempt *tmp, int *busies
 		return 0;
 	}
 
-	ast_channel_lock(tmp->chan);
-	while (ast_channel_trylock(qe->chan)) {
-		CHANNEL_DEADLOCK_AVOIDANCE(tmp->chan);
-	}
+	ast_channel_lock_both(tmp->chan, qe->chan);
 
 	if (qe->cancel_answered_elsewhere) {
 		ast_set_flag(tmp->chan, AST_FLAG_ANSWERED_ELSEWHERE);
@@ -3225,19 +3222,22 @@ static int ring_entry(struct queue_ent *qe, struct callattempt *tmp, int *busies
 		strcpy(tmp->chan->cdr->userfield, qe->chan->cdr->userfield);
 	}
 
+	ast_channel_unlock(tmp->chan);
+	ast_channel_unlock(qe->chan);
+
 	/* Place the call, but don't wait on the answer */
 	if ((res = ast_call(tmp->chan, location, 0))) {
 		/* Again, keep going even if there's an error */
 		ast_debug(1, "ast call on peer returned %d\n", res);
 		ast_verb(3, "Couldn't call %s\n", tmp->interface);
-		ast_channel_unlock(tmp->chan);
-		ast_channel_unlock(qe->chan);
 		do_hang(tmp);
 		(*busies)++;
 		update_status(qe->parent, tmp->member, get_queue_member_status(tmp->member));
 		return 0;
 	} else if (qe->parent->eventwhencalled) {
 		char vars[2048];
+
+		ast_channel_lock_both(tmp->chan, qe->chan);
 
 		manager_event(EVENT_FLAG_AGENT, "AgentCalled",
 			"Queue: %s\r\n"
@@ -3255,16 +3255,18 @@ static int ring_entry(struct queue_ent *qe, struct callattempt *tmp, int *busies
 			"Uniqueid: %s\r\n"
 			"%s",
 			qe->parent->name, tmp->interface, tmp->member->membername, qe->chan->name, tmp->chan->name,
-			S_COR(tmp->chan->caller.id.number.valid, tmp->chan->caller.id.number.str, "unknown"),
-			S_COR(tmp->chan->caller.id.name.valid, tmp->chan->caller.id.name.str, "unknown"),
-			S_COR(tmp->chan->connected.id.number.valid, tmp->chan->connected.id.number.str, "unknown"),
-			S_COR(tmp->chan->connected.id.name.valid, tmp->chan->connected.id.name.str, "unknown"),
+			S_COR(qe->chan->caller.id.number.valid, qe->chan->caller.id.number.str, "unknown"),
+			S_COR(qe->chan->caller.id.name.valid, qe->chan->caller.id.name.str, "unknown"),
+			S_COR(qe->chan->connected.id.number.valid, qe->chan->connected.id.number.str, "unknown"),
+			S_COR(qe->chan->connected.id.name.valid, qe->chan->connected.id.name.str, "unknown"),
 			qe->chan->context, qe->chan->exten, qe->chan->priority, qe->chan->uniqueid,
 			qe->parent->eventwhencalled == QUEUE_EVENT_VARIABLES ? vars2manager(qe->chan, vars, sizeof(vars)) : "");
+
+		ast_channel_unlock(tmp->chan);
+		ast_channel_unlock(qe->chan);
+
 		ast_verb(3, "Called %s\n", tmp->interface);
 	}
-	ast_channel_unlock(tmp->chan);
-	ast_channel_unlock(qe->chan);
 
 	update_status(qe->parent, tmp->member, get_queue_member_status(tmp->member));
 	return 1;
@@ -3698,10 +3700,7 @@ static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callatte
 					} else {
 						struct ast_party_redirecting redirecting;
 
-						ast_channel_lock(o->chan);
-						while (ast_channel_trylock(in)) {
-							CHANNEL_DEADLOCK_AVOIDANCE(o->chan);
-						}
+						ast_channel_lock_both(o->chan, in);
 						ast_channel_inherit_variables(in, o->chan);
 						ast_channel_datastore_inherit(in, o->chan);
 
