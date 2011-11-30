@@ -238,7 +238,7 @@ static void *handle_tcptls_connection(void *data)
 		if (!tcptls_session->f) {	/* no success opening descriptor stacking */
 			SSL_free(tcptls_session->ssl);
 		}
-   	}
+	}
 #endif /* DO_SSL */
 
 	if (!tcptls_session->f) {
