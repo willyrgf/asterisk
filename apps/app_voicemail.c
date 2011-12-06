@@ -284,6 +284,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			</parameter>
 		</syntax>
 		<description>
+			<note><para>DEPRECATED. Use VM_INFO(mailbox[@context],exists) instead.</para></note>
 			<para>Check to see if the specified <replaceable>mailbox</replaceable> exists. If no voicemail
 			<replaceable>context</replaceable> is specified, the <literal>default</literal> context
 			will be used.</para>
@@ -297,6 +298,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 				</variable>
 			</variablelist>
 		</description>
+		<see-also>
+			<ref type="function">VM_INFO</ref>
+		</see-also>
 	</application>
 	<application name="VMAuthenticate" language="en_US">
 		<synopsis>
@@ -354,9 +358,66 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<parameter name="context" />
 		</syntax>
 		<description>
+			<note><para>DEPRECATED. Use VM_INFO(mailbox[@context],exists) instead.</para></note>
 			<para>Returns a boolean of whether the corresponding <replaceable>mailbox</replaceable> exists.
 			If <replaceable>context</replaceable> is not specified, defaults to the <literal>default</literal>
 			context.</para>
+		</description>
+		<see-also>
+			<ref type="function">VM_INFO</ref>
+		</see-also>
+	</function>
+	<function name="VM_INFO" language="en_US">
+		<synopsis>
+			Returns the selected attribute from a mailbox.
+		</synopsis>
+		<syntax argsep=",">
+			<parameter name="mailbox" argsep="@" required="true">
+				<argument name="mailbox" required="true" />
+				<argument name="context" />
+			</parameter>
+			<parameter name="attribute" required="true">
+				<optionlist>
+					<option name="count">
+						<para>Count of messages in specified <replaceable>folder</replaceable>.
+						If <replaceable>folder</replaceable> is not specified, defaults to <literal>INBOX</literal>.</para>
+					</option>
+					<option name="email">
+						<para>E-mail address associated with the mailbox.</para>
+					</option>
+					<option name="exists">
+						<para>Returns a boolean of whether the corresponding <replaceable>mailbox</replaceable> exists.</para>
+					</option>
+					<option name="fullname">
+						<para>Full name associated with the mailbox.</para>
+					</option>
+					<option name="language">
+						<para>Mailbox language if overridden, otherwise the language of the channel.</para>
+					</option>
+					<option name="locale">
+						<para>Mailbox locale if overridden, otherwise global locale.</para>
+					</option>
+					<option name="pager">
+						<para>Pager e-mail address associated with the mailbox.</para>
+					</option>
+					<option name="password">
+						<para>Mailbox access password.</para>
+					</option>
+					<option name="tz">
+						<para>Mailbox timezone if overridden, otherwise global timezone</para>
+					</option>
+				</optionlist>
+			</parameter>
+			<parameter name="folder" required="false">
+				<para>If not specified, <literal>INBOX</literal> is assumed.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Returns the selected attribute from the specified <replaceable>mailbox</replaceable>.
+			If <replaceable>context</replaceable> is not specified, defaults to the <literal>default</literal>
+			context. Where the <replaceable>folder</replaceable> can be specified, common folders
+			include <literal>INBOX</literal>, <literal>Old</literal>, <literal>Work</literal>,
+			<literal>Family</literal> and <literal>Friends</literal>.</para>
 		</description>
 	</function>
 	<manager name="VoicemailUsersList" language="en_US">
@@ -540,6 +601,10 @@ AST_APP_OPTIONS(vm_app_options, {
 });
 
 static int load_config(int reload);
+#ifdef TEST_FRAMEWORK
+static int load_config_from_memory(int reload, struct ast_config *cfg, struct ast_config *ucfg);
+#endif
+static int actual_load_config(int reload, struct ast_config *cfg, struct ast_config *ucfg);
 
 /*! \page vmlang Voicemail Language Syntaxes Supported
 
@@ -5219,11 +5284,15 @@ static int messagecount(const char *context, const char *mailbox, const char *fo
 	char sql[PATH_MAX];
 	char rowdata[20];
 	struct generic_prepare_struct gps = { .sql = sql, .argc = 0 };
-	if (!folder)
-		folder = "INBOX";
+
 	/* If no mailbox, return immediately */
-	if (ast_strlen_zero(mailbox))
+	if (ast_strlen_zero(mailbox)) {
 		return 0;
+	}
+
+	if (ast_strlen_zero(folder)) {
+		folder = "INBOX";
+	}
 
 	obj = ast_odbc_request_obj(odbc_database, 0);
 	if (obj) {
@@ -10971,7 +11040,7 @@ static int vm_box_exists(struct ast_channel *chan, const char *data)
 
 	if (!dep_warning) {
 		dep_warning = 1;
-		ast_log(AST_LOG_WARNING, "MailboxExists is deprecated.  Please use ${MAILBOX_EXISTS(%s)} instead.\n", (char *) data);
+		ast_log(AST_LOG_WARNING, "MailboxExists is deprecated.  Please use ${VM_INFO(%s,exists)} instead.\n", data);
 	}
 
 	box = ast_strdupa(data);
@@ -11001,6 +11070,7 @@ static int acf_mailbox_exists(struct ast_channel *chan, const char *cmd, char *a
 		AST_APP_ARG(mbox);
 		AST_APP_ARG(context);
 	);
+	static int dep_warning = 0;
 
 	AST_NONSTANDARD_APP_ARGS(arg, args, '@');
 
@@ -11009,13 +11079,97 @@ static int acf_mailbox_exists(struct ast_channel *chan, const char *cmd, char *a
 		return -1;
 	}
 
+	if (!dep_warning) {
+		dep_warning = 1;
+		ast_log(AST_LOG_WARNING, "MAILBOX_EXISTS is deprecated.  Please use ${VM_INFO(%s,exists)} instead.\n", args);
+	}
+
 	ast_copy_string(buf, find_user(&svm, ast_strlen_zero(arg.context) ? "default" : arg.context, arg.mbox) ? "1" : "0", len);
+	return 0;
+}
+
+static int acf_vm_info(struct ast_channel *chan, const char *cmd, char *args, char *buf, size_t len)
+{
+	struct ast_vm_user *vmu = NULL;
+	char *tmp, *mailbox, *context, *parse;
+	int res = 0;
+
+	AST_DECLARE_APP_ARGS(arg,
+		AST_APP_ARG(mailbox_context);
+		AST_APP_ARG(attribute);
+		AST_APP_ARG(folder);
+	);
+
+	buf[0] = '\0';
+
+	if (ast_strlen_zero(args)) {
+		ast_log(LOG_ERROR, "VM_INFO requires an argument (<mailbox>[@<context>],attribute[,folder])\n");
+		return -1;
+	}
+
+	parse = ast_strdupa(args);
+	AST_STANDARD_APP_ARGS(arg, parse);
+
+	if (ast_strlen_zero(arg.mailbox_context) || ast_strlen_zero(arg.attribute)) {
+		ast_log(LOG_ERROR, "VM_INFO requires an argument (<mailbox>[@<context>],attribute[,folder])\n");
+		return -1;
+	}
+
+	tmp = ast_strdupa(arg.mailbox_context);
+	mailbox = strsep(&tmp, "@");
+	context = strsep(&tmp, "");
+
+	if (ast_strlen_zero(context)) {
+		 context = "default";
+	}
+
+	vmu = find_user(NULL, context, mailbox);
+
+	if (!strncasecmp(arg.attribute, "exists", 5)) {
+		ast_copy_string(buf, vmu ? "1" : "0", len);
+		return 0;
+	}
+
+	if (vmu) {
+		if (!strncasecmp(arg.attribute, "password", 8)) {
+			ast_copy_string(buf, vmu->password, len);
+		} else if (!strncasecmp(arg.attribute, "fullname", 8)) {
+			ast_copy_string(buf, vmu->fullname, len);
+		} else if (!strncasecmp(arg.attribute, "email", 5)) {
+			ast_copy_string(buf, vmu->email, len);
+		} else if (!strncasecmp(arg.attribute, "pager", 5)) {
+			ast_copy_string(buf, vmu->pager, len);
+		} else if (!strncasecmp(arg.attribute, "language", 8)) {
+			ast_copy_string(buf, S_OR(vmu->language, chan->language), len);
+		} else if (!strncasecmp(arg.attribute, "locale", 6)) {
+			ast_copy_string(buf, vmu->locale, len);
+		} else if (!strncasecmp(arg.attribute, "tz", 2)) {
+			ast_copy_string(buf, vmu->zonetag, len);
+		} else if (!strncasecmp(arg.attribute, "count", 5)) {
+			/* If mbxfolder is empty messagecount will default to INBOX */
+			res = messagecount(context, mailbox, arg.folder);
+			if (res < 0) {
+				ast_log(LOG_ERROR, "Unable to retrieve message count for mailbox %s\n", arg.mailbox_context);
+				return -1;
+			}
+			snprintf(buf, len, "%d", res);
+		} else {
+			ast_log(LOG_ERROR, "Unknown attribute '%s' for VM_INFO\n", arg.attribute);
+			return -1;
+		}
+	}
+
 	return 0;
 }
 
 static struct ast_custom_function mailbox_exists_acf = {
 	.name = "MAILBOX_EXISTS",
 	.read = acf_mailbox_exists,
+};
+
+static struct ast_custom_function vm_info_acf = {
+	.name = "VM_INFO",
+	.read = acf_vm_info,
 };
 
 static int vmauthenticate(struct ast_channel *chan, const char *data)
@@ -11767,16 +11921,9 @@ static const char *substitute_escapes(const char *value)
 
 static int load_config(int reload)
 {
-	struct ast_vm_user *current;
 	struct ast_config *cfg, *ucfg;
-	char *cat;
-	struct ast_variable *var;
-	const char *val;
-	char *q, *stringp, *tmp;
-	int x;
-	int tmpadsi[4];
 	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
-	char secretfn[PATH_MAX] = "";
+	int res;
 
 	ast_unload_realtime("voicemail");
 	ast_unload_realtime("voicemail_data");
@@ -11804,6 +11951,35 @@ static int load_config(int reload)
 			ucfg = NULL;
 		}
 	}
+
+	res = actual_load_config(reload, cfg, ucfg);
+
+	ast_config_destroy(cfg);
+	ast_config_destroy(ucfg);
+
+	return res;
+}
+
+#ifdef TEST_FRAMEWORK
+static int load_config_from_memory(int reload, struct ast_config *cfg, struct ast_config *ucfg)
+{
+	ast_unload_realtime("voicemail");
+	ast_unload_realtime("voicemail_data");
+	return actual_load_config(reload, cfg, ucfg);
+}
+#endif
+
+static int actual_load_config(int reload, struct ast_config *cfg, struct ast_config *ucfg)
+{
+	struct ast_vm_user *current;
+	char *cat;
+	struct ast_variable *var;
+	const char *val;
+	char *q, *stringp, *tmp;
+	int x;
+	int tmpadsi[4];
+	char secretfn[PATH_MAX] = "";
+
 #ifdef IMAP_STORAGE
 	ast_copy_string(imapparentfolder, "\0", sizeof(imapparentfolder));
 #endif
@@ -12315,70 +12491,6 @@ static int load_config(int reload)
 		if ((val = ast_variable_retrieve(cfg, "general", "pollmailboxes")))
 			poll_mailboxes = ast_true(val);
 
-		if (ucfg) {	
-			for (cat = ast_category_browse(ucfg, NULL); cat ; cat = ast_category_browse(ucfg, cat)) {
-				if (!strcasecmp(cat, "general")) {
-					continue;
-				}
-				if (!ast_true(ast_config_option(ucfg, cat, "hasvoicemail")))
-					continue;
-				if ((current = find_or_create(userscontext, cat))) {
-					populate_defaults(current);
-					apply_options_full(current, ast_variable_browse(ucfg, cat));
-					ast_copy_string(current->context, userscontext, sizeof(current->context));
-					if (!ast_strlen_zero(current->password) && current->passwordlocation == OPT_PWLOC_VOICEMAILCONF) {
-						current->passwordlocation = OPT_PWLOC_USERSCONF;
-					}
-
-					switch (current->passwordlocation) {
-					case OPT_PWLOC_SPOOLDIR:
-						snprintf(secretfn, sizeof(secretfn), "%s%s/%s/secret.conf", VM_SPOOL_DIR, current->context, current->mailbox);
-						read_password_from_file(secretfn, current->password, sizeof(current->password));
-					}
-				}
-			}
-			ast_config_destroy(ucfg);
-		}
-		cat = ast_category_browse(cfg, NULL);
-		while (cat) {
-			if (strcasecmp(cat, "general")) {
-				var = ast_variable_browse(cfg, cat);
-				if (strcasecmp(cat, "zonemessages")) {
-					/* Process mailboxes in this context */
-					while (var) {
-						append_mailbox(cat, var->name, var->value);
-						var = var->next;
-					}
-				} else {
-					/* Timezones in this context */
-					while (var) {
-						struct vm_zone *z;
-						if ((z = ast_malloc(sizeof(*z)))) {
-							char *msg_format, *tzone;
-							msg_format = ast_strdupa(var->value);
-							tzone = strsep(&msg_format, "|,");
-							if (msg_format) {
-								ast_copy_string(z->name, var->name, sizeof(z->name));
-								ast_copy_string(z->timezone, tzone, sizeof(z->timezone));
-								ast_copy_string(z->msg_format, msg_format, sizeof(z->msg_format));
-								AST_LIST_LOCK(&zones);
-								AST_LIST_INSERT_HEAD(&zones, z, list);
-								AST_LIST_UNLOCK(&zones);
-							} else {
-								ast_log(AST_LOG_WARNING, "Invalid timezone definition at line %d\n", var->lineno);
-								ast_free(z);
-							}
-						} else {
-							AST_LIST_UNLOCK(&users);
-							ast_config_destroy(cfg);
-							return -1;
-						}
-						var = var->next;
-					}
-				}
-			}
-			cat = ast_category_browse(cfg, cat);
-		}
 		memset(fromstring, 0, sizeof(fromstring));
 		memset(pagerfromstring, 0, sizeof(pagerfromstring));
 		strcpy(charset, "ISO-8859-1");
@@ -12441,8 +12553,74 @@ static int load_config(int reload)
 		if ((val = ast_variable_retrieve(cfg, "general", "pagerbody"))) {
 			pagerbody = ast_strdup(substitute_escapes(val));
 		}
+
+		/* load mailboxes from users.conf */
+		if (ucfg) {	
+			for (cat = ast_category_browse(ucfg, NULL); cat ; cat = ast_category_browse(ucfg, cat)) {
+				if (!strcasecmp(cat, "general")) {
+					continue;
+				}
+				if (!ast_true(ast_config_option(ucfg, cat, "hasvoicemail")))
+					continue;
+				if ((current = find_or_create(userscontext, cat))) {
+					populate_defaults(current);
+					apply_options_full(current, ast_variable_browse(ucfg, cat));
+					ast_copy_string(current->context, userscontext, sizeof(current->context));
+					if (!ast_strlen_zero(current->password) && current->passwordlocation == OPT_PWLOC_VOICEMAILCONF) {
+						current->passwordlocation = OPT_PWLOC_USERSCONF;
+					}
+
+					switch (current->passwordlocation) {
+					case OPT_PWLOC_SPOOLDIR:
+						snprintf(secretfn, sizeof(secretfn), "%s%s/%s/secret.conf", VM_SPOOL_DIR, current->context, current->mailbox);
+						read_password_from_file(secretfn, current->password, sizeof(current->password));
+					}
+				}
+			}
+		}
+
+		/* load mailboxes from voicemail.conf */
+		cat = ast_category_browse(cfg, NULL);
+		while (cat) {
+			if (strcasecmp(cat, "general")) {
+				var = ast_variable_browse(cfg, cat);
+				if (strcasecmp(cat, "zonemessages")) {
+					/* Process mailboxes in this context */
+					while (var) {
+						append_mailbox(cat, var->name, var->value);
+						var = var->next;
+					}
+				} else {
+					/* Timezones in this context */
+					while (var) {
+						struct vm_zone *z;
+						if ((z = ast_malloc(sizeof(*z)))) {
+							char *msg_format, *tzone;
+							msg_format = ast_strdupa(var->value);
+							tzone = strsep(&msg_format, "|,");
+							if (msg_format) {
+								ast_copy_string(z->name, var->name, sizeof(z->name));
+								ast_copy_string(z->timezone, tzone, sizeof(z->timezone));
+								ast_copy_string(z->msg_format, msg_format, sizeof(z->msg_format));
+								AST_LIST_LOCK(&zones);
+								AST_LIST_INSERT_HEAD(&zones, z, list);
+								AST_LIST_UNLOCK(&zones);
+							} else {
+								ast_log(AST_LOG_WARNING, "Invalid timezone definition at line %d\n", var->lineno);
+								ast_free(z);
+							}
+						} else {
+							AST_LIST_UNLOCK(&users);
+							return -1;
+						}
+						var = var->next;
+					}
+				}
+			}
+			cat = ast_category_browse(cfg, cat);
+		}
+
 		AST_LIST_UNLOCK(&users);
-		ast_config_destroy(cfg);
 
 		if (poll_mailboxes && poll_thread == AST_PTHREADT_NULL)
 			start_poll_thread();
@@ -12453,8 +12631,6 @@ static int load_config(int reload)
 	} else {
 		AST_LIST_UNLOCK(&users);
 		ast_log(AST_LOG_WARNING, "Failed to load configuration file.\n");
-		if (ucfg)
-			ast_config_destroy(ucfg);
 		return 0;
 	}
 }
@@ -12914,6 +13090,166 @@ AST_TEST_DEFINE(test_voicemail_notify_endl)
 	fclose(file);
 	return res;
 }
+
+AST_TEST_DEFINE(test_voicemail_load_config)
+{
+	int res = AST_TEST_PASS;
+	struct ast_vm_user *vmu;
+	struct ast_config *cfg;
+	char config_filename[32] = "/tmp/voicemail.conf.XXXXXX";
+	int fd;
+	FILE *file;
+	struct ast_flags config_flags = { CONFIG_FLAG_NOCACHE };
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "test_voicemail_load_config";
+		info->category = "/apps/app_voicemail/";
+		info->summary = "Test loading Voicemail config";
+		info->description =
+			"Verify that configuration is loaded consistently. "
+			"This is to test regressions of ASTERISK-18838 where it was noticed that "
+			"some options were loaded after the mailboxes were instantiated, causing "
+			"those options not to be set correctly.";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	/* build a config file by hand... */
+	if ((fd = mkstemp(config_filename)) < 0) {
+		return AST_TEST_FAIL;
+	}
+	if (!(file = fdopen(fd, "w"))) {
+		close(fd);
+		unlink(config_filename);
+		return AST_TEST_FAIL;
+	}
+	fputs("[general]\ncallback=somecontext\nlocale=de_DE.UTF-8\ntz=european\n[test]", file);
+	fputs("00000001 => 9999,Mr. Test,,,callback=othercontext|locale=nl_NL.UTF-8|tz=central\n", file);
+	fputs("00000002 => 9999,Mrs. Test\n", file);
+	fclose(file);
+
+	if (!(cfg = ast_config_load(config_filename, config_flags))) {
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+	load_config_from_memory(1, cfg, NULL);
+	ast_config_destroy(cfg);
+
+#define CHECK(u, attr, value) else if (strcmp(u->attr, value)) { \
+	ast_test_status_update(test, "mailbox %s should have %s '%s', but has '%s'\n", \
+	u->mailbox, #attr, value, u->attr); res = AST_TEST_FAIL; break; }
+
+	AST_LIST_LOCK(&users);
+	AST_LIST_TRAVERSE(&users, vmu, list) {
+		if (!strcmp(vmu->mailbox, "00000001")) {
+			if (0); /* trick to get CHECK to work */
+			CHECK(vmu, callback, "othercontext")
+			CHECK(vmu, locale, "nl_NL.UTF-8")
+			CHECK(vmu, zonetag, "central")
+		} else if (!strcmp(vmu->mailbox, "00000002")) {
+			if (0); /* trick to get CHECK to work */
+			CHECK(vmu, callback, "somecontext")
+			CHECK(vmu, locale, "de_DE.UTF-8")
+			CHECK(vmu, zonetag, "european")
+		}
+	}
+	AST_LIST_UNLOCK(&users);
+
+#undef CHECK
+
+	/* restore config */
+	load_config(1); /* this might say "Failed to load configuration file." */
+
+cleanup:
+	unlink(config_filename);
+	return res;
+}
+
+AST_TEST_DEFINE(test_voicemail_vm_info)
+{
+	struct ast_vm_user *vmu;
+	struct ast_channel *chan = NULL;
+	const char testcontext[] = "test";
+	const char testmailbox[] = "00000000";
+	const char vminfo_cmd[] = "VM_INFO";
+	char vminfo_buf[256], vminfo_args[256];
+	int res = AST_TEST_PASS;
+	int test_ret = 0;
+	int test_counter = 0;
+
+	struct {
+		char *vminfo_test_args;
+		char *vminfo_expected;
+		int vminfo_ret;
+	} test_items[] = {
+		{ "", "", -1 },				/* Missing argument */
+		{ "00000000@test,badparam", "", -1 },	/* Wrong argument */
+		{ "00000000@test", "", -1 },		/* Missing argument */
+		{ "00000000@test,exists", "1", 0 },
+		{ "11111111@test,exists", "0", 0 },	/* Invalid mailbox */
+		{ "00000000@test,email", "vm-info-test@example.net", 0 },
+		{ "11111111@test,email", "", 0 },	/* Invalid mailbox */
+		{ "00000000@test,fullname", "Test Framework Mailbox", 0 },
+		{ "00000000@test,pager", "vm-info-pager-test@example.net", 0 },
+		{ "00000000@test,locale", "en_US", 0 },
+		{ "00000000@test,tz", "central", 0 },
+		{ "00000000@test,language", "en", 0 },
+		{ "00000000@test,password", "9876", 0 },
+	};
+
+	switch (cmd) {
+		case TEST_INIT:
+			info->name = "test_voicemail_vm_info";
+			info->category = "/apps/app_voicemail/";
+			info->summary = "VM_INFO unit test";
+			info->description =
+				"This tests passing various parameters to VM_INFO";
+			return AST_TEST_NOT_RUN;
+		case TEST_EXECUTE:
+			break;
+	}
+
+	if (!(chan = ast_dummy_channel_alloc())) {
+		ast_test_status_update(test, "Unable to create dummy channel\n");
+		return AST_TEST_FAIL;
+	}
+
+	if (!(vmu = find_user(NULL, testcontext, testmailbox)) &&
+			!(vmu = find_or_create(testcontext, testmailbox))) {
+		ast_test_status_update(test, "Cannot create vmu structure\n");
+		chan = ast_channel_unref(chan);
+		return AST_TEST_FAIL;
+	}
+
+	populate_defaults(vmu);
+
+	ast_copy_string(vmu->email, "vm-info-test@example.net", sizeof(vmu->email));
+	ast_copy_string(vmu->fullname, "Test Framework Mailbox", sizeof(vmu->fullname));
+	ast_copy_string(vmu->pager, "vm-info-pager-test@example.net", sizeof(vmu->pager));
+	ast_copy_string(vmu->language, "en", sizeof(vmu->language));
+	ast_copy_string(vmu->zonetag, "central", sizeof(vmu->zonetag));
+	ast_copy_string(vmu->locale, "en_US", sizeof(vmu->zonetag));
+	ast_copy_string(vmu->password, "9876", sizeof(vmu->password));
+
+	for (test_counter = 0; test_counter < ARRAY_LEN(test_items); test_counter++) {
+		ast_copy_string(vminfo_args, test_items[test_counter].vminfo_test_args, sizeof(vminfo_args));
+		test_ret = acf_vm_info(chan, vminfo_cmd, vminfo_args, vminfo_buf, sizeof(vminfo_buf));
+		if (strcmp(vminfo_buf, test_items[test_counter].vminfo_expected)) {
+			ast_test_status_update(test, "VM_INFO respose was: '%s', but expected: '%s'\n", vminfo_buf, test_items[test_counter].vminfo_expected);
+			res = AST_TEST_FAIL;
+		}
+		if (!(test_ret == test_items[test_counter].vminfo_ret)) {
+			ast_test_status_update(test, "VM_INFO return code was: '%i', but expected '%i'\n", test_ret, test_items[test_counter].vminfo_ret);
+			res = AST_TEST_FAIL;
+		}
+	}
+
+	chan = ast_channel_unref(chan);
+	return res;
+}
 #endif /* defined(TEST_FRAMEWORK) */
 
 static int reload(void)
@@ -12931,6 +13267,7 @@ static int unload_module(void)
 	res |= ast_unregister_application(app4);
 	res |= ast_unregister_application(sayname_app);
 	res |= ast_custom_function_unregister(&mailbox_exists_acf);
+	res |= ast_custom_function_unregister(&vm_info_acf);
 	res |= ast_manager_unregister("VoicemailUsersList");
 	res |= ast_data_unregister(NULL);
 #ifdef TEST_FRAMEWORK
@@ -12938,6 +13275,8 @@ static int unload_module(void)
 	res |= AST_TEST_UNREGISTER(test_voicemail_msgcount);
 	res |= AST_TEST_UNREGISTER(test_voicemail_vmuser);
 	res |= AST_TEST_UNREGISTER(test_voicemail_notify_endl);
+	res |= AST_TEST_UNREGISTER(test_voicemail_load_config);
+	res |= AST_TEST_UNREGISTER(test_voicemail_vm_info);
 #endif
 	ast_cli_unregister_multiple(cli_voicemail, ARRAY_LEN(cli_voicemail));
 	ast_uninstall_vm_functions();
@@ -12981,12 +13320,15 @@ static int load_module(void)
 	res |= ast_register_application_xml(app4, vmauthenticate);
 	res |= ast_register_application_xml(sayname_app, vmsayname_exec);
 	res |= ast_custom_function_register(&mailbox_exists_acf);
+	res |= ast_custom_function_register(&vm_info_acf);
 	res |= ast_manager_register_xml("VoicemailUsersList", EVENT_FLAG_CALL | EVENT_FLAG_REPORTING, manager_list_voicemail_users);
 #ifdef TEST_FRAMEWORK
 	res |= AST_TEST_REGISTER(test_voicemail_vmsayname);
 	res |= AST_TEST_REGISTER(test_voicemail_msgcount);
 	res |= AST_TEST_REGISTER(test_voicemail_vmuser);
 	res |= AST_TEST_REGISTER(test_voicemail_notify_endl);
+	res |= AST_TEST_REGISTER(test_voicemail_load_config);
+	res |= AST_TEST_REGISTER(test_voicemail_vm_info);
 #endif
 
 	if (res)
