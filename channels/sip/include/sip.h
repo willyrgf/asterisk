@@ -34,6 +34,7 @@
 #include "asterisk/astobj.h"
 #include "asterisk/indications.h"
 #include "asterisk/security_events.h"
+#include "asterisk/features.h"
 
 #ifndef FALSE
 #define FALSE    0
@@ -182,6 +183,7 @@
  */
 /*@{*/
 #define DEFAULT_CONTEXT        "default"  /*!< The default context for [general] section as well as devices */
+#define DEFAULT_RECORD_FEATURE   "automon"  /*!< The default feature specified for use with INFO */
 #define DEFAULT_MOHINTERPRET   "default"  /*!< The default music class */
 #define DEFAULT_MOHSUGGEST     ""
 #define DEFAULT_VMEXTEN        "asterisk" /*!< Default voicemail extension */
@@ -207,7 +209,7 @@
 #define DEFAULT_NOTIFYRINGING  TRUE     /*!< Notify devicestate system on ringing state */
 #define DEFAULT_NOTIFYCID      DISABLED	/*!< Include CID with ringing notifications */
 #define DEFAULT_PEDANTIC       TRUE     /*!< Follow SIP standards for dialog matching */
-#define DEFAULT_AUTOCREATEPEER FALSE    /*!< Don't create peers automagically */
+#define DEFAULT_AUTOCREATEPEER AUTOPEERS_DISABLED    /*!< Don't create peers automagically */
 #define	DEFAULT_MATCHEXTERNADDRLOCALLY FALSE /*!< Match extern IP locally default setting */
 #define DEFAULT_QUALIFY        FALSE    /*!< Don't monitor devices */
 #define DEFAULT_CALLEVENTS     FALSE    /*!< Extra manager SIP call events */
@@ -556,6 +558,14 @@ enum sip_transport {
 	SIP_TRANSPORT_TLS = 1 << 2,    /*!< TCP/TLS - reliable and secure transport for signalling */
 };
 
+/*! \brief Automatic peer registration behavior
+*/
+enum autocreatepeer_mode {
+	AUTOPEERS_DISABLED = 0,		/*!< Automatic peer creation disabled */
+	AUTOPEERS_VOLATILE,			/*!< Automatic peers dropped on sip reload (pre-1.8 behavior) */
+	AUTOPEERS_PERSIST			/*!< Automatic peers survive sip configuration reload */
+};
+
 /*! \brief States whether a SIP message can create a dialog in Asterisk. */
 enum can_create_dialog {
 	CAN_NOT_CREATE_DIALOG,
@@ -709,7 +719,7 @@ struct sip_settings {
 	int rtautoclear;            /*!< Realtime ?? */
 	int directrtpsetup;         /*!< Enable support for Direct RTP setup (no re-invites) */
 	int pedanticsipchecking;    /*!< Extra checking ?  Default off */
-	int autocreatepeer;         /*!< Auto creation of peers at registration? Default off. */
+	enum autocreatepeer_mode autocreatepeer;  /*!< Auto creation of peers at registration? Default off. */
 	int srvlookup;              /*!< SRV Lookup on or off. Default is on */
 	int allowguest;             /*!< allow unauthenticated peers to connect? */
 	int alwaysauthreject;       /*!< Send 401 Unauthorized for all failing requests */
@@ -736,6 +746,8 @@ struct sip_settings {
 	struct sip_proxy outboundproxy; /*!< Outbound proxy */
 	char default_context[AST_MAX_CONTEXT];
 	char default_subscribecontext[AST_MAX_CONTEXT];
+	char default_record_on_feature[FEATURE_MAX_LEN];
+	char default_record_off_feature[FEATURE_MAX_LEN];
 	struct ast_ha *contact_ha;  /*! \brief Global list of addresses dynamic peers are not allowed to use */
 	struct ast_format_cap *caps; /*!< Supported codecs */
 	int tcp_enabled;
@@ -1235,6 +1247,8 @@ struct sip_peer {
 		AST_STRING_FIELD(engine);       /*!<  RTP Engine to use */
 		AST_STRING_FIELD(unsolicited_mailbox);  /*!< Mailbox to store received unsolicited MWI NOTIFY messages information in */
 		AST_STRING_FIELD(zone);         /*!< Tonezone for this device */
+		AST_STRING_FIELD(record_on_feature); /*!< Feature to use when receiving INFO with record: on during a call */
+		AST_STRING_FIELD(record_off_feature); /*!< Feature to use when receiving INFO with record: off during a call */
 		);
 	struct sip_socket socket;       /*!< Socket used for this peer */
 	enum sip_transport default_outbound_transport;   /*!< Peer Registration may change the default outbound transport.
