@@ -21,12 +21,20 @@ ConfBridge
  * Added menu action participant_count.  This will playback the number of current
    participants in a conference.
 
+Voicemail
+------------------
+ * Addition of the VM_INFO function - see Dialplan function changes
+ * The imapserver, imapport, and imapflags configuration options can now be
+   overriden on a user by user basis.
+
 SIP Changes
 -----------
  * Asterisk will no longer substitute CID number for CID name into display
    name field if CID number exists without a CID name. This change improves
    compatibility with certain device features such as Avaya IP500's directory
    lookup service.
+ * A new setting for autocreatepeer (autocreatepeer=persistent) allows peers
+   created using that setting to not be removed during SIP reload.
 
 Chan_local changes
 ------------------
