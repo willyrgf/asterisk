@@ -2222,7 +2222,7 @@ static struct ast_tcptls_session_args sip_tls_desc = {
 	\return Always returns 0 */
 #define append_history(p, event, fmt , args... )	append_history_full(p, "%-15s " fmt, event, ## args)
 
-struct sip_pvt *dialog_ref_debug(struct sip_pvt *p, char *tag, char *file, int line, const char *func)
+struct sip_pvt *dialog_ref_debug(struct sip_pvt *p, const char *tag, char *file, int line, const char *func)
 {
 	if (p)
 #ifdef REF_DEBUG
@@ -2235,7 +2235,7 @@ struct sip_pvt *dialog_ref_debug(struct sip_pvt *p, char *tag, char *file, int l
 	return p;
 }
 
-struct sip_pvt *dialog_unref_debug(struct sip_pvt *p, char *tag, char *file, int line, const char *func)
+struct sip_pvt *dialog_unref_debug(struct sip_pvt *p, const char *tag, char *file, int line, const char *func)
 {
 	if (p)
 #ifdef REF_DEBUG
@@ -4116,14 +4116,16 @@ static int send_provisional_keepalive_full(struct sip_pvt *pvt, int with_sdp)
 	return 0;
 }
 
-static int send_provisional_keepalive(const void *data) {
+static int send_provisional_keepalive(const void *data)
+{
 	struct sip_pvt *pvt = (struct sip_pvt *) data;
 
 	return send_provisional_keepalive_full(pvt, 0);
 }
 
-static int send_provisional_keepalive_with_sdp(const void *data) {
-	struct sip_pvt *pvt = (void *)data;
+static int send_provisional_keepalive_with_sdp(const void *data)
+{
+	struct sip_pvt *pvt = (void *) data;
 
 	return send_provisional_keepalive_full(pvt, 1);
 }
