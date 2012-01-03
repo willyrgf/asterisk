@@ -207,35 +207,39 @@ were called to appear in /tmp/refs, you can do this sort of thing:
 #ifdef REF_DEBUG
 #define dialog_ref(arg1,arg2) dialog_ref_debug((arg1),(arg2), __FILE__, __LINE__, __PRETTY_FUNCTION__)
 #define dialog_unref(arg1,arg2) dialog_unref_debug((arg1),(arg2), __FILE__, __LINE__, __PRETTY_FUNCTION__)
-static struct sip_pvt *dialog_ref_debug(struct sip_pvt *p, char *tag, const char *file, int line, const char *func)
+static struct sip_pvt *dialog_ref_debug(struct sip_pvt *p, const char *tag, const char *file, int line, const char *func)
 {
-	if (p)
+	if (p) {
 		ao2_ref_debug(p, 1, tag, file, line, func);
-	else
+	} else {
 		ast_log(LOG_ERROR, "Attempt to Ref a null pointer\n");
+	}
 	return p;
 }
 
-static struct sip_pvt *dialog_unref_debug(struct sip_pvt *p, char *tag, const char *file, int line, const char *func)
+static struct sip_pvt *dialog_unref_debug(struct sip_pvt *p, const char *tag, const char *file, int line, const char *func)
 {
-	if (p)
+	if (p) {
 		ao2_ref_debug(p, -1, tag, file, line, func);
+	}
 	return NULL;
 }
 #else
-static struct sip_pvt *dialog_ref(struct sip_pvt *p, char *tag)
+static struct sip_pvt *dialog_ref(struct sip_pvt *p, const char *tag)
 {
-	if (p)
+	if (p) {
 		ao2_ref(p, 1);
-	else
+	} else {
 		ast_log(LOG_ERROR, "Attempt to Ref a null pointer\n");
+	}
 	return p;
 }
 
-static struct sip_pvt *dialog_unref(struct sip_pvt *p, char *tag)
+static struct sip_pvt *dialog_unref(struct sip_pvt *p, const char *tag)
 {
-	if (p)
+	if (p) {
 		ao2_ref(p, -1);
+	}
 	return NULL;
 }
 #endif
@@ -332,19 +336,22 @@ Example:
 
 	*//* Unlink us from the owner (channel) if we have one *//*
 	if (dialog->owner) {
-		if (lockowner)
+		if (lockowner) {
 			ast_channel_lock(dialog->owner);
+		}
 		ast_debug(1, "Detaching from channel %s\n", dialog->owner->name);
 		dialog->owner->tech_pvt = dialog_unref(dialog->owner->tech_pvt, "resetting channel dialog ptr in unlink_all");
-		if (lockowner)
+		if (lockowner) {
 			ast_channel_unlock(dialog->owner);
+		}
 	}
 	if (dialog->registry) {
-		if (dialog->registry->call == dialog)
+		if (dialog->registry->call == dialog) {
 			dialog->registry->call = dialog_unref(dialog->registry->call, "nulling out the registry's call dialog field in unlink_all");
+		}
 		dialog->registry = registry_unref(dialog->registry, "delete dialog->registry");
 	}
-    ...
+	...
  	dialog_unref(dialog, "Let's unbump the count in the unlink so the poor pvt can disappear if it is time");
 
 In the above code, the ao2_t_unlink could end up destroying the dialog
