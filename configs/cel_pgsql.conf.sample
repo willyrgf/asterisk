@@ -48,9 +48,10 @@
 ;	peeraccount
 ;	uniqueid
 ;	linkedid
-;	amaflag  (an int)
+;	amaflags  (an int)
 ;	userfield
 ;	peer
+;	extra
 
 
 [global]
