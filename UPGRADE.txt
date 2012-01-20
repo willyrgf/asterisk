@@ -22,6 +22,10 @@
 
 From 10 to 11:
 
+Parking:
+ - The comebacktoorigin setting must now be set per parking lot. The setting in
+   the general section will not be applied automatically to each parking lot.
+
 Dialplan Functions:
  - MAILBOX_EXISTS has been deprecated. Use VM_INFO with the 'exists' parameter
    instead.
@@ -48,6 +52,9 @@ SIP
 ===
  - A new option "tonezone" for setting default tonezone for the channel driver
    or individual devices
+ - A new manager event, "SessionTimeout" has been added and is triggered when
+   a call is terminated due to RTP stream inactivity or SIP session timer
+   expiration.
 
 users.conf:
  - A defined user with hasvoicemail=yes now finally uses a Gosub to stdexten
