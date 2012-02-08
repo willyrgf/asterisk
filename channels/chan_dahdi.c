@@ -12060,6 +12060,7 @@ static int pri_create_trunkgroup(int trunkgroup, int *channels)
 		}
 		if (ioctl(fd, DAHDI_GET_PARAMS, &p)) {
 			ast_log(LOG_WARNING, "Failed to get channel parameters for channel %d: %s\n", channels[y], strerror(errno));
+			close(fd);
 			return -1;
 		}
 		if (ioctl(fd, DAHDI_SPANSTAT, &si)) {
