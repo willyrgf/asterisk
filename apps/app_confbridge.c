@@ -614,7 +614,7 @@ static int announce_user_count(struct conference_bridge *conference_bridge, stru
 				"")) {
 				return -1;
 			}
-		} else {
+		} else if (ast_fileexists(there_are, NULL, NULL) && ast_fileexists(other_in_party, NULL, NULL)) {
 			play_sound_file(conference_bridge, there_are);
 			play_sound_number(conference_bridge, conference_bridge->users - 1);
 			play_sound_file(conference_bridge, other_in_party);
@@ -1146,6 +1146,12 @@ static int alloc_playback_chan(struct conference_bridge *conference_bridge)
 static int play_sound_helper(struct conference_bridge *conference_bridge, const char *filename, int say_number)
 {
 	struct ast_channel *underlying_channel;
+
+	/* Do not waste resources trying to play files that do not exist */
+	if (!ast_fileexists(filename, NULL, NULL)) {
+		ast_log(LOG_WARNING, "File %s does not exist in any format\n", filename);
+		return 0;
+	}
 
 	ast_mutex_lock(&conference_bridge->playback_lock);
 	if (!(conference_bridge->playback_chan)) {
@@ -1721,15 +1727,15 @@ static int action_dialplan_exec(struct ast_bridge_channel *bridge_channel, struc
 	ast_channel_lock(bridge_channel->chan);
 
 	/*save off*/
-	exten = ast_strdupa(bridge_channel->chan->exten);
-	context = ast_strdupa(bridge_channel->chan->context);
+	exten = ast_strdupa(ast_channel_exten(bridge_channel->chan));
+	context = ast_strdupa(ast_channel_context(bridge_channel->chan));
 	priority = bridge_channel->chan->priority;
 	pbx = bridge_channel->chan->pbx;
 	bridge_channel->chan->pbx = NULL;
 
 	/*set new*/
-	ast_copy_string(bridge_channel->chan->exten, menu_action->data.dialplan_args.exten, sizeof(bridge_channel->chan->exten));
-	ast_copy_string(bridge_channel->chan->context, menu_action->data.dialplan_args.context, sizeof(bridge_channel->chan->context));
+	ast_channel_exten_set(bridge_channel->chan, menu_action->data.dialplan_args.exten);
+	ast_channel_context_set(bridge_channel->chan, menu_action->data.dialplan_args.context);
 	bridge_channel->chan->priority = menu_action->data.dialplan_args.priority;
 
 	ast_channel_unlock(bridge_channel->chan);
@@ -1740,8 +1746,8 @@ static int action_dialplan_exec(struct ast_bridge_channel *bridge_channel, struc
 	/*restore*/
 	ast_channel_lock(bridge_channel->chan);
 
-	ast_copy_string(bridge_channel->chan->exten, exten, sizeof(bridge_channel->chan->exten));
-	ast_copy_string(bridge_channel->chan->context, context, sizeof(bridge_channel->chan->context));
+	ast_channel_exten_set(bridge_channel->chan, exten);
+	ast_channel_context_set(bridge_channel->chan, context);
 	bridge_channel->chan->priority = priority;
 	bridge_channel->chan->pbx = pbx;
 
