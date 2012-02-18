@@ -1309,7 +1309,7 @@ int ast_format_attr_reg_interface(const struct ast_format_attr_interface *interf
 	wrapper->id = interface->id;
 
 	/* The write lock is already held. */
-	ao2_link_nolock(interfaces, wrapper);
+	ao2_link_flags(interfaces, wrapper, OBJ_NOLOCK);
 	ao2_unlock(interfaces);
 
 	ao2_ref(wrapper, -1);

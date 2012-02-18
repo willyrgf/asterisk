@@ -856,6 +856,7 @@ int ao2_container_count(struct ao2_container *c);
  *
  * \param container The container to operate on.
  * \param obj The object to be added.
+ * \param flags search_flags to control linking the object.  (OBJ_NOLOCK)
  * \param tag used for debugging.
  *
  * \retval NULL on errors.
@@ -870,19 +871,19 @@ int ao2_container_count(struct ao2_container *c);
  */
 #ifdef REF_DEBUG
 
-#define ao2_t_link(container, obj, tag)        __ao2_link_debug((container), (obj), 0, (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__)
-#define ao2_link(container, obj)               __ao2_link_debug((container), (obj), 0, "",  __FILE__, __LINE__, __PRETTY_FUNCTION__)
+#define ao2_t_link(container, obj, tag)					__ao2_link_debug((container), (obj), 0, (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__)
+#define ao2_link(container, obj)						__ao2_link_debug((container), (obj), 0, "",  __FILE__, __LINE__, __PRETTY_FUNCTION__)
 
-#define ao2_t_link_nolock(container, obj, tag) __ao2_link_debug((container), (obj), OBJ_NOLOCK, (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__)
-#define ao2_link_nolock(container, obj)        __ao2_link_debug((container), (obj), OBJ_NOLOCK, "",  __FILE__, __LINE__, __PRETTY_FUNCTION__)
+#define ao2_t_link_flags(container, obj, flags, tag)	__ao2_link_debug((container), (obj), (flags), (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__)
+#define ao2_link_flags(container, obj, flags)			__ao2_link_debug((container), (obj), (flags), "",  __FILE__, __LINE__, __PRETTY_FUNCTION__)
 
 #else
 
-#define ao2_t_link(container, obj, tag)        __ao2_link((container), (obj), 0)
-#define ao2_link(container, obj)               __ao2_link((container), (obj), 0)
+#define ao2_t_link(container, obj, tag)					__ao2_link((container), (obj), 0)
+#define ao2_link(container, obj)						__ao2_link((container), (obj), 0)
 
-#define ao2_t_link_nolock(container, obj, tag) __ao2_link((container), (obj), OBJ_NOLOCK)
-#define ao2_link_nolock(container, obj)        __ao2_link((container), (obj), OBJ_NOLOCK)
+#define ao2_t_link_flags(container, obj, flags, tag)	__ao2_link((container), (obj), (flags))
+#define ao2_link_flags(container, obj, flags)			__ao2_link((container), (obj), (flags))
 
 #endif
 
@@ -894,6 +895,7 @@ void *__ao2_link(struct ao2_container *c, void *newobj, int flags);
  *
  * \param container The container to operate on.
  * \param obj The object to unlink.
+ * \param flags search_flags to control unlinking the object.  (OBJ_NOLOCK)
  * \param tag used for debugging.
  *
  * \retval NULL, always
@@ -908,19 +910,19 @@ void *__ao2_link(struct ao2_container *c, void *newobj, int flags);
  */
 #ifdef REF_DEBUG
 
-#define ao2_t_unlink(container, obj, tag)        __ao2_unlink_debug((container), (obj), 0, (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__)
-#define ao2_unlink(container, obj)               __ao2_unlink_debug((container), (obj), 0, "",  __FILE__, __LINE__, __PRETTY_FUNCTION__)
+#define ao2_t_unlink(container, obj, tag)				__ao2_unlink_debug((container), (obj), 0, (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__)
+#define ao2_unlink(container, obj)						__ao2_unlink_debug((container), (obj), 0, "",  __FILE__, __LINE__, __PRETTY_FUNCTION__)
 
-#define ao2_t_unlink_nolock(container, obj, tag) __ao2_unlink_debug((container), (obj), OBJ_NOLOCK, (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__)
-#define ao2_unlink_nolock(container, obj)        __ao2_unlink_debug((container), (obj), OBJ_NOLOCK, "",  __FILE__, __LINE__, __PRETTY_FUNCTION__)
+#define ao2_t_unlink_flags(container, obj, flags, tag)	__ao2_unlink_debug((container), (obj), (flags), (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__)
+#define ao2_unlink_flags(container, obj, flags)			__ao2_unlink_debug((container), (obj), (flags), "",  __FILE__, __LINE__, __PRETTY_FUNCTION__)
 
 #else
 
-#define ao2_t_unlink(container, obj, tag)        __ao2_unlink((container), (obj), 0)
-#define ao2_unlink(container, obj)               __ao2_unlink((container), (obj), 0)
+#define ao2_t_unlink(container, obj, tag)				__ao2_unlink((container), (obj), 0)
+#define ao2_unlink(container, obj)						__ao2_unlink((container), (obj), 0)
 
-#define ao2_t_unlink_nolock(container, obj, tag) __ao2_unlink((container), (obj), OBJ_NOLOCK)
-#define ao2_unlink_nolock(container, obj)        __ao2_unlink((container), (obj), OBJ_NOLOCK)
+#define ao2_t_unlink_flags(container, obj, flags, tag)	__ao2_unlink((container), (obj), (flags))
+#define ao2_unlink_flags(container, obj, flags)			__ao2_unlink((container), (obj), (flags))
 
 #endif
 
