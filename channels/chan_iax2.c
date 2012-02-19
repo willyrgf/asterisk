@@ -165,7 +165,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 				</enumlist>
 			</parameter>
 		</syntax>
-		<description></description>
+		<description>
+			<para>Gets information associated with the specified IAX2 peer.</para>
+		</description>
 		<see-also>
 			<ref type="function">SIPPEER</ref>
 		</see-also>
@@ -177,7 +179,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		<syntax>
 			<parameter name="varname" required="true" />
 		</syntax>
-		<description></description>
+		<description>
+			<para>Gets or sets a variable that is sent to a remote IAX2 peer during call setup.</para>
+		</description>
 	</function>
 	<manager name="IAXpeers" language="en_US">
 		<synopsis>
@@ -12407,6 +12411,7 @@ static struct iax2_peer *build_peer(const char *name, struct ast_variable *v, st
 		peer->pokeexpire = -1;
 		peer->sockfd = defaultsockfd;
 		peer->addr.ss.ss_family = AF_INET;
+		peer->addr.len = sizeof(struct sockaddr_in);
 		if (ast_string_field_init(peer, 32))
 			peer = peer_unref(peer);
 	}
