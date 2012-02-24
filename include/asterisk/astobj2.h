@@ -392,13 +392,13 @@ typedef void (*ao2_destructor_fn)(void *);
 
 /*! \brief Options available when allocating an ao2 object. */
 enum ao2_alloc_opts {
-	/*! Ao2 object has a recursive mutex lock associated with it. */
+	/*! The ao2 object has a recursive mutex lock associated with it. */
 	AO2_ALLOC_OPT_LOCK_MUTEX = (0 << 0),
-	/*! Ao2 object has a non-recursive read/write lock associated with it. */
+	/*! The ao2 object has a non-recursive read/write lock associated with it. */
 	AO2_ALLOC_OPT_LOCK_RWLOCK = (1 << 0),
-	/*! Ao2 object has no lock associated with it. */
+	/*! The ao2 object has no lock associated with it. */
 	AO2_ALLOC_OPT_LOCK_NOLOCK = (2 << 0),
-	/*! Ao2 object locking option field mask. */
+	/*! The ao2 object locking option field mask. */
 	AO2_ALLOC_OPT_LOCK_MASK = (3 << 0),
 };
 
@@ -407,8 +407,8 @@ enum ao2_alloc_opts {
  *
  * \param data_size The sizeof() of the user-defined structure.
  * \param destructor_fn The destructor function (can be NULL)
- * \param options Ao2 object options (See enum ao2_alloc_opts)
- * \param debug_msg Ao2 object debug tracing message.
+ * \param options The ao2 object options (See enum ao2_alloc_opts)
+ * \param debug_msg An ao2 object debug tracing message.
  * \return A pointer to user-data.
  *
  * \details
@@ -596,7 +596,7 @@ Operations on container include:
     OBJ_POINTER - if set, 'arg' is an object pointer, and a hash table
                   search will be done. If not, a traversal is done.
     OBJ_KEY - if set, 'arg', is a hashable item that is not an object.
- 	          Similar to OBJ_POINTER and mutually exclusive.
+              Similar to OBJ_POINTER and mutually exclusive.
 
   -  \b ao2_callback(c, flags, fn, arg)
     apply fn(obj, arg) to all objects in the container.
@@ -611,7 +611,7 @@ Operations on container include:
                         search will be done. If not, a traversal is done through
                         all the hash table 'buckets'..
          OBJ_KEY      - if set, 'arg', is a hashable item that is not an object.
- 	                    Similar to OBJ_POINTER and mutually exclusive.
+                        Similar to OBJ_POINTER and mutually exclusive.
       - fn is a func that returns int, and takes 3 args:
         (void *obj, void *arg, int flags);
           obj is an object
