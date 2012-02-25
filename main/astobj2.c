@@ -45,7 +45,7 @@ struct __priv_data {
 	ao2_destructor_fn destructor_fn;
 	/*! User data size for stats */
 	size_t data_size;
-	/*! Ao2 object option flags */
+	/*! The ao2 object option flags */
 	uint32_t options;
 	/*! magic number.  This is used to verify that a pointer passed in is a
 	 *  valid astobj2 */
@@ -208,7 +208,7 @@ int __ao2_lock(void *user_data, enum ao2_lock_req lock_how, const char *file, co
 		}
 		break;
 	case AO2_ALLOC_OPT_LOCK_NOLOCK:
-		/* Ao2 object has no lock. */
+		/* The ao2 object has no lock. */
 		break;
 	default:
 		ast_log(__LOG_ERROR, file, line, func, "Invalid lock option on ao2 object %p\n",
@@ -257,7 +257,7 @@ int __ao2_unlock(void *user_data, const char *file, const char *func, int line, 
 #endif
 		break;
 	case AO2_ALLOC_OPT_LOCK_NOLOCK:
-		/* Ao2 object has no lock. */
+		/* The ao2 object has no lock. */
 		break;
 	default:
 		ast_log(__LOG_ERROR, file, line, func, "Invalid lock option on ao2 object %p\n",
@@ -314,7 +314,7 @@ int __ao2_trylock(void *user_data, enum ao2_lock_req lock_how, const char *file,
 		}
 		break;
 	case AO2_ALLOC_OPT_LOCK_NOLOCK:
-		/* Ao2 object has no lock. */
+		/* The ao2 object has no lock. */
 		return 0;
 	default:
 		ast_log(__LOG_ERROR, file, line, func, "Invalid lock option on ao2 object %p\n",
@@ -328,17 +328,18 @@ int __ao2_trylock(void *user_data, enum ao2_lock_req lock_how, const char *file,
 
 /*!
  * \internal
- * \brief Adjust the possible RWLOCK to the requested level.
+ * \brief Adjust an object's lock to the requested level.
  *
- * \param user_data Ao2 object to adjust lock level.
+ * \param user_data An ao2 object to adjust lock level.
  * \param lock_how What level to adjust lock.
  * \param keep_stronger TRUE if keep original lock level if it is stronger.
  *
  * \pre The ao2 object is already locked.
  *
  * \details
- * RWLOCKs have their lock level adjusted to the specified level
- * if it is not already there.
+ * An ao2 object with a RWLOCK will have its lock level adjusted
+ * to the specified level if it is not already there.  An ao2
+ * object with a different type of lock is not affected.
  *
  * \return Original lock level.
  */
