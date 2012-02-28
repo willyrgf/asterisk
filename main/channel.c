@@ -1097,7 +1097,7 @@ __ast_channel_alloc_ap(int needqueue, int state, const char *cid_num, const char
 		
 	ast_channel_context_set(tmp, S_OR(context, "default"));
 	ast_channel_exten_set(tmp, S_OR(exten, "s"));
-	ast_channel_priority_set(tmp, -1);
+	ast_channel_priority_set(tmp, 1);
 
 	ast_channel_cdr_set(tmp, ast_cdr_alloc());
 	ast_cdr_init(ast_channel_cdr(tmp), tmp);
@@ -5370,6 +5370,16 @@ struct ast_channel *__ast_request_and_dial(const char *type, struct ast_format_c
 			ast_channel_unlock(chan);
 		}
 	}
+
+	/*
+	 * I seems strange to set the CallerID on an outgoing call leg
+	 * to whom we are calling, but this function's callers are doing
+	 * various Originate methods.  This call leg goes to the local
+	 * user.  Once the local user answers, the dialplan needs to be
+	 * able to access the CallerID from the CALLERID function as if
+	 * the local user had placed this call.
+	 */
+	ast_set_callerid(chan, cid_num, cid_name, cid_num);
 
 	ast_set_flag(ast_channel_cdr(chan), AST_CDR_FLAG_ORIGINATED);
 	ast_party_connected_line_set_init(&connected, &chan->connected);
