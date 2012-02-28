@@ -875,7 +875,7 @@ int ao2_container_dup(struct ao2_container *dest, struct ao2_container *src, enu
  * \retval NULL on error.
  */
 struct ao2_container *__ao2_container_clone(struct ao2_container *orig, enum search_flags flags);
-struct ao2_container *__ao2_container_clone_debug(struct ao2_container *orig, enum search_flags flags, const char *tag, char *file, int line, const char *funcname, int ref_debug);
+struct ao2_container *__ao2_container_clone_debug(struct ao2_container *orig, enum search_flags flags, const char *tag, const char *file, int line, const char *funcname, int ref_debug);
 #if defined(REF_DEBUG)
 
 #define ao2_t_container_clone(orig, flags, tag)	__ao2_container_clone_debug(orig, flags, tag, __FILE__, __LINE__, __PRETTY_FUNCTION__, 1)

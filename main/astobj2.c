@@ -1344,8 +1344,8 @@ int ao2_container_dup(struct ao2_container *dest, struct ao2_container *src, enu
 	int res = 0;
 
 	if (!(flags & OBJ_NOLOCK)) {
-		ao2_lock(src);
-		ao2_lock(dest);
+		ao2_rdlock(src);
+		ao2_wrlock(dest);
 	}
 	obj = __ao2_callback(src, OBJ_NOLOCK, dup_obj_cb, dest);
 	if (obj) {
@@ -1368,16 +1368,24 @@ int ao2_container_dup(struct ao2_container *dest, struct ao2_container *src, enu
 struct ao2_container *__ao2_container_clone(struct ao2_container *orig, enum search_flags flags)
 {
 	struct ao2_container *clone;
+	struct astobj2 *orig_obj;
+	unsigned int options;
 	int failed;
 
+	orig_obj = INTERNAL_OBJ(orig);
+	if (!orig_obj) {
+		return NULL;
+	}
+	options = orig_obj->priv_data.options;
+
 	/* Create the clone container with the same properties as the original. */
-	clone = __ao2_container_alloc(orig->n_buckets, orig->hash_fn, orig->cmp_fn);
+	clone = __ao2_container_alloc(options, orig->n_buckets, orig->hash_fn, orig->cmp_fn);
 	if (!clone) {
 		return NULL;
 	}
 
 	if (flags & OBJ_NOLOCK) {
-		ao2_lock(clone);
+		ao2_wrlock(clone);
 	}
 	failed = ao2_container_dup(clone, orig, flags);
 	if (flags & OBJ_NOLOCK) {
@@ -1391,20 +1399,28 @@ struct ao2_container *__ao2_container_clone(struct ao2_container *orig, enum sea
 	return clone;
 }
 
-struct ao2_container *__ao2_container_clone_debug(struct ao2_container *orig, enum search_flags flags, const char *tag, char *file, int line, const char *funcname, int ref_debug)
+struct ao2_container *__ao2_container_clone_debug(struct ao2_container *orig, enum search_flags flags, const char *tag, const char *file, int line, const char *funcname, int ref_debug)
 {
 	struct ao2_container *clone;
+	struct astobj2 *orig_obj;
+	unsigned int options;
 	int failed;
 
+	orig_obj = INTERNAL_OBJ(orig);
+	if (!orig_obj) {
+		return NULL;
+	}
+	options = orig_obj->priv_data.options;
+
 	/* Create the clone container with the same properties as the original. */
-	clone = __ao2_container_alloc_debug(orig->n_buckets, orig->hash_fn, orig->cmp_fn, tag,
-		file, line, funcname, ref_debug);
+	clone = __ao2_container_alloc_debug(options, orig->n_buckets, orig->hash_fn,
+		orig->cmp_fn, tag, file, line, funcname, ref_debug);
 	if (!clone) {
 		return NULL;
 	}
 
 	if (flags & OBJ_NOLOCK) {
-		ao2_lock(clone);
+		ao2_wrlock(clone);
 	}
 	failed = ao2_container_dup(clone, orig, flags);
 	if (flags & OBJ_NOLOCK) {
