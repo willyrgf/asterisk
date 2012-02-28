@@ -2440,7 +2440,7 @@ static int sip_tcptls_write(struct ast_tcptls_session_instance *tcptls_session, 
 		return XMIT_ERROR;
 	}
 
-	ast_mutex_lock(&tcptls_session->lock);
+	ao2_lock(tcptls_session);
 
 	if ((tcptls_session->fd == -1) ||
 		!(th = ao2_t_find(threadt, &tmp, OBJ_POINTER, "ao2_find, getting sip_threadinfo in tcp helper thread")) ||
@@ -2467,7 +2467,7 @@ static int sip_tcptls_write(struct ast_tcptls_session_instance *tcptls_session, 
 	}
 	ao2_unlock(th);
 
-	ast_mutex_unlock(&tcptls_session->lock);
+	ao2_unlock(tcptls_session);
 	ao2_t_ref(th, -1, "In sip_tcptls_write, unref threadinfo object after finding it");
 	return res;
 
@@ -2478,7 +2478,7 @@ tcptls_write_setup_error:
 	if (packet) {
 		ao2_t_ref(packet, -1, "could not allocate packet's data");
 	}
-	ast_mutex_unlock(&tcptls_session->lock);
+	ao2_unlock(tcptls_session);
 
 	return XMIT_ERROR;
 }
@@ -2692,9 +2692,9 @@ static void *_sip_tcp_helper_thread(struct ast_tcptls_session_instance *tcptls_s
 					}
 				}
 
-				ast_mutex_lock(&tcptls_session->lock);
+				ao2_lock(tcptls_session);
 				if (!fgets(buf, sizeof(buf), tcptls_session->f)) {
-					ast_mutex_unlock(&tcptls_session->lock);
+					ao2_unlock(tcptls_session);
 					if (after_poll) {
 						goto cleanup;
 					} else {
@@ -2702,7 +2702,7 @@ static void *_sip_tcp_helper_thread(struct ast_tcptls_session_instance *tcptls_s
 						continue;
 					}
 				}
-				ast_mutex_unlock(&tcptls_session->lock);
+				ao2_unlock(tcptls_session);
 				after_poll = 0;
 				if (me->stop) {
 					 goto cleanup;
@@ -2742,9 +2742,9 @@ static void *_sip_tcp_helper_thread(struct ast_tcptls_session_instance *tcptls_s
 						}
 					}
 
-					ast_mutex_lock(&tcptls_session->lock);
+					ao2_lock(tcptls_session);
 					if (!(bytes_read = fread(buf, 1, MIN(sizeof(buf) - 1, cl), tcptls_session->f))) {
-						ast_mutex_unlock(&tcptls_session->lock);
+						ao2_unlock(tcptls_session);
 						if (after_poll) {
 							goto cleanup;
 						} else {
@@ -2753,7 +2753,7 @@ static void *_sip_tcp_helper_thread(struct ast_tcptls_session_instance *tcptls_s
 						}
 					}
 					buf[bytes_read] = '\0';
-					ast_mutex_unlock(&tcptls_session->lock);
+					ao2_unlock(tcptls_session);
 					after_poll = 0;
 					if (me->stop) {
 						goto cleanup;
@@ -2823,10 +2823,10 @@ cleanup:
 	}
 
 	if (tcptls_session) {
-		ast_mutex_lock(&tcptls_session->lock);
+		ao2_lock(tcptls_session);
 		ast_tcptls_close_session_file(tcptls_session);
 		tcptls_session->parent = NULL;
-		ast_mutex_unlock(&tcptls_session->lock);
+		ao2_unlock(tcptls_session);
 
 		ao2_ref(tcptls_session, -1);
 		tcptls_session = NULL;
@@ -28380,10 +28380,11 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 			if (handle_t38_options(&peerflags[0], &mask[0], v, &peer->t38_maxdatagram)) {
 				continue;
 			}
-			if (!strcasecmp(v->name, "transport") && !ast_strlen_zero(v->value)) {
+			if (!strcasecmp(v->name, "transport")) {
 				char *val = ast_strdupa(v->value);
 				char *trans;
 
+				peer->transports = peer->default_outbound_transport = 0;
 				while ((trans = strsep(&val, ","))) {
 					trans = ast_skip_blanks(trans);
 
@@ -28394,7 +28395,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 					} else if (default_tls_cfg.enabled && !strncasecmp(trans, "tls", 3)) {
 						peer->transports |= SIP_TRANSPORT_TLS;
 					} else if (!strncasecmp(trans, "tcp", 3) || !strncasecmp(trans, "tls", 3)) {
-						ast_log(LOG_WARNING, "'%.3s' is not a valid transport type when %.3senabled=no. If no other is specified, the defaults from general will be used.\n", trans, trans);
+						ast_log(LOG_WARNING, "'%.3s' is not a valid transport type when %.3senable=no. If no other is specified, the defaults from general will be used.\n", trans, trans);
 					} else {
 						ast_log(LOG_NOTICE, "'%s' is not a valid transport type. if no other is specified, the defaults from general will be used.\n", trans);
 					}
@@ -29146,8 +29147,8 @@ static int reload_config(enum channelreloadreason reason)
 	memset(&default_prefs, 0 , sizeof(default_prefs));
 	memset(&sip_cfg.outboundproxy, 0, sizeof(struct sip_proxy));
 	sip_cfg.outboundproxy.force = FALSE;		/*!< Don't force proxy usage, use route: headers */
-	default_transports = 0;				/*!< Reset default transport to zero here, default value later on */
-	default_primary_transport = 0;			/*!< Reset default primary transport to zero here, default value later on */
+	default_transports = SIP_TRANSPORT_UDP;
+	default_primary_transport = SIP_TRANSPORT_UDP;
 	ourport_tcp = STANDARD_SIP_PORT;
 	ourport_tls = STANDARD_TLS_PORT;
 	externtcpport = STANDARD_SIP_PORT;
@@ -29345,10 +29346,11 @@ static int reload_config(enum channelreloadreason reason)
 			timerb_set = 1;
 		} else if (!strcasecmp(v->name, "t1min")) {
 			global_t1min = atoi(v->value);
-		} else if (!strcasecmp(v->name, "transport") && !ast_strlen_zero(v->value)) {
+		} else if (!strcasecmp(v->name, "transport")) {
 			char *val = ast_strdupa(v->value);
 			char *trans;
 
+			default_transports = default_primary_transport = 0;
 			while ((trans = strsep(&val, ","))) {
 				trans = ast_skip_blanks(trans);
 
