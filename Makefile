@@ -48,8 +48,8 @@ export ASTERISKVERSIONNUM
 DESTDIR?=$(INSTALL_PATH)
 export DESTDIR
 
-export INSTALL_PATH	# Additional prefix for the following paths
-export ASTETCDIR		# Path for config files
+export INSTALL_PATH       # Additional prefix for the following paths
+export ASTETCDIR          # Path for config files
 export ASTVARRUNDIR
 export ASTSPOOLDIR
 export ASTVARLIBDIR
@@ -65,20 +65,21 @@ export AGI_DIR
 export ASTCONFPATH
 export ASTKEYDIR
 
-export OSARCH			# Operating system
-export PROC			# Processor type
+export OSARCH             # Operating system
+export PROC               # Processor type
 
-export NOISY_BUILD		# Used in Makefile.rules
-export MENUSELECT_CFLAGS	# Options selected in menuselect.
-export AST_DEVMODE		# Set to "yes" for additional compiler
-                                # and runtime checks
+export NOISY_BUILD        # Used in Makefile.rules
+export MENUSELECT_CFLAGS  # Options selected in menuselect.
+export AST_DEVMODE        # Set to "yes" for additional compiler
+                          # and runtime checks
+export AST_DEVMODE_STRICT # Enables shadow warnings (-Wshadow)
 
-export _SOLINK			# linker flags for all shared objects
-export SOLINK			# linker flags for loadable modules
-export DYLINK			# linker flags for shared libraries
-export STATIC_BUILD		# Additional cflags, set to -static
-                                # for static builds. Probably
-                                # should go directly to ASTLDFLAGS
+export _SOLINK            # linker flags for all shared objects
+export SOLINK             # linker flags for loadable modules
+export DYLINK             # linker flags for shared libraries
+export STATIC_BUILD       # Additional cflags, set to -static
+                          # for static builds. Probably
+                          # should go directly to ASTLDFLAGS
 
 #--- paths to various commands
 export CC
@@ -224,6 +225,9 @@ ifeq ($(AST_DEVMODE),yes)
   _ASTCFLAGS+=-Wundef
   _ASTCFLAGS+=-Wmissing-format-attribute
   _ASTCFLAGS+=-Wformat=2
+  ifeq ($(AST_DEVMODE_STRICT),yes)
+    _ASTCFLAGS+=-Wshadow
+  endif
   ADDL_TARGETS+=validate-docs
 endif
 
