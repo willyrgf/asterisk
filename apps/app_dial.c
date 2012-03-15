@@ -1080,7 +1080,9 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 			ast_connected_line_copy_from_caller(&connected_caller, &outgoing->chan->caller);
 			ast_channel_unlock(outgoing->chan);
 			connected_caller.source = AST_CONNECTED_LINE_UPDATE_SOURCE_ANSWER;
-			ast_channel_update_connected_line(in, &connected_caller, NULL);
+			if (ast_channel_connected_line_macro(outgoing->chan, in, &connected_caller, 1, 0)) {
+				ast_channel_update_connected_line(in, &connected_caller, NULL);
+			}
 			ast_party_connected_line_free(&connected_caller);
 		}
 	}
@@ -1144,7 +1146,9 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 							ast_connected_line_copy_from_caller(&connected_caller, &c->caller);
 							ast_channel_unlock(c);
 							connected_caller.source = AST_CONNECTED_LINE_UPDATE_SOURCE_ANSWER;
-							ast_channel_update_connected_line(in, &connected_caller, NULL);
+							if (ast_channel_connected_line_macro(c, in, &connected_caller, 1, 0)) {
+								ast_channel_update_connected_line(in, &connected_caller, NULL);
+							}
 							ast_party_connected_line_free(&connected_caller);
 						}
 					}
@@ -1216,7 +1220,9 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 								ast_connected_line_copy_from_caller(&connected_caller, &c->caller);
 								ast_channel_unlock(c);
 								connected_caller.source = AST_CONNECTED_LINE_UPDATE_SOURCE_ANSWER;
-								ast_channel_update_connected_line(in, &connected_caller, NULL);
+								if (ast_channel_connected_line_macro(c, in, &connected_caller, 1, 0)) {
+									ast_channel_update_connected_line(in, &connected_caller, NULL);
+								}
 								ast_party_connected_line_free(&connected_caller);
 							}
 						}
