@@ -722,7 +722,7 @@ Operations on container include:
     OBJ_MULTIPLE - don't stop at first match
     OBJ_POINTER - if set, 'arg' is an object pointer, and a hash table
                   search will be done. If not, a traversal is done.
-    OBJ_KEY - if set, 'arg', is a hashable item that is not an object.
+    OBJ_KEY - if set, 'arg', is a container key item that is not an object.
               Similar to OBJ_POINTER and mutually exclusive.
 
   -  \b ao2_callback(c, flags, fn, arg)
@@ -737,7 +737,7 @@ Operations on container include:
          OBJ_POINTER  - if set, 'arg' is an object pointer, and a hash table
                         search will be done. If not, a traversal is done through
                         all the hash table 'buckets'..
-         OBJ_KEY      - if set, 'arg', is a hashable item that is not an object.
+         OBJ_KEY      - if set, 'arg', is a container key item that is not an object.
                         Similar to OBJ_POINTER and mutually exclusive.
       - fn is a func that returns int, and takes 3 args:
         (void *obj, void *arg, int flags);
@@ -795,32 +795,6 @@ to define callback and hash functions and their arguments.
  */
 
 /*! \brief
- * Type of a generic callback function
- * \param obj  pointer to the (user-defined part) of an object.
- * \param arg callback argument from ao2_callback()
- * \param flags flags from ao2_callback()
- *
- * The return values are a combination of enum _cb_results.
- * Callback functions are used to search or manipulate objects in a container.
- */
-typedef int (ao2_callback_fn)(void *obj, void *arg, int flags);
-
-/*! \brief
- * Type of a generic callback function
- * \param obj pointer to the (user-defined part) of an object.
- * \param arg callback argument from ao2_callback()
- * \param data arbitrary data from ao2_callback()
- * \param flags flags from ao2_callback()
- *
- * The return values are a combination of enum _cb_results.
- * Callback functions are used to search or manipulate objects in a container.
- */
-typedef int (ao2_callback_data_fn)(void *obj, void *arg, void *data, int flags);
-
-/*! \brief a very common callback is one that matches by address. */
-ao2_callback_fn ao2_match_by_addr;
-
-/*! \brief
  * A callback function will return a combination of CMP_MATCH and CMP_STOP.
  * The latter will terminate the search in a container.
  */
@@ -830,7 +804,7 @@ enum _cb_results {
 };
 
 /*! \brief
- * Flags passed to ao2_callback() and ao2_hash_fn() to modify its behaviour.
+ * Flags passed to ao2_callback(), ao2_hash_fn(), and ao2_sort_fn() to modify its behaviour.
  */
 enum search_flags {
 	/*! Unlink the object for which the callback function
@@ -875,25 +849,136 @@ enum search_flags {
 	 */
 	OBJ_NOLOCK = (1 << 5),
 	/*!
-	 * \brief The data is hashable, but is not an object.
+	 * \brief The data is a container key, but is not an object.
 	 *
 	 * \details
 	 * This can be used when you want to be able to pass custom data
-	 * to the container's stored ao2_hash_fn and ao2_find
+	 * to the container's stored ao2_hash_fn, ao2_sort_fn, and ao2_find
 	 * ao2_callback_fn functions that is not a full object, but
 	 * perhaps just a string.
 	 *
 	 * \note OBJ_KEY and OBJ_POINTER are mutually exclusive options.
 	 */
 	OBJ_KEY = (1 << 6),
+	/*! \brief Traverse in ascending order (First to last container object) */
+	OBJ_ORDER_ASCENDING = (0 << 7),
+	/*! \brief Traverse in decending order (Last to first container object) */
+	OBJ_ORDER_DECENDING = (1 << 7),
+	/*! \brief Traverse in pre-order (Node then childeren, for tree container) */
+	OBJ_ORDER_PRE = (2 << 7),
+	/*! \brief Traverse in post-order (Childeren then node, for tree container) */
+	OBJ_ORDER_POST = (3 << 7),
+	OBJ_ORDER_MASK = (3 << 7),
 };
 
 /*!
- * Type of a generic function to generate a hash value from an object.
- * flags is ignored at the moment. Eventually, it will include the
- * value of OBJ_POINTER passed to ao2_callback().
+ * \brief Options available when allocating an ao2 container object.
+ *
+ * \note Each option is open to some interpretation by the
+ * container type as long as it makes sence with the option
+ * name.
  */
-typedef int (ao2_hash_fn)(const void *obj, const int flags);
+enum ao2_container_opts {
+	/*!
+	 * \brief Insert objects at the end of the container.
+	 *
+	 * \note If an ao2_sort_fn is provided, the object is inserted
+	 * after any duplicates.
+	 *
+	 * \note Hash containers insert the object in the computed hash
+	 * bucket in the indicated manner.
+	 */
+	AO2_CONTAINER_ALLOC_OPT_INSERT_END = (0 << 0),
+	/*!
+	 * \brief Insert objects at the beginning of the container.
+	 *
+	 * \note If an ao2_sort_fn is provided, the object is inserted
+	 * before any duplicates.
+	 *
+	 * \note Hash containers insert the object in the computed hash
+	 * bucket in the indicated manner.
+	 */
+	AO2_CONTAINER_ALLOC_OPT_INSERT_BEGIN = (1 << 0),
+
+	/*!
+	 * \brief Allow duplicate keyed objects in container.
+	 */
+	AO2_CONTAINER_ALLOC_OPT_DUPS_ALLOW = (0 << 1),
+	/*!
+	 * \brief Reject duplicate keyed objects in container.
+	 */
+	AO2_CONTAINER_ALLOC_OPT_DUPS_REJECT = (1 << 1),
+	/*!
+	 * \brief Reject duplicate objects in container.
+	 *
+	 * \details Don't link the same object into the container twice.
+	 * However, you can link a different object with the same key.
+	 *
+	 * \note It is assumed that the objects are located where the
+	 * container key says they should be located.
+	 */
+	AO2_CONTAINER_ALLOC_OPT_DUPS_OBJ_REJECT = (2 << 1),
+	/*!
+	 * \brief Replace duplicate keyed objects in container.
+	 *
+	 * \details The existing duplicate object is removed and the new
+	 * object takes the old object's place.
+	 */
+	AO2_CONTAINER_ALLOC_OPT_DUPS_REPLACE = (3 << 1),
+	/*! \brief The ao2 container object duplicate option field mask. */
+	AO2_CONTAINER_ALLOC_OPT_DUPS_MASK = (3 << 1),
+};
+
+/*! \brief
+ * Type of a generic callback function
+ * \param obj  pointer to the (user-defined part) of an object.
+ * \param arg callback argument from ao2_callback()
+ * \param flags flags from ao2_callback()
+ *
+ * The return values are a combination of enum _cb_results.
+ * Callback functions are used to search or manipulate objects in a container.
+ */
+typedef int (ao2_callback_fn)(void *obj, void *arg, int flags);
+
+/*! \brief A common ao2_callback is one that matches by address. */
+int ao2_match_by_addr(void *obj, void *arg, int flags);
+
+/*! \brief
+ * Type of a generic callback function
+ * \param obj pointer to the (user-defined part) of an object.
+ * \param arg callback argument from ao2_callback()
+ * \param data arbitrary data from ao2_callback()
+ * \param flags flags from ao2_callback()
+ *
+ * The return values are a combination of enum _cb_results.
+ * Callback functions are used to search or manipulate objects in a container.
+ */
+typedef int (ao2_callback_data_fn)(void *obj, void *arg, void *data, int flags);
+
+/*!
+ * Type of a generic function to generate a hash value from an object.
+ *
+ * \param obj pointer to the (user-defined part) of an object.
+ * \param flags flags from ao2_callback()
+ *   OBJ_KEY - if set, 'obj', is a container key item that is not an object.
+ *
+ * \return Computed hash value.
+ */
+typedef int (ao2_hash_fn)(const void *obj, int flags);
+
+/*!
+ * \brief Type of generic container sort function.
+ *
+ * \param obj_left pointer to the (user-defined part) of an object.
+ * \param obj_right pointer to the (user-defined part) of an object.
+ * \param flags flags from ao2_callback()
+ *   OBJ_KEY - if set, 'obj_right', is a container key item that is not an object.
+ *
+ * \retval <0 if obj_left < obj_right
+ * \retval =0 if obj_left == obj_right
+ * \retval >0 if obj_left > obj_right
+ */
+typedef int (ao2_sort_fn)(const void *obj_left, const void *obj_right, int flags);
 
 /*! \name Object Containers
  * Here start declarations of containers.
@@ -910,7 +995,45 @@ struct ao2_container;
  *
  * \param options Container ao2 object options (See enum ao2_alloc_opts)
  * \param n_buckets Number of buckets for hash
- * \param hash_fn Pointer to a function computing a hash value.
+ * \param hash_fn Pointer to a function computing a hash value. (NULL if everyting goes in first bucket.)
+ * \param cmp_fn Pointer to a compare function used by ao2_find. (NULL to match everything)
+ * \param tag used for debugging.
+ *
+ * \return A pointer to a struct container.
+ *
+ * \note Destructor is set implicitly.
+ * \note This is legacy container creation that is mapped to the new method.
+ */
+
+#define ao2_t_container_alloc_options(options, n_buckets, hash_fn, cmp_fn, tag) \
+	ao2_t_container_alloc_hash((options), 0, (n_buckets), (hash_fn), NULL, (cmp_fn), (tag))
+#define ao2_container_alloc_options(options, n_buckets, hash_fn, cmp_fn) \
+	ao2_container_alloc_hash((options), 0, (n_buckets), (hash_fn), NULL, (cmp_fn))
+
+#define ao2_t_container_alloc(n_buckets, hash_fn, cmp_fn, tag) \
+	ao2_t_container_alloc_options(AO2_ALLOC_OPT_LOCK_MUTEX, (n_buckets), (hash_fn), (cmp_fn), (tag))
+#define ao2_container_alloc(n_buckets, hash_fn, cmp_fn) \
+	ao2_container_alloc_options(AO2_ALLOC_OPT_LOCK_MUTEX, (n_buckets), (hash_fn), (cmp_fn))
+
+/* BUGBUG for legacy precompiled modules. Should be able to remove since it is trunk. */
+struct ao2_container *__ao2_container_alloc(unsigned int options,
+	unsigned int n_buckets, ao2_hash_fn *hash_fn, ao2_callback_fn *cmp_fn);
+struct ao2_container *__ao2_container_alloc_debug(unsigned int options,
+	unsigned int n_buckets, ao2_hash_fn *hash_fn, ao2_callback_fn *cmp_fn,
+	const char *tag, const char *file, int line, const char *funcname, int ref_debug);
+
+/*!
+ * \brief Allocate and initialize a hash container with the desired number of buckets.
+ *
+ * \details
+ * We allocate space for a struct astobj_container, struct container
+ * and the buckets[] array.
+ *
+ * \param ao2_options Container ao2 object options (See enum ao2_alloc_opts)
+ * \param container_options Container behaviour options (See enum ao2_container_opts)
+ * \param n_buckets Number of buckets for hash
+ * \param hash_fn Pointer to a function computing a hash value. (NULL if everyting goes in first bucket.)
+ * \param sort_fn Pointer to a sort function. (NULL if buckets not sorted.)
  * \param cmp_fn Pointer to a compare function used by ao2_find. (NULL to match everything)
  * \param tag used for debugging.
  *
@@ -921,46 +1044,93 @@ struct ao2_container;
 
 #if defined(REF_DEBUG)
 
-#define ao2_t_container_alloc_options(options, n_buckets, hash_fn, cmp_fn, tag) \
-	__ao2_container_alloc_debug((options), (n_buckets), (hash_fn), (cmp_fn), (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__, 1)
-#define ao2_container_alloc_options(options, n_buckets, hash_fn, cmp_fn) \
-	__ao2_container_alloc_debug((options), (n_buckets), (hash_fn), (cmp_fn), "",  __FILE__, __LINE__, __PRETTY_FUNCTION__, 1)
-
-#define ao2_t_container_alloc(n_buckets, hash_fn, cmp_fn, tag) \
-	__ao2_container_alloc_debug(AO2_ALLOC_OPT_LOCK_MUTEX, (n_buckets), (hash_fn), (cmp_fn), (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__, 1)
-#define ao2_container_alloc(n_buckets, hash_fn, cmp_fn) \
-	__ao2_container_alloc_debug(AO2_ALLOC_OPT_LOCK_MUTEX, (n_buckets), (hash_fn), (cmp_fn), "",  __FILE__, __LINE__, __PRETTY_FUNCTION__, 1)
+#define ao2_t_container_alloc_hash(ao2_options, container_options, n_buckets, hash_fn, sort_fn, cmp_fn, tag) \
+	__ao2_container_alloc_hash_debug((ao2_options), (container_options), (n_buckets), (hash_fn), (sort_fn), (cmp_fn), (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__, 1)
+#define ao2_container_alloc_hash(ao2_options, container_options, n_buckets, hash_fn, sort_fn, cmp_fn) \
+	__ao2_container_alloc_hash_debug((ao2_options), (container_options), (n_buckets), (hash_fn), (sort_fn), (cmp_fn), "",  __FILE__, __LINE__, __PRETTY_FUNCTION__, 1)
 
 #elif defined(__AST_DEBUG_MALLOC)
 
-#define ao2_t_container_alloc_options(options, n_buckets, hash_fn, cmp_fn, tag) \
-	__ao2_container_alloc_debug((options), (n_buckets), (hash_fn), (cmp_fn), (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__, 0)
-#define ao2_container_alloc_options(options, n_buckets, hash_fn, cmp_fn) \
-	__ao2_container_alloc_debug((options), (n_buckets), (hash_fn), (cmp_fn), "",  __FILE__, __LINE__, __PRETTY_FUNCTION__, 0)
-
-#define ao2_t_container_alloc(n_buckets, hash_fn, cmp_fn, tag) \
-	__ao2_container_alloc_debug(AO2_ALLOC_OPT_LOCK_MUTEX, (n_buckets), (hash_fn), (cmp_fn), (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__, 0)
-#define ao2_container_alloc(n_buckets, hash_fn, cmp_fn) \
-	__ao2_container_alloc_debug(AO2_ALLOC_OPT_LOCK_MUTEX, (n_buckets), (hash_fn), (cmp_fn), "",  __FILE__, __LINE__, __PRETTY_FUNCTION__, 0)
+#define ao2_t_container_alloc_hash(ao2_options, container_options, n_buckets, hash_fn, sort_fn, cmp_fn, tag) \
+	__ao2_container_alloc_hash_debug((ao2_options), (container_options), (n_buckets), (hash_fn), (sort_fn), (cmp_fn), (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__, 0)
+#define ao2_container_alloc_hash(ao2_options, container_options, n_buckets, hash_fn, sort_fn, cmp_fn) \
+	__ao2_container_alloc_hash_debug((ao2_options), (container_options), (n_buckets), (hash_fn), (sort_fn), (cmp_fn), "",  __FILE__, __LINE__, __PRETTY_FUNCTION__, 0)
 
 #else
 
-#define ao2_t_container_alloc_options(options, n_buckets, hash_fn, cmp_fn, tag) \
-	__ao2_container_alloc((options), (n_buckets), (hash_fn), (cmp_fn))
-#define ao2_container_alloc_options(options, n_buckets, hash_fn, cmp_fn) \
-	__ao2_container_alloc((options), (n_buckets), (hash_fn), (cmp_fn))
-
-#define ao2_t_container_alloc(n_buckets, hash_fn, cmp_fn, tag) \
-	__ao2_container_alloc(AO2_ALLOC_OPT_LOCK_MUTEX, (n_buckets), (hash_fn), (cmp_fn))
-#define ao2_container_alloc(n_buckets, hash_fn, cmp_fn) \
-	__ao2_container_alloc(AO2_ALLOC_OPT_LOCK_MUTEX, (n_buckets), (hash_fn), (cmp_fn))
+#define ao2_t_container_alloc_hash(ao2_options, container_options, n_buckets, hash_fn, sort_fn, cmp_fn, tag) \
+	__ao2_container_alloc_hash((ao2_options), (container_options), (n_buckets), (hash_fn), (sort_fn), (cmp_fn))
+#define ao2_container_alloc_hash(ao2_options, container_options, n_buckets, hash_fn, sort_fn, cmp_fn) \
+	__ao2_container_alloc_hash((ao2_options), (container_options), (n_buckets), (hash_fn), (sort_fn), (cmp_fn))
 
 #endif
 
-struct ao2_container *__ao2_container_alloc(unsigned int options,
-	unsigned int n_buckets, ao2_hash_fn *hash_fn, ao2_callback_fn *cmp_fn);
-struct ao2_container *__ao2_container_alloc_debug(unsigned int options,
-	unsigned int n_buckets, ao2_hash_fn *hash_fn, ao2_callback_fn *cmp_fn,
+struct ao2_container *__ao2_container_alloc_hash(unsigned int ao2_options, unsigned int container_options,
+	unsigned int n_buckets, ao2_hash_fn *hash_fn, ao2_sort_fn *sort_fn, ao2_callback_fn *cmp_fn);
+struct ao2_container *__ao2_container_alloc_hash_debug(unsigned int ao2_options, unsigned int container_options,
+	unsigned int n_buckets, ao2_hash_fn *hash_fn, ao2_sort_fn *sort_fn, ao2_callback_fn *cmp_fn,
+	const char *tag, const char *file, int line, const char *funcname, int ref_debug);
+
+/*!
+ * \brief Allocate and initialize a list container.
+ *
+ * \param ao2_options Container ao2 object options (See enum ao2_alloc_opts)
+ * \param container_options Container behaviour options (See enum ao2_container_opts)
+ * \param sort_fn Pointer to a sort function. (NULL if list not sorted.)
+ * \param cmp_fn Pointer to a compare function used by ao2_find. (NULL to match everything)
+ * \param tag used for debugging.
+ *
+ * \return A pointer to a struct container.
+ *
+ * \note Destructor is set implicitly.
+ * \note Implemented as a degenerate hash table.
+ */
+#define ao2_t_container_alloc_list(ao2_options, container_options, sort_fn, cmp_fn, tag) \
+	ao2_t_container_alloc_hash((ao2_options), (container_options), 1, NULL, (sort_fn), (cmp_fn), (tag))
+#define ao2_container_alloc_list(ao2_options, container_options, sort_fn, cmp_fn) \
+	ao2_container_alloc_hash((ao2_options), (container_options), 1, NULL, (sort_fn), (cmp_fn))
+
+/*!
+ * \brief Allocate and initialize a red-black tree container.
+ *
+ * \param ao2_options Container ao2 object options (See enum ao2_alloc_opts)
+ * \param container_options Container behaviour options (See enum ao2_container_opts)
+ * \param sort_fn Pointer to a sort function. (NULL if buckets not sorted.)
+ * \param cmp_fn Pointer to a compare function used by ao2_find. (NULL to match everything)
+ * \param tag used for debugging.
+ *
+ * \return A pointer to a struct container.
+ *
+ * \note Destructor is set implicitly.
+ */
+
+#if defined(REF_DEBUG)
+
+#define ao2_t_container_alloc_tree(ao2_options, container_options, sort_fn, cmp_fn, tag) \
+	__ao2_container_alloc_tree_debug((ao2_options), (container_options), (sort_fn), (cmp_fn), (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__, 1)
+#define ao2_container_alloc_tree(ao2_options, container_options, , sort_fn, cmp_fn) \
+	__ao2_container_alloc_tree_debug((ao2_options), (container_options), (sort_fn), (cmp_fn), "",  __FILE__, __LINE__, __PRETTY_FUNCTION__, 1)
+
+#elif defined(__AST_DEBUG_MALLOC)
+
+#define ao2_t_container_alloc_tree(ao2_options, container_options, sort_fn, cmp_fn, tag) \
+	__ao2_container_alloc_tree_debug((ao2_options), (container_options), (sort_fn), (cmp_fn), (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__, 0)
+#define ao2_container_alloc_tree(ao2_options, container_options, sort_fn, cmp_fn) \
+	__ao2_container_alloc_tree_debug((ao2_options), (container_options), (sort_fn), (cmp_fn), "",  __FILE__, __LINE__, __PRETTY_FUNCTION__, 0)
+
+#else
+
+#define ao2_t_container_alloc_tree(ao2_options, container_options, sort_fn, cmp_fn, tag) \
+	__ao2_container_alloc_tree((ao2_options), (container_options), (sort_fn), (cmp_fn))
+#define ao2_container_alloc_tree(ao2_options, container_options, sort_fn, cmp_fn) \
+	__ao2_container_alloc_tree((ao2_options), (container_options), (sort_fn), (cmp_fn))
+
+#endif
+
+struct ao2_container *__ao2_container_alloc_tree(unsigned int ao2_options, unsigned int container_options,
+	ao2_sort_fn *sort_fn, ao2_callback_fn *cmp_fn);
+struct ao2_container *__ao2_container_alloc_tree_debug(unsigned int ao2_options, unsigned int container_options,
+	ao2_sort_fn *sort_fn, ao2_callback_fn *cmp_fn,
 	const char *tag, const char *file, int line, const char *funcname, int ref_debug);
 
 /*! \brief
@@ -1121,10 +1291,10 @@ void *__ao2_unlink(struct ao2_container *c, void *obj, int flags);
  *  the callback.
  *   - If OBJ_NODATA is set, ao2_callback will return NULL. No refcounts
  *     of any of the traversed objects will be incremented.
- *     On the converse, if it is NOT set (the default), The ref count
- *     of each object for which CMP_MATCH was set will be incremented,
- *     and you will have no way of knowing which those are, until
- *     the multiple-object-return functionality is implemented.
+ *     On the converse, if it is NOT set (the default), the ref count
+ *     of the first matching object will be incremented and returned.  If
+ *     OBJ_MULTIPLE is set, the ref count of all matching objects will
+ *     be incremented in an iterator for a temporary container and returned.
  *   - If OBJ_POINTER is set, the traversed items will be restricted
  *     to the objects in the bucket that the object key hashes to.
  * \param cb_fn A function pointer, that will be called on all
@@ -1143,7 +1313,7 @@ void *__ao2_unlink(struct ao2_container *c, void *obj, int flags);
  * \param tag used for debugging.
  * \return when OBJ_MULTIPLE is not included in the flags parameter,
  *         the return value will be either the object found or NULL if no
- *         no matching object was found. if OBJ_MULTIPLE is included,
+ *         no matching object was found.  If OBJ_MULTIPLE is included,
  *         the return value will be a pointer to an ao2_iterator object,
  *         which must be destroyed with ao2_iterator_destroy() when the
  *         caller no longer needs it.
@@ -1165,11 +1335,11 @@ void *__ao2_unlink(struct ao2_container *c, void *obj, int flags);
  * on objects according on flags passed.
  * XXX describe better
  * The comparison is done calling the compare function set implicitly.
- * The p pointer can be a pointer to an object or to a key,
+ * The arg pointer can be a pointer to an object or to a key,
  * we can say this looking at flags value.
- * If p points to an object we will search for the object pointed
+ * If arg points to an object we will search for the object pointed
  * by this value, otherwise we search for a key value.
- * If the key is not unique we only find the first matching valued.
+ * If the key is not unique we only find the first matching value.
  *
  * The use of flags argument is the follow:
  *
@@ -1180,7 +1350,7 @@ void *__ao2_unlink(struct ao2_container *c, void *obj, int flags);
  *      OBJ_MULTIPLE            return multiple matches
  *                              Default is no.
  *      OBJ_POINTER             the pointer is an object pointer
- *      OBJ_KEY                 the pointer is to a hashable key
+ *      OBJ_KEY                 the pointer is to a container key
  *
  * \note When the returned object is no longer in use, ao2_ref() should
  * be used to free the additional reference possibly created by this function.
@@ -1384,15 +1554,22 @@ enum ao2_iterator_flags {
 	 * locked already.
 	 */
 	AO2_ITERATOR_DONTLOCK = (1 << 0),
-	/*! Indicates that the iterator was dynamically allocated by
+	/*!
+	 * Indicates that the iterator was dynamically allocated by
 	 * astobj2 API and should be freed by ao2_iterator_destroy().
 	 */
 	AO2_ITERATOR_MALLOCD = (1 << 1),
-	/*! Indicates that before the iterator returns an object from
+	/*!
+	 * Indicates that before the iterator returns an object from
 	 * the container being iterated, the object should be unlinked
 	 * from the container.
 	 */
 	AO2_ITERATOR_UNLINK = (1 << 2),
+	/*!
+	 * Iterate in decending order (Last to first container object)
+	 * (Otherwise ascending order)
+	 */
+	AO2_ITERATOR_DECENDING = (1 << 3),
 };
 
 /*!
