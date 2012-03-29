@@ -722,7 +722,7 @@ Operations on container include:
     OBJ_MULTIPLE - don't stop at first match
     OBJ_POINTER - if set, 'arg' is an object pointer, and a hash table
                   search will be done. If not, a traversal is done.
-    OBJ_KEY - if set, 'arg', is a container key item that is not an object.
+    OBJ_KEY - if set, 'arg', is a search key item that is not an object.
               Similar to OBJ_POINTER and mutually exclusive.
 
   -  \b ao2_callback(c, flags, fn, arg)
@@ -737,7 +737,7 @@ Operations on container include:
          OBJ_POINTER  - if set, 'arg' is an object pointer, and a hash table
                         search will be done. If not, a traversal is done through
                         all the hash table 'buckets'..
-         OBJ_KEY      - if set, 'arg', is a container key item that is not an object.
+         OBJ_KEY      - if set, 'arg', is a search key item that is not an object.
                         Similar to OBJ_POINTER and mutually exclusive.
       - fn is a func that returns int, and takes 3 args:
         (void *obj, void *arg, int flags);
@@ -807,31 +807,47 @@ enum _cb_results {
  * Flags passed to ao2_callback(), ao2_hash_fn(), and ao2_sort_fn() to modify its behaviour.
  */
 enum search_flags {
-	/*! Unlink the object for which the callback function
-	 *  returned CMP_MATCH.
+	/*!
+	 * Unlink the object for which the callback function returned
+	 * CMP_MATCH.
 	 */
 	OBJ_UNLINK = (1 << 0),
-	/*! On match, don't return the object hence do not increase
-	 *  its refcount.
+	/*!
+	 * On match, don't return the object hence do not increase its
+	 * refcount.
 	 */
 	OBJ_NODATA = (1 << 1),
-	/*! Don't stop at the first match in ao2_callback() unless the result of
-	 *  of the callback function == (CMP_STOP | CMP_MATCH).
+	/*!
+	 * Don't stop at the first match in ao2_callback() unless the
+	 * result of of the callback function has the CMP_STOP bit set.
 	 */
 	OBJ_MULTIPLE = (1 << 2),
-	/*! obj is an object of the same type as the one being searched for,
-	 *  so use the object's hash function for optimized searching.
-	 *  The search function is unaffected (i.e. use the one passed as
-	 *  argument, or match_by_addr if none specified).
+	/*!
+	 * The given obj is an object of the same type as the one being
+	 * searched for, so use the object's hash and/or sort functions
+	 * for optimized searching.
 	 */
 	OBJ_POINTER = (1 << 3),
 	/*!
 	 * \brief Continue if a match is not found in the hashed out bucket
 	 *
-	 * This flag is to be used in combination with OBJ_POINTER.  This tells
-	 * the ao2_callback() core to keep searching through the rest of the
-	 * buckets if a match is not found in the starting bucket defined by
-	 * the hash value on the argument.
+	 * \details
+	 * This flag is to be used in combination with the OBJ_POINTER
+	 * or OBJ_KEY flags.  This flag causes the entire container to
+	 * be searched for an object.  The OBJ_POINTER or OBJ_KEY flags
+	 * just start the search where the search key specifies to
+	 * start.  If the object is not found then the search
+	 * _continues_ until the search wraps around to the starting
+	 * point.
+	 *
+	 * Normal searches start where the search key specifies to start
+	 * and end when the search key indicates that the object is not
+	 * in the container.
+	 *
+	 * For hash containers, this tells the ao2_callback() core to
+	 * keep searching through the rest of the buckets if a match is
+	 * not found in the starting bucket defined by the hash value on
+	 * the argument.
 	 */
 	OBJ_CONTINUE = (1 << 4),
 	/*!
@@ -849,7 +865,7 @@ enum search_flags {
 	 */
 	OBJ_NOLOCK = (1 << 5),
 	/*!
-	 * \brief The data is a container key, but is not an object.
+	 * \brief The data is a search key, but is not an object.
 	 *
 	 * \details
 	 * This can be used when you want to be able to pass custom data
@@ -860,40 +876,47 @@ enum search_flags {
 	 * \note OBJ_KEY and OBJ_POINTER are mutually exclusive options.
 	 */
 	OBJ_KEY = (1 << 6),
+
+	/*! \brief Traverse order option field mask. */
+	OBJ_ORDER_MASK = (3 << 7),
 	/*! \brief Traverse in ascending order (First to last container object) */
 	OBJ_ORDER_ASCENDING = (0 << 7),
-	/*! \brief Traverse in decending order (Last to first container object) */
-	OBJ_ORDER_DECENDING = (1 << 7),
-	/*! \brief Traverse in pre-order (Node then childeren, for tree container) */
+	/*! \brief Traverse in descending order (Last to first container object) */
+	OBJ_ORDER_DESCENDING = (1 << 7),
+	/*!
+	 * \brief Traverse in pre-order (Node then childeren, for tree container)
+	 *
+	 * \note For non-tree containers, it is up to the container type
+	 * to make the best interpretation of the order.  For list and
+	 * hash containers, this also means ascending order because a
+	 * tree can degenerate into a list.
+	 */
 	OBJ_ORDER_PRE = (2 << 7),
-	/*! \brief Traverse in post-order (Childeren then node, for tree container) */
+	/*!
+	 * \brief Traverse in post-order (Childeren then node, for tree container)
+	 *
+	 * \note For non-tree containers, it is up to the container type
+	 * to make the best interpretation of the order.  For list and
+	 * hash containers, this also means descending order because a
+	 * tree can degenerate into a list.
+	 */
 	OBJ_ORDER_POST = (3 << 7),
-	OBJ_ORDER_MASK = (3 << 7),
 };
 
 /*!
  * \brief Options available when allocating an ao2 container object.
  *
  * \note Each option is open to some interpretation by the
- * container type as long as it makes sence with the option
+ * container type as long as it makes sense with the option
  * name.
  */
 enum ao2_container_opts {
 	/*!
-	 * \brief Insert objects at the end of the container.
-	 *
-	 * \note If an ao2_sort_fn is provided, the object is inserted
-	 * after any duplicates.
-	 *
-	 * \note Hash containers insert the object in the computed hash
-	 * bucket in the indicated manner.
-	 */
-	AO2_CONTAINER_ALLOC_OPT_INSERT_END = (0 << 0),
-	/*!
 	 * \brief Insert objects at the beginning of the container.
+	 * (Otherwise it is the opposite; insert at the end.)
 	 *
 	 * \note If an ao2_sort_fn is provided, the object is inserted
-	 * before any duplicates.
+	 * before any objects with duplicate keys.
 	 *
 	 * \note Hash containers insert the object in the computed hash
 	 * bucket in the indicated manner.
@@ -901,11 +924,18 @@ enum ao2_container_opts {
 	AO2_CONTAINER_ALLOC_OPT_INSERT_BEGIN = (1 << 0),
 
 	/*!
-	 * \brief Allow duplicate keyed objects in container.
+	 * \brief The ao2 container objects with duplicate keys option field mask.
+	 */
+	AO2_CONTAINER_ALLOC_OPT_DUPS_MASK = (3 << 1),
+	/*!
+	 * \brief Allow objects with duplicate keys in container.
 	 */
 	AO2_CONTAINER_ALLOC_OPT_DUPS_ALLOW = (0 << 1),
 	/*!
-	 * \brief Reject duplicate keyed objects in container.
+	 * \brief Reject objects with duplicate keys in container.
+	 *
+	 * \note The container must be sorted.  i.e. have an
+	 * ao2_sort_fn.
 	 */
 	AO2_CONTAINER_ALLOC_OPT_DUPS_REJECT = (1 << 1),
 	/*!
@@ -914,19 +944,23 @@ enum ao2_container_opts {
 	 * \details Don't link the same object into the container twice.
 	 * However, you can link a different object with the same key.
 	 *
+	 * \note The container must be sorted.  i.e. have an
+	 * ao2_sort_fn.
+	 *
 	 * \note It is assumed that the objects are located where the
-	 * container key says they should be located.
+	 * search key says they should be located.
 	 */
 	AO2_CONTAINER_ALLOC_OPT_DUPS_OBJ_REJECT = (2 << 1),
 	/*!
-	 * \brief Replace duplicate keyed objects in container.
+	 * \brief Replace objects with duplicate keys in container.
 	 *
 	 * \details The existing duplicate object is removed and the new
 	 * object takes the old object's place.
+	 *
+	 * \note The container must be sorted.  i.e. have an
+	 * ao2_sort_fn.
 	 */
 	AO2_CONTAINER_ALLOC_OPT_DUPS_REPLACE = (3 << 1),
-	/*! \brief The ao2 container object duplicate option field mask. */
-	AO2_CONTAINER_ALLOC_OPT_DUPS_MASK = (3 << 1),
 };
 
 /*! \brief
@@ -960,7 +994,7 @@ typedef int (ao2_callback_data_fn)(void *obj, void *arg, void *data, int flags);
  *
  * \param obj pointer to the (user-defined part) of an object.
  * \param flags flags from ao2_callback()
- *   OBJ_KEY - if set, 'obj', is a container key item that is not an object.
+ *   OBJ_KEY - if set, 'obj', is a search key item that is not an object.
  *
  * \return Computed hash value.
  */
@@ -972,7 +1006,7 @@ typedef int (ao2_hash_fn)(const void *obj, int flags);
  * \param obj_left pointer to the (user-defined part) of an object.
  * \param obj_right pointer to the (user-defined part) of an object.
  * \param flags flags from ao2_callback()
- *   OBJ_KEY - if set, 'obj_right', is a container key item that is not an object.
+ *   OBJ_KEY - if set, 'obj_right', is a search key item that is not an object.
  *
  * \retval <0 if obj_left < obj_right
  * \retval =0 if obj_left == obj_right
@@ -1033,7 +1067,7 @@ struct ao2_container *__ao2_container_alloc_debug(unsigned int options,
  * \param container_options Container behaviour options (See enum ao2_container_opts)
  * \param n_buckets Number of buckets for hash
  * \param hash_fn Pointer to a function computing a hash value. (NULL if everyting goes in first bucket.)
- * \param sort_fn Pointer to a sort function. (NULL if buckets not sorted.)
+ * \param sort_fn Pointer to a sort function. (NULL to not sort the buckets.)
  * \param cmp_fn Pointer to a compare function used by ao2_find. (NULL to match everything)
  * \param tag used for debugging.
  *
@@ -1122,7 +1156,7 @@ struct ao2_container *__ao2_container_alloc_list_debug(unsigned int ao2_options,
  *
  * \param ao2_options Container ao2 object options (See enum ao2_alloc_opts)
  * \param container_options Container behaviour options (See enum ao2_container_opts)
- * \param sort_fn Pointer to a sort function. (NULL if buckets not sorted.)
+ * \param sort_fn Pointer to a sort function.
  * \param cmp_fn Pointer to a compare function used by ao2_find. (NULL to match everything)
  * \param tag used for debugging.
  *
@@ -1380,7 +1414,7 @@ void *__ao2_unlink(struct ao2_container *c, void *obj, int flags);
  *      OBJ_MULTIPLE            return multiple matches
  *                              Default is no.
  *      OBJ_POINTER             the pointer is an object pointer
- *      OBJ_KEY                 the pointer is to a container key
+ *      OBJ_KEY                 the pointer is to a search key
  *
  * \note When the returned object is no longer in use, ao2_ref() should
  * be used to free the additional reference possibly created by this function.
@@ -1596,10 +1630,17 @@ enum ao2_iterator_flags {
 	 */
 	AO2_ITERATOR_UNLINK = (1 << 2),
 	/*!
-	 * Iterate in decending order (Last to first container object)
+	 * Iterate in descending order (Last to first container object)
 	 * (Otherwise ascending order)
+	 *
+	 * \note Other traversal orders such as pre-order and post-order
+	 * do not make sense because they require the container
+	 * structure to be static during the traversal.  Iterators just
+	 * about guarantee that is not going to happen because the
+	 * container is allowed to change by other threads during the
+	 * iteration.
 	 */
-	AO2_ITERATOR_DECENDING = (1 << 3),
+	AO2_ITERATOR_DESCENDING = (1 << 3),
 };
 
 /*!
