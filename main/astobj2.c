@@ -870,104 +870,11 @@ struct ao2_container {
 };
 
 /*!
- * A structure to create a linked list of entries,
- * used within a bucket.
- * XXX \todo this should be private to the container code
- */
-struct bucket_entry {
-	AST_LIST_ENTRY(bucket_entry) entry;
-	/*! Stored object in node. */
-	void *obj;
-	int version;
-};
-
-/*! BUGBUG change to a doubly linked list to support traverse order options and ref counted nodes. */
-/* each bucket in the container is a tailq. */
-AST_LIST_HEAD_NOLOCK(bucket, bucket_entry);
-
-/*!
- * A hash container in addition to values common to all
- * container types, stores the hash callback function,
- * information on the number of hash buckets, the hash bucket
- * heads, and a version number, starting at 0 (for a newly
- * created, empty container) and incremented every time an
- * object is inserted or deleted. The assumption is that an
- * object is never moved in a container, but removed and readded
- * with the new number.  The version number is especially useful
- * when implementing iterators.  In fact, we can associate a
- * unique, monotonically increasing number to each object, which
- * means that, within an iterator, we can store the version
- * number of the current object, and easily look for the next
- * one, which is the next one in the list with a higher number.
- * Since all objects have a version >0, we can use 0 as a marker
- * for 'we need the first object in the bucket'.
- */
-struct ao2_container_hash {
-	struct ao2_container common;
-/*! BUGBUG struct ao2_container_hash need to convert to ref counted nodes */
-	ao2_hash_fn *hash_fn;
-	int n_buckets;
-	/*! described above */
-	int version;
-	/*! variable size */
-	struct bucket buckets[0];
-};
-
-/*!
  * return the number of elements in the container
  */
 int ao2_container_count(struct ao2_container *c)
 {
 	return c->elements;
-}
-
-/*
- * link an object to a container
- */
-static int hash_ao2_link(struct ao2_container_hash *c, void *user_data, int flags, const char *tag, const char *file, int line, const char *func)
-{
-	int i;
-	enum ao2_lock_req orig_lock;
-	/* create a new list entry */
-	struct bucket_entry *p;
-/*! BUGBUG hash_ao2_link() need to convert to ref counted nodes */
-/*! BUGBUG hash_ao2_link() need to add sorting support */
-/*! BUGBUG hash_ao2_link() need to add insert option support */
-/*! BUGBUG hash_ao2_link() need to add duplicate handling option support */
-
-	p = ast_calloc(1, sizeof(*p));
-	if (!p) {
-		return 0;
-	}
-
-	i = abs(c->hash_fn(user_data, OBJ_POINTER));
-
-	if (flags & OBJ_NOLOCK) {
-		orig_lock = adjust_lock(c, AO2_LOCK_REQ_WRLOCK, 1);
-	} else {
-		ao2_wrlock(c);
-		orig_lock = AO2_LOCK_REQ_MUTEX;
-	}
-
-	i %= c->n_buckets;
-	p->obj = user_data;
-	p->version = ast_atomic_fetchadd_int(&c->version, 1);
-	AST_LIST_INSERT_TAIL(&c->buckets[i], p, entry);
-	ast_atomic_fetchadd_int(&c->common.elements, 1);
-
-	if (tag) {
-		__ao2_ref_debug(user_data, +1, tag, file, line, func);
-	} else {
-		__ao2_ref(user_data, +1);
-	}
-
-	if (flags & OBJ_NOLOCK) {
-		adjust_lock(c, orig_lock, 0);
-	} else {
-		ao2_unlock(c);
-	}
-
-	return 1;
 }
 
 int __ao2_link_debug(struct ao2_container *c, void *obj_new, int flags, const char *tag, const char *file, int line, const char *func)
@@ -1043,13 +950,482 @@ static int cb_true_data(void *user_data, void *arg, void *data, int flags)
 	return CMP_MATCH;
 }
 
+void *__ao2_callback_debug(struct ao2_container *c, enum search_flags flags,
+	ao2_callback_fn *cb_fn, void *arg, const char *tag, const char *file, int line,
+	const char *func)
+{
+	if (!INTERNAL_OBJ(c) || !c->v_table || !c->v_table->traverse) {
+		/* Sanity checks. */
+		return NULL;
+	}
+	return c->v_table->traverse(c, flags, cb_fn, arg, NULL, DEFAULT, tag, file, line, func);
+}
+
+void *__ao2_callback(struct ao2_container *c, enum search_flags flags,
+	ao2_callback_fn *cb_fn, void *arg)
+{
+	if (!INTERNAL_OBJ(c) || !c->v_table || !c->v_table->traverse) {
+		/* Sanity checks. */
+		return NULL;
+	}
+	return c->v_table->traverse(c, flags, cb_fn, arg, NULL, DEFAULT, NULL, NULL, 0, NULL);
+}
+
+void *__ao2_callback_data_debug(struct ao2_container *c, enum search_flags flags,
+	ao2_callback_data_fn *cb_fn, void *arg, void *data, const char *tag, const char *file,
+	int line, const char *func)
+{
+	if (!INTERNAL_OBJ(c) || !c->v_table || !c->v_table->traverse) {
+		/* Sanity checks. */
+		return NULL;
+	}
+	return c->v_table->traverse(c, flags, cb_fn, arg, data, WITH_DATA, tag, file, line, func);
+}
+
+void *__ao2_callback_data(struct ao2_container *c, enum search_flags flags,
+	ao2_callback_data_fn *cb_fn, void *arg, void *data)
+{
+	if (!INTERNAL_OBJ(c) || !c->v_table || !c->v_table->traverse) {
+		/* Sanity checks. */
+		return NULL;
+	}
+	return c->v_table->traverse(c, flags, cb_fn, arg, data, WITH_DATA, NULL, NULL, 0, NULL);
+}
+
 /*!
+ * the find function just invokes the default callback with some reasonable flags.
+ */
+void *__ao2_find_debug(struct ao2_container *c, const void *arg, enum search_flags flags,
+	const char *tag, const char *file, int line, const char *func)
+{
+	void *arged = (void *) arg;/* Done to avoid compiler const warning */
+
+	return __ao2_callback_debug(c, flags, c->cmp_fn, arged, tag, file, line, func);
+}
+
+void *__ao2_find(struct ao2_container *c, const void *arg, enum search_flags flags)
+{
+	void *arged = (void *) arg;/* Done to avoid compiler const warning */
+
+	return __ao2_callback(c, flags, c->cmp_fn, arged);
+}
+
+/*!
+ * initialize an iterator so we start from the first object
+ */
+struct ao2_iterator ao2_iterator_init(struct ao2_container *c, int flags)
+{
+	struct ao2_iterator a = {
+		.c = c,
+		.flags = flags
+	};
+
+	ao2_ref(c, +1);
+
+	return a;
+}
+
+/*!
+ * destroy an iterator
+ */
+void ao2_iterator_destroy(struct ao2_iterator *iter)
+{
+	ao2_ref(iter->c, -1);
+	if (iter->flags & AO2_ITERATOR_MALLOCD) {
+		ast_free(iter);
+	} else {
+		iter->c = NULL;
+	}
+}
+
+/*
+ * move to the next element in the container.
+ */
+static void *internal_ao2_iterator_next(struct ao2_iterator *iter, const char *tag, const char *file, int line, const char *func)
+{
+	enum ao2_lock_req orig_lock;
+	void *ret;
+
+	if (!INTERNAL_OBJ(iter->c) || !iter->c->v_table || !iter->c->v_table->iterator_next) {
+		/* Sanity checks. */
+		return NULL;
+	}
+
+	if (iter->flags & AO2_ITERATOR_DONTLOCK) {
+		if (iter->flags & AO2_ITERATOR_UNLINK) {
+			orig_lock = adjust_lock(iter->c, AO2_LOCK_REQ_WRLOCK, 1);
+		} else {
+			orig_lock = adjust_lock(iter->c, AO2_LOCK_REQ_RDLOCK, 1);
+		}
+	} else {
+		orig_lock = AO2_LOCK_REQ_MUTEX;
+		if (iter->flags & AO2_ITERATOR_UNLINK) {
+			ao2_wrlock(iter->c);
+		} else {
+			ao2_rdlock(iter->c);
+		}
+	}
+
+	ret = iter->c->v_table->iterator_next(iter->c, iter, tag, file, line, func);
+
+	if (iter->flags & AO2_ITERATOR_DONTLOCK) {
+		adjust_lock(iter->c, orig_lock, 0);
+	} else {
+		ao2_unlock(iter->c);
+	}
+
+	return ret;
+}
+
+void *__ao2_iterator_next_debug(struct ao2_iterator *iter, const char *tag, const char *file, int line, const char *func)
+{
+	return internal_ao2_iterator_next(iter, tag, file, line, func);
+}
+
+void *__ao2_iterator_next(struct ao2_iterator *iter)
+{
+	return internal_ao2_iterator_next(iter, NULL, __FILE__, __LINE__, __PRETTY_FUNCTION__);
+}
+
+static void container_destruct(void *_c)
+{
+	struct ao2_container *c = _c;
+
+	/* Unlink any stored objects in the container. */
+	c->destroying = 1;
+	__ao2_callback(c, OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE, NULL, NULL);
+
+	/* Perform any extra container cleanup. */
+	if (c->v_table && c->v_table->destroy) {
+		c->v_table->destroy(c);
+	}
+
+#ifdef AO2_DEBUG
+	ast_atomic_fetchadd_int(&ao2.total_containers, -1);
+#endif
+}
+
+static void container_destruct_debug(void *_c)
+{
+	struct ao2_container *c = _c;
+
+	/* Unlink any stored objects in the container. */
+	c->destroying = 1;
+	__ao2_callback_debug(c, OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE, NULL, NULL,
+		"container_destruct_debug called", __FILE__, __LINE__, __PRETTY_FUNCTION__);
+
+	/* Perform any extra container cleanup. */
+	if (c->v_table && c->v_table->destroy) {
+		c->v_table->destroy(c);
+	}
+
+#ifdef AO2_DEBUG
+	ast_atomic_fetchadd_int(&ao2.total_containers, -1);
+#endif
+}
+
+/*!
+ * \internal
+ * \brief Put obj into the arg container.
+ * \since 11.0
+ *
+ * \param obj  pointer to the (user-defined part) of an object.
+ * \param arg callback argument from ao2_callback()
+ * \param flags flags from ao2_callback()
+ *
+ * \retval 0 on success.
+ * \retval CMP_STOP|CMP_MATCH on error.
+ */
+static int dup_obj_cb(void *obj, void *arg, int flags)
+{
+	struct ao2_container *dest = arg;
+
+	return __ao2_link(dest, obj, OBJ_NOLOCK) ? 0 : (CMP_MATCH | CMP_STOP);
+}
+
+int ao2_container_dup(struct ao2_container *dest, struct ao2_container *src, enum search_flags flags)
+{
+	void *obj;
+	int res = 0;
+
+	if (!(flags & OBJ_NOLOCK)) {
+		ao2_rdlock(src);
+		ao2_wrlock(dest);
+	}
+	obj = __ao2_callback(src, OBJ_NOLOCK, dup_obj_cb, dest);
+	if (obj) {
+		/* Failed to put this obj into the dest container. */
+		__ao2_ref(obj, -1);
+
+		/* Remove all items from the dest container. */
+		__ao2_callback(dest, OBJ_NOLOCK | OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE, NULL,
+			NULL);
+		res = -1;
+	}
+	if (!(flags & OBJ_NOLOCK)) {
+		ao2_unlock(dest);
+		ao2_unlock(src);
+	}
+
+	return res;
+}
+
+struct ao2_container *__ao2_container_clone(struct ao2_container *orig, enum search_flags flags)
+{
+	struct ao2_container *clone;
+	int failed;
+
+	/* Create the clone container with the same properties as the original. */
+	if (!INTERNAL_OBJ(orig) || !orig->v_table || !orig->v_table->alloc_empty_clone) {
+		/* Sanity checks. */
+		return NULL;
+	}
+	clone = orig->v_table->alloc_empty_clone(orig);
+	if (!clone) {
+		return NULL;
+	}
+
+	if (flags & OBJ_NOLOCK) {
+		ao2_wrlock(clone);
+	}
+	failed = ao2_container_dup(clone, orig, flags);
+	if (flags & OBJ_NOLOCK) {
+		ao2_unlock(clone);
+	}
+	if (failed) {
+		/* Object copy into the clone container failed. */
+		__ao2_ref(clone, -1);
+		clone = NULL;
+	}
+	return clone;
+}
+
+struct ao2_container *__ao2_container_clone_debug(struct ao2_container *orig, enum search_flags flags, const char *tag, const char *file, int line, const char *func, int ref_debug)
+{
+	struct ao2_container *clone;
+	int failed;
+
+	/* Create the clone container with the same properties as the original. */
+	if (!INTERNAL_OBJ(orig) || !orig->v_table || !orig->v_table->alloc_empty_clone_debug) {
+		/* Sanity checks. */
+		return NULL;
+	}
+	clone = orig->v_table->alloc_empty_clone_debug(orig, tag, file, line, func, ref_debug);
+	if (!clone) {
+		return NULL;
+	}
+
+	if (flags & OBJ_NOLOCK) {
+		ao2_wrlock(clone);
+	}
+	failed = ao2_container_dup(clone, orig, flags);
+	if (flags & OBJ_NOLOCK) {
+		ao2_unlock(clone);
+	}
+	if (failed) {
+		/* Object copy into the clone container failed. */
+		if (ref_debug) {
+			__ao2_ref_debug(clone, -1, tag, file, line, func);
+		} else {
+			__ao2_ref(clone, -1);
+		}
+		clone = NULL;
+	}
+	return clone;
+}
+
+/*!
+ * A structure to create a linked list of entries,
+ * used within a bucket.
+ * XXX \todo this should be private to the container code
+ */
+struct bucket_entry {
+	AST_LIST_ENTRY(bucket_entry) entry;
+	/*! Stored object in node. */
+	void *obj;
+	int version;
+};
+
+/*! BUGBUG change to a doubly linked list to support traverse order options and ref counted nodes. */
+/* each bucket in the container is a tailq. */
+AST_LIST_HEAD_NOLOCK(bucket, bucket_entry);
+
+/*!
+ * A hash container in addition to values common to all
+ * container types, stores the hash callback function,
+ * information on the number of hash buckets, the hash bucket
+ * heads, and a version number, starting at 0 (for a newly
+ * created, empty container) and incremented every time an
+ * object is inserted or deleted. The assumption is that an
+ * object is never moved in a container, but removed and readded
+ * with the new number.  The version number is especially useful
+ * when implementing iterators.  In fact, we can associate a
+ * unique, monotonically increasing number to each object, which
+ * means that, within an iterator, we can store the version
+ * number of the current object, and easily look for the next
+ * one, which is the next one in the list with a higher number.
+ * Since all objects have a version >0, we can use 0 as a marker
+ * for 'we need the first object in the bucket'.
+ */
+struct ao2_container_hash {
+	struct ao2_container common;
+/*! BUGBUG struct ao2_container_hash need to convert to ref counted nodes */
+	ao2_hash_fn *hash_fn;
+	int n_buckets;
+	/*! described above */
+	int version;
+	/*! variable size */
+	struct bucket buckets[0];
+};
+
+/*!
+ * \internal
+ * \brief Create an empty copy of this container.
+ * \since 11.0
+ *
+ * \param self Container to operate upon.
+ *
+ * \retval empty-clone-container on success.
+ * \retval NULL on error.
+ */
+static struct ao2_container *hash_ao2_alloc_empty_clone(struct ao2_container_hash *self)
+{
+	struct astobj2 *orig_obj;
+	unsigned int ao2_options;
+
+	/* Get container ao2 options. */
+	orig_obj = INTERNAL_OBJ(self);
+	if (!orig_obj) {
+		return NULL;
+	}
+	ao2_options = orig_obj->priv_data.options;
+
+	return __ao2_container_alloc_hash(ao2_options, self->common.options, self->n_buckets,
+		self->hash_fn, self->common.sort_fn, self->common.cmp_fn);
+}
+
+/*!
+ * \internal
+ * \brief Create an empty copy of this container. (Debug version)
+ * \since 11.0
+ *
+ * \param self Container to operate upon.
+ * \param tag used for debugging.
+ * \param file Debug file name invoked from
+ * \param line Debug line invoked from
+ * \param func Debug function name invoked from
+ * \param ref_debug TRUE if to output a debug reference message.
+ *
+ * \retval empty-clone-container on success.
+ * \retval NULL on error.
+ */
+static struct ao2_container *hash_ao2_alloc_empty_clone_debug(struct ao2_container_hash *self, const char *tag, const char *file, int line, const char *func, int ref_debug)
+{
+	struct astobj2 *orig_obj;
+	unsigned int ao2_options;
+
+	/* Get container ao2 options. */
+	orig_obj = INTERNAL_OBJ(self);
+	if (!orig_obj) {
+		return NULL;
+	}
+	ao2_options = orig_obj->priv_data.options;
+
+	return __ao2_container_alloc_hash_debug(ao2_options, self->common.options,
+		self->n_buckets, self->hash_fn, self->common.sort_fn, self->common.cmp_fn,
+		tag, file, line, func, ref_debug);
+}
+
+/*!
+ * \internal
+ * \brief Link an object into this container.
+ * \since 11.0
+ *
+ * \param self Container to operate upon.
+ * \param obj_new Object to insert into the container.
+ * \param flags search_flags to control linking the object.  (OBJ_NOLOCK)
+ * \param tag used for debugging.
+ * \param file Debug file name invoked from
+ * \param line Debug line invoked from
+ * \param func Debug function name invoked from
+ *
+ * \retval 0 on errors.
+ * \retval 1 on success.
+ */
+static int hash_ao2_link(struct ao2_container_hash *c, void *user_data, int flags, const char *tag, const char *file, int line, const char *func)
+{
+	int i;
+	enum ao2_lock_req orig_lock;
+	/* create a new list entry */
+	struct bucket_entry *p;
+/*! BUGBUG hash_ao2_link() need to convert to ref counted nodes */
+/*! BUGBUG hash_ao2_link() need to add sorting support */
+/*! BUGBUG hash_ao2_link() need to add insert option support */
+/*! BUGBUG hash_ao2_link() need to add duplicate handling option support */
+
+	p = ast_calloc(1, sizeof(*p));
+	if (!p) {
+		return 0;
+	}
+
+	i = abs(c->hash_fn(user_data, OBJ_POINTER));
+
+	if (flags & OBJ_NOLOCK) {
+		orig_lock = adjust_lock(c, AO2_LOCK_REQ_WRLOCK, 1);
+	} else {
+		ao2_wrlock(c);
+		orig_lock = AO2_LOCK_REQ_MUTEX;
+	}
+
+	i %= c->n_buckets;
+	p->obj = user_data;
+	p->version = ast_atomic_fetchadd_int(&c->version, 1);
+	AST_LIST_INSERT_TAIL(&c->buckets[i], p, entry);
+	ast_atomic_fetchadd_int(&c->common.elements, 1);
+
+	if (tag) {
+		__ao2_ref_debug(user_data, +1, tag, file, line, func);
+	} else {
+		__ao2_ref(user_data, +1);
+	}
+
+	if (flags & OBJ_NOLOCK) {
+		adjust_lock(c, orig_lock, 0);
+	} else {
+		ao2_unlock(c);
+	}
+
+	return 1;
+}
+
+/*!
+ * \brief Traverse the container.
+ *
+ * \details
  * Browse the container using different stategies accoding the flags.
- * \return Is a pointer to an object or to a list of object if OBJ_MULTIPLE is
- * specified.
  * Luckily, for debug purposes, the added args (tag, file, line, func)
  * aren't an excessive load to the system, as the callback should not be
  * called as often as, say, the ao2_ref func is called.
+ *
+ * \param self Container to operate upon.
+ * \param flags search_flags to control traversing the container
+ * \param cb_fn Comparison callback function.
+ * \param arg Comparison callback arg parameter.
+ * \param data Data comparison callback data parameter.
+ * \param type Type of comparison callback cb_fn.
+ * \param tag used for debugging.
+ * \param file Debug file name invoked from
+ * \param line Debug line invoked from
+ * \param func Debug function name invoked from
+ *
+ * \retval NULL on failure or no matching object found.
+ *
+ * \retval object found if OBJ_MULTIPLE is not set in the flags
+ * parameter.
+ *
+ * \retval ao2_iterator pointer if OBJ_MULTIPLE is set in the
+ * flags parameter.  The iterator must be destroyed with
+ * ao2_iterator_destroy() when the caller no longer needs it.
  */
 static void *hash_ao2_callback(struct ao2_container_hash *c, enum search_flags flags,
 	void *cb_fn, void *arg, void *data, enum ao2_callback_type type, const char *tag,
@@ -1251,238 +1627,6 @@ static void *hash_ao2_callback(struct ao2_container_hash *c, enum search_flags f
 	} else {
 		return ret;
 	}
-}
-
-void *__ao2_callback_debug(struct ao2_container *c, enum search_flags flags,
-	ao2_callback_fn *cb_fn, void *arg, const char *tag, const char *file, int line,
-	const char *func)
-{
-	if (!INTERNAL_OBJ(c) || !c->v_table || !c->v_table->traverse) {
-		/* Sanity checks. */
-		return NULL;
-	}
-	return c->v_table->traverse(c, flags, cb_fn, arg, NULL, DEFAULT, tag, file, line, func);
-}
-
-void *__ao2_callback(struct ao2_container *c, enum search_flags flags,
-	ao2_callback_fn *cb_fn, void *arg)
-{
-	if (!INTERNAL_OBJ(c) || !c->v_table || !c->v_table->traverse) {
-		/* Sanity checks. */
-		return NULL;
-	}
-	return c->v_table->traverse(c, flags, cb_fn, arg, NULL, DEFAULT, NULL, NULL, 0, NULL);
-}
-
-void *__ao2_callback_data_debug(struct ao2_container *c, enum search_flags flags,
-	ao2_callback_data_fn *cb_fn, void *arg, void *data, const char *tag, const char *file,
-	int line, const char *func)
-{
-	if (!INTERNAL_OBJ(c) || !c->v_table || !c->v_table->traverse) {
-		/* Sanity checks. */
-		return NULL;
-	}
-	return c->v_table->traverse(c, flags, cb_fn, arg, data, WITH_DATA, tag, file, line, func);
-}
-
-void *__ao2_callback_data(struct ao2_container *c, enum search_flags flags,
-	ao2_callback_data_fn *cb_fn, void *arg, void *data)
-{
-	if (!INTERNAL_OBJ(c) || !c->v_table || !c->v_table->traverse) {
-		/* Sanity checks. */
-		return NULL;
-	}
-	return c->v_table->traverse(c, flags, cb_fn, arg, data, WITH_DATA, NULL, NULL, 0, NULL);
-}
-
-/*!
- * the find function just invokes the default callback with some reasonable flags.
- */
-void *__ao2_find_debug(struct ao2_container *c, const void *arg, enum search_flags flags,
-	const char *tag, const char *file, int line, const char *func)
-{
-	void *arged = (void *) arg;/* Done to avoid compiler const warning */
-
-	return __ao2_callback_debug(c, flags, c->cmp_fn, arged, tag, file, line, func);
-}
-
-void *__ao2_find(struct ao2_container *c, const void *arg, enum search_flags flags)
-{
-	void *arged = (void *) arg;/* Done to avoid compiler const warning */
-
-	return __ao2_callback(c, flags, c->cmp_fn, arged);
-}
-
-/*!
- * initialize an iterator so we start from the first object
- */
-struct ao2_iterator ao2_iterator_init(struct ao2_container *c, int flags)
-{
-	struct ao2_iterator a = {
-		.c = c,
-		.flags = flags
-	};
-
-	ao2_ref(c, +1);
-
-	return a;
-}
-
-/*!
- * destroy an iterator
- */
-void ao2_iterator_destroy(struct ao2_iterator *iter)
-{
-	ao2_ref(iter->c, -1);
-	if (iter->flags & AO2_ITERATOR_MALLOCD) {
-		ast_free(iter);
-	} else {
-		iter->c = NULL;
-	}
-}
-
-/*
- * move to the next element in the container.
- */
-static void *internal_ao2_iterator_next(struct ao2_iterator *iter, const char *tag, const char *file, int line, const char *func)
-{
-	enum ao2_lock_req orig_lock;
-	void *ret;
-
-	if (!INTERNAL_OBJ(iter->c) || !iter->c->v_table || !iter->c->v_table->iterator_next) {
-		/* Sanity checks. */
-		return NULL;
-	}
-
-	if (iter->flags & AO2_ITERATOR_DONTLOCK) {
-		if (iter->flags & AO2_ITERATOR_UNLINK) {
-			orig_lock = adjust_lock(iter->c, AO2_LOCK_REQ_WRLOCK, 1);
-		} else {
-			orig_lock = adjust_lock(iter->c, AO2_LOCK_REQ_RDLOCK, 1);
-		}
-	} else {
-		orig_lock = AO2_LOCK_REQ_MUTEX;
-		if (iter->flags & AO2_ITERATOR_UNLINK) {
-			ao2_wrlock(iter->c);
-		} else {
-			ao2_rdlock(iter->c);
-		}
-	}
-
-	ret = iter->c->v_table->iterator_next(iter->c, iter, tag, file, line, func);
-
-	if (iter->flags & AO2_ITERATOR_DONTLOCK) {
-		adjust_lock(iter->c, orig_lock, 0);
-	} else {
-		ao2_unlock(iter->c);
-	}
-
-	return ret;
-}
-
-void *__ao2_iterator_next_debug(struct ao2_iterator *iter, const char *tag, const char *file, int line, const char *func)
-{
-	return internal_ao2_iterator_next(iter, tag, file, line, func);
-}
-
-void *__ao2_iterator_next(struct ao2_iterator *iter)
-{
-	return internal_ao2_iterator_next(iter, NULL, __FILE__, __LINE__, __PRETTY_FUNCTION__);
-}
-
-static void container_destruct(void *_c)
-{
-	struct ao2_container *c = _c;
-
-	/* Unlink any stored objects in the container. */
-	c->destroying = 1;
-	__ao2_callback(c, OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE, NULL, NULL);
-
-	/* Perform any extra container cleanup. */
-	if (c->v_table && c->v_table->destroy) {
-		c->v_table->destroy(c);
-	}
-
-#ifdef AO2_DEBUG
-	ast_atomic_fetchadd_int(&ao2.total_containers, -1);
-#endif
-}
-
-static void container_destruct_debug(void *_c)
-{
-	struct ao2_container *c = _c;
-
-	/* Unlink any stored objects in the container. */
-	c->destroying = 1;
-	__ao2_callback_debug(c, OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE, NULL, NULL,
-		"container_destruct_debug called", __FILE__, __LINE__, __PRETTY_FUNCTION__);
-
-	/* Perform any extra container cleanup. */
-	if (c->v_table && c->v_table->destroy) {
-		c->v_table->destroy(c);
-	}
-
-#ifdef AO2_DEBUG
-	ast_atomic_fetchadd_int(&ao2.total_containers, -1);
-#endif
-}
-
-/*!
- * \internal
- * \brief Create an empty copy of this container.
- * \since 11.0
- *
- * \param self Container to operate upon.
- *
- * \retval empty-clone-container on success.
- * \retval NULL on error.
- */
-static struct ao2_container *hash_ao2_alloc_empty_clone(struct ao2_container_hash *self)
-{
-	struct astobj2 *orig_obj;
-	unsigned int ao2_options;
-
-	/* Get container ao2 options. */
-	orig_obj = INTERNAL_OBJ(self);
-	if (!orig_obj) {
-		return NULL;
-	}
-	ao2_options = orig_obj->priv_data.options;
-
-	return __ao2_container_alloc_hash(ao2_options, self->common.options, self->n_buckets,
-		self->hash_fn, self->common.sort_fn, self->common.cmp_fn);
-}
-
-/*!
- * \internal
- * \brief Create an empty copy of this container. (Debug version)
- * \since 11.0
- *
- * \param self Container to operate upon.
- * \param tag used for debugging.
- * \param file Debug file name invoked from
- * \param line Debug line invoked from
- * \param func Debug function name invoked from
- * \param ref_debug TRUE if to output a debug reference message.
- *
- * \retval empty-clone-container on success.
- * \retval NULL on error.
- */
-static struct ao2_container *hash_ao2_alloc_empty_clone_debug(struct ao2_container_hash *self, const char *tag, const char *file, int line, const char *func, int ref_debug)
-{
-	struct astobj2 *orig_obj;
-	unsigned int ao2_options;
-
-	/* Get container ao2 options. */
-	orig_obj = INTERNAL_OBJ(self);
-	if (!orig_obj) {
-		return NULL;
-	}
-	ao2_options = orig_obj->priv_data.options;
-
-	return __ao2_container_alloc_hash_debug(ao2_options, self->common.options,
-		self->n_buckets, self->hash_fn, self->common.sort_fn, self->common.cmp_fn,
-		tag, file, line, func, ref_debug);
 }
 
 /*!
@@ -1703,116 +1847,6 @@ struct ao2_container *__ao2_container_alloc_debug(unsigned int options,
 }
 
 /*! BUGBUG need to add red-black tree container support */
-
-/*!
- * \internal
- * \brief Put obj into the arg container.
- * \since 11.0
- *
- * \param obj  pointer to the (user-defined part) of an object.
- * \param arg callback argument from ao2_callback()
- * \param flags flags from ao2_callback()
- *
- * \retval 0 on success.
- * \retval CMP_STOP|CMP_MATCH on error.
- */
-static int dup_obj_cb(void *obj, void *arg, int flags)
-{
-	struct ao2_container *dest = arg;
-
-	return __ao2_link(dest, obj, OBJ_NOLOCK) ? 0 : (CMP_MATCH | CMP_STOP);
-}
-
-int ao2_container_dup(struct ao2_container *dest, struct ao2_container *src, enum search_flags flags)
-{
-	void *obj;
-	int res = 0;
-
-	if (!(flags & OBJ_NOLOCK)) {
-		ao2_rdlock(src);
-		ao2_wrlock(dest);
-	}
-	obj = __ao2_callback(src, OBJ_NOLOCK, dup_obj_cb, dest);
-	if (obj) {
-		/* Failed to put this obj into the dest container. */
-		__ao2_ref(obj, -1);
-
-		/* Remove all items from the dest container. */
-		__ao2_callback(dest, OBJ_NOLOCK | OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE, NULL,
-			NULL);
-		res = -1;
-	}
-	if (!(flags & OBJ_NOLOCK)) {
-		ao2_unlock(dest);
-		ao2_unlock(src);
-	}
-
-	return res;
-}
-
-struct ao2_container *__ao2_container_clone(struct ao2_container *orig, enum search_flags flags)
-{
-	struct ao2_container *clone;
-	int failed;
-
-	/* Create the clone container with the same properties as the original. */
-	if (!INTERNAL_OBJ(orig) || !orig->v_table || !orig->v_table->alloc_empty_clone) {
-		/* Sanity checks. */
-		return NULL;
-	}
-	clone = orig->v_table->alloc_empty_clone(orig);
-	if (!clone) {
-		return NULL;
-	}
-
-	if (flags & OBJ_NOLOCK) {
-		ao2_wrlock(clone);
-	}
-	failed = ao2_container_dup(clone, orig, flags);
-	if (flags & OBJ_NOLOCK) {
-		ao2_unlock(clone);
-	}
-	if (failed) {
-		/* Object copy into the clone container failed. */
-		__ao2_ref(clone, -1);
-		clone = NULL;
-	}
-	return clone;
-}
-
-struct ao2_container *__ao2_container_clone_debug(struct ao2_container *orig, enum search_flags flags, const char *tag, const char *file, int line, const char *func, int ref_debug)
-{
-	struct ao2_container *clone;
-	int failed;
-
-	/* Create the clone container with the same properties as the original. */
-	if (!INTERNAL_OBJ(orig) || !orig->v_table || !orig->v_table->alloc_empty_clone_debug) {
-		/* Sanity checks. */
-		return NULL;
-	}
-	clone = orig->v_table->alloc_empty_clone_debug(orig, tag, file, line, func, ref_debug);
-	if (!clone) {
-		return NULL;
-	}
-
-	if (flags & OBJ_NOLOCK) {
-		ao2_wrlock(clone);
-	}
-	failed = ao2_container_dup(clone, orig, flags);
-	if (flags & OBJ_NOLOCK) {
-		ao2_unlock(clone);
-	}
-	if (failed) {
-		/* Object copy into the clone container failed. */
-		if (ref_debug) {
-			__ao2_ref_debug(clone, -1, tag, file, line, func);
-		} else {
-			__ao2_ref(clone, -1);
-		}
-		clone = NULL;
-	}
-	return clone;
-}
 
 #ifdef AO2_DEBUG
 static int print_cb(void *obj, void *arg, int flag)
