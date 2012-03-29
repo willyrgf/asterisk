@@ -826,6 +826,9 @@ enum search_flags {
 	 * The given obj is an object of the same type as the one being
 	 * searched for, so use the object's hash and/or sort functions
 	 * for optimized searching.
+	 *
+	 * The matching function is unaffected (i.e. The cb_fn argument
+	 * to ao2_callback).
 	 */
 	OBJ_POINTER = (1 << 3),
 	/*!
