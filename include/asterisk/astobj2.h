@@ -462,7 +462,7 @@ enum ao2_alloc_opts {
 #endif
 
 void *__ao2_alloc_debug(size_t data_size, ao2_destructor_fn destructor_fn, unsigned int options, const char *tag,
-	const char *file, int line, const char *funcname, int ref_debug);
+	const char *file, int line, const char *func, int ref_debug);
 void *__ao2_alloc(size_t data_size, ao2_destructor_fn destructor_fn, unsigned int options);
 
 /*! @} */
@@ -503,7 +503,7 @@ void *__ao2_alloc(size_t data_size, ao2_destructor_fn destructor_fn, unsigned in
 
 #endif
 
-int __ao2_ref_debug(void *o, int delta, const char *tag, const char *file, int line, const char *funcname);
+int __ao2_ref_debug(void *o, int delta, const char *tag, const char *file, int line, const char *func);
 int __ao2_ref(void *o, int delta);
 
 /*! @} */
@@ -1020,7 +1020,7 @@ struct ao2_container *__ao2_container_alloc(unsigned int options,
 	unsigned int n_buckets, ao2_hash_fn *hash_fn, ao2_callback_fn *cmp_fn);
 struct ao2_container *__ao2_container_alloc_debug(unsigned int options,
 	unsigned int n_buckets, ao2_hash_fn *hash_fn, ao2_callback_fn *cmp_fn,
-	const char *tag, const char *file, int line, const char *funcname, int ref_debug);
+	const char *tag, const char *file, int line, const char *func, int ref_debug);
 
 /*!
  * \brief Allocate and initialize a hash container with the desired number of buckets.
@@ -1065,11 +1065,13 @@ struct ao2_container *__ao2_container_alloc_debug(unsigned int options,
 
 #endif
 
-struct ao2_container *__ao2_container_alloc_hash(unsigned int ao2_options, unsigned int container_options,
-	unsigned int n_buckets, ao2_hash_fn *hash_fn, ao2_sort_fn *sort_fn, ao2_callback_fn *cmp_fn);
-struct ao2_container *__ao2_container_alloc_hash_debug(unsigned int ao2_options, unsigned int container_options,
-	unsigned int n_buckets, ao2_hash_fn *hash_fn, ao2_sort_fn *sort_fn, ao2_callback_fn *cmp_fn,
-	const char *tag, const char *file, int line, const char *funcname, int ref_debug);
+struct ao2_container *__ao2_container_alloc_hash(unsigned int ao2_options,
+	unsigned int container_options, unsigned int n_buckets, ao2_hash_fn *hash_fn,
+	ao2_sort_fn *sort_fn, ao2_callback_fn *cmp_fn);
+struct ao2_container *__ao2_container_alloc_hash_debug(unsigned int ao2_options,
+	unsigned int container_options, unsigned int n_buckets, ao2_hash_fn *hash_fn,
+	ao2_sort_fn *sort_fn, ao2_callback_fn *cmp_fn,
+	const char *tag, const char *file, int line, const char *func, int ref_debug);
 
 /*!
  * \brief Allocate and initialize a list container.
@@ -1085,10 +1087,35 @@ struct ao2_container *__ao2_container_alloc_hash_debug(unsigned int ao2_options,
  * \note Destructor is set implicitly.
  * \note Implemented as a degenerate hash table.
  */
+
+#if defined(REF_DEBUG)
+
 #define ao2_t_container_alloc_list(ao2_options, container_options, sort_fn, cmp_fn, tag) \
-	ao2_t_container_alloc_hash((ao2_options), (container_options), 1, NULL, (sort_fn), (cmp_fn), (tag))
+	__ao2_container_alloc_list_debug((ao2_options), (container_options), (sort_fn), (cmp_fn), (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__, 1)
 #define ao2_container_alloc_list(ao2_options, container_options, sort_fn, cmp_fn) \
-	ao2_container_alloc_hash((ao2_options), (container_options), 1, NULL, (sort_fn), (cmp_fn))
+	__ao2_container_alloc_list_debug((ao2_options), (container_options), (sort_fn), (cmp_fn), "",  __FILE__, __LINE__, __PRETTY_FUNCTION__, 1)
+
+#elif defined(__AST_DEBUG_MALLOC)
+
+#define ao2_t_container_alloc_list(ao2_options, container_options, sort_fn, cmp_fn, tag) \
+	__ao2_container_alloc_list_debug((ao2_options), (container_options), (sort_fn), (cmp_fn), (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__, 0)
+#define ao2_container_alloc_list(ao2_options, container_options, sort_fn, cmp_fn) \
+	__ao2_container_alloc_list_debug((ao2_options), (container_options), (sort_fn), (cmp_fn), "",  __FILE__, __LINE__, __PRETTY_FUNCTION__, 0)
+
+#else
+
+#define ao2_t_container_alloc_list(ao2_options, container_options, sort_fn, cmp_fn, tag) \
+	__ao2_container_alloc_list((ao2_options), (container_options), (sort_fn), (cmp_fn))
+#define ao2_container_alloc_list(ao2_options, container_options, sort_fn, cmp_fn) \
+	__ao2_container_alloc_list((ao2_options), (container_options), (sort_fn), (cmp_fn))
+
+#endif
+
+struct ao2_container *__ao2_container_alloc_list(unsigned int ao2_options,
+	unsigned int container_options, ao2_sort_fn *sort_fn, ao2_callback_fn *cmp_fn);
+struct ao2_container *__ao2_container_alloc_list_debug(unsigned int ao2_options,
+	unsigned int container_options, ao2_sort_fn *sort_fn, ao2_callback_fn *cmp_fn,
+	const char *tag, const char *file, int line, const char *func, int ref_debug);
 
 /*!
  * \brief Allocate and initialize a red-black tree container.
@@ -1131,7 +1158,7 @@ struct ao2_container *__ao2_container_alloc_tree(unsigned int ao2_options, unsig
 	ao2_sort_fn *sort_fn, ao2_callback_fn *cmp_fn);
 struct ao2_container *__ao2_container_alloc_tree_debug(unsigned int ao2_options, unsigned int container_options,
 	ao2_sort_fn *sort_fn, ao2_callback_fn *cmp_fn,
-	const char *tag, const char *file, int line, const char *funcname, int ref_debug);
+	const char *tag, const char *file, int line, const char *func, int ref_debug);
 
 /*! \brief
  * Returns the number of elements in a container.
@@ -1172,7 +1199,7 @@ int ao2_container_dup(struct ao2_container *dest, struct ao2_container *src, enu
  * \retval NULL on error.
  */
 struct ao2_container *__ao2_container_clone(struct ao2_container *orig, enum search_flags flags);
-struct ao2_container *__ao2_container_clone_debug(struct ao2_container *orig, enum search_flags flags, const char *tag, const char *file, int line, const char *funcname, int ref_debug);
+struct ao2_container *__ao2_container_clone_debug(struct ao2_container *orig, enum search_flags flags, const char *tag, const char *file, int line, const char *func, int ref_debug);
 #if defined(REF_DEBUG)
 
 #define ao2_t_container_clone(orig, flags, tag)	__ao2_container_clone_debug(orig, flags, tag, __FILE__, __LINE__, __PRETTY_FUNCTION__, 1)
@@ -1208,8 +1235,8 @@ struct ao2_container *__ao2_container_clone_debug(struct ao2_container *orig, en
  * \param flags search_flags to control linking the object.  (OBJ_NOLOCK)
  * \param tag used for debugging.
  *
- * \retval NULL on errors.
- * \retval newobj on success.
+ * \retval 0 on errors.
+ * \retval 1 on success.
  *
  * This function inserts an object in a container according its key.
  *
@@ -1236,8 +1263,8 @@ struct ao2_container *__ao2_container_clone_debug(struct ao2_container *orig, en
 
 #endif
 
-void *__ao2_link_debug(struct ao2_container *c, void *new_obj, int flags, const char *tag, const char *file, int line, const char *funcname);
-void *__ao2_link(struct ao2_container *c, void *newobj, int flags);
+int __ao2_link_debug(struct ao2_container *c, void *obj_new, int flags, const char *tag, const char *file, int line, const char *func);
+int __ao2_link(struct ao2_container *c, void *obj_new, int flags);
 
 /*!
  * \brief Remove an object from a container
@@ -1275,7 +1302,7 @@ void *__ao2_link(struct ao2_container *c, void *newobj, int flags);
 
 #endif
 
-void *__ao2_unlink_debug(struct ao2_container *c, void *obj, int flags, const char *tag, const char *file, int line, const char *funcname);
+void *__ao2_unlink_debug(struct ao2_container *c, void *obj, int flags, const char *tag, const char *file, int line, const char *func);
 void *__ao2_unlink(struct ao2_container *c, void *obj, int flags);
 
 
@@ -1311,12 +1338,15 @@ void *__ao2_unlink(struct ao2_container *c, void *obj, int flags);
  *         also used by ao2_callback).
  * \param arg passed to the callback.
  * \param tag used for debugging.
- * \return when OBJ_MULTIPLE is not included in the flags parameter,
- *         the return value will be either the object found or NULL if no
- *         no matching object was found.  If OBJ_MULTIPLE is included,
- *         the return value will be a pointer to an ao2_iterator object,
- *         which must be destroyed with ao2_iterator_destroy() when the
- *         caller no longer needs it.
+ *
+ * \retval NULL on failure or no matching object found.
+ *
+ * \retval object found if OBJ_MULTIPLE is not set in the flags
+ * parameter.
+ *
+ * \retval ao2_iterator pointer if OBJ_MULTIPLE is set in the
+ * flags parameter.  The iterator must be destroyed with
+ * ao2_iterator_destroy() when the caller no longer needs it.
  *
  * If the function returns any objects, their refcount is incremented,
  * and the caller is in charge of decrementing them once done.
@@ -1375,7 +1405,7 @@ void *__ao2_unlink(struct ao2_container *c, void *obj, int flags);
 
 void *__ao2_callback_debug(struct ao2_container *c, enum search_flags flags,
 	ao2_callback_fn *cb_fn, void *arg, const char *tag, const char *file, int line,
-	const char *funcname);
+	const char *func);
 void *__ao2_callback(struct ao2_container *c, enum search_flags flags, ao2_callback_fn *cb_fn, void *arg);
 
 /*! @} */
@@ -1413,7 +1443,7 @@ void *__ao2_callback(struct ao2_container *c, enum search_flags flags, ao2_callb
 
 void *__ao2_callback_data_debug(struct ao2_container *c, enum search_flags flags,
 	ao2_callback_data_fn *cb_fn, void *arg, void *data, const char *tag, const char *file,
-	int line, const char *funcname);
+	int line, const char *func);
 void *__ao2_callback_data(struct ao2_container *c, enum search_flags flags,
 	ao2_callback_data_fn *cb_fn, void *arg, void *data);
 
@@ -1437,7 +1467,7 @@ void *__ao2_callback_data(struct ao2_container *c, enum search_flags flags,
 #endif
 
 void *__ao2_find_debug(struct ao2_container *c, const void *arg, enum search_flags flags,
-	const char *tag, const char *file, int line, const char *funcname);
+	const char *tag, const char *file, int line, const char *func);
 void *__ao2_find(struct ao2_container *c, const void *arg, enum search_flags flags);
 
 /*! \brief
@@ -1593,7 +1623,7 @@ struct ao2_iterator ao2_iterator_init(struct ao2_container *c, int flags);
 /*!
  * \brief Destroy a container iterator
  *
- * \param i the iterator to destroy
+ * \param iter the iterator to destroy
  *
  * \retval none
  *
@@ -1602,9 +1632,9 @@ struct ao2_iterator ao2_iterator_init(struct ao2_container *c, int flags);
  *
  */
 #if defined(TEST_FRAMEWORK)
-void ao2_iterator_destroy(struct ao2_iterator *i) __attribute__((noinline));
+void ao2_iterator_destroy(struct ao2_iterator *iter) __attribute__((noinline));
 #else
-void ao2_iterator_destroy(struct ao2_iterator *i);
+void ao2_iterator_destroy(struct ao2_iterator *iter);
 #endif
 #ifdef REF_DEBUG
 
@@ -1618,8 +1648,8 @@ void ao2_iterator_destroy(struct ao2_iterator *i);
 
 #endif
 
-void *__ao2_iterator_next_debug(struct ao2_iterator *a, const char *tag, const char *file, int line, const char *funcname);
-void *__ao2_iterator_next(struct ao2_iterator *a);
+void *__ao2_iterator_next_debug(struct ao2_iterator *iter, const char *tag, const char *file, int line, const char *func);
+void *__ao2_iterator_next(struct ao2_iterator *iter);
 
 /* extra functions */
 void ao2_bt(void);	/* backtrace */
