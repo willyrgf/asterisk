@@ -324,6 +324,7 @@ int ast_db_deltree(const char *family, const char *keytree)
 {
 	char prefix[MAX_DB_FIELD];
 	struct ast_variable *murderlist, *cur;
+	int counter = 0;
 
 	if (family) {
 		if (keytree) {
