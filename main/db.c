@@ -364,7 +364,6 @@ int ast_db_deltree(const char *family, const char *keytree)
 
 int ast_db_put(const char *family, const char *keys, const char *value)
 {
-	char fullkey[MAX_DB_FIELD];
 	DBT key, data;
 	int res;
 
