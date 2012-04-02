@@ -23,6 +23,10 @@
  * \author Mark Spencer <markster@digium.com> 
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
@@ -645,7 +649,8 @@ static int parkinglot_hash_cb(const void *obj, const int flags)
 
 static int parkinglot_cmp_cb(void *obj, void *arg, int flags)
 {
-	struct ast_parkinglot *parkinglot = obj, *parkinglot2 = arg;
+	struct ast_parkinglot *parkinglot = obj;
+	struct ast_parkinglot *parkinglot2 = arg;
 
 	return !strcasecmp(parkinglot->name, parkinglot2->name) ? CMP_MATCH | CMP_STOP : 0;
 }
@@ -2876,8 +2881,12 @@ int ast_feature_detect(struct ast_channel *chan, struct ast_flags *features, con
 
 /*! \brief Check if a feature exists */
 static int feature_check(struct ast_channel *chan, struct ast_flags *features, char *code) {
+	char *chan_dynamic_features;
+	ast_channel_lock(chan);
+	chan_dynamic_features = ast_strdupa(S_OR(pbx_builtin_getvar_helper(chan, "DYNAMIC_FEATURES"),""));
+	ast_channel_unlock(chan);
 
-	return feature_interpret_helper(chan, NULL, NULL, code, 0, NULL, features, FEATURE_INTERPRET_CHECK, NULL);
+	return feature_interpret_helper(chan, NULL, NULL, code, 0, chan_dynamic_features, features, FEATURE_INTERPRET_CHECK, NULL);
 }
 
 static void set_config_flags(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config)
@@ -3398,14 +3407,17 @@ static void clear_dialed_interfaces(struct ast_channel *chan)
 
 /*!
  * \brief bridge the call and set CDR
- * \param chan,peer,config
- * 
+ *
+ * \param chan The bridge considers this channel the caller.
+ * \param peer The bridge considers this channel the callee.
+ * \param config Configuration for this bridge.
+ *
  * Set start time, check for two channels,check if monitor on
  * check for feature activation, create new CDR
  * \retval res on success.
  * \retval -1 on failure to bridge.
  */
-int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast_bridge_config *config)
+int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config)
 {
 	/* Copy voice back and forth between the two channels.  Give the peer
 	   the ability to transfer calls with '#<extension' syntax. */
@@ -3703,10 +3715,21 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 				break;
 			case AST_CONTROL_OPTION:
 				aoh = f->data.ptr;
-				/* Forward option Requests */
+				/* Forward option Requests, but only ones we know are safe
+				 * These are ONLY sent by chan_iax2 and I'm not convinced that
+				 * they are useful. I haven't deleted them entirely because I
+				 * just am not sure of the ramifications of removing them. */
 				if (aoh && aoh->flag == AST_OPTION_FLAG_REQUEST) {
-					ast_channel_setoption(other, ntohs(aoh->option), aoh->data, 
-						f->datalen - sizeof(struct ast_option_header), 0);
+				   	switch (ntohs(aoh->option)) {
+					case AST_OPTION_TONE_VERIFY:
+					case AST_OPTION_TDD:
+					case AST_OPTION_RELAXDTMF:
+					case AST_OPTION_AUDIO_MODE:
+					case AST_OPTION_DIGIT_DETECT:
+					case AST_OPTION_FAX_DETECT:
+						ast_channel_setoption(other, ntohs(aoh->option), aoh->data, 
+							f->datalen - sizeof(struct ast_option_header), 0);
+					}
 				}
 				break;
 			}
@@ -4305,8 +4328,8 @@ static void *do_parking_thread(void *ignore)
 		struct ao2_iterator iter;
 		struct ast_parkinglot *curlot;
 		int ms = -1;	/* poll2 timeout, uninitialized */
-		iter = ao2_iterator_init(parkinglots, 0);
 
+		iter = ao2_iterator_init(parkinglots, 0);
 		while ((curlot = ao2_iterator_next(&iter))) {
 			manage_parkinglot(curlot, pfds, nfds, &new_pfds, &new_nfds, &ms);
 			ao2_ref(curlot, -1);
@@ -5003,8 +5026,9 @@ static int load_config(void)
 			if ((sscanf(var->value, "%30d", &transferdigittimeout) != 1) || (transferdigittimeout < 1)) {
 				ast_log(LOG_WARNING, "%s is not a valid transferdigittimeout\n", var->value);
 				transferdigittimeout = DEFAULT_TRANSFER_DIGIT_TIMEOUT;
-			} else
+			} else {
 				transferdigittimeout = transferdigittimeout * 1000;
+			}
 		} else if (!strcasecmp(var->name, "featuredigittimeout")) {
 			if ((sscanf(var->value, "%30d", &featuredigittimeout) != 1) || (featuredigittimeout < 1)) {
 				ast_log(LOG_WARNING, "%s is not a valid featuredigittimeout\n", var->value);
@@ -5014,14 +5038,16 @@ static int load_config(void)
 			if ((sscanf(var->value, "%30d", &atxfernoanswertimeout) != 1) || (atxfernoanswertimeout < 1)) {
 				ast_log(LOG_WARNING, "%s is not a valid atxfernoanswertimeout\n", var->value);
 				atxfernoanswertimeout = DEFAULT_NOANSWER_TIMEOUT_ATTENDED_TRANSFER;
-			} else
+			} else {
 				atxfernoanswertimeout = atxfernoanswertimeout * 1000;
+			}
 		} else if (!strcasecmp(var->name, "atxferloopdelay")) {
 			if ((sscanf(var->value, "%30u", &atxferloopdelay) != 1)) {
 				ast_log(LOG_WARNING, "%s is not a valid atxferloopdelay\n", var->value);
 				atxferloopdelay = DEFAULT_ATXFER_LOOP_DELAY;
-			} else 
+			} else {
 				atxferloopdelay *= 1000;
+			}
 		} else if (!strcasecmp(var->name, "atxferdropcall")) {
 			atxferdropcall = ast_true(var->value);
 		} else if (!strcasecmp(var->name, "atxfercallbackretries")) {
@@ -5032,12 +5058,13 @@ static int load_config(void)
 		} else if (!strcasecmp(var->name, "courtesytone")) {
 			ast_copy_string(courtesytone, var->value, sizeof(courtesytone));
 		}  else if (!strcasecmp(var->name, "parkedplay")) {
-			if (!strcasecmp(var->value, "both"))
+			if (!strcasecmp(var->value, "both")) {
 				parkedplay = 2;
-			else if (!strcasecmp(var->value, "parked"))
+			} else if (!strcasecmp(var->value, "parked")) {
 				parkedplay = 1;
-			else
+			} else {
 				parkedplay = 0;
+			}
 		} else if (!strcasecmp(var->name, "xfersound")) {
 			ast_copy_string(xfersound, var->value, sizeof(xfersound));
 		} else if (!strcasecmp(var->name, "xferfailsound")) {
@@ -5057,11 +5084,12 @@ static int load_config(void)
 
 	unmap_features();
 	for (var = ast_variable_browse(cfg, "featuremap"); var; var = var->next) {
-		if (remap_feature(var->name, var->value))
+		if (remap_feature(var->name, var->value)) {
 			ast_log(LOG_NOTICE, "Unknown feature '%s'\n", var->name);
+		}
 	}
 
-	/* Map a key combination to an application*/
+	/* Map a key combination to an application */
 	ast_unregister_features();
 	for (var = ast_variable_browse(cfg, "applicationmap"); var; var = var->next) {
 		char *tmp_val = ast_strdupa(var->value);
@@ -5161,23 +5189,27 @@ static int load_config(void)
 		/* Is this a parkinglot definition ? */
 		if (!strncasecmp(ctg, "parkinglot_", strlen("parkinglot_"))) {
 			ast_debug(2, "Found configuration section %s, assume parking context\n", ctg);
-			if(!build_parkinglot(ctg, ast_variable_browse(cfg, ctg)))
+			if (!build_parkinglot(ctg, ast_variable_browse(cfg, ctg))) {
 				ast_log(LOG_ERROR, "Could not build parking lot %s. Configuration error.\n", ctg);
-			else
+			} else {
 				ast_debug(1, "Configured parking context %s\n", ctg);
+			}
 			continue;	
 		}
+
 		/* No, check if it's a group */
 		for (i = 0; i < ARRAY_LEN(categories); i++) {
-			if (!strcasecmp(categories[i], ctg))
+			if (!strcasecmp(categories[i], ctg)) {
 				break;
+			}
+		}
+		if (i < ARRAY_LEN(categories)) {
+			continue;
 		}
 
-		if (i < ARRAY_LEN(categories)) 
+		if (!(fg = register_group(ctg))) {
 			continue;
-
-		if (!(fg = register_group(ctg)))
-			continue;
+		}
 
 		for (var = ast_variable_browse(cfg, ctg); var; var = var->next) {
 			struct ast_call_feature *feature;
@@ -5918,18 +5950,20 @@ int ast_bridge_timelimit(struct ast_channel *chan, struct ast_bridge_config *con
 	} else if ( (delta = config->play_warning - config->timelimit) > 0) {
 		int w = config->warning_freq;
 
-		/* If the first warning is requested _after_ the entire call would end,
-		   and no warning frequency is requested, then turn off the warning. If
-		   a warning frequency is requested, reduce the 'first warning' time by
-		   that frequency until it falls within the call's total time limit.
-		   Graphically:
-				  timelim->|    delta        |<-playwarning
-			0__________________|_________________|
-					 | w  |    |    |    |
-
-		   so the number of intervals to cut is 1+(delta-1)/w
-		*/
-
+		/*
+		 * If the first warning is requested _after_ the entire call
+		 * would end, and no warning frequency is requested, then turn
+		 * off the warning. If a warning frequency is requested, reduce
+		 * the 'first warning' time by that frequency until it falls
+		 * within the call's total time limit.
+		 *
+		 * Graphically:
+		 *                timelim->|    delta        |<-playwarning
+		 *      0__________________|_________________|
+		 *                       | w  |    |    |    |
+		 *
+		 * so the number of intervals to cut is 1+(delta-1)/w
+		 */
 		if (w == 0) {
 			config->play_warning = 0;
 		} else {
@@ -6074,8 +6108,6 @@ static int bridge_exec(struct ast_channel *chan, const char *data)
 					"Channel2: %s\r\n", chan->name, args.dest_chan);
 	}
 
-	ast_channel_unlock(current_dest_chan);
-
 	do_bridge_masquerade(current_dest_chan, final_dest_chan);
 
 	chans[0] = current_dest_chan;
@@ -6188,9 +6220,9 @@ int ast_features_init(void)
 	}
 
 	res |= ast_devstate_prov_add("Park", metermaidstate);
-#ifdef TEST_FRAMEWORK
+#if defined(TEST_FRAMEWORK)
 	res |= AST_TEST_REGISTER(features_test);
-#endif
+#endif	/* defined(TEST_FRAMEWORK) */
 
 	return res;
 }

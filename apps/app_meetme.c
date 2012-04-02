@@ -31,6 +31,8 @@
 
 /*** MODULEINFO
 	<depend>dahdi</depend>
+	<support_level>deprecated</support_level>
+	<replacement>app_confbridge</replacement>
  ***/
 
 #include "asterisk.h"
@@ -364,7 +366,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</syntax>
 		<description>
 			<para>Run admin <replaceable>command</replaceable> for a specific
-			<replaceable>channel</replaceable> in any coference.</para>
+			<replaceable>channel</replaceable> in any conference.</para>
 		</description>
 	</application>
 	<application name="SLAStation" language="en_US">
@@ -602,12 +604,12 @@ enum {
 	CONFFLAG_KICK_CONTINUE = (1 << 28),
 	CONFFLAG_DURATION_STOP = (1 << 29),
 	CONFFLAG_DURATION_LIMIT = (1 << 30),
-	/*! Do not write any audio to this channel until the state is up. */
-	CONFFLAG_NO_AUDIO_UNTIL_UP = (1 << 31),
 };
 
-/* !If set play an intro announcement at start of conference */
-#define CONFFLAG_INTROMSG ((uint64_t)1 << 32)
+/*! Do not write any audio to this channel until the state is up. */
+#define CONFFLAG_NO_AUDIO_UNTIL_UP  (1ULL << 31)
+/*! If set play an intro announcement at start of conference */
+#define CONFFLAG_INTROMSG           (1ULL << 32)
 
 enum {
 	OPT_ARG_WAITMARKED = 0,
@@ -4331,15 +4333,13 @@ static int conf_exec(struct ast_channel *chan, const char *data)
 					res = -1;
 				}
 			} else {
-				if (((!ast_strlen_zero(cnf->pin)       &&
-					!ast_test_flag64(&confflags, CONFFLAG_ADMIN)) ||
-				     (!ast_strlen_zero(cnf->pinadmin)  &&
-						 ast_test_flag64(&confflags, CONFFLAG_ADMIN)) ||
-					     (!ast_strlen_zero(cnf->pin) &&
-							 ast_strlen_zero(cnf->pinadmin) &&
-							 ast_test_flag64(&confflags, CONFFLAG_ADMIN))) &&
-				    ((!(cnf->users == 0 && cnf->isdynamic)) ||
-						ast_test_flag64(&confflags, CONFFLAG_ALWAYSPROMPT))) {
+				/* Check to see if the conference requires a pin
+				 * and we ALWAYS prompt or no pin was provided */
+				if ((!ast_strlen_zero(cnf->pin) ||
+					(!ast_strlen_zero(cnf->pinadmin) &&
+						ast_test_flag64(&confflags, CONFFLAG_ADMIN))) &&
+				    (ast_test_flag64(&confflags, CONFFLAG_ALWAYSPROMPT) ||
+						ast_strlen_zero(args.pin))) {
 					char pin[MAX_PIN] = "";
 					int j;
 

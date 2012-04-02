@@ -19,6 +19,7 @@
 
 /*** MODULEINFO
 	<defaultenabled>no</defaultenabled>
+	<support_level>extended</support_level>
  ***/
 
 #include "chan_ooh323.h"
@@ -1104,6 +1105,9 @@ static int ooh323_answer(struct ast_channel *ast)
 				ast_debug(1, "ooh323_answer(%s)\n", ast->name);
 			ast_channel_unlock(ast);
 			ooAnswerCall(p->callToken);
+		}
+		if (callToken) {
+			free(callToken);
 		}
 		ast_mutex_unlock(&p->lock);
 	}

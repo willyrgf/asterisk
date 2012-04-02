@@ -25,6 +25,11 @@
  * \ingroup applications
  */
 
+/*** MODULEINFO
+	<support_level>deprecated</support_level>
+	<replacement>func_env (FILE())</replacement>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")

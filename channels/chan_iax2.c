@@ -33,6 +33,7 @@
 
 /*** MODULEINFO
 	<use>crypto</use>
+	<support_level>core</support_level>
  ***/
 
 #include "asterisk.h"
@@ -1817,7 +1818,9 @@ static int scheduled_destroy(const void *vid)
 
 static void free_signaling_queue_entry(struct signaling_queue_entry *s)
 {
-	ast_free(s->f.data.ptr);
+	if (s->f.datalen) {
+		ast_free(s->f.data.ptr);
+	}
 	ast_free(s);
 }
 
@@ -5266,10 +5269,6 @@ static int iax2_setoption(struct ast_channel *c, int option, void *data, int dat
 		/* these two cannot be sent, because they require a result */
 		errno = ENOSYS;
 		return -1;
-	case AST_OPTION_FORMAT_READ:
-	case AST_OPTION_FORMAT_WRITE:
-	case AST_OPTION_MAKE_COMPATIBLE:
-		return -1;
 	case AST_OPTION_OPRMODE:
 		errno = EINVAL;
 		return -1;
@@ -5286,7 +5285,16 @@ static int iax2_setoption(struct ast_channel *c, int option, void *data, int dat
 		ast_mutex_unlock(&iaxsl[callno]);
 		return 0;
 	}
-	default:
+	/* These options are sent to the other side across the network where
+	 * they will be passed to whatever channel is bridged there. Don't
+	 * do anything silly like pass an option that transmits pointers to
+	 * memory on this machine to a remote machine to use */
+	case AST_OPTION_TONE_VERIFY:
+	case AST_OPTION_TDD:
+	case AST_OPTION_RELAXDTMF:
+	case AST_OPTION_AUDIO_MODE:
+	case AST_OPTION_DIGIT_DETECT:
+	case AST_OPTION_FAX_DETECT:
 	{
 		unsigned short callno = PTR_TO_CALLNO(c->tech_pvt);
 		struct chan_iax2_pvt *pvt;
@@ -5314,7 +5322,12 @@ static int iax2_setoption(struct ast_channel *c, int option, void *data, int dat
 		ast_free(h);
 		return res;
 	}
+	default:
+		return -1;
 	}
+
+	/* Just in case someone does a break instead of a return */
+	return -1;
 }
 
 static int iax2_queryoption(struct ast_channel *c, int option, void *data, int *datalen)
@@ -9244,7 +9257,8 @@ static void *iax_park_thread(void *stuff)
 	struct ast_channel *chan1, *chan2;
 	struct iax_dual *d;
 	struct ast_frame *f;
-	int ext;
+	int ext = 0;
+
 	d = stuff;
 	chan1 = d->chan1;
 	chan2 = d->chan2;
@@ -10681,7 +10695,7 @@ static int socket_process(struct iax2_thread *thread)
 					pbx_builtin_setvar_helper(owner, "BLINDTRANSFER", bridged_chan->name);
 					pbx_builtin_setvar_helper(bridged_chan, "BLINDTRANSFER", owner->name);
 
-					if (ast_parking_ext_valid(ies.called_number, c, iaxs[fr->callno]->context)) {
+					if (ast_parking_ext_valid(ies.called_number, owner, iaxs[fr->callno]->context)) {
 						ast_debug(1, "Parking call '%s'\n", bridged_chan->name);
 						if (iax_park(bridged_chan, owner, ies.called_number)) {
 							ast_log(LOG_WARNING, "Failed to park call '%s'\n",

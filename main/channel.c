@@ -6299,29 +6299,40 @@ int ast_do_masquerade(struct ast_channel *original)
 	 */
 	ao2_lock(channels);
 
-	/* lock the original channel to determine if the masquerade is require or not */
+	/* lock the original channel to determine if the masquerade is required or not */
 	ast_channel_lock(original);
 
-	/* This checks to see if the masquerade has already happened or not.  There is a
-	 * race condition that exists for this function. Since all pvt and channel locks
-	 * must be let go before calling do_masquerade, it is possible that it could be
-	 * called multiple times for the same channel.  This check verifies whether
-	 * or not the masquerade has already been completed by another thread */
-	if (!original->masq) {
-		ast_channel_unlock(original);
-		ao2_unlock(channels);
-		return 0; /* masq already completed by another thread, or never needed to be done to begin with */
+	/*
+	 * This checks to see if the masquerade has already happened or
+	 * not.  There is a race condition that exists for this
+	 * function.  Since all pvt and channel locks must be let go
+	 * before calling do_masquerade, it is possible that it could be
+	 * called multiple times for the same channel.  This check
+	 * verifies whether or not the masquerade has already been
+	 * completed by another thread.
+	 */
+	while ((clonechan = original->masq) && ast_channel_trylock(clonechan)) {
+		/*
+		 * A masq is needed but we could not get the clonechan lock
+		 * immediately.  Since this function already holds the global
+		 * container lock, unlocking original for deadlock avoidance
+		 * will not result in any sort of masquerade race condition.  If
+		 * masq is called by a different thread while this happens, it
+		 * will be stuck waiting until we unlock the container.
+		 */
+		CHANNEL_DEADLOCK_AVOIDANCE(original);
 	}
 
-	/* now that we have verified no race condition exists, set the clone channel */
-	clonechan = original->masq;
-
-	/* since this function already holds the global container lock, unlocking original
-	 * for deadlock avoidance will not result in any sort of masquerade race condition.
-	 * If masq is called by a different thread while this happens, it will be stuck waiting
-	 * until we unlock the container. */
-	while (ast_channel_trylock(clonechan)) {
-		CHANNEL_DEADLOCK_AVOIDANCE(original);
+	/*
+	 * A final masq check must be done after deadlock avoidance for
+	 * clonechan above or we could get a double masq.  This is
+	 * posible with ast_hangup at least.
+	 */
+	if (!clonechan) {
+		/* masq already completed by another thread, or never needed to be done to begin with */
+		ast_channel_unlock(original);
+		ao2_unlock(channels);
+		return 0;
 	}
 
 	/* Get any transfer masquerade connected line exchange data. */
@@ -7175,7 +7186,7 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 		config->nexteventts = ast_tvadd(config->start_time, ast_samp2tv(config->timelimit, 1000));
 		if ((caller_warning || callee_warning) && config->play_warning) {
 			long next_warn = config->play_warning;
-			if (time_left_ms < config->play_warning) {
+			if (time_left_ms < config->play_warning && config->warning_freq > 0) {
 				/* At least one warning was played, which means we are returning after feature */
 				long warns_passed = (config->play_warning - time_left_ms) / config->warning_freq;
 				/* It is 'warns_passed * warning_freq' NOT '(warns_passed + 1) * warning_freq',
@@ -7287,6 +7298,7 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 		    (c0->tech->bridge == c1->tech->bridge) &&
 		    !c0->monitor && !c1->monitor &&
 		    !c0->audiohooks && !c1->audiohooks &&
+		    ast_framehook_list_is_empty(c0->framehooks) && ast_framehook_list_is_empty(c1->framehooks) &&
 		    !c0->masq && !c0->masqr && !c1->masq && !c1->masqr) {
 			int timeoutms = to - 1000 > 0 ? to - 1000 : to;
 			/* Looks like they share a bridge method and nothing else is in the way */
@@ -7387,28 +7399,42 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 /*! \brief Sets an option on a channel */
 int ast_channel_setoption(struct ast_channel *chan, int option, void *data, int datalen, int block)
 {
+	int res;
+
+	ast_channel_lock(chan);
 	if (!chan->tech->setoption) {
 		errno = ENOSYS;
+		ast_channel_unlock(chan);
 		return -1;
 	}
 
 	if (block)
 		ast_log(LOG_ERROR, "XXX Blocking not implemented yet XXX\n");
 
-	return chan->tech->setoption(chan, option, data, datalen);
+	res = chan->tech->setoption(chan, option, data, datalen);
+	ast_channel_unlock(chan);
+
+	return res;
 }
 
 int ast_channel_queryoption(struct ast_channel *chan, int option, void *data, int *datalen, int block)
 {
+	int res;
+
+	ast_channel_lock(chan);
 	if (!chan->tech->queryoption) {
 		errno = ENOSYS;
+		ast_channel_unlock(chan);
 		return -1;
 	}
 
 	if (block)
 		ast_log(LOG_ERROR, "XXX Blocking not implemented yet XXX\n");
 
-	return chan->tech->queryoption(chan, option, data, datalen);
+	res = chan->tech->queryoption(chan, option, data, datalen);
+	ast_channel_unlock(chan);
+
+	return res;
 }
 
 struct tonepair_def {

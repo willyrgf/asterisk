@@ -27,6 +27,7 @@
 
 /*** MODULEINFO
 	<depend>chan_local</depend>
+	<support_level>core</support_level>
  ***/
 
 
@@ -65,6 +66,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/aoc.h"
 #include "asterisk/ccss.h"
 #include "asterisk/indications.h"
+#include "asterisk/framehook.h"
 
 /*** DOCUMENTATION
 	<application name="Dial" language="en_US">
@@ -551,18 +553,19 @@ enum {
 	OPT_CALLEE_GOSUB =      (1 << 28),
 	OPT_CALLEE_MIXMONITOR = (1 << 29),
 	OPT_CALLER_MIXMONITOR = (1 << 30),
-	OPT_CALLER_ANSWER =	(1 << 31),
 };
 
-#define DIAL_STILLGOING      (1 << 31)
-#define DIAL_NOFORWARDHTML   ((uint64_t)1 << 32) /* flags are now 64 bits, so keep it up! */
-#define DIAL_CALLERID_ABSENT ((uint64_t)1 << 33) /* TRUE if caller id is not available for connected line. */
-#define OPT_CANCEL_ELSEWHERE ((uint64_t)1 << 34)
-#define OPT_PEER_H           ((uint64_t)1 << 35)
-#define OPT_CALLEE_GO_ON     ((uint64_t)1 << 36)
-#define OPT_CANCEL_TIMEOUT   ((uint64_t)1 << 37)
-#define OPT_FORCE_CID_TAG    ((uint64_t)1 << 38)
-#define OPT_FORCE_CID_PRES   ((uint64_t)1 << 39)
+/* flags are now 64 bits, so keep it up! */
+#define DIAL_STILLGOING      (1LLU << 31)
+#define DIAL_NOFORWARDHTML   (1LLU << 32)
+#define DIAL_CALLERID_ABSENT (1LLU << 33) /* TRUE if caller id is not available for connected line. */
+#define OPT_CANCEL_ELSEWHERE (1LLU << 34)
+#define OPT_PEER_H           (1LLU << 35)
+#define OPT_CALLEE_GO_ON     (1LLU << 36)
+#define OPT_CANCEL_TIMEOUT   (1LLU << 37)
+#define OPT_FORCE_CID_TAG    (1LLU << 38)
+#define OPT_FORCE_CID_PRES   (1LLU << 39)
+#define OPT_CALLER_ANSWER    (1LLU << 40)
 
 enum {
 	OPT_ARG_ANNOUNCE = 0,
@@ -631,7 +634,8 @@ END_OPTIONS );
 	OPT_CALLER_HANGUP | OPT_CALLEE_TRANSFER | OPT_CALLER_TRANSFER | \
 	OPT_CALLEE_MONITOR | OPT_CALLER_MONITOR | OPT_CALLEE_PARK |  \
 	OPT_CALLER_PARK | OPT_ANNOUNCE | OPT_CALLEE_MACRO | OPT_CALLEE_GOSUB) && \
-	!chan->audiohooks && !peer->audiohooks)
+	!chan->audiohooks && !peer->audiohooks && \
+	ast_framehook_list_is_empty(chan->framehooks) && ast_framehook_list_is_empty(peer->framehooks))
 
 /*
  * The list of active channels
@@ -2406,7 +2410,8 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 	 * datastore again, causing a crash
 	 */
 	ast_channel_lock(chan);
-	if (!ast_channel_datastore_remove(chan, datastore)) {
+	datastore = ast_channel_datastore_find(chan, &dialed_interface_info, NULL); /* make sure we weren't cleaned up already */
+	if (datastore && !ast_channel_datastore_remove(chan, datastore)) {
 		ast_datastore_free(datastore);
 	}
 	ast_channel_unlock(chan);

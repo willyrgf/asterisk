@@ -44,6 +44,7 @@
 	<use>pri</use>
 	<use>ss7</use>
 	<use>openr2</use>
+	<support_level>core</support_level>
  ***/
 
 #include "asterisk.h"
@@ -174,11 +175,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		<syntax>
 			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
 			<parameter name="DAHDIChannel" required="true">
-				<para>DAHDI channel name to transfer.</para>
+				<para>DAHDI channel number to transfer.</para>
 			</parameter>
 		</syntax>
 		<description>
-			<para>Transfer a DAHDI channel.</para>
+			<para>Simulate a flash hook event by the user connected to the channel.</para>
+			<note><para>Valid only for analog channels.</para></note>
 		</description>
 	</manager>
 	<manager name="DAHDIHangup" language="en_US">
@@ -188,11 +190,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		<syntax>
 			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
 			<parameter name="DAHDIChannel" required="true">
-				<para>DAHDI channel name to hangup.</para>
+				<para>DAHDI channel number to hangup.</para>
 			</parameter>
 		</syntax>
 		<description>
-			<para>Hangup a DAHDI channel.</para>
+			<para>Simulate an on-hook event by the user connected to the channel.</para>
+			<note><para>Valid only for analog channels.</para></note>
 		</description>
 	</manager>
 	<manager name="DAHDIDialOffhook" language="en_US">
@@ -201,10 +204,15 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</synopsis>
 		<syntax>
 			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
-			<parameter name="DAHDIChannel" required="true" />
-			<parameter name="Number" required="true" />
+			<parameter name="DAHDIChannel" required="true">
+				<para>DAHDI channel number to dial digits.</para>
+			</parameter>
+			<parameter name="Number" required="true">
+				<para>Digits to dial.</para>
+			</parameter>
 		</syntax>
 		<description>
+			<para>Generate DTMF control frames to the bridged peer.</para>
 		</description>
 	</manager>
 	<manager name="DAHDIDNDon" language="en_US">
@@ -213,9 +221,13 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</synopsis>
 		<syntax>
 			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
-			<parameter name="DAHDIChannel" required="true" />
+			<parameter name="DAHDIChannel" required="true">
+				<para>DAHDI channel number to set DND on.</para>
+			</parameter>
 		</syntax>
 		<description>
+			<para>Equivalent to the CLI command "dahdi set dnd <variable>channel</variable> on".</para>
+			<note><para>Feature only supported by analog channels.</para></note>
 		</description>
 	</manager>
 	<manager name="DAHDIDNDoff" language="en_US">
@@ -224,22 +236,27 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</synopsis>
 		<syntax>
 			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
-			<parameter name="DAHDIChannel" required="true" />
+			<parameter name="DAHDIChannel" required="true">
+				<para>DAHDI channel number to set DND off.</para>
+			</parameter>
 		</syntax>
 		<description>
+			<para>Equivalent to the CLI command "dahdi set dnd <variable>channel</variable> off".</para>
+			<note><para>Feature only supported by analog channels.</para></note>
 		</description>
 	</manager>
 	<manager name="DAHDIShowChannels" language="en_US">
 		<synopsis>
-			Show status DAHDI channels.
+			Show status of DAHDI channels.
 		</synopsis>
 		<syntax>
 			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
 			<parameter name="DAHDIChannel">
-				<para>Specify the specific channel to show.  Show all channels if zero or not present.</para>
+				<para>Specify the specific channel number to show.  Show all channels if zero or not present.</para>
 			</parameter>
 		</syntax>
 		<description>
+			<para>Similar to the CLI command "dahdi show channels".</para>
 		</description>
 	</manager>
 	<manager name="DAHDIRestart" language="en_US">
@@ -250,6 +267,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
 		</syntax>
 		<description>
+			<para>Equivalent to the CLI command "dahdi restart".</para>
 		</description>
 	</manager>
  ***/
@@ -395,8 +413,6 @@ static struct dahdi_ring_cadence AS_RP_cadence = {{250, 10000}};
 
 static char defaultcic[64] = "";
 static char defaultozz[64] = "";
-
-static char parkinglot[AST_MAX_EXTENSION] = "";		/*!< Default parking lot for this channel */
 
 /*! Run this script when the MWI state changes on an FXO line, if mwimonitor is enabled */
 static char mwimonitornotify[PATH_MAX] = "";
@@ -3036,9 +3052,9 @@ static int sig_pri_tone_to_dahditone(enum sig_pri_tone tone)
 #if defined(HAVE_PRI)
 static void my_handle_dchan_exception(struct sig_pri_span *pri, int index)
 {
-	int x, res;
+	int x;
 
-	res = ioctl(pri->fds[index], DAHDI_GETEVENT, &x);
+	ioctl(pri->fds[index], DAHDI_GETEVENT, &x);
 	if (x) {
 		ast_log(LOG_NOTICE, "PRI got event: %s (%d) on D-channel of span %d\n", event2str(x), x, pri->span);
 	}
@@ -8911,6 +8927,22 @@ static struct ast_frame *dahdi_read(struct ast_channel *ast)
 		return &p->subs[idx].f;
 	}
 
+	/*
+	 * If we have a fake_event, fake an exception to handle it only
+	 * if this channel owns the private.
+	 */
+	if (p->fake_event && p->owner == ast) {
+		if (analog_lib_handles(p->sig, p->radio, p->oprmode)) {
+			struct analog_pvt *analog_p = p->sig_pvt;
+
+			f = analog_exception(analog_p, ast);
+		} else {
+			f = __dahdi_exception(ast);
+		}
+		ast_mutex_unlock(&p->lock);
+		return f;
+	}
+
 	if (ast->rawreadformat == AST_FORMAT_SLINEAR) {
 		if (!p->subs[idx].linear) {
 			p->subs[idx].linear = 1;
@@ -9141,10 +9173,6 @@ static struct ast_frame *dahdi_read(struct ast_channel *ast)
 			break;
 		}
 	}
-
-	/* If we have a fake_event, trigger exception to handle it */
-	if (p->fake_event)
-		ast_set_flag(ast, AST_FLAG_EXCEPTION);
 
 	ast_mutex_unlock(&p->lock);
 	return f;
@@ -9409,6 +9437,8 @@ static struct ast_channel *dahdi_new(struct dahdi_pvt *i, int state, int startpb
 	int features;
 	struct ast_str *chan_name;
 	struct ast_variable *v;
+	char *dashptr;
+	char device_name[AST_CHANNEL_NAME];
 
 	if (i->subs[idx].owner) {
 		ast_log(LOG_WARNING, "Channel %d already has a %s call\n", i->channel,subnames[idx]);
@@ -9589,7 +9619,13 @@ static struct ast_channel *dahdi_new(struct dahdi_pvt *i, int state, int startpb
 	/* Configure the new channel jb */
 	ast_jb_configure(tmp, &global_jbconf);
 
-	ast_devstate_changed_literal(ast_state_chan2dev(state), tmp->name);
+	/* Set initial device state */
+	ast_copy_string(device_name, tmp->name, sizeof(device_name));
+	dashptr = strrchr(device_name, '-');
+	if (dashptr) {
+		*dashptr = '\0';
+	}
+	ast_devstate_changed_literal(AST_DEVICE_UNKNOWN, device_name);
 
 	for (v = i->vars ; v ; v = v->next)
 		pbx_builtin_setvar_helper(tmp, v->name, v->value);
@@ -9679,6 +9715,33 @@ static int dahdi_dnd(struct dahdi_pvt *dahdichan, int flag)
 			"Status: %s\r\n", dahdichan->channel,
 			flag? "enabled" : "disabled");
 
+	return 0;
+}
+
+static int canmatch_featurecode(const char *exten)
+{
+	int extlen = strlen(exten);
+	const char *pickup_ext;
+	if (!extlen) {
+		return 1;
+	}
+	pickup_ext = ast_pickup_ext();
+	if (extlen < strlen(pickup_ext) && !strncmp(pickup_ext, exten, extlen)) {
+		return 1;
+	}
+	/* hardcoded features are *60, *67, *69, *70, *72, *73, *78, *79, *82, *0 */
+	if (exten[0] == '*' && extlen < 3) {
+		if (extlen == 1) {
+			return 1;
+		}
+		/* "*0" should be processed before it gets here */
+		switch (exten[1]) {
+		case '6':
+		case '7':
+		case '8':
+			return 1;
+		}
+	}
 	return 0;
 }
 
@@ -10225,7 +10288,7 @@ static void *analog_ss_thread(void *data)
 				}
 			} else if (!ast_canmatch_extension(chan, chan->context, exten, 1,
 				S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL))
-				&& ((exten[0] != '*') || (strlen(exten) > 2))) {
+				&& !canmatch_featurecode(exten)) {
 				ast_debug(1, "Can't match %s from '%s' in context %s\n", exten,
 					S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, "<Unknown Caller>"),
 					chan->context);
@@ -10982,7 +11045,7 @@ quit_no_clean:
 */
 static int mwi_send_init(struct dahdi_pvt * pvt)
 {
-	int x, res;
+	int x;
 
 #ifdef HAVE_DAHDI_LINEREVERSE_VMWI
 	/* Determine how this spill is to be sent */
@@ -11018,7 +11081,7 @@ static int mwi_send_init(struct dahdi_pvt * pvt)
 		return -1;
 	}
 	x = DAHDI_FLUSH_BOTH;
-	res = ioctl(pvt->subs[SUB_REAL].dfd, DAHDI_FLUSH, &x);
+	ioctl(pvt->subs[SUB_REAL].dfd, DAHDI_FLUSH, &x);
 	x = 3000;
 	ioctl(pvt->subs[SUB_REAL].dfd, DAHDI_ONHOOKTRANSFER, &x);
 #ifdef HAVE_DAHDI_LINEREVERSE_VMWI
@@ -13826,17 +13889,22 @@ static void *mfcr2_monitor(void *data)
 #endif
 static void dahdi_pri_message(struct pri *pri, char *s)
 {
-	int x, y;
-	int dchan = -1, span = -1, dchancount = 0;
+	int x;
+	int y;
+	int dchan = -1;
+	int span = -1;
+	int dchancount = 0;
 
 	if (pri) {
 		for (x = 0; x < NUM_SPANS; x++) {
 			for (y = 0; y < SIG_PRI_NUM_DCHANS; y++) {
-				if (pris[x].pri.dchans[y])
+				if (pris[x].pri.dchans[y]) {
 					dchancount++;
+				}
 
-				if (pris[x].pri.dchans[y] == pri)
+				if (pris[x].pri.dchans[y] == pri) {
 					dchan = y;
+				}
 			}
 			if (dchan >= 0) {
 				span = x;
@@ -13844,14 +13912,18 @@ static void dahdi_pri_message(struct pri *pri, char *s)
 			}
 			dchancount = 0;
 		}
-		if (dchancount > 1 && (span > -1))
-			ast_verbose("[Span %d D-Channel %d]%s", span, dchan, s);
-		else if (span > -1)
-			ast_verbose("%d %s", span+1, s);
-		else
-			ast_verbose("%s", s);
-	} else
-		ast_verbose("%s", s);
+		if (-1 < span) {
+			if (1 < dchancount) {
+				ast_verbose("[PRI Span: %d D-Channel: %d] %s", span + 1, dchan, s);
+			} else {
+				ast_verbose("PRI Span: %d %s", span + 1, s);
+			}
+		} else {
+			ast_verbose("PRI Span: ? %s", s);
+		}
+	} else {
+		ast_verbose("PRI Span: ? %s", s);
+	}
 
 	ast_mutex_lock(&pridebugfdlock);
 
@@ -13868,18 +13940,22 @@ static void dahdi_pri_message(struct pri *pri, char *s)
 #if defined(HAVE_PRI)
 static void dahdi_pri_error(struct pri *pri, char *s)
 {
-	int x, y;
-	int dchan = -1, span = -1;
+	int x;
+	int y;
+	int dchan = -1;
+	int span = -1;
 	int dchancount = 0;
 
 	if (pri) {
 		for (x = 0; x < NUM_SPANS; x++) {
 			for (y = 0; y < SIG_PRI_NUM_DCHANS; y++) {
-				if (pris[x].pri.dchans[y])
+				if (pris[x].pri.dchans[y]) {
 					dchancount++;
+				}
 
-				if (pris[x].pri.dchans[y] == pri)
+				if (pris[x].pri.dchans[y] == pri) {
 					dchan = y;
+				}
 			}
 			if (dchan >= 0) {
 				span = x;
@@ -13887,14 +13963,18 @@ static void dahdi_pri_error(struct pri *pri, char *s)
 			}
 			dchancount = 0;
 		}
-		if ((dchancount > 1) && (span > -1))
-			ast_log(LOG_ERROR, "[Span %d D-Channel %d] PRI: %s", span, dchan, s);
-		else if (span > -1)
-			ast_log(LOG_ERROR, "%d %s", span+1, s);
-		else
-			ast_log(LOG_ERROR, "%s", s);
-	} else
-		ast_log(LOG_ERROR, "%s", s);
+		if (-1 < span) {
+			if (1 < dchancount) {
+				ast_log(LOG_ERROR, "[PRI Span: %d D-Channel: %d] %s", span + 1, dchan, s);
+			} else {
+				ast_log(LOG_ERROR, "PRI Span: %d %s", span + 1, s);
+			}
+		} else {
+			ast_log(LOG_ERROR, "PRI Span: ? %s", s);
+		}
+	} else {
+		ast_log(LOG_ERROR, "PRI Span: ? %s", s);
+	}
 
 	ast_mutex_lock(&pridebugfdlock);
 
@@ -14102,6 +14182,7 @@ static char *handle_pri_debug(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 }
 #endif	/* defined(HAVE_PRI) */
 
+#if defined(HAVE_PRI)
 #if defined(HAVE_PRI_SERVICE_MESSAGES)
 static char *handle_pri_service_generic(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a, int changestatus)
 {
@@ -14245,6 +14326,39 @@ static char *handle_pri_service_disable_channel(struct ast_cli_entry *e, int cmd
 	return handle_pri_service_generic(e, cmd, a, 2);
 }
 #endif	/* defined(HAVE_PRI_SERVICE_MESSAGES) */
+#endif	/* defined(HAVE_PRI) */
+
+#if defined(HAVE_PRI)
+static char *handle_pri_show_channels(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	int span;
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "pri show channels";
+		e->usage =
+			"Usage: pri show channels\n"
+			"       Displays PRI channel information such as the current mapping\n"
+			"       of DAHDI B channels to Asterisk channel names and which calls\n"
+			"       are on hold or call-waiting.  Calls on hold or call-waiting\n"
+			"       are not associated with any B channel.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc != 3)
+		return CLI_SHOWUSAGE;
+
+	sig_pri_cli_show_channels_header(a->fd);
+	for (span = 0; span < NUM_SPANS; ++span) {
+		if (pris[span].pri.pri) {
+			sig_pri_cli_show_channels(a->fd, &pris[span].pri);
+		}
+	}
+	return CLI_SUCCESS;
+}
+#endif	/* defined(HAVE_PRI) */
 
 #if defined(HAVE_PRI)
 static char *handle_pri_show_spans(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
@@ -14256,7 +14370,7 @@ static char *handle_pri_show_spans(struct ast_cli_entry *e, int cmd, struct ast_
 		e->command = "pri show spans";
 		e->usage =
 			"Usage: pri show spans\n"
-			"       Displays PRI Information\n";
+			"       Displays PRI span information\n";
 		return NULL;
 	case CLI_GENERATE:
 		return NULL;
@@ -14377,8 +14491,9 @@ static struct ast_cli_entry dahdi_pri_cli[] = {
  	AST_CLI_DEFINE(handle_pri_service_enable_channel, "Return a channel to service"),
  	AST_CLI_DEFINE(handle_pri_service_disable_channel, "Remove a channel from service"),
 #endif	/* defined(HAVE_PRI_SERVICE_MESSAGES) */
-	AST_CLI_DEFINE(handle_pri_show_spans, "Displays PRI Information"),
-	AST_CLI_DEFINE(handle_pri_show_span, "Displays PRI Information"),
+	AST_CLI_DEFINE(handle_pri_show_channels, "Displays PRI channel information"),
+	AST_CLI_DEFINE(handle_pri_show_spans, "Displays PRI span information"),
+	AST_CLI_DEFINE(handle_pri_show_span, "Displays PRI span information"),
 	AST_CLI_DEFINE(handle_pri_show_debug, "Displays current PRI debug settings"),
 	AST_CLI_DEFINE(handle_pri_set_debug_file, "Sends PRI debug output to the specified file"),
 	AST_CLI_DEFINE(handle_pri_version, "Displays libpri version"),
@@ -14969,7 +15084,7 @@ static char *dahdi_show_channels(struct ast_cli_entry *e, int cmd, struct ast_cl
 				}
 				break;
 			default:
-				;
+				break;
 			}
 		}
 		if (tmp->channel > 0) {
@@ -15579,16 +15694,37 @@ static struct dahdi_pvt *find_channel(int channel)
 	return p;
 }
 
+/*!
+ * \internal
+ * \brief Get private struct using given numeric channel string.
+ *
+ * \param channel Numeric channel number string get private struct.
+ *
+ * \retval pvt on success.
+ * \retval NULL on error.
+ */
+static struct dahdi_pvt *find_channel_from_str(const char *channel)
+{
+	int chan_num;
+
+	if (sscanf(channel, "%30d", &chan_num) != 1) {
+		/* Not numeric string. */
+		return NULL;
+	}
+
+	return find_channel(chan_num);
+}
+
 static int action_dahdidndon(struct mansession *s, const struct message *m)
 {
-	struct dahdi_pvt *p = NULL;
+	struct dahdi_pvt *p;
 	const char *channel = astman_get_header(m, "DAHDIChannel");
 
 	if (ast_strlen_zero(channel)) {
 		astman_send_error(s, m, "No channel specified");
 		return 0;
 	}
-	p = find_channel(atoi(channel));
+	p = find_channel_from_str(channel);
 	if (!p) {
 		astman_send_error(s, m, "No such channel");
 		return 0;
@@ -15600,14 +15736,14 @@ static int action_dahdidndon(struct mansession *s, const struct message *m)
 
 static int action_dahdidndoff(struct mansession *s, const struct message *m)
 {
-	struct dahdi_pvt *p = NULL;
+	struct dahdi_pvt *p;
 	const char *channel = astman_get_header(m, "DAHDIChannel");
 
 	if (ast_strlen_zero(channel)) {
 		astman_send_error(s, m, "No channel specified");
 		return 0;
 	}
-	p = find_channel(atoi(channel));
+	p = find_channel_from_str(channel);
 	if (!p) {
 		astman_send_error(s, m, "No such channel");
 		return 0;
@@ -15619,16 +15755,20 @@ static int action_dahdidndoff(struct mansession *s, const struct message *m)
 
 static int action_transfer(struct mansession *s, const struct message *m)
 {
-	struct dahdi_pvt *p = NULL;
+	struct dahdi_pvt *p;
 	const char *channel = astman_get_header(m, "DAHDIChannel");
 
 	if (ast_strlen_zero(channel)) {
 		astman_send_error(s, m, "No channel specified");
 		return 0;
 	}
-	p = find_channel(atoi(channel));
+	p = find_channel_from_str(channel);
 	if (!p) {
 		astman_send_error(s, m, "No such channel");
+		return 0;
+	}
+	if (!analog_lib_handles(p->sig, 0, 0)) {
+		astman_send_error(s, m, "Channel signaling is not analog");
 		return 0;
 	}
 	dahdi_fake_event(p,TRANSFER);
@@ -15638,16 +15778,20 @@ static int action_transfer(struct mansession *s, const struct message *m)
 
 static int action_transferhangup(struct mansession *s, const struct message *m)
 {
-	struct dahdi_pvt *p = NULL;
+	struct dahdi_pvt *p;
 	const char *channel = astman_get_header(m, "DAHDIChannel");
 
 	if (ast_strlen_zero(channel)) {
 		astman_send_error(s, m, "No channel specified");
 		return 0;
 	}
-	p = find_channel(atoi(channel));
+	p = find_channel_from_str(channel);
 	if (!p) {
 		astman_send_error(s, m, "No such channel");
+		return 0;
+	}
+	if (!analog_lib_handles(p->sig, 0, 0)) {
+		astman_send_error(s, m, "Channel signaling is not analog");
 		return 0;
 	}
 	dahdi_fake_event(p,HANGUP);
@@ -15657,7 +15801,7 @@ static int action_transferhangup(struct mansession *s, const struct message *m)
 
 static int action_dahdidialoffhook(struct mansession *s, const struct message *m)
 {
-	struct dahdi_pvt *p = NULL;
+	struct dahdi_pvt *p;
 	const char *channel = astman_get_header(m, "DAHDIChannel");
 	const char *number = astman_get_header(m, "Number");
 	int i;
@@ -15670,7 +15814,7 @@ static int action_dahdidialoffhook(struct mansession *s, const struct message *m
 		astman_send_error(s, m, "No number specified");
 		return 0;
 	}
-	p = find_channel(atoi(channel));
+	p = find_channel_from_str(channel);
 	if (!p) {
 		astman_send_error(s, m, "No such channel");
 		return 0;
@@ -15694,9 +15838,11 @@ static int action_dahdishowchannels(struct mansession *s, const struct message *
 	const char *dahdichannel = astman_get_header(m, "DAHDIChannel");
 	char idText[256] = "";
 	int channels = 0;
-	int dahdichanquery = -1;
-	if (!ast_strlen_zero(dahdichannel)) {
-		dahdichanquery = atoi(dahdichannel);
+	int dahdichanquery;
+
+	if (!dahdichannel || sscanf(dahdichannel, "%30d", &dahdichanquery) != 1) {
+		/* Not numeric string. */
+		dahdichanquery = -1;
 	}
 
 	astman_send_ack(s, m, "DAHDI channel status will follow");
@@ -16575,11 +16721,6 @@ static int process_dahdi(struct dahdi_chan_conf *confp, const char *cat, struct 
 		if (!ast_jb_read_conf(&global_jbconf, v->name, v->value))
 			continue;
 
-		/* must have parkinglot in confp before build_channels is called */
-		if (!strcasecmp(v->name, "parkinglot")) {
-			ast_copy_string(confp->chan.parkinglot, v->value, sizeof(confp->chan.parkinglot));
-		}
-
 		/* Create the interface list */
 		if (!strcasecmp(v->name, "channel") || !strcasecmp(v->name, "channels")) {
  			if (options & PROC_DAHDI_OPT_NOCHAN) {
@@ -16743,7 +16884,7 @@ static int process_dahdi(struct dahdi_chan_conf *confp, const char *cat, struct 
 		} else if (!strcasecmp(v->name, "mohsuggest")) {
 			ast_copy_string(confp->chan.mohsuggest, v->value, sizeof(confp->chan.mohsuggest));
 		} else if (!strcasecmp(v->name, "parkinglot")) {
-			ast_copy_string(parkinglot, v->value, sizeof(parkinglot));
+			ast_copy_string(confp->chan.parkinglot, v->value, sizeof(confp->chan.parkinglot));
 		} else if (!strcasecmp(v->name, "stripmsd")) {
 			ast_log(LOG_NOTICE, "Configuration option \"%s\" has been deprecated. Please use dialplan instead\n", v->name);
 			confp->chan.stripmsd = atoi(v->value);

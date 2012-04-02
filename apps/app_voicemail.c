@@ -40,6 +40,7 @@
 /*** MODULEINFO
 	<use>res_adsi</use>
 	<use>res_smdi</use>
+	<support_level>core</support_level>
  ***/
 
 /*** MAKEOPTS
@@ -862,6 +863,18 @@ static char vm_mismatch[80] = "vm-mismatch";
 static char vm_invalid_password[80] = "vm-invalid-password";
 static char vm_pls_try_again[80] = "vm-pls-try-again";
 
+/*
+ * XXX If we have the time, motivation, etc. to fix up this prompt, one of the following would be appropriate:
+ * 1. create a sound along the lines of "Please try again.  When done, press the pound key" which could be spliced
+ * from existing sound clips.  This would require some programming changes in the area of vm_forward options and also
+ * app.c's __ast_play_and_record function
+ * 2. create a sound prompt saying "Please try again.  When done recording, press any key to stop and send the prepended
+ * message."  At the time of this comment, I think this would require new voice work to be commissioned.
+ * 3. Something way different like providing instructions before a time out or a post-recording menu.  This would require
+ * more effort than either of the other two.
+ */
+static char vm_prepend_timeout[80] = "vm-then-pound";
+
 static struct ast_flags globalflags = {0};
 
 static int saydurationminfo;
@@ -903,6 +916,8 @@ static int add_email_attachment(FILE *p, struct ast_vm_user *vmu, char *format, 
 static int is_valid_dtmf(const char *key);
 static void read_password_from_file(const char *secretfn, char *password, int passwordlen);
 static int write_password_to_file(const char *secretfn, const char *password);
+static const char *substitute_escapes(const char *value);
+static void free_user(struct ast_vm_user *vmu);
 
 struct ao2_container *inprocess_container;
 
@@ -994,7 +1009,8 @@ static char *strip_control_and_high(const char *input, char *buf, size_t buflen)
  * - the dialcontext
  * - the exitcontext
  * - vmmaxsecs, vmmaxmsg, maxdeletedmsg
- * - volume gain.
+ * - volume gain
+ * - emailsubject, emailbody set to NULL
  */
 static void populate_defaults(struct ast_vm_user *vmu)
 {
@@ -1045,6 +1061,10 @@ static void apply_option(struct ast_vm_user *vmu, const char *var, const char *v
 		ast_copy_string(vmu->attachfmt, value, sizeof(vmu->attachfmt));
 	} else if (!strcasecmp(var, "serveremail")) {
 		ast_copy_string(vmu->serveremail, value, sizeof(vmu->serveremail));
+	} else if (!strcasecmp(var, "emailbody")) {
+		vmu->emailbody = ast_strdup(substitute_escapes(value));
+	} else if (!strcasecmp(var, "emailsubject")) {
+		vmu->emailsubject = ast_strdup(substitute_escapes(value));
 	} else if (!strcasecmp(var, "language")) {
 		ast_copy_string(vmu->language, value, sizeof(vmu->language));
 	} else if (!strcasecmp(var, "tz")) {
@@ -1215,6 +1235,9 @@ static int check_password(struct ast_vm_user *vmu, char *password)
 	/* check minimum length */
 	if (strlen(password) < minpassword)
 		return 1;
+	/* check that password does not contain '*' character */
+	if (!ast_strlen_zero(password) && password[0] == '*')
+		return 1;
 	if (!ast_strlen_zero(ext_pass_check_cmd)) {
 		char cmd[255], buf[255];
 
@@ -1294,8 +1317,14 @@ static void apply_options_full(struct ast_vm_user *retval, struct ast_variable *
 		if (!strcasecmp(var->name, "vmsecret")) {
 			ast_copy_string(retval->password, var->value, sizeof(retval->password));
 		} else if (!strcasecmp(var->name, "secret") || !strcasecmp(var->name, "password")) { /* don't overwrite vmsecret if it exists */
-			if (ast_strlen_zero(retval->password))
-				ast_copy_string(retval->password, var->value, sizeof(retval->password));
+			if (ast_strlen_zero(retval->password)) {
+				if (!ast_strlen_zero(var->value) && var->value[0] == '*') {
+					ast_log(LOG_WARNING, "Invalid password detected for mailbox %s.  The password"
+						"\n\tmust be reset in voicemail.conf.\n", retval->mailbox);
+				} else {
+					ast_copy_string(retval->password, var->value, sizeof(retval->password));
+				}
+			}
 		} else if (!strcasecmp(var->name, "uniqueid")) {
 			ast_copy_string(retval->uniqueid, var->value, sizeof(retval->uniqueid));
 		} else if (!strcasecmp(var->name, "pager")) {
@@ -1382,7 +1411,7 @@ static struct ast_vm_user *find_user_realtime(struct ast_vm_user *ivm, const cha
 			ast_variables_destroy(var);
 		} else { 
 			if (!ivm) 
-				ast_free(retval);
+				free_user(retval);
 			retval = NULL;
 		}	
 	} 
@@ -6866,7 +6895,10 @@ static int vm_forwardoptions(struct ast_channel *chan, struct ast_vm_user *vmu, 
 				ast_channel_setoption(chan, AST_OPTION_RXGAIN, &record_gain, sizeof(record_gain), 0);
 
 			cmd = ast_play_and_prepend(chan, NULL, msgfile, 0, vm_fmts, &prepend_duration, 1, silencethreshold, maxsilence);
-			if (cmd == 'S') {
+
+			if (cmd == 'S') { /* If we timed out, tell the user it didn't work properly and clean up the files */
+				ast_stream_and_wait(chan, vm_pls_try_again, ""); /* this might be removed if a proper vm_prepend_timeout is ever recorded */
+				ast_stream_and_wait(chan, vm_prepend_timeout, "");
 				ast_filerename(backup, msgfile, NULL);
 			}
 
@@ -6903,6 +6935,9 @@ static int vm_forwardoptions(struct ast_channel *chan, struct ast_vm_user *vmu, 
 			cmd = '*';
 			break;
 		default: 
+			/* If time_out and return to menu, reset already_recorded */
+			already_recorded = 0;
+
 			cmd = ast_play_and_wait(chan, "vm-forwardoptions");
 				/* "Press 1 to prepend a message or 2 to forward the message without prepending" */
 			if (!cmd)
@@ -6912,8 +6947,9 @@ static int vm_forwardoptions(struct ast_channel *chan, struct ast_vm_user *vmu, 
 				cmd = ast_waitfordigit(chan, 6000);
 			if (!cmd)
 				retries++;
-			if (retries > 3)
-				cmd = 't';
+			if (retries > 3) {
+				cmd = '*'; /* Let's cancel this beast */
+			}
 		}
 	}
 
@@ -6928,7 +6964,7 @@ static int vm_forwardoptions(struct ast_channel *chan, struct ast_vm_user *vmu, 
 		rename(backup_textfile, textfile);
 	}
 
-	if (cmd == 't' || cmd == 'S')
+	if (cmd == 't' || cmd == 'S') /* XXX entering this block with a value of 'S' is probably no longer possible. */
 		cmd = 0;
 	return cmd;
 }
@@ -9673,10 +9709,12 @@ static int vm_authenticate(struct ast_channel *chan, char *mailbox, int mailbox_
 			}
 		} else if (mailbox[0] == '*') {
 			/* user entered '*' */
+			ast_verb(4, "Mailbox begins with '*', attempting jump to extension 'a'\n");
 			if (ast_exists_extension(chan, chan->context, "a", 1,
 				S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL))) {
 				return -1;
 			}
+			ast_verb(4, "Jump to extension 'a' failed; setting mailbox to NULL\n");
 			mailbox[0] = '\0';
 		}
 
@@ -9705,12 +9743,16 @@ static int vm_authenticate(struct ast_channel *chan, char *mailbox, int mailbox_
 				return -1;
 			} else if (password[0] == '*') {
 				/* user entered '*' */
+				ast_verb(4, "Password begins with '*', attempting jump to extension 'a'\n");
 				if (ast_exists_extension(chan, chan->context, "a", 1,
 					S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL))) {
 					mailbox[0] = '*';
 					return -1;
 				}
+				ast_verb(4, "Jump to extension 'a' failed; setting mailbox and user to NULL\n");
 				mailbox[0] = '\0';
+				/* if the password entered was '*', do not let a user mailbox be created if the extension 'a' is not defined */
+				vmu = NULL;
 			}
 		}
 
@@ -10557,6 +10599,14 @@ static struct ast_vm_user *find_or_create(const char *context, const char *box)
 {
 	struct ast_vm_user *vmu;
 
+	if (!ast_strlen_zero(box) && box[0] == '*') {
+		ast_log(LOG_WARNING, "Mailbox %s in context %s begins with '*' character.  The '*' character,"
+				"\n\twhen it is the first character in a mailbox or password, is used to jump to a"
+				"\n\tpredefined extension 'a'.  A mailbox or password beginning with '*' is not valid"
+				"\n\tand will be ignored.\n", box, context);
+		return NULL;
+	}
+
 	AST_LIST_TRAVERSE(&users, vmu, list) {
 		if (ast_test_flag((&globalflags), VM_SEARCH) && !strcasecmp(box, vmu->mailbox)) {
 			if (strcasecmp(vmu->context, context)) {
@@ -10605,6 +10655,11 @@ static int append_mailbox(const char *context, const char *box, const char *data
 
 	stringp = tmp;
 	if ((s = strsep(&stringp, ","))) {
+		if (!ast_strlen_zero(s) && s[0] == '*') {
+			ast_log(LOG_WARNING, "Invalid password detected for mailbox %s.  The password"
+				"\n\tmust be reset in voicemail.conf.\n", box);
+		}
+		/* assign password regardless of validity to prevent NULL password from being assigned */
 		ast_copy_string(vmu->password, s, sizeof(vmu->password));
 	}
 	if (stringp && (s = strsep(&stringp, ","))) {
@@ -10648,7 +10703,9 @@ AST_TEST_DEFINE(test_voicemail_vmuser)
 		"envelope=yes|moveheard=yes|sayduration=yes|saydurationm=5|forcename=yes|"
 		"forcegreetings=yes|callback=somecontext|dialout=somecontext2|"
 		"exitcontext=somecontext3|minsecs=10|maxsecs=100|nextaftercmd=yes|"
-		"backupdeleted=50|volgain=1.3|passwordlocation=spooldir";
+		"backupdeleted=50|volgain=1.3|passwordlocation=spooldir|emailbody="
+		"Dear ${VM_NAME}:\n\n\tYou were just left a ${VM_DUR} long message|emailsubject="
+		"[PBX]: New message ${VM_MSGNUM} in mailbox ${VM_MAILBOX}";
 #ifdef IMAP_STORAGE
 	static const char option_string2[] = "imapuser=imapuser|imappassword=imappasswd|"
 		"imapfolder=INBOX|imapvmshareid=6000";
@@ -10670,6 +10727,7 @@ AST_TEST_DEFINE(test_voicemail_vmuser)
 		return AST_TEST_NOT_RUN;
 	}
 	ast_set_flag(vmu, VM_ALLOCED);
+	populate_defaults(vmu);
 
 	apply_options(vmu, options_string);
 
@@ -10683,6 +10741,14 @@ AST_TEST_DEFINE(test_voicemail_vmuser)
 	}
 	if (strcasecmp(vmu->serveremail, "someguy@digium.com")) {
 		ast_test_status_update(test, "Parse failure for serveremail option\n");
+		res = 1;
+	}
+	if (!vmu->emailsubject || strcasecmp(vmu->emailsubject, "[PBX]: New message ${VM_MSGNUM} in mailbox ${VM_MAILBOX}")) {
+		ast_test_status_update(test, "Parse failure for emailsubject option\n");
+		res = 1;
+	}
+	if (!vmu->emailbody || strcasecmp(vmu->emailbody, "Dear ${VM_NAME}:\n\n\tYou were just left a ${VM_DUR} long message")) {
+		ast_test_status_update(test, "Parse failure for emailbody option\n");
 		res = 1;
 	}
 	if (strcasecmp(vmu->zonetag, "central")) {
@@ -12119,6 +12185,9 @@ static int load_config(int reload)
 			ast_copy_string(vm_mismatch, val, sizeof(vm_mismatch));
 		if ((val = ast_variable_retrieve(cfg, "general", "vm-pls-try-again"))) {
 			ast_copy_string(vm_pls_try_again, val, sizeof(vm_pls_try_again));
+		}
+		if ((val = ast_variable_retrieve(cfg, "general", "vm-prepend-timeout"))) {
+			ast_copy_string(vm_prepend_timeout, val, sizeof(vm_prepend_timeout));
 		}
 		/* load configurable audio prompts */
 		if ((val = ast_variable_retrieve(cfg, "general", "listen-control-forward-key")) && is_valid_dtmf(val))

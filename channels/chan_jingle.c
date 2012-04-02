@@ -31,6 +31,7 @@
 	<depend>iksemel</depend>
 	<depend>res_jabber</depend>
 	<use>openssl</use>
+	<support_level>extended</support_level>
  ***/
 
 #include "asterisk.h"

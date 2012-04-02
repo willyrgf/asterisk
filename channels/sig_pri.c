@@ -124,6 +124,25 @@ static int pri_gendigittimeout = 8000;
 
 static int pri_active_dchan_index(struct sig_pri_span *pri);
 
+static const char *sig_pri_call_level2str(enum sig_pri_call_level level)
+{
+	switch (level) {
+	case SIG_PRI_CALL_LEVEL_IDLE:
+		return "Idle";
+	case SIG_PRI_CALL_LEVEL_SETUP:
+		return "Setup";
+	case SIG_PRI_CALL_LEVEL_OVERLAP:
+		return "Overlap";
+	case SIG_PRI_CALL_LEVEL_PROCEEDING:
+		return "Proceeding";
+	case SIG_PRI_CALL_LEVEL_ALERTING:
+		return "Alerting";
+	case SIG_PRI_CALL_LEVEL_CONNECT:
+		return "Connect";
+	}
+	return "Unknown";
+}
+
 static inline void pri_rel(struct sig_pri_span *pri)
 {
 	ast_mutex_unlock(&pri->lock);
@@ -4464,6 +4483,7 @@ static void *pri_dchannel(void *vpri)
 	int res;
 	int chanpos = 0;
 	int x;
+	int law;
 	struct ast_channel *c;
 	struct timeval tv, lowest, *next;
 	int doidling=0;
@@ -5093,7 +5113,20 @@ static void *pri_dchannel(void *vpri)
 				/* Make sure extension exists (or in overlap dial mode, can exist) */
 				if (((pri->overlapdial & DAHDI_OVERLAPDIAL_INCOMING) && ast_canmatch_extension(NULL, pri->pvts[chanpos]->context, pri->pvts[chanpos]->exten, 1, pri->pvts[chanpos]->cid_num)) ||
 					ast_exists_extension(NULL, pri->pvts[chanpos]->context, pri->pvts[chanpos]->exten, 1, pri->pvts[chanpos]->cid_num)) {
-					/* Setup law */
+					/* Select audio companding mode. */
+					switch (e->ring.layer1) {
+					case PRI_LAYER_1_ALAW:
+						law = SIG_PRI_ALAW;
+						break;
+					case PRI_LAYER_1_ULAW:
+						law = SIG_PRI_ULAW;
+						break;
+					default:
+						/* This is a data call to us. */
+						law = SIG_PRI_DEFLAW;
+						break;
+					}
+
 					if (e->ring.complete || !(pri->overlapdial & DAHDI_OVERLAPDIAL_INCOMING)) {
 						/* Just announce proceeding */
 						pri->pvts[chanpos]->call_level = SIG_PRI_CALL_LEVEL_PROCEEDING;
@@ -5119,10 +5152,8 @@ static void *pri_dchannel(void *vpri)
 						sig_pri_unlock_private(pri->pvts[chanpos]);
 						ast_mutex_unlock(&pri->lock);
 						c = sig_pri_new_ast_channel(pri->pvts[chanpos],
-							AST_STATE_RESERVED,
-							(e->ring.layer1 == PRI_LAYER_1_ALAW)
-								? SIG_PRI_ALAW : SIG_PRI_ULAW,
-							e->ring.ctype, pri->pvts[chanpos]->exten, NULL);
+							AST_STATE_RESERVED, law, e->ring.ctype,
+							pri->pvts[chanpos]->exten, NULL);
 						ast_mutex_lock(&pri->lock);
 						sig_pri_lock_private(pri->pvts[chanpos]);
 						if (c) {
@@ -5238,9 +5269,7 @@ static void *pri_dchannel(void *vpri)
 						sig_pri_unlock_private(pri->pvts[chanpos]);
 						ast_mutex_unlock(&pri->lock);
 						c = sig_pri_new_ast_channel(pri->pvts[chanpos],
-							AST_STATE_RING,
-							(e->ring.layer1 == PRI_LAYER_1_ALAW)
-								? SIG_PRI_ALAW : SIG_PRI_ULAW, e->ring.ctype,
+							AST_STATE_RING, law, e->ring.ctype,
 							pri->pvts[chanpos]->exten, NULL);
 						ast_mutex_lock(&pri->lock);
 						sig_pri_lock_private(pri->pvts[chanpos]);
@@ -7213,8 +7242,9 @@ int sig_pri_digit_begin(struct sig_pri_chan *pvt, struct ast_channel *ast, char 
 		}
 		if (pvt->call_level < SIG_PRI_CALL_LEVEL_CONNECT) {
 			ast_log(LOG_WARNING,
-				"Span %d: Digit '%c' may be ignored by peer. (Call level:%d)\n",
-				pvt->pri->span, digit, pvt->call_level);
+				"Span %d: Digit '%c' may be ignored by peer. (Call level:%d(%s))\n",
+				pvt->pri->span, digit, pvt->call_level,
+				sig_pri_call_level2str(pvt->call_level));
 		}
 	}
 	return 1;
@@ -7632,6 +7662,55 @@ struct sig_pri_chan *sig_pri_chan_new(void *pvt_data, struct sig_pri_callback *c
 void sig_pri_chan_delete(struct sig_pri_chan *doomed)
 {
 	ast_free(doomed);
+}
+
+#define SIG_PRI_SC_HEADER	"%-4s %4s %-4s %-4s %-10s %-4s %s\n"
+#define SIG_PRI_SC_LINE		 "%4d %4d %-4s %-4s %-10s %-4s %s"
+void sig_pri_cli_show_channels_header(int fd)
+{
+	ast_cli(fd, SIG_PRI_SC_HEADER, "PRI",  "",     "B",    "Chan", "Call",  "PRI",  "Channel");
+	ast_cli(fd, SIG_PRI_SC_HEADER, "Span", "Chan", "Chan", "Idle", "Level", "Call", "Name");
+}
+
+void sig_pri_cli_show_channels(int fd, struct sig_pri_span *pri)
+{
+	char line[256];
+	int idx;
+	struct sig_pri_chan *pvt;
+
+	ast_mutex_lock(&pri->lock);
+	for (idx = 0; idx < pri->numchans; ++idx) {
+		if (!pri->pvts[idx]) {
+			continue;
+		}
+		pvt = pri->pvts[idx];
+		sig_pri_lock_private(pvt);
+		sig_pri_lock_owner(pri, idx);
+		if (pvt->no_b_channel && sig_pri_is_chan_available(pvt)) {
+			/* Don't show held/call-waiting channels if they are not in use. */
+			sig_pri_unlock_private(pvt);
+			continue;
+		}
+
+		snprintf(line, sizeof(line), SIG_PRI_SC_LINE,
+			pri->span,
+			pvt->channel,
+			pvt->no_b_channel ? "No" : "Yes",/* Has media */
+			sig_pri_is_chan_available(pvt) ? "Yes" : "No",
+			sig_pri_call_level2str(pvt->call_level),
+			pvt->call ? "Yes" : "No",
+			pvt->owner ? pvt->owner->name : "");
+
+		if (pvt->owner) {
+			ast_channel_unlock(pvt->owner);
+		}
+		sig_pri_unlock_private(pvt);
+
+		ast_mutex_unlock(&pri->lock);
+		ast_cli(fd, "%s\n", line);
+		ast_mutex_lock(&pri->lock);
+	}
+	ast_mutex_unlock(&pri->lock);
 }
 
 static void build_status(char *s, size_t len, int status, int active)
