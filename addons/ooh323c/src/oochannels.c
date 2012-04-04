@@ -949,6 +949,7 @@ int ooMonitorCallChannels(OOH323CallData *call)
    ast_mutex_lock(&call->Lock);
    ast_mutex_unlock(&call->Lock);
    ast_mutex_destroy(&call->Lock);
+   ast_mutex_destroy(&call->GkLock);
    ast_cond_destroy(&call->gkWait);
    pctxt = call->pctxt;
    freeContext(pctxt);
@@ -1574,6 +1575,10 @@ int ooOnSendMsg
                     call->callToken);
       /* if(gH323ep.h323Callbacks.onAlerting && call->callState < OO_CALL_CLEAR)
          gH323ep.h323Callbacks.onAlerting(call); */
+      break;
+   case OOStatus:
+      OOTRACEINFO3("Sent Message - Status (%s, %s) \n", call->callType,
+                    call->callToken);
       break;
    case OOConnect:
       OOTRACEINFO3("Sent Message - Connect (%s, %s)\n", call->callType,

@@ -353,10 +353,10 @@ static struct ast_channel *ooh323_new(struct ooh323_pvt *i, int state,
 
 	/* Don't hold a h323 pvt lock while we allocate a channel */
 	ast_mutex_unlock(&i->lock);
+   	ast_mutex_lock(&ooh323c_cn_lock);
    	ch = ast_channel_alloc(1, state, i->callerid_num, i->callerid_name, 
 				i->accountcode, i->exten, i->context, linkedid, i->amaflags,
 				"OOH323/%s-%ld", host, callnumber);
-   	ast_mutex_lock(&ooh323c_cn_lock);
    	callnumber++;
    	ast_mutex_unlock(&ooh323c_cn_lock);
    
@@ -449,8 +449,11 @@ static struct ast_channel *ooh323_new(struct ooh323_pvt *i, int state,
 			} 
 	 	}
 
-		manager_event(EVENT_FLAG_SYSTEM, "ChannelUpdate", "Channel: %s\r\nChanneltype: %s\r\n"
+		if (ch) {
+			manager_event(EVENT_FLAG_SYSTEM, "ChannelUpdate", 
+				"Channel: %s\r\nChanneltype: %s\r\n"
 				"CallRef: %d\r\n", ch->name, "OOH323", i->call_reference);
+		}
 	} else
 		ast_log(LOG_WARNING, "Unable to allocate channel structure\n");
 
@@ -568,14 +571,12 @@ static struct ast_channel *ooh323_request(const char *type, format_t format,
 	char *ext = NULL;
 	char tmp[256];
 	char formats[FORMAT_STRING_SIZE];
-	int oldformat;
 	int port = 0;
 
 	if (gH323Debug)
 		ast_verbose("---   ooh323_request - data %s format %s\n", (char*)data,  
 										ast_getformatname_multiple(formats,FORMAT_STRING_SIZE,format));
 
-	oldformat = format;
 	format &= AST_FORMAT_AUDIO_MASK;
 	if (!format) {
 		ast_log(LOG_NOTICE, "Asked to get a channel of unsupported format '%lld'\n", (long long) format);
@@ -854,6 +855,7 @@ static int ooh323_digit_begin(struct ast_channel *chan, char digit)
 {
 	char dtmf[2];
 	struct ooh323_pvt *p = (struct ooh323_pvt *) chan->tech_pvt;
+	int res = 0;
 	
 	if (gH323Debug)
 		ast_verbose("---   ooh323_digit_begin\n");
@@ -882,17 +884,21 @@ static int ooh323_digit_begin(struct ast_channel *chan, char digit)
 		dtmf[0] = digit;
 		dtmf[1] = '\0';
 		ooSendDTMFDigit(p->callToken, dtmf);
+	} else if (p->dtmfmode & H323_DTMF_INBAND) {
+		res = -1; // tell Asterisk to generate inband indications
 	}
 	ast_mutex_unlock(&p->lock);
-	if (gH323Debug)
-		ast_verbose("+++   ooh323_digit_begin\n");
+	if (gH323Debug) {
+		ast_verbose("+++   ooh323_digit_begin %d\n", res);
+	}
 
-	return 0;
+	return res;
 }
 
 static int ooh323_digit_end(struct ast_channel *chan, char digit, unsigned int duration)
 {
 	struct ooh323_pvt *p = (struct ooh323_pvt *) chan->tech_pvt;
+	int res = 0;
 
 	if (gH323Debug)
 		ast_verbose("---   ooh323_digit_end\n");
@@ -902,14 +908,18 @@ static int ooh323_digit_end(struct ast_channel *chan, char digit, unsigned int d
 		return -1;
 	}
 	ast_mutex_lock(&p->lock);
-	if (p->rtp && ((p->dtmfmode & H323_DTMF_RFC2833) || (p->dtmfmode & H323_DTMF_CISCO)) ) 
+	if (p->rtp && ((p->dtmfmode & H323_DTMF_RFC2833) || (p->dtmfmode & H323_DTMF_CISCO)) ) {
 		ast_rtp_instance_dtmf_end(p->rtp, digit);
+	} else if(p->dtmfmode & H323_DTMF_INBAND) {
+		res = -1; // tell Asterisk to stop inband indications
+	}
 
 	ast_mutex_unlock(&p->lock);
-	if (gH323Debug)
-		ast_verbose("+++   ooh323_digit_end\n");
+	if (gH323Debug) {
+		ast_verbose("+++   ooh323_digit_end, res = %d\n", res);
+	}
 
-	return 0;
+	return res;
 }
 
 
@@ -1226,21 +1236,24 @@ static int ooh323_indicate(struct ast_channel *ast, int condition, const void *d
 	 
    	ast_mutex_lock(&p->lock);
 	switch (condition) {
+	case AST_CONTROL_INCOMPLETE:
+		/* While h323 does support overlapped dialing, this channel driver does not
+		 * at this time.  Treat a response of Incomplete as if it were congestion.
+		 */
 	case AST_CONTROL_CONGESTION:
 		if (!ast_test_flag(p, H323_ALREADYGONE)) {
-            		ooHangCall(callToken, OO_REASON_LOCAL_CONGESTED, 
-						AST_CAUSE_SWITCH_CONGESTION);
+			ooHangCall(callToken, OO_REASON_LOCAL_CONGESTED, AST_CAUSE_SWITCH_CONGESTION);
 			ast_set_flag(p, H323_ALREADYGONE);
 		}
 		break;
 	case AST_CONTROL_BUSY:
 		if (!ast_test_flag(p, H323_ALREADYGONE)) {
-            		ooHangCall(callToken, OO_REASON_LOCAL_BUSY, AST_CAUSE_USER_BUSY);
+			ooHangCall(callToken, OO_REASON_LOCAL_BUSY, AST_CAUSE_USER_BUSY);
 			ast_set_flag(p, H323_ALREADYGONE);
 		}
 		break;
 	case AST_CONTROL_HOLD:
-		ast_moh_start(ast, data, NULL);		
+		ast_moh_start(ast, data, NULL);
 		break;
 	case AST_CONTROL_UNHOLD:
 		ast_moh_stop(ast);
@@ -2635,6 +2648,7 @@ int reload_config(int reload)
          		pNewAlias = malloc(sizeof(struct ooAliases));
 			if (!pNewAlias) {
 				ast_log(LOG_ERROR, "Failed to allocate memory for h323id alias\n");
+				ast_config_destroy(cfg);
 				return 1;
 			}
 	 		if (gAliasList == NULL) { /* first h323id - set as callerid if callerid is not set */
@@ -2649,6 +2663,7 @@ int reload_config(int reload)
          		pNewAlias = malloc(sizeof(struct ooAliases));
 			if (!pNewAlias) {
 				ast_log(LOG_ERROR, "Failed to allocate memory for e164 alias\n");
+				ast_config_destroy(cfg);
 				return 1;
 			}
 			pNewAlias->type =  T_H225AliasAddress_dialedDigits;
@@ -2660,6 +2675,7 @@ int reload_config(int reload)
          		pNewAlias = malloc(sizeof(struct ooAliases));
 			if (!pNewAlias) {
 				ast_log(LOG_ERROR, "Failed to allocate memory for email alias\n");
+				ast_config_destroy(cfg);
 				return 1;
 			}
 			pNewAlias->type =  T_H225AliasAddress_email_ID;
@@ -3905,7 +3921,6 @@ static int ooh323_set_rtp_peer(struct ast_channel *chan, struct ast_rtp_instance
 	struct sockaddr_in them;
 	struct sockaddr_in us;
 	struct ast_sockaddr tmp;
-	int mode;
 
 	if (gH323Debug)
 		ast_verbose("---   ooh323_set_peer - %s\n", chan->name);
@@ -3914,7 +3929,6 @@ static int ooh323_set_rtp_peer(struct ast_channel *chan, struct ast_rtp_instance
 		return 0;
 	}
 
-	mode = ooh323_convertAsteriskCapToH323Cap(chan->writeformat); 
 	p = (struct ooh323_pvt *) chan->tech_pvt;
 	if (!p) {
 		ast_log(LOG_ERROR, "No Private Structure, this is bad\n");
@@ -4283,7 +4297,7 @@ struct ast_frame *ooh323_rtp_read(struct ast_channel *ast, struct ooh323_pvt *p)
 		f = &null_frame;
 	}
 
-	if (p->owner) {
+	if (f && p->owner) {
 		/* We already hold the channel lock */
 		if (f->frametype == AST_FRAME_VOICE && !p->faxmode) {
 			if (f->subclass.codec != p->owner->nativeformats) {
