@@ -25,6 +25,13 @@
  * \note DB3 is licensed under Sleepycat Public License and is thus incompatible
  * with GPL.  To avoid having to make another exception (and complicate 
  * licensing even further) we elect to use DB1 which is BSD licensed 
+ * 
+ * \note AstDB realtime
+ * AstDB realtime works with the basic operations - put, get, del
+ * Database show also works.
+ * 
+ * The tree/family operations doesn't currently work. Maybe tree and family needs
+ * to be separate fields in the database, instead of one single field as I've tried with.
  */
 
 #include "asterisk.h"
@@ -46,6 +53,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/utils.h"
 #include "asterisk/lock.h"
 #include "asterisk/manager.h"
+#include "asterisk/config.h"
 #include "db1-ast/include/db.h"
 
 /*** DOCUMENTATION
@@ -109,15 +117,107 @@ typedef int (*process_keys_cb)(DBT *key, DBT *value, const char *filter, void *d
 
 static void db_sync(void);
 
+static int db_rt;			/*!< Flag for realtime system */
+static char *db_rt_rtfamily = "astdb";	/*!< Realtime name tag */
+static char *db_rt_value = "value";	/*!< Database field name for values */
+static char *db_rt_family = "family";   /*!< Database field name for family */
+static char *db_rt_key = "keyname";     /*!< Database field name for key */
+static char *db_rt_sysnamelabel = "systemname"; /*!< Database field name for system name */
+static const char *db_rt_sysname;       /*!< From asterisk.conf or "asterisk" */
+
+/*! \brief Initialize either realtime support or Asterisk ast-db. 
+
+	Note: Since realtime support is loaded after astdb, we can not do this early, but has to do the
+	check on need. Now, there's a risk an internal module (not a loaded module) use astdb before 
+	realtime is checked, but that's something we propably have to live with until we solve it.
+
+	Make sure that realtime modules are loaded before dundi and the channels.
+*/
 static int dbinit(void) 
 {
-	if (!astdb && !(astdb = dbopen(ast_config_AST_DB, O_CREAT | O_RDWR, AST_FILE_MODE, DB_BTREE, NULL))) {
+	if (db_rt) {
+		return 0;
+	}
+	db_rt = ast_check_realtime(db_rt_rtfamily);
+	if (!db_rt && !astdb && !(astdb = dbopen(ast_config_AST_DB, O_CREAT | O_RDWR, AST_FILE_MODE, DB_BTREE, NULL))) {
 		ast_log(LOG_WARNING, "Unable to open Asterisk database '%s': %s\n", ast_config_AST_DB, strerror(errno));
 		return -1;
 	}
 	return 0;
 }
 
+/*! \brief Load a set of entries from astdb/realtime. This is for all operations that
+   	work on a whole "tree" or "family" 
+	\note the calling function needs to destroy the result set with ast_config_destroy(resultset) 
+*/
+static struct ast_variable *db_realtime_getall(const char *family, const char *key)
+{
+	struct ast_variable *data, *returnset = NULL;
+	const char *keyname = NULL, *familyname = NULL;
+	struct ast_config *variablelist = NULL;
+	const char *cat = NULL;
+	char buf[512];
+
+	ast_debug(2, ">>>>>> getall family: %s Key %s \n", family, key);
+
+	if (ast_strlen_zero(family)) {
+		/* Load all entries in the astdb */
+		if (ast_strlen_zero(key)) {
+			/* No variables given */
+			variablelist = ast_load_realtime_multientry(db_rt_rtfamily, db_rt_sysnamelabel, db_rt_sysname, SENTINEL);
+		} else {
+			/* Only key given */
+			variablelist = ast_load_realtime_multientry(db_rt_rtfamily, db_rt_sysnamelabel, db_rt_sysname, db_rt_key, key, SENTINEL);
+		}
+	} else {
+		if (ast_strlen_zero(key)) {
+			variablelist = ast_load_realtime_multientry(db_rt_rtfamily, db_rt_sysnamelabel, db_rt_sysname, db_rt_family, family, SENTINEL);
+		} else {
+			variablelist = ast_load_realtime_multientry(db_rt_rtfamily, db_rt_sysnamelabel, db_rt_sysname, db_rt_family, family, db_rt_key, key, SENTINEL);
+		}
+	}
+	if (!variablelist) {
+		return NULL;
+	}
+	/* Now we need to start converting all this stuff. We have thre ast_variable sets per record in the result set */
+	while ((cat = ast_category_browse(variablelist, cat))) {
+		struct ast_variable *resultset, *cur;
+
+		cur = resultset = ast_variable_browse(variablelist, cat);
+	
+		/* skip the system name */
+		while (cur) {
+			ast_debug(2, ">>>> Found name %s ...\n", cur->name);
+			if (!strcmp(cur->name, db_rt_family)) {
+				familyname = cur->value;
+			} else if (!strcmp(cur->name, db_rt_key)) {
+				keyname = cur->value;
+			} else if (!strcmp(cur->name, db_rt_value)) {
+				snprintf(buf, sizeof(buf), "/%s/%s", S_OR(familyname, ""), S_OR(keyname, ""));
+				data = ast_variable_new(buf, S_OR(cur->value, "astdb-realtime"), "");
+				familyname = keyname = NULL;
+				ast_debug(2, "#### Found Variable %s with value %s \n", buf, cur->value);
+				/* Add this to the returnset */
+				data->next = returnset;
+				returnset = data;
+			} else {
+				if (ast_strlen_zero(cur->name)) {
+					ast_debug(2, "#### Skipping  strange record \n");
+				} else {
+					ast_debug(2, "#### Skipping  %s with value %s \n", cur->name, cur->value);
+				}
+			}
+			cur = cur->next;
+		}
+		//if (resultset)
+			//ast_variables_destroy(resultset);
+	}
+
+	/* Clean up the resultset */
+	ast_config_destroy(variablelist);
+	
+	return returnset;
+}
 
 static inline int keymatch(const char *key, const char *prefix)
 {
@@ -223,6 +323,8 @@ static int db_deltree_cb(DBT *key, DBT *value, const char *filter, void *data)
 int ast_db_deltree(const char *family, const char *keytree)
 {
 	char prefix[MAX_DB_FIELD];
+	struct ast_variable *murderlist, *cur;
+	int counter = 0;
 
 	if (family) {
 		if (keytree) {
@@ -235,32 +337,79 @@ int ast_db_deltree(const char *family, const char *keytree)
 	} else {
 		prefix[0] = '\0';
 	}
+	
+	if (!db_rt) {
+		return process_db_keys(db_deltree_cb, NULL, prefix, 1);
+	}
 
-	return process_db_keys(db_deltree_cb, NULL, prefix, 1);
+	cur = murderlist = db_realtime_getall(family, S_OR(keytree, ""));
+	while (cur) {
+		int res;
+		char *familyname = ast_strdupa(&cur->name[1]);	/* Skip the first slash */
+		char *keyname = familyname;
+		familyname = strsep(&keyname, "/");
+
+		res = ast_destroy_realtime(db_rt_rtfamily, db_rt_sysnamelabel, db_rt_sysname, db_rt_family, familyname, db_rt_key, keyname, SENTINEL);
+		if (res >= 0) {
+			counter ++;
+		}
+		cur = cur->next;
+	}
+
+	ast_variables_destroy(murderlist);
+		
+	return counter;
+	
 }
 
 int ast_db_put(const char *family, const char *keys, const char *value)
 {
-	char fullkey[MAX_DB_FIELD];
 	DBT key, data;
-	int res, fullkeylen;
+	int res;
 
-	ast_mutex_lock(&dblock);
-	if (dbinit()) {
-		ast_mutex_unlock(&dblock);
-		return -1;
+	if (!db_rt) {
+		ast_mutex_lock(&dblock);
+		if (dbinit()) {
+			ast_mutex_unlock(&dblock);
+			return -1;
+		}
+		if (db_rt) {
+			ast_mutex_unlock(&dblock);
+		}
 	}
 
-	fullkeylen = snprintf(fullkey, sizeof(fullkey), "/%s/%s", family, keys);
-	memset(&key, 0, sizeof(key));
-	memset(&data, 0, sizeof(data));
-	key.data = fullkey;
-	key.size = fullkeylen + 1;
-	data.data = (char *) value;
-	data.size = strlen(value) + 1;
-	res = astdb->put(astdb, &key, &data, 0);
-	db_sync();
-	ast_mutex_unlock(&dblock);
+	if (db_rt) {
+		int rowsaffected ;
+
+		/* Now, the question here is if we're overwriting or adding 
+			First, let's try updating it.
+		*/
+		ast_debug(2, ".... Trying ast_update_realtime\n");
+		/* Update_realtime with mysql returns the number of rows affected */
+		rowsaffected = ast_update2_realtime(db_rt_rtfamily, db_rt_family, family, db_rt_key, keys, db_rt_sysnamelabel, db_rt_sysname, SENTINEL, db_rt_value, value, SENTINEL);
+		res = rowsaffected > 0 ? 0 : 1;
+		if (res) {
+			ast_debug(2, ".... Trying ast_store_realtime\n");
+			/* Update failed, let's try adding a new record */
+			res = ast_store_realtime(db_rt_rtfamily, db_rt_sysnamelabel, db_rt_sysname, db_rt_family, family, db_rt_key, keys, db_rt_value, value, SENTINEL);
+			/* Ast_store_realtime with mysql returns 0 if ok, -1 if bad */
+
+		}
+	} else {
+		int fullkeylen;
+		char fullkey[256];
+
+		fullkeylen = snprintf(fullkey, sizeof(fullkey), "/%s/%s", family, keys);
+		memset(&key, 0, sizeof(key));
+		memset(&data, 0, sizeof(data));
+		key.data = fullkey;
+		key.size = fullkeylen + 1;
+		data.data = (char *) value;
+		data.size = strlen(value) + 1;
+		res = astdb->put(astdb, &key, &data, 0);
+		db_sync();
+		ast_mutex_unlock(&dblock);
+	}
 	if (res)
 		ast_log(LOG_WARNING, "Unable to put value '%s' for key '%s' in family '%s'\n", value, keys, family);
 
@@ -273,12 +422,38 @@ int ast_db_get(const char *family, const char *keys, char *value, int valuelen)
 	DBT key, data;
 	int res, fullkeylen;
 
-	ast_mutex_lock(&dblock);
-	if (dbinit()) {
-		ast_mutex_unlock(&dblock);
-		return -1;
+	if (!db_rt) {
+		ast_mutex_lock(&dblock);
+		if (dbinit()) {
+			ast_mutex_unlock(&dblock);
+			return -1;
+		}
+		if (db_rt) {
+			ast_mutex_unlock(&dblock);
+		}
 	}
 
+	if (db_rt) {
+		struct ast_variable *var, *res;
+		memset(value, 0, valuelen);
+
+		res = var = ast_load_realtime(db_rt_rtfamily, db_rt_sysnamelabel, db_rt_sysname, db_rt_family, family, db_rt_key, keys, SENTINEL);
+		if (!var) {
+			return 1;
+		} 
+		/* We should only have one value here, so let's make this simple... */
+		while (res) {
+			if (!strcasecmp(res->name, db_rt_value)) {
+				ast_copy_string(value, res->value, (valuelen > strlen(res->value) ) ? strlen(res->value) +1: valuelen);
+				res = NULL;
+			} else {
+				res = res->next;
+			}
+		}
+		
+		ast_variables_destroy(var);
+		return 0;
+	} 
 	fullkeylen = snprintf(fullkey, sizeof(fullkey), "/%s/%s", family, keys);
 	memset(&key, 0, sizeof(key));
 	memset(&data, 0, sizeof(data));
@@ -317,21 +492,29 @@ int ast_db_del(const char *family, const char *keys)
 	DBT key;
 	int res, fullkeylen;
 
-	ast_mutex_lock(&dblock);
-	if (dbinit()) {
-		ast_mutex_unlock(&dblock);
-		return -1;
+	if (!db_rt) {
+		ast_mutex_lock(&dblock);
+		if (dbinit()) {
+			ast_mutex_unlock(&dblock);
+			return -1;
+		}
+		if (db_rt)
+			ast_mutex_unlock(&dblock);
 	}
 	
-	fullkeylen = snprintf(fullkey, sizeof(fullkey), "/%s/%s", family, keys);
-	memset(&key, 0, sizeof(key));
-	key.data = fullkey;
-	key.size = fullkeylen + 1;
+	if (db_rt) {
+		int rowcount = ast_destroy_realtime(db_rt_rtfamily, db_rt_sysnamelabel, db_rt_sysname, db_rt_family, family, db_rt_key, keys, SENTINEL);
+		res = rowcount > 0 ? 0 : 1;
+	} else {
+		fullkeylen = snprintf(fullkey, sizeof(fullkey), "/%s/%s", family, keys);
+		memset(&key, 0, sizeof(key));
+		key.data = fullkey;
+		key.size = fullkeylen + 1;
 	
-	res = astdb->del(astdb, &key, 0);
-	db_sync();
-	
-	ast_mutex_unlock(&dblock);
+		res = astdb->del(astdb, &key, 0);
+		db_sync();
+		ast_mutex_unlock(&dblock);
+	}
 
 	if (res) {
 		ast_debug(1, "Unable to find key '%s' in family '%s'\n", keys, family);
@@ -357,6 +540,7 @@ static char *handle_cli_database_put(struct ast_cli_entry *e, int cmd, struct as
 
 	if (a->argc != 5)
 		return CLI_SHOWUSAGE;
+
 	res = ast_db_put(a->argv[2], a->argv[3], a->argv[4]);
 	if (res)  {
 		ast_cli(a->fd, "Failed to update entry\n");
@@ -431,7 +615,7 @@ static char *handle_cli_database_deltree(struct ast_cli_entry *e, int cmd, struc
 		e->usage =
 			"Usage: database deltree <family> [keytree]\n"
 			"   OR: database deltree <family>[/keytree]\n"
-			"       Deletes a family or specific keytree within a family\n"
+ 			"       Deletes a family or specific keytree within a family\n"
 			"       in the Asterisk database.  The two arguments may be\n"
 			"       separated by either a space or a slash.\n";
 		return NULL;
@@ -453,6 +637,29 @@ static char *handle_cli_database_deltree(struct ast_cli_entry *e, int cmd, struc
 	}
 	return CLI_SUCCESS;
 }
+
+static void handle_cli_database_show_realtime(struct ast_cli_args *a, const char *family, const char *key)
+{
+	struct ast_variable *resultset;
+	struct ast_variable *cur;
+	int counter = 0;
+
+	dbinit();
+	if (!db_rt) {
+		ast_cli(a->fd, "Error: Can't connect to astdb/realtime\n");
+		return;
+	}
+
+	cur = resultset = db_realtime_getall(family, key);
+	while (cur) {
+		ast_cli(a->fd, "%-40s: %-25s\n", cur->name, S_OR(cur->value, ""));
+		cur = cur->next;
+		counter++;
+	}
+	ast_cli(a->fd, "%d results found.\n", counter);
+	ast_variables_destroy(resultset);
+}
+
 
 static int db_show_cb(DBT *key, DBT *value, const char *filter, void *data)
 {
@@ -499,7 +706,10 @@ static char *handle_cli_database_show(struct ast_cli_entry *e, int cmd, struct a
 	} else {
 		return CLI_SHOWUSAGE;
 	}
-
+	if (db_rt) {
+		handle_cli_database_show_realtime(a, a->argc >= 3 ? a->argv[2] : "", a->argc == 4 ? a->argv[3] : "");
+		return CLI_SUCCESS;	
+	}
 	if((counter = process_db_keys(db_show_cb, a, prefix, 0)) < 0) {
 		ast_cli(a->fd, "Database unavailable\n");
 		return CLI_SUCCESS;
@@ -546,6 +756,11 @@ static char *handle_cli_database_showkey(struct ast_cli_entry *e, int cmd, struc
 		return CLI_SHOWUSAGE;
 	}
 
+	if (db_rt) {
+		ast_mutex_unlock(&dblock);
+		handle_cli_database_show_realtime(a, "", a->argv[2]);
+		return CLI_SUCCESS;	
+	}
 	if ((counter = process_db_keys(db_showkey_cb, a, suffix, 0)) < 0) {
 		ast_cli(a->fd, "Database unavailable\n");
 		return CLI_SUCCESS;
@@ -662,8 +877,9 @@ static int manager_dbget(struct mansession *s, const struct message *m)
 		return 0;
 	}
 
-	if (!ast_strlen_zero(id))
+	if (!ast_strlen_zero(id)) {
 		snprintf(idText, sizeof(idText) ,"ActionID: %s\r\n", id);
+	}
 
 	res = ast_db_get(family, key, tmp, sizeof(tmp));
 	if (res) {
@@ -702,10 +918,11 @@ static int manager_dbdel(struct mansession *s, const struct message *m)
 	}
 
 	res = ast_db_del(family, key);
-	if (res)
+	if (res) {
 		astman_send_error(s, m, "Database entry not found");
-	else
+	} else {
 		astman_send_ack(s, m, "Key deleted successfully");
+	}
 
 	return 0;
 }
@@ -721,15 +938,17 @@ static int manager_dbdeltree(struct mansession *s, const struct message *m)
 		return 0;
 	}
 
-	if (!ast_strlen_zero(key))
+	if (!ast_strlen_zero(key)) {
 		res = ast_db_deltree(family, key);
-	else
+	} else {
 		res = ast_db_deltree(family, NULL);
+	}
 
-	if (res < 0)
+	if (res < 0) {
 		astman_send_error(s, m, "Database entry not found");
-	else
+	} else {
 		astman_send_ack(s, m, "Key tree deleted successfully");
+	}
 	
 	return 0;
 }
@@ -771,6 +990,12 @@ static void *db_sync_thread(void *data)
 
 int astdb_init(void)
 {
+	/* When this routine is run, the realtime modules are not loaded so we can't initialize realtime yet. */
+	db_rt = 0;
+
+	/* If you have multiple systems using the same database, set the systemname in asterisk.conf */
+	db_rt_sysname = S_OR(ast_config_AST_SYSTEM_NAME, "asterisk");
+	
 	pthread_t dont_care;
 
 	ast_cond_init(&dbcond, NULL);
@@ -778,7 +1003,9 @@ int astdb_init(void)
 		return -1;
 	}
 
+	/* initialize astdb or realtime */
 	dbinit();
+
 	ast_cli_register_multiple(cli_database, ARRAY_LEN(cli_database));
 	ast_manager_register_xml("DBGet", EVENT_FLAG_SYSTEM | EVENT_FLAG_REPORTING, manager_dbget);
 	ast_manager_register_xml("DBPut", EVENT_FLAG_SYSTEM, manager_dbput);
