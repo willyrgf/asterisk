@@ -764,7 +764,7 @@ static struct ast_frame *oh323_rtp_read(struct oh323_pvt *pvt)
 	if (f && (f->frametype == AST_FRAME_DTMF) && !(pvt->options.dtmfmode & (H323_DTMF_RFC2833 | H323_DTMF_CISCO))) {
 		return &ast_null_frame;
 	}
-	if (pvt->owner) {
+	if (f && pvt->owner) {
 		/* We already hold the channel lock */
 		if (f->frametype == AST_FRAME_VOICE) {
 			if (f->subclass.codec != pvt->owner->nativeformats) {
@@ -1431,6 +1431,7 @@ static struct oh323_user *build_user(const char *name, struct ast_variable *v, s
 			} else {
 				struct ast_sockaddr tmp;
 
+				tmp.ss.ss_family = AF_INET;
 				if (ast_get_ip(&tmp, v->value)) {
 					ASTOBJ_UNREF(user, oh323_destroy_user);
 					return NULL;
@@ -1756,7 +1757,6 @@ static int create_addr(struct oh323_pvt *pvt, char *opeer)
 }
 static struct ast_channel *oh323_request(const char *type, format_t format, const struct ast_channel *requestor, void *data, int *cause)
 {
-	format_t oldformat;
 	struct oh323_pvt *pvt;
 	struct ast_channel *tmpc = NULL;
 	char *dest = (char *)data;
@@ -1772,7 +1772,6 @@ static struct ast_channel *oh323_request(const char *type, format_t format, cons
 		ast_log(LOG_WARNING, "Unable to build pvt data for '%s'\n", (char *)data);
 		return NULL;
 	}
-	oldformat = format;
 	format &= AST_FORMAT_AUDIO_MASK;
 	if (!format) {
 		ast_log(LOG_NOTICE, "Asked to get a channel of unsupported format '%s'\n", ast_getformatname_multiple(tmp, sizeof(tmp), format));
@@ -3200,6 +3199,7 @@ static enum ast_rtp_glue_result oh323_get_rtp_peer(struct ast_channel *chan, str
 	return res;
 }
 
+#if 0
 static char *convertcap(format_t cap)
 {
 	switch (cap) {
@@ -3226,6 +3226,7 @@ static char *convertcap(format_t cap)
 		return NULL;
 	}
 }
+#endif
 
 static int oh323_set_rtp_peer(struct ast_channel *chan, struct ast_rtp_instance *rtp, struct ast_rtp_instance *vrtp, struct ast_rtp_instance *trtp, format_t codecs, int nat_active)
 {
@@ -3233,13 +3234,18 @@ static int oh323_set_rtp_peer(struct ast_channel *chan, struct ast_rtp_instance 
 	struct oh323_pvt *pvt;
 	struct sockaddr_in them = { 0, };
 	struct sockaddr_in us = { 0, };
+#if 0	/* Native bridge still isn't ready */
 	char *mode;
+#endif
 
 	if (!rtp) {
 		return 0;
 	}
 
+#if 0	/* Native bridge still isn't ready */
 	mode = convertcap(chan->writeformat);
+#endif
+
 	pvt = (struct oh323_pvt *) chan->tech_pvt;
 	if (!pvt) {
 		ast_log(LOG_ERROR, "No Private Structure, this is bad\n");

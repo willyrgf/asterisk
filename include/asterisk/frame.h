@@ -37,7 +37,7 @@ extern "C" {
 
 struct ast_codec_pref {
 	char order[sizeof(format_t) * 8];
-	char framing[sizeof(format_t) * 8];
+	int framing[64]; /*!< Magic numbers are bad, but this just needs to be bigger than ARRAY_LEN(AST_FORMAT_LIST) */
 };
 
 /*!
@@ -336,8 +336,8 @@ enum ast_control_frame_type {
 	AST_CONTROL_AOC = 28,			/*!< Advice of Charge with encoded generic AOC payload */
 	AST_CONTROL_END_OF_Q = 29,		/*!< Indicate that this position was the end of the channel queue for a softhangup. */
 	AST_CONTROL_INCOMPLETE = 30,	/*!< Indication that the extension dialed is incomplete */
-	AST_CONTROL_BRIDGEPARAM = 31,   /*!< Bridge parameter update after masquerade */
-	AST_CONTROL_UPDATE_RTP_PEER = 32, /*!< Interrupt the bridge and have it update the peer */
+	AST_CONTROL_UPDATE_RTP_PEER = 31, /*!< Interrupt the bridge and have it update the peer */
+	AST_CONTROL_BRIDGEPARAM = 32,   /*!< Bridge parameter update after masquerade */
 };
 
 enum ast_frame_read_action {

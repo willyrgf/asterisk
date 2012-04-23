@@ -200,6 +200,15 @@ static int analog_wait_event(struct analog_pvt *p)
 	return -1;
 }
 
+static int analog_have_progressdetect(struct analog_pvt *p)
+{
+	if (p->calls->have_progressdetect) {
+		return p->calls->have_progressdetect(p->chan_pvt);
+	}
+	/* Don't have progress detection. */
+	return 0;
+}
+
 enum analog_cid_start analog_str_to_cidstart(const char *value)
 {
 	if (!strcasecmp(value, "ring")) {
@@ -503,6 +512,14 @@ static int analog_on_hook(struct analog_pvt *p)
 	return -1;
 }
 
+static void analog_set_outgoing(struct analog_pvt *p, int is_outgoing)
+{
+	p->outgoing = is_outgoing;
+	if (p->calls->set_outgoing) {
+		p->calls->set_outgoing(p->chan_pvt, is_outgoing);
+	}
+}
+
 static int analog_check_for_conference(struct analog_pvt *p)
 {
 	if (p->calls->check_for_conference) {
@@ -784,11 +801,11 @@ struct ast_channel * analog_request(struct analog_pvt *p, int *callwait, const s
 		}
 	}
 
-	p->outgoing = 1;
+	analog_set_outgoing(p, 1);
 	ast = analog_new_ast_channel(p, AST_STATE_RESERVED, 0,
 		p->owner ? ANALOG_SUB_CALLWAIT : ANALOG_SUB_REAL, requestor);
 	if (!ast) {
-		p->outgoing = 0;
+		analog_set_outgoing(p, 0);
 	}
 	return ast;
 }
@@ -1014,7 +1031,7 @@ int analog_call(struct analog_pvt *p, struct ast_channel *ast, char *rdest, int 
 	}
 
 	p->dialednone = 0;
-	p->outgoing = 1;
+	analog_set_outgoing(p, 1);
 
 	mysig = p->sig;
 	if (p->outsigmod > -1) {
@@ -1417,7 +1434,7 @@ int analog_hangup(struct analog_pvt *p, struct ast_channel *ast)
 		analog_set_ringtimeout(p, 0);
 		analog_set_confirmanswer(p, 0);
 		analog_set_pulsedial(p, 0);
-		p->outgoing = 0;
+		analog_set_outgoing(p, 0);
 		p->onhooktime = time(NULL);
 		p->cidrings = 1;
 
@@ -2741,7 +2758,9 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 					}
 				}
 				if (ast->_state == AST_STATE_DIALING) {
-					if (analog_check_confirmanswer(p) || (!p->dialednone
+					if (analog_have_progressdetect(p)) {
+						ast_debug(1, "Done dialing, but waiting for progress detection before doing more...\n");
+					} else if (analog_check_confirmanswer(p) || (!p->dialednone
 						&& ((mysig == ANALOG_SIG_EM) || (mysig == ANALOG_SIG_EM_E1)
 							|| (mysig == ANALOG_SIG_EMWINK) || (mysig == ANALOG_SIG_FEATD)
 							|| (mysig == ANALOG_SIG_FEATDMF_TA) || (mysig == ANALOG_SIG_FEATDMF)

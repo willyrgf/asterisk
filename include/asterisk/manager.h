@@ -56,6 +56,7 @@
 
 #define AMI_VERSION                     "1.1"
 #define DEFAULT_MANAGER_PORT 5038	/* Default port for Asterisk management via TCP */
+#define DEFAULT_MANAGER_TLS_PORT 5039	/* Default port for Asterisk management via TCP */
 
 /*! \name Constant return values
  *\note Currently, returning anything other than zero causes the session to terminate.
@@ -159,6 +160,8 @@ struct manager_action {
 	 * function and unregestring the AMI action object.
 	 */
 	unsigned int registered:1;
+	/*! Number of active func() calls in progress. */
+	unsigned int active_count;
 };
 
 /*! \brief External routines may register/unregister manager callbacks this way 

@@ -9,6 +9,64 @@
 ======================================================================
 
 ------------------------------------------------------------------------------
+--- Functionality changes since Asterisk 1.8.10.0 ----------------------------
+------------------------------------------------------------------------------
+
+Background DNS Update Manager
+-----------------------------
+ * The default verbosity for ast_verb() messages has been increased to 6. This
+   should help reduce the 'doing dnsmgr_lookup for' message from spamming the
+   CLI.
+
+------------------------------------------------------------------------------
+--- Functionality changes since Asterisk 1.8.9.1 -----------------------------
+------------------------------------------------------------------------------
+
+Gosub changes
+-------------
+ * A new function, STACK_PEEK, has been added, to correlate for functionality
+   available in AEL in 1.4 that disappeared in 1.8.  STACK_PEEK permits the
+   user to see the location of the calling Gosub from within the subroutine.
+
+------------------------------------------------------------------------------
+--- Functionality changes since Asterisk 1.8.9.0 -----------------------------
+------------------------------------------------------------------------------
+
+Followme changes
+-------------
+ * A new option, 'I' has been added to app_followme.
+   By setting this option, Asterisk will not update the caller with
+   connected line changes when they occur.  This is similar to app_dial
+   and app_queue.
+
+RTP changes
+-------------
+ * A new option, 'probation' has been added to rtp.conf
+   RTP in strictrtp mode can now require more than 1 packet to exit learning
+   mode with a new source (and by default requires 4). The probation option
+   allows the user to change the required number of packets in sequence to any
+   desired value. Use a value of 1 to essentially restore the old behavior.
+   Also, with strictrtp on, Asterisk will now drop all packets until learning
+   mode has successfully exited. These changes are based on how pjmedia handles
+   media sources and source changes.
+
+FAX changes
+------------
+ * res_fax now has module reload support.
+
+------------------------------------------------------------------------------
+--- Functionality changes since Asterisk 1.8.7.1 -----------------------------
+------------------------------------------------------------------------------
+
+SIP Changes
+-----------
+    * Due to potential username discovery vulnerabilities, the 'nat' setting in sip.conf
+      now defaults to force_rport. It is very important that phones requiring nat=no be
+      specifically set as such instead of relying on the default setting. If at all
+      possible, all devices should have nat settings configured in the general section as
+      opposed to configuring nat per-device.
+
+------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 1.6.2 to Asterisk 1.8 ----------------
 ------------------------------------------------------------------------------
 

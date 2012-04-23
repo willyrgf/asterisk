@@ -137,6 +137,8 @@ static const char *sig_pri_call_level2str(enum sig_pri_call_level level)
 		return "Proceeding";
 	case SIG_PRI_CALL_LEVEL_ALERTING:
 		return "Alerting";
+	case SIG_PRI_CALL_LEVEL_DEFER_DIAL:
+		return "DeferDial";
 	case SIG_PRI_CALL_LEVEL_CONNECT:
 		return "Connect";
 	}
@@ -178,8 +180,21 @@ static void sig_pri_set_digital(struct sig_pri_chan *p, int is_digital)
 	}
 }
 
+static void sig_pri_set_outgoing(struct sig_pri_chan *p, int is_outgoing)
+{
+	p->outgoing = is_outgoing;
+	if (p->calls->set_outgoing) {
+		p->calls->set_outgoing(p->chan_pvt, is_outgoing);
+	}
+}
+
 void sig_pri_set_alarm(struct sig_pri_chan *p, int in_alarm)
 {
+	if (sig_pri_is_alarm_ignored(p->pri)) {
+		/* Always set not in alarm */
+		in_alarm = 0;
+	}
+
 	/*
 	 * Clear the channel restart flag when the channel alarm changes
 	 * to prevent the flag from getting stuck when the link goes
@@ -213,6 +228,13 @@ static void sig_pri_make_cc_dialstring(struct sig_pri_chan *p, char *buf, size_t
 	}
 }
 #endif	/* defined(HAVE_PRI_CCSS) */
+
+static void sig_pri_dial_digits(struct sig_pri_chan *p, const char *dial_string)
+{
+	if (p->calls->dial_digits) {
+		p->calls->dial_digits(p->chan_pvt, dial_string);
+	}
+}
 
 /*!
  * \internal
@@ -420,35 +442,41 @@ static int pri_to_ast_presentation(int pri_presentation)
 	int ast_presentation;
 
 	switch (pri_presentation) {
-	case PRES_ALLOWED_USER_NUMBER_NOT_SCREENED:
-		ast_presentation = AST_PRES_ALLOWED_USER_NUMBER_NOT_SCREENED;
+	case PRI_PRES_ALLOWED | PRI_PRES_USER_NUMBER_UNSCREENED:
+		ast_presentation = AST_PRES_ALLOWED | AST_PRES_USER_NUMBER_UNSCREENED;
 		break;
-	case PRES_ALLOWED_USER_NUMBER_PASSED_SCREEN:
-		ast_presentation = AST_PRES_ALLOWED_USER_NUMBER_PASSED_SCREEN;
+	case PRI_PRES_ALLOWED | PRI_PRES_USER_NUMBER_PASSED_SCREEN:
+		ast_presentation = AST_PRES_ALLOWED | AST_PRES_USER_NUMBER_PASSED_SCREEN;
 		break;
-	case PRES_ALLOWED_USER_NUMBER_FAILED_SCREEN:
-		ast_presentation = AST_PRES_ALLOWED_USER_NUMBER_FAILED_SCREEN;
+	case PRI_PRES_ALLOWED | PRI_PRES_USER_NUMBER_FAILED_SCREEN:
+		ast_presentation = AST_PRES_ALLOWED | AST_PRES_USER_NUMBER_FAILED_SCREEN;
 		break;
-	case PRES_ALLOWED_NETWORK_NUMBER:
-		ast_presentation = AST_PRES_ALLOWED_NETWORK_NUMBER;
+	case PRI_PRES_ALLOWED | PRI_PRES_NETWORK_NUMBER:
+		ast_presentation = AST_PRES_ALLOWED | AST_PRES_NETWORK_NUMBER;
 		break;
-	case PRES_PROHIB_USER_NUMBER_NOT_SCREENED:
-		ast_presentation = AST_PRES_PROHIB_USER_NUMBER_NOT_SCREENED;
+
+	case PRI_PRES_RESTRICTED | PRI_PRES_USER_NUMBER_UNSCREENED:
+		ast_presentation = AST_PRES_RESTRICTED | AST_PRES_USER_NUMBER_UNSCREENED;
 		break;
-	case PRES_PROHIB_USER_NUMBER_PASSED_SCREEN:
-		ast_presentation = AST_PRES_PROHIB_USER_NUMBER_PASSED_SCREEN;
+	case PRI_PRES_RESTRICTED | PRI_PRES_USER_NUMBER_PASSED_SCREEN:
+		ast_presentation = AST_PRES_RESTRICTED | AST_PRES_USER_NUMBER_PASSED_SCREEN;
 		break;
-	case PRES_PROHIB_USER_NUMBER_FAILED_SCREEN:
-		ast_presentation = AST_PRES_PROHIB_USER_NUMBER_FAILED_SCREEN;
+	case PRI_PRES_RESTRICTED | PRI_PRES_USER_NUMBER_FAILED_SCREEN:
+		ast_presentation = AST_PRES_RESTRICTED | AST_PRES_USER_NUMBER_FAILED_SCREEN;
 		break;
-	case PRES_PROHIB_NETWORK_NUMBER:
-		ast_presentation = AST_PRES_PROHIB_NETWORK_NUMBER;
+	case PRI_PRES_RESTRICTED | PRI_PRES_NETWORK_NUMBER:
+		ast_presentation = AST_PRES_RESTRICTED | AST_PRES_NETWORK_NUMBER;
 		break;
-	case PRES_NUMBER_NOT_AVAILABLE:
+
+	case PRI_PRES_UNAVAILABLE | PRI_PRES_USER_NUMBER_UNSCREENED:
+	case PRI_PRES_UNAVAILABLE | PRI_PRES_USER_NUMBER_PASSED_SCREEN:
+	case PRI_PRES_UNAVAILABLE | PRI_PRES_USER_NUMBER_FAILED_SCREEN:
+	case PRI_PRES_UNAVAILABLE | PRI_PRES_NETWORK_NUMBER:
 		ast_presentation = AST_PRES_NUMBER_NOT_AVAILABLE;
 		break;
+
 	default:
-		ast_presentation = AST_PRES_PROHIB_USER_NUMBER_NOT_SCREENED;
+		ast_presentation = AST_PRES_RESTRICTED | AST_PRES_USER_NUMBER_UNSCREENED;
 		break;
 	}
 
@@ -469,35 +497,41 @@ static int ast_to_pri_presentation(int ast_presentation)
 	int pri_presentation;
 
 	switch (ast_presentation) {
-	case AST_PRES_ALLOWED_USER_NUMBER_NOT_SCREENED:
-		pri_presentation = PRES_ALLOWED_USER_NUMBER_NOT_SCREENED;
+	case AST_PRES_ALLOWED | AST_PRES_USER_NUMBER_UNSCREENED:
+		pri_presentation = PRI_PRES_ALLOWED | PRI_PRES_USER_NUMBER_UNSCREENED;
 		break;
-	case AST_PRES_ALLOWED_USER_NUMBER_PASSED_SCREEN:
-		pri_presentation = PRES_ALLOWED_USER_NUMBER_PASSED_SCREEN;
+	case AST_PRES_ALLOWED | AST_PRES_USER_NUMBER_PASSED_SCREEN:
+		pri_presentation = PRI_PRES_ALLOWED | PRI_PRES_USER_NUMBER_PASSED_SCREEN;
 		break;
-	case AST_PRES_ALLOWED_USER_NUMBER_FAILED_SCREEN:
-		pri_presentation = PRES_ALLOWED_USER_NUMBER_FAILED_SCREEN;
+	case AST_PRES_ALLOWED | AST_PRES_USER_NUMBER_FAILED_SCREEN:
+		pri_presentation = PRI_PRES_ALLOWED | PRI_PRES_USER_NUMBER_FAILED_SCREEN;
 		break;
-	case AST_PRES_ALLOWED_NETWORK_NUMBER:
-		pri_presentation = PRES_ALLOWED_NETWORK_NUMBER;
+	case AST_PRES_ALLOWED | AST_PRES_NETWORK_NUMBER:
+		pri_presentation = PRI_PRES_ALLOWED | PRI_PRES_NETWORK_NUMBER;
 		break;
-	case AST_PRES_PROHIB_USER_NUMBER_NOT_SCREENED:
-		pri_presentation = PRES_PROHIB_USER_NUMBER_NOT_SCREENED;
+
+	case AST_PRES_RESTRICTED | AST_PRES_USER_NUMBER_UNSCREENED:
+		pri_presentation = PRI_PRES_RESTRICTED | PRI_PRES_USER_NUMBER_UNSCREENED;
 		break;
-	case AST_PRES_PROHIB_USER_NUMBER_PASSED_SCREEN:
-		pri_presentation = PRES_PROHIB_USER_NUMBER_PASSED_SCREEN;
+	case AST_PRES_RESTRICTED | AST_PRES_USER_NUMBER_PASSED_SCREEN:
+		pri_presentation = PRI_PRES_RESTRICTED | PRI_PRES_USER_NUMBER_PASSED_SCREEN;
 		break;
-	case AST_PRES_PROHIB_USER_NUMBER_FAILED_SCREEN:
-		pri_presentation = PRES_PROHIB_USER_NUMBER_FAILED_SCREEN;
+	case AST_PRES_RESTRICTED | AST_PRES_USER_NUMBER_FAILED_SCREEN:
+		pri_presentation = PRI_PRES_RESTRICTED | PRI_PRES_USER_NUMBER_FAILED_SCREEN;
 		break;
-	case AST_PRES_PROHIB_NETWORK_NUMBER:
-		pri_presentation = PRES_PROHIB_NETWORK_NUMBER;
+	case AST_PRES_RESTRICTED | AST_PRES_NETWORK_NUMBER:
+		pri_presentation = PRI_PRES_RESTRICTED | PRI_PRES_NETWORK_NUMBER;
 		break;
-	case AST_PRES_NUMBER_NOT_AVAILABLE:
+
+	case AST_PRES_UNAVAILABLE | AST_PRES_USER_NUMBER_UNSCREENED:
+	case AST_PRES_UNAVAILABLE | AST_PRES_USER_NUMBER_PASSED_SCREEN:
+	case AST_PRES_UNAVAILABLE | AST_PRES_USER_NUMBER_FAILED_SCREEN:
+	case AST_PRES_UNAVAILABLE | AST_PRES_NETWORK_NUMBER:
 		pri_presentation = PRES_NUMBER_NOT_AVAILABLE;
 		break;
+
 	default:
-		pri_presentation = PRES_PROHIB_USER_NUMBER_NOT_SCREENED;
+		pri_presentation = PRI_PRES_RESTRICTED | PRI_PRES_USER_NUMBER_UNSCREENED;
 		break;
 	}
 
@@ -984,10 +1018,10 @@ struct ast_channel *sig_pri_request(struct sig_pri_chan *p, enum sig_pri_law law
 
 	ast_log(LOG_DEBUG, "%s %d\n", __FUNCTION__, p->channel);
 
-	p->outgoing = 1;
+	sig_pri_set_outgoing(p, 1);
 	ast = sig_pri_new_ast_channel(p, AST_STATE_RESERVED, law, transfercapability, p->exten, requestor);
 	if (!ast) {
-		p->outgoing = 0;
+		sig_pri_set_outgoing(p, 0);
 	}
 	return ast;
 }
@@ -1460,6 +1494,7 @@ static int pri_fixup_principle(struct sig_pri_span *pri, int principle, q931_cal
 #if defined(HAVE_PRI_SETUP_KEYPAD)
 		strcpy(new_chan->keypad_digits, old_chan->keypad_digits);
 #endif	/* defined(HAVE_PRI_SETUP_KEYPAD) */
+		strcpy(new_chan->deferred_digits, old_chan->deferred_digits);
 #if defined(HAVE_PRI_AOC_EVENTS)
 		new_chan->aoc_s_request_invoke_id = old_chan->aoc_s_request_invoke_id;
 		new_chan->aoc_e = old_chan->aoc_e;
@@ -1933,15 +1968,12 @@ static void *pri_ss_thread(void *data)
 			&& !ast_matchmore_extension(chan, chan->context, exten, 1, p->cid_num)) {
 			sig_pri_lock_private(p);
 			if (p->pri->pri) {
-				if (!pri_grab(p, p->pri)) {
-					if (p->call_level < SIG_PRI_CALL_LEVEL_PROCEEDING) {
-						p->call_level = SIG_PRI_CALL_LEVEL_PROCEEDING;
-					}
-					pri_proceeding(p->pri->pri, p->call, PVT_TO_CHANNEL(p), 0);
-					pri_rel(p->pri);
-				} else {
-					ast_log(LOG_WARNING, "Unable to grab PRI on span %d\n", p->pri->span);
+				pri_grab(p, p->pri);
+				if (p->call_level < SIG_PRI_CALL_LEVEL_PROCEEDING) {
+					p->call_level = SIG_PRI_CALL_LEVEL_PROCEEDING;
 				}
+				pri_proceeding(p->pri->pri, p->call, PVT_TO_CHANNEL(p), 0);
+				pri_rel(p->pri);
 			}
 			sig_pri_unlock_private(p);
 		}
@@ -4420,7 +4452,6 @@ static int sig_pri_handle_hold(struct sig_pri_span *pri, pri_event *ev)
 	int retval;
 	int chanpos_old;
 	int chanpos_new;
-	struct ast_channel *bridged;
 	struct ast_channel *owner;
 
 	chanpos_old = pri_find_principle_by_call(pri, ev->hold.call);
@@ -4441,9 +4472,11 @@ static int sig_pri_handle_hold(struct sig_pri_span *pri, pri_event *ev)
 	if (!owner) {
 		goto done_with_private;
 	}
-	bridged = ast_bridged_channel(owner);
-	if (!bridged) {
-		/* Cannot hold a call that is not bridged. */
+	if (pri->pvts[chanpos_old]->call_level != SIG_PRI_CALL_LEVEL_CONNECT) {
+		/*
+		 * Make things simple.  Don't allow placing a call on hold that
+		 * is not connected.
+		 */
 		goto done_with_owner;
 	}
 	chanpos_new = pri_find_empty_nobch(pri);
@@ -4841,7 +4874,7 @@ static void *pri_dchannel(void *vpri)
 				}
 				break;
 			case PRI_EVENT_RESTART:
-				if (e->restart.channel > -1 && PRI_CHANNEL(e->ring.channel) != 0xFF) {
+				if (e->restart.channel > -1 && PRI_CHANNEL(e->restart.channel) != 0xFF) {
 					chanpos = pri_find_principle(pri, e->restart.channel, NULL);
 					if (chanpos < 0)
 						ast_log(LOG_WARNING,
@@ -5045,7 +5078,7 @@ static void *pri_dchannel(void *vpri)
 #endif	/* defined(HAVE_PRI_CALL_WAITING) */
 					{
 						/* We will not accept incoming call waiting calls. */
-						pri_hangup(pri->pri, e->ring.call, PRI_CAUSE_INCOMPATIBLE_DESTINATION);
+						pri_hangup(pri->pri, e->ring.call, PRI_CAUSE_NORMAL_CIRCUIT_CONGESTION);
 						break;
 					}
 #if defined(HAVE_PRI_CALL_WAITING)
@@ -5722,14 +5755,28 @@ static void *pri_dchannel(void *vpri)
 #endif	/* defined(HAVE_PRI_CALL_WAITING) */
 				sig_pri_handle_subcmds(pri, chanpos, e->e, e->answer.channel,
 					e->answer.subcmds, e->answer.call);
-				if (pri->pvts[chanpos]->call_level < SIG_PRI_CALL_LEVEL_CONNECT) {
-					pri->pvts[chanpos]->call_level = SIG_PRI_CALL_LEVEL_CONNECT;
+				if (!ast_strlen_zero(pri->pvts[chanpos]->deferred_digits)) {
+					/* We have some 'w' deferred digits to dial now. */
+					ast_verb(3,
+						"Span %d: Channel %d/%d dialing deferred digit string: %s\n",
+						pri->span, pri->pvts[chanpos]->logicalspan,
+						pri->pvts[chanpos]->prioffset,
+						pri->pvts[chanpos]->deferred_digits);
+					if (pri->pvts[chanpos]->call_level < SIG_PRI_CALL_LEVEL_DEFER_DIAL) {
+						pri->pvts[chanpos]->call_level = SIG_PRI_CALL_LEVEL_DEFER_DIAL;
+					}
+					sig_pri_dial_digits(pri->pvts[chanpos],
+						pri->pvts[chanpos]->deferred_digits);
+				} else {
+					if (pri->pvts[chanpos]->call_level < SIG_PRI_CALL_LEVEL_CONNECT) {
+						pri->pvts[chanpos]->call_level = SIG_PRI_CALL_LEVEL_CONNECT;
+					}
+					sig_pri_open_media(pri->pvts[chanpos]);
+					pri_queue_control(pri, chanpos, AST_CONTROL_ANSWER);
+					sig_pri_set_dialing(pri->pvts[chanpos], 0);
+					/* Enable echo cancellation if it's not on already */
+					sig_pri_set_echocanceller(pri->pvts[chanpos], 1);
 				}
-				sig_pri_open_media(pri->pvts[chanpos]);
-				pri_queue_control(pri, chanpos, AST_CONTROL_ANSWER);
-				/* Enable echo cancellation if it's not on already */
-				sig_pri_set_dialing(pri->pvts[chanpos], 0);
-				sig_pri_set_echocanceller(pri->pvts[chanpos], 1);
 
 #ifdef SUPPORT_USERUSER
 				if (!ast_strlen_zero(e->answer.useruserinfo)) {
@@ -6309,7 +6356,7 @@ int sig_pri_hangup(struct sig_pri_chan *p, struct ast_channel *ast)
 		return 0;
 	}
 
-	p->outgoing = 0;
+	sig_pri_set_outgoing(p, 0);
 	sig_pri_set_digital(p, 0);	/* push up to parent for EC*/
 #if defined(HAVE_PRI_CALL_WAITING)
 	if (p->is_call_waiting) {
@@ -6435,7 +6482,14 @@ void sig_pri_extract_called_num_subaddr(struct sig_pri_chan *p, const char *rdes
 	if (strlen(number) < p->stripmsd) {
 		number = "";
 	} else {
+		char *deferred;
+
 		number += p->stripmsd;
+		deferred = strchr(number, 'w');
+		if (deferred) {
+			/* Remove any 'w' deferred digits. */
+			*deferred = '\0';
+		}
 		while (isalpha(*number)) {
 			++number;
 		}
@@ -6513,7 +6567,7 @@ int sig_pri_call(struct sig_pri_chan *p, struct ast_channel *ast, char *rdest, i
 	}
 
 	p->dialdest[0] = '\0';
-	p->outgoing = 1;
+	sig_pri_set_outgoing(p, 1);
 
 	ast_copy_string(dest, rdest, sizeof(dest));
 	AST_NONSTANDARD_APP_ARGS(args, dest, '/');
@@ -6551,7 +6605,6 @@ int sig_pri_call(struct sig_pri_chan *p, struct ast_channel *ast, char *rdest, i
 		}
 		dialed_subaddress.str = s;
 		dialed_subaddress.valid = 1;
-		s = NULL;
 	}
 
 	l = NULL;
@@ -6580,17 +6633,30 @@ int sig_pri_call(struct sig_pri_chan *p, struct ast_channel *ast, char *rdest, i
 		ast_log(LOG_WARNING, "Number '%s' is shorter than stripmsd (%d)\n", c, p->stripmsd);
 		return -1;
 	}
-	if (pri_grab(p, p->pri)) {
-		ast_log(LOG_WARNING, "Failed to grab PRI!\n");
-		return -1;
+
+	/* Extract any 'w' deferred digits. */
+	s = strchr(c + p->stripmsd, 'w');
+	if (s) {
+		*s++ = '\0';
+		ast_copy_string(p->deferred_digits, s, sizeof(p->deferred_digits));
+		/*
+		 * Since we have a 'w', this means that there will not be any
+		 * more normal dialed digits.  Therefore, the sending complete
+		 * ie needs to be sent with any normal digits.
+		 */
+	} else {
+		p->deferred_digits[0] = '\0';
 	}
+
+	pri_grab(p, p->pri);
 	if (!(p->call = pri_new_call(p->pri->pri))) {
 		ast_log(LOG_WARNING, "Unable to create call on channel %d\n", p->channel);
 		pri_rel(p->pri);
 		return -1;
 	}
 	if (!(sr = pri_sr_new())) {
-		ast_log(LOG_WARNING, "Failed to allocate setup request channel %d\n", p->channel);
+		ast_log(LOG_WARNING, "Failed to allocate setup request on channel %d\n",
+			p->channel);
 		pri_destroycall(p->pri->pri, p->call);
 		p->call = NULL;
 		pri_rel(p->pri);
@@ -6922,16 +6988,13 @@ int sig_pri_indicate(struct sig_pri_chan *p, struct ast_channel *chan, int condi
 			chan->hangupcause = AST_CAUSE_USER_BUSY;
 			p->progress = 1;/* No need to send plain PROGRESS after this. */
 			if (p->pri && p->pri->pri) {
-				if (!pri_grab(p, p->pri)) {
+				pri_grab(p, p->pri);
 #ifdef HAVE_PRI_PROG_W_CAUSE
-					pri_progress_with_cause(p->pri->pri, p->call, PVT_TO_CHANNEL(p), 1, chan->hangupcause);
+				pri_progress_with_cause(p->pri->pri, p->call, PVT_TO_CHANNEL(p), 1, chan->hangupcause);
 #else
-					pri_progress(p->pri->pri,p->call, PVT_TO_CHANNEL(p), 1);
+				pri_progress(p->pri->pri,p->call, PVT_TO_CHANNEL(p), 1);
 #endif
-					pri_rel(p->pri);
-				} else {
-					ast_log(LOG_WARNING, "Unable to grab PRI on span %d\n", p->pri->span);
-				}
+				pri_rel(p->pri);
 			}
 		}
 		break;
@@ -6939,13 +7002,10 @@ int sig_pri_indicate(struct sig_pri_chan *p, struct ast_channel *chan, int condi
 		if (p->call_level < SIG_PRI_CALL_LEVEL_ALERTING && !p->outgoing) {
 			p->call_level = SIG_PRI_CALL_LEVEL_ALERTING;
 			if (p->pri && p->pri->pri) {
-				if (!pri_grab(p, p->pri)) {
-					pri_acknowledge(p->pri->pri,p->call, PVT_TO_CHANNEL(p),
-						p->no_b_channel || p->digital ? 0 : 1);
-					pri_rel(p->pri);
-				} else {
-					ast_log(LOG_WARNING, "Unable to grab PRI on span %d\n", p->pri->span);
-				}
+				pri_grab(p, p->pri);
+				pri_acknowledge(p->pri->pri,p->call, PVT_TO_CHANNEL(p),
+					p->no_b_channel || p->digital ? 0 : 1);
+				pri_rel(p->pri);
 			}
 		}
 		res = sig_pri_play_tone(p, SIG_PRI_TONE_RINGTONE);
@@ -6959,16 +7019,13 @@ int sig_pri_indicate(struct sig_pri_chan *p, struct ast_channel *chan, int condi
 		if (p->call_level < SIG_PRI_CALL_LEVEL_PROCEEDING && !p->outgoing) {
 			p->call_level = SIG_PRI_CALL_LEVEL_PROCEEDING;
 			if (p->pri && p->pri->pri) {
-				if (!pri_grab(p, p->pri)) {
-					pri_proceeding(p->pri->pri,p->call, PVT_TO_CHANNEL(p),
-						p->no_b_channel || p->digital ? 0 : 1);
-					if (!p->no_b_channel && !p->digital) {
-						sig_pri_set_dialing(p, 0);
-					}
-					pri_rel(p->pri);
-				} else {
-					ast_log(LOG_WARNING, "Unable to grab PRI on span %d\n", p->pri->span);
+				pri_grab(p, p->pri);
+				pri_proceeding(p->pri->pri,p->call, PVT_TO_CHANNEL(p),
+					p->no_b_channel || p->digital ? 0 : 1);
+				if (!p->no_b_channel && !p->digital) {
+					sig_pri_set_dialing(p, 0);
 				}
+				pri_rel(p->pri);
 			}
 		}
 		/* don't continue in ast_indicate */
@@ -6981,16 +7038,13 @@ int sig_pri_indicate(struct sig_pri_chan *p, struct ast_channel *chan, int condi
 			&& !p->no_b_channel) {
 			p->progress = 1;/* No need to send plain PROGRESS again. */
 			if (p->pri && p->pri->pri) {
-				if (!pri_grab(p, p->pri)) {
+				pri_grab(p, p->pri);
 #ifdef HAVE_PRI_PROG_W_CAUSE
-					pri_progress_with_cause(p->pri->pri,p->call, PVT_TO_CHANNEL(p), 1, -1);  /* no cause at all */
+				pri_progress_with_cause(p->pri->pri,p->call, PVT_TO_CHANNEL(p), 1, -1);  /* no cause at all */
 #else
-					pri_progress(p->pri->pri,p->call, PVT_TO_CHANNEL(p), 1);
+				pri_progress(p->pri->pri,p->call, PVT_TO_CHANNEL(p), 1);
 #endif
-					pri_rel(p->pri);
-				} else {
-					ast_log(LOG_WARNING, "Unable to grab PRI on span %d\n", p->pri->span);
-				}
+				pri_rel(p->pri);
 			}
 		}
 		/* don't continue in ast_indicate */
@@ -7037,36 +7091,29 @@ int sig_pri_indicate(struct sig_pri_chan *p, struct ast_channel *chan, int condi
 			}
 			p->progress = 1;/* No need to send plain PROGRESS after this. */
 			if (p->pri && p->pri->pri) {
-				if (!pri_grab(p, p->pri)) {
+				pri_grab(p, p->pri);
 #ifdef HAVE_PRI_PROG_W_CAUSE
-					pri_progress_with_cause(p->pri->pri, p->call, PVT_TO_CHANNEL(p), 1, chan->hangupcause);
+				pri_progress_with_cause(p->pri->pri, p->call, PVT_TO_CHANNEL(p), 1, chan->hangupcause);
 #else
-					pri_progress(p->pri->pri,p->call, PVT_TO_CHANNEL(p), 1);
+				pri_progress(p->pri->pri,p->call, PVT_TO_CHANNEL(p), 1);
 #endif
-					pri_rel(p->pri);
-				} else {
-					ast_log(LOG_WARNING, "Unable to grab PRI on span %d\n", p->pri->span);
-				}
+				pri_rel(p->pri);
 			}
 		}
 		break;
 	case AST_CONTROL_HOLD:
 		if (p->pri && !strcasecmp(p->mohinterpret, "passthrough")) {
-			if (!pri_grab(p, p->pri)) {
-				res = pri_notify(p->pri->pri, p->call, p->prioffset, PRI_NOTIFY_REMOTE_HOLD);
-				pri_rel(p->pri);
-			} else {
-				ast_log(LOG_WARNING, "Unable to grab PRI on span %d\n", p->pri->span);
-			}
+			pri_grab(p, p->pri);
+			res = pri_notify(p->pri->pri, p->call, p->prioffset, PRI_NOTIFY_REMOTE_HOLD);
+			pri_rel(p->pri);
 		} else
 			ast_moh_start(chan, data, p->mohinterpret);
 		break;
 	case AST_CONTROL_UNHOLD:
 		if (p->pri && !strcasecmp(p->mohinterpret, "passthrough")) {
-			if (!pri_grab(p, p->pri)) {
-				res = pri_notify(p->pri->pri, p->call, p->prioffset, PRI_NOTIFY_REMOTE_RETRIEVAL);
-				pri_rel(p->pri);
-			}
+			pri_grab(p, p->pri);
+			res = pri_notify(p->pri->pri, p->call, p->prioffset, PRI_NOTIFY_REMOTE_RETRIEVAL);
+			pri_rel(p->pri);
 		} else
 			ast_moh_stop(chan);
 		break;
@@ -7078,9 +7125,10 @@ int sig_pri_indicate(struct sig_pri_chan *p, struct ast_channel *chan, int condi
 		break;
 	case AST_CONTROL_CONNECTED_LINE:
 		ast_debug(1, "Received AST_CONTROL_CONNECTED_LINE on %s\n", chan->name);
-		if (p->pri && !pri_grab(p, p->pri)) {
+		if (p->pri) {
 			struct pri_party_connected_line connected;
 
+			pri_grab(p, p->pri);
 			memset(&connected, 0, sizeof(connected));
 			sig_pri_party_id_from_ast(&connected.id, &chan->connected.id);
 
@@ -7090,7 +7138,8 @@ int sig_pri_indicate(struct sig_pri_chan *p, struct ast_channel *chan, int condi
 		break;
 	case AST_CONTROL_REDIRECTING:
 		ast_debug(1, "Received AST_CONTROL_REDIRECTING on %s\n", chan->name);
-		if (p->pri && !pri_grab(p, p->pri)) {
+		if (p->pri) {
+			pri_grab(p, p->pri);
 			sig_pri_redirecting_update(p, chan);
 			pri_rel(p->pri);
 		}
@@ -7101,7 +7150,8 @@ int sig_pri_indicate(struct sig_pri_chan *p, struct ast_channel *chan, int condi
 			struct ast_aoc_decoded *decoded
 				= ast_aoc_decode((struct ast_aoc_encoded *) data, datalen, chan);
 			ast_debug(1, "Received AST_CONTROL_AOC on %s\n", chan->name);
-			if (decoded && p->pri && !pri_grab(p, p->pri)) {
+			if (decoded && p->pri) {
+				pri_grab(p, p->pri);
 				switch (ast_aoc_get_msg_type(decoded)) {
 				case AST_AOC_S:
 					if (p->pri->aoc_passthrough_flag & SIG_PRI_AOC_GRANT_S) {
@@ -7152,29 +7202,27 @@ int sig_pri_indicate(struct sig_pri_chan *p, struct ast_channel *chan, int condi
 
 int sig_pri_answer(struct sig_pri_chan *p, struct ast_channel *ast)
 {
-	int res = 0;
+	int res;
+
 	/* Send a pri acknowledge */
-	if (!pri_grab(p, p->pri)) {
+	pri_grab(p, p->pri);
 #if defined(HAVE_PRI_AOC_EVENTS)
-		if (p->aoc_s_request_invoke_id_valid) {
-			/* if AOC-S was requested and the invoke id is still present on answer.  That means
-			 * no AOC-S rate list was provided, so send a NULL response which will indicate that
-			 * AOC-S is not available */
-			pri_aoc_s_request_response_send(p->pri->pri, p->call,
-				p->aoc_s_request_invoke_id, NULL);
-			p->aoc_s_request_invoke_id_valid = 0;
-		}
-#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
-		if (p->call_level < SIG_PRI_CALL_LEVEL_CONNECT) {
-			p->call_level = SIG_PRI_CALL_LEVEL_CONNECT;
-		}
-		sig_pri_set_dialing(p, 0);
-		sig_pri_open_media(p);
-		res = pri_answer(p->pri->pri, p->call, 0, !p->digital);
-		pri_rel(p->pri);
-	} else {
-		res = -1;
+	if (p->aoc_s_request_invoke_id_valid) {
+		/* if AOC-S was requested and the invoke id is still present on answer.  That means
+		 * no AOC-S rate list was provided, so send a NULL response which will indicate that
+		 * AOC-S is not available */
+		pri_aoc_s_request_response_send(p->pri->pri, p->call,
+			p->aoc_s_request_invoke_id, NULL);
+		p->aoc_s_request_invoke_id_valid = 0;
 	}
+#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
+	if (p->call_level < SIG_PRI_CALL_LEVEL_CONNECT) {
+		p->call_level = SIG_PRI_CALL_LEVEL_CONNECT;
+	}
+	sig_pri_set_dialing(p, 0);
+	sig_pri_open_media(p);
+	res = pri_answer(p->pri->pri, p->call, 0, !p->digital);
+	pri_rel(p->pri);
 	ast_setstate(ast, AST_STATE_UP);
 	return res;
 }
@@ -7315,12 +7363,9 @@ int sig_pri_digit_begin(struct sig_pri_chan *pvt, struct ast_channel *ast, char 
 			return 0;
 		}
 		if (pvt->call_level < SIG_PRI_CALL_LEVEL_PROCEEDING) {
-			if (!pri_grab(pvt, pvt->pri)) {
-				pri_information(pvt->pri->pri, pvt->call, digit);
-				pri_rel(pvt->pri);
-			} else {
-				ast_log(LOG_WARNING, "Unable to grab PRI on span %d\n", pvt->pri->span);
-			}
+			pri_grab(pvt, pvt->pri);
+			pri_information(pvt->pri->pri, pvt->call, digit);
+			pri_rel(pvt->pri);
 			return 0;
 		}
 		if (pvt->call_level < SIG_PRI_CALL_LEVEL_CONNECT) {
@@ -7331,6 +7376,40 @@ int sig_pri_digit_begin(struct sig_pri_chan *pvt, struct ast_channel *ast, char 
 		}
 	}
 	return 1;
+}
+
+/*!
+ * \brief DTMF dial string complete.
+ * \since 1.8.11
+ *
+ * \param pvt sig_pri private channel structure.
+ * \param ast Asterisk channel
+ *
+ * \note Channel and private lock are already held.
+ *
+ * \return Nothing
+ */
+void sig_pri_dial_complete(struct sig_pri_chan *pvt, struct ast_channel *ast)
+{
+	/* If we just completed 'w' deferred dialing digits, we need to answer now. */
+	if (pvt->call_level == SIG_PRI_CALL_LEVEL_DEFER_DIAL) {
+		pvt->call_level = SIG_PRI_CALL_LEVEL_CONNECT;
+
+		sig_pri_open_media(pvt);
+		{
+			struct ast_frame f = {AST_FRAME_CONTROL, };
+
+			if (pvt->calls->queue_control) {
+				pvt->calls->queue_control(pvt->chan_pvt, AST_CONTROL_ANSWER);
+			}
+
+			f.subclass.integer = AST_CONTROL_ANSWER;
+			ast_queue_frame(ast, &f);
+		}
+		sig_pri_set_dialing(pvt, 0);
+		/* Enable echo cancellation if it's not on already */
+		sig_pri_set_echocanceller(pvt, 1);
+	}
 }
 
 #if defined(HAVE_PRI_MWI)
@@ -7717,6 +7796,18 @@ void sig_pri_chan_alarm_notify(struct sig_pri_chan *p, int noalarm)
 	pri_rel(p->pri);
 }
 
+/*!
+ * \brief Determine if layer 1 alarms are ignored.
+ *
+ * \param p Channel private pointer.
+ *
+ * \return TRUE if the alarm is ignored.
+ */
+int sig_pri_is_alarm_ignored(struct sig_pri_span *pri)
+{
+	return pri->layer1_ignored;
+}
+
 struct sig_pri_chan *sig_pri_chan_new(void *pvt_data, struct sig_pri_callback *callback, struct sig_pri_span *pri, int logicalspan, int channo, int trunkgroup)
 {
 	struct sig_pri_chan *p;
@@ -7870,14 +7961,9 @@ int pri_send_keypad_facility_exec(struct sig_pri_chan *p, const char *digits)
 		return -1;
 	}
 
-	if (!pri_grab(p, p->pri)) {
-		pri_keypad_facility(p->pri->pri, p->call, digits);
-		pri_rel(p->pri);
-	} else {
-		ast_debug(1, "Unable to grab pri to send keypad facility!\n");
-		sig_pri_unlock_private(p);
-		return -1;
-	}
+	pri_grab(p, p->pri);
+	pri_keypad_facility(p->pri->pri, p->call, digits);
+	pri_rel(p->pri);
 
 	sig_pri_unlock_private(p);
 
@@ -7896,12 +7982,9 @@ int pri_send_callrerouting_facility_exec(struct sig_pri_chan *p, enum ast_channe
 		return -1;
 	}
 
-	if (!pri_grab(p, p->pri)) {
-		res = pri_callrerouting_facility(p->pri->pri, p->call, destination, original, reason);
-		pri_rel(p->pri);
-	} else {
-		ast_log(LOG_DEBUG, "Unable to grab pri to send callrerouting facility on span %d!\n", p->pri->span);
-	}
+	pri_grab(p, p->pri);
+	res = pri_callrerouting_facility(p->pri->pri, p->call, destination, original, reason);
+	pri_rel(p->pri);
 
 	sig_pri_unlock_private(p);
 

@@ -95,6 +95,8 @@ enum sig_pri_call_level {
 	SIG_PRI_CALL_LEVEL_PROCEEDING,
 	/*! Called party is being alerted of the call. (ALERTING) */
 	SIG_PRI_CALL_LEVEL_ALERTING,
+	/*! Call is dialing 'w' deferred digits. (CONNECT) */
+	SIG_PRI_CALL_LEVEL_DEFER_DIAL,
 	/*! Call is connected/answered. (CONNECT) */
 	SIG_PRI_CALL_LEVEL_CONNECT,
 };
@@ -127,6 +129,7 @@ struct sig_pri_callback {
 	void (* const set_alarm)(void *pvt, int in_alarm);
 	void (* const set_dialing)(void *pvt, int is_dialing);
 	void (* const set_digital)(void *pvt, int is_digital);
+	void (* const set_outgoing)(void *pvt, int is_outgoing);
 	void (* const set_callerid)(void *pvt, const struct ast_party_caller *caller);
 	void (* const set_dnid)(void *pvt, const char *dnid);
 	void (* const set_rdnis)(void *pvt, const char *rdnis);
@@ -136,6 +139,7 @@ struct sig_pri_callback {
 	const char *(* const get_orig_dialstring)(void *pvt);
 	void (* const make_cc_dialstring)(void *pvt, char *buf, size_t buf_size);
 	void (* const update_span_devstate)(struct sig_pri_span *pri);
+	void (* const dial_digits)(void *pvt, const char *dial_string);
 
 	void (* const open_media)(void *pvt);
 
@@ -227,6 +231,8 @@ struct sig_pri_chan {
 	/*! \brief Keypad digits that came in with the SETUP message. */
 	char keypad_digits[AST_MAX_EXTENSION];
 #endif	/* defined(HAVE_PRI_SETUP_KEYPAD) */
+	/*! 'w' deferred dialing digits. */
+	char deferred_digits[AST_MAX_EXTENSION];
 
 #if defined(HAVE_PRI_AOC_EVENTS)
 	struct pri_subcmd_aoc_e aoc_e;
@@ -358,6 +364,8 @@ struct sig_pri_span {
 	/*! \brief TRUE if we will allow incoming ISDN call waiting calls. */
 	unsigned int allow_call_waiting_calls:1;
 #endif	/* defined(HAVE_PRI_CALL_WAITING) */
+	/*! TRUE if layer 1 alarm status is ignored */
+	unsigned int layer1_ignored:1;
 	/*!
 	 * TRUE if a new call's sig_pri_chan.user_tag[] has the MSN
 	 * appended to the initial_user_tag[].
@@ -507,6 +515,7 @@ void sig_pri_init_pri(struct sig_pri_span *pri);
 /* If return 0, it means this function was able to handle it (pre setup digits).  If non zero, the user of this
  * functions should handle it normally (generate inband DTMF) */
 int sig_pri_digit_begin(struct sig_pri_chan *pvt, struct ast_channel *ast, char digit);
+void sig_pri_dial_complete(struct sig_pri_chan *pvt, struct ast_channel *ast);
 
 void sig_pri_stop_pri(struct sig_pri_span *pri);
 int sig_pri_start_pri(struct sig_pri_span *pri);
@@ -514,8 +523,8 @@ int sig_pri_start_pri(struct sig_pri_span *pri);
 void sig_pri_set_alarm(struct sig_pri_chan *p, int in_alarm);
 void sig_pri_chan_alarm_notify(struct sig_pri_chan *p, int noalarm);
 
+int sig_pri_is_alarm_ignored(struct sig_pri_span *pri);
 void pri_event_alarm(struct sig_pri_span *pri, int index, int before_start_pri);
-
 void pri_event_noalarm(struct sig_pri_span *pri, int index, int before_start_pri);
 
 struct ast_channel *sig_pri_request(struct sig_pri_chan *p, enum sig_pri_law law, const struct ast_channel *requestor, int transfercapability);
