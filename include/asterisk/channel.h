@@ -3513,6 +3513,28 @@ int ast_channel_get_device_name(struct ast_channel *chan, char *device_name, siz
  * \param size The size of the buffer to write to
  */
 int ast_channel_get_cc_agent_type(struct ast_channel *chan, char *agent_type, size_t size);
+
+/*! \brief Asynchronous filestream playing playlist
+  Used (at least at first) in app_queue - in the ast_queue_streamfile_info channel datastore 
+*/
+struct ast_queue_streamfile_name {
+  char *filename;
+  AST_LIST_ENTRY(ast_queue_streamfile_name) list;
+};
+
+/*! \brief Information data about background playing of prompts */
+struct ast_queue_streamfile_info {
+  void (*digitHandler)(void *data, char digit); /* a func ptr to the handler that will do what needs doing when the streaming of a soundfile is finished */
+  struct queue_ent *qe;
+  AST_LIST_HEAD(,ast_queue_streamfile_name) flist;   /* a list of other sound files that need to be played in sequence */
+  struct ast_channel *chan;
+  int ringing;
+  char moh[80];
+  int now_playing;
+  int valid_exit;  /* if valid_exit() in app_queue is true */
+};
+
+
 #if defined(__cplusplus) || defined(c_plusplus)
 }
 #endif

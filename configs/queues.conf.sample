@@ -78,6 +78,14 @@ monitor-type = MixMonitor
 ;
 ;check_state_unknown = no
 ;
+; Prompts played to the caller by default is played in the foreground,
+; which means that even if a queue member becomes available, the 
+; prompt will be played fully. Enabling 'background_prompts' will
+; make sure that prompts are interruptible. If a queue member becomes
+; available, the prompt will be interrupted.
+;
+background_prompts=no
+;
 ;[markq]
 ;
 ; A sample call queue

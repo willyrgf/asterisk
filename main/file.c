@@ -44,6 +44,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/app.h"
 #include "asterisk/pbx.h"
 #include "asterisk/linkedlists.h"
+#include "asterisk/channel.h"
 #include "asterisk/module.h"
 #include "asterisk/astobj2.h"
 #include "asterisk/test.h"
@@ -771,6 +772,18 @@ struct ast_filestream *ast_openvstream(struct ast_channel *chan, const char *fil
 	return NULL;
 }
 
+static const struct ast_datastore_info ast_sound_ending_obj = { /* this is here because it is referenced here
+							     and the only other place it is used is in app_queue,
+							     which is not always loaded. */
+        .type = "ast_sound_ending"
+};
+
+const struct ast_datastore_info *ast_sound_ending()
+{
+	return &ast_sound_ending_obj;
+}
+
+
 static struct ast_frame *read_frame(struct ast_filestream *s, int *whennext)
 {
 	struct ast_frame *fr, *new_fr;
@@ -829,6 +842,7 @@ static enum fsread_res ast_readaudio_callback(struct ast_filestream *s)
 				ast_log(LOG_WARNING, "Failed to write frame\n");
 				ast_frfree(fr);
 			}
+			ast_log(LOG_DEBUG, "--- Giving up here now\n");
 			goto return_failure;
 		}
 
