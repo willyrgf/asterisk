@@ -414,7 +414,7 @@ static int wait_file_full(struct ast_channel *chan, const char *ints, const char
 	/* if a datastore is present, we are in the queue app (perhaps others in time)
 	   and don't want to wait around for the sounds to finish playing */
 
-	if ((datastore = ast_channel_datastore_find(chan, queue_ds_sound_ending(), NULL))) { /* app_queue wants to schedule this instead of play & wait */
+	if ((datastore = ast_channel_datastore_find(chan, ast_sound_ending(), NULL))) { /* app_queue wants to schedule this instead of play & wait */
 		struct ast_queue_streamfile_info *aqsi = datastore->data;
 		if (aqsi) {
 			AST_LIST_LOCK(&aqsi->flist);

@@ -709,15 +709,15 @@ struct ast_filestream *ast_openvstream(struct ast_channel *chan, const char *fil
 	return NULL;
 }
 
-const struct ast_datastore_info queue_ds_sound_ending_obj = { /* this is here because it is referenced here
+static const struct ast_datastore_info ast_sound_ending_obj = { /* this is here because it is referenced here
 							     and the only other place it is used is in app_queue,
 							     which is not always loaded. */
-        .type = "queue_sound_ending"
+        .type = "ast_sound_ending"
 };
 
-const struct ast_datastore_info *queue_ds_sound_ending()
+const struct ast_datastore_info *ast_sound_ending()
 {
-	return &queue_ds_sound_ending_obj;
+	return &ast_sound_ending_obj;
 }
 
 
