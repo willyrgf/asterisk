@@ -881,7 +881,6 @@ static const struct autopause {
 	{ QUEUE_AUTOPAUSE_ALL,"all" },
 };
 
-
 static struct ast_taskprocessor *devicestate_tps;
 
 #define DEFAULT_RETRY		5
@@ -2527,7 +2526,6 @@ static int join_queue(char *queuename, struct queue_ent *qe, enum queue_result *
 	return res;
 }
 
-extern const struct ast_datastore_info queue_ds_sound_ending;
 void destroy_streamfile_info(struct ast_queue_streamfile_info *playdata);
 /* Uncommented by Old Olle patch 
 static int play_file(struct ast_channel *chan, const char *filename)
@@ -5982,7 +5980,7 @@ static int play_file(struct ast_channel *chan, const char *filename, int ringing
 	}
 
 	/* look up the datastore and the play_finished struct, and set appropriate values */
-	if ((datastore = ast_channel_datastore_find(chan, &queue_ds_sound_ending, NULL))) {
+	if ((datastore = ast_channel_datastore_find(chan, queue_ds_sound_ending(), NULL))) {
 		aqsi = datastore->data;
 		if (aqsi) {  /* copy this stuff into place */
 			aqsi->ringing = ringing;
@@ -6256,7 +6254,7 @@ static int queue_exec(struct ast_channel *chan, const char *data)
 		S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, ""),
 		qe.opos);
   /* Begin old Olle patch */
-	datastore = ast_channel_datastore_alloc(&queue_ds_sound_ending, NULL);
+	datastore = ast_datastore_alloc(queue_ds_sound_ending(), NULL);
 
 	aqsi->qe = &qe;
 	aqsi->chan = chan;
