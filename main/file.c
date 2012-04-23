@@ -44,6 +44,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/app.h"
 #include "asterisk/pbx.h"
 #include "asterisk/linkedlists.h"
+#include "asterisk/channel.h"
 #include "asterisk/module.h"
 #include "asterisk/astobj2.h"
 #include "asterisk/test.h"
@@ -708,6 +709,12 @@ struct ast_filestream *ast_openvstream(struct ast_channel *chan, const char *fil
 	return NULL;
 }
 
+const struct ast_datastore_info queue_ds_sound_ending = { /* this is here because it is referenced here
+							     and the only other place it is used is in app_queue,
+							     which is not always loaded. */
+        .type = "queue_sound_ending"
+};
+
 static struct ast_frame *read_frame(struct ast_filestream *s, int *whennext)
 {
 	struct ast_frame *fr, *new_fr;
@@ -756,6 +763,7 @@ static enum fsread_res ast_readaudio_callback(struct ast_filestream *s)
 		struct ast_frame *fr;
 
 		if (s->orig_chan_name && strcasecmp(s->owner->name, s->orig_chan_name)) {
+			ast_log(LOG_DEBUG, "--- Giving up here\n");
 			goto return_failure;
 		}
 
@@ -766,6 +774,7 @@ static enum fsread_res ast_readaudio_callback(struct ast_filestream *s)
 				ast_log(LOG_WARNING, "Failed to write frame\n");
 				ast_frfree(fr);
 			}
+			ast_log(LOG_DEBUG, "--- Giving up here now\n");
 			goto return_failure;
 		} 
 
@@ -792,6 +801,10 @@ static enum fsread_res ast_readaudio_callback(struct ast_filestream *s)
 	return FSREAD_SUCCESS_SCHED;
 
 return_failure:
+	if (option_debug > 1) {
+		ast_log(LOG_DEBUG, "DEBUG: return_failure called. Giving up. !\n");
+	}
+
 	s->owner->streamid = -1;
 	ast_settimeout(s->owner, 0, NULL, NULL);
 	return FSREAD_FAILURE;
