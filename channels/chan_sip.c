@@ -2948,7 +2948,7 @@ static void ref_proxy(struct sip_pvt *pvt, struct sip_proxy *proxy)
  * \note A reference to the dialog must be held before calling this function, and this
  * function does not release that reference.
  */
->>>>>>> .merge-right.r362997
+void dialog_unlink_all(struct sip_pvt *dialog)
 {
 	struct sip_pkt *cp;
 	struct ast_channel *owner;

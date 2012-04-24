@@ -494,12 +494,8 @@ installdirs:
 	$(INSTALL) -d "$(DESTDIR)$(ASTDATADIR)/keys"
 	$(INSTALL) -d "$(DESTDIR)$(ASTDATADIR)/phoneprov"
 	$(INSTALL) -d "$(DESTDIR)$(ASTDATADIR)/static-http"
-<<<<<<< .working
-	$(INSTALL) -d "$(DESTDIR)$(ASTDATADIR)/sounds"
-=======
 	$(INSTALL) -d "$(DESTDIR)$(ASTDATADIR)/sounds"
 	$(INSTALL) -d "$(DESTDIR)$(ASTDATADIR)/moh"
->>>>>>> .merge-right.r362997
 	$(INSTALL) -d "$(DESTDIR)$(ASTMANDIR)/man8"
 	$(INSTALL) -d "$(DESTDIR)$(AGI_DIR)"
 	$(INSTALL) -d "$(DESTDIR)$(ASTDBDIR)"
