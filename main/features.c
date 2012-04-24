@@ -1383,7 +1383,6 @@ static int park_call_full(struct ast_channel *chan, struct ast_channel *peer, st
 	struct parkeduser *pu = args->pu;
 	const char *event_from;		/*!< Channel name that is parking the call. */
 	char app_data[AST_MAX_EXTENSION + AST_MAX_CONTEXT];
-	char app_data[AST_MAX_EXTENSION + AST_MAX_CONTEXT];
 
 	if (pu == NULL) {
 		args->pu = pu = park_space_reserve(chan, peer, args);
@@ -4959,10 +4958,6 @@ END_OPTIONS );
 static int park_call_exec(struct ast_channel *chan, const char *data)
 {
 	struct ast_park_call_args args = { 0, };
-	struct ast_flags flags = { 0 };
-	struct ast_park_call_args args = {
-		.orig_chan_name = orig_chan_name,
-	};
 	struct ast_flags flags = { 0 };
 	char orig_exten[AST_MAX_EXTENSION];
 	int orig_priority;
