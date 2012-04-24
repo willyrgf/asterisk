@@ -157,7 +157,7 @@ int daemon(int, int);  /* defined in libresolv of all places */
 #define AST_MAX_CONNECTS 128
 #define NUM_MSGS 64
 
-/*! Minimum allowed DTMF digit length - 80ms */
+/*! Default minimum DTMF digit length - 80ms */
 #define AST_MIN_DTMF_DURATION 80
 
 
