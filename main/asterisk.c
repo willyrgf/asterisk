@@ -3204,7 +3204,7 @@ static void ast_readconfig(void)
 			ast_set2_flag(&ast_options, ast_true(v->value), AST_OPT_FLAG_INTERNAL_TIMING);
 		} else if (!strcasecmp(v->name, "mindtmfduration")) {
 			if ((sscanf(v->value, "%30d", &option_dtmfminduration) != 1) || (option_dtmfminduration < 0)) {
-				option_dtmfminduration = 80;
+				option_dtmfminduration = AST_MIN_DTMF_DURATION;
 			}
 		} else if (!strcasecmp(v->name, "maxcalls")) {
 			if ((sscanf(v->value, "%30d", &option_maxcalls) != 1) || (option_maxcalls < 0)) {
