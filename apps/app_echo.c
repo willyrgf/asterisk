@@ -49,8 +49,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			frames. Note: If '#' detected application exits.</para>
 			<para>This application does not automatically answer and should be
 			preceeded by an application such as Answer() or Progress().</para>
-			<para>This application does not automatically answer and should be
-			preceeded by an application such as Answer() or Progress().</para>
 		</description>
 	</application>
  ***/

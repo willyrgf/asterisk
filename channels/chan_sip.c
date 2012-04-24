@@ -22167,6 +22167,10 @@ static int handle_request_update(struct sip_pvt *p, struct sip_request *req)
 		transmit_response(p, "501 Method Not Implemented", req);
 		return 0;
 	}
+	if (!p->owner) {
+		transmit_response(p, "481 Call/Transaction Does Not Exist", req);
+		return 0;
+	}
 	if (get_rpid(p, req)) {
 		struct ast_party_connected_line connected;
 		struct ast_set_party_connected_line update_connected;
@@ -25710,8 +25714,8 @@ static int sip_send_mwi_to_peer(struct sip_peer *peer, int cache_only)
 	/* the following will decrement the refcount on p as it finishes */
 	transmit_notify_with_mwi(p, newmsgs, oldmsgs, vmexten);
 	sip_pvt_unlock(p);
-	sip_pvt_unlock(p);
 	dialog_unref(p, "unref dialog ptr p just before it goes out of scope at the end of sip_send_mwi_to_peer.");
+
 	return 0;
 }
 
@@ -28012,6 +28016,7 @@ static int reload_config(enum channelreloadreason reason)
 			authl = NULL;
 		}
 		ast_mutex_unlock(&authl_lock);
+
 
 		cleanup_all_regs();
 		/* Then, actually destroy users and registry */

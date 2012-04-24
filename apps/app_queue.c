@@ -4977,6 +4977,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 		qe->handled++;
 		ast_queue_log(queuename, qe->chan->uniqueid, member->membername, "CONNECT", "%ld|%s|%ld", (long) time(NULL) - qe->start, peer->uniqueid,
 													(long)(orig - to > 0 ? (orig - to) / 1000 : 0));
+
 		if (qe->chan->cdr) {
 			struct ast_cdr *cdr;
 			struct ast_cdr *newcdr;
