@@ -1170,6 +1170,7 @@ static int iax2_answer(struct ast_channel *c);
 static int iax2_call(struct ast_channel *c, char *dest, int timeout);
 static int iax2_devicestate(void *data);
 static int iax2_digit_begin(struct ast_channel *c, char digit);
+static int iax2_digit_continue(struct ast_channel *c, char digit, unsigned int duration);
 static int iax2_digit_end(struct ast_channel *c, char digit, unsigned int duration);
 static int iax2_do_register(struct iax2_registry *reg);
 static int iax2_fixup(struct ast_channel *oldchannel, struct ast_channel *newchan);
@@ -1221,6 +1222,7 @@ static const struct ast_channel_tech iax2_tech = {
 	.requester = iax2_request,
 	.devicestate = iax2_devicestate,
 	.send_digit_begin = iax2_digit_begin,
+	.send_digit_continue = iax2_digit_continue,
 	.send_digit_end = iax2_digit_end,
 	.send_text = iax2_sendtext,
 	.send_image = iax2_sendimage,
@@ -4285,6 +4287,11 @@ static int iax2_transmit(struct iax_frame *fr)
 static int iax2_digit_begin(struct ast_channel *c, char digit)
 {
 	return send_command_locked(PTR_TO_CALLNO(c->tech_pvt), AST_FRAME_DTMF_BEGIN, digit, 0, NULL, 0, -1);
+}
+
+static int iax2_digit_continue(struct ast_channel *c, char digit, unsigned int duration)
+{
+	return send_command_locked(PTR_TO_CALLNO(c->tech_pvt), AST_FRAME_DTMF_CONTINUE, digit, 0, NULL, 0, -1);
 }
 
 static int iax2_digit_end(struct ast_channel *c, char digit, unsigned int duration)
