@@ -780,7 +780,7 @@ static enum fsread_res ast_readaudio_callback(struct ast_filestream *s)
 				ast_log(LOG_WARNING, "Failed to write frame\n");
 				ast_frfree(fr);
 			}
-			ast_ldebug(3, "--- Giving up here now\n");
+			ast_debug(3, "--- Giving up here now\n");
 			goto return_failure;
 		} 
 
