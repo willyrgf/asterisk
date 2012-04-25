@@ -404,8 +404,7 @@ static int wait_file(struct ast_channel *chan, const char *ints, const char *fil
 	return wait_file_full(chan, ints, file, lang, -1, -1);
 }
 
-/* this routine to provide wait_file capability for those with audiofd, ctrlfd  */
-   
+/*! \brief this routine to provide \ref wait_file() capability for those with audiofd, ctrlfd  */
 static int wait_file_full(struct ast_channel *chan, const char *ints, const char *file, const char *lang, int audiofd, int ctrlfd) 
 {
 	int res;
@@ -416,72 +415,73 @@ static int wait_file_full(struct ast_channel *chan, const char *ints, const char
 
 	if ((datastore = ast_channel_datastore_find(chan, ast_sound_ending(), NULL))) { /* app_queue wants to schedule this instead of play & wait */
 		struct ast_queue_streamfile_info *aqsi = datastore->data;
-		if (aqsi) {
-			AST_LIST_LOCK(&aqsi->flist);
-			if (aqsi->now_playing) {
-				struct ast_queue_streamfile_name *fn = ast_calloc(1, sizeof(*fn));
-				
-				fn->filename = ast_strdup(file);
-				ast_debug(3, "----> Adding file %s to playlist for %s\n", file, chan->name);
-				
-				/* link the struct into the current ast_queue_streamfile_info struct */
-				AST_LIST_INSERT_TAIL(&aqsi->flist, fn, list);
-			} else {
-				/* if not playing, then start playing this file */
-				if (aqsi->ringing) {
-					ast_indicate(aqsi->chan,-1);
-				} else {
-					ast_moh_stop(aqsi->chan);
-				}
-				
-				ast_stopstream(aqsi->chan);
-				
-				ast_autoservice_stop(aqsi->chan);
-				
-				ast_debug(3, "Starting to stream %s\n", file);
-				res = ast_streamfile(aqsi->chan, file, aqsi->chan->language); /* begin the streaming */
-				
-				while (res && !AST_LIST_EMPTY(&aqsi->flist)) {
-					/* really, how could this even be possible?
-					   just in case.... */
-					struct ast_queue_streamfile_name *fn;
-					
-					fn = AST_LIST_REMOVE_HEAD(&aqsi->flist, list);
-					
-					ast_debug(3,"Start streaming file %s\n", fn->filename);
-					res = ast_streamfile(aqsi->chan, fn->filename, aqsi->chan->language);
-				}
-				
-				
-				if (res) {
-					/* oops, the current file has problems */
-					/* restore the moh */
-					if (aqsi->ringing) {
-						ast_indicate(aqsi->chan, AST_CONTROL_RINGING);
-					} else {
-						ast_moh_start(aqsi->chan, aqsi->moh, NULL);
-					}
-					AST_LIST_UNLOCK(&aqsi->flist);
-					return 1;
-				}
-				aqsi->now_playing = 1; /* We have begun playback */
-				ast_autoservice_start(aqsi->chan); /* this will let the sound file play in a different thread */
-			}
-			AST_LIST_UNLOCK(&aqsi->flist);
+		if (!aqsi) {
 			return 0;
 		}
+		AST_LIST_LOCK(&aqsi->flist);
+		if (aqsi->now_playing) {
+			struct ast_queue_streamfile_name *fn = ast_calloc(1, sizeof(*fn));
+			
+			fn->filename = ast_strdup(file);
+			ast_debug(3, "----> Adding file %s to playlist for %s\n", file, chan->name);
+			
+			/* link the struct into the current ast_queue_streamfile_info struct */
+			AST_LIST_INSERT_TAIL(&aqsi->flist, fn, list);
+		} else {
+			/* if not playing, then start playing this file */
+			if (aqsi->ringing) {
+				ast_indicate(aqsi->chan,-1);
+			} else {
+				ast_moh_stop(aqsi->chan);
+			}
+				
+			ast_stopstream(aqsi->chan);
+				
+			ast_autoservice_stop(aqsi->chan);
+				
+			ast_debug(3, "Starting to stream %s\n", file);
+			res = ast_streamfile(aqsi->chan, file, aqsi->chan->language); /* begin the streaming */
+				
+			while (res && !AST_LIST_EMPTY(&aqsi->flist)) {
+				/* really, how could this even be possible?  just in case.... */
+				struct ast_queue_streamfile_name *fn;
 		
-	} else {
-		/* otherwise, exactly business as usual */
-		if ((res = ast_streamfile(chan, file, lang)))
-			ast_log(LOG_WARNING, "Unable to play message %s\n", file);
-		if ((audiofd  > -1) && (ctrlfd > -1))
-			res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
-		else
-			res = ast_waitstream(chan, ints);
-		return res;
+				fn = AST_LIST_REMOVE_HEAD(&aqsi->flist, list);
+					
+				ast_debug(3,"Start streaming file %s\n", fn->filename);
+				res = ast_streamfile(aqsi->chan, fn->filename, aqsi->chan->language);
+			}
+				
+				
+			if (res) {
+				/* oops, the current file has problems */
+				/* restore the moh */
+				if (aqsi->ringing) {
+					ast_indicate(aqsi->chan, AST_CONTROL_RINGING);
+				} else {
+					ast_moh_start(aqsi->chan, aqsi->moh, NULL);
+				}
+				AST_LIST_UNLOCK(&aqsi->flist);
+				return 1;
+			}
+			aqsi->now_playing = 1; /* We have begun playback */
+			ast_autoservice_start(aqsi->chan); /* this will let the sound file play in a different thread */
+		}
+		AST_LIST_UNLOCK(&aqsi->flist);
+		return 0;
+		
+	} 
+
+	/* otherwise, exactly business as usual */
+	if ((res = ast_streamfile(chan, file, lang))) {
+		ast_log(LOG_WARNING, "Unable to play message %s\n", file);
 	}
-	return 0;
+	if ((audiofd  > -1) && (ctrlfd > -1)) {
+		res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+	} else {
+		res = ast_waitstream(chan, ints);
+	}
+	return res;
 }
 
 /*! \brief  ast_say_number_full: call language-specific functions */
@@ -3227,7 +3227,7 @@ int ast_say_date_en(struct ast_channel *chan, time_t t, const char *ints, const 
 	}
 	if (!res)
 		res = ast_say_number(chan, tm.tm_mday, ints, lang, (char * ) NULL);
-#ifdef IS_THIS_A_MISTAKE 
+#ifdef IS_THIS_A_MISTAKE
 	if (!res)
 		res = ast_waitstream(chan, ints);
 #endif

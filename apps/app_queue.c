@@ -3314,22 +3314,11 @@ static int say_periodic_announcement(struct queue_ent *qe, int ringing)
 	}
 	
 	/* play the announcement */
-	res = play_file(qe->chan, ast_str_buffer(qe->parent->sound_periodicannounce[qe->last_periodic_announce_sound]),ringing, qe->moh);
+	res = play_file(qe->chan, ast_str_buffer(qe->parent->sound_periodicannounce[qe->last_periodic_announce_sound]), ringing, qe->moh);
 
-	/*	if (res > 0 && !valid_exit(qe, res))
-		res = 0;
-	*/
 	/* we no longer check for valid_exit(), as we simply
 	   start the playback and let the autoservice thread
 	   keep it going */
-
-	/* Resume Music on Hold if the caller is going to stay in the queue */
-	if (!res) {
-		if (ringing)
-			ast_indicate(qe->chan, AST_CONTROL_RINGING);
-		else
-			ast_moh_start(qe->chan, qe->moh, NULL);
-	}
 
 	/* update last_periodic_announce_time */
 	if (qe->parent->relativeperiodicannounce)
@@ -5963,18 +5952,24 @@ static int play_file(struct ast_channel *chan, const char *filename, int ringing
 		if (ast_strlen_zero(filename)) {
 			return 0;
 		}
-		/* Play prompts like before, with no interruption */
+
+		if (!ast_fileexists(filename, NULL, chan->language)) {
+			return 0;
+		}
+
 		ast_stopstream(chan);
+
 		res = ast_streamfile(chan, filename, chan->language);
 		if (!res) {
 			res = ast_waitstream(chan, AST_DIGIT_ANY);
 		}
+
 		ast_stopstream(chan);
 		if (ringing) {
                         ast_indicate(chan, AST_CONTROL_RINGING);
                 } else {
                         ast_moh_start(chan, moh, NULL);
-                }
+		}
 
 		return res;
 	}
@@ -6872,8 +6867,9 @@ static void queue_set_global_params(struct ast_config *cfg)
 	if ((general_val = ast_variable_retrieve(cfg, "general", "updatecdr")))
 		update_cdr = ast_true(general_val);
 	background_prompts = 0;
-	if ((general_val = ast_variable_retrieve(cfg, "general", "background_prompts")))
+	if ((general_val = ast_variable_retrieve(cfg, "general", "background_prompts"))) {
 		background_prompts = ast_true(general_val);
+	}
 	shared_lastcall = 0;
 	if ((general_val = ast_variable_retrieve(cfg, "general", "shared_lastcall")))
 		shared_lastcall = ast_true(general_val);
