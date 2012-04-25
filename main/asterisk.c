@@ -186,7 +186,7 @@ int option_debug;				/*!< Debug level */
 double option_maxload;				/*!< Max load avg on system */
 int option_maxcalls;				/*!< Max number of active calls */
 int option_maxfiles;				/*!< Max number of open file handles (files, sockets) */
-int option_dtmfminduration;			/*!< Minimum duration of DTMF. */
+unsigned int option_dtmfminduration;		/*!< Minimum duration of DTMF. */
 #if defined(HAVE_SYSINFO)
 long option_minmemfree;				/*!< Minimum amount of free system memory - stop accepting calls if free memory falls below this watermark */
 #endif
@@ -492,7 +492,7 @@ static char *handle_show_settings(struct ast_cli_entry *e, int cmd, struct ast_c
 	ast_cli(a->fd, "  Internal timing:             %s\n", ast_test_flag(&ast_options, AST_OPT_FLAG_INTERNAL_TIMING) ? "Enabled" : "Disabled");
 	ast_cli(a->fd, "  Transmit silence during rec: %s\n", ast_test_flag(&ast_options, AST_OPT_FLAG_TRANSMIT_SILENCE) ? "Enabled" : "Disabled");
 	ast_cli(a->fd, "  Generic PLC:                 %s\n", ast_test_flag(&ast_options, AST_OPT_FLAG_GENERIC_PLC) ? "Enabled" : "Disabled");
-	ast_cli(a->fd, "  Min DTMF duration::          %d\n", option_dtmfminduration);
+	ast_cli(a->fd, "  Min DTMF duration::          %u\n", option_dtmfminduration);
 
 	ast_cli(a->fd, "\n* Subsystems\n");
 	ast_cli(a->fd, "  -------------\n");
@@ -3203,7 +3203,7 @@ static void ast_readconfig(void)
 		} else if (!strcasecmp(v->name, "internal_timing")) {
 			ast_set2_flag(&ast_options, ast_true(v->value), AST_OPT_FLAG_INTERNAL_TIMING);
 		} else if (!strcasecmp(v->name, "mindtmfduration")) {
-			if ((sscanf(v->value, "%30d", &option_dtmfminduration) != 1) || (option_dtmfminduration < 0)) {
+			if (sscanf(v->value, "%30u", &option_dtmfminduration) != 1) {
 				option_dtmfminduration = AST_MIN_DTMF_DURATION;
 			}
 		} else if (!strcasecmp(v->name, "maxcalls")) {
