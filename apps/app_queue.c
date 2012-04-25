@@ -2527,29 +2527,6 @@ static int join_queue(char *queuename, struct queue_ent *qe, enum queue_result *
 }
 
 void destroy_streamfile_info(struct ast_queue_streamfile_info *playdata);
-/* Uncommented by Old Olle patch 
-static int play_file(struct ast_channel *chan, const char *filename)
-{
-	int res;
-
-	if (ast_strlen_zero(filename)) {
-		return 0;
-	}
-
-	if (!ast_fileexists(filename, NULL, chan->language)) {
-		return 0;
-	}
-
-	ast_stopstream(chan);
-
-	res = ast_streamfile(chan, filename, chan->language);
-	if (!res)
-		res = ast_waitstream(chan, AST_DIGIT_ANY);
-
-	ast_stopstream(chan);
-
-	return res;
-} */
 
 /*!
  * \brief Check for valid exit from queue via goto
@@ -2630,10 +2607,11 @@ static int say_position(struct queue_ent *qe, int ringing)
 		} else {
 			if (qe->parent->announceposition == ANNOUNCEPOSITION_MORE_THAN && qe->pos > qe->parent->announcepositionlimit){
 				/* More than Case*/
-			  res = play_file(qe->chan, qe->parent->queue_quantity1, ringing, NULL);
+				res = play_file(qe->chan, qe->parent->queue_quantity1, ringing, NULL);
 				if (res)
 					goto playout;
 				res = ast_say_number(qe->chan, qe->parent->announcepositionlimit, AST_DIGIT_ANY, qe->chan->language, NULL); /* Needs gender */
+/* OEJ CHECK */
 				if (res)
 					goto playout;
 			} else {
@@ -2672,9 +2650,9 @@ static int say_position(struct queue_ent *qe, int ringing)
 
 	/* If the hold time is >1 min, if it's enabled, and if it's not
 	   supposed to be only once and we have already said it, say it */
-    if ((avgholdmins+avgholdsecs) > 0 && qe->parent->announceholdtime &&
-        ((qe->parent->announceholdtime == ANNOUNCEHOLDTIME_ONCE && !qe->last_pos) ||
-        !(qe->parent->announceholdtime == ANNOUNCEHOLDTIME_ONCE))) {
+	if ((avgholdmins+avgholdsecs) > 0 && qe->parent->announceholdtime &&
+       	 ((qe->parent->announceholdtime == ANNOUNCEHOLDTIME_ONCE && !qe->last_pos) ||
+       	 !(qe->parent->announceholdtime == ANNOUNCEHOLDTIME_ONCE))) {
 		res = play_file(qe->chan, qe->parent->sound_holdtime,ringing,NULL);
 		if (res)
 			goto playout;
@@ -3928,6 +3906,10 @@ static int wait_our_turn(struct queue_ent *qe, int ringing, enum queue_result *r
 
 	/* This is the holding pen for callers 2 through maxlen */
 	for (;;) {
+
+		if (background_prompts) {
+			play_file(qe->chan, NULL, 0, qe->moh);
+		}
 
 		if (is_our_turn(qe))
 			break;
@@ -6248,19 +6230,21 @@ static int queue_exec(struct ast_channel *chan, const char *data)
 		S_OR(args.url, ""),
 		S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, ""),
 		qe.opos);
-  /* Begin old Olle patch */
-	datastore = ast_datastore_alloc(ast_sound_ending(), NULL);
 
-	aqsi->qe = &qe;
-	aqsi->chan = chan;
-	aqsi->ringing = ringing;
-	aqsi->now_playing = 0;
-	strcpy(aqsi->moh, qe.moh);
-	AST_LIST_HEAD_INIT(&aqsi->flist);
-	datastore->data = aqsi;
+	/* Add the background music datastore for this channel */
+	if (background_prompts) {
+		datastore = ast_datastore_alloc(ast_sound_ending(), NULL);
+
+		aqsi->qe = &qe;
+		aqsi->chan = chan;
+		aqsi->ringing = ringing;
+		aqsi->now_playing = 0;
+		strcpy(aqsi->moh, qe.moh);
+		AST_LIST_HEAD_INIT(&aqsi->flist);
+		datastore->data = aqsi;
 	
-	ast_channel_datastore_add(chan, datastore);
-  /* End old Olle patch */
+		ast_channel_datastore_add(chan, datastore);
+	}
 
 	copy_rules(&qe, args.rule);
 	qe.pr = AST_LIST_FIRST(&qe.qe_rules);
