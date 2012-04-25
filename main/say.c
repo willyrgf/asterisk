@@ -7848,8 +7848,9 @@ static int ast_say_number_full_ka(struct ast_channel *chan, int num, const char 
 	char* s = 0;
 	const char* remaining = fn;
 
-	if (!num)
+	if (!num) {
 		return ast_say_digits_full(chan, 0, ints, language, audiofd, ctrlfd);
+	}
 
 
 	ast_translate_number_ka(num, fn, 512);
@@ -7869,8 +7870,9 @@ static int ast_say_number_full_ka(struct ast_channel *chan, int num, const char 
 		ast_free(new_string);
 
 		remaining = s + 1;  /* position just after the found space char. */
-		while (*remaining == ' ')  /* skip multiple spaces */
+		while (*remaining == ' ') {  /* skip multiple spaces */
 			remaining++;
+		}
 	}
 
 
@@ -7911,14 +7913,16 @@ static int ast_say_date_ka(struct ast_channel *chan, time_t t, const char *ints,
 	int res = 0;
 	ast_localtime(&when, &tm, NULL);
 
-	if (!res)
+	if (!res) {
 		res = ast_say_number(chan, tm.tm_year + 1900, ints, lang, (char *) NULL);
+	}
 
 	if (!res) {
 		snprintf(fn, sizeof(fn), "digits/tslis %d", tm.tm_wday);
 		res = ast_streamfile(chan, fn, lang);
-		if (!res)
+		if (!res) {
 			res = ast_waitstream(chan, ints);
+		}
 	}
 
 	if (!res) {
@@ -7931,8 +7935,9 @@ static int ast_say_date_ka(struct ast_channel *chan, time_t t, const char *ints,
 	if (!res) {
 		snprintf(fn, sizeof(fn), "digits/mon-%d", tm.tm_mon);
 		res = ast_streamfile(chan, fn, lang);
-		if (!res)
+		if (!res) {
 			res = ast_waitstream(chan, ints);
+		}
 	}
 	return res;
 
@@ -7979,8 +7984,9 @@ static int ast_say_datetime_ka(struct ast_channel *chan, time_t t, const char *i
 
 	ast_localtime(&when, &tm, NULL);
 	res = ast_say_date(chan, t, ints, lang);
-	if (!res)
+	if (!res) {
 		ast_say_time(chan, t, ints, lang);
+	}
 	return res;
 
 }
@@ -8003,8 +8009,9 @@ static int ast_say_datetime_from_now_ka(struct ast_channel *chan, time_t t, cons
 	daydiff = now.tm_yday - tm.tm_yday;
 	if ((daydiff < 0) || (daydiff > 6)) {
 		/* Day of month and month */
-		if (!res)
+		if (!res) {
 			res = ast_say_number(chan, tm.tm_mday, ints, lang, (char *) NULL);
+		}
 		if (!res) {
 			snprintf(fn, sizeof(fn), "digits/mon-%d", tm.tm_mon);
 			res = wait_file(chan, ints, fn, lang);
@@ -8017,8 +8024,9 @@ static int ast_say_datetime_from_now_ka(struct ast_channel *chan, time_t t, cons
 			res = wait_file(chan, ints, fn, lang);
 		}
 	} /* Otherwise, it was today */
-	if (!res)
+	if (!res) {
 		res = ast_say_time(chan, t, ints, lang);
+	}
 
 	return res;
 }
