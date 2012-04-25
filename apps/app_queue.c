@@ -2611,7 +2611,6 @@ static int say_position(struct queue_ent *qe, int ringing)
 				if (res)
 					goto playout;
 				res = ast_say_number(qe->chan, qe->parent->announcepositionlimit, AST_DIGIT_ANY, qe->chan->language, NULL); /* Needs gender */
-/* OEJ CHECK */
 				if (res)
 					goto playout;
 			} else {
@@ -5809,12 +5808,6 @@ static void gen_closestream(struct gen_state *state)
 	state->chan->stream = NULL;
 	state->stream = NULL;
 	state->aqsi->now_playing = 0;	/* Important flag to indicate we are no longer playing on this channel */
-	//ast_log(LOG_DEBUG, "--- Restarting MOH --\n");
-	//if (state->aqsi->ringing) {
-		//ast_indicate(state->chan, AST_CONTROL_RINGING);
-	//} else if (state->aqsi->moh) {
-		//ast_moh_start(state->chan, state->aqsi->moh, NULL);
-	//}
 }
 
 /*! \brief Release generator on channel */
@@ -6280,7 +6273,7 @@ check_turns:
 		}
 
 		if (background_prompts) {
-			play_file(qe.chan, NULL, ringing, qe.moh);	/* OEJ - Trigger next prompt */
+			play_file(qe.chan, NULL, ringing, qe.moh);	
 		}
 		if (makeannouncement) {
 			/* Make a position announcement, if enabled */
