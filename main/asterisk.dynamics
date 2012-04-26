@@ -1,5 +1,5 @@
 {
-	*ast_sound_*;
+	*ast_prompt_list;
 	*ast_adsi_*;
 	*ast_agi_*;
 	*ast_pktccops_*;

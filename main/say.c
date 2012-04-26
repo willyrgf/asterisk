@@ -423,10 +423,10 @@ static int wait_file_full(struct ast_channel *chan, const char *ints, const char
 			AST_LIST_LOCK(&aqsi->flist);
 			if (aqsi->now_playing) {
 				struct ast_queue_streamfile_name *fn = ast_calloc(1, sizeof(*fn));
-				
+
 				fn->filename = ast_strdup(file);
 				ast_debug(3, "----> Adding file %s to playlist for %s\n", file, ast_channel_name(chan));
-				
+
 				/* link the struct into the current ast_queue_streamfile_info struct */
 				AST_LIST_INSERT_TAIL(&aqsi->flist, fn, list);
 			} else {
@@ -436,22 +436,17 @@ static int wait_file_full(struct ast_channel *chan, const char *ints, const char
 				} else {
 					ast_moh_stop(aqsi->chan);
 				}
-				
+
 				ast_stopstream(aqsi->chan);
-				
 				ast_autoservice_stop(aqsi->chan);
-				
 				res = ast_streamfile(aqsi->chan, file, ast_channel_language(aqsi->chan)); /* begin the streaming */
 				while (res && !AST_LIST_EMPTY(&aqsi->flist)) {
 					struct ast_queue_streamfile_name *fn;
-					
 					fn = AST_LIST_REMOVE_HEAD(&aqsi->flist, list);
-					
 					ast_debug(3,"Start streaming file %s\n", fn->filename);
 					res = ast_streamfile(aqsi->chan, fn->filename, ast_channel_language(aqsi->chan));
 				}
-				
-				
+
 				if (res) {
 					/* oops, the current file has problems */
 					/* restore the moh */
@@ -470,7 +465,6 @@ static int wait_file_full(struct ast_channel *chan, const char *ints, const char
 			return 0;
 		}
 		return 0;
-		
 	} 
 	/* otherwise, exactly business as usual */
 	if ((res = ast_streamfile(chan, file, lang))) {
@@ -3231,10 +3225,6 @@ int ast_say_date_en(struct ast_channel *chan, time_t t, const char *ints, const 
 	}
 	if (!res)
 		res = ast_say_number(chan, tm.tm_mday, ints, lang, (char * ) NULL);
-#ifdef IS_THIS_A_MISTAKE 
-	if (!res)
-		res = ast_waitstream(chan, ints);
-#endif
 	if (!res)
 		res = ast_say_number(chan, tm.tm_year + 1900, ints, lang, (char *) NULL);
 	return res;
@@ -3254,10 +3244,6 @@ int ast_say_date_da(struct ast_channel *chan, time_t t, const char *ints, const 
 	}
 	if (!res)
 		res = ast_say_enumeration(chan, tm.tm_mday, ints, lang, (char * ) NULL);
-#ifdef IS_THIS_A_MISTAKE
-	if (!res)
-		res = ast_waitstream(chan, ints);
-#endif
 	if (!res) {
 		snprintf(fn, sizeof(fn), "digits/mon-%d", tm.tm_mon);
 		res = wait_file(chan, ints, fn, lang);
@@ -3301,10 +3287,6 @@ int ast_say_date_de(struct ast_channel *chan, time_t t, const char *ints, const 
 	}
 	if (!res)
 		res = ast_say_enumeration(chan, tm.tm_mday, ints, lang, (char * ) NULL);
-#ifdef IS_THIS_A_MISTAKE
-	if (!res)
-		res = ast_waitstream(chan, ints);
-#endif
 	if (!res) {
 		snprintf(fn, sizeof(fn), "digits/mon-%d", tm.tm_mon);
 		res = wait_file(chan, ints, fn, lang);
@@ -3381,10 +3363,6 @@ int ast_say_date_fr(struct ast_channel *chan, time_t t, const char *ints, const 
 	}
 	if (!res)
 		res = ast_say_number(chan, tm.tm_mday, ints, lang, (char * ) NULL);
-#ifdef IS_THIS_A_MISTAKE 
-	if (!res)
-		res = ast_waitstream(chan, ints);
-#endif
 	if (!res) {
 		snprintf(fn, sizeof(fn), "digits/mon-%d", tm.tm_mon);
 		res = wait_file(chan, ints, fn, lang);
@@ -3412,10 +3390,6 @@ int ast_say_date_nl(struct ast_channel *chan, time_t t, const char *ints, const 
 		snprintf(fn, sizeof(fn), "digits/mon-%d", tm.tm_mon);
 		res = wait_file(chan, ints, fn, lang);
 	}
-#ifdef IS_THIS_A_MISTAKE 
-	if (!res)
-		res = ast_waitstream(chan, ints);
-#endif
 	if (!res)
 		res = ast_say_number(chan, tm.tm_year + 1900, ints, lang, (char *) NULL);
 	return res;
@@ -3437,10 +3411,6 @@ int ast_say_date_th(struct ast_channel *chan, time_t t, const char *ints, const 
 	}
 	if (!res)
 		res = ast_say_number(chan, tm.tm_mday, ints, lang, (char * ) NULL);
-#ifdef IS_THIS_A_MISTAKE 
-	if (!res)
-		res = ast_waitstream(chan, ints);
-#endif
 	if (!res) {
 		ast_copy_string(fn, "digits/duan", sizeof(fn));
 		res = wait_file(chan, ints, fn, lang);
@@ -3501,11 +3471,6 @@ int ast_say_date_he(struct ast_channel *chan, time_t t, const char *ints, const 
 	if (!res) {
 		res = ast_say_number(chan, tm.tm_mday, ints, lang, "m");
 	}
-#ifdef IS_THIS_A_MISTAKE 
-	if (!res) {
-		res = ast_waitstream(chan, ints);
-	}
-#endif
 	if (!res) {
 		res = ast_say_number(chan, tm.tm_year + 1900, ints, lang, "m");
 	}
@@ -6444,22 +6409,10 @@ int ast_say_time_he(struct ast_channel *chan, time_t t, const char *ints, const 
 		if (!res) {				/* say a leading zero if needed */
 			res = ast_say_number_full_he(chan, 0, ints, lang, "f", -1, -1);
 		}
-#ifdef IS_THIS_A_MISTAKE 
-		if (!res)
-			res = ast_waitstream(chan, ints);
-#endif
 		if (!res)
 			res = ast_say_number_full_he(chan, tm.tm_min, ints, lang, "f", -1, -1);
 	} else {
-#ifdef IS_THIS_A_MISTAKE 
-		if (!res)
-			res = ast_waitstream(chan, ints);
-#endif
 	}
-#ifdef IS_THIS_A_MISTAKE 
-	if (!res)
-		res = ast_waitstream(chan, ints);
-#endif
 	return res;
 }
 
@@ -6856,26 +6809,10 @@ int ast_say_datetime_he(struct ast_channel *chan, time_t t, const char *ints, co
 			/* say a leading zero if needed */
 			res = ast_say_number(chan, 0, ints, lang, "f");
 		}
-#ifdef IS_THIS_A_MISTAKE 
-		if (!res) {
-			res = ast_waitstream(chan, ints);
-		}
-#endif
 		if (!res) {
 			res = ast_say_number(chan, tm.tm_min, ints, lang, "f");
 		}
-	} else {
-#ifdef IS_THIS_A_MISTAKE 
-		if (!res) {
-			res = ast_waitstream(chan, ints);
-		}
-#endif
-	}
-#ifdef IS_THIS_A_MISTAKE 
-	if (!res) {
-		res = ast_waitstream(chan, ints);
-	}
-#endif
+	} 
 	if (!res) {
 		res = ast_say_number(chan, tm.tm_year + 1900, ints, lang, "f");
 	}

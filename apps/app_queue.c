@@ -2877,7 +2877,7 @@ static int say_position(struct queue_ent *qe, int ringing)
     if ((avgholdmins+avgholdsecs) > 0 && qe->parent->announceholdtime &&
         ((qe->parent->announceholdtime == ANNOUNCEHOLDTIME_ONCE && !qe->last_pos) ||
         !(qe->parent->announceholdtime == ANNOUNCEHOLDTIME_ONCE))) {
-		res = play_file(qe->chan, qe->parent->sound_holdtime,ringing,NULL);
+		res = play_file(qe->chan, qe->parent->sound_holdtime, ringing, NULL);
 		if (res) {
 			goto playout;
 		}
@@ -4927,7 +4927,7 @@ static int try_calling(struct queue_ent *qe, const struct ast_flags opts, char *
 			/* instead of starting autoservice and jacking this thread to push sound to the
 			   peer channel, let's set up a background player to the peer channel and 
 			   get on with life in this thread. */
-			
+
 			if (qe->parent->memberdelay) {
 				ast_log(LOG_NOTICE, "Delaying member connect for %d seconds\n", qe->parent->memberdelay);
 				res2 |= ast_safe_sleep(peer, qe->parent->memberdelay * 1000);
@@ -4945,8 +4945,6 @@ static int try_calling(struct queue_ent *qe, const struct ast_flags opts, char *
 					holdtime = abs((now - qe->start) / 60);
 					holdtimesecs = abs((now - qe->start) % 60);
 					if (holdtime > 0) {
-	//int ast_say_number(struct ast_channel *chan, int num,
-	//const char *ints, const char *lang, const char *options);
 						ast_say_number(peer, holdtime, AST_DIGIT_ANY, ast_channel_language(peer), NULL);
 						play_file(peer, qe->parent->sound_minutes, ringing, qe->moh);
 					}
@@ -6283,7 +6281,6 @@ static int play_file(struct ast_channel *chan, const char *filename, int ringing
 	struct gen_state *generatordata;
 	struct ast_queue_streamfile_name *sfn = NULL;
 	char playfilename[512];
-	
 
 	if (!background_prompts) {
 		if (ast_strlen_zero(filename)) {
@@ -6319,7 +6316,7 @@ static int play_file(struct ast_channel *chan, const char *filename, int ringing
 		return 1; /* Why continue, if I can't access the datastore & list? */
 	}
 	ast_debug(2, "---- Background prompts now playing: %d\n", aqsi->now_playing);
-	
+
 	if (aqsi->now_playing == 0) {
 		playfilename[0] = '\0';
 		if (ast_strlen_zero(filename)) {
@@ -6351,7 +6348,7 @@ static int play_file(struct ast_channel *chan, const char *filename, int ringing
 	}
 
 	AST_LIST_LOCK(&aqsi->flist);
-	
+
 	if (aqsi->now_playing) {
 		struct ast_queue_streamfile_name *fn = ast_calloc(1, sizeof(*fn));
 		fn->filename = ast_strdup(filename);
@@ -6399,14 +6396,14 @@ static int play_file(struct ast_channel *chan, const char *filename, int ringing
 		}
 		aqsi->now_playing = 1; /* We have begun playback */
 	}
-	
+
 	AST_LIST_UNLOCK(&aqsi->flist);
 	ast_waitfor(chan, 1);
-	
+
 	return 0; /* non-zero most likely means the file doesn't exist */
 }
 
-/*! \brief This routine propably will only need to be called at module unload time */
+/*! \brief Destroy playlist */
 void destroy_streamfile_info(struct ast_queue_streamfile_info *playdata)
 {
 	struct ast_queue_streamfile_name *fn;
@@ -6592,7 +6589,6 @@ static int queue_exec(struct ast_channel *chan, const char *data)
 		strcpy(aqsi->moh, qe.moh);
 		AST_LIST_HEAD_INIT(&aqsi->flist);
 		datastore->data = aqsi;
-	
 		ast_channel_datastore_add(chan, datastore);
 	}
 
@@ -6717,11 +6713,10 @@ stop:
 	if (background_prompts) {
 		/* remove the playdata datastore */
 		ast_channel_datastore_remove(chan, datastore);
-	
-    		/* get rid of the datastore for non-wait sound playing */
+		/* get rid of the datastore for non-wait sound playing */
 		destroy_streamfile_info(aqsi);
 	}
-	
+
 	if (res) {
 		if (res < 0) {
 			if (!qe.handled) {
