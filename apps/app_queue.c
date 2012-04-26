@@ -2690,7 +2690,7 @@ posout:
 			qe->chan->name, qe->parent->name, qe->pos);
 	}
 	if (say_thanks) {
-	  res = play_file(qe->chan, qe->parent->sound_thanks, ringing, NULL);
+		res = play_file(qe->chan, qe->parent->sound_thanks, ringing, NULL);
 	}
 playout:
 
@@ -3764,9 +3764,6 @@ static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callatte
 				}
 			}
 		}
-		if (background_prompts) {
-			play_file(qe->chan, NULL, 0, qe->moh);
-		}
 
 		/* If we received an event from the caller, deal with it. */
 		if (winner == in) {
@@ -3931,9 +3928,9 @@ static int wait_our_turn(struct queue_ent *qe, int ringing, enum queue_result *r
 		}
 
 		/* Make a position announcement, if enabled */
-		if (qe->parent->announcefrequency &&
-			(res = say_position(qe,ringing)))
+		if (qe->parent->announcefrequency && (res = say_position(qe,ringing))) {
 			break;
+		}
 
 		/* If we have timed out, break out */
 		if (qe->expire && (time(NULL) >= qe->expire)) {
@@ -5962,7 +5959,9 @@ static int play_file(struct ast_channel *chan, const char *filename, int ringing
 		ast_log(LOG_ERROR, "Can't find the ast_sound_ending datastore! on chan %s\n", chan->name);
 		return 1; /* Why continue, if I can't access the datastore & list? */
 	}
-	ast_debug(2, "---- Aqsi now playing: %d\n", aqsi->now_playing);
+	if (option_debug && !ast_strlen_zero(filename)) {
+		ast_debug(2, "---- Aqsi now playing: %s\n", aqsi->now_playing ? "true" : "false");
+	}
 	
 	if (aqsi->now_playing == 0) {
 		playfilename[0] = '\0';
@@ -5982,10 +5981,10 @@ static int play_file(struct ast_channel *chan, const char *filename, int ringing
 					ast_indicate(chan, AST_CONTROL_RINGING);
 				} else {
 					if (!ast_test_flag(chan, AST_FLAG_MOH)) {
-						ast_moh_start(chan, aqsi->qe->moh, NULL);
+						ast_moh_start(chan, aqsi->qe->moh ? aqsi->qe->moh : NULL, NULL);
 					}
 				}
-				return -1;
+				return 0;
 			}
 		} else {
 			ast_copy_string(playfilename, filename, sizeof(playfilename));
@@ -5993,7 +5992,7 @@ static int play_file(struct ast_channel *chan, const char *filename, int ringing
 	} else {
 		if (ast_strlen_zero(filename)) {
 			ast_debug(3, "--- just checking... No filename and currently playing\n");
-			return -1;
+			return 0;
 		}
 	}
 
@@ -6034,8 +6033,6 @@ static int play_file(struct ast_channel *chan, const char *filename, int ringing
 		ast_copy_string(generatordata->filename, playfilename, sizeof(generatordata->filename));
 		generatordata->chan = chan;
 		generatordata->aqsi = aqsi;
-
-
 
 		/* Starting new generator on channel. */
 		if (ast_activate_generator(chan, &play_file_gen, generatordata)) {
