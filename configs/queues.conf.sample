@@ -82,7 +82,12 @@ monitor-type = MixMonitor
 ; which means that even if a queue member becomes available, the 
 ; prompt will be played fully. Enabling 'background_prompts' will
 ; make sure that prompts are interruptible. If a queue member becomes
-; available, the prompt will be interrupted.
+; available, the prompt will be interrupted immediately.
+;
+; Make sure that your prompts are shorter than the interval between
+; periodic announcements. Otherwise, there will be a queue to play
+; and it will sound awkward for the customer to here that you are now
+; number 4,3,2 and 1 in the queue at the same time...
 ;
 background_prompts=no
 ;

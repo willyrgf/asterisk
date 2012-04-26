@@ -54,7 +54,33 @@
  * by Matthew Enger <m.enger@xi.com.au>
  *
  * \ingroup applications
+ *
+ * Related information
+ * \ref queue_bg_prompts Background queue prompts
  */
+
+/*!
+ * \page queue_bg_prompts Background queue prompts
+ *
+ * The background queue prompts changes the way we entertain the channel with
+ * various prompts. The prompts are stored in a playlist and played by a generator
+ * which means that if an agent becomes available while we play a prompt, the prompt
+ * will be interrupted and the call will be answered. Without background prompts
+ * the available agent has to wait until the prompt is finished before the phone
+ * rings and the customer can be serviced.
+ *
+ * This is implemented as a channel datastore that maintains the playlist. A call
+ * to play_file() or say_<something> will just add prompts to the list.
+ *
+ * You need to make sure that the periodic announcements and the messages match
+ * timewise, otherwise they will all be queued up and played too late.
+ *
+ * A possible fix would be to mark position and wait time messages in the play
+ * queue so that when a new one is added, the old ones are removed.
+ *
+ */
+ 
+
 
 /*** MODULEINFO
 	<use type="module">res_monitor</use>
@@ -2722,30 +2748,6 @@ static int join_queue(char *queuename, struct queue_ent *qe, enum queue_result *
 }
 
 void destroy_streamfile_info(struct ast_queue_streamfile_info *playdata);
-/* Uncommented by Old Olle patch 
-static int play_file(struct ast_channel *chan, const char *filename)
-{
-	int res;
-
-	if (ast_strlen_zero(filename)) {
-		return 0;
-	}
-
-	if (!ast_fileexists(filename, NULL, ast_channel_language(chan))) {
-		return 0;
-	}
-
-	ast_stopstream(chan);
-
-	res = ast_streamfile(chan, filename, ast_channel_language(chan));
-	if (!res) {
-		res = ast_waitstream(chan, AST_DIGIT_ANY);
-	}
-
-	ast_stopstream(chan);
-
-	return res;
-} */
 
 /*!
  * \brief Check for valid exit from queue via goto
@@ -4272,6 +4274,10 @@ static int wait_our_turn(struct queue_ent *qe, int ringing, enum queue_result *r
 		if (qe->expire && (time(NULL) >= qe->expire)) {
 			*reason = QUEUE_TIMEOUT;
 			break;
+		}
+
+		if (background_prompts) {
+			play_file(qe->chan, NULL, 0, qe->moh);
 		}
 		
 		/* Wait a second before checking again */
@@ -6614,19 +6620,22 @@ static int queue_exec(struct ast_channel *chan, const char *data)
 		S_OR(args.url, ""),
 		S_COR(ast_channel_caller(chan)->id.number.valid, ast_channel_caller(chan)->id.number.str, ""),
 		qe.opos);
-  /* Begin old Olle patch */
-	datastore = ast_datastore_alloc(ast_sound_ending(), NULL);
-
-	aqsi->qe = &qe;
-	aqsi->chan = chan;
-	aqsi->ringing = ringing;
-	aqsi->now_playing = 0;
-	strcpy(aqsi->moh, qe.moh);
-	AST_LIST_HEAD_INIT(&aqsi->flist);
-	datastore->data = aqsi;
+	if (background_prompts) {
+		/* Set up the channel datastore for the playlist of prompts
+		   that we're going to play in the background while the call
+		   is in the queue. 
+		 */
+		datastore = ast_datastore_alloc(ast_sound_ending(), NULL);
+		aqsi->qe = &qe;
+		aqsi->chan = chan;
+		aqsi->ringing = ringing;
+		aqsi->now_playing = 0;
+		strcpy(aqsi->moh, qe.moh);
+		AST_LIST_HEAD_INIT(&aqsi->flist);
+		datastore->data = aqsi;
 	
-	ast_channel_datastore_add(chan, datastore);
-  /* End old Olle patch */
+		ast_channel_datastore_add(chan, datastore);
+	}
 
 	copy_rules(&qe, args.rule);
 	qe.pr = AST_LIST_FIRST(&qe.qe_rules);
