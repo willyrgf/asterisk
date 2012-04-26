@@ -2878,7 +2878,6 @@ static void generator_write_format_change(struct ast_channel *chan)
 		ast_channel_generator(chan)->write_format_change(chan, ast_channel_generatordata(chan));
 	}
 	ast_channel_unlock(chan);
-	ast_debug(3, "ast_deactivate_generator() done on chan %s\n", ast_channel_name(chan));
 }
 
 static int generator_force(const void *data)
@@ -4081,7 +4080,6 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 
 				/* Run generator sitting on the line if timing device not available
 				* and synchronous generation of outgoing frames is necessary       */
-				ast_debug(3, ">>>>>>>>> just another silly message. We are generating, man! \n");
 				ast_read_generator_actions(chan, f);
 			}
 			break;

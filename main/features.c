@@ -1619,13 +1619,10 @@ static int park_call_full(struct ast_channel *chan, struct ast_channel *peer, st
 	ast_debug(4, "AMI ParkedCall Channel: %s\n", ast_channel_name(chan));
 	ast_debug(4, "AMI ParkedCall From: %s\n", event_from);
 
-/* OEJ */
-#ifdef HAVE_ADSI
 	if (peer && adsipark && ast_adsi_available(peer)) {
 		adsi_announce_park(peer, pu->parkingexten);	/* Only supports parking numbers */
 		ast_adsi_unload_session(peer);
 	}
-#endif
 
 	snprintf(app_data, sizeof(app_data), "%s,%s", pu->parkingexten,
 		pu->parkinglot->name);

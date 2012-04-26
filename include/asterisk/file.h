@@ -40,7 +40,8 @@ extern "C" {
 struct ast_filestream;
 struct ast_format;
 
-const struct ast_datastore_info *ast_sound_ending(void);
+/* Prompt list for background play of audio */
+const struct ast_datastore_info *ast_prompt_list(void);
 
 /*! The maximum number of formats we expect to see in a format string */
 #define AST_MAX_FORMATS 10
@@ -339,7 +340,6 @@ int ast_file_init(void);
  * \return a pointer to the reduced format string, this is a pointer to fmts
  */
 char *ast_format_str_reduce(char *fmts);
-
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }

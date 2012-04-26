@@ -416,7 +416,8 @@ static int wait_file_full(struct ast_channel *chan, const char *ints, const char
 	/* if a datastore is present, we are in the queue app (perhaps others in time)
 	   and don't want to wait around for the sounds to finish playing */
 
-	if ((datastore = ast_channel_datastore_find(chan, ast_sound_ending(), NULL))) { /* app_queue wants to schedule this instead of play & wait */
+	if ((datastore = ast_channel_datastore_find(chan, ast_prompt_list(), NULL))) { 
+		/* app_queue wants to schedule this instead of play & wait */
 		struct ast_queue_streamfile_info *aqsi = datastore->data;
 		if (aqsi) {
 			AST_LIST_LOCK(&aqsi->flist);
@@ -440,12 +441,8 @@ static int wait_file_full(struct ast_channel *chan, const char *ints, const char
 				
 				ast_autoservice_stop(aqsi->chan);
 				
-				ast_debug(3, "Starting to stream %s\n", file);
 				res = ast_streamfile(aqsi->chan, file, ast_channel_language(aqsi->chan)); /* begin the streaming */
-				
 				while (res && !AST_LIST_EMPTY(&aqsi->flist)) {
-					/* really, how could this even be possible?
-					   just in case.... */
 					struct ast_queue_streamfile_name *fn;
 					
 					fn = AST_LIST_REMOVE_HEAD(&aqsi->flist, list);
@@ -472,20 +469,19 @@ static int wait_file_full(struct ast_channel *chan, const char *ints, const char
 			AST_LIST_UNLOCK(&aqsi->flist);
 			return 0;
 		}
+		return 0;
 		
-	} else {
-		/* otherwise, exactly business as usual */
-		if ((res = ast_streamfile(chan, file, lang))) {
-			ast_log(LOG_WARNING, "Unable to play message %s\n", file);
-		}
-		if ((audiofd  > -1) && (ctrlfd > -1)) {
-			res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
-		} else {
-			res = ast_waitstream(chan, ints);
-		}
-		return res;
+	} 
+	/* otherwise, exactly business as usual */
+	if ((res = ast_streamfile(chan, file, lang))) {
+		ast_log(LOG_WARNING, "Unable to play message %s\n", file);
 	}
-	return 0;
+	if ((audiofd  > -1) && (ctrlfd > -1)) {
+		res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+	} else {
+		res = ast_waitstream(chan, ints);
+	}
+	return res;
 }
 
 /*! \brief  ast_say_number_full: call language-specific functions
