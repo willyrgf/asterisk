@@ -1,0 +1,50 @@
+Olle E. Johansson
+EDVINA AB, Sollentuna Sweden				2012-04-26
+
+
+
+AppleRaisin - Moving Astdb to realtime
+--------------------------------------
+This branch, based on Asterisk 1.4, implements storage of AstDB in ARA, the realtime data object
+manipulation abstraction something in Asterisk. The name "realtime" is getting more and more
+non-descriptive for what ARA has become.
+
+This means that all built-in Asterisk operations, like SIP registrations,
+will be saved in a database of your choice, as well as astdb data from
+3rd party applications, like FreePBX.
+
+There is a potential chicken and egg issue here. The realtime drivers
+load after the asterisk core, so if the core at some point starts storing
+data in astdb, the realtime driver will not be active. If that happens,
+a cache of some kind of delay will be needed. So far we haven't discovered
+any such issues.
+
+The code was originally created in 2009 for Asterisk 1.4 and funded by the FCCN,
+the Portuguese University Network. The port for Asterisk 1.8 was funded
+by IT-Center in Portugal.
+
+
+Howto:
+------
+
+1. Make sure you load the realtime driver before channel drivers and modules that use AstDb
+
+2. Create a database with this table or something similar for non-SQL realtime drivers.
+   Configure this in the "astdb" family in extconfig.conf
+
+	CREATE TABLE `astdb` (
+  		`systemname` varchar(40) NOT NULL,
+  		`family` varchar(256) NOT NULL,
+  		`keyname` varchar(256) NOT NULL,
+  		`value` varchar(1050) NOT NULL,
+  		PRIMARY KEY  (`family`,`keyname`)
+	) ENGINE=MyISAM DEFAULT CHARSET=latin1;
+
+The reason I use the systemname is to create an ability for multiple asterisk servers
+to share the same table, and still query for another server's data.
+
+A special thank you to...
+-------------------------
+- Jared Smith, who gently forced me into the #freepbx-dev IRC channel to discuss this project
+- During the process I've gotten a lot of information from Philippe @freepbx - thank you!
+- The three years of cheers from the FreePBX project every time I mention this code
