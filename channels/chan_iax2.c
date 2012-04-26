@@ -4291,11 +4291,13 @@ static int iax2_digit_begin(struct ast_channel *c, char digit)
 
 static int iax2_digit_continue(struct ast_channel *c, char digit, unsigned int duration)
 {
+	/* We propably should find a way to send duration here. */
 	return send_command_locked(PTR_TO_CALLNO(c->tech_pvt), AST_FRAME_DTMF_CONTINUE, digit, 0, NULL, 0, -1);
 }
 
 static int iax2_digit_end(struct ast_channel *c, char digit, unsigned int duration)
 {
+	/* We propably should find a way to send duration here. */
 	return send_command_locked(PTR_TO_CALLNO(c->tech_pvt), AST_FRAME_DTMF_END, digit, 0, NULL, 0, -1);
 }
 
