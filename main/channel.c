@@ -1038,12 +1038,34 @@ int ast_queue_frame_head(struct ast_channel *chan, struct ast_frame *fin)
 	return __ast_queue_frame(chan, fin, 1, NULL);
 }
 
+static void set_hangupchannelvars(struct ast_channel *chan, const char *name, int forget)
+{
+	if (!chan || ast_strlen_zero(name)) {
+		return;
+	}
+	if(ast_test_flag(chan, AST_FLAG_HANGUPCHANNEL_SET)) {
+		return;
+	}
+	if (!forget) {
+		ast_set_flag(chan, AST_FLAG_HANGUPCHANNEL_SET);
+	}
+
+	/* Set a channel variable */
+	pbx_builtin_setvar_helper(chan, "HANGUPCHANNEL", name);
+
+	/* Also set a cdr variable, that can be reached regardless of the cdr before h option */
+	if (chan->cdr) {
+		ast_cdr_setvar(chan->cdr, "hangupchannel", name, 0);
+	}
+}
+
 /*! \brief Queue a hangup frame for channel */
 int ast_queue_hangup(struct ast_channel *chan)
 {
 	struct ast_frame f = { AST_FRAME_CONTROL, AST_CONTROL_HANGUP };
 	/* Yeah, let's not change a lock-critical value without locking */
 	if (!ast_channel_trylock(chan)) {
+		set_hangupchannelvars(chan, chan->name, 0);
 		chan->_softhangup |= AST_SOFTHANGUP_DEV;
 		ast_channel_unlock(chan);
 	}
@@ -1601,6 +1623,8 @@ int ast_softhangup_nolock(struct ast_channel *chan, int cause)
 {
 	if (option_debug)
 		ast_log(LOG_DEBUG, "Soft-Hanging up channel '%s'\n", chan->name);
+
+	set_hangupchannelvars(chan, "system", 0);
 	/* Inform channel driver that we need to be hung up, if it cares */
 	chan->_softhangup |= cause;
 	ast_queue_frame(chan, &ast_null_frame);
@@ -4828,6 +4852,10 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 	/* Before we enter in and bridge these two together tell them both the source of audio has changed */
 	ast_indicate(c0, AST_CONTROL_SRCUPDATE);
 	ast_indicate(c1, AST_CONTROL_SRCUPDATE);
+
+	/* Before we really know, blame the hangup on the peer */
+	set_hangupchannelvars(c0, c1->name, 1);
+	set_hangupchannelvars(c1, c0->name, 1);
 
 	for (/* ever */;;) {
 		struct timeval now = { 0, };

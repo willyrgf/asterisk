@@ -539,6 +539,8 @@ enum {
 	 *  some non-traditional dialplans (like AGI) to continue to function.
 	 */
 	AST_FLAG_DISABLE_WORKAROUNDS = (1 << 20),
+	/*! Hangup channel already set, don't reset */
+	AST_FLAG_HANGUPCHANNEL_SET = (1 << 21),
 };
 
 /*! \brief ast_bridge_config flags */
