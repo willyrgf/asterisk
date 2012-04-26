@@ -25,6 +25,10 @@
  * \ingroup applications
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
@@ -48,8 +52,8 @@ static const char nocdr_app[] = "NoCDR";
 
 static int nocdr_exec(struct ast_channel *chan, const char *data)
 {
-	if (chan->cdr)
-		ast_set_flag(chan->cdr, AST_CDR_FLAG_POST_DISABLED);
+	if (ast_channel_cdr(chan))
+		ast_set_flag(ast_channel_cdr(chan), AST_CDR_FLAG_POST_DISABLED);
 
 	return 0;
 }

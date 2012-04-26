@@ -61,6 +61,9 @@ enum user_profile_flags {
 
 enum bridge_profile_flags {
 	BRIDGE_OPT_RECORD_CONFERENCE = (1 << 0), /*!< Set if the conference should be recorded */
+	BRIDGE_OPT_VIDEO_SRC_LAST_MARKED = (1 << 1), /*!< Set if conference should feed video of last marked user to all participants. */
+	BRIDGE_OPT_VIDEO_SRC_FIRST_MARKED = (1 << 2), /*!< Set if conference should feed video of first marked user to all participants. */
+	BRIDGE_OPT_VIDEO_SRC_FOLLOW_TALKER = (1 << 3), /*!< Set if conference set the video feed to follow the loudest talker.  */
 };
 
 enum conf_menu_action_id {
@@ -78,6 +81,10 @@ enum conf_menu_action_id {
 	MENU_ACTION_ADMIN_KICK_LAST,
 	MENU_ACTION_LEAVE,
 	MENU_ACTION_NOOP,
+	MENU_ACTION_SET_SINGLE_VIDEO_SRC,
+	MENU_ACTION_RELEASE_SINGLE_VIDEO_SRC,
+	MENU_ACTION_PARTICIPANT_COUNT,
+	MENU_ACTION_ADMIN_TOGGLE_MUTE_PARTICIPANTS,
 };
 
 /*! The conference menu action contains both
@@ -121,6 +128,7 @@ struct user_profile {
 	char name[128];
 	char pin[MAX_PIN];
 	char moh_class[128];
+	char announcement[PATH_MAX];
 	unsigned int flags;
 	unsigned int announce_user_count_all_after;
 	/*! The time in ms of talking before a user is considered to be talking by the dsp. */
@@ -151,6 +159,8 @@ enum conf_sounds {
 	CONF_SOUND_ERROR_MENU,
 	CONF_SOUND_JOIN,
 	CONF_SOUND_LEAVE,
+	CONF_SOUND_PARTICIPANTS_MUTED,
+	CONF_SOUND_PARTICIPANTS_UNMUTED,
 };
 
 struct bridge_profile_sounds {
@@ -175,6 +185,8 @@ struct bridge_profile_sounds {
 		AST_STRING_FIELD(errormenu);
 		AST_STRING_FIELD(leave);
 		AST_STRING_FIELD(join);
+		AST_STRING_FIELD(participantsmuted);
+		AST_STRING_FIELD(participantsunmuted);
 	);
 };
 
@@ -197,6 +209,7 @@ struct conference_bridge {
 	unsigned int users;                                               /*!< Number of users present */
 	unsigned int markedusers;                                         /*!< Number of marked users present */
 	unsigned int locked:1;                                            /*!< Is this conference bridge locked? */
+	unsigned int muted:1;                                            /*!< Is this conference bridge muted? */
 	struct ast_channel *playback_chan;                                /*!< Channel used for playback into the conference bridge */
 	struct ast_channel *record_chan;                                  /*!< Channel used for recording the conference */
 	pthread_t record_thread;                                          /*!< The thread the recording chan lives in */
@@ -215,6 +228,7 @@ struct conference_bridge_user {
 	struct ast_bridge_features features;         /*!< Bridge features structure */
 	struct ast_bridge_tech_optimizations tech_args; /*!< Bridge technology optimizations for talk detection */
 	unsigned int kicked:1;                       /*!< User has been kicked from the conference */
+	unsigned int playing_moh:1;                  /*!< MOH is currently being played to the user */
 	AST_LIST_ENTRY(conference_bridge_user) list; /*!< Linked list information */
 };
 

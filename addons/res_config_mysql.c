@@ -25,6 +25,7 @@
 /*** MODULEINFO
 	<depend>mysqlclient</depend>
 	<defaultenabled>no</defaultenabled>
+	<support_level>extended</support_level>
  ***/
 
 #include "asterisk.h"
@@ -1378,8 +1379,7 @@ static int load_module(void)
 	parse_config(0);
 
 	ast_config_engine_register(&mysql_engine);
-	if (option_verbose > 1)
-		ast_verbose(VERBOSE_PREFIX_2 "MySQL RealTime driver loaded.\n");
+	ast_verb(2, "MySQL RealTime driver loaded.\n");
 	ast_cli_register_multiple(cli_realtime_mysql_status, sizeof(cli_realtime_mysql_status) / sizeof(struct ast_cli_entry));
 	return 0;
 }
@@ -1391,8 +1391,7 @@ static int unload_module(void)
 
 	ast_cli_unregister_multiple(cli_realtime_mysql_status, sizeof(cli_realtime_mysql_status) / sizeof(struct ast_cli_entry));
 	ast_config_engine_deregister(&mysql_engine);
-	if (option_verbose > 1)
-		ast_verbose(VERBOSE_PREFIX_2 "MySQL RealTime unloaded.\n");
+	ast_verb(2, "MySQL RealTime unloaded.\n");
 
 	ast_module_user_hangup_all();
 
@@ -1418,11 +1417,7 @@ static int unload_module(void)
 static int reload(void)
 {
 	parse_config(1);
-
-	if (option_verbose > 1) {
-		ast_verb(2, "MySQL RealTime reloaded.\n");
-	}
-
+	ast_verb(2, "MySQL RealTime reloaded.\n");
 	return 0;
 }
 

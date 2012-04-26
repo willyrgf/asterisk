@@ -27,6 +27,10 @@
  * 
  * \ingroup applications
  */
+
+/*** MODULEINFO
+	<support_level>extended</support_level>
+ ***/
  
 #include "asterisk.h"
 
@@ -61,9 +65,11 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		<description>
 			<para>Executes mpg123 to play the given location, which typically would be a mp3 filename
 			or m3u playlist filename or a URL. Please read http://en.wikipedia.org/wiki/M3U
-			to see how M3U playlist file format is like, Example usage would be 
+			to see how M3U playlist file format is like, Example usage would be
 			exten => 1234,1,MP3Player(/var/lib/asterisk/playlist.m3u)
 			User can exit by pressing any key on the dialpad, or by hanging up.</para>
+			<para>This application does not automatically answer and should be preceeded by an
+			application such as Answer() or Progress().</para>
 		</description>
 	</application>
 
@@ -162,7 +168,7 @@ static int mp3_exec(struct ast_channel *chan, const char *data)
 	
 	ast_stopstream(chan);
 
-	ast_format_copy(&owriteformat, &chan->writeformat);
+	ast_format_copy(&owriteformat, ast_channel_writeformat(chan));
 	res = ast_set_write_format_by_id(chan, AST_FORMAT_SLINEAR);
 	if (res < 0) {
 		ast_log(LOG_WARNING, "Unable to set write format to signed linear\n");

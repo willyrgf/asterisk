@@ -23,6 +23,10 @@
  * 
  * \ingroup applications
  */
+
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
  
 #include "asterisk.h"
 
@@ -92,24 +96,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			</variablelist>
 		</description>
 	</application>
-	<function name="VALID_EXTEN" language="en_US">
-		<synopsis>
-			Determine whether an extension exists or not.
-		</synopsis>
-		<syntax>
-			<parameter name="context">
-				<para>Defaults to the current context</para>
-			</parameter>
-			<parameter name="extension" required="true" />
-			<parameter name="priority">
-				<para>Priority defaults to <literal>1</literal>.</para>
-			</parameter>
-		</syntax>
-		<description>
-			<para>Returns a true value if the indicated <replaceable>context</replaceable>,
-			<replaceable>extension</replaceable>, and <replaceable>priority</replaceable> exist.</para>
-		</description>
-	</function>
  ***/
 
 enum readexten_option_flags {
@@ -143,7 +129,7 @@ static int readexten_exec(struct ast_channel *chan, const char *data)
 		AST_APP_ARG(options);
 		AST_APP_ARG(timeout);
 	);
-	
+
 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_WARNING, "ReadExten requires at least one argument\n");
 		pbx_builtin_setvar_helper(chan, "READEXTENSTATUS", "ERROR");
@@ -159,14 +145,17 @@ static int readexten_exec(struct ast_channel *chan, const char *data)
 		return 0;
 	}
 
-	if (ast_strlen_zero(arglist.filename))
+	if (ast_strlen_zero(arglist.filename)) {
 		arglist.filename = NULL;
+	}
 
-	if (ast_strlen_zero(arglist.context))
-		arglist.context = chan->context;
+	if (ast_strlen_zero(arglist.context)) {
+		arglist.context = ast_strdupa(ast_channel_context(chan));
+	}
 
-	if (!ast_strlen_zero(arglist.options))
+	if (!ast_strlen_zero(arglist.options)) {
 		ast_app_parse_options(readexten_app_options, &flags, NULL, arglist.options);
+	}
 
 	if (!ast_strlen_zero(arglist.timeout)) {
 		timeout = atoi(arglist.timeout);
@@ -175,17 +164,17 @@ static int readexten_exec(struct ast_channel *chan, const char *data)
 	}
 
 	if (timeout <= 0)
-		timeout = chan->pbx ? chan->pbx->rtimeoutms : 10000;
+		timeout = ast_channel_pbx(chan) ? ast_channel_pbx(chan)->rtimeoutms : 10000;
 
 	if (digit_timeout <= 0)
-		digit_timeout = chan->pbx ? chan->pbx->dtimeoutms : 5000;
+		digit_timeout = ast_channel_pbx(chan) ? ast_channel_pbx(chan)->dtimeoutms : 5000;
 
 	if (ast_test_flag(&flags, OPT_INDICATION) && !ast_strlen_zero(arglist.filename)) {
-		ts = ast_get_indication_tone(chan->zone, arglist.filename);
+		ts = ast_get_indication_tone(ast_channel_zone(chan), arglist.filename);
 	}
 
 	do {
-		if (chan->_state != AST_STATE_UP) {
+		if (ast_channel_state(chan) != AST_STATE_UP) {
 			if (ast_test_flag(&flags, OPT_SKIP)) {
 				/* At the user's option, skip if the line is not up */
 				pbx_builtin_setvar_helper(chan, arglist.variable, "");
@@ -208,7 +197,7 @@ static int readexten_exec(struct ast_channel *chan, const char *data)
 		if (ts && ts->data[0]) {
 			res = ast_playtones_start(chan, 0, ts->data, 0);
 		} else if (arglist.filename) {
-			if (ast_test_flag(&flags, OPT_INDICATION) && ast_fileexists(arglist.filename, NULL, chan->language) <= 0) {
+			if (ast_test_flag(&flags, OPT_INDICATION) && ast_fileexists(arglist.filename, NULL, ast_channel_language(chan)) <= 0) {
 				/*
 				 * We were asked to play an indication that did not exist in the config.
 				 * If no such file exists, play it as a tonelist.  With any luck they won't
@@ -217,7 +206,7 @@ static int readexten_exec(struct ast_channel *chan, const char *data)
 				 */
 				res = ast_playtones_start(chan, 0, arglist.filename, 0);
 			} else {
-				res = ast_streamfile(chan, arglist.filename, chan->language);
+				res = ast_streamfile(chan, arglist.filename, ast_channel_language(chan));
 			}
 		}
 
@@ -241,9 +230,9 @@ static int readexten_exec(struct ast_channel *chan, const char *data)
 
 			exten[x] = res;
 			if (!ast_matchmore_extension(chan, arglist.context, exten, 1 /* priority */,
-				S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL))) {
+				S_COR(ast_channel_caller(chan)->id.number.valid, ast_channel_caller(chan)->id.number.str, NULL))) {
 				if (!ast_exists_extension(chan, arglist.context, exten, 1,
-					S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL))
+					S_COR(ast_channel_caller(chan)->id.number.valid, ast_channel_caller(chan)->id.number.str, NULL))
 					&& res == '#') {
 					exten[x] = '\0';
 				}
@@ -255,12 +244,12 @@ static int readexten_exec(struct ast_channel *chan, const char *data)
 			break;
 
 		if (ast_exists_extension(chan, arglist.context, exten, 1,
-			S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL))) {
+			S_COR(ast_channel_caller(chan)->id.number.valid, ast_channel_caller(chan)->id.number.str, NULL))) {
 			ast_debug(3, "User entered valid extension '%s'\n", exten);
 			pbx_builtin_setvar_helper(chan, arglist.variable, exten);
 			status = "OK";
 		} else {
-			ast_debug(3, "User dialed invalid extension '%s' in context '%s' on %s\n", exten, arglist.context, chan->name);
+			ast_debug(3, "User dialed invalid extension '%s' in context '%s' on %s\n", exten, arglist.context, ast_channel_name(chan));
 			pbx_builtin_setvar_helper(chan, arglist.variable, "i");
 			pbx_builtin_setvar_helper(chan, "INVALID_EXTEN", exten);
 			status = "INVALID";
@@ -276,57 +265,15 @@ static int readexten_exec(struct ast_channel *chan, const char *data)
 	return status[0] == 'H' ? -1 : 0;
 }
 
-static int acf_isexten_exec(struct ast_channel *chan, const char *cmd, char *parse, char *buffer, size_t buflen)
-{
-	int priority_int;
-	AST_DECLARE_APP_ARGS(args,
-		AST_APP_ARG(context);
-		AST_APP_ARG(extension);
-		AST_APP_ARG(priority);
-	);
-
-	AST_STANDARD_APP_ARGS(args, parse);
-
-	if (ast_strlen_zero(args.context))
-		args.context = chan->context;
-
-	if (ast_strlen_zero(args.extension)) {
-		ast_log(LOG_WARNING, "Syntax: VALID_EXTEN([<context>],<extension>[,<priority>]) - missing argument <extension>!\n");
-		return -1;
-	}
-
-	if (ast_strlen_zero(args.priority))
-		priority_int = 1;
-	else
-		priority_int = atoi(args.priority);
-
-	if (ast_exists_extension(chan, args.context, args.extension, priority_int,
-		S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL))) {
-	    ast_copy_string(buffer, "1", buflen);
-	} else {
-	    ast_copy_string(buffer, "0", buflen);
-	}
-
-	return 0;
-}
-
-static struct ast_custom_function acf_isexten = {
-	.name = "VALID_EXTEN",
-	.read = acf_isexten_exec,
-};
-
 static int unload_module(void)
 {
 	int res = ast_unregister_application(app);
-	res |= ast_custom_function_unregister(&acf_isexten);
-
-	return res;	
+	return res;
 }
 
 static int load_module(void)
 {
 	int res = ast_register_application_xml(app, readexten_exec);
-	res |= ast_custom_function_register(&acf_isexten);
 	return res;
 }
 

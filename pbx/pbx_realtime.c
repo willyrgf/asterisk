@@ -23,6 +23,10 @@
  * \arg See also: \ref AstARA
  */
 
+/*** MODULEINFO
+	<support_level>extended</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
@@ -40,7 +44,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/manager.h"
 #include "asterisk/cli.h"
 #include "asterisk/lock.h"
-#include "asterisk/md5.h"
 #include "asterisk/linkedlists.h"
 #include "asterisk/chanvars.h"
 #include "asterisk/sched.h"
@@ -349,9 +352,9 @@ static int realtime_exec(struct ast_channel *chan, const char *context, const ch
 				if(!ast_strlen_zero(tmp))
 					pbx_substitute_variables_helper(chan, tmp, appdata, sizeof(appdata) - 1);
 				ast_verb(3, "Executing [%s@%s:%d] %s(\"%s\", \"%s\")\n",
-						chan->exten, chan->context, chan->priority,
+						ast_channel_exten(chan), ast_channel_context(chan), ast_channel_priority(chan),
 						 term_color(tmp1, app, COLOR_BRCYAN, 0, sizeof(tmp1)),
-						 term_color(tmp2, chan->name, COLOR_BRMAGENTA, 0, sizeof(tmp2)),
+						 term_color(tmp2, ast_channel_name(chan), COLOR_BRMAGENTA, 0, sizeof(tmp2)),
 						 term_color(tmp3, S_OR(appdata, ""), COLOR_BRMAGENTA, 0, sizeof(tmp3)));
 				manager_event(EVENT_FLAG_DIALPLAN, "Newexten",
 							  "Channel: %s\r\n"
@@ -361,7 +364,7 @@ static int realtime_exec(struct ast_channel *chan, const char *context, const ch
 							  "Application: %s\r\n"
 							  "AppData: %s\r\n"
 							  "Uniqueid: %s\r\n",
-							  chan->name, chan->context, chan->exten, chan->priority, app, !ast_strlen_zero(appdata) ? appdata : "(NULL)", chan->uniqueid);
+							  ast_channel_name(chan), ast_channel_context(chan), ast_channel_exten(chan), ast_channel_priority(chan), app, !ast_strlen_zero(appdata) ? appdata : "(NULL)", ast_channel_uniqueid(chan));
 				
 				res = pbx_exec(chan, a, appdata);
 			} else
@@ -385,12 +388,12 @@ static int realtime_matchmore(struct ast_channel *chan, const char *context, con
 
 static struct ast_switch realtime_switch =
 {
-        name:                   "Realtime",
-        description:   		"Realtime Dialplan Switch",
-        exists:                 realtime_exists,
-        canmatch:               realtime_canmatch,
-        exec:                   realtime_exec,
-        matchmore:              realtime_matchmore,
+	.name			= "Realtime",
+	.description		= "Realtime Dialplan Switch",
+	.exists			= realtime_exists,
+	.canmatch		= realtime_canmatch,
+	.exec			= realtime_exec,
+	.matchmore		= realtime_matchmore,
 };
 
 static int unload_module(void)

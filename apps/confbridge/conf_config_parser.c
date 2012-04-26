@@ -187,6 +187,8 @@ static int set_user_option(const char *name, const char *value, struct user_prof
 		ast_copy_string(u_profile->pin, value, sizeof(u_profile->pin));
 	} else if (!strcasecmp(name, "music_on_hold_class")) {
 		ast_copy_string(u_profile->moh_class, value, sizeof(u_profile->moh_class));
+	} else if (!strcasecmp(name, "announcement")) {
+		ast_copy_string(u_profile->announcement, value, sizeof(u_profile->announcement));
 	} else if (!strcasecmp(name, "denoise")) {
 		ast_set2_flag(u_profile, ast_true(value), USER_OPT_DENOISE);
 	} else if (!strcasecmp(name, "dsp_talking_threshold")) {
@@ -219,6 +221,8 @@ static int set_sound(const char *sound_name, const char *sound_file, struct brid
 
 	if (!strcasecmp(sound_name, "sound_only_person")) {
 		ast_string_field_set(sounds, onlyperson, sound_file);
+	} else if (!strcasecmp(sound_name, "sound_only_one")) {
+		ast_string_field_set(sounds, onlyone, sound_file);
 	} else if (!strcasecmp(sound_name, "sound_has_joined")) {
 		ast_string_field_set(sounds, hasjoin, sound_file);
 	} else if (!strcasecmp(sound_name, "sound_has_left")) {
@@ -253,6 +257,10 @@ static int set_sound(const char *sound_name, const char *sound_file, struct brid
 		ast_string_field_set(sounds, join, sound_file);
 	} else if (!strcasecmp(sound_name, "sound_leave")) {
 		ast_string_field_set(sounds, leave, sound_file);
+	} else if (!strcasecmp(sound_name, "sound_participants_muted")) {
+		ast_string_field_set(sounds, participantsmuted, sound_file);
+	} else if (!strcasecmp(sound_name, "sound_participants_unmuted")) {
+		ast_string_field_set(sounds, participantsunmuted, sound_file);
 	} else {
 		return -1;
 	}
@@ -284,6 +292,14 @@ static int set_bridge_option(const char *name, const char *value, struct bridge_
 		}
 	} else if (!strcasecmp(name, "record_conference")) {
 		ast_set2_flag(b_profile, ast_true(value), BRIDGE_OPT_RECORD_CONFERENCE);
+	} else if (!strcasecmp(name, "video_mode")) {
+		if (!strcasecmp(value, "first_marked")) {
+			ast_set_flag(b_profile, BRIDGE_OPT_VIDEO_SRC_FIRST_MARKED);
+		} else if (!strcasecmp(value, "last_marked")) {
+			ast_set_flag(b_profile, BRIDGE_OPT_VIDEO_SRC_LAST_MARKED);
+		} else if (!strcasecmp(value, "follow_talker")) {
+			ast_set_flag(b_profile, BRIDGE_OPT_VIDEO_SRC_FOLLOW_TALKER);
+		}
 	} else if (!strcasecmp(name, "max_members")) {
 		if (sscanf(value, "%30u", &b_profile->max_members) != 1) {
 			return -1;
@@ -307,7 +323,7 @@ static int set_bridge_option(const char *name, const char *value, struct bridge_
 		}
 		/* Using a bridge profile as a template is a little complicated due to the sounds. Since the sounds
 		 * structure of a dynamic profile will need to be altered, a completely new sounds structure must be
-		 * create instead of simply holding a reference to the one built by the config file. */
+		 * created instead of simply holding a reference to the one built by the config file. */
 		ast_string_field_set(sounds, onlyperson, tmp->sounds->onlyperson);
 		ast_string_field_set(sounds, hasjoin, tmp->sounds->hasjoin);
 		ast_string_field_set(sounds, hasleft, tmp->sounds->hasleft);
@@ -324,6 +340,8 @@ static int set_bridge_option(const char *name, const char *value, struct bridge_
 		ast_string_field_set(sounds, unlockednow, tmp->sounds->unlockednow);
 		ast_string_field_set(sounds, lockednow, tmp->sounds->lockednow);
 		ast_string_field_set(sounds, errormenu, tmp->sounds->errormenu);
+		ast_string_field_set(sounds, participantsmuted, tmp->sounds->participantsmuted);
+		ast_string_field_set(sounds, participantsunmuted, tmp->sounds->participantsunmuted);
 
 		ao2_ref(tmp->sounds, -1); /* sounds struct copied over to it from the template by reference only. */
 		ao2_ref(oldsounds,-1);    /* original sounds struct we don't need anymore */
@@ -499,6 +517,7 @@ static int parse_user(const char *cat, struct ast_config *cfg)
 	u_profile->talking_threshold = DEFAULT_TALKING_THRESHOLD;
 	memset(u_profile->pin, 0, sizeof(u_profile->pin));
 	memset(u_profile->moh_class, 0, sizeof(u_profile->moh_class));
+	memset(u_profile->announcement, 0, sizeof(u_profile->announcement));
 	for (var = ast_variable_browse(cfg, cat); var; var = var->next) {
 		if (!strcasecmp(var->name, "type")) {
 			continue;
@@ -532,8 +551,12 @@ static int add_action_to_menu_entry(struct conf_menu_entry *menu_entry, enum con
 	case MENU_ACTION_RESET_LISTENING:
 	case MENU_ACTION_RESET_TALKING:
 	case MENU_ACTION_ADMIN_TOGGLE_LOCK:
+	case MENU_ACTION_ADMIN_TOGGLE_MUTE_PARTICIPANTS:
+	case MENU_ACTION_PARTICIPANT_COUNT:
 	case MENU_ACTION_ADMIN_KICK_LAST:
 	case MENU_ACTION_LEAVE:
+	case MENU_ACTION_SET_SINGLE_VIDEO_SRC:
+	case MENU_ACTION_RELEASE_SINGLE_VIDEO_SRC:
 		break;
 	case MENU_ACTION_PLAYBACK:
 	case MENU_ACTION_PLAYBACK_AND_CONTINUE:
@@ -582,7 +605,7 @@ static int add_action_to_menu_entry(struct conf_menu_entry *menu_entry, enum con
 
 static int add_menu_entry(struct conf_menu *menu, const char *dtmf, const char *action_names)
 {
-	struct conf_menu_entry *menu_entry = NULL;
+	struct conf_menu_entry *menu_entry = NULL, *cur = NULL;
 	int res = 0;
 	char *tmp_action_names = ast_strdupa(action_names);
 	char *action = NULL;
@@ -645,10 +668,18 @@ static int add_menu_entry(struct conf_menu *menu, const char *dtmf, const char *
 			res |= add_action_to_menu_entry(menu_entry, MENU_ACTION_DECREASE_TALKING, NULL);
 		} else if (!strcasecmp(action, "admin_toggle_conference_lock")) {
 			res |= add_action_to_menu_entry(menu_entry, MENU_ACTION_ADMIN_TOGGLE_LOCK, NULL);
+		} else if (!strcasecmp(action, "admin_toggle_mute_participants")) {
+			res |= add_action_to_menu_entry(menu_entry, MENU_ACTION_ADMIN_TOGGLE_MUTE_PARTICIPANTS, NULL);
+		} else if (!strcasecmp(action, "participant_count")) {
+			res |= add_action_to_menu_entry(menu_entry, MENU_ACTION_PARTICIPANT_COUNT, NULL);
 		} else if (!strcasecmp(action, "admin_kick_last")) {
 			res |= add_action_to_menu_entry(menu_entry, MENU_ACTION_ADMIN_KICK_LAST, NULL);
 		} else if (!strcasecmp(action, "leave_conference")) {
 			res |= add_action_to_menu_entry(menu_entry, MENU_ACTION_LEAVE, NULL);
+		} else if (!strcasecmp(action, "set_as_single_video_src")) {
+			res |= add_action_to_menu_entry(menu_entry, MENU_ACTION_SET_SINGLE_VIDEO_SRC, NULL);
+		} else if (!strcasecmp(action, "release_as_single_video_src")) {
+			res |= add_action_to_menu_entry(menu_entry, MENU_ACTION_RELEASE_SINGLE_VIDEO_SRC, NULL);
 		} else if (!strncasecmp(action, "dialplan_exec(", 14)) {
 			ast_copy_string(buf, action, sizeof(buf));
 			action_args = buf;
@@ -683,13 +714,23 @@ static int add_menu_entry(struct conf_menu *menu, const char *dtmf, const char *
 
 	/* if adding any of the actions failed, bail */
 	if (res) {
-		struct conf_menu_action *action;
-		while ((action = AST_LIST_REMOVE_HEAD(&menu_entry->actions, action))) {
-			ast_free(action);
+		struct conf_menu_action *menu_action;
+		while ((menu_action = AST_LIST_REMOVE_HEAD(&menu_entry->actions, action))) {
+			ast_free(menu_action);
 		}
 		ast_free(menu_entry);
 		return -1;
 	}
+
+	/* remove any list entry with an identical DTMF sequence for overrides */
+	AST_LIST_TRAVERSE_SAFE_BEGIN(&menu->entries, cur, entry) {
+		if (!strcasecmp(cur->dtmf, menu_entry->dtmf)) {
+			AST_LIST_REMOVE_CURRENT(entry);
+			ast_free(cur);
+			break;
+		}
+	}
+	AST_LIST_TRAVERSE_SAFE_END;
 
 	AST_LIST_INSERT_TAIL(&menu->entries, menu_entry, entry);
 
@@ -821,6 +862,8 @@ static char *handle_cli_confbridge_show_user_profile(struct ast_cli_entry *e, in
 	ast_cli(a->fd,"MOH Class:               %s\n",
 		ast_strlen_zero(u_profile.moh_class) ?
 		"default" : u_profile.moh_class);
+	ast_cli(a->fd,"Announcement:            %s\n",
+		u_profile.announcement);
 	ast_cli(a->fd,"Quiet:                   %s\n",
 		u_profile.flags & USER_OPT_QUIET ?
 		"enabled" : "disabled");
@@ -973,6 +1016,16 @@ static char *handle_cli_confbridge_show_bridge_profile(struct ast_cli_entry *e, 
 		ast_cli(a->fd,"Max Members:          No Limit\n");
 	}
 
+	if (b_profile.flags & BRIDGE_OPT_VIDEO_SRC_LAST_MARKED) {
+		ast_cli(a->fd, "Video Mode:           last_marked\n");
+	} else if (b_profile.flags & BRIDGE_OPT_VIDEO_SRC_FIRST_MARKED) {
+		ast_cli(a->fd, "Video Mode:           first_marked\n");
+	} else if (b_profile.flags & BRIDGE_OPT_VIDEO_SRC_FOLLOW_TALKER) {
+		ast_cli(a->fd, "Video Mode:           follow_talker\n");
+	} else {
+		ast_cli(a->fd, "Video Mode:           no video\n");
+	}
+
 	ast_cli(a->fd,"sound_join:           %s\n", conf_get_sound(CONF_SOUND_JOIN, b_profile.sounds));
 	ast_cli(a->fd,"sound_leave:          %s\n", conf_get_sound(CONF_SOUND_LEAVE, b_profile.sounds));
 	ast_cli(a->fd,"sound_only_person:    %s\n", conf_get_sound(CONF_SOUND_ONLY_PERSON, b_profile.sounds));
@@ -991,6 +1044,8 @@ static char *handle_cli_confbridge_show_bridge_profile(struct ast_cli_entry *e, 
 	ast_cli(a->fd,"sound_unlocked_now:   %s\n", conf_get_sound(CONF_SOUND_UNLOCKED_NOW, b_profile.sounds));
 	ast_cli(a->fd,"sound_lockednow:      %s\n", conf_get_sound(CONF_SOUND_LOCKED_NOW, b_profile.sounds));
 	ast_cli(a->fd,"sound_error_menu:     %s\n", conf_get_sound(CONF_SOUND_ERROR_MENU, b_profile.sounds));
+	ast_cli(a->fd,"sound_participants_muted:     %s\n", conf_get_sound(CONF_SOUND_PARTICIPANTS_MUTED, b_profile.sounds));
+	ast_cli(a->fd,"sound_participants_unmuted:     %s\n", conf_get_sound(CONF_SOUND_PARTICIPANTS_UNMUTED, b_profile.sounds));
 	ast_cli(a->fd,"\n");
 
 	conf_bridge_profile_destroy(&b_profile);
@@ -1126,11 +1181,23 @@ static char *handle_cli_confbridge_show_menu(struct ast_cli_entry *e, int cmd, s
 			case MENU_ACTION_ADMIN_TOGGLE_LOCK:
 				ast_cli(a->fd, "admin_toggle_conference_lock");
 				break;
+			case MENU_ACTION_ADMIN_TOGGLE_MUTE_PARTICIPANTS:
+				ast_cli(a->fd, "admin_toggle_mute_participants");
+				break;
+			case MENU_ACTION_PARTICIPANT_COUNT:
+				ast_cli(a->fd, "participant_count");
+				break;
 			case MENU_ACTION_ADMIN_KICK_LAST:
 				ast_cli(a->fd, "admin_kick_last");
 				break;
 			case MENU_ACTION_LEAVE:
 				ast_cli(a->fd, "leave_conference");
+				break;
+			case MENU_ACTION_SET_SINGLE_VIDEO_SRC:
+				ast_cli(a->fd, "set_as_single_video_src");
+				break;
+			case MENU_ACTION_RELEASE_SINGLE_VIDEO_SRC:
+				ast_cli(a->fd, "release_as_single_video_src");
 				break;
 			}
 			action_num++;
@@ -1244,6 +1311,7 @@ int conf_load_config(int reload)
 	}
 
 	remove_all_delme();
+	ast_config_destroy(cfg);
 
 	return 0;
 }
@@ -1270,8 +1338,9 @@ const struct user_profile *conf_find_user_profile(struct ast_channel *chan, cons
 				conf_user_profile_copy(result, &b_data->u_profile);
 				return result;
 			}
+		} else {
+			ast_channel_unlock(chan);
 		}
-		ast_channel_unlock(chan);
 	}
 
 	if (ast_strlen_zero(user_profile_name)) {
@@ -1320,8 +1389,9 @@ const struct bridge_profile *conf_find_bridge_profile(struct ast_channel *chan, 
 				conf_bridge_profile_copy(result, &b_data->b_profile);
 				return result;
 			}
+		} else {
+			ast_channel_unlock(chan);
 		}
-		ast_channel_unlock(chan);
 	}
 	if (ast_strlen_zero(bridge_profile_name)) {
 		bridge_profile_name = DEFAULT_BRIDGE_PROFILE;

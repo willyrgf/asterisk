@@ -25,6 +25,10 @@
  * \ingroup channel_drivers
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
@@ -88,10 +92,10 @@ static struct ast_jb_conf g_jb_conf = {
 	.target_extra = -1,
 };
 
-static struct ast_channel *local_request(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, void *data, int *cause);
+static struct ast_channel *local_request(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, const char *data, int *cause);
 static int local_digit_begin(struct ast_channel *ast, char digit);
 static int local_digit_end(struct ast_channel *ast, char digit, unsigned int duration);
-static int local_call(struct ast_channel *ast, char *dest, int timeout);
+static int local_call(struct ast_channel *ast, const char *dest, int timeout);
 static int local_hangup(struct ast_channel *ast);
 static int local_answer(struct ast_channel *ast);
 static struct ast_frame *local_read(struct ast_channel *ast);
@@ -100,7 +104,7 @@ static int local_indicate(struct ast_channel *ast, int condition, const void *da
 static int local_fixup(struct ast_channel *oldchan, struct ast_channel *newchan);
 static int local_sendhtml(struct ast_channel *ast, int subclass, const char *data, int datalen);
 static int local_sendtext(struct ast_channel *ast, const char *text);
-static int local_devicestate(void *data);
+static int local_devicestate(const char *data);
 static struct ast_channel *local_bridgedchannel(struct ast_channel *chan, struct ast_channel *bridge);
 static int local_queryoption(struct ast_channel *ast, int option, void *data, int *datalen);
 static int local_setoption(struct ast_channel *chan, int option, void *data, int datalen);
@@ -190,10 +194,7 @@ static void awesome_locking(struct local_pvt *p, struct ast_channel **outchan, s
 			ao2_lock(p);
 		} else {
 			/* lock both channels first, then get the pvt lock */
-			ast_channel_lock(chan);
-			while (ast_channel_trylock(owner)) {
-				CHANNEL_DEADLOCK_AVOIDANCE(chan);
-			}
+			ast_channel_lock_both(chan, owner);
 			ao2_lock(p);
 		}
 
@@ -217,6 +218,7 @@ static void awesome_locking(struct local_pvt *p, struct ast_channel **outchan, s
 	*outchan = p->chan;
 }
 
+/* Called with ast locked */
 static int local_setoption(struct ast_channel *ast, int option, void * data, int datalen)
 {
 	int res = 0;
@@ -225,27 +227,22 @@ static int local_setoption(struct ast_channel *ast, int option, void * data, int
 	ast_chan_write_info_t *write_info;
 
 	if (option != AST_OPTION_CHANNEL_WRITE) {
-		res = -1;
-		goto setoption_cleanup;
+		return -1;
 	}
 
 	write_info = data;
 
 	if (write_info->version != AST_CHAN_WRITE_INFO_T_VERSION) {
 		ast_log(LOG_ERROR, "The chan_write_info_t type has changed, and this channel hasn't been updated!\n");
-		res = -1;
-		goto setoption_cleanup;
+		return -1;
 	}
 
 	/* get the tech pvt */
-	ast_channel_lock(ast);
-	if (!(p = ast->tech_pvt)) {
-		ast_channel_unlock(ast);
-		res = -1;
-		goto setoption_cleanup;
+	if (!(p = ast_channel_tech_pvt(ast))) {
+		return -1;
 	}
 	ao2_ref(p, 1);
-	ast_channel_unlock(ast);
+	ast_channel_unlock(ast); /* Held when called, unlock before locking another channel */
 
 	/* get the channel we are supposed to write to */
 	ao2_lock(p);
@@ -272,11 +269,12 @@ setoption_cleanup:
 	if (otherchan) {
 		ast_channel_unref(otherchan);
 	}
+	ast_channel_lock(ast); /* Lock back before we leave */
 	return res;
 }
 
 /*! \brief Adds devicestate to local channels */
-static int local_devicestate(void *data)
+static int local_devicestate(const char *data)
 {
 	char *exten = ast_strdupa(data);
 	char *context = NULL, *opts = NULL;
@@ -286,7 +284,7 @@ static int local_devicestate(void *data)
 
 	if (!(context = strchr(exten, '@'))) {
 		ast_log(LOG_WARNING, "Someone used Local/%s somewhere without a @context. This is bad.\n", exten);
-		return AST_DEVICE_INVALID;	
+		return AST_DEVICE_INVALID;
 	}
 
 	*context++ = '\0';
@@ -298,9 +296,9 @@ static int local_devicestate(void *data)
 	ast_debug(3, "Checking if extension %s@%s exists (devicestate)\n", exten, context);
 
 	res = ast_exists_extension(NULL, context, exten, 1, NULL);
-	if (!res)		
+	if (!res)
 		return AST_DEVICE_INVALID;
-	
+
 	res = AST_DEVICE_NOT_INUSE;
 
 	it = ao2_iterator_init(locals, 0);
@@ -320,12 +318,12 @@ static int local_devicestate(void *data)
 /*! \brief Return the bridged channel of a Local channel */
 static struct ast_channel *local_bridgedchannel(struct ast_channel *chan, struct ast_channel *bridge)
 {
-	struct local_pvt *p = bridge->tech_pvt;
+	struct local_pvt *p = ast_channel_tech_pvt(bridge);
 	struct ast_channel *bridged = bridge;
 
 	if (!p) {
 		ast_debug(1, "Asked for bridged channel on '%s'/'%s', returning <none>\n",
-			chan->name, bridge->name);
+			ast_channel_name(chan), ast_channel_name(bridge));
 		return NULL;
 	}
 
@@ -334,12 +332,12 @@ static struct ast_channel *local_bridgedchannel(struct ast_channel *chan, struct
 	if (ast_test_flag(p, LOCAL_BRIDGE)) {
 		/* Find the opposite channel */
 		bridged = (bridge == p->owner ? p->chan : p->owner);
-		
+
 		/* Now see if the opposite channel is bridged to anything */
 		if (!bridged) {
 			bridged = bridge;
-		} else if (bridged->_bridge) {
-			bridged = bridged->_bridge;
+		} else if (ast_channel_internal_bridged_channel(bridged)) {
+			bridged = ast_channel_internal_bridged_channel(bridged);
 		}
 	}
 
@@ -348,6 +346,7 @@ static struct ast_channel *local_bridgedchannel(struct ast_channel *chan, struct
 	return bridged;
 }
 
+/* Called with ast locked */
 static int local_queryoption(struct ast_channel *ast, int option, void *data, int *datalen)
 {
 	struct local_pvt *p;
@@ -361,21 +360,18 @@ static int local_queryoption(struct ast_channel *ast, int option, void *data, in
 	}
 
 	/* for some reason the channel is not locked in channel.c when this function is called */
-	ast_channel_lock(ast);
-	if (!(p = ast->tech_pvt)) {
-		ast_channel_unlock(ast);
+	if (!(p = ast_channel_tech_pvt(ast))) {
 		return -1;
 	}
 
 	ao2_lock(p);
 	if (!(tmp = IS_OUTBOUND(ast, p) ? p->owner : p->chan)) {
 		ao2_unlock(p);
-		ast_channel_unlock(ast);
 		return -1;
 	}
 	ast_channel_ref(tmp);
 	ao2_unlock(p);
-	ast_channel_unlock(ast);
+	ast_channel_unlock(ast); /* Held when called, unlock before locking another channel */
 
 	ast_channel_lock(tmp);
 	if (!(bridged = ast_bridged_channel(tmp))) {
@@ -394,6 +390,7 @@ query_cleanup:
 	if (tmp) {
 		tmp = ast_channel_unref(tmp);
 	}
+	ast_channel_lock(ast); /* Lock back before we leave */
 
 	return res;
 }
@@ -406,7 +403,7 @@ query_cleanup:
  * local_pvt, it is impossible to guarantee it will not be destroyed by another thread
  * during deadlock avoidance.
  */
-static int local_queue_frame(struct local_pvt *p, int isoutbound, struct ast_frame *f, 
+static int local_queue_frame(struct local_pvt *p, int isoutbound, struct ast_frame *f,
 	struct ast_channel *us, int us_locked)
 {
 	struct ast_channel *other = NULL;
@@ -419,7 +416,7 @@ static int local_queue_frame(struct local_pvt *p, int isoutbound, struct ast_fra
 	}
 
 	/* do not queue frame if generator is on both local channels */
-	if (us && us->generator && other->generator) {
+	if (us && ast_channel_generator(us) && ast_channel_generator(other)) {
 		return 0;
 	}
 
@@ -447,12 +444,13 @@ static int local_queue_frame(struct local_pvt *p, int isoutbound, struct ast_fra
 
 static int local_answer(struct ast_channel *ast)
 {
-	struct local_pvt *p = ast->tech_pvt;
+	struct local_pvt *p = ast_channel_tech_pvt(ast);
 	int isoutbound;
 	int res = -1;
 
-	if (!p)
+	if (!p) {
 		return -1;
+	}
 
 	ao2_lock(p);
 	ao2_ref(p, 1);
@@ -501,7 +499,7 @@ static void check_bridge(struct local_pvt *p)
 	/* since we had to unlock p to get the bridged chan, validate our
 	 * data once again and verify the bridged channel is what we expect
 	 * it to be in order to perform this optimization */
-	if (ast_test_flag(p, LOCAL_ALREADY_MASQED) || !p->owner || !p->chan || (p->chan->_bridge != bridged_chan)) {
+	if (ast_test_flag(p, LOCAL_ALREADY_MASQED) || !p->owner || !p->chan || (ast_channel_internal_bridged_channel(p->chan) != bridged_chan)) {
 		return;
 	}
 
@@ -510,30 +508,30 @@ static void check_bridge(struct local_pvt *p)
 	   frames on the owner channel (because they would be transferred to the
 	   outbound channel during the masquerade)
 	*/
-	if (p->chan->_bridge /* Not ast_bridged_channel!  Only go one step! */ && AST_LIST_EMPTY(&p->owner->readq)) {
+	if (ast_channel_internal_bridged_channel(p->chan) /* Not ast_bridged_channel!  Only go one step! */ && AST_LIST_EMPTY(ast_channel_readq(p->owner))) {
 		/* Masquerade bridged channel into owner */
 		/* Lock everything we need, one by one, and give up if
 		   we can't get everything.  Remember, we'll get another
 		   chance in just a little bit */
-		if (!ast_channel_trylock(p->chan->_bridge)) {
-			if (!ast_check_hangup(p->chan->_bridge)) {
+		if (!ast_channel_trylock(ast_channel_internal_bridged_channel(p->chan))) {
+			if (!ast_check_hangup(ast_channel_internal_bridged_channel(p->chan))) {
 				if (!ast_channel_trylock(p->owner)) {
 					if (!ast_check_hangup(p->owner)) {
-						if (p->owner->monitor && !p->chan->_bridge->monitor) {
+						if (ast_channel_monitor(p->owner) && !ast_channel_monitor(ast_channel_internal_bridged_channel(p->chan))) {
 							/* If a local channel is being monitored, we don't want a masquerade
 							 * to cause the monitor to go away. Since the masquerade swaps the monitors,
 							 * pre-swapping the monitors before the masquerade will ensure that the monitor
 							 * ends up where it is expected.
 							 */
-							tmp = p->owner->monitor;
-							p->owner->monitor = p->chan->_bridge->monitor;
-							p->chan->_bridge->monitor = tmp;
+							tmp = ast_channel_monitor(p->owner);
+							ast_channel_monitor_set(p->owner, ast_channel_monitor(ast_channel_internal_bridged_channel(p->chan)));
+							ast_channel_monitor_set(ast_channel_internal_bridged_channel(p->chan), tmp);
 						}
-						if (p->chan->audiohooks) {
+						if (ast_channel_audiohooks(p->chan)) {
 							struct ast_audiohook_list *audiohooks_swapper;
-							audiohooks_swapper = p->chan->audiohooks;
-							p->chan->audiohooks = p->owner->audiohooks;
-							p->owner->audiohooks = audiohooks_swapper;
+							audiohooks_swapper = ast_channel_audiohooks(p->chan);
+							ast_channel_audiohooks_set(p->chan, ast_channel_audiohooks(p->owner));
+							ast_channel_audiohooks_set(p->owner, audiohooks_swapper);
 						}
 
 						/* If any Caller ID was set, preserve it after masquerade like above. We must check
@@ -543,38 +541,29 @@ static void check_bridge(struct local_pvt *p)
 						 * thread (which is the to be masqueraded away local channel) before both local
 						 * channels are optimized away.
 						 */
-						if (p->owner->caller.id.name.valid || p->owner->caller.id.number.valid
-							|| p->owner->caller.id.subaddress.valid || p->owner->caller.ani.name.valid
-							|| p->owner->caller.ani.number.valid || p->owner->caller.ani.subaddress.valid) {
-							struct ast_party_caller tmp;
-							tmp = p->owner->caller;
-							p->owner->caller = p->chan->_bridge->caller;
-							p->chan->_bridge->caller = tmp;
+						if (ast_channel_caller(p->owner)->id.name.valid || ast_channel_caller(p->owner)->id.number.valid
+							|| ast_channel_caller(p->owner)->id.subaddress.valid || ast_channel_caller(p->owner)->ani.name.valid
+							|| ast_channel_caller(p->owner)->ani.number.valid || ast_channel_caller(p->owner)->ani.subaddress.valid) {
+							SWAP(*ast_channel_caller(p->owner), *ast_channel_caller(ast_channel_internal_bridged_channel(p->chan)));
 						}
-						if (p->owner->redirecting.from.name.valid || p->owner->redirecting.from.number.valid
-							|| p->owner->redirecting.from.subaddress.valid || p->owner->redirecting.to.name.valid
-							|| p->owner->redirecting.to.number.valid || p->owner->redirecting.to.subaddress.valid) {
-							struct ast_party_redirecting tmp;
-							tmp = p->owner->redirecting;
-							p->owner->redirecting = p->chan->_bridge->redirecting;
-							p->chan->_bridge->redirecting = tmp;
+						if (ast_channel_redirecting(p->owner)->from.name.valid || ast_channel_redirecting(p->owner)->from.number.valid
+							|| ast_channel_redirecting(p->owner)->from.subaddress.valid || ast_channel_redirecting(p->owner)->to.name.valid
+							|| ast_channel_redirecting(p->owner)->to.number.valid || ast_channel_redirecting(p->owner)->to.subaddress.valid) {
+							SWAP(*ast_channel_redirecting(p->owner), *ast_channel_redirecting(ast_channel_internal_bridged_channel(p->chan)));
 						}
-						if (p->owner->dialed.number.str || p->owner->dialed.subaddress.valid) {
-							struct ast_party_dialed tmp;
-							tmp = p->owner->dialed;
-							p->owner->dialed = p->chan->_bridge->dialed;
-							p->chan->_bridge->dialed = tmp;
+						if (ast_channel_dialed(p->owner)->number.str || ast_channel_dialed(p->owner)->subaddress.valid) {
+							SWAP(*ast_channel_dialed(p->owner), *ast_channel_dialed(ast_channel_internal_bridged_channel(p->chan)));
 						}
 
 
 						ast_app_group_update(p->chan, p->owner);
-						ast_channel_masquerade(p->owner, p->chan->_bridge);
+						ast_channel_masquerade(p->owner, ast_channel_internal_bridged_channel(p->chan));
 						ast_set_flag(p, LOCAL_ALREADY_MASQED);
 					}
 					ast_channel_unlock(p->owner);
 				}
 			}
-			ast_channel_unlock(p->chan->_bridge);
+			ast_channel_unlock(ast_channel_internal_bridged_channel(p->chan));
 		}
 	}
 }
@@ -586,7 +575,7 @@ static struct ast_frame  *local_read(struct ast_channel *ast)
 
 static int local_write(struct ast_channel *ast, struct ast_frame *f)
 {
-	struct local_pvt *p = ast->tech_pvt;
+	struct local_pvt *p = ast_channel_tech_pvt(ast);
 	int res = -1;
 	int isoutbound;
 
@@ -606,7 +595,7 @@ static int local_write(struct ast_channel *ast, struct ast_frame *f)
 	if (!ast_test_flag(p, LOCAL_ALREADY_MASQED)) {
 		res = local_queue_frame(p, isoutbound, f, ast, 1);
 	} else {
-		ast_debug(1, "Not posting to queue since already masked on '%s'\n", ast->name);
+		ast_debug(1, "Not posting to queue since already masked on '%s'\n", ast_channel_name(ast));
 		res = 0;
 	}
 	ao2_unlock(p);
@@ -617,10 +606,11 @@ static int local_write(struct ast_channel *ast, struct ast_frame *f)
 
 static int local_fixup(struct ast_channel *oldchan, struct ast_channel *newchan)
 {
-	struct local_pvt *p = newchan->tech_pvt;
+	struct local_pvt *p = ast_channel_tech_pvt(newchan);
 
-	if (!p)
+	if (!p) {
 		return -1;
+	}
 
 	ao2_lock(p);
 
@@ -629,13 +619,14 @@ static int local_fixup(struct ast_channel *oldchan, struct ast_channel *newchan)
 		ao2_unlock(p);
 		return -1;
 	}
-	if (p->owner == oldchan)
+	if (p->owner == oldchan) {
 		p->owner = newchan;
-	else
+	} else {
 		p->chan = newchan;
+	}
 
 	/* Do not let a masquerade cause a Local channel to be bridged to itself! */
-	if (!ast_check_hangup(newchan) && ((p->owner && p->owner->_bridge == p->chan) || (p->chan && p->chan->_bridge == p->owner))) {
+	if (!ast_check_hangup(newchan) && ((p->owner && ast_channel_internal_bridged_channel(p->owner) == p->chan) || (p->chan && ast_channel_internal_bridged_channel(p->chan) == p->owner))) {
 		ast_log(LOG_WARNING, "You can not bridge a Local channel to itself!\n");
 		ao2_unlock(p);
 		ast_queue_hangup(newchan);
@@ -648,13 +639,14 @@ static int local_fixup(struct ast_channel *oldchan, struct ast_channel *newchan)
 
 static int local_indicate(struct ast_channel *ast, int condition, const void *data, size_t datalen)
 {
-	struct local_pvt *p = ast->tech_pvt;
+	struct local_pvt *p = ast_channel_tech_pvt(ast);
 	int res = 0;
 	struct ast_frame f = { AST_FRAME_CONTROL, };
 	int isoutbound;
 
-	if (!p)
+	if (!p) {
 		return -1;
+	}
 
 	ao2_ref(p, 1); /* ref for local_queue_frame */
 
@@ -686,11 +678,11 @@ static int local_indicate(struct ast_channel *ast, int condition, const void *da
 			unsigned char frame_data[1024];
 			if (condition == AST_CONTROL_CONNECTED_LINE) {
 				if (isoutbound) {
-					ast_connected_line_copy_to_caller(&the_other_channel->caller, &this_channel->connected);
+					ast_connected_line_copy_to_caller(ast_channel_caller(the_other_channel), ast_channel_connected(this_channel));
 				}
-				f.datalen = ast_connected_line_build_data(frame_data, sizeof(frame_data), &this_channel->connected, NULL);
+				f.datalen = ast_connected_line_build_data(frame_data, sizeof(frame_data), ast_channel_connected(this_channel), NULL);
 			} else {
-				f.datalen = ast_redirecting_build_data(frame_data, sizeof(frame_data), &this_channel->redirecting, NULL);
+				f.datalen = ast_redirecting_build_data(frame_data, sizeof(frame_data), ast_channel_redirecting(this_channel), NULL);
 			}
 			f.subclass.integer = condition;
 			f.data.ptr = frame_data;
@@ -714,13 +706,14 @@ static int local_indicate(struct ast_channel *ast, int condition, const void *da
 
 static int local_digit_begin(struct ast_channel *ast, char digit)
 {
-	struct local_pvt *p = ast->tech_pvt;
+	struct local_pvt *p = ast_channel_tech_pvt(ast);
 	int res = -1;
 	struct ast_frame f = { AST_FRAME_DTMF_BEGIN, };
 	int isoutbound;
 
-	if (!p)
+	if (!p) {
 		return -1;
+	}
 
 	ao2_ref(p, 1); /* ref for local_queue_frame */
 	ao2_lock(p);
@@ -735,13 +728,14 @@ static int local_digit_begin(struct ast_channel *ast, char digit)
 
 static int local_digit_end(struct ast_channel *ast, char digit, unsigned int duration)
 {
-	struct local_pvt *p = ast->tech_pvt;
+	struct local_pvt *p = ast_channel_tech_pvt(ast);
 	int res = -1;
 	struct ast_frame f = { AST_FRAME_DTMF_END, };
 	int isoutbound;
 
-	if (!p)
+	if (!p) {
 		return -1;
+	}
 
 	ao2_ref(p, 1); /* ref for local_queue_frame */
 	ao2_lock(p);
@@ -757,13 +751,14 @@ static int local_digit_end(struct ast_channel *ast, char digit, unsigned int dur
 
 static int local_sendtext(struct ast_channel *ast, const char *text)
 {
-	struct local_pvt *p = ast->tech_pvt;
+	struct local_pvt *p = ast_channel_tech_pvt(ast);
 	int res = -1;
 	struct ast_frame f = { AST_FRAME_TEXT, };
 	int isoutbound;
 
-	if (!p)
+	if (!p) {
 		return -1;
+	}
 
 	ao2_lock(p);
 	ao2_ref(p, 1); /* ref for local_queue_frame */
@@ -778,13 +773,14 @@ static int local_sendtext(struct ast_channel *ast, const char *text)
 
 static int local_sendhtml(struct ast_channel *ast, int subclass, const char *data, int datalen)
 {
-	struct local_pvt *p = ast->tech_pvt;
+	struct local_pvt *p = ast_channel_tech_pvt(ast);
 	int res = -1;
 	struct ast_frame f = { AST_FRAME_HTML, };
 	int isoutbound;
 
-	if (!p)
+	if (!p) {
 		return -1;
+	}
 
 	ao2_lock(p);
 	ao2_ref(p, 1); /* ref for local_queue_frame */
@@ -799,11 +795,11 @@ static int local_sendhtml(struct ast_channel *ast, int subclass, const char *dat
 	return res;
 }
 
-/*! \brief Initiate new call, part of PBX interface 
- * 	dest is the dial string */
-static int local_call(struct ast_channel *ast, char *dest, int timeout)
+/*! \brief Initiate new call, part of PBX interface
+ *         dest is the dial string */
+static int local_call(struct ast_channel *ast, const char *dest, int timeout)
 {
-	struct local_pvt *p = ast->tech_pvt;
+	struct local_pvt *p = ast_channel_tech_pvt(ast);
 	int pvt_locked = 0;
 
 	struct ast_channel *owner = NULL;
@@ -845,34 +841,34 @@ static int local_call(struct ast_channel *ast, char *dest, int timeout)
 	 * All these failure points just return -1. The individual strings will
 	 * be cleared when we destroy the channel.
 	 */
-	ast_party_redirecting_copy(&chan->redirecting, &owner->redirecting);
+	ast_party_redirecting_copy(ast_channel_redirecting(chan), ast_channel_redirecting(owner));
 
-	ast_party_dialed_copy(&chan->dialed, &owner->dialed);
+	ast_party_dialed_copy(ast_channel_dialed(chan), ast_channel_dialed(owner));
 
-	ast_connected_line_copy_to_caller(&chan->caller, &owner->connected);
-	ast_connected_line_copy_from_caller(&chan->connected, &owner->caller);
+	ast_connected_line_copy_to_caller(ast_channel_caller(chan), ast_channel_connected(owner));
+	ast_connected_line_copy_from_caller(ast_channel_connected(chan), ast_channel_caller(owner));
 
-	ast_string_field_set(chan, language, owner->language);
-	ast_string_field_set(chan, accountcode, owner->accountcode);
-	ast_string_field_set(chan, musicclass, owner->musicclass);
+	ast_channel_language_set(chan, ast_channel_language(owner));
+	ast_channel_accountcode_set(chan, ast_channel_accountcode(owner));
+	ast_channel_musicclass_set(chan, ast_channel_musicclass(owner));
 	ast_cdr_update(chan);
 
 	ast_channel_cc_params_init(chan, ast_channel_get_cc_config_params(owner));
 
 	/* Make sure we inherit the ANSWERED_ELSEWHERE flag if it's set on the queue/dial call request in the dialplan */
-	if (ast_test_flag(ast, AST_FLAG_ANSWERED_ELSEWHERE)) {
-		ast_set_flag(chan, AST_FLAG_ANSWERED_ELSEWHERE);
+	if (ast_test_flag(ast_channel_flags(ast), AST_FLAG_ANSWERED_ELSEWHERE)) {
+		ast_set_flag(ast_channel_flags(chan), AST_FLAG_ANSWERED_ELSEWHERE);
 	}
 
 	/* copy the channel variables from the incoming channel to the outgoing channel */
 	/* Note that due to certain assumptions, they MUST be in the same order */
-	AST_LIST_TRAVERSE(&owner->varshead, varptr, entries) {
+	AST_LIST_TRAVERSE(ast_channel_varshead(owner), varptr, entries) {
 		namelen = strlen(varptr->name);
 		len = sizeof(struct ast_var_t) + namelen + strlen(varptr->value) + 2;
 		if ((new = ast_calloc(1, len))) {
 			memcpy(new, varptr, len);
 			new->value = &(new->name[0]) + namelen + 1;
-			AST_LIST_INSERT_TAIL(&chan->varshead, new, entries);
+			AST_LIST_INSERT_TAIL(ast_channel_varshead(chan), new, entries);
 		}
 	}
 	ast_channel_datastore_inherit(owner, chan);
@@ -885,8 +881,8 @@ static int local_call(struct ast_channel *ast, char *dest, int timeout)
 	}
 	ast_set_cc_interfaces_chanvar(chan, reduced_dest);
 
-	exten = ast_strdupa(chan->exten);
-	context = ast_strdupa(chan->context);
+	exten = ast_strdupa(ast_channel_exten(chan));
+	context = ast_strdupa(ast_channel_context(chan));
 
 	ao2_unlock(p);
 	pvt_locked = 0;
@@ -894,12 +890,25 @@ static int local_call(struct ast_channel *ast, char *dest, int timeout)
 	ast_channel_unlock(chan);
 
 	if (!ast_exists_extension(chan, context, exten, 1,
-		S_COR(owner->caller.id.number.valid, owner->caller.id.number.str, NULL))) {
+		S_COR(ast_channel_caller(owner)->id.number.valid, ast_channel_caller(owner)->id.number.str, NULL))) {
 		ast_log(LOG_NOTICE, "No such extension/context %s@%s while calling Local channel\n", exten, context);
 		res = -1;
 		chan = ast_channel_unref(chan); /* we already unlocked it, so clear it hear so the cleanup label won't touch it. */
 		goto return_cleanup;
 	}
+
+	manager_event(EVENT_FLAG_CALL, "LocalBridge",
+		      "Channel1: %s\r\n"
+		      "Channel2: %s\r\n"
+		      "Uniqueid1: %s\r\n"
+		      "Uniqueid2: %s\r\n"
+		      "Context: %s\r\n"
+		      "Exten: %s\r\n"
+		      "LocalOptimization: %s\r\n",
+			ast_channel_name(p->owner), ast_channel_name(p->chan), ast_channel_uniqueid(p->owner), ast_channel_uniqueid(p->chan),
+			p->context, p->exten,
+			ast_test_flag(p, LOCAL_NO_OPTIMIZATION) ? "Yes" : "No");
+
 
 	/* Start switch on sub channel */
 	if (!(res = ast_pbx_start(chan))) {
@@ -940,11 +949,11 @@ return_cleanup:
 /*! \brief Hangup a call through the local proxy channel */
 static int local_hangup(struct ast_channel *ast)
 {
-	struct local_pvt *p = ast->tech_pvt;
+	struct local_pvt *p = ast_channel_tech_pvt(ast);
 	int isoutbound;
 	int hangup_chan = 0;
 	int res = 0;
-	struct ast_frame f = { AST_FRAME_CONTROL, { AST_CONTROL_HANGUP }, .data.uint32 = ast->hangupcause };
+	struct ast_frame f = { AST_FRAME_CONTROL, { AST_CONTROL_HANGUP }, .data.uint32 = ast_channel_hangupcause(ast) };
 	struct ast_channel *owner = NULL;
 	struct ast_channel *chan = NULL;
 
@@ -968,15 +977,15 @@ static int local_hangup(struct ast_channel *ast)
 
 	isoutbound = IS_OUTBOUND(ast, p); /* just comparing pointer of ast */
 
-	if (p->chan && ast_test_flag(ast, AST_FLAG_ANSWERED_ELSEWHERE)) {
-		ast_set_flag(p->chan, AST_FLAG_ANSWERED_ELSEWHERE);
+	if (p->chan && ast_test_flag(ast_channel_flags(ast), AST_FLAG_ANSWERED_ELSEWHERE)) {
+		ast_set_flag(ast_channel_flags(p->chan), AST_FLAG_ANSWERED_ELSEWHERE);
 		ast_debug(2, "This local call has the ANSWERED_ELSEWHERE flag set.\n");
 	}
 
 	if (isoutbound) {
 		const char *status = pbx_builtin_getvar_helper(p->chan, "DIALSTATUS");
 		if ((status) && (p->owner)) {
-			p->owner->hangupcause = p->chan->hangupcause;
+			ast_channel_hangupcause_set(p->owner, ast_channel_hangupcause(p->chan));
 			pbx_builtin_setvar_helper(p->owner, "CHANLOCALSTATUS", status);
 		}
 
@@ -991,7 +1000,7 @@ static int local_hangup(struct ast_channel *ast)
 		p->owner = NULL;
 	}
 
-	ast->tech_pvt = NULL; /* this is one of our locked channels, doesn't matter which */
+	ast_channel_tech_pvt_set(ast, NULL); /* this is one of our locked channels, doesn't matter which */
 
 	if (!p->owner && !p->chan) {
 		ao2_unlock(p);
@@ -1110,16 +1119,16 @@ static struct ast_channel *local_new(struct local_pvt *p, int state, const char 
 
 	/* Allocate two new Asterisk channels */
 	/* safe accountcode */
-	if (p->owner && p->owner->accountcode)
-		t = p->owner->accountcode;
+	if (p->owner && ast_channel_accountcode(p->owner))
+		t = ast_channel_accountcode(p->owner);
 	else
 		t = "";
 
 	if (p->owner)
-		ama = p->owner->amaflags;
+		ama = ast_channel_amaflags(p->owner);
 	else
 		ama = 0;
-	if (!(tmp = ast_channel_alloc(1, state, 0, 0, t, p->exten, p->context, linkedid, ama, "Local/%s@%s-%04x;1", p->exten, p->context, randnum)) 
+	if (!(tmp = ast_channel_alloc(1, state, 0, 0, t, p->exten, p->context, linkedid, ama, "Local/%s@%s-%04x;1", p->exten, p->context, randnum))
 		|| !(tmp2 = ast_channel_alloc(1, AST_STATE_RING, 0, 0, t, p->exten, p->context, linkedid, ama, "Local/%s@%s-%04x;2", p->exten, p->context, randnum))) {
 		if (tmp) {
 			tmp = ast_channel_release(tmp);
@@ -1128,35 +1137,36 @@ static struct ast_channel *local_new(struct local_pvt *p, int state, const char 
 		return NULL;
 	}
 
-	tmp2->tech = tmp->tech = &local_tech;
+	ast_channel_tech_set(tmp, &local_tech);
+	ast_channel_tech_set(tmp2, &local_tech);
 
-	ast_format_cap_copy(tmp->nativeformats, p->reqcap);
-	ast_format_cap_copy(tmp2->nativeformats, p->reqcap);
+	ast_format_cap_copy(ast_channel_nativeformats(tmp), p->reqcap);
+	ast_format_cap_copy(ast_channel_nativeformats(tmp2), p->reqcap);
 
 	/* Determine our read/write format and set it on each channel */
 	ast_best_codec(p->reqcap, &fmt);
-	ast_format_copy(&tmp->writeformat, &fmt);
-	ast_format_copy(&tmp2->writeformat, &fmt);
-	ast_format_copy(&tmp->rawwriteformat, &fmt);
-	ast_format_copy(&tmp2->rawwriteformat, &fmt);
-	ast_format_copy(&tmp->readformat, &fmt);
-	ast_format_copy(&tmp2->readformat, &fmt);
-	ast_format_copy(&tmp->rawreadformat, &fmt);
-	ast_format_copy(&tmp2->rawreadformat, &fmt);
+	ast_format_copy(ast_channel_writeformat(tmp), &fmt);
+	ast_format_copy(ast_channel_writeformat(tmp2), &fmt);
+	ast_format_copy(ast_channel_rawwriteformat(tmp), &fmt);
+	ast_format_copy(ast_channel_rawwriteformat(tmp2), &fmt);
+	ast_format_copy(ast_channel_readformat(tmp), &fmt);
+	ast_format_copy(ast_channel_readformat(tmp2), &fmt);
+	ast_format_copy(ast_channel_rawreadformat(tmp), &fmt);
+	ast_format_copy(ast_channel_rawreadformat(tmp2), &fmt);
 
-	tmp->tech_pvt = p;
-	tmp2->tech_pvt = p;
+	ast_channel_tech_pvt_set(tmp, p);
+	ast_channel_tech_pvt_set(tmp2, p);
 
 	p->owner = tmp;
 	p->chan = tmp2;
 	p->u_owner = ast_module_user_add(p->owner);
 	p->u_chan = ast_module_user_add(p->chan);
 
-	ast_copy_string(tmp->context, p->context, sizeof(tmp->context));
-	ast_copy_string(tmp2->context, p->context, sizeof(tmp2->context));
-	ast_copy_string(tmp2->exten, p->exten, sizeof(tmp->exten));
-	tmp->priority = 1;
-	tmp2->priority = 1;
+	ast_channel_context_set(tmp, p->context);
+	ast_channel_context_set(tmp2, p->context);
+	ast_channel_exten_set(tmp2, p->exten);
+	ast_channel_priority_set(tmp, 1);
+	ast_channel_priority_set(tmp2, 1);
 
 	ast_jb_configure(tmp, &p->jb_conf);
 
@@ -1164,14 +1174,14 @@ static struct ast_channel *local_new(struct local_pvt *p, int state, const char 
 }
 
 /*! \brief Part of PBX interface */
-static struct ast_channel *local_request(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, void *data, int *cause)
+static struct ast_channel *local_request(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, const char *data, int *cause)
 {
 	struct local_pvt *p = NULL;
 	struct ast_channel *chan = NULL;
 
 	/* Allocate a new private structure and then Asterisk channel */
 	if ((p = local_alloc(data, cap))) {
-		if (!(chan = local_new(p, AST_STATE_DOWN, requestor ? requestor->linkedid : NULL))) {
+		if (!(chan = local_new(p, AST_STATE_DOWN, requestor ? ast_channel_linkedid(requestor) : NULL))) {
 			ao2_unlink(locals, p);
 		}
 		if (chan && ast_channel_cc_params_init(chan, requestor ? ast_channel_get_cc_config_params((struct ast_channel *)requestor) : NULL)) {
@@ -1201,8 +1211,9 @@ static char *locals_show(struct ast_cli_entry *e, int cmd, struct ast_cli_args *
 		return NULL;
 	}
 
-	if (a->argc != 3)
+	if (a->argc != 3) {
 		return CLI_SHOWUSAGE;
+	}
 
 	if (ao2_container_count(locals) == 0) {
 		ast_cli(a->fd, "No local channels in use\n");
@@ -1212,7 +1223,7 @@ static char *locals_show(struct ast_cli_entry *e, int cmd, struct ast_cli_args *
 	it = ao2_iterator_init(locals, 0);
 	while ((p = ao2_iterator_next(&it))) {
 		ao2_lock(p);
-		ast_cli(a->fd, "%s -- %s@%s\n", p->owner ? p->owner->name : "<unowned>", p->exten, p->context);
+		ast_cli(a->fd, "%s -- %s@%s\n", p->owner ? ast_channel_name(p->owner) : "<unowned>", p->exten, p->context);
 		ao2_unlock(p);
 		ao2_ref(p, -1);
 	}
@@ -1246,7 +1257,7 @@ static int manager_optimize_away(struct mansession *s, const struct message *m)
 		return 0;
 	}
 
-	p = c->tech_pvt;
+	p = ast_channel_tech_pvt(c);
 	ast_channel_unref(c);
 	c = NULL;
 

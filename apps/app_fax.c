@@ -16,6 +16,7 @@
 	<defaultenabled>no</defaultenabled>
 	<depend>spandsp</depend>
 	<conflict>res_fax</conflict>
+	<support_level>extended</support_level>
 ***/
 
 #include "asterisk.h"
@@ -45,7 +46,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/manager.h"
 
 /*** DOCUMENTATION
-	<application name="SendFAX" language="en_US">
+	<application name="SendFAX" language="en_US" module="app_fax">
 		<synopsis>
 			Send a Fax
 		</synopsis>
@@ -90,7 +91,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			</variablelist>
 		</description>
 	</application>
-	<application name="ReceiveFAX" language="en_US">
+	<application name="ReceiveFAX" language="en_US" module="app_fax">
 		<synopsis>
 			Receive a Fax
 		</synopsis>
@@ -264,12 +265,12 @@ static void phase_e_handler(t30_state_t *f, void *user_data, int result)
 		"Resolution: %d\r\n"
 		"TransferRate: %d\r\n"
 		"FileName: %s\r\n",
-		s->chan->name,
-		s->chan->exten,
-		S_COR(s->chan->caller.id.number.valid, s->chan->caller.id.number.str, ""),
-		S_COR(s->chan->caller.id.name.valid, s->chan->caller.id.name.str, ""),
-		S_COR(s->chan->connected.id.number.valid, s->chan->connected.id.number.str, ""),
-		S_COR(s->chan->connected.id.name.valid, s->chan->connected.id.name.str, ""),
+		ast_channel_name(s->chan),
+		ast_channel_exten(s->chan),
+		S_COR(ast_channel_caller(s->chan)->id.number.valid, ast_channel_caller(s->chan)->id.number.str, ""),
+		S_COR(ast_channel_caller(s->chan)->id.name.valid, ast_channel_caller(s->chan)->id.name.str, ""),
+		S_COR(ast_channel_connected(s->chan)->id.number.valid, ast_channel_connected(s->chan)->id.number.str, ""),
+		S_COR(ast_channel_connected(s->chan)->id.name.valid, ast_channel_connected(s->chan)->id.name.str, ""),
 		far_ident,
 		local_ident,
 		pages_transferred,
@@ -349,7 +350,7 @@ static int fax_generator_generate(struct ast_channel *chan, void *data, int len,
 		AST_FRAME_SET_BUFFER(&outf, buffer, AST_FRIENDLY_OFFSET, len * sizeof(int16_t));
 
 		if (ast_write(chan, &outf) < 0) {
-			ast_log(LOG_WARNING, "Failed to write frame to '%s': %s\n", chan->name, strerror(errno));
+			ast_log(LOG_WARNING, "Failed to write frame to '%s': %s\n", ast_channel_name(chan), strerror(errno));
 			return -1;
 		}
 	}
@@ -407,11 +408,11 @@ static int transmit_audio(fax_session *s)
 			unsigned int timeout = 5000;
 			int ms;
 
-			ast_debug(1, "Negotiating T.38 for receive on %s\n", s->chan->name);
+			ast_debug(1, "Negotiating T.38 for receive on %s\n", ast_channel_name(s->chan));
 			while (timeout > 0) {
 				ms = ast_waitfor(s->chan, 1000);
 				if (ms < 0) {
-					ast_log(LOG_WARNING, "something bad happened while channel '%s' was polling.\n", s->chan->name);
+					ast_log(LOG_WARNING, "something bad happened while channel '%s' was polling.\n", ast_channel_name(s->chan));
 					return -1;
 				}
 				if (!ms) {
@@ -420,7 +421,7 @@ static int transmit_audio(fax_session *s)
 						timeout -= 1000;
 						continue;
 					} else {
-						ast_log(LOG_WARNING, "channel '%s' timed-out during the T.38 negotiation.\n", s->chan->name);
+						ast_log(LOG_WARNING, "channel '%s' timed-out during the T.38 negotiation.\n", ast_channel_name(s->chan));
 						break;
 					}
 				}
@@ -434,14 +435,14 @@ static int transmit_audio(fax_session *s)
 
 					switch (parameters->request_response) {
 					case AST_T38_NEGOTIATED:
-						ast_debug(1, "Negotiated T.38 for receive on %s\n", s->chan->name);
+						ast_debug(1, "Negotiated T.38 for receive on %s\n", ast_channel_name(s->chan));
 						res = 1;
 						break;
 					case AST_T38_REFUSED:
-						ast_log(LOG_WARNING, "channel '%s' refused to negotiate T.38\n", s->chan->name);
+						ast_log(LOG_WARNING, "channel '%s' refused to negotiate T.38\n", ast_channel_name(s->chan));
 						break;
 					default:
-						ast_log(LOG_ERROR, "channel '%s' failed to negotiate T.38\n", s->chan->name);
+						ast_log(LOG_ERROR, "channel '%s' failed to negotiate T.38\n", ast_channel_name(s->chan));
 						break;
 					}
 					ast_frfree(inf);
@@ -464,7 +465,7 @@ static int transmit_audio(fax_session *s)
         t30state = &fax.t30_state;
 #endif
 
-	ast_format_copy(&original_read_fmt, &s->chan->readformat);
+	ast_format_copy(&original_read_fmt, ast_channel_readformat(s->chan));
 	if (original_read_fmt.id != AST_FORMAT_SLINEAR) {
 		res = ast_set_read_format_by_id(s->chan, AST_FORMAT_SLINEAR);
 		if (res < 0) {
@@ -473,7 +474,7 @@ static int transmit_audio(fax_session *s)
 		}
 	}
 
-	ast_format_copy(&original_write_fmt, &s->chan->writeformat);
+	ast_format_copy(&original_write_fmt, ast_channel_writeformat(s->chan));
 	if (original_write_fmt.id != AST_FORMAT_SLINEAR) {
 		res = ast_set_write_format_by_id(s->chan, AST_FORMAT_SLINEAR);
 		if (res < 0) {
@@ -593,12 +594,12 @@ static int transmit_audio(fax_session *s)
 done:
 	if (original_write_fmt.id != AST_FORMAT_SLINEAR) {
 		if (ast_set_write_format(s->chan, &original_write_fmt) < 0)
-			ast_log(LOG_WARNING, "Unable to restore write format on '%s'\n", s->chan->name);
+			ast_log(LOG_WARNING, "Unable to restore write format on '%s'\n", ast_channel_name(s->chan));
 	}
 
 	if (original_read_fmt.id != AST_FORMAT_SLINEAR) {
 		if (ast_set_read_format(s->chan, &original_read_fmt) < 0)
-			ast_log(LOG_WARNING, "Unable to restore read format on '%s'\n", s->chan->name);
+			ast_log(LOG_WARNING, "Unable to restore read format on '%s'\n", ast_channel_name(s->chan));
 	}
 
 	return res;
@@ -734,11 +735,11 @@ disable_t38:
 			unsigned int timeout = 5000;
 			int ms;
 
-			ast_debug(1, "Shutting down T.38 on %s\n", s->chan->name);
+			ast_debug(1, "Shutting down T.38 on %s\n", ast_channel_name(s->chan));
 			while (timeout > 0) {
 				ms = ast_waitfor(s->chan, 1000);
 				if (ms < 0) {
-					ast_log(LOG_WARNING, "something bad happened while channel '%s' was polling.\n", s->chan->name);
+					ast_log(LOG_WARNING, "something bad happened while channel '%s' was polling.\n", ast_channel_name(s->chan));
 					return -1;
 				}
 				if (!ms) {
@@ -747,7 +748,7 @@ disable_t38:
 						timeout -= 1000;
 						continue;
 					} else {
-						ast_log(LOG_WARNING, "channel '%s' timed-out during the T.38 shutdown.\n", s->chan->name);
+						ast_log(LOG_WARNING, "channel '%s' timed-out during the T.38 shutdown.\n", ast_channel_name(s->chan));
 						break;
 					}
 				}
@@ -761,13 +762,13 @@ disable_t38:
 
 					switch (parameters->request_response) {
 					case AST_T38_TERMINATED:
-						ast_debug(1, "Shut down T.38 on %s\n", s->chan->name);
+						ast_debug(1, "Shut down T.38 on %s\n", ast_channel_name(s->chan));
 						break;
 					case AST_T38_REFUSED:
-						ast_log(LOG_WARNING, "channel '%s' refused to disable T.38\n", s->chan->name);
+						ast_log(LOG_WARNING, "channel '%s' refused to disable T.38\n", ast_channel_name(s->chan));
 						break;
 					default:
-						ast_log(LOG_ERROR, "channel '%s' failed to disable T.38\n", s->chan->name);
+						ast_log(LOG_ERROR, "channel '%s' failed to disable T.38\n", ast_channel_name(s->chan));
 						break;
 					}
 					ast_frfree(inf);
@@ -796,12 +797,12 @@ static int transmit(fax_session *s)
 	pbx_builtin_setvar_helper(s->chan, "FAXRESOLUTION", NULL);
 	pbx_builtin_setvar_helper(s->chan, "FAXBITRATE", NULL); 
 
-	if (s->chan->_state != AST_STATE_UP) {
+	if (ast_channel_state(s->chan) != AST_STATE_UP) {
 		/* Shouldn't need this, but checking to see if channel is already answered
 		 * Theoretically asterisk should already have answered before running the app */
 		res = ast_answer(s->chan);
 		if (res) {
-			ast_log(LOG_WARNING, "Could not answer channel '%s'\n", s->chan->name);
+			ast_log(LOG_WARNING, "Could not answer channel '%s'\n", ast_channel_name(s->chan));
 			return res;
 		}
 	}

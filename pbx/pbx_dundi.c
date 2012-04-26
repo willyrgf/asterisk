@@ -23,7 +23,8 @@
 
 /*** MODULEINFO
 	<depend>zlib</depend>
-	<use>crypto</use>
+	<use type="external">crypto</use>
+	<support_level>extended</support_level>
  ***/
 
 #include "asterisk.h"
@@ -57,7 +58,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/sched.h"
 #include "asterisk/io.h"
 #include "asterisk/utils.h"
-#include "asterisk/netsock.h"
+#include "asterisk/netsock2.h"
 #include "asterisk/crypto.h"
 #include "asterisk/astdb.h"
 #include "asterisk/acl.h"
@@ -544,13 +545,18 @@ struct dundi_query_state {
 	char fluffy[0];
 };
 
-static int get_mapping_weight(struct dundi_mapping *map)
+static int get_mapping_weight(struct dundi_mapping *map, struct varshead *headp)
 {
 	char buf[32];
 
 	buf[0] = 0;
 	if (map->weightstr) {
-		pbx_substitute_variables_helper(NULL, map->weightstr, buf, sizeof(buf) - 1);
+		if (headp) {
+			pbx_substitute_variables_varshead(headp, map->weightstr, buf, sizeof(buf) - 1);
+		} else {                
+			pbx_substitute_variables_helper(NULL, map->weightstr, buf, sizeof(buf) - 1);
+		}
+
 		if (sscanf(buf, "%30d", &map->_weight) != 1)
 			map->_weight = MAX_WEIGHT;
 	}
@@ -586,7 +592,6 @@ static int dundi_lookup_local(struct dundi_result *dr, struct dundi_mapping *map
 			ast_set_flag(&flags, map->options & 0xffff);
 			ast_copy_flags(dr + anscnt, &flags, AST_FLAGS_ALL);
 			dr[anscnt].techint = map->tech;
-			dr[anscnt].weight = get_mapping_weight(map);
 			dr[anscnt].expiration = dundi_cache_time;
 			ast_copy_string(dr[anscnt].tech, tech2str(map->tech), sizeof(dr[anscnt].tech));
 			dr[anscnt].eid = *us_eid;
@@ -602,10 +607,13 @@ static int dundi_lookup_local(struct dundi_result *dr, struct dundi_mapping *map
 				newvariable = ast_var_assign("IPADDR", ipaddr);
 				AST_LIST_INSERT_HEAD(&headp, newvariable, entries);
 				pbx_substitute_variables_varshead(&headp, map->dest, dr[anscnt].dest, sizeof(dr[anscnt].dest));
+				dr[anscnt].weight = get_mapping_weight(map, &headp);
 				while ((newvariable = AST_LIST_REMOVE_HEAD(&headp, entries)))
 					ast_var_delete(newvariable);
-			} else
+			} else {
 				dr[anscnt].dest[0] = '\0';
+				dr[anscnt].weight = get_mapping_weight(map, NULL);
+			}
 			anscnt++;
 		} else {
 			/* No answers...  Find the fewest number of digits from the
@@ -1216,7 +1224,7 @@ static int cache_lookup_internal(time_t now, struct dundi_request *req, char *ke
 	return 0;
 }
 
-static int cache_lookup(struct dundi_request *req, dundi_eid *peer_eid, uint32_t crc32, int *lowexpiration)
+static int cache_lookup(struct dundi_request *req, dundi_eid *peer_eid, uint32_t crc, int *lowexpiration)
 {
 	char key[256];
 	char eid_str[20];
@@ -1232,7 +1240,7 @@ static int cache_lookup(struct dundi_request *req, dundi_eid *peer_eid, uint32_t
 	dundi_eid_to_str_short(eid_str, sizeof(eid_str), peer_eid);
 	dundi_eid_to_str_short(eidroot_str, sizeof(eidroot_str), &req->root_eid);
 	ast_eid_to_str(eid_str_full, sizeof(eid_str_full), peer_eid);
-	snprintf(key, sizeof(key), "%s/%s/%s/e%08x", eid_str, req->number, req->dcontext, crc32);
+	snprintf(key, sizeof(key), "%s/%s/%s/e%08x", eid_str, req->number, req->dcontext, crc);
 	res |= cache_lookup_internal(now, req, key, eid_str_full, lowexpiration);
 	snprintf(key, sizeof(key), "%s/%s/%s/e%08x", eid_str, req->number, req->dcontext, 0);
 	res |= cache_lookup_internal(now, req, key, eid_str_full, lowexpiration);
@@ -1247,7 +1255,7 @@ static int cache_lookup(struct dundi_request *req, dundi_eid *peer_eid, uint32_t
 				break;
 			x++;
 			/* Check for hints */
-			snprintf(key, sizeof(key), "hint/%s/%s/%s/e%08x", eid_str, tmp, req->dcontext, crc32);
+			snprintf(key, sizeof(key), "hint/%s/%s/%s/e%08x", eid_str, tmp, req->dcontext, crc);
 			res2 |= cache_lookup_internal(now, req, key, eid_str_full, lowexpiration);
 			snprintf(key, sizeof(key), "hint/%s/%s/%s/e%08x", eid_str, tmp, req->dcontext, 0);
 			res2 |= cache_lookup_internal(now, req, key, eid_str_full, lowexpiration);
@@ -2835,7 +2843,7 @@ static char *dundi_show_mappings(struct ast_cli_entry *e, int cmd, struct ast_cl
 	AST_LIST_LOCK(&peers);
 	ast_cli(a->fd, FORMAT2, "DUNDi Cntxt", "Weight", "Local Cntxt", "Options", "Tech", "Destination");
 	AST_LIST_TRAVERSE(&mappings, map, list) {
-		snprintf(weight, sizeof(weight), "%d", get_mapping_weight(map));
+		snprintf(weight, sizeof(weight), "%d", get_mapping_weight(map, NULL));
 		ast_cli(a->fd, FORMAT, map->dcontext, weight,
 			ast_strlen_zero(map->lcontext) ? "<none>" : map->lcontext,
 			dundi_flags2str(fs, sizeof(fs), map->options), tech2str(map->tech), map->dest);
@@ -3665,7 +3673,7 @@ static int dundi_lookup_internal(struct dundi_result *result, int maxret, struct
 		ast_waitfor_n_fd(dr.pfds, 1, &ms, NULL);
 	}
 	if (chan && ast_check_hangup(chan))
-		ast_debug(1, "Hrm, '%s' hungup before their query for %s@%s finished\n", chan->name, dr.number, dr.dcontext);
+		ast_debug(1, "Hrm, '%s' hungup before their query for %s@%s finished\n", ast_channel_name(chan), dr.number, dr.dcontext);
 	cancel_request(&dr);
 	unregister_request(&dr);
 	res = dr.respcount;
@@ -4533,9 +4541,9 @@ static int dundi_helper(struct ast_channel *chan, const char *context, const cha
 		if (!strcasecmp(exten, "s")) {
 			exten = pbx_builtin_getvar_helper(chan, "ARG1");
 			if (ast_strlen_zero(exten))
-				exten = chan->macroexten;
+				exten = ast_channel_macroexten(chan);
 			if (ast_strlen_zero(exten))
-				exten = chan->exten;
+				exten = ast_channel_exten(chan);
 			if (ast_strlen_zero(exten)) {
 				ast_log(LOG_WARNING, "Called in Macro mode with no ARG1 or MACRO_EXTEN?\n");
 				return -1;
@@ -4585,9 +4593,9 @@ static int dundi_exec(struct ast_channel *chan, const char *context, const char 
 		if (!strcasecmp(exten, "s")) {
 			exten = pbx_builtin_getvar_helper(chan, "ARG1");
 			if (ast_strlen_zero(exten))
-				exten = chan->macroexten;
+				exten = ast_channel_macroexten(chan);
 			if (ast_strlen_zero(exten))
-				exten = chan->exten;
+				exten = ast_channel_exten(chan);
 			if (ast_strlen_zero(exten)) {
 				ast_log(LOG_WARNING, "Called in Macro mode with no ARG1 or MACRO_EXTEN?\n");
 				return -1;
@@ -4857,7 +4865,7 @@ static int load_module(void)
 		return AST_MODULE_LOAD_DECLINE;
 	}
 
-	ast_netsock_set_qos(netsocket, tos, 0, "DUNDi");
+	ast_set_qos(netsocket, tos, 0, "DUNDi");
 
 	if (start_network_thread()) {
 		ast_log(LOG_ERROR, "Unable to start network thread\n");

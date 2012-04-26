@@ -25,6 +25,7 @@
 
 /*** MODULEINFO
 	<depend>TEST_FRAMEWORK</depend>
+	<support_level>core</support_level>
  ***/
 
 #include "asterisk.h"
@@ -37,7 +38,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/astobj2.h"
 
 struct test_obj {
-	char c[20];
 	int i;
 	int *destructor_count;
 };
@@ -74,29 +74,46 @@ static int multiple_cb(void *obj, void *arg, int flag)
 static int test_cmp_cb(void *obj, void *arg, int flags)
 {
 	struct test_obj *cmp_obj = (struct test_obj *) obj;
-	struct test_obj *test_obj = (struct test_obj *) arg;
+
 	if (!arg) {
 		return 0;
 	}
-	return (cmp_obj->i == test_obj->i) ? CMP_MATCH | CMP_STOP : 0;
+
+	if (flags & OBJ_KEY) {
+		int *i = (int *) arg;
+		return (cmp_obj->i == *i) ? CMP_MATCH | CMP_STOP : 0;
+	} else {
+		struct test_obj *test_obj = (struct test_obj *) arg;
+		return (cmp_obj->i == test_obj->i) ? CMP_MATCH | CMP_STOP : 0;
+	}
 }
 
 static int test_hash_cb(const void *obj, const int flags)
 {
-	struct test_obj *test_obj = (struct test_obj *) obj;
-	if (!test_obj || ast_strlen_zero(test_obj->c)) {
+	if (!obj) {
 		return 0;
 	}
-	return ast_str_hash(test_obj->c);
+
+	if (flags & OBJ_KEY) {
+		const int *i = obj;
+
+		return *i;
+	} else {
+		const struct test_obj *test_obj = obj;
+
+		return test_obj->i;
+	}
 }
 
 static int astobj2_test_helper(int use_hash, int use_cmp, unsigned int lim, struct ast_test *test)
 {
 	struct ao2_container *c1;
 	struct ao2_container *c2;
+	struct ao2_container *c3 = NULL;
 	struct ao2_iterator it;
 	struct ao2_iterator *mult_it;
 	struct test_obj *obj;
+	struct test_obj *obj2;
 	struct test_obj tmp_obj;
 	int bucket_size;
 	int increment = 0;
@@ -127,7 +144,6 @@ static int astobj2_test_helper(int use_hash, int use_cmp, unsigned int lim, stru
 			res = AST_TEST_FAIL;
 			goto cleanup;
 		}
-		snprintf(obj->c, sizeof(obj->c), "zombie #%d", num);
 		obj->destructor_count = &destructor_count;
 		obj->i = num;
 		ao2_link(c1, obj);
@@ -139,6 +155,44 @@ static int astobj2_test_helper(int use_hash, int use_cmp, unsigned int lim, stru
 	}
 
 	ast_test_status_update(test, "Container created: random bucket size %d: number of items: %d\n", bucket_size, lim);
+
+	/* Testing ao2_container_clone */
+	c3 = ao2_container_clone(c1, 0);
+	if (!c3) {
+		ast_test_status_update(test, "ao2_container_clone failed.\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+	if (ao2_container_count(c1) != ao2_container_count(c3)) {
+		ast_test_status_update(test, "Cloned container does not have the same number of objects.\n");
+		res = AST_TEST_FAIL;
+	} else {
+		it = ao2_iterator_init(c1, 0);
+		for (; (obj = ao2_t_iterator_next(&it, "test orig")); ao2_t_ref(obj, -1, "test orig")) {
+			/*
+			 * Unlink the matching object from the cloned container to make
+			 * the next search faster.  This is a big speed optimization!
+			 * It reduces the container with 100000 objects test time from
+			 * 18 seconds to 200 ms.
+			 */
+			obj2 = ao2_t_callback(c3, OBJ_POINTER | OBJ_UNLINK, ao2_match_by_addr, obj,
+				"test clone");
+			if (obj2) {
+				ao2_t_ref(obj2, -1, "test clone");
+				continue;
+			}
+			ast_test_status_update(test,
+				"Orig container has an object %p not in the clone container.\n", obj);
+			res = AST_TEST_FAIL;
+		}
+		ao2_iterator_destroy(&it);
+		if (ao2_container_count(c3)) {
+			ast_test_status_update(test, "Cloned container still has objects.\n");
+			res = AST_TEST_FAIL;
+		}
+	}
+	ao2_t_ref(c3, -1, "bye c3");
+	c3 = NULL;
 
 	/* Testing ao2_find with no flags */
 	num = 100;
@@ -162,11 +216,27 @@ static int astobj2_test_helper(int use_hash, int use_cmp, unsigned int lim, stru
 	num = 75;
 	for (; num; num--) {
 		int i = (ast_random() % ((lim / 2)) + 1); /* find a random object */
-		snprintf(tmp_obj.c, sizeof(tmp_obj.c), "zombie #%d", i);
 		tmp_obj.i = i;
 		if (!(obj = ao2_find(c1, &tmp_obj, OBJ_POINTER))) {
 			res = AST_TEST_FAIL;
 			ast_test_status_update(test, "COULD NOT FIND:%d, ao2_find() with OBJ_POINTER flag failed.\n", i);
+		} else {
+			/* a correct match will only take place when the custom cmp function is used */
+			if (use_cmp && obj->i != i) {
+				ast_test_status_update(test, "object %d does not match object %d\n", obj->i, tmp_obj.i);
+				res = AST_TEST_FAIL;
+			}
+			ao2_t_ref(obj, -1, "test");
+		}
+	}
+
+	/* Testing ao2_find with OBJ_KEY */
+	num = 75;
+	for (; num; num--) {
+		int i = (ast_random() % ((lim / 2)) + 1); /* find a random object */
+		if (!(obj = ao2_find(c1, &i, OBJ_KEY))) {
+			res = AST_TEST_FAIL;
+			ast_test_status_update(test, "COULD NOT FIND:%d, ao2_find() with OBJ_KEY flag failed.\n", i);
 		} else {
 			/* a correct match will only take place when the custom cmp function is used */
 			if (use_cmp && obj->i != i) {
@@ -265,7 +335,7 @@ static int astobj2_test_helper(int use_hash, int use_cmp, unsigned int lim, stru
 		ao2_iterator_destroy(mult_it);
 	}
 
-	/* Is the container count what we expect after all the finds and unlinks?*/
+	/* Is the container count what we expect after all the finds and unlinks? */
 	if (ao2_container_count(c1) != lim) {
 		ast_test_status_update(test, "container count does not match what is expected after ao2_find tests.\n");
 		res = AST_TEST_FAIL;
@@ -305,6 +375,9 @@ cleanup:
 	}
 	if (c2) {
 		ao2_t_ref(c2, -1, "bye c2");
+	}
+	if (c3) {
+		ao2_t_ref(c3, -1, "bye c3");
 	}
 
 	if (destructor_count > 0) {
@@ -373,7 +446,7 @@ AST_TEST_DEFINE(astobj2_test_2)
 	int num;
 	static const int NUM_OBJS = 5;
 	int destructor_count = NUM_OBJS;
-	struct test_obj tmp_obj = { "", };
+	struct test_obj tmp_obj = { 0, };
 
 	switch (cmd) {
 	case TEST_INIT:
@@ -494,10 +567,144 @@ cleanup:
 	return res;
 }
 
+static AO2_GLOBAL_OBJ_STATIC(astobj2_array, 2);
+
+AST_TEST_DEFINE(astobj2_test_3)
+{
+	int res = AST_TEST_PASS;
+	int destructor_count = 0;
+	int num_objects = 0;
+	struct test_obj *obj = NULL;
+	struct test_obj *obj2 = NULL;
+	struct test_obj *obj3 = NULL;
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "astobj2_test3";
+		info->category = "/main/astobj2/";
+		info->summary = "Test global ao2 array container";
+		info->description =
+			"This test is to see if the global ao2 array container works as intended.";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	/* Put an object in index 0 */
+	obj = ao2_alloc(sizeof(struct test_obj), test_obj_destructor);
+	if (!obj) {
+		ast_test_status_update(test, "ao2_alloc failed.\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+	obj->destructor_count = &destructor_count;
+	obj->i = ++num_objects;
+	obj2 = ao2_t_global_obj_replace(astobj2_array, 0, obj, "Save object in index 0");
+	if (obj2) {
+		ast_test_status_update(test, "Returned object not expected.\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+	/* Save object for next check. */
+	obj3 = obj;
+
+	/* Replace an object in index 0 */
+	obj = ao2_alloc(sizeof(struct test_obj), test_obj_destructor);
+	if (!obj) {
+		ast_test_status_update(test, "ao2_alloc failed.\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+	obj->destructor_count = &destructor_count;
+	obj->i = ++num_objects;
+	obj2 = ao2_t_global_obj_replace(astobj2_array, 0, obj, "Replace object in index 0");
+	if (!obj2) {
+		ast_test_status_update(test, "Expected an object.\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+	if (obj2 != obj3) {
+		ast_test_status_update(test, "Replaced object not expected object.\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+	ao2_ref(obj3, -1);
+	obj3 = NULL;
+	ao2_ref(obj2, -1);
+	obj2 = NULL;
+	ao2_ref(obj, -1);
+
+	/* Put an object in index 1 */
+	obj = ao2_alloc(sizeof(struct test_obj), test_obj_destructor);
+	if (!obj) {
+		ast_test_status_update(test, "ao2_alloc failed.\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+	obj->destructor_count = &destructor_count;
+	obj->i = ++num_objects;
+	obj2 = ao2_t_global_obj_replace(astobj2_array, 1, obj, "Save object in index 1");
+	if (obj2) {
+		ao2_ref(obj2, -1);
+		ast_test_status_update(test, "Returned object not expected.\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+	/* Save object for next check. */
+	obj3 = obj;
+
+	/* Get a reference to the object in index 1. */
+	obj = ao2_t_global_obj_ref(astobj2_array, 1, "Get reference of index 1 object");
+	if (!obj) {
+		ast_test_status_update(test, "Expected an object.\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+	if (obj != obj3) {
+		ast_test_status_update(test, "Returned object not expected.\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+	ao2_ref(obj3, -1);
+	obj3 = NULL;
+	ao2_ref(obj, -1);
+	obj = NULL;
+
+	/* Release all objects in the global array. */
+	ao2_t_global_obj_release(astobj2_array, "Check release all objects");
+	destructor_count += num_objects;
+	if (0 < destructor_count) {
+		ast_test_status_update(test,
+			"all destructors were not called, destructor count is %d\n",
+			destructor_count);
+		res = AST_TEST_FAIL;
+	} else if (destructor_count < 0) {
+		ast_test_status_update(test,
+			"Destructor was called too many times, destructor count is %d\n",
+			destructor_count);
+		res = AST_TEST_FAIL;
+	}
+
+cleanup:
+	if (obj) {
+		ao2_t_ref(obj, -1, "Test cleanup external object 1");
+	}
+	if (obj2) {
+		ao2_t_ref(obj2, -1, "Test cleanup external object 2");
+	}
+	if (obj3) {
+		ao2_t_ref(obj3, -1, "Test cleanup external object 3");
+	}
+	ao2_t_global_obj_release(astobj2_array, "Test cleanup array");
+
+	return res;
+}
+
 static int unload_module(void)
 {
 	AST_TEST_UNREGISTER(astobj2_test_1);
 	AST_TEST_UNREGISTER(astobj2_test_2);
+	AST_TEST_UNREGISTER(astobj2_test_3);
 	return 0;
 }
 
@@ -505,6 +712,7 @@ static int load_module(void)
 {
 	AST_TEST_REGISTER(astobj2_test_1);
 	AST_TEST_REGISTER(astobj2_test_2);
+	AST_TEST_REGISTER(astobj2_test_3);
 	return AST_MODULE_LOAD_SUCCESS;
 }
 

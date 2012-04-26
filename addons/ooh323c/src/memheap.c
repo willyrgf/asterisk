@@ -726,7 +726,7 @@ void* memHeapRealloc (void** ppvMemHeap, void* mem_p, int nbytes_)
    OSMemLink** ppMemLink;
    OSMemBlk* pMemBlk;
    OSMemElemDescr* pElem;
-   OSMemLink* pMemLink, *pPrevMemLink = 0;
+   OSMemLink* pMemLink;
    void *newMem_p;
    unsigned nbytes, nunits;
 
@@ -758,7 +758,6 @@ void* memHeapRealloc (void** ppvMemHeap, void* mem_p, int nbytes_)
          *(int*)(((char*)pMemLink) + sizeof (OSMemLink)) = nbytes_;
          return pMemLink->pMemBlk;
       }
-      pPrevMemLink = pMemLink;
    }
 
    /* Round number of bytes to nearest 8-byte boundary */
@@ -1062,6 +1061,7 @@ void memHeapAddRef (void** ppvMemHeap)
 void memHeapRelease (void** ppvMemHeap)
 {
    OSMemHeap** ppMemHeap = (OSMemHeap**)ppvMemHeap;
+   OSMemHeap* pMemHeap = *ppMemHeap;
 
    if (ppMemHeap != 0 && *ppMemHeap != 0 && --(*ppMemHeap)->refCnt == 0) {
       OSMemLink* pMemLink, *pMemLink2;
@@ -1078,9 +1078,10 @@ void memHeapRelease (void** ppvMemHeap)
          free (pMemLink2);
       }
 
-      if ((*ppMemHeap)->flags & RT_MH_FREEHEAPDESC)
+      if ((*ppMemHeap)->flags & RT_MH_FREEHEAPDESC) {
+         ast_mutex_destroy(&pMemHeap->pLock);
          free (*ppMemHeap);
-
+      }
       *ppMemHeap = 0;
    }
 }
