@@ -6667,7 +6667,7 @@ static int sip_senddigit_continue(struct ast_channel *ast, char digit, unsigned 
 	switch (ast_test_flag(&p->flags[0], SIP_DTMF)) {
 	case SIP_DTMF_RFC2833:
 		if (p->rtp) {
-			ast_rtp_senddigit_continue(p->rtp, digit, duration);
+			ast_rtp_instance_dtmf_continue(p->rtp, digit, duration);
 		}
 		break;
 	}

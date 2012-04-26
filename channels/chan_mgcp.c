@@ -1328,7 +1328,7 @@ static int mgcp_senddigit_continue(struct ast_channel *ast, char digit, unsigned
 
 	if (p->dtmfmode & MGCP_DTMF_RFC2833) {
 		ast_debug(4, "DTMF continue using RFC2833\n");
-		ast_rtp_senddigit_continue(sub->rtp, digit, duration);
+		ast_rtp_instance_dtmf_continue(sub->rtp, digit, duration);
 	}
 	ast_mutex_unlock(&sub->lock);
 
