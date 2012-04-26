@@ -408,7 +408,7 @@ static int wait_file(struct ast_channel *chan, const char *ints, const char *fil
 
 /*! wait_file_full: this routine to provide wait_file capability for those with audiofd, ctrlfd  
 */
-static int wait_file_full(struct ast_channel *chan, const char *ints, const char *file, const char *lang, int audiofd, int ctrlfd) 
+static int wait_file_full(struct ast_channel *chan, const char *ints, const char *file, const char *lang, int audiofd, int ctrlfd)
 {
 	int res;
 	struct ast_datastore *datastore;
@@ -416,7 +416,7 @@ static int wait_file_full(struct ast_channel *chan, const char *ints, const char
 	/* if a datastore is present, we are in the queue app (perhaps others in time)
 	   and don't want to wait around for the sounds to finish playing */
 
-	if ((datastore = ast_channel_datastore_find(chan, ast_prompt_list(), NULL))) { 
+	if ((datastore = ast_channel_datastore_find(chan, ast_prompt_list(), NULL))) {
 		/* app_queue wants to schedule this instead of play & wait */
 		struct ast_queue_streamfile_info *aqsi = datastore->data;
 		if (aqsi) {
@@ -465,7 +465,7 @@ static int wait_file_full(struct ast_channel *chan, const char *ints, const char
 			return 0;
 		}
 		return 0;
-	} 
+	}
 	/* otherwise, exactly business as usual */
 	if ((res = ast_streamfile(chan, file, lang))) {
 		ast_log(LOG_WARNING, "Unable to play message %s\n", file);
@@ -6812,7 +6812,7 @@ int ast_say_datetime_he(struct ast_channel *chan, time_t t, const char *ints, co
 		if (!res) {
 			res = ast_say_number(chan, tm.tm_min, ints, lang, "f");
 		}
-	} 
+	}
 	if (!res) {
 		res = ast_say_number(chan, tm.tm_year + 1900, ints, lang, "f");
 	}

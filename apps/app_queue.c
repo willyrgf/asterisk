@@ -6232,7 +6232,6 @@ static int gen_generate(struct ast_channel *chan, void *data, int len, int sampl
 		ast_log(LOG_ERROR, "... no channel to generate frames for!\n");
 		return -1;
 	}
-	
 	state->sample_queue += samples;
 
 	while (state->sample_queue > 0) {
@@ -6336,14 +6335,14 @@ static int play_file(struct ast_channel *chan, const char *filename, int ringing
 						ast_moh_start(chan, aqsi->qe->moh, NULL);
 					}
 				}
-				return -1;
+				return 0;
 			}
 		} else {
 			ast_copy_string(playfilename, filename, sizeof(playfilename));
 		}
 	} else {
 		if (ast_strlen_zero(filename)) {
-			return -1;
+			return 0;
 		}
 	}
 
@@ -6353,7 +6352,7 @@ static int play_file(struct ast_channel *chan, const char *filename, int ringing
 		struct ast_queue_streamfile_name *fn = ast_calloc(1, sizeof(*fn));
 		fn->filename = ast_strdup(filename);
 		ast_debug(3, "Background prompts: queued sound file %s for playing on chan %s\n", filename, ast_channel_name(chan));
-		
+
 		/* link the struct into the current ast_queue_streamfile_info struct */
 		AST_LIST_INSERT_TAIL(&aqsi->flist, fn, list); 
 		/* in this case, nothing else to do, just insert the new file at the end of the list */
