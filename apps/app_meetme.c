@@ -142,10 +142,13 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					</option>
 					<option name="p" hasparams="optional">
 						<para>Allow user to exit the conference by pressing <literal>#</literal> (default)
-						or any of the defined keys. If keys contain <literal>*</literal> this will override
-						option <literal>s</literal>. The key used is set to channel variable
+						or any of the defined keys.  The key used is set to channel variable
 						<variable>MEETME_EXIT_KEY</variable>.</para>
 						<argument name="keys" required="true" />
+						<note>
+							<para>Option <literal>s</literal> has priority for <literal>*</literal>
+							since it cannot change its activation code.</para>
+						</note>
 					</option>
 					<option name="P">
 						<para>Always prompt for the pin even if it is specified.</para>
@@ -180,6 +183,10 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 						<para>Allow user to exit the conference by entering a valid single digit
 						extension <variable>MEETME_EXIT_CONTEXT</variable> or the current context
 						if that variable is not defined.</para>
+						<note>
+							<para>Option <literal>s</literal> has priority for <literal>*</literal>
+							since it cannot change its activation code.</para>
+						</note>
 					</option>
 					<option name="1">
 						<para>Do not play message when first person enters</para>
@@ -214,7 +221,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<para>Enters the user into a specified MeetMe conference.  If the <replaceable>confno</replaceable>
 			is omitted, the user will be prompted to enter one.  User can exit the conference by hangup, or
 			if the <literal>p</literal> option is specified, by pressing <literal>#</literal>.</para>
-			<note><para>The DAHDI kernel modules and at least one hardware driver (or dahdi_dummy)
+			<note><para>The DAHDI kernel modules and a functional DAHDI timing source (see dahdi_test)
 			must be present for conferencing to operate properly. In addition, the chan_dahdi channel driver
 			must be loaded for the <literal>i</literal> and <literal>r</literal> options to operate at
 			all.</para></note>
@@ -3535,7 +3542,10 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, struc
 					}
 
 					conf_flush(fd, chan);
-				/* Since this option could absorb DTMF meant for the previous (menu), we have to check this one last */
+				/*
+				 * Since options using DTMF could absorb DTMF meant for the
+				 * conference menu, we have to check them after the menu.
+				 */
 				} else if ((f->frametype == AST_FRAME_DTMF) && ast_test_flag64(confflags, CONFFLAG_EXIT_CONTEXT) && ast_exists_extension(chan, exitcontext, dtmfstr, 1, "")) {
 					if (ast_test_flag64(confflags, CONFFLAG_PASS_DTMF)) {
 						conf_queue_dtmf(conf, user, f);
@@ -3647,7 +3657,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, struc
 								}
 								if (musiconhold && mohtempstopped && confsilence > MEETME_DELAYDETECTENDTALK) {
 									mohtempstopped = 0;
-									ast_moh_start(chan, NULL, NULL);
+									conf_start_moh(chan, optargs[OPT_ARG_MOH_CLASS]);
 								}
 							}
 						} else {
@@ -3669,7 +3679,7 @@ bailoutandtrynormal:
 						}
 						if (musiconhold && mohtempstopped && confsilence > MEETME_DELAYDETECTENDTALK) {
 							mohtempstopped = 0;
-							ast_moh_start(chan, NULL, NULL);
+							conf_start_moh(chan, optargs[OPT_ARG_MOH_CLASS]);
 						}
 					}
 				} else {
@@ -3917,8 +3927,12 @@ static struct ast_conference *find_conf_realtime(struct ast_channel *chan, char 
 			cnf->useropts = ast_strdup(useropts);
 			cnf->adminopts = ast_strdup(adminopts);
 			cnf->bookid = ast_strdup(bookid);
-			cnf->recordingfilename = ast_strdup(recordingfilename);
-			cnf->recordingformat = ast_strdup(recordingformat);
+			if (!ast_strlen_zero(recordingfilename)) {
+				cnf->recordingfilename = ast_strdup(recordingfilename);
+			}
+			if (!ast_strlen_zero(recordingformat)) {
+				cnf->recordingformat = ast_strdup(recordingformat);
+			}
 
 			/* Parse the other options into confflags -- need to do this in two
 			 * steps, because the parse_options routine zeroes the buffer. */
@@ -4332,13 +4346,27 @@ static int conf_exec(struct ast_channel *chan, const char *data)
 					res = -1;
 				}
 			} else {
-				/* Check to see if the conference requires a pin
-				 * and we ALWAYS prompt or no pin was provided */
-				if ((!ast_strlen_zero(cnf->pin) ||
+				/* Conference requires a pin for specified access level */
+				int req_pin = !ast_strlen_zero(cnf->pin) ||
 					(!ast_strlen_zero(cnf->pinadmin) &&
-						ast_test_flag64(&confflags, CONFFLAG_ADMIN))) &&
-				    (ast_test_flag64(&confflags, CONFFLAG_ALWAYSPROMPT) ||
-						ast_strlen_zero(args.pin))) {
+						ast_test_flag64(&confflags, CONFFLAG_ADMIN));
+				/* The following logic was derived from a
+				 * 4 variable truth table and defines which
+				 * circumstances are not exempt from pin
+				 * checking.
+				 * If this needs to be modified, write the
+				 * truth table back out from the boolean
+				 * expression AB+A'D+C', change the erroneous
+				 * result, and rederive the expression.
+				 * Variables:
+				 *  A: pin provided?
+				 *  B: always prompt?
+				 *  C: dynamic?
+				 *  D: has users? */
+				int not_exempt = !cnf->isdynamic;
+				not_exempt = not_exempt || (!ast_strlen_zero(args.pin) && ast_test_flag64(&confflags, CONFFLAG_ALWAYSPROMPT));
+				not_exempt = not_exempt || (ast_strlen_zero(args.pin) && cnf->users);
+				if (req_pin && not_exempt) {
 					char pin[MAX_PIN] = "";
 					int j;
 
@@ -4558,6 +4586,12 @@ static int admin_exec(struct ast_channel *chan, const char *data) {
 	case 101: /* e: Eject last user*/
 	{
 		int max_no = 0;
+
+		/* If they passed in a user, disregard it */
+		if (user) {
+			ao2_ref(user, -1);
+		}
+
 		ao2_callback(cnf->usercontainer, OBJ_NODATA, user_max_cmp, &max_no);
 		user = ao2_find(cnf->usercontainer, &max_no, 0);
 		if (!ast_test_flag64(&user->userflags, CONFFLAG_ADMIN))
@@ -4573,7 +4607,7 @@ static int admin_exec(struct ast_channel *chan, const char *data) {
 		user->adminflags |= ADMINFLAG_MUTED;
 		break;
 	case 78: /* N: Mute all (non-admin) users */
-		ao2_callback(cnf->usercontainer, OBJ_NODATA, user_set_muted_cb, NULL);
+		ao2_callback(cnf->usercontainer, OBJ_NODATA, user_set_muted_cb, &cnf);
 		break;					
 	case 109: /* m: Unmute */ 
 		user->adminflags &= ~(ADMINFLAG_MUTED | ADMINFLAG_SELFMUTED | ADMINFLAG_T_REQUEST);
@@ -4842,6 +4876,31 @@ static int action_meetmelist(struct mansession *s, const struct message *m)
 	return 0;
 }
 
+/*! \internal
+ * \brief creates directory structure and assigns absolute path from relative paths for filenames
+ *
+ * \param filename contains the absolute or relative path to the desired file
+ * \param buffer stores completed filename, absolutely must be a buffer of PATH_MAX length
+ */
+static void filename_parse(char *filename, char *buffer)
+{
+	char *slash;
+	if (ast_strlen_zero(filename)) {
+		ast_log(LOG_WARNING, "No file name was provided for a file save option.\n");
+	} else if (filename[0] != '/') {
+		snprintf(buffer, PATH_MAX, "%s/meetme/%s", ast_config_AST_SPOOL_DIR, filename);
+	} else {
+		ast_copy_string(buffer, filename, PATH_MAX);
+	}
+
+	slash = buffer;
+	if ((slash = strrchr(slash, '/'))) {
+		*slash = '\0';
+		ast_mkdir(buffer, 0777);
+		*slash = '/';
+	}
+}
+
 static void *recordthread(void *args)
 {
 	struct ast_conference *cnf = args;
@@ -4851,10 +4910,14 @@ static void *recordthread(void *args)
 	int res = 0;
 	int x;
 	const char *oldrecordingfilename = NULL;
+	char filename_buffer[PATH_MAX];
 
 	if (!cnf || !cnf->lchan) {
 		pthread_exit(0);
 	}
+
+	filename_buffer[0] = '\0';
+	filename_parse(cnf->recordingfilename, filename_buffer);
 
 	ast_stopstream(cnf->lchan);
 	flags = O_CREAT | O_TRUNC | O_WRONLY;
@@ -4867,9 +4930,9 @@ static void *recordthread(void *args)
 			AST_LIST_UNLOCK(&confs);
 			break;
 		}
-		if (!s && cnf->recordingfilename && (cnf->recordingfilename != oldrecordingfilename)) {
-			s = ast_writefile(cnf->recordingfilename, cnf->recordingformat, NULL, flags, 0, AST_FILE_MODE);
-			oldrecordingfilename = cnf->recordingfilename;
+		if (!s && !(ast_strlen_zero(filename_buffer)) && (filename_buffer != oldrecordingfilename)) {
+			s = ast_writefile(filename_buffer, cnf->recordingformat, NULL, flags, 0, AST_FILE_MODE);
+			oldrecordingfilename = filename_buffer;
 		}
 		
 		f = ast_read(cnf->lchan);
@@ -5882,19 +5945,6 @@ static void sla_check_reload(void)
 		return;
 	}
 
-	/* We need to actually delete the previous versions of trunks and stations now */
-	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&sla_stations, station, entry) {
-		AST_RWLIST_REMOVE_CURRENT(entry);
-		ast_free(station);
-	}
-	AST_RWLIST_TRAVERSE_SAFE_END;
-
-	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&sla_trunks, trunk, entry) {
-		AST_RWLIST_REMOVE_CURRENT(entry);
-		ast_free(trunk);
-	}
-	AST_RWLIST_TRAVERSE_SAFE_END;
-
 	/* yay */
 	sla_load_config(1);
 	sla.reload = 0;
@@ -6791,6 +6841,24 @@ static int sla_load_config(int reload)
 	} else if (cfg == CONFIG_STATUS_FILEINVALID) {
 		ast_log(LOG_ERROR, "Config file " SLA_CONFIG_FILE " is in an invalid format.  Aborting.\n");
 		return 0;
+	}
+
+	if (reload) {
+		struct sla_station *station;
+		struct sla_trunk *trunk;
+
+		/* We need to actually delete the previous versions of trunks and stations now */
+		AST_RWLIST_TRAVERSE_SAFE_BEGIN(&sla_stations, station, entry) {
+			AST_RWLIST_REMOVE_CURRENT(entry);
+			ast_free(station);
+		}
+		AST_RWLIST_TRAVERSE_SAFE_END;
+
+		AST_RWLIST_TRAVERSE_SAFE_BEGIN(&sla_trunks, trunk, entry) {
+			AST_RWLIST_REMOVE_CURRENT(entry);
+			ast_free(trunk);
+		}
+		AST_RWLIST_TRAVERSE_SAFE_END;
 	}
 
 	if ((val = ast_variable_retrieve(cfg, "general", "attemptcallerid")))

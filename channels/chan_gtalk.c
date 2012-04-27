@@ -288,7 +288,7 @@ static int add_codec_to_answer(const struct gtalk_pvt *p, int codec, iks *dcodec
 		if(!payload_eg711u || !payload_pcmu) {
 			iks_delete(payload_pcmu);
 			iks_delete(payload_eg711u);
-			ast_log(LOG_WARNING,"Failed to allocate iks node");
+			ast_log(LOG_WARNING,"Failed to allocate iks node\n");
 			return -1;
 		}
 		iks_insert_attrib(payload_pcmu, "id", "0");
@@ -310,7 +310,7 @@ static int add_codec_to_answer(const struct gtalk_pvt *p, int codec, iks *dcodec
 		if(!payload_eg711a || !payload_pcma) {
 			iks_delete(payload_eg711a);
 			iks_delete(payload_pcma);
-			ast_log(LOG_WARNING,"Failed to allocate iks node");
+			ast_log(LOG_WARNING,"Failed to allocate iks node\n");
 			return -1;
 		}
 		iks_insert_attrib(payload_pcma, "id", "8");
@@ -329,7 +329,7 @@ static int add_codec_to_answer(const struct gtalk_pvt *p, int codec, iks *dcodec
 	if (!strcasecmp("ilbc", format)) {
 		iks *payload_ilbc = iks_new("payload-type");
 		if(!payload_ilbc) {
-			ast_log(LOG_WARNING,"Failed to allocate iks node");
+			ast_log(LOG_WARNING,"Failed to allocate iks node\n");
 			return -1;
 		}
 		iks_insert_attrib(payload_ilbc, "id", "97");
@@ -342,7 +342,7 @@ static int add_codec_to_answer(const struct gtalk_pvt *p, int codec, iks *dcodec
 	if (!strcasecmp("g723", format)) {
 		iks *payload_g723 = iks_new("payload-type");
 		if(!payload_g723) {
-			ast_log(LOG_WARNING,"Failed to allocate iks node");
+			ast_log(LOG_WARNING,"Failed to allocate iks node\n");
 			return -1;
 		}
 		iks_insert_attrib(payload_g723, "id", "4");
@@ -355,7 +355,7 @@ static int add_codec_to_answer(const struct gtalk_pvt *p, int codec, iks *dcodec
 	if (!strcasecmp("speex", format)) {
 		iks *payload_speex = iks_new("payload-type");
 		if(!payload_speex) {
-			ast_log(LOG_WARNING,"Failed to allocate iks node");
+			ast_log(LOG_WARNING,"Failed to allocate iks node\n");
 			return -1;
 		}
 		iks_insert_attrib(payload_speex, "id", "110");
@@ -368,7 +368,7 @@ static int add_codec_to_answer(const struct gtalk_pvt *p, int codec, iks *dcodec
 	if (!strcasecmp("gsm", format)) {
 		iks *payload_gsm = iks_new("payload-type");
 		if(!payload_gsm) {
-			ast_log(LOG_WARNING,"Failed to allocate iks node");
+			ast_log(LOG_WARNING,"Failed to allocate iks node\n");
 			return -1;
 		}
 		iks_insert_attrib(payload_gsm, "id", "103");
@@ -481,7 +481,8 @@ static int gtalk_ringing_ack(void *data, ikspak *pak)
 				break;
 			}
 			if (!strcasecmp(name, "error") &&
-				(redirect = iks_find_cdata(traversenodes, "redirect")) &&
+				((redirect = iks_find_cdata(traversenodes, "redirect")) ||
+				  (redirect = iks_find_cdata(traversenodes, "sta:redirect"))) &&
 				(redirect = strstr(redirect, "xmpp:"))) {
 				redirect += 5;
 				ast_log(LOG_DEBUG, "redirect %s\n", redirect);
@@ -882,7 +883,7 @@ static int gtalk_create_candidates(struct gtalk *client, struct gtalk_pvt *p, ch
 	gtalk_get_local_ip(&us);
 
 	if (!strcmp(ast_sockaddr_stringify_addr(&us), "127.0.0.1")) {
-		ast_log(LOG_WARNING, "Found a loopback IP on the system, check your network configuration or set the bindaddr attribute.");
+		ast_log(LOG_WARNING, "Found a loopback IP on the system, check your network configuration or set the bindaddr attribute.\n");
 	}
 
 	/* Setup our gtalk candidates */
@@ -977,8 +978,8 @@ static struct gtalk_pvt *gtalk_alloc(struct gtalk *client, const char *us, const
 {
 	struct gtalk_pvt *tmp = NULL;
 	struct aji_resource *resources = NULL;
-	struct aji_buddy *buddy;
-	char idroster[200];
+	struct aji_buddy *buddy = NULL;
+	char idroster[200] = "";
 	char *data, *exten = NULL;
 	struct ast_sockaddr bindaddr_tmp;
 
@@ -1005,7 +1006,13 @@ static struct gtalk_pvt *gtalk_alloc(struct gtalk *client, const char *us, const
 			snprintf(idroster, sizeof(idroster), "%s", them);
 		} else {
 			ast_log(LOG_ERROR, "no gtalk capable clients to talk to.\n");
+			if (buddy) {
+				ASTOBJ_UNREF(buddy, ast_aji_buddy_destroy);
+			}
 			return NULL;
+		}
+		if (buddy) {
+			ASTOBJ_UNREF(buddy, ast_aji_buddy_destroy);
 		}
 	}
 	if (!(tmp = ast_calloc(1, sizeof(*tmp)))) {
@@ -1267,6 +1274,9 @@ static int gtalk_newcall(struct gtalk *client, ikspak *pak)
 	if (!strcasecmp(client->name, "guest")){
 		/* the guest account is not tied to any configured XMPP client,
 		   let's set it now */
+		if (client->connection) {
+			ASTOBJ_UNREF(client->connection, ast_aji_client_destroy);
+		}
 		client->connection = ast_aji_get_client(from);
 		if (!client->connection) {
 			ast_log(LOG_ERROR, "No XMPP client to talk to, us (partial JID) : %s\n", from);
@@ -1867,6 +1877,9 @@ static struct ast_channel *gtalk_request(const char *type, format_t format, cons
 	if (!strcasecmp(client->name, "guest")){
 		/* the guest account is not tied to any configured XMPP client,
 		   let's set it now */
+		if (client->connection) {
+			ASTOBJ_UNREF(client->connection, ast_aji_client_destroy);
+		}
 		client->connection = ast_aji_get_client(sender);
 		if (!client->connection) {
 			ast_log(LOG_ERROR, "No XMPP client to talk to, us (partial JID) : %s\n", sender);
@@ -2064,12 +2077,12 @@ static int gtalk_load_config(void)
 {
 	char *cat = NULL;
 	struct ast_config *cfg = NULL;
-	char context[AST_MAX_CONTEXT];
-	char parkinglot[AST_MAX_CONTEXT];
+	char context[AST_MAX_CONTEXT] = "";
+	char parkinglot[AST_MAX_CONTEXT] = "";
 	int allowguest = 1;
 	struct ast_variable *var;
 	struct gtalk *member;
-	struct ast_codec_pref prefs;
+	struct ast_codec_pref prefs = { "", };
 	struct aji_client_container *clients;
 	struct gtalk_candidate *global_candidates = NULL;
 	struct hostent *hp;
@@ -2156,6 +2169,9 @@ static int gtalk_load_config(void)
 					ASTOBJ_CONTAINER_TRAVERSE(clients, 1, {
 						ASTOBJ_WRLOCK(iterator);
 						ASTOBJ_WRLOCK(member);
+						if (member->connection) {
+							ASTOBJ_UNREF(member->connection, ast_aji_client_destroy);
+						}
 						member->connection = NULL;
 						iks_filter_add_rule(iterator->f, gtalk_parser, member, IKS_RULE_TYPE, IKS_PAK_IQ, IKS_RULE_NS, GOOGLE_NS, IKS_RULE_DONE);
 						iks_filter_add_rule(iterator->f, gtalk_parser, member, IKS_RULE_TYPE, IKS_PAK_IQ, IKS_RULE_NS, GOOGLE_JINGLE_NS, IKS_RULE_DONE);
@@ -2179,6 +2195,7 @@ static int gtalk_load_config(void)
 		cat = ast_category_browse(cfg, cat);
 	}
 
+	ast_config_destroy(cfg);
 	gtalk_update_externip();
 	gtalk_free_candidates(global_candidates);
 	return 1;
