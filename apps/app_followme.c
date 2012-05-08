@@ -153,12 +153,8 @@ struct call_followme {
 };
 
 struct fm_args {
-	/*! Inbound (caller) channel */
-	struct ast_channel *chan;
 	char *mohclass;
 	AST_LIST_HEAD_NOLOCK(cnumbers, number) cnumbers;
-	/*! Winning outbound (callee) channel */
-	struct ast_channel *outbound;
 	/*! Accumulated connected line information from inbound call. */
 	struct ast_party_connected_line connected_in;
 	/*! Accumulated connected line information from outbound call. */
@@ -167,9 +163,8 @@ struct fm_args {
 	unsigned int pending_in_connected_update:1;
 	/*! TRUE if connected line information from outbound call is available. */
 	unsigned int pending_out_connected_update:1;
-	int status;
 	char context[AST_MAX_CONTEXT];
-	char namerecloc[AST_MAX_CONTEXT];
+	char namerecloc[PATH_MAX];
 	char takecall[MAX_YN_STRING];	/*!< Digit mapping to take a call */
 	char nextindp[MAX_YN_STRING];	/*!< Digit mapping to decline a call */
 	char callfromprompt[PATH_MAX];	/*!< Sound prompt name and path */
@@ -890,11 +885,20 @@ static struct ast_channel *wait_for_winner(struct findme_user_listptr *findme_us
 	return NULL;
 }
 
-static void findmeexec(struct fm_args *tpargs)
+/*!
+ * \internal
+ * \brief Find an extension willing to take the call.
+ *
+ * \param tpargs Active Followme config.
+ * \param caller Channel initiating the outgoing calls.
+ *
+ * \retval winner Winning outgoing call.
+ * \retval NULL if could not find someone to take the call.
+ */
+static struct ast_channel *findmeexec(struct fm_args *tpargs, struct ast_channel *caller)
 {
 	struct number *nm;
 	struct ast_channel *outbound;
-	struct ast_channel *caller;
 	struct ast_channel *winner = NULL;
 	char dialarg[512];
 	char num[512];
@@ -907,11 +911,10 @@ static void findmeexec(struct fm_args *tpargs)
 	findme_user_list = ast_calloc(1, sizeof(*findme_user_list));
 	if (!findme_user_list) {
 		ast_log(LOG_WARNING, "Failed to allocate memory for findme_user_list\n");
-		return;
+		return NULL;
 	}
 	AST_LIST_HEAD_INIT_NOLOCK(findme_user_list);
 
-	caller = tpargs->chan;
 	for (idx = 1; !ast_check_hangup(caller); ++idx) {
 		/* Find next followme numbers to dial. */
 		AST_LIST_TRAVERSE(&tpargs->cnumbers, nm, entry) {
@@ -1028,12 +1031,7 @@ static void findmeexec(struct fm_args *tpargs)
 		break;
 	}
 	destroy_calling_tree(findme_user_list);
-	if (!winner) {
-		tpargs->status = 1;
-	} else {
-		tpargs->status = 100;
-		tpargs->outbound = winner;
-	}
+	return winner;
 }
 
 static struct call_followme *find_realtime(const char *name)
@@ -1151,7 +1149,6 @@ static int app_exec(struct ast_channel *chan, const char *data)
 	struct number *nm, *newnm;
 	int res = 0;
 	char *argstr;
-	char namerecloc[255];
 	struct ast_channel *caller;
 	struct ast_channel *outbound;
 	AST_DECLARE_APP_ARGS(args,
@@ -1223,7 +1220,6 @@ static int app_exec(struct ast_channel *chan, const char *data)
 		ast_clear_flag(&targs.followmeflags, FOLLOWMEFLAG_NOANSWER);
 	}
 
-	namerecloc[0] = '\0';
 	if (ast_test_flag(&targs.followmeflags, FOLLOWMEFLAG_NOANSWER)) {
 		ast_indicate(chan, AST_CONTROL_RINGING);
 	} else {
@@ -1238,14 +1234,14 @@ static int app_exec(struct ast_channel *chan, const char *data)
 		if (ast_test_flag(&targs.followmeflags, FOLLOWMEFLAG_RECORDNAME)) {
 			int duration = 5;
 
-			snprintf(namerecloc, sizeof(namerecloc), "%s/followme.%s",
+			snprintf(targs.namerecloc, sizeof(targs.namerecloc), "%s/followme.%s",
 				ast_config_AST_SPOOL_DIR, ast_channel_uniqueid(chan));
-			if (ast_play_and_record(chan, "vm-rec-name", namerecloc, 5, "sln", &duration,
+			if (ast_play_and_record(chan, "vm-rec-name", targs.namerecloc, 5, "sln", &duration,
 				NULL, ast_dsp_get_threshold_from_settings(THRESHOLD_SILENCE), 0, NULL) < 0) {
 				goto outrun;
 			}
-			if (!ast_fileexists(namerecloc, NULL, ast_channel_language(chan))) {
-				namerecloc[0] = '\0';
+			if (!ast_fileexists(targs.namerecloc, NULL, ast_channel_language(chan))) {
+				targs.namerecloc[0] = '\0';
 			}
 		}
 
@@ -1258,22 +1254,12 @@ static int app_exec(struct ast_channel *chan, const char *data)
 		ast_moh_start(chan, S_OR(targs.mohclass, NULL), NULL);
 	}
 
-	targs.status = 0;
-	targs.chan = chan;
-	ast_copy_string(targs.namerecloc, namerecloc, sizeof(targs.namerecloc));
 	ast_channel_lock(chan);
 	ast_connected_line_copy_from_caller(&targs.connected_in, ast_channel_caller(chan));
 	ast_channel_unlock(chan);
 
-	findmeexec(&targs);
-
-	while ((nm = AST_LIST_REMOVE_HEAD(&targs.cnumbers, entry)))
-		ast_free(nm);
-
-	if (!ast_strlen_zero(namerecloc))
-		unlink(namerecloc);
-
-	if (targs.status != 100) {
+	outbound = findmeexec(&targs, chan);
+	if (!outbound) {
 		if (ast_test_flag(&targs.followmeflags, FOLLOWMEFLAG_NOANSWER)) {
 			if (ast_channel_state(chan) != AST_STATE_UP) {
 				ast_answer(chan);
@@ -1287,7 +1273,6 @@ static int app_exec(struct ast_channel *chan, const char *data)
 		res = 0;
 	} else {
 		caller = chan;
-		outbound = targs.outbound;
 		/* Bridge the two channels. */
 
 		memset(&config, 0, sizeof(config));
@@ -1337,8 +1322,15 @@ static int app_exec(struct ast_channel *chan, const char *data)
 	}
 
 outrun:
+	while ((nm = AST_LIST_REMOVE_HEAD(&targs.cnumbers, entry))) {
+		ast_free(nm);
+	}
+	if (!ast_strlen_zero(targs.namerecloc)) {
+		unlink(targs.namerecloc);
+	}
 	ast_party_connected_line_free(&targs.connected_in);
 	ast_party_connected_line_free(&targs.connected_out);
+
 	if (f->realtime) {
 		/* Not in list */
 		free_numbers(f);
