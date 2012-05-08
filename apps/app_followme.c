@@ -566,7 +566,6 @@ static void destroy_calling_tree(struct findme_user_listptr *findme_user_list)
 		ast_party_connected_line_free(&fmuser->connected);
 		ast_free(fmuser);
 	}
-	ast_free(findme_user_list);
 }
 
 static struct ast_channel *wait_for_winner(struct findme_user_listptr *findme_user_list, struct number *nm, struct ast_channel *caller, char *namerecloc, struct fm_args *tpargs)
@@ -906,14 +905,7 @@ static struct ast_channel *findmeexec(struct fm_args *tpargs, struct ast_channel
 	char *rest, *number;
 	struct findme_user *tmpuser;
 	struct findme_user *fmuser;
-	struct findme_user_listptr *findme_user_list;
-
-	findme_user_list = ast_calloc(1, sizeof(*findme_user_list));
-	if (!findme_user_list) {
-		ast_log(LOG_WARNING, "Failed to allocate memory for findme_user_list\n");
-		return NULL;
-	}
-	AST_LIST_HEAD_INIT_NOLOCK(findme_user_list);
+	struct findme_user_listptr findme_user_list = AST_LIST_HEAD_NOLOCK_INIT_VALUE;
 
 	for (idx = 1; !ast_check_hangup(caller); ++idx) {
 		/* Find next followme numbers to dial. */
@@ -969,7 +961,7 @@ static struct ast_channel *findmeexec(struct fm_args *tpargs, struct ast_channel
 					tmpuser->state = 0;
 					tmpuser->cleared = 0;
 					ast_copy_string(tmpuser->dialarg, dialarg, sizeof(dialarg));
-					AST_LIST_INSERT_TAIL(findme_user_list, tmpuser, entry);
+					AST_LIST_INSERT_TAIL(&findme_user_list, tmpuser, entry);
 				} else {
 					ast_verb(3, "couldn't reach at this number.\n");
 					ast_channel_lock(outbound);
@@ -1002,17 +994,17 @@ static struct ast_channel *findmeexec(struct fm_args *tpargs, struct ast_channel
 			}
 		}
 
-		if (AST_LIST_EMPTY(findme_user_list)) {
+		if (AST_LIST_EMPTY(&findme_user_list)) {
 			continue;
 		}
 
-		winner = wait_for_winner(findme_user_list, nm, caller, tpargs->namerecloc, tpargs);
+		winner = wait_for_winner(&findme_user_list, nm, caller, tpargs->namerecloc, tpargs);
 		if (!winner) {
 			continue;
 		}
 
 		/* Destroy losing calls up to the winner.  The rest will be destroyed later. */
-		while ((fmuser = AST_LIST_REMOVE_HEAD(findme_user_list, entry))) {
+		while ((fmuser = AST_LIST_REMOVE_HEAD(&findme_user_list, entry))) {
 			if (fmuser->ochan == winner) {
 				/* Pass any connected line info up. */
 				tpargs->connected_out = fmuser->connected;
@@ -1030,7 +1022,7 @@ static struct ast_channel *findmeexec(struct fm_args *tpargs, struct ast_channel
 		}
 		break;
 	}
-	destroy_calling_tree(findme_user_list);
+	destroy_calling_tree(&findme_user_list);
 	return winner;
 }
 
