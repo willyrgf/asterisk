@@ -2967,16 +2967,19 @@ struct ast_channel *ast_waitfor_nandfds(struct ast_channel **c, int n, int *fds,
 		int fdno;
 	} *fdmap = NULL;
 
-	if ((sz = n * AST_MAX_FDS + nfds)) {
-		pfds = alloca(sizeof(*pfds) * sz);
-		fdmap = alloca(sizeof(*fdmap) * sz);
-	}
-
 	if (outfd) {
 		*outfd = -99999;
 	}
 	if (exception) {
 		*exception = 0;
+	}
+
+	if ((sz = n * AST_MAX_FDS + nfds)) {
+		pfds = alloca(sizeof(*pfds) * sz);
+		fdmap = alloca(sizeof(*fdmap) * sz);
+	} else {
+		/* nothing to allocate and no FDs to check */
+		return NULL;
 	}
 
 	/* Perform any pending masquerades */
@@ -5666,6 +5669,23 @@ struct ast_channel *ast_request(const char *type, struct ast_format_cap *request
 	AST_RWLIST_UNLOCK(&backends);
 
 	return NULL;
+}
+
+int ast_pre_call(struct ast_channel *chan, const char *sub_args)
+{
+	int (*pre_call)(struct ast_channel *chan, const char *sub_args);
+
+	ast_channel_lock(chan);
+	pre_call = ast_channel_tech(chan)->pre_call;
+	if (pre_call) {
+		int res;
+
+		res = pre_call(chan, sub_args);
+		ast_channel_unlock(chan);
+		return res;
+	}
+	ast_channel_unlock(chan);
+	return ast_app_exec_sub(NULL, chan, sub_args);
 }
 
 int ast_call(struct ast_channel *chan, const char *addr, int timeout)
