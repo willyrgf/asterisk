@@ -1009,7 +1009,9 @@ static void bridge_call_thread_launch(void *data)
 
 	pthread_attr_init(&attr);
 	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-	ast_pthread_create(&thread, &attr, bridge_call_thread, data);
+	if (ast_pthread_create(&thread, &attr, bridge_call_thread, data)) {
+		ast_log(LOG_WARNING, "Failed to create thread for parked call.\n");
+	}
 	pthread_attr_destroy(&attr);
 	memset(&sched, 0, sizeof(sched));
 	pthread_setschedparam(thread, SCHED_RR, &sched);
@@ -3345,9 +3347,11 @@ static int feature_interpret(struct ast_channel *chan, struct ast_channel *peer,
 	struct ast_flags features;
 	struct ast_call_feature feature;
 	if (sense == FEATURE_SENSE_CHAN) {
+		/* Coverity - This uninit_use should be ignored since this macro initializes the flags */
 		ast_copy_flags(&features, &(config->features_caller), AST_FLAGS_ALL);
 	}
 	else {
+		/* Coverity - This uninit_use should be ignored since this macro initializes the flags */
 		ast_copy_flags(&features, &(config->features_callee), AST_FLAGS_ALL);
 	}
 
@@ -8147,7 +8151,9 @@ int ast_features_init(void)
 		return res;
 	}
 	ast_cli_register_multiple(cli_features, ARRAY_LEN(cli_features));
-	ast_pthread_create(&parking_thread, NULL, do_parking_thread, NULL);
+	if (ast_pthread_create(&parking_thread, NULL, do_parking_thread, NULL)) {
+		return -1;
+	}
 	ast_register_application2(app_bridge, bridge_exec, NULL, NULL, NULL);
 	res = ast_register_application2(parkedcall, parked_call_exec, NULL, NULL, NULL);
 	if (!res)
