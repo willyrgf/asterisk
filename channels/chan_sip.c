@@ -7093,6 +7093,7 @@ static int sip_indicate(struct ast_channel *ast, int condition, const void *data
 		break;
 	case AST_CONTROL_UPDATE_RTP_PEER: /* Absorb this since it is handled by the bridge */
 		break;
+	case AST_CONTROL_PVT_CAUSE_CODE: /* these should be handled by the code in channel.c */
 	case -1:
 		res = -1;
 		break;
@@ -23208,9 +23209,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 				}
 			}
 			transmit_response_reliable(p, "491 Request Pending", req);
-			p->pendinginvite = seqno;
 			check_via(p, req);
-			copy_request(&p->initreq, req);
 			ast_debug(1, "Got INVITE on call where we already have pending INVITE, deferring that - %s\n", p->callid);
 			/* Don't destroy dialog here */
 			res = INV_REQ_FAILED;
@@ -23230,7 +23229,6 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 		if (p->owner) {
 			ast_debug(3, "INVITE w Replaces on existing call? Refusing action. [%s]\n", p->callid);
 			transmit_response_reliable(p, "400 Bad request", req);	/* The best way to not not accept the transfer */
-			p->pendinginvite = seqno;
 			check_via(p, req);
 			copy_request(&p->initreq, req);
 			/* Do not destroy existing call */
@@ -23250,7 +23248,6 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 			sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 			p->invitestate = INV_COMPLETED;
 			res = INV_REQ_ERROR;
-			p->pendinginvite = seqno;
 			check_via(p, req);
 			copy_request(&p->initreq, req);
 			goto request_invite_cleanup;
@@ -23355,7 +23352,6 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 			refer_locked = 0;
 			p->invitestate = INV_COMPLETED;
 			res = INV_REQ_ERROR;
-			p->pendinginvite = seqno;
 			check_via(p, req);
 			copy_request(&p->initreq, req);
 			goto request_invite_cleanup;
@@ -26118,28 +26114,29 @@ static int handle_incoming(struct sip_pvt *p, struct sip_request *req, struct as
 			ast_debug(1, "Ignoring out of order response %u (expecting %u)\n", seqno, p->ocseq);
 			return -1;
 		} else {
-			char causevar[256], causeval[256];
-
 			if ((respid == 200) || ((respid >= 300) && (respid <= 399))) {
 				extract_uri(p, req);
 			}
 
-			handle_response(p, respid, e + len, req, seqno);
+			if (p->owner) {
+				struct ast_control_pvt_cause_code *cause_code;
+				int data_size = sizeof(*cause_code);
+				/* size of the string making up the cause code is "SIP " + cause length */
+				data_size += 4 + strlen(REQ_OFFSET_TO_STR(req, rlPart2));
+				cause_code = alloca(data_size);
 
-			if (global_store_sip_cause && p->owner) {
-				struct ast_channel *owner = p->owner;
+				ast_copy_string(cause_code->chan_name, ast_channel_name(p->owner), AST_CHANNEL_NAME);
 
-				snprintf(causevar, sizeof(causevar), "MASTER_CHANNEL(HASH(SIP_CAUSE,%s))", ast_channel_name(owner));
-				snprintf(causeval, sizeof(causeval), "SIP %s", REQ_OFFSET_TO_STR(req, rlPart2));
+				snprintf(cause_code->code, data_size - sizeof(*cause_code) + 1, "SIP %s", REQ_OFFSET_TO_STR(req, rlPart2));
 
-				ast_channel_ref(owner);
-				sip_pvt_unlock(p);
-				ast_channel_unlock(owner);
-				*nounlock = 1;
-				pbx_builtin_setvar_helper(owner, causevar, causeval);
-				ast_channel_unref(owner);
-				sip_pvt_lock(p);
+				if (global_store_sip_cause) {
+					cause_code->emulate_sip_cause = 1;
+				}
+
+				ast_queue_control_data(p->owner, AST_CONTROL_PVT_CAUSE_CODE, cause_code, data_size);
 			}
+
+			handle_response(p, respid, e + len, req, seqno);
 		}
 		return 0;
 	}
@@ -26208,13 +26205,13 @@ static int handle_incoming(struct sip_pvt *p, struct sip_request *req, struct as
 			if (!req->ignore && req->method == SIP_INVITE) {
 				transmit_response_reliable(p, "481 Call/Transaction Does Not Exist", req);
 				/* Will cease to exist after ACK */
+				return res;
 			} else if (req->method != SIP_ACK) {
 				transmit_response(p, "481 Call/Transaction Does Not Exist", req);
 				sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
-			} else {
-				ast_debug(1, "Got ACK for unknown dialog... strange.\n");
+				return res;
 			}
-			return res;
+			/* Otherwise, this is an ACK. It will always have a to-tag */
 		}
 	}
 
@@ -29887,6 +29884,9 @@ static int reload_config(enum channelreloadreason reason)
 			}
 		} else if (!strcasecmp(v->name, "storesipcause")) {
 			global_store_sip_cause = ast_true(v->value);
+			if (global_store_sip_cause) {
+				ast_log(LOG_WARNING, "Usage of SIP_CAUSE is deprecated.  Please use HANGUPCAUSE instead.\n");
+			}
 		} else if (!strcasecmp(v->name, "qualifygap")) {
 			if (sscanf(v->value, "%30d", &global_qualify_gap) != 1) {
 				ast_log(LOG_WARNING, "Invalid qualifygap '%s' at line %d of %s\n", v->value, v->lineno, config);
