@@ -9315,11 +9315,13 @@ static struct ast_frame *dahdi_read(struct ast_channel *ast)
 					 * Treat this as a "hangup" instead of a "busy" on the
 					 * assumption that a busy means the incoming call went away.
 					 */
+					ast_frfree(f);
 					f = NULL;
 				}
 			} else if (p->dialtone_detect && !p->outgoing && f->frametype == AST_FRAME_VOICE) {
 				if ((ast_dsp_get_tstate(p->dsp) == DSP_TONE_STATE_DIALTONE) && (ast_dsp_get_tcount(p->dsp) > 9)) {
 					/* Dialtone detected on inbound call; hangup the channel */
+					ast_frfree(f);
 					f = NULL;
 				}
 			} else if (f->frametype == AST_FRAME_DTMF_BEGIN
@@ -9345,7 +9347,8 @@ static struct ast_frame *dahdi_read(struct ast_channel *ast)
 				if (ast_tvdiff_ms(ast_tvnow(), p->waitingfordt) >= p->waitfordialtone ) {
 					p->waitingfordt.tv_sec = 0;
 					ast_log(LOG_WARNING, "Never saw dialtone on channel %d\n", p->channel);
-					f=NULL;
+					ast_frfree(f);
+					f = NULL;
 				} else if (f->frametype == AST_FRAME_VOICE) {
 					f->frametype = AST_FRAME_NULL;
 					f->subclass.integer = 0;
@@ -9360,6 +9363,7 @@ static struct ast_frame *dahdi_read(struct ast_channel *ast)
 								ast_log(LOG_WARNING, "Unable to initiate dialing on trunk channel %d\n", p->channel);
 								p->dop.dialstr[0] = '\0';
 								ast_mutex_unlock(&p->lock);
+								ast_frfree(f);
 								return NULL;
 							} else {
 								ast_debug(1, "Sent deferred digit string: %s\n", p->dop.dialstr);
