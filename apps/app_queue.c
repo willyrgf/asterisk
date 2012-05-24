@@ -5963,6 +5963,8 @@ static int play_file(struct ast_channel *chan, const char *filename, int ringing
 	}
 
 	/* look up the datastore and the play_finished struct, and set appropriate values */
+	
+	ast_channel_lock(chan);
 	if ((datastore = ast_channel_datastore_find(chan, ast_sound_ending(), NULL))) {
 		aqsi = datastore->data;
 		if (aqsi) {  /* copy this stuff into place */
@@ -5973,8 +5975,10 @@ static int play_file(struct ast_channel *chan, const char *filename, int ringing
 		}
 	} else {
 		ast_log(LOG_ERROR, "Can't find the ast_sound_ending datastore! on chan %s\n", chan->name);
+		ast_channel_unlock(chan);
 		return 1; /* Why continue, if I can't access the datastore & list? */
 	}
+	ast_channel_unlock(chan);
 	if (option_debug && !ast_strlen_zero(filename)) {
 		ast_debug(2, "---- Aqsi now playing: %s\n", aqsi->now_playing ? "true" : "false");
 	}
@@ -5986,9 +5990,7 @@ static int play_file(struct ast_channel *chan, const char *filename, int ringing
 			if (!AST_LIST_EMPTY(&aqsi->flist)) {
 				sfn = AST_LIST_REMOVE_HEAD(&aqsi->flist, list);
 				ast_copy_string(playfilename, sfn->filename, sizeof(playfilename));
-				ringing = aqsi->ringing;
-				moh = aqsi->moh;
-				free(sfn);
+				ast_free(sfn);
 				ast_debug(3, "--- No filename and not playing - selecting next file in playlist - %s\n", playfilename);
 			}
 			if (ast_strlen_zero(playfilename)) {
@@ -6023,6 +6025,11 @@ static int play_file(struct ast_channel *chan, const char *filename, int ringing
 	if (aqsi->now_playing) {
 		struct ast_queue_streamfile_name *fn = ast_calloc(1, sizeof(*fn));
 		fn->filename = ast_strdup(filename);
+		if (!fn || ! fn->filename) {
+			ast_log(LOG_ERROR, "Error allocating memory.\n");
+			AST_LIST_UNLOCK(&aqsi->flist);
+			return 1;
+		} 
 		ast_debug(3, "    queued sound file %s for playing on chan %s\n", filename, chan->name);
 		
 		/* link the struct into the current ast_queue_streamfile_info struct */
@@ -6050,6 +6057,7 @@ static int play_file(struct ast_channel *chan, const char *filename, int ringing
 		generatordata = ast_calloc(1, sizeof(struct gen_state));
 		if (!generatordata) {
 			ast_log(LOG_ERROR, "Can't allocate generator input\n");
+			AST_LIST_UNLOCK(&aqsi->flist);
 			return 1;
 		}
 		ast_copy_string(generatordata->filename, playfilename, sizeof(generatordata->filename));
@@ -6120,7 +6128,7 @@ static int queue_exec(struct ast_channel *chan, const char *data)
 	int max_penalty, min_penalty;
 	enum queue_result reason = QUEUE_UNKNOWN;
 	struct ast_datastore *datastore = NULL;
-	struct ast_queue_streamfile_info *aqsi = calloc(1,sizeof(struct ast_queue_streamfile_info));
+	struct ast_queue_streamfile_info *aqsi = ast_calloc(1, sizeof(struct ast_queue_streamfile_info));
 
 	/* whether to exit Queue application after the timeout hits */
 	int tries = 0;
@@ -6246,16 +6254,18 @@ static int queue_exec(struct ast_channel *chan, const char *data)
 	/* Add the background music datastore for this channel */
 	if (background_prompts) {
 		datastore = ast_datastore_alloc(ast_sound_ending(), NULL);
-
-		aqsi->qe = &qe;
-		aqsi->chan = chan;
-		aqsi->ringing = ringing;
-		aqsi->now_playing = 0;
-		strcpy(aqsi->moh, qe.moh);
-		AST_LIST_HEAD_INIT(&aqsi->flist);
-		datastore->data = aqsi;
+		if (datastore && aqsi) {
+			/* If memory allocation worked out */
+			aqsi->qe = &qe;
+			aqsi->chan = chan;
+			aqsi->ringing = ringing;
+			aqsi->now_playing = 0;
+			ast_copy_string(aqsi->moh, qe.moh, sizeof(aqsi->moh));
+			AST_LIST_HEAD_INIT(&aqsi->flist);
+			datastore->data = aqsi;
 	
-		ast_channel_datastore_add(chan, datastore);
+			ast_channel_datastore_add(chan, datastore);
+		}
 	}
 
 	copy_rules(&qe, args.rule);
