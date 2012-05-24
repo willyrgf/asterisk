@@ -1,0 +1,6 @@
+This is a branch where we are trying to resolve a situation where
+a queue member is ready and waiting for a new call while a prompt is played
+to the call waiting in the queue. Currently the prompt is played fully.
+
+With this code such prompts will be played asynchronously, and the call will
+be connected to the queue member.
