@@ -3524,14 +3524,14 @@ struct ast_queue_streamfile_name {
 
 /*! \brief Information data about background playing of prompts */
 struct ast_queue_streamfile_info {
-	void (*digitHandler)(void *data, char digit); /* a func ptr to the handler that will do what needs doing when the streaming of a soundfile is finished */
+	void (*digitHandler)(void *data, char digit); 		/*!< a func ptr to the handler that will do what needs doing when the streaming of a soundfile is finished */
 	struct queue_ent *qe;
-	AST_LIST_HEAD(,ast_queue_streamfile_name) flist;   /* a list of other sound files that need to be played in sequence */
-	struct ast_channel *chan;
-	int ringing;
-	char moh[80];
-	int now_playing;
-	int valid_exit;  /* if valid_exit() in app_queue is true */
+	AST_LIST_HEAD(,ast_queue_streamfile_name) flist;   	/*!< a list of other sound files that need to be played in sequence */
+	struct ast_channel *chan;				/*!< The channel we operate on */
+	int ringing;						/*!< Queues: If we play ringing instead of music on hold in this queue */
+	char moh[80];						/*!< Musiconhold for this channel */
+	int now_playing;					/*!< Set when we have a playlist and are streaming audio from it */
+	int valid_exit;						/*!< if valid_exit() in app_queue is true */
 };
 
 

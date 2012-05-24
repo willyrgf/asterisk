@@ -419,51 +419,51 @@ static int wait_file_full(struct ast_channel *chan, const char *ints, const char
 	if ((datastore = ast_channel_datastore_find(chan, ast_prompt_list(), NULL))) {
 		/* app_queue wants to schedule this instead of play & wait */
 		struct ast_queue_streamfile_info *aqsi = datastore->data;
-		if (aqsi) {
-			AST_LIST_LOCK(&aqsi->flist);
-			if (aqsi->now_playing) {
-				struct ast_queue_streamfile_name *fn = ast_calloc(1, sizeof(*fn));
-
-				fn->filename = ast_strdup(file);
-				ast_debug(3, "----> Adding file %s to playlist for %s\n", file, ast_channel_name(chan));
-
-				/* link the struct into the current ast_queue_streamfile_info struct */
-				AST_LIST_INSERT_TAIL(&aqsi->flist, fn, list);
-			} else {
-				/* if not playing, then start playing this file */
-				if (aqsi->ringing) {
-					ast_indicate(aqsi->chan,-1);
-				} else {
-					ast_moh_stop(aqsi->chan);
-				}
-
-				ast_stopstream(aqsi->chan);
-				ast_autoservice_stop(aqsi->chan);
-				res = ast_streamfile(aqsi->chan, file, ast_channel_language(aqsi->chan)); /* begin the streaming */
-				while (res && !AST_LIST_EMPTY(&aqsi->flist)) {
-					struct ast_queue_streamfile_name *fn;
-					fn = AST_LIST_REMOVE_HEAD(&aqsi->flist, list);
-					ast_debug(3,"Start streaming file %s\n", fn->filename);
-					res = ast_streamfile(aqsi->chan, fn->filename, ast_channel_language(aqsi->chan));
-				}
-
-				if (res) {
-					/* oops, the current file has problems */
-					/* restore the moh */
-					if (aqsi->ringing) {
-						ast_indicate(aqsi->chan, AST_CONTROL_RINGING);
-					} else {
-						ast_moh_start(aqsi->chan, aqsi->moh, NULL);
-					}
-					AST_LIST_UNLOCK(&aqsi->flist);
-					return 1;
-				}
-				aqsi->now_playing = 1; /* We have begun playback */
-				ast_autoservice_start(aqsi->chan); /* this will let the sound file play in a different thread */
-			}
-			AST_LIST_UNLOCK(&aqsi->flist);
+		if (!aqsi) {
 			return 0;
 		}
+		AST_LIST_LOCK(&aqsi->flist);
+		if (aqsi->now_playing) {
+			struct ast_queue_streamfile_name *fn = ast_calloc(1, sizeof(*fn));
+
+			fn->filename = ast_strdup(file);
+			ast_debug(3, "----> Adding file %s to playlist for %s\n", file, ast_channel_name(chan));
+
+			/* link the struct into the current ast_queue_streamfile_info struct */
+			AST_LIST_INSERT_TAIL(&aqsi->flist, fn, list);
+		} else {
+			/* if not playing, then start playing this file */
+			if (aqsi->ringing) {
+				ast_indicate(aqsi->chan,-1);
+			} else {
+				ast_moh_stop(aqsi->chan);
+			}
+
+			ast_stopstream(aqsi->chan);
+			ast_autoservice_stop(aqsi->chan);
+			res = ast_streamfile(aqsi->chan, file, ast_channel_language(aqsi->chan)); /* begin the streaming */
+			while (res && !AST_LIST_EMPTY(&aqsi->flist)) {
+				struct ast_queue_streamfile_name *fn;
+				fn = AST_LIST_REMOVE_HEAD(&aqsi->flist, list);
+				ast_debug(3,"Start streaming file %s\n", fn->filename);
+				res = ast_streamfile(aqsi->chan, fn->filename, ast_channel_language(aqsi->chan));
+			}
+
+			if (res) {
+				/* oops, the current file has problems */
+				/* restore the moh */
+				if (aqsi->ringing) {
+					ast_indicate(aqsi->chan, AST_CONTROL_RINGING);
+				} else {
+					ast_moh_start(aqsi->chan, aqsi->moh, NULL);
+				}
+				AST_LIST_UNLOCK(&aqsi->flist);
+				return 1;
+			}
+			aqsi->now_playing = 1; /* We have begun playback */
+			ast_autoservice_start(aqsi->chan); /* this will let the sound file play in a different thread */
+		}
+		AST_LIST_UNLOCK(&aqsi->flist);
 		return 0;
 	}
 	/* otherwise, exactly business as usual */
