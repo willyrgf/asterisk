@@ -130,6 +130,9 @@ HOOK_T ast_tcptls_server_write(struct ast_tcptls_session_instance *tcptls_sessio
 static void session_instance_destructor(void *obj)
 {
 	struct ast_tcptls_session_instance *i = obj;
+	if (i->parent && i->parent->tls_cfg) {
+		ast_ssl_teardown(i->parent->tls_cfg);
+	}
 	ast_mutex_destroy(&i->lock);
 }
 
@@ -311,6 +314,14 @@ static int __ssl_setup(struct ast_tls_config *cfg, int client)
 	SSL_load_error_strings();
 	SSLeay_add_ssl_algorithms();
 
+	/* Get rid of an old SSL_CTX since we're about to
+	 * allocate a new one
+	 */
+	if (cfg->ssl_ctx) {
+		SSL_CTX_free(cfg->ssl_ctx);
+		cfg->ssl_ctx = NULL;
+	}
+
 	if (client) {
 #ifndef OPENSSL_NO_SSL2
 		if (ast_test_flag(&cfg->flags, AST_SSL_SSLV2_CLIENT)) {
@@ -346,6 +357,8 @@ static int __ssl_setup(struct ast_tls_config *cfg, int client)
 				ast_verb(0, "SSL error loading cert file. <%s>", cfg->certfile);
 				sleep(2);
 				cfg->enabled = 0;
+				SSL_CTX_free(cfg->ssl_ctx);
+				cfg->ssl_ctx = NULL;
 				return 0;
 			}
 		}
@@ -355,6 +368,8 @@ static int __ssl_setup(struct ast_tls_config *cfg, int client)
 				ast_verb(0, "SSL error loading private key file. <%s>", tmpprivate);
 				sleep(2);
 				cfg->enabled = 0;
+				SSL_CTX_free(cfg->ssl_ctx);
+				cfg->ssl_ctx = NULL;
 				return 0;
 			}
 		}
@@ -365,6 +380,8 @@ static int __ssl_setup(struct ast_tls_config *cfg, int client)
 				ast_verb(0, "SSL cipher error <%s>", cfg->cipher);
 				sleep(2);
 				cfg->enabled = 0;
+				SSL_CTX_free(cfg->ssl_ctx);
+				cfg->ssl_ctx = NULL;
 				return 0;
 			}
 		}
@@ -382,6 +399,16 @@ static int __ssl_setup(struct ast_tls_config *cfg, int client)
 int ast_ssl_setup(struct ast_tls_config *cfg)
 {
 	return __ssl_setup(cfg, 0);
+}
+
+void ast_ssl_teardown(struct ast_tls_config *cfg)
+{
+#ifdef DO_SSL
+	if (cfg->ssl_ctx) {
+		SSL_CTX_free(cfg->ssl_ctx);
+		cfg->ssl_ctx = NULL;
+	}
+#endif
 }
 
 struct ast_tcptls_session_instance *ast_tcptls_client_start(struct ast_tcptls_session_instance *tcptls_session)
@@ -412,8 +439,10 @@ struct ast_tcptls_session_instance *ast_tcptls_client_start(struct ast_tcptls_se
 	return handle_tcptls_connection(tcptls_session);
 
 client_start_error:
-	close(desc->accept_fd);
-	desc->accept_fd = -1;
+	if (desc) {
+		close(desc->accept_fd);
+		desc->accept_fd = -1;
+	}
 	if (tcptls_session) {
 		ao2_ref(tcptls_session, -1);
 	}

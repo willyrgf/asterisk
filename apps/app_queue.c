@@ -1828,9 +1828,17 @@ static int insert_penaltychange(const char *list_name, const char *content, cons
 	
 		if (!inserted) {
 			AST_LIST_INSERT_TAIL(&rl_iter->rules, rule, list);
+			inserted = 1;
 		}
+
+		break;
 	}
 
+	if (!inserted) {
+		ast_log(LOG_WARNING, "Unknown rule list name %s; ignoring.\n", list_name);
+		ast_free(rule);
+		return -1;
+	}
 	return 0;
 }
 
@@ -4218,6 +4226,7 @@ static struct ast_datastore *setup_transfer_datastore(struct queue_ent *qe, stru
 	ast_channel_lock(qe->chan);
 	if (!(ds = ast_datastore_alloc(&queue_transfer_info, NULL))) {
 		ast_channel_unlock(qe->chan);
+		ast_free(qtds);
 		ast_log(LOG_WARNING, "Unable to create transfer datastore. queue_log will not show attended transfer\n");
 		return NULL;
 	}
@@ -4610,6 +4619,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 			int res2;
 
 			res2 = ast_autoservice_start(qe->chan);
+
 			/* instead of starting autoservice and jacking this thread to push sound to the
 			   peer channel, let's set up a background player to the peer channel and 
 			   get on with life in this thread. */
@@ -4619,7 +4629,9 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 				res2 |= ast_safe_sleep(peer, qe->parent->memberdelay * 1000);
 			}
 			if (!res2 && announce) {
-				play_file(peer, announce, ringing, qe->moh);;
+				if (play_file(peer, announce, ringing, qe->moh) < 0) {
+					ast_log(LOG_ERROR, "play_file failed for '%s' on %s\n", announce, peer->name);
+				}
 			}
 			if (!res2 && qe->parent->reportholdtime) {
 				int res3;
@@ -4632,11 +4644,15 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 					holdtimesecs = abs((now - qe->start) % 60);
 					if (holdtime > 0) {
 						ast_say_number(peer, holdtime, AST_DIGIT_ANY, peer->language, NULL);
-						play_file(peer, qe->parent->sound_minutes, ringing, qe->moh);
+						if (play_file(peer, qe->parent->sound_minutes, ringing, qe->moh) < 0) {
+							ast_log(LOG_ERROR, "play_file failed for '%s' on %s\n", qe->parent->sound_minutes, peer->name);
+						}
 					}
 					if (holdtimesecs > 1) {
 						ast_say_number(peer, holdtimesecs, AST_DIGIT_ANY, peer->language, NULL);
-						play_file(peer, qe->parent->sound_seconds, ringing, qe->moh);
+						if (play_file(peer, qe->parent->sound_seconds, ringing, qe->moh) < 0) {
+							ast_log(LOG_ERROR, "play_file failed for '%s' on %s\n", qe->parent->sound_seconds, peer->name);
+						}
 					}
 				}
 			}
