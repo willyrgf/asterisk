@@ -20391,7 +20391,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 		ast_log(LOG_WARNING, "Received response: \"Forbidden\" from '%s'\n", get_header(&p->initreq, "From"));
 		if (!req->ignore && p->owner) {
 			ast_set_hangupsource(p->owner, p->owner->name, 0);
-			ast_queue_hangup_with_cause(p->owner, AST_CAUSE_CONGESTION);
+			ast_queue_hangup_with_cause(p->owner, hangup_sip2cause(resp));
 		}
 		break;
 
@@ -20399,7 +20399,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 		xmitres = transmit_request(p, SIP_ACK, seqno, XMIT_UNRELIABLE, FALSE);
 		if (p->owner && !req->ignore) {
 			ast_set_hangupsource(p->owner, p->owner->name, 0);
-			ast_queue_hangup_with_cause(p->owner, AST_CAUSE_CONGESTION);
+			ast_queue_hangup_with_cause(p->owner, hangup_sip2cause(resp));
 		}
 		break;
 
@@ -20409,7 +20409,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 		ast_log(LOG_WARNING, "Re-invite to non-existing call leg on other UA. SIP dialog '%s'. Giving up.\n", p->callid);
 		xmitres = transmit_request(p, SIP_ACK, seqno, XMIT_UNRELIABLE, FALSE);
 		if (p->owner) {
-			ast_queue_hangup_with_cause(p->owner, AST_CAUSE_CONGESTION);
+			ast_queue_hangup_with_cause(p->owner, hangup_sip2cause(resp));
 		}
 		break;
 
@@ -20424,7 +20424,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 		append_history(p, "Identity", "SIP identity is required. Not supported by Asterisk.");
 		ast_log(LOG_WARNING, "SIP identity required by proxy. SIP dialog '%s'. Giving up.\n", p->callid);
 		if (p->owner && !req->ignore) {
-			ast_queue_hangup_with_cause(p->owner, AST_CAUSE_CONGESTION);
+			ast_queue_hangup_with_cause(p->owner, hangup_sip2cause(resp));
 		}
 		break;
 
@@ -20457,7 +20457,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 		} else {
 			/* We can't set up this call, so give up */
 			if (p->owner && !req->ignore) {
-				ast_queue_hangup_with_cause(p->owner, AST_CAUSE_CONGESTION);
+				ast_queue_hangup_with_cause(p->owner, hangup_sip2cause(resp));
 			}
 		}
 		break;
@@ -20465,7 +20465,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 		xmitres = transmit_request(p, SIP_ACK, seqno, XMIT_UNRELIABLE, FALSE);
 		if (p->owner && !req->ignore) {
 			if (p->owner->_state != AST_STATE_UP) {
-				ast_queue_hangup_with_cause(p->owner, AST_CAUSE_CONGESTION);
+				ast_queue_hangup_with_cause(p->owner, hangup_sip2cause(resp));
 			} else {
 				/* This is a re-invite that failed. */
 				/* Reset the flag after a while
@@ -20489,7 +20489,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 	case 501: /* Not implemented */
 		xmitres = transmit_request(p, SIP_ACK, seqno, XMIT_UNRELIABLE, FALSE);
 		if (p->owner) {
-			ast_queue_hangup_with_cause(p->owner, AST_CAUSE_CONGESTION);
+			ast_queue_hangup_with_cause(p->owner, hangup_sip2cause(resp));
 		}
 		break;
 	}
@@ -21353,7 +21353,7 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 				default:
 					/* Send hangup */	
 					if (owner && sipmethod != SIP_BYE)
-						ast_queue_hangup_with_cause(p->owner, AST_CAUSE_PROTOCOL_ERROR);
+						ast_queue_hangup_with_cause(p->owner, hangup_sip2cause(resp));
 					break;
 				}
 				/* ACK on invite */
