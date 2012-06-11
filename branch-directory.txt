@@ -18,6 +18,7 @@ cancel_answer_elsewhere		Trunk	Code that's merged into trunk				DELETE
 cancel_elsewhere_1.4		1.4	Backport of cancel_elsewhere
 cdr_radius				No idea. Experimental or merged.			DELETE
 codename-pineapple			chan_sip3. Lots of cool stuff. never merged
+darjeeling-prack-1.8		1.8	Implementation of PRACK (started 2012-06)
 deluxepine-1.4			1.4	Named access control lists
 deluxepine-trunk		Trunk	Named access control lists. Candidate for 1.8
 dialplan-ami-amievents		?	Needs investigation
