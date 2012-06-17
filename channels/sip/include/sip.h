@@ -223,6 +223,7 @@
 #define DEFAULT_CAPABILITY (AST_FORMAT_ULAW | AST_FORMAT_TESTLAW | AST_FORMAT_ALAW | AST_FORMAT_GSM | AST_FORMAT_H263);
 #define DEFAULT_STORE_SIP_CAUSE FALSE      /*!< Don't store HASH(SIP_CAUSE,<channel name>) for channels by default */
 #endif
+#define DEFAULT_PRACK	FALSE		/*!< Default: Prack is turned off */
 /*@}*/
 
 /*! \name SIPflags
@@ -357,9 +358,10 @@
 
 
 #define SIP_PAGE3_SNOM_AOC               (1 << 0)  /*!< DPG: Allow snom aoc messages */
+#define SIP_PAGE3_PRACK               (2 << 0)  /*!< DPG: Allow snom aoc messages */
 
 #define SIP_PAGE3_FLAGS_TO_COPY \
-	(SIP_PAGE3_SNOM_AOC)
+	(SIP_PAGE3_SNOM_AOC | SIP_PAGE3_PRACK)
 
 /*@}*/
 
@@ -403,6 +405,7 @@ enum invitestates {
  * where the original response would be sent RELIABLE in an INVITE transaction
  */
 enum xmittype {
+	XMIT_PRACK = 3,    /*!< Transmit response the PRACK way: reliably, with re-transmits. */
 	XMIT_CRITICAL = 2,    /*!< Transmit critical SIP message reliably, with re-transmits.
 	                       *   If it fails, it's critical and will cause a teardown of the session */
 	XMIT_RELIABLE = 1,    /*!< Transmit SIP message reliably, with re-transmits */
@@ -560,7 +563,7 @@ enum sipmethod {
 	SIP_NOTIFY,     /*!< Status update, Part of the event package standard, result of a SUBSCRIBE or a REFER */
 	SIP_INVITE,     /*!< Set up a session */
 	SIP_ACK,        /*!< End of a three-way handshake started with INVITE. */
-	SIP_PRACK,      /*!< Reliable pre-call signalling. Not supported in Asterisk. */
+	SIP_PRACK,      /*!< Reliable pre-call signalling. */
 	SIP_BYE,        /*!< End of a session */
 	SIP_REFER,      /*!< Refer to another URI (transfer) */
 	SIP_SUBSCRIBE,  /*!< Subscribe for updates (voicemail, session status, device status, presence) */
@@ -696,6 +699,7 @@ struct sip_settings {
 	unsigned int disallowed_methods;   /*!< methods that we should never try to use */
 	int notifyringing;          /*!< Send notifications on ringing */
 	int notifyhold;             /*!< Send notifications on hold */
+	int prack;			/*!< 0 offer prack, 1 use prack in responses */
 	enum notifycid_setting notifycid;  /*!< Send CID with ringing notifications */
 	enum transfermodes allowtransfer;  /*!< SIP Refer restriction scheme */
 	int allowsubscribe;         /*!< Flag for disabling ALL subscriptions, this is FALSE only if all peers are FALSE
@@ -984,6 +988,8 @@ struct sip_pvt {
 	uint32_t ocseq;                         /*!< Current outgoing seqno */
 	uint32_t icseq;                         /*!< Current incoming seqno */
 	uint32_t init_icseq;                    /*!< Initial incoming seqno from first request */
+	uint32_t rseq;                          /*!< Current outgoing PRACK rseq */
+	uint32_t irseq;                         /*!< Current incoming PRACK rseq */
 	ast_group_t callgroup;                  /*!< Call group */
 	ast_group_t pickupgroup;                /*!< Pickup group */
 	uint32_t lastinvite;                    /*!< Last seqno of invite */
@@ -1140,6 +1146,7 @@ struct sip_pkt {
 	int retrans;              /*!< Retransmission number */
 	int method;               /*!< SIP method for this packet */
 	uint32_t seqno;           /*!< Sequence number */
+	uint32_t rseqno;           /*!< PRACK Sequence number */
 	char is_resp;             /*!< 1 if this is a response packet (e.g. 200 OK), 0 if it is a request */
 	char is_fatal;            /*!< non-zero if there is a fatal error */
 	int response_code;        /*!< If this is a response, the response code */
@@ -1749,7 +1756,7 @@ static const struct cfsip_options {
 	char * const text;  /*!< Text id, as in standard */
 } sip_options[] = {	/* XXX used in 3 places */
 	/* RFC3262: PRACK 100% reliability */
-	{ SIP_OPT_100REL,	NOT_SUPPORTED,	"100rel" },
+	{ SIP_OPT_100REL,	SUPPORTED,	"100rel" },
 	/* RFC3959: SIP Early session support */
 	{ SIP_OPT_EARLY_SESSION, NOT_SUPPORTED,	"early-session" },
 	/* SIMPLE events:  RFC4662 */

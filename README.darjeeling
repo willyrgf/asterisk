@@ -1,0 +1,102 @@
+Edvina AB
+Olle E. Johansson
+
+
+Project started: 2012-06-15
+
+
+
+
+
+Darjeeling-prack-1.8
+--------------------
+
+This branch will implement PRACK in the SIP stack of Asterisk.
+
+PRACK stands for reliable unreliable provisional responses.
+
+In SIP, the provisional responses are often sent over UDP, which means that they can
+get lost. Some of them are retransmitted every minute (to get at least one through
+once during a three minute period following RFC 3261). For some messages, it's 
+important that they get through immediately. Like if you want to play a message to
+the customer that he's call will be cancelled due to lack of funds in his account.
+
+PRACK adds a retransmit and ACK mechanism to the 1xx messages excluding 100 (since
+it's transmitted hop-by-hop).
+
+If the INVITE contains
+	Supported: 100rel
+
+then the 1xx answer can add 
+	Required: 100rel
+	Rseq: 	42
+
+The Rseq is the PRACK sequence number
+The caller then needs to confirm the message with a new request, during the INVITE transaction
+	PRACK
+	RAck: 	42	<cseq #> <cseq method>
+
+And the callee confirms this (and close the PRACK transaction) with a 200 OK.
+
+If the PRACK is not received in time, the 1xx response will be retransmitted.
+There can only be ONE outstanding PRACK, which makes it easier to integrate in the
+Asterisk SIP stack that unfortunately lacks a transaction layer.
+
+PRACK is documented in RFC 3262.
+
+Retransmission works like the retransmission of responses to INVITE (like the 200 OK).
+It starts with T1 and doubles for each retransmission. Unlike INVITE responses,
+the retransmission timer does not cap at T2.
+
+If retransmission times out, a 5xx message should terminate the INVITE transaction.
+
+
+A PRACK received that does not match existing SIP_PVT is responded to with 481.
+
+* When to stop?
+---------------
+From the RFC: 
+"The UAS MAY send a final response to the initial request before having received PRACKs for all unacknowledged
+reliable provisional responses, unless the final response is 2xx and any of the unacknowledged
+reliable provisional responses contained a session description. In that case, it MUST NOT send a final response
+until those provisional responses are acknowledged. If the UAS does send a final response when
+reliable responses are still unacknowledged, it SHOULD NOT continue to retransmit the unacknowledged
+reliable provisional responses, but it MUST be prepared to process PRACK requests for those outstanding
+responses. A UAS MUST NOT send new reliable provisional responses (as opposed to retransmissions of
+unacknowledged ones) after sending a final response to a request"
+
+* Receive in order until final response
+---------------------------------------
+"Handling of subsequent reliable provisional responses for the same initial request follows the same rules
+as above, with the following difference: reliable provisional responses are guaranteed to be in order. As a
+result, if the UAC receives another reliable provisional response to the same request, and its RSeq value
+is not one higher than the value of the sequence number, that response MUST NOT be acknowledged with a
+PRACK, and MUST NOT be processed further by the UAC. An implementation MAY discard the response,
+or MAY cache the response in the hopes of receiving the missing responses.
+The UAC MAY acknowledge reliable provisional responses received after the final response or MAY discard
+them."
+
+* When do the call begin?
+-------------------------
+A corner case that I don't know if it's implemented: If we receive and INVITE without SDP, we MUST
+add SDP offer to the reliable answer and the caller must add an SDP answer to the PRACK. This means 
+that the session begins in the middle of the INVITE transaction.
+"Once an answer has been sent or received, the UA SHOULD establish the session based on the parameters of
+the offer and answer, even if the original INVITE itself has not been responded to." (section 5)
+
+* Security
+----------
+"The PRACK request can be injected by attackers to force retransmissions of reliable provisional responses to
+cease. As these responses can convey important information, PRACK messages SHOULD be authenticated
+as any other request." (section 9)
+
+Todo
+----
+* Add PRACK to the list of supported headers
+* Should we be able to REQUIRE prack? Based on what? _SIPREQUIREPRACK ?
+* PRACK enabled globally and per device - user and peer
+* PRACK enabled per call - SIPCHANINFO?
+
+---------------------
+The patch is (C) Copyright by Edvina AB, Sollentuna, Sweden. 
+Developed by Olle E. Johansson, oej@edvina.net
