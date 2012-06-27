@@ -27,6 +27,10 @@
  * \author Terry Wilson
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
@@ -250,7 +254,6 @@ static void channel_data_add_flags(struct ast_data *tree,
 	ast_data_add_bool(tree, "IN_DTMF", ast_test_flag(ast_channel_flags(chan), AST_FLAG_IN_DTMF));
 	ast_data_add_bool(tree, "EMULATE_DTMF", ast_test_flag(ast_channel_flags(chan), AST_FLAG_EMULATE_DTMF));
 	ast_data_add_bool(tree, "END_DTMF_ONLY", ast_test_flag(ast_channel_flags(chan), AST_FLAG_END_DTMF_ONLY));
-	ast_data_add_bool(tree, "ANSWERED_ELSEWHERE", ast_test_flag(ast_channel_flags(chan), AST_FLAG_ANSWERED_ELSEWHERE));
 	ast_data_add_bool(tree, "MASQ_NOSTREAM", ast_test_flag(ast_channel_flags(chan), AST_FLAG_MASQ_NOSTREAM));
 	ast_data_add_bool(tree, "BRIDGE_HANGUP_RUN", ast_test_flag(ast_channel_flags(chan), AST_FLAG_BRIDGE_HANGUP_RUN));
 	ast_data_add_bool(tree, "BRIDGE_HANGUP_DONT", ast_test_flag(ast_channel_flags(chan), AST_FLAG_BRIDGE_HANGUP_DONT));
@@ -848,8 +851,8 @@ void ast_channel_callid_set(struct ast_channel *chan, struct ast_callid *callid)
 	if (chan->callid) {
 
 		if ((option_debug >= 3) || (ast_opt_dbg_module && ast_debug_get_by_module(AST_MODULE) >= 3)) {
-			char call_identifier_from[13];
-			char call_identifier_to[13];
+			char call_identifier_from[AST_CALLID_BUFFER_LENGTH];
+			char call_identifier_to[AST_CALLID_BUFFER_LENGTH];
 			ast_callid_strnprint(call_identifier_from, sizeof(call_identifier_from), chan->callid);
 			ast_callid_strnprint(call_identifier_to, sizeof(call_identifier_to), callid);
 			ast_log(LOG_DEBUG, "Channel Call ID changing from %s to %s\n", call_identifier_from, call_identifier_to);

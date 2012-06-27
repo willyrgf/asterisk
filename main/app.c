@@ -23,6 +23,10 @@
  * \author Mark Spencer <markster@digium.com>
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
@@ -55,6 +59,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/linkedlists.h"
 #include "asterisk/threadstorage.h"
 #include "asterisk/test.h"
+#include "asterisk/module.h"
 
 AST_THREADSTORAGE_PUBLIC(ast_str_thread_global_buf);
 
@@ -312,82 +317,52 @@ int ast_app_run_macro(struct ast_channel *autoservice_chan, struct ast_channel *
 	return res;
 }
 
-int ast_app_exec_sub(struct ast_channel *autoservice_chan, struct ast_channel *sub_chan, const char *sub_args)
+static const struct ast_app_stack_funcs *app_stack_callbacks;
+
+void ast_install_stack_functions(const struct ast_app_stack_funcs *funcs)
 {
-	struct ast_app *sub_app;
-	const char *saved_context;
-	const char *saved_exten;
-	int saved_priority;
-	int saved_autoloopflag;
+	app_stack_callbacks = funcs;
+}
+
+const char *ast_app_expand_sub_args(struct ast_channel *chan, const char *args)
+{
+	const struct ast_app_stack_funcs *funcs;
+	const char *new_args;
+
+	funcs = app_stack_callbacks;
+	if (!funcs || !funcs->expand_sub_args) {
+		ast_log(LOG_WARNING,
+			"Cannot expand 'Gosub(%s)' arguments.  The app_stack module is not available.\n",
+			args);
+		return NULL;
+	}
+	ast_module_ref(funcs->module);
+
+	new_args = funcs->expand_sub_args(chan, args);
+	ast_module_unref(funcs->module);
+	return new_args;
+}
+
+int ast_app_exec_sub(struct ast_channel *autoservice_chan, struct ast_channel *sub_chan, const char *sub_args, int ignore_hangup)
+{
+	const struct ast_app_stack_funcs *funcs;
 	int res;
 
-	sub_app = pbx_findapp("Gosub");
-	if (!sub_app) {
+	funcs = app_stack_callbacks;
+	if (!funcs || !funcs->run_sub) {
 		ast_log(LOG_WARNING,
-			"Cannot run 'Gosub(%s)'.  The application is not available.\n", sub_args);
+			"Cannot run 'Gosub(%s)'.  The app_stack module is not available.\n",
+			sub_args);
 		return -1;
 	}
+	ast_module_ref(funcs->module);
+
 	if (autoservice_chan) {
 		ast_autoservice_start(autoservice_chan);
 	}
 
-	ast_channel_lock(sub_chan);
-
-	/* Save current dialplan location */
-	saved_context = ast_strdupa(ast_channel_context(sub_chan));
-	saved_exten = ast_strdupa(ast_channel_exten(sub_chan));
-	saved_priority = ast_channel_priority(sub_chan);
-
-	/*
-	 * Save flag to restore at the end so we don't have to play with
-	 * the priority in the gosub location string.
-	 */
-	saved_autoloopflag = ast_test_flag(ast_channel_flags(sub_chan), AST_FLAG_IN_AUTOLOOP);
-	ast_clear_flag(ast_channel_flags(sub_chan), AST_FLAG_IN_AUTOLOOP);
-
-	/* Set known location for Gosub to return - 1 */
-	ast_channel_context_set(sub_chan, "gosub_virtual_context");
-	ast_channel_exten_set(sub_chan, "s");
-	ast_channel_priority_set(sub_chan, 1 - 1);
-
-	ast_debug(4, "%s Original location: %s,%s,%d\n", ast_channel_name(sub_chan),
-		saved_context, saved_exten, saved_priority);
-
-	ast_channel_unlock(sub_chan);
-	res = pbx_exec(sub_chan, sub_app, sub_args);
-	ast_debug(4, "Gosub exited with status %d\n", res);
-	ast_channel_lock(sub_chan);
-	if (!res) {
-		struct ast_pbx_args gosub_args = {{0}};
-		struct ast_pbx *saved_pbx;
-
-		/* supress warning about a pbx already being on the channel */
-		saved_pbx = ast_channel_pbx(sub_chan);
-		ast_channel_pbx_set(sub_chan, NULL);
-
-		ast_channel_unlock(sub_chan);
-		gosub_args.no_hangup_chan = 1;
-		ast_pbx_run_args(sub_chan, &gosub_args);
-		ast_channel_lock(sub_chan);
-
-		/* Restore pbx. */
-		ast_free(ast_channel_pbx(sub_chan));
-		ast_channel_pbx_set(sub_chan, saved_pbx);
-	}
-
-	ast_debug(4, "%s Ending location: %s,%s,%d\n", ast_channel_name(sub_chan),
-		ast_channel_context(sub_chan), ast_channel_exten(sub_chan),
-		ast_channel_priority(sub_chan));
-
-	/* Restore flag */
-	ast_set2_flag(ast_channel_flags(sub_chan), saved_autoloopflag, AST_FLAG_IN_AUTOLOOP);
-
-	/* Restore dialplan location */
-	ast_channel_context_set(sub_chan, saved_context);
-	ast_channel_exten_set(sub_chan, saved_exten);
-	ast_channel_priority_set(sub_chan, saved_priority);
-
-	ast_channel_unlock(sub_chan);
+	res = funcs->run_sub(sub_chan, sub_args, ignore_hangup);
+	ast_module_unref(funcs->module);
 
 	if (autoservice_chan) {
 		ast_autoservice_stop(autoservice_chan);
@@ -395,14 +370,14 @@ int ast_app_exec_sub(struct ast_channel *autoservice_chan, struct ast_channel *s
 	return res;
 }
 
-int ast_app_run_sub(struct ast_channel *autoservice_chan, struct ast_channel *sub_chan, const char *sub_location, const char *sub_args)
+int ast_app_run_sub(struct ast_channel *autoservice_chan, struct ast_channel *sub_chan, const char *sub_location, const char *sub_args, int ignore_hangup)
 {
 	int res;
 	char *args_str;
 	size_t args_len;
 
 	if (ast_strlen_zero(sub_args)) {
-		return ast_app_exec_sub(autoservice_chan, sub_chan, sub_location);
+		return ast_app_exec_sub(autoservice_chan, sub_chan, sub_location, ignore_hangup);
 	}
 
 	/* Create the Gosub application argument string. */
@@ -413,7 +388,7 @@ int ast_app_run_sub(struct ast_channel *autoservice_chan, struct ast_channel *su
 	}
 	snprintf(args_str, args_len, "%s(%s)", sub_location, sub_args);
 
-	res = ast_app_exec_sub(autoservice_chan, sub_chan, args_str);
+	res = ast_app_exec_sub(autoservice_chan, sub_chan, args_str, ignore_hangup);
 	ast_free(args_str);
 	return res;
 }
@@ -423,18 +398,96 @@ static int (*ast_inboxcount_func)(const char *mailbox, int *newmsgs, int *oldmsg
 static int (*ast_inboxcount2_func)(const char *mailbox, int *urgentmsgs, int *newmsgs, int *oldmsgs) = NULL;
 static int (*ast_sayname_func)(struct ast_channel *chan, const char *mailbox, const char *context) = NULL;
 static int (*ast_messagecount_func)(const char *context, const char *mailbox, const char *folder) = NULL;
+static int (*ast_copy_recording_to_vm_func)(struct ast_vm_recording_data *vm_rec_data) = NULL;
+static const char *(*ast_vm_index_to_foldername_func)(int id) = NULL;
+static struct ast_vm_mailbox_snapshot *(*ast_vm_mailbox_snapshot_create_func)(const char *mailbox,
+	const char *context,
+	const char *folder,
+	int descending,
+	enum ast_vm_snapshot_sort_val sort_val,
+	int combine_INBOX_and_OLD) = NULL;
+static struct ast_vm_mailbox_snapshot *(*ast_vm_mailbox_snapshot_destroy_func)(struct ast_vm_mailbox_snapshot *mailbox_snapshot) = NULL;
+static int (*ast_vm_msg_move_func)(const char *mailbox,
+	const char *context,
+	size_t num_msgs,
+	const char *oldfolder,
+	const char *old_msg_ids[],
+	const char *newfolder) = NULL;
+static int (*ast_vm_msg_remove_func)(const char *mailbox,
+	const char *context,
+	size_t num_msgs,
+	const char *folder,
+	const char *msgs[]) = NULL;
+static int (*ast_vm_msg_forward_func)(const char *from_mailbox,
+	const char *from_context,
+	const char *from_folder,
+	const char *to_mailbox,
+	const char *to_context,
+	const char *to_folder,
+	size_t num_msgs,
+	const char *msg_ids[],
+	int delete_old) = NULL;
+static int (*ast_vm_msg_play_func)(struct ast_channel *chan,
+	const char *mailbox,
+	const char *context,
+	const char *folder,
+	const char *msg_num,
+	ast_vm_msg_play_cb cb) = NULL;
 
 void ast_install_vm_functions(int (*has_voicemail_func)(const char *mailbox, const char *folder),
 			      int (*inboxcount_func)(const char *mailbox, int *newmsgs, int *oldmsgs),
 			      int (*inboxcount2_func)(const char *mailbox, int *urgentmsgs, int *newmsgs, int *oldmsgs),
 			      int (*messagecount_func)(const char *context, const char *mailbox, const char *folder),
-			      int (*sayname_func)(struct ast_channel *chan, const char *mailbox, const char *context))
+			      int (*sayname_func)(struct ast_channel *chan, const char *mailbox, const char *context),
+			      int (*copy_recording_to_vm_func)(struct ast_vm_recording_data *vm_rec_data),
+			      const char *vm_index_to_foldername_func(int id),
+			      struct ast_vm_mailbox_snapshot *(*vm_mailbox_snapshot_create_func)(const char *mailbox,
+				const char *context,
+				const char *folder,
+				int descending,
+				enum ast_vm_snapshot_sort_val sort_val,
+				int combine_INBOX_and_OLD),
+			      struct ast_vm_mailbox_snapshot *(*vm_mailbox_snapshot_destroy_func)(struct ast_vm_mailbox_snapshot *mailbox_snapshot),
+			      int (*vm_msg_move_func)(const char *mailbox,
+				const char *context,
+				size_t num_msgs,
+				const char *oldfolder,
+				const char *old_msg_ids[],
+				const char *newfolder),
+			      int (*vm_msg_remove_func)(const char *mailbox,
+				const char *context,
+				size_t num_msgs,
+				const char *folder,
+				const char *msgs[]),
+			      int (*vm_msg_forward_func)(const char *from_mailbox,
+				const char *from_context,
+				const char *from_folder,
+				const char *to_mailbox,
+				const char *to_context,
+				const char *to_folder,
+				size_t num_msgs,
+				const char *msg_ids[],
+				int delete_old),
+			      int (*vm_msg_play_func)(struct ast_channel *chan,
+				const char *mailbox,
+				const char *context,
+				const char *folder,
+				const char *msg_num,
+				ast_vm_msg_play_cb cb))
 {
 	ast_has_voicemail_func = has_voicemail_func;
 	ast_inboxcount_func = inboxcount_func;
 	ast_inboxcount2_func = inboxcount2_func;
 	ast_messagecount_func = messagecount_func;
 	ast_sayname_func = sayname_func;
+	ast_copy_recording_to_vm_func = copy_recording_to_vm_func;
+	ast_vm_index_to_foldername_func = vm_index_to_foldername_func;
+	ast_vm_mailbox_snapshot_create_func = vm_mailbox_snapshot_create_func;
+	ast_vm_mailbox_snapshot_destroy_func = vm_mailbox_snapshot_destroy_func;
+	ast_vm_msg_move_func = vm_msg_move_func;
+	ast_vm_msg_remove_func = vm_msg_remove_func;
+	ast_vm_msg_forward_func = vm_msg_forward_func;
+	ast_vm_msg_play_func = vm_msg_play_func;
 }
 
 void ast_uninstall_vm_functions(void)
@@ -444,7 +497,33 @@ void ast_uninstall_vm_functions(void)
 	ast_inboxcount2_func = NULL;
 	ast_messagecount_func = NULL;
 	ast_sayname_func = NULL;
+	ast_copy_recording_to_vm_func = NULL;
+	ast_vm_index_to_foldername_func = NULL;
+	ast_vm_mailbox_snapshot_create_func = NULL;
+	ast_vm_mailbox_snapshot_destroy_func = NULL;
+	ast_vm_msg_move_func = NULL;
+	ast_vm_msg_remove_func = NULL;
+	ast_vm_msg_forward_func = NULL;
+	ast_vm_msg_play_func = NULL;
 }
+
+#ifdef TEST_FRAMEWORK
+int (*ast_vm_test_create_user_func)(const char *context, const char *mailbox) = NULL;
+int (*ast_vm_test_destroy_user_func)(const char *context, const char *mailbox) = NULL;
+
+void ast_install_vm_test_functions(int (*vm_test_create_user_func)(const char *context, const char *mailbox),
+				   int (*vm_test_destroy_user_func)(const char *context, const char *mailbox))
+{
+	ast_vm_test_create_user_func = vm_test_create_user_func;
+	ast_vm_test_destroy_user_func = vm_test_destroy_user_func;
+}
+
+void ast_uninstall_vm_test_functions(void)
+{
+	ast_vm_test_create_user_func = NULL;
+	ast_vm_test_destroy_user_func = NULL;
+}
+#endif
 
 int ast_app_has_voicemail(const char *mailbox, const char *folder)
 {
@@ -459,6 +538,28 @@ int ast_app_has_voicemail(const char *mailbox, const char *folder)
 	return 0;
 }
 
+/*!
+ * \internal
+ * \brief Function used as a callback for ast_copy_recording_to_vm when a real one isn't installed.
+ * \param vm_rec_data Stores crucial information about the voicemail that will basically just be used
+ * to figure out what the name of the recipient was supposed to be
+ */
+int ast_app_copy_recording_to_vm(struct ast_vm_recording_data *vm_rec_data)
+{
+	static int warned = 0;
+
+	if (ast_copy_recording_to_vm_func) {
+		return ast_copy_recording_to_vm_func(vm_rec_data);
+	}
+
+	if (warned++ % 10 == 0) {
+		ast_verb(3, "copy recording to voicemail called to copy %s.%s to %s@%s, but voicemail not loaded.\n",
+			vm_rec_data->recording_file, vm_rec_data->recording_ext,
+			vm_rec_data->mailbox, vm_rec_data->context);
+	}
+
+	return -1;
+}
 
 int ast_app_inboxcount(const char *mailbox, int *newmsgs, int *oldmsgs)
 {
@@ -525,6 +626,107 @@ int ast_app_messagecount(const char *context, const char *mailbox, const char *f
 
 	return 0;
 }
+
+const char *ast_vm_index_to_foldername(int id)
+{
+	if (ast_vm_index_to_foldername_func) {
+		return ast_vm_index_to_foldername_func(id);
+	}
+	return NULL;
+}
+
+struct ast_vm_mailbox_snapshot *ast_vm_mailbox_snapshot_create(const char *mailbox,
+	const char *context,
+	const char *folder,
+	int descending,
+	enum ast_vm_snapshot_sort_val sort_val,
+	int combine_INBOX_and_OLD)
+{
+	if (ast_vm_mailbox_snapshot_create_func) {
+		return ast_vm_mailbox_snapshot_create_func(mailbox, context, folder, descending, sort_val, combine_INBOX_and_OLD);
+	}
+	return NULL;
+}
+
+struct ast_vm_mailbox_snapshot *ast_vm_mailbox_snapshot_destroy(struct ast_vm_mailbox_snapshot *mailbox_snapshot)
+{
+	if (ast_vm_mailbox_snapshot_destroy_func) {
+		return ast_vm_mailbox_snapshot_destroy_func(mailbox_snapshot);
+	}
+	return NULL;
+}
+
+int ast_vm_msg_move(const char *mailbox,
+	const char *context,
+	size_t num_msgs,
+	const char *oldfolder,
+	const char *old_msg_ids[],
+	const char *newfolder)
+{
+	if (ast_vm_msg_move_func) {
+		return ast_vm_msg_move_func(mailbox, context, num_msgs, oldfolder, old_msg_ids, newfolder);
+	}
+	return 0;
+}
+
+int ast_vm_msg_remove(const char *mailbox,
+	const char *context,
+	size_t num_msgs,
+	const char *folder,
+	const char *msgs[])
+{
+	if (ast_vm_msg_remove_func) {
+		return ast_vm_msg_remove_func(mailbox, context, num_msgs, folder, msgs);
+	}
+	return 0;
+}
+
+int ast_vm_msg_forward(const char *from_mailbox,
+	const char *from_context,
+	const char *from_folder,
+	const char *to_mailbox,
+	const char *to_context,
+	const char *to_folder,
+	size_t num_msgs,
+	const char *msg_ids[],
+	int delete_old)
+{
+	if (ast_vm_msg_forward_func) {
+		return ast_vm_msg_forward_func(from_mailbox, from_context, from_folder, to_mailbox, to_context, to_folder, num_msgs, msg_ids, delete_old);
+	}
+	return 0;
+}
+
+int ast_vm_msg_play(struct ast_channel *chan,
+	const char *mailbox,
+	const char *context,
+	const char *folder,
+	const char *msg_num,
+	ast_vm_msg_play_cb cb)
+{
+	if (ast_vm_msg_play_func) {
+		return ast_vm_msg_play_func(chan, mailbox, context, folder, msg_num, cb);
+	}
+	return 0;
+}
+
+#ifdef TEST_FRAMEWORK
+int ast_vm_test_create_user(const char *context, const char *mailbox)
+{
+	if (ast_vm_test_create_user_func) {
+		return ast_vm_test_create_user_func(context, mailbox);
+	}
+	return 0;
+}
+
+int ast_vm_test_destroy_user(const char *context, const char *mailbox)
+{
+	if (ast_vm_test_destroy_user_func) {
+		return ast_vm_test_destroy_user_func(context, mailbox);
+	}
+	return 0;
+}
+#endif
 
 int ast_dtmf_stream(struct ast_channel *chan, struct ast_channel *peer, const char *digits, int between, unsigned int duration)
 {
@@ -709,10 +911,16 @@ int ast_linear_stream(struct ast_channel *chan, const char *filename, int fd, in
 	return res;
 }
 
-int ast_control_streamfile(struct ast_channel *chan, const char *file,
-			   const char *fwd, const char *rev,
-			   const char *stop, const char *suspend,
-			   const char *restart, int skipms, long *offsetms)
+static int control_streamfile(struct ast_channel *chan,
+	const char *file,
+	const char *fwd,
+	const char *rev,
+	const char *stop,
+	const char *suspend,
+	const char *restart,
+	int skipms,
+	long *offsetms,
+	ast_waitstream_fr_cb cb)
 {
 	char *breaks = NULL;
 	char *end = NULL;
@@ -784,7 +992,11 @@ int ast_control_streamfile(struct ast_channel *chan, const char *file,
 				ast_seekstream(ast_channel_stream(chan), offset, SEEK_SET);
 				offset = 0;
 			}
-			res = ast_waitstream_fr(chan, breaks, fwd, rev, skipms);
+			if (cb) {
+				res = ast_waitstream_fr_w_cb(chan, breaks, fwd, rev, skipms, cb);
+			} else {
+				res = ast_waitstream_fr(chan, breaks, fwd, rev, skipms);
+			}
 		}
 
 		if (res < 1) {
@@ -846,6 +1058,28 @@ int ast_control_streamfile(struct ast_channel *chan, const char *file,
 	ast_stopstream(chan);
 
 	return res;
+}
+
+int ast_control_streamfile_w_cb(struct ast_channel *chan,
+	const char *file,
+	const char *fwd,
+	const char *rev,
+	const char *stop,
+	const char *suspend,
+	const char *restart,
+	int skipms,
+	long *offsetms,
+	ast_waitstream_fr_cb cb)
+{
+	return control_streamfile(chan, file, fwd, rev, stop, suspend, restart, skipms, offsetms, cb);
+}
+
+int ast_control_streamfile(struct ast_channel *chan, const char *file,
+			   const char *fwd, const char *rev,
+			   const char *stop, const char *suspend,
+			   const char *restart, int skipms, long *offsetms)
+{
+	return control_streamfile(chan, file, fwd, rev, stop, suspend, restart, skipms, offsetms, NULL);
 }
 
 int ast_play_and_wait(struct ast_channel *chan, const char *fn)

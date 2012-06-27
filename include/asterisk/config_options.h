@@ -124,31 +124,41 @@ struct aco_type {
 	struct aco_type_internal *internal;
 };
 
-/*! \brief A callback function for applying the config changes
+/*! \brief A callback function to run just prior to applying config changes
  * \retval 0 Success
  * \retval non-zero Failure. Changes not applied
  */
 typedef int (*aco_pre_apply_config)(void);
 
-/*! \brief A callback functino for allocating an object to hold all config objects
+/*! \brief A callback function called only if config changes have been applied
+ *
+ * \note If a config file has not been edited prior to performing a reload, this
+ * callback will not be called.
+ */
+typedef void (*aco_post_apply_config)(void);
+
+/*! \brief A callback function for allocating an object to hold all config objects
  * \retval NULL error
  * \retval non-NULL a config object container
  */
 typedef void *(*aco_snapshot_alloc)(void);
 
+/*! \brief The representation of a single configuration file to be processed */
 struct aco_file {
-	const char *filename;
-	const char **preload;
+	const char *filename; /*!< \brief The filename to be processed */
+	const char *alias;    /*!< \brief An alias filename to be tried if 'filename' cannot be found */
+	const char **preload; /*!< \brief A null-terminated oredered array of categories to be loaded first */
 	struct aco_type *types[]; /*!< The list of types for this config. Required. Use a sentinel! */
 };
 
 struct aco_info {
-	const char *module;         /*!< The name of the module whose config is being processed */
+	const char *module; /*!< The name of the module whose config is being processed */
 	aco_pre_apply_config pre_apply_config; /*!< A callback called after processing, but before changes are applied */
+	aco_post_apply_config post_apply_config;/*!< A callback called after changes are applied */
 	aco_snapshot_alloc snapshot_alloc;     /*!< Allocate an object to hold all global configs and item containers */
 	struct ao2_global_obj *global_obj;     /*!< The global object array that holds the user-defined config object */
 	struct aco_info_internal *internal;
-	struct aco_file *files[];    /*!< The config filename */
+	struct aco_file *files[];    /*!< An array of aco_files to process */
 };
 
 /*! \brief A helper macro to ensure that aco_info types always have a sentinel */
@@ -206,26 +216,171 @@ int aco_info_init(struct aco_info *info);
  */
 void aco_info_destroy(struct aco_info *info);
 
-/*! \brief The option types with default handlers
+/*! \brief The option types
  *
  * \note aco_option_register takes an option type which is used
  * to look up the handler for that type. Each non-custom type requires
  * field names for specific types in the struct being configured. Each
- * option below is commented with the field types, *in the order
- * they must be passed* to aco_option_register. The fields
- * are located in the args array in the ast_config_option passed to
- * the default handler function.
- * */
+ * option below is commented with the field types, additional arguments
+ * and example usage with aco_option_register
+ */
 enum aco_option_type {
-	OPT_ACL_T,         /*!< fields: struct ast_ha * */
-	OPT_BOOL_T,        /*!< fields: unsigned int */
-	OPT_CODEC_T,       /*!< fields: struct ast_codec pref, struct ast_format_cap * */
-	OPT_CUSTOM_T,      /*!< fields: none */
-	OPT_DOUBLE_T,      /*!< fields: double */
-	OPT_INT_T,         /*!< fields: int */
-	OPT_SOCKADDR_T,    /*!< fields: struct ast_sockaddr */
-	OPT_STRINGFIELD_T, /*!< fields: ast_string_field */
-	OPT_UINT_T,        /*!< fields: unsigned int */
+	/*! \brief Type for default option handler for ACLs
+	 * \note aco_option_register flags:
+	 *   non-zero : "permit"
+	 *   0        : "deny"
+	 * aco_option_register varargs:
+	 *   FLDSET macro with the field of type struct ast_ha *.
+	 *
+	 * Example:
+	 * {code}
+	 * struct test_item {
+	 *     struct ast_ha *ha;
+	 * };
+	 * aco_option_register(&cfg_info, "permit", ACO_EXACT, my_types, NULL, OPT_ACL_T, 1, FLDSET(struct test_item, ha));
+	 * aco_option_register(&cfg_info, "deny", ACO_EXACT, my_types, NULL, OPT_ACL_T, 0, FLDSET(struct test_item, ha));
+	 * {code}
+	 */
+	OPT_ACL_T,
+
+	/*! \brief Type for default option handler for bools (ast_true/ast_false)
+	 * \note aco_option_register flags:
+	 *   non-zero : process via ast_true
+	 *   0        : process via ast_false
+	 * aco_option_register varargs:
+	 *   FLDSET macro with the field of type int. It is important to note that the field
+	 *   cannot be a bitfield. If bitfields are required, they must be set via a custom handler.
+	 *
+	 * Example:
+	 * {code}
+	 * struct test_item {
+	 *     int enabled;
+	 * };
+		aco_option_register(&cfg_info, "enabled", ACO_EXACT, my_types, "no", OPT_BOOL_T, 1, FLDSET(struct test_item, enabled));
+	 * {endcode}
+	 */
+	OPT_BOOL_T,
+
+	/*! \brief Type for default option handler for codec preferences/capabilities
+	 * \note aco_option_register flags:
+	 *   non-zero : This is an "allow" style option
+	 *   0        : This is a "disallow" style option
+	 * aco_option_register varargs:
+	 *   FLDSET macro with fields representing a struct ast_codec_pref and a struct ast_format_cap *
+	 *
+	 * Example:
+	 * {code}
+	 * struct test_item {
+	 *     struct ast_codec_pref pref;
+	 *     struct ast_format cap *cap;
+	 * };
+	 * aco_option_register(&cfg_info, "allow", ACO_EXACT, my_types, "ulaw,alaw", OPT_CODEC_T, 1, FLDSET(struct test_item, pref, cap));
+	 * aco_option_register(&cfg_info, "disallow", ACO_EXACT, my_types, "all", OPT_CODEC_T, 0, FLDSET(struct test_item, pref, cap));
+	 */
+	OPT_CODEC_T,
+
+	/*! \brief Type for a custom (user-defined) option handler */
+	OPT_CUSTOM_T,
+
+	/*! \brief Type for default option handler for doubles
+	 *
+	 * \note aco_option_register flags:
+	 *   See flags available for use with the PARSE_DOUBLE type for the ast_parse_arg function
+	 * aco_option_register varargs:
+	 *   FLDSET macro with the field of type double
+	 *
+	 * Example:
+	 * struct test_item {
+	 *     double dub;
+	 * };
+	 * {code}
+	 * aco_option_register(&cfg_info, "doubleopt", ACO_EXACT, my_types, "3", OPT_DOUBLE_T, FLDSET(struct test_item, dub));
+	 * {endcode}
+	 */
+	OPT_DOUBLE_T,
+
+	/*! \brief Type for default option handler for signed integers
+	 *
+	 * \note aco_option_register flags:
+	 *   See flags available for use with the PARSE_INT32 type for the ast_parse_arg function
+	 * aco_option_register varargs:
+	 *   FLDSET macro with the field of type int32_t
+	 *   The remaining varargs for should be arguments compatible with the varargs for the
+	 *   ast_parse_arg function with the PARSE_INT32 type and the flags passed in the
+	 *   aco_option_register flags parameter.
+	 *
+	 * \note In most situations, it is preferable to not pass the PARSE_DEFAULT flag. If a config
+	 * contains an invalid value, it is better to let the config loading fail with warnings so that
+	 * the problem is fixed by the administrator.
+	 *
+	 * Example:
+	 * struct test_item {
+	 *     int32_t intopt;
+	 * };
+	 * {code}
+	 * aco_option_register(&cfg_info, "intopt", ACO_EXACT, my_types, "3", OPT_INT_T, PARSE_IN_RANGE, FLDSET(struct test_item, intopt), -10, 10);
+	 * {endcode}
+	 */
+	OPT_INT_T,
+
+	/*! \brief Type for default handler for ast_sockaddrs
+	 *
+	 * \note aco_option_register flags:
+	 *   See flags available for use with the PARSE_ADDR type for the ast_parse_arg function
+	 * aco_option_register varargs:
+	 *   FLDSET macro with the field being of type struct ast_sockaddr.
+	 *
+	 * Example:
+	 * {code}
+	 * struct test_item {
+	 *     struct ast_sockaddr addr;
+	 * };
+	 * aco_option_register(&cfg_info, "sockaddropt", ACO_EXACT, my_types, "0.0.0.0:1234", OPT_SOCKADDR_T, 0, FLDSET(struct test_item, addr));
+	 * {endcode}
+	 */
+	OPT_SOCKADDR_T,
+
+	/*! \brief Type for default option handler for stringfields
+	 * \note aco_option_register flags:
+	 *   none
+	 * aco_option_register varargs:
+	 *   STRFLDSET macro with the field being the field created by AST_STRING_FIELD
+	 *
+	 * Example:
+	 * {code}
+	 * struct test_item {
+	 *     AST_DECLARE_STRING_FIELDS(
+	 *         AST_STRING_FIELD(thing);
+	 *     );
+	 * };
+	 * aco_option_register(&cfg_info, "thing", ACO_EXACT, my_types, NULL, OPT_STR_T, 0, STRFLDSET(struct test_item, thing));
+	 * {endcode}
+	 */
+	OPT_STRINGFIELD_T,
+
+	/*! \brief Type for default option handler for unsigned integers
+	 *
+	 * \note aco_option_register flags:
+	 *   See flags available for use with the PARSE_UINT32 type for the ast_parse_arg function
+	 * aco_option_register varargs:
+	 *   FLDSET macro with the field of type uint32_t
+	 *   The remaining varargs for should be arguments compatible with the varargs for the
+	 *   ast_parse_arg function with the PARSE_UINT32 type and the flags passed in the
+	 *   aco_option_register flags parameter.
+	 *
+	 * \note In most situations, it is preferable to not pass the PARSE_DEFAULT flag. If a config
+	 * contains an invalid value, it is better to let the config loading fail with warnings so that
+	 * the problem is fixed by the administrator.
+	 *
+	 * Example:
+	 * struct test_item {
+	 *     int32_t intopt;
+	 * };
+	 * {code}
+	 * aco_option_register(&cfg_info, "uintopt", ACO_EXACT, my_types, "3", OPT_UINT_T, PARSE_IN_RANGE, FLDSET(struct test_item, uintopt), 1, 10);
+	 * {endcode}
+	 */
+	OPT_UINT_T,
 };
 
 /*! \brief A callback function for handling a particular option
@@ -241,15 +396,24 @@ typedef int (*aco_option_handler)(const struct aco_option *opt, struct ast_varia
 /*! \brief Allocate a container to hold config options */
 struct ao2_container *aco_option_container_alloc(void);
 
+/*! \brief Return values for the aco_process functions
+ */
+enum aco_process_status {
+	ACO_PROCESS_OK,        /*!< \brief The config was processed and applied */
+	ACO_PROCESS_UNCHANGED, /*!< \brief The config had not been edited and no changes applied */
+	ACO_PROCESS_ERROR,     /*!< \brief Their was an error and no changes were applied */
+};
+
 /*! \brief Process a config info via the options registered with an aco_info
  *
  * \param info The config_options_info to be used for handling the config
  * \param reload Whether or not this is a reload
  *
- * \retval 0 Success
- * \retval -1 Failure
+ * \retval ACO_PROCESS_OK Success
+ * \retval ACO_PROCESS_ERROR Failure
+ * \retval ACO_PROCESS_UNCHANGED No change due to unedited config file
  */
-int aco_process_config(struct aco_info *info, int reload);
+enum aco_process_status aco_process_config(struct aco_info *info, int reload);
 
 /*! \brief Process config info from an ast_config via options registered with an aco_info
  *
@@ -258,10 +422,10 @@ int aco_process_config(struct aco_info *info, int reload);
  * \param cfg A pointer to a loaded ast_config to parse
  * \param reload Whether or not this is a reload
  *
- * \retval 0 Success
- * \retval -1 Failure
+ * \retval ACO_PROCESS_OK Success
+ * \retval ACO_PROCESS_ERROR Failure
  */
-int aco_process_ast_config(struct aco_info *info, struct aco_file *file, struct ast_config *cfg);
+enum aco_process_status aco_process_ast_config(struct aco_info *info, struct aco_file *file, struct ast_config *cfg);
 
 /*! \brief Parse each option defined in a config category
  * \param type The aco_type with the options for parsing

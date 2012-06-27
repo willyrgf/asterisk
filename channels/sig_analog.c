@@ -23,6 +23,10 @@
  * \author Matthew Fredrickson <creslin@digium.com>
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 #include <errno.h>
@@ -1766,6 +1770,7 @@ static void *__analog_ss_thread(void *data)
 	int len = 0;
 	int res;
 	int idx;
+	struct ast_callid *callid;
 
 	analog_increase_ss_count(p);
 
@@ -1775,6 +1780,12 @@ static void *__analog_ss_thread(void *data)
 		/* What happened to the channel? */
 		goto quit;
 	}
+
+	if ((callid = ast_channel_callid(chan))) {
+		ast_callid_threadassoc_add(callid);
+		ast_callid_unref(callid);
+	}
+
 	/* in the bizarre case where the channel has become a zombie before we
 	   even get started here, abort safely
 	*/
@@ -2659,6 +2670,9 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 	pthread_t threadid;
 	struct ast_channel *chan;
 	struct ast_frame *f;
+	struct ast_control_pvt_cause_code *cause_code;
+	int data_size = sizeof(*cause_code);
+	char *subclass = NULL;
 
 	ast_debug(1, "%s %d\n", __FUNCTION__, p->channel);
 
@@ -2689,7 +2703,29 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 
 	ast_debug(1, "Got event %s(%d) on channel %d (index %d)\n", analog_event2str(res), res, p->channel, idx);
 
+	/* add length of "ANALOG " */
+	data_size += 7;
+
 	if (res & (ANALOG_EVENT_PULSEDIGIT | ANALOG_EVENT_DTMFUP)) {
+		/* add length of "ANALOG_EVENT_" */
+		data_size += 13;
+		if (res & ANALOG_EVENT_PULSEDIGIT) {
+			/* add length of "PULSEDIGIT" */
+			data_size += 10;
+		} else {
+			/* add length of "DTMFUP" */
+			data_size += 6;
+		}
+
+		/* add length of " (c)" */
+		data_size += 4;
+
+		cause_code = alloca(data_size);
+		ast_copy_string(cause_code->chan_name, ast_channel_name(ast), AST_CHANNEL_NAME);
+		snprintf(cause_code->code, data_size - sizeof(*cause_code) + 1, "ANALOG ANALOG_EVENT_%s (%c)",
+			(res & ANALOG_EVENT_DTMFUP) ? "DTMFUP" : "PULSEDIGIT", res & 0xff);
+		ast_queue_control_data(ast, AST_CONTROL_PVT_CAUSE_CODE, cause_code, data_size);
+
 		analog_set_pulsedial(p, (res & ANALOG_EVENT_PULSEDIGIT) ? 1 : 0);
 		ast_debug(1, "Detected %sdigit '%c'\n", (res & ANALOG_EVENT_PULSEDIGIT) ? "pulse ": "", res & 0xff);
 		analog_confmute(p, 0);
@@ -2700,6 +2736,14 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 	}
 
 	if (res & ANALOG_EVENT_DTMFDOWN) {
+		/* add length of "ANALOG_EVENT_DTMFDOWN (c)" */
+		data_size += 25;
+
+		cause_code = alloca(data_size);
+		ast_copy_string(cause_code->chan_name, ast_channel_name(ast), AST_CHANNEL_NAME);
+		snprintf(cause_code->code, data_size - sizeof(*cause_code) + 1, "ANALOG ANALOG_EVENT_DTMFDOWN (%c)", res & 0xff);
+		ast_queue_control_data(ast, AST_CONTROL_PVT_CAUSE_CODE, cause_code, data_size);
+
 		ast_debug(1, "DTMF Down '%c'\n", res & 0xff);
 		/* Mute conference */
 		analog_confmute(p, 1);
@@ -2708,6 +2752,13 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 		analog_handle_dtmf(p, ast, idx, &f);
 		return f;
 	}
+
+	subclass = analog_event2str(res);
+	data_size += strlen(subclass);
+	cause_code = alloca(data_size);
+	ast_copy_string(cause_code->chan_name, ast_channel_name(ast), AST_CHANNEL_NAME);
+	snprintf(cause_code->code, data_size - sizeof(*cause_code) + 1, "ANALOG %s", subclass);
+	ast_queue_control_data(ast, AST_CONTROL_PVT_CAUSE_CODE, cause_code, data_size);
 
 	switch (res) {
 	case ANALOG_EVENT_EC_DISABLED:
@@ -3176,6 +3227,8 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 					ast_queue_control(p->subs[ANALOG_SUB_REAL].owner, AST_CONTROL_FLASH);
 					goto winkflashdone;
 				} else if (!analog_check_for_conference(p)) {
+					struct ast_callid *callid = NULL;
+					int callid_created;
 					char cid_num[256];
 					char cid_name[256];
 
@@ -3205,13 +3258,26 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 						ast_log(LOG_WARNING, "Unable to allocate three-way subchannel\n");
 						goto winkflashdone;
 					}
-					/* Make new channel */
+
+					callid_created = ast_callid_threadstorage_auto(&callid);
+
+					/*
+					 * Make new channel
+					 *
+					 * We cannot hold the p or ast locks while creating a new
+					 * channel.
+					 */
+					analog_unlock_private(p);
+					ast_channel_unlock(ast);
 					chan = analog_new_ast_channel(p, AST_STATE_RESERVED, 0, ANALOG_SUB_THREEWAY, NULL);
+					ast_channel_lock(ast);
+					analog_lock_private(p);
 					if (!chan) {
 						ast_log(LOG_WARNING,
 							"Cannot allocate new call structure on channel %d\n",
 							p->channel);
 						analog_unalloc_sub(p, ANALOG_SUB_THREEWAY);
+						ast_callid_threadstorage_auto_clean(callid, callid_created);
 						goto winkflashdone;
 					}
 					if (p->dahditrcallerid) {
@@ -3249,6 +3315,7 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 								!ast_strlen_zero(p->mohsuggest) ? strlen(p->mohsuggest) + 1 : 0);
 						}
 					}
+					ast_callid_threadstorage_auto_clean(callid, callid_created);
 				}
 			} else {
 				/* Already have a 3 way call */
@@ -3613,7 +3680,18 @@ struct ast_frame *analog_exception(struct analog_pvt *p, struct ast_channel *ast
 		f = &p->subs[idx].f;
 		return f;
 	}
+
 	f = __analog_handle_event(p, ast);
+	if (!f) {
+		const char *name = ast_strdupa(ast_channel_name(ast));
+
+		/* Tell the CDR this DAHDI device hung up */
+		analog_unlock_private(p);
+		ast_channel_unlock(ast);
+		ast_set_hangupsource(ast, name, 0);
+		ast_channel_lock(ast);
+		analog_lock_private(p);
+	}
 	return f;
 }
 
@@ -3622,6 +3700,8 @@ void *analog_handle_init_event(struct analog_pvt *i, int event)
 	int res;
 	pthread_t threadid;
 	struct ast_channel *chan;
+	struct ast_callid *callid = NULL;
+	int callid_created;
 
 	ast_debug(1, "channel (%d) - signaling (%d) - event (%s)\n",
 				i->channel, i->sig, analog_event2str(event));
@@ -3643,6 +3723,7 @@ void *analog_handle_init_event(struct analog_pvt *i, int event)
 			if (res && (errno == EBUSY)) {
 				break;
 			}
+			callid_created = ast_callid_threadstorage_auto(&callid);
 
 			/* Cancel VMWI spill */
 			analog_cancel_cidspill(i);
@@ -3683,6 +3764,7 @@ void *analog_handle_init_event(struct analog_pvt *i, int event)
 				} else
 					ast_log(LOG_WARNING, "Unable to create channel\n");
 			}
+			ast_callid_threadstorage_auto_clean(callid, callid_created);
 			break;
 		case ANALOG_SIG_FXSLS:
 		case ANALOG_SIG_FXSGS:
@@ -3704,6 +3786,7 @@ void *analog_handle_init_event(struct analog_pvt *i, int event)
 		case ANALOG_SIG_SF_FEATDMF:
 		case ANALOG_SIG_SF_FEATB:
 		case ANALOG_SIG_SF:
+			callid_created = ast_callid_threadstorage_auto(&callid);
 			/* Check for callerid, digits, etc */
 			if (i->cid_start == ANALOG_CID_START_POLARITY_IN || i->cid_start == ANALOG_CID_START_DTMF_NOALERT) {
 				chan = analog_new_ast_channel(i, AST_STATE_PRERING, 0, ANALOG_SUB_REAL, NULL);
@@ -3721,6 +3804,7 @@ void *analog_handle_init_event(struct analog_pvt *i, int event)
 				}
 				ast_hangup(chan);
 			}
+			ast_callid_threadstorage_auto_clean(callid, callid_created);
 			break;
 		default:
 			ast_log(LOG_WARNING, "Don't know how to handle ring/answer with signalling %s on channel %d\n", analog_sigtype_to_str(i->sig), i->channel);
@@ -3794,6 +3878,7 @@ void *analog_handle_init_event(struct analog_pvt *i, int event)
 		case ANALOG_SIG_FXSLS:
 		case ANALOG_SIG_FXSKS:
 		case ANALOG_SIG_FXSGS:
+			callid_created = ast_callid_threadstorage_auto(&callid);
 			/* We have already got a PR before the channel was
 			   created, but it wasn't handled. We need polarity
 			   to be REV for remote hangup detection to work.
@@ -3814,6 +3899,7 @@ void *analog_handle_init_event(struct analog_pvt *i, int event)
 					ast_log(LOG_WARNING, "Unable to start simple switch thread on channel %d\n", i->channel);
 				}
 			}
+			ast_callid_threadstorage_auto_clean(callid, callid_created);
 			break;
 		default:
 			ast_log(LOG_WARNING, "handle_init_event detected "
@@ -3827,6 +3913,7 @@ void *analog_handle_init_event(struct analog_pvt *i, int event)
 		case ANALOG_SIG_FXSLS:
 		case ANALOG_SIG_FXSKS:
 		case ANALOG_SIG_FXSGS:
+			callid_created = ast_callid_threadstorage_auto(&callid);
 			if (i->cid_start == ANALOG_CID_START_DTMF_NOALERT) {
 				ast_verb(2, "Starting DTMF CID detection on channel %d\n",
 					i->channel);
@@ -3838,6 +3925,7 @@ void *analog_handle_init_event(struct analog_pvt *i, int event)
 					ast_log(LOG_WARNING, "Unable to start simple switch thread on channel %d\n", i->channel);
 				}
 			}
+			ast_callid_threadstorage_auto_clean(callid, callid_created);
 			break;
 		default:
 			ast_log(LOG_WARNING, "handle_init_event detected "

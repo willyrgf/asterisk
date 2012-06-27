@@ -27,6 +27,9 @@
  * \arg \ref AstCREDITS
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
 
 #include "asterisk.h"
 
@@ -369,6 +372,32 @@ static void sig_ss7_queue_control(struct sig_ss7_linkset *ss7, int chanpos, int 
 
 /*!
  * \internal
+ * \brief Queue a PVT_CAUSE_CODE frame onto the owner channel.
+ * \since 11
+ *
+ * \param owner Owner channel of the pvt.
+ * \param cause String describing the cause to be placed into the frame.
+ *
+ * \note Assumes the linkset->lock is already obtained.
+ * \note Assumes the sig_ss7_lock_private(linkset->pvts[chanpos]) is already obtained.
+ * \note Assumes linkset->pvts[chanpos]->owner is non-NULL and its lock is already obtained.
+ *
+ * \return Nothing
+ */
+static void ss7_queue_pvt_cause_data(struct ast_channel *owner, const char *cause)
+{
+	struct ast_control_pvt_cause_code *cause_code;
+	int datalen = sizeof(*cause_code) + strlen(cause);
+
+	cause_code = alloca(datalen);
+	ast_copy_string(cause_code->chan_name, ast_channel_name(owner), AST_CHANNEL_NAME);
+	ast_copy_string(cause_code->code, cause, datalen + 1 - sizeof(*cause_code));
+	ast_queue_control_data(owner, AST_CONTROL_PVT_CAUSE_CODE, cause_code, datalen);
+}
+
+
+/*!
+ * \internal
  * \brief Find the channel position by CIC/DPC.
  *
  * \param linkset SS7 linkset control structure.
@@ -526,6 +555,8 @@ static void ss7_start_call(struct sig_ss7_chan *p, struct sig_ss7_linkset *links
 	int law;
 	struct ast_channel *c;
 	char tmp[256];
+	struct ast_callid *callid = NULL;
+	int callid_created = ast_callid_threadstorage_auto(&callid);
 
 	if (!(linkset->flags & LINKSET_FLAG_EXPLICITACM)) {
 		p->call_level = SIG_SS7_CALL_LEVEL_PROCEEDING;
@@ -555,6 +586,7 @@ static void ss7_start_call(struct sig_ss7_chan *p, struct sig_ss7_linkset *links
 		isup_rel(linkset->ss7, p->ss7call, -1);
 		p->call_level = SIG_SS7_CALL_LEVEL_IDLE;
 		p->alreadyhungup = 1;
+		ast_callid_threadstorage_auto_clean(callid, callid_created);
 		return;
 	}
 
@@ -656,6 +688,7 @@ static void ss7_start_call(struct sig_ss7_chan *p, struct sig_ss7_linkset *links
 	/* Must return with linkset and private lock. */
 	ast_mutex_lock(&linkset->lock);
 	sig_ss7_lock_private(p);
+	ast_callid_threadstorage_auto_clean(callid, callid_created);
 }
 
 static void ss7_apply_plan_to_number(char *buf, size_t size, const struct sig_ss7_linkset *ss7, const char *number, const unsigned nai)
@@ -690,6 +723,36 @@ static int ss7_pres_scr2cid_pres(char presentation_ind, char screening_ind)
 	return ((presentation_ind & 0x3) << 5) | (screening_ind & 0x3);
 }
 
+/*!
+ * \internal
+ * \brief Set callid threadstorage for the ss7_linkset thread to that of an existing channel
+ *
+ * \param linkset ss7 span control structure.
+ * \param chanpos channel position in the span
+ *
+ * \note Assumes the ss7->lock is already obtained.
+ * \note Assumes the sig_ss7_lock_private(ss7->pvts[chanpos]) is already obtained.
+ *
+ * \return a reference to the callid bound to the channel which has also
+ *         been bound to threadstorage if it exists. If this returns non-NULL,
+ *         the callid must be unreffed and the threadstorage should be unbound
+ *         before the while loop wraps in ss7_linkset.
+ */
+static struct ast_callid *func_ss7_linkset_callid(struct sig_ss7_linkset *linkset, int chanpos)
+{
+	struct ast_callid *callid = NULL;
+	sig_ss7_lock_owner(linkset, chanpos);
+	if (linkset->pvts[chanpos]->owner) {
+		callid = ast_channel_callid(linkset->pvts[chanpos]->owner);
+		ast_channel_unlock(linkset->pvts[chanpos]->owner);
+		if (callid) {
+			ast_callid_threadassoc_add(callid);
+		}
+	}
+
+	return callid;
+}
+
 /* This is a thread per linkset that handles all received events from libss7. */
 void *ss7_linkset(void *data)
 {
@@ -699,7 +762,6 @@ void *ss7_linkset(void *data)
 	struct ss7 *ss7 = linkset->ss7;
 	ss7_event *e = NULL;
 	struct sig_ss7_chan *p;
-	int chanpos;
 	struct pollfd pollers[SIG_SS7_NUM_DCHANS];
 	int nextms = 0;
 
@@ -767,6 +829,10 @@ void *ss7_linkset(void *data)
 		}
 
 		while ((e = ss7_check_event(ss7))) {
+			struct ast_callid *callid = NULL;
+			int chanpos = -1;
+			char cause_str[30];
+
 			if (linkset->debug) {
 				ast_verbose("Linkset %d: Processing event: %s\n",
 					linkset->span, ss7_event2str(e->e));
@@ -803,6 +869,8 @@ void *ss7_linkset(void *data)
 				}
 				p = linkset->pvts[chanpos];
 				sig_ss7_lock_private(p);
+				callid = func_ss7_linkset_callid(linkset, chanpos);
+
 				switch (e->cpg.event) {
 				case CPG_EVENT_ALERTING:
 					if (p->call_level < SIG_SS7_CALL_LEVEL_ALERTING) {
@@ -840,12 +908,14 @@ void *ss7_linkset(void *data)
 				}
 				p = linkset->pvts[chanpos];
 				sig_ss7_lock_private(p);
+				callid = func_ss7_linkset_callid(linkset, chanpos);
 				sig_ss7_set_inservice(p, 1);
 				sig_ss7_set_remotelyblocked(p, 0);
 				isup_set_call_dpc(e->rsc.call, p->dpc);
 				sig_ss7_lock_owner(linkset, chanpos);
 				p->ss7call = NULL;
 				if (p->owner) {
+					ss7_queue_pvt_cause_data(p->owner, "SS7 ISUP_EVENT_RSC");
 					ast_softhangup_nolock(p->owner, AST_SOFTHANGUP_DEV);
 					ast_channel_unlock(p->owner);
 				}
@@ -903,6 +973,7 @@ void *ss7_linkset(void *data)
 					}
 					p->call_level = SIG_SS7_CALL_LEVEL_GLARE;
 					if (p->owner) {
+						ss7_queue_pvt_cause_data(p->owner, "SS7 ISUP_EVENT_IAM (glare)");
 						ast_channel_hangupcause_set(p->owner, AST_CAUSE_NORMAL_CLEARING);
 						ast_softhangup_nolock(p->owner, AST_SOFTHANGUP_DEV);
 						ast_channel_unlock(p->owner);
@@ -1044,8 +1115,12 @@ void *ss7_linkset(void *data)
 				}
 				p = linkset->pvts[chanpos];
 				sig_ss7_lock_private(p);
+				callid = func_ss7_linkset_callid(linkset, chanpos);
 				sig_ss7_lock_owner(linkset, chanpos);
 				if (p->owner) {
+					snprintf(cause_str, sizeof(cause_str), "SS7 ISUP_EVENT_REL (%d)", e->rel.cause);
+					ss7_queue_pvt_cause_data(p->owner, cause_str);
+
 					ast_channel_hangupcause_set(p->owner, e->rel.cause);
 					ast_softhangup_nolock(p->owner, AST_SOFTHANGUP_DEV);
 					ast_channel_unlock(p->owner);
@@ -1075,6 +1150,7 @@ void *ss7_linkset(void *data)
 					}
 
 					sig_ss7_lock_private(p);
+					callid = func_ss7_linkset_callid(linkset, chanpos);
 					sig_ss7_queue_control(linkset, chanpos, AST_CONTROL_PROCEEDING);
 					if (p->call_level < SIG_SS7_CALL_LEVEL_PROCEEDING) {
 						p->call_level = SIG_SS7_CALL_LEVEL_PROCEEDING;
@@ -1190,6 +1266,7 @@ void *ss7_linkset(void *data)
 				{
 					p = linkset->pvts[chanpos];
 					sig_ss7_lock_private(p);
+					callid = func_ss7_linkset_callid(linkset, chanpos);
 					if (p->call_level < SIG_SS7_CALL_LEVEL_CONNECT) {
 						p->call_level = SIG_SS7_CALL_LEVEL_CONNECT;
 					}
@@ -1209,6 +1286,7 @@ void *ss7_linkset(void *data)
 				{
 					p = linkset->pvts[chanpos];
 					sig_ss7_lock_private(p);
+					callid = func_ss7_linkset_callid(linkset, chanpos);
 					if (p->alreadyhungup) {
 						if (!p->owner) {
 							p->call_level = SIG_SS7_CALL_LEVEL_IDLE;
@@ -1233,6 +1311,7 @@ void *ss7_linkset(void *data)
 					p = linkset->pvts[chanpos];
 					ast_debug(1, "FAA received on CIC %d\n", e->faa.cic);
 					sig_ss7_lock_private(p);
+					callid = func_ss7_linkset_callid(linkset, chanpos);
 					if (p->alreadyhungup){
 						if (!p->owner) {
 							p->call_level = SIG_SS7_CALL_LEVEL_IDLE;
@@ -1247,6 +1326,34 @@ void *ss7_linkset(void *data)
 			default:
 				ast_debug(1, "Unknown event %s\n", ss7_event2str(e->e));
 				break;
+			}
+
+			if (chanpos > -1) {
+				switch (e->e) {
+				/* handled above */
+				case ISUP_EVENT_IAM:
+				case ISUP_EVENT_REL:
+				case ISUP_EVENT_RSC:
+					break;
+				default:
+					p = linkset->pvts[chanpos];
+					sig_ss7_lock_private(p);
+					sig_ss7_lock_owner(linkset, chanpos);
+					if (p->owner) {
+						char *event_str = ss7_event2str(e->e);
+
+						snprintf(cause_str, sizeof(cause_str), "SS7 %s", event_str);
+						ss7_queue_pvt_cause_data(p->owner, cause_str);
+						ast_channel_unlock(p->owner);
+					}
+					sig_ss7_unlock_private(p);
+				}
+			}
+
+			/* Call ID stuff needs to be cleaned up here */
+			if (callid) {
+				callid = ast_callid_unref(callid);
+				ast_callid_threadassoc_remove();
 			}
 		}
 		ast_mutex_unlock(&linkset->lock);

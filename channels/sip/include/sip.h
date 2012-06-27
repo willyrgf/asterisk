@@ -467,6 +467,7 @@ enum media_type {
 	SDP_VIDEO,   /*!< RTP/AVP Video */
 	SDP_IMAGE,   /*!< Image udptl, not TCP or RTP */
 	SDP_TEXT,    /*!< RTP/AVP Realtime Text */
+	SDP_UNKNOWN, /*!< Unknown media type */
 };
 
 /*! \brief Authentication types - proxy or www authentication
@@ -968,10 +969,11 @@ struct sip_st_cfg {
 };
 
 /*! \brief Structure for remembering offered media in an INVITE, to make sure we reply
-	to all media streams. In theory. In practise, we try our best. */
+	to all media streams. */
 struct offered_media {
-	int order_offered;		/*!< Order the media was offered in. Not offered is 0 */
-	char codecs[128];
+	enum media_type type;		/*!< The type of media that was offered */
+	char *decline_m_line;		/*!< Used if the media type is unknown/unused or a media stream is declined */
+	AST_LIST_ENTRY(offered_media) next;
 };
 
 /*! Additional headers to send with MESSAGE method packet. */
@@ -1023,6 +1025,7 @@ struct sip_pvt {
 		AST_STRING_FIELD(rdnis);        /*!< Referring DNIS */
 		AST_STRING_FIELD(redircause);   /*!< Referring cause */
 		AST_STRING_FIELD(theirtag);     /*!< Their tag */
+		AST_STRING_FIELD(tag);          /*!< Our tag for this session */
 		AST_STRING_FIELD(username);     /*!< [user] name */
 		AST_STRING_FIELD(peername);     /*!< [peer] name, not set if [user] */
 		AST_STRING_FIELD(authname);     /*!< Who we use for authentication */
@@ -1041,6 +1044,8 @@ struct sip_pvt {
 		AST_STRING_FIELD(parkinglot);   /*!< Parkinglot */
 		AST_STRING_FIELD(engine);       /*!< RTP engine to use */
 		AST_STRING_FIELD(dialstring);   /*!< The dialstring used to call this SIP endpoint */
+		AST_STRING_FIELD(last_presence_subtype);   /*!< The last presence subtype sent for a subscription. */
+		AST_STRING_FIELD(last_presence_message);   /*!< The last presence message for a subscription */
 		AST_STRING_FIELD(msg_body);     /*!< Text for a MESSAGE body */
 	);
 	char via[128];                          /*!< Via: header */
@@ -1072,7 +1077,6 @@ struct sip_pvt {
 	                                       */
 	unsigned short req_secure_signaling:1;/*!< Whether we are required to have secure signaling or not */
 	unsigned short natdetected:1;         /*!< Whether we detected a NAT when processing the Via */
-	char tag[11];                     /*!< Our tag for this session */
 	int timer_t1;                     /*!< SIP timer T1, ms rtt */
 	int timer_b;                      /*!< SIP timer B, ms */
 	unsigned int sipoptions;          /*!< Supported SIP options on the other end */
@@ -1141,6 +1145,7 @@ struct sip_pvt {
 	enum subscriptiontype subscribed;   /*!< SUBSCRIBE: Is this dialog a subscription?  */
 	int stateid;                        /*!< SUBSCRIBE: ID for devicestate subscriptions */
 	int laststate;                      /*!< SUBSCRIBE: Last known extension state */
+	int last_presence_state;            /*!< SUBSCRIBE: Last known presence state */
 	uint32_t dialogver;                 /*!< SUBSCRIBE: Version for subscription dialog-info */
 
 	struct ast_dsp *dsp;                /*!< Inband DTMF or Fax CNG tone Detection dsp */
@@ -1191,7 +1196,7 @@ struct sip_pvt {
 	 *
 	 * The large-scale changes would be a good idea for implementing during an SDP rewrite.
 	 */
-	struct offered_media offered_media[OFFERED_MEDIA_COUNT];
+	AST_LIST_HEAD_NOLOCK(, offered_media) offered_media;
 	struct ast_cc_config_params *cc_params;
 	struct sip_epa_entry *epa_entry;
 	int fromdomainport;                 /*!< Domain port to show in from field */

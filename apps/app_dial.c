@@ -133,8 +133,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					<para>Reset the call detail record (CDR) for this call.</para>
 				</option>
 				<option name="c">
-					<para>If the Dial() application cancels this call, always set the flag to tell the channel
-					driver that the call is answered elsewhere.</para>
+					<para>If the Dial() application cancels this call, always set HANGUPCAUSE to 'answered elsewhere'</para>
 				</option>
 				<option name="d">
 					<para>Allow the calling user to dial a 1 digit extension while waiting for
@@ -727,8 +726,6 @@ static void hanguptree(struct dial_head *out_chans, struct ast_channel *exceptio
 		/* Hangup any existing lines we have open */
 		if (outgoing->chan && (outgoing->chan != exception)) {
 			if (answered_elsewhere) {
-				/* The flag is used for local channel inheritance and stuff */
-				ast_set_flag(ast_channel_flags(outgoing->chan), AST_FLAG_ANSWERED_ELSEWHERE);
 				/* This is for the channel drivers */
 				ast_channel_hangupcause_set(outgoing->chan, AST_CAUSE_ANSWERED_ELSEWHERE);
 			}
@@ -823,6 +820,20 @@ static const char *get_cid_name(char *name, int namelen, struct ast_channel *cha
 static void senddialevent(struct ast_channel *src, struct ast_channel *dst, const char *dialstring)
 {
 	struct ast_channel *chans[] = { src, dst };
+	/*** DOCUMENTATION
+		<managerEventInstance>
+			<synopsis>Raised when a dial action has started.</synopsis>
+			<syntax>
+				<parameter name="SubEvent">
+					<enumlist>
+						<enum name="Begin"/>
+						<enum name="End"/>
+					</enumlist>
+					<para>A sub event type, specifying whether the dial action has begun or ended.</para>
+				</parameter>
+			</syntax>
+		</managerEventInstance>
+	***/
 	ast_manager_event_multichan(EVENT_FLAG_CALL, "Dial", 2, chans,
 		"SubEvent: Begin\r\n"
 		"Channel: %s\r\n"
@@ -845,6 +856,16 @@ static void senddialevent(struct ast_channel *src, struct ast_channel *dst, cons
 
 static void senddialendevent(struct ast_channel *src, const char *dialstatus)
 {
+	/*** DOCUMENTATION
+		<managerEventInstance>
+			<synopsis>Raised when a dial action has ended.</synopsis>
+			<syntax>
+				<parameter name="DialStatus">
+					<para>The value of the <variable>DIALSTATUS</variable> channel variable.</para>
+				</parameter>
+			</syntax>
+		</managerEventInstance>
+	***/
 	ast_manager_event(src, EVENT_FLAG_CALL, "Dial",
 		"SubEvent: End\r\n"
 		"Channel: %s\r\n"
@@ -2283,7 +2304,7 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 	if (ast_test_flag64(&opts, OPT_PREDIAL_CALLER)
 		&& !ast_strlen_zero(opt_args[OPT_ARG_PREDIAL_CALLER])) {
 		ast_replace_subargument_delimiter(opt_args[OPT_ARG_PREDIAL_CALLER]);
-		ast_app_exec_sub(NULL, chan, opt_args[OPT_ARG_PREDIAL_CALLER]);
+		ast_app_exec_sub(NULL, chan, opt_args[OPT_ARG_PREDIAL_CALLER], 0);
 	}
 
 	/* loop through the list of dial destinations */
@@ -2515,12 +2536,12 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 		if (outbound_group)
 			ast_app_group_set_channel(tc, outbound_group);
 		/* If the calling channel has the ANSWERED_ELSEWHERE flag set, inherit it. This is to support local channels */
-		if (ast_test_flag(ast_channel_flags(chan), AST_FLAG_ANSWERED_ELSEWHERE))
-			ast_set_flag(ast_channel_flags(tc), AST_FLAG_ANSWERED_ELSEWHERE);
+		if (ast_channel_hangupcause(chan) == AST_CAUSE_ANSWERED_ELSEWHERE)
+			ast_channel_hangupcause_set(tc, AST_CAUSE_ANSWERED_ELSEWHERE);
 
 		/* Check if we're forced by configuration */
 		if (ast_test_flag64(&opts, OPT_CANCEL_ELSEWHERE))
-			 ast_set_flag(ast_channel_flags(tc), AST_FLAG_ANSWERED_ELSEWHERE);
+			 ast_channel_hangupcause_set(tc, AST_CAUSE_ANSWERED_ELSEWHERE);
 
 
 		/* Inherit context and extension */
@@ -2553,12 +2574,18 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 	if (ast_test_flag64(&opts, OPT_PREDIAL_CALLEE)
 		&& !ast_strlen_zero(opt_args[OPT_ARG_PREDIAL_CALLEE])
 		&& !AST_LIST_EMPTY(&out_chans)) {
-		ast_autoservice_start(chan);
+		const char *predial_callee;
+
 		ast_replace_subargument_delimiter(opt_args[OPT_ARG_PREDIAL_CALLEE]);
-		AST_LIST_TRAVERSE(&out_chans, tmp, node) {
-			ast_pre_call(tmp->chan, opt_args[OPT_ARG_PREDIAL_CALLEE]);
+		predial_callee = ast_app_expand_sub_args(chan, opt_args[OPT_ARG_PREDIAL_CALLEE]);
+		if (predial_callee) {
+			ast_autoservice_start(chan);
+			AST_LIST_TRAVERSE(&out_chans, tmp, node) {
+				ast_pre_call(tmp->chan, predial_callee);
+			}
+			ast_autoservice_stop(chan);
+			ast_free((char *) predial_callee);
 		}
-		ast_autoservice_stop(chan);
 	}
 
 	/* Start all outgoing calls */
@@ -2793,7 +2820,9 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 			ast_channel_context_set(peer, ast_channel_context(chan));
 			ast_channel_exten_set(peer, ast_channel_exten(chan));
 			ast_channel_priority_set(peer, ast_channel_priority(chan) + 2);
-			ast_pbx_start(peer);
+			if (ast_pbx_start(peer)) {
+				ast_hangup(peer);
+			}
 			hanguptree(&out_chans, NULL, ast_test_flag64(&opts, OPT_CANCEL_ELSEWHERE) ? 1 : 0);
 			if (continue_exec)
 				*continue_exec = 1;
@@ -2887,7 +2916,7 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 				}
 			}
 			if (gosub_args) {
-				res9 = ast_app_exec_sub(chan, peer, gosub_args);
+				res9 = ast_app_exec_sub(chan, peer, gosub_args, 0);
 				ast_free(gosub_args);
 			} else {
 				ast_log(LOG_ERROR, "Could not Allocate string for Gosub arguments -- Gosub Call Aborted!\n");
@@ -3041,24 +3070,26 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 			}
 			ast_set2_flag(ast_channel_flags(peer), autoloopflag, AST_FLAG_IN_AUTOLOOP);  /* set it back the way it was */
 		}
-		if (!ast_check_hangup(peer) && ast_test_flag64(&opts, OPT_CALLEE_GO_ON)) {
-			if(!ast_strlen_zero(opt_args[OPT_ARG_CALLEE_GO_ON])) {
-				ast_replace_subargument_delimiter(opt_args[OPT_ARG_CALLEE_GO_ON]);
-				ast_parseable_goto(peer, opt_args[OPT_ARG_CALLEE_GO_ON]);
-			} else { /* F() */
+		if (!ast_check_hangup(peer)) {
+			if (ast_test_flag64(&opts, OPT_CALLEE_GO_ON)) {
 				int goto_res;
-				goto_res = ast_goto_if_exists(peer, ast_channel_context(chan), ast_channel_exten(chan), (ast_channel_priority(chan)) + 1); 
-				if (goto_res == AST_PBX_GOTO_FAILED) {
-					ast_hangup(peer);
+
+				if (!ast_strlen_zero(opt_args[OPT_ARG_CALLEE_GO_ON])) {
+					ast_replace_subargument_delimiter(opt_args[OPT_ARG_CALLEE_GO_ON]);
+					goto_res = ast_parseable_goto(peer, opt_args[OPT_ARG_CALLEE_GO_ON]);
+				} else { /* F() */
+					goto_res = ast_goto_if_exists(peer, ast_channel_context(chan),
+						ast_channel_exten(chan), ast_channel_priority(chan) + 1);
+				}
+				if (!goto_res && !ast_pbx_start(peer)) {
+					/* The peer is now running its own PBX. */
 					goto out;
 				}
-			}
-			ast_pbx_start(peer);
-		} else {
-			if (!ast_check_hangup(chan))
+			} else {
 				ast_channel_hangupcause_set(chan, ast_channel_hangupcause(peer));
-			ast_hangup(peer);
+			}
 		}
+		ast_hangup(peer);
 	}
 out:
 	if (moh) {
@@ -3079,11 +3110,11 @@ out:
 	}
 
 	ast_channel_early_bridge(chan, NULL);
-	hanguptree(&out_chans, NULL, 0); /* In this case, there's no answer anywhere */
+	hanguptree(&out_chans, NULL, ast_channel_hangupcause(chan)==AST_CAUSE_ANSWERED_ELSEWHERE ? 1 : 0 ); /* forward 'answered elsewhere' if we received it */
 	pbx_builtin_setvar_helper(chan, "DIALSTATUS", pa.status);
 	senddialendevent(chan, pa.status);
 	ast_debug(1, "Exiting with DIALSTATUS=%s.\n", pa.status);
-	
+
 	if ((ast_test_flag64(peerflags, OPT_GO_ON)) && !ast_check_hangup(chan) && (res != AST_PBX_INCOMPLETE)) {
 		if (!ast_tvzero(calldurationlimit))
 			memset(ast_channel_whentohangup(chan), 0, sizeof(*ast_channel_whentohangup(chan)));

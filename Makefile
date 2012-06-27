@@ -96,6 +96,7 @@ export MD5
 export WGET_EXTRA_ARGS
 export LDCONFIG
 export LDCONFIG_FLAGS
+export PYTHON
 
 # even though we could use '-include makeopts' here, use a wildcard
 # lookup anyway, so that make won't try to build makeopts if it doesn't
@@ -315,12 +316,28 @@ all: _cleantest_all
 	@echo " +               $(mK) install               +"
 	@echo " +-------------------------------------------+"
 
+full: _cleantest_all_full
+	@echo " +--------- Asterisk Build Complete ---------+"
+	@echo " + Asterisk has successfully been built, and +"
+	@echo " + can be installed by running:              +"
+	@echo " +                                           +"
+	@echo " +               $(mK) install               +"
+	@echo " +-------------------------------------------+"
+
+
 # For parallel builds, we must call cleantest *before* running the
 # other dependencies on _all.
 _cleantest_all: cleantest
 	@$(MAKE) _all
 
+# For parallel builds, we must call cleantest *before* running the
+# other dependencies on _all.
+_cleantest_all_full: cleantest
+	@$(MAKE) _all_full
+
 _all: makeopts $(SUBDIRS) doc/core-en_US.xml $(ADDL_TARGETS)
+
+_all_full: makeopts $(SUBDIRS) doc/full-en_US.xml $(ADDL_TARGETS)
 
 makeopts: configure
 	@echo "****"
@@ -413,6 +430,8 @@ _clean:
 	rm -f defaults.h
 	rm -f include/asterisk/build.h
 	rm -f main/version.c
+	rm -f doc/core-en_US.xml
+	rm -f doc/full-en_US.xml
 	@$(MAKE) -C menuselect clean
 	cp -f .cleancount .lastclean
 
@@ -465,6 +484,27 @@ doc/core-en_US.xml: $(foreach dir,$(MOD_SUBDIRS),$(shell $(GREP) -l "language=\"
 	@echo
 	@echo "</docs>" >> $@
 
+doc/full-en_US.xml: $(foreach dir,$(MOD_SUBDIRS),$(shell $(GREP) -l "language=\"en_US\"" $(dir)/*.c $(dir)/*.cc 2>/dev/null))
+ifeq ($(PYTHON),:)
+	@echo "--------------------------------------------------------------------------"
+	@echo "---        Please install python to build full documentation           ---"
+	@echo "--------------------------------------------------------------------------"
+else
+	@printf "Building Documentation For: "
+	@echo "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" > $@
+	@echo "<!DOCTYPE docs SYSTEM \"appdocsxml.dtd\">" >> $@
+	@echo "<docs xmlns:xi=\"http://www.w3.org/2001/XInclude\">" >> $@
+	@for x in $(MOD_SUBDIRS); do \
+		printf "$$x " ; \
+		for i in $$x/*.c; do \
+			$(PYTHON) build_tools/get_documentation.py < $$i >> $@ ; \
+		done ; \
+	done
+	@echo
+	@echo "</docs>" >> $@
+	@$(PYTHON) build_tools/post_process_documentation.py -i $@ -o "doc/core-en_US.xml"
+endif
+
 validate-docs: doc/core-en_US.xml
 ifeq ($(XMLSTARLET)$(XMLLINT),::)
 	@echo "--------------------------------------------------------------------------"
@@ -497,40 +537,23 @@ update:
 
 NEWHEADERS=$(notdir $(wildcard include/asterisk/*.h))
 OLDHEADERS=$(filter-out $(NEWHEADERS) $(notdir $(DESTDIR)$(ASTHEADERDIR)),$(notdir $(wildcard $(DESTDIR)$(ASTHEADERDIR)/*.h)))
+INSTALLDIRS="$(ASTLIBDIR)" "$(ASTMODDIR)" "$(ASTSBINDIR)" "$(ASTETCDIR)" "$(ASTVARRUNDIR)" \
+	"$(ASTSPOOLDIR)" "$(ASTSPOOLDIR)/dictate" "$(ASTSPOOLDIR)/meetme" \
+	"$(ASTSPOOLDIR)/monitor" "$(ASTSPOOLDIR)/system" "$(ASTSPOOLDIR)/tmp" \
+	"$(ASTSPOOLDIR)/voicemail" "$(ASTHEADERDIR)" "$(ASTHEADERDIR)/doxygen" \
+	"$(ASTLOGDIR)" "$(ASTLOGDIR)/cdr-csv" "$(ASTLOGDIR)/cdr-custom" \
+	"$(ASTLOGDIR)/cel-custom" "$(ASTDATADIR)" "$(ASTDATADIR)/documentation" \
+	"$(ASTDATADIR)/documentation/thirdparty" "$(ASTDATADIR)/firmware" \
+	"$(ASTDATADIR)/firmware/iax" "$(ASTDATADIR)/images" "$(ASTDATADIR)/keys" \
+	"$(ASTDATADIR)/phoneprov" "$(ASTDATADIR)/static-http" "$(ASTDATADIR)/sounds" \
+	"$(ASTDATADIR)/moh" "$(ASTMANDIR)/man8" "$(AGI_DIR)" "$(ASTDBDIR)"
 
 installdirs:
-	$(INSTALL) -d "$(DESTDIR)$(ASTLIBDIR)"
-	$(INSTALL) -d "$(DESTDIR)$(ASTMODDIR)"
-	$(INSTALL) -d "$(DESTDIR)$(ASTSBINDIR)"
-	$(INSTALL) -d "$(DESTDIR)$(ASTETCDIR)"
-	$(INSTALL) -d "$(DESTDIR)$(ASTVARRUNDIR)"
-	$(INSTALL) -d "$(DESTDIR)$(ASTSPOOLDIR)"
-	$(INSTALL) -d "$(DESTDIR)$(ASTSPOOLDIR)/dictate"
-	$(INSTALL) -d "$(DESTDIR)$(ASTSPOOLDIR)/meetme"
-	$(INSTALL) -d "$(DESTDIR)$(ASTSPOOLDIR)/monitor"
-	$(INSTALL) -d "$(DESTDIR)$(ASTSPOOLDIR)/system"
-	$(INSTALL) -d "$(DESTDIR)$(ASTSPOOLDIR)/tmp"
-	$(INSTALL) -d "$(DESTDIR)$(ASTSPOOLDIR)/voicemail"
-	$(INSTALL) -d "$(DESTDIR)$(ASTHEADERDIR)"
-	$(INSTALL) -d "$(DESTDIR)$(ASTHEADERDIR)/doxygen"
-	$(INSTALL) -d "$(DESTDIR)$(ASTLOGDIR)"
-	$(INSTALL) -d "$(DESTDIR)$(ASTLOGDIR)/cdr-csv"
-	$(INSTALL) -d "$(DESTDIR)$(ASTLOGDIR)/cdr-custom"
-	$(INSTALL) -d "$(DESTDIR)$(ASTLOGDIR)/cel-custom"
-	$(INSTALL) -d "$(DESTDIR)$(ASTDATADIR)"
-	$(INSTALL) -d "$(DESTDIR)$(ASTDATADIR)/documentation"
-	$(INSTALL) -d "$(DESTDIR)$(ASTDATADIR)/documentation/thirdparty"
-	$(INSTALL) -d "$(DESTDIR)$(ASTDATADIR)/firmware"
-	$(INSTALL) -d "$(DESTDIR)$(ASTDATADIR)/firmware/iax"
-	$(INSTALL) -d "$(DESTDIR)$(ASTDATADIR)/images"
-	$(INSTALL) -d "$(DESTDIR)$(ASTDATADIR)/keys"
-	$(INSTALL) -d "$(DESTDIR)$(ASTDATADIR)/phoneprov"
-	$(INSTALL) -d "$(DESTDIR)$(ASTDATADIR)/static-http"
-	$(INSTALL) -d "$(DESTDIR)$(ASTDATADIR)/sounds"
-	$(INSTALL) -d "$(DESTDIR)$(ASTDATADIR)/moh"
-	$(INSTALL) -d "$(DESTDIR)$(ASTMANDIR)/man8"
-	$(INSTALL) -d "$(DESTDIR)$(AGI_DIR)"
-	$(INSTALL) -d "$(DESTDIR)$(ASTDBDIR)"
+	@for i in $(INSTALLDIRS); do \
+		if [ ! -z "$${i}" -a ! -d "$(DESTDIR)$${i}" ]; then \
+			$(INSTALL) -d "$(DESTDIR)$${i}"; \
+		fi; \
+	done
 
 main-bininstall:
 	+@DESTDIR="$(DESTDIR)" ASTSBINDIR="$(ASTSBINDIR)" ASTLIBDIR="$(ASTLIBDIR)" $(SUBMAKE) -C main bininstall

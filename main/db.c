@@ -35,6 +35,10 @@
  * to be separate fields in the database, instead of one single field as I've tried with.
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")

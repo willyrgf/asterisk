@@ -48,6 +48,9 @@
  * - app_fax.c
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
 
 #include "asterisk.h"
 
@@ -1411,7 +1414,7 @@ static int removed_options_handler(const struct aco_option *opt, struct ast_vari
 
 static void __ast_udptl_reload(int reload)
 {
-	if (aco_process_config(&cfg_info, reload)) {
+	if (aco_process_config(&cfg_info, reload) == ACO_PROCESS_ERROR) {
 		ast_log(LOG_WARNING, "Could not reload udptl config\n");
 	}
 }

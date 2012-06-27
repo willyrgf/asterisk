@@ -12,6 +12,14 @@
 --- Functionality changes from Asterisk 10 to Asterisk 11 --------------------
 ------------------------------------------------------------------------------
 
+Build System
+----
+ * A new make target, 'full', has been added to the Makefile.  This performs
+   the same compilation actions as make all, but will also scan the entirety of
+   each source file for documentation.  This option is needed to generate AMI
+   event documentation.  Note that your system must have Python in order for
+   this make target to succeed.
+
 Core
 ----
  * The expression parser now recognizes the ABS() absolute value function,
@@ -31,6 +39,13 @@ Core
  * The minimum DTMF duration can now be configured in asterisk.conf
    as "mindtmfduration". The default value is (as before) set to 80 ms.
    (previously it was only available in source code)
+ * Each logging destination and console now have an independent notion of the
+   current verbosity level.  Logger.conf now allows an optional argument to
+   the 'verbose' specifier, indicating the level of verbosity sent to that
+   particular logging destination.  Additionally, remote consoles now each
+   have their own verbosity level.  The command 'core set verbose' will now set
+   a separate level for each remote console without affecting any other
+   console.
 
 CLI Changes
 -------------------
@@ -193,6 +208,15 @@ AMI (Asterisk Manager Interface) changes
    behavior to hanging up a single channel is unchanged, but if you pass a regex,
    the manager will send you a list of channels back that were hung up.
 
+ * Support for IPv6 addresses has been added.
+
+ * AMI Events can now be documented in the Asterisk source.  Two new CLI
+   commands have been added to display information about AMI events at run time:
+   manager show events, which shows a list of all known and documented AMI
+   events, and manager show event [event name], which shows detail information
+   about a specific AMI event.  Note that AMI event documentation is only
+   generated when Asterisk is compiled using 'make full'.
+
 FAX changes
 -----------
  * FAXOPT(faxdetect) will enable a generic fax detect framehook for dialplan
@@ -202,16 +226,6 @@ DUNDi changes
 -------------
  * Allow the built in variables ${NUMBER}, ${IPADDR} and ${SECRET} to be
    used within the dynamic weight attribute when specifying a mapping.
-
-Core changes
-------------
- * Each logging destination and console now have an independent notion of the
-   current verbosity level.  Logger.conf now allows an optional argument to
-   the 'verbose' specifier, indicating the level of verbosity sent to that
-   particular logging destination.  Additionally, remote consoles now each
-   have their own verbosity level.  The command 'core set verbose' will now set
-   a separate level for each remote console without affecting any other
-   console.
 
 Dialplan functions
 ------------------

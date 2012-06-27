@@ -835,9 +835,10 @@ enum {
 	/*! This is set to tell the channel not to generate DTMF begin frames, and
 	 *  to instead only generate END frames. */
 	AST_FLAG_END_DTMF_ONLY = (1 << 14),
-	/*! Flag to show channels that this call is hangup due to the fact that the call
+	/* OBSOLETED in favor of AST_CAUSE_ANSWERED_ELSEWHERE
+	Flag to show channels that this call is hangup due to the fact that the call
 	    was indeed answered, but in another channel */
-	AST_FLAG_ANSWERED_ELSEWHERE = (1 << 15),
+	/* AST_FLAG_ANSWERED_ELSEWHERE = (1 << 15), */
 	/*! This flag indicates that on a masquerade, an active stream should not
 	 *  be carried over */
 	AST_FLAG_MASQ_NOSTREAM = (1 << 16),
@@ -1387,6 +1388,8 @@ void ast_channel_clear_softhangup(struct ast_channel *chan, int flag);
  * \param source a string describing the source of the hangup for this channel
  * \param force
  *
+ * \note Absolutely _NO_ channel locks should be held before calling this function.
+ *
  * \since 1.8
  *
  * Hangupsource is generally the channel name that caused the bridge to be
@@ -1406,11 +1409,11 @@ int ast_check_hangup_locked(struct ast_channel *chan);
 
 /*!
  * \brief Lock the given channel, then request softhangup on the channel with the given causecode
- * \param obj channel on which to hang up
- * \param causecode cause code to use
- * \return 0
+ * \param chan channel on which to hang up
+ * \param causecode cause code to use (Zero if don't use cause code)
+ * \return Nothing
  */
-int ast_channel_softhangup_withcause_locked(void *obj, int causecode);
+void ast_channel_softhangup_withcause_locked(struct ast_channel *chan, int causecode);
 
 /*!
  * \brief Compare a offset with the settings of when to hang a channel up
@@ -3561,6 +3564,15 @@ int ast_channel_get_cc_agent_type(struct ast_channel *chan, char *agent_type, si
  * in the global channels conatiner, use this function.
  */
 void ast_channel_unlink(struct ast_channel *chan);
+
+/*!
+ * \brief Sets the HANGUPCAUSE hash and optionally the SIP_CAUSE hash 
+ * on the given channel
+ *
+ * \param chan channel on which to set the cause information
+ * \param cause_code ast_control_pvt_cause_code structure containing cause information
+ */
+void ast_channel_hangupcause_hash_set(struct ast_channel *chan, const struct ast_control_pvt_cause_code *cause_code);
 
 /* ACCESSOR FUNTIONS */
 /*! \brief Set the channel name */

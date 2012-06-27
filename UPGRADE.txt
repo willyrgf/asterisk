@@ -25,6 +25,11 @@ From 10 to 11:
 Parking:
  - The comebacktoorigin setting must now be set per parking lot. The setting in
    the general section will not be applied automatically to each parking lot.
+ - The BLINDTRANSFER channel variable is deleted from a channel when it is
+   bridged to prevent subtle bugs in the parking feature.  The channel
+   variable is used by Asterisk internally for the Park application to work
+   properly.  If you were using it for your own purposes, copy it to your
+   own channel variable before the channel is bridged.
 
 res_ais:
  - Users of res_ais in versions of Asterisk prior to Asterisk 11 must change
@@ -96,6 +101,10 @@ SIP
    should be vastly improved.  The HANGUPCAUSE hash should now be used instead
    of SIP_CAUSE. Because of this, the storesipcause option in sip.conf is also
    deprecated.
+ - The sip paramater for Originating Line Information (oli, isup-oli, and
+   ss7-oli) is now parsed out of the From header and copied into the channel's
+   ANI2 information field.  This is readable from the CALLERID(ani2) dialplan
+   function.
 
 chan_unistim
  - Due to massive update in chan_unistim phone keys functions and on-screen 
