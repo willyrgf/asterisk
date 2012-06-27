@@ -18293,6 +18293,7 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
  	ast_cli(a->fd, "  Timer B:                %d\n", global_timer_b);
 	ast_cli(a->fd, "  No premature media:     %s\n", AST_CLI_YESNO(global_prematuremediafilter));
 	ast_cli(a->fd, "  Max forwards:           %d\n", sip_cfg.default_max_forwards);
+	ast_cli(a->fd, "  PRACK support:          %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[2], SIP_PAGE3_PRACK)));
 
 	ast_cli(a->fd, "\nDefault Settings:\n");
 	ast_cli(a->fd, "-----------------\n");
@@ -18664,6 +18665,7 @@ static char *sip_show_channel(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 			ast_cli(a->fd, "  Format:                 %s\n", ast_getformatname_multiple(formatbuf, sizeof(formatbuf), cur->owner ? cur->owner->nativeformats : 0) );
 			ast_cli(a->fd, "  T.38 support            %s\n", AST_CLI_YESNO(cur->udptl != NULL));
 			ast_cli(a->fd, "  Video support           %s\n", AST_CLI_YESNO(cur->vrtp != NULL));
+			ast_cli(a->fd, "  PRACK support           %s\n", AST_CLI_YESNO(ast_test_flag(&cur->flags[2], SIP_PAGE3_PRACK)));
 			ast_cli(a->fd, "  MaxCallBR:              %d kbps\n", cur->maxcallbitrate);
 			ast_cli(a->fd, "  Theoretical Address:    %s\n", ast_sockaddr_stringify(&cur->sa));
 			ast_cli(a->fd, "  Received Address:       %s\n", ast_sockaddr_stringify(&cur->recv));
@@ -19912,6 +19914,39 @@ static int sip_reinvite_retry(const void *data)
 	return 0;
 }
 
+/*! \brief Handle PRACK responses
+	SKREP
+ */
+static void handle_response_prack(struct sip_pvt *p, int resp, const char *rest, struct sip_request *req, uint32_t seqno)
+{
+	ast_debug(2, "---> Got response on UPDATE :: %d \n", resp);
+	/* Handle authentication early */
+	if (resp == 401 || resp == 407) {
+		if (p->options) {
+			p->options->auth_type = (resp == 401 ? WWW_AUTH : PROXY_AUTH);
+		}
+		if ((p->authtries == MAX_AUTHTRIES) || do_proxy_auth(p, req, resp, SIP_UPDATE, 1)) {
+			ast_log(LOG_NOTICE, "Failed to authenticate on PRACK to '%s'\n", get_header(&p->initreq, "From"));
+		}
+		return;
+	}
+
+	switch(resp) {
+	case 200:	/* 200 OK - all is fine in the kingdom of SIP */
+	case 481:	/* Ok, they did not find our call ID. Let's die */
+	case 403: 	/* Forbidden */
+	case 415: /* Unsupported media type */
+	case 488: /* Not acceptable here */
+	case 606: /* Not Acceptable */
+	case 501: 	/* Let's kill this dialog */
+		break;
+	default:
+		break;
+	};
+	
+	
+}
+
 /*!
  * \brief Handle authentication challenge for SIP UPDATE
  *
@@ -21147,6 +21182,9 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 	} else if (sipmethod == SIP_INFO) {
 		/* More good gravy! */
 		handle_response_info(p, resp, rest, req, seqno);
+	} else if (sipmethod == SIP_PRACK) {
+		/* More good candy! */
+		handle_response_prack(p, resp, rest, req, seqno);
 	} else if (sipmethod == SIP_MESSAGE) {
 		/* More good gravy! */
 		handle_response_message(p, resp, rest, req, seqno);
@@ -22290,6 +22328,15 @@ static int handle_request_update(struct sip_pvt *p, struct sip_request *req)
 		connected.source = AST_CONNECTED_LINE_UPDATE_SOURCE_TRANSFER;
 		ast_channel_queue_connected_line_update(p->owner, &connected, &update_connected);
 	}
+	transmit_response(p, "200 OK", req);
+	return 0;
+}
+
+/*! Support for the SIP Prack method
+ */
+static int handle_request_prack(struct sip_pvt *p, struct sip_request *req)
+{
+	/* SKREP */
 	transmit_response(p, "200 OK", req);
 	return 0;
 }
@@ -25347,6 +25394,9 @@ static int handle_incoming(struct sip_pvt *p, struct sip_request *req, struct as
 	case SIP_UPDATE:
 		res = handle_request_update(p, req);
 		break;
+	case SIP_PRACK:
+		res = handle_request_prack(p, req);
+		break;
 	case SIP_ACK:
 		/* Make sure we don't ignore this */
 		if (seqno == p->pendinginvite) {
@@ -26993,6 +27043,9 @@ static int handle_common_options(struct ast_flags *flags, struct ast_flags *mask
 	} else if (!strcasecmp(v->name, "buggymwi")) {
 		ast_set_flag(&mask[1], SIP_PAGE2_BUGGY_MWI);
 		ast_set2_flag(&flags[1], ast_true(v->value), SIP_PAGE2_BUGGY_MWI);
+	} else if (!strcasecmp(v->name, "prack")) {
+		ast_set_flag(&mask[2], SIP_PAGE3_PRACK);
+		ast_set2_flag(&flags[2], ast_true(v->value), SIP_PAGE3_PRACK);
 	} else
 		res = 0;
 
@@ -28228,6 +28281,7 @@ static int reload_config(enum channelreloadreason reason)
 	sip_cfg.allowsubscribe = FALSE;
 	sip_cfg.disallowed_methods = SIP_UNKNOWN;
 	sip_cfg.contact_ha = NULL;		/* Reset the contact ACL */
+	sip_cfg.prack = DEFAULT_PRACK;
 	snprintf(global_useragent, sizeof(global_useragent), "%s %s", DEFAULT_USERAGENT, ast_get_version());
 	snprintf(global_sdpsession, sizeof(global_sdpsession), "%s %s", DEFAULT_SDPSESSION, ast_get_version());
 	snprintf(global_sdpowner, sizeof(global_sdpowner), "%s", DEFAULT_SDPOWNER);
