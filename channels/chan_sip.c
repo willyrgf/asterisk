@@ -1242,10 +1242,10 @@ static void add_cc_call_info_to_response(struct sip_pvt *p, struct sip_request *
 static int __transmit_response(struct sip_pvt *p, const char *msg, const struct sip_request *req, enum xmittype reliable);
 static int retrans_pkt(const void *data);
 static int transmit_response_using_temp(ast_string_field callid, struct ast_sockaddr *addr, int useglobal_nat, const int intended_method, const struct sip_request *req, const char *msg);
-static int transmit_response(struct sip_pvt *p, const char *msg, const struct sip_request *req);
 static int transmit_response_reliable(struct sip_pvt *p, const char *msg, const struct sip_request *req);
 static int transmit_response_with_date(struct sip_pvt *p, const char *msg, const struct sip_request *req);
 static int transmit_response_with_sdp(struct sip_pvt *p, const char *msg, const struct sip_request *req, enum xmittype reliable, int oldsdp, int rpid);
+static int transmit_response(struct sip_pvt *p, const char *msg, const struct sip_request *req);
 static int transmit_response_with_unsupported(struct sip_pvt *p, const char *msg, const struct sip_request *req, const char *unsupported);
 static int transmit_response_with_auth(struct sip_pvt *p, const char *msg, const struct sip_request *req, const char *rand, enum xmittype reliable, const char *header, int stale);
 static int transmit_provisional_response(struct sip_pvt *p, const char *msg, const struct sip_request *req, int with_sdp);
@@ -4160,6 +4160,11 @@ static void update_provisional_keepalive(struct sip_pvt *pvt, int with_sdp)
 static int send_response(struct sip_pvt *p, struct sip_request *req, enum xmittype reliable, uint32_t seqno)
 {
 	int res;
+
+	/* Room for PRACK */
+	if (ast_test_flag(&p->flags[2], SIP_PAGE3_PRACK)) {
+		ast_debug(2, "=!=!=!=!=!=!=!= PRACK SHOULD BE USED HERE. Exactly HERE\n");
+	}
 
 	finalize_content(req);
 	add_blank(req);
@@ -9845,13 +9850,15 @@ static int process_sdp_a_image(const char *a, struct sip_pvt *p)
  *  is supported for this dialog. */
 static int add_supported_header(struct sip_pvt *pvt, struct sip_request *req)
 {
-	int res;
+	char supported[256] = "replaces";
+
 	if (st_get_mode(pvt, 0) != SESSION_TIMER_MODE_REFUSE) {
-		res = add_header(req, "Supported", "replaces, timer");
-	} else {
-		res = add_header(req, "Supported", "replaces");
+		strncat(supported, ", timer", sizeof(supported));
+	} 
+	if (ast_test_flag(&pvt->flags[2], SIP_PAGE3_PRACK)) {
+		strncat(supported, ", 100rel", sizeof(supported));
 	}
-	return res;
+	return add_header(req, "Supported", supported);
 }
 
 /*! \brief Add header to SIP message */
@@ -10483,6 +10490,11 @@ static int __transmit_response(struct sip_pvt *p, const char *msg, const struct 
 			&& (!strncmp(msg, "180", 3) || !strncmp(msg, "183", 3))) {
 		ast_clear_flag(&p->flags[1], SIP_PAGE2_CONNECTLINEUPDATE_PEND);
 		add_rpid(&resp, p);
+	}
+	if (ast_test_flag(&p->flags[2], SIP_PAGE3_PRACK) && strncmp(msg, "100", 3) && !strncmp(msg, "1", 1)) {
+		/* SKREP */
+		ast_debug(2, "=!=!=!=!=!= PRACK applied to message \"%s\" \n", msg);
+		reliable = XMIT_PRACK;
 	}
 	if (ast_test_flag(&p->flags[0], SIP_OFFER_CC)) {
 		add_cc_call_info_to_response(p, &resp);
@@ -17700,7 +17712,7 @@ static char *_sip_show_peer(int type, int fd, struct mansession *s, const struct
 
 		/* - is enumerated */
 		astman_append(s, "SIP-DTMFmode: %s\r\n", dtmfmode2str(ast_test_flag(&peer->flags[0], SIP_DTMF)));
-		astman_append(fd, "SIP-PRACK: %s\r\n", ast_test_flag(&peer->flags[2], SIP_PAGE3_PRACK));
+		astman_append(s, "SIP-PRACK: %s\r\n", ast_test_flag(&peer->flags[2], SIP_PAGE3_PRACK) ? "Y" : "N");
 		astman_append(s, "ToHost: %s\r\n", peer->tohost);
 		astman_append(s, "Address-IP: %s\r\nAddress-Port: %d\r\n", ast_sockaddr_stringify_addr(&peer->addr), ast_sockaddr_port(&peer->addr));
 		astman_append(s, "Default-addr-IP: %s\r\nDefault-addr-port: %d\r\n", ast_sockaddr_stringify_addr(&peer->defaddr), ast_sockaddr_port(&peer->defaddr));
