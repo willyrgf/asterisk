@@ -241,6 +241,9 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
                                 ; and multiline formatted headers for strict
                                 ; SIP compatibility (defaults to "yes")
 
+;prack=yes			; Enable PRACK support. (defaults to "no")
+				; Can also be set on a per device basis.
+
 ; See https://wiki.asterisk.org/wiki/display/AST/IP+Quality+of+Service for a description of these parameters.
 ;tos_sip=cs3                    ; Sets TOS for SIP packets.
 ;tos_audio=ef                   ; Sets TOS for RTP audio packets.
