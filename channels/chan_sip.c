@@ -4161,7 +4161,7 @@ static int send_response(struct sip_pvt *p, struct sip_request *req, enum xmitty
 {
 	int res;
 
-	if (ast_test_flag(&p->flags[2], SIP_PAGE3_PRACK)) {
+	if (p->initreq.method == SIP_INVITE && ast_test_flag(&p->flags[2], SIP_PAGE3_PRACK)) {
 		if (reliable == XMIT_PRACK) {
 			ast_debug(2, "=!=!=!=!=!=!=!= PRACK WILL BE USED HERE. Exactly HERE\n");
 		} else {
@@ -21085,7 +21085,7 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 	struct ast_channel *owner;
 	int sipmethod;
 	const char *c = get_header(req, "Cseq");
-	const char *required = get_header(req, "Required");
+	const char *required = get_header(req, "Require");
 
 	/* GCC 4.2 complains if I try to cast c as a char * when passing it to ast_skip_nonblanks, so make a copy of it */
 	char *c_copy = ast_strdupa(c);
