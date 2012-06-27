@@ -23,6 +23,10 @@
  * \author Russell Bryant <russell@digium.com>
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
@@ -1281,8 +1285,9 @@ struct ast_event *ast_event_new(enum ast_event_type type, ...)
 			break;
 		}
 
+		/* realloc inside one of the append functions failed */
 		if (!event) {
-			break;
+			return NULL;
 		}
 	}
 

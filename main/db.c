@@ -34,6 +34,10 @@
  * to be separate fields in the database, instead of one single field as I've tried with.
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
@@ -1005,6 +1009,7 @@ int astdb_init(void)
 
 	/* initialize astdb or realtime */
 	dbinit();
+	/* Ignore check_return warning from Coverity for dbinit below */
 
 	ast_cli_register_multiple(cli_database, ARRAY_LEN(cli_database));
 	ast_manager_register_xml("DBGet", EVENT_FLAG_SYSTEM | EVENT_FLAG_REPORTING, manager_dbget);

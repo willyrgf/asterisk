@@ -26,6 +26,10 @@
  * See http://wiki.asterisk.org
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
@@ -562,7 +566,11 @@ struct ast_variable *ast_variable_browse(const struct ast_config *config, const 
 {
 	struct ast_category *cat = NULL;
 
-	if (category && config->last_browse && (config->last_browse->name == category)) {
+	if (!category) {
+		return NULL;
+	}
+
+	if (config->last_browse && (config->last_browse->name == category)) {
 		cat = config->last_browse;
 	} else {
 		cat = ast_category_get(config, category);
@@ -1483,6 +1491,8 @@ static struct ast_config *config_text_file_load(const char *database, const char
 
 			if (unchanged) {
 				AST_LIST_UNLOCK(&cfmtime_head);
+				ast_free(comment_buffer);
+				ast_free(lline_buffer);
 				return CONFIG_STATUS_FILEUNCHANGED;
 			}
 		}
@@ -1637,13 +1647,13 @@ static struct ast_config *config_text_file_load(const char *database, const char
 		}
 #endif
 
-	if (cfg && cfg != CONFIG_STATUS_FILEUNCHANGED && cfg != CONFIG_STATUS_FILEINVALID && cfg->include_level == 1 && ast_test_flag(&flags, CONFIG_FLAG_WITHCOMMENTS)) {
+	if (ast_test_flag(&flags, CONFIG_FLAG_WITHCOMMENTS)) {
 		ast_free(comment_buffer);
 		ast_free(lline_buffer);
 		comment_buffer = NULL;
 		lline_buffer = NULL;
 	}
-	
+
 	if (count == 0)
 		return NULL;
 
@@ -1896,7 +1906,7 @@ int ast_config_text_file_save(const char *configfile, const struct ast_config *c
 			/* Dump section with any appropriate comment */
 			for (cmt = cat->precomments; cmt; cmt=cmt->next) {
 				char *cmtp = cmt->cmt;
-				while (*cmtp == ';' && *(cmtp+1) == '!') {
+				while (cmtp && *cmtp == ';' && *(cmtp+1) == '!') {
 					char *cmtp2 = strchr(cmtp+1, '\n');
 					if (cmtp2)
 						cmtp = cmtp2+1;

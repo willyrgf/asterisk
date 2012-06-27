@@ -1470,6 +1470,8 @@ void ast_channel_clear_softhangup(struct ast_channel *chan, int flag);
  * \param source a string describing the source of the hangup for this channel
  * \param force
  *
+ * \note Absolutely _NO_ channel locks should be held before calling this function.
+ *
  * \since 1.8
  *
  * Hangupsource is generally the channel name that caused the bridge to be
@@ -2124,8 +2126,11 @@ void ast_begin_shutdown(int hangup);
 /*! Cancels an existing shutdown and returns to normal operation */
 void ast_cancel_shutdown(void);
 
-/*! \return number of active/allocated channels */
+/*! \return number of channels available for lookup */
 int ast_active_channels(void);
+
+/*! \return the number of channels not yet destroyed */
+int ast_undestroyed_channels(void);
 
 /*! \return non-zero if Asterisk is being shut down */
 int ast_shutting_down(void);
