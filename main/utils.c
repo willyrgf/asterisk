@@ -84,12 +84,12 @@ AST_MUTEX_DEFINE_STATIC(__mutex);
 
 /*! \brief Reentrant replacement for gethostbyname for BSD-based systems.
 \note This
-routine is derived from code originally written and placed in the public 
+routine is derived from code originally written and placed in the public
 domain by Enzo Michelangeli <em@em.no-ip.com> */
 
 static int gethostbyname_r (const char *name, struct hostent *ret, char *buf,
-				size_t buflen, struct hostent **result, 
-				int *h_errnop) 
+				size_t buflen, struct hostent **result,
+				int *h_errnop)
 {
 	int hsave;
 	struct hostent *ph;
@@ -184,7 +184,7 @@ static int gethostbyname_r (const char *name, struct hostent *ret, char *buf,
 
 #endif
 
-/*! \brief Re-entrant (thread safe) version of gethostbyname that replaces the 
+/*! \brief Re-entrant (thread safe) version of gethostbyname that replaces the
    standard gethostbyname (which is not thread safe)
 */
 struct hostent *ast_gethostbyname(const char *host, struct ast_hostent *hp)
@@ -220,7 +220,7 @@ struct hostent *ast_gethostbyname(const char *host, struct ast_hostent *hp)
 		if (inet_pton(AF_INET, host, hp->hp.h_addr) > 0)
 			return &hp->hp;
 		return NULL;
-		
+
 	}
 #ifdef HAVE_GETHOSTBYNAME_R_5
 	result = gethostbyname_r(host, &hp->hp, hp->buf, sizeof(hp->buf), &herrno);
@@ -261,7 +261,7 @@ void ast_sha1_hash(char *output, const char *input)
 	uint8_t Message_Digest[20];
 
 	SHA1Reset(&sha);
-	
+
 	SHA1Input(&sha, (const unsigned char *) input, strlen(input));
 
 	SHA1Result(&sha, Message_Digest);
@@ -284,7 +284,7 @@ int ast_base64decode(unsigned char *dst, const char *src, int max)
 		bits += 6;
 		src++;
 		incnt++;
-		/* If we have at least 8 bits left over, take that character 
+		/* If we have at least 8 bits left over, take that character
 		   off the top */
 		if (bits >= 8)  {
 			bits -= 8;
@@ -329,7 +329,7 @@ int ast_base64encode_full(char *dst, const unsigned char *src, int srclen, int m
 		}
 	}
 	if (bits && (cnt + 4 <= max)) {
-		/* Add one last character for the remaining bits, 
+		/* Add one last character for the remaining bits,
 		   padding the rest with 0 */
 		byte <<= 24 - bits;
 		*dst++ = base64[(byte >> 18) & 0x3f];
@@ -502,8 +502,8 @@ static int dev_urandom_fd;
 #undef pthread_mutex_init
 #undef pthread_mutex_destroy
 
-/*! 
- * \brief Keep track of which locks a thread holds 
+/*!
+ * \brief Keep track of which locks a thread holds
  *
  * There is an instance of this struct for every active thread
  */
@@ -531,18 +531,18 @@ struct thr_lock_info {
 	 *  The index (num_locks - 1) has the info on the last one in the
 	 *  locks member */
 	unsigned int num_locks;
-	/*! Protects the contents of the locks member 
+	/*! Protects the contents of the locks member
 	 * Intentionally not ast_mutex_t */
 	pthread_mutex_t lock;
 	AST_LIST_ENTRY(thr_lock_info) entry;
 };
 
-/*! 
- * \brief Locked when accessing the lock_infos list 
+/*!
+ * \brief Locked when accessing the lock_infos list
  */
 AST_MUTEX_DEFINE_STATIC(lock_infos_lock);
 /*!
- * \brief A list of each thread's lock info 
+ * \brief A list of each thread's lock info
  */
 static AST_LIST_HEAD_NOLOCK_STATIC(lock_infos, thr_lock_info);
 
@@ -568,8 +568,8 @@ static void lock_info_destroy(void *data)
 			break;
 		}
 
-		ast_log(LOG_ERROR, 
-			"Thread '%s' still has a lock! - '%s' (%p) from '%s' in %s:%d!\n", 
+		ast_log(LOG_ERROR,
+			"Thread '%s' still has a lock! - '%s' (%p) from '%s' in %s:%d!\n",
 			lock_info->thread_name,
 			lock_info->locks[i].lock_name,
 			lock_info->locks[i].lock_addr,
@@ -745,7 +745,7 @@ void ast_remove_lock_info(void *lock_addr)
 
 	if (i < lock_info->num_locks - 1) {
 		/* Not the last one ... *should* be rare! */
-		memmove(&lock_info->locks[i], &lock_info->locks[i + 1], 
+		memmove(&lock_info->locks[i], &lock_info->locks[i + 1],
 			(lock_info->num_locks - (i + 1)) * sizeof(lock_info->locks[0]));
 	}
 
@@ -780,7 +780,7 @@ static void append_backtrace_information(struct ast_str **str, struct ast_bt *bt
 
 	if ((symbols = ast_bt_get_symbols(bt->addresses, bt->num_frames))) {
 		int frame_iterator;
-		
+
 		for (frame_iterator = 0; frame_iterator < bt->num_frames; ++frame_iterator) {
 			ast_str_append(str, 0, "\t%s\n", symbols[frame_iterator]);
 		}
@@ -797,27 +797,27 @@ static void append_lock_information(struct ast_str **str, struct thr_lock_info *
 	int j;
 	ast_mutex_t *lock;
 	struct ast_lock_track *lt;
-	
-	ast_str_append(str, 0, "=== ---> %sLock #%d (%s): %s %d %s %s %p (%d)\n", 
-				   lock_info->locks[i].pending > 0 ? "Waiting for " : 
+
+	ast_str_append(str, 0, "=== ---> %sLock #%d (%s): %s %d %s %s %p (%d)\n",
+				   lock_info->locks[i].pending > 0 ? "Waiting for " :
 				   lock_info->locks[i].pending < 0 ? "Tried and failed to get " : "", i,
-				   lock_info->locks[i].file, 
+				   lock_info->locks[i].file,
 				   locktype2str(lock_info->locks[i].type),
 				   lock_info->locks[i].line_num,
 				   lock_info->locks[i].func, lock_info->locks[i].lock_name,
-				   lock_info->locks[i].lock_addr, 
+				   lock_info->locks[i].lock_addr,
 				   lock_info->locks[i].times_locked);
 #ifdef HAVE_BKTR
 	append_backtrace_information(str, lock_info->locks[i].backtrace);
 #endif
-	
+
 	if (!lock_info->locks[i].pending || lock_info->locks[i].pending == -1)
 		return;
-	
+
 	/* We only have further details for mutexes right now */
 	if (lock_info->locks[i].type != AST_MUTEX)
 		return;
-	
+
 	lock = lock_info->locks[i].lock_addr;
 	lt = lock->track;
 	ast_reentrancy_lock(lt);
@@ -825,14 +825,14 @@ static void append_lock_information(struct ast_str **str, struct thr_lock_info *
 		ast_str_append(str, 0, "=== --- ---> Locked Here: %s line %d (%s)\n",
 					   lt->file[j], lt->lineno[j], lt->func[j]);
 	}
-	ast_reentrancy_unlock(lt);	
+	ast_reentrancy_unlock(lt);
 }
 
 
-/*! This function can help you find highly temporal locks; locks that happen for a 
+/*! This function can help you find highly temporal locks; locks that happen for a
     short time, but at unexpected times, usually at times that create a deadlock,
 	Why is this thing locked right then? Who is locking it? Who am I fighting
-    with for this lock? 
+    with for this lock?
 
 	To answer such questions, just call this routine before you would normally try
 	to aquire a lock. It doesn't do anything if the lock is not acquired. If the
@@ -857,7 +857,7 @@ void log_show_lock(void *this_lock_addr)
 		ast_log(LOG_NOTICE,"Could not create str\n");
 		return;
 	}
-	
+
 
 	pthread_mutex_lock(&lock_infos_lock.mutex);
 	AST_LIST_TRAVERSE(&lock_infos, lock_info, entry) {
@@ -900,7 +900,7 @@ static char *handle_show_locks(struct ast_cli_entry *e, int cmd, struct ast_cli_
 		return NULL;
 	}
 
-	ast_str_append(&str, 0, "\n" 
+	ast_str_append(&str, 0, "\n"
 	               "=======================================================================\n"
 	               "=== Currently Held Locks ==============================================\n"
 	               "=======================================================================\n"
@@ -1081,7 +1081,7 @@ int ast_pthread_create_detached_stack(pthread_t *thread, pthread_attr_t *attr, v
 	if ((errno = pthread_attr_setdetachstate(attr, PTHREAD_CREATE_DETACHED)))
 		ast_log(LOG_WARNING, "pthread_attr_setdetachstate: %s\n", strerror(errno));
 
-	res = ast_pthread_create_stack(thread, attr, start_routine, data, 
+	res = ast_pthread_create_stack(thread, attr, start_routine, data,
 	                               stacksize, file, caller, line, start_fn);
 
 	if (attr_destroy)
@@ -1152,7 +1152,7 @@ static int ast_wait_for_output(int fd, int timeoutms)
  * If the descriptor is blocking, all assumptions on the guaranteed
  * detail do not apply anymore.
  */
-int ast_carefulwrite(int fd, char *s, int len, int timeoutms) 
+int ast_carefulwrite(int fd, char *s, int len, int timeoutms)
 {
 	struct timeval start = ast_tvnow();
 	int res = 0;
@@ -1183,7 +1183,7 @@ int ast_carefulwrite(int fd, char *s, int len, int timeoutms)
 
 		elapsed = ast_tvdiff_ms(ast_tvnow(), start);
 		if (elapsed >= timeoutms) {
-			/* We've taken too long to write 
+			/* We've taken too long to write
 			 * This is only an error condition if we haven't finished writing. */
 			res = len ? -1 : 0;
 			break;
@@ -1226,7 +1226,7 @@ int ast_careful_fwrite(FILE *f, int fd, const char *src, size_t len, int timeout
 
 		elapsed = ast_tvdiff_ms(ast_tvnow(), start);
 		if (elapsed >= timeoutms) {
-			/* We've taken too long to write 
+			/* We've taken too long to write
 			 * This is only an error condition if we haven't finished writing. */
 			n = len ? -1 : 0;
 			break;
@@ -1350,6 +1350,26 @@ int ast_build_string(char **buffer, size_t *space, const char *fmt, ...)
 	return result;
 }
 
+int ast_regex_string_to_regex_pattern(const char *regex_string, struct ast_str *regex_pattern)
+{
+	int regex_len = strlen(regex_string);
+	int ret = 3;
+
+	/* Chop off the leading / if there is one */
+	if ((regex_len >= 1) && (regex_string[0] == '/')) {
+		ast_str_set(&regex_pattern, 0, "%s", regex_string + 1);
+		ret -= 2;
+	}
+
+	/* Chop off the ending / if there is one */
+	if ((regex_len > 1) && (regex_string[regex_len - 1] == '/')) {
+		ast_str_truncate(regex_pattern, -1);
+		ret -= 1;
+	}
+
+	return ret;
+}
+
 int ast_true(const char *s)
 {
 	if (ast_strlen_zero(s))
@@ -1464,9 +1484,18 @@ long int ast_random(void)
 	return res;
 }
 
+void ast_replace_subargument_delimiter(char *s)
+{
+	for (; *s; s++) {
+		if (*s == '^') {
+			*s = ',';
+		}
+	}
+}
+
 char *ast_process_quotes_and_slashes(char *start, char find, char replace_with)
 {
- 	char *dataPut = start;
+	char *dataPut = start;
 	int inEscape = 0;
 	int inQuotes = 0;
 
@@ -1773,7 +1802,7 @@ void __ast_string_field_ptr_build_va(struct ast_string_field_mgr *mgr,
 			return;
 		}
 		vsprintf(target, format, ap);
-		va_end(ap);
+		va_end(ap); /* XXX va_end without va_start? */
 		__ast_string_field_release_active(*pool_head, *ptr);
 		*ptr = target;
 	} else if (*ptr != target) {
@@ -1818,7 +1847,7 @@ void *__ast_calloc_with_stringfields(unsigned int num_structs, size_t struct_siz
 	void *allocation;
 	unsigned int x;
 
-#if defined(__AST_DEBUG_MALLOC)	
+#if defined(__AST_DEBUG_MALLOC)
 	if (!(allocation = __ast_calloc(num_structs, size_to_alloc, file, lineno, func))) {
 		return NULL;
 	}
@@ -1925,7 +1954,7 @@ void ast_enable_packet_fragmentation(int sock)
 {
 #if defined(HAVE_IP_MTU_DISCOVER)
 	int val = IP_PMTUDISC_DONT;
-	
+
 	if (setsockopt(sock, IPPROTO_IP, IP_MTU_DISCOVER, &val, sizeof(val)))
 		ast_log(LOG_WARNING, "Unable to disable PMTU discovery. Large UDP packets may fail to be delivered when sent from this socket.\n");
 #endif /* HAVE_IP_MTU_DISCOVER */
@@ -1989,9 +2018,28 @@ int ast_utils_init(void)
  * pedantic arg can be set to nonzero if we need to do addition Digest check.
  */
 int ast_parse_digest(const char *digest, struct ast_http_digest *d, int request, int pedantic) {
-	int i;
-	char *c, key[512], val[512];
+	char *c;
 	struct ast_str *str = ast_str_create(16);
+
+	/* table of recognised keywords, and places where they should be copied */
+	const struct x {
+		const char *key;
+		const ast_string_field *field;
+	} *i, keys[] = {
+		{ "username=", &d->username },
+		{ "realm=", &d->realm },
+		{ "nonce=", &d->nonce },
+		{ "uri=", &d->uri },
+		{ "domain=", &d->domain },
+		{ "response=", &d->response },
+		{ "cnonce=", &d->cnonce },
+		{ "opaque=", &d->opaque },
+		/* Special cases that cannot be directly copied */
+		{ "algorithm=", NULL },
+		{ "qop=", NULL },
+		{ "nc=", NULL },
+		{ NULL, 0 },
+	};
 
 	if (ast_strlen_zero(digest) || !d || !str) {
 		ast_free(str);
@@ -2010,72 +2058,55 @@ int ast_parse_digest(const char *digest, struct ast_http_digest *d, int request,
 	c += strlen("Digest ");
 
 	/* lookup for keys/value pair */
-	while (*c && *(c = ast_skip_blanks(c))) {
+	while (c && *c && *(c = ast_skip_blanks(c))) {
 		/* find key */
-		i = 0;
-		while (*c && *c != '=' && *c != ',' && !isspace(*c)) {
-			key[i++] = *c++;
-		}
-		key[i] = '\0';
-		c = ast_skip_blanks(c);
-		if (*c == '=') {
-			c = ast_skip_blanks(++c);
-			i = 0;
-			if (*c == '\"') {
-				/* in quotes. Skip first and look for last */
-				c++;
-				while (*c && *c != '\"') {
-					if (*c == '\\' && c[1] != '\0') { /* unescape chars */
-						c++;
-					}
-					val[i++] = *c++;
-				}
+		for (i = keys; i->key != NULL; i++) {
+			char *src, *separator;
+			int unescape = 0;
+			if (strncasecmp(c, i->key, strlen(i->key)) != 0) {
+				continue;
+			}
+
+			/* Found. Skip keyword, take text in quotes or up to the separator. */
+			c += strlen(i->key);
+			if (*c == '"') {
+				src = ++c;
+				separator = "\"";
+				unescape = 1;
 			} else {
-				/* token */
-				while (*c && *c != ',' && !isspace(*c)) {
-					val[i++] = *c++;
+				src = c;
+				separator = ",";
+			}
+			strsep(&c, separator); /* clear separator and move ptr */
+			if (unescape) {
+				ast_unescape_c(src);
+			}
+			if (i->field) {
+				ast_string_field_ptr_set(d, i->field, src);
+			} else {
+				/* Special cases that require additional procesing */
+				if (!strcasecmp(i->key, "algorithm=")) {
+					if (strcasecmp(src, "MD5")) {
+						ast_log(LOG_WARNING, "Digest algorithm: \"%s\" not supported.\n", src);
+						ast_free(str);
+						return -1;
+					}
+				} else if (!strcasecmp(i->key, "qop=") && !strcasecmp(src, "auth")) {
+					d->qop = 1;
+				} else if (!strcasecmp(i->key, "nc=")) {
+					unsigned long u;
+					if (sscanf(src, "%30lx", &u) != 1) {
+						ast_log(LOG_WARNING, "Incorrect Digest nc value: \"%s\".\n", src);
+						ast_free(str);
+						return -1;
+					}
+					ast_string_field_set(d, nc, src);
 				}
 			}
-			val[i] = '\0';
+			break;
 		}
-
-		while (*c && *c != ',') {
-			c++;
-		}
-		if (*c) {
-			c++;
-		}
-
-		if (!strcasecmp(key, "username")) {
-			ast_string_field_set(d, username, val);
-		} else if (!strcasecmp(key, "realm")) {
-			ast_string_field_set(d, realm, val);
-		} else if (!strcasecmp(key, "nonce")) {
-			ast_string_field_set(d, nonce, val);
-		} else if (!strcasecmp(key, "uri")) {
-			ast_string_field_set(d, uri, val);
-		} else if (!strcasecmp(key, "domain")) {
-			ast_string_field_set(d, domain, val);
-		} else if (!strcasecmp(key, "response")) {
-			ast_string_field_set(d, response, val);
-		} else if (!strcasecmp(key, "algorithm")) {
-			if (strcasecmp(val, "MD5")) {
-				ast_log(LOG_WARNING, "Digest algorithm: \"%s\" not supported.\n", val);
-				return -1;
-			}
-		} else if (!strcasecmp(key, "cnonce")) {
-			ast_string_field_set(d, cnonce, val);
-		} else if (!strcasecmp(key, "opaque")) {
-			ast_string_field_set(d, opaque, val);
-		} else if (!strcasecmp(key, "qop") && !strcasecmp(val, "auth")) {
-			d->qop = 1;
-		} else if (!strcasecmp(key, "nc")) {
-			unsigned long u;
-			if (sscanf(val, "%30lx", &u) != 1) {
-				ast_log(LOG_WARNING, "Incorrect Digest nc value: \"%s\".\n", val);
-				return -1;
-			}
-			ast_string_field_set(d, nc, val);
+		if (i->key == NULL) { /* not found, try ',' */
+			strsep(&c, ",");
 		}
 	}
 	ast_free(str);

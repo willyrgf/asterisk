@@ -289,7 +289,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define locked_string_field_set(chan, field, source) \
 	do { \
 		ast_channel_lock(chan); \
-		ast_string_field_set(chan, field, source); \
+		ast_channel_##field##_set(chan, source); \
 		ast_channel_unlock(chan); \
 	} while (0)
 
@@ -307,77 +307,77 @@ static int func_channel_read(struct ast_channel *chan, const char *function,
 	struct ast_format_cap *tmpcap;
 
 	if (!strcasecmp(data, "audionativeformat")) {
-		if ((tmpcap = ast_format_cap_get_type(chan->nativeformats, AST_FORMAT_TYPE_AUDIO))) {
+		if ((tmpcap = ast_format_cap_get_type(ast_channel_nativeformats(chan), AST_FORMAT_TYPE_AUDIO))) {
 			ast_copy_string(buf, ast_getformatname_multiple(tmp, sizeof(tmp), tmpcap), len);
 			tmpcap = ast_format_cap_destroy(tmpcap);
 		}
 	} else if (!strcasecmp(data, "videonativeformat")) {
-		if ((tmpcap = ast_format_cap_get_type(chan->nativeformats, AST_FORMAT_TYPE_VIDEO))) {
+		if ((tmpcap = ast_format_cap_get_type(ast_channel_nativeformats(chan), AST_FORMAT_TYPE_VIDEO))) {
 			ast_copy_string(buf, ast_getformatname_multiple(tmp, sizeof(tmp), tmpcap), len);
 			tmpcap = ast_format_cap_destroy(tmpcap);
 		}
 	} else if (!strcasecmp(data, "audioreadformat")) {
-		ast_copy_string(buf, ast_getformatname(&chan->readformat), len);
+		ast_copy_string(buf, ast_getformatname(ast_channel_readformat(chan)), len);
 	} else if (!strcasecmp(data, "audiowriteformat")) {
-		ast_copy_string(buf, ast_getformatname(&chan->writeformat), len);
+		ast_copy_string(buf, ast_getformatname(ast_channel_writeformat(chan)), len);
 #ifdef CHANNEL_TRACE
 	} else if (!strcasecmp(data, "trace")) {
 		ast_channel_lock(chan);
 		ast_copy_string(buf, ast_channel_trace_is_enabled(chan) ? "1" : "0", len);
 		ast_channel_unlock(chan);
 #endif
-	} else if (!strcasecmp(data, "tonezone") && chan->zone)
-		locked_copy_string(chan, buf, chan->zone->country, len);
+	} else if (!strcasecmp(data, "tonezone") && ast_channel_zone(chan))
+		locked_copy_string(chan, buf, ast_channel_zone(chan)->country, len);
 	else if (!strcasecmp(data, "language"))
-		locked_copy_string(chan, buf, chan->language, len);
+		locked_copy_string(chan, buf, ast_channel_language(chan), len);
 	else if (!strcasecmp(data, "musicclass"))
-		locked_copy_string(chan, buf, chan->musicclass, len);
+		locked_copy_string(chan, buf, ast_channel_musicclass(chan), len);
 	else if (!strcasecmp(data, "name")) {
-		locked_copy_string(chan, buf, chan->name, len);
+		locked_copy_string(chan, buf, ast_channel_name(chan), len);
 	} else if (!strcasecmp(data, "parkinglot"))
-		locked_copy_string(chan, buf, chan->parkinglot, len);
+		locked_copy_string(chan, buf, ast_channel_parkinglot(chan), len);
 	else if (!strcasecmp(data, "state"))
-		locked_copy_string(chan, buf, ast_state2str(chan->_state), len);
+		locked_copy_string(chan, buf, ast_state2str(ast_channel_state(chan)), len);
 	else if (!strcasecmp(data, "channeltype"))
-		locked_copy_string(chan, buf, chan->tech->type, len);
+		locked_copy_string(chan, buf, ast_channel_tech(chan)->type, len);
 	else if (!strcasecmp(data, "accountcode"))
-		locked_copy_string(chan, buf, chan->accountcode, len);
+		locked_copy_string(chan, buf, ast_channel_accountcode(chan), len);
 	else if (!strcasecmp(data, "checkhangup")) {
 		ast_channel_lock(chan);
 		ast_copy_string(buf, ast_check_hangup(chan) ? "1" : "0", len);
 		ast_channel_unlock(chan);
 	} else if (!strcasecmp(data, "peeraccount"))
-		locked_copy_string(chan, buf, chan->peeraccount, len);
+		locked_copy_string(chan, buf, ast_channel_peeraccount(chan), len);
 	else if (!strcasecmp(data, "hangupsource"))
-		locked_copy_string(chan, buf, chan->hangupsource, len);
-	else if (!strcasecmp(data, "appname") && chan->appl)
-		locked_copy_string(chan, buf, chan->appl, len);
-	else if (!strcasecmp(data, "appdata") && chan->data)
-		locked_copy_string(chan, buf, chan->data, len);
-	else if (!strcasecmp(data, "exten") && chan->data)
-		locked_copy_string(chan, buf, chan->exten, len);
-	else if (!strcasecmp(data, "context") && chan->data)
-		locked_copy_string(chan, buf, chan->context, len);
-	else if (!strcasecmp(data, "userfield") && chan->data)
-		locked_copy_string(chan, buf, chan->userfield, len);
-	else if (!strcasecmp(data, "channame") && chan->data)
-		locked_copy_string(chan, buf, chan->name, len);
+		locked_copy_string(chan, buf, ast_channel_hangupsource(chan), len);
+	else if (!strcasecmp(data, "appname") && ast_channel_appl(chan))
+		locked_copy_string(chan, buf, ast_channel_appl(chan), len);
+	else if (!strcasecmp(data, "appdata") && ast_channel_data(chan))
+		locked_copy_string(chan, buf, ast_channel_data(chan), len);
+	else if (!strcasecmp(data, "exten") && ast_channel_data(chan))
+		locked_copy_string(chan, buf, ast_channel_exten(chan), len);
+	else if (!strcasecmp(data, "context") && ast_channel_data(chan))
+		locked_copy_string(chan, buf, ast_channel_context(chan), len);
+	else if (!strcasecmp(data, "userfield") && ast_channel_data(chan))
+		locked_copy_string(chan, buf, ast_channel_userfield(chan), len);
+	else if (!strcasecmp(data, "channame") && ast_channel_data(chan))
+		locked_copy_string(chan, buf, ast_channel_name(chan), len);
 	else if (!strcasecmp(data, "linkedid")) {
 		ast_channel_lock(chan);
-		if (ast_strlen_zero(chan->linkedid)) {
+		if (ast_strlen_zero(ast_channel_linkedid(chan))) {
 			/* fall back on the channel's uniqueid if linkedid is unset */
-			ast_copy_string(buf, chan->uniqueid, len);
+			ast_copy_string(buf, ast_channel_uniqueid(chan), len);
 		}
 		else {
-			ast_copy_string(buf, chan->linkedid, len);
+			ast_copy_string(buf, ast_channel_linkedid(chan), len);
 		}
 		ast_channel_unlock(chan);
 	} else if (!strcasecmp(data, "peer")) {
 		struct ast_channel *p;
 		ast_channel_lock(chan);
 		p = ast_bridged_channel(chan);
-		if (p || chan->tech || chan->cdr) /* dummy channel? if so, we hid the peer name in the language */
-			ast_copy_string(buf, (p ? p->name : ""), len);
+		if (p || ast_channel_tech(chan) || ast_channel_cdr(chan)) /* dummy channel? if so, we hid the peer name in the language */
+			ast_copy_string(buf, (p ? ast_channel_name(p) : ""), len);
 		else {
 			/* a dummy channel can still pass along bridged peer info via
                            the BRIDGEPEER variable */
@@ -389,18 +389,18 @@ static int func_channel_read(struct ast_channel *chan, const char *function,
 		}
 		ast_channel_unlock(chan);
 	} else if (!strcasecmp(data, "uniqueid")) {
-		locked_copy_string(chan, buf, chan->uniqueid, len);
+		locked_copy_string(chan, buf, ast_channel_uniqueid(chan), len);
 	} else if (!strcasecmp(data, "transfercapability")) {
-		locked_copy_string(chan, buf, transfercapability_table[chan->transfercapability & 0x1f], len);
+		locked_copy_string(chan, buf, transfercapability_table[ast_channel_transfercapability(chan) & 0x1f], len);
 	} else if (!strcasecmp(data, "callgroup")) {
 		char groupbuf[256];
-		locked_copy_string(chan, buf,  ast_print_group(groupbuf, sizeof(groupbuf), chan->callgroup), len);
+		locked_copy_string(chan, buf,  ast_print_group(groupbuf, sizeof(groupbuf), ast_channel_callgroup(chan)), len);
 	} else if (!strcasecmp(data, "pickupgroup")) {
 		char groupbuf[256];
-		locked_copy_string(chan, buf,  ast_print_group(groupbuf, sizeof(groupbuf), chan->pickupgroup), len);
+		locked_copy_string(chan, buf,  ast_print_group(groupbuf, sizeof(groupbuf), ast_channel_pickupgroup(chan)), len);
 	} else if (!strcasecmp(data, "amaflags")) {
 		char amabuf[256];
-		snprintf(amabuf,sizeof(amabuf), "%d", chan->amaflags);
+		snprintf(amabuf,sizeof(amabuf), "%d", ast_channel_amaflags(chan));
 		locked_copy_string(chan, buf, amabuf, len);
 	} else if (!strncasecmp(data, "secure_bridge_", 14)) {
 		struct ast_datastore *ds;
@@ -414,7 +414,7 @@ static int func_channel_read(struct ast_channel *chan, const char *function,
 			}
 		}
 		ast_channel_unlock(chan);
-	} else if (!chan->tech || !chan->tech->func_channel_read || chan->tech->func_channel_read(chan, function, data, buf, len)) {
+	} else if (!ast_channel_tech(chan) || !ast_channel_tech(chan)->func_channel_read || ast_channel_tech(chan)->func_channel_read(chan, function, data, buf, len)) {
 		ast_log(LOG_WARNING, "Unknown or unavailable item requested: '%s'\n", data);
 		ret = -1;
 	}
@@ -441,13 +441,15 @@ static int func_channel_write_real(struct ast_channel *chan, const char *functio
 	else if (!strcasecmp(data, "amaflags")) {
 		ast_channel_lock(chan);
 		if(isdigit(*value)) {
-			sscanf(value, "%30d", &chan->amaflags);
+			int amaflags;
+			sscanf(value, "%30d", &amaflags);
+			ast_channel_amaflags_set(chan, amaflags);
 		} else if (!strcasecmp(value,"OMIT")){
-			chan->amaflags = 1;
+			ast_channel_amaflags_set(chan, 1);
 		} else if (!strcasecmp(value,"BILLING")){
-			chan->amaflags = 2;
+			ast_channel_amaflags_set(chan, 2);
 		} else if (!strcasecmp(value,"DOCUMENTATION")){
-			chan->amaflags = 3;
+			ast_channel_amaflags_set(chan, 3);
 		}
 		ast_channel_unlock(chan);
 	} else if (!strcasecmp(data, "peeraccount"))
@@ -464,7 +466,7 @@ static int func_channel_write_real(struct ast_channel *chan, const char *functio
 			ret = ast_channel_trace_disable(chan);
 		else {
 			ret = -1;
-			ast_log(LOG_WARNING, "Invalid value for CHANNEL(trace).");
+			ast_log(LOG_WARNING, "Invalid value for CHANNEL(trace).\n");
 		}
 		ast_channel_unlock(chan);
 	}
@@ -476,17 +478,17 @@ static int func_channel_write_real(struct ast_channel *chan, const char *functio
 			ret = -1;	
 		} else {
 			ast_channel_lock(chan);
-			if (chan->zone) {
-				chan->zone = ast_tone_zone_unref(chan->zone);
+			if (ast_channel_zone(chan)) {
+				ast_channel_zone_set(chan, ast_tone_zone_unref(ast_channel_zone(chan)));
 			}
-			chan->zone = ast_tone_zone_ref(new_zone);
+			ast_channel_zone_set(chan, ast_tone_zone_ref(new_zone));
 			ast_channel_unlock(chan);
 			new_zone = ast_tone_zone_unref(new_zone);
 		}
 	} else if (!strcasecmp(data, "callgroup")) {
-		chan->callgroup = ast_get_group(value);
+		ast_channel_callgroup_set(chan, ast_get_group(value));
 	} else if (!strcasecmp(data, "pickupgroup")) {
-		chan->pickupgroup = ast_get_group(value);
+		ast_channel_pickupgroup_set(chan, ast_get_group(value));
 	} else if (!strcasecmp(data, "txgain")) {
 		sscanf(value, "%4hhd", &gainset);
 		ast_channel_setoption(chan, AST_OPTION_TXGAIN, &gainset, sizeof(gainset), 0);
@@ -497,7 +499,7 @@ static int func_channel_write_real(struct ast_channel *chan, const char *functio
 		unsigned short i;
 		for (i = 0; i < 0x20; i++) {
 			if (!strcasecmp(transfercapability_table[i], value) && strcmp(value, "UNK")) {
-				chan->transfercapability = i;
+				ast_channel_transfercapability_set(chan, i);
 				break;
 			}
 		}
@@ -532,8 +534,8 @@ static int func_channel_write_real(struct ast_channel *chan, const char *functio
 		} else if (!strcasecmp(data, "secure_bridge_media")) {
 			store->media = ast_true(value) ? 1 : 0;
 		}
-	} else if (!chan->tech->func_channel_write
-		 || chan->tech->func_channel_write(chan, function, data, value)) {
+	} else if (!ast_channel_tech(chan)->func_channel_write
+		 || ast_channel_tech(chan)->func_channel_write(chan, function, data, value)) {
 		ast_log(LOG_WARNING, "Unknown or unavailable item requested: '%s'\n",
 				data);
 		ret = -1;
@@ -593,14 +595,14 @@ static int func_channels_read(struct ast_channel *chan, const char *function, ch
 
 	while ((c = ast_channel_iterator_next(iter))) {
 		ast_channel_lock(c);
-		if (ast_strlen_zero(data) || regexec(&re, c->name, 0, NULL, 0) == 0) {
-			size_t namelen = strlen(c->name);
+		if (ast_strlen_zero(data) || regexec(&re, ast_channel_name(c), 0, NULL, 0) == 0) {
+			size_t namelen = strlen(ast_channel_name(c));
 			if (buflen + namelen + (ast_strlen_zero(buf) ? 0 : 1) + 1 < maxlen) {
 				if (!ast_strlen_zero(buf)) {
 					strcat(buf, " ");
 					buflen++;
 				}
-				strcat(buf, c->name);
+				strcat(buf, ast_channel_name(c));
 				buflen += namelen;
 			} else {
 				ast_log(LOG_WARNING, "Number of channels exceeds the available buffer space.  Output will be truncated!\n");
@@ -627,7 +629,7 @@ static struct ast_custom_function channels_function = {
 static int func_mchan_read(struct ast_channel *chan, const char *function,
 			     char *data, struct ast_str **buf, ssize_t len)
 {
-	struct ast_channel *mchan = ast_channel_get_by_name(chan->linkedid);
+	struct ast_channel *mchan = ast_channel_get_by_name(ast_channel_linkedid(chan));
 	char *template = alloca(4 + strlen(data));
 	sprintf(template, "${%s}", data); /* SAFE */
 	ast_str_substitute_variables(buf, len, mchan ? mchan : chan, template);
@@ -640,7 +642,7 @@ static int func_mchan_read(struct ast_channel *chan, const char *function,
 static int func_mchan_write(struct ast_channel *chan, const char *function,
 			      char *data, const char *value)
 {
-	struct ast_channel *mchan = ast_channel_get_by_name(chan->linkedid);
+	struct ast_channel *mchan = ast_channel_get_by_name(ast_channel_linkedid(chan));
 	pbx_builtin_setvar_helper(mchan ? mchan : chan, data, value);
 	if (mchan) {
 		ast_channel_unref(mchan);

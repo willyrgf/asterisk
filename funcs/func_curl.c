@@ -302,6 +302,7 @@ static int acf_curlopt_write(struct ast_channel *chan, const char *cmd, char *na
 			if (!(list = ast_calloc(1, sizeof(*list)))) {
 				ast_log(LOG_ERROR, "Unable to allocate list head.  Cannot set any CURL options\n");
 				ast_datastore_free(store);
+				return -1;
 			}
 
 			store->data = list;
@@ -608,6 +609,7 @@ static int acf_curl_helper(struct ast_channel *chan, const char *cmd, char *info
 
 	if (!(curl = ast_threadstorage_get(&curl_instance, sizeof(*curl)))) {
 		ast_log(LOG_ERROR, "Cannot allocate curl structure\n");
+		ast_free(str);
 		return -1;
 	}
 

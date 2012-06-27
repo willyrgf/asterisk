@@ -136,6 +136,7 @@ struct ast_tcptls_session_args {
 	struct ast_tls_config *tls_cfg; /*!< points to the SSL configuration if any */
 	int accept_fd;
 	int poll_timeout;
+	/*! Server accept_fn thread ID used for external shutdown requests. */
 	pthread_t master;
 	void *(*accept_fn)(void *); /*!< the function in charge of doing the accept */
 	void (*periodic_fn)(void *);/*!< something we may want to run before after select on the accept socket */
@@ -154,7 +155,6 @@ struct ast_tcptls_session_instance {
 	int client;
 	struct ast_sockaddr remote_address;
 	struct ast_tcptls_session_args *parent;
-	ast_mutex_t lock;
 };
 
 #if defined(HAVE_FUNOPEN)

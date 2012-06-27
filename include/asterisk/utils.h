@@ -227,6 +227,8 @@ int ast_base64encode_full(char *dst, const unsigned char *src, int srclen, int m
 #undef MAX
 #define MAX(a, b) ({ typeof(a) __a = (a); typeof(b) __b = (b); ((__a < __b) ? __b : __a);})
 
+#define SWAP(a,b) do { typeof(a) __tmp = (a); (a) = (b); (b) = __tmp; } while (0)
+
 /*!
  * \brief Encode data in base64
  * \param dst the destination buffer
@@ -425,6 +427,12 @@ int ast_pthread_create_detached_stack(pthread_t *thread, pthread_attr_t *attr, v
 		__FILE__, __FUNCTION__, __LINE__, #c)
 
 /* End of thread management support */
+
+/*!
+	\brief Replace '^' in a string with ','
+	\param s String within which to replace characters
+*/
+void ast_replace_subargument_delimiter(char *s);
 
 /*!
 	\brief Process a string to find and replace characters

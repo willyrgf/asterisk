@@ -205,26 +205,27 @@ static void *lock_broker(void *unused)
 static int ast_channel_hash_cb(const void *obj, const int flags)
 {
 	const struct ast_channel *chan = obj;
-	return ast_str_case_hash(chan->name);
+	return ast_str_case_hash(ast_channel_name(chan));
 }
 
 static int ast_channel_cmp_cb(void *obj, void *arg, int flags)
 {
 	struct ast_channel *chan = obj, *cmp_args = arg;
-	return strcasecmp(chan->name, cmp_args->name) ? 0 : CMP_MATCH;
+	return strcasecmp(ast_channel_name(chan), ast_channel_name(cmp_args)) ? 0 : CMP_MATCH;
 }
 
-static int get_lock(struct ast_channel *chan, char *lockname, int try)
+static int get_lock(struct ast_channel *chan, char *lockname, int trylock)
 {
 	struct ast_datastore *lock_store = ast_channel_datastore_find(chan, &lock_info, NULL);
 	struct lock_frame *current;
 	struct channel_lock_frame *clframe = NULL;
 	AST_LIST_HEAD(, channel_lock_frame) *list;
 	int res = 0;
-	struct timespec three_seconds = { .tv_sec = 3 };
+	struct timespec timeout = { 0, };
+	struct timeval now;
 
 	if (!lock_store) {
-		ast_debug(1, "Channel %s has no lock datastore, so we're allocating one.\n", chan->name);
+		ast_debug(1, "Channel %s has no lock datastore, so we're allocating one.\n", ast_channel_name(chan));
 		lock_store = ast_datastore_alloc(&lock_info, NULL);
 		if (!lock_store) {
 			ast_log(LOG_ERROR, "Unable to allocate new datastore.  No locks will be obtained.\n");
@@ -233,7 +234,9 @@ static int get_lock(struct ast_channel *chan, char *lockname, int try)
 
 		list = ast_calloc(1, sizeof(*list));
 		if (!list) {
-			ast_log(LOG_ERROR, "Unable to allocate datastore list head.  %sLOCK will fail.\n", try ? "TRY" : "");
+			ast_log(LOG_ERROR,
+				"Unable to allocate datastore list head.  %sLOCK will fail.\n",
+				trylock ? "TRY" : "");
 			ast_datastore_free(lock_store);
 			return -1;
 		}
@@ -307,7 +310,9 @@ static int get_lock(struct ast_channel *chan, char *lockname, int try)
 		}
 
 		if (!(clframe = ast_calloc(1, sizeof(*clframe)))) {
-			ast_log(LOG_ERROR, "Unable to allocate channel lock frame.  %sLOCK will fail.\n", try ? "TRY" : "");
+			ast_log(LOG_ERROR,
+				"Unable to allocate channel lock frame.  %sLOCK will fail.\n",
+				trylock ? "TRY" : "");
 			AST_LIST_UNLOCK(list);
 			return -1;
 		}
@@ -345,8 +350,14 @@ static int get_lock(struct ast_channel *chan, char *lockname, int try)
 	pthread_kill(broker_tid, SIGURG);
 	AST_LIST_UNLOCK(&locklist);
 
-	if ((!current->owner) ||
-		(!try && !(res = ast_cond_timedwait(&current->cond, &current->mutex, &three_seconds)))) {
+	/* Wait up to three seconds from now for LOCK. */
+	now = ast_tvnow();
+	timeout.tv_sec = now.tv_sec + 3;
+	timeout.tv_nsec = now.tv_usec * 1000;
+
+	if (!current->owner
+		|| (!trylock
+			&& !(res = ast_cond_timedwait(&current->cond, &current->mutex, &timeout)))) {
 		res = 0;
 		current->owner = chan;
 		current->count++;

@@ -358,7 +358,7 @@ static int rec_write(struct ast_channel *ast, struct ast_frame *f)
 {
 	return 0;
 }
-static struct ast_channel *rec_request(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, void *data, int *cause);
+static struct ast_channel *rec_request(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, const char *data, int *cause);
 static struct ast_channel_tech record_tech = {
 	.type = "ConfBridgeRec",
 	.description = "Conference Bridge Recording Channel",
@@ -366,7 +366,7 @@ static struct ast_channel_tech record_tech = {
 	.read = rec_read,
 	.write = rec_write,
 };
-static struct ast_channel *rec_request(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, void *data, int *cause)
+static struct ast_channel *rec_request(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, const char *data, int *cause)
 {
 	struct ast_channel *tmp;
 	struct ast_format fmt;
@@ -378,12 +378,12 @@ static struct ast_channel *rec_request(const char *type, struct ast_format_cap *
 		return NULL;
 	}
 	ast_format_set(&fmt, AST_FORMAT_SLINEAR, 0);
-	tmp->tech = &record_tech;
-	ast_format_cap_add_all(tmp->nativeformats);
-	ast_format_copy(&tmp->writeformat, &fmt);
-	ast_format_copy(&tmp->rawwriteformat, &fmt);
-	ast_format_copy(&tmp->readformat, &fmt);
-	ast_format_copy(&tmp->rawreadformat, &fmt);
+	ast_channel_tech_set(tmp, &record_tech);
+	ast_format_cap_add_all(ast_channel_nativeformats(tmp));
+	ast_format_copy(ast_channel_writeformat(tmp), &fmt);
+	ast_format_copy(ast_channel_rawwriteformat(tmp), &fmt);
+	ast_format_copy(ast_channel_readformat(tmp), &fmt);
+	ast_format_copy(ast_channel_rawreadformat(tmp), &fmt);
 	return tmp;
 }
 
@@ -545,11 +545,11 @@ static void send_join_event(struct ast_channel *chan, const char *conf_name)
 		"Conference: %s\r\n"
 		"CallerIDnum: %s\r\n"
 		"CallerIDname: %s\r\n",
-		chan->name,
-		chan->uniqueid,
+		ast_channel_name(chan),
+		ast_channel_uniqueid(chan),
 		conf_name,
-		S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, "<unknown>"),
-		S_COR(chan->caller.id.name.valid, chan->caller.id.name.str, "<unknown>")
+		S_COR(ast_channel_caller(chan)->id.number.valid, ast_channel_caller(chan)->id.number.str, "<unknown>"),
+		S_COR(ast_channel_caller(chan)->id.name.valid, ast_channel_caller(chan)->id.name.str, "<unknown>")
 	);
 }
 
@@ -561,11 +561,11 @@ static void send_leave_event(struct ast_channel *chan, const char *conf_name)
 		"Conference: %s\r\n"
 		"CallerIDnum: %s\r\n"
 		"CallerIDname: %s\r\n",
-		chan->name,
-		chan->uniqueid,
+		ast_channel_name(chan),
+		ast_channel_uniqueid(chan),
 		conf_name,
-		S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, "<unknown>"),
-		S_COR(chan->caller.id.name.valid, chan->caller.id.name.str, "<unknown>")
+		S_COR(ast_channel_caller(chan)->id.number.valid, ast_channel_caller(chan)->id.number.str, "<unknown>"),
+		S_COR(ast_channel_caller(chan)->id.name.valid, ast_channel_caller(chan)->id.name.str, "<unknown>")
 	);
 }
 
@@ -606,7 +606,7 @@ static int announce_user_count(struct conference_bridge *conference_bridge, stru
 				"")) {
 				return -1;
 			}
-			if (ast_say_number(conference_bridge_user->chan, conference_bridge->users - 1, "", conference_bridge_user->chan->language, NULL)) {
+			if (ast_say_number(conference_bridge_user->chan, conference_bridge->users - 1, "", ast_channel_language(conference_bridge_user->chan), NULL)) {
 				return -1;
 			}
 			if (ast_stream_and_wait(conference_bridge_user->chan,
@@ -614,7 +614,7 @@ static int announce_user_count(struct conference_bridge *conference_bridge, stru
 				"")) {
 				return -1;
 			}
-		} else {
+		} else if (ast_fileexists(there_are, NULL, NULL) && ast_fileexists(other_in_party, NULL, NULL)) {
 			play_sound_file(conference_bridge, there_are);
 			play_sound_number(conference_bridge, conference_bridge->users - 1);
 			play_sound_file(conference_bridge, other_in_party);
@@ -873,8 +873,10 @@ static void destroy_conference_bridge(void *obj)
 	ast_mutex_destroy(&conference_bridge->playback_lock);
 
 	if (conference_bridge->playback_chan) {
-		struct ast_channel *underlying_channel = conference_bridge->playback_chan->tech->bridged_channel(conference_bridge->playback_chan, NULL);
-		ast_hangup(underlying_channel);
+		struct ast_channel *underlying_channel = ast_channel_tech(conference_bridge->playback_chan)->bridged_channel(conference_bridge->playback_chan, NULL);
+		if (underlying_channel) {
+			ast_hangup(underlying_channel);
+		}
 		ast_hangup(conference_bridge->playback_chan);
 		conference_bridge->playback_chan = NULL;
 	}
@@ -993,6 +995,17 @@ static struct conference_bridge *join_conference_bridge(const char *name, struct
 	/* Set the device state for this conference */
 	if (conference_bridge->users == 1) {
 		ast_devstate_changed(AST_DEVICE_INUSE, "confbridge:%s", conference_bridge->name);
+	}
+
+	/* If an announcement is to be played play it */
+	if (!ast_strlen_zero(conference_bridge_user->u_profile.announcement)) {
+		if (play_prompt_to_channel(conference_bridge,
+					   conference_bridge_user->chan,
+					   conference_bridge_user->u_profile.announcement)) {
+			ao2_unlock(conference_bridge);
+			leave_conference_bridge(conference_bridge, conference_bridge_user);
+			return NULL;
+		}
 	}
 
 	/* If the caller is a marked user or is waiting for a marked user to enter pass 'em off, otherwise pass them off to do regular joining stuff */
@@ -1129,7 +1142,7 @@ static int alloc_playback_chan(struct conference_bridge *conference_bridge)
 	}
 	cap = ast_format_cap_destroy(cap);
 
-	conference_bridge->playback_chan->bridge = conference_bridge->bridge;
+	ast_channel_internal_bridge_set(conference_bridge->playback_chan, conference_bridge->bridge);
 
 	if (ast_call(conference_bridge->playback_chan, "", 0)) {
 		ast_hangup(conference_bridge->playback_chan);
@@ -1145,27 +1158,33 @@ static int play_sound_helper(struct conference_bridge *conference_bridge, const 
 {
 	struct ast_channel *underlying_channel;
 
+	/* Do not waste resources trying to play files that do not exist */
+	if (!ast_fileexists(filename, NULL, NULL)) {
+		ast_log(LOG_WARNING, "File %s does not exist in any format\n", filename);
+		return 0;
+	}
+
 	ast_mutex_lock(&conference_bridge->playback_lock);
 	if (!(conference_bridge->playback_chan)) {
 		if (alloc_playback_chan(conference_bridge)) {
 			ast_mutex_unlock(&conference_bridge->playback_lock);
 			return -1;
 		}
-		underlying_channel = conference_bridge->playback_chan->tech->bridged_channel(conference_bridge->playback_chan, NULL);
+		underlying_channel = ast_channel_tech(conference_bridge->playback_chan)->bridged_channel(conference_bridge->playback_chan, NULL);
 	} else {
 		/* Channel was already available so we just need to add it back into the bridge */
-		underlying_channel = conference_bridge->playback_chan->tech->bridged_channel(conference_bridge->playback_chan, NULL);
-		ast_bridge_impart(conference_bridge->bridge, underlying_channel, NULL, NULL);
+		underlying_channel = ast_channel_tech(conference_bridge->playback_chan)->bridged_channel(conference_bridge->playback_chan, NULL);
+		ast_bridge_impart(conference_bridge->bridge, underlying_channel, NULL, NULL, 0);
 	}
 
 	/* The channel is all under our control, in goes the prompt */
 	if (!ast_strlen_zero(filename)) {
 		ast_stream_and_wait(conference_bridge->playback_chan, filename, "");
 	} else {
-		ast_say_number(conference_bridge->playback_chan, say_number, "", conference_bridge->playback_chan->language, NULL);
+		ast_say_number(conference_bridge->playback_chan, say_number, "", ast_channel_language(conference_bridge->playback_chan), NULL);
 	}
 
-	ast_debug(1, "Departing underlying channel '%s' from bridge '%p'\n", underlying_channel->name, conference_bridge->bridge);
+	ast_debug(1, "Departing underlying channel '%s' from bridge '%p'\n", ast_channel_name(underlying_channel), conference_bridge->bridge);
 	ast_bridge_depart(conference_bridge->bridge, underlying_channel);
 
 	ast_mutex_unlock(&conference_bridge->playback_lock);
@@ -1228,7 +1247,7 @@ static void conf_handle_talker_cb(struct ast_bridge *bridge, struct ast_bridge_c
 	      "Uniqueid: %s\r\n"
 	      "Conference: %s\r\n"
 	      "TalkingStatus: %s\r\n",
-	      bridge_channel->chan->name, bridge_channel->chan->uniqueid, conf_name, talking ? "on" : "off");
+	      ast_channel_name(bridge_channel->chan), ast_channel_uniqueid(bridge_channel->chan), conf_name, talking ? "on" : "off");
 }
 
 static int conf_get_pin(struct ast_channel *chan, struct conference_bridge_user *conference_bridge_user)
@@ -1250,7 +1269,7 @@ static int conf_get_pin(struct ast_channel *chan, struct conference_bridge_user 
 		}
 		ast_streamfile(chan,
 			conf_get_sound(CONF_SOUND_INVALID_PIN, conference_bridge_user->b_profile.sounds),
-			chan->language);
+			ast_channel_language(chan));
 		res = ast_waitstream(chan, AST_DIGIT_ANY);
 		if (res > 0) {
 			/* Account for digit already read during ivalid pin playback
@@ -1282,7 +1301,7 @@ static int conf_rec_name(struct conference_bridge_user *user, const char *conf_n
 	}
 	snprintf(user->name_rec_location, sizeof(user->name_rec_location),
 		 "%s/confbridge-name-%s-%s", destdir,
-		 conf_name, user->chan->uniqueid);
+		 conf_name, ast_channel_uniqueid(user->chan));
 
 	res = ast_play_and_record(user->chan,
 		"vm-rec-name",
@@ -1325,7 +1344,7 @@ static int confbridge_exec(struct ast_channel *chan, const char *data)
 	);
 	ast_bridge_features_init(&conference_bridge_user.features);
 
-	if (chan->_state != AST_STATE_UP) {
+	if (ast_channel_state(chan) != AST_STATE_UP) {
 		ast_answer(chan);
 	}
 
@@ -1548,7 +1567,7 @@ static int action_toggle_mute(struct conference_bridge *conference_bridge,
 	/* Mute or unmute yourself, note we only allow manipulation if they aren't waiting for a marked user or if marked users exist */
 	if (!ast_test_flag(&conference_bridge_user->u_profile, USER_OPT_WAITMARKED) || conference_bridge->markedusers) {
 		conference_bridge_user->features.mute = (!conference_bridge_user->features.mute ? 1 : 0);
-		ast_test_suite_event_notify("CONF_MUTE", "Message: participant %s %s\r\nConference: %s\r\nChannel: %s", chan->name, conference_bridge_user->features.mute ? "muted" : "unmuted", conference_bridge_user->b_profile.name, chan->name);
+		ast_test_suite_event_notify("CONF_MUTE", "Message: participant %s %s\r\nConference: %s\r\nChannel: %s", ast_channel_name(chan), conference_bridge_user->features.mute ? "muted" : "unmuted", conference_bridge_user->b_profile.name, ast_channel_name(chan));
 	}
 	return ast_stream_and_wait(chan, (conference_bridge_user->features.mute ?
 		conf_get_sound(CONF_SOUND_MUTED, conference_bridge_user->b_profile.sounds) :
@@ -1617,7 +1636,7 @@ static int action_playback_and_continue(struct conference_bridge *conference_bri
 	char *file = NULL;
 
 	while ((file = strsep(&file_copy, "&"))) {
-		if (ast_streamfile(bridge_channel->chan, file, bridge_channel->chan->language)) {
+		if (ast_streamfile(bridge_channel->chan, file, ast_channel_language(bridge_channel->chan))) {
 			ast_log(LOG_WARNING, "Failed to playback file %s to channel\n", file);
 			return -1;
 		}
@@ -1684,7 +1703,7 @@ static int action_kick_last(struct conference_bridge *conference_bridge,
 			conf_get_sound(CONF_SOUND_ERROR_MENU, conference_bridge_user->b_profile.sounds),
 			"");
 		ast_log(LOG_WARNING, "Only admin users can use the kick_last menu action. Channel %s of conf %s is not an admin.\n",
-			bridge_channel->chan->name,
+			ast_channel_name(bridge_channel->chan),
 			conference_bridge->name);
 		return -1;
 	}
@@ -1719,16 +1738,16 @@ static int action_dialplan_exec(struct ast_bridge_channel *bridge_channel, struc
 	ast_channel_lock(bridge_channel->chan);
 
 	/*save off*/
-	exten = ast_strdupa(bridge_channel->chan->exten);
-	context = ast_strdupa(bridge_channel->chan->context);
-	priority = bridge_channel->chan->priority;
-	pbx = bridge_channel->chan->pbx;
-	bridge_channel->chan->pbx = NULL;
+	exten = ast_strdupa(ast_channel_exten(bridge_channel->chan));
+	context = ast_strdupa(ast_channel_context(bridge_channel->chan));
+	priority = ast_channel_priority(bridge_channel->chan);
+	pbx = ast_channel_pbx(bridge_channel->chan);
+	ast_channel_pbx_set(bridge_channel->chan, NULL);
 
 	/*set new*/
-	ast_copy_string(bridge_channel->chan->exten, menu_action->data.dialplan_args.exten, sizeof(bridge_channel->chan->exten));
-	ast_copy_string(bridge_channel->chan->context, menu_action->data.dialplan_args.context, sizeof(bridge_channel->chan->context));
-	bridge_channel->chan->priority = menu_action->data.dialplan_args.priority;
+	ast_channel_exten_set(bridge_channel->chan, menu_action->data.dialplan_args.exten);
+	ast_channel_context_set(bridge_channel->chan, menu_action->data.dialplan_args.context);
+	ast_channel_priority_set(bridge_channel->chan, menu_action->data.dialplan_args.priority);
 
 	ast_channel_unlock(bridge_channel->chan);
 
@@ -1738,10 +1757,10 @@ static int action_dialplan_exec(struct ast_bridge_channel *bridge_channel, struc
 	/*restore*/
 	ast_channel_lock(bridge_channel->chan);
 
-	ast_copy_string(bridge_channel->chan->exten, exten, sizeof(bridge_channel->chan->exten));
-	ast_copy_string(bridge_channel->chan->context, context, sizeof(bridge_channel->chan->context));
-	bridge_channel->chan->priority = priority;
-	bridge_channel->chan->pbx = pbx;
+	ast_channel_exten_set(bridge_channel->chan, exten);
+	ast_channel_context_set(bridge_channel->chan, context);
+	ast_channel_priority_set(bridge_channel->chan, priority);
+	ast_channel_pbx_set(bridge_channel->chan, pbx);
 
 	ast_channel_unlock(bridge_channel->chan);
 
@@ -1938,12 +1957,12 @@ static char *handle_cli_confbridge_kick(struct ast_cli_entry *e, int cmd, struct
 	}
 	ao2_lock(bridge);
 	AST_LIST_TRAVERSE(&bridge->users_list, participant, list) {
-		if (!strncmp(a->argv[3], participant->chan->name, strlen(participant->chan->name))) {
+		if (!strncmp(a->argv[3], ast_channel_name(participant->chan), strlen(ast_channel_name(participant->chan)))) {
 			break;
 		}
 	}
 	if (participant) {
-		ast_cli(a->fd, "Kicking %s from confbridge %s\n", participant->chan->name, bridge->name);
+		ast_cli(a->fd, "Kicking %s from confbridge %s\n", ast_channel_name(participant->chan), bridge->name);
 		participant->kicked = 1;
 		ast_bridge_remove(bridge->bridge, participant->chan);
 	}
@@ -1996,11 +2015,11 @@ static char *handle_cli_confbridge_list(struct ast_cli_entry *e, int cmd, struct
 		ast_cli(a->fd, "============================= ================ ================ ================ ================\n");
 		ao2_lock(bridge);
 		AST_LIST_TRAVERSE(&bridge->users_list, participant, list) {
-			ast_cli(a->fd, "%-29s ", participant->chan->name);
+			ast_cli(a->fd, "%-29s ", ast_channel_name(participant->chan));
 			ast_cli(a->fd, "%-17s", participant->u_profile.name);
 			ast_cli(a->fd, "%-17s", participant->b_profile.name);
 			ast_cli(a->fd, "%-17s", participant->menu_name);
-			ast_cli(a->fd, "%-17s", S_COR(participant->chan->caller.id.number.valid, participant->chan->caller.id.number.str, "<unknown>"));
+			ast_cli(a->fd, "%-17s", S_COR(ast_channel_caller(participant->chan)->id.number.valid, ast_channel_caller(participant->chan)->id.number.str, "<unknown>"));
 			ast_cli(a->fd, "\n");
 		}
 		ao2_unlock(bridge);
@@ -2057,13 +2076,13 @@ static int generic_mute_unmute_helper(int mute, const char *conference, const ch
 	}
 	ao2_lock(bridge);
 	AST_LIST_TRAVERSE(&bridge->users_list, participant, list) {
-		if (!strncmp(user, participant->chan->name, strlen(user))) {
+		if (!strncmp(user, ast_channel_name(participant->chan), strlen(user))) {
 			break;
 		}
 	}
 	if (participant) {
 		participant->features.mute = mute;
-		ast_test_suite_event_notify("CONF_MUTE", "Message: participant %s %s\r\nConference: %s\r\nChannel: %s", participant->chan->name, participant->features.mute ? "muted" : "unmuted", bridge->b_profile.name, participant->chan->name);
+		ast_test_suite_event_notify("CONF_MUTE", "Message: participant %s %s\r\nConference: %s\r\nChannel: %s", ast_channel_name(participant->chan), participant->features.mute ? "muted" : "unmuted", bridge->b_profile.name, ast_channel_name(participant->chan));
 	} else {
 		res = -2;;
 	}
@@ -2338,9 +2357,9 @@ static int action_confbridgelist(struct mansession *s, const struct message *m)
 			"\r\n",
 			id_text,
 			bridge->name,
-			S_COR(participant->chan->caller.id.number.valid, participant->chan->caller.id.number.str, "<unknown>"),
-			S_COR(participant->chan->caller.id.name.valid, participant->chan->caller.id.name.str, "<no name>"),
-			participant->chan->name,
+			S_COR(ast_channel_caller(participant->chan)->id.number.valid, ast_channel_caller(participant->chan)->id.number.str, "<unknown>"),
+			S_COR(ast_channel_caller(participant->chan)->id.name.valid, ast_channel_caller(participant->chan)->id.name.str, "<no name>"),
+			ast_channel_name(participant->chan),
 			ast_test_flag(&participant->u_profile, USER_OPT_ADMIN) ? "Yes" : "No",
 			ast_test_flag(&participant->u_profile, USER_OPT_MARKEDUSER) ? "Yes" : "No");
 	}
@@ -2508,7 +2527,7 @@ static int action_confbridgekick(struct mansession *s, const struct message *m)
 
 	ao2_lock(bridge);
 	AST_LIST_TRAVERSE(&bridge->users_list, participant, list) {
-		if (!strcasecmp(participant->chan->name, channel)) {
+		if (!strcasecmp(ast_channel_name(participant->chan), channel)) {
 			participant->kicked = 1;
 			ast_bridge_remove(bridge->bridge, participant->chan);
 			found = 1;
@@ -2635,7 +2654,7 @@ static int action_confbridgesetsinglevideosrc(struct mansession *s, const struct
 	/* find channel and set as video src. */
 	ao2_lock(bridge);
 	AST_LIST_TRAVERSE(&bridge->users_list, participant, list) {
-		if (!strncmp(channel, participant->chan->name, strlen(channel))) {
+		if (!strncmp(channel, ast_channel_name(participant->chan), strlen(channel))) {
 			ast_bridge_set_single_src_video_mode(bridge->bridge, participant->chan);
 			break;
 		}

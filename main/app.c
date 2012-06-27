@@ -108,7 +108,7 @@ static AST_RWLIST_HEAD_STATIC(groups, ast_group_info);
  * \param collect
  * \param size
  * \param maxlen
- * \param timeout timeout in seconds
+ * \param timeout timeout in milliseconds
  *
  * \return 0 if extension does not exist, 1 if extension exists
 */
@@ -121,13 +121,15 @@ int ast_app_dtget(struct ast_channel *chan, const char *context, char *collect, 
 		maxlen = size;
 	}
 
-	if (!timeout && chan->pbx) {
-		timeout = chan->pbx->dtimeoutms / 1000.0;
-	} else if (!timeout) {
-		timeout = 5;
+	if (!timeout) {
+		if (ast_channel_pbx(chan) && ast_channel_pbx(chan)->dtimeoutms) {
+			timeout = ast_channel_pbx(chan)->dtimeoutms;
+		} else {
+			timeout = 5000;
+		}
 	}
 
-	if ((ts = ast_get_indication_tone(chan->zone, "dial"))) {
+	if ((ts = ast_get_indication_tone(ast_channel_zone(chan), "dial"))) {
 		res = ast_playtones_start(chan, 0, ts->data, 0);
 		ts = ast_tone_zone_sound_unref(ts);
 	} else {
@@ -147,14 +149,14 @@ int ast_app_dtget(struct ast_channel *chan, const char *context, char *collect, 
 		}
 		collect[x++] = res;
 		if (!ast_matchmore_extension(chan, context, collect, 1,
-			S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL))) {
+			S_COR(ast_channel_caller(chan)->id.number.valid, ast_channel_caller(chan)->id.number.str, NULL))) {
 			break;
 		}
 	}
 
 	if (res >= 0) {
 		res = ast_exists_extension(chan, context, collect, 1,
-			S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL)) ? 1 : 0;
+			S_COR(ast_channel_caller(chan)->id.number.valid, ast_channel_caller(chan)->id.number.str, NULL)) ? 1 : 0;
 	}
 
 	return res;
@@ -166,7 +168,7 @@ int ast_app_dtget(struct ast_channel *chan, const char *context, char *collect, 
  * \param prompt The file to stream to the channel
  * \param s The string to read in to.  Must be at least the size of your length
  * \param maxlen How many digits to read (maximum)
- * \param timeout set timeout to 0 for "standard" timeouts. Set timeout to -1 for 
+ * \param timeout set timeout to 0 for "standard" timeouts. Set timeout to -1 for
  *      "ludicrous time" (essentially never times out) */
 enum ast_getdata_result ast_app_getdata(struct ast_channel *c, const char *prompt, char *s, int maxlen, int timeout)
 {
@@ -183,16 +185,16 @@ enum ast_getdata_result ast_app_getdata(struct ast_channel *c, const char *promp
 
 	filename = ast_strdupa(prompt);
 	while ((front = strsep(&filename, "&"))) {
-		ast_test_suite_event_notify("PLAYBACK", "Message: %s\r\nChannel: %s", front, c->name);
+		ast_test_suite_event_notify("PLAYBACK", "Message: %s\r\nChannel: %s", front, ast_channel_name(c));
 		if (!ast_strlen_zero(front)) {
-			res = ast_streamfile(c, front, c->language);
+			res = ast_streamfile(c, front, ast_channel_language(c));
 			if (res)
 				continue;
 		}
 		if (ast_strlen_zero(filename)) {
 			/* set timeouts for the last prompt */
-			fto = c->pbx ? c->pbx->rtimeoutms : 6000;
-			to = c->pbx ? c->pbx->dtimeoutms : 2000;
+			fto = ast_channel_pbx(c) ? ast_channel_pbx(c)->rtimeoutms : 6000;
+			to = ast_channel_pbx(c) ? ast_channel_pbx(c)->dtimeoutms : 2000;
 
 			if (timeout > 0) {
 				fto = to = timeout;
@@ -205,7 +207,7 @@ enum ast_getdata_result ast_app_getdata(struct ast_channel *c, const char *promp
 			 * get rid of the long timeout between
 			 * prompts, and make it 50ms */
 			fto = 50;
-			to = c->pbx ? c->pbx->dtimeoutms : 2000;
+			to = ast_channel_pbx(c) ? ast_channel_pbx(c)->dtimeoutms : 2000;
 		}
 		res = ast_readstring(c, s, maxlen, to, fto, "#");
 		if (res == AST_GETDATA_EMPTY_END_TERMINATED) {
@@ -227,7 +229,7 @@ int ast_app_getdata_full(struct ast_channel *c, const char *prompt, char *s, int
 	int res, to = 2000, fto = 6000;
 
 	if (!ast_strlen_zero(prompt)) {
-		res = ast_streamfile(c, prompt, c->language);
+		res = ast_streamfile(c, prompt, ast_channel_language(c));
 		if (res < 0) {
 			return res;
 		}
@@ -245,25 +247,174 @@ int ast_app_getdata_full(struct ast_channel *c, const char *prompt, char *s, int
 	return res;
 }
 
-int ast_app_run_macro(struct ast_channel *autoservice_chan, struct ast_channel *macro_chan, const char * const macro_name, const char * const macro_args)
+int ast_app_exec_macro(struct ast_channel *autoservice_chan, struct ast_channel *macro_chan, const char *macro_args)
 {
 	struct ast_app *macro_app;
 	int res;
-	char buf[1024];
 
 	macro_app = pbx_findapp("Macro");
 	if (!macro_app) {
-		ast_log(LOG_WARNING, "Cannot run macro '%s' because the 'Macro' application in not available\n", macro_name);
+		ast_log(LOG_WARNING,
+			"Cannot run 'Macro(%s)'.  The application is not available.\n", macro_args);
 		return -1;
 	}
-	snprintf(buf, sizeof(buf), "%s%s%s", macro_name, ast_strlen_zero(macro_args) ? "" : ",", S_OR(macro_args, ""));
 	if (autoservice_chan) {
 		ast_autoservice_start(autoservice_chan);
 	}
-	res = pbx_exec(macro_chan, macro_app, buf);
+
+	ast_debug(4, "%s Original location: %s,%s,%d\n", ast_channel_name(macro_chan),
+		ast_channel_context(macro_chan), ast_channel_exten(macro_chan),
+		ast_channel_priority(macro_chan));
+
+	res = pbx_exec(macro_chan, macro_app, macro_args);
+	ast_debug(4, "Macro exited with status %d\n", res);
+
+	/*
+	 * Assume anything negative from Macro is an error.
+	 * Anything else is success.
+	 */
+	if (res < 0) {
+		res = -1;
+	} else {
+		res = 0;
+	}
+
+	ast_debug(4, "%s Ending location: %s,%s,%d\n", ast_channel_name(macro_chan),
+		ast_channel_context(macro_chan), ast_channel_exten(macro_chan),
+		ast_channel_priority(macro_chan));
+
 	if (autoservice_chan) {
 		ast_autoservice_stop(autoservice_chan);
 	}
+	return res;
+}
+
+int ast_app_run_macro(struct ast_channel *autoservice_chan, struct ast_channel *macro_chan, const char *macro_name, const char *macro_args)
+{
+	int res;
+	char *args_str;
+	size_t args_len;
+
+	if (ast_strlen_zero(macro_args)) {
+		return ast_app_exec_macro(autoservice_chan, macro_chan, macro_name);
+	}
+
+	/* Create the Macro application argument string. */
+	args_len = strlen(macro_name) + strlen(macro_args) + 2;
+	args_str = ast_malloc(args_len);
+	if (!args_str) {
+		return -1;
+	}
+	snprintf(args_str, args_len, "%s,%s", macro_name, macro_args);
+
+	res = ast_app_exec_macro(autoservice_chan, macro_chan, args_str);
+	ast_free(args_str);
+	return res;
+}
+
+int ast_app_exec_sub(struct ast_channel *autoservice_chan, struct ast_channel *sub_chan, const char *sub_args)
+{
+	struct ast_app *sub_app;
+	const char *saved_context;
+	const char *saved_exten;
+	int saved_priority;
+	int saved_autoloopflag;
+	int res;
+
+	sub_app = pbx_findapp("Gosub");
+	if (!sub_app) {
+		ast_log(LOG_WARNING,
+			"Cannot run 'Gosub(%s)'.  The application is not available.\n", sub_args);
+		return -1;
+	}
+	if (autoservice_chan) {
+		ast_autoservice_start(autoservice_chan);
+	}
+
+	ast_channel_lock(sub_chan);
+
+	/* Save current dialplan location */
+	saved_context = ast_strdupa(ast_channel_context(sub_chan));
+	saved_exten = ast_strdupa(ast_channel_exten(sub_chan));
+	saved_priority = ast_channel_priority(sub_chan);
+
+	/*
+	 * Save flag to restore at the end so we don't have to play with
+	 * the priority in the gosub location string.
+	 */
+	saved_autoloopflag = ast_test_flag(ast_channel_flags(sub_chan), AST_FLAG_IN_AUTOLOOP);
+	ast_clear_flag(ast_channel_flags(sub_chan), AST_FLAG_IN_AUTOLOOP);
+
+	/* Set known location for Gosub to return - 1 */
+	ast_channel_context_set(sub_chan, "gosub_virtual_context");
+	ast_channel_exten_set(sub_chan, "s");
+	ast_channel_priority_set(sub_chan, 1 - 1);
+
+	ast_debug(4, "%s Original location: %s,%s,%d\n", ast_channel_name(sub_chan),
+		saved_context, saved_exten, saved_priority);
+
+	ast_channel_unlock(sub_chan);
+	res = pbx_exec(sub_chan, sub_app, sub_args);
+	ast_debug(4, "Gosub exited with status %d\n", res);
+	ast_channel_lock(sub_chan);
+	if (!res) {
+		struct ast_pbx_args gosub_args = {{0}};
+		struct ast_pbx *saved_pbx;
+
+		/* supress warning about a pbx already being on the channel */
+		saved_pbx = ast_channel_pbx(sub_chan);
+		ast_channel_pbx_set(sub_chan, NULL);
+
+		ast_channel_unlock(sub_chan);
+		gosub_args.no_hangup_chan = 1;
+		ast_pbx_run_args(sub_chan, &gosub_args);
+		ast_channel_lock(sub_chan);
+
+		/* Restore pbx. */
+		ast_free(ast_channel_pbx(sub_chan));
+		ast_channel_pbx_set(sub_chan, saved_pbx);
+	}
+
+	ast_debug(4, "%s Ending location: %s,%s,%d\n", ast_channel_name(sub_chan),
+		ast_channel_context(sub_chan), ast_channel_exten(sub_chan),
+		ast_channel_priority(sub_chan));
+
+	/* Restore flag */
+	ast_set2_flag(ast_channel_flags(sub_chan), saved_autoloopflag, AST_FLAG_IN_AUTOLOOP);
+
+	/* Restore dialplan location */
+	ast_channel_context_set(sub_chan, saved_context);
+	ast_channel_exten_set(sub_chan, saved_exten);
+	ast_channel_priority_set(sub_chan, saved_priority);
+
+	ast_channel_unlock(sub_chan);
+
+	if (autoservice_chan) {
+		ast_autoservice_stop(autoservice_chan);
+	}
+	return res;
+}
+
+int ast_app_run_sub(struct ast_channel *autoservice_chan, struct ast_channel *sub_chan, const char *sub_location, const char *sub_args)
+{
+	int res;
+	char *args_str;
+	size_t args_len;
+
+	if (ast_strlen_zero(sub_args)) {
+		return ast_app_exec_sub(autoservice_chan, sub_chan, sub_location);
+	}
+
+	/* Create the Gosub application argument string. */
+	args_len = strlen(sub_location) + strlen(sub_args) + 3;
+	args_str = ast_malloc(args_len);
+	if (!args_str) {
+		return -1;
+	}
+	snprintf(args_str, args_len, "%s(%s)", sub_location, sub_args);
+
+	res = ast_app_exec_sub(autoservice_chan, sub_chan, args_str);
+	ast_free(args_str);
 	return res;
 }
 
@@ -455,7 +606,7 @@ static void linear_release(struct ast_channel *chan, void *params)
 	struct linear_state *ls = params;
 
 	if (ls->origwfmt.id && ast_set_write_format(chan, &ls->origwfmt)) {
-		ast_log(LOG_WARNING, "Unable to restore channel '%s' to format '%d'\n", chan->name, ls->origwfmt.id);
+		ast_log(LOG_WARNING, "Unable to restore channel '%s' to format '%d'\n", ast_channel_name(chan), ls->origwfmt.id);
 	}
 
 	if (ls->autoclose) {
@@ -505,15 +656,15 @@ static void *linear_alloc(struct ast_channel *chan, void *params)
 
 	/* In this case, params is already malloc'd */
 	if (ls->allowoverride) {
-		ast_set_flag(chan, AST_FLAG_WRITE_INT);
+		ast_set_flag(ast_channel_flags(chan), AST_FLAG_WRITE_INT);
 	} else {
-		ast_clear_flag(chan, AST_FLAG_WRITE_INT);
+		ast_clear_flag(ast_channel_flags(chan), AST_FLAG_WRITE_INT);
 	}
 
-	ast_format_copy(&ls->origwfmt, &chan->writeformat);
+	ast_format_copy(&ls->origwfmt, ast_channel_writeformat(chan));
 
 	if (ast_set_write_format_by_id(chan, AST_FORMAT_SLINEAR)) {
-		ast_log(LOG_WARNING, "Unable to set '%s' to linear format (write)\n", chan->name);
+		ast_log(LOG_WARNING, "Unable to set '%s' to linear format (write)\n", ast_channel_name(chan));
 		ast_free(ls);
 		ls = params = NULL;
 	}
@@ -523,9 +674,9 @@ static void *linear_alloc(struct ast_channel *chan, void *params)
 
 static struct ast_generator linearstream =
 {
-	alloc: linear_alloc,
-	release: linear_release,
-	generate: linear_generator,
+	.alloc = linear_alloc,
+	.release = linear_release,
+	.generate = linear_generator,
 };
 
 int ast_linear_stream(struct ast_channel *chan, const char *filename, int fd, int allowoverride)
@@ -597,7 +748,7 @@ int ast_control_streamfile(struct ast_channel *chan, const char *file,
 			strcat(breaks, restart);
 		}
 	}
-	if (chan->_state != AST_STATE_UP) {
+	if (ast_channel_state(chan) != AST_STATE_UP) {
 		res = ast_answer(chan);
 	}
 
@@ -612,10 +763,10 @@ int ast_control_streamfile(struct ast_channel *chan, const char *file,
 
 	for (;;) {
 		ast_stopstream(chan);
-		res = ast_streamfile(chan, file, chan->language);
+		res = ast_streamfile(chan, file, ast_channel_language(chan));
 		if (!res) {
 			if (pause_restart_point) {
-				ast_seekstream(chan->stream, pause_restart_point, SEEK_SET);
+				ast_seekstream(ast_channel_stream(chan), pause_restart_point, SEEK_SET);
 				pause_restart_point = 0;
 			}
 			else if (end || offset < 0) {
@@ -624,12 +775,12 @@ int ast_control_streamfile(struct ast_channel *chan, const char *file,
 				}
 				ast_verb(3, "ControlPlayback seek to offset %ld from end\n", offset);
 
-				ast_seekstream(chan->stream, offset, SEEK_END);
+				ast_seekstream(ast_channel_stream(chan), offset, SEEK_END);
 				end = NULL;
 				offset = 0;
 			} else if (offset) {
 				ast_verb(3, "ControlPlayback seek to offset %ld\n", offset);
-				ast_seekstream(chan->stream, offset, SEEK_SET);
+				ast_seekstream(ast_channel_stream(chan), offset, SEEK_SET);
 				offset = 0;
 			}
 			res = ast_waitstream_fr(chan, breaks, fwd, rev, skipms);
@@ -647,7 +798,7 @@ int ast_control_streamfile(struct ast_channel *chan, const char *file,
 		}
 
 		if (suspend && strchr(suspend, res)) {
-			pause_restart_point = ast_tellstream(chan->stream);
+			pause_restart_point = ast_tellstream(ast_channel_stream(chan));
 			for (;;) {
 				ast_stopstream(chan);
 				if (!(res = ast_waitfordigit(chan, 1000))) {
@@ -675,8 +826,8 @@ int ast_control_streamfile(struct ast_channel *chan, const char *file,
 	if (pause_restart_point) {
 		offset = pause_restart_point;
 	} else {
-		if (chan->stream) {
-			offset = ast_tellstream(chan->stream);
+		if (ast_channel_stream(chan)) {
+			offset = ast_tellstream(ast_channel_stream(chan));
 		} else {
 			offset = -8;  /* indicate end of file */
 		}
@@ -687,7 +838,7 @@ int ast_control_streamfile(struct ast_channel *chan, const char *file,
 	}
 
 	/* If we are returning a digit cast it as char */
-	if (res > 0 || chan->stream) {
+	if (res > 0 || ast_channel_stream(chan)) {
 		res = (char)res;
 	}
 
@@ -700,8 +851,8 @@ int ast_play_and_wait(struct ast_channel *chan, const char *fn)
 {
 	int d = 0;
 
-	ast_test_suite_event_notify("PLAYBACK", "Message: %s\r\nChannel: %s", fn, chan->name);
-	if ((d = ast_streamfile(chan, fn, chan->language))) {
+	ast_test_suite_event_notify("PLAYBACK", "Message: %s\r\nChannel: %s", fn, ast_channel_name(chan));
+	if ((d = ast_streamfile(chan, fn, ast_channel_language(chan)))) {
 		return d;
 	}
 
@@ -771,7 +922,7 @@ static int __ast_play_and_record(struct ast_channel *chan, const char *playfile,
 	}
 
 	ast_debug(1, "play_and_record: %s, %s, '%s'\n", playfile ? playfile : "<None>", recordfile, fmt);
-	snprintf(comment, sizeof(comment), "Playing %s, Recording to: %s on %s\n", playfile ? playfile : "<None>", recordfile, chan->name);
+	snprintf(comment, sizeof(comment), "Playing %s, Recording to: %s on %s\n", playfile ? playfile : "<None>", recordfile, ast_channel_name(chan));
 
 	if (playfile || beep) {
 		if (!beep) {
@@ -826,7 +977,7 @@ static int __ast_play_and_record(struct ast_channel *chan, const char *playfile,
 			return -1;
 		}
 		ast_dsp_set_threshold(sildet, silencethreshold);
-		ast_format_copy(&rfmt, &chan->readformat);
+		ast_format_copy(&rfmt, ast_channel_readformat(chan));
 		res = ast_set_read_format_by_id(chan, AST_FORMAT_SLINEAR);
 		if (res < 0) {
 			ast_log(LOG_WARNING, "Unable to set to linear mode, giving up\n");
@@ -853,7 +1004,7 @@ static int __ast_play_and_record(struct ast_channel *chan, const char *playfile,
 				ast_debug(1, "One waitfor failed, trying another\n");
 				/* Try one more time in case of masq */
 				if (!(res = ast_waitfor(chan, 2000))) {
-					ast_log(LOG_WARNING, "No audio available on %s??\n", chan->name);
+					ast_log(LOG_WARNING, "No audio available on %s??\n", ast_channel_name(chan));
 					res = -1;
 				}
 			}
@@ -1031,7 +1182,7 @@ static int __ast_play_and_record(struct ast_channel *chan, const char *playfile,
 		}
 	}
 	if (rfmt.id && ast_set_read_format(chan, &rfmt)) {
-		ast_log(LOG_WARNING, "Unable to restore format %s to channel '%s'\n", ast_getformatname(&rfmt), chan->name);
+		ast_log(LOG_WARNING, "Unable to restore format %s to channel '%s'\n", ast_getformatname(&rfmt), ast_channel_name(chan));
 	}
 	if ((outmsg == 2) && (!skip_confirmation_sound)) {
 		ast_stream_and_wait(chan, "auth-thankyou", "");
@@ -1550,7 +1701,7 @@ int ast_unlock_path(const char *path)
 	return r;
 }
 
-int ast_record_review(struct ast_channel *chan, const char *playfile, const char *recordfile, int maxtime, const char *fmt, int *duration, const char *path) 
+int ast_record_review(struct ast_channel *chan, const char *playfile, const char *recordfile, int maxtime, const char *fmt, int *duration, const char *path)
 {
 	int silencethreshold;
 	int maxsilence = 0;
@@ -1690,7 +1841,7 @@ static int ivr_dispatch(struct ast_channel *chan, struct ast_ivr_option *option,
 		}
 		return res;
 	case AST_ACTION_WAITOPTION:
-		if (!(res = ast_waitfordigit(chan, chan->pbx ? chan->pbx->rtimeoutms : 10000))) {
+		if (!(res = ast_waitfordigit(chan, ast_channel_pbx(chan) ? ast_channel_pbx(chan)->rtimeoutms : 10000))) {
 			return 't';
 		}
 		return res;
@@ -1748,7 +1899,7 @@ static int read_newoption(struct ast_channel *chan, struct ast_ivr_menu *menu, c
 	int res = 0;
 	int ms;
 	while (option_matchmore(menu, exten)) {
-		ms = chan->pbx ? chan->pbx->dtimeoutms : 5000;
+		ms = ast_channel_pbx(chan) ? ast_channel_pbx(chan)->dtimeoutms : 5000;
 		if (strlen(exten) >= maxexten - 1) {
 			break;
 		}

@@ -212,9 +212,9 @@ static int lua_pbx_exec(lua_State *L)
 	chan = lua_touserdata(L, -1);
 	lua_pop(L, 1);
 	
-	context = ast_strdupa(chan->context);
-	exten = ast_strdupa(chan->exten);
-	priority = chan->priority;
+	context = ast_strdupa(ast_channel_context(chan));
+	exten = ast_strdupa(ast_channel_exten(chan));
+	priority = ast_channel_priority(chan);
 	
 	lua_concat_args(L, 2, nargs);
 	data = lua_tostring(L, -1);
@@ -222,7 +222,7 @@ static int lua_pbx_exec(lua_State *L)
 	ast_verb(3, "Executing [%s@%s:%d] %s(\"%s\", \"%s\")\n",
 			exten, context, priority,
 			term_color(tmp, app_name, COLOR_BRCYAN, 0, sizeof(tmp)),
-			term_color(tmp2, chan->name, COLOR_BRMAGENTA, 0, sizeof(tmp2)),
+			term_color(tmp2, ast_channel_name(chan), COLOR_BRMAGENTA, 0, sizeof(tmp2)),
 			term_color(tmp3, data, COLOR_BRMAGENTA, 0, sizeof(tmp3)));
 
 	lua_getfield(L, LUA_REGISTRYINDEX, "autoservice");
@@ -246,17 +246,17 @@ static int lua_pbx_exec(lua_State *L)
 		return lua_error(L);
 	}
 
-	if (strcmp(context, chan->context)) {
+	if (strcmp(context, ast_channel_context(chan))) {
 		lua_pushstring(L, context);
-		lua_pushstring(L, chan->context);
+		lua_pushstring(L, ast_channel_context(chan));
 		lua_pushliteral(L, "context");
-	} else if (strcmp(exten, chan->exten)) {
+	} else if (strcmp(exten, ast_channel_exten(chan))) {
 		lua_pushstring(L, exten);
-		lua_pushstring(L, chan->exten);
+		lua_pushstring(L, ast_channel_exten(chan));
 		lua_pushliteral(L, "exten");
-	} else if (priority != chan->priority) {
+	} else if (priority != ast_channel_priority(chan)) {
 		lua_pushinteger(L, priority);
-		lua_pushinteger(L, chan->priority);
+		lua_pushinteger(L, ast_channel_priority(chan));
 		lua_pushliteral(L, "priority");
 	} else {
 		/* no goto - restore the original position back
@@ -333,7 +333,7 @@ static int lua_get_variable_value(lua_State *L)
 	if (!ast_strlen_zero(name) && name[strlen(name) - 1] == ')') {
 		value = ast_func_read(chan, name, workspace, LUA_BUF_SIZE) ? NULL : workspace;
 	} else {
-		pbx_retrieve_variable(chan, name, &value, workspace, LUA_BUF_SIZE, &chan->varshead);
+		pbx_retrieve_variable(chan, name, &value, workspace, LUA_BUF_SIZE, ast_channel_varshead(chan));
 	}
 	
 	if (autoservice)
@@ -574,7 +574,7 @@ static int lua_get_variable(lua_State *L)
 	/* if this is not a request for a dialplan funciton attempt to retrieve
 	 * the value of the variable */
 	if (!ast_strlen_zero(name) && name[strlen(name) - 1] != ')') {
-		pbx_retrieve_variable(chan, name, &value, workspace, LUA_BUF_SIZE, &chan->varshead);
+		pbx_retrieve_variable(chan, name, &value, workspace, LUA_BUF_SIZE, ast_channel_varshead(chan));
 	}
 
 	if (value) {
@@ -1257,7 +1257,7 @@ static lua_State *lua_get_state(struct ast_channel *chan)
 	lua_State *L;
 
 	if (!chan) {
-		lua_State *L = luaL_newstate();
+		L = luaL_newstate();
 		if (!L) {
 			ast_log(LOG_ERROR, "Error allocating lua_State, no memory\n");
 			return NULL;
@@ -1298,7 +1298,7 @@ static lua_State *lua_get_state(struct ast_channel *chan)
 
 			if (lua_load_extensions(L, chan)) {
 				const char *error = lua_tostring(L, -1);
-				ast_log(LOG_ERROR, "Error loading extensions.lua for %s: %s\n", chan->name, error);
+				ast_log(LOG_ERROR, "Error loading extensions.lua for %s: %s\n", ast_channel_name(chan), error);
 
 				ast_channel_lock(chan);
 				ast_channel_datastore_remove(chan, datastore);

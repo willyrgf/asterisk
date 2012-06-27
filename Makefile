@@ -1,6 +1,6 @@
 #
 # Asterisk -- A telephony toolkit for Linux.
-# 
+#
 # Top level Makefile
 #
 # Copyright (C) 1999-2010, Digium, Inc.
@@ -19,8 +19,10 @@
 # _ASTLDFLAGS - linker flags (not libraries) provided by the build system
 # LIBS - additional libraries, at top-level for all links,
 #      on a single object just for that object
-# SOLINK - linker flags used only for creating shared objects (.so files),
-#      used for all .so links
+# SOLINK - linker flags used only for creating dynamically loadable modules
+#          as .so files
+# DYLINK - linker flags used only for creating shared libaries
+#          (.so files on Unix-type platforms, .dylib on Darwin)
 #
 # Values for ASTCFLAGS and ASTLDFLAGS can be specified in the
 # environment when running make, as follows:
@@ -46,16 +48,16 @@ export ASTERISKVERSIONNUM
 DESTDIR?=$(INSTALL_PATH)
 export DESTDIR
 
-export INSTALL_PATH	# Additional prefix for the following paths
-export ASTETCDIR		# Path for config files
+export INSTALL_PATH       # Additional prefix for the following paths
+export ASTETCDIR          # Path for config files
 export ASTVARRUNDIR
-export MODULES_DIR
 export ASTSPOOLDIR
 export ASTVARLIBDIR
 export ASTDATADIR
 export ASTDBDIR
 export ASTLOGDIR
 export ASTLIBDIR
+export ASTMODDIR
 export ASTMANDIR
 export ASTHEADERDIR
 export ASTSBINDIR
@@ -63,18 +65,20 @@ export AGI_DIR
 export ASTCONFPATH
 export ASTKEYDIR
 
-export OSARCH			# Operating system
-export PROC			# Processor type
+export OSARCH             # Operating system
 
-export NOISY_BUILD		# Used in Makefile.rules
-export MENUSELECT_CFLAGS	# Options selected in menuselect.
-export AST_DEVMODE		# Set to "yes" for additional compiler
-                                # and runtime checks
+export NOISY_BUILD        # Used in Makefile.rules
+export MENUSELECT_CFLAGS  # Options selected in menuselect.
+export AST_DEVMODE        # Set to "yes" for additional compiler
+                          # and runtime checks
+export AST_DEVMODE_STRICT # Enables shadow warnings (-Wshadow)
 
-export SOLINK			# linker flags for shared objects
-export STATIC_BUILD		# Additional cflags, set to -static
-                                # for static builds. Probably
-                                # should go directly to ASTLDFLAGS
+export _SOLINK            # linker flags for all shared objects
+export SOLINK             # linker flags for loadable modules
+export DYLINK             # linker flags for shared libraries
+export STATIC_BUILD       # Additional cflags, set to -static
+                          # for static builds. Probably
+                          # should go directly to ASTLDFLAGS
 
 #--- paths to various commands
 export CC
@@ -90,6 +94,8 @@ export AWK
 export GREP
 export MD5
 export WGET_EXTRA_ARGS
+export LDCONFIG
+export LDCONFIG_FLAGS
 
 # even though we could use '-include makeopts' here, use a wildcard
 # lookup anyway, so that make won't try to build makeopts if it doesn't
@@ -129,7 +135,6 @@ DEBUG=-g3
 # Asterisk.conf is located in ASTETCDIR or by using the -C flag
 # when starting Asterisk
 ASTCONFPATH=$(ASTETCDIR)/asterisk.conf
-MODULES_DIR=$(ASTLIBDIR)/modules
 AGI_DIR=$(ASTDATADIR)/agi-bin
 
 # If you use Apache, you may determine by a grep 'DocumentRoot' of your httpd.conf file
@@ -150,7 +155,7 @@ LINKER_SYMBOL_PREFIX=
 
 # If the file .asterisk.makeopts is present in your home directory, you can
 # include all of your favorite menuselect options so that every time you download
-# a new version of Asterisk, you don't have to run menuselect to set them. 
+# a new version of Asterisk, you don't have to run menuselect to set them.
 # The file /etc/asterisk.makeopts will also be included but can be overridden
 # by the file in your home directory.
 
@@ -164,36 +169,8 @@ OTHER_SUBDIR_CFLAGS="-I$(ASTTOPDIR)/include"
 OPTIONS=
 
 ifeq ($(OSARCH),linux-gnu)
-  ifeq ($(PROC),x86_64)
-    # You must have GCC 3.4 to use k8, otherwise use athlon
-    PROC=k8
-    #PROC=athlon
-  endif
-
-  ifeq ($(PROC),sparc64)
-    #The problem with sparc is the best stuff is in newer versions of gcc (post 3.0) only.
-    #This works for even old (2.96) versions of gcc and provides a small boost either way.
-    #A ultrasparc cpu is really v9 but the stock debian stable 3.0 gcc doesn't support it.
-    #So we go lowest common available by gcc and go a step down, still a step up from
-    #the default as we now have a better instruction set to work with. - Belgarath
-    PROC=ultrasparc
-    OPTIONS+=$(shell if $(CC) -mtune=$(PROC) -S -o /dev/null -xc /dev/null >/dev/null 2>&1; then echo "-mtune=$(PROC)"; fi)
-    OPTIONS+=$(shell if $(CC) -mcpu=v8 -S -o /dev/null -xc /dev/null >/dev/null 2>&1; then echo "-mcpu=v8"; fi)
-    OPTIONS+=-fomit-frame-pointer
-  endif
-
-  ifeq ($(PROC),arm)
-    # The Cirrus logic is the only heavily shipping arm processor with a real floating point unit
-    ifeq ($(SUB_PROC),maverick)
-      OPTIONS+=-fsigned-char -mcpu=ep9312
-    else
-      ifeq ($(SUB_PROC),xscale)
-        OPTIONS+=-fsigned-char -mcpu=xscale
-      else
-        OPTIONS+=-fsigned-char 
-      endif
-    endif
-  endif
+  # flag to tell 'ldconfig' to only process specified directories
+  LDCONFIG_FLAGS=-n
 endif
 
 ifeq ($(findstring -save-temps,$(_ASTCFLAGS) $(ASTCFLAGS)),)
@@ -214,9 +191,12 @@ ifeq ($(AST_DEVMODE),yes)
   _ASTCFLAGS+=-Wunused
   _ASTCFLAGS+=$(AST_DECLARATION_AFTER_STATEMENT)
   _ASTCFLAGS+=$(AST_FORTIFY_SOURCE)
-  _ASTCFLAGS+=-Wundef 
+  _ASTCFLAGS+=-Wundef
   _ASTCFLAGS+=-Wmissing-format-attribute
   _ASTCFLAGS+=-Wformat=2
+  ifeq ($(AST_DEVMODE_STRICT),yes)
+    _ASTCFLAGS+=-Wshadow
+  endif
   ADDL_TARGETS+=validate-docs
 endif
 
@@ -224,29 +204,12 @@ ifneq ($(findstring BSD,$(OSARCH)),)
   _ASTCFLAGS+=-isystem /usr/local/include
 endif
 
-ifeq ($(findstring -march,$(_ASTCFLAGS) $(ASTCFLAGS)),)
-  ifneq ($(AST_MARCH_NATIVE),)
-    _ASTCFLAGS+=$(AST_MARCH_NATIVE)
-  else
-    ifneq ($(PROC),ultrasparc)
-      _ASTCFLAGS+=$(shell if $(CC) -march=$(PROC) -S -o /dev/null -xc /dev/null >/dev/null 2>&1; then echo "-march=$(PROC)"; fi)
-    endif
-  endif
-endif
-
-ifeq ($(PROC),ppc)
-  _ASTCFLAGS+=-fsigned-char
-endif
-
 ifeq ($(OSARCH),FreeBSD)
-  ifeq ($(findstring -march,$(_ASTCFLAGS) $(ASTCFLAGS)),)
-    ifeq ($(PROC),i386)
-      _ASTCFLAGS+=-march=i686
-    endif
-  endif
   # -V is understood by BSD Make, not by GNU make.
   BSDVERSION=$(shell make -V OSVERSION -f /usr/share/mk/bsd.port.subdir.mk)
   _ASTCFLAGS+=$(shell if test $(BSDVERSION) -lt 500016 ; then echo "-D_THREAD_SAFE"; fi)
+  # flag to tell 'ldconfig' to only process specified directories
+  LDCONFIG_FLAGS=-m
 endif
 
 ifeq ($(OSARCH),NetBSD)
@@ -287,14 +250,17 @@ MOD_SUBDIRS_MENUSELECT_TREE:=$(MOD_SUBDIRS:%=%-menuselect-tree)
 
 ifneq ($(findstring darwin,$(OSARCH)),)
   _ASTCFLAGS+=-D__Darwin__
-  SOLINK=-bundle -Xlinker -macosx_version_min -Xlinker 10.4 -Xlinker -undefined -Xlinker dynamic_lookup -force_flat_namespace
+  _SOLINK=-Xlinker -macosx_version_min -Xlinker 10.4 -Xlinker -undefined -Xlinker dynamic_lookup -force_flat_namespace
   ifeq ($(shell if test `/usr/bin/sw_vers -productVersion | cut -c4` -gt 5; then echo 6; else echo 0; fi),6)
-    SOLINK+=/usr/lib/bundle1.o
+    _SOLINK+=/usr/lib/bundle1.o
   endif
+  SOLINK=-bundle $(_SOLINK)
+  DYLINK=-Xlinker -dylib $(_SOLINK)
   _ASTLDFLAGS+=-L/usr/local/lib
 else
 # These are used for all but Darwin
   SOLINK=-shared
+  DYLINK=$(SOLINK)
   ifneq ($(findstring BSD,$(OSARCH)),)
     _ASTLDFLAGS+=-L/usr/local/lib
   endif
@@ -302,10 +268,12 @@ endif
 
 ifeq ($(OSARCH),SunOS)
   SOLINK=-shared -fpic -L/usr/local/ssl/lib -lrt
+  DYLINK=$(SOLINK)
 endif
 
 ifeq ($(OSARCH),OpenBSD)
   SOLINK=-shared -fpic
+  DYLINK=$(SOLINK)
 endif
 
 # comment to print directories during submakes
@@ -338,19 +306,24 @@ else
 	mK=" make"
 endif
 
-all: _all
-	@echo " +--------- Asterisk Build Complete ---------+"  
-	@echo " + Asterisk has successfully been built, and +"  
+all: _cleantest_all
+	@echo " +--------- Asterisk Build Complete ---------+"
+	@echo " + Asterisk has successfully been built, and +"
 	@echo " + can be installed by running:              +"
 	@echo " +                                           +"
-	@echo " +               $(mK) install               +"  
-	@echo " +-------------------------------------------+"  
+	@echo " +               $(mK) install               +"
+	@echo " +-------------------------------------------+"
 
-_all: cleantest makeopts $(SUBDIRS) doc/core-en_US.xml $(ADDL_TARGETS)
+# For parallel builds, we must call cleantest *before* running the
+# other dependencies on _all.
+_cleantest_all: cleantest
+	@$(MAKE) _all
+
+_all: makeopts $(SUBDIRS) doc/core-en_US.xml $(ADDL_TARGETS)
 
 makeopts: configure
 	@echo "****"
-	@echo "**** The configure script must be executed before running '$(MAKE)'." 
+	@echo "**** The configure script must be executed before running '$(MAKE)'."
 	@echo "****               Please run \"./configure\"."
 	@echo "****"
 	@exit 1
@@ -381,7 +354,7 @@ makeopts.embed_rules: menuselect.makeopts
 	+@$(SUBMAKE) $(MOD_SUBDIRS_EMBED_LDFLAGS)
 	+@$(SUBMAKE) $(MOD_SUBDIRS_EMBED_LIBS)
 
-$(SUBDIRS): main/version.c include/asterisk/version.h include/asterisk/build.h include/asterisk/buildopts.h defaults.h makeopts.embed_rules
+$(SUBDIRS): main/version.c include/asterisk/build.h include/asterisk/buildopts.h defaults.h makeopts.embed_rules
 
 ifeq ($(findstring $(OSARCH), mingw32 cygwin ),)
     # Non-windows:
@@ -417,11 +390,6 @@ main/version.c: FORCE
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 	@rm -f $@.tmp
 
-include/asterisk/version.h: FORCE
-	@build_tools/make_version_h > $@.tmp
-	@cmp -s $@.tmp $@ || mv $@.tmp $@
-	@rm -f $@.tmp
-
 include/asterisk/buildopts.h: menuselect.makeopts
 	@build_tools/make_buildopts_h > $@.tmp
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
@@ -444,7 +412,6 @@ _clean:
 	rm -f defaults.h
 	rm -f include/asterisk/build.h
 	rm -f main/version.c
-	rm -f include/asterisk/version.h
 	@$(MAKE) -C menuselect clean
 	cp -f .cleancount .lastclean
 
@@ -462,7 +429,7 @@ distclean: $(SUBDIRS_DIST_CLEAN) _clean
 	rm -rf doc/api
 	rm -f build_tools/menuselect-deps
 
-datafiles: _all doc/core-en_US.xml
+datafiles: _cleantest_all doc/core-en_US.xml
 	CFLAGS="$(_ASTCFLAGS) $(ASTCFLAGS)" build_tools/mkpkgconfig "$(DESTDIR)$(libdir)/pkgconfig";
 # Should static HTTP be installed during make samples or even with its own target ala
 # webvoicemail?  There are portions here that *could* be customized but might also be
@@ -510,7 +477,7 @@ else
   endif
 endif
 
-update: 
+update:
 	@if [ -d .svn ]; then \
 		echo "Updating from Subversion..." ; \
 		fromrev="`svn info | $(AWK) '/Revision: / {print $$2}'`"; \
@@ -531,7 +498,8 @@ NEWHEADERS=$(notdir $(wildcard include/asterisk/*.h))
 OLDHEADERS=$(filter-out $(NEWHEADERS) $(notdir $(DESTDIR)$(ASTHEADERDIR)),$(notdir $(wildcard $(DESTDIR)$(ASTHEADERDIR)/*.h)))
 
 installdirs:
-	$(INSTALL) -d "$(DESTDIR)$(MODULES_DIR)"
+	$(INSTALL) -d "$(DESTDIR)$(ASTLIBDIR)"
+	$(INSTALL) -d "$(DESTDIR)$(ASTMODDIR)"
 	$(INSTALL) -d "$(DESTDIR)$(ASTSBINDIR)"
 	$(INSTALL) -d "$(DESTDIR)$(ASTETCDIR)"
 	$(INSTALL) -d "$(DESTDIR)$(ASTVARRUNDIR)"
@@ -563,9 +531,10 @@ installdirs:
 	$(INSTALL) -d "$(DESTDIR)$(AGI_DIR)"
 	$(INSTALL) -d "$(DESTDIR)$(ASTDBDIR)"
 
-bininstall: _all installdirs $(SUBDIRS_INSTALL)
-	$(INSTALL) -m 755 main/asterisk "$(DESTDIR)$(ASTSBINDIR)/"
-	$(LN) -sf asterisk "$(DESTDIR)$(ASTSBINDIR)/rasterisk"
+main-bininstall:
+	+@DESTDIR="$(DESTDIR)" ASTSBINDIR="$(ASTSBINDIR)" ASTLIBDIR="$(ASTLIBDIR)" $(SUBMAKE) -C main bininstall
+
+bininstall: _cleantest_all installdirs $(SUBDIRS_INSTALL) main-bininstall
 	$(INSTALL) -m 755 contrib/scripts/astgenkey "$(DESTDIR)$(ASTSBINDIR)/"
 	$(INSTALL) -m 755 contrib/scripts/autosupport "$(DESTDIR)$(ASTSBINDIR)/"
 	if [ ! -f "$(DESTDIR)$(ASTSBINDIR)/safe_asterisk" -a ! -f /sbin/launchd ]; then \
@@ -591,17 +560,17 @@ bininstall: _all installdirs $(SUBDIRS_INSTALL)
 	fi
 
 $(SUBDIRS_INSTALL):
-	+@DESTDIR="$(DESTDIR)" ASTSBINDIR="$(ASTSBINDIR)" $(SUBMAKE) -C $(@:-install=) install 
+	+@DESTDIR="$(DESTDIR)" ASTSBINDIR="$(ASTSBINDIR)" $(SUBMAKE) -C $(@:-install=) install
 
 NEWMODS:=$(foreach d,$(MOD_SUBDIRS),$(notdir $(wildcard $(d)/*.so)))
-OLDMODS=$(filter-out $(NEWMODS) $(notdir $(DESTDIR)$(MODULES_DIR)),$(notdir $(wildcard $(DESTDIR)$(MODULES_DIR)/*.so)))
+OLDMODS=$(filter-out $(NEWMODS) $(notdir $(DESTDIR)$(ASTMODDIR)),$(notdir $(wildcard $(DESTDIR)$(ASTMODDIR)/*.so)))
 
 oldmodcheck:
 	@if [ -n "$(OLDMODS)" ]; then \
 		echo " WARNING WARNING WARNING" ;\
 		echo "" ;\
 		echo " Your Asterisk modules directory, located at" ;\
-		echo " $(DESTDIR)$(MODULES_DIR)" ;\
+		echo " $(DESTDIR)$(ASTMODDIR)" ;\
 		echo " contains modules that were not installed by this " ;\
 		echo " version of Asterisk. Please ensure that these" ;\
 		echo " modules are compatible with this version before" ;\
@@ -625,14 +594,14 @@ install: badshell bininstall datafiles
 	@if [ -x /usr/sbin/asterisk-post-install ]; then \
 		/usr/sbin/asterisk-post-install "$(DESTDIR)" . ; \
 	fi
-	@echo " +---- Asterisk Installation Complete -------+"  
+	@echo " +---- Asterisk Installation Complete -------+"
 	@echo " +                                           +"
 	@echo " +    YOU MUST READ THE SECURITY DOCUMENT    +"
 	@echo " +                                           +"
-	@echo " + Asterisk has successfully been installed. +"  
-	@echo " + If you would like to install the sample   +"  
+	@echo " + Asterisk has successfully been installed. +"
+	@echo " + If you would like to install the sample   +"
 	@echo " + configuration files (overwriting any      +"
-	@echo " + existing config files), run:              +"  
+	@echo " + existing config files), run:              +"
 	@echo " +                                           +"
 	@echo " +               $(mK) samples               +"
 	@echo " +                                           +"
@@ -688,7 +657,7 @@ samples: adsi
 	if [ "$(OVERWRITE)" = "y" ]; then \
 		echo "Updating asterisk.conf" ; \
 		sed -e 's|^astetcdir.*$$|astetcdir => $(ASTETCDIR)|' \
-			-e 's|^astmoddir.*$$|astmoddir => $(MODULES_DIR)|' \
+			-e 's|^astmoddir.*$$|astmoddir => $(ASTMODDIR)|' \
 			-e 's|^astvarlibdir.*$$|astvarlibdir => $(ASTVARLIBDIR)|' \
 			-e 's|^astdbdir.*$$|astdbdir => $(ASTDBDIR)|' \
 			-e 's|^astkeydir.*$$|astkeydir => $(ASTKEYDIR)|' \
@@ -730,7 +699,7 @@ webvmail:
 	for x in images/*.gif; do \
 		$(INSTALL) -m 644 $$x "$(DESTDIR)$(HTTP_DOCSDIR)/_asterisk/"; \
 	done
-	@echo " +--------- Asterisk Web Voicemail ----------+"  
+	@echo " +--------- Asterisk Web Voicemail ----------+"
 	@echo " +                                           +"
 	@echo " + Asterisk Web Voicemail is installed in    +"
 	@echo " + your cgi-bin directory:                   +"
@@ -746,11 +715,11 @@ webvmail:
 	@echo " + in your Makefile of HTTP_CGIDIR and       +"
 	@echo " + HTTP_DOCSDIR                              +"
 	@echo " +                                           +"
-	@echo " +-------------------------------------------+"  
+	@echo " +-------------------------------------------+"
 
 progdocs:
 	(cat contrib/asterisk-ng-doxygen; echo "HAVE_DOT=$(HAVEDOT)"; \
-	echo "PROJECT_NUMBER=$(ASTERISKVERSION)") | doxygen - 
+	echo "PROJECT_NUMBER=$(ASTERISKVERSION)") | doxygen -
 
 install-logrotate:
 	if [ ! -d "$(DESTDIR)$(ASTETCDIR)/../logrotate.d" ]; then \
@@ -837,7 +806,7 @@ sounds:
 	$(MAKE) -C sounds all
 
 # If the cleancount has been changed, force a make clean.
-# .cleancount is the global clean count, and .lastclean is the 
+# .cleancount is the global clean count, and .lastclean is the
 # last clean count we had
 
 cleantest:
@@ -847,9 +816,11 @@ cleantest:
 $(SUBDIRS_UNINSTALL):
 	+@$(SUBMAKE) -C $(@:-uninstall=) uninstall
 
-_uninstall: $(SUBDIRS_UNINSTALL)
-	rm -f "$(DESTDIR)$(MODULES_DIR)/"*
-	rm -f "$(DESTDIR)$(ASTSBINDIR)/"*asterisk*
+main-binuninstall:
+	+@DESTDIR="$(DESTDIR)" ASTSBINDIR="$(ASTSBINDIR)" ASTLIBDIR="$(ASTLIBDIR)" $(SUBMAKE) -C main binuninstall
+
+_uninstall: $(SUBDIRS_UNINSTALL) main-binuninstall
+	rm -f "$(DESTDIR)$(ASTMODDIR)/"*
 	rm -f "$(DESTDIR)$(ASTSBINDIR)/astgenkey"
 	rm -f "$(DESTDIR)$(ASTSBINDIR)/autosupport"
 	rm -rf "$(DESTDIR)$(ASTHEADERDIR)"
@@ -861,21 +832,21 @@ _uninstall: $(SUBDIRS_UNINSTALL)
 	$(MAKE) -C sounds uninstall
 
 uninstall: _uninstall
-	@echo " +--------- Asterisk Uninstall Complete -----+"  
-	@echo " + Asterisk binaries, sounds, man pages,     +"  
-	@echo " + headers, modules, and firmware builds,    +"  
-	@echo " + have all been uninstalled.                +"  
+	@echo " +--------- Asterisk Uninstall Complete -----+"
+	@echo " + Asterisk binaries, sounds, man pages,     +"
+	@echo " + headers, modules, and firmware builds,    +"
+	@echo " + have all been uninstalled.                +"
 	@echo " +                                           +"
 	@echo " + To remove ALL traces of Asterisk,         +"
 	@echo " + including configuration, spool            +"
 	@echo " + directories, and logs, run the following  +"
 	@echo " + command:                                  +"
 	@echo " +                                           +"
-	@echo " +            $(mK) uninstall-all            +"  
-	@echo " +-------------------------------------------+"  
+	@echo " +            $(mK) uninstall-all            +"
+	@echo " +-------------------------------------------+"
 
 uninstall-all: _uninstall
-	rm -rf "$(DESTDIR)$(ASTLIBDIR)"
+	rm -rf "$(DESTDIR)$(ASTMODDIR)"
 	rm -rf "$(DESTDIR)$(ASTVARLIBDIR)"
 	rm -rf "$(DESTDIR)$(ASTDATADIR)"
 	rm -rf "$(DESTDIR)$(ASTSPOOLDIR)"
@@ -954,6 +925,8 @@ menuselect-tree: $(foreach dir,$(filter-out main,$(MOD_SUBDIRS)),$(wildcard $(di
 .PHONY: dist-clean
 .PHONY: distclean
 .PHONY: all
+.PHONY: _all
+.PHONY: _cleantest_all
 .PHONY: prereqs
 .PHONY: cleantest
 .PHONY: uninstall

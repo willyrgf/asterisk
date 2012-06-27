@@ -226,7 +226,7 @@ static struct ast_frame *audiohook_read_frame_single(struct ast_audiohook *audio
 	/* Ensure the factory is able to give us the samples we want */
 	if (samples > ast_slinfactory_available(factory))
 		return NULL;
-	
+
 	/* Read data in from factory */
 	if (!ast_slinfactory_read(factory, buf, samples))
 		return NULL;
@@ -356,10 +356,10 @@ static struct ast_frame *audiohook_read_frame_helper(struct ast_audiohook *audio
 		samples_converted = samples * (ast_format_rate(format) / (float) audiohook->hook_internal_samp_rate);
 	}
 
-	if (!(read_frame = (direction == AST_AUDIOHOOK_DIRECTION_BOTH ? 
-		audiohook_read_frame_both(audiohook, samples_converted, read_reference, write_reference) : 
-		audiohook_read_frame_single(audiohook, samples_converted, direction)))) { 
-		return NULL; 
+	if (!(read_frame = (direction == AST_AUDIOHOOK_DIRECTION_BOTH ?
+		audiohook_read_frame_both(audiohook, samples_converted, read_reference, write_reference) :
+		audiohook_read_frame_single(audiohook, samples_converted, direction)))) {
+		return NULL;
 	}
 
 	/* If they don't want signed linear back out, we'll have to send it through the translation path */
@@ -434,30 +434,32 @@ int ast_audiohook_attach(struct ast_channel *chan, struct ast_audiohook *audioho
 {
 	ast_channel_lock(chan);
 
-	if (!chan->audiohooks) {
+	if (!ast_channel_audiohooks(chan)) {
+		struct ast_audiohook_list *ahlist;
 		/* Whoops... allocate a new structure */
-		if (!(chan->audiohooks = ast_calloc(1, sizeof(*chan->audiohooks)))) {
+		if (!(ahlist = ast_calloc(1, sizeof(*ahlist)))) {
 			ast_channel_unlock(chan);
 			return -1;
 		}
-		AST_LIST_HEAD_INIT_NOLOCK(&chan->audiohooks->spy_list);
-		AST_LIST_HEAD_INIT_NOLOCK(&chan->audiohooks->whisper_list);
-		AST_LIST_HEAD_INIT_NOLOCK(&chan->audiohooks->manipulate_list);
+		ast_channel_audiohooks_set(chan, ahlist);
+		AST_LIST_HEAD_INIT_NOLOCK(&ast_channel_audiohooks(chan)->spy_list);
+		AST_LIST_HEAD_INIT_NOLOCK(&ast_channel_audiohooks(chan)->whisper_list);
+		AST_LIST_HEAD_INIT_NOLOCK(&ast_channel_audiohooks(chan)->manipulate_list);
 		/* This sample rate will adjust as necessary when writing to the list. */
-		chan->audiohooks->list_internal_samp_rate = 8000;
+		ast_channel_audiohooks(chan)->list_internal_samp_rate = 8000;
 	}
 
 	/* Drop into respective list */
 	if (audiohook->type == AST_AUDIOHOOK_TYPE_SPY)
-		AST_LIST_INSERT_TAIL(&chan->audiohooks->spy_list, audiohook, list);
+		AST_LIST_INSERT_TAIL(&ast_channel_audiohooks(chan)->spy_list, audiohook, list);
 	else if (audiohook->type == AST_AUDIOHOOK_TYPE_WHISPER)
-		AST_LIST_INSERT_TAIL(&chan->audiohooks->whisper_list, audiohook, list);
+		AST_LIST_INSERT_TAIL(&ast_channel_audiohooks(chan)->whisper_list, audiohook, list);
 	else if (audiohook->type == AST_AUDIOHOOK_TYPE_MANIPULATE)
-		AST_LIST_INSERT_TAIL(&chan->audiohooks->manipulate_list, audiohook, list);
+		AST_LIST_INSERT_TAIL(&ast_channel_audiohooks(chan)->manipulate_list, audiohook, list);
 
 
-	audiohook_set_internal_rate(audiohook, chan->audiohooks->list_internal_samp_rate, 1);
-	audiohook_list_set_samplerate_compatibility(chan->audiohooks);
+	audiohook_set_internal_rate(audiohook, ast_channel_audiohooks(chan)->list_internal_samp_rate, 1);
+	audiohook_list_set_samplerate_compatibility(ast_channel_audiohooks(chan));
 
 	/* Change status over to running since it is now attached */
 	ast_audiohook_update_status(audiohook, AST_AUDIOHOOK_STATUS_RUNNING);
@@ -534,7 +536,7 @@ int ast_audiohook_detach_list(struct ast_audiohook_list *audiohook_list)
 		if (audiohook_list->out_translate[i].trans_pvt)
 			ast_translator_free_path(audiohook_list->out_translate[i].trans_pvt);
 	}
-	
+
 	/* Free ourselves */
 	ast_free(audiohook_list);
 
@@ -573,7 +575,7 @@ void ast_audiohook_move_by_source(struct ast_channel *old_chan, struct ast_chann
 	struct ast_audiohook *audiohook;
 	enum ast_audiohook_status oldstatus;
 
-	if (!old_chan->audiohooks || !(audiohook = find_audiohook_by_source(old_chan->audiohooks, source))) {
+	if (!ast_channel_audiohooks(old_chan) || !(audiohook = find_audiohook_by_source(ast_channel_audiohooks(old_chan), source))) {
 		return;
 	}
 
@@ -604,12 +606,12 @@ int ast_audiohook_detach_source(struct ast_channel *chan, const char *source)
 	ast_channel_lock(chan);
 
 	/* Ensure the channel has audiohooks on it */
-	if (!chan->audiohooks) {
+	if (!ast_channel_audiohooks(chan)) {
 		ast_channel_unlock(chan);
 		return -1;
 	}
 
-	audiohook = find_audiohook_by_source(chan->audiohooks, source);
+	audiohook = find_audiohook_by_source(ast_channel_audiohooks(chan), source);
 
 	ast_channel_unlock(chan);
 
@@ -633,19 +635,19 @@ int ast_audiohook_remove(struct ast_channel *chan, struct ast_audiohook *audioho
 {
 	ast_channel_lock(chan);
 
-	if (!chan->audiohooks) {
+	if (!ast_channel_audiohooks(chan)) {
 		ast_channel_unlock(chan);
 		return -1;
 	}
 
 	if (audiohook->type == AST_AUDIOHOOK_TYPE_SPY)
-		AST_LIST_REMOVE(&chan->audiohooks->spy_list, audiohook, list);
+		AST_LIST_REMOVE(&ast_channel_audiohooks(chan)->spy_list, audiohook, list);
 	else if (audiohook->type == AST_AUDIOHOOK_TYPE_WHISPER)
-		AST_LIST_REMOVE(&chan->audiohooks->whisper_list, audiohook, list);
+		AST_LIST_REMOVE(&ast_channel_audiohooks(chan)->whisper_list, audiohook, list);
 	else if (audiohook->type == AST_AUDIOHOOK_TYPE_MANIPULATE)
-		AST_LIST_REMOVE(&chan->audiohooks->manipulate_list, audiohook, list);
+		AST_LIST_REMOVE(&ast_channel_audiohooks(chan)->manipulate_list, audiohook, list);
 
-	audiohook_list_set_samplerate_compatibility(chan->audiohooks);
+	audiohook_list_set_samplerate_compatibility(ast_channel_audiohooks(chan));
 	ast_audiohook_update_status(audiohook, AST_AUDIOHOOK_STATUS_DONE);
 
 	ast_channel_unlock(chan);
@@ -768,7 +770,7 @@ static struct ast_frame *audiohook_list_translate_to_native(struct ast_audiohook
  *         because no translation to SLINEAR audio was required.
  * Part_3: Translate end_frame's audio back into the format of start frame if necessary.  This
  *         is only necessary if manipulation of middle_frame occurred.
- *         
+ *
  * \param chan Channel that the list is coming off of
  * \param audiohook_list List of audiohooks
  * \param direction Direction frame is coming in from
@@ -782,10 +784,6 @@ static struct ast_frame *audio_audiohook_write_list(struct ast_channel *chan, st
 	int samples;
 	int middle_frame_manipulated = 0;
 	int removed = 0;
-
-	/* Don't translate our frame if we aren't going to bother to use it */
-	if (ast_audiohook_write_list_empty(audiohook_list))
-		return end_frame;
 
 	/* ---Part_1. translate start_frame to SLINEAR if necessary. */
 	if (!(middle_frame = audiohook_list_translate_to_slin(audiohook_list, direction, start_frame))) {
@@ -931,9 +929,9 @@ void ast_audiohook_trigger_wait(struct ast_audiohook *audiohook)
 	wait = ast_tvadd(ast_tvnow(), ast_samp2tv(50000, 1000));
 	ts.tv_sec = wait.tv_sec;
 	ts.tv_nsec = wait.tv_usec * 1000;
-	
+
 	ast_cond_timedwait(&audiohook->trigger, &audiohook->lock, &ts);
-	
+
 	return;
 }
 
@@ -943,26 +941,26 @@ int ast_channel_audiohook_count_by_source(struct ast_channel *chan, const char *
 	int count = 0;
 	struct ast_audiohook *ah = NULL;
 
-	if (!chan->audiohooks)
+	if (!ast_channel_audiohooks(chan))
 		return -1;
 
 	switch (type) {
 		case AST_AUDIOHOOK_TYPE_SPY:
-			AST_LIST_TRAVERSE(&chan->audiohooks->spy_list, ah, list) {
+			AST_LIST_TRAVERSE(&ast_channel_audiohooks(chan)->spy_list, ah, list) {
 				if (!strcmp(ah->source, source)) {
 					count++;
 				}
 			}
 			break;
 		case AST_AUDIOHOOK_TYPE_WHISPER:
-			AST_LIST_TRAVERSE(&chan->audiohooks->whisper_list, ah, list) {
+			AST_LIST_TRAVERSE(&ast_channel_audiohooks(chan)->whisper_list, ah, list) {
 				if (!strcmp(ah->source, source)) {
 					count++;
 				}
 			}
 			break;
 		case AST_AUDIOHOOK_TYPE_MANIPULATE:
-			AST_LIST_TRAVERSE(&chan->audiohooks->manipulate_list, ah, list) {
+			AST_LIST_TRAVERSE(&ast_channel_audiohooks(chan)->manipulate_list, ah, list) {
 				if (!strcmp(ah->source, source)) {
 					count++;
 				}
@@ -981,24 +979,24 @@ int ast_channel_audiohook_count_by_source_running(struct ast_channel *chan, cons
 {
 	int count = 0;
 	struct ast_audiohook *ah = NULL;
-	if (!chan->audiohooks)
+	if (!ast_channel_audiohooks(chan))
 		return -1;
 
 	switch (type) {
 		case AST_AUDIOHOOK_TYPE_SPY:
-			AST_LIST_TRAVERSE(&chan->audiohooks->spy_list, ah, list) {
+			AST_LIST_TRAVERSE(&ast_channel_audiohooks(chan)->spy_list, ah, list) {
 				if ((!strcmp(ah->source, source)) && (ah->status == AST_AUDIOHOOK_STATUS_RUNNING))
 					count++;
 			}
 			break;
 		case AST_AUDIOHOOK_TYPE_WHISPER:
-			AST_LIST_TRAVERSE(&chan->audiohooks->whisper_list, ah, list) {
+			AST_LIST_TRAVERSE(&ast_channel_audiohooks(chan)->whisper_list, ah, list) {
 				if ((!strcmp(ah->source, source)) && (ah->status == AST_AUDIOHOOK_STATUS_RUNNING))
 					count++;
 			}
 			break;
 		case AST_AUDIOHOOK_TYPE_MANIPULATE:
-			AST_LIST_TRAVERSE(&chan->audiohooks->manipulate_list, ah, list) {
+			AST_LIST_TRAVERSE(&ast_channel_audiohooks(chan)->manipulate_list, ah, list) {
 				if ((!strcmp(ah->source, source)) && (ah->status == AST_AUDIOHOOK_STATUS_RUNNING))
 					count++;
 			}
@@ -1211,12 +1209,12 @@ int ast_audiohook_set_mute(struct ast_channel *chan, const char *source, enum as
 	ast_channel_lock(chan);
 
 	/* Ensure the channel has audiohooks on it */
-	if (!chan->audiohooks) {
+	if (!ast_channel_audiohooks(chan)) {
 		ast_channel_unlock(chan);
 		return -1;
 	}
 
-	audiohook = find_audiohook_by_source(chan->audiohooks, source);
+	audiohook = find_audiohook_by_source(ast_channel_audiohooks(chan), source);
 
 	if (audiohook) {
 		if (clear) {

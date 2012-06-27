@@ -69,13 +69,16 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
  * they are active at the same time.  The plain pres option will simply
  * live on as a historical relic.
  *
- * Do not document the REDIRECTING(from-pres) or REDIRECTING(to-pres) datatypes.
- * The name and number now have their own presentation value.  The from-pres
- * and to-pres options will simply live on as a historical relic with as best
- * as can be managed backward compatible meaning.
+ * Do not document the REDIRECTING(orig-pres), REDIRECTING(from-pres),
+ * or REDIRECTING(to-pres) datatypes.
+ * The name and number now have their own presentation value.  The orig-pres,
+ * from-pres, and to-pres options will simply live on as a historical relic
+ * with as best as can be managed backward compatible meaning.
  *
- * Do not document the REDIRECTING(from-ton) or REDIRECTING(to-ton) datatypes.
- * They are aliases for from-num-plan and to-num-plan respectively.
+ * Do not document the REDIRECTING(orig-ton), REDIRECTING(from-ton),
+ * or REDIRECTING(to-ton) datatypes.
+ * They are aliases for orig-num-plan, from-num-plan, and to-num-plan
+ * respectively.
  */
 /*** DOCUMENTATION
 	<function name="CALLERID" language="en_US">
@@ -239,6 +242,21 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<parameter name="datatype" required="true">
 				<para>The allowable datatypes are:</para>
 				<enumlist>
+					<enum name = "orig-all" />
+					<enum name = "orig-name" />
+					<enum name = "orig-name-valid" />
+					<enum name = "orig-name-charset" />
+					<enum name = "orig-name-pres" />
+					<enum name = "orig-num" />
+					<enum name = "orig-num-valid" />
+					<enum name = "orig-num-plan" />
+					<enum name = "orig-num-pres" />
+					<enum name = "orig-subaddr" />
+					<enum name = "orig-subaddr-valid" />
+					<enum name = "orig-subaddr-type" />
+					<enum name = "orig-subaddr-odd" />
+					<enum name = "orig-tag" />
+					<enum name = "orig-reason" />
 					<enum name = "from-all" />
 					<enum name = "from-name" />
 					<enum name = "from-name-valid" />
@@ -279,7 +297,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		<description>
 			<para>Gets or sets Redirecting data on the channel.</para>
 			<para>The allowable values for the <replaceable>reason</replaceable>
-			field are the following:</para>
+			and <replaceable>orig-reason</replaceable> fields are the following:</para>
 			<enumlist>
 				<enum name = "unknown"><para>Unknown</para></enum>
 				<enum name = "cfb"><para>Call Forwarding Busy</para></enum>
@@ -818,7 +836,7 @@ static int callerpres_read(struct ast_channel *chan, const char *cmd, char *data
 			"  Use CALLERID(name-pres) or CALLERID(num-pres) instead.\n");
 	}
 	ast_copy_string(buf,
-		ast_named_caller_presentation(ast_party_id_presentation(&chan->caller.id)), len);
+		ast_named_caller_presentation(ast_party_id_presentation(&ast_channel_caller(chan)->id)), len);
 	return 0;
 }
 
@@ -848,8 +866,8 @@ static int callerpres_write(struct ast_channel *chan, const char *cmd, char *dat
 	if (pres < 0) {
 		ast_log(LOG_WARNING, "'%s' is not a valid presentation (see 'show function CALLERPRES')\n", value);
 	} else {
-		chan->caller.id.name.presentation = pres;
-		chan->caller.id.number.presentation = pres;
+		ast_channel_caller(chan)->id.name.presentation = pres;
+		ast_channel_caller(chan)->id.number.presentation = pres;
 	}
 	return 0;
 }
@@ -869,7 +887,6 @@ static int callerpres_write(struct ast_channel *chan, const char *cmd, char *dat
  */
 static int callerid_read(struct ast_channel *chan, const char *cmd, char *data, char *buf, size_t len)
 {
-	enum ID_FIELD_STATUS status;
 	char *parms;
 	struct ast_party_members member;
 	AST_DECLARE_APP_ARGS(args,
@@ -914,12 +931,13 @@ static int callerid_read(struct ast_channel *chan, const char *cmd, char *data, 
 			ast_log(LOG_ERROR, "Unknown callerid data type '%s'.\n", data);
 		}
 	} else {
+		enum ID_FIELD_STATUS status;
 		ast_channel_lock(chan);
 
 		if (member.argc == 1 && !strcasecmp("rdnis", member.argv[0])) {
-			if (chan->redirecting.from.number.valid
-				&& chan->redirecting.from.number.str) {
-				ast_copy_string(buf, chan->redirecting.from.number.str, len);
+			if (ast_channel_redirecting(chan)->from.number.valid
+				&& ast_channel_redirecting(chan)->from.number.str) {
+				ast_copy_string(buf, ast_channel_redirecting(chan)->from.number.str, len);
 			}
 		} else if (!strcasecmp("dnid", member.argv[0])) {
 			if (member.argc == 1) {
@@ -934,12 +952,12 @@ static int callerid_read(struct ast_channel *chan, const char *cmd, char *data, 
 				 */
 				if (member.argc == 2) {
 					/* dnid-num */
-					if (chan->dialed.number.str) {
-						ast_copy_string(buf, chan->dialed.number.str, len);
+					if (ast_channel_dialed(chan)->number.str) {
+						ast_copy_string(buf, ast_channel_dialed(chan)->number.str, len);
 					}
 				} else if (member.argc == 3 && !strcasecmp("plan", member.argv[2])) {
 					/* dnid-num-plan */
-					snprintf(buf, len, "%d", chan->dialed.number.plan);
+					snprintf(buf, len, "%d", ast_channel_dialed(chan)->number.plan);
 				} else {
 					ast_log(LOG_ERROR, "Unknown callerid data type '%s'.\n", data);
 				}
@@ -949,7 +967,7 @@ static int callerid_read(struct ast_channel *chan, const char *cmd, char *data, 
 				 * dnid-subaddr...
 				 */
 				status = party_subaddress_read(buf, len, member.argc - 2, member.argv + 2,
-					&chan->dialed.subaddress);
+					&ast_channel_dialed(chan)->subaddress);
 				switch (status) {
 				case ID_FIELD_VALID:
 				case ID_FIELD_INVALID:
@@ -962,7 +980,7 @@ static int callerid_read(struct ast_channel *chan, const char *cmd, char *data, 
 				ast_log(LOG_ERROR, "Unknown callerid data type '%s'.\n", data);
 			}
 		} else if (member.argc == 1 && !strcasecmp("ani2", member.argv[0])) {
-			snprintf(buf, len, "%d", chan->caller.ani2);
+			snprintf(buf, len, "%d", ast_channel_caller(chan)->ani2);
 		} else if (!strcasecmp("ani", member.argv[0])) {
 			if (member.argc == 1) {
 				/* Setup as if user had given ani-num instead. */
@@ -970,7 +988,7 @@ static int callerid_read(struct ast_channel *chan, const char *cmd, char *data, 
 				member.argv[1] = "num";
 			}
 			status = party_id_read(buf, len, member.argc - 1, member.argv + 1,
-				&chan->caller.ani);
+				&ast_channel_caller(chan)->ani);
 			switch (status) {
 			case ID_FIELD_VALID:
 			case ID_FIELD_INVALID:
@@ -980,7 +998,7 @@ static int callerid_read(struct ast_channel *chan, const char *cmd, char *data, 
 				break;
 			}
 		} else {
-			status = party_id_read(buf, len, member.argc, member.argv, &chan->caller.id);
+			status = party_id_read(buf, len, member.argc, member.argv, &ast_channel_caller(chan)->id);
 			switch (status) {
 			case ID_FIELD_VALID:
 			case ID_FIELD_INVALID:
@@ -1040,14 +1058,14 @@ static int callerid_write(struct ast_channel *chan, const char *cmd, char *data,
 
 	ast_channel_lock(chan);
 	if (member.argc == 1 && !strcasecmp("rdnis", member.argv[0])) {
-		chan->redirecting.from.number.valid = 1;
-		ast_free(chan->redirecting.from.number.str);
-		chan->redirecting.from.number.str = ast_strdup(value);
-		if (chan->cdr) {
-			ast_cdr_setcid(chan->cdr, chan);
+		ast_channel_redirecting(chan)->from.number.valid = 1;
+		ast_free(ast_channel_redirecting(chan)->from.number.str);
+		ast_channel_redirecting(chan)->from.number.str = ast_strdup(value);
+		if (ast_channel_cdr(chan)) {
+			ast_cdr_setcid(ast_channel_cdr(chan), chan);
 		}
 	} else if (!strcasecmp("dnid", member.argv[0])) {
-		ast_party_dialed_set_init(&dialed, &chan->dialed);
+		ast_party_dialed_set_init(&dialed, ast_channel_dialed(chan));
 		if (member.argc == 1) {
 			/* Setup as if user had given dnid-num instead. */
 			member.argc = 2;
@@ -1062,9 +1080,9 @@ static int callerid_write(struct ast_channel *chan, const char *cmd, char *data,
 				/* dnid-num */
 				dialed.number.str = ast_strdup(value);
 				ast_trim_blanks(dialed.number.str);
-				ast_party_dialed_set(&chan->dialed, &dialed);
-				if (chan->cdr) {
-					ast_cdr_setcid(chan->cdr, chan);
+				ast_party_dialed_set(ast_channel_dialed(chan), &dialed);
+				if (ast_channel_cdr(chan)) {
+					ast_cdr_setcid(ast_channel_cdr(chan), chan);
 				}
 			} else if (member.argc == 3 && !strcasecmp("plan", member.argv[2])) {
 				/* dnid-num-plan */
@@ -1072,9 +1090,9 @@ static int callerid_write(struct ast_channel *chan, const char *cmd, char *data,
 				ast_trim_blanks(val);
 
 				if (('0' <= val[0]) && (val[0] <= '9')) {
-					chan->dialed.number.plan = atoi(val);
-					if (chan->cdr) {
-						ast_cdr_setcid(chan->cdr, chan);
+					ast_channel_dialed(chan)->number.plan = atoi(val);
+					if (ast_channel_cdr(chan)) {
+						ast_cdr_setcid(ast_channel_cdr(chan), chan);
 					}
 				} else {
 					ast_log(LOG_ERROR,
@@ -1092,9 +1110,9 @@ static int callerid_write(struct ast_channel *chan, const char *cmd, char *data,
 				member.argv + 2, value);
 			switch (status) {
 			case ID_FIELD_VALID:
-				ast_party_dialed_set(&chan->dialed, &dialed);
-				if (chan->cdr) {
-					ast_cdr_setcid(chan->cdr, chan);
+				ast_party_dialed_set(ast_channel_dialed(chan), &dialed);
+				if (ast_channel_cdr(chan)) {
+					ast_cdr_setcid(ast_channel_cdr(chan), chan);
 				}
 				break;
 			case ID_FIELD_INVALID:
@@ -1112,15 +1130,15 @@ static int callerid_write(struct ast_channel *chan, const char *cmd, char *data,
 		ast_trim_blanks(val);
 
 		if (('0' <= val[0]) && (val[0] <= '9')) {
-			chan->caller.ani2 = atoi(val);
-			if (chan->cdr) {
-				ast_cdr_setcid(chan->cdr, chan);
+			ast_channel_caller(chan)->ani2 = atoi(val);
+			if (ast_channel_cdr(chan)) {
+				ast_cdr_setcid(ast_channel_cdr(chan), chan);
 			}
 		} else {
 			ast_log(LOG_ERROR, "Unknown callerid ani2 '%s', value unchanged\n", val);
 		}
 	} else if (!strcasecmp("ani", member.argv[0])) {
-		ast_party_caller_set_init(&caller, &chan->caller);
+		ast_party_caller_set_init(&caller, ast_channel_caller(chan));
 		if (member.argc == 1) {
 			/* Setup as if user had given ani-num instead. */
 			member.argc = 2;
@@ -1129,9 +1147,9 @@ static int callerid_write(struct ast_channel *chan, const char *cmd, char *data,
 		status = party_id_write(&caller.ani, member.argc - 1, member.argv + 1, value);
 		switch (status) {
 		case ID_FIELD_VALID:
-			ast_party_caller_set(&chan->caller, &caller, NULL);
-			if (chan->cdr) {
-				ast_cdr_setcid(chan->cdr, chan);
+			ast_party_caller_set(ast_channel_caller(chan), &caller, NULL);
+			if (ast_channel_cdr(chan)) {
+				ast_cdr_setcid(ast_channel_cdr(chan), chan);
 			}
 			break;
 		case ID_FIELD_INVALID:
@@ -1142,13 +1160,13 @@ static int callerid_write(struct ast_channel *chan, const char *cmd, char *data,
 		}
 		ast_party_caller_free(&caller);
 	} else {
-		ast_party_caller_set_init(&caller, &chan->caller);
+		ast_party_caller_set_init(&caller, ast_channel_caller(chan));
 		status = party_id_write(&caller.id, member.argc, member.argv, value);
 		switch (status) {
 		case ID_FIELD_VALID:
 			ast_channel_set_caller_event(chan, &caller, NULL);
-			if (chan->cdr) {
-				ast_cdr_setcid(chan->cdr, chan);
+			if (ast_channel_cdr(chan)) {
+				ast_cdr_setcid(ast_channel_cdr(chan), chan);
 			}
 			break;
 		case ID_FIELD_INVALID:
@@ -1181,7 +1199,6 @@ static int connectedline_read(struct ast_channel *chan, const char *cmd, char *d
 {
 	struct ast_party_members member;
 	char *read_what;
-	enum ID_FIELD_STATUS status;
 
 	/* Ensure that the buffer is empty */
 	*buf = 0;
@@ -1200,9 +1217,10 @@ static int connectedline_read(struct ast_channel *chan, const char *cmd, char *d
 	ast_channel_lock(chan);
 
 	if (member.argc == 1 && !strcasecmp("source", member.argv[0])) {
-		ast_copy_string(buf, ast_connected_line_source_name(chan->connected.source), len);
+		ast_copy_string(buf, ast_connected_line_source_name(ast_channel_connected(chan)->source), len);
 	} else {
-		status = party_id_read(buf, len, member.argc, member.argv, &chan->connected.id);
+		enum ID_FIELD_STATUS status;
+		status = party_id_read(buf, len, member.argc, member.argv, &ast_channel_connected(chan)->id);
 		switch (status) {
 		case ID_FIELD_VALID:
 		case ID_FIELD_INVALID:
@@ -1233,7 +1251,6 @@ static int connectedline_read(struct ast_channel *chan, const char *cmd, char *d
 static int connectedline_write(struct ast_channel *chan, const char *cmd, char *data, const char *value)
 {
 	struct ast_party_connected_line connected;
-	enum ID_FIELD_STATUS status;
 	char *val;
 	char *parms;
 	void (*set_it)(struct ast_channel *chan, const struct ast_party_connected_line *connected, const struct ast_set_party_connected_line *update);
@@ -1272,7 +1289,7 @@ static int connectedline_write(struct ast_channel *chan, const char *cmd, char *
 	}
 
 	ast_channel_lock(chan);
-	ast_party_connected_line_set_init(&connected, &chan->connected);
+	ast_party_connected_line_set_init(&connected, ast_channel_connected(chan));
 	ast_channel_unlock(chan);
 
 	value = ast_skip_blanks(value);
@@ -1296,6 +1313,7 @@ static int connectedline_write(struct ast_channel *chan, const char *cmd, char *
 			set_it(chan, &connected, NULL);
 		}
 	} else {
+		enum ID_FIELD_STATUS status;
 		status = party_id_write(&connected.id, member.argc, member.argv, value);
 		switch (status) {
 		case ID_FIELD_VALID:
@@ -1330,6 +1348,7 @@ static int redirecting_read(struct ast_channel *chan, const char *cmd, char *dat
 {
 	struct ast_party_members member;
 	char *read_what;
+	const struct ast_party_redirecting *ast_redirecting;
 	enum ID_FIELD_STATUS status;
 
 	/* Ensure that the buffer is empty */
@@ -1348,9 +1367,26 @@ static int redirecting_read(struct ast_channel *chan, const char *cmd, char *dat
 
 	ast_channel_lock(chan);
 
-	if (!strcasecmp("from", member.argv[0])) {
+	ast_redirecting = ast_channel_redirecting(chan);
+	if (!strcasecmp("orig", member.argv[0])) {
+		if (member.argc == 2 && !strcasecmp("reason", member.argv[1])) {
+			ast_copy_string(buf,
+				ast_redirecting_reason_name(ast_redirecting->orig_reason), len);
+		} else {
+			status = party_id_read(buf, len, member.argc - 1, member.argv + 1,
+				&ast_redirecting->orig);
+			switch (status) {
+			case ID_FIELD_VALID:
+			case ID_FIELD_INVALID:
+				break;
+			default:
+				ast_log(LOG_ERROR, "Unknown redirecting data type '%s'.\n", data);
+				break;
+			}
+		}
+	} else if (!strcasecmp("from", member.argv[0])) {
 		status = party_id_read(buf, len, member.argc - 1, member.argv + 1,
-			&chan->redirecting.from);
+			&ast_redirecting->from);
 		switch (status) {
 		case ID_FIELD_VALID:
 		case ID_FIELD_INVALID:
@@ -1361,7 +1397,7 @@ static int redirecting_read(struct ast_channel *chan, const char *cmd, char *dat
 		}
 	} else if (!strcasecmp("to", member.argv[0])) {
 		status = party_id_read(buf, len, member.argc - 1, member.argv + 1,
-			&chan->redirecting.to);
+			&ast_redirecting->to);
 		switch (status) {
 		case ID_FIELD_VALID:
 		case ID_FIELD_INVALID:
@@ -1377,11 +1413,11 @@ static int redirecting_read(struct ast_channel *chan, const char *cmd, char *dat
 		 */
 		ast_copy_string(buf,
 			ast_named_caller_presentation(
-				ast_party_id_presentation(&chan->redirecting.from)), len);
+				ast_party_id_presentation(&ast_redirecting->from)), len);
 	} else if (member.argc == 1 && !strcasecmp("reason", member.argv[0])) {
-		ast_copy_string(buf, ast_redirecting_reason_name(chan->redirecting.reason), len);
+		ast_copy_string(buf, ast_redirecting_reason_name(ast_redirecting->reason), len);
 	} else if (member.argc == 1 && !strcasecmp("count", member.argv[0])) {
-		snprintf(buf, len, "%d", chan->redirecting.count);
+		snprintf(buf, len, "%d", ast_redirecting->count);
 	} else {
 		ast_log(LOG_ERROR, "Unknown redirecting data type '%s'.\n", data);
 	}
@@ -1445,12 +1481,47 @@ static int redirecting_write(struct ast_channel *chan, const char *cmd, char *da
 	}
 
 	ast_channel_lock(chan);
-	ast_party_redirecting_set_init(&redirecting, &chan->redirecting);
+	ast_party_redirecting_set_init(&redirecting, ast_channel_redirecting(chan));
 	ast_channel_unlock(chan);
 
 	value = ast_skip_blanks(value);
 
-	if (!strcasecmp("from", member.argv[0])) {
+	if (!strcasecmp("orig", member.argv[0])) {
+		if (member.argc == 2 && !strcasecmp("reason", member.argv[1])) {
+			int reason;
+
+			val = ast_strdupa(value);
+			ast_trim_blanks(val);
+
+			if (('0' <= val[0]) && (val[0] <= '9')) {
+				reason = atoi(val);
+			} else {
+				reason = ast_redirecting_reason_parse(val);
+			}
+
+			if (reason < 0) {
+				ast_log(LOG_ERROR,
+					"Unknown redirecting orig reason '%s', value unchanged\n", val);
+			} else {
+				redirecting.orig_reason = reason;
+				set_it(chan, &redirecting, NULL);
+			}
+		} else {
+			status = party_id_write(&redirecting.orig, member.argc - 1, member.argv + 1,
+				value);
+			switch (status) {
+			case ID_FIELD_VALID:
+				set_it(chan, &redirecting, NULL);
+				break;
+			case ID_FIELD_INVALID:
+				break;
+			default:
+				ast_log(LOG_ERROR, "Unknown redirecting data type '%s'.\n", data);
+				break;
+			}
+			ast_party_redirecting_free(&redirecting);
+		}
+	} else if (!strcasecmp("from", member.argv[0])) {
 		status = party_id_write(&redirecting.from, member.argc - 1, member.argv + 1,
 			value);
 		switch (status) {

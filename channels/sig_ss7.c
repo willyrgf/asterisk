@@ -120,6 +120,14 @@ static void sig_ss7_set_digital(struct sig_ss7_chan *p, int is_digital)
 	}
 }
 
+static void sig_ss7_set_outgoing(struct sig_ss7_chan *p, int is_outgoing)
+{
+	p->outgoing = is_outgoing;
+	if (p->calls->set_outgoing) {
+		p->calls->set_outgoing(p->chan_pvt, is_outgoing);
+	}
+}
+
 static void sig_ss7_set_inservice(struct sig_ss7_chan *p, int is_inservice)
 {
 	if (p->calls->set_inservice) {
@@ -140,6 +148,22 @@ static void sig_ss7_set_remotelyblocked(struct sig_ss7_chan *p, int is_blocked)
 	p->remotelyblocked = is_blocked;
 	if (p->calls->set_remotelyblocked) {
 		p->calls->set_remotelyblocked(p->chan_pvt, is_blocked);
+	}
+}
+
+/*!
+ * \internal
+ * \brief Open the SS7 channel media path.
+ * \since 1.8.12
+ *
+ * \param p Channel private control structure.
+ *
+ * \return Nothing
+ */
+static void sig_ss7_open_media(struct sig_ss7_chan *p)
+{
+	if (p->calls->open_media) {
+		p->calls->open_media(p->chan_pvt);
 	}
 }
 
@@ -249,7 +273,7 @@ static struct ast_channel *sig_ss7_new_ast_channel(struct sig_ss7_chan *p, int s
 		p->owner = ast;
 	}
 	p->alreadyhungup = 0;
-	ast->transfercapability = transfercapability;
+	ast_channel_transfercapability_set(ast, transfercapability);
 	pbx_builtin_setvar_helper(ast, "TRANSFERCAPABILITY",
 		ast_transfercapability2str(transfercapability));
 	if (transfercapability & AST_TRANS_CAP_DIGITAL) {
@@ -435,8 +459,11 @@ static inline void ss7_hangup_cics(struct sig_ss7_linkset *linkset, int startcic
 	for (i = 0; i < linkset->numchans; i++) {
 		if (linkset->pvts[i] && (linkset->pvts[i]->dpc == dpc && ((linkset->pvts[i]->cic >= startcic) && (linkset->pvts[i]->cic <= endcic)))) {
 			sig_ss7_lock_private(linkset->pvts[i]);
-			if (linkset->pvts[i]->owner)
-				linkset->pvts[i]->owner->_softhangup |= AST_SOFTHANGUP_DEV;
+			sig_ss7_lock_owner(linkset, i);
+			if (linkset->pvts[i]->owner) {
+				ast_softhangup_nolock(linkset->pvts[i]->owner, AST_SOFTHANGUP_DEV);
+				ast_channel_unlock(linkset->pvts[i]->owner);
+			}
 			sig_ss7_unlock_private(linkset->pvts[i]);
 		}
 	}
@@ -624,7 +651,7 @@ static void ss7_start_call(struct sig_ss7_chan *p, struct sig_ss7_linkset *links
 	ast_channel_unlock(c);
 
 	if (ast_pbx_start(c)) {
-		ast_log(LOG_WARNING, "Unable to start PBX on %s (CIC %d)\n", c->name, p->cic);
+		ast_log(LOG_WARNING, "Unable to start PBX on %s (CIC %d)\n", ast_channel_name(c), p->cic);
 		ast_hangup(c);
 	} else {
 		ast_verb(3, "Accepting call to '%s' on CIC %d\n", p->exten, p->cic);
@@ -799,12 +826,7 @@ void *ss7_linkset(void *data)
 						sig_ss7_queue_control(linkset, chanpos, AST_CONTROL_PROGRESS);
 						p->progress = 1;
 						sig_ss7_set_dialing(p, 0);
-#if 0	/* This code no longer seems to be necessary so I did not convert it. */
-						if (p->dsp && p->dsp_features) {
-							ast_dsp_set_features(p->dsp, p->dsp_features);
-							p->dsp_features = 0;
-						}
-#endif
+						sig_ss7_open_media(p);
 					}
 					break;
 				default:
@@ -885,7 +907,7 @@ void *ss7_linkset(void *data)
 					}
 					p->call_level = SIG_SS7_CALL_LEVEL_GLARE;
 					if (p->owner) {
-						p->owner->hangupcause = AST_CAUSE_NORMAL_CLEARING;
+						ast_channel_hangupcause_set(p->owner, AST_CAUSE_NORMAL_CLEARING);
 						ast_softhangup_nolock(p->owner, AST_SOFTHANGUP_DEV);
 						ast_channel_unlock(p->owner);
 					}
@@ -1028,7 +1050,7 @@ void *ss7_linkset(void *data)
 				sig_ss7_lock_private(p);
 				sig_ss7_lock_owner(linkset, chanpos);
 				if (p->owner) {
-					p->owner->hangupcause = e->rel.cause;
+					ast_channel_hangupcause_set(p->owner, e->rel.cause);
 					ast_softhangup_nolock(p->owner, AST_SOFTHANGUP_DEV);
 					ast_channel_unlock(p->owner);
 				}
@@ -1176,12 +1198,8 @@ void *ss7_linkset(void *data)
 						p->call_level = SIG_SS7_CALL_LEVEL_CONNECT;
 					}
 					sig_ss7_queue_control(linkset, chanpos, AST_CONTROL_ANSWER);
-#if 0	/* This code no longer seems to be necessary so I did not convert it. */
-					if (p->dsp && p->dsp_features) {
-						ast_dsp_set_features(p->dsp, p->dsp_features);
-						p->dsp_features = 0;
-					}
-#endif
+					sig_ss7_set_dialing(p, 0);
+					sig_ss7_open_media(p);
 					sig_ss7_set_echocanceller(p, 1);
 					sig_ss7_unlock_private(p);
 				}
@@ -1407,7 +1425,7 @@ static unsigned char cid_pres2ss7screen(int cid_pres)
  * \retval 0 on success.
  * \retval -1 on error.
  */
-int sig_ss7_call(struct sig_ss7_chan *p, struct ast_channel *ast, char *rdest)
+int sig_ss7_call(struct sig_ss7_chan *p, struct ast_channel *ast, const char *rdest)
 {
 	char ss7_called_nai;
 	int called_nai_strip;
@@ -1443,7 +1461,7 @@ int sig_ss7_call(struct sig_ss7_chan *p, struct ast_channel *ast, char *rdest)
 	}
 
 	if (!p->hidecallerid) {
-		l = ast->connected.id.number.valid ? ast->connected.id.number.str : NULL;
+		l = ast_channel_connected(ast)->id.number.valid ? ast_channel_connected(ast)->id.number.str : NULL;
 	} else {
 		l = NULL;
 	}
@@ -1492,10 +1510,10 @@ int sig_ss7_call(struct sig_ss7_chan *p, struct ast_channel *ast, char *rdest)
 		}
 	}
 	isup_set_calling(p->ss7call, l ? (l + calling_nai_strip) : NULL, ss7_calling_nai,
-		p->use_callingpres ? cid_pres2ss7pres(ast->connected.id.number.presentation) : (l ? SS7_PRESENTATION_ALLOWED : SS7_PRESENTATION_RESTRICTED),
-		p->use_callingpres ? cid_pres2ss7screen(ast->connected.id.number.presentation) : SS7_SCREENING_USER_PROVIDED);
+		p->use_callingpres ? cid_pres2ss7pres(ast_channel_connected(ast)->id.number.presentation) : (l ? SS7_PRESENTATION_ALLOWED : SS7_PRESENTATION_RESTRICTED),
+		p->use_callingpres ? cid_pres2ss7screen(ast_channel_connected(ast)->id.number.presentation) : SS7_SCREENING_USER_PROVIDED);
 
-	isup_set_oli(p->ss7call, ast->connected.ani2);
+	isup_set_oli(p->ss7call, ast_channel_connected(ast)->ani2);
 	isup_init_call(p->ss7->ss7, p->ss7call, p->cic, p->dpc);
 
 	/* Set the charge number if it is set */
@@ -1563,14 +1581,14 @@ int sig_ss7_hangup(struct sig_ss7_chan *p, struct ast_channel *ast)
 {
 	int res = 0;
 
-	if (!ast->tech_pvt) {
+	if (!ast_channel_tech_pvt(ast)) {
 		ast_log(LOG_WARNING, "Asked to hangup channel not connected\n");
 		return 0;
 	}
 
 	p->owner = NULL;
 	sig_ss7_set_dialing(p, 0);
-	p->outgoing = 0;
+	sig_ss7_set_outgoing(p, 0);
 	p->progress = 0;
 	p->rlt = 0;
 	p->exten[0] = '\0';
@@ -1580,7 +1598,7 @@ int sig_ss7_hangup(struct sig_ss7_chan *p, struct ast_channel *ast)
 	if (p->ss7call) {
 		if (!p->alreadyhungup) {
 			const char *cause = pbx_builtin_getvar_helper(ast,"SS7_CAUSE");
-			int icause = ast->hangupcause ? ast->hangupcause : -1;
+			int icause = ast_channel_hangupcause(ast) ? ast_channel_hangupcause(ast) : -1;
 
 			if (cause) {
 				if (atoi(cause)) {
@@ -1614,6 +1632,7 @@ int sig_ss7_answer(struct sig_ss7_chan *p, struct ast_channel *ast)
 	if (p->call_level < SIG_SS7_CALL_LEVEL_CONNECT) {
 		p->call_level = SIG_SS7_CALL_LEVEL_CONNECT;
 	}
+	sig_ss7_open_media(p);
 	res = isup_anm(p->ss7->ss7, p->ss7call);
 	ss7_rel(p->ss7);
 	return res;
@@ -1655,6 +1674,12 @@ int sig_ss7_indicate(struct sig_ss7_chan *p, struct ast_channel *chan, int condi
 
 	switch (condition) {
 	case AST_CONTROL_BUSY:
+		if (p->call_level < SIG_SS7_CALL_LEVEL_CONNECT) {
+			ast_channel_hangupcause_set(chan, AST_CAUSE_USER_BUSY);
+			ast_softhangup_nolock(chan, AST_SOFTHANGUP_DEV);
+			res = 0;
+			break;
+		}
 		res = sig_ss7_play_tone(p, SIG_SS7_TONE_BUSY);
 		break;
 	case AST_CONTROL_RINGING:
@@ -1674,15 +1699,15 @@ int sig_ss7_indicate(struct sig_ss7_chan *p, struct ast_channel *chan, int condi
 
 		res = sig_ss7_play_tone(p, SIG_SS7_TONE_RINGTONE);
 
-		if (chan->_state != AST_STATE_UP && chan->_state != AST_STATE_RING) {
+		if (ast_channel_state(chan) != AST_STATE_UP && ast_channel_state(chan) != AST_STATE_RING) {
 			ast_setstate(chan, AST_STATE_RINGING);
 		}
 		break;
 	case AST_CONTROL_PROCEEDING:
-		ast_debug(1,"Received AST_CONTROL_PROCEEDING on %s\n",chan->name);
+		ast_debug(1,"Received AST_CONTROL_PROCEEDING on %s\n",ast_channel_name(chan));
 		ss7_grab(p, p->ss7);
 		/* This IF sends the FAR for an answered ALEG call */
-		if (chan->_state == AST_STATE_UP && (p->rlt != 1)){
+		if (ast_channel_state(chan) == AST_STATE_UP && (p->rlt != 1)){
 			if ((isup_far(p->ss7->ss7, p->ss7call)) != -1) {
 				p->rlt = 1;
 			}
@@ -1697,7 +1722,7 @@ int sig_ss7_indicate(struct sig_ss7_chan *p, struct ast_channel *chan, int condi
 		res = 0;
 		break;
 	case AST_CONTROL_PROGRESS:
-		ast_debug(1,"Received AST_CONTROL_PROGRESS on %s\n",chan->name);
+		ast_debug(1,"Received AST_CONTROL_PROGRESS on %s\n",ast_channel_name(chan));
 		ss7_grab(p, p->ss7);
 		if (!p->progress && p->call_level < SIG_SS7_CALL_LEVEL_ALERTING && !p->outgoing) {
 			p->progress = 1;/* No need to send inband-information progress again. */
@@ -1713,15 +1738,23 @@ int sig_ss7_indicate(struct sig_ss7_chan *p, struct ast_channel *chan, int condi
 		res = 0;
 		break;
 	case AST_CONTROL_INCOMPLETE:
-		/* If the channel is connected, wait for additional input */
-		if (p->call_level == SIG_SS7_CALL_LEVEL_CONNECT) {
+		if (p->call_level < SIG_SS7_CALL_LEVEL_CONNECT) {
+			ast_channel_hangupcause_set(chan, AST_CAUSE_INVALID_NUMBER_FORMAT);
+			ast_softhangup_nolock(chan, AST_SOFTHANGUP_DEV);
 			res = 0;
 			break;
 		}
-		chan->hangupcause = AST_CAUSE_INVALID_NUMBER_FORMAT;
+		/* Wait for DTMF digits to complete the dialed number. */
+		res = 0;
 		break;
 	case AST_CONTROL_CONGESTION:
-		chan->hangupcause = AST_CAUSE_CONGESTION;
+		if (p->call_level < SIG_SS7_CALL_LEVEL_CONNECT) {
+			ast_channel_hangupcause_set(chan, AST_CAUSE_CONGESTION);
+			ast_softhangup_nolock(chan, AST_SOFTHANGUP_DEV);
+			res = 0;
+			break;
+		}
+		res = sig_ss7_play_tone(p, SIG_SS7_TONE_CONGESTION);
 		break;
 	case AST_CONTROL_HOLD:
 		ast_moh_start(chan, data, p->mohinterpret);
@@ -1755,10 +1788,10 @@ struct ast_channel *sig_ss7_request(struct sig_ss7_chan *p, enum sig_ss7_law law
 {
 	struct ast_channel *ast;
 
-	p->outgoing = 1;
+	sig_ss7_set_outgoing(p, 1);
 	ast = sig_ss7_new_ast_channel(p, AST_STATE_RESERVED, law, transfercapability, p->exten, requestor);
 	if (!ast) {
-		p->outgoing = 0;
+		sig_ss7_set_outgoing(p, 0);
 
 		/* Release the allocated channel.  Only have to deal with the linkset lock. */
 		ast_mutex_lock(&p->ss7->lock);
@@ -1812,7 +1845,7 @@ void sig_ss7_cli_show_channels(int fd, struct sig_ss7_linkset *linkset)
 			pvt->remotelyblocked ? "Yes" : "No",
 			sig_ss7_call_level2str(pvt->call_level),
 			pvt->ss7call ? "Yes" : "No",
-			pvt->owner ? pvt->owner->name : "");
+			pvt->owner ? ast_channel_name(pvt->owner) : "");
 
 		if (pvt->owner) {
 			ast_channel_unlock(pvt->owner);
