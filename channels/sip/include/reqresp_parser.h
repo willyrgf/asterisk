@@ -145,6 +145,14 @@ void sip_request_parser_unregister_tests(void);
 unsigned int parse_sip_options(const char *options, char *unsupported, size_t unsupported_len);
 
 /*!
+ * \brief Parse required header in incoming packet or response
+ *	returns bitmap
+ * 
+ * \param option list
+ */
+unsigned int parse_required_sip_options(const char *options);
+
+/*!
  * \brief Compare two URIs as described in RFC 3261 Section 19.1.4
  *
  * \param input1 First URI

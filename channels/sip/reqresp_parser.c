@@ -1516,18 +1516,13 @@ AST_TEST_DEFINE(parse_contact_header_test)
 }
 
 /*!
- * \brief Parse supported header in incoming packet
- *
- * \details This function parses through the options parameters and
- * builds a bit field representing all the SIP options in that field. When an
- * item is found that is not supported, it is copied to the unsupported
- * out buffer.
- *
+ * \brief Parse supported or required header in incoming packet
  * \param option list
  * \param unsupported out buffer (optional)
  * \param unsupported out buffer length (optional)
+ * \param response True if this is a required header from a response
  */
-unsigned int parse_sip_options(const char *options, char *unsupported, size_t unsupported_len)
+static unsigned int _parse_sip_options(const char *options, char *unsupported, size_t unsupported_len)
 {
 	char *next, *sep;
 	char *temp;
@@ -1547,7 +1542,7 @@ unsigned int parse_sip_options(const char *options, char *unsupported, size_t un
 
 	temp = ast_strdupa(options);
 
-	ast_debug(3, "Begin: parsing SIP \"Supported: %s\"\n", options);
+	ast_debug(3, "Begin: parsing SIP \"Required:\" or \"Supported: %s\"\n", options);
 
 	for (next = temp; next; next = sep) {
 		found = FALSE;
@@ -1742,6 +1737,35 @@ AST_TEST_DEFINE(sip_parse_options_test)
 
 	return res;
 }
+
+/*!
+ * \brief Parse supported header in incoming packet
+ *
+ * \details This function parses through the options parameters and
+ * builds a bit field representing all the SIP options in that field. When an
+ * item is found that is not supported, it is copied to the unsupported
+ * out buffer.
+ *
+ * \param option list
+ * \param unsupported out buffer (optional)
+ * \param unsupported out buffer length (optional)
+ */
+unsigned int parse_sip_options(const char *options, char *unsupported, size_t unsupported_len)
+{
+	return _parse_sip_options(options, unsupported, unsupported_len);
+}
+
+/*!
+ * \brief required header in incoming packet or response
+ *	returns bitmap
+ * 
+ * \param option list
+ */
+unsigned int parse_required_sip_options(const char *options)
+{
+	return _parse_sip_options(options, NULL, 0 );
+}
+
 
 /*! \brief helper routine for sip_uri_cmp to compare URI parameters
  *

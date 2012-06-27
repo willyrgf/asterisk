@@ -4161,9 +4161,12 @@ static int send_response(struct sip_pvt *p, struct sip_request *req, enum xmitty
 {
 	int res;
 
-	/* Room for PRACK */
 	if (ast_test_flag(&p->flags[2], SIP_PAGE3_PRACK)) {
-		ast_debug(2, "=!=!=!=!=!=!=!= PRACK SHOULD BE USED HERE. Exactly HERE\n");
+		if (reliable == XMIT_PRACK) {
+			ast_debug(2, "=!=!=!=!=!=!=!= PRACK WILL BE USED HERE. Exactly HERE\n");
+		} else {
+			ast_debug(2, "=!=!=!=!=!=!=!= PRACK COULD BE USED HERE. Exactly HERE\n");
+		}
 	}
 
 	finalize_content(req);
@@ -21082,6 +21085,8 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 	struct ast_channel *owner;
 	int sipmethod;
 	const char *c = get_header(req, "Cseq");
+	const char *required = get_header(req, "Required");
+
 	/* GCC 4.2 complains if I try to cast c as a char * when passing it to ast_skip_nonblanks, so make a copy of it */
 	char *c_copy = ast_strdupa(c);
 	/* Skip the Cseq and its subsequent spaces */
@@ -21111,6 +21116,19 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 
 		if (!owner->hangupcause)
 			owner->hangupcause = hangup_sip2cause(resp);
+	}
+
+	/* If we have a required header in the response, the other side have activated an extension
+	   we said that we do support */
+	if (!ast_strlen_zero(required)) {
+		int activeextensions = parse_required_sip_options(required);
+		if (activeextensions & SIP_OPT_100REL) {
+			ast_debug(3, "!=!=!=!=!=! Response relies on PRACK! \n");
+			/* DO Something here !!! */
+		}
+		if (activeextensions & SIP_OPT_TIMER) {
+			ast_debug(3, "!=!=!=!=!=! The other side activated Session timers! \n");
+		}
 	}
 
 	if (p->socket.type == SIP_TRANSPORT_UDP) {
@@ -21168,6 +21186,7 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 		pvt_set_needdestroy(p, "received 4XX response to a BYE");
 		return;
 	}
+	
 
 	if (p->relatedpeer && sipmethod == SIP_OPTIONS) {
 		/* We don't really care what the response is, just that it replied back.
