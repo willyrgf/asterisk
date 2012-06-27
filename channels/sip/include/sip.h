@@ -358,7 +358,8 @@
 
 
 #define SIP_PAGE3_SNOM_AOC               (1 << 0)  /*!< DPG: Allow snom aoc messages */
-#define SIP_PAGE3_PRACK               (2 << 0)  /*!< DPG: Allow snom aoc messages */
+#define SIP_PAGE3_PRACK               (1 << 1)  /*!< DPG: Allow snom aoc messages */
+#define SIP_PAGE3_100REL               (1 << 2)  /*!< D: If PRACK is active for a specific dialog */
 
 #define SIP_PAGE3_FLAGS_TO_COPY \
 	(SIP_PAGE3_SNOM_AOC | SIP_PAGE3_PRACK)
@@ -699,7 +700,6 @@ struct sip_settings {
 	unsigned int disallowed_methods;   /*!< methods that we should never try to use */
 	int notifyringing;          /*!< Send notifications on ringing */
 	int notifyhold;             /*!< Send notifications on hold */
-	int prack;			/*!< 0 offer prack, 1 use prack in responses */
 	enum notifycid_setting notifycid;  /*!< Send CID with ringing notifications */
 	enum transfermodes allowtransfer;  /*!< SIP Refer restriction scheme */
 	int allowsubscribe;         /*!< Flag for disabling ALL subscriptions, this is FALSE only if all peers are FALSE

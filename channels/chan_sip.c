@@ -12259,6 +12259,7 @@ static int transmit_invite(struct sip_pvt *p, int sipmethod, int sdp, int init, 
 	other end knows and replace the current call with this new call */
 	if (p->options && !ast_strlen_zero(p->options->replaces)) {
 		add_header(&req, "Replaces", p->options->replaces);
+		/* XXX This needs to be automated since we can have multiple options here */
 		add_header(&req, "Require", "replaces");
 	}
 
@@ -18676,6 +18677,9 @@ static char *sip_show_channel(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 			ast_cli(a->fd, "  Theoretical Address:    %s\n", ast_sockaddr_stringify(&cur->sa));
 			ast_cli(a->fd, "  Received Address:       %s\n", ast_sockaddr_stringify(&cur->recv));
 			ast_cli(a->fd, "  SIP Transfer mode:      %s\n", transfermode2str(cur->allowtransfer));
+			ast_cli(a->fd, "  SIP PRACK support:      %s\n", ast_test_flag(&cur->flags[2], SIP_PAGE3_100REL) ? "Active" :
+				 (ast_test_flag(&cur->flags[2], SIP_PAGE3_PRACK) ? "Enabled" : "Disabled"));
+
 			ast_cli(a->fd, "  Force rport:            %s\n", AST_CLI_YESNO(ast_test_flag(&cur->flags[0], SIP_NAT_FORCE_RPORT)));
 			if (ast_sockaddr_isnull(&cur->redirip)) {
 				ast_cli(a->fd,
@@ -21125,6 +21129,8 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 		if (activeextensions & SIP_OPT_100REL) {
 			ast_debug(3, "!=!=!=!=!=! Response relies on PRACK! \n");
 			/* DO Something here !!! */
+			/* XXX If the response relies on PRACK, we need to start a PRACK transaction
+			 */
 		}
 		if (activeextensions & SIP_OPT_TIMER) {
 			ast_debug(3, "!=!=!=!=!=! The other side activated Session timers! \n");
@@ -22433,6 +22439,24 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 	Include the Require: option tags for further processing as well */
 	p->sipoptions |= required_profile;
 	p->reqsipoptions = required_profile;
+
+	/* Check if the request supports or require PRACK */
+	if (p->reqsipoptions & SIP_OPT_100REL || p->sipoptions & SIP_OPT_100REL) {
+		if (ast_test_flag(&p->flags[2], SIP_PAGE3_PRACK)) {	/* Is PRACK enabled for this dialog? */
+			ast_set_flag(&p->flags[2], SIP_PAGE3_100REL);	/* Mark PRACK as active for this dialog */
+		} else {
+			/* If PRACK was required but is disabled in configuration, don't play */
+			if (p->reqsipoptions & SIP_OPT_100REL) {
+				transmit_response(p, "420 Bad extension (unsupported)", req);
+			}
+			p->invitestate = INV_COMPLETED;
+			if (!p->lastinvite) {
+				sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
+			}
+			res = -1;
+			goto request_invite_cleanup;
+		}
+	}
 
 	/* Check if this is a loop */
 	if (ast_test_flag(&p->flags[0], SIP_OUTGOING) && p->owner && (p->invitestate != INV_TERMINATED && p->invitestate != INV_CONFIRMED) && p->owner->_state != AST_STATE_UP) {
@@ -28306,7 +28330,6 @@ static int reload_config(enum channelreloadreason reason)
 	sip_cfg.allowsubscribe = FALSE;
 	sip_cfg.disallowed_methods = SIP_UNKNOWN;
 	sip_cfg.contact_ha = NULL;		/* Reset the contact ACL */
-	sip_cfg.prack = DEFAULT_PRACK;
 	snprintf(global_useragent, sizeof(global_useragent), "%s %s", DEFAULT_USERAGENT, ast_get_version());
 	snprintf(global_sdpsession, sizeof(global_sdpsession), "%s %s", DEFAULT_SDPSESSION, ast_get_version());
 	snprintf(global_sdpowner, sizeof(global_sdpowner), "%s", DEFAULT_SDPOWNER);
