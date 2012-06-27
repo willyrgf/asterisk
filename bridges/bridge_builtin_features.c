@@ -79,13 +79,13 @@ static struct ast_channel *dial_transfer(struct ast_channel *caller, const char 
 	snprintf(destination, sizeof(destination), "%s@%s", exten, context);
 
 	/* Now we request that chan_local prepare to call the destination */
-	if (!(chan = ast_request("Local", caller->nativeformats, caller, destination, &cause))) {
+	if (!(chan = ast_request("Local", ast_channel_nativeformats(caller), caller, destination, &cause))) {
 		return NULL;
 	}
 
 	/* Before we actually dial out let's inherit appropriate information. */
 	ast_channel_lock_both(caller, chan);
-	ast_connected_line_copy_from_caller(&chan->connected, &caller->caller);
+	ast_connected_line_copy_from_caller(ast_channel_connected(chan), ast_channel_caller(caller));
 	ast_channel_inherit_variables(caller, chan);
 	ast_channel_datastore_inherit(caller, chan);
 	ast_channel_unlock(chan);
@@ -106,7 +106,7 @@ static int feature_blind_transfer(struct ast_bridge *bridge, struct ast_bridge_c
 	char exten[AST_MAX_EXTENSION] = "";
 	struct ast_channel *chan = NULL;
 	struct ast_bridge_features_blind_transfer *blind_transfer = hook_pvt;
-	const char *context = (blind_transfer && !ast_strlen_zero(blind_transfer->context) ? blind_transfer->context : bridge_channel->chan->context);
+	const char *context = (blind_transfer && !ast_strlen_zero(blind_transfer->context) ? blind_transfer->context : ast_channel_context(bridge_channel->chan));
 
 	/* Grab the extension to transfer to */
 	if (!grab_transfer(bridge_channel->chan, exten, sizeof(exten), context)) {
@@ -123,7 +123,7 @@ static int feature_blind_transfer(struct ast_bridge *bridge, struct ast_bridge_c
 	}
 
 	/* This is sort of the fun part. We impart the above channel onto the bridge, and have it take our place. */
-	ast_bridge_impart(bridge, chan, bridge_channel->chan, NULL);
+	ast_bridge_impart(bridge, chan, bridge_channel->chan, NULL, 1);
 
 	return 0;
 }
@@ -171,7 +171,7 @@ static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridg
 	struct ast_bridge_features caller_features, called_features;
 	enum ast_bridge_channel_state attended_bridge_result;
 	struct ast_bridge_features_attended_transfer *attended_transfer = hook_pvt;
-	const char *context = (attended_transfer && !ast_strlen_zero(attended_transfer->context) ? attended_transfer->context : bridge_channel->chan->context);
+	const char *context = (attended_transfer && !ast_strlen_zero(attended_transfer->context) ? attended_transfer->context : ast_channel_context(bridge_channel->chan));
 
 	/* Grab the extension to transfer to */
 	if (!grab_transfer(bridge_channel->chan, exten, sizeof(exten), context)) {
@@ -200,7 +200,7 @@ static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridg
 	ast_bridge_features_set_flag(&called_features, AST_BRIDGE_FLAG_DISSOLVE);
 
 	/* This is how this is going down, we are imparting the channel we called above into this bridge first */
-	ast_bridge_impart(attended_bridge, chan, NULL, &called_features);
+	ast_bridge_impart(attended_bridge, chan, NULL, &called_features, 1);
 
 	/* Before we join setup a features structure with the hangup option, just in case they want to use DTMF */
 	ast_bridge_features_init(&caller_features);
@@ -222,9 +222,9 @@ static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridg
 		/* If the user wants to turn this into a threeway transfer then do so, otherwise they take our place */
 		if (attended_bridge_result == AST_BRIDGE_CHANNEL_STATE_DEPART) {
 			/* We want to impart them upon the bridge and just have us return to it as normal */
-			ast_bridge_impart(bridge, chan, NULL, NULL);
+			ast_bridge_impart(bridge, chan, NULL, NULL, 1);
 		} else {
-			ast_bridge_impart(bridge, chan, bridge_channel->chan, NULL);
+			ast_bridge_impart(bridge, chan, bridge_channel->chan, NULL, 1);
 		}
 	} else {
 		ast_stream_and_wait(bridge_channel->chan, "beeperr", AST_DIGIT_ANY);

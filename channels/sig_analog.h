@@ -223,6 +223,7 @@ struct analog_callback {
 	void (* const set_cadence)(void *pvt, int *cidrings, struct ast_channel *chan);
 	void (* const set_alarm)(void *pvt, int in_alarm);
 	void (* const set_dialing)(void *pvt, int is_dialing);
+	void (* const set_outgoing)(void *pvt, int is_outgoing);
 	void (* const set_ringtimeout)(void *pvt, int ringt);
 	void (* const set_waitingfordt)(void *pvt, struct ast_channel *ast);
 	int (* const check_waitingfordt)(void *pvt);
@@ -351,7 +352,7 @@ void analog_delete(struct analog_pvt *doomed);
 
 void analog_free(struct analog_pvt *p);
 
-int analog_call(struct analog_pvt *p, struct ast_channel *ast, char *rdest, int timeout);
+int analog_call(struct analog_pvt *p, struct ast_channel *ast, const char *rdest, int timeout);
 
 int analog_hangup(struct analog_pvt *p, struct ast_channel *ast);
 

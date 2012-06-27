@@ -55,25 +55,42 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		<synopsis>
 			Directed extension call pickup.
 		</synopsis>
-		<syntax argsep="&amp;">
-			<parameter name="ext" argsep="@" required="true">
-				<argument name="extension" required="true"/>
-				<argument name="context" />
-			</parameter>
-			<parameter name="ext2" argsep="@" multiple="true">
-				<argument name="extension2" required="true"/>
-				<argument name="context2"/>
+		<syntax>
+			<parameter name="targets" argsep="&amp;">
+				<argument name="extension" argsep="@" required="true">
+					<para>Specification of the pickup target.</para>
+					<argument name="extension" required="true"/>
+					<argument name="context" />
+				</argument>
+				<argument name="extension2" argsep="@" multiple="true">
+					<para>Additional specifications of pickup targets.</para>
+					<argument name="extension2" required="true"/>
+					<argument name="context2"/>
+				</argument>
 			</parameter>
 		</syntax>
 		<description>
-			<para>This application can pickup any ringing channel that is calling
-			the specified <replaceable>extension</replaceable>. If no <replaceable>context</replaceable>
-			is specified, the current context will be used. If you use the special string <literal>PICKUPMARK</literal>
-			for the context parameter, for example 10@PICKUPMARK, this application
-			tries to find a channel which has defined a <variable>PICKUPMARK</variable>
-			channel variable with the same value as <replaceable>extension</replaceable>
-			(in this example, <literal>10</literal>). When no parameter is specified, the application
-			will pickup a channel matching the pickup group of the active channel.</para>
+			<para>This application can pickup a specified ringing channel.  The channel
+			to pickup can be specified in the following ways.</para>
+			<para>1) If no <replaceable>extension</replaceable> targets are specified,
+			the application will pickup a channel matching the pickup group of the
+			requesting channel.</para>
+			<para>2) If the <replaceable>extension</replaceable> is specified with a
+			<replaceable>context</replaceable> of the special string
+			<literal>PICKUPMARK</literal> (for example 10@PICKUPMARK), the application
+			will pickup a channel which has defined the channel variable
+			<variable>PICKUPMARK</variable> with the same value as
+			<replaceable>extension</replaceable> (in this example,
+			<literal>10</literal>).</para>
+			<para>3) If the <replaceable>extension</replaceable> is specified
+			with or without a <replaceable>context</replaceable>, the channel with a
+			matching <replaceable>extension</replaceable> and <replaceable>context</replaceable>
+			will be picked up.  If no <replaceable>context</replaceable> is specified,
+			the current context will be used.</para>
+			<note><para>The <replaceable>extension</replaceable> is typically set on
+			matching channels by the dial application that created the channel.  The
+			<replaceable>context</replaceable> is set on matching channels by the
+			channel driver for the device.</para></note>
 		</description>
 	</application>
 	<application name="PickupChan" language="en_US">
@@ -113,7 +130,7 @@ static int pickup_by_name_cb(void *obj, void *arg, void *data, int flags)
 	struct pickup_by_name_args *args = data;
 
 	ast_channel_lock(target);
-	if (!strncasecmp(target->name, args->name, args->len) && ast_can_pickup(target)) {
+	if (!strncasecmp(ast_channel_name(target), args->name, args->len) && ast_can_pickup(target)) {
 		/* Return with the channel still locked on purpose */
 		return CMP_MATCH | CMP_STOP;
 	}
@@ -183,7 +200,7 @@ static int pickup_by_exten(struct ast_channel *chan, const char *exten, const ch
 	while ((target = ast_channel_iterator_next(iter))) {
 		ast_channel_lock(target);
 		if ((chan != target) && ast_can_pickup(target)) {
-			ast_log(LOG_NOTICE, "%s pickup by %s\n", target->name, chan->name);
+			ast_log(LOG_NOTICE, "%s pickup by %s\n", ast_channel_name(target), ast_channel_name(chan));
 			break;
 		}
 		ast_channel_unlock(target);
@@ -241,7 +258,7 @@ static int find_channel_by_group(void *obj, void *arg, void *data, int flags)
 	struct ast_channel *chan = data;/*!< Channel wanting to pickup call */
 
 	ast_channel_lock(target);
-	if (chan != target && (chan->pickupgroup & target->callgroup)
+	if (chan != target && (ast_channel_pickupgroup(chan) & ast_channel_callgroup(target))
 		&& ast_can_pickup(target)) {
 		/* Return with the channel still locked on purpose */
 		return CMP_MATCH | CMP_STOP;
@@ -259,7 +276,7 @@ static int pickup_by_group(struct ast_channel *chan)
 	/* The found channel is already locked. */
 	target = ast_channel_callback(find_channel_by_group, NULL, chan, 0);
 	if (target) {
-		ast_log(LOG_NOTICE, "pickup %s attempt by %s\n", target->name, chan->name);
+		ast_log(LOG_NOTICE, "pickup %s attempt by %s\n", ast_channel_name(target), ast_channel_name(chan));
 		res = ast_do_pickup(chan, target);
 		ast_channel_unlock(target);
 		target = ast_channel_unref(target);
@@ -271,14 +288,16 @@ static int pickup_by_group(struct ast_channel *chan)
 /* application entry point for Pickup() */
 static int pickup_exec(struct ast_channel *chan, const char *data)
 {
-	char *tmp = ast_strdupa(data);
-	char *exten = NULL, *context = NULL;
+	char *tmp;
+	char *exten;
+	char *context;
 
 	if (ast_strlen_zero(data)) {
 		return pickup_by_group(chan) ? 0 : -1;
 	}
 
 	/* Parse extension (and context if there) */
+	tmp = ast_strdupa(data);
 	while (!ast_strlen_zero(tmp) && (exten = strsep(&tmp, "&"))) {
 		if ((context = strchr(exten, '@')))
 			*context++ = '\0';
@@ -288,12 +307,15 @@ static int pickup_exec(struct ast_channel *chan, const char *data)
 				return -1;
 			}
 		} else {
-			if (!pickup_by_exten(chan, exten, !ast_strlen_zero(context) ? context : chan->context)) {
+			if (ast_strlen_zero(context)) {
+				context = (char *) ast_channel_context(chan);
+			}
+			if (!pickup_by_exten(chan, exten, context)) {
 				/* Pickup successful.  Stop the dialplan this channel is a zombie. */
 				return -1;
 			}
 		}
-		ast_log(LOG_NOTICE, "No target channel found for %s.\n", exten);
+		ast_log(LOG_NOTICE, "No target channel found for %s@%s.\n", exten, context);
 	}
 
 	/* Pickup failed.  Keep going in the dialplan. */
@@ -308,7 +330,7 @@ static int find_by_part(void *obj, void *arg, void *data, int flags)
 	int len = strlen(part);
 
 	ast_channel_lock(target);
-	if (len <= strlen(target->name) && !strncmp(target->name, part, len)
+	if (len <= strlen(ast_channel_name(target)) && !strncmp(ast_channel_name(target), part, len)
 		&& ast_can_pickup(target)) {
 		/* Return with the channel still locked on purpose */
 		return CMP_MATCH | CMP_STOP;
@@ -359,7 +381,7 @@ static int pickupchan_exec(struct ast_channel *chan, const char *data)
 
 	/* Parse channel */
 	while (!ast_strlen_zero(args.channel) && (pickup = strsep(&args.channel, "&"))) {
-		if (!strncasecmp(chan->name, pickup, strlen(pickup))) {
+		if (!strncasecmp(ast_channel_name(chan), pickup, strlen(pickup))) {
 			ast_log(LOG_NOTICE, "Cannot pickup your own channel %s.\n", pickup);
 		} else {
 			if (partial_pickup) {

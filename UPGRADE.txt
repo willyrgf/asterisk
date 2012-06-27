@@ -22,14 +22,40 @@
 
 From 10 to 11:
 
+Parking:
+ - The comebacktoorigin setting must now be set per parking lot. The setting in
+   the general section will not be applied automatically to each parking lot.
+ - The BLINDTRANSFER channel variable is deleted from a channel when it is
+   bridged to prevent subtle bugs in the parking feature.  The channel
+   variable is used by Asterisk internally for the Park application to work
+   properly.  If you were using it for your own purposes, copy it to your
+   own channel variable before the channel is bridged.
+
+res_ais:
+ - Users of res_ais in versions of Asterisk prior to Asterisk 11 must change
+   to use the res_corosync module, instead.  OpenAIS is deprecated, but
+   Corosync is still actively developed and maintained.  Corosync came out of
+   the OpenAIS project.
+
 Dialplan Functions:
  - MAILBOX_EXISTS has been deprecated. Use VM_INFO with the 'exists' parameter
    instead.
+ - Macro has been deprecated in favor of GoSub.  For redirecting and connected
+   line purposes use the following variables instead of their macro equivalents:
+   REDIRECTING_SEND_SUB, REDIRECTING_SEND_SUB_ARGS,
+   CONNECTED_LINE_SEND_SUB, CONNECTED_LINE_SEND_SUB_ARGS.
+ - The REDIRECTING function now supports the redirecting original party id
+   and reason.
+
 
 func_enum:
  - ENUM query functions now return a count of -1 on lookup error to
    differentiate between a failed query and a successful query with 0 results
    matching the specified type.
+
+CDR:
+ - cdr_adaptive_odbc now supports specifying a schema so that Asterisk can
+   connect to databases that use schemas.
 
 Configuration Files:
  - Files listed below have been updated to be more consistent with how Asterisk
@@ -40,14 +66,55 @@ Configuration Files:
    - dnsmgr.conf
    - dsp.conf
 
+ - The 'verbose' setting in logger.conf now takes an optional argument,
+   specifying the verbosity level for each logging destination.  The default,
+   if not otherwise specified, is a verbosity of 3.
+
 AMI:
   - DBDelTree now correctly returns an error when 0 rows are deleted just as
     the DBDel action does.
+  - The IAX2 PeerStatus event now sends a 'Port' header.  In Asterisk 10, this was
+    erroneously being sent as a 'Post' header.
+
+CCSS:
+ - Macro is deprecated. Use cc_callback_sub instead of cc_callback_macro
+   in channel configurations.
+
+app_meetme:
+  - The 'c' option (announce user count) will now work even if the 'q' (quiet)
+    option is enabled.
+
+app_followme:
+ - Answered outgoing calls no longer get cut off when the next step is started.
+   You now have until the last step times out to decide if you want to accept
+   the call or not before being disconnected.
 
 SIP
 ===
  - A new option "tonezone" for setting default tonezone for the channel driver
    or individual devices
+ - A new manager event, "SessionTimeout" has been added and is triggered when
+   a call is terminated due to RTP stream inactivity or SIP session timer
+   expiration.
+ - SIP_CAUSE is now deprecated.  It has been modified to use the same
+   mechanism as HANGUPCAUSE.  Behavior should not change, but performance
+   should be vastly improved.  The HANGUPCAUSE hash should now be used instead
+   of SIP_CAUSE. Because of this, the storesipcause option in sip.conf is also
+   deprecated.
+ - The sip paramater for Originating Line Information (oli, isup-oli, and
+   ss7-oli) is now parsed out of the From header and copied into the channel's
+   ANI2 information field.  This is readable from the CALLERID(ani2) dialplan
+   function.
+
+chan_unistim
+ - Due to massive update in chan_unistim phone keys functions and on-screen 
+   information changed.
+
+users.conf:
+ - A defined user with hasvoicemail=yes now finally uses a Gosub to stdexten
+   as documented in extensions.conf.sample since v1.6.0 instead of a Macro as
+   documented in v1.4.  Set the asterisk.conf stdexten=macro parameter to
+   invoke the stdexten the old way.
 
 From 1.8 to 10:
 

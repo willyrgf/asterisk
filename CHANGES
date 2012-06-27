@@ -12,6 +12,48 @@
 --- Functionality changes from Asterisk 10 to Asterisk 11 --------------------
 ------------------------------------------------------------------------------
 
+Build System
+----
+ * A new make target, 'full', has been added to the Makefile.  This performs
+   the same compilation actions as make all, but will also scan the entirety of
+   each source file for documentation.  This option is needed to generate AMI
+   event documentation.  Note that your system must have Python in order for
+   this make target to succeed.
+
+Core
+----
+ * The expression parser now recognizes the ABS() absolute value function,
+   which will convert negative floating point values to positive values.
+ * The Asterisk build system will now build and install a shared library
+   (libasteriskssl.so) used to wrap various initialization and shutdown functions
+   from the libssl and libcrypto libraries provided by OpenSSL. This is done so
+   that Asterisk can ensure that these functions do *not* get called by any
+   modules that are loaded into Asterisk, since they should only be called once
+   in any single process. If desired, this feature can be disabled by supplying
+   the "--disable-asteriskssl" option to the configure script.
+ * Threads belonging to a particular call are now linked with callids which get
+   added to any log messages produced by those threads. Log messages can now be
+   easily identified as involved with a certain call by looking at their call id.
+   Call ids may also be attached to log messages for just about any case where
+   it can be determined to be related to a particular call.
+ * The minimum DTMF duration can now be configured in asterisk.conf
+   as "mindtmfduration". The default value is (as before) set to 80 ms.
+   (previously it was only available in source code)
+ * Each logging destination and console now have an independent notion of the
+   current verbosity level.  Logger.conf now allows an optional argument to
+   the 'verbose' specifier, indicating the level of verbosity sent to that
+   particular logging destination.  Additionally, remote consoles now each
+   have their own verbosity level.  The command 'core set verbose' will now set
+   a separate level for each remote console without affecting any other
+   console.
+
+CLI Changes
+-------------------
+ * mixmonitor list <channel> command will now show MixMonitor ID, and the filenames
+   of all running mixmonitors on a channel.
+ * The debuglevel of "pri set debug" is now a bitmask ranging from 0 to 15 if
+   numeric instead of 0, 1, or 2.
+
 ConfBridge
 -------------------
  * Added menu action admin_toggle_mute_participants.  This will mute / unmute
@@ -20,6 +62,14 @@ ConfBridge
    occurs to be overriden using sound_participants_unmuted and sound_participants_muted.
  * Added menu action participant_count.  This will playback the number of current
    participants in a conference.
+ * Added announcement configuration option to user profile. If set the sound file will
+   be played to the user, and only the user, upon joining the conference bridge.
+
+Voicemail
+------------------
+ * Addition of the VM_INFO function - see Dialplan function changes
+ * The imapserver, imapport, and imapflags configuration options can now be
+   overriden on a user by user basis.
 
 SIP Changes
 -----------
@@ -27,12 +77,52 @@ SIP Changes
    name field if CID number exists without a CID name. This change improves
    compatibility with certain device features such as Avaya IP500's directory
    lookup service.
+ * A new setting for autocreatepeer (autocreatepeer=persistent) allows peers
+   created using that setting to not be removed during SIP reload.
+ * Add support to realtime for the 'callbackextension' option
+ * When multiple peers exist with the same address, but differing
+   callbackextension options, incoming requests that are matched by address
+   will be matched to the peer with the matching callbackextension if it is
+   available.
+ * NAT settings are now a combinable list of options. The equivalent of the
+   deprecated nat=yes is nat=force_rport,comedia. nat=no behaves as before.
+ * Two new NAT options, auto_force_rport and auto_comedia, have been added
+   which set the force_rport and comedia options automatically if Asterisk
+   detects that an incoming SIP request crossed a NAT after being sent by
+   the remote endpoint.
+ * Adds an option send_diversion which can be disabled to prevent
+   diversion headers from automatically being added to invites.
+ * Add support for lightweight NAT keepalive. If enabled a blank packet will
+   be sent to the remote host at a given interval to keep the NAT mapping open.
+   This can be enabled using the keepalive configuration option.
  * Externaddr is now a valid setting for SIP devices in sip.conf
 
 Chan_local changes
 ------------------
  * Added a manager event "LocalBridge" for local channel call bridges between
    the two pseudo-channels created.
+
+Chan_dahdi changes
+------------------
+ * Added dialtone_detect option for analog ports to disconnect incoming
+   calls when dialtone is detected.
+
+Chan_unistim changes
+--------------------
+ * Added ability to use multiple lines on phone, so for one device in 
+   configuration multiple lines can be defined, it allows to have multiple calls
+   on one phone, callwaiting and switching between calls.
+ * Added option 'sharpdial' allowing end dialing by pressing # key
+ * Added options 'cwstyle', 'cwvolume' controlling callwaiting appearance
+ * Added global 'debug' option, that enables debug in channel driver
+ * Added ability for translation on-screen menu to multiple languages. Tested on
+   Russian languages.  Supported encodings: ISO 8859-1, ISO 8859-2, ISO 8859-4, 
+   ISO 8859-5, ISO 2022-JP. Language controlled by 'language' and on-screen 
+   menu of phone
+ * Reworked dialing number input: added dialing by timeout, immediate dial on 
+   on dialplan compare, phone number length now not limited by screen size
+ * Added ability for pickup a call using fetures.conf defined value and 
+   on-screen key
 
 Codec changes
 -------------
@@ -41,10 +131,24 @@ Codec changes
    requirement to use two different keywords.  For example, to specify all
    codecs except g729 and g723, one need only specify allow=all,!g729,!g723.
 
+Music On Hold Changes
+---------------------
+ * Added 'announcement' option which will play at the start of MOH and between
+   songs in modes of MOH that can detect transitions between songs (eg.
+   files, mp3, etc).
+
 Queue changes
 -------------
  * Added queue options autopausebusy and autopauseunavail for automatically
    pausing a queue member when their device reports busy or congestion.
+ * The 'ignorebusy' option for queue members has been deprecated in favor of
+   the option 'ringinuse. Also a 'queue set ringinuse' CLI command has been
+   added as well as an AMI action 'QueueMemberRingInUse' to set this variable on a
+   per interface basis. Individual ringinuse values can now be set in
+   queues.conf via an argument to member definitions. Lastly, the queue
+   'ringinuse' setting now only determines defaults for the per member
+   'ringinuse' setting and does not override per member settings like it does
+   in earlier versions.
 
 Voicemail changes
 -----------------
@@ -61,6 +165,25 @@ Applications
    when using multiple options (so that j option could be used without having to
    manually specify timezone and format) There are other beneftis eg. format can
    now be used without specifying time zone as well.
+ * Added 'F()' option to Queue and Bridge. Similar to the dial option, these can
+   be supplied with arguments indicating where the callee should go after the caller
+   is hung up, or without options specified, the priority after the Queue/Bridge
+   will be used.
+ * Added 'b' and 'B' options to Dial that execute a Gosub on callee and caller
+   channels respectively before the callee channels are called.
+
+Parking
+------------
+ * New per parking lot options: comebackcontext and comebackdialtime. See
+   configs/features.conf.sample for more details.
+
+ * Channel variable PARKER is now set when comebacktoorigin is disabled in
+   a parking lot.
+
+ * MixMonitor hooks now have IDs associated with them which can be used to assign
+   a target to StopMixMonitor. Use of MixMonitor's i(variable) option will allow
+   storage of the MixMontior ID in a channel variable.  StopMixmonitor now accepts
+   that ID as an argument.
 
 CDR postgresql driver changes
 -----------------------------
@@ -70,6 +193,30 @@ AMI (Asterisk Manager Interface) changes
 ----------------------------------------
  * Originate now generates an error response if the extension given
    is not found in the dialplan
+
+ * MixMonitor will now show IDs associated with the mixmonitor upon creating them
+   if the i(variable) option is used. StopMixMonitor will accept MixMonitorID as
+   on option to close specific MixMonitors.
+
+ * The SIPshowpeer manager action response field "SIP-Forcerport" has been updated
+   to include information about peers configured with nat=auto_force_rport by
+   returning "A" if auto_force_rport is set and nat is detected, and "a" if it is
+   set and nat is not detected. "Y" and "N" are still returned if auto_force_rport
+   is not enabled.
+
+ * Hangup now can take a regular expression as the Channel option.  If you want
+   to hangup multiple channels, use /regex/ as the Channel option.  Existing 
+   behavior to hanging up a single channel is unchanged, but if you pass a regex,
+   the manager will send you a list of channels back that were hung up.
+
+ * Support for IPv6 addresses has been added.
+
+ * AMI Events can now be documented in the Asterisk source.  Two new CLI
+   commands have been added to display information about AMI events at run time:
+   manager show events, which shows a list of all known and documented AMI
+   events, and manager show event [event name], which shows detail information
+   about a specific AMI event.  Note that AMI event documentation is only
+   generated when Asterisk is compiled using 'make full'.
 
 FAX changes
 -----------
@@ -87,6 +234,58 @@ Dialplan functions
    user information, such as the email address and full name.
    The MAILBOX_EXISTS dialplan function has been deprecated in favour of
    VM_INFO.
+ * The REDIRECTING function now supports the redirecting original party id
+   and reason.
+ * Two new functions have been added: FEATURE() and FEATUREMAP().  FEATURE()
+   lets you set some of the configuration options from the [general] section
+   of features.conf on a per-channel basis.  FEATUREMAP() lets you customize
+   the key sequence used to activate built-in features, such as blindxfer,
+   and automon.  See the built-in documentation for details.
+
+Followme changes
+-------------
+ * A new option, 'I' has been added to app_followme.
+   By setting this option, Asterisk will not update the caller with
+   connected line changes when they occur.  This is similar to app_dial
+   and app_queue.
+ * The 'N' option is now ignored if the call is already answered.
+ * Added 'b' and 'B' options to FollowMe that execute a Gosub on callee
+   and caller channels respectively before the callee channels are called.
+
+RTP changes
+-------------
+ * A new option, 'probation' has been added to rtp.conf
+   RTP in strictrtp mode can now require more than 1 packet to exit learning
+   mode with a new source (and by default requires 4). The probation option
+   allows the user to change the required number of packets in sequence to any
+   desired value. Use a value of 1 to essentially restore the old behavior.
+   Also, with strictrtp on, Asterisk will now drop all packets until learning
+   mode has successfully exited. These changes are based on how pjmedia handles
+   media sources and source changes.
+
+Text Messaging
+--------------
+ * MESSAGE(from) for incoming SIP messages now returns "display-name" <uri>
+   instead of simply the uri.  This is the format that MessageSend() can use
+   in the from parameter for outgoing SIP messages.
+
+res_corosync
+------------
+ * A new module, res_corosync, has been introduced.  This module uses the
+   Corosync cluster enginer (http://www.corosync.org) to allow a local cluster
+   of Asterisk servers to both Message Waiting Indication (MWI) and/or
+   Device State (presence) information.  This module is very similar to, and
+   is a replacement for the res_ais module that was in previous releases of
+   Asterisk.
+
+AGI
+---
+ * A new channel variable, AGIEXITONHANGUP, has been added which allows
+   Asterisk to behave like it did in Asterisk 1.4 and earlier where the
+   AGI application would exit immediately after a channel hangup is detected.
+ * IPv6 addresses are now supported when using FastAGI (agi://).  Hostnames
+   are resolved and each address is attempted in turn until one succeeds or
+   all fail.
 
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 1.8 to Asterisk 10 -------------------
@@ -526,7 +725,9 @@ Applications
  * Voicemail now runs the externnotify script when pollmailboxes is activated and
    notices a change.
  * Voicemail now includes rdnis within msgXXXX.txt file.
- * Added 'D' command to ExternalIVR full details in doc/externalivr.txt
+ * ExternalIVR now supports IPv6 addresses.
+ * Added 'D' command to ExternalIVR. Details are available on the Asterisk wiki
+   at https://wiki.asterisk.org/wiki/x/oQBB
  * ParkedCall and Park can now specify the parking lot to use.
 
 Dialplan Functions
@@ -827,7 +1028,7 @@ Call Completion Supplementary Services for Asterisk
  * Call completion support has been added for SIP, DAHDI/ISDN, and DAHDI/analog.
    DAHDI/ISDN supports call completion for the following switch types:
    EuroIsdn(ETSI) for PTP and PTMP modes, and Qsig.
-   See doc/CCSS_architecture.pdf and doc/tex/ccss.tex(asterisk.pdf) for details.
+   See https://wiki.asterisk.org/wiki/x/2ABQ for details.
 
 Multicast RTP Support
 ---------------------
@@ -845,7 +1046,10 @@ Security Events Framework
    sends these events to the "security" logger level.  Currently, AMI is the only
    Asterisk component that reports security events.  However, SIP support will be
    coming soon.  For more information on the security events framework, see the
-   "Security Events" chapter of the included documentation - doc/tex/asterisk.pdf.
+   "Asterisk Security Framework" section of the Asterisk wiki at
+   https://wiki.asterisk.org/wiki/x/wgBQ
+ * SIP support was added in Asterisk 10
+ * This API now supports IPv6 addresses
 
 Fax
 ---
@@ -896,7 +1100,8 @@ Miscellaneous
  * The Realtime dialplan switch now caches entries for 1 second.  This provides a
    significant increase in performance (about 3X) for installations using this switchtype.
  * Distributed devicestate now supports the use of the XMPP protocol, in addition to
-   AIS.  For more information, please see doc/distributed_devstate-XMPP.txt
+   AIS.  For more information, please see the Distributed Device State section of the
+   Asterisk wiki at https://wiki.asterisk.org/wiki/x/jw4iAQ
  * The addition of G.719 pass-through support.
  * Added support for 16khz Speex audio.  This can be enabled by using 'allow=speex16'
    during device configuration.
@@ -1124,13 +1329,14 @@ LDAP Schema File Additions
 Device State Handling
 ---------------------
  * The event infrastructure in Asterisk got another big update to help support
-    distributed events.  It currently supports distributed device state and
-    distributed Voicemail MWI (Message Waiting Indication).  A new module has
-    been merged, res_ais, which facilitates communicating events between servers.
-    It uses the SAForum AIS (Service Availability Forum Application Interface
-    Specification) CLM (Cluster Management) and EVT (Event) services to maintain
-    a cluster of Asterisk servers, and to share events between them.  For more
-    information on setting this up, see doc/distributed_devstate.txt.
+   distributed events.  It currently supports distributed device state and
+   distributed Voicemail MWI (Message Waiting Indication).  A new module has
+   been merged, res_ais, which facilitates communicating events between servers.
+   It uses the SAForum AIS (Service Availability Forum Application Interface
+   Specification) CLM (Cluster Management) and EVT (Event) services to maintain
+   a cluster of Asterisk servers, and to share events between them.  For more
+   information on setting this up, refer to the Distributed Device State section
+   of the Asterisk wiki at https://wiki.asterisk.org/wiki/x/jw4iAQ
 
 Dialplan Functions
 ------------------
@@ -1205,8 +1411,8 @@ Application Changes
    the first argument to Chanspy(). Pressing 4 will change to spy mode, pressing 5 will
    change to whisper mode, and pressing 6 will change to barge mode.
  * ExternalIVR now takes several options that affect the way it performs, as
-   well as having several new commands.  Please see doc/externalivr.txt for the
-   complete documentation.
+   well as having several new commands.  Please see the External IVR page on the Asterisk
+   wiki for complete documentation: https://wiki.asterisk.org/wiki/x/oQBB
  * Added ability to communicate over a TCP socket instead of forking a child process for the 
    ExternalIVR application.
  * ChanIsAvail has a new option, 'a', which will return all available channels instead
@@ -1325,8 +1531,9 @@ Miscellaneous
     the 'setvar' option to cause a given audio file to be played upon completion
     of an attended transfer.  Currently it works for DAHDI, IAX2, SIP, and
     Skinny channels only.
-  * You can now compile Asterisk against the Hoard Memory Allocator, see doc/hoard.txt
-    for more information.
+  * You can now compile Asterisk against the Hoard Memory Allocator, see the
+    Hoard page on the Asterisk wiki for more information:
+    https://wiki.asterisk.org/wiki/x/pQBB
   * Config file variables may now be appended to, by using the '+=' append
     operator.  This is most helpful when working with long SQL queries in
     func_odbc.conf, as the queries no longer need to be specified on a single
@@ -1344,7 +1551,7 @@ Miscellaneous
 AMI - The manager (TCP/TLS/HTTP)
 --------------------------------
   * Manager has undergone a lot of changes, all of them documented
-    in doc/manager_1_1.txt
+    on the Asterisk wiki at https://wiki.asterisk.org/wiki/x/tQBB
   * Manager version has changed to 1.1
   * Added a new action 'CoreShowChannels' to list currently defined channels
      and some information about them. 
@@ -1391,10 +1598,10 @@ AMI - The manager (TCP/TLS/HTTP)
     to a subshell, it requires the System privilege, as well.  This was done to
     enhance manager security.
   * Originate now accepts codec settings with "Codecs: alaw, ulaw, h264" 
-  * New command: Atxfer. See doc/manager_1_1.txt for more details or 
-    manager show command Atxfer from the CLI
-  * New command: IAXregistry. See doc/manager_1_1.txt for more details or
-    manager show command IAXregistry from the CLI
+  * New command: Atxfer. See https://wiki.asterisk.org/wiki/x/uABB for more details
+    or manager show command Atxfer from the CLI
+  * New command: IAXregistry. See https://wiki.asterisk.org/wiki/x/uABB for more
+    details or manager show command IAXregistry from the CLI
 
 Dialplan functions
 ------------------
@@ -1506,8 +1713,8 @@ SIP changes
   * Added SIP Session Timers support (RFC 4028).  This prevents stuck SIP sessions that
      were not properly torn down due to network or endpoint failures during an established
      SIP session.
-  * Added experimental TCP and TLS support for SIP.  See doc/siptls.txt and 
-     configs/sip.conf.sample for more information on how it is used.
+  * Added experimental TCP and TLS support for SIP.  See https://wiki.asterisk.org/wiki/x/ygBB
+     and configs/sip.conf.sample for more information on how it is used.
   * Added a new configuration option "authfailureevents" that enables manager events when
     a peer can't authenticate properly. 
   * Added DNS manager support to registrations for peers not referencing a peer entry.
@@ -1597,9 +1804,10 @@ DAHDI channel driver (chan_dahdi) Changes
 
 New Channel Drivers
 -------------------
-  * Added a new channel driver, chan_unistim.  See doc/unistim.txt and
-     configs/unistim.conf.sample for details.  This new channel driver allows
-     you to use Nortel i2002, i2004, and i2050 phones with Asterisk.
+  * Added a new channel driver, chan_unistim.  See the Asterisk wiki at
+     https://wiki.asterisk.org/wiki/x/vgsiAQ and configs/unistim.conf.sample
+     for details.  This new channel driver allows you to use Nortel i2002,
+     i2004, and i2050 phones with Asterisk.
   * Added a new channel driver, chan_console, which uses portaudio as a cross
      platform audio interface.  It was written as a channel driver that would
      work with Mac CoreAudio, but portaudio supports a number of other audio
@@ -1971,8 +2179,8 @@ Miscellaneous
   * Added the jittertargetextra configuration option.
   * Added support for setting the CoS for VLAN traffic (802.1p).  See the sample
      configuration files for the IP channel drivers.  The new option is "cos".
-     This information is also documented in doc/qos.tex, or the IP Quality of Service
-     section of asterisk.pdf.
+     This information is also documented on the Asterisk wiki at
+     https://wiki.asterisk.org/wiki/x/EYBG
   * When originating a call using AMI or pbx_spool that fails the reason for failure
      will now be available in the failed extension using the REASON dialplan variable.
   * Added support for reading the TOUCH_MONITOR_PREFIX channel variable.

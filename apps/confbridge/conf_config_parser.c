@@ -23,6 +23,10 @@
  * \author David Vossel <dvossel@digium.com>
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
@@ -187,6 +191,8 @@ static int set_user_option(const char *name, const char *value, struct user_prof
 		ast_copy_string(u_profile->pin, value, sizeof(u_profile->pin));
 	} else if (!strcasecmp(name, "music_on_hold_class")) {
 		ast_copy_string(u_profile->moh_class, value, sizeof(u_profile->moh_class));
+	} else if (!strcasecmp(name, "announcement")) {
+		ast_copy_string(u_profile->announcement, value, sizeof(u_profile->announcement));
 	} else if (!strcasecmp(name, "denoise")) {
 		ast_set2_flag(u_profile, ast_true(value), USER_OPT_DENOISE);
 	} else if (!strcasecmp(name, "dsp_talking_threshold")) {
@@ -239,6 +245,8 @@ static int set_sound(const char *sound_name, const char *sound_file, struct brid
 		ast_string_field_set(sounds, placeintoconf, sound_file);
 	} else if (!strcasecmp(sound_name, "sound_wait_for_leader")) {
 		ast_string_field_set(sounds, waitforleader, sound_file);
+	} else if (!strcasecmp(sound_name, "sound_leader_has_left")) {
+		ast_string_field_set(sounds, leaderhasleft, sound_file);
 	} else if (!strcasecmp(sound_name, "sound_get_pin")) {
 		ast_string_field_set(sounds, getpin, sound_file);
 	} else if (!strcasecmp(sound_name, "sound_invalid_pin")) {
@@ -332,6 +340,7 @@ static int set_bridge_option(const char *name, const char *value, struct bridge_
 		ast_string_field_set(sounds, otherinparty, tmp->sounds->otherinparty);
 		ast_string_field_set(sounds, placeintoconf, tmp->sounds->placeintoconf);
 		ast_string_field_set(sounds, waitforleader, tmp->sounds->waitforleader);
+		ast_string_field_set(sounds, leaderhasleft, tmp->sounds->leaderhasleft);
 		ast_string_field_set(sounds, getpin, tmp->sounds->getpin);
 		ast_string_field_set(sounds, invalidpin, tmp->sounds->invalidpin);
 		ast_string_field_set(sounds, locked, tmp->sounds->locked);
@@ -515,6 +524,7 @@ static int parse_user(const char *cat, struct ast_config *cfg)
 	u_profile->talking_threshold = DEFAULT_TALKING_THRESHOLD;
 	memset(u_profile->pin, 0, sizeof(u_profile->pin));
 	memset(u_profile->moh_class, 0, sizeof(u_profile->moh_class));
+	memset(u_profile->announcement, 0, sizeof(u_profile->announcement));
 	for (var = ast_variable_browse(cfg, cat); var; var = var->next) {
 		if (!strcasecmp(var->name, "type")) {
 			continue;
@@ -711,9 +721,9 @@ static int add_menu_entry(struct conf_menu *menu, const char *dtmf, const char *
 
 	/* if adding any of the actions failed, bail */
 	if (res) {
-		struct conf_menu_action *action;
-		while ((action = AST_LIST_REMOVE_HEAD(&menu_entry->actions, action))) {
-			ast_free(action);
+		struct conf_menu_action *menu_action;
+		while ((menu_action = AST_LIST_REMOVE_HEAD(&menu_entry->actions, action))) {
+			ast_free(menu_action);
 		}
 		ast_free(menu_entry);
 		return -1;
@@ -859,6 +869,8 @@ static char *handle_cli_confbridge_show_user_profile(struct ast_cli_entry *e, in
 	ast_cli(a->fd,"MOH Class:               %s\n",
 		ast_strlen_zero(u_profile.moh_class) ?
 		"default" : u_profile.moh_class);
+	ast_cli(a->fd,"Announcement:            %s\n",
+		u_profile.announcement);
 	ast_cli(a->fd,"Quiet:                   %s\n",
 		u_profile.flags & USER_OPT_QUIET ?
 		"enabled" : "disabled");
@@ -1033,6 +1045,7 @@ static char *handle_cli_confbridge_show_bridge_profile(struct ast_cli_entry *e, 
 	ast_cli(a->fd,"sound_other_in_party: %s\n", conf_get_sound(CONF_SOUND_OTHER_IN_PARTY, b_profile.sounds));
 	ast_cli(a->fd,"sound_place_into_conference: %s\n", conf_get_sound(CONF_SOUND_PLACE_IN_CONF, b_profile.sounds));
 	ast_cli(a->fd,"sound_wait_for_leader:       %s\n", conf_get_sound(CONF_SOUND_WAIT_FOR_LEADER, b_profile.sounds));
+	ast_cli(a->fd,"sound_leader_has_left:       %s\n", conf_get_sound(CONF_SOUND_LEADER_HAS_LEFT, b_profile.sounds));
 	ast_cli(a->fd,"sound_get_pin:        %s\n", conf_get_sound(CONF_SOUND_GET_PIN, b_profile.sounds));
 	ast_cli(a->fd,"sound_invalid_pin:    %s\n", conf_get_sound(CONF_SOUND_INVALID_PIN, b_profile.sounds));
 	ast_cli(a->fd,"sound_locked:         %s\n", conf_get_sound(CONF_SOUND_LOCKED, b_profile.sounds));
@@ -1306,6 +1319,7 @@ int conf_load_config(int reload)
 	}
 
 	remove_all_delme();
+	ast_config_destroy(cfg);
 
 	return 0;
 }
@@ -1332,8 +1346,9 @@ const struct user_profile *conf_find_user_profile(struct ast_channel *chan, cons
 				conf_user_profile_copy(result, &b_data->u_profile);
 				return result;
 			}
+		} else {
+			ast_channel_unlock(chan);
 		}
-		ast_channel_unlock(chan);
 	}
 
 	if (ast_strlen_zero(user_profile_name)) {

@@ -142,6 +142,7 @@ struct sig_ss7_callback {
 	void (* const set_alarm)(void *pvt, int in_alarm);
 	void (* const set_dialing)(void *pvt, int is_dialing);
 	void (* const set_digital)(void *pvt, int is_digital);
+	void (* const set_outgoing)(void *pvt, int is_outgoing);
 	void (* const set_inservice)(void *pvt, int is_inservice);
 	void (* const set_locallyblocked)(void *pvt, int is_blocked);
 	void (* const set_remotelyblocked)(void *pvt, int is_blocked);
@@ -149,6 +150,7 @@ struct sig_ss7_callback {
 	void (* const set_dnid)(void *pvt, const char *dnid);
 
 	void (* const queue_control)(void *pvt, int subclass);
+	void (* const open_media)(void *pvt);
 };
 
 struct sig_ss7_chan {
@@ -282,7 +284,7 @@ void sig_ss7_link_noalarm(struct sig_ss7_linkset *linkset, int which);
 int sig_ss7_add_sigchan(struct sig_ss7_linkset *linkset, int which, int ss7type, int transport, int inalarm, int networkindicator, int pointcode, int adjpointcode);
 
 int sig_ss7_available(struct sig_ss7_chan *p);
-int sig_ss7_call(struct sig_ss7_chan *p, struct ast_channel *ast, char *rdest);
+int sig_ss7_call(struct sig_ss7_chan *p, struct ast_channel *ast, const char *rdest);
 int sig_ss7_hangup(struct sig_ss7_chan *p, struct ast_channel *ast);
 int sig_ss7_answer(struct sig_ss7_chan *p, struct ast_channel *ast);
 void sig_ss7_fixup(struct ast_channel *oldchan, struct ast_channel *newchan, struct sig_ss7_chan *pchan);

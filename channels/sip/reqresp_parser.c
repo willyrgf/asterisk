@@ -19,6 +19,10 @@
  * \brief sip request parsing functions and unit tests
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
@@ -217,7 +221,7 @@ int parse_uri_full(char *uri, const char *scheme, char **user, char **pass,
 }
 
 
-AST_TEST_DEFINE(sip_parse_uri_fully_test)
+AST_TEST_DEFINE(sip_parse_uri_full_test)
 {
 	int res = AST_TEST_PASS;
 	char uri[1024];
@@ -227,12 +231,6 @@ AST_TEST_DEFINE(sip_parse_uri_fully_test)
 	struct testdata {
 		char *desc;
 		char *uri;
-		char **userptr;
-		char **passptr;
-		char **hostportptr;
-		char **headersptr;
-		char **residueptr;
-		struct uriparams *paramsptr;
 		char *user;
 		char *pass;
 		char *hostport;
@@ -250,12 +248,6 @@ AST_TEST_DEFINE(sip_parse_uri_fully_test)
 	struct testdata td1 = {
 		.desc = "no headers",
 		.uri = "sip:user:secret@host:5060;param=discard;transport=tcp;param2=residue",
-		.userptr = &user,
-		.passptr = &pass,
-		.hostportptr = &hostport,
-		.headersptr = &headers,
-		.residueptr = &residue,
-		.paramsptr = &params,
 		.user = "user",
 		.pass = "secret",
 		.hostport = "host:5060",
@@ -269,12 +261,6 @@ AST_TEST_DEFINE(sip_parse_uri_fully_test)
 	struct testdata td2 = {
 		.desc = "with headers",
 		.uri = "sip:user:secret@host:5060;param=discard;transport=tcp;param2=discard2?header=blah&header2=blah2;param3=residue",
-		.userptr = &user,
-		.passptr = &pass,
-		.hostportptr = &hostport,
-		.headersptr = &headers,
-		.residueptr = &residue,
-		.paramsptr = &params,
 		.user = "user",
 		.pass = "secret",
 		.hostport = "host:5060",
@@ -288,12 +274,6 @@ AST_TEST_DEFINE(sip_parse_uri_fully_test)
 	struct testdata td3 = {
 		.desc = "difficult user",
 		.uri = "sip:-_.!~*'()&=+$,;?/:secret@host:5060;transport=tcp",
-		.userptr = &user,
-		.passptr = &pass,
-		.hostportptr = &hostport,
-		.headersptr = &headers,
-		.residueptr = &residue,
-		.paramsptr = &params,
 		.user = "-_.!~*'()&=+$,;?/",
 		.pass = "secret",
 		.hostport = "host:5060",
@@ -307,12 +287,6 @@ AST_TEST_DEFINE(sip_parse_uri_fully_test)
 	struct testdata td4 = {
 		.desc = "difficult pass",
 		.uri = "sip:user:-_.!~*'()&=+$,@host:5060;transport=tcp",
-		.userptr = &user,
-		.passptr = &pass,
-		.hostportptr = &hostport,
-		.headersptr = &headers,
-		.residueptr = &residue,
-		.paramsptr = &params,
 		.user = "user",
 		.pass = "-_.!~*'()&=+$,",
 		.hostport = "host:5060",
@@ -326,12 +300,6 @@ AST_TEST_DEFINE(sip_parse_uri_fully_test)
 	struct testdata td5 = {
 		.desc = "difficult host",
 		.uri = "sip:user:secret@1-1.a-1.:5060;transport=tcp",
-		.userptr = &user,
-		.passptr = &pass,
-		.hostportptr = &hostport,
-		.headersptr = &headers,
-		.residueptr = &residue,
-		.paramsptr = &params,
 		.user = "user",
 		.pass = "secret",
 		.hostport = "1-1.a-1.:5060",
@@ -345,12 +313,6 @@ AST_TEST_DEFINE(sip_parse_uri_fully_test)
 	struct testdata td6 = {
 		.desc = "difficult params near transport",
 		.uri = "sip:user:secret@host:5060;-_.!~*'()[]/:&+$=-_.!~*'()[]/:&+$;transport=tcp",
-		.userptr = &user,
-		.passptr = &pass,
-		.hostportptr = &hostport,
-		.headersptr = &headers,
-		.residueptr = &residue,
-		.paramsptr = &params,
 		.user = "user",
 		.pass = "secret",
 		.hostport = "host:5060",
@@ -364,12 +326,6 @@ AST_TEST_DEFINE(sip_parse_uri_fully_test)
 	struct testdata td7 = {
 		.desc = "difficult params near headers",
 		.uri = "sip:user:secret@host:5060;-_.!~*'()[]/:&+$=-_.!~*'()[]/:&+$?header=blah&header2=blah2;-_.!~*'()[]/:&+$=residue",
-		.userptr = &user,
-		.passptr = &pass,
-		.hostportptr = &hostport,
-		.headersptr = &headers,
-		.residueptr = &residue,
-		.paramsptr = &params,
 		.user = "user",
 		.pass = "secret",
 		.hostport = "host:5060",
@@ -383,12 +339,6 @@ AST_TEST_DEFINE(sip_parse_uri_fully_test)
 	struct testdata td8 = {
 		.desc = "lr parameter",
 		.uri = "sip:user:secret@host:5060;param=discard;lr?header=blah",
-		.userptr = &user,
-		.passptr = &pass,
-		.hostportptr = &hostport,
-		.headersptr = &headers,
-		.residueptr = &residue,
-		.paramsptr = &params,
 		.user = "user",
 		.pass = "secret",
 		.hostport = "host:5060",
@@ -402,12 +352,6 @@ AST_TEST_DEFINE(sip_parse_uri_fully_test)
 	struct testdata td9 = {
 		.desc = "alternative lr parameter",
 		.uri = "sip:user:secret@host:5060;param=discard;lr=yes?header=blah",
-		.userptr = &user,
-		.passptr = &pass,
-		.hostportptr = &hostport,
-		.headersptr = &headers,
-		.residueptr = &residue,
-		.paramsptr = &params,
 		.user = "user",
 		.pass = "secret",
 		.hostport = "host:5060",
@@ -421,12 +365,6 @@ AST_TEST_DEFINE(sip_parse_uri_fully_test)
 	struct testdata td10 = {
 		.desc = "no lr parameter",
 		.uri = "sip:user:secret@host:5060;paramlr=lr;lr=no;lr=off;lr=0;lr=;=lr;lrextra;lrparam2=lr?header=blah",
-		.userptr = &user,
-		.passptr = &pass,
-		.hostportptr = &hostport,
-		.headersptr = &headers,
-		.residueptr = &residue,
-		.paramsptr = &params,
 		.user = "user",
 		.pass = "secret",
 		.hostport = "host:5060",
@@ -469,19 +407,19 @@ AST_TEST_DEFINE(sip_parse_uri_fully_test)
 		params.lr = 0;
 
 		ast_copy_string(uri,testdataptr->uri,sizeof(uri));
-		if (parse_uri_full(uri, "sip:,sips:", testdataptr->userptr,
-				   testdataptr->passptr, testdataptr->hostportptr,
-				   testdataptr->paramsptr,
-				   testdataptr->headersptr,
-				   testdataptr->residueptr) ||
-			((testdataptr->userptr) && strcmp(testdataptr->user, user)) ||
-			((testdataptr->passptr) && strcmp(testdataptr->pass, pass)) ||
-			((testdataptr->hostportptr) && strcmp(testdataptr->hostport, hostport)) ||
-			((testdataptr->headersptr) && strcmp(testdataptr->headers, headers)) ||
-			((testdataptr->residueptr) && strcmp(testdataptr->residue, residue)) ||
-			((testdataptr->paramsptr) && strcmp(testdataptr->params.transport,params.transport)) ||
-			((testdataptr->paramsptr) && (testdataptr->params.lr != params.lr)) ||
-			((testdataptr->paramsptr) && strcmp(testdataptr->params.user,params.user))
+		if (parse_uri_full(uri, "sip:,sips:", &user,
+				   &pass, &hostport,
+				   &params,
+				   &headers,
+				   &residue) ||
+			(user && strcmp(testdataptr->user, user)) ||
+			(pass && strcmp(testdataptr->pass, pass)) ||
+			(hostport && strcmp(testdataptr->hostport, hostport)) ||
+			(headers && strcmp(testdataptr->headers, headers)) ||
+			(residue && strcmp(testdataptr->residue, residue)) ||
+			(strcmp(testdataptr->params.transport,params.transport)) ||
+			(testdataptr->params.lr != params.lr) ||
+			(strcmp(testdataptr->params.user,params.user))
 		) {
 				ast_test_status_update(test, "Sub-Test: %s, failed.\n", testdataptr->desc);
 				res = AST_TEST_FAIL;
@@ -685,63 +623,77 @@ const char *get_calleridname(const char *input, char *output, size_t outputsize)
 	char *orig_output = output;
 	const char *orig_input = input;
 
+	if (!output || !outputsize) {
+		/* Bad output parameters.  Should never happen. */
+		return input;
+	}
+
 	/* clear any empty characters in the beginning */
 	input = ast_skip_blanks(input);
-
-	/* no data at all or no storage room? */
-	if (!input || *input == '<' || !outputsize || !output) {
-		return orig_input;
-	}
 
 	/* make sure the output buffer is initilized */
 	*orig_output = '\0';
 
 	/* make room for '\0' at the end of the output buffer */
-	outputsize--;
+	--outputsize;
+
+	/* no data at all or no display name? */
+	if (!input || *input == '<') {
+		return input;
+	}
 
 	/* quoted-string rules */
 	if (input[0] == '"') {
 		input++; /* skip the first " */
 
-		for (;((outputsize > 0) && *input); input++) {
+		for (; *input; ++input) {
 			if (*input == '"') {  /* end of quoted-string */
 				break;
 			} else if (*input == 0x5c) { /* quoted-pair = "\" (%x00-09 / %x0B-0C / %x0E-7F) */
-				input++;
-				if (!*input || (unsigned char)*input > 0x7f || *input == 0xa || *input == 0xd) {
+				++input;
+				if (!*input) {
+					break;
+				}
+				if ((unsigned char) *input > 0x7f || *input == 0xa || *input == 0xd) {
 					continue;  /* not a valid quoted-pair, so skip it */
 				}
-			} else if (((*input != 0x9) && ((unsigned char) *input < 0x20)) ||
-			            (*input == 0x7f)) {
+			} else if ((*input != 0x9 && (unsigned char) *input < 0x20)
+				|| *input == 0x7f) {
 				continue; /* skip this invalid character. */
 			}
 
-			*output++ = *input;
-			outputsize--;
+			if (0 < outputsize) {
+				/* We still have room for the output display-name. */
+				*output++ = *input;
+				--outputsize;
+			}
 		}
 
 		/* if this is successful, input should be at the ending quote */
-		if (!input || *input != '"') {
+		if (*input != '"') {
 			ast_log(LOG_WARNING, "No ending quote for display-name was found\n");
 			*orig_output = '\0';
 			return orig_input;
 		}
 
 		/* make sure input is past the last quote */
-		input++;
+		++input;
 
-		/* terminate outbuf */
+		/* terminate output */
 		*output = '\0';
 	} else {  /* either an addr-spec or tokenLWS-combo */
-		for (;((outputsize > 0) && *input); input++) {
+		for (; *input; ++input) {
 			/* token or WSP (without LWS) */
 			if ((*input >= '0' && *input <= '9') || (*input >= 'A' && *input <= 'Z')
 				|| (*input >= 'a' && *input <= 'z') || *input == '-' || *input == '.'
 				|| *input == '!' || *input == '%' || *input == '*' || *input == '_'
 				|| *input == '+' || *input == '`' || *input == '\'' || *input == '~'
 				|| *input == 0x9 || *input == ' ') {
-				*output++ = *input;
-				outputsize -= 1;
+				if (0 < outputsize) {
+					/* We still have room for the output display-name. */
+					*output++ = *input;
+					--outputsize;
+				}
 			} else if (*input == '<') {   /* end of tokenLWS-combo */
 				/* we could assert that the previous char is LWS, but we don't care */
 				break;
@@ -759,10 +711,10 @@ const char *get_calleridname(const char *input, char *output, size_t outputsize)
 			return orig_input;
 		}
 
-		/* set NULL while trimming trailing whitespace */
+		/* terminate output while trimming any trailing whitespace */
 		do {
 			*output-- = '\0';
-		} while (*output == 0x9 || *output == ' '); /* we won't go past orig_output as first was a non-space */
+		} while (orig_output <= output && (*output == 0x9 || *output == ' '));
 	}
 
 	return input;
@@ -771,11 +723,12 @@ const char *get_calleridname(const char *input, char *output, size_t outputsize)
 AST_TEST_DEFINE(get_calleridname_test)
 {
 	int res = AST_TEST_PASS;
-	const char *in1 = "\" quoted-text internal \\\" quote \"<stuff>";
+	const char *in1 = " \" quoted-text internal \\\" quote \"<stuff>";
 	const char *in2 = " token text with no quotes <stuff>";
 	const char *overflow1 = " \"quoted-text overflow 1234567890123456789012345678901234567890\" <stuff>";
+	const char *overflow2 = " non-quoted text overflow 1234567890123456789012345678901234567890 <stuff>";
 	const char *noendquote = " \"quoted-text no end <stuff>";
-	const char *addrspec = " \"sip:blah@blah <stuff>";
+	const char *addrspec = " sip:blah@blah";
 	const char *no_quotes_no_brackets = "blah@blah";
 	const char *after_dname;
 	char dname[40];
@@ -810,8 +763,16 @@ AST_TEST_DEFINE(get_calleridname_test)
 	/* quoted-text buffer overflow */
 	after_dname = get_calleridname(overflow1, dname, sizeof(dname));
 	ast_test_status_update(test, "overflow display-name1: %s\nafter: %s\n", dname, after_dname);
-	if (*dname != '\0' && after_dname != overflow1) {
+	if (strcmp(dname, "quoted-text overflow 123456789012345678")) {
 		ast_test_status_update(test, "overflow display-name1 test failed\n");
+		res = AST_TEST_FAIL;
+	}
+
+	/* non-quoted-text buffer overflow */
+	after_dname = get_calleridname(overflow2, dname, sizeof(dname));
+	ast_test_status_update(test, "overflow display-name2: %s\nafter: %s\n", dname, after_dname);
+	if (strcmp(dname, "non-quoted text overflow 12345678901234")) {
+		ast_test_status_update(test, "overflow display-name2 test failed\n");
 		res = AST_TEST_FAIL;
 	}
 
@@ -825,7 +786,7 @@ AST_TEST_DEFINE(get_calleridname_test)
 
 	/* addr-spec rather than display-name. */
 	after_dname = get_calleridname(addrspec, dname, sizeof(dname));
-	ast_test_status_update(test, "noendquote display-name1: %s\nafter: %s\n", dname, after_dname);
+	ast_test_status_update(test, "addr-spec display-name1: %s\nafter: %s\n", dname, after_dname);
 	if (*dname != '\0' && after_dname != addrspec) {
 		ast_test_status_update(test, "detection of addr-spec failed\n");
 		res = AST_TEST_FAIL;
@@ -839,14 +800,13 @@ AST_TEST_DEFINE(get_calleridname_test)
 		res = AST_TEST_FAIL;
 	}
 
-
 	return res;
 }
 
 int get_name_and_number(const char *hdr, char **name, char **number)
 {
 	char header[256];
-	char tmp_name[50] = { 0, };
+	char tmp_name[50];
 	char *tmp_number = NULL;
 	char *hostport = NULL;
 	char *dummy = NULL;
@@ -1069,14 +1029,14 @@ char *get_in_brackets(char *tmp)
 AST_TEST_DEFINE(get_in_brackets_test)
 {
 	int res = AST_TEST_PASS;
-	char *in_brackets = "<sip:name:secret@host:port;transport=tcp?headers=testblah&headers2=blahblah>";
+	char in_brackets[] = "sip:name:secret@host:port;transport=tcp?headers=testblah&headers2=blahblah";
 	char no_name[] = "<sip:name:secret@host:port;transport=tcp?headers=testblah&headers2=blahblah>";
 	char quoted_string[] = "\"I'm a quote stri><ng\" <sip:name:secret@host:port;transport=tcp?headers=testblah&headers2=blahblah>";
 	char missing_end_quote[] = "\"I'm a quote string <sip:name:secret@host:port;transport=tcp?headers=testblah&headers2=blahblah>";
 	char name_no_quotes[] = "name not in quotes <sip:name:secret@host:port;transport=tcp?headers=testblah&headers2=blahblah>";
 	char no_end_bracket[] = "name not in quotes <sip:name:secret@host:port;transport=tcp?headers=testblah&headers2=blahblah";
 	char no_name_no_brackets[] = "sip:name@host";
-	char missing_start_bracket[] = "name not in quotes sip:name:secret@host:port;transport=tcp?headers=testblah&headers2=blahblah>";
+	char missing_start_bracket[] = "sip:name:secret@host:port;transport=tcp?headers=testblah&headers2=blahblah>";
 	char *uri = NULL;
 
 	switch (cmd) {
@@ -1093,57 +1053,49 @@ AST_TEST_DEFINE(get_in_brackets_test)
 	}
 
 	/* Test 1, simple get in brackets */
-	if (!(uri = get_in_brackets(no_name)) || !(strcmp(uri, in_brackets))) {
-
-		ast_test_status_update(test, "Test 1, simple get in brackets failed.\n");
+	if (!(uri = get_in_brackets(no_name)) || strcmp(uri, in_brackets)) {
+		ast_test_status_update(test, "Test 1, simple get in brackets failed. %s\n", uri);
 		res = AST_TEST_FAIL;
 	}
 
 	/* Test 2, starts with quoted string */
-	if (!(uri = get_in_brackets(quoted_string)) || !(strcmp(uri, in_brackets))) {
-
-		ast_test_status_update(test, "Test 2, get in brackets with quoted string in front failed.\n");
+	if (!(uri = get_in_brackets(quoted_string)) || strcmp(uri, in_brackets)) {
+		ast_test_status_update(test, "Test 2, get in brackets with quoted string in front failed. %s\n", uri);
 		res = AST_TEST_FAIL;
 	}
 
 	/* Test 3, missing end quote */
-	if (!(uri = get_in_brackets(missing_end_quote)) || !(strcmp(uri, in_brackets))) {
-
-		ast_test_status_update(test, "Test 3, missing end quote failed.\n");
+	if (!(uri = get_in_brackets(missing_end_quote)) || !strcmp(uri, in_brackets)) {
+		ast_test_status_update(test, "Test 3, missing end quote failed. %s\n", uri);
 		res = AST_TEST_FAIL;
 	}
 
 	/* Test 4, starts with a name not in quotes */
-	if (!(uri = get_in_brackets(name_no_quotes)) || !(strcmp(uri, in_brackets))) {
-
-		ast_test_status_update(test, "Test 4, passing name not in quotes failed.\n");
+	if (!(uri = get_in_brackets(name_no_quotes)) || strcmp(uri, in_brackets)) {
+		ast_test_status_update(test, "Test 4, passing name not in quotes failed. %s\n", uri);
 		res = AST_TEST_FAIL;
 	}
 
 	/* Test 5, no end bracket, should just return everything after the first '<'  */
-	if (!(uri = get_in_brackets(no_end_bracket)) || !(strcmp(uri, in_brackets))) {
-
-		ast_test_status_update(test, "Test 5, no end bracket failed.\n");
+	if (!(uri = get_in_brackets(no_end_bracket)) || !strcmp(uri, in_brackets)) {
+		ast_test_status_update(test, "Test 5, no end bracket failed. %s\n", uri);
 		res = AST_TEST_FAIL;
 	}
 
 	/* Test 6, NULL input  */
-	if ((uri = get_in_brackets(NULL))) {
-
+	if (get_in_brackets(NULL)) {
 		ast_test_status_update(test, "Test 6, NULL input failed.\n");
 		res = AST_TEST_FAIL;
 	}
 
 	/* Test 7, no name, and no brackets. */
-	if (!(uri = get_in_brackets(no_name_no_brackets)) || (strcmp(uri, "sip:name@host"))) {
-
+	if (!(uri = get_in_brackets(no_name_no_brackets)) || strcmp(uri, "sip:name@host")) {
 		ast_test_status_update(test, "Test 7 failed. %s\n", uri);
 		res = AST_TEST_FAIL;
 	}
 
 	/* Test 8, no start bracket, but with ending bracket. */
-	if (!(uri = get_in_brackets(missing_start_bracket)) || !(strcmp(uri, in_brackets))) {
-
+	if (!(uri = get_in_brackets(missing_start_bracket)) || strcmp(uri, in_brackets)) {
 		ast_test_status_update(test, "Test 8 failed. %s\n", uri);
 		res = AST_TEST_FAIL;
 	}
@@ -1158,20 +1110,42 @@ int parse_name_andor_addr(char *uri, const char *scheme, char **name,
 			  char **residue)
 {
 	char buf[1024];
-	char **residue2=residue;
+	char **residue2 = residue;
+	char *orig_uri = uri;
 	int ret;
+
+	buf[0] = '\0';
 	if (name) {
-		get_calleridname(uri,buf,sizeof(buf));
-		*name = buf;
+		uri = (char *) get_calleridname(uri, buf, sizeof(buf));
 	}
-	ret = get_in_brackets_full(uri,&uri,residue);
-	if (ret == 0) { /* uri is in brackets so do not treat unknown trailing uri parameters as potential messageheader parameters */
-		*residue = *residue + 1; /* step over the first semicolon so as per parse uri residue */
+	ret = get_in_brackets_full(uri, &uri, residue);
+	if (ret == 0) {
+		/*
+		 * The uri is in brackets so do not treat unknown trailing uri
+		 * parameters as potential message header parameters.
+		 */
+		if (residue && **residue) {
+			/* step over the first semicolon as per parse_uri_full residue */
+			*residue = *residue + 1;
+		}
 		residue2 = NULL;
 	}
 
-	return parse_uri_full(uri, scheme, user, pass, hostport, params, headers,
-			      residue2);
+	if (name) {
+		if (buf[0]) {
+			/*
+			 * There is always room at orig_uri for the display-name because
+			 * at least one character has always been removed.  A '"' or '<'
+			 * has been removed.
+			 */
+			strcpy(orig_uri, buf);
+			*name = orig_uri;
+		} else {
+			*name = "";
+		}
+	}
+
+	return parse_uri_full(uri, scheme, user, pass, hostport, params, headers, residue2);
 }
 
 AST_TEST_DEFINE(parse_name_andor_addr_test)
@@ -1184,13 +1158,6 @@ AST_TEST_DEFINE(parse_name_andor_addr_test)
 	struct testdata {
 		char *desc;
 		char *uri;
-		char **nameptr;
-		char **userptr;
-		char **passptr;
-		char **hostportptr;
-		char **headersptr;
-		char **residueptr;
-		struct uriparams *paramsptr;
 		char *name;
 		char *user;
 		char *pass;
@@ -1208,13 +1175,6 @@ AST_TEST_DEFINE(parse_name_andor_addr_test)
 	struct testdata td1 = {
 		.desc = "quotes and brackets",
 		.uri = "\"name :@ \" <sip:user:secret@host:5060;param=discard;transport=tcp>;tag=tag",
-		.nameptr = &name,
-		.userptr = &user,
-		.passptr = &pass,
-		.hostportptr = &hostport,
-		.headersptr = &headers,
-		.residueptr = &residue,
-		.paramsptr = &params,
 		.name =  "name :@ ",
 		.user = "user",
 		.pass = "secret",
@@ -1229,13 +1189,6 @@ AST_TEST_DEFINE(parse_name_andor_addr_test)
 	struct testdata td2 = {
 		.desc = "no quotes",
 		.uri = "givenname familyname <sip:user:secret@host:5060;param=discard;transport=tcp>;expires=3600",
-		.nameptr = &name,
-		.userptr = &user,
-		.passptr = &pass,
-		.hostportptr = &hostport,
-		.headersptr = &headers,
-		.residueptr = &residue,
-		.paramsptr = &params,
 		.name = "givenname familyname",
 		.user = "user",
 		.pass = "secret",
@@ -1250,13 +1203,6 @@ AST_TEST_DEFINE(parse_name_andor_addr_test)
 	struct testdata td3 = {
 		.desc = "no brackets",
 		.uri = "sip:user:secret@host:5060;param=discard;transport=tcp;q=1",
-		.nameptr = &name,
-		.userptr = &user,
-		.passptr = &pass,
-		.hostportptr = &hostport,
-		.headersptr = &headers,
-		.residueptr = &residue,
-		.paramsptr = &params,
 		.name = "",
 		.user = "user",
 		.pass = "secret",
@@ -1271,13 +1217,6 @@ AST_TEST_DEFINE(parse_name_andor_addr_test)
 	struct testdata td4 = {
 		.desc = "just host",
 		.uri = "sips:host",
-		.nameptr = &name,
-		.userptr = &user,
-		.passptr = &pass,
-		.hostportptr = &hostport,
-		.headersptr = &headers,
-		.residueptr = &residue,
-		.paramsptr = &params,
 		.name = "",
 		.user = "",
 		.pass = "",
@@ -1313,34 +1252,34 @@ AST_TEST_DEFINE(parse_name_andor_addr_test)
 		name = user = pass = hostport = headers = residue = NULL;
 		params.transport = params.user = params.method = params.ttl = params.maddr = NULL;
 		params.lr = 0;
-	ast_copy_string(uri,testdataptr->uri,sizeof(uri));
+		ast_copy_string(uri,testdataptr->uri,sizeof(uri));
 		if (parse_name_andor_addr(uri, "sip:,sips:",
-					  testdataptr->nameptr,
-					  testdataptr->userptr,
-					  testdataptr->passptr,
-					  testdataptr->hostportptr,
-					  testdataptr->paramsptr,
-					  testdataptr->headersptr,
-					  testdataptr->residueptr) ||
-			((testdataptr->nameptr) && strcmp(testdataptr->name, name)) ||
-			((testdataptr->userptr) && strcmp(testdataptr->user, user)) ||
-			((testdataptr->passptr) && strcmp(testdataptr->pass, pass)) ||
-			((testdataptr->hostportptr) && strcmp(testdataptr->hostport, hostport)) ||
-			((testdataptr->headersptr) && strcmp(testdataptr->headers, headers)) ||
-			((testdataptr->residueptr) && strcmp(testdataptr->residue, residue)) ||
-			((testdataptr->paramsptr) && strcmp(testdataptr->params.transport,params.transport)) ||
-			((testdataptr->paramsptr) && strcmp(testdataptr->params.user,params.user))
-		) {
-				ast_test_status_update(test, "Sub-Test: %s,failed.\n", testdataptr->desc);
-				res = AST_TEST_FAIL;
+					  &name,
+					  &user,
+					  &pass,
+					  &hostport,
+					  &params,
+					  &headers,
+					  &residue) ||
+			(name && strcmp(testdataptr->name, name)) ||
+			(user && strcmp(testdataptr->user, user)) ||
+			(pass && strcmp(testdataptr->pass, pass)) ||
+			(hostport && strcmp(testdataptr->hostport, hostport)) ||
+			(headers && strcmp(testdataptr->headers, headers)) ||
+			(residue && strcmp(testdataptr->residue, residue)) ||
+			(strcmp(testdataptr->params.transport,params.transport)) ||
+			(strcmp(testdataptr->params.user,params.user))
+			) {
+			ast_test_status_update(test, "Sub-Test: %s,failed.\n", testdataptr->desc);
+			res = AST_TEST_FAIL;
 		}
 	}
-
 
 	return res;
 }
 
-int get_comma(char *in, char **out) {
+int get_comma(char *in, char **out)
+{
 	char *c;
 	char *parse = in;
 	if (out) {
@@ -1376,35 +1315,35 @@ int get_comma(char *in, char **out) {
 	return 1;
 }
 
-int parse_contact_header(char *contactheader, struct contactliststruct *contactlist) {
+int parse_contact_header(char *contactheader, struct contactliststruct *contactlist)
+{
 	int res;
 	int last;
 	char *comma;
 	char *residue;
 	char *param;
 	char *value;
-	struct contact *contact=NULL;
+	struct contact *split_contact = NULL;
 
 	if (*contactheader == '*') {
 		return 1;
 	}
 
-	contact = malloc(sizeof(*contact));
+	split_contact = ast_calloc(1, sizeof(*split_contact));
 
-	AST_LIST_HEAD_SET_NOLOCK(contactlist, contact);
-	while ((last = get_comma(contactheader,&comma)) != -1) {
-
+	AST_LIST_HEAD_SET_NOLOCK(contactlist, split_contact);
+	while ((last = get_comma(contactheader, &comma)) != -1) {
 		res = parse_name_andor_addr(contactheader, "sip:,sips:",
-					    &contact->name, &contact->user,
-					    &contact->pass, &contact->hostport,
-					    &contact->params, &contact->headers,
-					    &residue);
+			&split_contact->name, &split_contact->user,
+			&split_contact->pass, &split_contact->hostport,
+			&split_contact->params, &split_contact->headers,
+			&residue);
 		if (res == -1) {
 			return res;
 		}
 
 		/* parse contact params */
-		contact->expires = contact->q = "";
+		split_contact->expires = split_contact->q = "";
 
 		while ((value = strchr(residue,'='))) {
 			*value++ = '\0';
@@ -1417,20 +1356,19 @@ int parse_contact_header(char *contactheader, struct contactliststruct *contactl
 			}
 
 			if (!strcmp(param,"expires")) {
-				contact->expires = value;
+				split_contact->expires = value;
 			} else if (!strcmp(param,"q")) {
-				contact->q = value;
+				split_contact->q = value;
 			}
 		}
 
-		if(last) {
+		if (last) {
 			return 0;
 		}
 		contactheader = comma;
 
-		contact = malloc(sizeof(*contact));
-		AST_LIST_INSERT_TAIL(contactlist, contact, list);
-
+		split_contact = ast_calloc(1, sizeof(*split_contact));
+		AST_LIST_INSERT_TAIL(contactlist, split_contact, list);
 	}
 	return last;
 }
@@ -1563,16 +1501,15 @@ AST_TEST_DEFINE(parse_contact_header_test)
 					strcmp(tdcontactptr->params.transport, contactptr->params.transport) ||
 					strcmp(tdcontactptr->params.ttl, contactptr->params.ttl) ||
 					(tdcontactptr->params.lr != contactptr->params.lr)
-				) {
+					) {
 					ast_test_status_update(test, "Sub-Test: %s,failed.\n", testdataptr->desc);
 					res = AST_TEST_FAIL;
 					break;
 				}
 
-			contactptr = AST_LIST_NEXT(contactptr,list);
+				contactptr = AST_LIST_NEXT(contactptr,list);
 			}
 		}
-
 	}
 
 	return res;
@@ -2545,7 +2482,7 @@ void sip_request_parser_register_tests(void)
 	AST_TEST_REGISTER(sip_parse_uri_test);
 	AST_TEST_REGISTER(get_in_brackets_test);
 	AST_TEST_REGISTER(get_name_and_number_test);
-	AST_TEST_REGISTER(sip_parse_uri_fully_test);
+	AST_TEST_REGISTER(sip_parse_uri_full_test);
 	AST_TEST_REGISTER(parse_name_andor_addr_test);
 	AST_TEST_REGISTER(parse_contact_header_test);
 	AST_TEST_REGISTER(sip_parse_options_test);
@@ -2558,7 +2495,7 @@ void sip_request_parser_unregister_tests(void)
 	AST_TEST_UNREGISTER(get_calleridname_test);
 	AST_TEST_UNREGISTER(get_in_brackets_test);
 	AST_TEST_UNREGISTER(get_name_and_number_test);
-	AST_TEST_UNREGISTER(sip_parse_uri_fully_test);
+	AST_TEST_UNREGISTER(sip_parse_uri_full_test);
 	AST_TEST_UNREGISTER(parse_name_andor_addr_test);
 	AST_TEST_UNREGISTER(parse_contact_header_test);
 	AST_TEST_UNREGISTER(sip_parse_options_test);
