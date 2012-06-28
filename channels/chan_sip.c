@@ -4196,6 +4196,7 @@ static void add_prack_respheader(struct sip_pvt *p, struct sip_request *req, int
 			snprintf(buf, sizeof(buf), "%d", ++(p->rseq));
 			add_header(req, "Rseq", buf);
 			req->reqsipoptions |= SIP_OPT_100REL;
+			append_history(p, "PRACK", "PRACK Required: Our Rseq %d", p->rseq);
 			ast_debug(2, "=!=!=!=!=!=!=!= PRACK USED HERE. Rseq %d \n", p->rseq);
 		} else {
 			ast_debug(2, "=!=!=!=!=!=!=!= PRACK COULD BE USED HERE. Exactly HERE\n");
@@ -12264,6 +12265,10 @@ static int transmit_prack(struct sip_pvt *p, int their_rseq)
 {
 	if (their_rseq == p->irseq) {
 		ast_debug(3, "!?!?!?!?!? This is a retransmit of the previous response. %d \n", their_rseq);
+		/* RFC 3262: In particular, a UAC SHOULD NOT retransmit the PRACK request
+   		   when it receives a retransmission of the provisional response being
+   		   acknowledged, although doing so does not create a protocol error.*/
+		return -2;	/* Not used by transmit_invite et al */
 	}
 	p->irseq = their_rseq;
 	return transmit_invite(p, SIP_PRACK, 0, 1, NULL);
@@ -21215,7 +21220,15 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 			/* XXX If the response relies on PRACK, we need to start a PRACK transaction
 			 */
 			sscanf(get_header(req, "RSeq"), "%30u ", &their_rseq);
-			transmit_prack(p, their_rseq);
+			if (transmit_prack(p, their_rseq) == -2) {
+				/* This response is a retransmit and should be ignored */
+				/* RFC 3262: Once a reliable provisional response is received, retransmissions of
+   				   that response MUST be discarded.  A response is a retransmission when
+   				   its dialog ID, CSeq, and RSeq match the original response.  
+				*/
+				append_history(p, "Ignore", "Ignoring this retransmit (PRACK active)\n");
+				return;
+			}
 		}
 		if (activeextensions & SIP_OPT_TIMER) {
 			ast_debug(3, "!=!=!=!=!=! The other side activated Session timers! \n");
@@ -22462,6 +22475,7 @@ static int handle_request_prack(struct sip_pvt *p, struct sip_request *req)
 		int acked = __sip_ack(p, cseq, 1 /* response */, 0);
 		ast_debug(3, "!=!=!=!=!=! Tried acking the response - %s \n", acked ? "Sucess" : "Total utterly failure");
 	}
+	append_history(p, "PRACK", "PRACK received Rseq %d", rseq);
 	transmit_response(p, "200 OK", req);
 	return 0;
 }
