@@ -753,6 +753,7 @@ struct sip_request {
 	int headers;            /*!< # of SIP Headers */
 	int method;             /*!< Method of this request */
 	int lines;              /*!< Body Content */
+	unsigned int reqsipoptions;  /*!< Required SIP options for this answer */
 	unsigned int sdp_start; /*!< the line number where the SDP begins */
 	unsigned int sdp_count; /*!< the number of lines of SDP */
 	char debug;             /*!< print extra debugging if non zero */
@@ -989,8 +990,8 @@ struct sip_pvt {
 	uint32_t ocseq;                         /*!< Current outgoing seqno */
 	uint32_t icseq;                         /*!< Current incoming seqno */
 	uint32_t init_icseq;                    /*!< Initial incoming seqno from first request */
-	uint32_t rseq;                          /*!< Current outgoing PRACK rseq */
-	uint32_t irseq;                         /*!< Current incoming PRACK rseq */
+	uint32_t rseq;                          /*!< Current PRACK rseq on our side*/
+	uint32_t irseq;                         /*!< Current PRACK rseq on their side*/
 	ast_group_t callgroup;                  /*!< Call group */
 	ast_group_t pickupgroup;                /*!< Pickup group */
 	uint32_t lastinvite;                    /*!< Last seqno of invite */

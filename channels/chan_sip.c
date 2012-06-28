@@ -4163,9 +4163,29 @@ static int send_response(struct sip_pvt *p, struct sip_request *req, enum xmitty
 
 	if (p->initreq.method == SIP_INVITE && ast_test_flag(&p->flags[2], SIP_PAGE3_PRACK)) {
 		if (reliable == XMIT_PRACK) {
-			ast_debug(2, "=!=!=!=!=!=!=!= PRACK WILL BE USED HERE. Exactly HERE\n");
+			char buf[SIPBUFSIZE/2];
+			if (p->rseq == 0) {
+				p->rseq = 41; /* Starting level. Hi Douglas */
+			}
+			snprintf(buf, sizeof(buf), "%d", ++(p->rseq));
+			add_header(req, "Rseq", buf);
+			req->reqsipoptions &= SIP_OPT_100REL;
+			ast_debug(2, "=!=!=!=!=!=!=!= PRACK USED HERE. Rseq %d\n", p->rseq);
 		} else {
 			ast_debug(2, "=!=!=!=!=!=!=!= PRACK COULD BE USED HERE. Exactly HERE\n");
+		}
+	}
+
+	if (req->reqsipoptions) {
+		char buf[SIPBUFSIZE];
+		int i;
+
+		for (i = 0; i < ARRAY_LEN(sip_options); i++) {
+			if (req->reqsipoptions & sip_options[i].id) {
+				strncat(buf, ", ", sizeof(buf));
+				strncat(buf, sip_options[i].text, sizeof(buf));
+				ast_debug(3, "Found required response SIP option: %s\n", sip_options[i].text);
+			}
 		}
 	}
 
@@ -10297,6 +10317,7 @@ static int respprep(struct sip_request *resp, struct sip_pvt *p, const char *msg
 		snprintf(se_hdr, sizeof(se_hdr), "%d;refresher=%s", p->stimer->st_interval,
 			strefresher2str(p->stimer->st_ref));
 		add_header(resp, "Session-Expires", se_hdr);
+		resp->reqsipoptions &= SIP_OPT_TIMER;
 	}
 
 	if (msg[0] == '2' && (p->method == SIP_SUBSCRIBE || p->method == SIP_REGISTER)) {
