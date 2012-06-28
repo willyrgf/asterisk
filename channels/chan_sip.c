@@ -1266,6 +1266,7 @@ static int transmit_notify_with_sipfrag(struct sip_pvt *p, int cseq, char *messa
 static int transmit_cc_notify(struct ast_cc_agent *agent, struct sip_pvt *subscription, enum sip_cc_notify_state state);
 static int transmit_register(struct sip_registry *r, int sipmethod, const char *auth, const char *authheader);
 static int send_response(struct sip_pvt *p, struct sip_request *req, enum xmittype reliable, uint32_t seqno);
+static void add_required_respheader(struct sip_request *req);
 static int send_request(struct sip_pvt *p, struct sip_request *req, enum xmittype reliable, uint32_t seqno);
 static void copy_request(struct sip_request *dst, const struct sip_request *src);
 static void receive_message(struct sip_pvt *p, struct sip_request *req);
@@ -4156,11 +4157,30 @@ static void update_provisional_keepalive(struct sip_pvt *pvt, int with_sdp)
 		with_sdp ? send_provisional_keepalive_with_sdp : send_provisional_keepalive, dialog_ref(pvt, "Increment refcount to pass dialog pointer to sched callback"));
 }
 
-/*! \brief Transmit response on SIP request*/
-static int send_response(struct sip_pvt *p, struct sip_request *req, enum xmittype reliable, uint32_t seqno)
-{
-	int res;
+/*! \brief Adds a Required header 
 
+	Needs to be called before attachment (i.e. SDP) is added
+*/
+static void add_required_respheader(struct sip_request *req)
+{
+	if (req->reqsipoptions) {
+		char buf[SIPBUFSIZE];
+		int i;
+
+		for (i = 0; i < ARRAY_LEN(sip_options); i++) {
+			if (req->reqsipoptions & sip_options[i].id) {
+				strncat(buf, ", ", sizeof(buf));
+				strncat(buf, sip_options[i].text, sizeof(buf));
+				ast_debug(3, "Found required response SIP option: %s\n", sip_options[i].text);
+			}
+		}
+		add_header(req, "Required", buf);
+	}
+
+}
+
+static void add_prack_respheader(struct sip_pvt *p, struct sip_request *req, int reliable)
+{
 	if (p->initreq.method == SIP_INVITE && ast_test_flag(&p->flags[2], SIP_PAGE3_PRACK)) {
 		if (reliable == XMIT_PRACK) {
 			char buf[SIPBUFSIZE/2];
@@ -4175,19 +4195,13 @@ static int send_response(struct sip_pvt *p, struct sip_request *req, enum xmitty
 			ast_debug(2, "=!=!=!=!=!=!=!= PRACK COULD BE USED HERE. Exactly HERE\n");
 		}
 	}
+}
 
-	if (req->reqsipoptions) {
-		char buf[SIPBUFSIZE];
-		int i;
+/*! \brief Transmit response on SIP request*/
+static int send_response(struct sip_pvt *p, struct sip_request *req, enum xmittype reliable, uint32_t seqno)
+{
+	int res;
 
-		for (i = 0; i < ARRAY_LEN(sip_options); i++) {
-			if (req->reqsipoptions & sip_options[i].id) {
-				strncat(buf, ", ", sizeof(buf));
-				strncat(buf, sip_options[i].text, sizeof(buf));
-				ast_debug(3, "Found required response SIP option: %s\n", sip_options[i].text);
-			}
-		}
-	}
 
 	finalize_content(req);
 	add_blank(req);
@@ -10559,6 +10573,8 @@ static int __transmit_response(struct sip_pvt *p, const char *msg, const struct 
 			add_header(&resp, "X-Asterisk-HangupCauseCode", buf);
 		}
 	}
+	add_required_respheader(&resp);
+	add_prack_respheader(p, &resp, reliable);
 	return send_response(p, &resp, reliable, seqno);
 }
 
@@ -10571,6 +10587,7 @@ static int transmit_response_with_sip_etag(struct sip_pvt *p, const char *msg, c
 	}
 	respprep(&resp, p, msg, req);
 	add_header(&resp, "SIP-ETag", esc_entry->entity_tag);
+	add_required_respheader(&resp);
 
 	return send_response(p, &resp, 0, 0);
 }
@@ -10658,6 +10675,7 @@ static int transmit_response_with_unsupported(struct sip_pvt *p, const char *msg
 	respprep(&resp, p, msg, req);
 	append_date(&resp);
 	add_header(&resp, "Unsupported", unsupported);
+	add_required_respheader(&resp);
 	return send_response(p, &resp, XMIT_UNRELIABLE, 0);
 }
 
@@ -10711,6 +10729,7 @@ static int transmit_response_with_date(struct sip_pvt *p, const char *msg, const
 	struct sip_request resp;
 	respprep(&resp, p, msg, req);
 	append_date(&resp);
+	add_required_respheader(&resp);
 	return send_response(p, &resp, XMIT_UNRELIABLE, 0);
 }
 
@@ -10720,6 +10739,7 @@ static int transmit_response_with_allow(struct sip_pvt *p, const char *msg, cons
 	struct sip_request resp;
 	respprep(&resp, p, msg, req);
 	add_header(&resp, "Accept", "application/sdp");
+	add_required_respheader(&resp);
 	return send_response(p, &resp, reliable, 0);
 }
 
@@ -10732,6 +10752,7 @@ static int transmit_response_with_minexpires(struct sip_pvt *p, const char *msg,
 	snprintf(tmp, sizeof(tmp), "%d", min_expiry);
 	respprep(&resp, p, msg, req);
 	add_header(&resp, "Min-Expires", tmp);
+	add_required_respheader(&resp);
 	return send_response(p, &resp, XMIT_UNRELIABLE, 0);
 }
 
@@ -11813,6 +11834,8 @@ static int transmit_response_with_sdp(struct sip_pvt *p, const char *msg, const 
 	if (rpid == TRUE) {
 		add_rpid(&resp, p);
 	}
+	add_required_respheader(&resp);
+	add_prack_respheader(p, &resp, reliable);
 	if (ast_test_flag(&p->flags[0], SIP_OFFER_CC)) {
 		add_cc_call_info_to_response(p, &resp);
 	}
@@ -11832,6 +11855,11 @@ static int transmit_response_with_sdp(struct sip_pvt *p, const char *msg, const 
 		ast_log(LOG_ERROR, "Can't add SDP to response, since we have no RTP session allocated. Call-ID %s\n", p->callid);
 	if (reliable && !p->pendinginvite)
 		p->pendinginvite = seqno;		/* Buggy clients sends ACK on RINGING too */
+	if (ast_test_flag(&p->flags[2], SIP_PAGE3_PRACK) && strncmp(msg, "100", 3) && !strncmp(msg, "1", 1)) {
+		/* SKREP */
+		ast_debug(2, "=!=!=!=!=!= PRACK applied to message \"%s\" \n", msg);
+		reliable = XMIT_PRACK;
+	}
 	return send_response(p, &resp, reliable, seqno);
 }
 
