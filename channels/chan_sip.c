@@ -10579,8 +10579,10 @@ static int __transmit_response(struct sip_pvt *p, const char *msg, const struct 
 			add_header(&resp, "X-Asterisk-HangupCauseCode", buf);
 		}
 	}
-	add_prack_respheader(p, &resp, reliable);
-	add_required_respheader(&resp);
+	if (!strncmp(msg, "100", 3)) {
+		add_prack_respheader(p, &resp, reliable);
+		add_required_respheader(&resp);
+	}
 	return send_response(p, &resp, reliable, seqno);
 }
 
@@ -12258,8 +12260,12 @@ static int transmit_publish(struct sip_epa_entry *epa_entry, enum sip_publish_ty
 /*! 
  * \brief transmit SIP PRACK as a response to a provisional response with a Rseq and Require: 100rel header 
  */
-static int transmit_prack(struct sip_pvt *p)
+static int transmit_prack(struct sip_pvt *p, int their_rseq)
 {
+	if (their_rseq == p->irseq) {
+		ast_debug(3, "!?!?!?!?!? This is a retransmit of the previous response. %d \n", their_rseq);
+	}
+	p->irseq = their_rseq;
 	return transmit_invite(p, SIP_PRACK, 0, 1, NULL);
 }
 
@@ -21203,12 +21209,13 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 		int activeextensions = parse_required_sip_options(required);
 		if (activeextensions & SIP_OPT_100REL) {
 			const char *rseq = get_header(req, "RSeq");
+			int their_rseq;
 			ast_debug(3, "!=!=!=!=!=! Response relies on PRACK! Rseq %s\n", rseq);
 			/* DO Something here !!! */
 			/* XXX If the response relies on PRACK, we need to start a PRACK transaction
 			 */
-			sscanf(get_header(req, "RSeq"), "%30u ", &p->irseq);
-			transmit_prack(p);
+			sscanf(get_header(req, "RSeq"), "%30u ", &their_rseq);
+			transmit_prack(p, their_rseq);
 		}
 		if (activeextensions & SIP_OPT_TIMER) {
 			ast_debug(3, "!=!=!=!=!=! The other side activated Session timers! \n");
