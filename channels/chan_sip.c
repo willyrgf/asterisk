@@ -12201,7 +12201,15 @@ static int transmit_publish(struct sip_epa_entry *epa_entry, enum sip_publish_ty
 }
 
 /*! 
- * \brief Build REFER/INVITE/OPTIONS/SUBSCRIBE message and transmit it
+ * \brief transmit SIP PRACK as a response to a provisional response with a Rseq and Require: 100rel header 
+ */
+static int transmit_prack(struct sip_pvt *p)
+{
+	return transmit_invite(p, SIP_PRACK, 0, 1, NULL);
+}
+
+/*! 
+ * \brief Build PRACK/REFER/INVITE/OPTIONS/SUBSCRIBE message and transmit it
  * \param p sip_pvt structure
  * \param sipmethod
  * \param sdp unknown
@@ -12253,6 +12261,12 @@ static int transmit_invite(struct sip_pvt *p, int sipmethod, int sdp, int init, 
 		}
 		snprintf(buf, sizeof(buf), "%d", p->expiry);
 		add_header(&req, "Expires", buf);
+	} else if (sipmethod == SIP_PRACK) {
+		/* Place holder */
+		/* Add headers for PRACK */
+		char buf[SIPBUFSIZE/2];
+		snprintf(buf, sizeof(buf), "%d %d %s", p->irseq, p->lastinvite, "INVITE");
+		add_header(&req, "RAck", buf);
 	}
 
 	/* This new INVITE is part of an attended transfer. Make sure that the
@@ -12264,7 +12278,7 @@ static int transmit_invite(struct sip_pvt *p, int sipmethod, int sdp, int init, 
 	}
 
 	/* Add Session-Timers related headers */
-	if (st_get_mode(p, 0) == SESSION_TIMER_MODE_ORIGINATE) {
+	if (sipmethod == SIP_INVITE && st_get_mode(p, 0) == SESSION_TIMER_MODE_ORIGINATE) {
 		char i2astr[10];
 
 		if (!p->stimer->st_interval) {
@@ -21131,10 +21145,13 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 	if (!ast_strlen_zero(required)) {
 		int activeextensions = parse_required_sip_options(required);
 		if (activeextensions & SIP_OPT_100REL) {
-			ast_debug(3, "!=!=!=!=!=! Response relies on PRACK! \n");
+			const char *rseq = get_header(req, "RSeq");
+			ast_debug(3, "!=!=!=!=!=! Response relies on PRACK! Rseq %s\n", rseq);
 			/* DO Something here !!! */
 			/* XXX If the response relies on PRACK, we need to start a PRACK transaction
 			 */
+			sscanf(get_header(req, "RSeq"), "%30u ", &p->irseq);
+			transmit_prack(p);
 		}
 		if (activeextensions & SIP_OPT_TIMER) {
 			ast_debug(3, "!=!=!=!=!=! The other side activated Session timers! \n");
