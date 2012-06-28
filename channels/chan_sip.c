@@ -3785,7 +3785,7 @@ static enum sip_result __sip_reliable_xmit(struct sip_pvt *p, uint32_t seqno, in
 			pkt->response_code = respid;
 		}
 		if (ast_test_flag(&p->flags[2], SIP_PAGE3_PRACK) && respid > 100 && respid < 200) {
-			pkt->rseqno = p->rseqno;
+			pkt->rseqno = p->rseq;
 		}
 	}
 	pkt->timer_t1 = p->timer_t1;	/* Set SIP timer T1 */
@@ -3968,7 +3968,7 @@ int sip_cancel_destroy(struct sip_pvt *p)
 
 /*! \brief Acknowledges receipt of a packet and stops retransmission
  * called with p locked*/
-int __sip_ack(struct sip_pvt *p, uint32_t seqno, int resp, int sipmethod)
+int __sip_ack(struct sip_pvt *p, uint32_t seqno, int resp, int sipmethod, int rseqno)
 {
 	struct sip_pkt *cur, *prev = NULL;
 	const char *msg = "Not Found";	/* used only for debugging */
@@ -3987,6 +3987,10 @@ int __sip_ack(struct sip_pvt *p, uint32_t seqno, int resp, int sipmethod)
 		if (cur->seqno != seqno || cur->is_resp != resp) {
 			continue;
 		}
+		/* With PRACK we can have a situation with multiple unPRACKed responses */
+		if (rseqno && cur->rseqno != rseqno) {
+			continue;
+		}
 		if (cur->is_resp || cur->method == sipmethod) {
 			res = TRUE;
 			msg = "Found";
@@ -3998,6 +4002,7 @@ int __sip_ack(struct sip_pvt *p, uint32_t seqno, int resp, int sipmethod)
 				if (sipdebug)
 					ast_debug(4, "** SIP TIMER: Cancelling retransmit of packet (reply received) Retransid #%d\n", cur->retransid);
 			}
+
 			/* This odd section is designed to thwart a
 			 * race condition in the packet scheduler. There are
 			 * two conditions under which deleting the packet from the
@@ -4029,7 +4034,7 @@ int __sip_ack(struct sip_pvt *p, uint32_t seqno, int resp, int sipmethod)
 		}
 	}
 	ast_debug(1, "Stopping retransmission on '%s' of %s %u: Match %s Rseq %d\n",
-		p->callid, resp ? "Response" : "Request", seqno, msg, p->rseqno);
+		p->callid, resp ? "Response" : "Request", seqno, msg, rseqno);
 	return res;
 }
 
@@ -4047,7 +4052,7 @@ void __sip_pretend_ack(struct sip_pvt *p)
 		}
 		cur = p->packets;
 		method = (cur->method) ? cur->method : find_sip_method(cur->data->str);
-		__sip_ack(p, cur->seqno, cur->is_resp, method);
+		__sip_ack(p, cur->seqno, cur->is_resp, method, 0);
 	}
 }
 
@@ -21267,7 +21272,7 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 				ack_res = __sip_semi_ack(p, seqno, 0, sipmethod);
 			}
 		} else {
-			ack_res = __sip_ack(p, seqno, 0, sipmethod);
+			ack_res = __sip_ack(p, seqno, 0, sipmethod, 0);
 		}
 
 		if (ack_res == FALSE) {
@@ -22494,7 +22499,7 @@ static int handle_request_prack(struct sip_pvt *p, struct sip_request *req)
 	ast_debug(3, "!=!=!=!=!=!= Got PRACK with rseq %d and cseq %d \n", rseq, cseq);
 	if (rseq <= p->rseq) {
 		/* Ack the retransmits */
-		int acked = __sip_ack(p, cseq, 1 /* response */, 0);
+		int acked = __sip_ack(p, cseq, 1 /* response */, 0, rseq);
 		ast_debug(2, "!=!=!=!=!=! Tried acking the response - %s \n", acked ? "Sucess" : "Total utterly failure");
 	}
 	append_history(p, "PRACK", "PRACK received Rseq %d", rseq);
@@ -22653,7 +22658,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 			 * transaction. Calling __sip_ack will take care of this by clearing the p->pendinginvite and removing the response
 			 * from the previous transaction from the list of outstanding packets.
 			 */
-			__sip_ack(p, p->pendinginvite, 1, 0);
+			__sip_ack(p, p->pendinginvite, 1, 0, 0);
 		} else {
 			/* We already have a pending invite. Sorry. You are on hold. */
 			p->glareinvite = seqno;
@@ -24749,7 +24754,7 @@ static int handle_request_publish(struct sip_pvt *p, struct sip_request *req, st
 		return 0;
 	} else if (auth_result == AUTH_SUCCESSFUL && p->lastinvite) {
 		/* We need to stop retransmitting the 401 */
-		__sip_ack(p, p->lastinvite, 1, 0);
+		__sip_ack(p, p->lastinvite, 1, 0, 0);
 	}
 
 	publish_type = determine_sip_publish_type(req, event, etag, expires_str, &expires_int);
@@ -25584,7 +25589,7 @@ static int handle_incoming(struct sip_pvt *p, struct sip_request *req, struct as
 		if (seqno == p->pendinginvite) {
 			p->invitestate = INV_TERMINATED;
 			p->pendinginvite = 0;
-			acked = __sip_ack(p, seqno, 1 /* response */, 0);
+			acked = __sip_ack(p, seqno, 1 /* response */, 0, 0);
 			if (find_sdp(req)) {
 				if (process_sdp(p, req, SDP_T38_NONE))
 					return -1;
@@ -25593,7 +25598,7 @@ static int handle_incoming(struct sip_pvt *p, struct sip_request *req, struct as
 		} else if (p->glareinvite == seqno) {
 			/* handle ack for the 491 pending sent for glareinvite */
 			p->glareinvite = 0;
-			acked = __sip_ack(p, seqno, 1, 0);
+			acked = __sip_ack(p, seqno, 1, 0, 0);
 		}
 		if (!acked) {
 			/* Got an ACK that did not match anything. Ignore
