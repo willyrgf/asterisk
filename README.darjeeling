@@ -19,7 +19,7 @@ In SIP, the provisional responses are often sent over UDP, which means that they
 get lost. Some of them are retransmitted every minute (to get at least one through
 once during a three minute period following RFC 3261). For some messages, it's 
 important that they get through immediately. Like if you want to play a message to
-the customer that he's call will be cancelled due to lack of funds in his account.
+the customer that his call will be cancelled due to lack of funds in his account.
 
 PRACK adds a retransmit and ACK mechanism to the 1xx messages excluding 100 (since
 it's transmitted hop-by-hop).
@@ -28,7 +28,7 @@ If the INVITE contains
 	Supported: 100rel
 
 then the 1xx answer can add 
-	Required: 100rel
+	Require: 100rel
 	Rseq: 	42
 
 The Rseq is the PRACK sequence number
@@ -93,8 +93,16 @@ as any other request." (section 9)
 Todo
 ----
 * Add PRACK to the list of supported headers
+	- done
 * Should we be able to REQUIRE prack? Based on what? _SIPREQUIREPRACK ?
+	- not now
 * PRACK enabled globally and per device - user and peer
+	- done
+* PRACK working when Asterisk is the UAS
+	- done
+* PRACK working when Asterisk is the UAC
+* PRACK with authentication
+* Requesting auth for PRACK
 * PRACK enabled per call - SIPCHANINFO?
 
 ---------------------
