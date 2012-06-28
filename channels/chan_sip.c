@@ -4164,17 +4164,23 @@ static void update_provisional_keepalive(struct sip_pvt *pvt, int with_sdp)
 static void add_required_respheader(struct sip_request *req)
 {
 	if (req->reqsipoptions) {
-		char buf[SIPBUFSIZE];
+		char buf[SIPBUFSIZE] = "";
 		int i;
+
+		ast_debug(2, "=!=!=!=!= Plenty of required options for this message \n");
 
 		for (i = 0; i < ARRAY_LEN(sip_options); i++) {
 			if (req->reqsipoptions & sip_options[i].id) {
-				strncat(buf, ", ", sizeof(buf));
+				if (buf[0] != '\0') {
+					strncat(buf, ", ", sizeof(buf));
+				}
 				strncat(buf, sip_options[i].text, sizeof(buf));
 				ast_debug(3, "Found required response SIP option: %s\n", sip_options[i].text);
 			}
 		}
 		add_header(req, "Required", buf);
+	} else {
+		ast_debug(2, "=!=!=!=!= No required options for this message \n");
 	}
 
 }
