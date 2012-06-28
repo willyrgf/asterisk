@@ -10573,8 +10573,8 @@ static int __transmit_response(struct sip_pvt *p, const char *msg, const struct 
 			add_header(&resp, "X-Asterisk-HangupCauseCode", buf);
 		}
 	}
-	add_required_respheader(&resp);
 	add_prack_respheader(p, &resp, reliable);
+	add_required_respheader(&resp);
 	return send_response(p, &resp, reliable, seqno);
 }
 
@@ -11834,8 +11834,13 @@ static int transmit_response_with_sdp(struct sip_pvt *p, const char *msg, const 
 	if (rpid == TRUE) {
 		add_rpid(&resp, p);
 	}
-	add_required_respheader(&resp);
+	if (ast_test_flag(&p->flags[2], SIP_PAGE3_PRACK) && strncmp(msg, "100", 3) && !strncmp(msg, "1", 1)) {
+		/* SKREP */
+		ast_debug(2, "=!=!=!=!=!= PRACK applied to message \"%s\" \n", msg);
+		reliable = XMIT_PRACK;
+	}
 	add_prack_respheader(p, &resp, reliable);
+	add_required_respheader(&resp);
 	if (ast_test_flag(&p->flags[0], SIP_OFFER_CC)) {
 		add_cc_call_info_to_response(p, &resp);
 	}
@@ -11855,11 +11860,6 @@ static int transmit_response_with_sdp(struct sip_pvt *p, const char *msg, const 
 		ast_log(LOG_ERROR, "Can't add SDP to response, since we have no RTP session allocated. Call-ID %s\n", p->callid);
 	if (reliable && !p->pendinginvite)
 		p->pendinginvite = seqno;		/* Buggy clients sends ACK on RINGING too */
-	if (ast_test_flag(&p->flags[2], SIP_PAGE3_PRACK) && strncmp(msg, "100", 3) && !strncmp(msg, "1", 1)) {
-		/* SKREP */
-		ast_debug(2, "=!=!=!=!=!= PRACK applied to message \"%s\" \n", msg);
-		reliable = XMIT_PRACK;
-	}
 	return send_response(p, &resp, reliable, seqno);
 }
 
