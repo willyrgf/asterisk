@@ -4178,7 +4178,7 @@ static void add_required_respheader(struct sip_request *req)
 				ast_debug(3, "Found required response SIP option: %s\n", sip_options[i].text);
 			}
 		}
-		add_header(req, "Required", buf);
+		add_header(req, "Require", buf);
 	} else {
 		ast_debug(2, "=!=!=!=!= No required options for this message \n");
 	}
@@ -4195,8 +4195,8 @@ static void add_prack_respheader(struct sip_pvt *p, struct sip_request *req, int
 			}
 			snprintf(buf, sizeof(buf), "%d", ++(p->rseq));
 			add_header(req, "Rseq", buf);
-			req->reqsipoptions &= SIP_OPT_100REL;
-			ast_debug(2, "=!=!=!=!=!=!=!= PRACK USED HERE. Rseq %d\n", p->rseq);
+			req->reqsipoptions |= SIP_OPT_100REL;
+			ast_debug(2, "=!=!=!=!=!=!=!= PRACK USED HERE. Rseq %d \n", p->rseq);
 		} else {
 			ast_debug(2, "=!=!=!=!=!=!=!= PRACK COULD BE USED HERE. Exactly HERE\n");
 		}
@@ -10337,7 +10337,7 @@ static int respprep(struct sip_request *resp, struct sip_pvt *p, const char *msg
 		snprintf(se_hdr, sizeof(se_hdr), "%d;refresher=%s", p->stimer->st_interval,
 			strefresher2str(p->stimer->st_ref));
 		add_header(resp, "Session-Expires", se_hdr);
-		resp->reqsipoptions &= SIP_OPT_TIMER;
+		resp->reqsipoptions |= SIP_OPT_TIMER;
 	}
 
 	if (msg[0] == '2' && (p->method == SIP_SUBSCRIBE || p->method == SIP_REGISTER)) {
@@ -19998,7 +19998,7 @@ static int sip_reinvite_retry(const void *data)
  */
 static void handle_response_prack(struct sip_pvt *p, int resp, const char *rest, struct sip_request *req, uint32_t seqno)
 {
-	ast_debug(2, "---> Got response on UPDATE :: %d \n", resp);
+	ast_debug(2, "---> Got response on PRACK :: %d \n", resp);
 	/* Handle authentication early */
 	if (resp == 401 || resp == 407) {
 		if (p->options) {
@@ -20012,6 +20012,8 @@ static void handle_response_prack(struct sip_pvt *p, int resp, const char *rest,
 
 	switch(resp) {
 	case 200:	/* 200 OK - all is fine in the kingdom of SIP */
+		/* Stop retransmission */
+
 	case 481:	/* Ok, they did not find our call ID. Let's die */
 	case 403: 	/* Forbidden */
 	case 415: /* Unsupported media type */
@@ -22440,7 +22442,19 @@ static int handle_request_update(struct sip_pvt *p, struct sip_request *req)
  */
 static int handle_request_prack(struct sip_pvt *p, struct sip_request *req)
 {
-	/* SKREP */
+	const char *rack = get_header(req, "RAck");
+	int rseq, cseq;
+
+	if(sscanf(rack, "%30d %30d", &rseq, &cseq) != 2) {
+		/* we did not get proper rseq/cseq */
+		transmit_response(p, "481 Could not get proper rseq/cseq in Rack", req);
+	}
+	ast_debug(3, "!=!=!=!=!=!= Got PRACK with rseq %d and cseq %d \n", rseq, cseq);
+	if (rseq <= p->rseq) {
+		/* Ack the retransmits */
+		int acked = __sip_ack(p, cseq, 1 /* response */, 0);
+		ast_debug(3, "!=!=!=!=!=! Tried acking the response - %s \n", acked ? "Sucess" : "Total utterly failure");
+	}
 	transmit_response(p, "200 OK", req);
 	return 0;
 }
