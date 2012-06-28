@@ -753,6 +753,7 @@ struct sip_request {
 	int headers;            /*!< # of SIP Headers */
 	int method;             /*!< Method of this request */
 	int lines;              /*!< Body Content */
+	uint32_t rseqno;		/*!< PRACK Rseq */
 	unsigned int reqsipoptions;  /*!< Required SIP options for this answer */
 	unsigned int sdp_start; /*!< the line number where the SDP begins */
 	unsigned int sdp_count; /*!< the number of lines of SDP */

@@ -3784,6 +3784,9 @@ static enum sip_result __sip_reliable_xmit(struct sip_pvt *p, uint32_t seqno, in
 		if (sscanf(ast_str_buffer(pkt->data), "SIP/2.0 %30u", &respid) == 1) {
 			pkt->response_code = respid;
 		}
+		if (ast_test_flag(&p->flags[2], SIP_PAGE3_PRACK) && respid > 100 && respid < 200) {
+			pkt->rseqno = p->rseqno;
+		}
 	}
 	pkt->timer_t1 = p->timer_t1;	/* Set SIP timer T1 */
 	pkt->retransid = -1;
@@ -4025,8 +4028,8 @@ int __sip_ack(struct sip_pvt *p, uint32_t seqno, int resp, int sipmethod)
 			break;
 		}
 	}
-	ast_debug(1, "Stopping retransmission on '%s' of %s %u: Match %s\n",
-		p->callid, resp ? "Response" : "Request", seqno, msg);
+	ast_debug(1, "Stopping retransmission on '%s' of %s %u: Match %s Rseq %d\n",
+		p->callid, resp ? "Response" : "Request", seqno, msg, p->rseqno);
 	return res;
 }
 
@@ -4195,6 +4198,7 @@ static void add_prack_respheader(struct sip_pvt *p, struct sip_request *req, int
 			}
 			snprintf(buf, sizeof(buf), "%d", ++(p->rseq));
 			add_header(req, "Rseq", buf);
+			req->rseqno = p->rseq;
 			req->reqsipoptions |= SIP_OPT_100REL;
 			append_history(p, "PRACK", "PRACK Required: Our Rseq %d", p->rseq);
 			ast_debug(2, "=!=!=!=!=!=!=!= PRACK USED HERE. Rseq %d \n", p->rseq);
@@ -10580,7 +10584,7 @@ static int __transmit_response(struct sip_pvt *p, const char *msg, const struct 
 			add_header(&resp, "X-Asterisk-HangupCauseCode", buf);
 		}
 	}
-	if (!strncmp(msg, "100", 3)) {
+	if (strncmp(msg, "100", 3)) {
 		add_prack_respheader(p, &resp, reliable);
 		add_required_respheader(&resp);
 	}
@@ -11848,8 +11852,10 @@ static int transmit_response_with_sdp(struct sip_pvt *p, const char *msg, const 
 		ast_debug(2, "=!=!=!=!=!= PRACK applied to message \"%s\" \n", msg);
 		reliable = XMIT_PRACK;
 	}
-	add_prack_respheader(p, &resp, reliable);
-	add_required_respheader(&resp);
+	if (strncmp(msg, "100", 3)) {
+		add_prack_respheader(p, &resp, reliable);
+		add_required_respheader(&resp);
+	}
 	if (ast_test_flag(&p->flags[0], SIP_OFFER_CC)) {
 		add_cc_call_info_to_response(p, &resp);
 	}
@@ -12266,9 +12272,20 @@ static int transmit_prack(struct sip_pvt *p, int their_rseq)
 	if (their_rseq == p->irseq) {
 		ast_debug(3, "!?!?!?!?!? This is a retransmit of the previous response. %d \n", their_rseq);
 		/* RFC 3262: In particular, a UAC SHOULD NOT retransmit the PRACK request
-   		   when it receives a retransmission of the provisional response being
-   		   acknowledged, although doing so does not create a protocol error.*/
+   		   	when it receives a retransmission of the provisional response being
+   		   	acknowledged, although doing so does not create a protocol error.*/
 		return -2;	/* Not used by transmit_invite et al */
+	}
+	if (p->irseq > 0 && their_rseq != p->irseq + 1) {
+		ast_debug(3, "!?!?!?!?!? This is a response out of sequence! ignored. %d \n", their_rseq);
+		/* RFC 3262: if the UAC receives another reliable provisional
+   			response to the same request, and its RSeq value is not one higher
+   			than the value of the sequence number, that response MUST NOT be
+   			acknowledged with a PRACK, and MUST NOT be processed further by the
+   			UAC.  An implementation MAY discard the response, or MAY cache the
+   			response in the hopes of receiving the missing responses.
+		*/
+		return -3;
 	}
 	p->irseq = their_rseq;
 	return transmit_invite(p, SIP_PRACK, 0, 1, NULL);
@@ -21216,6 +21233,7 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 			const char *rseq = get_header(req, "RSeq");
 			int their_rseq;
 			ast_debug(3, "!=!=!=!=!=! Response relies on PRACK! Rseq %s\n", rseq);
+
 			/* DO Something here !!! */
 			/* XXX If the response relies on PRACK, we need to start a PRACK transaction
 			 */
@@ -21226,7 +21244,11 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
    				   that response MUST be discarded.  A response is a retransmission when
    				   its dialog ID, CSeq, and RSeq match the original response.  
 				*/
-				append_history(p, "Ignore", "Ignoring this retransmit (PRACK active)\n");
+				append_history(p, "PrIgnore", "Ignoring this retransmit (PRACK active)\n");
+				return;
+			}
+			if (transmit_prack(p, their_rseq) == -3) {
+				append_history(p, "PrIgnore", "Ignoring this response - out of order (PRACK active)\n");
 				return;
 			}
 		}
@@ -22473,7 +22495,7 @@ static int handle_request_prack(struct sip_pvt *p, struct sip_request *req)
 	if (rseq <= p->rseq) {
 		/* Ack the retransmits */
 		int acked = __sip_ack(p, cseq, 1 /* response */, 0);
-		ast_debug(3, "!=!=!=!=!=! Tried acking the response - %s \n", acked ? "Sucess" : "Total utterly failure");
+		ast_debug(2, "!=!=!=!=!=! Tried acking the response - %s \n", acked ? "Sucess" : "Total utterly failure");
 	}
 	append_history(p, "PRACK", "PRACK received Rseq %d", rseq);
 	transmit_response(p, "200 OK", req);
