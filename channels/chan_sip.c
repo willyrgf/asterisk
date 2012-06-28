@@ -20029,7 +20029,6 @@ static int sip_reinvite_retry(const void *data)
 }
 
 /*! \brief Handle PRACK responses
-	SKREP
  */
 static void handle_response_prack(struct sip_pvt *p, int resp, const char *rest, struct sip_request *req, uint32_t seqno)
 {
@@ -20039,24 +20038,32 @@ static void handle_response_prack(struct sip_pvt *p, int resp, const char *rest,
 		if (p->options) {
 			p->options->auth_type = (resp == 401 ? WWW_AUTH : PROXY_AUTH);
 		}
-		if ((p->authtries == MAX_AUTHTRIES) || do_proxy_auth(p, req, resp, SIP_UPDATE, 1)) {
+		if ((p->authtries == MAX_AUTHTRIES) || do_proxy_auth(p, req, resp, SIP_PRACK, 1)) {
 			ast_log(LOG_NOTICE, "Failed to authenticate on PRACK to '%s'\n", get_header(&p->initreq, "From"));
 		}
 		return;
 	}
 
+	/* THe REALLY important thing is that the PRACK request gets a response. The response itself
+	   is not that important. A 481 means that the call will hang up. No response at all means
+	   that the call will hang up 
+	 */
 	switch(resp) {
 	case 200:	/* 200 OK - all is fine in the kingdom of SIP */
-		/* Stop retransmission */
+		break;
 
-	case 481:	/* Ok, they did not find our call ID. Let's die */
-	case 403: 	/* Forbidden */
+	case 408: /* Timeout */
+	case 481: /* Ok, they did not find our call ID. Let's die */
+		if (p->owner) {
+			ast_queue_hangup_with_cause(p->owner, hangup_sip2cause(resp));
+		}
+		break;
+	case 403: /* Forbidden */
 	case 415: /* Unsupported media type */
 	case 488: /* Not acceptable here */
 	case 606: /* Not Acceptable */
-	case 501: 	/* Let's kill this dialog */
-		break;
 	default:
+		/* Don't do anything */
 		break;
 	};
 	
@@ -20497,6 +20504,10 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 
 		/* Check for Session-Timers related headers */
 		if (st_get_mode(p, 0) != SESSION_TIMER_MODE_REFUSE && p->outgoing_call == TRUE && !reinvite) {
+			/* XXX Code should check in response if there's a "Require: timer"
+				header. If there is, sessions timer is enabled for this dialog
+				If not, only this side (UAC) do session timers.
+			 */
 			p_hdrval = (char*)get_header(req, "Session-Expires");
 			if (!ast_strlen_zero(p_hdrval)) {
 				/* UAS supports Session-Timers */
@@ -21239,13 +21250,17 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 		if (activeextensions & SIP_OPT_100REL) {
 			const char *rseq = get_header(req, "RSeq");
 			int their_rseq;
+			int res;
 			ast_debug(3, "!=!=!=!=!=! Response relies on PRACK! Rseq %s\n", rseq);
 
 			/* DO Something here !!! */
 			/* XXX If the response relies on PRACK, we need to start a PRACK transaction
 			 */
 			sscanf(get_header(req, "RSeq"), "%30u ", &their_rseq);
-			if (transmit_prack(p, their_rseq) == -2) {
+			append_history(p, "TxPrack", "Their Rseq %d\n", their_rseq);
+			
+			res = transmit_prack(p, their_rseq);
+			if (res == -2) {
 				/* This response is a retransmit and should be ignored */
 				/* RFC 3262: Once a reliable provisional response is received, retransmissions of
    				   that response MUST be discarded.  A response is a retransmission when
@@ -21253,8 +21268,7 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 				*/
 				append_history(p, "PrIgnore", "Ignoring this retransmit (PRACK active)\n");
 				return;
-			}
-			if (transmit_prack(p, their_rseq) == -3) {
+			} else if (res  == -3) {
 				append_history(p, "PrIgnore", "Ignoring this response - out of order (PRACK active)\n");
 				return;
 			}
