@@ -10532,8 +10532,10 @@ static int __transmit_response(struct sip_pvt *p, const char *msg, const struct 
 {
 	struct sip_request resp;
 	uint32_t seqno = 0;
+	int res;
 
-	if (reliable && (sscanf(get_header(req, "CSeq"), "%30u ", &seqno) != 1)) {
+	res = sscanf(get_header(req, "CSeq"), "%30u ", &seqno);
+	if (reliable && res != 1) {
 		ast_log(LOG_WARNING, "Unable to determine sequence number from '%s'\n", get_header(req, "CSeq"));
 		return -1;
 	}
