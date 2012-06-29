@@ -4195,9 +4195,12 @@ static void add_required_respheader(struct sip_request *req)
 
 }
 
+/*! \brief Active PRACK if supported by config and by other end */
 static void add_prack_respheader(struct sip_pvt *p, struct sip_request *req, int reliable)
 {
-	if (p->initreq.method == SIP_INVITE && ast_test_flag(&p->flags[2], SIP_PAGE3_PRACK)) {
+	/* If method is INVITE and it contains Supported: 100 rel and we have enabled PRACK */
+	if (p->initreq.method == SIP_INVITE && p->sipoptions & SIP_OPT_100REL && ast_test_flag(&p->flags[2], SIP_PAGE3_PRACK)) {
+		/* Check if the invite has 100 REL supported here */
 		if (reliable == XMIT_PRACK) {
 			char buf[SIPBUFSIZE/2];
 			if (p->rseq == 0) {
