@@ -6523,6 +6523,10 @@ static int sip_answer(struct ast_channel *ast)
 	struct sip_pvt *p = ast->tech_pvt;
 
 	sip_pvt_lock(p);
+	if (ast_test_flag(&p->flags[2], SIP_PAGE3_INVITE_WAIT_FOR_PRACK)) {
+		ast_set_flag(&p->flags[2], SIP_PAGE3_ANSWER_WAIT_FOR_PRACK);
+		return 0;
+	}
 	if (ast->_state != AST_STATE_UP) {
 		try_suggested_sip_codec(p);	
 
@@ -11863,6 +11867,8 @@ static int transmit_response_with_sdp(struct sip_pvt *p, const char *msg, const 
 		reliable = XMIT_PRACK;
 	}
 	if (strncmp(msg, "100", 3)) {
+		/* If we send a resposne WITH sdp we are not allowed to respond before the PRACK is received */
+		ast_set_flag(&p->flags[2], SIP_PAGE3_INVITE_WAIT_FOR_PRACK);
 		add_prack_respheader(p, &resp, reliable);
 		add_required_respheader(&resp);
 	}
@@ -22515,6 +22521,7 @@ static int handle_request_prack(struct sip_pvt *p, struct sip_request *req)
 		/* we did not get proper rseq/cseq */
 		transmit_response(p, "481 Could not get proper rseq/cseq in Rack", req);
 	}
+	ast_clear_flag(&p->flags[2], SIP_PAGE3_INVITE_WAIT_FOR_PRACK);	/* Clear flag */
 	ast_debug(3, "!=!=!=!=!=!= Got PRACK with rseq %d and cseq %d \n", rseq, cseq);
 	if (rseq <= p->rseq) {
 		/* Ack the retransmits */
@@ -22523,6 +22530,13 @@ static int handle_request_prack(struct sip_pvt *p, struct sip_request *req)
 	}
 	append_history(p, "PRACK", "PRACK received Rseq %d", rseq);
 	transmit_response(p, "200 OK", req);
+	if (ast_test_flag(&p->flags[2], SIP_PAGE3_ANSWER_WAIT_FOR_PRACK)) {
+		/* If the response sent reliably contained an SDP, we're not allowed to  answer
+		   until we have a PRACK response 
+		 */
+		sip_answer(p->owner);
+		ast_clear_flag(&p->flags[2], SIP_PAGE3_ANSWER_WAIT_FOR_PRACK);
+	}
 	return 0;
 }
 

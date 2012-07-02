@@ -357,9 +357,11 @@
 	SIP_PAGE2_Q850_REASON | SIP_PAGE2_HAVEPEERCONTEXT | SIP_PAGE2_USE_SRTP)
 
 
-#define SIP_PAGE3_SNOM_AOC               (1 << 0)  /*!< DPG: Allow snom aoc messages */
-#define SIP_PAGE3_PRACK               (1 << 1)  /*!< DPG: Allow snom aoc messages */
-#define SIP_PAGE3_100REL               (1 << 2)  /*!< D: If PRACK is active for a specific dialog */
+#define SIP_PAGE3_SNOM_AOC              (1 << 0)  /*!< DPG: Allow snom aoc messages */
+#define SIP_PAGE3_PRACK               	(1 << 1)  /*!< DPG: Allow snom aoc messages */
+#define SIP_PAGE3_100REL               	(1 << 2)  /*!< D: If PRACK is active for a specific dialog */
+#define SIP_PAGE3_INVITE_WAIT_FOR_PRACK (1 << 3)  /*!< D: Wait for PRACK response before sending 200 OK */
+#define SIP_PAGE3_ANSWER_WAIT_FOR_PRACK	(1 << 4)  /*!< D: Send ANSWER when PRACK is received */
 
 #define SIP_PAGE3_FLAGS_TO_COPY \
 	(SIP_PAGE3_SNOM_AOC | SIP_PAGE3_PRACK)
