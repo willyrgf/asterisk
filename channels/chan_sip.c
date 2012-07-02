@@ -4054,7 +4054,7 @@ void __sip_pretend_ack(struct sip_pvt *p)
 		}
 		cur = p->packets;
 		method = (cur->method) ? cur->method : find_sip_method(cur->data->str);
-		__sip_ack(p, cur->seqno, cur->is_resp, method, 0);
+		__sip_ack(p, cur->seqno, cur->is_resp, method, cur->rseqno);
 	}
 }
 
