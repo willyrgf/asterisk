@@ -3786,7 +3786,7 @@ static enum sip_result __sip_reliable_xmit(struct sip_pvt *p, uint32_t seqno, in
 		if (sscanf(ast_str_buffer(pkt->data), "SIP/2.0 %30u", &respid) == 1) {
 			pkt->response_code = respid;
 		}
-		if (ast_test_flag(&p->flags[2], SIP_PAGE3_PRACK) && respid > 100 && respid < 200) {
+		if (ast_test_flag(&p->flags[2], SIP_PAGE3_100REL) && respid > 100 && respid < 200) {
 			pkt->rseqno = p->rseq;
 		}
 	}
@@ -4199,7 +4199,7 @@ static void add_required_respheader(struct sip_request *req)
 static void add_prack_respheader(struct sip_pvt *p, struct sip_request *req, int reliable)
 {
 	/* If method is INVITE and it contains Supported: 100 rel and we have enabled PRACK */
-	if (p->initreq.method == SIP_INVITE && p->sipoptions & SIP_OPT_100REL && ast_test_flag(&p->flags[2], SIP_PAGE3_PRACK)) {
+	if (ast_test_flag(&p->flags[2], SIP_PAGE3_100REL)) {
 		/* Check if the invite has 100 REL supported here */
 		if (reliable == XMIT_PRACK) {
 			char buf[SIPBUFSIZE/2];
@@ -10552,8 +10552,7 @@ static int __transmit_response(struct sip_pvt *p, const char *msg, const struct 
 		ast_clear_flag(&p->flags[1], SIP_PAGE2_CONNECTLINEUPDATE_PEND);
 		add_rpid(&resp, p);
 	}
-	if (ast_test_flag(&p->flags[2], SIP_PAGE3_PRACK) && strncmp(msg, "100", 3) && !strncmp(msg, "1", 1)) {
-		/* SKREP */
+	if (ast_test_flag(&p->flags[2], SIP_PAGE3_100REL) && strncmp(msg, "100", 3) && !strncmp(msg, "1", 1)) {
 		ast_debug(2, "=!=!=!=!=!= PRACK applied to message \"%s\" \n", msg);
 		reliable = XMIT_PRACK;
 	}
@@ -11859,8 +11858,7 @@ static int transmit_response_with_sdp(struct sip_pvt *p, const char *msg, const 
 	if (rpid == TRUE) {
 		add_rpid(&resp, p);
 	}
-	if (ast_test_flag(&p->flags[2], SIP_PAGE3_PRACK) && strncmp(msg, "100", 3) && !strncmp(msg, "1", 1)) {
-		/* SKREP */
+	if (ast_test_flag(&p->flags[2], SIP_PAGE3_100REL) && strncmp(msg, "100", 3) && !strncmp(msg, "1", 1)) {
 		ast_debug(2, "=!=!=!=!=!= PRACK applied to message \"%s\" \n", msg);
 		reliable = XMIT_PRACK;
 	}
@@ -18781,7 +18779,7 @@ static char *sip_show_channel(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 			ast_cli(a->fd, "  Format:                 %s\n", ast_getformatname_multiple(formatbuf, sizeof(formatbuf), cur->owner ? cur->owner->nativeformats : 0) );
 			ast_cli(a->fd, "  T.38 support            %s\n", AST_CLI_YESNO(cur->udptl != NULL));
 			ast_cli(a->fd, "  Video support           %s\n", AST_CLI_YESNO(cur->vrtp != NULL));
-			ast_cli(a->fd, "  PRACK support           %s\n", AST_CLI_YESNO(ast_test_flag(&cur->flags[2], SIP_PAGE3_PRACK)));
+			ast_cli(a->fd, "  PRACK active            %s\n", AST_CLI_YESNO(ast_test_flag(&cur->flags[2], SIP_PAGE3_100REL)));
 			ast_cli(a->fd, "  MaxCallBR:              %d kbps\n", cur->maxcallbitrate);
 			ast_cli(a->fd, "  Theoretical Address:    %s\n", ast_sockaddr_stringify(&cur->sa));
 			ast_cli(a->fd, "  Received Address:       %s\n", ast_sockaddr_stringify(&cur->recv));
