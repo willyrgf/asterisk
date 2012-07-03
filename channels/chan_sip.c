@@ -21316,16 +21316,18 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 	if (!ast_strlen_zero(required)) {
 		int activeextensions = parse_required_sip_options(required);
 		if (activeextensions & SIP_OPT_100REL) {
+
 			const char *rseq = get_header(req, "RSeq");
 			int their_rseq;
 			int res;
 			ast_debug(3, "!=!=!=!=!=! Response relies on PRACK! Rseq %s\n", rseq);
 
-			/* DO Something here !!! */
 			/* XXX If the response relies on PRACK, we need to start a PRACK transaction
 			 */
 			sscanf(get_header(req, "RSeq"), "%30u ", &their_rseq);
 			append_history(p, "TxPrack", "Their Rseq %d\n", their_rseq);
+			parse_ok_contact(p, req);
+			build_route(p, req, 1, resp);
 			
 			res = transmit_prack(p, their_rseq);
 			if (res == -2) {
