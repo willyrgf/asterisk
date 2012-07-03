@@ -167,7 +167,7 @@ struct ast_rtp {
 	enum dtmf_send_states sending_dtmf;     /*!< - are we sending dtmf */
 	char send_digit;	/*!< digit we are sending */
 	char send_dtmf_frame;	/*!< Number of samples in a frame with the current packetization */
-	AST_LIST_HEAD_NOLOCK(, ast_frame) dtmfqueue;	/*!< Queue for DTMF that we receive while occupied with transmitting an outbound DTMF */
+	AST_LIST_HEAD_NOLOCK(, ast_frame) dtmfqueue;	/*!< \ref DTMFQUEUE : Queue for DTMF that we receive while occupied with transmitting an outbound DTMF */
 	struct timeval dtmfmute;
 
 	int send_payload;
@@ -338,6 +338,25 @@ static struct ast_rtp_engine asterisk_rtp_engine = {
 	.qos = ast_rtp_qos_set,
 	.sendcng = ast_rtp_sendcng,
 };
+
+/*! * \page DTMFQUEUE Queue for outbound DTMF events
+
+	The Asterisk RTP Engine contains a queue for outbound DTMF events. Because of Asterisk's
+	architecture, we might have situations where DTMF events are not happening at the same
+ 	time on the inbound call leg and the outbound. Because the feature handling, we might
+	"swallow" a DTMF for a while to figure out the next digit. When we realize that this
+	is not a digit we want, we start playing out the complete DTMF on the outbound call leg.
+
+	During that time, we might get an incoming DTMF begin signal on the inbound call leg,
+	which is transported over the bridge and to the outbound call leg, that gets a 
+	request to begin a new DTMF, while still playing out the previous one.
+
+	In order not to drop this DTMF, we queue it up until we're done with the previous
+	DTMF and then play it out.
+
+	The DTMF queue is held in the rtp structure. 
+*/
+
 
 static inline int rtp_debug_test_addr(struct ast_sockaddr *addr)
 {
@@ -676,6 +695,7 @@ static int ast_rtp_dtmf_begin(struct ast_rtp_instance *instance, char digit)
 	if (rtp->sending_dtmf) {
 		ast_debug(3, "Received DTMF begin while we're playing out DTMF. Ignoring \n");
 		rtp->sending_dtmf = DTMF_SEND_INPROGRESS_WITH_QUEUE;	/* Tell the world that there's an ignored DTMF */
+	//	AST_LIST_INSERT_TAIL(&frames, f, frame_list);
 /* OEJ Fix ??? */
 	}
 
