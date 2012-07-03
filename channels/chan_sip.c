@@ -6528,7 +6528,7 @@ static int sip_answer(struct ast_channel *ast)
 		ast_debug(2, "<-<-<--<-<-<-< HOLDING Answer while waiting for PRACK to arrive on channel %s\n", ast->name);
 		return 0;
 	}
-	if (ast->_state != AST_STATE_UP || ast_test_flag(&p->flags[2], SIP_PAGE3_INVITE_WAIT_FOR_PRACK) {
+	if (ast->_state != AST_STATE_UP || ast_test_flag(&p->flags[2], SIP_PAGE3_INVITE_WAIT_FOR_PRACK)) {
 		try_suggested_sip_codec(p);	
 
 		ast_setstate(ast, AST_STATE_UP);
