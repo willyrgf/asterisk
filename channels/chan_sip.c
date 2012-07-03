@@ -21253,41 +21253,6 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 			owner->hangupcause = hangup_sip2cause(resp);
 	}
 
-	/* If we have a required header in the response, the other side have activated an extension
-	   we said that we do support */
-	if (!ast_strlen_zero(required)) {
-		int activeextensions = parse_required_sip_options(required);
-		if (activeextensions & SIP_OPT_100REL) {
-			const char *rseq = get_header(req, "RSeq");
-			int their_rseq;
-			int res;
-			ast_debug(3, "!=!=!=!=!=! Response relies on PRACK! Rseq %s\n", rseq);
-
-			/* DO Something here !!! */
-			/* XXX If the response relies on PRACK, we need to start a PRACK transaction
-			 */
-			sscanf(get_header(req, "RSeq"), "%30u ", &their_rseq);
-			append_history(p, "TxPrack", "Their Rseq %d\n", their_rseq);
-			
-			res = transmit_prack(p, their_rseq);
-			if (res == -2) {
-				/* This response is a retransmit and should be ignored */
-				/* RFC 3262: Once a reliable provisional response is received, retransmissions of
-   				   that response MUST be discarded.  A response is a retransmission when
-   				   its dialog ID, CSeq, and RSeq match the original response.  
-				*/
-				append_history(p, "PrIgnore", "Ignoring this retransmit (PRACK active)\n");
-				return;
-			} else if (res  == -3) {
-				append_history(p, "PrIgnore", "Ignoring this response - out of order (PRACK active)\n");
-				return;
-			}
-		}
-		if (activeextensions & SIP_OPT_TIMER) {
-			ast_debug(3, "!=!=!=!=!=! The other side activated Session timers! \n");
-		}
-	}
-
 	if (p->socket.type == SIP_TRANSPORT_UDP) {
 		int ack_res = FALSE;
 
@@ -21324,6 +21289,7 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 		gettag(req, "To", tag, sizeof(tag));
 		ast_string_field_set(p, theirtag, tag);
 	}
+
 	/* This needs to be configurable on a channel/peer level,
 	   not mandatory for all communication. Sadly enough, NAT implementations
 	   are not so stable so we can always rely on these headers.
@@ -21344,6 +21310,40 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 		return;
 	}
 	
+	/* If we have a required header in the response, the other side have activated an extension
+	   we said that we do support */
+	if (!ast_strlen_zero(required)) {
+		int activeextensions = parse_required_sip_options(required);
+		if (activeextensions & SIP_OPT_100REL) {
+			const char *rseq = get_header(req, "RSeq");
+			int their_rseq;
+			int res;
+			ast_debug(3, "!=!=!=!=!=! Response relies on PRACK! Rseq %s\n", rseq);
+
+			/* DO Something here !!! */
+			/* XXX If the response relies on PRACK, we need to start a PRACK transaction
+			 */
+			sscanf(get_header(req, "RSeq"), "%30u ", &their_rseq);
+			append_history(p, "TxPrack", "Their Rseq %d\n", their_rseq);
+			
+			res = transmit_prack(p, their_rseq);
+			if (res == -2) {
+				/* This response is a retransmit and should be ignored */
+				/* RFC 3262: Once a reliable provisional response is received, retransmissions of
+   				   that response MUST be discarded.  A response is a retransmission when
+   				   its dialog ID, CSeq, and RSeq match the original response.  
+				*/
+				append_history(p, "PrIgnore", "Ignoring this retransmit (PRACK active)\n");
+				return;
+			} else if (res  == -3) {
+				append_history(p, "PrIgnore", "Ignoring this response - out of order (PRACK active)\n");
+				return;
+			}
+		}
+		if (activeextensions & SIP_OPT_TIMER) {
+			ast_debug(3, "!=!=!=!=!=! The other side activated Session timers! \n");
+		}
+	}
 
 	if (p->relatedpeer && sipmethod == SIP_OPTIONS) {
 		/* We don't really care what the response is, just that it replied back.
