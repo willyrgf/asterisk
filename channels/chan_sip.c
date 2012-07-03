@@ -6526,6 +6526,7 @@ static int sip_answer(struct ast_channel *ast)
 	if (ast->_state != AST_STATE_UP && ast_test_flag(&p->flags[2], SIP_PAGE3_INVITE_WAIT_FOR_PRACK)) {
 		ast_set_flag(&p->flags[2], SIP_PAGE3_ANSWER_WAIT_FOR_PRACK);
 		ast_debug(2, "<-<-<--<-<-<-< HOLDING Answer while waiting for PRACK to arrive on channel %s\n", ast->name);
+		sip_pvt_unlock(p);
 		return 0;
 	}
 	if (ast->_state != AST_STATE_UP || ast_test_flag(&p->flags[2], SIP_PAGE3_INVITE_WAIT_FOR_PRACK)) {
