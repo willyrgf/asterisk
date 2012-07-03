@@ -6523,12 +6523,12 @@ static int sip_answer(struct ast_channel *ast)
 	struct sip_pvt *p = ast->tech_pvt;
 
 	sip_pvt_lock(p);
-	if (ast_test_flag(&p->flags[2], SIP_PAGE3_INVITE_WAIT_FOR_PRACK)) {
+	if (ast->_state != AST_STATE_UP && ast_test_flag(&p->flags[2], SIP_PAGE3_INVITE_WAIT_FOR_PRACK)) {
 		ast_set_flag(&p->flags[2], SIP_PAGE3_ANSWER_WAIT_FOR_PRACK);
 		ast_debug(2, "<-<-<--<-<-<-< HOLDING Answer while waiting for PRACK to arrive on channel %s\n", ast->name);
 		return 0;
 	}
-	if (ast->_state != AST_STATE_UP) {
+	if (ast->_state != AST_STATE_UP || ast_test_flag(&p->flags[2], SIP_PAGE3_INVITE_WAIT_FOR_PRACK) {
 		try_suggested_sip_codec(p);	
 
 		ast_setstate(ast, AST_STATE_UP);
@@ -22522,7 +22522,6 @@ static int handle_request_prack(struct sip_pvt *p, struct sip_request *req)
 		/* we did not get proper rseq/cseq */
 		transmit_response(p, "481 Could not get proper rseq/cseq in Rack", req);
 	}
-	ast_clear_flag(&p->flags[2], SIP_PAGE3_INVITE_WAIT_FOR_PRACK);	/* Clear flag */
 	ast_debug(3, "!=!=!=!=!=!= Got PRACK with rseq %d and cseq %d \n", rseq, cseq);
 	if (rseq <= p->rseq) {
 		/* Ack the retransmits */
@@ -22539,6 +22538,7 @@ static int handle_request_prack(struct sip_pvt *p, struct sip_request *req)
 		ast_clear_flag(&p->flags[2], SIP_PAGE3_ANSWER_WAIT_FOR_PRACK);
 		sip_answer(p->owner);
 	}
+	ast_clear_flag(&p->flags[2], SIP_PAGE3_INVITE_WAIT_FOR_PRACK);	/* Clear flag */
 	return 0;
 }
 
