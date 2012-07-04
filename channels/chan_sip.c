@@ -12350,7 +12350,9 @@ static int transmit_invite(struct sip_pvt *p, int sipmethod, int sdp, int init, 
 	req.method = sipmethod;
 	if (init) {/* Bump branch even on initial requests */
 		p->branch ^= ast_random();
-		p->invite_branch = p->branch;
+		if (sipmethod == SIP_INVITE) {
+			p->invite_branch = p->branch;
+		}
 		build_via(p);
 	}
 	if (init > 1) {

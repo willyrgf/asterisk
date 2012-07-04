@@ -1,7 +1,7 @@
 Index: channels/chan_sip.c
 ===================================================================
---- channels/chan_sip.c	(.../branches/1.8)	(revision 369561)
-+++ channels/chan_sip.c	(.../team/oej/darjeeling-prack-1.8)	(revision 369561)
+--- channels/chan_sip.c	(.../branches/1.8)	(revision 369599)
++++ channels/chan_sip.c	(.../team/oej/darjeeling-prack-1.8)	(revision 369599)
 @@ -1242,10 +1242,10 @@
  static int __transmit_response(struct sip_pvt *p, const char *msg, const struct sip_request *req, enum xmittype reliable);
  static int retrans_pkt(const void *data);
@@ -144,56 +144,7 @@ Index: channels/chan_sip.c
  	finalize_content(req);
  	add_blank(req);
  	if (sip_debug_test_pvt(p)) {
-@@ -6225,21 +6286,6 @@
- 	return 0;
- }
- 
--static int reinvite_timeout(const void *data)
--{
--	struct sip_pvt *dialog = (struct sip_pvt *) data;
--	struct ast_channel *owner = sip_pvt_lock_full(dialog);
--	check_pendings(dialog);
--	dialog->reinviteid = -1;
--	if (owner) {
--		ast_channel_unlock(owner);
--		ast_channel_unref(owner);
--	}
--	ao2_unlock(dialog);
--	dialog_unref(dialog, "unref for reinvite timeout");
--	return 0;
--}
--
- /*! \brief  sip_hangup: Hangup SIP call
-  * Part of PBX interface, called from ast_hangup */
- static int sip_hangup(struct ast_channel *ast)
-@@ -6367,7 +6413,7 @@
- 				stop_session_timer(p);
- 			}
- 
--			if (!p->pendinginvite) {
-+			if (!p->pendinginvite || p->ongoing_reinvite) {
- 				struct ast_channel *bridge = ast_bridged_channel(oldowner);
- 				char quality_buf[AST_MAX_USER_FIELD], *quality;
- 
-@@ -6429,16 +6475,8 @@
- 				ast_set_flag(&p->flags[0], SIP_PENDINGBYE);	
- 				ast_clear_flag(&p->flags[0], SIP_NEEDREINVITE);	
- 				AST_SCHED_DEL_UNREF(sched, p->waitid, dialog_unref(p, "when you delete the waitid sched, you should dec the refcount for the stored dialog ptr"));
--				if (sip_cancel_destroy(p)) {
-+				if (sip_cancel_destroy(p))
- 					ast_log(LOG_WARNING, "Unable to cancel SIP destruction.  Expect bad things.\n");
--				}
--				/* If we have an ongoing reinvite, there is a chance that we have gotten a provisional
--				 * response, but something weird has happened and we will never receive a final response.
--				 * So, just in case, check for pending actions after a bit of time to trigger the pending
--				 * bye that we are setting above */
--				if (p->ongoing_reinvite && p->reinviteid < 0) {
--					p->reinviteid = ast_sched_add(sched, 32 * p->timer_t1, reinvite_timeout, dialog_ref(p, "ref for reinvite_timeout"));
--				}
- 			}
- 		}
- 	}
-@@ -6485,7 +6523,13 @@
+@@ -6485,7 +6546,13 @@
  	struct sip_pvt *p = ast->tech_pvt;
  
  	sip_pvt_lock(p);
@@ -208,15 +159,7 @@ Index: channels/chan_sip.c
  		try_suggested_sip_codec(p);	
  
  		ast_setstate(ast, AST_STATE_UP);
-@@ -7711,7 +7755,6 @@
- 	p->method = intended_method;
- 	p->initid = -1;
- 	p->waitid = -1;
--	p->reinviteid = -1;
- 	p->autokillid = -1;
- 	p->request_queue_sched_id = -1;
- 	p->provisional_keepalive_sched_id = -1;
-@@ -9871,13 +9914,15 @@
+@@ -9871,13 +9938,15 @@
   *  is supported for this dialog. */
  static int add_supported_header(struct sip_pvt *pvt, struct sip_request *req)
  {
@@ -237,7 +180,7 @@ Index: channels/chan_sip.c
  }
  
  /*! \brief Add header to SIP message */
-@@ -10313,6 +10358,7 @@
+@@ -10313,6 +10382,7 @@
  		snprintf(se_hdr, sizeof(se_hdr), "%d;refresher=%s", p->stimer->st_interval,
  			strefresher2str(p->stimer->st_ref));
  		add_header(resp, "Session-Expires", se_hdr);
@@ -245,7 +188,7 @@ Index: channels/chan_sip.c
  	}
  
  	if (msg[0] == '2' && (p->method == SIP_SUBSCRIBE || p->method == SIP_REGISTER)) {
-@@ -10497,8 +10543,10 @@
+@@ -10497,8 +10567,10 @@
  {
  	struct sip_request resp;
  	uint32_t seqno = 0;
@@ -257,7 +200,7 @@ Index: channels/chan_sip.c
  		ast_log(LOG_WARNING, "Unable to determine sequence number from '%s'\n", get_header(req, "CSeq"));
  		return -1;
  	}
-@@ -10510,6 +10558,10 @@
+@@ -10510,6 +10582,10 @@
  		ast_clear_flag(&p->flags[1], SIP_PAGE2_CONNECTLINEUPDATE_PEND);
  		add_rpid(&resp, p);
  	}
@@ -268,7 +211,7 @@ Index: channels/chan_sip.c
  	if (ast_test_flag(&p->flags[0], SIP_OFFER_CC)) {
  		add_cc_call_info_to_response(p, &resp);
  	}
-@@ -10549,6 +10601,10 @@
+@@ -10549,6 +10625,10 @@
  			add_header(&resp, "X-Asterisk-HangupCauseCode", buf);
  		}
  	}
@@ -279,7 +222,7 @@ Index: channels/chan_sip.c
  	return send_response(p, &resp, reliable, seqno);
  }
  
-@@ -10561,6 +10617,7 @@
+@@ -10561,6 +10641,7 @@
  	}
  	respprep(&resp, p, msg, req);
  	add_header(&resp, "SIP-ETag", esc_entry->entity_tag);
@@ -287,7 +230,7 @@ Index: channels/chan_sip.c
  
  	return send_response(p, &resp, 0, 0);
  }
-@@ -10648,6 +10705,7 @@
+@@ -10648,6 +10729,7 @@
  	respprep(&resp, p, msg, req);
  	append_date(&resp);
  	add_header(&resp, "Unsupported", unsupported);
@@ -295,7 +238,7 @@ Index: channels/chan_sip.c
  	return send_response(p, &resp, XMIT_UNRELIABLE, 0);
  }
  
-@@ -10701,6 +10759,7 @@
+@@ -10701,6 +10783,7 @@
  	struct sip_request resp;
  	respprep(&resp, p, msg, req);
  	append_date(&resp);
@@ -303,7 +246,7 @@ Index: channels/chan_sip.c
  	return send_response(p, &resp, XMIT_UNRELIABLE, 0);
  }
  
-@@ -10710,6 +10769,7 @@
+@@ -10710,6 +10793,7 @@
  	struct sip_request resp;
  	respprep(&resp, p, msg, req);
  	add_header(&resp, "Accept", "application/sdp");
@@ -311,7 +254,7 @@ Index: channels/chan_sip.c
  	return send_response(p, &resp, reliable, 0);
  }
  
-@@ -10722,6 +10782,7 @@
+@@ -10722,6 +10806,7 @@
  	snprintf(tmp, sizeof(tmp), "%d", min_expiry);
  	respprep(&resp, p, msg, req);
  	add_header(&resp, "Min-Expires", tmp);
@@ -319,7 +262,7 @@ Index: channels/chan_sip.c
  	return send_response(p, &resp, XMIT_UNRELIABLE, 0);
  }
  
-@@ -11803,6 +11864,16 @@
+@@ -11803,6 +11888,16 @@
  	if (rpid == TRUE) {
  		add_rpid(&resp, p);
  	}
@@ -336,7 +279,7 @@ Index: channels/chan_sip.c
  	if (ast_test_flag(&p->flags[0], SIP_OFFER_CC)) {
  		add_cc_call_info_to_response(p, &resp);
  	}
-@@ -12212,7 +12283,34 @@
+@@ -12212,7 +12307,34 @@
  }
  
  /*! 
@@ -372,7 +315,7 @@ Index: channels/chan_sip.c
   * \param p sip_pvt structure
   * \param sipmethod
   * \param sdp unknown
-@@ -12264,17 +12362,24 @@
+@@ -12264,17 +12386,24 @@
  		}
  		snprintf(buf, sizeof(buf), "%d", p->expiry);
  		add_header(&req, "Expires", buf);
@@ -398,7 +341,7 @@ Index: channels/chan_sip.c
  		char i2astr[10];
  
  		if (!p->stimer->st_interval) {
-@@ -17602,6 +17707,7 @@
+@@ -17602,6 +17731,7 @@
  		ast_cli(fd, "  DirectMedia  : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[0], SIP_DIRECT_MEDIA)));
  		ast_cli(fd, "  PromiscRedir : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[0], SIP_PROMISCREDIR)));
  		ast_cli(fd, "  User=Phone   : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[0], SIP_USEREQPHONE)));
@@ -406,7 +349,7 @@ Index: channels/chan_sip.c
  		ast_cli(fd, "  Video Support: %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[1], SIP_PAGE2_VIDEOSUPPORT) || ast_test_flag(&peer->flags[1], SIP_PAGE2_VIDEOSUPPORT_ALWAYS)));
  		ast_cli(fd, "  Text Support : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[1], SIP_PAGE2_TEXTSUPPORT)));
  		ast_cli(fd, "  Ign SDP ver  : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[1], SIP_PAGE2_IGNORESDPVERSION)));
-@@ -17725,6 +17831,7 @@
+@@ -17725,6 +17855,7 @@
  
  		/* - is enumerated */
  		astman_append(s, "SIP-DTMFmode: %s\r\n", dtmfmode2str(ast_test_flag(&peer->flags[0], SIP_DTMF)));
@@ -414,7 +357,7 @@ Index: channels/chan_sip.c
  		astman_append(s, "ToHost: %s\r\n", peer->tohost);
  		astman_append(s, "Address-IP: %s\r\nAddress-Port: %d\r\n", ast_sockaddr_stringify_addr(&peer->addr), ast_sockaddr_port(&peer->addr));
  		astman_append(s, "Default-addr-IP: %s\r\nDefault-addr-port: %d\r\n", ast_sockaddr_stringify_addr(&peer->defaddr), ast_sockaddr_port(&peer->defaddr));
-@@ -18308,6 +18415,7 @@
+@@ -18308,6 +18439,7 @@
   	ast_cli(a->fd, "  Timer B:                %d\n", global_timer_b);
  	ast_cli(a->fd, "  No premature media:     %s\n", AST_CLI_YESNO(global_prematuremediafilter));
  	ast_cli(a->fd, "  Max forwards:           %d\n", sip_cfg.default_max_forwards);
@@ -422,7 +365,7 @@ Index: channels/chan_sip.c
  
  	ast_cli(a->fd, "\nDefault Settings:\n");
  	ast_cli(a->fd, "-----------------\n");
-@@ -18679,10 +18787,14 @@
+@@ -18679,10 +18811,14 @@
  			ast_cli(a->fd, "  Format:                 %s\n", ast_getformatname_multiple(formatbuf, sizeof(formatbuf), cur->owner ? cur->owner->nativeformats : 0) );
  			ast_cli(a->fd, "  T.38 support            %s\n", AST_CLI_YESNO(cur->udptl != NULL));
  			ast_cli(a->fd, "  Video support           %s\n", AST_CLI_YESNO(cur->vrtp != NULL));
@@ -437,19 +380,7 @@ Index: channels/chan_sip.c
  			ast_cli(a->fd, "  Force rport:            %s\n", AST_CLI_YESNO(ast_test_flag(&cur->flags[0], SIP_NAT_FORCE_RPORT)));
  			if (ast_sockaddr_isnull(&cur->redirip)) {
  				ast_cli(a->fd,
-@@ -19876,9 +19988,8 @@
- 			   INVITE, but do set an autodestruct just in case we never get it. */
- 		} else {
- 			/* We have a pending outbound invite, don't send something
--			 * new in-transaction, unless it is a pending reinvite, then
--			 * by the time we are called here, we should probably just hang up. */
--			if (p->pendinginvite && !p->ongoing_reinvite)
-+				new in-transaction */
-+			if (p->pendinginvite)
- 				return;
- 
- 			if (p->owner) {
-@@ -19928,6 +20039,48 @@
+@@ -19928,6 +20064,48 @@
  	return 0;
  }
  
@@ -498,30 +429,7 @@ Index: channels/chan_sip.c
  /*!
   * \brief Handle authentication challenge for SIP UPDATE
   *
-@@ -20118,19 +20271,12 @@
-  	if (resp >= 300 && (p->invitestate == INV_CALLING || p->invitestate == INV_PROCEEDING || p->invitestate == INV_EARLY_MEDIA ))
-  		p->invitestate = INV_COMPLETED;
-  	
--	if ((resp >= 200 && reinvite)) {
--		p->ongoing_reinvite = 0;
--		if (p->reinviteid > -1) {
--			AST_SCHED_DEL_UNREF(sched, p->reinviteid, dialog_unref(p, "unref dialog for reinvite timeout because of a final response"));
--			/* Since we got a final response to the reinvite, but were relying on the reinvite_timeout
--			 * function to clean up after the reinvite, we need to make sure and call check_pendings */
--			check_pendings(p);
--		}
--	}
--
- 	/* Final response, clear out pending invite */
- 	if ((resp == 200 || resp >= 300) && p->pendinginvite && seqno == p->pendinginvite) {
- 		p->pendinginvite = 0;
-+		if (reinvite) {
-+			p->ongoing_reinvite = 0;
-+		}
- 	}
- 
- 	/* If this is a response to our initial INVITE, we need to set what we can use
-@@ -20369,6 +20515,10 @@
+@@ -20366,6 +20544,10 @@
  
  		/* Check for Session-Timers related headers */
  		if (st_get_mode(p, 0) != SESSION_TIMER_MODE_REFUSE && p->outgoing_call == TRUE && !reinvite) {
@@ -532,7 +440,7 @@ Index: channels/chan_sip.c
  			p_hdrval = (char*)get_header(req, "Session-Expires");
  			if (!ast_strlen_zero(p_hdrval)) {
  				/* UAS supports Session-Timers */
-@@ -21071,6 +21221,8 @@
+@@ -21068,6 +21250,8 @@
  	struct ast_channel *owner;
  	int sipmethod;
  	const char *c = get_header(req, "Cseq");
@@ -541,7 +449,7 @@ Index: channels/chan_sip.c
  	/* GCC 4.2 complains if I try to cast c as a char * when passing it to ast_skip_nonblanks, so make a copy of it */
  	char *c_copy = ast_strdupa(c);
  	/* Skip the Cseq and its subsequent spaces */
-@@ -21112,7 +21264,7 @@
+@@ -21109,7 +21293,7 @@
  				ack_res = __sip_semi_ack(p, seqno, 0, sipmethod);
  			}
  		} else {
@@ -550,7 +458,7 @@ Index: channels/chan_sip.c
  		}
  
  		if (ack_res == FALSE) {
-@@ -21138,6 +21290,7 @@
+@@ -21135,6 +21319,7 @@
  		gettag(req, "To", tag, sizeof(tag));
  		ast_string_field_set(p, theirtag, tag);
  	}
@@ -558,7 +466,7 @@ Index: channels/chan_sip.c
  	/* This needs to be configurable on a channel/peer level,
  	   not mandatory for all communication. Sadly enough, NAT implementations
  	   are not so stable so we can always rely on these headers.
-@@ -21157,7 +21310,44 @@
+@@ -21154,7 +21339,44 @@
  		pvt_set_needdestroy(p, "received 4XX response to a BYE");
  		return;
  	}
@@ -603,7 +511,7 @@ Index: channels/chan_sip.c
  	if (p->relatedpeer && sipmethod == SIP_OPTIONS) {
  		/* We don't really care what the response is, just that it replied back.
  		   Well, as long as it's not a 100 response...  since we might
-@@ -21174,6 +21364,9 @@
+@@ -21171,6 +21393,9 @@
  	} else if (sipmethod == SIP_INFO) {
  		/* More good gravy! */
  		handle_response_info(p, resp, rest, req, seqno);
@@ -613,7 +521,7 @@ Index: channels/chan_sip.c
  	} else if (sipmethod == SIP_MESSAGE) {
  		/* More good gravy! */
  		handle_response_message(p, resp, rest, req, seqno);
-@@ -22321,6 +22514,37 @@
+@@ -22318,6 +22543,37 @@
  	return 0;
  }
  
@@ -651,7 +559,7 @@ Index: channels/chan_sip.c
  /*!
   * \brief Handle incoming INVITE request
   * \note If the INVITE has a Replaces header, it is part of an
-@@ -22392,6 +22616,24 @@
+@@ -22389,6 +22645,24 @@
  	p->sipoptions |= required_profile;
  	p->reqsipoptions = required_profile;
  
@@ -676,7 +584,7 @@ Index: channels/chan_sip.c
  	/* Check if this is a loop */
  	if (ast_test_flag(&p->flags[0], SIP_OUTGOING) && p->owner && (p->invitestate != INV_TERMINATED && p->invitestate != INV_CONFIRMED) && p->owner->_state != AST_STATE_UP) {
  		/* This is a call to ourself.  Send ourselves an error code and stop
-@@ -22454,7 +22696,7 @@
+@@ -22451,7 +22725,7 @@
  			 * transaction. Calling __sip_ack will take care of this by clearing the p->pendinginvite and removing the response
  			 * from the previous transaction from the list of outstanding packets.
  			 */
@@ -685,7 +593,7 @@ Index: channels/chan_sip.c
  		} else {
  			/* We already have a pending invite. Sorry. You are on hold. */
  			p->glareinvite = seqno;
-@@ -24550,7 +24792,7 @@
+@@ -24547,7 +24821,7 @@
  		return 0;
  	} else if (auth_result == AUTH_SUCCESSFUL && p->lastinvite) {
  		/* We need to stop retransmitting the 401 */
@@ -694,7 +602,7 @@ Index: channels/chan_sip.c
  	}
  
  	publish_type = determine_sip_publish_type(req, event, etag, expires_str, &expires_int);
-@@ -25377,12 +25619,15 @@
+@@ -25374,12 +25648,15 @@
  	case SIP_UPDATE:
  		res = handle_request_update(p, req);
  		break;
@@ -711,7 +619,7 @@ Index: channels/chan_sip.c
  			if (find_sdp(req)) {
  				if (process_sdp(p, req, SDP_T38_NONE))
  					return -1;
-@@ -25391,7 +25636,7 @@
+@@ -25388,7 +25665,7 @@
  		} else if (p->glareinvite == seqno) {
  			/* handle ack for the 491 pending sent for glareinvite */
  			p->glareinvite = 0;
@@ -720,7 +628,7 @@ Index: channels/chan_sip.c
  		}
  		if (!acked) {
  			/* Got an ACK that did not match anything. Ignore
-@@ -27035,6 +27280,9 @@
+@@ -27032,6 +27309,9 @@
  	} else if (!strcasecmp(v->name, "buggymwi")) {
  		ast_set_flag(&mask[1], SIP_PAGE2_BUGGY_MWI);
  		ast_set2_flag(&flags[1], ast_true(v->value), SIP_PAGE2_BUGGY_MWI);
@@ -732,8 +640,8 @@ Index: channels/chan_sip.c
  
 Index: channels/sip/include/sip.h
 ===================================================================
---- channels/sip/include/sip.h	(.../branches/1.8)	(revision 369561)
-+++ channels/sip/include/sip.h	(.../team/oej/darjeeling-prack-1.8)	(revision 369561)
+--- channels/sip/include/sip.h	(.../branches/1.8)	(revision 369599)
++++ channels/sip/include/sip.h	(.../team/oej/darjeeling-prack-1.8)	(revision 369599)
 @@ -155,7 +155,7 @@
   *  \todo This string should be set dynamically. We only support REFER and SUBSCRIBE if we have
   *  allowsubscribe and allowrefer on in sip.conf.
@@ -803,15 +711,7 @@ Index: channels/sip/include/sip.h
  	ast_group_t callgroup;                  /*!< Call group */
  	ast_group_t pickupgroup;                /*!< Pickup group */
  	uint32_t lastinvite;                    /*!< Last seqno of invite */
-@@ -1069,7 +1079,6 @@
- 
- 	int initid;                         /*!< Auto-congest ID if appropriate (scheduler) */
- 	int waitid;                         /*!< Wait ID for scheduler after 491 or other delays */
--	int reinviteid;                     /*!< Reinvite in case of provisional, but no final response */
- 	int autokillid;                     /*!< Auto-kill ID (scheduler) */
- 	int t38id;                          /*!< T.38 Response ID */
- 	struct sip_refer *refer;            /*!< REFER: SIP transfer data structure */
-@@ -1142,6 +1151,7 @@
+@@ -1142,6 +1152,7 @@
  	int retrans;              /*!< Retransmission number */
  	int method;               /*!< SIP method for this packet */
  	uint32_t seqno;           /*!< Sequence number */
@@ -819,7 +719,7 @@ Index: channels/sip/include/sip.h
  	char is_resp;             /*!< 1 if this is a response packet (e.g. 200 OK), 0 if it is a request */
  	char is_fatal;            /*!< non-zero if there is a fatal error */
  	int response_code;        /*!< If this is a response, the response code */
-@@ -1751,7 +1761,7 @@
+@@ -1751,7 +1762,7 @@
  	char * const text;  /*!< Text id, as in standard */
  } sip_options[] = {	/* XXX used in 3 places */
  	/* RFC3262: PRACK 100% reliability */
@@ -830,8 +730,8 @@ Index: channels/sip/include/sip.h
  	/* SIMPLE events:  RFC4662 */
 Index: channels/sip/include/reqresp_parser.h
 ===================================================================
---- channels/sip/include/reqresp_parser.h	(.../branches/1.8)	(revision 369561)
-+++ channels/sip/include/reqresp_parser.h	(.../team/oej/darjeeling-prack-1.8)	(revision 369561)
+--- channels/sip/include/reqresp_parser.h	(.../branches/1.8)	(revision 369599)
++++ channels/sip/include/reqresp_parser.h	(.../team/oej/darjeeling-prack-1.8)	(revision 369599)
 @@ -145,6 +145,14 @@
  unsigned int parse_sip_options(const char *options, char *unsupported, size_t unsupported_len);
  
@@ -849,8 +749,8 @@ Index: channels/sip/include/reqresp_parser.h
   * \param input1 First URI
 Index: channels/sip/include/dialog.h
 ===================================================================
---- channels/sip/include/dialog.h	(.../branches/1.8)	(revision 369561)
-+++ channels/sip/include/dialog.h	(.../team/oej/darjeeling-prack-1.8)	(revision 369561)
+--- channels/sip/include/dialog.h	(.../branches/1.8)	(revision 369599)
++++ channels/sip/include/dialog.h	(.../team/oej/darjeeling-prack-1.8)	(revision 369599)
 @@ -67,7 +67,7 @@
  
  /*! \brief Acknowledges receipt of a packet and stops retransmission
@@ -862,8 +762,8 @@ Index: channels/sip/include/dialog.h
   * called with p locked */
 Index: channels/sip/reqresp_parser.c
 ===================================================================
---- channels/sip/reqresp_parser.c	(.../branches/1.8)	(revision 369561)
-+++ channels/sip/reqresp_parser.c	(.../team/oej/darjeeling-prack-1.8)	(revision 369561)
+--- channels/sip/reqresp_parser.c	(.../branches/1.8)	(revision 369599)
++++ channels/sip/reqresp_parser.c	(.../team/oej/darjeeling-prack-1.8)	(revision 369599)
 @@ -1516,18 +1516,13 @@
  }
  
@@ -934,7 +834,7 @@ Index: channels/sip/reqresp_parser.c
 Index: README.darjeeling
 ===================================================================
 --- README.darjeeling	(.../branches/1.8)	(revision 0)
-+++ README.darjeeling	(.../team/oej/darjeeling-prack-1.8)	(revision 369561)
++++ README.darjeeling	(.../team/oej/darjeeling-prack-1.8)	(revision 369599)
 @@ -0,0 +1,130 @@
 +Edvina AB
 +Olle E. Johansson
@@ -1078,8 +978,8 @@ Added: svn:keywords
 
 Index: configs/sip.conf.sample
 ===================================================================
---- configs/sip.conf.sample	(.../branches/1.8)	(revision 369561)
-+++ configs/sip.conf.sample	(.../team/oej/darjeeling-prack-1.8)	(revision 369561)
+--- configs/sip.conf.sample	(.../branches/1.8)	(revision 369599)
++++ configs/sip.conf.sample	(.../team/oej/darjeeling-prack-1.8)	(revision 369599)
 @@ -241,6 +241,9 @@
                                  ; and multiline formatted headers for strict
                                  ; SIP compatibility (defaults to "yes")
@@ -1094,9 +994,9 @@ Index: configs/sip.conf.sample
 Egenskapsändringar för: .
 ___________________________________________________________________
 Added: automerge
-   + Is-there-life-off-net?
+   + *
 Added: svnmerge-integrated
-   + /branches/1.8:1-369499
+   + /branches/1.8:1-369590
 Added: automerge-email
    + oej@edvina.net
 
