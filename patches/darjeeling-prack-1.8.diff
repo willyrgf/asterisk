@@ -1,7 +1,7 @@
 Index: channels/chan_sip.c
 ===================================================================
---- channels/chan_sip.c	(.../branches/1.8)	(revision 369599)
-+++ channels/chan_sip.c	(.../team/oej/darjeeling-prack-1.8)	(revision 369599)
+--- channels/chan_sip.c	(.../branches/1.8)	(revision 369624)
++++ channels/chan_sip.c	(.../team/oej/darjeeling-prack-1.8)	(revision 369624)
 @@ -1242,10 +1242,10 @@
  static int __transmit_response(struct sip_pvt *p, const char *msg, const struct sip_request *req, enum xmittype reliable);
  static int retrans_pkt(const void *data);
@@ -37,7 +37,7 @@ Index: channels/chan_sip.c
  /*! \brief Acknowledges receipt of a packet and stops retransmission
   * called with p locked*/
 -int __sip_ack(struct sip_pvt *p, uint32_t seqno, int resp, int sipmethod)
-+int __sip_ack(struct sip_pvt *p, uint32_t seqno, int resp, int sipmethod, int rseqno)
++int __sip_ack(struct sip_pvt *p, uint32_t seqno, int resp, int sipmethod, uint32_t rseqno)
  {
  	struct sip_pkt *cur, *prev = NULL;
  	const char *msg = "Not Found";	/* used only for debugging */
@@ -127,8 +127,8 @@ Index: channels/chan_sip.c
 +			add_header(req, "Rseq", buf);
 +			req->rseqno = p->rseq;
 +			req->reqsipoptions |= SIP_OPT_100REL;
-+			append_history(p, "PRACK", "PRACK Required: Our Rseq %d", p->rseq);
-+			ast_debug(2, "=!=!=!=!=!=!=!= PRACK USED HERE. Rseq %d \n", p->rseq);
++			append_history(p, "PRACK", "PRACK Required: Our Rseq %u", p->rseq);
++			ast_debug(2, "=!=!=!=!=!=!=!= PRACK USED HERE. Rseq %u \n", p->rseq);
 +		} else {
 +			ast_debug(2, "=!=!=!=!=!=!=!= PRACK COULD BE USED HERE. Exactly HERE\n");
 +		}
@@ -286,17 +286,17 @@ Index: channels/chan_sip.c
 - * \brief Build REFER/INVITE/OPTIONS/SUBSCRIBE message and transmit it
 + * \brief transmit SIP PRACK as a response to a provisional response with a Rseq and Require: 100rel header 
 + */
-+static int transmit_prack(struct sip_pvt *p, int their_rseq)
++static int transmit_prack(struct sip_pvt *p, uint32_t their_rseq)
 +{
 +	if (their_rseq == p->irseq) {
-+		ast_debug(3, "!?!?!?!?!? This is a retransmit of the previous response. %d \n", their_rseq);
++		ast_debug(3, "!?!?!?!?!? This is a retransmit of the previous response. %u \n", their_rseq);
 +		/* RFC 3262: In particular, a UAC SHOULD NOT retransmit the PRACK request
 +   		   	when it receives a retransmission of the provisional response being
 +   		   	acknowledged, although doing so does not create a protocol error.*/
 +		return -2;	/* Not used by transmit_invite et al */
 +	}
 +	if (p->irseq > 0 && their_rseq != p->irseq + 1) {
-+		ast_debug(3, "!?!?!?!?!? This is a response out of sequence! ignored. %d \n", their_rseq);
++		ast_debug(3, "!?!?!?!?!? This is a response out of sequence! ignored. %u \n", their_rseq);
 +		/* RFC 3262: if the UAC receives another reliable provisional
 +   			response to the same request, and its RSeq value is not one higher
 +   			than the value of the sequence number, that response MUST NOT be
@@ -315,7 +315,18 @@ Index: channels/chan_sip.c
   * \param p sip_pvt structure
   * \param sipmethod
   * \param sdp unknown
-@@ -12264,17 +12386,24 @@
+@@ -12228,7 +12350,9 @@
+ 	req.method = sipmethod;
+ 	if (init) {/* Bump branch even on initial requests */
+ 		p->branch ^= ast_random();
+-		p->invite_branch = p->branch;
++		if (sipmethod != SIP_PRACK) {
++			p->invite_branch = p->branch;
++		}
+ 		build_via(p);
+ 	}
+ 	if (init > 1) {
+@@ -12264,17 +12388,24 @@
  		}
  		snprintf(buf, sizeof(buf), "%d", p->expiry);
  		add_header(&req, "Expires", buf);
@@ -323,7 +334,7 @@ Index: channels/chan_sip.c
 +		/* Place holder */
 +		/* Add headers for PRACK */
 +		char buf[SIPBUFSIZE/2];
-+		snprintf(buf, sizeof(buf), "%d %d %s", p->irseq, p->lastinvite, "INVITE");
++		snprintf(buf, sizeof(buf), "%u %u %s", p->irseq, p->lastinvite, "INVITE");
 +		add_header(&req, "RAck", buf);
  	}
  
@@ -341,7 +352,7 @@ Index: channels/chan_sip.c
  		char i2astr[10];
  
  		if (!p->stimer->st_interval) {
-@@ -17602,6 +17731,7 @@
+@@ -17602,6 +17733,7 @@
  		ast_cli(fd, "  DirectMedia  : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[0], SIP_DIRECT_MEDIA)));
  		ast_cli(fd, "  PromiscRedir : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[0], SIP_PROMISCREDIR)));
  		ast_cli(fd, "  User=Phone   : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[0], SIP_USEREQPHONE)));
@@ -349,7 +360,7 @@ Index: channels/chan_sip.c
  		ast_cli(fd, "  Video Support: %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[1], SIP_PAGE2_VIDEOSUPPORT) || ast_test_flag(&peer->flags[1], SIP_PAGE2_VIDEOSUPPORT_ALWAYS)));
  		ast_cli(fd, "  Text Support : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[1], SIP_PAGE2_TEXTSUPPORT)));
  		ast_cli(fd, "  Ign SDP ver  : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[1], SIP_PAGE2_IGNORESDPVERSION)));
-@@ -17725,6 +17855,7 @@
+@@ -17725,6 +17857,7 @@
  
  		/* - is enumerated */
  		astman_append(s, "SIP-DTMFmode: %s\r\n", dtmfmode2str(ast_test_flag(&peer->flags[0], SIP_DTMF)));
@@ -357,7 +368,7 @@ Index: channels/chan_sip.c
  		astman_append(s, "ToHost: %s\r\n", peer->tohost);
  		astman_append(s, "Address-IP: %s\r\nAddress-Port: %d\r\n", ast_sockaddr_stringify_addr(&peer->addr), ast_sockaddr_port(&peer->addr));
  		astman_append(s, "Default-addr-IP: %s\r\nDefault-addr-port: %d\r\n", ast_sockaddr_stringify_addr(&peer->defaddr), ast_sockaddr_port(&peer->defaddr));
-@@ -18308,6 +18439,7 @@
+@@ -18308,6 +18441,7 @@
   	ast_cli(a->fd, "  Timer B:                %d\n", global_timer_b);
  	ast_cli(a->fd, "  No premature media:     %s\n", AST_CLI_YESNO(global_prematuremediafilter));
  	ast_cli(a->fd, "  Max forwards:           %d\n", sip_cfg.default_max_forwards);
@@ -365,7 +376,7 @@ Index: channels/chan_sip.c
  
  	ast_cli(a->fd, "\nDefault Settings:\n");
  	ast_cli(a->fd, "-----------------\n");
-@@ -18679,10 +18811,14 @@
+@@ -18679,10 +18813,14 @@
  			ast_cli(a->fd, "  Format:                 %s\n", ast_getformatname_multiple(formatbuf, sizeof(formatbuf), cur->owner ? cur->owner->nativeformats : 0) );
  			ast_cli(a->fd, "  T.38 support            %s\n", AST_CLI_YESNO(cur->udptl != NULL));
  			ast_cli(a->fd, "  Video support           %s\n", AST_CLI_YESNO(cur->vrtp != NULL));
@@ -380,7 +391,7 @@ Index: channels/chan_sip.c
  			ast_cli(a->fd, "  Force rport:            %s\n", AST_CLI_YESNO(ast_test_flag(&cur->flags[0], SIP_NAT_FORCE_RPORT)));
  			if (ast_sockaddr_isnull(&cur->redirip)) {
  				ast_cli(a->fd,
-@@ -19928,6 +20064,48 @@
+@@ -19928,6 +20066,48 @@
  	return 0;
  }
  
@@ -429,7 +440,7 @@ Index: channels/chan_sip.c
  /*!
   * \brief Handle authentication challenge for SIP UPDATE
   *
-@@ -20366,6 +20544,10 @@
+@@ -20366,6 +20546,10 @@
  
  		/* Check for Session-Timers related headers */
  		if (st_get_mode(p, 0) != SESSION_TIMER_MODE_REFUSE && p->outgoing_call == TRUE && !reinvite) {
@@ -440,7 +451,7 @@ Index: channels/chan_sip.c
  			p_hdrval = (char*)get_header(req, "Session-Expires");
  			if (!ast_strlen_zero(p_hdrval)) {
  				/* UAS supports Session-Timers */
-@@ -21068,6 +21250,8 @@
+@@ -21068,6 +21252,8 @@
  	struct ast_channel *owner;
  	int sipmethod;
  	const char *c = get_header(req, "Cseq");
@@ -449,7 +460,7 @@ Index: channels/chan_sip.c
  	/* GCC 4.2 complains if I try to cast c as a char * when passing it to ast_skip_nonblanks, so make a copy of it */
  	char *c_copy = ast_strdupa(c);
  	/* Skip the Cseq and its subsequent spaces */
-@@ -21109,7 +21293,7 @@
+@@ -21109,7 +21295,7 @@
  				ack_res = __sip_semi_ack(p, seqno, 0, sipmethod);
  			}
  		} else {
@@ -458,7 +469,7 @@ Index: channels/chan_sip.c
  		}
  
  		if (ack_res == FALSE) {
-@@ -21135,6 +21319,7 @@
+@@ -21135,6 +21321,7 @@
  		gettag(req, "To", tag, sizeof(tag));
  		ast_string_field_set(p, theirtag, tag);
  	}
@@ -466,7 +477,7 @@ Index: channels/chan_sip.c
  	/* This needs to be configurable on a channel/peer level,
  	   not mandatory for all communication. Sadly enough, NAT implementations
  	   are not so stable so we can always rely on these headers.
-@@ -21154,7 +21339,44 @@
+@@ -21154,7 +21341,44 @@
  		pvt_set_needdestroy(p, "received 4XX response to a BYE");
  		return;
  	}
@@ -478,14 +489,14 @@ Index: channels/chan_sip.c
 +		if (activeextensions & SIP_OPT_100REL) {
  
 +			const char *rseq = get_header(req, "RSeq");
-+			int their_rseq;
++			uint32_t their_rseq;
 +			int res;
 +			ast_debug(3, "!=!=!=!=!=! Response relies on PRACK! Rseq %s\n", rseq);
 +
 +			/* XXX If the response relies on PRACK, we need to start a PRACK transaction
 +			 */
 +			sscanf(get_header(req, "RSeq"), "%30u ", &their_rseq);
-+			append_history(p, "TxPrack", "Their Rseq %d\n", their_rseq);
++			append_history(p, "TxPrack", "Their Rseq %u\n", their_rseq);
 +			parse_ok_contact(p, req);
 +			build_route(p, req, 1, resp);
 +			
@@ -511,7 +522,7 @@ Index: channels/chan_sip.c
  	if (p->relatedpeer && sipmethod == SIP_OPTIONS) {
  		/* We don't really care what the response is, just that it replied back.
  		   Well, as long as it's not a 100 response...  since we might
-@@ -21171,6 +21393,9 @@
+@@ -21171,6 +21395,9 @@
  	} else if (sipmethod == SIP_INFO) {
  		/* More good gravy! */
  		handle_response_info(p, resp, rest, req, seqno);
@@ -521,7 +532,7 @@ Index: channels/chan_sip.c
  	} else if (sipmethod == SIP_MESSAGE) {
  		/* More good gravy! */
  		handle_response_message(p, resp, rest, req, seqno);
-@@ -22318,6 +22543,37 @@
+@@ -22318,6 +22545,37 @@
  	return 0;
  }
  
@@ -530,19 +541,19 @@ Index: channels/chan_sip.c
 +static int handle_request_prack(struct sip_pvt *p, struct sip_request *req)
 +{
 +	const char *rack = get_header(req, "RAck");
-+	int rseq, cseq;
++	uint32_t rseq, cseq;
 +
-+	if(sscanf(rack, "%30d %30d", &rseq, &cseq) != 2) {
++	if(sscanf(rack, "%30u %30u", &rseq, &cseq) != 2) {
 +		/* we did not get proper rseq/cseq */
 +		transmit_response(p, "481 Could not get proper rseq/cseq in Rack", req);
 +	}
-+	ast_debug(3, "!=!=!=!=!=!= Got PRACK with rseq %d and cseq %d \n", rseq, cseq);
++	ast_debug(3, "!=!=!=!=!=!= Got PRACK with rseq %u and cseq %u \n", rseq, cseq);
 +	if (rseq <= p->rseq) {
 +		/* Ack the retransmits */
 +		int acked = __sip_ack(p, cseq, 1 /* response */, 0, rseq);
 +		ast_debug(2, "!=!=!=!=!=! Tried acking the response - %s \n", acked ? "Sucess" : "Total utterly failure");
 +	}
-+	append_history(p, "PRACK", "PRACK received Rseq %d", rseq);
++	append_history(p, "PRACK", "PRACK received Rseq %u", rseq);
 +	transmit_response(p, "200 OK", req);
 +	if (ast_test_flag(&p->flags[2], SIP_PAGE3_ANSWER_WAIT_FOR_PRACK)) {
 +		/* If the response sent reliably contained an SDP, we're not allowed to  answer
@@ -559,7 +570,16 @@ Index: channels/chan_sip.c
  /*!
   * \brief Handle incoming INVITE request
   * \note If the INVITE has a Replaces header, it is part of an
-@@ -22389,6 +22645,24 @@
+@@ -22379,7 +22637,7 @@
+ 			p->invitestate = INV_COMPLETED;
+ 			if (!p->lastinvite)
+ 				sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
+-			res = -1;
++			res = 0;
+ 			goto request_invite_cleanup;
+ 		}
+ 	}
+@@ -22389,6 +22647,22 @@
  	p->sipoptions |= required_profile;
  	p->reqsipoptions = required_profile;
  
@@ -567,16 +587,14 @@ Index: channels/chan_sip.c
 +	if (p->reqsipoptions & SIP_OPT_100REL || p->sipoptions & SIP_OPT_100REL) {
 +		if (ast_test_flag(&p->flags[2], SIP_PAGE3_PRACK)) {	/* Is PRACK enabled for this dialog? */
 +			ast_set_flag(&p->flags[2], SIP_PAGE3_100REL);	/* Mark PRACK as active for this dialog */
-+		} else {
++		} else if (p->reqsipoptions & SIP_OPT_100REL) {
 +			/* If PRACK was required but is disabled in configuration, don't play */
-+			if (p->reqsipoptions & SIP_OPT_100REL) {
-+				transmit_response(p, "420 Bad extension (unsupported)", req);
-+			}
++			transmit_response(p, "420 Bad extension (unsupported)", req);
 +			p->invitestate = INV_COMPLETED;
 +			if (!p->lastinvite) {
 +				sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 +			}
-+			res = -1;
++			res = 0;
 +			goto request_invite_cleanup;
 +		}
 +	}
@@ -640,8 +658,8 @@ Index: channels/chan_sip.c
  
 Index: channels/sip/include/sip.h
 ===================================================================
---- channels/sip/include/sip.h	(.../branches/1.8)	(revision 369599)
-+++ channels/sip/include/sip.h	(.../team/oej/darjeeling-prack-1.8)	(revision 369599)
+--- channels/sip/include/sip.h	(.../branches/1.8)	(revision 369624)
++++ channels/sip/include/sip.h	(.../team/oej/darjeeling-prack-1.8)	(revision 369624)
 @@ -155,7 +155,7 @@
   *  \todo This string should be set dynamically. We only support REFER and SUBSCRIBE if we have
   *  allowsubscribe and allowrefer on in sip.conf.
@@ -730,8 +748,8 @@ Index: channels/sip/include/sip.h
  	/* SIMPLE events:  RFC4662 */
 Index: channels/sip/include/reqresp_parser.h
 ===================================================================
---- channels/sip/include/reqresp_parser.h	(.../branches/1.8)	(revision 369599)
-+++ channels/sip/include/reqresp_parser.h	(.../team/oej/darjeeling-prack-1.8)	(revision 369599)
+--- channels/sip/include/reqresp_parser.h	(.../branches/1.8)	(revision 369624)
++++ channels/sip/include/reqresp_parser.h	(.../team/oej/darjeeling-prack-1.8)	(revision 369624)
 @@ -145,6 +145,14 @@
  unsigned int parse_sip_options(const char *options, char *unsupported, size_t unsupported_len);
  
@@ -749,21 +767,21 @@ Index: channels/sip/include/reqresp_parser.h
   * \param input1 First URI
 Index: channels/sip/include/dialog.h
 ===================================================================
---- channels/sip/include/dialog.h	(.../branches/1.8)	(revision 369599)
-+++ channels/sip/include/dialog.h	(.../team/oej/darjeeling-prack-1.8)	(revision 369599)
+--- channels/sip/include/dialog.h	(.../branches/1.8)	(revision 369624)
++++ channels/sip/include/dialog.h	(.../team/oej/darjeeling-prack-1.8)	(revision 369624)
 @@ -67,7 +67,7 @@
  
  /*! \brief Acknowledges receipt of a packet and stops retransmission
   * called with p locked*/
 -int __sip_ack(struct sip_pvt *p, uint32_t seqno, int resp, int sipmethod);
-+int __sip_ack(struct sip_pvt *p, uint32_t seqno, int resp, int sipmethod, int rseqno);
++int __sip_ack(struct sip_pvt *p, uint32_t seqno, int resp, int sipmethod, uint32_t rseqno);
  
  /*! \brief Pretend to ack all packets
   * called with p locked */
 Index: channels/sip/reqresp_parser.c
 ===================================================================
---- channels/sip/reqresp_parser.c	(.../branches/1.8)	(revision 369599)
-+++ channels/sip/reqresp_parser.c	(.../team/oej/darjeeling-prack-1.8)	(revision 369599)
+--- channels/sip/reqresp_parser.c	(.../branches/1.8)	(revision 369624)
++++ channels/sip/reqresp_parser.c	(.../team/oej/darjeeling-prack-1.8)	(revision 369624)
 @@ -1516,18 +1516,13 @@
  }
  
@@ -834,7 +852,7 @@ Index: channels/sip/reqresp_parser.c
 Index: README.darjeeling
 ===================================================================
 --- README.darjeeling	(.../branches/1.8)	(revision 0)
-+++ README.darjeeling	(.../team/oej/darjeeling-prack-1.8)	(revision 369599)
++++ README.darjeeling	(.../team/oej/darjeeling-prack-1.8)	(revision 369624)
 @@ -0,0 +1,130 @@
 +Edvina AB
 +Olle E. Johansson
@@ -978,8 +996,8 @@ Added: svn:keywords
 
 Index: configs/sip.conf.sample
 ===================================================================
---- configs/sip.conf.sample	(.../branches/1.8)	(revision 369599)
-+++ configs/sip.conf.sample	(.../team/oej/darjeeling-prack-1.8)	(revision 369599)
+--- configs/sip.conf.sample	(.../branches/1.8)	(revision 369624)
++++ configs/sip.conf.sample	(.../team/oej/darjeeling-prack-1.8)	(revision 369624)
 @@ -241,6 +241,9 @@
                                  ; and multiline formatted headers for strict
                                  ; SIP compatibility (defaults to "yes")
