@@ -22637,7 +22637,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 			p->invitestate = INV_COMPLETED;
 			if (!p->lastinvite)
 				sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
-			res = -1;
+			res = 0;
 			goto request_invite_cleanup;
 		}
 	}
@@ -22651,16 +22651,14 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 	if (p->reqsipoptions & SIP_OPT_100REL || p->sipoptions & SIP_OPT_100REL) {
 		if (ast_test_flag(&p->flags[2], SIP_PAGE3_PRACK)) {	/* Is PRACK enabled for this dialog? */
 			ast_set_flag(&p->flags[2], SIP_PAGE3_100REL);	/* Mark PRACK as active for this dialog */
-		} else {
+		} else if (p->reqsipoptions & SIP_OPT_100REL) {
 			/* If PRACK was required but is disabled in configuration, don't play */
-			if (p->reqsipoptions & SIP_OPT_100REL) {
-				transmit_response(p, "420 Bad extension (unsupported)", req);
-			}
+			transmit_response(p, "420 Bad extension (unsupported)", req);
 			p->invitestate = INV_COMPLETED;
 			if (!p->lastinvite) {
 				sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 			}
-			res = -1;
+			res = 0;
 			goto request_invite_cleanup;
 		}
 	}
