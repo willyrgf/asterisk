@@ -4035,7 +4035,7 @@ int __sip_ack(struct sip_pvt *p, uint32_t seqno, int resp, int sipmethod, uint32
 			break;
 		}
 	}
-	ast_debug(1, "Stopping retransmission on '%s' of %s %u: Match %s Rseq %d\n",
+	ast_debug(1, "Stopping retransmission on '%s' of %s %u: Match %s Rseq %u\n",
 		p->callid, resp ? "Response" : "Request", seqno, msg, rseqno);
 	return res;
 }
