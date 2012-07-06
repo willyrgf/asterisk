@@ -12321,7 +12321,7 @@ static int transmit_prack(struct sip_pvt *p, uint32_t their_rseq)
 	   check the rseq sequence numbers for retransmits and act upon them.
 	*/
 
-	if (!ast_strlen_zero(p->theirtag_prack) && !strcmp(p->theirtag, p->theirtag_prack)) {
+	if (!ast_strlen_zero(p->theirtag_prack) && strcmp(p->theirtag, p->theirtag_prack)) {
 		/* We have already sent a PRACK in this dialog, but to a different device.
 		   In this code, we focus on the first response that requires PRACK and do not check
 		   the validity of rseq in responses in other early dialogs by controlling
