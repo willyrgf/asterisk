@@ -12311,26 +12311,61 @@ static int transmit_publish(struct sip_epa_entry *epa_entry, enum sip_publish_ty
  */
 static int transmit_prack(struct sip_pvt *p, uint32_t their_rseq)
 {
-	if (their_rseq == p->irseq) {
-		ast_debug(3, "!?!?!?!?!? This is a retransmit of the previous response. %u \n", their_rseq);
-		/* RFC 3262: In particular, a UAC SHOULD NOT retransmit the PRACK request
-   		   	when it receives a retransmission of the provisional response being
-   		   	acknowledged, although doing so does not create a protocol error.*/
-		return -2;	/* Not used by transmit_invite et al */
-	}
-	if (p->irseq > 0 && their_rseq != p->irseq + 1) {
-		ast_debug(3, "!?!?!?!?!? This is a response out of sequence! ignored. %u \n", their_rseq);
-		/* RFC 3262: if the UAC receives another reliable provisional
-   			response to the same request, and its RSeq value is not one higher
-   			than the value of the sequence number, that response MUST NOT be
-   			acknowledged with a PRACK, and MUST NOT be processed further by the
-   			UAC.  An implementation MAY discard the response, or MAY cache the
-   			response in the hopes of receiving the missing responses.
+	int res;
+	int comparerseq = TRUE;
+	uint32_t focus_rseq = p->irseq;
+
+	/* During the early media phase, we could have a situation where we get provisional
+	   responses from multiple devices, in separate early dialogs. In this case, this 
+	   code focuses on the FIRST early media response as the one in focus where we 
+	   check the rseq sequence numbers for retransmits and act upon them.
+	*/
+
+	if (!ast_strlen_zero(p->theirtag_prack) && !strcmp(p->theirtag, p->theirtag_prack)) {
+		/* We have already sent a PRACK in this dialog, but to a different device.
+		   In this code, we focus on the first response that requires PRACK and do not check
+		   the validity of rseq in responses in other early dialogs by controlling
+		   the PRACK sequence numbers ordering.
+
+		   To be 100% RFC correct, we should have a sip_pvt structure for each early dialog
+		   and terminate them if we get a 199 response in that early dialog. these should
+		   be organized in a tree-like structure based on the original
+		   INVITE callid, cseq and from-tag.
 		*/
-		return -3;
+		comparerseq = FALSE;
+	}
+	
+	if (comparerseq) {
+		if (their_rseq == p->irseq) {
+			ast_debug(3, "!?!?!?!?!? This is a retransmit of the previous response. %u \n", their_rseq);
+			/* RFC 3262: In particular, a UAC SHOULD NOT retransmit the PRACK request
+   		   		when it receives a retransmission of the provisional response being
+   		   		acknowledged, although doing so does not create a protocol error.*/
+			return -2;	/* Not used by transmit_invite et al */
+		}
+		if (p->irseq > 0 && their_rseq != p->irseq + 1) {
+			ast_debug(3, "!?!?!?!?!? This is a response out of sequence! ignored. %u \n", their_rseq);
+			/* RFC 3262: if the UAC receives another reliable provisional
+   				response to the same request, and its RSeq value is not one higher
+   				than the value of the sequence number, that response MUST NOT be
+   				acknowledged with a PRACK, and MUST NOT be processed further by the
+   				UAC.  An implementation MAY discard the response, or MAY cache the
+   				response in the hopes of receiving the missing responses.
+			*/
+			return -3;
+		}
 	}
 	p->irseq = their_rseq;
-	return transmit_invite(p, SIP_PRACK, 0, 1, NULL);
+	res = transmit_invite(p, SIP_PRACK, 0, 1, NULL);
+
+	if (ast_strlen_zero(p->theirtag_prack)) {
+		p->irseq = their_rseq;
+		ast_string_field_set(p, theirtag_prack, p->tag);		/* Save this tag as a PRACK focus for this dialog */
+	} else {
+		p->irseq = focus_rseq;
+	}
+
+	return res;
 }
 
 /*! 
@@ -18440,6 +18475,7 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	ast_cli(a->fd, "  Timer T1 minimum:       %d\n", global_t1min);
  	ast_cli(a->fd, "  Timer B:                %d\n", global_timer_b);
 	ast_cli(a->fd, "  No premature media:     %s\n", AST_CLI_YESNO(global_prematuremediafilter));
+	ast_cli(a->fd, "  Early media focus:      %s\n", AST_CLI_YESNO(sip_cfg.early_media_focus));
 	ast_cli(a->fd, "  Max forwards:           %d\n", sip_cfg.default_max_forwards);
 	ast_cli(a->fd, "  PRACK support:          %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[2], SIP_PAGE3_PRACK)));
 
@@ -20366,7 +20402,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 				ast_setstate(p->owner, AST_STATE_RINGING);
 			}
 		}
-		if (find_sdp(req)) {
+		if (!req->ignoresdp && find_sdp(req)) {
 			if (p->invitestate != INV_CANCELLED)
 				p->invitestate = INV_EARLY_MEDIA;
 			res = process_sdp(p, req, SDP_T38_NONE);
@@ -20375,6 +20411,9 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 				ast_queue_control(p->owner, AST_CONTROL_PROGRESS);
 			}
 			ast_rtp_instance_activate(p->rtp);
+			if (sip_cfg.early_media_focus && ast_strlen_zero(p->theirtag_early)) {
+				ast_string_field_set(p, theirtag_early, p->tag);
+			}
 		}
 		check_pendings(p);
 		break;
@@ -20438,7 +20477,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 			}
 			sip_handle_cc(p, req, AST_CC_CCNR);
 		}
-		if (find_sdp(req)) {
+		if (!req->ignoresdp && find_sdp(req)) {
 			if (p->invitestate != INV_CANCELLED)
 				p->invitestate = INV_EARLY_MEDIA;
 			res = process_sdp(p, req, SDP_T38_NONE);
@@ -21256,6 +21295,7 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 	int sipmethod;
 	const char *c = get_header(req, "Cseq");
 	const char *required = get_header(req, "Require");
+	char tag[128];
 
 	/* GCC 4.2 complains if I try to cast c as a char * when passing it to ast_skip_nonblanks, so make a copy of it */
 	char *c_copy = ast_strdupa(c);
@@ -21317,13 +21357,13 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 		p->pendinginvite = 0;
 	}
 
-	/* Get their tag if we haven't already */
-	if (ast_strlen_zero(p->theirtag) || (resp >= 200)) {
-		char tag[128];
-
-		gettag(req, "To", tag, sizeof(tag));
-		ast_string_field_set(p, theirtag, tag);
-	}
+	
+	/* Always get the tag. Find_call will filter out after we have an established dialog,
+	   so that we don't update the tag after a 200 or other final response. 
+	   Provided that SIP pedantic checking is turned on of course.
+	*/
+	gettag(req, "To", tag, sizeof(tag));
+	ast_string_field_set(p, theirtag, tag);
 
 	/* This needs to be configurable on a channel/peer level,
 	   not mandatory for all communication. Sadly enough, NAT implementations
@@ -21379,6 +21419,14 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 		}
 		if (activeextensions & SIP_OPT_TIMER) {
 			ast_debug(3, "!=!=!=!=!=! The other side activated Session timers! \n");
+		}
+	}
+
+	if (sip_cfg.early_media_focus && !ast_strlen_zero(p->theirtag_early) && !strcmp(p->theirtag_early, p->theirtag)) {
+		/* If we already are in early media phase, and have a response from a new device in this call we should
+	   	ignore the SDP. */
+		if(p->invitestate == INV_EARLY_MEDIA) {
+			req->ignoresdp = TRUE;
 		}
 	}
 
@@ -27977,6 +28025,8 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 					ast_log(LOG_WARNING, "'%s' is not a valid maxforwards value at line %d.  Using default.\n", v->value, v->lineno);
 					peer->maxforwards = sip_cfg.default_max_forwards;
 				}
+			} else if (!strcasecmp(v->name, "earlymediafocus")) {
+				sip_cfg.early_media_focus = ast_true(v->value);
 			} else if (!strcasecmp(v->name, "accountcode")) {
 				ast_string_field_set(peer, accountcode, v->value);
 			} else if (!strcasecmp(v->name, "mohinterpret")) {
@@ -28522,6 +28572,7 @@ static int reload_config(enum channelreloadreason reason)
 	externtcpport = STANDARD_SIP_PORT;
 	externtlsport = STANDARD_TLS_PORT;
 	sip_cfg.srvlookup = DEFAULT_SRVLOOKUP;
+	sip_cfg.early_media_focus = DEFAULT_EARLY_MEDIA_FOCUS;
 	global_tos_sip = DEFAULT_TOS_SIP;
 	global_tos_audio = DEFAULT_TOS_AUDIO;
 	global_tos_video = DEFAULT_TOS_VIDEO;

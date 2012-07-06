@@ -241,7 +241,7 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
                                 ; and multiline formatted headers for strict
                                 ; SIP compatibility (defaults to "yes")
 
-;prack=yes			; Enable PRACK support. (defaults to "no")
+;prack=yes			; Enable PRACK (SIP option 100rel)  support. (defaults to "no")
 				; Can also be set on a per device basis.
 
 ; See https://wiki.asterisk.org/wiki/display/AST/IP+Quality+of+Service for a description of these parameters.
@@ -349,6 +349,14 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
                                 ;
                                 ; In order for "noanswer" applications to work, you need to run
                                 ; the progress() application in the priority before the app.
+;earlymediafocus=yes		; If you have a forking SIP proxy in the call, Asterisk may get multiple
+				; 183/180 responses with SDP from *different* devices. The default is that 
+				; Asterisk jumps on to each one. There's no *correct* solution to this
+				; problem. Turning this on means that Asterisk focuses on the *first*
+				; early media response and ignores the rest. This might mean that the
+				; user gets a ring tone and stays with that even if the service provider
+				; from a different media server plays a very important message.
+				; Default is "no" - jump to the latest one.
 
 ;progressinband=never           ; If we should generate in-band ringing always
                                 ; use 'never' to never use in-band signalling, even in cases

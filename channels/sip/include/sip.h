@@ -187,6 +187,7 @@
 #define DEFAULT_MWI_FROM       ""
 #define DEFAULT_NOTIFYMIME     "application/simple-message-summary"
 #define DEFAULT_ALLOWGUEST     TRUE
+#define DEFAULT_EARLY_MEDIA_FOCUS	FALSE;	/*!< Focus on a single early media stream */
 #define DEFAULT_RTPKEEPALIVE   0      /*!< Default RTPkeepalive setting */
 #define DEFAULT_CALLCOUNTER    FALSE   /*!< Do not enable call counters by default */
 #define DEFAULT_SRVLOOKUP      TRUE    /*!< Recommended setting is ON */
@@ -681,6 +682,7 @@ struct __show_chan_arg {
 	      be applied to devices (trunks, services, phones)
 */
 struct sip_settings {
+	int early_media_focus;		/*!< G: Focus on the first early media stream received, ignore the rest */
 	int peer_rtupdate;          /*!< G: Update database with registration data for peer? */
 	int rtsave_sysname;         /*!< G: Save system name at registration? */
 	int ignore_regexpire;       /*!< G: Ignore expiration of peer  */
@@ -763,6 +765,7 @@ struct sip_request {
 	char has_to_tag;        /*!< non-zero if packet has To: tag */
 	char ignore;            /*!< if non-zero This is a re-transmit, ignore it */
 	char authenticated;     /*!< non-zero if this request was authenticated */
+	char ignoresdp;		/*!< In some cases, we have to ignore the SDP in responses */
 	ptrdiff_t header[SIP_MAX_HEADERS]; /*!< Array of offsets into the request string of each SIP header*/
 	ptrdiff_t line[SIP_MAX_LINES];     /*!< Array of offsets into the request string of each SDP line*/
 	struct ast_str *data;	
@@ -967,6 +970,8 @@ struct sip_pvt {
 		AST_STRING_FIELD(rdnis);        /*!< Referring DNIS */
 		AST_STRING_FIELD(redircause);   /*!< Referring cause */
 		AST_STRING_FIELD(theirtag);     /*!< Their tag */
+		AST_STRING_FIELD(theirtag_prack);  /*!< Current tag focus for PRACK handling */
+		AST_STRING_FIELD(theirtag_early);  /*!< Current tag focus for early media handling */
 		AST_STRING_FIELD(tag);          /*!< Our tag for this session */
 		AST_STRING_FIELD(username);     /*!< [user] name */
 		AST_STRING_FIELD(peername);     /*!< [peer] name, not set if [user] */
