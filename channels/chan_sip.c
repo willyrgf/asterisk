@@ -21425,9 +21425,7 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 	if (sip_cfg.early_media_focus && !ast_strlen_zero(p->theirtag_early) && !strcmp(p->theirtag_early, p->theirtag)) {
 		/* If we already are in early media phase, and have a response from a new device in this call we should
 	   	ignore the SDP. */
-		if(p->invitestate == INV_EARLY_MEDIA) {
-			req->ignoresdp = TRUE;
-		}
+		req->ignoresdp = TRUE;
 	}
 
 	if (p->relatedpeer && sipmethod == SIP_OPTIONS) {
@@ -28025,8 +28023,6 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 					ast_log(LOG_WARNING, "'%s' is not a valid maxforwards value at line %d.  Using default.\n", v->value, v->lineno);
 					peer->maxforwards = sip_cfg.default_max_forwards;
 				}
-			} else if (!strcasecmp(v->name, "earlymediafocus")) {
-				sip_cfg.early_media_focus = ast_true(v->value);
 			} else if (!strcasecmp(v->name, "accountcode")) {
 				ast_string_field_set(peer, accountcode, v->value);
 			} else if (!strcasecmp(v->name, "mohinterpret")) {
@@ -28926,6 +28922,8 @@ static int reload_config(enum channelreloadreason reason)
 			global_match_auth_username = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "srvlookup")) {
 			sip_cfg.srvlookup = ast_true(v->value);
+		} else if (!strcasecmp(v->name, "earlymediafocus")) {
+			sip_cfg.early_media_focus = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "pedantic")) {
 			sip_cfg.pedanticsipchecking = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "maxexpirey") || !strcasecmp(v->name, "maxexpiry")) {
