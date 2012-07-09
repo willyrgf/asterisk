@@ -4248,7 +4248,7 @@ static int send_response(struct sip_pvt *p, struct sip_request *req, enum xmitty
 	}
 
 	res = (reliable) ?
-		 __sip_reliable_xmit(p, seqno, 1, req->data, (reliable == XMIT_CRITICAL), req->method) :
+		 __sip_reliable_xmit(p, seqno, 1, req->data, (reliable == XMIT_CRITICAL || reliable == XMIT_PRACK), req->method) :
 		__sip_xmit(p, req->data);
 	deinit_req(req);
 	if (res > 0) {
@@ -11895,8 +11895,10 @@ static int transmit_response_with_sdp(struct sip_pvt *p, const char *msg, const 
 		reliable = XMIT_PRACK;
 	}
 	if (strncmp(msg, "100", 3)) {
-		/* If we send a resposne WITH sdp we are not allowed to respond before the PRACK is received */
-		ast_set_flag(&p->flags[2], SIP_PAGE3_INVITE_WAIT_FOR_PRACK);
+		/* If we send a response WITH sdp we are not allowed to respond before the PRACK is received */
+		if (ast_test_flag(&p->flags[2], SIP_PAGE3_100REL) {
+			ast_set_flag(&p->flags[2], SIP_PAGE3_INVITE_WAIT_FOR_PRACK);
+		}
 		add_prack_respheader(p, &resp, reliable);
 		add_required_respheader(&resp);
 	}
@@ -20487,6 +20489,9 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 				/* Queue a progress frame */
 				ast_queue_control(p->owner, AST_CONTROL_PROGRESS);
 			}
+			if (sip_cfg.early_media_focus && ast_strlen_zero(p->theirtag_early)) {
+				ast_string_field_set(p, theirtag_early, p->tag);
+			}
 			ast_rtp_instance_activate(p->rtp);
 		} else {
 			/* Alcatel PBXs are known to send 183s with no SDP after sending
@@ -21424,7 +21429,7 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 		}
 	}
 
-	if (sip_cfg.early_media_focus && !ast_strlen_zero(p->theirtag_early) && !strcmp(p->theirtag_early, p->theirtag)) {
+	if (sip_cfg.early_media_focus && !ast_strlen_zero(p->theirtag_early) && strcmp(p->theirtag_early, p->theirtag)) {
 		/* If we already are in early media phase, and have a response from a new device in this call we should
 	   	ignore the SDP. */
 		req->ignoresdp = TRUE;
@@ -22702,6 +22707,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 	if (p->reqsipoptions & SIP_OPT_100REL || p->sipoptions & SIP_OPT_100REL) {
 		if (ast_test_flag(&p->flags[2], SIP_PAGE3_PRACK)) {	/* Is PRACK enabled for this dialog? */
 			ast_set_flag(&p->flags[2], SIP_PAGE3_100REL);	/* Mark PRACK as active for this dialog */
+			ast_debug(2, "--#-#-#-#- Adding PRACK support for this dialog \n");
 		} else if (p->reqsipoptions & SIP_OPT_100REL) {
 			/* If PRACK was required but is disabled in configuration, don't play */
 			transmit_response(p, "420 Bad extension (unsupported)", req);
