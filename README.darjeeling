@@ -3,6 +3,7 @@ Olle E. Johansson
 
 
 Project started: 2012-06-15
+Project ended:   2012-07-09
 
 
 
@@ -31,6 +32,12 @@ Asterisk will now add 100rel to the list of supported options. If the other devi
 supports PRACK Asterisk will activate it or support it if the other side
 requires it.
 There's currently no support for requiring PRACK in a call.
+
+In this branch there's also code for a related issue. The option "earlymediafocus" in 
+SIP.conf will, when enabled, force Asterisk to only parse and activate the first
+SDP received in an 18x answer. If multiple devices answer, the others will be ignored.
+This works better if you enable strictrtp in rtp.conf so that we lock on to the ip
+address in the SDP instead of accepting audio from anyone.
 
 
 Technichal details
@@ -102,12 +109,10 @@ the offer and answer, even if the original INVITE itself has not been responded 
 cease. As these responses can convey important information, PRACK messages SHOULD be authenticated
 as any other request." (section 9)
 
-Todo
+Done
 ----
 * Add PRACK to the list of supported headers
 	- done
-* Should we be able to REQUIRE prack? Based on what? _SIPREQUIREPRACK ?
-	- not now
 * PRACK enabled globally and per device - user and peer
 	- done
 * PRACK working when Asterisk is the UAS
@@ -115,15 +120,22 @@ Todo
 * PRACK working when Asterisk is the UAC
 	- done
 * PRACK with authentication
-	- not done
-* Requesting auth for PRACK
-	- not done
+	- done
 * PRACK in "sip show settings"
 	- done
 * PRACK in "sip show peer xxx"
 	- done
 * PRACK in "sip show channel xxx"
 	- done
+
+Future work for anyone interested
+---------------------------------
+* Requesting auth for PRACK
+	- We should Authenticate incoming pracks and support re-use of Nonces in order
+	  to lessen the traffic
+* Should we be able to REQUIRE prack in an INVITE? Based on what? _SIPREQUIREPRACK ?
+* PRACK only for 183 with SDP
+	- Option to require PRACK only on provisional responses with SDP attachments
 
 ---------------------
 The patch is (C) Copyright by Edvina AB, Sollentuna, Sweden. 
