@@ -11896,7 +11896,7 @@ static int transmit_response_with_sdp(struct sip_pvt *p, const char *msg, const 
 	}
 	if (strncmp(msg, "100", 3)) {
 		/* If we send a response WITH sdp we are not allowed to respond before the PRACK is received */
-		if (ast_test_flag(&p->flags[2], SIP_PAGE3_100REL) {
+		if (ast_test_flag(&p->flags[2], SIP_PAGE3_100REL)) {
 			ast_set_flag(&p->flags[2], SIP_PAGE3_INVITE_WAIT_FOR_PRACK);
 		}
 		add_prack_respheader(p, &resp, reliable);
