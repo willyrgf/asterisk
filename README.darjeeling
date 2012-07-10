@@ -25,6 +25,8 @@ the customer that his call will be cancelled due to lack of funds in his account
 PRACK adds a retransmit and ACK mechanism to the 1xx messages excluding 100 (since
 it's transmitted hop-by-hop).
 
+This work was funded by Nordicom Norge AS, part of the Phonera group.
+
 Configuration
 =============
 Add prack=yes in the [general] section of sip.conf or in device configurations. 
