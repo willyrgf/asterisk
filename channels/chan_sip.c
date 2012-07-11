@@ -1232,7 +1232,7 @@ static const char *sip_get_callid(struct ast_channel *chan);
 static int handle_request_do(struct sip_request *req, struct ast_sockaddr *addr);
 static int sip_standard_port(enum sip_transport type, int port);
 static int sip_prepare_socket(struct sip_pvt *p);
-static int get_address_family_filter(const struct ast_sockaddr *addr);
+static int get_address_family_filter(unsigned int transport);
 
 /*--- Transmitting responses and requests */
 static int sipsock_read(int *id, int fd, short events, void *ignore);
@@ -1415,6 +1415,8 @@ static int ast_sockaddr_resolve_first_af(struct ast_sockaddr *addr,
 				      const char *name, int flag, int family);
 static int ast_sockaddr_resolve_first(struct ast_sockaddr *addr,
 				      const char *name, int flag);
+static int ast_sockaddr_resolve_first_transport(struct ast_sockaddr *addr,
+						const char *name, int flag, unsigned int transport);
 
 /*--- Debugging
 	Functions for enabling debug per IP or fully, or enabling history logging for
@@ -1516,7 +1518,7 @@ static char *generate_random_string(char *buf, size_t size);
 static void build_callid_pvt(struct sip_pvt *pvt);
 static void change_callid_pvt(struct sip_pvt *pvt, const char *callid);
 static void build_callid_registry(struct sip_registry *reg, const struct ast_sockaddr *ourip, const char *fromdomain);
-static void make_our_tag(char *tagbuf, size_t len);
+static void make_our_tag(struct sip_pvt *pvt);
 static int add_header(struct sip_request *req, const char *var, const char *value);
 static int add_header_max_forwards(struct sip_pvt *dialog, struct sip_request *req);
 static int add_content(struct sip_request *req, const char *line);
@@ -3095,7 +3097,7 @@ static int proxy_update(struct sip_proxy *proxy)
 	if (!ast_sockaddr_parse(&proxy->ip, proxy->name, 0)) {
 		/* Ok, not an IP address, then let's check if it's a domain or host */
 		/* XXX Todo - if we have proxy port, don't do SRV */
-		proxy->ip.ss.ss_family = get_address_family_filter(&bindaddr); /* Filter address family */
+		proxy->ip.ss.ss_family = get_address_family_filter(SIP_TRANSPORT_UDP); /* Filter address family */
 		if (ast_get_ip_or_srv(&proxy->ip, proxy->name, sip_cfg.srvlookup ? "_sip._udp" : NULL) < 0) {
 				ast_log(LOG_WARNING, "Unable to locate host '%s'\n", proxy->name);
 				return FALSE;
@@ -3848,7 +3850,7 @@ static int __sip_autodestruct(const void *data)
 			ast_debug(3, "Re-scheduled destruction of SIP call %s\n", p->callid ? p->callid : "<unknown>");
 			append_history(p, "ReliableXmit", "timeout");
 			if (sscanf(p->lastmsg, "Tx: %30s", method_str) == 1 || sscanf(p->lastmsg, "Rx: %30s", method_str) == 1) {
-				if (method_match(SIP_CANCEL, method_str) || method_match(SIP_BYE, method_str)) {
+				if (p->ongoing_reinvite || method_match(SIP_CANCEL, method_str) || method_match(SIP_BYE, method_str)) {
 					pvt_set_needdestroy(p, "autodestruct");
 				}
 			}
@@ -4810,7 +4812,7 @@ static int realtime_peer_by_name(const char *const *name, struct ast_sockaddr *a
 					if (ast_sockaddr_resolve(&addrs,
 								 tmp->value,
 								 PARSE_PORT_FORBID,
-								 get_address_family_filter(&bindaddr)) <= 0 ||
+								 get_address_family_filter(SIP_TRANSPORT_UDP)) <= 0 ||
 								 ast_sockaddr_cmp(&addrs[0], addr)) {
 						/* No match */
 						ast_variables_destroy(*var);
@@ -5478,7 +5480,7 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer, struct ast_soc
 			}
 		}
 
-		if (ast_sockaddr_resolve_first(&dialog->sa, hostn, 0)) {
+		if (ast_sockaddr_resolve_first_transport(&dialog->sa, hostn, 0, dialog->socket.type ? dialog->socket.type : SIP_TRANSPORT_UDP)) {
 			ast_log(LOG_WARNING, "No such host: %s\n", peername);
 			return -1;
 		}
@@ -6223,6 +6225,21 @@ const char *hangup_cause2sip(int cause)
 	return 0;
 }
 
+static int reinvite_timeout(const void *data)
+{
+	struct sip_pvt *dialog = (struct sip_pvt *) data;
+	struct ast_channel *owner = sip_pvt_lock_full(dialog);
+	dialog->reinviteid = -1;
+	check_pendings(dialog);
+	if (owner) {
+		ast_channel_unlock(owner);
+		ast_channel_unref(owner);
+	}
+	ao2_unlock(dialog);
+	dialog_unref(dialog, "unref for reinvite timeout");
+	return 0;
+}
+
 /*! \brief  sip_hangup: Hangup SIP call
  * Part of PBX interface, called from ast_hangup */
 static int sip_hangup(struct ast_channel *ast)
@@ -6412,8 +6429,16 @@ static int sip_hangup(struct ast_channel *ast)
 				ast_set_flag(&p->flags[0], SIP_PENDINGBYE);	
 				ast_clear_flag(&p->flags[0], SIP_NEEDREINVITE);	
 				AST_SCHED_DEL_UNREF(sched, p->waitid, dialog_unref(p, "when you delete the waitid sched, you should dec the refcount for the stored dialog ptr"));
-				if (sip_cancel_destroy(p))
+				if (sip_cancel_destroy(p)) {
 					ast_log(LOG_WARNING, "Unable to cancel SIP destruction.  Expect bad things.\n");
+				}
+				/* If we have an ongoing reinvite, there is a chance that we have gotten a provisional
+				 * response, but something weird has happened and we will never receive a final response.
+				 * So, just in case, check for pending actions after a bit of time to trigger the pending
+				 * bye that we are setting above */
+				if (p->ongoing_reinvite && p->reinviteid < 0) {
+					p->reinviteid = ast_sched_add(sched, 32 * p->timer_t1, reinvite_timeout, dialog_ref(p, "ref for reinvite_timeout"));
+				}
 			}
 		}
 	}
@@ -6980,6 +7005,9 @@ static int sip_indicate(struct ast_channel *ast, int condition, const void *data
 		}
 		break;
 	case AST_CONTROL_UPDATE_RTP_PEER: /* Absorb this since it is handled by the bridge */
+		break;
+	case AST_CONTROL_FLASH: /* We don't currently handle AST_CONTROL_FLASH here, but it is expected, so we don't need to warn either. */
+		res = -1;
 		break;
 	case -1:
 		res = -1;
@@ -7605,9 +7633,9 @@ static void build_callid_registry(struct sip_registry *reg, const struct ast_soc
 }
 
 /*! \brief Make our SIP dialog tag */
-static void make_our_tag(char *tagbuf, size_t len)
+static void make_our_tag(struct sip_pvt *pvt)
 {
-	snprintf(tagbuf, len, "as%08lx", ast_random());
+	ast_string_field_build(pvt, tag, "as%08lx", ast_random());
 }
 
 /*! \brief Allocate Session-Timers struct w/in dialog */
@@ -7686,6 +7714,7 @@ struct sip_pvt *sip_alloc(ast_string_field callid, struct ast_sockaddr *addr,
 	p->method = intended_method;
 	p->initid = -1;
 	p->waitid = -1;
+	p->reinviteid = -1;
 	p->autokillid = -1;
 	p->request_queue_sched_id = -1;
 	p->provisional_keepalive_sched_id = -1;
@@ -7718,7 +7747,7 @@ struct sip_pvt *sip_alloc(ast_string_field callid, struct ast_sockaddr *addr,
 	p->do_history = recordhistory;
 
 	p->branch = ast_random();	
-	make_our_tag(p->tag, sizeof(p->tag));
+	make_our_tag(p);
 	p->ocseq = INITIAL_CSEQ;
 	p->allowed_methods = UINT_MAX;
 
@@ -7804,7 +7833,7 @@ static int process_via(struct sip_pvt *p, const struct sip_request *req)
 	}
 
 	if (via->maddr) {
-		if (ast_sockaddr_resolve_first(&p->sa, via->maddr, PARSE_PORT_FORBID)) {
+		if (ast_sockaddr_resolve_first_transport(&p->sa, via->maddr, PARSE_PORT_FORBID, p->socket.type)) {
 			ast_log(LOG_WARNING, "Can't find address for maddr '%s'\n", via->maddr);
 			ast_log(LOG_ERROR, "error processing via header\n");
 			free_via(via);
@@ -10092,7 +10121,7 @@ static void set_destination(struct sip_pvt *p, char *uri)
 
 	/*! \todo XXX If we have sip_cfg.srvlookup on, then look for NAPTR/SRV,
 	 * otherwise, just look for A records */
-	if (ast_sockaddr_resolve_first(&p->sa, hostname, 0)) {
+	if (ast_sockaddr_resolve_first_transport(&p->sa, hostname, 0, p->socket.type)) {
 		ast_log(LOG_WARNING, "Can't find address for host '%s'\n", hostname);
 		return;
 	}
@@ -10113,7 +10142,7 @@ static void set_destination(struct sip_pvt *p, char *uri)
 
 		/*! \todo XXX If we have sip_cfg.srvlookup on, then look for
 		 * NAPTR/SRV, otherwise, just look for A records */
-		if (ast_sockaddr_resolve_first(&p->sa, hostname, PARSE_PORT_FORBID)) {
+		if (ast_sockaddr_resolve_first_transport(&p->sa, hostname, PARSE_PORT_FORBID, p->socket.type)) {
 			ast_log(LOG_WARNING, "Can't find address for host '%s'\n", hostname);
 			return;
 		}
@@ -10584,7 +10613,7 @@ static int transmit_response_using_temp(ast_string_field callid, struct ast_sock
 	}
 
 	p->branch = ast_random();
-	make_our_tag(p->tag, sizeof(p->tag));
+	make_our_tag(p);
 	p->ocseq = INITIAL_CSEQ;
 
 	if (useglobal_nat && addr) {
@@ -11889,7 +11918,7 @@ static int transmit_reinvite_with_sdp(struct sip_pvt *p, int t38version, int old
 	initialize_initreq(p, &req);
 	p->lastinvite = p->ocseq;
 	ast_set_flag(&p->flags[0], SIP_OUTGOING);       /* Change direction of this dialog */
-
+	p->ongoing_reinvite = 1;
 	return send_request(p, &req, XMIT_CRITICAL, p->ocseq);
 }
 
@@ -12451,7 +12480,7 @@ static int __sip_subscribe_mwi_do(struct sip_subscription_mwi *mwi)
 		struct sip_subscription_mwi *saved;
 		snprintf(transport, sizeof(transport), "_%s._%s", get_srv_service(mwi->transport), get_srv_protocol(mwi->transport));
 
-		mwi->us.ss.ss_family = get_address_family_filter(&bindaddr); /* Filter address family */
+		mwi->us.ss.ss_family = get_address_family_filter(mwi->transport); /* Filter address family */
 		saved = ASTOBJ_REF(mwi);
 		ast_dnsmgr_lookup_cb(mwi->hostname, &mwi->us, &mwi->dnsmgr, sip_cfg.srvlookup ? transport : NULL, on_dns_update_mwi, saved);
 		if (!mwi->dnsmgr) {
@@ -13242,7 +13271,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 		char transport[MAXHOSTNAMELEN];
 		peer = find_peer(r->hostname, NULL, TRUE, FINDPEERS, FALSE, 0);
 		snprintf(transport, sizeof(transport), "_%s._%s",get_srv_service(r->transport), get_srv_protocol(r->transport)); /* have to use static get_transport function */
-		r->us.ss.ss_family = get_address_family_filter(&bindaddr); /* Filter address family */
+		r->us.ss.ss_family = get_address_family_filter(r->transport); /* Filter address family */
 
 		/* No point in doing a DNS lookup of the register hostname if we're just going to
 		 * end up using an outbound proxy. obproxy_get is safe to call with either of r->call
@@ -13267,7 +13296,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 			return 0;
 		} else {
 			p = dialog_ref(r->call, "getting a copy of the r->call dialog in transmit_register");
-			make_our_tag(p->tag, sizeof(p->tag));	/* create a new local tag for every register attempt */
+			make_our_tag(p);	/* create a new local tag for every register attempt */
 			ast_string_field_set(p, theirtag, NULL);	/* forget their old tag, so we don't match tags when getting response */
 		}
 	} else {
@@ -13958,7 +13987,7 @@ static int __set_address_from_contact(const char *fullcontact, struct ast_sockad
 		return -1;
 	}
 
-	if (ast_sockaddr_resolve_first(addr, hostport, 0)) {
+	if (ast_sockaddr_resolve_first_transport(addr, hostport, 0, get_transport_str2enum(transport))) {
 		ast_log(LOG_WARNING, "Invalid host name in Contact: (can't "
 			"resolve in DNS) : '%s'\n", hostport);
 		return -1;
@@ -14103,7 +14132,7 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 		ast_debug(1, "Store REGISTER's Contact header for call routing.\n");
 		/* XXX This could block for a long time XXX */
 		/*! \todo Check NAPTR/SRV if we have not got a port in the URI */
-		if (ast_sockaddr_resolve_first(&testsa, hostport, 0)) {
+		if (ast_sockaddr_resolve_first_transport(&testsa, hostport, 0, peer->socket.type)) {
 			ast_log(LOG_WARNING, "Invalid hostport '%s'\n", hostport);
 			ast_string_field_set(peer, fullcontact, "");
 			ast_string_field_set(pvt, our_contact, "");
@@ -18988,7 +19017,7 @@ static void handle_request_info(struct sip_pvt *p, struct sip_request *req)
 /*! \brief Enable SIP Debugging for a single IP */
 static char *sip_do_debug_ip(int fd, const char *arg)
 {
-	if (ast_sockaddr_resolve_first(&debugaddr, arg, 0)) {
+	if (ast_sockaddr_resolve_first_af(&debugaddr, arg, 0, 0)) {
 		return CLI_SHOWUSAGE;
 	}
 
@@ -19838,8 +19867,11 @@ static void parse_moved_contact(struct sip_pvt *p, struct sip_request *req, char
 static void check_pendings(struct sip_pvt *p)
 {
 	if (ast_test_flag(&p->flags[0], SIP_PENDINGBYE)) {
-		/* if we can't BYE, then this is really a pending CANCEL */
-		if (p->invitestate == INV_PROCEEDING || p->invitestate == INV_EARLY_MEDIA) {
+		if (p->reinviteid > -1) {
+			/* Outstanding p->reinviteid timeout, so wait... */
+			return;
+		} else if (p->invitestate == INV_PROCEEDING || p->invitestate == INV_EARLY_MEDIA) {
+			/* if we can't BYE, then this is really a pending CANCEL */
 			p->invitestate = INV_CANCELLED;
 			transmit_request(p, SIP_CANCEL, p->lastinvite, XMIT_RELIABLE, FALSE);
 			/* If the cancel occurred on an initial invite, cancel the pending BYE */
@@ -19850,8 +19882,9 @@ static void check_pendings(struct sip_pvt *p)
 			   INVITE, but do set an autodestruct just in case we never get it. */
 		} else {
 			/* We have a pending outbound invite, don't send something
-				new in-transaction */
-			if (p->pendinginvite)
+			 * new in-transaction, unless it is a pending reinvite, then
+			 * by the time we are called here, we should probably just hang up. */
+			if (p->pendinginvite && !p->ongoing_reinvite)
 				return;
 
 			if (p->owner) {
@@ -20091,9 +20124,17 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
  	if (resp >= 300 && (p->invitestate == INV_CALLING || p->invitestate == INV_PROCEEDING || p->invitestate == INV_EARLY_MEDIA ))
  		p->invitestate = INV_COMPLETED;
  	
+	if ((resp >= 200 && reinvite)) {
+		p->ongoing_reinvite = 0;
+		if (p->reinviteid > -1) {
+			AST_SCHED_DEL_UNREF(sched, p->reinviteid, dialog_unref(p, "unref dialog for reinvite timeout because of a final response"));
+		}
+	}
+
 	/* Final response, clear out pending invite */
-	if ((resp == 200 || resp >= 300) && p->pendinginvite && seqno == p->pendinginvite)
+	if ((resp == 200 || resp >= 300) && p->pendinginvite && seqno == p->pendinginvite) {
 		p->pendinginvite = 0;
+	}
 
 	/* If this is a response to our initial INVITE, we need to set what we can use
 	 * for this peer.
@@ -22777,8 +22818,6 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 				 */
 				/* Fall through */
 			case SIP_GET_DEST_EXTEN_NOT_FOUND:
-			case SIP_GET_DEST_REFUSED:
-			default:
 				{
 					char *decoded_exten = ast_strdupa(p->exten);
 					transmit_response_reliable(p, "404 Not Found", req);
@@ -22787,6 +22826,10 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 						" '%s' rejected because extension not found in context '%s'.\n",
 						S_OR(p->username, p->peername), ast_sockaddr_stringify(&p->recv), decoded_exten, p->context);
 				}
+				break;
+			case SIP_GET_DEST_REFUSED:
+			default:
+				transmit_response_reliable(p, "403 Forbidden", req);
 			} /* end switch */
 
 			p->invitestate = INV_COMPLETED;
@@ -22802,7 +22845,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 				ast_string_field_set(p, exten, "s");
 			/* Initialize our tag */
 
-			make_our_tag(p->tag, sizeof(p->tag));
+			make_our_tag(p);
 			/* First invitation - create the channel.  Allocation
 			 * failures are handled below. */
 			c = sip_new(p, AST_STATE_DOWN, S_OR(p->peername, NULL), NULL);
@@ -24774,7 +24817,7 @@ static int handle_request_subscribe(struct sip_pvt *p, struct sip_request *req, 
 
 	/* Initialize tag for new subscriptions */	
 	if (ast_strlen_zero(p->tag))
-		make_our_tag(p->tag, sizeof(p->tag));
+		make_our_tag(p);
 
 	if (!strncmp(eventheader, "presence", MAX(event_len, 8)) || !strncmp(eventheader, "dialog", MAX(event_len, 6))) { /* Presence, RFC 3842 */
 		unsigned int pidf_xml;
@@ -25266,14 +25309,15 @@ static int handle_incoming(struct sip_pvt *p, struct sip_request *req, struct as
 		if (!p->initreq.headers && req->has_to_tag) {
 			/* If this is a first request and it got a to-tag, it is not for us */
 			if (!req->ignore && req->method == SIP_INVITE) {
-				/* We will be subversive here. By blanking out the to-tag of the request,
-				 * it will cause us to attach our own generated to-tag instead. This way,
-				 * when we receive an ACK, the ACK will contain the to-tag we generated,
-				 * resulting in a proper to-tag match.
+				/* Just because we think this is a dialog-starting INVITE with a to-tag
+				 * doesn't mean it actually is. It could be a reinvite for an established, but
+				 * unknown dialog. In such a case, we need to change our tag to the
+				 * incoming INVITE's to-tag so that they will recognize the 481 we send and
+				 * so that we will properly match their incoming ACK.
 				 */
-				char *to_header = (char *) get_header(req, "To");
-				char *tag = strstr(to_header, ";tag=");
-				*tag = '\0';
+				char totag[128];
+				gettag(req, "To", totag, sizeof(totag));
+				ast_string_field_set(p, tag, totag);
 				p->pendinginvite = p->icseq;
 				transmit_response_reliable(p, "481 Call/Transaction Does Not Exist", req);
 				/* Will cease to exist after ACK */
@@ -25551,8 +25595,20 @@ static struct ast_tcptls_session_instance *sip_tcp_locate(struct ast_sockaddr *s
  *
  * \note return 0 if addr is [::] else it returns addr's family.
  */
-int get_address_family_filter(const struct ast_sockaddr *addr)
+int get_address_family_filter(unsigned int transport)
 {
+	const struct ast_sockaddr *addr = NULL;
+
+	if ((transport == SIP_TRANSPORT_UDP) || !transport) {
+		addr = &bindaddr;
+	}
+	else if (transport == SIP_TRANSPORT_TCP) {
+		addr = &sip_tcp_desc.local_address;
+	}
+	else if (transport == SIP_TRANSPORT_TLS) {
+		addr = &sip_tls_desc.local_address;
+	}
+
 	if (ast_sockaddr_is_ipv6(addr) && ast_sockaddr_is_any(addr)) {
 		return 0;
 	}
@@ -26687,7 +26743,7 @@ static struct ast_channel *sip_request_call(const char *type, format_t format, c
 	}
 
 	if (!ast_strlen_zero(remote_address)) {
-		if (ast_sockaddr_resolve_first(&remote_address_sa, remote_address, 0)) {
+		if (ast_sockaddr_resolve_first_transport(&remote_address_sa, remote_address, 0, transport)) {
 			ast_log(LOG_WARNING, "Unable to find IP address for host %s. We will not use this remote IP address\n", remote_address);
 		} else {
 			if (!ast_sockaddr_port(&remote_address_sa)) {
@@ -27909,7 +27965,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 
 		snprintf(transport, sizeof(transport), "_%s._%s", get_srv_service(peer->socket.type), get_srv_protocol(peer->socket.type));
 
-		peer->addr.ss.ss_family = get_address_family_filter(&bindaddr); /* Filter address family */
+		peer->addr.ss.ss_family = get_address_family_filter(peer->socket.type); /* Filter address family */
 		if (ast_dnsmgr_lookup_cb(_srvlookup, &peer->addr, &peer->dnsmgr, sip_cfg.srvlookup && !peer->portinuri ? transport : NULL,
 					on_dns_update_peer, ref_peer(peer, "Store peer on dnsmgr"))) {
 			ast_log(LOG_ERROR, "srvlookup failed for host: %s, on peer %s, removing peer\n", _srvlookup, peer->name);
@@ -29948,7 +30004,17 @@ static int ast_sockaddr_resolve_first_af(struct ast_sockaddr *addr,
 static int ast_sockaddr_resolve_first(struct ast_sockaddr *addr,
 				      const char* name, int flag)
 {
-	return ast_sockaddr_resolve_first_af(addr, name, flag, get_address_family_filter(&bindaddr));
+	return ast_sockaddr_resolve_first_af(addr, name, flag, get_address_family_filter(SIP_TRANSPORT_UDP));
+}
+
+/*! \brief  Return the first entry from ast_sockaddr_resolve filtered by family of binddaddr
+ *
+ * \warn Using this function probably means you have a faulty design.
+ */
+static int ast_sockaddr_resolve_first_transport(struct ast_sockaddr *addr,
+						const char* name, int flag, unsigned int transport)
+{
+        return ast_sockaddr_resolve_first_af(addr, name, flag, get_address_family_filter(transport));
 }
 
 /*! \brief

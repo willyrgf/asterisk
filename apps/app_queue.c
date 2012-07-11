@@ -4680,11 +4680,6 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 			int res2;
 
 			res2 = ast_autoservice_start(qe->chan);
-
-			/* instead of starting autoservice and jacking this thread to push sound to the
-			   peer channel, let's set up a background player to the peer channel and 
-			   get on with life in this thread. */
-			
 			if (qe->parent->memberdelay) {
 				ast_log(LOG_NOTICE, "Delaying member connect for %d seconds\n", qe->parent->memberdelay);
 				res2 |= ast_safe_sleep(peer, qe->parent->memberdelay * 1000);
@@ -4716,8 +4711,8 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 						}
 					}
 				}
+				ast_autoservice_stop(qe->chan);
 			}
-			res2 |= ast_autoservice_stop(qe->chan);
 
 
 			if (ast_check_hangup(peer)) {
@@ -4737,8 +4732,8 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 				ast_hangup(peer);
 				ao2_ref(member, -1);
 				goto out;
-			} else if (res2) {
-				/* Caller must have hung up just before being connected*/
+			} else if (ast_check_hangup(qe->chan)) {
+				/* Caller must have hung up just before being connected */
 				ast_log(LOG_NOTICE, "Caller was about to talk to agent on %s but the caller hungup.\n", peer->name);
 				ast_queue_log(queuename, qe->chan->uniqueid, member->membername, "ABANDON", "%d|%d|%ld", qe->pos, qe->opos, (long) time(NULL) - qe->start);
 				record_abandoned(qe);
