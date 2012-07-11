@@ -287,6 +287,9 @@ static int autofill_default = 0;
 /*! \brief queues.conf [general] option */
 static int montype_default = 0;
 
+/*! \brief queues.conf [general] option */
+static int shared_lastcall = 1;
+
 enum queue_result {
 	QUEUE_UNKNOWN = 0,
 	QUEUE_TIMEOUT = 1,
@@ -325,6 +328,7 @@ struct callattempt {
 	struct callattempt *q_next;
 	struct callattempt *call_next;
 	struct ast_channel *chan;
+	struct call_queue *lastqueue;
 	char interface[256];
 	int stillgoing;
 	int metric;
@@ -368,6 +372,7 @@ struct member {
 	int status;                         /*!< Status of queue member */
 	int paused;                         /*!< Are we paused (not accepting calls)? */
 	time_t lastcall;                    /*!< When last successful call was hungup */
+	struct call_queue *lastqueue;       /*!< Last queue we received a call */
 	unsigned int dead:1;                /*!< Used to detect members deleted in realtime */
 	unsigned int delme:1;               /*!< Flag to delete entry on reload */
 };
@@ -1936,11 +1941,14 @@ static int ring_entry(struct queue_ent *qe, struct callattempt *tmp, int *busies
 	const char *macrocontext, *macroexten;
 
 	/* on entry here, we know that tmp->chan == NULL */
-	if (qe->parent->wrapuptime && (time(NULL) - tmp->lastcall < qe->parent->wrapuptime)) {
+	if ((tmp->lastqueue && tmp->lastqueue->wrapuptime && (time(NULL) - tmp->lastcall < tmp->lastqueue->wrapuptime)) ||
+		(!tmp->lastqueue && qe->parent->wrapuptime && (time(NULL) - tmp->lastcall < qe->parent->wrapuptime))) {
 		if (option_debug)
-			ast_log(LOG_DEBUG, "Wrapuptime not yet expired for %s\n", tmp->interface);
-		if (qe->chan->cdr)
+			ast_log(LOG_DEBUG, "Wrapuptime not yet expired on queue %s for %s\n", 
+				(tmp->lastqueue ? tmp->lastqueue->name : qe->parent->name), tmp->interface);
+		if (qe->chan->cdr) {
 			ast_cdr_busy(qe->chan->cdr);
+		}
 		tmp->stillgoing = 0;
 		(*busies)++;
 		return 0;
@@ -2640,15 +2648,38 @@ static int wait_our_turn(struct queue_ent *qe, int ringing, enum queue_result *r
 
 static int update_queue(struct call_queue *q, struct member *member, int callcompletedinsl)
 {
+	struct member *mem;
+	
+	if (shared_lastcall) {
+		AST_LIST_LOCK(&queues);
+		AST_LIST_TRAVERSE(&queues, q, list) {
+			ao2_lock(q);
+			if ((mem = ao2_find(q->members, member, OBJ_POINTER))) {
+				time(&mem->lastcall);
+				mem->calls++;
+				mem->lastqueue = q;
+				ao2_ref(mem, -1);
+			}
+			ao2_unlock(q);
+		}
+		AST_LIST_UNLOCK(&queues);
+	} else {
+		ao2_lock(q);
+		time(&member->lastcall);
+		member->calls++;
+		member->lastqueue = q;
+		ao2_unlock(q);
+	}	
 	ao2_lock(q);
-	time(&member->lastcall);
-	member->calls++;
 	q->callscompleted++;
-	if (callcompletedinsl)
+	if (callcompletedinsl) {
 		q->callscompletedinsl++;
+	}
+
 	ao2_unlock(q);
 	return 0;
 }
+
 
 /*! \brief Calculate the metric of each member in the outgoing callattempts
  *
@@ -3019,6 +3050,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 		tmp->member = cur;
 		tmp->oldstatus = cur->status;
 		tmp->lastcall = cur->lastcall;
+		tmp->lastqueue = cur->lastqueue;
 		ast_copy_string(tmp->interface, cur->interface, sizeof(tmp->interface));
 		/* Special case: If we ring everyone, go ahead and ring them, otherwise
 		   just calculate their metric for the appropriate strategy */
@@ -4522,6 +4554,10 @@ static int reload_queues(void)
 		if (!strcasecmp(cat, "general")) {	
 			/* Initialize global settings */
 			queue_persistent_members = 0;
+			shared_lastcall = 0;
+			if ((general_val = ast_variable_retrieve(cfg, "general", "shared_lastcall"))) {
+				shared_lastcall = ast_true(general_val);
+			}
 			if ((general_val = ast_variable_retrieve(cfg, "general", "persistentmembers")))
 				queue_persistent_members = ast_true(general_val);
 			autofill_default = 0;
