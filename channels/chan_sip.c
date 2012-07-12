@@ -10388,7 +10388,7 @@ static int respprep(struct sip_request *resp, struct sip_pvt *p, const char *msg
 		resp->reqsipoptions |= SIP_OPT_TIMER;
 	}
 
-	if (msg[0] == '2' && (p->method == SIP_SUBSCRIBE || p->method == SIP_REGISTER)) {
+	if (msg[0] == '2' && (p->method == SIP_SUBSCRIBE || p->method == SIP_REGISTER || p->method == SIP_PUBLISH)) {
 		/* For registration responses, we also need expiry and
 		   contact info */
 		char tmp[256];
