@@ -2652,15 +2652,15 @@ static int update_queue(struct call_queue *q, struct member *member, int callcom
 	
 	if (shared_lastcall) {
 		AST_LIST_LOCK(&queues);
-		AST_LIST_TRAVERSE(&queues, q, list) {
-			ao2_lock(q);
-			if ((mem = ao2_find(q->members, member, OBJ_POINTER))) {
+		AST_LIST_TRAVERSE(&queues, qc, list) {
+			ao2_lock(qc);
+			if ((mem = ao2_find(qc->members, member, OBJ_POINTER))) {
 				time(&mem->lastcall);
 				mem->calls++;
 				mem->lastqueue = q;
 				ao2_ref(mem, -1);
 			}
-			ao2_unlock(q);
+			ao2_unlock(qc);
 		}
 		AST_LIST_UNLOCK(&queues);
 	} else {
@@ -2675,7 +2675,6 @@ static int update_queue(struct call_queue *q, struct member *member, int callcom
 	if (callcompletedinsl) {
 		q->callscompletedinsl++;
 	}
-
 	ao2_unlock(q);
 	return 0;
 }
