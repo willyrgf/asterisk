@@ -2649,6 +2649,7 @@ static int wait_our_turn(struct queue_ent *qe, int ringing, enum queue_result *r
 static int update_queue(struct call_queue *q, struct member *member, int callcompletedinsl)
 {
 	struct member *mem;
+	struct call_queue *qc;
 	
 	if (shared_lastcall) {
 		AST_LIST_LOCK(&queues);
