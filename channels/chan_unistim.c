@@ -729,6 +729,7 @@ static struct unistim_menu_item options_menu[] =
 static struct unistim_languages options_languages[] =
 {
 	{"English", "en", ISO_8859_1, NULL},
+	{"French", "fr", ISO_8859_1, NULL},
 	{"Russian", "ru", ISO_8859_5, NULL},
 	{NULL, NULL, 0, NULL}
 };
@@ -4448,6 +4449,7 @@ static void process_request(int size, unsigned char *buf, struct unistimsession 
 		} else if (pte->state == STATE_EXTENSION) {
 			return;
 		} else {
+			pte->device->nextdial = 0;
 			show_main_page(pte);
 		}
 		return;
