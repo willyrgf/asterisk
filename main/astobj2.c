@@ -533,6 +533,13 @@ int __ao2_ref(void *user_data, int delta)
 	return internal_ao2_ref(user_data, delta, __FILE__, __LINE__, __FUNCTION__);
 }
 
+void ao2_cleanup(void *obj)
+{
+	if (obj) {
+		ao2_ref(obj, -1);
+	}
+}
+
 static void *internal_ao2_alloc(size_t data_size, ao2_destructor_fn destructor_fn, unsigned int options, const char *file, int line, const char *func)
 {
 	/* allocation */
@@ -1045,6 +1052,13 @@ void ao2_iterator_destroy(struct ao2_iterator *iter)
 		ast_free(iter);
 	} else {
 		iter->c = NULL;
+	}
+}
+
+void ao2_iterator_cleanup(struct ao2_iterator *iter)
+{
+	if (iter) {
+		ao2_iterator_destroy(iter);
 	}
 }
 
@@ -1797,10 +1811,12 @@ struct ao2_container *__ao2_container_alloc_hash(unsigned int ao2_options,
 {
 	/* XXX maybe consistency check on arguments ? */
 	/* compute the container size */
-	const unsigned int num_buckets = hash_fn ? n_buckets : 1;
-	size_t container_size = sizeof(struct ao2_container_hash)
-		+ num_buckets * sizeof(struct bucket);
+	unsigned int num_buckets;
+	size_t container_size;
 	struct ao2_container_hash *self;
+
+	num_buckets = hash_fn ? n_buckets : 1;
+	container_size = sizeof(struct ao2_container_hash) + num_buckets * sizeof(struct bucket);
 
 	self = __ao2_alloc(container_size, container_destruct, ao2_options);
 	return hash_ao2_container_init(self, container_options, num_buckets,
@@ -1830,7 +1846,7 @@ struct ao2_container *__ao2_container_alloc_hash_debug(unsigned int ao2_options,
 struct ao2_container *__ao2_container_alloc_list(unsigned int ao2_options,
 	unsigned int container_options, ao2_sort_fn *sort_fn, ao2_callback_fn *cmp_fn)
 {
-	return __ao2_container_alloc_hash(ao2_options, container_options, 1, NULL, NULL,
+	return __ao2_container_alloc_hash(ao2_options, container_options, 1, NULL, sort_fn,
 		cmp_fn);
 }
 
@@ -1838,8 +1854,8 @@ struct ao2_container *__ao2_container_alloc_list_debug(unsigned int ao2_options,
 	unsigned int container_options, ao2_sort_fn *sort_fn, ao2_callback_fn *cmp_fn,
 	const char *tag, const char *file, int line, const char *func, int ref_debug)
 {
-	return __ao2_container_alloc_hash_debug(ao2_options, container_options, 1, NULL, NULL,
-		cmp_fn, tag, file, line, func, ref_debug);
+	return __ao2_container_alloc_hash_debug(ao2_options, container_options, 1, NULL,
+		sort_fn, cmp_fn, tag, file, line, func, ref_debug);
 }
 
 struct ao2_container *__ao2_container_alloc(unsigned int options,
@@ -1857,20 +1873,6 @@ struct ao2_container *__ao2_container_alloc_debug(unsigned int options,
 }
 
 /*! BUGBUG need to add red-black tree container support */
-
-void ao2_cleanup(void *obj)
-{
-	if (obj) {
-		ao2_ref(obj, -1);
-	}
-}
-
-void ao2_iterator_cleanup(struct ao2_iterator *iter)
-{
-	if (iter) {
-		ao2_iterator_destroy(iter);
-	}
-}
 
 #ifdef AO2_DEBUG
 static int print_cb(void *obj, void *arg, int flag)

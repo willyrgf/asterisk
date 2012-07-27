@@ -969,8 +969,8 @@ enum ao2_container_opts {
 	AO2_CONTAINER_ALLOC_OPT_DUPS_REPLACE = (3 << 1),
 };
 
-/*! \brief
- * Type of a generic callback function
+/*!
+ * \brief Type of a generic callback function
  * \param obj  pointer to the (user-defined part) of an object.
  * \param arg callback argument from ao2_callback()
  * \param flags flags from ao2_callback()
@@ -983,8 +983,8 @@ typedef int (ao2_callback_fn)(void *obj, void *arg, int flags);
 /*! \brief A common ao2_callback is one that matches by address. */
 int ao2_match_by_addr(void *obj, void *arg, int flags);
 
-/*! \brief
- * Type of a generic callback function
+/*!
+ * \brief Type of a generic callback function
  * \param obj pointer to the (user-defined part) of an object.
  * \param arg callback argument from ao2_callback()
  * \param data arbitrary data from ao2_callback()
