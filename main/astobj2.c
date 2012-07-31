@@ -829,6 +829,33 @@ typedef void *(*ao2_container_traverse_fn)(struct ao2_container *self, enum sear
  */
 typedef void *(*ao2_iterator_next_fn)(struct ao2_container *self, struct ao2_iterator *iter, const char *tag, const char *file, int line, const char *func);
 
+/*!
+ * \internal
+ * \brief Display statistics of the specified container.
+ *
+ * \param self Container to display statistics.
+ * \param fd File descriptor to send output.
+ * \param prnt Print output callback function to use.
+ *
+ * \note The container is already locked for reading.
+ *
+ * \return Nothing
+ */
+typedef void (*ao2_container_statistics)(struct ao2_container *self, int fd, void (*prnt)(int fd, const char *fmt, ...) __attribute__((format(printf, 2, 3))));
+
+/*!
+ * \internal
+ * \brief Perform an integrity check on the specified container.
+ *
+ * \param self Container to check integrity.
+ *
+ * \note The container is already locked for reading.
+ *
+ * \retval 0 on success.
+ * \retval -1 on error.
+ */
+typedef int (*ao2_container_integrity)(struct ao2_container *self);
+
 /*! Container virtual methods template. */
 struct container_methods {
 	/*! Destroy this container. */
@@ -843,6 +870,12 @@ struct container_methods {
 	ao2_container_traverse_fn traverse;
 	/*! Find the next iteration element in the container. */
 	ao2_iterator_next_fn iterator_next;
+#if defined(AST_DEVMODE)
+	/*! Display container debug statistics. (Method for debug purposes) */
+	ao2_container_statistics stats;
+	/*! Perform an integrity check on the container. (Method for debug purposes) */
+	ao2_container_integrity integrity;
+#endif	/* defined(AST_DEVMODE) */
 };
 
 /*!
@@ -1258,6 +1291,59 @@ struct ao2_container *__ao2_container_clone_debug(struct ao2_container *orig, en
 	return clone;
 }
 
+#if defined(AST_DEVMODE)
+/*!
+ * \internal
+ * \brief Display statistics of the specified container.
+ * \since 11.0
+ *
+ * \param self Container to display statistics.
+ * \param fd File descriptor to send output.
+ * \param prnt Print output callback function to use.
+ *
+ * \return Nothing
+ */
+static void ao2_container_stats(struct ao2_container *self, int fd, void (*prnt)(int fd, const char *fmt, ...) __attribute__((format(printf, 2, 3))))
+{
+	if (!INTERNAL_OBJ(self) || !self->v_table) {
+		prnt(fd, "Invalid container\n");
+		return;
+	}
+
+	ao2_rdlock(self);
+	prnt(fd, "Number of objects: %d\n", self->elements);
+	if (self->v_table->stats) {
+		self->v_table->stats(self, fd, prnt);
+	}
+	ao2_unlock(self);
+}
+#endif	/* defined(AST_DEVMODE) */
+
+int ao2_container_check(struct ao2_container *self, enum search_flags flags)
+{
+	int res = 0;
+
+	if (!INTERNAL_OBJ(self) || !self->v_table) {
+		/* Sanity checks. */
+		return -1;
+	}
+#if defined(AST_DEVMODE)
+	if (!self->v_table->integrity) {
+		/* No ingetrigy check available.  Assume container is ok. */
+		return 0;
+	}
+
+	if (flags & OBJ_NOLOCK) {
+		ao2_rdlock(self);
+	}
+	res = self->v_table->integrity(self);
+	if (flags & OBJ_NOLOCK) {
+		ao2_unlock(self);
+	}
+#endif	/* defined(AST_DEVMODE) */
+	return res;
+}
+
 /*!
  * A structure to create a linked list of entries,
  * used within a bucket.
@@ -1271,8 +1357,16 @@ struct bucket_entry {
 };
 
 /*! BUGBUG change to a doubly linked list to support traverse order options and ref counted nodes. */
-/* each bucket in the container is a tailq. */
-AST_LIST_HEAD_NOLOCK(bucket, bucket_entry);
+struct bucket {
+	/*! List of objects held in the bucket. */
+	AST_LIST_HEAD_NOLOCK(, bucket_entry) list;
+#if defined(AST_DEVMODE)
+	/*! Number of elements currently in the bucket. */
+	int elements;
+	/*! Maximum number of elements in the bucket. */
+	int max_elements;
+#endif	/* defined(AST_DEVMODE) */
+};
 
 /*!
  * A hash container in addition to values common to all
@@ -1404,7 +1498,13 @@ static int hash_ao2_link(struct ao2_container_hash *c, void *user_data, int flag
 	i %= c->n_buckets;
 	p->obj = user_data;
 	p->version = ast_atomic_fetchadd_int(&c->version, 1);
-	AST_LIST_INSERT_TAIL(&c->buckets[i], p, entry);
+	AST_LIST_INSERT_TAIL(&c->buckets[i].list, p, entry);
+#if defined(AST_DEVMODE)
+	++c->buckets[i].elements;
+	if (c->buckets[i].max_elements < c->buckets[i].elements) {
+		c->buckets[i].max_elements = c->buckets[i].elements;
+	}
+#endif	/* defined(AST_DEVMODE) */
 	ast_atomic_fetchadd_int(&c->common.elements, 1);
 
 	if (tag) {
@@ -1551,7 +1651,7 @@ static void *hash_ao2_callback(struct ao2_container_hash *c, enum search_flags f
 		/* scan the list with prev-cur pointers */
 		struct bucket_entry *cur;
 
-		AST_LIST_TRAVERSE_SAFE_BEGIN(&c->buckets[i], cur, entry) {
+		AST_LIST_TRAVERSE_SAFE_BEGIN(&c->buckets[i].list, cur, entry) {
 			int match = (CMP_MATCH | CMP_STOP);
 
 			if (type == WITH_DATA) {
@@ -1599,6 +1699,9 @@ static void *hash_ao2_callback(struct ao2_container_hash *c, enum search_flags f
 				AST_LIST_REMOVE_CURRENT(entry);
 				/* update number of elements */
 				ast_atomic_fetchadd_int(&c->common.elements, -1);
+#if defined(AST_DEVMODE)
+				--c->buckets[i].elements;
+#endif	/* defined(AST_DEVMODE) */
 
 				/* - When unlinking and not returning the result, (OBJ_NODATA), the ref from the container
 				 * must be decremented.
@@ -1706,7 +1809,7 @@ static void *hash_ao2_iterator_next(struct ao2_container_hash *self, struct ao2_
 	 */
 	for (; iter->bucket < lim; iter->bucket++, iter->version = 0) {
 		/* scan the current bucket */
-		AST_LIST_TRAVERSE(&self->buckets[iter->bucket], p, entry) {
+		AST_LIST_TRAVERSE(&self->buckets[iter->bucket].list, p, entry) {
 			if (p->version > iter->version) {
 				goto found;
 			}
@@ -1721,7 +1824,7 @@ found:
 	if (iter->flags & AO2_ITERATOR_UNLINK) {
 		/* we are going to modify the container, so update version */
 		ast_atomic_fetchadd_int(&self->version, 1);
-		AST_LIST_REMOVE(&self->buckets[iter->bucket], p, entry);
+		AST_LIST_REMOVE(&self->buckets[iter->bucket].list, p, entry);
 		/* update number of elements */
 		ast_atomic_fetchadd_int(&self->common.elements, -1);
 		iter->version = 0;
@@ -1744,6 +1847,47 @@ found:
 	return ret;
 }
 
+#if defined(AST_DEVMODE)
+/*!
+ * \internal
+ * \brief Display statistics of the specified container.
+ * \since 11.0
+ *
+ * \param self Container to display statistics.
+ * \param fd File descriptor to send output.
+ * \param prnt Print output callback function to use.
+ *
+ * \note The container is already locked for reading.
+ *
+ * \return Nothing
+ */
+static void hash_ao2_stats(struct ao2_container_hash *self, int fd, void (*prnt)(int fd, const char *fmt, ...) __attribute__((format(printf, 2, 3))))
+{
+#define FORMAT  "%10.10s %10.10s %10.10s\n"
+#define FORMAT2 "%10d %10d %10d\n"
+
+	int bucket;
+	int suppressed_buckets = 0;
+
+	prnt(fd, "Number of buckets: %d\n\n", self->n_buckets);
+
+	prnt(fd, FORMAT, "Bucket", "Objects", "Max");
+	for (bucket = 0; bucket < self->n_buckets; ++bucket) {
+		if (self->buckets[bucket].max_elements) {
+			prnt(fd, FORMAT2, bucket, self->buckets[bucket].elements,
+				self->buckets[bucket].max_elements);
+			suppressed_buckets = 0;
+		} else if (!suppressed_buckets) {
+			suppressed_buckets = 1;
+			prnt(fd, "...\n");
+		}
+	}
+
+#undef FORMAT
+#undef FORMAT2
+}
+#endif	/* defined(AST_DEVMODE) */
+
 /*! Hash container virtual method table. */
 static const struct container_methods v_table_hash = {
 	.alloc_empty_clone = (ao2_container_alloc_empty_clone_fn) hash_ao2_alloc_empty_clone,
@@ -1752,6 +1896,9 @@ static const struct container_methods v_table_hash = {
 	.link = (ao2_container_link_fn) hash_ao2_link,
 	.traverse = (ao2_container_traverse_fn) hash_ao2_callback,
 	.iterator_next = (ao2_iterator_next_fn) hash_ao2_iterator_next,
+#if defined(AST_DEVMODE)
+	.stats = (ao2_container_statistics) hash_ao2_stats,
+#endif	/* defined(AST_DEVMODE) */
 };
 
 /*!
@@ -2012,18 +2159,243 @@ static char *handle_astobj2_test(struct ast_cli_entry *e, int cmd, struct ast_cl
 	handle_astobj2_stats(e, CLI_HANDLER, &fake_args);
 	return CLI_SUCCESS;
 }
+#endif /* AO2_DEBUG */
 
+#if defined(AST_DEVMODE)
+static struct ao2_container *reg_containers;
+
+struct ao2_reg_container {
+	/*! Registered container pointer. */
+	struct ao2_container *registered;
+	/*! Name container registered under. */
+	char name[1];
+};
+
+struct ao2_reg_key {
+	/*! Length of partial key match.  Zero if exact match. */
+	int len;
+	/*! Registration key name. */
+	const char *name;
+};
+
+struct ao2_reg_match {
+	/*! The nth match to find. */
+	int find_nth;
+	/*! Count of the matches already found. */
+	int count;
+};
+#endif	/* defined(AST_DEVMODE) */
+
+#if defined(AST_DEVMODE)
+static int ao2_reg_sort_cb(const void *obj_left, const void *obj_right, int flags)
+{
+	const struct ao2_reg_container *reg_left = obj_left;
+	int cmp;
+
+	if (flags & OBJ_KEY) {
+		const struct ao2_reg_key *key = obj_right;
+
+		if (key->len) {
+			cmp = strncasecmp(reg_left->name, key->name, key->len);
+		} else {
+			cmp = strcasecmp(reg_left->name, key->name);
+		}
+	} else {
+		const struct ao2_reg_container *reg_right = obj_right;
+
+		cmp = strcasecmp(reg_left->name, reg_right->name);
+	}
+	return cmp;
+}
+#endif	/* defined(AST_DEVMODE) */
+
+#if defined(AST_DEVMODE)
+static void ao2_reg_destructor(void *v_doomed)
+{
+	struct ao2_reg_container *doomed = v_doomed;
+
+	if (doomed->registered) {
+		ao2_ref(doomed->registered, -1);
+	}
+}
+#endif	/* defined(AST_DEVMODE) */
+
+int ao2_container_register(const char *name, struct ao2_container *self)
+{
+	int res = 0;
+#if defined(AST_DEVMODE)
+	size_t size;
+	struct ao2_reg_container *reg;
+
+	size = strlen(name);
+	reg = ao2_alloc_options(sizeof(*reg) + size, ao2_reg_destructor,
+		AO2_ALLOC_OPT_LOCK_NOLOCK);
+	if (!reg) {
+		return -1;
+	}
+
+	/* Fill in registered entry */
+	ao2_ref(self, +1);
+	reg->registered = self;
+	strcpy(reg->name, name);/* safe */
+
+	if (!ao2_link(reg_containers, reg)) {
+		res = -1;
+	}
+
+	ao2_ref(reg, -1);
+#endif	/* defined(AST_DEVMODE) */
+	return res;
+}
+
+void ao2_container_unregister(const char *name)
+{
+#if defined(AST_DEVMODE)
+	struct ao2_reg_key key;
+
+	key.len = 0;
+	key.name = name;
+	ao2_find(reg_containers, &key, OBJ_UNLINK | OBJ_NODATA | OBJ_KEY);
+#endif	/* defined(AST_DEVMODE) */
+}
+
+#if defined(AST_DEVMODE)
+static int ao2_complete_reg_cb(void *obj, void *arg, void *data, int flags)
+{
+	struct ao2_reg_match *which = data;
+
+	/* ao2_reg_sort_cb() has already filtered the search to matching keys */
+	return (which->find_nth < ++which->count) ? (CMP_MATCH | CMP_STOP) : 0;
+}
+#endif	/* defined(AST_DEVMODE) */
+
+#if defined(AST_DEVMODE)
+static char *complete_container_names(struct ast_cli_args *a)
+{
+	struct ao2_reg_key key;
+	struct ao2_reg_match which;
+	struct ao2_reg_container *reg;
+	char *name;
+
+	if (a->pos != 3) {
+		return NULL;
+	}
+
+	key.len = strlen(a->word);
+	key.name = a->word;
+	which.find_nth = a->n;
+	which.count = 0;
+	reg = ao2_callback_data(reg_containers, OBJ_KEY, ao2_complete_reg_cb, &key, &which);
+	if (reg) {
+		name = ast_strdup(reg->name);
+		ao2_ref(reg, -1);
+	} else {
+		name = NULL;
+	}
+	return name;
+}
+#endif	/* defined(AST_DEVMODE) */
+
+#if defined(AST_DEVMODE)
+/*! \brief Show container statistics - CLI command */
+static char *handle_cli_astobj2_container_stats(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	const char *name;
+	struct ao2_reg_container *reg;
+	struct ao2_reg_key key;
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "astobj2 container stats";
+		e->usage =
+			"Usage: astobj2 container stats <name>\n"
+			"	Show statistics about the specified container <name>.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return complete_container_names(a);
+	}
+
+	if (a->argc != 4) {
+		return CLI_SHOWUSAGE;
+	}
+
+	name = a->argv[3];
+	key.len = 0;
+	key.name = name;
+	reg = ao2_find(reg_containers, &key, OBJ_KEY);
+	if (reg) {
+		ao2_container_stats(reg->registered, a->fd, ast_cli);
+		ao2_ref(reg, -1);
+	} else {
+		ast_cli(a->fd, "Container '%s' not found.\n", name);
+	}
+
+	return CLI_SUCCESS;
+}
+#endif	/* defined(AST_DEVMODE) */
+
+#if defined(AST_DEVMODE)
+/*! \brief Show container check results - CLI command */
+static char *handle_cli_astobj2_container_check(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	const char *name;
+	struct ao2_reg_container *reg;
+	struct ao2_reg_key key;
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "astobj2 container check";
+		e->usage =
+			"Usage: astobj2 container check <name>\n"
+			"	Perform a container integrity check on <name>.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return complete_container_names(a);
+	}
+
+	if (a->argc != 4) {
+		return CLI_SHOWUSAGE;
+	}
+
+	name = a->argv[3];
+	key.len = 0;
+	key.name = name;
+	reg = ao2_find(reg_containers, &key, OBJ_KEY);
+	if (reg) {
+		ast_cli(a->fd, "Container check of '%s': %s.\n", name,
+			ao2_container_check(reg->registered, 0) ? "failed" : "OK");
+		ao2_ref(reg, -1);
+	} else {
+		ast_cli(a->fd, "Container '%s' not found.\n", name);
+	}
+
+	return CLI_SUCCESS;
+}
+#endif	/* defined(AST_DEVMODE) */
+
+#if defined(AO2_DEBUG) || defined(AST_DEVMODE)
 static struct ast_cli_entry cli_astobj2[] = {
+#if defined(AO2_DEBUG)
 	AST_CLI_DEFINE(handle_astobj2_stats, "Print astobj2 statistics"),
 	AST_CLI_DEFINE(handle_astobj2_test, "Test astobj2"),
+#endif /* defined(AO2_DEBUG) */
+#if defined(AST_DEVMODE)
+	AST_CLI_DEFINE(handle_cli_astobj2_container_stats, "Show container statistics"),
+	AST_CLI_DEFINE(handle_cli_astobj2_container_check, "Perform a container integrity check"),
+#endif	/* defined(AST_DEVMODE) */
 };
-#endif /* AO2_DEBUG */
+#endif	/* defined(AO2_DEBUG) || defined(AST_DEVMODE) */
+
 
 int astobj2_init(void)
 {
-#ifdef AO2_DEBUG
+#if defined(AST_DEVMODE)
+	reg_containers = ao2_container_alloc_list(AO2_ALLOC_OPT_LOCK_RWLOCK,
+		AO2_CONTAINER_ALLOC_OPT_DUPS_REJECT, ao2_reg_sort_cb, NULL);
+#endif	/* defined(AST_DEVMODE) */
+#if defined(AO2_DEBUG) || defined(AST_DEVMODE)
 	ast_cli_register_multiple(cli_astobj2, ARRAY_LEN(cli_astobj2));
-#endif
+#endif	/* defined(AO2_DEBUG) || defined(AST_DEVMODE) */
 
 	return 0;
 }
