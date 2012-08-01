@@ -28,7 +28,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/_private.h"
 #include "asterisk/astobj2.h"
-#include "asterisk/linkedlists.h"
+#include "asterisk/dlinkedlists.h"
 #include "asterisk/utils.h"
 #include "asterisk/cli.h"
 #define REF_FILE "/tmp/refs"
@@ -1382,7 +1382,7 @@ struct ao2_container_hash;
  */
 struct hash_bucket_node {
 	/*! Next node links in the list. */
-	AST_LIST_ENTRY(hash_bucket_node) links;
+	AST_DLLIST_ENTRY(hash_bucket_node) links;
 	/*! Stored object in node. */
 	void *obj;
 	/*! Container holding the node.  (Does not hold a reference.) */
@@ -1391,10 +1391,9 @@ struct hash_bucket_node {
 	int my_bucket;
 };
 
-/*! BUGBUG change to a doubly linked list to support traverse order options. */
 struct hash_bucket {
 	/*! List of objects held in the bucket. */
-	AST_LIST_HEAD_NOLOCK(, hash_bucket_node) list;
+	AST_DLLIST_HEAD_NOLOCK(, hash_bucket_node) list;
 #if defined(AST_DEVMODE)
 	/*! Number of elements currently in the bucket. */
 	int elements;
@@ -1517,12 +1516,13 @@ static void hash_ao2_node_destructor(void *v_doomed)
 		adjust_lock(my_container, AO2_LOCK_REQ_WRLOCK, 1);
 
 		bucket = &my_container->buckets[doomed->my_bucket];
-		AST_LIST_REMOVE(&bucket->list, doomed, links);
+/* BUGBUG need to check if hash_ao2_link() will have problems on failure paths. */
+		AST_DLLIST_REMOVE(&bucket->list, doomed, links);
 	}
 
 	/*
-	 * We could still have an object in the node ONLY if the
-	 * container is being destroyed.
+	 * We could have an object in the node if the container is being
+	 * destroyed or the object hasn't been linked in yet.
 	 */
 	if (doomed->obj) {
 		ao2_ref(doomed->obj, -1);
@@ -1562,6 +1562,7 @@ static int hash_ao2_link(struct ao2_container_hash *self, void *obj_new, int fla
 	}
 
 	i = abs(self->hash_fn(obj_new, OBJ_POINTER));
+	i %= self->n_buckets;
 
 	if (flags & OBJ_NOLOCK) {
 		orig_lock = adjust_lock(self, AO2_LOCK_REQ_WRLOCK, 1);
@@ -1570,12 +1571,21 @@ static int hash_ao2_link(struct ao2_container_hash *self, void *obj_new, int fla
 		orig_lock = AO2_LOCK_REQ_MUTEX;
 	}
 
-	i %= self->n_buckets;
+	if (tag) {
+		__ao2_ref_debug(obj_new, +1, tag, file, line, func);
+	} else {
+		__ao2_ref(obj_new, +1);
+	}
 	node->obj = obj_new;
 	node->my_container = self;
 	node->my_bucket = i;
 
-	AST_LIST_INSERT_TAIL(&self->buckets[i].list, node, links);
+	if (self->common.options & AO2_CONTAINER_ALLOC_OPT_INSERT_BEGIN) {
+		AST_DLLIST_INSERT_HEAD(&self->buckets[i].list, node, links);
+	} else {
+		AST_DLLIST_INSERT_TAIL(&self->buckets[i].list, node, links);
+	}
+
 #if defined(AST_DEVMODE)
 	++self->buckets[i].elements;
 	if (self->buckets[i].max_elements < self->buckets[i].elements) {
@@ -1584,11 +1594,6 @@ static int hash_ao2_link(struct ao2_container_hash *self, void *obj_new, int fla
 #endif	/* defined(AST_DEVMODE) */
 	ast_atomic_fetchadd_int(&self->common.elements, 1);
 
-	if (tag) {
-		__ao2_ref_debug(obj_new, +1, tag, file, line, func);
-	} else {
-		__ao2_ref(obj_new, +1);
-	}
 
 	if (flags & OBJ_NOLOCK) {
 		adjust_lock(self, orig_lock, 0);
@@ -1729,9 +1734,9 @@ static void *hash_ao2_callback(struct ao2_container_hash *self, enum search_flag
 		struct hash_bucket_node *next;
 
 		/* Find first non-empty node. */
-		node = AST_LIST_FIRST(&self->buckets[i].list);
+		node = AST_DLLIST_FIRST(&self->buckets[i].list);
 		while (node && !node->obj) {
-			node = AST_LIST_NEXT(node, links);
+			node = AST_DLLIST_NEXT(node, links);
 		}
 		if (node) {
 			int match;
@@ -1837,9 +1842,9 @@ static void *hash_ao2_callback(struct ao2_container_hash *self, enum search_flag
 
 next_bucket_node:
 				/* Find next non-empty node. */
-				next = AST_LIST_NEXT(node, links);
+				next = AST_DLLIST_NEXT(node, links);
 				while (next && !next->obj) {
-					next = AST_LIST_NEXT(next, links);
+					next = AST_DLLIST_NEXT(next, links);
 				}
 				if (next) {
 					__ao2_ref(next, +1);
@@ -1915,9 +1920,9 @@ static void *hash_ao2_iterator_next(struct ao2_container_hash *self, struct ao2_
 		cur_bucket = node->my_bucket;
 
 		/* Find next non-empty node. */
-		node = AST_LIST_NEXT(node, links);
+		node = AST_DLLIST_NEXT(node, links);
 		while (node && !node->obj) {
-			node = AST_LIST_NEXT(node, links);
+			node = AST_DLLIST_NEXT(node, links);
 		}
 		if (node) {
 			/* Found a non-empty node. */
@@ -1926,9 +1931,9 @@ static void *hash_ao2_iterator_next(struct ao2_container_hash *self, struct ao2_
 	} else {
 		/* Find first non-empty node. */
 		cur_bucket = 0;
-		node = AST_LIST_FIRST(&self->buckets[cur_bucket].list);
+		node = AST_DLLIST_FIRST(&self->buckets[cur_bucket].list);
 		while (node && !node->obj) {
-			node = AST_LIST_NEXT(node, links);
+			node = AST_DLLIST_NEXT(node, links);
 		}
 		if (node) {
 			/* Found a non-empty node. */
@@ -1938,9 +1943,9 @@ static void *hash_ao2_iterator_next(struct ao2_container_hash *self, struct ao2_
 
 	/* Find a non-empty node in the remaining buckets */
 	while (++cur_bucket < self->n_buckets) {
-		node = AST_LIST_FIRST(&self->buckets[cur_bucket].list);
+		node = AST_DLLIST_FIRST(&self->buckets[cur_bucket].list);
 		while (node && !node->obj) {
-			node = AST_LIST_NEXT(node, links);
+			node = AST_DLLIST_NEXT(node, links);
 		}
 		if (node) {
 			/* Found a non-empty node. */
