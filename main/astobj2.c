@@ -725,6 +725,15 @@ void *__ao2_global_obj_ref(struct ao2_global_obj *holder, const char *tag, const
 	return obj;
 }
 
+enum ao2_container_insert {
+	/*! The node was inserted into the container. */
+	AO2_CONTAINER_INSERT_NODE_INSERTED,
+	/*! The node object replaced an existing node object. */
+	AO2_CONTAINER_INSERT_NODE_OBJ_REPLACED,
+	/*! The node was rejected (duplicate). */
+	AO2_CONTAINER_INSERT_NODE_REJECTED,
+};
+
 /* BUGBUG may not be needed */
 enum ao2_container_type {
 	AO2_CONTAINER_TYPE_HASH,
@@ -1516,18 +1525,106 @@ static void hash_ao2_node_destructor(void *v_doomed)
 		adjust_lock(my_container, AO2_LOCK_REQ_WRLOCK, 1);
 
 		bucket = &my_container->buckets[doomed->my_bucket];
-/* BUGBUG need to check if hash_ao2_link() will have problems on failure paths. */
 		AST_DLLIST_REMOVE(&bucket->list, doomed, links);
 	}
 
 	/*
 	 * We could have an object in the node if the container is being
-	 * destroyed or the object hasn't been linked in yet.
+	 * destroyed or the node had not been linked in yet.
 	 */
 	if (doomed->obj) {
 		ao2_ref(doomed->obj, -1);
 		doomed->obj = NULL;
 	}
+}
+
+/*!
+ * \internal
+ * \brief Insert the given node into the specified bucket in the container.
+ * \since 11.0
+ *
+ * \param self Container to operate upon.
+ * \param bucket Hash bucket to insert the node.
+ * \param node What to put in the bucket list.
+ * 
+ * \return enum ao2_container_insert value.
+ */
+static enum ao2_container_insert hash_ao2_link_insert(struct ao2_container_hash *self, struct hash_bucket *bucket, struct hash_bucket_node *node)
+{
+	int cmp;
+	struct hash_bucket_node *cur;
+	ao2_sort_fn *sort_fn;
+	uint32_t options;
+
+	sort_fn = self->common.sort_fn;
+	options = self->common.options;
+
+	if (options & AO2_CONTAINER_ALLOC_OPT_INSERT_BEGIN) {
+		if (sort_fn) {
+			AST_DLLIST_TRAVERSE_BACKWARDS_SAFE_BEGIN(&bucket->list, cur, links) {
+				cmp = sort_fn(cur, node, OBJ_POINTER);
+				if (cmp > 0) {
+					continue;
+				}
+				if (cmp < 0) {
+					AST_DLLIST_INSERT_AFTER_CURRENT(node, links);
+					return AO2_CONTAINER_INSERT_NODE_INSERTED;
+				}
+				switch (options & AO2_CONTAINER_ALLOC_OPT_DUPS_MASK) {
+				default:
+				case AO2_CONTAINER_ALLOC_OPT_DUPS_ALLOW:
+					break;
+				case AO2_CONTAINER_ALLOC_OPT_DUPS_REJECT:
+					/* Reject all objects with the same key. */
+					return AO2_CONTAINER_INSERT_NODE_REJECTED;
+				case AO2_CONTAINER_ALLOC_OPT_DUPS_OBJ_REJECT:
+					if (cur->obj == node->obj) {
+						/* Reject inserting the same object */
+						return AO2_CONTAINER_INSERT_NODE_REJECTED;
+					}
+					break;
+				case AO2_CONTAINER_ALLOC_OPT_DUPS_REPLACE:
+					SWAP(cur->obj, node->obj);
+					return AO2_CONTAINER_INSERT_NODE_OBJ_REPLACED;
+				}
+			}
+			AST_DLLIST_TRAVERSE_BACKWARDS_SAFE_END;
+		}
+		AST_DLLIST_INSERT_HEAD(&bucket->list, node, links);
+	} else {
+		if (sort_fn) {
+			AST_DLLIST_TRAVERSE_SAFE_BEGIN(&bucket->list, cur, links) {
+				cmp = sort_fn(cur, node, OBJ_POINTER);
+				if (cmp < 0) {
+					continue;
+				}
+				if (cmp > 0) {
+					AST_DLLIST_INSERT_BEFORE_CURRENT(node, links);
+					return AO2_CONTAINER_INSERT_NODE_INSERTED;
+				}
+				switch (options & AO2_CONTAINER_ALLOC_OPT_DUPS_MASK) {
+				default:
+				case AO2_CONTAINER_ALLOC_OPT_DUPS_ALLOW:
+					break;
+				case AO2_CONTAINER_ALLOC_OPT_DUPS_REJECT:
+					/* Reject all objects with the same key. */
+					return AO2_CONTAINER_INSERT_NODE_REJECTED;
+				case AO2_CONTAINER_ALLOC_OPT_DUPS_OBJ_REJECT:
+					if (cur->obj == node->obj) {
+						/* Reject inserting the same object */
+						return AO2_CONTAINER_INSERT_NODE_REJECTED;
+					}
+					break;
+				case AO2_CONTAINER_ALLOC_OPT_DUPS_REPLACE:
+					SWAP(cur->obj, node->obj);
+					return AO2_CONTAINER_INSERT_NODE_OBJ_REPLACED;
+				}
+			}
+			AST_DLLIST_TRAVERSE_SAFE_END;
+		}
+		AST_DLLIST_INSERT_TAIL(&bucket->list, node, links);
+	}
+	return AO2_CONTAINER_INSERT_NODE_INSERTED;
 }
 
 /*!
@@ -1549,12 +1646,9 @@ static void hash_ao2_node_destructor(void *v_doomed)
 static int hash_ao2_link(struct ao2_container_hash *self, void *obj_new, int flags, const char *tag, const char *file, int line, const char *func)
 {
 	int i;
+	int res;
 	enum ao2_lock_req orig_lock;
 	struct hash_bucket_node *node;
-
-/*! BUGBUG hash_ao2_link() need to add sorting support */
-/*! BUGBUG hash_ao2_link() need to add insert option support */
-/*! BUGBUG hash_ao2_link() need to add duplicate handling option support */
 
 	node = __ao2_alloc(sizeof(*node), hash_ao2_node_destructor, AO2_ALLOC_OPT_LOCK_NOLOCK);
 	if (!node) {
@@ -1580,20 +1674,28 @@ static int hash_ao2_link(struct ao2_container_hash *self, void *obj_new, int fla
 	node->my_container = self;
 	node->my_bucket = i;
 
-	if (self->common.options & AO2_CONTAINER_ALLOC_OPT_INSERT_BEGIN) {
-		AST_DLLIST_INSERT_HEAD(&self->buckets[i].list, node, links);
-	} else {
-		AST_DLLIST_INSERT_TAIL(&self->buckets[i].list, node, links);
-	}
-
+	/* Insert the new node. */
+	res = 0;
+	switch (hash_ao2_link_insert(self, &self->buckets[i], node)) {
+	case AO2_CONTAINER_INSERT_NODE_INSERTED:
 #if defined(AST_DEVMODE)
-	++self->buckets[i].elements;
-	if (self->buckets[i].max_elements < self->buckets[i].elements) {
-		self->buckets[i].max_elements = self->buckets[i].elements;
-	}
+		++self->buckets[i].elements;
+		if (self->buckets[i].max_elements < self->buckets[i].elements) {
+			self->buckets[i].max_elements = self->buckets[i].elements;
+		}
 #endif	/* defined(AST_DEVMODE) */
-	ast_atomic_fetchadd_int(&self->common.elements, 1);
+		ast_atomic_fetchadd_int(&self->common.elements, 1);
 
+		res = 1;
+		break;
+	case AO2_CONTAINER_INSERT_NODE_OBJ_REPLACED:
+		res = 1;
+		/* Fall through */
+	case AO2_CONTAINER_INSERT_NODE_REJECTED:
+		node->my_container = NULL;
+		ao2_ref(node, -1);
+		break;
+	}
 
 	if (flags & OBJ_NOLOCK) {
 		adjust_lock(self, orig_lock, 0);
@@ -1601,7 +1703,7 @@ static int hash_ao2_link(struct ao2_container_hash *self, void *obj_new, int fla
 		ao2_unlock(self);
 	}
 
-	return 1;
+	return res;
 }
 
 /*!
@@ -1644,8 +1746,8 @@ static void *hash_ao2_callback(struct ao2_container_hash *self, enum search_flag
 	ao2_callback_data_fn *cb_withdata = NULL;
 	struct ao2_container *multi_container = NULL;
 	struct ao2_iterator *multi_iterator = NULL;
+	ao2_sort_fn *sort_fn;
 
-/*! BUGBUG hash_ao2_callback() need to add sorting support */
 /*! BUGBUG hash_ao2_callback() need to add traverse order option support */
 	/*
 	 * This logic is used so we can support OBJ_MULTIPLE with OBJ_NODATA
@@ -1697,9 +1799,11 @@ static void *hash_ao2_callback(struct ao2_container_hash *self, enum search_flag
 	if ((flags & (OBJ_POINTER | OBJ_KEY))) {
 		/* we know hash can handle this case */
 		start = i = self->hash_fn(arg, flags & (OBJ_POINTER | OBJ_KEY)) % self->n_buckets;
+		sort_fn = self->common.sort_fn;
 	} else {
 		/* don't know, let's scan all buckets */
 		start = i = -1;		/* XXX this must be fixed later. */
+		sort_fn = NULL;
 	}
 
 	/* determine the search boundaries: i..last-1 */
@@ -1743,6 +1847,21 @@ static void *hash_ao2_callback(struct ao2_container_hash *self, enum search_flag
 
 			__ao2_ref(node, +1);
 			do {
+				if (sort_fn) {
+					int cmp;
+
+					cmp = sort_fn(node, arg, flags & (OBJ_POINTER | OBJ_KEY));
+					if (cmp < 0) {
+						match = 0;
+						goto next_bucket_node;
+					}
+					if (cmp > 0) {
+						/* No more nodes in this bucket are possible to match. */
+						match = 0;
+						break;
+					}
+				}
+
 				/* Visit the current node. */
 				match = (CMP_MATCH | CMP_STOP);
 				if (type == WITH_DATA) {
@@ -1930,15 +2049,7 @@ static void *hash_ao2_iterator_next(struct ao2_container_hash *self, struct ao2_
 		}
 	} else {
 		/* Find first non-empty node. */
-		cur_bucket = 0;
-		node = AST_DLLIST_FIRST(&self->buckets[cur_bucket].list);
-		while (node && !node->obj) {
-			node = AST_DLLIST_NEXT(node, links);
-		}
-		if (node) {
-			/* Found a non-empty node. */
-			goto hash_found;
-		}
+		cur_bucket = -1;
 	}
 
 	/* Find a non-empty node in the remaining buckets */
