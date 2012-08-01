@@ -1599,8 +1599,8 @@ void *__ao2_find(struct ao2_container *c, const void *arg, enum search_flags fla
  *
  */
 
-/*! \brief
- * The astobj2 iterator
+/*!
+ * \brief The astobj2 iterator
  *
  * \note You are not supposed to know the internals of an iterator!
  * We would like the iterator to be opaque, unfortunately
@@ -1610,34 +1610,17 @@ void *__ao2_find(struct ao2_container *c, const void *arg, enum search_flags fla
  * The iterator has a pointer to the container, and a flags
  * field specifying various things e.g. whether the container
  * should be locked or not while navigating on it.
- * The iterator "points" to the current object, which is identified
- * by three values:
- *
- * - a bucket number;
- * - the object_id, which is also the container version number
- *   when the object was inserted. This identifies the object
- *   uniquely, however reaching the desired object requires
- *   scanning a list.
- * - a pointer, and a container version when we saved the pointer.
- *   If the container has not changed its version number, then we
- *   can safely follow the pointer to reach the object in constant time.
+ * The iterator "points" to the current container node.
  *
  * Details are in the implementation of ao2_iterator_next()
- * A freshly-initialized iterator has bucket=0, version=0.
  */
 struct ao2_iterator {
-	/*! the container */
+	/*! The container (Has a reference) */
 	struct ao2_container *c;
+	/*! Last container node (Has a reference) */
+	void *last_node;
 	/*! operation flags */
 	int flags;
-	/*! current bucket */
-	int bucket;
-	/*! container version */
-	unsigned int c_version;
-	/*! pointer to the current object */
-	void *obj;
-	/*! container version when the object was created */
-	unsigned int version;
 };
 
 /*! Flags that can be passed to ao2_iterator_init() to modify the behavior
@@ -1716,7 +1699,8 @@ struct ao2_iterator ao2_iterator_init(struct ao2_container *c, int flags);
 void ao2_iterator_destroy(struct ao2_iterator *iter) __attribute__((noinline));
 #else
 void ao2_iterator_destroy(struct ao2_iterator *iter);
-#endif
+#endif	/* defined(TEST_FRAMEWORK) */
+
 #ifdef REF_DEBUG
 
 #define ao2_t_iterator_next(iter, tag) __ao2_iterator_next_debug((iter), (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__)

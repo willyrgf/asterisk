@@ -1080,11 +1080,39 @@ struct ao2_iterator ao2_iterator_init(struct ao2_container *c, int flags)
  */
 void ao2_iterator_destroy(struct ao2_iterator *iter)
 {
+	/* Release the last container node reference if we have one. */
+	if (iter->last_node) {
+		enum ao2_lock_req orig_lock;
+
+		/*
+		 * Do a read lock in case the container node unref does not
+		 * destroy the node.  If the container node is destroyed then
+		 * the lock will be upgraded to a write lock.
+		 */
+		if (iter->flags & AO2_ITERATOR_DONTLOCK) {
+			orig_lock = adjust_lock(iter->c, AO2_LOCK_REQ_RDLOCK, 1);
+		} else {
+			orig_lock = AO2_LOCK_REQ_MUTEX;
+			ao2_rdlock(iter->c);
+		}
+
+		ao2_ref(iter->last_node, -1);
+		iter->last_node = NULL;
+
+		if (iter->flags & AO2_ITERATOR_DONTLOCK) {
+			adjust_lock(iter->c, orig_lock, 0);
+		} else {
+			ao2_unlock(iter->c);
+		}
+	}
+
+	/* Release the iterated container reference. */
 	ao2_ref(iter->c, -1);
+	iter->c = NULL;
+
+	/* Free the malloced iterator. */
 	if (iter->flags & AO2_ITERATOR_MALLOCD) {
 		ast_free(iter);
-	} else {
-		iter->c = NULL;
 	}
 }
 
@@ -1344,22 +1372,28 @@ int ao2_container_check(struct ao2_container *self, enum search_flags flags)
 	return res;
 }
 
+struct ao2_container_hash;
+
 /*!
  * A structure to create a linked list of entries,
  * used within a bucket.
  * XXX \todo this should be private to the container code
  */
-struct bucket_entry {
-	AST_LIST_ENTRY(bucket_entry) entry;
+struct hash_bucket_node {
+	/*! Next node links in the list. */
+	AST_LIST_ENTRY(hash_bucket_node) links;
 	/*! Stored object in node. */
 	void *obj;
-	int version;
+	/*! Container holding the node.  (Does not hold a reference.) */
+	struct ao2_container_hash *my_container;
+	/*! Hash bucket holding the node. */
+	int my_bucket;
 };
 
-/*! BUGBUG change to a doubly linked list to support traverse order options and ref counted nodes. */
-struct bucket {
+/*! BUGBUG change to a doubly linked list to support traverse order options. */
+struct hash_bucket {
 	/*! List of objects held in the bucket. */
-	AST_LIST_HEAD_NOLOCK(, bucket_entry) list;
+	AST_LIST_HEAD_NOLOCK(, hash_bucket_node) list;
 #if defined(AST_DEVMODE)
 	/*! Number of elements currently in the bucket. */
 	int elements;
@@ -1370,30 +1404,20 @@ struct bucket {
 
 /*!
  * A hash container in addition to values common to all
- * container types, stores the hash callback function,
- * information on the number of hash buckets, the hash bucket
- * heads, and a version number, starting at 0 (for a newly
- * created, empty container) and incremented every time an
- * object is inserted or deleted. The assumption is that an
- * object is never moved in a container, but removed and readded
- * with the new number.  The version number is especially useful
- * when implementing iterators.  In fact, we can associate a
- * unique, monotonically increasing number to each object, which
- * means that, within an iterator, we can store the version
- * number of the current object, and easily look for the next
- * one, which is the next one in the list with a higher number.
- * Since all objects have a version >0, we can use 0 as a marker
- * for 'we need the first object in the bucket'.
+ * container types, stores the hash callback function, the
+ * number of hash buckets, and the hash bucket heads.
  */
 struct ao2_container_hash {
+	/*!
+	 * \brief Items common to all containers.
+	 * \note Must be first in the specific container struct.
+	 */
 	struct ao2_container common;
-/*! BUGBUG struct ao2_container_hash need to convert to ref counted nodes */
 	ao2_hash_fn *hash_fn;
+	/*! Number of hash buckets in this container. */
 	int n_buckets;
-	/*! described above */
-	int version;
-	/*! variable size */
-	struct bucket buckets[0];
+	/*! Hash bucket array of n_buckets.  Variable size. */
+	struct hash_bucket buckets[0];
 };
 
 /*!
@@ -1456,6 +1480,57 @@ static struct ao2_container *hash_ao2_alloc_empty_clone_debug(struct ao2_contain
 
 /*!
  * \internal
+ * \brief Destroy a hash container list node.
+ * \since 11.0
+ *
+ * \param v_doomed Container node to destroy.
+ *
+ * \details
+ * The container node unlinks itself from the container as part
+ * of its destruction.  The node must be destroyed while the
+ * container is already locked.
+ *
+ * \return Nothing
+ */
+static void hash_ao2_node_destructor(void *v_doomed)
+{
+	struct hash_bucket_node *doomed = v_doomed;
+	struct hash_bucket *bucket;
+	struct ao2_container_hash *my_container;
+
+	my_container = doomed->my_container;
+	if (my_container) {
+		/*
+		 * Promote to write lock if not already there.  Since
+		 * adjust_lock() can potentially release and block waiting for a
+		 * write lock, care must be taken to ensure that node references
+		 * are released before releasing the container references.
+		 *
+		 * Node references held by an iterator can only be held while
+		 * the iterator also holds a reference to the container.  These
+		 * node references must be unreferenced before the container can
+		 * be unreferenced to ensure that the node will not get a
+		 * negative reference and the destructor called twice for the
+		 * same node.
+		 */
+		adjust_lock(my_container, AO2_LOCK_REQ_WRLOCK, 1);
+
+		bucket = &my_container->buckets[doomed->my_bucket];
+		AST_LIST_REMOVE(&bucket->list, doomed, links);
+	}
+
+	/*
+	 * We could still have an object in the node ONLY if the
+	 * container is being destroyed.
+	 */
+	if (doomed->obj) {
+		ao2_ref(doomed->obj, -1);
+		doomed->obj = NULL;
+	}
+}
+
+/*!
+ * \internal
  * \brief Link an object into this container.
  * \since 11.0
  *
@@ -1470,53 +1545,54 @@ static struct ao2_container *hash_ao2_alloc_empty_clone_debug(struct ao2_contain
  * \retval 0 on errors.
  * \retval 1 on success.
  */
-static int hash_ao2_link(struct ao2_container_hash *c, void *user_data, int flags, const char *tag, const char *file, int line, const char *func)
+static int hash_ao2_link(struct ao2_container_hash *self, void *obj_new, int flags, const char *tag, const char *file, int line, const char *func)
 {
 	int i;
 	enum ao2_lock_req orig_lock;
-	/* create a new list entry */
-	struct bucket_entry *p;
-/*! BUGBUG hash_ao2_link() need to convert to ref counted nodes */
+	struct hash_bucket_node *node;
+
 /*! BUGBUG hash_ao2_link() need to add sorting support */
 /*! BUGBUG hash_ao2_link() need to add insert option support */
 /*! BUGBUG hash_ao2_link() need to add duplicate handling option support */
 
-	p = ast_calloc(1, sizeof(*p));
-	if (!p) {
+	node = __ao2_alloc(sizeof(*node), hash_ao2_node_destructor, AO2_ALLOC_OPT_LOCK_NOLOCK);
+	if (!node) {
 		return 0;
 	}
 
-	i = abs(c->hash_fn(user_data, OBJ_POINTER));
+	i = abs(self->hash_fn(obj_new, OBJ_POINTER));
 
 	if (flags & OBJ_NOLOCK) {
-		orig_lock = adjust_lock(c, AO2_LOCK_REQ_WRLOCK, 1);
+		orig_lock = adjust_lock(self, AO2_LOCK_REQ_WRLOCK, 1);
 	} else {
-		ao2_wrlock(c);
+		ao2_wrlock(self);
 		orig_lock = AO2_LOCK_REQ_MUTEX;
 	}
 
-	i %= c->n_buckets;
-	p->obj = user_data;
-	p->version = ast_atomic_fetchadd_int(&c->version, 1);
-	AST_LIST_INSERT_TAIL(&c->buckets[i].list, p, entry);
+	i %= self->n_buckets;
+	node->obj = obj_new;
+	node->my_container = self;
+	node->my_bucket = i;
+
+	AST_LIST_INSERT_TAIL(&self->buckets[i].list, node, links);
 #if defined(AST_DEVMODE)
-	++c->buckets[i].elements;
-	if (c->buckets[i].max_elements < c->buckets[i].elements) {
-		c->buckets[i].max_elements = c->buckets[i].elements;
+	++self->buckets[i].elements;
+	if (self->buckets[i].max_elements < self->buckets[i].elements) {
+		self->buckets[i].max_elements = self->buckets[i].elements;
 	}
 #endif	/* defined(AST_DEVMODE) */
-	ast_atomic_fetchadd_int(&c->common.elements, 1);
+	ast_atomic_fetchadd_int(&self->common.elements, 1);
 
 	if (tag) {
-		__ao2_ref_debug(user_data, +1, tag, file, line, func);
+		__ao2_ref_debug(obj_new, +1, tag, file, line, func);
 	} else {
-		__ao2_ref(user_data, +1);
+		__ao2_ref(obj_new, +1);
 	}
 
 	if (flags & OBJ_NOLOCK) {
-		adjust_lock(c, orig_lock, 0);
+		adjust_lock(self, orig_lock, 0);
 	} else {
-		ao2_unlock(c);
+		ao2_unlock(self);
 	}
 
 	return 1;
@@ -1551,7 +1627,7 @@ static int hash_ao2_link(struct ao2_container_hash *c, void *user_data, int flag
  * flags parameter.  The iterator must be destroyed with
  * ao2_iterator_destroy() when the caller no longer needs it.
  */
-static void *hash_ao2_callback(struct ao2_container_hash *c, enum search_flags flags,
+static void *hash_ao2_callback(struct ao2_container_hash *self, enum search_flags flags,
 	void *cb_fn, void *arg, void *data, enum ao2_callback_type type, const char *tag,
 	const char *file, int line, const char *func)
 {
@@ -1563,7 +1639,6 @@ static void *hash_ao2_callback(struct ao2_container_hash *c, enum search_flags f
 	struct ao2_container *multi_container = NULL;
 	struct ao2_iterator *multi_iterator = NULL;
 
-/*! BUGBUG hash_ao2_callback() need to convert to ref counted nodes */
 /*! BUGBUG hash_ao2_callback() need to add sorting support */
 /*! BUGBUG hash_ao2_callback() need to add traverse order option support */
 	/*
@@ -1615,7 +1690,7 @@ static void *hash_ao2_callback(struct ao2_container_hash *c, enum search_flags f
 	 */
 	if ((flags & (OBJ_POINTER | OBJ_KEY))) {
 		/* we know hash can handle this case */
-		start = i = c->hash_fn(arg, flags & (OBJ_POINTER | OBJ_KEY)) % c->n_buckets;
+		start = i = self->hash_fn(arg, flags & (OBJ_POINTER | OBJ_KEY)) % self->n_buckets;
 	} else {
 		/* don't know, let's scan all buckets */
 		start = i = -1;		/* XXX this must be fixed later. */
@@ -1624,9 +1699,9 @@ static void *hash_ao2_callback(struct ao2_container_hash *c, enum search_flags f
 	/* determine the search boundaries: i..last-1 */
 	if (i < 0) {
 		start = i = 0;
-		last = c->n_buckets;
+		last = self->n_buckets;
 	} else if ((flags & OBJ_CONTINUE)) {
-		last = c->n_buckets;
+		last = self->n_buckets;
 	} else {
 		last = i + 1;
 	}
@@ -1634,105 +1709,154 @@ static void *hash_ao2_callback(struct ao2_container_hash *c, enum search_flags f
 	/* avoid modifications to the content */
 	if (flags & OBJ_NOLOCK) {
 		if (flags & OBJ_UNLINK) {
-			orig_lock = adjust_lock(c, AO2_LOCK_REQ_WRLOCK, 1);
+			orig_lock = adjust_lock(self, AO2_LOCK_REQ_WRLOCK, 1);
 		} else {
-			orig_lock = adjust_lock(c, AO2_LOCK_REQ_RDLOCK, 1);
+			orig_lock = adjust_lock(self, AO2_LOCK_REQ_RDLOCK, 1);
 		}
 	} else {
 		orig_lock = AO2_LOCK_REQ_MUTEX;
 		if (flags & OBJ_UNLINK) {
-			ao2_wrlock(c);
+			ao2_wrlock(self);
 		} else {
-			ao2_rdlock(c);
+			ao2_rdlock(self);
 		}
 	}
 
-	for (; i < last ; i++) {
-		/* scan the list with prev-cur pointers */
-		struct bucket_entry *cur;
+	for (; i < last; ++i) {
+		/* Scan the current bucket */
+		struct hash_bucket_node *node;
+		struct hash_bucket_node *next;
 
-		AST_LIST_TRAVERSE_SAFE_BEGIN(&c->buckets[i].list, cur, entry) {
-			int match = (CMP_MATCH | CMP_STOP);
+		/* Find first non-empty node. */
+		node = AST_LIST_FIRST(&self->buckets[i].list);
+		while (node && !node->obj) {
+			node = AST_LIST_NEXT(node, links);
+		}
+		if (node) {
+			int match;
 
-			if (type == WITH_DATA) {
-				match &= cb_withdata(cur->obj, arg, data, flags);
-			} else {
-				match &= cb_default(cur->obj, arg, flags);
-			}
-
-			/* we found the object, performing operations according flags */
-			if (match == 0) {	/* no match, no stop, continue */
-				continue;
-			} else if (match == CMP_STOP) {	/* no match but stop, we are done */
-				i = last;
-				break;
-			}
-
-			/* we have a match (CMP_MATCH) here */
-			if (!(flags & OBJ_NODATA)) {	/* if must return the object, record the value */
-				/* it is important to handle this case before the unlink */
-				ret = cur->obj;
-				if (!(flags & (OBJ_UNLINK | OBJ_MULTIPLE))) {
-					if (tag) {
-						__ao2_ref_debug(ret, 1, tag, file, line, func);
-					} else {
-						__ao2_ref(ret, 1);
-					}
-				}
-			}
-
-			/* If we are in OBJ_MULTIPLE mode and OBJ_NODATA is off,
-			 * link the object into the container that will hold the results.
-			 */
-			if (ret && (multi_container != NULL)) {
-				if (tag) {
-					__ao2_link_debug(multi_container, ret, flags, tag, file, line, func);
+			__ao2_ref(node, +1);
+			do {
+				/* Visit the current node. */
+				match = (CMP_MATCH | CMP_STOP);
+				if (type == WITH_DATA) {
+					match &= cb_withdata(node->obj, arg, data, flags);
 				} else {
-					__ao2_link(multi_container, ret, flags);
+					match &= cb_default(node->obj, arg, flags);
 				}
-				ret = NULL;
-			}
+				if (match == 0) {
+					/* no match, no stop, continue */
+					goto next_bucket_node;
+				} else if (match == CMP_STOP) {
+					/* no match but stop, we are done */
+					break;
+				}
 
-			if (flags & OBJ_UNLINK) {	/* must unlink */
-				/* we are going to modify the container, so update version */
-				ast_atomic_fetchadd_int(&c->version, 1);
-				AST_LIST_REMOVE_CURRENT(entry);
-				/* update number of elements */
-				ast_atomic_fetchadd_int(&c->common.elements, -1);
+				/*
+				 * CMP_MATCH is set here
+				 *
+				 * we found the object, performing operations according to flags
+				 */
+				if (node->obj) {
+					/* The object is still in the container. */
+					if (!(flags & OBJ_NODATA)) {
+						/*
+						 * We are returning the object, record the value.  It is
+						 * important to handle this case before the unlink.
+						 */
+						if (multi_container) {
+							/*
+							 * Link the object into the container that will hold the
+							 * results.
+							 */
+							if (tag) {
+								__ao2_link_debug(multi_container, node->obj, flags,
+									tag, file, line, func);
+							} else {
+								__ao2_link(multi_container, node->obj, flags);
+							}
+						} else {
+							ret = node->obj;
+							/* Returning a single object. */
+							if (!(flags & OBJ_UNLINK)) {
+								/*
+								 * Bump the ref count since we are not going to unlink and
+								 * transfer the container's object ref to the returned object.
+								 */
+								if (tag) {
+									__ao2_ref_debug(ret, 1, tag, file, line, func);
+								} else {
+									__ao2_ref(ret, 1);
+								}
+							}
+						}
+					}
+
+					if (flags & OBJ_UNLINK) {
+						/* update number of elements */
+						ast_atomic_fetchadd_int(&self->common.elements, -1);
 #if defined(AST_DEVMODE)
-				--c->buckets[i].elements;
+						--self->buckets[i].elements;
 #endif	/* defined(AST_DEVMODE) */
 
-				/* - When unlinking and not returning the result, (OBJ_NODATA), the ref from the container
-				 * must be decremented.
-				 * - When unlinking with OBJ_MULTIPLE the ref from the original container
-				 * must be decremented regardless if OBJ_NODATA is used. This is because the result is
-				 * returned in a new container that already holds its own ref for the object. If the ref
-				 * from the original container is not accounted for here a memory leak occurs. */
-				if (flags & (OBJ_NODATA | OBJ_MULTIPLE)) {
-					if (tag) {
-						__ao2_ref_debug(cur->obj, -1, tag, file, line, func);
-					} else {
-						__ao2_ref(cur->obj, -1);
+						/*
+						 * - When unlinking and not returning the result, OBJ_NODATA is
+						 * set, the ref from the container must be decremented.
+						 *
+						 * - When unlinking with a multi_container the ref from the
+						 * original container must be decremented.  This is because the
+						 * result is returned in a new container that already holds its
+						 * own ref for the object.
+						 *
+						 * If the ref from the original container is not accounted for
+						 * here a memory leak occurs.
+						 */
+						if (multi_container || (flags & OBJ_NODATA)) {
+							if (tag) {
+								__ao2_ref_debug(node->obj, -1, tag, file, line, func);
+							} else {
+								__ao2_ref(node->obj, -1);
+							}
+						}
+						node->obj = NULL;
+
+						/* Unref the node from the container. */
+						__ao2_ref(node, -1);
 					}
 				}
-				ast_free(cur);	/* free the link record */
-			}
 
-			if ((match & CMP_STOP) || !(flags & OBJ_MULTIPLE)) {
-				/* We found our only (or last) match, so force an exit from
-				   the outside loop. */
-				i = last;
+				if ((match & CMP_STOP) || !(flags & OBJ_MULTIPLE)) {
+					/*
+					 * We found our only (or last) match, so force an exit from the
+					 * outside loop.
+					 */
+					match = CMP_STOP;
+					break;
+				}
+
+next_bucket_node:
+				/* Find next non-empty node. */
+				next = AST_LIST_NEXT(node, links);
+				while (next && !next->obj) {
+					next = AST_LIST_NEXT(next, links);
+				}
+				if (next) {
+					__ao2_ref(next, +1);
+				}
+				__ao2_ref(node, -1);
+				node = next;
+			} while (node);
+			if (node) {
+				__ao2_ref(node, -1);
+			}
+			if (match & CMP_STOP) {
 				break;
 			}
 		}
-		AST_LIST_TRAVERSE_SAFE_END;
 
-		if (ret) {
-			break;
-		}
-
-		if (i == c->n_buckets - 1 && (flags & OBJ_POINTER) && (flags & OBJ_CONTINUE)) {
+		if (i == self->n_buckets - 1
+			&& (flags & OBJ_CONTINUE)
+			&& (flags & (OBJ_POINTER | OBJ_KEY))) {
 			/* Move to the beginning to ensure we check every bucket */
 			i = -1;
 			last = start;
@@ -1740,9 +1864,9 @@ static void *hash_ao2_callback(struct ao2_container_hash *c, enum search_flags f
 	}
 
 	if (flags & OBJ_NOLOCK) {
-		adjust_lock(c, orig_lock, 0);
+		adjust_lock(self, orig_lock, 0);
 	} else {
-		ao2_unlock(c);
+		ao2_unlock(self);
 	}
 
 	/* if multi_container was created, we are returning multiple objects */
@@ -1775,74 +1899,92 @@ static void *hash_ao2_callback(struct ao2_container_hash *c, enum search_flags f
  */
 static void *hash_ao2_iterator_next(struct ao2_container_hash *self, struct ao2_iterator *iter, const char *tag, const char *file, int line, const char *func)
 {
-	int lim;
-	struct bucket_entry *p = NULL;
+	int cur_bucket;
+	struct hash_bucket_node *node;
 	void *ret;
 
-/*! BUGBUG hash_ao2_iterator_next() need to convert to ref counted nodes */
 /*! BUGBUG hash_ao2_iterator_next() need to add iteration order option support */
 	if ((struct ao2_container *) self != iter->c) {
 		/* Sanity checks. */
 		return NULL;
 	}
 
-	/* optimization. If the container is unchanged and
-	 * we have a pointer, try follow it
-	 */
-	if (self->version == iter->c_version && (p = iter->obj)) {
-		if ((p = AST_LIST_NEXT(p, entry))) {
-			goto found;
+	node = iter->last_node;
+	if (node) {
+		cur_bucket = node->my_bucket;
+
+		/* Find next non-empty node. */
+		node = AST_LIST_NEXT(node, links);
+		while (node && !node->obj) {
+			node = AST_LIST_NEXT(node, links);
 		}
-		/* nope, start from the next bucket */
-		iter->bucket++;
-		iter->version = 0;
-		iter->obj = NULL;
-	}
-
-	lim = self->n_buckets;
-
-	/* Browse the buckets array, moving to the next
-	 * buckets if we don't find the entry in the current one.
-	 * Stop when we find an element with version number greater
-	 * than the current one (we reset the version to 0 when we
-	 * switch buckets).
-	 */
-	for (; iter->bucket < lim; iter->bucket++, iter->version = 0) {
-		/* scan the current bucket */
-		AST_LIST_TRAVERSE(&self->buckets[iter->bucket].list, p, entry) {
-			if (p->version > iter->version) {
-				goto found;
-			}
+		if (node) {
+			/* Found a non-empty node. */
+			goto hash_found;
+		}
+	} else {
+		/* Find first non-empty node. */
+		cur_bucket = 0;
+		node = AST_LIST_FIRST(&self->buckets[cur_bucket].list);
+		while (node && !node->obj) {
+			node = AST_LIST_NEXT(node, links);
+		}
+		if (node) {
+			/* Found a non-empty node. */
+			goto hash_found;
 		}
 	}
-	if (!p) {
-		return NULL;
+
+	/* Find a non-empty node in the remaining buckets */
+	while (++cur_bucket < self->n_buckets) {
+		node = AST_LIST_FIRST(&self->buckets[cur_bucket].list);
+		while (node && !node->obj) {
+			node = AST_LIST_NEXT(node, links);
+		}
+		if (node) {
+			/* Found a non-empty node. */
+			goto hash_found;
+		}
 	}
 
-found:
-	ret = p->obj;
+	/* No more nodes to visit in the container. */
+	if (iter->last_node) {
+		__ao2_ref(iter->last_node, -1);
+		iter->last_node = NULL;
+	}
+	return NULL;
+
+hash_found:
+	ret = node->obj;
+
 	if (iter->flags & AO2_ITERATOR_UNLINK) {
-		/* we are going to modify the container, so update version */
-		ast_atomic_fetchadd_int(&self->version, 1);
-		AST_LIST_REMOVE(&self->buckets[iter->bucket].list, p, entry);
 		/* update number of elements */
 		ast_atomic_fetchadd_int(&self->common.elements, -1);
-		iter->version = 0;
-		iter->obj = NULL;
-		iter->c_version = self->version;
-		ast_free(p);
-	} else {
-		iter->version = p->version;
-		iter->obj = p;
-		iter->c_version = self->version;
+#if defined(AST_DEVMODE)
+		--self->buckets[cur_bucket].elements;
+#endif	/* defined(AST_DEVMODE) */
 
-		/* inc refcount of returned object */
+		/* Transfer the object ref from the container to the returned object. */
+		node->obj = NULL;
+
+		/* Transfer the container's node ref to the iterator. */
+	} else {
+		/* Bump ref of returned object */
 		if (tag) {
 			__ao2_ref_debug(ret, 1, tag, file, line, func);
 		} else {
 			__ao2_ref(ret, 1);
 		}
+
+		/* Bump the container's node ref for the iterator. */
+		__ao2_ref(node, +1);
 	}
+
+	/* Replace the iterator's node */
+	if (iter->last_node) {
+		__ao2_ref(iter->last_node, -1);
+	}
+	iter->last_node = node;
 
 	return ret;
 }
@@ -1935,7 +2077,6 @@ static struct ao2_container *hash_ao2_container_init(
 		return NULL;
 	}
 
-/*! BUGBUG hash_ao2_container_init() need to convert to ref counted nodes */
 	self->common.v_table = &v_table_hash;
 	self->common.sort_fn = sort_fn;
 	self->common.cmp_fn = cmp_fn;
@@ -1943,7 +2084,6 @@ static struct ao2_container *hash_ao2_container_init(
 	self->common.type = AO2_CONTAINER_TYPE_HASH;
 	self->hash_fn = hash_fn ? hash_fn : hash_zero;
 	self->n_buckets = n_buckets;
-	self->version = 1;	/* 0 is a reserved value here */
 
 #ifdef AO2_DEBUG
 	ast_atomic_fetchadd_int(&ao2.total_containers, 1);
@@ -1963,7 +2103,7 @@ struct ao2_container *__ao2_container_alloc_hash(unsigned int ao2_options,
 	struct ao2_container_hash *self;
 
 	num_buckets = hash_fn ? n_buckets : 1;
-	container_size = sizeof(struct ao2_container_hash) + num_buckets * sizeof(struct bucket);
+	container_size = sizeof(struct ao2_container_hash) + num_buckets * sizeof(struct hash_bucket);
 
 	self = __ao2_alloc(container_size, container_destruct, ao2_options);
 	return hash_ao2_container_init(self, container_options, num_buckets,
@@ -1982,7 +2122,7 @@ struct ao2_container *__ao2_container_alloc_hash_debug(unsigned int ao2_options,
 	struct ao2_container_hash *self;
 
 	num_buckets = hash_fn ? n_buckets : 1;
-	container_size = sizeof(struct ao2_container_hash) + num_buckets * sizeof(struct bucket);
+	container_size = sizeof(struct ao2_container_hash) + num_buckets * sizeof(struct hash_bucket);
 
 	self = __ao2_alloc_debug(container_size, container_destruct_debug, ao2_options,
 		tag, file, line, func, ref_debug);
@@ -2070,7 +2210,7 @@ static char *handle_astobj2_test(struct ast_cli_entry *e, int cmd, struct ast_cl
 		e->command = "astobj2 test";
 		e->usage = "Usage: astobj2 test <num>\n"
 			   "       Runs astobj2 test. Creates 'num' objects,\n"
-			   "       and test iterators, callbacks and may be other stuff\n";
+			   "       and test iterators, callbacks and maybe other stuff\n";
 		return NULL;
 	case CLI_GENERATE:
 		return NULL;
