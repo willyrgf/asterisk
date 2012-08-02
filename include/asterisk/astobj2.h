@@ -895,7 +895,7 @@ enum search_flags {
 	 * \note For non-tree containers, it is up to the container type
 	 * to make the best interpretation of the order.  For list and
 	 * hash containers, this also means ascending order because a
-	 * tree can degenerate into a list.
+	 * binary tree can degenerate into a list.
 	 */
 	OBJ_ORDER_PRE = (2 << 7),
 	/*!
@@ -904,7 +904,7 @@ enum search_flags {
 	 * \note For non-tree containers, it is up to the container type
 	 * to make the best interpretation of the order.  For list and
 	 * hash containers, this also means descending order because a
-	 * tree can degenerate into a list.
+	 * binary tree can degenerate into a list.
 	 */
 	OBJ_ORDER_POST = (3 << 7),
 };

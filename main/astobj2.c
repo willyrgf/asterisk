@@ -1546,7 +1546,7 @@ static void hash_ao2_node_destructor(void *v_doomed)
  * \param self Container to operate upon.
  * \param bucket Hash bucket to insert the node.
  * \param node What to put in the bucket list.
- * 
+ *
  * \return enum ao2_container_insert value.
  */
 static enum ao2_container_insert hash_ao2_link_insert(struct ao2_container_hash *self, struct hash_bucket *bucket, struct hash_bucket_node *node)
@@ -1740,6 +1740,7 @@ static void *hash_ao2_callback(struct ao2_container_hash *self, enum search_flag
 	const char *file, int line, const char *func)
 {
 	int i, start, last;	/* search boundaries */
+	int descending;
 	enum ao2_lock_req orig_lock;
 	void *ret = NULL;
 	ao2_callback_fn *cb_default = NULL;
@@ -1748,7 +1749,6 @@ static void *hash_ao2_callback(struct ao2_container_hash *self, enum search_flag
 	struct ao2_iterator *multi_iterator = NULL;
 	ao2_sort_fn *sort_fn;
 
-/*! BUGBUG hash_ao2_callback() need to add traverse order option support */
 	/*
 	 * This logic is used so we can support OBJ_MULTIPLE with OBJ_NODATA
 	 * turned off.  This if statement checks for the special condition
@@ -1790,11 +1790,22 @@ static void *hash_ao2_callback(struct ao2_container_hash *self, enum search_flag
 		}
 	}
 
+	/* Determine traversal order. */
+	switch (flags & OBJ_ORDER_MASK) {
+	case OBJ_ORDER_POST:
+	case OBJ_ORDER_DESCENDING:
+		descending = 1;
+		break;
+	case OBJ_ORDER_PRE:
+	case OBJ_ORDER_ASCENDING:
+	default:
+		descending = 0;
+		break;
+	}
+
 	/*
-	 * XXX this can be optimized.
-	 * If we have a hash function and lookup by pointer,
-	 * run the hash function. Otherwise, scan the whole container
-	 * (this only for the time being. We need to optimize this.)
+	 * If lookup by pointer or search key, run the hash and optional
+	 * sort functions.  Otherwise, traverse the whole container.
 	 */
 	if ((flags & (OBJ_POINTER | OBJ_KEY))) {
 		/* we know hash can handle this case */
@@ -1802,18 +1813,31 @@ static void *hash_ao2_callback(struct ao2_container_hash *self, enum search_flag
 		sort_fn = self->common.sort_fn;
 	} else {
 		/* don't know, let's scan all buckets */
-		start = i = -1;		/* XXX this must be fixed later. */
+		start = i = -1;
 		sort_fn = NULL;
 	}
 
-	/* determine the search boundaries: i..last-1 */
-	if (i < 0) {
-		start = i = 0;
-		last = self->n_buckets;
-	} else if ((flags & OBJ_CONTINUE)) {
-		last = self->n_buckets;
+	/* determine the search boundaries */
+	if (descending) {
+		/* i downto last */
+		if (i < 0) {
+			start = i = self->n_buckets - 1;
+			last = 0;
+		} else if ((flags & OBJ_CONTINUE)) {
+			last = 0;
+		} else {
+			last = i;
+		}
 	} else {
-		last = i + 1;
+		/* i to last-1 */
+		if (i < 0) {
+			start = i = 0;
+			last = self->n_buckets;
+		} else if ((flags & OBJ_CONTINUE)) {
+			last = self->n_buckets;
+		} else {
+			last = i + 1;
+		}
 	}
 
 	/* avoid modifications to the content */
@@ -1832,33 +1856,52 @@ static void *hash_ao2_callback(struct ao2_container_hash *self, enum search_flag
 		}
 	}
 
-	for (; i < last; ++i) {
+	for (; descending ? (last <= i) : (i < last); descending ? --i : ++i) {
 		/* Scan the current bucket */
 		struct hash_bucket_node *node;
 		struct hash_bucket_node *next;
 
 		/* Find first non-empty node. */
-		node = AST_DLLIST_FIRST(&self->buckets[i].list);
-		while (node && !node->obj) {
-			node = AST_DLLIST_NEXT(node, links);
+		if (descending) {
+			node = AST_DLLIST_LAST(&self->buckets[i].list);
+			while (node && !node->obj) {
+				node = AST_DLLIST_PREV(node, links);
+			}
+		} else {
+			node = AST_DLLIST_FIRST(&self->buckets[i].list);
+			while (node && !node->obj) {
+				node = AST_DLLIST_NEXT(node, links);
+			}
 		}
 		if (node) {
 			int match;
 
 			__ao2_ref(node, +1);
-			do {
+			for (;;) {
 				if (sort_fn) {
 					int cmp;
 
 					cmp = sort_fn(node, arg, flags & (OBJ_POINTER | OBJ_KEY));
-					if (cmp < 0) {
-						match = 0;
-						goto next_bucket_node;
-					}
-					if (cmp > 0) {
-						/* No more nodes in this bucket are possible to match. */
-						match = 0;
-						break;
+					if (descending) {
+						if (cmp > 0) {
+							match = 0;
+							goto next_bucket_node;
+						}
+						if (cmp < 0) {
+							/* No more nodes in this bucket are possible to match. */
+							match = 0;
+							break;
+						}
+					} else {
+						if (cmp < 0) {
+							match = 0;
+							goto next_bucket_node;
+						}
+						if (cmp > 0) {
+							/* No more nodes in this bucket are possible to match. */
+							match = 0;
+							break;
+						}
 					}
 				}
 
@@ -1961,16 +2004,37 @@ static void *hash_ao2_callback(struct ao2_container_hash *self, enum search_flag
 
 next_bucket_node:
 				/* Find next non-empty node. */
-				next = AST_DLLIST_NEXT(node, links);
-				while (next && !next->obj) {
-					next = AST_DLLIST_NEXT(next, links);
+				if (descending) {
+					next = AST_DLLIST_PREV(node, links);
+					while (next && !next->obj) {
+						next = AST_DLLIST_PREV(next, links);
+					}
+				} else {
+					next = AST_DLLIST_NEXT(node, links);
+					while (next && !next->obj) {
+						next = AST_DLLIST_NEXT(next, links);
+					}
 				}
 				if (next) {
 					__ao2_ref(next, +1);
 				}
 				__ao2_ref(node, -1);
 				node = next;
-			} while (node);
+
+				/* No more nodes in this bucket. */
+				if (!node) {
+					break;
+				}
+
+				/*
+				 * Dereferencing the old node may have resulted in our next node
+				 * object being removed by another thread if the container uses
+				 * RW locks and the container was read locked.
+				 */
+				if (!node->obj) {
+					goto next_bucket_node;
+				}
+			}
 			if (node) {
 				__ao2_ref(node, -1);
 			}
@@ -1979,12 +2043,21 @@ next_bucket_node:
 			}
 		}
 
-		if (i == self->n_buckets - 1
-			&& (flags & OBJ_CONTINUE)
+		if ((flags & OBJ_CONTINUE)
 			&& (flags & (OBJ_POINTER | OBJ_KEY))) {
-			/* Move to the beginning to ensure we check every bucket */
-			i = -1;
-			last = start;
+			if (descending) {
+				if (i == 0) {
+					/* Move to the end to ensure we check every bucket */
+					i = self->n_buckets;
+					last = start + 1;
+				}
+			} else {
+				if (i == self->n_buckets - 1) {
+					/* Move to the beginning to ensure we check every bucket */
+					i = -1;
+					last = start;
+				}
+			}
 		}
 	}
 
@@ -2028,39 +2101,69 @@ static void *hash_ao2_iterator_next(struct ao2_container_hash *self, struct ao2_
 	struct hash_bucket_node *node;
 	void *ret;
 
-/*! BUGBUG hash_ao2_iterator_next() need to add iteration order option support */
 	if ((struct ao2_container *) self != iter->c) {
 		/* Sanity checks. */
 		return NULL;
 	}
 
 	node = iter->last_node;
-	if (node) {
-		cur_bucket = node->my_bucket;
-
-		/* Find next non-empty node. */
-		node = AST_DLLIST_NEXT(node, links);
-		while (node && !node->obj) {
-			node = AST_DLLIST_NEXT(node, links);
-		}
+	if (iter->flags & AO2_ITERATOR_DESCENDING) {
 		if (node) {
-			/* Found a non-empty node. */
-			goto hash_found;
+			cur_bucket = node->my_bucket;
+
+			/* Find next non-empty node. */
+			node = AST_DLLIST_PREV(node, links);
+			while (node && !node->obj) {
+				node = AST_DLLIST_PREV(node, links);
+			}
+			if (node) {
+				/* Found a non-empty node. */
+				goto hash_found;
+			}
+		} else {
+			/* Find first non-empty node. */
+			cur_bucket = self->n_buckets;
+		}
+
+		/* Find a non-empty node in the remaining buckets */
+		while (0 <= --cur_bucket) {
+			node = AST_DLLIST_LAST(&self->buckets[cur_bucket].list);
+			while (node && !node->obj) {
+				node = AST_DLLIST_PREV(node, links);
+			}
+			if (node) {
+				/* Found a non-empty node. */
+				goto hash_found;
+			}
 		}
 	} else {
-		/* Find first non-empty node. */
-		cur_bucket = -1;
-	}
-
-	/* Find a non-empty node in the remaining buckets */
-	while (++cur_bucket < self->n_buckets) {
-		node = AST_DLLIST_FIRST(&self->buckets[cur_bucket].list);
-		while (node && !node->obj) {
-			node = AST_DLLIST_NEXT(node, links);
-		}
 		if (node) {
-			/* Found a non-empty node. */
-			goto hash_found;
+			cur_bucket = node->my_bucket;
+
+			/* Find next non-empty node. */
+			node = AST_DLLIST_NEXT(node, links);
+			while (node && !node->obj) {
+				node = AST_DLLIST_NEXT(node, links);
+			}
+			if (node) {
+				/* Found a non-empty node. */
+				goto hash_found;
+			}
+		} else {
+			/* Find first non-empty node. */
+			cur_bucket = -1;
+		}
+
+		/* Find a non-empty node in the remaining buckets */
+		while (++cur_bucket < self->n_buckets) {
+			node = AST_DLLIST_FIRST(&self->buckets[cur_bucket].list);
+			while (node && !node->obj) {
+				node = AST_DLLIST_NEXT(node, links);
+			}
+			if (node) {
+				/* Found a non-empty node. */
+				goto hash_found;
+			}
 		}
 	}
 
