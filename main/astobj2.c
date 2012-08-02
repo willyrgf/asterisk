@@ -1378,7 +1378,6 @@ struct ao2_container_hash;
 /*!
  * A structure to create a linked list of entries,
  * used within a bucket.
- * XXX \todo this should be private to the container code
  */
 struct hash_bucket_node {
 	/*! Next node links in the list. */
@@ -2052,6 +2051,20 @@ next_bucket_node:
 		}
 	}
 
+#if defined(AST_DEVMODE)
+	if (self->common.destroying) {
+		/* Check that the container no longer has any nodes */
+		for (i = self->n_buckets; i--;) {
+			if (!AST_DLLIST_EMPTY(&self->buckets[i].list)) {
+				ast_log(LOG_ERROR,
+					"Ref leak destroying container.  Container still has nodes!\n");
+				ast_assert(0);
+				break;
+			}
+		}
+	}
+#endif	/* defined(AST_DEVMODE) */
+
 	if (flags & OBJ_NOLOCK) {
 		adjust_lock(self, orig_lock, 0);
 	} else {
@@ -2306,8 +2319,6 @@ struct ao2_container *__ao2_container_alloc_hash(unsigned int ao2_options,
 	unsigned int container_options, unsigned int n_buckets, ao2_hash_fn *hash_fn,
 	ao2_sort_fn *sort_fn, ao2_callback_fn *cmp_fn)
 {
-	/* XXX maybe consistency check on arguments ? */
-	/* compute the container size */
 	unsigned int num_buckets;
 	size_t container_size;
 	struct ao2_container_hash *self;
@@ -2325,8 +2336,6 @@ struct ao2_container *__ao2_container_alloc_hash_debug(unsigned int ao2_options,
 	ao2_sort_fn *sort_fn, ao2_callback_fn *cmp_fn,
 	const char *tag, const char *file, int line, const char *func, int ref_debug)
 {
-	/* XXX maybe consistency check on arguments ? */
-	/* compute the container size */
 	unsigned int num_buckets;
 	size_t container_size;
 	struct ao2_container_hash *self;
@@ -2741,7 +2750,7 @@ int astobj2_init(void)
 {
 #if defined(AST_DEVMODE)
 	reg_containers = ao2_container_alloc_list(AO2_ALLOC_OPT_LOCK_RWLOCK,
-		AO2_CONTAINER_ALLOC_OPT_DUPS_REJECT, ao2_reg_sort_cb, NULL);
+		AO2_CONTAINER_ALLOC_OPT_DUPS_REPLACE, ao2_reg_sort_cb, NULL);
 #endif	/* defined(AST_DEVMODE) */
 #if defined(AO2_DEBUG) || defined(AST_DEVMODE)
 	ast_cli_register_multiple(cli_astobj2, ARRAY_LEN(cli_astobj2));
