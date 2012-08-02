@@ -734,13 +734,6 @@ enum ao2_container_insert {
 	AO2_CONTAINER_INSERT_NODE_REJECTED,
 };
 
-/* BUGBUG may not be needed */
-enum ao2_container_type {
-	AO2_CONTAINER_TYPE_HASH,
-	AO2_CONTAINER_TYPE_LIST = 0,/* This is a degenerate hash container. */
-	AO2_CONTAINER_TYPE_TREE,
-};
-
 enum ao2_callback_type {
 	DEFAULT,
 	WITH_DATA,
@@ -913,8 +906,6 @@ struct ao2_container {
 	uint32_t options;
 	/*! Number of elements in the container. */
 	int elements;
-	/*! Type of container. BUGBUG may not be needed. */
-	enum ao2_container_type type;
 	/*!
 	 * \brief TRUE if the container is being destroyed.
 	 *
@@ -2301,7 +2292,6 @@ static struct ao2_container *hash_ao2_container_init(
 	self->common.sort_fn = sort_fn;
 	self->common.cmp_fn = cmp_fn;
 	self->common.options = options;
-	self->common.type = AO2_CONTAINER_TYPE_HASH;
 	self->hash_fn = hash_fn ? hash_fn : hash_zero;
 	self->n_buckets = n_buckets;
 
