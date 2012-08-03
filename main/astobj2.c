@@ -1552,7 +1552,7 @@ static enum ao2_container_insert hash_ao2_link_insert(struct ao2_container_hash 
 	if (options & AO2_CONTAINER_ALLOC_OPT_INSERT_BEGIN) {
 		if (sort_fn) {
 			AST_DLLIST_TRAVERSE_BACKWARDS_SAFE_BEGIN(&bucket->list, cur, links) {
-				cmp = sort_fn(cur, node, OBJ_POINTER);
+				cmp = sort_fn(cur->obj, node->obj, OBJ_POINTER);
 				if (cmp > 0) {
 					continue;
 				}
@@ -1584,7 +1584,7 @@ static enum ao2_container_insert hash_ao2_link_insert(struct ao2_container_hash 
 	} else {
 		if (sort_fn) {
 			AST_DLLIST_TRAVERSE_SAFE_BEGIN(&bucket->list, cur, links) {
-				cmp = sort_fn(cur, node, OBJ_POINTER);
+				cmp = sort_fn(cur->obj, node->obj, OBJ_POINTER);
 				if (cmp < 0) {
 					continue;
 				}
@@ -1804,7 +1804,7 @@ static void *hash_ao2_callback(struct ao2_container_hash *self, enum search_flag
 	} else {
 		/* don't know, let's scan all buckets */
 		start = i = -1;
-		sort_fn = NULL;
+		sort_fn = (flags & OBJ_PARTIAL_KEY) ? self->common.sort_fn : NULL;
 	}
 
 	/* determine the search boundaries */
@@ -1871,7 +1871,8 @@ static void *hash_ao2_callback(struct ao2_container_hash *self, enum search_flag
 				if (sort_fn) {
 					int cmp;
 
-					cmp = sort_fn(node, arg, flags & (OBJ_POINTER | OBJ_KEY));
+					cmp = sort_fn(node->obj, arg,
+						flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY));
 					if (descending) {
 						if (cmp > 0) {
 							match = 0;
@@ -2530,10 +2531,10 @@ struct ao2_reg_container {
 	char name[1];
 };
 
-struct ao2_reg_key {
-	/*! Length of partial key match.  Zero if exact match. */
+struct ao2_reg_partial_key {
+	/*! Length of partial key match. */
 	int len;
-	/*! Registration key name. */
+	/*! Registration partial key name. */
 	const char *name;
 };
 
@@ -2552,13 +2553,13 @@ static int ao2_reg_sort_cb(const void *obj_left, const void *obj_right, int flag
 	int cmp;
 
 	if (flags & OBJ_KEY) {
-		const struct ao2_reg_key *key = obj_right;
+		const char *name = obj_right;
 
-		if (key->len) {
-			cmp = strncasecmp(reg_left->name, key->name, key->len);
-		} else {
-			cmp = strcasecmp(reg_left->name, key->name);
-		}
+		cmp = strcasecmp(reg_left->name, name);
+	} else if (flags & OBJ_PARTIAL_KEY) {
+		const struct ao2_reg_partial_key *partial_key = obj_right;
+
+		cmp = strncasecmp(reg_left->name, partial_key->name, partial_key->len);
 	} else {
 		const struct ao2_reg_container *reg_right = obj_right;
 
@@ -2583,11 +2584,9 @@ int ao2_container_register(const char *name, struct ao2_container *self)
 {
 	int res = 0;
 #if defined(AST_DEVMODE)
-	size_t size;
 	struct ao2_reg_container *reg;
 
-	size = strlen(name);
-	reg = ao2_alloc_options(sizeof(*reg) + size, ao2_reg_destructor,
+	reg = ao2_alloc_options(sizeof(*reg) + strlen(name), ao2_reg_destructor,
 		AO2_ALLOC_OPT_LOCK_NOLOCK);
 	if (!reg) {
 		return -1;
@@ -2610,11 +2609,7 @@ int ao2_container_register(const char *name, struct ao2_container *self)
 void ao2_container_unregister(const char *name)
 {
 #if defined(AST_DEVMODE)
-	struct ao2_reg_key key;
-
-	key.len = 0;
-	key.name = name;
-	ao2_find(reg_containers, &key, OBJ_UNLINK | OBJ_NODATA | OBJ_KEY);
+	ao2_find(reg_containers, name, OBJ_UNLINK | OBJ_NODATA | OBJ_KEY);
 #endif	/* defined(AST_DEVMODE) */
 }
 
@@ -2631,7 +2626,7 @@ static int ao2_complete_reg_cb(void *obj, void *arg, void *data, int flags)
 #if defined(AST_DEVMODE)
 static char *complete_container_names(struct ast_cli_args *a)
 {
-	struct ao2_reg_key key;
+	struct ao2_reg_partial_key partial_key;
 	struct ao2_reg_match which;
 	struct ao2_reg_container *reg;
 	char *name;
@@ -2640,11 +2635,12 @@ static char *complete_container_names(struct ast_cli_args *a)
 		return NULL;
 	}
 
-	key.len = strlen(a->word);
-	key.name = a->word;
+	partial_key.len = strlen(a->word);
+	partial_key.name = a->word;
 	which.find_nth = a->n;
 	which.count = 0;
-	reg = ao2_callback_data(reg_containers, OBJ_KEY, ao2_complete_reg_cb, &key, &which);
+	reg = ao2_callback_data(reg_containers, partial_key.len ? OBJ_PARTIAL_KEY : 0,
+		ao2_complete_reg_cb, &partial_key, &which);
 	if (reg) {
 		name = ast_strdup(reg->name);
 		ao2_ref(reg, -1);
@@ -2661,7 +2657,6 @@ static char *handle_cli_astobj2_container_stats(struct ast_cli_entry *e, int cmd
 {
 	const char *name;
 	struct ao2_reg_container *reg;
-	struct ao2_reg_key key;
 
 	switch (cmd) {
 	case CLI_INIT:
@@ -2679,9 +2674,7 @@ static char *handle_cli_astobj2_container_stats(struct ast_cli_entry *e, int cmd
 	}
 
 	name = a->argv[3];
-	key.len = 0;
-	key.name = name;
-	reg = ao2_find(reg_containers, &key, OBJ_KEY);
+	reg = ao2_find(reg_containers, name, OBJ_KEY);
 	if (reg) {
 		ao2_container_stats(reg->registered, a->fd, ast_cli);
 		ao2_ref(reg, -1);
@@ -2699,7 +2692,6 @@ static char *handle_cli_astobj2_container_check(struct ast_cli_entry *e, int cmd
 {
 	const char *name;
 	struct ao2_reg_container *reg;
-	struct ao2_reg_key key;
 
 	switch (cmd) {
 	case CLI_INIT:
@@ -2717,9 +2709,7 @@ static char *handle_cli_astobj2_container_check(struct ast_cli_entry *e, int cmd
 	}
 
 	name = a->argv[3];
-	key.len = 0;
-	key.name = name;
-	reg = ao2_find(reg_containers, &key, OBJ_KEY);
+	reg = ao2_find(reg_containers, name, OBJ_KEY);
 	if (reg) {
 		ast_cli(a->fd, "Container check of '%s': %s.\n", name,
 			ao2_container_check(reg->registered, 0) ? "failed" : "OK");

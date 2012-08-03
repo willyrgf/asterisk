@@ -727,6 +727,8 @@ Operations on container include:
                   search will be done. If not, a traversal is done.
     OBJ_KEY - if set, 'arg', is a search key item that is not an object.
               Similar to OBJ_POINTER and mutually exclusive.
+    OBJ_PARTIAL_KEY - if set, 'arg', is a partial search key item that is not an object.
+              Similar to OBJ_KEY and mutually exclusive.
 
   -  \b ao2_callback(c, flags, fn, arg)
     apply fn(obj, arg) to all objects in the container.
@@ -742,6 +744,8 @@ Operations on container include:
                         all the hash table 'buckets'..
          OBJ_KEY      - if set, 'arg', is a search key item that is not an object.
                         Similar to OBJ_POINTER and mutually exclusive.
+         OBJ_PARTIAL_KEY - if set, 'arg', is a partial search key item that is not an object.
+                        Similar to OBJ_KEY and mutually exclusive.
       - fn is a func that returns int, and takes 3 args:
         (void *obj, void *arg, int flags);
           obj is an object
@@ -806,8 +810,13 @@ enum _cb_results {
 	CMP_STOP	= 0x2,	/*!< stop the search now */
 };
 
-/*! \brief
- * Flags passed to ao2_callback(), ao2_hash_fn(), and ao2_sort_fn() to modify its behaviour.
+/*!
+ * \brief Flags passed to ao2_callback_fn(), ao2_hash_fn(), and ao2_sort_fn() to modify behaviour.
+ *
+ * \todo XXX OBJ_POINTER, OBJ_KEY, and OBJ_PARTIAL_KEY need to
+ * be put into a bit field like OBJ_ORDER_MASK since they are
+ * mutually exclusive.  This change unfortunately is not
+ * backwards compatible.
  */
 enum search_flags {
 	/*!
@@ -826,25 +835,30 @@ enum search_flags {
 	 */
 	OBJ_MULTIPLE = (1 << 2),
 	/*!
-	 * The given obj is an object of the same type as the one being
-	 * searched for, so use the object's hash and/or sort functions
-	 * for optimized searching.
+	 * \brief The arg parameter is an object of the same type.
 	 *
-	 * The matching function is unaffected (i.e. The cb_fn argument
-	 * to ao2_callback).
+	 * \details
+	 * The arg parameter is an object of the same type as the one
+	 * being searched for, so use the object's ao2_hash_fn and/or
+	 * ao2_sort_fn functions for optimized searching.
+	 *
+	 * \note The supplied ao2_callback_fn is called after the
+	 * container nodes have been filtered by the ao2_hash_fn and/or
+	 * ao2_sort_fn functions.
+	 *
+	 * \note OBJ_POINTER, OBJ_KEY, and OBJ_PARTIAL_KEY are mutually
+	 * exclusive.
 	 */
 	OBJ_POINTER = (1 << 3),
 	/*!
-	 * \brief Continue if a match is not found in the hashed out bucket
+	 * \brief Continue if a match is not found.
 	 *
 	 * \details
-	 * This flag is to be used in combination with the OBJ_POINTER
-	 * or OBJ_KEY flags.  This flag causes the entire container to
-	 * be searched for an object.  The OBJ_POINTER or OBJ_KEY flags
-	 * just start the search where the search key specifies to
-	 * start.  If the object is not found then the search
-	 * _continues_ until the search wraps around to the starting
-	 * point.
+	 * This flag forces a whole container search.  The OBJ_POINTER,
+	 * OBJ_KEY, and OBJ_PARTIAL_KEY flags just specify where to
+	 * start the search in the container.  If the search is not
+	 * stopped early then the search _continues_ until the search
+	 * wraps around to the starting point.
 	 *
 	 * Normal searches start where the search key specifies to start
 	 * and end when the search key indicates that the object is not
@@ -854,6 +868,9 @@ enum search_flags {
 	 * keep searching through the rest of the buckets if a match is
 	 * not found in the starting bucket defined by the hash value on
 	 * the argument.
+	 *
+	 * \note The supplied ao2_callback_fn is called for every node
+	 * in the container from the starting point.
 	 */
 	OBJ_CONTINUE = (1 << 4),
 	/*!
@@ -871,24 +888,47 @@ enum search_flags {
 	 */
 	OBJ_NOLOCK = (1 << 5),
 	/*!
-	 * \brief The data is a search key, but is not an object.
+	 * \brief The arg parameter is a search key, but is not an object.
 	 *
 	 * \details
 	 * This can be used when you want to be able to pass custom data
-	 * to the container's stored ao2_hash_fn, ao2_sort_fn, and ao2_find
-	 * ao2_callback_fn functions that is not a full object, but
-	 * perhaps just a string.
+	 * to the container's stored ao2_hash_fn, ao2_sort_fn, and
+	 * ao2_find ao2_callback_fn functions that is not a full object,
+	 * but perhaps just a string.
 	 *
-	 * \note OBJ_KEY and OBJ_POINTER are mutually exclusive options.
+	 * \note The supplied ao2_callback_fn is called after the
+	 * container nodes have been filtered by the ao2_hash_fn and/or
+	 * ao2_sort_fn functions.
+	 *
+	 * \note OBJ_POINTER, OBJ_KEY, and OBJ_PARTIAL_KEY are mutually
+	 * exclusive.
 	 */
 	OBJ_KEY = (1 << 6),
+	/*!
+	 * \brief The arg parameter is a partial search key similar to OBJ_KEY.
+	 *
+	 * \details
+	 * The partial key can be used by the ao2_sort_fn to guide the
+	 * search to find a contiguous subset of a sorted container.
+	 * For example, a sorted container holds: "A", "B", "Bert",
+	 * "Beth", "Earnie".  Doing a partial key search with "B" will
+	 * find the sorted subset of all held objects starting with "B".
+	 *
+	 * \note The supplied ao2_callback_fn is called after the
+	 * container nodes have been filtered by the ao2_sort_fn
+	 * function.
+	 *
+	 * \note OBJ_POINTER, OBJ_KEY, and OBJ_PARTIAL_KEY are mutually
+	 * exclusive.
+	 */
+	OBJ_PARTIAL_KEY = (1 << 7),
 
 	/*! \brief Traverse order option field mask. */
-	OBJ_ORDER_MASK = (3 << 7),
+	OBJ_ORDER_MASK = (0x03 << 8),
 	/*! \brief Traverse in ascending order (First to last container object) */
-	OBJ_ORDER_ASCENDING = (0 << 7),
+	OBJ_ORDER_ASCENDING = (0 << 8),
 	/*! \brief Traverse in descending order (Last to first container object) */
-	OBJ_ORDER_DESCENDING = (1 << 7),
+	OBJ_ORDER_DESCENDING = (1 << 8),
 	/*!
 	 * \brief Traverse in pre-order (Node then childeren, for tree container)
 	 *
@@ -897,7 +937,7 @@ enum search_flags {
 	 * hash containers, this also means ascending order because a
 	 * binary tree can degenerate into a list.
 	 */
-	OBJ_ORDER_PRE = (2 << 7),
+	OBJ_ORDER_PRE = (2 << 8),
 	/*!
 	 * \brief Traverse in post-order (Childeren then node, for tree container)
 	 *
@@ -906,7 +946,7 @@ enum search_flags {
 	 * hash containers, this also means descending order because a
 	 * binary tree can degenerate into a list.
 	 */
-	OBJ_ORDER_POST = (3 << 7),
+	OBJ_ORDER_POST = (3 << 8),
 };
 
 /*!
@@ -974,6 +1014,9 @@ enum ao2_container_opts {
  * \param obj  pointer to the (user-defined part) of an object.
  * \param arg callback argument from ao2_callback()
  * \param flags flags from ao2_callback()
+ *   OBJ_POINTER - if set, 'arg', is an object.
+ *   OBJ_KEY - if set, 'arg', is a search key item that is not an object.
+ *   OBJ_PARTIAL_KEY - if set, 'arg', is a partial search key item that is not an object.
  *
  * The return values are a combination of enum _cb_results.
  * Callback functions are used to search or manipulate objects in a container.
@@ -989,6 +1032,9 @@ int ao2_match_by_addr(void *obj, void *arg, int flags);
  * \param arg callback argument from ao2_callback()
  * \param data arbitrary data from ao2_callback()
  * \param flags flags from ao2_callback()
+ *   OBJ_POINTER - if set, 'arg', is an object.
+ *   OBJ_KEY - if set, 'arg', is a search key item that is not an object.
+ *   OBJ_PARTIAL_KEY - if set, 'arg', is a partial search key item that is not an object.
  *
  * The return values are a combination of enum _cb_results.
  * Callback functions are used to search or manipulate objects in a container.
@@ -1000,6 +1046,7 @@ typedef int (ao2_callback_data_fn)(void *obj, void *arg, void *data, int flags);
  *
  * \param obj pointer to the (user-defined part) of an object.
  * \param flags flags from ao2_callback()
+ *   OBJ_POINTER - if set, 'obj', is an object.
  *   OBJ_KEY - if set, 'obj', is a search key item that is not an object.
  *
  * \return Computed hash value.
@@ -1012,7 +1059,9 @@ typedef int (ao2_hash_fn)(const void *obj, int flags);
  * \param obj_left pointer to the (user-defined part) of an object.
  * \param obj_right pointer to the (user-defined part) of an object.
  * \param flags flags from ao2_callback()
+ *   OBJ_POINTER - if set, 'obj_right', is an object.
  *   OBJ_KEY - if set, 'obj_right', is a search key item that is not an object.
+ *   OBJ_PARTIAL_KEY - if set, 'obj_right', is a partial search key item that is not an object.
  *
  * \retval <0 if obj_left < obj_right
  * \retval =0 if obj_left == obj_right
@@ -1455,6 +1504,7 @@ void *__ao2_unlink(struct ao2_container *c, void *obj, int flags);
  *                              Default is no.
  *      OBJ_POINTER             the pointer is an object pointer
  *      OBJ_KEY                 the pointer is to a search key
+ *      OBJ_PARTIAL_KEY         the pointer is to a partial search key
  *
  * \note When the returned object is no longer in use, ao2_ref() should
  * be used to free the additional reference possibly created by this function.
