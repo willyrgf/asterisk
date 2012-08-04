@@ -1696,6 +1696,420 @@ static int hash_ao2_link(struct ao2_container_hash *self, void *obj_new, int fla
 	return res;
 }
 
+/*! Traversal state to restart a hash container traversal. */
+struct hash_traversal_state {
+	/*! Active sort function in the traversal if not NULL. */
+	ao2_sort_fn *sort_fn;
+	/*! Node returned in the sorted starting hash bucket if OBJ_CONTINUE flag set. (Reffed) */
+	struct hash_bucket_node *first_node;
+	/*! Saved comparison callback arg pointer. */
+	void *arg;
+	/*! Starting hash bucket */
+	int bucket_start;
+	/*! Stopping hash bucket */
+	int bucket_last;
+	/*! Saved search flags to control traversing the container. */
+	enum search_flags flags;
+	/*! TRUE if it is a descending search */
+	unsigned int descending:1;
+	/*! TRUE if the starting bucket needs to be rechecked because of sorting skips. */
+	unsigned int recheck_starting_bucket:1;
+};
+
+/*!
+ * \internal
+ * \brief Find the first hash container node in a traversal.
+ * \since 11.0
+ *
+ * \param self Container to operate upon.
+ * \param flags search_flags to control traversing the container
+ * \param arg Comparison callback arg parameter.
+ * \param state Traversal state to restart hash container traversal.
+ *
+ * \retval node-ptr of found node (Reffed).
+ * \retval NULL when no node found.
+ */
+static struct hash_bucket_node *hash_find_first(struct ao2_container_hash *self, enum search_flags flags, void *arg, struct hash_traversal_state *state)
+{
+	struct hash_bucket_node *node;
+	int bucket_cur;
+	int cmp;
+
+	memset(state, 0, sizeof(*state));
+	state->arg = arg;
+	state->flags = flags;
+
+	/* Determine traversal order. */
+	switch (flags & OBJ_ORDER_MASK) {
+	case OBJ_ORDER_POST:
+	case OBJ_ORDER_DESCENDING:
+		state->descending = 1;
+		break;
+	case OBJ_ORDER_PRE:
+	case OBJ_ORDER_ASCENDING:
+	default:
+		break;
+	}
+
+	/*
+	 * If lookup by pointer or search key, run the hash and optional
+	 * sort functions.  Otherwise, traverse the whole container.
+	 */
+	if ((flags & (OBJ_POINTER | OBJ_KEY))) {
+		/* we know hash can handle this case */
+		bucket_cur = self->hash_fn(arg, flags & (OBJ_POINTER | OBJ_KEY)) % self->n_buckets;
+		state->sort_fn = self->common.sort_fn;
+	} else {
+		/* don't know, let's scan all buckets */
+		bucket_cur = -1;
+		state->sort_fn = (flags & OBJ_PARTIAL_KEY) ? self->common.sort_fn : NULL;
+	}
+
+	if (state->descending) {
+		/*
+		 * Determine the search boundaries of a descending traversal.
+		 *
+		 * bucket_cur downto state->bucket_last
+		 */
+		if (bucket_cur < 0) {
+			bucket_cur = self->n_buckets - 1;
+			state->bucket_last = 0;
+		} else {
+			state->bucket_last = bucket_cur;
+		}
+		if (flags & OBJ_CONTINUE) {
+			state->bucket_last = 0;
+			if (state->sort_fn) {
+				state->recheck_starting_bucket = 1;
+			}
+		}
+		state->bucket_start = bucket_cur;
+
+		/* For each bucket */
+		for (; state->bucket_last <= bucket_cur; --bucket_cur) {
+			/* For each node in the bucket. */
+			for (node = AST_DLLIST_LAST(&self->buckets[bucket_cur].list);
+				node;
+				node = AST_DLLIST_PREV(node, links)) {
+				if (!node->obj) {
+					/* Node is empty */
+					continue;
+				}
+
+				if (state->sort_fn) {
+					/* Filter node through the sort_fn */
+					cmp = state->sort_fn(node->obj, arg,
+						flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY));
+					if (cmp > 0) {
+						continue;
+					}
+					if (flags & OBJ_CONTINUE) {
+						/* Remember first node when we wrap around. */
+						__ao2_ref(node, +1);
+						state->first_node = node;
+
+						/* From now on all nodes are matching */
+						state->sort_fn = NULL;
+					} else if (cmp < 0) {
+						/* No more nodes in this bucket are possible to match. */
+						break;
+					}
+				}
+
+				/* We have the first traversal node */
+				__ao2_ref(node, +1);
+				return node;
+			}
+
+			/* Was this the starting bucket? */
+			if (bucket_cur == state->bucket_start
+				&& (flags & OBJ_CONTINUE)
+				&& flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY)) {
+				/* In case the bucket was empty or none of the nodes matched. */
+				state->sort_fn = NULL;
+			}
+
+			/* Was this the first container bucket? */
+			if (bucket_cur == 0
+				&& (flags & OBJ_CONTINUE)
+				&& flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY)) {
+				/* Move to the end to ensure we check every bucket */
+				bucket_cur = self->n_buckets;
+				state->bucket_last = state->bucket_start + 1;
+				if (state->recheck_starting_bucket) {
+					/*
+					 * We have to recheck the first part of the starting bucket
+					 * because of sorting skips.
+					 */
+					--state->bucket_last;
+				}
+			}
+		}
+	} else {
+		/*
+		 * Determine the search boundaries of an ascending traversal.
+		 *
+		 * bucket_cur to state->bucket_last-1
+		 */
+		if (bucket_cur < 0) {
+			bucket_cur = 0;
+			state->bucket_last = self->n_buckets;
+		} else {
+			state->bucket_last = bucket_cur + 1;
+		}
+		if (flags & OBJ_CONTINUE) {
+			state->bucket_last = self->n_buckets;
+			if (state->sort_fn) {
+				state->recheck_starting_bucket = 1;
+			}
+		}
+		state->bucket_start = bucket_cur;
+
+		/* For each bucket */
+		for (; bucket_cur < state->bucket_last; ++bucket_cur) {
+			/* For each node in the bucket. */
+			for (node = AST_DLLIST_FIRST(&self->buckets[bucket_cur].list);
+				node;
+				node = AST_DLLIST_NEXT(node, links)) {
+				if (!node->obj) {
+					/* Node is empty */
+					continue;
+				}
+
+				if (state->sort_fn) {
+					/* Filter node through the sort_fn */
+					cmp = state->sort_fn(node->obj, arg,
+						flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY));
+					if (cmp < 0) {
+						continue;
+					}
+					if (flags & OBJ_CONTINUE) {
+						/* Remember first node when we wrap around. */
+						__ao2_ref(node, +1);
+						state->first_node = node;
+
+						/* From now on all nodes are matching */
+						state->sort_fn = NULL;
+					} else if (cmp > 0) {
+						/* No more nodes in this bucket are possible to match. */
+						break;
+					}
+				}
+
+				/* We have the first traversal node */
+				__ao2_ref(node, +1);
+				return node;
+			}
+
+			/* Was this the starting bucket? */
+			if (bucket_cur == state->bucket_start
+				&& (flags & OBJ_CONTINUE)
+				&& flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY)) {
+				/* In case the bucket was empty or none of the nodes matched. */
+				state->sort_fn = NULL;
+			}
+
+			/* Was this the last container bucket? */
+			if (bucket_cur == self->n_buckets - 1
+				&& (flags & OBJ_CONTINUE)
+				&& flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY)) {
+				/* Move to the beginning to ensure we check every bucket */
+				bucket_cur = -1;
+				state->bucket_last = state->bucket_start;
+				if (state->recheck_starting_bucket) {
+					/*
+					 * We have to recheck the first part of the starting bucket
+					 * because of sorting skips.
+					 */
+					++state->bucket_last;
+				}
+			}
+		}
+	}
+
+	return NULL;
+}
+
+/*!
+ * \internal
+ * \brief Find the next hash container node in a traversal.
+ * \since 11.0
+ *
+ * \param self Container to operate upon.
+ * \param state Traversal state to restart hash container traversal.
+ * \param prev Previous node returned by the traversal search functions.
+ *    The ref ownership is passed back to this function.
+ *
+ * \retval node-ptr of found node (Reffed).
+ * \retval NULL when no node found.
+ */
+static struct hash_bucket_node *hash_find_next(struct ao2_container_hash *self, struct hash_traversal_state *state, struct hash_bucket_node *prev)
+{
+	struct hash_bucket_node *node;
+	void *arg;
+	enum search_flags flags;
+	int bucket_cur;
+	int cmp;
+
+	arg = state->arg;
+	flags = state->flags;
+	bucket_cur = prev->my_bucket;
+	node = prev;
+
+	if (state->descending) {
+		goto hash_descending_start;
+
+		/* For each bucket */
+		for (; state->bucket_last <= bucket_cur; --bucket_cur) {
+			/* For each node in the bucket. */
+			for (node = AST_DLLIST_LAST(&self->buckets[bucket_cur].list);
+				node;
+				node = AST_DLLIST_PREV(node, links)) {
+				if (node == state->first_node) {
+					/* We have wrapped back to the starting point. */
+					__ao2_ref(prev, -1);
+					return NULL;
+				}
+				if (!node->obj) {
+					/* Node is empty */
+					continue;
+				}
+
+				if (state->sort_fn) {
+					/* Filter node through the sort_fn */
+					cmp = state->sort_fn(node->obj, arg,
+						flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY));
+					if (cmp > 0) {
+						continue;
+					}
+					if (cmp < 0) {
+						/* No more nodes in this bucket are possible to match. */
+						break;
+					}
+				}
+
+				/* We have the next traversal node */
+				__ao2_ref(node, +1);
+
+				/*
+				 * Dereferencing the prev node may result in our next node
+				 * object being removed by another thread.  This could happen if
+				 * the container uses RW locks and the container was read
+				 * locked.
+				 */
+				__ao2_ref(prev, -1);
+				if (node->obj) {
+					return node;
+				}
+				prev = node;
+
+hash_descending_start:;
+			}
+
+			/* Was this the first container bucket? */
+			if (bucket_cur == 0
+				&& (flags & OBJ_CONTINUE)
+				&& flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY)) {
+				/* Move to the end to ensure we check every bucket */
+				bucket_cur = self->n_buckets;
+				state->bucket_last = state->bucket_start + 1;
+				if (state->recheck_starting_bucket) {
+					/*
+					 * We have to recheck the first part of the starting bucket
+					 * because of sorting skips.
+					 */
+					--state->bucket_last;
+				}
+			}
+		}
+	} else {
+		goto hash_ascending_start;
+
+		/* For each bucket */
+		for (; bucket_cur < state->bucket_last; ++bucket_cur) {
+			/* For each node in the bucket. */
+			for (node = AST_DLLIST_FIRST(&self->buckets[bucket_cur].list);
+				node;
+				node = AST_DLLIST_NEXT(node, links)) {
+				if (node == state->first_node) {
+					/* We have wrapped back to the starting point. */
+					__ao2_ref(prev, -1);
+					return NULL;
+				}
+				if (!node->obj) {
+					/* Node is empty */
+					continue;
+				}
+
+				if (state->sort_fn) {
+					/* Filter node through the sort_fn */
+					cmp = state->sort_fn(node->obj, arg,
+						flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY));
+					if (cmp < 0) {
+						continue;
+					}
+					if (cmp > 0) {
+						/* No more nodes in this bucket are possible to match. */
+						break;
+					}
+				}
+
+				/* We have the next traversal node */
+				__ao2_ref(node, +1);
+
+				/*
+				 * Dereferencing the prev node may result in our next node
+				 * object being removed by another thread.  This could happen if
+				 * the container uses RW locks and the container was read
+				 * locked.
+				 */
+				__ao2_ref(prev, -1);
+				if (node->obj) {
+					return node;
+				}
+				prev = node;
+
+hash_ascending_start:;
+			}
+
+			/* Was this the last container bucket? */
+			if (bucket_cur == self->n_buckets - 1
+				&& (flags & OBJ_CONTINUE)
+				&& flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY)) {
+				/* Move to the beginning to ensure we check every bucket */
+				bucket_cur = -1;
+				state->bucket_last = state->bucket_start;
+				if (state->recheck_starting_bucket) {
+					/*
+					 * We have to recheck the first part of the starting bucket
+					 * because of sorting skips.
+					 */
+					++state->bucket_last;
+				}
+			}
+		}
+	}
+
+	__ao2_ref(prev, -1);
+	return NULL;
+}
+
+/*!
+ * \internal
+ * \brief Cleanup the hash container traversal state.
+ * \since 11.0
+ *
+ * \param state Traversal state to cleanup.
+ *
+ * \return Nothing
+ */
+static void hash_find_cleanup(struct hash_traversal_state *state)
+{
+	if (state->first_node) {
+		__ao2_ref(state->first_node, -1);
+	}
+}
+
 /*!
  * \brief Traverse the container.
  *
@@ -1729,16 +2143,17 @@ static void *hash_ao2_callback(struct ao2_container_hash *self, enum search_flag
 	void *cb_fn, void *arg, void *data, enum ao2_callback_type type, const char *tag,
 	const char *file, int line, const char *func)
 {
-	int i, start, last;	/* search boundaries */
-	int descending;
-	enum ao2_lock_req orig_lock;
-	void *ret = NULL;
+	void *ret;
 	ao2_callback_fn *cb_default = NULL;
 	ao2_callback_data_fn *cb_withdata = NULL;
+	struct hash_bucket_node *node;
+	struct hash_traversal_state traversal_state;
+
+	enum ao2_lock_req orig_lock;
 	struct ao2_container *multi_container = NULL;
 	struct ao2_iterator *multi_iterator = NULL;
-	ao2_sort_fn *sort_fn;
 
+/* BUGBUG pull the multi_container and locking code up into the generic container code. */
 	/*
 	 * This logic is used so we can support OBJ_MULTIPLE with OBJ_NODATA
 	 * turned off.  This if statement checks for the special condition
@@ -1763,70 +2178,12 @@ static void *hash_ao2_callback(struct ao2_container_hash *self, enum search_flag
 		}
 	}
 
-	/* override the match function if necessary */
-	if (cb_fn == NULL) { /* if NULL, match everything */
+	/* Match everything if no callback match function provided. */
+	if (!cb_fn) {
 		if (type == WITH_DATA) {
-			cb_withdata = cb_true_data;
+			cb_fn = cb_true_data;
 		} else {
-			cb_default = cb_true;
-		}
-	} else {
-		/* We do this here to avoid the per object casting penalty (even though
-		   that is probably optimized away anyway). */
-		if (type == WITH_DATA) {
-			cb_withdata = cb_fn;
-		} else {
-			cb_default = cb_fn;
-		}
-	}
-
-	/* Determine traversal order. */
-	switch (flags & OBJ_ORDER_MASK) {
-	case OBJ_ORDER_POST:
-	case OBJ_ORDER_DESCENDING:
-		descending = 1;
-		break;
-	case OBJ_ORDER_PRE:
-	case OBJ_ORDER_ASCENDING:
-	default:
-		descending = 0;
-		break;
-	}
-
-	/*
-	 * If lookup by pointer or search key, run the hash and optional
-	 * sort functions.  Otherwise, traverse the whole container.
-	 */
-	if ((flags & (OBJ_POINTER | OBJ_KEY))) {
-		/* we know hash can handle this case */
-		start = i = self->hash_fn(arg, flags & (OBJ_POINTER | OBJ_KEY)) % self->n_buckets;
-		sort_fn = self->common.sort_fn;
-	} else {
-		/* don't know, let's scan all buckets */
-		start = i = -1;
-		sort_fn = (flags & OBJ_PARTIAL_KEY) ? self->common.sort_fn : NULL;
-	}
-
-	/* determine the search boundaries */
-	if (descending) {
-		/* i downto last */
-		if (i < 0) {
-			start = i = self->n_buckets - 1;
-			last = 0;
-		} else if ((flags & OBJ_CONTINUE)) {
-			last = 0;
-		} else {
-			last = i;
-		}
-	} else {
-		/* i to last-1 */
-		if (i < 0) {
-			start = i = 0;
-			last = self->n_buckets;
-		} else if ((flags & OBJ_CONTINUE)) {
-			last = self->n_buckets;
-		} else {
-			last = i + 1;
+			cb_fn = cb_true;
 		}
 	}
 
@@ -1846,217 +2203,127 @@ static void *hash_ao2_callback(struct ao2_container_hash *self, enum search_flag
 		}
 	}
 
-	for (; descending ? (last <= i) : (i < last); descending ? --i : ++i) {
-		/* Scan the current bucket */
-		struct hash_bucket_node *node;
-		struct hash_bucket_node *next;
+	/* We do this here to avoid the per object casting penalty (even though
+	   that is probably optimized away anyway). */
+	if (type == WITH_DATA) {
+		cb_withdata = cb_fn;
+	} else {
+		cb_default = cb_fn;
+	}
 
-		/* Find first non-empty node. */
-		if (descending) {
-			node = AST_DLLIST_LAST(&self->buckets[i].list);
-			while (node && !node->obj) {
-				node = AST_DLLIST_PREV(node, links);
-			}
+	ret = NULL;
+	for (node = hash_find_first(self, flags, arg, &traversal_state);
+		node;
+		node = hash_find_next(self, &traversal_state, node)) {
+		int match;
+
+		/* Visit the current node. */
+		match = (CMP_MATCH | CMP_STOP);
+		if (type == WITH_DATA) {
+			match &= cb_withdata(node->obj, arg, data, flags);
 		} else {
-			node = AST_DLLIST_FIRST(&self->buckets[i].list);
-			while (node && !node->obj) {
-				node = AST_DLLIST_NEXT(node, links);
-			}
+			match &= cb_default(node->obj, arg, flags);
 		}
-		if (node) {
-			int match;
+		if (match == 0) {
+			/* no match, no stop, continue */
+			continue;
+		}
+		if (match == CMP_STOP) {
+			/* no match but stop, we are done */
+			break;
+		}
 
-			__ao2_ref(node, +1);
-			for (;;) {
-				if (sort_fn) {
-					int cmp;
-
-					cmp = sort_fn(node->obj, arg,
-						flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY));
-					if (descending) {
-						if (cmp > 0) {
-							match = 0;
-							goto next_bucket_node;
-						}
-						if (cmp < 0) {
-							/* No more nodes in this bucket are possible to match. */
-							match = 0;
-							break;
-						}
-					} else {
-						if (cmp < 0) {
-							match = 0;
-							goto next_bucket_node;
-						}
-						if (cmp > 0) {
-							/* No more nodes in this bucket are possible to match. */
-							match = 0;
-							break;
-						}
-					}
-				}
-
-				/* Visit the current node. */
-				match = (CMP_MATCH | CMP_STOP);
-				if (type == WITH_DATA) {
-					match &= cb_withdata(node->obj, arg, data, flags);
-				} else {
-					match &= cb_default(node->obj, arg, flags);
-				}
-				if (match == 0) {
-					/* no match, no stop, continue */
-					goto next_bucket_node;
-				} else if (match == CMP_STOP) {
-					/* no match but stop, we are done */
-					break;
-				}
-
+		/*
+		 * CMP_MATCH is set here
+		 *
+		 * we found the object, performing operations according to flags
+		 */
+		if (node->obj) {
+			/* The object is still in the container. */
+			if (!(flags & OBJ_NODATA)) {
 				/*
-				 * CMP_MATCH is set here
-				 *
-				 * we found the object, performing operations according to flags
+				 * We are returning the object, record the value.  It is
+				 * important to handle this case before the unlink.
 				 */
-				if (node->obj) {
-					/* The object is still in the container. */
-					if (!(flags & OBJ_NODATA)) {
+				if (multi_container) {
+					/*
+					 * Link the object into the container that will hold the
+					 * results.
+					 */
+					if (tag) {
+						__ao2_link_debug(multi_container, node->obj, flags,
+							tag, file, line, func);
+					} else {
+						__ao2_link(multi_container, node->obj, flags);
+					}
+				} else {
+					ret = node->obj;
+					/* Returning a single object. */
+					if (!(flags & OBJ_UNLINK)) {
 						/*
-						 * We are returning the object, record the value.  It is
-						 * important to handle this case before the unlink.
+						 * Bump the ref count since we are not going to unlink and
+						 * transfer the container's object ref to the returned object.
 						 */
-						if (multi_container) {
-							/*
-							 * Link the object into the container that will hold the
-							 * results.
-							 */
-							if (tag) {
-								__ao2_link_debug(multi_container, node->obj, flags,
-									tag, file, line, func);
-							} else {
-								__ao2_link(multi_container, node->obj, flags);
-							}
+						if (tag) {
+							__ao2_ref_debug(ret, 1, tag, file, line, func);
 						} else {
-							ret = node->obj;
-							/* Returning a single object. */
-							if (!(flags & OBJ_UNLINK)) {
-								/*
-								 * Bump the ref count since we are not going to unlink and
-								 * transfer the container's object ref to the returned object.
-								 */
-								if (tag) {
-									__ao2_ref_debug(ret, 1, tag, file, line, func);
-								} else {
-									__ao2_ref(ret, 1);
-								}
-							}
+							__ao2_ref(ret, 1);
 						}
 					}
+				}
+			}
 
-					if (flags & OBJ_UNLINK) {
-						/* update number of elements */
-						ast_atomic_fetchadd_int(&self->common.elements, -1);
+			if (flags & OBJ_UNLINK) {
+				/* update number of elements */
+				ast_atomic_fetchadd_int(&self->common.elements, -1);
 #if defined(AST_DEVMODE)
-						--self->buckets[i].elements;
+				--self->buckets[node->my_bucket].elements;
 #endif	/* defined(AST_DEVMODE) */
 
-						/*
-						 * - When unlinking and not returning the result, OBJ_NODATA is
-						 * set, the ref from the container must be decremented.
-						 *
-						 * - When unlinking with a multi_container the ref from the
-						 * original container must be decremented.  This is because the
-						 * result is returned in a new container that already holds its
-						 * own ref for the object.
-						 *
-						 * If the ref from the original container is not accounted for
-						 * here a memory leak occurs.
-						 */
-						if (multi_container || (flags & OBJ_NODATA)) {
-							if (tag) {
-								__ao2_ref_debug(node->obj, -1, tag, file, line, func);
-							} else {
-								__ao2_ref(node->obj, -1);
-							}
-						}
-						node->obj = NULL;
-
-						/* Unref the node from the container. */
-						__ao2_ref(node, -1);
-					}
-				}
-
-				if ((match & CMP_STOP) || !(flags & OBJ_MULTIPLE)) {
-					/*
-					 * We found our only (or last) match, so force an exit from the
-					 * outside loop.
-					 */
-					match = CMP_STOP;
-					break;
-				}
-
-next_bucket_node:
-				/* Find next non-empty node. */
-				if (descending) {
-					next = AST_DLLIST_PREV(node, links);
-					while (next && !next->obj) {
-						next = AST_DLLIST_PREV(next, links);
-					}
-				} else {
-					next = AST_DLLIST_NEXT(node, links);
-					while (next && !next->obj) {
-						next = AST_DLLIST_NEXT(next, links);
-					}
-				}
-				if (next) {
-					__ao2_ref(next, +1);
-				}
-				__ao2_ref(node, -1);
-				node = next;
-
-				/* No more nodes in this bucket. */
-				if (!node) {
-					break;
-				}
-
 				/*
-				 * Dereferencing the old node may have resulted in our next node
-				 * object being removed by another thread if the container uses
-				 * RW locks and the container was read locked.
+				 * - When unlinking and not returning the result, OBJ_NODATA is
+				 * set, the ref from the container must be decremented.
+				 *
+				 * - When unlinking with a multi_container the ref from the
+				 * original container must be decremented.  This is because the
+				 * result is returned in a new container that already holds its
+				 * own ref for the object.
+				 *
+				 * If the ref from the original container is not accounted for
+				 * here a memory leak occurs.
 				 */
-				if (!node->obj) {
-					goto next_bucket_node;
+				if (multi_container || (flags & OBJ_NODATA)) {
+					if (tag) {
+						__ao2_ref_debug(node->obj, -1, tag, file, line, func);
+					} else {
+						__ao2_ref(node->obj, -1);
+					}
 				}
-			}
-			if (node) {
+				node->obj = NULL;
+
+				/* Unref the node from the container. */
 				__ao2_ref(node, -1);
-			}
-			if (match & CMP_STOP) {
-				break;
 			}
 		}
 
-		if ((flags & OBJ_CONTINUE)
-			&& (flags & (OBJ_POINTER | OBJ_KEY))) {
-			if (descending) {
-				if (i == 0) {
-					/* Move to the end to ensure we check every bucket */
-					i = self->n_buckets;
-					last = start + 1;
-				}
-			} else {
-				if (i == self->n_buckets - 1) {
-					/* Move to the beginning to ensure we check every bucket */
-					i = -1;
-					last = start;
-				}
-			}
+		if ((match & CMP_STOP) || !(flags & OBJ_MULTIPLE)) {
+			/* We found our only (or last) match, so we are done */
+			break;
 		}
+	}
+	hash_find_cleanup(&traversal_state);
+	if (node) {
+		/* Unref the node from hash_find_xxx() */
+		__ao2_ref(node, -1);
 	}
 
 #if defined(AST_DEVMODE)
 	if (self->common.destroying) {
+		int idx;
+
 		/* Check that the container no longer has any nodes */
-		for (i = self->n_buckets; i--;) {
-			if (!AST_DLLIST_EMPTY(&self->buckets[i].list)) {
+		for (idx = self->n_buckets; idx--;) {
+			if (!AST_DLLIST_EMPTY(&self->buckets[idx].list)) {
 				ast_log(LOG_ERROR,
 					"Ref leak destroying container.  Container still has nodes!\n");
 				ast_assert(0);
@@ -2073,7 +2340,7 @@ next_bucket_node:
 	}
 
 	/* if multi_container was created, we are returning multiple objects */
-	if (multi_container != NULL) {
+	if (multi_container) {
 		*multi_iterator = ao2_iterator_init(multi_container,
 			AO2_ITERATOR_UNLINK | AO2_ITERATOR_MALLOCD);
 		ao2_ref(multi_container, -1);
