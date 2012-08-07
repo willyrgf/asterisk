@@ -410,6 +410,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					<enum name="pickupgroup">
 						<para>The configured Pickupgroup.</para>
 					</enum>
+					<enum name="namedcallgroup">
+						<para>The configured Named Callgroup.</para>
+					</enum>
+					<enum name="namedpickupgroup">
+						<para>The configured Named Pickupgroup.</para>
+					</enum>
 					<enum name="codecs">
 						<para>The configured codecs.</para>
 					</enum>
@@ -1453,6 +1459,7 @@ static char * _sip_show_peers(int fd, int *total, struct mansession *s, const st
 static char *sip_show_peers(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
 static char *sip_show_objects(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
 static void  print_group(int fd, ast_group_t group, int crlf);
+static void  print_named_groups(int fd, struct ast_namedgroups *groups, int crlf);
 static const char *dtmfmode2str(int mode) attribute_const;
 static int str2dtmfmode(const char *str) attribute_unused;
 static const char *insecure2str(int mode) attribute_const;
@@ -4907,6 +4914,9 @@ static void sip_destroy_peer(struct sip_peer *peer)
 		peer->socket.ws_session = NULL;
 	}
 
+	peer->named_callgroups = ast_unref_namedgroups(peer->named_callgroups);
+	peer->named_pickupgroups = ast_unref_namedgroups(peer->named_pickupgroups);
+
 	ast_cc_config_params_destroy(peer->cc_params);
 
 	ast_string_field_free_memory(peer);
@@ -5628,6 +5638,10 @@ static int create_addr_from_peer(struct sip_pvt *dialog, struct sip_peer *peer)
 	ref_proxy(dialog, obproxy_get(dialog, peer));
 	dialog->callgroup = peer->callgroup;
 	dialog->pickupgroup = peer->pickupgroup;
+	ast_unref_namedgroups(dialog->named_callgroups);
+	dialog->named_callgroups = ast_ref_namedgroups(peer->named_callgroups);
+	ast_unref_namedgroups(dialog->named_pickupgroups);
+	dialog->named_pickupgroups = ast_ref_namedgroups(peer->named_pickupgroups);
 	ast_copy_string(dialog->zone, peer->zone, sizeof(dialog->zone));
 	dialog->allowtransfer = peer->allowtransfer;
 	dialog->jointnoncodeccapability = dialog->noncodeccapability;
@@ -6218,6 +6232,9 @@ void __sip_destroy(struct sip_pvt *p, int lockowner, int lockdialoglist)
 		ao2_t_ref(p->peerauth, -1, "Removing active peer authentication");
 		p->peerauth = NULL;
 	}
+
+	p->named_callgroups = ast_unref_namedgroups(p->named_callgroups);
+	p->named_pickupgroups = ast_unref_namedgroups(p->named_pickupgroups);
 
 	p->caps = ast_format_cap_destroy(p->caps);
 	p->jointcaps = ast_format_cap_destroy(p->jointcaps);
@@ -7570,6 +7587,10 @@ static struct ast_channel *sip_new(struct sip_pvt *i, int state, const char *tit
 
 	ast_channel_callgroup_set(tmp, i->callgroup);
 	ast_channel_pickupgroup_set(tmp, i->pickupgroup);
+
+	ast_channel_named_callgroups_set(tmp, i->named_callgroups);
+	ast_channel_named_pickupgroups_set(tmp, i->named_pickupgroups);
+
 	ast_channel_caller(tmp)->id.name.presentation = i->callingpres;
 	ast_channel_caller(tmp)->id.number.presentation = i->callingpres;
 	if (!ast_strlen_zero(i->parkinglot)) {
@@ -9429,7 +9450,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 
 	int peernoncodeccapability = 0, vpeernoncodeccapability = 0, tpeernoncodeccapability = 0;
 
-	struct ast_rtp_codecs *newaudiortp = NULL, *newvideortp = NULL, *newtextrtp = NULL;
+	struct ast_rtp_codecs newaudiortp = { 0, }, newvideortp = { 0, }, newtextrtp = { 0, };
 	struct ast_format_cap *newjointcapability = ast_format_cap_alloc_nolock(); /* Negotiated capability */
 	struct ast_format_cap *newpeercapability = ast_format_cap_alloc_nolock();
 	int newnoncodeccapability;
@@ -9466,8 +9487,8 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 		goto process_sdp_cleanup;
 	}
 
-	if (!(newaudiortp = ast_calloc(1, sizeof(*newaudiortp))) || !(newvideortp = ast_calloc(1, sizeof(*newvideortp))) ||
-	    !(newtextrtp = ast_calloc(1, sizeof(*newtextrtp)))) {
+	if (ast_rtp_codecs_payloads_initialize(&newaudiortp) || ast_rtp_codecs_payloads_initialize(&newvideortp) ||
+	    ast_rtp_codecs_payloads_initialize(&newtextrtp)) {
 		res = -1;
 		goto process_sdp_cleanup;
 	}
@@ -9511,11 +9532,11 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 			if (process_sdp_a_sendonly(value, &sendonly)) {
 				processed = TRUE;
 			}
-			else if (process_sdp_a_audio(value, p, newaudiortp, &last_rtpmap_codec))
+			else if (process_sdp_a_audio(value, p, &newaudiortp, &last_rtpmap_codec))
 				processed = TRUE;
-			else if (process_sdp_a_video(value, p, newvideortp, &last_rtpmap_codec))
+			else if (process_sdp_a_video(value, p, &newvideortp, &last_rtpmap_codec))
 				processed = TRUE;
-			else if (process_sdp_a_text(value, p, newtextrtp, red_fmtp, &red_num_gen, red_data_pt, &last_rtpmap_codec))
+			else if (process_sdp_a_text(value, p, &newtextrtp, red_fmtp, &red_num_gen, red_data_pt, &last_rtpmap_codec))
 				processed = TRUE;
 			else if (process_sdp_a_image(value, p))
 				processed = TRUE;
@@ -9629,7 +9650,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 						ast_verbose("Found RTP audio format %d\n", codec);
 					}
 
-					ast_rtp_codecs_payloads_set_m_type(newaudiortp, NULL, codec);
+					ast_rtp_codecs_payloads_set_m_type(&newaudiortp, NULL, codec);
 				}
 			} else {
 				ast_log(LOG_WARNING, "Rejecting audio media offer due to invalid or unsupported syntax: %s\n", m);
@@ -9701,7 +9722,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 					if (debug) {
 						ast_verbose("Found RTP video format %d\n", codec);
 					}
-					ast_rtp_codecs_payloads_set_m_type(newvideortp, NULL, codec);
+					ast_rtp_codecs_payloads_set_m_type(&newvideortp, NULL, codec);
 				}
 			} else {
 				ast_log(LOG_WARNING, "Rejecting video media offer due to invalid or unsupported syntax: %s\n", m);
@@ -9765,7 +9786,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 					if (debug) {
 						ast_verbose("Found RTP text format %d\n", codec);
 					}
-					ast_rtp_codecs_payloads_set_m_type(newtextrtp, NULL, codec);
+					ast_rtp_codecs_payloads_set_m_type(&newtextrtp, NULL, codec);
 				}
 			} else {
 				ast_log(LOG_WARNING, "Rejecting text stream offer due to invalid or unsupported syntax: %s\n", m);
@@ -9883,7 +9904,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 					} else if (!processed_crypto && process_crypto(p, p->rtp, &p->srtp, value)) {
 						processed_crypto = TRUE;
 						processed = TRUE;
-					} else if (process_sdp_a_audio(value, p, newaudiortp, &last_rtpmap_codec)) {
+					} else if (process_sdp_a_audio(value, p, &newaudiortp, &last_rtpmap_codec)) {
 						processed = TRUE;
 					}
 				}
@@ -9894,7 +9915,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 					} else if (!processed_crypto && process_crypto(p, p->vrtp, &p->vsrtp, value)) {
 						processed_crypto = TRUE;
 						processed = TRUE;
-					} else if (process_sdp_a_video(value, p, newvideortp, &last_rtpmap_codec)) {
+					} else if (process_sdp_a_video(value, p, &newvideortp, &last_rtpmap_codec)) {
 						processed = TRUE;
 					}
 				}
@@ -9902,7 +9923,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 				else if (text) {
 					if (process_sdp_a_ice(value, p, p->trtp)) {
 						processed = TRUE;
-					} if (process_sdp_a_text(value, p, newtextrtp, red_fmtp, &red_num_gen, red_data_pt, &last_rtpmap_codec)) {
+					} if (process_sdp_a_text(value, p, &newtextrtp, red_fmtp, &red_num_gen, red_data_pt, &last_rtpmap_codec)) {
 						processed = TRUE;
 					} else if (!processed_crypto && process_crypto(p, p->trtp, &p->tsrtp, value)) {
 						processed_crypto = TRUE;
@@ -9975,9 +9996,9 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 	}
 
 	/* Now gather all of the codecs that we are asked for: */
-	ast_rtp_codecs_payload_formats(newaudiortp, peercapability, &peernoncodeccapability);
-	ast_rtp_codecs_payload_formats(newvideortp, vpeercapability, &vpeernoncodeccapability);
-	ast_rtp_codecs_payload_formats(newtextrtp, tpeercapability, &tpeernoncodeccapability);
+	ast_rtp_codecs_payload_formats(&newaudiortp, peercapability, &peernoncodeccapability);
+	ast_rtp_codecs_payload_formats(&newvideortp, vpeercapability, &vpeernoncodeccapability);
+	ast_rtp_codecs_payload_formats(&newtextrtp, tpeercapability, &tpeernoncodeccapability);
 
 	ast_format_cap_append(newpeercapability, peercapability);
 	ast_format_cap_append(newpeercapability, vpeercapability);
@@ -10040,7 +10061,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 					    ast_sockaddr_stringify(sa));
 			}
 
-			ast_rtp_codecs_payloads_copy(newaudiortp, ast_rtp_instance_get_codecs(p->rtp), p->rtp);
+			ast_rtp_codecs_payloads_copy(&newaudiortp, ast_rtp_instance_get_codecs(p->rtp), p->rtp);
 			/* Ensure RTCP is enabled since it may be inactive
 			   if we're coming back from a T.38 session */
 			ast_rtp_instance_set_prop(p->rtp, AST_RTP_PROPERTY_RTCP, 1);
@@ -10087,7 +10108,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 				ast_verbose("Peer video RTP is at port %s\n",
 					    ast_sockaddr_stringify(vsa));
 			}
-			ast_rtp_codecs_payloads_copy(newvideortp, ast_rtp_instance_get_codecs(p->vrtp), p->vrtp);
+			ast_rtp_codecs_payloads_copy(&newvideortp, ast_rtp_instance_get_codecs(p->vrtp), p->vrtp);
 		} else {
 			ast_rtp_instance_stop(p->vrtp);
 			if (debug)
@@ -10111,7 +10132,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 			} else {
 				p->red = 0;
 			}
-			ast_rtp_codecs_payloads_copy(newtextrtp, ast_rtp_instance_get_codecs(p->trtp), p->trtp);
+			ast_rtp_codecs_payloads_copy(&newtextrtp, ast_rtp_instance_get_codecs(p->trtp), p->trtp);
 		} else {
 			ast_rtp_instance_stop(p->trtp);
 			if (debug)
@@ -10229,15 +10250,9 @@ process_sdp_cleanup:
 	if (res) {
 		offered_media_list_destroy(p);
 	}
-	if (newtextrtp) {
-		ast_free(newtextrtp);
-	}
-	if (newvideortp) {
-		ast_free(newvideortp);
-	}
-	if (newaudiortp) {
-		ast_free(newaudiortp);
-	}
+	ast_rtp_codecs_payloads_destroy(&newtextrtp);
+	ast_rtp_codecs_payloads_destroy(&newvideortp);
+	ast_rtp_codecs_payloads_destroy(&newaudiortp);
 	ast_format_cap_destroy(peercapability);
 	ast_format_cap_destroy(vpeercapability);
 	ast_format_cap_destroy(tpeercapability);
@@ -17344,6 +17359,10 @@ static enum check_auth_result check_peer_ok(struct sip_pvt *p, char *of,
 		p->amaflags = peer->amaflags;
 		p->callgroup = peer->callgroup;
 		p->pickupgroup = peer->pickupgroup;
+		ast_unref_namedgroups(p->named_callgroups);
+		p->named_callgroups = ast_ref_namedgroups(peer->named_callgroups);
+		ast_unref_namedgroups(p->named_pickupgroups);
+		p->named_pickupgroups = ast_ref_namedgroups(peer->named_pickupgroups);
 		ast_format_cap_copy(p->caps, peer->caps);
 		ast_format_cap_copy(p->jointcaps, peer->caps);
 		p->prefs = peer->prefs;
@@ -18347,6 +18366,16 @@ static void print_group(int fd, ast_group_t group, int crlf)
 	ast_cli(fd, crlf ? "%s\r\n" : "%s\n", ast_print_group(buf, sizeof(buf), group) );
 }
 
+/*! \brief Print named call groups and pickup groups */
+static void print_named_groups(int fd, struct ast_namedgroups *group, int crlf)
+{
+	struct ast_str *buf = ast_str_create(1024);
+	if (buf) {
+		ast_cli(fd, crlf ? "%s\r\n" : "%s\n", ast_print_namedgroups(&buf, group) );
+		ast_free(buf);
+	}
+}
+
 /*! \brief mapping between dtmf flags and strings */
 static const struct _map_x_s dtmfstr[] = {
 	{ SIP_DTMF_RFC2833,     "rfc2833" },
@@ -19002,6 +19031,10 @@ static char *_sip_show_peer(int type, int fd, struct mansession *s, const struct
 		print_group(fd, peer->callgroup, 0);
 		ast_cli(fd, "  Pickupgroup  : ");
 		print_group(fd, peer->pickupgroup, 0);
+		ast_cli(fd, "  Named Callgr : ");
+		print_named_groups(fd, peer->named_callgroups, 0);
+		ast_cli(fd, "  Nam. Pickupgr: ");
+		print_named_groups(fd, peer->named_pickupgroups, 0);
 		peer_mailboxes_to_str(&mailbox_str, peer);
 		ast_cli(fd, "  MOH Suggest  : %s\n", peer->mohsuggest);
 		ast_cli(fd, "  Mailbox      : %s\n", mailbox_str->str);
@@ -19096,7 +19129,7 @@ static char *_sip_show_peer(int type, int fd, struct mansession *s, const struct
 		peer = sip_unref_peer(peer, "sip_show_peer: sip_unref_peer: done with peer ptr");
 	} else  if (peer && type == 1) { /* manager listing */
 		char buffer[256];
-		struct ast_str *mailbox_str = ast_str_alloca(512);
+		struct ast_str *tmp_str = ast_str_alloca(512);
 		astman_append(s, "Channeltype: SIP\r\n");
 		astman_append(s, "ObjectName: %s\r\n", peer->name);
 		astman_append(s, "ChanObjectType: peer\r\n");
@@ -19118,9 +19151,15 @@ static char *_sip_show_peer(int type, int fd, struct mansession *s, const struct
 		astman_append(s, "%s\r\n", ast_print_group(buffer, sizeof(buffer), peer->callgroup));
 		astman_append(s, "Pickupgroup: ");
 		astman_append(s, "%s\r\n", ast_print_group(buffer, sizeof(buffer), peer->pickupgroup));
+		astman_append(s, "Named Callgroup: ");
+		astman_append(s, "%s\r\n", ast_print_namedgroups(&tmp_str, peer->named_callgroups));
+		ast_str_reset(tmp_str);
+		astman_append(s, "Named Pickupgroup: ");
+		astman_append(s, "%s\r\n", ast_print_namedgroups(&tmp_str, peer->named_pickupgroups));
+		ast_str_reset(tmp_str);
 		astman_append(s, "MOHSuggest: %s\r\n", peer->mohsuggest);
-		peer_mailboxes_to_str(&mailbox_str, peer);
-		astman_append(s, "VoiceMailbox: %s\r\n", mailbox_str->str);
+		peer_mailboxes_to_str(&tmp_str, peer);
+		astman_append(s, "VoiceMailbox: %s\r\n", tmp_str->str);
 		astman_append(s, "TransferMode: %s\r\n", transfermode2str(peer->allowtransfer));
 		astman_append(s, "LastMsgsSent: %d\r\n", peer->lastmsgssent);
 		astman_append(s, "Maxforwards: %d\r\n", peer->maxforwards);
@@ -19287,6 +19326,10 @@ static char *sip_show_user(struct ast_cli_entry *e, int cmd, struct ast_cli_args
 		print_group(a->fd, user->callgroup, 0);
 		ast_cli(a->fd, "  Pickupgroup  : ");
 		print_group(a->fd, user->pickupgroup, 0);
+		ast_cli(a->fd, "  Named Callgr : ");
+		print_named_groups(a->fd, user->named_callgroups, 0);
+		ast_cli(a->fd, "  Nam. Pickupgr: ");
+		print_named_groups(a->fd, user->named_pickupgroups, 0);
 		ast_cli(a->fd, "  Callerid     : %s\n", ast_callerid_merge(cbuf, sizeof(cbuf), user->cid_name, user->cid_num, "<unspecified>"));
 		ast_cli(a->fd, "  ACL          : %s\n", AST_CLI_YESNO(ast_acl_list_is_empty(user->acl) == 0));
  		ast_cli(a->fd, "  Sess-Timers  : %s\n", stmode2str(user->stimer.st_mode_oper));
@@ -21039,6 +21082,18 @@ static int function_sippeer(struct ast_channel *chan, const char *cmd, char *dat
 		ast_print_group(buf, len, peer->callgroup);
 	} else  if (!strcasecmp(colname, "pickupgroup")) {
 		ast_print_group(buf, len, peer->pickupgroup);
+	} else  if (!strcasecmp(colname, "namedcallgroup")) {
+		struct ast_str *tmp_str = ast_str_create(1024);
+		if (tmp_str) {
+			ast_copy_string(buf, ast_print_namedgroups(&tmp_str, peer->named_callgroups), len);
+			ast_free(tmp_str);
+		}
+	} else  if (!strcasecmp(colname, "namedpickupgroup")) {
+		struct ast_str *tmp_str = ast_str_create(1024);
+		if (tmp_str) {
+			ast_copy_string(buf, ast_print_namedgroups(&tmp_str, peer->named_pickupgroups), len);
+			ast_free(tmp_str);
+		}
 	} else  if (!strcasecmp(colname, "useragent")) {
 		ast_copy_string(buf, peer->useragent, len);
 	} else  if (!strcasecmp(colname, "mailbox")) {
@@ -29431,6 +29486,10 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 		}
 	}
 
+	/* clear named callgroup and named pickup group container */
+	peer->named_callgroups = ast_unref_namedgroups(peer->named_callgroups);
+	peer->named_pickupgroups = ast_unref_namedgroups(peer->named_pickupgroups);
+
 	for (; v || ((v = alt) && !(alt=NULL)); v = v->next) {
 		if (!devstate_only) {
 			if (handle_common_options(&peerflags[0], &mask[0], v)) {
@@ -29668,6 +29727,10 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 				peer->allowtransfer = ast_true(v->value) ? TRANSFER_OPENFORALL : TRANSFER_CLOSED;
 			} else if (!strcasecmp(v->name, "pickupgroup")) {
 				peer->pickupgroup = ast_get_group(v->value);
+			} else if (!strcasecmp(v->name, "namedcallgroup")) {
+				peer->named_callgroups = ast_get_namedgroups(v->value);
+			} else if (!strcasecmp(v->name, "namedpickupgroup")) {
+				peer->named_pickupgroups = ast_get_namedgroups(v->value);
 			} else if (!strcasecmp(v->name, "allow")) {
 				int error = ast_parse_allow_disallow(&peer->prefs, peer->caps, v->value, TRUE);
 				if (error) {
