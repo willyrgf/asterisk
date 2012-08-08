@@ -351,6 +351,8 @@ chan_sip
  * Added support for format attribute negotiation.  See the Codecs changes for
    more information.
 
+ * Extra headers specified with SIPAddHeader are sent with the REFER message
+   when using Transfer application. See refer_addheaders in sip.conf.sample.
 
 chan_skinny
 ------------------
@@ -425,6 +427,9 @@ Core
  * Asterisk can now use a system-provided NetBSD editline library (libedit) if it
    is available.
 
+ * Call files now support the "early_media" option to connect with an outgoing
+   extension when early media is received.
+
 AGI
 ------------------
  * A new channel variable, AGIEXITONHANGUP, has been added which allows
@@ -438,6 +443,10 @@ AGI
 
 AMI (Asterisk Manager Interface)
 ------------------
+ * The originate action now has an option "EarlyMedia" that enables the
+   call to bridge when we get early media in the call. Previously,
+   early media was disregarded always when originating calls using AMI.
+
  * Added setvar= option to manager accounts (much like sip.conf)
 
  * Originate now generates an error response if the extension given is not found
@@ -660,12 +669,6 @@ Scripts
    its value to determine the directory to assume is the top-level directory of
    the source tree.  If the variable is not set, it defaults to the current
    behavior and uses the current working directory.
-
-
-SIP changes
---------------------------
- * Extra headers specified with SIPAddHeader are sent with the REFER message
-   when using Transfer application. See refer_addheaders in sip.conf.sample.
 
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 1.8 to Asterisk 10 -------------------
