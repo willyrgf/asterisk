@@ -967,6 +967,14 @@ static const struct {
 	{{ "restart", "gracefully", NULL }},
 };
 
+/*! \brief Structure for simple linked list of available contexts for a manager
+ 	session */
+struct man_context {
+	char context[AST_MAX_CONTEXT];
+	struct man_context *next;
+};
+
+
 /* In order to understand what the heck is going on with the
  * mansession_session and mansession structs, we need to have a bit of a history
  * lesson.
@@ -1021,6 +1029,7 @@ struct mansession_session {
 	struct ao2_container *whitefilters;	/*!< Manager event filters - white list */
 	struct ao2_container *blackfilters;	/*!< Manager event filters - black list */
 	int send_events;	/*!<  XXX what ? */
+	struct man_context *context;	/*!< Contexts for new calls. Multiple allowed */
 	struct eventqent *last_ev;	/*!< last event processed. */
 	int writetimeout;	/*!< Timeout for ast_carefulwrite() */
 	time_t authstart;
@@ -1072,6 +1081,7 @@ struct ast_manager_user {
 	int writetimeout;		/*!< Per user Timeout for ast_carefulwrite() */
 	int displayconnects;		/*!< XXX unused */
 	int keep;			/*!< mark entries created on a reload */
+	struct man_context *context;	/*!< Contexts allowed */
 	struct ao2_container *whitefilters; /*!< Manager event filters - white list */
 	struct ao2_container *blackfilters; /*!< Manager event filters - black list */
 	char *a1_hash;			/*!< precalculated A1 for Digest auth */
@@ -1222,6 +1232,61 @@ static const struct permalias {
 	{ 0, "none" },
 };
 
+/* Search list of context. Stolen from chan_iax2 */
+static int apply_context(struct man_context *con, const char *context)
+{
+	while(con) {
+		if (!strcmp(con->context, context) || !strcmp(con->context, "*")) {
+			return 1;
+		}
+		con = con->next;
+	}
+	return 0;
+}
+
+static void free_contexts(struct man_context *con)
+{
+	struct man_context *conl;
+	while(con) {
+		conl = con;
+		con = con->next;
+		ast_free(conl);
+	}
+}
+
+static struct man_context *build_context(const char *context)
+{
+        struct man_context *con;
+
+        if ((con = ast_calloc(1, sizeof(*con)))) {
+                ast_copy_string(con->context, context, sizeof(con->context));
+	}
+
+        return con;
+}
+
+static struct man_context *append_context(struct man_context *con, const char *context)
+{
+	struct man_context *top;
+	if (!con) {
+		return build_context(context);
+	}
+	top = build_context(context);
+	top->next = con;
+	return top;
+}
+
+static struct man_context *copy_context(struct man_context *con)
+{
+	struct man_context *top = NULL;
+	while(con) {
+		top = append_context(top, con->context);
+		con = con->next;
+	}
+	return top;
+}
+
+
 /*! \brief Checks to see if a string which can be used to evaluate functions should be rejected */
 static int function_capable_string_allowed_with_auths(const char *evaluating, int writepermlist)
 {
@@ -1363,6 +1428,10 @@ static void session_destructor(void *obj)
 	}
 	if (eqe) {
 		ast_atomic_fetchadd_int(&eqe->usecount, -1);
+	}
+
+	if (session->context) {
+		free_contexts(session->context);
 	}
 
 	if (session->whitefilters) {
@@ -2507,6 +2576,7 @@ static int authenticate(struct mansession *s, const struct message *m)
 	s->session->readperm = user->readperm;
 	s->session->writeperm = user->writeperm;
 	s->session->writetimeout = user->writetimeout;
+	s->session->context = copy_context(user->context);
 
 	filter_iter = ao2_iterator_init(user->whitefilters, 0);
 	while ((regex_filter = ao2_iterator_next(&filter_iter))) {
@@ -3598,6 +3668,12 @@ static int action_redirect(struct mansession *s, const struct message *m)
 		}
 	}
 
+	/* Check if redirect is to allowed context */
+	if (s->session->context && ! apply_context(s->session->context, context) ) {
+		astman_send_error(s, m, "Illegal context");
+		return 0;
+	}
+
 	if (!ast_strlen_zero(priority2) && (sscanf(priority2, "%30d", &pi2) != 1)) {
 		if ((pi2 = ast_findlabel_extension(NULL, context2, exten2, priority2, NULL)) < 1) {
 			astman_send_error(s, m, "Invalid ExtraPriority");
@@ -3687,6 +3763,12 @@ static int action_atxfer(struct mansession *s, const struct message *m)
 	}
 	if (ast_strlen_zero(exten)) {
 		astman_send_error(s, m, "No extension specified");
+		return 0;
+	}
+
+	/* Check if transfer is to allowed context */
+	if (s->session->context && ! apply_context(s->session->context, context) ) {
+		astman_send_error(s, m, "Illegal context");
 		return 0;
 	}
 
@@ -4207,6 +4289,12 @@ static int action_originate(struct mansession *s, const struct message *m)
 		res = 0;
 		goto fast_orig_cleanup;
 	}
+
+	if (s->session->context && ! apply_context(s->session->context, context) ) {
+		astman_send_error(s, m, "Illegal context");
+		return 0;
+	}
+
 	*data++ = '\0';
 	ast_copy_string(tmp2, callerid, sizeof(tmp2));
 	ast_callerid_parse(tmp2, &n, &l);
@@ -7029,6 +7117,7 @@ static int __init_manager(int reload)
 					/* Default displayconnect from [general] */
 					user->displayconnects = displayconnects;
 					user->writetimeout = 100;
+					user->context = NULL;
 				}
 
 				if (!user_secret) {
@@ -7094,6 +7183,10 @@ static int __init_manager(int reload)
 			ast_copy_string(user->username, cat, sizeof(user->username));
 
 			user->ha = NULL;
+			if (user->context) {
+				free_contexts(user->context);
+			}
+			user->context = NULL;
 			user->readperm = 0;
 			user->writeperm = 0;
 			/* Default displayconnect from [general] */
@@ -7124,6 +7217,8 @@ static int __init_manager(int reload)
 			} else if (!strcasecmp(var->name, "deny") ||
 				       !strcasecmp(var->name, "permit")) {
 				user->ha = ast_append_ha(var->name, var->value, user->ha, NULL);
+			}  else if (!strcasecmp(var->name, "context") ) {
+				user->context = append_context(user->context, var->value);
 			}  else if (!strcasecmp(var->name, "read") ) {
 				user->readperm = get_perm(var->value);
 			}  else if (!strcasecmp(var->name, "write") ) {
@@ -7171,6 +7266,9 @@ static int __init_manager(int reload)
 		}
 		if (user->secret) {
 			ast_free(user->secret);
+		}
+		if (user->context) {
+			free_contexts(user->context);
 		}
 		ao2_t_callback(user->whitefilters, OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE, NULL, NULL, "unlink all white filters");
 		ao2_t_callback(user->blackfilters, OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE, NULL, NULL, "unlink all black filters");
