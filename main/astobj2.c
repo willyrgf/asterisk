@@ -725,6 +725,11 @@ void *__ao2_global_obj_ref(struct ao2_global_obj *holder, const char *tag, const
 	return obj;
 }
 
+enum ao2_callback_type {
+	AO2_CALLBACK_DEFAULT,
+	AO2_CALLBACK_WITH_DATA,
+};
+
 enum ao2_container_insert {
 	/*! The node was inserted into the container. */
 	AO2_CONTAINER_INSERT_NODE_INSERTED,
@@ -734,9 +739,22 @@ enum ao2_container_insert {
 	AO2_CONTAINER_INSERT_NODE_REJECTED,
 };
 
-enum ao2_callback_type {
-	DEFAULT,
-	WITH_DATA,
+enum ao2_container_rtti {
+	/*! This is a hash container */
+	AO2_CONTAINER_RTTI_HASH,
+};
+
+/*!
+ * \brief Generic container node.
+ *
+ * \details This is the base container node type that contains
+ * values common to all container nodes.
+ */
+struct ao2_container_node {
+	/*! Stored object in node. */
+	void *obj;
+	/*! Container holding the node.  (Does not hold a reference.) */
+	struct ao2_container *my_container;
 };
 
 /*!
@@ -790,32 +808,44 @@ typedef struct ao2_container *(*ao2_container_alloc_empty_clone_debug_fn)(struct
 typedef int (*ao2_container_link_fn)(struct ao2_container *self, void *obj_new, enum search_flags flags, const char *tag, const char *file, int line, const char *func);
 
 /*!
- * \brief Traverse the container.
+ * \brief Find the first container node in a traversal.
+ * \since 11.0
  *
  * \param self Container to operate upon.
  * \param flags search_flags to control traversing the container
- * \param cb_fn Comparison callback function.
  * \param arg Comparison callback arg parameter.
- * \param data Data comparison callback data parameter.
- * \param type Type of comparison callback cb_fn.
- * \param tag used for debugging.
- * \param file Debug file name invoked from
- * \param line Debug line invoked from
- * \param func Debug function name invoked from
+ * \param v_state Traversal state to restart container traversal.
  *
- * \retval NULL on failure or no matching object found.
- *
- * \retval object found if OBJ_MULTIPLE is not set in the flags
- * parameter.
- *
- * \retval ao2_iterator pointer if OBJ_MULTIPLE is set in the
- * flags parameter.  The iterator must be destroyed with
- * ao2_iterator_destroy() when the caller no longer needs it.
+ * \retval node-ptr of found node (Reffed).
+ * \retval NULL when no node found.
  */
-typedef void *(*ao2_container_traverse_fn)(struct ao2_container *self, enum search_flags flags, void *cb_fn, void *arg, void *data, enum ao2_callback_type type, const char *tag, const char *file, int line, const char *func);
+typedef struct ao2_container_node *(*ao2_container_find_first_fn)(struct ao2_container *self, enum search_flags flags, void *arg, void *v_state);
 
 /*!
- * \internal
+ * \brief Find the next container node in a traversal.
+ * \since 11.0
+ *
+ * \param self Container to operate upon.
+ * \param v_state Traversal state to restart container traversal.
+ * \param prev Previous node returned by the traversal search functions.
+ *    The ref ownership is passed back to this function.
+ *
+ * \retval node-ptr of found node (Reffed).
+ * \retval NULL when no node found.
+ */
+typedef struct ao2_container_node *(*ao2_container_find_next_fn)(struct ao2_container *self, void *v_state, struct ao2_container_node *prev);
+
+/*!
+ * \brief Cleanup the container traversal state.
+ * \since 11.0
+ *
+ * \param v_state Traversal state to cleanup.
+ *
+ * \return Nothing
+ */
+typedef void (*ao2_container_find_cleanup_fn)(void *v_state);
+
+/*!
  * \brief Find the next iteration element in the container.
  *
  * \param self Container to operate upon.
@@ -833,7 +863,6 @@ typedef void *(*ao2_container_traverse_fn)(struct ao2_container *self, enum sear
 typedef void *(*ao2_iterator_next_fn)(struct ao2_container *self, struct ao2_iterator *iter, const char *tag, const char *file, int line, const char *func);
 
 /*!
- * \internal
  * \brief Display statistics of the specified container.
  *
  * \param self Container to display statistics.
@@ -847,7 +876,6 @@ typedef void *(*ao2_iterator_next_fn)(struct ao2_container *self, struct ao2_ite
 typedef void (*ao2_container_statistics)(struct ao2_container *self, int fd, void (*prnt)(int fd, const char *fmt, ...) __attribute__((format(printf, 2, 3))));
 
 /*!
- * \internal
  * \brief Perform an integrity check on the specified container.
  *
  * \param self Container to check integrity.
@@ -860,7 +888,9 @@ typedef void (*ao2_container_statistics)(struct ao2_container *self, int fd, voi
 typedef int (*ao2_container_integrity)(struct ao2_container *self);
 
 /*! Container virtual methods template. */
-struct container_methods {
+struct ao2_container_methods {
+	/*! Run Time Type Identification */
+	enum ao2_container_rtti type;
 	/*! Destroy this container. */
 	ao2_container_destroy_fn destroy;
 	/*! \brief Create an empty copy of this container. */
@@ -869,8 +899,12 @@ struct container_methods {
 	ao2_container_alloc_empty_clone_debug_fn alloc_empty_clone_debug;
 	/*! Link an object into this container. */
 	ao2_container_link_fn link;
-	/*! Traverse the container. */
-	ao2_container_traverse_fn traverse;
+	/*! Traverse the container, find the first node. */
+	ao2_container_find_first_fn traverse_first;
+	/*! Traverse the container, find the next node. */
+	ao2_container_find_next_fn traverse_next;
+	/*! Traverse the container, cleanup state. */
+	ao2_container_find_cleanup_fn traverse_cleanup;
 	/*! Find the next iteration element in the container. */
 	ao2_iterator_next_fn iterator_next;
 #if defined(AST_DEVMODE)
@@ -897,7 +931,7 @@ struct container_methods {
  */
 struct ao2_container {
 	/*! Container virtual method table. */
-	const struct container_methods *v_table;
+	const struct ao2_container_methods *v_table;
 	/*! Container sort function if the container is sorted. */
 	ao2_sort_fn *sort_fn;
 	/*! Container traversal matching function for ao2_find. */
@@ -1001,46 +1035,273 @@ static int cb_true_data(void *user_data, void *arg, void *data, int flags)
 	return CMP_MATCH;
 }
 
+#if defined(AST_DEVMODE)
+static void hash_ao2_traverse_unlink_node_stat(struct ao2_container *self, struct ao2_container_node *node);
+#endif	/* defined(AST_DEVMODE) */
+
+/*! Allow enough room for container specific traversal state structs */
+#define AO2_TRAVERSAL_STATE_SIZE	100
+
+/*!
+ * \internal
+ * \brief Traverse the container.  (internal)
+ * \since 11.0
+ *
+ * \param self Container to operate upon.
+ * \param flags search_flags to control traversing the container
+ * \param cb_fn Comparison callback function.
+ * \param arg Comparison callback arg parameter.
+ * \param data Data comparison callback data parameter.
+ * \param type Type of comparison callback cb_fn.
+ * \param tag used for debugging.
+ * \param file Debug file name invoked from
+ * \param line Debug line invoked from
+ * \param func Debug function name invoked from
+ *
+ * \retval NULL on failure or no matching object found.
+ *
+ * \retval object found if OBJ_MULTIPLE is not set in the flags
+ * parameter.
+ *
+ * \retval ao2_iterator pointer if OBJ_MULTIPLE is set in the
+ * flags parameter.  The iterator must be destroyed with
+ * ao2_iterator_destroy() when the caller no longer needs it.
+ */
+static void *__ao2_traverse_internal(struct ao2_container *self, enum search_flags flags,
+	void *cb_fn, void *arg, void *data, enum ao2_callback_type type,
+	const char *tag, const char *file, int line, const char *func)
+{
+	void *ret;
+	ao2_callback_fn *cb_default = NULL;
+	ao2_callback_data_fn *cb_withdata = NULL;
+	struct ao2_container_node *node;
+	void *traversal_state;
+
+	enum ao2_lock_req orig_lock;
+	struct ao2_container *multi_container = NULL;
+	struct ao2_iterator *multi_iterator = NULL;
+
+	if (!INTERNAL_OBJ(self) || !self->v_table || !self->v_table->traverse_first
+		|| !self->v_table->traverse_next) {
+		/* Sanity checks. */
+		return NULL;
+	}
+
+	/*
+	 * This logic is used so we can support OBJ_MULTIPLE with OBJ_NODATA
+	 * turned off.  This if statement checks for the special condition
+	 * where multiple items may need to be returned.
+	 */
+	if ((flags & (OBJ_MULTIPLE | OBJ_NODATA)) == OBJ_MULTIPLE) {
+		/* we need to return an ao2_iterator with the results,
+		 * as there could be more than one. the iterator will
+		 * hold the only reference to a container that has all the
+		 * matching objects linked into it, so when the iterator
+		 * is destroyed, the container will be automatically
+		 * destroyed as well.
+		 */
+		multi_container = __ao2_container_alloc_list(AO2_ALLOC_OPT_LOCK_NOLOCK, 0, NULL,
+			NULL);
+		if (!multi_container) {
+			return NULL;
+		}
+		if (!(multi_iterator = ast_calloc(1, sizeof(*multi_iterator)))) {
+			ao2_ref(multi_container, -1);
+			return NULL;
+		}
+	}
+
+	if (!cb_fn) {
+		/* Match everything if no callback match function provided. */
+		if (type == AO2_CALLBACK_WITH_DATA) {
+			cb_withdata = cb_true_data;
+		} else {
+			cb_default = cb_true;
+		}
+	} else {
+		/*
+		 * We do this here to avoid the per object casting penalty (even
+		 * though that is probably optimized away anyway).
+		 */
+		if (type == AO2_CALLBACK_WITH_DATA) {
+			cb_withdata = cb_fn;
+		} else {
+			cb_default = cb_fn;
+		}
+	}
+
+	/* avoid modifications to the content */
+	if (flags & OBJ_NOLOCK) {
+		if (flags & OBJ_UNLINK) {
+			orig_lock = adjust_lock(self, AO2_LOCK_REQ_WRLOCK, 1);
+		} else {
+			orig_lock = adjust_lock(self, AO2_LOCK_REQ_RDLOCK, 1);
+		}
+	} else {
+		orig_lock = AO2_LOCK_REQ_MUTEX;
+		if (flags & OBJ_UNLINK) {
+			ao2_wrlock(self);
+		} else {
+			ao2_rdlock(self);
+		}
+	}
+
+	/* Create a buffer for the traversal state. */
+	traversal_state = alloca(AO2_TRAVERSAL_STATE_SIZE);
+
+	ret = NULL;
+	for (node = self->v_table->traverse_first(self, flags, arg, traversal_state);
+		node;
+		node = self->v_table->traverse_next(self, traversal_state, node)) {
+		int match;
+
+		/* Visit the current node. */
+		match = (CMP_MATCH | CMP_STOP);
+		if (type == AO2_CALLBACK_WITH_DATA) {
+			match &= cb_withdata(node->obj, arg, data, flags);
+		} else {
+			match &= cb_default(node->obj, arg, flags);
+		}
+		if (match == 0) {
+			/* no match, no stop, continue */
+			continue;
+		}
+		if (match == CMP_STOP) {
+			/* no match but stop, we are done */
+			break;
+		}
+
+		/*
+		 * CMP_MATCH is set here
+		 *
+		 * we found the object, performing operations according to flags
+		 */
+		if (node->obj) {
+			/* The object is still in the container. */
+			if (!(flags & OBJ_NODATA)) {
+				/*
+				 * We are returning the object, record the value.  It is
+				 * important to handle this case before the unlink.
+				 */
+				if (multi_container) {
+					/*
+					 * Link the object into the container that will hold the
+					 * results.
+					 */
+					if (tag) {
+						__ao2_link_debug(multi_container, node->obj, flags,
+							tag, file, line, func);
+					} else {
+						__ao2_link(multi_container, node->obj, flags);
+					}
+				} else {
+					ret = node->obj;
+					/* Returning a single object. */
+					if (!(flags & OBJ_UNLINK)) {
+						/*
+						 * Bump the ref count since we are not going to unlink and
+						 * transfer the container's object ref to the returned object.
+						 */
+						if (tag) {
+							__ao2_ref_debug(ret, 1, tag, file, line, func);
+						} else {
+							__ao2_ref(ret, 1);
+						}
+					}
+				}
+			}
+
+			if (flags & OBJ_UNLINK) {
+				/* update number of elements */
+				ast_atomic_fetchadd_int(&self->elements, -1);
+#if defined(AST_DEVMODE)
+				switch (self->v_table->type) {
+				case AO2_CONTAINER_RTTI_HASH:
+					hash_ao2_traverse_unlink_node_stat(self, node);
+					break;
+				}
+#endif	/* defined(AST_DEVMODE) */
+
+				/*
+				 * - When unlinking and not returning the result, OBJ_NODATA is
+				 * set, the ref from the container must be decremented.
+				 *
+				 * - When unlinking with a multi_container the ref from the
+				 * original container must be decremented.  This is because the
+				 * result is returned in a new container that already holds its
+				 * own ref for the object.
+				 *
+				 * If the ref from the original container is not accounted for
+				 * here a memory leak occurs.
+				 */
+				if (multi_container || (flags & OBJ_NODATA)) {
+					if (tag) {
+						__ao2_ref_debug(node->obj, -1, tag, file, line, func);
+					} else {
+						__ao2_ref(node->obj, -1);
+					}
+				}
+				node->obj = NULL;
+
+				/* Unref the node from the container. */
+				__ao2_ref(node, -1);
+			}
+		}
+
+		if ((match & CMP_STOP) || !(flags & OBJ_MULTIPLE)) {
+			/* We found our only (or last) match, so we are done */
+			break;
+		}
+	}
+	if (self->v_table->traverse_cleanup) {
+		self->v_table->traverse_cleanup(traversal_state);
+	}
+	if (node) {
+		/* Unref the node from self->v_table->traverse_first/traverse_next() */
+		__ao2_ref(node, -1);
+	}
+
+	if (flags & OBJ_NOLOCK) {
+		adjust_lock(self, orig_lock, 0);
+	} else {
+		ao2_unlock(self);
+	}
+
+	/* if multi_container was created, we are returning multiple objects */
+	if (multi_container) {
+		*multi_iterator = ao2_iterator_init(multi_container,
+			AO2_ITERATOR_UNLINK | AO2_ITERATOR_MALLOCD);
+		ao2_ref(multi_container, -1);
+		return multi_iterator;
+	} else {
+		return ret;
+	}
+}
+
 void *__ao2_callback_debug(struct ao2_container *c, enum search_flags flags,
 	ao2_callback_fn *cb_fn, void *arg, const char *tag, const char *file, int line,
 	const char *func)
 {
-	if (!INTERNAL_OBJ(c) || !c->v_table || !c->v_table->traverse) {
-		/* Sanity checks. */
-		return NULL;
-	}
-	return c->v_table->traverse(c, flags, cb_fn, arg, NULL, DEFAULT, tag, file, line, func);
+	return __ao2_traverse_internal(c, flags, cb_fn, arg, NULL, AO2_CALLBACK_DEFAULT, tag, file, line, func);
 }
 
 void *__ao2_callback(struct ao2_container *c, enum search_flags flags,
 	ao2_callback_fn *cb_fn, void *arg)
 {
-	if (!INTERNAL_OBJ(c) || !c->v_table || !c->v_table->traverse) {
-		/* Sanity checks. */
-		return NULL;
-	}
-	return c->v_table->traverse(c, flags, cb_fn, arg, NULL, DEFAULT, NULL, NULL, 0, NULL);
+	return __ao2_traverse_internal(c, flags, cb_fn, arg, NULL, AO2_CALLBACK_DEFAULT, NULL, NULL, 0, NULL);
 }
 
 void *__ao2_callback_data_debug(struct ao2_container *c, enum search_flags flags,
 	ao2_callback_data_fn *cb_fn, void *arg, void *data, const char *tag, const char *file,
 	int line, const char *func)
 {
-	if (!INTERNAL_OBJ(c) || !c->v_table || !c->v_table->traverse) {
-		/* Sanity checks. */
-		return NULL;
-	}
-	return c->v_table->traverse(c, flags, cb_fn, arg, data, WITH_DATA, tag, file, line, func);
+	return __ao2_traverse_internal(c, flags, cb_fn, arg, data, AO2_CALLBACK_WITH_DATA, tag, file, line, func);
 }
 
 void *__ao2_callback_data(struct ao2_container *c, enum search_flags flags,
 	ao2_callback_data_fn *cb_fn, void *arg, void *data)
 {
-	if (!INTERNAL_OBJ(c) || !c->v_table || !c->v_table->traverse) {
-		/* Sanity checks. */
-		return NULL;
-	}
-	return c->v_table->traverse(c, flags, cb_fn, arg, data, WITH_DATA, NULL, NULL, 0, NULL);
+	return __ao2_traverse_internal(c, flags, cb_fn, arg, data, AO2_CALLBACK_WITH_DATA, NULL, NULL, 0, NULL);
 }
 
 /*!
@@ -1051,6 +1312,10 @@ void *__ao2_find_debug(struct ao2_container *c, const void *arg, enum search_fla
 {
 	void *arged = (void *) arg;/* Done to avoid compiler const warning */
 
+	if (!c) {
+		/* Sanity checks. */
+		return NULL;
+	}
 	return __ao2_callback_debug(c, flags, c->cmp_fn, arged, tag, file, line, func);
 }
 
@@ -1058,6 +1323,10 @@ void *__ao2_find(struct ao2_container *c, const void *arg, enum search_flags fla
 {
 	void *arged = (void *) arg;/* Done to avoid compiler const warning */
 
+	if (!c) {
+		/* Sanity checks. */
+		return NULL;
+	}
 	return __ao2_callback(c, flags, c->cmp_fn, arged);
 }
 
@@ -1373,19 +1642,18 @@ int ao2_container_check(struct ao2_container *self, enum search_flags flags)
 	return res;
 }
 
-struct ao2_container_hash;
-
 /*!
  * A structure to create a linked list of entries,
  * used within a bucket.
  */
 struct hash_bucket_node {
+	/*!
+	 * \brief Items common to all container nodes.
+	 * \note Must be first in the specific node struct.
+	 */
+	struct ao2_container_node common;
 	/*! Next node links in the list. */
 	AST_DLLIST_ENTRY(hash_bucket_node) links;
-	/*! Stored object in node. */
-	void *obj;
-	/*! Container holding the node.  (Does not hold a reference.) */
-	struct ao2_container_hash *my_container;
 	/*! Hash bucket holding the node. */
 	int my_bucket;
 };
@@ -1497,7 +1765,7 @@ static void hash_ao2_node_destructor(void *v_doomed)
 	struct hash_bucket *bucket;
 	struct ao2_container_hash *my_container;
 
-	my_container = doomed->my_container;
+	my_container = (struct ao2_container_hash *) doomed->common.my_container;
 	if (my_container) {
 		/*
 		 * Promote to write lock if not already there.  Since
@@ -1522,9 +1790,9 @@ static void hash_ao2_node_destructor(void *v_doomed)
 	 * We could have an object in the node if the container is being
 	 * destroyed or the node had not been linked in yet.
 	 */
-	if (doomed->obj) {
-		ao2_ref(doomed->obj, -1);
-		doomed->obj = NULL;
+	if (doomed->common.obj) {
+		ao2_ref(doomed->common.obj, -1);
+		doomed->common.obj = NULL;
 	}
 }
 
@@ -1552,7 +1820,7 @@ static enum ao2_container_insert hash_ao2_link_insert(struct ao2_container_hash 
 	if (options & AO2_CONTAINER_ALLOC_OPT_INSERT_BEGIN) {
 		if (sort_fn) {
 			AST_DLLIST_TRAVERSE_BACKWARDS_SAFE_BEGIN(&bucket->list, cur, links) {
-				cmp = sort_fn(cur->obj, node->obj, OBJ_POINTER);
+				cmp = sort_fn(cur->common.obj, node->common.obj, OBJ_POINTER);
 				if (cmp > 0) {
 					continue;
 				}
@@ -1568,13 +1836,13 @@ static enum ao2_container_insert hash_ao2_link_insert(struct ao2_container_hash 
 					/* Reject all objects with the same key. */
 					return AO2_CONTAINER_INSERT_NODE_REJECTED;
 				case AO2_CONTAINER_ALLOC_OPT_DUPS_OBJ_REJECT:
-					if (cur->obj == node->obj) {
+					if (cur->common.obj == node->common.obj) {
 						/* Reject inserting the same object */
 						return AO2_CONTAINER_INSERT_NODE_REJECTED;
 					}
 					break;
 				case AO2_CONTAINER_ALLOC_OPT_DUPS_REPLACE:
-					SWAP(cur->obj, node->obj);
+					SWAP(cur->common.obj, node->common.obj);
 					return AO2_CONTAINER_INSERT_NODE_OBJ_REPLACED;
 				}
 			}
@@ -1584,7 +1852,7 @@ static enum ao2_container_insert hash_ao2_link_insert(struct ao2_container_hash 
 	} else {
 		if (sort_fn) {
 			AST_DLLIST_TRAVERSE_SAFE_BEGIN(&bucket->list, cur, links) {
-				cmp = sort_fn(cur->obj, node->obj, OBJ_POINTER);
+				cmp = sort_fn(cur->common.obj, node->common.obj, OBJ_POINTER);
 				if (cmp < 0) {
 					continue;
 				}
@@ -1600,13 +1868,13 @@ static enum ao2_container_insert hash_ao2_link_insert(struct ao2_container_hash 
 					/* Reject all objects with the same key. */
 					return AO2_CONTAINER_INSERT_NODE_REJECTED;
 				case AO2_CONTAINER_ALLOC_OPT_DUPS_OBJ_REJECT:
-					if (cur->obj == node->obj) {
+					if (cur->common.obj == node->common.obj) {
 						/* Reject inserting the same object */
 						return AO2_CONTAINER_INSERT_NODE_REJECTED;
 					}
 					break;
 				case AO2_CONTAINER_ALLOC_OPT_DUPS_REPLACE:
-					SWAP(cur->obj, node->obj);
+					SWAP(cur->common.obj, node->common.obj);
 					return AO2_CONTAINER_INSERT_NODE_OBJ_REPLACED;
 				}
 			}
@@ -1660,8 +1928,8 @@ static int hash_ao2_link(struct ao2_container_hash *self, void *obj_new, int fla
 	} else {
 		__ao2_ref(obj_new, +1);
 	}
-	node->obj = obj_new;
-	node->my_container = self;
+	node->common.obj = obj_new;
+	node->common.my_container = (struct ao2_container *) self;
 	node->my_bucket = i;
 
 	/* Insert the new node. */
@@ -1682,7 +1950,7 @@ static int hash_ao2_link(struct ao2_container_hash *self, void *obj_new, int fla
 		res = 1;
 		/* Fall through */
 	case AO2_CONTAINER_INSERT_NODE_REJECTED:
-		node->my_container = NULL;
+		node->common.my_container = NULL;
 		ao2_ref(node, -1);
 		break;
 	}
@@ -1716,6 +1984,14 @@ struct hash_traversal_state {
 	unsigned int recheck_starting_bucket:1;
 };
 
+struct hash_traversal_state_check {
+	/*
+	 * If we have a division by zero compile error here then there
+	 * is not enough room for the state.  Increase AO2_TRAVERSAL_STATE_SIZE.
+	 */
+	char check[1 / (AO2_TRAVERSAL_STATE_SIZE / sizeof(struct hash_traversal_state))];
+};
+
 /*!
  * \internal
  * \brief Find the first hash container node in a traversal.
@@ -1729,7 +2005,7 @@ struct hash_traversal_state {
  * \retval node-ptr of found node (Reffed).
  * \retval NULL when no node found.
  */
-static struct hash_bucket_node *hash_find_first(struct ao2_container_hash *self, enum search_flags flags, void *arg, struct hash_traversal_state *state)
+static struct hash_bucket_node *hash_ao2_find_first(struct ao2_container_hash *self, enum search_flags flags, void *arg, struct hash_traversal_state *state)
 {
 	struct hash_bucket_node *node;
 	int bucket_cur;
@@ -1791,14 +2067,14 @@ static struct hash_bucket_node *hash_find_first(struct ao2_container_hash *self,
 			for (node = AST_DLLIST_LAST(&self->buckets[bucket_cur].list);
 				node;
 				node = AST_DLLIST_PREV(node, links)) {
-				if (!node->obj) {
+				if (!node->common.obj) {
 					/* Node is empty */
 					continue;
 				}
 
 				if (state->sort_fn) {
 					/* Filter node through the sort_fn */
-					cmp = state->sort_fn(node->obj, arg,
+					cmp = state->sort_fn(node->common.obj, arg,
 						flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY));
 					if (cmp > 0) {
 						continue;
@@ -1871,14 +2147,14 @@ static struct hash_bucket_node *hash_find_first(struct ao2_container_hash *self,
 			for (node = AST_DLLIST_FIRST(&self->buckets[bucket_cur].list);
 				node;
 				node = AST_DLLIST_NEXT(node, links)) {
-				if (!node->obj) {
+				if (!node->common.obj) {
 					/* Node is empty */
 					continue;
 				}
 
 				if (state->sort_fn) {
 					/* Filter node through the sort_fn */
-					cmp = state->sort_fn(node->obj, arg,
+					cmp = state->sort_fn(node->common.obj, arg,
 						flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY));
 					if (cmp < 0) {
 						continue;
@@ -1943,7 +2219,7 @@ static struct hash_bucket_node *hash_find_first(struct ao2_container_hash *self,
  * \retval node-ptr of found node (Reffed).
  * \retval NULL when no node found.
  */
-static struct hash_bucket_node *hash_find_next(struct ao2_container_hash *self, struct hash_traversal_state *state, struct hash_bucket_node *prev)
+static struct hash_bucket_node *hash_ao2_find_next(struct ao2_container_hash *self, struct hash_traversal_state *state, struct hash_bucket_node *prev)
 {
 	struct hash_bucket_node *node;
 	void *arg;
@@ -1970,14 +2246,14 @@ static struct hash_bucket_node *hash_find_next(struct ao2_container_hash *self, 
 					__ao2_ref(prev, -1);
 					return NULL;
 				}
-				if (!node->obj) {
+				if (!node->common.obj) {
 					/* Node is empty */
 					continue;
 				}
 
 				if (state->sort_fn) {
 					/* Filter node through the sort_fn */
-					cmp = state->sort_fn(node->obj, arg,
+					cmp = state->sort_fn(node->common.obj, arg,
 						flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY));
 					if (cmp > 0) {
 						continue;
@@ -1998,7 +2274,7 @@ static struct hash_bucket_node *hash_find_next(struct ao2_container_hash *self, 
 				 * locked.
 				 */
 				__ao2_ref(prev, -1);
-				if (node->obj) {
+				if (node->common.obj) {
 					return node;
 				}
 				prev = node;
@@ -2036,14 +2312,14 @@ hash_descending_start:;
 					__ao2_ref(prev, -1);
 					return NULL;
 				}
-				if (!node->obj) {
+				if (!node->common.obj) {
 					/* Node is empty */
 					continue;
 				}
 
 				if (state->sort_fn) {
 					/* Filter node through the sort_fn */
-					cmp = state->sort_fn(node->obj, arg,
+					cmp = state->sort_fn(node->common.obj, arg,
 						flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY));
 					if (cmp < 0) {
 						continue;
@@ -2064,7 +2340,7 @@ hash_descending_start:;
 				 * locked.
 				 */
 				__ao2_ref(prev, -1);
-				if (node->obj) {
+				if (node->common.obj) {
 					return node;
 				}
 				prev = node;
@@ -2103,250 +2379,10 @@ hash_ascending_start:;
  *
  * \return Nothing
  */
-static void hash_find_cleanup(struct hash_traversal_state *state)
+static void hash_ao2_find_cleanup(struct hash_traversal_state *state)
 {
 	if (state->first_node) {
 		__ao2_ref(state->first_node, -1);
-	}
-}
-
-/*!
- * \brief Traverse the container.
- *
- * \details
- * Browse the container using different stategies accoding the flags.
- * Luckily, for debug purposes, the added args (tag, file, line, func)
- * aren't an excessive load to the system, as the callback should not be
- * called as often as, say, the ao2_ref func is called.
- *
- * \param self Container to operate upon.
- * \param flags search_flags to control traversing the container
- * \param cb_fn Comparison callback function.
- * \param arg Comparison callback arg parameter.
- * \param data Data comparison callback data parameter.
- * \param type Type of comparison callback cb_fn.
- * \param tag used for debugging.
- * \param file Debug file name invoked from
- * \param line Debug line invoked from
- * \param func Debug function name invoked from
- *
- * \retval NULL on failure or no matching object found.
- *
- * \retval object found if OBJ_MULTIPLE is not set in the flags
- * parameter.
- *
- * \retval ao2_iterator pointer if OBJ_MULTIPLE is set in the
- * flags parameter.  The iterator must be destroyed with
- * ao2_iterator_destroy() when the caller no longer needs it.
- */
-static void *hash_ao2_callback(struct ao2_container_hash *self, enum search_flags flags,
-	void *cb_fn, void *arg, void *data, enum ao2_callback_type type, const char *tag,
-	const char *file, int line, const char *func)
-{
-	void *ret;
-	ao2_callback_fn *cb_default = NULL;
-	ao2_callback_data_fn *cb_withdata = NULL;
-	struct hash_bucket_node *node;
-	struct hash_traversal_state traversal_state;
-
-	enum ao2_lock_req orig_lock;
-	struct ao2_container *multi_container = NULL;
-	struct ao2_iterator *multi_iterator = NULL;
-
-/* BUGBUG pull the multi_container and locking code up into the generic container code. */
-	/*
-	 * This logic is used so we can support OBJ_MULTIPLE with OBJ_NODATA
-	 * turned off.  This if statement checks for the special condition
-	 * where multiple items may need to be returned.
-	 */
-	if ((flags & (OBJ_MULTIPLE | OBJ_NODATA)) == OBJ_MULTIPLE) {
-		/* we need to return an ao2_iterator with the results,
-		 * as there could be more than one. the iterator will
-		 * hold the only reference to a container that has all the
-		 * matching objects linked into it, so when the iterator
-		 * is destroyed, the container will be automatically
-		 * destroyed as well.
-		 */
-		multi_container = __ao2_container_alloc_list(AO2_ALLOC_OPT_LOCK_NOLOCK, 0, NULL,
-			NULL);
-		if (!multi_container) {
-			return NULL;
-		}
-		if (!(multi_iterator = ast_calloc(1, sizeof(*multi_iterator)))) {
-			ao2_ref(multi_container, -1);
-			return NULL;
-		}
-	}
-
-	/* Match everything if no callback match function provided. */
-	if (!cb_fn) {
-		if (type == WITH_DATA) {
-			cb_fn = cb_true_data;
-		} else {
-			cb_fn = cb_true;
-		}
-	}
-
-	/* avoid modifications to the content */
-	if (flags & OBJ_NOLOCK) {
-		if (flags & OBJ_UNLINK) {
-			orig_lock = adjust_lock(self, AO2_LOCK_REQ_WRLOCK, 1);
-		} else {
-			orig_lock = adjust_lock(self, AO2_LOCK_REQ_RDLOCK, 1);
-		}
-	} else {
-		orig_lock = AO2_LOCK_REQ_MUTEX;
-		if (flags & OBJ_UNLINK) {
-			ao2_wrlock(self);
-		} else {
-			ao2_rdlock(self);
-		}
-	}
-
-	/* We do this here to avoid the per object casting penalty (even though
-	   that is probably optimized away anyway). */
-	if (type == WITH_DATA) {
-		cb_withdata = cb_fn;
-	} else {
-		cb_default = cb_fn;
-	}
-
-	ret = NULL;
-	for (node = hash_find_first(self, flags, arg, &traversal_state);
-		node;
-		node = hash_find_next(self, &traversal_state, node)) {
-		int match;
-
-		/* Visit the current node. */
-		match = (CMP_MATCH | CMP_STOP);
-		if (type == WITH_DATA) {
-			match &= cb_withdata(node->obj, arg, data, flags);
-		} else {
-			match &= cb_default(node->obj, arg, flags);
-		}
-		if (match == 0) {
-			/* no match, no stop, continue */
-			continue;
-		}
-		if (match == CMP_STOP) {
-			/* no match but stop, we are done */
-			break;
-		}
-
-		/*
-		 * CMP_MATCH is set here
-		 *
-		 * we found the object, performing operations according to flags
-		 */
-		if (node->obj) {
-			/* The object is still in the container. */
-			if (!(flags & OBJ_NODATA)) {
-				/*
-				 * We are returning the object, record the value.  It is
-				 * important to handle this case before the unlink.
-				 */
-				if (multi_container) {
-					/*
-					 * Link the object into the container that will hold the
-					 * results.
-					 */
-					if (tag) {
-						__ao2_link_debug(multi_container, node->obj, flags,
-							tag, file, line, func);
-					} else {
-						__ao2_link(multi_container, node->obj, flags);
-					}
-				} else {
-					ret = node->obj;
-					/* Returning a single object. */
-					if (!(flags & OBJ_UNLINK)) {
-						/*
-						 * Bump the ref count since we are not going to unlink and
-						 * transfer the container's object ref to the returned object.
-						 */
-						if (tag) {
-							__ao2_ref_debug(ret, 1, tag, file, line, func);
-						} else {
-							__ao2_ref(ret, 1);
-						}
-					}
-				}
-			}
-
-			if (flags & OBJ_UNLINK) {
-				/* update number of elements */
-				ast_atomic_fetchadd_int(&self->common.elements, -1);
-#if defined(AST_DEVMODE)
-				--self->buckets[node->my_bucket].elements;
-#endif	/* defined(AST_DEVMODE) */
-
-				/*
-				 * - When unlinking and not returning the result, OBJ_NODATA is
-				 * set, the ref from the container must be decremented.
-				 *
-				 * - When unlinking with a multi_container the ref from the
-				 * original container must be decremented.  This is because the
-				 * result is returned in a new container that already holds its
-				 * own ref for the object.
-				 *
-				 * If the ref from the original container is not accounted for
-				 * here a memory leak occurs.
-				 */
-				if (multi_container || (flags & OBJ_NODATA)) {
-					if (tag) {
-						__ao2_ref_debug(node->obj, -1, tag, file, line, func);
-					} else {
-						__ao2_ref(node->obj, -1);
-					}
-				}
-				node->obj = NULL;
-
-				/* Unref the node from the container. */
-				__ao2_ref(node, -1);
-			}
-		}
-
-		if ((match & CMP_STOP) || !(flags & OBJ_MULTIPLE)) {
-			/* We found our only (or last) match, so we are done */
-			break;
-		}
-	}
-	hash_find_cleanup(&traversal_state);
-	if (node) {
-		/* Unref the node from hash_find_xxx() */
-		__ao2_ref(node, -1);
-	}
-
-#if defined(AST_DEVMODE)
-	if (self->common.destroying) {
-		int idx;
-
-		/* Check that the container no longer has any nodes */
-		for (idx = self->n_buckets; idx--;) {
-			if (!AST_DLLIST_EMPTY(&self->buckets[idx].list)) {
-				ast_log(LOG_ERROR,
-					"Ref leak destroying container.  Container still has nodes!\n");
-				ast_assert(0);
-				break;
-			}
-		}
-	}
-#endif	/* defined(AST_DEVMODE) */
-
-	if (flags & OBJ_NOLOCK) {
-		adjust_lock(self, orig_lock, 0);
-	} else {
-		ao2_unlock(self);
-	}
-
-	/* if multi_container was created, we are returning multiple objects */
-	if (multi_container) {
-		*multi_iterator = ao2_iterator_init(multi_container,
-			AO2_ITERATOR_UNLINK | AO2_ITERATOR_MALLOCD);
-		ao2_ref(multi_container, -1);
-		return multi_iterator;
-	} else {
-		return ret;
 	}
 }
 
@@ -2385,7 +2421,7 @@ static void *hash_ao2_iterator_next(struct ao2_container_hash *self, struct ao2_
 
 			/* Find next non-empty node. */
 			node = AST_DLLIST_PREV(node, links);
-			while (node && !node->obj) {
+			while (node && !node->common.obj) {
 				node = AST_DLLIST_PREV(node, links);
 			}
 			if (node) {
@@ -2400,7 +2436,7 @@ static void *hash_ao2_iterator_next(struct ao2_container_hash *self, struct ao2_
 		/* Find a non-empty node in the remaining buckets */
 		while (0 <= --cur_bucket) {
 			node = AST_DLLIST_LAST(&self->buckets[cur_bucket].list);
-			while (node && !node->obj) {
+			while (node && !node->common.obj) {
 				node = AST_DLLIST_PREV(node, links);
 			}
 			if (node) {
@@ -2414,7 +2450,7 @@ static void *hash_ao2_iterator_next(struct ao2_container_hash *self, struct ao2_
 
 			/* Find next non-empty node. */
 			node = AST_DLLIST_NEXT(node, links);
-			while (node && !node->obj) {
+			while (node && !node->common.obj) {
 				node = AST_DLLIST_NEXT(node, links);
 			}
 			if (node) {
@@ -2429,7 +2465,7 @@ static void *hash_ao2_iterator_next(struct ao2_container_hash *self, struct ao2_
 		/* Find a non-empty node in the remaining buckets */
 		while (++cur_bucket < self->n_buckets) {
 			node = AST_DLLIST_FIRST(&self->buckets[cur_bucket].list);
-			while (node && !node->obj) {
+			while (node && !node->common.obj) {
 				node = AST_DLLIST_NEXT(node, links);
 			}
 			if (node) {
@@ -2447,7 +2483,7 @@ static void *hash_ao2_iterator_next(struct ao2_container_hash *self, struct ao2_
 	return NULL;
 
 hash_found:
-	ret = node->obj;
+	ret = node->common.obj;
 
 	if (iter->flags & AO2_ITERATOR_UNLINK) {
 		/* update number of elements */
@@ -2457,7 +2493,7 @@ hash_found:
 #endif	/* defined(AST_DEVMODE) */
 
 		/* Transfer the object ref from the container to the returned object. */
-		node->obj = NULL;
+		node->common.obj = NULL;
 
 		/* Transfer the container's node ref to the iterator. */
 	} else {
@@ -2480,6 +2516,53 @@ hash_found:
 
 	return ret;
 }
+
+#if defined(AST_DEVMODE)
+/*!
+ * \internal
+ * \brief Decrement the hash container linked object statistic.
+ * \since 11.0
+ *
+ * \param hash Container to operate upon.
+ * \param hash_node Container node unlinking object from.
+ *
+ * \return Nothing
+ */
+static void hash_ao2_traverse_unlink_node_stat(struct ao2_container *hash, struct ao2_container_node *hash_node)
+{
+	struct ao2_container_hash *self = (struct ao2_container_hash *) hash;
+	struct hash_bucket_node *node = (struct hash_bucket_node *) hash_node;
+
+	--self->buckets[node->my_bucket].elements;
+}
+#endif	/* defined(AST_DEVMODE) */
+
+#if defined(AST_DEVMODE)
+/*!
+ * \internal
+ *
+ * \brief Destroy this container.
+ * \since 11.0
+ *
+ * \param self Container to operate upon.
+ *
+ * \return Nothing
+ */
+static void hash_ao2_destroy(struct ao2_container_hash *self)
+{
+	int idx;
+
+	/* Check that the container no longer has any nodes */
+	for (idx = self->n_buckets; idx--;) {
+		if (!AST_DLLIST_EMPTY(&self->buckets[idx].list)) {
+			ast_log(LOG_ERROR,
+				"Ref leak destroying container.  Container still has nodes!\n");
+			ast_assert(0);
+			break;
+		}
+	}
+}
+#endif	/* defined(AST_DEVMODE) */
 
 #if defined(AST_DEVMODE)
 /*!
@@ -2523,14 +2606,18 @@ static void hash_ao2_stats(struct ao2_container_hash *self, int fd, void (*prnt)
 #endif	/* defined(AST_DEVMODE) */
 
 /*! Hash container virtual method table. */
-static const struct container_methods v_table_hash = {
+static const struct ao2_container_methods v_table_hash = {
+	.type = AO2_CONTAINER_RTTI_HASH,
 	.alloc_empty_clone = (ao2_container_alloc_empty_clone_fn) hash_ao2_alloc_empty_clone,
 	.alloc_empty_clone_debug =
 		(ao2_container_alloc_empty_clone_debug_fn) hash_ao2_alloc_empty_clone_debug,
 	.link = (ao2_container_link_fn) hash_ao2_link,
-	.traverse = (ao2_container_traverse_fn) hash_ao2_callback,
+	.traverse_first = (ao2_container_find_first_fn) hash_ao2_find_first,
+	.traverse_next = (ao2_container_find_next_fn) hash_ao2_find_next,
+	.traverse_cleanup = (ao2_container_find_cleanup_fn) hash_ao2_find_cleanup,
 	.iterator_next = (ao2_iterator_next_fn) hash_ao2_iterator_next,
 #if defined(AST_DEVMODE)
+	.destroy = (ao2_container_destroy_fn) hash_ao2_destroy,
 	.stats = (ao2_container_statistics) hash_ao2_stats,
 #endif	/* defined(AST_DEVMODE) */
 };
