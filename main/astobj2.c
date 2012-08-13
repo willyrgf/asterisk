@@ -809,7 +809,6 @@ typedef int (*ao2_container_link_fn)(struct ao2_container *self, void *obj_new, 
 
 /*!
  * \brief Find the first container node in a traversal.
- * \since 11.0
  *
  * \param self Container to operate upon.
  * \param flags search_flags to control traversing the container
@@ -823,7 +822,6 @@ typedef struct ao2_container_node *(*ao2_container_find_first_fn)(struct ao2_con
 
 /*!
  * \brief Find the next container node in a traversal.
- * \since 11.0
  *
  * \param self Container to operate upon.
  * \param v_state Traversal state to restart container traversal.
@@ -837,7 +835,6 @@ typedef struct ao2_container_node *(*ao2_container_find_next_fn)(struct ao2_cont
 
 /*!
  * \brief Cleanup the container traversal state.
- * \since 11.0
  *
  * \param v_state Traversal state to cleanup.
  *
@@ -1045,7 +1042,7 @@ static void hash_ao2_traverse_unlink_node_stat(struct ao2_container *self, struc
 /*!
  * \internal
  * \brief Traverse the container.  (internal)
- * \since 11.0
+ * \since 12.0
  *
  * \param self Container to operate upon.
  * \param flags search_flags to control traversing the container
@@ -1593,7 +1590,7 @@ struct ao2_container *__ao2_container_clone_debug(struct ao2_container *orig, en
 /*!
  * \internal
  * \brief Display statistics of the specified container.
- * \since 11.0
+ * \since 12.0
  *
  * \param self Container to display statistics.
  * \param fd File descriptor to send output.
@@ -1690,7 +1687,7 @@ struct ao2_container_hash {
 /*!
  * \internal
  * \brief Create an empty copy of this container.
- * \since 11.0
+ * \since 12.0
  *
  * \param self Container to operate upon.
  *
@@ -1716,7 +1713,7 @@ static struct ao2_container *hash_ao2_alloc_empty_clone(struct ao2_container_has
 /*!
  * \internal
  * \brief Create an empty copy of this container. (Debug version)
- * \since 11.0
+ * \since 12.0
  *
  * \param self Container to operate upon.
  * \param tag used for debugging.
@@ -1748,7 +1745,7 @@ static struct ao2_container *hash_ao2_alloc_empty_clone_debug(struct ao2_contain
 /*!
  * \internal
  * \brief Destroy a hash container list node.
- * \since 11.0
+ * \since 12.0
  *
  * \param v_doomed Container node to destroy.
  *
@@ -1799,7 +1796,7 @@ static void hash_ao2_node_destructor(void *v_doomed)
 /*!
  * \internal
  * \brief Insert the given node into the specified bucket in the container.
- * \since 11.0
+ * \since 12.0
  *
  * \param self Container to operate upon.
  * \param bucket Hash bucket to insert the node.
@@ -1888,7 +1885,7 @@ static enum ao2_container_insert hash_ao2_link_insert(struct ao2_container_hash 
 /*!
  * \internal
  * \brief Link an object into this container.
- * \since 11.0
+ * \since 12.0
  *
  * \param self Container to operate upon.
  * \param obj_new Object to insert into the container.
@@ -1995,7 +1992,7 @@ struct hash_traversal_state_check {
 /*!
  * \internal
  * \brief Find the first hash container node in a traversal.
- * \since 11.0
+ * \since 12.0
  *
  * \param self Container to operate upon.
  * \param flags search_flags to control traversing the container
@@ -2209,7 +2206,7 @@ static struct hash_bucket_node *hash_ao2_find_first(struct ao2_container_hash *s
 /*!
  * \internal
  * \brief Find the next hash container node in a traversal.
- * \since 11.0
+ * \since 12.0
  *
  * \param self Container to operate upon.
  * \param state Traversal state to restart hash container traversal.
@@ -2373,7 +2370,7 @@ hash_ascending_start:;
 /*!
  * \internal
  * \brief Cleanup the hash container traversal state.
- * \since 11.0
+ * \since 12.0
  *
  * \param state Traversal state to cleanup.
  *
@@ -2389,7 +2386,7 @@ static void hash_ao2_find_cleanup(struct hash_traversal_state *state)
 /*!
  * \internal
  * \brief Find the next iteration element in the container.
- * \since 11.0
+ * \since 12.0
  *
  * \param self Container to operate upon.
  * \param iter The iterator to operate upon
@@ -2521,7 +2518,7 @@ hash_found:
 /*!
  * \internal
  * \brief Decrement the hash container linked object statistic.
- * \since 11.0
+ * \since 12.0
  *
  * \param hash Container to operate upon.
  * \param hash_node Container node unlinking object from.
@@ -2542,7 +2539,7 @@ static void hash_ao2_traverse_unlink_node_stat(struct ao2_container *hash, struc
  * \internal
  *
  * \brief Destroy this container.
- * \since 11.0
+ * \since 12.0
  *
  * \param self Container to operate upon.
  *
@@ -2568,7 +2565,7 @@ static void hash_ao2_destroy(struct ao2_container_hash *self)
 /*!
  * \internal
  * \brief Display statistics of the specified container.
- * \since 11.0
+ * \since 12.0
  *
  * \param self Container to display statistics.
  * \param fd File descriptor to send output.
