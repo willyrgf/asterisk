@@ -153,6 +153,11 @@ static int astobj2_test_helper(int use_hash, int use_cmp, unsigned int lim, stru
 			res = AST_TEST_FAIL;
 		}
 	}
+	if (ao2_container_check(c1, 0)) {
+		ast_test_status_update(test, "container integrity check failed\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
 
 	ast_test_status_update(test, "Container created: random bucket size %d: number of items: %d\n", bucket_size, lim);
 
@@ -160,6 +165,11 @@ static int astobj2_test_helper(int use_hash, int use_cmp, unsigned int lim, stru
 	c3 = ao2_container_clone(c1, 0);
 	if (!c3) {
 		ast_test_status_update(test, "ao2_container_clone failed.\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+	if (ao2_container_check(c3, 0)) {
+		ast_test_status_update(test, "container integrity check failed\n");
 		res = AST_TEST_FAIL;
 		goto cleanup;
 	}
@@ -188,6 +198,10 @@ static int astobj2_test_helper(int use_hash, int use_cmp, unsigned int lim, stru
 		ao2_iterator_destroy(&it);
 		if (ao2_container_count(c3)) {
 			ast_test_status_update(test, "Cloned container still has objects.\n");
+			res = AST_TEST_FAIL;
+		}
+		if (ao2_container_check(c3, 0)) {
+			ast_test_status_update(test, "container integrity check failed\n");
 			res = AST_TEST_FAIL;
 		}
 	}
@@ -247,13 +261,15 @@ static int astobj2_test_helper(int use_hash, int use_cmp, unsigned int lim, stru
 		}
 	}
 
-	/* Testing ao2_find with OBJ_POINTER | OBJ_UNLINK | OBJ_CONTINUE.
+	/*
+	 * Testing ao2_find with OBJ_POINTER | OBJ_UNLINK | OBJ_CONTINUE.
 	 * In this test items are unlinked from c1 and placed in c2.  Then
 	 * unlinked from c2 and placed back into c1.
 	 *
 	 * For this module and set of custom hash/cmp functions, an object
 	 * should only be found if the astobj2 default cmp function is used.
-	 * This test is designed to mimic the chan_iax.c call number use case. */
+	 * This test is designed to mimic the chan_iax.c call number use case.
+	 */
 	num = lim < 25 ? lim : 25;
 	for (; num; num--) {
 		if (!(obj = ao2_find(c1, NULL, OBJ_POINTER | OBJ_UNLINK | OBJ_CONTINUE))) {
@@ -270,6 +286,16 @@ static int astobj2_test_helper(int use_hash, int use_cmp, unsigned int lim, stru
 			ao2_t_ref(obj, -1, "test");
 		}
 	}
+	if (ao2_container_check(c1, 0)) {
+		ast_test_status_update(test, "container integrity check failed\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+	if (ao2_container_check(c2, 0)) {
+		ast_test_status_update(test, "container integrity check failed\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
 	it = ao2_iterator_init(c2, 0);
 	while ((obj = ao2_t_iterator_next(&it, "test"))) {
 		ao2_t_unlink(c2, obj, "test");
@@ -277,6 +303,16 @@ static int astobj2_test_helper(int use_hash, int use_cmp, unsigned int lim, stru
 		ao2_t_ref(obj, -1, "test");
 	}
 	ao2_iterator_destroy(&it);
+	if (ao2_container_check(c1, 0)) {
+		ast_test_status_update(test, "container integrity check failed\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+	if (ao2_container_check(c2, 0)) {
+		ast_test_status_update(test, "container integrity check failed\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
 
 	/* Test Callback with no flags. */
 	increment = 0;
@@ -297,13 +333,18 @@ static int astobj2_test_helper(int use_hash, int use_cmp, unsigned int lim, stru
 	/* Test OBJ_MULTIPLE with OBJ_UNLINK*/
 	num = lim < 25 ? lim : 25;
 	if (!(mult_it = ao2_t_callback(c1, OBJ_MULTIPLE | OBJ_UNLINK, multiple_cb, &num, "test multiple"))) {
-		ast_test_status_update(test, "OBJ_MULTIPLE iwth OBJ_UNLINK test failed.\n");
+		ast_test_status_update(test, "OBJ_MULTIPLE with OBJ_UNLINK test failed.\n");
 		res = AST_TEST_FAIL;
 	} else {
 		/* make sure num items unlinked is as expected */
 		if ((lim - ao2_container_count(c1)) != num) {
 			ast_test_status_update(test, "OBJ_MULTIPLE | OBJ_UNLINK test failed, did not unlink correct number of objects.\n");
 			res = AST_TEST_FAIL;
+		}
+		if (ao2_container_check(c1, 0)) {
+			ast_test_status_update(test, "container integrity check failed\n");
+			res = AST_TEST_FAIL;
+			goto cleanup;
 		}
 
 		/* link what was unlinked back into c1 */
@@ -312,6 +353,11 @@ static int astobj2_test_helper(int use_hash, int use_cmp, unsigned int lim, stru
 			ao2_t_ref(obj, -1, "test"); /* remove ref from iterator */
 		}
 		ao2_iterator_destroy(mult_it);
+		if (ao2_container_check(c1, 0)) {
+			ast_test_status_update(test, "container integrity check failed\n");
+			res = AST_TEST_FAIL;
+			goto cleanup;
+		}
 	}
 
 	/* Test OBJ_MULTIPLE without unlink, add items back afterwards */
@@ -359,12 +405,21 @@ static int astobj2_test_helper(int use_hash, int use_cmp, unsigned int lim, stru
 		ast_test_status_update(test, "unlink during iterator failed. Number %d was not removed.\n", num);
 		res = AST_TEST_FAIL;
 	}
+	if (ao2_container_check(c1, 0)) {
+		ast_test_status_update(test, "container integrity check failed\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
 
 	/* Test unlink all with OBJ_MULTIPLE, leave a single object for the container to destroy */
 	ao2_t_callback(c1, OBJ_MULTIPLE | OBJ_UNLINK | OBJ_NODATA, all_but_one_cb, NULL, "test multiple");
 	/* check to make sure all test_obj destructors were called except for 1 */
 	if (destructor_count != 1) {
 		ast_test_status_update(test, "OBJ_MULTIPLE | OBJ_UNLINK | OBJ_NODATA failed. destructor count %d\n", destructor_count);
+		res = AST_TEST_FAIL;
+	}
+	if (ao2_container_check(c1, 0)) {
+		ast_test_status_update(test, "container integrity check failed\n");
 		res = AST_TEST_FAIL;
 	}
 
@@ -483,6 +538,11 @@ AST_TEST_DEFINE(astobj2_test_2)
 			ast_test_status_update(test, "container did not link correctly\n");
 			res = AST_TEST_FAIL;
 		}
+	}
+	if (ao2_container_check(c, 0)) {
+		ast_test_status_update(test, "container integrity check failed\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
 	}
 
 	/*

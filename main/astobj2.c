@@ -2030,7 +2030,8 @@ static struct hash_bucket_node *hash_ao2_find_first(struct ao2_container_hash *s
 	 */
 	if ((flags & (OBJ_POINTER | OBJ_KEY))) {
 		/* we know hash can handle this case */
-		bucket_cur = self->hash_fn(arg, flags & (OBJ_POINTER | OBJ_KEY)) % self->n_buckets;
+		bucket_cur = abs(self->hash_fn(arg, flags & (OBJ_POINTER | OBJ_KEY)));
+		bucket_cur %= self->n_buckets;
 		state->sort_fn = self->common.sort_fn;
 	} else {
 		/* don't know, let's scan all buckets */
@@ -2602,6 +2603,126 @@ static void hash_ao2_stats(struct ao2_container_hash *self, int fd, void (*prnt)
 }
 #endif	/* defined(AST_DEVMODE) */
 
+#if defined(AST_DEVMODE)
+/*!
+ * \internal
+ * \brief Perform an integrity check on the specified container.
+ * \since 12.0
+ *
+ * \param self Container to check integrity.
+ *
+ * \note The container is already locked for reading.
+ *
+ * \retval 0 on success.
+ * \retval -1 on error.
+ */
+static int hash_ao2_integrity(struct ao2_container_hash *self)
+{
+	int bucket_exp;
+	int bucket;
+	int count_node_forward;
+	int count_node_backward;
+	int count_obj_forward;
+	int count_obj_backward;
+	struct hash_bucket_node *node;
+	struct hash_bucket_node *last;
+
+	/* For each bucket in the container. */
+	for (bucket = 0; bucket < self->n_buckets; ++bucket) {
+		count_node_forward = 0;
+		count_node_backward = 0;
+		count_obj_forward = 0;
+		count_obj_backward = 0;
+
+		/* Check forward list. */
+		last = NULL;
+		for (node = AST_DLLIST_FIRST(&self->buckets[bucket].list);
+			node;
+			node = AST_DLLIST_NEXT(node, links)) {
+			++count_node_forward;
+
+			if (bucket != node->my_bucket) {
+				ast_log(LOG_ERROR, "Node not in correct bucket!\n");
+				return -1;
+			}
+
+			if (!node->common.obj) {
+				/* Node is empty. */
+				continue;
+			}
+			++count_obj_forward;
+
+			/* Check container hash key for expected bucket. */
+			bucket_exp = abs(self->hash_fn(node->common.obj, OBJ_POINTER));
+			bucket_exp %= self->n_buckets;
+			if (bucket != bucket_exp) {
+				ast_log(LOG_ERROR, "Hash does not match bucket!\n");
+				return -1;
+			}
+
+			/* Check sort if configured. */
+			if (last && self->common.sort_fn) {
+				if (self->common.sort_fn(last->common.obj, node->common.obj, OBJ_POINTER) > 0) {
+					ast_log(LOG_ERROR, "Bucket nodes out of order!\n");
+					return -1;
+				}
+			}
+			last = node;
+		}
+
+		/* Check backward list. */
+		last = NULL;
+		for (node = AST_DLLIST_LAST(&self->buckets[bucket].list);
+			node;
+			node = AST_DLLIST_PREV(node, links)) {
+			++count_node_backward;
+
+			if (bucket != node->my_bucket) {
+				ast_log(LOG_ERROR, "Node not in correct bucket!\n");
+				return -1;
+			}
+
+			if (!node->common.obj) {
+				/* Node is empty. */
+				continue;
+			}
+			++count_obj_backward;
+
+			/* Check container hash key for expected bucket. */
+			bucket_exp = abs(self->hash_fn(node->common.obj, OBJ_POINTER));
+			bucket_exp %= self->n_buckets;
+			if (bucket != bucket_exp) {
+				ast_log(LOG_ERROR, "Hash does not match bucket!\n");
+				return -1;
+			}
+
+			/* Check sort if configured. */
+			if (last && self->common.sort_fn) {
+				if (self->common.sort_fn(node->common.obj, last->common.obj, OBJ_POINTER) > 0) {
+					ast_log(LOG_ERROR, "Bucket nodes out of order!\n");
+					return -1;
+				}
+			}
+			last = node;
+		}
+
+		/* Check bucket forward/backward node count. */
+		if (count_node_forward != count_node_backward) {
+			ast_log(LOG_ERROR, "Forward/backward node count does not match!\n");
+			return -1;
+		}
+
+		/* Check bucket forward/backward obj count. */
+		if (count_obj_forward != count_obj_backward) {
+			ast_log(LOG_ERROR, "Forward/backward object count does not match!\n");
+			return -1;
+		}
+	}
+
+	return 0;
+}
+#endif	/* defined(AST_DEVMODE) */
+
 /*! Hash container virtual method table. */
 static const struct ao2_container_methods v_table_hash = {
 	.type = AO2_CONTAINER_RTTI_HASH,
@@ -2616,6 +2737,7 @@ static const struct ao2_container_methods v_table_hash = {
 #if defined(AST_DEVMODE)
 	.destroy = (ao2_container_destroy_fn) hash_ao2_destroy,
 	.stats = (ao2_container_statistics) hash_ao2_stats,
+	.integrity = (ao2_container_integrity) hash_ao2_integrity,
 #endif	/* defined(AST_DEVMODE) */
 };
 
