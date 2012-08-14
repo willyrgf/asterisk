@@ -1064,7 +1064,7 @@ static void hash_ao2_traverse_unlink_node_stat(struct ao2_container *self, struc
  * flags parameter.  The iterator must be destroyed with
  * ao2_iterator_destroy() when the caller no longer needs it.
  */
-static void *__ao2_traverse_internal(struct ao2_container *self, enum search_flags flags,
+static void *internal_ao2_traverse(struct ao2_container *self, enum search_flags flags,
 	void *cb_fn, void *arg, void *data, enum ao2_callback_type type,
 	const char *tag, const char *file, int line, const char *func)
 {
@@ -1279,26 +1279,26 @@ void *__ao2_callback_debug(struct ao2_container *c, enum search_flags flags,
 	ao2_callback_fn *cb_fn, void *arg, const char *tag, const char *file, int line,
 	const char *func)
 {
-	return __ao2_traverse_internal(c, flags, cb_fn, arg, NULL, AO2_CALLBACK_DEFAULT, tag, file, line, func);
+	return internal_ao2_traverse(c, flags, cb_fn, arg, NULL, AO2_CALLBACK_DEFAULT, tag, file, line, func);
 }
 
 void *__ao2_callback(struct ao2_container *c, enum search_flags flags,
 	ao2_callback_fn *cb_fn, void *arg)
 {
-	return __ao2_traverse_internal(c, flags, cb_fn, arg, NULL, AO2_CALLBACK_DEFAULT, NULL, NULL, 0, NULL);
+	return internal_ao2_traverse(c, flags, cb_fn, arg, NULL, AO2_CALLBACK_DEFAULT, NULL, NULL, 0, NULL);
 }
 
 void *__ao2_callback_data_debug(struct ao2_container *c, enum search_flags flags,
 	ao2_callback_data_fn *cb_fn, void *arg, void *data, const char *tag, const char *file,
 	int line, const char *func)
 {
-	return __ao2_traverse_internal(c, flags, cb_fn, arg, data, AO2_CALLBACK_WITH_DATA, tag, file, line, func);
+	return internal_ao2_traverse(c, flags, cb_fn, arg, data, AO2_CALLBACK_WITH_DATA, tag, file, line, func);
 }
 
 void *__ao2_callback_data(struct ao2_container *c, enum search_flags flags,
 	ao2_callback_data_fn *cb_fn, void *arg, void *data)
 {
-	return __ao2_traverse_internal(c, flags, cb_fn, arg, data, AO2_CALLBACK_WITH_DATA, NULL, NULL, 0, NULL);
+	return internal_ao2_traverse(c, flags, cb_fn, arg, data, AO2_CALLBACK_WITH_DATA, NULL, NULL, 0, NULL);
 }
 
 /*!
@@ -2115,6 +2115,7 @@ static struct hash_bucket_node *hash_ao2_find_first(struct ao2_container_hash *s
 					 * We have to recheck the first part of the starting bucket
 					 * because of sorting skips.
 					 */
+					state->recheck_starting_bucket = 0;
 					--state->bucket_last;
 				}
 			}
@@ -2195,6 +2196,7 @@ static struct hash_bucket_node *hash_ao2_find_first(struct ao2_container_hash *s
 					 * We have to recheck the first part of the starting bucket
 					 * because of sorting skips.
 					 */
+					state->recheck_starting_bucket = 0;
 					++state->bucket_last;
 				}
 			}
@@ -2292,6 +2294,7 @@ hash_descending_start:;
 					 * We have to recheck the first part of the starting bucket
 					 * because of sorting skips.
 					 */
+					state->recheck_starting_bucket = 0;
 					--state->bucket_last;
 				}
 			}
@@ -2358,6 +2361,7 @@ hash_ascending_start:;
 					 * We have to recheck the first part of the starting bucket
 					 * because of sorting skips.
 					 */
+					state->recheck_starting_bucket = 0;
 					++state->bucket_last;
 				}
 			}
