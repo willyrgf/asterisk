@@ -2628,8 +2628,11 @@ static int hash_ao2_integrity(struct ao2_container_hash *self)
 	int count_node_backward;
 	int count_obj_forward;
 	int count_obj_backward;
+	int count_total_obj;
 	struct hash_bucket_node *node;
 	struct hash_bucket_node *last;
+
+	count_total_obj = 0;
 
 	/* For each bucket in the container. */
 	for (bucket = 0; bucket < self->n_buckets; ++bucket) {
@@ -2721,6 +2724,15 @@ static int hash_ao2_integrity(struct ao2_container_hash *self)
 			ast_log(LOG_ERROR, "Forward/backward object count does not match!\n");
 			return -1;
 		}
+
+		/* Accumulate found object counts. */
+		count_total_obj += count_obj_forward;
+	}
+
+	/* Check total obj count. */
+	if (count_total_obj != ao2_container_count(&self->common)) {
+		ast_log(LOG_ERROR, "Total object count does not match ao2_container_count()!\n");
+		return -1;
 	}
 
 	return 0;
