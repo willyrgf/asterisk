@@ -1160,6 +1160,76 @@ static int insert_test_vector(struct ao2_container *container, int *destroy_coun
 
 /*!
  * \internal
+ * \brief Insert duplicates of number into the given container.
+ * \since 12.0
+ *
+ * \note The given container must not already have the number in it.
+ *
+ * \param container Container to insert the duplicates.
+ * \param destroy_counter What to increment when the object is destroyed.
+ * \param number Number of object to duplicate.
+ * \param prefix Test output prefix string.
+ * \param test Test output controller.
+ *
+ * \retval 0 on success.
+ * \retval -1 on error.
+ */
+static int insert_test_duplicates(struct ao2_container *container, int *destroy_counter, int number, const char *prefix, struct ast_test *test)
+{
+	int count;
+	struct test_obj *obj;
+	struct test_obj *obj_dup;
+
+	/* Check if object already exists in the container. */
+	obj = ao2_find(container, &number, OBJ_KEY);
+	if (obj) {
+		ast_test_status_update(test, "%s: Object %d already exists.\n", prefix, number);
+		ao2_t_ref(obj, -1, "test");
+		return -1;
+	}
+
+	/* Add three duplicate keyed objects. */
+	obj_dup = NULL;
+	for (count = 0; count < 4; ++count) {
+		obj = ao2_alloc(sizeof(struct test_obj), test_obj_destructor);
+		if (!obj) {
+			ast_test_status_update(test, "%s: ao2_alloc failed.\n", prefix);
+			if (obj_dup) {
+				ao2_t_ref(obj_dup, -1, "test");
+			}
+			return -1;
+		}
+		if (destroy_counter) {
+			/* This object ultimately needs to be destroyed. */
+			++*destroy_counter;
+		}
+		obj->destructor_count = destroy_counter;
+		obj->i = number;
+		obj->dup_number = count;
+		ao2_link(container, obj);
+
+		if (count == 2) {
+			/* Duplicate this object. */
+			obj_dup = obj;
+		} else {
+			ao2_t_ref(obj, -1, "test");
+		}
+	}
+
+	/* Add the duplicate object. */
+	ao2_link(container, obj_dup);
+	ao2_t_ref(obj_dup, -1, "test");
+
+	if (ao2_container_check(container, 0)) {
+		ast_test_status_update(test, "%s: Container integrity check failed\n", prefix);
+		return -1;
+	}
+
+	return 0;
+}
+
+/*!
+ * \internal
  * \brief Iterate over the container and compare the objects with the given vector.
  * \since 12.0
  *
@@ -1241,7 +1311,7 @@ static int test_ao2_callback_traversal(int res, struct ao2_container *container,
 	const int *vector, int count, const char *prefix, struct ast_test *test)
 {
 	struct ao2_iterator *mult_iter;
-	struct test_obj *obj;
+	struct test_obj *obj = NULL;
 	int idx;
 
 	mult_iter = ao2_callback(container, flags | OBJ_MULTIPLE, cmp_fn, arg);
@@ -1265,12 +1335,79 @@ static int test_ao2_callback_traversal(int res, struct ao2_container *container,
 		}
 		ao2_ref(obj, -1); /* remove ref from iterator */
 	}
-	obj = ao2_iterator_next(mult_iter);
 	if (obj) {
-		ast_test_status_update(test, "%s: Too many objects found.  Object %d\n",
-			prefix, obj->i);
+		obj = ao2_iterator_next(mult_iter);
+		if (obj) {
+			ast_test_status_update(test, "%s: Too many objects found.  Object %d\n",
+				prefix, obj->i);
+			ao2_ref(obj, -1); /* remove ref from iterator */
+			res = AST_TEST_FAIL;
+		}
+	}
+	ao2_iterator_destroy(mult_iter);
+
+	return res;
+}
+
+/*!
+ * \internal
+ * \brief Run an ao2_find() for duplicates and compare the returned vector with the given vector.
+ * \since 12.0
+ *
+ * \param res Passed in enum ast_test_result_state.
+ * \param container Container to traverse.
+ * \param flags Callback flags controlling the traversal.
+ * \param number Number of object to find all duplicates.
+ * \param vector Expected vector to find.
+ * \param count Number of objects in the vector.
+ * \param prefix Test output prefix string.
+ * \param test Test output controller.
+ *
+ * \return enum ast_test_result_state
+ */
+static int test_expected_duplicates(int res, struct ao2_container *container,
+	enum search_flags flags, int number,
+	const int *vector, int count, const char *prefix, struct ast_test *test)
+{
+	struct ao2_iterator *mult_iter;
+	struct test_obj *obj = NULL;
+	int idx;
+
+	mult_iter = ao2_find(container, &number, flags | OBJ_MULTIPLE | OBJ_KEY);
+	if (!mult_iter) {
+		ast_test_status_update(test, "%s: Did not return iterator.\n", prefix);
+		return AST_TEST_FAIL;
+	}
+
+	/* Check matching objects against the given vector. */
+	for (idx = 0; idx < count; ++idx) {
+		obj = ao2_iterator_next(mult_iter);
+		if (!obj) {
+			ast_test_status_update(test, "%s: Too few objects found.\n", prefix);
+			res = AST_TEST_FAIL;
+			break;
+		}
+		if (number != obj->i) {
+			ast_test_status_update(test, "%s: Object %d != %d.\n",
+				prefix, obj->i, number);
+			res = AST_TEST_FAIL;
+		}
+		if (vector[idx] != obj->dup_number) {
+			ast_test_status_update(test, "%s: Object dup id %d != vector[%d] %d.\n",
+				prefix, obj->dup_number, idx, vector[idx]);
+			res = AST_TEST_FAIL;
+		}
 		ao2_ref(obj, -1); /* remove ref from iterator */
-		res = AST_TEST_FAIL;
+	}
+	if (obj) {
+		obj = ao2_iterator_next(mult_iter);
+		if (obj) {
+			ast_test_status_update(test,
+				"%s: Too many objects found.  Object %d, dup id %d\n",
+				prefix, obj->i, obj->dup_number);
+			ao2_ref(obj, -1); /* remove ref from iterator */
+			res = AST_TEST_FAIL;
+		}
 	}
 	ao2_iterator_destroy(mult_iter);
 
@@ -1493,6 +1630,7 @@ static int test_traversal_sorted(int res, int tst_num, enum test_container_type 
 	struct ao2_container *c2 = NULL;
 	int partial;
 	int destructor_count = 0;
+	int duplicate_number = 100;
 
 	/*! Container object insertion vector. */
 	static const int test_initial[] = {
@@ -1529,27 +1667,47 @@ static int test_traversal_sorted(int res, int tst_num, enum test_container_type 
 		7, 6, 5
 	};
 
+	/* Duplicate identifier order */
+	static const int test_dup_allow_forward[] = {
+		0, 1, 2, 3, 2
+	};
+	static const int test_dup_allow_backward[] = {
+		2, 3, 2, 1, 0
+	};
+	static const int test_dup_reject[] = {
+		0
+	};
+	static const int test_dup_obj_reject_forward[] = {
+		0, 1, 2, 3
+	};
+	static const int test_dup_obj_reject_backward[] = {
+		3, 2, 1, 0
+	};
+	static const int test_dup_replace[] = {
+		2
+	};
+
 	ast_test_status_update(test, "Test %d, %s containers.\n",
 		tst_num, test_container2str(type));
 
-	/* Create container that inserts objects at the end. */
-	c1 = test_make_sorted(type, 0);
+	/* Create container that inserts duplicate objects after matching objects. */
+	c1 = test_make_sorted(type, AO2_CONTAINER_ALLOC_OPT_DUPS_ALLOW);
 	if (!c1) {
 		res = AST_TEST_FAIL;
 		goto test_cleanup;
 	}
-	if (insert_test_vector(c1, &destructor_count, test_initial, ARRAY_LEN(test_initial), "c1", test)) {
+	if (insert_test_vector(c1, &destructor_count, test_initial, ARRAY_LEN(test_initial), "c1(DUPS_ALLOW)", test)) {
 		res = AST_TEST_FAIL;
 		goto test_cleanup;
 	}
 
-	/* Create container that inserts objects at the beginning. */
-	c2 = test_make_sorted(type, AO2_CONTAINER_ALLOC_OPT_INSERT_BEGIN);
+	/* Create container that inserts duplicate objects before matching objects. */
+	c2 = test_make_sorted(type, AO2_CONTAINER_ALLOC_OPT_INSERT_BEGIN | AO2_CONTAINER_ALLOC_OPT_DUPS_ALLOW);
 	if (!c2) {
 		res = AST_TEST_FAIL;
 		goto test_cleanup;
 	}
-	if (insert_test_vector(c2, &destructor_count, test_initial, ARRAY_LEN(test_initial), "c2", test)) {
+	if (insert_test_vector(c2, &destructor_count, test_initial, ARRAY_LEN(test_initial), "c2(DUPS_ALLOW)", test)) {
 		res = AST_TEST_FAIL;
 		goto test_cleanup;
 	}
@@ -1620,7 +1778,146 @@ static int test_traversal_sorted(int res, int tst_num, enum test_container_type 
 		break;
 	}
 
-	/*! \todo BUGBUG test_traversal_sorted() remining to test duplicate handling. */
+	/* Add duplicates to initial containers that allow duplicates */
+	if (insert_test_duplicates(c1, &destructor_count, duplicate_number, "c1(DUPS_ALLOW)", test)) {
+		res = AST_TEST_FAIL;
+		goto test_cleanup;
+	}
+	if (insert_test_duplicates(c2, &destructor_count, duplicate_number, "c2(DUPS_ALLOW)", test)) {
+		res = AST_TEST_FAIL;
+		goto test_cleanup;
+	}
+
+	/* Check duplicates in containers that allow duplicates. */
+	res = test_expected_duplicates(res, c1, OBJ_ORDER_ASCENDING, duplicate_number,
+		test_dup_allow_forward, ARRAY_LEN(test_dup_allow_forward),
+		"Duplicates (ascending, DUPS_ALLOW)", test);
+	res = test_expected_duplicates(res, c1, OBJ_ORDER_DESCENDING, duplicate_number,
+		test_dup_allow_backward, ARRAY_LEN(test_dup_allow_backward),
+		"Duplicates (descending, DUPS_ALLOW)", test);
+
+	ao2_t_ref(c1, -1, "bye c1");
+	c1 = NULL;
+	ao2_t_ref(c2, -1, "bye c2");
+	c2 = NULL;
+
+	/* Create containers that reject duplicate keyed objects. */
+	c1 = test_make_sorted(type, AO2_CONTAINER_ALLOC_OPT_DUPS_REJECT);
+	if (!c1) {
+		res = AST_TEST_FAIL;
+		goto test_cleanup;
+	}
+	if (insert_test_vector(c1, &destructor_count, test_initial, ARRAY_LEN(test_initial), "c1(DUPS_REJECT)", test)) {
+		res = AST_TEST_FAIL;
+		goto test_cleanup;
+	}
+	if (insert_test_duplicates(c1, &destructor_count, duplicate_number, "c1(DUPS_REJECT)", test)) {
+		res = AST_TEST_FAIL;
+		goto test_cleanup;
+	}
+	c2 = test_make_sorted(type, AO2_CONTAINER_ALLOC_OPT_INSERT_BEGIN | AO2_CONTAINER_ALLOC_OPT_DUPS_REJECT);
+	if (!c2) {
+		res = AST_TEST_FAIL;
+		goto test_cleanup;
+	}
+	if (insert_test_vector(c2, &destructor_count, test_initial, ARRAY_LEN(test_initial), "c2(DUPS_REJECT)", test)) {
+		res = AST_TEST_FAIL;
+		goto test_cleanup;
+	}
+	if (insert_test_duplicates(c2, &destructor_count, duplicate_number, "c2(DUPS_REJECT)", test)) {
+		res = AST_TEST_FAIL;
+		goto test_cleanup;
+	}
+
+	/* Check duplicates in containers that reject duplicate keyed objects. */
+	res = test_expected_duplicates(res, c1, OBJ_ORDER_ASCENDING, duplicate_number,
+		test_dup_reject, ARRAY_LEN(test_dup_reject),
+		"Duplicates (ascending, DUPS_REJECT)", test);
+	res = test_expected_duplicates(res, c1, OBJ_ORDER_DESCENDING, duplicate_number,
+		test_dup_reject, ARRAY_LEN(test_dup_reject),
+		"Duplicates (descending, DUPS_REJECT)", test);
+
+	ao2_t_ref(c1, -1, "bye c1");
+	c1 = NULL;
+	ao2_t_ref(c2, -1, "bye c2");
+	c2 = NULL;
+
+	/* Create containers that reject duplicate objects. */
+	c1 = test_make_sorted(type, AO2_CONTAINER_ALLOC_OPT_DUPS_OBJ_REJECT);
+	if (!c1) {
+		res = AST_TEST_FAIL;
+		goto test_cleanup;
+	}
+	if (insert_test_vector(c1, &destructor_count, test_initial, ARRAY_LEN(test_initial), "c1(DUPS_OBJ_REJECT)", test)) {
+		res = AST_TEST_FAIL;
+		goto test_cleanup;
+	}
+	if (insert_test_duplicates(c1, &destructor_count, duplicate_number, "c1(DUPS_OBJ_REJECT)", test)) {
+		res = AST_TEST_FAIL;
+		goto test_cleanup;
+	}
+	c2 = test_make_sorted(type, AO2_CONTAINER_ALLOC_OPT_INSERT_BEGIN | AO2_CONTAINER_ALLOC_OPT_DUPS_OBJ_REJECT);
+	if (!c2) {
+		res = AST_TEST_FAIL;
+		goto test_cleanup;
+	}
+	if (insert_test_vector(c2, &destructor_count, test_initial, ARRAY_LEN(test_initial), "c2(DUPS_OBJ_REJECT)", test)) {
+		res = AST_TEST_FAIL;
+		goto test_cleanup;
+	}
+	if (insert_test_duplicates(c2, &destructor_count, duplicate_number, "c2(DUPS_OBJ_REJECT)", test)) {
+		res = AST_TEST_FAIL;
+		goto test_cleanup;
+	}
+
+	/* Check duplicates in containers that reject duplicate objects. */
+	res = test_expected_duplicates(res, c1, OBJ_ORDER_ASCENDING, duplicate_number,
+		test_dup_obj_reject_forward, ARRAY_LEN(test_dup_obj_reject_forward),
+		"Duplicates (ascending, DUPS_OBJ_REJECT)", test);
+	res = test_expected_duplicates(res, c1, OBJ_ORDER_DESCENDING, duplicate_number,
+		test_dup_obj_reject_backward, ARRAY_LEN(test_dup_obj_reject_backward),
+		"Duplicates (descending, DUPS_OBJ_REJECT)", test);
+
+	ao2_t_ref(c1, -1, "bye c1");
+	c1 = NULL;
+	ao2_t_ref(c2, -1, "bye c2");
+	c2 = NULL;
+
+	/* Create container that replaces duplicate keyed objects. */
+	c1 = test_make_sorted(type, AO2_CONTAINER_ALLOC_OPT_DUPS_REPLACE);
+	if (!c1) {
+		res = AST_TEST_FAIL;
+		goto test_cleanup;
+	}
+	if (insert_test_vector(c1, &destructor_count, test_initial, ARRAY_LEN(test_initial), "c1(DUPS_REJECT)", test)) {
+		res = AST_TEST_FAIL;
+		goto test_cleanup;
+	}
+	if (insert_test_duplicates(c1, &destructor_count, duplicate_number, "c1(DUPS_REJECT)", test)) {
+		res = AST_TEST_FAIL;
+		goto test_cleanup;
+	}
+	c2 = test_make_sorted(type, AO2_CONTAINER_ALLOC_OPT_INSERT_BEGIN | AO2_CONTAINER_ALLOC_OPT_DUPS_REPLACE);
+	if (!c2) {
+		res = AST_TEST_FAIL;
+		goto test_cleanup;
+	}
+	if (insert_test_vector(c2, &destructor_count, test_initial, ARRAY_LEN(test_initial), "c2(DUPS_REPLACE)", test)) {
+		res = AST_TEST_FAIL;
+		goto test_cleanup;
+	}
+	if (insert_test_duplicates(c2, &destructor_count, duplicate_number, "c2(DUPS_REPLACE)", test)) {
+		res = AST_TEST_FAIL;
+		goto test_cleanup;
+	}
+
+	/* Check duplicates in containers that replaces duplicate keyed objects. */
+	res = test_expected_duplicates(res, c1, OBJ_ORDER_ASCENDING, duplicate_number,
+		test_dup_replace, ARRAY_LEN(test_dup_replace),
+		"Duplicates (ascending, DUPS_REPLACE)", test);
+	res = test_expected_duplicates(res, c1, OBJ_ORDER_DESCENDING, duplicate_number,
+		test_dup_replace, ARRAY_LEN(test_dup_replace),
+		"Duplicates (descending, DUPS_REPLACE)", test);
 
 test_cleanup:
 	/* destroy containers */
