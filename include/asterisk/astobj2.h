@@ -1601,32 +1601,24 @@ void *__ao2_find(struct ao2_container *c, const void *arg, enum search_flags fla
  * ao2_iterator to keep track of the current position.
  *
  * Because the navigation is typically done without holding the
- * lock on the container across the loop, objects can be inserted or deleted
- * or moved while we work. As a consequence, there is no guarantee that
- * we manage to touch all the elements in the container, and it is possible
- * that we touch the same object multiple times.
+ * lock on the container across the loop, objects can be
+ * inserted or deleted or moved while we work.  As a
+ * consequence, there is no guarantee that we manage to touch
+ * all the elements in the container, and it is possible that we
+ * touch the same object multiple times.
  *
- * However, within the current hash table container, the following is true:
- *  - It is not possible to miss an object in the container while iterating
- *    unless it gets added after the iteration begins and is added to a bucket
- *    that is before the one the current object is in.  In this case, even if
- *    you locked the container around the entire iteration loop, you still would
- *    not see this object, because it would still be waiting on the container
- *    lock so that it can be added.
- *  - It would be extremely rare to see an object twice.  The only way this can
- *    happen is if an object got unlinked from the container and added again
- *    during the same iteration.  Furthermore, when the object gets added back,
- *    it has to be in the current or later bucket for it to be seen again.
+ * An iterator must be first initialized with
+ * ao2_iterator_init(), then we can use o = ao2_iterator_next()
+ * to move from one element to the next.  Remember that the
+ * object returned by ao2_iterator_next() has its refcount
+ * incremented, and the reference must be explicitly released
+ * when done with it.
  *
- * An iterator must be first initialized with ao2_iterator_init(),
- * then we can use o = ao2_iterator_next() to move from one
- * element to the next. Remember that the object returned by
- * ao2_iterator_next() has its refcount incremented,
- * and the reference must be explicitly released when done with it.
- *
- * In addition, ao2_iterator_init() will hold a reference to the container
- * being iterated, which will be freed when ao2_iterator_destroy() is called
- * to free up the resources used by the iterator (if any).
+ * In addition, ao2_iterator_init() will hold a reference to the
+ * container being iterated and the last container node found.
+ * Thes objects will be unreffed when ao2_iterator_destroy() is
+ * called to free up the resources used by the iterator (if
+ * any).
  *
  * Example:
  *
@@ -1638,6 +1630,12 @@ void *__ao2_find(struct ao2_container *c, const void *arg, enum search_flags fla
  *
  *  i = ao2_iterator_init(c, flags);
  *
+ *  while ((o = ao2_iterator_next(&i))) {
+ *     ... do something on o ...
+ *     ao2_ref(o, -1);
+ *  }
+ *
+ *  ao2_iterator_restart(&i);
  *  while ((o = ao2_iterator_next(&i))) {
  *     ... do something on o ...
  *     ao2_ref(o, -1);
@@ -1669,7 +1667,9 @@ struct ao2_iterator {
 	struct ao2_container *c;
 	/*! Last container node (Has a reference) */
 	void *last_node;
-	/*! operation flags */
+	/*! Nonzero if the iteration has completed. */
+	int complete;
+	/*! operation flags (enum ao2_iterator_flags) */
 	int flags;
 };
 
@@ -1688,7 +1688,10 @@ enum ao2_iterator_flags {
 	 * to the original locked state.
 	 *
 	 * \note Only use this flag if the ao2_container is manually
-	 * locked already.
+	 * locked already.  You should hold the lock until after
+	 * ao2_iterator_destroy().  If you must release the lock then
+	 * you must at least hold the lock whenever you call an
+	 * ao2_iterator_xxx function with this iterator.
 	 */
 	AO2_ITERATOR_DONTLOCK = (1 << 0),
 	/*!
@@ -1720,7 +1723,7 @@ enum ao2_iterator_flags {
  * \brief Create an iterator for a container
  *
  * \param c the container
- * \param flags one or more flags from ao2_iterator_flags
+ * \param flags one or more flags from ao2_iterator_flags.
  *
  * \retval the constructed iterator
  *
@@ -1730,7 +1733,6 @@ enum ao2_iterator_flags {
  *       allocated on the stack or on the heap.
  *
  * This function will take a reference on the container being iterated.
- *
  */
 struct ao2_iterator ao2_iterator_init(struct ao2_container *c, int flags);
 
@@ -1743,7 +1745,6 @@ struct ao2_iterator ao2_iterator_init(struct ao2_container *c, int flags);
  *
  * This function will release the container reference held by the iterator
  * and any other resources it may be holding.
- *
  */
 #if defined(TEST_FRAMEWORK)
 void ao2_iterator_destroy(struct ao2_iterator *iter) __attribute__((noinline));
@@ -1765,6 +1766,19 @@ void ao2_iterator_destroy(struct ao2_iterator *iter);
 
 void *__ao2_iterator_next_debug(struct ao2_iterator *iter, const char *tag, const char *file, int line, const char *func);
 void *__ao2_iterator_next(struct ao2_iterator *iter);
+
+/*!
+ * \brief Restart an iteration.
+ *
+ * \param iter the iterator to restart
+ *
+ * \note A restart is not going to have any effect if the
+ * iterator was created with the AO2_ITERATOR_UNLINK flag.  Any
+ * previous objects returned were removed from the container.
+ *
+ * \retval none
+ */
+void ao2_iterator_restart(struct ao2_iterator *iter);
 
 /* extra functions */
 void ao2_bt(void);	/* backtrace */

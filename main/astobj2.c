@@ -1342,10 +1342,7 @@ struct ao2_iterator ao2_iterator_init(struct ao2_container *c, int flags)
 	return a;
 }
 
-/*!
- * destroy an iterator
- */
-void ao2_iterator_destroy(struct ao2_iterator *iter)
+void ao2_iterator_restart(struct ao2_iterator *iter)
 {
 	/* Release the last container node reference if we have one. */
 	if (iter->last_node) {
@@ -1372,6 +1369,15 @@ void ao2_iterator_destroy(struct ao2_iterator *iter)
 			ao2_unlock(iter->c);
 		}
 	}
+
+	/* The iteration is no longer complete. */
+	iter->complete = 0;
+}
+
+void ao2_iterator_destroy(struct ao2_iterator *iter)
+{
+	/* Release any last container node reference. */
+	ao2_iterator_restart(iter);
 
 	/* Release the iterated container reference. */
 	ao2_ref(iter->c, -1);
@@ -1403,6 +1409,11 @@ static void *internal_ao2_iterator_next(struct ao2_iterator *iter, const char *t
 		return NULL;
 	}
 
+	if (iter->complete) {
+		/* Don't return any more nodes. */
+		return NULL;
+	}
+
 	if (iter->flags & AO2_ITERATOR_DONTLOCK) {
 		if (iter->flags & AO2_ITERATOR_UNLINK) {
 			orig_lock = adjust_lock(iter->c, AO2_LOCK_REQ_WRLOCK, 1);
@@ -1419,6 +1430,10 @@ static void *internal_ao2_iterator_next(struct ao2_iterator *iter, const char *t
 	}
 
 	ret = iter->c->v_table->iterator_next(iter->c, iter, tag, file, line, func);
+	if (!ret) {
+		/* The iteration has completed. */
+		iter->complete = 1;
+	}
 
 	if (iter->flags & AO2_ITERATOR_DONTLOCK) {
 		adjust_lock(iter->c, orig_lock, 0);

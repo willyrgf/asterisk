@@ -1248,7 +1248,7 @@ static int test_ao2_iteration(int res, struct ao2_container *container,
 	const int *vector, int count, const char *prefix, struct ast_test *test)
 {
 	struct ao2_iterator iter;
-	struct test_obj *obj = NULL;
+	struct test_obj *obj;
 	int idx;
 
 	if (ao2_container_count(container) != count) {
@@ -1274,14 +1274,12 @@ static int test_ao2_iteration(int res, struct ao2_container *container,
 		}
 		ao2_ref(obj, -1); /* remove ref from iterator */
 	}
+	obj = ao2_iterator_next(&iter);
 	if (obj) {
-		obj = ao2_iterator_next(&iter);
-		if (obj) {
-			ast_test_status_update(test, "%s: Too many objects found.  Object %d\n",
-				prefix, obj->i);
-			ao2_ref(obj, -1); /* remove ref from iterator */
-			res = AST_TEST_FAIL;
-		}
+		ast_test_status_update(test, "%s: Too many objects found.  Object %d\n",
+			prefix, obj->i);
+		ao2_ref(obj, -1); /* remove ref from iterator */
+		res = AST_TEST_FAIL;
 	}
 
 	ao2_iterator_destroy(&iter);
@@ -1311,7 +1309,7 @@ static int test_ao2_callback_traversal(int res, struct ao2_container *container,
 	const int *vector, int count, const char *prefix, struct ast_test *test)
 {
 	struct ao2_iterator *mult_iter;
-	struct test_obj *obj = NULL;
+	struct test_obj *obj;
 	int idx;
 
 	mult_iter = ao2_callback(container, flags | OBJ_MULTIPLE, cmp_fn, arg);
@@ -1335,14 +1333,12 @@ static int test_ao2_callback_traversal(int res, struct ao2_container *container,
 		}
 		ao2_ref(obj, -1); /* remove ref from iterator */
 	}
+	obj = ao2_iterator_next(mult_iter);
 	if (obj) {
-		obj = ao2_iterator_next(mult_iter);
-		if (obj) {
-			ast_test_status_update(test, "%s: Too many objects found.  Object %d\n",
-				prefix, obj->i);
-			ao2_ref(obj, -1); /* remove ref from iterator */
-			res = AST_TEST_FAIL;
-		}
+		ast_test_status_update(test, "%s: Too many objects found.  Object %d\n",
+			prefix, obj->i);
+		ao2_ref(obj, -1); /* remove ref from iterator */
+		res = AST_TEST_FAIL;
 	}
 	ao2_iterator_destroy(mult_iter);
 
@@ -1370,7 +1366,7 @@ static int test_expected_duplicates(int res, struct ao2_container *container,
 	const int *vector, int count, const char *prefix, struct ast_test *test)
 {
 	struct ao2_iterator *mult_iter;
-	struct test_obj *obj = NULL;
+	struct test_obj *obj;
 	int idx;
 
 	mult_iter = ao2_find(container, &number, flags | OBJ_MULTIPLE | OBJ_KEY);
@@ -1399,15 +1395,13 @@ static int test_expected_duplicates(int res, struct ao2_container *container,
 		}
 		ao2_ref(obj, -1); /* remove ref from iterator */
 	}
+	obj = ao2_iterator_next(mult_iter);
 	if (obj) {
-		obj = ao2_iterator_next(mult_iter);
-		if (obj) {
-			ast_test_status_update(test,
-				"%s: Too many objects found.  Object %d, dup id %d\n",
-				prefix, obj->i, obj->dup_number);
-			ao2_ref(obj, -1); /* remove ref from iterator */
-			res = AST_TEST_FAIL;
-		}
+		ast_test_status_update(test,
+			"%s: Too many objects found.  Object %d, dup id %d\n",
+			prefix, obj->i, obj->dup_number);
+		ao2_ref(obj, -1); /* remove ref from iterator */
+		res = AST_TEST_FAIL;
 	}
 	ao2_iterator_destroy(mult_iter);
 
