@@ -792,20 +792,29 @@ typedef struct ao2_container *(*ao2_container_alloc_empty_clone_fn)(struct ao2_c
 typedef struct ao2_container *(*ao2_container_alloc_empty_clone_debug_fn)(struct ao2_container *self, const char *tag, const char *file, int line, const char *func, int ref_debug);
 
 /*!
- * \brief Link an object into this container.
+ * \brief Create a new container node.
  *
  * \param self Container to operate upon.
- * \param obj_new Object to insert into the container.
- * \param flags search_flags to control linking the object.  (OBJ_NOLOCK)
+ * \param obj_new Object to put into the node.
  * \param tag used for debugging.
  * \param file Debug file name invoked from
  * \param line Debug line invoked from
  * \param func Debug function name invoked from
  *
- * \retval 0 on errors.
- * \retval 1 on success.
+ * \retval initialized-node on success.
+ * \retval NULL on error.
  */
-typedef int (*ao2_container_link_fn)(struct ao2_container *self, void *obj_new, enum search_flags flags, const char *tag, const char *file, int line, const char *func);
+typedef struct ao2_container_node *(*ao2_container_new_node_fn)(struct ao2_container *self, void *obj_new, const char *tag, const char *file, int line, const char *func);
+
+/*!
+ * \brief Insert a node into this container.
+ *
+ * \param self Container to operate upon.
+ * \param node Container node to insert into the container.
+ *
+ * \return enum ao2_container_insert value.
+ */
+typedef enum ao2_container_insert (*ao2_container_insert_fn)(struct ao2_container *self, struct ao2_container_node *node);
 
 /*!
  * \brief Find the first container node in a traversal.
@@ -894,8 +903,10 @@ struct ao2_container_methods {
 	ao2_container_alloc_empty_clone_fn alloc_empty_clone;
 	/*! \brief Create an empty copy of this container. (Debug version) */
 	ao2_container_alloc_empty_clone_debug_fn alloc_empty_clone_debug;
-	/*! Link an object into this container. */
-	ao2_container_link_fn link;
+	/*! Create a new container node. */
+	ao2_container_new_node_fn new_node;
+	/*! Insert a node into this container. */
+	ao2_container_insert_fn insert;
 	/*! Traverse the container, find the first node. */
 	ao2_container_find_first_fn traverse_first;
 	/*! Traverse the container, find the next node. */
@@ -959,22 +970,87 @@ int ao2_container_count(struct ao2_container *c)
 	return c->elements;
 }
 
-int __ao2_link_debug(struct ao2_container *c, void *obj_new, int flags, const char *tag, const char *file, int line, const char *func)
+#if defined(AST_DEVMODE)
+static void hash_ao2_link_node_stat(struct ao2_container *hash, struct ao2_container_node *hash_node);
+#endif	/* defined(AST_DEVMODE) */
+
+/*!
+ * \internal
+ * \brief Link an object into this container.  (internal)
+ *
+ * \param self Container to operate upon.
+ * \param obj_new Object to insert into the container.
+ * \param flags search_flags to control linking the object.  (OBJ_NOLOCK)
+ * \param tag used for debugging.
+ * \param file Debug file name invoked from
+ * \param line Debug line invoked from
+ * \param func Debug function name invoked from
+ *
+ * \retval 0 on errors.
+ * \retval 1 on success.
+ */
+static int internal_ao2_link(struct ao2_container *self, void *obj_new, int flags, const char *tag, const char *file, int line, const char *func)
 {
-	if (!INTERNAL_OBJ(obj_new) || !INTERNAL_OBJ(c) || !c->v_table || !c->v_table->link) {
+	int res;
+	enum ao2_lock_req orig_lock;
+	struct ao2_container_node *node;
+
+	if (!INTERNAL_OBJ(obj_new) || !INTERNAL_OBJ(self)
+		|| !self->v_table || !self->v_table->new_node || !self->v_table->insert) {
 		/* Sanity checks. */
 		return 0;
 	}
-	return c->v_table->link(c, obj_new, flags, tag, file, line, func);
+
+	if (flags & OBJ_NOLOCK) {
+		orig_lock = adjust_lock(self, AO2_LOCK_REQ_WRLOCK, 1);
+	} else {
+		ao2_wrlock(self);
+		orig_lock = AO2_LOCK_REQ_MUTEX;
+	}
+
+	res = 0;
+	node = self->v_table->new_node(self, obj_new, tag, file, line, func);
+	if (node) {
+		/* Insert the new node. */
+		switch (self->v_table->insert(self, node)) {
+		case AO2_CONTAINER_INSERT_NODE_INSERTED:
+#if defined(AST_DEVMODE)
+			switch (self->v_table->type) {
+			case AO2_CONTAINER_RTTI_HASH:
+				hash_ao2_link_node_stat(self, node);
+				break;
+			}
+#endif	/* defined(AST_DEVMODE) */
+			ast_atomic_fetchadd_int(&self->elements, 1);
+
+			res = 1;
+			break;
+		case AO2_CONTAINER_INSERT_NODE_OBJ_REPLACED:
+			res = 1;
+			/* Fall through */
+		case AO2_CONTAINER_INSERT_NODE_REJECTED:
+			__ao2_ref(node, -1);
+			break;
+		}
+	}
+
+	if (flags & OBJ_NOLOCK) {
+		adjust_lock(self, orig_lock, 0);
+	} else {
+		ao2_unlock(self);
+	}
+
+	return res;
+}
+
+int __ao2_link_debug(struct ao2_container *c, void *obj_new, int flags, const char *tag, const char *file, int line, const char *func)
+{
+	return internal_ao2_link(c, obj_new, flags, tag, file, line, func);
 }
 
 int __ao2_link(struct ao2_container *c, void *obj_new, int flags)
 {
-	if (!INTERNAL_OBJ(obj_new) || !INTERNAL_OBJ(c) || !c->v_table || !c->v_table->link) {
-		/* Sanity checks. */
-		return 0;
-	}
-	return c->v_table->link(c, obj_new, flags, NULL, __FILE__, __LINE__, __PRETTY_FUNCTION__);
+	return internal_ao2_link(c, obj_new, flags, NULL, __FILE__, __LINE__, __PRETTY_FUNCTION__);
 }
 
 /*!
@@ -1042,7 +1118,6 @@ static void hash_ao2_traverse_unlink_node_stat(struct ao2_container *self, struc
 /*!
  * \internal
  * \brief Traverse the container.  (internal)
- * \since 12.0
  *
  * \param self Container to operate upon.
  * \param flags search_flags to control traversing the container
@@ -1668,6 +1743,8 @@ struct hash_bucket_node {
 	AST_DLLIST_ENTRY(hash_bucket_node) links;
 	/*! Hash bucket holding the node. */
 	int my_bucket;
+	/*! TRUE if the node is linked into the container. */
+	unsigned int is_linked:1;
 };
 
 struct hash_bucket {
@@ -1774,11 +1851,11 @@ static struct ao2_container *hash_ao2_alloc_empty_clone_debug(struct ao2_contain
 static void hash_ao2_node_destructor(void *v_doomed)
 {
 	struct hash_bucket_node *doomed = v_doomed;
-	struct hash_bucket *bucket;
-	struct ao2_container_hash *my_container;
 
-	my_container = (struct ao2_container_hash *) doomed->common.my_container;
-	if (my_container) {
+	if (doomed->is_linked) {
+		struct ao2_container_hash *my_container;
+		struct hash_bucket *bucket;
+
 		/*
 		 * Promote to write lock if not already there.  Since
 		 * adjust_lock() can potentially release and block waiting for a
@@ -1792,6 +1869,7 @@ static void hash_ao2_node_destructor(void *v_doomed)
 		 * negative reference and the destructor called twice for the
 		 * same node.
 		 */
+		my_container = (struct ao2_container_hash *) doomed->common.my_container;
 		adjust_lock(my_container, AO2_LOCK_REQ_WRLOCK, 1);
 
 		bucket = &my_container->buckets[doomed->my_bucket];
@@ -1810,22 +1888,63 @@ static void hash_ao2_node_destructor(void *v_doomed)
 
 /*!
  * \internal
- * \brief Insert the given node into the specified bucket in the container.
+ * \brief Create a new container node.
  * \since 12.0
  *
  * \param self Container to operate upon.
- * \param bucket Hash bucket to insert the node.
- * \param node What to put in the bucket list.
+ * \param obj_new Object to put into the node.
+ * \param tag used for debugging.
+ * \param file Debug file name invoked from
+ * \param line Debug line invoked from
+ * \param func Debug function name invoked from
+ *
+ * \retval initialized-node on success.
+ * \retval NULL on error.
+ */
+static struct hash_bucket_node *hash_ao2_new_node(struct ao2_container_hash *self, void *obj_new, const char *tag, const char *file, int line, const char *func)
+{
+	struct hash_bucket_node *node;
+	int i;
+
+	node = __ao2_alloc(sizeof(*node), hash_ao2_node_destructor, AO2_ALLOC_OPT_LOCK_NOLOCK);
+	if (!node) {
+		return NULL;
+	}
+
+	i = abs(self->hash_fn(obj_new, OBJ_POINTER));
+	i %= self->n_buckets;
+
+	if (tag) {
+		__ao2_ref_debug(obj_new, +1, tag, file, line, func);
+	} else {
+		__ao2_ref(obj_new, +1);
+	}
+	node->common.obj = obj_new;
+	node->common.my_container = (struct ao2_container *) self;
+	node->my_bucket = i;
+
+	return node;
+}
+
+/*!
+ * \internal
+ * \brief Insert a node into this container.
+ * \since 12.0
+ *
+ * \param self Container to operate upon.
+ * \param node Container node to insert into the container.
  *
  * \return enum ao2_container_insert value.
  */
-static enum ao2_container_insert hash_ao2_link_insert(struct ao2_container_hash *self, struct hash_bucket *bucket, struct hash_bucket_node *node)
+static enum ao2_container_insert hash_ao2_insert_node(struct ao2_container_hash *self, struct hash_bucket_node *node)
 {
 	int cmp;
+	struct hash_bucket *bucket;
 	struct hash_bucket_node *cur;
 	ao2_sort_fn *sort_fn;
 	uint32_t options;
 
+	bucket = &self->buckets[node->my_bucket];
 	sort_fn = self->common.sort_fn;
 	options = self->common.options;
 
@@ -1838,6 +1957,7 @@ static enum ao2_container_insert hash_ao2_link_insert(struct ao2_container_hash 
 				}
 				if (cmp < 0) {
 					AST_DLLIST_INSERT_AFTER_CURRENT(node, links);
+					node->is_linked = 1;
 					return AO2_CONTAINER_INSERT_NODE_INSERTED;
 				}
 				switch (options & AO2_CONTAINER_ALLOC_OPT_DUPS_MASK) {
@@ -1870,6 +1990,7 @@ static enum ao2_container_insert hash_ao2_link_insert(struct ao2_container_hash 
 				}
 				if (cmp > 0) {
 					AST_DLLIST_INSERT_BEFORE_CURRENT(node, links);
+					node->is_linked = 1;
 					return AO2_CONTAINER_INSERT_NODE_INSERTED;
 				}
 				switch (options & AO2_CONTAINER_ALLOC_OPT_DUPS_MASK) {
@@ -1894,86 +2015,8 @@ static enum ao2_container_insert hash_ao2_link_insert(struct ao2_container_hash 
 		}
 		AST_DLLIST_INSERT_TAIL(&bucket->list, node, links);
 	}
+	node->is_linked = 1;
 	return AO2_CONTAINER_INSERT_NODE_INSERTED;
-}
-
-/*!
- * \internal
- * \brief Link an object into this container.
- * \since 12.0
- *
- * \param self Container to operate upon.
- * \param obj_new Object to insert into the container.
- * \param flags search_flags to control linking the object.  (OBJ_NOLOCK)
- * \param tag used for debugging.
- * \param file Debug file name invoked from
- * \param line Debug line invoked from
- * \param func Debug function name invoked from
- *
- * \retval 0 on errors.
- * \retval 1 on success.
- */
-static int hash_ao2_link(struct ao2_container_hash *self, void *obj_new, int flags, const char *tag, const char *file, int line, const char *func)
-{
-	int i;
-	int res;
-	enum ao2_lock_req orig_lock;
-	struct hash_bucket_node *node;
-
-	node = __ao2_alloc(sizeof(*node), hash_ao2_node_destructor, AO2_ALLOC_OPT_LOCK_NOLOCK);
-	if (!node) {
-		return 0;
-	}
-
-	i = abs(self->hash_fn(obj_new, OBJ_POINTER));
-	i %= self->n_buckets;
-
-	if (flags & OBJ_NOLOCK) {
-		orig_lock = adjust_lock(self, AO2_LOCK_REQ_WRLOCK, 1);
-	} else {
-		ao2_wrlock(self);
-		orig_lock = AO2_LOCK_REQ_MUTEX;
-	}
-
-	if (tag) {
-		__ao2_ref_debug(obj_new, +1, tag, file, line, func);
-	} else {
-		__ao2_ref(obj_new, +1);
-	}
-	node->common.obj = obj_new;
-	node->common.my_container = (struct ao2_container *) self;
-	node->my_bucket = i;
-
-	/* Insert the new node. */
-	res = 0;
-	switch (hash_ao2_link_insert(self, &self->buckets[i], node)) {
-	case AO2_CONTAINER_INSERT_NODE_INSERTED:
-#if defined(AST_DEVMODE)
-		++self->buckets[i].elements;
-		if (self->buckets[i].max_elements < self->buckets[i].elements) {
-			self->buckets[i].max_elements = self->buckets[i].elements;
-		}
-#endif	/* defined(AST_DEVMODE) */
-		ast_atomic_fetchadd_int(&self->common.elements, 1);
-
-		res = 1;
-		break;
-	case AO2_CONTAINER_INSERT_NODE_OBJ_REPLACED:
-		res = 1;
-		/* Fall through */
-	case AO2_CONTAINER_INSERT_NODE_REJECTED:
-		node->common.my_container = NULL;
-		ao2_ref(node, -1);
-		break;
-	}
-
-	if (flags & OBJ_NOLOCK) {
-		adjust_lock(self, orig_lock, 0);
-	} else {
-		ao2_unlock(self);
-	}
-
-	return res;
 }
 
 /*! Traversal state to restart a hash container traversal. */
@@ -2535,6 +2578,30 @@ hash_found:
 #if defined(AST_DEVMODE)
 /*!
  * \internal
+ * \brief Increment the hash container linked object statistic.
+ * \since 12.0
+ *
+ * \param hash Container to operate upon.
+ * \param hash_node Container node linking object to.
+ *
+ * \return Nothing
+ */
+static void hash_ao2_link_node_stat(struct ao2_container *hash, struct ao2_container_node *hash_node)
+{
+	struct ao2_container_hash *self = (struct ao2_container_hash *) hash;
+	struct hash_bucket_node *node = (struct hash_bucket_node *) hash_node;
+	int i = node->my_bucket;
+
+	++self->buckets[i].elements;
+	if (self->buckets[i].max_elements < self->buckets[i].elements) {
+		self->buckets[i].max_elements = self->buckets[i].elements;
+	}
+}
+#endif	/* defined(AST_DEVMODE) */
+
+#if defined(AST_DEVMODE)
+/*!
+ * \internal
  * \brief Decrement the hash container linked object statistic.
  * \since 12.0
  *
@@ -2758,7 +2825,8 @@ static const struct ao2_container_methods v_table_hash = {
 	.alloc_empty_clone = (ao2_container_alloc_empty_clone_fn) hash_ao2_alloc_empty_clone,
 	.alloc_empty_clone_debug =
 		(ao2_container_alloc_empty_clone_debug_fn) hash_ao2_alloc_empty_clone_debug,
-	.link = (ao2_container_link_fn) hash_ao2_link,
+	.new_node = (ao2_container_new_node_fn) hash_ao2_new_node,
+	.insert = (ao2_container_insert_fn) hash_ao2_insert_node,
 	.traverse_first = (ao2_container_find_first_fn) hash_ao2_find_first,
 	.traverse_next = (ao2_container_find_next_fn) hash_ao2_find_next,
 	.traverse_cleanup = (ao2_container_find_cleanup_fn) hash_ao2_find_cleanup,
