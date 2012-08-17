@@ -1104,13 +1104,6 @@ struct ao2_container;
 #define ao2_container_alloc(n_buckets, hash_fn, cmp_fn) \
 	ao2_container_alloc_options(AO2_ALLOC_OPT_LOCK_MUTEX, (n_buckets), (hash_fn), (cmp_fn))
 
-/* BUGBUG for legacy precompiled modules. Should be able to remove since it is trunk. */
-struct ao2_container *__ao2_container_alloc(unsigned int options,
-	unsigned int n_buckets, ao2_hash_fn *hash_fn, ao2_callback_fn *cmp_fn);
-struct ao2_container *__ao2_container_alloc_debug(unsigned int options,
-	unsigned int n_buckets, ao2_hash_fn *hash_fn, ao2_callback_fn *cmp_fn,
-	const char *tag, const char *file, int line, const char *func, int ref_debug);
-
 /*!
  * \brief Allocate and initialize a hash container with the desired number of buckets.
  *

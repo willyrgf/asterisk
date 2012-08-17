@@ -2869,20 +2869,6 @@ struct ao2_container *__ao2_container_alloc_list_debug(unsigned int ao2_options,
 		sort_fn, cmp_fn, tag, file, line, func, ref_debug);
 }
 
-struct ao2_container *__ao2_container_alloc(unsigned int options,
-	unsigned int n_buckets, ao2_hash_fn *hash_fn, ao2_callback_fn *cmp_fn)
-{
-	return __ao2_container_alloc_hash(options, 0, n_buckets, hash_fn, NULL, cmp_fn);
-}
-
-struct ao2_container *__ao2_container_alloc_debug(unsigned int options,
-	unsigned int n_buckets, ao2_hash_fn *hash_fn, ao2_callback_fn *cmp_fn,
-	const char *tag, const char *file, int line, const char *func, int ref_debug)
-{
-	return __ao2_container_alloc_hash_debug(options, 0, n_buckets, hash_fn, NULL, cmp_fn,
-		tag, file, line, func, ref_debug);
-}
-
 /*! BUGBUG need to add red-black tree container support */
 
 #ifdef AO2_DEBUG
