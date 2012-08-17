@@ -2029,11 +2029,9 @@ static struct hash_bucket_node *hash_ao2_find_first(struct ao2_container_hash *s
 
 	/* Determine traversal order. */
 	switch (flags & OBJ_ORDER_MASK) {
-	case OBJ_ORDER_POST:
 	case OBJ_ORDER_DESCENDING:
 		state->descending = 1;
 		break;
-	case OBJ_ORDER_PRE:
 	case OBJ_ORDER_ASCENDING:
 	default:
 		break;
@@ -2868,8 +2866,6 @@ struct ao2_container *__ao2_container_alloc_list_debug(unsigned int ao2_options,
 	return __ao2_container_alloc_hash_debug(ao2_options, container_options, 1, NULL,
 		sort_fn, cmp_fn, tag, file, line, func, ref_debug);
 }
-
-/*! BUGBUG need to add red-black tree container support */
 
 #ifdef AO2_DEBUG
 static int print_cb(void *obj, void *arg, int flag)

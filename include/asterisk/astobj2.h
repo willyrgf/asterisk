@@ -929,24 +929,6 @@ enum search_flags {
 	OBJ_ORDER_ASCENDING = (0 << 8),
 	/*! \brief Traverse in descending order (Last to first container object) */
 	OBJ_ORDER_DESCENDING = (1 << 8),
-	/*!
-	 * \brief Traverse in pre-order (Node then childeren, for tree container)
-	 *
-	 * \note For non-tree containers, it is up to the container type
-	 * to make the best interpretation of the order.  For list and
-	 * hash containers, this also means ascending order because a
-	 * binary tree can degenerate into a list.
-	 */
-	OBJ_ORDER_PRE = (2 << 8),
-	/*!
-	 * \brief Traverse in post-order (Childeren then node, for tree container)
-	 *
-	 * \note For non-tree containers, it is up to the container type
-	 * to make the best interpretation of the order.  For list and
-	 * hash containers, this also means descending order because a
-	 * binary tree can degenerate into a list.
-	 */
-	OBJ_ORDER_POST = (3 << 8),
 };
 
 /*!
@@ -1197,49 +1179,6 @@ struct ao2_container *__ao2_container_alloc_list(unsigned int ao2_options,
 	unsigned int container_options, ao2_sort_fn *sort_fn, ao2_callback_fn *cmp_fn);
 struct ao2_container *__ao2_container_alloc_list_debug(unsigned int ao2_options,
 	unsigned int container_options, ao2_sort_fn *sort_fn, ao2_callback_fn *cmp_fn,
-	const char *tag, const char *file, int line, const char *func, int ref_debug);
-
-/*!
- * \brief Allocate and initialize a red-black tree container.
- *
- * \param ao2_options Container ao2 object options (See enum ao2_alloc_opts)
- * \param container_options Container behaviour options (See enum ao2_container_opts)
- * \param sort_fn Pointer to a sort function.
- * \param cmp_fn Pointer to a compare function used by ao2_find. (NULL to match everything)
- * \param tag used for debugging.
- *
- * \return A pointer to a struct container.
- *
- * \note Destructor is set implicitly.
- */
-
-#if defined(REF_DEBUG)
-
-#define ao2_t_container_alloc_tree(ao2_options, container_options, sort_fn, cmp_fn, tag) \
-	__ao2_container_alloc_tree_debug((ao2_options), (container_options), (sort_fn), (cmp_fn), (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__, 1)
-#define ao2_container_alloc_tree(ao2_options, container_options, , sort_fn, cmp_fn) \
-	__ao2_container_alloc_tree_debug((ao2_options), (container_options), (sort_fn), (cmp_fn), "",  __FILE__, __LINE__, __PRETTY_FUNCTION__, 1)
-
-#elif defined(__AST_DEBUG_MALLOC)
-
-#define ao2_t_container_alloc_tree(ao2_options, container_options, sort_fn, cmp_fn, tag) \
-	__ao2_container_alloc_tree_debug((ao2_options), (container_options), (sort_fn), (cmp_fn), (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__, 0)
-#define ao2_container_alloc_tree(ao2_options, container_options, sort_fn, cmp_fn) \
-	__ao2_container_alloc_tree_debug((ao2_options), (container_options), (sort_fn), (cmp_fn), "",  __FILE__, __LINE__, __PRETTY_FUNCTION__, 0)
-
-#else
-
-#define ao2_t_container_alloc_tree(ao2_options, container_options, sort_fn, cmp_fn, tag) \
-	__ao2_container_alloc_tree((ao2_options), (container_options), (sort_fn), (cmp_fn))
-#define ao2_container_alloc_tree(ao2_options, container_options, sort_fn, cmp_fn) \
-	__ao2_container_alloc_tree((ao2_options), (container_options), (sort_fn), (cmp_fn))
-
-#endif
-
-struct ao2_container *__ao2_container_alloc_tree(unsigned int ao2_options, unsigned int container_options,
-	ao2_sort_fn *sort_fn, ao2_callback_fn *cmp_fn);
-struct ao2_container *__ao2_container_alloc_tree_debug(unsigned int ao2_options, unsigned int container_options,
-	ao2_sort_fn *sort_fn, ao2_callback_fn *cmp_fn,
 	const char *tag, const char *file, int line, const char *func, int ref_debug);
 
 /*! \brief
