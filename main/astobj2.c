@@ -852,21 +852,19 @@ typedef struct ao2_container_node *(*ao2_container_find_next_fn)(struct ao2_cont
 typedef void (*ao2_container_find_cleanup_fn)(void *v_state);
 
 /*!
- * \brief Find the next iteration element in the container.
+ * \brief Find the next non-empty iteration node in the container.
  *
  * \param self Container to operate upon.
- * \param iter The iterator to operate upon
- * \param tag used for debugging.
- * \param file Debug file name invoked from
- * \param line Debug line invoked from
- * \param func Debug function name invoked from
+ * \param prev Previous node returned by the iterator.
+ * \param flags search_flags to control iterating the container.
+ *   Only AO2_ITERATOR_DESCENDING is useful by the method.
  *
- * \note The iterator container is already locked.
+ * \note The container is already locked.
  *
- * \retval next-object on success.
- * \retval NULL on error or no more elements in the container.
+ * \retval node on success.
+ * \retval NULL on error or no more nodes in the container.
  */
-typedef void *(*ao2_iterator_next_fn)(struct ao2_container *self, struct ao2_iterator *iter, const char *tag, const char *file, int line, const char *func);
+typedef struct ao2_container_node *(*ao2_iterator_next_fn)(struct ao2_container *self, struct ao2_container_node *prev, enum ao2_iterator_flags flags);
 
 /*!
  * \brief Display statistics of the specified container.
@@ -972,6 +970,7 @@ int ao2_container_count(struct ao2_container *c)
 
 #if defined(AST_DEVMODE)
 static void hash_ao2_link_node_stat(struct ao2_container *hash, struct ao2_container_node *hash_node);
+static void hash_ao2_unlink_node_stat(struct ao2_container *hash, struct ao2_container_node *hash_node);
 #endif	/* defined(AST_DEVMODE) */
 
 /*!
@@ -1107,10 +1106,6 @@ static int cb_true_data(void *user_data, void *arg, void *data, int flags)
 {
 	return CMP_MATCH;
 }
-
-#if defined(AST_DEVMODE)
-static void hash_ao2_traverse_unlink_node_stat(struct ao2_container *self, struct ao2_container_node *node);
-#endif	/* defined(AST_DEVMODE) */
 
 /*! Allow enough room for container specific traversal state structs */
 #define AO2_TRAVERSAL_STATE_SIZE	100
@@ -1289,7 +1284,7 @@ static void *internal_ao2_traverse(struct ao2_container *self, enum search_flags
 #if defined(AST_DEVMODE)
 				switch (self->v_table->type) {
 				case AO2_CONTAINER_RTTI_HASH:
-					hash_ao2_traverse_unlink_node_stat(self, node);
+					hash_ao2_unlink_node_stat(self, node);
 					break;
 				}
 #endif	/* defined(AST_DEVMODE) */
@@ -1477,6 +1472,7 @@ void ao2_iterator_cleanup(struct ao2_iterator *iter)
 static void *internal_ao2_iterator_next(struct ao2_iterator *iter, const char *tag, const char *file, int line, const char *func)
 {
 	enum ao2_lock_req orig_lock;
+	struct ao2_container_node *node;
 	void *ret;
 
 	if (!INTERNAL_OBJ(iter->c) || !iter->c->v_table || !iter->c->v_table->iterator_next) {
@@ -1485,7 +1481,7 @@ static void *internal_ao2_iterator_next(struct ao2_iterator *iter, const char *t
 	}
 
 	if (iter->complete) {
-		/* Don't return any more nodes. */
+		/* Don't return any more objects. */
 		return NULL;
 	}
 
@@ -1504,11 +1500,47 @@ static void *internal_ao2_iterator_next(struct ao2_iterator *iter, const char *t
 		}
 	}
 
-	ret = iter->c->v_table->iterator_next(iter->c, iter, tag, file, line, func);
-	if (!ret) {
+	node = iter->c->v_table->iterator_next(iter->c, iter->last_node, iter->flags);
+	if (node) {
+		ret = node->obj;
+
+		if (iter->flags & AO2_ITERATOR_UNLINK) {
+			/* update number of elements */
+			ast_atomic_fetchadd_int(&iter->c->elements, -1);
+#if defined(AST_DEVMODE)
+			switch (iter->c->v_table->type) {
+			case AO2_CONTAINER_RTTI_HASH:
+				hash_ao2_unlink_node_stat(iter->c, node);
+				break;
+			}
+#endif	/* defined(AST_DEVMODE) */
+
+			/* Transfer the object ref from the container to the returned object. */
+			node->obj = NULL;
+
+			/* Transfer the container's node ref to the iterator. */
+		} else {
+			/* Bump ref of returned object */
+			if (tag) {
+				__ao2_ref_debug(ret, +1, tag, file, line, func);
+			} else {
+				__ao2_ref(ret, +1);
+			}
+
+			/* Bump the container's node ref for the iterator. */
+			__ao2_ref(node, +1);
+		}
+	} else {
 		/* The iteration has completed. */
 		iter->complete = 1;
+		ret = NULL;
 	}
+
+	/* Replace the iterator's node */
+	if (iter->last_node) {
+		__ao2_ref(iter->last_node, -1);
+	}
+	iter->last_node = node;
 
 	if (iter->flags & AO2_ITERATOR_DONTLOCK) {
 		adjust_lock(iter->c, orig_lock, 0);
@@ -2446,45 +2478,37 @@ static void hash_ao2_find_cleanup(struct hash_traversal_state *state)
 
 /*!
  * \internal
- * \brief Find the next iteration element in the container.
+ * \brief Find the next non-empty iteration node in the container.
  * \since 12.0
  *
  * \param self Container to operate upon.
- * \param iter The iterator to operate upon
- * \param tag used for debugging.
- * \param file Debug file name invoked from
- * \param line Debug line invoked from
- * \param func Debug function name invoked from
+ * \param node Previous node returned by the iterator.
+ * \param flags search_flags to control iterating the container.
+ *   Only AO2_ITERATOR_DESCENDING is useful by the method.
  *
- * \note The iterator container is already locked.
+ * \note The container is already locked.
  *
- * \retval next-object on success.
- * \retval NULL on error or no more elements in the container.
+ * \retval node on success.
+ * \retval NULL on error or no more nodes in the container.
  */
-static void *hash_ao2_iterator_next(struct ao2_container_hash *self, struct ao2_iterator *iter, const char *tag, const char *file, int line, const char *func)
+static struct hash_bucket_node *hash_ao2_iterator_next(struct ao2_container_hash *self, struct hash_bucket_node *node, enum ao2_iterator_flags flags)
 {
 	int cur_bucket;
-	struct hash_bucket_node *node;
-	void *ret;
 
-	if ((struct ao2_container *) self != iter->c) {
-		/* Sanity checks. */
-		return NULL;
-	}
-
-	node = iter->last_node;
-	if (iter->flags & AO2_ITERATOR_DESCENDING) {
+	if (flags & AO2_ITERATOR_DESCENDING) {
 		if (node) {
 			cur_bucket = node->my_bucket;
 
 			/* Find next non-empty node. */
-			node = AST_DLLIST_PREV(node, links);
-			while (node && !node->common.obj) {
+			for (;;) {
 				node = AST_DLLIST_PREV(node, links);
-			}
-			if (node) {
-				/* Found a non-empty node. */
-				goto hash_found;
+				if (!node) {
+					break;
+				}
+				if (node->common.obj) {
+					/* Found a non-empty node. */
+					return node;
+				}
 			}
 		} else {
 			/* Find first non-empty node. */
@@ -2494,12 +2518,12 @@ static void *hash_ao2_iterator_next(struct ao2_container_hash *self, struct ao2_
 		/* Find a non-empty node in the remaining buckets */
 		while (0 <= --cur_bucket) {
 			node = AST_DLLIST_LAST(&self->buckets[cur_bucket].list);
-			while (node && !node->common.obj) {
+			while (node) {
+				if (node->common.obj) {
+					/* Found a non-empty node. */
+					return node;
+				}
 				node = AST_DLLIST_PREV(node, links);
-			}
-			if (node) {
-				/* Found a non-empty node. */
-				goto hash_found;
 			}
 		}
 	} else {
@@ -2507,13 +2531,15 @@ static void *hash_ao2_iterator_next(struct ao2_container_hash *self, struct ao2_
 			cur_bucket = node->my_bucket;
 
 			/* Find next non-empty node. */
-			node = AST_DLLIST_NEXT(node, links);
-			while (node && !node->common.obj) {
+			for (;;) {
 				node = AST_DLLIST_NEXT(node, links);
-			}
-			if (node) {
-				/* Found a non-empty node. */
-				goto hash_found;
+				if (!node) {
+					break;
+				}
+				if (node->common.obj) {
+					/* Found a non-empty node. */
+					return node;
+				}
 			}
 		} else {
 			/* Find first non-empty node. */
@@ -2523,56 +2549,18 @@ static void *hash_ao2_iterator_next(struct ao2_container_hash *self, struct ao2_
 		/* Find a non-empty node in the remaining buckets */
 		while (++cur_bucket < self->n_buckets) {
 			node = AST_DLLIST_FIRST(&self->buckets[cur_bucket].list);
-			while (node && !node->common.obj) {
+			while (node) {
+				if (node->common.obj) {
+					/* Found a non-empty node. */
+					return node;
+				}
 				node = AST_DLLIST_NEXT(node, links);
-			}
-			if (node) {
-				/* Found a non-empty node. */
-				goto hash_found;
 			}
 		}
 	}
 
 	/* No more nodes to visit in the container. */
-	if (iter->last_node) {
-		__ao2_ref(iter->last_node, -1);
-		iter->last_node = NULL;
-	}
 	return NULL;
-
-hash_found:
-	ret = node->common.obj;
-
-	if (iter->flags & AO2_ITERATOR_UNLINK) {
-		/* update number of elements */
-		ast_atomic_fetchadd_int(&self->common.elements, -1);
-#if defined(AST_DEVMODE)
-		--self->buckets[cur_bucket].elements;
-#endif	/* defined(AST_DEVMODE) */
-
-		/* Transfer the object ref from the container to the returned object. */
-		node->common.obj = NULL;
-
-		/* Transfer the container's node ref to the iterator. */
-	} else {
-		/* Bump ref of returned object */
-		if (tag) {
-			__ao2_ref_debug(ret, 1, tag, file, line, func);
-		} else {
-			__ao2_ref(ret, 1);
-		}
-
-		/* Bump the container's node ref for the iterator. */
-		__ao2_ref(node, +1);
-	}
-
-	/* Replace the iterator's node */
-	if (iter->last_node) {
-		__ao2_ref(iter->last_node, -1);
-	}
-	iter->last_node = node;
-
-	return ret;
 }
 
 #if defined(AST_DEVMODE)
@@ -2610,7 +2598,7 @@ static void hash_ao2_link_node_stat(struct ao2_container *hash, struct ao2_conta
  *
  * \return Nothing
  */
-static void hash_ao2_traverse_unlink_node_stat(struct ao2_container *hash, struct ao2_container_node *hash_node)
+static void hash_ao2_unlink_node_stat(struct ao2_container *hash, struct ao2_container_node *hash_node)
 {
 	struct ao2_container_hash *self = (struct ao2_container_hash *) hash;
 	struct hash_bucket_node *node = (struct hash_bucket_node *) hash_node;
@@ -2802,6 +2790,12 @@ static int hash_ao2_integrity(struct ao2_container_hash *self)
 		/* Check bucket forward/backward obj count. */
 		if (count_obj_forward != count_obj_backward) {
 			ast_log(LOG_ERROR, "Forward/backward object count does not match!\n");
+			return -1;
+		}
+
+		/* Check bucket obj count statistic. */
+		if (count_obj_forward != self->buckets[bucket].elements) {
+			ast_log(LOG_ERROR, "Bucket object count stat does not match!\n");
 			return -1;
 		}
 
