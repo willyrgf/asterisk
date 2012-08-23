@@ -768,6 +768,8 @@ struct ao2_container_node {
 	void *obj;
 	/*! Container holding the node.  (Does not hold a reference.) */
 	struct ao2_container *my_container;
+	/*! TRUE if the node is linked into the container. */
+	unsigned int is_linked:1;
 };
 
 /*!
@@ -959,6 +961,12 @@ struct ao2_container {
 	uint32_t options;
 	/*! Number of elements in the container. */
 	int elements;
+#if defined(AST_DEVMODE)
+	/*! Number of nodes in the container. */
+	int nodes;
+	/*! Maximum number of empty nodes in the container. (nodes - elements) */
+	int max_empty_nodes;
+#endif	/* defined(AST_DEVMODE) */
 	/*!
 	 * \brief TRUE if the container is being destroyed.
 	 *
@@ -967,8 +975,7 @@ struct ao2_container {
 	 *
 	 * \note There should not be any empty nodes in the container
 	 * during destruction.  If there are then an error needs to be
-	 * issued about container node reference leaks.  Someone forgot
-	 * to call ao2_iterator_destroy() somewhere.
+	 * issued about container node reference leaks.
 	 */
 	unsigned int destroying:1;
 };
@@ -978,7 +985,7 @@ struct ao2_container {
  */
 int ao2_container_count(struct ao2_container *c)
 {
-	return c->elements;
+	return ast_atomic_fetchadd_int(&c->elements, 0);
 }
 
 #if defined(AST_DEVMODE)
@@ -1027,14 +1034,16 @@ static int internal_ao2_link(struct ao2_container *self, void *obj_new, int flag
 		/* Insert the new node. */
 		switch (self->v_table->insert(self, node)) {
 		case AO2_CONTAINER_INSERT_NODE_INSERTED:
+			node->is_linked = 1;
+			ast_atomic_fetchadd_int(&self->elements, 1);
 #if defined(AST_DEVMODE)
+			++self->nodes;
 			switch (self->v_table->type) {
 			case AO2_CONTAINER_RTTI_HASH:
 				hash_ao2_link_node_stat(self, node);
 				break;
 			}
 #endif	/* defined(AST_DEVMODE) */
-			ast_atomic_fetchadd_int(&self->elements, 1);
 
 			res = 1;
 			break;
@@ -1299,6 +1308,13 @@ static void *internal_ao2_traverse(struct ao2_container *self, enum search_flags
 				/* update number of elements */
 				ast_atomic_fetchadd_int(&self->elements, -1);
 #if defined(AST_DEVMODE)
+				{
+					int empty = self->nodes - self->elements;
+
+					if (self->max_empty_nodes < empty) {
+						self->max_empty_nodes = empty;
+					}
+				}
 				switch (self->v_table->type) {
 				case AO2_CONTAINER_RTTI_HASH:
 					hash_ao2_unlink_node_stat(self, node);
@@ -1528,6 +1544,13 @@ static void *internal_ao2_iterator_next(struct ao2_iterator *iter, const char *t
 			/* update number of elements */
 			ast_atomic_fetchadd_int(&iter->c->elements, -1);
 #if defined(AST_DEVMODE)
+			{
+				int empty = iter->c->nodes - iter->c->elements;
+
+				if (iter->c->max_empty_nodes < empty) {
+					iter->c->max_empty_nodes = empty;
+				}
+			}
 			switch (iter->c->v_table->type) {
 			case AO2_CONTAINER_RTTI_HASH:
 				hash_ao2_unlink_node_stat(iter->c, node);
@@ -1752,6 +1775,18 @@ static void ao2_container_stats(struct ao2_container *self, int fd, void (*prnt)
 
 	ao2_rdlock(self);
 	prnt(fd, "Number of objects: %d\n", self->elements);
+	prnt(fd, "Number of nodes: %d\n", self->nodes);
+	prnt(fd, "Number of empty nodes: %d\n", self->nodes - self->elements);
+	/*
+	 * XXX
+	 * If the max_empty_nodes count gets out of single digits you
+	 * likely have a code path where ao2_iterator_destroy() is not
+	 * called.
+	 *
+	 * Empty nodes do not harm the container but they do make
+	 * container operations less efficient.
+	 */
+	prnt(fd, "Maximum empty nodes: %d\n", self->max_empty_nodes);
 	if (self->v_table->stats) {
 		self->v_table->stats(self, fd, prnt);
 	}
@@ -1799,8 +1834,6 @@ struct hash_bucket_node {
 	AST_DLLIST_ENTRY(hash_bucket_node) links;
 	/*! Hash bucket holding the node. */
 	int my_bucket;
-	/*! TRUE if the node is linked into the container. */
-	unsigned int is_linked:1;
 };
 
 struct hash_bucket {
@@ -1908,7 +1941,7 @@ static void hash_ao2_node_destructor(void *v_doomed)
 {
 	struct hash_bucket_node *doomed = v_doomed;
 
-	if (doomed->is_linked) {
+	if (doomed->common.is_linked) {
 		struct ao2_container_hash *my_container;
 		struct hash_bucket *bucket;
 
@@ -1930,6 +1963,10 @@ static void hash_ao2_node_destructor(void *v_doomed)
 
 		bucket = &my_container->buckets[doomed->my_bucket];
 		AST_DLLIST_REMOVE(&bucket->list, doomed, links);
+
+#if defined(AST_DEVMODE)
+		--my_container->common.nodes;
+#endif	/* defined(AST_DEVMODE) */
 	}
 
 	/*
@@ -2013,7 +2050,6 @@ static enum ao2_container_insert hash_ao2_insert_node(struct ao2_container_hash 
 				}
 				if (cmp < 0) {
 					AST_DLLIST_INSERT_AFTER_CURRENT(node, links);
-					node->is_linked = 1;
 					return AO2_CONTAINER_INSERT_NODE_INSERTED;
 				}
 				switch (options & AO2_CONTAINER_ALLOC_OPT_DUPS_MASK) {
@@ -2046,7 +2082,6 @@ static enum ao2_container_insert hash_ao2_insert_node(struct ao2_container_hash 
 				}
 				if (cmp > 0) {
 					AST_DLLIST_INSERT_BEFORE_CURRENT(node, links);
-					node->is_linked = 1;
 					return AO2_CONTAINER_INSERT_NODE_INSERTED;
 				}
 				switch (options & AO2_CONTAINER_ALLOC_OPT_DUPS_MASK) {
@@ -2071,7 +2106,6 @@ static enum ao2_container_insert hash_ao2_insert_node(struct ao2_container_hash 
 		}
 		AST_DLLIST_INSERT_TAIL(&bucket->list, node, links);
 	}
-	node->is_linked = 1;
 	return AO2_CONTAINER_INSERT_NODE_INSERTED;
 }
 
@@ -2487,6 +2521,7 @@ hash_ascending_resume:;
 		}
 	}
 
+	/* No more nodes in the container left to traverse. */
 	__ao2_ref(prev, -1);
 	return NULL;
 }
@@ -2638,7 +2673,6 @@ static void hash_ao2_unlink_node_stat(struct ao2_container *hash, struct ao2_con
 }
 #endif	/* defined(AST_DEVMODE) */
 
-#if defined(AST_DEVMODE)
 /*!
  * \internal
  *
@@ -2656,14 +2690,12 @@ static void hash_ao2_destroy(struct ao2_container_hash *self)
 	/* Check that the container no longer has any nodes */
 	for (idx = self->n_buckets; idx--;) {
 		if (!AST_DLLIST_EMPTY(&self->buckets[idx].list)) {
-			ast_log(LOG_ERROR,
-				"Ref leak destroying container.  Container still has nodes!\n");
+			ast_log(LOG_ERROR, "Node ref leak.  Hash container still has nodes!\n");
 			ast_assert(0);
 			break;
 		}
 	}
 }
-#endif	/* defined(AST_DEVMODE) */
 
 #if defined(AST_DEVMODE)
 /*!
@@ -2723,120 +2755,137 @@ static int hash_ao2_integrity(struct ao2_container_hash *self)
 {
 	int bucket_exp;
 	int bucket;
-	int count_node_forward;
-	int count_node_backward;
-	int count_obj_forward;
-	int count_obj_backward;
+	int count_obj;
 	int count_total_obj;
+	int count_total_node;
+	void *obj_last;
 	struct hash_bucket_node *node;
-	struct hash_bucket_node *last;
+	struct hash_bucket_node *prev;
+	struct hash_bucket_node *next;
 
 	count_total_obj = 0;
+	count_total_node = 0;
 
 	/* For each bucket in the container. */
 	for (bucket = 0; bucket < self->n_buckets; ++bucket) {
-		count_node_forward = 0;
-		count_node_backward = 0;
-		count_obj_forward = 0;
-		count_obj_backward = 0;
+		if (!AST_DLLIST_FIRST(&self->buckets[bucket].list)
+			&& !AST_DLLIST_LAST(&self->buckets[bucket].list)) {
+			/* The bucket list is empty. */
+			continue;
+		}
 
-		/* Check forward list. */
-		last = NULL;
-		for (node = AST_DLLIST_FIRST(&self->buckets[bucket].list);
-			node;
-			node = AST_DLLIST_NEXT(node, links)) {
-			++count_node_forward;
+		count_obj = 0;
+		obj_last = NULL;
 
-			if (bucket != node->my_bucket) {
-				ast_log(LOG_ERROR, "Node not in correct bucket!\n");
+		/* Check bucket list links and nodes. */
+		node = AST_DLLIST_LAST(&self->buckets[bucket].list);
+		if (!node) {
+			ast_log(LOG_ERROR, "Bucket %d list tail is NULL when it should not be!\n",
+				bucket);
+			return -1;
+		}
+		if (AST_DLLIST_NEXT(node, links)) {
+			ast_log(LOG_ERROR, "Bucket %d list tail node is not the last node!\n",
+				bucket);
+			return -1;
+		}
+		node = AST_DLLIST_FIRST(&self->buckets[bucket].list);
+		if (!node) {
+			ast_log(LOG_ERROR, "Bucket %d list head is NULL when it should not be!\n",
+				bucket);
+			return -1;
+		}
+		if (AST_DLLIST_PREV(node, links)) {
+			ast_log(LOG_ERROR, "Bucket %d list head node is not the first node!\n",
+				bucket);
+			return -1;
+		}
+		for (; node; node = next) {
+			/* Check backward link. */
+			prev = AST_DLLIST_PREV(node, links);
+			if (prev) {
+				if (node != AST_DLLIST_NEXT(prev, links)) {
+					ast_log(LOG_ERROR, "Bucket %d list node's prev node does not link back!\n",
+						bucket);
+					return -1;
+				}
+			} else if (node != AST_DLLIST_FIRST(&self->buckets[bucket].list)) {
+				ast_log(LOG_ERROR, "Bucket %d backward list chain is broken!\n",
+					bucket);
 				return -1;
 			}
 
+			/* Check forward link. */
+			next = AST_DLLIST_NEXT(node, links);
+			if (next) {
+				if (node != AST_DLLIST_PREV(next, links)) {
+					ast_log(LOG_ERROR, "Bucket %d list node's next node does not link back!\n",
+						bucket);
+					return -1;
+				}
+			} else if (node != AST_DLLIST_LAST(&self->buckets[bucket].list)) {
+				ast_log(LOG_ERROR, "Bucket %d forward list chain is broken!\n",
+					bucket);
+				return -1;
+			}
+
+			if (bucket != node->my_bucket) {
+				ast_log(LOG_ERROR, "Bucket %d node claims to be in bucket %d!\n",
+					bucket, node->my_bucket);
+				return -1;
+			}
+
+			++count_total_node;
 			if (!node->common.obj) {
 				/* Node is empty. */
 				continue;
 			}
-			++count_obj_forward;
+			++count_obj;
 
 			/* Check container hash key for expected bucket. */
 			bucket_exp = abs(self->hash_fn(node->common.obj, OBJ_POINTER));
 			bucket_exp %= self->n_buckets;
 			if (bucket != bucket_exp) {
-				ast_log(LOG_ERROR, "Hash does not match bucket!\n");
+				ast_log(LOG_ERROR, "Bucket %d node hashes to bucket %d!\n",
+					bucket, bucket_exp);
 				return -1;
 			}
 
 			/* Check sort if configured. */
-			if (last && self->common.sort_fn) {
-				if (self->common.sort_fn(last->common.obj, node->common.obj, OBJ_POINTER) > 0) {
-					ast_log(LOG_ERROR, "Bucket nodes out of order!\n");
+			if (self->common.sort_fn) {
+				if (obj_last
+					&& self->common.sort_fn(obj_last, node->common.obj, OBJ_POINTER) > 0) {
+					ast_log(LOG_ERROR, "Bucket %d nodes out of sorted order!\n",
+						bucket);
 					return -1;
 				}
+				obj_last = node->common.obj;
 			}
-			last = node;
-		}
-
-		/* Check backward list. */
-		last = NULL;
-		for (node = AST_DLLIST_LAST(&self->buckets[bucket].list);
-			node;
-			node = AST_DLLIST_PREV(node, links)) {
-			++count_node_backward;
-
-			if (bucket != node->my_bucket) {
-				ast_log(LOG_ERROR, "Node not in correct bucket!\n");
-				return -1;
-			}
-
-			if (!node->common.obj) {
-				/* Node is empty. */
-				continue;
-			}
-			++count_obj_backward;
-
-			/* Check container hash key for expected bucket. */
-			bucket_exp = abs(self->hash_fn(node->common.obj, OBJ_POINTER));
-			bucket_exp %= self->n_buckets;
-			if (bucket != bucket_exp) {
-				ast_log(LOG_ERROR, "Hash does not match bucket!\n");
-				return -1;
-			}
-
-			/* Check sort if configured. */
-			if (last && self->common.sort_fn) {
-				if (self->common.sort_fn(node->common.obj, last->common.obj, OBJ_POINTER) > 0) {
-					ast_log(LOG_ERROR, "Bucket nodes out of order!\n");
-					return -1;
-				}
-			}
-			last = node;
-		}
-
-		/* Check bucket forward/backward node count. */
-		if (count_node_forward != count_node_backward) {
-			ast_log(LOG_ERROR, "Forward/backward node count does not match!\n");
-			return -1;
-		}
-
-		/* Check bucket forward/backward obj count. */
-		if (count_obj_forward != count_obj_backward) {
-			ast_log(LOG_ERROR, "Forward/backward object count does not match!\n");
-			return -1;
 		}
 
 		/* Check bucket obj count statistic. */
-		if (count_obj_forward != self->buckets[bucket].elements) {
-			ast_log(LOG_ERROR, "Bucket object count stat does not match!\n");
+		if (count_obj != self->buckets[bucket].elements) {
+			ast_log(LOG_ERROR, "Bucket %d object count of %d does not match stat of %d!\n",
+				bucket, count_obj, self->buckets[bucket].elements);
 			return -1;
 		}
 
 		/* Accumulate found object counts. */
-		count_total_obj += count_obj_forward;
+		count_total_obj += count_obj;
 	}
 
 	/* Check total obj count. */
 	if (count_total_obj != ao2_container_count(&self->common)) {
-		ast_log(LOG_ERROR, "Total object count does not match ao2_container_count()!\n");
+		ast_log(LOG_ERROR,
+			"Total object count of %d does not match ao2_container_count() of %d!\n",
+			count_total_obj, ao2_container_count(&self->common));
+		return -1;
+	}
+
+	/* Check total node count. */
+	if (count_total_node != self->common.nodes) {
+		ast_log(LOG_ERROR, "Total node count of %d does not match stat of %d!\n",
+			count_total_node, self->common.nodes);
 		return -1;
 	}
 
@@ -2856,8 +2905,8 @@ static const struct ao2_container_methods v_table_hash = {
 	.traverse_next = (ao2_container_find_next_fn) hash_ao2_find_next,
 	.traverse_cleanup = (ao2_container_find_cleanup_fn) hash_ao2_find_cleanup,
 	.iterator_next = (ao2_iterator_next_fn) hash_ao2_iterator_next,
-#if defined(AST_DEVMODE)
 	.destroy = (ao2_container_destroy_fn) hash_ao2_destroy,
+#if defined(AST_DEVMODE)
 	.stats = (ao2_container_statistics) hash_ao2_stats,
 	.integrity = (ao2_container_integrity) hash_ao2_integrity,
 #endif	/* defined(AST_DEVMODE) */
@@ -3089,7 +3138,7 @@ static char *handle_astobj2_test(struct ast_cli_entry *e, int cmd, struct ast_cl
 	ast_cli(a->fd, "testing callbacks again\n");
 	ao2_t_callback(c1, 0, print_cb, a, "test callback");
 
-	ast_verbose("now you should see an error message:\n");
+	ast_verbose("now you should see an error and possible assertion failure messages:\n");
 	ao2_t_ref(&i, -1, "");	/* i is not a valid object so we print an error here */
 
 	ast_cli(a->fd, "destroy container\n");
