@@ -45,7 +45,7 @@ enum test_container_type {
 /*!
  * \internal
  * \brief Convert the container type enum to string.
- * \since 12.0
+ * \since 12.0.0
  *
  * \param type Container type value to convert to string.
  *
@@ -202,7 +202,7 @@ static int test_sort_cb(const void *obj_left, const void *obj_right, int flags)
 /*!
  * \internal
  * \brief Test container cloning.
- * \since 12.0
+ * \since 12.0.0
  *
  * \param res Passed in enum ast_test_result_state.
  * \param orig Container to clone.
@@ -263,7 +263,7 @@ static int test_container_clone(int res, struct ao2_container *orig, struct ast_
 /*!
  * \internal
  * \brief Test ao2_find with no flags.
- * \since 12.0
+ * \since 12.0.0
  *
  * \param res Passed in enum ast_test_result_state.
  * \param look_in Container to search.
@@ -302,7 +302,7 @@ static int test_ao2_find_w_no_flags(int res, struct ao2_container *look_in, int 
 /*!
  * \internal
  * \brief Test ao2_find with OBJ_POINTER.
- * \since 12.0
+ * \since 12.0.0
  *
  * \param res Passed in enum ast_test_result_state.
  * \param look_in Container to search.
@@ -341,7 +341,7 @@ static int test_ao2_find_w_OBJ_POINTER(int res, struct ao2_container *look_in, i
 /*!
  * \internal
  * \brief Test ao2_find with OBJ_KEY.
- * \since 12.0
+ * \since 12.0.0
  *
  * \param res Passed in enum ast_test_result_state.
  * \param look_in Container to search.
@@ -378,7 +378,7 @@ static int test_ao2_find_w_OBJ_KEY(int res, struct ao2_container *look_in, int l
 /*!
  * \internal
  * \brief Test ao2_find with OBJ_PARTIAL_KEY.
- * \since 12.0
+ * \since 12.0.0
  *
  * \param res Passed in enum ast_test_result_state.
  * \param look_in Container to search.
@@ -1049,7 +1049,7 @@ cleanup:
 /*!
  * \internal
  * \brief Make a nonsorted container for astobj2 testing.
- * \since 12.0
+ * \since 12.0.0
  *
  * \param type Container type to create.
  * \param options Container options
@@ -1079,7 +1079,7 @@ static struct ao2_container *test_make_nonsorted(enum test_container_type type, 
 /*!
  * \internal
  * \brief Make a sorted container for astobj2 testing.
- * \since 12.0
+ * \since 12.0.0
  *
  * \param type Container type to create.
  * \param options Container options
@@ -1109,7 +1109,7 @@ static struct ao2_container *test_make_sorted(enum test_container_type type, int
 /*!
  * \internal
  * \brief Insert the given test vector into the given container.
- * \since 12.0
+ * \since 12.0.0
  *
  * \note The given test vector must not have any duplicates.
  *
@@ -1161,7 +1161,7 @@ static int insert_test_vector(struct ao2_container *container, int *destroy_coun
 /*!
  * \internal
  * \brief Insert duplicates of number into the given container.
- * \since 12.0
+ * \since 12.0.0
  *
  * \note The given container must not already have the number in it.
  *
@@ -1231,7 +1231,7 @@ static int insert_test_duplicates(struct ao2_container *container, int *destroy_
 /*!
  * \internal
  * \brief Iterate over the container and compare the objects with the given vector.
- * \since 12.0
+ * \since 12.0.0
  *
  * \param res Passed in enum ast_test_result_state.
  * \param container Container to iterate.
@@ -1290,7 +1290,7 @@ static int test_ao2_iteration(int res, struct ao2_container *container,
 /*!
  * \internal
  * \brief Run an ao2_callback() and compare the returned vector with the given vector.
- * \since 12.0
+ * \since 12.0.0
  *
  * \param res Passed in enum ast_test_result_state.
  * \param container Container to traverse.
@@ -1348,7 +1348,7 @@ static int test_ao2_callback_traversal(int res, struct ao2_container *container,
 /*!
  * \internal
  * \brief Run an ao2_find() for duplicates and compare the returned vector with the given vector.
- * \since 12.0
+ * \since 12.0.0
  *
  * \param res Passed in enum ast_test_result_state.
  * \param container Container to traverse.
@@ -1411,7 +1411,7 @@ static int test_expected_duplicates(int res, struct ao2_container *container,
 /*!
  * \internal
  * \brief Test nonsorted container traversal.
- * \since 12.0
+ * \since 12.0.0
  *
  * \param res Passed in enum ast_test_result_state.
  * \param tst_num Test number.
@@ -1609,7 +1609,7 @@ test_cleanup:
 /*!
  * \internal
  * \brief Test sorted container traversal.
- * \since 12.0
+ * \since 12.0.0
  *
  * \param res Passed in enum ast_test_result_state.
  * \param tst_num Test number.
