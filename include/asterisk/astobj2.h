@@ -1240,7 +1240,7 @@ struct ao2_container *__ao2_container_clone_debug(struct ao2_container *orig, en
 
 /*!
  * \brief Perform an integrity check on the specified container.
- * \since 12.0
+ * \since 12.0.0
  *
  * \param self Container to check integrity.
  * \param flags OBJ_NOLOCK if a lock is already held on the container.
@@ -1252,7 +1252,7 @@ int ao2_container_check(struct ao2_container *self, enum search_flags flags);
 
 /*!
  * \brief Register a container for CLI stats and integrity check.
- * \since 12.0
+ * \since 12.0.0
  *
  * \param name Name to register the container under.
  * \param self Container to register.
@@ -1264,7 +1264,7 @@ int ao2_container_register(const char *name, struct ao2_container *self);
 
 /*!
  * \brief Unregister a container for CLI stats and integrity check.
- * \since 12.0
+ * \since 12.0.0
  *
  * \param name Name the container is registered under.
  *

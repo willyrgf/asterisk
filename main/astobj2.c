@@ -176,6 +176,7 @@ int __ao2_lock(void *user_data, enum ao2_lock_req lock_how, const char *file, co
 	int res = 0;
 
 	if (obj == NULL) {
+		ast_assert(0);
 		return -1;
 	}
 
@@ -234,6 +235,7 @@ int __ao2_unlock(void *user_data, const char *file, const char *func, int line, 
 	int current_value;
 
 	if (obj == NULL) {
+		ast_assert(0);
 		return -1;
 	}
 
@@ -282,6 +284,7 @@ int __ao2_trylock(void *user_data, enum ao2_lock_req lock_how, const char *file,
 	int res = 0;
 
 	if (obj == NULL) {
+		ast_assert(0);
 		return -1;
 	}
 
@@ -401,6 +404,7 @@ void *ao2_object_get_lockaddr(void *user_data)
 	struct astobj2_lock *obj_mutex;
 
 	if (obj == NULL) {
+		ast_assert(0);
 		return NULL;
 	}
 
@@ -424,6 +428,7 @@ static int internal_ao2_ref(void *user_data, int delta, const char *file, int li
 	int ret;
 
 	if (obj == NULL) {
+		ast_assert(0);
 		return -1;
 	}
 
@@ -508,8 +513,10 @@ int __ao2_ref_debug(void *user_data, int delta, const char *tag, const char *fil
 {
 	struct astobj2 *obj = INTERNAL_OBJ(user_data);
 
-	if (obj == NULL)
+	if (obj == NULL) {
+		ast_assert(0);
 		return -1;
+	}
 
 	if (delta != 0) {
 		FILE *refo = fopen(REF_FILE, "a");
@@ -647,10 +654,12 @@ void __ao2_global_obj_release(struct ao2_global_obj *holder, const char *tag, co
 	if (!holder) {
 		/* For sanity */
 		ast_log(LOG_ERROR, "Must be called with a global object!\n");
+		ast_assert(0);
 		return;
 	}
 	if (__ast_rwlock_wrlock(file, line, func, &holder->lock, name)) {
 		/* Could not get the write lock. */
+		ast_assert(0);
 		return;
 	}
 
@@ -670,10 +679,12 @@ void *__ao2_global_obj_replace(struct ao2_global_obj *holder, void *obj, const c
 	if (!holder) {
 		/* For sanity */
 		ast_log(LOG_ERROR, "Must be called with a global object!\n");
+		ast_assert(0);
 		return NULL;
 	}
 	if (__ast_rwlock_wrlock(file, line, func, &holder->lock, name)) {
 		/* Could not get the write lock. */
+		ast_assert(0);
 		return NULL;
 	}
 
@@ -707,11 +718,13 @@ void *__ao2_global_obj_ref(struct ao2_global_obj *holder, const char *tag, const
 	if (!holder) {
 		/* For sanity */
 		ast_log(LOG_ERROR, "Must be called with a global object!\n");
+		ast_assert(0);
 		return NULL;
 	}
 
 	if (__ast_rwlock_rdlock(file, line, func, &holder->lock, name)) {
 		/* Could not get the read lock. */
+		ast_assert(0);
 		return NULL;
 	}
 
@@ -997,6 +1010,7 @@ static int internal_ao2_link(struct ao2_container *self, void *obj_new, int flag
 	if (!INTERNAL_OBJ(obj_new) || !INTERNAL_OBJ(self)
 		|| !self->v_table || !self->v_table->new_node || !self->v_table->insert) {
 		/* Sanity checks. */
+		ast_assert(0);
 		return 0;
 	}
 
@@ -1069,6 +1083,7 @@ void *__ao2_unlink_debug(struct ao2_container *c, void *user_data, int flags,
 {
 	if (!INTERNAL_OBJ(user_data)) {
 		/* Sanity checks. */
+		ast_assert(0);
 		return NULL;
 	}
 
@@ -1082,6 +1097,7 @@ void *__ao2_unlink(struct ao2_container *c, void *user_data, int flags)
 {
 	if (!INTERNAL_OBJ(user_data)) {
 		/* Sanity checks. */
+		ast_assert(0);
 		return NULL;
 	}
 
@@ -1151,6 +1167,7 @@ static void *internal_ao2_traverse(struct ao2_container *self, enum search_flags
 	if (!INTERNAL_OBJ(self) || !self->v_table || !self->v_table->traverse_first
 		|| !self->v_table->traverse_next) {
 		/* Sanity checks. */
+		ast_assert(0);
 		return NULL;
 	}
 
@@ -1381,6 +1398,7 @@ void *__ao2_find_debug(struct ao2_container *c, const void *arg, enum search_fla
 
 	if (!c) {
 		/* Sanity checks. */
+		ast_assert(0);
 		return NULL;
 	}
 	return __ao2_callback_debug(c, flags, c->cmp_fn, arged, tag, file, line, func);
@@ -1392,6 +1410,7 @@ void *__ao2_find(struct ao2_container *c, const void *arg, enum search_flags fla
 
 	if (!c) {
 		/* Sanity checks. */
+		ast_assert(0);
 		return NULL;
 	}
 	return __ao2_callback(c, flags, c->cmp_fn, arged);
@@ -1477,6 +1496,7 @@ static void *internal_ao2_iterator_next(struct ao2_iterator *iter, const char *t
 
 	if (!INTERNAL_OBJ(iter->c) || !iter->c->v_table || !iter->c->v_table->iterator_next) {
 		/* Sanity checks. */
+		ast_assert(0);
 		return NULL;
 	}
 
@@ -1652,6 +1672,7 @@ struct ao2_container *__ao2_container_clone(struct ao2_container *orig, enum sea
 	/* Create the clone container with the same properties as the original. */
 	if (!INTERNAL_OBJ(orig) || !orig->v_table || !orig->v_table->alloc_empty_clone) {
 		/* Sanity checks. */
+		ast_assert(0);
 		return NULL;
 	}
 	clone = orig->v_table->alloc_empty_clone(orig);
@@ -1682,6 +1703,7 @@ struct ao2_container *__ao2_container_clone_debug(struct ao2_container *orig, en
 	/* Create the clone container with the same properties as the original. */
 	if (!INTERNAL_OBJ(orig) || !orig->v_table || !orig->v_table->alloc_empty_clone_debug) {
 		/* Sanity checks. */
+		ast_assert(0);
 		return NULL;
 	}
 	clone = orig->v_table->alloc_empty_clone_debug(orig, tag, file, line, func, ref_debug);
@@ -1712,7 +1734,7 @@ struct ao2_container *__ao2_container_clone_debug(struct ao2_container *orig, en
 /*!
  * \internal
  * \brief Display statistics of the specified container.
- * \since 12.0
+ * \since 12.0.0
  *
  * \param self Container to display statistics.
  * \param fd File descriptor to send output.
@@ -1724,6 +1746,7 @@ static void ao2_container_stats(struct ao2_container *self, int fd, void (*prnt)
 {
 	if (!INTERNAL_OBJ(self) || !self->v_table) {
 		prnt(fd, "Invalid container\n");
+		ast_assert(0);
 		return;
 	}
 
@@ -1742,6 +1765,7 @@ int ao2_container_check(struct ao2_container *self, enum search_flags flags)
 
 	if (!INTERNAL_OBJ(self) || !self->v_table) {
 		/* Sanity checks. */
+		ast_assert(0);
 		return -1;
 	}
 #if defined(AST_DEVMODE)
@@ -1750,11 +1774,11 @@ int ao2_container_check(struct ao2_container *self, enum search_flags flags)
 		return 0;
 	}
 
-	if (flags & OBJ_NOLOCK) {
+	if (!(flags & OBJ_NOLOCK)) {
 		ao2_rdlock(self);
 	}
 	res = self->v_table->integrity(self);
-	if (flags & OBJ_NOLOCK) {
+	if (!(flags & OBJ_NOLOCK)) {
 		ao2_unlock(self);
 	}
 #endif	/* defined(AST_DEVMODE) */
@@ -1811,7 +1835,7 @@ struct ao2_container_hash {
 /*!
  * \internal
  * \brief Create an empty copy of this container.
- * \since 12.0
+ * \since 12.0.0
  *
  * \param self Container to operate upon.
  *
@@ -1837,7 +1861,7 @@ static struct ao2_container *hash_ao2_alloc_empty_clone(struct ao2_container_has
 /*!
  * \internal
  * \brief Create an empty copy of this container. (Debug version)
- * \since 12.0
+ * \since 12.0.0
  *
  * \param self Container to operate upon.
  * \param tag used for debugging.
@@ -1869,7 +1893,7 @@ static struct ao2_container *hash_ao2_alloc_empty_clone_debug(struct ao2_contain
 /*!
  * \internal
  * \brief Destroy a hash container list node.
- * \since 12.0
+ * \since 12.0.0
  *
  * \param v_doomed Container node to destroy.
  *
@@ -1921,7 +1945,7 @@ static void hash_ao2_node_destructor(void *v_doomed)
 /*!
  * \internal
  * \brief Create a new container node.
- * \since 12.0
+ * \since 12.0.0
  *
  * \param self Container to operate upon.
  * \param obj_new Object to put into the node.
@@ -1961,7 +1985,7 @@ static struct hash_bucket_node *hash_ao2_new_node(struct ao2_container_hash *sel
 /*!
  * \internal
  * \brief Insert a node into this container.
- * \since 12.0
+ * \since 12.0.0
  *
  * \param self Container to operate upon.
  * \param node Container node to insert into the container.
@@ -2082,7 +2106,7 @@ struct hash_traversal_state_check {
 /*!
  * \internal
  * \brief Find the first hash container node in a traversal.
- * \since 12.0
+ * \since 12.0.0
  *
  * \param self Container to operate upon.
  * \param flags search_flags to control traversing the container
@@ -2297,7 +2321,7 @@ static struct hash_bucket_node *hash_ao2_find_first(struct ao2_container_hash *s
 /*!
  * \internal
  * \brief Find the next hash container node in a traversal.
- * \since 12.0
+ * \since 12.0.0
  *
  * \param self Container to operate upon.
  * \param state Traversal state to restart hash container traversal.
@@ -2320,8 +2344,15 @@ static struct hash_bucket_node *hash_ao2_find_next(struct ao2_container_hash *se
 	bucket_cur = prev->my_bucket;
 	node = prev;
 
+	/*
+	 * This function is structured the same as hash_ao2_find_first()
+	 * intentionally.  We are resuming the search loops from
+	 * hash_ao2_find_first() in order to find the next node.  The
+	 * search loops must be resumed where hash_ao2_find_first()
+	 * returned with the first node.
+	 */
 	if (state->descending) {
-		goto hash_descending_start;
+		goto hash_descending_resume;
 
 		/* For each bucket */
 		for (; state->bucket_last <= bucket_cur; --bucket_cur) {
@@ -2367,7 +2398,7 @@ static struct hash_bucket_node *hash_ao2_find_next(struct ao2_container_hash *se
 				}
 				prev = node;
 
-hash_descending_start:;
+hash_descending_resume:;
 			}
 
 			/* Was this the first container bucket? */
@@ -2388,7 +2419,7 @@ hash_descending_start:;
 			}
 		}
 	} else {
-		goto hash_ascending_start;
+		goto hash_ascending_resume;
 
 		/* For each bucket */
 		for (; bucket_cur < state->bucket_last; ++bucket_cur) {
@@ -2434,7 +2465,7 @@ hash_descending_start:;
 				}
 				prev = node;
 
-hash_ascending_start:;
+hash_ascending_resume:;
 			}
 
 			/* Was this the last container bucket? */
@@ -2463,7 +2494,7 @@ hash_ascending_start:;
 /*!
  * \internal
  * \brief Cleanup the hash container traversal state.
- * \since 12.0
+ * \since 12.0.0
  *
  * \param state Traversal state to cleanup.
  *
@@ -2479,7 +2510,7 @@ static void hash_ao2_find_cleanup(struct hash_traversal_state *state)
 /*!
  * \internal
  * \brief Find the next non-empty iteration node in the container.
- * \since 12.0
+ * \since 12.0.0
  *
  * \param self Container to operate upon.
  * \param node Previous node returned by the iterator.
@@ -2567,7 +2598,7 @@ static struct hash_bucket_node *hash_ao2_iterator_next(struct ao2_container_hash
 /*!
  * \internal
  * \brief Increment the hash container linked object statistic.
- * \since 12.0
+ * \since 12.0.0
  *
  * \param hash Container to operate upon.
  * \param hash_node Container node linking object to.
@@ -2591,7 +2622,7 @@ static void hash_ao2_link_node_stat(struct ao2_container *hash, struct ao2_conta
 /*!
  * \internal
  * \brief Decrement the hash container linked object statistic.
- * \since 12.0
+ * \since 12.0.0
  *
  * \param hash Container to operate upon.
  * \param hash_node Container node unlinking object from.
@@ -2612,7 +2643,7 @@ static void hash_ao2_unlink_node_stat(struct ao2_container *hash, struct ao2_con
  * \internal
  *
  * \brief Destroy this container.
- * \since 12.0
+ * \since 12.0.0
  *
  * \param self Container to operate upon.
  *
@@ -2638,7 +2669,7 @@ static void hash_ao2_destroy(struct ao2_container_hash *self)
 /*!
  * \internal
  * \brief Display statistics of the specified container.
- * \since 12.0
+ * \since 12.0.0
  *
  * \param self Container to display statistics.
  * \param fd File descriptor to send output.
@@ -2679,7 +2710,7 @@ static void hash_ao2_stats(struct ao2_container_hash *self, int fd, void (*prnt)
 /*!
  * \internal
  * \brief Perform an integrity check on the specified container.
- * \since 12.0
+ * \since 12.0.0
  *
  * \param self Container to check integrity.
  *
