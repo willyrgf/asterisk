@@ -522,6 +522,7 @@ enum ao2_lock_req {
  * Lock an object.
  *
  * \param a A pointer to the object we want to lock.
+ * \param lock_how, file, func, line, var
  * \return 0 on success, other values on error.
  */
 int __ao2_lock(void *a, enum ao2_lock_req lock_how, const char *file, const char *func, int line, const char *var);
@@ -533,6 +534,7 @@ int __ao2_lock(void *a, enum ao2_lock_req lock_how, const char *file, const char
  * Unlock an object.
  *
  * \param a A pointer to the object we want unlock.
+ * \param file, func, line, var
  * \return 0 on success, other values on error.
  */
 int __ao2_unlock(void *a, const char *file, const char *func, int line, const char *var);
@@ -542,6 +544,7 @@ int __ao2_unlock(void *a, const char *file, const char *func, int line, const ch
  * Try locking-- (don't block if fail)
  *
  * \param a A pointer to the object we want to lock.
+ * \param lock_how, file, func, line, var
  * \return 0 on success, other values on error.
  */
 int __ao2_trylock(void *a, enum ao2_lock_req lock_how, const char *file, const char *func, int line, const char *var);
@@ -1287,7 +1290,6 @@ void ao2_container_unregister(const char *name);
  *
  * \param container The container to operate on.
  * \param obj The object to be added.
- * \param flags search_flags to control linking the object.  (OBJ_NOLOCK)
  * \param tag used for debugging.
  *
  * \retval 0 on errors.
@@ -1305,6 +1307,24 @@ void ao2_container_unregister(const char *name);
 #define ao2_t_link(container, obj, tag)					__ao2_link_debug((container), (obj), 0, (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__)
 #define ao2_link(container, obj)						__ao2_link_debug((container), (obj), 0, "",  __FILE__, __LINE__, __PRETTY_FUNCTION__)
 
+/*!
+ * \brief Add an object to a container.
+ *
+ * \param container The container to operate on.
+ * \param obj The object to be added.
+ * \param flags search_flags to control linking the object.  (OBJ_NOLOCK)
+ * \param tag used for debugging.
+ *
+ * \retval NULL on errors.
+ * \retval !NULL on success.
+ *
+ * This function inserts an object in a container according its key.
+ *
+ * \note Remember to set the key before calling this function.
+ *
+ * \note This function automatically increases the reference count to account
+ *       for the reference that the container now holds to the object.
+ */
 #define ao2_t_link_flags(container, obj, flags, tag)	__ao2_link_debug((container), (obj), (flags), (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__)
 #define ao2_link_flags(container, obj, flags)			__ao2_link_debug((container), (obj), (flags), "",  __FILE__, __LINE__, __PRETTY_FUNCTION__)
 
@@ -1326,7 +1346,6 @@ int __ao2_link(struct ao2_container *c, void *obj_new, int flags);
  *
  * \param container The container to operate on.
  * \param obj The object to unlink.
- * \param flags search_flags to control unlinking the object.  (OBJ_NOLOCK)
  * \param tag used for debugging.
  *
  * \retval NULL, always
@@ -1343,6 +1362,25 @@ int __ao2_link(struct ao2_container *c, void *obj_new, int flags);
 
 #define ao2_t_unlink(container, obj, tag)				__ao2_unlink_debug((container), (obj), 0, (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__)
 #define ao2_unlink(container, obj)						__ao2_unlink_debug((container), (obj), 0, "",  __FILE__, __LINE__, __PRETTY_FUNCTION__)
+
+/*!
+ * \brief Remove an object from a container
+ *
+ * \param container The container to operate on.
+ * \param obj The object to unlink.
+ * \param flags search_flags to control unlinking the object.  (OBJ_NOLOCK)
+ * \param tag used for debugging.
+ *
+ * \retval NULL, always
+ *
+ * \note The object requested to be unlinked must be valid.  However, if it turns
+ *       out that it is not in the container, this function is still safe to
+ *       be called.
+ *
+ * \note If the object gets unlinked from the container, the container's
+ *       reference to the object will be automatically released. (The
+ *       refcount will be decremented).
+ */
 
 #define ao2_t_unlink_flags(container, obj, flags, tag)	__ao2_unlink_debug((container), (obj), (flags), (tag),  __FILE__, __LINE__, __PRETTY_FUNCTION__)
 #define ao2_unlink_flags(container, obj, flags)			__ao2_unlink_debug((container), (obj), (flags), "",  __FILE__, __LINE__, __PRETTY_FUNCTION__)
