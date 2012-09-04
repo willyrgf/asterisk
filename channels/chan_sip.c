@@ -1448,7 +1448,7 @@ static int handle_common_options(struct ast_flags *flags, struct ast_flags *mask
 static void set_socket_transport(struct sip_socket *socket, int transport);
 
 /* Realtime device support */
-static void realtime_update_peer(const char *peername, struct ast_sockaddr *addr, const char *username, const char *fullcontact, const char *useragent, int expirey, unsigned short deprecated_username, int lastms);
+static void realtime_update_peer(const char *peername, struct ast_sockaddr *addr, const char *username, const char *fullcontact, const char *useragent, int expirey, unsigned short deprecated_username, int lastms, const char *path);
 static void update_peer(struct sip_peer *p, int expire);
 static struct ast_variable *get_insecure_variable_from_config(struct ast_config *config);
 static const char *get_name_from_variable(const struct ast_variable *var);
@@ -4553,7 +4553,7 @@ static int sip_sendtext(struct ast_channel *ast, const char *text)
 	that name and store that in the "regserver" field in the sippeers
 	table to facilitate multi-server setups.
 */
-static void realtime_update_peer(const char *peername, struct ast_sockaddr *addr, const char *defaultuser, const char *fullcontact, const char *useragent, int expirey, unsigned short deprecated_username, int lastms)
+static void realtime_update_peer(const char *peername, struct ast_sockaddr *addr, const char *defaultuser, const char *fullcontact, const char *useragent, int expirey, unsigned short deprecated_username, int lastms, const char *path)
 {
 	char port[10];
 	char ipaddr[INET6_ADDRSTRLEN];
@@ -4577,10 +4577,11 @@ static void realtime_update_peer(const char *peername, struct ast_sockaddr *addr
 	ast_copy_string(ipaddr, ast_sockaddr_isnull(addr) ? "" : ast_sockaddr_stringify_addr(addr), sizeof(ipaddr));
 	ast_copy_string(port, ast_sockaddr_port(addr) ? ast_sockaddr_stringify_port(addr) : "", sizeof(port));
 
-	if (ast_strlen_zero(sysname))	/* No system name, disable this */
+	if (ast_strlen_zero(sysname)) {	/* No system name, disable this */
 		sysname = NULL;
-	else if (sip_cfg.rtsave_sysname)
+	} else if (sip_cfg.rtsave_sysname) {
 		syslabel = "regserver";
+	}
 
 	/* XXX IMPORTANT: Anytime you add a new parameter to be updated, you
          *  must also add it to contrib/scripts/asterisk.ldap-schema,
@@ -4588,18 +4589,38 @@ static void realtime_update_peer(const char *peername, struct ast_sockaddr *addr
          *  and to configs/res_ldap.conf.sample as described in
          *  bugs 15156 and 15895 
          */
-	if (fc) {
-		ast_update_realtime(tablename, "name", peername, "ipaddr", ipaddr,
-			"port", port, "regseconds", regseconds,
-			deprecated_username ? "username" : "defaultuser", defaultuser,
-			"useragent", useragent, "lastms", str_lastms,
-			fc, fullcontact, syslabel, sysname, SENTINEL); /* note fc and syslabel _can_ be NULL */
+
+	/* This is ugly, we need something better ;-) */
+	if (sip_cfg.rtsave_path) {
+		if (fc) {
+			ast_update_realtime(tablename, "name", peername, "ipaddr", ipaddr,
+				"port", port, "regseconds", regseconds,
+				deprecated_username ? "username" : "defaultuser", defaultuser,
+				"useragent", useragent, "lastms", str_lastms,
+				"path", path,			/* Path data can be NULL */
+				fc, fullcontact, syslabel, sysname, SENTINEL); /* note fc and syslabel _can_ be NULL */
+		} else {
+			ast_update_realtime(tablename, "name", peername, "ipaddr", ipaddr,
+				"port", port, "regseconds", regseconds,
+				"useragent", useragent, "lastms", str_lastms,
+				deprecated_username ? "username" : "defaultuser", defaultuser,
+				"path", path,			/* Path data can be NULL */
+				syslabel, sysname, SENTINEL); /* note syslabel _can_ be NULL */
+		}
 	} else {
-		ast_update_realtime(tablename, "name", peername, "ipaddr", ipaddr,
-			"port", port, "regseconds", regseconds,
-			"useragent", useragent, "lastms", str_lastms,
-			deprecated_username ? "username" : "defaultuser", defaultuser,
-			syslabel, sysname, SENTINEL); /* note syslabel _can_ be NULL */
+		if (fc) {
+			ast_update_realtime(tablename, "name", peername, "ipaddr", ipaddr,
+				"port", port, "regseconds", regseconds,
+				deprecated_username ? "username" : "defaultuser", defaultuser,
+				"useragent", useragent, "lastms", str_lastms,
+				fc, fullcontact, syslabel, sysname, SENTINEL); /* note fc and syslabel _can_ be NULL */
+		} else {
+			ast_update_realtime(tablename, "name", peername, "ipaddr", ipaddr,
+				"port", port, "regseconds", regseconds,
+				"useragent", useragent, "lastms", str_lastms,
+				deprecated_username ? "username" : "defaultuser", defaultuser,
+				syslabel, sysname, SENTINEL); /* note syslabel _can_ be NULL */
+		}
 	}
 }
 
@@ -4728,11 +4749,12 @@ static void sip_destroy_peer(struct sip_peer *peer)
 /*! \brief Update peer data in database (if used) */
 static void update_peer(struct sip_peer *p, int expire)
 {
-/* klaus: TODO: store/read Path to/from realtime */
 	int rtcachefriends = ast_test_flag(&p->flags[1], SIP_PAGE2_RTCACHEFRIENDS);
 	if (sip_cfg.peer_rtupdate &&
 	    (p->is_realtime || rtcachefriends)) {
-		realtime_update_peer(p->name, &p->addr, p->username, p->fullcontact, p->useragent, expire, p->deprecated_username, p->lastms);
+		char path[SIPBUFSIZE*2];
+		make_route_list(p->path, path, sizeof(path));
+		realtime_update_peer(p->name, &p->addr, p->username, p->fullcontact, p->useragent, expire, p->deprecated_username, p->lastms, path);
 	}
 }
 
@@ -18542,6 +18564,7 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
 		ast_cli(a->fd, "  Update:                 %s\n", AST_CLI_YESNO(sip_cfg.peer_rtupdate));
 		ast_cli(a->fd, "  Ignore Reg. Expire:     %s\n", AST_CLI_YESNO(sip_cfg.ignore_regexpire));
 		ast_cli(a->fd, "  Save sys. name:         %s\n", AST_CLI_YESNO(sip_cfg.rtsave_sysname));
+		ast_cli(a->fd, "  Save path header:       %s\n", AST_CLI_YESNO(sip_cfg.rtsave_path));
 		ast_cli(a->fd, "  Auto Clear:             %d (%s)\n", sip_cfg.rtautoclear, ast_test_flag(&global_flags[1], SIP_PAGE2_RTAUTOCLEAR) ? "Enabled" : "Disabled");
 	}
 	ast_cli(a->fd, "\n----\n");
@@ -28587,6 +28610,8 @@ static int reload_config(enum channelreloadreason reason)
 			ast_set2_flag(&global_flags[1], ast_true(v->value), SIP_PAGE2_RTCACHEFRIENDS);
 		} else if (!strcasecmp(v->name, "rtsavesysname")) {
 			sip_cfg.rtsave_sysname = ast_true(v->value);
+		} else if (!strcasecmp(v->name, "rtsavepath")) {
+			sip_cfg.rtsave_path = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "rtupdate")) {
 			sip_cfg.peer_rtupdate = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "ignoreregexpire")) {

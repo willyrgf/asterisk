@@ -679,6 +679,7 @@ struct __show_chan_arg {
 struct sip_settings {
 	int peer_rtupdate;          /*!< G: Update database with registration data for peer? */
 	int rtsave_sysname;         /*!< G: Save system name at registration? */
+	int rtsave_path;            /*!< G: Save path header on registration */
 	int ignore_regexpire;       /*!< G: Ignore expiration of peer  */
 	int rtautoclear;            /*!< Realtime ?? */
 	int directrtpsetup;         /*!< Enable support for Direct RTP setup (no re-invites) */
