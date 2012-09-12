@@ -14,8 +14,11 @@
  * at the top of the source tree.
  */
 
-/*
- * Function implementing astobj2 objects.
+/*! \file
+ *
+ * \brief Functions implementing astobj2 objects.
+ *
+ * \author Richard Mudgett <rmudgett@digium.com>
  */
 
 /*** MODULEINFO
