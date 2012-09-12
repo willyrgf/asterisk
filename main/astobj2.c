@@ -2174,7 +2174,7 @@ static struct hash_bucket_node *hash_ao2_find_first(struct ao2_container_hash *s
 	 * If lookup by pointer or search key, run the hash and optional
 	 * sort functions.  Otherwise, traverse the whole container.
 	 */
-	if ((flags & (OBJ_POINTER | OBJ_KEY))) {
+	if (flags & (OBJ_POINTER | OBJ_KEY)) {
 		/* we know hash can handle this case */
 		bucket_cur = abs(self->hash_fn(arg, flags & (OBJ_POINTER | OBJ_KEY)));
 		bucket_cur %= self->n_buckets;
@@ -2244,7 +2244,7 @@ static struct hash_bucket_node *hash_ao2_find_first(struct ao2_container_hash *s
 			/* Was this the starting bucket? */
 			if (bucket_cur == state->bucket_start
 				&& (flags & OBJ_CONTINUE)
-				&& flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY)) {
+				&& (flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY))) {
 				/* In case the bucket was empty or none of the nodes matched. */
 				state->sort_fn = NULL;
 			}
@@ -2252,7 +2252,7 @@ static struct hash_bucket_node *hash_ao2_find_first(struct ao2_container_hash *s
 			/* Was this the first container bucket? */
 			if (bucket_cur == 0
 				&& (flags & OBJ_CONTINUE)
-				&& flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY)) {
+				&& (flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY))) {
 				/* Move to the end to ensure we check every bucket */
 				bucket_cur = self->n_buckets;
 				state->bucket_last = state->bucket_start + 1;
@@ -2325,7 +2325,7 @@ static struct hash_bucket_node *hash_ao2_find_first(struct ao2_container_hash *s
 			/* Was this the starting bucket? */
 			if (bucket_cur == state->bucket_start
 				&& (flags & OBJ_CONTINUE)
-				&& flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY)) {
+				&& (flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY))) {
 				/* In case the bucket was empty or none of the nodes matched. */
 				state->sort_fn = NULL;
 			}
@@ -2333,7 +2333,7 @@ static struct hash_bucket_node *hash_ao2_find_first(struct ao2_container_hash *s
 			/* Was this the last container bucket? */
 			if (bucket_cur == self->n_buckets - 1
 				&& (flags & OBJ_CONTINUE)
-				&& flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY)) {
+				&& (flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY))) {
 				/* Move to the beginning to ensure we check every bucket */
 				bucket_cur = -1;
 				state->bucket_last = state->bucket_start;
@@ -2438,7 +2438,7 @@ hash_descending_resume:;
 			/* Was this the first container bucket? */
 			if (bucket_cur == 0
 				&& (flags & OBJ_CONTINUE)
-				&& flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY)) {
+				&& (flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY))) {
 				/* Move to the end to ensure we check every bucket */
 				bucket_cur = self->n_buckets;
 				state->bucket_last = state->bucket_start + 1;
@@ -2505,7 +2505,7 @@ hash_ascending_resume:;
 			/* Was this the last container bucket? */
 			if (bucket_cur == self->n_buckets - 1
 				&& (flags & OBJ_CONTINUE)
-				&& flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY)) {
+				&& (flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY))) {
 				/* Move to the beginning to ensure we check every bucket */
 				bucket_cur = -1;
 				state->bucket_last = state->bucket_start;
