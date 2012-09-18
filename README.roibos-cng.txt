@@ -44,6 +44,10 @@ To add comfort noise support
   - Listen for talk detection
   - Stop sending CNG, send media
 
+Done:
+  - Added res_noise.c from cmantunes from https://issues.asterisk.org/jira/browse/ASTERISK-5263
+    This includes a noise generator
+
 References
 ----------
 
