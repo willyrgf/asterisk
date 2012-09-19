@@ -301,6 +301,8 @@ extern struct ast_frame ast_null_frame;
 #define AST_FORMAT_SPEEX16    (1ULL << 33)
 /*! Raw mu-law data (G.711) */
 #define AST_FORMAT_TESTLAW    (1ULL << 47)
+/*! Comfort noise. Not a frame type per se, but needs to be added as a codec */
+#define AST_FORMAT_CN    (1ULL << 48)
 /*! Reserved bit - do not use */
 #define AST_FORMAT_RESERVED   (1ULL << 63)
 

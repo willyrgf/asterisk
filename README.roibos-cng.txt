@@ -11,6 +11,17 @@ Started: 2012-09-18
 Comfort Noise support in Asterisk 1.8
 =====================================
 
+Comfort Noise in SIP/RTP is 
+- negotiated in the SDP as a codec
+- starts activated by a silence in the media stream
+- the sender stops sending media, sends a single CNG RTP packet that indicates
+  a noise level
+- the receiver activated a Comfort Noise Generator in the call until media 
+  reappears from the sender
+
+A requirement for using this is that it is included as a codec with payload
+13 (or dynamic) in the SDP
+
 Current state:
 
 * RTP Channel

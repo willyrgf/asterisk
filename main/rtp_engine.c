@@ -119,7 +119,7 @@ static const struct ast_rtp_mime_type {
 	{{1, AST_FORMAT_G726_AAL2}, "audio", "AAL2-G726-32", 8000},
 	{{0, AST_RTP_DTMF}, "audio", "telephone-event", 8000},
 	{{0, AST_RTP_CISCO_DTMF}, "audio", "cisco-telephone-event", 8000},
-	{{0, AST_RTP_CN}, "audio", "CN", 8000},
+	{{1, AST_FORMAT_CN}, "audio", "CN", 8000},
 	{{1, AST_FORMAT_JPEG}, "video", "JPEG", 90000},
 	{{1, AST_FORMAT_PNG}, "video", "PNG", 90000},
 	{{1, AST_FORMAT_H261}, "video", "H261", 90000},
@@ -158,11 +158,11 @@ static const struct ast_rtp_payload_type static_RTP_PT[AST_RTP_MAX_PT] = {
 	[9] = {1, AST_FORMAT_G722},
 	[10] = {1, AST_FORMAT_SLINEAR}, /* 2 channels */
 	[11] = {1, AST_FORMAT_SLINEAR}, /* 1 channel */
-	[13] = {0, AST_RTP_CN},
+	[13] = {1, AST_FORMAT_CN},
 	[16] = {1, AST_FORMAT_ADPCM}, /* 11.025 kHz */
 	[17] = {1, AST_FORMAT_ADPCM}, /* 22.050 kHz */
 	[18] = {1, AST_FORMAT_G729A},
-	[19] = {0, AST_RTP_CN},         /* Also used for CN */
+	[19] = {1, AST_FORMAT_CN},         /* Also used for CN */
 	[26] = {1, AST_FORMAT_JPEG},
 	[31] = {1, AST_FORMAT_H261},
 	[34] = {1, AST_FORMAT_H263},

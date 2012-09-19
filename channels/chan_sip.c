@@ -11093,6 +11093,7 @@ static void add_codec_to_sdp(const struct sip_pvt *p, format_t codec,
 		fmt = ast_codec_pref_getsize(pref, codec);
 	} else /* I don't see how you couldn't have p->rtp, but good to check for and error out if not there like earlier code */
 		return;
+
 	ast_str_append(m_buf, 0, " %d", rtp_code);
 	ast_str_append(a_buf, 0, "a=rtpmap:%d %s/%d\r\n", rtp_code,
 		       ast_rtp_lookup_mime_subtype2(1, codec,

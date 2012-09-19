@@ -2350,7 +2350,7 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 			process_dtmf_rfc2833(instance, rtp->rawdata + AST_FRIENDLY_OFFSET + hdrlen, res - hdrlen, seqno, timestamp, &addr, payloadtype, mark, &frames);
 		} else if (payload.code == AST_RTP_CISCO_DTMF) {
 			f = process_dtmf_cisco(instance, rtp->rawdata + AST_FRIENDLY_OFFSET + hdrlen, res - hdrlen, seqno, timestamp, &addr, payloadtype, mark);
-		} else if (payload.code == AST_RTP_CN) {
+		} else if (payload.code == AST_FORMAT_CN) {
 			f = process_cn_rfc3389(instance, rtp->rawdata + AST_FRIENDLY_OFFSET + hdrlen, res - hdrlen, seqno, timestamp, &addr, payloadtype, mark);
 		} else {
 			ast_log(LOG_NOTICE, "Unknown RTP codec %d received from '%s'\n",
@@ -2801,7 +2801,7 @@ static int ast_rtp_sendcng(struct ast_rtp_instance *instance, int level)
 		return -1;
 	}
 
-	payload = ast_rtp_codecs_payload_lookup(ast_rtp_instance_get_codecs(instance), AST_RTP_CN);
+	payload = ast_rtp_codecs_payload_lookup(ast_rtp_instance_get_codecs(instance), AST_FORMAT_CN);
 
 	level = 127 - (level & 0x7f);
 	
@@ -2821,7 +2821,7 @@ static int ast_rtp_sendcng(struct ast_rtp_instance *instance, int level)
 	} else if (rtp_debug_test_addr(&remote_address)) {
 		ast_verbose("Sent Comfort Noise RTP packet to %s (type %-2.2d, seq %-6.6u, ts %-6.6u, len %-6.6u)\n",
 				ast_sockaddr_stringify(&remote_address),
-				AST_RTP_CN, rtp->seqno, rtp->lastdigitts, res - hdrlen);
+				AST_FORMAT_CN, rtp->seqno, rtp->lastdigitts, res - hdrlen);
 	}
 
 	return res;
