@@ -2357,6 +2357,8 @@ static void sip_tcptls_client_args_destructor(void *obj)
 		ast_free(args->tls_cfg->cipher);
 		ast_free(args->tls_cfg->cafile);
 		ast_free(args->tls_cfg->capath);
+
+		ast_ssl_teardown(args->tls_cfg);
 	}
 	ast_free(args->tls_cfg);
 	ast_free((char *) args->name);
@@ -3922,7 +3924,7 @@ static int __sip_autodestruct(const void *data)
 	 */
 	owner = sip_pvt_lock_full(p);
 	if (owner) {
-		ast_log(LOG_WARNING, "Autodestruct on dialog '%s' with owner in place (Method: %s). Rescheduling destruction for 10000 ms\n", p->callid, sip_methods[p->method].text);
+		ast_log(LOG_WARNING, "Autodestruct on dialog '%s' with owner %s in place (Method: %s). Rescheduling destruction for 10000 ms\n", p->callid, owner->name, sip_methods[p->method].text);
 		ast_queue_hangup_with_cause(owner, AST_CAUSE_PROTOCOL_ERROR);
 		ast_channel_unlock(owner);
 		ast_channel_unref(owner);
@@ -9141,6 +9143,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 				}
 
 				if (initialize_udptl(p)) {
+					ast_log(LOG_WARNING, "Rejecting offer with image stream due to UDPTL initialization failure\n");
 					return -1;
 				}
 
@@ -29253,7 +29256,8 @@ static struct ast_udptl *sip_get_udptl_peer(struct ast_channel *chan)
 
 	if (!(opp_chan = ast_bridged_channel(chan))) {
 		return NULL;
-	} else if ((opp_chan->tech != &sip_tech) || (!(opp = opp_chan->tech_pvt))) {
+	} else if (((opp_chan->tech != &sip_tech) && (opp_chan->tech != &sip_tech_info)) ||
+		   (!(opp = opp_chan->tech_pvt))) {
 		return NULL;
 	}
 

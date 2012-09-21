@@ -142,7 +142,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					</option>
 					<option name="p" hasparams="optional">
 						<para>Allow user to exit the conference by pressing <literal>#</literal> (default)
-						or any of the defined keys.  The key used is set to channel variable
+						or any of the defined keys. Dial plan execution will continue at the next
+						priority following MeetMe. The key used is set to channel variable
 						<variable>MEETME_EXIT_KEY</variable>.</para>
 						<argument name="keys" required="true" />
 						<note>
@@ -4241,6 +4242,7 @@ static int conf_exec(struct ast_channel *chan, const char *data)
 									}
 								}
 								AST_LIST_UNLOCK(&confs);
+								cnf = NULL;
 								if (!found) {
 									/* At this point, we have a confno_tmp (static conference) that is empty */
 									if ((empty_no_pin && ast_strlen_zero(stringp)) || (!empty_no_pin)) {
