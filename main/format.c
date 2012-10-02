@@ -959,6 +959,7 @@ static int format_list_add_static(
 	entry->custom_entry = 0;
 
 	ao2_link(format_list, entry);
+	ao2_ref(entry, -1);
 	return 0;
 }
 
@@ -1027,6 +1028,7 @@ static int build_format_list_array(void)
 	ast_rwlock_unlock(&format_list_array_lock);
 	return 0;
 }
+
 static int format_list_init(void)
 {
 	struct ast_format tmpfmt;
@@ -1076,6 +1078,20 @@ static int format_list_init(void)
 	return 0;
 }
 
+/*! \internal \brief Clean up resources on Asterisk shutdown */
+static void format_list_shutdown(void)
+{
+	ast_rwlock_destroy(&format_list_array_lock);
+	if (format_list) {
+		ao2_t_ref(format_list, -1, "Unref format_list container in shutdown");
+		format_list = NULL;
+	}
+	if (format_list_array) {
+		ao2_t_ref(format_list_array, -1, "Unref format_list_array in shutdown");
+		format_list_array = NULL;
+	}
+}
+
 int ast_format_list_init(void)
 {
 	if (ast_rwlock_init(&format_list_array_lock)) {
@@ -1088,15 +1104,21 @@ int ast_format_list_init(void)
 		goto init_list_cleanup;
 	}
 
+	ast_register_atexit(format_list_shutdown);
 	return 0;
 init_list_cleanup:
 
-	ast_rwlock_destroy(&format_list_array_lock);
-	ao2_ref(format_list, -1);
-	if (format_list_array) {
-		ao2_ref(format_list_array, -1);
-	}
+	format_list_shutdown();
 	return -1;
+}
+
+/*! \internal \brief Clean up resources on Asterisk shutdown */
+static void format_attr_shutdown(void)
+{
+	if (interfaces) {
+		ao2_ref(interfaces, -1);
+		interfaces = NULL;
+	}
 }
 
 int ast_format_attr_init(void)
@@ -1108,6 +1130,7 @@ int ast_format_attr_init(void)
 	if (!interfaces) {
 		return -1;
 	}
+	ast_register_atexit(format_attr_shutdown);
 	return 0;
 }
 
@@ -1373,7 +1396,7 @@ int ast_format_attr_reg_interface(const struct ast_format_attr_interface *interf
 			ast_rtp_engine_load_format(&f_list[x].format);
 		}
 	}
-
+	f_list = ast_format_list_destroy(f_list);
 	return 0;
 }
 
@@ -1407,6 +1430,6 @@ int ast_format_attr_unreg_interface(const struct ast_format_attr_interface *inte
 
 	/* This will remove all custom formats previously created for this interface */
 	load_format_config();
-
+	f_list = ast_format_list_destroy(f_list);
 	return 0;
 }
