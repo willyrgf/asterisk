@@ -2350,6 +2350,42 @@ struct ast_silence_generator *ast_channel_start_silence_generator(struct ast_cha
 void ast_channel_stop_silence_generator(struct ast_channel *chan, struct ast_silence_generator *state);
 
 /*!
+ * \brief An opaque 'object' structure use by noise generators on channels.
+ */
+struct ast_noise_generator;
+
+/*!
+ * \brief Starts a noise generator on the given channel.
+ * \param chan The channel to generate silence on
+ * \param level The noise level in negative (dBOV)
+ * \return An ast_noise_generator pointer, or NULL if an error occurs
+ *
+ * \details
+ * This function will cause SLINEAR noise to be generated on the supplied
+ * channel until it is disabled; if the channel cannot be put into SLINEAR
+ * mode then the function will fail.
+ *
+ * \note
+ * The pointer returned by this function must be preserved and passed to
+ * ast_channel_stop_noise_generator when you wish to stop the noise
+ * generation.
+ */
+struct ast_noise_generator *ast_channel_start_noise_generator(struct ast_channel *chan, const float level);
+
+/*!
+ * \brief Stops a previously-started noise generator on the given channel.
+ * \param chan The channel to operate on
+ * \param state The ast_noise_generator pointer return by a previous call to
+ * ast_channel_start_noise_generator.
+ * \return nothing
+ *
+ * \details
+ * This function will stop the operating noise generator and return the channel
+ * to its previous write format.
+ */
+void ast_channel_stop_noise_generator(struct ast_channel *chan, struct ast_noise_generator *state);
+
+/*!
  * \brief Check if the channel can run in internal timing mode.
  * \param chan The channel to check
  * \return boolean
