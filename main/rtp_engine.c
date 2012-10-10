@@ -119,7 +119,7 @@ static const struct ast_rtp_mime_type {
 	{{1, AST_FORMAT_G726_AAL2}, "audio", "AAL2-G726-32", 8000},
 	{{0, AST_RTP_DTMF}, "audio", "telephone-event", 8000},
 	{{0, AST_RTP_CISCO_DTMF}, "audio", "cisco-telephone-event", 8000},
-	{{1, AST_FORMAT_CN}, "audio", "CN", 8000},
+	{{0, AST_RTP_CN}, "audio", "CN", 8000},
 	{{1, AST_FORMAT_JPEG}, "video", "JPEG", 90000},
 	{{1, AST_FORMAT_PNG}, "video", "PNG", 90000},
 	{{1, AST_FORMAT_H261}, "video", "H261", 90000},
