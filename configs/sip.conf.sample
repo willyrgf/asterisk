@@ -195,6 +195,15 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
                                 ; destination replies with 482 Loop Detected
                                 ; default = yes
 
+;supportpath=yes		; This activates parsing and handling of Path header as defined in RFC 3327. This enables
+				; Asterisk to route outgoing out-of-dialog requests via a set of proxies by using a pre-loaded
+				; route-set defined by the Path headers in the REGISTER request. NOTE: As this influences routing 
+				; of SIP requests make sure to not trust Path headers provided by the user's SIP client (the proxy
+				; in front of Asterisk should remove existing user provided Path headers). NOTE: when a peer has a
+				; path and outboundproxy set, the path will be added to Router header but routing to next hop is
+				; done using the outboundproxy. 
+				; NOTE: Path support does not work with realtime registrations yet.
+
 ;
 ; If regcontext is specified, Asterisk will dynamically create and destroy a
 ; NoOp priority 1 extension for a given peer who registers or unregisters with
