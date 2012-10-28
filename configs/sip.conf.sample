@@ -433,6 +433,9 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ;rtsavesysname=yes              ; Save systemname in realtime database at registration
                                 ; Default= no
 
+;rtsavespath=yes                ; Save path header in realtime database
+                                ; Default= no
+
 ;rtupdate=yes                   ; Send registry updates to database using realtime? (yes|no)
                                 ; If set to yes, when a SIP UA registers successfully, the ip address,
                                 ; the origination port, the registration period, and the username of

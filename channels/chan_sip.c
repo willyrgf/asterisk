@@ -832,6 +832,7 @@ struct sip_auth {
 	SIP_PAGE2_UDPTL_DESTINATION | SIP_PAGE2_FORWARD_LOOP_DETECTED)
 
 #define SIP_PAGE3_USEPATH		(1 << 1)       /*!< 1: Path header supported */
+#define SIP_PAGE3_RT_SAVEPATH		(1 << 2)       /*!< 1: Realtime Path header supported */
 #define SIP_PAGE3_FLAGS_TO_COPY \
 	(SIP_PAGE3_USEPATH )
 
@@ -2706,14 +2707,25 @@ static void realtime_update_peer(const char *peername, struct sockaddr_in *sin, 
 	else if (ast_test_flag(&global_flags[1], SIP_PAGE2_RTSAVE_SYSNAME))
 		syslabel = "regserver";
 
-	if (fc)
-		ast_update_realtime("sippeers", "name", peername, "ipaddr", ipaddr,
+	if(ast_test_flag(&global_flags[2], SIP_PAGE3_RT_SAVEPATH)) {
+		if (fc)
+			ast_update_realtime("sippeers", "name", peername, "ipaddr", ipaddr,
+			"port", port, "regseconds", regseconds,
+			"username", username, fc, fullcontact, "path", path, syslabel, sysname, NULL); /* note fc and syslabel _can_ be NULL */
+		else
+			ast_update_realtime("sippeers", "name", peername, "ipaddr", ipaddr,
+			"port", port, "regseconds", regseconds,
+			"username", username, "path", path, syslabel, sysname, NULL); /* note syslabel _can_ be NULL */
+	} else {
+		if (fc)
+			ast_update_realtime("sippeers", "name", peername, "ipaddr", ipaddr,
 			"port", port, "regseconds", regseconds,
 			"username", username, fc, fullcontact, syslabel, sysname, NULL); /* note fc and syslabel _can_ be NULL */
-	else
-		ast_update_realtime("sippeers", "name", peername, "ipaddr", ipaddr,
+		else
+			ast_update_realtime("sippeers", "name", peername, "ipaddr", ipaddr,
 			"port", port, "regseconds", regseconds,
 			"username", username, syslabel, sysname, NULL); /* note syslabel _can_ be NULL */
+	}
 	if (seen_lastms) {
 		/* We cannot do this in the same statement as above, because the lack of
 		 * this field could cause the whole statement to fail. */
@@ -12293,6 +12305,7 @@ static int sip_show_settings(int fd, int argc, char *argv[])
 		ast_cli(fd, "  Update:                 %s\n", ast_test_flag(&global_flags[1], SIP_PAGE2_RTUPDATE) ? "Yes" : "No");
 		ast_cli(fd, "  Ignore Reg. Expire:     %s\n", ast_test_flag(&global_flags[1], SIP_PAGE2_IGNOREREGEXPIRE) ? "Yes" : "No");
 		ast_cli(fd, "  Save sys. name:         %s\n", ast_test_flag(&global_flags[1], SIP_PAGE2_RTSAVE_SYSNAME) ? "Yes" : "No");
+		ast_cli(fd, "  Save path:              %s\n", ast_test_flag(&global_flags[2], SIP_PAGE3_RT_SAVEPATH) ? "Yes" : "No");
 		ast_cli(fd, "  Auto Clear:             %d (%s)", global_rtautoclear, ast_test_flag(&global_flags[1], SIP_PAGE2_RTAUTOCLEAR) ? "Enabled" : "Disabled");
 	}
 	ast_cli(fd, "\n----\n");
@@ -19342,6 +19355,8 @@ static int reload_config(enum channelreloadreason reason)
 			ast_set2_flag(&global_flags[1], ast_true(v->value), SIP_PAGE2_RTCACHEFRIENDS);	
 		} else if (!strcasecmp(v->name, "rtsavesysname")) {
 			ast_set2_flag(&global_flags[1], ast_true(v->value), SIP_PAGE2_RTSAVE_SYSNAME);	
+		} else if (!strcasecmp(v->name, "rtsavepath")) {
+			ast_set2_flag(&global_flags[2], ast_true(v->value), SIP_PAGE3_RT_SAVEPATH);	
 		} else if (!strcasecmp(v->name, "rtupdate")) {
 			ast_set2_flag(&global_flags[1], ast_true(v->value), SIP_PAGE2_RTUPDATE);	
 		} else if (!strcasecmp(v->name, "ignoreregexpire")) {
