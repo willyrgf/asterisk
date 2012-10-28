@@ -945,6 +945,33 @@ static struct ast_channel *feature_request_and_dial(struct ast_channel *caller,
 	struct ast_channel *transferee, const char *type, format_t format, void *data,
 	int timeout, int *outstate, const char *language);
 
+static const struct ast_datastore_info channel_app_data_datastore = {
+	.type = "Channel appdata datastore",
+	.destroy = ast_free_ptr,
+};
+
+static int set_chan_app_data(struct ast_channel *chan, const char *src_app_data)
+{
+	struct ast_datastore *datastore;
+	char *dst_app_data;
+
+	datastore = ast_datastore_alloc(&channel_app_data_datastore, NULL);
+	if (!datastore) {
+		return -1;
+	}
+
+	dst_app_data = ast_malloc(strlen(src_app_data) + 1);
+	if (!dst_app_data) {
+		ast_datastore_free(datastore);
+		return -1;
+	}
+
+	chan->data = strcpy(dst_app_data, src_app_data);
+	datastore->data = dst_app_data;
+	ast_channel_datastore_add(chan, datastore);
+	return 0;
+}
+
 /*!
  * \brief bridge the call 
  * \param data thread bridge.
@@ -958,9 +985,13 @@ static void *bridge_call_thread(void *data)
 	struct ast_bridge_thread_obj *tobj = data;
 
 	tobj->chan->appl = !tobj->return_to_pbx ? "Transferred Call" : "ManagerBridge";
-	tobj->chan->data = tobj->peer->name;
+	if (set_chan_app_data(tobj->chan, tobj->peer->name)) {
+		tobj->chan->data = "(Empty)";
+	}
 	tobj->peer->appl = !tobj->return_to_pbx ? "Transferred Call" : "ManagerBridge";
-	tobj->peer->data = tobj->chan->name;
+	if (set_chan_app_data(tobj->peer, tobj->chan->name)) {
+		tobj->peer->data = "(Empty)";
+	}
 
 	ast_bridge_call(tobj->peer, tobj->chan, &tobj->bconfig);
 
@@ -6613,7 +6644,6 @@ static int load_config(int reload)
 			return -1;
 		}
 		ast_debug(1, "Configuration of default default parking lot done.\n");
-		parkinglot_addref(default_parkinglot);
 	}
 
 	cfg = ast_config_load2("features.conf", "features", config_flags);
@@ -8190,6 +8220,22 @@ exit_features_test:
 }
 #endif	/* defined(TEST_FRAMEWORK) */
 
+/*! \internal \brief Clean up resources on Asterisk shutdown */
+static void features_shutdown(void)
+{
+	ast_devstate_prov_del("Park");
+	ast_manager_unregister("Bridge");
+	ast_manager_unregister("Park");
+	ast_manager_unregister("Parkinglots");
+	ast_manager_unregister("ParkedCalls");
+	ast_unregister_application(parkcall);
+	ast_unregister_application(parkedcall);
+	ast_unregister_application(app_bridge);
+
+	pthread_cancel(parking_thread);
+	ao2_ref(parkinglots, -1);
+}
+
 int ast_features_init(void)
 {
 	int res;
@@ -8221,6 +8267,8 @@ int ast_features_init(void)
 #if defined(TEST_FRAMEWORK)
 	res |= AST_TEST_REGISTER(features_test);
 #endif	/* defined(TEST_FRAMEWORK) */
+
+	ast_register_atexit(features_shutdown);
 
 	return res;
 }

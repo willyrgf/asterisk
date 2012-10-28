@@ -5000,6 +5000,9 @@ static enum ast_pbx_result __ast_pbx_run(struct ast_channel *c,
 		int invalid = 0;
 		int timeout = 0;
 
+		/* No digits pressed yet */
+		dst_exten[pos] = '\0';
+
 		/* loop on priorities in this context/exten */
 		while (!(res = ast_spawn_extension(c, c->context, c->exten, c->priority,
 			S_COR(c->caller.id.number.valid, c->caller.id.number.str, NULL),
@@ -6752,6 +6755,7 @@ static int manager_show_dialplan_helper(struct mansession *s, const struct messa
 			continue;	/* not the name we want */
 
 		dpc->context_existence = 1;
+		dpc->total_context++;
 
 		ast_debug(3, "manager_show_dialplan: Found Context: %s \n", ast_get_context_name(c));
 
@@ -6775,8 +6779,6 @@ static int manager_show_dialplan_helper(struct mansession *s, const struct messa
 
 			dpc->extension_existence = 1;
 
-			/* may we print context info? */
-			dpc->total_context++;
 			dpc->total_exten++;
 
 			p = NULL;		/* walk next extension peers */
@@ -10302,6 +10304,26 @@ static const struct ast_data_entry pbx_data_providers[] = {
 	AST_DATA_ENTRY("asterisk/core/hints", &hints_data_provider),
 };
 
+/*! \internal \brief Clean up resources on Asterisk shutdown.
+ * \note Cleans up resources allocated in load_pbx */
+static void unload_pbx(void)
+{
+	int x;
+
+	if (device_state_sub) {
+		device_state_sub = ast_event_unsubscribe(device_state_sub);
+	}
+
+	/* Unregister builtin applications */
+	for (x = 0; x < ARRAY_LEN(builtins); x++) {
+		ast_unregister_application(builtins[x].name);
+	}
+	ast_manager_unregister("ShowDialPlan");
+	ast_custom_function_unregister(&exception_function);
+	ast_custom_function_unregister(&testtime_function);
+	ast_data_unregister(NULL);
+}
+
 int load_pbx(void)
 {
 	int x;
@@ -10335,6 +10357,7 @@ int load_pbx(void)
 		return -1;
 	}
 
+	ast_register_atexit(unload_pbx);
 	return 0;
 }
 
